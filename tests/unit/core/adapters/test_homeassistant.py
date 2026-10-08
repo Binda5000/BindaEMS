@@ -111,17 +111,26 @@ async def test_disconnect_marks_values_stale(ha_env) -> None:
     await run_until(adapter, stale_after_error)
 
 
-async def test_backoff_grows_and_resets_after_authenticated_session(ha_env) -> None:
+async def test_backoff_grows_and_resets_after_session_with_events(ha_env) -> None:
     adapter, _, _ = ha_env(
         inbound=[
             ConnectionError("vor der Anmeldung"),
             *AUTH,
-            ConnectionError("nach der Anmeldung"),
+            _added("55"),
+            ConnectionError("nach Ereignissen"),
             ConnectionError("vor der Anmeldung"),
         ]
     )
     await run_until(adapter, lambda: len(adapter.sleeps) >= 3)
     assert adapter.sleeps[:3] == [1.0, 1.0, 2.0]
+
+
+async def test_failures_after_login_without_events_back_off(ha_env) -> None:
+    # z. B. ungültige Entitäts-ID: Anmeldung klappt, das Abo scheitert – nicht jede Sekunde neu
+    failure = {"id": 1, "type": "result", "success": False, "error": {"code": "invalid_format"}}
+    adapter, _, _ = ha_env(inbound=[*AUTH, failure] * 3)
+    await run_until(adapter, lambda: len(adapter.sleeps) >= 3)
+    assert adapter.sleeps[:3] == [1.0, 2.0, 4.0]
 
 
 async def test_cancel_marks_source_disconnected(ha_env) -> None:

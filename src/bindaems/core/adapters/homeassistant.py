@@ -109,7 +109,7 @@ class HaAdapter:
         self._signals: dict[str, list[str]] = {}
         for signal, entity_id in cfg.entities.items():
             self._signals.setdefault(entity_id, []).append(signal)
-        self._authenticated = False
+        self._session_events = 0
         store.register_source(SOURCE, None, invalidate_on_reconnect=True)
 
     def health(self) -> AdapterHealth:
@@ -117,7 +117,7 @@ class HaAdapter:
 
     async def run(self) -> None:
         while True:
-            self._authenticated = False
+            self._session_events = 0
             delay: float | None = None
             try:
                 await self._session()
@@ -133,7 +133,7 @@ class HaAdapter:
             self._health.last_error = error
             self._health.error_count += 1
             if delay is None:
-                if self._authenticated:
+                if self._session_events > 0:  # nur eine Sitzung mit Daten gilt als erfolgreich
                     self._backoff.reset()
                 delay = self._backoff.next()
             self._status.failed(error, delay)
@@ -173,7 +173,6 @@ class HaAdapter:
             raise AuthInvalidError
         if answer.get("type") != "auth_ok":
             raise ConnectionError(f"unerwartete Antwort auf auth: {answer.get('type')}")
-        self._authenticated = True
 
     async def _ping(self, conn: HaConnection) -> None:
         message_id = SUBSCRIPTION_ID
@@ -199,6 +198,7 @@ class HaAdapter:
         removed = event.get("r")
         for entity_id in removed if isinstance(removed, list) else []:
             self._set_entity(entity_id, None)
+        self._session_events += 1
         self._health.last_ok = datetime.now(UTC)
 
     def _set_entity(self, entity_id: Any, state: Any) -> None:
