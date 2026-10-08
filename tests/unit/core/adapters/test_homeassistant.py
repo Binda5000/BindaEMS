@@ -183,3 +183,28 @@ async def test_connect_ws_rejects_non_object_messages(payload: str) -> None:
                 await conn.recv_json()
         finally:
             await conn.close()
+
+
+async def test_entities_not_resent_after_reconnect_are_stale(ha_env) -> None:
+    holder = []
+    adapter, _, store = ha_env(
+        inbound=[
+            *AUTH,
+            _added("55"),
+            lambda: holder[0].clock.advance(1),
+            ConnectionError("weg"),
+            *AUTH,  # neue Sitzung: die Entität wird nicht mehr gemeldet
+        ]
+    )
+    holder.append(adapter)
+
+    def stale_after_reconnect() -> bool:
+        reading = store.snapshot().get("vehicle.egolf.soc_pct")
+        return (
+            adapter.health().error_count >= 1
+            and adapter.health().connected
+            and reading is not None
+            and reading.quality is Quality.STALE
+        )
+
+    await run_until(adapter, stale_after_reconnect)

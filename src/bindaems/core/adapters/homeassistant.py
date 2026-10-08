@@ -109,7 +109,7 @@ class HaAdapter:
         for signal, entity_id in cfg.entities.items():
             self._signals.setdefault(entity_id, []).append(signal)
         self._authenticated = False
-        store.register_source(SOURCE, None)
+        store.register_source(SOURCE, None, invalidate_on_reconnect=True)
 
     def health(self) -> AdapterHealth:
         return replace(self._health)

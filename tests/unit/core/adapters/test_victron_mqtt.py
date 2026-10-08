@@ -111,3 +111,25 @@ async def test_unchanged_values_stay_valid_while_cerbo_sends(fake_env) -> None:
         return (snap.ts - start).total_seconds() == 8 and snap.ok("battery.soc_pct") == 55.0
 
     await run_until(adapter, soc_still_valid_after_8s)
+
+
+async def test_values_not_resent_after_reconnect_are_stale(fake_env) -> None:
+    holder = []
+    pv = MqttMessage(f"N/{P}/pvinverter/31/Ac/Power", b'{"value": 3500.0}')
+    first = MqttMessage(f"N/{P}/grid/30/Ac/Power", b'{"value": 500.0}')
+    second = MqttMessage(f"N/{P}/grid/30/Ac/Power", b'{"value": 600.0}')
+    adapter, _, store = fake_env(
+        sessions=[[pv, first, lambda: holder[0].clock.advance(1)], [second]]
+    )
+    holder.append(adapter)
+
+    def pv_stale_after_reconnect() -> bool:  # der PV-Zähler kam nach dem Neustart nicht wieder
+        snap = store.snapshot()
+        reading = snap.get("pv.huawei.power_w")
+        return (
+            snap.ok("grid.power_w") == 600.0
+            and reading is not None
+            and reading.quality is Quality.STALE
+        )
+
+    await run_until(adapter, pv_stale_after_reconnect)

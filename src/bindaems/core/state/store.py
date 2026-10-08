@@ -27,6 +27,9 @@ class StateStore:
       oder die Quelle getrennt ist. Bei Quellen mit ``activity_based=True`` zählt das letzte
       Lebenszeichen der Quelle statt der letzten Wertänderung – für Quellen, die nur
       Änderungen senden (Victron-MQTT mit ``suppress-republish``).
+    * Bei Quellen mit ``invalidate_on_reconnect=True`` gelten Werte aus einer früheren
+      Verbindung als veraltet, bis die Quelle sie in der neuen Verbindung erneut meldet – ein
+      nach dem Neustart fehlendes Gerät darf nicht mit seinem letzten Wert weiterleben.
     * ``STATE`` gilt, solange die Quelle verbunden ist.
     * ``None``, ``NaN`` und ``±inf`` sind ``INVALID``.
     """
@@ -39,12 +42,20 @@ class StateStore:
         self._ok_since: dict[str, datetime] = {}
         self._activity_based: dict[str, bool] = {}
         self._last_activity: dict[str, datetime] = {}
+        self._invalidate_on_reconnect: dict[str, bool] = {}
+        self._session_start: dict[str, datetime] = {}
 
     def register_source(
-        self, name: str, freshness_s: float | None, *, activity_based: bool = False
+        self,
+        name: str,
+        freshness_s: float | None,
+        *,
+        activity_based: bool = False,
+        invalidate_on_reconnect: bool = False,
     ) -> None:
         self._freshness[name] = freshness_s
         self._activity_based[name] = activity_based
+        self._invalidate_on_reconnect[name] = invalidate_on_reconnect
         self._connected.setdefault(name, False)
 
     def touch(self, source: str) -> None:
@@ -77,6 +88,8 @@ class StateStore:
     def set_connected(self, source: str, connected: bool) -> None:
         if source not in self._freshness:
             raise KeyError(f"unbekannte Quelle: {source}")
+        if connected and not self._connected[source]:
+            self._session_start[source] = self._clock.now()
         self._connected[source] = connected
 
     def snapshot(self) -> Snapshot:
@@ -100,6 +113,13 @@ class StateStore:
             return Quality.INVALID
         if not self._connected.get(entry.source, False):
             return Quality.STALE
+        session = self._session_start.get(entry.source)
+        if (
+            self._invalidate_on_reconnect[entry.source]
+            and session is not None
+            and entry.ts < session
+        ):
+            return Quality.STALE  # aus einer früheren Verbindung und seither nicht erneut gemeldet
         if entry.kind is SignalKind.MEASUREMENT:
             freshness = self._freshness[entry.source]
             reference = entry.ts

@@ -103,3 +103,30 @@ def test_touch_unknown_source_rejected() -> None:
     _, store = make()
     with pytest.raises(KeyError):
         store.touch("unbekannt")
+
+
+def test_values_from_before_reconnect_are_stale_until_resent() -> None:
+    clock = ManualClock(T0)
+    store = StateStore(clock)
+    store.register_source("victron", 5.0, activity_based=True, invalidate_on_reconnect=True)
+    store.set_connected("victron", True)
+    store.update("pv.huawei.power_w", 3500.0, source="victron", kind=M)
+    store.update("ess.hub4_mode", 1, source="victron", kind=S)
+    store.set_connected("victron", False)
+    clock.advance(60)
+    store.set_connected("victron", True)  # neue Sitzung: nur das Netz meldet sich wieder
+    store.set_connected("victron", True)  # wiederholtes Melden beginnt keine weitere Sitzung
+    store.update("grid.power_w", 500.0, source="victron", kind=M)
+    assert quality(store, "pv.huawei.power_w") is Quality.STALE
+    assert quality(store, "ess.hub4_mode") is Quality.STALE
+    assert store.snapshot().ok("grid.power_w") == 500.0
+    store.update("ess.hub4_mode", 1, source="victron", kind=S)  # erneut gesendet
+    assert store.snapshot().ok("ess.hub4_mode") == 1
+
+
+def test_polled_sources_keep_values_across_reconnect_by_default() -> None:
+    _, store = make()  # ohne invalidate_on_reconnect
+    store.update("grid.power_w", 1.0, source="victron", kind=M)
+    store.set_connected("victron", False)
+    store.set_connected("victron", True)
+    assert store.snapshot().ok("grid.power_w") == 1.0

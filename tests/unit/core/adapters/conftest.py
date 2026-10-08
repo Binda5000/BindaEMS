@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterator, Awaitable, Callable, Iterable
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterable, Sequence
 from typing import Any
 
 import httpx
@@ -79,11 +79,16 @@ def fake_env(cfg: Config) -> Callable[..., tuple[Any, list[FakeTransport], State
         portal_id: str | None = P,
         first_fails: bool = False,
         end_with_error: bool = False,
+        sessions: Sequence[Iterable[MqttMessage | Callable[[], object]]] | None = None,
     ) -> tuple[Any, list[FakeTransport], StateStore]:
         specs: list[FakeTransport] = []
         if first_fails:
             specs.append(FakeTransport(fail_on_enter=True))
-        specs.append(FakeTransport(messages, end_with_error=end_with_error))
+        if sessions is not None:  # mehrere Sitzungen; alle außer der letzten enden mit Fehler
+            specs += [FakeTransport(m, end_with_error=True) for m in sessions[:-1]]
+            specs.append(FakeTransport(sessions[-1]))
+        else:
+            specs.append(FakeTransport(messages, end_with_error=end_with_error))
         transports: list[FakeTransport] = []
 
         def factory() -> FakeTransport:
@@ -223,12 +228,16 @@ class FakeConnection:
         self.outbound.append(msg)
 
     async def recv_json(self) -> dict[str, Any]:
-        if not self._inbound:
-            await asyncio.Event().wait()  # blockiert bis zum Abbruch
-        item = self._inbound.pop(0)
-        if isinstance(item, Exception):
-            raise item
-        return item
+        while True:
+            if not self._inbound:
+                await asyncio.Event().wait()  # blockiert bis zum Abbruch
+            item = self._inbound.pop(0)
+            if callable(item):  # Skript-Schritt, z. B. die Uhr vorstellen
+                item()
+                continue
+            if isinstance(item, Exception):
+                raise item
+            return item
 
     async def close(self) -> None:
         return None
@@ -250,10 +259,12 @@ def ha_env(cfg: Config) -> Callable[..., tuple[Any, FakeConnection, StateStore]]
         async def connect(url: str) -> FakeConnection:
             return conn
 
-        store = StateStore(ManualClock(T0))
+        clock = ManualClock(T0)
+        store = StateStore(clock)
         sleep = RecordingSleep()
         adapter = HaAdapter(ha, SecretStr("tok"), store, connect, ping_s=ping_s, sleep=sleep)
         adapter.sleeps = sleep.calls  # type: ignore[attr-defined]
+        adapter.clock = clock  # type: ignore[attr-defined]
         return adapter, conn, store
 
     return build

@@ -150,7 +150,9 @@ class VictronMqttAdapter:
         self._session_messages = 0
         self.portal_id: str | None = cfg.mqtt.portal_id
         # Der Cerbo sendet nur Änderungen: frisch ist, was er sendet, solange er überhaupt sendet.
-        store.register_source(SOURCE, FRESHNESS_S, activity_based=True)
+        store.register_source(
+            SOURCE, FRESHNESS_S, activity_based=True, invalidate_on_reconnect=True
+        )
 
     def health(self) -> AdapterHealth:
         return replace(self._health)
