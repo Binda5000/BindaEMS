@@ -9,6 +9,8 @@ from datetime import UTC, datetime
 from types import MappingProxyType
 from typing import Any
 
+from bindaems.core.state.derived import Derived
+from bindaems.core.telemetry.lineprotocol import Point
 from bindaems.shared.domain import Quality, Reading, SignalKind, Snapshot, Value
 
 T0 = datetime(2026, 10, 8, 10, 0, tzinfo=UTC)
@@ -48,3 +50,28 @@ async def run_until(adapter: Any, predicate: Callable[[], bool], max_wait_s: flo
         task.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await task
+
+
+class FakeSink:
+    """Sammelt geschriebene Punkte (erfüllt ``PointSink``)."""
+
+    def __init__(self) -> None:
+        self.points: list[Point] = []
+
+    def write(self, point: Point) -> None:
+        self.points.append(point)
+
+
+EMPTY_DERIVED = Derived(
+    grid_w=None,
+    pv_total_w=None,
+    consumption_w=None,
+    battery_ac_w=None,
+    battery_w=None,
+    house_load_w=None,
+    consumption_l={},
+    wallbox_w={},
+    wallbox_phase_a={},
+    phase_import_a={},
+    balance_residual_w=None,
+)
