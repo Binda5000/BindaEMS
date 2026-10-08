@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 from typing import Protocol
 
@@ -185,7 +185,9 @@ class TelemetrySampler:
                 self._last_fields[signal] = point.fields
                 self._sink.write(point)
             elif self._due(signal, cadence, now):
-                self._sink.write(point)
+                # Abtastzeitpunkt statt Änderungszeitpunkt: unveränderte Werte (z. B. PV nachts)
+                # sendet der Cerbo nicht erneut – mit altem Zeitstempel überschriebe InfluxDB sie
+                self._sink.write(replace(point, ts=snap.ts))
         for name in DERIVED_FIELDS:
             value = getattr(derived, name)
             if value is None or not self._due(f"derived.{name}", DERIVED_CADENCE_S, now):

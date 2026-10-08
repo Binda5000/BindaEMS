@@ -179,3 +179,21 @@ def test_due_tolerance_of_50_ms() -> None:
     clock.advance(timedelta(seconds=1.9))  # 2 s − 0,1 s: noch nicht fällig
     smp.on_cycle(snap_at(clock.now(), {"grid.power_w": 1.0}), EMPTY_DERIVED)
     assert [p.ts for p in sink.points] == [T0, T0 + timedelta(seconds=1.96)]
+
+
+def test_unchanged_values_get_the_sample_time() -> None:
+    # Der Cerbo sendet konstante Werte nicht erneut: der Wert bleibt gültig, sein Zeitstempel alt.
+    # Jede Ausgabe braucht trotzdem ihren eigenen Zeitpunkt, sonst überschreibt InfluxDB sie.
+    from types import MappingProxyType
+
+    from bindaems.shared.domain import Snapshot
+
+    clock = ManualClock(T0)
+    sink = FakeSink()
+    smp = TelemetrySampler(sink, clock)
+    unchanged = Reading(0.0, T0, Quality.OK, "victron", M)  # PV nachts: seit T0 konstant 0 W
+    for _ in range(3):
+        snap = Snapshot(clock.now(), MappingProxyType({"pv.huawei.power_w": unchanged}))
+        smp.on_cycle(snap, EMPTY_DERIVED)
+        clock.advance(2)
+    assert [p.ts for p in sink.points] == [T0 + timedelta(seconds=s) for s in (0, 2, 4)]
