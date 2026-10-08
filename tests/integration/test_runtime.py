@@ -235,3 +235,17 @@ def test_configure_logging_quiets_request_logs(capsys) -> None:
         root.setLevel(level)
     assert "HTTP Request" not in out and "accepted" not in out
     assert "echte Warnung" in out
+
+
+async def test_frozen_grid_counter_raises_alarm_after_full_slot(runtime_env) -> None:
+    # Netz 3000 W Bezug, der Zähler steht still: nach einer vollen Viertelstunde fällt es auf
+    frozen = {"grid.energy_import_kwh": 1000.0, "grid.energy_export_kwh": 500.0}
+    rt, _, clock = runtime_env(start="2026-10-08T09:59:55+00:00", extra=frozen)
+    for _ in range(182):  # bis 10:15:05, Schritt 5 s (= größte integrierte Lücke)
+        rt.cycle_once()
+        clock.advance(5)
+    alarms = {a["id"]: a for a in rt.health().alarms}
+    assert "plaus.grid_counter" in alarms
+    assert (
+        "Bezug 750 Wh aus der Leistung, 0 Wh laut Zähler" in alarms["plaus.grid_counter"]["message"]
+    )

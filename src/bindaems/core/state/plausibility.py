@@ -6,7 +6,7 @@ from collections import deque
 from datetime import datetime, timedelta
 
 from bindaems.core.state.derived import PHASES, Derived, number
-from bindaems.shared.domain import Alarm, Severity, Snapshot
+from bindaems.shared.domain import Alarm, Severity, SlotFlows, Snapshot
 
 VOLTAGE_RANGE_V = (180.0, 270.0)
 MAX_GRID_PHASE_W = 30_000.0
@@ -71,3 +71,45 @@ class PlausibilityMonitor:
         if mean <= limit:
             return None
         return f"Energiebilanz unplausibel: Abweichung {mean:.0f} W (Grenze {limit:.0f} W)"
+
+
+SLOT_S = 900.0
+MIN_SLOT_COVERAGE = 0.9
+COUNTER_MIN_LIMIT_WH = 100.0
+COUNTER_RELATIVE_LIMIT = 0.15
+_GRID_COUNTERS = ("grid.energy_import_kwh", "grid.energy_export_kwh")
+
+
+def check_grid_counters(flows: SlotFlows, now: datetime) -> Alarm | None:
+    """Vergleicht die integrierte Netzleistung einer Viertelstunde mit dem Netzzähler.
+
+    Die Energiebilanz in ``evaluate`` sieht Fehler der Netz- oder PV-Messung nicht, weil der
+    Verbrauch aus genau diesen Werten berechnet wird. Eine eingefrorene Netzleistung oder ein
+    stehender Zähler fällt hier auf. Geprüft werden nur Slots mit mindestens 90 % Abdeckung und
+    beiden Zählerständen an beiden Grenzen; die Leistung wird auf den ganzen Slot hochgerechnet.
+    """
+    if flows.covered_s < MIN_SLOT_COVERAGE * SLOT_S:
+        return None
+    measured = []
+    for signal in _GRID_COUNTERS:
+        start, end = flows.counters.get(signal, (None, None))
+        if start is None or end is None:
+            return None
+        measured.append((end - start) * 1000.0)
+    scale = SLOT_S / flows.covered_s
+    imported = scale * sum(wh for key, wh in flows.flows_wh.items() if key.startswith("grid>"))
+    exported = scale * sum(wh for key, wh in flows.flows_wh.items() if key.endswith(">grid"))
+    deviations = []
+    for label, integrated, counted in (
+        ("Bezug", imported, measured[0]),
+        ("Einspeisung", exported, measured[1]),
+    ):
+        limit = max(COUNTER_MIN_LIMIT_WH, COUNTER_RELATIVE_LIMIT * max(integrated, counted))
+        if abs(integrated - counted) > limit:
+            deviations.append(
+                f"{label} {integrated:.0f} Wh aus der Leistung, {counted:.0f} Wh laut Zähler"
+            )
+    if not deviations:
+        return None
+    message = f"Netzleistung und Netzzähler weichen ab: {'; '.join(deviations)}."
+    return Alarm("plaus.grid_counter", Severity.WARNING, message, now)

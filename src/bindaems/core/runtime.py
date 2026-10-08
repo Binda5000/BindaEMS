@@ -13,7 +13,7 @@ import time
 from collections import deque
 from collections.abc import AsyncIterator, Callable, Generator, Sequence
 from contextlib import AbstractAsyncContextManager
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from datetime import datetime, timedelta
 from functools import partial
 from typing import Any
@@ -35,7 +35,7 @@ from bindaems.core.broadcast import Broadcast
 from bindaems.core.checks.competitors import detect_competitors
 from bindaems.core.checks.selfcheck import CheckResult, run_selfcheck
 from bindaems.core.state.derived import Derived, derive
-from bindaems.core.state.plausibility import PlausibilityMonitor
+from bindaems.core.state.plausibility import PlausibilityMonitor, check_grid_counters
 from bindaems.core.state.store import StateStore
 from bindaems.core.telemetry.influx import InfluxWriter
 from bindaems.core.telemetry.sampler import PointSink, TelemetrySampler
@@ -130,6 +130,7 @@ class CoreRuntime:
         self.selfcheck_runs = 0
         self._selfcheck: list[CheckResult] = []
         self._competitor_alarms: list[Alarm] = []
+        self._counter_alarm: Alarm | None = None
         self._last_check: datetime | None = None
         self._alarms: list[Alarm] = []
         self._cycle_ms: deque[float] = deque(maxlen=CYCLE_HISTORY)
@@ -216,6 +217,7 @@ class CoreRuntime:
         if closed is not None:
             self._sampler.write_slot_flows(closed)
             self.broadcast.publish({"type": "slot_flows", "data": _slot_json(closed)})
+            self._check_counters(closed, now)
         self._sampler.on_cycle(snap, derived)
         if self._check_due(now):
             self._competitor_alarms = detect_competitors(snap, self._cfg, now)
@@ -225,7 +227,10 @@ class CoreRuntime:
         self._last_state = state
         self.broadcast.publish({"type": "state", "data": state})
         self._record_cycle((self._timer() - started) * 1000.0, now)
-        self._update_alarms([*plausibility, *self._competitor_alarms, *self._overrun_alarm()])
+        counter = [self._counter_alarm] if self._counter_alarm is not None else []
+        self._update_alarms(
+            [*plausibility, *self._competitor_alarms, *counter, *self._overrun_alarm()]
+        )
 
     def _flows(self, derived: Derived) -> dict[str, float] | None:
         pv, grid = derived.pv_total_w, derived.grid_w
@@ -234,6 +239,12 @@ class CoreRuntime:
             return None  # Bilanz unbekannt: zählt nicht als abgedeckt
         wallboxes = {name: derived.wallbox_w.get(name) or 0.0 for name in self._cfg.wallbox_order}
         return allocate(pv, grid, battery, house, wallboxes)
+
+    def _check_counters(self, closed: SlotFlows, now: datetime) -> None:
+        alarm = check_grid_counters(closed, now)
+        if alarm is not None and self._counter_alarm is not None:
+            alarm = replace(alarm, since=self._counter_alarm.since)  # besteht seit dem ersten Slot
+        self._counter_alarm = alarm
 
     def _check_due(self, now: datetime) -> bool:
         last = self._last_check

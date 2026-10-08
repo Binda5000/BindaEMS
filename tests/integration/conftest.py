@@ -30,6 +30,7 @@ def runtime_env(cfg: Config) -> Callable[..., tuple[CoreRuntime, FakeSink, Manua
         state: Mapping[str, Value] | None = None,
         omit: Sequence[str] = (),
         fail_first: bool = False,
+        extra: Mapping[str, float] | None = None,
         **kwargs: Any,
     ) -> tuple[CoreRuntime, FakeSink, ManualClock]:
         clock = ManualClock(datetime.fromisoformat(start))
@@ -47,7 +48,7 @@ def runtime_env(cfg: Config) -> Callable[..., tuple[CoreRuntime, FakeSink, Manua
             calls[0] += 1
             if fail_first and calls[0] == 1:
                 raise RuntimeError("Testfehler im ersten Zyklus")
-            for signal, value in VALUES.items():
+            for signal, value in (VALUES | dict(extra or {})).items():
                 if signal not in omit:
                     rt.store.update(signal, value, source="victron", kind=SignalKind.MEASUREMENT)
             for signal, value in (state or {}).items():

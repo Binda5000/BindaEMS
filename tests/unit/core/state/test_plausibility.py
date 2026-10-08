@@ -100,3 +100,56 @@ def test_balance_limit_has_500_w_floor(cfg) -> None:
     for i in range(61):
         alarms = mon.evaluate(snap(small), d, T0 + timedelta(seconds=i))
     assert not [a for a in alarms if a.id == "plaus.balance"]
+
+
+def _slot(flows: dict[str, float], imp: tuple, exp: tuple, covered: float = 900.0):
+    from bindaems.shared.domain import SlotFlows
+
+    counters = {"grid.energy_import_kwh": imp, "grid.energy_export_kwh": exp}
+    return SlotFlows(T0, covered, flows, counters)
+
+
+def test_grid_counters_consistent_with_power() -> None:
+    from bindaems.core.state.plausibility import check_grid_counters
+
+    slot = _slot({"grid>house": 740.0, "pv>house": 100.0}, (100.0, 100.75), (50.0, 50.0))
+    assert check_grid_counters(slot, T0) is None
+
+
+def test_frozen_grid_power_is_detected_by_counters() -> None:
+    from bindaems.core.state.plausibility import check_grid_counters
+
+    # Leistung eingefroren bei 27 kW: integriert 6750 Wh, der Zähler zählt nur 750 Wh
+    alarm = check_grid_counters(_slot({"grid>house": 6750.0}, (100.0, 100.75), (50.0, 50.0)), T0)
+    assert alarm is not None and alarm.id == "plaus.grid_counter"
+    assert alarm.severity is Severity.WARNING
+    assert alarm.message == (
+        "Netzleistung und Netzzähler weichen ab: Bezug 6750 Wh aus der Leistung, "
+        "750 Wh laut Zähler."
+    )
+
+
+def test_export_deviation_is_detected() -> None:
+    from bindaems.core.state.plausibility import check_grid_counters
+
+    alarm = check_grid_counters(_slot({"pv>grid": 900.0}, (100.0, 100.0), (50.0, 50.0)), T0)
+    assert (
+        alarm is not None
+        and "Einspeisung 900 Wh aus der Leistung, 0 Wh laut Zähler" in alarm.message
+    )
+
+
+def test_counter_check_needs_coverage_and_both_counters() -> None:
+    from bindaems.core.state.plausibility import check_grid_counters
+
+    bad = {"grid>house": 6750.0}
+    assert check_grid_counters(_slot(bad, (100.0, 100.75), (50.0, 50.0), covered=600.0), T0) is None
+    assert check_grid_counters(_slot(bad, (100.0, None), (50.0, 50.0)), T0) is None
+
+
+def test_counter_check_scales_partly_covered_slot() -> None:
+    from bindaems.core.state.plausibility import check_grid_counters
+
+    # 850 s abgedeckt: 708 Wh entsprechen 750 Wh über die ganze Viertelstunde
+    slot = _slot({"grid>house": 708.0}, (100.0, 100.75), (50.0, 50.0), covered=850.0)
+    assert check_grid_counters(slot, T0) is None
