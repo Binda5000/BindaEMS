@@ -7,6 +7,8 @@ import sys
 
 import structlog
 
+QUIET_LOGGERS = ("httpx", "httpcore", "uvicorn.error", "uvicorn.access")
+
 
 def configure_logging(level: str = "INFO") -> None:
     numeric = logging.getLevelNamesMapping()[level.upper()]
@@ -40,3 +42,7 @@ def configure_logging(level: str = "INFO") -> None:
     root = logging.getLogger()
     root.handlers[:] = [handler]
     root.setLevel(numeric)
+    # je Anfrage eine Zeile (InfluxDB jede Sekunde, Wall Connector alle 2 s) und jeder
+    # WebSocket-Aufbau – das füllte die Logrotation mit Rauschen
+    for noisy in QUIET_LOGGERS:
+        logging.getLogger(noisy).setLevel(max(numeric, logging.WARNING))

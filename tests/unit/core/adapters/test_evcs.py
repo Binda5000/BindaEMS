@@ -145,3 +145,13 @@ async def test_pymodbus_reader_connect_failure_raises() -> None:
     reader = PymodbusReader("127.0.0.1", _free_port(), 1)
     with pytest.raises(ConnectionError):
         await reader.connect()
+
+
+async def test_errors_and_recovery_are_logged(evcs_env) -> None:
+    from structlog.testing import capture_logs
+
+    adapter, _, _ = evcs_env(blocks=[RuntimeError("timeout"), REGS])
+    with capture_logs() as logs:
+        await run_until(adapter, lambda: adapter.health().connected)
+    assert [e["event"] for e in logs] == ["Adapter-Fehler", "Adapter verbunden"]
+    assert logs[0]["adapter"] == "evcs" and "timeout" in logs[0]["error"]

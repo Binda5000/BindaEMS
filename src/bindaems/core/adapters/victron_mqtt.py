@@ -20,7 +20,7 @@ from typing import Protocol
 import aiomqtt
 from pydantic import SecretStr
 
-from bindaems.core.adapters.base import AdapterHealth, Backoff
+from bindaems.core.adapters.base import AdapterHealth, Backoff, StatusLog
 from bindaems.core.adapters.victron_topics import InstanceResolver, parse_message
 from bindaems.core.state.store import StateStore
 from bindaems.shared.config import MqttConfig, VictronConfig
@@ -146,6 +146,7 @@ class VictronMqttAdapter:
         self._sleep = sleep
         self._resolver = InstanceResolver(cfg.instances)
         self._health = AdapterHealth(name=self.name)
+        self._status = StatusLog(self.name)
         self._backoff = Backoff()
         self._session_messages = 0
         self.portal_id: str | None = cfg.mqtt.portal_id
@@ -173,7 +174,9 @@ class VictronMqttAdapter:
             self._health.error_count += 1
             if self._session_messages > 0:
                 self._backoff.reset()
-            await self._sleep(self._backoff.next())
+            delay = self._backoff.next()
+            self._status.failed(error, delay)
+            await self._sleep(delay)
 
     async def _session(self) -> None:
         async with self._transport_factory() as transport:
@@ -218,3 +221,5 @@ class VictronMqttAdapter:
     def _set_connected(self, connected: bool) -> None:
         self._store.set_connected(SOURCE, connected)
         self._health.connected = connected
+        if connected:
+            self._status.connected()

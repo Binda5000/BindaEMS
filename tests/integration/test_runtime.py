@@ -212,3 +212,26 @@ async def test_cycle_errors_do_not_stop_the_loop(runtime_env) -> None:
     await rt.shutdown()
     await asyncio.gather(task, return_exceptions=True)
     assert any(e["event"] == "Zyklus fehlgeschlagen" for e in logs)
+
+
+def test_configure_logging_quiets_request_logs(capsys) -> None:
+    import logging
+
+    import structlog
+
+    from bindaems.core.logging import configure_logging
+
+    root = logging.getLogger()
+    handlers, level = root.handlers[:], root.level
+    try:
+        configure_logging("INFO")
+        logging.getLogger("httpx").info("HTTP Request: POST http://influx.lan:8086/write")
+        logging.getLogger("uvicorn.error").info("WebSocket /v1/stream [accepted]")
+        logging.getLogger("httpx").warning("echte Warnung")
+        out = capsys.readouterr().out
+    finally:
+        structlog.reset_defaults()
+        root.handlers[:] = handlers
+        root.setLevel(level)
+    assert "HTTP Request" not in out and "accepted" not in out
+    assert "echte Warnung" in out

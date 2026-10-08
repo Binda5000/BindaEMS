@@ -136,3 +136,13 @@ async def test_backoff_resets_after_success(respx_mock, tessie_env) -> None:
     adapter, _ = tessie_env()
     await run_until(adapter, lambda: len(adapter.sleeps) >= 3)
     assert adapter.sleeps[:3] == [60.0, 30.0, 60.0]
+
+
+async def test_invalid_token_is_logged(respx_mock, tessie_env) -> None:
+    from structlog.testing import capture_logs
+
+    respx_mock.get(URL).respond(401)
+    adapter, _ = tessie_env()
+    with capture_logs() as logs:
+        await run_until(adapter, lambda: bool(adapter.sleeps))
+    assert logs[0]["error"] == "Tessie-Token ungültig" and logs[0]["retry_in_s"] == 900.0

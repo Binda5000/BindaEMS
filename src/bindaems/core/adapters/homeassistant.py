@@ -19,7 +19,7 @@ from pydantic import SecretStr
 from websockets.asyncio.client import ClientConnection
 from websockets.asyncio.client import connect as ws_connect
 
-from bindaems.core.adapters.base import AdapterHealth, Backoff
+from bindaems.core.adapters.base import AdapterHealth, Backoff, StatusLog
 from bindaems.core.state.store import StateStore
 from bindaems.shared.config import HomeAssistantConfig
 from bindaems.shared.domain import SignalKind, Value
@@ -104,6 +104,7 @@ class HaAdapter:
         self._ping_s = ping_s
         self._sleep = sleep
         self._health = AdapterHealth(name=self.name)
+        self._status = StatusLog(self.name)
         self._backoff = Backoff()
         self._signals: dict[str, list[str]] = {}
         for signal, entity_id in cfg.entities.items():
@@ -135,6 +136,7 @@ class HaAdapter:
                 if self._authenticated:
                     self._backoff.reset()
                 delay = self._backoff.next()
+            self._status.failed(error, delay)
             await self._sleep(delay)
 
     async def _session(self) -> None:
@@ -207,3 +209,5 @@ class HaAdapter:
     def _set_connected(self, connected: bool) -> None:
         self._store.set_connected(SOURCE, connected)
         self._health.connected = connected
+        if connected:
+            self._status.connected()

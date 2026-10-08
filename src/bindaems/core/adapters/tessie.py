@@ -17,7 +17,7 @@ from typing import Any
 import httpx
 from pydantic import SecretStr
 
-from bindaems.core.adapters.base import AdapterHealth, Backoff
+from bindaems.core.adapters.base import AdapterHealth, Backoff, StatusLog
 from bindaems.core.state.store import StateStore
 from bindaems.shared.config import LatLon, VehicleConfig
 from bindaems.shared.domain import SignalKind, Value
@@ -111,6 +111,7 @@ class TessieAdapter:
         self._client = client
         self._sleep = sleep
         self._health = AdapterHealth(name=self._source)
+        self._status = StatusLog(self._source)
         self._backoff = Backoff(initial=60.0, maximum=900.0)
         store.register_source(self._source, FRESHNESS_S)
 
@@ -136,15 +137,16 @@ class TessieAdapter:
                 timeout=TIMEOUT_S,
             )
             if response.status_code in (401, 403):
-                self._fail("Tessie-Token ungültig")
+                self._fail("Tessie-Token ungültig", AUTH_RETRY_S)
                 return AUTH_RETRY_S
             response.raise_for_status()
             data = response.json()
             if not isinstance(data, dict):
                 raise ValueError("JSON-Objekt erwartet")
         except Exception as exc:  # 429, 5xx, Zeitüberschreitung, Netzwerk: Backoff ab 60 s
-            self._fail(f"{type(exc).__name__}: {exc}")
-            return self._backoff.next()
+            delay = self._backoff.next()
+            self._fail(f"{type(exc).__name__}: {exc}", delay)
+            return delay
         values = parse_state(data, self._home, self._cfg.home_radius_m)
         for key, value in values.items():
             self._store.update(
@@ -155,6 +157,7 @@ class TessieAdapter:
             )
         self._store.set_connected(self._source, True)
         self._health.connected = True
+        self._status.connected()
         self._health.last_ok = datetime.now(UTC)
         self._backoff.reset()
         charging, plugged = values["charging_state"], values["plugged"]
@@ -163,7 +166,8 @@ class TessieAdapter:
             plugged if isinstance(plugged, bool) else None,
         )
 
-    def _fail(self, message: str) -> None:
+    def _fail(self, message: str, retry_in_s: float) -> None:
+        self._status.failed(message, retry_in_s)
         self._health.connected = False
         self._health.last_error = message
         self._health.error_count += 1

@@ -208,3 +208,12 @@ async def test_entities_not_resent_after_reconnect_are_stale(ha_env) -> None:
         )
 
     await run_until(adapter, stale_after_reconnect)
+
+
+async def test_invalid_token_is_logged(ha_env) -> None:
+    from structlog.testing import capture_logs
+
+    adapter, _, _ = ha_env(inbound=[{"type": "auth_required"}, {"type": "auth_invalid"}])
+    with capture_logs() as logs:
+        await run_until(adapter, lambda: bool(adapter.sleeps))
+    assert any(e["event"] == "Adapter-Fehler" and e["error"] == "HA-Token ungültig" for e in logs)

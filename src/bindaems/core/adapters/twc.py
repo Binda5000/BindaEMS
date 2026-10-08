@@ -11,7 +11,7 @@ from typing import Any
 
 import httpx
 
-from bindaems.core.adapters.base import AdapterHealth, Backoff
+from bindaems.core.adapters.base import AdapterHealth, Backoff, StatusLog
 from bindaems.core.state.store import StateStore
 from bindaems.shared.config import PhaseMap, TwcConfig
 from bindaems.shared.domain import SignalKind, Value
@@ -93,6 +93,7 @@ class TwcAdapter:
         self._lifetime_every = max(1, round(lifetime_s / vitals_s))
         self._sleep = sleep
         self._health = AdapterHealth(name=name)
+        self._status = StatusLog(name)
         self._backoff = Backoff()
         self._version_read = False
         store.register_source(name, FRESHNESS_S)
@@ -102,16 +103,20 @@ class TwcAdapter:
 
     async def run(self) -> None:
         while True:
+            error = "Sitzung beendet"
             try:
                 await self._session()
             except asyncio.CancelledError:
                 self._set_connected(False)
                 raise
             except Exception as exc:  # jeder Abfragefehler führt zu Backoff und neuem Versuch
-                self._set_connected(False)
-                self._health.last_error = f"{type(exc).__name__}: {exc}"
-                self._health.error_count += 1
-            await self._sleep(self._backoff.next())
+                error = f"{type(exc).__name__}: {exc}"
+            self._set_connected(False)
+            self._health.last_error = error
+            self._health.error_count += 1
+            delay = self._backoff.next()
+            self._status.failed(error, delay)
+            await self._sleep(delay)
 
     async def _session(self) -> None:
         if not self._version_read:
@@ -147,6 +152,8 @@ class TwcAdapter:
     def _set_connected(self, connected: bool) -> None:
         self._store.set_connected(self.name, connected)
         self._health.connected = connected
+        if connected:
+            self._status.connected()
 
 
 def _text(data: Mapping[str, Any], key: str) -> str | None:

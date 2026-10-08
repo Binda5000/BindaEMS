@@ -96,3 +96,14 @@ async def test_missing_version_endpoint_does_not_block_vitals(respx_mock, twc_en
     respx_mock.get("http://twc.lan/api/1/lifetime").respond(json=LIFETIME)
     adapter, store = twc_env()
     await run_until(adapter, lambda: store.snapshot().ok("wallbox.twc.power_w") is not None)
+
+
+async def test_http_errors_are_logged(respx_mock, twc_env) -> None:
+    from structlog.testing import capture_logs
+
+    respx_mock.get("http://twc.lan/api/1/version").respond(json={})
+    respx_mock.get("http://twc.lan/api/1/vitals").respond(503)
+    adapter, _ = twc_env()
+    with capture_logs() as logs:
+        await run_until(adapter, lambda: adapter.health().error_count >= 1)
+    assert logs[0]["event"] == "Adapter-Fehler" and logs[0]["adapter"] == "twc"

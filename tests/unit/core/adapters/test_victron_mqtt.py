@@ -133,3 +133,15 @@ async def test_values_not_resent_after_reconnect_are_stale(fake_env) -> None:
         )
 
     await run_until(adapter, pv_stale_after_reconnect)
+
+
+async def test_connection_changes_are_logged(fake_env) -> None:
+    from structlog.testing import capture_logs
+
+    adapter, _, _ = fake_env(first_fails=True)
+    with capture_logs() as logs:
+        await run_until(adapter, lambda: adapter.health().connected)
+    assert [(e["event"], e["adapter"]) for e in logs] == [
+        ("Adapter-Fehler", "victron"),
+        ("Adapter verbunden", "victron"),
+    ]
