@@ -1,8 +1,9 @@
 """Abbildung der Venus-OS-MQTT-Topics (dbus-flashmq) auf EMS-Signale.
 
 Ausgewertet werden nur Topics ``N/<portal>/<service>/<instance>/<path>`` mit JSON-Payload
-``{"value": …}``. Alle anderen Nachrichten werden ignoriert. ``{"value": null}`` ergibt ein
-Update mit Wert ``None`` – der Zustandsspeicher markiert das Signal dann als ungültig.
+``{"value": …}``. Alle anderen Nachrichten werden ignoriert. ``{"value": null}`` und eine leere
+Payload (dbus-flashmq leert so die Topics eines verschwundenen Dienstes) ergeben ein Update mit
+Wert ``None`` – der Zustandsspeicher markiert das Signal dann als ungültig.
 """
 
 from __future__ import annotations
@@ -171,8 +172,11 @@ def parse_message(
 def _decode_value(payload: bytes) -> tuple[bool, Value]:
     """Liefert ``(gültig, Wert)``.
 
-    Ungültig sind Nicht-JSON, ein fehlendes ``value`` sowie Listen und Objekte.
+    Ungültig sind Nicht-JSON, ein fehlendes ``value`` sowie Listen und Objekte. Eine leere
+    Payload bedeutet „Wert entfernt“ und ergibt ``None``.
     """
+    if not payload:
+        return True, None
     try:
         data = json.loads(payload)
     except (UnicodeDecodeError, json.JSONDecodeError):

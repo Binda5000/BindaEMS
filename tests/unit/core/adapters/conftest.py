@@ -35,7 +35,7 @@ class RecordingSleep:
 class FakeTransport:
     def __init__(
         self,
-        messages: Iterable[MqttMessage] = (),
+        messages: Iterable[MqttMessage | Callable[[], object]] = (),
         *,
         fail_on_enter: bool = False,
         end_with_error: bool = False,
@@ -62,6 +62,9 @@ class FakeTransport:
 
     async def messages(self) -> AsyncIterator[MqttMessage]:
         for message in self._messages:
+            if callable(message):  # Skript-Schritt, z. B. die Uhr vorstellen
+                message()
+                continue
             yield message
         if self._end_with_error:
             raise ConnectionError("Verbindung verloren")
@@ -94,10 +97,12 @@ def fake_env(cfg: Config) -> Callable[..., tuple[Any, list[FakeTransport], State
             update={"keepalive_s": keepalive_s, "portal_id": portal_id}
         )
         victron = cfg.victron.model_copy(update={"mqtt": mqtt})
-        store = StateStore(ManualClock(T0))
+        clock = ManualClock(T0)
+        store = StateStore(clock)
         sleep = RecordingSleep()
         adapter = VictronMqttAdapter(victron, None, store, factory, sleep=sleep)
         adapter.sleeps = sleep.calls  # type: ignore[attr-defined]
+        adapter.clock = clock  # type: ignore[attr-defined]
         return adapter, transports, store
 
     return build

@@ -109,6 +109,13 @@ def test_null_value_yields_invalid_update() -> None:
     ]
 
 
+def test_empty_payload_marks_value_removed() -> None:
+    # dbus-flashmq leert die Topics eines verschwundenen Dienstes
+    assert parse_message(f"N/{P}/grid/30/Ac/L1/Power", b"", P, resolver()) == [
+        SignalUpdate("grid.l1.power_w", None, M)
+    ]
+
+
 def test_broken_json_ignored() -> None:
     assert parse_message(f"N/{P}/grid/30/Ac/L1/Power", b"{kaputt", P, resolver()) == []
 

@@ -149,7 +149,8 @@ class VictronMqttAdapter:
         self._backoff = Backoff()
         self._session_messages = 0
         self.portal_id: str | None = cfg.mqtt.portal_id
-        store.register_source(SOURCE, FRESHNESS_S)
+        # Der Cerbo sendet nur Änderungen: frisch ist, was er sendet, solange er überhaupt sendet.
+        store.register_source(SOURCE, FRESHNESS_S, activity_based=True)
 
     def health(self) -> AdapterHealth:
         return replace(self._health)
@@ -206,6 +207,7 @@ class VictronMqttAdapter:
             await transport.publish(f"R/{portal}/keepalive", KEEPALIVE_SUPPRESS)
 
     def _handle(self, message: MqttMessage, portal: str) -> None:
+        self._store.touch(SOURCE)
         for update in parse_message(message.topic, message.payload, portal, self._resolver):
             self._store.update(update.signal, update.value, source=SOURCE, kind=update.kind)
         self._session_messages += 1

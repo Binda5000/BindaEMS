@@ -87,3 +87,27 @@ async def test_backoff_resets_after_session_with_messages(fake_env) -> None:
     )
     await run_until(adapter, lambda: len(adapter.sleeps) >= 3)
     assert adapter.sleeps[:3] == [1.0, 1.0, 2.0]
+
+
+async def test_unchanged_values_stay_valid_while_cerbo_sends(fake_env) -> None:
+    holder = []
+
+    def advance(seconds: float):
+        return lambda: holder[0].clock.advance(seconds)
+
+    adapter, _, store = fake_env(
+        messages=[
+            MqttMessage(f"N/{P}/system/0/Dc/Battery/Soc", b'{"value": 55.0}'),
+            advance(4),
+            MqttMessage(f"N/{P}/system/0/Dc/Battery/Temperature", b'{"value": 21.0}'),
+            advance(4),
+        ]
+    )
+    holder.append(adapter)
+    start = adapter.clock.now()
+
+    def soc_still_valid_after_8s() -> bool:  # SOC unverändert, aber der Cerbo sendet weiter
+        snap = store.snapshot()
+        return (snap.ts - start).total_seconds() == 8 and snap.ok("battery.soc_pct") == 55.0
+
+    await run_until(adapter, soc_still_valid_after_8s)

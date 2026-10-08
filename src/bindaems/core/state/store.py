@@ -24,7 +24,9 @@ class StateStore:
     """Hält die Signale aller Adapter; die Qualität wird bei jedem ``snapshot()`` neu bewertet.
 
     * ``MEASUREMENT`` veraltet, wenn das Alter die Frischegrenze der Quelle überschreitet
-      oder die Quelle getrennt ist.
+      oder die Quelle getrennt ist. Bei Quellen mit ``activity_based=True`` zählt das letzte
+      Lebenszeichen der Quelle statt der letzten Wertänderung – für Quellen, die nur
+      Änderungen senden (Victron-MQTT mit ``suppress-republish``).
     * ``STATE`` gilt, solange die Quelle verbunden ist.
     * ``None``, ``NaN`` und ``±inf`` sind ``INVALID``.
     """
@@ -35,10 +37,21 @@ class StateStore:
         self._connected: dict[str, bool] = {}
         self._entries: dict[str, _Entry] = {}
         self._ok_since: dict[str, datetime] = {}
+        self._activity_based: dict[str, bool] = {}
+        self._last_activity: dict[str, datetime] = {}
 
-    def register_source(self, name: str, freshness_s: float | None) -> None:
+    def register_source(
+        self, name: str, freshness_s: float | None, *, activity_based: bool = False
+    ) -> None:
         self._freshness[name] = freshness_s
+        self._activity_based[name] = activity_based
         self._connected.setdefault(name, False)
+
+    def touch(self, source: str) -> None:
+        """Lebenszeichen einer Quelle, auch wenn sich kein Wert geändert hat."""
+        if source not in self._freshness:
+            raise KeyError(f"unbekannte Quelle: {source}")
+        self._last_activity[source] = self._clock.now()
 
     def update(
         self,
@@ -52,6 +65,7 @@ class StateStore:
         if source not in self._freshness:
             raise KeyError(f"unbekannte Quelle: {source}")
         invalid = value is None or (isinstance(value, float) and not math.isfinite(value))
+        self._last_activity[source] = self._clock.now()
         self._entries[signal] = _Entry(
             value=None if invalid else value,
             ts=ensure_utc(ts) if ts is not None else self._clock.now(),
@@ -88,6 +102,9 @@ class StateStore:
             return Quality.STALE
         if entry.kind is SignalKind.MEASUREMENT:
             freshness = self._freshness[entry.source]
-            if freshness is not None and (now - entry.ts).total_seconds() > freshness:
+            reference = entry.ts
+            if self._activity_based[entry.source]:
+                reference = max(reference, self._last_activity.get(entry.source, reference))
+            if freshness is not None and (now - reference).total_seconds() > freshness:
                 return Quality.STALE
         return Quality.OK

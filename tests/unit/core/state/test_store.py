@@ -83,3 +83,23 @@ def test_matching_prefix() -> None:
     s.update("grid.l1.power_w", 1.0, source="victron", kind=M)
     s.update("battery.soc_pct", 2.0, source="victron", kind=M)
     assert set(s.snapshot().matching("grid.")) == {"grid.l1.power_w"}
+
+
+def test_activity_based_source_keeps_unchanged_measurement_valid() -> None:
+    clock = ManualClock(T0)
+    store = StateStore(clock)
+    store.register_source("victron", 5.0, activity_based=True)
+    store.set_connected("victron", True)
+    store.update("pv.huawei.power_w", 0.0, source="victron", kind=M)  # nachts konstant 0 W
+    clock.advance(4)
+    store.touch("victron")  # andere Nachricht der Quelle, Wert unverändert
+    clock.advance(4)
+    assert store.snapshot().ok("pv.huawei.power_w") == 0.0
+    clock.advance(1.1)  # 5,1 s ohne Lebenszeichen der Quelle
+    assert quality(store, "pv.huawei.power_w") is Quality.STALE
+
+
+def test_touch_unknown_source_rejected() -> None:
+    _, store = make()
+    with pytest.raises(KeyError):
+        store.touch("unbekannt")
