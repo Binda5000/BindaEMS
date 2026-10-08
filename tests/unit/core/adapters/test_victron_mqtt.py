@@ -1,0 +1,89 @@
+import ssl
+
+from tests.helpers import run_until
+from tests.unit.core.adapters.conftest import P
+
+from bindaems.core.adapters.victron_mqtt import KEEPALIVE_SUPPRESS, MqttMessage, build_tls_context
+from bindaems.shared.config import MqttConfig
+from bindaems.shared.domain import Quality
+
+
+async def test_first_keepalive_requests_full_republish(fake_env) -> None:
+    adapter, transports, _ = fake_env(keepalive_s=0.02)
+    await run_until(adapter, lambda: bool(transports) and len(transports[0].published) >= 3)
+    t = transports[0]
+    assert t.published[0] == (f"R/{P}/keepalive", b"")
+    assert all(payload == KEEPALIVE_SUPPRESS for _, payload in t.published[1:])
+
+
+async def test_publishes_only_keepalive_topic(fake_env) -> None:
+    adapter, transports, _ = fake_env(keepalive_s=0.02)
+    await run_until(adapter, lambda: bool(transports) and len(transports[0].published) >= 2)
+    assert {topic for topic, _ in transports[0].published} == {f"R/{P}/keepalive"}
+
+
+async def test_messages_update_store(fake_env) -> None:
+    adapter, _, store = fake_env(
+        messages=[MqttMessage(f"N/{P}/grid/30/Ac/L1/Power", b'{"value": 500.0}')]
+    )
+    await run_until(adapter, lambda: store.snapshot().ok("grid.l1.power_w") == 500.0)
+
+
+async def test_subscribes_expected_filters(fake_env) -> None:
+    adapter, transports, _ = fake_env()
+    await run_until(adapter, lambda: bool(transports) and len(transports[0].subscribed) >= 11)
+    assert f"N/{P}/grid/+/#" in transports[0].subscribed
+    assert f"N/{P}/settings/0/Settings/DynamicEss/#" in transports[0].subscribed
+
+
+async def test_portal_discovery_when_not_configured(fake_env) -> None:
+    adapter, transports, _ = fake_env(
+        portal_id=None,
+        messages=[MqttMessage("N/abc123/system/0/Serial", b'{"value": "abc123"}')],
+    )
+    await run_until(
+        adapter, lambda: bool(transports) and "N/abc123/grid/+/#" in transports[0].subscribed
+    )
+    assert adapter.portal_id == "abc123"
+
+
+async def test_reconnect_requests_full_republish_again(fake_env) -> None:
+    adapter, transports, _ = fake_env(first_fails=True, keepalive_s=0.02)
+    await run_until(adapter, lambda: len(transports) == 2 and bool(transports[1].published))
+    assert adapter.sleeps[0] == 1.0
+    assert transports[1].published[0] == (f"R/{P}/keepalive", b"")
+
+
+async def test_disconnect_marks_state_signals_stale(fake_env) -> None:
+    adapter, _, store = fake_env(
+        end_with_error=True,
+        messages=[MqttMessage(f"N/{P}/settings/0/Settings/CGwacs/Hub4Mode", b'{"value": 1}')],
+    )
+    await run_until(adapter, lambda: adapter.health().error_count >= 1)
+    reading = store.snapshot().get("ess.hub4_mode")
+    assert reading is not None and reading.quality is Quality.STALE
+
+
+def test_tls_context_without_verification() -> None:
+    ctx = build_tls_context(MqttConfig(host="cerbo.lan", tls=True, tls_verify=False))
+    assert ctx is not None
+    assert ctx.check_hostname is False and ctx.verify_mode == ssl.CERT_NONE
+
+
+def test_tls_context_with_verification() -> None:
+    ctx = build_tls_context(MqttConfig(host="cerbo.lan", tls=True))
+    assert ctx is not None and ctx.verify_mode == ssl.CERT_REQUIRED
+
+
+def test_no_tls_context_for_plain_mqtt() -> None:
+    assert build_tls_context(MqttConfig(host="cerbo.lan", port=1883, tls=False)) is None
+
+
+async def test_backoff_resets_after_session_with_messages(fake_env) -> None:
+    adapter, _, _ = fake_env(
+        first_fails=True,
+        end_with_error=True,
+        messages=[MqttMessage(f"N/{P}/grid/30/Ac/Power", b'{"value": 1.0}')],
+    )
+    await run_until(adapter, lambda: len(adapter.sleeps) >= 3)
+    assert adapter.sleeps[:3] == [1.0, 1.0, 2.0]
