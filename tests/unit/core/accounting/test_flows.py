@@ -136,3 +136,15 @@ def test_flush_without_samples_returns_none() -> None:
     acc.add(datetime(2026, 10, 8, 9, 0, tzinfo=UTC), {}, snap({}))
     assert acc.flush() is not None
     assert acc.flush() is None  # der laufende Slot wird nur einmal ausgegeben
+
+
+def test_unknown_flows_do_not_count_as_covered() -> None:
+    acc = SlotAccumulator(counter_signals=["grid.energy_import_kwh"])
+    t = datetime(2026, 10, 8, 9, 0, tzinfo=UTC)
+    acc.add(t, None, snap({"grid.energy_import_kwh": 1.0}))  # Bilanz unbekannt
+    acc.add(t + timedelta(seconds=1), {"pv>house": 3600.0}, snap({}))
+    acc.add(t + timedelta(seconds=2), None, snap({"grid.energy_import_kwh": 1.2}))
+    slot = acc.flush()
+    assert slot.covered_s == pytest.approx(1.0)  # nur die Sekunde mit bekannten Flüssen
+    assert slot.flows_wh == {"pv>house": pytest.approx(1.0)}
+    assert slot.counters["grid.energy_import_kwh"] == (1.0, 1.2)

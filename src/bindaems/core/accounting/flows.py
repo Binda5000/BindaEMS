@@ -70,28 +70,31 @@ class SlotAccumulator:
 
     Die Leistung eines Abtastpunkts gilt bis zum nächsten; das Intervall wird dem Slot des
     früheren Punkts zugerechnet, aber nur bis zu ``max_gap_s`` – längere Lücken bleiben offen
-    und senken ``covered_s``.
+    und senken ``covered_s``. ``flows_w=None`` heißt „Bilanz unbekannt“: Das folgende Intervall
+    zählt nicht als abgedeckt, Slotgrenzen und Zählerstände werden trotzdem fortgeschrieben.
     """
 
     def __init__(self, counter_signals: Sequence[str], max_gap_s: float = 5.0) -> None:
         self._signals = list(counter_signals)
         self._max_gap_s = max_gap_s
         self._slot: datetime | None = None
-        self._prev: tuple[datetime, Mapping[str, float]] | None = None
+        self._prev: tuple[datetime, Mapping[str, float] | None] | None = None
         self._covered_s = 0.0
         self._flows_wh: dict[str, float] = defaultdict(float)
         self._start: dict[str, float | None] = {}
         self._last: dict[str, float | None] = {}
 
-    def add(self, ts: datetime, flows_w: Mapping[str, float], snap: Snapshot) -> SlotFlows | None:
+    def add(
+        self, ts: datetime, flows_w: Mapping[str, float] | None, snap: Snapshot
+    ) -> SlotFlows | None:
         if self._prev is not None:
             prev_ts, prev_flows = self._prev
             dt = (ts - prev_ts).total_seconds()
-            if 0 < dt <= self._max_gap_s:
+            if prev_flows is not None and 0 < dt <= self._max_gap_s:
                 for key, power in prev_flows.items():
                     self._flows_wh[key] += power * dt / 3600.0
                 self._covered_s += dt
-        self._prev = (ts, dict(flows_w))
+        self._prev = (ts, dict(flows_w) if flows_w is not None else None)
 
         values = {signal: _counter(snap, signal) for signal in self._signals}
         closed = None
