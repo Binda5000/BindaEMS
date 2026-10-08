@@ -97,3 +97,47 @@ def test_file_being_written_is_not_visible(tmp_path, monkeypatch) -> None:
     sp.append("raw", ["a 1"])
     assert visible_while_writing == [[]]
     assert [f.lines for f in sp.oldest(10)] == [["a 1"]]
+
+
+def test_no_directory_scans_after_startup(tmp_path, monkeypatch) -> None:
+    # bei stundenlangem InfluxDB-Ausfall entstehen zehntausende Dateien: nach dem Start
+    # darf keine Operation das Verzeichnis durchsuchen (sie liefe auf der Ereignisschleife)
+    clock = ManualClock(TS)
+    sp = DiskSpool(tmp_path, 200, timedelta(days=7), clock)
+
+    def no_scan(*args, **kwargs):
+        raise AssertionError("Verzeichnis-Scan nach dem Start")
+
+    monkeypatch.setattr("pathlib.Path.glob", no_scan)
+    monkeypatch.setattr("pathlib.Path.iterdir", no_scan)
+    for i in range(8):
+        sp.append("raw", [f"m{i} f=1"])
+        clock.advance(1)
+        sp.enforce_limits()
+    files = sp.oldest(3)
+    assert [f.lines[0] for f in files] == ["m0 f=1", "m1 f=1", "m2 f=1"]
+    sp.remove(files[0].path)
+    assert sp.size_bytes() == 7 * len("m0 f=1\n")
+    assert sp.oldest(1)[0].lines == ["m1 f=1"]
+
+
+def test_existing_files_are_taken_over_at_startup(tmp_path) -> None:
+    first = DiskSpool(tmp_path, 10_000_000, timedelta(days=7), ManualClock(TS))
+    first.append("raw", ["a 1"])
+    first.append("long", ["b 2"])
+    restarted = DiskSpool(tmp_path, 10_000_000, timedelta(days=7), ManualClock(TS))
+    assert [(f.rp, f.lines) for f in restarted.oldest(5)] == [("raw", ["a 1"]), ("long", ["b 2"])]
+    assert restarted.size_bytes() == first.size_bytes() == 8
+
+
+def test_foreign_files_are_ignored(tmp_path) -> None:
+    (tmp_path / "fremd.lp").write_text("x 1\n")
+    (tmp_path / "notiz.txt").write_text("hallo")
+    clock = ManualClock(TS)
+    sp = DiskSpool(tmp_path, 5, timedelta(days=7), clock)  # 2 × 4 Byte > 5 Byte
+    sp.append("raw", ["a 1"])
+    clock.advance(1)
+    sp.append("raw", ["b 2"])
+    assert sp.enforce_limits() == 1  # nur eigene Dateien zählen und werden gelöscht
+    assert [f.lines for f in sp.oldest(5)] == [["b 2"]]
+    assert (tmp_path / "fremd.lp").exists()
