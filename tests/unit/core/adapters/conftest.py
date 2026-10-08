@@ -10,6 +10,7 @@ from pydantic import SecretStr
 from tests.helpers import T0
 
 from bindaems.core.adapters.evcs import EvcsAdapter
+from bindaems.core.adapters.homeassistant import HaAdapter
 from bindaems.core.adapters.tessie import TessieAdapter
 from bindaems.core.adapters.twc import TwcAdapter
 from bindaems.core.adapters.victron_mqtt import MqttMessage, VictronMqttAdapter
@@ -202,3 +203,52 @@ async def tessie_env(cfg: Config) -> AsyncIterator[Callable[..., tuple[Any, ...]
     yield build
     for client in clients:
         await client.aclose()
+
+
+class FakeConnection:
+    """Eingangs-Skript für ``recv_json``: ein Dict ist eine Nachricht, eine Exception wird
+    geworfen; danach blockiert ``recv_json`` bis zum Abbruch. Gesendetes landet in ``outbound``.
+    """
+
+    def __init__(self, inbound: Iterable[dict[str, Any] | Exception]) -> None:
+        self._inbound = list(inbound)
+        self.outbound: list[dict[str, Any]] = []
+
+    async def send_json(self, msg: dict[str, Any]) -> None:
+        self.outbound.append(msg)
+
+    async def recv_json(self) -> dict[str, Any]:
+        if not self._inbound:
+            await asyncio.Event().wait()  # blockiert bis zum Abbruch
+        item = self._inbound.pop(0)
+        if isinstance(item, Exception):
+            raise item
+        return item
+
+    async def close(self) -> None:
+        return None
+
+
+@pytest.fixture
+def ha_env(cfg: Config) -> Callable[..., tuple[Any, FakeConnection, StateStore]]:
+    def build(
+        inbound: Iterable[dict[str, Any] | Exception],
+        ping_s: float = 30.0,
+        entities: dict[str, str] | None = None,
+    ) -> tuple[Any, FakeConnection, StateStore]:
+        assert cfg.homeassistant is not None
+        ha = cfg.homeassistant.model_copy(
+            update={"entities": entities or {"vehicle.egolf.soc_pct": "sensor.egolf_soc"}}
+        )
+        conn = FakeConnection(inbound)
+
+        async def connect(url: str) -> FakeConnection:
+            return conn
+
+        store = StateStore(ManualClock(T0))
+        sleep = RecordingSleep()
+        adapter = HaAdapter(ha, SecretStr("tok"), store, connect, ping_s=ping_s, sleep=sleep)
+        adapter.sleeps = sleep.calls  # type: ignore[attr-defined]
+        return adapter, conn, store
+
+    return build
