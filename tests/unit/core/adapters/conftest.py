@@ -1,15 +1,16 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterator, Callable, Iterable
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterable
 from typing import Any
 
 import pytest
 from tests.helpers import T0
 
+from bindaems.core.adapters.evcs import EvcsAdapter
 from bindaems.core.adapters.victron_mqtt import MqttMessage, VictronMqttAdapter
 from bindaems.core.state.store import StateStore
-from bindaems.shared.config import Config
+from bindaems.shared.config import Config, EvcsConfig
 from bindaems.shared.timeutil import ManualClock
 
 P = "c0619ab1234"
@@ -93,5 +94,60 @@ def fake_env(cfg: Config) -> Callable[..., tuple[Any, list[FakeTransport], State
         adapter = VictronMqttAdapter(victron, None, store, factory, sleep=sleep)
         adapter.sleeps = sleep.calls  # type: ignore[attr-defined]
         return adapter, transports, store
+
+    return build
+
+
+class FakeReader:
+    """Liefert ``blocks`` der Reihe nach: eine Liste als Registerinhalt, eine Exception wird
+    geworfen; danach blockiert ``read_holding`` bis zum Abbruch.
+
+    Jeder Aufruf landet in ``calls`` – auch jeder unbekannte, etwa ein Schreibversuch.
+    """
+
+    def __init__(self, blocks: Iterable[list[int] | Exception]) -> None:
+        self._blocks = list(blocks)
+        self.calls: list[tuple[object, ...]] = []
+
+    async def connect(self) -> None:
+        self.calls.append(("connect",))
+
+    async def read_holding(self, address: int, count: int) -> list[int]:
+        self.calls.append(("read_holding", address, count))
+        if not self._blocks:
+            await asyncio.Event().wait()  # blockiert bis zum Abbruch
+        block = self._blocks.pop(0)
+        if isinstance(block, Exception):
+            raise block
+        return block
+
+    async def close(self) -> None:
+        self.calls.append(("close",))
+
+    def __getattr__(self, name: str) -> Callable[..., Awaitable[None]]:
+        if name.startswith("_"):
+            raise AttributeError(name)
+
+        async def record(*args: object, **kwargs: object) -> None:
+            self.calls.append((name, *args))
+
+        return record
+
+
+@pytest.fixture
+def evcs_env(cfg: Config) -> Callable[..., tuple[Any, FakeReader, StateStore]]:
+    def build(
+        blocks: Iterable[list[int] | Exception], poll_s: float = 1.0
+    ) -> tuple[Any, FakeReader, StateStore]:
+        evcs = cfg.wallboxes["evcs"]
+        assert isinstance(evcs, EvcsConfig)
+        reader = FakeReader(blocks)
+        clock = ManualClock(T0)
+        store = StateStore(clock)
+        sleep = RecordingSleep()
+        adapter = EvcsAdapter("evcs", evcs, store, lambda: reader, poll_s=poll_s, sleep=sleep)
+        adapter.sleeps = sleep.calls  # type: ignore[attr-defined]
+        adapter.clock = clock  # type: ignore[attr-defined]
+        return adapter, reader, store
 
     return build
