@@ -91,9 +91,12 @@ def test_stream_sends_messages(client) -> None:
         assert ws.receive_json()["type"] == "state"
 
 
-def test_stream_accepts_query_token(client) -> None:
-    with client.websocket_connect(f"/v1/stream?token={TOKEN}") as ws:
-        assert ws.receive_json() == {"type": "state", "data": {}}
+def test_stream_rejects_token_in_query(client) -> None:
+    # ein Token in der URL landet in Zugriffslogs (uvicorn protokolliert den Pfad): nur Header
+    with pytest.raises(WebSocketDisconnect) as exc:
+        with client.websocket_connect(f"/v1/stream?token={TOKEN}") as ws:
+            ws.receive_json()
+    assert exc.value.code == 4401
 
 
 @pytest.mark.parametrize("path", ["/v1/stream?token=falsch", "/v1/stream"])

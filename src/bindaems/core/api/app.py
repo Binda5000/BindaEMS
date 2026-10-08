@@ -85,9 +85,8 @@ def create_api(view: CoreView, token: SecretStr) -> FastAPI:
 
     @app.websocket("/v1/stream")
     async def stream(websocket: WebSocket) -> None:
+        # nur per Header: ein Token in der URL landete in den Zugriffslogs
         candidate = _bearer(websocket.headers.get("authorization"))
-        if candidate is None:
-            candidate = websocket.query_params.get("token")
         # erst annehmen, dann schließen: sonst sähe ein echter Client nur HTTP 403 statt 4401
         await websocket.accept()
         if not _matches(candidate, token):
