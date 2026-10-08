@@ -4,13 +4,15 @@ import asyncio
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterable
 from typing import Any
 
+import httpx
 import pytest
 from tests.helpers import T0
 
 from bindaems.core.adapters.evcs import EvcsAdapter
+from bindaems.core.adapters.twc import TwcAdapter
 from bindaems.core.adapters.victron_mqtt import MqttMessage, VictronMqttAdapter
 from bindaems.core.state.store import StateStore
-from bindaems.shared.config import Config, EvcsConfig
+from bindaems.shared.config import Config, EvcsConfig, TwcConfig
 from bindaems.shared.timeutil import ManualClock
 
 P = "c0619ab1234"
@@ -151,3 +153,23 @@ def evcs_env(cfg: Config) -> Callable[..., tuple[Any, FakeReader, StateStore]]:
         return adapter, reader, store
 
     return build
+
+
+@pytest.fixture
+async def twc_env(cfg: Config) -> AsyncIterator[Callable[..., tuple[Any, StateStore]]]:
+    clients: list[httpx.AsyncClient] = []
+
+    def build(**kwargs: Any) -> tuple[Any, StateStore]:
+        twc = cfg.wallboxes["twc"]
+        assert isinstance(twc, TwcConfig)
+        client = httpx.AsyncClient()
+        clients.append(client)
+        store = StateStore(ManualClock(T0))
+        sleep = RecordingSleep()
+        adapter = TwcAdapter("twc", twc, store, client, sleep=sleep, **kwargs)
+        adapter.sleeps = sleep.calls  # type: ignore[attr-defined]
+        return adapter, store
+
+    yield build
+    for client in clients:
+        await client.aclose()

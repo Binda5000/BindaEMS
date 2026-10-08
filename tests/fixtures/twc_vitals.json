@@ -1,0 +1,1 @@
+{"contactor_closed": true, "vehicle_connected": true, "session_s": 1234, "grid_v": 230.1, "grid_hz": 49.98, "vehicle_current_a": 16.1, "currentA_a": 16.0, "currentB_a": 16.1, "currentC_a": 15.9, "currentN_a": 0.2, "voltageA_v": 230.0, "voltageB_v": 231.0, "voltageC_v": 229.0, "session_energy_wh": 4321.5, "evse_state": 11}
