@@ -1,0 +1,100 @@
+# Beispielkonfiguration für BindaEMS – Werte nur zur Illustration, an die eigene Anlage anpassen.
+# Harte Grenzen stehen ausschließlich hier; UI, Home Assistant und Lernmodelle können sie nicht ändern.
+# Secrets (Tokens, Passwörter) gehören in die .env-Datei, nicht hierher.
+
+site:
+  timezone: Europe/Vienna
+  location: {lat: 48.20, lon: 16.37}
+
+grid:
+  phases: 3
+  voltage_nominal_v: 230
+  fuse_a: 35            # Hausanschlusssicherung je Phase in A
+  fuse_margin_a: 2      # Sicherheitsabstand in A
+
+battery:
+  usable_kwh: 30
+  reserve_soc_pct: 20   # USV-Reserve: harte Untergrenze für den Akku-SOC
+  max_charge_w: 10000
+  max_discharge_w: 12000
+
+victron:
+  mqtt:
+    host: cerbo.lan
+    port: 8883
+    tls: true
+    tls_verify: false   # der Cerbo nutzt ein selbstsigniertes Zertifikat
+    # portal_id: c0619ab1234   # ohne Angabe wird die Portal-ID automatisch ermittelt
+  modbus: {host: cerbo.lan, port: 502}
+  instances:            # Werte laut Prüfprotokoll Teil 1 eintragen
+    grid: 30
+    vebus: 276
+    battery: 512
+    pv: {31: huawei}
+    acload: {32: obergeschoss}
+    evcharger: {40: evcs}
+  expected:
+    hub4_mode: 1
+    batterylife_states: [10]
+  max_grid_charge_setpoint_w: 8000
+  persistent_writes: {per_hour: 12, per_day: 100}
+  watchdog: {heartbeat_s: 10, timeout_s: 90}
+
+wallboxes:
+  evcs:
+    type: victron_evcs_ns
+    host: evcs.lan
+    min_a: 6
+    max_a: 16
+    safe_a: 6
+    phase_map: [L1, L2, L3]   # Wallbox-Phase 1..3 → Netzphase
+    live_allowed: false
+  twc:
+    type: tesla_wall_connector_gen3
+    host: twc.lan
+    max_a: 16
+    phase_map: [L1, L2, L3]
+
+vehicles:
+  tesla:
+    name: Tesla Model 3
+    usable_kwh: 75
+    phases: 3
+    min_a: 5
+    max_a: 16
+    default_wallbox: twc
+    live_allowed: false
+    tessie: {vin: 5YJ3E7EB0MF000000}
+  egolf:
+    name: e-Golf
+    usable_kwh: 38.6
+    phases: 2
+    min_a: 6
+    max_a: 16
+    default_wallbox: evcs
+    soc_entity: sensor.egolf_soc
+
+pv:
+  planes:
+    - {name: Sued, kwp: 10, tilt_deg: 30, azimuth_deg: 0}   # Azimut: 0 = Süd, −90 = Ost, 90 = West
+  inverter_ac_max_w: 10000
+
+homeassistant:
+  url: http://homeassistant.lan:8123
+  entities:             # Signalname → entity_id
+    vehicle.egolf.soc_pct: sensor.egolf_soc
+
+influxdb:
+  url: http://influx.lan:8086
+  database: bindaems
+  username: bindaems
+  ha_database: homeassistant
+
+telemetry:
+  spool_dir: /data/spool
+  spool_max_mb: 500
+  spool_max_age_days: 7
+
+core_api:
+  host: 0.0.0.0
+  port: 8081
