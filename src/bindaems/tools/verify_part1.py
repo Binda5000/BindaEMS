@@ -77,6 +77,22 @@ DISCOVERY_TIMEOUT_S = 10.0
 HTTP_TIMEOUT_S = 10.0
 EVCS_BLOCKS = ((5000, 50), (5050, 50), (5100, 50), (5150, 50))
 _SECRET_KEY = re.compile(r"token|password|passwort|secret|latitude|longitude", re.IGNORECASE)
+# Nur diese Teilbäume kommen in die Rohdaten – andere Einstellungen (z. B. die BLE-PIN unter
+# Settings/Ble) haben im eingecheckten Protokoll nichts zu suchen.
+DUMP_SUBTREES = (
+    "system/",
+    "grid/",
+    "pvinverter/",
+    "acload/",
+    "vebus/",
+    "battery/",
+    "evcharger/",
+    "hub4/",
+    "settings/0/Settings/CGwacs/",
+    "settings/0/Settings/DynamicEss/",
+    "settings/0/Settings/SystemSetup/",
+    "platform/0/Firmware/",
+)
 
 
 def redact(data: Any) -> Any:
@@ -91,6 +107,12 @@ def redact(data: Any) -> Any:
     if isinstance(data, list):
         return [redact(item) for item in data]
     return data
+
+
+def keep_in_dump(topic: str, portal: str) -> bool:
+    """Gehört das Topic in die Rohdaten des Prüfprotokolls?"""
+    prefix = f"N/{portal}/"
+    return topic.startswith(prefix) and topic[len(prefix) :].startswith(DUMP_SUBTREES)
 
 
 def clock_offset_s(date_header: str | None, local_now: datetime) -> float | None:
@@ -152,7 +174,8 @@ class _Mqtt:
     async def _consume(self, messages: AsyncIterator[MqttMessage], portal: str) -> None:
         async for message in messages:
             self.store.touch("victron")
-            self.topics[message.topic] = message.payload.decode(errors="replace")
+            if keep_in_dump(message.topic, portal):
+                self.topics[message.topic] = message.payload.decode(errors="replace")
             parts = message.topic.split("/")
             if len(parts) >= 4 and parts[0] == "N" and parts[3].isdigit():
                 self.services[parts[2]].add(int(parts[3]))

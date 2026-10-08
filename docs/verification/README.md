@@ -39,6 +39,8 @@ Lokal aus dem Repository geht es mit:
 - `YYYY-MM-DD-pruefprotokoll-teil1-rohdaten.json` enthält alle Rohdaten.
   - Token und Passwörter werden nie ausgegeben.
   - Koordinaten (`latitude`/`longitude`) und die VIN werden geschwärzt.
+  - Vom Cerbo werden nur die benötigten Teilbäume gespeichert (Messwerte, ESS-, DESS- und
+    DVCC-Einstellungen, Firmware); andere Einstellungen wie die BLE-PIN nicht.
   - So können beide Dateien in dieses Verzeichnis eingecheckt werden.
 - Ist eine Quelle nicht erreichbar, steht im Bericht ein FEHLER mit der Meldung. Die übrigen
   Prüfungen laufen trotzdem.

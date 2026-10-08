@@ -177,3 +177,35 @@ def test_http_sources_are_checked(tmp_path, monkeypatch, respx_mock) -> None:
 def test_invalid_config_returns_2(argv, capsys) -> None:
     assert main(argv) == 2
     assert "Konfiguration ungültig" in capsys.readouterr().err
+
+
+def test_dump_keeps_only_relevant_subtrees() -> None:
+    from bindaems.tools.verify_part1 import keep_in_dump
+
+    p = "c0619ab1234"
+    assert keep_in_dump(f"N/{p}/grid/30/Ac/Power", p)
+    assert keep_in_dump(f"N/{p}/settings/0/Settings/CGwacs/Hub4Mode", p)
+    assert keep_in_dump(f"N/{p}/platform/0/Firmware/Installed/Version", p)
+    assert not keep_in_dump(f"N/{p}/settings/0/Settings/Ble/Service/Pincode", p)
+    assert not keep_in_dump(f"N/{p}/settings/0/Settings/System/VncPassword", p)
+    assert not keep_in_dump(f"N/{p}/settings/0/Settings/CGwacsX/Foo", p)
+    assert not keep_in_dump("N/anderes/grid/30/Ac/Power", p)
+
+
+async def test_mqtt_dump_skips_unrelated_settings(cfg) -> None:
+    from pydantic import SecretStr
+
+    from bindaems.core.adapters.victron_mqtt import MqttMessage
+    from bindaems.shared.config import Secrets
+    from bindaems.tools.verify_part1 import _Mqtt
+
+    p = "c0619ab1234"
+
+    async def messages():
+        yield MqttMessage(f"N/{p}/grid/30/Ac/Power", b'{"value": 500.0}')
+        yield MqttMessage(f"N/{p}/settings/0/Settings/Ble/Service/Pincode", b'{"value": "123456"}')
+
+    mqtt = _Mqtt(cfg, Secrets(internal_token=SecretStr("x" * 32)))
+    await mqtt._consume(messages(), p)
+    assert list(mqtt.topics) == [f"N/{p}/grid/30/Ac/Power"]
+    assert mqtt.services == {"grid": {30}, "settings": {0}}  # Inventar bleibt vollständig
