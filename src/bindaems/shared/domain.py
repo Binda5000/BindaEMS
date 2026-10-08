@@ -65,3 +65,16 @@ class Alarm:
     severity: Severity
     message: str
     since: datetime
+
+
+@dataclass(frozen=True)
+class SlotFlows:
+    """Energieflüsse eines Viertelstunden-Slots und die Zählerstände an seinen Grenzen.
+
+    ``counters`` bildet je Zählersignal ``(Start, Ende)`` ab; ``None`` heißt unbekannt.
+    """
+
+    slot_start: datetime
+    covered_s: float
+    flows_wh: Mapping[str, float]
+    counters: Mapping[str, tuple[float | None, float | None]]
