@@ -1,0 +1,1 @@
+{"state": "online", "charge_state": {"battery_level": 63, "charge_limit_soc": 80, "charging_state": "Charging", "charge_amps": 16, "charge_current_request": 16, "charger_actual_current": 16, "charger_phases": 3, "charger_power": 11, "scheduled_charging_mode": "Off"}, "drive_state": {"latitude": 48.2, "longitude": 16.37}}

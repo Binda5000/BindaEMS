@@ -6,9 +6,11 @@ from typing import Any
 
 import httpx
 import pytest
+from pydantic import SecretStr
 from tests.helpers import T0
 
 from bindaems.core.adapters.evcs import EvcsAdapter
+from bindaems.core.adapters.tessie import TessieAdapter
 from bindaems.core.adapters.twc import TwcAdapter
 from bindaems.core.adapters.victron_mqtt import MqttMessage, VictronMqttAdapter
 from bindaems.core.state.store import StateStore
@@ -169,6 +171,33 @@ async def twc_env(cfg: Config) -> AsyncIterator[Callable[..., tuple[Any, StateSt
         adapter = TwcAdapter("twc", twc, store, client, sleep=sleep, **kwargs)
         adapter.sleeps = sleep.calls  # type: ignore[attr-defined]
         return adapter, store
+
+    yield build
+    for client in clients:
+        await client.aclose()
+
+
+@pytest.fixture
+async def tessie_env(cfg: Config) -> AsyncIterator[Callable[..., tuple[Any, ...]]]:
+    clients: list[httpx.AsyncClient] = []
+
+    def build(with_clock: bool = False) -> tuple[Any, ...]:
+        client = httpx.AsyncClient()
+        clients.append(client)
+        clock = ManualClock(T0)
+        store = StateStore(clock)
+        sleep = RecordingSleep()
+        adapter = TessieAdapter(
+            "tesla",
+            cfg.vehicles["tesla"],
+            cfg.site.location,
+            SecretStr("tok"),
+            store,
+            client,
+            sleep=sleep,
+        )
+        adapter.sleeps = sleep.calls  # type: ignore[attr-defined]
+        return (adapter, store, clock) if with_clock else (adapter, store)
 
     yield build
     for client in clients:
