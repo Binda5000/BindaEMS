@@ -74,3 +74,12 @@ def test_secrets_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("BINDAEMS_TESSIE_TOKEN", "abc")
     token = load_secrets().tessie_token
     assert token is not None and token.get_secret_value() == "abc"
+
+
+def test_empty_secret_variables_count_as_unset(monkeypatch) -> None:
+    # .env.example enthält leere Einträge; leer heißt „nicht gesetzt“, nicht „leeres Token“
+    monkeypatch.setenv("BINDAEMS_INTERNAL_TOKEN", "x" * 32)
+    monkeypatch.setenv("BINDAEMS_TESSIE_TOKEN", "")
+    monkeypatch.setenv("BINDAEMS_MQTT_PASSWORD", "")
+    secrets = load_secrets()
+    assert secrets.tessie_token is None and secrets.mqtt_password is None

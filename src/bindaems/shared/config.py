@@ -287,7 +287,8 @@ def load_config(path: Path) -> Config:
 class Secrets(BaseSettings):
     """Secrets aus Umgebungsvariablen ``BINDAEMS_*`` (nie im Repository)."""
 
-    model_config = SettingsConfigDict(env_prefix="BINDAEMS_", extra="ignore")
+    # leere Einträge (z. B. aus .env.example) gelten als nicht gesetzt
+    model_config = SettingsConfigDict(env_prefix="BINDAEMS_", extra="ignore", env_ignore_empty=True)
 
     mqtt_password: SecretStr | None = None
     tessie_token: SecretStr | None = None

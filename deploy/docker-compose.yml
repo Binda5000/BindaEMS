@@ -1,0 +1,33 @@
+# BindaEMS auf der VM: /opt/bindaems/{docker-compose.yml,config.yaml,.env}
+# Start: docker compose up -d · Update: docker compose pull && docker compose up -d
+name: bindaems
+
+services:
+  ems-core:
+    image: ghcr.io/binda5000/bindaems-core:${BINDAEMS_VERSION:-latest}
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.core
+    env_file: .env
+    volumes:
+      - ./config.yaml:/config/config.yaml:ro
+      - core-data:/data
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "5"
+    # Keine veröffentlichten Ports. Nur zur Diagnose kurzzeitig einkommentieren:
+    # ports:
+    #   - "127.0.0.1:8081:8081"
+    networks:
+      - internal
+
+networks:
+  # Gemeinsames Netz für core und app (Phase 1b). Bewusst kein „internal: true“:
+  # der core braucht das LAN (Cerbo, Wallboxen, InfluxDB, HA) und das Internet (Tessie).
+  internal: {}
+
+volumes:
+  core-data: {}
