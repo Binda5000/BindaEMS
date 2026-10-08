@@ -61,7 +61,7 @@ def test_failures_have_exact_texts(cfg) -> None:
     res = by_id(run_selfcheck(snap(bad, kind=STATE), cfg, fresh, T0))
     assert res["phases"] == CheckResult("phases", "fail", "Erwartet 3 Phasen, gemeldet 1.")
     assert res["ess_mode"] == CheckResult("ess_mode", "fail", "ESS-Modus 3, erwartet 1.")
-    assert res["batterylife"].message == "BatteryLife-Zustand 2, erwartet [10]."
+    assert res["batterylife"].message == "BatteryLife-Zustand 2, erwartet [10, 11, 12]."
     assert res["dess"] == CheckResult("dess", "fail", "Dynamic ESS ist aktiv (Modus 1).")
     assert res["schedules"].message == "Aktive Victron-Ladefenster: 0, 3."
     assert res["evcs_mode.evcs"] == CheckResult(
@@ -115,3 +115,18 @@ def test_fresh_data_lists_only_missing_signals(cfg) -> None:
     res = by_id(run_selfcheck(snap(GOOD, kind=STATE), cfg, since, T0))
     assert res["fresh_data"].message == "Nicht aktuell: grid.l3.power_w, battery.soc_pct."
     assert "battery.soc_pct" in CRITICAL_SIGNALS
+
+
+def test_batterylife_low_soc_states_are_expected(cfg) -> None:
+    # „Optimiert ohne BatteryLife“: 10 normal, 11 SOC unter Min-SOC, 12 Nachladen – nachts üblich
+    for state in (10, 11, 12):
+        res = by_id(
+            run_selfcheck(snap(GOOD | {"ess.batterylife_state": state}, kind=STATE), cfg, fresh, T0)
+        )
+        assert res["batterylife"].status == "ok", state
+
+
+def test_victron_expected_default_states() -> None:
+    from bindaems.shared.config import VictronExpected
+
+    assert VictronExpected().batterylife_states == [10, 11, 12]

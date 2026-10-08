@@ -35,7 +35,7 @@ victron:
     evcharger: {40: evcs}
   expected:
     hub4_mode: 1
-    batterylife_states: [10]
+    batterylife_states: [10, 11, 12]   # Optimiert ohne BatteryLife: normal, SOC unter Min-SOC, Nachladen
   max_grid_charge_setpoint_w: 8000
   persistent_writes: {per_hour: 12, per_day: 100}
   watchdog: {heartbeat_s: 10, timeout_s: 90}

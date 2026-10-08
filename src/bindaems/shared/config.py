@@ -103,7 +103,8 @@ class VictronInstances(_Model):
 
 class VictronExpected(_Model):
     hub4_mode: int = 1
-    batterylife_states: list[int] = Field(default_factory=lambda: [10])
+    # „Optimiert ohne BatteryLife“: 10 normal, 11 SOC unter Min-SOC, 12 Nachladen
+    batterylife_states: list[int] = Field(default_factory=lambda: [10, 11, 12])
 
 
 class WriteBudget(_Model):
