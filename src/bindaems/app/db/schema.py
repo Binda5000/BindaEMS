@@ -103,3 +103,21 @@ settings_version = Table(
     Column("comment", String(200), nullable=True),
     Column("data", JSON, nullable=False),
 )
+
+# Verbraucher mit Hierarchie; Leistung aus einem core-Signal oder einer HA-Entität
+consumer_table = Table(
+    "consumer",
+    metadata,
+    Column("id", Integer, primary_key=True),
+    Column("name", String(60), nullable=False),
+    Column("group_name", String(60), nullable=True),
+    Column("parent_id", Integer, ForeignKey("consumer.id", ondelete="RESTRICT"), nullable=True),
+    Column("color", String(7), nullable=False),
+    Column("source_kind", String(8), nullable=False),
+    Column("power_ref", String(200), nullable=False),
+    Column("power_unit", String(4), nullable=True),
+    Column("sort", Integer, nullable=False),
+    Column("created_at", UtcDateTime(), nullable=False),
+    Column("updated_at", UtcDateTime(), nullable=False),
+    Index("ix_consumer_parent_id", "parent_id"),
+)

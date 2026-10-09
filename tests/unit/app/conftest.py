@@ -1,9 +1,11 @@
 from collections.abc import Callable, Iterator
 from pathlib import Path
 
+import httpx
 import pytest
 from fastapi import APIRouter
 from fastapi.testclient import TestClient
+from pydantic import SecretStr
 from sqlalchemy import Engine
 from tests.app_helpers import FAST_HASHER, T_APP
 
@@ -13,7 +15,9 @@ from bindaems.app.auth.routes import audit_router, auth_router, users_router
 from bindaems.app.auth.service import AuthService
 from bindaems.app.auth.web import Guard
 from bindaems.app.db.engine import migrate, open_database
+from bindaems.app.history.influx import InfluxReader
 from bindaems.app.settings.service import SettingsService
+from bindaems.shared.config import Config
 from bindaems.shared.timeutil import ManualClock
 
 
@@ -59,3 +63,9 @@ def make_client(auth: AuthService, guard: Guard, audit: AuditLog) -> Callable[..
 @pytest.fixture
 def settings_service(engine: Engine, clock: ManualClock, audit: AuditLog) -> SettingsService:
     return SettingsService(engine, clock, audit)
+
+
+@pytest.fixture
+def reader(cfg: Config) -> InfluxReader:
+    # respx ersetzt den Transport; es entstehen keine echten Verbindungen
+    return InfluxReader(cfg.influxdb, SecretStr("geheim"), httpx.AsyncClient())
