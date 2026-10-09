@@ -7,6 +7,7 @@ Topics, die ``allowed_topic`` erlaubt; Befehle aus HA gibt es in dieser Phase ni
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import re
 import secrets
@@ -27,6 +28,7 @@ from bindaems.shared.retry import Backoff, StatusLog
 log = structlog.get_logger(__name__)
 
 QOS = 1
+OFFLINE_TIMEOUT_S = 2.0
 
 
 class HaTransport(Protocol):
@@ -128,7 +130,11 @@ class HaPublisher:
         while True:
             try:
                 async with self._transport_factory() as transport:
-                    await self._session(transport)
+                    try:
+                        await self._session(transport)
+                    except asyncio.CancelledError:
+                        await self._goodbye(transport)
+                        raise
                 error = "Verbindung beendet"
             except Exception as exc:  # jede Störung führt zum Neuverbinden
                 error = f"{type(exc).__name__}: {exc}"
@@ -137,6 +143,16 @@ class HaPublisher:
             delay = self._backoff.next()
             self._status_log.failed(error, delay)
             await self._sleep(delay)
+
+    async def _goodbye(self, transport: HaTransport) -> None:
+        """Beim geordneten Ende selbst „offline“ melden: ein normales DISCONNECT verwirft den
+        Last Will, sonst zeigte HA eingefrorene Werte als aktuell an."""
+        self._connected, self._error = False, "app beendet"
+        with contextlib.suppress(Exception):
+            await asyncio.wait_for(
+                self._publish(transport, f"{self._cfg.base_topic}/status", "offline"),
+                OFFLINE_TIMEOUT_S,
+            )
 
     async def _session(self, transport: HaTransport) -> None:
         lock = asyncio.Lock()  # Veröffentlichungen aus beiden Aufgaben nicht verschränken

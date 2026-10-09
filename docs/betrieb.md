@@ -223,8 +223,8 @@ Entitäten (Gerät „BindaEMS“, sofern nicht anders angegeben):
 | SOC (Gerät „BindaEMS <Fahrzeug>“) | % | je Fahrzeug |
 | Ladeleistung (Gerät „BindaEMS EVCS“ / „BindaEMS Wall Connector“) | W | je Wallbox |
 
-Ist die app nicht verbunden, setzt der Broker alle Entitäten über den Last Will auf
-„nicht verfügbar“.
+Fährt die app geordnet herunter, meldet sie sich selbst ab; bei einem Absturz oder
+Verbindungsabbruch setzt der Broker alle Entitäten über den Last Will auf „nicht verfügbar“.
 
 ## 8. Tarif und Abrechnung
 

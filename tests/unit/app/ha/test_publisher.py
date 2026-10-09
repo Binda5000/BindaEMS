@@ -24,7 +24,12 @@ async def run_publisher_until(publisher: HaPublisher, condition: Callable[[], bo
 
 async def test_connect_publishes_online_discovery_and_states_retained(publisher_env) -> None:
     publisher, transport = publisher_env()
-    await run_publisher_until(publisher, lambda: transport.published_state("price_now") is not None)
+    await run_publisher_until(
+        publisher,
+        lambda: (
+            transport.published_state("price_now") is not None and publisher.component_status().ok
+        ),
+    )
     assert transport.published[0] == ("bindaems/status", "online", True)
     assert (
         "homeassistant/sensor/bindaems/price_now/config",
@@ -34,7 +39,6 @@ async def test_connect_publishes_online_discovery_and_states_retained(publisher_
     assert transport.subscriptions == ["homeassistant/status"]
     assert transport.published_state("price_now") == "13.44"
     assert transport.count("bindaems/state/price_now/attributes") == 1
-    assert publisher.component_status().ok
 
 
 async def test_last_will_is_offline(cfg) -> None:
@@ -93,3 +97,20 @@ def test_only_allowed_topics_are_published(cfg) -> None:
         "W/abc/x",
     ):
         assert not pattern.fullmatch(topic)
+
+
+async def test_orderly_stop_reports_offline(publisher_env) -> None:
+    # Ein geordnetes DISCONNECT verwirft den Last Will; die app muss selbst „offline“ melden
+    publisher, transport = publisher_env()
+    task = asyncio.create_task(publisher.run())
+    for _ in range(10_000):
+        if transport.published_state("price_now") is not None:
+            break
+        await asyncio.sleep(0)
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
+    assert transport.published[-1] == ("bindaems/status", "offline", True)
+    assert not publisher.component_status().ok
