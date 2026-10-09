@@ -1,0 +1,125 @@
+{
+  "actor": "test",
+  "comment": null,
+  "created_at": "2026-10-09T08:00:00+00:00",
+  "settings": {
+    "feed_in": {
+      "monthly_ct": {
+        "2026-09": 7.3
+      }
+    },
+    "prices": {
+      "reference_source": "energy_charts",
+      "vat_fallback": "gross",
+      "vat_mode": "auto"
+    },
+    "pv_model": {
+      "noct_c": 45.0,
+      "performance_ratio": 0.85,
+      "temp_coeff_pct_per_k": -0.35
+    },
+    "tariff": {
+      "components": [
+        {
+          "id": "spot",
+          "kind": "energy_per_kwh",
+          "name": "Börsenpreis",
+          "source": "spot",
+          "valid_from": null,
+          "valid_until": null,
+          "value_ct": null,
+          "vat": true,
+          "windows": []
+        },
+        {
+          "id": "supplier_markup",
+          "kind": "energy_per_kwh",
+          "name": "Lieferantenaufschlag",
+          "source": "fixed",
+          "valid_from": null,
+          "valid_until": null,
+          "value_ct": 1.2,
+          "vat": true,
+          "windows": []
+        },
+        {
+          "id": "grid_usage",
+          "kind": "energy_per_kwh",
+          "name": "Netznutzungsentgelt Arbeitspreis (Netzebene 7)",
+          "source": "fixed",
+          "valid_from": null,
+          "valid_until": null,
+          "value_ct": 8.11,
+          "vat": true,
+          "windows": [
+            {
+              "end": "16:00:00",
+              "factor": 0.8,
+              "months": [
+                4,
+                5,
+                6,
+                7,
+                8,
+                9
+              ],
+              "start": "10:00:00",
+              "value_ct": null,
+              "weekdays": [
+                0,
+                1,
+                2,
+                3,
+                4,
+                5,
+                6
+              ]
+            }
+          ]
+        },
+        {
+          "id": "grid_loss",
+          "kind": "energy_per_kwh",
+          "name": "Netzverlustentgelt",
+          "source": "fixed",
+          "valid_from": null,
+          "valid_until": null,
+          "value_ct": null,
+          "vat": true,
+          "windows": []
+        },
+        {
+          "id": "electricity_tax",
+          "kind": "energy_per_kwh",
+          "name": "Elektrizitätsabgabe",
+          "source": "fixed",
+          "valid_from": null,
+          "valid_until": null,
+          "value_ct": null,
+          "vat": true,
+          "windows": []
+        },
+        {
+          "id": "renewables_levy",
+          "kind": "energy_per_kwh",
+          "name": "Erneuerbaren-Förderbeitrag",
+          "source": "fixed",
+          "valid_from": null,
+          "valid_until": null,
+          "value_ct": null,
+          "vat": true,
+          "windows": []
+        }
+      ],
+      "fixed_price_gross_ct": 30.0,
+      "vat_pct": 20.0
+    }
+  },
+  "source": "ui",
+  "version": 3,
+  "warnings": [
+    "Tarifbestandteil „Netzverlustentgelt“ hat noch keinen Wert.",
+    "Tarifbestandteil „Elektrizitätsabgabe“ hat noch keinen Wert.",
+    "Tarifbestandteil „Erneuerbaren-Förderbeitrag“ hat noch keinen Wert."
+  ]
+}

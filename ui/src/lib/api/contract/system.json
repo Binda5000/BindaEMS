@@ -1,0 +1,112 @@
+{
+  "components": [
+    {
+      "details": {},
+      "message": "core verbunden",
+      "name": "core",
+      "ok": true,
+      "since": null
+    },
+    {
+      "details": {},
+      "message": "Preise bis 09.10. 23:45",
+      "name": "prices",
+      "ok": true,
+      "since": null
+    },
+    {
+      "details": {},
+      "message": "PV-Prognose von 10:00 Uhr",
+      "name": "forecast",
+      "ok": true,
+      "since": null
+    },
+    {
+      "details": {},
+      "message": "letzte Viertelstunde 09:45",
+      "name": "ledger",
+      "ok": true,
+      "since": null
+    },
+    {
+      "details": {},
+      "message": "InfluxDB: alles übertragen",
+      "name": "influx",
+      "ok": true,
+      "since": null
+    },
+    {
+      "details": {},
+      "message": "MQTT noch nicht verbunden",
+      "name": "ha",
+      "ok": false,
+      "since": null
+    }
+  ],
+  "core": {
+    "connected": true,
+    "health": {
+      "adapters": [
+        {
+          "connected": true,
+          "error_count": 0,
+          "last_error": null,
+          "last_ok": "2026-10-09T08:00:00Z",
+          "name": "victron"
+        }
+      ],
+      "alarms": [],
+      "cycle_ms_p95": 0.0,
+      "mode": "OBSERVE",
+      "selfcheck": [
+        {
+          "id": "phases",
+          "message": "3 Phasen erkannt.",
+          "status": "ok"
+        },
+        {
+          "id": "ess_mode",
+          "message": "ESS-Modus 1 wie erwartet.",
+          "status": "ok"
+        },
+        {
+          "id": "batterylife",
+          "message": "BatteryLife-Zustand 10 wie erwartet.",
+          "status": "ok"
+        },
+        {
+          "id": "dess",
+          "message": "Dynamic ESS ist aus.",
+          "status": "ok"
+        },
+        {
+          "id": "schedules",
+          "message": "Keine Victron-Ladefenster aktiv.",
+          "status": "ok"
+        },
+        {
+          "id": "min_soc",
+          "message": "Victron-Min-SOC entspricht der USV-Reserve.",
+          "status": "ok"
+        },
+        {
+          "id": "evcs_mode.evcs",
+          "message": "EVCS im manuellen Modus.",
+          "status": "ok"
+        },
+        {
+          "id": "fresh_data",
+          "message": "Kritische Messwerte seit mindestens 30 s aktuell.",
+          "status": "ok"
+        }
+      ],
+      "version": "0.1.0"
+    }
+  },
+  "warnings": [
+    "Tarifbestandteil „Netzverlustentgelt“ hat noch keinen Wert.",
+    "Tarifbestandteil „Elektrizitätsabgabe“ hat noch keinen Wert.",
+    "Tarifbestandteil „Erneuerbaren-Förderbeitrag“ hat noch keinen Wert.",
+    "Admin „admin“ hat keine Zwei-Faktor-Anmeldung (TOTP)."
+  ]
+}

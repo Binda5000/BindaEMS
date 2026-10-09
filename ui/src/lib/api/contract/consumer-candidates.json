@@ -1,0 +1,20 @@
+{
+  "core": [
+    {
+      "ref": "load.buero.power_w"
+    },
+    {
+      "ref": "load.obergeschoss.power_w"
+    }
+  ],
+  "ha": [
+    {
+      "entity_id": "sensor.kueche_power",
+      "unit": "W"
+    },
+    {
+      "entity_id": "sensor.waschmaschine_power",
+      "unit": "W"
+    }
+  ]
+}

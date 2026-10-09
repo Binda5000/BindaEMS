@@ -1,0 +1,62 @@
+[
+  {
+    "id": "grid",
+    "label": "Netz",
+    "unit": "W"
+  },
+  {
+    "id": "pv",
+    "label": "PV",
+    "unit": "W"
+  },
+  {
+    "id": "battery",
+    "label": "Akku",
+    "unit": "W"
+  },
+  {
+    "id": "house",
+    "label": "Haus",
+    "unit": "W"
+  },
+  {
+    "id": "consumption",
+    "label": "Verbrauch gesamt",
+    "unit": "W"
+  },
+  {
+    "id": "wallbox.evcs",
+    "label": "Wallbox evcs",
+    "unit": "W"
+  },
+  {
+    "id": "wallbox.twc",
+    "label": "Wallbox twc",
+    "unit": "W"
+  },
+  {
+    "id": "soc.battery",
+    "label": "Akku-SOC",
+    "unit": "%"
+  },
+  {
+    "id": "soc.tesla",
+    "label": "SOC Tesla Model 3",
+    "unit": "%"
+  },
+  {
+    "id": "soc.egolf",
+    "label": "SOC e-Golf",
+    "unit": "%"
+  },
+  {
+    "id": "price",
+    "label": "Bezugspreis",
+    "unit": "ct/kWh"
+  },
+  {
+    "id": "forecast.pv",
+    "label": "PV-Prognose",
+    "unit": "W"
+  }
+]

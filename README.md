@@ -33,3 +33,21 @@ pnpm check      # Typprüfung (svelte-check)
 pnpm lint       # Prettier und ESLint
 pnpm build      # statisches SPA nach ui/build
 ```
+
+### Demo-Backend
+
+Für die Arbeit am UI ohne Anlage: die echte ems-app mit festen Messwerten, ohne Geräte und ohne
+Internet (Preise, Prognose und InfluxDB kommen aus Aufnahmen und einem Ersatz). Start im
+Repository-Wurzelverzeichnis:
+
+```bash
+uv run python -m tests.e2e.ui_server              # API auf http://127.0.0.1:8099
+uv run python -m tests.e2e.ui_server --ui-dir ui/build   # liefert zusätzlich das gebaute UI aus
+```
+
+- Benutzer `admin` (Admin), `sicher` (Admin mit TOTP, Geheimnis `JBSWY3DPEHPK3PXP`) und `gast`
+  (Lesen), Passwort jeweils `demo-passwort-1`.
+- Die Uhr steht auf dem 09.10.2026, 10:00 Ortszeit; die Messwerte schwanken jede Sekunde leicht.
+- Jeder Start beginnt mit einem frischen Stand (neues Temp-Verzeichnis, außer mit `--data-dir`).
+- Die Vertragsdateien `ui/src/lib/api/contract/*.json` entstehen aus derselben Demo-Welt:
+  `UPDATE_UI_CONTRACT=1 uv run pytest tests/integration/test_ui_contract.py`.

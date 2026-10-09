@@ -1,0 +1,23 @@
+[
+  {
+    "actor": "test",
+    "comment": null,
+    "created_at": "2026-10-09T08:00:00+00:00",
+    "source": "ui",
+    "version": 3
+  },
+  {
+    "actor": "test",
+    "comment": null,
+    "created_at": "2026-10-09T08:00:00+00:00",
+    "source": "ui",
+    "version": 2
+  },
+  {
+    "actor": "system",
+    "comment": "Standardwerte",
+    "created_at": "2026-10-09T08:00:00+00:00",
+    "source": "system",
+    "version": 1
+  }
+]

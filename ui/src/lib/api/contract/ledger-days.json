@@ -1,0 +1,51 @@
+[
+  {
+    "autarky": null,
+    "battery_charge_kwh": 0.0,
+    "battery_discharge_kwh": 0.0,
+    "consumption_kwh": 0.0,
+    "cost_eur": 0.0,
+    "counter_kwh": {},
+    "coverage": 0.0,
+    "date": "2026-10-08",
+    "expected_slots": 96,
+    "export_kwh": 0.0,
+    "house_kwh": 0.0,
+    "import_kwh": 0.0,
+    "net_cost_eur": 0.0,
+    "pv_kwh": 0.0,
+    "revenue_eur": 0.0,
+    "savings_no_plant_eur": 0.0,
+    "savings_same_import_eur": 0.0,
+    "self_consumption": null,
+    "slots": 0,
+    "wallbox_kwh": {}
+  },
+  {
+    "autarky": 0.376,
+    "battery_charge_kwh": 0.9,
+    "battery_discharge_kwh": 0.0,
+    "consumption_kwh": 2.66,
+    "cost_eur": 0.62,
+    "counter_kwh": {
+      "grid.energy_export_kwh": 0.22,
+      "grid.energy_import_kwh": 1.66
+    },
+    "coverage": 0.042,
+    "date": "2026-10-09",
+    "expected_slots": 96,
+    "export_kwh": 0.22,
+    "house_kwh": 1.28,
+    "import_kwh": 1.66,
+    "net_cost_eur": 0.604,
+    "pv_kwh": 2.12,
+    "revenue_eur": 0.016,
+    "savings_no_plant_eur": 0.194,
+    "savings_same_import_eur": -0.122,
+    "self_consumption": 0.896,
+    "slots": 4,
+    "wallbox_kwh": {
+      "twc": 1.38
+    }
+  }
+]
