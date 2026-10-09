@@ -190,3 +190,25 @@ def test_wrong_passwords_for_totp_disable_lock_the_account(make_client, auth, cl
         assert wrong.status_code == 400
     locked = client.post("/api/auth/totp/disable", json={"password": PASSWORD}, headers=csrf)
     assert locked.status_code == 429
+
+
+BACKGROUND = {"X-Bindaems-Background": "1"}
+
+
+def test_background_requests_do_not_keep_the_session_alive(make_client, auth, clock) -> None:
+    # Übersicht offen, niemand bedient: die Admin-Sitzung endet nach 30 min (Spec 14)
+    client = make_client()
+    login_as(client, auth, "admin")
+    clock.advance(20 * 60)
+    assert client.get("/api/auth/me", headers=BACKGROUND).status_code == 200
+    clock.advance(11 * 60)
+    assert client.get("/api/auth/me", headers=BACKGROUND).status_code == 401
+
+
+def test_user_requests_keep_the_session_alive(make_client, auth, clock) -> None:
+    client = make_client()
+    login_as(client, auth, "admin")
+    clock.advance(20 * 60)
+    assert client.get("/api/auth/me").status_code == 200
+    clock.advance(11 * 60)
+    assert client.get("/api/auth/me").status_code == 200

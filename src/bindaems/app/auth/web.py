@@ -20,6 +20,8 @@ from bindaems.app.auth.service import (
 SESSION_COOKIE = "bindaems_session"
 CSRF_COOKIE = "bindaems_csrf"
 CSRF_HEADER = "X-CSRF-Token"
+# Vom UI bei automatischen Abfragen gesetzt (Wert "1")
+BACKGROUND_HEADER = "X-Bindaems-Background"
 _SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
 
 
@@ -33,7 +35,9 @@ class Guard:
     def require(self, role: Role) -> Callable[[Request], SessionInfo]:
         def dependency(request: Request) -> SessionInfo:
             token = request.cookies.get(SESSION_COOKIE)
-            session = self._auth.resolve(token) if token else None
+            # Abfragen im Takt sind keine Bedienung: sie verlängern die Sitzung nicht
+            touch = request.headers.get(BACKGROUND_HEADER) != "1"
+            session = self._auth.resolve(token, touch=touch) if token else None
             if session is None:
                 raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Nicht angemeldet")
             if ROLE_RANK[session.user.role] < ROLE_RANK[role]:
