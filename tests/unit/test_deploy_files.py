@@ -253,3 +253,18 @@ def test_ci_checks_and_builds_the_ui() -> None:
     ):
         assert command in runs
     assert set(ci["jobs"]["docker"]["needs"]) == {"python", "ui"}
+
+
+def test_ci_runs_the_ui_end_to_end_tests() -> None:
+    ci = yaml.safe_load(Path(".github/workflows/ci.yml").read_text())
+    job = ci["jobs"]["e2e"]
+    runs = " ".join(step.get("run", "") for step in job["steps"])
+    for command in (
+        "uv sync --locked --extra core --extra app --extra dev",
+        "pnpm install --frozen-lockfile",
+        "pnpm exec playwright install --with-deps chromium",
+        "pnpm build",
+        "pnpm e2e",
+    ):
+        assert command in runs
+    assert set(job["needs"]) == {"python", "ui"}
