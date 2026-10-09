@@ -69,7 +69,8 @@ def matches_contract(name: str, body: object) -> bool:
     path = CONTRACT / f"{name}.json"
     if os.environ.get("UPDATE_UI_CONTRACT") == "1":
         path.parent.mkdir(parents=True, exist_ok=True)
-        text = json.dumps(body, indent=2, ensure_ascii=False, sort_keys=True) + "\n"
+        # Reihenfolge wie in der Antwort: sie ist Teil des Vertrags (z. B. die Fahrzeuge)
+        text = json.dumps(body, indent=2, ensure_ascii=False) + "\n"
         path.write_text(text, encoding="utf-8")
         return True
     return path.is_file() and json.loads(path.read_text(encoding="utf-8")) == body

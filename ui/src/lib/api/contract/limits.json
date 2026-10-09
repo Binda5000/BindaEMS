@@ -1,42 +1,22 @@
 {
+  "grid": {
+    "phases": 3,
+    "voltage_nominal_v": 230.0,
+    "fuse_a": 35.0,
+    "fuse_margin_a": 2.0
+  },
   "battery": {
+    "usable_kwh": 30.0,
+    "reserve_soc_pct": 20.0,
     "max_charge_w": 10000.0,
     "max_discharge_w": 12000.0,
-    "reserve_soc_pct": 20.0,
-    "soc_max_pct": 100.0,
-    "usable_kwh": 30.0
-  },
-  "grid": {
-    "fuse_a": 35.0,
-    "fuse_margin_a": 2.0,
-    "phases": 3,
-    "voltage_nominal_v": 230.0
-  },
-  "vehicles": {
-    "egolf": {
-      "default_wallbox": "evcs",
-      "live_allowed": false,
-      "max_a": 16,
-      "min_a": 6,
-      "name": "e-Golf",
-      "phases": 2,
-      "usable_kwh": 38.6
-    },
-    "tesla": {
-      "default_wallbox": "twc",
-      "live_allowed": false,
-      "max_a": 16,
-      "min_a": 5,
-      "name": "Tesla Model 3",
-      "phases": 3,
-      "usable_kwh": 75.0
-    }
+    "soc_max_pct": 100.0
   },
   "victron": {
     "max_grid_charge_setpoint_w": 8000.0,
     "persistent_writes": {
-      "per_day": 100,
-      "per_hour": 12
+      "per_hour": 12,
+      "per_day": 100
     },
     "watchdog": {
       "heartbeat_s": 10.0,
@@ -45,25 +25,45 @@
   },
   "wallboxes": {
     "evcs": {
-      "live_allowed": false,
-      "max_a": 16,
+      "type": "victron_evcs_ns",
       "min_a": 6,
+      "max_a": 16,
+      "safe_a": 6,
       "phase_map": [
         "L1",
         "L2",
         "L3"
       ],
-      "safe_a": 6,
-      "type": "victron_evcs_ns"
+      "live_allowed": false
     },
     "twc": {
+      "type": "tesla_wall_connector_gen3",
       "max_a": 16,
       "phase_map": [
         "L1",
         "L2",
         "L3"
-      ],
-      "type": "tesla_wall_connector_gen3"
+      ]
+    }
+  },
+  "vehicles": {
+    "tesla": {
+      "name": "Tesla Model 3",
+      "usable_kwh": 75.0,
+      "phases": 3,
+      "min_a": 5,
+      "max_a": 16,
+      "default_wallbox": "twc",
+      "live_allowed": false
+    },
+    "egolf": {
+      "name": "e-Golf",
+      "usable_kwh": 38.6,
+      "phases": 2,
+      "min_a": 6,
+      "max_a": 16,
+      "default_wallbox": "evcs",
+      "live_allowed": false
     }
   }
 }

@@ -1,1270 +1,1270 @@
 {
-  "slots": [
-    {
-      "feed_in_ct": 7.3,
-      "import_gross_ct": 28.996000000000002,
-      "import_net_ct": 24.163333333333334,
-      "missing": [
-        "grid_loss",
-        "electricity_tax",
-        "renewables_levy"
-      ],
-      "origin": "primary",
-      "spot_net_ct": 14.853333333333335,
-      "start": "2026-10-08T22:00:00+00:00"
-    },
-    {
-      "feed_in_ct": 7.3,
-      "import_gross_ct": 28.996000000000002,
-      "import_net_ct": 24.163333333333334,
-      "missing": [
-        "grid_loss",
-        "electricity_tax",
-        "renewables_levy"
-      ],
-      "origin": "primary",
-      "spot_net_ct": 14.853333333333335,
-      "start": "2026-10-08T22:15:00+00:00"
-    },
-    {
-      "feed_in_ct": 7.3,
-      "import_gross_ct": 28.996000000000002,
-      "import_net_ct": 24.163333333333334,
-      "missing": [
-        "grid_loss",
-        "electricity_tax",
-        "renewables_levy"
-      ],
-      "origin": "primary",
-      "spot_net_ct": 14.853333333333335,
-      "start": "2026-10-08T22:30:00+00:00"
-    },
-    {
-      "feed_in_ct": 7.3,
-      "import_gross_ct": 28.996000000000002,
-      "import_net_ct": 24.163333333333334,
-      "missing": [
-        "grid_loss",
-        "electricity_tax",
-        "renewables_levy"
-      ],
-      "origin": "primary",
-      "spot_net_ct": 14.853333333333335,
-      "start": "2026-10-08T22:45:00+00:00"
-    },
-    {
-      "feed_in_ct": 7.3,
-      "import_gross_ct": 29.894000000000002,
-      "import_net_ct": 24.91166666666667,
-      "missing": [
-        "grid_loss",
-        "electricity_tax",
-        "renewables_levy"
-      ],
-      "origin": "primary",
-      "spot_net_ct": 15.601666666666668,
-      "start": "2026-10-08T23:00:00+00:00"
-    },
-    {
-      "feed_in_ct": 7.3,
-      "import_gross_ct": 29.894000000000002,
-      "import_net_ct": 24.91166666666667,
-      "missing": [
-        "grid_loss",
-        "electricity_tax",
-        "renewables_levy"
-      ],
-      "origin": "primary",
-      "spot_net_ct": 15.601666666666668,
-      "start": "2026-10-08T23:15:00+00:00"
-    },
-    {
-      "feed_in_ct": 7.3,
-      "import_gross_ct": 29.894000000000002,
-      "import_net_ct": 24.91166666666667,
-      "missing": [
-        "grid_loss",
-        "electricity_tax",
-        "renewables_levy"
-      ],
-      "origin": "primary",
-      "spot_net_ct": 15.601666666666668,
-      "start": "2026-10-08T23:30:00+00:00"
-    },
-    {
-      "feed_in_ct": 7.3,
-      "import_gross_ct": 29.894000000000002,
-      "import_net_ct": 24.91166666666667,
-      "missing": [
-        "grid_loss",
-        "electricity_tax",
-        "renewables_levy"
-      ],
-      "origin": "primary",
-      "spot_net_ct": 15.601666666666668,
-      "start": "2026-10-08T23:45:00+00:00"
-    },
-    {
-      "feed_in_ct": 7.3,
-      "import_gross_ct": 29.898,
-      "import_net_ct": 24.915,
-      "missing": [
-        "grid_loss",
-        "electricity_tax",
-        "renewables_levy"
-      ],
-      "origin": "primary",
-      "spot_net_ct": 15.605,
-      "start": "2026-10-09T00:00:00+00:00"
-    },
-    {
-      "feed_in_ct": 7.3,
-      "import_gross_ct": 29.898,
-      "import_net_ct": 24.915,
-      "missing": [
-        "grid_loss",
-        "electricity_tax",
-        "renewables_levy"
-      ],
-      "origin": "primary",
-      "spot_net_ct": 15.605,
-      "start": "2026-10-09T00:15:00+00:00"
-    },
-    {
-      "feed_in_ct": 7.3,
-      "import_gross_ct": 29.898,
-      "import_net_ct": 24.915,
-      "missing": [
-        "grid_loss",
-        "electricity_tax",
-        "renewables_levy"
-      ],
-      "origin": "primary",
-      "spot_net_ct": 15.605,
-      "start": "2026-10-09T00:30:00+00:00"
-    },
-    {
-      "feed_in_ct": 7.3,
-      "import_gross_ct": 29.898,
-      "import_net_ct": 24.915,
-      "missing": [
-        "grid_loss",
-        "electricity_tax",
-        "renewables_levy"
-      ],
-      "origin": "primary",
-      "spot_net_ct": 15.605,
-      "start": "2026-10-09T00:45:00+00:00"
-    },
-    {
-      "feed_in_ct": 7.3,
-      "import_gross_ct": 30.503,
-      "import_net_ct": 25.419166666666666,
-      "missing": [
-        "grid_loss",
-        "electricity_tax",
-        "renewables_levy"
-      ],
-      "origin": "primary",
-      "spot_net_ct": 16.109166666666667,
-      "start": "2026-10-09T01:00:00+00:00"
-    },
-    {
-      "feed_in_ct": 7.3,
-      "import_gross_ct": 30.503,
-      "import_net_ct": 25.419166666666666,
-      "missing": [
-        "grid_loss",
-        "electricity_tax",
-        "renewables_levy"
-      ],
-      "origin": "primary",
-      "spot_net_ct": 16.109166666666667,
-      "start": "2026-10-09T01:15:00+00:00"
-    },
-    {
-      "feed_in_ct": 7.3,
-      "import_gross_ct": 30.503,
-      "import_net_ct": 25.419166666666666,
-      "missing": [
-        "grid_loss",
-        "electricity_tax",
-        "renewables_levy"
-      ],
-      "origin": "primary",
-      "spot_net_ct": 16.109166666666667,
-      "start": "2026-10-09T01:30:00+00:00"
-    },
-    {
-      "feed_in_ct": 7.3,
-      "import_gross_ct": 30.503,
-      "import_net_ct": 25.419166666666666,
-      "missing": [
-        "grid_loss",
-        "electricity_tax",
-        "renewables_levy"
-      ],
-      "origin": "primary",
-      "spot_net_ct": 16.109166666666667,
-      "start": "2026-10-09T01:45:00+00:00"
-    },
-    {
-      "feed_in_ct": 7.3,
-      "import_gross_ct": 31.340000000000003,
-      "import_net_ct": 26.116666666666667,
-      "missing": [
-        "grid_loss",
-        "electricity_tax",
-        "renewables_levy"
-      ],
-      "origin": "primary",
-      "spot_net_ct": 16.80666666666667,
-      "start": "2026-10-09T02:00:00+00:00"
-    },
-    {
-      "feed_in_ct": 7.3,
-      "import_gross_ct": 31.340000000000003,
-      "import_net_ct": 26.116666666666667,
-      "missing": [
-        "grid_loss",
-        "electricity_tax",
-        "renewables_levy"
-      ],
-      "origin": "primary",
-      "spot_net_ct": 16.80666666666667,
-      "start": "2026-10-09T02:15:00+00:00"
-    },
-    {
-      "feed_in_ct": 7.3,
-      "import_gross_ct": 31.340000000000003,
-      "import_net_ct": 26.116666666666667,
-      "missing": [
-        "grid_loss",
-        "electricity_tax",
-        "renewables_levy"
-      ],
-      "origin": "primary",
-      "spot_net_ct": 16.80666666666667,
-      "start": "2026-10-09T02:30:00+00:00"
-    },
-    {
-      "feed_in_ct": 7.3,
-      "import_gross_ct": 31.340000000000003,
-      "import_net_ct": 26.116666666666667,
-      "missing": [
-        "grid_loss",
-        "electricity_tax",
-        "renewables_levy"
-      ],
-      "origin": "primary",
-      "spot_net_ct": 16.80666666666667,
-      "start": "2026-10-09T02:45:00+00:00"
-    },
-    {
-      "feed_in_ct": 7.3,
-      "import_gross_ct": 30.534,
-      "import_net_ct": 25.444999999999997,
-      "missing": [
-        "grid_loss",
-        "electricity_tax",
-        "renewables_levy"
-      ],
-      "origin": "primary",
-      "spot_net_ct": 16.134999999999998,
-      "start": "2026-10-09T03:00:00+00:00"
-    },
-    {
-      "feed_in_ct": 7.3,
-      "import_gross_ct": 30.534,
-      "import_net_ct": 25.444999999999997,
-      "missing": [
-        "grid_loss",
-        "electricity_tax",
-        "renewables_levy"
-      ],
-      "origin": "primary",
-      "spot_net_ct": 16.134999999999998,
-      "start": "2026-10-09T03:15:00+00:00"
-    },
-    {
-      "feed_in_ct": 7.3,
-      "import_gross_ct": 30.534,
-      "import_net_ct": 25.444999999999997,
-      "missing": [
-        "grid_loss",
-        "electricity_tax",
-        "renewables_levy"
-      ],
-      "origin": "primary",
-      "spot_net_ct": 16.134999999999998,
-      "start": "2026-10-09T03:30:00+00:00"
-    },
-    {
-      "feed_in_ct": 7.3,
-      "import_gross_ct": 30.534,
-      "import_net_ct": 25.444999999999997,
-      "missing": [
-        "grid_loss",
-        "electricity_tax",
-        "renewables_levy"
-      ],
-      "origin": "primary",
-      "spot_net_ct": 16.134999999999998,
-      "start": "2026-10-09T03:45:00+00:00"
-    },
-    {
-      "feed_in_ct": 7.3,
-      "import_gross_ct": 37.492000000000004,
-      "import_net_ct": 31.243333333333332,
-      "missing": [
-        "grid_loss",
-        "electricity_tax",
-        "renewables_levy"
-      ],
-      "origin": "primary",
-      "spot_net_ct": 21.933333333333334,
-      "start": "2026-10-09T04:00:00+00:00"
-    },
-    {
-      "feed_in_ct": 7.3,
-      "import_gross_ct": 37.492000000000004,
-      "import_net_ct": 31.243333333333332,
-      "missing": [
-        "grid_loss",
-        "electricity_tax",
-        "renewables_levy"
-      ],
-      "origin": "primary",
-      "spot_net_ct": 21.933333333333334,
-      "start": "2026-10-09T04:15:00+00:00"
-    },
-    {
-      "feed_in_ct": 7.3,
-      "import_gross_ct": 37.492000000000004,
-      "import_net_ct": 31.243333333333332,
-      "missing": [
-        "grid_loss",
-        "electricity_tax",
-        "renewables_levy"
-      ],
-      "origin": "primary",
-      "spot_net_ct": 21.933333333333334,
-      "start": "2026-10-09T04:30:00+00:00"
-    },
-    {
-      "feed_in_ct": 7.3,
-      "import_gross_ct": 37.492000000000004,
-      "import_net_ct": 31.243333333333332,
-      "missing": [
-        "grid_loss",
-        "electricity_tax",
-        "renewables_levy"
-      ],
-      "origin": "primary",
-      "spot_net_ct": 21.933333333333334,
-      "start": "2026-10-09T04:45:00+00:00"
-    },
-    {
-      "feed_in_ct": 7.3,
-      "import_gross_ct": 37.958,
-      "import_net_ct": 31.631666666666668,
-      "missing": [
-        "grid_loss",
-        "electricity_tax",
-        "renewables_levy"
-      ],
-      "origin": "primary",
-      "spot_net_ct": 22.32166666666667,
-      "start": "2026-10-09T05:00:00+00:00"
-    },
-    {
-      "feed_in_ct": 7.3,
-      "import_gross_ct": 37.958,
-      "import_net_ct": 31.631666666666668,
-      "missing": [
-        "grid_loss",
-        "electricity_tax",
-        "renewables_levy"
-      ],
-      "origin": "primary",
-      "spot_net_ct": 22.32166666666667,
-      "start": "2026-10-09T05:15:00+00:00"
-    },
-    {
-      "feed_in_ct": 7.3,
-      "import_gross_ct": 37.958,
-      "import_net_ct": 31.631666666666668,
-      "missing": [
-        "grid_loss",
-        "electricity_tax",
-        "renewables_levy"
-      ],
-      "origin": "primary",
-      "spot_net_ct": 22.32166666666667,
-      "start": "2026-10-09T05:30:00+00:00"
-    },
-    {
-      "feed_in_ct": 7.3,
-      "import_gross_ct": 37.958,
-      "import_net_ct": 31.631666666666668,
-      "missing": [
-        "grid_loss",
-        "electricity_tax",
-        "renewables_levy"
-      ],
-      "origin": "primary",
-      "spot_net_ct": 22.32166666666667,
-      "start": "2026-10-09T05:45:00+00:00"
-    },
-    {
-      "feed_in_ct": 7.3,
-      "import_gross_ct": 35.621,
-      "import_net_ct": 29.684166666666666,
-      "missing": [
-        "grid_loss",
-        "electricity_tax",
-        "renewables_levy"
-      ],
-      "origin": "primary",
-      "spot_net_ct": 20.374166666666667,
-      "start": "2026-10-09T06:00:00+00:00"
-    },
-    {
-      "feed_in_ct": 7.3,
-      "import_gross_ct": 35.621,
-      "import_net_ct": 29.684166666666666,
-      "missing": [
-        "grid_loss",
-        "electricity_tax",
-        "renewables_levy"
-      ],
-      "origin": "primary",
-      "spot_net_ct": 20.374166666666667,
-      "start": "2026-10-09T06:15:00+00:00"
-    },
-    {
-      "feed_in_ct": 7.3,
-      "import_gross_ct": 35.621,
-      "import_net_ct": 29.684166666666666,
-      "missing": [
-        "grid_loss",
-        "electricity_tax",
-        "renewables_levy"
-      ],
-      "origin": "primary",
-      "spot_net_ct": 20.374166666666667,
-      "start": "2026-10-09T06:30:00+00:00"
-    },
-    {
-      "feed_in_ct": 7.3,
-      "import_gross_ct": 35.621,
-      "import_net_ct": 29.684166666666666,
-      "missing": [
-        "grid_loss",
-        "electricity_tax",
-        "renewables_levy"
-      ],
-      "origin": "primary",
-      "spot_net_ct": 20.374166666666667,
-      "start": "2026-10-09T06:45:00+00:00"
-    },
-    {
-      "feed_in_ct": 7.3,
-      "import_gross_ct": 37.361000000000004,
-      "import_net_ct": 31.134166666666665,
-      "missing": [
-        "grid_loss",
-        "electricity_tax",
-        "renewables_levy"
-      ],
-      "origin": "primary",
-      "spot_net_ct": 21.824166666666667,
-      "start": "2026-10-09T07:00:00+00:00"
-    },
-    {
-      "feed_in_ct": 7.3,
-      "import_gross_ct": 37.361000000000004,
-      "import_net_ct": 31.134166666666665,
-      "missing": [
-        "grid_loss",
-        "electricity_tax",
-        "renewables_levy"
-      ],
-      "origin": "primary",
-      "spot_net_ct": 21.824166666666667,
-      "start": "2026-10-09T07:15:00+00:00"
-    },
-    {
-      "feed_in_ct": 7.3,
-      "import_gross_ct": 37.361000000000004,
-      "import_net_ct": 31.134166666666665,
-      "missing": [
-        "grid_loss",
-        "electricity_tax",
-        "renewables_levy"
-      ],
-      "origin": "primary",
-      "spot_net_ct": 21.824166666666667,
-      "start": "2026-10-09T07:30:00+00:00"
-    },
-    {
-      "feed_in_ct": 7.3,
-      "import_gross_ct": 37.361000000000004,
-      "import_net_ct": 31.134166666666665,
-      "missing": [
-        "grid_loss",
-        "electricity_tax",
-        "renewables_levy"
-      ],
-      "origin": "primary",
-      "spot_net_ct": 21.824166666666667,
-      "start": "2026-10-09T07:45:00+00:00"
-    },
-    {
-      "feed_in_ct": 7.3,
-      "import_gross_ct": 30.982,
-      "import_net_ct": 25.81833333333333,
-      "missing": [
-        "grid_loss",
-        "electricity_tax",
-        "renewables_levy"
-      ],
-      "origin": "primary",
-      "spot_net_ct": 16.508333333333333,
-      "start": "2026-10-09T08:00:00+00:00"
-    },
-    {
-      "feed_in_ct": 7.3,
-      "import_gross_ct": 30.982,
-      "import_net_ct": 25.81833333333333,
-      "missing": [
-        "grid_loss",
-        "electricity_tax",
-        "renewables_levy"
-      ],
-      "origin": "primary",
-      "spot_net_ct": 16.508333333333333,
-      "start": "2026-10-09T08:15:00+00:00"
-    },
-    {
-      "feed_in_ct": 7.3,
-      "import_gross_ct": 30.982,
-      "import_net_ct": 25.81833333333333,
-      "missing": [
-        "grid_loss",
-        "electricity_tax",
-        "renewables_levy"
-      ],
-      "origin": "primary",
-      "spot_net_ct": 16.508333333333333,
-      "start": "2026-10-09T08:30:00+00:00"
-    },
-    {
-      "feed_in_ct": 7.3,
-      "import_gross_ct": 30.982,
-      "import_net_ct": 25.81833333333333,
-      "missing": [
-        "grid_loss",
-        "electricity_tax",
-        "renewables_levy"
-      ],
-      "origin": "primary",
-      "spot_net_ct": 16.508333333333333,
-      "start": "2026-10-09T08:45:00+00:00"
-    },
-    {
-      "feed_in_ct": 7.3,
-      "import_gross_ct": 37.685,
-      "import_net_ct": 31.40416666666667,
-      "missing": [
-        "grid_loss",
-        "electricity_tax",
-        "renewables_levy"
-      ],
-      "origin": "primary",
-      "spot_net_ct": 22.09416666666667,
-      "start": "2026-10-09T09:00:00+00:00"
-    },
-    {
-      "feed_in_ct": 7.3,
-      "import_gross_ct": 37.685,
-      "import_net_ct": 31.40416666666667,
-      "missing": [
-        "grid_loss",
-        "electricity_tax",
-        "renewables_levy"
-      ],
-      "origin": "primary",
-      "spot_net_ct": 22.09416666666667,
-      "start": "2026-10-09T09:15:00+00:00"
-    },
-    {
-      "feed_in_ct": 7.3,
-      "import_gross_ct": 37.685,
-      "import_net_ct": 31.40416666666667,
-      "missing": [
-        "grid_loss",
-        "electricity_tax",
-        "renewables_levy"
-      ],
-      "origin": "primary",
-      "spot_net_ct": 22.09416666666667,
-      "start": "2026-10-09T09:30:00+00:00"
-    },
-    {
-      "feed_in_ct": 7.3,
-      "import_gross_ct": 37.685,
-      "import_net_ct": 31.40416666666667,
-      "missing": [
-        "grid_loss",
-        "electricity_tax",
-        "renewables_levy"
-      ],
-      "origin": "primary",
-      "spot_net_ct": 22.09416666666667,
-      "start": "2026-10-09T09:45:00+00:00"
-    },
-    {
-      "feed_in_ct": 7.3,
-      "import_gross_ct": 35.237,
-      "import_net_ct": 29.364166666666666,
-      "missing": [
-        "grid_loss",
-        "electricity_tax",
-        "renewables_levy"
-      ],
-      "origin": "primary",
-      "spot_net_ct": 20.054166666666667,
-      "start": "2026-10-09T10:00:00+00:00"
-    },
-    {
-      "feed_in_ct": 7.3,
-      "import_gross_ct": 35.237,
-      "import_net_ct": 29.364166666666666,
-      "missing": [
-        "grid_loss",
-        "electricity_tax",
-        "renewables_levy"
-      ],
-      "origin": "primary",
-      "spot_net_ct": 20.054166666666667,
-      "start": "2026-10-09T10:15:00+00:00"
-    },
-    {
-      "feed_in_ct": 7.3,
-      "import_gross_ct": 35.237,
-      "import_net_ct": 29.364166666666666,
-      "missing": [
-        "grid_loss",
-        "electricity_tax",
-        "renewables_levy"
-      ],
-      "origin": "primary",
-      "spot_net_ct": 20.054166666666667,
-      "start": "2026-10-09T10:30:00+00:00"
-    },
-    {
-      "feed_in_ct": 7.3,
-      "import_gross_ct": 35.237,
-      "import_net_ct": 29.364166666666666,
-      "missing": [
-        "grid_loss",
-        "electricity_tax",
-        "renewables_levy"
-      ],
-      "origin": "primary",
-      "spot_net_ct": 20.054166666666667,
-      "start": "2026-10-09T10:45:00+00:00"
-    },
-    {
-      "feed_in_ct": 7.3,
-      "import_gross_ct": 35.24,
-      "import_net_ct": 29.366666666666667,
-      "missing": [
-        "grid_loss",
-        "electricity_tax",
-        "renewables_levy"
-      ],
-      "origin": "primary",
-      "spot_net_ct": 20.05666666666667,
-      "start": "2026-10-09T11:00:00+00:00"
-    },
-    {
-      "feed_in_ct": 7.3,
-      "import_gross_ct": 35.24,
-      "import_net_ct": 29.366666666666667,
-      "missing": [
-        "grid_loss",
-        "electricity_tax",
-        "renewables_levy"
-      ],
-      "origin": "primary",
-      "spot_net_ct": 20.05666666666667,
-      "start": "2026-10-09T11:15:00+00:00"
-    },
-    {
-      "feed_in_ct": 7.3,
-      "import_gross_ct": 35.24,
-      "import_net_ct": 29.366666666666667,
-      "missing": [
-        "grid_loss",
-        "electricity_tax",
-        "renewables_levy"
-      ],
-      "origin": "primary",
-      "spot_net_ct": 20.05666666666667,
-      "start": "2026-10-09T11:30:00+00:00"
-    },
-    {
-      "feed_in_ct": 7.3,
-      "import_gross_ct": 35.24,
-      "import_net_ct": 29.366666666666667,
-      "missing": [
-        "grid_loss",
-        "electricity_tax",
-        "renewables_levy"
-      ],
-      "origin": "primary",
-      "spot_net_ct": 20.05666666666667,
-      "start": "2026-10-09T11:45:00+00:00"
-    },
-    {
-      "feed_in_ct": 7.3,
-      "import_gross_ct": 34.805,
-      "import_net_ct": 29.004166666666666,
-      "missing": [
-        "grid_loss",
-        "electricity_tax",
-        "renewables_levy"
-      ],
-      "origin": "primary",
-      "spot_net_ct": 19.694166666666668,
-      "start": "2026-10-09T12:00:00+00:00"
-    },
-    {
-      "feed_in_ct": 7.3,
-      "import_gross_ct": 34.805,
-      "import_net_ct": 29.004166666666666,
-      "missing": [
-        "grid_loss",
-        "electricity_tax",
-        "renewables_levy"
-      ],
-      "origin": "primary",
-      "spot_net_ct": 19.694166666666668,
-      "start": "2026-10-09T12:15:00+00:00"
-    },
-    {
-      "feed_in_ct": 7.3,
-      "import_gross_ct": 34.805,
-      "import_net_ct": 29.004166666666666,
-      "missing": [
-        "grid_loss",
-        "electricity_tax",
-        "renewables_levy"
-      ],
-      "origin": "primary",
-      "spot_net_ct": 19.694166666666668,
-      "start": "2026-10-09T12:30:00+00:00"
-    },
-    {
-      "feed_in_ct": 7.3,
-      "import_gross_ct": 34.805,
-      "import_net_ct": 29.004166666666666,
-      "missing": [
-        "grid_loss",
-        "electricity_tax",
-        "renewables_levy"
-      ],
-      "origin": "primary",
-      "spot_net_ct": 19.694166666666668,
-      "start": "2026-10-09T12:45:00+00:00"
-    },
-    {
-      "feed_in_ct": 7.3,
-      "import_gross_ct": 31.338,
-      "import_net_ct": 26.115,
-      "missing": [
-        "grid_loss",
-        "electricity_tax",
-        "renewables_levy"
-      ],
-      "origin": "primary",
-      "spot_net_ct": 16.805,
-      "start": "2026-10-09T13:00:00+00:00"
-    },
-    {
-      "feed_in_ct": 7.3,
-      "import_gross_ct": 31.338,
-      "import_net_ct": 26.115,
-      "missing": [
-        "grid_loss",
-        "electricity_tax",
-        "renewables_levy"
-      ],
-      "origin": "primary",
-      "spot_net_ct": 16.805,
-      "start": "2026-10-09T13:15:00+00:00"
-    },
-    {
-      "feed_in_ct": 7.3,
-      "import_gross_ct": 31.338,
-      "import_net_ct": 26.115,
-      "missing": [
-        "grid_loss",
-        "electricity_tax",
-        "renewables_levy"
-      ],
-      "origin": "primary",
-      "spot_net_ct": 16.805,
-      "start": "2026-10-09T13:30:00+00:00"
-    },
-    {
-      "feed_in_ct": 7.3,
-      "import_gross_ct": 31.338,
-      "import_net_ct": 26.115,
-      "missing": [
-        "grid_loss",
-        "electricity_tax",
-        "renewables_levy"
-      ],
-      "origin": "primary",
-      "spot_net_ct": 16.805,
-      "start": "2026-10-09T13:45:00+00:00"
-    },
-    {
-      "feed_in_ct": 7.3,
-      "import_gross_ct": 37.681000000000004,
-      "import_net_ct": 31.400833333333335,
-      "missing": [
-        "grid_loss",
-        "electricity_tax",
-        "renewables_levy"
-      ],
-      "origin": "primary",
-      "spot_net_ct": 22.090833333333336,
-      "start": "2026-10-09T14:00:00+00:00"
-    },
-    {
-      "feed_in_ct": 7.3,
-      "import_gross_ct": 37.681000000000004,
-      "import_net_ct": 31.400833333333335,
-      "missing": [
-        "grid_loss",
-        "electricity_tax",
-        "renewables_levy"
-      ],
-      "origin": "primary",
-      "spot_net_ct": 22.090833333333336,
-      "start": "2026-10-09T14:15:00+00:00"
-    },
-    {
-      "feed_in_ct": 7.3,
-      "import_gross_ct": 37.681000000000004,
-      "import_net_ct": 31.400833333333335,
-      "missing": [
-        "grid_loss",
-        "electricity_tax",
-        "renewables_levy"
-      ],
-      "origin": "primary",
-      "spot_net_ct": 22.090833333333336,
-      "start": "2026-10-09T14:30:00+00:00"
-    },
-    {
-      "feed_in_ct": 7.3,
-      "import_gross_ct": 37.681000000000004,
-      "import_net_ct": 31.400833333333335,
-      "missing": [
-        "grid_loss",
-        "electricity_tax",
-        "renewables_levy"
-      ],
-      "origin": "primary",
-      "spot_net_ct": 22.090833333333336,
-      "start": "2026-10-09T14:45:00+00:00"
-    },
-    {
-      "feed_in_ct": 7.3,
-      "import_gross_ct": 37.572,
-      "import_net_ct": 31.31,
-      "missing": [
-        "grid_loss",
-        "electricity_tax",
-        "renewables_levy"
-      ],
-      "origin": "primary",
-      "spot_net_ct": 22.0,
-      "start": "2026-10-09T15:00:00+00:00"
-    },
-    {
-      "feed_in_ct": 7.3,
-      "import_gross_ct": 37.572,
-      "import_net_ct": 31.31,
-      "missing": [
-        "grid_loss",
-        "electricity_tax",
-        "renewables_levy"
-      ],
-      "origin": "primary",
-      "spot_net_ct": 22.0,
-      "start": "2026-10-09T15:15:00+00:00"
-    },
-    {
-      "feed_in_ct": 7.3,
-      "import_gross_ct": 37.572,
-      "import_net_ct": 31.31,
-      "missing": [
-        "grid_loss",
-        "electricity_tax",
-        "renewables_levy"
-      ],
-      "origin": "primary",
-      "spot_net_ct": 22.0,
-      "start": "2026-10-09T15:30:00+00:00"
-    },
-    {
-      "feed_in_ct": 7.3,
-      "import_gross_ct": 37.572,
-      "import_net_ct": 31.31,
-      "missing": [
-        "grid_loss",
-        "electricity_tax",
-        "renewables_levy"
-      ],
-      "origin": "primary",
-      "spot_net_ct": 22.0,
-      "start": "2026-10-09T15:45:00+00:00"
-    },
-    {
-      "feed_in_ct": 7.3,
-      "import_gross_ct": 38.152,
-      "import_net_ct": 31.793333333333333,
-      "missing": [
-        "grid_loss",
-        "electricity_tax",
-        "renewables_levy"
-      ],
-      "origin": "primary",
-      "spot_net_ct": 22.483333333333334,
-      "start": "2026-10-09T16:00:00+00:00"
-    },
-    {
-      "feed_in_ct": 7.3,
-      "import_gross_ct": 38.152,
-      "import_net_ct": 31.793333333333333,
-      "missing": [
-        "grid_loss",
-        "electricity_tax",
-        "renewables_levy"
-      ],
-      "origin": "primary",
-      "spot_net_ct": 22.483333333333334,
-      "start": "2026-10-09T16:15:00+00:00"
-    },
-    {
-      "feed_in_ct": 7.3,
-      "import_gross_ct": 38.152,
-      "import_net_ct": 31.793333333333333,
-      "missing": [
-        "grid_loss",
-        "electricity_tax",
-        "renewables_levy"
-      ],
-      "origin": "primary",
-      "spot_net_ct": 22.483333333333334,
-      "start": "2026-10-09T16:30:00+00:00"
-    },
-    {
-      "feed_in_ct": 7.3,
-      "import_gross_ct": 38.152,
-      "import_net_ct": 31.793333333333333,
-      "missing": [
-        "grid_loss",
-        "electricity_tax",
-        "renewables_levy"
-      ],
-      "origin": "primary",
-      "spot_net_ct": 22.483333333333334,
-      "start": "2026-10-09T16:45:00+00:00"
-    },
-    {
-      "feed_in_ct": 7.3,
-      "import_gross_ct": 37.572,
-      "import_net_ct": 31.31,
-      "missing": [
-        "grid_loss",
-        "electricity_tax",
-        "renewables_levy"
-      ],
-      "origin": "primary",
-      "spot_net_ct": 22.0,
-      "start": "2026-10-09T17:00:00+00:00"
-    },
-    {
-      "feed_in_ct": 7.3,
-      "import_gross_ct": 37.572,
-      "import_net_ct": 31.31,
-      "missing": [
-        "grid_loss",
-        "electricity_tax",
-        "renewables_levy"
-      ],
-      "origin": "primary",
-      "spot_net_ct": 22.0,
-      "start": "2026-10-09T17:15:00+00:00"
-    },
-    {
-      "feed_in_ct": 7.3,
-      "import_gross_ct": 37.572,
-      "import_net_ct": 31.31,
-      "missing": [
-        "grid_loss",
-        "electricity_tax",
-        "renewables_levy"
-      ],
-      "origin": "primary",
-      "spot_net_ct": 22.0,
-      "start": "2026-10-09T17:30:00+00:00"
-    },
-    {
-      "feed_in_ct": 7.3,
-      "import_gross_ct": 37.572,
-      "import_net_ct": 31.31,
-      "missing": [
-        "grid_loss",
-        "electricity_tax",
-        "renewables_levy"
-      ],
-      "origin": "primary",
-      "spot_net_ct": 22.0,
-      "start": "2026-10-09T17:45:00+00:00"
-    },
-    {
-      "feed_in_ct": 7.3,
-      "import_gross_ct": 37.655,
-      "import_net_ct": 31.379166666666666,
-      "missing": [
-        "grid_loss",
-        "electricity_tax",
-        "renewables_levy"
-      ],
-      "origin": "primary",
-      "spot_net_ct": 22.069166666666668,
-      "start": "2026-10-09T18:00:00+00:00"
-    },
-    {
-      "feed_in_ct": 7.3,
-      "import_gross_ct": 37.655,
-      "import_net_ct": 31.379166666666666,
-      "missing": [
-        "grid_loss",
-        "electricity_tax",
-        "renewables_levy"
-      ],
-      "origin": "primary",
-      "spot_net_ct": 22.069166666666668,
-      "start": "2026-10-09T18:15:00+00:00"
-    },
-    {
-      "feed_in_ct": 7.3,
-      "import_gross_ct": 37.655,
-      "import_net_ct": 31.379166666666666,
-      "missing": [
-        "grid_loss",
-        "electricity_tax",
-        "renewables_levy"
-      ],
-      "origin": "primary",
-      "spot_net_ct": 22.069166666666668,
-      "start": "2026-10-09T18:30:00+00:00"
-    },
-    {
-      "feed_in_ct": 7.3,
-      "import_gross_ct": 37.655,
-      "import_net_ct": 31.379166666666666,
-      "missing": [
-        "grid_loss",
-        "electricity_tax",
-        "renewables_levy"
-      ],
-      "origin": "primary",
-      "spot_net_ct": 22.069166666666668,
-      "start": "2026-10-09T18:45:00+00:00"
-    },
-    {
-      "feed_in_ct": 7.3,
-      "import_gross_ct": 36.968,
-      "import_net_ct": 30.806666666666665,
-      "missing": [
-        "grid_loss",
-        "electricity_tax",
-        "renewables_levy"
-      ],
-      "origin": "primary",
-      "spot_net_ct": 21.496666666666666,
-      "start": "2026-10-09T19:00:00+00:00"
-    },
-    {
-      "feed_in_ct": 7.3,
-      "import_gross_ct": 36.968,
-      "import_net_ct": 30.806666666666665,
-      "missing": [
-        "grid_loss",
-        "electricity_tax",
-        "renewables_levy"
-      ],
-      "origin": "primary",
-      "spot_net_ct": 21.496666666666666,
-      "start": "2026-10-09T19:15:00+00:00"
-    },
-    {
-      "feed_in_ct": 7.3,
-      "import_gross_ct": 36.968,
-      "import_net_ct": 30.806666666666665,
-      "missing": [
-        "grid_loss",
-        "electricity_tax",
-        "renewables_levy"
-      ],
-      "origin": "primary",
-      "spot_net_ct": 21.496666666666666,
-      "start": "2026-10-09T19:30:00+00:00"
-    },
-    {
-      "feed_in_ct": 7.3,
-      "import_gross_ct": 36.968,
-      "import_net_ct": 30.806666666666665,
-      "missing": [
-        "grid_loss",
-        "electricity_tax",
-        "renewables_levy"
-      ],
-      "origin": "primary",
-      "spot_net_ct": 21.496666666666666,
-      "start": "2026-10-09T19:45:00+00:00"
-    },
-    {
-      "feed_in_ct": 7.3,
-      "import_gross_ct": 36.965,
-      "import_net_ct": 30.804166666666667,
-      "missing": [
-        "grid_loss",
-        "electricity_tax",
-        "renewables_levy"
-      ],
-      "origin": "primary",
-      "spot_net_ct": 21.49416666666667,
-      "start": "2026-10-09T20:00:00+00:00"
-    },
-    {
-      "feed_in_ct": 7.3,
-      "import_gross_ct": 36.965,
-      "import_net_ct": 30.804166666666667,
-      "missing": [
-        "grid_loss",
-        "electricity_tax",
-        "renewables_levy"
-      ],
-      "origin": "primary",
-      "spot_net_ct": 21.49416666666667,
-      "start": "2026-10-09T20:15:00+00:00"
-    },
-    {
-      "feed_in_ct": 7.3,
-      "import_gross_ct": 36.965,
-      "import_net_ct": 30.804166666666667,
-      "missing": [
-        "grid_loss",
-        "electricity_tax",
-        "renewables_levy"
-      ],
-      "origin": "primary",
-      "spot_net_ct": 21.49416666666667,
-      "start": "2026-10-09T20:30:00+00:00"
-    },
-    {
-      "feed_in_ct": 7.3,
-      "import_gross_ct": 36.965,
-      "import_net_ct": 30.804166666666667,
-      "missing": [
-        "grid_loss",
-        "electricity_tax",
-        "renewables_levy"
-      ],
-      "origin": "primary",
-      "spot_net_ct": 21.49416666666667,
-      "start": "2026-10-09T20:45:00+00:00"
-    },
-    {
-      "feed_in_ct": 7.3,
-      "import_gross_ct": 36.577,
-      "import_net_ct": 30.480833333333333,
-      "missing": [
-        "grid_loss",
-        "electricity_tax",
-        "renewables_levy"
-      ],
-      "origin": "primary",
-      "spot_net_ct": 21.170833333333334,
-      "start": "2026-10-09T21:00:00+00:00"
-    },
-    {
-      "feed_in_ct": 7.3,
-      "import_gross_ct": 36.577,
-      "import_net_ct": 30.480833333333333,
-      "missing": [
-        "grid_loss",
-        "electricity_tax",
-        "renewables_levy"
-      ],
-      "origin": "primary",
-      "spot_net_ct": 21.170833333333334,
-      "start": "2026-10-09T21:15:00+00:00"
-    },
-    {
-      "feed_in_ct": 7.3,
-      "import_gross_ct": 36.577,
-      "import_net_ct": 30.480833333333333,
-      "missing": [
-        "grid_loss",
-        "electricity_tax",
-        "renewables_levy"
-      ],
-      "origin": "primary",
-      "spot_net_ct": 21.170833333333334,
-      "start": "2026-10-09T21:30:00+00:00"
-    },
-    {
-      "feed_in_ct": 7.3,
-      "import_gross_ct": 36.577,
-      "import_net_ct": 30.480833333333333,
-      "missing": [
-        "grid_loss",
-        "electricity_tax",
-        "renewables_levy"
-      ],
-      "origin": "primary",
-      "spot_net_ct": 21.170833333333334,
-      "start": "2026-10-09T21:45:00+00:00"
-    }
-  ],
   "status": {
+    "last_attempt": "2026-10-09T08:00:00+00:00",
+    "last_success": "2026-10-09T08:00:00+00:00",
+    "vat_mode": "gross",
+    "vat_detection": {
+      "result": "gross",
+      "ratio": 1.2,
+      "slots": 96
+    },
     "days": [
       {
         "date": "2026-10-09",
-        "findings": [],
-        "origin": "primary"
+        "origin": "primary",
+        "findings": []
       }
     ],
-    "errors": [],
-    "last_attempt": "2026-10-09T08:00:00+00:00",
-    "last_success": "2026-10-09T08:00:00+00:00",
-    "vat_detection": {
-      "ratio": 1.2,
-      "result": "gross",
-      "slots": 96
+    "errors": []
+  },
+  "slots": [
+    {
+      "start": "2026-10-08T22:00:00+00:00",
+      "spot_net_ct": 14.853333333333335,
+      "import_net_ct": 24.163333333333334,
+      "import_gross_ct": 28.996000000000002,
+      "feed_in_ct": 7.3,
+      "origin": "primary",
+      "missing": [
+        "grid_loss",
+        "electricity_tax",
+        "renewables_levy"
+      ]
     },
-    "vat_mode": "gross"
-  }
+    {
+      "start": "2026-10-08T22:15:00+00:00",
+      "spot_net_ct": 14.853333333333335,
+      "import_net_ct": 24.163333333333334,
+      "import_gross_ct": 28.996000000000002,
+      "feed_in_ct": 7.3,
+      "origin": "primary",
+      "missing": [
+        "grid_loss",
+        "electricity_tax",
+        "renewables_levy"
+      ]
+    },
+    {
+      "start": "2026-10-08T22:30:00+00:00",
+      "spot_net_ct": 14.853333333333335,
+      "import_net_ct": 24.163333333333334,
+      "import_gross_ct": 28.996000000000002,
+      "feed_in_ct": 7.3,
+      "origin": "primary",
+      "missing": [
+        "grid_loss",
+        "electricity_tax",
+        "renewables_levy"
+      ]
+    },
+    {
+      "start": "2026-10-08T22:45:00+00:00",
+      "spot_net_ct": 14.853333333333335,
+      "import_net_ct": 24.163333333333334,
+      "import_gross_ct": 28.996000000000002,
+      "feed_in_ct": 7.3,
+      "origin": "primary",
+      "missing": [
+        "grid_loss",
+        "electricity_tax",
+        "renewables_levy"
+      ]
+    },
+    {
+      "start": "2026-10-08T23:00:00+00:00",
+      "spot_net_ct": 15.601666666666668,
+      "import_net_ct": 24.91166666666667,
+      "import_gross_ct": 29.894000000000002,
+      "feed_in_ct": 7.3,
+      "origin": "primary",
+      "missing": [
+        "grid_loss",
+        "electricity_tax",
+        "renewables_levy"
+      ]
+    },
+    {
+      "start": "2026-10-08T23:15:00+00:00",
+      "spot_net_ct": 15.601666666666668,
+      "import_net_ct": 24.91166666666667,
+      "import_gross_ct": 29.894000000000002,
+      "feed_in_ct": 7.3,
+      "origin": "primary",
+      "missing": [
+        "grid_loss",
+        "electricity_tax",
+        "renewables_levy"
+      ]
+    },
+    {
+      "start": "2026-10-08T23:30:00+00:00",
+      "spot_net_ct": 15.601666666666668,
+      "import_net_ct": 24.91166666666667,
+      "import_gross_ct": 29.894000000000002,
+      "feed_in_ct": 7.3,
+      "origin": "primary",
+      "missing": [
+        "grid_loss",
+        "electricity_tax",
+        "renewables_levy"
+      ]
+    },
+    {
+      "start": "2026-10-08T23:45:00+00:00",
+      "spot_net_ct": 15.601666666666668,
+      "import_net_ct": 24.91166666666667,
+      "import_gross_ct": 29.894000000000002,
+      "feed_in_ct": 7.3,
+      "origin": "primary",
+      "missing": [
+        "grid_loss",
+        "electricity_tax",
+        "renewables_levy"
+      ]
+    },
+    {
+      "start": "2026-10-09T00:00:00+00:00",
+      "spot_net_ct": 15.605,
+      "import_net_ct": 24.915,
+      "import_gross_ct": 29.898,
+      "feed_in_ct": 7.3,
+      "origin": "primary",
+      "missing": [
+        "grid_loss",
+        "electricity_tax",
+        "renewables_levy"
+      ]
+    },
+    {
+      "start": "2026-10-09T00:15:00+00:00",
+      "spot_net_ct": 15.605,
+      "import_net_ct": 24.915,
+      "import_gross_ct": 29.898,
+      "feed_in_ct": 7.3,
+      "origin": "primary",
+      "missing": [
+        "grid_loss",
+        "electricity_tax",
+        "renewables_levy"
+      ]
+    },
+    {
+      "start": "2026-10-09T00:30:00+00:00",
+      "spot_net_ct": 15.605,
+      "import_net_ct": 24.915,
+      "import_gross_ct": 29.898,
+      "feed_in_ct": 7.3,
+      "origin": "primary",
+      "missing": [
+        "grid_loss",
+        "electricity_tax",
+        "renewables_levy"
+      ]
+    },
+    {
+      "start": "2026-10-09T00:45:00+00:00",
+      "spot_net_ct": 15.605,
+      "import_net_ct": 24.915,
+      "import_gross_ct": 29.898,
+      "feed_in_ct": 7.3,
+      "origin": "primary",
+      "missing": [
+        "grid_loss",
+        "electricity_tax",
+        "renewables_levy"
+      ]
+    },
+    {
+      "start": "2026-10-09T01:00:00+00:00",
+      "spot_net_ct": 16.109166666666667,
+      "import_net_ct": 25.419166666666666,
+      "import_gross_ct": 30.503,
+      "feed_in_ct": 7.3,
+      "origin": "primary",
+      "missing": [
+        "grid_loss",
+        "electricity_tax",
+        "renewables_levy"
+      ]
+    },
+    {
+      "start": "2026-10-09T01:15:00+00:00",
+      "spot_net_ct": 16.109166666666667,
+      "import_net_ct": 25.419166666666666,
+      "import_gross_ct": 30.503,
+      "feed_in_ct": 7.3,
+      "origin": "primary",
+      "missing": [
+        "grid_loss",
+        "electricity_tax",
+        "renewables_levy"
+      ]
+    },
+    {
+      "start": "2026-10-09T01:30:00+00:00",
+      "spot_net_ct": 16.109166666666667,
+      "import_net_ct": 25.419166666666666,
+      "import_gross_ct": 30.503,
+      "feed_in_ct": 7.3,
+      "origin": "primary",
+      "missing": [
+        "grid_loss",
+        "electricity_tax",
+        "renewables_levy"
+      ]
+    },
+    {
+      "start": "2026-10-09T01:45:00+00:00",
+      "spot_net_ct": 16.109166666666667,
+      "import_net_ct": 25.419166666666666,
+      "import_gross_ct": 30.503,
+      "feed_in_ct": 7.3,
+      "origin": "primary",
+      "missing": [
+        "grid_loss",
+        "electricity_tax",
+        "renewables_levy"
+      ]
+    },
+    {
+      "start": "2026-10-09T02:00:00+00:00",
+      "spot_net_ct": 16.80666666666667,
+      "import_net_ct": 26.116666666666667,
+      "import_gross_ct": 31.340000000000003,
+      "feed_in_ct": 7.3,
+      "origin": "primary",
+      "missing": [
+        "grid_loss",
+        "electricity_tax",
+        "renewables_levy"
+      ]
+    },
+    {
+      "start": "2026-10-09T02:15:00+00:00",
+      "spot_net_ct": 16.80666666666667,
+      "import_net_ct": 26.116666666666667,
+      "import_gross_ct": 31.340000000000003,
+      "feed_in_ct": 7.3,
+      "origin": "primary",
+      "missing": [
+        "grid_loss",
+        "electricity_tax",
+        "renewables_levy"
+      ]
+    },
+    {
+      "start": "2026-10-09T02:30:00+00:00",
+      "spot_net_ct": 16.80666666666667,
+      "import_net_ct": 26.116666666666667,
+      "import_gross_ct": 31.340000000000003,
+      "feed_in_ct": 7.3,
+      "origin": "primary",
+      "missing": [
+        "grid_loss",
+        "electricity_tax",
+        "renewables_levy"
+      ]
+    },
+    {
+      "start": "2026-10-09T02:45:00+00:00",
+      "spot_net_ct": 16.80666666666667,
+      "import_net_ct": 26.116666666666667,
+      "import_gross_ct": 31.340000000000003,
+      "feed_in_ct": 7.3,
+      "origin": "primary",
+      "missing": [
+        "grid_loss",
+        "electricity_tax",
+        "renewables_levy"
+      ]
+    },
+    {
+      "start": "2026-10-09T03:00:00+00:00",
+      "spot_net_ct": 16.134999999999998,
+      "import_net_ct": 25.444999999999997,
+      "import_gross_ct": 30.534,
+      "feed_in_ct": 7.3,
+      "origin": "primary",
+      "missing": [
+        "grid_loss",
+        "electricity_tax",
+        "renewables_levy"
+      ]
+    },
+    {
+      "start": "2026-10-09T03:15:00+00:00",
+      "spot_net_ct": 16.134999999999998,
+      "import_net_ct": 25.444999999999997,
+      "import_gross_ct": 30.534,
+      "feed_in_ct": 7.3,
+      "origin": "primary",
+      "missing": [
+        "grid_loss",
+        "electricity_tax",
+        "renewables_levy"
+      ]
+    },
+    {
+      "start": "2026-10-09T03:30:00+00:00",
+      "spot_net_ct": 16.134999999999998,
+      "import_net_ct": 25.444999999999997,
+      "import_gross_ct": 30.534,
+      "feed_in_ct": 7.3,
+      "origin": "primary",
+      "missing": [
+        "grid_loss",
+        "electricity_tax",
+        "renewables_levy"
+      ]
+    },
+    {
+      "start": "2026-10-09T03:45:00+00:00",
+      "spot_net_ct": 16.134999999999998,
+      "import_net_ct": 25.444999999999997,
+      "import_gross_ct": 30.534,
+      "feed_in_ct": 7.3,
+      "origin": "primary",
+      "missing": [
+        "grid_loss",
+        "electricity_tax",
+        "renewables_levy"
+      ]
+    },
+    {
+      "start": "2026-10-09T04:00:00+00:00",
+      "spot_net_ct": 21.933333333333334,
+      "import_net_ct": 31.243333333333332,
+      "import_gross_ct": 37.492000000000004,
+      "feed_in_ct": 7.3,
+      "origin": "primary",
+      "missing": [
+        "grid_loss",
+        "electricity_tax",
+        "renewables_levy"
+      ]
+    },
+    {
+      "start": "2026-10-09T04:15:00+00:00",
+      "spot_net_ct": 21.933333333333334,
+      "import_net_ct": 31.243333333333332,
+      "import_gross_ct": 37.492000000000004,
+      "feed_in_ct": 7.3,
+      "origin": "primary",
+      "missing": [
+        "grid_loss",
+        "electricity_tax",
+        "renewables_levy"
+      ]
+    },
+    {
+      "start": "2026-10-09T04:30:00+00:00",
+      "spot_net_ct": 21.933333333333334,
+      "import_net_ct": 31.243333333333332,
+      "import_gross_ct": 37.492000000000004,
+      "feed_in_ct": 7.3,
+      "origin": "primary",
+      "missing": [
+        "grid_loss",
+        "electricity_tax",
+        "renewables_levy"
+      ]
+    },
+    {
+      "start": "2026-10-09T04:45:00+00:00",
+      "spot_net_ct": 21.933333333333334,
+      "import_net_ct": 31.243333333333332,
+      "import_gross_ct": 37.492000000000004,
+      "feed_in_ct": 7.3,
+      "origin": "primary",
+      "missing": [
+        "grid_loss",
+        "electricity_tax",
+        "renewables_levy"
+      ]
+    },
+    {
+      "start": "2026-10-09T05:00:00+00:00",
+      "spot_net_ct": 22.32166666666667,
+      "import_net_ct": 31.631666666666668,
+      "import_gross_ct": 37.958,
+      "feed_in_ct": 7.3,
+      "origin": "primary",
+      "missing": [
+        "grid_loss",
+        "electricity_tax",
+        "renewables_levy"
+      ]
+    },
+    {
+      "start": "2026-10-09T05:15:00+00:00",
+      "spot_net_ct": 22.32166666666667,
+      "import_net_ct": 31.631666666666668,
+      "import_gross_ct": 37.958,
+      "feed_in_ct": 7.3,
+      "origin": "primary",
+      "missing": [
+        "grid_loss",
+        "electricity_tax",
+        "renewables_levy"
+      ]
+    },
+    {
+      "start": "2026-10-09T05:30:00+00:00",
+      "spot_net_ct": 22.32166666666667,
+      "import_net_ct": 31.631666666666668,
+      "import_gross_ct": 37.958,
+      "feed_in_ct": 7.3,
+      "origin": "primary",
+      "missing": [
+        "grid_loss",
+        "electricity_tax",
+        "renewables_levy"
+      ]
+    },
+    {
+      "start": "2026-10-09T05:45:00+00:00",
+      "spot_net_ct": 22.32166666666667,
+      "import_net_ct": 31.631666666666668,
+      "import_gross_ct": 37.958,
+      "feed_in_ct": 7.3,
+      "origin": "primary",
+      "missing": [
+        "grid_loss",
+        "electricity_tax",
+        "renewables_levy"
+      ]
+    },
+    {
+      "start": "2026-10-09T06:00:00+00:00",
+      "spot_net_ct": 20.374166666666667,
+      "import_net_ct": 29.684166666666666,
+      "import_gross_ct": 35.621,
+      "feed_in_ct": 7.3,
+      "origin": "primary",
+      "missing": [
+        "grid_loss",
+        "electricity_tax",
+        "renewables_levy"
+      ]
+    },
+    {
+      "start": "2026-10-09T06:15:00+00:00",
+      "spot_net_ct": 20.374166666666667,
+      "import_net_ct": 29.684166666666666,
+      "import_gross_ct": 35.621,
+      "feed_in_ct": 7.3,
+      "origin": "primary",
+      "missing": [
+        "grid_loss",
+        "electricity_tax",
+        "renewables_levy"
+      ]
+    },
+    {
+      "start": "2026-10-09T06:30:00+00:00",
+      "spot_net_ct": 20.374166666666667,
+      "import_net_ct": 29.684166666666666,
+      "import_gross_ct": 35.621,
+      "feed_in_ct": 7.3,
+      "origin": "primary",
+      "missing": [
+        "grid_loss",
+        "electricity_tax",
+        "renewables_levy"
+      ]
+    },
+    {
+      "start": "2026-10-09T06:45:00+00:00",
+      "spot_net_ct": 20.374166666666667,
+      "import_net_ct": 29.684166666666666,
+      "import_gross_ct": 35.621,
+      "feed_in_ct": 7.3,
+      "origin": "primary",
+      "missing": [
+        "grid_loss",
+        "electricity_tax",
+        "renewables_levy"
+      ]
+    },
+    {
+      "start": "2026-10-09T07:00:00+00:00",
+      "spot_net_ct": 21.824166666666667,
+      "import_net_ct": 31.134166666666665,
+      "import_gross_ct": 37.361000000000004,
+      "feed_in_ct": 7.3,
+      "origin": "primary",
+      "missing": [
+        "grid_loss",
+        "electricity_tax",
+        "renewables_levy"
+      ]
+    },
+    {
+      "start": "2026-10-09T07:15:00+00:00",
+      "spot_net_ct": 21.824166666666667,
+      "import_net_ct": 31.134166666666665,
+      "import_gross_ct": 37.361000000000004,
+      "feed_in_ct": 7.3,
+      "origin": "primary",
+      "missing": [
+        "grid_loss",
+        "electricity_tax",
+        "renewables_levy"
+      ]
+    },
+    {
+      "start": "2026-10-09T07:30:00+00:00",
+      "spot_net_ct": 21.824166666666667,
+      "import_net_ct": 31.134166666666665,
+      "import_gross_ct": 37.361000000000004,
+      "feed_in_ct": 7.3,
+      "origin": "primary",
+      "missing": [
+        "grid_loss",
+        "electricity_tax",
+        "renewables_levy"
+      ]
+    },
+    {
+      "start": "2026-10-09T07:45:00+00:00",
+      "spot_net_ct": 21.824166666666667,
+      "import_net_ct": 31.134166666666665,
+      "import_gross_ct": 37.361000000000004,
+      "feed_in_ct": 7.3,
+      "origin": "primary",
+      "missing": [
+        "grid_loss",
+        "electricity_tax",
+        "renewables_levy"
+      ]
+    },
+    {
+      "start": "2026-10-09T08:00:00+00:00",
+      "spot_net_ct": 16.508333333333333,
+      "import_net_ct": 25.81833333333333,
+      "import_gross_ct": 30.982,
+      "feed_in_ct": 7.3,
+      "origin": "primary",
+      "missing": [
+        "grid_loss",
+        "electricity_tax",
+        "renewables_levy"
+      ]
+    },
+    {
+      "start": "2026-10-09T08:15:00+00:00",
+      "spot_net_ct": 16.508333333333333,
+      "import_net_ct": 25.81833333333333,
+      "import_gross_ct": 30.982,
+      "feed_in_ct": 7.3,
+      "origin": "primary",
+      "missing": [
+        "grid_loss",
+        "electricity_tax",
+        "renewables_levy"
+      ]
+    },
+    {
+      "start": "2026-10-09T08:30:00+00:00",
+      "spot_net_ct": 16.508333333333333,
+      "import_net_ct": 25.81833333333333,
+      "import_gross_ct": 30.982,
+      "feed_in_ct": 7.3,
+      "origin": "primary",
+      "missing": [
+        "grid_loss",
+        "electricity_tax",
+        "renewables_levy"
+      ]
+    },
+    {
+      "start": "2026-10-09T08:45:00+00:00",
+      "spot_net_ct": 16.508333333333333,
+      "import_net_ct": 25.81833333333333,
+      "import_gross_ct": 30.982,
+      "feed_in_ct": 7.3,
+      "origin": "primary",
+      "missing": [
+        "grid_loss",
+        "electricity_tax",
+        "renewables_levy"
+      ]
+    },
+    {
+      "start": "2026-10-09T09:00:00+00:00",
+      "spot_net_ct": 22.09416666666667,
+      "import_net_ct": 31.40416666666667,
+      "import_gross_ct": 37.685,
+      "feed_in_ct": 7.3,
+      "origin": "primary",
+      "missing": [
+        "grid_loss",
+        "electricity_tax",
+        "renewables_levy"
+      ]
+    },
+    {
+      "start": "2026-10-09T09:15:00+00:00",
+      "spot_net_ct": 22.09416666666667,
+      "import_net_ct": 31.40416666666667,
+      "import_gross_ct": 37.685,
+      "feed_in_ct": 7.3,
+      "origin": "primary",
+      "missing": [
+        "grid_loss",
+        "electricity_tax",
+        "renewables_levy"
+      ]
+    },
+    {
+      "start": "2026-10-09T09:30:00+00:00",
+      "spot_net_ct": 22.09416666666667,
+      "import_net_ct": 31.40416666666667,
+      "import_gross_ct": 37.685,
+      "feed_in_ct": 7.3,
+      "origin": "primary",
+      "missing": [
+        "grid_loss",
+        "electricity_tax",
+        "renewables_levy"
+      ]
+    },
+    {
+      "start": "2026-10-09T09:45:00+00:00",
+      "spot_net_ct": 22.09416666666667,
+      "import_net_ct": 31.40416666666667,
+      "import_gross_ct": 37.685,
+      "feed_in_ct": 7.3,
+      "origin": "primary",
+      "missing": [
+        "grid_loss",
+        "electricity_tax",
+        "renewables_levy"
+      ]
+    },
+    {
+      "start": "2026-10-09T10:00:00+00:00",
+      "spot_net_ct": 20.054166666666667,
+      "import_net_ct": 29.364166666666666,
+      "import_gross_ct": 35.237,
+      "feed_in_ct": 7.3,
+      "origin": "primary",
+      "missing": [
+        "grid_loss",
+        "electricity_tax",
+        "renewables_levy"
+      ]
+    },
+    {
+      "start": "2026-10-09T10:15:00+00:00",
+      "spot_net_ct": 20.054166666666667,
+      "import_net_ct": 29.364166666666666,
+      "import_gross_ct": 35.237,
+      "feed_in_ct": 7.3,
+      "origin": "primary",
+      "missing": [
+        "grid_loss",
+        "electricity_tax",
+        "renewables_levy"
+      ]
+    },
+    {
+      "start": "2026-10-09T10:30:00+00:00",
+      "spot_net_ct": 20.054166666666667,
+      "import_net_ct": 29.364166666666666,
+      "import_gross_ct": 35.237,
+      "feed_in_ct": 7.3,
+      "origin": "primary",
+      "missing": [
+        "grid_loss",
+        "electricity_tax",
+        "renewables_levy"
+      ]
+    },
+    {
+      "start": "2026-10-09T10:45:00+00:00",
+      "spot_net_ct": 20.054166666666667,
+      "import_net_ct": 29.364166666666666,
+      "import_gross_ct": 35.237,
+      "feed_in_ct": 7.3,
+      "origin": "primary",
+      "missing": [
+        "grid_loss",
+        "electricity_tax",
+        "renewables_levy"
+      ]
+    },
+    {
+      "start": "2026-10-09T11:00:00+00:00",
+      "spot_net_ct": 20.05666666666667,
+      "import_net_ct": 29.366666666666667,
+      "import_gross_ct": 35.24,
+      "feed_in_ct": 7.3,
+      "origin": "primary",
+      "missing": [
+        "grid_loss",
+        "electricity_tax",
+        "renewables_levy"
+      ]
+    },
+    {
+      "start": "2026-10-09T11:15:00+00:00",
+      "spot_net_ct": 20.05666666666667,
+      "import_net_ct": 29.366666666666667,
+      "import_gross_ct": 35.24,
+      "feed_in_ct": 7.3,
+      "origin": "primary",
+      "missing": [
+        "grid_loss",
+        "electricity_tax",
+        "renewables_levy"
+      ]
+    },
+    {
+      "start": "2026-10-09T11:30:00+00:00",
+      "spot_net_ct": 20.05666666666667,
+      "import_net_ct": 29.366666666666667,
+      "import_gross_ct": 35.24,
+      "feed_in_ct": 7.3,
+      "origin": "primary",
+      "missing": [
+        "grid_loss",
+        "electricity_tax",
+        "renewables_levy"
+      ]
+    },
+    {
+      "start": "2026-10-09T11:45:00+00:00",
+      "spot_net_ct": 20.05666666666667,
+      "import_net_ct": 29.366666666666667,
+      "import_gross_ct": 35.24,
+      "feed_in_ct": 7.3,
+      "origin": "primary",
+      "missing": [
+        "grid_loss",
+        "electricity_tax",
+        "renewables_levy"
+      ]
+    },
+    {
+      "start": "2026-10-09T12:00:00+00:00",
+      "spot_net_ct": 19.694166666666668,
+      "import_net_ct": 29.004166666666666,
+      "import_gross_ct": 34.805,
+      "feed_in_ct": 7.3,
+      "origin": "primary",
+      "missing": [
+        "grid_loss",
+        "electricity_tax",
+        "renewables_levy"
+      ]
+    },
+    {
+      "start": "2026-10-09T12:15:00+00:00",
+      "spot_net_ct": 19.694166666666668,
+      "import_net_ct": 29.004166666666666,
+      "import_gross_ct": 34.805,
+      "feed_in_ct": 7.3,
+      "origin": "primary",
+      "missing": [
+        "grid_loss",
+        "electricity_tax",
+        "renewables_levy"
+      ]
+    },
+    {
+      "start": "2026-10-09T12:30:00+00:00",
+      "spot_net_ct": 19.694166666666668,
+      "import_net_ct": 29.004166666666666,
+      "import_gross_ct": 34.805,
+      "feed_in_ct": 7.3,
+      "origin": "primary",
+      "missing": [
+        "grid_loss",
+        "electricity_tax",
+        "renewables_levy"
+      ]
+    },
+    {
+      "start": "2026-10-09T12:45:00+00:00",
+      "spot_net_ct": 19.694166666666668,
+      "import_net_ct": 29.004166666666666,
+      "import_gross_ct": 34.805,
+      "feed_in_ct": 7.3,
+      "origin": "primary",
+      "missing": [
+        "grid_loss",
+        "electricity_tax",
+        "renewables_levy"
+      ]
+    },
+    {
+      "start": "2026-10-09T13:00:00+00:00",
+      "spot_net_ct": 16.805,
+      "import_net_ct": 26.115,
+      "import_gross_ct": 31.338,
+      "feed_in_ct": 7.3,
+      "origin": "primary",
+      "missing": [
+        "grid_loss",
+        "electricity_tax",
+        "renewables_levy"
+      ]
+    },
+    {
+      "start": "2026-10-09T13:15:00+00:00",
+      "spot_net_ct": 16.805,
+      "import_net_ct": 26.115,
+      "import_gross_ct": 31.338,
+      "feed_in_ct": 7.3,
+      "origin": "primary",
+      "missing": [
+        "grid_loss",
+        "electricity_tax",
+        "renewables_levy"
+      ]
+    },
+    {
+      "start": "2026-10-09T13:30:00+00:00",
+      "spot_net_ct": 16.805,
+      "import_net_ct": 26.115,
+      "import_gross_ct": 31.338,
+      "feed_in_ct": 7.3,
+      "origin": "primary",
+      "missing": [
+        "grid_loss",
+        "electricity_tax",
+        "renewables_levy"
+      ]
+    },
+    {
+      "start": "2026-10-09T13:45:00+00:00",
+      "spot_net_ct": 16.805,
+      "import_net_ct": 26.115,
+      "import_gross_ct": 31.338,
+      "feed_in_ct": 7.3,
+      "origin": "primary",
+      "missing": [
+        "grid_loss",
+        "electricity_tax",
+        "renewables_levy"
+      ]
+    },
+    {
+      "start": "2026-10-09T14:00:00+00:00",
+      "spot_net_ct": 22.090833333333336,
+      "import_net_ct": 31.400833333333335,
+      "import_gross_ct": 37.681000000000004,
+      "feed_in_ct": 7.3,
+      "origin": "primary",
+      "missing": [
+        "grid_loss",
+        "electricity_tax",
+        "renewables_levy"
+      ]
+    },
+    {
+      "start": "2026-10-09T14:15:00+00:00",
+      "spot_net_ct": 22.090833333333336,
+      "import_net_ct": 31.400833333333335,
+      "import_gross_ct": 37.681000000000004,
+      "feed_in_ct": 7.3,
+      "origin": "primary",
+      "missing": [
+        "grid_loss",
+        "electricity_tax",
+        "renewables_levy"
+      ]
+    },
+    {
+      "start": "2026-10-09T14:30:00+00:00",
+      "spot_net_ct": 22.090833333333336,
+      "import_net_ct": 31.400833333333335,
+      "import_gross_ct": 37.681000000000004,
+      "feed_in_ct": 7.3,
+      "origin": "primary",
+      "missing": [
+        "grid_loss",
+        "electricity_tax",
+        "renewables_levy"
+      ]
+    },
+    {
+      "start": "2026-10-09T14:45:00+00:00",
+      "spot_net_ct": 22.090833333333336,
+      "import_net_ct": 31.400833333333335,
+      "import_gross_ct": 37.681000000000004,
+      "feed_in_ct": 7.3,
+      "origin": "primary",
+      "missing": [
+        "grid_loss",
+        "electricity_tax",
+        "renewables_levy"
+      ]
+    },
+    {
+      "start": "2026-10-09T15:00:00+00:00",
+      "spot_net_ct": 22.0,
+      "import_net_ct": 31.31,
+      "import_gross_ct": 37.572,
+      "feed_in_ct": 7.3,
+      "origin": "primary",
+      "missing": [
+        "grid_loss",
+        "electricity_tax",
+        "renewables_levy"
+      ]
+    },
+    {
+      "start": "2026-10-09T15:15:00+00:00",
+      "spot_net_ct": 22.0,
+      "import_net_ct": 31.31,
+      "import_gross_ct": 37.572,
+      "feed_in_ct": 7.3,
+      "origin": "primary",
+      "missing": [
+        "grid_loss",
+        "electricity_tax",
+        "renewables_levy"
+      ]
+    },
+    {
+      "start": "2026-10-09T15:30:00+00:00",
+      "spot_net_ct": 22.0,
+      "import_net_ct": 31.31,
+      "import_gross_ct": 37.572,
+      "feed_in_ct": 7.3,
+      "origin": "primary",
+      "missing": [
+        "grid_loss",
+        "electricity_tax",
+        "renewables_levy"
+      ]
+    },
+    {
+      "start": "2026-10-09T15:45:00+00:00",
+      "spot_net_ct": 22.0,
+      "import_net_ct": 31.31,
+      "import_gross_ct": 37.572,
+      "feed_in_ct": 7.3,
+      "origin": "primary",
+      "missing": [
+        "grid_loss",
+        "electricity_tax",
+        "renewables_levy"
+      ]
+    },
+    {
+      "start": "2026-10-09T16:00:00+00:00",
+      "spot_net_ct": 22.483333333333334,
+      "import_net_ct": 31.793333333333333,
+      "import_gross_ct": 38.152,
+      "feed_in_ct": 7.3,
+      "origin": "primary",
+      "missing": [
+        "grid_loss",
+        "electricity_tax",
+        "renewables_levy"
+      ]
+    },
+    {
+      "start": "2026-10-09T16:15:00+00:00",
+      "spot_net_ct": 22.483333333333334,
+      "import_net_ct": 31.793333333333333,
+      "import_gross_ct": 38.152,
+      "feed_in_ct": 7.3,
+      "origin": "primary",
+      "missing": [
+        "grid_loss",
+        "electricity_tax",
+        "renewables_levy"
+      ]
+    },
+    {
+      "start": "2026-10-09T16:30:00+00:00",
+      "spot_net_ct": 22.483333333333334,
+      "import_net_ct": 31.793333333333333,
+      "import_gross_ct": 38.152,
+      "feed_in_ct": 7.3,
+      "origin": "primary",
+      "missing": [
+        "grid_loss",
+        "electricity_tax",
+        "renewables_levy"
+      ]
+    },
+    {
+      "start": "2026-10-09T16:45:00+00:00",
+      "spot_net_ct": 22.483333333333334,
+      "import_net_ct": 31.793333333333333,
+      "import_gross_ct": 38.152,
+      "feed_in_ct": 7.3,
+      "origin": "primary",
+      "missing": [
+        "grid_loss",
+        "electricity_tax",
+        "renewables_levy"
+      ]
+    },
+    {
+      "start": "2026-10-09T17:00:00+00:00",
+      "spot_net_ct": 22.0,
+      "import_net_ct": 31.31,
+      "import_gross_ct": 37.572,
+      "feed_in_ct": 7.3,
+      "origin": "primary",
+      "missing": [
+        "grid_loss",
+        "electricity_tax",
+        "renewables_levy"
+      ]
+    },
+    {
+      "start": "2026-10-09T17:15:00+00:00",
+      "spot_net_ct": 22.0,
+      "import_net_ct": 31.31,
+      "import_gross_ct": 37.572,
+      "feed_in_ct": 7.3,
+      "origin": "primary",
+      "missing": [
+        "grid_loss",
+        "electricity_tax",
+        "renewables_levy"
+      ]
+    },
+    {
+      "start": "2026-10-09T17:30:00+00:00",
+      "spot_net_ct": 22.0,
+      "import_net_ct": 31.31,
+      "import_gross_ct": 37.572,
+      "feed_in_ct": 7.3,
+      "origin": "primary",
+      "missing": [
+        "grid_loss",
+        "electricity_tax",
+        "renewables_levy"
+      ]
+    },
+    {
+      "start": "2026-10-09T17:45:00+00:00",
+      "spot_net_ct": 22.0,
+      "import_net_ct": 31.31,
+      "import_gross_ct": 37.572,
+      "feed_in_ct": 7.3,
+      "origin": "primary",
+      "missing": [
+        "grid_loss",
+        "electricity_tax",
+        "renewables_levy"
+      ]
+    },
+    {
+      "start": "2026-10-09T18:00:00+00:00",
+      "spot_net_ct": 22.069166666666668,
+      "import_net_ct": 31.379166666666666,
+      "import_gross_ct": 37.655,
+      "feed_in_ct": 7.3,
+      "origin": "primary",
+      "missing": [
+        "grid_loss",
+        "electricity_tax",
+        "renewables_levy"
+      ]
+    },
+    {
+      "start": "2026-10-09T18:15:00+00:00",
+      "spot_net_ct": 22.069166666666668,
+      "import_net_ct": 31.379166666666666,
+      "import_gross_ct": 37.655,
+      "feed_in_ct": 7.3,
+      "origin": "primary",
+      "missing": [
+        "grid_loss",
+        "electricity_tax",
+        "renewables_levy"
+      ]
+    },
+    {
+      "start": "2026-10-09T18:30:00+00:00",
+      "spot_net_ct": 22.069166666666668,
+      "import_net_ct": 31.379166666666666,
+      "import_gross_ct": 37.655,
+      "feed_in_ct": 7.3,
+      "origin": "primary",
+      "missing": [
+        "grid_loss",
+        "electricity_tax",
+        "renewables_levy"
+      ]
+    },
+    {
+      "start": "2026-10-09T18:45:00+00:00",
+      "spot_net_ct": 22.069166666666668,
+      "import_net_ct": 31.379166666666666,
+      "import_gross_ct": 37.655,
+      "feed_in_ct": 7.3,
+      "origin": "primary",
+      "missing": [
+        "grid_loss",
+        "electricity_tax",
+        "renewables_levy"
+      ]
+    },
+    {
+      "start": "2026-10-09T19:00:00+00:00",
+      "spot_net_ct": 21.496666666666666,
+      "import_net_ct": 30.806666666666665,
+      "import_gross_ct": 36.968,
+      "feed_in_ct": 7.3,
+      "origin": "primary",
+      "missing": [
+        "grid_loss",
+        "electricity_tax",
+        "renewables_levy"
+      ]
+    },
+    {
+      "start": "2026-10-09T19:15:00+00:00",
+      "spot_net_ct": 21.496666666666666,
+      "import_net_ct": 30.806666666666665,
+      "import_gross_ct": 36.968,
+      "feed_in_ct": 7.3,
+      "origin": "primary",
+      "missing": [
+        "grid_loss",
+        "electricity_tax",
+        "renewables_levy"
+      ]
+    },
+    {
+      "start": "2026-10-09T19:30:00+00:00",
+      "spot_net_ct": 21.496666666666666,
+      "import_net_ct": 30.806666666666665,
+      "import_gross_ct": 36.968,
+      "feed_in_ct": 7.3,
+      "origin": "primary",
+      "missing": [
+        "grid_loss",
+        "electricity_tax",
+        "renewables_levy"
+      ]
+    },
+    {
+      "start": "2026-10-09T19:45:00+00:00",
+      "spot_net_ct": 21.496666666666666,
+      "import_net_ct": 30.806666666666665,
+      "import_gross_ct": 36.968,
+      "feed_in_ct": 7.3,
+      "origin": "primary",
+      "missing": [
+        "grid_loss",
+        "electricity_tax",
+        "renewables_levy"
+      ]
+    },
+    {
+      "start": "2026-10-09T20:00:00+00:00",
+      "spot_net_ct": 21.49416666666667,
+      "import_net_ct": 30.804166666666667,
+      "import_gross_ct": 36.965,
+      "feed_in_ct": 7.3,
+      "origin": "primary",
+      "missing": [
+        "grid_loss",
+        "electricity_tax",
+        "renewables_levy"
+      ]
+    },
+    {
+      "start": "2026-10-09T20:15:00+00:00",
+      "spot_net_ct": 21.49416666666667,
+      "import_net_ct": 30.804166666666667,
+      "import_gross_ct": 36.965,
+      "feed_in_ct": 7.3,
+      "origin": "primary",
+      "missing": [
+        "grid_loss",
+        "electricity_tax",
+        "renewables_levy"
+      ]
+    },
+    {
+      "start": "2026-10-09T20:30:00+00:00",
+      "spot_net_ct": 21.49416666666667,
+      "import_net_ct": 30.804166666666667,
+      "import_gross_ct": 36.965,
+      "feed_in_ct": 7.3,
+      "origin": "primary",
+      "missing": [
+        "grid_loss",
+        "electricity_tax",
+        "renewables_levy"
+      ]
+    },
+    {
+      "start": "2026-10-09T20:45:00+00:00",
+      "spot_net_ct": 21.49416666666667,
+      "import_net_ct": 30.804166666666667,
+      "import_gross_ct": 36.965,
+      "feed_in_ct": 7.3,
+      "origin": "primary",
+      "missing": [
+        "grid_loss",
+        "electricity_tax",
+        "renewables_levy"
+      ]
+    },
+    {
+      "start": "2026-10-09T21:00:00+00:00",
+      "spot_net_ct": 21.170833333333334,
+      "import_net_ct": 30.480833333333333,
+      "import_gross_ct": 36.577,
+      "feed_in_ct": 7.3,
+      "origin": "primary",
+      "missing": [
+        "grid_loss",
+        "electricity_tax",
+        "renewables_levy"
+      ]
+    },
+    {
+      "start": "2026-10-09T21:15:00+00:00",
+      "spot_net_ct": 21.170833333333334,
+      "import_net_ct": 30.480833333333333,
+      "import_gross_ct": 36.577,
+      "feed_in_ct": 7.3,
+      "origin": "primary",
+      "missing": [
+        "grid_loss",
+        "electricity_tax",
+        "renewables_levy"
+      ]
+    },
+    {
+      "start": "2026-10-09T21:30:00+00:00",
+      "spot_net_ct": 21.170833333333334,
+      "import_net_ct": 30.480833333333333,
+      "import_gross_ct": 36.577,
+      "feed_in_ct": 7.3,
+      "origin": "primary",
+      "missing": [
+        "grid_loss",
+        "electricity_tax",
+        "renewables_levy"
+      ]
+    },
+    {
+      "start": "2026-10-09T21:45:00+00:00",
+      "spot_net_ct": 21.170833333333334,
+      "import_net_ct": 30.480833333333333,
+      "import_gross_ct": 36.577,
+      "feed_in_ct": 7.3,
+      "origin": "primary",
+      "missing": [
+        "grid_loss",
+        "electricity_tax",
+        "renewables_levy"
+      ]
+    }
+  ]
 }

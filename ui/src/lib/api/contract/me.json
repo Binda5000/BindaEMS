@@ -1,9 +1,9 @@
 {
   "user": {
-    "created_at": "2026-10-09T08:00:00+00:00",
     "id": 1,
+    "username": "admin",
     "role": "admin",
     "totp_enabled": false,
-    "username": "admin"
+    "created_at": "2026-10-09T08:00:00+00:00"
   }
 }

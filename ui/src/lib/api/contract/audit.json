@@ -1,125 +1,125 @@
 [
   {
-    "action": "consumer.create",
+    "id": 8,
+    "ts": "2026-10-09T08:00:00+00:00",
     "actor": "admin",
+    "source": "ui",
+    "action": "consumer.create",
+    "target": "Küche",
     "details": {
-      "color": "#59a14f",
-      "group": null,
       "name": "Küche",
+      "group": null,
       "parent_id": null,
+      "color": "#59a14f",
+      "source_kind": "ha",
       "power_ref": "sensor.kueche_power",
       "power_unit": "W",
-      "sort": 0,
-      "source_kind": "ha"
-    },
-    "id": 8,
-    "source": "ui",
-    "target": "Küche",
-    "ts": "2026-10-09T08:00:00+00:00"
+      "sort": 0
+    }
   },
   {
-    "action": "consumer.create",
+    "id": 7,
+    "ts": "2026-10-09T08:00:00+00:00",
     "actor": "admin",
+    "source": "ui",
+    "action": "consumer.create",
+    "target": "Büro",
     "details": {
-      "color": "#f28e2b",
-      "group": null,
       "name": "Büro",
+      "group": null,
       "parent_id": 1,
+      "color": "#f28e2b",
+      "source_kind": "core",
       "power_ref": "load.buero.power_w",
       "power_unit": null,
-      "sort": 0,
-      "source_kind": "core"
-    },
-    "id": 7,
-    "source": "ui",
-    "target": "Büro",
-    "ts": "2026-10-09T08:00:00+00:00"
+      "sort": 0
+    }
   },
   {
-    "action": "consumer.create",
+    "id": 6,
+    "ts": "2026-10-09T08:00:00+00:00",
     "actor": "admin",
+    "source": "ui",
+    "action": "consumer.create",
+    "target": "Obergeschoss",
     "details": {
-      "color": "#4e79a7",
-      "group": null,
       "name": "Obergeschoss",
+      "group": null,
       "parent_id": null,
+      "color": "#4e79a7",
+      "source_kind": "core",
       "power_ref": "load.obergeschoss.power_w",
       "power_unit": null,
-      "sort": 0,
-      "source_kind": "core"
-    },
-    "id": 6,
-    "source": "ui",
-    "target": "Obergeschoss",
-    "ts": "2026-10-09T08:00:00+00:00"
+      "sort": 0
+    }
   },
   {
-    "action": "settings.update",
-    "actor": "test",
-    "details": {
-      "changes": [
-        {
-          "new": 7.3,
-          "old": null,
-          "path": "feed_in.monthly_ct.2026-09"
-        }
-      ],
-      "version": 3
-    },
     "id": 5,
-    "source": "ui",
-    "target": "einstellungen",
-    "ts": "2026-10-09T08:00:00+00:00"
-  },
-  {
-    "action": "settings.update",
+    "ts": "2026-10-09T08:00:00+00:00",
     "actor": "test",
+    "source": "ui",
+    "action": "settings.update",
+    "target": "einstellungen",
     "details": {
+      "version": 3,
       "changes": [
         {
-          "new": 8.11,
+          "path": "feed_in.monthly_ct.2026-09",
           "old": null,
-          "path": "tariff.components[2].value_ct"
+          "new": 7.3
         }
-      ],
-      "version": 2
-    },
-    "id": 4,
-    "source": "ui",
-    "target": "einstellungen",
-    "ts": "2026-10-09T08:00:00+00:00"
+      ]
+    }
   },
   {
-    "action": "user.create",
+    "id": 4,
+    "ts": "2026-10-09T08:00:00+00:00",
+    "actor": "test",
+    "source": "ui",
+    "action": "settings.update",
+    "target": "einstellungen",
+    "details": {
+      "version": 2,
+      "changes": [
+        {
+          "path": "tariff.components[2].value_ct",
+          "old": null,
+          "new": 8.11
+        }
+      ]
+    }
+  },
+  {
+    "id": 3,
+    "ts": "2026-10-09T08:00:00+00:00",
     "actor": "cli",
+    "source": "cli",
+    "action": "user.create",
+    "target": "gast",
     "details": {
       "role": "viewer"
-    },
-    "id": 3,
-    "source": "cli",
-    "target": "gast",
-    "ts": "2026-10-09T08:00:00+00:00"
+    }
   },
   {
-    "action": "user.create",
-    "actor": "cli",
-    "details": {
-      "role": "admin"
-    },
     "id": 2,
-    "source": "cli",
-    "target": "sicher",
-    "ts": "2026-10-09T08:00:00+00:00"
-  },
-  {
-    "action": "user.create",
+    "ts": "2026-10-09T08:00:00+00:00",
     "actor": "cli",
+    "source": "cli",
+    "action": "user.create",
+    "target": "sicher",
     "details": {
       "role": "admin"
-    },
+    }
+  },
+  {
     "id": 1,
+    "ts": "2026-10-09T08:00:00+00:00",
+    "actor": "cli",
     "source": "cli",
+    "action": "user.create",
     "target": "admin",
-    "ts": "2026-10-09T08:00:00+00:00"
+    "details": {
+      "role": "admin"
+    }
   }
 ]

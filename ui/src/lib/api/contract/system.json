@@ -1,108 +1,108 @@
 {
-  "components": [
-    {
-      "details": {},
-      "message": "core verbunden",
-      "name": "core",
-      "ok": true,
-      "since": null
-    },
-    {
-      "details": {},
-      "message": "Preise bis 09.10. 23:45",
-      "name": "prices",
-      "ok": true,
-      "since": null
-    },
-    {
-      "details": {},
-      "message": "PV-Prognose von 10:00 Uhr",
-      "name": "forecast",
-      "ok": true,
-      "since": null
-    },
-    {
-      "details": {},
-      "message": "letzte Viertelstunde 09:45",
-      "name": "ledger",
-      "ok": true,
-      "since": null
-    },
-    {
-      "details": {},
-      "message": "InfluxDB: alles übertragen",
-      "name": "influx",
-      "ok": true,
-      "since": null
-    },
-    {
-      "details": {},
-      "message": "MQTT noch nicht verbunden",
-      "name": "ha",
-      "ok": false,
-      "since": null
-    }
-  ],
   "core": {
     "connected": true,
     "health": {
+      "mode": "OBSERVE",
+      "version": "0.1.0",
       "adapters": [
         {
+          "name": "victron",
           "connected": true,
-          "error_count": 0,
-          "last_error": null,
           "last_ok": "2026-10-09T08:00:00Z",
-          "name": "victron"
+          "last_error": null,
+          "error_count": 0
         }
       ],
-      "alarms": [],
-      "cycle_ms_p95": 0.0,
-      "mode": "OBSERVE",
       "selfcheck": [
         {
           "id": "phases",
-          "message": "3 Phasen erkannt.",
-          "status": "ok"
+          "status": "ok",
+          "message": "3 Phasen erkannt."
         },
         {
           "id": "ess_mode",
-          "message": "ESS-Modus 1 wie erwartet.",
-          "status": "ok"
+          "status": "ok",
+          "message": "ESS-Modus 1 wie erwartet."
         },
         {
           "id": "batterylife",
-          "message": "BatteryLife-Zustand 10 wie erwartet.",
-          "status": "ok"
+          "status": "ok",
+          "message": "BatteryLife-Zustand 10 wie erwartet."
         },
         {
           "id": "dess",
-          "message": "Dynamic ESS ist aus.",
-          "status": "ok"
+          "status": "ok",
+          "message": "Dynamic ESS ist aus."
         },
         {
           "id": "schedules",
-          "message": "Keine Victron-Ladefenster aktiv.",
-          "status": "ok"
+          "status": "ok",
+          "message": "Keine Victron-Ladefenster aktiv."
         },
         {
           "id": "min_soc",
-          "message": "Victron-Min-SOC entspricht der USV-Reserve.",
-          "status": "ok"
+          "status": "ok",
+          "message": "Victron-Min-SOC entspricht der USV-Reserve."
         },
         {
           "id": "evcs_mode.evcs",
-          "message": "EVCS im manuellen Modus.",
-          "status": "ok"
+          "status": "ok",
+          "message": "EVCS im manuellen Modus."
         },
         {
           "id": "fresh_data",
-          "message": "Kritische Messwerte seit mindestens 30 s aktuell.",
-          "status": "ok"
+          "status": "ok",
+          "message": "Kritische Messwerte seit mindestens 30 s aktuell."
         }
       ],
-      "version": "0.1.0"
+      "alarms": [],
+      "cycle_ms_p95": 0.0
     }
   },
+  "components": [
+    {
+      "name": "core",
+      "ok": true,
+      "message": "core verbunden",
+      "since": null,
+      "details": {}
+    },
+    {
+      "name": "prices",
+      "ok": true,
+      "message": "Preise bis 09.10. 23:45",
+      "since": null,
+      "details": {}
+    },
+    {
+      "name": "forecast",
+      "ok": true,
+      "message": "PV-Prognose von 10:00 Uhr",
+      "since": null,
+      "details": {}
+    },
+    {
+      "name": "ledger",
+      "ok": true,
+      "message": "letzte Viertelstunde 09:45",
+      "since": null,
+      "details": {}
+    },
+    {
+      "name": "influx",
+      "ok": true,
+      "message": "InfluxDB: alles übertragen",
+      "since": null,
+      "details": {}
+    },
+    {
+      "name": "ha",
+      "ok": false,
+      "message": "MQTT noch nicht verbunden",
+      "since": null,
+      "details": {}
+    }
+  ],
   "warnings": [
     "Tarifbestandteil „Netzverlustentgelt“ hat noch keinen Wert.",
     "Tarifbestandteil „Elektrizitätsabgabe“ hat noch keinen Wert.",

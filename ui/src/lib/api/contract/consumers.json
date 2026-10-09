@@ -1,75 +1,75 @@
 {
-  "consumers": [
-    {
-      "color": "#f28e2b",
-      "group": null,
-      "id": 2,
-      "name": "Büro",
-      "parent_id": 1,
-      "power_ref": "load.buero.power_w",
-      "power_unit": null,
-      "sort": 0,
-      "source_kind": "core"
-    },
-    {
-      "color": "#59a14f",
-      "group": null,
-      "id": 3,
-      "name": "Küche",
-      "parent_id": null,
-      "power_ref": "sensor.kueche_power",
-      "power_unit": "W",
-      "sort": 0,
-      "source_kind": "ha"
-    },
-    {
-      "color": "#4e79a7",
-      "group": null,
-      "id": 1,
-      "name": "Obergeschoss",
-      "parent_id": null,
-      "power_ref": "load.obergeschoss.power_w",
-      "power_unit": null,
-      "sort": 0,
-      "source_kind": "core"
-    }
-  ],
   "tree": {
+    "id": null,
+    "name": "Haus",
+    "color": null,
+    "power_w": 1220.0,
+    "other_w": 390.0,
+    "mismatch": false,
     "children": [
       {
-        "children": [],
-        "color": "#59a14f",
         "id": 3,
-        "mismatch": false,
         "name": "Küche",
+        "color": "#59a14f",
+        "power_w": 230.0,
         "other_w": null,
-        "power_w": 230.0
+        "mismatch": false,
+        "children": []
       },
       {
+        "id": 1,
+        "name": "Obergeschoss",
+        "color": "#4e79a7",
+        "power_w": 600.0,
+        "other_w": 450.0,
+        "mismatch": false,
         "children": [
           {
-            "children": [],
-            "color": "#f28e2b",
             "id": 2,
-            "mismatch": false,
             "name": "Büro",
+            "color": "#f28e2b",
+            "power_w": 150.0,
             "other_w": null,
-            "power_w": 150.0
+            "mismatch": false,
+            "children": []
           }
-        ],
-        "color": "#4e79a7",
-        "id": 1,
-        "mismatch": false,
-        "name": "Obergeschoss",
-        "other_w": 450.0,
-        "power_w": 600.0
+        ]
       }
-    ],
-    "color": null,
-    "id": null,
-    "mismatch": false,
-    "name": "Haus",
-    "other_w": 390.0,
-    "power_w": 1220.0
-  }
+    ]
+  },
+  "consumers": [
+    {
+      "id": 2,
+      "name": "Büro",
+      "group": null,
+      "parent_id": 1,
+      "color": "#f28e2b",
+      "source_kind": "core",
+      "power_ref": "load.buero.power_w",
+      "power_unit": null,
+      "sort": 0
+    },
+    {
+      "id": 3,
+      "name": "Küche",
+      "group": null,
+      "parent_id": null,
+      "color": "#59a14f",
+      "source_kind": "ha",
+      "power_ref": "sensor.kueche_power",
+      "power_unit": "W",
+      "sort": 0
+    },
+    {
+      "id": 1,
+      "name": "Obergeschoss",
+      "group": null,
+      "parent_id": null,
+      "color": "#4e79a7",
+      "source_kind": "core",
+      "power_ref": "load.obergeschoss.power_w",
+      "power_unit": null,
+      "sort": 0
+    }
+  ]
 }
