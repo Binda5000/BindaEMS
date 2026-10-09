@@ -11,6 +11,7 @@ import hmac
 import math
 import re
 import secrets
+import threading
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any, Literal, get_args
@@ -39,6 +40,8 @@ MIN_PASSWORD_LEN = 10
 MAX_PASSWORD_LEN = 1024
 USERNAME_RE = re.compile(r"^[a-z0-9._-]{3,32}$")
 TOTP_ISSUER = "BindaEMS"
+LOGIN_STRIPES = 64  # Anmeldungen desselben Namens laufen nacheinander (Sperre ohne Wettlauf)
+HASH_CONCURRENCY = 2  # gleichzeitige Argon2-Berechnungen; jede braucht rund 64 MiB
 
 _Row = Row[*tuple[Any, ...]]
 
@@ -176,7 +179,9 @@ class AuthService:
         self._audit = audit
         self._hasher = hasher or PasswordHasher()
         # unbekannte Namen werden gegen diesen Hash geprüft, damit die Antwortzeit gleich bleibt
-        self._dummy_hash = self._hasher.hash(secrets.token_urlsafe(16))
+        self._login_locks = [threading.Lock() for _ in range(LOGIN_STRIPES)]
+        self._hash_slots = threading.BoundedSemaphore(HASH_CONCURRENCY)
+        self._dummy_hash = self._hash(secrets.token_urlsafe(16))
 
     # --- Benutzer ------------------------------------------------------------------------
 
@@ -186,7 +191,7 @@ class AuthService:
         name = _normalize_username(username)
         _check_password(password)
         role = _check_role(role)
-        password_hash = self._hasher.hash(password)
+        password_hash = self._hash(password)
         now = self._clock.now()
         with self._engine.begin() as conn:
             if self._find(conn, name) is not None:
@@ -245,7 +250,7 @@ class AuthService:
         keep_session: str | None = None,
     ) -> None:
         _check_password(password)
-        password_hash = self._hasher.hash(password)
+        password_hash = self._hash(password)
         with self._engine.begin() as conn:
             row = self._get(conn, user_id)
             conn.execute(
@@ -288,6 +293,11 @@ class AuthService:
         self, username: str, password: str, *, totp: str | None, remember: bool
     ) -> NewSession:
         key = username.strip().lower()[:64]
+        # Prüfen der Sperre, Passwortprüfung und Zählen des Fehlversuchs ohne Wettlauf
+        with self._login_locks[hash(key) % LOGIN_STRIPES]:
+            return self._login(key, password, totp=totp, remember=remember)
+
+    def _login(self, key: str, password: str, *, totp: str | None, remember: bool) -> NewSession:
         now = self._clock.now()
         until = self._locked_until(key)
         if until is not None and now < until:
@@ -310,9 +320,7 @@ class AuthService:
                 self._fail(key, now)
                 raise InvalidCredentialsError()
         rehash = (
-            self._hasher.hash(password)
-            if self._hasher.check_needs_rehash(row.password_hash)
-            else None
+            self._hash(password) if self._hasher.check_needs_rehash(row.password_hash) else None
         )
         session: NewSession | None = None
         with self._engine.begin() as conn:
@@ -436,11 +444,16 @@ class AuthService:
 
     # --- intern --------------------------------------------------------------------------
 
+    def _hash(self, password: str) -> str:
+        with self._hash_slots:
+            return self._hasher.hash(password)
+
     def _verify(self, password_hash: str, password: str) -> bool:
         if len(password) > MAX_PASSWORD_LEN:
             return False
         try:
-            return self._hasher.verify(password_hash, password)
+            with self._hash_slots:
+                return self._hasher.verify(password_hash, password)
         except (VerificationError, InvalidHashError):
             return False
 

@@ -1,13 +1,18 @@
 import hashlib
 import json
+import threading
+import time
 from datetime import timedelta
+from typing import Literal
 
 import pyotp
 import pytest
+from argon2 import PasswordHasher
 from sqlalchemy import select
 from tests.app_helpers import PASSWORD, T_APP
 
 from bindaems.app.auth.service import (
+    AuthService,
     InvalidCredentialsError,
     InvalidUsernameError,
     LastAdminError,
@@ -202,3 +207,57 @@ def test_changes_are_audited_without_secrets(auth, audit) -> None:
 def test_admins_without_totp_are_reported(auth) -> None:
     auth.create_user("chris", PASSWORD, "admin", actor="cli", source="cli")
     assert auth.warnings() == ["Admin „chris“ hat keine Zwei-Faktor-Anmeldung (TOTP)."]
+
+
+class SlowHasher(PasswordHasher):
+    """Schnelle Argon2-Parameter, aber jede Prüfung dauert 20 ms; zählt gleichzeitige Prüfungen."""
+
+    def __init__(self) -> None:
+        super().__init__(time_cost=1, memory_cost=8, parallelism=1)
+        self._guard = threading.Lock()
+        self.active = 0
+        self.peak = 0
+
+    def verify(self, hash: str | bytes, password: str | bytes) -> Literal[True]:
+        with self._guard:
+            self.active += 1
+            self.peak = max(self.peak, self.active)
+        try:
+            time.sleep(0.02)
+            return super().verify(hash, password)
+        finally:
+            with self._guard:
+                self.active -= 1
+
+
+def _parallel_logins(auth: AuthService, names: list[str]) -> list[str]:
+    results: list[str] = []
+
+    def attempt(name: str) -> None:
+        try:
+            auth.login(name, "falsch-falsch-1", totp=None, remember=False)
+        except InvalidCredentialsError:
+            results.append("invalid")
+        except LockedError:
+            results.append("locked")
+
+    threads = [threading.Thread(target=attempt, args=(name,)) for name in names]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    return results
+
+
+def test_parallel_wrong_passwords_cannot_bypass_the_lockout(engine, clock, audit) -> None:
+    auth = AuthService(engine, clock, audit, hasher=SlowHasher())
+    auth.create_user("chris", PASSWORD, "admin", actor="cli", source="cli")
+    results = _parallel_logins(auth, ["chris"] * 40)
+    assert (results.count("invalid"), results.count("locked")) == (5, 35)
+
+
+def test_password_checks_run_at_most_two_at_a_time(engine, clock, audit) -> None:
+    hasher = SlowHasher()
+    auth = AuthService(engine, clock, audit, hasher=hasher)
+    _parallel_logins(auth, [f"gast{i}" for i in range(12)])  # Argon2 braucht je 64 MiB
+    assert 1 <= hasher.peak <= 2
