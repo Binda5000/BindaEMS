@@ -2,7 +2,7 @@ import io
 from pathlib import Path
 
 import yaml
-from tests.app_helpers import PASSWORD
+from tests.app_helpers import PASSWORD, mock_all_sources
 
 from bindaems.app.audit import AuditLog
 from bindaems.app.auth.service import AuthService
@@ -55,3 +55,11 @@ def test_cli_rejects_invalid_config(tmp_path, capsys) -> None:
     argv = ["create-admin", "--username", "chris", "--config", str(tmp_path / "config.yaml")]
     assert main(argv) == 2
     assert "Konfiguration ungültig" in capsys.readouterr().err
+
+
+def test_verify_prices_needs_no_config(tmp_path, respx_mock, capsys) -> None:
+    mock_all_sources(respx_mock)
+    assert main(["verify-prices", "--out", str(tmp_path)]) == 0
+    [protocol] = tmp_path.glob("pruefprotokoll-preise-*.md")
+    assert "Ergebnis: bestanden" in protocol.read_text()
+    assert str(protocol) in capsys.readouterr().out

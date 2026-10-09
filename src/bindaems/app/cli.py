@@ -3,13 +3,17 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
 import getpass
 import sys
 from pathlib import Path
 
+import httpx
+
 from bindaems.app.audit import AuditLog
 from bindaems.app.auth.service import AuthError, AuthService, UserNotFoundError
 from bindaems.app.db.engine import DB_FILENAME, migrate, open_database
+from bindaems.app.prices.verify import check_prices
 from bindaems.shared.config import Config, ConfigError, load_config
 from bindaems.shared.timeutil import SystemClock
 
@@ -28,6 +32,10 @@ def _parser() -> argparse.ArgumentParser:
         command.add_argument(
             "--password-stdin", action="store_true", help="Passwort aus der ersten Zeile von stdin"
         )
+    verify = commands.add_parser(
+        "verify-prices", help="Prüfprotokoll „Preise“ schreiben (ohne Konfiguration)"
+    )
+    verify.add_argument("--out", type=Path, required=True, help="Zielverzeichnis")
     return parser
 
 
@@ -70,8 +78,15 @@ def _accounts(args: argparse.Namespace, cfg: Config) -> int:
         return 1
 
 
+async def _verify_prices(out_dir: Path) -> int:
+    async with httpx.AsyncClient() as http:
+        return await check_prices(http, SystemClock(), out_dir)
+
+
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
+    if args.command == "verify-prices":
+        return asyncio.run(_verify_prices(args.out))
     try:
         cfg = load_config(args.config)
     except ConfigError as exc:

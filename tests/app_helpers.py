@@ -4,7 +4,8 @@ from __future__ import annotations
 
 from collections.abc import Callable, Sequence
 from datetime import UTC, datetime
-from typing import Literal
+from pathlib import Path
+from typing import Any, Literal
 
 from argon2 import PasswordHasher
 from fastapi.testclient import TestClient
@@ -12,6 +13,7 @@ from fastapi.testclient import TestClient
 from bindaems.app.auth.service import AuthService, Role
 from bindaems.app.consumers.service import Consumer, ConsumerInput
 from bindaems.app.fetch import RawResponse
+from bindaems.app.prices.sources import AwattarSource, EnergyChartsSource, SmartEnergySource
 from bindaems.app.prices.store import SlotRow
 from bindaems.shared.settings import RuntimeSettings
 
@@ -86,3 +88,27 @@ def price_row(
 ) -> SlotRow:
     raw = net if origin == "primary" else None
     return SlotRow(slot, raw, net, reference_ct, origin, None)
+
+
+FIX_SE = Path("tests/fixtures/smartenergy_2026-10-09.json")
+FIX_EC = Path("tests/fixtures/energycharts_at_2026-10-09.json")
+FIX_AW = Path("tests/fixtures/awattar_2026-10-09.json")
+
+
+def mock_all_sources(
+    respx_mock: Any,
+    *,
+    smartenergy: Path | int = FIX_SE,
+    energy_charts: Path | int = FIX_EC,
+    awattar: Path | int = FIX_AW,
+) -> None:
+    """respx-Routen für die drei Preisquellen: Aufnahme oder HTTP-Status."""
+    for url, response in (
+        (SmartEnergySource.URL, smartenergy),
+        (EnergyChartsSource.URL, energy_charts),
+        (AwattarSource.URL, awattar),
+    ):
+        if isinstance(response, int):
+            respx_mock.get(url).respond(response, text="Wartung")
+        else:
+            respx_mock.get(url).respond(200, text=response.read_text())
