@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
+from collections.abc import Awaitable, Callable, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal
@@ -112,3 +112,18 @@ def mock_all_sources(
             respx_mock.get(url).respond(response, text="Wartung")
         else:
             respx_mock.get(url).respond(200, text=response.read_text())
+
+
+class StopScheduler(Exception):
+    """Beendet eine Endlosschleife im Test (ausgelöst vom Ersatz für ``sleep``)."""
+
+
+def record_then_stop(sleeps: list[float], after: int) -> Callable[[float], Awaitable[None]]:
+    """Zeichnet Wartezeiten auf und löst beim ``after``-ten Aufruf ``StopScheduler`` aus."""
+
+    async def sleep(seconds: float) -> None:
+        sleeps.append(seconds)
+        if len(sleeps) >= after:
+            raise StopScheduler
+
+    return sleep

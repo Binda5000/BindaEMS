@@ -1,6 +1,7 @@
 from datetime import UTC, date, datetime
 
 import pytest
+from tests.app_helpers import StopScheduler, record_then_stop
 
 from bindaems.app.prices.pipeline import PriceStatus
 from bindaems.app.prices.scheduler import PriceScheduler, next_price_fetch
@@ -9,10 +10,6 @@ from bindaems.shared.timeutil import LOCAL_TZ, ManualClock
 
 def local(iso: str) -> datetime:
     return datetime.fromisoformat(iso).replace(tzinfo=LOCAL_TZ)
-
-
-class StopScheduler(Exception):
-    pass
 
 
 class FakePipeline:
@@ -39,15 +36,6 @@ class FakeStore:
     def complete_day(self, day: date, origin: str | None = None) -> bool:
         self.asked.append((day, origin))
         return self.complete
-
-
-def record_then_stop(sleeps: list[float], after: int):
-    async def sleep(seconds: float) -> None:
-        sleeps.append(seconds)
-        if len(sleeps) >= after:
-            raise StopScheduler
-
-    return sleep
 
 
 @pytest.mark.parametrize(
