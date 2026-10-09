@@ -13,6 +13,7 @@ from fastapi.testclient import TestClient
 from bindaems.app.auth.service import AuthService, Role
 from bindaems.app.consumers.service import Consumer, ConsumerInput
 from bindaems.app.fetch import RawResponse
+from bindaems.app.ha.entities import HaInputs
 from bindaems.app.prices.sources import AwattarSource, EnergyChartsSource, SmartEnergySource
 from bindaems.app.prices.store import SlotRow
 from bindaems.app.settings.service import SettingsService
@@ -160,3 +161,29 @@ SLOT_FLOWS_MSG: dict[str, Any] = {
     },
     "counters": {"grid.energy_import_kwh": [100.0, 100.4], "grid.energy_export_kwh": [50.0, 50.3]},
 }
+
+
+def sample_inputs(**changes: Any) -> HaInputs:
+    """``HaInputs`` mit plausiblen Werten; einzelne Felder lassen sich überschreiben."""
+    values: dict[str, Any] = {
+        "core_connected": True,
+        "mode": "OBSERVE",
+        "derived": {
+            "grid_w": 512.0,
+            "pv_total_w": 3000.0,
+            "battery_w": -200.0,
+            "house_load_w": 1800.0,
+            "wallbox_w": {"evcs": 0.0, "twc": 1380.0},
+        },
+        "signals": {"battery.soc_pct": 55.0, "vehicle.tesla.soc_pct": 70.0},
+        "alarm_ids": [],
+        "adapters_offline": [],
+        "price_now_ct": 13.44,
+        "prices_ahead": [(T_APP, 13.44)],
+        "feed_in_ct": 7.0,
+        "prices_missing": False,
+        "pv_today_kwh": 12.34,
+        "pv_tomorrow_kwh": 8.1,
+    }
+    values.update(changes)
+    return HaInputs(**values)
