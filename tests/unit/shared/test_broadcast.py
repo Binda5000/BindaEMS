@@ -1,6 +1,6 @@
 import asyncio
 
-from bindaems.core.broadcast import Broadcast
+from bindaems.shared.broadcast import Broadcast
 
 
 async def test_broadcast_drops_oldest_for_slow_subscriber() -> None:

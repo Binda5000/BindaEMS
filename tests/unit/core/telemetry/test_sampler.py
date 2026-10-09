@@ -3,9 +3,9 @@ from datetime import timedelta
 
 from tests.helpers import EMPTY_DERIVED, T0, FakeSink, snap_at
 
-from bindaems.core.telemetry.lineprotocol import Point
 from bindaems.core.telemetry.sampler import TelemetrySampler, cadence_for, signal_to_point
 from bindaems.shared.domain import Quality, Reading, SignalKind, SlotFlows
+from bindaems.shared.influx.lineprotocol import Point
 from bindaems.shared.timeutil import ManualClock
 
 S = SignalKind.STATE

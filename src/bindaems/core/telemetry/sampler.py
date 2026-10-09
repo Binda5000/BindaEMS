@@ -11,20 +11,15 @@ import re
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from datetime import datetime
-from typing import Protocol
 
 from bindaems.core.state.derived import Derived
-from bindaems.core.telemetry.lineprotocol import FieldValue, Point
 from bindaems.shared.domain import Quality, Reading, SignalKind, SlotFlows, Snapshot, Value
+from bindaems.shared.influx.lineprotocol import FieldValue, Point, PointSink
 from bindaems.shared.timeutil import Clock
 
 DUE_TOLERANCE_S = 0.05
 DERIVED_CADENCE_S = 2.0
 DERIVED_FIELDS = ("house_load_w", "battery_ac_w", "pv_total_w", "consumption_w")
-
-
-class PointSink(Protocol):
-    def write(self, point: Point) -> None: ...
 
 
 @dataclass(frozen=True)

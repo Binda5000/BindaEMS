@@ -1,10 +1,7 @@
-import ssl
-
 from tests.helpers import run_until
 from tests.unit.core.adapters.conftest import P
 
-from bindaems.core.adapters.victron_mqtt import KEEPALIVE_SUPPRESS, MqttMessage, build_tls_context
-from bindaems.shared.config import MqttConfig
+from bindaems.core.adapters.victron_mqtt import KEEPALIVE_SUPPRESS, MqttMessage
 from bindaems.shared.domain import Quality
 
 
@@ -62,21 +59,6 @@ async def test_disconnect_marks_state_signals_stale(fake_env) -> None:
     await run_until(adapter, lambda: adapter.health().error_count >= 1)
     reading = store.snapshot().get("ess.hub4_mode")
     assert reading is not None and reading.quality is Quality.STALE
-
-
-def test_tls_context_without_verification() -> None:
-    ctx = build_tls_context(MqttConfig(host="cerbo.lan", tls=True, tls_verify=False))
-    assert ctx is not None
-    assert ctx.check_hostname is False and ctx.verify_mode == ssl.CERT_NONE
-
-
-def test_tls_context_with_verification() -> None:
-    ctx = build_tls_context(MqttConfig(host="cerbo.lan", tls=True))
-    assert ctx is not None and ctx.verify_mode == ssl.CERT_REQUIRED
-
-
-def test_no_tls_context_for_plain_mqtt() -> None:
-    assert build_tls_context(MqttConfig(host="cerbo.lan", port=1883, tls=False)) is None
 
 
 async def test_backoff_resets_after_session_with_messages(fake_env) -> None:

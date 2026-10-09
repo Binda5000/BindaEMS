@@ -10,8 +10,8 @@ from types import MappingProxyType
 from typing import Any
 
 from bindaems.core.state.derived import Derived
-from bindaems.core.telemetry.lineprotocol import Point
 from bindaems.shared.domain import Quality, Reading, SignalKind, Snapshot, Value
+from bindaems.shared.influx.lineprotocol import Point
 
 T0 = datetime(2026, 10, 8, 10, 0, tzinfo=UTC)
 

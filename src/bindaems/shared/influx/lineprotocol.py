@@ -6,6 +6,7 @@ import math
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from typing import Protocol
 
 from bindaems.shared.timeutil import ensure_utc
 
@@ -23,6 +24,12 @@ class Point:
     fields: Mapping[str, FieldValue]
     ts: datetime
     rp: str = "raw"
+
+
+class PointSink(Protocol):
+    """Nimmt Messpunkte entgegen (z. B. ``InfluxWriter``); ``write`` blockiert nie."""
+
+    def write(self, point: Point) -> None: ...
 
 
 def _field(value: FieldValue) -> str | None:

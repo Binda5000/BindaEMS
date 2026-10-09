@@ -19,10 +19,11 @@ from pydantic import SecretStr
 from websockets.asyncio.client import ClientConnection
 from websockets.asyncio.client import connect as ws_connect
 
-from bindaems.core.adapters.base import AdapterHealth, Backoff, StatusLog
+from bindaems.core.adapters.base import AdapterHealth
 from bindaems.core.state.store import StateStore
 from bindaems.shared.config import HomeAssistantConfig
 from bindaems.shared.domain import SignalKind, Value
+from bindaems.shared.retry import Backoff, StatusLog
 
 SOURCE = "ha"
 AUTH_RETRY_S = 300.0

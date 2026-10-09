@@ -17,9 +17,9 @@ import httpx
 import structlog
 from pydantic import SecretStr
 
-from bindaems.core.telemetry.lineprotocol import Point, to_line
-from bindaems.core.telemetry.spool import DiskSpool
 from bindaems.shared.config import InfluxConfig
+from bindaems.shared.influx.lineprotocol import Point, to_line
+from bindaems.shared.influx.spool import DiskSpool
 
 log = structlog.get_logger(__name__)
 

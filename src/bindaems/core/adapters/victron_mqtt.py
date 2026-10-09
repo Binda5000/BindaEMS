@@ -10,7 +10,6 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import secrets
-import ssl
 from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
@@ -20,10 +19,12 @@ from typing import Protocol
 import aiomqtt
 from pydantic import SecretStr
 
-from bindaems.core.adapters.base import AdapterHealth, Backoff, StatusLog
+from bindaems.core.adapters.base import AdapterHealth
 from bindaems.core.adapters.victron_topics import InstanceResolver, parse_message
 from bindaems.core.state.store import StateStore
 from bindaems.shared.config import MqttConfig, VictronConfig
+from bindaems.shared.mqtt import build_tls_context
+from bindaems.shared.retry import Backoff, StatusLog
 
 SOURCE = "victron"
 FRESHNESS_S = 5.0
@@ -65,18 +66,6 @@ class MqttTransport(Protocol):
     async def publish(self, topic: str, payload: bytes) -> None: ...
 
     def messages(self) -> AsyncIterator[MqttMessage]: ...
-
-
-def build_tls_context(cfg: MqttConfig) -> ssl.SSLContext | None:
-    """TLS-Kontext für den Cerbo; ``tls_verify=False`` akzeptiert das selbstsignierte Zertifikat."""
-    if not cfg.tls:
-        return None
-    cafile = str(cfg.tls_ca_file) if cfg.tls_ca_file is not None else None
-    context = ssl.create_default_context(cafile=cafile)
-    if not cfg.tls_verify:
-        context.check_hostname = False
-        context.verify_mode = ssl.CERT_NONE
-    return context
 
 
 def _payload_bytes(payload: object) -> bytes:

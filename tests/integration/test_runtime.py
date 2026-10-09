@@ -164,7 +164,7 @@ def test_configure_logging_writes_json_with_utc_timestamp(capsys) -> None:
 
     import structlog
 
-    from bindaems.core.logging import configure_logging
+    from bindaems.shared.logging import configure_logging
 
     root = logging.getLogger()
     handlers, level = root.handlers[:], root.level
@@ -219,7 +219,7 @@ def test_configure_logging_quiets_request_logs(capsys) -> None:
 
     import structlog
 
-    from bindaems.core.logging import configure_logging
+    from bindaems.shared.logging import configure_logging
 
     root = logging.getLogger()
     handlers, level = root.handlers[:], root.level

@@ -3,9 +3,9 @@ from datetime import timedelta
 
 import pytest
 from structlog.testing import capture_logs
-from tests.unit.core.telemetry.conftest import TS
+from tests.unit.shared.influx.conftest import TS
 
-from bindaems.core.telemetry.spool import DiskSpool
+from bindaems.shared.influx.spool import DiskSpool
 from bindaems.shared.timeutil import ManualClock
 
 
@@ -93,7 +93,7 @@ def test_file_being_written_is_not_visible(tmp_path, monkeypatch) -> None:
         visible_while_writing.append(sp.oldest(10))
         real_fsync(fd)
 
-    monkeypatch.setattr("bindaems.core.telemetry.spool.os.fsync", spy)
+    monkeypatch.setattr("bindaems.shared.influx.spool.os.fsync", spy)
     sp.append("raw", ["a 1"])
     assert visible_while_writing == [[]]
     assert [f.lines for f in sp.oldest(10)] == [["a 1"]]

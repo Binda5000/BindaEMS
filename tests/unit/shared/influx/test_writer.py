@@ -2,9 +2,9 @@ import base64
 import gzip
 
 import httpx
-from tests.unit.core.telemetry.conftest import TS
+from tests.unit.shared.influx.conftest import TS
 
-from bindaems.core.telemetry.lineprotocol import Point, to_line
+from bindaems.shared.influx.lineprotocol import Point, to_line
 
 URL = "http://influx.lan:8086/write"
 

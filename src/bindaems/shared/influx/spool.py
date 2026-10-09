@@ -20,7 +20,7 @@ from pathlib import Path
 
 import structlog
 
-from bindaems.core.telemetry.lineprotocol import epoch_ms
+from bindaems.shared.influx.lineprotocol import epoch_ms
 from bindaems.shared.timeutil import Clock
 
 log = structlog.get_logger(__name__)

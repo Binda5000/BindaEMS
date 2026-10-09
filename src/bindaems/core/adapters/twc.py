@@ -11,10 +11,11 @@ from typing import Any
 
 import httpx
 
-from bindaems.core.adapters.base import AdapterHealth, Backoff, StatusLog
+from bindaems.core.adapters.base import AdapterHealth
 from bindaems.core.state.store import StateStore
 from bindaems.shared.config import PhaseMap, TwcConfig
 from bindaems.shared.domain import SignalKind, Value
+from bindaems.shared.retry import Backoff, StatusLog
 
 M = SignalKind.MEASUREMENT
 S = SignalKind.STATE

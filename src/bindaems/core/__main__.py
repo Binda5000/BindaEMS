@@ -11,9 +11,9 @@ from pathlib import Path
 import structlog
 from pydantic import ValidationError
 
-from bindaems.core.logging import configure_logging
 from bindaems.core.runtime import CoreRuntime
 from bindaems.shared.config import Config, ConfigError, Secrets, load_config, load_secrets
+from bindaems.shared.logging import configure_logging
 
 log = structlog.get_logger("bindaems.core")
 

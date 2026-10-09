@@ -9,9 +9,9 @@ import httpx
 import pytest
 from pydantic import SecretStr
 
-from bindaems.core.telemetry.influx import InfluxWriter
-from bindaems.core.telemetry.spool import DiskSpool
 from bindaems.shared.config import Config
+from bindaems.shared.influx.spool import DiskSpool
+from bindaems.shared.influx.writer import InfluxWriter
 from bindaems.shared.timeutil import ManualClock
 
 TS = datetime(2026, 10, 8, 10, 0, 0, 123000, tzinfo=UTC)  # = 1791453600123 ms

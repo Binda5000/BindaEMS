@@ -17,10 +17,11 @@ from typing import Protocol, cast
 from pymodbus.client import AsyncModbusTcpClient
 from pymodbus.pdu import ModbusPDU
 
-from bindaems.core.adapters.base import AdapterHealth, Backoff, StatusLog
+from bindaems.core.adapters.base import AdapterHealth
 from bindaems.core.state.store import StateStore
 from bindaems.shared.config import EvcsConfig
 from bindaems.shared.domain import SignalKind, Value
+from bindaems.shared.retry import Backoff, StatusLog
 
 FRESHNESS_S = 5.0
 

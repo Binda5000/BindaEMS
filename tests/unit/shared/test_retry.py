@@ -1,4 +1,4 @@
-from bindaems.core.adapters.base import Backoff
+from bindaems.shared.retry import Backoff
 
 
 def test_backoff_sequence_and_reset() -> None:
@@ -11,7 +11,7 @@ def test_backoff_sequence_and_reset() -> None:
 def test_status_log_reports_changes_and_throttles_repeats() -> None:
     from structlog.testing import capture_logs
 
-    from bindaems.core.adapters.base import StatusLog
+    from bindaems.shared.retry import StatusLog
 
     now = [0.0]
     status = StatusLog("evcs", monotonic=lambda: now[0])
