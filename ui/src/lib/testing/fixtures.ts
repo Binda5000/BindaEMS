@@ -2,12 +2,14 @@
 import * as v from 'valibot';
 import ledgerDaysJson from '$lib/api/contract/ledger-days.json';
 import limitsJson from '$lib/api/contract/limits.json';
+import settingsJson from '$lib/api/contract/settings.json';
 import stateJson from '$lib/api/contract/state.json';
 import systemJson from '$lib/api/contract/system.json';
 import {
 	DaySummarySchema,
 	LimitsSchema,
 	ReadingSchema,
+	SettingsCurrentSchema,
 	StateResponseSchema,
 	SystemResponseSchema,
 	type CoreState,
@@ -15,6 +17,7 @@ import {
 	type Derived,
 	type Limits,
 	type Reading,
+	type SettingsCurrent,
 	type SystemResponse
 } from '$lib/api/schemas';
 
@@ -48,4 +51,8 @@ export function daySummary(overrides: Partial<DaySummary> = {}): DaySummary {
 	const days = v.parse(v.array(DaySummarySchema), ledgerDaysJson);
 	const base = days.find((day) => day.slots > 0) ?? days[0];
 	return { ...base, ...overrides };
+}
+
+export function settingsCurrent(): SettingsCurrent {
+	return v.parse(SettingsCurrentSchema, settingsJson);
 }

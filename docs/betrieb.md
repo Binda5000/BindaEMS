@@ -249,31 +249,42 @@ Verbindungsabbruch setzt der Broker alle Entitäten über den Last Will auf „n
 
 Nach der Inbetriebnahme trägst du in den Laufzeit-Einstellungen nach, was die Spec bewusst
 offen lässt: Netznutzungsentgelt (Arbeitspreis), Netzverlustentgelt, Elektrizitätsabgabe,
-Erneuerbaren-Förderbeitrag (alle netto in ct/kWh) und jeden Monat den OeMAG-Marktpreis
-(`feed_in.monthly_ct`, z. B. `"2026-10": 7.3`). Bis dahin zählen fehlende Werte als 0, und
-`/api/system` zeigt Warnungen. Jede Änderung ist eine neue Version im Änderungsprotokoll.
+Erneuerbaren-Förderbeitrag (alle netto in ct/kWh) und jeden Monat den OeMAG-Marktpreis. Bis
+dahin zählen fehlende Werte als 0, und die Übersicht und die Seite „System“ zeigen Warnungen.
+Jede Änderung ist eine neue Version im Änderungsprotokoll.
 
-Die Abrechnung speichert je Viertelstunde den Bezugspreis zum Slotzeitpunkt. Nach einer
-Tarifänderung bewertest du die betroffenen Tage neu (Admin). Bis das UI da ist, geht das so:
+Im UI (Admin) unter **Einstellungen**:
+
+- **Bearbeiten**: je fester Tarifbestandteil ein Feld „… (ct/kWh netto)“ (Komma oder Punkt,
+  leer = noch kein Wert), die OeMAG-Monatswerte (Monat und ct/kWh, Zeilen hinzufügen oder
+  entfernen), Brutto/Netto der Börsenpreise und die Referenzquelle, dazu ein Kommentar.
+  **Speichern** legt eine neue Version an. Hat inzwischen jemand anderes gespeichert, bleiben
+  deine Eingaben stehen; „Neu laden (Eingaben verwerfen)“ holt den neuen Stand.
+- **Abrechnung neu bewerten**: Die Abrechnung speichert je Viertelstunde den Bezugspreis zum
+  Slotzeitpunkt. Nach einer Änderung der Tarifwerte erscheint das Formular mit dem Zeitraum
+  vom Monatsbeginn bis heute; **Neu bewerten** rechnet die gewählten Tage mit dem aktuellen
+  Tarif neu.
+- **Export und Import**: „Exportieren (YAML)“ lädt die gültigen Einstellungen herunter;
+  „YAML-Datei importieren“ übernimmt eine geprüfte Datei als neue Version. Fehler nennen die
+  betroffenen Felder. Zeitfenster der Tarifbestandteile (z. B. Sommer-Faktor) änderst du so.
+- **Versionen** listet alle Stände mit Zeit, Person, Quelle und Kommentar.
+
+Der Einspeiseerlös wird immer erst beim Lesen mit dem eingetragenen OeMAG-Wert berechnet; dafür
+ist keine Neubewertung nötig.
+
+### Alternative für Skripte (curl)
+
+Dieselben Schritte über die API, z. B. für eine Automatisierung:
 
 ```bash
 APP=https://ems.example.lan
 curl -c jar -H 'Content-Type: application/json' \
   -d '{"username": "<name>", "password": "<passwort>"}' "$APP/api/auth/login"
 CSRF=$(awk '$6 == "bindaems_csrf" {print $7}' jar)
+# Abrechnung neu bewerten
 curl -b jar -H "X-CSRF-Token: $CSRF" -H 'Content-Type: application/json' \
   -d '{"from": "2026-10-01", "to": "2026-10-31"}' "$APP/api/ledger/reprice"
-```
-
-Der Einspeiseerlös wird immer erst beim Lesen mit dem eingetragenen OeMAG-Wert berechnet.
-
-### Einstellungen exportieren und importieren
-
-`GET /api/settings/export` liefert die gültigen Einstellungen als YAML. `POST
-/api/settings/import` mit `{"yaml": "…"}` übernimmt eine geprüfte Datei als neue Version;
-Fehler nennen die betroffenen Felder. Mit derselben Anmeldung wie oben:
-
-```bash
+# Einstellungen exportieren und importieren
 curl -b jar "$APP/api/settings/export" -o einstellungen.yaml
 python3 -c 'import json, sys; print(json.dumps({"yaml": open(sys.argv[1]).read()}))' \
   einstellungen.yaml > import.json
