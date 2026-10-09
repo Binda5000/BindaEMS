@@ -296,10 +296,27 @@ class AuthService:
             user_id, password=password, actor=actor, source=source, keep_session=keep_session
         )
 
-    def verify_password(self, user_id: int, password: str) -> bool:
+    def check_password(self, user_id: int, password: str) -> None:
+        """Passwort eines angemeldeten Benutzers bestätigen (Passwortwechsel, TOTP).
+
+        Fehlversuche zählen wie bei der Anmeldung; mit einer offenen Sitzung ließe sich das
+        Passwort sonst unbegrenzt durchprobieren.
+        """
         with self._engine.connect() as conn:
             row = self._get(conn, user_id)
-        return self._verify(row.password_hash, password)
+        key = row.username
+        with self._login_locks[hash(key) % LOGIN_STRIPES]:
+            now = self._clock.now()
+            until = self._locked_until(key)
+            if until is not None and now < until:
+                raise LockedError(until, now)
+            if not self._verify(row.password_hash, password):
+                self._fail(key, now)
+                raise InvalidCredentialsError()
+            with self._engine.begin() as conn:
+                conn.execute(
+                    delete(login_failure_table).where(login_failure_table.c.username == key)
+                )
 
     def delete_user(self, user_id: int, *, actor: str, source: Source) -> None:
         with self._admin_lock, self._engine.begin() as conn:
@@ -427,7 +444,9 @@ class AuthService:
 
     # --- TOTP ----------------------------------------------------------------------------
 
-    def totp_begin(self, user_id: int) -> tuple[str, str]:
+    def totp_begin(self, user_id: int, password: str) -> tuple[str, str]:
+        # mit dem Passwort: sonst könnte eine fremde Sitzung TOTP auf ihr Gerät einrichten
+        self.check_password(user_id, password)
         secret = pyotp.random_base32()
         with self._engine.begin() as conn:
             row = self._get(conn, user_id)
@@ -458,8 +477,11 @@ class AuthService:
             self._audit.record(actor, source, "user.totp_enable", row.username, conn=conn)
 
     def totp_disable(self, user_id: int, password: str, *, actor: str, source: Source) -> None:
-        if not self.verify_password(user_id, password):
-            raise InvalidCredentialsError()
+        self.check_password(user_id, password)
+        self.reset_totp(user_id, actor=actor, source=source)
+
+    def reset_totp(self, user_id: int, *, actor: str, source: Source) -> None:
+        """TOTP ohne Passwort abschalten – für die Befehlszeile, wenn das Gerät verloren ist."""
         with self._engine.begin() as conn:
             row = self._get(conn, user_id)
             conn.execute(

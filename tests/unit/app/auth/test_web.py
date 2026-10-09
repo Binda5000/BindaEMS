@@ -98,7 +98,7 @@ def test_rejected_role_change_leaves_the_password_unchanged(make_client, auth) -
         f"/api/users/{me}", json={"password": "neues-passwort-1", "role": "viewer"}, headers=csrf
     )
     assert response.status_code == 409
-    assert auth.verify_password(me, PASSWORD)
+    auth.check_password(me, PASSWORD)  # wirft bei geändertem Passwort
     assert client.get("/api/audit").json()[0]["action"] == "user.create"
 
 
@@ -117,7 +117,7 @@ def test_lockout_answers_429_with_retry_after(make_client, auth) -> None:
 
 def test_login_reports_totp_requirement(make_client, auth, clock) -> None:
     user = auth.create_user("chris", PASSWORD, "admin", actor="cli", source="cli")
-    secret, _ = auth.totp_begin(user.id)
+    secret, _ = auth.totp_begin(user.id, PASSWORD)
     auth.totp_enable(user.id, pyotp.TOTP(secret).at(clock.now()), actor="chris", source="ui")
     response = make_client().post(
         "/api/auth/login", json={"username": "chris", "password": PASSWORD}
@@ -147,8 +147,46 @@ def test_password_change_requires_old_password(make_client, auth) -> None:
 def test_totp_setup_and_enable_via_api(make_client, auth, clock) -> None:
     client = make_client()
     csrf = login_as(client, auth, "admin")
-    secret = client.post("/api/auth/totp/setup", headers=csrf).json()["secret"]
+    secret = client.post("/api/auth/totp/setup", json={"password": PASSWORD}, headers=csrf).json()[
+        "secret"
+    ]
     code = pyotp.TOTP(secret).at(clock.now())
     enabled = client.post("/api/auth/totp/enable", json={"code": code}, headers=csrf)
     assert enabled.status_code == 204
     assert client.get("/api/auth/me").json()["user"]["totp_enabled"] is True
+
+
+def test_wrong_old_passwords_lock_the_account(make_client, auth) -> None:
+    client = make_client()
+    csrf = login_as(client, auth, "operator")
+    body = {"old_password": "falsch-falsch", "new_password": "neues-passwort-1"}
+    for _ in range(5):
+        assert client.post("/api/auth/password", json=body, headers=csrf).status_code == 400
+    body["old_password"] = PASSWORD
+    locked = client.post("/api/auth/password", json=body, headers=csrf)
+    assert locked.status_code == 429 and locked.headers["retry-after"] == "900"
+
+
+def test_totp_setup_requires_the_password(make_client, auth) -> None:
+    client = make_client()
+    csrf = login_as(client, auth, "admin")
+    assert client.post("/api/auth/totp/setup", headers=csrf).status_code == 422
+    wrong = client.post("/api/auth/totp/setup", json={"password": "falsch-falsch"}, headers=csrf)
+    assert wrong.status_code == 400 and wrong.json() == {"detail": "Passwort falsch"}
+
+
+def test_wrong_passwords_for_totp_disable_lock_the_account(make_client, auth, clock) -> None:
+    client = make_client()
+    csrf = login_as(client, auth, "admin")
+    secret = client.post("/api/auth/totp/setup", json={"password": PASSWORD}, headers=csrf).json()[
+        "secret"
+    ]
+    code = pyotp.TOTP(secret).at(clock.now())
+    client.post("/api/auth/totp/enable", json={"code": code}, headers=csrf)
+    for _ in range(5):
+        wrong = client.post(
+            "/api/auth/totp/disable", json={"password": "falsch-falsch"}, headers=csrf
+        )
+        assert wrong.status_code == 400
+    locked = client.post("/api/auth/totp/disable", json={"password": PASSWORD}, headers=csrf)
+    assert locked.status_code == 429

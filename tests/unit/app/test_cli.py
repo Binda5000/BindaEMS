@@ -1,13 +1,14 @@
 import io
 from pathlib import Path
 
+import pyotp
 import yaml
 from tests.app_helpers import PASSWORD, mock_all_sources
 
 from bindaems.app.audit import AuditLog
 from bindaems.app.auth.service import AuthService
 from bindaems.app.cli import main
-from bindaems.app.db.engine import DB_FILENAME, open_database
+from bindaems.app.db.engine import DB_FILENAME, migrate, open_database
 from bindaems.shared.timeutil import SystemClock
 
 EXAMPLE = Path("deploy/config.example.yaml")
@@ -46,6 +47,28 @@ def test_set_password_for_unknown_user_fails(tmp_path, monkeypatch, capsys) -> N
     monkeypatch.setattr("sys.stdin", io.StringIO(PASSWORD + "\n"))
     path = write_app_config(tmp_path)
     argv = ["set-password", "--username", "niemand", "--password-stdin", "--config", str(path)]
+    assert main(argv) == 1
+    assert "Benutzer nicht gefunden" in capsys.readouterr().err
+
+
+def test_reset_totp_lets_a_user_with_a_lost_device_log_in(tmp_path, capsys) -> None:
+    path = write_app_config(tmp_path)
+    engine = open_database(tmp_path / DB_FILENAME)
+    migrate(engine)
+    auth = AuthService(engine, SystemClock(), AuditLog(engine, SystemClock()))
+    user = auth.create_user("chris", PASSWORD, "admin", actor="cli", source="cli")
+    secret, _ = auth.totp_begin(user.id, PASSWORD)
+    auth.totp_enable(user.id, pyotp.TOTP(secret).now(), actor="chris", source="ui")
+    try:
+        assert main(["reset-totp", "--username", "Chris", "--config", str(path)]) == 0
+        assert "Zwei-Faktor-Anmeldung für „chris“ abgeschaltet." in capsys.readouterr().out
+        assert auth.login("chris", PASSWORD, totp=None, remember=False)
+    finally:
+        engine.dispose()
+
+
+def test_reset_totp_for_unknown_user_fails(tmp_path, capsys) -> None:
+    argv = ["reset-totp", "--username", "niemand", "--config", str(write_app_config(tmp_path))]
     assert main(argv) == 1
     assert "Benutzer nicht gefunden" in capsys.readouterr().err
 

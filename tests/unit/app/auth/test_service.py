@@ -146,7 +146,7 @@ def test_logout_deletes_session(auth) -> None:
 
 def test_totp_required_once_enabled_and_codes_not_reusable(auth, clock) -> None:
     user = auth.create_user("chris", PASSWORD, "admin", actor="cli", source="cli")
-    secret, uri = auth.totp_begin(user.id)
+    secret, uri = auth.totp_begin(user.id, PASSWORD)
     assert uri.startswith("otpauth://totp/BindaEMS:chris?")
     totp = pyotp.TOTP(secret)
     auth.totp_enable(user.id, totp.at(clock.now()), actor="chris", source="ui")
@@ -161,7 +161,7 @@ def test_totp_required_once_enabled_and_codes_not_reusable(auth, clock) -> None:
 
 def test_wrong_totp_codes_count_as_failures(auth, clock) -> None:
     user = auth.create_user("chris", PASSWORD, "admin", actor="cli", source="cli")
-    secret, _ = auth.totp_begin(user.id)
+    secret, _ = auth.totp_begin(user.id, PASSWORD)
     auth.totp_enable(user.id, pyotp.TOTP(secret).at(clock.now()), actor="chris", source="ui")
     for _ in range(5):
         with pytest.raises(InvalidCredentialsError):
@@ -295,3 +295,31 @@ def test_parallel_demotions_keep_one_admin(auth, monkeypatch) -> None:
     results = _demote_in_parallel(auth, [anna.id, bert.id])
     assert sorted(results) == ["last-admin", "ok"]
     assert [user.role for user in auth.list_users()].count("admin") == 1
+
+
+def test_password_checks_count_towards_the_login_lockout(auth) -> None:
+    # Mit einer offenen Sitzung ließe sich das Passwort sonst unbegrenzt durchprobieren
+    user = auth.create_user("chris", PASSWORD, "operator", actor="cli", source="cli")
+    for _ in range(5):
+        with pytest.raises(InvalidCredentialsError):
+            auth.check_password(user.id, "falsch-falsch")
+    with pytest.raises(LockedError):
+        auth.check_password(user.id, PASSWORD)
+    with pytest.raises(LockedError):
+        auth.login("chris", PASSWORD, totp=None, remember=False)
+
+
+def test_totp_setup_needs_the_password(auth) -> None:
+    user = auth.create_user("chris", PASSWORD, "admin", actor="cli", source="cli")
+    with pytest.raises(InvalidCredentialsError):
+        auth.totp_begin(user.id, "falsch-falsch")
+
+
+def test_reset_totp_turns_two_factor_off_without_password(auth, audit, clock) -> None:
+    user = auth.create_user("chris", PASSWORD, "admin", actor="cli", source="cli")
+    secret, _ = auth.totp_begin(user.id, PASSWORD)
+    auth.totp_enable(user.id, pyotp.TOTP(secret).at(clock.now()), actor="chris", source="ui")
+    auth.reset_totp(user.id, actor="cli", source="cli")
+    assert not auth.get_user(user.id).totp_enabled
+    assert auth.login("chris", PASSWORD, totp=None, remember=False)
+    assert (audit.recent()[0].action, audit.recent()[0].source) == ("user.totp_disable", "cli")

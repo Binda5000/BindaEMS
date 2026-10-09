@@ -24,7 +24,7 @@ from bindaems.shared.timeutil import SystemClock
 
 log = structlog.get_logger("bindaems.app")
 
-COMMANDS = ("serve", "create-admin", "set-password", "verify-prices")
+COMMANDS = ("serve", "create-admin", "set-password", "reset-totp", "verify-prices")
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -43,6 +43,12 @@ def _parser() -> argparse.ArgumentParser:
         command.add_argument(
             "--password-stdin", action="store_true", help="Passwort aus der ersten Zeile von stdin"
         )
+    reset_totp = commands.add_parser(
+        "reset-totp",
+        parents=[common],
+        help="Zwei-Faktor-Anmeldung eines Benutzers abschalten (TOTP-Gerät verloren)",
+    )
+    reset_totp.add_argument("--username", required=True)
     verify = commands.add_parser(
         "verify-prices", help="Prüfprotokoll „Preise“ schreiben (ohne Konfiguration)"
     )
@@ -67,6 +73,14 @@ def _auth_service(cfg: Config) -> AuthService:
     return AuthService(engine, clock, AuditLog(engine, clock))
 
 
+def _user_id(auth: AuthService, username: str) -> tuple[int, str]:
+    name = username.strip().lower()
+    match = [user.id for user in auth.list_users() if user.username == name]
+    if not match:
+        raise UserNotFoundError()
+    return match[0], name
+
+
 def _accounts(args: argparse.Namespace, cfg: Config) -> int:
     password = _read_password(args.password_stdin)
     if password is None:
@@ -77,16 +91,25 @@ def _accounts(args: argparse.Namespace, cfg: Config) -> int:
             user = auth.create_user(args.username, password, "admin", actor="cli", source="cli")
             print(f"Admin „{user.username}“ angelegt.")
             return 0
-        name = args.username.strip().lower()
-        match = [user for user in auth.list_users() if user.username == name]
-        if not match:
-            raise UserNotFoundError()
-        auth.set_password(match[0].id, password, actor="cli", source="cli")
+        user_id, name = _user_id(auth, args.username)
+        auth.set_password(user_id, password, actor="cli", source="cli")
         print(f"Passwort für „{name}“ geändert.")
         return 0
     except AuthError as exc:
         print(exc, file=sys.stderr)
         return 1
+
+
+def _reset_totp(cfg: Config, username: str) -> int:
+    auth = _auth_service(cfg)
+    try:
+        user_id, name = _user_id(auth, username)
+        auth.reset_totp(user_id, actor="cli", source="cli")
+    except AuthError as exc:
+        print(exc, file=sys.stderr)
+        return 1
+    print(f"Zwei-Faktor-Anmeldung für „{name}“ abgeschaltet.")
+    return 0
 
 
 def _secrets_error(exc: ValidationError) -> str:
@@ -137,6 +160,8 @@ def main(argv: list[str] | None = None) -> int:
     except ConfigError as exc:
         print(exc, file=sys.stderr)
         return 2
+    if args.command == "reset-totp":
+        return _reset_totp(cfg, args.username)
     if args.command != "serve":
         return _accounts(args, cfg)
     try:

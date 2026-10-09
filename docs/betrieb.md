@@ -145,8 +145,21 @@ docker compose run --rm ems-app create-admin --username <name>
 Ein vergessenes Passwort setzt `docker compose run --rm ems-app set-password --username <name>`
 neu. Weitere Benutzer legt ein Admin über die API bzw. später im UI an. Die Rollen sind
 `admin` (alles), `operator` (Bedienen; in Phase 1b wie Lesen) und `viewer` (Lesen).
-Zwei-Faktor-Anmeldung (TOTP) richtet jeder Benutzer selbst ein; solange ein Admin sie nicht
-hat, zeigt `/api/system` eine Warnung.
+Zwei-Faktor-Anmeldung (TOTP) richtet jeder Benutzer selbst ein, bestätigt mit seinem Passwort;
+solange ein Admin sie nicht hat, zeigt `/api/system` eine Warnung.
+
+Ist das TOTP-Gerät verloren, schaltet dieser Befehl die Zwei-Faktor-Anmeldung für das Konto ab:
+
+```bash
+docker compose run --rm ems-app reset-totp --username <name>
+```
+
+Danach meldet sich die Person nur mit dem Passwort an und richtet TOTP neu ein. Beide Befehle
+stehen im Änderungsprotokoll (`/api/audit`, Quelle `cli`).
+
+Falsche Passwörter zählen überall gleich: bei der Anmeldung, beim Passwortwechsel und beim
+Einrichten oder Abschalten von TOTP. Nach 5 Fehlversuchen innerhalb von 15 min ist das Konto
+15 min gesperrt.
 
 ## 6. Reverse Proxy
 

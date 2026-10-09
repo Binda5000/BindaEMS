@@ -54,7 +54,7 @@ class TotpCodeBody(_Body):
     code: Annotated[str, Field(max_length=16)]
 
 
-class TotpDisableBody(_Body):
+class PasswordConfirmBody(_Body):
     password: Annotated[str, Field(max_length=MAX_PASSWORD_LEN)]
 
 
@@ -81,6 +81,14 @@ def user_json(user: User) -> dict[str, Any]:
 
 def _client_ip(request: Request) -> str | None:
     return request.client.host if request.client is not None else None
+
+
+def _locked(exc: LockedError) -> HTTPException:
+    return HTTPException(
+        status.HTTP_429_TOO_MANY_REQUESTS,
+        str(exc),
+        headers={"Retry-After": str(exc.retry_after_s)},
+    )
 
 
 def auth_router(auth: AuthService, guard: Guard) -> APIRouter:
@@ -129,8 +137,12 @@ def auth_router(auth: AuthService, guard: Guard) -> APIRouter:
 
     @router.post("/password", status_code=status.HTTP_204_NO_CONTENT)
     def change_password(body: PasswordBody, session: Viewer) -> None:
-        if not auth.verify_password(session.user.id, body.old_password):
-            raise HTTPException(status.HTTP_400_BAD_REQUEST, "Altes Passwort falsch")
+        try:
+            auth.check_password(session.user.id, body.old_password)
+        except LockedError as exc:
+            raise _locked(exc) from exc
+        except InvalidCredentialsError as exc:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, "Altes Passwort falsch") from exc
         try:
             auth.set_password(
                 session.user.id,
@@ -143,9 +155,13 @@ def auth_router(auth: AuthService, guard: Guard) -> APIRouter:
             raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc)) from exc
 
     @router.post("/totp/setup")
-    def totp_setup(session: Viewer) -> dict[str, str]:
+    def totp_setup(body: PasswordConfirmBody, session: Viewer) -> dict[str, str]:
         try:
-            secret, uri = auth.totp_begin(session.user.id)
+            secret, uri = auth.totp_begin(session.user.id, body.password)
+        except LockedError as exc:
+            raise _locked(exc) from exc
+        except InvalidCredentialsError as exc:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, "Passwort falsch") from exc
         except TotpAlreadyEnabledError as exc:
             raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
         return {"secret": secret, "uri": uri}
@@ -158,11 +174,13 @@ def auth_router(auth: AuthService, guard: Guard) -> APIRouter:
             raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
 
     @router.post("/totp/disable", status_code=status.HTTP_204_NO_CONTENT)
-    def totp_disable(body: TotpDisableBody, session: Viewer) -> None:
+    def totp_disable(body: PasswordConfirmBody, session: Viewer) -> None:
         try:
             auth.totp_disable(
                 session.user.id, body.password, actor=session.user.username, source="ui"
             )
+        except LockedError as exc:
+            raise _locked(exc) from exc
         except InvalidCredentialsError as exc:
             raise HTTPException(status.HTTP_400_BAD_REQUEST, "Passwort falsch") from exc
 
