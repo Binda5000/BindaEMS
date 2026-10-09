@@ -163,8 +163,9 @@ Einrichten oder Abschalten von TOTP. Nach 5 Fehlversuchen innerhalb von 15 min i
 
 ## 6. Reverse Proxy
 
-Die app ist nur über den Reverse Proxy (HTTPS) erreichbar. Der Proxy läuft außerhalb dieser
-VM und leitet auf `<vm>:8080` weiter. Er muss:
+Die app ist nur über den Reverse Proxy (HTTPS) erreichbar. Sie liefert unter `/` auch die
+Web-UI aus; die kommt fertig gebaut mit dem Image (`/app/ui`, Einstellung `app.ui_dir`). Der
+Proxy läuft außerhalb dieser VM und leitet auf `<vm>:8080` weiter. Er muss:
 
 - den ursprünglichen `Host`-Header samt Port weitergeben (der Live-WebSocket prüft die Herkunft
   dagegen; nginx: `$http_host`, nicht `$host`),
@@ -179,6 +180,8 @@ location / {
     proxy_set_header Host $http_host;
     proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
     proxy_set_header X-Forwarded-Proto $scheme;
+    gzip on;
+    gzip_types text/css application/javascript image/svg+xml;
 }
 location /api/live {
     proxy_pass http://<vm>:8080;
@@ -191,6 +194,8 @@ location /api/live {
     proxy_read_timeout 1h;
 }
 ```
+
+`gzip` verkleinert die Dateien der Web-UI (Skripte, Stile); die API antwortet ohnehin klein.
 
 In `config.yaml`:
 

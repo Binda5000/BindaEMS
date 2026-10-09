@@ -25,9 +25,35 @@ jobs:
       - name: Tests
         run: uv run pytest -q
 
+  ui:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ui
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          package_json_file: ui/package.json
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: pnpm
+          cache-dependency-path: ui/pnpm-lock.yaml
+      - name: Abhängigkeiten installieren
+        run: pnpm install --frozen-lockfile
+      - name: Lint und Format
+        run: pnpm lint
+      - name: Typprüfung
+        run: pnpm check
+      - name: Tests
+        run: pnpm test
+      - name: Bauen
+        run: pnpm build
+
   docker:
     runs-on: ubuntu-latest
-    needs: python
+    needs: [python, ui]
     strategy:
       matrix:
         component: [core, app]

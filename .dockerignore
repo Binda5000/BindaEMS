@@ -9,7 +9,12 @@
 **/*.pyc
 docs
 tests
-ui
+ui/node_modules
+ui/build
+ui/.svelte-kit
+ui/test-results
+ui/playwright-report
+ui/tests
 deploy/.env
 deploy/config.yaml
 *.egg-info

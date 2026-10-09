@@ -243,7 +243,7 @@ class AppConfig(_Model):
     core_url: Annotated[str, Field(pattern=r"^https?://")] = "http://ems-core:8081"
     trusted_proxies: list[str] = Field(default_factory=list)
     cookie_secure: bool = True
-    ui_dir: Path | None = None
+    ui_dir: Path | None = Path("/app/ui")
 
     @field_validator("trusted_proxies")
     @classmethod

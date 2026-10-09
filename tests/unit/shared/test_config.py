@@ -90,7 +90,7 @@ def test_app_and_ha_mqtt_from_example() -> None:
     assert (cfg.app.port, cfg.app.core_url) == (8080, "http://ems-core:8081")
     assert (cfg.app.data_dir, cfg.app.backup_dir) == (Path("/data"), Path("/backup"))
     assert cfg.app.trusted_proxies == ["192.168.1.10"]
-    assert cfg.app.cookie_secure is True and cfg.app.ui_dir is None
+    assert cfg.app.cookie_secure is True and cfg.app.ui_dir == Path("/app/ui")
     assert cfg.homeassistant is not None
     mqtt = cfg.homeassistant.mqtt
     assert mqtt is not None

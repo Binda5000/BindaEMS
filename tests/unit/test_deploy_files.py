@@ -226,3 +226,30 @@ def test_ci_builds_both_images() -> None:
 
 def test_env_example_documents_app_port() -> None:
     assert "# BINDAEMS_APP_PORT=8080" in Path("deploy/.env.example").read_text()
+
+
+def test_app_image_builds_and_ships_the_ui() -> None:
+    text = Path("deploy/Dockerfile.app").read_text()
+    assert "FROM node:22-bookworm-slim AS ui" in text
+    assert "pnpm install --frozen-lockfile" in text and "pnpm build" in text
+    assert "COPY --from=ui /ui/build /app/ui" in text
+
+
+def test_docker_context_contains_ui_sources_but_no_build_output() -> None:
+    lines = Path(".dockerignore").read_text().splitlines()
+    assert "ui" not in lines
+    assert {"ui/node_modules", "ui/build", "ui/.svelte-kit"} <= set(lines)
+
+
+def test_ci_checks_and_builds_the_ui() -> None:
+    ci = yaml.safe_load(Path(".github/workflows/ci.yml").read_text())
+    runs = " ".join(step.get("run", "") for step in ci["jobs"]["ui"]["steps"])
+    for command in (
+        "pnpm install --frozen-lockfile",
+        "pnpm lint",
+        "pnpm check",
+        "pnpm test",
+        "pnpm build",
+    ):
+        assert command in runs
+    assert set(ci["jobs"]["docker"]["needs"]) == {"python", "ui"}
