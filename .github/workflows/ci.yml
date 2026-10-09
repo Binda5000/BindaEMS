@@ -13,7 +13,7 @@ jobs:
         with:
           python-version: "3.12"
       - name: Abhängigkeiten installieren
-        run: uv sync --locked --extra core --extra dev
+        run: uv sync --locked --extra core --extra app --extra dev
       - name: Lint
         run: uv run ruff check .
       - name: Format
