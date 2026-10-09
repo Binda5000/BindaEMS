@@ -1,6 +1,7 @@
 """Bausteine, die core und app brauchen, liegen in shared – nicht doppelt im core."""
 
 import importlib.util
+from pathlib import Path
 
 import pytest
 
@@ -27,3 +28,19 @@ def test_retry_tls_and_sink_are_defined_in_shared() -> None:
     assert Backoff.__module__ == StatusLog.__module__ == "bindaems.shared.retry"
     assert build_tls_context.__module__ == "bindaems.shared.mqtt"
     assert PointSink.__module__ == "bindaems.shared.influx.lineprotocol"
+
+
+def test_every_package_directory_has_an_init() -> None:
+    # Namespace-Pakete sieht import-linter nicht; ihre Importgrenzen blieben ungeprüft.
+    # Ausnahme: die Alembic-Migrationen werden über den Pfad geladen, nicht als Paket.
+    root = Path("src/bindaems")
+    missing = [
+        str(directory)
+        for directory in [root, *root.rglob("*")]
+        if directory.is_dir()
+        and directory.name != "__pycache__"
+        and "migrations" not in directory.parts
+        and any(directory.glob("*.py"))
+        and not (directory / "__init__.py").exists()
+    ]
+    assert missing == []
