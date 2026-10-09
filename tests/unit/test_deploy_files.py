@@ -194,3 +194,35 @@ def test_app_healthcheck_returns_0_when_healthy(monkeypatch) -> None:
         assert health() == 0
     finally:
         server.shutdown()
+
+
+def test_compose_has_app_service() -> None:
+    compose = yaml.safe_load(Path("deploy/docker-compose.yml").read_text())
+    app = compose["services"]["ems-app"]
+    assert Path(app["build"]["dockerfile"]).exists() and app["ports"] == ["8080:8080"]
+    assert app["networks"] == ["internal"] and "ems-core" in app["depends_on"]
+    assert {"./config.yaml:/config/config.yaml:ro", "app-data:/data", "backup:/backup"} <= set(
+        app["volumes"]
+    )
+    assert {"core-data", "app-data", "backup"} <= set(compose["volumes"])
+    assert app["env_file"] in (".env", [".env"]) and app["restart"] == "unless-stopped"
+
+
+def test_app_dockerfile_runs_as_non_root_with_healthcheck() -> None:
+    text = Path("deploy/Dockerfile.app").read_text()
+    assert "--extra app" in text and "USER ems" in text
+    assert 'CMD ["python", "-m", "bindaems.app.healthcheck"]' in text
+    assert 'ENTRYPOINT ["python", "-m", "bindaems.app"]' in text
+    assert 'CMD ["serve", "--config", "/config/config.yaml"]' in text and "EXPOSE 8080" in text
+
+
+def test_ci_builds_both_images() -> None:
+    ci = yaml.safe_load(Path(".github/workflows/ci.yml").read_text())
+    docker = ci["jobs"]["docker"]
+    assert docker["strategy"]["matrix"]["component"] == ["core", "app"]
+    files = [step.get("with", {}).get("file") for step in docker["steps"]]
+    assert "deploy/Dockerfile.${{ matrix.component }}" in files
+
+
+def test_env_example_documents_app_port() -> None:
+    assert "# BINDAEMS_APP_PORT=8080" in Path("deploy/.env.example").read_text()

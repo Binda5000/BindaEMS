@@ -14,7 +14,7 @@ mit harten Sicherheitsgrenzen (USV-Reserve, Hausanschluss) und nachvollziehbaren
 Voraussetzung: [uv](https://docs.astral.sh/uv/) und Python 3.12.
 
 ```bash
-uv sync --extra core --extra dev   # Abhängigkeiten installieren
+uv sync --extra core --extra app --extra dev   # Abhängigkeiten installieren
 uv run pytest                       # Tests
 uv run ruff check . && uv run mypy src && uv run lint-imports   # Lint, Typen, Importgrenzen
 ```

@@ -24,10 +24,38 @@ services:
     networks:
       - internal
 
+  ems-app:
+    image: ghcr.io/binda5000/bindaems-app:${BINDAEMS_VERSION:-latest}
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.app
+    env_file: .env
+    volumes:
+      - ./config.yaml:/config/config.yaml:ro
+      - app-data:/data
+      - backup:/backup
+    # Der Reverse Proxy läuft außerhalb dieser VM und leitet auf <vm>:8080 weiter; seine Adresse
+    # steht in app.trusted_proxies. Läuft er als Container auf dieser VM, ersetzt ein gemeinsames
+    # Docker-Netz die Portfreigabe (docs/betrieb.md).
+    ports:
+      - "8080:8080"
+    networks:
+      - internal
+    depends_on:
+      - ems-core
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "5"
+
 networks:
-  # Gemeinsames Netz für core und app (Phase 1b). Bewusst kein „internal: true“:
+  # Gemeinsames Netz für core und app. Bewusst kein „internal: true“:
   # der core braucht das LAN (Cerbo, Wallboxen, InfluxDB, HA) und das Internet (Tessie).
   internal: {}
 
 volumes:
   core-data: {}
+  app-data: {}
+  backup: {}
