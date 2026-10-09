@@ -1,6 +1,8 @@
 """Bausteine, die core und app brauchen, liegen in shared – nicht doppelt im core."""
 
+import ast
 import importlib.util
+import re
 from pathlib import Path
 
 import pytest
@@ -44,3 +46,27 @@ def test_every_package_directory_has_an_init() -> None:
         and not (directory / "__init__.py").exists()
     ]
     assert missing == []
+
+
+LOG_METHODS = {"debug", "info", "warning", "error", "exception", "critical"}
+
+
+def test_log_events_are_german_messages() -> None:
+    # Das Log liest der Betreiber; Ereignisse sind deutsche Sätze wie „Adapter verbunden“,
+    # keine englischen Bezeichner wie ``adapter_connected``.
+    identifiers = []
+    for path in Path("src/bindaems").rglob("*.py"):
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+            if (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and node.func.attr in LOG_METHODS
+                and isinstance(node.func.value, ast.Name)
+                and node.func.value.id == "log"
+                and node.args
+                and isinstance(node.args[0], ast.Constant)
+                and isinstance(node.args[0].value, str)
+                and re.fullmatch(r"[a-z0-9_]+", node.args[0].value)
+            ):
+                identifiers.append(f"{path}:{node.lineno}: {node.args[0].value}")
+    assert identifiers == []

@@ -79,7 +79,7 @@ class HaValueCache:
             series = await self._reader.query(query, database=self._database)
         except InfluxQueryError as exc:
             self._values = {}
-            log.warning("ha_values_failed", error=str(exc))
+            log.warning("HA-Werte der Verbraucher nicht lesbar", error=str(exc))
             return
         values: dict[HaRef, float] = {}
         for item in series:
@@ -205,7 +205,7 @@ async def candidates(
         try:
             series = await reader.query('SHOW SERIES FROM "W","kW"', database=database)
         except InfluxQueryError as exc:
-            log.warning("ha_candidates_failed", error=str(exc))
+            log.warning("HA-Leistungsquellen nicht lesbar", error=str(exc))
             series = []
         for item in series:
             column = item.columns.index("key") if "key" in item.columns else 0

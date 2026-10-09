@@ -153,7 +153,8 @@ hat, zeigt `/api/system` eine Warnung.
 Die app ist nur über den Reverse Proxy (HTTPS) erreichbar. Der Proxy läuft außerhalb dieser
 VM und leitet auf `<vm>:8080` weiter. Er muss:
 
-- den ursprünglichen `Host`-Header weitergeben (der Live-WebSocket prüft die Herkunft dagegen),
+- den ursprünglichen `Host`-Header samt Port weitergeben (der Live-WebSocket prüft die Herkunft
+  dagegen; nginx: `$http_host`, nicht `$host`),
 - `X-Forwarded-For` und `X-Forwarded-Proto` setzen,
 - für `/api/live` das WebSocket-Upgrade durchreichen (lange Lesezeit, z. B. 1 h).
 
@@ -162,7 +163,7 @@ Beispiel für nginx:
 ```nginx
 location / {
     proxy_pass http://<vm>:8080;
-    proxy_set_header Host $host;
+    proxy_set_header Host $http_host;
     proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
     proxy_set_header X-Forwarded-Proto $scheme;
 }
@@ -171,7 +172,7 @@ location /api/live {
     proxy_http_version 1.1;
     proxy_set_header Upgrade $http_upgrade;
     proxy_set_header Connection "upgrade";
-    proxy_set_header Host $host;
+    proxy_set_header Host $http_host;
     proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
     proxy_set_header X-Forwarded-Proto $scheme;
     proxy_read_timeout 1h;

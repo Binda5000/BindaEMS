@@ -81,7 +81,9 @@ class ForecastService:
                 weather = parse_plane(raw.body)
             except (FetchError, ForecastParseError) as exc:
                 self._error = f"PV-Prognose für Fläche {plane.name} fehlgeschlagen: {exc}"
-                log.warning("pv_forecast_failed", plane=plane.name, error=str(exc))
+                log.warning(
+                    "PV-Prognose für Fläche fehlgeschlagen", plane=plane.name, error=str(exc)
+                )
                 return self._forecast
             planes.append(
                 {
