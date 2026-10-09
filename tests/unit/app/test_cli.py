@@ -63,3 +63,21 @@ def test_verify_prices_needs_no_config(tmp_path, respx_mock, capsys) -> None:
     [protocol] = tmp_path.glob("pruefprotokoll-preise-*.md")
     assert "Ergebnis: bestanden" in protocol.read_text()
     assert str(protocol) in capsys.readouterr().out
+
+
+def test_serve_returns_2_on_invalid_config(tmp_path, capsys) -> None:
+    (tmp_path / "config.yaml").write_text("grid: {}\n")
+    assert main(["serve", "--config", str(tmp_path / "config.yaml")]) == 2
+    assert "Konfiguration ungültig" in capsys.readouterr().err
+
+
+def test_serve_returns_2_without_internal_token(tmp_path, monkeypatch, capsys) -> None:
+    monkeypatch.delenv("BINDAEMS_INTERNAL_TOKEN", raising=False)
+    assert main(["--config", str(write_app_config(tmp_path))]) == 2
+    assert "Secrets ungültig" in capsys.readouterr().err
+
+
+def test_serve_never_echoes_secret_values(tmp_path, monkeypatch, capsys) -> None:
+    monkeypatch.setenv("BINDAEMS_INTERNAL_TOKEN", "geheim-zu-kurz")
+    assert main(["--config", str(write_app_config(tmp_path))]) == 2
+    assert "geheim-zu-kurz" not in capsys.readouterr().err

@@ -161,3 +161,36 @@ def test_healthcheck_checks_api_with_token(monkeypatch, token: str, expected: in
         assert main() == expected
     finally:
         server.shutdown()
+
+
+def test_app_healthcheck_returns_1_when_unreachable(monkeypatch) -> None:
+    monkeypatch.setenv("BINDAEMS_APP_PORT", "1")  # nichts lauscht auf Port 1
+    from bindaems.app.healthcheck import main as health
+
+    assert health() == 1
+
+
+class _AppHealthHandler(BaseHTTPRequestHandler):
+    def do_GET(self) -> None:
+        self.send_response(200 if self.path == "/health" else 404)
+        self.send_header("Content-Length", "2")
+        self.end_headers()
+        self.wfile.write(b"{}")
+
+    def log_message(self, *args: object) -> None:
+        return None
+
+
+def test_app_healthcheck_returns_0_when_healthy(monkeypatch) -> None:
+    server = ThreadingHTTPServer(("127.0.0.1", 0), _AppHealthHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        monkeypatch.setenv("BINDAEMS_APP_PORT", str(server.server_address[1]))
+        for name in ("HTTP_PROXY", "http_proxy", "ALL_PROXY", "all_proxy"):
+            monkeypatch.setenv(name, "http://127.0.0.1:9")  # ein Proxy darf nicht greifen
+        from bindaems.app.healthcheck import main as health
+
+        assert health() == 0
+    finally:
+        server.shutdown()
