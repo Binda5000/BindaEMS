@@ -1,1 +1,1 @@
-<h1>BindaEMS</h1>
+<p class="muted">Die Übersicht folgt.</p>
