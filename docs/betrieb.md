@@ -1,12 +1,12 @@
 # Betrieb von BindaEMS
 
-Stand: Phase 1b. Es laufen zwei Dienste, beide steuern **nichts**:
+Stand: Phase 1c. Es laufen zwei Dienste, beide steuern **nichts**:
 
 - `ems-core` im Modus **OBSERVE** liest Cerbo GX, EVCS, Wall Connector, Tessie und Home
   Assistant und schreibt Telemetrie nach InfluxDB.
-- `ems-app` meldet Benutzer an und stellt die API für das Web-UI bereit (das UI folgt mit
-  Plan 1c). Sie holt Preise und die PV-Prognose, rechnet jede Viertelstunde ab und meldet
-  lesende Sensoren per MQTT Discovery an Home Assistant.
+- `ems-app` meldet Benutzer an und liefert das Web-UI samt API aus (Abschnitt 12). Sie holt
+  Preise und die PV-Prognose, rechnet jede Viertelstunde ab und meldet lesende Sensoren per
+  MQTT Discovery an Home Assistant.
 
 ## 1. Voraussetzungen der VM
 
@@ -357,3 +357,88 @@ docker compose run --rm -v "$PWD/verification:/out" ems-app verify-prices --out 
 
 Exitcode 0 heißt bestanden. Das Protokoll und die Rohantworten übernimmst du nach
 `docs/verification/` (Details dort im Abschnitt „Preise“).
+
+## 12. Web-UI
+
+Die app liefert die Bedienoberfläche unter derselben Adresse aus wie ihre API, also über den
+Reverse Proxy aus Abschnitt 6, z. B. `https://ems.example.lan`. Das UI braucht kein Internet;
+alle Daten kommen von der app.
+
+### Anmeldung und Rollen
+
+- Den ersten Admin legst du über die Befehlszeile an (Abschnitt 5), alle weiteren Benutzer ein
+  Admin unter **Benutzer**.
+- **Lesen** sieht alles, ändert nichts. **Bedienen** entspricht in Phase 1 dem Lesen; ab Phase 2
+  steuert diese Rolle das Laden. **Admin** ändert zusätzlich Einstellungen, Verbraucher und
+  Benutzer und sieht das Änderungsprotokoll.
+- „Angemeldet bleiben“ hält die Sitzung 30 Tage, aber nur für Bedienen und Lesen.
+- Nach 5 Fehlversuchen innerhalb von 15 min ist die Anmeldung 15 min gesperrt; die Meldung nennt
+  die Uhrzeit, ab der es wieder geht.
+
+### Zwei-Faktor-Anmeldung
+
+Unter **Konto** → „Zwei-Faktor-Anmeldung (TOTP)“ → „Einrichten“ bestätigst du dein Passwort,
+scannst den QR-Code mit einer Authenticator-App (oder tippst das angezeigte Geheimnis ab), gibst
+den sechsstelligen Bestätigungscode ein und wählst „Aktivieren“. Ab dann fragt die Anmeldung
+nach Passwort und Bestätigungscode. Für Admins ist das dringend empfohlen; „System“ und die
+Übersicht weisen auf Admins ohne TOTP hin. Ist das Telefon verloren, hilft `reset-totp`
+(Abschnitt 5).
+
+### Sitzung und Leerlauf
+
+- Eine Sitzung ohne „angemeldet bleiben“ endet nach 30 min ohne Bedienung. Das gilt für Admins
+  immer, auch wenn die Übersicht offen bleibt: automatische Abfragen und die Live-Anzeige zählen
+  nicht als Bedienung.
+- Ist die Sitzung abgelaufen, führt das UI zur Anmeldung („Sitzung abgelaufen – bitte neu
+  anmelden.“) und danach zurück zur vorherigen Seite.
+- Ein Passwortwechsel unter **Konto** meldet alle anderen Geräte ab. Ändert ein Admin Rolle oder
+  Passwort eines Benutzers, sind dessen Sitzungen beendet.
+
+### App installieren
+
+Das UI lässt sich wie eine App mit eigenem Symbol und Fenster einrichten (es bleibt eine
+Webseite und braucht die Verbindung zur app; HTTPS ist Voraussetzung):
+
+- **Android (Chrome):** Menü ⋮ → „App installieren“ (je nach Version „Zum Startbildschirm
+  hinzufügen“).
+- **iPhone und iPad (Safari):** Teilen → „Zum Home-Bildschirm“.
+- **Desktop (Chrome, Edge):** Symbol „App installieren“ in der Adressleiste.
+
+### Hell und dunkel
+
+Der Knopf mit dem Halbkreis in der Kopfzeile wechselt zwischen System, Hell und Dunkel. Die Wahl
+gilt für diesen Browser.
+
+### Seiten
+
+| Seite | Inhalt |
+|---|---|
+| Übersicht | Energiefluss live, Strompreis jetzt und die nächsten 3 h, Ladestände, Preise und PV-Prognose für heute und morgen, Hinweise, Verbraucher |
+| Verlauf | Diagramm mit bis zu 8 Reihen für frei wählbare Tage (höchstens 400), Tagesbilanz mit Kosten, Erlös, Autarkie und den Zählerständen für den Abgleich mit VRM |
+| Verbraucher | Verbraucherbaum mit „Sonstiges“; Admins legen Verbraucher an, ändern und löschen sie |
+| System | Komponenten, Hinweise, core (Adapter, Selbstprüfung, Alarme), Preise (Admins: „Preise jetzt abrufen“), PV-Prognose, alle Signale mit Suche |
+| Einstellungen | Tarif, OeMAG-Werte, Preise, PV-Modell und harte Grenzen; Admins bearbeiten, bewerten neu und exportieren oder importieren (Abschnitt 8) |
+| Benutzer | nur Admins: anlegen, Rolle ändern, Passwort setzen, löschen |
+| Protokoll | nur Admins: Änderungsprotokoll nach Bereich |
+| Konto | eigenes Passwort, Zwei-Faktor-Anmeldung, Abmelden |
+
+### Live-Anzeige
+
+Das Kennzeichen oben rechts zeigt den Zustand der Live-Verbindung:
+
+- **live:** Die Werte kommen laufend, etwa jede Sekunde.
+- **veraltet:** Seit über 5 s kamen keine neuen Werte. Energiefluss und Ladestände zeigen die
+  letzten Werte gedämpft.
+- **core getrennt:** Die app erreicht den core nicht. Prüfe `docker compose ps` und
+  `docker compose logs --tail 100 ems-core` sowie unter „System“ die Komponente core.
+- **verbinde …:** Das UI baut die Verbindung neu auf (nach 1, 2, 5 und 10 s, danach alle 30 s).
+  Hält das an, prüfe Netz und Reverse Proxy, vor allem das WebSocket-Upgrade für `/api/live`
+  (Abschnitt 6).
+- **abgemeldet:** Die Sitzung ist abgelaufen.
+
+Fehlende Werte erscheinen als „–“, nie als 0.
+
+### Demo-Backend
+
+Das Demo-Backend aus dem README (feste Messwerte, eingefrorene Uhr, bekannte Passwörter) dient
+nur der Entwicklung des UI. Es läuft nie auf der Anlage und nie im Netz.

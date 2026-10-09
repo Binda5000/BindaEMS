@@ -8,6 +8,8 @@ mit harten Sicherheitsgrenzen (USV-Reserve, Hausanschluss) und nachvollziehbaren
 
 - Design-Spezifikation: [`docs/superpowers/specs/2026-10-08-bindaems-design.md`](docs/superpowers/specs/2026-10-08-bindaems-design.md)
 - Implementierungspläne: [`docs/superpowers/plans/`](docs/superpowers/plans/)
+- Betrieb und Bedienung: [`docs/betrieb.md`](docs/betrieb.md)
+- Prüfprotokolle und Abnahme: [`docs/verification/`](docs/verification/)
 
 ## Entwicklung
 

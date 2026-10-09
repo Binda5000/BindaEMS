@@ -98,3 +98,11 @@ Lokal aus dem Repository geht es mit
   Brutto/Netto erkannt. Der Exitcode ist dann 0, sonst 1.
 
 Das Protokoll übernimmst du mit Datum nach `docs/verification/`.
+
+## Abnahme Phase 1
+
+Die Checkliste für die Abnahme der Phase 1 (Spec 18) steht in
+[`abnahme-phase-1.md`](abnahme-phase-1.md): 7 Tage lückenlose Aufzeichnung, Tages-Energiebilanz
+innerhalb ±2 % von VRM, Preise und Prognose sichtbar und nachweislich keine Schreibpfade zu
+Geräten. Für die Abnahme kopierst du sie mit Datum, füllst sie an der Anlage aus und checkst sie
+hier ein.
