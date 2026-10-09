@@ -42,6 +42,7 @@ VatMode = Literal["net", "gross"]
 VAT_WORDS: dict[VatMode, str] = {"net": "netto", "gross": "brutto"}
 NO_PRIMARY = "keine Daten von smartENERGY"
 PUBLISH_AHEAD = timedelta(days=3)
+TOMORROW_EXPECTED_FROM = time(16)  # ab dann sollten die Preise für morgen vorliegen
 
 
 @dataclass(frozen=True)
@@ -152,6 +153,8 @@ class PricePipeline:
         errors: list[str],
     ) -> PriceStatus:
         factor = 1 + settings.tariff.vat_pct / 100
+        local_now = now.astimezone(LOCAL_TZ)
+        tomorrow_expected = local_now.time() >= TOMORROW_EXPECTED_FROM
         primary_days = {d: i for d, i in by_local_day(primary.intervals).items() if d in window}
         reference_days = {d for d in by_local_day(reference.intervals) if d in window}
         reference_slots = to_slots(reference.intervals)
@@ -204,6 +207,10 @@ class PricePipeline:
                 days.append(DayResult(day, "primary", []))
                 continue
             findings = found if found is not None else [NO_PRIMARY]
+            reason = NO_PRIMARY if found is None else f"smartENERGY verdächtig ({'; '.join(found)})"
+            # den Folgetag veröffentlicht smartENERGY oft erst am Nachmittag; bis dahin ist sein
+            # Fehlen normal, verdächtige Werte sind es nie
+            report = found is not None or day == local_now.date() or tomorrow_expected
             if all(slot in reference_slots for slot in expected):
                 rows += [
                     SlotRow(
@@ -216,12 +223,15 @@ class PricePipeline:
                     )
                     for slot in expected
                 ]
-                reason = (
-                    NO_PRIMARY if found is None else f"smartENERGY verdächtig ({'; '.join(found)})"
-                )
-                errors.append(f"{day:%d.%m.}: {reason} – Ersatzquelle {reference_name}")
+                if report:
+                    errors.append(f"{day:%d.%m.}: {reason} – Ersatzquelle {reference_name}")
                 days.append(DayResult(day, "fallback", findings))
             else:
+                if report:
+                    errors.append(
+                        f"{day:%d.%m.}: {reason} – keine Preise, "
+                        f"Ersatzquelle {reference_name} unvollständig"
+                    )
                 days.append(DayResult(day, None, findings))
 
         if rows:

@@ -235,3 +235,35 @@ async def test_net_day_is_caught_even_when_overall_detection_says_gross(pipeline
         date(2026, 10, 10): "fallback",
     }
     assert {s.origin for s in store.get(T_END, T_END + timedelta(days=1))} == {"fallback"}
+
+
+async def test_tomorrow_only_from_reference_is_no_error_before_16(pipeline_env) -> None:
+    # smartENERGY veröffentlicht den Folgetag oft erst am Nachmittag
+    pipeline, store, _ = pipeline_env(primary=FIX_SE, reference=two_days_reference())
+    status = await pipeline.refresh()
+    assert {d.day: d.origin for d in status.days} == {
+        date(2026, 10, 9): "primary",
+        date(2026, 10, 10): "fallback",
+    }
+    assert status.errors == []
+    assert pipeline.component_status().ok
+    assert len(store.get(T_END, T_END + timedelta(days=1))) == 96
+
+
+async def test_tomorrow_still_missing_at_16_is_reported(pipeline_env, clock) -> None:
+    clock.advance(6 * 3600)  # 16:00 Ortszeit
+    pipeline, _, _ = pipeline_env(primary=FIX_SE, reference=two_days_reference())
+    status = await pipeline.refresh()
+    assert status.errors == ["10.10.: keine Daten von smartENERGY – Ersatzquelle energy_charts"]
+
+
+async def test_suspicious_tomorrow_without_complete_reference_is_reported(pipeline_env) -> None:
+    pipeline, store, _ = pipeline_env(primary=two_days_primary(0.0), reference=FIX_EC)
+    status = await pipeline.refresh()
+    assert status.days[1] == DayResult(date(2026, 10, 10), None, ["alle Werte gleich (0.000 ct)"])
+    assert status.errors == [
+        "10.10.: smartENERGY verdächtig (alle Werte gleich (0.000 ct)) – keine Preise, "
+        "Ersatzquelle energy_charts unvollständig"
+    ]
+    assert not pipeline.component_status().ok
+    assert store.get(T_END, T_END + timedelta(days=1)) == []

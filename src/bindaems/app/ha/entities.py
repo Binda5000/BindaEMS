@@ -10,12 +10,13 @@ import math
 import re
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
-from datetime import datetime, time, timedelta
+from datetime import datetime, timedelta
 from typing import Any, Literal
 
 from bindaems import __version__
 from bindaems.app.core_link import LiveState
 from bindaems.app.forecast.service import ForecastService
+from bindaems.app.prices.pipeline import TOMORROW_EXPECTED_FROM
 from bindaems.app.prices.service import PriceService
 from bindaems.app.prices.store import PriceStore
 from bindaems.shared.config import Config, EvcsConfig, HaMqttConfig
@@ -26,7 +27,6 @@ NODE_ID = "bindaems"
 MANUFACTURER = "BindaEMS"
 UNKNOWN = "None"
 PRICES_AHEAD = timedelta(hours=36)
-TOMORROW_EXPECTED_FROM = time(16)  # ab dann sollten die Preise für morgen vorliegen
 
 
 @dataclass(frozen=True)
