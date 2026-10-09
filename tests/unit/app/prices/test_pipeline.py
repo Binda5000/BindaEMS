@@ -2,7 +2,7 @@
 
 import json
 from collections.abc import Callable
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
 import httpx
@@ -37,6 +37,31 @@ def all_zero(fixture: Path) -> str:
 
 def scaled(fixture: Path, factor: float) -> str:
     return _changed(fixture, lambda v: v * factor)
+
+
+def two_days_primary(tomorrow_factor: float) -> str:
+    """Aufnahme plus derselbe Tag einen Tag später, Werte mal ``tomorrow_factor``."""
+    data = json.loads(FIX_SE.read_text())
+    tomorrow = [
+        {
+            "date": (datetime.fromisoformat(entry["date"]) + timedelta(days=1)).isoformat(),
+            "value": entry["value"] * tomorrow_factor,
+        }
+        for entry in data["data"]
+    ]
+    data["data"] += tomorrow
+    return json.dumps(data)
+
+
+def two_days_reference(tiny_hours_tomorrow: int = 0) -> str:
+    """Referenz für beide Tage; morgen haben die ersten Stunden auf Wunsch fast 0 ct."""
+    data = json.loads(FIX_EC.read_text())
+    tomorrow = list(data["price"])
+    for index in range(4 * tiny_hours_tomorrow):
+        tomorrow[index] = 1.0  # 0,1 ct – zählt nicht für die Erkennung
+    data["unix_seconds"] = data["unix_seconds"] + [t + 86400 for t in data["unix_seconds"]]
+    data["price"] = data["price"] + tomorrow
+    return json.dumps(data)
 
 
 def set_vat_mode(service: SettingsService, mode: str) -> None:
@@ -146,6 +171,7 @@ async def test_manual_vat_mode_overrides_detection(pipeline_env, settings_servic
     status = await pipeline.refresh()
     assert status.vat_mode == "net" and status.vat_detection.result == "gross"
     assert store.get(T_FIRST, T_FIRST + SLOT)[0].spot_net_ct == 17.824
+    assert "Brutto/Netto: eingestellt „netto“, erkannt „brutto“ (Verhältnis 1.200)" in status.errors
 
 
 async def test_restore_redetects_vat_from_stored_slots(pipeline_env) -> None:
@@ -175,3 +201,37 @@ async def test_settings_change_republishes_import_prices(pipeline_env, settings_
     pipeline.republish()
     assert {p.tags["kind"] for p in sink.points} == {"import_gross"}
     assert min(p.ts for p in sink.points) == datetime(2026, 10, 9, 8, tzinfo=UTC)  # ab jetzt
+
+
+async def test_switch_to_net_after_earlier_detection_goes_to_fallback(pipeline_env) -> None:
+    pipeline, store, _ = pipeline_env(primary=FIX_SE, reference=FIX_EC)
+    await pipeline.refresh()  # erkennt „brutto“
+    pipeline_env(primary=two_days_primary(1 / 1.2), reference=two_days_reference(), store=store)
+    status = await pipeline.refresh()
+    assert {d.day: d.origin for d in status.days} == {
+        date(2026, 10, 9): "primary",
+        date(2026, 10, 10): "fallback",
+    }
+    assert any(
+        e.startswith("Brutto/Netto nicht erkennbar (Verhältnis 1.1") and "zuletzt erkannt" in e
+        for e in status.errors
+    )
+    assert any(
+        e.startswith("10.10.: smartENERGY verdächtig (Brutto/Netto passt nicht")
+        for e in status.errors
+    )
+    tomorrow = store.get(T_END, T_END + timedelta(days=1))
+    assert len(tomorrow) == 96 and {s.origin for s in tomorrow} == {"fallback"}
+
+
+async def test_net_day_is_caught_even_when_overall_detection_says_gross(pipeline_env) -> None:
+    pipeline, store, _ = pipeline_env(
+        primary=two_days_primary(1 / 1.2), reference=two_days_reference(tiny_hours_tomorrow=4)
+    )
+    status = await pipeline.refresh()
+    assert status.vat_detection.result == "gross"  # 24 Stunden brutto gegen 20 Stunden netto
+    assert {d.day: d.origin for d in status.days} == {
+        date(2026, 10, 9): "primary",
+        date(2026, 10, 10): "fallback",
+    }
+    assert {s.origin for s in store.get(T_END, T_END + timedelta(days=1))} == {"fallback"}

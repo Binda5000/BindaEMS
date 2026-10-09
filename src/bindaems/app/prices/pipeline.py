@@ -16,6 +16,7 @@ from typing import Literal
 from bindaems.app.fetch import FetchError, RawResponse
 from bindaems.app.history.influx import RP_LONG
 from bindaems.app.prices.checks import (
+    VAT_TOLERANCE,
     VatDetection,
     by_local_day,
     detect_vat,
@@ -170,12 +171,24 @@ class PricePipeline:
             day: {slot: value / divisor for slot, value in slots.items()}
             for day, slots in raw_slots.items()
         }
+        mismatch: dict[date, list[str]] = {}
+        if settings.prices.vat_mode == "auto":
+            # ein Tag, dessen eigenes Verhältnis nicht zur gültigen Einstellung passt (Wechsel
+            # brutto/netto), ist verdächtig – auch wenn die Erkennung über alle Tage passt
+            for day in clean:
+                own = detect_vat(raw_slots[day], reference_slots, factor)
+                if own.ratio is not None and abs(own.ratio - divisor) > VAT_TOLERANCE:
+                    mismatch[day] = [f"Brutto/Netto passt nicht (Verhältnis {own.ratio:.3f})"]
 
         rows: list[SlotRow] = []
         days: list[DayResult] = []
         for day in sorted(primary_days.keys() | reference_days):
             expected = local_day_slots(day)
-            found = structure[day] + range_findings(net_slots[day]) if day in structure else None
+            found = (
+                structure[day] + mismatch.get(day, []) + range_findings(net_slots[day])
+                if day in structure
+                else None
+            )
             if found == []:
                 rows += [
                     SlotRow(
@@ -231,13 +244,24 @@ class PricePipeline:
         errors: list[str],
     ) -> VatMode:
         """Einstellung, sonst Erkennung, sonst letzte Erkennung, sonst Ersatzeinstellung."""
-        if settings.prices.vat_mode == "net":
-            return "net"
-        if settings.prices.vat_mode == "gross":
-            return "gross"
-        if detection is not None and detection.result is not None:
-            return detection.result
+        ratio = detection.ratio if detection is not None else None
+        detected = detection.result if detection is not None else None
+        if settings.prices.vat_mode != "auto":
+            mode: VatMode = "net" if settings.prices.vat_mode == "net" else "gross"
+            if detected is not None and detected != mode and ratio is not None:
+                errors.append(
+                    f"Brutto/Netto: eingestellt „{VAT_WORDS[mode]}“, erkannt "
+                    f"„{VAT_WORDS[detected]}“ (Verhältnis {ratio:.3f})"
+                )
+            return mode
+        if detected is not None:
+            return detected
         if self._detected is not None:
+            if ratio is not None:  # gemessen, aber weder netto noch brutto
+                errors.append(
+                    f"Brutto/Netto nicht erkennbar (Verhältnis {ratio:.3f}) – "
+                    f"zuletzt erkannt „{VAT_WORDS[self._detected]}“ aktiv"
+                )
             return self._detected
         fallback = settings.prices.vat_fallback
         if primary_used:  # ohne verwendbaren Primärtag spielt die Einstellung keine Rolle
