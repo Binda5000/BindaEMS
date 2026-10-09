@@ -5,9 +5,23 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 from argon2 import PasswordHasher
+from fastapi.testclient import TestClient
+
+from bindaems.app.auth.service import AuthService, Role
 
 T_APP = datetime(2026, 10, 9, 8, 0, tzinfo=UTC)  # 10:00 Ortszeit
 
 PASSWORD = "richtig-geheim-1"
 # billige Parameter, damit die Tests schnell bleiben; der Dienst nutzt sonst die Standardwerte
 FAST_HASHER = PasswordHasher(time_cost=1, memory_cost=8, parallelism=1)
+
+
+def login_as(
+    client: TestClient, auth: AuthService, role: Role, username: str | None = None
+) -> dict[str, str]:
+    """Legt einen Benutzer an, meldet ihn an und liefert den CSRF-Header für Schreibzugriffe."""
+    name = username or f"{role}-test"
+    auth.create_user(name, PASSWORD, role, actor="test", source="cli")
+    response = client.post("/api/auth/login", json={"username": name, "password": PASSWORD})
+    assert response.status_code == 200, response.text
+    return {"X-CSRF-Token": response.cookies["bindaems_csrf"]}

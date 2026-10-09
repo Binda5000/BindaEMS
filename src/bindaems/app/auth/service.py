@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import math
 import re
 import secrets
 from dataclasses import dataclass
@@ -57,8 +58,9 @@ class TotpRequiredError(AuthError):
 
 
 class LockedError(AuthError):
-    def __init__(self, until: datetime) -> None:
+    def __init__(self, until: datetime, now: datetime) -> None:
         self.until = until
+        self.retry_after_s = max(1, math.ceil((until - now).total_seconds()))
         local = until.astimezone(LOCAL_TZ)
         super().__init__(f"Zu viele Fehlversuche – Anmeldung gesperrt bis {local:%H:%M} Uhr")
 
@@ -289,7 +291,7 @@ class AuthService:
         now = self._clock.now()
         until = self._locked_until(key)
         if until is not None and now < until:
-            raise LockedError(until)  # während der Sperre wird nichts geprüft und nichts gezählt
+            raise LockedError(until, now)  # in der Sperre wird nichts geprüft oder gezählt
         with self._engine.connect() as conn:
             row = self._find(conn, key)
         if row is None:
