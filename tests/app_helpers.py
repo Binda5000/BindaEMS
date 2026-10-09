@@ -8,6 +8,7 @@ from argon2 import PasswordHasher
 from fastapi.testclient import TestClient
 
 from bindaems.app.auth.service import AuthService, Role
+from bindaems.shared.settings import RuntimeSettings
 
 T_APP = datetime(2026, 10, 9, 8, 0, tzinfo=UTC)  # 10:00 Ortszeit
 
@@ -25,3 +26,13 @@ def login_as(
     response = client.post("/api/auth/login", json={"username": name, "password": PASSWORD})
     assert response.status_code == 200, response.text
     return {"X-CSRF-Token": response.cookies["bindaems_csrf"]}
+
+
+def with_grid_usage(settings: RuntimeSettings, value_ct: float | None) -> RuntimeSettings:
+    """Kopie mit einem Wert für das Netznutzungsentgelt (Bestandteil ``grid_usage``)."""
+    components = [
+        c.model_copy(update={"value_ct": value_ct}) if c.id == "grid_usage" else c
+        for c in settings.tariff.components
+    ]
+    tariff = settings.tariff.model_copy(update={"components": components})
+    return settings.model_copy(update={"tariff": tariff})

@@ -91,3 +91,15 @@ login_failure_table = Table(
     Column("ts", UtcDateTime(), nullable=False),
     Index("ix_login_failure_username_ts", "username", "ts"),
 )
+
+# Jede gespeicherte Fassung der Laufzeit-Einstellungen; die höchste Version gilt
+settings_version = Table(
+    "settings_version",
+    metadata,
+    Column("version", Integer, primary_key=True, autoincrement=False),
+    Column("created_at", UtcDateTime(), nullable=False),
+    Column("actor", String(64), nullable=False),
+    Column("source", String(16), nullable=False),
+    Column("comment", String(200), nullable=True),
+    Column("data", JSON, nullable=False),
+)

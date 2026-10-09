@@ -13,6 +13,7 @@ from bindaems.app.auth.routes import audit_router, auth_router, users_router
 from bindaems.app.auth.service import AuthService
 from bindaems.app.auth.web import Guard
 from bindaems.app.db.engine import migrate, open_database
+from bindaems.app.settings.service import SettingsService
 from bindaems.shared.timeutil import ManualClock
 
 
@@ -53,3 +54,8 @@ def make_client(auth: AuthService, guard: Guard, audit: AuditLog) -> Callable[..
         return TestClient(create_app([*base, *routers]), base_url="https://testserver")
 
     return build
+
+
+@pytest.fixture
+def settings_service(engine: Engine, clock: ManualClock, audit: AuditLog) -> SettingsService:
+    return SettingsService(engine, clock, audit)
