@@ -276,6 +276,10 @@
 </div>
 
 <style>
+	.facts {
+		margin: 0 0 0.75rem;
+	}
+
 	.system {
 		display: grid;
 		gap: var(--gap);
@@ -312,21 +316,6 @@
 
 	.label {
 		font-weight: 600;
-	}
-
-	.facts {
-		display: grid;
-		grid-template-columns: max-content 1fr;
-		gap: 0.25rem 1rem;
-		margin: 0 0 0.75rem;
-	}
-
-	.facts dt {
-		color: var(--muted);
-	}
-
-	.facts dd {
-		margin: 0;
 	}
 
 	.scroll {

@@ -60,6 +60,10 @@
 </dl>
 
 <style>
+	.facts {
+		margin: 1rem 0 0;
+	}
+
 	.scroll {
 		overflow-x: auto;
 	}
@@ -81,20 +85,5 @@
 	.window {
 		display: block;
 		white-space: nowrap;
-	}
-
-	.facts {
-		display: grid;
-		grid-template-columns: max-content 1fr;
-		gap: 0.25rem 1rem;
-		margin: 1rem 0 0;
-	}
-
-	.facts dt {
-		color: var(--muted);
-	}
-
-	.facts dd {
-		margin: 0;
 	}
 </style>

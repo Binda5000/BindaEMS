@@ -132,21 +132,6 @@
 		font-size: 0.9375rem;
 	}
 
-	.facts {
-		display: grid;
-		grid-template-columns: max-content 1fr;
-		gap: 0.25rem 1rem;
-		margin: 0;
-	}
-
-	.facts dt {
-		color: var(--muted);
-	}
-
-	.facts dd {
-		margin: 0;
-	}
-
 	.scroll {
 		overflow-x: auto;
 	}

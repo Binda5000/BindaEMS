@@ -59,26 +59,15 @@
 {/if}
 
 <style>
+	.facts {
+		margin: 0 0 0.75rem;
+	}
+
 	.account {
 		display: grid;
 		gap: var(--gap);
 		grid-template-columns: repeat(auto-fit, minmax(min(100%, 22rem), 1fr));
 		align-items: start;
-	}
-
-	.facts {
-		display: grid;
-		grid-template-columns: max-content 1fr;
-		gap: 0.25rem 1rem;
-		margin: 0 0 0.75rem;
-	}
-
-	.facts dt {
-		color: var(--muted);
-	}
-
-	.facts dd {
-		margin: 0;
 	}
 
 	.logout {

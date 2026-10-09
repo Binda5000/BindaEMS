@@ -170,6 +170,32 @@ th.num {
 	white-space: nowrap;
 }
 
+/* waagrecht scrollende Tabellen; „relative“ hält absolut gesetzte Teile (z. B. .sr-only) im
+   Container, sonst verbreiterten sie die Seite */
+.scroll {
+	position: relative;
+	overflow-x: auto;
+	max-width: 100%;
+}
+
+/* Kennzahlen als Liste „Beschriftung – Wert“; die Beschriftung nimmt höchstens die halbe Breite */
+.facts {
+	display: grid;
+	grid-template-columns: fit-content(50%) minmax(0, 1fr);
+	gap: 0.25rem 1rem;
+	margin: 0;
+}
+
+.facts dt {
+	color: var(--muted);
+}
+
+.facts dd {
+	margin: 0;
+	min-width: 0;
+	overflow-wrap: anywhere;
+}
+
 .sr-only {
 	position: absolute;
 	width: 1px;

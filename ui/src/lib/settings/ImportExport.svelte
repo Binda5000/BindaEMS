@@ -53,8 +53,14 @@
 <style>
 	.import {
 		display: grid;
+		grid-template-columns: minmax(0, 1fr);
 		gap: 0.5rem;
 		max-width: 28rem;
+	}
+
+	.import input {
+		width: 100%;
+		min-width: 0;
 	}
 
 	p {
