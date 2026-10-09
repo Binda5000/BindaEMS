@@ -4,12 +4,15 @@ from __future__ import annotations
 
 from collections.abc import Callable, Sequence
 from datetime import UTC, datetime
+from typing import Literal
 
 from argon2 import PasswordHasher
 from fastapi.testclient import TestClient
 
 from bindaems.app.auth.service import AuthService, Role
 from bindaems.app.consumers.service import Consumer, ConsumerInput
+from bindaems.app.fetch import RawResponse
+from bindaems.app.prices.store import SlotRow
 from bindaems.shared.settings import RuntimeSettings
 
 T_APP = datetime(2026, 10, 9, 8, 0, tzinfo=UTC)  # 10:00 Ortszeit
@@ -69,3 +72,17 @@ def core_input(
     return ConsumerInput(
         name=name, color="#000000", source_kind="core", power_ref=ref, parent_id=parent_id
     )
+
+
+def raw_response(source: str, body: str, status: int = 200) -> RawResponse:
+    return RawResponse(source, f"https://{source}.example/", T_APP, status, body)
+
+
+def price_row(
+    slot: datetime,
+    net: float,
+    origin: Literal["primary", "fallback"],
+    reference_ct: float | None = None,
+) -> SlotRow:
+    raw = net if origin == "primary" else None
+    return SlotRow(slot, raw, net, reference_ct, origin, None)

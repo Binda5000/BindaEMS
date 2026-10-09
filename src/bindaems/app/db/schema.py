@@ -9,12 +9,14 @@ from sqlalchemy import (
     Boolean,
     Column,
     Dialect,
+    Float,
     ForeignKey,
     Index,
     Integer,
     MetaData,
     String,
     Table,
+    Text,
     UniqueConstraint,
 )
 from sqlalchemy.types import TypeDecorator
@@ -120,4 +122,32 @@ consumer_table = Table(
     Column("created_at", UtcDateTime(), nullable=False),
     Column("updated_at", UtcDateTime(), nullable=False),
     Index("ix_consumer_parent_id", "parent_id"),
+)
+
+# Rohantworten der Preisquellen; gleiche Antworten nacheinander werden nur einmal gespeichert
+price_raw = Table(
+    "price_raw",
+    metadata,
+    Column("id", Integer, primary_key=True),
+    Column("source", String(32), nullable=False),
+    Column("url", String(500), nullable=False),
+    Column("fetched_at", UtcDateTime(), nullable=False),
+    Column("last_fetched_at", UtcDateTime(), nullable=False),
+    Column("status", Integer, nullable=False),
+    Column("sha256", String(64), nullable=False),
+    Column("body", Text, nullable=False),
+    Index("ix_price_raw_source", "source"),
+)
+
+# Gültiger Börsenpreis je Slot (netto) mit Herkunft: primary = smartENERGY, fallback = Referenz
+price_slot = Table(
+    "price_slot",
+    metadata,
+    Column("slot_start", UtcDateTime(), primary_key=True),
+    Column("spot_raw_ct", Float, nullable=True),
+    Column("spot_net_ct", Float, nullable=False),
+    Column("reference_ct", Float, nullable=True),
+    Column("origin", String(8), nullable=False),
+    Column("raw_id", Integer, ForeignKey("price_raw.id"), nullable=True),
+    Column("updated_at", UtcDateTime(), nullable=False),
 )
