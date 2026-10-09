@@ -15,6 +15,7 @@ from bindaems.app.consumers.service import Consumer, ConsumerInput
 from bindaems.app.fetch import RawResponse
 from bindaems.app.prices.sources import AwattarSource, EnergyChartsSource, SmartEnergySource
 from bindaems.app.prices.store import SlotRow
+from bindaems.app.settings.service import SettingsService
 from bindaems.shared.settings import RuntimeSettings
 
 T_APP = datetime(2026, 10, 9, 8, 0, tzinfo=UTC)  # 10:00 Ortszeit
@@ -127,3 +128,35 @@ def record_then_stop(sleeps: list[float], after: int) -> Callable[[float], Await
             raise StopScheduler
 
     return sleep
+
+
+def _update_settings(service: SettingsService, settings: RuntimeSettings) -> None:
+    current = service.current()
+    service.update(settings, base_version=current.version, actor="test", source="ui")
+
+
+def set_grid_usage(service: SettingsService, value_ct: float | None) -> None:
+    _update_settings(service, with_grid_usage(service.current().settings, value_ct))
+
+
+def set_feed_in(service: SettingsService, monthly_ct: dict[str, float]) -> None:
+    settings = service.current().settings
+    feed_in = settings.feed_in.model_copy(update={"monthly_ct": monthly_ct})
+    _update_settings(service, settings.model_copy(update={"feed_in": feed_in}))
+
+
+# Nachricht ``slot_flows`` des core für den Slot 2026-10-09T08:00Z (10:00 Ortszeit)
+SLOT_FLOWS_MSG: dict[str, Any] = {
+    "slot_start": "2026-10-09T08:00:00+00:00",
+    "covered_s": 900.0,
+    "flows_wh": {
+        "pv>house": 400.0,
+        "pv>wb:evcs": 200.0,
+        "pv>battery": 100.0,
+        "pv>grid": 300.0,
+        "battery>house": 50.0,
+        "grid>house": 150.0,
+        "grid>wb:twc": 250.0,
+    },
+    "counters": {"grid.energy_import_kwh": [100.0, 100.4], "grid.energy_export_kwh": [50.0, 50.3]},
+}

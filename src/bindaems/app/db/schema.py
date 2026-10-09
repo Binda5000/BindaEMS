@@ -151,3 +151,18 @@ price_slot = Table(
     Column("raw_id", Integer, ForeignKey("price_raw.id"), nullable=True),
     Column("updated_at", UtcDateTime(), nullable=False),
 )
+
+# Abrechnung je Viertelstunde aus den slot_flows des core (Spec 11.4)
+ledger_slot = Table(
+    "ledger_slot",
+    metadata,
+    Column("slot_start", UtcDateTime(), primary_key=True),
+    Column("covered_s", Float, nullable=False),
+    Column("flows_wh", JSON, nullable=False),
+    Column("counters", JSON, nullable=True),
+    Column("import_wh", Float, nullable=False),
+    Column("export_wh", Float, nullable=False),
+    Column("import_price_ct", Float, nullable=True),  # Bezugspreis brutto zum Slotzeitpunkt
+    Column("origin", String(8), nullable=False),
+    Column("updated_at", UtcDateTime(), nullable=False),
+)
