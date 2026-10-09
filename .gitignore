@@ -21,6 +21,8 @@ deploy/config.yaml
 node_modules/
 ui/build/
 ui/.svelte-kit/
+ui/test-results/
+ui/playwright-report/
 
 # Editor
 .idea/
