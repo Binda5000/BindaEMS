@@ -4,7 +4,19 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from sqlalchemy import JSON, Column, Dialect, Index, Integer, MetaData, String, Table
+from sqlalchemy import (
+    JSON,
+    Boolean,
+    Column,
+    Dialect,
+    ForeignKey,
+    Index,
+    Integer,
+    MetaData,
+    String,
+    Table,
+    UniqueConstraint,
+)
 from sqlalchemy.types import TypeDecorator
 
 from bindaems.shared.timeutil import ensure_utc
@@ -40,4 +52,42 @@ audit_log = Table(
     Column("target", String(200), nullable=True),
     Column("details", JSON, nullable=True),
     Index("ix_audit_log_ts", "ts"),
+)
+
+user_table = Table(
+    "user",
+    metadata,
+    Column("id", Integer, primary_key=True),
+    Column("username", String(32), nullable=False),
+    Column("password_hash", String(200), nullable=False),
+    Column("role", String(16), nullable=False),
+    Column("totp_secret", String(64), nullable=True),
+    Column("totp_enabled", Boolean, nullable=False),
+    Column("totp_last_step", Integer, nullable=True),
+    Column("created_at", UtcDateTime(), nullable=False),
+    Column("updated_at", UtcDateTime(), nullable=False),
+    UniqueConstraint("username", name="uq_user_username"),
+)
+
+# id = SHA-256 des Sitzungstokens; das Token selbst steht nur im Cookie
+session_table = Table(
+    "session",
+    metadata,
+    Column("id", String(64), primary_key=True),
+    Column("user_id", Integer, ForeignKey("user.id", ondelete="CASCADE"), nullable=False),
+    Column("csrf_token", String(64), nullable=False),
+    Column("created_at", UtcDateTime(), nullable=False),
+    Column("last_seen_at", UtcDateTime(), nullable=False),
+    Column("expires_at", UtcDateTime(), nullable=False),
+    Column("remember", Boolean, nullable=False),
+    Index("ix_session_user_id", "user_id"),
+)
+
+login_failure_table = Table(
+    "login_failure",
+    metadata,
+    Column("id", Integer, primary_key=True),
+    Column("username", String(64), nullable=False),
+    Column("ts", UtcDateTime(), nullable=False),
+    Index("ix_login_failure_username_ts", "username", "ts"),
 )
