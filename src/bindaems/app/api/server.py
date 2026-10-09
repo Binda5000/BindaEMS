@@ -48,6 +48,15 @@ def content_security_policy(index_html: str | None) -> str:
     )
 
 
+def security_headers(path: str, csp: str) -> dict[str, str]:
+    """Security-Header einer HTTP-Antwort; API-Antworten landen in keinem Cache."""
+    headers = dict(_STATIC_HEADERS)
+    headers["Content-Security-Policy"] = csp
+    if path == "/api" or path.startswith("/api/"):
+        headers["Cache-Control"] = "no-store"
+    return headers
+
+
 class SecurityHeaders:
     """Setzt die Security-Header auf jede HTTP-Antwort; WebSockets bleiben unberührt."""
 
@@ -59,17 +68,13 @@ class SecurityHeaders:
         if scope["type"] != "http":
             await self._app(scope, receive, send)
             return
-        path: str = scope["path"]
-        api = path == "/api" or path.startswith("/api/")
+        extra = security_headers(scope["path"], self._csp)
 
         async def send_with_headers(message: Message) -> None:
             if message["type"] == "http.response.start":
                 headers = MutableHeaders(scope=message)
-                for name, value in _STATIC_HEADERS:
+                for name, value in extra.items():
                     headers[name] = value
-                headers["Content-Security-Policy"] = self._csp
-                if api:
-                    headers["Cache-Control"] = "no-store"
             await send(message)
 
         await self._app(scope, receive, send_with_headers)
@@ -91,7 +96,15 @@ def create_app(routers: Sequence[APIRouter], *, ui_dir: Path | None = None) -> F
         app.include_router(router)
 
     index_html = _mount_ui(app, ui_dir) if ui_dir is not None else None
-    app.add_middleware(SecurityHeaders, csp=content_security_policy(index_html))
+    csp = content_security_policy(index_html)
+
+    @app.exception_handler(Exception)
+    async def server_error(request: Request, exc: Exception) -> Response:
+        # antwortet aus der äußersten Schicht, an SecurityHeaders vorbei; uvicorn loggt den Fehler
+        headers = security_headers(request.scope["path"], csp)
+        return JSONResponse({"detail": "Interner Fehler"}, status_code=500, headers=headers)
+
+    app.add_middleware(SecurityHeaders, csp=csp)
     return app
 
 

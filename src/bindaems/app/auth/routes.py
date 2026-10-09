@@ -191,20 +191,17 @@ def users_router(auth: AuthService, guard: Guard) -> APIRouter:
 
     @router.patch("/{user_id}")
     def change_user(user_id: int, body: UserPatchBody, session: Admin) -> dict[str, Any]:
-        actor = session.user.username
+        own = user_id == session.user.id
         try:
-            if body.password is not None:
-                own = user_id == session.user.id
-                auth.set_password(
-                    user_id,
-                    body.password,
-                    actor=actor,
-                    source="ui",
-                    keep_session=session.session_id if own else None,
-                )
-            if body.role is not None:
-                auth.set_role(user_id, body.role, actor=actor, source="ui")
-            return user_json(auth.get_user(user_id))
+            user = auth.update_user(
+                user_id,
+                password=body.password,
+                role=body.role,
+                actor=session.user.username,
+                source="ui",
+                keep_session=session.session_id if own else None,
+            )
+            return user_json(user)
         except UserNotFoundError as exc:
             raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from exc
         except LastAdminError as exc:

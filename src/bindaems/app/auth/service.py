@@ -181,6 +181,9 @@ class AuthService:
         # unbekannte Namen werden gegen diesen Hash geprüft, damit die Antwortzeit gleich bleibt
         self._login_locks = [threading.Lock() for _ in range(LOGIN_STRIPES)]
         self._hash_slots = threading.BoundedSemaphore(HASH_CONCURRENCY)
+        # Zählen der Admins und Ändern nacheinander: SQLite beginnt die Transaktion erst beim
+        # ersten Schreiben, zwei Herabstufungen könnten sonst beide „noch 2 Admins“ sehen
+        self._admin_lock = threading.Lock()
         self._dummy_hash = self._hash(secrets.token_urlsafe(16))
 
     # --- Benutzer ------------------------------------------------------------------------
@@ -222,23 +225,63 @@ class AuthService:
         with self._engine.connect() as conn:
             return _user(self._get(conn, user_id))
 
-    def set_role(self, user_id: int, role: Role, *, actor: str, source: Source) -> User:
-        role = _check_role(role)
-        with self._engine.begin() as conn:
+    def update_user(
+        self,
+        user_id: int,
+        *,
+        password: str | None = None,
+        role: Role | None = None,
+        actor: str,
+        source: Source,
+        keep_session: str | None = None,
+    ) -> User:
+        """Passwort und Rolle in einer Transaktion: scheitert ein Teil, bleibt alles unverändert.
+
+        ``keep_session`` bleibt beim reinen Passwortwechsel angemeldet (die eigene Sitzung).
+        """
+        if password is not None:
+            _check_password(password)
+        if role is not None:
+            role = _check_role(role)
+        password_hash = self._hash(password) if password is not None else None
+        now = self._clock.now()
+        with self._admin_lock, self._engine.begin() as conn:
             row = self._get(conn, user_id)
-            if row.role == "admin" and role != "admin" and self._admin_count(conn) == 1:
+            demoted = role is not None and row.role == "admin" and role != "admin"
+            if demoted and self._admin_count(conn) == 1:
                 raise LastAdminError()
-            conn.execute(
-                update(user_table)
-                .where(user_table.c.id == user_id)
-                .values(role=role, updated_at=self._clock.now())
-            )
-            # alte Sitzungen könnten sonst Rechte oder „angemeldet bleiben“ der alten Rolle behalten
-            conn.execute(delete(session_table).where(session_table.c.user_id == user_id))
-            self._audit.record(
-                actor, source, "user.role", row.username, {"from": row.role, "to": role}, conn=conn
-            )
+            sessions = delete(session_table).where(session_table.c.user_id == user_id)
+            if password_hash is not None:
+                conn.execute(
+                    update(user_table)
+                    .where(user_table.c.id == user_id)
+                    .values(password_hash=password_hash, updated_at=now)
+                )
+                self._audit.record(actor, source, "user.password", row.username, conn=conn)
+                if role is None and keep_session is not None:
+                    sessions = sessions.where(session_table.c.id != keep_session)
+            if role is not None:
+                conn.execute(
+                    update(user_table)
+                    .where(user_table.c.id == user_id)
+                    .values(role=role, updated_at=now)
+                )
+                self._audit.record(
+                    actor,
+                    source,
+                    "user.role",
+                    row.username,
+                    {"from": row.role, "to": role},
+                    conn=conn,
+                )
+            if password_hash is not None or role is not None:
+                # alte Sitzungen könnten sonst Rechte oder „angemeldet bleiben“ der alten Rolle
+                # bzw. den Zugang mit dem alten Passwort behalten
+                conn.execute(sessions)
             return _user(self._get(conn, user_id))
+
+    def set_role(self, user_id: int, role: Role, *, actor: str, source: Source) -> User:
+        return self.update_user(user_id, role=role, actor=actor, source=source)
 
     def set_password(
         self,
@@ -249,20 +292,9 @@ class AuthService:
         source: Source,
         keep_session: str | None = None,
     ) -> None:
-        _check_password(password)
-        password_hash = self._hash(password)
-        with self._engine.begin() as conn:
-            row = self._get(conn, user_id)
-            conn.execute(
-                update(user_table)
-                .where(user_table.c.id == user_id)
-                .values(password_hash=password_hash, updated_at=self._clock.now())
-            )
-            sessions = delete(session_table).where(session_table.c.user_id == user_id)
-            if keep_session is not None:
-                sessions = sessions.where(session_table.c.id != keep_session)
-            conn.execute(sessions)
-            self._audit.record(actor, source, "user.password", row.username, conn=conn)
+        self.update_user(
+            user_id, password=password, actor=actor, source=source, keep_session=keep_session
+        )
 
     def verify_password(self, user_id: int, password: str) -> bool:
         with self._engine.connect() as conn:
@@ -270,7 +302,7 @@ class AuthService:
         return self._verify(row.password_hash, password)
 
     def delete_user(self, user_id: int, *, actor: str, source: Source) -> None:
-        with self._engine.begin() as conn:
+        with self._admin_lock, self._engine.begin() as conn:
             row = self._get(conn, user_id)
             if row.role == "admin" and self._admin_count(conn) == 1:
                 raise LastAdminError()

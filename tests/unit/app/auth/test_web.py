@@ -90,6 +90,18 @@ def test_last_admin_cannot_delete_itself(make_client, auth) -> None:
     }
 
 
+def test_rejected_role_change_leaves_the_password_unchanged(make_client, auth) -> None:
+    client = make_client()
+    csrf = login_as(client, auth, "admin", username="chris")
+    me = client.get("/api/auth/me").json()["user"]["id"]
+    response = client.patch(
+        f"/api/users/{me}", json={"password": "neues-passwort-1", "role": "viewer"}, headers=csrf
+    )
+    assert response.status_code == 409
+    assert auth.verify_password(me, PASSWORD)
+    assert client.get("/api/audit").json()[0]["action"] == "user.create"
+
+
 def test_lockout_answers_429_with_retry_after(make_client, auth) -> None:
     client = make_client()
     auth.create_user("chris", PASSWORD, "viewer", actor="cli", source="cli")

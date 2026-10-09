@@ -1,5 +1,6 @@
 from pathlib import Path
 
+from fastapi import APIRouter
 from fastapi.testclient import TestClient
 
 from bindaems.app.api.server import create_app
@@ -21,6 +22,22 @@ def test_security_headers_on_every_response() -> None:
 def test_unknown_api_path_is_german_404_and_not_cached() -> None:
     response = TestClient(create_app([])).get("/api/gibt-es-nicht")
     assert response.status_code == 404 and response.json() == {"detail": "Nicht gefunden"}
+    assert response.headers["cache-control"] == "no-store"
+
+
+def test_unexpected_error_is_german_json_with_security_headers() -> None:
+    router = APIRouter()
+
+    @router.get("/api/kaputt")
+    def broken() -> None:
+        raise RuntimeError("Interna aus dem Stacktrace")
+
+    client = TestClient(create_app([router]), raise_server_exceptions=False)
+    response = client.get("/api/kaputt")
+    assert response.status_code == 500
+    assert response.json() == {"detail": "Interner Fehler"}
+    assert response.headers["x-content-type-options"] == "nosniff"
+    assert "frame-ancestors 'none'" in response.headers["content-security-policy"]
     assert response.headers["cache-control"] == "no-store"
 
 

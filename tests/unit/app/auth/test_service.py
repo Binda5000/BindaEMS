@@ -261,3 +261,37 @@ def test_password_checks_run_at_most_two_at_a_time(engine, clock, audit) -> None
     auth = AuthService(engine, clock, audit, hasher=hasher)
     _parallel_logins(auth, [f"gast{i}" for i in range(12)])  # Argon2 braucht je 64 MiB
     assert 1 <= hasher.peak <= 2
+
+
+def _demote_in_parallel(auth: AuthService, user_ids: list[int]) -> list[str]:
+    results: list[str] = []
+
+    def demote(user_id: int) -> None:
+        try:
+            auth.set_role(user_id, "viewer", actor="test", source="ui")
+            results.append("ok")
+        except LastAdminError:
+            results.append("last-admin")
+
+    threads = [threading.Thread(target=demote, args=(user_id,)) for user_id in user_ids]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    return results
+
+
+def test_parallel_demotions_keep_one_admin(auth, monkeypatch) -> None:
+    anna = auth.create_user("anna", PASSWORD, "admin", actor="cli", source="cli")
+    bert = auth.create_user("bert", PASSWORD, "admin", actor="cli", source="cli")
+    count = AuthService._admin_count
+
+    def slow_count(conn):
+        result = count(conn)
+        time.sleep(0.05)  # Zeitfenster zwischen Zählen und Ändern weiten
+        return result
+
+    monkeypatch.setattr(AuthService, "_admin_count", staticmethod(slow_count))
+    results = _demote_in_parallel(auth, [anna.id, bert.id])
+    assert sorted(results) == ["last-admin", "ok"]
+    assert [user.role for user in auth.list_users()].count("admin") == 1
