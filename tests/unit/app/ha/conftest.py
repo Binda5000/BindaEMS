@@ -26,16 +26,24 @@ class FakeTransport:
     """Zeichnet Veröffentlichungen, Abos, Verbindungen und Wartezeiten auf."""
 
     def __init__(
-        self, incoming: Iterable[tuple[str, bytes]], fail_first_connection: bool, interval: float
+        self,
+        incoming: Iterable[tuple[str, bytes]],
+        fail_first_connection: bool,
+        interval: float,
+        stream_error: Exception | None = None,
+        stream_ends: bool = False,
     ) -> None:
         self.published: list[tuple[str, str, bool]] = []
         self.subscriptions: list[str] = []
         self.connections = 0
+        self.streams = 0
         self.sleeps: list[float] = []
         self.ticks = 0
         self._incoming = list(incoming)
         self._fail_first = fail_first_connection
         self._interval = interval
+        self._stream_error = stream_error
+        self._stream_ends = stream_ends
 
     async def __aenter__(self) -> "FakeTransport":
         self.connections += 1
@@ -53,9 +61,14 @@ class FakeTransport:
         self.subscriptions.append(topic)
 
     async def messages(self):
+        self.streams += 1
         incoming, self._incoming = self._incoming, []
         for item in incoming:
             yield item
+        if self.streams == 1 and self._stream_error is not None:
+            raise self._stream_error  # laufende Verbindung bricht ab
+        if self.streams == 1 and self._stream_ends:
+            return  # Nachrichtenstrom endet ohne Fehler
         await asyncio.Event().wait()  # Verbindung bleibt offen
 
     async def sleep(self, seconds: float) -> None:
@@ -115,10 +128,19 @@ def forecast_service() -> FakeForecast:
 @pytest.fixture
 def publisher_env(cfg):
     def build(
-        incoming: Iterable[tuple[str, bytes]] = (), fail_first_connection: bool = False
+        incoming: Iterable[tuple[str, bytes]] = (),
+        fail_first_connection: bool = False,
+        stream_error: Exception | None = None,
+        stream_ends: bool = False,
     ) -> tuple[HaPublisher, FakeTransport]:
         mqtt = cfg.homeassistant.mqtt
-        transport = FakeTransport(incoming, fail_first_connection, mqtt.publish_interval_s)
+        transport = FakeTransport(
+            incoming,
+            fail_first_connection,
+            mqtt.publish_interval_s,
+            stream_error=stream_error,
+            stream_ends=stream_ends,
+        )
         publisher = HaPublisher(
             mqtt,
             build_entities(cfg),

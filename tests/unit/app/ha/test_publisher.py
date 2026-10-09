@@ -85,6 +85,37 @@ async def test_status_reports_connection_error(publisher_env) -> None:
     assert not status.ok and "Mosquitto nicht erreichbar" in status.message
 
 
+async def test_dropped_session_reconnects_and_republishes(publisher_env) -> None:
+    publisher, transport = publisher_env(stream_error=ConnectionError("Verbindung verloren"))
+    await run_publisher_until(
+        publisher,
+        lambda: (
+            transport.count("homeassistant/sensor/bindaems/price_now/config") == 2
+            and publisher.component_status().ok
+        ),
+    )
+    assert transport.connections == 2
+    assert transport.sleeps == [1.0]
+    assert transport.count("bindaems/state/price_now") == 2
+
+
+async def test_status_names_the_cause_of_a_dropped_session(publisher_env) -> None:
+    # Die Aufgabengruppe der Sitzung verpackt den Fehler; der Status nennt die Ursache
+    publisher, transport = publisher_env(stream_error=ConnectionError("Verbindung verloren"))
+    await run_publisher_until(publisher, lambda: transport.sleeps == [1.0])
+    status = publisher.component_status()
+    assert status.message == "MQTT nicht verbunden: ConnectionError: Verbindung verloren"
+
+
+async def test_ended_message_stream_reconnects(publisher_env) -> None:
+    publisher, transport = publisher_env(stream_ends=True)
+    await run_publisher_until(
+        publisher, lambda: transport.connections == 2 and publisher.component_status().ok
+    )
+    assert transport.sleeps == [1.0]
+    assert transport.count("homeassistant/sensor/bindaems/price_now/config") == 2
+
+
 def test_only_allowed_topics_are_published(cfg) -> None:
     pattern = allowed_topic(cfg.homeassistant.mqtt)
     assert pattern.fullmatch("homeassistant/sensor/bindaems/price_now/config")

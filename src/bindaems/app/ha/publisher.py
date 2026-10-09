@@ -95,6 +95,13 @@ class AiomqttHaTransport:
             yield str(message.topic), _payload_bytes(message.payload)
 
 
+def _cause(exc: BaseException) -> str:
+    """Fehlertext für den Status; aus der Aufgabengruppe der Sitzung die eigentliche Ursache."""
+    while isinstance(exc, BaseExceptionGroup) and exc.exceptions:
+        exc = exc.exceptions[0]
+    return f"{type(exc).__name__}: {exc}"
+
+
 def allowed_topic(mqtt: HaMqttConfig) -> re.Pattern[str]:
     prefix, base = re.escape(mqtt.discovery_prefix), re.escape(mqtt.base_topic)
     return re.compile(
@@ -137,7 +144,7 @@ class HaPublisher:
                         raise
                 error = "Verbindung beendet"
             except Exception as exc:  # jede Störung führt zum Neuverbinden
-                error = f"{type(exc).__name__}: {exc}"
+                error = _cause(exc)
             self._connected, self._error = False, error
             self._sent.clear()
             delay = self._backoff.next()
@@ -179,6 +186,7 @@ class HaPublisher:
             if topic == birth and payload.strip() == b"online":
                 async with lock:
                     await self._publish_all(transport)  # HA neu gestartet
+        raise ConnectionError("Nachrichtenstrom beendet")  # neu verbinden
 
     async def _publish_all(self, transport: HaTransport) -> None:
         for spec in self._entities:

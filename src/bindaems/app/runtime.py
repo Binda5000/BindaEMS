@@ -151,6 +151,7 @@ class AppRuntime:
         self.ha_values = HaValueCache(self.reader, ha_database) if ha_database is not None else None
         self.ha_publisher: HaPublisher | None = None
         self._ha_inputs: HaInputs | None = None
+        self._ha_ready = asyncio.Event()  # erste Werte für HA bestimmt
         mqtt = cfg.homeassistant.mqtt if cfg.homeassistant is not None else None
         if mqtt is not None:
             self.ha_publisher = HaPublisher(
@@ -211,7 +212,9 @@ class AppRuntime:
         )
 
     def _current_ha_inputs(self) -> HaInputs:
-        return self._ha_inputs if self._ha_inputs is not None else self._build_ha_inputs()
+        if self._ha_inputs is None:  # der Publisher startet erst nach den ersten Werten
+            raise RuntimeError("Werte für Home Assistant noch nicht bestimmt")
+        return self._ha_inputs
 
     def _build_ha_inputs(self) -> HaInputs:
         return build_inputs(
@@ -238,7 +241,10 @@ class AppRuntime:
         if self.ha_values is not None:
             jobs.append(("ha-values", partial(self._ha_values_loop, self.ha_values)))
         if self.ha_publisher is not None:
-            jobs += [("ha-inputs", self._ha_inputs_loop), ("ha", self.ha_publisher.run)]
+            jobs += [
+                ("ha-inputs", self._ha_inputs_loop),
+                ("ha", partial(self._ha_loop, self.ha_publisher)),
+            ]
         async with asyncio.TaskGroup() as group:
             self._tasks = [
                 group.create_task(self._supervise(name, job), name=name) for name, job in jobs
@@ -303,9 +309,15 @@ class AppRuntime:
         while True:
             try:
                 self._ha_inputs = await asyncio.to_thread(self._build_ha_inputs)
+                self._ha_ready.set()
             except Exception:
                 log.exception("Werte für Home Assistant nicht bestimmbar")
             await asyncio.sleep(HA_INPUTS_S)
+
+    async def _ha_loop(self, publisher: HaPublisher) -> None:
+        """Verbindet erst, wenn die ersten Werte bestimmt sind."""
+        await self._ha_ready.wait()
+        await publisher.run()
 
     async def _maintenance_loop(self) -> None:
         while True:
