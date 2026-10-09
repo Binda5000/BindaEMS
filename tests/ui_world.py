@@ -78,6 +78,15 @@ _MEAN = re.compile(
     r"WHERE .*time >= (?P<start>\d+)ms AND time < (?P<end>\d+)ms "
     r"GROUP BY time\((?P<step>\d+)s\)"
 )
+_ID_TAG = re.compile(r"\"id\"='(?P<id>[^']*)'")
+# Leistung je Reihe in W: Grundwert und Anteil, der mit der Sonne steigt
+POWER_SHAPES = {
+    "grid": (500.0, -1400.0),
+    "pv_total": (0.0, 3400.0),
+    "battery": (-250.0, 1300.0),
+    "house_load": (900.0, 450.0),
+    "consumption": (1100.0, 1800.0),
+}
 _LAST = re.compile(r'^SELECT last\("value"\) AS "v" FROM ')
 _ENTITY = re.compile(r"\"domain\"='(?P<domain>[^']*)' AND \"entity_id\"='(?P<object_id>[^']*)'")
 _SHOW_SERIES = re.compile(r'^SHOW SERIES FROM "W","kW"$')
@@ -137,17 +146,18 @@ def _ledger_messages() -> list[dict[str, Any]]:
     return messages
 
 
-def _curve(measurement: str, ms: int) -> float:
-    """Deterministische Tageskurve je Messgröße (Maximum der Sonne um 12:00 UTC)."""
+def _curve(measurement: str, ms: int, series_id: str) -> float:
+    """Deterministische Tageskurve je Messgröße und Reihe (Maximum der Sonne um 12:00 UTC)."""
     hour = (ms / 3_600_000) % 24
     sun = math.sin(2 * math.pi * (hour - 6) / 24)
     if measurement == "soc":
-        return round(55 + 30 * sun, 1)
+        return round(55 + 30 * sun if series_id == "battery" else 60 + 10 * sun, 1)
     if measurement == "price":
         return round(14 + 5 * math.sin(2 * math.pi * (hour - 12) / 24), 2)  # Abends teuer
     if measurement == "forecast":
         return round(max(0.0, 3.5 * sun), 3)  # kW
-    return round(800 + 2400 * max(0.0, sun), 1)  # Leistung in W
+    base, solar = POWER_SHAPES.get(series_id, (150.0, 700.0))
+    return round(base + solar * max(0.0, sun), 1)  # Leistung in W
 
 
 def _influx_result(series: list[dict[str, Any]]) -> httpx.Response:
@@ -163,9 +173,10 @@ def _influx(request: httpx.Request) -> httpx.Response:
     if mean := _MEAN.search(query):
         start, end = int(mean["start"]), int(mean["end"])
         interval = max(int(mean["step"]), 900) * 1000
+        tag = _ID_TAG.search(query)
         first = -(-start // interval) * interval
         values = [
-            [ms, _curve(mean["measurement"], ms)]
+            [ms, _curve(mean["measurement"], ms, tag["id"] if tag else "")]
             for index, ms in enumerate(range(first, end, interval))
             if index != MISSING_POINT
         ]

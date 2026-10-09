@@ -1,7 +1,7 @@
 // Optionen für ECharts: Zeitachse in Wien, Farben nur aus der Palette
 import type { LineSeriesOption } from 'echarts/charts';
 import type { EChartsCoreOption } from 'echarts/core';
-import type { ForecastSlot, PriceSlot } from '$lib/api/schemas';
+import type { ForecastSlot, HistoryResponse, PriceSlot } from '$lib/api/schemas';
 import { DASH, NBSP, formatCt, formatDay, formatNumber, formatTime } from '$lib/format';
 import { parseIso, todayVienna } from '$lib/time';
 import type { Palette } from './palette';
@@ -139,6 +139,74 @@ export function priceForecastOption(
 			formatter: axisTooltip({ Bezugspreis: formatCt, Einspeisung: formatCt, 'PV-Prognose': kw })
 		},
 		yAxis: [valueAxis('ct/kWh', palette), valueAxis('kW', palette, forecast.length > 0)],
+		series
+	};
+}
+
+/** Üblicher Punktabstand einer Reihe (unterer Median der Abstände) */
+function typicalInterval(points: [number, number][]): number {
+	const gaps = points.slice(1).map(([time], index) => time - points[index][0]);
+	gaps.sort((a, b) => a - b);
+	return gaps.length > 0 ? gaps[Math.floor((gaps.length - 1) / 2)] : 0;
+}
+
+/**
+ * Lücke, wenn zwei Punkte mehr als 1,5 Raster auseinander liegen (fehlende Messwerte). Das
+ * Raster ist der Schritt der Abfrage oder, wenn die Reihe gröber vorliegt (Preis und Prognose
+ * je Viertelstunde), ihr üblicher Punktabstand.
+ */
+function withGaps(points: [number, number][], stepMs: number, scale: number): Point[] {
+	const interval = Math.max(stepMs, typicalInterval(points));
+	const result: Point[] = [];
+	let previous: number | null = null;
+	for (const [time, value] of points) {
+		if (previous !== null && time - previous > 1.5 * interval) {
+			result.push([previous + interval, null]);
+		}
+		result.push([time, scale === 1 ? value : value / scale]);
+		previous = time;
+	}
+	return result;
+}
+
+function unitFormat(unit: string): ValueFormat {
+	if (unit === '%') return (value) => `${formatNumber(value, 0)}${NBSP}%`;
+	if (unit === 'ct/kWh') return formatCt;
+	return (value) => `${formatNumber(value, 2)}${NBSP}${unit}`;
+}
+
+export function historyOption(data: HistoryResponse, palette: Palette): EChartsCoreOption {
+	const units: string[] = [];
+	const formats: Record<string, ValueFormat> = {};
+	const series: LineSeriesOption[] = Object.values(data.series).map((entry, index) => {
+		const unit = entry.unit === 'W' ? 'kW' : entry.unit; // Leistung in kW
+		if (!units.includes(unit)) units.push(unit);
+		formats[entry.label] = unitFormat(unit);
+		const color = palette.series[index % palette.series.length];
+		return {
+			name: entry.label,
+			type: 'line',
+			yAxisIndex: units.indexOf(unit),
+			showSymbol: false,
+			data: withGaps(entry.points, data.step_s * 1000, entry.unit === 'W' ? 1000 : 1),
+			lineStyle: { color, width: 1.5 },
+			itemStyle: { color }
+		};
+	});
+	return {
+		...baseOption(palette),
+		grid: { left: 8, right: 8, top: 40, bottom: 44, containLabel: true },
+		tooltip: { trigger: 'axis', formatter: axisTooltip(formats) },
+		dataZoom: [
+			{ type: 'inside' },
+			{ type: 'slider', height: 20, bottom: 8, textStyle: { color: palette.muted } }
+		],
+		yAxis: units.map((unit, index) => ({
+			...valueAxis(unit, palette),
+			position: index % 2 === 0 ? 'left' : 'right',
+			offset: Math.floor(index / 2) * 48,
+			splitLine: { show: index === 0, lineStyle: { color: palette.grid } }
+		})),
 		series
 	};
 }

@@ -1,14 +1,17 @@
 // Testdaten aus den Vertragsdateien (nur für Tests), jedes Mal frisch durch das Schema geprüft
 import * as v from 'valibot';
+import ledgerDaysJson from '$lib/api/contract/ledger-days.json';
 import limitsJson from '$lib/api/contract/limits.json';
 import stateJson from '$lib/api/contract/state.json';
 import systemJson from '$lib/api/contract/system.json';
 import {
+	DaySummarySchema,
 	LimitsSchema,
 	ReadingSchema,
 	StateResponseSchema,
 	SystemResponseSchema,
 	type CoreState,
+	type DaySummary,
 	type Derived,
 	type Limits,
 	type Reading,
@@ -38,4 +41,11 @@ export function limits(): Limits {
 
 export function system(): SystemResponse {
 	return v.parse(SystemResponseSchema, systemJson);
+}
+
+/** Ein Tag der Abrechnung (09.10. der Demo-Welt), einzelne Felder überschreibbar */
+export function daySummary(overrides: Partial<DaySummary> = {}): DaySummary {
+	const days = v.parse(v.array(DaySummarySchema), ledgerDaysJson);
+	const base = days.find((day) => day.slots > 0) ?? days[0];
+	return { ...base, ...overrides };
 }

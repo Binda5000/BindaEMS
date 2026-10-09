@@ -1,7 +1,7 @@
 import type { LineSeriesOption, YAXisComponentOption } from 'echarts';
 import { describe, expect, it } from 'vitest';
 import type { PriceSlot } from '$lib/api/schemas';
-import { priceForecastOption } from './options';
+import { historyOption, priceForecastOption } from './options';
 import type { Palette } from './palette';
 
 const palette: Palette = {
@@ -59,5 +59,63 @@ describe('Preise und Prognose', () => {
 			'kW'
 		]);
 		expect(JSON.stringify(series[0].markLine)).toContain(String(at(5)));
+	});
+});
+
+describe('Verlauf', () => {
+	const data = {
+		rp: 'raw' as const,
+		step_s: 60,
+		series: {
+			grid: {
+				label: 'Netz',
+				unit: 'W',
+				points: [
+					[0, 1000],
+					[60_000, 2000],
+					[300_000, 3000]
+				] as [number, number][]
+			},
+			'soc.battery': { label: 'Akku-SOC', unit: '%', points: [[0, 55]] as [number, number][] }
+		}
+	};
+
+	it('trägt jede Einheit auf eigener Achse, Leistung in kW', () => {
+		const option = historyOption(data, palette);
+		expect((option.yAxis as YAXisComponentOption[]).map((axis) => axis.name)).toEqual(['kW', '%']);
+		const [grid, soc] = option.series as LineSeriesOption[];
+		expect([grid.name, grid.yAxisIndex, soc.name, soc.yAxisIndex]).toEqual([
+			'Netz',
+			0,
+			'Akku-SOC',
+			1
+		]);
+	});
+
+	it('unterbricht die Linie bei Lücken', () => {
+		const [grid] = historyOption(data, palette).series as LineSeriesOption[];
+		expect(grid.data).toEqual([
+			[0, 1],
+			[60_000, 2],
+			[120_000, null],
+			[300_000, 3]
+		]);
+	});
+	it('bricht Reihen im Viertelstundenraster bei kleinerem Schritt nicht auf', () => {
+		// Preis und Prognose liegen je Viertelstunde vor, ein Tag wird aber mit 5 min abgefragt
+		const quarter = [0, 1, 2, 4].map((k): [number, number] => [k * 900_000, 20 + k]);
+		const prices = {
+			rp: 'long' as const,
+			step_s: 300,
+			series: { price: { label: 'Bezugspreis', unit: 'ct/kWh', points: quarter } }
+		};
+		const [price] = historyOption(prices, palette).series as LineSeriesOption[];
+		expect(price.data).toEqual([
+			[0, 20],
+			[900_000, 21],
+			[1_800_000, 22],
+			[2_700_000, null],
+			[3_600_000, 24]
+		]);
 	});
 });
