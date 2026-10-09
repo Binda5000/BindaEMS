@@ -83,6 +83,10 @@ homeassistant:
   url: http://homeassistant.lan:8123
   entities:             # Signalname → entity_id
     vehicle.egolf.soc_pct: sensor.egolf_soc
+  mqtt:                 # MQTT Discovery am bestehenden Mosquitto (eigener Benutzer bindaems)
+    host: homeassistant.lan
+    port: 1883
+    username: bindaems
 
 influxdb:
   url: http://influx.lan:8086
@@ -98,3 +102,9 @@ telemetry:
 core_api:
   host: 0.0.0.0
   port: 8081
+
+app:
+  port: 8080
+  core_url: http://ems-core:8081
+  trusted_proxies: [192.168.1.10]   # IP-Adresse des Reverse Proxy
+  cookie_secure: true

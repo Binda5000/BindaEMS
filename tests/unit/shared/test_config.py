@@ -83,3 +83,55 @@ def test_empty_secret_variables_count_as_unset(monkeypatch) -> None:
     monkeypatch.setenv("BINDAEMS_MQTT_PASSWORD", "")
     secrets = load_secrets()
     assert secrets.tessie_token is None and secrets.mqtt_password is None
+
+
+def test_app_and_ha_mqtt_from_example() -> None:
+    cfg = load_config(EXAMPLE)
+    assert (cfg.app.port, cfg.app.core_url) == (8080, "http://ems-core:8081")
+    assert (cfg.app.data_dir, cfg.app.backup_dir) == (Path("/data"), Path("/backup"))
+    assert cfg.app.trusted_proxies == ["192.168.1.10"]
+    assert cfg.app.cookie_secure is True and cfg.app.ui_dir is None
+    assert cfg.homeassistant is not None
+    mqtt = cfg.homeassistant.mqtt
+    assert mqtt is not None
+    assert (mqtt.host, mqtt.port, mqtt.tls, mqtt.username) == (
+        "homeassistant.lan",
+        1883,
+        False,
+        "bindaems",
+    )
+    assert (mqtt.discovery_prefix, mqtt.base_topic, mqtt.publish_interval_s) == (
+        "homeassistant",
+        "bindaems",
+        10.0,
+    )
+
+
+def test_app_section_is_optional(tmp_path: Path) -> None:
+    cfg = load_config(write_cfg(tmp_path, lambda d: d.pop("app")))
+    assert cfg.app.port == 8080 and cfg.app.trusted_proxies == []
+
+
+@pytest.mark.parametrize("value", ["proxy.lan", "300.1.1.1", "10.0.0.0/33"])
+def test_trusted_proxies_must_be_ip_or_network(tmp_path: Path, value: str) -> None:
+    p = write_cfg(tmp_path, lambda d: d["app"].update(trusted_proxies=[value]))
+    with pytest.raises(ConfigError, match="trusted_proxies"):
+        load_config(p)
+
+
+def test_trusted_proxies_accept_addresses_and_networks(tmp_path: Path) -> None:
+    p = write_cfg(tmp_path, lambda d: d["app"].update(trusted_proxies=["10.0.0.0/8", "fd00::1"]))
+    assert load_config(p).app.trusted_proxies == ["10.0.0.0/8", "fd00::1"]
+
+
+def test_ha_mqtt_topics_must_be_plain_names(tmp_path: Path) -> None:
+    p = write_cfg(tmp_path, lambda d: d["homeassistant"]["mqtt"].update(base_topic="bindaems/#"))
+    with pytest.raises(ConfigError, match="base_topic"):
+        load_config(p)
+
+
+def test_ha_mqtt_password_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("BINDAEMS_INTERNAL_TOKEN", "x" * 32)
+    monkeypatch.setenv("BINDAEMS_HA_MQTT_PASSWORD", "mqtt-geheim")
+    password = load_secrets().ha_mqtt_password
+    assert password is not None and password.get_secret_value() == "mqtt-geheim"

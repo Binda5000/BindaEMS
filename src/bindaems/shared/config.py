@@ -7,6 +7,7 @@ Umgebungsvariablen mit dem Präfix ``BINDAEMS_``.
 
 from __future__ import annotations
 
+import ipaddress
 from pathlib import Path
 from typing import Annotated, Any, Literal, Self
 
@@ -194,9 +195,24 @@ class PvConfig(_Model):
     inverter_ac_max_w: Annotated[float, Field(gt=0)]
 
 
+class HaMqttConfig(_Model):
+    """MQTT Discovery am bestehenden Mosquitto von Home Assistant (eigener Benutzer)."""
+
+    host: str
+    port: Annotated[int, Field(ge=1, le=65535)] = 1883
+    tls: bool = False
+    tls_verify: bool = True
+    tls_ca_file: Path | None = None
+    username: str | None = "bindaems"
+    discovery_prefix: Annotated[str, Field(pattern=r"^[a-z0-9_]+$")] = "homeassistant"
+    base_topic: Annotated[str, Field(pattern=r"^[a-z0-9_]+$")] = "bindaems"
+    publish_interval_s: Annotated[float, Field(gt=0)] = 10.0
+
+
 class HomeAssistantConfig(_Model):
     url: Annotated[str, Field(pattern=r"^https?://")]
     entities: dict[str, str] = Field(default_factory=dict)
+    mqtt: HaMqttConfig | None = None
 
 
 class InfluxConfig(_Model):
@@ -217,6 +233,31 @@ class CoreApiConfig(_Model):
     port: Annotated[int, Field(ge=1, le=65535)] = 8081
 
 
+class AppConfig(_Model):
+    """ems-app: HTTP-Server, Datenablage und Anbindung an den core."""
+
+    host: str = "0.0.0.0"  # noqa: S104 - erreichbar nur über den Reverse Proxy
+    port: Annotated[int, Field(ge=1, le=65535)] = 8080
+    data_dir: Path = Path("/data")
+    backup_dir: Path = Path("/backup")
+    core_url: Annotated[str, Field(pattern=r"^https?://")] = "http://ems-core:8081"
+    trusted_proxies: list[str] = Field(default_factory=list)
+    cookie_secure: bool = True
+    ui_dir: Path | None = None
+
+    @field_validator("trusted_proxies")
+    @classmethod
+    def _proxies_are_networks(cls, value: list[str]) -> list[str]:
+        for entry in value:
+            try:
+                ipaddress.ip_network(entry, strict=False)
+            except ValueError:
+                raise ValueError(
+                    f"keine gültige IP-Adresse oder kein gültiges Netz: {entry}"
+                ) from None
+        return value
+
+
 class Config(_Model):
     site: SiteConfig
     grid: GridConfig
@@ -230,6 +271,7 @@ class Config(_Model):
     influxdb: InfluxConfig
     telemetry: TelemetryConfig = Field(default_factory=TelemetryConfig)
     core_api: CoreApiConfig = Field(default_factory=CoreApiConfig)
+    app: AppConfig = Field(default_factory=AppConfig)
 
     @model_validator(mode="after")
     def _cross_references(self) -> Self:
@@ -295,6 +337,7 @@ class Secrets(BaseSettings):
     tessie_token: SecretStr | None = None
     ha_token: SecretStr | None = None
     influx_password: SecretStr | None = None
+    ha_mqtt_password: SecretStr | None = None
     internal_token: SecretStr
 
     @field_validator("internal_token")
