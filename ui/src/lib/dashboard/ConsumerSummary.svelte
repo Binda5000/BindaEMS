@@ -112,8 +112,26 @@
 	.name {
 		display: inline-flex;
 		align-items: baseline;
-		overflow-wrap: break-word;
+		/* in Tabellen zählt nur „anywhere“: lange Namen brechen, statt die Seite zu verbreitern */
+		overflow-wrap: anywhere;
 		hyphens: auto;
+	}
+
+	/* drei Spalten bei 360 px auch mit breiter Schrift (DejaVu Sans in der CI) */
+	@media (max-width: 400px) {
+		.summary td,
+		.summary th {
+			padding: 0.25rem;
+		}
+
+		.consumer td:first-child,
+		.other td:first-child {
+			padding-left: 0.75rem;
+		}
+
+		.summary .num {
+			font-size: 0.875rem;
+		}
 	}
 
 	.swatch {
