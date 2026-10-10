@@ -1,6 +1,6 @@
 // Tagesbilanz aus der Abrechnung: formatierte Zellen je Tag und die Zählerstände für VRM
 import type { DaySummary } from '$lib/api/schemas';
-import { formatDay, formatEnergy, formatEur, formatRatio } from '$lib/format';
+import { NBSP, formatDay, formatEnergy, formatEur, formatNumber, formatRatio } from '$lib/format';
 
 export type BalanceColumn =
 	| 'coverage'
@@ -56,12 +56,21 @@ export function counterLabel(key: string): string {
 	return key;
 }
 
+/**
+ * Abdeckung: Slots mit Daten und Anteil der aufgezeichneten Zeit. Der Anteil wird abgerundet –
+ * „100 %“ heißt lückenlos (der core zieht jede Lücke über 5 s ab), auch wenn alle Slots da sind.
+ */
+function coverageText(day: DaySummary): string {
+	const percent = day.coverage >= 1 ? '100' : formatNumber(Math.floor(day.coverage * 1000) / 10, 1);
+	return `${day.slots} von ${day.expected_slots} · ${percent}${NBSP}%`;
+}
+
 export function balanceRows(days: DaySummary[]): BalanceRow[] {
 	return days.map((day) => ({
 		date: day.date,
 		day: formatDay(day.date),
 		cells: {
-			coverage: `${day.slots} von ${day.expected_slots}`,
+			coverage: coverageText(day),
 			pv: formatEnergy(day.pv_kwh),
 			import: formatEnergy(day.import_kwh),
 			export: formatEnergy(day.export_kwh),

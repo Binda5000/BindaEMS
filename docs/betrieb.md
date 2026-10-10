@@ -415,7 +415,7 @@ gilt für diesen Browser.
 | Seite | Inhalt |
 |---|---|
 | Übersicht | Energiefluss live, Strompreis jetzt und die nächsten 3 h, Ladestände, Preise und PV-Prognose für heute und morgen, Hinweise, Verbraucher |
-| Verlauf | Diagramm mit bis zu 8 Reihen für frei wählbare Tage (höchstens 400), Tagesbilanz mit Kosten, Erlös, Autarkie und den Zählerständen für den Abgleich mit VRM |
+| Verlauf | Diagramm mit bis zu 8 Reihen für frei wählbare Tage (höchstens 400), Tagesbilanz mit Abdeckung (Viertelstunden und Anteil der aufgezeichneten Zeit), Kosten, Erlös, Autarkie und den Zählerständen für den Abgleich mit VRM |
 | Verbraucher | Verbraucherbaum mit „Sonstiges“; Admins legen Verbraucher an, ändern und löschen sie |
 | System | Komponenten, Hinweise, core (Adapter, Selbstprüfung, Alarme), Preise (Admins: „Preise jetzt abrufen“), PV-Prognose, alle Signale mit Suche |
 | Einstellungen | Tarif, OeMAG-Werte, Preise, PV-Modell und harte Grenzen; Admins bearbeiten, bewerten neu und exportieren oder importieren (Abschnitt 8) |

@@ -26,22 +26,24 @@ Prüfschritte:
 1. **Verlauf:** Erster Tag und Letzter Tag auf die 7 Prüftage setzen (oder „7 Tage“), Reihen
    Netz, PV, Akku und Haus wählen. Die Linien laufen ohne Unterbrechung durch.
 2. **Tagesbilanz** (unter dem Diagramm): An allen 7 Tagen steht volle Abdeckung, also
-   „96 von 96“. Am Tag der Umstellung auf Sommerzeit gilt „92 von 92“, am Tag der Umstellung auf
-   Winterzeit „100 von 100“.
+   „96 von 96 · 100 %“. Am Tag der Umstellung auf Sommerzeit gilt „92 von 92 · 100 %“, am Tag
+   der Umstellung auf Winterzeit „100 von 100 · 100 %“. Die Prozentzahl ist der Anteil der
+   aufgezeichneten Zeit und wird abgerundet: Schon eine Lücke von mehr als 5 s drückt sie unter
+   100 %, auch wenn alle Viertelstunden Daten haben.
 3. **System:** Die Komponente InfluxDB meldet „InfluxDB: alles übertragen“, core ist verbunden
    und die Selbstprüfung zeigt keinen Fehler.
 
 Nachweis: Bildschirmfoto von Verlauf und Tagesbilanz, Werte in der Tabelle.
 
-| Tag | Abdeckung | Lücken im Diagramm | Bemerkung |
+| Tag | Abdeckung (Viertelstunden · %) | Lücken im Diagramm | Bemerkung |
 |---|---|---|---|
-| 1 | von | ☐ keine | |
-| 2 | von | ☐ keine | |
-| 3 | von | ☐ keine | |
-| 4 | von | ☐ keine | |
-| 5 | von | ☐ keine | |
-| 6 | von | ☐ keine | |
-| 7 | von | ☐ keine | |
+| 1 | von · % | ☐ keine | |
+| 2 | von · % | ☐ keine | |
+| 3 | von · % | ☐ keine | |
+| 4 | von · % | ☐ keine | |
+| 5 | von · % | ☐ keine | |
+| 6 | von · % | ☐ keine | |
+| 7 | von · % | ☐ keine | |
 
 Datum: ________ Ergebnis: ☐ bestanden ☐ nicht bestanden Unterschrift: ________
 
