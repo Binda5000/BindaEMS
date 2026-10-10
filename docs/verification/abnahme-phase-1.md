@@ -31,7 +31,8 @@ Prüfschritte:
    aufgezeichneten Zeit und wird abgerundet: Schon eine Lücke von mehr als 5 s drückt sie unter
    100 %, auch wenn alle Viertelstunden Daten haben.
 3. **System:** Die Komponente InfluxDB meldet „InfluxDB: alles übertragen“, core ist verbunden
-   und die Selbstprüfung zeigt keinen Fehler.
+   und die Selbstprüfung zeigt keinen Fehler. Einzige Ausnahme: „Dynamic ESS ist aktiv“. DESS
+   bleibt nach Entscheidung des Betreibers vom 10.10.2026 an, bis Phase 2 live schaltet.
 
 Nachweis: Bildschirmfoto von Verlauf und Tagesbilanz, Werte in der Tabelle.
 

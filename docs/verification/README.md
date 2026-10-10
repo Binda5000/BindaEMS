@@ -41,7 +41,8 @@ Lokal aus dem Repository geht es mit:
   - Koordinaten (`latitude`/`longitude`) und die VIN werden geschwärzt.
   - Vom Cerbo werden nur die benötigten Teilbäume gespeichert (Messwerte, ESS-, DESS- und
     DVCC-Einstellungen, Firmware); andere Einstellungen wie die BLE-PIN nicht.
-  - So können beide Dateien in dieses Verzeichnis eingecheckt werden.
+  - Trotzdem enthalten die Rohdaten Portal-ID, Seriennummern und alle Messungen der
+    HA-Datenbank. Solange das Repository öffentlich ist, wird nur der Bericht eingecheckt.
 - Ist eine Quelle nicht erreichbar, steht im Bericht ein FEHLER mit der Meldung. Die übrigen
   Prüfungen laufen trotzdem.
 
@@ -53,6 +54,9 @@ Lokal aus dem Repository geht es mit:
    - Die Vorzeichenkonvention des Netzstroms lässt sich nur bei Einspeisung über 100 W
      bestimmen.
    - Ein aktiver Ladeplan im Fahrzeug muss aus.
+   - „EVCS-Registerabbild leer“: Unter `host` und `unit_id` antwortet etwas, aber nicht die
+     EVCS. Der Bericht nennt den Weg, über den der Cerbo die Wallbox liest; `host` dorthin
+     stellen und Teil 1 wiederholen.
 3. Den Bericht mit Datum einchecken.
 
 ### Manuell zu prüfen

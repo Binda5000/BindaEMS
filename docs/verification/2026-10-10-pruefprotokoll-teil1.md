@@ -53,11 +53,20 @@
 ## Bewertung vom 10.10.2026
 
 - **Dynamic ESS aktiv (17.1-2):** Spec 3.2 und 7.2 verlangen DESS aus, bevor das EMS schreibt.
-  Wann DESS ausgeschaltet wird, entscheidet der Betreiber. Offen.
+  Entscheidung des Betreibers: DESS bleibt an, bis Phase 2 live schaltet. Bis dahin ist der
+  Fehler in der Selbstprüfung erwartet; die Abnahme-Checkliste lässt ihn zu.
 - **EVCS-Registerabbild leer (17.1-8):** Die Register 5000–5199 sind alle 0, auch Produkt-ID
-  und Firmware. Der „manuelle Modus“ stammt aus Register 5009 = 0 und ist deshalb nicht
-  belegt. Leistung und Energie der EVCS kommen über den GX (`evcharger` 40) und sind davon
-  nicht betroffen. Offen: Adresse und Modbus-Einstellungen der EVCS prüfen; der Weg für das
-  Schreiben wird in Prüfprotokoll Teil 2 festgelegt (Spec 8.6).
-- **Peak Shaving (17.1-2):** Importlimit 20 A mit „immer“. Spec 8.1 verlangt es knapp unter
-  der Hausanschlusssicherung (`grid.fuse_a`). Offen.
+  und Firmware. Der „manuelle Modus“ stammte aus Register 5009 = 0 und war damit nicht belegt.
+  - Die Rohdaten zeigen den Weg des Cerbo: `evcharger/40/Mgmt/Connection` = „Modbus TCP
+    192.168.81.41“ (`dbus-modbus-client`), Produkt-ID 49190 = 0xC026, Modell AC22NS, Modus 0
+    (manuell), Firmware 133631. Die EVCS ist also über Modbus TCP erreichbar und tatsächlich
+    im manuellen Modus.
+  - Offen: `wallboxes.evcs.host` mit 192.168.81.41 abgleichen und Teil 1 wiederholen.
+  - Seit dieser Prüfung liest die Selbstprüfung den EVCS-Modus vom Cerbo. Ein leeres
+    Registerabbild meldet das Werkzeug als WARNUNG mit dem Weg des Cerbo.
+  - Leistung und Energie der EVCS kommen über den Cerbo und sind nicht betroffen. Den Weg für
+    das Schreiben legt Prüfprotokoll Teil 2 fest (Spec 8.6).
+- **Peak Shaving (17.1-2):** Das Importlimit steht auf 20 A mit „immer“, die
+  Hausanschlusssicherung hat 35 A. Spec 8.1 verlangt das Limit knapp unter der Sicherung,
+  z. B. 33 A. Bis zum Ende der Abnahme bleibt es unverändert; umgestellt wird vor Phase 2.
+- **Akku (17.1-6):** 1880 Ah, etwa 96 kWh; `battery.usable_kwh` ist 96 (Angabe des Betreibers).
