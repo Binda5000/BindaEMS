@@ -10,6 +10,7 @@ mit harten Sicherheitsgrenzen (USV-Reserve, Hausanschluss) und nachvollziehbaren
 - Implementierungspläne: [`docs/superpowers/plans/`](docs/superpowers/plans/)
 - Betrieb und Bedienung: [`docs/betrieb.md`](docs/betrieb.md)
 - Prüfprotokolle und Abnahme: [`docs/verification/`](docs/verification/)
+- Stand und nächste Schritte (Übergabe): [`docs/uebergabe.md`](docs/uebergabe.md)
 
 ## Entwicklung
 
