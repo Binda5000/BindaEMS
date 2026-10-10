@@ -61,12 +61,14 @@
     192.168.81.41“ (`dbus-modbus-client`), Produkt-ID 49190 = 0xC026, Modell AC22NS, Modus 0
     (manuell), Firmware 133631. Die EVCS ist also über Modbus TCP erreichbar und tatsächlich
     im manuellen Modus.
-  - Offen: `wallboxes.evcs.host` mit 192.168.81.41 abgleichen und Teil 1 wiederholen.
+  - Nachtrag: Laut Betreiber stand `wallboxes.evcs.host` schon auf 192.168.81.41. Die
+    Adresse erklärt die Nullen also nicht. BindaEMS liest wie der Cerbo: Funktionscode 3,
+    Unit-ID 1, ab Register 5000. Die Ursache ist offen und wird vor Phase 2b geklärt.
   - Seit dieser Prüfung liest die Selbstprüfung den EVCS-Modus vom Cerbo. Ein leeres
     Registerabbild meldet das Werkzeug als WARNUNG mit dem Weg des Cerbo.
   - Leistung und Energie der EVCS kommen über den Cerbo und sind nicht betroffen. Den Weg für
     das Schreiben legt Prüfprotokoll Teil 2 fest (Spec 8.6).
 - **Peak Shaving (17.1-2):** Das Importlimit steht auf 20 A mit „immer“, die
   Hausanschlusssicherung hat 35 A. Spec 8.1 verlangt das Limit knapp unter der Sicherung,
-  z. B. 33 A. Bis zum Ende der Abnahme bleibt es unverändert; umgestellt wird vor Phase 2.
+  z. B. 33 A. Nachtrag: Laut Betreiber steht das Limit bei etwa 33 A; diese Prüfung las 20 A.
 - **Akku (17.1-6):** 1880 Ah, etwa 96 kWh; `battery.usable_kwh` ist 96 (Angabe des Betreibers).

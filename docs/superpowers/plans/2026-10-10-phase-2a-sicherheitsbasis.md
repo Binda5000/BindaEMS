@@ -54,9 +54,10 @@ Danach folgt die Abnahme der Phase 2 (Spec 18):
 2. Live-Schaltung je Aktor, in der Reihenfolge EVCS, Victron, Tesla.
 3. Vor der Live-Schaltung von Victron schaltet der Betreiber Dynamic ESS ab (Entscheidung vom 10.10.2026).
 
-Vorher an der Anlage zu erledigen (aus Prüfprotokoll Teil 1):
-- **Vor 2b:** `wallboxes.evcs.host` auf 192.168.81.41 stellen und Teil 1 wiederholen.
-- **Vor dem ersten Live-Aktor:** das Peak-Shaving-Importlimit knapp unter die Hausanschlusssicherung stellen, z. B. auf 33 A (Ebene 0).
+Stand an der Anlage (Angabe des Betreibers vom 10.10.2026):
+- `wallboxes.evcs.host` steht schon auf 192.168.81.41.
+- Das Peak-Shaving-Importlimit steht schon knapp unter der Hausanschlusssicherung, bei etwa 33 A (Ebene 0).
+- **Offen vor 2b:** Warum enthält das eigene EVCS-Registerabbild trotz richtiger Adresse nur Nullen (Prüfprotokoll Teil 1, 17.1-8)? Davon hängt ab, ob 2b direkt per Modbus oder über den GX-Dienst `evcharger` auf die EVCS schreibt.
 
 ## Präzisierungen gegenüber der Spec
 

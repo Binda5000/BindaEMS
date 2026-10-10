@@ -148,9 +148,10 @@ Demo-Zugänge: `admin`, `gast` (Lesen) und `sicher` (Admin mit TOTP, Geheimnis
   brutto). Teil 1 mit Befunden, siehe die Bewertung am Ende des Protokolls:
   - Dynamic ESS bleibt nach Entscheidung des Betreibers an, bis Phase 2 live schaltet.
   - Die EVCS (AC22NS, Produkt-ID 0xC026) liest der Cerbo per Modbus TCP unter
-    192.168.81.41; BindaEMS bekam nur Nullen. `wallboxes.evcs.host` abgleichen.
-  - Peak Shaving: Importlimit 20 A „immer“ bei 35 A Hausanschlusssicherung; vor Phase 2 auf
-    knapp unter 35 A stellen.
+    192.168.81.41. BindaEMS bekam unter derselben Adresse nur Nullen. `wallboxes.evcs.host`
+    stand laut Betreiber schon richtig; die Ursache ist offen und wird vor 2b geklärt.
+  - Peak Shaving: Laut Betreiber steht das Importlimit knapp unter der 35-A-Sicherung (etwa
+    33 A); das Protokoll vom 10.10. las noch 20 A.
   - Akku 96 kWh nutzbar.
 - **HA-Daten in InfluxDB:** Datenbank `homeassistant`, `bindaems` hat READ. HA schreibt mit
   `measurement_attr: entity_id`:
