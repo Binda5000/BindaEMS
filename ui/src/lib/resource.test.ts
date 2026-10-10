@@ -68,3 +68,23 @@ it('stop bricht die laufende Anfrage ab', async () => {
 	stop();
 	expect(signal?.aborted).toBe(true);
 });
+
+it('lädt einmalige Daten nach einem Fehler erneut, danach nicht mehr', async () => {
+	let calls = 0;
+	const resource = new Resource(
+		async () => {
+			calls += 1;
+			if (calls === 1) throw new ApiError(502, 'Server nicht erreichbar (HTTP 502)');
+			return 'da';
+		},
+		{ retryMs: 30_000, hidden: () => false }
+	);
+	const stop = resource.start();
+	await vi.advanceTimersByTimeAsync(0);
+	expect(resource.error?.status).toBe(502);
+	await vi.advanceTimersByTimeAsync(30_000);
+	expect([calls, resource.data, resource.error]).toEqual([2, 'da', null]);
+	await vi.advanceTimersByTimeAsync(300_000);
+	expect(calls).toBe(2);
+	stop();
+});

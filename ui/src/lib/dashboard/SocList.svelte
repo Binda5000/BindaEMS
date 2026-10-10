@@ -1,4 +1,6 @@
 <script lang="ts">
+	import type { ApiError } from '$lib/api/errors';
+	import Notice from '$lib/components/Notice.svelte';
 	import { formatSoc } from '$lib/format';
 	import type { SocEntry } from './socs';
 
@@ -6,9 +8,11 @@
 		entries: SocEntry[];
 		/** Live-Verbindung veraltet: alle Werte gedämpft */
 		stale?: boolean;
+		/** Fahrzeuge (Grenzen der Anlage) nicht geladen */
+		error?: ApiError | null;
 	}
 
-	let { entries, stale = false }: Props = $props();
+	let { entries, stale = false, error = null }: Props = $props();
 </script>
 
 <ul class="socs" class:stale>
@@ -27,6 +31,9 @@
 		</li>
 	{/each}
 </ul>
+{#if error}
+	<Notice level="error">Fahrzeuge nicht geladen: {error.detail}</Notice>
+{/if}
 
 <style>
 	.socs {

@@ -21,7 +21,7 @@
 
 	const system = new Resource((o) => api.system(o), { intervalMs: 15_000 });
 	const consumers = new Resource((o) => api.consumers(o), { intervalMs: 15_000 });
-	const limits = new Resource((o) => api.limits(o));
+	const limits = new Resource((o) => api.limits(o), { retryMs: 30_000 });
 	const pricesNow = new Resource((o) => api.pricesNow(o), { intervalMs: 60_000 });
 	const prices = new Resource((o) => api.prices(null, o), { intervalMs: 300_000 });
 	const forecast = new Resource((o) => api.forecast(o), { intervalMs: 300_000 });
@@ -65,7 +65,7 @@
 		<PriceNow data={pricesNow.data} error={pricesNow.error} />
 	</Card>
 	<Card title="Ladestände">
-		<SocList entries={socs} stale={live.stale} />
+		<SocList entries={socs} stale={live.stale} error={limits.error} />
 	</Card>
 	<div class="wide">
 		<Card title="Preise und PV heute/morgen">

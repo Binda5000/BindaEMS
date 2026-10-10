@@ -21,3 +21,21 @@ it('fragt auf der Anmeldeseite nicht nach dem Benutzer', async () => {
 	});
 	expect(me).not.toHaveBeenCalled();
 });
+
+it('behält bei Netzfehlern und 5xx den zuletzt bekannten Benutzer', async () => {
+	const user = { id: 1, username: 'admin', role: 'admin', totp_enabled: true, created_at: 'x' };
+	me.mockResolvedValueOnce({ user });
+	await expect(load({ url: new URL('https://ems.lan/') } as never)).resolves.toEqual({ user });
+	me.mockRejectedValueOnce(new ApiError(502, 'Server nicht erreichbar (HTTP 502)'));
+	await expect(load({ url: new URL('https://ems.lan/verlauf') } as never)).resolves.toEqual({
+		user
+	});
+	me.mockRejectedValueOnce(new ApiError(0, 'Keine Verbindung zum Server'));
+	await expect(load({ url: new URL('https://ems.lan/system') } as never)).resolves.toEqual({
+		user
+	});
+	me.mockRejectedValueOnce(new ApiError(401, 'Nicht angemeldet'));
+	await expect(load({ url: new URL('https://ems.lan/system') } as never)).rejects.toMatchObject({
+		status: 307
+	});
+});

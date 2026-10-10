@@ -5,6 +5,8 @@ import { ApiError } from './api/errors';
 export interface ResourceOptions {
 	/** Takt in ms; ohne Angabe wird nur einmal geladen */
 	intervalMs?: number;
+	/** ohne Takt: nach einem Fehler in diesem Abstand erneut versuchen, bis es gelingt */
+	retryMs?: number;
 	hidden?: () => boolean;
 }
 
@@ -22,6 +24,7 @@ export class Resource<T> {
 
 	#load: Loader<T>;
 	#intervalMs: number | undefined;
+	#retryMs: number | undefined;
 	#hidden: () => boolean;
 	#running = false;
 	#timer: ReturnType<typeof setTimeout> | null = null;
@@ -30,6 +33,7 @@ export class Resource<T> {
 	constructor(load: Loader<T>, options: ResourceOptions = {}) {
 		this.#load = load;
 		this.#intervalMs = options.intervalMs;
+		this.#retryMs = options.retryMs;
 		this.#hidden = options.hidden ?? (() => document.visibilityState === 'hidden');
 	}
 
@@ -79,13 +83,14 @@ export class Resource<T> {
 	}
 
 	#schedule(): void {
-		if (!this.#running || this.#intervalMs === undefined) return;
+		const delay = this.#intervalMs ?? (this.error ? this.#retryMs : undefined);
+		if (!this.#running || delay === undefined) return;
 		this.#timer = setTimeout(() => {
 			this.#timer = null;
 			// verborgen: nur weiterzählen; beim Zurückkehren lädt `visibilitychange`
 			if (this.#hidden()) this.#schedule();
 			else void this.#run(true);
-		}, this.#intervalMs);
+		}, delay);
 	}
 
 	#clearTimer(): void {
