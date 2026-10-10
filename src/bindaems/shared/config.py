@@ -53,6 +53,8 @@ class GridConfig(_Model):
     voltage_nominal_v: Annotated[float, Field(gt=0)] = 230.0
     fuse_a: Annotated[float, Field(gt=0, le=200)]
     fuse_margin_a: Annotated[float, Field(ge=0)] = 2.0
+    # optionale maximale Bezugsleistung in kW (Spec 8.2)
+    max_import_kw: Annotated[float, Field(gt=0)] | None = None
 
     @model_validator(mode="after")
     def _margin_below_fuse(self) -> Self:
@@ -126,6 +128,7 @@ class VictronConfig(_Model):
     max_grid_charge_setpoint_w: Annotated[float, Field(ge=0)]
     persistent_writes: WriteBudget = Field(default_factory=WriteBudget)
     watchdog: WatchdogConfig = Field(default_factory=WatchdogConfig)
+    live_allowed: bool = False
 
 
 class EvcsConfig(_Model):
@@ -164,6 +167,26 @@ class TessieVehicle(_Model):
     vin: Annotated[str, Field(min_length=17, max_length=17)]
 
 
+class VehicleCommandLimits(_Model):
+    """Befehlslimits für Fahrzeugbefehle über Tessie (Spec 6.5).
+
+    Der Ladestrom wird höchstens alle ``current_interval_s`` Sekunden und nur ab
+    ``current_step_a`` A Unterschied geändert. ``per_hour`` begrenzt alle Befehle zusammen,
+    ``start_stop_per_hour`` davon die Start/Stopp-Befehle.
+    """
+
+    current_interval_s: Annotated[float, Field(ge=0)] = 90.0
+    current_step_a: Annotated[int, Field(ge=1)] = 2
+    per_hour: Annotated[int, Field(ge=0)] = 20
+    start_stop_per_hour: Annotated[int, Field(ge=0)] = 6
+
+    @model_validator(mode="after")
+    def _start_stop_within_per_hour(self) -> Self:
+        if self.start_stop_per_hour > self.per_hour:
+            raise ValueError("start_stop_per_hour darf per_hour nicht übersteigen")
+        return self
+
+
 class VehicleConfig(_Model):
     name: str
     usable_kwh: Annotated[float, Field(gt=0)]
@@ -173,6 +196,7 @@ class VehicleConfig(_Model):
     default_wallbox: str
     live_allowed: bool = False
     tessie: TessieVehicle | None = None
+    commands: VehicleCommandLimits = Field(default_factory=VehicleCommandLimits)
     soc_entity: str | None = None
     home_radius_m: Annotated[float, Field(gt=0)] = 150.0
 
@@ -180,6 +204,12 @@ class VehicleConfig(_Model):
     def _min_below_max(self) -> Self:
         if self.min_a > self.max_a:
             raise ValueError("min_a darf nicht größer als max_a sein")
+        return self
+
+    @model_validator(mode="after")
+    def _live_needs_tessie(self) -> Self:
+        if self.live_allowed and self.tessie is None:
+            raise ValueError("live_allowed verlangt einen tessie-Abschnitt")
         return self
 
 
@@ -258,6 +288,19 @@ class AppConfig(_Model):
         return value
 
 
+class SafetyConfig(_Model):
+    """Sicherheitsschicht des ems-core."""
+
+    # Freigabe einer Sperre nach so vielen Sekunden ohne Ursache (Spec 7.9)
+    lock_release_s: Annotated[float, Field(gt=0, le=3600)] = 60.0
+
+
+class CoreConfig(_Model):
+    """ems-core: Datenablage für den persistenten Zustand der Steuerung."""
+
+    data_dir: Path = Path("/data")
+
+
 class Config(_Model):
     site: SiteConfig
     grid: GridConfig
@@ -272,6 +315,8 @@ class Config(_Model):
     telemetry: TelemetryConfig = Field(default_factory=TelemetryConfig)
     core_api: CoreApiConfig = Field(default_factory=CoreApiConfig)
     app: AppConfig = Field(default_factory=AppConfig)
+    safety: SafetyConfig = Field(default_factory=SafetyConfig)
+    core: CoreConfig = Field(default_factory=CoreConfig)
 
     @model_validator(mode="after")
     def _cross_references(self) -> Self:

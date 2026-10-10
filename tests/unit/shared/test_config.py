@@ -6,7 +6,7 @@ import pytest
 import yaml
 from pydantic import ValidationError
 
-from bindaems.shared.config import ConfigError, load_config, load_secrets
+from bindaems.shared.config import ConfigError, VehicleCommandLimits, load_config, load_secrets
 
 EXAMPLE = Path("deploy/config.example.yaml")
 
@@ -135,3 +135,40 @@ def test_ha_mqtt_password_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("BINDAEMS_HA_MQTT_PASSWORD", "mqtt-geheim")
     password = load_secrets().ha_mqtt_password
     assert password is not None and password.get_secret_value() == "mqtt-geheim"
+
+
+def test_safety_defaults() -> None:
+    cfg = load_config(EXAMPLE)
+    assert cfg.victron.live_allowed is False
+    assert cfg.grid.max_import_kw is None
+    assert cfg.safety.lock_release_s == 60.0
+    assert cfg.core.data_dir == Path("/data")
+    assert cfg.vehicles["tesla"].commands == VehicleCommandLimits(
+        current_interval_s=90.0, current_step_a=2, per_hour=20, start_stop_per_hour=6
+    )
+
+
+def test_vehicle_live_needs_tessie(tmp_path: Path) -> None:
+    p = write_cfg(tmp_path, lambda d: d["vehicles"]["egolf"].update(live_allowed=True))
+    with pytest.raises(ConfigError, match="live_allowed verlangt einen tessie-Abschnitt"):
+        load_config(p)
+
+
+def test_start_stop_limit_within_hourly_limit(tmp_path: Path) -> None:
+    limits = {"per_hour": 5, "start_stop_per_hour": 6}
+    p = write_cfg(tmp_path, lambda d: d["vehicles"]["tesla"].update(commands=limits))
+    with pytest.raises(ConfigError, match="start_stop_per_hour darf per_hour nicht übersteigen"):
+        load_config(p)
+
+
+@pytest.mark.parametrize("seconds", [0, 3601])
+def test_lock_release_bounds(tmp_path: Path, seconds: int) -> None:
+    p = write_cfg(tmp_path, lambda d: d.update(safety={"lock_release_s": seconds}))
+    with pytest.raises(ConfigError, match=r"safety\.lock_release_s"):
+        load_config(p)
+
+
+def test_max_import_must_be_positive(tmp_path: Path) -> None:
+    p = write_cfg(tmp_path, lambda d: d["grid"].update(max_import_kw=0))
+    with pytest.raises(ConfigError, match=r"grid\.max_import_kw"):
+        load_config(p)

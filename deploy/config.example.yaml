@@ -39,6 +39,7 @@ victron:
   max_grid_charge_setpoint_w: 8000
   persistent_writes: {per_hour: 12, per_day: 100}
   watchdog: {heartbeat_s: 10, timeout_s: 90}
+  live_allowed: false   # erst nach bestandenem Prüfprotokoll Teil 2 (Spec 8.7)
 
 wallboxes:
   evcs:
@@ -65,6 +66,8 @@ vehicles:
     default_wallbox: twc
     live_allowed: false
     tessie: {vin: 5YJ3E7EB0MF000000}
+    # Befehlslimits für Tessie (Spec 6.5)
+    commands: {current_interval_s: 90, current_step_a: 2, per_hour: 20, start_stop_per_hour: 6}
   egolf:
     name: e-Golf
     usable_kwh: 38.6
@@ -108,3 +111,7 @@ app:
   core_url: http://ems-core:8081
   trusted_proxies: [192.168.1.10]   # IP-Adresse des Reverse Proxy
   cookie_secure: true
+
+safety: {lock_release_s: 60}   # Freigabe einer Sperre nach so vielen Sekunden ohne Ursache, Spec 7.9
+
+core: {data_dir: /data}
