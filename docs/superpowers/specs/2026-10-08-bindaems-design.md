@@ -1063,7 +1063,7 @@ Greift, wenn der Solver scheitert, das Zeitlimit überschritten ist oder das Erg
   | `decision` | `actuator`, `reason` | `text`, `value` | bei Ereignis |
 
 - **Schreiben:** gebündelt im Line Protocol (`/write`, gzip, Millisekunden), über einen eigenen schlanken httpx-Client. Bei Ausfall puffert ein Spool.
-- **Lesen:** per InfluxQL (`/query`). Die HA-Datenbank wird nur gelesen; dort ist die Messung die Einheit, `entity_id` ist Tag, das Feld heißt `value`.
+- **Lesen:** per InfluxQL (`/query`). Die HA-Datenbank wird nur gelesen. Je nach `measurement_attr` der HA-Integration ist die Messung die Einheit (`W`, `kW`; HA-Standard) oder die Entität (`sensor.kueche`; so in dieser Anlage, die Einheit steht dann im Feld `unit_of_measurement_str`). In beiden Fällen sind `domain` und `entity_id` (ohne Domain) Tags, und das Feld heißt `value`.
 
 ### 11.3 SQLite (app)
 

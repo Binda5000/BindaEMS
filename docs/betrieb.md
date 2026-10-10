@@ -78,8 +78,10 @@ INFLUX_URL=http://influx.lan:8086 INFLUX_ADMIN_USER=admin INFLUX_ADMIN_PASSWORD=
 
 Den Benutzer für BindaEMS legst du einmalig an. Das Passwort ist `BINDAEMS_INFLUX_PASSWORD`
 aus `.env`. Den Lesezugriff auf die HA-Datenbank braucht die app für Verbraucher aus
-HA-Entitäten (`influxdb.ha_database`), später auch für die Lernmodelle. Die app schreibt
-Preise, PV-Prognose und Abrechnung (`price`, `forecast`, `ledger`) direkt in `long`.
+HA-Entitäten (`influxdb.ha_database`), später auch für die Lernmodelle. Die HA-Datenbank heißt
+so, wie es in der InfluxDB-Konfiguration von HA unter `database:` steht; ohne Angabe
+`home_assistant`. Die app schreibt Preise, PV-Prognose und Abrechnung (`price`, `forecast`,
+`ledger`) direkt in `long`.
 
 ```sql
 CREATE USER "bindaems" WITH PASSWORD '…'
@@ -427,6 +429,51 @@ gilt für diesen Browser.
 | Benutzer | nur Admins: anlegen, Rolle ändern, Passwort setzen, löschen |
 | Protokoll | nur Admins: Änderungsprotokoll nach Bereich |
 | Konto | eigenes Passwort, Zwei-Faktor-Anmeldung, Abmelden |
+
+### Verbraucher aus Home Assistant
+
+Ein Verbraucher liest seine Leistung aus einem core-Signal oder aus einer HA-Entität.
+
+- **HA-Entität:** Die app fragt Home Assistant nicht selbst. Sie liest alle 15 s den letzten
+  Wert der letzten 24 h aus der HA-Datenbank in InfluxDB (`influxdb.ha_database`, derselbe
+  Server wie `influxdb.url`, Lesezugriff aus Abschnitt 3).
+  - Beide Schemata der HA-Integration gehen: Messung je Einheit (`W`, `kW`; HA-Standard) und
+    Messung je Entität (`measurement_attr: entity_id`). Im zweiten Fall steht die Einheit im
+    Feld `unit_of_measurement_str`.
+  - Die Vorschläge im Formular zeigen Sensoren in W oder kW. Bei Messung je Entität sind es
+    die, die in den letzten 30 Tagen etwas geschrieben haben. Andere Entitäten trägst du von
+    Hand ein und wählst die Einheit.
+- **core-Signal:** Für Live-Werte ohne InfluxDB trägst du die Entität in `config.yaml` unter
+  `homeassistant.entities` ein, z. B. `load.serverschrank.power_w: sensor.serverschrank_power`.
+  Der Sensor muss in W messen; der core rechnet nicht um. Danach
+  `docker compose restart ems-core ems-app`.
+
+Fehlt ein Wert, steht der Grund unter dem Namen:
+
+| Grund | Bedeutung und Abhilfe |
+|---|---|
+| kein Wert in den letzten 24 h | HA schreibt nur bei einer Änderung, z. B. ist das Gerät seit gestern aus. Oder HA schreibt die Entität gar nicht nach InfluxDB (`include`/`exclude` in der InfluxDB-Konfiguration von HA). |
+| HA meldet kWh statt W | Die Entität hat eine andere Einheit als eingestellt, etwa ein Energiezähler statt eines Leistungssensors. Einheit oder Entität korrigieren. |
+| HA-Datenbank nicht lesbar | InfluxDB lehnt die Abfrage ab. Meist fehlt `GRANT READ` (Abschnitt 3), oder der Datenbankname stimmt nicht. Die genaue Meldung steht im Formular unter „HA-Entität“ und im Log der app. |
+| HA-Datenbank nicht eingerichtet | `influxdb.ha_database` fehlt in `config.yaml`. |
+
+Log, Datenbank und Schema prüfst du so (InfluxQL im influx-CLI oder in Grafana → Explore, als
+Admin):
+
+```bash
+docker compose logs --since 30m ems-app | grep "HA-"
+```
+
+```sql
+SHOW DATABASES
+SHOW GRANTS FOR "bindaems"
+SHOW SERIES ON "homeassistant" WHERE "entity_id" = 'serverschrank_power'
+```
+
+`entity_id` steht dort ohne `sensor.`. Die Zeile von `SHOW SERIES` beginnt mit der Einheit
+(`W,…`) oder mit der Entität (`sensor.serverschrank_power,…`); beides liest die app. Beginnt
+sie mit etwas anderem, etwa `state,…` bei `override_measurement`, findet die app den Sensor
+nicht. Dann nimm den Weg über das core-Signal.
 
 ### Live-Anzeige
 

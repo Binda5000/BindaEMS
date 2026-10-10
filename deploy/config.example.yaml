@@ -92,7 +92,7 @@ influxdb:
   url: http://influx.lan:8086
   database: bindaems
   username: bindaems
-  ha_database: homeassistant
+  ha_database: homeassistant   # wie `database:` in HAs InfluxDB-Konfiguration (HA-Standard: home_assistant)
 
 telemetry:
   spool_dir: /data/spool

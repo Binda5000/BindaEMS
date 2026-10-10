@@ -1,16 +1,19 @@
 # Übergabe an die nächste Session
 
-Stand: 10.10.2026, Commit `0ebe055` (identisch auf `main` und `claude/ems-haus-akku-pv-93c0s6`).
+Stand: 10.10.2026. Neue Arbeit liegt zuerst auf dem Arbeitsbranch
+`claude/ems-haus-akku-pv-93c0s6`; was davon schon auf `main` ist, zeigt `git log main`.
 
 ## Kurzfassung
 
 - **Phase 1 ist umgesetzt:** 1a (core, lesend), 1b (app-Backend), 1c (Web-UI) samt Gesamtreview,
   Fix-Durchgang und allen zurückgestellten Kleinigkeiten.
+- **HA-Verbraucher (nach Phase 1):** Die app liest beide InfluxDB-Schemata der HA-Integration
+  (Messung je Einheit oder je Entität). Fehlt ein Wert, nennen Liste und Formular den Grund.
 - **Images:** `ghcr.io/binda5000/bindaems-core:latest` und `ghcr.io/binda5000/bindaems-app:latest`.
   Sie sind öffentlich, und die CI setzt `latest` bei jedem Push auf `main`.
 - **Tests:**
-  - Python: 632 (ruff, mypy strict, import-linter)
-  - UI: Vitest 179 (svelte-check, Prettier, ESLint)
+  - Python: 638 (ruff, mypy strict, import-linter)
+  - UI: Vitest 183 (svelte-check, Prettier, ESLint)
   - E2E: Playwright 11
 - **Offen:**
   - die Installation beim Betreiber fertigstellen (HTTPS-Proxy)
@@ -138,6 +141,12 @@ Demo-Zugänge: `admin`, `gast` (Lesen) und `sicher` (Admin mit TOTP, Geheimnis
 - Docker auf der VM `192.168.82.20`, Images `latest`.
 - Das UI ist direkt über `http://192.168.82.20:8080` erreichbar, noch ohne HTTPS-Proxy. Die
   Anmeldung klappt deshalb nur mit `cookie_secure: false`.
+- **HA-Daten in InfluxDB:** Datenbank `homeassistant`, `bindaems` hat READ. HA schreibt mit
+  `measurement_attr: entity_id`:
+  - Messung = Entität (`sensor.…`), Tags `domain` und `entity_id` (ohne Domain)
+  - Felder `value`, `unit_of_measurement_str`, `device_class_str`, `state_class_str`,
+    `friendly_name_str`
+  - Wichtig auch für die Lastprognose aus der HA-Historie.
 - **Als Nächstes an der Anlage:**
   1. Reverse Proxy mit HTTPS einrichten (Betriebshandbuch 6). Port 8080 soll nur der Proxy
      erreichen. `app.trusted_proxies` setzen, `cookie_secure` wieder auf `true`.
@@ -171,7 +180,8 @@ Demo-Zugänge: `admin`, `gast` (Lesen) und `sicher` (Admin mit TOTP, Geheimnis
 
 Entschieden in Phase 1c; im Commit-Verlauf bzw. der Abschlussnachricht begründet:
 
-- HA-Verbraucherwerte bis 24 h alt, ohne Altersangabe. HA schreibt nur bei Änderung.
+- HA-Verbraucherwerte bis 24 h alt, ohne Altersangabe; ältere zeigen „kein Wert in den letzten
+  24 h“. HA schreibt nur bei Änderung.
 - CSP `connect-src 'self'`: Auf sehr alten Safari-Versionen bliebe die Live-Verbindung getrennt.
 - Kein Offline-Modus, kein Service Worker.
 - Ein Konflikt beim Speichern der Einstellungen (409) bietet Neuladen, aber kein Zusammenführen.
