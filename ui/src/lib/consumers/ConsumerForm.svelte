@@ -21,17 +21,21 @@
 	let busy = $state(false);
 
 	const parents = $derived(parentOptions(consumers, editingId));
-	const suggestions = $derived(
-		draft.sourceKind === 'core'
-			? (candidates?.core.map((candidate) => candidate.ref) ?? [])
-			: (candidates?.ha.map((candidate) => candidate.entity_id) ?? [])
-	);
+	// eine HA-Entität kann in W und kW vorliegen (Home Assistant schreibt je Einheit eine Messgröße)
+	const suggestions = $derived([
+		...new Set(
+			draft.sourceKind === 'core'
+				? (candidates?.core.map((candidate) => candidate.ref) ?? [])
+				: (candidates?.ha.map((candidate) => candidate.entity_id) ?? [])
+		)
+	]);
 
-	// gewählte HA-Entität aus den Vorschlägen: Einheit übernehmen
+	// gewählte HA-Entität aus den Vorschlägen: Einheit übernehmen, wenn sie eindeutig ist
 	function refChanged() {
 		if (draft.sourceKind !== 'ha') return;
-		const match = candidates?.ha.find((candidate) => candidate.entity_id === draft.powerRef.trim());
-		if (match) draft.powerUnit = match.unit;
+		const ref = draft.powerRef.trim();
+		const matches = candidates?.ha.filter((candidate) => candidate.entity_id === ref) ?? [];
+		if (matches.length === 1) draft.powerUnit = matches[0].unit;
 	}
 
 	async function submit(event: SubmitEvent) {

@@ -106,7 +106,7 @@
 	<Card title="Hinweise">
 		{#if system.data && system.data.warnings.length > 0}
 			<ul class="plain">
-				{#each system.data.warnings as warning (warning)}
+				{#each system.data.warnings as warning, index (index)}
 					<li><Notice level="warning">{warning}</Notice></li>
 				{/each}
 			</ul>
@@ -226,7 +226,7 @@
 					</tbody>
 				</table>
 			</div>
-			{#each status.errors as message (message)}
+			{#each status.errors as message, index (index)}
 				<Notice level="error">{message}</Notice>
 			{/each}
 		{/if}

@@ -89,7 +89,7 @@
 		{@const current = settings.data}
 		{#if current.warnings.length > 0}
 			<ul class="plain">
-				{#each current.warnings as warning (warning)}
+				{#each current.warnings as warning, index (index)}
 					<li><Notice level="warning">{warning}</Notice></li>
 				{/each}
 			</ul>
