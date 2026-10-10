@@ -2,6 +2,9 @@ import httpx
 import pytest
 from tests.app_helpers import login_as
 
+from bindaems.app.history.routes import history_router
+from bindaems.app.history.series import build_catalog
+
 URL = "http://influx.lan:8086/query"
 HOUR = {"from": "2026-10-09T00:00:00Z", "to": "2026-10-09T01:00:00Z"}
 
@@ -60,3 +63,12 @@ def test_catalog_endpoint(client, auth) -> None:
     login_as(client, auth, "viewer")
     catalog = client.get("/api/history/catalog").json()
     assert catalog[0] == {"id": "grid", "label": "Netz", "unit": "W"}
+
+
+def test_own_labels_replace_catalog_labels(make_client, reader, cfg, clock, guard, auth) -> None:
+    client = make_client(
+        history_router(reader, build_catalog(cfg), clock, guard, lambda: {"wallbox.evcs": "Garage"})
+    )
+    login_as(client, auth, "viewer")
+    labels = {item["id"]: item["label"] for item in client.get("/api/history/catalog").json()}
+    assert (labels["wallbox.evcs"], labels["wallbox.twc"]) == ("Garage", "Wallbox twc")

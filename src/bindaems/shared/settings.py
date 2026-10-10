@@ -9,7 +9,7 @@ from __future__ import annotations
 from datetime import date, time
 from typing import Annotated, Any, Literal, Self
 
-from pydantic import Field, field_validator, model_validator
+from pydantic import Field, StringConstraints, field_validator, model_validator
 
 from bindaems.shared.config import _Model
 
@@ -142,11 +142,17 @@ class PvModelSettings(_Model):
     noct_c: Annotated[float, Field(ge=20, le=80)] = 45.0
 
 
+WallboxKey = Annotated[str, Field(min_length=1, max_length=60)]
+DisplayName = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=40)]
+
+
 class RuntimeSettings(_Model):
     prices: PriceSettings = Field(default_factory=PriceSettings)
     tariff: TariffSettings = Field(default_factory=TariffSettings)
     feed_in: FeedInSettings = Field(default_factory=FeedInSettings)
     pv_model: PvModelSettings = Field(default_factory=PvModelSettings)
+    # eigene Namen der Ladestationen (Schlüssel wie in config.yaml); ohne Namen gilt der Typ
+    wallbox_names: dict[WallboxKey, DisplayName] = Field(default_factory=dict)
 
 
 def settings_warnings(settings: RuntimeSettings) -> list[str]:

@@ -82,3 +82,25 @@ it('schlägt die Neubewertung ab Monatsbeginn vor', () => {
 		last: '2026-10-09'
 	});
 });
+
+it('übernimmt eigene Namen der Ladestationen, leere entfallen, zu lange sind ein Fehler', () => {
+	const current = settings();
+	const draft = draftFrom(current, ['evcs', 'twc']);
+	expect(draft.wallboxNames).toEqual({ evcs: '', twc: 'Garage' });
+	draft.wallboxNames.evcs = ' Carport ';
+	draft.wallboxNames.twc = '';
+	const result = applyDraft(current, draft);
+	if (!('settings' in result)) throw new Error(JSON.stringify(result.errors));
+	expect(result.settings.wallbox_names).toEqual({ evcs: 'Carport' });
+	expect(result.tariffChanged).toBe(false);
+	draft.wallboxNames.evcs = 'x'.repeat(41);
+	expect(applyDraft(current, draft)).toEqual({
+		errors: { 'wallboxNames.evcs': 'Höchstens 40 Zeichen' }
+	});
+	expect(
+		editorFieldErrors(
+			[{ loc: ['body', 'settings', 'wallbox_names', 'evcs'], msg: 'zu lang', type: 'x' }],
+			current
+		)
+	).toEqual({ 'wallboxNames.evcs': 'zu lang' });
+});

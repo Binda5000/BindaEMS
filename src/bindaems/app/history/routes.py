@@ -3,7 +3,7 @@
 Ohne ``from __future__ import annotations`` (siehe ``auth/routes.py``).
 """
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from datetime import datetime, timedelta
 from typing import Annotated, Any
 
@@ -29,8 +29,13 @@ def _bad_request(text: str) -> HTTPException:
 
 
 def history_router(
-    reader: InfluxReader, catalog: Mapping[str, SeriesSpec], clock: Clock, guard: Guard
+    reader: InfluxReader,
+    catalog: Mapping[str, SeriesSpec],
+    clock: Clock,
+    guard: Guard,
+    labels: Callable[[], Mapping[str, str]] = dict,
 ) -> APIRouter:
+    """``labels``: aktuelle eigene Beschriftungen je Reihe (z. B. Namen der Ladestationen)."""
     router = APIRouter(prefix="/api/history")
     Viewer = Annotated[SessionInfo, Depends(guard.require("viewer"))]
 
@@ -61,6 +66,7 @@ def history_router(
         if rp == RP_LONG:
             step = max(step, LONG_MIN_STEP_S)
         result: dict[str, Any] = {}
+        names = labels()
         for spec in specs:
             try:
                 rows = await reader.query(build_query(spec, rp, start, end, step))
@@ -74,13 +80,16 @@ def history_router(
                 for row in item.values
                 if len(row) >= 2 and row[1] is not None
             ]
-            result[spec.id] = {"label": spec.label, "unit": spec.unit, "points": points}
+            label = names.get(spec.id, spec.label)
+            result[spec.id] = {"label": label, "unit": spec.unit, "points": points}
         return {"rp": rp, "step_s": step, "series": result}
 
     @router.get("/catalog")
     def catalog_list(session: Viewer) -> list[dict[str, str]]:
+        names = labels()
         return [
-            {"id": spec.id, "label": spec.label, "unit": spec.unit} for spec in catalog.values()
+            {"id": spec.id, "label": names.get(spec.id, spec.label), "unit": spec.unit}
+            for spec in catalog.values()
         ]
 
     return router

@@ -106,6 +106,7 @@
 					{#key editorKey}
 						<SettingsEditor
 							{current}
+							wallboxes={limits.data?.wallboxes}
 							save={api.saveSettings}
 							onSaved={afterSave}
 							onReload={reload}

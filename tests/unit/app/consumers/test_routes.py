@@ -1,5 +1,9 @@
+import asyncio
+
 from tests.app_helpers import core_input, login_as
 
+from bindaems.app.consumers.energy import EnergyCache
+from bindaems.app.consumers.routes import consumers_router
 from bindaems.app.consumers.service import ConsumerInput
 
 
@@ -57,3 +61,35 @@ def test_admin_changes_map_errors_to_statuses(client, auth) -> None:
     assert client.patch("/api/consumers/999", json=body, headers=csrf).status_code == 404
     assert client.delete(f"/api/consumers/{2**70}", headers=csrf).status_code == 422
     assert client.delete(f"/api/consumers/{child['id']}", headers=csrf).status_code == 204
+
+
+def test_tree_endpoint_with_energy_since_midnight(
+    make_client, service, live, reader, cfg, guard, auth, clock, respx_mock
+) -> None:
+    respx_mock.get("http://influx.lan:8086/query").respond(
+        json={
+            "results": [
+                {
+                    "series": [
+                        {
+                            "name": "power",
+                            "tags": {"source": "load", "id": "obergeschoss"},
+                            "columns": ["time", "w"],
+                            "values": [[1791504000000, 600.0]],
+                        }
+                    ]
+                }
+            ]
+        }
+    )
+    energy = EnergyCache(reader, clock, None)
+    client = make_client(consumers_router(service, live, None, reader, cfg, guard, energy))
+    login_as(client, auth, "viewer")
+    service.create(core_input("OG", ref="load.obergeschoss.power_w"), actor="chris", source="ui")
+    assert client.get("/api/consumers").json()["energy_since"] is None
+    asyncio.run(energy.refresh(service.list()))
+    body = client.get("/api/consumers").json()
+    assert body["energy_since"] == "2026-10-08T22:00:00+00:00"
+    og = body["tree"]["children"][0]
+    assert (og["energy_kwh"], og["energy_note"]) == (0.01, None)  # 1 min × 600 W
+    assert (body["tree"]["energy_kwh"], body["tree"]["other_kwh"]) == (None, None)

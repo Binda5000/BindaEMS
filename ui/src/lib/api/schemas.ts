@@ -194,7 +194,9 @@ export const RuntimeSettingsSchema = v.looseObject({
 		performance_ratio: v.number(),
 		temp_coeff_pct_per_k: v.number(),
 		noct_c: v.number()
-	})
+	}),
+	/** eigene Namen der Ladestationen; ohne Eintrag gilt der Typ */
+	wallbox_names: v.optional(v.record(v.string(), v.string()), {})
 });
 export type RuntimeSettings = v.InferOutput<typeof RuntimeSettingsSchema>;
 
@@ -216,6 +218,7 @@ export type SettingsCurrent = v.InferOutput<typeof SettingsCurrentSchema>;
 
 const EvcsLimitsSchema = v.object({
 	type: v.literal('victron_evcs_ns'),
+	name: v.nullable(v.string()),
 	min_a: v.number(),
 	max_a: v.number(),
 	safe_a: v.number(),
@@ -224,6 +227,7 @@ const EvcsLimitsSchema = v.object({
 });
 const TwcLimitsSchema = v.object({
 	type: v.literal('tesla_wall_connector_gen3'),
+	name: v.nullable(v.string()),
 	max_a: v.number(),
 	phase_map: v.array(Phase)
 });
@@ -289,6 +293,11 @@ export interface TreeNode {
 	other_w: number | null;
 	mismatch: boolean;
 	children: TreeNode[];
+	/** Energie seit Mitternacht */
+	energy_kwh: number | null;
+	/** warum `energy_kwh` fehlt */
+	energy_note: string | null;
+	other_kwh: number | null;
 }
 
 export const TreeNodeSchema: v.GenericSchema<TreeNode> = v.object({
@@ -299,12 +308,17 @@ export const TreeNodeSchema: v.GenericSchema<TreeNode> = v.object({
 	note: v.nullable(v.string()),
 	other_w: NullableNumber,
 	mismatch: v.boolean(),
-	children: v.array(v.lazy(() => TreeNodeSchema))
+	children: v.array(v.lazy(() => TreeNodeSchema)),
+	energy_kwh: NullableNumber,
+	energy_note: v.nullable(v.string()),
+	other_kwh: NullableNumber
 });
 
 export const ConsumersResponseSchema = v.object({
 	tree: TreeNodeSchema,
-	consumers: v.array(ConsumerSchema)
+	consumers: v.array(ConsumerSchema),
+	/** Beginn des Energiezeitraums (Mitternacht); `null`: noch nicht berechnet */
+	energy_since: v.nullable(Iso)
 });
 export type ConsumersResponse = v.InferOutput<typeof ConsumersResponseSchema>;
 

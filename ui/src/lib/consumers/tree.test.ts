@@ -17,7 +17,10 @@ const node = (
 	note: null,
 	other_w: other,
 	mismatch,
-	children
+	children,
+	energy_kwh: power === null ? null : power / 100,
+	energy_note: null,
+	other_kwh: other === null ? null : other / 100
 });
 
 const tree: TreeNode = {
@@ -56,4 +59,22 @@ it('übernimmt den Grund für einen fehlenden Wert, „Sonstiges“ hat keinen',
 		['Büro', null],
 		['Sonstiges', null]
 	]);
+});
+
+it('übernimmt die Energie seit Mitternacht, auch für „Sonstiges“', () => {
+	const rows = consumerRows(tree);
+	expect(rows.map((row) => [row.name, row.energyKwh])).toEqual([
+		['Haus', 18],
+		['Küche', 1.2],
+		['Obergeschoss', 6],
+		['Büro', 1.5],
+		['Sonstiges', 4.5],
+		['Sonstiges', 10.8]
+	]);
+	const quiet = consumerRows({
+		...node(1, 'OG', 100),
+		energy_kwh: null,
+		energy_note: 'kein Verlauf'
+	});
+	expect([quiet[0].energyKwh, quiet[0].energyNote]).toEqual([null, 'kein Verlauf']);
 });

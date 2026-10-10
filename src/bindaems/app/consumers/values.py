@@ -35,6 +35,7 @@ _SCALE: dict[str, float] = {"W": 1.0, "kW": 1000.0}
 CORE_CANDIDATE_RE = re.compile(r"^load\.[^.]+\.power_w$")
 UNIT_FIELD: Final = "unit_of_measurement_str"
 NO_VALUE: Final = "kein Wert in den letzten 24 h"
+WRONG_UNIT: Final = "HA meldet"
 UNREADABLE: Final = "HA-Datenbank nicht lesbar"
 NOT_CONFIGURED: Final = "HA-Datenbank nicht eingerichtet (influxdb.ha_database)"
 # Messung je Entität: letzte Einheit je Reihe (ORDER BY … LIMIT 1 liest nur den jüngsten Block)
@@ -121,7 +122,7 @@ class HaValueCache:
             if value is not None:
                 result[ref] = (value * _SCALE[ref.unit], None)
             elif readings:
-                result[ref] = (None, f"HA meldet {readings[0][0]} statt {ref.unit}")
+                result[ref] = (None, f"{WRONG_UNIT} {readings[0][0]} statt {ref.unit}")
             else:
                 result[ref] = (None, NO_VALUE)
         self._readings = result
@@ -132,6 +133,11 @@ class HaValueCache:
     def note(self, ref: HaRef) -> str | None:
         """Warum ``ref`` keinen Wert hat; ``None``, solange die Entität nicht gelesen wurde."""
         return self._readings.get(ref, (None, None))[1]
+
+    def wrong_unit(self, ref: HaRef) -> bool:
+        """HA meldet für ``ref`` eine andere Einheit als eingestellt (z. B. kWh statt W)."""
+        note = self.note(ref)
+        return note is not None and note.startswith(WRONG_UNIT)
 
 
 def _readings(series: Sequence[Series]) -> dict[tuple[str, str], list[tuple[str | None, float]]]:
@@ -165,20 +171,30 @@ class TreeNode:
     other_w: float | None
     mismatch: bool
     children: list[TreeNode]
+    energy_kwh: float | None = None  # seit Mitternacht
+    energy_note: str | None = None  # warum ``energy_kwh`` fehlt
+    other_kwh: float | None = None
+
+
+Energy = tuple[float | None, str | None]
+
+
+def _rest(total: float | None, parts: Sequence[float | None]) -> float | None:
+    """``total`` minus Summe der ``parts``; ``None``, wenn ein Wert fehlt."""
+    if total is None or not parts or any(part is None for part in parts):
+        return None
+    return total - sum(part for part in parts if part is not None)
 
 
 def _settle(node: TreeNode) -> TreeNode:
-    """„Sonstiges“ eines Knotens: eigene Leistung minus Summe der Kinder."""
-    if not node.children or node.power_w is None:
-        return node
-    parts = [child.power_w for child in node.children]
-    if any(part is None for part in parts):
-        return node
-    other = node.power_w - sum(part for part in parts if part is not None)
-    if other < 0:
+    """„Sonstiges“ eines Knotens: eigene Leistung und Energie minus Summe der Kinder."""
+    other = _rest(node.power_w, [child.power_w for child in node.children])
+    if other is not None and other < 0:
         node.other_w, node.mismatch = 0.0, True  # Kinder messen mehr als das Elternelement
     else:
         node.other_w = other
+    other_kwh = _rest(node.energy_kwh, [child.energy_kwh for child in node.children])
+    node.other_kwh = None if other_kwh is None else round(max(0.0, other_kwh), 3)
     return node
 
 
@@ -187,6 +203,8 @@ def build_tree(
     power: Callable[[Consumer], float | None],
     house_w: float | None,
     note: Callable[[Consumer], str | None] = lambda _: None,
+    energy: Callable[[Consumer], Energy] = lambda _: (None, None),
+    house_kwh: float | None = None,
 ) -> TreeNode:
     """Baum unter der Wurzel „Haus“ mit „Sonstiges“ je Ebene."""
     ids = {consumer.id for consumer in consumers}
@@ -196,6 +214,7 @@ def build_tree(
         children.setdefault(parent, []).append(consumer)
 
     def node(consumer: Consumer) -> TreeNode:
+        kwh, energy_note = energy(consumer)
         return _settle(
             TreeNode(
                 id=consumer.id,
@@ -206,6 +225,8 @@ def build_tree(
                 other_w=None,
                 mismatch=False,
                 children=[node(child) for child in children.get(consumer.id, [])],
+                energy_kwh=kwh,
+                energy_note=energy_note,
             )
         )
 
@@ -218,6 +239,7 @@ def build_tree(
         other_w=None,
         mismatch=False,
         children=[node(consumer) for consumer in children.get(None, [])],
+        energy_kwh=house_kwh,
     )
     return _settle(root)
 

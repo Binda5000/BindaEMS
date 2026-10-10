@@ -421,14 +421,40 @@ gilt für diesen Browser.
 
 | Seite | Inhalt |
 |---|---|
-| Übersicht | Energiefluss live, Strompreis jetzt und die nächsten 3 h, Ladestände, Preise und PV-Prognose für heute und morgen, Hinweise, Verbraucher |
+| Übersicht | Energiefluss live mit den Verbrauchern unter dem Haus, Strompreis jetzt und die nächsten 3 h (Balken überfahren, antippen oder mit den Pfeiltasten wählen zeigt den Preis der Viertelstunde), Ladestände, Preise und PV-Prognose für heute und morgen, Hinweise, Verbraucher mit Leistung und Energie seit Mitternacht |
 | Verlauf | Diagramm mit bis zu 8 Reihen für frei wählbare Tage (höchstens 400), Tagesbilanz mit Abdeckung (Viertelstunden und Anteil der aufgezeichneten Zeit), Kosten, Erlös, Autarkie und den Tageswerten der Zähler (Differenz über den Tag) für den Abgleich mit VRM |
-| Verbraucher | Verbraucherbaum mit „Sonstiges“; Admins legen Verbraucher an, ändern und löschen sie |
+| Verbraucher | Verbraucherbaum mit „Sonstiges“, Leistung und Energie seit Mitternacht („Heute“); Admins legen Verbraucher an, ändern und löschen sie |
 | System | Komponenten, Hinweise, core (Adapter, Selbstprüfung, Alarme), Preise (Admins: „Preise jetzt abrufen“), PV-Prognose, alle Signale mit Suche |
-| Einstellungen | Tarif, OeMAG-Werte, Preise, PV-Modell und harte Grenzen; Admins bearbeiten, bewerten neu und exportieren oder importieren (Abschnitt 8) |
+| Einstellungen | Tarif, OeMAG-Werte, Preise, PV-Modell, Namen der Ladestationen und harte Grenzen; Admins bearbeiten, bewerten neu und exportieren oder importieren (Abschnitt 8) |
 | Benutzer | nur Admins: anlegen, Rolle ändern, Passwort setzen, löschen |
 | Protokoll | nur Admins: Änderungsprotokoll nach Bereich |
 | Konto | eigenes Passwort, Zwei-Faktor-Anmeldung, Abmelden |
+
+### Namen der Ladestationen
+
+Unter **Einstellungen** → „Bearbeiten“ → „Ladestationen“ gibt ein Admin jeder Wallbox einen
+eigenen Namen (höchstens 40 Zeichen). Er erscheint im Energiefluss, im Verlauf und bei den
+harten Grenzen. Ein leeres Feld heißt: der Typname („EVCS“, „Wall Connector“). Der Schlüssel aus
+`config.yaml` (z. B. `evcs`) bleibt unverändert.
+
+### Energie der Verbraucher
+
+Die Spalte „Heute“ zeigt die Energie seit Mitternacht (Wien). Die app rechnet sie jede Minute
+aus dem Leistungsverlauf in InfluxDB:
+
+- **core-Signale** `load.…`, `pv.…` und `wallbox.….power_w` sowie das Haus aus den
+  Minutenmitteln der Messung `power`. Fehlen Minuten (core oder InfluxDB aus), zählen sie nicht.
+- **HA-Entitäten** aus der HA-Datenbank. Ein Wert gilt bis zur nächsten Änderung; der letzte
+  Wert vor Mitternacht (höchstens 7 Tage zurück) gilt ab Mitternacht.
+- „Sonstiges“ ist die Energie des Elternelements minus die seiner Unterverbraucher.
+
+Fehlt die Energie, steht der Grund unter dem Namen („Energie: …“):
+
+| Grund | Bedeutung |
+|---|---|
+| kein Verlauf seit Mitternacht | InfluxDB hat für heute keine Werte dieses Signals. |
+| Signal wird nicht aufgezeichnet | Der core schreibt dieses Signal nicht nach InfluxDB, oder die HA-Datenbank ist nicht eingerichtet. |
+| Verlauf nicht lesbar | InfluxDB lehnt die Abfrage ab oder ist nicht erreichbar (Log der app). |
 
 ### Verbraucher aus Home Assistant
 

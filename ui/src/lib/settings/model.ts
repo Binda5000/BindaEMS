@@ -3,12 +3,15 @@
 import type { PriceComponent, PriceSettings, RuntimeSettings, TimeWindow } from '$lib/api/schemas';
 import { fieldErrors } from '$lib/api/errors';
 import { todayVienna } from '$lib/time';
+import { WALLBOX_NAME_MAX } from '$lib/wallboxes';
 
 export interface SettingsDraft {
 	/** Werte der festen Tarifbestandteile nach ID, netto in ct/kWh */
 	values: Record<string, string>;
 	feedIn: { month: string; ct: string }[];
 	prices: PriceSettings;
+	/** eigene Namen der Ladestationen nach Schlüssel; leer = Typname */
+	wallboxNames: Record<string, string>;
 	comment: string;
 }
 
@@ -33,7 +36,8 @@ export function decimalText(value: number | null): string {
 	return value === null ? '' : String(value).replace('.', ',');
 }
 
-export function draftFrom(settings: RuntimeSettings): SettingsDraft {
+/** `wallboxes`: Schlüssel aller Ladestationen aus config.yaml (auch ohne eigenen Namen) */
+export function draftFrom(settings: RuntimeSettings, wallboxes: string[] = []): SettingsDraft {
 	const values: Record<string, string> = {};
 	for (const component of settings.tariff.components) {
 		if (component.source === 'fixed') values[component.id] = decimalText(component.value_ct);
@@ -44,6 +48,10 @@ export function draftFrom(settings: RuntimeSettings): SettingsDraft {
 			.sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
 			.map(([month, ct]) => ({ month, ct: decimalText(ct) })),
 		prices: { ...settings.prices },
+		wallboxNames: {
+			...Object.fromEntries(wallboxes.map((key) => [key, ''])),
+			...settings.wallbox_names
+		},
 		comment: ''
 	};
 }
@@ -87,13 +95,25 @@ export function applyDraft(settings: RuntimeSettings, draft: SettingsDraft): Dra
 		if (valid && typeof ct === 'number') monthly[month] = ct;
 	});
 
+	const wallboxNames: Record<string, string> = {};
+	for (const [key, text] of Object.entries(draft.wallboxNames)) {
+		const name = text.trim();
+		if (name === '') continue; // ohne eigenen Namen gilt der Typ
+		if (name.length > WALLBOX_NAME_MAX) {
+			errors[`wallboxNames.${key}`] = `Höchstens ${WALLBOX_NAME_MAX} Zeichen`;
+			continue;
+		}
+		wallboxNames[key] = name;
+	}
+
 	if (Object.keys(errors).length > 0) return { errors };
 	return {
 		settings: {
 			...settings,
 			prices: { ...settings.prices, ...draft.prices },
 			tariff: { ...settings.tariff, components },
-			feed_in: { ...settings.feed_in, monthly_ct: monthly }
+			feed_in: { ...settings.feed_in, monthly_ct: monthly },
+			wallbox_names: wallboxNames
 		},
 		tariffChanged
 	};
@@ -162,6 +182,8 @@ export function editorFieldErrors(
 		} else if (parts[0] === 'feed_in' && parts[1] === 'monthly_ct' && parts.length >= 3) {
 			const index = months.indexOf(parts[2]);
 			if (index >= 0) key = `feedIn.${index}.${parts.length > 3 ? 'month' : 'ct'}`;
+		} else if (parts[0] === 'wallbox_names' && parts.length >= 2) {
+			key = `wallboxNames.${parts[1]}`;
 		}
 		result[key] ??= message;
 	}

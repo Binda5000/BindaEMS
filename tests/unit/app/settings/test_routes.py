@@ -70,3 +70,27 @@ def test_limits_show_hard_limits_without_hosts_or_vin(client, auth) -> None:
     assert limits["vehicles"]["egolf"]["phases"] == 2
     text = json.dumps(limits)
     assert "host" not in text and "5YJ3E7EB0MF000000" not in text
+
+
+def test_wallbox_names_from_settings_appear_in_limits(client, auth) -> None:
+    csrf = login_as(client, auth, "admin")
+    assert client.get("/api/limits").json()["wallboxes"]["evcs"]["name"] is None
+    settings = client.get("/api/settings").json()["settings"]
+    settings["wallbox_names"] = {"evcs": "  Garage  "}
+    saved = client.put(
+        "/api/settings", json={"base_version": 1, "settings": settings}, headers=csrf
+    )
+    assert saved.json()["settings"]["wallbox_names"] == {"evcs": "Garage"}
+    wallboxes = client.get("/api/limits").json()["wallboxes"]
+    assert (wallboxes["evcs"]["name"], wallboxes["twc"]["name"]) == ("Garage", None)
+
+
+@pytest.mark.parametrize("name", ["", "   ", "x" * 41])
+def test_wallbox_names_must_not_be_empty_or_too_long(client, auth, name) -> None:
+    csrf = login_as(client, auth, "admin")
+    settings = client.get("/api/settings").json()["settings"]
+    settings["wallbox_names"] = {"evcs": name}
+    response = client.put(
+        "/api/settings", json={"base_version": 1, "settings": settings}, headers=csrf
+    )
+    assert response.status_code == 422

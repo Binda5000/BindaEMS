@@ -1,6 +1,7 @@
 <script lang="ts">
 	import type { Limits } from '$lib/api/schemas';
 	import { formatNumber, NBSP } from '$lib/format';
+	import { wallboxName } from '$lib/wallboxes';
 
 	interface Props {
 		limits: Limits;
@@ -66,6 +67,7 @@
 		<thead>
 			<tr>
 				<th scope="col">Name</th>
+				<th scope="col">Schlüssel</th>
 				<th scope="col">Typ</th>
 				<th scope="col">Strom</th>
 				<th scope="col">Phasen</th>
@@ -75,6 +77,7 @@
 		<tbody>
 			{#each Object.entries(limits.wallboxes) as [name, wallbox] (name)}
 				<tr>
+					<td>{wallboxName(name, wallbox)}</td>
 					<td>{name}</td>
 					<td>{wallbox.type === 'victron_evcs_ns' ? 'Victron EVCS NS' : 'Tesla Wall Connector'}</td>
 					<td>
@@ -112,7 +115,9 @@
 					<td>{n(vehicle.usable_kwh, 'kWh', 1)}</td>
 					<td>{vehicle.phases}</td>
 					<td>{vehicle.min_a}–{vehicle.max_a}{NBSP}A</td>
-					<td>{vehicle.default_wallbox}</td>
+					<td>
+						{wallboxName(vehicle.default_wallbox, limits.wallboxes[vehicle.default_wallbox])}
+					</td>
 					<td>{yesNo(vehicle.live_allowed)}</td>
 				</tr>
 			{/each}

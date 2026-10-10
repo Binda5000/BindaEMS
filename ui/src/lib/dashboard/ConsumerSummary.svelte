@@ -3,7 +3,7 @@
 	import type { TreeNode } from '$lib/api/schemas';
 	import Notice from '$lib/components/Notice.svelte';
 	import { consumerRows } from '$lib/consumers/tree';
-	import { formatPower, formatRatio } from '$lib/format';
+	import { formatEnergy, formatPower, formatRatio } from '$lib/format';
 
 	interface Props {
 		tree: TreeNode | undefined;
@@ -33,20 +33,35 @@
 		<p class="stale">veraltet</p>
 	{/if}
 	<table class="summary" data-stale={error !== null}>
-		<caption class="sr-only">Verbraucher mit Leistung und Anteil an der Hauslast</caption>
+		<caption class="sr-only"
+			>Verbraucher mit Leistung (Anteil an der Hauslast darunter) und Energie seit Mitternacht</caption
+		>
+		<thead>
+			<tr>
+				<th scope="col"><span class="sr-only">Verbraucher</span></th>
+				<th scope="col" class="num">Jetzt</th>
+				<th scope="col" class="num">Heute</th>
+			</tr>
+		</thead>
 		<tbody>
 			{#each rows as row (row.key)}
 				<tr class={row.kind}>
 					<td>
-						<span class="swatch" aria-hidden="true" style:background={row.color ?? 'transparent'}
-						></span>
-						{row.name}
+						<span class="name"
+							><span class="swatch" aria-hidden="true" style:background={row.color ?? 'transparent'}
+							></span>{row.name}</span
+						>
 						{#if row.kind === 'other' && row.mismatch}
 							<span class="mismatch">(Unterverbraucher messen mehr)</span>
 						{/if}
 					</td>
-					<td class="num">{formatPower(row.powerW)}</td>
-					<td class="num muted">{row.kind === 'root' ? '' : share(row.powerW)}</td>
+					<td class="num">
+						{formatPower(row.powerW)}
+						{#if row.kind !== 'root' && share(row.powerW)}
+							<span class="share muted">{share(row.powerW)}</span>
+						{/if}
+					</td>
+					<td class="num">{formatEnergy(row.energyKwh)}</td>
 				</tr>
 			{/each}
 		</tbody>
@@ -55,9 +70,29 @@
 <p class="more"><a href="/verbraucher">Alle Verbraucher</a></p>
 
 <style>
-	.summary td {
+	.summary td,
+	.summary th {
 		border-bottom: none;
 		padding: 0.25rem 0.375rem;
+	}
+
+	.summary {
+		width: 100%;
+	}
+
+	.summary .num {
+		white-space: nowrap;
+	}
+
+	.share {
+		display: block;
+		font-size: 0.8125rem;
+	}
+
+	.summary th {
+		font-size: 0.8125rem;
+		font-weight: 400;
+		color: var(--muted);
 	}
 
 	.root td {
@@ -74,7 +109,15 @@
 		font-style: italic;
 	}
 
+	.name {
+		display: inline-flex;
+		align-items: baseline;
+		overflow-wrap: break-word;
+		hyphens: auto;
+	}
+
 	.swatch {
+		flex: none;
 		display: inline-block;
 		width: 0.625rem;
 		height: 0.625rem;

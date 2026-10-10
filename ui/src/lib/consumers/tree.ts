@@ -1,4 +1,4 @@
-// Verbraucherbaum als flache Zeilen; „Sonstiges“ folgt den Kindern jedes Knotens mit Kindern
+// Verbraucherbaum als flache Zeilen mit Leistung und Energie seit Mitternacht; „Sonstiges“ folgt den Kindern jedes Knotens mit Kindern
 import type { TreeNode } from '$lib/api/schemas';
 
 export interface ConsumerRow {
@@ -9,6 +9,10 @@ export interface ConsumerRow {
 	powerW: number | null;
 	/** warum `powerW` fehlt */
 	note: string | null;
+	/** Energie seit Mitternacht */
+	energyKwh: number | null;
+	/** warum `energyKwh` fehlt */
+	energyNote: string | null;
 	color: string | null;
 	kind: 'root' | 'consumer' | 'other';
 	mismatch: boolean;
@@ -24,6 +28,8 @@ export function consumerRows(tree: TreeNode): ConsumerRow[] {
 			depth,
 			powerW: node.power_w,
 			note: node.note,
+			energyKwh: node.energy_kwh,
+			energyNote: node.energy_note,
 			color: node.color,
 			kind: depth === 0 ? 'root' : 'consumer',
 			mismatch: node.mismatch
@@ -37,6 +43,8 @@ export function consumerRows(tree: TreeNode): ConsumerRow[] {
 				depth: depth + 1,
 				powerW: node.other_w,
 				note: null,
+				energyKwh: node.other_kwh,
+				energyNote: null,
 				color: null,
 				kind: 'other',
 				mismatch: node.mismatch

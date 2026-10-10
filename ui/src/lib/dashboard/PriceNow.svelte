@@ -16,6 +16,26 @@
 
 	const summary = $derived(data ? priceSummary(data) : null);
 	const max = $derived(Math.max(0, ...(summary?.next.map((n) => n.ct) ?? [])));
+
+	/** Balken unter Maus, Finger oder Tastatur; sein Preis steht darüber */
+	let active = $state<number | null>(null);
+	const slot = $derived(active === null ? null : (summary?.next[active] ?? null));
+
+	function slotEnd(start: string): string {
+		return new Date(Date.parse(start) + 15 * 60_000).toISOString();
+	}
+
+	function onKeydown(event: KeyboardEvent) {
+		const count = summary?.next.length ?? 0;
+		if (count === 0) return;
+		const step = event.key === 'ArrowRight' ? 1 : event.key === 'ArrowLeft' ? -1 : 0;
+		if (step !== 0) {
+			event.preventDefault();
+			active = Math.min(count - 1, Math.max(0, (active ?? -1) + step));
+		} else if (event.key === 'Escape') {
+			active = null;
+		}
+	}
 </script>
 
 <div class="price-now">
@@ -34,20 +54,49 @@
 	{/if}
 
 	{#if summary && summary.next.length > 0}
-		<ol class="bars" aria-label="Preise der nächsten 3 Stunden">
-			{#each summary.next as slot (slot.start)}
-				<li class={slot.level} title="{formatTime(slot.start)}: {formatCt(slot.ct)}">
-					<span
-						class="bar"
-						aria-hidden="true"
-						style:height="{max > 0 ? Math.max(8, (slot.ct / max) * 100) : 8}%"
-					></span>
-					<span class="sr-only">
-						{formatTime(slot.start)}: {formatCt(slot.ct)}, {LEVELS[slot.level]}
-					</span>
-				</li>
-			{/each}
-		</ol>
+		<div class="chart">
+			{#if slot && active !== null}
+				<p
+					class="tip {slot.level}"
+					data-testid="price-tip"
+					style:--at={(active + 0.5) / summary.next.length}
+				>
+					<span class="tip-time">{formatTime(slot.start)}–{formatTime(slotEnd(slot.start))}</span>
+					<strong>{formatCt(slot.ct)}</strong>
+				</p>
+			{/if}
+			<!-- Balken zeigen ihren Preis bei Maus, Finger und Pfeiltasten; die Werte stehen zusätzlich als Text darin -->
+			<!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions -->
+			<ol
+				class="bars"
+				aria-label="Preise der nächsten 3 Stunden (Pfeiltasten zeigen den Preis je Viertelstunde)"
+				tabindex="0"
+				onkeydown={onKeydown}
+				onblur={() => (active = null)}
+				onpointerleave={(event) => {
+					if (event.pointerType === 'mouse') active = null;
+				}}
+			>
+				{#each summary.next as item, index (item.start)}
+					<li
+						class={item.level}
+						class:active={active === index}
+						class:dimmed={active !== null && active !== index}
+						onpointerenter={() => (active = index)}
+						onpointerdown={() => (active = index)}
+					>
+						<span
+							class="bar"
+							aria-hidden="true"
+							style:height="{max > 0 ? Math.max(8, (item.ct / max) * 100) : 8}%"
+						></span>
+						<span class="sr-only">
+							{formatTime(item.start)}: {formatCt(item.ct)}, {LEVELS[item.level]}
+						</span>
+					</li>
+				{/each}
+			</ol>
+		</div>
 		<p class="axis muted" aria-hidden="true">
 			<span>{formatTime(summary.next[0].start)}</span>
 			<span>{formatTime(summary.next[summary.next.length - 1].start)}</span>
@@ -87,9 +136,49 @@
 		font-weight: 600;
 	}
 
+	.chart {
+		position: relative;
+		margin-top: 2.25rem; /* Platz für den Preis über dem Balken */
+	}
+
+	.tip {
+		position: absolute;
+		bottom: calc(100% + 0.25rem);
+		left: clamp(3.5rem, calc(var(--at) * 100%), calc(100% - 3.5rem));
+		transform: translateX(-50%);
+		display: flex;
+		gap: 0.375rem;
+		align-items: baseline;
+		margin: 0;
+		padding: 0.125rem 0.5rem;
+		border: 1px solid var(--border);
+		border-radius: 6px;
+		background: var(--surface);
+		box-shadow: 0 2px 6px rgb(0 0 0 / 0.15);
+		white-space: nowrap;
+		font-size: 0.875rem;
+		pointer-events: none;
+	}
+
+	.tip-time {
+		color: var(--muted);
+	}
+
+	.tip.low strong {
+		color: var(--ok);
+	}
+
+	.tip.mid strong {
+		color: var(--warn);
+	}
+
+	.tip.high strong {
+		color: var(--error);
+	}
+
 	.bars {
 		list-style: none;
-		margin: 0.5rem 0 0;
+		margin: 0;
 		padding: 0;
 		display: grid;
 		grid-template-columns: repeat(12, 1fr);
@@ -102,6 +191,17 @@
 		height: 100%;
 		display: flex;
 		align-items: flex-end;
+		cursor: pointer;
+		touch-action: manipulation;
+	}
+
+	.bars li.dimmed .bar {
+		opacity: 0.45;
+	}
+
+	.bars li.active .bar {
+		outline: 2px solid var(--text);
+		outline-offset: 1px;
 	}
 
 	.bar {

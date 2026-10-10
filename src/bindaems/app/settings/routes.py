@@ -3,6 +3,7 @@
 Ohne ``from __future__ import annotations`` (siehe ``auth/routes.py``).
 """
 
+from collections.abc import Mapping
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Response, status
@@ -44,13 +45,18 @@ def _version_meta(version: SettingsVersion) -> dict[str, Any]:
     }
 
 
-def limits_json(cfg: Config) -> dict[str, Any]:
-    """Harte Grenzen aus ``config.yaml`` – ohne Hosts, Zugangsdaten und Fahrzeug-IDs."""
+def limits_json(cfg: Config, wallbox_names: Mapping[str, str] | None = None) -> dict[str, Any]:
+    """Harte Grenzen aus ``config.yaml`` – ohne Hosts, Zugangsdaten und Fahrzeug-IDs.
+
+    ``name`` je Wallbox ist der eigene Anzeigename aus den Einstellungen (``None``: keiner).
+    """
+    names = wallbox_names or {}
     wallboxes: dict[str, Any] = {}
     for name, wallbox in cfg.wallboxes.items():
         if isinstance(wallbox, EvcsConfig):
             wallboxes[name] = {
                 "type": wallbox.type,
+                "name": names.get(name),
                 "min_a": wallbox.min_a,
                 "max_a": wallbox.max_a,
                 "safe_a": wallbox.safe_a,
@@ -60,6 +66,7 @@ def limits_json(cfg: Config) -> dict[str, Any]:
         else:
             wallboxes[name] = {
                 "type": wallbox.type,
+                "name": names.get(name),
                 "max_a": wallbox.max_a,
                 "phase_map": list(wallbox.phase_map),
             }
@@ -151,6 +158,6 @@ def settings_router(service: SettingsService, cfg: Config, guard: Guard) -> APIR
 
     @router.get("/api/limits")
     def limits(session: Viewer) -> dict[str, Any]:
-        return limits_json(cfg)
+        return limits_json(cfg, service.current().settings.wallbox_names)
 
     return router

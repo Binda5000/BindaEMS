@@ -1,6 +1,6 @@
 [
   {
-    "id": 8,
+    "id": 9,
     "ts": "2026-10-09T08:00:00+00:00",
     "actor": "admin",
     "source": "ui",
@@ -18,7 +18,7 @@
     }
   },
   {
-    "id": 7,
+    "id": 8,
     "ts": "2026-10-09T08:00:00+00:00",
     "actor": "admin",
     "source": "ui",
@@ -36,7 +36,7 @@
     }
   },
   {
-    "id": 6,
+    "id": 7,
     "ts": "2026-10-09T08:00:00+00:00",
     "actor": "admin",
     "source": "ui",
@@ -51,6 +51,24 @@
       "power_ref": "load.obergeschoss.power_w",
       "power_unit": null,
       "sort": 0
+    }
+  },
+  {
+    "id": 6,
+    "ts": "2026-10-09T08:00:00+00:00",
+    "actor": "test",
+    "source": "ui",
+    "action": "settings.update",
+    "target": "einstellungen",
+    "details": {
+      "version": 4,
+      "changes": [
+        {
+          "path": "wallbox_names.twc",
+          "old": null,
+          "new": "Garage"
+        }
+      ]
     }
   },
   {

@@ -26,6 +26,7 @@
   "wallboxes": {
     "evcs": {
       "type": "victron_evcs_ns",
+      "name": null,
       "min_a": 6,
       "max_a": 16,
       "safe_a": 6,
@@ -38,6 +39,7 @@
     },
     "twc": {
       "type": "tesla_wall_connector_gen3",
+      "name": "Garage",
       "max_a": 16,
       "phase_map": [
         "L1",

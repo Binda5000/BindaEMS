@@ -180,3 +180,19 @@ async def test_candidates_say_why_ha_sources_are_missing(cfg, live, respx_mock, 
     influx = cfg.influxdb.model_copy(update={"ha_database": None})
     result = await candidates(cfg.model_copy(update={"influxdb": influx}), live, reader)
     assert result["ha_error"] == "HA-Datenbank nicht eingerichtet (influxdb.ha_database)"
+
+
+def test_tree_computes_energy_and_other_energy_per_level() -> None:
+    consumers, power = tree_input([k(1, 800.0), k(2, 300.0, parent=1), k(3, 500.0)])
+    energy = {1: (4.0, None), 2: (1.5, None), 3: (None, "kein Verlauf seit Mitternacht")}
+    root = build_tree(consumers, power, 2000.0, energy=lambda c: energy[c.id], house_kwh=12.0)
+    assert (root.energy_kwh, root.other_kwh) == (12.0, None)  # Energie von V3 fehlt
+    og = root.children[0]
+    assert (og.energy_kwh, og.other_kwh, og.energy_note) == (4.0, 2.5, None)
+    assert root.children[1].energy_note == "kein Verlauf seit Mitternacht"
+
+
+def test_tree_negative_other_energy_is_clamped() -> None:
+    consumers, power = tree_input([k(1, 800.0)])
+    root = build_tree(consumers, power, 2000.0, energy=lambda _: (5.0, None), house_kwh=4.0)
+    assert root.other_kwh == 0.0

@@ -8,7 +8,7 @@
 	import Notice from '$lib/components/Notice.svelte';
 	import ConsumerSummary from '$lib/dashboard/ConsumerSummary.svelte';
 	import EnergyFlow from '$lib/dashboard/EnergyFlow.svelte';
-	import { flowBranches, wallboxLabels } from '$lib/dashboard/flow';
+	import { flowBranches, flowConsumers, wallboxLabels } from '$lib/dashboard/flow';
 	import Notices from '$lib/dashboard/Notices.svelte';
 	import { noticesFrom } from '$lib/dashboard/notices';
 	import PriceNow from '$lib/dashboard/PriceNow.svelte';
@@ -38,6 +38,7 @@
 	});
 
 	const branches = $derived(flowBranches(live.state?.derived, wallboxLabels(limits.data)));
+	const flowItems = $derived(flowConsumers(consumers.data?.tree));
 	const socs = $derived(socEntries(live.state, limits.data));
 	const notices = $derived(noticesFrom(system.data));
 
@@ -58,7 +59,7 @@
 <div class="dashboard">
 	<div class="wide">
 		<Card title="Energiefluss">
-			<EnergyFlow {branches} stale={live.stale} />
+			<EnergyFlow {branches} consumers={flowItems} stale={live.stale} />
 		</Card>
 	</div>
 	<Card title="Strompreis">
