@@ -87,6 +87,7 @@ export function priceForecastOption(
 	const now = parseIso(nowIso);
 	const series: LineSeriesOption[] = [
 		{
+			id: 'import',
 			name: 'Bezugspreis',
 			type: 'line',
 			step: 'end',
@@ -109,6 +110,7 @@ export function priceForecastOption(
 	];
 	if (prices.some((slot) => slot.feed_in_ct !== null)) {
 		series.push({
+			id: 'feed_in',
 			name: 'Einspeisung',
 			type: 'line',
 			step: 'end',
@@ -121,6 +123,7 @@ export function priceForecastOption(
 	}
 	if (forecast.length > 0) {
 		series.push({
+			id: 'pv',
 			name: 'PV-Prognose',
 			type: 'line',
 			yAxisIndex: 1,
@@ -178,12 +181,13 @@ function unitFormat(unit: string): ValueFormat {
 export function historyOption(data: HistoryResponse, palette: Palette): EChartsCoreOption {
 	const units: string[] = [];
 	const formats: Record<string, ValueFormat> = {};
-	const series: LineSeriesOption[] = Object.values(data.series).map((entry, index) => {
+	const series: LineSeriesOption[] = Object.entries(data.series).map(([id, entry], index) => {
 		const unit = entry.unit === 'W' ? 'kW' : entry.unit; // Leistung in kW
 		if (!units.includes(unit)) units.push(unit);
 		formats[entry.label] = unitFormat(unit);
 		const color = palette.series[index % palette.series.length];
 		return {
+			id,
 			name: entry.label,
 			type: 'line',
 			yAxisIndex: units.indexOf(unit),

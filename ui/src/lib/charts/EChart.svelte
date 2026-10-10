@@ -34,9 +34,18 @@
 		};
 	});
 
-	// erste und jede geänderte Option vollständig übernehmen
+	function reducedMotion(): boolean {
+		return (
+			typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches
+		);
+	}
+
+	// neue Werte einarbeiten: Zoom und ausgeblendete Reihen bleiben, Reihen und y-Achsen werden
+	// ersetzt (abgewählte verschwinden); bei prefers-reduced-motion ohne Animation
 	$effect(() => {
-		chart?.setOption(option, { notMerge: true });
+		chart?.setOption(reducedMotion() ? { ...option, animation: false } : option, {
+			replaceMerge: ['series', 'yAxis']
+		});
 	});
 </script>
 
