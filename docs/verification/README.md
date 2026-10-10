@@ -54,9 +54,11 @@ Lokal aus dem Repository geht es mit:
    - Die Vorzeichenkonvention des Netzstroms lässt sich nur bei Einspeisung über 100 W
      bestimmen.
    - Ein aktiver Ladeplan im Fahrzeug muss aus.
-   - „EVCS-Registerabbild leer“: Unter `host` und `unit_id` antwortet etwas, aber nicht die
-     EVCS. Der Bericht nennt den Weg, über den der Cerbo die Wallbox liest; `host` dorthin
-     stellen und Teil 1 wiederholen.
+   - „EVCS-Registerabbild leer“: Unter `host`, `port` und `unit_id` antwortet etwas, aber
+     nicht die EVCS. Der Bericht nennt den Weg, über den der Cerbo die Wallbox liest. Der Cerbo
+     findet sie per mDNS und nutzt den dort angekündigten Port; ihn zeigt der Cerbo unter den
+     gespeicherten Modbus-TCP-Geräten. `host` und `port` dorthin stellen und Teil 1
+     wiederholen.
 3. Den Bericht mit Datum einchecken.
 
 ### Manuell zu prüfen

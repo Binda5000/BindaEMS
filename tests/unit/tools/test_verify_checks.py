@@ -1,6 +1,7 @@
 from datetime import timedelta
 from types import MappingProxyType
 
+import pytest
 from tests.helpers import T0, snap
 
 from bindaems.core.checks.selfcheck import CheckResult
@@ -91,7 +92,20 @@ def test_submeter_counter_reported() -> None:
 
 
 def test_evcs_dump_unknown_product_warns() -> None:
-    assert check_evcs_dump({5000: 0x1234, 5007: 1, 5008: 2})[0].status == "warn"
+    findings = check_evcs_dump({5000: 0x1234, 5007: 1, 5008: 2})
+    assert findings[0].status == "warn"
+    # ohne bekannte Produkt-ID ist auch die Firmware kein verlässlicher Wert
+    assert "EVCS-Firmware" not in [f.title for f in findings]
+
+
+def test_evcs_dump_firmware_like_the_cerbo() -> None:
+    findings = check_evcs_dump({5000: 0xC026, 5007: 0x0002, 5008: 0x09FF})
+    assert findings[1] == Finding("17.1-8", "EVCS-Firmware", "info", "Firmware v2.09")
+
+
+@pytest.mark.parametrize("product_id", [0xC023, 0xC024, 0xC025, 0xC026, 0xC027])
+def test_evcs_dump_knows_all_victron_models(product_id: int) -> None:
+    assert check_evcs_dump({5000: product_id})[0].status == "ok"
 
 
 def test_evcs_dump_lists_nonzero_registers() -> None:
@@ -114,11 +128,12 @@ def test_evcs_dump_all_zero_warns_with_the_cerbo_address() -> None:
     last = check_evcs_dump(regs, gx_connection="Modbus TCP 192.168.81.41")[-1]
     assert (last.item, last.title, last.status) == ("17.1-8", "EVCS-Registerabbild leer", "warn")
     assert last.detail == (
-        "Alle 200 Register sind 0. Der Cerbo liest die EVCS über „Modbus TCP 192.168.81.41“; "
-        "prüfe host und unit_id der Wallbox in config.yaml."
+        "Alle 200 Register sind 0. Der Cerbo liest die EVCS über „Modbus TCP 192.168.81.41“, "
+        "mit dem Port, den die EVCS per mDNS ankündigt; prüfe host, port und unit_id der "
+        "Wallbox in config.yaml."
     )
     assert check_evcs_dump(regs)[-1].detail == (
-        "Alle 200 Register sind 0. Prüfe host und unit_id der Wallbox in config.yaml."
+        "Alle 200 Register sind 0. Prüfe host, port und unit_id der Wallbox in config.yaml."
     )
 
 

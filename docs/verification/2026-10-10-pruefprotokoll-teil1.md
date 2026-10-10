@@ -63,7 +63,12 @@
     im manuellen Modus.
   - Nachtrag: Laut Betreiber stand `wallboxes.evcs.host` schon auf 192.168.81.41. Die
     Adresse erklärt die Nullen also nicht. BindaEMS liest wie der Cerbo: Funktionscode 3,
-    Unit-ID 1, ab Register 5000. Die Ursache ist offen und wird vor Phase 2b geklärt.
+    Unit-ID 1, ab Register 5000.
+  - Diagnose vom 10.10.2026 (nur lesend, aus dem core-Container):
+    - Port 502 liefert mit Funktionscode 3 bei den Unit-IDs 0, 1 und 100 nur Nullen.
+    - Funktionscode 4 beantwortet die EVCS mit „illegal function“.
+    - Victrons GX-Treiber findet die EVCS per mDNS und nutzt den dort angekündigten Port.
+      Vermutlich ist das nicht 502; offen ist, den Port am Cerbo abzulesen.
   - Seit dieser Prüfung liest die Selbstprüfung den EVCS-Modus vom Cerbo. Ein leeres
     Registerabbild meldet das Werkzeug als WARNUNG mit dem Weg des Cerbo.
   - Leistung und Energie der EVCS kommen über den Cerbo und sind nicht betroffen. Den Weg für

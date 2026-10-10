@@ -1,7 +1,8 @@
 """Victron EV Charging Station NS über Modbus TCP, ausschließlich lesend.
 
-Gelesen wird zyklisch ein Block ab Register 5000. Leistung, Status und Energie der Wallbox
-liefert zusätzlich der GX über MQTT (``wallbox.<id>.*`` aus ``victron_topics``).
+Gelesen wird zyklisch ein Block ab Register 5000. Die Belegung folgt Victrons eigenem GX-Treiber
+(``dbus-modbus-client``, ``ev_charger.py``, Stand v1.83). Leistung, Status und Energie der
+Wallbox liefert zusätzlich der GX über MQTT (``wallbox.<id>.*`` aus ``victron_topics``).
 """
 
 from __future__ import annotations
@@ -9,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import inspect
+import struct
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import replace
 from datetime import UTC, datetime
@@ -33,10 +35,12 @@ REG_FW_HIGH = 5007
 REG_FW_LOW = 5008
 REG_MODE = 5009
 REG_START_STOP = 5010
-REG_SET_CURRENT = 5017
+REG_SET_CURRENT = 5016
+REG_MAX_CURRENT = 5017
 REG_ACTUAL_CURRENT_X10 = 5018
 
-KNOWN_PRODUCT_IDS = frozenset({0xC024, 0xC025, 0xC026})
+# EVCS 32A V2, AC22, AC22E, AC22NS, EVCS 32A NS V2 – alle mit derselben Belegung
+KNOWN_PRODUCT_IDS = frozenset({0xC023, 0xC024, 0xC025, 0xC026, 0xC027})
 
 
 class ModbusReadError(Exception):
@@ -96,16 +100,24 @@ class PymodbusReader:
         self._client.close()
 
 
+def firmware_text(high: int, low: int) -> str:
+    """Firmware wie im GX, z. B. ``v2.09``; Vorabversionen als ``v1.21-beta-01``."""
+    _, major, minor, beta = struct.unpack("4B", struct.pack(">2H", high, low))
+    version = f"v{major:x}.{minor:02x}"
+    return version if beta == 0xFF else f"{version}-beta-{beta:02x}"
+
+
 def decode_block(start: int, regs: Sequence[int]) -> dict[str, Value]:
     def reg(address: int) -> int:
         return regs[address - start]
 
     return {
         "product_id": reg(REG_PRODUCT_ID),
-        "firmware": f"{reg(REG_FW_HIGH):04x}.{reg(REG_FW_LOW):04x}",
+        "firmware": firmware_text(reg(REG_FW_HIGH), reg(REG_FW_LOW)),
         "mode": reg(REG_MODE),
         "start_stop": reg(REG_START_STOP),
         "set_current_a": reg(REG_SET_CURRENT),
+        "max_current_a": reg(REG_MAX_CURRENT),
         "current_a": reg(REG_ACTUAL_CURRENT_X10) / 10,
     }
 
@@ -169,11 +181,15 @@ class EvcsAdapter:
 
     def _apply(self, values: dict[str, Value]) -> None:
         product_id = values["product_id"]
-        if product_id not in KNOWN_PRODUCT_IDS:
+        known = product_id in KNOWN_PRODUCT_IDS
+        if not known:
             self._health.last_error = f"Unbekannte Produkt-ID 0x{product_id:04X}"
         for key, value in values.items():
             kind = SignalKind.MEASUREMENT if key == "current_a" else SignalKind.STATE
-            self._store.update(f"wallbox.{self.name}.{key}", value, source=self.name, kind=kind)
+            # ohne bekannte Produkt-ID ist das Abbild keines einer EVCS (Prüfprotokoll 10.10.2026:
+            # lauter Nullen): ungültig, damit Strom und Modus vom Cerbo kommen statt 0
+            usable = value if known or key == "product_id" else None
+            self._store.update(f"wallbox.{self.name}.{key}", usable, source=self.name, kind=kind)
         self._set_connected(True)
         self._health.last_ok = datetime.now(UTC)
 

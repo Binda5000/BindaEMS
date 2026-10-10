@@ -148,8 +148,14 @@ Demo-Zugänge: `admin`, `gast` (Lesen) und `sicher` (Admin mit TOTP, Geheimnis
   brutto). Teil 1 mit Befunden, siehe die Bewertung am Ende des Protokolls:
   - Dynamic ESS bleibt nach Entscheidung des Betreibers an, bis Phase 2 live schaltet.
   - Die EVCS (AC22NS, Produkt-ID 0xC026) liest der Cerbo per Modbus TCP unter
-    192.168.81.41. BindaEMS bekam unter derselben Adresse nur Nullen. `wallboxes.evcs.host`
-    stand laut Betreiber schon richtig; die Ursache ist offen und wird vor 2b geklärt.
+    192.168.81.41. BindaEMS bekam unter derselben Adresse auf Port 502 nur Nullen, mit jeder
+    Unit-ID; Funktionscode 4 kennt die EVCS nicht. `wallboxes.evcs.host` stand laut Betreiber
+    schon richtig. Vermutlich nutzt die EVCS einen anderen Port: Der Cerbo findet sie per mDNS
+    und nimmt den dort angekündigten. Offen: den Port am Cerbo ablesen (gespeicherte
+    Modbus-TCP-Geräte) und `wallboxes.evcs.port` setzen.
+  - Seit dem 10.10.2026 folgt die Registerbelegung Victrons GX-Treiber: Sollstrom 5016,
+    Maximalstrom 5017. Ohne bekannte Produkt-ID gelten die Registerwerte als ungültig; Strom
+    und Modus kommen dann vom Cerbo.
   - Peak Shaving: Laut Betreiber steht das Importlimit knapp unter der 35-A-Sicherung (etwa
     33 A); das Protokoll vom 10.10. las noch 20 A.
   - Akku 96 kWh nutzbar.

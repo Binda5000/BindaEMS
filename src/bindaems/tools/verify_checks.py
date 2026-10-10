@@ -14,6 +14,7 @@ from bindaems.core.adapters.evcs import (
     REG_FW_HIGH,
     REG_FW_LOW,
     REG_PRODUCT_ID,
+    firmware_text,
 )
 from bindaems.core.checks.selfcheck import CheckResult
 from bindaems.core.checks.values import fmt, number
@@ -276,24 +277,23 @@ def check_evcs_dump(regs: Mapping[int, int], gx_connection: str | None = None) -
             "EVCS-Produkt-ID",
             "ok" if known else "warn",
             f"Produkt-ID 0x{product_id:04X}" + ("" if known else " – unbekannt"),
-        ),
-        Finding(
-            "17.1-8",
-            "EVCS-Firmware",
-            "info",
-            f"Firmware {regs.get(REG_FW_HIGH, 0):04x}.{regs.get(REG_FW_LOW, 0):04x}",
-        ),
+        )
     ]
+    if known:  # ohne bekannte Produkt-ID ist auch die Firmware kein verlässlicher Wert
+        firmware = firmware_text(regs.get(REG_FW_HIGH, 0), regs.get(REG_FW_LOW, 0))
+        findings.append(Finding("17.1-8", "EVCS-Firmware", "info", f"Firmware {firmware}"))
     nonzero = [
         f"{address} = {value} (0x{value:04X})" for address, value in sorted(regs.items()) if value
     ]
     if nonzero:
         findings.append(Finding("17.1-8", "EVCS-Register ≠ 0", "info", "; ".join(nonzero)))
         return findings
-    # leer: antwortet unter host/unit_id überhaupt die EVCS?
-    hint = "host und unit_id der Wallbox in config.yaml."
+    # leer: antwortet unter host/port/unit_id überhaupt die EVCS? Der Cerbo findet sie per mDNS
+    # und nimmt den dort angekündigten Port, der nicht 502 sein muss.
+    hint = "host, port und unit_id der Wallbox in config.yaml."
     detail = f"Alle {len(regs)} Register sind 0. " + (
-        f"Der Cerbo liest die EVCS über „{gx_connection}“; prüfe {hint}"
+        f"Der Cerbo liest die EVCS über „{gx_connection}“, mit dem Port, den die EVCS per mDNS "
+        f"ankündigt; prüfe {hint}"
         if gx_connection
         else f"Prüfe {hint}"
     )

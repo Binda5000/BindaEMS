@@ -57,7 +57,10 @@ Danach folgt die Abnahme der Phase 2 (Spec 18):
 Stand an der Anlage (Angabe des Betreibers vom 10.10.2026):
 - `wallboxes.evcs.host` steht schon auf 192.168.81.41.
 - Das Peak-Shaving-Importlimit steht schon knapp unter der Hausanschlusssicherung, bei etwa 33 A (Ebene 0).
-- **Offen vor 2b:** Warum enthält das eigene EVCS-Registerabbild trotz richtiger Adresse nur Nullen (Prüfprotokoll Teil 1, 17.1-8)? Davon hängt ab, ob 2b direkt per Modbus oder über den GX-Dienst `evcharger` auf die EVCS schreibt.
+- **Offen vor 2b:** Das eigene EVCS-Registerabbild enthält trotz richtiger Adresse nur Nullen (Prüfprotokoll Teil 1, 17.1-8).
+  - Vermutlich ein anderer Port: Der Cerbo findet die EVCS per mDNS und nutzt den dort angekündigten Port.
+  - Davon hängt ab, ob 2b direkt per Modbus oder über den GX-Dienst `evcharger` auf die EVCS schreibt.
+  - Geschrieben wird in jedem Fall der Sollstrom (Register 5016, auf dem GX `/SetCurrent`), nie der Maximalstrom (5017).
 
 ## Präzisierungen gegenüber der Spec
 

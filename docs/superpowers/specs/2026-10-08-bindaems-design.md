@@ -121,16 +121,21 @@ Alles, was in diesem Abschnitt als „zu prüfen“ markiert ist, wird im Prüfp
 
 ### 3.5 Victron EVCS NS
 
-- Modbus TCP direkt an der Wallbox, Unit-ID 1. Die Register laut Community-Tabelle:
+- Modbus TCP direkt an der Wallbox, Unit-ID 1. Die Register laut Victrons eigenem GX-Treiber (`dbus-modbus-client`, `ev_charger.py`, Stand v1.83). Sie gelten für alle Modelle mit den Produkt-IDs 0xC023–0xC027; die AC22NS hat 0xC026.
 
   | Register | Bedeutung |
   |---|---|
-  | 5009 | Modus (0 = manuell) |
+  | 5000 | Produkt-ID |
+  | 5007–5008 | Firmware |
+  | 5009 | Modus (0 = manuell, 1 = automatisch, 2 = geplant) |
   | 5010 | Start/Stop |
-  | 5017 | Strom, 6–32 A |
+  | 5011–5014 | Leistung L1–L3 und gesamt (W) |
+  | 5015 | Status |
+  | 5016 | Sollstrom (A) |
+  | 5017 | Maximalstrom (A) |
   | 5018 | Ist-Strom (A × 10) |
 
-  Beim NS-Modell weichen einzelne Register ab; das wird geprüft.
+- Der Cerbo findet die EVCS per mDNS (`_victron-car-charger._tcp`) und nutzt den dort angekündigten Port; der muss nicht 502 sein. Im Prüfprotokoll Teil 1 vom 10.10.2026 lieferte Port 502 nur Nullen.
 - Es gibt **keinen Kommunikations-Watchdog**: Fällt das EMS aus, lädt die Wallbox mit dem zuletzt gesetzten Strom weiter.
 - **Folge:** Der Watchdog setzt bei Ausfall einen sicheren Strom (8.6).
 
@@ -408,7 +413,7 @@ bindaems/
 - **Lesen jede Sekunde:** Status, Modus, Start/Stop, Soll- und Ist-Strom, Leistung, Session- und Gesamtenergie. Die Firmware wird beim Start gelesen.
 - **Schreiben:**
   - Start/Stop.
-  - Strom von 6 bis 16 A in ganzen Ampere, höchstens alle 5 s und mit 1 A Totband.
+  - Strom von 6 bis 16 A in ganzen Ampere, höchstens alle 5 s und mit 1 A Totband. Geschrieben wird der Sollstrom (5016), nie der Maximalstrom (5017).
   - Jede Änderung wird durch Zurücklesen bestätigt.
 - **Modus:** Das EMS stellt ihn **nie** selbst um. Steht er nicht auf „manuell“, sperrt das EMS das Schreiben und meldet einen Alarm (7.9).
 - **Phasenzuordnung** (konfigurierbar): auf welchen Netzphasen die Wallbox-Phasen 1–3 liegen. Der e-Golf nutzt die ersten beiden Wallbox-Phasen (konfigurierbar je Fahrzeug). Die Zuordnung wird über Messungen plausibilisiert.

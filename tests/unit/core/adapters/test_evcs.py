@@ -12,22 +12,36 @@ from bindaems.core.adapters.evcs import (
     ModbusReadError,
     PymodbusReader,
     decode_block,
+    firmware_text,
 )
-from bindaems.shared.domain import Quality
+from bindaems.core.state.derived import derive
+from bindaems.shared.domain import Quality, SignalKind
 
-REGS = [0xC025, 0, 0, 0, 0, 0, 0, 0x0102, 0x0003, 0, 1, 0, 0, 0, 0, 0, 0, 16, 125, 0]
+# Belegung wie im GX-Treiber von Victron (dbus-modbus-client, ev_charger.py): AC22NS, Firmware
+# v2.09, Modus manuell, Laden an, Status 2 (lädt), Sollstrom 10 A (5016), Maximalstrom 16 A (5017),
+# Ist-Strom 12,5 A (5018)
+REGS = [0xC026, 0, 0, 0, 0, 0, 0, 0x0002, 0x09FF, 0, 1, 0, 0, 0, 0, 2, 10, 16, 125, 0]
+REGISTER_VALUES = ("firmware", "mode", "start_stop", "set_current_a", "max_current_a", "current_a")
 
 
 def test_decode_block() -> None:
     d = decode_block(5000, REGS)
     assert d == {
-        "product_id": 0xC025,
-        "firmware": "0102.0003",
+        "product_id": 0xC026,
+        "firmware": "v2.09",
         "mode": 0,
         "start_stop": 1,
-        "set_current_a": 16,
+        "set_current_a": 10,
+        "max_current_a": 16,
         "current_a": 12.5,
     }
+
+
+@pytest.mark.parametrize(
+    ("high", "low", "text"), [(0x0002, 0x09FF, "v2.09"), (0x0001, 0x2101, "v1.21-beta-01")]
+)
+def test_firmware_like_the_cerbo(high: int, low: int, text: str) -> None:
+    assert firmware_text(high, low) == text
 
 
 async def test_poll_updates_store(evcs_env) -> None:
@@ -93,16 +107,42 @@ async def test_only_read_calls(evcs_env) -> None:
     assert {c[0] for c in reader.calls} <= {"connect", "read_holding", "close"}
 
 
-async def test_unknown_product_id_reported(evcs_env) -> None:
+async def test_unknown_product_id_invalidates_register_values(evcs_env) -> None:
     adapter, _, store = evcs_env(blocks=[[0x1234, *REGS[1:]]])
-    await run_until(
-        adapter,
-        lambda: (
-            adapter.health().last_error is not None
-            and store.snapshot().ok("wallbox.evcs.current_a") == 12.5
-        ),  # Werte trotzdem übernommen
-    )
+
+    def invalidated() -> bool:
+        snap = store.snapshot()
+        readings = [snap.get(f"wallbox.evcs.{key}") for key in REGISTER_VALUES]
+        return snap.ok("wallbox.evcs.product_id") == 0x1234 and all(
+            r is not None and r.quality is Quality.INVALID for r in readings
+        )
+
+    await run_until(adapter, invalidated)
     assert "Unbekannte Produkt-ID 0x1234" in adapter.health().last_error
+
+
+async def test_empty_register_block_leaves_current_to_the_cerbo(evcs_env, cfg) -> None:
+    # Prüfprotokoll 10.10.2026: eigenes Registerabbild nur Nullen; der Cerbo meldet, dass der
+    # e-Golf mit 16 A auf zwei Phasen lädt
+    adapter, _, store = evcs_env(blocks=[[0] * BLOCK_COUNT])
+    store.register_source("victron", 5.0)
+    store.set_connected("victron", True)
+    for signal, value in {
+        "wallbox.evcs.power_w": 7360.0,
+        "wallbox.evcs.gx_current_a": 16.0,
+    }.items():
+        store.update(signal, value, source="victron", kind=SignalKind.MEASUREMENT)
+
+    def phases_from_the_cerbo() -> bool:
+        snap = store.snapshot()
+        phases = derive(snap, cfg).wallbox_phase_a.get("evcs")
+        return snap.ok("wallbox.evcs.product_id") == 0 and phases == {
+            "L1": 16.0,
+            "L2": 16.0,
+            "L3": 0.0,
+        }
+
+    await run_until(adapter, phases_from_the_cerbo)
 
 
 def _free_port() -> int:

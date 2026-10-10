@@ -31,6 +31,7 @@ from bindaems.core.adapters import tessie as tessie_api
 from bindaems.core.adapters.evcs import (
     BLOCK_COUNT,
     BLOCK_START,
+    KNOWN_PRODUCT_IDS,
     ModbusReadError,
     PymodbusReader,
     decode_block,
@@ -300,7 +301,8 @@ async def run_verification(
         block = [regs.get(BLOCK_START + i) for i in range(BLOCK_COUNT)]
         if all(value is not None for value in block):
             values = decode_block(BLOCK_START, [v for v in block if v is not None])
-            meta[f"EVCS-Firmware {name}"] = str(values["firmware"])
+            if values["product_id"] in KNOWN_PRODUCT_IDS:  # sonst keine verlässliche Firmware
+                meta[f"EVCS-Firmware {name}"] = str(values["firmware"])
             mqtt.store.register_source(name, 5.0)
             mqtt.store.set_connected(name, True)
             for key, value in values.items():
