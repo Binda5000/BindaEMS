@@ -4,14 +4,14 @@ import type { Derived, Limits } from '$lib/api/schemas';
 /** Darunter gilt ein Zweig als ruhend (Messrauschen, Standby). */
 export const IDLE_W = 20;
 
-/** `in` = zum Hausanschluss hin */
-export type FlowDirection = 'in' | 'out' | 'idle' | 'unknown';
+/** `in` = zum Hausanschluss hin; `implausible` = gegen die einzig mögliche Richtung (Messfehler) */
+export type FlowDirection = 'in' | 'out' | 'idle' | 'unknown' | 'implausible';
 
 export interface FlowBranch {
 	id: string;
 	label: string;
 	caption: string;
-	/** Betrag; die Richtung trägt das Vorzeichen */
+	/** Betrag; die Richtung trägt das Vorzeichen (bei `implausible` der Messwert mit Vorzeichen) */
 	powerW: number | null;
 	direction: FlowDirection;
 }
@@ -42,8 +42,14 @@ function branch(
 	label: string,
 	value: number | null | undefined,
 	positive: 'in' | 'out',
-	captions: { in?: string; out?: string } = {}
+	captions: { in?: string; out?: string } = {},
+	oneWay = false
 ): FlowBranch {
+	// PV erzeugt nur, Haus und Wallboxen verbrauchen nur: ein Wert gegen diese Richtung ist ein
+	// Mess- oder Zeitfehler und kein Rückfluss
+	if (oneWay && typeof value === 'number' && Number.isFinite(value) && value < -IDLE_W) {
+		return { id, label, caption: 'unplausibel', powerW: value, direction: 'implausible' };
+	}
 	const dir = direction(value, positive);
 	const known = dir !== 'unknown' && value !== null && value !== undefined;
 	const caption = (dir === 'in' || dir === 'out' ? captions[dir] : undefined) ?? label;
@@ -58,12 +64,14 @@ export function flowBranches(
 		...new Set([...Object.keys(wallboxes), ...Object.keys(derived?.wallbox_w ?? {})])
 	];
 	return [
-		branch('pv', 'PV', derived?.pv_total_w, 'in'),
+		branch('pv', 'PV', derived?.pv_total_w, 'in', {}, true),
 		branch('grid', 'Netz', derived?.grid_w, 'in', { in: 'Bezug', out: 'Einspeisung' }),
 		branch('battery', 'Akku', derived?.battery_w, 'out', { in: 'entlädt', out: 'lädt' }),
-		branch('house', 'Haus', derived?.house_load_w, 'out'),
+		branch('house', 'Haus', derived?.house_load_w, 'out', {}, true),
 		...wallboxKeys
 			.sort()
-			.map((key) => branch(`wallbox:${key}`, wallboxes[key] ?? key, derived?.wallbox_w[key], 'out'))
+			.map((key) =>
+				branch(`wallbox:${key}`, wallboxes[key] ?? key, derived?.wallbox_w[key], 'out', {}, true)
+			)
 	];
 }

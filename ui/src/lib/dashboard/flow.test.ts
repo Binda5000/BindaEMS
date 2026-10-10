@@ -51,3 +51,19 @@ it('unbekannte Werte zeigen einen Strich', () => {
 	});
 	expect(flowBranches(null, labels).every((b) => b.direction === 'unknown')).toBe(true);
 });
+
+it('kennzeichnet negative PV-, Haus- und Wallboxwerte als unplausibel statt als Rückfluss', () => {
+	// Zeitversatz oder Messfehler: Strom fließt nicht vom Haus ins Netz zurück
+	const branches = flowBranches(
+		{ ...midday, pv_total_w: -300, house_load_w: -150, wallbox_w: { evcs: -500, twc: -10 } },
+		labels
+	);
+	const byId = Object.fromEntries(branches.map((b) => [b.id, b]));
+	expect([byId.pv.direction, byId.pv.powerW]).toEqual(['implausible', -300]);
+	expect([byId.house.direction, byId.house.powerW]).toEqual(['implausible', -150]);
+	expect([byId['wallbox:evcs'].direction, byId['wallbox:evcs'].powerW]).toEqual([
+		'implausible',
+		-500
+	]);
+	expect(byId['wallbox:twc'].direction).toBe('idle'); // Rauschen um 0
+});

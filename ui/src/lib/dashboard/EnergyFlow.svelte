@@ -166,6 +166,18 @@
 		animation: none;
 	}
 
+	.line.implausible {
+		stroke: var(--warn);
+		stroke-dasharray: 2 6;
+		stroke-width: 2;
+		animation: none;
+	}
+
+	[data-direction='implausible'] .caption,
+	[data-direction='implausible'] .power {
+		fill: var(--warn);
+	}
+
 	@keyframes run {
 		to {
 			stroke-dashoffset: -26;

@@ -25,3 +25,12 @@ it('zeigt unbekannte Werte als Strich, nicht als 0', () => {
 	expect(screen.getByTestId('flow-grid')).toHaveTextContent('–');
 	expect(screen.getByTestId('flow-grid')).not.toHaveTextContent('0 W');
 });
+
+it('zeigt unplausible Werte mit Vorzeichen und ohne Fluss', () => {
+	const branches = flowBranches(derived({ pv_total_w: -300 }), labels);
+	render(EnergyFlow, { branches, stale: false });
+	expect(screen.getByTestId('flow-pv')).toHaveAttribute('data-direction', 'implausible');
+	expect(screen.getByTestId('flow-pv')).toHaveTextContent('300 W');
+	expect(screen.getByTestId('flow-pv')).toHaveTextContent('unplausibel');
+	expect(screen.getByRole('figure').getAttribute('aria-label')).toContain('PV unplausibel');
+});
