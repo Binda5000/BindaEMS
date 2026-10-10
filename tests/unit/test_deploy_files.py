@@ -268,3 +268,15 @@ def test_ci_runs_the_ui_end_to_end_tests() -> None:
     ):
         assert command in runs
     assert set(job["needs"]) == {"python", "ui"}
+
+
+def test_ci_publishes_latest_from_main() -> None:
+    # „latest“ ist der Stand von main (Betriebshandbuch, Standard in docker-compose.yml) –
+    # unabhängig davon, welcher Branch auf GitHub als Standard eingestellt ist
+    ci = yaml.safe_load(Path(".github/workflows/ci.yml").read_text())
+    docker = ci["jobs"]["docker"]
+    meta = next(step for step in docker["steps"] if step.get("id") == "meta")
+    tags = meta["with"]["tags"].splitlines()
+    assert "type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}" in tags
+    assert "is_default_branch" not in meta["with"]["tags"]
+    assert "github.ref == 'refs/heads/main'" in docker["env"]["PUBLISH"]
