@@ -7,8 +7,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Literal
 
-from bindaems.core.adapters.evcs import KNOWN_PRODUCT_IDS
-from bindaems.core.checks.values import fmt, number, schedule_days
+from bindaems.core.checks.values import evcs_mode, fmt, number, schedule_days
 from bindaems.shared.config import Config, EvcsConfig
 from bindaems.shared.domain import Snapshot
 
@@ -96,25 +95,13 @@ def _min_soc(snap: Snapshot, cfg: Config) -> CheckResult:
     return CheckResult("min_soc", "ok", "Victron-Min-SOC entspricht der USV-Reserve.")
 
 
-def _evcs_mode(snap: Snapshot, name: str) -> float | None:
-    """Modus, wie ihn der Cerbo liest; ohne Cerbo nur aus einem gültigen eigenen Registerabbild."""
-    gx = number(snap, f"wallbox.{name}.gx_mode")
-    if gx is not None:
-        return gx
-    # ein leeres Registerabbild (alle 0) läse sich sonst als „manuell“
-    product = number(snap, f"wallbox.{name}.product_id")
-    if product is not None and int(product) in KNOWN_PRODUCT_IDS:
-        return number(snap, f"wallbox.{name}.mode")
-    return None
-
-
 def _evcs_modes(snap: Snapshot, cfg: Config) -> list[CheckResult]:
     results = []
     for name, wallbox in cfg.wallboxes.items():
         if not isinstance(wallbox, EvcsConfig):
             continue
         check_id = f"evcs_mode.{name}"
-        v = _evcs_mode(snap, name)
+        v = evcs_mode(snap, name)
         if v is None:
             results.append(CheckResult(check_id, "unknown", "EVCS-Modus nicht verfügbar."))
         elif v == 0:

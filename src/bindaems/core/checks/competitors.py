@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from bindaems.core.checks.values import fmt, number, schedule_days
+from bindaems.core.checks.values import evcs_mode, fmt, number, schedule_days
 from bindaems.shared.config import Config, EvcsConfig
 from bindaems.shared.domain import Alarm, Severity, Snapshot
 
@@ -33,8 +33,8 @@ def detect_competitors(snap: Snapshot, cfg: Config, now: datetime) -> list[Alarm
                 )
             )
     for name, wallbox in cfg.wallboxes.items():
-        mode = number(snap, f"wallbox.{name}.mode")
-        if isinstance(wallbox, EvcsConfig) and mode is not None and mode != 0:
+        mode = evcs_mode(snap, name) if isinstance(wallbox, EvcsConfig) else None
+        if mode is not None and mode != 0:
             alarms.append(
                 Alarm(
                     f"competitor.evcs_mode.{name}",

@@ -32,8 +32,15 @@ def test_active_schedule_detected(cfg) -> None:
 
 
 def test_evcs_not_manual(cfg) -> None:
-    alarms = detect_competitors(snap({"wallbox.evcs.mode": 1}, kind=STATE), cfg, T0)
+    alarms = detect_competitors(snap({"wallbox.evcs.gx_mode": 1}, kind=STATE), cfg, T0)
     assert alarms[0].message == "EVCS „evcs“ ist nicht im manuellen Modus (Modus 1)."
+
+
+def test_evcs_mode_from_cerbo_not_from_an_empty_register_block(cfg) -> None:
+    # Prüfprotokoll 10.10.2026: eigenes Registerabbild leer (alle 0), der Cerbo meldet den Modus
+    values = {"wallbox.evcs.product_id": 0, "wallbox.evcs.mode": 0, "wallbox.evcs.gx_mode": 1}
+    alarms = detect_competitors(snap(values, kind=STATE), cfg, T0)
+    assert [a.id for a in alarms] == ["competitor.evcs_mode.evcs"]
 
 
 def test_vehicle_schedule_is_warning(cfg) -> None:
@@ -46,14 +53,14 @@ def test_vehicle_schedule_is_warning(cfg) -> None:
 
 
 def test_only_ok_values_are_checked(cfg) -> None:
-    stale = snap({"dess.mode": 1, "wallbox.evcs.mode": 2}, kind=STATE, quality=Quality.STALE)
+    stale = snap({"dess.mode": 1, "wallbox.evcs.gx_mode": 2}, kind=STATE, quality=Quality.STALE)
     assert detect_competitors(stale, cfg, T0) == []
 
 
 def test_alarm_order(cfg) -> None:
     values = {
         "vehicle.tesla.scheduled_charging": True,
-        "wallbox.evcs.mode": 1,
+        "wallbox.evcs.gx_mode": 1,
         "ess.schedule.10.day": 0,
         "ess.schedule.2.day": 8,
         "dess.mode": 1,
@@ -69,5 +76,5 @@ def test_alarm_order(cfg) -> None:
 
 
 def test_quiet_when_all_clear(cfg) -> None:
-    values = {"dess.mode": 0, "ess.schedule.0.day": -7, "wallbox.evcs.mode": 0}
+    values = {"dess.mode": 0, "ess.schedule.0.day": -7, "wallbox.evcs.gx_mode": 0}
     assert detect_competitors(snap(values, kind=STATE), cfg, T0) == []
