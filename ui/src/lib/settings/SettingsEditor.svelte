@@ -1,12 +1,15 @@
 <script lang="ts">
 	import { untrack } from 'svelte';
 	import { ApiError, detailText } from '$lib/api/errors';
-	import type { RuntimeSettings, SettingsCurrent } from '$lib/api/schemas';
+	import type { Limits, RuntimeSettings, SettingsCurrent } from '$lib/api/schemas';
 	import Notice from '$lib/components/Notice.svelte';
+	import { WALLBOX_NAME_MAX, WALLBOX_TYPES } from '$lib/wallboxes';
 	import { applyDraft, draftFrom, editorFieldErrors } from './model';
 
 	interface Props {
 		current: SettingsCurrent;
+		/** Ladestationen aus config.yaml (für ihre Namen); fehlt, solange nicht geladen */
+		wallboxes?: Limits['wallboxes'];
 		save: (
 			baseVersion: number,
 			settings: RuntimeSettings,
@@ -17,12 +20,20 @@
 		onCancel?: () => void;
 	}
 
-	let { current, save, onSaved, onReload, onCancel }: Props = $props();
+	let { current, wallboxes = {}, save, onSaved, onReload, onCancel }: Props = $props();
 
 	const uid = $props.id();
 	// Der Entwurf beginnt beim geladenen Stand; „Neu laden“ baut den Editor neu auf
-	let draft = $state(untrack(() => draftFrom(current.settings)));
+	let draft = $state(untrack(() => draftFrom(current.settings, Object.keys(wallboxes))));
 	let errors = $state<Record<string, string>>({});
+
+	// Ladestationen, die erst nach dem Öffnen geladen wurden, bekommen ein leeres Feld
+	$effect(() => {
+		const keys = Object.keys(wallboxes);
+		untrack(() => {
+			for (const key of keys) draft.wallboxNames[key] ??= '';
+		});
+	});
 	let message = $state<string | null>(null);
 	let conflict = $state(false);
 	let busy = $state(false);
@@ -64,7 +75,9 @@
 				const detail = (error.body as { detail?: unknown } | null)?.detail;
 				const mapped = editorFieldErrors(detail, result.settings);
 				const known = Object.fromEntries(
-					Object.entries(mapped).filter(([key]) => /^(values|feedIn|prices)\./.test(key))
+					Object.entries(mapped).filter(([key]) =>
+						/^(values|feedIn|prices|wallboxNames)\./.test(key)
+					)
 				);
 				errors = known;
 				const rest = Object.entries(mapped).filter(([key]) => !(key in known));
@@ -178,6 +191,31 @@
 			</select>
 		</div>
 	</fieldset>
+
+	{#if Object.keys(draft.wallboxNames).length > 0}
+		<fieldset>
+			<legend>Ladestationen</legend>
+			<p class="hint">Eigener Name für Übersicht und Verlauf; leer = Typname.</p>
+			{#each Object.keys(draft.wallboxNames) as key (key)}
+				{@const field = `wallboxNames.${key}`}
+				{@const wallbox = wallboxes[key]}
+				<div class="field">
+					<label for="{uid}-wallbox-{key}">
+						{wallbox ? `${key} (${WALLBOX_TYPES[wallbox.type]})` : key}
+					</label>
+					<input
+						id="{uid}-wallbox-{key}"
+						maxlength={WALLBOX_NAME_MAX}
+						placeholder={wallbox ? WALLBOX_TYPES[wallbox.type] : key}
+						bind:value={draft.wallboxNames[key]}
+						aria-invalid={errors[field] ? 'true' : undefined}
+						aria-describedby={describedBy(field)}
+					/>
+					{@render fieldError(field)}
+				</div>
+			{/each}
+		</fieldset>
+	{/if}
 
 	<div class="field">
 		<label for="{uid}-comment">Kommentar (optional)</label>

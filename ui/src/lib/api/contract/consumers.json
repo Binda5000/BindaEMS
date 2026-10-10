@@ -16,7 +16,10 @@
         "note": null,
         "other_w": null,
         "mismatch": false,
-        "children": []
+        "children": [],
+        "energy_kwh": 2.458,
+        "energy_note": null,
+        "other_kwh": null
       },
       {
         "id": 1,
@@ -35,11 +38,20 @@
             "note": null,
             "other_w": null,
             "mismatch": false,
-            "children": []
+            "children": [],
+            "energy_kwh": 1.23,
+            "energy_note": null,
+            "other_kwh": null
           }
-        ]
+        ],
+        "energy_kwh": 4.652,
+        "energy_note": null,
+        "other_kwh": 3.422
       }
-    ]
+    ],
+    "energy_kwh": 9.228,
+    "energy_note": null,
+    "other_kwh": 2.118
   },
   "consumers": [
     {
@@ -75,5 +87,6 @@
       "power_unit": null,
       "sort": 0
     }
-  ]
+  ],
+  "energy_since": "2026-10-08T22:00:00+00:00"
 }

@@ -12,6 +12,9 @@ const tree: TreeNode = {
 	note: null,
 	other_w: 1680,
 	mismatch: false,
+	energy_kwh: 14.2,
+	energy_note: null,
+	other_kwh: 13,
 	children: [
 		{
 			id: 1,
@@ -21,7 +24,10 @@ const tree: TreeNode = {
 			note: null,
 			other_w: null,
 			mismatch: false,
-			children: []
+			children: [],
+			energy_kwh: 1.2,
+			energy_note: null,
+			other_kwh: null
 		}
 	]
 };
@@ -40,4 +46,11 @@ it('zeigt aktuelle Werte ohne Kennzeichnung und ohne Daten nur den Fehler', () =
 	render(ConsumerSummary, { tree: undefined, error: new ApiError(502, 'Server nicht erreichbar') });
 	expect(screen.getByText('Server nicht erreichbar')).toBeInTheDocument();
 	expect(screen.queryByRole('table')).not.toBeInTheDocument();
+});
+
+it('zeigt Leistung und Energie seit Mitternacht', () => {
+	render(ConsumerSummary, { tree, error: null });
+	expect(screen.getByRole('row', { name: /Küche/ })).toHaveTextContent('120 W');
+	expect(screen.getByRole('row', { name: /Küche/ })).toHaveTextContent('1,20 kWh');
+	expect(screen.getByRole('row', { name: /Haus/ })).toHaveTextContent('14,2 kWh');
 });

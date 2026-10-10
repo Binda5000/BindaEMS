@@ -17,7 +17,10 @@ const leaf = (
 	note,
 	other_w: null,
 	mismatch: false,
-	children: []
+	children: [],
+	energy_kwh: power === null ? null : 1.25,
+	energy_note: null,
+	other_kwh: null
 });
 const tree = (mismatch = false): TreeNode => ({
 	id: null,
@@ -27,7 +30,10 @@ const tree = (mismatch = false): TreeNode => ({
 	note: null,
 	other_w: mismatch ? 0 : 1680,
 	mismatch,
-	children: [leaf(1, 'Küche', 120)]
+	children: [leaf(1, 'Küche', 120)],
+	energy_kwh: 12.5,
+	energy_note: null,
+	other_kwh: 11.25
 });
 
 it('zeigt „Sonstiges“ und Admins die Knöpfe zum Bearbeiten', () => {
@@ -76,4 +82,22 @@ it('nennt den Grund, wenn ein Wert fehlt', () => {
 		onDelete: vi.fn()
 	});
 	expect(screen.getByText('HA meldet kWh statt W')).toBeInTheDocument();
+});
+
+it('zeigt die Energie seit Mitternacht und warum sie fehlt', () => {
+	const quiet = {
+		...leaf(2, 'Herd', 0),
+		energy_kwh: null,
+		energy_note: 'kein Verlauf seit Mitternacht'
+	};
+	render(ConsumerTree, {
+		rows: consumerRows({ ...tree(), children: [leaf(1, 'Küche', 120), quiet] }),
+		admin: false,
+		onEdit: vi.fn(),
+		onDelete: vi.fn()
+	});
+	expect(screen.getByRole('columnheader', { name: 'Heute' })).toBeInTheDocument();
+	expect(screen.getByRole('row', { name: /Küche/ })).toHaveTextContent('1,25 kWh');
+	expect(screen.getByRole('row', { name: /Haus/ })).toHaveTextContent('12,5 kWh');
+	expect(screen.getByText('Energie: kein Verlauf seit Mitternacht')).toBeInTheDocument();
 });

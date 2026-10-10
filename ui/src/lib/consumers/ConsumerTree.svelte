@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { formatPower } from '$lib/format';
+	import { formatEnergy, formatPower } from '$lib/format';
 	import type { ConsumerRow } from './tree';
 
 	interface Props {
@@ -14,12 +14,13 @@
 
 <table class="tree">
 	<caption class="sr-only"
-		>Verbraucher mit Leistung; „Sonstiges“ ist der nicht gemessene Rest</caption
+		>Verbraucher mit Leistung und Energie seit Mitternacht; „Sonstiges“ ist der nicht gemessene Rest</caption
 	>
 	<thead>
 		<tr>
 			<th scope="col">Verbraucher</th>
 			<th scope="col" class="num">Leistung</th>
+			<th scope="col" class="num">Heute</th>
 			{#if admin}
 				<th scope="col"><span class="sr-only">Aktionen</span></th>
 			{/if}
@@ -42,9 +43,14 @@
 					{#if row.powerW === null && row.note}
 						<!-- bündig mit dem Namen: Farbfeld 0,75 rem + Abstand 0,5 rem -->
 						<span class="note" style:padding-left="{(row.depth + 1) * 1.25}rem">{row.note}</span>
+					{:else if row.energyKwh === null && row.energyNote}
+						<span class="note" style:padding-left="{(row.depth + 1) * 1.25}rem"
+							>Energie: {row.energyNote}</span
+						>
 					{/if}
 				</td>
 				<td class="num">{formatPower(row.powerW)}</td>
+				<td class="num">{formatEnergy(row.energyKwh)}</td>
 				{#if admin}
 					<td class="actions">
 						{#if row.kind === 'consumer' && row.id !== null}
