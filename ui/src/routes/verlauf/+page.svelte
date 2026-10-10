@@ -26,6 +26,7 @@
 	import SeriesPicker from '$lib/history/SeriesPicker.svelte';
 	import { Resource } from '$lib/resource.svelte';
 	import { theme } from '$lib/theme.svelte';
+	import { todayVienna } from '$lib/time';
 
 	const POLL_MS = 60_000;
 
@@ -34,7 +35,25 @@
 	let last = $state(presetDays('heute', new Date()).last);
 
 	const catalog = new Resource((o) => api.historyCatalog(o));
-	onMount(() => catalog.start());
+
+	// Wiener Datum, jede Minute neu: eine Voreinstellung (Heute, 7 Tage …) rückt um Mitternacht
+	// nach, sonst zeigte eine über Nacht offene Seite den Vortag als „Heute“
+	let today = $state(todayVienna());
+	onMount(() => {
+		const stop = catalog.start();
+		const clock = setInterval(() => (today = todayVienna()), 60_000);
+		return () => {
+			stop();
+			clearInterval(clock);
+		};
+	});
+	$effect(() => {
+		void today;
+		if (preset === null) return;
+		const days = presetDays(preset, new Date());
+		if (days.first !== first) first = days.first;
+		if (days.last !== last) last = days.last;
+	});
 
 	// Reihen aus der URL (?reihen=grid,pv), damit Links die Auswahl behalten
 	const selected = $derived.by(() => {
