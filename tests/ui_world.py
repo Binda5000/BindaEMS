@@ -20,7 +20,13 @@ import httpx
 import respx
 from pydantic import SecretStr
 from sqlalchemy import update
-from tests.app_helpers import T_APP, mock_all_sources, set_feed_in, set_grid_usage
+from tests.app_helpers import (
+    T_APP,
+    mock_all_sources,
+    set_feed_in,
+    set_grid_usage,
+    set_wallbox_names,
+)
 from tests.helpers import FakeSink
 
 from bindaems.app.consumers.service import ConsumerInput
@@ -92,8 +98,21 @@ POWER_SHAPES = {
     "battery": (-250.0, 1300.0),
     "house_load": (900.0, 450.0),
     "consumption": (1100.0, 1800.0),
+    "obergeschoss": (450.0, 300.0),
+    "buero": (120.0, 60.0),
 }
 _LAST = re.compile(r'^SELECT last\("value"\) AS "v", ')
+# Energie seit Mitternacht: Minutenmittel des core und HA-Werte (heute und der letzte davor)
+_CORE_ENERGY = re.compile(
+    r'^SELECT mean\("p_w"\) AS "w" FROM "raw"\."power" .*time >= (?P<start>\d+)ms '
+    r"AND time < (?P<end>\d+)ms"
+)
+_SOURCE_ID = re.compile(r"\"source\"='(?P<source>[^']*)' AND \"id\"='(?P<id>[^']*)'")
+_HA_ENERGY = re.compile(
+    r'^SELECT (?P<agg>mean|last)\("value"\) AS "w" FROM .*time >= (?P<start>\d+)ms '
+    r"AND time < (?P<end>\d+)ms"
+)
+HA_ENERGY_STEP_MS = 900_000  # HA schreibt bei Änderung; hier alle 15 min
 _ENTITY = re.compile(r"\"domain\"='(?P<domain>[^']*)' AND \"entity_id\"='(?P<object_id>[^']*)'")
 _SHOW_SERIES = re.compile(r'^SHOW SERIES FROM "W","kW"$')
 
@@ -173,9 +192,60 @@ def _influx_result(series: list[dict[str, Any]]) -> httpx.Response:
     return httpx.Response(200, json={"results": [result]})
 
 
+def _ha_power_entities() -> dict[tuple[str, str], tuple[str, float]]:
+    """HA-Leistungsentitäten mit dem Namen ihrer Messung und dem Wert in deren Einheit."""
+    found = {
+        entity: (f"{entity[0]}.{entity[1]}", value)
+        for entity, (value, unit) in HA_BY_ENTITY.items()
+        if unit in ("W", "kW")
+    }
+    found |= {entity: (unit, value) for entity, (value, unit) in HA_BY_UNIT.items()}
+    return found
+
+
+def _energy_influx(query: str) -> httpx.Response | None:
+    """Antworten für ``consumers.energy``: Minutenmittel des core, HA-Werte bei Änderung."""
+    if core := _CORE_ENERGY.search(query):
+        start, end = int(core["start"]), int(core["end"])
+        first = -(-start // 60_000) * 60_000
+        return _influx_result(
+            [
+                {
+                    "name": "power",
+                    "tags": {"source": source, "id": id_},
+                    "columns": ["time", "w"],
+                    "values": [[ms, _curve("power", ms, id_)] for ms in range(first, end, 60_000)],
+                }
+                for source, id_ in _SOURCE_ID.findall(query)
+            ]
+        )
+    if ha := _HA_ENERGY.search(query):
+        start, end = int(ha["start"]), int(ha["end"])
+        series = []
+        for domain, object_id in _ENTITY.findall(query):
+            found = _ha_power_entities().get((domain, object_id))
+            if found is None:
+                continue
+            name, value = found
+            if ha["agg"] == "last":
+                values = [[end - 60_000, value]]
+            else:
+                first = -(-start // HA_ENERGY_STEP_MS) * HA_ENERGY_STEP_MS
+                values = [
+                    [ms, round(value * (1 + 0.3 * math.sin(ms / 7_200_000)), 1)]
+                    for ms in range(first, end, HA_ENERGY_STEP_MS)
+                ]
+            tags = {"domain": domain, "entity_id": object_id}
+            series.append({"name": name, "tags": tags, "columns": ["time", "w"], "values": values})
+        return _influx_result(series)
+    return None
+
+
 def _influx(request: httpx.Request) -> httpx.Response:
-    """Ersatz für InfluxDB ``/query``: Verlauf, letzte HA-Werte und HA-Reihen."""
+    """Ersatz für InfluxDB ``/query``: Verlauf, Energie, letzte HA-Werte und HA-Reihen."""
     query = request.url.params.get("q", "")
+    if (energy := _energy_influx(query)) is not None:
+        return energy
     if mean := _MEAN.search(query):
         start, end = int(mean["start"]), int(mean["end"])
         interval = max(int(mean["step"]), 900) * 1000
@@ -370,12 +440,14 @@ async def build_world(cfg: Config, data_dir: Path, *, ui_dir: Path | None = None
         app._sink.bind(asyncio.get_running_loop())  # wie AppRuntime.run
         world = World(app, core, clock, router)
         _create_users(app)
-        # zwei Versionen; Netzverlust, Elektrizitätsabgabe und Förderbeitrag bleiben leer
+        # drei Versionen; Netzverlust, Elektrizitätsabgabe und Förderbeitrag bleiben leer
         set_grid_usage(app.settings, 8.11)
         set_feed_in(app.settings, {"2026-09": 7.3})
+        set_wallbox_names(app.settings, {"twc": "Garage"})  # die EVCS behält ihren Typnamen
         refs = _create_consumers(app)
         assert app.ha_values is not None
         await app.ha_values.refresh(refs)
+        await app.energy.refresh(app.consumers.list())
         await app.pipeline.refresh()
         await app.forecast.refresh()
         world.step_live()

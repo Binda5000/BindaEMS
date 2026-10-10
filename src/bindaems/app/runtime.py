@@ -26,6 +26,7 @@ from bindaems.app.auth.routes import audit_router, auth_router, users_router
 from bindaems.app.auth.service import AuthService
 from bindaems.app.auth.web import Guard
 from bindaems.app.backup import backup_database
+from bindaems.app.consumers.energy import EnergyCache
 from bindaems.app.consumers.routes import consumers_router
 from bindaems.app.consumers.service import ConsumerService
 from bindaems.app.consumers.values import HaRef, HaValueCache
@@ -64,6 +65,7 @@ BACKFILL_FIRST = timedelta(days=7)
 BACKFILL_HOURLY = timedelta(hours=6)
 HOUR_S = 3600.0
 HA_VALUES_S = 15.0
+ENERGY_S = 60.0  # Energie der Verbraucher seit Mitternacht
 HA_INPUTS_S = 5.0
 RESTART_S = 10.0
 BACKUP_AT = (3, 15)  # Ortszeit
@@ -149,6 +151,7 @@ class AppRuntime:
             slot_flows_handlers=[self.ledger.handle_stream_message],
         )
         self.ha_values = HaValueCache(self.reader, ha_database) if ha_database is not None else None
+        self.energy = EnergyCache(self.reader, self._clock, ha_database)
         self.ha_publisher: HaPublisher | None = None
         self._ha_inputs: HaInputs | None = None
         self._ha_ready = asyncio.Event()  # erste Werte für HA bestimmt
@@ -179,9 +182,11 @@ class AppRuntime:
                 audit_router(self.audit, guard),
                 settings_router(self.settings, cfg, guard),
                 live_router(self.live, guard, sources, self._warnings),
-                history_router(self.reader, build_catalog(cfg), self._clock, guard),
+                history_router(
+                    self.reader, build_catalog(cfg), self._clock, guard, self._series_labels
+                ),
                 consumers_router(
-                    self.consumers, self.live, self.ha_values, self.reader, cfg, guard
+                    self.consumers, self.live, self.ha_values, self.reader, cfg, guard, self.energy
                 ),
                 prices_router(self.prices, self.pipeline, self._clock, guard),
                 forecast_router(self.forecast, self._clock, guard),
@@ -198,6 +203,11 @@ class AppRuntime:
         return make_reference(
             "awattar" if name == "awattar" else "energy_charts", self._http, self._clock
         )
+
+    def _series_labels(self) -> dict[str, str]:
+        """Eigene Namen der Ladestationen für den Verlauf."""
+        names = self.settings.current().settings.wallbox_names
+        return {f"wallbox.{key}": name for key, name in names.items()}
 
     def _warnings(self) -> list[str]:
         return self.settings.warnings() + self.auth.warnings()
@@ -237,6 +247,7 @@ class AppRuntime:
             ("ledger", self._ledger_loop),
             ("maintenance", self._maintenance_loop),
             ("backup", self._backup_loop),
+            ("consumer-energy", self._energy_loop),
         ]
         if self.ha_values is not None:
             jobs.append(("ha-values", partial(self._ha_values_loop, self.ha_values)))
@@ -303,6 +314,15 @@ class AppRuntime:
             except Exception:
                 log.exception("HA-Werte der Verbraucher nicht lesbar")
             await asyncio.sleep(HA_VALUES_S)
+
+    async def _energy_loop(self) -> None:
+        while True:
+            try:
+                consumers = await asyncio.to_thread(self.consumers.list)
+                await self.energy.refresh(consumers)
+            except Exception:
+                log.exception("Energie der Verbraucher nicht bestimmbar")
+            await asyncio.sleep(ENERGY_S)
 
     async def _ha_inputs_loop(self) -> None:
         """Hält die Werte für Home Assistant aktuell (Datenbank im Worker-Thread)."""

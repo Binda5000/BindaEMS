@@ -146,6 +146,11 @@ def set_feed_in(service: SettingsService, monthly_ct: dict[str, float]) -> None:
     _update_settings(service, settings.model_copy(update={"feed_in": feed_in}))
 
 
+def set_wallbox_names(service: SettingsService, names: dict[str, str]) -> None:
+    settings = service.current().settings
+    _update_settings(service, settings.model_copy(update={"wallbox_names": names}))
+
+
 # Nachricht ``slot_flows`` des core für den Slot 2026-10-09T08:00Z (10:00 Ortszeit)
 SLOT_FLOWS_MSG: dict[str, Any] = {
     "slot_start": "2026-10-09T08:00:00+00:00",

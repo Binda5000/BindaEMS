@@ -10,6 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException, Path, status
 
 from bindaems.app.auth.service import SessionInfo
 from bindaems.app.auth.web import Guard
+from bindaems.app.consumers.energy import EnergyCache
 from bindaems.app.consumers.service import (
     MAX_ID,
     Consumer,
@@ -18,6 +19,8 @@ from bindaems.app.consumers.service import (
     ConsumerService,
 )
 from bindaems.app.consumers.values import (
+    Energy,
+    HaRef,
     HaValueCache,
     build_tree,
     candidates,
@@ -42,10 +45,20 @@ def consumers_router(
     reader: InfluxReader | None,
     cfg: Config,
     guard: Guard,
+    energy: EnergyCache | None = None,
 ) -> APIRouter:
     router = APIRouter(prefix="/api/consumers")
     Viewer = Annotated[SessionInfo, Depends(guard.require("viewer"))]
     Admin = Annotated[SessionInfo, Depends(guard.require("admin"))]
+
+    def consumer_energy(consumer: Consumer) -> Energy:
+        if energy is None:
+            return (None, None)
+        if consumer.source_kind == "ha" and ha is not None and consumer.power_unit is not None:
+            ref = HaRef.from_consumer(consumer)
+            if ha.wrong_unit(ref):  # der Verlauf hätte dieselbe falsche Einheit
+                return (None, ha.note(ref))
+        return (energy.energy_kwh(consumer), energy.note(consumer))
 
     @router.get("")
     def read(session: Viewer) -> dict[str, Any]:
@@ -57,8 +70,15 @@ def consumers_router(
             lambda c: consumer_power(c, live, ha),
             house_w,
             lambda c: consumer_note(c, ha),
+            consumer_energy,
+            energy.house_kwh() if energy is not None else None,
         )
-        return {"tree": asdict(tree), "consumers": [consumer_json(c) for c in consumers]}
+        since = energy.since if energy is not None else None
+        return {
+            "tree": asdict(tree),
+            "consumers": [consumer_json(c) for c in consumers],
+            "energy_since": since.isoformat() if since is not None else None,
+        }
 
     @router.get("/candidates")
     async def list_candidates(session: Admin) -> dict[str, Any]:
