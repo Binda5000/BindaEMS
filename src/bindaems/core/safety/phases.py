@@ -61,7 +61,8 @@ def check_phases(
 
     Geprüft wird nur, was den Netzbezug erhöhen kann. Als Erhöhung gilt bei
 
-    - ``current``: der Ist-Strom ist unbekannt oder kleiner als der Wert
+    - ``current``: der Ist-Strom ist kleiner als der Wert; ist er unbekannt, nur ein Wert über
+      dem sicheren Strom ``safe_a`` (Spec 8.5), denn der darf immer gesetzt werden
     - ``charging``: ein Start, während die Wallbox nicht nachweislich lädt
     - ``grid_setpoint``: der Wert liegt über dem wirksamen Ist-Sollwert
     - ``max_discharge``: ein Wert von mindestens 0 unter der aktuellen Entladeleistung
@@ -98,7 +99,10 @@ def check_phases(
 def _check_current(actuator: str, value: float, ctx: SafetyContext, limits: HardLimits) -> Step:
     """Ladestrom in A: Erlaubt ist ``floor(min(h_p + m_p))`` über die aktiven Phasen der Wallbox."""
     actual = _finite(ctx.present.get((actuator, CommandKind.CURRENT)))
-    increase = actual is None or actual < value
+    if actual is None:  # unbekannt: nur über dem sicheren Strom, den auch der Watchdog blind setzt
+        increase = value > limits.currents[actuator].safe_a
+    else:
+        increase = actual < value
     phases, measured = _wallbox(actuator, ctx, limits)
     active = tuple(p for p in phases if measured.get(p, 0.0) >= ACTIVE_PHASE_A)
     loads = _loads(ctx, active or phases, measured)

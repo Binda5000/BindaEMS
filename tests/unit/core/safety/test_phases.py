@@ -334,9 +334,64 @@ def test_current_without_room(limits, value, actual, expected, expected_codes) -
 
 
 @pytest.mark.parametrize("actual", [None, NAN, True])
-def test_current_unknown_actual_counts_as_increase(limits, actual) -> None:
+def test_current_above_safe_with_unknown_actual_counts_as_increase(limits, actual) -> None:
     step = change_current(limits, 16.0, actual=actual)  # erlaubt: 3 A
     assert step.reject and codes(step) == ["phase.rejected"]
+
+
+@pytest.mark.parametrize("actual", [None, NAN, True])
+@pytest.mark.parametrize("actuator", [EVCS, TESLA])
+def test_safe_current_with_unknown_actual_is_no_increase(limits, actuator, actual) -> None:
+    safe_a, min_a = float(limits.currents[actuator].safe_a), limits.currents[actuator].min_a
+    # Phasenströme unbekannt (veraltete Daten): der sichere Strom bleibt, wie jede Verringerung
+    stale = change_current(limits, safe_a, dict.fromkeys(PHASES), actual=actual, actuator=actuator)
+    assert (stale.value, stale.findings) == (safe_a, ())
+    # kein Spielraum: auf den Mindeststrom statt einer Ablehnung, mit dem Befund dazu
+    crowded = change_current(limits, safe_a, NO_ROOM, actual=actual, actuator=actuator)
+    assert (crowded.value, codes(crowded)) == (float(min_a), ["phase.minimum"])
+    assert crowded.findings[0].text == (
+        f"Phase L1 würde über 33 A steigen; nur noch Mindeststrom {min_a} A möglich."
+    )
+
+
+@pytest.mark.parametrize("actuator", [EVCS, TESLA])
+def test_current_just_above_safe_with_unknown_actual_is_an_increase(limits, actuator) -> None:
+    above_safe = limits.currents[actuator].safe_a + 1.0
+    stale = change_current(limits, above_safe, dict.fromkeys(PHASES), actuator=actuator)
+    assert stale.reject and codes(stale) == ["phase.unknown"]
+    crowded = change_current(limits, above_safe, NO_ROOM, actuator=actuator)
+    assert crowded.reject and codes(crowded) == ["phase.rejected"]
+
+
+@pytest.mark.parametrize("actuator", [EVCS, TESLA])
+def test_safe_current_above_a_known_actual_is_an_increase(limits, actuator) -> None:
+    # Nur ein unbekannter Ist-Strom nimmt dem sicheren Strom das Gewicht: Bei bekannten 0 A
+    # ist er ein Anstieg.
+    safe_a = float(limits.currents[actuator].safe_a)
+    step = change_current(limits, safe_a, dict.fromkeys(PHASES), actual=0.0, actuator=actuator)
+    assert step.reject and codes(step) == ["phase.unknown"]
+
+
+def test_safe_current_threshold_is_safe_a_not_min_a(limits) -> None:
+    # Mindeststrom 6 A, sicherer Strom 10 A; der Ist-Strom ist unbekannt
+    safe_above_minimum = replace(
+        limits, currents={**limits.currents, EVCS: CurrentRange(6, 16, 10)}
+    )
+
+    def unknown_actual(value, imports):
+        return change_current(safe_above_minimum, value, imports)
+
+    stale = dict.fromkeys(PHASES)
+    for value in (8.0, 10.0):  # nicht über dem sicheren Strom, 8 A aber über dem Mindeststrom
+        step = unknown_actual(value, stale)
+        assert (step.value, step.findings) == (value, ())
+    assert codes(unknown_actual(11.0, stale)) == ["phase.unknown"]
+
+    crowded = unknown_actual(10.0, NO_ROOM)  # kein Spielraum: wirklich auf den Mindeststrom
+    assert (crowded.value, codes(crowded)) == (6.0, ["phase.minimum"])
+    some_room = unknown_actual(10.0, {"L1": 25.0, "L2": 20.0, "L3": 10.0})  # erlaubt: 8 A
+    assert (some_room.value, codes(some_room)) == (8.0, ["phase.reduced"])
+    assert some_room.findings[0].text == "Phase L1 würde über 33 A steigen; reduziert auf 8 A."
 
 
 def test_current_decrease_stops_at_the_minimum_not_the_safe_current(limits) -> None:
