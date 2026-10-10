@@ -174,10 +174,16 @@ class HardLimits:
 
 
 def _number(value: object) -> float | None:
-    """Der Wert als Zahl; ``bool``, ``None`` und alles andere gelten nicht als Zahl."""
+    """Der Wert als Zahl; ``bool``, ``None`` und alles andere gelten nicht als Zahl.
+
+    NaN und ±∞ bleiben Zahlen; die Regeln 1–3 lehnen sie später ab (``finite_number``).
+    """
     if isinstance(value, bool) or not isinstance(value, int | float):
         return None
-    return float(value)
+    try:
+        return float(value)
+    except OverflowError:  # ein int, der größer ist als jedes float
+        return None
 
 
 def toward_safe(command: Command, ctx: SafetyContext, limits: HardLimits) -> bool:

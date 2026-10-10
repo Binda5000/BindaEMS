@@ -671,13 +671,16 @@ def test_discharge_limit_with_unknown_phase_currents(limits) -> None:
 # --- Min-SOC (min_soc)
 
 
+@pytest.mark.parametrize("imports", [OVER, UNKNOWN])
 @pytest.mark.parametrize(
     ("value", "soc", "discharge", "expected_codes"),
     [
         (20.0, None, None, []),  # nicht über der Reserve von 20 %: SOC und Leistung egal
         (20.0, 10.0, None, []),
+        (20.0, 50.0, 1000.0, []),  # die Reserve selbst: ob die Phasenströme bekannt sind, egal
         (50.0, 50.0, None, []),  # nicht über dem SOC
         (40.0, 50.0, None, []),
+        (40.0, 50.0, 1000.0, []),
         (20.5, None, None, ["phase.soc_unknown"]),  # knapp über der Reserve
         (50.5, 50.0, None, ["phase.battery_unknown"]),  # knapp über dem SOC
         (60.0, None, None, ["phase.soc_unknown"]),  # beides unbekannt: der SOC zuerst
@@ -687,10 +690,11 @@ def test_discharge_limit_with_unknown_phase_currents(limits) -> None:
     ],
 )
 def test_min_soc_needs_soc_and_battery_power_to_be_known(
-    limits, value, soc, discharge, expected_codes
+    limits, imports, value, soc, discharge, expected_codes
 ) -> None:
-    # L1 liegt über der Grenze; nur wo es eine Erhöhung ist, kommt es darauf überhaupt an
-    step = set_min_soc(limits, value, OVER, soc_pct=soc, battery_discharge_w=discharge)
+    # L1 liegt über der Grenze oder L2 ist unbekannt; nur wo es eine Erhöhung ist, kommt es
+    # darauf überhaupt an, und selbst dann prüfen SOC und Leistung vor den Phasen.
+    step = set_min_soc(limits, value, imports, soc_pct=soc, battery_discharge_w=discharge)
     assert codes(step) == expected_codes
     assert step.reject == bool(expected_codes)
     if not expected_codes:
@@ -713,6 +717,29 @@ def test_min_soc_checks_the_phase_after_the_discharge_stops(limits) -> None:
         limits, 60.0, {"L1": 10.0, "L2": 30.0, "L3": 20.0}, battery_discharge_w=9000.0
     )
     assert named.findings[0].text == "Phase L2 würde über 33 A steigen."
+
+
+# --- Sicherer Zustand
+
+
+@pytest.mark.parametrize("actuator", [VICTRON, EVCS, TESLA])
+@pytest.mark.parametrize(
+    ("imports", "untouched"),
+    [
+        (dict.fromkeys(PHASES), True),  # veraltete Messwerte (Spec 8.4): nichts ist bekannt
+        (UNKNOWN, True),
+        (NO_ROOM, False),  # überlastete Phase: der Strom geht höchstens auf den Mindeststrom
+    ],
+)
+def test_safe_state_commands_are_never_rejected(limits, actuator, imports, untouched) -> None:
+    ctx = make_ctx(phase_import_a=imports, soc_pct=None, battery_discharge_w=None, present={})
+    commands = limits.safe_commands(actuator)
+    assert commands
+    for command in commands:
+        step = check_phases(command, command.value, ctx, limits)
+        assert not step.reject, command
+        if untouched:
+            assert (step.value, step.findings) == (command.value, ())
 
 
 # --- Falsche Werte, unbrauchbare Zahlen, Typ des Ergebnisses

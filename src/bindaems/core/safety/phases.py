@@ -23,7 +23,14 @@ from types import MappingProxyType
 from typing import Final, NamedTuple
 
 from bindaems.core.safety.limits import HardLimits
-from bindaems.core.safety.types import Finding, SafetyContext, Step, de
+from bindaems.core.safety.types import (
+    Finding,
+    SafetyContext,
+    Step,
+    de,
+    finite_number,
+    invalid_value,
+)
 from bindaems.shared.config import Phase
 from bindaems.shared.control import Command, CommandKind, CommandValue
 
@@ -82,7 +89,7 @@ def check_phases(
     if kind == CommandKind.GRID_SETPOINT and value is None:
         return Step(None)  # hebt den Override auf
 
-    number = _finite(value)
+    number = finite_number(value)
     if number is None:
         return _invalid(kind, value)
     if kind == CommandKind.CURRENT:
@@ -98,7 +105,7 @@ def check_phases(
 
 def _check_current(actuator: str, value: float, ctx: SafetyContext, limits: HardLimits) -> Step:
     """Ladestrom in A: Erlaubt ist ``floor(min(h_p + m_p))`` über die aktiven Phasen der Wallbox."""
-    actual = _finite(ctx.present.get((actuator, CommandKind.CURRENT)))
+    actual = finite_number(ctx.present.get((actuator, CommandKind.CURRENT)))
     if actual is None:  # unbekannt: nur über dem sicheren Strom, den auch der Watchdog blind setzt
         increase = value > limits.currents[actuator].safe_a
     else:
@@ -134,7 +141,7 @@ def _check_charging(actuator: str, start: bool, ctx: SafetyContext, limits: Hard
     if loads is None:
         return _PHASES_UNKNOWN
 
-    charge_a = _finite(ctx.present.get((actuator, CommandKind.CURRENT)))
+    charge_a = finite_number(ctx.present.get((actuator, CommandKind.CURRENT)))
     if charge_a is None:
         charge_a = limits.currents[actuator].max_a
     if all(load.imported - load.measured + charge_a <= limits.phase_limit_a for load in loads):
@@ -180,7 +187,7 @@ def _setpoint_actual(actuator: str, ctx: SafetyContext) -> float:
     override = ctx.present[key]
     if override is None:
         return ctx.base_grid_setpoint_w
-    number = _finite(override)
+    number = finite_number(override)
     return lowest if number is None else number
 
 
@@ -196,9 +203,9 @@ def _check_max_discharge(
     """
     if value < 0:
         return Step(value)
-    discharge = _finite(ctx.battery_discharge_w)
+    discharge = finite_number(ctx.battery_discharge_w)
     if discharge is None:
-        actual = _finite(ctx.present.get((actuator, CommandKind.MAX_DISCHARGE)))
+        actual = finite_number(ctx.present.get((actuator, CommandKind.MAX_DISCHARGE)))
         looser = actual is not None and 0 <= actual <= value
         return Step(value) if looser else _BATTERY_UNKNOWN
     if value >= discharge:
@@ -225,12 +232,12 @@ def _check_min_soc(value: float, ctx: SafetyContext, limits: HardLimits) -> Step
     """
     if value <= limits.reserve_soc_pct:
         return Step(value)
-    soc = _finite(ctx.soc_pct)
+    soc = finite_number(ctx.soc_pct)
     if soc is None:
         return _SOC_UNKNOWN
     if value <= soc:
         return Step(value)
-    discharge = _finite(ctx.battery_discharge_w)
+    discharge = finite_number(ctx.battery_discharge_w)
     if discharge is None:
         return _BATTERY_UNKNOWN
     loads = _loads(ctx, _PHASES)
@@ -260,7 +267,7 @@ def _wallbox(
     if key is None or phase_map is None:
         return _PHASES, _NO_CURRENT
     measured = ctx.wallbox_phase_a.get(key, _NO_CURRENT)
-    currents = {p: c for p in _PHASES if (c := _finite(measured.get(p))) is not None}
+    currents = {p: c for p in _PHASES if (c := finite_number(measured.get(p))) is not None}
     return tuple(p for p in _PHASES if p in phase_map), currents
 
 
@@ -270,7 +277,7 @@ def _loads(
     """Netzbezug und Wallbox-Strom der betroffenen Phasen; ``None``, wenn ein Netzbezug fehlt."""
     loads = []
     for phase in phases:
-        imported = _finite(ctx.phase_import_a.get(phase))
+        imported = finite_number(ctx.phase_import_a.get(phase))
         if imported is None:
             return None
         loads.append(_Load(phase, imported, measured.get(phase, 0.0)))
@@ -288,17 +295,6 @@ def _binding(loads: list[_Load], limits: HardLimits) -> tuple[Phase, float]:
     return phase, limits.phase_limit_a - imported + measured
 
 
-def _finite(value: object) -> float | None:
-    """Der Wert als endliche Zahl; ``bool``, ``None``, NaN, ±∞ und alles andere gelten nicht."""
-    if isinstance(value, bool) or not isinstance(value, int | float):
-        return None
-    try:
-        number = float(value)
-    except OverflowError:  # ein int, der größer ist als jedes float
-        return None
-    return number if math.isfinite(number) else None
-
-
 def _over(phase: Phase, limits: HardLimits) -> str:
     return f"Phase {phase} würde über {de(limits.phase_limit_a)} A steigen"
 
@@ -313,5 +309,4 @@ def _rejected(phase: Phase, limits: HardLimits) -> Step:
 
 
 def _invalid(kind: CommandKind, value: CommandValue) -> Step:
-    text = f"Ungültiger Wert für „{kind}“: {value!r}."
-    return Step(None, (Finding("value.invalid", text),), reject=True)
+    return Step(None, (invalid_value(kind, value),), reject=True)

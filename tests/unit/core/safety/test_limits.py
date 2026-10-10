@@ -83,3 +83,17 @@ TOWARD_SAFE = [
 @pytest.mark.parametrize(("command", "present", "expected"), TOWARD_SAFE)
 def test_toward_safe(limits, command, present, expected) -> None:
     assert toward_safe(command, make_ctx(present=present), limits) is expected
+
+
+@pytest.mark.parametrize(
+    ("value", "actual"),
+    [
+        pytest.param(10**400, 16.0, id="value-too-large"),
+        pytest.param(-(10**400), 16.0, id="value-too-small"),
+        pytest.param(6.0, 10**400, id="actual-too-large"),
+    ],
+)
+def test_toward_safe_ignores_an_int_too_large_for_a_float(limits, value, actual) -> None:
+    command = Command("wallbox.evcs", K.CURRENT, value, urgent=True)
+    ctx = make_ctx(present={("wallbox.evcs", K.CURRENT): actual})
+    assert toward_safe(command, ctx, limits) is False

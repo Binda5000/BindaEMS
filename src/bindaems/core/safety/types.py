@@ -1,11 +1,14 @@
 """Typen der Safety-Schicht: Ergebnis einer Prüfung und der Kontext, in dem geprüft wird.
 
 Die Schicht ist rein: Zeit, Messwerte, Freigaben und Sperren bekommt sie über den
-``SafetyContext`` von außen (Spec 8.3).
+``SafetyContext`` von außen (Spec 8.3). Dazu kommen die Hilfen, die alle Regeln gleich brauchen:
+``de`` für Zahlen in Texten, ``finite_number`` als Zahlenregel und ``invalid_value`` für den
+Befund eines ungültigen Werts.
 """
 
 from __future__ import annotations
 
+import math
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime
@@ -24,6 +27,21 @@ from bindaems.shared.control import (
 def de(value: float) -> str:
     """Zahl für Begründungstexte: zehn signifikante Stellen, Dezimalkomma, echtes Minus (U+2212)."""
     return f"{value:.10g}".replace(".", ",").replace("-", "\N{MINUS SIGN}")
+
+
+def finite_number(value: object) -> float | None:
+    """Der Wert als endliche Zahl; ``bool``, ``None``, NaN, ±∞ und alles andere gelten nicht.
+
+    Das ist die Zahlenregel der Safety-Regeln: Was hier ``None`` ergibt, ist ungültig (der Wert
+    eines Befehls) oder unbekannt (ein Wert aus dem Kontext).
+    """
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        return None
+    try:
+        number = float(value)
+    except OverflowError:  # ein int, der größer ist als jedes float
+        return None
+    return number if math.isfinite(number) else None
 
 
 class Outcome(StrEnum):
@@ -47,6 +65,11 @@ class Finding:
 
     code: str
     text: str
+
+
+def invalid_value(kind: CommandKind, value: object) -> Finding:
+    """Befund ``value.invalid``: Der Wert passt nicht zur Art des Befehls (Typ, nicht endlich)."""
+    return Finding("value.invalid", f"Ungültiger Wert für „{kind}“: {value!r}.")
 
 
 @dataclass(frozen=True)

@@ -9,7 +9,7 @@ from __future__ import annotations
 import math
 
 from bindaems.core.safety.limits import CurrentRange, HardLimits
-from bindaems.core.safety.types import Finding, Step, de
+from bindaems.core.safety.types import Finding, Step, de, finite_number, invalid_value
 from bindaems.shared.control import Command, CommandKind
 
 
@@ -29,7 +29,7 @@ def check_range(command: Command, limits: HardLimits, budget_w: float | None) ->
     if kind == CommandKind.GRID_SETPOINT and command.value is None:
         return Step(None)  # hebt den Override auf
 
-    value = _finite_number(command.value)
+    value = finite_number(command.value)
     if value is None:
         return _invalid(command)
     if kind == CommandKind.CURRENT:
@@ -44,24 +44,13 @@ def check_range(command: Command, limits: HardLimits, budget_w: float | None) ->
     return _invalid(command)  # unbekannte Art: im Zweifel ablehnen
 
 
-def _finite_number(value: object) -> float | None:
-    """Der Wert als endliche Zahl; ``bool``, ``None``, NaN, ±∞ und alles andere gelten nicht."""
-    if isinstance(value, bool) or not isinstance(value, int | float):
-        return None
-    try:
-        number = float(value)
-    except OverflowError:  # ein int, der größer ist als jedes float
-        return None
-    return number if math.isfinite(number) else None
-
-
 def _reject(code: str, text: str, *earlier: Finding) -> Step:
     """Ablehnung mit den früheren Findings und dem neuen; ``value`` ist dabei immer ``None``."""
     return Step(None, (*earlier, Finding(code, text)), reject=True)
 
 
 def _invalid(command: Command) -> Step:
-    return _reject("value.invalid", f"Ungültiger Wert für „{command.kind}“: {command.value!r}.")
+    return Step(None, (invalid_value(command.kind, command.value),), reject=True)
 
 
 def _outside(value: float, unit: str) -> Step:
