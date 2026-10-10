@@ -86,3 +86,24 @@ it('meldet eine fehlende Verbindung', async () => {
 	const error = await request('GET', '/api/system').catch((e) => e);
 	expect([error.status, error.detail]).toEqual([0, NETWORK_ERROR]);
 });
+
+it('nennt Fehlerseiten des Proxys statt „Unbekannter Fehler“', async () => {
+	// beim Neustart der app antwortet nginx mit einer HTML-Seite
+	for (const status of [502, 504, 404]) {
+		fetchMock.mockResolvedValueOnce(
+			new Response('<html><body>Bad Gateway</body></html>', {
+				status,
+				headers: { 'Content-Type': 'text/html' }
+			})
+		);
+	}
+	await expect(request('GET', '/api/system')).rejects.toMatchObject({
+		detail: 'Server nicht erreichbar (HTTP 502)'
+	});
+	await expect(request('GET', '/api/system')).rejects.toMatchObject({
+		detail: 'Server nicht erreichbar (HTTP 504)'
+	});
+	await expect(request('GET', '/api/system')).rejects.toMatchObject({
+		detail: 'Unbekannter Fehler (HTTP 404)'
+	});
+});

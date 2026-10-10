@@ -1,7 +1,7 @@
 import type { LineSeriesOption, YAXisComponentOption } from 'echarts';
 import { describe, expect, it } from 'vitest';
 import type { PriceSlot } from '$lib/api/schemas';
-import { historyOption, priceForecastOption } from './options';
+import { axisTooltip, historyOption, priceForecastOption } from './options';
 import type { Palette } from './palette';
 
 const palette: Palette = {
@@ -118,4 +118,11 @@ describe('Verlauf', () => {
 			[3_600_000, 24]
 		]);
 	});
+});
+
+it('setzt Reihennamen im Tooltip als Text, nicht als HTML', () => {
+	const tooltip = axisTooltip({});
+	const html = tooltip([{ seriesName: 'SOC <b>Golf</b> & Co', value: [0, 42] }]);
+	expect(html).toContain('SOC &lt;b&gt;Golf&lt;/b&gt; &amp; Co');
+	expect(html).not.toContain('<b>Golf</b>');
 });

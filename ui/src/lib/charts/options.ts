@@ -32,6 +32,19 @@ function steps(slots: PriceSlot[], value: (slot: PriceSlot) => number | null): P
 
 const kw: ValueFormat = (value) => `${formatNumber(value, 2)}${NBSP}kW`;
 
+const HTML_ESCAPES: Record<string, string> = {
+	'&': '&amp;',
+	'<': '&lt;',
+	'>': '&gt;',
+	'"': '&quot;',
+	"'": '&#39;'
+};
+
+/** Text für HTML: der Tooltip ist HTML, Reihennamen kommen aus der Konfiguration */
+function escapeHtml(text: string): string {
+	return text.replace(/[&<>"']/g, (char) => HTML_ESCAPES[char] ?? char);
+}
+
 /** Tooltip mit der Zeit in Wien und den Werten je Reihe in ihrer Einheit */
 export function axisTooltip(formats: Record<string, ValueFormat>) {
 	return (params: unknown): string => {
@@ -46,7 +59,7 @@ export function axisTooltip(formats: Record<string, ValueFormat>) {
 			const value = Array.isArray(item.value) ? item.value[1] : item.value;
 			const format = formats[item.seriesName ?? ''] ?? ((v: number) => formatNumber(v, 1));
 			const text = typeof value === 'number' ? format(value) : DASH;
-			return `${item.marker ?? ''}${item.seriesName ?? ''}: <b>${text}</b>`;
+			return `${item.marker ?? ''}${escapeHtml(item.seriesName ?? '')}: <b>${text}</b>`;
 		});
 		return [time, ...lines].join('<br>');
 	};

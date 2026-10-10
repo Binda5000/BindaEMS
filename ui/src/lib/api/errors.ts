@@ -90,6 +90,19 @@ export function detailText(detail: unknown): string {
 		.join('\n');
 }
 
+/**
+ * Text zu einer Fehlerantwort: `detail` der API, sonst nach Status. Ohne JSON (Fehlerseite des
+ * Proxys, etwa während die app neu startet) nennt der Text wenigstens den Status.
+ */
+export function responseText(status: number, detail: unknown): string {
+	const text = detailText(detail);
+	if (text !== UNKNOWN_ERROR) return text;
+	if (status === 502 || status === 503 || status === 504) {
+		return `Server nicht erreichbar (HTTP ${status})`;
+	}
+	return `${UNKNOWN_ERROR} (HTTP ${status})`;
+}
+
 /** Fehler je Feld unterhalb von `prefix`; Schlüssel ist der restliche Pfad mit Punkten. */
 export function fieldErrors(
 	detail: unknown,

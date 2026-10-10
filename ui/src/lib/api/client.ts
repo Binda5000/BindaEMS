@@ -1,7 +1,7 @@
 // HTTP-Zugriff auf die API: Sitzungs-Cookie, CSRF-Token, Kennzeichen für automatische Abfragen,
 // deutsche Fehlertexte und Prüfung der Antworten gegen ihr Schema
 import * as v from 'valibot';
-import { ApiError, CONTRACT_ERROR, NETWORK_ERROR, detailText } from './errors';
+import { ApiError, CONTRACT_ERROR, NETWORK_ERROR, responseText } from './errors';
 
 /** Automatische Abfragen im Takt verlängern die Sitzung nicht (Wert „1“). */
 export const BACKGROUND_HEADER = 'X-Bindaems-Background';
@@ -92,7 +92,7 @@ export async function request<T = void>(
 			typeof data === 'object' && data !== null ? (data as { detail?: unknown }).detail : undefined;
 		throw new ApiError(
 			response.status,
-			detailText(detail),
+			responseText(response.status, detail),
 			data,
 			retryAfter(response.headers.get('Retry-After'))
 		);
