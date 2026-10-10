@@ -92,7 +92,8 @@ Stand an der Anlage (Angabe des Betreibers vom 10.10.2026):
    - Das Löschen der hub4-Overrides kommt mit 2b, sobald Teil 2 die Pfade festgelegt hat.
 4. **Dringende Befehle (8.3).**
    - Gemeint ist ein Befehl mit `urgent=True`, der nachweislich Richtung sicherer Zustand geht: weniger Strom, Stopp, ein niedrigerer Netz-Sollwert, ein aufgehobener Override oder ein Sicherwert.
-   - Er umgeht Mindestabstände, Stundenlimits, Totbänder (außer bei gleichem Wert) und das Schreibbudget, wird aber mitgezählt.
+   - Er umgeht Mindestabstände, Stundenlimits und Totbänder (außer bei gleichem Wert). Das Schreibbudget umgeht er nur mit dem exakten Sicherwert der Art (`safe_commands`), damit auch fehlerhaft „dringende“ Folgen den Flash nicht erschöpfen. Er wird aber mitgezählt.
+   - **Zustand:** In SAFE darf er schreiben, damit der sichere Zustand hergestellt werden kann (8.4, 8.5). In START und OBSERVE bleibt der core auch für ihn lesend (7.2, 8.3 Regel 8). In CONTROL und DEGRADED ist das Zustands-Gate ohnehin offen.
    - Sperren (7.9) gelten auch für ihn.
    - Geht ein als dringend markierter Befehl nicht Richtung Sicherheit, wird er normal geprüft.
    - **Grund:** Spec 7.3 verlangt, dass die EVCS im nächsten Zyklus reduziert und der Tesla bei Überlast sofort auf Mindeststrom geht.
@@ -147,14 +148,14 @@ Stand an der Anlage (Angabe des Betreibers vom 10.10.2026):
   - Zeit kommt immer als Argument; Dateizugriffe laufen nur über `core.persistence.files`.
 - **Abdeckung (Spec 16):** Zeilenabdeckung ≥ 90 % für `core/safety` und `core/control`, ≥ 75 % für das ganze Paket. Die CI prüft beides (Task 18).
 - **Ablage des core:**
-  - Dateien `intent.json` und `write_budget.json` unter `core.data_dir` (Default `/data`, Volume `core-data`).
+  - Dateien unter `core.data_dir` (Default `/data`, Volume `core-data`): `intent.json` entsteht schon in 2a. `write_budget.json` entsteht erst ab 2b, wenn die Aktoren die `SafetyLayer` aufrufen; 2a legt nur Format und Klasse fest (Task 6), kein 2a-Task verdrahtet das Budget in die Laufzeit.
   - Geschrieben wird atomar: temporäre Datei im selben Verzeichnis, dann `os.replace`.
   - Für unlesbare Dateien ist festgelegt, wie der core sicher startet (Tasks 6 und 11).
 - **Cerbo-Watchdog:**
   - Python ≥ 3.8: ruff mit `target-version = "py38"` und ein `ast`-Test mit `feature_version=(3, 8)`.
   - Nur Standardbibliothek plus `dbus`, `gi.repository.GLib` und `vedbus` vom Gerät; keine Importe aus `bindaems`.
   - Läuft unter daemontools.
-  - Schreibt nur in `/data/bindaems-watchdog/`, den Link `/service/bindaems-watchdog` und seinen Block in `/data/rc.local`.
+  - Schreibt nur in `/data/bindaems-watchdog/`, den Link `/service/bindaems-watchdog`, seinen Block in `/data/rc.local` und sein flüchtiges Log nach `/var/log/bindaems-watchdog/` (multilog, wie andere Venus-Dienste).
 - **Einheiten:**
   - Strom in A, in Befehlen ganzzahlig; Leistung in W; SOC in %.
   - Zahlen in Begründungstexten über `de()`: Dezimalkomma und echtes Minus.
@@ -208,13 +209,14 @@ src/bindaems/core/adapters/victron_topics.py, victron_mqtt.py    (geändert) bin
 src/bindaems/core/state/store.py            (geändert) connected()
 src/bindaems/core/api/app.py, core/runtime.py                    (geändert)
 src/bindaems/tools/watchdog_config.py, watchdog_probe.py
+src/bindaems/tools/verify_checks.py         (geändert) render_report(…, title=…)
 src/bindaems/app/ha/entities.py             (geändert) „Watchdog ausgelöst“
 cerbo-watchdog/                             README.md, install.sh, config.ini.example, ruff.toml,
                                             bindaems-watchdog.py, service/run, service/log/run,
                                             bindaems_watchdog/{__init__,config,logic,state_file,actions,service}.py
 ui/src/lib/api/schemas.ts, ui/src/lib/system/view.ts, ui/src/routes/system/+page.svelte   (geändert)
-tests/unit/core/{safety,control,persistence,watchdog_client}/…, tests/property/test_safety_layer.py,
-tests/unit/cerbo_watchdog/…, tests/unit/tools/…, tests/integration/test_runtime_control.py
+tests/unit/core/conftest.py (Fixtures limits, limits_live), tests/unit/core/{safety,control,persistence,watchdog_client}/…,
+tests/property/test_safety_layer.py, tests/unit/cerbo_watchdog/…, tests/unit/tools/…, tests/integration/test_runtime_control.py
 ```
 
 Neue Pakete unter `src/bindaems` bekommen eine `__init__.py` (Layout-Test). Testverzeichnisse bekommen keine.
@@ -224,7 +226,7 @@ Neue Pakete unter `src/bindaems` bekommen eine `__init__.py` (Layout-Test). Test
 ### Task 1: Konfiguration für Freigaben, Befehlslimits und Ablage
 
 **Files:**
-- Modify: `src/bindaems/shared/config.py`, `deploy/config.example.yaml`
+- Modify: `src/bindaems/shared/config.py`, `deploy/config.example.yaml`, `ui/src/lib/api/contract/limits.json` (regeneriert in Step 5)
 - Test: `tests/unit/shared/test_config.py`
 
 **Interfaces:**
@@ -317,7 +319,7 @@ git commit -m "feat(shared): Freigaben, Befehlslimits und Ablage in der Konfigur
 
 **Files:**
 - Create: `src/bindaems/shared/control.py`, `src/bindaems/core/safety/__init__.py`, `src/bindaems/core/safety/types.py`, `src/bindaems/core/safety/limits.py`
-- Test: `tests/unit/shared/test_control.py`, `tests/unit/core/safety/conftest.py`, `tests/unit/core/safety/test_limits.py`
+- Test: `tests/unit/shared/test_control.py`, `tests/unit/core/conftest.py`, `tests/unit/core/safety/conftest.py`, `tests/unit/core/safety/test_limits.py`
 
 **Interfaces:**
 - Consumes: `Config`, `VehicleCommandLimits`, `PhaseMap`, `Phase` (Task 1, `shared/config.py`)
@@ -403,9 +405,10 @@ git commit -m "feat(shared): Freigaben, Befehlslimits und Ablage in der Konfigur
     | `max_discharge` | Wert ist −1, oder bekannter Ist-Wert ≥ 0 und Wert ≥ Ist-Wert |
     | `min_soc` | Wert = Reserve, oder Ist-Wert bekannt und Reserve ≤ Wert ≤ Ist-Wert |
 
-- Produces für Tests in `tests/unit/core/safety/conftest.py`:
+- Produces für Tests in `tests/unit/core/conftest.py` (die Fixtures gelten für alle Tests unter `tests/unit/core`, auch für `control/`):
   - Fixture `limits`: `HardLimits.from_config(cfg)`
   - Fixture `limits_live`: wie `limits`, aber mit `live_allowed: true` für `victron`, `wallboxes.evcs` und `vehicles.tesla`
+- Produces für Tests in `tests/unit/core/safety/conftest.py`:
   - `PHASES = ("L1", "L2", "L3")`
   - Funktion `make_ctx(**changes: Any) -> SafetyContext`. Ihre Defaults:
     - `now=T0`, `operating=CONTROL`
@@ -517,7 +520,7 @@ Expected: `24 passed`
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/bindaems/shared/control.py src/bindaems/core/safety tests/unit/shared/test_control.py tests/unit/core/safety
+git add src/bindaems/shared/control.py src/bindaems/core/safety tests/unit/shared/test_control.py tests/unit/core/conftest.py tests/unit/core/safety
 git commit -m "feat(safety): Steuerungstypen, Absicht und Aktorkatalog mit harten Grenzen"
 ```
 
@@ -649,7 +652,7 @@ git commit -m "feat(safety): Regeln 1–3 – Sollwerte klemmen oder ablehnen"
 
 **Grundbegriffe:**
 - Spielraum je Phase: `h_p = limits.phase_limit_a − I_p`, mit `I_p = ctx.phase_import_a[p]`.
-- Die bindende Phase in den Texten ist die mit dem kleinsten Spielraum unter den betroffenen Phasen; bei Gleichstand gilt die Reihenfolge L1, L2, L3.
+- Die bindende Phase in den Texten ist die mit dem kleinsten Spielraum unter den betroffenen Phasen. Bei `current` ist das die mit dem kleinsten `h_p + m_p`, also dieselbe Größe, aus der „erlaubt“ entsteht. Bei Gleichstand gilt die Reihenfolge L1, L2, L3.
 - Fehlt `I_p` für eine betroffene Phase, wird eine Erhöhung abgelehnt (`phase.unknown`). Eine Verringerung bleibt unverändert.
 - **Wallbox-Phasen:**
   - Gemessener Strom `m_p = ctx.wallbox_phase_a.get(key, {}).get(p, 0.0)`.
@@ -662,7 +665,7 @@ git commit -m "feat(safety): Regeln 1–3 – Sollwerte klemmen oder ablehnen"
 |---|---|---|
 | `current` | Ist-Strom (`present[(a, CURRENT)]`) unbekannt oder kleiner als der Wert | `erlaubt = floor(min_p(h_p + m_p))` über die aktiven Phasen. Wert ≤ erlaubt: unverändert. Sonst bei einer Erhöhung: erlaubt ≥ `min_a` → auf erlaubt (`phase.reduced`), sonst ablehnen (`phase.rejected`). Bei einer Verringerung: auf `max(min_a, erlaubt)` (`phase.reduced` bzw. `phase.minimum`) |
 | `charging` | Wert `True` und Ist-Wert nicht `True` | Ladestrom `I_c` = bekannter Ist-Strom, sonst `max_a`. Geprüft wird `I_p − m_p + I_c ≤ Grenze` auf allen drei Phasen der Wallbox; verletzt → ablehnen (`phase.rejected`). `False` ist immer erlaubt. |
-| `grid_setpoint` | Wert nicht `None` und größer als der wirksame Ist-Sollwert `S0` (Override, sonst `base_grid_setpoint_w`) | `S_max = S0 + 3 × U × min_p h_p`. Wert ≤ `S_max`: unverändert. Sonst: `S_max ≥ 0` → auf `floor(S_max)` (`phase.reduced`); `S_max < 0` und `S0 ≥ 0` → auf 0 (`phase.reduced`); sonst ablehnen (`phase.rejected`) |
+| `grid_setpoint` | Wert nicht `None` und größer als der wirksame Ist-Sollwert `S0` (Override, sonst `base_grid_setpoint_w`). Fehlt `(victron, grid_setpoint)` in `present`, gilt `S0 = min(base_grid_setpoint_w, 0)`: die vorsichtigste Annahme, denn ein Override ist nie negativ. | `S_max = S0 + 3 × U × min_p h_p`. Wert ≤ `S_max`: unverändert. Sonst: `S_max ≥ 0` → auf `floor(S_max)` (`phase.reduced`); `S_max < 0` und `S0 ≥ 0` → auf 0 (`phase.reduced`); sonst ablehnen (`phase.rejected`) |
 | `max_discharge` | Wert ≥ 0 und kleiner als die aktuelle Entladeleistung `D` | `ΔP = D − Wert` ins Netz. `L_min = D − 3 × U × min_p h_p`. Wert ≥ `L_min`: unverändert; sonst auf `ceil(L_min)` (`phase.discharge`), über `max_discharge_w` auf −1. Ist `D` unbekannt, wird eine Verschärfung abgelehnt (`phase.battery_unknown`); das heißt Wert ≥ 0 und Ist-Wert unbekannt, −1 oder größer. |
 | `min_soc` | Wert > Reserve und Wert > SOC | `ΔP = D`; wenn `I_p + ΔP / (3 × U)` auf einer Phase über der Grenze liegt, ablehnen (`phase.rejected`). Ist der SOC unbekannt, wird abgelehnt (`phase.soc_unknown`); ist `D` unbekannt, ebenfalls (`phase.battery_unknown`). |
 
@@ -758,6 +761,13 @@ def test_setpoint_on_overloaded_phase(limits) -> None:
     assert check_phases(Command("victron", K.GRID_SETPOINT, 0.0), 0.0, from_feed_in, limits).reject
 
 
+def test_setpoint_unknown_present_assumes_lowest(limits) -> None:
+    ctx = make_ctx(phase_import_a=IMP, base_grid_setpoint_w=-200.0)
+    step = check_phases(Command("victron", K.GRID_SETPOINT, 6000.0), 6000.0, ctx, limits)
+    assert step.value == 1870.0
+    assert step.findings[0].text == "Phase L1 würde über 33 A steigen; reduziert auf 1870 W."
+
+
 def test_discharge_lock_raised_to_protect_phases(limits) -> None:
     ctx = make_ctx(phase_import_a=IMP, battery_discharge_w=9000.0,
                    present={("victron", K.MAX_DISCHARGE): -1.0})
@@ -784,7 +794,7 @@ Expected: FAIL (`ModuleNotFoundError`)
 - [ ] **Step 4: Tests laufen lassen**
 
 Run: `uv run pytest tests/unit/core/safety/test_phases.py -q`
-Expected: `12 passed`
+Expected: `13 passed`
 
 - [ ] **Step 5: Commit**
 
@@ -1370,7 +1380,7 @@ git commit -m "feat(safety): Sperren für Teilsysteme und wirksame Betriebsarten
 **Ablauf von `authorize`**, genau in dieser Reihenfolge:
 1. Aktor in `limits.actuators` und Art in `spec.kinds`, sonst `REJECTED`.
 2. `urgent_ok = command.urgent and toward_safe(command, ctx, limits)`. Ist `command.urgent` gesetzt, aber nicht `urgent_ok`, kommt `urgent.ignored` dazu, und es geht normal weiter.
-3. **Zustand:** `ctx.operating` ist CONTROL oder DEGRADED, oder es gilt `urgent_ok` und der Zustand ist nicht START. Sonst `REJECTED` mit `state.inactive`.
+3. **Zustand:** `ctx.operating` ist CONTROL oder DEGRADED, oder es gilt `urgent_ok` und der Zustand ist SAFE. Sonst `REJECTED` mit `state.inactive`.
 4. **Sperre:** Ist `ctx.locks.get(id)` nicht leer, folgt `REJECTED` mit `lock`, auch bei dringenden Befehlen.
 5. **Betriebsart:** `dry_run = ctx.modes.get(id, DRY_RUN) is not LIVE`.
 6. **Eingangsdaten:** Ist `ctx.inputs.ok` falsch und gilt nicht `urgent_ok`, folgt `REJECTED` mit `inputs`.
@@ -1403,7 +1413,7 @@ git commit -m "feat(safety): Sperren für Teilsysteme und wirksame Betriebsarten
   - bis zu zwei Sperren, Eingangsdaten ok oder nicht
   - Phasenströme −60…60 A oder `None`, Wallbox-Ströme 0…32 A je Phase
   - Tesla an `twc`, an `evcs` oder an unbekannter Wallbox
-  - beliebige `present`-Werte
+  - `present` je Aktor und Art fehlend oder typgerecht, denn ab 2b kommt `present` aus den Rücklesewerten der Aktoren mit festen Typen: endliche Zahlen; bei `charging` ein `bool`; `None` nur beim Netz-Sollwert (kein Override)
   - Entladeleistung 0…15 kW oder `None`, SOC 0…100 oder `None`
   - Basis-Sollwert −500…500 W, Budget 0…30 kW oder `None`
 - Befehle: alle Arten auf `victron`, `wallbox.evcs`, `vehicle.tesla` und dem Nicht-Aktor `wallbox.twc`. Werte sind `None`, `bool`, −50 000…50 000 sowie −1, NaN und ∞; `urgent` ist zufällig.
@@ -1416,9 +1426,9 @@ git commit -m "feat(safety): Sperren für Teilsysteme und wirksame Betriebsarten
 |---|---|
 | `test_sendable_values_stay_within_hard_limits` | `sendable` ⇒ der Wert liegt im Bereich: Strom ganzzahlig in `[min_a, max_a]`; Netz-Sollwert `None` oder `0 ≤ v ≤ grid_setpoint_max(ctx.grid_budget_w)`; Entladegrenze −1 oder `0 ≤ v ≤ max_discharge_w`; Min-SOC `reserve ≤ v ≤ 100`; `charging` ist `bool` |
 | `test_sendable_increases_keep_phases_below_limit` | `sendable` und Erhöhung ⇒ alle betroffenen Phasen bekannt und vorhergesagt ≤ `phase_limit_a` + 1e-6 |
-| `test_gate_lock_inputs_and_dry_run` | `sendable` ⇒ nicht gesperrt; Zustand CONTROL oder DEGRADED oder (dringend, sicherer Wert und nicht START); Eingangsdaten ok oder (dringend und sicherer Wert). `send` ⇒ `ctx.modes[id]` ist `LIVE`. Nicht-Aktoren sind nie `sendable`. |
-| `test_rate_limits_hold_over_sequences` | Folgen aus Zeitschritten von 0…120 s und nicht dringenden Befehlen (EVCS-Strom 6–16 A, EVCS Start/Stopp, Tesla-Strom 5–16 A, Tesla Start/Stopp, Netz-Sollwert 0–8000 W) in einem großzügigen Kontext (CONTROL, live, Spielraum 33 A je Phase, ohne `present`). Die `sendable`-Zeitpunkte halten alle Mindestabstände ein; beim Tesla gibt es in keinem Fenster von 3600 s mehr als 20 Befehle und mehr als 6 Start/Stopp. |
-| `test_budget_holds_over_sequences` | Folgen von Min-SOC- und Entladegrenzen-Befehlen mit Zeitschritten von 0…600 s, bis zu 200 Schritte. Kein Fenster von 1 h enthält mehr als 12 und kein Fenster von 24 h mehr als 100 `sendable` persistente Befehle. |
+| `test_gate_lock_inputs_and_dry_run` | `sendable` ⇒ nicht gesperrt; Zustand CONTROL oder DEGRADED oder (dringend, sicherer Wert und SAFE); Eingangsdaten ok oder (dringend und sicherer Wert). `send` ⇒ `ctx.modes[id]` ist `LIVE`. Nicht-Aktoren sind nie `sendable`. |
+| `test_rate_limits_hold_over_sequences` | Folgen aus Zeitschritten von 0…120 s und nicht dringenden Befehlen (EVCS-Strom 6–16 A, EVCS Start/Stopp, Tesla-Strom 5–16 A, Tesla Start/Stopp, Netz-Sollwert 0–8000 W) in einem großzügigen Kontext (CONTROL, live, Spielraum 33 A je Phase, ohne `present`). Die `sendable`-Zeitpunkte halten alle Mindestabstände ein. Die Fenster sind halboffen wie in Task 5: Zeitpunkte zählen zusammen, wenn sie weniger als 3600 s auseinanderliegen. Beim Tesla gibt es in keinem solchen Fenster mehr als 20 Befehle und mehr als 6 Start/Stopp. |
+| `test_budget_holds_over_sequences` | Folgen von nicht dringenden Min-SOC- und Entladegrenzen-Befehlen mit Zeitschritten von 0…600 s, bis zu 200 Schritte. Die Fenster sind halboffen wie in Task 6: Zeitpunkte zählen zusammen, wenn sie weniger als 1 h bzw. weniger als 24 h auseinanderliegen. Kein Fenster von 1 h enthält mehr als 12 und kein Fenster von 24 h mehr als 100 `sendable` persistente Befehle. |
 
 `@settings(max_examples=500, deadline=None)` für die drei Einzeltests, `max_examples=100` für die Folgen.
 
@@ -1453,6 +1463,12 @@ def test_urgent_toward_safe_passes_in_safe_state(layer) -> None:
     ctx = make_ctx(operating=OperatingState.SAFE, present={("wallbox.evcs", K.CURRENT): 16.0})
     v = layer.authorize(Command("wallbox.evcs", K.CURRENT, 6.0, urgent=True), ctx)
     assert (v.outcome, v.value, v.send) == (Outcome.ACCEPTED, 6.0, True)
+
+
+def test_urgent_toward_safe_rejected_in_observe(layer) -> None:
+    ctx = make_ctx(operating=OperatingState.OBSERVE, present={("wallbox.evcs", K.CURRENT): 16.0})
+    v = layer.authorize(Command("wallbox.evcs", K.CURRENT, 6.0, urgent=True), ctx)
+    assert (v.outcome, v.findings[-1].text) == (Outcome.REJECTED, "Regelbetrieb nicht aktiv (Zustand OBSERVE).")
 
 
 def test_urgent_without_safer_value_is_checked_normally(layer) -> None:
@@ -1538,7 +1554,7 @@ Expected: FAIL (`ModuleNotFoundError`)
 - [ ] **Step 4: Unit-Tests laufen lassen**
 
 Run: `uv run pytest tests/unit/core/safety/test_layer.py -q`
-Expected: `14 passed`
+Expected: `15 passed`
 
 - [ ] **Step 5: Property-Tests nach der Tabelle schreiben und laufen lassen**
 
@@ -1561,7 +1577,7 @@ git commit -m "feat(safety): SafetyLayer mit Property-Tests – kein Befehl verl
 - Test: `tests/unit/core/control/test_operating.py`
 
 **Interfaces:**
-- Consumes: `OperatingState` (Task 2)
+- Consumes: `OperatingState` (Task 2), `REASON_WATCHDOG_MODE` (Task 8, `bindaems.core.safety.modes`)
 - Produces:
   - Gründe als Konstanten:
 
@@ -1570,7 +1586,7 @@ git commit -m "feat(safety): SafetyLayer mit Property-Tests – kein Befehl verl
     | `REASON_CONTROL_OFF` | `"Regelbetrieb ist aus."` |
     | `REASON_NOT_FRESH` | `"Kritische Messwerte noch nicht 30 s aktuell."` |
     | `REASON_PHASES` | `"3 Phasen mit je einem Gerät nicht bestätigt."` |
-    | `REASON_WATCHDOG` | `"Watchdog am Cerbo ist nicht scharf."` |
+    | `REASON_WATCHDOG` | `"Watchdog am Cerbo ist nicht scharf."`; als `REASON_WATCHDOG = REASON_WATCHDOG_MODE` aus `bindaems.core.safety.modes` (Task 8) importiert: gleicher Text, eine Quelle |
 
   - `@dataclass(frozen=True) class OperatingInputs`: `control_requested: bool`, `data_fresh: bool`, `phases_ok: bool`, `watchdog_required: bool`, `watchdog_armed: bool`, `safe_reasons: tuple[str, ...] = ()`, `degraded_reasons: tuple[str, ...] = ()`
   - `@dataclass(frozen=True) class Transition`: `previous: OperatingState`, `state: OperatingState`, `reasons: tuple[str, ...]`, `ts: datetime`
@@ -1701,11 +1717,11 @@ git commit -m "feat(control): Betriebszustände START, OBSERVE, CONTROL, DEGRADE
 
 **Files:**
 - Create: `src/bindaems/core/control/intent.py`
-- Modify: `src/bindaems/core/api/app.py`
+- Modify: `src/bindaems/core/api/app.py`, `src/bindaems/core/runtime.py`, `tests/integration/conftest.py`
 - Test: `tests/unit/core/control/test_intent.py`, `tests/unit/core/api/test_api.py`
 
 **Interfaces:**
-- Consumes: `Intent`, `ActuatorMode` (Task 2), `HardLimits` (Task 2), `write_json_atomic`, `read_json` (Task 6)
+- Consumes: `Intent`, `ActuatorMode` (Task 2), `HardLimits` (Task 2), `write_json_atomic`, `read_json` (Task 6); die Fixtures `limits` und `limits_live` aus `tests/unit/core/conftest.py` (Task 2)
 - Produces in `intent.py`:
   - `INTENT_FILE_PROBLEM = "Gespeicherte Absicht unlesbar; der core startet ohne Absicht (Regelbetrieb aus)."`
   - `@dataclass(frozen=True) class IntentReply`: `result: Literal["accepted", "clamped", "rejected"]`, `version: int | None` (die danach gültige Version), `details: tuple[str, ...] = ()`, `rejection: Literal["stale", "unknown_actuator"] | None = None`
@@ -1713,17 +1729,18 @@ git commit -m "feat(control): Betriebszustände START, OBSERVE, CONTROL, DEGRADE
     - `__init__(self, path: Path, limits: HardLimits) -> None`
     - Properties `current: Intent | None` und `load_problem: str | None`
     - `load(self) -> None`: Datei fehlt → keine Absicht. Datei unlesbar oder ungültig → keine Absicht, `load_problem = INTENT_FILE_PROBLEM`, Log-Warnung.
-    - `submit(self, intent: Intent, now: datetime) -> IntentReply`, Regeln der Reihe nach:
+    - `submit(self, intent: Intent, now: datetime) -> IntentReply`, Regeln der Reihe nach. Geklemmt wird vor dem Vergleich: „Inhalt“ in den beiden Zeilen zu „Version = gültige“ ist die Absicht nach dem Klemmen, also live ohne `live_allowed` schon als `dry_run`.
 
       | Fall | Ergebnis | Details |
       |---|---|---|
       | unbekannte Aktor-IDs | rejected, `unknown_actuator`; Version unverändert | je ID, sortiert: `f"Unbekannter Aktor „{id}“."` |
       | Version < gültige | rejected, `stale` | `f"Version {v} ist älter als die gültige Version {c}."` |
-      | Version = gültige, gleicher Inhalt | accepted, keine neue Speicherung | – |
-      | Version = gültige, anderer Inhalt | rejected, `stale` | `f"Version {v} ist bereits mit anderem Inhalt angenommen."` |
+      | Version = gültige, gleicher Inhalt nach dem Klemmen | Wiederholung: dieselbe Antwort wie bei der Annahme (accepted bzw. clamped), keine neue Speicherung | dieselben wie bei der Annahme |
+      | Version = gültige, anderer Inhalt nach dem Klemmen | rejected, `stale` | `f"Version {v} ist bereits mit anderem Inhalt angenommen."` |
       | live ohne `live_allowed` | clamped: der Aktor wird auf `dry_run` gesetzt | `f"{label}: in config.yaml nicht für den Live-Betrieb freigegeben; bleibt im Dry-Run."` |
       | sonst | accepted | – |
 
+    - Eine erneut gesendete Absicht bekommt damit dieselbe Antwort (`result` und `details`) wie bei der Annahme, auch wenn sie damals geklemmt wurde. Die Wiederholung ist für die app (2d) idempotent: Sie führt zu Status 200 statt 409.
     - Angenommene und geklemmte Absichten werden zur gültigen Absicht und als `{"intent": <JSON>, "accepted_at": <ISO>}` gespeichert; danach ist `load_problem` gleich `None`.
     - Scheitert das Speichern, gilt die Absicht trotzdem im Speicher. Dazu kommt `f"Absicht nicht gespeichert: {exc}"`, und der Fehler wird geloggt.
 - Produces in `api/app.py`:
@@ -1731,6 +1748,12 @@ git commit -m "feat(control): Betriebszustände START, OBSERVE, CONTROL, DEGRADE
   - `GET /v1/intent` liefert `{"intent": <JSON> | null}`.
   - `PUT /v1/intent` erwartet als Body eine `Intent`. Die Antwort ist `{"result", "version", "details"}` mit Status 200 (accepted, clamped), 409 (`stale`) oder 422 (`unknown_actuator`).
   - Beide Endpunkte verlangen das Token wie `/v1/health`.
+- Produces in `runtime.py`, bewusst minimal: Ohne diese Verdrahtung scheitert `mypy src`, weil `create_api(self, …)` die `CoreRuntime` als `CoreView` übergibt. Task 13 baut darauf auf.
+  - `limits = HardLimits.from_config(cfg)`
+  - `intents = IntentStore(cfg.core.data_dir / "intent.json", limits)`, im Konstruktor mit `load()` geladen
+  - `intent()` liefert `intents.current`; `submit_intent(intent)` ruft `intents.submit(intent, clock.now())` auf.
+  - Sonst bleibt die Laufzeit unverändert; Zustände, Sperren und Heartbeat folgen in Task 13.
+- Produces in `tests/integration/conftest.py`: `runtime_env` setzt `core.data_dir` auf `tmp_path / "core"`, damit kein Test unter `/data` liest oder schreibt.
 
 - [ ] **Step 1: Failing Tests schreiben**
 
@@ -1781,6 +1804,20 @@ def test_same_version_same_content_accepted(tmp_path, limits) -> None:
     store = make_store(tmp_path, limits)
     store.submit(Intent(version=5, control=True), T0)
     assert store.submit(Intent(version=5, control=True), T0) == IntentReply("accepted", 5)
+
+
+def test_resubmitting_clamped_intent_is_idempotent(tmp_path, limits, monkeypatch) -> None:
+    store = make_store(tmp_path, limits)
+    intent = Intent(version=1, actuators={"wallbox.evcs": LIVE})
+    first = store.submit(intent, T0)
+    assert first == IntentReply("clamped", 1, (
+        "EVCS „evcs“: in config.yaml nicht für den Live-Betrieb freigegeben; bleibt im Dry-Run.",
+    ))
+    save = Mock()
+    monkeypatch.setattr("bindaems.core.control.intent.write_json_atomic", save)
+    assert store.submit(intent, T0) == first
+    save.assert_not_called()
+    assert store.current.actuators == {"wallbox.evcs": DRY}
 
 
 def test_same_version_other_content_rejected(tmp_path, limits) -> None:
@@ -1852,19 +1889,19 @@ def test_get_intent(view_client) -> None:
 - [ ] **Step 2: Tests laufen lassen**
 
 Run: `uv run pytest tests/unit/core/control/test_intent.py tests/unit/core/api/test_api.py -q`
-Expected: FAIL (`ModuleNotFoundError` bzw. 404 für `/v1/intent`)
+Expected: FAIL (`ModuleNotFoundError`)
 
-- [ ] **Step 3: `IntentStore` und die Endpunkte umsetzen**
+- [ ] **Step 3: `IntentStore`, die Endpunkte und die minimale Verdrahtung in `CoreRuntime` und `runtime_env` umsetzen**
 
-- [ ] **Step 4: Tests laufen lassen**
+- [ ] **Step 4: Tests und Typprüfung laufen lassen**
 
-Run: `uv run pytest tests/unit/core/control/test_intent.py tests/unit/core/api/test_api.py -q`
-Expected: PASS (13 neue Tests, die bisherigen API-Tests unverändert grün)
+Run: `uv run pytest tests/unit/core/control/test_intent.py tests/unit/core/api/test_api.py tests/integration -q && uv run mypy src`
+Expected: PASS (14 neue Tests, die bisherigen API- und Integrationstests unverändert grün), mypy ohne Befund
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/bindaems/core/control/intent.py src/bindaems/core/api/app.py tests/unit/core/control/test_intent.py tests/unit/core/api/test_api.py
+git add src/bindaems/core/control/intent.py src/bindaems/core/api/app.py src/bindaems/core/runtime.py tests/integration/conftest.py tests/unit/core/control/test_intent.py tests/unit/core/api/test_api.py
 git commit -m "feat(control): Absicht mit Version, Klemmung auf live_allowed und PUT/GET /v1/intent"
 ```
 
@@ -1965,7 +2002,11 @@ async def test_publishes_only_keepalive_and_allowed_writes(fake_env) -> None:
 async def test_write_publishes_json_value_when_connected(fake_env) -> None:
     results: list[bool] = []
     adapter, transports, _ = fake_env(messages=[lambda: results.append(adapter.write(HEARTBEAT_PATH, 7))])
-    await run_until(adapter, lambda: (f"W/{P}/bindaems/0/Heartbeat", b'{"value": 7}') in transports[0].published)
+    await run_until(
+        adapter,
+        lambda: bool(transports)
+        and (f"W/{P}/bindaems/0/Heartbeat", b'{"value": 7}') in transports[0].published,
+    )
     assert results == [True]
 
 
@@ -2124,7 +2165,7 @@ git commit -m "feat(core): Watchdog-Status lesen und Heartbeat an den Cerbo send
 ### Task 13: Laufzeit – Zustände, Absicht, Sperren und Heartbeat im Zyklus
 
 **Files:**
-- Modify: `src/bindaems/core/runtime.py`, `src/bindaems/core/api/app.py`, `src/bindaems/core/state/store.py`, `tests/integration/conftest.py`, `tests/ui_world.py`
+- Modify: `src/bindaems/core/runtime.py`, `src/bindaems/core/api/app.py`, `src/bindaems/core/state/store.py`, `tests/integration/conftest.py`, `tests/ui_world.py`, `ui/src/lib/api/contract/system.json` (regeneriert in Step 4)
 - Test: `tests/integration/test_runtime_control.py`, `tests/unit/core/state/test_store.py`
 
 **Interfaces:**
@@ -2144,16 +2185,15 @@ git commit -m "feat(core): Watchdog-Status lesen und Heartbeat an den Cerbo send
 
 - Produces in `runtime.py`:
   - **Konstruktor:** neuer Parameter `watchdog_send: Callable[[int], bool] | None = None`. Ohne ihn schreibt der Victron-Adapter aus `self.adapters` mit `write(HEARTBEAT_PATH, n)`; ohne Victron-Adapter ist das Ergebnis `False`.
-  - **Neue öffentliche Attribute:**
+  - **Schon aus Task 11 vorhanden, hier unverändert übernommen:**
     - `limits` (`HardLimits`)
     - `intents`: `IntentStore(cfg.core.data_dir / "intent.json", limits)`, wird im Konstruktor geladen
+    - `CoreView.intent()` liefert die gültige Absicht; `CoreView.submit_intent(intent)` ruft `intents.submit(intent, clock.now())` auf.
+  - **Neue öffentliche Attribute:**
     - `locks`: `LockManager(cfg.safety.lock_release_s)`
     - `operating` (`OperatingStateMachine`)
     - `heartbeat`: `HeartbeatClient(send, cfg.victron.watchdog.heartbeat_s)`
-  - **`CoreView`:**
-    - `intent()` liefert die gültige Absicht.
-    - `submit_intent(intent)` ruft `intents.submit(intent, clock.now())` auf.
-    - `health()` füllt die neuen Felder; `mode` ist `operating.state`.
+  - **`CoreView`:** `health()` füllt die neuen Felder; `mode` ist `operating.state`.
   - **Zusätzliche Schritte in `cycle_once`**, in dieser Reihenfolge nach den bisherigen Prüfungen:
     1. `inputs.evaluate(snap, plausibility, now)`
     2. In Zyklen, in denen die Prüfungen liefen: `locks.update(now, lock_causes(competitor_alarms, selfcheck, limits))`
@@ -2182,7 +2222,7 @@ git commit -m "feat(core): Watchdog-Status lesen und Heartbeat an den Cerbo send
   - **Stabiles `since`:** `_update_alarms` übernimmt für jede Alarm-ID, die schon in der vorigen Liste stand, deren `since`. Das gilt auch für die bisherigen Alarme mitregelnder Systeme.
   - **`shutdown()`:** bleibt, wie es ist; es sendet keine Freigabe.
 - Test-Infrastruktur:
-  - `runtime_env` in `tests/integration/conftest.py` setzt `core.data_dir` auf `tmp_path / "core"`.
+  - `runtime_env` in `tests/integration/conftest.py` setzt `core.data_dir` auf `tmp_path / "core"`; das gibt es schon aus Task 11 und bleibt.
   - Neuer Parameter `configure: Callable[[Config], Config] | None` passt die Konfiguration an; weitere Schlüsselwortargumente gehen wie bisher an `CoreRuntime`.
   - `tests/ui_world.py` setzt `core.data_dir` unter das Datenverzeichnis der Demo.
 
@@ -2190,8 +2230,8 @@ git commit -m "feat(core): Watchdog-Status lesen und Heartbeat an den Cerbo send
 
 ```python
 # tests/unit/core/state/test_store.py (ergänzen)
-def test_connected_reports_sources(clock) -> None:
-    store = StateStore(clock)
+def test_connected_reports_sources() -> None:
+    store = StateStore(ManualClock(T0))
     assert store.connected("evcs") is None
     store.register_source("evcs", 5.0)
     assert store.connected("evcs") is False
@@ -2311,7 +2351,7 @@ async def test_shutdown_sends_no_release(runtime_env) -> None:
     rt.submit_intent(Intent(version=1, actuators={"wallbox.evcs": ActuatorMode.LIVE}))
     run(rt, clock, 2)
     await rt.shutdown()
-    assert 0 not in sent
+    assert sent == [1]
 
 
 async def test_intent_survives_restart(runtime_env) -> None:
@@ -2322,7 +2362,7 @@ async def test_intent_survives_restart(runtime_env) -> None:
 
 
 async def test_health_lists_actuators_and_watchdog(runtime_env) -> None:
-    rt, _, _ = runtime_env()
+    rt, _, _ = runtime_env(state=GOOD_STATE)
     rt.cycle_once()
     health = rt.health()
     assert [a["id"] for a in health.actuators] == ["victron", "wallbox.evcs", "vehicle.tesla"]
@@ -2374,7 +2414,7 @@ git commit -m "feat(core): Betriebszustände, Absicht, Sperren und Heartbeat im 
 
 **Interfaces:**
 - Produces:
-  - `cerbo-watchdog/ruff.toml`: `extend = "../pyproject.toml"`, `target-version = "py38"`, `src = ["."]`
+  - `cerbo-watchdog/ruff.toml`: `extend = "../pyproject.toml"`, `target-version = "py38"`, `src = ["."]` und der Abschnitt `[lint.pyupgrade]` mit `keep-runtime-typing = true`. Python 3.8 braucht `Optional`, `Tuple`, `Dict` und `List` in den Annotationen; ohne diese Einstellung meldet die Regelgruppe `UP` aus der Wurzelkonfiguration sie als UP006 bzw. UP045.
   - `bindaems_watchdog/__init__.py`: `VERSION = "1.0.0"`
   - Alle Module beginnen mit `from __future__ import annotations` und nutzen `typing.Optional`, `Tuple`, `Dict` und `List` statt `X | Y` oder `list[...]` außerhalb von Annotationen.
 - Produces in `config.py`:
@@ -2602,6 +2642,10 @@ def test_corrupt_state_file_starts_armed(tmp_path: Path) -> None:
 SOURCES = sorted(Path("cerbo-watchdog").rglob("*.py"))
 
 
+def test_sources_found() -> None:
+    assert len(SOURCES) >= 4
+
+
 @pytest.mark.parametrize("path", SOURCES, ids=str)
 def test_runs_on_python_38(path: Path) -> None:
     ast.parse(path.read_text(), filename=str(path), feature_version=(3, 8))
@@ -2626,7 +2670,7 @@ Expected: FAIL (`ModuleNotFoundError: No module named 'bindaems_watchdog'`)
 - [ ] **Step 4: Tests und ruff laufen lassen**
 
 Run: `uv run pytest tests/unit/cerbo_watchdog -q && uv run ruff check cerbo-watchdog && uv run ruff format --check cerbo-watchdog`
-Expected: `26 passed` (9 Logik, 8 Konfiguration, 3 Zustandsdatei, 6 Kompatibilität für 4 Dateien), ruff ohne Befund
+Expected: `27 passed` (9 Logik, 8 Konfiguration, 3 Zustandsdatei, 7 Kompatibilität: Quellen gefunden, 4 Dateien, `bindaems`-Unabhängigkeit, Versionsgleichheit), ruff ohne Befund
 
 - [ ] **Step 5: Commit**
 
@@ -2644,7 +2688,7 @@ git commit -m "feat(watchdog): Zustandsautomat, config.ini und Zustandsdatei des
   - im Paket: `cerbo-watchdog/bindaems_watchdog/actions.py`, `cerbo-watchdog/bindaems_watchdog/service.py`
   - Skripte: `cerbo-watchdog/bindaems-watchdog.py`, `cerbo-watchdog/service/run`, `cerbo-watchdog/service/log/run`, `cerbo-watchdog/install.sh`
   - Doku: `cerbo-watchdog/README.md`
-- Test: `tests/unit/cerbo_watchdog/test_actions.py`, `tests/unit/cerbo_watchdog/test_service.py`, `tests/unit/cerbo_watchdog/test_install.py`
+- Test: `tests/unit/cerbo_watchdog/fakes.py` (Testhilfe `FakeAccess`), `tests/unit/cerbo_watchdog/test_actions.py`, `tests/unit/cerbo_watchdog/test_service.py`, `tests/unit/cerbo_watchdog/test_install.py`
 
 **Interfaces:**
 - Consumes: `Settings`, `Action`, `WatchdogLogic`, `StoredState`, `read_state`, `write_state`, `VERSION` (Task 14)
@@ -2668,7 +2712,8 @@ git commit -m "feat(watchdog): Zustandsautomat, config.ini und Zustandsdatei des
   - `SERVICE_NAME = "com.victronenergy.bindaems"`, `VELIB_PATH = "/opt/victronenergy/dbus-systemcalc-py/ext/velib_python"`
   - `class WatchdogService`:
     - `__init__(self, settings, logic, runner, stored: StoredState, publish: Callable[[str, object], None], save: Callable[[StoredState], None], wall: Callable[[], float], monotonic: Callable[[], float]) -> None`
-    - `values(self) -> Dict[str, object]`: aktuelle Werte aller Pfade: `/Heartbeat` (zuletzt empfangen, Start 0), `/State`, `/TripCount`, `/LastTripTime`, `/LastTripFailures`, `/TimeoutSeconds` (`timeout_s` als int), `/Version`
+    - `values(self) -> Dict[str, object]`: aktuelle Werte aller Pfade: `/Heartbeat` (zuletzt empfangen, Start `None` = ungültig), `/State`, `/TripCount`, `/LastTripTime`, `/LastTripFailures`, `/TimeoutSeconds` (`timeout_s` als int), `/Version`
+      - **Warum `None`:** velib ruft den Callback bei einem unveränderten Wert nicht auf. Startete `/Heartbeat` mit 0, ginge nach einem Neustart im Zustand „scharf“ eine erste Freigabe 0 verloren, und der Watchdog löste fälschlich aus.
     - `on_heartbeat(self, path: str, value: object) -> bool`: Callback von VeDbusService. Er nimmt nur `int` an, kein `bool`, und nur Werte ≥ 0; dann ruft er `logic.heartbeat(value, monotonic())` auf und liefert `True`. Sonst liefert er `False`, und der Schreibzugriff wird abgelehnt.
     - `tick(self) -> bool`: GLib-Timer, Ergebnis immer `True`.
       - Löst `logic.tick` aus: `trip_count += 1`, `last_trip_time = int(wall())`, `runner.start(now)`, dann `publish` für `/TripCount` und `/LastTripTime`.
@@ -2810,7 +2855,8 @@ SETTINGS = Settings(enabled=True, timeout_s=90.0, rearm_s=30.0, gap_s=25.0, retr
 
 
 class Env:
-    def __init__(self, stored: StoredState = StoredState()) -> None:
+    def __init__(self, stored: StoredState | None = None) -> None:
+        stored = stored or StoredState()
         self.now = 0.0
         self.published: list[tuple[str, object]] = []
         self.saved: list[StoredState] = []
@@ -2867,7 +2913,7 @@ def test_register_paths_only_heartbeat_writeable() -> None:
     dbus_service = FakeDbusService()
     register_paths(dbus_service, Env().service)
     assert dbus_service.paths == [
-        ("/Heartbeat", 0, True), ("/State", 0, False), ("/TripCount", 0, False), ("/LastTripTime", 0, False),
+        ("/Heartbeat", None, True), ("/State", 0, False), ("/TripCount", 0, False), ("/LastTripTime", 0, False),
         ("/LastTripFailures", 0, False), ("/TimeoutSeconds", 90, False), ("/Version", "1.0.0", False),
     ]
 
@@ -2883,13 +2929,21 @@ ROOT = Path("cerbo-watchdog")
 SCRIPTS = ["install.sh", "service/run", "service/log/run"]
 
 
+def run_bash(*args: str, check: bool = False) -> subprocess.CompletedProcess[str]:
+    bash = shutil.which("bash")
+    assert bash is not None
+    return subprocess.run(  # noqa: S603 - festes Skript aus dem Repository
+        [bash, *args], capture_output=True, text=True, check=check
+    )
+
+
 @pytest.mark.parametrize("name", SCRIPTS)
 def test_script_syntax(name: str) -> None:
-    subprocess.run(["bash", "-n", str(ROOT / name)], check=True)
+    run_bash("-n", str(ROOT / name), check=True)
 
 
 def test_install_without_arguments_prints_usage() -> None:
-    result = subprocess.run(["bash", str(ROOT / "install.sh")], capture_output=True, text=True, check=False)
+    result = run_bash(str(ROOT / "install.sh"))
     assert result.returncode == 2 and result.stderr.startswith("Aufruf:")
 
 
@@ -2903,7 +2957,7 @@ def test_scripts_are_executable(name: str) -> None:
 Run: `uv run pytest tests/unit/cerbo_watchdog -q`
 Expected: FAIL (`ModuleNotFoundError: No module named 'bindaems_watchdog.actions'`)
 
-- [ ] **Step 3: Aktionen, Dienst, Skripte und README umsetzen** (Ausführrechte mit `git update-index --chmod=+x` sichern)
+- [ ] **Step 3: Aktionen, Dienst, Skripte und README umsetzen** (Ausführrechte mit `chmod +x` auf die vier Dateien `install.sh`, `service/run`, `service/log/run` und `bindaems-watchdog.py` setzen; `git add` übernimmt den Modus 100755, weil `core.filemode` gilt. Der Test prüft die Rechte auf der Platte.)
 
 - [ ] **Step 4: Tests, ruff und mypy laufen lassen**
 
@@ -2923,6 +2977,7 @@ git commit -m "feat(watchdog): Aktionen mit Rücklesen, D-Bus-Dienst für Venus 
 
 **Files:**
 - Create: `src/bindaems/tools/watchdog_config.py`, `src/bindaems/tools/watchdog_probe.py`
+- Modify: `src/bindaems/tools/verify_checks.py`
 - Test: `tests/unit/tools/test_watchdog_config.py`, `tests/unit/tools/test_watchdog_probe.py`
 
 **Interfaces:**
@@ -2931,6 +2986,7 @@ git commit -m "feat(watchdog): Aktionen mit Rücklesen, D-Bus-Dienst für Venus 
   - `MqttTransport`, `AiomqttTransport`, `KEEPALIVE_SUPPRESS`, `HEARTBEAT_PATH` (`core/adapters/victron_mqtt.py`)
   - `WATCHDOG_VERSION` (Task 12)
   - `Finding`, `render_report` (`tools/verify_checks.py`), `de` (Task 2)
+- Produces in `verify_checks.py`: `render_report(findings: Sequence[Finding], meta: Mapping[str, str], *, title: str = "Prüfprotokoll Teil 1") -> str`. Die Überschrift ist `f"# {title} – {meta.get('Datum', '')}"`; bisher stand „Prüfprotokoll Teil 1“ fest im Text. Der Standard hält die bestehenden Aufrufe und Tests unverändert gültig.
 - Produces in `watchdog_config.py`:
   - `render_config(cfg: Config) -> str` erzeugt genau das Format aus Task 14:
     - Zeiten aus `cfg.victron.watchdog`; `heartbeat_gap_s = 2,5 × heartbeat_s`; `rearm_s = 30`, `retries = 6`, `retry_s = 5`
@@ -2971,7 +3027,7 @@ git commit -m "feat(watchdog): Aktionen mit Rücklesen, D-Bus-Dienst für Venus 
 
       Jede Antwort außer `j` beendet mit Exitcode 1, ohne Verbindung.
     - Sonst verbindet sie sich wie der Victron-Adapter; die Portal-ID kommt aus der Konfiguration oder aus `N/+/system/0/Serial`.
-    - Der Bericht entsteht mit `render_report` und `meta = {"Werkzeug": "watchdog_probe", "Datum": …}`.
+    - Der Bericht entsteht mit `render_report(findings, meta, title="Prüfprotokoll Teil 2 – Watchdog-Probe")` und `meta = {"Werkzeug": "watchdog_probe", "Datum": …}`.
     - Exitcode 0, wenn kein Schritt `fail` ist, sonst 1.
 
 - [ ] **Step 1: Failing Tests schreiben**
@@ -3012,14 +3068,14 @@ def test_main_rejects_invalid_config(tmp_path: Path, capsys) -> None:
 ```
 
 `SimulatedCerbo` in `tests/unit/tools/test_watchdog_probe.py` ist ein `MqttTransport`:
-- Er enthält eine `WatchdogLogic` aus `bindaems_watchdog` mit verkürzten Zeiten (`timeout_s=0.4`, `rearm_s=0.15`, `gap_s=0.12`).
+- Er enthält eine `WatchdogLogic` aus `bindaems_watchdog` mit verkürzten Zeiten (`timeout_s=0.8`, `rearm_s=0.15`, `gap_s=0.5`). Die Abstände sind großzügig, damit der Test auf einer belasteten CI nicht flackert.
 - Heartbeats auf `W/<P>/bindaems/0/Heartbeat` reicht er an die Logik weiter.
 - Ein Hintergrund-Task ruft alle 10 ms `tick` auf.
 - Bei jeder Änderung stellt er `N/`-Meldungen für `State`, `TripCount` und `LastTripFailures` (0) in seine Nachrichten. Auf den Keepalive antwortet er mit `Version` und `State`.
 
 ```python
-FAST = ProbeTimings(heartbeat_s=0.05, answer_wait_s=0.5, arm_wait_s=1.0, timeout_s=0.4, trip_slack_s=0.5,
-                    rearm_wait_s=1.0, release_wait_s=0.5)
+FAST = ProbeTimings(heartbeat_s=0.05, answer_wait_s=1.0, arm_wait_s=2.0, timeout_s=0.8, trip_slack_s=1.0,
+                    rearm_wait_s=2.0, release_wait_s=1.0)
 TITLES = ["Watchdog erreichbar", "Watchdog-Version", "Scharf nach Heartbeat", "Auslösung ohne Heartbeat",
           "Wieder scharf", "Freigabe ohne Auslösung"]
 
@@ -3039,8 +3095,10 @@ async def test_probe_without_answer_stops_after_first_step() -> None:
 
 def test_main_aborts_without_confirmation(monkeypatch) -> None:
     monkeypatch.setattr("builtins.input", lambda _prompt: "n")
-    monkeypatch.setattr("bindaems.tools.watchdog_probe.AiomqttTransport", Mock(side_effect=AssertionError("keine Verbindung")))
+    transport = Mock(side_effect=AssertionError("keine Verbindung"))
+    monkeypatch.setattr("bindaems.tools.watchdog_probe.AiomqttTransport", transport)
     assert main(["--config", "deploy/config.example.yaml"]) == 1
+    transport.assert_not_called()
 ```
 
 `SilentTransport` nimmt alles an und liefert keine Nachrichten.
@@ -3050,17 +3108,17 @@ def test_main_aborts_without_confirmation(monkeypatch) -> None:
 Run: `uv run pytest tests/unit/tools/test_watchdog_config.py tests/unit/tools/test_watchdog_probe.py -q`
 Expected: FAIL (`ModuleNotFoundError`)
 
-- [ ] **Step 3: Beide Werkzeuge umsetzen**
+- [ ] **Step 3: Beide Werkzeuge umsetzen**, dazu `render_report` um das Schlüsselwort `title` erweitern
 
 - [ ] **Step 4: Tests laufen lassen**
 
-Run: `uv run pytest tests/unit/tools/test_watchdog_config.py tests/unit/tools/test_watchdog_probe.py tests/unit/cerbo_watchdog -q`
-Expected: PASS (8 neue Tests, alle Watchdog-Tests grün)
+Run: `uv run pytest tests/unit/tools/test_watchdog_config.py tests/unit/tools/test_watchdog_probe.py tests/unit/tools/test_verify_checks.py tests/unit/cerbo_watchdog -q`
+Expected: PASS (8 neue Tests, alle Watchdog-Tests und die bisherigen Tests zu `render_report` grün)
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/bindaems/tools/watchdog_config.py src/bindaems/tools/watchdog_probe.py tests/unit/tools
+git add src/bindaems/tools/watchdog_config.py src/bindaems/tools/watchdog_probe.py src/bindaems/tools/verify_checks.py tests/unit/tools
 git commit -m "feat(tools): config.ini für den Watchdog aus config.yaml erzeugen, Watchdog-Probe"
 ```
 
@@ -3081,6 +3139,7 @@ git commit -m "feat(tools): config.ini für den Watchdog aus config.yaml erzeuge
 - Produces in `entities.py`:
   - `HaInputs.watchdog_state: str | None = None`: `build_inputs` liest `health["watchdog"]["state"]`, wenn vorhanden.
   - Neue Entität `watchdog_tripped` am Gerät „BindaEMS“: binary_sensor „Watchdog ausgelöst“ mit `device_class="problem"`.
+    - Position in `build_entities`: direkt nach `problem_device_offline` (vor `tesla_soc`).
     - Wert `on_off(state == "tripped")`; bei `None` oder `"unknown"` gilt `on_off(None)`.
   - `sample_inputs` bekommt `watchdog_state=None`.
 - Produces in `schemas.ts`, in `CoreHealthSchema`:
@@ -3118,6 +3177,8 @@ git commit -m "feat(tools): config.ini für den Watchdog aus config.yaml erzeuge
   - Damit zeigt die Demo „wartet“.
 
 - [ ] **Step 1: Failing Tests schreiben**
+
+Der bestehende `test_entities_from_config` in `tests/unit/app/ha/test_entities.py` prüft die exakte Liste der Entitäts-IDs. Er bekommt `"watchdog_tripped"` direkt nach `"problem_device_offline"` (und vor `"tesla_soc"`) in die erwartete Liste.
 
 ```python
 # tests/unit/app/ha/test_entities.py (ergänzen)
@@ -3174,8 +3235,7 @@ Expected: Die Dateien mit dem Zustand bekommen die Watchdog-Signale der Demo, `s
 Run:
 ```bash
 uv run pytest -q
-cd ui && pnpm lint && pnpm check && pnpm test && pnpm build
-FONTCONFIG_FILE=$PWD/tests/e2e/fonts-ci.conf pnpm e2e
+(cd ui && pnpm lint && pnpm check && pnpm test && pnpm build && FONTCONFIG_FILE=$PWD/tests/e2e/fonts-ci.conf pnpm e2e)
 ```
 Expected: alles grün. Die System-Seite hat bei 360 px auch mit der Schrift der CI keinen waagrechten Überlauf; alle Bedienelemente sind mindestens 44 × 44 px groß.
 
@@ -3209,7 +3269,10 @@ git commit -m "feat(ui): Betriebszustand, Aktoren und Watchdog auf der System-Se
   - **Doku:**
     - `docs/betrieb.md`: neue Abschnitte
       - „Betriebszustände und Freigaben“: Zustände, Gründe, Sperren, Dry-Run und live, Reihenfolge der Inbetriebnahme, Wartung nach Spec 15
-      - „Watchdog am Cerbo“: `config.ini` erzeugen (`docker compose run --rm ems-core python -m bindaems.tools.watchdog_config > config.ini`), Installation mit `install.sh`, Probe (`docker compose run --rm ems-core python -m bindaems.tools.watchdog_probe`), Update, Entfernen, Logs
+      - „Watchdog am Cerbo“: `config.ini` erzeugen, Installation mit `install.sh`, Probe, Update, Entfernen, Logs
+        - Die Befehle folgen dem Muster aus dem Abschnitt „Prüfprotokolle“ (`docs/betrieb.md`): `--entrypoint python`, denn der ENTRYPOINT des Images ist `python -m bindaems.core`.
+        - `config.ini` erzeugen: `docker compose run --rm -T --entrypoint python ems-core -m bindaems.tools.watchdog_config --config /config/config.yaml > config.ini`
+        - Probe: erst `mkdir -p verification && sudo chown 10001 verification`, dann `docker compose run --rm -v "$PWD/verification:/out" --entrypoint python ems-core -m bindaems.tools.watchdog_probe --config /config/config.yaml --out /out/<Datum>-watchdog-probe.md`. Der Bericht liegt danach auf dem Host in `verification/`; im Container ginge er mit `--rm` verloren.
     - Spec, mit Verweis auf diesen Plan:
       - 5.6: Aufbau von `cerbo-watchdog/`
       - 7.2: Gate und Sperren je Teilsystem (Präzisierung 1)
