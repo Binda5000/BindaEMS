@@ -97,13 +97,7 @@
 		<Notices {notices} />
 	</Card>
 	<Card title="Verbraucher">
-		{#if consumers.data}
-			<ConsumerSummary tree={consumers.data.tree} />
-		{:else if consumers.error}
-			<Notice level="error">{consumers.error.detail}</Notice>
-		{:else}
-			<p class="muted">Lädt …</p>
-		{/if}
+		<ConsumerSummary tree={consumers.data?.tree} error={consumers.error} />
 	</Card>
 </div>
 
