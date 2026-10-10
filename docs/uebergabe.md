@@ -184,8 +184,9 @@ Demo-Zugänge: `admin`, `gast` (Lesen) und `sicher` (Admin mit TOTP, Geheimnis
    - HA-Bedienelemente
    - Anlagensimulator in der CI
 
-   Wie Phase 1 sinnvoll in Teilpläne aufteilen. Zuerst die Spec-Abschnitte 7 (Regelung) und
-   8 (Sicherheit) lesen. Erst der Plan, dann die Freigabe.
+   Zuschnitt in die Pläne 2a–2d und der Plan 2a (Sicherheitsbasis) liegen zur Freigabe vor:
+   `docs/superpowers/plans/2026-10-10-phase-2a-sicherheitsbasis.md`. Umgesetzt wird erst nach
+   der Freigabe durch den Betreiber.
 
 ## Bewusst offen gelassen
 
