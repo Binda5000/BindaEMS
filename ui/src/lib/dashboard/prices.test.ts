@@ -1,6 +1,6 @@
 import { expect, it } from 'vitest';
 import type { PriceSlot } from '$lib/api/schemas';
-import { priceSummary } from './prices';
+import { forecastForChart, priceSummary } from './prices';
 
 const slot = (minute: number, ct: number, extra: Partial<PriceSlot> = {}): PriceSlot => ({
 	start: new Date(Date.UTC(2026, 9, 9, 8, minute)).toISOString(),
@@ -49,4 +49,24 @@ it('ohne Preis für jetzt bleibt alles leer', () => {
 		incomplete: false,
 		next: []
 	});
+});
+
+/** Viertelstunden ab `from` (UTC) als ISO-Zeitpunkte */
+function quarterHours(from: string, count: number): string[] {
+	return Array.from({ length: count }, (_, index) =>
+		new Date(Date.parse(from) + index * 900_000).toISOString()
+	);
+}
+
+it('zeigt die PV-Prognose für heute und morgen, auch bevor die Preise für morgen da sind', () => {
+	// 09.10., 10:00 in Wien: Preise gibt es erst für heute, Open-Meteo liefert drei Tage
+	const now = new Date('2026-10-09T08:00:00Z');
+	const forecast = quarterHours('2026-10-08T22:00:00Z', 3 * 96).map((start) => ({
+		start,
+		p50_w: 1000
+	}));
+	const shown = forecastForChart(forecast, now);
+	expect(shown[0]?.start).toBe('2026-10-08T22:00:00.000Z'); // heute 00:00 in Wien
+	expect(shown.at(-1)?.start).toBe('2026-10-10T21:45:00.000Z'); // morgen 23:45 in Wien
+	expect(shown).toHaveLength(2 * 96);
 });

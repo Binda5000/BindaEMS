@@ -1,5 +1,6 @@
-// Strompreis jetzt und die Stufen der nächsten 3 h (Drittel der Spanne)
-import type { PricesNow } from '$lib/api/schemas';
+// Strompreis jetzt und die Stufen der nächsten 3 h (Drittel der Spanne); PV-Prognose fürs Diagramm
+import type { ForecastSlot, PricesNow } from '$lib/api/schemas';
+import { addDays, localRange, parseIso, todayVienna } from '$lib/time';
 
 export type PriceLevel = 'low' | 'mid' | 'high';
 
@@ -32,4 +33,19 @@ export function priceSummary(data: PricesNow): PriceSummary {
 			level: level(slot.import_gross_ct)
 		}))
 	};
+}
+
+/**
+ * PV-Prognose für das Diagramm „heute/morgen“: heute und morgen in Wien, unabhängig davon, ob die
+ * Preise für morgen schon da sind (die kommen erst am Nachmittag; Open-Meteo reicht drei Tage).
+ */
+export function forecastForChart(forecast: ForecastSlot[], now: Date): ForecastSlot[] {
+	const today = todayVienna(now);
+	const range = localRange(today, addDays(today, 1));
+	const from = parseIso(range.from) ?? Number.NaN;
+	const to = parseIso(range.to) ?? Number.NaN;
+	return forecast.filter((slot) => {
+		const start = parseIso(slot.start);
+		return start !== null && start >= from && start < to;
+	});
 }

@@ -2,7 +2,7 @@
 	import { onMount } from 'svelte';
 	import { api } from '$lib/api/endpoints';
 	import EChart from '$lib/charts/EChart.svelte';
-	import { SLOT_MS, priceForecastOption } from '$lib/charts/options';
+	import { priceForecastOption } from '$lib/charts/options';
 	import { readPalette } from '$lib/charts/palette';
 	import Card from '$lib/components/Card.svelte';
 	import Notice from '$lib/components/Notice.svelte';
@@ -12,12 +12,12 @@
 	import Notices from '$lib/dashboard/Notices.svelte';
 	import { noticesFrom } from '$lib/dashboard/notices';
 	import PriceNow from '$lib/dashboard/PriceNow.svelte';
+	import { forecastForChart } from '$lib/dashboard/prices';
 	import SocList from '$lib/dashboard/SocList.svelte';
 	import { socEntries } from '$lib/dashboard/socs';
 	import { live } from '$lib/live.svelte';
 	import { Resource } from '$lib/resource.svelte';
 	import { theme } from '$lib/theme.svelte';
-	import { addDays, localRange, parseIso, todayVienna } from '$lib/time';
 
 	const system = new Resource((o) => api.system(o), { intervalMs: 15_000 });
 	const consumers = new Resource((o) => api.consumers(o), { intervalMs: 15_000 });
@@ -47,19 +47,7 @@
 		return readPalette();
 	});
 
-	// Prognose auf den Zeitraum der Preise beschränken (sonst heute und morgen)
-	const forecastSlots = $derived.by(() => {
-		const slots = prices.data?.slots ?? [];
-		const today = todayVienna();
-		const fallback = localRange(today, addDays(today, 1));
-		const from = slots.length > 0 ? parseIso(slots[0].start) : parseIso(fallback.from);
-		const last = slots.at(-1);
-		const to = last ? (parseIso(last.start) ?? 0) + SLOT_MS : parseIso(fallback.to);
-		return (forecast.data?.slots ?? []).filter((slot) => {
-			const start = parseIso(slot.start);
-			return start !== null && from !== null && to !== null && start >= from && start < to;
-		});
-	});
+	const forecastSlots = $derived(forecastForChart(forecast.data?.slots ?? [], new Date(nowIso)));
 
 	const chartOption = $derived(
 		priceForecastOption(prices.data?.slots ?? [], forecastSlots, nowIso, palette)
