@@ -4,6 +4,7 @@
     "name": "Haus",
     "color": null,
     "power_w": 1220.0,
+    "note": null,
     "other_w": 390.0,
     "mismatch": false,
     "children": [
@@ -12,6 +13,7 @@
         "name": "Küche",
         "color": "#59a14f",
         "power_w": 230.0,
+        "note": null,
         "other_w": null,
         "mismatch": false,
         "children": []
@@ -21,6 +23,7 @@
         "name": "Obergeschoss",
         "color": "#4e79a7",
         "power_w": 600.0,
+        "note": null,
         "other_w": 450.0,
         "mismatch": false,
         "children": [
@@ -29,6 +32,7 @@
             "name": "Büro",
             "color": "#f28e2b",
             "power_w": 150.0,
+            "note": null,
             "other_w": null,
             "mismatch": false,
             "children": []

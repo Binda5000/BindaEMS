@@ -7,6 +7,8 @@ export interface ConsumerRow {
 	name: string;
 	depth: number;
 	powerW: number | null;
+	/** warum `powerW` fehlt */
+	note: string | null;
 	color: string | null;
 	kind: 'root' | 'consumer' | 'other';
 	mismatch: boolean;
@@ -21,6 +23,7 @@ export function consumerRows(tree: TreeNode): ConsumerRow[] {
 			name: node.name,
 			depth,
 			powerW: node.power_w,
+			note: node.note,
 			color: node.color,
 			kind: depth === 0 ? 'root' : 'consumer',
 			mismatch: node.mismatch
@@ -33,6 +36,7 @@ export function consumerRows(tree: TreeNode): ConsumerRow[] {
 				name: 'Sonstiges',
 				depth: depth + 1,
 				powerW: node.other_w,
+				note: null,
 				color: null,
 				kind: 'other',
 				mismatch: node.mismatch

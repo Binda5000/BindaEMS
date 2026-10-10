@@ -14,6 +14,7 @@ const node = (
 	name,
 	color: '#4f8cff',
 	power_w: power,
+	note: null,
 	other_w: other,
 	mismatch,
 	children
@@ -45,4 +46,14 @@ it('fügt je Ebene mit Unterverbrauchern „Sonstiges“ an', () => {
 it('überträgt die Abweichung auf „Sonstiges“', () => {
 	const odd = node(1, 'OG', 100, [node(2, 'Büro', 150)], 0, true);
 	expect(consumerRows(odd).at(-1)).toMatchObject({ kind: 'other', powerW: 0, mismatch: true });
+});
+
+it('übernimmt den Grund für einen fehlenden Wert, „Sonstiges“ hat keinen', () => {
+	const parent = node(1, 'OG', null, [node(2, 'Büro', 150)]);
+	const rows = consumerRows({ ...parent, note: 'kein Wert in den letzten 24 h' });
+	expect(rows.map((row) => [row.name, row.note])).toEqual([
+		['OG', 'kein Wert in den letzten 24 h'],
+		['Büro', null],
+		['Sonstiges', null]
+	]);
 });

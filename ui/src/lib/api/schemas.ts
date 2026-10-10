@@ -284,6 +284,8 @@ export interface TreeNode {
 	name: string;
 	color: string | null;
 	power_w: number | null;
+	/** warum `power_w` fehlt, z. B. „kein Wert in den letzten 24 h“ */
+	note: string | null;
 	other_w: number | null;
 	mismatch: boolean;
 	children: TreeNode[];
@@ -294,6 +296,7 @@ export const TreeNodeSchema: v.GenericSchema<TreeNode> = v.object({
 	name: v.string(),
 	color: v.nullable(v.string()),
 	power_w: NullableNumber,
+	note: v.nullable(v.string()),
 	other_w: NullableNumber,
 	mismatch: v.boolean(),
 	children: v.array(v.lazy(() => TreeNodeSchema))
@@ -307,7 +310,9 @@ export type ConsumersResponse = v.InferOutput<typeof ConsumersResponseSchema>;
 
 export const CandidatesSchema = v.object({
 	core: v.array(v.object({ ref: v.string() })),
-	ha: v.array(v.object({ entity_id: v.string(), unit: v.picklist(['W', 'kW']) }))
+	ha: v.array(v.object({ entity_id: v.string(), unit: v.picklist(['W', 'kW']) })),
+	/** warum HA-Vorschläge fehlen (Datenbank nicht eingerichtet oder nicht lesbar) */
+	ha_error: v.nullable(v.string())
 });
 export type Candidates = v.InferOutput<typeof CandidatesSchema>;
 

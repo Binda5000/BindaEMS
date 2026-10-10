@@ -1,5 +1,7 @@
 from tests.app_helpers import core_input, login_as
 
+from bindaems.app.consumers.service import ConsumerInput
+
 
 def test_tree_endpoint_with_live_values(client, auth, service, live) -> None:
     login_as(client, auth, "viewer")
@@ -8,7 +10,25 @@ def test_tree_endpoint_with_live_values(client, auth, service, live) -> None:
     tree = body["tree"]
     assert tree["power_w"] == live.derived()["house_load_w"] and tree["children"][0]["name"] == "OG"
     assert tree["children"][0]["power_w"] == 640.0 and tree["other_w"] == 1460.0
+    assert tree["children"][0]["note"] is None and tree["note"] is None
     assert body["consumers"][0]["power_ref"] == "load.obergeschoss.power_w"
+
+
+def test_tree_says_why_an_ha_value_is_missing(client, auth, service) -> None:
+    login_as(client, auth, "viewer")
+    server = ConsumerInput(
+        name="Serverschrank",
+        color="#000000",
+        source_kind="ha",
+        power_ref="sensor.serverschrank_power",
+        power_unit="W",
+    )
+    service.create(server, actor="chris", source="ui")
+    node = client.get("/api/consumers").json()["tree"]["children"][0]
+    assert (node["power_w"], node["note"]) == (
+        None,
+        "HA-Datenbank nicht eingerichtet (influxdb.ha_database)",
+    )
 
 
 def test_changes_are_admin_only(client, auth) -> None:

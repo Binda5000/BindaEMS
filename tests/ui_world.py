@@ -24,7 +24,7 @@ from tests.app_helpers import T_APP, mock_all_sources, set_feed_in, set_grid_usa
 from tests.helpers import FakeSink
 
 from bindaems.app.consumers.service import ConsumerInput
-from bindaems.app.consumers.values import HaRef
+from bindaems.app.consumers.values import ENTITY_UNITS_QUERY, HaRef
 from bindaems.app.db.schema import user_table
 from bindaems.app.forecast.openmeteo import OPEN_METEO_URL
 from bindaems.app.runtime import AppRuntime
@@ -70,7 +70,13 @@ TESLA_SOURCE = "tessie:tesla"  # nicht verbunden: der Ladestand gilt als veralte
 # Vorlauf vor T_DEMO: die Selbstprüfung verlangt seit 30 s aktuelle Messwerte
 WARMUP = timedelta(seconds=60)
 
-HA_POWER_W = {("sensor", "kueche_power"): 230.0, ("sensor", "waschmaschine_power"): 2.4}
+# HA-Datenbank: Messung je Entität (measurement_attr: entity_id, wie beim Betreiber) und je
+# Einheit (HA-Standard); Wert und Einheit je Entität
+HA_BY_ENTITY = {
+    ("sensor", "kueche_power"): (230.0, "W"),
+    ("sensor", "wohnzimmer_temperatur"): (21.5, "°C"),
+}
+HA_BY_UNIT = {("sensor", "waschmaschine_power"): (2.4, "W")}
 MISSING_POINT = 2  # der dritte Punkt jeder Verlaufsreihe fehlt (Lücke)
 
 _MEAN = re.compile(
@@ -87,7 +93,7 @@ POWER_SHAPES = {
     "house_load": (900.0, 450.0),
     "consumption": (1100.0, 1800.0),
 }
-_LAST = re.compile(r'^SELECT last\("value"\) AS "v" FROM ')
+_LAST = re.compile(r'^SELECT last\("value"\) AS "v", ')
 _ENTITY = re.compile(r"\"domain\"='(?P<domain>[^']*)' AND \"entity_id\"='(?P<object_id>[^']*)'")
 _SHOW_SERIES = re.compile(r'^SHOW SERIES FROM "W","kW"$')
 
@@ -185,20 +191,36 @@ def _influx(request: httpx.Request) -> httpx.Response:
             [{"name": mean["measurement"], "columns": columns, "values": values}] if values else []
         )
     if _LAST.search(query):
-        series = [
-            {
-                "name": "W",
-                "tags": {"domain": domain, "entity_id": object_id},
-                "columns": ["time", "v"],
-                "values": [[epoch_ms(T_DEMO), HA_POWER_W[(domain, object_id)]]],
-            }
-            for domain, object_id in _ENTITY.findall(query)
-            if (domain, object_id) in HA_POWER_W
-        ]
+        series = []
+        for domain, object_id in _ENTITY.findall(query):
+            tags = {"domain": domain, "entity_id": object_id}
+            if (domain, object_id) in HA_BY_ENTITY:
+                value, unit = HA_BY_ENTITY[(domain, object_id)]
+                name, recorded = f"{domain}.{object_id}", unit
+            elif (domain, object_id) in HA_BY_UNIT:
+                value, unit = HA_BY_UNIT[(domain, object_id)]
+                name, recorded = unit, None
+            else:
+                continue
+            row = [epoch_ms(T_DEMO), value, recorded]
+            series.append(
+                {"name": name, "tags": tags, "columns": ["time", "v", "u"], "values": [row]}
+            )
         return _influx_result(series)
     if _SHOW_SERIES.search(query):
-        keys = [[f"W,domain={d},entity_id={o}"] for d, o in sorted(HA_POWER_W)]
+        keys = [[f"{u},domain={d},entity_id={o}"] for (d, o), (_, u) in sorted(HA_BY_UNIT.items())]
         return _influx_result([{"columns": ["key"], "values": keys}])
+    if query == ENTITY_UNITS_QUERY:
+        series = [
+            {
+                "name": f"{domain}.{object_id}",
+                "tags": {"domain": domain, "entity_id": object_id},
+                "columns": ["time", "u"],
+                "values": [[epoch_ms(T_DEMO), unit]],
+            }
+            for (domain, object_id), (_, unit) in sorted(HA_BY_ENTITY.items())
+        ]
+        return _influx_result(series)
     return httpx.Response(400, json={"error": f"Demo-InfluxDB kennt die Abfrage nicht: {query}"})
 
 

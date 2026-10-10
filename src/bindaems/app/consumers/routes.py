@@ -21,6 +21,7 @@ from bindaems.app.consumers.values import (
     HaValueCache,
     build_tree,
     candidates,
+    consumer_note,
     consumer_power,
 )
 from bindaems.app.core_link import LiveState
@@ -51,11 +52,16 @@ def consumers_router(
         consumers = service.list()
         house = live.derived().get("house_load_w")
         house_w = float(house) if isinstance(house, int | float) else None
-        tree = build_tree(consumers, lambda c: consumer_power(c, live, ha), house_w)
+        tree = build_tree(
+            consumers,
+            lambda c: consumer_power(c, live, ha),
+            house_w,
+            lambda c: consumer_note(c, ha),
+        )
         return {"tree": asdict(tree), "consumers": [consumer_json(c) for c in consumers]}
 
     @router.get("/candidates")
-    async def list_candidates(session: Admin) -> dict[str, list[dict[str, str]]]:
+    async def list_candidates(session: Admin) -> dict[str, Any]:
         return await candidates(cfg, live, reader)
 
     @router.post("", status_code=status.HTTP_201_CREATED)

@@ -9,6 +9,7 @@ const tree: TreeNode = {
 	name: 'Haus',
 	color: null,
 	power_w: 1800,
+	note: null,
 	other_w: 1680,
 	mismatch: false,
 	children: [
@@ -17,6 +18,7 @@ const tree: TreeNode = {
 			name: 'Küche',
 			color: '#4f8cff',
 			power_w: 120,
+			note: null,
 			other_w: null,
 			mismatch: false,
 			children: []

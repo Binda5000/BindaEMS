@@ -16,5 +16,6 @@
       "entity_id": "sensor.waschmaschine_power",
       "unit": "W"
     }
-  ]
+  ],
+  "ha_error": null
 }

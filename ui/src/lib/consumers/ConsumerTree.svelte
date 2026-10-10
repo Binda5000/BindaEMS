@@ -39,6 +39,10 @@
 					{#if row.kind === 'other' && row.mismatch}
 						<span class="mismatch">Unterverbraucher messen mehr als der Elternverbraucher</span>
 					{/if}
+					{#if row.powerW === null && row.note}
+						<!-- bündig mit dem Namen: Farbfeld 0,75 rem + Abstand 0,5 rem -->
+						<span class="note" style:padding-left="{(row.depth + 1) * 1.25}rem">{row.note}</span>
+					{/if}
 				</td>
 				<td class="num">{formatPower(row.powerW)}</td>
 				{#if admin}
@@ -92,6 +96,12 @@
 		color: var(--warn);
 		font-size: 0.875rem;
 		font-style: normal;
+	}
+
+	.note {
+		display: block;
+		color: var(--muted);
+		font-size: 0.875rem;
 	}
 
 	.actions {

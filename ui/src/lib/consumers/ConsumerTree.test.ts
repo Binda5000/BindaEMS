@@ -4,11 +4,17 @@ import type { TreeNode } from '$lib/api/schemas';
 import ConsumerTree from './ConsumerTree.svelte';
 import { consumerRows } from './tree';
 
-const leaf = (id: number, name: string, power: number): TreeNode => ({
+const leaf = (
+	id: number,
+	name: string,
+	power: number | null,
+	note: string | null = null
+): TreeNode => ({
 	id,
 	name,
 	color: '#4f8cff',
 	power_w: power,
+	note,
 	other_w: null,
 	mismatch: false,
 	children: []
@@ -18,6 +24,7 @@ const tree = (mismatch = false): TreeNode => ({
 	name: 'Haus',
 	color: null,
 	power_w: mismatch ? 100 : 1800,
+	note: null,
 	other_w: mismatch ? 0 : 1680,
 	mismatch,
 	children: [leaf(1, 'Küche', 120)]
@@ -54,4 +61,19 @@ it('Abweichung wird angezeigt', () => {
 	expect(
 		screen.getByText('Unterverbraucher messen mehr als der Elternverbraucher')
 	).toBeInTheDocument();
+});
+
+it('nennt den Grund, wenn ein Wert fehlt', () => {
+	const root: TreeNode = {
+		...tree(),
+		other_w: null,
+		children: [leaf(1, 'Küche', 120), leaf(2, 'Serverschrank', null, 'HA meldet kWh statt W')]
+	};
+	render(ConsumerTree, {
+		rows: consumerRows(root),
+		admin: false,
+		onEdit: vi.fn(),
+		onDelete: vi.fn()
+	});
+	expect(screen.getByText('HA meldet kWh statt W')).toBeInTheDocument();
 });

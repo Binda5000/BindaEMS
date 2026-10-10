@@ -115,6 +115,13 @@
 		</datalist>
 		{#if candidates === undefined}
 			<p class="hint">Suche Signale … (das kann wegen InfluxDB etwas dauern)</p>
+		{:else if draft.sourceKind === 'ha' && candidates.ha_error}
+			<p class="hint warn">{candidates.ha_error}</p>
+		{:else if draft.sourceKind === 'ha' && candidates.ha.length === 0}
+			<p class="hint">
+				Keine Sensoren in W oder kW in der HA-Datenbank gefunden. Du kannst die Entität trotzdem
+				eintragen.
+			</p>
 		{/if}
 		{@render fieldError('powerRef')}
 	</div>
@@ -232,6 +239,10 @@
 		margin: 0;
 		color: var(--muted);
 		font-size: 0.875rem;
+	}
+
+	.hint.warn {
+		color: var(--warn);
 	}
 
 	.error {
