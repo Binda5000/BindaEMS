@@ -2,14 +2,32 @@
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
 	import { api } from '$lib/api/endpoints';
-	import type { LoginBody } from '$lib/api/schemas';
+	import { ApiError } from '$lib/api/errors';
+	import type { LoginBody, User } from '$lib/api/schemas';
 	import LoginForm from '$lib/auth/LoginForm.svelte';
 	import { safeNext } from '$lib/navigation';
 
 	const next = $derived(page.url.searchParams.get('next'));
 	const expired = $derived(page.url.searchParams.get('abgelaufen') === '1');
 
-	const login = (body: LoginBody) => api.login(body).then((response) => response.user);
+	const COOKIE_DROPPED =
+		'Anmeldung angenommen, aber der Browser hat das Sitzungs-Cookie verworfen. Das UI braucht ' +
+		'HTTPS (Reverse Proxy, Betriebshandbuch Abschnitt 6). Nur für einen Test im LAN ohne HTTPS: ' +
+		'app.cookie_secure: false.';
+
+	// Das Sitzungs-Cookie trägt „Secure“: über http:// verwirft der Browser es still. Ohne diese
+	// Prüfung führte die nächste Seite gleich wieder zur Anmeldung, ohne jeden Hinweis.
+	async function login(body: LoginBody): Promise<User> {
+		const { user } = await api.login(body);
+		try {
+			await api.me({ redirectOn401: false });
+		} catch (error) {
+			if (error instanceof ApiError && error.status === 401)
+				throw new ApiError(401, COOKIE_DROPPED);
+			throw error;
+		}
+		return user;
+	}
 
 	function onSuccess() {
 		void goto(safeNext(next), { replaceState: true, invalidateAll: true });
