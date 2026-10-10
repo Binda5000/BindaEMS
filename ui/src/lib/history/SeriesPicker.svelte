@@ -64,7 +64,7 @@
 		display: inline-flex;
 		align-items: center;
 		gap: 0.375rem;
-		min-height: 2.25rem;
+		min-height: 2.75rem;
 	}
 
 	.disabled {

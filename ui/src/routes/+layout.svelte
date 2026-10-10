@@ -260,7 +260,7 @@
 	.icon-button {
 		display: inline-grid;
 		place-items: center;
-		width: 2.5rem;
+		width: 2.75rem;
 		padding: 0;
 		background: transparent;
 		border-color: transparent;

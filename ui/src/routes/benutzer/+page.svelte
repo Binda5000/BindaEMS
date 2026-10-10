@@ -266,17 +266,12 @@
 		min-width: max-content;
 	}
 
-	select {
-		min-height: 2.25rem;
-	}
-
 	.actions {
 		text-align: right;
 		white-space: nowrap;
 	}
 
 	.actions button {
-		min-height: 2rem;
 		padding: 0.125rem 0.625rem;
 		font-size: 0.875rem;
 	}

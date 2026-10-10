@@ -100,7 +100,6 @@
 	}
 
 	.actions button {
-		min-height: 2rem;
 		padding: 0.125rem 0.625rem;
 		font-size: 0.875rem;
 	}
