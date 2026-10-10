@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 import statistics
 from collections.abc import Mapping, Sequence
@@ -250,7 +251,21 @@ def check_peak_shaving(snap: Snapshot) -> Finding:
     )
 
 
-def check_evcs_dump(regs: Mapping[int, int]) -> list[Finding]:
+def evcharger_connection(topics: Mapping[str, str], instance: int) -> str | None:
+    """Wie der Cerbo eine Wallbox anspricht, z. B. „Modbus TCP 192.168.81.41“."""
+    suffix = f"/evcharger/{instance}/Mgmt/Connection"
+    for topic, payload in topics.items():
+        if topic.endswith(suffix):
+            try:
+                value = json.loads(payload).get("value")
+            except (ValueError, AttributeError):
+                return None
+            return value if isinstance(value, str) else None
+    return None
+
+
+def check_evcs_dump(regs: Mapping[int, int], gx_connection: str | None = None) -> list[Finding]:
+    """Registerabbild der EVCS; ``gx_connection`` ist der Weg des Cerbo zur selben Wallbox."""
     if REG_PRODUCT_ID not in regs:
         return [Finding("17.1-8", "EVCS-Produkt-ID", "fail", "Register 5000 nicht lesbar.")]
     product_id = regs[REG_PRODUCT_ID]
@@ -272,9 +287,17 @@ def check_evcs_dump(regs: Mapping[int, int]) -> list[Finding]:
     nonzero = [
         f"{address} = {value} (0x{value:04X})" for address, value in sorted(regs.items()) if value
     ]
-    findings.append(
-        Finding("17.1-8", "EVCS-Register ≠ 0", "info", "; ".join(nonzero) or "Alle Register 0.")
+    if nonzero:
+        findings.append(Finding("17.1-8", "EVCS-Register ≠ 0", "info", "; ".join(nonzero)))
+        return findings
+    # leer: antwortet unter host/unit_id überhaupt die EVCS?
+    hint = "host und unit_id der Wallbox in config.yaml."
+    detail = f"Alle {len(regs)} Register sind 0. " + (
+        f"Der Cerbo liest die EVCS über „{gx_connection}“; prüfe {hint}"
+        if gx_connection
+        else f"Prüfe {hint}"
     )
+    findings.append(Finding("17.1-8", "EVCS-Registerabbild leer", "warn", detail))
     return findings
 
 

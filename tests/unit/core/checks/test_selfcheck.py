@@ -13,7 +13,7 @@ GOOD = {
     "dess.mode": 0,
     "ess.schedule.0.day": -7,
     "ess.min_soc_pct": 20,
-    "wallbox.evcs.mode": 0,
+    "wallbox.evcs.gx_mode": 0,  # wie der Cerbo die EVCS liest
 }
 
 
@@ -56,7 +56,7 @@ def test_failures_have_exact_texts(cfg) -> None:
         "dess.mode": 1.0,
         "ess.schedule.0.day": 7,
         "ess.schedule.3.day": 0,
-        "wallbox.evcs.mode": 1,
+        "wallbox.evcs.gx_mode": 1,
     }
     res = by_id(run_selfcheck(snap(bad, kind=STATE), cfg, fresh, T0))
     assert res["phases"] == CheckResult("phases", "fail", "Erwartet 3 Phasen, gemeldet 1.")
@@ -67,6 +67,28 @@ def test_failures_have_exact_texts(cfg) -> None:
     assert res["evcs_mode.evcs"] == CheckResult(
         "evcs_mode.evcs", "fail", "EVCS im Modus 1 statt manuell."
     )
+
+
+def test_evcs_mode_from_cerbo_not_from_an_empty_register_block(cfg) -> None:
+    # Prüfprotokoll 10.10.2026: das eigene Registerabbild der EVCS war leer (alle Register 0)
+    empty_block = {"wallbox.evcs.product_id": 0, "wallbox.evcs.mode": 0}
+    auto = GOOD | empty_block | {"wallbox.evcs.gx_mode": 1}
+    res = by_id(run_selfcheck(snap(auto, kind=STATE), cfg, fresh, T0))
+    assert res["evcs_mode.evcs"] == CheckResult(
+        "evcs_mode.evcs", "fail", "EVCS im Modus 1 statt manuell."
+    )
+
+
+def test_evcs_mode_without_cerbo_needs_a_valid_register_block(cfg) -> None:
+    without_cerbo = {k: v for k, v in GOOD.items() if k != "wallbox.evcs.gx_mode"}
+    empty = without_cerbo | {"wallbox.evcs.product_id": 0, "wallbox.evcs.mode": 0}
+    res = by_id(run_selfcheck(snap(empty, kind=STATE), cfg, fresh, T0))
+    assert res["evcs_mode.evcs"] == CheckResult(
+        "evcs_mode.evcs", "unknown", "EVCS-Modus nicht verfügbar."
+    )
+    valid = without_cerbo | {"wallbox.evcs.product_id": 0xC026, "wallbox.evcs.mode": 0}
+    res = by_id(run_selfcheck(snap(valid, kind=STATE), cfg, fresh, T0))
+    assert res["evcs_mode.evcs"].status == "ok"
 
 
 def test_min_soc_below_reserve_fails(cfg) -> None:

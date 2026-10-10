@@ -63,7 +63,7 @@ VICTRON_STATE = {
     "ess.batterylife_state": 10.0,
     "ess.min_soc_pct": 20.0,
     "dess.mode": 0.0,
-    "wallbox.evcs.mode": 0.0,
+    "wallbox.evcs.gx_mode": 0.0,  # Modus, wie ihn der Cerbo liest
     **{f"ess.schedule.{k}.day": -7.0 for k in range(5)},  # negativ: Ladefenster aus
 }
 TESLA_SOURCE = "tessie:tesla"  # nicht verbunden: der Ladestand gilt als veraltet

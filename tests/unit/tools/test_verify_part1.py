@@ -7,6 +7,7 @@ import httpx
 import pytest
 import yaml
 
+from bindaems.tools import verify_part1
 from bindaems.tools.verify_part1 import clock_offset_s, main, redact
 
 VIN = "5YJ3E7EB0MF000000"
@@ -209,3 +210,38 @@ async def test_mqtt_dump_skips_unrelated_settings(cfg) -> None:
     await mqtt._consume(messages(), p)
     assert list(mqtt.topics) == [f"N/{p}/grid/30/Ac/Power"]
     assert mqtt.services == {"grid": {30}, "settings": {0}}  # Inventar bleibt vollständig
+
+
+def test_empty_evcs_register_block_names_the_cerbo_path(tmp_path, monkeypatch) -> None:
+    # Prüfprotokoll 10.10.2026: eigenes Registerabbild leer, der Cerbo las die EVCS problemlos
+    async def cerbo(self, duration_s: float) -> None:
+        self.topics["N/c0619ab1234/evcharger/40/Mgmt/Connection"] = (
+            '{"value":"Modbus TCP 192.168.81.41"}'
+        )
+        self.samples.append(self.store.snapshot())
+
+    async def zeros(wallbox) -> tuple[dict[int, int], list[str]]:
+        return dict.fromkeys(range(5000, 5200), 0), []
+
+    monkeypatch.setattr(verify_part1._Mqtt, "run", cerbo)
+    monkeypatch.setattr(verify_part1, "_read_evcs", zeros)
+    closed = _closed_port()
+    config = _config(
+        tmp_path,
+        **{
+            "homeassistant.url": f"http://127.0.0.1:{closed}",
+            "influxdb.url": f"http://127.0.0.1:{closed}",
+        },
+    )
+    raw_cfg = yaml.safe_load(config.read_text())
+    raw_cfg["wallboxes"]["twc"]["host"] = f"127.0.0.1:{closed}"
+    config.write_text(yaml.safe_dump(raw_cfg))
+    _env(monkeypatch)
+    out = tmp_path / "out"
+    assert main(["--config", str(config), "--duration", "0.2", "--out", str(out)]) == 0
+    report, _ = _outputs(out)
+    assert (
+        "| 17.1-8 | EVCS-Registerabbild leer | WARNUNG | Alle 200 Register sind 0. Der Cerbo liest "
+        "die EVCS über „Modbus TCP 192.168.81.41“; prüfe host und unit_id der Wallbox in "
+        "config.yaml. |"
+    ) in report

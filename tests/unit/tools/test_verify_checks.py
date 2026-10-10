@@ -20,6 +20,7 @@ from bindaems.tools.verify_checks import (
     check_selfcheck,
     check_tessie,
     check_twc,
+    evcharger_connection,
     render_report,
 )
 
@@ -105,6 +106,30 @@ def test_evcs_dump_lists_nonzero_registers() -> None:
 
 def test_evcs_dump_without_registers_fails() -> None:
     assert check_evcs_dump({})[0].status == "fail"
+
+
+def test_evcs_dump_all_zero_warns_with_the_cerbo_address() -> None:
+    # Prüfprotokoll 10.10.2026: 5000–5199 alle 0, der Cerbo las die EVCS unter 192.168.81.41
+    regs = dict.fromkeys(range(5000, 5200), 0)
+    last = check_evcs_dump(regs, gx_connection="Modbus TCP 192.168.81.41")[-1]
+    assert (last.item, last.title, last.status) == ("17.1-8", "EVCS-Registerabbild leer", "warn")
+    assert last.detail == (
+        "Alle 200 Register sind 0. Der Cerbo liest die EVCS über „Modbus TCP 192.168.81.41“; "
+        "prüfe host und unit_id der Wallbox in config.yaml."
+    )
+    assert check_evcs_dump(regs)[-1].detail == (
+        "Alle 200 Register sind 0. Prüfe host und unit_id der Wallbox in config.yaml."
+    )
+
+
+def test_evcharger_connection_on_the_cerbo() -> None:
+    topics = {
+        "N/c0619ab344fa/evcharger/40/Mgmt/Connection": '{"value":"Modbus TCP 192.168.81.41"}',
+        "N/c0619ab344fa/evcharger/40/Mode": '{"value":0}',
+    }
+    assert evcharger_connection(topics, 40) == "Modbus TCP 192.168.81.41"
+    assert evcharger_connection(topics, 41) is None
+    assert evcharger_connection({"N/x/evcharger/40/Mgmt/Connection": "kein JSON"}, 40) is None
 
 
 def test_mqtt_inventory_missing_instance_warns(cfg) -> None:

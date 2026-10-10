@@ -69,6 +69,7 @@ from bindaems.tools.verify_checks import (
     check_selfcheck,
     check_tessie,
     check_twc,
+    evcharger_connection,
     render_report,
 )
 
@@ -287,7 +288,9 @@ async def run_verification(
             findings.append(Finding("17.1-8", f"EVCS {name}", "fail", _error(exc)))
             continue
         raw["evcs"][name] = {"registers": {str(a): v for a, v in sorted(regs.items())}}
-        findings += check_evcs_dump(regs)
+        instance = next((i for i, n in cfg.victron.instances.evcharger.items() if n == name), None)
+        link = evcharger_connection(mqtt.topics, instance) if instance is not None else None
+        findings += check_evcs_dump(regs, gx_connection=link)
         if unreadable:
             findings.append(
                 Finding(
