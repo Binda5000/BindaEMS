@@ -663,7 +663,7 @@ git commit -m "feat(safety): Regeln 1–3 – Sollwerte klemmen oder ablehnen"
 
 | Art | Erhöhung, wenn … | Prüfung |
 |---|---|---|
-| `current` | Ist-Strom (`present[(a, CURRENT)]`) unbekannt oder kleiner als der Wert | `erlaubt = floor(min_p(h_p + m_p))` über die aktiven Phasen. Wert ≤ erlaubt: unverändert. Sonst bei einer Erhöhung: erlaubt ≥ `min_a` → auf erlaubt (`phase.reduced`), sonst ablehnen (`phase.rejected`). Bei einer Verringerung: auf `max(min_a, erlaubt)` (`phase.reduced` bzw. `phase.minimum`) |
+| `current` | Ist-Strom (`present[(a, CURRENT)]`) kleiner als der Wert; ist er unbekannt, nur bei Wert > `safe_a` (der sichere Strom ist nie eine Erhöhung, damit der sichere Zustand auch bei veralteten Cerbo-Daten erreichbar bleibt, Spec 8.4) | `erlaubt = floor(min_p(h_p + m_p))` über die aktiven Phasen. Wert ≤ erlaubt: unverändert. Sonst bei einer Erhöhung: erlaubt ≥ `min_a` → auf erlaubt (`phase.reduced`), sonst ablehnen (`phase.rejected`). Bei einer Verringerung: auf `max(min_a, erlaubt)` (`phase.reduced` bzw. `phase.minimum`) |
 | `charging` | Wert `True` und Ist-Wert nicht `True` | Ladestrom `I_c` = bekannter Ist-Strom, sonst `max_a`. Geprüft wird `I_p − m_p + I_c ≤ Grenze` auf allen drei Phasen der Wallbox; verletzt → ablehnen (`phase.rejected`). `False` ist immer erlaubt. |
 | `grid_setpoint` | Wert nicht `None` und größer als der wirksame Ist-Sollwert `S0` (Override, sonst `base_grid_setpoint_w`). Fehlt `(victron, grid_setpoint)` in `present`, gilt `S0 = min(base_grid_setpoint_w, 0)`: die vorsichtigste Annahme, denn ein Override ist nie negativ. | `S_max = S0 + 3 × U × min_p h_p`. Wert ≤ `S_max`: unverändert. Sonst: `S_max ≥ 0` → auf `floor(S_max)` (`phase.reduced`); `S_max < 0` und `S0 ≥ 0` → auf 0 (`phase.reduced`); sonst ablehnen (`phase.rejected`) |
 | `max_discharge` | Wert ≥ 0 und kleiner als die aktuelle Entladeleistung `D` | `ΔP = D − Wert` ins Netz. `L_min = D − 3 × U × min_p h_p`. Wert ≥ `L_min`: unverändert; sonst auf `ceil(L_min)` (`phase.discharge`), über `max_discharge_w` auf −1. Ist `D` unbekannt, wird eine Verschärfung abgelehnt (`phase.battery_unknown`); das heißt Wert ≥ 0 und Ist-Wert unbekannt, −1 oder größer. |
@@ -1420,7 +1420,7 @@ git commit -m "feat(safety): Sperren für Teilsysteme und wirksame Betriebsarten
 - Die Orakel im Test setzen die Tabellen dieses Plans unabhängig um:
   - `in_range` (Tasks 2 und 3)
   - `safer` (`toward_safe`-Tabelle aus Task 2)
-  - `is_increase` und `phases_hold` (Erhöhungs-Spalte und Vorhersage aus Task 4)
+  - `is_increase` und `phases_hold` (Erhöhungs-Spalte und Vorhersage aus Task 4; beim Strom gilt ein Wert ≤ `safe_a` bei unbekanntem Ist-Strom nicht als Erhöhung)
 
 | Test | Eigenschaft |
 |---|---|
