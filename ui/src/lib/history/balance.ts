@@ -1,6 +1,14 @@
 // Tagesbilanz aus der Abrechnung: formatierte Zellen je Tag und die Zählerstände für VRM
 import type { DaySummary } from '$lib/api/schemas';
-import { NBSP, formatDay, formatEnergy, formatEur, formatNumber, formatRatio } from '$lib/format';
+import {
+	DASH,
+	NBSP,
+	formatDay,
+	formatEnergy,
+	formatEur,
+	formatNumber,
+	formatRatio
+} from '$lib/format';
 
 export type BalanceColumn =
 	| 'coverage'
@@ -66,27 +74,35 @@ function coverageText(day: DaySummary): string {
 }
 
 export function balanceRows(days: DaySummary[]): BalanceRow[] {
-	return days.map((day) => ({
-		date: day.date,
-		day: formatDay(day.date),
-		cells: {
-			coverage: coverageText(day),
-			pv: formatEnergy(day.pv_kwh),
-			import: formatEnergy(day.import_kwh),
-			export: formatEnergy(day.export_kwh),
-			charge: formatEnergy(day.battery_charge_kwh),
-			discharge: formatEnergy(day.battery_discharge_kwh),
-			house: formatEnergy(day.house_kwh),
-			wallboxes: formatEnergy(Object.values(day.wallbox_kwh).reduce((sum, kwh) => sum + kwh, 0)),
-			cost: formatEur(day.cost_eur),
-			revenue: formatEur(day.revenue_eur),
-			net: formatEur(day.net_cost_eur),
-			autarky: formatRatio(day.autarky),
-			selfConsumption: formatRatio(day.self_consumption)
-		},
-		counters: Object.entries(day.counter_kwh).map(([key, kwh]) => ({
-			name: counterLabel(key),
-			value: formatEnergy(kwh)
-		}))
-	}));
+	return days.map((day) => {
+		const row: BalanceRow = {
+			date: day.date,
+			day: formatDay(day.date),
+			cells: {
+				coverage: coverageText(day),
+				pv: formatEnergy(day.pv_kwh),
+				import: formatEnergy(day.import_kwh),
+				export: formatEnergy(day.export_kwh),
+				charge: formatEnergy(day.battery_charge_kwh),
+				discharge: formatEnergy(day.battery_discharge_kwh),
+				house: formatEnergy(day.house_kwh),
+				wallboxes: formatEnergy(Object.values(day.wallbox_kwh).reduce((sum, kwh) => sum + kwh, 0)),
+				cost: formatEur(day.cost_eur),
+				revenue: formatEur(day.revenue_eur),
+				net: formatEur(day.net_cost_eur),
+				autarky: formatRatio(day.autarky),
+				selfConsumption: formatRatio(day.self_consumption)
+			},
+			counters: Object.entries(day.counter_kwh).map(([key, kwh]) => ({
+				name: counterLabel(key),
+				value: formatEnergy(kwh)
+			}))
+		};
+		// ohne einen Slot liefert die Abrechnung Nullen: das sind fehlende Werte, kein Verbrauch
+		if (day.slots === 0) {
+			for (const { key } of BALANCE_COLUMNS) if (key !== 'coverage') row.cells[key] = DASH;
+			row.counters = [];
+		}
+		return row;
+	});
 }

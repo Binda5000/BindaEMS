@@ -1,4 +1,7 @@
+import * as v from 'valibot';
 import { expect, it } from 'vitest';
+import ledgerDaysJson from '$lib/api/contract/ledger-days.json';
+import { DaySummarySchema } from '$lib/api/schemas';
 import { daySummary } from '$lib/testing/fixtures';
 import { balanceRows } from './balance';
 
@@ -50,4 +53,15 @@ it('listet die Zählerstände für den Abgleich mit VRM', () => {
 		{ name: 'Netz Bezug', value: '12,3 kWh' },
 		{ name: 'PV huawei', value: '3,21 kWh' }
 	]);
+});
+
+it('zeigt für einen Tag ohne Daten Striche statt 0', () => {
+	// so liefert die Abrechnung einen Tag ohne Aufzeichnung (08.10. der Demo-Welt)
+	const empty = v.parse(v.array(DaySummarySchema), ledgerDaysJson).find((day) => day.slots === 0);
+	if (!empty) throw new Error('ledger-days.json enthält keinen Tag ohne Daten');
+	const [row] = balanceRows([empty]);
+	const { coverage, ...values } = row.cells;
+	expect(coverage).toBe('0 von 96 · 0,0\u00a0%');
+	expect(Object.values(values).filter((text) => text !== '–')).toEqual([]);
+	expect(row.counters).toEqual([]);
 });
