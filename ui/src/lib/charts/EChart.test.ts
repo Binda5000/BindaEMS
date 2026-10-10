@@ -7,6 +7,7 @@ import { HistoryResponseSchema, type HistoryResponse } from '$lib/api/schemas';
 import EChart from './EChart.svelte';
 import { historyOption } from './options';
 import { readPalette } from './palette';
+import { formatTime } from '$lib/format';
 
 // echtes ECharts ohne Canvas (jsdom): serverseitig als SVG mit fester Größe gezeichnet
 const { charts } = vi.hoisted(() => ({ charts: [] as EChartsType[] }));
@@ -34,6 +35,7 @@ vi.mock('./echarts', async () => {
 
 interface ShownOption {
 	animation?: unknown;
+	xAxis?: { axisLabel?: { customValues?: number[] } }[];
 	series?: unknown[];
 	dataZoom?: { start: number; end: number }[];
 	legend?: { selected?: Record<string, boolean> }[];
@@ -111,4 +113,29 @@ it('zeichnet bei prefers-reduced-motion ohne Animation', async () => {
 	render(EChart, { option: historyOption(history, palette), label: 'Verlauf' });
 	const chart = await drawn();
 	expect(shown(chart).animation).toBe(false);
+});
+
+it('legt die Zeitachse auf Wiener Stunden und verfeinert sie beim Zoomen', async () => {
+	// ein ganzer Tag (09.10. in Wien), je Viertelstunde ein Punkt
+	const start = Date.parse('2026-10-08T22:00:00Z');
+	const points = Array.from({ length: 97 }, (_, index): [number, number] => [
+		start + index * 900_000,
+		500
+	]);
+	const day: HistoryResponse = {
+		...history,
+		series: { grid: { ...history.series.grid, points } }
+	};
+	render(EChart, { option: historyOption(day, palette), label: 'Verlauf' });
+	const chart = await drawn();
+	const ticks = () => shown(chart).xAxis?.[0].axisLabel?.customValues ?? [];
+	const fullHours = (values: number[]) =>
+		values.every((t) => formatTime(new Date(t).toISOString()).endsWith(':00'));
+	const step = (values: number[]) => (values[1] ?? 0) - (values[0] ?? 0);
+	const before = ticks();
+	expect(before.length).toBeGreaterThan(2);
+	expect(fullHours(before)).toBe(true);
+	chart.dispatchAction({ type: 'dataZoom', start: 20, end: 40 });
+	await vi.waitFor(() => expect(step(ticks())).toBeLessThan(step(before)));
+	expect(fullHours(ticks())).toBe(true);
 });

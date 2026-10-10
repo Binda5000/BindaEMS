@@ -66,3 +66,53 @@ export function localRange(first: string, last: string): { from: string; to: str
 		to: new Date(localMidnight(addDays(last, 1))).toISOString()
 	};
 }
+
+/** Zeitpunkt, zu dem die Wiener Uhr am Tag `date` die volle Stunde `hour` zeigt; null in der Lücke. */
+function localHour(date: string, hour: number): number | null {
+	const [year, month, day] = splitDate(date);
+	const wall = Date.UTC(year, month - 1, day, hour);
+	const first = wall - offsetMinutes(wall) * 60_000;
+	const at = wall - offsetMinutes(first) * 60_000;
+	return at + offsetMinutes(at) * 60_000 === wall ? at : null;
+}
+
+// Abstände der Achsenmarken in Minuten; ab einem Tag an Wiener Mitternächten
+const TICK_STEPS_MIN = [
+	5, 10, 15, 30, 60, 120, 180, 360, 720, 1440, 2880, 10080, 20160, 43200, 86400, 129600, 259200,
+	525600
+];
+
+/**
+ * Marken für eine Zeitachse an vollen Wiener Minuten, Stunden bzw. Mitternächten, höchstens
+ * `maxTicks`. ECharts legt seine Marken in die Zeitzone des Browsers; so stimmen sie auch
+ * anderswo und an Tagen der Zeitumstellung mit der Wiener Uhr überein.
+ */
+export function viennaTicks(fromMs: number, toMs: number, maxTicks: number): number[] {
+	if (!(toMs > fromMs)) return [];
+	const spanMin = (toMs - fromMs) / 60_000;
+	const step = TICK_STEPS_MIN.find((minutes) => spanMin / minutes + 1 <= maxTicks) ?? 525600;
+	const ticks: number[] = [];
+	const push = (at: number | null) => {
+		if (at !== null && at >= fromMs && at <= toMs) ticks.push(at);
+	};
+	const last = todayVienna(new Date(toMs));
+	for (let date = todayVienna(new Date(fromMs)); date <= last; date = addDays(date, 1)) {
+		if (step < 1440) {
+			// innerhalb einer Stunde ändert sich der Versatz nie (Umstellung zur vollen Stunde)
+			for (let hour = 0; hour < 24; hour += Math.max(1, step / 60)) {
+				const base = localHour(date, hour);
+				if (base === null) continue;
+				for (let minute = 0; minute < 60; minute += step < 60 ? step : 60) {
+					push(base + minute * 60_000);
+				}
+			}
+			continue;
+		}
+		// mehrtägig: ab dem 1.1.1970 gezählt, damit die Marken beim Verschieben stehen bleiben;
+		// Wochen beginnen am Montag
+		const [year, month, day] = splitDate(date);
+		const dayNumber = Date.UTC(year, month - 1, day) / 86_400_000 + (step === 10080 ? 3 : 0);
+		if (dayNumber % (step / 1440) === 0) push(localMidnight(date));
+	}
+	return ticks;
+}
