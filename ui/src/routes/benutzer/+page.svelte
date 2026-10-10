@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
+	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
 	import { api } from '$lib/api/endpoints';
 	import { ApiError } from '$lib/api/errors';
@@ -8,6 +9,7 @@
 	import Dialog from '$lib/components/Dialog.svelte';
 	import Notice from '$lib/components/Notice.svelte';
 	import { formatDateTime } from '$lib/format';
+	import { live } from '$lib/live.svelte';
 	import { Resource } from '$lib/resource.svelte';
 	import { ROLE_LABELS } from '$lib/roles';
 	import { MIN_PASSWORD } from '$lib/users/form';
@@ -19,6 +21,13 @@
 
 	const me = $derived((page.data.user as User | null)?.id ?? null);
 	let message = $state<{ level: 'info' | 'error'; text: string } | null>(null);
+
+	// Rolle oder Passwort des eigenen Kontos geändert: der Server beendet die Sitzung. Gleich zur
+	// Anmeldung mit Grund, statt beim nächsten Laden „Sitzung abgelaufen“ zu melden.
+	async function signedOut(reason: 'rolle' | 'passwort') {
+		live.stop();
+		await goto(`/login?grund=${reason}`, { replaceState: true, invalidateAll: true });
+	}
 
 	function failed(error: unknown) {
 		message = {
@@ -47,6 +56,7 @@
 		message = null;
 		try {
 			await api.updateUser(user.id, { role });
+			if (user.id === me) return await signedOut('rolle');
 			message = { level: 'info', text: `Rolle von „${user.username}“: ${ROLE_LABELS[role]}.` };
 		} catch (error) {
 			select.value = user.role; // abgelehnt: Auswahl zurücksetzen
@@ -67,6 +77,11 @@
 		roleChange = null;
 		roleConfirmOpen = false;
 	}
+
+	// auch mit Esc oder „ד geschlossen: ohne Bestätigung bleibt die Rolle
+	$effect(() => {
+		if (!roleConfirmOpen && roleChange) cancelOwnRole();
+	});
 
 	// --- Passwort --------------------------------------------------------------------------
 	let passwordFor = $state<User | null>(null);
@@ -92,6 +107,7 @@
 		try {
 			await api.updateUser(user.id, { password: newPassword });
 			passwordOpen = false;
+			if (user.id === me) return await signedOut('passwort');
 			message = {
 				level: 'info',
 				text: `Passwort für „${user.username}“ gesetzt; bestehende Sitzungen sind abgemeldet.`

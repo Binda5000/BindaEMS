@@ -12,9 +12,10 @@ vi.mock('$lib/api/endpoints', async (original) => ({
 	api
 }));
 vi.mock('$app/navigation', () => ({ goto }));
-vi.mock('$app/state', () => ({
-	page: { url: new URL('http://192.168.82.20:8080/login?next=%2F') }
+const { state } = vi.hoisted(() => ({
+	state: { url: new URL('http://192.168.82.20:8080/login?next=%2F') }
 }));
+vi.mock('$app/state', () => ({ page: state }));
 
 const user = {
 	id: 1,
@@ -48,4 +49,11 @@ it('geht nach geprüfter Sitzung zur gewünschten Seite', async () => {
 	await signIn();
 	await vi.waitFor(() => expect(goto).toHaveBeenCalledWith('/', expect.anything()));
 	expect(api.me).toHaveBeenLastCalledWith({ redirectOn401: false });
+});
+
+it('nennt den Grund, wenn die eigene Rolle geändert wurde', () => {
+	state.url = new URL('https://ems.lan/login?grund=rolle');
+	render(Page);
+	expect(screen.getByText('Deine Rolle wurde geändert – bitte neu anmelden.')).toBeInTheDocument();
+	expect(screen.queryByText(/Sitzung abgelaufen/)).not.toBeInTheDocument();
 });

@@ -10,6 +10,13 @@
 	const next = $derived(page.url.searchParams.get('next'));
 	const expired = $derived(page.url.searchParams.get('abgelaufen') === '1');
 
+	// gewollte Abmeldung nach einer Änderung am eigenen Konto (Seite „Benutzer“)
+	const REASONS: Record<string, string> = {
+		rolle: 'Deine Rolle wurde geändert – bitte neu anmelden.',
+		passwort: 'Dein Passwort wurde neu gesetzt – bitte neu anmelden.'
+	};
+	const reason = $derived(REASONS[page.url.searchParams.get('grund') ?? ''] ?? null);
+
 	const COOKIE_DROPPED =
 		'Anmeldung angenommen, aber der Browser hat das Sitzungs-Cookie verworfen. Das UI braucht ' +
 		'HTTPS (Reverse Proxy, Betriebshandbuch Abschnitt 6). Nur für einen Test im LAN ohne HTTPS: ' +
@@ -41,7 +48,9 @@
 <main class="login">
 	<h1>Anmelden</h1>
 	<p class="brand">BindaEMS</p>
-	{#if expired}
+	{#if reason}
+		<p class="expired" role="status">{reason}</p>
+	{:else if expired}
 		<p class="expired" role="status">Sitzung abgelaufen – bitte neu anmelden.</p>
 	{/if}
 	<LoginForm {login} {onSuccess} />
