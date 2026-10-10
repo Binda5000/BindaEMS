@@ -8,7 +8,9 @@
 	let { rows }: Props = $props();
 </script>
 
-<p class="hint muted">Zählerstände für den Abgleich mit VRM: je Tag unter „Zähler“ aufklappen.</p>
+<p class="hint muted">
+	Tageswerte der Zähler für den Abgleich mit VRM: je Tag unter „Zähler“ aufklappen.
+</p>
 <div class="scroll">
 	<table>
 		<thead>
@@ -30,7 +32,7 @@
 					<td>
 						{#if row.counters.length > 0}
 							<details>
-								<summary>Zählerstände</summary>
+								<summary>Tageswerte</summary>
 								<dl>
 									{#each row.counters as counter (counter.name)}
 										<dt>{counter.name}</dt>

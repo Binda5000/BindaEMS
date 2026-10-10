@@ -45,7 +45,7 @@ it('nennt 100 % nur ohne jede Lücke (alle Slots da, aber 10 s gefehlt)', () => 
 	]);
 });
 
-it('listet die Zählerstände für den Abgleich mit VRM', () => {
+it('listet die Tageswerte der Zähler für den Abgleich mit VRM', () => {
 	const [row] = balanceRows([
 		daySummary({ counter_kwh: { 'grid.energy_import_kwh': 12.345, 'pv.huawei.energy_kwh': 3.21 } })
 	]);

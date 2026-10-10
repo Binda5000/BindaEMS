@@ -52,7 +52,7 @@ Datum: ________ Ergebnis: ☐ bestanden ☐ nicht bestanden Unterschrift: ______
 ## 2. Tages-Energiebilanz innerhalb ±2 % von VRM
 
 **Fundort im UI:** Verlauf → Tagesbilanz (Spalten PV, Bezug, Einspeisung, Haus, Wallboxen) und
-je Tag „Zähler“ → „Zählerstände“.
+je Tag „Zähler“ → „Tageswerte“.
 
 Prüfschritte:
 
@@ -60,8 +60,8 @@ Prüfschritte:
 2. In VRM für jeden Tag PV-Ertrag, Netzbezug, Einspeisung und Verbrauch ablesen.
 3. In der Tagesbilanz dieselben Größen ablesen; Verbrauch = Haus + Wallboxen.
 4. Abweichung in % = (BindaEMS − VRM) / VRM × 100. Jede Größe muss innerhalb ±2 % liegen.
-5. Die Zählerstände (Netz Bezug, Netz Einspeisung) mit den Zählerdaten in VRM vergleichen. Sie
-   helfen, eine Abweichung einer Seite zuzuordnen.
+5. Die Tageswerte der Zähler (Netz Bezug, Netz Einspeisung; Differenz der Zählerstände über den
+   Tag) mit den Zählerdaten in VRM vergleichen. Sie helfen, eine Abweichung einer Seite zuzuordnen.
 
 | Tag | Größe | VRM (kWh) | BindaEMS (kWh) | Abweichung (%) | innerhalb ±2 % |
 |---|---|---|---|---|---|

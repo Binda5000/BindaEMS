@@ -1,4 +1,4 @@
-// Tagesbilanz aus der Abrechnung: formatierte Zellen je Tag und die Zählerstände für VRM
+// Tagesbilanz aus der Abrechnung: formatierte Zellen je Tag und die Tageswerte der Zähler für VRM
 import type { DaySummary } from '$lib/api/schemas';
 import {
 	DASH,

@@ -67,13 +67,14 @@ def collect_responses(world: World) -> dict[str, object]:
 def matches_contract(name: str, body: object) -> bool:
     """Vergleicht mit der Vertragsdatei; mit ``UPDATE_UI_CONTRACT=1`` wird sie neu geschrieben."""
     path = CONTRACT / f"{name}.json"
+    # Reihenfolge wie in der Antwort: sie ist Teil des Vertrags (z. B. die Fahrzeuge), daher
+    # Vergleich als Text statt als Objekt
+    text = json.dumps(body, indent=2, ensure_ascii=False) + "\n"
     if os.environ.get("UPDATE_UI_CONTRACT") == "1":
         path.parent.mkdir(parents=True, exist_ok=True)
-        # Reihenfolge wie in der Antwort: sie ist Teil des Vertrags (z. B. die Fahrzeuge)
-        text = json.dumps(body, indent=2, ensure_ascii=False) + "\n"
         path.write_text(text, encoding="utf-8")
         return True
-    return path.is_file() and json.loads(path.read_text(encoding="utf-8")) == body
+    return path.is_file() and path.read_text(encoding="utf-8") == text
 
 
 async def test_api_responses_match_ui_contract(cfg, tmp_path) -> None:
@@ -102,3 +103,12 @@ async def test_demo_world_is_deterministic(cfg, tmp_path) -> None:
 def test_no_stale_contract_files() -> None:
     names = {path.stem for path in CONTRACT.glob("*.json")}
     assert names == GET_ENDPOINTS.keys() | OTHER
+
+
+def test_contract_comparison_respects_key_order(tmp_path, monkeypatch) -> None:
+    # Die Reihenfolge ist Teil des Vertrags: das UI zeigt z. B. die Fahrzeuge so, wie sie kommen
+    monkeypatch.setitem(globals(), "CONTRACT", tmp_path)
+    monkeypatch.delenv("UPDATE_UI_CONTRACT", raising=False)
+    (tmp_path / "x.json").write_text(json.dumps({"a": 1, "b": 2}, indent=2) + "\n")
+    assert matches_contract("x", {"a": 1, "b": 2})
+    assert not matches_contract("x", {"b": 2, "a": 1})
