@@ -11,7 +11,9 @@ from pathlib import Path
 from typing import Any
 
 from fastapi.testclient import TestClient
-from tests.ui_world import DEMO_PASSWORD, World, build_world
+from tests.ui_world import DEMO_PASSWORD, DEMO_TOTP_SECRET, T_DEMO, World, build_world
+
+from bindaems.shared.domain import Alarm, Severity
 
 CONTRACT = Path("ui/src/lib/api/contract")
 GET_ENDPOINTS = {
@@ -33,7 +35,16 @@ GET_ENDPOINTS = {
     "users": "/api/users",
     "audit": "/api/audit",
 }
-OTHER = {"live-hello", "live-state", "error-422"}
+OTHER = {
+    "live-hello",
+    "live-state",
+    "live-core",
+    "live-alarm",
+    "health",
+    "totp-setup",
+    "reprice",
+    "error-422",
+}
 
 
 def collect_responses(world: World) -> dict[str, object]:
@@ -61,7 +72,38 @@ def collect_responses(world: World) -> dict[str, object]:
     rejected = client.put("/api/settings", json=body, headers=csrf)
     assert rejected.status_code == 422, rejected.text
     actual["error-422"] = rejected.json()
+
+    health = client.get("/health")
+    assert health.status_code == 200, health.text
+    actual["health"] = health.json()
+    setup = client.post("/api/auth/totp/setup", json={"password": DEMO_PASSWORD}, headers=csrf)
+    assert setup.status_code == 200, setup.text
+    secret = setup.json()["secret"]  # bei jedem Lauf neu: für den Vertrag zählt die Form
+    actual["totp-setup"] = {
+        "secret": DEMO_TOTP_SECRET,
+        "uri": setup.json()["uri"].replace(secret, DEMO_TOTP_SECRET),
+    }
+    days = {"from": "2026-10-09", "to": "2026-10-09"}
+    repriced = client.post("/api/ledger/reprice", json=days, headers=csrf)
+    assert repriced.status_code == 200, repriced.text
+    actual["reprice"] = repriced.json()
     return actual
+
+
+async def live_messages(world: World) -> dict[str, object]:
+    """``alarm`` und ``core`` so, wie sie über /api/live kommen; je Alarmstufe ein Alarm."""
+    alarms = [
+        Alarm(f"demo.{severity.value}", severity, f"Beispiel ({severity.value})", T_DEMO)
+        for severity in Severity
+    ]
+    async with world.core.subscribe() as core_stream, world.app.live.subscribe() as ui_stream:
+        world.core._update_alarms(alarms)  # Serialisierung des core
+        await world.app.live_feed._dispatch(await asyncio.wait_for(anext(core_stream), 2))
+        alarm = await asyncio.wait_for(anext(ui_stream), 2)  # von der app weitergereicht
+        world.app.live_feed._disconnected()
+        core = await asyncio.wait_for(anext(ui_stream), 2)
+        world.app.live_feed._connected()
+    return {"live-alarm": alarm, "live-core": core}
 
 
 def matches_contract(name: str, body: object) -> bool:
@@ -80,7 +122,8 @@ def matches_contract(name: str, body: object) -> bool:
 async def test_api_responses_match_ui_contract(cfg, tmp_path) -> None:
     world = await build_world(cfg, tmp_path)
     try:
-        actual = await asyncio.to_thread(collect_responses, world)  # GET, WebSocket, 422
+        actual = await asyncio.to_thread(collect_responses, world)  # GET, WebSocket, POST, 422
+        actual.update(await live_messages(world))
     finally:
         world.close()
     mismatched = [name for name, body in actual.items() if not matches_contract(name, body)]
@@ -94,7 +137,9 @@ async def test_demo_world_is_deterministic(cfg, tmp_path) -> None:
     for name in ("a", "b"):
         world = await build_world(cfg, tmp_path / name)
         try:
-            bodies.append(await asyncio.to_thread(collect_responses, world))
+            body = await asyncio.to_thread(collect_responses, world)
+            body.update(await live_messages(world))
+            bodies.append(body)
         finally:
             world.close()
     assert bodies[0] == bodies[1]

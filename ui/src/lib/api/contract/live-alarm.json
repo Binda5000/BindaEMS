@@ -1,0 +1,23 @@
+{
+  "type": "alarm",
+  "data": [
+    {
+      "id": "demo.info",
+      "severity": "info",
+      "message": "Beispiel (info)",
+      "since": "2026-10-09T08:00:00+00:00"
+    },
+    {
+      "id": "demo.warning",
+      "severity": "warning",
+      "message": "Beispiel (warning)",
+      "since": "2026-10-09T08:00:00+00:00"
+    },
+    {
+      "id": "demo.error",
+      "severity": "error",
+      "message": "Beispiel (error)",
+      "since": "2026-10-09T08:00:00+00:00"
+    }
+  ]
+}

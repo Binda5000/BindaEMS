@@ -26,6 +26,11 @@ const SCHEMAS: Record<string, v.GenericSchema> = {
 	audit: v.array(s.AuditEntrySchema),
 	'live-hello': s.LiveMessageSchema,
 	'live-state': s.LiveMessageSchema,
+	'live-core': s.LiveMessageSchema,
+	'live-alarm': s.LiveMessageSchema, // je Alarmstufe des core ein Alarm
+	health: s.HealthSchema,
+	'totp-setup': s.TotpSetupSchema,
+	reprice: v.object({ repriced: v.number() }),
 	'error-422': s.ValidationErrorSchema
 };
 

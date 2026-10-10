@@ -37,3 +37,31 @@ test('ein falsches Passwort bleibt auf der Anmeldung', async ({ page }) => {
 	await expect(page.getByText('Benutzername oder Passwort falsch')).toBeVisible();
 	await expect(page).toHaveURL(/\/login/);
 });
+
+test('beendete Sitzung führt mit Hinweis zur Anmeldung und danach zurück', async ({ browser }) => {
+	const viewer = await browser.newPage();
+	const admin = await browser.newPage();
+	await login(viewer, 'gast');
+	await viewer.goto('/verlauf');
+	await expect(viewer.getByRole('heading', { level: 1, name: 'Verlauf' })).toBeVisible();
+	await login(admin, 'admin');
+	await admin.goto('/benutzer');
+	const role = admin.getByLabel('Rolle von gast');
+	try {
+		// ändert ein Admin die Rolle, sind die Sitzungen von gast beendet
+		await role.selectOption('operator');
+		await expect(admin.getByText('Rolle von „gast“: Bedienen.')).toBeVisible();
+		await viewer.getByLabel('Erster Tag').fill('2026-10-08'); // nächste Anfrage von gast
+		await expect(viewer).toHaveURL(/\/login\?next=%2Fverlauf.*abgelaufen=1/);
+		await expect(viewer.getByText('Sitzung abgelaufen – bitte neu anmelden.')).toBeVisible();
+	} finally {
+		await role.selectOption('viewer'); // für die anderen Abläufe
+		await expect(admin.getByText('Rolle von „gast“: Lesen.')).toBeVisible();
+	}
+	await viewer.getByLabel('Benutzername').fill('gast');
+	await viewer.getByLabel('Passwort').fill(DEMO_PASSWORD);
+	await viewer.getByRole('button', { name: 'Anmelden' }).click();
+	await expect(viewer).toHaveURL(/\/verlauf$/);
+	await viewer.close();
+	await admin.close();
+});

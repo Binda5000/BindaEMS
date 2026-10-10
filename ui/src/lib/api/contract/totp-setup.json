@@ -1,0 +1,4 @@
+{
+  "secret": "JBSWY3DPEHPK3PXP",
+  "uri": "otpauth://totp/BindaEMS:admin?secret=JBSWY3DPEHPK3PXP&issuer=BindaEMS"
+}
