@@ -386,9 +386,10 @@ nach Passwort und Bestätigungscode. Für Admins ist das dringend empfohlen; „
 
 ### Sitzung und Leerlauf
 
-- Eine Sitzung ohne „angemeldet bleiben“ endet nach 30 min ohne Bedienung. Das gilt für Admins
-  immer, auch wenn die Übersicht offen bleibt: automatische Abfragen und die Live-Anzeige zählen
-  nicht als Bedienung.
+- Eine Sitzung ohne „angemeldet bleiben“ endet nach 30 min ohne Bedienung. Bedienung ist jedes
+  Tippen, Klicken oder Antippen im UI, auch in einem noch nicht gespeicherten Formular. Das gilt
+  für Admins immer, auch wenn die Übersicht offen bleibt: automatische Abfragen und die
+  Live-Anzeige zählen nicht als Bedienung.
 - Ist die Sitzung abgelaufen, führt das UI zur Anmeldung („Sitzung abgelaufen – bitte neu
   anmelden.“) und danach zurück zur vorherigen Seite.
 - Ein Passwortwechsel unter **Konto** meldet alle anderen Geräte ab. Ändert ein Admin Rolle oder

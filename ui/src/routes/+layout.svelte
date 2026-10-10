@@ -3,6 +3,7 @@
 	import { onMount } from 'svelte';
 	import { afterNavigate, goto } from '$app/navigation';
 	import { page } from '$app/state';
+	import { watchActivity } from '$lib/activity';
 	import { onUnauthorized } from '$lib/api/client';
 	import { api } from '$lib/api/endpoints';
 	import Dialog from '$lib/components/Dialog.svelte';
@@ -48,6 +49,12 @@
 		if (userId === null) return;
 		live.start();
 		return () => live.stop();
+	});
+
+	// Bedienung verlängert die Sitzung, auch ohne Anfrage (Tippen in einem Formular)
+	$effect(() => {
+		if (userId === null) return;
+		return watchActivity(window, () => api.me());
 	});
 
 	afterNavigate(() => {
