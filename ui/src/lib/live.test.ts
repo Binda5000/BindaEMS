@@ -117,13 +117,16 @@ it('4403 bleibt getrennt', () => {
 	expect([live.status, sockets.length]).toEqual(['forbidden', 1]);
 });
 
-it('übergeht kaputte Nachrichten', () => {
+it('übergeht kaputte Nachrichten und meldet sie', () => {
+	const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
 	const live = connect();
 	sockets[0].open();
 	sockets[0].send(hello);
 	sockets[0].onmessage?.({ data: 'kein JSON' });
 	sockets[0].send({ type: 'unbekannt', data: 1 });
 	expect(live.state).toEqual(hello.data.state);
+	expect(warn).toHaveBeenCalledTimes(2);
+	warn.mockRestore();
 });
 
 it('baut die Adresse aus dem Ursprung der Seite', () => {
@@ -131,4 +134,42 @@ it('baut die Adresse aus dem Ursprung der Seite', () => {
 	expect(liveUrl({ protocol: 'http:', host: '127.0.0.1:8099' })).toBe(
 		'ws://127.0.0.1:8099/api/live'
 	);
+});
+
+it('verbindet neu, wenn bei verbundenem core 30 s lang nichts kommt', () => {
+	// tote Verbindung ohne close (Server ohne FIN weg): sonst wartete das UI auf das TCP-Keepalive
+	const live = connect();
+	const closed = vi.spyOn(FakeSocket.prototype, 'close');
+	sockets[0].open();
+	sockets[0].send(hello);
+	vi.advanceTimersByTime(29_000);
+	expect(sockets).toHaveLength(1);
+	vi.advanceTimersByTime(2_000);
+	expect(closed).toHaveBeenCalled();
+	expect(live.status).toBe('reconnecting');
+	vi.advanceTimersByTime(RECONNECT_DELAYS_MS[0]);
+	expect(sockets).toHaveLength(2);
+	closed.mockRestore();
+});
+
+it('wartet bei getrenntem core ohne Neuverbinden', () => {
+	// ohne core schickt die app nichts: Stille ist dann kein Verbindungsfehler
+	const live = connect();
+	sockets[0].open();
+	sockets[0].send({ ...hello, data: { ...hello.data, core_connected: false } });
+	vi.advanceTimersByTime(120_000);
+	expect([sockets.length, live.status]).toEqual([1, 'open']);
+});
+
+it('meldet abgelehnte Nachrichten und hält den core mit jedem Zustand für verbunden', () => {
+	const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+	const live = connect();
+	sockets[0].open();
+	// ein hello, das nicht zum Schema passt (z. B. neue Alarmstufe), wird verworfen
+	sockets[0].send({ ...hello, data: { ...hello.data, alarms: [{ id: 'x', severity: 'neu' }] } });
+	expect(warn).toHaveBeenCalled();
+	expect(live.coreConnected).toBe(false);
+	sockets[0].send(stateMessage);
+	expect(live.coreConnected).toBe(true);
+	warn.mockRestore();
 });

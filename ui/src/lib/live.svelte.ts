@@ -6,6 +6,8 @@ export type LiveStatus =
 	'connecting' | 'open' | 'reconnecting' | 'unauthorized' | 'forbidden' | 'stopped';
 
 export const STALE_AFTER_MS = 5000;
+/** Der core schickt jede Sekunde einen Zustand: so lange Stille bei verbundenem core = tote Verbindung */
+export const SILENT_RECONNECT_MS = 30_000;
 export const RECONNECT_DELAYS_MS = [1000, 2000, 5000, 10000, 30000] as const; // danach immer 30 s
 const WS_UNAUTHORIZED = 4401; // Sitzung fehlt oder ist abgelaufen
 const WS_FORBIDDEN = 4403; // fremde Herkunft
@@ -66,7 +68,7 @@ export class LiveConnection {
 	start(): void {
 		if (this.#socket !== null || this.#retry !== null) return; // läuft schon
 		this.#attempt = 0;
-		this.#clock = setInterval(() => (this.#now = Date.now()), CLOCK_MS);
+		this.#clock = setInterval(() => this.#tick(), CLOCK_MS);
 		this.#open();
 	}
 
@@ -90,15 +92,41 @@ export class LiveConnection {
 		};
 	}
 
+	#tick(): void {
+		this.#now = Date.now();
+		// Eine Verbindung kann still sterben (Server ohne FIN weg, Netz gewechselt); dann käme
+		// kein close, bis das TCP-Keepalive des Browsers greift. Ohne core schickt die app nichts.
+		if (
+			this.status === 'open' &&
+			this.coreConnected &&
+			this.lastMessageAt !== null &&
+			this.#now - this.lastMessageAt > SILENT_RECONNECT_MS
+		) {
+			const socket = this.#socket;
+			if (socket !== null) {
+				socket.onopen = socket.onmessage = socket.onclose = null;
+				socket.close();
+			}
+			this.#closed(1006);
+		}
+	}
+
 	#receive(raw: unknown): void {
 		let data: unknown;
 		try {
 			data = JSON.parse(String(raw));
 		} catch {
-			return; // kaputte Nachricht: übergehen
+			console.warn('Live-Nachricht ist kein JSON, übergangen');
+			return;
 		}
 		const result = v.safeParse(LiveMessageSchema, data);
-		if (!result.success) return;
+		if (!result.success) {
+			console.warn(
+				'Live-Nachricht passt nicht zum Schema, übergangen:',
+				result.issues.map((issue) => `${v.getDotPath(issue) ?? '(Wurzel)'}: ${issue.message}`)
+			);
+			return;
+		}
 		const message = result.output;
 		this.lastMessageAt = this.#now = Date.now();
 		switch (message.type) {
@@ -110,6 +138,7 @@ export class LiveConnection {
 				break;
 			case 'state':
 				this.state = message.data;
+				this.coreConnected = true; // die app reicht Zustände nur bei verbundenem core weiter
 				break;
 			case 'alarm':
 				this.alarms = message.data;
