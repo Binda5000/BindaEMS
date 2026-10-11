@@ -118,6 +118,27 @@ def test_evcs_dump_lists_nonzero_registers() -> None:
     )
 
 
+def test_evcs_dump_keeps_serial_and_name_out_of_the_report() -> None:
+    # Prüfprotokoll 11.10.2026: 5001–5006 enthalten die Seriennummer als Text, ab 5027 steht der
+    # Name („EVCS-<Seriennummer>“). Der Bericht ist für das öffentliche Repository.
+    serial = dict.fromkeys(range(5001, 5007), 0x4141)
+    name = dict.fromkeys(range(5027, 5049), 0x4242)
+    regs = {5000: 0xC026, 5016: 12, 5049: 1} | serial | name
+    (dump,) = [f for f in check_evcs_dump(regs) if f.title == "EVCS-Register ≠ 0"]
+    assert dump.detail == (
+        "5000 = 49190 (0xC026); 5016 = 12 (0x000C); 5049 = 1 (0x0001); "
+        "Seriennummer (5001–5006) und Name (5027–5048) stehen nur in den Rohdaten."
+    )
+
+
+def test_evcs_dump_names_only_the_hidden_text_it_found() -> None:
+    regs = {5000: 0xC026, 5003: 0x4141}
+    (dump,) = [f for f in check_evcs_dump(regs) if f.title == "EVCS-Register ≠ 0"]
+    assert dump.detail == (
+        "5000 = 49190 (0xC026); Seriennummer (5001–5006) steht nur in den Rohdaten."
+    )
+
+
 def test_evcs_dump_without_registers_fails() -> None:
     assert check_evcs_dump({})[0].status == "fail"
 
@@ -286,6 +307,23 @@ def test_influx_schema() -> None:
     assert [f.status for f in findings] == ["ok", "ok", "info"]
     no_long = show | {"retention_policies": show["retention_policies"][:1]}
     assert check_influx(no_long)[1].status == "fail"
+
+
+def test_influx_report_counts_ha_measurements_without_names() -> None:
+    # Die Namen verraten Geräte und Räume (Prüfprotokoll 11.10.2026); der Bericht ist für das
+    # öffentliche Repository
+    show = {
+        "databases": ["bindaems", "homeassistant"],
+        "retention_policies": [],
+        "ha_database": "homeassistant",
+        "ha_measurements": ["binary_sensor.kueche_fenster", "sensor.flur_temperatur", "W"],
+    }
+    assert check_influx(show)[-1] == Finding(
+        "17.1-11",
+        "HA-Messungen in InfluxDB",
+        "info",
+        "homeassistant: 3 Messungen; die Namen stehen nur in den Rohdaten.",
+    )
 
 
 def test_clock_offset_warns() -> None:

@@ -43,6 +43,8 @@ Lokal aus dem Repository geht es mit:
     DVCC-Einstellungen, Firmware); andere Einstellungen wie die BLE-PIN nicht.
   - Trotzdem enthalten die Rohdaten Portal-ID, Seriennummern und alle Messungen der
     HA-Datenbank. Solange das Repository öffentlich ist, wird nur der Bericht eingecheckt.
+  - Der Bericht nennt Seriennummer und Namen der EVCS sowie die Namen der HA-Messungen nicht;
+    sie stehen nur in den Rohdaten.
 - Ist eine Quelle nicht erreichbar, steht im Bericht ein FEHLER mit der Meldung. Die übrigen
   Prüfungen laufen trotzdem.
 

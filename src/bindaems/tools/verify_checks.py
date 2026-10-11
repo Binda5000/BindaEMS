@@ -30,6 +30,11 @@ MAX_UPDATE_INTERVAL_S = 5.0
 MAX_CLOCK_OFFSET_S = 2.0
 EXPORT_THRESHOLD_W = -100.0
 
+# Text, der die EVCS identifiziert (Prüfprotokoll 11.10.2026): 5001–5006 enthalten die
+# Seriennummer, ab 5027 steht der Name („EVCS-<Seriennummer>“), 5049 ist das nächste Feld. Er
+# bleibt in den Rohdaten; der Bericht ist für das öffentliche Repository.
+EVCS_TEXT_REGISTERS = {"Seriennummer": (5001, 5006), "Name": (5027, 5048)}
+
 
 @dataclass(frozen=True)
 class Finding:
@@ -285,11 +290,24 @@ def check_evcs_dump(regs: Mapping[int, int], gx_connection: str | None = None) -
     if known:  # ohne bekannte Produkt-ID ist auch die Firmware kein verlässlicher Wert
         firmware = firmware_text(regs.get(REG_FW_HIGH, 0), regs.get(REG_FW_LOW, 0))
         findings.append(Finding("17.1-8", "EVCS-Firmware", "info", f"Firmware {firmware}"))
-    nonzero = [
-        f"{address} = {value} (0x{value:04X})" for address, value in sorted(regs.items()) if value
-    ]
+    nonzero = {address: value for address, value in sorted(regs.items()) if value}
     if nonzero:
-        findings.append(Finding("17.1-8", "EVCS-Register ≠ 0", "info", "; ".join(nonzero)))
+        hidden = {
+            label: (first, last)
+            for label, (first, last) in EVCS_TEXT_REGISTERS.items()
+            if any(first <= address <= last for address in nonzero)
+        }
+        shown = [
+            f"{address} = {value} (0x{value:04X})"
+            for address, value in nonzero.items()
+            if not any(first <= address <= last for first, last in hidden.values())
+        ]
+        if hidden:
+            names = " und ".join(
+                f"{label} ({first}–{last})" for label, (first, last) in hidden.items()
+            )
+            shown.append(f"{names} {'stehen' if len(hidden) > 1 else 'steht'} nur in den Rohdaten.")
+        findings.append(Finding("17.1-8", "EVCS-Register ≠ 0", "info", "; ".join(shown)))
         return findings
     # leer: Die EVCS liefert nur Nullen, wenn die Adresse von BindaEMS nicht auf ihrer
     # Modbus-TCP-Whitelist steht (Prüfprotokoll 10.10.2026, Nachtrag 11.10.2026); danach erst
@@ -418,7 +436,8 @@ def check_influx(show: Mapping[str, Any]) -> list[Finding]:
             "17.1-11",
             "HA-Messungen in InfluxDB",
             "info" if ha_db and measurements else "warn",
-            f"{ha_db}: {len(measurements)} Messungen ({', '.join(measurements[:30])})"
+            # ohne Namen: Sie verraten Geräte und Räume, der Bericht ist für das Repository
+            f"{ha_db}: {len(measurements)} Messungen; die Namen stehen nur in den Rohdaten."
             if ha_db and measurements
             else "Keine HA-Datenbank oder keine Messungen gefunden.",
         )

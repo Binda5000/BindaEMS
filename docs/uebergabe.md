@@ -202,55 +202,43 @@ Demo-Zugänge: `admin`, `gast` (Lesen) und `sicher` (Admin mit TOTP, Geheimnis
 
 ## Stand der Installation beim Betreiber
 
-- Docker auf der VM `192.168.82.20`, Images `latest`.
-- Das UI ist direkt über `http://192.168.82.20:8080` erreichbar, noch ohne HTTPS-Proxy. Die
-  Anmeldung klappt deshalb nur mit `cookie_secure: false`.
-- **Prüfprotokolle vom 10.10.2026** in `docs/verification/`: Preise bestanden (smartENERGY
-  brutto). Teil 1 mit Befunden, siehe die Bewertung am Ende des Protokolls:
+- Docker auf der VM `192.168.82.20`, Images `latest` vom Stand nach Plan 2a (11.10.2026).
+- Reverse Proxy mit HTTPS sowie Tarif und OeMAG-Wert im UI: laut Betreiber eingerichtet
+  (11.10.2026). Zum Proxy gehören laut Betriebshandbuch 6: Port 8080 erreicht nur der Proxy,
+  `app.trusted_proxies` ist gesetzt, `cookie_secure` steht wieder auf `true`.
+- **Prüfprotokolle** in `docs/verification/`, Bewertungen jeweils am Ende des Protokolls:
+  - Preise am 10.10.2026 bestanden (smartENERGY brutto).
+  - Teil 1 am 10.10.2026 mit Befunden, am 11.10.2026 mit erreichbarer EVCS wiederholt.
+  - Watchdog-Probe (Teil 2, Punkt 17.2-5) am 11.10.2026 bestanden.
+- **Befunde:**
   - Dynamic ESS bleibt nach Entscheidung des Betreibers an, bis Victron live geschaltet wird.
   - Die EVCS (AC22NS, Produkt-ID 0xC026) liest der Cerbo per Modbus TCP unter
-    192.168.81.41. BindaEMS bekam unter derselben Adresse nur Nullen. Ursache war die
+    192.168.81.41. BindaEMS bekam unter derselben Adresse zuerst nur Nullen. Ursache war die
     IP-Whitelist der EVCS: Die Adresse der VM stand nicht darauf. Die EVCS nimmt die Verbindung
-    dann trotzdem an und liefert nur Nullen. Der Betreiber hat die Whitelist am 11.10.2026
-    korrigiert; seitdem antwortet die EVCS BindaEMS. Teil 1 muss das noch im Protokoll belegen.
+    dann trotzdem an und liefert nur Nullen. Seit der Betreiber die Whitelist am 11.10.2026
+    korrigiert hat, liest BindaEMS ihre Register selbst (Firmware v2.09, manueller Modus).
   - Seit dem 10.10.2026 folgt die Registerbelegung Victrons GX-Treiber: Sollstrom 5016,
     Maximalstrom 5017. Ohne bekannte Produkt-ID gelten die Registerwerte als ungültig; Strom
     und Modus kommen dann vom Cerbo.
-  - Peak Shaving: Laut Betreiber steht das Importlimit knapp unter der 35-A-Sicherung (etwa
-    33 A); das Protokoll vom 10.10. las noch 20 A.
+  - **Peak Shaving, offen:** Laut Betreiber steht das Importlimit knapp unter der
+    35-A-Sicherung (etwa 33 A). Beide Prüfprotokolle lesen am Cerbo aber
+    `Settings/CGwacs/AcInputLimit` = 20 A mit `AlwaysPeakShave` = 1.
   - Akku 96 kWh nutzbar.
-- **Watchdog:** noch nicht installiert. Bis dahin zeigt das UI den Watchdog als „keine Antwort“,
-  ohne Alarm, solange kein Aktor live angefordert ist.
+- **Watchdog:** Version 1.0.0 am Cerbo installiert, Probe am 11.10.2026 bestanden. Er wartet,
+  solange kein Aktor live angefordert ist.
 - **HA-Daten in InfluxDB:** Datenbank `homeassistant`, `bindaems` hat READ. HA schreibt mit
   `measurement_attr: entity_id`:
   - Messung = Entität (`sensor.…`), Tags `domain` und `entity_id` (ohne Domain)
   - Felder `value`, `unit_of_measurement_str`, `device_class_str`, `state_class_str`,
     `friendly_name_str`
   - Wichtig auch für die Lastprognose aus der HA-Historie.
-- **Als Nächstes an der Anlage:**
-  1. **Images von Plan 2a ausrollen**, sobald 2a auf `main` ist, core und app aus demselben Stand:
-     `docker compose pull && docker compose up -d`. Ohne sie fehlen die Werkzeuge
-     `bindaems.tools.watchdog_config` und `bindaems.tools.watchdog_probe`, und die System-Seite
-     zeigt den Status des Watchdogs nicht.
-  2. Reverse Proxy mit HTTPS einrichten (Betriebshandbuch 6). Port 8080 soll nur der Proxy
-     erreichen. `app.trusted_proxies` setzen, `cookie_secure` wieder auf `true`.
-  3. InfluxDB einrichten (`deploy/influxdb-setup.sh`), den ersten Admin anlegen und TOTP
-     einrichten.
-  4. Prüfprotokoll Teil 1 wiederholen, jetzt mit erreichbarer EVCS: Produkt-ID, Firmware und
-     Modus müssen aus den eigenen Registern kommen. Den Bericht nach `docs/verification/`
-     übernehmen und `config.yaml` anhand der Abweichungen korrigieren. „Preise“ ist bestanden
-     (10.10.2026).
-  5. Tarifbestandteile und den OeMAG-Monatswert im UI eintragen (Einstellungen).
-  6. **Watchdog installieren** (Betriebshandbuch 14): `config.ini` aus `config.yaml` erzeugen und mit
-     `cerbo-watchdog/install.sh` auf den Cerbo bringen. Dafür braucht es den SSH-Zugang als root
-     zum Cerbo und die EVCS unter `victron.instances.evcharger` in `config.yaml`.
-  7. **Probe** gemeinsam mit dem Betreiber laufen lassen (Betriebshandbuch 14) und den Bericht nach
-     `docs/verification/` übernehmen. Die Auslösung setzt die EVCS auf den sicheren Strom, den
-     Min-SOC auf die USV-Reserve und die Entladegrenze auf unbegrenzt, sofern sie abwichen.
-     Danach alle drei prüfen und wieder einstellen und im Log des Cerbo die Zeile zum Aktionslauf
-     lesen.
-  8. Im UI (**System** → „Watchdog am Cerbo“) und in HA („Watchdog ausgelöst“) prüfen, dass der
-     Status stimmt: „wartet“ nach der Probe.
+- **Offen an der Anlage:**
+  1. Am Cerbo klären, welches Importlimit gilt (siehe „Peak Shaving“ oben). Spec 8.1 verlangt
+     es knapp unter der Hausanschlusssicherung (Ebene 0).
+  2. Die manuellen Punkte von Teil 1 nachtragen: Sicherheitsprofil und Modbus-Dienstliste
+     (17.1-3), NTP am Cerbo (17.1-12).
+  3. Die Log-Zeile „Aktionen abgeschlossen: …“ der Probe vom 11.10.2026 nachreichen; sie zeigt, ob
+     jede Aktion „ok“ oder „unverändert“ war.
 
 ## Nächste Schritte im Projekt
 
@@ -261,8 +249,8 @@ Demo-Zugänge: `admin`, `gast` (Lesen) und `sicher` (Admin mit TOTP, Geheimnis
    - nachweislich keine Schreibpfade zu Geräten
 2. **Phase 2**, Wallbox-Lastmanagement und PV-Überschussladen (Spec 18), in vier Plänen
    (Zuschnitt in `docs/superpowers/plans/2026-10-10-phase-2a-sicherheitsbasis.md`):
-   - **2a Sicherheitsbasis:** umgesetzt und im Gesamtreview geprüft (11.10.2026); dessen Befunde
-     sind behoben. Offen sind die Arbeiten an der Anlage (siehe oben).
+   - **2a Sicherheitsbasis:** umgesetzt, im Gesamtreview geprüft und an der Anlage installiert;
+     die Watchdog-Probe ist bestanden (11.10.2026).
    - **2b Aktoren:**
      - Gerüst mit `capabilities()` und `apply()`, Dry-Run und Rücklese-Prüfung für EVCS, Victron
        und Tesla
@@ -285,10 +273,11 @@ Demo-Zugänge: `admin`, `gast` (Lesen) und `sicher` (Admin mit TOTP, Geheimnis
    Victron, Tesla.
 
    **EVCS in 2b:** Seit der korrigierten IP-Whitelist antwortet die EVCS BindaEMS direkt per Modbus
-   (siehe oben). Ob 2b direkt per Modbus oder über den GX-Dienst `evcharger` auf die EVCS schreibt,
-   legt das Prüfprotokoll Teil 2 fest (Spec 8.6). Geschrieben wird in jedem Fall der Sollstrom
-   (Register 5016, auf dem GX `/SetCurrent`), nie der Maximalstrom (5017). Der Watchdog ist nicht
-   betroffen: Er schreibt über den GX-Dienst `evcharger` am Cerbo.
+   (Prüfprotokoll Teil 1 vom 11.10.2026). Ob 2b direkt per Modbus oder über den GX-Dienst
+   `evcharger` auf die EVCS schreibt, legt das Prüfprotokoll Teil 2 fest (Spec 8.6). Geschrieben
+   wird in jedem Fall der Sollstrom (Register 5016, auf dem GX `/SetCurrent`), nie der
+   Maximalstrom (5017). Der Watchdog ist nicht betroffen: Er schreibt über den GX-Dienst
+   `evcharger` am Cerbo.
 
 ## Vor einer Live-Schaltung in 2b zu klären
 
