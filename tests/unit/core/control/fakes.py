@@ -5,7 +5,7 @@ from datetime import datetime
 
 from bindaems.core.control.actuator import Capabilities, Confirmation, matches
 from bindaems.shared.control import CommandKind, CommandValue
-from bindaems.shared.domain import Snapshot
+from bindaems.shared.domain import Alarm, Snapshot
 
 
 @dataclass
@@ -38,3 +38,6 @@ class FakeActuator:
         if kind in self.echo and matches(kind, value, self.echo[kind]):
             return Confirmation.CONFIRMED, ""
         return Confirmation.PENDING, ""
+
+    def alarms(self, now: datetime) -> list[Alarm]:
+        return []

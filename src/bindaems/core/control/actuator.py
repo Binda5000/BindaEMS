@@ -2,8 +2,9 @@
 
 Der Ausführer (``executor.CommandExecutor``) kennt ein Gerät nur über das Protokoll ``Actuator``:
 Der Aktor sagt, ob er steuerbar ist (``capabilities``), welche Werte das Gerät gerade hat
-(``present``), nimmt einen Auftrag an (``send``) und sagt, ob das Gerät den Wert übernommen hat
-(``confirm``). Die Frist fürs Rücklesen überwacht der Ausführer, nicht der Aktor.
+(``present``), nimmt einen Auftrag an (``send``), sagt, ob das Gerät den Wert übernommen hat
+(``confirm``), und nennt seine eigenen Alarme (``alarms``). Die Frist fürs Rücklesen überwacht der
+Ausführer, nicht der Aktor.
 
 ``matches`` vergleicht den gesendeten mit dem zurückgelesenen Wert, mit den Toleranzen aus
 Präzisierung 6 des Plans 2b. Die Schicht ist rein: ohne I/O, die Zeit kommt als Argument.
@@ -17,7 +18,7 @@ from enum import StrEnum
 from typing import Final, Protocol
 
 from bindaems.shared.control import CommandKind, CommandValue
-from bindaems.shared.domain import Snapshot
+from bindaems.shared.domain import Alarm, Snapshot
 from bindaems.shared.numbers import finite_number
 
 # Bestätigt ist ein Wert, wenn der zurückgelesene höchstens so weit abweicht (Einheit der Art).
@@ -90,6 +91,14 @@ class Actuator(Protocol):
         self, kind: CommandKind, value: CommandValue, snap: Snapshot
     ) -> tuple[Confirmation, str]:
         """Hat das Gerät ``value`` übernommen? Der Text nennt bei ``FAILED`` den Grund."""
+        ...
+
+    def alarms(self, now: datetime) -> list[Alarm]:
+        """Die Alarme, die der Aktor selbst kennt, zu ``now``; ohne eigenen Anlass ``[]``.
+
+        EVCS und Victron haben keine eigenen. Der Tesla meldet, solange er nach Fehlern gesperrt
+        ist.
+        """
         ...
 
 

@@ -1,8 +1,10 @@
 from dataclasses import FrozenInstanceError
 
 import pytest
+from tests.helpers import T0
+from tests.unit.core.control.fakes import FakeActuator
 
-from bindaems.core.control.actuator import Capabilities, Confirmation, matches
+from bindaems.core.control.actuator import Actuator, Capabilities, Confirmation, matches
 from bindaems.shared.control import CommandKind
 
 K = CommandKind
@@ -22,6 +24,15 @@ def test_capabilities_have_no_reasons_by_default_and_are_frozen() -> None:
     assert (capabilities.controllable, capabilities.reasons) == (True, ())
     with pytest.raises(FrozenInstanceError):
         capabilities.controllable = False
+
+
+def test_the_protocol_asks_every_actuator_for_its_alarms() -> None:
+    # Der Tesla meldet damit „nach Fehlern nicht steuerbar“; EVCS und Victron haben keine eigenen.
+    assert callable(getattr(Actuator, "alarms", None))
+
+
+def test_the_fake_actuator_has_no_alarms() -> None:
+    assert FakeActuator("wallbox.evcs").alarms(T0) == []
 
 
 @pytest.mark.parametrize(
