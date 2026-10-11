@@ -7,7 +7,7 @@ import pytest
 from structlog.testing import capture_logs
 from tests.helpers import T0
 
-from bindaems.core.persistence.files import read_json
+from bindaems.core.persistence.files import read_json, write_json_atomic
 from bindaems.core.safety.budget import PersistentWriteBudget
 from bindaems.core.safety.types import Finding
 from bindaems.shared.domain import Alarm, Severity
@@ -362,4 +362,88 @@ def test_both_alarms_come_in_the_order_of_the_table(tmp_path: Path) -> None:
     assert [(a.id, a.since) for a in budget.alarms(M(3))] == [
         ("safety.write_budget", M(2)),
         ("safety.write_budget_file", M(1)),
+    ]
+
+
+# Alarm „Uhr“: gespeicherte Schreibzeiten in der Zukunft
+
+CLOCK_ALARM = (
+    "Gespeicherte Schreibzeiten liegen bis zu {n} min in der Zukunft; "
+    "persistente Schreibzugriffe bleiben bis dahin begrenzt."
+)
+
+
+def future_file(tmp_path: Path, *ahead_s: float) -> None:
+    """``b.json`` mit je einem Schreibvorgang ``ahead_s`` Sekunden nach T0."""
+    write_json_atomic(tmp_path / "b.json", {"writes": [S(s).isoformat() for s in ahead_s]})
+
+
+def test_future_entries_raise_the_clock_alarm(tmp_path) -> None:
+    path = tmp_path / "budget.json"
+    write_json_atomic(path, {"writes": [(T0 + timedelta(minutes=10)).isoformat()]})
+    alarms = PersistentWriteBudget(12, 100, path, T0).alarms(T0)
+    assert [(a.id, a.message) for a in alarms] == [
+        (
+            "safety.clock",
+            "Gespeicherte Schreibzeiten liegen bis zu 10 min in der Zukunft; "
+            "persistente Schreibzugriffe bleiben bis dahin begrenzt.",
+        )
+    ]
+
+
+@pytest.mark.parametrize(
+    ("ahead_s", "minutes"),
+    [(301, 6), (360, 6), (361, 7), (600, 10), (601, 11), (86_400, 1440)],
+)
+def test_clock_alarm_counts_whole_minutes_rounded_up(
+    tmp_path: Path, ahead_s: int, minutes: int
+) -> None:
+    future_file(tmp_path, ahead_s)
+    assert new_budget(tmp_path).alarms(T0) == [
+        Alarm("safety.clock", Severity.WARNING, CLOCK_ALARM.format(n=minutes), T0)
+    ]
+
+
+@pytest.mark.parametrize("ahead_s", [-3600, -1, 0, 1, 299, 300])
+def test_no_clock_alarm_up_to_five_minutes_ahead(tmp_path: Path, ahead_s: int) -> None:
+    future_file(tmp_path, ahead_s)
+    assert new_budget(tmp_path).alarms(T0) == []
+
+
+def test_clock_alarm_names_the_latest_entry_and_starts_at_now(tmp_path: Path) -> None:
+    future_file(tmp_path, 3 * 60, 20 * 60, 8 * 60)  # nicht sortiert
+    [alarm] = new_budget(tmp_path).alarms(M(3))
+    assert (alarm.severity, alarm.since) == (Severity.WARNING, M(3))
+    assert alarm.message == CLOCK_ALARM.format(n=17)  # bis M(20), von M(3) aus gesehen
+
+
+def test_clock_alarm_ends_when_the_clock_catches_up(tmp_path: Path) -> None:
+    future_file(tmp_path, 10 * 60)
+    budget = new_budget(tmp_path)
+    assert [a.id for a in budget.alarms(M(4))] == ["safety.clock"]  # 6 min voraus
+    assert budget.alarms(M(5)) == []  # genau 5 min voraus
+
+
+def test_clock_alarm_also_follows_an_entry_recorded_in_the_future(tmp_path: Path) -> None:
+    budget = new_budget(tmp_path)
+    budget.record(M(30))
+    assert [a.message for a in budget.alarms(T0)] == [CLOCK_ALARM.format(n=30)]
+
+
+def test_clock_alarm_does_not_relax_the_budget(tmp_path: Path) -> None:
+    future_file(tmp_path, 10 * 60)
+    budget = new_budget(tmp_path, per_hour=1)
+    assert budget.check(T0) is not None  # der Eintrag in der Zukunft zählt weiter
+    assert [a.id for a in budget.alarms(T0)] == ["safety.clock"]
+
+
+def test_clock_alarm_comes_after_the_other_two(tmp_path: Path) -> None:
+    (tmp_path / "b.json").write_text("kaputt")
+    budget = new_budget(tmp_path, now=M(1))
+    budget.note_rejection(M(2))
+    budget.record(M(60))
+    assert [a.id for a in budget.alarms(M(3))] == [
+        "safety.write_budget",
+        "safety.write_budget_file",
+        "safety.clock",
     ]

@@ -1,8 +1,12 @@
+import math
+from dataclasses import replace
+from typing import cast
+
 import pytest
 from tests.unit.core.safety.conftest import make_ctx
 
 from bindaems.core.safety.limits import CurrentRange, HardLimits, toward_safe
-from bindaems.shared.control import Command, CommandKind
+from bindaems.shared.control import VICTRON, Command, CommandKind
 
 
 def test_catalog_from_example(limits) -> None:
@@ -97,3 +101,47 @@ def test_toward_safe_ignores_an_int_too_large_for_a_float(limits, value, actual)
     command = Command("wallbox.evcs", K.CURRENT, value, urgent=True)
     ctx = make_ctx(present={("wallbox.evcs", K.CURRENT): actual})
     assert toward_safe(command, ctx, limits) is False
+
+
+def test_toward_safe_with_unknown_base_only_clears(limits) -> None:
+    ctx = make_ctx(base_grid_setpoint_w=None, present={(VICTRON, K.GRID_SETPOINT): None})
+    assert toward_safe(Command(VICTRON, K.GRID_SETPOINT, None, urgent=True), ctx, limits)
+    assert not toward_safe(Command(VICTRON, K.GRID_SETPOINT, -1000.0, urgent=True), ctx, limits)
+
+
+@pytest.mark.parametrize("base", [None, math.nan, math.inf, -math.inf])
+@pytest.mark.parametrize("value", [-1000.0, 0.0, 500.0])
+def test_toward_safe_with_unusable_base_accepts_no_number(limits, base, value) -> None:
+    # Ohne Override gilt der Basis-Sollwert; ist er unbekannt, lässt sich kein Wert vergleichen.
+    ctx = make_ctx(base_grid_setpoint_w=base, present={(VICTRON, K.GRID_SETPOINT): None})
+    assert not toward_safe(Command(VICTRON, K.GRID_SETPOINT, value, urgent=True), ctx, limits)
+    assert toward_safe(Command(VICTRON, K.GRID_SETPOINT, None, urgent=True), ctx, limits)
+
+
+def test_toward_safe_with_unknown_base_compares_with_the_known_override(limits) -> None:
+    ctx = make_ctx(base_grid_setpoint_w=None, present={(VICTRON, K.GRID_SETPOINT): 1000.0})
+    assert toward_safe(Command(VICTRON, K.GRID_SETPOINT, 500.0), ctx, limits)
+    assert not toward_safe(Command(VICTRON, K.GRID_SETPOINT, 1500.0), ctx, limits)
+
+
+def test_toward_safe_without_override_compares_with_the_known_base(limits) -> None:
+    ctx = make_ctx(base_grid_setpoint_w=500.0, present={(VICTRON, K.GRID_SETPOINT): None})
+    assert toward_safe(Command(VICTRON, K.GRID_SETPOINT, 400.0), ctx, limits)
+    assert toward_safe(Command(VICTRON, K.GRID_SETPOINT, 500.0), ctx, limits)
+    assert not toward_safe(Command(VICTRON, K.GRID_SETPOINT, 600.0), ctx, limits)
+
+
+def test_kind_given_as_plain_text_counts_as_that_kind(limits) -> None:
+    plain = Command("wallbox.evcs", cast(CommandKind, "current"), 6.0, urgent=True)
+    ctx = make_ctx(present={("wallbox.evcs", K.CURRENT): 10.0})
+    assert toward_safe(plain, ctx, limits)
+
+
+@pytest.mark.parametrize(("command", "present", "expected"), TOWARD_SAFE)
+def test_toward_safe_gives_the_same_for_kinds_as_plain_text(
+    limits, command, present, expected
+) -> None:
+    # Jede Art, einmal als Mitglied und einmal als gleicher Text: dasselbe Urteil.
+    plain = replace(command, kind=cast(CommandKind, str(command.kind)))
+    assert type(plain.kind) is str
+    assert toward_safe(plain, make_ctx(present=present), limits) is expected

@@ -12,10 +12,14 @@ Die Fenster sind halboffen wie beim Rate-Limiter: Ein Eintrag zum Zeitpunkt ``t`
 Fehlt die Datei, ist das Budget leer (erster Start). Ist sie unlesbar oder nicht im Format, ist
 unbekannt, wie viel schon verbraucht ist: Der Flash geht vor, und die persistenten Einstellungen
 bleiben ab dem Laden 1 h gesperrt.
+
+Ein Eintrag in der Zukunft (die Uhr lief zurück) zählt weiter, das ist die sichere Seite. Liegt
+einer mehr als 5 min nach ``now``, meldet ``alarms`` den Alarm ``safety.clock``.
 """
 
 from __future__ import annotations
 
+import math
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Final
@@ -23,7 +27,7 @@ from typing import Any, Final
 import structlog
 
 from bindaems.core.persistence.files import read_json, write_json_atomic
-from bindaems.core.safety.types import Finding
+from bindaems.core.safety.types import Finding, de
 from bindaems.shared.domain import Alarm, Severity
 from bindaems.shared.timeutil import ensure_utc
 
@@ -32,6 +36,8 @@ log = structlog.get_logger(__name__)
 _HOUR: Final = timedelta(hours=1)
 _DAY: Final = timedelta(hours=24)
 _FILE_BLOCK: Final = timedelta(hours=1)  # Sperre ab dem Laden einer unlesbaren Datei
+_CLOCK_TOLERANCE: Final = timedelta(minutes=5)  # so weit darf ein Eintrag in der Zukunft liegen
+_MINUTE: Final = timedelta(minutes=1)
 
 
 class PersistentWriteBudget:
@@ -44,7 +50,8 @@ class PersistentWriteBudget:
     - ``alarms`` liefert die Alarme.
 
     Alle Zeitpunkte sind zeitzonenbewusst (wie ``SafetyContext.now``). Ein Eintrag, der nach ``now``
-    liegt, zählt weiter: Läuft die Uhr zurück, ist das Budget eher zu streng als zu lasch.
+    liegt, zählt weiter: Läuft die Uhr zurück, ist das Budget eher zu streng als zu lasch. Liegt
+    einer mehr als 5 min danach, meldet ``alarms`` den Alarm ``safety.clock``.
     """
 
     def __init__(self, per_hour: int, per_day: int, path: Path, now: datetime) -> None:
@@ -125,6 +132,9 @@ class PersistentWriteBudget:
           liefert; ``since`` ist die erste Ablehnung.
         - ``safety.write_budget_file``: bis zum Ende der Sperre wegen der unlesbaren Datei;
           ``since`` ist die Ladezeit.
+        - ``safety.clock``: solange ein erfasster Schreibvorgang mehr als 5 min nach ``now`` liegt;
+          ``since`` ist ``now``. Die Zahl im Text ist der späteste Eintrag, aufgerundet auf ganze
+          Minuten.
         """
         self.check(now)  # ist wieder Platz, endet damit die Ablehnungsfolge und ihr Alarm
         alarms: list[Alarm] = []
@@ -146,6 +156,18 @@ class PersistentWriteBudget:
                     "Datei des Schreibbudgets unlesbar; "
                     "persistente Einstellungen bleiben 1 h gesperrt.",
                     loaded_at,
+                )
+            )
+        ahead = max(self._writes, default=now) - now
+        if ahead > _CLOCK_TOLERANCE:
+            minutes = math.ceil(ahead / _MINUTE)
+            alarms.append(
+                Alarm(
+                    "safety.clock",
+                    Severity.WARNING,
+                    f"Gespeicherte Schreibzeiten liegen bis zu {de(minutes)} min in der Zukunft; "
+                    "persistente Schreibzugriffe bleiben bis dahin begrenzt.",
+                    now,
                 )
             )
         return alarms

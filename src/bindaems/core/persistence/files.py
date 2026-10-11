@@ -3,7 +3,8 @@
 Das ist die einzige Stelle, an der ``core.safety`` und ``core.control`` Dateien anfassen.
 Geschrieben wird über eine temporäre Datei im selben Verzeichnis und ``os.replace``: Ein Leser
 sieht immer den alten oder den neuen Inhalt, nie einen halb geschriebenen, auch wenn der Prozess
-oder der Rechner mitten im Schreiben ausfällt.
+oder der Rechner mitten im Schreiben ausfällt. Danach wird auch das Verzeichnis gesichert, damit
+das Ersetzen einen Stromausfall übersteht.
 """
 
 from __future__ import annotations
@@ -15,13 +16,27 @@ from pathlib import Path
 from typing import Any
 
 
+def fsync_directory(path: Path) -> None:
+    """Sichert das Verzeichnis ``path`` auf der Platte (``fsync``).
+
+    Erst damit steht ein Umbenennen oder Anlegen darin auch nach einem Stromausfall fest. Ein
+    ``OSError`` heißt, dass sich das Verzeichnis nicht öffnen oder sichern ließ.
+    """
+    fd = os.open(path, os.O_RDONLY)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
 def write_json_atomic(path: Path, data: Any) -> None:
     """Schreibt ``data`` als JSON (UTF-8, Umlaute bleiben lesbar) nach ``path``.
 
     Die Datei ist danach ganz neu oder unverändert. Das Verzeichnis wird bei Bedarf angelegt. Der
     Inhalt geht zuerst nach ``<name>.tmp`` im selben Verzeichnis (``os.replace`` ist nur innerhalb
     eines Dateisystems atomar), wird mit ``flush`` und ``os.fsync`` auf die Platte gebracht und
-    ersetzt dann die Zieldatei.
+    ersetzt dann die Zieldatei. Danach wird das Verzeichnis gesichert (``fsync_directory``); ein
+    ``OSError`` dabei wird ignoriert, denn der neue Inhalt steht schon.
 
     Bei einem Fehler bleibt die alte Datei, die temporäre Datei wird entfernt, und der Fehler
     wird weitergegeben: ``OSError`` bei der Platte, ``TypeError`` oder ``ValueError`` bei Daten,
@@ -41,6 +56,8 @@ def write_json_atomic(path: Path, data: Any) -> None:
         with contextlib.suppress(OSError):  # fehlt sie oder geht es nicht, zählt der erste Fehler
             temp.unlink()
         raise
+    with contextlib.suppress(OSError):  # der neue Inhalt steht schon; mehr als sichern geht nicht
+        fsync_directory(path.parent)
 
 
 def read_json(path: Path) -> Any:

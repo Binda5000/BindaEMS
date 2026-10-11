@@ -10,7 +10,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Literal
 
-from bindaems.core.safety.types import SafetyContext
+from bindaems.core.safety.types import SafetyContext, finite_number
 from bindaems.shared.config import Config, EvcsConfig, PhaseMap, VehicleCommandLimits
 from bindaems.shared.control import (
     VICTRON,
@@ -195,14 +195,17 @@ def toward_safe(command: Command, ctx: SafetyContext, limits: HardLimits) -> boo
     - ``current``: Wert ≤ bekannter Ist-Wert, oder der Ist-Wert ist unbekannt und Wert ≤ ``safe_a``
     - ``charging``: Wert ist ``False``
     - ``grid_setpoint``: Wert ist ``None``, oder der Ist-Wert ist bekannt und Wert ≤ wirksamer
-      Ist-Sollwert (der Override, sonst ``base_grid_setpoint_w``)
+      Ist-Sollwert (der Override, sonst ``base_grid_setpoint_w``); ohne Override und mit
+      unbekanntem Basis-Sollwert (``None``, NaN, ±∞) gilt nur ``None``
     - ``max_discharge``: Wert ist −1, oder der bekannte Ist-Wert ist ≥ 0 und Wert ≥ Ist-Wert
     - ``min_soc``: Wert ist die Reserve, oder der Ist-Wert ist bekannt und Reserve ≤ Wert ≤ Ist-Wert
+
+    Befehlsarten werden mit ``==`` verglichen: Eine Art als gleicher Text gilt als diese Art.
     """
     kind = command.kind
-    if kind is CommandKind.CHARGING:
+    if kind == CommandKind.CHARGING:
         return command.value is False
-    if kind is CommandKind.GRID_SETPOINT and command.value is None:
+    if kind == CommandKind.GRID_SETPOINT and command.value is None:
         return True
     value = _number(command.value)
     if value is None:
@@ -211,21 +214,22 @@ def toward_safe(command: Command, ctx: SafetyContext, limits: HardLimits) -> boo
     key = (command.actuator, kind)
     known = key in ctx.present
     actual = _number(ctx.present.get(key))
-    if kind is CommandKind.CURRENT:
+    if kind == CommandKind.CURRENT:
         current = limits.currents.get(command.actuator)
         if current is None:
             return False
         if known:
             return actual is not None and value <= actual
         return value <= current.safe_a
-    if kind is CommandKind.GRID_SETPOINT:
+    if kind == CommandKind.GRID_SETPOINT:
         if not known:
             return False
-        effective = ctx.base_grid_setpoint_w if ctx.present[key] is None else actual
+        base = finite_number(ctx.base_grid_setpoint_w)
+        effective = base if ctx.present[key] is None else actual
         return effective is not None and value <= effective
-    if kind is CommandKind.MAX_DISCHARGE:
+    if kind == CommandKind.MAX_DISCHARGE:
         return value == -1 or (actual is not None and actual >= 0 and value >= actual)
-    if kind is CommandKind.MIN_SOC:
+    if kind == CommandKind.MIN_SOC:
         reserve = limits.reserve_soc_pct
         return value == reserve or (actual is not None and reserve <= value <= actual)
     return False

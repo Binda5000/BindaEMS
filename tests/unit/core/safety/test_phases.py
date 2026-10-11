@@ -1,3 +1,4 @@
+import math
 from dataclasses import replace
 
 import pytest
@@ -593,6 +594,93 @@ def test_setpoint_names_the_phase_with_the_least_room(limits) -> None:
 def test_setpoint_increase_with_unknown_phase_currents_is_rejected(limits) -> None:
     step = set_setpoint(limits, 1000.0, UNKNOWN, present={(VICTRON, K.GRID_SETPOINT): None})
     assert step.reject and codes(step) == ["phase.unknown"]
+
+
+# --- Netz-Sollwert bei unbekanntem Basis-Sollwert (Präzisierung 13)
+
+UNKNOWN_SETPOINT = Finding(
+    "phase.unknown_setpoint",
+    "Wirksamer Netz-Sollwert unbekannt; nur das Aufheben des Overrides ist erlaubt.",
+)
+
+
+@pytest.mark.parametrize("base", [None, math.nan, math.inf])
+def test_unknown_base_setpoint_allows_only_clearing(limits, base) -> None:
+    ctx = make_ctx(base_grid_setpoint_w=base, present={(VICTRON, K.GRID_SETPOINT): None})
+    assert check_phases(Command(VICTRON, K.GRID_SETPOINT, -500.0), -500.0, ctx, limits).reject
+    assert not check_phases(Command(VICTRON, K.GRID_SETPOINT, None), None, ctx, limits).reject
+
+
+def test_missing_override_and_unknown_base_reject_numbers(limits) -> None:
+    ctx = make_ctx(base_grid_setpoint_w=None, present={})
+    assert check_phases(Command(VICTRON, K.GRID_SETPOINT, 0.0), 0.0, ctx, limits).reject
+
+
+def test_known_override_does_not_need_the_base(limits) -> None:
+    ctx = make_ctx(base_grid_setpoint_w=None, present={(VICTRON, K.GRID_SETPOINT): 100.0})
+    assert not check_phases(Command(VICTRON, K.GRID_SETPOINT, 50.0), 50.0, ctx, limits).reject
+
+
+@pytest.mark.parametrize("base", [None, NAN, INF, -INF], ids=["none", "nan", "inf", "-inf"])
+@pytest.mark.parametrize("value", [-500.0, 0.0, 500.0, 6000.0])
+@pytest.mark.parametrize(
+    "present",
+    [
+        pytest.param({(VICTRON, K.GRID_SETPOINT): None}, id="no-override"),
+        pytest.param({}, id="override-unknown"),
+        pytest.param({(VICTRON, K.GRID_SETPOINT): True}, id="override-bool"),
+        pytest.param({(VICTRON, K.GRID_SETPOINT): NAN}, id="override-nan"),
+        pytest.param({(VICTRON, K.GRID_SETPOINT): INF}, id="override-inf"),
+    ],
+)
+@pytest.mark.parametrize("imports", [IMP, UNKNOWN], ids=["phases-known", "phases-unknown"])
+def test_unknown_effective_setpoint_rejects_every_number(
+    limits, base, value, present, imports
+) -> None:
+    # Weder der Override noch der Basis-Sollwert sagen, was gerade gilt: nicht einmal ein Wert
+    # unter dem Basis-Sollwert ist als Verringerung erkennbar. Das gilt vor den Phasenströmen.
+    step = set_setpoint(limits, value, imports, base_grid_setpoint_w=base, present=present)
+    assert (step.value, step.findings, step.reject) == (None, (UNKNOWN_SETPOINT,), True)
+
+
+@pytest.mark.parametrize("base", [None, NAN, INF, -INF], ids=["none", "nan", "inf", "-inf"])
+@pytest.mark.parametrize(
+    "present",
+    [
+        pytest.param({}, id="override-unknown"),
+        pytest.param({(VICTRON, K.GRID_SETPOINT): None}, id="no-override"),
+        pytest.param({(VICTRON, K.GRID_SETPOINT): 500.0}, id="override"),
+    ],
+)
+@pytest.mark.parametrize("imports", [IMP, OVER, UNKNOWN], ids=["ok", "over", "unknown"])
+def test_clearing_the_override_never_needs_base_or_phases(limits, base, present, imports) -> None:
+    step = set_setpoint(limits, None, imports, base_grid_setpoint_w=base, present=present)
+    assert (step.value, step.findings) == (None, ())
+
+
+@pytest.mark.parametrize("base", [None, NAN, INF, -INF], ids=["none", "nan", "inf", "-inf"])
+def test_known_override_decides_alone_when_the_base_is_unknown(limits, base) -> None:
+    override = {(VICTRON, K.GRID_SETPOINT): 1000.0}
+    reduced = set_setpoint(limits, 6000.0, base_grid_setpoint_w=base, present=override)
+    assert (reduced.value, codes(reduced)) == (3070.0, ["phase.reduced"])  # 1000 W + 2070 W
+    assert reduced.findings[0].text == "Phase L1 würde über 33 A steigen; reduziert auf 3070 W."
+    lower = set_setpoint(limits, 400.0, UNKNOWN, base_grid_setpoint_w=base, present=override)
+    assert (lower.value, lower.findings) == (400.0, ())  # eine Verringerung, auch ohne Phasen
+
+
+@pytest.mark.parametrize("base", [0, 500.0, -200.0])
+def test_known_base_keeps_the_calculation_of_the_effective_setpoint(limits, base) -> None:
+    # Der Basis-Sollwert gilt, solange kein Override aktiv ist; als int ist er so gut wie als float.
+    no_override = {(VICTRON, K.GRID_SETPOINT): None}
+    step = set_setpoint(limits, 6000.0, base_grid_setpoint_w=base, present=no_override)
+    assert step.value == base + 2070.0
+
+
+@pytest.mark.parametrize("base", [None, NAN, INF])
+def test_safe_state_commands_stay_open_when_the_base_is_unknown(limits, base) -> None:
+    ctx = make_ctx(base_grid_setpoint_w=base, soc_pct=None, battery_discharge_w=None, present={})
+    for command in limits.safe_commands(VICTRON):
+        assert not check_phases(command, command.value, ctx, limits).reject, command
 
 
 # --- Entladegrenze (max_discharge)

@@ -424,3 +424,113 @@ def test_tesla_band_comes_from_the_configuration(limits) -> None:
     ctx = make_ctx(present={(TESLA, K.CURRENT): 10.0})
     assert deadband(Command(TESLA, K.CURRENT, 12.0), 12.0, ctx, custom) == inside("3", "A")
     assert deadband(Command(TESLA, K.CURRENT, 13.0), 13.0, ctx, custom) is None
+
+
+# Stundeneinträge über einen Neustart: hourly_entries und restore
+
+
+def test_hourly_entries_are_empty_before_the_first_command(limits) -> None:
+    assert RateLimiter(limits).hourly_entries() == []
+
+
+def test_hourly_entries_are_only_those_of_actuators_with_hourly_limits(limits) -> None:
+    rl = RateLimiter(limits)
+    rl.record(Command(EVCS, K.CURRENT, 10.0), S(0))
+    rl.record(Command(VICTRON, K.GRID_SETPOINT, 500.0), S(1))
+    rl.record(Command(VICTRON, K.MIN_SOC, 30.0), S(2))
+    rl.record(Command(TESLA, K.CHARGING, True), S(3))
+    rl.record(Command(TESLA, K.CURRENT, 10.0), S(4))
+    assert rl.hourly_entries() == [(TESLA, K.CHARGING, S(3)), (TESLA, K.CURRENT, S(4))]
+
+
+def test_hourly_entries_come_in_time_order_across_kinds(limits) -> None:
+    rl = RateLimiter(limits)
+    rl.record(Command(TESLA, K.CHARGING, True), S(0))
+    rl.record(Command(TESLA, K.CURRENT, 10.0), S(10))
+    rl.record(Command(TESLA, K.CHARGING, False), S(20))
+    assert rl.hourly_entries() == [
+        (TESLA, K.CHARGING, S(0)),
+        (TESLA, K.CURRENT, S(10)),
+        (TESLA, K.CHARGING, S(20)),
+    ]
+
+
+def test_hourly_entries_drop_what_record_dropped(limits) -> None:
+    rl = RateLimiter(limits)
+    rl.record(Command(TESLA, K.CHARGING, True), S(0))
+    rl.record(Command(TESLA, K.CHARGING, False), S(3600))
+    assert rl.hourly_entries() == [(TESLA, K.CHARGING, S(3600))]
+
+
+def test_hourly_entries_are_a_copy(limits) -> None:
+    rl = RateLimiter(limits)
+    rl.record(Command(TESLA, K.CHARGING, True), S(0))
+    rl.hourly_entries().clear()
+    assert rl.hourly_entries() == [(TESLA, K.CHARGING, S(0))]
+
+
+@pytest.mark.parametrize("actuator", [TESLA, EVCS, VICTRON, "vehicle.gone"])
+def test_has_hourly_limits_only_for_the_tesla(limits, actuator) -> None:
+    assert RateLimiter(limits).has_hourly_limits(actuator) is (actuator == TESLA)
+
+
+@pytest.mark.parametrize(
+    ("age_s", "kept"),
+    [(0, True), (3599.999, True), (3600, False), (7200, False), (-30, True)],
+    ids=["now", "just-younger", "an-hour", "two-hours", "in-the-future"],
+)
+def test_restore_drops_entries_from_a_full_hour_ago(limits, age_s, kept) -> None:
+    rl, now = RateLimiter(limits), S(10_000)
+    rl.restore([(TESLA, K.CHARGING, now - timedelta(seconds=age_s))], now)
+    assert bool(rl.hourly_entries()) is kept
+
+
+def test_restore_brings_back_the_hourly_limits(limits) -> None:
+    before = RateLimiter(limits)
+    for i in range(6):
+        before.record(Command(TESLA, K.CHARGING, i % 2 == 0), S(60 * i))
+    after = RateLimiter(limits)
+    after.restore(before.hourly_entries(), S(420))
+    start = Command(TESLA, K.CHARGING, True)
+    assert after.check(start, S(420)) == before.check(start, S(420))
+    assert after.check(start, S(420)) == Finding(
+        "rate.start_stop", "Höchstens 6 Start/Stopp pro Stunde erreicht."
+    )
+    assert after.check(start, S(3600 + 1)) is None  # das erste Ereignis ist dann eine Stunde alt
+
+
+def test_restore_brings_back_the_interval_of_the_current(limits) -> None:
+    before = RateLimiter(limits)
+    before.record(Command(TESLA, K.CURRENT, 10.0), S(0))
+    after = RateLimiter(limits)
+    after.restore(before.hourly_entries(), S(30))
+    assert after.check(Command(TESLA, K.CURRENT, 14.0), S(30)).code == "rate.interval"
+    assert after.check(Command(TESLA, K.CURRENT, 14.0), S(90)) is None
+
+
+def test_restore_ignores_entries_of_actuators_without_hourly_limits(limits) -> None:
+    rl = RateLimiter(limits)
+    rl.restore(
+        [
+            (EVCS, K.CURRENT, S(0)),
+            (VICTRON, K.GRID_SETPOINT, S(0)),
+            ("vehicle.gone", K.CHARGING, S(0)),
+            (TESLA, K.CHARGING, S(0)),
+        ],
+        S(1),
+    )
+    assert rl.hourly_entries() == [(TESLA, K.CHARGING, S(0))]
+    assert rl.check(Command(EVCS, K.CURRENT, 12.0), S(1)) is None  # kein Abstand aus der Datei
+
+
+def test_restore_keeps_the_order_when_entries_were_recorded_already(limits) -> None:
+    rl = RateLimiter(limits)
+    rl.record(Command(TESLA, K.CHARGING, True), S(100))
+    rl.restore([(TESLA, K.CHARGING, S(150)), (TESLA, K.CHARGING, S(50))], S(200))
+    assert rl.hourly_entries() == [
+        (TESLA, K.CHARGING, S(50)),
+        (TESLA, K.CHARGING, S(100)),
+        (TESLA, K.CHARGING, S(150)),
+    ]
+    rl.record(Command(TESLA, K.CHARGING, False), S(3700))  # S(50) ist dann zu alt, S(100) auch
+    assert rl.hourly_entries() == [(TESLA, K.CHARGING, S(150)), (TESLA, K.CHARGING, S(3700))]

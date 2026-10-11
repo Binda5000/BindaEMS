@@ -144,9 +144,10 @@ def safer(command: Command, ctx: SafetyContext) -> bool:
     known, actual = key in ctx.present, ctx.present.get(key)
     if kind == K.CURRENT:
         return value <= actual if known else value <= CURRENTS[command.actuator][2]
-    if kind == K.GRID_SETPOINT:
-        effective = ctx.base_grid_setpoint_w if actual is None else actual
-        return known and value <= effective
+    if kind == K.GRID_SETPOINT:  # ohne Override zählt die Basis, und die kann unbekannt sein
+        base = number(ctx.base_grid_setpoint_w)
+        effective = base if actual is None else actual
+        return known and effective is not None and value <= effective
     if kind == K.MAX_DISCHARGE:
         return value == -1 or (known and actual >= 0 and value >= actual)
     if kind == K.MIN_SOC:
@@ -154,16 +155,18 @@ def safer(command: Command, ctx: SafetyContext) -> bool:
     return False
 
 
-def setpoint_before(ctx: SafetyContext) -> float:
+def setpoint_before(ctx: SafetyContext) -> float | None:
     """Wirksamer Netz-Sollwert vor dem Befehl: der Override, ohne Override die Basis.
 
-    Ist der Override unbekannt, gilt der niedrigste mögliche Wert ``min(Basis, 0)``.
+    Ist der Override unbekannt, gilt der niedrigste mögliche Wert ``min(Basis, 0)``. ``None``
+    heißt unbekannt: Es kommt auf die Basis an, und sie ist unbekannt (``None``, NaN, ±∞).
     """
+    base = number(ctx.base_grid_setpoint_w)
     key = (VICTRON, K.GRID_SETPOINT)
     if key not in ctx.present:
-        return min(ctx.base_grid_setpoint_w, 0.0)
+        return None if base is None else min(base, 0.0)
     override = ctx.present[key]
-    return ctx.base_grid_setpoint_w if override is None else override
+    return base if override is None else override
 
 
 def is_increase(command: Command, value: object, ctx: SafetyContext) -> bool:
@@ -172,8 +175,9 @@ def is_increase(command: Command, value: object, ctx: SafetyContext) -> bool:
     known, actual = key in ctx.present, ctx.present.get(key)
     if kind == K.CHARGING:
         return value is True and actual is not True
-    if kind == K.GRID_SETPOINT:
-        return value is not None and value > setpoint_before(ctx)
+    if kind == K.GRID_SETPOINT:  # bei unbekanntem Sollwert ist jede Zahl eine mögliche Erhöhung
+        before = setpoint_before(ctx)
+        return value is not None and (before is None or value > before)
     if kind == K.CURRENT:  # bei unbekanntem Ist-Strom nur über dem sicheren Strom
         return actual < value if known else value > CURRENTS[command.actuator][2]
     if kind == K.MAX_DISCHARGE:
@@ -216,7 +220,10 @@ def predicted(command: Command, value: object, ctx: SafetyContext) -> list[float
             draw = max_a if actual is None else max(actual, min_a)
         return [None if imported[p] is None else imported[p] - measured[p] + draw for p in phases]
     if kind == K.GRID_SETPOINT:  # die Änderung verteilt sich gleichmäßig auf die drei Phasen
-        extra = (value - setpoint_before(ctx)) / (3 * VOLTAGE_V)
+        before = setpoint_before(ctx)
+        if before is None:
+            return [None]
+        extra = (value - before) / (3 * VOLTAGE_V)
     elif kind == K.MAX_DISCHARGE:  # was der Akku nicht mehr entlädt, kommt aus dem Netz
         if ctx.battery_discharge_w is None:
             return [None]
@@ -376,7 +383,9 @@ PRESENT = {  # typgerecht wie die Rücklesewerte der Aktoren ab 2b; None nur bei
 KNOWN = st.booleans()
 DISCHARGE_W = mixed((4, st.floats(1, 15_000)), (1, st.floats(0, 15_000)), (1, st.none()))
 SOC_PCT = mixed((5, st.floats(0, 100)), (1, st.none()))
-BASE_SETPOINT_W = st.floats(-500, 500)
+BASE_SETPOINT_W = mixed(  # manchmal unbekannt: None, NaN oder ±∞ (Plan 2b, Präzisierung 13)
+    (6, st.floats(-500, 500)), (1, st.none()), (1, st.sampled_from([math.nan, math.inf, -math.inf]))
+)
 BUDGET_W = mixed((1, st.floats(0, 30_000)), (1, st.none()))
 HISTORY = weighted((4, False), (1, True))
 

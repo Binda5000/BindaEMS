@@ -50,3 +50,33 @@ def test_invalid_value_finding_names_kind_and_value() -> None:
     assert invalid_value(CommandKind.GRID_SETPOINT, float("nan")).text == (
         "Ungültiger Wert für „grid_setpoint“: nan."
     )
+
+
+def test_invalid_value_text_is_truncated() -> None:
+    shown = repr("x" * 200)[:59] + "…"
+    finding = invalid_value(CommandKind.CURRENT, "x" * 200)
+    assert finding.text == f"Ungültiger Wert für „current“: {shown}."
+
+
+def shown_part(value: object) -> str:
+    """Die Darstellung des Werts im Text des Befunds."""
+    text = invalid_value(CommandKind.CURRENT, value).text
+    return text.removeprefix("Ungültiger Wert für „current“: ").removesuffix(".")
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        ("x" * 58, repr("x" * 58)),  # die Darstellung hat genau 60 Zeichen: unverändert
+        ("x" * 59, repr("x" * 59)[:59] + "…"),  # 61 Zeichen: die ersten 59 und „…“
+        (list(range(100)), repr(list(range(100)))[:59] + "…"),
+        ("ä" * 100, repr("ä" * 100)[:59] + "…"),  # Zeichen, nicht Bytes
+        (10**59, repr(10**59)),  # 60 Stellen
+        (10**60, repr(10**60)[:59] + "…"),  # 61 Stellen
+    ],
+    ids=["60-chars", "61-chars", "list", "umlauts", "int-60", "int-61"],
+)
+def test_invalid_value_keeps_at_most_60_characters(value: object, expected: str) -> None:
+    shown = shown_part(value)
+    assert shown == expected
+    assert len(shown) <= 60

@@ -5,6 +5,7 @@ from unittest.mock import Mock
 
 import pytest
 
+from bindaems.core.persistence import files
 from bindaems.core.persistence.files import read_json, write_json_atomic
 
 
@@ -84,6 +85,8 @@ def test_content_is_flushed_and_synced_before_it_replaces_the_old_file(
 
     monkeypatch.setattr("bindaems.core.persistence.files.os.fsync", fsync)
     monkeypatch.setattr("bindaems.core.persistence.files.os.replace", replace)
+    # das Sichern des Verzeichnisses ruft ebenfalls os.fsync auf; es hat eigene Tests (unten)
+    monkeypatch.setattr(files, "fsync_directory", lambda path: None)
     write_json_atomic(target, {"a": 1})
     assert [step for step, _ in steps] == ["fsync", "replace"]
     assert [json.loads(content) for _, content in steps] == [{"a": 1}, {"a": 1}]
@@ -179,3 +182,94 @@ def test_too_deeply_nested_json_is_a_value_error(tmp_path: Path) -> None:
 def test_other_read_errors_stay_os_errors(tmp_path: Path) -> None:
     with pytest.raises(IsADirectoryError):
         read_json(tmp_path)
+
+
+# Das Verzeichnis nach dem Ersetzen sichern (fsync des Verzeichnisses)
+
+
+def test_write_syncs_the_directory(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    synced: list[Path] = []
+    monkeypatch.setattr(files, "fsync_directory", synced.append)
+    files.write_json_atomic(tmp_path / "a.json", {"x": 1})
+    assert synced == [tmp_path]
+
+
+def test_directory_sync_error_keeps_the_new_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def fail(path: Path) -> None:
+        raise OSError("kein fsync")
+
+    monkeypatch.setattr(files, "fsync_directory", fail)
+    files.write_json_atomic(tmp_path / "a.json", {"x": 1})
+    assert files.read_json(tmp_path / "a.json") == {"x": 1}
+
+
+def test_directory_is_synced_after_the_replace(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    target = tmp_path / "x.json"
+    write_json_atomic(target, {"v": 1})
+    seen: list[object] = []
+    monkeypatch.setattr(files, "fsync_directory", lambda path: seen.append(read_json(target)))
+    write_json_atomic(target, {"v": 2})
+    assert seen == [{"v": 2}]  # beim Sichern steht der neue Inhalt schon an seinem Platz
+
+
+def test_failed_replace_does_not_sync_the_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    synced: list[Path] = []
+    monkeypatch.setattr(files, "fsync_directory", synced.append)
+    monkeypatch.setattr(
+        "bindaems.core.persistence.files.os.replace", Mock(side_effect=OSError("voll"))
+    )
+    with pytest.raises(OSError, match="voll"):
+        write_json_atomic(tmp_path / "x.json", {"v": 1})
+    assert synced == []
+
+
+def test_fsync_directory_syncs_the_directory_itself(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    synced: list[int] = []  # Inode dessen, was gesichert wurde
+    real_fsync = os.fsync
+
+    def fsync(fd: int) -> None:
+        synced.append(os.fstat(fd).st_ino)
+        real_fsync(fd)
+
+    monkeypatch.setattr("bindaems.core.persistence.files.os.fsync", fsync)
+    files.fsync_directory(tmp_path)
+    assert synced == [tmp_path.stat().st_ino]
+
+
+@pytest.mark.parametrize("fsync_fails", [False, True], ids=["ok", "fsync-fails"])
+def test_fsync_directory_never_leaks_its_handle(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fsync_fails: bool
+) -> None:
+    opened: list[int] = []
+    real_open = os.open
+
+    def open_(path: Path, flags: int) -> int:
+        fd = real_open(path, flags)
+        opened.append(fd)
+        return fd
+
+    monkeypatch.setattr("bindaems.core.persistence.files.os.open", open_)
+    if fsync_fails:
+        monkeypatch.setattr(
+            "bindaems.core.persistence.files.os.fsync", Mock(side_effect=OSError("kein fsync"))
+        )
+        with pytest.raises(OSError, match="kein fsync"):
+            files.fsync_directory(tmp_path)
+    else:
+        files.fsync_directory(tmp_path)
+    [fd] = opened
+    with pytest.raises(OSError):  # der Deskriptor ist geschlossen
+        os.fstat(fd)
+
+
+def test_fsync_directory_of_a_missing_directory_is_an_os_error(tmp_path: Path) -> None:
+    with pytest.raises(FileNotFoundError):
+        files.fsync_directory(tmp_path / "fehlt")

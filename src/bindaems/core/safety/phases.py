@@ -10,6 +10,8 @@ Vorhersage ist bewusst vorsichtig:
 - Der Netz-Sollwert, die Entladegrenze und der Min-SOC wirken gleichmäßig auf die drei Phasen
   (3-Phasen-ESS mit einem Gerät je Phase).
 - Ist der Netzbezug einer betroffenen Phase unbekannt, sind nur Verringerungen erlaubt.
+- Ist der wirksame Netz-Sollwert unbekannt (weder Override noch Basis-Sollwert bekannt), ist beim
+  Netz-Sollwert nur das Aufheben des Overrides erlaubt.
 
 Bezeichnungen: ``I_p`` ist der Netzbezug der Phase ``p`` (``ctx.phase_import_a``), ``h_p`` ihr
 Spielraum ``phase_limit_a − I_p`` und ``m_p`` der gemessene Strom der Wallbox auf ihr.
@@ -48,6 +50,16 @@ _BATTERY_UNKNOWN = Step(
     None, (Finding("phase.battery_unknown", "Akkuleistung unbekannt."),), reject=True
 )
 _SOC_UNKNOWN = Step(None, (Finding("phase.soc_unknown", "Akku-SOC unbekannt."),), reject=True)
+_SETPOINT_UNKNOWN = Step(
+    None,
+    (
+        Finding(
+            "phase.unknown_setpoint",
+            "Wirksamer Netz-Sollwert unbekannt; nur das Aufheben des Overrides ist erlaubt.",
+        ),
+    ),
+    reject=True,
+)
 
 
 class _Load(NamedTuple):
@@ -71,7 +83,8 @@ def check_phases(
     - ``current``: der Ist-Strom ist kleiner als der Wert; ist er unbekannt, nur ein Wert über
       dem sicheren Strom ``safe_a`` (Spec 8.5), denn der darf immer gesetzt werden
     - ``charging``: ein Start, während die Wallbox nicht nachweislich lädt
-    - ``grid_setpoint``: der Wert liegt über dem wirksamen Ist-Sollwert
+    - ``grid_setpoint``: der Wert liegt über dem wirksamen Ist-Sollwert; ist dieser unbekannt,
+      gilt jeder Zahlenwert als Erhöhung und wird abgelehnt (``phase.unknown_setpoint``)
     - ``max_discharge``: ein Wert von mindestens 0 unter der aktuellen Entladeleistung
     - ``min_soc``: der Wert liegt über der Reserve und über dem SOC
 
@@ -156,9 +169,12 @@ def _check_grid_setpoint(
 ) -> Step:
     """Netz-Sollwert in W: Er darf um höchstens ``3 × U × min(h_p)`` über ``S0`` liegen.
 
-    ``S0`` ist der wirksame Ist-Sollwert.
+    ``S0`` ist der wirksame Ist-Sollwert. Ist er unbekannt, lässt sich kein Zahlenwert einordnen,
+    auch kein niedriger: Die Regel lehnt jeden ab, noch vor den Phasenströmen.
     """
     actual = _setpoint_actual(actuator, ctx)
+    if actual is None:
+        return _SETPOINT_UNKNOWN
     if value <= actual:
         return Step(value)
     loads = _loads(ctx, _PHASES)
@@ -176,19 +192,22 @@ def _check_grid_setpoint(
     return _rejected(phase, limits)
 
 
-def _setpoint_actual(actuator: str, ctx: SafetyContext) -> float:
+def _setpoint_actual(actuator: str, ctx: SafetyContext) -> float | None:
     """Wirksamer Ist-Sollwert in W: der Override, ohne Override der Basis-Sollwert.
 
     Fehlt der Ist-Wert oder ist er unbrauchbar, gilt die vorsichtigste Annahme. Ein Override ist
-    nie negativ, also ist ``min(Basis, 0)`` der niedrigste mögliche Sollwert.
+    nie negativ, also ist ``min(Basis, 0)`` der niedrigste mögliche Sollwert. Ein bekannter
+    Override gilt allein. In jedem anderen Fall kommt es auf den Basis-Sollwert an; ist er
+    unbekannt (``finite_number``), ist es auch der wirksame Sollwert, und das Ergebnis ist ``None``.
     """
-    lowest = min(ctx.base_grid_setpoint_w, 0.0)
+    base = finite_number(ctx.base_grid_setpoint_w)
+    lowest = None if base is None else min(base, 0.0)
     key = (actuator, CommandKind.GRID_SETPOINT)
     if key not in ctx.present:
         return lowest
     override = ctx.present[key]
     if override is None:
-        return ctx.base_grid_setpoint_w
+        return base
     number = finite_number(override)
     return lowest if number is None else number
 

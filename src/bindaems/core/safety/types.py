@@ -13,6 +13,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
+from typing import Final
 
 from bindaems.shared.config import Phase
 from bindaems.shared.control import (
@@ -22,6 +23,8 @@ from bindaems.shared.control import (
     CommandValue,
     OperatingState,
 )
+
+_VALUE_TEXT_MAX: Final = 60  # Zeichen, die ein ungültiger Wert im Text eines Befunds einnimmt
 
 
 def de(value: float) -> str:
@@ -68,8 +71,15 @@ class Finding:
 
 
 def invalid_value(kind: CommandKind, value: object) -> Finding:
-    """Befund ``value.invalid``: Der Wert passt nicht zur Art des Befehls (Typ, nicht endlich)."""
-    return Finding("value.invalid", f"Ungültiger Wert für „{kind}“: {value!r}.")
+    """Befund ``value.invalid``: Der Wert passt nicht zur Art des Befehls (Typ, nicht endlich).
+
+    Der Wert erscheint mit seiner ``repr``, höchstens 60 Zeichen lang: Ist sie länger, bleiben die
+    ersten 59 Zeichen, gefolgt von „…“. So bleibt der Text kurz, auch bei einem absurden Wert.
+    """
+    shown = repr(value)
+    if len(shown) > _VALUE_TEXT_MAX:
+        shown = f"{shown[: _VALUE_TEXT_MAX - 1]}…"
+    return Finding("value.invalid", f"Ungültiger Wert für „{kind}“: {shown}.")
 
 
 @dataclass(frozen=True)
@@ -106,7 +116,8 @@ class SafetyContext:
       unbekannt. Beim Netz-Sollwert heißt ``None`` „kein Override aktiv“.
     - ``battery_discharge_w``: aktuelle Entladeleistung, ≥ 0
     - ``soc_pct``: Akku-SOC
-    - ``base_grid_setpoint_w``: persistenter Netz-Sollwert; er gilt ohne Override
+    - ``base_grid_setpoint_w``: persistenter Netz-Sollwert; er gilt ohne Override. ``None``, NaN
+      und ±∞ heißen unbekannt (``finite_number``)
     - ``grid_budget_w``: 15-min-Budget (Regel 2); ``None`` heißt keins
     """
 
@@ -121,7 +132,7 @@ class SafetyContext:
     present: Mapping[tuple[str, CommandKind], CommandValue]
     battery_discharge_w: float | None = None
     soc_pct: float | None = None
-    base_grid_setpoint_w: float = 0.0
+    base_grid_setpoint_w: float | None = 0.0
     grid_budget_w: float | None = None
 
 

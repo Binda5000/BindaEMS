@@ -40,7 +40,8 @@ class RateLimiter:
     - Tesla (Spec 6.5): ``current`` alle ``current_interval_s``; ``charging`` ohne Mindestabstand
 
     Beim Tesla gelten dazu Stundenlimits im gleitenden Fenster: höchstens ``per_hour`` Befehle
-    zusammen, davon höchstens ``start_stop_per_hour`` ``charging``-Befehle.
+    zusammen, davon höchstens ``start_stop_per_hour`` ``charging``-Befehle. Diese Einträge
+    überstehen einen Neustart: ``hourly_entries`` gibt sie her, ``restore`` spielt sie wieder ein.
     """
 
     def __init__(self, limits: HardLimits) -> None:
@@ -89,6 +90,39 @@ class RateLimiter:
         times.append(now)
         while _age_s(now, times[0]) >= _WINDOW_S:  # der neue Eintrag hält die Schleife an
             times.popleft()
+
+    def has_hourly_limits(self, actuator: str) -> bool:
+        """Gelten für den Aktor Stundenlimits? Das trifft nur den Tesla (Spec 6.5)."""
+        return _tesla_commands(self._limits, actuator) is not None
+
+    def hourly_entries(self) -> list[tuple[str, CommandKind, datetime]]:
+        """Die erfassten Befehle der Aktoren mit Stundenlimits, nach Zeit sortiert (eine Kopie).
+
+        Das sind alle Einträge im Speicher, also auch der letzte je Aktor und Art, der älter ist
+        als 3600 s (siehe ``record``). ``restore`` spielt sie nach einem Neustart wieder ein.
+        """
+        entries = [
+            (actuator, kind, recorded)
+            for (actuator, kind), times in self._times.items()
+            if self.has_hourly_limits(actuator)
+            for recorded in times
+        ]
+        return sorted(entries, key=lambda entry: entry[2])
+
+    def restore(self, entries: Iterable[tuple[str, CommandKind, datetime]], now: datetime) -> None:
+        """Spielt Einträge aus ``hourly_entries`` nach einem Neustart wieder ein.
+
+        Einträge, die zu ``now`` mindestens 3600 s zurückliegen, fallen weg, ebenso die von Aktoren
+        ohne Stundenlimits. Ein Eintrag nach ``now`` bleibt: Läuft die Uhr zurück, ist das Limit
+        eher zu streng als zu lasch. Was schon erfasst ist, bleibt, und die Einträge je Aktor und
+        Art bleiben nach Zeit geordnet.
+        """
+        restored: dict[tuple[str, CommandKind], list[datetime]] = {}
+        for actuator, kind, recorded in entries:
+            if self.has_hourly_limits(actuator) and _age_s(now, recorded) < _WINDOW_S:
+                restored.setdefault((actuator, kind), []).append(recorded)
+        for key, times in restored.items():
+            self._times[key] = deque(sorted([*self._times.get(key, ()), *times]))
 
     def _count(self, actuator: str, kinds: Iterable[CommandKind], now: datetime) -> int:
         """Zahl der erfassten Befehle des Aktors in den Arten ``kinds`` innerhalb des Fensters."""

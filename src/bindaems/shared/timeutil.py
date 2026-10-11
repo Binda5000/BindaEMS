@@ -7,6 +7,8 @@ Stunden, daher deckt sich das Raster mit dem lokalen Smart-Meter-Raster).
 
 from __future__ import annotations
 
+import time as _time  # ``time`` heißt hier schon die Uhrzeit-Klasse aus ``datetime``
+from collections.abc import Callable
 from datetime import UTC, date, datetime, time, timedelta
 from typing import Protocol
 from zoneinfo import ZoneInfo
@@ -62,6 +64,28 @@ class SystemClock:
 
     def now(self) -> datetime:
         return datetime.now(UTC)
+
+
+class AnchoredClock:
+    """Die Wanduhr beim Start plus die monotone Zeit seither.
+
+    Ein Sprung der Wanduhr (NTP, von Hand gestellt) verschiebt diese Uhr nicht; er wirkt sich erst
+    nach einem Neustart aus. Sie taugt deshalb für Fristen, Limits und Budgets, die nicht
+    rückwärts oder sprunghaft laufen dürfen. Der Konstruktor liest ``wall`` und ``monotonic``
+    genau einmal; ``now`` liest danach nur noch die monotone Uhr.
+    """
+
+    def __init__(
+        self,
+        wall: Callable[[], datetime] = lambda: datetime.now(UTC),
+        monotonic: Callable[[], float] = _time.monotonic,
+    ) -> None:
+        self._anchor = ensure_utc(wall())
+        self._started = monotonic()
+        self._monotonic = monotonic
+
+    def now(self) -> datetime:
+        return self._anchor + timedelta(seconds=self._monotonic() - self._started)
 
 
 class ManualClock:

@@ -14,14 +14,20 @@ für ihn.
 
 Zeit, Messwerte, Freigaben und Sperren kommen über den ``SafetyContext``. Gedächtnis haben nur der
 Rate-Limiter und das Schreibbudget: Sie erfassen jeden Befehl, der einen Wert zum Senden ergibt.
+Das Schreibbudget liegt in einer Datei; die Stundeneinträge des Rate-Limiters (Tesla) legt die
+Schicht in ``rate_file``, damit auch sie einen Neustart überstehen.
 """
 
 from __future__ import annotations
 
 from dataclasses import replace
 from datetime import datetime
-from typing import Final
+from pathlib import Path
+from typing import Any, Final
 
+import structlog
+
+from bindaems.core.persistence.files import read_json, write_json_atomic
 from bindaems.core.safety.budget import PersistentWriteBudget
 from bindaems.core.safety.limits import HardLimits, toward_safe
 from bindaems.core.safety.phases import check_phases
@@ -32,10 +38,14 @@ from bindaems.shared.control import (
     PERSISTENT_KINDS,
     ActuatorMode,
     Command,
+    CommandKind,
     CommandValue,
     OperatingState,
 )
 from bindaems.shared.domain import Alarm
+from bindaems.shared.timeutil import ensure_utc
+
+log = structlog.get_logger(__name__)
 
 URGENT_IGNORED: Final = Finding(
     "urgent.ignored",
@@ -46,6 +56,7 @@ URGENT_BYPASS: Final = Finding(
 )
 
 _CONTROL_STATES: Final = frozenset({OperatingState.CONTROL, OperatingState.DEGRADED})
+_RATE_FILE_VERSION: Final = 1
 
 
 class SafetyLayer:
@@ -55,10 +66,30 @@ class SafetyLayer:
     von außen, denn es liegt in einer Datei unter ``core.data_dir``.
     """
 
-    def __init__(self, limits: HardLimits, budget: PersistentWriteBudget) -> None:
+    def __init__(
+        self,
+        limits: HardLimits,
+        budget: PersistentWriteBudget,
+        *,
+        rate_file: Path | None = None,
+        now: datetime | None = None,
+    ) -> None:
+        """Die Schicht mit ihren Grenzen und dem Schreibbudget.
+
+        Mit ``rate_file`` schreibt sie nach jedem erfassten Befehl eines Aktors mit Stundenlimits
+        (Tesla) dessen Einträge atomar dorthin: ``{"version": 1, "entries": [{"actuator": …,
+        "kind": …, "ts": ISO-Zeit}, …]}``. Mit ``rate_file`` und ``now`` lädt sie die Datei beim
+        Start; Einträge, die zu ``now`` eine Stunde oder älter sind, fallen weg. Eine fehlende Datei
+        ergibt einen leeren Start, eine unlesbare oder nicht im Format (ganz oder gar nicht) auch,
+        dazu eine Warnung im Log. Das Laden schreibt nichts; die Datei entsteht oder heilt mit dem
+        ersten Eintrag. Ohne ``now`` wird nicht geladen, wohl aber geschrieben.
+        """
         self._limits = limits
         self._budget = budget
         self._rate = RateLimiter(limits)
+        self._rate_file = rate_file
+        if rate_file is not None and now is not None:
+            self._load_rates(rate_file, now)
 
     def authorize(self, command: Command, ctx: SafetyContext) -> Verdict:
         """Prüft den Befehl im Kontext ``ctx`` und liefert das Urteil.
@@ -81,7 +112,8 @@ class SafetyLayer:
         11. Persistente Art bei erschöpftem Schreibbudget: ``REJECTED`` samt Alarm, außer bei
             ``urgent_ok``, wenn der Wert nach den Regeln 1–4 genau der Sicherwert der Art ist.
         12. Erfassen im Rate-Limiter und, bei persistenten Arten, im Schreibbudget; auch im
-            Dry-Run, aber nie bei ``UNCHANGED``, ``DEFERRED`` oder ``REJECTED``.
+            Dry-Run, aber nie bei ``UNCHANGED``, ``DEFERRED`` oder ``REJECTED``. Bei einem Aktor
+            mit Stundenlimits schreibt die Schicht danach ``rate_file`` neu.
         13. ``REDUCED``, wenn Regel 4 den Wert geändert hat; sonst ``CLAMPED``, wenn die Regeln 1–3
             ihn geändert haben; sonst ``ACCEPTED``.
 
@@ -175,6 +207,8 @@ class SafetyLayer:
 
         # 12. Erfassen, auch im Dry-Run
         self._rate.record(command, now)
+        if self._rate_file is not None and self._rate.has_hourly_limits(actuator):
+            self._save_rates(self._rate_file)
         if persistent:
             self._budget.record(now)
 
@@ -195,3 +229,60 @@ class SafetyLayer:
             safe.kind == command.kind and safe.value == value
             for safe in self._limits.safe_commands(command.actuator)
         )
+
+    def _load_rates(self, path: Path, now: datetime) -> None:
+        """Spielt die Einträge aus ``path`` in den Rate-Limiter ein; ohne Datei beginnt er leer.
+
+        Eine Datei, die sich nicht lesen lässt oder nicht im Format ist, gilt als Ganzes als leer
+        und ergibt eine Warnung. Die Datei bleibt unberührt.
+        """
+        try:
+            entries = _parse_rates(read_json(path))
+        except FileNotFoundError:
+            return  # erster Start: nichts zu laden
+        except (OSError, ValueError) as exc:
+            log.warning("Datei der Rate-Limits unlesbar", path=str(path), error=str(exc))
+            return
+        self._rate.restore(entries, now)
+
+    def _save_rates(self, path: Path) -> None:
+        """Schreibt die Stundeneinträge des Rate-Limiters atomar nach ``path``.
+
+        Ein Schreibfehler kommt ins Log und ändert das Urteil nicht: Der Speicher gilt weiter, und
+        der nächste erfolgreiche Eintrag bringt die Datei auf den Stand.
+        """
+        entries = [
+            {"actuator": actuator, "kind": str(kind), "ts": ensure_utc(recorded).isoformat()}
+            for actuator, kind, recorded in self._rate.hourly_entries()
+        ]
+        try:
+            write_json_atomic(path, {"version": _RATE_FILE_VERSION, "entries": entries})
+        except OSError as exc:
+            log.error("Datei der Rate-Limits nicht geschrieben", path=str(path), error=str(exc))
+
+
+def _parse_rates(data: Any) -> list[tuple[str, CommandKind, datetime]]:
+    """Die Einträge aus ``{"version": 1, "entries": [{"actuator", "kind", "ts"}, …]}``.
+
+    ``ValueError``, wenn die Form abweicht: andere Version, fremde oder fehlende Schlüssel, Werte,
+    die keine Zeichenketten sind, eine unbekannte Art, eine Zeit ohne Zeitzone oder keine ISO-Zeit.
+    """
+    if not isinstance(data, dict) or data.keys() != {"version", "entries"}:
+        raise ValueError('erwartet ein Objekt der Form {"version": 1, "entries": […]}')
+    if data["version"] != _RATE_FILE_VERSION:
+        raise ValueError(f"unbekannte Version: {data['version']!r}")
+    items = data["entries"]
+    if not isinstance(items, list):
+        raise ValueError('"entries" ist keine Liste')
+    entries: list[tuple[str, CommandKind, datetime]] = []
+    for item in items:
+        if not isinstance(item, dict) or item.keys() != {"actuator", "kind", "ts"}:
+            raise ValueError(f"Eintrag ist kein Objekt der Form {{actuator, kind, ts}}: {item!r}")
+        actuator, kind, ts = item["actuator"], item["kind"], item["ts"]
+        if not (isinstance(actuator, str) and isinstance(kind, str) and isinstance(ts, str)):
+            raise ValueError(f"Aktor, Art und Zeit eines Eintrags sind Zeichenketten: {item!r}")
+        moment = datetime.fromisoformat(ts)  # ValueError, wenn es keine ISO-Zeit ist
+        if moment.tzinfo is None:
+            raise ValueError(f"Eintrag ohne Zeitzone: {ts!r}")
+        entries.append((actuator, CommandKind(kind), moment))  # ValueError bei unbekannter Art
+    return entries

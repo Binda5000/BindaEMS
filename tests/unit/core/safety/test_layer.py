@@ -1,11 +1,14 @@
+import json
 from datetime import timedelta
 from pathlib import Path
+from unittest.mock import Mock
 
 import pytest
+from structlog.testing import capture_logs
 from tests.helpers import T0
 from tests.unit.core.safety.conftest import PHASES, make_ctx
 
-from bindaems.core.persistence.files import read_json
+from bindaems.core.persistence.files import read_json, write_json_atomic
 from bindaems.core.safety.budget import PersistentWriteBudget
 from bindaems.core.safety.layer import SafetyLayer
 from bindaems.core.safety.types import Finding, InputStatus, Outcome
@@ -16,9 +19,13 @@ K = CommandKind
 S = lambda s: T0 + timedelta(seconds=s)  # noqa: E731
 
 
+def budget(tmp_path: Path) -> PersistentWriteBudget:
+    return PersistentWriteBudget(12, 100, tmp_path / "budget.json", T0)
+
+
 @pytest.fixture
 def layer(limits, tmp_path: Path) -> SafetyLayer:
-    return SafetyLayer(limits, PersistentWriteBudget(12, 100, tmp_path / "budget.json", T0))
+    return SafetyLayer(limits, budget(tmp_path))
 
 
 def test_unknown_actuator_rejected(layer) -> None:
@@ -463,6 +470,13 @@ def test_alarms_and_block_come_from_the_budget(limits, tmp_path: Path) -> None:
     assert layer.authorize(Command("victron", K.GRID_SETPOINT, 500.0), make_ctx()).send
 
 
+def test_clock_alarm_of_the_budget_comes_through_the_layer(limits, tmp_path: Path) -> None:
+    write_json_atomic(tmp_path / "budget.json", {"writes": [S(600).isoformat()]})
+    layer = SafetyLayer(limits, budget(tmp_path))
+    assert [(a.id, a.since) for a in layer.alarms(T0)] == [("safety.clock", T0)]
+    assert layer.alarms(S(300)) == []
+
+
 def test_urgent_bypass_keeps_the_checked_value(layer) -> None:
     layer.authorize(Command(EVCS, K.CURRENT, 10.0), evcs_at(0, 8.0))
     urgent = layer.authorize(Command(EVCS, K.CURRENT, 8.7, urgent=True), evcs_at(1, 10.0))
@@ -575,3 +589,248 @@ def test_urgent_value_rejected_by_ranges_is_not_urgent(layer, command, present) 
         Outcome.REJECTED,
         ["urgent.ignored", "state.inactive"],
     )
+
+
+# Rate-Limits des Tesla überstehen einen Neustart (rate_limits.json)
+
+TESLA = "vehicle.tesla"
+RATE_FILE_UNREADABLE = "Datei der Rate-Limits unlesbar"
+RATE_FILE_UNWRITTEN = "Datei der Rate-Limits nicht geschrieben"
+
+
+def test_tesla_hour_window_survives_restart(tmp_path, limits_live) -> None:
+    rate_file = tmp_path / "rate_limits.json"
+    layer = SafetyLayer(limits_live, budget(tmp_path), rate_file=rate_file, now=T0)
+    for i in range(6):  # start_stop_per_hour = 6
+        moment = T0 + timedelta(seconds=100 * i)
+        command = Command("vehicle.tesla", K.CHARGING, i % 2 == 0)
+        assert layer.authorize(command, make_ctx(now=moment)).outcome == Outcome.ACCEPTED
+    later = T0 + timedelta(seconds=700)
+    fresh = SafetyLayer(limits_live, budget(tmp_path), rate_file=rate_file, now=later)
+    verdict = fresh.authorize(Command("vehicle.tesla", K.CHARGING, True), make_ctx(now=later))
+    assert verdict.outcome == Outcome.DEFERRED
+    assert verdict.findings[-1].code == "rate.start_stop"
+
+
+def test_unreadable_rate_file_starts_empty(tmp_path, limits_live) -> None:
+    rate_file = tmp_path / "rate_limits.json"
+    rate_file.write_text("{", encoding="utf-8")
+    layer = SafetyLayer(limits_live, budget(tmp_path), rate_file=rate_file, now=T0)
+    command = Command("vehicle.tesla", K.CHARGING, True)
+    assert layer.authorize(command, make_ctx()).outcome == Outcome.ACCEPTED
+
+
+def rate_entry(at: float, **changes) -> dict:
+    """Ein Eintrag von ``rate_limits.json``: ein Start/Stopp des Tesla ``at`` Sekunden nach T0."""
+    return {"actuator": TESLA, "kind": "charging", "ts": S(at).isoformat()} | changes
+
+
+def rate_doc(*entries, **changes) -> dict:
+    return {"version": 1, "entries": list(entries)} | changes
+
+
+def restarted(limits, tmp_path: Path, at: float) -> SafetyLayer:
+    return SafetyLayer(limits, budget(tmp_path), rate_file=tmp_path / "rate_limits.json", now=S(at))
+
+
+def start(layer: SafetyLayer, at: float, on: bool = True, **changes):
+    return layer.authorize(Command(TESLA, K.CHARGING, on), make_ctx(now=S(at), **changes))
+
+
+def test_rate_file_lists_the_hourly_entries_in_time_order(tmp_path, limits_live) -> None:
+    layer = restarted(limits_live, tmp_path, 0)
+    assert start(layer, 0).send
+    current = {(TESLA, K.CURRENT): 6.0}
+    assert layer.authorize(
+        Command(TESLA, K.CURRENT, 10.0), make_ctx(now=S(100), present=current)
+    ).send
+    assert start(layer, 200, on=False).send
+    assert read_json(tmp_path / "rate_limits.json") == rate_doc(
+        rate_entry(0), rate_entry(100, kind="current"), rate_entry(200)
+    )
+
+
+def test_only_commands_with_hourly_limits_write_the_rate_file(tmp_path, limits_live) -> None:
+    layer = restarted(limits_live, tmp_path, 0)
+    assert layer.authorize(Command(EVCS, K.CURRENT, 10.0), make_ctx(now=S(0))).send
+    assert layer.authorize(Command("victron", K.GRID_SETPOINT, 500.0), make_ctx(now=S(1))).send
+    assert not (tmp_path / "rate_limits.json").exists()
+    assert start(layer, 2).send
+    assert read_json(tmp_path / "rate_limits.json") == rate_doc(rate_entry(2))
+
+
+def test_commands_that_are_not_recorded_leave_the_rate_file_alone(tmp_path, limits_live) -> None:
+    layer = restarted(limits_live, tmp_path, 0)
+    for i in range(6):
+        assert start(layer, 100 * i, on=i % 2 == 0).send
+    rate_file = tmp_path / "rate_limits.json"
+    before = rate_file.read_bytes()
+    deferred = start(layer, 700)
+    rejected = start(layer, 701, operating=OperatingState.OBSERVE)
+    assert (deferred.outcome, rejected.outcome) == (Outcome.DEFERRED, Outcome.REJECTED)
+    assert rate_file.read_bytes() == before
+
+
+def test_dry_run_commands_are_written_to_the_rate_file_too(tmp_path, limits_live) -> None:
+    layer = restarted(limits_live, tmp_path, 0)
+    verdict = start(layer, 0, modes={TESLA: ActuatorMode.DRY_RUN})
+    assert (verdict.outcome, verdict.send) == (Outcome.ACCEPTED, False)
+    assert read_json(tmp_path / "rate_limits.json") == rate_doc(rate_entry(0))
+
+
+def test_without_a_rate_file_nothing_is_written(layer, tmp_path: Path) -> None:
+    for i in range(3):
+        assert start(layer, 10 * i, on=i % 2 == 0).send
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_tesla_current_interval_survives_restart(tmp_path, limits_live) -> None:
+    first = restarted(limits_live, tmp_path, 0)
+    present = {(TESLA, K.CURRENT): 6.0}
+    assert first.authorize(
+        Command(TESLA, K.CURRENT, 10.0), make_ctx(now=S(0), present=present)
+    ).send
+    fresh = restarted(limits_live, tmp_path, 30)
+    present = {(TESLA, K.CURRENT): 10.0}
+    early = fresh.authorize(Command(TESLA, K.CURRENT, 14.0), make_ctx(now=S(30), present=present))
+    assert (early.outcome, early.findings[-1].text) == (
+        Outcome.DEFERRED,
+        "Mindestabstand 90 s noch nicht erreicht.",
+    )
+    on_time = fresh.authorize(Command(TESLA, K.CURRENT, 14.0), make_ctx(now=S(90), present=present))
+    assert on_time.outcome == Outcome.ACCEPTED
+
+
+def test_missing_rate_file_is_a_silent_empty_start(tmp_path, limits_live) -> None:
+    with capture_logs() as logs:
+        layer = restarted(limits_live, tmp_path, 0)
+    assert logs == []
+    assert not (tmp_path / "rate_limits.json").exists()  # das Laden schreibt nichts
+    assert start(layer, 0).outcome == Outcome.ACCEPTED
+
+
+def test_unreadable_rate_file_is_logged_and_healed_by_the_next_entry(tmp_path, limits_live) -> None:
+    rate_file = tmp_path / "rate_limits.json"
+    rate_file.write_text("{", encoding="utf-8")
+    with capture_logs() as logs:
+        layer = restarted(limits_live, tmp_path, 0)
+    assert [(e["log_level"], e["event"]) for e in logs] == [("warning", RATE_FILE_UNREADABLE)]
+    assert rate_file.read_text(encoding="utf-8") == "{"  # das Laden schreibt nichts
+    assert start(layer, 0).send
+    assert read_json(rate_file) == rate_doc(rate_entry(0))
+
+
+def test_a_rate_path_that_is_no_file_starts_empty_and_is_logged(tmp_path, limits_live) -> None:
+    (tmp_path / "rate_limits.json").mkdir()
+    with capture_logs() as logs:
+        layer = restarted(limits_live, tmp_path, 0)
+    assert [e["event"] for e in logs] == [RATE_FILE_UNREADABLE]
+    assert start(layer, 0).outcome == Outcome.ACCEPTED
+
+
+# sechs Start/Stopp in den letzten 10 Minuten: das Limit pro Stunde ist erreicht
+SIX = [rate_entry(100 * i) for i in range(6)]
+
+BAD_RATE_FILES = [
+    pytest.param(b"", id="leer"),
+    pytest.param(b"\xff\xfe\x00", id="keine-utf8-kodierung"),
+    pytest.param(b"[]", id="liste-statt-objekt"),
+    pytest.param(b"null", id="null"),
+    pytest.param(json.dumps({"entries": SIX}).encode(), id="version-fehlt"),
+    pytest.param(json.dumps(rate_doc(*SIX, version=2)).encode(), id="andere-version"),
+    pytest.param(json.dumps({"version": 1}).encode(), id="entries-fehlt"),
+    pytest.param(json.dumps(rate_doc(*SIX, extra=1)).encode(), id="fremder-schluessel"),
+    pytest.param(json.dumps({"version": 1, "entries": {}}).encode(), id="entries-objekt"),
+    pytest.param(json.dumps(rate_doc(*SIX, 5)).encode(), id="eintrag-zahl"),
+    pytest.param(
+        json.dumps(rate_doc(*SIX, {"actuator": TESLA, "kind": "charging"})).encode(),
+        id="ts-fehlt",
+    ),
+    pytest.param(json.dumps(rate_doc(*SIX, rate_entry(0, extra=1))).encode(), id="eintrag-extra"),
+    pytest.param(json.dumps(rate_doc(*SIX, rate_entry(0, ts="gestern"))).encode(), id="ts-text"),
+    pytest.param(json.dumps(rate_doc(*SIX, rate_entry(0, ts=5))).encode(), id="ts-zahl"),
+    pytest.param(
+        json.dumps(rate_doc(*SIX, rate_entry(0, ts="2026-10-08T10:00:00"))).encode(),
+        id="ts-ohne-zeitzone",
+    ),
+    pytest.param(json.dumps(rate_doc(*SIX, rate_entry(0, kind="bogus"))).encode(), id="art-fremd"),
+    pytest.param(json.dumps(rate_doc(*SIX, rate_entry(0, kind=5))).encode(), id="art-zahl"),
+    pytest.param(json.dumps(rate_doc(*SIX, rate_entry(0, actuator=5))).encode(), id="aktor-zahl"),
+]
+
+
+@pytest.mark.parametrize("content", BAD_RATE_FILES)
+def test_invalid_rate_file_is_unreadable_as_a_whole(tmp_path, limits_live, content: bytes) -> None:
+    # Die sechs gültigen Einträge würden den nächsten Start sperren; ein schlechter Eintrag in der
+    # Datei macht sie unlesbar: ganz oder gar nicht.
+    (tmp_path / "rate_limits.json").write_bytes(content)
+    with capture_logs() as logs:
+        layer = restarted(limits_live, tmp_path, 700)
+    assert [(e["log_level"], e["event"]) for e in logs] == [("warning", RATE_FILE_UNREADABLE)]
+    assert start(layer, 700).outcome == Outcome.ACCEPTED
+
+
+def test_rate_file_with_all_entries_valid_blocks_the_next_start(tmp_path, limits_live) -> None:
+    write_json_atomic(tmp_path / "rate_limits.json", rate_doc(*SIX))
+    with capture_logs() as logs:
+        layer = restarted(limits_live, tmp_path, 700)
+    assert logs == []
+    assert start(layer, 700).outcome == Outcome.DEFERRED
+
+
+@pytest.mark.parametrize(
+    ("age_s", "outcome"),
+    [(3599, Outcome.DEFERRED), (3600, Outcome.ACCEPTED)],
+    ids=["younger", "hour"],
+)
+def test_entries_count_after_loading_while_younger_than_an_hour(
+    tmp_path, limits_live, age_s, outcome
+) -> None:
+    write_json_atomic(tmp_path / "rate_limits.json", rate_doc(*[rate_entry(0)] * 6))
+    layer = restarted(limits_live, tmp_path, age_s)
+    assert start(layer, age_s).outcome == outcome
+
+
+def test_entries_of_actuators_without_hourly_limits_in_the_file_are_ignored(
+    tmp_path, limits_live
+) -> None:
+    entries = [
+        rate_entry(699, actuator=EVCS, kind="current"),  # fürs EVCS gilt ein Mindestabstand von 5 s
+        rate_entry(699, actuator="vehicle.gone"),
+    ]
+    write_json_atomic(tmp_path / "rate_limits.json", rate_doc(*entries))
+    with capture_logs() as logs:
+        layer = restarted(limits_live, tmp_path, 700)
+    assert logs == []
+    ctx = make_ctx(now=S(700), present={(EVCS, K.CURRENT): 8.0})
+    assert layer.authorize(Command(EVCS, K.CURRENT, 12.0), ctx).outcome == Outcome.ACCEPTED
+
+
+@pytest.mark.parametrize("content", [rate_doc(*SIX), b"{"], ids=["valid", "broken"])
+def test_rate_file_is_loaded_only_together_with_now(tmp_path, limits_live, content) -> None:
+    rate_file = tmp_path / "rate_limits.json"
+    if isinstance(content, bytes):
+        rate_file.write_bytes(content)
+    else:
+        write_json_atomic(rate_file, content)
+    with capture_logs() as logs:
+        layer = SafetyLayer(limits_live, budget(tmp_path), rate_file=rate_file)
+    assert logs == []  # ohne ``now`` wird nicht gelesen, also gibt es auch nichts zu melden
+    assert start(layer, 700).outcome == Outcome.ACCEPTED
+    assert read_json(rate_file) == rate_doc(rate_entry(700))  # geschrieben wird trotzdem
+
+
+def test_failing_rate_file_write_is_logged_and_the_window_holds(
+    tmp_path, limits_live, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        "bindaems.core.persistence.files.os.replace", Mock(side_effect=OSError("voll"))
+    )
+    layer = restarted(limits_live, tmp_path, 0)
+    with capture_logs() as logs:
+        for i in range(6):
+            assert start(layer, 100 * i, on=i % 2 == 0).outcome == Outcome.ACCEPTED
+        deferred = start(layer, 700)
+    assert [(e["log_level"], e["event"]) for e in logs] == [("error", RATE_FILE_UNWRITTEN)] * 6
+    assert (deferred.outcome, deferred.findings[-1].code) == (Outcome.DEFERRED, "rate.start_stop")
+    assert list(tmp_path.iterdir()) == []
