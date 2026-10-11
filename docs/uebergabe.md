@@ -26,9 +26,9 @@ Stand: 11.10.2026. Neue Arbeit liegt zuerst auf dem Arbeitsbranch
   UI-Schemas sind streng, eine abweichende Version zeigt auf der System-Seite nur „Unerwartete
   Antwort vom Server“.
 - **Tests:**
-  - Python: 1790 (ruff, mypy strict auch für den Watchdog, import-linter mit 4 Verträgen);
+  - Python: 1823 (ruff, mypy strict auch für den Watchdog, import-linter mit 4 Verträgen);
     Abdeckung 95 % insgesamt, `core/safety` und `core/control` 99 %
-  - darin: Cerbo-Watchdog 220 Fälle, Property-Tests der Safety-Schicht 7
+  - darin: Cerbo-Watchdog 243 Fälle, Property-Tests 7 (davon 5 für die Safety-Schicht)
   - UI: Vitest 232 (svelte-check, Prettier, ESLint)
   - E2E: Playwright 11
 - **Offen:**
@@ -230,20 +230,26 @@ Demo-Zugänge: `admin`, `gast` (Lesen) und `sicher` (Admin mit TOTP, Geheimnis
     `friendly_name_str`
   - Wichtig auch für die Lastprognose aus der HA-Historie.
 - **Als Nächstes an der Anlage:**
-  1. Reverse Proxy mit HTTPS einrichten (Betriebshandbuch 6). Port 8080 soll nur der Proxy
+  1. **Images von Plan 2a ausrollen**, sobald 2a auf `main` ist, core und app aus demselben Stand:
+     `docker compose pull && docker compose up -d`. Ohne sie fehlen die Werkzeuge
+     `bindaems.tools.watchdog_config` und `bindaems.tools.watchdog_probe`, und die System-Seite
+     zeigt den Status des Watchdogs nicht.
+  2. Reverse Proxy mit HTTPS einrichten (Betriebshandbuch 6). Port 8080 soll nur der Proxy
      erreichen. `app.trusted_proxies` setzen, `cookie_secure` wieder auf `true`.
-  2. InfluxDB einrichten (`deploy/influxdb-setup.sh`), den ersten Admin anlegen und TOTP
+  3. InfluxDB einrichten (`deploy/influxdb-setup.sh`), den ersten Admin anlegen und TOTP
      einrichten.
-  3. Die Prüfprotokolle Teil 1 und „Preise“ laufen lassen, nach `docs/verification/` übernehmen
+  4. Die Prüfprotokolle Teil 1 und „Preise“ laufen lassen, nach `docs/verification/` übernehmen
      und `config.yaml` anhand der Abweichungen korrigieren.
-  4. Tarifbestandteile und den OeMAG-Monatswert im UI eintragen (Einstellungen).
-  5. **Watchdog installieren** (Betriebshandbuch 14): `config.ini` aus `config.yaml` erzeugen und mit
+  5. Tarifbestandteile und den OeMAG-Monatswert im UI eintragen (Einstellungen).
+  6. **Watchdog installieren** (Betriebshandbuch 14): `config.ini` aus `config.yaml` erzeugen und mit
      `cerbo-watchdog/install.sh` auf den Cerbo bringen. Dafür braucht es den SSH-Zugang als root
      zum Cerbo und die EVCS unter `victron.instances.evcharger` in `config.yaml`.
-  6. **Probe** gemeinsam mit dem Betreiber laufen lassen (Betriebshandbuch 14) und den Bericht nach
-     `docs/verification/` übernehmen. Die Auslösung setzt die EVCS auf den sicheren Strom;
-     danach den gewünschten Strom wieder einstellen.
-  7. Im UI (**System** → „Watchdog am Cerbo“) und in HA („Watchdog ausgelöst“) prüfen, dass der
+  7. **Probe** gemeinsam mit dem Betreiber laufen lassen (Betriebshandbuch 14) und den Bericht nach
+     `docs/verification/` übernehmen. Die Auslösung setzt die EVCS auf den sicheren Strom, den
+     Min-SOC auf die USV-Reserve und die Entladegrenze auf unbegrenzt, sofern sie abwichen.
+     Danach alle drei prüfen und wieder einstellen und im Log des Cerbo die Zeile zum Aktionslauf
+     lesen.
+  8. Im UI (**System** → „Watchdog am Cerbo“) und in HA („Watchdog ausgelöst“) prüfen, dass der
      Status stimmt: „wartet“ nach der Probe.
 
 ## Nächste Schritte im Projekt
@@ -282,6 +288,34 @@ Demo-Zugänge: `admin`, `gast` (Lesen) und `sicher` (Admin mit TOTP, Geheimnis
    (vermutlich ein anderer Port, siehe oben). Davon hängt ab, ob 2b direkt per Modbus oder über den
    GX-Dienst `evcharger` auf die EVCS schreibt. Geschrieben wird in jedem Fall der Sollstrom
    (Register 5016, auf dem GX `/SetCurrent`), nie der Maximalstrom (5017).
+
+## Vor einer Live-Schaltung in 2b zu klären
+
+Aus dem Gesamtreview von Plan 2a. Kein Victron- oder EVCS-Aktor geht live, bevor diese Punkte
+entschieden und umgesetzt sind:
+
+- **core hängt in OBSERVE (Blocker):** Startet der core mit einer gespeicherten Live-Absicht und
+  erreicht CONTROL nicht, sendet er trotzdem Heartbeats. Der Watchdog bleibt ruhig, aber niemand
+  regelt, und dringende Befehle gehen in OBSERVE nicht durch (Präzisierung 4). Damit trägt auch
+  die Annahme aus Plan 2a nicht, in diesem Fall greife der Watchdog (Präzisierungen 2 und 4).
+  Mögliche Wege:
+  - die Heartbeats einstellen, wenn CONTROL, DEGRADED oder SAFE nicht binnen N s nach dem Start
+    erreicht ist,
+  - Befehle für den sicheren Zustand nach einem Neustart auch in OBSERVE zulassen,
+  - SAFE statt OBSERVE, wenn Gründe für SAFE vorliegen und ein Aktor live angefordert ist.
+- **Bevor 2b die `SafetyLayer` verdrahtet:**
+  - `base_grid_setpoint_w` durch `finite_number` prüfen.
+  - Befehlsarten mit `==` vergleichen.
+  - Die Darstellung von `invalid_value` (repr) in der Länge begrenzen.
+  - Einen gestorbenen MQTT-Sender und eine verlorene Freigabe 0 behandeln (unten „Heartbeat
+    (2b)“).
+  - Die Uhr festlegen, monoton verankert (unten „Uhr (2b)“).
+  - Nach `os.replace` das Verzeichnis per `fsync` sichern: `intent.json`, `write_budget.json`,
+    `state.json`.
+  - Den Watchdog nur als scharf werten, wenn der zuletzt gesendete Heartbeat des core
+    zurückkommt, und `/TimeoutSeconds` mit `victron.watchdog.timeout_s` vergleichen.
+  - Entscheiden, ob „ausgelöst“ einen Neustart des Cerbo übersteht. Heute speichert `state.json`
+    nur „scharf“; ein ausgelöster Watchdog startet danach als „wartet“.
 
 ## Hinweise für die Pläne 2b bis 2d
 

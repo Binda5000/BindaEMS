@@ -1350,7 +1350,7 @@ pv:
   - Alternativ: lokaler Build auf der VM mit demselben Compose-File.
 - **Proxmox-HA:**
   - Die VM ist eine HA-Ressource; ZFS-Replikation alle 1–5 min.
-  - Bei einem Failover greift der Watchdog. Der core startet danach in OBSERVE.
+  - Bei einem Failover greift der Watchdog, wenn ein Victron- oder EVCS-Aktor live angefordert ist und der core nicht innerhalb des Timeouts (90 s) wieder Heartbeats sendet. Ohne live angeforderten Aktor wartet der Watchdog und greift nicht ein (8.6). Der core startet danach in OBSERVE.
 - **Betrieb:**
   - **Logs:** strukturiertes JSON auf stdout, mit Docker-Logrotation.
   - **Überwachung:** `/health` pro Dienst; Zustand des EMS als HA-Binary-Sensoren; Grafana-Startdashboard ab Phase 4.
@@ -1460,7 +1460,7 @@ Die Ergebnisse kommen nach `docs/verification/` mit Datum, Firmwareständen, erw
    - Start/Stop, Strom 6–16 A, Reaktionszeit
    - Verhalten bei unterbrochener Modbus-Verbindung (behält sie den Strom?)
    - Erkennung externer Änderungen
-   - Weg für den sicheren Strom vom Cerbo aus
+   - Weg für den sicheren Strom vom Cerbo aus: für den Watchdog in 8.6 festgelegt (GX-Dienst `evcharger`, `/SetCurrent`), die Watchdog-Probe (Punkt 5) übt ihn. Zu prüfen bleibt, dass die EVCS den Wert übernimmt; dafür den Strom vor der Probe von Hand verstellen
 7. **Tesla über Tessie:**
    - Latenz und Wirkung von `set_charging_amps` am Wall Connector
    - Verhalten bei 5 A
@@ -1599,7 +1599,7 @@ Keiner blockiert die Architektur; geklärt wird jeweils in der genannten Phase.
 | Punkt | Wann |
 |---|---|
 | Endgültige Victron-Schreibwege | Prüfprotokoll Teil 2 |
-| Weg für den sicheren EVCS-Strom vom Cerbo aus | Prüfprotokoll Teil 2 |
+| Weg für den sicheren EVCS-Strom vom Cerbo aus: für den Watchdog in 8.6 festgelegt (GX-Dienst `evcharger`, `/SetCurrent`, geübt mit der Watchdog-Probe); offen ist nur, ob die EVCS den Wert übernimmt | Prüfprotokoll Teil 2 (17.2-5 und 17.2-6) |
 | Werte aus dem Preisblatt Netz NÖ | Inbetriebnahme Phase 3 |
 | ElWG-Sätze | nach Veröffentlichung der SNE-T-V |
 | Entitäts-IDs des e-Golf | Konfiguration in Phase 1 |

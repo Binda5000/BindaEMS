@@ -653,6 +653,14 @@ setzt. Das UI zeigt unter **System** → „Aktoren“ je Aktor „Angefordert�
 erlaubt“. Weicht „Wirksam“ ab, nennen die „Hinweise“ den Grund: „In config.yaml nicht für den
 Live-Betrieb freigegeben (live_allowed).“ oder „Watchdog am Cerbo ist nicht scharf.“
 
+**Live-Freigabe zurücknehmen:** Bevor du bei einem Victron- oder EVCS-Aktor `live_allowed` wieder
+auf `false` setzt oder ihn auf anderem Weg aus der `config.yaml` nimmst (etwa eine EVCS entfernst),
+stellst du ihn in der Absicht auf Dry-Run (ab Plan 2d in der Bedienung, bis dahin mit
+`PUT /v1/intent`). Warte, bis der Watchdog „wartet“ zeigt: Der core hat dann einmal die Freigabe 0
+gesendet. Änderst du zuerst die `config.yaml`, sieht der core den Aktor nach dem Neustart nicht
+mehr als live angefordert und sendet keine 0. Ein scharfer Watchdog löst dann 90 s nach dem
+letzten Heartbeat aus.
+
 ### Reihenfolge der Inbetriebnahme
 
 1. **Watchdog** installieren und die Probe bestehen (Abschnitt 14, Plan 2a).
@@ -708,9 +716,16 @@ Zustände, Zeiten und D-Bus-Pfade stehen in `cerbo-watchdog/README.md`. Wichtig 
 - Nach einem Neustart des Cerbo startet ein scharfer Watchdog wieder scharf
   (`/data/bindaems-watchdog/state.json`), und der core hat 90 s, sich zu melden. Eine unlesbare
   Datei gilt als scharf.
+- Nimmst du einem Victron- oder EVCS-Aktor `live_allowed`, stelle ihn vorher in der Absicht auf
+  Dry-Run (Abschnitt 13, „Live-Freigabe zurücknehmen“). Sonst löst ein scharfer Watchdog 90 s
+  nach dem letzten Heartbeat aus, also kurz nach dem Neustart des core.
 
 ### Voraussetzungen
 
+- core und app laufen mit den Images von Plan 2a, beide aus demselben Stand. Rolle sie zuerst aus:
+  `docker compose pull && docker compose up -d` (Abschnitt 4). Sonst fehlen im Image des core die
+  Werkzeuge `bindaems.tools.watchdog_config` und `bindaems.tools.watchdog_probe`, und die
+  System-Seite kann den Status des Watchdogs nicht zeigen.
 - Venus OS mit Python ≥ 3.8 (`install.sh` prüft das) und SSH-Zugang als `root` zum Cerbo
   (Root-Passwort setzen und SSH einschalten, siehe die Victron-Anleitung „Root Access“). Am
   besten hinterlegst du einen SSH-Schlüssel (`ssh-copy-id root@cerbo.lan`), sonst fragt
@@ -795,8 +810,9 @@ bis zu den Aktionen auf dem Cerbo. Sie
 5. und gibt ihn mit der 0 frei.
 
 **Die Probe löst den Watchdog aus:** Er setzt die EVCS auf den sicheren Strom und schreibt
-Min-SOC und Entladegrenze, wenn sie abweichen. Wähle einen Zeitpunkt, zu dem das passt, und stelle
-danach den gewünschten EVCS-Strom wieder ein.
+Min-SOC und Entladegrenze, wenn sie abweichen. Wähle einen Zeitpunkt, zu dem das passt. Prüfe
+danach alle drei Werte und stelle sie wieder ein, wie du sie haben willst: den EVCS-Strom, den
+Min-SOC (jetzt die USV-Reserve) und die Entladegrenze (jetzt unbegrenzt).
 
 ```bash
 cd /opt/bindaems
@@ -835,7 +851,8 @@ docker compose run --rm -v "$PWD/verification:/out" --entrypoint python ems-core
   frei. Gelingt die Freigabe nach einem Abbruch nicht, warnt die Probe auf der Konsole: Der
   Watchdog kann dann scharf bleiben und später auslösen oder ausgelöst bleiben. Starte die Probe
   erneut (sie endet mit der Freigabe) oder gib ihn am Cerbo frei:
-  `dbus -y com.victronenergy.bindaems /Heartbeat SetValue 0`.
+  `dbus -y com.victronenergy.bindaems /Heartbeat SetValue 0`. Prüfe danach, dass `/State` 0 ist:
+  `dbus -y com.victronenergy.bindaems /State GetValue`.
 - Die Probe vergleicht die installierte `config.ini` nicht mit `config.yaml`. Änderst du
   `victron.watchdog`, die USV-Reserve oder einen sicheren Strom, erzeuge die `config.ini` neu und
   übertrage sie mit `install.sh`.

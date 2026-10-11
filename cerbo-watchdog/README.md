@@ -154,7 +154,12 @@ etwa bei Verbindungsverlust; dann bleiben die bis dahin gewonnenen Befunde im Be
 Freigabe nicht, steht das im Bericht und auf der Konsole: Der Watchdog kann dann scharf bleiben
 und später auslösen oder ausgelöst bleiben. Zurück geht es, indem du die Probe erneut startest
 (sie endet mit der Freigabe) oder am Cerbo
-`dbus -y com.victronenergy.bindaems /Heartbeat SetValue 0` ausführst.
+`dbus -y com.victronenergy.bindaems /Heartbeat SetValue 0` ausführst. Prüfe danach, dass `/State`
+0 ist: `dbus -y com.victronenergy.bindaems /State GetValue`.
+
+Nach der Probe stehen die EVCS auf dem sicheren Strom, der Min-SOC auf der USV-Reserve und die
+Entladegrenze auf unbegrenzt, sofern sie vorher abwichen. Prüfe alle drei und stelle sie wieder
+ein, wie du sie haben willst.
 
 ## Aktualisieren
 
