@@ -3,6 +3,7 @@
 	import { page } from '$app/state';
 	import { api } from '$lib/api/endpoints';
 	import { ApiError } from '$lib/api/errors';
+	import type { CoreHealth } from '$lib/api/schemas';
 	import Card from '$lib/components/Card.svelte';
 	import Notice from '$lib/components/Notice.svelte';
 	import StatusDot from '$lib/components/StatusDot.svelte';
@@ -11,7 +12,18 @@
 	import { Resource } from '$lib/resource.svelte';
 	import { hasRole } from '$lib/roles';
 	import SignalTable from '$lib/system/SignalTable.svelte';
-	import { componentLabel, selfcheckLabel, signalRows, vatText } from '$lib/system/view';
+	import {
+		actuatorModeLabel,
+		actuatorNotes,
+		componentLabel,
+		heartbeatLabel,
+		modeLabel,
+		selfcheckLabel,
+		signalRows,
+		vatText,
+		watchdogStateLabel,
+		watchdogVersionText
+	} from '$lib/system/view';
 	import { todayVienna } from '$lib/time';
 
 	const system = new Resource((o) => api.system(o), { intervalMs: 15_000 });
@@ -38,7 +50,6 @@
 		(forecast.data?.days ?? []).filter((day) => day.date >= todayVienna()).slice(0, 3)
 	);
 
-	const MODES: Record<string, string> = { OBSERVE: 'Beobachten (nur lesend)' };
 	const ORIGINS = { primary: 'smartENERGY', fallback: 'Ersatzquelle' } as const;
 	const SELFCHECK_STATE = { ok: 'ok', warn: 'warn', fail: 'error', unknown: 'unknown' } as const;
 	const SELFCHECK_TEXT = {
@@ -47,6 +58,19 @@
 		fail: 'Fehler',
 		unknown: 'unbekannt'
 	};
+
+	const WATCHDOG_DOT = {
+		armed: 'ok',
+		waiting: 'warn',
+		disabled: 'warn',
+		tripped: 'error'
+	} as const;
+
+	/** Ohne Antwort ist der Watchdog ein Fehler, sobald der Betrieb ihn braucht. */
+	function watchdogDot(watchdog: CoreHealth['watchdog']): 'ok' | 'warn' | 'error' | 'unknown' {
+		if (watchdog.state === 'unknown') return watchdog.required ? 'error' : 'unknown';
+		return WATCHDOG_DOT[watchdog.state];
+	}
 
 	let refreshing = $state(false);
 	let refreshMessage = $state<{ level: 'info' | 'error'; text: string } | null>(null);
@@ -120,7 +144,37 @@
 			<dt>Verbindung</dt>
 			<dd>{system.data?.core.connected ? 'verbunden' : 'getrennt'}</dd>
 			<dt>Betriebsart</dt>
-			<dd>{health ? (MODES[health.mode] ?? health.mode) : DASH}</dd>
+			<dd>
+				{#if health}
+					{modeLabel(health.mode)}
+					{#if health.mode_since}
+						<span class="muted">{since(health.mode_since)}</span>
+					{/if}
+				{:else}
+					{DASH}
+				{/if}
+			</dd>
+			{#if health && health.mode_reasons.length > 0}
+				<dd class="list">
+					<ul>
+						{#each health.mode_reasons as reason, index (index)}
+							<li>{reason}</li>
+						{/each}
+					</ul>
+				</dd>
+			{/if}
+			<dt>Eingangsdaten</dt>
+			{#if health && !health.inputs.ok}
+				<dd class="list">
+					<ul>
+						{#each health.inputs.problems as problem, index (index)}
+							<li>{problem}</li>
+						{/each}
+					</ul>
+				</dd>
+			{:else}
+				<dd>{health ? 'in Ordnung' : DASH}</dd>
+			{/if}
 			<dt>Version core</dt>
 			<dd>{health?.version ?? DASH}</dd>
 			<dt>Version app</dt>
@@ -189,6 +243,80 @@
 			{:else}
 				<p class="muted">Keine Alarme</p>
 			{/if}
+		{/if}
+	</Card>
+
+	<Card title="Aktoren">
+		{#if health}
+			<div class="scroll">
+				<table>
+					<thead>
+						<tr>
+							<th scope="col">Aktor</th>
+							<th scope="col">Angefordert</th>
+							<th scope="col">Wirksam</th>
+							<th scope="col">live erlaubt</th>
+							<th scope="col">Hinweise</th>
+						</tr>
+					</thead>
+					<tbody>
+						{#each health.actuators as actuator (actuator.id)}
+							{@const notes = actuatorNotes(actuator)}
+							<tr>
+								<td>{actuator.label}</td>
+								<td>{actuatorModeLabel(actuator.requested)}</td>
+								<td>{actuatorModeLabel(actuator.effective)}</td>
+								<td>{actuator.live_allowed ? 'ja' : 'nein'}</td>
+								<td class="notes">
+									{#if notes.length > 0}
+										<ul class="plain">
+											{#each notes as note, index (index)}
+												<li>{note}</li>
+											{/each}
+										</ul>
+									{:else}
+										{DASH}
+									{/if}
+								</td>
+							</tr>
+						{/each}
+					</tbody>
+				</table>
+			</div>
+		{:else if system.data}
+			<p class="muted">Keine Daten vom core</p>
+		{/if}
+	</Card>
+
+	<Card title="Watchdog am Cerbo">
+		{#if health}
+			{@const watchdog = health.watchdog}
+			<dl class="facts">
+				<dt>Zustand</dt>
+				<dd class="state">
+					<StatusDot state={watchdogDot(watchdog)} label={watchdogStateLabel(watchdog.state)} />
+					<span>{watchdogStateLabel(watchdog.state)}</span>
+				</dd>
+				<dt>Heartbeat</dt>
+				<dd>{heartbeatLabel(watchdog.heartbeat)}</dd>
+				<dt>Auslösungen</dt>
+				<dd>{watchdog.trip_count ?? DASH}</dd>
+				<dt>Letzte Auslösung</dt>
+				<dd>
+					{#if watchdog.last_trip}
+						{formatDateTime(watchdog.last_trip)}
+					{:else}
+						<!-- „nie“ nur, wenn der Zähler es sagt; ohne Antwort des Watchdogs ist es unbekannt -->
+						{watchdog.trip_count === 0 ? 'nie' : DASH}
+					{/if}
+				</dd>
+				<dt>Fehlgeschlagene Aktionen</dt>
+				<dd>{watchdog.last_trip_failures ?? DASH}</dd>
+				<dt>Version</dt>
+				<dd>{watchdogVersionText(watchdog.version, watchdog.expected_version)}</dd>
+			</dl>
+		{:else if system.data}
+			<p class="muted">Keine Daten vom core</p>
 		{/if}
 	</Card>
 
@@ -318,6 +446,27 @@
 		font-weight: 600;
 	}
 
+	/* Liste unter einer Zeile der Kennzahlen: in der Spalte der Werte, auf schmalen Schirmen über
+	   die ganze Breite (die Spalte der Werte wäre dort zu schmal für ganze Sätze) */
+	.facts .list {
+		grid-column: 2;
+	}
+
+	.list ul {
+		margin: 0;
+		padding-left: 1.25rem;
+	}
+
+	.state {
+		display: flex;
+		align-items: center;
+		gap: 0.5rem;
+	}
+
+	.notes {
+		min-width: 12rem;
+	}
+
 	.scroll {
 		overflow-x: auto;
 	}
@@ -355,6 +504,10 @@
 		.checks .message,
 		.components .since {
 			grid-column: 2;
+		}
+
+		.facts .list {
+			grid-column: 1 / -1;
 		}
 	}
 </style>

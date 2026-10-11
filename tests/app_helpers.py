@@ -189,6 +189,7 @@ def sample_inputs(**changes: Any) -> HaInputs:
         "prices_missing": False,
         "pv_today_kwh": 12.34,
         "pv_tomorrow_kwh": 8.1,
+        "watchdog_state": None,
     }
     values.update(changes)
     return HaInputs(**values)

@@ -53,6 +53,7 @@ class HaInputs:
     prices_missing: bool
     pv_today_kwh: float | None
     pv_tomorrow_kwh: float | None
+    watchdog_state: str | None = None  # Zustand des Watchdogs am Cerbo; None = unbekannt
 
 
 @dataclass(frozen=True)
@@ -111,6 +112,14 @@ def _competitor(inputs: HaInputs) -> str:
     if not inputs.core_connected:
         return UNKNOWN
     return on_off(any(alarm.startswith("competitor.") for alarm in inputs.alarm_ids))
+
+
+def _watchdog_tripped(inputs: HaInputs) -> str:
+    """AN, wenn der Watchdog am Cerbo ausgelöst hat; ohne Auskunft des Watchdogs unbekannt."""
+    state = inputs.watchdog_state
+    if state is None or state == "unknown":
+        return on_off(None)
+    return on_off(state == "tripped")
 
 
 def _price_attributes(inputs: HaInputs) -> Mapping[str, Any]:
@@ -236,6 +245,14 @@ def build_entities(cfg: Config) -> list[EntitySpec]:
             device_class="problem",
             attributes=lambda i: {"adapters": list(i.adapters_offline or [])},
         ),
+        EntitySpec(
+            "watchdog_tripped",
+            "binary_sensor",
+            "Watchdog ausgelöst",
+            main,
+            _watchdog_tripped,
+            device_class="problem",
+        ),
     ]
     for key, vehicle in cfg.vehicles.items():
         oid = object_id(key)
@@ -310,6 +327,8 @@ def build_inputs(
                 signals[name] = value
     health = live.health if connected and isinstance(live.health, dict) else None
     mode = health.get("mode") if health is not None else None
+    watchdog = health.get("watchdog") if health is not None else None
+    watchdog_state = watchdog.get("state") if isinstance(watchdog, dict) else None
     adapters = health.get("adapters") if health is not None else None
     adapters_offline = (
         [
@@ -348,4 +367,5 @@ def build_inputs(
         prices_missing=prices_missing,
         pv_today_kwh=latest.day_energy_kwh(local.date()) if latest is not None else None,
         pv_tomorrow_kwh=latest.day_energy_kwh(tomorrow) if latest is not None else None,
+        watchdog_state=watchdog_state if isinstance(watchdog_state, str) else None,
     )

@@ -6,7 +6,7 @@ import pytest
 import yaml
 from tests.app_helpers import T_APP, price_row, sample_inputs
 
-from bindaems.app.ha.entities import EntitySpec, build_entities, build_inputs, discovery
+from bindaems.app.ha.entities import EntitySpec, build_entities, build_inputs, discovery, on_off
 from bindaems.app.prices.service import PriceService
 from bindaems.shared.config import Config
 
@@ -32,6 +32,7 @@ def test_entities_from_config(cfg) -> None:
         "problem_competitor",
         "problem_prices",
         "problem_device_offline",
+        "watchdog_tripped",
         "tesla_soc",
         "egolf_soc",
         "evcs_power",
@@ -107,6 +108,28 @@ def test_problem_sensors(cfg) -> None:
     assert offline.attributes(sample_inputs(adapters_offline=["twc"])) == {"adapters": ["twc"]}
 
 
+def test_watchdog_tripped_entity(cfg) -> None:
+    spec = next(e for e in build_entities(cfg) if e.object_id == "watchdog_tripped")
+    assert (spec.component, spec.name, spec.device_class) == (
+        "binary_sensor",
+        "Watchdog ausgelöst",
+        "problem",
+    )
+    assert spec.value(sample_inputs(watchdog_state="tripped")) == "ON"
+    assert spec.value(sample_inputs(watchdog_state="armed")) == "OFF"
+    assert spec.value(sample_inputs(watchdog_state="unknown")) == on_off(None)
+    # ohne Auskunft (core nicht verbunden oder Watchdog fehlt im Bericht) ist der Wert unbekannt
+    assert spec.value(sample_inputs(watchdog_state=None)) == on_off(None)
+    assert {spec.value(sample_inputs(watchdog_state=s)) for s in ("waiting", "disabled")} == {"OFF"}
+    topic, payload = discovery(spec, cfg.homeassistant.mqtt)
+    data = json.loads(payload)
+    assert topic == "homeassistant/binary_sensor/bindaems/watchdog_tripped/config"
+    assert (data["unique_id"], data["device"]["identifiers"]) == (
+        "bindaems_watchdog_tripped",
+        ["bindaems"],
+    )
+
+
 def test_price_attributes_list_local_times_up_to_36h(cfg) -> None:
     ahead = [(T_APP + timedelta(minutes=15 * i), 10.0 + i / 3) for i in range(200)]
     attributes = entity(cfg, "price_now").attributes(sample_inputs(prices_ahead=ahead))
@@ -148,3 +171,30 @@ def test_prices_missing_after_16_when_tomorrow_incomplete(
     store.save([price_row(afternoon, 10.0, "primary")])
     inputs = build_inputs(live, price_service, store, forecast_service, afternoon)
     assert inputs.price_now_ct is not None and inputs.prices_missing
+
+
+def test_build_inputs_reads_watchdog_state(live, price_service, store, forecast_service) -> None:
+    live.health = {**live.health, "watchdog": {"state": "tripped"}}
+    inputs = build_inputs(live, price_service, store, forecast_service, T_APP)
+    assert inputs.watchdog_state == "tripped"
+    live.health = {k: v for k, v in live.health.items() if k != "watchdog"}
+    inputs = build_inputs(live, price_service, store, forecast_service, T_APP)
+    assert inputs.watchdog_state is None
+
+
+@pytest.mark.parametrize("watchdog", ["tripped", {"state": 2}, {}, None])
+def test_build_inputs_ignores_a_malformed_watchdog_report(
+    watchdog, live, price_service, store, forecast_service
+) -> None:
+    live.health = {**live.health, "watchdog": watchdog}
+    inputs = build_inputs(live, price_service, store, forecast_service, T_APP)
+    assert inputs.watchdog_state is None
+
+
+def test_build_inputs_ignores_the_watchdog_of_an_old_report_without_core(
+    live, price_service, store, forecast_service
+) -> None:
+    live.health = {**live.health, "watchdog": {"state": "tripped"}}
+    live.connected = False
+    inputs = build_inputs(live, price_service, store, forecast_service, T_APP)
+    assert inputs.watchdog_state is None

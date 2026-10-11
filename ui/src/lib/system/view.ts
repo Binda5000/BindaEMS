@@ -1,7 +1,10 @@
 // Texte und Zeilen der System-Seite
-import type { CoreState, PriceStatus, Reading } from '$lib/api/schemas';
+import type { CoreHealth, CoreState, PriceStatus, Reading } from '$lib/api/schemas';
 import { DASH, formatNumber } from '$lib/format';
 import { parseIso } from '$lib/time';
+
+type Watchdog = CoreHealth['watchdog'];
+type Actuator = CoreHealth['actuators'][number];
 
 const COMPONENTS: Record<string, string> = {
 	core: 'core',
@@ -22,6 +25,33 @@ const SELFCHECKS: Record<string, string> = {
 	fresh_data: 'Datenfrische'
 };
 
+const MODES: Record<CoreHealth['mode'], string> = {
+	START: 'Start',
+	OBSERVE: 'Beobachten (nur lesend)',
+	CONTROL: 'Regeln',
+	DEGRADED: 'Eingeschränkt',
+	SAFE: 'Sicherer Zustand'
+};
+
+const WATCHDOG_STATES: Record<Watchdog['state'], string> = {
+	waiting: 'wartet',
+	armed: 'scharf',
+	tripped: 'ausgelöst',
+	disabled: 'deaktiviert',
+	unknown: 'keine Antwort'
+};
+
+const HEARTBEATS: Record<Watchdog['heartbeat'], string> = {
+	off: 'aus (kein Aktor live)',
+	active: 'aktiv',
+	released: 'freigegeben'
+};
+
+const ACTUATOR_MODES: Record<Actuator['requested'], string> = {
+	dry_run: 'Dry-Run',
+	live: 'live'
+};
+
 const SIGNAL_NUMBER = new Intl.NumberFormat('de-AT', { maximumFractionDigits: 3 });
 
 export function componentLabel(name: string): string {
@@ -31,6 +61,33 @@ export function componentLabel(name: string): string {
 export function selfcheckLabel(id: string): string {
 	if (id.startsWith('evcs_mode.')) return `EVCS-Modus ${id.slice('evcs_mode.'.length)}`;
 	return SELFCHECKS[id] ?? id;
+}
+
+export function modeLabel(mode: CoreHealth['mode']): string {
+	return MODES[mode];
+}
+
+export function watchdogStateLabel(state: Watchdog['state']): string {
+	return WATCHDOG_STATES[state];
+}
+
+export function heartbeatLabel(heartbeat: Watchdog['heartbeat']): string {
+	return HEARTBEATS[heartbeat];
+}
+
+export function actuatorModeLabel(mode: Actuator['requested']): string {
+	return ACTUATOR_MODES[mode];
+}
+
+/** Die Version des Watchdogs am Cerbo; weicht sie von der erwarteten ab, steht diese dabei. */
+export function watchdogVersionText(version: string | null, expected: string): string {
+	if (version === null) return DASH;
+	return version === expected ? version : `${version} (erwartet ${expected})`;
+}
+
+/** Hinweise zu einem Aktor: warum er nicht live läuft, dann wodurch er gesperrt ist */
+export function actuatorNotes(actuator: Pick<Actuator, 'reasons' | 'locked'>): string[] {
+	return [...actuator.reasons, ...actuator.locked.map((reason) => `gesperrt: ${reason}`)];
 }
 
 export function signalValue(value: Reading['v']): string {

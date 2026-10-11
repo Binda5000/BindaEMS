@@ -68,3 +68,72 @@ it('akzeptiert die Nullfälle der API', () => {
 		})
 	).toEqual([]);
 });
+
+describe('Gesundheitsbericht des core', () => {
+	const demo = files['./contract/system.json'] as { core: { health: Record<string, unknown> } };
+	const check = (changes: Record<string, unknown>) =>
+		issues(s.CoreHealthSchema, { ...demo.core.health, ...changes });
+	const watchdog = (changes: Record<string, unknown>) =>
+		check({ watchdog: { ...(demo.core.health.watchdog as object), ...changes } });
+
+	it.each(['START', 'OBSERVE', 'CONTROL', 'DEGRADED', 'SAFE'])(
+		'akzeptiert den Betriebszustand %s',
+		(mode) => {
+			expect(check({ mode })).toEqual([]);
+		}
+	);
+
+	it('lehnt einen unbekannten Betriebszustand ab', () => {
+		expect(check({ mode: 'RUNNING' })).not.toEqual([]);
+	});
+
+	it.each(['waiting', 'armed', 'tripped', 'disabled', 'unknown'])(
+		'akzeptiert den Watchdog-Zustand %s',
+		(state) => {
+			expect(watchdog({ state })).toEqual([]);
+		}
+	);
+
+	it.each(['off', 'active', 'released'])('akzeptiert den Heartbeat %s', (heartbeat) => {
+		expect(watchdog({ heartbeat })).toEqual([]);
+	});
+
+	it('lehnt einen unbekannten Watchdog-Zustand und Heartbeat ab', () => {
+		expect(watchdog({ state: 'armd' })).not.toEqual([]);
+		expect(watchdog({ heartbeat: 'on' })).not.toEqual([]);
+	});
+
+	it('akzeptiert einen Watchdog ohne Antwort mit unbekannten Werten', () => {
+		const unknown = {
+			state: 'unknown',
+			trip_count: null,
+			last_trip: null,
+			last_trip_failures: null,
+			version: null
+		};
+		expect(watchdog(unknown)).toEqual([]);
+	});
+
+	it('akzeptiert Absicht, Betriebsarten der Aktoren und den Beginn der Betriebsart', () => {
+		const intent = {
+			version: 3,
+			control: true,
+			actuators: { victron: 'live', 'wallbox.evcs': 'dry_run' }
+		};
+		expect(check({ intent, mode_since: null })).toEqual([]);
+		expect(check({ intent: { ...intent, actuators: { victron: 'manual' } } })).not.toEqual([]);
+		const actuator = {
+			id: 'victron',
+			label: 'Victron (ESS)',
+			live_allowed: true,
+			reasons: [],
+			locked: []
+		};
+		expect(
+			check({ actuators: [{ ...actuator, requested: 'live', effective: 'dry_run' }] })
+		).toEqual([]);
+		expect(
+			check({ actuators: [{ ...actuator, requested: 'live', effective: 'auto' }] })
+		).not.toEqual([]);
+	});
+});

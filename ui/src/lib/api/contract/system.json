@@ -92,11 +92,11 @@
         }
       ],
       "watchdog": {
-        "state": "unknown",
-        "trip_count": null,
+        "state": "waiting",
+        "trip_count": 0,
         "last_trip": null,
-        "last_trip_failures": null,
-        "version": null,
+        "last_trip_failures": 0,
+        "version": "1.0.0",
         "expected_version": "1.0.0",
         "heartbeat": "off",
         "required": false

@@ -93,8 +93,11 @@ export const CoreStateSchema = v.object({
 });
 export type CoreState = v.InferOutput<typeof CoreStateSchema>;
 
+/** Betriebsart eines Aktors (nicht der Betriebszustand des core) */
+const Mode = v.picklist(['dry_run', 'live']);
+
 export const CoreHealthSchema = v.object({
-	mode: v.picklist(['OBSERVE']),
+	mode: v.picklist(['START', 'OBSERVE', 'CONTROL', 'DEGRADED', 'SAFE']),
 	version: v.string(),
 	adapters: v.array(
 		v.object({
@@ -113,7 +116,40 @@ export const CoreHealthSchema = v.object({
 		})
 	),
 	alarms: v.array(AlarmSchema),
-	cycle_ms_p95: NullableNumber
+	cycle_ms_p95: NullableNumber,
+	/** seit wann der Betriebszustand gilt */
+	mode_since: v.nullable(Iso),
+	/** warum der Betriebszustand gilt (z. B. warum eingeschränkt) */
+	mode_reasons: v.array(v.string()),
+	/** die gültige Absicht der Bedienung; `null`: noch keine */
+	intent: v.nullable(
+		v.object({ version: v.number(), control: v.boolean(), actuators: v.record(v.string(), Mode) })
+	),
+	actuators: v.array(
+		v.object({
+			id: v.string(),
+			label: v.string(),
+			requested: Mode,
+			effective: Mode,
+			live_allowed: v.boolean(),
+			/** warum ein angeforderter Live-Betrieb nicht gilt */
+			reasons: v.array(v.string()),
+			/** warum der Aktor gesperrt ist (z. B. wegen eines mitregelnden Systems) */
+			locked: v.array(v.string())
+		})
+	),
+	watchdog: v.object({
+		state: v.picklist(['waiting', 'armed', 'tripped', 'disabled', 'unknown']),
+		trip_count: NullableNumber,
+		last_trip: v.nullable(Iso),
+		last_trip_failures: NullableNumber,
+		version: v.nullable(v.string()),
+		expected_version: v.string(),
+		heartbeat: v.picklist(['off', 'active', 'released']),
+		/** der Betrieb braucht ihn: ein freigegebener Victron- oder EVCS-Aktor ist live angefordert */
+		required: v.boolean()
+	}),
+	inputs: v.object({ ok: v.boolean(), problems: v.array(v.string()) })
 });
 export type CoreHealth = v.InferOutput<typeof CoreHealthSchema>;
 

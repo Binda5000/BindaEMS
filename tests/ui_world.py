@@ -62,8 +62,9 @@ FIXED_SIGNALS = {
     "load.obergeschoss.power_w": 600.0,
     "load.buero.power_w": 150.0,
 }
-# Einstellungen der Anlage wie erwartet: die Selbstprüfung des core meldet alles in Ordnung
-VICTRON_STATE = {
+# Einstellungen der Anlage wie erwartet: die Selbstprüfung des core meldet alles in Ordnung.
+# Der Watchdog am Cerbo ist installiert und wartet auf einen stabilen Heartbeat.
+VICTRON_STATE: dict[str, float | str] = {
     "vebus.phases": 3.0,
     "ess.hub4_mode": 1.0,
     "ess.batterylife_state": 10.0,
@@ -71,6 +72,12 @@ VICTRON_STATE = {
     "dess.mode": 0.0,
     "wallbox.evcs.gx_mode": 0.0,  # Modus, wie ihn der Cerbo liest
     **{f"ess.schedule.{k}.day": -7.0 for k in range(5)},  # negativ: Ladefenster aus
+    "watchdog.state": 0.0,  # 0 = wartet
+    "watchdog.version": "1.0.0",
+    "watchdog.trip_count": 0.0,
+    "watchdog.last_trip_time": 0.0,  # 0 = nie
+    "watchdog.last_trip_failures": 0.0,
+    "watchdog.timeout_s": 90.0,
 }
 TESLA_SOURCE = "tessie:tesla"  # nicht verbunden: der Ladestand gilt als veraltet
 # Vorlauf vor T_DEMO: die Selbstprüfung verlangt seit 30 s aktuelle Messwerte
