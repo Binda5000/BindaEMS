@@ -1,14 +1,22 @@
-"""Victron-Cerbo-Adapter über MQTT (dbus-flashmq), ausschließlich lesend.
+"""Victron-Cerbo-Adapter über MQTT (dbus-flashmq): liest alles, schreibt nur den Heartbeat.
 
-Publiziert wird nur der Keepalive auf ``R/<portal>/keepalive``: nach jedem Verbindungsaufbau
-einmal leer (vollständige Neuveröffentlichung aller Werte), danach im Takt ``keepalive_s`` mit
+Publiziert werden der Keepalive und die Pfade aus ``WRITABLE_PATHS``.
+
+Der Keepalive geht auf ``R/<portal>/keepalive``: nach jedem Verbindungsaufbau einmal leer
+(vollständige Neuveröffentlichung aller Werte), danach im Takt ``keepalive_s`` mit
 ``suppress-republish``.
+
+Geschrieben wird nur über ``VictronMqttAdapter.write``, und zwar der Heartbeat des
+Totmann-Watchdogs auf ``W/<portal>/bindaems/0/Heartbeat``. Der Auftrag geht in die Warteschlange
+der laufenden Sitzung, deren Sender-Task ihn veröffentlicht. Mit der Sitzung verfällt die
+Warteschlange; ein veralteter Heartbeat erreicht also nie eine neue Verbindung.
 """
 
 from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
 import secrets
 from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass, replace
@@ -42,7 +50,14 @@ SUBSCRIPTIONS = (
     "settings/0/Settings/CGwacs/#",
     "settings/0/Settings/DynamicEss/#",
     "settings/0/Settings/SystemSetup/#",
+    "bindaems/0/#",
 )
+# Der einzige Schreibweg des EMS auf den Cerbo: der Heartbeat des Watchdogs (0 = Freigabe).
+HEARTBEAT_PATH = "bindaems/0/Heartbeat"
+WRITABLE_PATHS: frozenset[str] = frozenset({HEARTBEAT_PATH})
+OUTBOX_SIZE = 100
+
+_Outbox = asyncio.Queue[tuple[str, bytes]]  # (Topic, Payload) der Schreibaufträge einer Sitzung
 
 
 @dataclass(frozen=True)
@@ -115,7 +130,10 @@ class AiomqttTransport:
 
 
 class VictronMqttAdapter:
-    """Liest alle relevanten Cerbo-Werte per MQTT in den Zustandsspeicher."""
+    """Liest alle relevanten Cerbo-Werte per MQTT in den Zustandsspeicher.
+
+    Schreiben geht nur über ``write`` und nur auf Pfade aus ``WRITABLE_PATHS``.
+    """
 
     name = "victron"
 
@@ -138,6 +156,7 @@ class VictronMqttAdapter:
         self._status = StatusLog(self.name)
         self._backoff = Backoff()
         self._session_messages = 0
+        self._outbox: _Outbox | None = None  # nur während einer Sitzung
         self.portal_id: str | None = cfg.mqtt.portal_id
         # Der Cerbo sendet nur Änderungen: frisch ist, was er sendet, solange er überhaupt sendet.
         store.register_source(
@@ -146,6 +165,26 @@ class VictronMqttAdapter:
 
     def health(self) -> AdapterHealth:
         return replace(self._health)
+
+    def write(self, path: str, value: float | int | None) -> bool:
+        """Stellt einen Schreibauftrag in die Warteschlange der laufenden Sitzung.
+
+        Erlaubt sind nur Pfade aus ``WRITABLE_PATHS``, jeder andere ergibt einen ``ValueError``.
+        Ohne laufende Sitzung oder bei voller Warteschlange liefert es ``False`` und merkt sich
+        nichts; der Aufrufer versucht es später erneut. ``True`` heißt: eingereiht, nicht
+        zugestellt. Das Veröffentlichen übernimmt der Sender-Task der Sitzung. Aufruf nur aus dem
+        Event-Loop.
+        """
+        if path not in WRITABLE_PATHS:
+            raise ValueError(f"Schreibpfad nicht freigegeben: {path}")
+        outbox, portal = self._outbox, self.portal_id
+        if outbox is None or portal is None:
+            return False
+        try:
+            outbox.put_nowait((f"W/{portal}/{path}", json.dumps({"value": value}).encode()))
+        except asyncio.QueueFull:
+            return False
+        return True
 
     async def run(self) -> None:
         while True:
@@ -178,14 +217,24 @@ class VictronMqttAdapter:
                 await transport.subscribe(f"N/{portal}/{topic_filter}")
             await transport.publish(f"R/{portal}/keepalive", b"")
             self._set_connected(True)
-            keepalive = asyncio.create_task(self._keepalive(transport, portal))
+            outbox: _Outbox = asyncio.Queue(maxsize=OUTBOX_SIZE)
+            self._outbox = outbox
+            tasks = (
+                asyncio.create_task(self._keepalive(transport, portal)),
+                asyncio.create_task(self._sender(transport, outbox)),
+            )
             try:
                 async for message in messages:
                     self._handle(message, portal)
             finally:
-                keepalive.cancel()
-                with contextlib.suppress(asyncio.CancelledError):
-                    await keepalive
+                self._outbox = None  # mit der Sitzung verfällt die Warteschlange
+                for task in tasks:
+                    task.cancel()
+                for task in tasks:
+                    # Ein gescheiterter Hilfs-Task (Veröffentlichen schlug fehl) darf weder den
+                    # Fehler der Sitzung noch einen Abbruch des Adapters überdecken.
+                    with contextlib.suppress(asyncio.CancelledError, Exception):
+                        await task
 
     async def _discover_portal(self, messages: AsyncIterator[MqttMessage]) -> str:
         async with asyncio.timeout(DISCOVERY_TIMEOUT_S):
@@ -199,6 +248,11 @@ class VictronMqttAdapter:
         while True:
             await asyncio.sleep(self._cfg.mqtt.keepalive_s)
             await transport.publish(f"R/{portal}/keepalive", KEEPALIVE_SUPPRESS)
+
+    async def _sender(self, transport: MqttTransport, outbox: _Outbox) -> None:
+        while True:
+            topic, payload = await outbox.get()
+            await transport.publish(topic, payload)
 
     def _handle(self, message: MqttMessage, portal: str) -> None:
         self._store.touch(SOURCE)

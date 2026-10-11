@@ -94,6 +94,16 @@ ROUTES: dict[str, list[_Route]] = {
     "hub4": _routes(
         (r"Overrides/(?P<name>[A-Za-z0-9]+)", "ess.override.{name}", S),
     ),
+    # Totmann-Watchdog des EMS auf dem Cerbo (``com.victronenergy.bindaems``, Spec 8.6)
+    "bindaems": _routes(
+        (r"State", "watchdog.state", S),
+        (r"TripCount", "watchdog.trip_count", S),
+        (r"LastTripTime", "watchdog.last_trip_time", S),  # Unix-Sekunden, 0 = nie
+        (r"LastTripFailures", "watchdog.last_trip_failures", S),
+        (r"TimeoutSeconds", "watchdog.timeout_s", S),
+        (r"Version", "watchdog.version", S),
+        (r"Heartbeat", "watchdog.heartbeat", S),
+    ),
 }
 
 # Diese Settings-Teilbäume werden zusätzlich generisch als ``settings.<pfad>`` abgebildet.
@@ -112,7 +122,7 @@ class InstanceResolver:
 
     _SINGLETONS = ("grid", "vebus", "battery")
     _NAMED = ("pvinverter", "acload", "evcharger")
-    _SYSTEM = ("system", "settings", "hub4")
+    _SYSTEM = ("system", "settings", "hub4", "bindaems")
 
     def __init__(self, instances: VictronInstances) -> None:
         self._configured: dict[str, int | None] = {

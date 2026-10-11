@@ -1,5 +1,7 @@
 import json
 
+import pytest
+
 from bindaems.core.adapters.victron_topics import InstanceResolver, SignalUpdate, parse_message
 from bindaems.shared.config import VictronInstances
 from bindaems.shared.domain import SignalKind
@@ -124,3 +126,45 @@ def test_other_portal_and_non_n_topics_ignored() -> None:
     r = resolver()
     assert parse_message("N/other/grid/30/Ac/Power", b'{"value": 1}', P, r) == []
     assert parse_message(f"R/{P}/keepalive", b"", P, r) == []
+
+
+WATCHDOG = [
+    ("State", "watchdog.state", 1),
+    ("TripCount", "watchdog.trip_count", 2),
+    ("LastTripTime", "watchdog.last_trip_time", 1791600000),
+    ("LastTripFailures", "watchdog.last_trip_failures", 0),
+    ("TimeoutSeconds", "watchdog.timeout_s", 90),
+    ("Version", "watchdog.version", "1.0.0"),
+    ("Heartbeat", "watchdog.heartbeat", 17),
+]
+
+
+@pytest.mark.parametrize(("path", "signal", "value"), WATCHDOG)
+def test_watchdog_topics(cfg, path, signal, value) -> None:
+    payload = json.dumps({"value": value}).encode()
+    resolver = InstanceResolver(cfg.victron.instances)
+    assert parse_message(f"N/{P}/bindaems/0/{path}", payload, P, resolver) == [
+        SignalUpdate(signal, value, SignalKind.STATE)
+    ]
+
+
+def test_watchdog_only_instance_zero(cfg) -> None:
+    resolver = InstanceResolver(cfg.victron.instances)
+    assert parse_message(f"N/{P}/bindaems/1/State", b'{"value": 1}', P, resolver) == []
+
+
+@pytest.mark.parametrize("path", [path for path, _, _ in WATCHDOG])
+def test_watchdog_paths_match_exactly(path: str) -> None:
+    for wrong in (f"{path}X", f"{path}/Sub", f"X{path}", path.lower()):
+        assert parse_message(*msg(f"bindaems/0/{wrong}", 1), P, resolver()) == []
+
+
+def test_watchdog_unknown_path_ignored() -> None:
+    assert parse_message(*msg("bindaems/0/Unbekannt", 1), P, resolver()) == []
+
+
+def test_watchdog_removed_value_yields_invalid_update() -> None:
+    # dbus-flashmq leert die Topics des Watchdogs, wenn dessen Dienst auf dem Cerbo verschwindet
+    assert parse_message(f"N/{P}/bindaems/0/State", b"", P, resolver()) == [
+        SignalUpdate("watchdog.state", None, S)
+    ]
