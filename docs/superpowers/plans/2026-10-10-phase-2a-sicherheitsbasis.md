@@ -2716,9 +2716,10 @@ git commit -m "feat(watchdog): Zustandsautomat, config.ini und Zustandsdatei des
       - **Warum `None`:** velib ruft den Callback bei einem unveränderten Wert nicht auf. Startete `/Heartbeat` mit 0, ginge nach einem Neustart im Zustand „scharf“ eine erste Freigabe 0 verloren, und der Watchdog löste fälschlich aus.
     - `on_heartbeat(self, path: str, value: object) -> bool`: Callback von VeDbusService. Er nimmt nur `int` an, kein `bool`, und nur Werte ≥ 0; dann ruft er `logic.heartbeat(value, monotonic())` auf und liefert `True`. Sonst liefert er `False`, und der Schreibzugriff wird abgelehnt.
     - `tick(self) -> bool`: GLib-Timer, Ergebnis immer `True`.
-      - Löst `logic.tick` aus: `trip_count += 1`, `last_trip_time = int(wall())`, `runner.start(now)`, dann `publish` für `/TripCount` und `/LastTripTime`.
-      - `runner.tick(now)`; ist der Runner gerade fertig geworden, folgt `publish("/LastTripFailures", runner.failures)`.
-      - Hat sich `logic.state` geändert, folgen `publish("/State", state)` und `save(StoredState(armed=state == ARMED, trip_count, last_trip_time))`.
+      - Löst `logic.tick` aus: `trip_count += 1`, `last_trip_time = int(wall())`, `runner.start(now)`, `publish("/LastTripFailures", 0)`, dann `publish` für `/TripCount` und `/LastTripTime`.
+      - `runner.tick(now)` nur, solange der Lauf offen ist; ist der Runner gerade fertig geworden, folgt `publish("/LastTripFailures", runner.failures)`. Verlässt der Watchdog TRIPPED (Freigabe 0 oder wieder scharf), endet der Lauf sofort: keine weiteren Schreibversuche, offene Ergebnisse bleiben „offen“, `/LastTripFailures` mit dem bisherigen Stand, Warnung im Log.
+      - Hat sich `logic.state` geändert, folgen `publish("/State", state)` und `save(StoredState(armed=state == ARMED, trip_count, last_trip_time))`. Scheitert das Speichern, wird der neueste Stand bei jedem Tick erneut geschrieben, bis es gelingt; der Fehler wird einmal geloggt.
+      - Nichts davon wirft aus `tick` heraus: In PyGObject entfernt eine Ausnahme im Timer-Callback den Timer.
       - Jede Zustandsänderung, jede Auslösung und jedes fehlgeschlagene Ergebnis wird über `logging` protokolliert, auf Deutsch.
   - `register_paths(dbus_service: Any, service: WatchdogService) -> None`: `add_path` für alle Pfade aus `values()`. Nur `/Heartbeat` ist schreibbar (`writeable=True`, `onchangecallback=service.on_heartbeat`).
   - `class DbusItemAccess(ItemAccess)`:
@@ -2747,7 +2748,7 @@ git commit -m "feat(watchdog): Zustandsautomat, config.ini und Zustandsdatei des
     - `./install.sh --uninstall <ziel>`
     - Ohne gültige Argumente: Nutzung auf stderr, beginnend mit `Aufruf:`, Exitcode 2, kein ssh.
   - **Installation:**
-    1. Per ssh prüfen, dass `python3` ≥ 3.8 und `/opt/victronenergy` vorhanden sind; sonst Abbruch mit Meldung.
+    1. Per ssh zuerst prüfen, dass ein vorhandener Block in `/data/rc.local` eine Endmarke hat (sonst Abbruch ohne jede Änderung, ebenso bei der Deinstallation); dann, dass `python3` ≥ 3.8, die benötigten Module (`configparser`, `dataclasses`, `json`, `contextlib`, `dbus`, `gi.repository.GLib`), velib und `/opt/victronenergy` vorhanden sind; sonst Abbruch mit Meldung.
     2. `bindaems-watchdog.py`, `bindaems_watchdog/` und `service/` per `tar` über `ssh` nach `/data/bindaems-watchdog/` übertragen, ebenso `config.ini` (Rechte 0644). Nicht `scp`: Moderne Clients nutzen dafür SFTP, das der Dropbear-Server von Venus OS nicht sicher anbietet.
     3. In `/data/rc.local` einen Block zwischen `# bindaems-watchdog begin` und `# bindaems-watchdog end` mit `ln -sfn /data/bindaems-watchdog/service /service/bindaems-watchdog` setzen. Ein vorhandener Block wird ersetzt; `rc.local` wird bei Bedarf angelegt und ausführbar gemacht.
     4. Den Link sofort setzen. War der Dienst schon da, folgt `svc -t /service/bindaems-watchdog`.
