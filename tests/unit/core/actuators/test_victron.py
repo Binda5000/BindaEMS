@@ -1,21 +1,34 @@
 """Tests des Victron-Aktors: Netz-Sollwert-Override, Entladegrenze und Min-SOC über den Cerbo."""
 
+import json
 from collections.abc import Mapping
 
 import pytest
 from tests.helpers import T0, snap
 
 from bindaems.core.actuators.victron import VictronActuator
-from bindaems.core.adapters.victron_mqtt import writable_paths
+from bindaems.core.adapters.victron_mqtt import (
+    FRESHNESS_S,
+    MAX_DISCHARGE_PATH,
+    MIN_SOC_PATH,
+    SETPOINT_OVERRIDE_PATH,
+    SOURCE,
+    writable_paths,
+)
+from bindaems.core.adapters.victron_topics import InstanceResolver, parse_message
 from bindaems.core.control.actuator import Capabilities, Confirmation
+from bindaems.core.state.store import StateStore
+from bindaems.shared.config import Config
 from bindaems.shared.control import CommandKind
 from bindaems.shared.domain import Quality, Reading, SignalKind, Snapshot, Value
+from bindaems.shared.timeutil import ManualClock
 
 NOT_CONNECTED = "Cerbo nicht verbunden."
 NOT_ACCEPTED = "Cerbo-Verbindung: Auftrag nicht angenommen."
 OVERRIDE = "ess.override.setpoint"
 MAX_DISCHARGE = "ess.max_discharge_w"
 MIN_SOC = "ess.min_soc_pct"
+PORTAL = "c0619ab1234"
 
 
 def readings(signals: Mapping[str, tuple[Value, Quality]]) -> Snapshot:
@@ -38,6 +51,31 @@ def actuator(
         return accept
 
     return VictronActuator(send, lambda: connected)
+
+
+class CerboFeed:
+    """Der Weg vom Cerbo in den Zustandsspeicher, so wie ``VictronMqttAdapter`` ihn geht.
+
+    Eine Nachricht ``N/<portal>/<pfad>`` mit ``{"value": …}`` läuft durch ``parse_message`` in einen
+    echten ``StateStore``, der wie im Adapter eingerichtet ist.
+    """
+
+    def __init__(self, cfg: Config) -> None:
+        self.store = StateStore(ManualClock(T0))
+        self.store.register_source(
+            SOURCE, FRESHNESS_S, activity_based=True, invalidate_on_reconnect=True
+        )
+        self.store.set_connected(SOURCE, True)
+        self._resolver = InstanceResolver(cfg.victron.instances)
+
+    def publish(self, path: str, value: object) -> None:
+        topic, payload = f"N/{PORTAL}/{path}", json.dumps({"value": value}).encode()
+        self.store.touch(SOURCE)
+        for update in parse_message(topic, payload, PORTAL, self._resolver):
+            self.store.update(update.signal, update.value, source=SOURCE, kind=update.kind)
+
+    def connected(self) -> bool:
+        return bool(self.store.connected(SOURCE))
 
 
 # Vorgabe des Plans
@@ -266,10 +304,29 @@ def test_override_is_its_number(value) -> None:
     assert actuator().present(snap({OVERRIDE: value})) == {CommandKind.GRID_SETPOINT: float(value)}
 
 
-@pytest.mark.parametrize("quality", [Quality.STALE, Quality.INVALID])
-@pytest.mark.parametrize("value", [None, 1500.0])
-def test_override_needs_quality_ok(quality, value) -> None:
-    # Ohne Qualität OK ist der Netz-Sollwert unbekannt, auch wenn der Wert „None“ lautet.
+@pytest.mark.parametrize("quality", [Quality.OK, Quality.INVALID])
+def test_no_override_is_none_while_the_cerbo_is_connected(quality) -> None:
+    # Ein null des Cerbo (D-Bus-Wert ungültig) erreicht den Zustandsspeicher als ungültig (R23).
+    state = snap({OVERRIDE: None}, quality=quality)
+    assert actuator().present(state) == {CommandKind.GRID_SETPOINT: None}
+
+
+@pytest.mark.parametrize("quality", [Quality.OK, Quality.INVALID])
+def test_no_override_is_unknown_while_the_cerbo_is_not_connected(quality) -> None:
+    state = snap({OVERRIDE: None}, quality=quality)
+    assert actuator(connected=False).present(state) == {}
+
+
+@pytest.mark.parametrize(
+    ("value", "quality"),
+    [
+        (None, Quality.STALE),
+        (1500.0, Quality.STALE),
+        (1500.0, Quality.INVALID),
+    ],
+)
+def test_override_is_unknown_without_a_usable_reading(value, quality) -> None:
+    # Eine Zahl gilt nur mit Qualität OK; ein veralteter Wert sagt auch über „kein Override“ nichts.
     assert actuator().present(snap({OVERRIDE: value}, quality=quality)) == {}
 
 
@@ -289,7 +346,7 @@ def test_only_the_setpoint_override_is_the_grid_setpoint() -> None:
 def test_present_reports_each_kind_on_its_own() -> None:
     state = readings(
         {
-            OVERRIDE: (None, Quality.OK),
+            OVERRIDE: (None, Quality.INVALID),
             MAX_DISCHARGE: (500, Quality.STALE),
             MIN_SOC: (20, Quality.OK),
         }
@@ -357,11 +414,19 @@ def test_confirm_stays_open_while_nothing_is_read_back(kind) -> None:
     assert victron.confirm(kind, value, stale) == (Confirmation.PENDING, "")
 
 
-def test_lifting_the_override_is_not_confirmed_by_an_invalid_reading() -> None:
-    # „Kein Override“ bestätigt nur ein Rücklesen mit Qualität OK, nicht ein ungültiges.
+@pytest.mark.parametrize("quality", [Quality.OK, Quality.INVALID])
+def test_lifting_the_override_is_confirmed_by_no_override(quality) -> None:
+    # Der Cerbo meldet „kein Override“ als ungültigen Wert; das bestätigt das Aufheben (R23).
     victron = actuator()
-    invalid = snap({OVERRIDE: None}, quality=Quality.INVALID)
-    assert victron.confirm(CommandKind.GRID_SETPOINT, None, invalid) == (Confirmation.PENDING, "")
+    state = snap({OVERRIDE: None}, quality=quality)
+    assert victron.confirm(CommandKind.GRID_SETPOINT, None, state) == (Confirmation.CONFIRMED, "")
+    assert victron.confirm(CommandKind.GRID_SETPOINT, 1000.0, state) == (Confirmation.PENDING, "")
+
+
+def test_lifting_the_override_is_not_confirmed_without_the_cerbo() -> None:
+    state = snap({OVERRIDE: None}, quality=Quality.INVALID)
+    victron = actuator(connected=False)
+    assert victron.confirm(CommandKind.GRID_SETPOINT, None, state) == (Confirmation.PENDING, "")
 
 
 def test_confirm_never_fails_on_its_own() -> None:
@@ -381,3 +446,69 @@ def test_reading_back_never_writes() -> None:
     victron.confirm(CommandKind.GRID_SETPOINT, 1000.0, state)
     victron.alarms(T0)
     assert sent == []
+
+
+# Durch die echte Pipeline: Nachricht des Cerbo → parse_message → StateStore → Aktor
+
+
+def test_the_override_and_its_removal_come_back_through_the_real_pipeline(cfg) -> None:
+    cerbo = CerboFeed(cfg)
+    victron = VictronActuator(lambda p, v: True, cerbo.connected)
+
+    cerbo.publish(SETPOINT_OVERRIDE_PATH, 1500)
+    active = cerbo.store.snapshot()
+    assert victron.present(active) == {CommandKind.GRID_SETPOINT: 1500.0}
+    assert victron.confirm(CommandKind.GRID_SETPOINT, 1500.0, active) == (
+        Confirmation.CONFIRMED,
+        "",
+    )
+    assert victron.confirm(CommandKind.GRID_SETPOINT, None, active) == (Confirmation.PENDING, "")
+
+    cerbo.publish(SETPOINT_OVERRIDE_PATH, None)  # der D-Bus-Wert ist ungültig: kein Override
+    lifted = cerbo.store.snapshot()
+    reading = lifted.get(OVERRIDE)
+    assert reading is not None  # die Annahme hinter R23: das null kommt als ungültiger Wert an
+    assert (reading.value, reading.quality) == (None, Quality.INVALID)
+    assert victron.present(lifted) == {CommandKind.GRID_SETPOINT: None}
+    assert victron.confirm(CommandKind.GRID_SETPOINT, None, lifted) == (Confirmation.CONFIRMED, "")
+    assert victron.confirm(CommandKind.GRID_SETPOINT, 1500.0, lifted) == (Confirmation.PENDING, "")
+
+
+def test_nothing_is_known_through_the_real_pipeline_once_the_cerbo_is_gone(cfg) -> None:
+    cerbo = CerboFeed(cfg)
+    victron = VictronActuator(lambda p, v: True, cerbo.connected)
+    cerbo.publish(SETPOINT_OVERRIDE_PATH, None)
+    cerbo.publish(MAX_DISCHARGE_PATH, -1)
+    cerbo.publish(MIN_SOC_PATH, 20)
+    assert victron.present(cerbo.store.snapshot()) == {
+        CommandKind.GRID_SETPOINT: None,
+        CommandKind.MAX_DISCHARGE: -1.0,
+        CommandKind.MIN_SOC: 20.0,
+    }
+
+    cerbo.store.set_connected(SOURCE, False)  # der Speicher hält das null weiter für ungültig
+    gone = cerbo.store.snapshot()
+    assert victron.present(gone) == {}
+    assert victron.confirm(CommandKind.GRID_SETPOINT, None, gone) == (Confirmation.PENDING, "")
+
+
+@pytest.mark.parametrize(
+    ("kind", "value"),
+    [
+        (CommandKind.GRID_SETPOINT, 1500.0),
+        (CommandKind.GRID_SETPOINT, None),
+        (CommandKind.MAX_DISCHARGE, -1.0),
+        (CommandKind.MIN_SOC, 20.0),
+    ],
+)
+def test_the_echo_of_the_cerbo_confirms_the_write(cfg, kind, value) -> None:
+    # Der Pfad, den der Aktor schreibt, und das Signal, das er zurückliest, gehören zusammen.
+    cerbo = CerboFeed(cfg)
+    written: list = []
+    victron = VictronActuator(lambda p, v: written.append((p, v)) or True, cerbo.connected)
+    assert victron.send(kind, value) is None
+    assert victron.confirm(kind, value, cerbo.store.snapshot()) == (Confirmation.PENDING, "")
+
+    for path, payload in written:
+        cerbo.publish(path, payload)  # der Cerbo meldet den geschriebenen Wert zurück
+    assert victron.confirm(kind, value, cerbo.store.snapshot()) == (Confirmation.CONFIRMED, "")

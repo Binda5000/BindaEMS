@@ -10,9 +10,11 @@ Geschrieben wird über die Funktion ``send`` (im core ``VictronMqttAdapter.write
 nur einreiht; der Aktor wartet nie. Modbus TCP zum Cerbo (Register 2716/2717) bleibt ungenutzt.
 
 Zurückgelesen wird, was der Cerbo meldet: ``ess.override.setpoint``, ``ess.max_discharge_w`` und
-``ess.min_soc_pct``. Ein Wert zählt nur mit Qualität ``OK`` und als endliche Zahl; ohne brauchbaren
-Wert ist die Art unbekannt. Beim Netz-Sollwert ist „kein Override aktiv“ (``None``) etwas anderes
-als „unbekannt“ (die Art fehlt).
+``ess.min_soc_pct``. Entladegrenze und Min-SOC zählen nur mit Qualität ``OK`` und als endliche
+Zahl; ohne brauchbaren Wert ist die Art unbekannt. Beim Netz-Sollwert ist „kein Override aktiv“
+(``None``) etwas anderes als „unbekannt“ (die Art fehlt): Ein ``null`` des Cerbo (der D-Bus-Wert
+ist ungültig) erreicht den Zustandsspeicher als ungültiger Wert und heißt „kein Override“, solange
+die Verbindung zum Cerbo steht.
 """
 
 from __future__ import annotations
@@ -51,8 +53,9 @@ class VictronActuator:
     """Die Victron-Anlage als Aktor (Plan 2b, Präzisierung 1 und 12).
 
     ``send`` reiht einen Schreibauftrag (Pfad, Wert) ein und sagt, ob er angenommen wurde;
-    ``connected`` sagt, ob die Verbindung zum Cerbo steht. Die Grenzen für die Werte prüft die
-    Safety-Schicht, nicht der Aktor.
+    ``connected`` sagt, ob die Verbindung zum Cerbo steht. Sie entscheidet über die Fähigkeiten und
+    darüber, ob ein ungültiger Override-Wert „kein Override“ heißt. Die Grenzen für die Werte prüft
+    die Safety-Schicht, nicht der Aktor.
     """
 
     id = VICTRON
@@ -75,19 +78,23 @@ class VictronActuator:
     def present(self, snap: Snapshot) -> dict[CommandKind, CommandValue]:
         """Override, Entladegrenze und Min-SOC, wie der Cerbo sie meldet; was fehlt, ist unbekannt.
 
-        Entladegrenze und Min-SOC zählen als endliche Zahl mit Qualität ``OK``. Der Netz-Sollwert
-        braucht ebenfalls die Qualität ``OK``: Eine endliche Zahl ist der Override, der Wert
-        ``None`` heißt „kein Override aktiv“, und alles andere (NaN, ±∞, Text, ein Wahrheitswert)
-        lässt die Art fehlen. Ein ``null`` des Cerbo erreicht den Zustandsspeicher als ungültig
-        (``INVALID``) und ist damit unbekannt, nicht „kein Override“.
+        Entladegrenze und Min-SOC zählen als endliche Zahl mit Qualität ``OK``. Der Netz-Sollwert:
+
+        - Eine endliche Zahl mit Qualität ``OK`` ist der Override.
+        - Der Wert ``None`` mit Qualität ``OK`` oder ``INVALID`` heißt „kein Override aktiv“
+          (``None``), solange der Cerbo verbunden ist. Ein ``null`` des Cerbo (der D-Bus-Wert ist
+          ungültig) erreicht den Zustandsspeicher als ``INVALID``.
+        - Alles andere lässt die Art fehlen: ein fehlendes oder veraltetes Signal, NaN, ±∞, Text,
+          ein Wahrheitswert und ``None`` ohne Verbindung zum Cerbo.
         """
         present: dict[CommandKind, CommandValue] = {}
         # Nicht ``snap.ok``: Das gibt für ein fehlendes Signal und für „OK mit Wert None“ dasselbe.
         override = snap.get(_OVERRIDE_SIGNAL)
-        if override is not None and override.quality is Quality.OK:
+        if override is not None:
             if override.value is None:
-                present[CommandKind.GRID_SETPOINT] = None  # kein Override aktiv
-            else:
+                if override.quality in (Quality.OK, Quality.INVALID) and self._connected():
+                    present[CommandKind.GRID_SETPOINT] = None  # kein Override aktiv
+            elif override.quality is Quality.OK:
                 setpoint = finite_number(override.value)
                 if setpoint is not None:
                     present[CommandKind.GRID_SETPOINT] = setpoint
