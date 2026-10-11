@@ -16,14 +16,19 @@ import pytest
 import yaml
 from aiomqtt import MqttError
 from bindaems_watchdog import VERSION
-from bindaems_watchdog.config import Settings
+from bindaems_watchdog.actions import ActionRunner
+from bindaems_watchdog.config import parse_settings
 from bindaems_watchdog.logic import ARMED, TRIPPED, WAITING, WatchdogLogic
+from bindaems_watchdog.service import WatchdogService
+from bindaems_watchdog.state_file import StoredState
+from tests.unit.cerbo_watchdog.fakes import FakeAccess
 
 from bindaems.core.adapters.victron_mqtt import KEEPALIVE_SUPPRESS, MqttMessage
 from bindaems.shared.config import Config
 from bindaems.shared.timeutil import LOCAL_TZ
 from bindaems.tools import watchdog_probe
 from bindaems.tools.verify_checks import Finding
+from bindaems.tools.watchdog_config import RETRIES, RETRY_S
 from bindaems.tools.watchdog_probe import ProbeTimings, main, run_probe, timings_from_config
 
 P = "c0619ab1234"
@@ -31,12 +36,15 @@ OTHER = "d1730bc2345"  # eine fremde Anlage am selben Broker
 NOTIFY = f"N/{P}/bindaems/0/"
 HEARTBEAT = f"W/{P}/bindaems/0/Heartbeat"
 KEEPALIVE = f"R/{P}/keepalive"
+SIM_RETRIES = 2  # Wiederholungen einer gescheiterten Aktion im nachgebildeten Cerbo …
+SIM_RETRY_S = 0.05  # … und ihr Abstand: Ein Lauf mit Fehlern dauert 0,1 s.
 FAST = ProbeTimings(
     heartbeat_s=0.05,
     answer_wait_s=1.0,
     arm_wait_s=2.0,
     timeout_s=0.8,
     trip_slack_s=1.0,
+    actions_wait_s=(SIM_RETRIES + 1) * SIM_RETRY_S + 0.15,  # 0,3 s
     rearm_wait_s=2.0,
     release_wait_s=1.0,
 )
@@ -49,50 +57,78 @@ TITLES = [
     "Freigabe ohne Auslösung",
 ]
 
+# Die Aktionen aus ``config.ini.example``: EVCS (evcharger mit Instanz 40), Min-SOC, Entladegrenze.
+EXAMPLE = parse_settings(Path("cerbo-watchdog/config.ini.example").read_text(encoding="utf-8"))
+EVCS_ITEM = ("com.victronenergy.evcharger.sim", "/SetCurrent")
+MIN_SOC_ITEM = ("com.victronenergy.settings", "/Settings/CGwacs/BatteryLife/MinimumSocLimit")
+DISCHARGE_ITEM = ("com.victronenergy.settings", "/Settings/CGwacs/MaxDischargePower")
+
+
+def plant(*, evcs: bool = True, failing_sets: int = 0) -> FakeAccess:
+    """Die Werte am nachgebildeten Cerbo, alle abseits ihres Sicherwerts: 16 A, 30 %, 5000 W.
+
+    ``evcs=False``: Es gibt keinen evcharger mit der Instanz 40. Die ersten ``failing_sets``
+    Schreibzugriffe lehnt der Cerbo ab.
+    """
+    services = {("com.victronenergy.evcharger", 40): EVCS_ITEM[0]} if evcs else {}
+    values = {EVCS_ITEM: 16, MIN_SOC_ITEM: 30, DISCHARGE_ITEM: 5000}
+    return FakeAccess(values, services, failing_sets)
+
 
 class SimulatedCerbo:
-    """Der Cerbo als ``MqttTransport`` mit der echten ``WatchdogLogic`` dahinter, mit kurzen Zeiten.
+    """Der Cerbo als ``MqttTransport`` mit dem echten ``WatchdogService`` und kurzen Zeiten.
 
-    Die Abstände sind großzügig (Heartbeat der Probe 0,05 s gegen 0,5 s Lücke), damit der Test auf
-    einer belasteten CI nicht flackert. Wie der Dienst am Cerbo veröffentlicht er mit der
-    Auslösung ``LastTripFailures`` = 0 und den Endstand (``failed_actions``) erst, wenn der
-    Aktionslauf endet: nach ``ACTIONS_S`` oder früher, sobald der Watchdog ``TRIPPED`` verlässt.
-    ``enabled=False`` ergibt einen deaktivierten Watchdog.
+    Logik, Aktionslauf und Veröffentlichung sind die des Dienstes am Cerbo, mit den Aktionen aus
+    ``config.ini.example``; nur D-Bus ersetzt ``access`` (Standard: ``plant()``). Mit der Auslösung
+    steht ``LastTripFailures`` also auf 0 und bekommt den Endstand, wenn der Lauf endet; verlässt
+    der Watchdog vorher ``TRIPPED``, bricht der Lauf ab wie am Cerbo. Wie dbus-flashmq meldet der
+    Cerbo einen Pfad, wenn sich sein Wert ändert, und auf den leeren Keepalive alle Pfade. Der Takt
+    kommt alle 10 ms. Die Abstände sind großzügig (Heartbeat der Probe 0,05 s gegen 0,5 s Lücke),
+    damit der Test auf einer belasteten CI nicht flackert. ``enabled=False`` ergibt einen
+    deaktivierten Watchdog.
     """
-
-    ACTIONS_S = 0.1
 
     def __init__(
         self,
         *,
-        failed_actions: int = 0,
+        access: FakeAccess | None = None,
         version: str = VERSION,
         enabled: bool = True,
+        timeout_s: float = 0.8,
         rearm_s: float = 0.15,
+        gap_s: float = 0.5,
+        retries: int = SIM_RETRIES,
+        retry_s: float = SIM_RETRY_S,
     ) -> None:
-        settings = Settings(
+        settings = replace(
+            EXAMPLE,
             enabled=enabled,
-            timeout_s=0.8,
+            timeout_s=timeout_s,
             rearm_s=rearm_s,
-            gap_s=0.5,
-            retries=0,
-            retry_s=1.0,
-            state_file="state.json",
-            actions=(),
+            gap_s=gap_s,
+            retries=retries,
+            retry_s=retry_s,
         )
+        self.access = access if access is not None else plant()
         self._logic = WatchdogLogic(settings, armed_at_start=False, now=time.monotonic())
-        self._failed_actions = failed_actions
-        self._version = version
+        self._service = WatchdogService(
+            settings,
+            self._logic,
+            ActionRunner(self.access, settings.actions, settings.retries, settings.retry_s),
+            StoredState(),
+            publish=self._set,
+            save=lambda _state: None,
+            wall=time.time,
+            monotonic=time.monotonic,
+        )
+        self._paths = {**self._service.values(), "/Version": version}  # wie auf D-Bus
         self._messages: asyncio.Queue[MqttMessage] = asyncio.Queue()
-        self._trip_count = 0
-        self._failures = 0
-        self._run_since: float | None = None  # Beginn des laufenden Aktionslaufs
-        self._announced = self._snapshot()
         self._ticker: asyncio.Task[None] | None = None
         self.subscribed: list[str] = []
         self.published: list[tuple[str, bytes]] = []
         self.published_at: list[float] = []
         self.last_beat_at = time.monotonic()
+        self.tripped_at: float | None = None  # wann /State zuletzt auf „ausgelöst“ ging
         # Haken für Tests: wird nach jeder Veröffentlichung der Probe und nach jedem Takt gerufen
         self.on_change: Callable[[SimulatedCerbo], None] | None = None
 
@@ -101,8 +137,8 @@ class SimulatedCerbo:
         return self._logic.state
 
     @property
-    def trip_count(self) -> int:
-        return self._trip_count
+    def trip_count(self) -> object:
+        return self._service.values()["/TripCount"]
 
     def heartbeats(self) -> list[int]:
         """Die gesendeten Heartbeat-Werte der Probe, in der Reihenfolge des Sendens."""
@@ -130,12 +166,11 @@ class SimulatedCerbo:
         self.published.append((topic, payload))
         self.published_at.append(time.monotonic())
         if topic == HEARTBEAT:
-            self._logic.heartbeat(json.loads(payload)["value"], time.monotonic())
+            self._service.on_heartbeat("/Heartbeat", json.loads(payload)["value"])
             self.last_beat_at = time.monotonic()
-            self._advance(tick=False)
         elif topic == KEEPALIVE and payload == b"":  # leer: alles neu veröffentlichen
-            self._notify("Version", self._version)
-            self._notify("State", self._logic.state)
+            for path, value in self._paths.items():
+                self._notify(path[1:], value)
         if self.on_change is not None:
             self.on_change(self)
 
@@ -143,33 +178,21 @@ class SimulatedCerbo:
         while True:
             yield await self._messages.get()
 
-    def _snapshot(self) -> tuple[int, int, int]:
-        return self._logic.state, self._trip_count, self._failures
-
     async def _tick_every_10_ms(self) -> None:
         while True:
             await asyncio.sleep(0.01)
-            self._advance(tick=True)
+            self._service.tick()
             if self.on_change is not None:
                 self.on_change(self)
 
-    def _advance(self, *, tick: bool) -> None:
-        now = time.monotonic()
-        if tick and self._logic.tick(now):  # Auslösung: der Zähler steigt, die Fehlerzahl ist 0
-            self._trip_count += 1
-            self._failures = 0
-            self._run_since = now
-        run_ended = self._run_since is not None and (
-            self._logic.state != TRIPPED or now - self._run_since >= self.ACTIONS_S
-        )
-        if run_ended:
-            self._run_since = None
-            self._failures = self._failed_actions
-        if (snapshot := self._snapshot()) != self._announced:  # wie der Dienst: erst die Zähler
-            self._announced = snapshot
-            self._notify("TripCount", self._trip_count)
-            self._notify("LastTripFailures", self._failures)
-            self._notify("State", self._logic.state)
+    def _set(self, path: str, value: object) -> None:
+        """``publish`` des Dienstes: Wie ein D-Bus-Pfad meldet er nur eine Änderung."""
+        if self._paths.get(path) == value:
+            return
+        self._paths[path] = value
+        if path == "/State" and value == TRIPPED:
+            self.tripped_at = time.monotonic()
+        self._notify(path[1:], value)
 
     def _notify(self, name: str, value: object) -> None:
         payload = json.dumps({"value": value}).encode()
@@ -367,11 +390,61 @@ async def test_probe_reports_each_step_with_its_values() -> None:
 
 
 async def test_probe_counts_failed_actions_at_the_end_of_the_trip_run() -> None:
-    # Mit der Auslösung steht /LastTripFailures auf 0; der Endstand kommt erst später.
-    async with SimulatedCerbo(failed_actions=2) as cerbo:
+    # Mit der Auslösung steht /LastTripFailures auf 0; der Endstand kommt erst nach allen
+    # Wiederholungen. Hier scheitern alle drei Aktionen: keine EVCS, jedes Schreiben abgelehnt.
+    async with SimulatedCerbo(access=plant(evcs=False, failing_sets=1000)) as cerbo:
         findings = await run_probe(cerbo, P, FAST)
     assert [f.status for f in findings] == ["ok", "ok", "ok", "warn", "ok", "ok"]
-    assert findings[3].detail.endswith("Auslösungen 0 → 1, fehlgeschlagene Aktionen 2")
+    assert findings[3].detail.endswith("Auslösungen 0 → 1, fehlgeschlagene Aktionen 3")
+
+
+# Zeiten wie am Cerbo, durch 100 geteilt: Timeout 90 s, wieder scharf nach 30 s, Lücke 25 s,
+# 6 Wiederholungen im Abstand von 5 s; die Heartbeats der Probe kommen ohne Verzögerung an.
+CERBO_TIMES = {"timeout_s": 0.9, "rearm_s": 0.3, "gap_s": 0.25, "retries": 6, "retry_s": 0.05}
+CERBO_PROBE = ProbeTimings(
+    heartbeat_s=0.05,
+    answer_wait_s=1.0,
+    arm_wait_s=1.0,
+    timeout_s=0.9,
+    trip_slack_s=1.0,
+    actions_wait_s=0.8,  # mehr als 6 × 0,05 s, auch auf einer belasteten CI
+    rearm_wait_s=1.0,
+    release_wait_s=1.0,
+)
+
+
+@pytest.mark.parametrize("rearm_s", [0.3, 0.2], ids=["wie am Cerbo", "kürzer als der Lauf"])
+async def test_probe_reports_a_failing_evcs_action_with_fast_heartbeats(rearm_s: float) -> None:
+    # Befund aus dem Gesamtreview: Am Cerbo fehlt die EVCS (kein evcharger mit Instanz 40). Ihre
+    # Wiederholungen dauern 6 × 5 s, so lange wie das Wiederscharfwerden. Nahm die Probe die
+    # Heartbeats gleich nach der Auslösung wieder auf, brach das Wiederscharfwerden den Lauf ab,
+    # bevor die EVCS als fehlgeschlagen zählte, und die Probe meldete „0“ und OK.
+    times = CERBO_TIMES | {"rearm_s": rearm_s}
+    async with SimulatedCerbo(access=plant(evcs=False), **times) as cerbo:
+        findings = await run_probe(cerbo, P, CERBO_PROBE)
+    assert [f.status for f in findings] == ["ok", "ok", "ok", "warn", "ok", "ok"]
+    assert findings[3].detail.endswith("Auslösungen 0 → 1, fehlgeschlagene Aktionen 1")
+    assert cerbo.access.values[MIN_SOC_ITEM] == 20  # die übrigen Aktionen griffen
+    assert cerbo.access.values[DISCHARGE_ITEM] == -1
+
+
+async def test_probe_lets_the_action_run_finish_before_the_heartbeats_resume() -> None:
+    # Der Cerbo lehnt die ersten fünf Runden ab (je drei Schreibzugriffe); die sechste gelingt,
+    # 0,25 s nach der Auslösung und damit nach dem Wiederscharfwerden (0,15 s), hätte die Probe
+    # die Heartbeats gleich wieder aufgenommen.
+    async with SimulatedCerbo(access=plant(failing_sets=15), retries=6) as cerbo:
+        findings = await run_probe(cerbo, P, replace(FAST, actions_wait_s=0.6))
+    assert [f.status for f in findings] == ["ok"] * 6
+    assert findings[3].detail.endswith("fehlgeschlagene Aktionen 0")
+    assert cerbo.access.values[EVCS_ITEM] == 6  # der sichere Strom aus config.ini.example
+    assert (cerbo.access.values[MIN_SOC_ITEM], cerbo.access.values[DISCHARGE_ITEM]) == (20, -1)
+    assert cerbo.tripped_at is not None
+    resumed = min(
+        at
+        for (topic, _), at in zip(cerbo.published, cerbo.published_at, strict=True)
+        if topic == HEARTBEAT and at > cerbo.tripped_at
+    )
+    assert resumed - cerbo.tripped_at >= 0.6  # die Pause ohne Heartbeat
 
 
 async def test_probe_reports_a_disabled_watchdog_of_another_version() -> None:
@@ -502,6 +575,8 @@ CANCEL_POINTS: dict[str, Callable[[SimulatedCerbo], bool]] = {
     "arming": lambda c: len(c.heartbeats()) == 2,  # der Lauf zum Scharfmachen ist angefangen
     "pause": lambda c: c.state == ARMED and c.trip_count == 0 and c.silent_for() > 0.2,
     "trip": lambda c: c.state == TRIPPED,  # die Aktionen laufen
+    # die Probe wartet ohne Heartbeat, bis der Aktionslauf zu Ende sein muss
+    "actions": lambda c: c.tripped_at is not None and time.monotonic() - c.tripped_at > 0.1,
     "rearmed": lambda c: c.state == ARMED and c.trip_count == 1,
 }
 
@@ -619,7 +694,7 @@ async def test_probe_names_an_internal_error_and_still_releases() -> None:
         ("Watchdog erreichbar", "ok"),
         ("Watchdog-Version", "ok"),
         ("Scharf nach Heartbeat", "ok"),
-        ("Auslösung ohne Heartbeat", "warn"),
+        ("Auslösung ohne Heartbeat", "ok"),  # nach der Pause verbindlich, vor dem Fehler
         ("Interner Fehler der Probe", "fail"),
     ]
     assert findings[-1].detail == "RuntimeError: kaputt"
@@ -634,9 +709,13 @@ def test_timings_from_config(cfg: Config) -> None:
         arm_wait_s=45,
         timeout_s=90,
         trip_slack_s=30,
+        actions_wait_s=45,
         rearm_wait_s=45,
         release_wait_s=15,
     )
+    # Die Pause nach der Auslösung folgt den Wiederholungen, die watchdog_config schreibt: Der
+    # letzte Versuch kommt nach RETRIES × RETRY_S = 30 s.
+    assert timings_from_config(cfg).actions_wait_s == (RETRIES + 1) * RETRY_S + 10
     watchdog = cfg.victron.watchdog.model_copy(update={"heartbeat_s": 4, "timeout_s": 60})
     changed = cfg.model_copy(
         update={"victron": cfg.victron.model_copy(update={"watchdog": watchdog})}

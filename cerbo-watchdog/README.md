@@ -47,10 +47,10 @@ Sicherwert:
 Jede Aktion liest zuerst und schreibt nur, wenn der Wert abweicht; danach liest sie zurück und
 vergleicht. Zahlen gelten bis `tolerance` (Standard 0,5) als gleich. Ein gescheiterter Versuch
 folgt nach `retry_s` erneut, höchstens `retries` Mal. Die Aktionen laufen nur, solange der
-Watchdog ausgelöst ist: Wird er mit 0 freigegeben oder wieder scharf, endet der Lauf sofort, und
-noch offene Aktionen bleiben offen. `/LastTripFailures` steht mit jeder Auslösung auf 0 und zählt
-am Ende des Laufs die fehlgeschlagenen Aktionen. Solange der Watchdog wartet oder scharf ist,
-schreibt er nichts.
+Watchdog ausgelöst ist: Wird er mit 0 freigegeben oder wieder scharf, endet der Lauf sofort. Eine
+offene Aktion, die schon gescheitert ist, zählt dann als fehlgeschlagen; eine noch nie versuchte
+bleibt offen. `/LastTripFailures` steht mit jeder Auslösung auf 0 und zählt am Ende des Laufs die
+fehlgeschlagenen Aktionen. Solange der Watchdog wartet oder scharf ist, schreibt er nichts.
 
 ### D-Bus-Dienst `com.victronenergy.bindaems` (DeviceInstance 0)
 
@@ -123,6 +123,8 @@ ssh root@cerbo.lan dbus -y com.victronenergy.bindaems /State GetValue
 Ob die Kette vom EMS bis zu den Aktionen funktioniert, zeigt die Watchdog-Probe (Prüfprotokoll
 Teil 2, Spec 17.2 Punkt 5). **Die Probe löst den Watchdog aus:** Er setzt die EVCS auf den sicheren
 Strom und schreibt Min-SOC und Entladegrenze, wenn sie abweichen. Sie fragt deshalb vorher nach.
+Nach der Auslösung wartet sie 45 s ohne Heartbeat, damit der Aktionslauf mit allen Wiederholungen
+zu Ende kommt; erst dann liest sie die Zahl der fehlgeschlagenen Aktionen.
 
 ```bash
 cd /opt/bindaems
@@ -131,6 +133,10 @@ docker compose run --rm -v "$PWD/verification:/out" --entrypoint python ems-core
   -m bindaems.tools.watchdog_probe --config /config/config.yaml \
   --out /out/<datum>-watchdog-probe.md
 ```
+
+Prüfe nach jeder Probe das Log des Cerbo (unten, „Logs“), auch wenn der Bericht 0 fehlgeschlagene
+Aktionen nennt: „Aktionen abgeschlossen: …“ nennt das Ergebnis jeder Aktion, „Aktionen
+abgebrochen …“ einen Lauf, der vorzeitig endete.
 
 Mit Strg+C brichst du die Probe ab: Sie gibt den Watchdog vorher mit dem Heartbeat 0 frei und endet
 mit dem Exitcode 130, ohne Bericht. Dasselbe versucht sie, wenn sie aus anderem Grund endet,

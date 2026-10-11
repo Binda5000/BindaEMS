@@ -279,11 +279,36 @@ def test_release_ends_the_run_without_further_writes(caplog: pytest.LogCaptureFi
     for t in range(123, 200):
         rig.at(t)
     assert access.writes == writes
-    assert [value for path, value in rig.published if path == "/LastTripFailures"] == [0, 0]
+    # Beide sind schon einmal gescheitert: Mit dem Abbruch zählen sie als fehlgeschlagen.
+    assert [value for path, value in rig.published if path == "/LastTripFailures"] == [0, 2]
     records = [(r.levelname, r.getMessage()) for r in caplog.records]
     assert (
         "WARNING",
-        "Aktionen abgebrochen (Zustand wartet): evcs_evcs offen, min_soc offen",
+        "Aktionen abgebrochen (Zustand wartet): evcs_evcs fehlgeschlagen, min_soc fehlgeschlagen",
+    ) in records
+
+
+def test_rearming_in_the_tick_of_the_last_attempt_counts_the_failure(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    # Wie am Cerbo: rearm_s (30 s) = retries × retry_s (6 × 5 s). Der Heartbeat kommt gleich nach
+    # der Auslösung zurück, und der Watchdog wird in dem Takt wieder scharf, in dem der letzte
+    # Versuch für die EVCS fällig ist. Der Takt prüft „wieder scharf“ vor den Aktionen: Der Lauf
+    # bricht ab, ohne dass dieser Versuch stattfindet.
+    caplog.set_level(logging.INFO)
+    rig = Rig(settings=replace(SETTINGS, retries=6, actions=(EVCS, *SETTINGS.actions)))
+    rig.arm()
+    rig.at(121)  # Auslösung: Die EVCS fehlt (keine Instanz 40), Min-SOC gelingt.
+    rig.service.on_heartbeat("/Heartbeat", 1)  # noch in derselben Sekunde
+    for t in range(122, 152):
+        rig.at(t, beat=1 if t in (131, 141, 151) else None)
+    assert rig.service.values()["/State"] == 1
+    assert [value for path, value in rig.published if path == "/LastTripFailures"] == [0, 1]
+    records = [(r.levelname, r.getMessage()) for r in caplog.records]
+    assert ("ERROR", "Aktion evcs_evcs fehlgeschlagen.") in records
+    assert (
+        "WARNING",
+        "Aktionen abgebrochen (Zustand scharf): evcs_evcs fehlgeschlagen, min_soc ok",
     ) in records
 
 

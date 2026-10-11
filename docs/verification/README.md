@@ -121,8 +121,12 @@ Rückfrage.
 | Watchdog erreichbar | Der Watchdog antwortet über MQTT mit Version und Zustand. |
 | Watchdog-Version | Die Version ist die, die der core erwartet. |
 | Scharf nach Heartbeat | Heartbeats machen ihn scharf. |
-| Auslösung ohne Heartbeat | Bleiben sie aus, löst er nach dem Timeout aus. Der Bericht nennt die Zahl der fehlgeschlagenen Aktionen. |
+| Auslösung ohne Heartbeat | Bleiben sie aus, löst er nach dem Timeout aus. Die Probe wartet dann 45 s ohne Heartbeat, bis der Aktionslauf zu Ende ist, und nennt die Zahl der fehlgeschlagenen Aktionen. |
 | Wieder scharf | Mit stabilem Heartbeat wird er nach der Auslösung wieder scharf. |
+
+Prüfe nach jeder Probe auch das Log des Cerbo (Betriebshandbuch 14, „Probe“ und „Logs“): Die Zeile
+„Aktionen abgeschlossen: …“ nennt das Ergebnis jeder Aktion, auch wenn der Bericht 0 fehlgeschlagene
+Aktionen nennt.
 | Freigabe ohne Auslösung | Der Heartbeat 0 bringt ihn auf „wartet“, ohne dass er auslöst. |
 
 ### Aufruf

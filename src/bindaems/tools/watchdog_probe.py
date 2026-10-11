@@ -10,7 +10,9 @@ Die Probe spricht MQTT mit dem Cerbo. Sie schreibt dort nur den Heartbeat des Wa
 1. fragt den Watchdog nach Version und Zustand,
 2. macht ihn mit Heartbeats scharf,
 3. lässt die Heartbeats ausbleiben, bis er auslöst,
-4. nimmt die Heartbeats wieder auf, bis er wieder scharf ist,
+4. wartet ohne Heartbeat, bis seine Aktionen mit allen Wiederholungen durch sein müssen, liest
+   die Zahl der fehlgeschlagenen Aktionen und nimmt die Heartbeats wieder auf, bis er wieder
+   scharf ist,
 5. und gibt ihn mit der 0 frei.
 
 **Die Probe löst den Watchdog aus:** Er setzt die EVCS auf den sicheren Strom und schreibt Min-SOC
@@ -18,6 +20,9 @@ und Entladegrenze, wenn sie abweichen. Darum fragt das Werkzeug vorher nach; ``-
 die Rückfrage. Das Ergebnis ist ein Bericht im Format des Prüfprotokolls Teil 2. Läuft das EMS
 währenddessen mit einem live angeforderten Aktor, sendet es eigene Heartbeats, und der Watchdog
 löst nicht aus.
+
+Die Pause in Schritt 4 ist nötig: Wird der Watchdog wieder scharf, bricht sein Aktionslauf ab, und
+eine Aktion, die noch auf ihre nächste Wiederholung wartet, kommt nicht mehr zum Zug.
 
 Bricht die Probe ab, nachdem die Heartbeats liefen (Strg+C, Verbindungsverlust, Fehler), versucht
 sie, den Watchdog mit dem Heartbeat 0 freizugeben: Sonst löste er später unbeaufsichtigt aus oder
@@ -59,9 +64,11 @@ from bindaems.core.watchdog_client.status import WATCHDOG_VERSION
 from bindaems.shared.config import Config, ConfigError, Secrets, load_config, load_secrets
 from bindaems.shared.timeutil import LOCAL_TZ
 from bindaems.tools.verify_checks import Finding, Status, render_report
+from bindaems.tools.watchdog_config import RETRIES, RETRY_S
 
 ITEM = "17.2-5"  # Punkt im Prüfprotokoll Teil 2 (Spec 17.2)
 KEEPALIVE_S = 30.0  # Abstand der Keepalives; der Cerbo schickt Änderungen nur auf Anfrage
+ACTIONS_SLACK_S = 10.0  # Luft nach dem letzten möglichen Versuch des Aktionslaufs
 WAITING, ARMED, TRIPPED, DISABLED = 0, 1, 2, 3  # Werte von ``/State``
 STATE_NAMES = {WAITING: "wartet", ARMED: "scharf", TRIPPED: "ausgelöst", DISABLED: "deaktiviert"}
 NO_ANSWER = "Keine Antwort von com.victronenergy.bindaems."
@@ -84,7 +91,8 @@ class ProbeTimings:
 
     ``heartbeat_s`` ist der Takt der Heartbeats, ``timeout_s`` das Timeout des Watchdogs. Die
     ``*_wait_s`` sind die längsten Wartezeiten der Schritte; ``trip_slack_s`` kommt zum Timeout
-    hinzu, bis die Auslösung da sein muss.
+    hinzu, bis die Auslösung da sein muss. ``actions_wait_s`` ist die Pause ohne Heartbeat nach der
+    Auslösung, bis der Aktionslauf samt Wiederholungen zu Ende sein muss.
     """
 
     heartbeat_s: float
@@ -92,6 +100,7 @@ class ProbeTimings:
     arm_wait_s: float  # scharf nach den ersten Heartbeats
     timeout_s: float
     trip_slack_s: float
+    actions_wait_s: float  # Aktionslauf nach der Auslösung, ohne Heartbeat
     rearm_wait_s: float  # wieder scharf nach der Auslösung
     release_wait_s: float  # Zustand „wartet“ nach der 0
 
@@ -100,7 +109,8 @@ def timings_from_config(cfg: Config) -> ProbeTimings:
     """Heartbeat und Timeout aus ``victron.watchdog``; die Wartezeiten lassen Luft nach oben.
 
     Der Watchdog wird nach ``rearm_s`` = 30 s lückenloser Heartbeats scharf und prüft im Takt von
-    einer Sekunde.
+    einer Sekunde. Sein Aktionslauf dauert mit allen Wiederholungen ``RETRIES`` × ``RETRY_S`` aus
+    der erzeugten ``config.ini``; die Pause danach ist (``RETRIES`` + 1) × ``RETRY_S`` + 10 s.
     """
     watchdog = cfg.victron.watchdog
     return ProbeTimings(
@@ -109,6 +119,7 @@ def timings_from_config(cfg: Config) -> ProbeTimings:
         arm_wait_s=45.0,
         timeout_s=watchdog.timeout_s,
         trip_slack_s=30.0,
+        actions_wait_s=(RETRIES + 1) * RETRY_S + ACTIONS_SLACK_S,
         rearm_wait_s=45.0,
         release_wait_s=15.0,
     )
@@ -214,17 +225,18 @@ class _Probe:
         self._findings.append(await self._arm("Scharf nach Heartbeat", t.arm_wait_s))
         trips_before = self._values.get("TripCount")
         elapsed = await self._trip()
-        try:
-            rearmed = await self._arm("Wieder scharf", t.rearm_wait_s)
-        except BaseException:
-            # Abbruch vor dem Ende des Aktionslaufs: Der Befund zur Auslösung bleibt erhalten.
-            self._findings.append(self._trip_finding(elapsed, trips_before, final=False))
-            raise
-        # Mit der Auslösung steht /LastTripFailures auf 0; den Endstand bekommt der Pfad erst, wenn
-        # der Aktionslauf endet – spätestens beim Wieder-scharf-Werden. Darum entsteht dieser
-        # Befund erst jetzt, steht aber an seiner Stelle.
+        if elapsed is not None:
+            try:
+                await self._pause(t.actions_wait_s)
+            except BaseException:
+                # Abbruch vor dem Ende des Aktionslaufs: Der Befund zur Auslösung bleibt erhalten.
+                self._findings.append(self._trip_finding(elapsed, trips_before, final=False))
+                raise
+        # Mit der Auslösung steht /LastTripFailures auf 0; den Endstand bekommt der Pfad, wenn der
+        # Aktionslauf endet. Die Pause ohne Heartbeat lässt ihn mit allen Wiederholungen zu Ende
+        # laufen: Würde der Watchdog vorher wieder scharf, bräche der Lauf ab.
         self._findings.append(self._trip_finding(elapsed, trips_before, final=True))
-        self._findings.append(rearmed)
+        self._findings.append(await self._arm("Wieder scharf", t.rearm_wait_s))
         self._findings.append(await self._release())
 
     async def _release_after_abort(self) -> None:
@@ -263,6 +275,10 @@ class _Probe:
         if not await self._until(lambda: self._state() == TRIPPED, deadline):
             return None
         return loop.time() - self._last_beat
+
+    async def _pause(self, wait_s: float) -> None:
+        """Wartet ``wait_s`` ohne Heartbeat; endet die Verbindung vorher, mit deren Fehler."""
+        await self._until(lambda: False, asyncio.get_running_loop().time() + wait_s)
 
     def _trip_finding(self, elapsed: float | None, trips_before: object, *, final: bool) -> Finding:
         title = "Auslösung ohne Heartbeat"

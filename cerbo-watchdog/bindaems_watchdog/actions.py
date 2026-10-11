@@ -51,10 +51,11 @@ class _Task:
 class ActionRunner:
     """Führt die Aktionen einer Auslösung aus, jede für sich und mit Wiederholungen.
 
-    ``start`` beginnt einen Durchlauf, ``tick`` erledigt, was fällig ist. ``results`` hält je
-    Aktion ``"offen"``, ``"ok"`` (geschrieben und zurückgelesen), ``"unverändert"`` (stand schon
-    auf dem Sicherwert) oder ``"fehlgeschlagen"``; ``failures`` zählt die fehlgeschlagenen. Die
-    Namen der Aktionen sind eindeutig (ein Abschnitt je Name in der ``config.ini``).
+    ``start`` beginnt einen Durchlauf, ``tick`` erledigt, was fällig ist, und ``abort`` beendet
+    ihn vorzeitig. ``results`` hält je Aktion ``"offen"``, ``"ok"`` (geschrieben und
+    zurückgelesen), ``"unverändert"`` (stand schon auf dem Sicherwert) oder ``"fehlgeschlagen"``;
+    ``failures`` zählt die fehlgeschlagenen. Die Namen der Aktionen sind eindeutig (ein Abschnitt
+    je Name in der ``config.ini``).
     """
 
     def __init__(
@@ -102,6 +103,18 @@ class ActionRunner:
                 self._failures += 1
             else:
                 task.due = now + self._retry_s
+
+    def abort(self) -> None:
+        """Beendet den Durchlauf vorzeitig, ohne weiteren Versuch.
+
+        Eine offene Aktion, die schon mindestens einmal gescheitert ist, gilt als fehlgeschlagen
+        und zählt in ``failures``: Sie hat ihren Sicherwert nicht erreicht. Eine, die noch nie
+        versucht wurde, bleibt offen und zählt nicht.
+        """
+        for task in self._tasks:
+            if task.result == OPEN and task.attempts > 0:
+                task.result = FAILED
+                self._failures += 1
 
     def _attempt(self, action: Action) -> Optional[str]:
         """Ein Versuch: ``"ok"`` oder ``"unverändert"``; ``None``, wenn er gescheitert ist."""

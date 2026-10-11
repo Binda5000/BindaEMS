@@ -772,7 +772,8 @@ bis zu den Aktionen auf dem Cerbo. Sie
 1. fragt den Watchdog nach Version und Zustand,
 2. macht ihn mit Heartbeats scharf,
 3. lässt die Heartbeats ausbleiben, bis er auslöst,
-4. nimmt die Heartbeats wieder auf, bis er wieder scharf ist,
+4. wartet 45 s ohne Heartbeat, bis seine Aktionen mit allen Wiederholungen durch sind, und nimmt
+   die Heartbeats dann wieder auf, bis er wieder scharf ist,
 5. und gibt ihn mit der 0 frei.
 
 **Die Probe löst den Watchdog aus:** Er setzt die EVCS auf den sicheren Strom und schreibt
@@ -796,8 +797,16 @@ docker compose run --rm -v "$PWD/verification:/out" --entrypoint python ems-core
 - Der Bericht hat je Schritt eine Zeile mit OK, WARNUNG oder FEHLER. Der Exitcode ist 0, wenn
   kein Schritt FEHLER ist, und sonst 1. Bei ungültiger Konfiguration oder ungültigen Secrets ist er
   2.
-- Die Zeile „Auslösung ohne Heartbeat“ nennt die Zahl der fehlgeschlagenen Aktionen. Ist sie nicht
-  0, steht der Einzelfall im Log des Cerbo (unten, „Logs“).
+- Die Zeile „Auslösung ohne Heartbeat“ nennt die Zahl der fehlgeschlagenen Aktionen. Prüfe nach
+  **jeder** Probe zusätzlich das Log des Cerbo (unten, „Logs“), auch wenn die Zahl 0 ist:
+
+  ```bash
+  ssh root@cerbo.lan 'grep Aktion /var/log/bindaems-watchdog/current | tai64nlocal | tail -n 20'
+  ```
+
+  Die Zeile „Aktionen abgeschlossen: …“ nennt das Ergebnis jeder Aktion (`ok`, `unverändert` oder
+  `fehlgeschlagen`). Steht dort „Aktionen abgebrochen …“, endete der Lauf vorzeitig: Eine schon
+  gescheiterte Aktion zählt dann als fehlgeschlagen, eine mit „offen“ wurde nie versucht.
 - Die Probe verstellt vorher nichts: Stehen die Werte schon auf dem Sicherwert, schreibt der
   Watchdog nichts. Willst du das Zurücksetzen selbst sehen, stelle vor der Probe den EVCS-Strom
   von Hand auf einen anderen Wert und prüfe danach, dass er wieder auf dem sicheren Strom steht.

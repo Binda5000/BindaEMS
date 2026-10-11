@@ -880,7 +880,7 @@ Der Aufbau von `cerbo-watchdog/` steht in 5.6. Plan 2a (`docs/superpowers/plans/
     - Min-SOC auf die USV-Reserve
     - Entladegrenze auf unbegrenzt (−1)
   - Das Löschen der EMS-Overrides (hub4) kommt mit Plan 2b, sobald das Prüfprotokoll Teil 2 die Pfade festgelegt hat.
-  - Der Aktionslauf endet, sobald der Watchdog den Zustand „ausgelöst“ verlässt (Freigabe mit 0 oder wieder scharf). Noch offene Aktionen bleiben offen.
+  - Der Aktionslauf endet, sobald der Watchdog den Zustand „ausgelöst“ verlässt (Freigabe mit 0 oder wieder scharf). Eine offene Aktion, die schon gescheitert ist, zählt dann als fehlgeschlagen; eine noch nie versuchte bleibt offen.
 - **Konfiguration:**
   - Sicherwerte und Pfade stehen in `/data/bindaems-watchdog/config.ini`.
   - Ein Werkzeug erzeugt die Datei aus `config.yaml` (`python -m bindaems.tools.watchdog_config`). So stehen USV-Reserve, sicherer EVCS-Strom und Zeiten nur an einer Stelle. 2,5 × `heartbeat_s` muss kleiner sein als `timeout_s`, sonst lehnt der Watchdog die Datei ab.
@@ -1451,9 +1451,10 @@ Die Ergebnisse kommen nach `docs/verification/` mit Datum, Firmwareständen, erw
      - den Watchdog nach Version und Zustand fragen
      - ihn mit Heartbeats scharf machen
      - die Heartbeats ausbleiben lassen, bis er auslöst
+     - ohne Heartbeat warten, bis der Aktionslauf mit allen Wiederholungen zu Ende sein muss ((Wiederholungen + 1) × Abstand + 10 s, also 45 s); sonst bräche das Wiederscharfwerden den Lauf ab
      - die Heartbeats wieder aufnehmen, bis er wieder scharf ist
      - ihn mit der 0 freigeben
-   - Der Bericht (`docs/verification/JJJJ-MM-TT-watchdog-probe.md`) hat zu jedem Schritt eine Zeile unter Punkt 17.2-5. Die Zeile zur Auslösung nennt die Zahl der fehlgeschlagenen Aktionen (`/LastTripFailures`).
+   - Der Bericht (`docs/verification/JJJJ-MM-TT-watchdog-probe.md`) hat zu jedem Schritt eine Zeile unter Punkt 17.2-5. Die Zeile zur Auslösung nennt die Zahl der fehlgeschlagenen Aktionen (`/LastTripFailures`, gelesen nach dieser Pause). Nach jeder Probe prüft der Betreiber zusätzlich im Log des Cerbo die Zeile zum Aktionslauf („abgeschlossen“ oder „abgebrochen“).
    - Die Probe stellt vorher keine Werte um. Das Wiederherstellen verstellter Werte, auch der hub4-Overrides, kommt mit Plan 2b.
 6. **EVCS:**
    - Start/Stop, Strom 6–16 A, Reaktionszeit

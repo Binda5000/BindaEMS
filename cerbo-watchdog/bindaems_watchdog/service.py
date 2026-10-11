@@ -106,8 +106,9 @@ class WatchdogService:
         still. Darum fängt ``tick`` jeden Fehler, protokolliert ihn und macht weiter.
 
         Die Aktionen laufen nur, solange der Watchdog ausgelöst ist: Verlässt er den Zustand
-        (Freigabe mit 0 oder wieder scharf), endet der Lauf sofort, ohne weiteres Schreiben. Eine
-        Zustandsdatei, die sich nicht schreiben ließ, versucht er in jedem Takt erneut.
+        (Freigabe mit 0 oder wieder scharf), endet der Lauf sofort, ohne weiteres Schreiben; eine
+        schon gescheiterte offene Aktion zählt dann als fehlgeschlagen. Eine Zustandsdatei, die
+        sich nicht schreiben ließ, versucht er in jedem Takt erneut.
         """
         try:
             self._step(self._monotonic())
@@ -150,10 +151,12 @@ class WatchdogService:
     def _end_run(self, aborted: bool) -> None:
         """Beendet den Lauf: Ergebnisse ins Log, ``/LastTripFailures`` veröffentlichen.
 
-        Bei einem Abbruch bleiben unerledigte Aktionen offen; gezählt sind die bis dahin
-        fehlgeschlagenen.
+        Bei einem Abbruch zählt eine offene Aktion, die schon gescheitert ist, als fehlgeschlagen
+        (``ActionRunner.abort``); eine noch nie versuchte bleibt offen und zählt nicht.
         """
         self._run_pending = False
+        if aborted:
+            self._runner.abort()
         results = self._runner.results
         for name, result in results.items():
             if result == FAILED:

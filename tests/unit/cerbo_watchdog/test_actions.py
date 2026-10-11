@@ -216,3 +216,27 @@ def test_rejected_write_is_a_failed_attempt() -> None:
     assert runner.results == {"min_soc": "offen"}
     runner.tick(5.0)  # der zweite Versuch liest zuerst und findet den Sicherwert
     assert (len(access.writes), runner.results) == (1, {"min_soc": "unverändert"})
+
+
+def test_abort_counts_open_actions_that_already_failed() -> None:
+    # Die EVCS fehlt (keine Instanz 40) und wartet auf den nächsten Versuch, Min-SOC gelang.
+    runner = ActionRunner(FakeAccess({SETTINGS_PATH: 30}), [EVCS, MIN_SOC], retries=6, retry_s=5.0)
+    run(runner, [0.0, 5.0])
+    assert (runner.results, runner.failures) == ({"evcs_evcs": "offen", "min_soc": "ok"}, 0)
+    runner.abort()
+    assert (runner.results, runner.failures) == (
+        {"evcs_evcs": "fehlgeschlagen", "min_soc": "ok"},
+        1,
+    )
+
+
+def test_abort_leaves_actions_without_an_attempt_open() -> None:
+    access = FakeAccess({SETTINGS_PATH: 30})
+    runner = ActionRunner(access, [EVCS, MIN_SOC], retries=6, retry_s=5.0)
+    runner.start(0.0)
+    runner.abort()
+    assert (runner.results, runner.failures, access.writes) == (
+        {"evcs_evcs": "offen", "min_soc": "offen"},
+        0,
+        [],
+    )
