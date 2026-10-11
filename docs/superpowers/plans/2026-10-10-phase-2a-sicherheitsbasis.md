@@ -1117,8 +1117,8 @@ git commit -m "feat(safety): Regel 6 – Schreibbudget für persistente Einstell
   2. die Meldung jedes übergebenen Alarms, dessen ID mit `plaus.` beginnt; andere Alarme zählen nicht.
   3. `f"Sprung im Akku-SOC: {de(a)} % → {de(b)} %."`, solange die Haltezeit läuft.
 - Sprung:
-  - `InputCheck` merkt sich die letzte gültige SOC-Messung (Wert und `Reading.ts`).
-  - Eine neue Messung mit anderem `ts`, `|b − a| > 5` und Abstand ≤ 60 s setzt die Haltezeit auf `now + 60 s`.
+  - `InputCheck` merkt sich den letzten gültigen SOC-Wert und die Auswertungszeit `now`, zu der er ihn zuletzt mit Qualität OK gesehen hat. `Reading.ts` taugt dafür nicht: Mit suppress-republish bleibt er auf der letzten Änderung, obwohl der Wert bei jeder Auswertung gültig war.
+  - Ein neuer gültiger Wert mit `|b − a| > 5` und `now −` (letzte gültige Beobachtung) ≤ 60 s setzt die Haltezeit auf `now + 60 s`. Fehlt der SOC oder ist er ungültig, bleibt die Erinnerung unverändert.
   - Danach gilt die neue Messung als letzte.
 
 - [ ] **Step 1: Failing Tests schreiben**
