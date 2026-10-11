@@ -84,6 +84,22 @@ def soc_snap(seconds: float, pct: Value, quality: Quality = Quality.OK) -> Snaps
     return Snapshot(S(seconds), {**others.readings, **soc.readings})
 
 
+# Werte, die trotz Qualität OK keine endliche Zahl sind.
+UNUSABLE = {"none": None, "nan": float("nan"), "inf": float("inf"), "text": "55", "bool": True}
+
+
+def gap_snap(seconds: float, kind: str) -> Snapshot:
+    """Alle Signale in Ordnung, aber der SOC ist keine gültige Messung.
+
+    ``kind`` ist ``stale``, ``invalid``, ``absent`` oder ein Schlüssel aus ``UNUSABLE``.
+    """
+    if kind == "absent":
+        return snap_at(S(seconds), {k: v for k, v in GOOD.items() if k != SOC})
+    if kind in UNUSABLE:
+        return soc_snap(seconds, UNUSABLE[kind])
+    return soc_snap(seconds, 50.0, Quality(kind))
+
+
 def degraded(quality: Quality, *signals: str) -> Snapshot:
     """``GOOD``, aber die genannten Signale haben die Qualität ``quality``.
 
@@ -220,7 +236,7 @@ def test_a_jump_is_more_than_5_pp_in_either_direction(
 @pytest.mark.parametrize(
     ("gap_s", "jump"), [(59.0, True), (60.0, True), (60.5, False), (61.0, False)]
 )
-def test_the_measurements_must_be_at_most_60_s_apart(gap_s: float, jump: bool) -> None:
+def test_the_old_value_must_have_been_seen_at_most_60_s_ago(gap_s: float, jump: bool) -> None:
     check = InputCheck()
     check.evaluate(soc_snap(0, 50.0), [], T0)
     assert check.evaluate(soc_snap(gap_s, 60.0), [], S(gap_s)).ok is not jump
@@ -231,11 +247,11 @@ def test_the_hold_lasts_60_s_from_the_jump_and_is_half_open(cycle_s: float, held
     check = InputCheck()
     check.evaluate(soc_snap(0, 50.0), [], T0)
     check.evaluate(soc_snap(10, 58.0), [], S(10))  # Sprung erkannt, Haltezeit bis S(70)
-    # Jeder weitere Zyklus wertet dieselbe Messung aus (gleicher Zeitstempel).
+    # Jeder weitere Zyklus sieht denselben, unveränderten Wert.
     assert check.evaluate(soc_snap(10, 58.0), [], S(cycle_s)).ok is not held
 
 
-def test_cycles_with_the_same_measurement_do_not_extend_the_hold() -> None:
+def test_cycles_with_an_unchanged_soc_do_not_extend_the_hold() -> None:
     check = InputCheck()
     check.evaluate(soc_snap(0, 50.0), [], T0)
     for cycle_s in range(10, 70, 10):
@@ -262,7 +278,7 @@ def test_a_second_jump_restarts_the_hold_with_its_own_values() -> None:
     assert check.evaluate(soc_snap(30, 66.0), [], S(90)).ok
 
 
-def test_each_measurement_is_compared_with_the_one_before() -> None:
+def test_each_value_is_compared_with_the_one_before() -> None:
     check = InputCheck()
     check.evaluate(soc_snap(0, 50.0), [], T0)
     assert check.evaluate(soc_snap(10, 53.0), [], S(10)).ok
@@ -272,32 +288,53 @@ def test_each_measurement_is_compared_with_the_one_before() -> None:
     )
 
 
-def test_distance_counts_from_the_readings_and_the_hold_from_now() -> None:
+def test_a_jump_after_a_long_plateau_is_detected() -> None:
+    # Victron-MQTT mit suppress-republish meldet den SOC nur bei Änderungen: Sein Reading.ts
+    # bleibt bei T0 stehen, der Wert war aber in jedem Zyklus gültig.
     check = InputCheck()
-    check.evaluate(soc_snap(0, 50.0), [], T0)
-    # Die Messung ist 10 s jünger als die erste, wird aber erst bei S(200) ausgewertet: Der
-    # Abstand zählt nach den Messzeiten, die Haltezeit ab ``now``.
-    late = check.evaluate(soc_snap(10, 58.0), [], S(200))
-    assert late.problems == ("Sprung im Akku-SOC: 50 % → 58 %.",)
-    assert not check.evaluate(soc_snap(10, 58.0), [], S(259)).ok
-    assert check.evaluate(soc_snap(10, 58.0), [], S(260)).ok
-
-
-def test_a_reading_with_the_same_timestamp_is_not_a_new_measurement() -> None:
-    check = InputCheck()
-    check.evaluate(soc_snap(0, 50.0), [], T0)
-    assert check.evaluate(soc_snap(0, 70.0), [], S(5)).ok  # gleicher Zeitstempel: nicht neu
-    # Die letzte Messung ist weiter die von T0.
-    assert check.evaluate(soc_snap(10, 58.0), [], S(10)).problems == (
-        "Sprung im Akku-SOC: 50 % → 58 %.",
+    plateau = soc_snap(0, 50.0)
+    for cycle_s in range(0, 601, 10):
+        assert check.evaluate(plateau, [], S(cycle_s)).ok
+    assert check.evaluate(soc_snap(601, 80.0), [], S(601)).problems == (
+        "Sprung im Akku-SOC: 50 % → 80 %.",
     )
 
 
-@pytest.mark.parametrize(("ts_s", "jump"), [(140, True), (139, False)])
-def test_a_reading_older_than_the_last_counts_by_its_distance(ts_s: float, jump: bool) -> None:
+@pytest.mark.parametrize("gap", ["stale", "invalid", "absent", *UNUSABLE])
+def test_a_changed_value_after_a_gap_longer_than_60_s_is_no_jump(gap: str) -> None:
     check = InputCheck()
-    check.evaluate(soc_snap(200, 50.0), [], S(200))
-    assert check.evaluate(soc_snap(ts_s, 58.0), [], S(201)).ok is not jump
+    check.evaluate(soc_snap(0, 50.0), [], T0)
+    for cycle_s in range(10, 121, 10):  # nichts davon frischt den alten Wert auf
+        check.evaluate(gap_snap(cycle_s, gap), [], S(cycle_s))
+    assert check.evaluate(soc_snap(121, 60.0), [], S(121)).ok
+
+
+def test_evaluations_far_apart_are_no_jump_even_with_close_readings() -> None:
+    check = InputCheck()
+    check.evaluate(soc_snap(0, 50.0), [], T0)
+    # Die Messzeit liegt nur 10 s nach der ersten, ausgewertet wird aber erst bei S(200):
+    # Der alte Wert wurde seit 200 s nicht mehr gesehen.
+    assert check.evaluate(soc_snap(10, 60.0), [], S(200)).ok
+
+
+@pytest.mark.parametrize("ts_s", [0, 10, 1000])  # Messzeit gleich der ersten, nah, weit weg
+def test_reading_timestamps_play_no_role_for_a_jump_or_its_hold(ts_s: float) -> None:
+    check = InputCheck()
+    check.evaluate(soc_snap(0, 50.0), [], T0)
+    jumped = soc_snap(ts_s, 60.0)
+    assert check.evaluate(jumped, [], S(10)).problems == ("Sprung im Akku-SOC: 50 % → 60 %.",)
+    # Die Haltezeit läuft ab der Auswertung, nicht ab der Messzeit.
+    assert not check.evaluate(jumped, [], S(69)).ok
+    assert check.evaluate(jumped, [], S(70)).ok
+
+
+def test_a_clock_stepping_back_does_not_hide_a_jump() -> None:
+    check = InputCheck()
+    check.evaluate(soc_snap(3600, 50.0), [], S(3600))
+    # Die Uhr springt um eine Stunde zurück: Der Abstand gilt als klein (lieber zu streng).
+    assert check.evaluate(soc_snap(0, 58.0), [], T0).problems == (
+        "Sprung im Akku-SOC: 50 % → 58 %.",
+    )
 
 
 @pytest.mark.parametrize("quality", [Quality.STALE, Quality.INVALID])
@@ -306,13 +343,13 @@ def test_a_soc_without_quality_ok_is_neither_judged_nor_remembered(quality: Qual
     check.evaluate(soc_snap(0, 50.0), [], T0)
     bad = check.evaluate(soc_snap(10, 70.0, quality), [], S(10))
     assert bad.problems == ("Messwert fehlt oder ist veraltet: battery.soc_pct.",)  # kein Sprung
-    # Verglichen wird weiter mit der letzten gültigen Messung (50 % um T0).
+    # Verglichen wird weiter mit dem letzten gültigen Wert (50 %, zuletzt bei T0 gesehen).
     assert check.evaluate(soc_snap(20, 58.0), [], S(20)).problems == (
         "Sprung im Akku-SOC: 50 % → 58 %.",
     )
 
 
-@pytest.mark.parametrize("value", [None, float("nan"), float("inf"), "55", True])
+@pytest.mark.parametrize("value", list(UNUSABLE.values()))
 def test_an_unusable_soc_value_is_not_remembered(value: Value) -> None:
     check = InputCheck()
     check.evaluate(soc_snap(0, 50.0), [], T0)

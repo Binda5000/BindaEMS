@@ -4,14 +4,15 @@
 
 1. Ein Sicherheitssignal (``SAFETY_SIGNALS``) fehlt oder hat nicht die Qualität ``OK``.
 2. Die Plausibilitätsprüfung aus Phase 1 meldet einen Alarm (ID ``plaus.…``).
-3. Der Akku-SOC ist gesprungen: Ändert er sich zwischen zwei Messungen, die höchstens 60 s
-   auseinanderliegen, um mehr als 5 Prozentpunkte, gilt er 60 s lang als unplausibel.
+3. Der Akku-SOC ist gesprungen: Weicht er um mehr als 5 Prozentpunkte von einem Wert ab, den die
+   Prüfung höchstens 60 s zuvor zuletzt gesehen hat, gilt er 60 s lang als unplausibel.
 
 Die Sprungerkennung gilt nur für den SOC. Netzleistungen springen legitim, etwa beim Start einer
 Wallbox; für sie bleiben die Wertebereiche und die Energiebilanz der Plausibilitätsprüfung.
 
-Die Schicht ist rein: Die Zeit kommt als Argument. Der Abstand zweier Messungen zählt nach den
-Zeitstempeln der Messwerte (``Reading.ts``), die Haltezeit nach ``now``.
+Die Schicht ist rein: Die Zeit kommt als Argument. Abstand und Haltezeit zählen nach dem ``now``
+der Auswertungen, nicht nach ``Reading.ts``: Bei Victron-MQTT mit ``suppress-republish`` bleibt
+der Zeitstempel beim letzten Wertwechsel stehen, obwohl der Wert seither in jedem Zyklus gültig war.
 """
 
 from __future__ import annotations
@@ -35,18 +36,22 @@ SAFETY_SIGNALS: Final = (
     _SOC,
     "battery.power_w",
 )
-SOC_JUMP_PP: Final = 5.0  # mehr Prozentpunkte Änderung sind ein Sprung, ...
-SOC_JUMP_WINDOW_S: Final = 60.0  # ... wenn die Messungen höchstens so viele Sekunden trennen
-SOC_JUMP_HOLD_S: Final = 60.0  # so lange gilt der SOC nach einem Sprung als unplausibel
+
+# Sprung des SOC: Weicht ein gültiger Wert um mehr als SOC_JUMP_PP Prozentpunkte von einem Wert ab,
+# den die Prüfung höchstens SOC_JUMP_WINDOW_S zuvor zuletzt gesehen hat, gilt der SOC danach
+# SOC_JUMP_HOLD_S lang als unplausibel.
+SOC_JUMP_PP: Final = 5.0
+SOC_JUMP_WINDOW_S: Final = 60.0
+SOC_JUMP_HOLD_S: Final = 60.0
 
 _PLAUSIBILITY_PREFIX: Final = "plaus."  # Alarm-IDs der Plausibilitätsprüfung aus Phase 1
 
 
 class _Soc(NamedTuple):
-    """Eine gültige SOC-Messung: der Wert in % und der Zeitstempel des Messwerts."""
+    """Ein gültiger SOC-Wert in % und das ``now`` der Auswertung, die ihn zuletzt gesehen hat."""
 
     pct: float
-    ts: datetime
+    seen_at: datetime
 
 
 class _Jump(NamedTuple):
@@ -60,9 +65,9 @@ class _Jump(NamedTuple):
 class InputCheck:
     """Regel 7: Sind die Eingangsdaten dieses Zyklus brauchbar?
 
-    Der Zustand ist die letzte gültige SOC-Messung und der letzte erkannte Sprung. Dieselbe
-    Messung zählt nur einmal: Wertet ein weiterer Zyklus denselben Messwert (gleicher
-    ``Reading.ts``) noch einmal aus, ändert das weder die letzte Messung noch die Haltezeit.
+    Der Zustand ist der letzte gültige SOC-Wert mit dem Zeitpunkt, zu dem eine Auswertung ihn
+    zuletzt gesehen hat, und der letzte erkannte Sprung. Wertet ein weiterer Zyklus denselben Wert
+    noch einmal aus, ist das kein Sprung und verlängert die Haltezeit nicht.
     """
 
     def __init__(self) -> None:
@@ -80,14 +85,18 @@ class InputCheck:
            der übergebenen Reihenfolge. Andere Alarme zählen nicht.
         3. ``Sprung im Akku-SOC: a % → b %.``, solange die Haltezeit läuft.
 
-        Ein Sprung ist eine neue gültige SOC-Messung (Qualität ``OK``, endliche Zahl, anderer
-        ``Reading.ts`` als die letzte), die um mehr als ``SOC_JUMP_PP`` von der letzten abweicht
-        und höchstens ``SOC_JUMP_WINDOW_S`` von ihr entfernt liegt. Er setzt die Haltezeit auf
+        Ein Sprung ist ein gültiger SOC-Wert ``b`` (Qualität ``OK``, endliche Zahl), der um mehr
+        als ``SOC_JUMP_PP`` vom letzten gültigen Wert ``a`` abweicht, wenn eine frühere Auswertung
+        ``a`` zuletzt höchstens ``SOC_JUMP_WINDOW_S`` vor diesem ``now`` gesehen hat. Jede
+        Auswertung mit gültigem SOC merkt sich den Wert und ihr ``now`` als „zuletzt gesehen“, auch
+        bei unverändertem Wert; ``Reading.ts`` zählt nicht. Ein Sprung setzt die Haltezeit auf
         ``now + SOC_JUMP_HOLD_S``; sie ist halboffen, bei ``now`` gleich ihrem Ende ist sie
-        vorbei. Läuft die Uhr zurück, dauert sie entsprechend länger: lieber zu streng. Ein
-        weiterer Sprung ersetzt Haltezeit und Werte. Danach gilt die neue Messung als letzte,
-        auch wenn sie kein Sprung war. Fehlt der SOC oder ist er ungültig, bleibt die letzte
-        gültige Messung unverändert.
+        vorbei. Ein weiterer Sprung ersetzt Haltezeit und Werte.
+
+        Fehlt der SOC, hat er nicht die Qualität ``OK`` oder ist er keine endliche Zahl, bleibt der
+        Speicher unverändert: Nach einer Lücke von mehr als ``SOC_JUMP_WINDOW_S`` ist ein
+        geänderter Wert kein Sprung. Läuft die Uhr zurück, gilt der Abstand als klein und die
+        Haltezeit dauert entsprechend länger: lieber zu streng.
         """
         self._track_soc(snap, now)
         problems: list[str] = []
@@ -101,22 +110,17 @@ class InputCheck:
         return InputStatus(not problems, tuple(problems))
 
     def _track_soc(self, snap: Snapshot, now: datetime) -> None:
-        """Wertet eine neue gültige SOC-Messung aus und merkt sie sich als letzte."""
+        """Prüft einen gültigen SOC auf einen Sprung und merkt ihn als zuletzt gesehen."""
         reading = snap.get(_SOC)
         if reading is None or reading.quality is not Quality.OK:
             return
         pct = finite_number(reading.value)
         if pct is None:
             return
-        measured = _Soc(pct, reading.ts)
         last = self._last_soc
-        if last is not None:
-            if measured.ts == last.ts:
-                return  # dieselbe Messung wie im Zyklus davor
-            if _is_jump(last, measured):
-                until = now + timedelta(seconds=SOC_JUMP_HOLD_S)
-                self._jump = _Jump(last.pct, measured.pct, until)
-        self._last_soc = measured
+        if last is not None and _is_jump(last, pct, now):
+            self._jump = _Jump(last.pct, pct, now + timedelta(seconds=SOC_JUMP_HOLD_S))
+        self._last_soc = _Soc(pct, now)
 
 
 def _is_ok(snap: Snapshot, signal: str) -> bool:
@@ -125,9 +129,13 @@ def _is_ok(snap: Snapshot, signal: str) -> bool:
     return reading is not None and reading.quality is Quality.OK
 
 
-def _is_jump(before: _Soc, after: _Soc) -> bool:
-    """Mehr als ``SOC_JUMP_PP`` Unterschied bei höchstens ``SOC_JUMP_WINDOW_S`` Abstand."""
+def _is_jump(last: _Soc, pct: float, now: datetime) -> bool:
+    """``pct`` weicht von ``last`` um mehr als ``SOC_JUMP_PP`` ab, und ``last`` ist nicht zu alt.
+
+    Nicht zu alt heißt: ``now − last.seen_at`` ist höchstens ``SOC_JUMP_WINDOW_S``. Ein negativer
+    Abstand (die Uhr lief zurück) zählt als klein.
+    """
     return (
-        abs(after.pct - before.pct) > SOC_JUMP_PP
-        and abs((after.ts - before.ts).total_seconds()) <= SOC_JUMP_WINDOW_S
+        abs(pct - last.pct) > SOC_JUMP_PP
+        and (now - last.seen_at).total_seconds() <= SOC_JUMP_WINDOW_S
     )
