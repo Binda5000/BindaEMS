@@ -464,6 +464,16 @@ def test_start_assumes_set_current_or_maximum(limits, actuator, set_current, rej
     assert step.reject is reject
 
 
+@pytest.mark.parametrize(("actuator", "minimum"), [(EVCS, 6.0), (TESLA, 5.0)])
+def test_start_assumes_at_least_the_minimum_current(limits, actuator, minimum) -> None:
+    # Ein startendes Auto zieht mindestens den Mindeststrom, auch wenn der Ist-Strom 0 A ist.
+    tight = {"L1": 33.0 - minimum + 0.5, "L2": 10.0, "L3": 10.0}
+    over = start_charging(limits, tight, set_current=0.0, actuator=actuator)
+    assert over.reject and over.findings[0].text == "Phase L1 würde über 33 A steigen."
+    enough = {"L1": 33.0 - minimum, "L2": 10.0, "L3": 10.0}
+    assert start_charging(limits, enough, set_current=0.0, actuator=actuator).value is True
+
+
 def test_start_checks_all_three_phases(limits) -> None:
     # Auch eine Phase, auf der die Wallbox gerade nichts zieht, kann beim Start Strom bekommen.
     imports = {"L1": 20.0, "L2": 20.0, "L3": 32.5}

@@ -517,3 +517,61 @@ def test_budget_exception_needs_the_safe_value_of_the_same_kind(layer) -> None:
         Command("victron", K.MAX_DISCHARGE, 20.0, urgent=True), make_ctx(now=S(12), present=present)
     )
     assert (v.outcome, v.findings[-1].code) == (Outcome.REJECTED, "budget.exhausted")
+
+
+def test_urgent_setpoint_clamped_away_from_safe_is_not_urgent(layer) -> None:
+    # −300 W ginge Richtung sicher; die Regeln 1–3 machen daraus 0 W, 200 W mehr Bezug als −200 W.
+    ctx = make_ctx(
+        operating=OperatingState.SAFE,
+        inputs=InputStatus(False, ("A.",)),
+        base_grid_setpoint_w=-200.0,
+        present={("victron", K.GRID_SETPOINT): None},
+    )
+    v = layer.authorize(Command("victron", K.GRID_SETPOINT, -300.0, urgent=True), ctx)
+    assert (v.outcome, v.value, [f.code for f in v.findings]) == (
+        Outcome.REJECTED,
+        None,
+        ["urgent.ignored", "state.inactive"],
+    )
+
+
+def test_urgent_discharge_limit_clamped_to_a_tightening_is_not_urgent(layer) -> None:
+    # 15 000 W lockert die Grenze von 14 000 W; auf 12 000 W geklemmt verschärft sie aber.
+    command = Command("victron", K.MAX_DISCHARGE, 15000.0, urgent=True)
+    changes = {"battery_discharge_w": 13500.0, "present": {("victron", K.MAX_DISCHARGE): 14000.0}}
+    in_safe = layer.authorize(command, make_ctx(operating=OperatingState.SAFE, **changes))
+    assert (in_safe.outcome, [f.code for f in in_safe.findings]) == (
+        Outcome.REJECTED,
+        ["urgent.ignored", "state.inactive"],
+    )
+    bad_inputs = layer.authorize(command, make_ctx(inputs=InputStatus(False, ("A.",)), **changes))
+    assert (bad_inputs.outcome, [f.code for f in bad_inputs.findings]) == (
+        Outcome.REJECTED,
+        ["urgent.ignored", "inputs"],
+    )
+    normal = layer.authorize(command, make_ctx(**changes))  # nur nach den normalen Regeln
+    assert (normal.outcome, normal.value, [f.code for f in normal.findings]) == (
+        Outcome.CLAMPED,
+        12000.0,
+        ["urgent.ignored", "range.max"],
+    )
+
+
+@pytest.mark.parametrize(
+    ("command", "present"),
+    [
+        # unter dem Mindeststrom
+        (Command(EVCS, K.CURRENT, 5.0, urgent=True), {(EVCS, K.CURRENT): 16.0}),
+        # nicht endlich; abgelehnt hat der Sollwert keinen Wert, wie ein aufgehobener Override
+        (
+            Command("victron", K.GRID_SETPOINT, float("-inf"), urgent=True),
+            {("victron", K.GRID_SETPOINT): None},
+        ),
+    ],
+)
+def test_urgent_value_rejected_by_ranges_is_not_urgent(layer, command, present) -> None:
+    v = layer.authorize(command, make_ctx(operating=OperatingState.SAFE, present=present))
+    assert (v.outcome, [f.code for f in v.findings]) == (
+        Outcome.REJECTED,
+        ["urgent.ignored", "state.inactive"],
+    )

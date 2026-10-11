@@ -132,7 +132,9 @@ def _check_current(actuator: str, value: float, ctx: SafetyContext, limits: Hard
 def _check_charging(actuator: str, start: bool, ctx: SafetyContext, limits: HardLimits) -> Step:
     """Laden an oder aus: Beim Start muss ``I_p − m_p + I_c ≤ Grenze`` auf allen drei Phasen halten.
 
-    Ladestrom ``I_c`` ist der Ist-Strom, sonst der Höchststrom des Aktors.
+    Ladestrom ``I_c`` ist der Ist-Strom, aber mindestens der Mindeststrom des Aktors, denn ein
+    startendes Auto zieht nie weniger, auch wenn die Wallbox im Stand 0 A meldet. Ist der Ist-Strom
+    unbekannt, gilt der Höchststrom.
     """
     if not start or ctx.present.get((actuator, CommandKind.CHARGING)) is True:
         return Step(start)
@@ -141,9 +143,9 @@ def _check_charging(actuator: str, start: bool, ctx: SafetyContext, limits: Hard
     if loads is None:
         return _PHASES_UNKNOWN
 
-    charge_a = finite_number(ctx.present.get((actuator, CommandKind.CURRENT)))
-    if charge_a is None:
-        charge_a = limits.currents[actuator].max_a
+    current = limits.currents[actuator]
+    actual = finite_number(ctx.present.get((actuator, CommandKind.CURRENT)))
+    charge_a = current.max_a if actual is None else max(actual, current.min_a)
     if all(load.imported - load.measured + charge_a <= limits.phase_limit_a for load in loads):
         return Step(True)
     return _rejected(_binding(loads, limits)[0], limits)

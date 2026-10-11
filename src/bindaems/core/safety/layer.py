@@ -6,9 +6,11 @@ Sperren (7.9), Betriebsart, Eingangsdaten (Regel 7), Wertebereiche (Regeln 1–3
 ``Verdict``; im Dry-Run wird genauso geprüft und erfasst wie live, nur nicht gesendet.
 
 Ein dringender Befehl, der nachweislich Richtung sicherer Zustand geht (``toward_safe``), darf auch
-in SAFE schreiben und trotz unplausibler Eingangsdaten. Er umgeht Mindestabstände, Stundenlimits
-und Totbänder, außer bei gleichem Wert, und das Schreibbudget nur mit dem exakten Sicherwert seiner
-Art. Sperren und die Regeln 1–4 gelten auch für ihn.
+in SAFE schreiben und trotz unplausibler Eingangsdaten. Nachweislich heißt: mit dem angeforderten
+Wert und mit dem Wert nach den Regeln 1–3; Regel 4 verringert nur noch oder lockert die
+Entladegrenze. Er umgeht Mindestabstände, Stundenlimits und Totbänder, außer bei gleichem Wert, und
+das Schreibbudget nur mit dem exakten Sicherwert seiner Art. Sperren und die Regeln 1–4 gelten auch
+für ihn.
 
 Zeit, Messwerte, Freigaben und Sperren kommen über den ``SafetyContext``. Gedächtnis haben nur der
 Rate-Limiter und das Schreibbudget: Sie erfassen jeden Befehl, der einen Wert zum Senden ergibt.
@@ -16,6 +18,7 @@ Rate-Limiter und das Schreibbudget: Sie erfassen jeden Befehl, der einen Wert zu
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import datetime
 from typing import Final
 
@@ -63,8 +66,9 @@ class SafetyLayer:
         Die Schritte, genau in dieser Reihenfolge:
 
         1. Aktor im Katalog und Art beim Aktor erlaubt, sonst ``REJECTED``.
-        2. ``urgent_ok``: dringend und ``toward_safe``. Ist der Befehl als dringend markiert, geht
-           aber nicht Richtung sicher, kommt ``urgent.ignored`` dazu, und er wird normal geprüft.
+        2. ``urgent_ok``: dringend, und ``toward_safe`` gilt für den angeforderten Wert und für den
+           Wert nach den Regeln 1–3 (lehnen sie ab, nie). Ist der Befehl als dringend markiert,
+           aber nicht ``urgent_ok``, kommt ``urgent.ignored`` dazu, und er wird normal geprüft.
         3. Zustand CONTROL oder DEGRADED, oder ``urgent_ok`` in SAFE; sonst ``REJECTED``.
         4. Gesperrter Aktor: ``REJECTED``, auch bei ``urgent_ok``.
         5. Betriebsart: Dry-Run, außer der Aktor steht in ``ctx.modes`` auf ``LIVE``.
@@ -107,8 +111,16 @@ class SafetyLayer:
             text = f"„{spec.label}“ kennt den Befehl „{command.kind}“ nicht."
             return rejected(Finding("kind.unsupported", text))
 
-        # 2. Dringend und nachweislich Richtung sicherer Zustand?
-        urgent_ok = command.urgent and toward_safe(command, ctx, limits)
+        # 2. Dringend und nachweislich Richtung sicherer Zustand, mit dem angeforderten Wert und mit
+        #    dem Wert nach den Regeln 1–3, denn diese können ihn wieder davon wegbringen. Die Regeln
+        #    sind rein: Ihr Ergebnis wird hier schon berechnet, zählt aber erst in Schritt 7.
+        ranged = check_range(command, limits, ctx.grid_budget_w)
+        urgent_ok = (
+            command.urgent
+            and not ranged.reject
+            and toward_safe(command, ctx, limits)
+            and toward_safe(replace(command, value=ranged.value), ctx, limits)
+        )
         if command.urgent and not urgent_ok:
             findings.append(URGENT_IGNORED)
 
@@ -129,8 +141,7 @@ class SafetyLayer:
             problems = "; ".join(ctx.inputs.problems)
             return rejected(Finding("inputs", f"Eingangsdaten unplausibel: {problems}"))
 
-        # 7. Regeln 1–3: Wertebereiche
-        ranged = check_range(command, limits, ctx.grid_budget_w)
+        # 7. Regeln 1–3: Wertebereiche (in Schritt 2 berechnet)
         findings.extend(ranged.findings)
         if ranged.reject:
             return rejected()

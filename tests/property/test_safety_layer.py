@@ -21,7 +21,7 @@ import math
 import tempfile
 from collections.abc import Iterator
 from contextlib import contextmanager
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
 from itertools import pairwise
 from pathlib import Path
@@ -210,8 +210,10 @@ def predicted(command: Command, value: object, ctx: SafetyContext) -> list[float
         if kind == K.CURRENT:  # lädt die Wallbox, zählen nur ihre aktiven Phasen
             phases = [p for p in phases if measured[p] >= ACTIVE_A] or phases
             draw = value
-        else:  # Start mit dem bekannten Ist-Strom, sonst mit dem Höchststrom
-            draw = ctx.present.get((command.actuator, K.CURRENT), CURRENTS[command.actuator][1])
+        else:  # Start: Ist-Strom, aber mindestens der Mindeststrom; unbekannt der Höchststrom
+            min_a, max_a, _ = CURRENTS[command.actuator]
+            actual = ctx.present.get((command.actuator, K.CURRENT))
+            draw = max_a if actual is None else max(actual, min_a)
         return [None if imported[p] is None else imported[p] - measured[p] + draw for p in phases]
     if kind == K.GRID_SETPOINT:  # die Änderung verteilt sich gleichmäßig auf die drei Phasen
         extra = (value - setpoint_before(ctx)) / (3 * VOLTAGE_V)
@@ -281,12 +283,20 @@ VALUES = {  # meist ein Wert in der Nähe der Grenzen der Art, sonst irgendeiner
     K.CURRENT: mixed((3, st.integers(5, 32)), (2, st.floats(4, 40)), (1, ANY_VALUE)),
     K.CHARGING: mixed((4, st.booleans()), (1, ANY_VALUE)),
     K.GRID_SETPOINT: mixed(
-        (1, st.none()), (3, st.floats(1, 9_000)), (1, st.floats(-1_000, 25_000)), (1, ANY_VALUE)
+        (1, st.none()),
+        (3, st.floats(1, 9_000)),
+        (1, st.floats(-1_000, -1)),  # unter 0: die Regeln 1–3 heben auf 0
+        (1, st.floats(-1_000, 25_000)),
+        (1, ANY_VALUE),
     ),
     K.MAX_DISCHARGE: mixed(
         (1, st.just(-1.0)),
         (3, st.floats(0, 3_000)),
         (1, st.floats(0, 15_000)),
+        (
+            1,
+            st.floats(MAX_DISCHARGE_W, 2 * MAX_DISCHARGE_W),
+        ),  # die Regeln 1–3 senken auf die Grenze
         (1, st.floats(-10, 0)),
         (1, ANY_VALUE),
     ),
@@ -371,7 +381,6 @@ BUDGET_W = mixed((1, st.floats(0, 30_000)), (1, st.none()))
 HISTORY = weighted((4, False), (1, True))
 
 Checks = list[tuple[Command, SafetyContext]]
-Case = tuple[Checks, bool, bool]  # Befehle mit Kontext, recent, exhausted
 
 
 def context(draw: st.DrawFn, closed: str | None, actuator: str) -> SafetyContext:
@@ -402,39 +411,121 @@ def context(draw: st.DrawFn, closed: str | None, actuator: str) -> SafetyContext
     )
 
 
-@st.composite
-def batches(draw: st.DrawFn) -> Case:
+@dataclass(frozen=True)
+class Batch:
     """Je ein Befehl für jede Art jedes Aktors und einer daneben, alle im selben Kontext.
 
-    Die Gates sind meist offen; sonst ist eines zu, eine Sperre trifft einen zufälligen Aktor.
+    ``recent``: Eben erst ging ein Befehl derselben Art durch, die Mindestabstände greifen.
+    ``exhausted``: Das Schreibbudget ist aufgebraucht.
     """
+
+    commands: tuple[Command, ...]
+    ctx: SafetyContext
+    recent: bool
+    exhausted: bool
+
+    def checks(self) -> Checks:
+        return [(command, self.ctx) for command in self.commands]
+
+
+@st.composite
+def batches(draw: st.DrawFn) -> Batch:
+    """Die Gates sind meist offen; sonst ist eines zu, eine Sperre trifft einen zufälligen Aktor."""
     batch = [
         Command(actuator, kind, draw(VALUES[kind]), urgent=draw(URGENT)) for actuator, kind in PAIRS
     ]
     batch.append(draw(STRAY_COMMAND))
     ctx = context(draw, draw(CLOSED_GATE), draw(LOCKED_TARGET))
-    return [(command, ctx) for command in batch], draw(HISTORY), draw(HISTORY)
+    return Batch(tuple(batch), ctx, draw(HISTORY), draw(HISTORY))
 
 
-@st.composite
-def gate_cases(draw: st.DrawFn) -> Case:
-    """Ein Befehl in allen Stellungen der Gates, dringend und nicht dringend.
+DISTANCE = mixed((1, st.just(0.5)), (2, st.floats(1, 100)), (1, st.floats(100, 5_000)))
 
-    Die Stellungen: Regelbetrieb (CONTROL oder DEGRADED), SAFE, OBSERVE oder START; sein Aktor frei
-    oder gesperrt; Eingangsdaten plausibel oder nicht. Alles andere bleibt gleich.
+
+def safe_side(command: Command, distance: float) -> float | None:
+    """Ein Ist-Wert ``distance`` auf der sicheren Seite des Werts: Der Befehl ginge Richtung sicher.
+
+    Er liegt über dem Strom, dem Netz-Sollwert und dem Min-SOC und unter der Entladegrenze, nie
+    unter 0. ``None`` bei ``charging`` und bei Werten, die keine endliche Zahl sind.
     """
-    command = draw(ANY_COMMAND)
-    ctx = context(draw, None, command.actuator)
-    states = (ctx.operating, OperatingState.SAFE, draw(INACTIVE_STATE))
-    locked = {**ctx.locks, command.actuator: draw(LOCK_REASONS)}
-    checks = [
-        (replace(command, urgent=urgent), replace(ctx, operating=state, locks=locks, inputs=inputs))
-        for urgent in (command.urgent, not command.urgent)
+    value = number(command.value)
+    if value is None or command.kind == K.CHARGING:
+        return None
+    if command.kind == K.MAX_DISCHARGE:
+        return max(value - distance, 0.0)
+    return value + distance
+
+
+def gate_settings(
+    command: Command,
+    ctx: SafetyContext,
+    states: tuple[OperatingState, ...],
+    reasons: tuple[str, ...],
+) -> Checks:
+    """Der Befehl in jeder Stellung der Gates: jeder Zustand aus ``states``, sein Aktor frei oder
+    gesperrt, Eingangsdaten plausibel oder nicht."""
+    locked = {**ctx.locks, command.actuator: reasons}
+    return [
+        (command, replace(ctx, operating=state, locks=locks, inputs=inputs))
         for state in states
         for locks in (ctx.locks, locked)
         for inputs in (OK, NOT_OK)
     ]
-    return checks, draw(HISTORY), draw(HISTORY)
+
+
+@dataclass(frozen=True)
+class GateCase:
+    """Ein Befehl in einem Kontext mit offenen Gates und was es braucht, um sie zu schließen.
+
+    ``inactive``: OBSERVE oder START. ``reasons``: die Sperrgründe, wenn sein Aktor gesperrt ist.
+    ``distance``: Abstand des Ist-Werts in der Gegenprobe. ``recent`` und ``exhausted`` wie bei
+    ``Batch``.
+    """
+
+    command: Command
+    ctx: SafetyContext
+    inactive: OperatingState
+    reasons: tuple[str, ...]
+    distance: float
+    recent: bool
+    exhausted: bool
+
+    def checks(self) -> Checks:
+        """Der Befehl in allen Stellungen der Gates, dringend und nicht dringend.
+
+        Die Stellungen: Regelbetrieb (CONTROL oder DEGRADED), SAFE, OBSERVE oder START; sein Aktor
+        frei oder gesperrt; Eingangsdaten plausibel oder nicht. Dazu die Gegenprobe: der Befehl
+        dringend, mit einem Ist-Wert knapp auf der sicheren Seite seines Werts. So kommt auch ein
+        Wert vor, der Richtung sicher ginge, den die Regeln 1–3 aber wieder davon wegbringen.
+        """
+        command, ctx, reasons = self.command, self.ctx, self.reasons
+        states = (ctx.operating, OperatingState.SAFE, self.inactive)
+        checks = [
+            *gate_settings(command, ctx, states, reasons),
+            *gate_settings(replace(command, urgent=not command.urgent), ctx, states, reasons),
+        ]
+        near = safe_side(command, self.distance)
+        if near is not None:
+            present = {**ctx.present, (command.actuator, command.kind): near}
+            urgent = replace(command, urgent=True)
+            checks += gate_settings(urgent, replace(ctx, present=present), states, reasons)
+        return checks
+
+
+@st.composite
+def gate_cases(draw: st.DrawFn) -> GateCase:
+    """Ein Befehl, meist in einer Art seines Aktors, in einem Kontext mit offenen Gates."""
+    command = draw(ANY_COMMAND)
+    ctx = context(draw, None, command.actuator)
+    return GateCase(
+        command,
+        ctx,
+        draw(INACTIVE_STATE),
+        draw(LOCK_REASONS),
+        draw(DISTANCE),
+        draw(HISTORY),
+        draw(HISTORY),
+    )
 
 
 def generous(at: datetime) -> SafetyContext:
@@ -451,25 +542,22 @@ PREVIOUS = {  # ein harmloser Befehl derselben Art, der im großzügigen Kontext
 }
 
 
-def authorize_each(
-    checks: Checks, recent: bool, exhausted: bool
-) -> list[tuple[Command, SafetyContext, Verdict]]:
-    """Prüft jeden Befehl in seinem Kontext an einer frischen SafetyLayer.
+def authorize_each(case: Batch | GateCase) -> list[tuple[Command, SafetyContext, Verdict]]:
+    """Prüft jeden Befehl des Falls in seinem Kontext an einer frischen SafetyLayer.
 
-    Jede hat ihr eigenes Schreibbudget, eine eigene Datei im temporären Verzeichnis des Falls.
-    ``recent``: Eben erst ging ein Befehl derselben Art durch, die Mindestabstände greifen.
-    ``exhausted``: Das Schreibbudget ist aufgebraucht. So kommen auch die Wege über ``DEFERRED``,
-    ``urgent.bypass`` und die Ausnahme beim Schreibbudget vor.
+    Jede hat ihr eigenes Schreibbudget, eine eigene Datei im temporären Verzeichnis des Falls. Mit
+    ``recent`` und ``exhausted`` kommen auch die Wege über ``DEFERRED``, ``urgent.bypass`` und die
+    Ausnahme beim Schreibbudget vor.
     """
     results = []
     with tempfile.TemporaryDirectory() as tmp:
-        for index, (command, ctx) in enumerate(checks):
+        for index, (command, ctx) in enumerate(case.checks()):
             path = Path(tmp) / f"write_budget_{index}.json"
-            if exhausted:
+            if case.exhausted:
                 path.write_text(json.dumps({"writes": [ctx.now.isoformat()] * PER_HOUR}))
             layer = SafetyLayer(LIMITS, PersistentWriteBudget(PER_HOUR, PER_DAY, path, ctx.now))
             previous = PREVIOUS.get((command.actuator, command.kind))
-            if recent and previous is not None:
+            if case.recent and previous is not None:
                 assert layer.authorize(previous, generous(ctx.now)).sendable
             results.append((command, ctx, layer.authorize(command, ctx)))
     return results
@@ -488,8 +576,8 @@ def fresh_layer(now: datetime) -> Iterator[SafetyLayer]:
 
 @settings(max_examples=500, deadline=None)
 @given(batches())
-def test_sendable_values_stay_within_hard_limits(case: Case) -> None:
-    for command, ctx, verdict in authorize_each(*case):
+def test_sendable_values_stay_within_hard_limits(batch: Batch) -> None:
+    for command, ctx, verdict in authorize_each(batch):
         if verdict.sendable:
             assert in_range(command, verdict.value, ctx.grid_budget_w), (verdict, ctx)
         if verdict.outcome is Outcome.REJECTED:
@@ -498,12 +586,11 @@ def test_sendable_values_stay_within_hard_limits(case: Case) -> None:
 
 @settings(max_examples=500, deadline=None)
 @given(batches())
-def test_sendable_increases_keep_phases_below_limit(case: Case) -> None:
-    for command, ctx, verdict in authorize_each(*case):
-        actuator_kind = command.kind in KINDS.get(
-            command.actuator, ()
-        )  # sonst nie sendbar (Test 1)
-        if verdict.sendable and actuator_kind and is_increase(command, verdict.value, ctx):
+def test_sendable_increases_keep_phases_below_limit(batch: Batch) -> None:
+    for command, ctx, verdict in authorize_each(batch):
+        if not verdict.sendable or command.kind not in KINDS.get(command.actuator, ()):
+            continue  # nur Aktoren haben Phasen; alles andere ist nie sendbar (Test 1)
+        if is_increase(command, verdict.value, ctx):
             currents = predicted(command, verdict.value, ctx)
             assert all(c is not None and c <= PHASE_LIMIT_A + 1e-6 for c in currents), (
                 verdict,
@@ -513,12 +600,14 @@ def test_sendable_increases_keep_phases_below_limit(case: Case) -> None:
 
 @settings(max_examples=500, deadline=None)
 @given(gate_cases())
-def test_gate_lock_inputs_and_dry_run(case: Case) -> None:
-    for command, ctx, verdict in authorize_each(*case):
+def test_gate_lock_inputs_and_dry_run(case: GateCase) -> None:
+    for command, ctx, verdict in authorize_each(case):
         if verdict.sendable:
             assert command.kind in KINDS.get(command.actuator, ()), verdict  # nie an Nicht-Aktoren
             assert not ctx.locks.get(command.actuator), (verdict, ctx)
-            urgent_safe = command.urgent and safer(command, ctx)
+            # dringend zählt nur, wenn der angeforderte und der gesendete Wert Richtung sicher gehen
+            sent = replace(command, value=verdict.value)
+            urgent_safe = command.urgent and safer(command, ctx) and safer(sent, ctx)
             assert ctx.operating in (OperatingState.CONTROL, OperatingState.DEGRADED) or (
                 urgent_safe and ctx.operating == OperatingState.SAFE
             ), (verdict, ctx)
