@@ -148,3 +148,19 @@ def test_unknown_flows_do_not_count_as_covered() -> None:
     assert slot.covered_s == pytest.approx(1.0)  # nur die Sekunde mit bekannten Flüssen
     assert slot.flows_wh == {"pv>house": pytest.approx(1.0)}
     assert slot.counters["grid.energy_import_kwh"] == (1.0, 1.2)
+
+
+def test_accumulator_never_reports_more_than_a_slot() -> None:
+    # das Intervall über die Slotgrenze zählt zum früheren Slot: endet ein Slot mit einem
+    # längeren Intervall als er begann, käme er sonst auf mehr als 900 s (hier 902 s)
+    acc = SlotAccumulator(counter_signals=[])
+    t = datetime(2026, 10, 8, 9, 14, 59, tzinfo=UTC)
+    acc.add(t, {"pv>house": 0.0}, snap({}))
+    acc.add(t + timedelta(seconds=2), {"pv>house": 0.0}, snap({}))  # 09:15:01, schließt 09:00
+    ts = t + timedelta(seconds=2)
+    while ts < datetime(2026, 10, 8, 9, 29, 58, tzinfo=UTC):
+        ts += timedelta(seconds=1)
+        acc.add(ts, {"pv>house": 0.0}, snap({}))
+    closed = acc.add(ts + timedelta(seconds=5), {"pv>house": 0.0}, snap({}))  # 09:30:03
+    assert closed.slot_start == datetime(2026, 10, 8, 9, 15, tzinfo=UTC)
+    assert closed.covered_s == 900.0

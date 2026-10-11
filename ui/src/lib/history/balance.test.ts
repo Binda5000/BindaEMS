@@ -11,6 +11,7 @@ it('formatiert eine Tageszeile', () => {
 			date: '2026-10-09',
 			slots: 4,
 			expected_slots: 96,
+			complete: true,
 			coverage: 0.0417,
 			pv_kwh: 3.2,
 			wallbox_kwh: { evcs: 0, twc: 1.38 },
@@ -29,15 +30,15 @@ it('formatiert eine Tageszeile', () => {
 
 it('Tagesbilanz zeigt 100 Viertelstunden am 25.10.', () => {
 	const [row] = balanceRows([
-		daySummary({ date: '2026-10-25', slots: 100, expected_slots: 100, coverage: 1 })
+		daySummary({ date: '2026-10-25', slots: 100, expected_slots: 100, complete: true, coverage: 1 })
 	]);
 	expect(row.cells.coverage).toBe('100 von 100 · 100\u00a0%');
 });
 
 it('nennt 100 % nur ohne jede Lücke (alle Slots da, aber 10 s gefehlt)', () => {
 	const [gap, full] = balanceRows([
-		daySummary({ slots: 96, expected_slots: 96, coverage: 1 - 10 / 86_400 }),
-		daySummary({ slots: 96, expected_slots: 96, coverage: 1 })
+		daySummary({ slots: 96, expected_slots: 96, complete: true, coverage: 1 - 10 / 86_400 }),
+		daySummary({ slots: 96, expected_slots: 96, complete: true, coverage: 1 })
 	]);
 	expect([gap.cells.coverage, full.cells.coverage]).toEqual([
 		'96 von 96 · 99,9\u00a0%',
@@ -64,4 +65,11 @@ it('zeigt für einen Tag ohne Daten Striche statt 0', () => {
 	expect(coverage).toBe('0 von 96 · 0,0\u00a0%');
 	expect(Object.values(values).filter((text) => text !== '–')).toEqual([]);
 	expect(row.counters).toEqual([]);
+});
+
+it('Abdeckung am laufenden Tag zählt nur die vergangenen Viertelstunden', () => {
+	const [row] = balanceRows([
+		daySummary({ slots: 40, expected_slots: 40, complete: false, coverage: 0.9996 })
+	]);
+	expect(row.cells.coverage).toBe('40 von 40 bis jetzt · 99,9\u00a0%');
 });

@@ -1,15 +1,22 @@
+from datetime import timedelta
+
 from tests.app_helpers import SLOT_FLOWS_MSG as MSG
 from tests.app_helpers import login_as
 
 from bindaems.app.ledger.service import parse_slot_flows
 
 
-def test_days_endpoint(client, auth, ledger) -> None:
+def test_days_endpoint(client, auth, ledger, clock) -> None:
     login_as(client, auth, "viewer")
     ledger.ingest(parse_slot_flows(MSG), "stream")
+    clock.advance(timedelta(minutes=15))  # 10:15 Ortszeit
     [day] = client.get("/api/ledger/days", params={"from": "2026-10-09", "to": "2026-10-09"}).json()
-    assert day["pv_kwh"] == 1.0 and day["expected_slots"] == 96 and day["date"] == "2026-10-09"
-    assert day["coverage"] == 0.01 and day["wallbox_kwh"] == {"evcs": 0.2, "twc": 0.25}
+    assert day["pv_kwh"] == 1.0 and day["expected_slots"] == 41 and day["date"] == "2026-10-09"
+    assert (
+        day["complete"] is False
+        and day["coverage"] == 0.024
+        and day["wallbox_kwh"] == {"evcs": 0.2, "twc": 0.25}
+    )
 
 
 def test_days_span_is_limited(client, auth) -> None:

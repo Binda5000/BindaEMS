@@ -42,6 +42,7 @@ log = structlog.get_logger(__name__)
 
 Origin = Literal["stream", "influx"]
 SLOT_S = SLOT.total_seconds()
+COVERED_TOLERANCE_S = 0.5  # Rundung beim Summieren im core; mehr ist ein Fehler
 FRESH_FOR = timedelta(minutes=30)
 COVERAGE_FLOW = "_coverage"
 WALLBOX_PREFIX = "wb:"
@@ -71,8 +72,9 @@ def parse_slot_flows(data: Mapping[str, Any]) -> SlotFlows:
     if start != slot_start(start):
         raise ValueError(f"slot_start liegt nicht auf einer Viertelstunde: {text}")
     covered = _number(data.get("covered_s"))
-    if covered is None or not 0 <= covered <= SLOT_S:
+    if covered is None or not 0 <= covered <= SLOT_S + COVERED_TOLERANCE_S:
         raise ValueError(f"covered_s liegt außerhalb von 0–900 s: {data.get('covered_s')!r}")
+    covered = min(covered, SLOT_S)  # knapp darüber ist Rundung (der core summiert Kommazahlen)
     raw_flows = data.get("flows_wh")
     if not isinstance(raw_flows, Mapping):
         raise ValueError("flows_wh fehlt oder ist kein Objekt")
@@ -114,7 +116,8 @@ class LedgerSlot:
 class DaySummary:
     date: date
     slots: int
-    expected_slots: int
+    expected_slots: int  # vergangene Viertelstunden (heute: bis jetzt)
+    complete: bool  # der Tag ist vorbei
     coverage: float
     pv_kwh: float
     import_kwh: float
@@ -148,9 +151,16 @@ def _ledger_slot(row: _Row) -> LedgerSlot:
     )
 
 
-def _summary(day: date, slots: Sequence[LedgerSlot], settings: RuntimeSettings) -> DaySummary:
-    """Tageswerte; Energien werden in Wh summiert und erst am Ende in kWh umgerechnet."""
-    expected = local_day_slots(day)
+def _summary(
+    day: date, slots: Sequence[LedgerSlot], settings: RuntimeSettings, now: datetime
+) -> DaySummary:
+    """Tageswerte; Energien werden in Wh summiert und erst am Ende in kWh umgerechnet.
+
+    Die Abdeckung bezieht sich auf die vergangenen Viertelstunden, am laufenden Tag also nur
+    bis jetzt.
+    """
+    day_slots = local_day_slots(day)
+    expected = [start for start in day_slots if start + SLOT <= now]
     totals: dict[str, float] = {}
     for slot in slots:
         for name, wh in slot.flows_wh.items():
@@ -184,7 +194,7 @@ def _summary(day: date, slots: Sequence[LedgerSlot], settings: RuntimeSettings) 
     )
     if any(slot.import_wh > 0 and slot.import_price_ct is None for slot in slots):
         cost_eur = None  # ein Bezug ohne Preis macht die Tageskosten unbekannt
-    feed_in = feed_in_price(expected[0], settings.feed_in)
+    feed_in = feed_in_price(day_slots[0], settings.feed_in)
     revenue_eur = export_kwh * feed_in / 100 if feed_in is not None else None
     net_cost_eur = (
         cost_eur - revenue_eur if cost_eur is not None and revenue_eur is not None else None
@@ -194,7 +204,12 @@ def _summary(day: date, slots: Sequence[LedgerSlot], settings: RuntimeSettings) 
         date=day,
         slots=len(slots),
         expected_slots=len(expected),
-        coverage=math.fsum(slot.covered_s for slot in slots) / (len(expected) * SLOT_S),
+        complete=len(expected) == len(day_slots),
+        coverage=(
+            math.fsum(slot.covered_s for slot in slots) / (len(expected) * SLOT_S)
+            if expected
+            else 0.0
+        ),
         pv_kwh=pv_kwh,
         import_kwh=import_kwh,
         export_kwh=export_kwh,
@@ -402,10 +417,11 @@ class LedgerService:
         for slot in stored:
             by_day.setdefault(slot.slot_start.astimezone(LOCAL_TZ).date(), []).append(slot)
         settings = self._settings.current().settings
+        now = self._clock.now()
         summaries: list[DaySummary] = []
         day = first
         while day <= last:
-            summaries.append(_summary(day, by_day.get(day, []), settings))
+            summaries.append(_summary(day, by_day.get(day, []), settings, now))
             day += timedelta(days=1)
         return summaries
 
