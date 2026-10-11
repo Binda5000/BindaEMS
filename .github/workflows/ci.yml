@@ -19,11 +19,13 @@ jobs:
       - name: Format
         run: uv run ruff format --check .
       - name: Typprüfung
-        run: uv run mypy src
+        run: uv run mypy src cerbo-watchdog/bindaems_watchdog
       - name: Importgrenzen
         run: uv run lint-imports
       - name: Tests
-        run: uv run pytest -q
+        run: uv run pytest -q --cov --cov-report=term --cov-fail-under=75
+      - name: Abdeckung Safety und Regelung
+        run: uv run coverage report --include="src/bindaems/core/safety/*,src/bindaems/core/control/*" --fail-under=90
 
   ui:
     runs-on: ubuntu-latest

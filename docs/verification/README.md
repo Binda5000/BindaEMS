@@ -105,6 +105,55 @@ Lokal aus dem Repository geht es mit
 
 Das Protokoll übernimmst du mit Datum nach `docs/verification/`.
 
+## Teil 2 – Watchdog-Probe (17.2-5)
+
+Teil 2 (Spec 17.2) schreibt auf Geräte und läuft gemeinsam mit dem Betreiber. Plan 2a liefert dafür
+die Watchdog-Probe; die übrigen Punkte folgen mit Plan 2b. Das Werkzeug
+`bindaems.tools.watchdog_probe` spricht MQTT mit dem Cerbo. Es schreibt dort nur den Heartbeat des
+Watchdogs (`W/<portal>/bindaems/0/Heartbeat`) und sendet den Keepalive.
+
+**Die Probe löst den Watchdog aus:** Er setzt die EVCS auf den sicheren Strom und schreibt Min-SOC
+und Entladegrenze, wenn sie abweichen. Darum fragt das Werkzeug vorher nach; `--yes` überspringt die
+Rückfrage.
+
+| Schritt | Was geprüft wird |
+|---|---|
+| Watchdog erreichbar | Der Watchdog antwortet über MQTT mit Version und Zustand. |
+| Watchdog-Version | Die Version ist die, die der core erwartet. |
+| Scharf nach Heartbeat | Heartbeats machen ihn scharf. |
+| Auslösung ohne Heartbeat | Bleiben sie aus, löst er nach dem Timeout aus. Der Bericht nennt die Zahl der fehlgeschlagenen Aktionen. |
+| Wieder scharf | Mit stabilem Heartbeat wird er nach der Auslösung wieder scharf. |
+| Freigabe ohne Auslösung | Der Heartbeat 0 bringt ihn auf „wartet“, ohne dass er auslöst. |
+
+### Aufruf
+
+Alle Hinweise (Rückfrage, Abbruch, Voraussetzungen) stehen im Betriebshandbuch, Abschnitt 14. Kurz:
+
+```bash
+cd /opt/bindaems
+mkdir -p verification && sudo chown 10001 verification
+docker compose run --rm -v "$PWD/verification:/out" --entrypoint python ems-core \
+  -m bindaems.tools.watchdog_probe --config /config/config.yaml --out /out/<Datum>-watchdog-probe.md
+```
+
+Lokal aus dem Repository geht es mit
+`uv run python -m bindaems.tools.watchdog_probe --config deploy/config.yaml`. Ohne `--out` liegt
+der Bericht dann unter `docs/verification/<Datum>-watchdog-probe.md`.
+
+### Ergebnis
+
+- `JJJJ-MM-TT-watchdog-probe.md` enthält den Bericht mit der Tabelle
+  `Punkt | Prüfung | Ergebnis | Details`. Der Punkt ist immer 17.2-5, die Ergebnisse lauten OK,
+  WARNUNG oder FEHLER.
+- Exitcode 0: Kein Schritt ist FEHLER. 1: Ein Schritt ist FEHLER, der Bericht ließ sich nicht
+  schreiben oder die Rückfrage wurde verneint. 2: Konfiguration oder Secrets ungültig. 130: Strg+C;
+  die Probe gibt den Watchdog vorher frei.
+- Die Probe stellt vorher keine Werte um. Sie belegt die Kette vom EMS bis zu den Aktionen, die
+  Auslösung, das erneute Scharfwerden und die Freigabe; verstellte Werte kommen mit Plan 2b.
+
+Den Bericht übernimmst du mit Datum nach `docs/verification/`. Nach jedem Update von Venus OS oder
+der EVCS-Firmware wiederholst du die Probe.
+
 ## Abnahme Phase 1
 
 Die Checkliste für die Abnahme der Phase 1 (Spec 18) steht in

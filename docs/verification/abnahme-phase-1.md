@@ -32,7 +32,9 @@ Prüfschritte:
    100 %, auch wenn alle Viertelstunden Daten haben.
 3. **System:** Die Komponente InfluxDB meldet „InfluxDB: alles übertragen“, core ist verbunden
    und die Selbstprüfung zeigt keinen Fehler. Einzige Ausnahme: „Dynamic ESS ist aktiv“. DESS
-   bleibt nach Entscheidung des Betreibers vom 10.10.2026 an, bis Phase 2 live schaltet.
+   bleibt nach Entscheidung des Betreibers vom 10.10.2026 an, bis Victron live geschaltet wird.
+   Seit Phase 2a zeigt die Karte „Aktoren“ deshalb bei Victron „gesperrt: Dynamic ESS ist aktiv …“;
+   das ist erwartet.
 
 Nachweis: Bildschirmfoto von Verlauf und Tagesbilanz, Werte in der Tabelle.
 
@@ -114,12 +116,17 @@ Datum: ________ Ergebnis: ☐ bestanden ☐ nicht bestanden Unterschrift: ______
 
 ### 4.1 Im Code
 
-- Der core publiziert am Cerbo nur `R/<portal>/keepalive` (Abruf der Werte). Er liest über
-  Modbus nur und schickt an Wall Connector, Tessie und Home Assistant nur `GET`-Anfragen.
+- Der core publiziert am Cerbo `R/<portal>/keepalive` (Abruf der Werte). Seit Phase 2a kommt der
+  Heartbeat `W/<portal>/bindaems/0/Heartbeat` an den eigenen Watchdog hinzu, aber nur, solange ein
+  Victron- oder EVCS-Aktor live angefordert ist. Das ist vor Plan 2d nie der Fall: Alle Aktoren
+  laufen im Dry-Run, und niemand kann live schalten. Er liest über Modbus nur und schickt an Wall
+  Connector, Tessie und Home Assistant nur `GET`-Anfragen.
 - Die app schreibt nur nach InfluxDB (Messungen `price`, `forecast`, `ledger`) und auf ihre
   eigenen MQTT-Topics für Home Assistant (Discovery und Zustände unter dem eigenen Präfix).
-- Phase 1 enthält keine Schreib- oder Steuerfunktion; der core läuft im Modus OBSERVE
-  („System“ → Betriebsart „Beobachten (nur lesend)“).
+- Bis Plan 2d enthält BindaEMS keine Bedienung, die einen Aktor live schaltet; der core läuft im
+  Modus OBSERVE („System“ → Betriebsart „Beobachten (nur lesend)“, Grund „Regelbetrieb ist aus.“).
+  Unter „System“ → „Aktoren“ steht bei jedem Aktor „Angefordert“ und „Wirksam“ auf „Dry-Run“, und
+  die Karte „Watchdog am Cerbo“ zeigt den Heartbeat „aus (kein Aktor live)“.
 
 ### 4.2 An der Anlage: 24 h ohne Schreibzugriff
 
@@ -131,13 +138,17 @@ mosquitto_sub -h <cerbo> -p 8883 --cafile <cerbo-ca.pem> -v -t 'W/#' | tee w-top
 ```
 
 Erwartet: keine Nachricht von BindaEMS. Schreibzugriffe anderer Clients (VRM, Remote Console)
-in dieser Zeit vermeiden oder im Protokoll begründen.
+in dieser Zeit vermeiden oder im Protokoll begründen. Das gilt auch für die Watchdog-Probe
+(Betriebshandbuch 14): Sie sendet Heartbeats unter `W/<portal>/bindaems/0/Heartbeat`, also nicht
+während des Mitschnitts durchführen.
 
 ### 4.3 Einstellungen vorher und nachher
 
 EVCS-Modus und ESS-Einstellungen (ESS-Modus, BatteryLife, Min-SOC, Dynamic ESS, Ladefenster)
 zu Beginn und am Ende der 7 Tage mit dem Prüfprotokoll Teil 1 erfassen; „System“ →
-Selbstprüfung zeigt sie laufend. Alle Werte sind unverändert.
+Selbstprüfung zeigt sie laufend. Alle Werte sind unverändert. Die Watchdog-Probe setzt EVCS-Strom,
+Min-SOC und Entladegrenze auf die Sicherwerte; führe sie vor dem Beginn der 7 Tage oder nach ihrem
+Ende durch.
 
 | Punkt | Ergebnis |
 |---|---|

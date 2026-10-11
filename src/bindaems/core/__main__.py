@@ -35,7 +35,7 @@ async def _run(cfg: Config, secrets: Secrets) -> int:
         loop.add_signal_handler(sig, stop.set)
     run_task = asyncio.create_task(runtime.run(), name="core")
     stop_task = asyncio.create_task(stop.wait(), name="signal")
-    log.info("core gestartet", mode="OBSERVE")
+    log.info("core gestartet", mode=runtime.operating.state.value)
     await asyncio.wait({run_task, stop_task}, return_when=asyncio.FIRST_COMPLETED)
     if not stop_task.done():
         stop_task.cancel()
@@ -50,7 +50,8 @@ async def _run(cfg: Config, secrets: Secrets) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        prog="bindaems-core", description="BindaEMS core (Phase 1a: nur beobachten)"
+        prog="bindaems-core",
+        description="BindaEMS core (Phase 2a: Sicherheitsbasis, noch ohne Aktoren)",
     )
     parser.add_argument("--config", type=Path, default=Path("/config/config.yaml"))
     parser.add_argument(

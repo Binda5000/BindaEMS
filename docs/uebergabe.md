@@ -1,6 +1,6 @@
 # Übergabe an die nächste Session
 
-Stand: 10.10.2026. Neue Arbeit liegt zuerst auf dem Arbeitsbranch
+Stand: 11.10.2026. Neue Arbeit liegt zuerst auf dem Arbeitsbranch
 `claude/ems-haus-akku-pv-93c0s6`; was davon schon auf `main` ist, zeigt `git log main`.
 
 ## Kurzfassung
@@ -9,16 +9,34 @@ Stand: 10.10.2026. Neue Arbeit liegt zuerst auf dem Arbeitsbranch
   Fix-Durchgang und allen zurückgestellten Kleinigkeiten.
 - **HA-Verbraucher (nach Phase 1):** Die app liest beide InfluxDB-Schemata der HA-Integration
   (Messung je Einheit oder je Entität). Fehlt ein Wert, nennen Liste und Formular den Grund.
+- **Phase 2a (Sicherheitsbasis) ist umgesetzt** (Plan: `docs/superpowers/plans/2026-10-10-phase-2a-sicherheitsbasis.md`):
+  - Safety-Schicht mit allen 8 Regeln aus Spec 8.3 und Property-Tests (`core/safety`)
+  - Betriebszustände START, OBSERVE, CONTROL, DEGRADED und SAFE, Absicht mit Freigaben je Aktor
+    (`core/control`), Sperren für Teilsysteme bei mitregelnden Systemen
+  - Cerbo-Watchdog (`cerbo-watchdog/`) mit Installationsskript, dazu die Werkzeuge
+    `watchdog_config` (erzeugt die `config.ini`) und `watchdog_probe` (Prüfprotokoll Teil 2, Punkt 5)
+  - Heartbeat an den Watchdog, nur solange ein Victron- oder EVCS-Aktor live angefordert ist
+  - Status in UI (System-Seite) und HA (Sensor „Watchdog ausgelöst“)
+  - Abdeckungsgrenzen und ein Importvertrag in der CI
+  - BindaEMS schreibt damit noch auf kein Gerät. Ohne Bedienung (Plan 2d) ist nichts live: Der
+    core steht in OBSERVE und sendet keinen Heartbeat, und ein installierter Watchdog wartet.
 - **Images:** `ghcr.io/binda5000/bindaems-core:latest` und `ghcr.io/binda5000/bindaems-app:latest`.
-  Sie sind öffentlich, und die CI setzt `latest` bei jedem Push auf `main`.
+  Sie sind öffentlich, und die CI setzt `latest` bei jedem Push auf `main`. core und app werden
+  immer gemeinsam aus demselben Stand ausgerollt (gleiche Compose-Datei, gleiche Image-Tags): Die
+  UI-Schemas sind streng, eine abweichende Version zeigt auf der System-Seite nur „Unerwartete
+  Antwort vom Server“.
 - **Tests:**
-  - Python: 638 (ruff, mypy strict, import-linter)
-  - UI: Vitest 183 (svelte-check, Prettier, ESLint)
+  - Python: 1790 (ruff, mypy strict auch für den Watchdog, import-linter mit 4 Verträgen);
+    Abdeckung 95 % insgesamt, `core/safety` und `core/control` 99 %
+  - darin: Cerbo-Watchdog 220 Fälle, Property-Tests der Safety-Schicht 7
+  - UI: Vitest 232 (svelte-check, Prettier, ESLint)
   - E2E: Playwright 11
 - **Offen:**
+  - der Gesamtreview des Branches gegen Spec und Plan 2a
+  - an der Anlage: Watchdog installieren und die Probe laufen lassen (siehe unten)
   - die Installation beim Betreiber fertigstellen (HTTPS-Proxy)
   - die Abnahme der Phase 1 an der Anlage
-  - danach der Plan für Phase 2
+  - der Plan 2b (Aktoren)
 
 ## Arbeitsweise mit dem Betreiber
 
@@ -29,6 +47,8 @@ Stand: 10.10.2026. Neue Arbeit liegt zuerst auf dem Arbeitsbranch
   - Pläne entstehen mit `superpowers:writing-plans` unter `docs/superpowers/plans/`.
   - Phase 1 lief inline („Native“, `superpowers:executing-plans`): Ledger mit `Ruling:`-Zeilen,
     am Ende ein frischer Gesamtreviewer.
+  - Plan 2a lief mit `superpowers:subagent-driven-development`: je Task ein Implementierer und ein
+    Reviewer, ein Ledger mit Rulings und aufgeschobenen Kleinigkeiten, am Ende der Gesamtreview.
   - Befunde werden nach ihrer Wirkung neu bewertet. Critical und Important kommen in einen
     Fix-Durchgang, jeder mit einem Test, der vorher scheitert. Minors werden gesammelt und auf
     Wunsch erledigt („bitte die kleinigkeiten erledigen“).
@@ -54,9 +74,11 @@ Stand: 10.10.2026. Neue Arbeit liegt zuerst auf dem Arbeitsbranch
 | `docs/superpowers/plans/2026-10-08-phase-1a-fundament-datenerfassung.md` | Plan 1a (core) |
 | `docs/superpowers/plans/2026-10-09-phase-1b-app-backend.md` | Plan 1b (app) |
 | `docs/superpowers/plans/2026-10-09-phase-1c-web-ui.md` | Plan 1c (UI), mit Anhang A zu den API-Formen |
-| `docs/betrieb.md` | Betriebshandbuch: Installation, Proxy (6), HA (7), Tarif (8), Sicherung (9), Prüfprotokolle (11), Web-UI (12) |
+| `docs/superpowers/plans/2026-10-10-phase-2a-sicherheitsbasis.md` | Plan 2a (Sicherheitsbasis), mit dem Zuschnitt der Phase 2 in 2a–2d und den Präzisierungen gegenüber der Spec |
+| `docs/betrieb.md` | Betriebshandbuch: Installation, Proxy (6), HA (7), Tarif (8), Sicherung (9), Prüfprotokolle (11), Web-UI (12), Betriebszustände und Freigaben (13), Watchdog am Cerbo (14) |
+| `cerbo-watchdog/README.md` | Watchdog: Zustände, Zeiten, D-Bus-Pfade, Installation und Probe |
 | `docs/verification/abnahme-phase-1.md` | Checkliste für die Abnahme der Phase 1 |
-| `docs/verification/README.md` | Prüfprotokoll Teil 1 und Preise: Aufruf und Ergebnis |
+| `docs/verification/README.md` | Prüfprotokoll Teil 1, Preise und Watchdog-Probe: Aufruf und Ergebnis |
 | `README.md` | Entwicklung, Web-UI, Demo-Backend |
 
 ## Aufbau
@@ -66,7 +88,15 @@ Stand: 10.10.2026. Neue Arbeit liegt zuerst auf dem Arbeitsbranch
     Home Assistant)
   - Zustandsspeicher, abgeleitete Größen, Plausibilität, Flüsse je Viertelstunde
   - InfluxDB-Schreiber mit Spool, interne API mit Stream
-  - In Phase 1 schreibt der core nichts an Geräte.
+  - seit 2a vier Pakete für die Sicherheit:
+    - `safety/`: harte Grenzen, die Regeln 1–7, Rate-Limits, Schreibbudget, Eingangsprüfung,
+      Sperren, wirksame Betriebsarten (Regel 8) und die `SafetyLayer`. Sie ist rein.
+    - `control/`: Betriebszustände (`operating.py`) und Absicht (`intent.py`, Datei `intent.json`)
+    - `persistence/`: atomare JSON-Dateien
+    - `watchdog_client/`: Watchdog-Status lesen und Heartbeat senden
+  - Auf Geräte schreibt der core nur den Heartbeat an den Watchdog, und den nur bei einem live
+    angeforderten Victron- oder EVCS-Aktor. Die Aktoren und die Regelung folgen mit 2b und 2c; die
+    `SafetyLayer` wird bisher nur von Tests aufgerufen.
 - **`src/bindaems/app`**
   - FastAPI mit SQLite (SQLAlchemy Core)
   - Login, Sitzungen, TOTP, CSRF, Rollen
@@ -75,8 +105,14 @@ Stand: 10.10.2026. Neue Arbeit liegt zuerst auf dem Arbeitsbranch
   - PV-Prognose (Open-Meteo), Abrechnung, Verbraucher, Verlauf aus InfluxDB
   - HA MQTT Discovery
   - liefert das UI unter `/` aus
-- **`src/bindaems/shared`:** Konfiguration, Domänentypen, Influx-Client.
-  **`src/bindaems/tools`:** Prüfprotokoll Teil 1.
+- **`src/bindaems/shared`:** Konfiguration, Domänentypen (auch `control.py`: Befehle, Betriebsarten,
+  Absicht), Influx-Client.
+  **`src/bindaems/tools`:** Prüfprotokoll Teil 1, `watchdog_config` und `watchdog_probe`.
+- **`cerbo-watchdog/`**
+  - Python-Dienst für Venus OS (Python ≥ 3.8, nur Standardbibliothek und die Module des Geräts)
+  - die Logik (`bindaems_watchdog/logic.py`) ist rein und in der CI getestet, die D-Bus-Anbindung
+    (`service.py`) ist dünn
+  - `install.sh` installiert, aktualisiert und entfernt per ssh
 - **`ui/`**
   - SvelteKit 2 als SPA (Svelte 5 Runes), valibot-Schemas für jede Antwort, ECharts
   - Tests mit Vitest und Playwright
@@ -85,6 +121,9 @@ Stand: 10.10.2026. Neue Arbeit liegt zuerst auf dem Arbeitsbranch
 - **`deploy/` und CI:**
   - `deploy/`: Dockerfiles, `docker-compose.yml`, `config.example.yaml`, `influxdb-setup.sh`
   - CI `.github/workflows/ci.yml` mit den Jobs `python`, `ui`, `e2e` und `docker`
+  - Der Job `python` prüft zusätzlich mypy für das Watchdog-Paket, die Abdeckung (≥ 75 %
+    insgesamt, ≥ 90 % für `core/safety` und `core/control`) und den Importvertrag, der die
+    Safety-Schicht rein hält.
   - Veröffentlicht wird von `main` und von Tags.
 
 ## Befehle
@@ -93,8 +132,13 @@ In dieser Cloud-Umgebung brauchen alle `uv`-Aufrufe vorher:
 `export UV_SYSTEM_CERTS=1; unset UV_NATIVE_TLS`.
 
 ```bash
-# Python: Format, Lint, Typen, Importgrenzen, Tests
-uv run ruff format . && uv run ruff check . && uv run mypy src && uv run lint-imports && uv run pytest -q
+# Python: Format, Lint, Typen (auch das Watchdog-Paket), Importgrenzen, Tests mit Abdeckung
+uv run ruff format . && uv run ruff check . && uv run mypy src cerbo-watchdog/bindaems_watchdog && uv run lint-imports
+uv run pytest -q --cov --cov-report=term --cov-fail-under=75
+uv run coverage report --include="src/bindaems/core/safety/*,src/bindaems/core/control/*" --fail-under=90
+
+# nur der Cerbo-Watchdog (läuft ohne D-Bus)
+uv run pytest tests/unit/cerbo_watchdog -q
 
 # UI
 cd ui && pnpm check && pnpm lint && pnpm test
@@ -138,6 +182,23 @@ Demo-Zugänge: `admin`, `gast` (Lesen) und `sicher` (Admin mit TOTP, Geheimnis
 - **Schriften in der CI:** Dort wird `system-ui` zu DejaVu Sans, die deutlich breiter läuft als
   die lokale Schrift. Breitenfehler bei 360 px stellt man so nach (der Pfad muss absolut sein):
   `cd ui && FONTCONFIG_FILE=$PWD/tests/e2e/fonts-ci.conf pnpm e2e`.
+- **Watchdog-Paket (Phase 2a):**
+  - Es muss unter Python 3.8 laufen (ruff mit `py38` und ein `ast`-Test) und darf nichts aus
+    `bindaems` importieren. Die Version steht zweimal: `WATCHDOG_VERSION` in
+    `core/watchdog_client/status.py` und `VERSION` in `cerbo-watchdog/bindaems_watchdog/__init__.py`.
+    `tests/unit/cerbo_watchdog/test_compat.py` prüft, dass sie gleich sind.
+  - Das D-Bus-Gerüst läuft nur auf einem Venus-OS-Gerät. Die Python-Tests prüfen Logik,
+    Konfiguration, Zustandsdatei, Aktionen und den Dienst mit Fakes und `install.sh` gegen ein
+    nachgebildetes Gerät (Attrappen für ssh, svc und dbus). Die CI prüft mit shellcheck nur
+    `deploy/influxdb-setup.sh`; bei Änderungen an `install.sh` lass `shellcheck` selbst laufen.
+  - Jede Änderung an `victron.watchdog`, der USV-Reserve oder einem sicheren Strom in
+    `config.yaml` verlangt eine neue `config.ini` auf dem Cerbo (Betriebshandbuch 14).
+- **Neue Pakete unter `src/bindaems`** brauchen eine `__init__.py`; sonst sieht import-linter sie
+  nicht (`tests/unit/test_layout.py`).
+- **Gates für die Safety-Schicht:** `core/safety` und `core/control` dürfen nichts aus
+  `core.adapters`, `core.api`, `core.runtime`, `core.telemetry`, `core.accounting` und
+  `core.checks` importieren, auch nicht über Umwege (import-linter-Vertrag). Zeit kommt als Argument,
+  Dateien nur über `core.persistence.files`.
 
 ## Stand der Installation beim Betreiber
 
@@ -146,7 +207,7 @@ Demo-Zugänge: `admin`, `gast` (Lesen) und `sicher` (Admin mit TOTP, Geheimnis
   Anmeldung klappt deshalb nur mit `cookie_secure: false`.
 - **Prüfprotokolle vom 10.10.2026** in `docs/verification/`: Preise bestanden (smartENERGY
   brutto). Teil 1 mit Befunden, siehe die Bewertung am Ende des Protokolls:
-  - Dynamic ESS bleibt nach Entscheidung des Betreibers an, bis Phase 2 live schaltet.
+  - Dynamic ESS bleibt nach Entscheidung des Betreibers an, bis Victron live geschaltet wird.
   - Die EVCS (AC22NS, Produkt-ID 0xC026) liest der Cerbo per Modbus TCP unter
     192.168.81.41. BindaEMS bekam unter derselben Adresse auf Port 502 nur Nullen, mit jeder
     Unit-ID; Funktionscode 4 kennt die EVCS nicht. `wallboxes.evcs.host` stand laut Betreiber
@@ -159,6 +220,8 @@ Demo-Zugänge: `admin`, `gast` (Lesen) und `sicher` (Admin mit TOTP, Geheimnis
   - Peak Shaving: Laut Betreiber steht das Importlimit knapp unter der 35-A-Sicherung (etwa
     33 A); das Protokoll vom 10.10. las noch 20 A.
   - Akku 96 kWh nutzbar.
+- **Watchdog:** noch nicht installiert. Bis dahin zeigt das UI den Watchdog als „keine Antwort“,
+  ohne Alarm, solange kein Aktor live angefordert ist.
 - **HA-Daten in InfluxDB:** Datenbank `homeassistant`, `bindaems` hat READ. HA schreibt mit
   `measurement_attr: entity_id`:
   - Messung = Entität (`sensor.…`), Tags `domain` und `entity_id` (ohne Domain)
@@ -173,6 +236,14 @@ Demo-Zugänge: `admin`, `gast` (Lesen) und `sicher` (Admin mit TOTP, Geheimnis
   3. Die Prüfprotokolle Teil 1 und „Preise“ laufen lassen, nach `docs/verification/` übernehmen
      und `config.yaml` anhand der Abweichungen korrigieren.
   4. Tarifbestandteile und den OeMAG-Monatswert im UI eintragen (Einstellungen).
+  5. **Watchdog installieren** (Betriebshandbuch 14): `config.ini` aus `config.yaml` erzeugen und mit
+     `cerbo-watchdog/install.sh` auf den Cerbo bringen. Dafür braucht es den SSH-Zugang als root
+     zum Cerbo und die EVCS unter `victron.instances.evcharger` in `config.yaml`.
+  6. **Probe** gemeinsam mit dem Betreiber laufen lassen (Betriebshandbuch 14) und den Bericht nach
+     `docs/verification/` übernehmen. Die Auslösung setzt die EVCS auf den sicheren Strom;
+     danach den gewünschten Strom wieder einstellen.
+  7. Im UI (**System** → „Watchdog am Cerbo“) und in HA („Watchdog ausgelöst“) prüfen, dass der
+     Status stimmt: „wartet“ nach der Probe.
 
 ## Nächste Schritte im Projekt
 
@@ -181,19 +252,72 @@ Demo-Zugänge: `admin`, `gast` (Lesen) und `sicher` (Admin mit TOTP, Geheimnis
    - Tagesbilanz innerhalb ±2 % von VRM
    - Preise und Prognose sichtbar
    - nachweislich keine Schreibpfade zu Geräten
-2. **Plan Phase 2**, Wallbox-Lastmanagement und PV-Überschussladen (Spec 18):
-   - Cerbo-Watchdog
-   - Safety-Schicht mit Property-Tests
-   - Aktoren mit Dry-Run und Rücklese-Prüfung
-   - Entscheidungslog
-   - Prüfprotokoll Teil 2, schreibend und gemeinsam mit dem Betreiber (Spec 17.2)
-   - Regelung mit den Modi Sofort, PV, Min+PV, Aus und Boost
-   - HA-Bedienelemente
-   - Anlagensimulator in der CI
+2. **Phase 2**, Wallbox-Lastmanagement und PV-Überschussladen (Spec 18), in vier Plänen
+   (Zuschnitt in `docs/superpowers/plans/2026-10-10-phase-2a-sicherheitsbasis.md`):
+   - **2a Sicherheitsbasis:** umgesetzt. Offen sind der Gesamtreview des Branches und die Arbeiten
+     an der Anlage (siehe oben).
+   - **2b Aktoren:**
+     - Gerüst mit `capabilities()` und `apply()`, Dry-Run und Rücklese-Prüfung für EVCS, Victron
+       und Tesla
+     - sicherer Zustand (Spec 8.5)
+     - Entscheidungslog im core (Spool, Stream, `GET /v1/decisions`)
+     - Erkennung fremder Änderungen (Spec 7.9)
+     - Werkzeug für das Prüfprotokoll Teil 2, schreibend und gemeinsam mit dem Betreiber
+       (Spec 17.2)
+     - Watchdog-Aktionen für die hub4-Overrides
+   - **2c Regelung:** Regelzyklus, Phasenwächter, 15-min-Wächter, Modi Sofort, PV, Min+PV, Aus und
+     Boost, Akku-Unterstützung, Zuordnung Auto ↔ Wallbox, Degradationsstufen und der
+     Anlagensimulator mit Regelkreistests in der CI.
+   - **2d Bedienung:** Absicht aus der app (Regelbetrieb, Live-Schalter mit Bestätigung, Lademodi,
+     Ziele, Boost, Zuordnung), Entscheidungslog in SQLite, UI-Seiten „Laden“ und „Entscheidungen“,
+     HA-Bedienelemente und Benachrichtigungen. Mit 2d beginnt der Dry-Run.
 
-   Zuschnitt in die Pläne 2a–2d und der Plan 2a (Sicherheitsbasis) liegen zur Freigabe vor:
-   `docs/superpowers/plans/2026-10-10-phase-2a-sicherheitsbasis.md`. Umgesetzt wird erst nach
-   der Freigabe durch den Betreiber.
+   Als Nächstes folgt der Plan 2b. Er wird mit `superpowers:writing-plans` geschrieben und dem
+   Betreiber zur Freigabe vorgelegt (Spec 18); umgesetzt wird erst danach. Danach kommt die
+   Abnahme der Phase 2: 2 Wochen Dry-Run, dann die Live-Schaltung je Aktor in der Reihenfolge EVCS,
+   Victron, Tesla.
+
+   **Offen vor 2b:** Das eigene EVCS-Registerabbild enthält trotz richtiger Adresse nur Nullen
+   (vermutlich ein anderer Port, siehe oben). Davon hängt ab, ob 2b direkt per Modbus oder über den
+   GX-Dienst `evcharger` auf die EVCS schreibt. Geschrieben wird in jedem Fall der Sollstrom
+   (Register 5016, auf dem GX `/SetCurrent`), nie der Maximalstrom (5017).
+
+## Hinweise für die Pläne 2b bis 2d
+
+Aus den Reviews von Plan 2a. Die Pläne 2b bis 2d gibt es noch nicht; sie sollen diese Punkte
+aufgreifen:
+
+- **SafetyLayer aufrufen (2b):**
+  - `authorize` verändert Rate-Limiter und Schreibbudget. Es wird genau einmal je betrachtetem
+    Befehl aufgerufen.
+  - `SafetyContext.modes` muss `ActuatorMode`-Werte enthalten. Ein String „live“ bliebe still im
+    Dry-Run.
+  - `wallbox_phase_a` ist nach Netzphasen geschlüsselt; der Erzeuger wendet `phase_map` an.
+    `present[(aktor, current)]` ist der Sollstrom, nicht der Messstrom.
+  - `grid_budget_w` darf nie NaN oder ±∞ sein (Erzeuger ist der 15-min-Wächter in 2c).
+- **Uhr (2b):** Rate-Limiter und Schreibbudget rechnen mit der Wanduhr.
+  - Der Rate-Limiter lebt nur im Speicher: Ein Neustart vergisst das Stundenfenster des Tesla.
+  - Einträge des Schreibbudgets in der Zukunft zählen. Nach einer korrigierten Uhr bleiben
+    persistente Schreibzugriffe gesperrt, bis die Uhr aufholt.
+  - Der Heartbeat pausiert bei einer rückspringenden Uhr.
+  - Zu entscheiden: eine monoton verankerte Uhr für die Safety-Schicht, gegebenenfalls eine
+    Anlaufschonfrist für den Tesla.
+- **Heartbeat (2b):**
+  - `VictronMqttAdapter.write` reiht nur ein. Eine Freigabe 0 kurz vor einem Verbindungsabbruch
+    geht verloren, und der Watchdog löst 90 s später unnötig aus. Erwägen: „freigegeben, aber
+    Watchdog weiter scharf“ sendet die 0 erneut.
+  - Ein gestorbener Sender bleibt unbemerkt, und `write` liefert weiter `True`. Die Sitzung bei
+    beendetem Hilfstask beenden oder `write` mit `False` antworten lassen.
+  - `write` nur aus dem Event-Loop-Thread aufrufen.
+- **Watchdog (2b):** Die Aktionen für die hub4-Overrides kommen dazu, sobald das Prüfprotokoll
+  Teil 2 die Pfade festlegt. Die Probe soll dann auch verstellte Werte prüfen.
+- **Bedienung (2d):**
+  - Die Quittierung von Sperren (Spec 7.9) kommt hier; in 2a lösen sie sich nur nach
+    `safety.lock_release_s`.
+  - Die app nimmt für die Version der Absicht Millisekunden seit 1970.
+  - Der LiveFeed der app ignoriert `mode_change`. In 2a reicht die Health-Abfrage alle 10 s.
+  - `FakeView` in `tests/integration/test_core_link.py` kennt `intent()` und `submit_intent()`
+    noch nicht.
 
 ## Bewusst offen gelassen
 
@@ -211,3 +335,28 @@ Entschieden in Phase 1c; im Commit-Verlauf bzw. der Abschlussnachricht begründe
 - `theme-color` folgt dem System, nicht der manuellen Wahl im UI.
 - Ein E2E-Test für die Neuverbindung der Live-Anzeige fehlt. Die Logik ist mit Unit-Tests
   abgedeckt.
+
+Entschieden in Phase 2a; die Rulings stehen im Plan (Präzisierungen) bzw. im Commit-Verlauf:
+
+- Ein Teilsystem wird gesperrt, der ganze core bleibt im Betrieb: Ein fehlgeschlagener Victron-Punkt
+  sperrt nur Victron (Präzisierung 1).
+- Ohne live angeforderten Aktor gibt es keinen Heartbeat. Ein laufender core kann den Watchdog mit
+  der 0 abschalten (Präzisierung 2).
+- Sperren lösen sich in 2a nur automatisch. Das Schreibbudget (`write_budget.json`) entsteht erst
+  ab 2b; 2a legt nur Format und Klasse fest.
+- `PUT /v1/intent` der internen API ist in 2a der einzige Weg zu einer Absicht. Die app sendet sie
+  erst ab 2d, und die API prüft die Typen der Felder nicht streng (etwa `"version": true`).
+- Die Texte der Plausibilitätsprüfung aus Phase 1 zeigen den Dezimalpunkt („300.0 V“), auch unter
+  „Eingangsdaten“ auf der System-Seite.
+- Die Probe behandelt nur SIGINT. `docker stop` oder SIGTERM beenden sie ohne Freigabe des
+  Watchdogs (Betriebshandbuch 14). Ihre Schritte „scharf“, „Auslösung“ und „Freigabe“ können
+  „OK“ melden, ohne dass sich der Zustand geändert hat, wenn der Startzustand schon dem Ziel
+  entspricht.
+- Die `config.ini` des Watchdogs ändert man nicht von Hand (Betriebshandbuch 14). Täte man es,
+  verwürfe der Watchdog einen Abschnitt mit Tippfehler im Kopf (`[actions:x]`) still. Nach
+  `os.replace` sichert weder der core noch der Watchdog (`state.json`) das Verzeichnis per fsync.
+- `health()` des core kann Felder aus zwei Zyklen mischen.
+- UI: Ein deaktivierter Watchdog, den der Betrieb braucht, zeigt nur eine Warnung (der core meldet
+  einen Fehler-Alarm). Nach einem Verbindungsabbruch zum core bleiben die Karten „Aktoren“ und
+  „Watchdog am Cerbo“ bis etwa 25 s ohne Hinweis stehen. Die Datei `ui/src/routes/system/+page.svelte`
+  hat rund 500 Zeilen; bei weiterem Wachstum gehören die Karten in eigene Komponenten.

@@ -8,8 +8,9 @@ from structlog.testing import capture_logs
 from tests.helpers import FakeSink
 from tests.integration.conftest import TOKEN
 
-from bindaems.core.__main__ import main
+from bindaems.core.__main__ import _run, main
 from bindaems.core.api.app import create_api
+from bindaems.core.control.operating import OperatingStateMachine
 from bindaems.core.persistence.files import read_json, write_json_atomic
 from bindaems.core.runtime import CoreRuntime
 from bindaems.shared.config import Secrets
@@ -160,6 +161,27 @@ def test_main_returns_2_on_invalid_secrets_without_leaking(capsys, monkeypatch, 
     assert "internal_token" in err
     assert "streng-geheim-123" not in err
     assert token is None or token not in err
+
+
+async def test_start_message_reports_the_start_state(cfg, monkeypatch) -> None:
+    # Der core beginnt in START und schaltet selbst weiter (Spec 7.2): Die Startmeldung nennt den
+    # Zustand der Laufzeit, nicht fest OBSERVE.
+    class EndingRuntime:
+        def __init__(self, cfg, secrets) -> None:
+            self.operating = OperatingStateMachine()
+
+        async def run(self) -> None:
+            raise RuntimeError("beendet sich von selbst")
+
+        async def shutdown(self) -> None:
+            pass
+
+    monkeypatch.setattr("bindaems.core.__main__.CoreRuntime", EndingRuntime)
+    with capture_logs() as logs:
+        code = await _run(cfg, Secrets(internal_token=SecretStr(TOKEN)))
+    assert code == 1  # die Laufzeit endete unerwartet
+    started = [entry for entry in logs if entry["event"] == "core gestartet"]
+    assert [entry["mode"] for entry in started] == ["START"]
 
 
 def test_configure_logging_writes_json_with_utc_timestamp(capsys) -> None:

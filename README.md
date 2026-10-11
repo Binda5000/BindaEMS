@@ -9,6 +9,7 @@ mit harten Sicherheitsgrenzen (USV-Reserve, Hausanschluss) und nachvollziehbaren
 - Design-Spezifikation: [`docs/superpowers/specs/2026-10-08-bindaems-design.md`](docs/superpowers/specs/2026-10-08-bindaems-design.md)
 - Implementierungspläne: [`docs/superpowers/plans/`](docs/superpowers/plans/)
 - Betrieb und Bedienung: [`docs/betrieb.md`](docs/betrieb.md)
+- Watchdog am Cerbo GX (Totmann-Schalter, Installation, Probe): [`cerbo-watchdog/README.md`](cerbo-watchdog/README.md)
 - Prüfprotokolle und Abnahme: [`docs/verification/`](docs/verification/)
 - Stand und nächste Schritte (Übergabe): [`docs/uebergabe.md`](docs/uebergabe.md)
 
@@ -19,7 +20,8 @@ Voraussetzung: [uv](https://docs.astral.sh/uv/) und Python 3.12.
 ```bash
 uv sync --extra core --extra app --extra dev   # Abhängigkeiten installieren
 uv run pytest                       # Tests
-uv run ruff check . && uv run mypy src && uv run lint-imports   # Lint, Typen, Importgrenzen
+uv run pytest --cov                 # Tests mit Abdeckung (CI: 75 %, core/safety und core/control 90 %)
+uv run ruff check . && uv run mypy src cerbo-watchdog/bindaems_watchdog && uv run lint-imports   # Lint, Typen, Importgrenzen
 ```
 
 ### Web-UI entwickeln

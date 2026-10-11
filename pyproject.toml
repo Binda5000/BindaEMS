@@ -33,6 +33,7 @@ app = [
 dev = [
     "pytest>=8.3",
     "pytest-asyncio>=0.24",
+    "pytest-cov>=6.0",
     "hypothesis>=6.100",
     "respx>=0.21",
     "ruff>=0.6",
@@ -78,6 +79,12 @@ filterwarnings = [
     "ignore:Using `httpx` with `starlette.testclient` is deprecated:UserWarning",
 ]
 
+[tool.coverage.run]
+source = ["bindaems"]
+
+[tool.coverage.report]
+skip_empty = true
+
 [tool.importlinter]
 root_package = "bindaems"
 
@@ -98,3 +105,16 @@ name = "shared importiert weder core noch app"
 type = "forbidden"
 source_modules = ["bindaems.shared"]
 forbidden_modules = ["bindaems.core", "bindaems.app"]
+
+[[tool.importlinter.contracts]]
+name = "Safety-Schicht und Betriebszustände bleiben rein"
+type = "forbidden"
+source_modules = ["bindaems.core.safety", "bindaems.core.control"]
+forbidden_modules = [
+    "bindaems.core.adapters",
+    "bindaems.core.api",
+    "bindaems.core.runtime",
+    "bindaems.core.telemetry",
+    "bindaems.core.accounting",
+    "bindaems.core.checks",
+]
