@@ -81,4 +81,5 @@
 - **Peak Shaving (17.1-2):** Das Importlimit steht auf 20 A mit „immer“, die
   Hausanschlusssicherung hat 35 A. Spec 8.1 verlangt das Limit knapp unter der Sicherung,
   z. B. 33 A. Nachtrag: Laut Betreiber steht das Limit bei etwa 33 A; diese Prüfung las 20 A.
+  Nachtrag 11.10.2026: Die 20 A sind gewollt (Entscheidung des Betreibers).
 - **Akku (17.1-6):** 1880 Ah, etwa 96 kWh; `battery.usable_kwh` ist 96 (Angabe des Betreibers).

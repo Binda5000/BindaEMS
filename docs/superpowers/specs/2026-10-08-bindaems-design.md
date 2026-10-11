@@ -734,7 +734,7 @@ Kurzfristig puffern das ESS und das Victron-Importlimit (Ebene 0).
 
 **Ebene 0 – Geräte, unabhängig vom EMS:** Diese Werte stellt der Mensch am Gerät ein; das EMS prüft sie nur und meldet Abweichungen.
 - Victron-Min-SOC = USV-Reserve.
-- Victron-Netz-Importlimit (Peak Shaving „immer“) knapp unter der Hausanschlusssicherung.
+- Victron-Netz-Importlimit (Peak Shaving „immer“) knapp unter der Hausanschlusssicherung oder darunter. An der Anlage steht es bewusst bei 20 A je Phase (Entscheidung des Betreibers vom 11.10.2026); Bezug darüber deckt der Akku.
 - EVCS und Wall Connector auf je maximal 16 A.
 - BMS-Grenzen.
 

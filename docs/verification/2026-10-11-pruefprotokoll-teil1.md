@@ -62,8 +62,7 @@
 - **Dynamic ESS (17.1-2):** unverändert aktiv. Der FEHLER ist erwartet: DESS bleibt nach
   Entscheidung des Betreibers an, bis Victron live geschaltet wird.
 - **Peak Shaving (17.1-2):** Der Cerbo meldet wie am 10.10.2026 `Settings/CGwacs/AcInputLimit`
-  = 20 A mit `AlwaysPeakShave` = 1. Laut Betreiber steht das Importlimit bei etwa 33 A, Spec 8.1
-  verlangt es knapp unter der 35-A-Hausanschlusssicherung. Offen: am Cerbo prüfen, welcher Wert
-  gilt.
+  = 20 A mit `AlwaysPeakShave` = 1. Laut Betreiber sind die 20 A gewollt (Entscheidung vom
+  11.10.2026), also deutlich unter der 35-A-Hausanschlusssicherung.
 - **Übrige Punkte:** wie am 10.10.2026, ohne Befund. Offen sind nur die manuellen Punkte 17.1-3
   und 17.1-12.

@@ -220,9 +220,9 @@ Demo-Zugänge: `admin`, `gast` (Lesen) und `sicher` (Admin mit TOTP, Geheimnis
   - Seit dem 10.10.2026 folgt die Registerbelegung Victrons GX-Treiber: Sollstrom 5016,
     Maximalstrom 5017. Ohne bekannte Produkt-ID gelten die Registerwerte als ungültig; Strom
     und Modus kommen dann vom Cerbo.
-  - **Peak Shaving, offen:** Laut Betreiber steht das Importlimit knapp unter der
-    35-A-Sicherung (etwa 33 A). Beide Prüfprotokolle lesen am Cerbo aber
-    `Settings/CGwacs/AcInputLimit` = 20 A mit `AlwaysPeakShave` = 1.
+  - **Peak Shaving:** Importlimit 20 A je Phase mit „immer“ (`Settings/CGwacs/AcInputLimit`,
+    `AlwaysPeakShave` = 1). Das ist gewollt (Entscheidung des Betreibers vom 11.10.2026), also
+    deutlich unter der 35-A-Sicherung. Bezug über 20 A je Phase deckt der Akku.
   - Akku 96 kWh nutzbar.
 - **Watchdog:** Version 1.0.0 am Cerbo installiert, Probe am 11.10.2026 bestanden. Er wartet,
   solange kein Aktor live angefordert ist.
@@ -233,11 +233,9 @@ Demo-Zugänge: `admin`, `gast` (Lesen) und `sicher` (Admin mit TOTP, Geheimnis
     `friendly_name_str`
   - Wichtig auch für die Lastprognose aus der HA-Historie.
 - **Offen an der Anlage:**
-  1. Am Cerbo klären, welches Importlimit gilt (siehe „Peak Shaving“ oben). Spec 8.1 verlangt
-     es knapp unter der Hausanschlusssicherung (Ebene 0).
-  2. Die manuellen Punkte von Teil 1 nachtragen: Sicherheitsprofil und Modbus-Dienstliste
+  1. Die manuellen Punkte von Teil 1 nachtragen: Sicherheitsprofil und Modbus-Dienstliste
      (17.1-3), NTP am Cerbo (17.1-12).
-  3. Die Log-Zeile „Aktionen abgeschlossen: …“ der Probe vom 11.10.2026 nachreichen; sie zeigt, ob
+  2. Die Log-Zeile „Aktionen abgeschlossen: …“ der Probe vom 11.10.2026 nachreichen; sie zeigt, ob
      jede Aktion „ok“ oder „unverändert“ war.
 
 ## Nächste Schritte im Projekt

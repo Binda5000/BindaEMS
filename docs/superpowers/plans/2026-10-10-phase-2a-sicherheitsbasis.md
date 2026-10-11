@@ -57,6 +57,7 @@ Danach folgt die Abnahme der Phase 2 (Spec 18):
 Stand an der Anlage (Angabe des Betreibers vom 10.10.2026):
 - `wallboxes.evcs.host` steht schon auf 192.168.81.41.
 - Das Peak-Shaving-Importlimit steht schon knapp unter der Hausanschlusssicherung, bei etwa 33 A (Ebene 0).
+  - Nachtrag 11.10.2026: Beide Prüfprotokolle lesen 20 A je Phase; laut Betreiber ist das gewollt.
 - **Offen vor 2b:** Das eigene EVCS-Registerabbild enthält trotz richtiger Adresse nur Nullen (Prüfprotokoll Teil 1, 17.1-8).
   - Vermutlich ein anderer Port: Der Cerbo findet die EVCS per mDNS und nutzt den dort angekündigten Port.
   - Nachtrag 11.10.2026: Ursache war die IP-Whitelist der EVCS, nicht der Port; der Betreiber hat sie korrigiert.
