@@ -1,0 +1,383 @@
+import logging
+from dataclasses import replace
+from pathlib import Path
+from types import SimpleNamespace
+from typing import Any
+
+import pytest
+from bindaems_watchdog.actions import ActionRunner
+from bindaems_watchdog.config import Action, Settings
+from bindaems_watchdog.logic import WatchdogLogic
+from bindaems_watchdog.service import DbusItemAccess, WatchdogService, main, register_paths
+from bindaems_watchdog.state_file import StoredState
+from tests.unit.cerbo_watchdog.fakes import FakeAccess
+
+SETTINGS = Settings(
+    enabled=True,
+    timeout_s=90.0,
+    rearm_s=30.0,
+    gap_s=25.0,
+    retries=0,
+    retry_s=5.0,
+    state_file="state.json",
+    actions=(
+        Action(
+            "min_soc",
+            "com.victronenergy.settings",
+            "/Settings/CGwacs/BatteryLife/MinimumSocLimit",
+            20,
+        ),
+    ),
+)
+
+
+class Env:
+    def __init__(self, stored: StoredState | None = None) -> None:
+        stored = stored or StoredState()
+        self.now = 0.0
+        self.published: list[tuple[str, object]] = []
+        self.saved: list[StoredState] = []
+        access = FakeAccess(
+            {("com.victronenergy.settings", "/Settings/CGwacs/BatteryLife/MinimumSocLimit"): 30}
+        )
+        self.service = WatchdogService(
+            SETTINGS,
+            WatchdogLogic(SETTINGS, stored.armed, 0.0),
+            ActionRunner(access, SETTINGS.actions, SETTINGS.retries, SETTINGS.retry_s),
+            stored,
+            publish=lambda p, v: self.published.append((p, v)),
+            save=self.saved.append,
+            wall=lambda: 1791600000.0,
+            monotonic=lambda: self.now,
+        )
+
+    def at(self, t: float, beat: bool = False) -> None:
+        self.now = t
+        if beat:
+            self.service.on_heartbeat("/Heartbeat", 1)
+        self.service.tick()
+
+
+def test_heartbeat_callback_accepts_int_only() -> None:
+    service = Env().service
+    assert service.on_heartbeat("/Heartbeat", 5)
+    assert not any(service.on_heartbeat("/Heartbeat", v) for v in ("x", True, -1, 1.5))
+
+
+def test_trip_counts_runs_actions_and_publishes() -> None:
+    env = Env()
+    for t in (0, 10, 20, 30):
+        env.at(t, beat=True)
+    env.at(121)
+    assert ("/State", 2) in env.published and ("/TripCount", 1) in env.published
+    assert ("/LastTripTime", 1791600000) in env.published and (
+        "/LastTripFailures",
+        0,
+    ) in env.published
+    assert env.saved[-1] == StoredState(armed=False, trip_count=1, last_trip_time=1791600000)
+
+
+def test_state_saved_on_arm_and_release() -> None:
+    env = Env()
+    for t in (0, 10, 20, 30):
+        env.at(t, beat=True)
+    assert env.saved[-1].armed is True
+    env.service.on_heartbeat("/Heartbeat", 0)
+    env.at(31)
+    assert env.saved[-1].armed is False and env.published[-1] == ("/State", 0)
+
+
+class FakeDbusService:
+    def __init__(self) -> None:
+        self.paths: list[tuple[str, object, bool]] = []
+
+    def add_path(
+        self,
+        path: str,
+        value: object,
+        writeable: bool = False,
+        onchangecallback: Any = None,
+        **_: Any,
+    ) -> None:
+        self.paths.append((path, value, writeable))
+
+
+def test_register_paths_only_heartbeat_writeable() -> None:
+    dbus_service = FakeDbusService()
+    register_paths(dbus_service, Env().service)
+    assert dbus_service.paths == [
+        ("/Heartbeat", None, True),
+        ("/State", 0, False),
+        ("/TripCount", 0, False),
+        ("/LastTripTime", 0, False),
+        ("/LastTripFailures", 0, False),
+        ("/TimeoutSeconds", 90, False),
+        ("/Version", "1.0.0", False),
+    ]
+
+
+def test_initial_values_from_stored_state() -> None:
+    values = Env(StoredState(armed=True, trip_count=3, last_trip_time=5)).service.values()
+    assert (values["/State"], values["/TripCount"], values["/LastTripTime"]) == (1, 3, 5)
+
+
+# Weitere Randfälle
+
+MIN_SOC_ITEM = ("com.victronenergy.settings", "/Settings/CGwacs/BatteryLife/MinimumSocLimit")
+EVCS = Action("evcs_evcs", "com.victronenergy.evcharger", "/SetCurrent", 6, instance=40)
+
+
+class Rig:
+    """Wie ``Env``, dazu wählbare Einstellungen und Fehler beim Veröffentlichen und Speichern."""
+
+    def __init__(
+        self,
+        settings: Settings = SETTINGS,
+        stored: StoredState | None = None,
+        fail_publish: bool = False,
+        fail_save: bool = False,
+    ) -> None:
+        stored = stored or StoredState()
+        self.now = 0.0
+        self.clock_broken = False
+        self.fail_publish, self.fail_save = fail_publish, fail_save
+        self.published: list[tuple[str, object]] = []
+        self.saved: list[StoredState] = []
+        runner = ActionRunner(
+            FakeAccess({MIN_SOC_ITEM: 30}), settings.actions, settings.retries, settings.retry_s
+        )
+        self.service = WatchdogService(
+            settings,
+            WatchdogLogic(settings, stored.armed, 0.0),
+            runner,
+            stored,
+            publish=self._publish,
+            save=self._save,
+            wall=lambda: 1791600000.0,
+            monotonic=self._clock,
+        )
+
+    def _publish(self, path: str, value: object) -> None:
+        if self.fail_publish:
+            raise RuntimeError("D-Bus nicht erreichbar")
+        self.published.append((path, value))
+
+    def _save(self, state: StoredState) -> None:
+        if self.fail_save:
+            raise OSError(28, "No space left on device")
+        self.saved.append(state)
+
+    def _clock(self) -> float:
+        if self.clock_broken:
+            raise ValueError("Uhr kaputt")
+        return self.now
+
+    def at(self, t: float, beat: object = None) -> bool:
+        self.now = t
+        if beat is not None:
+            self.service.on_heartbeat("/Heartbeat", beat)
+        return self.service.tick()
+
+    def arm(self) -> None:
+        for t in (0, 10, 20, 30):
+            self.at(t, beat=1)
+
+
+class RecordingDbusService:
+    """Merkt sich je Pfad Wert, Schreibbarkeit und Callback wie ``VeDbusService.add_path``."""
+
+    def __init__(self) -> None:
+        self.paths: dict[str, tuple[object, bool, Any]] = {}
+
+    def add_path(
+        self, path: str, value: object, writeable: bool = False, onchangecallback: Any = None
+    ) -> None:
+        self.paths[path] = (value, writeable, onchangecallback)
+
+
+def test_heartbeat_path_feeds_the_watchdog() -> None:
+    env = Env()
+    dbus_service = RecordingDbusService()
+    register_paths(dbus_service, env.service)
+    callback = dbus_service.paths["/Heartbeat"][2]
+    assert [path for path, (_, _, cb) in dbus_service.paths.items() if cb] == ["/Heartbeat"]
+    for t in (0, 10, 20, 30):
+        env.now = t
+        assert callback("/Heartbeat", t + 1) is True
+        env.service.tick()
+    assert env.published[-1] == ("/State", 1)
+    assert callback("/Heartbeat", "x") is False
+
+
+def test_tick_survives_a_failing_save(caplog: pytest.LogCaptureFixture) -> None:
+    rig = Rig(fail_save=True)
+    for t in (0, 10, 20, 30):
+        assert rig.at(t, beat=1) is True
+    assert rig.published[-1] == ("/State", 1)
+    assert rig.at(121) is True
+    assert ("/State", 2) in rig.published and ("/LastTripFailures", 0) in rig.published
+    assert "Zustandsdatei nicht geschrieben: [Errno 28] No space left on device" in caplog.text
+
+
+def test_tick_survives_a_failing_publish() -> None:
+    rig = Rig(fail_publish=True)
+    rig.arm()
+    assert rig.at(121) is True
+    assert rig.saved[-1] == StoredState(armed=False, trip_count=1, last_trip_time=1791600000)
+    values = rig.service.values()
+    assert (values["/State"], values["/TripCount"], values["/LastTripFailures"]) == (2, 1, 0)
+
+
+def test_tick_survives_an_unexpected_error(caplog: pytest.LogCaptureFixture) -> None:
+    rig = Rig()
+    rig.arm()
+    rig.clock_broken = True
+    assert rig.at(60) is True
+    assert "Fehler im Takt; der Watchdog läuft weiter." in caplog.text
+    rig.clock_broken = False
+    rig.at(121)
+    assert ("/TripCount", 1) in rig.published
+
+
+def test_heartbeat_keeps_the_last_accepted_value() -> None:
+    service = Env().service
+    assert service.values()["/Heartbeat"] is None
+    assert service.on_heartbeat("/Heartbeat", 7)
+    assert not any(service.on_heartbeat("/Heartbeat", v) for v in (None, [], 2.0, "7"))
+    assert service.values()["/Heartbeat"] == 7
+
+
+def test_rejected_heartbeats_do_not_keep_it_armed() -> None:
+    rig = Rig()
+    rig.arm()
+    for t in range(40, 140, 10):
+        rig.at(t, beat=1.5)
+    assert ("/TripCount", 1) in rig.published
+
+
+def test_first_release_after_a_restart_armed_is_accepted() -> None:
+    rig = Rig(stored=StoredState(armed=True, trip_count=2, last_trip_time=5))
+    assert rig.service.values()["/Heartbeat"] is None  # die 0 ist für velib eine Änderung
+    rig.at(1, beat=0)
+    assert rig.published == [("/State", 0)]
+    assert rig.saved == [StoredState(armed=False, trip_count=2, last_trip_time=5)]
+    rig.at(200)
+    assert rig.published == [("/State", 0)]
+
+
+def test_failures_are_published_when_the_actions_end() -> None:
+    rig = Rig(settings=replace(SETTINGS, retries=2, actions=(EVCS,)))
+    rig.arm()
+    rig.at(121)
+    assert not any(path == "/LastTripFailures" for path, _ in rig.published)
+    rig.at(126)
+    rig.at(131)
+    assert rig.published[-1] == ("/LastTripFailures", 1)
+    assert rig.service.values()["/LastTripFailures"] == 1
+
+
+def test_disabled_watchdog_stays_quiet() -> None:
+    rig = Rig(settings=replace(SETTINGS, enabled=False), stored=StoredState(armed=True))
+    assert rig.service.values()["/State"] == 3
+    for t in range(0, 300, 10):
+        rig.at(t, beat=1 if t < 50 else None)
+    assert (rig.published, rig.saved) == ([], [])
+
+
+def test_states_trip_and_failed_actions_are_logged(caplog: pytest.LogCaptureFixture) -> None:
+    caplog.set_level(logging.INFO)
+    rig = Rig(settings=replace(SETTINGS, actions=(EVCS, *SETTINGS.actions)))
+    rig.arm()
+    rig.at(121)
+    records = [(r.levelname, r.getMessage()) for r in caplog.records]
+    assert ("INFO", "Zustand: wartet → scharf") in records
+    assert ("INFO", "Zustand: scharf → ausgelöst") in records
+    assert (
+        "WARNING",
+        "Ausgelöst: seit über 90 s kein Heartbeat (Auslösung 1). Die Aktionen laufen.",
+    ) in records
+    assert ("ERROR", "Aktion evcs_evcs fehlgeschlagen.") in records
+    assert ("INFO", "Aktionen abgeschlossen: evcs_evcs fehlgeschlagen, min_soc ok") in records
+
+
+def test_main_needs_the_config_path(caplog: pytest.LogCaptureFixture) -> None:
+    assert main([]) == 2
+    assert "Aufruf: bindaems-watchdog.py <config.ini>" in caplog.text
+
+
+def test_main_ends_with_2_on_a_config_error(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    config = tmp_path / "config.ini"
+    config.write_text("[watchdog]\ntimeout_s = 0\n", encoding="utf-8")
+    assert main([str(config)]) == 2
+    assert "config.ini: timeout_s muss eine positive Zahl sein." in caplog.text
+
+
+class FakeBus:
+    """Ersatz für eine Verbindung von dbus-python: Werte je (Dienst, Pfad)."""
+
+    def __init__(self, items: dict[tuple[str, str], object]) -> None:
+        self.items = dict(items)
+        self.set_result = 0
+        self.calls: list[tuple[str, dict[str, object]]] = []
+
+    def list_names(self) -> list[str]:
+        return [":1.7", "org.freedesktop.DBus", *sorted({service for service, _ in self.items})]
+
+    def get_object(self, service: str, path: str, introspect: bool = True) -> "FakeBusItem":
+        return FakeBusItem(self, (service, path))
+
+
+class FakeBusItem:
+    """Ein Pfad auf dem Ersatzbus; die Methoden heißen wie die von ``com.victronenergy.BusItem``."""
+
+    def __init__(self, bus: FakeBus, key: tuple[str, str]) -> None:
+        self.bus, self.key = bus, key
+
+    def GetValue(self, **options: object) -> object:
+        self.bus.calls.append(("GetValue", options))
+        value = self.bus.items[self.key]
+        if isinstance(value, Exception):
+            raise value
+        return value
+
+    def SetValue(self, value: object, **options: object) -> int:
+        self.bus.calls.append(("SetValue", options))
+        self.bus.items[self.key] = value
+        return self.bus.set_result
+
+
+FAKE_DBUS = SimpleNamespace(Array=lambda items, signature: ("Array", tuple(items), signature))
+
+
+def test_dbus_access_finds_the_service_by_device_instance() -> None:
+    bus = FakeBus(
+        {
+            ("com.victronenergy.evcharger.a", "/DeviceInstance"): RuntimeError("NoReply"),
+            ("com.victronenergy.evcharger.b", "/DeviceInstance"): 41,
+            ("com.victronenergy.evcharger.c", "/DeviceInstance"): 40,
+            ("com.victronenergy.evchargerx.d", "/DeviceInstance"): 42,
+        }
+    )
+    access = DbusItemAccess(bus, FAKE_DBUS)
+    assert access.find_service("com.victronenergy.evcharger", 40) == "com.victronenergy.evcharger.c"
+    assert access.find_service("com.victronenergy.evcharger", 42) is None
+    assert access.find_service("com.victronenergy.settings", None) == "com.victronenergy.settings"
+
+
+def test_dbus_access_reads_and_writes_bus_items() -> None:
+    bus = FakeBus({MIN_SOC_ITEM: 30.0})
+    access = DbusItemAccess(bus, FAKE_DBUS)
+    assert access.get_value(*MIN_SOC_ITEM) == 30.0
+    assert access.set_value(*MIN_SOC_ITEM, 20) is True
+    assert access.set_value(*MIN_SOC_ITEM, None) is True
+    assert bus.items[MIN_SOC_ITEM] == ("Array", (), "i")  # ungültig: leeres Array
+    bus.set_result = 2
+    assert access.set_value(*MIN_SOC_ITEM, 20) is False
+    interfaces = {(method, options["dbus_interface"]) for method, options in bus.calls}
+    assert interfaces == {
+        ("GetValue", "com.victronenergy.BusItem"),
+        ("SetValue", "com.victronenergy.BusItem"),
+    }
+    assert {options["signature"] for method, options in bus.calls if method == "SetValue"} == {"v"}
