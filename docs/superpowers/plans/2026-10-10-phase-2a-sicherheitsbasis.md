@@ -2717,7 +2717,7 @@ git commit -m "feat(watchdog): Zustandsautomat, config.ini und Zustandsdatei des
     - `on_heartbeat(self, path: str, value: object) -> bool`: Callback von VeDbusService. Er nimmt nur `int` an, kein `bool`, und nur Werte ≥ 0; dann ruft er `logic.heartbeat(value, monotonic())` auf und liefert `True`. Sonst liefert er `False`, und der Schreibzugriff wird abgelehnt.
     - `tick(self) -> bool`: GLib-Timer, Ergebnis immer `True`.
       - Löst `logic.tick` aus: `trip_count += 1`, `last_trip_time = int(wall())`, `runner.start(now)`, `publish("/LastTripFailures", 0)`, dann `publish` für `/TripCount` und `/LastTripTime`.
-      - `runner.tick(now)` nur, solange der Lauf offen ist; ist der Runner gerade fertig geworden, folgt `publish("/LastTripFailures", runner.failures)`. Verlässt der Watchdog TRIPPED (Freigabe 0 oder wieder scharf), endet der Lauf sofort: keine weiteren Schreibversuche, offene Ergebnisse bleiben „offen“, `/LastTripFailures` mit dem bisherigen Stand, Warnung im Log.
+      - `runner.tick(now)` nur, solange der Lauf offen ist; ist der Runner gerade fertig geworden, folgt `publish("/LastTripFailures", runner.failures)`. Verlässt der Watchdog TRIPPED (Freigabe 0 oder wieder scharf), endet der Lauf sofort: keine weiteren Schreibversuche, offene Ergebnisse mit mindestens einem Fehlversuch zählen als fehlgeschlagen, nie versuchte bleiben „offen“, `/LastTripFailures` mit diesem Stand, Warnung im Log.
       - Hat sich `logic.state` geändert, folgen `publish("/State", state)` und `save(StoredState(armed=state == ARMED, trip_count, last_trip_time))`. Scheitert das Speichern, wird der neueste Stand bei jedem Tick erneut geschrieben, bis es gelingt; der Fehler wird einmal geloggt.
       - Nichts davon wirft aus `tick` heraus: In PyGObject entfernt eine Ausnahme im Timer-Callback den Timer.
       - Jede Zustandsänderung, jede Auslösung und jedes fehlgeschlagene Ergebnis wird über `logging` protokolliert, auf Deutsch.
@@ -2749,7 +2749,7 @@ git commit -m "feat(watchdog): Zustandsautomat, config.ini und Zustandsdatei des
     - Ohne gültige Argumente: Nutzung auf stderr, beginnend mit `Aufruf:`, Exitcode 2, kein ssh.
   - **Installation:**
     1. Per ssh zuerst prüfen, dass ein vorhandener Block in `/data/rc.local` eine Endmarke hat (sonst Abbruch ohne jede Änderung, ebenso bei der Deinstallation); dann, dass `python3` ≥ 3.8, die benötigten Module (`configparser`, `dataclasses`, `json`, `contextlib`, `dbus`, `gi.repository.GLib`), velib und `/opt/victronenergy` vorhanden sind; sonst Abbruch mit Meldung.
-    2. `bindaems-watchdog.py`, `bindaems_watchdog/` und `service/` per `tar` über `ssh` nach `/data/bindaems-watchdog/` übertragen, ebenso `config.ini` (Rechte 0644). Nicht `scp`: Moderne Clients nutzen dafür SFTP, das der Dropbear-Server von Venus OS nicht sicher anbietet.
+    2. `bindaems-watchdog.py`, `bindaems_watchdog/` und `service/` per `tar` über `ssh` zuerst in ein Staging-Verzeichnis übertragen, ebenso `config.ini` (Rechte 0644). Nicht `scp`: Moderne Clients nutzen dafür SFTP, das der Dropbear-Server von Venus OS nicht sicher anbietet. Lokal wird vorher eine leere `config.ini` oder eine ohne `[watchdog]` abgelehnt; auf dem Cerbo prüft `load_settings` des übertragenen Pakets die Datei im Staging. Erst danach ersetzen Programm und `config.ini` die laufende Installation in `/data/bindaems-watchdog/` (`state.json` bleibt); sonst wird das Staging entfernt und abgebrochen. Eine `exit`-Zeile auf oberster Ebene in `/data/rc.local` führt vor jeder Änderung zum Abbruch.
     3. In `/data/rc.local` einen Block zwischen `# bindaems-watchdog begin` und `# bindaems-watchdog end` mit `ln -sfn /data/bindaems-watchdog/service /service/bindaems-watchdog` setzen. Ein vorhandener Block wird ersetzt; `rc.local` wird bei Bedarf angelegt und ausführbar gemacht.
     4. Den Link sofort setzen. War der Dienst schon da, folgt `svc -t /service/bindaems-watchdog`.
     5. Nach 5 s Version und Zustand zeigen: `dbus -y com.victronenergy.bindaems /Version GetValue` und `/State GetValue`.
@@ -3012,7 +3012,7 @@ git commit -m "feat(watchdog): Aktionen mit Rücklesen, D-Bus-Dienst für Venus 
     - Ablauf:
       1. `N/<portal>/bindaems/0/#` abonnieren und `R/<portal>/keepalive` leer publizieren; dann bis `answer_wait_s` auf State und Version warten.
       2. Heartbeats ab 1 im Takt `heartbeat_s` senden, bis der Zustand 1 ist (höchstens `arm_wait_s`).
-      3. Die Heartbeats stoppen und bis `timeout_s + trip_slack_s` auf Zustand 2 warten.
+      3. Die Heartbeats stoppen und bis `timeout_s + trip_slack_s` auf Zustand 2 warten; danach weiter ohne Heartbeat warten, bis der Aktionslauf sicher beendet ist ((retries + 1) × retry_s + 10 s aus denselben Konstanten wie der config-Generator), und erst dann `/LastTripFailures` lesen.
       4. Die Heartbeats wieder aufnehmen und bis `rearm_wait_s` auf Zustand 1 warten.
       5. Die 0 senden und bis `release_wait_s` auf Zustand 0 warten.
     - Alle 30 s wird der Keepalive mit `KEEPALIVE_SUPPRESS` gesendet.
@@ -3072,7 +3072,7 @@ def test_main_rejects_invalid_config(tmp_path: Path, capsys) -> None:
 - Er enthält eine `WatchdogLogic` aus `bindaems_watchdog` mit verkürzten Zeiten (`timeout_s=0.8`, `rearm_s=0.15`, `gap_s=0.5`). Die Abstände sind großzügig, damit der Test auf einer belasteten CI nicht flackert.
 - Heartbeats auf `W/<P>/bindaems/0/Heartbeat` reicht er an die Logik weiter.
 - Ein Hintergrund-Task ruft alle 10 ms `tick` auf.
-- Bei jeder Änderung stellt er `N/`-Meldungen für `State`, `TripCount` und `LastTripFailures` (0) in seine Nachrichten. Auf den Keepalive antwortet er mit `Version` und `State`.
+- Bei jeder Änderung stellt er `N/`-Meldungen für `State`, `TripCount` und `LastTripFailures` in seine Nachrichten; ein abgebrochener Aktionslauf verhält sich wie im echten Dienst. Auf den Keepalive antwortet er mit `Version` und `State`.
 
 ```python
 FAST = ProbeTimings(heartbeat_s=0.05, answer_wait_s=1.0, arm_wait_s=2.0, timeout_s=0.8, trip_slack_s=1.0,
@@ -3272,7 +3272,7 @@ git commit -m "feat(ui): Betriebszustand, Aktoren und Watchdog auf der System-Se
       - „Betriebszustände und Freigaben“: Zustände, Gründe, Sperren, Dry-Run und live, Reihenfolge der Inbetriebnahme, Wartung nach Spec 15
       - „Watchdog am Cerbo“: `config.ini` erzeugen, Installation mit `install.sh`, Probe, Update, Entfernen, Logs
         - Die Befehle folgen dem Muster aus dem Abschnitt „Prüfprotokolle“ (`docs/betrieb.md`): `--entrypoint python`, denn der ENTRYPOINT des Images ist `python -m bindaems.core`.
-        - `config.ini` erzeugen: `docker compose run --rm -T --entrypoint python ems-core -m bindaems.tools.watchdog_config --config /config/config.yaml > config.ini`
+        - `config.ini` erzeugen: `docker compose run --rm -T --entrypoint python ems-core -m bindaems.tools.watchdog_config --config /config/config.yaml > config.ini.new && mv config.ini.new config.ini` (so bleibt bei einem Fehler die alte Datei erhalten). Vorher die 2a-Images ausrollen (`docker compose pull && docker compose up -d`).
         - Probe: erst `mkdir -p verification && sudo chown 10001 verification`, dann `docker compose run --rm -v "$PWD/verification:/out" --entrypoint python ems-core -m bindaems.tools.watchdog_probe --config /config/config.yaml --out /out/<Datum>-watchdog-probe.md`. Der Bericht liegt danach auf dem Host in `verification/`; im Container ginge er mit `--rm` verloren.
     - Spec, mit Verweis auf diesen Plan:
       - 5.6: Aufbau von `cerbo-watchdog/`
