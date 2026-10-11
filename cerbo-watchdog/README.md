@@ -66,7 +66,7 @@ danach in `/LastTripFailures`. Solange der Watchdog wartet oder scharf ist, schr
 - SSH-Zugang als `root` zum Cerbo (Root-Passwort setzen und SSH einschalten, siehe die
   Victron-Anleitung „Root Access“). Hinterlege am besten einen SSH-Schlüssel
   (`ssh-copy-id root@cerbo.lan`); sonst fragt `install.sh` mehrmals nach dem Passwort.
-- Ein Rechner mit `bash`, `ssh`, `scp` und diesem Repository, z. B. die VM des EMS.
+- Ein Rechner mit `bash`, `ssh`, `tar` und diesem Repository, z. B. die VM des EMS.
 
 ## `config.ini` erzeugen
 
@@ -91,8 +91,8 @@ cd cerbo-watchdog   # im Repository
 Das Skript
 
 1. prüft per ssh, ob das Gerät passt (Python ≥ 3.8, Venus OS, nötige Module),
-2. kopiert Programm und `config.ini` nach `/data/bindaems-watchdog/`; das übersteht
-   Firmware-Updates,
+2. überträgt Programm und `config.ini` mit `tar` über ssh nach `/data/bindaems-watchdog/`
+   (ohne SFTP, das Venus OS nicht immer anbietet); das Verzeichnis übersteht Firmware-Updates,
 3. trägt in `/data/rc.local` den Block zwischen `# bindaems-watchdog begin` und
    `# bindaems-watchdog end` ein, der den Dienst bei jedem Start einhängt,
 4. hängt den Dienst sofort unter die Dienstüberwachung von Venus OS (`/service/bindaems-watchdog`)

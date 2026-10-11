@@ -1,4 +1,5 @@
 import logging
+import sys
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
@@ -301,17 +302,23 @@ def test_states_trip_and_failed_actions_are_logged(caplog: pytest.LogCaptureFixt
 
 
 def test_main_needs_the_config_path(caplog: pytest.LogCaptureFixture) -> None:
-    assert main([]) == 2
+    sleeps: list[float] = []
+    assert main([], sleep=sleeps.append) == 2
     assert "Aufruf: bindaems-watchdog.py <config.ini>" in caplog.text
+    assert sleeps == []  # ein falscher Aufruf endet sofort
 
 
-def test_main_ends_with_2_on_a_config_error(
-    tmp_path: Path, caplog: pytest.LogCaptureFixture
+def test_main_waits_60_s_after_a_config_error(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    monkeypatch.setitem(sys.modules, "dbus", None)  # jeder Zugriff auf D-Bus wirft ImportError
     config = tmp_path / "config.ini"
     config.write_text("[watchdog]\ntimeout_s = 0\n", encoding="utf-8")
-    assert main([str(config)]) == 2
+    sleeps: list[float] = []
+    assert main([str(config)], sleep=sleeps.append) == 2
+    assert sleeps == [60]
     assert "config.ini: timeout_s muss eine positive Zahl sein." in caplog.text
+    assert "Der Watchdog läuft nicht; nächster Versuch in 60 s." in caplog.text
 
 
 class FakeBus:

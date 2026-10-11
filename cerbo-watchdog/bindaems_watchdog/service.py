@@ -26,6 +26,9 @@ HEARTBEAT = "/Heartbeat"
 TICK_MS = 1000
 # Höchstdauer eines D-Bus-Aufrufs: Solange er läuft, steht die Hauptschleife.
 CALL_TIMEOUT_S = 5.0
+# Wartezeit vor dem Ende nach einem Konfigfehler: daemontools startet den Dienst sonst jede Sekunde
+# neu, und jeder Start kostet den Cerbo Rechenzeit.
+CONFIG_ERROR_DELAY_S = 60
 
 STATE_NAMES = {WAITING: "wartet", ARMED: "scharf", TRIPPED: "ausgelöst", DISABLED: "deaktiviert"}
 
@@ -212,10 +215,11 @@ class DbusItemAccess(ItemAccess):
         return self._bus.get_object(service, path, introspect=False)
 
 
-def main(argv: Optional[List[str]] = None) -> int:
+def main(argv: Optional[List[str]] = None, *, sleep: Callable[[float], None] = time.sleep) -> int:
     """Startet den Dienst mit ``argv = [<config.ini>]``; 2 bei falschem Aufruf oder Konfigfehler.
 
-    Kehrt sonst nicht zurück: Die Hauptschleife von GLib läuft, bis der Prozess beendet wird.
+    Nach einem Konfigfehler wartet ``main`` erst ``CONFIG_ERROR_DELAY_S`` (mit ``sleep``). Sonst
+    kehrt es nicht zurück: Die Hauptschleife von GLib läuft, bis der Prozess beendet wird.
     """
     args = sys.argv[1:] if argv is None else argv
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
@@ -226,6 +230,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         settings = load_settings(args[0])
     except ConfigError as exc:
         _log.error("%s", exc)
+        _log.warning("Der Watchdog läuft nicht; nächster Versuch in %g s.", CONFIG_ERROR_DELAY_S)
+        sleep(CONFIG_ERROR_DELAY_S)
         return 2
     stored, problem = read_state(settings.state_file)
     if problem is not None:

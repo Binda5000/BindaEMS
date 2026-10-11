@@ -15,6 +15,14 @@ REMOTE_DIR="/data/bindaems-watchdog"
 SERVICE_LINK="/service/bindaems-watchdog"
 RC_LOCAL="/data/rc.local"
 VICTRON_DIR="/opt/victronenergy"
+STAGE="" # lokales Verzeichnis für die Übertragung, am Ende entfernt
+
+cleanup() {
+  if [[ -n $STAGE ]]; then
+    rm -rf -- "$STAGE"
+  fi
+}
+trap cleanup EXIT
 
 usage() {
   cat >&2 <<'EOF'
@@ -168,10 +176,15 @@ install_watchdog() {
   fi
   echo "Prüfe $target …"
   on_device "$target" remote_check
-  echo "Kopiere die Dateien nach $target:$REMOTE_DIR …"
-  scp -r -- "$HERE/bindaems-watchdog.py" "$HERE/bindaems_watchdog" "$HERE/service" \
-    "$target:$REMOTE_DIR/"
-  scp -- "$config" "$target:$REMOTE_DIR/config.ini"
+  echo "Übertrage die Dateien nach $target:$REMOTE_DIR …"
+  STAGE="$(mktemp -d)"
+  cp -- "$config" "$STAGE/config.ini"
+  # tar über ssh statt scp: Moderne scp-Clients nutzen SFTP, das Dropbear auf Venus OS nicht immer
+  # anbietet. tar behält die Ausführrechte; Bytecode bleibt draußen, und COPYFILE_DISABLE verhindert
+  # die ._-Dateien von macOS. -o: Besitzer nicht vom Rechner übernehmen, die Dateien gehören root.
+  COPYFILE_DISABLE=1 tar -c -f - --exclude=__pycache__ --exclude='*.pyc' \
+    -C "$HERE" bindaems-watchdog.py bindaems_watchdog service -C "$STAGE" config.ini |
+    ssh "$target" tar -C "$REMOTE_DIR" -x -o -f -
   echo "Richte den Dienst ein …"
   on_device "$target" remote_activate
 }
