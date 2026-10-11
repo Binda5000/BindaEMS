@@ -411,7 +411,10 @@ export type Forecast = v.InferOutput<typeof ForecastSchema>;
 export const DaySummarySchema = v.object({
 	date: DateText,
 	slots: v.number(),
+	/** vergangene Viertelstunden (am laufenden Tag bis jetzt) */
 	expected_slots: v.number(),
+	/** der Tag ist vorbei */
+	complete: v.boolean(),
 	coverage: v.number(),
 	pv_kwh: v.number(),
 	import_kwh: v.number(),

@@ -67,10 +67,12 @@ export function counterLabel(key: string): string {
 /**
  * Abdeckung: Slots mit Daten und Anteil der aufgezeichneten Zeit. Der Anteil wird abgerundet –
  * „100 %“ heißt lückenlos (der core zieht jede Lücke über 5 s ab), auch wenn alle Slots da sind.
+ * Am laufenden Tag zählen nur die vergangenen Viertelstunden („bis jetzt“).
  */
 function coverageText(day: DaySummary): string {
 	const percent = day.coverage >= 1 ? '100' : formatNumber(Math.floor(day.coverage * 1000) / 10, 1);
-	return `${day.slots} von ${day.expected_slots} · ${percent}${NBSP}%`;
+	const until = day.complete ? '' : ' bis jetzt';
+	return `${day.slots} von ${day.expected_slots}${until} · ${percent}${NBSP}%`;
 }
 
 export function balanceRows(days: DaySummary[]): BalanceRow[] {

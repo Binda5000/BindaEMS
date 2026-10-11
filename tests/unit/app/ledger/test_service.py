@@ -113,8 +113,9 @@ async def test_backfill_skips_slots_without_coverage(ledger, respx_mock, reader)
     assert await ledger.backfill(reader, S, S + SLOT) == 0
 
 
-def test_day_summary_energy_balance_and_kpis(ledger, prices_with_10ct, feed_in_7ct) -> None:
+def test_day_summary_energy_balance_and_kpis(ledger, clock, prices_with_10ct, feed_in_7ct) -> None:
     ledger.ingest(parse_slot_flows(MSG), "stream")
+    clock.advance(SLOT)  # 10:15 Ortszeit, die Viertelstunde der Nachricht ist vorbei
     [day] = ledger.days(date(2026, 10, 9), date(2026, 10, 9))
     assert (day.pv_kwh, day.import_kwh, day.export_kwh) == (1.0, 0.4, 0.3)
     assert (day.house_kwh, dict(day.wallbox_kwh)) == (0.6, {"evcs": 0.2, "twc": 0.25})
@@ -124,7 +125,9 @@ def test_day_summary_energy_balance_and_kpis(ledger, prices_with_10ct, feed_in_7
         1.05,
     )
     assert day.counter_kwh["grid.energy_import_kwh"] == pytest.approx(0.4)
-    assert (day.slots, day.expected_slots) == (1, 96) and day.coverage == pytest.approx(1 / 96)
+    # 41 Viertelstunden sind vorbei, der Tag ist nicht fertig
+    assert (day.slots, day.expected_slots, day.complete) == (1, 41, False)
+    assert day.coverage == pytest.approx(1 / 41)
     assert day.cost_eur == pytest.approx(0.4 * 0.1344)
     assert day.revenue_eur == pytest.approx(0.3 * 0.07)
     assert day.autarky == pytest.approx(1 - 0.4 / 1.05) and day.self_consumption == pytest.approx(
@@ -141,9 +144,10 @@ def test_savings_follow_spec_formulas(ledger, prices_with_10ct, feed_in_7ct) -> 
     assert day.savings_same_import_eur == pytest.approx(0.4 * 0.30 - 0.3 * 0.07 - net_cost)
 
 
-def test_day_summary_on_dst_day_expects_100_slots(ledger) -> None:
+def test_day_summary_on_dst_day_expects_100_slots(ledger, clock) -> None:
+    clock.advance(timedelta(days=17))  # 26.10.
     [day] = ledger.days(date(2026, 10, 25), date(2026, 10, 25))
-    assert (day.expected_slots, day.slots, day.coverage) == (100, 0, 0.0)
+    assert (day.expected_slots, day.slots, day.coverage, day.complete) == (100, 0, 0.0, True)
     assert day.autarky is None and day.self_consumption is None
 
 
@@ -200,3 +204,15 @@ def test_parse_slot_flows_tolerates_rounding_above_a_slot() -> None:
     # der core summiert Kommazahlen; 900,0018 s ist Rundung, keine ungültige Viertelstunde
     assert parse_slot_flows(MSG | {"covered_s": 900.0018}).covered_s == 900.0
     assert parse_slot_flows(MSG | {"covered_s": 899.9983}).covered_s == 899.9983
+
+
+def test_coverage_of_today_counts_only_past_slots(ledger, clock) -> None:
+    ledger.ingest(parse_slot_flows(MSG | {"slot_start": "2026-10-09T07:45:00+00:00"}), "stream")
+    clock.advance(timedelta(minutes=14))  # 10:14: die Viertelstunde 10:00–10:15 läuft noch
+    today, tomorrow = ledger.days(date(2026, 10, 9), date(2026, 10, 10))
+    assert (today.slots, today.expected_slots) == (1, 40)
+    clock.advance(timedelta(minutes=1))  # 10:15
+    [today] = ledger.days(date(2026, 10, 9), date(2026, 10, 9))
+    assert today.expected_slots == 41
+    # ein Tag in der Zukunft hat noch keine Viertelstunde
+    assert (tomorrow.expected_slots, tomorrow.coverage, tomorrow.complete) == (0, 0.0, False)
