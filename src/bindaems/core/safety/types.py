@@ -2,8 +2,8 @@
 
 Die Schicht ist rein: Zeit, Messwerte, Freigaben und Sperren bekommt sie über den
 ``SafetyContext`` von außen (Spec 8.3). Dazu kommen die Hilfen, die alle Regeln gleich brauchen:
-``de`` für Zahlen in Texten, ``finite_number`` als Zahlenregel und ``invalid_value`` für den
-Befund eines ungültigen Werts.
+``de`` für Zahlen in Texten (sie liegt in ``shared.numbers`` und wird hier wieder angeboten),
+``finite_number`` als Zahlenregel und ``invalid_value`` für den Befund eines ungültigen Werts.
 """
 
 from __future__ import annotations
@@ -23,13 +23,9 @@ from bindaems.shared.control import (
     CommandValue,
     OperatingState,
 )
+from bindaems.shared.numbers import de as de  # ``as de``: ausdrücklich wieder angeboten
 
 _VALUE_TEXT_MAX: Final = 60  # Zeichen, die ein ungültiger Wert im Text eines Befunds einnimmt
-
-
-def de(value: float) -> str:
-    """Zahl für Begründungstexte: zehn signifikante Stellen, Dezimalkomma, echtes Minus (U+2212)."""
-    return f"{value:.10g}".replace(".", ",").replace("-", "\N{MINUS SIGN}")
 
 
 def finite_number(value: object) -> float | None:
