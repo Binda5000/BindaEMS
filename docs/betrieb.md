@@ -727,11 +727,15 @@ sicherer EVCS-Strom nur an einer Stelle. Ändere die Datei nie von Hand.
 ```bash
 cd /opt/bindaems
 docker compose run --rm -T --entrypoint python ems-core \
-  -m bindaems.tools.watchdog_config --config /config/config.yaml > config.ini
+  -m bindaems.tools.watchdog_config --config /config/config.yaml > config.ini.new \
+  && mv config.ini.new config.ini
 ```
 
 - `--entrypoint python`, denn der ENTRYPOINT des Images ist `python -m bindaems.core`. `-T`
   schaltet das Terminal ab, weil die Ausgabe mit `>` in die Datei geht.
+- Die Ausgabe geht zuerst nach `config.ini.new`. Nur wenn das Werkzeug ohne Fehler endet, ersetzt
+  `mv` die bisherige `config.ini`. Mit `> config.ini` bliebe nach einem Fehler eine leere Datei
+  zurück.
 - Das Werkzeug meldet auf der Fehlerausgabe, was die Datei nicht leisten kann:
   - Eine EVCS ohne GX-Instanz in `victron.instances.evcharger` ergibt eine Warnung (und einen
     Kommentar in der Datei): Der Watchdog setzt für sie keinen sicheren Strom.
@@ -752,6 +756,16 @@ Dienstüberwachung von Venus OS: sofort und, über einen Block in `/data/rc.loca
 Start. Außerhalb dieses Ordners, des Links `/service/bindaems-watchdog` und seines Blocks in
 `/data/rc.local` ändert es nichts. Am Ende zeigt es Version und Zustand: Nach der Erstinstallation
 „Zustand: 0“, der Watchdog wartet.
+
+Das Skript bricht ab, bevor es auf dem Cerbo etwas ändert, wenn
+
+- die `config.ini` leer ist oder keinen Abschnitt `[watchdog]` hat (Exitcode 2, noch ohne ssh),
+- `/data/rc.local` eine `exit`-Zeile ohne Einrückung enthält: Der Block des Watchdogs stünde
+  dahinter und liefe beim Start nie. Entferne die Zeile und rufe das Skript erneut auf.
+
+Die Dateien kommen zuerst nach `/data/bindaems-watchdog/neu/`. Dort prüft das neue Programm die
+neue `config.ini`. Lehnt es sie ab, bricht das Skript mit der Meldung des Watchdogs ab, und ein
+laufender Watchdog bleibt, wie er ist.
 
 Das UI zeigt den Zustand ebenfalls: Unter **System** nennt die Karte „Watchdog am Cerbo“ den
 Zustand „wartet“, den Heartbeat „aus (kein Aktor live)“ und die Version. In Home Assistant steht

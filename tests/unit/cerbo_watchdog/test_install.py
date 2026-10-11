@@ -50,6 +50,7 @@ def test_entry_script_finds_its_package() -> None:
 # install.sh gegen ein nachgebildetes Gerät: ssh fügt wie das echte die Argumente zu einem Befehl
 # zusammen und führt ihn lokal mit sh aus; jeder absolute Pfad darin zeigt in die Sandbox. svc,
 # dbus, python3 und sleep sind Attrappen; jeder Aufruf von ssh, svc und dbus landet im Protokoll.
+# Nur die Prüfung der config.ini mit dem übertragenen Paket (load_settings) läuft mit echtem Python.
 FAKES = {
     "ssh": """#!/bin/sh
 printf 'ssh %s\\n' "$*" >>"$FAKE_LOG"
@@ -69,6 +70,7 @@ printf 'dbus %s\\n' "$*" >>"$FAKE_LOG"
 case $3 in /Version) echo "'1.0.0'" ;; /State) echo 0 ;; esac
 """,
     "python3": """#!/bin/sh
+case $* in *load_settings*) exec "$REAL_PYTHON" "$@" ;; esac
 exit "${FAKE_PYTHON_STATUS:-0}"
 """,
     "sleep": """#!/bin/sh
@@ -76,7 +78,12 @@ exit 0
 """,
 }
 TARGET = "root@cerbo.test"
-PATHS = "/data/bindaems-watchdog /service/bindaems-watchdog /data/rc.local /opt/victronenergy"
+PATHS = (
+    "/data/bindaems-watchdog /service/bindaems-watchdog /data/rc.local /opt/victronenergy"
+    " /data/bindaems-watchdog/neu"
+)
+TRANSFER = f"ssh {TARGET} tar -C /data/bindaems-watchdog/neu -x -o -f -"
+INVALID = "[watchdog]\ntimeout_s = 0\n"  # hat [watchdog], aber der Watchdog lehnt sie ab
 BLOCK = "# bindaems-watchdog begin\nln -sfn {home}/service {link}\n# bindaems-watchdog end\n"
 
 
@@ -146,6 +153,7 @@ def device(tmp_path: Path) -> Device:
     tmp.mkdir()
     env = {**os.environ, "PATH": f"{fakes}{os.pathsep}{os.environ['PATH']}"}
     env |= {"SANDBOX": str(root), "FAKE_LOG": str(log), "TMPDIR": str(tmp)}
+    env |= {"REAL_PYTHON": sys.executable}
     return Device(source / "install.sh", root, config, env, log, tmp)
 
 
@@ -171,7 +179,7 @@ def test_install_sets_up_the_device(device: Device) -> None:
     calls = device.calls()
     assert calls[:3] == [
         f"ssh {TARGET} sh -s -- {PATHS}",
-        f"ssh {TARGET} tar -C /data/bindaems-watchdog -x -o -f -",
+        TRANSFER,
         f"ssh {TARGET} sh -s -- {PATHS}",
     ]
     assert not any(call.startswith("svc ") for call in calls)  # svscan startet ihn selbst
@@ -187,12 +195,20 @@ def test_update_replaces_the_block_and_restarts(device: Device) -> None:
     )
     assert device.install(TARGET, str(device.config)).returncode == 0
     (device.home / "state.json").write_text('{"armed": true}')
+    (device.home / "bindaems_watchdog/alt.py").write_text("")  # aus einer älteren Version
+    for supervise in ("service/supervise", "service/log/supervise"):  # legt daemontools an
+        (device.home / supervise).mkdir()
+        (device.home / supervise / "status").write_text("läuft")
     result = device.install(TARGET, str(device.config))
     assert result.returncode == 0, result.stderr
     expected = "#!/bin/sh\necho vorher\n" + device.block + "echo nachher\n"
     assert device.rc_local.read_text() == expected
     assert device.calls().count(f"svc -t {device.link}") == 1
     assert (device.home / "state.json").read_text() == '{"armed": true}'
+    assert not (device.home / "bindaems_watchdog/alt.py").exists()  # das Paket ist ersetzt
+    for supervise in ("service/supervise", "service/log/supervise"):
+        assert (device.home / supervise / "status").read_text() == "läuft"
+    assert not (device.home / "neu").exists()
 
 
 def test_uninstall_removes_only_its_own_parts(device: Device) -> None:
@@ -227,10 +243,53 @@ def test_uninstall_with_a_block_without_end_mark_changes_nothing(device: Device)
     assert device.calls()[before:] == [f"ssh {TARGET} sh -s -- {PATHS}"]  # kein svc
 
 
-def test_exit_in_rc_local_is_reported(device: Device) -> None:
-    device.rc_local.write_text("#!/bin/sh\nexit 0\n")
+@pytest.mark.parametrize(
+    "line", ["exit 0", "exit", "exit 1  # Ende", "exit;"], ids=["exit 0", "exit", "Kommentar", ";"]
+)
+def test_exit_in_rc_local_stops_before_any_change(device: Device, line: str) -> None:
+    # Der Block käme hinter die exit-Zeile, und der Watchdog startete nach einem Neustart nicht.
+    text = f"#!/bin/sh\necho vorher\n{line}\n"
+    device.rc_local.write_text(text)
     result = device.install(TARGET, str(device.config))
-    assert result.returncode == 0 and "exit-Zeile" in result.stderr
+    assert result.returncode == 1
+    assert "exit-Zeile" in result.stderr and "entfernen" in result.stderr
+    assert device.rc_local.read_text() == text and not device.link.is_symlink()
+    assert device.calls() == [f"ssh {TARGET} sh -s -- {PATHS}"]  # geprüft vor jeder Änderung
+    assert not device.home.exists()
+
+
+def test_exit_after_an_existing_block_also_stops_the_update(device: Device) -> None:
+    assert device.install(TARGET, str(device.config)).returncode == 0
+    text = device.rc_local.read_text() + "exit 0\n"
+    device.rc_local.write_text(text)
+    before = len(device.calls())
+    result = device.install(TARGET, str(device.config))
+    assert result.returncode == 1 and "exit-Zeile" in result.stderr
+    assert device.rc_local.read_text() == text
+    assert device.calls()[before:] == [f"ssh {TARGET} sh -s -- {PATHS}"]
+
+
+def test_indented_exit_in_rc_local_is_only_reported(device: Device) -> None:
+    device.rc_local.write_text("#!/bin/sh\nif [ -f /data/aus ]; then\n  exit 0\nfi\n")
+    result = device.install(TARGET, str(device.config))
+    assert result.returncode == 0, result.stderr
+    assert "eingerückte exit-Zeile" in result.stderr
+    assert device.rc_local.read_text().endswith(device.block)
+
+
+def test_words_starting_with_exit_are_no_exit_line(device: Device) -> None:
+    device.rc_local.write_text("#!/bin/sh\nexit_code=0\nexitcheck\n")
+    result = device.install(TARGET, str(device.config))
+    assert result.returncode == 0, result.stderr
+    assert "exit" not in result.stderr
+
+
+def test_uninstall_removes_its_block_despite_an_exit_line(device: Device) -> None:
+    assert device.install(TARGET, str(device.config)).returncode == 0
+    device.rc_local.write_text(device.rc_local.read_text() + "exit 0\n")
+    result = device.install("--uninstall", TARGET)
+    assert result.returncode == 0, result.stderr
+    assert device.rc_local.read_text() == "#!/bin/sh\nexit 0\n"
 
 
 def test_unsuitable_device_stops_before_copying(device: Device) -> None:
@@ -260,3 +319,57 @@ def test_missing_config_stops_without_ssh(device: Device, tmp_path: Path) -> Non
     result = device.install(TARGET, str(tmp_path / "fehlt.ini"))
     assert result.returncode == 2 and "nicht gefunden" in result.stderr
     assert device.calls() == []
+
+
+@pytest.mark.parametrize(
+    "text",
+    ["", "\n", "; nur ein Kommentar\n", "[action:min_soc]\nservice = x\npath = /y\nvalue = 20\n"],
+    ids=["leer", "Leerzeile", "Kommentar", "ohne [watchdog]"],
+)
+def test_config_without_watchdog_section_stops_without_ssh(device: Device, text: str) -> None:
+    # Schlägt „watchdog_config … > config.ini“ fehl, bleibt eine leere Datei zurück.
+    device.config.write_text(text, encoding="utf-8")
+    result = device.install(TARGET, str(device.config))
+    assert result.returncode == 2
+    assert "[watchdog]" in result.stderr and "nichts geändert" in result.stderr
+    assert device.calls() == []
+
+
+def tree(root: Path) -> dict[str, bytes]:
+    """Der Inhalt jeder Datei unter ``root``, je Pfad relativ zu ``root``."""
+    return {str(p.relative_to(root)): p.read_bytes() for p in root.rglob("*") if p.is_file()}
+
+
+def test_invalid_config_leaves_the_running_installation_alone(device: Device) -> None:
+    assert device.install(TARGET, str(device.config)).returncode == 0
+    (device.home / "state.json").write_text('{"armed": true}')
+    before, rc_before, calls_before = tree(device.home), device.rc_local.read_text(), device.calls()
+    device.config.write_text(INVALID, encoding="utf-8")
+    result = device.install(TARGET, str(device.config))
+    assert result.returncode == 1
+    assert "config.ini: timeout_s muss eine positive Zahl sein." in result.stderr  # vom Parser
+    assert "bleibt unverändert" in result.stderr
+    assert tree(device.home) == before  # Programm, config.ini und state.json wie vorher
+    assert device.rc_local.read_text() == rc_before and device.link.is_symlink()
+    check = f"ssh {TARGET} sh -s -- {PATHS}"
+    assert device.calls()[len(calls_before) :] == [check, TRANSFER, check]  # kein svc, kein dbus
+
+
+def test_invalid_config_on_a_new_device_leaves_nothing_behind(device: Device) -> None:
+    device.config.write_text(INVALID, encoding="utf-8")
+    result = device.install(TARGET, str(device.config))
+    assert result.returncode == 1
+    assert "config.ini: timeout_s muss eine positive Zahl sein." in result.stderr
+    assert not device.home.exists() and not device.link.is_symlink()
+    assert not device.rc_local.exists()
+
+
+def test_install_clears_a_leftover_staging_directory(device: Device) -> None:
+    # Eine abgebrochene Übertragung hinterlässt ihr Verzeichnis; nichts davon wird installiert.
+    leftover = device.home / "neu/bindaems_watchdog"
+    leftover.mkdir(parents=True)
+    (leftover / "rest.py").write_text("")
+    result = device.install(TARGET, str(device.config))
+    assert result.returncode == 0, result.stderr
+    assert not (device.home / "neu").exists()
+    assert not (device.home / "bindaems_watchdog/rest.py").exists()

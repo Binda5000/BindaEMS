@@ -2,6 +2,8 @@ import importlib.util
 import re
 from pathlib import Path
 
+import pytest
+
 
 def test_acceptance_checklist_covers_spec_18() -> None:
     text = Path("docs/verification/abnahme-phase-1.md").read_text(encoding="utf-8")
@@ -28,13 +30,21 @@ def test_operations_guide_describes_operating_states_and_the_watchdog() -> None:
         "## 14. Watchdog am Cerbo",
         "### Reihenfolge der Inbetriebnahme",
         "### Wartung",
-        "-m bindaems.tools.watchdog_config --config /config/config.yaml > config.ini",
+        "-m bindaems.tools.watchdog_config --config /config/config.yaml > config.ini.new",
         "-m bindaems.tools.watchdog_probe --config /config/config.yaml",
         "./install.sh root@cerbo.lan /opt/bindaems/config.ini",
         "./install.sh --uninstall root@cerbo.lan",
         "Watchdog ausgelöst",
     ):
         assert topic in text
+
+
+@pytest.mark.parametrize("doc", ["docs/betrieb.md", "cerbo-watchdog/README.md"])
+def test_watchdog_config_is_only_replaced_when_generated(doc: str) -> None:
+    # Schlägt die Erzeugung fehl, leerte „> config.ini“ die bisherige Datei.
+    text = Path(doc).read_text(encoding="utf-8")
+    assert "> config.ini.new \\\n  && mv config.ini.new config.ini\n" in text
+    assert not re.search(r"> config\.ini$", text, re.M)
 
 
 def test_documented_tool_commands_start_python_directly() -> None:

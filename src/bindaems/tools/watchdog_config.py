@@ -2,12 +2,14 @@
 
 Aufruf::
 
-    python -m bindaems.tools.watchdog_config --config /config/config.yaml > config.ini
+    python -m bindaems.tools.watchdog_config --config /config/config.yaml > config.ini.new &&
+        mv config.ini.new config.ini
 
 Heartbeat-Takt, Timeout, USV-Reserve und sicherer EVCS-Strom stehen so nur in der ``config.yaml``.
 Die Datei liest ``cerbo-watchdog/bindaems_watchdog/config.py`` auf dem Cerbo; das Format zeigt
 ``cerbo-watchdog/config.ini.example``. Der Watchdog schreibt nur, was in dieser Datei steht – das
-EMS kann sie zur Laufzeit nicht ändern. Ohne ``--out`` geht der Text auf die Standardausgabe.
+EMS kann sie zur Laufzeit nicht ändern. Ohne ``--out`` geht der Text auf die Standardausgabe;
+nach einem Fehler ist sie leer, darum ersetzt erst ``mv`` die bisherige Datei.
 
 Exitcode 2 mit der Meldung auf stderr: ungültige ``config.yaml``, ein Heartbeat-Takt, zu dem der
 Watchdog die Datei ablehnen würde, oder eine Zieldatei, die sich nicht schreiben lässt. Eine EVCS

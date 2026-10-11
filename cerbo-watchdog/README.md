@@ -80,11 +80,13 @@ Die Datei entsteht aus der `config.yaml` des EMS. Ändere sie nicht von Hand, so
 ```bash
 cd /opt/bindaems
 docker compose run --rm -T --entrypoint python ems-core \
-  -m bindaems.tools.watchdog_config --config /config/config.yaml > config.ini
+  -m bindaems.tools.watchdog_config --config /config/config.yaml > config.ini.new \
+  && mv config.ini.new config.ini
 ```
 
-Das Format zeigt `config.ini.example`. Das Werkzeug meldet auf der Fehlerausgabe, was die Datei
-nicht leisten kann:
+Erst wenn das Werkzeug ohne Fehler endet, ersetzt `mv` die bisherige Datei; mit `> config.ini`
+bliebe nach einem Fehler eine leere Datei zurück. Das Format zeigt `config.ini.example`. Das
+Werkzeug meldet auf der Fehlerausgabe, was die Datei nicht leisten kann:
 
 - Eine EVCS ohne GX-Instanz in `victron.instances.evcharger` ergibt eine Warnung (und einen
   Kommentar in der Datei): Der Watchdog setzt für sie keinen sicheren Strom.
@@ -100,13 +102,21 @@ cd cerbo-watchdog   # im Repository
 
 Das Skript
 
-1. prüft per ssh, ob das Gerät passt (Python ≥ 3.8, Venus OS, nötige Module),
-2. überträgt Programm und `config.ini` mit `tar` über ssh nach `/data/bindaems-watchdog/`
-   (ohne SFTP, das Venus OS nicht immer anbietet); das Verzeichnis übersteht Firmware-Updates,
-3. trägt in `/data/rc.local` den Block zwischen `# bindaems-watchdog begin` und
+1. lehnt eine leere `config.ini` oder eine ohne Abschnitt `[watchdog]` ab, noch bevor es das Gerät
+   anspricht (Exitcode 2),
+2. prüft per ssh, ob das Gerät passt (Python ≥ 3.8, Venus OS, nötige Module), und bricht ab, wenn
+   `/data/rc.local` eine `exit`-Zeile ohne Einrückung enthält (der Block stünde dahinter und
+   liefe beim Start nie),
+3. überträgt Programm und `config.ini` mit `tar` über ssh nach `/data/bindaems-watchdog/neu/`
+   (ohne SFTP, das Venus OS nicht immer anbietet),
+4. prüft dort die neue `config.ini` mit dem neuen Programm: Lehnt es sie ab, bricht das Skript mit
+   der Meldung ab, und ein laufender Watchdog bleibt, wie er ist,
+5. übernimmt die Dateien nach `/data/bindaems-watchdog/` (das Verzeichnis übersteht
+   Firmware-Updates; `state.json` bleibt),
+6. trägt in `/data/rc.local` den Block zwischen `# bindaems-watchdog begin` und
    `# bindaems-watchdog end` ein, der den Dienst bei jedem Start einhängt,
-4. hängt den Dienst sofort unter die Dienstüberwachung von Venus OS (`/service/bindaems-watchdog`)
-5. und zeigt nach ein paar Sekunden Version und Zustand.
+7. hängt den Dienst sofort unter die Dienstüberwachung von Venus OS (`/service/bindaems-watchdog`)
+8. und zeigt nach ein paar Sekunden Version und Zustand.
 
 Nach der Erstinstallation meldet er „Zustand: 0“ (wartet). Scharf wird er erst, wenn das EMS
 Heartbeats schickt. Außerhalb von `/data/bindaems-watchdog/`, dem Link und seinem Block in
