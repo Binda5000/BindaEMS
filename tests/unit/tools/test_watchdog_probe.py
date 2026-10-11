@@ -644,6 +644,9 @@ async def test_probe_tells_when_the_release_was_impossible(capsys) -> None:
     assert watchdog_probe.UNRELEASED in capsys.readouterr().err
     assert cerbo.heartbeats()[-1] != 0  # die Freigabe kam nicht an
     assert "Heartbeat 0" in watchdog_probe.UNRELEASED  # und der Hinweis sagt, wie es zurückgeht
+    # … und wie man danach prüft, dass der Watchdog wartet
+    assert "/State 0" in watchdog_probe.UNRELEASED
+    assert "dbus -y com.victronenergy.bindaems /State GetValue" in watchdog_probe.UNRELEASED
 
 
 async def test_probe_gives_up_on_a_release_that_hangs(monkeypatch, capsys) -> None:

@@ -77,7 +77,8 @@ UNRELEASED = (
     "Der Watchdog konnte nicht freigegeben werden: Er kann scharf bleiben und später auslösen "
     "oder ausgelöst bleiben. Zurücksetzen: die Probe erneut starten (sie endet mit der Freigabe) "
     "oder den Heartbeat 0 senden (am Cerbo: dbus -y com.victronenergy.bindaems /Heartbeat "
-    "SetValue 0)."
+    "SetValue 0) und danach prüfen, dass /State 0 ist (dbus -y com.victronenergy.bindaems /State "
+    "GetValue)."
 )
 WARNING = (
     "Die Probe löst den Watchdog aus. Er setzt die EVCS auf den sicheren Strom und schreibt "
