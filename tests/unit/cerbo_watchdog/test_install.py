@@ -211,6 +211,20 @@ def test_block_without_end_mark_is_left_alone(device: Device) -> None:
     result = device.install(TARGET, str(device.config))
     assert result.returncode == 1 and "keine Endmarke" in result.stderr
     assert device.rc_local.read_text() == text and not device.link.is_symlink()
+    assert device.calls() == [f"ssh {TARGET} sh -s -- {PATHS}"]  # geprüft vor jeder Änderung
+    assert not device.home.exists()
+
+
+def test_uninstall_with_a_block_without_end_mark_changes_nothing(device: Device) -> None:
+    assert device.install(TARGET, str(device.config)).returncode == 0
+    text = device.rc_local.read_text().replace("# bindaems-watchdog end\n", "")
+    device.rc_local.write_text(text)
+    before = len(device.calls())
+    result = device.install("--uninstall", TARGET)
+    assert result.returncode == 1 and "keine Endmarke" in result.stderr
+    assert device.rc_local.read_text() == text
+    assert device.link.is_symlink() and (device.home / "service/run").is_file()
+    assert device.calls()[before:] == [f"ssh {TARGET} sh -s -- {PATHS}"]  # kein svc
 
 
 def test_exit_in_rc_local_is_reported(device: Device) -> None:

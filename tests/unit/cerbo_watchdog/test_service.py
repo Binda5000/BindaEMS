@@ -137,16 +137,16 @@ class Rig:
         stored: StoredState | None = None,
         fail_publish: bool = False,
         fail_save: bool = False,
+        access: FakeAccess | None = None,
     ) -> None:
         stored = stored or StoredState()
+        self.access = access or FakeAccess({MIN_SOC_ITEM: 30})
         self.now = 0.0
         self.clock_broken = False
         self.fail_publish, self.fail_save = fail_publish, fail_save
         self.published: list[tuple[str, object]] = []
         self.saved: list[StoredState] = []
-        runner = ActionRunner(
-            FakeAccess({MIN_SOC_ITEM: 30}), settings.actions, settings.retries, settings.retry_s
-        )
+        runner = ActionRunner(self.access, settings.actions, settings.retries, settings.retry_s)
         self.service = WatchdogService(
             settings,
             WatchdogLogic(settings, stored.armed, 0.0),
@@ -240,6 +240,81 @@ def test_tick_survives_an_unexpected_error(caplog: pytest.LogCaptureFixture) -> 
     assert ("/TripCount", 1) in rig.published
 
 
+def test_failed_save_is_retried_every_tick_until_it_works() -> None:
+    rig = Rig(fail_save=True)
+    rig.arm()  # scharf bei 30, die Zustandsdatei lässt sich nicht schreiben
+    rig.at(31)
+    assert rig.saved == []
+    rig.fail_save = False
+    rig.at(32)
+    assert rig.saved == [StoredState(armed=True, trip_count=0, last_trip_time=0)]
+    rig.at(33)
+    assert len(rig.saved) == 1
+
+
+def test_save_retries_log_once_and_keep_the_newest_state(caplog: pytest.LogCaptureFixture) -> None:
+    caplog.set_level(logging.INFO)
+    rig = Rig(fail_save=True)
+    rig.arm()
+    for t in range(31, 40):
+        rig.at(t, beat=1)
+    rig.at(40, beat=0)  # Freigabe, solange die Datei noch nicht geschrieben ist
+    rig.fail_save = False
+    rig.at(41)
+    assert rig.saved == [StoredState(armed=False, trip_count=0, last_trip_time=0)]
+    assert caplog.text.count("Zustandsdatei nicht geschrieben") == 1
+    assert "Zustandsdatei wieder geschrieben." in caplog.text
+
+
+def test_release_ends_the_run_without_further_writes(caplog: pytest.LogCaptureFixture) -> None:
+    caplog.set_level(logging.INFO)
+    access = FakeAccess({MIN_SOC_ITEM: 30}, failing_sets=1000)
+    rig = Rig(
+        settings=replace(SETTINGS, retries=6, actions=(EVCS, *SETTINGS.actions)), access=access
+    )
+    rig.arm()
+    rig.at(121)  # Auslösung; beide Aktionen scheitern und wären in 5 s wieder dran
+    writes = list(access.writes)
+    rig.at(122, beat=0)
+    for t in range(123, 200):
+        rig.at(t)
+    assert access.writes == writes
+    assert [value for path, value in rig.published if path == "/LastTripFailures"] == [0, 0]
+    records = [(r.levelname, r.getMessage()) for r in caplog.records]
+    assert (
+        "WARNING",
+        "Aktionen abgebrochen (Zustand wartet): evcs_evcs offen, min_soc offen",
+    ) in records
+
+
+def test_rearming_ends_the_run_without_further_writes() -> None:
+    access = FakeAccess({MIN_SOC_ITEM: 30}, failing_sets=1000)
+    rig = Rig(settings=replace(SETTINGS, retries=100), access=access)
+    rig.arm()
+    rig.at(121)
+    for t in (122, 132, 142, 152):  # scharf bei 152, der Lauf versucht es bis dahin weiter
+        rig.at(t, beat=1)
+    assert rig.service.values()["/State"] == 1
+    writes = len(access.writes)
+    for t in range(153, 240):
+        rig.at(t, beat=1)
+    assert len(access.writes) == writes
+
+
+def test_a_new_trip_resets_the_failures_at_once() -> None:
+    rig = Rig(settings=replace(SETTINGS, retries=1, actions=(EVCS,)))
+    rig.arm()
+    rig.at(121)
+    rig.at(126)  # der zweite Versuch scheitert: fehlgeschlagen
+    assert rig.service.values()["/LastTripFailures"] == 1
+    for t in (130, 140, 150, 160):
+        rig.at(t, beat=1)
+    rig.published.clear()
+    rig.at(251)  # zweite Auslösung; der Lauf ist noch offen
+    assert ("/LastTripFailures", 0) in rig.published
+    assert rig.service.values()["/LastTripFailures"] == 0
+
+
 def test_heartbeat_keeps_the_last_accepted_value() -> None:
     service = Env().service
     assert service.values()["/Heartbeat"] is None
@@ -270,7 +345,8 @@ def test_failures_are_published_when_the_actions_end() -> None:
     rig = Rig(settings=replace(SETTINGS, retries=2, actions=(EVCS,)))
     rig.arm()
     rig.at(121)
-    assert not any(path == "/LastTripFailures" for path, _ in rig.published)
+    failures = [value for path, value in rig.published if path == "/LastTripFailures"]
+    assert failures == [0]  # nur der Neubeginn; das Ergebnis folgt am Ende des Laufs
     rig.at(126)
     rig.at(131)
     assert rig.published[-1] == ("/LastTripFailures", 1)

@@ -66,6 +66,8 @@ class WatchdogService:
         self._last_trip_time = stored.last_trip_time
         self._last_trip_failures = 0
         self._run_pending = False  # Aktionen laufen, ihr Ergebnis ist noch nicht veröffentlicht
+        self._unsaved: Optional[StoredState] = None  # noch nicht in die Zustandsdatei geschrieben
+        self._save_error: Optional[str] = None  # zuletzt protokollierter Fehler beim Speichern
 
     def values(self) -> Dict[str, object]:
         """Die aktuellen Werte aller Pfade.
@@ -102,6 +104,10 @@ class WatchdogService:
 
         Eine Ausnahme im Callback würde GLib den Timer entfernen lassen, und der Watchdog stünde
         still. Darum fängt ``tick`` jeden Fehler, protokolliert ihn und macht weiter.
+
+        Die Aktionen laufen nur, solange der Watchdog ausgelöst ist: Verlässt er den Zustand
+        (Freigabe mit 0 oder wieder scharf), endet der Lauf sofort, ohne weiteres Schreiben. Eine
+        Zustandsdatei, die sich nicht schreiben ließ, versucht er in jedem Takt erneut.
         """
         try:
             self._step(self._monotonic())
@@ -122,27 +128,42 @@ class WatchdogService:
             )
             self._send("/TripCount", self._trip_count)
             self._send("/LastTripTime", self._last_trip_time)
-        try:
-            self._runner.tick(now)
-        except Exception:
-            _log.exception("Fehler bei den Aktionen.")
-        if self._run_pending and not self._runner.busy:
-            self._run_pending = False
-            self._finish_run()
+            self._last_trip_failures = 0  # gilt ab jetzt für diese Auslösung
+            self._send("/LastTripFailures", 0)
         state = self._logic.state
+        if self._run_pending and state != TRIPPED:
+            self._end_run(aborted=True)
+        if self._run_pending:
+            try:
+                self._runner.tick(now)
+            except Exception:
+                _log.exception("Fehler bei den Aktionen.")
+            if not self._runner.busy:
+                self._end_run(aborted=False)
         if state != self._state:
             _log.info("Zustand: %s → %s", STATE_NAMES[self._state], STATE_NAMES[state])
             self._state = state
             self._send("/State", state)
-            self._store(StoredState(state == ARMED, self._trip_count, self._last_trip_time))
+            self._unsaved = StoredState(state == ARMED, self._trip_count, self._last_trip_time)
+        self._store()
 
-    def _finish_run(self) -> None:
+    def _end_run(self, aborted: bool) -> None:
+        """Beendet den Lauf: Ergebnisse ins Log, ``/LastTripFailures`` veröffentlichen.
+
+        Bei einem Abbruch bleiben unerledigte Aktionen offen; gezählt sind die bis dahin
+        fehlgeschlagenen.
+        """
+        self._run_pending = False
         results = self._runner.results
         for name, result in results.items():
             if result == FAILED:
                 _log.error("Aktion %s fehlgeschlagen.", name)
-        summary = ", ".join(f"{name} {result}" for name, result in results.items())
-        _log.info("Aktionen abgeschlossen: %s", summary or "keine")
+        summary = ", ".join(f"{name} {result}" for name, result in results.items()) or "keine"
+        if aborted:
+            state = STATE_NAMES[self._logic.state]
+            _log.warning("Aktionen abgebrochen (Zustand %s): %s", state, summary)
+        else:
+            _log.info("Aktionen abgeschlossen: %s", summary)
         self._last_trip_failures = self._runner.failures
         self._send("/LastTripFailures", self._last_trip_failures)
 
@@ -152,11 +173,24 @@ class WatchdogService:
         except Exception as exc:
             _log.error("%s nicht veröffentlicht: %s", path, exc)
 
-    def _store(self, state: StoredState) -> None:
+    def _store(self) -> None:
+        """Schreibt den noch offenen Stand in die Zustandsdatei; bei einem Fehler im nächsten Takt.
+
+        Derselbe Fehler steht nur einmal im Log, sonst verdrängte er im Sekundentakt den Rest.
+        """
+        if self._unsaved is None:
+            return
         try:
-            self._save(state)
+            self._save(self._unsaved)
         except Exception as exc:
-            _log.error("Zustandsdatei nicht geschrieben: %s", exc)
+            if str(exc) != self._save_error:
+                self._save_error = str(exc)
+                _log.error("Zustandsdatei nicht geschrieben: %s; neuer Versuch jede Sekunde.", exc)
+            return
+        self._unsaved = None
+        if self._save_error is not None:
+            self._save_error = None
+            _log.info("Zustandsdatei wieder geschrieben.")
 
 
 def register_paths(dbus_service: Any, service: WatchdogService) -> None:

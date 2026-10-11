@@ -13,7 +13,7 @@ selbst den sicheren Zustand her.
 |---|---|---|
 | 0 | wartet | wartet auf einen stabilen Heartbeat; greift nie ein |
 | 1 | scharf | löst aus, wenn der Heartbeat `timeout_s` lang ausbleibt |
-| 2 | ausgelöst | hat die Aktionen ausgeführt; wird wieder scharf, sobald der Heartbeat `rearm_s` lang stabil läuft |
+| 2 | ausgelöst | führt die Aktionen aus; wird wieder scharf, sobald der Heartbeat `rearm_s` lang stabil läuft |
 | 3 | deaktiviert | `enabled = false` in der `config.ini`; ignoriert alles |
 
 ### Zeiten
@@ -32,7 +32,8 @@ Die Zeiten stehen im Abschnitt `[watchdog]` der `config.ini`:
 - Die **0 gibt den Watchdog frei:** Er geht ohne Auslösung zurück auf „wartet“. Das EMS sendet
   sie, sobald kein Victron- oder EVCS-Aktor mehr live angefordert ist.
 - Ob der Watchdog scharf ist, steht in `/data/bindaems-watchdog/state.json`. Nach einem Neustart
-  des Cerbo startet er wieder scharf, und das EMS hat `timeout_s`, sich zu melden.
+  des Cerbo startet er wieder scharf, und das EMS hat `timeout_s`, sich zu melden. Lässt sich die
+  Datei nicht schreiben (z. B. `/data` voll), versucht er es jede Sekunde erneut.
 
 ### Aktionen bei der Auslösung
 
@@ -45,8 +46,11 @@ Sicherwert:
 
 Jede Aktion liest zuerst und schreibt nur, wenn der Wert abweicht; danach liest sie zurück und
 vergleicht. Zahlen gelten bis `tolerance` (Standard 0,5) als gleich. Ein gescheiterter Versuch
-folgt nach `retry_s` erneut, höchstens `retries` Mal. Die Zahl der fehlgeschlagenen Aktionen steht
-danach in `/LastTripFailures`. Solange der Watchdog wartet oder scharf ist, schreibt er nichts.
+folgt nach `retry_s` erneut, höchstens `retries` Mal. Die Aktionen laufen nur, solange der
+Watchdog ausgelöst ist: Wird er mit 0 freigegeben oder wieder scharf, endet der Lauf sofort, und
+noch offene Aktionen bleiben offen. `/LastTripFailures` steht mit jeder Auslösung auf 0 und zählt
+am Ende des Laufs die fehlgeschlagenen Aktionen. Solange der Watchdog wartet oder scharf ist,
+schreibt er nichts.
 
 ### D-Bus-Dienst `com.victronenergy.bindaems` (DeviceInstance 0)
 
@@ -56,7 +60,7 @@ danach in `/LastTripFailures`. Solange der Watchdog wartet oder scharf ist, schr
 | `/State` | 0 wartet, 1 scharf, 2 ausgelöst, 3 deaktiviert |
 | `/TripCount` | Zahl der Auslösungen |
 | `/LastTripTime` | letzte Auslösung in Unix-Sekunden, 0 = nie |
-| `/LastTripFailures` | fehlgeschlagene Aktionen der letzten Auslösung |
+| `/LastTripFailures` | fehlgeschlagene Aktionen der letzten Auslösung; 0, bis ihr Lauf endet |
 | `/TimeoutSeconds` | `timeout_s` |
 | `/Version` | Version des Watchdogs; das EMS warnt, wenn sie nicht zu seiner passt |
 

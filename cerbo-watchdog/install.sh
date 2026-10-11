@@ -70,6 +70,19 @@ edit_rc() {
   ' "$rc"
 }
 
+# Bricht ab, weil der Block in rc.local keine Endmarke hat.
+rc_broken() {
+  fail "Der Block in $rc hat keine Endmarke; bitte von Hand bereinigen."
+}
+
+# Prüft rc.local vor jeder Änderung: Mit einem Block ohne Endmarke bricht das Skript ab, bevor es
+# etwas anfasst.
+check_rc() {
+  if [ -f "$rc" ] && ! edit_rc "" >/dev/null; then
+    rc_broken
+  fi
+}
+
 # Schreibt rc.local aus $tmp neu (atomar, ausführbar).
 replace_rc() {
   chmod 0755 "$tmp"
@@ -78,9 +91,10 @@ replace_rc() {
 EOF
 }
 
-# Prüft das Gerät und legt das Programmverzeichnis an.
+# Prüft rc.local und das Gerät und legt das Programmverzeichnis an.
 remote_check() {
   cat <<'EOF'
+check_rc
 command -v python3 >/dev/null 2>&1 || fail "python3 fehlt auf dem Gerät."
 python3 -c 'import sys; sys.exit(sys.version_info < (3, 8))' ||
   fail "Der Watchdog braucht Python 3.8 oder neuer."
@@ -104,7 +118,7 @@ line="ln -sfn $dir/service $link"
 if [ -s "$rc" ]; then
   edit_rc "$line" >"$tmp" || {
     rm -f "$tmp"
-    fail "Der Block in $rc hat keine Endmarke; bitte von Hand bereinigen."
+    rc_broken
   }
 else
   printf '#!/bin/sh\n%s\n%s\n%s\n' "$begin" "$line" "$end" >"$tmp"
@@ -141,6 +155,7 @@ EOF
 # Hält den Dienst an, entfernt Link, Block und Programmverzeichnis.
 remote_uninstall() {
   cat <<'EOF'
+check_rc
 if [ -e "$link" ] || [ -L "$link" ]; then
   svc -d "$link" || true
   rm -f "$link"
@@ -153,7 +168,7 @@ if [ -f "$rc" ] && grep -qxF "$begin" "$rc"; then
   mkdir -p "$dir"
   edit_rc "" >"$tmp" || {
     rm -f "$tmp"
-    fail "Der Block in $rc hat keine Endmarke; bitte von Hand bereinigen."
+    rc_broken
   }
   replace_rc
 fi
