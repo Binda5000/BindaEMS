@@ -11,12 +11,26 @@ from starlette.websockets import WebSocketDisconnect
 from tests.helpers import EMPTY_DERIVED, snap
 
 from bindaems.core.api.app import HealthReport, create_api, snapshot_to_json
+from bindaems.core.control.intent import IntentReply
+from bindaems.shared.control import Intent
 
 TOKEN = "x" * 32
 H = {"Authorization": "Bearer " + TOKEN}
 
 
 class FakeView:
+    def __init__(self) -> None:
+        self.current: Intent | None = None
+        self.reply = IntentReply("accepted", 1)
+        self.submitted: list[Intent] = []
+
+    def intent(self) -> Intent | None:
+        return self.current
+
+    def submit_intent(self, intent: Intent) -> IntentReply:
+        self.submitted.append(intent)
+        return self.reply
+
     def health(self) -> HealthReport:
         return HealthReport(
             mode="OBSERVE",
@@ -41,6 +55,12 @@ class FakeView:
 @pytest.fixture
 def client() -> TestClient:
     return TestClient(create_api(FakeView(), SecretStr(TOKEN)))
+
+
+@pytest.fixture
+def view_client() -> tuple[TestClient, FakeView]:
+    view = FakeView()
+    return TestClient(create_api(view, SecretStr(TOKEN))), view
 
 
 def test_health_requires_token(client) -> None:
@@ -105,6 +125,93 @@ def test_stream_rejects_bad_token(client, path: str) -> None:
         with client.websocket_connect(path) as ws:
             ws.receive_json()
     assert exc.value.code == 4401
+
+
+def test_put_intent_accepted(view_client) -> None:
+    client, view = view_client
+    view.reply = IntentReply("accepted", 3)
+    r = client.put("/v1/intent", json={"version": 3, "control": True}, headers=H)
+    assert (r.status_code, r.json()) == (200, {"result": "accepted", "version": 3, "details": []})
+    assert view.submitted == [Intent(version=3, control=True)]
+
+
+def test_put_intent_stale_is_409(view_client) -> None:
+    client, view = view_client
+    view.reply = IntentReply(
+        "rejected", 5, ("Version 4 ist älter als die gültige Version 5.",), "stale"
+    )
+    assert client.put("/v1/intent", json={"version": 4}, headers=H).status_code == 409
+
+
+def test_put_intent_unknown_actuator_is_422(view_client) -> None:
+    client, view = view_client
+    view.reply = IntentReply(
+        "rejected", None, ("Unbekannter Aktor „wallbox.twc“.",), "unknown_actuator"
+    )
+    r = client.put(
+        "/v1/intent", json={"version": 1, "actuators": {"wallbox.twc": "live"}}, headers=H
+    )
+    assert (r.status_code, r.json()["details"]) == (422, ["Unbekannter Aktor „wallbox.twc“."])
+
+
+def test_get_intent(view_client) -> None:
+    client, view = view_client
+    view.current = Intent(version=3)
+    assert client.get("/v1/intent").status_code == 401
+    assert client.get("/v1/intent", headers=H).json() == {
+        "intent": {"version": 3, "control": False, "actuators": {}}
+    }
+
+
+# Weitere Randfälle
+
+
+def test_get_intent_without_intent_is_null(view_client) -> None:
+    client, _ = view_client
+    assert client.get("/v1/intent", headers=H).json() == {"intent": None}
+
+
+def test_put_intent_clamped_is_200_with_details(view_client) -> None:
+    client, view = view_client
+    details = (
+        "EVCS „evcs“: in config.yaml nicht für den Live-Betrieb freigegeben; bleibt im Dry-Run.",
+    )
+    view.reply = IntentReply("clamped", 1, details)
+    r = client.put(
+        "/v1/intent", json={"version": 1, "actuators": {"wallbox.evcs": "live"}}, headers=H
+    )
+    assert (r.status_code, r.json()) == (
+        200,
+        {"result": "clamped", "version": 1, "details": list(details)},
+    )
+    assert view.submitted == [
+        Intent.model_validate({"version": 1, "actuators": {"wallbox.evcs": "live"}})
+    ]
+
+
+def test_put_intent_requires_token(view_client) -> None:
+    client, view = view_client
+    for headers in ({}, {"Authorization": "Bearer " + "y" * 32}):
+        assert client.put("/v1/intent", json={"version": 1}, headers=headers).status_code == 401
+        # ohne Token erfährt niemand, was der Body hätte erfüllen müssen
+        assert client.put("/v1/intent", json={"version": 0}, headers=headers).status_code == 401
+    assert view.submitted == []
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        {"version": 0},
+        {"control": True},
+        {"version": 1, "actuators": {"victron": "an"}},
+        {"version": 1, "unbekannt": True},
+    ],
+    ids=["version-0", "ohne-version", "ungueltiger-modus", "fremdfeld"],
+)
+def test_put_intent_with_invalid_body_is_422_and_not_submitted(view_client, body) -> None:
+    client, view = view_client
+    assert client.put("/v1/intent", json=body, headers=H).status_code == 422
+    assert view.submitted == []
 
 
 def test_no_public_schema_or_docs(client) -> None:

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -24,7 +25,9 @@ VALUES: dict[str, float] = BASE | {
 
 
 @pytest.fixture
-def runtime_env(cfg: Config) -> Callable[..., tuple[CoreRuntime, FakeSink, ManualClock]]:
+def runtime_env(
+    cfg: Config, tmp_path: Path
+) -> Callable[..., tuple[CoreRuntime, FakeSink, ManualClock]]:
     def build(
         start: str = "2026-10-08T10:00:00+00:00",
         state: Mapping[str, Value] | None = None,
@@ -36,8 +39,16 @@ def runtime_env(cfg: Config) -> Callable[..., tuple[CoreRuntime, FakeSink, Manua
         clock = ManualClock(datetime.fromisoformat(start))
         sink = FakeSink()
         secrets = Secrets(internal_token=SecretStr(TOKEN))
+        # kein Test liest oder schreibt unter /data
+        core = cfg.core.model_copy(update={"data_dir": tmp_path / "core"})
         rt = CoreRuntime(
-            cfg, secrets, clock=clock, adapters=[], sink=sink, serve_api=False, **kwargs
+            cfg.model_copy(update={"core": core}),
+            secrets,
+            clock=clock,
+            adapters=[],
+            sink=sink,
+            serve_api=False,
+            **kwargs,
         )
         rt.store.register_source("victron", 5.0, activity_based=True)
         rt.store.set_connected("victron", True)

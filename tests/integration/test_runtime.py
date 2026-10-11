@@ -2,14 +2,18 @@ import asyncio
 from datetime import timedelta
 
 import pytest
+from fastapi.testclient import TestClient
 from pydantic import SecretStr
 from structlog.testing import capture_logs
 from tests.helpers import FakeSink
 from tests.integration.conftest import TOKEN
 
 from bindaems.core.__main__ import main
+from bindaems.core.api.app import create_api
+from bindaems.core.persistence.files import read_json, write_json_atomic
 from bindaems.core.runtime import CoreRuntime
 from bindaems.shared.config import Secrets
+from bindaems.shared.control import Intent
 
 
 async def test_cycle_produces_state_and_points(runtime_env) -> None:
@@ -249,3 +253,55 @@ async def test_frozen_grid_counter_raises_alarm_after_full_slot(runtime_env) -> 
     assert (
         "Bezug 750 Wh aus der Leistung, 0 Wh laut Zähler" in alarms["plaus.grid_counter"]["message"]
     )
+
+
+# Absicht: Die Laufzeit hält sie im IntentStore und legt sie unter core.data_dir ab.
+
+
+def test_intent_over_the_api_is_clamped_kept_and_saved_under_the_data_dir(
+    runtime_env, tmp_path
+) -> None:
+    rt, _, clock = runtime_env()
+    client = TestClient(create_api(rt, SecretStr(TOKEN)))
+    auth = {"Authorization": f"Bearer {TOKEN}"}
+    assert client.get("/v1/intent", headers=auth).json() == {"intent": None}
+    # die Beispielkonfiguration gibt keinen Aktor für den Live-Betrieb frei
+    body = {"version": 3, "control": True, "actuators": {"wallbox.evcs": "live"}}
+    reply = client.put("/v1/intent", json=body, headers=auth)
+    assert (reply.status_code, reply.json()) == (
+        200,
+        {
+            "result": "clamped",
+            "version": 3,
+            "details": [
+                "EVCS „evcs“: in config.yaml nicht für den Live-Betrieb freigegeben; "
+                "bleibt im Dry-Run."
+            ],
+        },
+    )
+    clamped = {"version": 3, "control": True, "actuators": {"wallbox.evcs": "dry_run"}}
+    assert rt.intent() == Intent.model_validate(clamped)
+    assert client.get("/v1/intent", headers=auth).json() == {"intent": clamped}
+    assert read_json(tmp_path / "core" / "intent.json") == {
+        "intent": clamped,
+        "accepted_at": clock.now().isoformat(),
+    }
+
+
+def test_saved_intent_is_loaded_when_the_runtime_starts(runtime_env, tmp_path) -> None:
+    stored = {"version": 4, "control": True, "actuators": {"wallbox.evcs": "dry_run"}}
+    write_json_atomic(
+        tmp_path / "core" / "intent.json",
+        {"intent": stored, "accepted_at": "2026-10-08T09:00:00+00:00"},
+    )
+    rt, _, _ = runtime_env()
+    assert rt.intent() == Intent.model_validate(stored)
+    assert rt.intents.load_problem is None
+
+
+def test_unreadable_intent_file_starts_without_intent(runtime_env, tmp_path) -> None:
+    (tmp_path / "core").mkdir()
+    (tmp_path / "core" / "intent.json").write_text("{kaputt")
+    rt, _, _ = runtime_env()
+    assert rt.intent() is None
+    assert rt.intents.load_problem is not None

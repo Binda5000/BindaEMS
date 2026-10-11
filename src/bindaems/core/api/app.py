@@ -1,4 +1,4 @@
-"""Interne API: Gesundheit, Zustand und Live-Stream für die app, geschützt durch ein Token."""
+"""Interne API: Gesundheit, Zustand, Absicht und Live-Stream für die app, mit Token geschützt."""
 
 from __future__ import annotations
 
@@ -8,13 +8,18 @@ from contextlib import AbstractAsyncContextManager
 from dataclasses import fields
 from typing import Annotated, Any, Literal, Protocol
 
-from fastapi import Depends, FastAPI, Header, HTTPException, WebSocket, status
+from fastapi import Depends, FastAPI, Header, HTTPException, Response, WebSocket, status
 from pydantic import BaseModel, SecretStr
 
+from bindaems.core.control.intent import IntentReply
 from bindaems.core.state.derived import Derived
+from bindaems.shared.control import Intent
 from bindaems.shared.domain import Snapshot
 
 WS_UNAUTHORIZED = 4401
+
+# Starlette hat den Namen für 422 geändert (ENTITY zu CONTENT); die Zahl gilt in jeder Version.
+HTTP_UNPROCESSABLE = 422
 
 
 class HealthReport(BaseModel):
@@ -26,10 +31,24 @@ class HealthReport(BaseModel):
     cycle_ms_p95: float | None
 
 
+class CurrentIntent(BaseModel):
+    intent: Intent | None
+
+
+class IntentResponse(BaseModel):
+    result: Literal["accepted", "clamped", "rejected"]
+    version: int | None
+    details: list[str]
+
+
 class CoreView(Protocol):
     def health(self) -> HealthReport: ...
 
     def state(self) -> dict[str, Any]: ...
+
+    def intent(self) -> Intent | None: ...
+
+    def submit_intent(self, intent: Intent) -> IntentReply: ...
 
     def subscribe(self) -> AbstractAsyncContextManager[AsyncIterator[dict[str, Any]]]: ...
 
@@ -49,6 +68,15 @@ def snapshot_to_json(snap: Snapshot, derived: Derived) -> dict[str, Any]:
         },
         "derived": {field.name: _plain(getattr(derived, field.name)) for field in fields(derived)},
     }
+
+
+def _intent_status(reply: IntentReply) -> int:
+    """200 für eine angenommene (auch geklemmte) Absicht, 422 für unbekannte Aktoren, sonst 409."""
+    if reply.result != "rejected":
+        return status.HTTP_200_OK
+    if reply.rejection == "unknown_actuator":
+        return HTTP_UNPROCESSABLE
+    return status.HTTP_409_CONFLICT
 
 
 def _bearer(authorization: str | None) -> str | None:
@@ -82,6 +110,18 @@ def create_api(view: CoreView, token: SecretStr) -> FastAPI:
     @app.get("/v1/state", dependencies=[Depends(require_token)])
     def state() -> dict[str, Any]:
         return view.state()
+
+    @app.get("/v1/intent", dependencies=[Depends(require_token)])
+    def get_intent() -> CurrentIntent:
+        return CurrentIntent(intent=view.intent())
+
+    @app.put("/v1/intent", dependencies=[Depends(require_token)])
+    def put_intent(intent: Intent, response: Response) -> IntentResponse:
+        reply = view.submit_intent(intent)
+        response.status_code = _intent_status(reply)
+        return IntentResponse(
+            result=reply.result, version=reply.version, details=list(reply.details)
+        )
 
     @app.websocket("/v1/stream")
     async def stream(websocket: WebSocket) -> None:

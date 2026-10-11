@@ -33,12 +33,15 @@ from bindaems.core.adapters.victron_mqtt import AiomqttTransport, VictronMqttAda
 from bindaems.core.api.app import HealthReport, create_api, snapshot_to_json
 from bindaems.core.checks.competitors import detect_competitors
 from bindaems.core.checks.selfcheck import CheckResult, run_selfcheck
+from bindaems.core.control.intent import IntentReply, IntentStore
+from bindaems.core.safety.limits import HardLimits
 from bindaems.core.state.derived import Derived, derive
 from bindaems.core.state.plausibility import PlausibilityMonitor, check_grid_counters
 from bindaems.core.state.store import StateStore
 from bindaems.core.telemetry.sampler import TelemetrySampler
 from bindaems.shared.broadcast import Broadcast
 from bindaems.shared.config import Config, EvcsConfig, Secrets
+from bindaems.shared.control import Intent
 from bindaems.shared.domain import Alarm, Severity, SlotFlows
 from bindaems.shared.influx.lineprotocol import PointSink
 from bindaems.shared.influx.spool import DiskSpool
@@ -101,6 +104,9 @@ class CoreRuntime:
         self._timer = timer
         self.store = StateStore(self._clock)
         self.broadcast = Broadcast()
+        self.limits = HardLimits.from_config(cfg)
+        self.intents = IntentStore(cfg.core.data_dir / "intent.json", self.limits)
+        self.intents.load()
         self._http: httpx.AsyncClient | None = None
         self._writer: InfluxWriter | None = None
         if sink is None:
@@ -205,6 +211,12 @@ class CoreRuntime:
 
     def subscribe(self) -> AbstractAsyncContextManager[AsyncIterator[dict[str, Any]]]:
         return self.broadcast.subscribe()
+
+    def intent(self) -> Intent | None:
+        return self.intents.current
+
+    def submit_intent(self, intent: Intent) -> IntentReply:
+        return self.intents.submit(intent, self._clock.now())
 
     # --- Zyklus --------------------------------------------------------------------------
 
