@@ -1,0 +1,30 @@
+; BindaEMS-Watchdog – erzeugt mit „python -m bindaems.tools.watchdog_config“ aus config.yaml.
+; Nicht von Hand ändern: config.yaml anpassen, neu erzeugen und mit install.sh übertragen.
+
+[watchdog]
+enabled = true
+timeout_s = 90
+rearm_s = 30
+heartbeat_gap_s = 25
+retries = 6
+retry_s = 5
+state_file = /data/bindaems-watchdog/state.json
+
+; EVCS „evcs“ auf den sicheren Strom (wallboxes.evcs.safe_a)
+[action:evcs_evcs]
+service = com.victronenergy.evcharger
+instance = 40
+path = /SetCurrent
+value = 6
+
+; Min-SOC auf die USV-Reserve (battery.reserve_soc_pct)
+[action:min_soc]
+service = com.victronenergy.settings
+path = /Settings/CGwacs/BatteryLife/MinimumSocLimit
+value = 20
+
+; Entladegrenze unbegrenzt
+[action:max_discharge]
+service = com.victronenergy.settings
+path = /Settings/CGwacs/MaxDischargePower
+value = -1

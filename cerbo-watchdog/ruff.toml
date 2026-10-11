@@ -1,0 +1,7 @@
+extend = "../pyproject.toml"
+target-version = "py38"
+src = ["."]
+
+[lint.pyupgrade]
+# Python 3.8 braucht Optional, Tuple, Dict und List in den Annotationen.
+keep-runtime-typing = true

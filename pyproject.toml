@@ -72,7 +72,7 @@ asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
 testpaths = ["tests"]
 addopts = "--import-mode=importlib"
-pythonpath = ["."]
+pythonpath = [".", "cerbo-watchdog"]
 filterwarnings = [
     # Starlette 1.7 empfiehlt für den TestClient das Paket httpx2; die Tests bleiben bei httpx.
     "ignore:Using `httpx` with `starlette.testclient` is deprecated:UserWarning",
