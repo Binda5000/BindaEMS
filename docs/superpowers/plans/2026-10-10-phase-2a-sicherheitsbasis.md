@@ -91,7 +91,7 @@ Stand an der Anlage (Angabe des Betreibers vom 10.10.2026):
      - Entladegrenze auf unbegrenzt (−1)
    - Das Löschen der hub4-Overrides kommt mit 2b, sobald Teil 2 die Pfade festgelegt hat.
 4. **Dringende Befehle (8.3).**
-   - Gemeint ist ein Befehl mit `urgent=True`, der nachweislich Richtung sicherer Zustand geht: weniger Strom, Stopp, ein niedrigerer Netz-Sollwert, ein aufgehobener Override oder ein Sicherwert.
+   - Gemeint ist ein Befehl mit `urgent=True`, der nachweislich Richtung sicherer Zustand geht, gemessen am angeforderten und am tatsächlich gesendeten Wert (nach dem Klemmen): weniger Strom, Stopp, ein niedrigerer Netz-Sollwert, ein aufgehobener Override oder ein Sicherwert.
    - Er umgeht Mindestabstände, Stundenlimits und Totbänder (außer bei gleichem Wert). Das Schreibbudget umgeht er nur mit dem exakten Sicherwert der Art (`safe_commands`), damit auch fehlerhaft „dringende“ Folgen den Flash nicht erschöpfen. Er wird aber mitgezählt.
    - **Zustand:** In SAFE darf er schreiben, damit der sichere Zustand hergestellt werden kann (8.4, 8.5). In START und OBSERVE bleibt der core auch für ihn lesend (7.2, 8.3 Regel 8). In CONTROL und DEGRADED ist das Zustands-Gate ohnehin offen.
    - Sperren (7.9) gelten auch für ihn.
@@ -664,7 +664,7 @@ git commit -m "feat(safety): Regeln 1–3 – Sollwerte klemmen oder ablehnen"
 | Art | Erhöhung, wenn … | Prüfung |
 |---|---|---|
 | `current` | Ist-Strom (`present[(a, CURRENT)]`) kleiner als der Wert; ist er unbekannt, nur bei Wert > `safe_a` (der sichere Strom ist nie eine Erhöhung, damit der sichere Zustand auch bei veralteten Cerbo-Daten erreichbar bleibt, Spec 8.4) | `erlaubt = floor(min_p(h_p + m_p))` über die aktiven Phasen. Wert ≤ erlaubt: unverändert. Sonst bei einer Erhöhung: erlaubt ≥ `min_a` → auf erlaubt (`phase.reduced`), sonst ablehnen (`phase.rejected`). Bei einer Verringerung: auf `max(min_a, erlaubt)` (`phase.reduced` bzw. `phase.minimum`) |
-| `charging` | Wert `True` und Ist-Wert nicht `True` | Ladestrom `I_c` = bekannter Ist-Strom, sonst `max_a`. Geprüft wird `I_p − m_p + I_c ≤ Grenze` auf allen drei Phasen der Wallbox; verletzt → ablehnen (`phase.rejected`). `False` ist immer erlaubt. |
+| `charging` | Wert `True` und Ist-Wert nicht `True` | Ladestrom `I_c` = `max(bekannter Ist-Strom, min_a)`, denn ein startendes Auto zieht mindestens den Mindeststrom; unbekannt: `max_a`. Geprüft wird `I_p − m_p + I_c ≤ Grenze` auf allen drei Phasen der Wallbox; verletzt → ablehnen (`phase.rejected`). `False` ist immer erlaubt. |
 | `grid_setpoint` | Wert nicht `None` und größer als der wirksame Ist-Sollwert `S0` (Override, sonst `base_grid_setpoint_w`). Fehlt `(victron, grid_setpoint)` in `present`, gilt `S0 = min(base_grid_setpoint_w, 0)`: die vorsichtigste Annahme, denn ein Override ist nie negativ. | `S_max = S0 + 3 × U × min_p h_p`. Wert ≤ `S_max`: unverändert. Sonst: `S_max ≥ 0` → auf `floor(S_max)` (`phase.reduced`); `S_max < 0` und `S0 ≥ 0` → auf 0 (`phase.reduced`); sonst ablehnen (`phase.rejected`) |
 | `max_discharge` | Wert ≥ 0 und kleiner als die aktuelle Entladeleistung `D` | `ΔP = D − Wert` ins Netz. `L_min = D − 3 × U × min_p h_p`. Wert ≥ `L_min`: unverändert; sonst auf `ceil(L_min)` (`phase.discharge`), über `max_discharge_w` auf −1. Ist `D` unbekannt, wird eine Verschärfung abgelehnt (`phase.battery_unknown`); das heißt Wert ≥ 0 und Ist-Wert unbekannt, −1 oder größer. |
 | `min_soc` | Wert > Reserve und Wert > SOC | `ΔP = D`; wenn `I_p + ΔP / (3 × U)` auf einer Phase über der Grenze liegt, ablehnen (`phase.rejected`). Ist der SOC unbekannt, wird abgelehnt (`phase.soc_unknown`); ist `D` unbekannt, ebenfalls (`phase.battery_unknown`). |
@@ -1379,7 +1379,7 @@ git commit -m "feat(safety): Sperren für Teilsysteme und wirksame Betriebsarten
 
 **Ablauf von `authorize`**, genau in dieser Reihenfolge:
 1. Aktor in `limits.actuators` und Art in `spec.kinds`, sonst `REJECTED`.
-2. `urgent_ok = command.urgent and toward_safe(command, ctx, limits)`. Ist `command.urgent` gesetzt, aber nicht `urgent_ok`, kommt `urgent.ignored` dazu, und es geht normal weiter.
+2. `urgent_ok = command.urgent and toward_safe(command, ctx, limits)` und `toward_safe` auch für den Wert nach den Regeln 1–3 (`check_range` ist rein und wird dafür vorab berechnet; lehnt es ab, ist `urgent_ok` falsch). Sonst könnte das Klemmen den gesendeten Wert vom sicheren Zustand wegbewegen. Ist `command.urgent` gesetzt, aber nicht `urgent_ok`, kommt `urgent.ignored` dazu, und es geht normal weiter.
 3. **Zustand:** `ctx.operating` ist CONTROL oder DEGRADED, oder es gilt `urgent_ok` und der Zustand ist SAFE. Sonst `REJECTED` mit `state.inactive`.
 4. **Sperre:** Ist `ctx.locks.get(id)` nicht leer, folgt `REJECTED` mit `lock`, auch bei dringenden Befehlen.
 5. **Betriebsart:** `dry_run = ctx.modes.get(id, DRY_RUN) is not LIVE`.
