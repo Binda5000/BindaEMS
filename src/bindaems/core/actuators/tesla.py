@@ -3,8 +3,9 @@
 Die drei Befehle (Plan 2b, Präzisierung 1) sind ``start_charging``, ``stop_charging`` und
 ``set_charging_amps``, jeweils als ``POST {TESSIE_BASE_URL}/{vin}/command/<Name>`` mit
 ``wait_for_completion=true``. Tessie antwortet erst, wenn das Fahrzeug den Befehl ausgeführt hat;
-das dauert bis zu ``COMMAND_TIMEOUT_S``. Der Zyklus wartet darauf nie: ``send`` startet den Befehl
-als Aufgabe des Event-Loops und kehrt sofort zurück, ``confirm`` fragt, ob sie fertig ist.
+das darf insgesamt höchstens ``COMMAND_TIMEOUT_S`` dauern (Spec 6.5). Der Zyklus wartet darauf
+nie: ``send`` startet den Befehl als Aufgabe des Event-Loops und kehrt sofort zurück, ``confirm``
+fragt, ob sie fertig ist.
 Bestätigt ist ein Befehl, wenn Tessie ``{"result": true}`` liefert (Präzisierung 6); den Cache
 fragt ``confirm`` nicht, denn er hinkt dem Fahrzeug hinterher.
 
@@ -35,7 +36,7 @@ from bindaems.shared.domain import Alarm, Severity, Snapshot
 from bindaems.shared.numbers import de, finite_number
 from bindaems.shared.timeutil import LOCAL_TZ
 
-COMMAND_TIMEOUT_S: Final = 60.0  # so lange wartet der Aktor auf die Antwort von Tessie (Spec 6.5)
+COMMAND_TIMEOUT_S: Final = 60.0  # Frist je Befehl, insgesamt und je httpx-Phase (Spec 6.5)
 FAILURES_ALLOWED: Final = 3  # so viele Fehler binnen FAILURE_WINDOW machen ihn nicht steuerbar
 FAILURE_WINDOW: Final = timedelta(minutes=15)  # Zählfenster und Dauer des Zustands danach
 
@@ -198,19 +199,25 @@ class TeslaActuator:
     async def _command(self, name: str, params: dict[str, str]) -> tuple[Confirmation, str]:
         """Sendet den Befehl ``name`` an Tessie und wartet auf die Antwort; sie ist das Ergebnis.
 
-        Bestätigt ist der Befehl bei einer Antwort 2xx mit ``{"result": true}``. Jedes andere
-        Ende ist ein Fehler: ein anderer Status, ``result`` nicht ``true`` oder eine Ausnahme
-        (Netz, Zeitüberschreitung, kein JSON). Jeder Fehler wird gezählt (``_note_failure``). Der
-        Abbruch der Aufgabe, etwa beim Herunterfahren, ist kein Fehler des Befehls und zählt
-        nicht.
+        Der ganze Austausch darf höchstens ``COMMAND_TIMEOUT_S`` dauern: Die Frist von httpx gilt
+        für jede Phase einzeln (Verbinden, Schreiben, Lesen), die äußere ``asyncio.timeout`` für
+        alles zusammen. Bestätigt ist der Befehl bei einer Antwort 2xx mit ``{"result": true}``.
+        Jedes andere Ende ist ein Fehler: ein anderer Status, ``result`` nicht ``true`` oder eine
+        Ausnahme (Netz, Zeitüberschreitung, kein JSON). Jeder Fehler wird gezählt
+        (``_note_failure``).
+
+        Ein Abbruch der Aufgabe von außen, etwa beim Herunterfahren, ist kein Fehler des Befehls
+        und zählt nicht. Die äußere Frist macht nur ihren eigenen Abbruch zum ``TimeoutError``,
+        der wie jede Ausnahme zählt; ein Abbruch von außen bleibt ein Abbruch.
         """
         try:
-            response = await self._client.post(
-                f"{TESSIE_BASE_URL}/{self._vin}/command/{name}",
-                params={"wait_for_completion": "true", **params},
-                headers={"Authorization": f"Bearer {self._token.get_secret_value()}"},
-                timeout=COMMAND_TIMEOUT_S,
-            )
+            async with asyncio.timeout(COMMAND_TIMEOUT_S):
+                response = await self._client.post(
+                    f"{TESSIE_BASE_URL}/{self._vin}/command/{name}",
+                    params={"wait_for_completion": "true", **params},
+                    headers={"Authorization": f"Bearer {self._token.get_secret_value()}"},
+                    timeout=COMMAND_TIMEOUT_S,
+                )
             failure = _answer_failure(response)
         except Exception as exc:  # Netz, Zeitüberschreitung, kein JSON: der Befehl ist gescheitert
             failure = self._exception_text(exc)

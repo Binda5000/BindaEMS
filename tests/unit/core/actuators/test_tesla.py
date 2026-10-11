@@ -850,6 +850,70 @@ async def test_a_command_cancelled_before_it_starts_sends_nothing(cfg, respx_moc
     assert respx_mock.calls.call_count == 0
 
 
+# Frist je Befehl
+
+
+async def test_a_command_that_never_answers_fails_at_the_total_timeout(
+    cfg, respx_mock, monkeypatch
+) -> None:
+    monkeypatch.setattr("bindaems.core.actuators.tesla.COMMAND_TIMEOUT_S", 0.02)
+    never = asyncio.Event()
+    requests: list[httpx.Request] = []
+
+    async def hang(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        await never.wait()  # Tessie antwortet nie
+        return httpx.Response(200, json={"result": True})
+
+    respx_mock.post(URL).mock(side_effect=hang)
+    now = [T0]
+    async with httpx.AsyncClient() as client:
+        car = tesla(cfg, client, now)
+        for minute in range(FAILURES_ALLOWED):
+            now[0] = T0 + timedelta(minutes=minute)
+            assert car.send(CommandKind.CURRENT, 10.0) is None  # der letzte Befehl ist zu Ende
+            await asyncio.sleep(0.1)  # die Frist ist 0,02 s
+            assert asyncio.all_tasks() == {asyncio.current_task()}  # die Aufgabe ist fertig
+            assert car.confirm(CommandKind.CURRENT, 10.0, snap({})) == (
+                Confirmation.FAILED,
+                "TimeoutError",
+            )
+            # Jede Zeitüberschreitung zählt als ein Fehler: nicht steuerbar erst nach dem dritten.
+            assert car.capabilities(snap(HOME), now[0]).controllable == (
+                minute < FAILURES_ALLOWED - 1
+            )
+        caps = car.capabilities(snap(HOME), T0 + timedelta(minutes=3))
+    assert caps.reasons == (AFTER_FAILURES,)
+    assert len(requests) == FAILURES_ALLOWED
+
+
+async def test_a_command_cancelled_while_waiting_is_no_timeout(cfg, respx_mock) -> None:
+    never = asyncio.Event()
+
+    async def hang(request: httpx.Request) -> httpx.Response:
+        await never.wait()
+        return httpx.Response(200, json={"result": True})
+
+    respx_mock.post(URL).mock(side_effect=hang)
+    now = [T0]
+    async with httpx.AsyncClient() as client:
+        car = tesla(cfg, client, now)
+        for minute in range(FAILURES_ALLOWED):
+            now[0] = T0 + timedelta(minutes=minute)
+            assert car.send(CommandKind.CURRENT, 10.0) is None
+            await asyncio.sleep(0)  # Tessie hat noch nicht geantwortet
+            (task,) = asyncio.all_tasks() - {asyncio.current_task()}
+            task.cancel()  # von außen, wie beim Herunterfahren; die Frist läuft noch
+            await asyncio.sleep(0.01)
+            assert car.confirm(CommandKind.CURRENT, 10.0, snap({})) == (
+                Confirmation.FAILED,
+                CANCELLED,
+            )
+        later = T0 + timedelta(minutes=3)
+        assert car.capabilities(snap(HOME), later) == Capabilities(True)
+        assert car.alarms(later) == []
+
+
 # Mit dem Ausführer
 
 TESLA = "vehicle.tesla"
