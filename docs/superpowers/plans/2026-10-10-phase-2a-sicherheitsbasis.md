@@ -59,6 +59,7 @@ Stand an der Anlage (Angabe des Betreibers vom 10.10.2026):
 - Das Peak-Shaving-Importlimit steht schon knapp unter der Hausanschlusssicherung, bei etwa 33 A (Ebene 0).
 - **Offen vor 2b:** Das eigene EVCS-Registerabbild enthält trotz richtiger Adresse nur Nullen (Prüfprotokoll Teil 1, 17.1-8).
   - Vermutlich ein anderer Port: Der Cerbo findet die EVCS per mDNS und nutzt den dort angekündigten Port.
+  - Nachtrag 11.10.2026: Ursache war die IP-Whitelist der EVCS, nicht der Port; der Betreiber hat sie korrigiert.
   - Davon hängt ab, ob 2b direkt per Modbus oder über den GX-Dienst `evcharger` auf die EVCS schreibt.
   - Geschrieben wird in jedem Fall der Sollstrom (Register 5016, auf dem GX `/SetCurrent`), nie der Maximalstrom (5017).
 

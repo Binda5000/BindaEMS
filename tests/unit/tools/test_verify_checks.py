@@ -123,17 +123,20 @@ def test_evcs_dump_without_registers_fails() -> None:
 
 
 def test_evcs_dump_all_zero_warns_with_the_cerbo_address() -> None:
-    # Prüfprotokoll 10.10.2026: 5000–5199 alle 0, der Cerbo las die EVCS unter 192.168.81.41
+    # Prüfprotokoll 10.10.2026: 5000–5199 alle 0, der Cerbo las die EVCS unter 192.168.81.41;
+    # Ursache war die IP-Whitelist der EVCS (Nachtrag 11.10.2026)
     regs = dict.fromkeys(range(5000, 5200), 0)
     last = check_evcs_dump(regs, gx_connection="Modbus TCP 192.168.81.41")[-1]
     assert (last.item, last.title, last.status) == ("17.1-8", "EVCS-Registerabbild leer", "warn")
     assert last.detail == (
-        "Alle 200 Register sind 0. Der Cerbo liest die EVCS über „Modbus TCP 192.168.81.41“, "
-        "mit dem Port, den die EVCS per mDNS ankündigt; prüfe host, port und unit_id der "
-        "Wallbox in config.yaml."
+        "Alle 200 Register sind 0. Der Cerbo liest die EVCS über „Modbus TCP 192.168.81.41“. "
+        "Die EVCS antwortet über Modbus TCP nur Adressen auf ihrer IP-Whitelist; prüfe dort die "
+        "Adresse von BindaEMS, dann host, port und unit_id der Wallbox in config.yaml."
     )
     assert check_evcs_dump(regs)[-1].detail == (
-        "Alle 200 Register sind 0. Prüfe host, port und unit_id der Wallbox in config.yaml."
+        "Alle 200 Register sind 0. Die EVCS antwortet über Modbus TCP nur Adressen auf ihrer "
+        "IP-Whitelist; prüfe dort die Adresse von BindaEMS, dann host, port und unit_id der "
+        "Wallbox in config.yaml."
     )
 
 

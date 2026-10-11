@@ -69,6 +69,10 @@
     - Funktionscode 4 beantwortet die EVCS mit „illegal function“.
     - Victrons GX-Treiber findet die EVCS per mDNS und nutzt den dort angekündigten Port.
       Vermutlich ist das nicht 502; offen ist, den Port am Cerbo abzulesen.
+  - Nachtrag 11.10.2026: Ursache war die IP-Whitelist der EVCS, nicht der Port. Die Adresse der
+    VM stand nicht darauf; die EVCS nahm die Verbindung trotzdem an und lieferte nur Nullen. Der
+    Betreiber hat die Whitelist korrigiert, seitdem antwortet die EVCS BindaEMS. Bei einem
+    leeren Registerabbild nennt das Werkzeug jetzt zuerst die Whitelist. Teil 1 wird wiederholt.
   - Seit dieser Prüfung liest die Selbstprüfung den EVCS-Modus vom Cerbo. Ein leeres
     Registerabbild meldet das Werkzeug als WARNUNG mit dem Weg des Cerbo.
   - Leistung und Energie der EVCS kommen über den Cerbo und sind nicht betroffen. Den Weg für

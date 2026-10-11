@@ -24,6 +24,8 @@ Totmann-Schalter der Anlage und greift nur ein, wenn ein live geschalteter core 
 - Netzzugang:
   - im LAN: Cerbo GX (MQTT 8883), EVCS (Modbus TCP 502), Wall Connector (HTTP 80),
     InfluxDB (8086), Home Assistant (8123)
+  - Die Adresse der VM muss auf der IP-Whitelist der EVCS stehen. Sonst nimmt die EVCS die
+    Verbindung zwar an, liefert aber nur Nullen.
   - im LAN außerdem: Mosquitto von Home Assistant (1883 bzw. 8883) für die Sensoren der app
   - ins Internet: Tessie (`api.tessie.com`), GHCR (`ghcr.io`) für Images sowie für die app
     `apis.smartenergy.at`, `api.energy-charts.info`, `api.awattar.at` und `api.open-meteo.com`

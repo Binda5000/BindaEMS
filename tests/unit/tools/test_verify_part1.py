@@ -242,7 +242,8 @@ def test_empty_evcs_register_block_names_the_cerbo_path(tmp_path, monkeypatch) -
     report, _ = _outputs(out)
     assert (
         "| 17.1-8 | EVCS-Registerabbild leer | WARNUNG | Alle 200 Register sind 0. Der Cerbo liest "
-        "die EVCS über „Modbus TCP 192.168.81.41“, mit dem Port, den die EVCS per mDNS "
-        "ankündigt; prüfe host, port und unit_id der Wallbox in config.yaml. |"
+        "die EVCS über „Modbus TCP 192.168.81.41“. Die EVCS antwortet über Modbus TCP nur "
+        "Adressen auf ihrer IP-Whitelist; prüfe dort die Adresse von BindaEMS, dann host, port "
+        "und unit_id der Wallbox in config.yaml. |"
     ) in report
     assert "EVCS-Firmware" not in report  # aus lauter Nullen gibt es keine Firmware

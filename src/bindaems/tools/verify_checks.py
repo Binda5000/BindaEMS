@@ -291,14 +291,15 @@ def check_evcs_dump(regs: Mapping[int, int], gx_connection: str | None = None) -
     if nonzero:
         findings.append(Finding("17.1-8", "EVCS-Register ≠ 0", "info", "; ".join(nonzero)))
         return findings
-    # leer: antwortet unter host/port/unit_id überhaupt die EVCS? Der Cerbo findet sie per mDNS
-    # und nimmt den dort angekündigten Port, der nicht 502 sein muss.
-    hint = "host, port und unit_id der Wallbox in config.yaml."
+    # leer: Die EVCS liefert nur Nullen, wenn die Adresse von BindaEMS nicht auf ihrer
+    # Modbus-TCP-Whitelist steht (Prüfprotokoll 10.10.2026, Nachtrag 11.10.2026); danach erst
+    # host/port/unit_id prüfen (der Cerbo nimmt den per mDNS angekündigten Port).
+    hint = (
+        "Die EVCS antwortet über Modbus TCP nur Adressen auf ihrer IP-Whitelist; prüfe dort die "
+        "Adresse von BindaEMS, dann host, port und unit_id der Wallbox in config.yaml."
+    )
     detail = f"Alle {len(regs)} Register sind 0. " + (
-        f"Der Cerbo liest die EVCS über „{gx_connection}“, mit dem Port, den die EVCS per mDNS "
-        f"ankündigt; prüfe {hint}"
-        if gx_connection
-        else f"Prüfe {hint}"
+        f"Der Cerbo liest die EVCS über „{gx_connection}“. {hint}" if gx_connection else hint
     )
     findings.append(Finding("17.1-8", "EVCS-Registerabbild leer", "warn", detail))
     return findings

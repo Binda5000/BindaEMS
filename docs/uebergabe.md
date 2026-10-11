@@ -209,11 +209,10 @@ Demo-Zugänge: `admin`, `gast` (Lesen) und `sicher` (Admin mit TOTP, Geheimnis
   brutto). Teil 1 mit Befunden, siehe die Bewertung am Ende des Protokolls:
   - Dynamic ESS bleibt nach Entscheidung des Betreibers an, bis Victron live geschaltet wird.
   - Die EVCS (AC22NS, Produkt-ID 0xC026) liest der Cerbo per Modbus TCP unter
-    192.168.81.41. BindaEMS bekam unter derselben Adresse auf Port 502 nur Nullen, mit jeder
-    Unit-ID; Funktionscode 4 kennt die EVCS nicht. `wallboxes.evcs.host` stand laut Betreiber
-    schon richtig. Vermutlich nutzt die EVCS einen anderen Port: Der Cerbo findet sie per mDNS
-    und nimmt den dort angekündigten. Offen: den Port am Cerbo ablesen (gespeicherte
-    Modbus-TCP-Geräte) und `wallboxes.evcs.port` setzen.
+    192.168.81.41. BindaEMS bekam unter derselben Adresse nur Nullen. Ursache war die
+    IP-Whitelist der EVCS: Die Adresse der VM stand nicht darauf. Die EVCS nimmt die Verbindung
+    dann trotzdem an und liefert nur Nullen. Der Betreiber hat die Whitelist am 11.10.2026
+    korrigiert; seitdem antwortet die EVCS BindaEMS. Teil 1 muss das noch im Protokoll belegen.
   - Seit dem 10.10.2026 folgt die Registerbelegung Victrons GX-Treiber: Sollstrom 5016,
     Maximalstrom 5017. Ohne bekannte Produkt-ID gelten die Registerwerte als ungültig; Strom
     und Modus kommen dann vom Cerbo.
@@ -237,8 +236,10 @@ Demo-Zugänge: `admin`, `gast` (Lesen) und `sicher` (Admin mit TOTP, Geheimnis
      erreichen. `app.trusted_proxies` setzen, `cookie_secure` wieder auf `true`.
   3. InfluxDB einrichten (`deploy/influxdb-setup.sh`), den ersten Admin anlegen und TOTP
      einrichten.
-  4. Die Prüfprotokolle Teil 1 und „Preise“ laufen lassen, nach `docs/verification/` übernehmen
-     und `config.yaml` anhand der Abweichungen korrigieren.
+  4. Prüfprotokoll Teil 1 wiederholen, jetzt mit erreichbarer EVCS: Produkt-ID, Firmware und
+     Modus müssen aus den eigenen Registern kommen. Den Bericht nach `docs/verification/`
+     übernehmen und `config.yaml` anhand der Abweichungen korrigieren. „Preise“ ist bestanden
+     (10.10.2026).
   5. Tarifbestandteile und den OeMAG-Monatswert im UI eintragen (Einstellungen).
   6. **Watchdog installieren** (Betriebshandbuch 14): `config.ini` aus `config.yaml` erzeugen und mit
      `cerbo-watchdog/install.sh` auf den Cerbo bringen. Dafür braucht es den SSH-Zugang als root
@@ -283,10 +284,11 @@ Demo-Zugänge: `admin`, `gast` (Lesen) und `sicher` (Admin mit TOTP, Geheimnis
    Abnahme der Phase 2: 2 Wochen Dry-Run, dann die Live-Schaltung je Aktor in der Reihenfolge EVCS,
    Victron, Tesla.
 
-   **Offen vor 2b:** Das eigene EVCS-Registerabbild enthält trotz richtiger Adresse nur Nullen
-   (vermutlich ein anderer Port, siehe oben). Davon hängt ab, ob 2b direkt per Modbus oder über den
-   GX-Dienst `evcharger` auf die EVCS schreibt. Geschrieben wird in jedem Fall der Sollstrom
-   (Register 5016, auf dem GX `/SetCurrent`), nie der Maximalstrom (5017).
+   **EVCS in 2b:** Seit der korrigierten IP-Whitelist antwortet die EVCS BindaEMS direkt per Modbus
+   (siehe oben). Ob 2b direkt per Modbus oder über den GX-Dienst `evcharger` auf die EVCS schreibt,
+   legt das Prüfprotokoll Teil 2 fest (Spec 8.6). Geschrieben wird in jedem Fall der Sollstrom
+   (Register 5016, auf dem GX `/SetCurrent`), nie der Maximalstrom (5017). Der Watchdog ist nicht
+   betroffen: Er schreibt über den GX-Dienst `evcharger` am Cerbo.
 
 ## Vor einer Live-Schaltung in 2b zu klären
 

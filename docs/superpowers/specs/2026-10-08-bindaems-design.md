@@ -135,7 +135,8 @@ Alles, was in diesem Abschnitt als „zu prüfen“ markiert ist, wird im Prüfp
   | 5017 | Maximalstrom (A) |
   | 5018 | Ist-Strom (A × 10) |
 
-- Der Cerbo findet die EVCS per mDNS (`_victron-car-charger._tcp`) und nutzt den dort angekündigten Port; der muss nicht 502 sein. Im Prüfprotokoll Teil 1 vom 10.10.2026 lieferte Port 502 nur Nullen.
+- Über Modbus TCP antwortet die EVCS nur Adressen auf ihrer IP-Whitelist. Andere Adressen bekommen trotzdem eine Verbindung, aber nur Nullen (Prüfprotokoll Teil 1 vom 10.10.2026, Ursache am 11.10.2026 gefunden). Die Adresse der VM gehört deshalb auf die Whitelist.
+- Der Cerbo findet die EVCS per mDNS (`_victron-car-charger._tcp`) und nutzt den dort angekündigten Port.
 - Es gibt **keinen Kommunikations-Watchdog**: Fällt das EMS aus, lädt die Wallbox mit dem zuletzt gesetzten Strom weiter.
 - **Folge:** Der Watchdog setzt bei Ausfall einen sicheren Strom (8.6).
 
