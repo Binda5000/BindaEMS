@@ -1,4 +1,7 @@
-"""Prüffunktionen für das Prüfprotokoll Teil 1 (Spec 17.1) – reine Funktionen ohne E/A."""
+"""Prüffunktionen für das Prüfprotokoll Teil 1 (Spec 17.1) – reine Funktionen ohne E/A.
+
+``Finding`` und ``render_report`` dienen auch dem Bericht der Watchdog-Probe (Teil 2).
+"""
 
 from __future__ import annotations
 
@@ -437,9 +440,14 @@ def _cell(text: str) -> str:
     return text.replace("|", "\\|").replace("\n", "<br>")
 
 
-def render_report(findings: Sequence[Finding], meta: Mapping[str, str]) -> str:
+def render_report(
+    findings: Sequence[Finding],
+    meta: Mapping[str, str],
+    *,
+    title: str = "Prüfprotokoll Teil 1",
+) -> str:
     lines = [
-        f"# Prüfprotokoll Teil 1 – {meta.get('Datum', '')}",
+        f"# {title} – {meta.get('Datum', '')}",
         "",
         "| Angabe | Wert |",
         "|---|---|",

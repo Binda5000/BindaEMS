@@ -307,6 +307,12 @@ def test_report_contains_table_and_labels() -> None:
     assert "| 17.1-8 | EVCS | WARNUNG | Unbekannte Produkt-ID |" in md
 
 
+def test_report_title_replaces_the_default_heading() -> None:
+    md = render_report([], {"Datum": "2026-10-08"}, title="Prüfprotokoll Teil 2 – Watchdog-Probe")
+    assert md.startswith("# Prüfprotokoll Teil 2 – Watchdog-Probe – 2026-10-08\n")
+    assert "Teil 1" not in md
+
+
 def test_report_escapes_table_breakers() -> None:
     md = render_report([Finding("17.1-9", "TWC", "fail", "a | b\nc")], {"Datum": "2026-10-08"})
     assert "| 17.1-9 | TWC | FEHLER | a \\| b<br>c |" in md

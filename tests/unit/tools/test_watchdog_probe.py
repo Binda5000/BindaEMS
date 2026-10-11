@@ -1,0 +1,546 @@
+import asyncio
+import json
+import re
+import statistics
+import time
+from collections.abc import AsyncIterator
+from dataclasses import replace
+from datetime import datetime
+from itertools import pairwise
+from pathlib import Path
+from unittest.mock import Mock
+
+import pytest
+import yaml
+from bindaems_watchdog import VERSION
+from bindaems_watchdog.config import Settings
+from bindaems_watchdog.logic import TRIPPED, WatchdogLogic
+
+from bindaems.core.adapters.victron_mqtt import KEEPALIVE_SUPPRESS, MqttMessage
+from bindaems.shared.config import Config
+from bindaems.shared.timeutil import LOCAL_TZ
+from bindaems.tools import watchdog_probe
+from bindaems.tools.verify_checks import Finding
+from bindaems.tools.watchdog_probe import ProbeTimings, main, run_probe, timings_from_config
+
+P = "c0619ab1234"
+OTHER = "d1730bc2345"  # eine fremde Anlage am selben Broker
+NOTIFY = f"N/{P}/bindaems/0/"
+HEARTBEAT = f"W/{P}/bindaems/0/Heartbeat"
+KEEPALIVE = f"R/{P}/keepalive"
+FAST = ProbeTimings(
+    heartbeat_s=0.05,
+    answer_wait_s=1.0,
+    arm_wait_s=2.0,
+    timeout_s=0.8,
+    trip_slack_s=1.0,
+    rearm_wait_s=2.0,
+    release_wait_s=1.0,
+)
+TITLES = [
+    "Watchdog erreichbar",
+    "Watchdog-Version",
+    "Scharf nach Heartbeat",
+    "Auslösung ohne Heartbeat",
+    "Wieder scharf",
+    "Freigabe ohne Auslösung",
+]
+
+
+class SimulatedCerbo:
+    """Der Cerbo als ``MqttTransport`` mit der echten ``WatchdogLogic`` dahinter, mit kurzen Zeiten.
+
+    Die Abstände sind großzügig (Heartbeat der Probe 0,05 s gegen 0,5 s Lücke), damit der Test auf
+    einer belasteten CI nicht flackert. Wie der Dienst am Cerbo veröffentlicht er mit der
+    Auslösung ``LastTripFailures`` = 0 und den Endstand (``failed_actions``) erst, wenn der
+    Aktionslauf endet: nach ``ACTIONS_S`` oder früher, sobald der Watchdog ``TRIPPED`` verlässt.
+    ``enabled=False`` ergibt einen deaktivierten Watchdog.
+    """
+
+    ACTIONS_S = 0.1
+
+    def __init__(
+        self,
+        *,
+        failed_actions: int = 0,
+        version: str = VERSION,
+        enabled: bool = True,
+        rearm_s: float = 0.15,
+    ) -> None:
+        settings = Settings(
+            enabled=enabled,
+            timeout_s=0.8,
+            rearm_s=rearm_s,
+            gap_s=0.5,
+            retries=0,
+            retry_s=1.0,
+            state_file="state.json",
+            actions=(),
+        )
+        self._logic = WatchdogLogic(settings, armed_at_start=False, now=time.monotonic())
+        self._failed_actions = failed_actions
+        self._version = version
+        self._messages: asyncio.Queue[MqttMessage] = asyncio.Queue()
+        self._trip_count = 0
+        self._failures = 0
+        self._run_since: float | None = None  # Beginn des laufenden Aktionslaufs
+        self._announced = self._snapshot()
+        self._ticker: asyncio.Task[None] | None = None
+        self.subscribed: list[str] = []
+        self.published: list[tuple[str, bytes]] = []
+        self.published_at: list[float] = []
+
+    async def __aenter__(self) -> "SimulatedCerbo":
+        self._ticker = asyncio.create_task(self._tick_every_10_ms())
+        return self
+
+    async def __aexit__(self, *exc: object) -> None:
+        assert self._ticker is not None
+        self._ticker.cancel()
+        await asyncio.gather(self._ticker, return_exceptions=True)
+
+    async def subscribe(self, topic: str) -> None:
+        self.subscribed.append(topic)
+        if topic == "N/+/system/0/Serial":  # so findet die Probe die Portal-ID
+            self._messages.put_nowait(MqttMessage(f"N/{P}/system/0/Serial", b'{"value": "HQ0"}'))
+
+    async def publish(self, topic: str, payload: bytes) -> None:
+        self.published.append((topic, payload))
+        self.published_at.append(time.monotonic())
+        if topic == HEARTBEAT:
+            self._logic.heartbeat(json.loads(payload)["value"], time.monotonic())
+            self._advance(tick=False)
+        elif topic == KEEPALIVE and payload == b"":  # leer: alles neu veröffentlichen
+            self._notify("Version", self._version)
+            self._notify("State", self._logic.state)
+
+    async def messages(self) -> AsyncIterator[MqttMessage]:
+        while True:
+            yield await self._messages.get()
+
+    def _snapshot(self) -> tuple[int, int, int]:
+        return self._logic.state, self._trip_count, self._failures
+
+    async def _tick_every_10_ms(self) -> None:
+        while True:
+            await asyncio.sleep(0.01)
+            self._advance(tick=True)
+
+    def _advance(self, *, tick: bool) -> None:
+        now = time.monotonic()
+        if tick and self._logic.tick(now):  # Auslösung: der Zähler steigt, die Fehlerzahl ist 0
+            self._trip_count += 1
+            self._failures = 0
+            self._run_since = now
+        run_ended = self._run_since is not None and (
+            self._logic.state != TRIPPED or now - self._run_since >= self.ACTIONS_S
+        )
+        if run_ended:
+            self._run_since = None
+            self._failures = self._failed_actions
+        if (snapshot := self._snapshot()) != self._announced:  # wie der Dienst: erst die Zähler
+            self._announced = snapshot
+            self._notify("TripCount", self._trip_count)
+            self._notify("LastTripFailures", self._failures)
+            self._notify("State", self._logic.state)
+
+    def _notify(self, name: str, value: object) -> None:
+        payload = json.dumps({"value": value}).encode()
+        self._messages.put_nowait(MqttMessage(NOTIFY + name, payload))
+
+
+class GarbledCerbo(SimulatedCerbo):
+    """Streut Unlesbares und Fremdes ein und veröffentlicht die Zähler als ``null``."""
+
+    async def messages(self) -> AsyncIterator[MqttMessage]:
+        yield MqttMessage(f"N/{OTHER}/battery/0/Soc", b'{"value": 50}')  # fremde Anlage
+        yield MqttMessage(NOTIFY + "State", b"")  # Wert entfernt
+        yield MqttMessage(NOTIFY + "State", b"kein JSON")
+        yield MqttMessage(NOTIFY + "State", b'["Liste"]')
+        yield MqttMessage(NOTIFY + "Fremd", b'{"value": 1}')  # unbekannter Pfad
+        async for message in super().messages():
+            yield message
+
+    def _notify(self, name: str, value: object) -> None:
+        super()._notify(name, None if name in {"TripCount", "LastTripFailures"} else value)
+        if name == "State":  # die fremde Anlage meldet dazu etwas anderes
+            self._messages.put_nowait(MqttMessage(f"N/{OTHER}/bindaems/0/State", b'{"value": 3}'))
+
+
+class StuckCerbo(SimulatedCerbo):
+    """Ignoriert die Freigabe 0: Der Watchdog bleibt scharf."""
+
+    async def publish(self, topic: str, payload: bytes) -> None:
+        if topic == HEARTBEAT and json.loads(payload)["value"] == 0:
+            return
+        await super().publish(topic, payload)
+
+
+class SilentTransport:
+    """Nimmt alles an und liefert keine Nachrichten."""
+
+    async def __aenter__(self) -> "SilentTransport":
+        return self
+
+    async def __aexit__(self, *exc: object) -> None:
+        return None
+
+    async def subscribe(self, topic: str) -> None:
+        return None
+
+    async def publish(self, topic: str, payload: bytes) -> None:
+        return None
+
+    async def messages(self) -> AsyncIterator[MqttMessage]:
+        await asyncio.Event().wait()  # blockiert bis zum Abbruch
+        yield MqttMessage("", b"")  # nie erreicht; macht die Methode zum Async-Generator
+
+
+class PartialAnswer(SilentTransport):
+    """Antwortet auf den Keepalive nur mit den angegebenen Werten."""
+
+    def __init__(self, **values: object) -> None:
+        self._values = values
+
+    async def messages(self) -> AsyncIterator[MqttMessage]:
+        for name, value in self._values.items():
+            yield MqttMessage(NOTIFY + name, json.dumps({"value": value}).encode())
+        await asyncio.Event().wait()  # blockiert bis zum Abbruch
+
+
+class EndingTransport(SilentTransport):
+    """Antwortet auf den Keepalive, dann endet der Nachrichtenstrom (mit ``error`` oder ohne)."""
+
+    def __init__(self, error: Exception | None) -> None:
+        self._error = error
+
+    async def messages(self) -> AsyncIterator[MqttMessage]:
+        yield MqttMessage(NOTIFY + "State", b'{"value": 0}')
+        yield MqttMessage(NOTIFY + "Version", f'{{"value": "{VERSION}"}}'.encode())
+        if self._error is not None:
+            raise self._error
+
+
+async def test_probe_passes_against_simulated_watchdog() -> None:
+    async with SimulatedCerbo() as cerbo:
+        findings = await run_probe(cerbo, P, FAST)
+    assert [f.title for f in findings] == TITLES
+    assert {f.status for f in findings} == {"ok"}
+
+
+async def test_probe_without_answer_stops_after_first_step() -> None:
+    async with SilentTransport() as silent:
+        findings = await run_probe(silent, P, FAST)
+    assert findings == [
+        Finding(
+            "17.2-5", "Watchdog erreichbar", "fail", "Keine Antwort von com.victronenergy.bindaems."
+        )
+    ]
+
+
+def test_main_aborts_without_confirmation(monkeypatch) -> None:
+    monkeypatch.setattr("builtins.input", lambda _prompt: "n")
+    transport = Mock(side_effect=AssertionError("keine Verbindung"))
+    monkeypatch.setattr("bindaems.tools.watchdog_probe.AiomqttTransport", transport)
+    assert main(["--config", "deploy/config.example.yaml"]) == 1
+    transport.assert_not_called()
+
+
+async def test_probe_reports_each_step_with_its_values() -> None:
+    async with SimulatedCerbo() as cerbo:
+        findings = await run_probe(cerbo, P, FAST)
+    assert {f.item for f in findings} == {"17.2-5"}
+    details = [f.detail for f in findings]
+    assert details[0] == f"Version {VERSION}, Zustand wartet"
+    assert details[1] == VERSION
+    assert re.fullmatch(r"scharf nach \d+ s", details[2])
+    assert re.fullmatch(  # 0,8 s Timeout seit dem letzten Heartbeat: gerundet 1 s
+        r"ausgelöst nach [12] s, Auslösungen 0 → 1, fehlgeschlagene Aktionen 0", details[3]
+    )
+    assert re.fullmatch(r"scharf nach \d+ s", details[4])
+    assert details[5] == "Heartbeat 0: Zustand wartet"
+    assert asyncio.all_tasks() == {asyncio.current_task()}  # kein Hilfstask läuft weiter
+
+
+async def test_probe_counts_failed_actions_at_the_end_of_the_trip_run() -> None:
+    # Mit der Auslösung steht /LastTripFailures auf 0; der Endstand kommt erst später.
+    async with SimulatedCerbo(failed_actions=2) as cerbo:
+        findings = await run_probe(cerbo, P, FAST)
+    assert [f.status for f in findings] == ["ok", "ok", "ok", "warn", "ok", "ok"]
+    assert findings[3].detail.endswith("Auslösungen 0 → 1, fehlgeschlagene Aktionen 2")
+
+
+async def test_probe_reports_a_disabled_watchdog_of_another_version() -> None:
+    timings = replace(
+        FAST,
+        arm_wait_s=0.51,
+        timeout_s=0.3,
+        trip_slack_s=0.4,
+        rearm_wait_s=0.51,
+        release_wait_s=0.2,
+    )
+    async with SimulatedCerbo(version="0.9.0", enabled=False) as cerbo:
+        findings = await run_probe(cerbo, P, timings)
+    assert [(f.title, f.status, f.detail) for f in findings] == [
+        ("Watchdog erreichbar", "ok", "Version 0.9.0, Zustand deaktiviert"),
+        ("Watchdog-Version", "warn", f"0.9.0, erwartet {VERSION}"),
+        ("Scharf nach Heartbeat", "fail", "nach 1 s nicht scharf (Zustand deaktiviert)"),
+        ("Auslösung ohne Heartbeat", "fail", "nach 1 s nicht ausgelöst"),
+        ("Wieder scharf", "fail", "nach 1 s nicht scharf (Zustand deaktiviert)"),
+        ("Freigabe ohne Auslösung", "fail", "Zustand deaktiviert statt wartet"),
+    ]
+
+
+async def test_probe_gives_each_step_its_own_wait() -> None:
+    # Der Watchdog braucht 0,5 s lückenlose Heartbeats, um wieder scharf zu werden: 0,1 s
+    # reichen nicht, die 2 s zum Scharfmachen am Anfang aber schon.
+    async with SimulatedCerbo(rearm_s=0.5) as cerbo:
+        findings = await run_probe(cerbo, P, replace(FAST, rearm_wait_s=0.1))
+    assert [f.status for f in findings] == ["ok", "ok", "ok", "ok", "fail", "ok"]
+    assert findings[4].detail == "nach 0 s nicht scharf (Zustand ausgelöst)"
+
+
+async def test_probe_reports_a_release_that_does_not_arrive() -> None:
+    async with StuckCerbo() as cerbo:
+        findings = await run_probe(cerbo, P, replace(FAST, release_wait_s=0.2))
+    assert [f.status for f in findings] == ["ok", "ok", "ok", "ok", "ok", "fail"]
+    assert findings[5].detail == "Zustand scharf statt wartet"
+
+
+@pytest.mark.parametrize(
+    "values",
+    [{"State": 0}, {"Version": VERSION}, {"State": None, "Version": VERSION}],
+    ids=["nur State", "nur Version", "State ohne Wert"],
+)
+async def test_probe_needs_state_and_version_for_an_answer(values: dict[str, object]) -> None:
+    async with PartialAnswer(**values) as partial:
+        findings = await run_probe(partial, P, replace(FAST, answer_wait_s=0.2))
+    assert findings == [
+        Finding(
+            "17.2-5", "Watchdog erreichbar", "fail", "Keine Antwort von com.victronenergy.bindaems."
+        )
+    ]
+
+
+async def test_probe_survives_unreadable_values() -> None:
+    async with GarbledCerbo() as cerbo:
+        findings = await run_probe(cerbo, P, FAST)
+    assert [f.status for f in findings] == ["ok", "ok", "ok", "warn", "ok", "ok"]
+    assert findings[3].detail.endswith("Auslösungen ? → ?, fehlgeschlagene Aktionen ?")
+
+
+async def test_probe_writes_only_keepalive_and_a_counting_heartbeat(monkeypatch) -> None:
+    monkeypatch.setattr(watchdog_probe, "KEEPALIVE_S", 0.2)
+    async with SimulatedCerbo() as cerbo:
+        await run_probe(cerbo, P, FAST)
+    assert cerbo.subscribed == [f"N/{P}/bindaems/0/#"]
+    assert {topic for topic, _ in cerbo.published} == {KEEPALIVE, HEARTBEAT}
+    assert cerbo.published[0] == (KEEPALIVE, b"")  # der erste Keepalive veröffentlicht alles neu
+    keepalives = [payload for topic, payload in cerbo.published if topic == KEEPALIVE]
+    assert len(keepalives) > 2  # und er wiederholt sich im Takt …
+    assert set(keepalives[1:]) == {KEEPALIVE_SUPPRESS}  # … ohne erneutes Veröffentlichen
+    beats = [
+        (json.loads(payload)["value"], at)
+        for (topic, payload), at in zip(cerbo.published, cerbo.published_at, strict=True)
+        if topic == HEARTBEAT
+    ]
+    values = [value for value, _ in beats]
+    assert values[:-1] == list(range(1, len(values)))  # 1, 2, 3, … auch nach der Pause
+    assert values[-1] == 0  # am Ende die Freigabe
+    gaps = [later - earlier for (_, earlier), (_, later) in pairwise(beats)]
+    assert FAST.heartbeat_s / 2 < statistics.median(gaps) < FAST.heartbeat_s * 4  # im Takt
+
+
+@pytest.mark.parametrize(
+    ("error", "message"),
+    [
+        (ConnectionError("Verbindung verloren"), "Verbindung verloren"),
+        (None, "MQTT-Verbindung beendet"),
+    ],
+)
+async def test_probe_fails_fast_when_the_connection_ends(
+    error: Exception | None, message: str
+) -> None:
+    async with EndingTransport(error) as ending:
+        with pytest.raises(ConnectionError, match=message):
+            await run_probe(ending, P, FAST)
+    assert asyncio.all_tasks() == {asyncio.current_task()}
+
+
+def test_timings_from_config(cfg: Config) -> None:
+    assert timings_from_config(cfg) == ProbeTimings(
+        heartbeat_s=10,
+        answer_wait_s=10,
+        arm_wait_s=45,
+        timeout_s=90,
+        trip_slack_s=30,
+        rearm_wait_s=45,
+        release_wait_s=15,
+    )
+    watchdog = cfg.victron.watchdog.model_copy(update={"heartbeat_s": 4, "timeout_s": 60})
+    changed = cfg.model_copy(
+        update={"victron": cfg.victron.model_copy(update={"watchdog": watchdog})}
+    )
+    timings = timings_from_config(changed)
+    assert (timings.heartbeat_s, timings.timeout_s) == (4, 60)
+    assert watchdog_probe.KEEPALIVE_S == 30  # alle 30 s
+
+
+def _today() -> str:
+    return datetime.now(LOCAL_TZ).date().isoformat()
+
+
+def _config_file(tmp_path: Path, portal_id: str | None) -> Path:
+    raw = yaml.safe_load(Path("deploy/config.example.yaml").read_text(encoding="utf-8"))
+    raw["victron"]["mqtt"]["portal_id"] = portal_id
+    config = tmp_path / "config.yaml"
+    config.write_text(yaml.safe_dump(raw), encoding="utf-8")
+    return config
+
+
+def _connect_to(monkeypatch, transport: object, timings: ProbeTimings = FAST) -> Mock:
+    """Lenkt ``main`` auf ``transport`` und kurze Zeiten um; liefert den Ersatz der Verbindung."""
+    factory = Mock(return_value=transport)
+    monkeypatch.setattr("bindaems.tools.watchdog_probe.AiomqttTransport", factory)
+    monkeypatch.setattr("bindaems.tools.watchdog_probe.timings_from_config", lambda _cfg: timings)
+    return factory
+
+
+@pytest.fixture
+def secrets_env(monkeypatch) -> None:
+    for name in ("TESSIE_TOKEN", "HA_TOKEN", "INFLUX_PASSWORD", "HA_MQTT_PASSWORD"):
+        monkeypatch.delenv(f"BINDAEMS_{name}", raising=False)
+    monkeypatch.setenv("BINDAEMS_INTERNAL_TOKEN", "x" * 32)
+    monkeypatch.setenv("BINDAEMS_MQTT_PASSWORD", "mqtt-geheim")
+
+
+@pytest.mark.parametrize("answer", ["", "n", "nein", "ja"])
+def test_main_aborts_on_every_answer_but_j(monkeypatch, capsys, answer: str) -> None:
+    monkeypatch.setattr("builtins.input", lambda _prompt: answer)
+    transport = Mock(side_effect=AssertionError("keine Verbindung"))
+    secrets = Mock(side_effect=AssertionError("keine Secrets"))
+    monkeypatch.setattr("bindaems.tools.watchdog_probe.AiomqttTransport", transport)
+    monkeypatch.setattr("bindaems.tools.watchdog_probe.load_secrets", secrets)
+    assert main(["--config", "deploy/config.example.yaml"]) == 1
+    transport.assert_not_called()
+    secrets.assert_not_called()
+    assert (
+        "Die Probe löst den Watchdog aus. Er setzt die EVCS auf den sicheren Strom und schreibt "
+        "Min-SOC und Entladegrenze, wenn sie abweichen."
+    ) in capsys.readouterr().out
+
+
+def test_main_aborts_when_there_is_no_input(monkeypatch) -> None:
+    def eof(_prompt: str) -> str:
+        raise EOFError
+
+    monkeypatch.setattr("builtins.input", eof)
+    transport = Mock(side_effect=AssertionError("keine Verbindung"))
+    monkeypatch.setattr("bindaems.tools.watchdog_probe.AiomqttTransport", transport)
+    assert main(["--config", "deploy/config.example.yaml"]) == 1
+    transport.assert_not_called()
+
+
+def test_main_rejects_invalid_config_before_asking(tmp_path: Path, monkeypatch, capsys) -> None:
+    monkeypatch.setattr("builtins.input", Mock(side_effect=AssertionError("keine Rückfrage")))
+    broken = tmp_path / "config.yaml"
+    broken.write_text("grid: 1\n")
+    assert main(["--config", str(broken)]) == 2
+    assert "Konfiguration ungültig" in capsys.readouterr().err
+
+
+def test_main_rejects_invalid_secrets_without_connecting(monkeypatch, capsys) -> None:
+    monkeypatch.delenv("BINDAEMS_INTERNAL_TOKEN", raising=False)
+    transport = Mock(side_effect=AssertionError("keine Verbindung"))
+    monkeypatch.setattr("bindaems.tools.watchdog_probe.AiomqttTransport", transport)
+    assert main(["--config", "deploy/config.example.yaml", "--yes"]) == 2
+    assert capsys.readouterr().err.startswith("Secrets ungültig")
+    transport.assert_not_called()
+
+
+@pytest.mark.usefixtures("secrets_env")
+def test_main_runs_the_probe_and_writes_the_report(
+    cfg: Config, monkeypatch, tmp_path: Path, capsys
+) -> None:
+    monkeypatch.setattr("builtins.input", lambda _prompt: "j")
+    cerbo = SimulatedCerbo()
+    transport = _connect_to(monkeypatch, cerbo)
+    out = tmp_path / "verification" / "bericht.md"
+    before = _today()
+    assert main(["--config", "deploy/config.example.yaml", "--out", str(out)]) == 0
+    after = _today()
+    mqtt_config, password = transport.call_args.args
+    assert mqtt_config == cfg.victron.mqtt
+    assert password.get_secret_value() == "mqtt-geheim"
+    assert cerbo.subscribed == ["N/+/system/0/Serial", f"N/{P}/bindaems/0/#"]  # Portal-ID erkannt
+    report = out.read_text(encoding="utf-8")
+    heading = re.match(r"# Prüfprotokoll Teil 2 – Watchdog-Probe – (\d{4}-\d\d-\d\d)\n", report)
+    assert heading and heading[1] in {before, after}
+    assert "| Werkzeug | watchdog_probe |" in report
+    for title in TITLES:
+        assert f"| 17.2-5 | {title} | OK |" in report
+    assert P not in report and "mqtt-geheim" not in report  # keine Anlagendaten im Bericht
+    shown = capsys.readouterr().out
+    assert "Die Probe löst den Watchdog aus." in shown
+    assert f"Bericht: {out}" in shown
+
+
+@pytest.mark.usefixtures("secrets_env")
+def test_main_exits_0_when_a_step_only_warns(monkeypatch, tmp_path: Path) -> None:
+    _connect_to(monkeypatch, GarbledCerbo())  # auch die Portal-Erkennung trifft auf Fremdes
+    out = tmp_path / "bericht.md"
+    assert main(["--config", "deploy/config.example.yaml", "--yes", "--out", str(out)]) == 0
+    assert "| 17.2-5 | Auslösung ohne Heartbeat | WARNUNG |" in out.read_text(encoding="utf-8")
+
+
+@pytest.mark.usefixtures("secrets_env")
+def test_main_exits_1_and_still_writes_the_report_when_a_step_fails(
+    monkeypatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr("builtins.input", Mock(side_effect=AssertionError("--yes fragt nicht")))
+    _connect_to(monkeypatch, SilentTransport(), replace(FAST, answer_wait_s=0.2))
+    config = _config_file(tmp_path, portal_id=P)
+    monkeypatch.chdir(tmp_path)
+    before = _today()
+    assert main(["--config", str(config), "--yes"]) == 1
+    after = _today()
+    (report,) = tmp_path.glob("docs/verification/*-watchdog-probe.md")  # der Standardpfad
+    assert report.name in {f"{before}-watchdog-probe.md", f"{after}-watchdog-probe.md"}
+    assert (
+        "| 17.2-5 | Watchdog erreichbar | FEHLER | Keine Antwort von com.victronenergy.bindaems. |"
+        in report.read_text(encoding="utf-8")
+    )
+
+
+@pytest.mark.usefixtures("secrets_env")
+def test_main_reports_a_failed_connection(monkeypatch, tmp_path: Path) -> None:
+    transport = Mock(side_effect=ConnectionRefusedError("Verbindung abgelehnt"))
+    monkeypatch.setattr("bindaems.tools.watchdog_probe.AiomqttTransport", transport)
+    out = tmp_path / "bericht.md"
+    assert main(["--config", "deploy/config.example.yaml", "--yes", "--out", str(out)]) == 1
+    assert "ConnectionRefusedError: Verbindung abgelehnt" in out.read_text(encoding="utf-8")
+
+
+@pytest.mark.usefixtures("secrets_env")
+def test_main_reports_a_missing_portal_id(monkeypatch, tmp_path: Path) -> None:
+    _connect_to(monkeypatch, SilentTransport())
+    monkeypatch.setattr(watchdog_probe, "DISCOVERY_TIMEOUT_S", 0.1)
+    out = tmp_path / "bericht.md"
+    assert main(["--config", "deploy/config.example.yaml", "--yes", "--out", str(out)]) == 1
+    detail = "ConnectionError: Portal-ID konnte nicht ermittelt werden"
+    assert f"| 17.2-5 | Verbindung zum Cerbo | FEHLER | {detail} |" in out.read_text("utf-8")
+
+
+@pytest.mark.usefixtures("secrets_env")
+def test_main_prints_the_report_when_it_cannot_be_written(
+    monkeypatch, tmp_path: Path, capsys
+) -> None:
+    _connect_to(monkeypatch, SilentTransport(), replace(FAST, answer_wait_s=0.2))
+    blocker = tmp_path / "datei"
+    blocker.write_text("")  # ein Verzeichnis lässt sich unter einer Datei nicht anlegen
+    config = _config_file(tmp_path, portal_id=P)
+    code = main(["--config", str(config), "--yes", "--out", str(blocker / "bericht.md")])
+    captured = capsys.readouterr()
+    assert code == 1
+    assert "Bericht nicht geschrieben" in captured.err
+    assert "# Prüfprotokoll Teil 2 – Watchdog-Probe" in captured.out
