@@ -19,9 +19,14 @@ die Rückfrage. Das Ergebnis ist ein Bericht im Format des Prüfprotokolls Teil 
 währenddessen mit einem live angeforderten Aktor, sendet es eigene Heartbeats, und der Watchdog
 löst nicht aus.
 
+Bricht die Probe ab, nachdem die Heartbeats liefen (Strg+C, Verbindungsverlust, Fehler), versucht
+sie, den Watchdog mit dem Heartbeat 0 freizugeben: Sonst löste er später unbeaufsichtigt aus oder
+bliebe ausgelöst. Gelingt das nicht, steht es im Bericht und auf der Konsole, dazu der Weg zurück.
+Befunde, die bis dahin vorlagen, bleiben im Bericht.
+
 Exitcode 0: kein Schritt ist ``fail``. 1: ein Schritt ist ``fail``, der Bericht ließ sich nicht
 schreiben oder der Betreiber hat die Rückfrage verneint (dann ohne Verbindung und ohne Secrets).
-2: Konfiguration oder Secrets ungültig.
+2: Konfiguration oder Secrets ungültig. 130: Strg+C.
 """
 
 from __future__ import annotations
@@ -37,6 +42,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from aiomqtt import MqttError
 from pydantic import ValidationError
 
 from bindaems.core.adapters.victron_mqtt import (
@@ -59,6 +65,13 @@ KEEPALIVE_S = 30.0  # Abstand der Keepalives; der Cerbo schickt Änderungen nur 
 WAITING, ARMED, TRIPPED, DISABLED = 0, 1, 2, 3  # Werte von ``/State``
 STATE_NAMES = {WAITING: "wartet", ARMED: "scharf", TRIPPED: "ausgelöst", DISABLED: "deaktiviert"}
 NO_ANSWER = "Keine Antwort von com.victronenergy.bindaems."
+RELEASE_ATTEMPT_S = 2.0  # so lange versucht die Probe nach einem Abbruch, den Watchdog freizugeben
+UNRELEASED = (
+    "Der Watchdog konnte nicht freigegeben werden: Er kann scharf bleiben und später auslösen "
+    "oder ausgelöst bleiben. Zurücksetzen: die Probe erneut starten (sie endet mit der Freigabe) "
+    "oder den Heartbeat 0 senden (am Cerbo: dbus -y com.victronenergy.bindaems /Heartbeat "
+    "SetValue 0)."
+)
 WARNING = (
     "Die Probe löst den Watchdog aus. Er setzt die EVCS auf den sicheren Strom und schreibt "
     "Min-SOC und Entladegrenze, wenn sie abweichen."
@@ -121,6 +134,19 @@ def _count(value: object) -> str:
     return str(number) if number is not None else "?"
 
 
+def _error_finding(exc: Exception, *, unreleased: bool = False) -> Finding:
+    """Der Befund zu einem Fehler: Verbindungsprobleme getrennt von Fehlern der Probe selbst.
+
+    ``unreleased``: Der Watchdog ließ sich nach dem Fehler nicht freigeben (Hinweis ``UNRELEASED``).
+    """
+    detail = f"{type(exc).__name__}: {exc}"
+    if unreleased:
+        detail += f". {UNRELEASED}"
+    connection = isinstance(exc, OSError | MqttError)
+    title = "Verbindung zum Cerbo" if connection else "Interner Fehler der Probe"
+    return Finding(ITEM, title, "fail", detail)
+
+
 class _Probe:
     """Ein Lauf der Probe: liest mit, was der Watchdog meldet, und sendet die Heartbeats."""
 
@@ -131,10 +157,36 @@ class _Probe:
         self._values: dict[str, object] = {}  # zuletzt gesehen: N/<portal>/bindaems/0/<Pfad>
         self._changed = asyncio.Event()  # gesetzt, wenn ein Wert eintrifft oder ein Task endet
         self._tasks: list[asyncio.Task[None]] = []
+        self._findings: list[Finding] = []  # in der Reihenfolge der Tabelle, mit den Schritten
         self._counter = 0  # zuletzt gesendeter Heartbeat über 0
         self._last_beat = 0.0  # Zeit des Event-Loops, zu der er ging
+        self._released = False  # die 0 ist gesendet
+        self._release_tried = False  # die Freigabe nach einem Abbruch wurde versucht
+        self._release_failed = False  # … und ist gescheitert
 
     async def run(self) -> list[Finding]:
+        """Führt die Schritte aus; ein Fehler beendet den Lauf, die bisherigen Befunde bleiben.
+
+        Nach einem Fehler gibt die Probe den Watchdog frei, wenn die Heartbeats schon liefen, und
+        hängt eine Fehlerzeile an, die Verbindungsverlust und Fehler der Probe unterscheidet.
+        """
+        try:
+            await self._steps()
+        except Exception as exc:
+            await self._release_after_abort()
+            self._findings.append(_error_finding(exc, unreleased=self._release_failed))
+        return self._findings
+
+    async def close(self) -> None:
+        """Gibt den Watchdog nach einem Abbruch frei und beendet die Hilfstasks."""
+        try:
+            await self._release_after_abort()
+        finally:
+            for task in self._tasks:
+                task.cancel()
+            await asyncio.gather(*self._tasks, return_exceptions=True)
+
+    async def _steps(self) -> None:
         t = self._timings
         loop = asyncio.get_running_loop()
         self._spawn(self._read(self._transport.messages()))
@@ -142,32 +194,58 @@ class _Probe:
         await self._transport.publish(f"R/{self._portal}/keepalive", b"")  # alles neu senden
         self._spawn(self._keepalive())
         if not await self._until(self._answered, loop.time() + t.answer_wait_s):
-            return [Finding(ITEM, "Watchdog erreichbar", "fail", NO_ANSWER)]
+            self._findings.append(Finding(ITEM, "Watchdog erreichbar", "fail", NO_ANSWER))
+            return
         version = str(self._values["Version"])
-        reachable = Finding(
-            ITEM, "Watchdog erreichbar", "ok", f"Version {version}, Zustand {self._state_name()}"
+        self._findings.append(
+            Finding(
+                ITEM,
+                "Watchdog erreichbar",
+                "ok",
+                f"Version {version}, Zustand {self._state_name()}",
+            )
         )
         if version == WATCHDOG_VERSION:
-            version_check = Finding(ITEM, "Watchdog-Version", "ok", version)
+            self._findings.append(Finding(ITEM, "Watchdog-Version", "ok", version))
         else:
             detail = f"{version}, erwartet {WATCHDOG_VERSION}"
-            version_check = Finding(ITEM, "Watchdog-Version", "warn", detail)
+            self._findings.append(Finding(ITEM, "Watchdog-Version", "warn", detail))
 
-        armed = await self._arm("Scharf nach Heartbeat", t.arm_wait_s)
+        self._findings.append(await self._arm("Scharf nach Heartbeat", t.arm_wait_s))
         trips_before = self._values.get("TripCount")
-        tripped_after = await self._trip()
-        rearmed = await self._arm("Wieder scharf", t.rearm_wait_s)
+        elapsed = await self._trip()
+        try:
+            rearmed = await self._arm("Wieder scharf", t.rearm_wait_s)
+        except BaseException:
+            # Abbruch vor dem Ende des Aktionslaufs: Der Befund zur Auslösung bleibt erhalten.
+            self._findings.append(self._trip_finding(elapsed, trips_before, final=False))
+            raise
         # Mit der Auslösung steht /LastTripFailures auf 0; den Endstand bekommt der Pfad erst, wenn
         # der Aktionslauf endet – spätestens beim Wieder-scharf-Werden. Darum entsteht dieser
         # Befund erst jetzt, steht aber an seiner Stelle.
-        trip = self._trip_finding(tripped_after, trips_before)
-        released = await self._release()
-        return [reachable, version_check, armed, trip, rearmed, released]
+        self._findings.append(self._trip_finding(elapsed, trips_before, final=True))
+        self._findings.append(rearmed)
+        self._findings.append(await self._release())
 
-    async def close(self) -> None:
-        for task in self._tasks:
-            task.cancel()
-        await asyncio.gather(*self._tasks, return_exceptions=True)
+    async def _release_after_abort(self) -> None:
+        """Gibt den Watchdog nach einem Abbruch frei, falls die Heartbeats schon liefen.
+
+        Ohne die 0 bliebe er scharf und löste ``timeout_s`` später aus, bliebe ausgelöst, oder ein
+        angefangener Lauf machte ihn nachträglich scharf. Es bleibt bei einem Versuch, auch wenn
+        er selbst abgebrochen wird; er dauert höchstens ``RELEASE_ATTEMPT_S``. Scheitert er, sagen
+        die Konsole und der Befund es.
+        """
+        if self._counter == 0 or self._released or self._release_tried:
+            return
+        self._release_tried = True
+        try:
+            async with asyncio.timeout(RELEASE_ATTEMPT_S):
+                await self._send(RELEASE)
+        except Exception:  # Zeitüberschreitung, Verbindung weg, …
+            self._release_failed = True
+            print(f"Achtung: {UNRELEASED}", file=sys.stderr)
+        else:
+            print("Der Watchdog ist mit dem Heartbeat 0 freigegeben.")
 
     async def _arm(self, title: str, wait_s: float) -> Finding:
         """Sendet Heartbeats, bis der Watchdog scharf ist, höchstens ``wait_s`` lang."""
@@ -186,7 +264,7 @@ class _Probe:
             return None
         return loop.time() - self._last_beat
 
-    def _trip_finding(self, elapsed: float | None, trips_before: object) -> Finding:
+    def _trip_finding(self, elapsed: float | None, trips_before: object, *, final: bool) -> Finding:
         title = "Auslösung ohne Heartbeat"
         if elapsed is None:
             t = self._timings
@@ -203,6 +281,9 @@ class _Probe:
             f"fehlgeschlagene Aktionen {_count(failures)}"
         )
         status: Status = "ok" if failures == 0 else "warn"  # unbekannt gilt nicht als fehlerfrei
+        if not final:  # die Fehlerzahl ist erst am Ende des Aktionslaufs verbindlich
+            detail += " (Abbruch vor dem Ende des Aktionslaufs)"
+            status = "warn"
         return Finding(ITEM, title, status, detail)
 
     async def _release(self) -> Finding:
@@ -236,7 +317,9 @@ class _Probe:
     async def _send(self, value: int) -> None:
         payload = json.dumps({"value": value}).encode()
         await self._transport.publish(f"W/{self._portal}/{HEARTBEAT_PATH}", payload)
-        if value != RELEASE:
+        if value == RELEASE:
+            self._released = True
+        else:
             self._last_beat = asyncio.get_running_loop().time()
 
     async def _until(self, predicate: Callable[[], bool], deadline: float) -> bool:
@@ -292,7 +375,9 @@ async def run_probe(transport: MqttTransport, portal: str, timings: ProbeTimings
     """Führt die Probe aus (Schritte siehe Modulbeschreibung); je Schritt ein ``Finding``.
 
     ``transport`` ist eine geöffnete Verbindung. Antwortet der Watchdog nicht, endet die Probe nach
-    dem ersten Schritt. Reißt die Verbindung ab, wirft die Funktion den Fehler.
+    dem ersten Schritt. Ein Fehler (Verbindung weg, Fehler der Probe) beendet den Lauf: Die
+    bisherigen Befunde bleiben, eine Fehlerzeile kommt dazu. Endet die Probe vorzeitig, nachdem die
+    Heartbeats liefen, auch durch Abbruch der Task, gibt sie den Watchdog mit dem Heartbeat 0 frei.
     """
     probe = _Probe(transport, portal, timings)
     try:
@@ -315,12 +400,17 @@ async def _discover_portal(transport: MqttTransport) -> str:
 
 async def _probe(cfg: Config, secrets: Secrets) -> list[Finding]:
     mqtt = cfg.victron.mqtt
+    findings: list[Finding] = []
     try:
         async with AiomqttTransport(mqtt, secrets.mqtt_password) as transport:
             portal = mqtt.portal_id or await _discover_portal(transport)
-            return await run_probe(transport, portal, timings_from_config(cfg))
-    except Exception as exc:  # Verbindungsfehler jeder Art: ein Befund statt eines Abbruchs
-        return [Finding(ITEM, "Verbindung zum Cerbo", "fail", f"{type(exc).__name__}: {exc}")]
+            findings = await run_probe(transport, portal, timings_from_config(cfg))
+    except Exception as exc:  # ein Befund statt eines Abbruchs
+        if findings:  # die Probe ist durch; nur das Trennen schlug fehl
+            print(f"Verbindung nicht sauber getrennt: {type(exc).__name__}: {exc}", file=sys.stderr)
+        else:
+            findings.append(_error_finding(exc))
+    return findings
 
 
 def _confirmed() -> bool:
@@ -354,6 +444,14 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--yes", action="store_true", help="ohne Rückfrage starten")
     args = parser.parse_args(argv)
+    try:
+        return _run(args)
+    except KeyboardInterrupt:  # Strg+C, auch an der Rückfrage; eine laufende Probe hat aufgeräumt
+        print("\nAbgebrochen.")
+        return 130
+
+
+def _run(args: argparse.Namespace) -> int:
     try:
         cfg = load_config(args.config)
     except ConfigError as exc:

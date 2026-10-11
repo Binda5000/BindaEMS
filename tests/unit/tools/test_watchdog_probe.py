@@ -1,20 +1,23 @@
 import asyncio
 import json
 import re
+import signal
 import statistics
 import time
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from dataclasses import replace
 from datetime import datetime
 from itertools import pairwise
 from pathlib import Path
+from typing import Any
 from unittest.mock import Mock
 
 import pytest
 import yaml
+from aiomqtt import MqttError
 from bindaems_watchdog import VERSION
 from bindaems_watchdog.config import Settings
-from bindaems_watchdog.logic import TRIPPED, WatchdogLogic
+from bindaems_watchdog.logic import ARMED, TRIPPED, WAITING, WatchdogLogic
 
 from bindaems.core.adapters.victron_mqtt import KEEPALIVE_SUPPRESS, MqttMessage
 from bindaems.shared.config import Config
@@ -89,6 +92,25 @@ class SimulatedCerbo:
         self.subscribed: list[str] = []
         self.published: list[tuple[str, bytes]] = []
         self.published_at: list[float] = []
+        self.last_beat_at = time.monotonic()
+        # Haken für Tests: wird nach jeder Veröffentlichung der Probe und nach jedem Takt gerufen
+        self.on_change: Callable[[SimulatedCerbo], None] | None = None
+
+    @property
+    def state(self) -> int:
+        return self._logic.state
+
+    @property
+    def trip_count(self) -> int:
+        return self._trip_count
+
+    def heartbeats(self) -> list[int]:
+        """Die gesendeten Heartbeat-Werte der Probe, in der Reihenfolge des Sendens."""
+        return [json.loads(p)["value"] for topic, p in self.published if topic == HEARTBEAT]
+
+    def silent_for(self) -> float:
+        """Sekunden seit dem letzten Heartbeat."""
+        return time.monotonic() - self.last_beat_at
 
     async def __aenter__(self) -> "SimulatedCerbo":
         self._ticker = asyncio.create_task(self._tick_every_10_ms())
@@ -109,10 +131,13 @@ class SimulatedCerbo:
         self.published_at.append(time.monotonic())
         if topic == HEARTBEAT:
             self._logic.heartbeat(json.loads(payload)["value"], time.monotonic())
+            self.last_beat_at = time.monotonic()
             self._advance(tick=False)
         elif topic == KEEPALIVE and payload == b"":  # leer: alles neu veröffentlichen
             self._notify("Version", self._version)
             self._notify("State", self._logic.state)
+        if self.on_change is not None:
+            self.on_change(self)
 
     async def messages(self) -> AsyncIterator[MqttMessage]:
         while True:
@@ -125,6 +150,8 @@ class SimulatedCerbo:
         while True:
             await asyncio.sleep(0.01)
             self._advance(tick=True)
+            if self.on_change is not None:
+                self.on_change(self)
 
     def _advance(self, *, tick: bool) -> None:
         now = time.monotonic()
@@ -174,6 +201,83 @@ class StuckCerbo(SimulatedCerbo):
         if topic == HEARTBEAT and json.loads(payload)["value"] == 0:
             return
         await super().publish(topic, payload)
+
+
+class DroppingCerbo(SimulatedCerbo):
+    """Der Nachrichtenstrom reißt ab, sobald der Watchdog ``drop_at`` meldet; Senden geht weiter."""
+
+    def __init__(self, drop_at: int, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self._drop_at = drop_at
+        self.dropped = False
+
+    async def messages(self) -> AsyncIterator[MqttMessage]:
+        async for message in super().messages():
+            yield message
+            if (
+                message.topic == NOTIFY + "State"
+                and json.loads(message.payload)["value"] == self._drop_at
+            ):
+                self.dropped = True
+                raise ConnectionError("Verbindung verloren")
+
+
+class DeadCerbo(DroppingCerbo):
+    """Nach dem Abriss lässt sich auch nichts mehr senden."""
+
+    async def publish(self, topic: str, payload: bytes) -> None:
+        if self.dropped:
+            raise ConnectionError("nicht verbunden")
+        await super().publish(topic, payload)
+
+
+class HangingCerbo(DroppingCerbo):
+    """Nach dem Abriss kehrt das Senden nie zurück."""
+
+    hanging = False
+
+    async def publish(self, topic: str, payload: bytes) -> None:
+        if self.dropped:
+            self.hanging = True
+            await asyncio.Event().wait()
+        await super().publish(topic, payload)
+
+
+class HangingRelease(SimulatedCerbo):
+    """Die Freigabe 0 hängt: Das Senden kehrt für sie nie zurück."""
+
+    hanging = False
+
+    async def publish(self, topic: str, payload: bytes) -> None:
+        if topic == HEARTBEAT and json.loads(payload)["value"] == 0:
+            self.hanging = True
+            await asyncio.Event().wait()
+        await super().publish(topic, payload)
+
+
+class BuggyCerbo(SimulatedCerbo):
+    """Ein Fehler der Probe selbst: Der erste Heartbeat nach der Auslösung löst einen Fehler aus."""
+
+    async def publish(self, topic: str, payload: bytes) -> None:
+        if topic == HEARTBEAT and self.state == TRIPPED and json.loads(payload)["value"] > 0:
+            raise RuntimeError("kaputt")
+        await super().publish(topic, payload)
+
+
+class RefusingCerbo(SimulatedCerbo):
+    """Das Abonnieren schlägt fehl, noch vor dem ersten Heartbeat."""
+
+    async def subscribe(self, topic: str) -> None:
+        raise ConnectionError("Abo abgelehnt")
+
+
+class InterruptedCerbo(SimulatedCerbo):
+    """Strg+C kommt, sobald der dritte Heartbeat gesendet ist."""
+
+    async def publish(self, topic: str, payload: bytes) -> None:
+        await super().publish(topic, payload)
+        if topic == HEARTBEAT and len(self.heartbeats()) == 3:
+            signal.raise_signal(signal.SIGINT)
 
 
 class SilentTransport:
@@ -352,19 +456,175 @@ async def test_probe_writes_only_keepalive_and_a_counting_heartbeat(monkeypatch)
 
 
 @pytest.mark.parametrize(
-    ("error", "message"),
+    ("error", "detail"),
     [
-        (ConnectionError("Verbindung verloren"), "Verbindung verloren"),
-        (None, "MQTT-Verbindung beendet"),
+        (ConnectionError("Verbindung verloren"), "ConnectionError: Verbindung verloren"),
+        (None, "ConnectionError: MQTT-Verbindung beendet"),
     ],
 )
-async def test_probe_fails_fast_when_the_connection_ends(
-    error: Exception | None, message: str
+async def test_probe_reports_a_connection_that_ends_at_once(
+    error: Exception | None, detail: str
 ) -> None:
     async with EndingTransport(error) as ending:
-        with pytest.raises(ConnectionError, match=message):
-            await run_probe(ending, P, FAST)
+        findings = await run_probe(ending, P, FAST)
+    assert [(f.title, f.status) for f in findings] == [
+        ("Watchdog erreichbar", "ok"),
+        ("Watchdog-Version", "ok"),
+        ("Verbindung zum Cerbo", "fail"),
+    ]
+    assert findings[-1].detail == detail
     assert asyncio.all_tasks() == {asyncio.current_task()}
+
+
+async def until(predicate: Callable[[], bool], limit_s: float = 5.0) -> None:
+    deadline = time.monotonic() + limit_s
+    while not predicate():
+        assert time.monotonic() < deadline, "Bedingung nicht eingetreten"
+        await asyncio.sleep(0.005)
+
+
+def cancel_when(
+    task: asyncio.Task[Any], condition: Callable[[SimulatedCerbo], bool]
+) -> Callable[[SimulatedCerbo], None]:
+    """Haken für ``SimulatedCerbo.on_change``: bricht ``task`` einmal ab, sobald es zutrifft."""
+    fired = False
+
+    def hook(cerbo: SimulatedCerbo) -> None:
+        nonlocal fired
+        if not fired and condition(cerbo):
+            fired = True
+            task.cancel()
+
+    return hook
+
+
+CANCEL_POINTS: dict[str, Callable[[SimulatedCerbo], bool]] = {
+    "arming": lambda c: len(c.heartbeats()) == 2,  # der Lauf zum Scharfmachen ist angefangen
+    "pause": lambda c: c.state == ARMED and c.trip_count == 0 and c.silent_for() > 0.2,
+    "trip": lambda c: c.state == TRIPPED,  # die Aktionen laufen
+    "rearmed": lambda c: c.state == ARMED and c.trip_count == 1,
+}
+
+
+@pytest.mark.parametrize("point", list(CANCEL_POINTS))
+async def test_probe_releases_the_watchdog_when_cancelled(point: str, capsys) -> None:
+    async with SimulatedCerbo() as cerbo:
+        task = asyncio.create_task(run_probe(cerbo, P, FAST))
+        cerbo.on_change = cancel_when(task, CANCEL_POINTS[point])
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert cerbo.heartbeats()[-1] == 0  # die Freigabe ging noch raus
+        assert cerbo.state == WAITING
+        assert "Der Watchdog ist mit dem Heartbeat 0 freigegeben." in capsys.readouterr().out
+        # Der angefangene Lauf zum Scharfmachen darf den Watchdog nicht nachträglich scharf machen.
+        if point == "arming":
+            await asyncio.sleep(0.4)
+            assert cerbo.state == WAITING
+    assert asyncio.all_tasks() == {asyncio.current_task()}
+
+
+async def test_probe_releases_and_keeps_its_findings_when_the_connection_drops() -> None:
+    async with DroppingCerbo(drop_at=ARMED) as cerbo:
+        findings = await run_probe(cerbo, P, FAST)
+    assert [(f.title, f.status) for f in findings] == [
+        ("Watchdog erreichbar", "ok"),
+        ("Watchdog-Version", "ok"),
+        ("Scharf nach Heartbeat", "ok"),
+        ("Verbindung zum Cerbo", "fail"),
+    ]
+    assert (
+        findings[-1].detail == "ConnectionError: Verbindung verloren"
+    )  # freigegeben: kein Hinweis
+    assert cerbo.heartbeats()[-1] == 0
+    assert cerbo.state == WAITING
+    assert asyncio.all_tasks() == {asyncio.current_task()}
+
+
+async def test_probe_keeps_the_trip_row_when_the_connection_drops_after_the_trip() -> None:
+    async with DroppingCerbo(drop_at=TRIPPED) as cerbo:
+        findings = await run_probe(cerbo, P, FAST)
+    assert [(f.title, f.status) for f in findings] == [
+        ("Watchdog erreichbar", "ok"),
+        ("Watchdog-Version", "ok"),
+        ("Scharf nach Heartbeat", "ok"),
+        ("Auslösung ohne Heartbeat", "warn"),  # der Aktionslauf war noch nicht zu Ende
+        ("Verbindung zum Cerbo", "fail"),
+    ]
+    assert re.fullmatch(
+        r"ausgelöst nach [12] s, Auslösungen 0 → 1, fehlgeschlagene Aktionen 0"
+        r" \(Abbruch vor dem Ende des Aktionslaufs\)",
+        findings[3].detail,
+    )
+    assert cerbo.heartbeats()[-1] == 0
+    assert cerbo.state == WAITING
+
+
+async def test_probe_tells_when_the_release_was_impossible(capsys) -> None:
+    async with DeadCerbo(drop_at=ARMED) as cerbo:
+        findings = await run_probe(cerbo, P, FAST)
+    assert [f.title for f in findings][-1] == "Verbindung zum Cerbo"
+    assert findings[-1].detail == (
+        f"ConnectionError: Verbindung verloren. {watchdog_probe.UNRELEASED}"
+    )
+    assert watchdog_probe.UNRELEASED in capsys.readouterr().err
+    assert cerbo.heartbeats()[-1] != 0  # die Freigabe kam nicht an
+    assert "Heartbeat 0" in watchdog_probe.UNRELEASED  # und der Hinweis sagt, wie es zurückgeht
+
+
+async def test_probe_gives_up_on_a_release_that_hangs(monkeypatch, capsys) -> None:
+    monkeypatch.setattr(watchdog_probe, "RELEASE_ATTEMPT_S", 0.1)
+    async with HangingCerbo(drop_at=ARMED) as cerbo:
+        findings = await run_probe(cerbo, P, FAST)
+    assert findings[-1].detail.endswith(watchdog_probe.UNRELEASED)
+    assert watchdog_probe.UNRELEASED in capsys.readouterr().err
+    assert asyncio.all_tasks() == {asyncio.current_task()}  # auch der hängende Versuch ist weg
+
+
+async def test_probe_does_not_release_what_it_never_touched() -> None:
+    async with RefusingCerbo() as cerbo:
+        findings = await run_probe(cerbo, P, FAST)
+    assert [(f.title, f.status, f.detail) for f in findings] == [
+        ("Verbindung zum Cerbo", "fail", "ConnectionError: Abo abgelehnt")
+    ]
+    assert cerbo.published == []  # ohne Heartbeats auch keine Freigabe
+
+
+async def test_probe_cleans_up_when_cancelled_again_during_the_release(monkeypatch) -> None:
+    monkeypatch.setattr(watchdog_probe, "RELEASE_ATTEMPT_S", 30.0)  # hängt, bis Strg+C erneut kommt
+    async with HangingCerbo(drop_at=ARMED) as cerbo:
+        task = asyncio.create_task(run_probe(cerbo, P, FAST))
+        await until(lambda: cerbo.hanging)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(task, 5.0)  # kein zweiter Versuch, der wieder 30 s hinge
+    assert asyncio.all_tasks() == {asyncio.current_task()}
+
+
+async def test_probe_cleans_up_when_cancelled_twice(monkeypatch) -> None:
+    monkeypatch.setattr(watchdog_probe, "RELEASE_ATTEMPT_S", 30.0)  # hängt, bis Strg+C erneut kommt
+    async with HangingRelease() as cerbo:
+        task = asyncio.create_task(run_probe(cerbo, P, FAST))
+        cerbo.on_change = cancel_when(task, CANCEL_POINTS["arming"])  # das erste Strg+C
+        await until(lambda: cerbo.hanging)  # die Freigabe hängt …
+        task.cancel()  # … und das zweite Strg+C kommt
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(task, 5.0)
+    assert asyncio.all_tasks() == {asyncio.current_task()}  # die Hilfstasks sind trotzdem weg
+
+
+async def test_probe_names_an_internal_error_and_still_releases() -> None:
+    async with BuggyCerbo() as cerbo:
+        findings = await run_probe(cerbo, P, FAST)
+    assert [(f.title, f.status) for f in findings] == [
+        ("Watchdog erreichbar", "ok"),
+        ("Watchdog-Version", "ok"),
+        ("Scharf nach Heartbeat", "ok"),
+        ("Auslösung ohne Heartbeat", "warn"),
+        ("Interner Fehler der Probe", "fail"),
+    ]
+    assert findings[-1].detail == "RuntimeError: kaputt"
+    assert cerbo.heartbeats()[-1] == 0
+    assert cerbo.state == WAITING
 
 
 def test_timings_from_config(cfg: Config) -> None:
@@ -513,12 +773,26 @@ def test_main_exits_1_and_still_writes_the_report_when_a_step_fails(
 
 
 @pytest.mark.usefixtures("secrets_env")
-def test_main_reports_a_failed_connection(monkeypatch, tmp_path: Path) -> None:
-    transport = Mock(side_effect=ConnectionRefusedError("Verbindung abgelehnt"))
+@pytest.mark.parametrize(
+    ("error", "title", "detail"),
+    [
+        (
+            ConnectionRefusedError("Verbindung abgelehnt"),
+            "Verbindung zum Cerbo",
+            "ConnectionRefusedError: Verbindung abgelehnt",
+        ),
+        (MqttError("Zeitüberschreitung"), "Verbindung zum Cerbo", "MqttError: Zeitüberschreitung"),
+        (RuntimeError("kaputt"), "Interner Fehler der Probe", "RuntimeError: kaputt"),
+    ],
+)
+def test_main_names_the_kind_of_error(
+    monkeypatch, tmp_path: Path, error: Exception, title: str, detail: str
+) -> None:
+    transport = Mock(side_effect=error)
     monkeypatch.setattr("bindaems.tools.watchdog_probe.AiomqttTransport", transport)
     out = tmp_path / "bericht.md"
     assert main(["--config", "deploy/config.example.yaml", "--yes", "--out", str(out)]) == 1
-    assert "ConnectionRefusedError: Verbindung abgelehnt" in out.read_text(encoding="utf-8")
+    assert f"| 17.2-5 | {title} | FEHLER | {detail} |" in out.read_text(encoding="utf-8")
 
 
 @pytest.mark.usefixtures("secrets_env")
@@ -544,3 +818,76 @@ def test_main_prints_the_report_when_it_cannot_be_written(
     assert code == 1
     assert "Bericht nicht geschrieben" in captured.err
     assert "# Prüfprotokoll Teil 2 – Watchdog-Probe" in captured.out
+
+
+@pytest.mark.skipif(
+    signal.getsignal(signal.SIGINT) is not signal.default_int_handler,
+    reason="SIGINT ist hier anders belegt; asyncio.run fängt Strg+C dann nicht",
+)
+@pytest.mark.usefixtures("secrets_env")
+def test_main_releases_the_watchdog_and_exits_130_on_ctrl_c(
+    monkeypatch, tmp_path: Path, capsys
+) -> None:
+    cerbo = InterruptedCerbo()
+    _connect_to(monkeypatch, cerbo)
+    out = tmp_path / "bericht.md"
+    try:
+        code = main(["--config", "deploy/config.example.yaml", "--yes", "--out", str(out)])
+    except KeyboardInterrupt:
+        pytest.fail("Strg+C darf nicht als KeyboardInterrupt aus main kommen")
+    assert code == 130
+    assert not out.exists()  # ein abgebrochener Lauf ergibt keinen halben Bericht
+    shown = capsys.readouterr()
+    assert "Der Watchdog ist mit dem Heartbeat 0 freigegeben." in shown.out
+    assert "Abgebrochen." in shown.out
+    assert "Traceback" not in shown.err
+    assert cerbo.heartbeats()[-1] == 0  # der Watchdog ist freigegeben
+    assert cerbo.state == WAITING
+
+
+def test_main_exits_130_on_ctrl_c_at_the_prompt(monkeypatch, capsys) -> None:
+    def interrupt(_prompt: str) -> str:
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr("builtins.input", interrupt)
+    transport = Mock(side_effect=AssertionError("keine Verbindung"))
+    secrets = Mock(side_effect=AssertionError("keine Secrets"))
+    monkeypatch.setattr("bindaems.tools.watchdog_probe.AiomqttTransport", transport)
+    monkeypatch.setattr("bindaems.tools.watchdog_probe.load_secrets", secrets)
+    try:
+        code = main(["--config", "deploy/config.example.yaml"])
+    except KeyboardInterrupt:
+        pytest.fail("Strg+C darf nicht als KeyboardInterrupt aus main kommen")
+    assert code == 130
+    transport.assert_not_called()
+    secrets.assert_not_called()
+    assert "Abgebrochen." in capsys.readouterr().out
+
+
+@pytest.mark.usefixtures("secrets_env")
+def test_main_tells_when_the_watchdog_could_not_be_released(
+    monkeypatch, tmp_path: Path, capsys
+) -> None:
+    _connect_to(monkeypatch, DeadCerbo(drop_at=ARMED))
+    out = tmp_path / "bericht.md"
+    assert main(["--config", "deploy/config.example.yaml", "--yes", "--out", str(out)]) == 1
+    report = out.read_text(encoding="utf-8")
+    assert "| 17.2-5 | Scharf nach Heartbeat | OK |" in report  # das Bisherige bleibt im Bericht
+    assert watchdog_probe.UNRELEASED in report
+    assert watchdog_probe.UNRELEASED in capsys.readouterr().err
+
+
+@pytest.mark.usefixtures("secrets_env")
+def test_main_keeps_the_findings_when_disconnecting_fails(
+    monkeypatch, tmp_path: Path, capsys
+) -> None:
+    class ExitFails(SilentTransport):
+        async def __aexit__(self, *exc: object) -> None:
+            raise MqttError("Trennen fehlgeschlagen")
+
+    _connect_to(monkeypatch, ExitFails(), replace(FAST, answer_wait_s=0.2))
+    config = _config_file(tmp_path, portal_id=P)
+    out = tmp_path / "bericht.md"
+    assert main(["--config", str(config), "--yes", "--out", str(out)]) == 1
+    assert out.read_text(encoding="utf-8").count("| 17.2-5 |") == 1  # nur der Befund der Probe
+    assert "MqttError: Trennen fehlgeschlagen" in capsys.readouterr().err

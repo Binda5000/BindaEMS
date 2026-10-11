@@ -83,7 +83,13 @@ docker compose run --rm -T --entrypoint python ems-core \
   -m bindaems.tools.watchdog_config --config /config/config.yaml > config.ini
 ```
 
-Das Format zeigt `config.ini.example`.
+Das Format zeigt `config.ini.example`. Das Werkzeug meldet auf der Fehlerausgabe, was die Datei
+nicht leisten kann:
+
+- Eine EVCS ohne GX-Instanz in `victron.instances.evcharger` ergibt eine Warnung (und einen
+  Kommentar in der Datei): Der Watchdog setzt für sie keinen sicheren Strom.
+- Ist 2,5 × `victron.watchdog.heartbeat_s` nicht kleiner als `timeout_s`, bricht es mit dem
+  Exitcode 2 ab: Der Watchdog lehnte eine solche Datei beim Start ab.
 
 ## Installieren
 
@@ -125,6 +131,14 @@ docker compose run --rm -v "$PWD/verification:/out" --entrypoint python ems-core
   -m bindaems.tools.watchdog_probe --config /config/config.yaml \
   --out /out/<datum>-watchdog-probe.md
 ```
+
+Mit Strg+C brichst du die Probe ab: Sie gibt den Watchdog vorher mit dem Heartbeat 0 frei und endet
+mit dem Exitcode 130, ohne Bericht. Dasselbe versucht sie, wenn sie aus anderem Grund endet,
+etwa bei Verbindungsverlust; dann bleiben die bis dahin gewonnenen Befunde im Bericht. Gelingt die
+Freigabe nicht, steht das im Bericht und auf der Konsole: Der Watchdog kann dann scharf bleiben
+und später auslösen oder ausgelöst bleiben. Zurück geht es, indem du die Probe erneut startest
+(sie endet mit der Freigabe) oder am Cerbo
+`dbus -y com.victronenergy.bindaems /Heartbeat SetValue 0` ausführst.
 
 ## Aktualisieren
 
