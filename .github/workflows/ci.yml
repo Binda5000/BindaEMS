@@ -107,7 +107,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Shellcheck
-        run: shellcheck deploy/influxdb-setup.sh
+        run: shellcheck deploy/influxdb-setup.sh cerbo-watchdog/install.sh cerbo-watchdog/service/run cerbo-watchdog/service/log/run
       - name: Compose-Datei prüfen
         run: |
           cp deploy/config.example.yaml deploy/config.yaml

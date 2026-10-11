@@ -1,5 +1,7 @@
 # syntax=docker/dockerfile:1
-# Image für ems-core (Phase 1a: nur beobachten). Bauen aus dem Repository-Wurzelverzeichnis:
+# Image für ems-core (Phase 2a): Betriebszustände, Sicherheitsprüfungen und Heartbeat an den
+# Watchdog. Auf Geräte schreibt der core nur diesen Heartbeat.
+# Bauen aus dem Repository-Wurzelverzeichnis:
 #   docker build -f deploy/Dockerfile.core -t bindaems-core:dev .
 FROM ghcr.io/astral-sh/uv:0.11.32 AS uv
 

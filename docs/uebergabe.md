@@ -189,8 +189,9 @@ Demo-Zugänge: `admin`, `gast` (Lesen) und `sicher` (Admin mit TOTP, Geheimnis
     `tests/unit/cerbo_watchdog/test_compat.py` prüft, dass sie gleich sind.
   - Das D-Bus-Gerüst läuft nur auf einem Venus-OS-Gerät. Die Python-Tests prüfen Logik,
     Konfiguration, Zustandsdatei, Aktionen und den Dienst mit Fakes und `install.sh` gegen ein
-    nachgebildetes Gerät (Attrappen für ssh, svc und dbus). Die CI prüft mit shellcheck nur
-    `deploy/influxdb-setup.sh`; bei Änderungen an `install.sh` lass `shellcheck` selbst laufen.
+    nachgebildetes Gerät (Attrappen für ssh, svc und dbus). Der Schritt „Shellcheck“ im Job
+    `docker` der CI prüft `install.sh`, `service/run` und `service/log/run` zusammen mit
+    `deploy/influxdb-setup.sh`.
   - Jede Änderung an `victron.watchdog`, der USV-Reserve oder einem sicheren Strom in
     `config.yaml` verlangt eine neue `config.ini` auf dem Cerbo (Betriebshandbuch 14).
 - **Neue Pakete unter `src/bindaems`** brauchen eine `__init__.py`; sonst sieht import-linter sie
