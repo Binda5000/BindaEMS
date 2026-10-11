@@ -20,22 +20,27 @@ Stand: 11.10.2026. Neue Arbeit liegt zuerst auf dem Arbeitsbranch
   - Abdeckungsgrenzen und ein Importvertrag in der CI
   - BindaEMS schreibt damit noch auf kein Gerät. Ohne Bedienung (Plan 2d) ist nichts live: Der
     core steht in OBSERVE und sendet keinen Heartbeat, und ein installierter Watchdog wartet.
+  - An der Anlage installiert; die Watchdog-Probe ist bestanden (11.10.2026).
+- **Plan 2b (Aktoren) ist geschrieben** (`docs/superpowers/plans/2026-10-11-phase-2b-aktoren.md`,
+  18 Tasks). **Hier geht es mit der Umsetzung subagent-driven weiter**
+  (`superpowers:subagent-driven-development`, Entscheidung des Betreibers vom 11.10.2026), siehe
+  „Nächster Schritt“ unten.
 - **Images:** `ghcr.io/binda5000/bindaems-core:latest` und `ghcr.io/binda5000/bindaems-app:latest`.
   Sie sind öffentlich, und die CI setzt `latest` bei jedem Push auf `main`. core und app werden
   immer gemeinsam aus demselben Stand ausgerollt (gleiche Compose-Datei, gleiche Image-Tags): Die
   UI-Schemas sind streng, eine abweichende Version zeigt auf der System-Seite nur „Unerwartete
   Antwort vom Server“.
 - **Tests:**
-  - Python: 1823 (ruff, mypy strict auch für den Watchdog, import-linter mit 4 Verträgen);
+  - Python: 1829 (ruff, mypy strict auch für den Watchdog, import-linter mit 4 Verträgen);
     Abdeckung 95 % insgesamt, `core/safety` und `core/control` 99 %
   - darin: Cerbo-Watchdog 243 Fälle, Property-Tests 7 (davon 5 für die Safety-Schicht)
-  - UI: Vitest 232 (svelte-check, Prettier, ESLint)
+  - UI: Vitest 233 (svelte-check, Prettier, ESLint)
   - E2E: Playwright 11
 - **Offen:**
-  - an der Anlage: Watchdog installieren und die Probe laufen lassen (siehe unten)
-  - die Installation beim Betreiber fertigstellen (HTTPS-Proxy)
+  - Plan 2b: Freigabe des Betreibers, dann Umsetzung subagent-driven
   - die Abnahme der Phase 1 an der Anlage
-  - der Plan 2b (Aktoren)
+  - kleine Punkte an der Anlage (siehe „Stand der Installation“): manuelle Punkte von Teil 1 und
+    die Log-Zeile der Probe
 
 ## Arbeitsweise mit dem Betreiber
 
@@ -48,6 +53,7 @@ Stand: 11.10.2026. Neue Arbeit liegt zuerst auf dem Arbeitsbranch
     am Ende ein frischer Gesamtreviewer.
   - Plan 2a lief mit `superpowers:subagent-driven-development`: je Task ein Implementierer und ein
     Reviewer, ein Ledger mit Rulings und aufgeschobenen Kleinigkeiten, am Ende der Gesamtreview.
+  - Plan 2b läuft ebenso subagent-driven (Entscheidung des Betreibers vom 11.10.2026).
   - Befunde werden nach ihrer Wirkung neu bewertet. Critical und Important kommen in einen
     Fix-Durchgang, jeder mit einem Test, der vorher scheitert. Minors werden gesammelt und auf
     Wunsch erledigt („bitte die kleinigkeiten erledigen“).
@@ -74,6 +80,8 @@ Stand: 11.10.2026. Neue Arbeit liegt zuerst auf dem Arbeitsbranch
 | `docs/superpowers/plans/2026-10-09-phase-1b-app-backend.md` | Plan 1b (app) |
 | `docs/superpowers/plans/2026-10-09-phase-1c-web-ui.md` | Plan 1c (UI), mit Anhang A zu den API-Formen |
 | `docs/superpowers/plans/2026-10-10-phase-2a-sicherheitsbasis.md` | Plan 2a (Sicherheitsbasis), mit dem Zuschnitt der Phase 2 in 2a–2d und den Präzisierungen gegenüber der Spec |
+| `docs/superpowers/plans/2026-10-10-phase-2a-entscheidungen.md` | Entscheidungen, geparkte Befunde und aufgeschobene Kleinigkeiten aus der Umsetzung von Plan 2a |
+| `docs/superpowers/plans/2026-10-11-phase-2b-aktoren.md` | Plan 2b (Aktoren), 18 Tasks; Entscheidungen des Betreibers vom 11.10.2026, Präzisierungen, Texte |
 | `docs/betrieb.md` | Betriebshandbuch: Installation, Proxy (6), HA (7), Tarif (8), Sicherung (9), Prüfprotokolle (11), Web-UI (12), Betriebszustände und Freigaben (13), Watchdog am Cerbo (14) |
 | `cerbo-watchdog/README.md` | Watchdog: Zustände, Zeiten, D-Bus-Pfade, Installation und Probe |
 | `docs/verification/abnahme-phase-1.md` | Checkliste für die Abnahme der Phase 1 |
@@ -271,15 +279,34 @@ Demo-Zugänge: `admin`, `gast` (Lesen) und `sicher` (Admin mit TOTP, Geheimnis
    - bei Live → Dry-Run oder „Regelbetrieb aus“ erst die Sicherwerte, dann die Freigabe
    - die EVCS über den GX-Dienst `evcharger`
 
-   Umgesetzt wird erst nach der Freigabe (Spec 18). Nach 2c und 2d kommt die Abnahme der Phase 2:
-   2 Wochen Dry-Run, dann die Live-Schaltung je Aktor in der Reihenfolge EVCS, Victron, Tesla.
+   Umgesetzt wird erst nach der Freigabe (Spec 18), und zwar subagent-driven (siehe „Nächster
+   Schritt“). Nach 2c und 2d kommt die Abnahme der Phase 2: 2 Wochen Dry-Run, dann die
+   Live-Schaltung je Aktor in der Reihenfolge EVCS, Victron, Tesla.
 
-   **EVCS in 2b:** Seit der korrigierten IP-Whitelist antwortet die EVCS BindaEMS direkt per Modbus
-   (Prüfprotokoll Teil 1 vom 11.10.2026). Ob 2b direkt per Modbus oder über den GX-Dienst
-   `evcharger` auf die EVCS schreibt, legt das Prüfprotokoll Teil 2 fest (Spec 8.6). Geschrieben
-   wird in jedem Fall der Sollstrom (Register 5016, auf dem GX `/SetCurrent`), nie der
-   Maximalstrom (5017). Der Watchdog ist nicht betroffen: Er schreibt über den GX-Dienst
-   `evcharger` am Cerbo.
+   **EVCS in 2b:**
+   - **Lesen:** Seit der korrigierten IP-Whitelist antwortet die EVCS BindaEMS direkt per Modbus
+     (Prüfprotokoll Teil 1 vom 11.10.2026); gelesen wird weiter so.
+   - **Schreiben:** über den GX-Dienst `evcharger` des Cerbo (`/SetCurrent`, `/StartStop`), wie
+     der Watchdog (Entscheidung des Betreibers vom 11.10.2026). Prüfprotokoll Teil 2 bestätigt
+     den Weg an der Anlage.
+   - Geschrieben wird nie der Maximalstrom (5017).
+
+### Nächster Schritt: Plan 2b subagent-driven umsetzen
+
+1. Freigabe des Betreibers für Plan 2b abwarten, falls sie noch nicht vorliegt.
+2. `superpowers:subagent-driven-development` mit
+   `docs/superpowers/plans/2026-10-11-phase-2b-aktoren.md` starten.
+   - Das Skript `sdd-workspace` legt den git-ignorierten Arbeitsordner
+     `.superpowers/sdd/2026-10-11-phase-2b-aktoren/` mit dem Ledger `progress.md` an.
+   - Vor Task 1 kommt die Vorab-Konfliktprüfung als Tabelle ins Ledger.
+3. **Je Task:** ein Implementierer und ein Reviewer, Rulings und aufgeschobene Kleinigkeiten ins
+   Ledger. Die Subagenten nutzen die Attributionszeilen ihrer eigenen Umgebung.
+4. **Am Ende:**
+   - der Gesamtreview, danach ein Fix-Durchgang
+   - die Entscheidungen in `docs/superpowers/plans/2026-10-11-phase-2b-entscheidungen.md`, wie
+     bei 2a
+   - die Abschlussnachricht mit Rulings und Deferred minors
+5. Nach `main` nur mit Zustimmung des Betreibers.
 
 ## Vor einer Live-Schaltung in 2b zu klären
 
