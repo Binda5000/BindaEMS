@@ -96,23 +96,30 @@ class DecisionSpool:
         return True
 
     def read_since(self, since: datetime, limit: int) -> tuple[list[Decision], bool]:
-        """Die Entscheidungen mit ``ts`` nach ``since``, aufsteigend, höchstens ``limit``.
+        """Die ersten ``limit`` Entscheidungen mit ``ts`` nach ``since``, aufsteigend.
 
-        Das Zweite sagt, ob es noch mehr gibt. Gelesen werden nur die Tagesdateien ab dem Tag von
-        ``since`` und nur so viele, wie das Limit braucht. Eine Zeile, die sich nicht lesen lässt,
-        kommt mit einer Warnung ins Log und fehlt im Ergebnis; ebenso eine Datei, die sich nicht
-        öffnen lässt. Ein Limit unter 0 gilt als 0.
+        Entscheidungen mit gleichem ``ts`` (alle eines Zyklus) werden nie getrennt: Fällt das Limit
+        in eine solche Gruppe, kommt die ganze Gruppe zurück, das Ergebnis überschreitet das Limit
+        dann um den Rest der Gruppe. So verliert nichts, wer mit ``since`` = letztem ``ts``
+        weiterliest, und eine Gruppe, die größer ist als das Limit, hält ihn nicht auf.
+
+        Das Zweite sagt, ob nach den zurückgegebenen Entscheidungen noch weitere folgen. Gelesen
+        werden nur die Tagesdateien ab dem Tag von ``since`` und nur so viele, wie dafür nötig
+        sind. Eine Zeile, die sich nicht lesen lässt, kommt mit einer Warnung ins Log und fehlt im
+        Ergebnis; ebenso eine Datei, die sich nicht öffnen lässt. Ein Limit unter 0 gilt als 0.
         """
         since = ensure_utc(since)
         limit = max(limit, 0)
         found: list[Decision] = []
+        end = 0
         for day_file in self._day_files():
             if day_file.day < since.date():
                 continue  # alle Zeitpunkte dieses Tages liegen vor ``since``
             found.extend(self._read_file(day_file.path, since))
-            if len(found) > limit:
-                break  # die späteren Tage ändern an den ersten ``limit`` nichts mehr
-        return found[:limit], len(found) > limit
+            end = _cut(found, limit)
+            if end < len(found):
+                break  # dahinter folgt mehr; spätere Tage ändern am Ergebnis nichts mehr
+        return found[:end], end < len(found)
 
     def prune(self, now: datetime) -> None:
         """Löscht Dateien, deren Tag vor dem Tag von ``now − max_age`` liegt (UTC).
@@ -192,6 +199,18 @@ class DecisionSpool:
             log.warning("Entscheidungsdatei nicht gelöscht", file=path.name, error=str(exc))
             return False
         return True
+
+
+def _cut(found: list[Decision], limit: int) -> int:
+    """Wie viele der nach Zeit geordneten ``found`` zurückkommen: ``limit``, ohne Gruppe zu trennen.
+
+    Fällt die Grenze in eine Gruppe gleicher Zeit, reicht der Schnitt bis zu deren Ende. Bei
+    ``limit`` 0 kommt nichts zurück, bei weniger Entscheidungen als ``limit`` alle.
+    """
+    end = min(limit, len(found))
+    while 0 < end < len(found) and found[end].ts == found[end - 1].ts:
+        end += 1
+    return end
 
 
 def _parse_line(path: Path, number: int, raw: bytes) -> Decision | None:

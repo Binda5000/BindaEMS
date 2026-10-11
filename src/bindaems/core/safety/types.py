@@ -2,13 +2,12 @@
 
 Die Schicht ist rein: Zeit, Messwerte, Freigaben und Sperren bekommt sie über den
 ``SafetyContext`` von außen (Spec 8.3). Dazu kommen die Hilfen, die alle Regeln gleich brauchen:
-``de`` für Zahlen in Texten (sie liegt in ``shared.numbers`` und wird hier wieder angeboten),
-``finite_number`` als Zahlenregel und ``invalid_value`` für den Befund eines ungültigen Werts.
+``de`` für Zahlen in Texten, ``finite_number`` als Zahlenregel (beide liegen in ``shared.numbers``
+und werden hier wieder angeboten) und ``invalid_value`` für den Befund eines ungültigen Werts.
 """
 
 from __future__ import annotations
 
-import math
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime
@@ -23,24 +22,10 @@ from bindaems.shared.control import (
     CommandValue,
     OperatingState,
 )
-from bindaems.shared.numbers import de as de  # ``as de``: ausdrücklich wieder angeboten
+from bindaems.shared.numbers import de as de  # ``as``-Form: ausdrücklich wieder angeboten
+from bindaems.shared.numbers import finite_number as finite_number
 
 _VALUE_TEXT_MAX: Final = 60  # Zeichen, die ein ungültiger Wert im Text eines Befunds einnimmt
-
-
-def finite_number(value: object) -> float | None:
-    """Der Wert als endliche Zahl; ``bool``, ``None``, NaN, ±∞ und alles andere gelten nicht.
-
-    Das ist die Zahlenregel der Safety-Regeln: Was hier ``None`` ergibt, ist ungültig (der Wert
-    eines Befehls) oder unbekannt (ein Wert aus dem Kontext).
-    """
-    if isinstance(value, bool) or not isinstance(value, int | float):
-        return None
-    try:
-        number = float(value)
-    except OverflowError:  # ein int, der größer ist als jedes float
-        return None
-    return number if math.isfinite(number) else None
 
 
 class Outcome(StrEnum):

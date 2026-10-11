@@ -161,6 +161,99 @@ def test_more_tells_whether_decisions_beyond_the_limit_exist(
     assert ([d.id for d in found], has_more) == (expected, more)
 
 
+# Gruppen gleicher Zeit: alle Entscheidungen eines Zyklus tragen dieselbe Zeit und werden nie
+# getrennt; sonst ginge der Rest beim nächsten Abruf (``since`` = letzte Zeit) verloren.
+
+
+def spool_with(tmp_path: Path, spec: list[tuple[str, int]]) -> DecisionSpool:
+    """Ein Spool mit den Entscheidungen (Kennung, Sekunden nach T0) in dieser Reihenfolge."""
+    spool = DecisionSpool(tmp_path)
+    for id_, seconds in spec:
+        assert spool.append(decision(id=id_, ts=T0 + timedelta(seconds=seconds)))
+    return spool
+
+
+GROUPS = [("a", 1), ("b1", 2), ("b2", 2), ("b3", 2), ("c", 3)]
+
+
+@pytest.mark.parametrize(
+    ("limit", "expected", "more"),
+    [
+        (1, ["a"], True),  # die Grenze liegt zwischen zwei Gruppen: nichts zu ergänzen
+        (2, ["a", "b1", "b2", "b3"], True),  # mitten in der Gruppe: die ganze Gruppe
+        (3, ["a", "b1", "b2", "b3"], True),
+        (4, ["a", "b1", "b2", "b3"], True),  # genau am Ende der Gruppe
+        (5, ["a", "b1", "b2", "b3", "c"], False),
+        (6, ["a", "b1", "b2", "b3", "c"], False),
+    ],
+)
+def test_limit_inside_a_group_of_equal_timestamps_returns_the_whole_group(
+    tmp_path: Path, limit: int, expected: list[str], more: bool
+) -> None:
+    found, has_more = spool_with(tmp_path, GROUPS).read_since(T0, limit)
+    assert ([d.id for d in found], has_more) == (expected, more)
+
+
+def test_a_group_at_the_end_leaves_nothing_more(tmp_path: Path) -> None:
+    spool = spool_with(tmp_path, [("a", 1), ("b1", 2), ("b2", 2)])
+    found, more = spool.read_since(T0, 2)  # das Limit liegt in der letzten Gruppe
+    assert [d.id for d in found] == ["a", "b1", "b2"] and more is False
+
+
+def test_a_group_larger_than_the_limit_is_returned_whole_and_the_next_call_goes_on(
+    tmp_path: Path,
+) -> None:
+    spool = spool_with(tmp_path, [("g1", 1), ("g2", 1), ("g3", 1), ("x", 2), ("y", 3)])
+    first, more = spool.read_since(T0, 1)
+    assert [d.id for d in first] == ["g1", "g2", "g3"] and more is True
+    second, more = spool.read_since(first[-1].ts, 1)
+    assert [d.id for d in second] == ["x"] and more is True
+    third, more = spool.read_since(second[-1].ts, 1)
+    assert [d.id for d in third] == ["y"] and more is False
+    assert spool.read_since(third[-1].ts, 1) == ([], False)
+
+
+def test_a_group_keeps_the_order_of_the_file(tmp_path: Path) -> None:
+    spool = spool_with(tmp_path, [("z", 2), ("m", 2), ("a", 2), ("early", 1)])
+    found, _ = spool.read_since(T0, 1)
+    assert [d.id for d in found] == ["early"]
+    found, _ = spool.read_since(T0, 2)  # das Limit liegt in der Gruppe: alle drei, wie angehängt
+    assert [d.id for d in found] == ["early", "z", "m", "a"]
+
+
+def test_the_same_instant_in_another_zone_belongs_to_the_group(tmp_path: Path) -> None:
+    spool = DecisionSpool(tmp_path)
+    spool.append(decision(id="utc", ts=T0 + timedelta(seconds=5)))
+    spool.append(decision(id="vienna", ts=(T0 + timedelta(seconds=5)).astimezone(LOCAL_TZ)))
+    spool.append(decision(id="later", ts=T0 + timedelta(seconds=6)))
+    found, more = spool.read_since(T0, 1)
+    assert [d.id for d in found] == ["utc", "vienna"] and more is True
+
+
+def test_a_group_at_the_end_of_a_day_looks_into_the_next_day_for_more(tmp_path: Path) -> None:
+    spool = spool_with(tmp_path, [("a", 1), ("b1", 2), ("b2", 2)])
+    spool.append(decision(id="next", ts=T0 + timedelta(days=1)))
+    found, more = spool.read_since(T0, 2)
+    assert [d.id for d in found] == ["a", "b1", "b2"] and more is True
+
+
+def test_a_next_day_without_readable_decisions_is_no_more(tmp_path: Path) -> None:
+    spool = spool_with(tmp_path, [("a", 1), ("b1", 2), ("b2", 2)])
+    day_file(tmp_path, "2026-10-09").write_text("{kaputt\n")
+    with capture_logs() as logs:
+        found, more = spool.read_since(T0, 2)
+    assert [d.id for d in found] == ["a", "b1", "b2"] and more is False
+    assert len(warned(logs)) == 1  # um das zu wissen, wurde der nächste Tag gelesen
+
+
+def test_limit_zero_never_returns_a_group(tmp_path: Path) -> None:
+    assert spool_with(tmp_path, GROUPS).read_since(T0, 0) == ([], True)
+    equal = DecisionSpool(tmp_path / "gleich")  # auch nicht, wenn alle dieselbe Zeit tragen
+    for id_ in ("g1", "g2"):
+        equal.append(decision(id=id_, ts=T0 + timedelta(seconds=1)))
+    assert equal.read_since(T0, 0) == ([], True)
+
+
 def test_read_since_without_any_decision(tmp_path: Path) -> None:
     assert DecisionSpool(tmp_path).read_since(T0, 10) == ([], False)
     assert DecisionSpool(tmp_path / "fehlt").read_since(T0, 10) == ([], False)

@@ -8,7 +8,6 @@ dasselbe sagen.
 
 from __future__ import annotations
 
-import math
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -16,7 +15,7 @@ from enum import StrEnum
 from typing import Any, Final
 
 from bindaems.shared.control import CommandKind, CommandValue
-from bindaems.shared.numbers import de
+from bindaems.shared.numbers import de, finite_number
 from bindaems.shared.timeutil import ensure_utc
 
 _SHOWN_MAX: Final = 60  # Zeichen, die ein ungültiger Wert in einem Text einnimmt
@@ -99,21 +98,6 @@ class Decision:
     inputs: Mapping[str, float | None]
 
 
-def _number(value: object) -> float | None:
-    """Der Wert als endliche Zahl; ``bool``, ``None``, NaN, ±∞ und alles andere gelten nicht.
-
-    Das ist die Zahlenregel von ``core.safety.types.finite_number``; ``shared`` darf ``core`` nicht
-    importieren.
-    """
-    if isinstance(value, bool) or not isinstance(value, int | float):
-        return None
-    try:
-        number = float(value)
-    except OverflowError:  # ein int, der größer ist als jedes float
-        return None
-    return number if math.isfinite(number) else None
-
-
 def _shown(value: object) -> str:
     """Die ``repr`` des Werts für einen Text, höchstens 60 Zeichen lang (sonst mit „…“)."""
     shown = repr(value)
@@ -128,7 +112,7 @@ def _json_value(value: object) -> float | bool | None:
     """
     if value is None or isinstance(value, bool):
         return value
-    return _number(value)
+    return finite_number(value)
 
 
 def decision_to_json(decision: Decision) -> dict[str, Any]:
@@ -150,7 +134,7 @@ def decision_to_json(decision: Decision) -> dict[str, Any]:
         "result": str(decision.result),
         "codes": list(decision.codes),
         "text": decision.text,
-        "inputs": {name: _number(value) for name, value in decision.inputs.items()},
+        "inputs": {name: finite_number(value) for name, value in decision.inputs.items()},
     }
 
 
@@ -197,7 +181,7 @@ def _command_value(data: dict[str, Any], field: str) -> CommandValue:
         return None
     if isinstance(value, bool):
         return value
-    number = _number(value)
+    number = finite_number(value)
     if number is None:
         raise _invalid(field, f"ist weder Zahl noch Wahrheitswert noch null: {_shown(value)}")
     return number
@@ -225,7 +209,7 @@ def _inputs(data: dict[str, Any]) -> dict[str, float | None]:
     for name, item in value.items():
         if not isinstance(name, str):
             raise _invalid("inputs", f"hat einen Namen, der keine Zeichenkette ist: {_shown(name)}")
-        number = _number(item)
+        number = finite_number(item)
         if item is not None and number is None:
             raise _invalid("inputs", f"enthält für „{name}“ keine Zahl: {_shown(item)}")
         inputs[name] = number
@@ -266,7 +250,7 @@ def decision_from_json(data: Any) -> Decision:
 
 def _command_text(kind: CommandKind, value: CommandValue) -> str:
     """Der Befehl als Text. Ein Wert, der nicht zur Art passt, erscheint, wie er ist (gekürzt)."""
-    number = _number(value)
+    number = finite_number(value)
     shown = de(number) if number is not None else _shown(value)
     if kind == CommandKind.CURRENT:
         return f"Strom {shown} A"
