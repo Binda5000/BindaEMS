@@ -85,12 +85,14 @@ def test_the_core_reads_what_the_watchdog_publishes() -> None:
     )
 
 
-def test_heartbeat_goes_to_the_only_writable_path_of_the_service() -> None:
+def test_heartbeat_goes_to_the_only_writable_path_of_the_service(cfg) -> None:
     # core und Probe schreiben W/<portal>/bindaems/0/Heartbeat; dbus-flashmq macht daraus /Heartbeat
     # des Dienstes com.victronenergy.bindaems mit der DeviceInstance 0.
     assert service.SERVICE_NAME == "com.victronenergy.bindaems"
     assert victron_mqtt.HEARTBEAT_PATH == f"bindaems/0{service.HEARTBEAT}"
-    assert victron_mqtt.WRITABLE_PATHS == {victron_mqtt.HEARTBEAT_PATH}
+    # Vom Dienst des Watchdogs darf der core nur den Heartbeat schreiben.
+    paths = victron_mqtt.writable_paths(cfg.victron)
+    assert {path for path in paths if path.startswith("bindaems/")} == {victron_mqtt.HEARTBEAT_PATH}
     assert watchdog_probe.HEARTBEAT_PATH is victron_mqtt.HEARTBEAT_PATH
 
 

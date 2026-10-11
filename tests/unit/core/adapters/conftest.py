@@ -4,6 +4,7 @@ import asyncio
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterable, Sequence
 from typing import Any
 
+import aiomqtt
 import httpx
 import pytest
 from pydantic import SecretStr
@@ -39,10 +40,12 @@ class FakeTransport:
         *,
         fail_on_enter: bool = False,
         end_with_error: bool = False,
+        fail_publish_prefix: str | None = None,
     ) -> None:
         self._messages = list(messages)
         self._fail_on_enter = fail_on_enter
         self._end_with_error = end_with_error
+        self._fail_publish_prefix = fail_publish_prefix
         self.subscribed: list[str] = []
         self.published: list[tuple[str, bytes]] = []
 
@@ -58,6 +61,8 @@ class FakeTransport:
         self.subscribed.append(topic)
 
     async def publish(self, topic: str, payload: bytes) -> None:
+        if self._fail_publish_prefix is not None and topic.startswith(self._fail_publish_prefix):
+            raise aiomqtt.MqttError("Senden fehlgeschlagen")
         self.published.append((topic, payload))
 
     async def messages(self) -> AsyncIterator[MqttMessage]:
@@ -80,15 +85,22 @@ def fake_env(cfg: Config) -> Callable[..., tuple[Any, list[FakeTransport], State
         first_fails: bool = False,
         end_with_error: bool = False,
         sessions: Sequence[Iterable[MqttMessage | Callable[[], object]]] | None = None,
+        fail_publish_prefix: str | None = None,
     ) -> tuple[Any, list[FakeTransport], StateStore]:
+        def make_transport(
+            scripted: Iterable[MqttMessage | Callable[[], object]] = (), **options: bool
+        ) -> FakeTransport:
+            # ``fail_publish_prefix`` gilt für jeden Transport, auch für spätere Sitzungen
+            return FakeTransport(scripted, fail_publish_prefix=fail_publish_prefix, **options)
+
         specs: list[FakeTransport] = []
         if first_fails:
-            specs.append(FakeTransport(fail_on_enter=True))
+            specs.append(make_transport(fail_on_enter=True))
         if sessions is not None:  # mehrere Sitzungen; alle außer der letzten enden mit Fehler
-            specs += [FakeTransport(m, end_with_error=True) for m in sessions[:-1]]
-            specs.append(FakeTransport(sessions[-1]))
+            specs += [make_transport(m, end_with_error=True) for m in sessions[:-1]]
+            specs.append(make_transport(sessions[-1]))
         else:
-            specs.append(FakeTransport(messages, end_with_error=end_with_error))
+            specs.append(make_transport(messages, end_with_error=end_with_error))
         transports: list[FakeTransport] = []
 
         def factory() -> FakeTransport:
