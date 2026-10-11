@@ -42,6 +42,7 @@ log = structlog.get_logger(__name__)
 
 Origin = Literal["stream", "influx"]
 SLOT_S = SLOT.total_seconds()
+COVERED_TOLERANCE_S = 0.5  # Rundung beim Summieren im core; mehr ist ein Fehler
 FRESH_FOR = timedelta(minutes=30)
 COVERAGE_FLOW = "_coverage"
 WALLBOX_PREFIX = "wb:"
@@ -71,8 +72,9 @@ def parse_slot_flows(data: Mapping[str, Any]) -> SlotFlows:
     if start != slot_start(start):
         raise ValueError(f"slot_start liegt nicht auf einer Viertelstunde: {text}")
     covered = _number(data.get("covered_s"))
-    if covered is None or not 0 <= covered <= SLOT_S:
+    if covered is None or not 0 <= covered <= SLOT_S + COVERED_TOLERANCE_S:
         raise ValueError(f"covered_s liegt außerhalb von 0–900 s: {data.get('covered_s')!r}")
+    covered = min(covered, SLOT_S)  # knapp darüber ist Rundung (der core summiert Kommazahlen)
     raw_flows = data.get("flows_wh")
     if not isinstance(raw_flows, Mapping):
         raise ValueError("flows_wh fehlt oder ist kein Objekt")

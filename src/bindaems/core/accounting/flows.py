@@ -7,7 +7,7 @@ from collections.abc import Mapping, Sequence
 from datetime import datetime
 
 from bindaems.shared.domain import SlotFlows, Snapshot
-from bindaems.shared.timeutil import slot_start
+from bindaems.shared.timeutil import SLOT, slot_start
 
 
 def wb_key(source: str, wallbox: str) -> str:
@@ -123,7 +123,8 @@ class SlotAccumulator:
     def _result(self, slot: datetime, end: Mapping[str, float | None]) -> SlotFlows:
         return SlotFlows(
             slot_start=slot,
-            covered_s=self._covered_s,
+            # das Intervall über die Slotgrenze zählt ganz zum früheren Slot, dazu kommt Rundung
+            covered_s=min(self._covered_s, SLOT.total_seconds()),
             flows_wh=dict(self._flows_wh),
             counters={s: (self._start.get(s), end.get(s)) for s in self._signals},
         )

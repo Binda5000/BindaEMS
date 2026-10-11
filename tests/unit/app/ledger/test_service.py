@@ -194,3 +194,9 @@ def test_component_status_follows_latest_slot(ledger, clock) -> None:
     clock.advance(timedelta(minutes=10))
     status = ledger.component_status()
     assert (status.ok, status.message) == (False, "keine Abrechnungsdaten seit 10:15")
+
+
+def test_parse_slot_flows_tolerates_rounding_above_a_slot() -> None:
+    # der core summiert Kommazahlen; 900,0018 s ist Rundung, keine ungültige Viertelstunde
+    assert parse_slot_flows(MSG | {"covered_s": 900.0018}).covered_s == 900.0
+    assert parse_slot_flows(MSG | {"covered_s": 899.9983}).covered_s == 899.9983
