@@ -34,6 +34,7 @@ def runtime_env(
         omit: Sequence[str] = (),
         fail_first: bool = False,
         extra: Mapping[str, float] | None = None,
+        configure: Callable[[Config], Config] | None = None,
         **kwargs: Any,
     ) -> tuple[CoreRuntime, FakeSink, ManualClock]:
         clock = ManualClock(datetime.fromisoformat(start))
@@ -41,8 +42,9 @@ def runtime_env(
         secrets = Secrets(internal_token=SecretStr(TOKEN))
         # kein Test liest oder schreibt unter /data
         core = cfg.core.model_copy(update={"data_dir": tmp_path / "core"})
+        local = cfg.model_copy(update={"core": core})
         rt = CoreRuntime(
-            cfg.model_copy(update={"core": core}),
+            configure(local) if configure is not None else local,
             secrets,
             clock=clock,
             adapters=[],

@@ -359,7 +359,8 @@ def _demo_config(cfg: Config, data_dir: Path, ui_dir: Path | None) -> Config:
             "core_url": "http://127.0.0.1:9",  # nie benutzt: den Stream ersetzt step_live
         }
     )
-    return cfg.model_copy(update={"app": app})
+    core = cfg.core.model_copy(update={"data_dir": data_dir / "core"})  # Absicht der Demo
+    return cfg.model_copy(update={"app": app, "core": core})
 
 
 def _build_core(cfg: Config, secrets: Secrets, clock: ManualClock) -> CoreRuntime:

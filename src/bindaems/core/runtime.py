@@ -1,7 +1,12 @@
-"""Laufzeit des core in Phase 1a (nur beobachten): Adapter, 1-s-Zyklus, Telemetrie, Prüfungen.
+"""Laufzeit des core: Adapter, 1-s-Zyklus, Telemetrie, Prüfungen, Betriebszustand und Heartbeat.
 
 Je Zyklus: Snapshot → abgeleitete Größen → Plausibilität → Flusszuordnung → Viertelstunden-
-Summen → Telemetrie → (alle 10 s) Selbstprüfung und mitregelnde Systeme → Stream.
+Summen → Telemetrie → (alle 10 s) Selbstprüfung und mitregelnde Systeme → Eingangsprüfung →
+(nach jeder Prüfung) Sperren → Watchdog, wirksame Betriebsarten und aktive Sperren →
+Betriebszustand → Stream → Alarme → Heartbeat.
+
+Auf Geräte schreibt der core nur den Heartbeat an den eigenen Watchdog am Cerbo (Plan 2a), und
+den nur aus einem Zyklus, der ohne Ausnahme bis zum Ende läuft.
 """
 
 from __future__ import annotations
@@ -11,12 +16,12 @@ import contextlib
 import math
 import time
 from collections import deque
-from collections.abc import AsyncIterator, Callable, Generator, Sequence
+from collections.abc import AsyncIterator, Callable, Generator, Mapping, Sequence
 from contextlib import AbstractAsyncContextManager
 from dataclasses import asdict, replace
 from datetime import datetime, timedelta
 from functools import partial
-from typing import Any
+from typing import Any, Final
 
 import httpx
 import structlog
@@ -29,20 +34,28 @@ from bindaems.core.adapters.evcs import EvcsAdapter, PymodbusReader
 from bindaems.core.adapters.homeassistant import HaAdapter
 from bindaems.core.adapters.tessie import TessieAdapter
 from bindaems.core.adapters.twc import TwcAdapter
-from bindaems.core.adapters.victron_mqtt import AiomqttTransport, VictronMqttAdapter
-from bindaems.core.api.app import HealthReport, create_api, snapshot_to_json
+from bindaems.core.adapters.victron_mqtt import HEARTBEAT_PATH, AiomqttTransport, VictronMqttAdapter
+from bindaems.core.api.app import HealthReport, create_api, snapshot_to_json, watchdog_to_json
 from bindaems.core.checks.competitors import detect_competitors
-from bindaems.core.checks.selfcheck import CheckResult, run_selfcheck
-from bindaems.core.control.intent import IntentReply, IntentStore
-from bindaems.core.safety.limits import HardLimits
+from bindaems.core.checks.selfcheck import CRITICAL_SIGNALS, FRESH_FOR, CheckResult, run_selfcheck
+from bindaems.core.checks.values import number
+from bindaems.core.control.intent import INTENT_FILE_PROBLEM, IntentReply, IntentStore
+from bindaems.core.control.operating import OperatingInputs, OperatingStateMachine, Transition
+from bindaems.core.safety.inputs import InputCheck
+from bindaems.core.safety.limits import ActuatorSpec, HardLimits
+from bindaems.core.safety.locks import LockInfo, LockManager, lock_causes
+from bindaems.core.safety.modes import ModeInfo, effective_modes, watchdog_required
+from bindaems.core.safety.types import InputStatus
 from bindaems.core.state.derived import Derived, derive
 from bindaems.core.state.plausibility import PlausibilityMonitor, check_grid_counters
 from bindaems.core.state.store import StateStore
 from bindaems.core.telemetry.sampler import TelemetrySampler
+from bindaems.core.watchdog_client.heartbeat import HeartbeatClient
+from bindaems.core.watchdog_client.status import WatchdogStatus, read_watchdog, watchdog_alarms
 from bindaems.shared.broadcast import Broadcast
 from bindaems.shared.config import Config, EvcsConfig, Secrets
-from bindaems.shared.control import Intent
-from bindaems.shared.domain import Alarm, Severity, SlotFlows
+from bindaems.shared.control import Intent, OperatingState
+from bindaems.shared.domain import Alarm, Quality, Severity, SlotFlows, Snapshot
 from bindaems.shared.influx.lineprotocol import PointSink
 from bindaems.shared.influx.spool import DiskSpool
 from bindaems.shared.influx.writer import InfluxWriter
@@ -55,6 +68,8 @@ CHECK_TOLERANCE_S = 0.05
 CYCLE_LIMIT_MS = 200.0
 OVERRUN_CYCLES = 3
 CYCLE_HISTORY = 300
+# ``system.active_in_source``: kein Netz am AC-Eingang, die Multis versorgen das Haus (Inselbetrieb)
+ISLAND_SOURCE: Final = 240
 
 
 class _ApiServer(uvicorn.Server):
@@ -81,6 +96,37 @@ def _slot_json(flows: SlotFlows) -> dict[str, Any]:
     }
 
 
+def _actuator_json(spec: ActuatorSpec, mode: ModeInfo, lock: LockInfo | None) -> dict[str, Any]:
+    return {
+        "id": spec.id,
+        "label": spec.label,
+        "requested": mode.requested.value,
+        "effective": mode.effective.value,
+        "live_allowed": spec.live_allowed,
+        "reasons": list(mode.reasons),
+        "locked": list(lock.reasons) if lock is not None else [],
+    }
+
+
+def _safe_reasons(snap: Snapshot) -> tuple[str, ...]:
+    """Gründe für den sicheren Zustand: veraltete Cerbo-Daten und Inselbetrieb.
+
+    Veraltet ist jedes Signal aus ``CRITICAL_SIGNALS``, das fehlt oder nicht die Qualität ``OK``
+    hat; die Meldung nennt sie in der Reihenfolge der Liste.
+    """
+    reasons: list[str] = []
+    stale = [
+        signal
+        for signal in CRITICAL_SIGNALS
+        if (reading := snap.get(signal)) is None or reading.quality is not Quality.OK
+    ]
+    if stale:
+        reasons.append(f"Cerbo-Daten veraltet: {', '.join(stale)}.")
+    if number(snap, "system.active_in_source") == ISLAND_SOURCE:
+        reasons.append("Netzausfall (Inselbetrieb).")
+    return tuple(reasons)
+
+
 class CoreRuntime:
     """Erfüllt ``CoreView`` der internen API."""
 
@@ -95,7 +141,9 @@ class CoreRuntime:
         cycle_s: float = 1.0,
         serve_api: bool = True,
         timer: Callable[[], float] = time.perf_counter,
+        watchdog_send: Callable[[int], bool] | None = None,
     ) -> None:
+        """``watchdog_send`` stellt den Heartbeat zu; ohne ihn schreibt der Victron-Adapter."""
         self._cfg = cfg
         self._secrets = secrets
         self._clock = clock or SystemClock()
@@ -107,6 +155,17 @@ class CoreRuntime:
         self.limits = HardLimits.from_config(cfg)
         self.intents = IntentStore(cfg.core.data_dir / "intent.json", self.limits)
         self.intents.load()
+        self.locks = LockManager(cfg.safety.lock_release_s)
+        self.operating = OperatingStateMachine()
+        send = watchdog_send if watchdog_send is not None else self._send_heartbeat
+        self.heartbeat = HeartbeatClient(send, cfg.victron.watchdog.heartbeat_s)
+        self._inputs = InputCheck()
+        # Ergebnis des letzten Zyklus für health(); vor dem ersten Zyklus aus der geladenen Absicht
+        self._input_status = InputStatus(True)
+        self._watchdog = WatchdogStatus.unknown()
+        self._watchdog_required = watchdog_required(self.intents.current, self.limits)
+        self._modes = effective_modes(self.intents.current, self.limits, self._watchdog.armed)
+        self._active_locks: dict[str, LockInfo] = {}
         self._http: httpx.AsyncClient | None = None
         self._writer: InfluxWriter | None = None
         if sink is None:
@@ -191,16 +250,44 @@ class CoreRuntime:
             adapters.append(HaAdapter(cfg.homeassistant, secrets.ha_token, self.store))
         return adapters
 
+    def _send_heartbeat(self, value: int) -> bool:
+        """Schreibt den Heartbeat über den Victron-Adapter; ohne ihn ist das Ergebnis ``False``.
+
+        Der Zyklus läuft im Event-Loop, ``write`` darf deshalb direkt aufgerufen werden.
+        """
+        for adapter in self.adapters:
+            if isinstance(adapter, VictronMqttAdapter):
+                return adapter.write(HEARTBEAT_PATH, value)
+        return False
+
     # --- CoreView ------------------------------------------------------------------------
 
     def health(self) -> HealthReport:
+        """Gesundheit mit dem Stand des letzten Zyklus; ``intent`` ist die gültige Absicht.
+
+        Die API ruft das aus einem anderen Thread auf. Deshalb liest es nur, was der Zyklus
+        abgelegt hat, und ruft etwa ``locks.active`` nicht selbst auf.
+        """
+        intent, since = self.intents.current, self.operating.since
+        modes, locks = self._modes, self._active_locks
         return HealthReport(
-            mode="OBSERVE",
+            mode=self.operating.state.value,
             version=__version__,
             adapters=[asdict(adapter.health()) for adapter in self.adapters],
             selfcheck=[asdict(result) for result in self._selfcheck],
             alarms=[_alarm_json(alarm) for alarm in self._alarms],
             cycle_ms_p95=self._p95(),
+            mode_since=since.isoformat() if since is not None else None,
+            mode_reasons=list(self.operating.reasons),
+            intent=intent.model_dump(mode="json") if intent is not None else None,
+            actuators=[
+                _actuator_json(spec, modes[actuator], locks.get(actuator))
+                for actuator, spec in self.limits.actuators.items()
+            ],
+            watchdog=watchdog_to_json(
+                self._watchdog, self.heartbeat.status, required=self._watchdog_required
+            ),
+            inputs={"ok": self._input_status.ok, "problems": list(self._input_status.problems)},
         )
 
     def state(self) -> dict[str, Any]:
@@ -232,18 +319,110 @@ class CoreRuntime:
             self.broadcast.publish({"type": "slot_flows", "data": _slot_json(closed)})
             self._check_counters(closed, now)
         self._sampler.on_cycle(snap, derived)
-        if self._check_due(now):
+        checked = self._check_due(now)
+        if checked:
             self._competitor_alarms = detect_competitors(snap, self._cfg, now)
             self._selfcheck = run_selfcheck(snap, self._cfg, self.store.ok_since, now)
             self.selfcheck_runs += 1
+        self._update_operation(snap, plausibility, now, checked=checked)
         state = snapshot_to_json(snap, derived)
         self._last_state = state
         self.broadcast.publish({"type": "state", "data": state})
         self._record_cycle((self._timer() - started) * 1000.0, now)
         counter = [self._counter_alarm] if self._counter_alarm is not None else []
         self._update_alarms(
-            [*plausibility, *self._competitor_alarms, *counter, *self._overrun_alarm()]
+            [
+                *plausibility,
+                *self._competitor_alarms,
+                *counter,
+                *self._overrun_alarm(),
+                *watchdog_alarms(self._watchdog, self._watchdog_required, now),
+                *self._operation_alarms(now),
+            ]
         )
+        # als Letztes: Eine Ausnahme in einem früheren Schritt lässt den Heartbeat ausfallen
+        self.heartbeat.on_cycle(now, required=self._watchdog_required)
+
+    def _update_operation(
+        self, snap: Snapshot, plausibility: Sequence[Alarm], now: datetime, *, checked: bool
+    ) -> None:
+        """Eingangsprüfung, Sperren, Watchdog, wirksame Betriebsarten und Betriebszustand.
+
+        Die Eingangsprüfung läuft in jedem Zyklus mit den Plausibilitätsalarmen dieses Zyklus
+        (ohne den Abrechnungsalarm ``plaus.grid_counter``). Die Sperren bekommen ihre Ursachen nur
+        in Zyklen, in denen Selbstprüfung und Erkennung mitregelnder Systeme liefen.
+        """
+        self._input_status = self._inputs.evaluate(snap, plausibility, now)
+        if checked:
+            self.locks.update(
+                now, lock_causes(self._competitor_alarms, self._selfcheck, self.limits)
+            )
+        intent = self.intents.current
+        self._watchdog = read_watchdog(snap)
+        self._watchdog_required = watchdog_required(intent, self.limits)
+        self._modes = effective_modes(intent, self.limits, self._watchdog.armed)
+        self._active_locks = self.locks.active(now)
+        inputs = OperatingInputs(
+            control_requested=intent is not None and intent.control,
+            data_fresh=self._data_fresh(now),
+            phases_ok=number(snap, "vebus.phases") == self._cfg.grid.phases,
+            watchdog_required=self._watchdog_required,
+            watchdog_armed=self._watchdog.armed,
+            safe_reasons=_safe_reasons(snap),
+            degraded_reasons=self._degraded_reasons(self._active_locks),
+        )
+        transition = self.operating.step(now, inputs)
+        if transition is not None:
+            self._announce(transition)
+
+    def _data_fresh(self, now: datetime) -> bool:
+        """Alle ``CRITICAL_SIGNALS`` sind seit mindestens 30 s ununterbrochen ``OK``."""
+        return all(
+            (since := self.store.ok_since(signal)) is not None and since <= now - FRESH_FOR
+            for signal in CRITICAL_SIGNALS
+        )
+
+    def _degraded_reasons(self, locks: Mapping[str, LockInfo]) -> tuple[str, ...]:
+        """Gründe für den eingeschränkten Betrieb, in dieser Reihenfolge:
+
+        1. jede Wallbox, deren Quelle registriert, aber nicht verbunden ist
+        2. jedes Fahrzeug mit Tessie, dessen Tessie-Quelle registriert, aber nicht verbunden ist
+        3. jede aktive Sperre, in der Reihenfolge des Aktorkatalogs
+        """
+        reasons: list[str] = []
+        for key, wallbox in self._cfg.wallboxes.items():
+            if self.store.connected(key) is False:
+                if isinstance(wallbox, EvcsConfig):
+                    reasons.append(f"EVCS „{key}“ nicht erreichbar.")
+                else:
+                    reasons.append(f"Wall Connector „{key}“ nicht erreichbar.")
+        for key, vehicle in self._cfg.vehicles.items():
+            if vehicle.tessie is not None and self.store.connected(f"tessie:{key}") is False:
+                reasons.append(f"Tessie für „{vehicle.name}“ nicht erreichbar.")
+        for actuator, spec in self.limits.actuators.items():
+            lock = locks.get(actuator)
+            if lock is not None:
+                reasons.append(f"{spec.label} gesperrt: {'; '.join(lock.reasons)}")
+        return tuple(reasons)
+
+    def _announce(self, transition: Transition) -> None:
+        """Meldet einen Wechsel des Betriebszustands im Stream und im Log."""
+        mode, previous = transition.state.value, transition.previous.value
+        reasons, ts = list(transition.reasons), transition.ts.isoformat()
+        data = {"mode": mode, "previous": previous, "reasons": reasons, "ts": ts}
+        self.broadcast.publish({"type": "mode_change", "data": data})
+        log.info("Betriebszustand gewechselt", mode=mode, previous=previous, reasons=reasons)
+
+    def _operation_alarms(self, now: datetime) -> list[Alarm]:
+        """``core.safe``, solange SAFE gilt; ``intent.file``, solange die Absicht unlesbar war."""
+        alarms: list[Alarm] = []
+        if self.operating.state == OperatingState.SAFE:
+            message = f"Sicherer Zustand: {'; '.join(self.operating.reasons)}"
+            since = self.operating.since or now  # in SAFE immer gesetzt
+            alarms.append(Alarm("core.safe", Severity.ERROR, message, since))
+        if self.intents.load_problem is not None:
+            alarms.append(Alarm("intent.file", Severity.WARNING, INTENT_FILE_PROBLEM, now))
+        return alarms
 
     def _flows(self, derived: Derived) -> dict[str, float] | None:
         pv, grid = derived.pv_total_w, derived.grid_w
@@ -289,9 +468,16 @@ class CoreRuntime:
         return ordered[max(0, math.ceil(0.95 * len(ordered)) - 1)]
 
     def _update_alarms(self, alarms: list[Alarm]) -> None:
+        """Übernimmt die Alarme; eine ID, die schon in der vorigen Liste stand, behält ``since``."""
+
         def key(items: list[Alarm]) -> list[tuple[str, str, str]]:
             return [(a.id, a.severity.value, a.message) for a in items]
 
+        since = {alarm.id: alarm.since for alarm in self._alarms}
+        alarms = [
+            replace(alarm, since=since[alarm.id]) if alarm.id in since else alarm
+            for alarm in alarms
+        ]
         changed = key(alarms) != key(self._alarms)
         self._alarms = alarms
         if changed:

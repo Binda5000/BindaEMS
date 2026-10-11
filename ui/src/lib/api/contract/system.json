@@ -56,7 +56,55 @@
         }
       ],
       "alarms": [],
-      "cycle_ms_p95": 0.0
+      "cycle_ms_p95": 0.0,
+      "mode_since": "2026-10-09T07:59:00+00:00",
+      "mode_reasons": [
+        "Regelbetrieb ist aus."
+      ],
+      "intent": null,
+      "actuators": [
+        {
+          "id": "victron",
+          "label": "Victron (ESS)",
+          "requested": "dry_run",
+          "effective": "dry_run",
+          "live_allowed": false,
+          "reasons": [],
+          "locked": []
+        },
+        {
+          "id": "wallbox.evcs",
+          "label": "EVCS „evcs“",
+          "requested": "dry_run",
+          "effective": "dry_run",
+          "live_allowed": false,
+          "reasons": [],
+          "locked": []
+        },
+        {
+          "id": "vehicle.tesla",
+          "label": "Tesla Model 3",
+          "requested": "dry_run",
+          "effective": "dry_run",
+          "live_allowed": false,
+          "reasons": [],
+          "locked": []
+        }
+      ],
+      "watchdog": {
+        "state": "unknown",
+        "trip_count": null,
+        "last_trip": null,
+        "last_trip_failures": null,
+        "version": null,
+        "expected_version": "1.0.0",
+        "heartbeat": "off",
+        "required": false
+      },
+      "inputs": {
+        "ok": true,
+        "problems": []
+      }
     }
   },
   "components": [

@@ -92,6 +92,10 @@ class StateStore:
             self._session_start[source] = self._clock.now()
         self._connected[source] = connected
 
+    def connected(self, source: str) -> bool | None:
+        """Ist die Quelle verbunden? ``None`` für eine Quelle, die nie registriert wurde."""
+        return self._connected.get(source)
+
     def snapshot(self) -> Snapshot:
         now = self._clock.now()
         readings: dict[str, Reading] = {}

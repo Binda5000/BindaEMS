@@ -130,3 +130,12 @@ def test_polled_sources_keep_values_across_reconnect_by_default() -> None:
     store.set_connected("victron", False)
     store.set_connected("victron", True)
     assert store.snapshot().ok("grid.power_w") == 1.0
+
+
+def test_connected_reports_sources() -> None:
+    store = StateStore(ManualClock(T0))
+    assert store.connected("evcs") is None
+    store.register_source("evcs", 5.0)
+    assert store.connected("evcs") is False
+    store.set_connected("evcs", True)
+    assert store.connected("evcs") is True

@@ -9,10 +9,12 @@ from dataclasses import fields
 from typing import Annotated, Any, Literal, Protocol
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Response, WebSocket, status
-from pydantic import BaseModel, SecretStr
+from pydantic import BaseModel, Field, SecretStr
 
 from bindaems.core.control.intent import IntentReply
 from bindaems.core.state.derived import Derived
+from bindaems.core.watchdog_client.heartbeat import HeartbeatPhase
+from bindaems.core.watchdog_client.status import WATCHDOG_VERSION, WatchdogStatus
 from bindaems.shared.control import Intent
 from bindaems.shared.domain import Snapshot
 
@@ -23,12 +25,31 @@ HTTP_UNPROCESSABLE = 422
 
 
 class HealthReport(BaseModel):
-    mode: Literal["OBSERVE"]
+    """Gesundheit des core; die Felder aus Plan 2a haben Defaults, ältere Aufrufer bleiben gültig.
+
+    - ``mode``, ``mode_since``, ``mode_reasons``: Betriebszustand, ISO-Zeit des letzten Wechsels
+      und die Gründe des Zustands
+    - ``intent``: die gültige Absicht als JSON
+    - ``actuators``: je Aktor in Katalogreihenfolge angeforderte und wirksame Betriebsart, Freigabe,
+      Gründe und Sperrgründe (``locked``)
+    - ``watchdog``: Watchdog am Cerbo und Heartbeat (``watchdog_to_json``)
+    - ``inputs``: Ergebnis der Eingangsprüfung (Regel 7)
+    """
+
+    mode: Literal["START", "OBSERVE", "CONTROL", "DEGRADED", "SAFE"]
     version: str
     adapters: list[dict[str, Any]]
     selfcheck: list[dict[str, str]]
     alarms: list[dict[str, str]]
     cycle_ms_p95: float | None
+    mode_since: str | None = None
+    mode_reasons: list[str] = Field(default_factory=list)
+    intent: dict[str, Any] | None = None
+    actuators: list[dict[str, Any]] = Field(default_factory=list)
+    watchdog: dict[str, Any] = Field(
+        default_factory=lambda: watchdog_to_json(WatchdogStatus.unknown(), "off", required=False)
+    )
+    inputs: dict[str, Any] = Field(default_factory=lambda: {"ok": True, "problems": []})
 
 
 class CurrentIntent(BaseModel):
@@ -67,6 +88,27 @@ def snapshot_to_json(snap: Snapshot, derived: Derived) -> dict[str, Any]:
             for signal, reading in snap.readings.items()
         },
         "derived": {field.name: _plain(getattr(derived, field.name)) for field in fields(derived)},
+    }
+
+
+def watchdog_to_json(
+    watchdog: WatchdogStatus, heartbeat: HeartbeatPhase, *, required: bool
+) -> dict[str, Any]:
+    """Status des Watchdogs mit der erwarteten Version, dazu Heartbeat und ``required``.
+
+    ``required`` heißt: Der Betrieb braucht den Watchdog (ein Victron- oder EVCS-Aktor ist live
+    angefordert und freigegeben).
+    """
+    last_trip = watchdog.last_trip
+    return {
+        "state": watchdog.state.value,
+        "trip_count": watchdog.trip_count,
+        "last_trip": last_trip.isoformat() if last_trip is not None else None,
+        "last_trip_failures": watchdog.last_trip_failures,
+        "version": watchdog.version,
+        "expected_version": WATCHDOG_VERSION,
+        "heartbeat": heartbeat,
+        "required": required,
     }
 
 

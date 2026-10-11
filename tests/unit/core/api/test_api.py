@@ -6,12 +6,13 @@ from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
-from pydantic import SecretStr
+from pydantic import SecretStr, ValidationError
 from starlette.websockets import WebSocketDisconnect
 from tests.helpers import EMPTY_DERIVED, snap
 
 from bindaems.core.api.app import HealthReport, create_api, snapshot_to_json
 from bindaems.core.control.intent import IntentReply
+from bindaems.core.watchdog_client.status import WATCHDOG_VERSION
 from bindaems.shared.control import Intent
 
 TOKEN = "x" * 32
@@ -77,6 +78,39 @@ def test_wrong_credentials_rejected(client, header: str) -> None:
 def test_health_ok(client) -> None:
     body = client.get("/v1/health", headers=H).json()
     assert body["mode"] == "OBSERVE" and body["adapters"][0]["name"] == "victron"
+
+
+def test_health_report_defaults_keep_existing_calls_valid() -> None:
+    report = FakeView().health()  # ohne die Felder aus Plan 2a
+    assert report.model_dump(exclude={"mode", "version", "adapters", "selfcheck", "alarms"}) == {
+        "cycle_ms_p95": None,
+        "mode_since": None,
+        "mode_reasons": [],
+        "intent": None,
+        "actuators": [],
+        "watchdog": {
+            "state": "unknown",
+            "trip_count": None,
+            "last_trip": None,
+            "last_trip_failures": None,
+            "version": None,
+            "expected_version": WATCHDOG_VERSION,
+            "heartbeat": "off",
+            "required": False,
+        },
+        "inputs": {"ok": True, "problems": []},
+    }
+
+
+@pytest.mark.parametrize("mode", ["START", "OBSERVE", "CONTROL", "DEGRADED", "SAFE"])
+def test_health_report_accepts_the_operating_states(mode: str) -> None:
+    report = FakeView().health().model_dump() | {"mode": mode}
+    assert HealthReport.model_validate(report).mode == mode
+
+
+def test_health_report_rejects_other_modes() -> None:
+    with pytest.raises(ValidationError):
+        HealthReport.model_validate(FakeView().health().model_dump() | {"mode": "observe"})
 
 
 def test_state_shape(client) -> None:
