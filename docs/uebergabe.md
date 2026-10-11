@@ -265,10 +265,14 @@ Demo-Zugänge: `admin`, `gast` (Lesen) und `sicher` (Admin mit TOTP, Geheimnis
      Ziele, Boost, Zuordnung), Entscheidungslog in SQLite, UI-Seiten „Laden“ und „Entscheidungen“,
      HA-Bedienelemente und Benachrichtigungen. Mit 2d beginnt der Dry-Run.
 
-   Als Nächstes folgt der Plan 2b. Er wird mit `superpowers:writing-plans` geschrieben und dem
-   Betreiber zur Freigabe vorgelegt (Spec 18); umgesetzt wird erst danach. Danach kommt die
-   Abnahme der Phase 2: 2 Wochen Dry-Run, dann die Live-Schaltung je Aktor in der Reihenfolge EVCS,
-   Victron, Tesla.
+   **Plan 2b liegt zur Freigabe vor:** `docs/superpowers/plans/2026-10-11-phase-2b-aktoren.md`
+   (18 Tasks). Er setzt die Entscheidungen des Betreibers vom 11.10.2026 um:
+   - Heartbeat nur, solange der core regelt
+   - bei Live → Dry-Run oder „Regelbetrieb aus“ erst die Sicherwerte, dann die Freigabe
+   - die EVCS über den GX-Dienst `evcharger`
+
+   Umgesetzt wird erst nach der Freigabe (Spec 18). Nach 2c und 2d kommt die Abnahme der Phase 2:
+   2 Wochen Dry-Run, dann die Live-Schaltung je Aktor in der Reihenfolge EVCS, Victron, Tesla.
 
    **EVCS in 2b:** Seit der korrigierten IP-Whitelist antwortet die EVCS BindaEMS direkt per Modbus
    (Prüfprotokoll Teil 1 vom 11.10.2026). Ob 2b direkt per Modbus oder über den GX-Dienst
@@ -280,7 +284,8 @@ Demo-Zugänge: `admin`, `gast` (Lesen) und `sicher` (Admin mit TOTP, Geheimnis
 ## Vor einer Live-Schaltung in 2b zu klären
 
 Aus dem Gesamtreview von Plan 2a. Kein Victron- oder EVCS-Aktor geht live, bevor diese Punkte
-entschieden und umgesetzt sind:
+entschieden und umgesetzt sind. Plan 2b greift alle auf (Präzisierungen 2, 3, 9 und 13 sowie
+Task 14):
 
 - **core hängt in OBSERVE (Blocker):** Startet der core mit einer gespeicherten Live-Absicht und
   erreicht CONTROL nicht, sendet er trotzdem Heartbeats. Der Watchdog bleibt ruhig, aber niemand
