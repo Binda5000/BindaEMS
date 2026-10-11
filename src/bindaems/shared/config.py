@@ -336,6 +336,23 @@ class Config(_Model):
             raise ValueError("wallbox_priority muss jede Wallbox genau einmal enthalten")
         return self
 
+    @model_validator(mode="after")
+    def _live_evcs_needs_gx_instance(self) -> Self:
+        """Eine live erlaubte EVCS braucht ihre evcharger-Instanz (Spec 8.6).
+
+        Der Watchdog am Cerbo findet die EVCS nur über diese Instanz; ohne sie erzeugt
+        ``watchdog_config`` keine Aktion für den sicheren Strom.
+        """
+        mapped = set(self.victron.instances.evcharger.values())
+        for key, wallbox in self.wallboxes.items():
+            if isinstance(wallbox, EvcsConfig) and wallbox.live_allowed and key not in mapped:
+                raise ValueError(
+                    f"wallboxes.{key}.live_allowed verlangt einen Eintrag „<Instanz>: {key}“ in "
+                    "victron.instances.evcharger; ohne ihn setzt der Watchdog am Cerbo für diese "
+                    "EVCS keinen sicheren Strom"
+                )
+        return self
+
     @property
     def wallbox_order(self) -> list[str]:
         """Wallbox-Reihenfolge für die PV-Zuordnung (Priorität oder Konfigurationsreihenfolge)."""

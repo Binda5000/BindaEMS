@@ -641,7 +641,9 @@ Ein Aktor läuft nur live, wenn alle vier Bedingungen gelten (Spec 8.7):
 
 1. `live_allowed: true` für den Aktor in `config.yaml`. Der Standard ist `false`. Es steht unter
    `victron`, bei jeder EVCS unter `wallboxes.<name>` und bei jedem Fahrzeug unter
-   `vehicles.<name>`; bei einem Fahrzeug verlangt es den Abschnitt `tessie`.
+   `vehicles.<name>`; bei einem Fahrzeug verlangt es den Abschnitt `tessie`, bei einer EVCS ihren
+   Eintrag unter `victron.instances.evcharger` (sonst setzt der Watchdog für sie keinen sicheren
+   Strom). Fehlt das, lehnen core und app die `config.yaml` beim Start mit diesem Grund ab.
 2. Das Prüfprotokoll Teil 2 ist für diesen Aktor bestanden.
 3. Ein Admin schaltet ihn im UI live, mit Bestätigung (ab Plan 2d).
 4. Bei Victron und EVCS ist der Watchdog scharf.
@@ -717,7 +719,9 @@ Zustände, Zeiten und D-Bus-Pfade stehen in `cerbo-watchdog/README.md`. Wichtig 
   `/opt/bindaems` liegen nur die Dateien aus `deploy/`; den Ordner `cerbo-watchdog/` brauchst
   du zusätzlich.
 - In `config.yaml` steht unter `victron.instances.evcharger` die Instanz der EVCS (laut
-  Prüfprotokoll Teil 1). Sonst setzt der Watchdog für sie keinen sicheren Strom.
+  Prüfprotokoll Teil 1). Sonst setzt der Watchdog für sie keinen sicheren Strom. Mit
+  `live_allowed: true` für die EVCS ist der Eintrag Pflicht; ohne ihn lehnen core und app die
+  `config.yaml` ab.
 
 ### config.ini erzeugen
 

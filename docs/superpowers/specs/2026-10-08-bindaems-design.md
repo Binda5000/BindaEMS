@@ -776,7 +776,7 @@ Kurzfristig puffern das ESS und das Victron-Importlimit (Ebene 0).
 
 UI, HA, Planer und Lernmodelle können diese Werte nur lesen.
 
-**Aktoren** (Plan 2a, `docs/superpowers/plans/2026-10-10-phase-2a-sicherheitsbasis.md`, Präzisierung 9): Sie heißen `victron`, `wallbox.<name>` für jede EVCS und `vehicle.<name>` für jedes Fahrzeug mit Tessie. Der Wall Connector und Fahrzeuge ohne Tessie, etwa der e-Golf, sind keine Aktoren. Victron bekommt `live_allowed`, denn 8.7 verlangt die Freigabe für jeden Aktor. `live_allowed` bei einem Fahrzeug verlangt `tessie`.
+**Aktoren** (Plan 2a, `docs/superpowers/plans/2026-10-10-phase-2a-sicherheitsbasis.md`, Präzisierung 9): Sie heißen `victron`, `wallbox.<name>` für jede EVCS und `vehicle.<name>` für jedes Fahrzeug mit Tessie. Der Wall Connector und Fahrzeuge ohne Tessie, etwa der e-Golf, sind keine Aktoren. Victron bekommt `live_allowed`, denn 8.7 verlangt die Freigabe für jeden Aktor. `live_allowed` bei einem Fahrzeug verlangt `tessie`, bei einer EVCS ihren Eintrag in `victron.instances.evcharger`: Nur über diese Instanz findet der Watchdog sie für den sicheren Strom (8.6).
 
 ### 8.3 Regeln der Safety-Schicht
 

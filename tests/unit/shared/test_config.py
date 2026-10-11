@@ -154,6 +154,35 @@ def test_vehicle_live_needs_tessie(tmp_path: Path) -> None:
         load_config(p)
 
 
+@pytest.mark.parametrize(
+    "evcharger", [{}, {41: "evcs2"}], ids=["ohne Instanz", "Instanz für eine andere Wallbox"]
+)
+def test_live_evcs_needs_its_gx_instance(tmp_path: Path, evcharger: dict[int, str]) -> None:
+    # Ohne die Zuordnung setzt der Watchdog am Cerbo für diese EVCS keinen sicheren Strom.
+    def live_without_instance(d: dict[str, Any]) -> None:
+        d["wallboxes"]["evcs"]["live_allowed"] = True
+        d["victron"]["instances"]["evcharger"] = evcharger
+
+    p = write_cfg(tmp_path, live_without_instance)
+    with pytest.raises(ConfigError) as caught:
+        load_config(p)
+    assert (
+        "wallboxes.evcs.live_allowed verlangt einen Eintrag „<Instanz>: evcs“ in "
+        "victron.instances.evcharger; ohne ihn setzt der Watchdog am Cerbo für diese EVCS keinen "
+        "sicheren Strom"
+    ) in str(caught.value)
+
+
+def test_live_evcs_with_its_gx_instance_is_valid(tmp_path: Path) -> None:
+    p = write_cfg(tmp_path, lambda d: d["wallboxes"]["evcs"].update(live_allowed=True))
+    assert load_config(p).wallboxes["evcs"].live_allowed is True  # {40: evcs} aus dem Beispiel
+
+
+def test_evcs_without_gx_instance_is_fine_while_not_live(tmp_path: Path) -> None:
+    p = write_cfg(tmp_path, lambda d: d["victron"]["instances"].update(evcharger={}))
+    assert load_config(p).victron.instances.evcharger == {}
+
+
 def test_start_stop_limit_within_hourly_limit(tmp_path: Path) -> None:
     limits = {"per_hour": 5, "start_stop_per_hour": 6}
     p = write_cfg(tmp_path, lambda d: d["vehicles"]["tesla"].update(commands=limits))
