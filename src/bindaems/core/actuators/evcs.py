@@ -19,6 +19,7 @@ from collections.abc import Callable
 from datetime import datetime
 from typing import Final
 
+from bindaems.core.actuators import REASON_NOT_ACCEPTED, REASON_NOT_CONNECTED
 from bindaems.core.adapters.victron_mqtt import evcharger_path
 from bindaems.core.checks.values import evcs_mode
 from bindaems.core.control.actuator import Capabilities, Confirmation, matches
@@ -27,11 +28,10 @@ from bindaems.shared.control import CommandKind, CommandValue, wallbox_actuator
 from bindaems.shared.domain import Alarm, Snapshot
 from bindaems.shared.numbers import finite_number
 
-# Gründe, warum die EVCS nicht steuerbar ist oder ein Auftrag nicht gesendet wurde (Plan „Texte“)
+# Gründe, warum die EVCS nicht steuerbar ist (Plan „Texte“); die Gründe zum Cerbo (nicht verbunden,
+# Auftrag nicht angenommen) teilt sie mit Victron und stehen in ``core.actuators``
 REASON_NO_INSTANCE: Final = "Keine evcharger-Instanz in victron.instances.evcharger."
-REASON_NOT_CONNECTED: Final = "Cerbo nicht verbunden."
 REASON_NOT_MANUAL: Final = "EVCS nicht im manuellen Modus."
-REASON_NOT_ACCEPTED: Final = "Cerbo-Verbindung: Auftrag nicht angenommen."
 
 # Signale zum Rücklesen, in der Reihenfolge der Quellen: erst das Modbus-Abbild, dann der Cerbo
 _CURRENT_SIGNALS: Final = ("set_current_a", "gx_set_current_a")
