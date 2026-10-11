@@ -1,0 +1,285 @@
+"""Der Ausführer: bringt jeden Befehl durch Safety-Schicht, Aktor und Rücklesen (Spec 6.1, 7.10).
+
+``CommandExecutor.execute`` holt für einen Befehl genau ein Urteil der Safety-Schicht, denn
+``authorize`` verändert Rate-Limiter und Schreibbudget. Ist für Aktor und Art noch ein
+Schreibvorgang offen, wird der Befehl gar nicht betrachtet. Das Urteil entscheidet dann:
+
+- Soll gesendet werden, prüft der Ausführer die Fähigkeiten des Aktors und sendet. Der
+  Schreibvorgang bleibt offen, bis ``poll`` ihn zurückgelesen hat, gescheitert meldet oder die
+  Frist verstreicht.
+- Im Dry-Run ergibt ein Urteil mit Wert die Entscheidung ``DRY_RUN``, ein abgelehnter Befehl
+  ``REJECTED``; dieselbe Ablehnung (Aktor, Art, Befund-Codes) wird höchstens alle 60 s
+  protokolliert.
+- ``UNCHANGED`` und ``DEFERRED`` ergeben keine Entscheidung.
+
+Jeder gesendete Befehl endet in genau einer Entscheidung: bestätigt (``OK``), gescheitert
+(``ERROR``), unbestätigt (``TIMEOUT``) oder nicht gesendet (``NOT_SENT``). Die letzten drei
+Ergebnisse sammelt ``take_failures`` für den fehlerfreien Zyklus (Präzisierung 5 des Plans 2b).
+
+Zwei Uhren: ``ctx.now`` und ``now`` sind die Zeit der Safety-Schicht (``AnchoredClock``); mit ihr
+laufen die Fristen und die 60 s der Ablehnungen. ``wall_now`` ist die Wanduhr und nur der Zeitpunkt
+der Entscheidung.
+
+Die Schicht ist rein: Die Zeit kommt als Argument, Aktoren und Entscheidungslog erreicht sie nur
+über die Protokolle ``Actuator`` und ``DecisionSink``.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass
+from datetime import datetime, timedelta
+from typing import Final, Protocol
+from uuid import uuid4
+
+from bindaems.core.control.actuator import Actuator, Confirmation
+from bindaems.core.safety.layer import SafetyLayer
+from bindaems.core.safety.types import Outcome, SafetyContext, Verdict
+from bindaems.shared.control import Command, CommandKind, CommandValue
+from bindaems.shared.decisions import Decision, DecisionResult, decision_text
+from bindaems.shared.domain import Snapshot
+
+_REJECTION_INTERVAL: Final = timedelta(seconds=60)  # dieselbe Ablehnung höchstens so oft
+
+_Key = tuple[str, CommandKind]  # Aktor und Art: ein Schreibvorgang je Schlüssel
+_RejectionKey = tuple[str, CommandKind, tuple[str, ...]]  # dazu die Codes der Befunde
+
+
+class DecisionSink(Protocol):
+    """Nimmt die Entscheidungen entgegen (Spool und Stream); sie wirft nicht."""
+
+    def __call__(self, decision: Decision) -> None: ...
+
+
+@dataclass(frozen=True)
+class WriteResult:
+    """Ausgang eines gesendeten Befehls.
+
+    ``value`` ist der gesendete Wert (nach der Safety-Schicht), ``result`` eins von ``OK``,
+    ``ERROR``, ``TIMEOUT`` und ``NOT_SENT``. ``detail`` nennt den Grund oder den letzten Text des
+    Aktors beim Rücklesen.
+    """
+
+    actuator: str
+    kind: CommandKind
+    value: CommandValue
+    result: DecisionResult
+    detail: str
+
+
+@dataclass(frozen=True)
+class _Open:
+    """Ein gesendeter Wert, der noch nicht zurückgelesen ist, samt dem Rest für die Entscheidung."""
+
+    verdict: Verdict
+    actuator: Actuator
+    deadline: datetime
+    inputs: Mapping[str, float | None]
+
+
+class CommandExecutor:
+    """Führt Befehle aus und wartet auf das Rücklesen (Plan 2b, Präzisierung 6 und 7).
+
+    ``actuators`` und ``labels`` sind je Aktor-ID gegeben; ohne Eintrag in ``labels`` steht die ID
+    im Text. ``sink`` bekommt jede Entscheidung, ``new_id`` liefert ihre Kennung.
+
+    Der Ausführer gehört in den Zyklus der Laufzeit und ist nicht für mehrere Threads gedacht. Die
+    Methoden der Aktoren dürfen nicht blockieren und werfen nicht (``Actuator``).
+    """
+
+    def __init__(
+        self,
+        layer: SafetyLayer,
+        actuators: Mapping[str, Actuator],
+        sink: DecisionSink,
+        labels: Mapping[str, str],
+        *,
+        new_id: Callable[[], str] = lambda: uuid4().hex,
+    ) -> None:
+        self._layer = layer
+        self._actuators = actuators
+        self._sink = sink
+        self._labels = labels
+        self._new_id = new_id
+        self._open: dict[_Key, _Open] = {}
+        self._failures: list[WriteResult] = []
+        self._rejected: dict[_RejectionKey, datetime] = {}  # wann zuletzt protokolliert
+
+    def execute(
+        self,
+        command: Command,
+        ctx: SafetyContext,
+        snap: Snapshot,
+        wall_now: datetime,
+        inputs: Mapping[str, float | None],
+    ) -> Verdict | None:
+        """Prüft den Befehl und führt das Urteil aus; ``inputs`` kommen in die Entscheidung.
+
+        ``None``, wenn für Aktor und Art ein Schreibvorgang offen ist: Dann wird der Befehl nicht
+        betrachtet, und die Safety-Schicht läuft nicht. Sonst das Urteil der Safety-Schicht, auch
+        wenn der Befehl danach nicht gesendet werden konnte (``NOT_SENT``). Wurde gesendet, ist der
+        Schreibvorgang offen (``pending``) mit der Frist ``ctx.now + confirm_timeout_s``.
+        """
+        if (command.actuator, command.kind) in self._open:
+            return None
+        verdict = self._layer.authorize(command, ctx)
+        if verdict.send:
+            self._send(verdict, ctx.now, snap, wall_now, inputs)
+        elif verdict.sendable:  # ein Wert steht fest, aber der Aktor ist im Dry-Run
+            self._decide(verdict, DecisionResult.DRY_RUN, wall_now, inputs)
+        elif verdict.outcome == Outcome.REJECTED and self._rejection_due(verdict, ctx.now):
+            self._decide(verdict, DecisionResult.REJECTED, wall_now, inputs)
+        return verdict
+
+    def poll(self, snap: Snapshot, now: datetime, wall_now: datetime) -> list[WriteResult]:
+        """Fragt die offenen Schreibvorgänge ab und schließt die fertigen ab.
+
+        Jeder abgeschlossene Schreibvorgang ergibt genau eine Entscheidung. Zuerst fragt der
+        Ausführer den Aktor (``confirm``): bestätigt ergibt ``OK``, gescheitert ``ERROR`` mit dem
+        Text des Aktors. Ist der Wert noch offen und die Frist erreicht (``now >= deadline``), ist
+        es ``TIMEOUT``; ein Wert, der genau zur Frist ankommt, gilt also als bestätigt. Sonst bleibt
+        der Schreibvorgang offen. Zurück kommen die abgeschlossenen in der Reihenfolge, in der sie
+        gesendet wurden.
+        """
+        finished: list[WriteResult] = []
+        for key, write in list(self._open.items()):
+            status, detail = write.actuator.confirm(key[1], write.verdict.value, snap)
+            if status == Confirmation.CONFIRMED:
+                result = DecisionResult.OK
+            elif status == Confirmation.FAILED:
+                result = DecisionResult.ERROR
+            elif now >= write.deadline:
+                result = DecisionResult.TIMEOUT
+            else:
+                continue
+            del self._open[key]
+            finished.append(self._finish(write.verdict, result, detail, wall_now, write.inputs))
+        return finished
+
+    def pending(self) -> frozenset[tuple[str, CommandKind]]:
+        """Aktor und Art aller Schreibvorgänge, die noch auf das Rücklesen warten."""
+        return frozenset(self._open)
+
+    def take_failures(self) -> list[WriteResult]:
+        """Alle ``ERROR``, ``TIMEOUT`` und ``NOT_SENT`` seit dem letzten Aufruf, in der Reihenfolge.
+
+        Der Aufruf leert die Liste. Eine Ablehnung der Safety-Schicht ist kein Fehler beim
+        Schreiben und kommt nicht vor.
+        """
+        failures, self._failures = self._failures, []
+        return failures
+
+    def _send(
+        self,
+        verdict: Verdict,
+        now: datetime,
+        snap: Snapshot,
+        wall_now: datetime,
+        inputs: Mapping[str, float | None],
+    ) -> None:
+        """Sendet den Wert; wurde nicht gesendet, endet der Befehl mit ``NOT_SENT``."""
+        reason = self._hand_over(verdict, now, snap, inputs)
+        if reason is not None:
+            self._finish(verdict, DecisionResult.NOT_SENT, reason, wall_now, inputs)
+
+    def _hand_over(
+        self, verdict: Verdict, now: datetime, snap: Snapshot, inputs: Mapping[str, float | None]
+    ) -> str | None:
+        """Prüft die Fähigkeiten, übergibt den Wert dem Aktor und öffnet den Schreibvorgang.
+
+        Der Grund, wenn nicht gesendet wurde: Der Aktor ist nicht steuerbar oder lehnt den
+        Auftrag ab. Sonst ``None``.
+        """
+        command = verdict.command
+        actuator = self._actuators.get(command.actuator)
+        if actuator is None:  # der Katalog kennt ihn, der Ausführer hat keinen Treiber dafür
+            return _not_controllable(("Aktor nicht eingerichtet.",))
+        capabilities = actuator.capabilities(snap, now)
+        if not capabilities.controllable:
+            return _not_controllable(capabilities.reasons)
+        refusal = actuator.send(command.kind, verdict.value)
+        if refusal is not None:
+            return refusal
+        deadline = now + timedelta(seconds=actuator.confirm_timeout_s)
+        self._open[(command.actuator, command.kind)] = _Open(
+            verdict, actuator, deadline, dict(inputs)
+        )
+        return None
+
+    def _finish(
+        self,
+        verdict: Verdict,
+        result: DecisionResult,
+        detail: str,
+        wall_now: datetime,
+        inputs: Mapping[str, float | None],
+    ) -> WriteResult:
+        """Schließt einen gesendeten Befehl ab: merkt einen Fehler und schreibt die Entscheidung."""
+        command = verdict.command
+        write = WriteResult(command.actuator, command.kind, verdict.value, result, detail)
+        if result != DecisionResult.OK:
+            self._failures.append(write)
+        self._decide(verdict, result, wall_now, inputs, detail=detail)
+        return write
+
+    def _decide(
+        self,
+        verdict: Verdict,
+        result: DecisionResult,
+        wall_now: datetime,
+        inputs: Mapping[str, float | None],
+        *,
+        detail: str = "",
+    ) -> None:
+        """Gibt die Entscheidung zu ``verdict`` an die Senke."""
+        command = verdict.command
+        label = self._labels.get(command.actuator, command.actuator)
+        # Der Text nennt den Wert nach der Safety-Schicht; ohne einen (Ablehnung) den angeforderten.
+        shown = verdict.value if verdict.sendable else command.value
+        findings = verdict.findings
+        decision = Decision(
+            id=self._new_id(),
+            ts=wall_now,
+            actuator=command.actuator,
+            kind=command.kind,
+            requested=command.value,
+            applied=verdict.value,
+            dry_run=verdict.dry_run,
+            outcome=str(verdict.outcome),
+            result=result,
+            codes=(*command.reasons, *(finding.code for finding in findings)),
+            text=decision_text(
+                label,
+                command.kind,
+                shown,
+                result,
+                detail=detail,
+                reasons=command.reasons,
+                findings=[finding.text for finding in findings],
+            ),
+            inputs=dict(inputs),
+        )
+        self._sink(decision)
+
+    def _rejection_due(self, verdict: Verdict, now: datetime) -> bool:
+        """Soll diese Ablehnung protokolliert werden? Dieselbe höchstens alle 60 s.
+
+        „Dieselbe“ heißt gleicher Aktor, gleiche Art und gleiche Befund-Codes. Die 60 s laufen auf
+        der Zeit der Safety-Schicht, ab der letzten protokollierten Ablehnung.
+        """
+        command = verdict.command
+        key = (command.actuator, command.kind, tuple(finding.code for finding in verdict.findings))
+        last = self._rejected.get(key)
+        if last is not None and now - last < _REJECTION_INTERVAL:
+            return False
+        # Was länger als 60 s zurückliegt, zählt nicht mehr und kann gehen.
+        self._rejected = {
+            old: when for old, when in self._rejected.items() if now - when < _REJECTION_INTERVAL
+        }
+        self._rejected[key] = now
+        return True
+
+
+def _not_controllable(reasons: tuple[str, ...]) -> str:
+    """Der Grund „nicht steuerbar“ mit den Gründen des Aktors, durch Leerzeichen verbunden."""
+    return f"nicht steuerbar: {' '.join(reasons)}" if reasons else "nicht steuerbar"
