@@ -2725,7 +2725,7 @@ git commit -m "feat(watchdog): Zustandsautomat, config.ini und Zustandsdatei des
     - `find_service` sucht in `bus.list_names()` nach Namen, die mit `service + "."` beginnen und deren `/DeviceInstance` der Instanz entspricht.
     - `get_value` und `set_value` nutzen `GetValue` bzw. `SetValue` an `com.victronenergy.BusItem`; `None` wird zu `dbus.Array([], signature="i")`. Ein `SetValue` mit Ergebnis 0 gilt als Erfolg.
   - `main(argv: Optional[List[str]] = None) -> int`:
-    1. `argv[0]` ist der Pfad zu `config.ini`. Ein `ConfigError` beendet mit Code 2.
+    1. `argv[0]` ist der Pfad zu `config.ini`. Ein `ConfigError` wird geloggt; nach 60 s Wartezeit (`CONFIG_ERROR_DELAY_S`) endet der Dienst mit Code 2, damit daemontools ihn nicht jede Sekunde neu startet.
     2. `read_state(settings.state_file)` lesen; ein Problem wird geloggt.
     3. `VELIB_PATH` in `sys.path` aufnehmen, dann `dbus`, `dbus.mainloop.glib`, `gi.repository.GLib` und `vedbus` importieren, erst hier (mit `# type: ignore[import-not-found]`).
     4. `VeDbusService(SERVICE_NAME, bus, register=False)`; ältere velib-Versionen ohne `register` fängt `except TypeError` ab.
@@ -2748,7 +2748,7 @@ git commit -m "feat(watchdog): Zustandsautomat, config.ini und Zustandsdatei des
     - Ohne gültige Argumente: Nutzung auf stderr, beginnend mit `Aufruf:`, Exitcode 2, kein ssh.
   - **Installation:**
     1. Per ssh prüfen, dass `python3` ≥ 3.8 und `/opt/victronenergy` vorhanden sind; sonst Abbruch mit Meldung.
-    2. `bindaems-watchdog.py`, `bindaems_watchdog/` und `service/` per `scp -r` nach `/data/bindaems-watchdog/` kopieren, ebenso `config.ini` (Rechte 0644).
+    2. `bindaems-watchdog.py`, `bindaems_watchdog/` und `service/` per `tar` über `ssh` nach `/data/bindaems-watchdog/` übertragen, ebenso `config.ini` (Rechte 0644). Nicht `scp`: Moderne Clients nutzen dafür SFTP, das der Dropbear-Server von Venus OS nicht sicher anbietet.
     3. In `/data/rc.local` einen Block zwischen `# bindaems-watchdog begin` und `# bindaems-watchdog end` mit `ln -sfn /data/bindaems-watchdog/service /service/bindaems-watchdog` setzen. Ein vorhandener Block wird ersetzt; `rc.local` wird bei Bedarf angelegt und ausführbar gemacht.
     4. Den Link sofort setzen. War der Dienst schon da, folgt `svc -t /service/bindaems-watchdog`.
     5. Nach 5 s Version und Zustand zeigen: `dbus -y com.victronenergy.bindaems /Version GetValue` und `/State GetValue`.
