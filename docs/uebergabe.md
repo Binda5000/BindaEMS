@@ -32,7 +32,6 @@ Stand: 11.10.2026. Neue Arbeit liegt zuerst auf dem Arbeitsbranch
   - UI: Vitest 232 (svelte-check, Prettier, ESLint)
   - E2E: Playwright 11
 - **Offen:**
-  - der Gesamtreview des Branches gegen Spec und Plan 2a
   - an der Anlage: Watchdog installieren und die Probe laufen lassen (siehe unten)
   - die Installation beim Betreiber fertigstellen (HTTPS-Proxy)
   - die Abnahme der Phase 1 an der Anlage
@@ -261,8 +260,8 @@ Demo-Zugänge: `admin`, `gast` (Lesen) und `sicher` (Admin mit TOTP, Geheimnis
    - nachweislich keine Schreibpfade zu Geräten
 2. **Phase 2**, Wallbox-Lastmanagement und PV-Überschussladen (Spec 18), in vier Plänen
    (Zuschnitt in `docs/superpowers/plans/2026-10-10-phase-2a-sicherheitsbasis.md`):
-   - **2a Sicherheitsbasis:** umgesetzt. Offen sind der Gesamtreview des Branches und die Arbeiten
-     an der Anlage (siehe oben).
+   - **2a Sicherheitsbasis:** umgesetzt und im Gesamtreview geprüft (11.10.2026); dessen Befunde
+     sind behoben. Offen sind die Arbeiten an der Anlage (siehe oben).
    - **2b Aktoren:**
      - Gerüst mit `capabilities()` und `apply()`, Dry-Run und Rücklese-Prüfung für EVCS, Victron
        und Tesla
