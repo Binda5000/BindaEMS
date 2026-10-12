@@ -402,14 +402,51 @@ def test_handback_goes_safe_on_safe_reasons(
     assert t == Transition(previous, O.SAFE, (*reasons, REASON_HANDBACK), S(3))
 
 
-def test_safe_keeps_waiting_for_the_handback() -> None:
+def test_safe_during_handback_keeps_the_hazard_visible() -> None:
+    # Inselbetrieb beim Ende des Regelbetriebs: SAFE nennt die Gefahr, solange sie besteht.
+    machine = in_control()
+    island = {**OFF, "safe_reasons": ("Netzausfall (Inselbetrieb).",)}
+    reasons = ("Netzausfall (Inselbetrieb).", REASON_HANDBACK)
+    assert machine.step(S(2), inputs(**island)) == Transition(O.CONTROL, O.SAFE, reasons, S(2))
+    assert machine.step(S(3), inputs(**island)) is None
+    assert (machine.state, machine.reasons) == (O.SAFE, reasons)
+
+
+@pytest.mark.parametrize(
+    "change", [{}, {"data_fresh": False, "degraded_reasons": ("x",), "watchdog_required": True}]
+)
+def test_safe_during_handback_without_safe_reasons(change: dict[str, Any]) -> None:
+    # Frische, Gründe für DEGRADED und der Watchdog sind keine Gründe für SAFE.
+    machine = in_control()
+    machine.step(S(2), inputs(safe_reasons=("S",)))
+    assert machine.step(S(3), inputs(**OFF, **change)) is None
+    assert (machine.state, machine.reasons) == (O.SAFE, (REASON_HANDBACK,))
+
+
+@pytest.mark.parametrize(
+    ("change", "reasons"),
+    [
+        ({"phases_ok": False}, (REASON_PHASES, REASON_HANDBACK)),
+        ({"phases_ok": False, "safe_reasons": ("S",)}, ("S", REASON_PHASES, REASON_HANDBACK)),
+    ],
+)
+def test_safe_during_handback_with_unconfirmed_phases(
+    change: dict[str, Any], reasons: tuple[str, ...]
+) -> None:
+    machine = in_control()
+    machine.step(S(2), inputs(safe_reasons=("S",)))
+    assert machine.step(S(3), inputs(**OFF, **change)) is None
+    assert (machine.state, machine.reasons) == (O.SAFE, reasons)
+
+
+def test_safe_waits_for_the_handback_then_observe() -> None:
     machine = in_control()
     machine.step(S(2), inputs(safe_reasons=("S",)))
     assert machine.step(S(3), inputs(**OFF, safe_reasons=("S",))) is None
+    assert (machine.state, machine.reasons) == (O.SAFE, ("S", REASON_HANDBACK))
+    assert machine.step(S(4), inputs(**OFF)) is None  # Gefahr vorbei, die Übergabe läuft noch
     assert (machine.state, machine.reasons) == (O.SAFE, (REASON_HANDBACK,))
-    assert machine.step(S(4), inputs(**OFF)) is None  # auch ohne Gründe für SAFE
-    assert (machine.state, machine.reasons) == (O.SAFE, (REASON_HANDBACK,))
-    t = machine.step(S(5), inputs(control_requested=False))
+    t = machine.step(S(5), inputs(control_requested=False))  # Übergabe fertig
     assert t == Transition(O.SAFE, O.OBSERVE, (REASON_CONTROL_OFF,), S(5))
 
 

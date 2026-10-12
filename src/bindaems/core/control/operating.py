@@ -70,16 +70,20 @@ class OperatingStateMachine:
     """Hält den Betriebszustand; die Laufzeit ruft ``step`` einmal je Zyklus auf.
 
     Der Automat beginnt in START, und der erste Schritt führt immer nach OBSERVE. Die Regeln
-    gelten der Reihe nach, die erste zutreffende entscheidet. Die Gate-Gründe sind die
-    ``safe_reasons``, dann ``REASON_NOT_FRESH`` (Messwerte nicht frisch), ``REASON_PHASES``
-    (Phasen nicht bestätigt) und ``REASON_WATCHDOG`` (Watchdog benötigt und nicht scharf); ohne
-    einen von ihnen ist das Gate offen.
+    gelten der Reihe nach, die erste zutreffende entscheidet.
+
+    - Die Gate-Gründe sind die ``safe_reasons``, dann ``REASON_NOT_FRESH`` (Messwerte nicht
+      frisch), ``REASON_PHASES`` (Phasen nicht bestätigt) und ``REASON_WATCHDOG`` (Watchdog
+      benötigt und nicht scharf); ohne einen von ihnen ist das Gate offen.
+    - Die Gründe für SAFE sind die ``safe_reasons`` und, falls die Phasen nicht bestätigt sind,
+      ``REASON_PHASES``.
 
     START, OBSERVE und SAFE:
 
-    1. Regelbetrieb aus: in SAFE mit ``handback_pending`` bleibt es SAFE mit ``REASON_HANDBACK``,
-       sonst OBSERVE mit ``REASON_CONTROL_OFF``. In START und OBSERVE schreibt der core nicht, eine
-       Übergabe hält ihn dort also nicht.
+    1. Regelbetrieb aus: In SAFE mit ``handback_pending`` bleibt es SAFE, bis die Übergabe fertig
+       ist. Die Gründe sind die Gründe für SAFE, dahinter ``REASON_HANDBACK``; so bleibt eine
+       Gefahr sichtbar, solange sie besteht. Sonst OBSERVE mit ``REASON_CONTROL_OFF``. In START und
+       OBSERVE schreibt der core nicht, eine Übergabe hält ihn dort also nicht.
     2. Gate zu: bleibt in SAFE, sonst OBSERVE; die Gründe sind die Gate-Gründe.
     3. Aus START: OBSERVE ohne Gründe, denn der erste Schritt schaltet nie weiter.
     4. Gate offen: DEGRADED mit den ``degraded_reasons``, wenn es welche gibt, sonst CONTROL.
@@ -87,10 +91,10 @@ class OperatingStateMachine:
     CONTROL und DEGRADED:
 
     1. Regelbetrieb aus ohne ``handback_pending``: OBSERVE mit ``REASON_CONTROL_OFF``.
-    2. Regelbetrieb aus mit ``handback_pending``: SAFE wie in Regel 3, mit ``REASON_HANDBACK`` am
-       Ende der Gründe; sonst DEGRADED mit ``REASON_HANDBACK`` allein.
-    3. ``safe_reasons`` oder Phasen nicht bestätigt: SAFE mit den ``safe_reasons`` und, falls die
-       Phasen nicht stimmen, ``REASON_PHASES``.
+    2. Regelbetrieb aus mit ``handback_pending``: Gibt es Gründe für SAFE, SAFE mit ihnen und
+       dahinter ``REASON_HANDBACK`` (wie in Regel 1 oben); sonst DEGRADED mit ``REASON_HANDBACK``
+       allein.
+    3. Gründe für SAFE: SAFE mit diesen Gründen.
     4. Sonst DEGRADED mit den ``degraded_reasons`` und, falls der Watchdog benötigt wird und nicht
        scharf ist, ``REASON_WATCHDOG``; gibt es keinen Grund, CONTROL.
 
@@ -151,7 +155,7 @@ def _decide_gated(state: OperatingState, inputs: OperatingInputs) -> _Outcome:
     """START, OBSERVE und SAFE: Regelbetrieb und Gate entscheiden, ob es weitergeht."""
     if not inputs.control_requested:
         if state == OperatingState.SAFE and inputs.handback_pending:
-            return OperatingState.SAFE, (REASON_HANDBACK,)
+            return OperatingState.SAFE, (*_safe_state_reasons(inputs), REASON_HANDBACK)
         return OperatingState.OBSERVE, (REASON_CONTROL_OFF,)
     gate = _gate_reasons(inputs)
     if gate:
@@ -164,9 +168,7 @@ def _decide_gated(state: OperatingState, inputs: OperatingInputs) -> _Outcome:
 
 def _decide_running(inputs: OperatingInputs) -> _Outcome:
     """CONTROL und DEGRADED: Regelbetrieb und Übergabe, Gründe für SAFE, sonst die für DEGRADED."""
-    safe = list(inputs.safe_reasons)
-    if not inputs.phases_ok:
-        safe.append(REASON_PHASES)
+    safe = _safe_state_reasons(inputs)
     if not inputs.control_requested:
         if not inputs.handback_pending:
             return OperatingState.OBSERVE, (REASON_CONTROL_OFF,)
@@ -174,11 +176,18 @@ def _decide_running(inputs: OperatingInputs) -> _Outcome:
             return OperatingState.SAFE, (*safe, REASON_HANDBACK)
         return OperatingState.DEGRADED, (REASON_HANDBACK,)
     if safe:
-        return OperatingState.SAFE, tuple(safe)
+        return OperatingState.SAFE, safe
     degraded = list(inputs.degraded_reasons)
     if _watchdog_missing(inputs):
         degraded.append(REASON_WATCHDOG)
     return _running_state(tuple(degraded))
+
+
+def _safe_state_reasons(inputs: OperatingInputs) -> tuple[str, ...]:
+    """Die Gründe für SAFE: die ``safe_reasons`` und, ohne bestätigte Phasen, ``REASON_PHASES``."""
+    if inputs.phases_ok:
+        return tuple(inputs.safe_reasons)
+    return (*inputs.safe_reasons, REASON_PHASES)
 
 
 def _running_state(degraded_reasons: tuple[str, ...]) -> _Outcome:
