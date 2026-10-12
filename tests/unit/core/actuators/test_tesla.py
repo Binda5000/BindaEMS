@@ -83,6 +83,23 @@ def car(cfg, idle_client) -> TeslaActuator:
     return tesla(cfg, idle_client, [T0])
 
 
+def stray_requests(respx_mock):
+    """Eine Route, die jede Anfrage auffängt, die keine andere Route trifft, und mit 500 antwortet.
+
+    Sie muss die letzte Route sein. Ohne sie wirft respx für eine Anfrage ohne Treffer einen
+    ``AssertionError``, ohne sie aufzuzeichnen, und der Aktor schluckt ihn als gescheiterten
+    Befehl: ``respx_mock.calls`` bliebe leer, auch wenn gesendet wurde. Mit ihr zeigt
+    ``stray.called``, dass etwas gesendet wurde, das der Test nicht erwartet.
+    """
+    return respx_mock.route().respond(500)
+
+
+@pytest.fixture
+def stray(respx_mock):
+    """``stray_requests`` für Tests, die sonst keine Route brauchen."""
+    return stray_requests(respx_mock)
+
+
 def readings(signals: Mapping[str, tuple[Value, Quality]]) -> Snapshot:
     """Snapshot mit Qualität je Signal."""
     return Snapshot(
@@ -414,12 +431,14 @@ def test_a_sleeping_car_is_still_read(car) -> None:
 )
 async def test_each_kind_goes_to_its_command(cfg, respx_mock, kind, value, name, params) -> None:
     route = respx_mock.post(command_url(name)).respond(json={"result": True})
+    stray = stray_requests(respx_mock)
     async with httpx.AsyncClient() as client:
         car = tesla(cfg, client, [T0])
         assert car.send(kind, value) is None
         await asyncio.sleep(0.01)
         assert car.confirm(kind, value, snap({})) == CONFIRMED
     assert route.call_count == 1
+    assert not stray.called  # nur dieser Befehl, an keinen anderen Pfad (etwa zum Wecken)
     request = route.calls.last.request
     assert request.method == "POST"
     assert sorted(request.url.params.multi_items()) == sorted(
@@ -448,33 +467,43 @@ async def test_current_is_sent_in_whole_amps(cfg, respx_mock, amps, sent) -> Non
         (CommandKind.MIN_SOC, "min_soc"),
     ],
 )
-async def test_other_kinds_are_not_sent(car, respx_mock, kind, name) -> None:
+async def test_other_kinds_are_not_sent(car, stray, kind, name) -> None:
     assert car.send(kind, 100.0) == f"Tesla kennt die Befehlsart „{name}“ nicht."
+    assert asyncio.all_tasks() == {asyncio.current_task()}  # kein Befehl wurde gestartet
     await asyncio.sleep(0.01)
-    assert respx_mock.calls.call_count == 0
+    assert not stray.called
 
 
 @pytest.mark.parametrize("value", [None, True, float("nan"), float("inf"), "10"])
-async def test_unusable_current_is_not_sent(car, respx_mock, value) -> None:
+async def test_unusable_current_is_not_sent(car, stray, value) -> None:
     assert car.send(CommandKind.CURRENT, value) == "Ungültiger Wert für „current“."
+    assert asyncio.all_tasks() == {asyncio.current_task()}  # kein Befehl wurde gestartet
     await asyncio.sleep(0.01)
-    assert respx_mock.calls.call_count == 0
+    assert not stray.called
 
 
 @pytest.mark.parametrize("value", [None, 1, 0, 1.0, "an", float("nan")])
-async def test_charging_must_be_a_boolean(car, respx_mock, value) -> None:
+async def test_charging_must_be_a_boolean(car, stray, value) -> None:
     assert car.send(CommandKind.CHARGING, value) == "Ungültiger Wert für „charging“."
+    assert asyncio.all_tasks() == {asyncio.current_task()}  # kein Befehl wurde gestartet
     await asyncio.sleep(0.01)
-    assert respx_mock.calls.call_count == 0
+    assert not stray.called
 
 
-async def test_reading_never_sends(car, respx_mock) -> None:
-    car.capabilities(snap(HOME), T0)
-    car.present(snap({}))
-    car.confirm(CommandKind.CURRENT, 10.0, snap({}))
-    car.alarms(T0)
+READS = {
+    "capabilities": lambda car: car.capabilities(snap(HOME), T0),
+    "present": lambda car: car.present(snap({})),
+    "confirm": lambda car: car.confirm(CommandKind.CURRENT, 10.0, snap({})),
+    "alarms": lambda car: car.alarms(T0),
+}
+
+
+@pytest.mark.parametrize("read", READS.values(), ids=list(READS))
+async def test_reading_never_sends(car, stray, read) -> None:
+    read(car)
+    assert asyncio.all_tasks() == {asyncio.current_task()}  # kein Befehl wurde gestartet
     await asyncio.sleep(0.01)
-    assert respx_mock.calls.call_count == 0
+    assert not stray.called
 
 
 # Hintergrund
@@ -839,6 +868,7 @@ async def test_a_cancelled_command_fails_but_is_not_counted(cfg, respx_mock) -> 
 
 
 async def test_a_command_cancelled_before_it_starts_sends_nothing(cfg, respx_mock) -> None:
+    stray = stray_requests(respx_mock)
     async with httpx.AsyncClient() as client:
         car = tesla(cfg, client, [T0])
         assert car.send(CommandKind.CURRENT, 10.0) is None
@@ -847,7 +877,7 @@ async def test_a_command_cancelled_before_it_starts_sends_nothing(cfg, respx_moc
         await asyncio.sleep(0.01)
         assert car.confirm(CommandKind.CURRENT, 10.0, snap({})) == (Confirmation.FAILED, CANCELLED)
         assert car.capabilities(snap(HOME), T0).controllable
-    assert respx_mock.calls.call_count == 0
+    assert not stray.called
 
 
 # Frist je Befehl
@@ -964,6 +994,7 @@ async def test_the_executor_logs_a_failed_command_with_the_reason(
 async def test_the_executor_sends_nothing_to_a_sleeping_car(
     cfg, respx_mock, limits_live, tmp_path
 ) -> None:
+    stray = stray_requests(respx_mock)
     async with httpx.AsyncClient() as client:
         executor, decisions = executor_for(tesla(cfg, client, [T0]), limits_live, tmp_path)
         asleep = snap(HOME | {"vehicle.tesla.online": False})
@@ -974,7 +1005,7 @@ async def test_the_executor_sends_nothing_to_a_sleeping_car(
         "Tesla Model 3: Strom 10 A – nicht gesendet: nicht steuerbar: "
         "Fahrzeug schläft oder ist offline; es wird nicht geweckt."
     )
-    assert executor.pending() == frozenset() and respx_mock.calls.call_count == 0
+    assert executor.pending() == frozenset() and not stray.called
 
 
 async def test_a_hanging_tessie_never_blocks_and_times_out_at_the_deadline(
@@ -1042,9 +1073,12 @@ async def test_the_cache_of_the_tessie_adapter_makes_the_car_controllable(
     cfg, respx_mock, car
 ) -> None:
     cache = await tessie_cache(cfg, respx_mock, STATE)
+    stray = stray_requests(respx_mock)  # nach der Abfrage des Adapters wäre jede Anfrage ungewollt
     assert car.capabilities(cache, T0) == Capabilities(True)
     assert car.present(cache) == {CommandKind.CURRENT: 16, CommandKind.CHARGING: True}
-    assert all(call.request.method == "GET" for call in respx_mock.calls)  # nur gelesen
+    await asyncio.sleep(0.01)
+    assert not stray.called
+    assert [call.request.method for call in respx_mock.calls] == ["GET"]  # nur die Abfrage
 
 
 @pytest.mark.parametrize(
