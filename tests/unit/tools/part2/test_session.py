@@ -91,6 +91,20 @@ async def test_unconfirmed_write_names_the_time(evcs_session) -> None:
     assert session.failure == "nicht bestätigt nach 0,05 s"
 
 
+async def test_sent_says_whether_the_last_write_went_out(evcs_session) -> None:
+    # Ein Auftrag, der nie hinausging, sagt nichts darüber, was das Gerät mit dem Wert tut.
+    session, evcs = evcs_session(follow=False)
+    assert session.sent is False
+    assert await session.set_and_confirm("wallbox.evcs", CURRENT, 10.0, 0.05) is None
+    assert session.sent is True  # hinaus, aber nicht bestätigt
+    evcs.accept = False
+    assert await session.set_and_confirm("wallbox.evcs", CURRENT, 12.0, 0.05) is None
+    assert session.sent is False  # abgelehnt: nie hinausgegangen
+    evcs.accept, evcs.follow = True, True
+    assert await session.set_and_confirm("wallbox.evcs", CURRENT, 12.0, 0.5) is not None
+    assert session.sent is True
+
+
 async def test_failed_confirmation_ends_the_wait(cfg: Config) -> None:
     # Ein Tesla, dessen Befehl Tessie ablehnt: sofort ein Ergebnis, nicht erst nach der Frist.
     car = StubTesla(Confirmation.FAILED)

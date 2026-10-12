@@ -531,6 +531,7 @@ def test_declined_start_names_what_the_tesla_part_does(
     assert main(TESLA_ARGS) == 1
     shown = capsys.readouterr().out
     assert "Fahrzeug „tesla“" in shown and "weckt es nie" in shown and "Abgebrochen." in shown
+    assert "nur an ein waches Fahrzeug, das zu Hause angesteckt ist" in shown
     assert fake_part.sessions == [] and fake_part.tesla_calls == []
 
 
@@ -689,6 +690,7 @@ def test_declined_start_names_what_the_victron_part_writes(
         "Entladegrenze",
         "höchstens 4 persistente Schreibzugriffe",
         "Dynamic ESS und einen Cerbo ohne Netz-Sollwert-Override",
+        "Entladegrenze nicht auf 0 W steht",
         "Abgebrochen.",
     ):
         assert text in shown

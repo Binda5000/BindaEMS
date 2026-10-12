@@ -218,6 +218,26 @@ def put_signal(store: StateStore, name: str, value: Value) -> None:
     store.update(name, value, source="twc", kind=kind)
 
 
+def tessie_reports(store: StateStore, *, every_s: float, until_s: float) -> None:
+    """Tessie meldet sich alle ``every_s`` neu, bis ``until_s`` nach dem Aufruf; dann fällt es aus.
+
+    Jedes Signal des Fahrzeugs bekommt dabei einen neuen Zeitstempel, wie bei einer Abfrage des
+    Adapters. Fällt Tessie aus, trennt der Adapter die Quelle nicht: Die Werte bleiben bis zu ihrer
+    Frischegrenze gültig, nur ihr Zeitstempel bleibt stehen.
+    """
+    loop = asyncio.get_running_loop()
+    end = loop.time() + until_s
+
+    def report() -> None:
+        if loop.time() >= end:
+            return
+        for name, reading in store.snapshot().matching("vehicle.tesla.").items():
+            put_signal(store, name, reading.value)
+        loop.call_later(every_s, report)
+
+    loop.call_later(every_s, report)
+
+
 class FakeTwc:
     """Der Wall Connector für die Teil-2-Tests des Teils Tesla; ``store`` ist der der Sitzung.
 

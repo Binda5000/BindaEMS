@@ -11,10 +11,13 @@ Netzladen über das mit der höchsten Leistung („binnen“ der Beobachtung).
 1. **Victron bereit** (17.2-1): steuerbar (Cerbo verbunden), Dynamic ESS aus (``dess.mode`` 0;
    DESS nullt fremde Overrides, Spec 3.2) und kein Netz-Sollwert-Override aktiv: Steht einer, regelt
    ein anderes System, und der Teil schriebe darüber. Die vorgefundene Entladegrenze muss die
-   Regeln 1–3 passieren (sonst ließe sie sich nicht wiederherstellen). Vorher wartet der Schritt
-   bis ``confirm_s`` auf Override und Entladegrenze. Sonst endet der Teil ohne Schreiben.
+   Regeln 1–3 passieren (sonst ließe sie sich nicht wiederherstellen), und sie darf nicht auf 0 W
+   stehen: Das hinterlässt ein abgebrochener Lauf, und als Ausgangswert bliebe das Entladen danach
+   gesperrt. Der Befund nennt sie. Vorher wartet der Schritt bis ``confirm_s`` auf Override und
+   Entladegrenze. Sonst endet der Teil ohne Schreiben.
 2. **Netz-Sollwert-Override:** setzen, Wirkung am Netz, mit ``None`` aufheben, Wirkung danach.
-   Bestätigt der Cerbo das Aufheben nicht, schreibt der Teil keinen weiteren Override mehr.
+   Bestätigt der Cerbo das Aufheben nicht, schreibt der Teil keinen weiteren Override mehr. Ging
+   das Aufheben gar nicht hinaus, nennt der Befund den Sendefehler: Über ``null`` sagt das nichts.
 3. **Override ohne Timeout** (Rückfrage): Override setzen und ``hold_s`` halten.
 4. **Override nach Neustart des Cerbo** (Rückfrage): Override setzen, der Betreiber startet den
    Cerbo neu, der Teil wartet auf die Neuverbindung. Der Neustart ist ein Handgriff: Mit ``--yes``
@@ -27,10 +30,15 @@ Netzladen über das mit der höchsten Leistung („binnen“ der Beobachtung).
 7. **Netzladen** (17.2-3): Override ``min(2000, Obergrenze)``, Ladeleistung des Akkus.
 8. **Kein Akku ins Auto** (17.2-4): nur bei ladender EVCS (über 1000 W, alle EVCS zusammen);
    Override = EVCS-Leistung in ganzen Watt, höchstens die Obergrenze, Entladeleistung des Akkus.
+   Geschrieben wird genau der Wert, den die Rückfrage nennt.
 9. **Importlimit** (17.2-8): Der Betreiber schaltet eine Last ein; der Teil beobachtet ``effect_s``
    lang den höchsten Netzstrom. Das ist ein Handgriff: Mit ``--yes`` entfällt der Schritt.
 
 Obergrenze ist der Höchstwert des Netz-Sollwerts nach Regel 2 (``HardLimits.grid_setpoint_max``).
+
+Vor jedem schreibenden Schritt prüft der Teil erneut, dass Dynamic ESS aus ist. Ist es inzwischen
+an, schreibt er nichts mehr: Der Schritt ist FEHLER mit dem Grund, die übrigen entfallen, und das
+Wiederherstellen am Ende stellt die vorgefundenen Werte her wie nach einem Abbruch.
 
 Nach jedem Block (jeder schreibende Schritt ist einer) stellt ``Part2Session.restore_after_step``
 die vorgefundenen Werte wieder her; ihre Zeilen stehen hinter dem Schritt (Präzisierung 11). Der
@@ -76,6 +84,11 @@ SKIPPED_NO_CAR: Final = "übersprungen: kein Laden an der EVCS"
 SKIPPED_STUCK: Final = "übersprungen: Override ließ sich nicht aufheben"
 SKIPPED_NO_OVERRIDE: Final = "übersprungen: kein Override gesetzt"
 RELEASE_FAILED: Final = "Aufheben mit null nicht bestätigt; Weg für die Rücknahme klären."
+RELEASE_NOT_SENT: Final = "Aufheben mit null: "  # davor, warum das null nie hinausging
+DISCHARGE_LOCKED: Final = (
+    "Entladegrenze steht auf {} W (Entladen gesperrt), vermutlich von einem abgebrochenen Lauf – "
+    "vor dem Test zurücksetzen."
+)
 NO_BATTERY: Final = "Akkuleistung nicht gemeldet"
 
 QUESTION_RESTART: Final = "Cerbo jetzt neu starten?"
@@ -190,6 +203,22 @@ def _mode_text(mode: object) -> str:
     return "unbekannt" if mode is None else _value(mode)
 
 
+def _dess_active(mode: object) -> str:
+    """Der Befund, wenn Dynamic ESS an ist; ein unbekannter Modus gilt als an."""
+    return (
+        f"Dynamic ESS ist aktiv (Modus {_mode_text(mode)}); die Victron-Punkte erst nach dem "
+        "Abschalten von DESS."
+    )
+
+
+def _limit_text(limit: CommandValue) -> str:
+    """Die Entladegrenze für Texte: „unbegrenzt“ für −1, sonst in W; ohne Wert „unbekannt“."""
+    number = finite_number(limit)
+    if number is None:
+        return "unbekannt"
+    return "unbegrenzt" if number == -1 else f"{de(number)} W"
+
+
 def _overrides(snap: Snapshot) -> str:
     """Die hub4-Overrides, die der Cerbo meldet, mit ihren Werten; sonst „keine“."""
     found = [
@@ -230,15 +259,21 @@ class _VictronSteps:
         self._overridden = False  # hat der Cerbo in den Schritten 2 bis 4 einen Override bestätigt?
         self._stuck = False  # steht noch ein Override, den das Wiederherstellen nicht aufhob?
         self._wrote = False  # hat der Block begonnen, etwas zu schreiben?
+        self._stopped: str | None = None  # warum der Teil nichts mehr schreibt (DESS ist an)
 
     async def run(self) -> None:
+        """Die Schritte der Reihe nach; ist DESS inzwischen an, endet der Teil nach dem Schritt."""
         if not await self._ready():
             return
         for step in (self._override, self._hold, self._reboot):
             await self._block(step)
+            if self._stopped is not None:
+                return
         self._together()
         for step in (self._discharge, self._grid_charging, self._car, self._import_limit):
             await self._block(step)
+            if self._stopped is not None:
+                return
 
     async def _block(self, step: Callable[[], Awaitable[None]]) -> None:
         """Ein Schritt; hat er geschrieben, folgen die vorgefundenen Werte, dann zählt der Override.
@@ -256,7 +291,11 @@ class _VictronSteps:
     # Victron bereit
 
     async def _ready(self) -> bool:
-        """Victron bereit: steuerbar, Dynamic ESS aus, kein Override, Entladegrenze innerhalb."""
+        """Victron bereit: steuerbar, Dynamic ESS aus, kein Override, Entladegrenze brauchbar.
+
+        Brauchbar ist die Entladegrenze, wenn die Regeln 1–3 sie unverändert durchlassen und sie
+        das Entladen nicht sperrt (0 W). Der Befund nennt sie.
+        """
         title = "Victron bereit"
         await self._session.wait_for(self._is_ready, self._t.confirm_s)
         snap = self._session.snapshot()
@@ -267,12 +306,7 @@ class _VictronSteps:
         mode = snap.ok("dess.mode")
         # DESS nullt fremde Overrides (Spec 3.2); ein unbekannter Modus gilt als an
         if finite_number(mode) != 0:
-            self._record(
-                title,
-                "fail",
-                f"Dynamic ESS ist aktiv (Modus {_mode_text(mode)}); die Victron-Punkte erst nach "
-                "dem Abschalten von DESS.",
-            )
+            self._record(title, "fail", _dess_active(mode))
             return False
         present = self._actuator.present(snap)
         override = finite_number(present.get(CommandKind.GRID_SETPOINT))
@@ -284,15 +318,21 @@ class _VictronSteps:
                 "vor dem Test aufheben.",
             )
             return False
+        limit = present.get(CommandKind.MAX_DISCHARGE)
         if CommandKind.MAX_DISCHARGE in present:
-            problem = self._session.found_problem(
-                VICTRON, CommandKind.MAX_DISCHARGE, present[CommandKind.MAX_DISCHARGE]
-            )
+            problem = self._session.found_problem(VICTRON, CommandKind.MAX_DISCHARGE, limit)
             if problem is not None:
                 self._record(title, "fail", problem)
                 return False
+            # Als Ausgangswert stellte der Teil eine Sperre am Ende wieder her: Das Entladen bliebe
+            # gesperrt, und das Importlimit von 20 A braucht den Akku.
+            if matches(CommandKind.MAX_DISCHARGE, DISCHARGE_LIMIT_W, limit):
+                self._record(title, "fail", DISCHARGE_LOCKED.format(_value(limit)))
+                return False
         self._ac_before = self._ac_setpoint(snap)
-        self._record(title, "ok", f"hub4-Overrides vorher: {_overrides(snap)}")
+        overrides = _overrides(snap)
+        detail = f"hub4-Overrides vorher: {overrides}; Entladegrenze vorher: {_limit_text(limit)}"
+        self._record(title, "ok", detail)
         return True
 
     def _is_ready(self, snap: Snapshot) -> bool:
@@ -331,7 +371,7 @@ class _VictronSteps:
         during = await self._grid_mean()
         release_s = await self._set(CommandKind.GRID_SETPOINT, None)
         if release_s is None:
-            self._record(title, "fail", RELEASE_FAILED)
+            self._record(title, "fail", self._release_failure())
             return
         after = await self._grid_mean()
         self._record(
@@ -531,18 +571,20 @@ class _VictronSteps:
             return
         if self._blocked(title, CAR_ITEM):
             return
+        value = self._car_w(power)
         question = (
-            f"Die EVCS lädt mit {de(round(power))} W. Override auf {de(self._car_w(power))} W "
-            "setzen? Der Akku soll nicht ins Auto entladen."
+            f"Die EVCS lädt mit {de(round(power))} W. Override auf {de(value)} W setzen? Der Akku "
+            "soll nicht ins Auto entladen."
         )
         if not self._session.ask(question):
             self._record(title, "info", SKIPPED, item=CAR_ITEM)
             return
-        power = self._evcs_w()  # die Rückfrage kann lange gedauert haben
-        if power is None or power <= CAR_MIN_W:
+        # Die Rückfrage kann lange gedauert haben. Lädt das Auto nicht mehr, entfällt der Schritt;
+        # sonst geht genau der bestätigte Wert hinaus, auch wenn sich die Leistung geändert hat.
+        now = self._evcs_w()
+        if now is None or now <= CAR_MIN_W:
             self._record(title, "info", SKIPPED_NO_CAR, item=CAR_ITEM)
             return
-        value = self._car_w(power)
         note = ""
         if value < round(power):  # die Obergrenze greift: Der Befund nennt sie
             note = f" (Override auf {de(value)} W begrenzt; EVCS-Leistung {de(round(power))} W)"
@@ -572,7 +614,7 @@ class _VictronSteps:
         """Override ``value`` setzen, ``effect_s`` beobachten, bewerten und aufheben.
 
         ``note`` hängt der Befund an das Urteil. Bestätigt der Cerbo das Aufheben nicht, bleibt das
-        Urteil im Text und der Befund ist ein FEHLER.
+        Urteil im Text und der Befund ist ein FEHLER (``_release_failure``).
         """
         if await self._set(CommandKind.GRID_SETPOINT, value) is None:
             self._record(title, "fail", f"Override {de(value)} W: {self._failure()}", item=item)
@@ -581,7 +623,7 @@ class _VictronSteps:
         status, detail = verdict(await self._session.observe(self._t.effect_s))
         detail += note
         if await self._set(CommandKind.GRID_SETPOINT, None) is None:
-            status, detail = "fail", f"{detail}; {RELEASE_FAILED}"
+            status, detail = "fail", f"{detail}; {self._release_failure()}"
         self._record(title, status, detail, item=item)
 
     # Importlimit
@@ -639,12 +681,48 @@ class _VictronSteps:
         return finite_number(snap.ok("ess.grid_setpoint_w"))
 
     async def _set(self, kind: CommandKind, value: CommandValue) -> float | None:
-        """``set_and_confirm`` mit ``confirm_s``."""
+        """``set_and_confirm`` mit ``confirm_s``; vor dem ersten Schreiben eines Schritts DESS.
+
+        Ist Dynamic ESS inzwischen an, schreibt der Teil nichts mehr (``_stopped``): Das Ergebnis
+        ist ``None``, und ``_failure`` nennt den Grund. Ein späteres Schreiben im selben Schritt
+        (das Aufheben des Overrides) prüft nicht erneut: Es nimmt nur zurück.
+        """
+        if not self._wrote:
+            dess = await self._dess_problem()
+            if dess is not None:
+                self._stopped = dess
+                return None
         self._wrote = True
         return await self._session.set_and_confirm(VICTRON, kind, value, self._t.confirm_s)
 
+    async def _dess_problem(self) -> str | None:
+        """Ist Dynamic ESS an? Dann der Befund dazu, sonst ``None``.
+
+        Wartet bis ``confirm_s`` auf einen bekannten Modus, etwa nach dem Neustart des Cerbo; ein
+        Modus, der unbekannt bleibt, gilt als an.
+        """
+        session = self._session
+        await session.wait_for(
+            lambda snap: finite_number(snap.ok("dess.mode")) is not None, self._t.confirm_s
+        )
+        mode = session.snapshot().ok("dess.mode")
+        return None if finite_number(mode) == 0 else _dess_active(mode)
+
     def _failure(self) -> str:
+        if self._stopped is not None:
+            return self._stopped
         return self._session.failure or f"nicht bestätigt nach {de(self._t.confirm_s)} s"
+
+    def _release_failure(self) -> str:
+        """Warum das Aufheben mit ``None`` nicht bestätigt ist: der Beleg zur offenen Frage um null.
+
+        Ging das null nie hinaus (nicht steuerbar, abgelehnt), nennt der Text den Sendefehler,
+        denn über null sagt das nichts. Nur ein null, das hinausging und den Override nicht
+        nachweislich aufhob, ist ``RELEASE_FAILED``.
+        """
+        if self._session.sent:
+            return RELEASE_FAILED
+        return f"{RELEASE_NOT_SENT}{self._failure()}"
 
     def _record(self, title: str, status: Status, detail: str, *, item: str = ITEM) -> None:
         self._session.record(Finding(item, title, status, detail))

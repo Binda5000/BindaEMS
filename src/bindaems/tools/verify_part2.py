@@ -21,13 +21,14 @@ Punkte: ``evcs`` (17.2-6 und der sichere Strom über den Watchdog, 17.2-5) mit `
 (Standard: die erste EVCS). ``tesla`` (17.2-7) mit ``--fahrzeug`` (Standard: das erste Fahrzeug
 mit Tessie): Die Befehle gehen über Tessie, die Wirkung misst das Werkzeug am Wall Connector, und
 das Fahrzeug wird nie geweckt. ``--schlafend`` prüft stattdessen, ohne etwas zu senden, dass ein
-schlafendes Fahrzeug schläft. ``tesla`` braucht ``BINDAEMS_TESSIE_TOKEN``. ``victron`` (17.2-1 bis
-17.2-4 und 17.2-8): Override des Netz-Sollwerts, Entladesperre, Netzladen, „kein Akku ins Auto“
-(mit der Leistung aller EVCS) und Importlimit. Es verweigert, solange Dynamic ESS aktiv ist, denn
-DESS nullt fremde Overrides: Der Betreiber schaltet DESS vorher ab, vor der Live-Schaltung von
-Victron. Es verweigert auch, solange ein Netz-Sollwert-Override steht, denn dann regelt ein anderes
-System. Die Entladegrenze ist eine gespeicherte Einstellung; das Werkzeug schreibt sie je Lauf
-höchstens viermal.
+schlafendes Fahrzeug nicht geweckt wird. ``tesla`` braucht ``BINDAEMS_TESSIE_TOKEN``.
+``victron`` (17.2-1 bis 17.2-4 und 17.2-8): Override des Netz-Sollwerts, Entladesperre, Netzladen,
+„kein Akku ins Auto“ (mit der Leistung aller EVCS) und Importlimit. Es verweigert, solange Dynamic
+ESS aktiv ist, denn DESS nullt fremde Overrides: Der Betreiber schaltet DESS vorher ab, vor der
+Live-Schaltung von Victron; geht es mitten im Lauf an, schreibt es nichts mehr. Es verweigert auch,
+solange ein Netz-Sollwert-Override steht, denn dann regelt ein anderes System, und bei einer
+Entladegrenze von 0 W, die ein abgebrochener Lauf hinterlassen haben kann. Die Entladegrenze ist
+eine gespeicherte Einstellung; das Werkzeug schreibt sie je Lauf höchstens viermal.
 
 Exitcode 0: kein Befund ist FEHLER. 1: ein Befund ist FEHLER, der Betreiber hat die Rückfrage vor
 dem Start verneint (dann ohne Secrets und ohne Verbindung) oder der Bericht ließ sich nicht
@@ -70,7 +71,7 @@ from bindaems.tools.part2.evcs import run_evcs
 from bindaems.tools.part2.session import MAX_PERSISTENT_WRITES, Part2Session, build_session, minutes
 from bindaems.tools.part2.session import RESTORE_S as SESSION_RESTORE_S
 from bindaems.tools.part2.tesla import DEFAULT_TIMINGS as TESLA_TIMINGS
-from bindaems.tools.part2.tesla import run_tesla
+from bindaems.tools.part2.tesla import NO_VEHICLE, run_tesla
 from bindaems.tools.part2.victron import DEFAULT_TIMINGS as VICTRON_TIMINGS
 from bindaems.tools.part2.victron import run_victron
 from bindaems.tools.verify_checks import Finding, render_report
@@ -90,7 +91,7 @@ WARNINGS: Final = {
     "tesla": (
         "Das Werkzeug stellt am Fahrzeug „{device}“ über Tessie den Ladestrom um und fragt vor dem "
         "kurzen Ausschalten des Ladens nach. Das Fahrzeug lädt dabei mit wechselndem Strom. Es "
-        "sendet nur an ein wachendes Fahrzeug, das zu Hause angesteckt ist, und weckt es nie. Nach "
+        "sendet nur an ein waches Fahrzeug, das zu Hause angesteckt ist, und weckt es nie. Nach "
         "jedem Schritt und am Ende, auch nach Strg+C, stellt es die vorgefundenen Werte wieder her."
     ),
     "victron": (
@@ -98,8 +99,9 @@ WARNINGS: Final = {
         "Netz) und stellt die Entladegrenze auf 0 W, eine gespeicherte Einstellung (höchstens "
         f"{MAX_PERSISTENT_WRITES} persistente Schreibzugriffe je Lauf). Es fragt vor jedem "
         "weiteren schreibenden Schritt nach und verlangt ausgeschaltetes Dynamic ESS und einen "
-        "Cerbo ohne Netz-Sollwert-Override; sonst endet es ohne zu schreiben. Nach jedem Schritt "
-        "und am Ende, auch nach Strg+C, stellt es die vorgefundenen Werte wieder her."
+        "Cerbo ohne Netz-Sollwert-Override, dessen Entladegrenze nicht auf 0 W steht; sonst endet "
+        "es ohne zu schreiben. Nach jedem Schritt und am Ende, auch nach Strg+C, stellt es die "
+        "vorgefundenen Werte wieder her."
     ),
     "tesla-schlafend": (
         "Das Werkzeug prüft am Fahrzeug „{device}“, dass ein schlafendes Auto nicht geweckt wird. "
@@ -182,7 +184,7 @@ def _vehicle(cfg: Config, name: str | None) -> str:
             raise ValueError("Kein Fahrzeug mit Tessie in vehicles.")
         return tessie[0]
     if name not in tessie:
-        raise ValueError(f"Kein Fahrzeug „{name}“ mit Tessie in vehicles.")
+        raise ValueError(NO_VEHICLE.format(name))
     return name
 
 

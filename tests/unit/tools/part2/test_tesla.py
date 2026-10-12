@@ -17,6 +17,7 @@ from tests.unit.tools.part2.conftest import (
     VIN,
     put_signal,
     stray_requests,
+    tessie_reports,
 )
 
 from bindaems.core.actuators.tesla import TeslaActuator
@@ -95,7 +96,8 @@ async def test_asleep_stops_before_any_command(tesla_session, respx_mock) -> Non
 
 async def test_sleep_check_never_sends(tesla_session, respx_mock) -> None:
     stray = stray_requests(respx_mock)
-    session, _ = tesla_session(state={"vehicle.tesla.online": False})
+    session, twc = tesla_session(state={"vehicle.tesla.online": False})
+    tessie_reports(twc.store, every_s=0.05, until_s=2.0)  # Tessie meldet sich während der Prüfung
     findings = await run_tesla(session, session.cfg, "tesla", asleep_check=True, timings=FAST)
     await asyncio.sleep(0.05)
     assert [f.status for f in findings] == ["ok"] and respx_mock.calls.call_count == 0
@@ -699,7 +701,8 @@ async def test_the_restore_after_a_block_waits_as_long_as_tessie_may_take(
 
 
 async def test_sleep_check_names_how_long_it_watched(tesla_session) -> None:
-    session, _ = tesla_session(state={"vehicle.tesla.online": False})
+    session, twc = tesla_session(state={"vehicle.tesla.online": False})
+    tessie_reports(twc.store, every_s=0.05, until_s=2.0)
     findings = await run_tesla(session, session.cfg, "tesla", asleep_check=True, timings=FAST)
     assert len(findings) == 1
     assert (findings[0].item, findings[0].title, findings[0].status) == (
@@ -770,6 +773,14 @@ async def test_sleep_check_needs_to_know_the_state(tesla_session) -> None:
     session, _ = tesla_session(state={"vehicle.tesla.online": None}, tessie_connected=False)
     findings = await run_tesla(session, session.cfg, "tesla", asleep_check=True, timings=FAST)
     assert findings == [
+        Finding("17.2-7", SLEEP_TITLE, "fail", "nicht beobachtbar: Tessie nicht erreichbar.")
+    ]
+
+
+async def test_sleep_check_needs_a_known_state_from_a_reachable_tessie(tesla_session) -> None:
+    session, _ = tesla_session(state={"vehicle.tesla.online": None})
+    findings = await run_tesla(session, session.cfg, "tesla", asleep_check=True, timings=FAST)
+    assert findings == [
         Finding(
             "17.2-7",
             SLEEP_TITLE,
@@ -777,6 +788,49 @@ async def test_sleep_check_needs_to_know_the_state(tesla_session) -> None:
             "Zustand des Fahrzeugs unbekannt; die Prüfung braucht ein schlafendes Fahrzeug.",
         )
     ]
+
+
+# Der Schlaf-Test braucht frische Meldungen von Tessie, zu Beginn und am Ende: Fällt Tessie aus,
+# gelten die Werte bis zu 900 s weiter, ohne dass jemand das Fahrzeug beobachtet.
+
+
+async def test_sleep_check_with_tessie_failing_is_not_observed(tesla_session) -> None:
+    session, twc = tesla_session(state={"vehicle.tesla.online": False})
+    tessie_reports(twc.store, every_s=0.05, until_s=0.1)  # danach fällt Tessie aus
+    findings = await run_tesla(session, session.cfg, "tesla", asleep_check=True, timings=FAST)
+    assert findings == [
+        Finding(
+            "17.2-7",
+            SLEEP_TITLE,
+            "fail",
+            "nicht beobachtbar: Wert veraltet; Tessie hat sich zum Ende der Prüfung nicht neu "
+            "gemeldet.",
+        )
+    ]
+    assert session.actuators["vehicle.tesla"].sent == []
+
+
+async def test_sleep_check_with_tessie_unreachable_at_the_end_is_not_observed(
+    tesla_session,
+) -> None:
+    session, twc = tesla_session(state={"vehicle.tesla.online": False})
+    tessie_reports(twc.store, every_s=0.05, until_s=2.0)
+    asyncio.get_running_loop().call_later(0.1, twc.store.set_connected, "tessie:tesla", False)
+    findings = await run_tesla(session, session.cfg, "tesla", asleep_check=True, timings=FAST)
+    assert findings == [
+        Finding("17.2-7", SLEEP_TITLE, "fail", "nicht beobachtbar: Tessie nicht erreichbar.")
+    ]
+
+
+async def test_sleep_check_reports_a_car_that_is_awake_in_the_last_report(tesla_session) -> None:
+    # Die letzte Prüfung der Schleife sah noch ein schlafendes Auto; die frische Meldung am Ende
+    # sagt „wach“.
+    session, twc = tesla_session(state={"vehicle.tesla.online": False})
+    asyncio.get_running_loop().call_later(0.45, put_signal, twc.store, "vehicle.tesla.online", True)
+    timings = replace(FAST, sleep_check_s=1.0)  # eine Prüfung in der Schleife, bei 0,3 s
+    findings = await run_tesla(session, session.cfg, "tesla", asleep_check=True, timings=timings)
+    assert [(f.title, f.status) for f in findings] == [(SLEEP_TITLE, "warn")]
+    assert findings[0].detail.startswith("Fahrzeug wurde nach ")
 
 
 # Mit den echten Adaptern

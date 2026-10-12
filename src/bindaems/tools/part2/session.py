@@ -167,8 +167,9 @@ class Part2Session:
       die einen Handgriff des Betreibers brauchen (``SKIPPED_UNATTENDED``).
 
     ``findings`` sind die Befunde, die die Teile mit ``record`` festhalten. ``failure`` nennt,
-    warum der letzte Aufruf von ``set_and_confirm`` keinen bestätigten Wert ergab. ``confirmed``
-    ist der zuletzt bestätigte Wert je Aktor und Art, auch vom Wiederherstellen.
+    warum der letzte Aufruf von ``set_and_confirm`` keinen bestätigten Wert ergab, ``sent``, ob er
+    einen Auftrag hinausgeschickt hat. ``confirmed`` ist der zuletzt bestätigte Wert je Aktor und
+    Art, auch vom Wiederherstellen.
     """
 
     def __init__(
@@ -193,6 +194,7 @@ class Part2Session:
         self.unattended = unattended
         self.findings: list[Finding] = []
         self.failure: str | None = None
+        self.sent = False
         self._store = store
         self._ask = ask
         self._poll_s = poll_s
@@ -348,11 +350,10 @@ class Part2Session:
         steuerbar ist, geht nie etwas.
 
         Ergebnis sind die Sekunden vom ersten Senden bis zur Bestätigung, sonst ``None``; dann
-        nennt ``failure`` den Grund: ging nichts hinaus, warum (Werte nach der Rückfrage nicht
-        aktuell, nicht steuerbar, abgelehnt, vorgefundener Wert unbekannt oder außerhalb der Regeln
-        1–3), sonst die Frist. Meldet
-        der Aktor ausdrücklich einen Fehler (Tesla: Tessie lehnt ab), endet das Warten sofort mit
-        „Fehler: …“.
+        nennt ``failure`` den Grund: ging nichts hinaus (``sent`` ist dann falsch), warum (Werte
+        nach der Rückfrage nicht aktuell, nicht steuerbar, abgelehnt, vorgefundener Wert unbekannt
+        oder außerhalb der Regeln 1–3), sonst die Frist. Meldet der Aktor ausdrücklich einen
+        Fehler (Tesla: Tessie lehnt ab), endet das Warten sofort mit „Fehler: …“.
 
         Ein Aktor, eine Art oder ein Wert, den die Regeln 1–3 klemmen oder ablehnen würden, ist ein
         Fehler des Werkzeugs (``ValueError``), noch vor jedem Senden. Vor dem ersten angenommenen
@@ -361,6 +362,7 @@ class Part2Session:
         device = self._checked(actuator, kind, value)
         key = (actuator, kind)
         self.failure = None
+        self.sent = False
         if self._budget_used_up(kind):
             self.failure = PERSISTENT_LIMIT
             return None
@@ -376,6 +378,7 @@ class Part2Session:
                 problem = self._send(device, key, kind, value)
                 if problem is None:
                     first_sent = last_sent = self.monotonic()
+                    self.sent = True
                 else:
                     blocked = problem
             if first_sent is not None:
@@ -411,11 +414,11 @@ class Part2Session:
         Sitzung nicht mehr als ihren Schreibvorgängen: Bestätigt Tessie „aus“ und lehnt „an“ ab,
         zeigt der Cache noch den vorgefundenen Zustand, und „an“ geht trotzdem noch einmal hinaus.
 
-        Jeder Wert hat seine eigene Frist ``timeout_s`` (15 s), mit Warten und erneutem Senden wie
-        in ``set_and_confirm``. Der Befund ist OK („Wiederhergestellt …“) oder FEHLER mit dem
-        Grund; eine Ausnahme wird zum Befund. Reicht das Budget für persistente Schreibzugriffe
-        nicht mehr, wird der Wert nicht geschrieben, sondern einmal gemeldet. Die Befunde
-        erscheinen auch auf der Konsole.
+        Jeder Wert hat seine eigene Frist ``timeout_s`` (Standard ``RESTORE_S``), mit Warten und
+        erneutem Senden wie in ``set_and_confirm``. Der Befund ist OK („Wiederhergestellt …“) oder
+        FEHLER mit dem Grund; eine Ausnahme wird zum Befund. Reicht das Budget für persistente
+        Schreibzugriffe nicht mehr, wird der Wert nicht geschrieben, sondern einmal gemeldet. Die
+        Befunde erscheinen auch auf der Konsole.
         """
         findings: list[Finding] = []
         for key, original in reversed(list(self._originals.items())):
