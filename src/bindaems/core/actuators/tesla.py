@@ -6,8 +6,14 @@ Die drei Befehle (Plan 2b, Präzisierung 1) sind ``start_charging``, ``stop_char
 das darf insgesamt höchstens ``COMMAND_TIMEOUT_S`` dauern (Spec 6.5). Der Zyklus wartet darauf
 nie: ``send`` startet den Befehl als Aufgabe des Event-Loops und kehrt sofort zurück, ``confirm``
 fragt, ob sie fertig ist.
-Bestätigt ist ein Befehl, wenn Tessie ``{"result": true}`` liefert (Präzisierung 6); den Cache
-fragt ``confirm`` nicht, denn er hinkt dem Fahrzeug hinterher.
+Bestätigt ist ein Befehl, wenn Tessie ``{"result": true}`` liefert (Präzisierung 6). Beim Strom
+reicht das nicht: Tessie bestätigt einen Befehl auf oder von 5 A, ohne dass das Auto ihn übernimmt,
+und erst der zweite wirkt (Prüfprotokoll Teil 2 vom 12.10.2026). Nach der Bestätigung wartet
+``confirm`` darum bis ``verify_s`` auf die nächste frische Meldung des Stroms im Tessie-Cache. Zeigt
+sie einen anderen Wert, geht der Befehl einmal erneut hinaus, aber nur, solange das Auto steuerbar
+ist; die Bestätigung dieser Wiederholung zählt dann ohne weitere Prüfung. Kommt keine frische
+Meldung, gilt die Bestätigung von Tessie wie bisher. Laden an und aus prüft ``confirm`` nicht im
+Cache.
 
 Tessie weckt das Fahrzeug bei Befehlen selbst. Der Tesla ist deshalb nur steuerbar, wenn der Cache
 ``online`` meldet und das Fahrzeug zu Hause und angesteckt ist (Spec 3.7, 6.5). Das sagt
@@ -22,23 +28,28 @@ from __future__ import annotations
 import asyncio
 from collections import deque
 from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Final
 
 import httpx
+import structlog
 from pydantic import SecretStr
 
 from bindaems.core.adapters.tessie import TESSIE_BASE_URL
-from bindaems.core.control.actuator import Capabilities, Confirmation
+from bindaems.core.control.actuator import Capabilities, Confirmation, matches
 from bindaems.shared.config import VehicleConfig
 from bindaems.shared.control import CommandKind, CommandValue, vehicle_actuator
-from bindaems.shared.domain import Alarm, Severity, Snapshot
+from bindaems.shared.domain import Alarm, Quality, Severity, Snapshot
 from bindaems.shared.numbers import de, finite_number
 from bindaems.shared.timeutil import LOCAL_TZ
 
 COMMAND_TIMEOUT_S: Final = 60.0  # Frist je Befehl, insgesamt und je httpx-Phase (Spec 6.5)
 FAILURES_ALLOWED: Final = 3  # so viele Fehler binnen FAILURE_WINDOW machen ihn nicht steuerbar
 FAILURE_WINDOW: Final = timedelta(minutes=15)  # Zählfenster und Dauer des Zustands danach
+# So lange wartet ein bestätigter Strom auf eine frische Meldung von Tessie: Beim Laden fragt der
+# Adapter alle 30 s ab. Mit Befehl und Wiederholung (je meist unter 3 s) bleibt das in der Frist.
+VERIFY_S: Final = 40.0
 
 # Gründe, warum der Tesla nicht steuerbar ist (Plan „Texte“); „nach Fehlern“ hat die Uhrzeit und
 # steht in ``_unavailable_text``
@@ -51,8 +62,28 @@ REASON_UNPLUGGED: Final = "Fahrzeug nicht angesteckt."
 REASON_RUNNING: Final = "Befehl an Tessie läuft noch."
 FAILURE_RESULT_FALSE: Final = "Tessie meldet result=false."
 FAILURE_CANCELLED: Final = "Befehl an Tessie abgebrochen."
+FAILURE_NOT_TAKEN: Final = "Fahrzeug übernahm {wanted} A nicht (Tessie meldet {reported} A)."
 
 _MASK: Final = "***"
+
+log = structlog.get_logger(__name__)
+
+
+@dataclass
+class _Check:
+    """Prüfung eines bestätigten Strombefehls im Tessie-Cache.
+
+    ``amps`` ist der gesendete Strom in ganzen Ampere, ``since`` die Zeit des ersten Snapshots, in
+    dem ``confirm`` die Bestätigung sah: Erst eine Meldung danach ist frisch. ``started`` ist
+    derselbe Moment auf der Uhr des Aktors; ab da nimmt ``send`` für die Art nichts an, bis die
+    Prüfung endet, höchstens ``confirm_timeout_s`` lang. ``repeated`` sagt, ob der Befehl schon ein
+    zweites Mal hinausging.
+    """
+
+    amps: int
+    since: datetime | None = None
+    started: datetime | None = None
+    repeated: bool = False
 
 
 def _unavailable_text(until: datetime) -> str:
@@ -81,6 +112,12 @@ def _request(kind: CommandKind, value: CommandValue) -> tuple[str, dict[str, str
             return f"Ungültiger Wert für „{kind}“."
         return ("start_charging" if value else "stop_charging"), {}
     return f"Tesla kennt die Befehlsart „{kind}“ nicht."
+
+
+def _amps_text(value: object) -> str:
+    """Ein gemeldeter Strom für Texte: die Zahl mit ``de``, sonst „unbekannt“."""
+    number = finite_number(value)
+    return "unbekannt" if number is None else de(number)
 
 
 def _answer_failure(response: httpx.Response) -> str | None:
@@ -114,6 +151,7 @@ class TeslaActuator:
     """
 
     confirm_timeout_s = 75.0  # die 60 s des Befehls und etwas Luft, bis die Aufgabe zu Ende ist
+    verify_s = VERIFY_S  # Prüfzeit im Cache nach der Bestätigung; 0 prüft nur schon frische Werte
 
     def __init__(
         self,
@@ -136,6 +174,7 @@ class TeslaActuator:
         self._connected = connected
         self._clock = clock
         self._tasks: dict[CommandKind, asyncio.Task[tuple[Confirmation, str]]] = {}
+        self._checks: dict[CommandKind, _Check] = {}  # nur für den Strom
         # die Zeiten der letzten Fehler: Ist der älteste von drei jünger als das Fenster,
         # ist der Tesla nicht mehr steuerbar
         self._failures: deque[datetime] = deque(maxlen=FAILURES_ALLOWED)
@@ -184,9 +223,10 @@ class TeslaActuator:
         """Startet den Befehl an Tessie als Aufgabe und kehrt sofort zurück.
 
         ``None``, wenn die Aufgabe läuft; sonst der Grund, warum nicht gesendet wurde: Läuft für
-        die Art noch ein Befehl, ist es ``REASON_RUNNING``. Eine andere Art, einen Strom, der
-        keine endliche Zahl ist, und ein Laden, das kein Wahrheitswert ist, schickt der Aktor nie.
-        Ob das Fahrzeug erreichbar ist, prüft der Ausführer mit ``capabilities``.
+        die Art noch ein Befehl oder seine Prüfung im Cache, ist es ``REASON_RUNNING``. Eine
+        andere Art, einen Strom, der keine endliche Zahl ist, und ein Laden, das kein
+        Wahrheitswert ist, schickt der Aktor nie. Ob das Fahrzeug erreichbar ist, prüft der
+        Ausführer mit ``capabilities``.
         """
         request = _request(kind, value)
         if isinstance(request, str):
@@ -194,7 +234,14 @@ class TeslaActuator:
         running = self._tasks.get(kind)
         if running is not None and not running.done():
             return REASON_RUNNING
-        self._tasks[kind] = asyncio.get_running_loop().create_task(self._command(*request))
+        check = self._checks.get(kind)
+        if check is not None and check.started is not None:
+            if self._clock() - check.started < timedelta(seconds=self.confirm_timeout_s):
+                return REASON_RUNNING
+        name, params = request
+        self._tasks[kind] = asyncio.get_running_loop().create_task(self._command(name, params))
+        if kind == CommandKind.CURRENT:
+            self._checks[kind] = _Check(int(params["amps"]))
         return None
 
     async def _command(self, name: str, params: dict[str, str]) -> tuple[Confirmation, str]:
@@ -258,15 +305,64 @@ class TeslaActuator:
         """Offen, solange der Befehl der Art läuft; danach sein Ergebnis.
 
         Das Ergebnis bleibt, bis das nächste ``send`` der Art es ersetzt. Ein abgebrochener Befehl
-        ist gescheitert. Wurde für die Art nichts gesendet, bleibt es offen. Weder der Wert noch
-        der Cache gehen ein: Bestätigt ist, was Tessie bestätigt.
+        ist gescheitert. Wurde für die Art nichts gesendet, bleibt es offen. Bestätigt ist, was
+        Tessie bestätigt; beim Strom prüft ``_check`` das zusätzlich im Tessie-Cache.
         """
         task = self._tasks.get(kind)
         if task is None or not task.done():
             return Confirmation.PENDING, ""
         if task.cancelled():
+            self._checks.pop(kind, None)
             return Confirmation.FAILED, FAILURE_CANCELLED
-        return task.result()
+        result = task.result()
+        check = self._checks.get(kind)
+        if check is None:
+            return result
+        if result[0] is not Confirmation.CONFIRMED or check.repeated:
+            del self._checks[kind]
+            return result
+        return self._check(kind, check, snap)
+
+    def _check(self, kind: CommandKind, check: _Check, snap: Snapshot) -> tuple[Confirmation, str]:
+        """Zeigt die nächste frische Meldung den bestätigten Strom? Sonst einmal wiederholen.
+
+        Frisch ist eine Meldung mit Qualität ``OK``, die nach dem ersten Snapshot mit der
+        Bestätigung kam. Ohne Signal im Snapshot lässt sich nichts prüfen; dann gilt die
+        Bestätigung von Tessie, ebenso, wenn bis ``verify_s`` nach der Bestätigung keine frische
+        Meldung kam. Zeigt eine frische Meldung den Strom, ist er bestätigt. Zeigt sie einen
+        anderen, geht der Befehl ein zweites Mal hinaus, wenn das Auto steuerbar ist; sonst ist er
+        gescheitert, und ``capabilities`` nennt die Gründe. Das Auto wird nie geweckt.
+        """
+        reading = snap.get(f"vehicle.{self._key}.charge_amps")
+        if reading is None:
+            del self._checks[kind]
+            return Confirmation.CONFIRMED, ""
+        if check.since is None:
+            check.since, check.started = snap.ts, self._clock()
+        if reading.quality is not Quality.OK or reading.ts <= check.since:
+            if (snap.ts - check.since).total_seconds() >= self.verify_s:
+                del self._checks[kind]
+                return Confirmation.CONFIRMED, ""
+            return Confirmation.PENDING, ""
+        if matches(kind, float(check.amps), finite_number(reading.value)):
+            del self._checks[kind]
+            return Confirmation.CONFIRMED, ""
+        wanted, reported = de(check.amps), _amps_text(reading.value)
+        capabilities = self.capabilities(snap, self._clock())
+        if not capabilities.controllable:
+            del self._checks[kind]
+            text = FAILURE_NOT_TAKEN.format(wanted=wanted, reported=reported)
+            return Confirmation.FAILED, " ".join((text, *capabilities.reasons))
+        log.info(
+            "Tesla übernahm den Strom nicht, Befehl wiederholt",
+            vehicle=self._name,
+            wanted_a=check.amps,
+            reported_a=reading.value,
+        )
+        check.repeated = True
+        request = self._command("set_charging_amps", {"amps": str(check.amps)})
+        self._tasks[kind] = asyncio.get_running_loop().create_task(request)
+        return Confirmation.PENDING, ""
 
     async def aclose(self) -> None:
         """Bricht laufende Befehle ab und wartet, bis ihre Aufgaben zu Ende sind.

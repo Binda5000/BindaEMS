@@ -309,9 +309,9 @@ Demo-Zugänge: `admin`, `gast` (Lesen) und `sicher` (Admin mit TOTP, Geheimnis
     `friendly_name_str`
   - Wichtig auch für die Lastprognose aus der HA-Historie.
 - **Offen an der Anlage, als Nächstes (Plan 2b):**
-  1. Tesla: `vehicles.tesla.min_a: 6` in der `config.yaml` setzen (empfohlen, siehe Nachtrag zum
-     zweiten Tesla-Bericht vom 12.10.2026), den core neu starten und den Punkt `tesla`
-     wiederholen. Den Schlaf-Test (`--schlafend`) durchführen (Betriebshandbuch 11).
+  1. Tesla: mit den neuen Images (Wiederholung des Strombefehls, siehe unten) den Punkt `tesla`
+     wiederholen; „Verhalten bei 5 A“ sollte jetzt wirken. Den Schlaf-Test (`--schlafend`)
+     durchführen (Betriebshandbuch 11).
   2. EVCS: den Schritt „Verbindung unterbrochen“ nachholen (Punkt `evcs` erneut, die Rückfrage
      mit `j` beantworten und das Netzwerkkabel der EVCS ziehen, wenn das Werkzeug es verlangt).
   3. Victron: 17.2-4 „Kein Akku ins Auto“ (während ein Auto an der EVCS lädt) und 17.2-8
@@ -414,9 +414,11 @@ Punkte aufgreifen:
     muss es danach wieder aufnehmen.
   - **Tesla-Ladestrom:** Über Tessie wirkt ein Befehl, der auf 5 A setzt oder von 5 A weggeht, erst
     beim zweiten Mal, obwohl Tessie den ersten mit `result: true` bestätigt (Prüfprotokoll Teil 2
-    vom 12.10.2026, Nachtrag). Der Tesla-Aktor soll nach der Bestätigung im Cache prüfen, ob der
-    Wert angekommen ist, und sonst einmal wiederholen. Die Regelung nimmt einen bestätigten
-    Befehl nicht als Wirkung; maßgeblich ist der gemessene Strom.
+    vom 12.10.2026, Nachtrag). Seit dem 12.10.2026 wartet der Tesla-Aktor nach der Bestätigung bis
+    40 s (`VERIFY_S`) auf die nächste frische Meldung des Stroms und sendet den Befehl einmal
+    erneut, wenn sie den alten Wert zeigt; ohne frische Meldung gilt die Bestätigung von Tessie.
+    Die Regelung nimmt trotzdem einen bestätigten Befehl nicht als Wirkung; maßgeblich ist der
+    gemessene Strom.
   - **Netz-Sollwert-Override:** Er verschwindet nach 5 min ohne Auffrischen (Prüfprotokoll Teil 2
     vom 12.10.2026). Die Regelung muss einen gewollten Override vorher auffrischen.
   - **Entladegrenze:** Es gibt einen flüchtigen Override `ess.override.maxdischargepower`. Prüfen,

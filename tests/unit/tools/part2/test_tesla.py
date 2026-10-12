@@ -82,6 +82,31 @@ async def test_current_change_reaches_the_wall_connector(tesla_session, respx_mo
     )
 
 
+async def test_a_current_the_car_takes_only_the_second_time_is_sent_twice(
+    tesla_session, respx_mock
+) -> None:
+    # An der Anlage (Prüfprotokoll Teil 2 vom 12.10.2026) bestätigte Tessie jeden Strombefehl, das
+    # Auto übernahm einen auf oder von 5 A aber erst beim zweiten. Hier übernimmt es jeden Wert
+    # erst beim zweiten Mal; der Cache meldet, was das Auto eingestellt hat.
+    session, twc = tesla_session(answers=[False], twc_follows=True, check_s=0.5)
+    sent: list[str] = []
+
+    def command(request: httpx.Request) -> httpx.Response:
+        amps = request.url.params["amps"]
+        if sent and sent[-1] == amps:
+            put_signal(twc.store, "vehicle.tesla.charge_amps", int(amps))
+        sent.append(amps)
+        return httpx.Response(200, json={"result": True})
+
+    respx_mock.post(AMPS_URL).mock(side_effect=command)
+    tessie_reports(twc.store, every_s=0.05, until_s=10.0)  # der Adapter fragt laufend ab
+    findings = await run_tesla(session, session.cfg, "tesla", timings=ROOMY)
+    status = {f.title: f.status for f in findings}
+    assert status["Ladestrom 10 A"] == "ok" and status["Verhalten bei 5 A"] == "ok"
+    assert sent == ["10", "10", "5", "5", "16", "16"]  # je Wert einmal wiederholt
+    assert twc.store.snapshot().ok("vehicle.tesla.charge_amps") == 16  # wiederhergestellt
+
+
 async def test_asleep_stops_before_any_command(tesla_session, respx_mock) -> None:
     stray = stray_requests(respx_mock)  # ohne Route zeichnet respx eine Anfrage nicht auf
     session, _ = tesla_session(state={"vehicle.tesla.online": False})
@@ -866,6 +891,7 @@ async def test_the_part_reads_what_the_real_adapters_write(cfg: Config, respx_mo
         lambda: store.connected("tessie:tesla") is True,
         clock=SystemClock().now,
     )
+    car.verify_s = 0.0  # der Cache von Tessie folgt hier keinem Befehl: Tessies Bestätigung zählt
     session = Part2Session(
         cfg,
         store=store,

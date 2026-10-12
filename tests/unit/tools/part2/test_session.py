@@ -505,6 +505,7 @@ def tesla_session(
         lambda: True,
         clock=SystemClock().now,
     )
+    car.verify_s = 0.0  # der Cache folgt hier keinem Befehl: Tessies Bestätigung zählt
     return Part2Session(
         cfg,
         store=store,

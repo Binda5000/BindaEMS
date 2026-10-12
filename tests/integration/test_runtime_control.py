@@ -1172,8 +1172,10 @@ TESSIE_COMMAND = "https://api.tessie.com/5YJ3E7EB0MF000000/command"
 async def test_tesla_current_is_watched_only_once_the_cache_shows_it(
     runtime_env, respx_mock
 ) -> None:
-    for command in ("set_charging_amps", "stop_charging"):
-        respx_mock.post(f"{TESSIE_COMMAND}/{command}").respond(200, json={"result": True})
+    amps = respx_mock.post(f"{TESSIE_COMMAND}/set_charging_amps").respond(
+        200, json={"result": True}
+    )
+    respx_mock.post(f"{TESSIE_COMMAND}/stop_charging").respond(200, json={"result": True})
     car = {"online": True, "at_home": True, "plugged": True, "charging_state": "Charging"}
     state = GOOD_STATE | {f"vehicle.tesla.{name}": value for name, value in car.items()}
     state |= {"vehicle.tesla.charge_amps": 16}
@@ -1188,7 +1190,12 @@ async def test_tesla_current_is_watched_only_once_the_cache_shows_it(
     run(rt, clock, 1)  # SAFE bei 31 s: Strom 5 A und Laden aus an Tessie
     await asyncio.sleep(0.01)  # Tessie bestätigt beide
     state |= {"system.active_in_source": 1}  # Netz wieder da
-    run(rt, clock, 30)  # der Cache zeigt noch 16 A: drei Prüfungen, aber noch keine Erwartung
+    # Die erste frische Meldung zeigt noch 16 A: Der Aktor wiederholt den Strombefehl einmal
+    # (Tessie bestätigt Befehle auf oder von 5 A, ohne dass das Auto sie übernimmt).
+    run(rt, clock, 2)
+    await asyncio.sleep(0.01)
+    assert amps.call_count == 2
+    run(rt, clock, 28)  # der Cache zeigt noch 16 A: drei Prüfungen, aber noch keine Erwartung
     assert locked(rt)["vehicle.tesla"] == []
     state |= {"vehicle.tesla.charge_amps": 5}
     run(rt, clock, 1)  # der Cache zeigt 5 A: ab jetzt erwartet

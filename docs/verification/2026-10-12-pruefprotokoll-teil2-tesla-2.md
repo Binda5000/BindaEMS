@@ -48,7 +48,7 @@ Abstand; der Zustand jeweils live von Tessie:
   Auto den Wert übernommen hat.
 - **Folge:** Das Auto blieb nach dem Versuch auf 5 A stehen; der Betreiber stellt den Strom in der
   App zurück.
-- **Empfehlung:** `vehicles.tesla.min_a: 6`. Damit fällt der 5-A-Fall weg, und der Sicherwert des
-  Tesla ist 6 A. Danach den Punkt `tesla` wiederholen; „Verhalten bei 6 A“ sollte dann wirken.
-- **Für Plan 2c:** Der Tesla-Aktor soll nach der Bestätigung durch Tessie im Cache prüfen, ob der
-  Wert angekommen ist, und den Befehl sonst einmal wiederholen.
+- **Umgesetzt am 12.10.2026:** Der Tesla-Aktor wartet nach der Bestätigung durch Tessie bis 40 s
+  auf die nächste frische Meldung des Stroms. Zeigt sie den alten Wert, sendet er den Befehl einmal
+  erneut. `min_a` kann deshalb bei 5 A bleiben. Ein weiterer Lauf des Punkts `tesla` mit den neuen
+  Images soll zeigen, dass „Verhalten bei 5 A“ jetzt wirkt.
