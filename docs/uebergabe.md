@@ -279,11 +279,12 @@ Demo-Zugänge: `admin`, `gast` (Lesen) und `sicher` (Admin mit TOTP, Geheimnis
   - Teil 2 Victron am 12.10.2026 mit vorübergehend abgeschaltetem DESS: Override setzen und mit
     `null` aufheben bestätigt, Ruhezustand `null`, Entladesperre und Netzladen wirken. Neu: Der
     Override verschwindet nach 5 min ohne Auffrischen. Offen sind 17.2-4 und 17.2-8.
-  - Teil 2 Tesla am 12.10.2026 teilweise bestanden: Befehle über Tessie und „Laden aus und an“
-    wirken, das schlafende Auto wurde nicht geweckt. Nicht belegt ist, dass das Auto einem neuen
-    Ladestrom folgt: Bei 5 A (Mindeststrom laut `config.yaml`) blieb es nach 90 s bei 10,1 A.
-    Ein erster Lauf meldete „Fahrzeug nicht zu Hause.“, obwohl es zu Hause war; danach nicht
-    mehr. Der Schlaf-Test steht aus.
+  - Teil 2 Tesla am 12.10.2026 teilweise bestanden (zwei Läufe): Das Auto folgt Strombefehlen
+    über Tessie (13 → 10 A in 4 s), „Laden aus und an“ wirkt, das schlafende Auto wurde nicht
+    geweckt. 5 A über Tessie wirkt nicht (Strom bleibt bei 10,1 A, Tessie bestätigt nach 0,5 s),
+    5 A über die Tesla-App schon; die Ursache ist offen. „Fahrzeug nicht zu Hause.“ im ersten
+    Lauf kam von einer falschen `site.location`, die der Betreiber korrigiert hat. Der
+    Schlaf-Test steht aus.
 - **Befunde:**
   - Dynamic ESS bleibt nach Entscheidung des Betreibers an, bis Victron live geschaltet wird.
   - Die EVCS (AC22NS, Produkt-ID 0xC026) liest der Cerbo per Modbus TCP unter
@@ -307,10 +308,9 @@ Demo-Zugänge: `admin`, `gast` (Lesen) und `sicher` (Admin mit TOTP, Geheimnis
     `friendly_name_str`
   - Wichtig auch für die Lastprognose aus der HA-Historie.
 - **Offen an der Anlage, als Nächstes (Plan 2b):**
-  1. Tesla: den Punkt `tesla` wiederholen, nachdem der Ladestrom in der Tesla-App auf z. B.
-     16 A stand (dann ist „Ladestrom 10 A“ messbar). Den tatsächlichen Mindeststrom des Autos
-     klären und `vehicles.tesla.min_a` darauf setzen. Den Schlaf-Test (`--schlafend`)
-     durchführen (Betriebshandbuch 11).
+  1. Tesla: klären, warum 5 A über Tessie nicht wirken (über die App schon), und danach
+     `vehicles.tesla.min_a` festlegen. Den Schlaf-Test (`--schlafend`) durchführen
+     (Betriebshandbuch 11).
   2. EVCS: den Schritt „Verbindung unterbrochen“ nachholen (Punkt `evcs` erneut, die Rückfrage
      mit `j` beantworten und das Netzwerkkabel der EVCS ziehen, wenn das Werkzeug es verlangt).
   3. Victron: 17.2-4 „Kein Akku ins Auto“ (während ein Auto an der EVCS lädt) und 17.2-8
@@ -411,10 +411,10 @@ Punkte aufgreifen:
     Aktoren, die die Regelung hält, darf das nicht als fremde Änderung zählen.
   - Nach einem Inselbetrieb bleibt das Laden aus („Laden aus“ des sicheren Zustands); die Regelung
     muss es danach wieder aufnehmen.
-  - **Tesla-Ladestrom:** Im Prüfprotokoll Teil 2 vom 12.10.2026 folgte das Auto 5 A nicht (blieb
-    bei 10,1 A), obwohl Tessie bestätigte. Die Regelung darf einen bestätigten Strombefehl nicht
-    als Wirkung nehmen; maßgeblich ist der gemessene Strom, und `min_a` muss dem echten
-    Mindeststrom des Autos entsprechen.
+  - **Tesla-Ladestrom:** Im Prüfprotokoll Teil 2 vom 12.10.2026 wirkte 5 A über Tessie nicht
+    (blieb bei 10,1 A), obwohl Tessie bestätigte; 10 A wirkte. Die Regelung darf einen
+    bestätigten Strombefehl nicht als Wirkung nehmen; maßgeblich ist der gemessene Strom, und
+    `min_a` muss dem kleinsten Strom entsprechen, der über Tessie wirkt.
   - **Netz-Sollwert-Override:** Er verschwindet nach 5 min ohne Auffrischen (Prüfprotokoll Teil 2
     vom 12.10.2026). Die Regelung muss einen gewollten Override vorher auffrischen.
   - **Entladegrenze:** Es gibt einen flüchtigen Override `ess.override.maxdischargepower`. Prüfen,

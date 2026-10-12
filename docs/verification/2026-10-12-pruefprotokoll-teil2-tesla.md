@@ -23,8 +23,9 @@
   Hause.“, obwohl das Auto zu Hause stand. Weitere Läufe endeten mit „Fahrzeug schläft oder ist
   offline; es wird nicht geweckt.“, bis der Betreiber das Laden in der Tesla-App startete und das
   Auto damit weckte. Dieser Bericht ist der Lauf danach; er hat die früheren Berichte
-  überschrieben. „Nicht zu Hause“ trat danach ohne Änderung der Konfiguration nicht mehr auf. Die
-  Ursache ist offen; vermutlich lieferte Tessie in diesem Moment keine aktuelle Position.
+  überschrieben. Ursache für „nicht zu Hause“ war eine falsche `site.location` in der
+  `config.yaml`; der Betreiber hat sie vor diesem Lauf korrigiert. Die PV-Prognose nutzt dieselbe
+  Position.
 - **Nicht geweckt:** Das Werkzeug hat das schlafende Auto nicht geweckt, wie vorgesehen.
 - **Befehle über Tessie:** Ladestrom und „Laden aus und an“ bestätigte Tessie nach 0,5 s.
 - **Laden aus und an:** wirkt. Der Schütz des Wall Connectors öffnete nach 2 s, das Laden ging
@@ -35,8 +36,5 @@
     10,1 A, obwohl Tessie den Befehl bestätigte (WARNUNG).
   - Ursache offen: Entweder nimmt das Auto unterhalb eines eigenen Mindeststroms keine Änderung
     an, oder es setzt Strombefehle nicht um.
-- **Offen:**
-  - Wiederholung mit vorher höherem Ladestrom (z. B. 16 A in der Tesla-App), damit „Ladestrom
-    10 A“ eine messbare Änderung ist.
-  - Den tatsächlichen Mindeststrom des Autos klären und `vehicles.tesla.min_a` darauf setzen.
-  - Den Schlaf-Test (`--schlafend`).
+- **Offen:** Wiederholung mit messbarem Stromwechsel und der Schlaf-Test. Die Wiederholung folgte
+  am selben Tag (`2026-10-12-pruefprotokoll-teil2-tesla-2.md`).
