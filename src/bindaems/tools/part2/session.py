@@ -12,9 +12,11 @@ Betreiber (Plan 2b, Präzisierung 11). Die Sitzung startet dafür die echten Ada
   erneut, wenn er ablehnt, und ohne Bestätigung nach ``resend_s`` noch einmal. So übersteht ein
   Wert das Neuverbinden zum Cerbo nach einer langen Rückfrage.
 - Vor dem ersten Schreiben je Aktor und Art merkt sie sich den vorgefundenen Wert (``present``).
-  Ist er unbekannt, schreibt sie nicht: Er ließe sich nicht wiederherstellen. Die Teile prüfen
-  vorher mit ``found_problem``, ob er zu den Regeln 1–3 passt; sonst ließe er sich auch nicht
-  wiederherstellen.
+  Ist er unbekannt, schreibt sie nicht: Er ließe sich nicht wiederherstellen. Dasselbe gilt für
+  einen Wert, den die Regeln 1–3 klemmen oder ablehnen würden (``found_problem``): Sie prüft ihn,
+  wenn der Auftrag hinausgehen soll, und sendet sonst nichts. So gilt es unabhängig davon, wann
+  der Wert auftaucht. Die Teile prüfen ihn in „bereit“ vorher, damit der Betreiber den Grund vor
+  der ersten Rückfrage erfährt.
 - Eine Rückfrage liest von der Konsole, solange steht der Event-Loop und mit ihm der Adapter von
   Tessie. Dessen Werte bleiben 900 s gültig, doch das Auto kann inzwischen schlafen, und ein Befehl
   weckte es. Werte von Tessie, die nicht neuer sind als die letzte Antwort, gelten darum als
@@ -23,7 +25,7 @@ Betreiber (Plan 2b, Präzisierung 11). Die Sitzung startet dafür die echten Ada
 - Nach jedem Schritt (``restore_after_step``), bei Abbruch und am Ende (``restore``) stellt sie
   die vorgefundenen Werte in umgekehrter Reihenfolge wieder her, auch nach Strg+C. Ein Wert, der
   schon wieder steht, wird nicht noch einmal geschrieben. Auch beim Wiederherstellen schreibt sie
-  nur Werte, die die Regeln 1–3 unverändert durchlassen.
+  nur Werte, die die Regeln 1–3 unverändert durchlassen: Vorgefundene Werte sind es immer.
 - Persistente Einstellungen (Entladegrenze, Min-SOC) sind Flash am Cerbo: Die Sitzung sendet sie je
   Lauf höchstens ``MAX_PERSISTENT_WRITES``-mal, das Wiederherstellen eingeschlossen. Danach
   verweigert sie das Schreiben, ohne zu senden. Der Betreiber muss einen Wert, der so stehen bleibt,
@@ -283,8 +285,9 @@ class Part2Session:
 
         Die Sitzung schreibt nur, was die Regeln 1–3 unverändert durchlassen, auch beim
         Wiederherstellen. Ein vorgefundener Wert, den sie klemmen oder ablehnen würden (ein Strom
-        über ``max_a``, unter ``min_a`` oder nicht ganzzahlig), bliebe nach dem Test verstellt. Die
-        Teile fragen darum in „bereit“, vor dem ersten Schreiben, und enden mit FEHLER.
+        über ``max_a``, unter ``min_a`` oder nicht ganzzahlig), bliebe nach dem Test verstellt.
+        Deshalb sendet sie nicht, wenn der vorgefundene Wert so ausfällt (``set_and_confirm``). Die
+        Teile fragen darum auch in „bereit“, vor dem ersten Schreiben, und enden mit FEHLER.
         """
         problems = _range_problems(actuator, kind, value, self.limits)
         if problems is None:
@@ -346,7 +349,8 @@ class Part2Session:
 
         Ergebnis sind die Sekunden vom ersten Senden bis zur Bestätigung, sonst ``None``; dann
         nennt ``failure`` den Grund: ging nichts hinaus, warum (Werte nach der Rückfrage nicht
-        aktuell, nicht steuerbar, abgelehnt, vorgefundener Wert unbekannt), sonst die Frist. Meldet
+        aktuell, nicht steuerbar, abgelehnt, vorgefundener Wert unbekannt oder außerhalb der Regeln
+        1–3), sonst die Frist. Meldet
         der Aktor ausdrücklich einen Fehler (Tesla: Tessie lehnt ab), endet das Warten sofort mit
         „Fehler: …“.
 
@@ -409,8 +413,8 @@ class Part2Session:
 
         Jeder Wert hat seine eigene Frist ``timeout_s`` (15 s), mit Warten und erneutem Senden wie
         in ``set_and_confirm``. Der Befund ist OK („Wiederhergestellt …“) oder FEHLER mit dem
-        Grund; eine Ausnahme wird zum Befund. Ein vorgefundener Wert, den die Regeln 1–3 nicht
-        unverändert durchlassen, wird nicht geschrieben, sondern einmal gemeldet. Die Befunde
+        Grund; eine Ausnahme wird zum Befund. Reicht das Budget für persistente Schreibzugriffe
+        nicht mehr, wird der Wert nicht geschrieben, sondern einmal gemeldet. Die Befunde
         erscheinen auch auf der Konsole.
         """
         findings: list[Finding] = []
@@ -457,7 +461,11 @@ class Part2Session:
     def _send(
         self, device: Actuator, key: _Key, kind: CommandKind, value: CommandValue
     ) -> str | None:
-        """Sendet, wenn der Aktor steuerbar und der Ausgangswert bekannt ist; sonst der Grund."""
+        """Sendet, wenn der Aktor steuerbar und der Ausgangswert brauchbar ist; sonst der Grund.
+
+        Brauchbar ist der Ausgangswert (der erste Auftrag je Aktor und Art merkt ihn sich für
+        ``restore``), wenn er bekannt ist und die Regeln 1–3 ihn unverändert durchlassen.
+        """
         snap = self.snapshot()
         capabilities = device.capabilities(snap, snap.ts)
         if not capabilities.controllable:
@@ -466,6 +474,8 @@ class Part2Session:
         first = key not in self._originals
         if first and kind not in present:
             return f"nicht gesendet: {UNKNOWN_ORIGINAL}"
+        if first and (problem := self.found_problem(key[0], kind, present[kind])) is not None:
+            return f"nicht gesendet: {problem}"
         refusal = device.send(kind, value)
         if refusal is not None:
             return f"nicht gesendet: {refusal}"
@@ -503,11 +513,6 @@ class Part2Session:
         try:
             if self._in_place(key, original):
                 return None
-            problems = _range_problems(actuator, kind, original, self.limits)
-            if problems is not None:
-                self._unrestorable.add(key)
-                detail = f"Ausgangswert außerhalb der Grenzen, nicht geschrieben: {problems}"
-                return Finding(item, title, "fail", detail)
             if self._budget_used_up(kind):  # der Wert bliebe verstellt: einmal melden genügt
                 self._unrestorable.add(key)
                 return Finding(item, title, "fail", PERSISTENT_LIMIT)

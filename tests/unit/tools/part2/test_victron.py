@@ -209,45 +209,160 @@ async def test_ready_waits_for_the_values_after_the_start(victron_session) -> No
     assert findings[0].status == "ok"
 
 
+OVERRIDE_ACTIVE = (
+    "Netz-Sollwert-Override aktiv ({}); ein anderes System regelt – vor dem Test aufheben."
+)
+
+
 @pytest.mark.parametrize(
-    ("state", "problem"),
+    ("override", "shown"), [(500.0, "500 W"), (0.0, "0 W"), (9000.0, "9000 W"), (-300.0, "−300 W")]
+)
+async def test_a_found_override_means_another_system_regulates(
+    victron_session, override: float, shown: str
+) -> None:
+    # Der Teil schriebe über den Override eines anderen Systems und ließe ihn danach liegen oder
+    # löschte ihn: Er fragt nichts und schreibt nichts.
+    asked: list[str] = []
+    session, cerbo = victron_session(
+        answers=[True] * 7, state={"ess.override.setpoint": override}, asked=asked
+    )
+    findings = await run_victron(session, session.cfg, timings=FAST)
+    assert findings == [Finding("17.2-1", "Victron bereit", "fail", OVERRIDE_ACTIVE.format(shown))]
+    assert cerbo.writes == [] and asked == []
+    assert cerbo.values["ess.override.setpoint"] == override  # unangetastet
+
+
+async def test_dess_comes_before_a_found_override(victron_session) -> None:
+    state = {"dess.mode": 1, "ess.override.setpoint": 500.0}
+    session, cerbo = victron_session(state=state)
+    findings = await run_victron(session, session.cfg, timings=FAST)
+    assert len(findings) == 1 and findings[0].detail.startswith("Dynamic ESS ist aktiv (Modus 1)")
+    assert cerbo.writes == []
+
+
+@pytest.mark.parametrize(
+    ("limit", "shown", "problem"),
     [
-        (
-            {"ess.override.setpoint": 9000.0},
-            "Ausgangswert Netz-Sollwert 9000 W außerhalb der Grenzen; er ließe sich nicht "
-            "wiederherstellen: Netz-Sollwert auf 8000 W begrenzt (maximaler Netzladesetpoint).",
-        ),
-        (
-            {"ess.override.setpoint": -300.0},
-            "Ausgangswert Netz-Sollwert −300 W außerhalb der Grenzen; er ließe sich nicht "
-            "wiederherstellen: Netz-Sollwert nie negativ (kein Akku ins Netz): −300 W → 0 W.",
-        ),
-        (
-            {"ess.max_discharge_w": 20000.0},
-            "Ausgangswert Entladegrenze 20000 W außerhalb der Grenzen; er ließe sich nicht "
-            "wiederherstellen: Auf den Höchstwert 12000 W begrenzt.",
-        ),
+        (20000.0, "20000", "Auf den Höchstwert 12000 W begrenzt."),
+        (12000.4, "12000,4", "Auf den Höchstwert 12000 W begrenzt."),
+        (-5.0, "−5", "Wert −5 W liegt außerhalb des zulässigen Bereichs."),
     ],
 )
-async def test_a_found_value_outside_the_limits_is_not_ready(
-    victron_session, state: dict[str, float], problem: str
+async def test_a_found_discharge_limit_outside_the_limits_is_not_ready(
+    victron_session, limit: float, shown: str, problem: str
 ) -> None:
     # Ein solcher Wert ließe sich nach dem Test nicht wiederherstellen: Es wird nichts geschrieben,
     # und niemand wird gefragt.
     asked: list[str] = []
-    session, cerbo = victron_session(state=state, asked=asked)
+    session, cerbo = victron_session(state={"ess.max_discharge_w": limit}, asked=asked)
     findings = await run_victron(session, session.cfg, timings=FAST)
-    assert findings == [Finding("17.2-1", "Victron bereit", "fail", problem)]
+    assert findings == [
+        Finding(
+            "17.2-1",
+            "Victron bereit",
+            "fail",
+            f"Ausgangswert Entladegrenze {shown} W außerhalb der Grenzen; er ließe sich nicht "
+            f"wiederherstellen: {problem}",
+        )
+    ]
     assert cerbo.writes == [] and asked == []
 
 
-async def test_found_values_inside_the_limits_are_ready(victron_session) -> None:
-    # ein Override von früher innerhalb der Grenzen und eine Entladegrenze „unbegrenzt“
-    state = {"ess.override.setpoint": 500.0, "ess.max_discharge_w": -1.0}
-    session, _ = victron_session(answers=NO, state=state)
+@pytest.mark.parametrize("limit", [-1.0, 0.0, 12000.0])
+async def test_found_discharge_limits_inside_the_limits_are_ready(
+    victron_session, limit: float
+) -> None:
+    # „unbegrenzt“ (−1), gesperrt (0) und der Höchstwert selbst
+    session, _ = victron_session(answers=NO, state={"ess.max_discharge_w": limit})
     findings = await run_victron(session, session.cfg, timings=FAST)
-    assert findings[0].status == "ok"
-    assert findings[0].detail.endswith("setpoint = 500")
+    assert findings[0] == Finding(
+        "17.2-1", "Victron bereit", "ok", "hub4-Overrides vorher: setpoint = null"
+    )
+
+
+# „bereit“ wartet bis confirm_s auf Override und Entladegrenze, ehe es entscheidet
+
+
+async def test_ready_waits_for_the_override_and_the_discharge_limit(victron_session) -> None:
+    session, cerbo = victron_session(
+        answers=NO, without=["ess.override.setpoint", "ess.max_discharge_w"]
+    )
+    loop = asyncio.get_running_loop()
+    loop.call_later(0.05, cerbo.put, "ess.override.setpoint", None)
+    loop.call_later(0.08, cerbo.put, "ess.max_discharge_w", 5000.0)
+    findings = await run_victron(session, session.cfg, timings=ROOMY)
+    # Der Override steht in der Liste, denn „bereit“ hat auf ihn gewartet.
+    assert findings[0] == Finding(
+        "17.2-1", "Victron bereit", "ok", "hub4-Overrides vorher: setpoint = null"
+    )
+
+
+async def test_ready_checks_a_discharge_limit_that_is_reported_late(victron_session) -> None:
+    # Der Cerbo meldet die Entladegrenze erst nach dem Start, und sie liegt über dem Höchstwert.
+    # Ohne Prüfung bliebe sie nach dem Test bei 0 W: Sie ließe sich nicht zurückschreiben.
+    asked: list[str] = []
+    session, cerbo = victron_session(
+        answers=ONLY_DISCHARGE, without=["ess.max_discharge_w"], asked=asked
+    )
+    asyncio.get_running_loop().call_later(0.05, cerbo.put, "ess.max_discharge_w", 20000.0)
+    findings = await run_victron(session, session.cfg, timings=ROOMY)
+    assert findings == [
+        Finding(
+            "17.2-1",
+            "Victron bereit",
+            "fail",
+            "Ausgangswert Entladegrenze 20000 W außerhalb der Grenzen; er ließe sich nicht "
+            "wiederherstellen: Auf den Höchstwert 12000 W begrenzt.",
+        )
+    ]
+    assert cerbo.writes == [] and asked == []
+
+
+async def test_ready_checks_an_override_that_is_reported_late(victron_session) -> None:
+    session, cerbo = victron_session(answers=NO, without=["ess.override.setpoint"])
+    asyncio.get_running_loop().call_later(0.05, cerbo.put, "ess.override.setpoint", 500.0)
+    findings = await run_victron(session, session.cfg, timings=ROOMY)
+    assert findings == [
+        Finding("17.2-1", "Victron bereit", "fail", OVERRIDE_ACTIVE.format("500 W"))
+    ]
+    assert cerbo.writes == []
+
+
+async def test_ready_waits_at_most_confirm_s_for_values_that_do_not_come(victron_session) -> None:
+    # Meldet der Cerbo sie nie, entscheidet „bereit“ nach confirm_s mit dem, was da ist; die
+    # Schritte, die den Wert brauchen, melden ihn dann als unbekannt.
+    session, _ = victron_session(
+        answers=NO, without=["ess.override.setpoint", "ess.max_discharge_w"]
+    )
+    started = asyncio.get_running_loop().time()
+    findings = await run_victron(session, session.cfg, timings=replace(FAST, confirm_s=0.3))
+    elapsed = asyncio.get_running_loop().time() - started
+    assert findings[0] == Finding("17.2-1", "Victron bereit", "ok", "hub4-Overrides vorher: keine")
+    assert 0.28 <= elapsed < 2.0
+
+
+async def test_a_discharge_limit_that_comes_after_bereit_is_still_checked_before_the_write(
+    victron_session,
+) -> None:
+    # „bereit“ wartet nur confirm_s. Meldet der Cerbo die Entladegrenze erst danach, etwa wenn der
+    # Betreiber die Rückfrage beantwortet, prüft die Sitzung sie vor dem ersten Schreiben.
+    def reported(cerbo: FakeCerbo) -> None:
+        cerbo.put("ess.max_discharge_w", 20000.0)
+
+    session, cerbo = victron_session(
+        answers=ONLY_DISCHARGE, without=["ess.max_discharge_w"], react={Q_DISCHARGE: reported}
+    )
+    findings = await run_victron(session, session.cfg, timings=FAST)
+    assert findings[0].status == "ok"  # „bereit“ wusste noch nichts davon
+    assert step(findings, "Entladesperre") == Finding(
+        "17.2-2",
+        "Entladesperre",
+        "fail",
+        "Entladegrenze 0 W: nicht gesendet: Ausgangswert Entladegrenze 20000 W außerhalb der "
+        "Grenzen; er ließe sich nicht wiederherstellen: Auf den Höchstwert 12000 W begrenzt.",
+    )
+    assert limits(cerbo) == []
+    assert cerbo.values["ess.max_discharge_w"] == 20000.0  # nichts verstellt
 
 
 # Rückfragen
@@ -1140,13 +1255,12 @@ async def test_each_step_is_undone_before_the_next(victron_session) -> None:
     assert {path for path, _ in cerbo.writes} <= {SETPOINT, DISCHARGE}
 
 
-async def test_a_found_override_is_restored_not_just_lifted(victron_session) -> None:
-    # Stand vor dem Test ein Override (500 W), stellt ihn jeder Schritt wieder her.
-    session, cerbo = victron_session(
-        answers=[True, True, False, False, False, False], state={"ess.override.setpoint": 500.0}
-    )
-    findings = await run_victron(session, session.cfg, timings=FAST)
-    assert cerbo.values["ess.override.setpoint"] == 500.0
-    assert step(findings, "Wiederherstellen: Netz-Sollwert 500 W").status == "ok"
-    # der Schritt selbst hebt auf: auf „kein Override“, danach kommt der Wiederherstellen-Schritt
-    assert setpoints(cerbo)[:3] == [1000.0, None, 500.0]
+async def test_a_run_that_starts_without_an_override_ends_with_it_lifted(victron_session) -> None:
+    # Vorgefunden ist „kein Override“ (sonst endet „bereit“); danach hebt jeder Block ihn auf, auch
+    # der Schritt, der ihn stehen lässt (Ohne Timeout).
+    session, cerbo = victron_session(answers=[True] * 4, unattended=True, plant=charges)
+    await run_victron(session, session.cfg, timings=FAST)
+    assert cerbo.values["ess.override.setpoint"] is None
+    assert any(v is not None for v in setpoints(cerbo))  # er war gesetzt
+    assert setpoints(cerbo)[-1] is None
+    assert await session.restore() == []

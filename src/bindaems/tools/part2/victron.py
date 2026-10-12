@@ -8,10 +8,11 @@ in jedem Schritt der Mittelwert über ``observe_s``. Die Wirkung auf den Akku be
 Akku ins Auto“ über das letzte (das Ausklingen gleich nach dem Schreiben zählt nicht), beim
 Netzladen über das mit der höchsten Leistung („binnen“ der Beobachtung).
 
-1. **Victron bereit** (17.2-1): steuerbar (Cerbo verbunden) und Dynamic ESS aus (``dess.mode`` 0;
-   DESS nullt fremde Overrides, Spec 3.2). Die vorgefundenen Werte von Override und Entladegrenze
-   müssen die Regeln 1–3 passieren (sonst ließen sie sich nicht wiederherstellen). Sonst endet der
-   Teil ohne Schreiben.
+1. **Victron bereit** (17.2-1): steuerbar (Cerbo verbunden), Dynamic ESS aus (``dess.mode`` 0;
+   DESS nullt fremde Overrides, Spec 3.2) und kein Netz-Sollwert-Override aktiv: Steht einer, regelt
+   ein anderes System, und der Teil schriebe darüber. Die vorgefundene Entladegrenze muss die
+   Regeln 1–3 passieren (sonst ließe sie sich nicht wiederherstellen). Vorher wartet der Schritt
+   bis ``confirm_s`` auf Override und Entladegrenze. Sonst endet der Teil ohne Schreiben.
 2. **Netz-Sollwert-Override:** setzen, Wirkung am Netz, mit ``None`` aufheben, Wirkung danach.
    Bestätigt der Cerbo das Aufheben nicht, schreibt der Teil keinen weiteren Override mehr.
 3. **Override ohne Timeout** (Rückfrage): Override setzen und ``hold_s`` halten.
@@ -32,9 +33,9 @@ Netzladen über das mit der höchsten Leistung („binnen“ der Beobachtung).
 Obergrenze ist der Höchstwert des Netz-Sollwerts nach Regel 2 (``HardLimits.grid_setpoint_max``).
 
 Nach jedem Block (jeder schreibende Schritt ist einer) stellt ``Part2Session.restore_after_step``
-die vorgefundenen Werte wieder her; ihre Zeilen stehen hinter dem Schritt (Präzisierung 11). Auch
-den Override, den der Schritt schon selbst aufgehoben hat, setzt das Wiederherstellen auf den
-vorgefundenen Wert, falls dort einer stand. Das letzte ``restore`` am Ende macht der Aufrufer.
+die vorgefundenen Werte wieder her; ihre Zeilen stehen hinter dem Schritt (Präzisierung 11). Der
+vorgefundene Override ist stets „keiner“, denn sonst endet „bereit“: Am Ende ist er aufgehoben.
+Das letzte ``restore`` am Ende macht der Aufrufer.
 """
 
 from __future__ import annotations
@@ -225,7 +226,6 @@ class _VictronSteps:
         self._ceiling = session.limits.grid_setpoint_max(None)[0]
         wallboxes = cfg.wallboxes.items()
         self._evcs = [key for key, wallbox in wallboxes if isinstance(wallbox, EvcsConfig)]
-        self._found_override: CommandValue = None  # der Override, der vor dem Test stand
         self._ac_before: float | None = None  # AcPowerSetPoint vor den Override-Schritten
         self._overridden = False  # hat der Cerbo in den Schritten 2 bis 4 einen Override bestätigt?
         self._stuck = False  # steht noch ein Override, den das Wiederherstellen nicht aufhob?
@@ -256,7 +256,7 @@ class _VictronSteps:
     # Victron bereit
 
     async def _ready(self) -> bool:
-        """Victron bereit: steuerbar, Dynamic ESS aus, vorgefundene Werte innerhalb der Grenzen."""
+        """Victron bereit: steuerbar, Dynamic ESS aus, kein Override, Entladegrenze innerhalb."""
         title = "Victron bereit"
         await self._session.wait_for(self._is_ready, self._t.confirm_s)
         snap = self._session.snapshot()
@@ -275,20 +275,39 @@ class _VictronSteps:
             )
             return False
         present = self._actuator.present(snap)
-        for kind in (CommandKind.GRID_SETPOINT, CommandKind.MAX_DISCHARGE):
-            if kind in present:
-                problem = self._session.found_problem(VICTRON, kind, present[kind])
-                if problem is not None:
-                    self._record(title, "fail", problem)
-                    return False
-        self._found_override = present.get(CommandKind.GRID_SETPOINT)
+        override = finite_number(present.get(CommandKind.GRID_SETPOINT))
+        if override is not None:  # Ein anderes System regelt über den Override.
+            self._record(
+                title,
+                "fail",
+                f"Netz-Sollwert-Override aktiv ({de(override)} W); ein anderes System regelt – "
+                "vor dem Test aufheben.",
+            )
+            return False
+        if CommandKind.MAX_DISCHARGE in present:
+            problem = self._session.found_problem(
+                VICTRON, CommandKind.MAX_DISCHARGE, present[CommandKind.MAX_DISCHARGE]
+            )
+            if problem is not None:
+                self._record(title, "fail", problem)
+                return False
         self._ac_before = self._ac_setpoint(snap)
         self._record(title, "ok", f"hub4-Overrides vorher: {_overrides(snap)}")
         return True
 
     def _is_ready(self, snap: Snapshot) -> bool:
-        """Steuerbar und mit bekanntem Modus von Dynamic ESS?"""
-        return self._controllable(snap) and finite_number(snap.ok("dess.mode")) is not None
+        """Steuerbar, mit bekanntem Modus von Dynamic ESS und mit Override und Entladegrenze?
+
+        Der Cerbo meldet seine Werte nach dem Start nach und nach. „bereit“ entscheidet erst, wenn
+        alles da ist, spätestens nach ``confirm_s``; was dann fehlt, melden die Schritte als
+        unbekannt.
+        """
+        if not self._controllable(snap) or finite_number(snap.ok("dess.mode")) is None:
+            return False
+        present = self._actuator.present(snap)
+        return all(
+            kind in present for kind in (CommandKind.GRID_SETPOINT, CommandKind.MAX_DISCHARGE)
+        )
 
     # Netz-Sollwert-Override
 
@@ -600,9 +619,9 @@ class _VictronSteps:
         return CommandKind.GRID_SETPOINT in present, present.get(CommandKind.GRID_SETPOINT)
 
     def _override_stuck(self) -> bool:
-        """Steht ein Override, der nicht der vorgefundene Zustand ist? Unbekannt zählt nicht."""
+        """Steht ein Override? Vorgefunden war keiner. Unbekannt zählt nicht."""
         known, current = self._override_state(self._session.snapshot())
-        return known and not matches(CommandKind.GRID_SETPOINT, self._found_override, current)
+        return known and current is not None
 
     def _blocked(self, title: str, item: str = ITEM) -> bool:
         """Steht ein Override, den das Wiederherstellen nicht aufhob? Dann kommt kein weiterer."""

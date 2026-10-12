@@ -688,7 +688,7 @@ def test_declined_start_names_what_the_victron_part_writes(
         "Netz-Sollwert-Override",
         "Entladegrenze",
         "höchstens 4 persistente Schreibzugriffe",
-        "Dynamic ESS",
+        "Dynamic ESS und einen Cerbo ohne Netz-Sollwert-Override",
         "Abgebrochen.",
     ):
         assert text in shown

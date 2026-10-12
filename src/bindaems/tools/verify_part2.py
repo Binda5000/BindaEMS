@@ -25,7 +25,8 @@ schlafendes Fahrzeug schläft. ``tesla`` braucht ``BINDAEMS_TESSIE_TOKEN``. ``vi
 17.2-4 und 17.2-8): Override des Netz-Sollwerts, Entladesperre, Netzladen, „kein Akku ins Auto“
 (mit der Leistung aller EVCS) und Importlimit. Es verweigert, solange Dynamic ESS aktiv ist, denn
 DESS nullt fremde Overrides: Der Betreiber schaltet DESS vorher ab, vor der Live-Schaltung von
-Victron. Die Entladegrenze ist eine gespeicherte Einstellung; das Werkzeug schreibt sie je Lauf
+Victron. Es verweigert auch, solange ein Netz-Sollwert-Override steht, denn dann regelt ein anderes
+System. Die Entladegrenze ist eine gespeicherte Einstellung; das Werkzeug schreibt sie je Lauf
 höchstens viermal.
 
 Exitcode 0: kein Befund ist FEHLER. 1: ein Befund ist FEHLER, der Betreiber hat die Rückfrage vor
@@ -96,9 +97,9 @@ WARNINGS: Final = {
         "Das Werkzeug setzt am Cerbo kurz den Netz-Sollwert-Override (der Akku lädt dabei aus dem "
         "Netz) und stellt die Entladegrenze auf 0 W, eine gespeicherte Einstellung (höchstens "
         f"{MAX_PERSISTENT_WRITES} persistente Schreibzugriffe je Lauf). Es fragt vor jedem "
-        "weiteren schreibenden Schritt nach und verlangt ausgeschaltetes Dynamic ESS; sonst endet "
-        "es ohne zu schreiben. Nach jedem Schritt und am Ende, auch nach Strg+C, stellt es die "
-        "vorgefundenen Werte wieder her."
+        "weiteren schreibenden Schritt nach und verlangt ausgeschaltetes Dynamic ESS und einen "
+        "Cerbo ohne Netz-Sollwert-Override; sonst endet es ohne zu schreiben. Nach jedem Schritt "
+        "und am Ende, auch nach Strg+C, stellt es die vorgefundenen Werte wieder her."
     ),
     "tesla-schlafend": (
         "Das Werkzeug prüft am Fahrzeug „{device}“, dass ein schlafendes Auto nicht geweckt wird. "

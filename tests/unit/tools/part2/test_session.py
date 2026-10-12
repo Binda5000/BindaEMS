@@ -28,6 +28,11 @@ from bindaems.tools.part2.session import Part2Session, build_session, minutes, s
 from bindaems.tools.verify_checks import Finding
 
 CURRENT, CHARGING = CommandKind.CURRENT, CommandKind.CHARGING
+MAX_DISCHARGE, MIN_SOC, GRID_SETPOINT = (
+    CommandKind.MAX_DISCHARGE,
+    CommandKind.MIN_SOC,
+    CommandKind.GRID_SETPOINT,
+)
 
 
 def currents(evcs: FakeEvcs) -> list[float | int | None]:
@@ -166,20 +171,76 @@ async def test_restore_runs_in_reverse_order(evcs_session) -> None:
     assert evcs.writes[-2:] == [("evcharger/40/StartStop", 1), ("evcharger/40/SetCurrent", 16)]
 
 
-async def test_restore_does_not_write_an_original_outside_the_limits(evcs_session) -> None:
-    session, evcs = evcs_session(state={"wallbox.evcs.gx_set_current_a": 32})
-    await session.set_and_confirm("wallbox.evcs", CURRENT, 10.0, 0.5)
-    assert await session.restore() == [
-        Finding(
-            "17.2-6",
-            "Wiederherstellen: Strom 32 A",
-            "fail",
-            "Ausgangswert außerhalb der Grenzen, nicht geschrieben: "
-            "Auf den Höchstwert 16 A begrenzt.",
-        )
+# Ein vorgefundener Wert außerhalb der Regeln 1–3 ließe sich nicht wiederherstellen: Die Sitzung
+# sendet dann gar nicht erst, wann immer der Wert auftaucht.
+
+OUTSIDE = "außerhalb der Grenzen; er ließe sich nicht wiederherstellen: "
+
+
+@pytest.mark.parametrize(
+    ("current", "problem"),
+    [
+        (32, "Auf den Höchstwert 16 A begrenzt."),
+        (3, "Unter dem Mindeststrom 6 A; zum Abschalten das Laden beenden."),
+        (10.5, "Auf ganze Ampere abgerundet: 10,5 A → 10 A."),
+    ],
+)
+async def test_a_found_value_outside_the_limits_is_not_written(
+    evcs_session, current: float, problem: str
+) -> None:
+    session, evcs = evcs_session(state={"wallbox.evcs.gx_set_current_a": current})
+    assert await session.set_and_confirm("wallbox.evcs", CURRENT, 10.0, 0.1) is None
+    shown = {32: "32", 3: "3", 10.5: "10,5"}[current]
+    assert session.failure == f"nicht gesendet: Ausgangswert Strom {shown} A {OUTSIDE}{problem}"
+    assert evcs.writes == []
+    assert await session.restore() == []  # nichts geschrieben, nichts herzustellen
+
+
+@pytest.mark.parametrize(
+    ("kind", "name", "found", "text"),
+    [
+        (MAX_DISCHARGE, "ess.max_discharge_w", 20000.0, "Entladegrenze 20000 W"),
+        (MAX_DISCHARGE, "ess.max_discharge_w", 12000.4, "Entladegrenze 12000,4 W"),
+        (GRID_SETPOINT, "ess.override.setpoint", 9000.0, "Netz-Sollwert 9000 W"),
+        (GRID_SETPOINT, "ess.override.setpoint", -300.0, "Netz-Sollwert −300 W"),
+    ],
+)
+async def test_a_found_victron_value_outside_the_limits_is_not_written(
+    victron_session, kind: CommandKind, name: str, found: float, text: str
+) -> None:
+    session, cerbo = victron_session(state={name: found})
+    assert await session.set_and_confirm("victron", kind, 0.0, 0.1) is None
+    assert session.failure is not None
+    assert session.failure.startswith(f"nicht gesendet: Ausgangswert {text} {OUTSIDE}")
+    assert cerbo.writes == []
+    assert await session.restore() == []
+
+
+async def test_a_found_value_that_arrives_late_is_checked_when_it_arrives(victron_session) -> None:
+    # Der Cerbo meldet die Entladegrenze erst nach dem Start; sie liegt über dem Höchstwert. Würde
+    # sie ohne Prüfung als Ausgangswert gemerkt, bliebe die Grenze nach dem Test bei 0 W.
+    session, cerbo = victron_session(without=["ess.max_discharge_w"])
+    asyncio.get_running_loop().call_later(0.05, cerbo.put, "ess.max_discharge_w", 20000.0)
+    assert await session.set_and_confirm("victron", MAX_DISCHARGE, 0.0, 0.3) is None
+    assert session.failure == (
+        f"nicht gesendet: Ausgangswert Entladegrenze 20000 W {OUTSIDE}Auf den Höchstwert 12000 W "
+        "begrenzt."
+    )
+    assert cerbo.writes == []
+    assert await session.restore() == []
+
+
+async def test_a_found_value_that_comes_back_inside_the_limits_is_written(victron_session) -> None:
+    # Der Wert wird bei jedem Versuch neu geprüft: Liegt er innerhalb der Frist wieder innerhalb
+    # der Grenzen, geht der Auftrag hinaus, und das Wiederherstellen nimmt diesen Wert.
+    session, cerbo = victron_session(state={"ess.max_discharge_w": 20000.0})
+    asyncio.get_running_loop().call_later(0.05, cerbo.put, "ess.max_discharge_w", 5000.0)
+    assert await session.set_and_confirm("victron", MAX_DISCHARGE, 0.0, 0.5) is not None
+    rows = await session.restore(timeout_s=0.5)
+    assert [(row.title, row.status) for row in rows] == [
+        ("Wiederherstellen: Entladegrenze 5000 W", "ok")
     ]
-    assert await session.restore() == []  # einmal gemeldet genügt
-    assert currents(evcs) == [10]
+    assert [v for p, v in cerbo.writes if "MaxDischargePower" in p] == [0.0, 5000.0]
 
 
 async def test_unconfirmed_restore_is_an_error_not_an_exception(evcs_session) -> None:
@@ -627,11 +688,6 @@ async def test_persistent_settings_are_not_sent_again(cfg: Config) -> None:
 
 # Persistente Schreibzugriffe: höchstens viermal je Lauf (Entladegrenze und Min-SOC zusammen)
 
-MAX_DISCHARGE, MIN_SOC, GRID_SETPOINT = (
-    CommandKind.MAX_DISCHARGE,
-    CommandKind.MIN_SOC,
-    CommandKind.GRID_SETPOINT,
-)
 BUDGET_USED = "nicht gesendet: höchstens 4 persistente Schreibzugriffe je Lauf."
 
 
