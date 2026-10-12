@@ -1,4 +1,4 @@
-"""Interne API: Gesundheit, Zustand, Absicht und Live-Stream für die app, mit Token geschützt."""
+"""Interne API, mit Token geschützt: Gesundheit, Zustand, Absicht, Entscheidungen, Live-Stream."""
 
 from __future__ import annotations
 
@@ -6,6 +6,7 @@ import hmac
 from collections.abc import AsyncIterator, Mapping
 from contextlib import AbstractAsyncContextManager
 from dataclasses import fields
+from datetime import UTC, datetime
 from typing import Annotated, Any, Literal, Protocol
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Response, WebSocket, status
@@ -16,12 +17,19 @@ from bindaems.core.state.derived import Derived
 from bindaems.core.watchdog_client.heartbeat import HeartbeatPhase
 from bindaems.core.watchdog_client.status import WATCHDOG_VERSION, WatchdogStatus
 from bindaems.shared.control import Intent
+from bindaems.shared.decisions import Decision, decision_to_json
 from bindaems.shared.domain import Snapshot
 
 WS_UNAUTHORIZED = 4401
 
 # Starlette hat den Namen für 422 geändert (ENTITY zu CONTENT); die Zahl gilt in jeder Version.
 HTTP_UNPROCESSABLE = 422
+
+# Entscheidungen je Abruf: Standard und Höchstwert von ``limit``, dazu die Texte der 422-Antworten
+DECISIONS_LIMIT_DEFAULT = 1000
+DECISIONS_LIMIT_MAX = 5000
+SINCE_DETAIL = "since muss eine ISO-Zeit mit Zeitzone sein"
+LIMIT_DETAIL = f"limit muss zwischen 1 und {DECISIONS_LIMIT_MAX} liegen"
 
 
 class HealthReport(BaseModel):
@@ -72,6 +80,13 @@ class CoreView(Protocol):
     def intent(self) -> Intent | None: ...
 
     def submit_intent(self, intent: Intent) -> IntentReply: ...
+
+    def decisions(self, since: datetime, limit: int) -> tuple[list[Decision], bool]:
+        """Die Entscheidungen mit ``ts`` nach ``since``, aufsteigend, und ob weitere folgen.
+
+        Das Ergebnis kann ``limit`` überschreiten: Entscheidungen gleicher Zeit bleiben beisammen.
+        Der Aufruf liest Dateien; die API ruft ihn in einem Arbeitsthread auf.
+        """
 
     def subscribe(self) -> AbstractAsyncContextManager[AsyncIterator[dict[str, Any]]]: ...
 
@@ -124,6 +139,42 @@ def _intent_status(reply: IntentReply) -> int:
     return status.HTTP_409_CONFLICT
 
 
+def _unprocessable(detail: str) -> HTTPException:
+    return HTTPException(status_code=HTTP_UNPROCESSABLE, detail=detail)
+
+
+def _since(text: str | None) -> datetime:
+    """Der Parameter ``since`` als Zeitpunkt in UTC; ohne ISO-Zeit mit Zeitzone ein 422.
+
+    Ohne Zeitzone wäre der Zeitpunkt mehrdeutig, und der Spool lehnt ihn ab. Nur eine gültige
+    Eingabe kehrt zurück; alles andere endet im 422 am Schluss.
+    """
+    if text is not None:
+        try:
+            moment = datetime.fromisoformat(text)
+            if moment.utcoffset() is not None:
+                return moment.astimezone(UTC)
+        except (ValueError, OverflowError):
+            pass  # keine ISO-Zeit, oder in UTC außerhalb von Jahr 1 bis 9999
+    raise _unprocessable(SINCE_DETAIL)
+
+
+def _limit(text: str | None) -> int:
+    """Der Parameter ``limit``: ohne Angabe der Standard.
+
+    Sonst muss er eine Ganzzahl von 1 bis zum Höchstwert sein, alles andere ist ein 422.
+    """
+    if text is None:
+        return DECISIONS_LIMIT_DEFAULT
+    try:
+        count = int(text)
+    except ValueError:
+        raise _unprocessable(LIMIT_DETAIL) from None
+    if not 1 <= count <= DECISIONS_LIMIT_MAX:
+        raise _unprocessable(LIMIT_DETAIL)
+    return count
+
+
 def _bearer(authorization: str | None) -> str | None:
     if authorization is None:
         return None
@@ -167,6 +218,22 @@ def create_api(view: CoreView, token: SecretStr) -> FastAPI:
         return IntentResponse(
             result=reply.result, version=reply.version, details=list(reply.details)
         )
+
+    @app.get("/v1/decisions", dependencies=[Depends(require_token)])
+    def get_decisions(since: str | None = None, limit: str | None = None) -> dict[str, Any]:
+        """Die Entscheidungen mit ``ts`` nach ``since`` (Pflicht), aufsteigend, bis ``limit``.
+
+        ``more`` sagt, ob nach den gelieferten noch weitere folgen. Die Antwort kann ``limit``
+        überschreiten, denn Entscheidungen gleicher Zeit (ein Zyklus) bleiben beisammen. Wer
+        weiterliest, nimmt das ``ts`` der letzten gelieferten als neues ``since``. Im Query steht
+        das ``+`` einer Zeitzone als ``%2B``.
+        """
+        # Beide Parameter als Text: FastAPI meldete einen Fehler sonst in eigener Form, und ein
+        # ``datetime`` ließe auch Zeiten ohne Zeitzone zu. Als ``def`` läuft der Endpunkt in einem
+        # Arbeitsthread; das Lesen der Dateien hält die Ereignisschleife (den Zyklus) nicht auf.
+        moment, count = _since(since), _limit(limit)
+        found, more = view.decisions(moment, count)
+        return {"decisions": [decision_to_json(decision) for decision in found], "more": more}
 
     @app.websocket("/v1/stream")
     async def stream(websocket: WebSocket) -> None:

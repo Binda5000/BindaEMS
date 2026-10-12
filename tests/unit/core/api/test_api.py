@@ -1,6 +1,8 @@
+import asyncio
 import contextlib
 from collections.abc import AsyncIterator
 from dataclasses import replace
+from datetime import datetime, timedelta
 from types import MappingProxyType
 from typing import Any
 
@@ -8,15 +10,26 @@ import pytest
 from fastapi.testclient import TestClient
 from pydantic import SecretStr, ValidationError
 from starlette.websockets import WebSocketDisconnect
-from tests.helpers import EMPTY_DERIVED, snap
+from tests.helpers import EMPTY_DERIVED, T0, snap
+from tests.unit.shared.test_decisions import decision
 
 from bindaems.core.api.app import HealthReport, create_api, snapshot_to_json
 from bindaems.core.control.intent import IntentReply
 from bindaems.core.watchdog_client.status import WATCHDOG_VERSION
 from bindaems.shared.control import Intent
+from bindaems.shared.decisions import Decision, decision_to_json
 
 TOKEN = "x" * 32
 H = {"Authorization": "Bearer " + TOKEN}
+
+
+def on_event_loop() -> bool:
+    """Ob der Aufruf auf einem Thread läuft, in dem eine Ereignisschleife läuft."""
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return False
+    return True
 
 
 class FakeView:
@@ -24,6 +37,15 @@ class FakeView:
         self.current: Intent | None = None
         self.reply = IntentReply("accepted", 1)
         self.submitted: list[Intent] = []
+        self.decision_list: list[Decision] = []
+        self.decision_more = False
+        self.decision_calls: list[tuple[datetime, int]] = []
+        self.decision_on_loop: list[bool] = []
+
+    def decisions(self, since: datetime, limit: int) -> tuple[list[Decision], bool]:
+        self.decision_calls.append((since, limit))
+        self.decision_on_loop.append(on_event_loop())
+        return self.decision_list, self.decision_more
 
     def intent(self) -> Intent | None:
         return self.current
@@ -246,6 +268,173 @@ def test_put_intent_with_invalid_body_is_422_and_not_submitted(view_client, body
     client, view = view_client
     assert client.put("/v1/intent", json=body, headers=H).status_code == 422
     assert view.submitted == []
+
+
+# Entscheidungen
+
+SINCE_DETAIL = "since muss eine ISO-Zeit mit Zeitzone sein"
+LIMIT_DETAIL = "limit muss zwischen 1 und 5000 liegen"
+
+
+def test_decisions_since_with_limit(view_client) -> None:
+    client, view = view_client
+    view.decision_list = [decision(id="d1", ts=T0 + timedelta(seconds=1))]
+    response = client.get("/v1/decisions", params={"since": T0.isoformat(), "limit": 1}, headers=H)
+    assert response.status_code == 200
+    assert response.json()["decisions"][0]["id"] == "d1" and response.json()["more"] is False
+    assert view.decision_calls == [(T0, 1)]
+
+
+@pytest.mark.parametrize(
+    ("params", "detail"),
+    [
+        ({"since": "gestern"}, "since muss eine ISO-Zeit mit Zeitzone sein"),
+        ({"since": "2026-10-08T10:00:00"}, "since muss eine ISO-Zeit mit Zeitzone sein"),
+        (
+            {"since": "2026-10-08T10:00:00+00:00", "limit": 0},
+            "limit muss zwischen 1 und 5000 liegen",
+        ),
+    ],
+)
+def test_decisions_reject_bad_parameters(client, params, detail) -> None:
+    response = client.get("/v1/decisions", params=params, headers=H)
+    assert (response.status_code, response.json()) == (422, {"detail": detail})
+
+
+def test_decisions_need_the_token(client) -> None:
+    assert client.get("/v1/decisions", params={"since": T0.isoformat()}).status_code == 401
+
+
+def test_decisions_ask_for_the_token_before_checking_the_parameters(view_client) -> None:
+    client, view = view_client
+    for headers in ({}, {"Authorization": "Bearer " + "y" * 32}):
+        good = client.get("/v1/decisions", params={"since": T0.isoformat()}, headers=headers)
+        # ohne Token erfährt niemand, was die Parameter hätten erfüllen müssen
+        bad = client.get("/v1/decisions", params={"since": "gestern", "limit": 0}, headers=headers)
+        assert (good.status_code, bad.status_code) == (401, 401)
+    assert view.decision_calls == []
+
+
+def test_decisions_without_limit_use_the_default_of_1000(view_client) -> None:
+    client, view = view_client
+    response = client.get("/v1/decisions", params={"since": T0.isoformat()}, headers=H)
+    assert response.status_code == 200
+    assert view.decision_calls == [(T0, 1000)]
+
+
+@pytest.mark.parametrize("limit", [1, 5000])
+def test_decisions_accept_the_limits_at_both_edges(view_client, limit: int) -> None:
+    client, view = view_client
+    response = client.get(
+        "/v1/decisions", params={"since": T0.isoformat(), "limit": limit}, headers=H
+    )
+    assert response.status_code == 200
+    assert view.decision_calls == [(T0, limit)]
+
+
+@pytest.mark.parametrize(
+    "since",
+    ["2026-10-08T10:00:00Z", "2026-10-08T12:00:00+02:00", "2026-10-08T09:00:00-01:00"],
+    ids=["Z", "plus-02-00", "minus-01-00"],
+)
+def test_decisions_hand_since_to_the_view_in_utc(view_client, since: str) -> None:
+    client, view = view_client
+    assert client.get("/v1/decisions", params={"since": since}, headers=H).status_code == 200
+    [(moment, _)] = view.decision_calls
+    assert moment == T0 and moment.utcoffset() == timedelta(0)
+
+
+def test_decisions_can_be_continued_from_the_ts_of_a_returned_decision(view_client) -> None:
+    # Die app liest weiter, indem sie das ts der letzten Entscheidung als since zurückschickt
+    client, view = view_client
+    last = T0 + timedelta(seconds=1, microseconds=123456)
+    view.decision_list = [decision(ts=last)]
+    first = client.get("/v1/decisions", params={"since": T0.isoformat()}, headers=H)
+    ts = first.json()["decisions"][0]["ts"]
+    assert ts == "2026-10-08T10:00:01.123456+00:00"
+    assert client.get("/v1/decisions", params={"since": ts}, headers=H).status_code == 200
+    assert view.decision_calls == [(T0, 1000), (last, 1000)]
+
+
+@pytest.mark.parametrize(
+    ("params", "detail"),
+    [
+        ({}, SINCE_DETAIL),  # since ist Pflicht
+        ({"since": ""}, SINCE_DETAIL),
+        ({"since": "2026-10-08"}, SINCE_DETAIL),  # nur ein Datum: keine Zeitzone
+        ({"since": "2026-10-08 10:00:00"}, SINCE_DETAIL),
+        ({"since": "10:00:00+00:00"}, SINCE_DETAIL),  # nur eine Uhrzeit
+        ({"since": "2026-10-08T10:00:00+00:00x"}, SINCE_DETAIL),
+        ({"since": "0001-01-01T00:00:00+01:00"}, SINCE_DETAIL),  # in UTC vor dem Jahr 1
+        ({"since": "9999-12-31T23:59:59-01:00"}, SINCE_DETAIL),  # in UTC nach dem Jahr 9999
+        ({"since": "gestern", "limit": 0}, SINCE_DETAIL),  # beides falsch: since zuerst
+        ({"since": T0.isoformat(), "limit": ""}, LIMIT_DETAIL),
+        ({"since": T0.isoformat(), "limit": "abc"}, LIMIT_DETAIL),
+        ({"since": T0.isoformat(), "limit": "1.5"}, LIMIT_DETAIL),
+        ({"since": T0.isoformat(), "limit": "9" * 5000}, LIMIT_DETAIL),
+        ({"since": T0.isoformat(), "limit": -1}, LIMIT_DETAIL),
+        ({"since": T0.isoformat(), "limit": 5001}, LIMIT_DETAIL),
+    ],
+    ids=[
+        "ohne-since",
+        "since-leer",
+        "nur-datum",
+        "ohne-zeitzone",
+        "nur-uhrzeit",
+        "text-hinter-der-zeit",
+        "vor-jahr-1-in-utc",
+        "nach-jahr-9999-in-utc",
+        "beides-falsch",
+        "limit-leer",
+        "limit-text",
+        "limit-bruch",
+        "limit-riesig",
+        "limit-negativ",
+        "limit-zu-gross",
+    ],
+)
+def test_decisions_with_bad_parameters_never_reach_the_view(view_client, params, detail) -> None:
+    client, view = view_client
+    response = client.get("/v1/decisions", params=params, headers=H)
+    assert (response.status_code, response.json()) == (422, {"detail": detail})
+    assert view.decision_calls == []
+
+
+def test_decisions_longer_than_the_limit_are_returned_as_they_are(view_client) -> None:
+    # Eine Gruppe gleicher Zeit (ein Zyklus) bleibt beisammen: Das Ergebnis darf das Limit sprengen
+    client, view = view_client
+    group = [decision(id=f"d{i}", ts=T0 + timedelta(seconds=1)) for i in range(3)]
+    view.decision_list, view.decision_more = group, True
+    response = client.get("/v1/decisions", params={"since": T0.isoformat(), "limit": 1}, headers=H)
+    assert response.status_code == 200
+    assert response.json() == {"decisions": [decision_to_json(d) for d in group], "more": True}
+    assert view.decision_calls == [(T0, 1)]
+
+
+def test_decisions_are_in_their_json_form_in_the_order_of_the_view(view_client) -> None:
+    client, view = view_client
+    first = decision(id="d1", ts=T0 + timedelta(seconds=1), inputs={"soc_pct": None})
+    second = decision(id="d2", ts=T0 + timedelta(seconds=2), requested=None, applied=None)
+    view.decision_list = [first, second]
+    body = client.get("/v1/decisions", params={"since": T0.isoformat()}, headers=H).json()
+    assert body == {"decisions": [decision_to_json(first), decision_to_json(second)], "more": False}
+    assert body["decisions"][0]["ts"] == "2026-10-08T10:00:01+00:00"
+    assert body["decisions"][0]["inputs"] == {"soc_pct": None}
+
+
+def test_decisions_when_there_are_none(view_client) -> None:
+    client, _ = view_client
+    response = client.get("/v1/decisions", params={"since": T0.isoformat()}, headers=H)
+    assert (response.status_code, response.json()) == (200, {"decisions": [], "more": False})
+
+
+def test_decisions_are_read_off_the_event_loop(view_client) -> None:
+    # Das Lesen der Tagesdateien darf den Zyklus nicht aufhalten, der auf derselben Schleife läuft
+    client, view = view_client
+    assert (
+        client.get("/v1/decisions", params={"since": T0.isoformat()}, headers=H).status_code == 200
+    )
+    assert view.decision_on_loop == [False]
 
 
 def test_no_public_schema_or_docs(client) -> None:

@@ -9,6 +9,7 @@ from typing import Any
 
 import httpx
 import pytest
+from fastapi.testclient import TestClient
 from pydantic import SecretStr
 from structlog.testing import capture_logs
 from tests.helpers import T0, FakeSink, run_until, snap
@@ -20,6 +21,7 @@ from bindaems.core.actuators.evcs import EvcsActuator
 from bindaems.core.actuators.tesla import TeslaActuator
 from bindaems.core.actuators.victron import VictronActuator
 from bindaems.core.adapters.victron_mqtt import VictronMqttAdapter
+from bindaems.core.api.app import create_api
 from bindaems.core.control.actuator import Confirmation
 from bindaems.core.control.intent import INTENT_FILE_PROBLEM
 from bindaems.core.persistence.files import read_json, write_json_atomic
@@ -576,6 +578,27 @@ async def test_decisions_are_streamed(runtime_env) -> None:
         if m["type"] == "decision" and m["data"]["actuator"] == "wallbox.evcs"
     ]
     assert [d["result"] for d in evcs] == ["ok", "ok"]
+
+
+async def test_decisions_over_the_api_are_those_of_the_stream(runtime_env) -> None:
+    state = dict(GOOD_STATE)
+    rt, _, clock = runtime_env(state=state)
+    messages = record_broadcast(rt)
+    rt.submit_intent(Intent(version=1, control=True))
+    run(rt, clock, 31)
+    state |= {"system.active_in_source": 240}
+    island = clock.now()
+    run(rt, clock, 1)
+    streamed = [m["data"] for m in messages if m["type"] == "decision"]
+    assert len(streamed) == 6
+    client = TestClient(create_api(rt, SecretStr(TOKEN)))
+    auth = {"Authorization": f"Bearer {TOKEN}"}
+    # Die sechs Entscheidungen eines Zyklus haben dieselbe Zeit und bleiben bei limit=1 beisammen.
+    page = client.get("/v1/decisions", params={"since": T0.isoformat(), "limit": 1}, headers=auth)
+    assert (page.status_code, page.json()) == (200, {"decisions": streamed, "more": False})
+    # Wer ab der Zeit der letzten Entscheidung weiterliest, bekommt keine doppelt.
+    rest = client.get("/v1/decisions", params={"since": island.isoformat()}, headers=auth)
+    assert (rest.status_code, rest.json()) == (200, {"decisions": [], "more": False})
 
 
 async def test_health_lists_capabilities(runtime_env) -> None:
