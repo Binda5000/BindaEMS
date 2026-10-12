@@ -2,8 +2,9 @@
 
 Der Victron-Adapter schreibt die Werte des D-Bus-Dienstes ``com.victronenergy.bindaems`` als
 ``watchdog.*``-Signale in den Zustandsspeicher. ``read_watchdog`` macht daraus den Status,
-``armed_for_core`` sagt, ob der Watchdog für diesen core scharf ist, und ``watchdog_alarms`` liefert
-die Alarme. Alles ist rein: Die Zeit kommt als Argument.
+``armed_for_core`` sagt, ob der Watchdog für diesen core scharf ist, ``timeout_matches``, ob er das
+konfigurierte Timeout meldet, und ``watchdog_alarms`` liefert die Alarme. Alles ist rein: Die Zeit
+kommt als Argument.
 """
 
 from __future__ import annotations
@@ -89,19 +90,26 @@ def armed_for_core(status: WatchdogStatus, recent: Collection[int], timeout_s: f
     """Ob der Watchdog für diesen core scharf ist, nicht nur irgendwie (Spec 8.6).
 
     Das gilt, wenn er scharf ist, als Echo einen der zuletzt gesendeten Zähler (``recent``) zeigt
-    und das erwartete Timeout meldet. ``timeout_s`` ist das konfigurierte Timeout
-    (``victron.watchdog.timeout_s``), verglichen als Zahl und so, wie der Watchdog es melden kann
-    (``_reportable_timeout``). Ein unbekanntes Echo oder Timeout zählt nicht: Hat ein früherer Lauf
-    oder ein Werkzeug den Watchdog scharf gemacht, schützt er diesen core nicht, denn sein
-    Heartbeat kommt nicht von hier.
+    und das erwartete Timeout meldet (``timeout_matches``). Ein unbekanntes Echo oder Timeout
+    zählt nicht: Hat ein früherer Lauf oder ein Werkzeug den Watchdog scharf gemacht, schützt er
+    diesen core nicht, denn sein Heartbeat kommt nicht von hier.
     """
     return (
         status.armed
         and status.heartbeat is not None
         and status.heartbeat in recent
-        and status.timeout_s is not None
-        and status.timeout_s == _reportable_timeout(timeout_s)
+        and timeout_matches(status, timeout_s)
     )
+
+
+def timeout_matches(status: WatchdogStatus, timeout_s: float) -> bool:
+    """Meldet der Watchdog das konfigurierte Timeout (``victron.watchdog.timeout_s``)?
+
+    Verglichen wird als Zahl und so, wie der Watchdog es melden kann (``_reportable_timeout``).
+    Ein unbekanntes Timeout passt nie, ebenso keins zu einer Einstellung, die keine endliche Zahl
+    ist. Zustand und Echo spielen keine Rolle.
+    """
+    return status.timeout_s is not None and status.timeout_s == _reportable_timeout(timeout_s)
 
 
 def watchdog_alarms(

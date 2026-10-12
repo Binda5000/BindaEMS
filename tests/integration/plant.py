@@ -22,14 +22,14 @@ class Plant:
     """Simulierte Anlage für die Laufzeit-Tests (Plan 2b).
 
     ``write`` ist der MQTT-Schreibweg des core. Vor jedem Zyklus (``before_cycle``) meldet sie den
-    Watchdog (``watchdog_state``, Echo des zuletzt geschriebenen Heartbeats, Timeout 90 s,
+    Watchdog (``watchdog_state``, Echo des zuletzt geschriebenen Heartbeats, ``timeout_s``,
     Version ``WATCHDOG_VERSION``) und übernimmt geschriebene EVCS-Werte als GX-Werte, solange
     ``follow`` gilt.
 
     ``echo`` ist das Echo, bevor der core einen Heartbeat geschrieben hat, etwa der Zähler eines
-    früheren Laufs; ``None`` heißt, der Watchdog meldet keins. Ohne ``accept`` nimmt der Cerbo
-    keinen EVCS-Auftrag an. Die Signale schreibt sie mit der Quelle ``victron``. ``writes`` hält
-    alle Schreibaufträge in ihrer Reihenfolge, auch die abgelehnten.
+    früheren Laufs; ``None`` heißt, der Watchdog meldet keins, ebenso bei ``timeout_s``. Ohne
+    ``accept`` nimmt der Cerbo keinen EVCS-Auftrag an. Die Signale schreibt sie mit der Quelle
+    ``victron``. ``writes`` hält alle Schreibaufträge in ihrer Reihenfolge, auch die abgelehnten.
     """
 
     def __init__(
@@ -39,11 +39,13 @@ class Plant:
         echo: int | None = None,
         follow: bool = True,
         accept: bool = True,
+        timeout_s: int | None = TIMEOUT_S,
     ) -> None:
         self.watchdog_state = watchdog_state
         self.echo = echo
         self.follow = follow
         self.accept = accept
+        self.timeout_s = timeout_s
         self.writes: list[tuple[str, float | int | None]] = []
         self._store: StateStore | None = None
         self._gx: dict[str, Value] = {}  # die übernommenen EVCS-Werte je GX-Signal
@@ -73,9 +75,10 @@ class Plant:
             raise RuntimeError("Plant.attach fehlt: kein Zustandsspeicher")
         signals: dict[str, Value] = {
             "watchdog.state": self.watchdog_state,
-            "watchdog.timeout_s": TIMEOUT_S,
             "watchdog.version": WATCHDOG_VERSION,
         }
+        if self.timeout_s is not None:
+            signals["watchdog.timeout_s"] = self.timeout_s
         if self.echo is not None:
             signals["watchdog.heartbeat"] = self.echo
         if self.follow:

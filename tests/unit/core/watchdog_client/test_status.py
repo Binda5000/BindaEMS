@@ -12,6 +12,7 @@ from bindaems.core.watchdog_client.status import (
     WatchdogStatus,
     armed_for_core,
     read_watchdog,
+    timeout_matches,
     watchdog_alarms,
 )
 from bindaems.shared.config import Config
@@ -432,3 +433,27 @@ def test_unusable_echo_is_unknown(value: Any) -> None:
 @pytest.mark.parametrize("value", [None, True, "90", float("nan"), float("inf")])
 def test_unusable_timeout_is_unknown(value: Any) -> None:
     assert read_watchdog(snap({"watchdog.timeout_s": value}, kind=STATE)).timeout_s is None
+
+
+# --- Timeout wie konfiguriert: für das Scharfschalten und „scharf für diesen core“ ----------------
+
+
+@pytest.mark.parametrize("configured", [90.0, 90, 90.5, 90.999])
+def test_timeout_matches_the_whole_seconds_the_watchdog_reports(configured: float) -> None:
+    assert timeout_matches(status(timeout_s=90.0), configured)
+
+
+@pytest.mark.parametrize("reported", [None, 89.0, 91.0, 120.0])
+def test_an_unknown_or_other_timeout_does_not_match(reported: float | None) -> None:
+    assert not timeout_matches(status(timeout_s=reported), 90.0)
+
+
+@pytest.mark.parametrize("configured", [float("inf"), float("-inf"), float("nan")])
+def test_a_configured_timeout_that_is_no_finite_number_never_matches(configured: float) -> None:
+    assert not timeout_matches(status(), configured)
+    assert not timeout_matches(status(timeout_s=None), configured)
+
+
+def test_timeout_matches_whatever_the_state_and_echo() -> None:
+    # Vor dem Scharfschalten wartet der Watchdog und hat noch kein Echo dieses core.
+    assert timeout_matches(status(state=WatchdogState.WAITING, heartbeat=None), 90.0)
