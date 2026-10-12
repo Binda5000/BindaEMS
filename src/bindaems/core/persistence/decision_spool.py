@@ -4,6 +4,9 @@ Jede Entscheidung ist eine Zeile in ``decisions-JJJJ-MM-TT.jsonl``; das Datum is
 ihres Zeitpunkts. Die Dateien werden nur ergänzt, nie umgeschrieben. ``prune`` hält sie auf
 höchstens ``max_age`` und ``max_bytes``; andere Dateien im Verzeichnis bleiben unberührt. Ein
 Fehler beim Schreiben kommt ins Log und unterbricht den Zyklus des core nicht.
+
+Geschrieben wird aus dem Zyklus des core, gelesen auch aus anderen Threads (die API). Eine Sperre
+sorgt dafür, dass ein Leser die Entscheidungen eines ``append_many`` ganz oder gar nicht sieht.
 """
 
 from __future__ import annotations
@@ -12,6 +15,8 @@ import json
 import os
 import re
 import stat
+import threading
+from collections.abc import Iterable
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Final, NamedTuple
@@ -54,6 +59,11 @@ class DecisionSpool:
     es eine Datei; ``prune`` löscht Dateien, deren Tag mehr als ``max_age`` zurückliegt, und
     danach die ältesten, bis alle zusammen höchstens ``max_bytes`` belegen. Der Aufrufer ruft
     ``prune`` von Zeit zu Zeit auf. Der Spool hat einen Schreiber: den core, aus einer Aufgabe.
+
+    Leser dürfen in anderen Threads laufen. Schreiben und Aufräumen geschehen unter einer Sperre;
+    ein Leser hält sie nur, um die Tagesdateien samt ihrer Größe festzuhalten, und liest dann ohne
+    sie, bis zu dieser Größe. So sieht er die Entscheidungen eines ``append_many`` ganz oder gar
+    nicht und hält den Schreiber nicht auf, während er liest.
     """
 
     def __init__(
@@ -66,34 +76,38 @@ class DecisionSpool:
         self._dir = directory
         self._max_bytes = max_bytes
         self._max_age = max_age
+        self._lock = threading.Lock()
 
     def append(self, decision: Decision) -> bool:
-        """Hängt die Entscheidung als eine JSON-Zeile an die Datei ihres Tages an.
+        """Hängt die Entscheidung als JSON-Zeile an die Datei ihres Tages an (``append_many``)."""
+        return self.append_many([decision])
 
-        Der Tag ist das UTC-Datum von ``ts``. ``True``, wenn die Zeile geschrieben ist. Bei einem
-        ``OSError`` (Verzeichnis nicht beschreibbar, Platte voll) kommt ein ``log.error``, und das
-        Ergebnis ist ``False``. Ein ``ts`` ohne Zeitzone ist ein Programmierfehler (``ValueError``).
+    def append_many(self, decisions: Iterable[Decision]) -> bool:
+        """Hängt die Entscheidungen in ihrer Reihenfolge an, je eine JSON-Zeile, in einem Zug.
 
-        Endet die Datei nicht auf einen Zeilenumbruch, etwa nach einem Abbruch beim Schreiben, wird
+        Jede kommt in die Datei ihres Tages, des UTC-Datums von ``ts``. Alle Zeilen einer Datei
+        gehen mit einem Schreibaufruf unter der Sperre hinaus: Ein Leser sieht sie ganz oder gar
+        nicht. ``True``, wenn alle Zeilen geschrieben sind; ohne Entscheidungen ``True``, ohne
+        etwas anzulegen. Bei einem ``OSError`` (Verzeichnis nicht beschreibbar, Platte voll) kommt
+        je Datei ein ``log.error``, und das Ergebnis ist ``False``. Ein ``ts`` ohne Zeitzone ist ein
+        Programmierfehler (``ValueError``); dann wird keine der Entscheidungen geschrieben.
+
+        Endet eine Datei nicht auf einen Zeilenumbruch, etwa nach einem Abbruch beim Schreiben, wird
         der Rest erst abgeschlossen: Er bleibt eine unlesbare Zeile und verschluckt nicht die
         nächste Entscheidung.
         """
-        text = json.dumps(decision_to_json(decision), ensure_ascii=False)
-        # Ein einzelnes Surrogat ließe sich nicht als UTF-8 schreiben; als Escape bleibt es lesbar.
-        data = f"{text}\n".encode(errors="backslashreplace")
-        path = self._dir / _file_name(ensure_utc(decision.ts).date())
-        try:
-            self._dir.mkdir(parents=True, exist_ok=True)
-            with path.open("ab+") as handle:
-                if handle.seek(0, os.SEEK_END) > 0:
-                    handle.seek(-1, os.SEEK_END)
-                    if handle.read(1) != b"\n":
-                        handle.write(b"\n")
-                handle.write(data)
-        except OSError as exc:
-            log.error("Entscheidung nicht in den Spool geschrieben", path=str(path), error=str(exc))
-            return False
-        return True
+        lines: dict[Path, list[bytes]] = {}
+        for decision in decisions:
+            text = json.dumps(decision_to_json(decision), ensure_ascii=False)
+            path = self._dir / _file_name(ensure_utc(decision.ts).date())
+            # Ein einzelnes Surrogat ließe sich nicht als UTF-8 schreiben; als Escape bleibt es
+            # lesbar.
+            lines.setdefault(path, []).append(f"{text}\n".encode(errors="backslashreplace"))
+        written = True
+        with self._lock:
+            for path, data in lines.items():
+                written = self._write(path, b"".join(data)) and written
+        return written
 
     def read_since(self, since: datetime, limit: int) -> tuple[list[Decision], bool]:
         """Die ersten ``limit`` Entscheidungen mit ``ts`` nach ``since``, aufsteigend.
@@ -107,15 +121,20 @@ class DecisionSpool:
         werden nur die Tagesdateien ab dem Tag von ``since`` und nur so viele, wie dafür nötig
         sind. Eine Zeile, die sich nicht lesen lässt, kommt mit einer Warnung ins Log und fehlt im
         Ergebnis; ebenso eine Datei, die sich nicht öffnen lässt. Ein Limit unter 0 gilt als 0.
+
+        Es zählt der Stand beim Aufruf: Was danach angehängt wird, liest der Aufruf nicht mehr.
+        Für das Lesen selbst hält er die Sperre nicht; er darf in einem anderen Thread laufen.
         """
         since = ensure_utc(since)
         limit = max(limit, 0)
+        with self._lock:  # nur festhalten, welche Dateien bis wohin gelten
+            day_files = self._day_files()
         found: list[Decision] = []
         end = 0
-        for day_file in self._day_files():
+        for day_file in day_files:
             if day_file.day < since.date():
                 continue  # alle Zeitpunkte dieses Tages liegen vor ``since``
-            found.extend(self._read_file(day_file.path, since))
+            found.extend(self._read_file(day_file, since))
             end = _cut(found, limit)
             if end < len(found):
                 break  # dahinter folgt mehr; spätere Tage ändern am Ergebnis nichts mehr
@@ -130,26 +149,45 @@ class DecisionSpool:
         kommt ins Log; die übrigen werden trotzdem behandelt.
         """
         cutoff = (ensure_utc(now) - self._max_age).date()
-        kept: list[_DayFile] = []
-        for day_file in self._day_files():
-            if day_file.day < cutoff:
-                self._delete(day_file.path)
-            else:
-                kept.append(day_file)
-        total = sum(day_file.size for day_file in kept)
-        removed = 0
-        for day_file in kept:  # die ältesten zuerst
-            if total <= self._max_bytes:
-                break
-            if self._delete(day_file.path):
-                total -= day_file.size
-                removed += 1
+        with self._lock:
+            kept: list[_DayFile] = []
+            for day_file in self._day_files():
+                if day_file.day < cutoff:
+                    self._delete(day_file.path)
+                else:
+                    kept.append(day_file)
+            total = sum(day_file.size for day_file in kept)
+            removed = 0
+            for day_file in kept:  # die ältesten zuerst
+                if total <= self._max_bytes:
+                    break
+                if self._delete(day_file.path):
+                    total -= day_file.size
+                    removed += 1
         if removed:
             log.warning(
                 "Spool-Grenze erreicht, älteste Entscheidungen verworfen",
                 removed_files=removed,
                 spool_bytes=total,
             )
+
+    def _write(self, path: Path, data: bytes) -> bool:
+        """Hängt ``data`` (ganze Zeilen) an die Datei an; ``False`` mit ``log.error`` bei Fehlern.
+
+        Nur unter der Sperre aufrufen.
+        """
+        try:
+            self._dir.mkdir(parents=True, exist_ok=True)
+            with path.open("ab+") as handle:
+                if handle.seek(0, os.SEEK_END) > 0:
+                    handle.seek(-1, os.SEEK_END)
+                    if handle.read(1) != b"\n":
+                        handle.write(b"\n")
+                handle.write(data)
+        except OSError as exc:
+            log.error("Entscheidung nicht in den Spool geschrieben", path=str(path), error=str(exc))
+            return False
+        return True
 
     def _day_files(self) -> list[_DayFile]:
         """Die Tagesdateien, älteste zuerst; andere Namen und Verzeichnisse fehlen hier."""
@@ -175,17 +213,24 @@ class DecisionSpool:
                 files.append(_DayFile(day, path, info.st_size))
         return sorted(files, key=lambda day_file: day_file.day)
 
-    def _read_file(self, path: Path, since: datetime) -> list[Decision]:
-        """Die Entscheidungen der Datei mit ``ts`` nach ``since``, nach Zeit geordnet."""
+    def _read_file(self, day_file: _DayFile, since: datetime) -> list[Decision]:
+        """Die Entscheidungen der Datei mit ``ts`` nach ``since``, nach Zeit geordnet.
+
+        Gelesen werden nur die ersten ``day_file.size`` Bytes: der Stand, den ``read_since`` unter
+        der Sperre festgehalten hat. Ein ``append_many``, das danach schreibt, fehlt ganz.
+        """
+        path = day_file.path
         decisions: list[Decision] = []
         try:
             with path.open("rb") as handle:
-                for number, raw in enumerate(handle, start=1):
-                    decision = _parse_line(path, number, raw)
-                    if decision is not None and decision.ts > since:
-                        decisions.append(decision)
+                data = handle.read(day_file.size)
         except OSError as exc:
             log.warning("Entscheidungsdatei nicht lesbar", file=path.name, error=str(exc))
+            return decisions
+        for number, raw in enumerate(data.split(b"\n"), start=1):
+            decision = _parse_line(path, number, raw)
+            if decision is not None and decision.ts > since:
+                decisions.append(decision)
         # stabil: bei gleicher Zeit bleibt die Reihenfolge der Datei
         decisions.sort(key=lambda decision: decision.ts)
         return decisions

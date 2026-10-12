@@ -31,7 +31,8 @@ class HealthReport(BaseModel):
       und die Gründe des Zustands
     - ``intent``: die gültige Absicht als JSON
     - ``actuators``: je Aktor in Katalogreihenfolge angeforderte und wirksame Betriebsart, Freigabe,
-      Gründe und Sperrgründe (``locked``)
+      Gründe und Sperrgründe (``locked``); dazu, ob er steuerbar ist (``controllable``), die Gründe,
+      warum nicht (``capability_reasons``), und die Arten mit offenem Schreibvorgang (``pending``)
     - ``watchdog``: Watchdog am Cerbo und Heartbeat (``watchdog_to_json``)
     - ``inputs``: Ergebnis der Eingangsprüfung (Regel 7)
     """

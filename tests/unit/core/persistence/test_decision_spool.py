@@ -1,8 +1,10 @@
 import inspect
 import json
+import threading
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any
+from types import TracebackType
+from typing import Any, BinaryIO
 
 import pytest
 from structlog.testing import capture_logs
@@ -159,6 +161,142 @@ def test_more_tells_whether_decisions_beyond_the_limit_exist(
         spool.append(decision(id=f"d{i}", ts=T0 + timedelta(seconds=1 + i)))
     found, has_more = spool.read_since(T0, limit)
     assert ([d.id for d in found], has_more) == (expected, more)
+
+
+# Mehrere auf einmal: die Entscheidungen eines Zyklus
+
+
+def test_append_many_writes_every_decision_in_its_day_file(tmp_path: Path) -> None:
+    spool = DecisionSpool(tmp_path)
+    batch = [
+        decision(id="a", ts=T0 + timedelta(seconds=1)),
+        decision(id="b", ts=T0 + timedelta(seconds=1)),
+        decision(id="next-day", ts=T0 + timedelta(days=1)),
+    ]
+    assert spool.append_many(batch) is True
+    assert names(tmp_path) == ["decisions-2026-10-08.jsonl", "decisions-2026-10-09.jsonl"]
+    assert spool.read_since(T0, 10) == (batch, False)
+
+
+def test_append_many_without_decisions_writes_nothing(tmp_path: Path) -> None:
+    directory = tmp_path / "decisions"
+    assert DecisionSpool(directory).append_many([]) is True
+    assert not directory.exists()
+
+
+def test_append_many_after_a_partial_line_starts_on_a_new_line(tmp_path: Path) -> None:
+    spool = DecisionSpool(tmp_path)
+    tmp_path.joinpath("decisions-2026-10-08.jsonl").write_bytes(b'{"id": "abgebrochen"')
+    batch = [decision(id=f"d{i}", ts=T0 + timedelta(seconds=1)) for i in range(2)]
+    assert spool.append_many(batch) is True
+    with capture_logs() as logs:
+        assert spool.read_since(T0, 10) == (batch, False)
+    assert len(warned(logs)) == 1  # nur der abgebrochene Rest
+
+
+def test_append_many_with_a_naive_timestamp_writes_none_of_them(tmp_path: Path) -> None:
+    batch = [decision(id="ok"), decision(id="naiv", ts=datetime(2026, 10, 8, 10, 0))]
+    with pytest.raises(ValueError, match="Zeitzone"):
+        DecisionSpool(tmp_path).append_many(batch)
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_append_many_failure_is_logged_and_returns_false(tmp_path: Path) -> None:
+    blocker = tmp_path / "datei"
+    blocker.write_text("x")
+    with capture_logs() as logs:
+        assert DecisionSpool(blocker).append_many([decision(), decision(id="b")]) is False
+    assert [e["event"] for e in logs if e["log_level"] == "error"] == [
+        "Entscheidung nicht in den Spool geschrieben"
+    ]
+
+
+class _PausedWrite:
+    """Eine Datei, deren ``write`` nach der Hälfte anhält, bis ``go`` gesetzt ist."""
+
+    def __init__(self, handle: BinaryIO, halfway: threading.Event, go: threading.Event) -> None:
+        self._handle = handle
+        self._halfway = halfway
+        self._go = go
+
+    def __enter__(self) -> "_PausedWrite":
+        return self
+
+    def __exit__(
+        self, kind: type[BaseException] | None, exc: BaseException | None, tb: TracebackType | None
+    ) -> None:
+        self._handle.close()
+
+    def seek(self, *args: Any) -> int:
+        return self._handle.seek(*args)
+
+    def read(self, *args: Any) -> bytes:
+        return self._handle.read(*args)
+
+    def write(self, data: bytes) -> int:
+        middle = len(data) // 2
+        self._handle.write(data[:middle])
+        self._handle.flush()  # die halbe Gruppe steht in der Datei
+        self._halfway.set()
+        assert self._go.wait(5)
+        return middle + self._handle.write(data[middle:])
+
+
+def test_a_reader_never_sees_half_of_a_batch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    spool = DecisionSpool(tmp_path)
+    halfway, go = threading.Event(), threading.Event()
+    real_open = Path.open
+
+    def open_(self: Path, mode: str = "r", *args: Any, **kwargs: Any) -> Any:
+        handle = real_open(self, mode, *args, **kwargs)
+        return _PausedWrite(handle, halfway, go) if "a" in mode else handle
+
+    monkeypatch.setattr(Path, "open", open_)
+    batch = [decision(id=f"d{i}", ts=T0 + timedelta(seconds=1)) for i in range(3)]
+    writer = threading.Thread(target=spool.append_many, args=(batch,))
+    writer.start()
+    assert halfway.wait(5)  # der Schreiber steckt mitten in der Gruppe
+    pages: list[tuple[list[Any], bool]] = []
+    reader = threading.Thread(target=lambda: pages.append(spool.read_since(T0, 10)))
+    reader.start()
+    reader.join(0.2)
+    assert reader.is_alive()  # er wartet, statt die halbe Gruppe zu lesen
+    go.set()
+    writer.join(5)
+    reader.join(5)
+    assert pages == [(batch, False)]
+
+
+def test_a_reader_reads_only_what_was_there_when_it_started(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    spool = DecisionSpool(tmp_path)
+    spool.append(decision(id="old", ts=T0 + timedelta(seconds=1)))
+    reading, go = threading.Event(), threading.Event()
+    real_open = Path.open
+
+    def open_(self: Path, mode: str = "r", *args: Any, **kwargs: Any) -> Any:
+        if mode == "rb":  # der Leser hat die Dateien festgehalten und beginnt zu lesen
+            reading.set()
+            assert go.wait(5)
+        return real_open(self, mode, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", open_)
+    pages: list[tuple[list[Any], bool]] = []
+    reader = threading.Thread(target=lambda: pages.append(spool.read_since(T0, 10)))
+    reader.start()
+    assert reading.wait(5)
+    batch = [decision(id=f"new{i}", ts=T0 + timedelta(seconds=2)) for i in range(3)]
+    writer = threading.Thread(target=spool.append_many, args=(batch,))
+    writer.start()
+    writer.join(5)
+    assert not writer.is_alive()  # Schreiben wartet nicht, solange der Leser liest
+    go.set()
+    reader.join(5)
+    assert [[d.id for d in found] for found, _ in pages] == [["old"]]
+    assert [d.id for d in spool.read_since(T0, 10)[0]] == ["old", "new0", "new1", "new2"]
 
 
 # Gruppen gleicher Zeit: alle Entscheidungen eines Zyklus tragen dieselbe Zeit und werden nie

@@ -35,14 +35,21 @@ def runtime_env(
         fail_first: bool = False,
         extra: Mapping[str, float] | None = None,
         configure: Callable[[Config], Config] | None = None,
+        before_cycle: Callable[[], None] | None = None,
         **kwargs: Any,
     ) -> tuple[CoreRuntime, FakeSink, ManualClock]:
+        """Laufzeit ohne Adapter; ``before_cycle`` läuft vor jedem Zyklus nach den Messwerten.
+
+        Die Uhr der Safety-Schicht ist dieselbe ``ManualClock`` wie die Wanduhr, sofern der Test
+        nicht selbst eine ``safety_clock`` übergibt.
+        """
         clock = ManualClock(datetime.fromisoformat(start))
         sink = FakeSink()
         secrets = Secrets(internal_token=SecretStr(TOKEN))
         # kein Test liest oder schreibt unter /data
         core = cfg.core.model_copy(update={"data_dir": tmp_path / "core"})
         local = cfg.model_copy(update={"core": core})
+        kwargs.setdefault("safety_clock", clock)
         rt = CoreRuntime(
             configure(local) if configure is not None else local,
             secrets,
@@ -66,6 +73,8 @@ def runtime_env(
                     rt.store.update(signal, value, source="victron", kind=SignalKind.MEASUREMENT)
             for signal, value in (state or {}).items():
                 rt.store.update(signal, value, source="victron", kind=SignalKind.STATE)
+            if before_cycle is not None:  # nach ``state``: Was die Anlage meldet, gewinnt
+                before_cycle()
             original()
 
         rt.cycle_once = cycle_once  # type: ignore[method-assign]

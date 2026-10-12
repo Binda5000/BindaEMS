@@ -109,7 +109,8 @@ class TeslaActuator:
 
     Je Art läuft höchstens ein Befehl. Die Aufgabe bleibt in ``_tasks``, auch wenn sie fertig ist:
     So hält der Aktor sie am Leben, und ``confirm`` kann ihr Ergebnis melden, bis das nächste
-    ``send`` der Art sie ersetzt.
+    ``send`` der Art sie ersetzt. Beim Herunterfahren beendet ``aclose`` die laufenden Befehle,
+    bevor der Eigentümer den Client schließt.
     """
 
     confirm_timeout_s = 75.0  # die 60 s des Befehls und etwas Luft, bis die Aufgabe zu Ende ist
@@ -266,6 +267,19 @@ class TeslaActuator:
         if task.cancelled():
             return Confirmation.FAILED, FAILURE_CANCELLED
         return task.result()
+
+    async def aclose(self) -> None:
+        """Bricht laufende Befehle ab und wartet, bis ihre Aufgaben zu Ende sind.
+
+        Für das Herunterfahren: Danach nutzt keine Aufgabe mehr den HTTP-Client, und er darf
+        geschlossen werden. Ein abgebrochener Befehl zählt nicht als Fehler; ``confirm`` meldet
+        ihn als gescheitert. Fertige Ergebnisse bleiben, wie sie sind.
+        """
+        running = [task for task in self._tasks.values() if not task.done()]
+        for task in running:
+            task.cancel()
+        if running:
+            await asyncio.wait(running)
 
     def alarms(self, now: datetime) -> list[Alarm]:
         """Der Alarm ``actuator.unavailable.<id>`` (Warnung), solange der Tesla nicht steuerbar ist.

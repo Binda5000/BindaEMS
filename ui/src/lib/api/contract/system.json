@@ -70,7 +70,10 @@
           "effective": "dry_run",
           "live_allowed": false,
           "reasons": [],
-          "locked": []
+          "locked": [],
+          "controllable": true,
+          "capability_reasons": [],
+          "pending": []
         },
         {
           "id": "wallbox.evcs",
@@ -79,7 +82,10 @@
           "effective": "dry_run",
           "live_allowed": false,
           "reasons": [],
-          "locked": []
+          "locked": [],
+          "controllable": true,
+          "capability_reasons": [],
+          "pending": []
         },
         {
           "id": "vehicle.tesla",
@@ -88,7 +94,15 @@
           "effective": "dry_run",
           "live_allowed": false,
           "reasons": [],
-          "locked": []
+          "locked": [],
+          "controllable": false,
+          "capability_reasons": [
+            "Tessie nicht erreichbar.",
+            "Fahrzeug schläft oder ist offline; es wird nicht geweckt.",
+            "Fahrzeug nicht zu Hause.",
+            "Fahrzeug nicht angesteckt."
+          ],
+          "pending": []
         }
       ],
       "watchdog": {

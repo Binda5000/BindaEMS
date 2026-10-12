@@ -867,6 +867,44 @@ async def test_a_cancelled_command_fails_but_is_not_counted(cfg, respx_mock) -> 
         assert car.alarms(later) == []
 
 
+async def test_aclose_ends_running_commands_without_counting_them(cfg, respx_mock) -> None:
+    never = asyncio.Event()
+    cancelled: list[str] = []
+
+    async def hang(request: httpx.Request) -> httpx.Response:
+        try:
+            await never.wait()  # Tessie antwortet nie
+        except asyncio.CancelledError:
+            cancelled.append(request.url.path)
+            raise
+        return httpx.Response(200, json={"result": True})
+
+    respx_mock.post(URL).mock(side_effect=hang)
+    respx_mock.post(command_url("stop_charging")).mock(side_effect=hang)
+    async with httpx.AsyncClient() as client:
+        car = tesla(cfg, client, [T0])
+        assert car.send(CommandKind.CURRENT, 10.0) is None
+        assert car.send(CommandKind.CHARGING, False) is None
+        await asyncio.sleep(0.01)  # beide warten auf Tessie
+        await car.aclose()
+        assert asyncio.all_tasks() == {asyncio.current_task()}  # nichts läuft mehr
+        assert len(cancelled) == 2
+        for kind, value in ((CommandKind.CURRENT, 10.0), (CommandKind.CHARGING, False)):
+            assert car.confirm(kind, value, snap({})) == (Confirmation.FAILED, CANCELLED)
+        assert car.capabilities(snap(HOME), T0) == Capabilities(True)  # kein Fehler gezählt
+        await car.aclose()  # ohne laufende Befehle sofort fertig
+
+
+async def test_aclose_keeps_finished_results(cfg, respx_mock) -> None:
+    respx_mock.post(URL).respond(200, json={"result": True})
+    async with httpx.AsyncClient() as client:
+        car = tesla(cfg, client, [T0])
+        car.send(CommandKind.CURRENT, 10.0)
+        await asyncio.sleep(0.01)
+        await car.aclose()
+        assert car.confirm(CommandKind.CURRENT, 10.0, snap({})) == CONFIRMED
+
+
 async def test_a_command_cancelled_before_it_starts_sends_nothing(cfg, respx_mock) -> None:
     stray = stray_requests(respx_mock)
     async with httpx.AsyncClient() as client:
