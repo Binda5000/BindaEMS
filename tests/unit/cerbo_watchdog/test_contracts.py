@@ -110,6 +110,15 @@ def test_the_core_reads_what_the_watchdog_publishes() -> None:
     )
 
 
+def test_the_core_has_no_version_complaint_about_the_watchdog_it_ships_with() -> None:
+    # Der Dienst meldet seine VERSION als /Version; stimmt sie nicht mit WATCHDOG_VERSION des core
+    # überein, warnt der core „bitte mit install.sh aktualisieren“.
+    signals = published_signals(make_service(StoredState()))
+    status = read_watchdog(snap(signals, kind=SignalKind.STATE))
+    assert status.version == VERSION
+    assert [a.id for a in watchdog_alarms(status, True, T0, expected_timeout_s=90.0)] == []
+
+
 @pytest.mark.parametrize("timeout_s", [90.0, 90.5, 90.999, 120.0, 45.25])
 def test_the_core_accepts_the_timeout_the_watchdog_reports(timeout_s: float) -> None:
     # Der Dienst meldet /TimeoutSeconds in ganzen Sekunden, die Konfiguration kennt Bruchteile.

@@ -10,8 +10,8 @@ from bindaems_watchdog.actions import ActionRunner
 from bindaems_watchdog.config import Action, Settings
 from bindaems_watchdog.logic import WatchdogLogic
 from bindaems_watchdog.service import DbusItemAccess, WatchdogService, main, register_paths
-from bindaems_watchdog.state_file import StoredState
-from tests.unit.cerbo_watchdog.fakes import FakeAccess
+from bindaems_watchdog.state_file import StoredState, read_state, write_state
+from tests.unit.cerbo_watchdog.fakes import DbusArray, FakeAccess
 
 SETTINGS = Settings(
     enabled=True,
@@ -75,7 +75,8 @@ def test_trip_counts_runs_actions_and_publishes() -> None:
         "/LastTripFailures",
         0,
     ) in env.published
-    assert env.saved[-1] == StoredState(armed=False, trip_count=1, last_trip_time=1791600000)
+    # ausgelöst gilt in der Zustandsdatei als scharf: Es übersteht einen Neustart des Cerbo
+    assert env.saved[-1] == StoredState(armed=True, trip_count=1, last_trip_time=1791600000)
 
 
 def test_state_saved_on_arm_and_release() -> None:
@@ -113,7 +114,7 @@ def test_register_paths_only_heartbeat_writeable() -> None:
         ("/LastTripTime", 0, False),
         ("/LastTripFailures", 0, False),
         ("/TimeoutSeconds", 90, False),
-        ("/Version", "1.0.0", False),
+        ("/Version", "1.1.0", False),
     ]
 
 
@@ -224,9 +225,53 @@ def test_tick_survives_a_failing_publish() -> None:
     rig = Rig(fail_publish=True)
     rig.arm()
     assert rig.at(121) is True
-    assert rig.saved[-1] == StoredState(armed=False, trip_count=1, last_trip_time=1791600000)
+    assert rig.saved[-1] == StoredState(armed=True, trip_count=1, last_trip_time=1791600000)
     values = rig.service.values()
     assert (values["/State"], values["/TripCount"], values["/LastTripFailures"]) == (2, 1, 0)
+
+
+def test_tripped_is_stored_as_armed() -> None:
+    rig = Rig()
+    rig.arm()
+    rig.at(121)  # ohne Heartbeat: Auslösung
+    assert rig.service.values()["/State"] == 2
+    assert rig.saved[-1].armed is True
+
+
+def test_state_is_stored_as_armed_from_arming_to_the_release() -> None:
+    rig = Rig()
+    rig.arm()
+    rig.at(121)  # ausgelöst
+    for t in (130, 140, 150, 160):  # der Heartbeat kommt zurück: wieder scharf
+        rig.at(t, beat=1)
+    assert rig.service.values()["/State"] == 1
+    assert [state.armed for state in rig.saved] == [True, True, True]  # scharf, ausgelöst, scharf
+    rig.at(161, beat=0)  # erst die Freigabe mit 0 macht ihn wartend
+    assert rig.saved[-1] == StoredState(armed=False, trip_count=1, last_trip_time=1791600000)
+
+
+def test_a_tripped_watchdog_restarts_armed_and_trips_again(tmp_path: Path) -> None:
+    # Der Cerbo startet neu, während der Watchdog ausgelöst ist. Die Zustandsdatei hält ihn für
+    # scharf, und bleibt der Heartbeat aus, löst er nach dem Timeout erneut aus. Die Aktion liest
+    # zuerst und schreibt nichts, was schon stimmt.
+    access = FakeAccess({MIN_SOC_ITEM: 30})
+    first = Rig(access=access)
+    first.arm()
+    first.at(121)
+    assert access.writes == [(*MIN_SOC_ITEM, 20)]
+    state_file = str(tmp_path / "state.json")
+    write_state(state_file, first.saved[-1])
+    stored, problem = read_state(state_file)  # wie beim Start des Dienstes
+    assert problem is None
+    restarted = Rig(stored=stored, access=access)
+    assert restarted.service.values()["/State"] == 1  # scharf, nicht wartend
+    restarted.at(60)
+    assert ("/TripCount", 2) not in restarted.published  # das EMS hat noch bis zum Timeout Zeit
+    restarted.at(91)  # weiter kein Heartbeat
+    assert ("/State", 2) in restarted.published and ("/TripCount", 2) in restarted.published
+    assert restarted.service.values()["/LastTripFailures"] == 0
+    assert access.writes == [(*MIN_SOC_ITEM, 20)]  # kein zweites Schreiben
+    assert restarted.saved[-1] == StoredState(armed=True, trip_count=2, last_trip_time=1791600000)
 
 
 def test_tick_survives_an_unexpected_error(caplog: pytest.LogCaptureFixture) -> None:
@@ -489,3 +534,24 @@ def test_dbus_access_reads_and_writes_bus_items() -> None:
         ("SetValue", "com.victronenergy.BusItem"),
     }
     assert {options["signature"] for method, options in bus.calls if method == "SetValue"} == {"v"}
+
+
+OVERRIDE_ITEM = ("com.victronenergy.hub4", "/Overrides/Setpoint")
+
+
+def test_override_is_cleared_with_the_invalid_value_and_then_left_alone() -> None:
+    # null durchgehend: Der Wert der Aktion ist None, auf D-Bus geht er als leeres Array (ungültig)
+    # hinaus, und ein Override, der schon ungültig ist, bleibt unberührt.
+    bus = FakeBus({OVERRIDE_ITEM: 1500.0})
+    access = DbusItemAccess(bus, SimpleNamespace(Array=DbusArray))
+    action = Action("override_setpoint", *OVERRIDE_ITEM, None)
+    runner = ActionRunner(access, [action], retries=0, retry_s=5.0)
+    runner.start(0.0)
+    runner.tick(0.0)
+    assert runner.results == {"override_setpoint": "ok"}
+    written = bus.items[OVERRIDE_ITEM]
+    assert isinstance(written, DbusArray) and written == [] and written.signature == "i"
+    runner.start(10.0)
+    runner.tick(10.0)
+    assert runner.results == {"override_setpoint": "unverändert"}
+    assert [method for method, _ in bus.calls].count("SetValue") == 1  # kein zweites Schreiben

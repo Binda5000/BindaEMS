@@ -1,3 +1,17 @@
+from collections.abc import Iterable
+
+
+class DbusArray(list[object]):
+    """Wie ``dbus.Array`` von dbus-python: eine Liste, die ihre Signatur kennt.
+
+    Venus OS meldet einen ungültigen Wert als leeres Array.
+    """
+
+    def __init__(self, items: Iterable[object] = (), signature: str = "i") -> None:
+        super().__init__(items)
+        self.signature = signature
+
+
 class FakeAccess:
     def __init__(
         self,

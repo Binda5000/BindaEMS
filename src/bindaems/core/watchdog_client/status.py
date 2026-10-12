@@ -19,7 +19,7 @@ from bindaems.shared.domain import Alarm, Severity, Snapshot, Value
 from bindaems.shared.numbers import de, finite_number
 
 # Muss ``VERSION`` in ``cerbo-watchdog/bindaems_watchdog/__init__.py`` entsprechen.
-WATCHDOG_VERSION: Final = "1.0.0"
+WATCHDOG_VERSION: Final = "1.1.0"
 
 _TRIPPED_TEXT: Final = "Der Watchdog am Cerbo hat ausgelöst und den sicheren Zustand hergestellt."
 _NO_ANSWER_TEXT: Final = "Watchdog am Cerbo antwortet nicht; Victron und EVCS bleiben im Dry-Run."

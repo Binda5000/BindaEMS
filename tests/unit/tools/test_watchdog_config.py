@@ -16,6 +16,73 @@ def test_example_matches_rendered_example(cfg: Config) -> None:
     assert render_config(cfg) == EXAMPLE.read_text(encoding="utf-8")
 
 
+def with_victron_live(cfg: Config) -> Config:
+    return cfg.model_copy(update={"victron": cfg.victron.model_copy(update={"live_allowed": True})})
+
+
+def test_override_action_only_with_victron_live(cfg) -> None:
+    assert "[action:override_setpoint]" not in render_config(cfg)
+    live = cfg.model_copy(update={"victron": cfg.victron.model_copy(update={"live_allowed": True})})
+    text = render_config(live)
+    assert (
+        "[action:override_setpoint]\nservice = com.victronenergy.hub4\n"
+        "path = /Overrides/Setpoint\nvalue = null" in text
+    )
+    assert parse_settings(text).actions[-1].value is None  # der Watchdog liest es als „ungültig“
+
+
+OVERRIDE_SECTION = (
+    "; Netz-Sollwert-Override des EMS aufheben (victron.live_allowed)\n"
+    "[action:override_setpoint]\n"
+    "service = com.victronenergy.hub4\n"
+    "path = /Overrides/Setpoint\n"
+    "value = null\n"
+)
+OVERRIDE_HINT = (
+    "; Netz-Sollwert-Override: ohne victron.live_allowed unberührt "
+    "(Aktion override_setpoint, seit Watchdog 1.1.0)\n"
+)
+
+
+def test_override_action_text_and_place(cfg: Config) -> None:
+    text = render_config(with_victron_live(cfg))
+    assert text.endswith("\n\n" + OVERRIDE_SECTION)  # als letzter Abschnitt, mit Leerzeile davor
+    settings = parse_settings(text)
+    assert [a.name for a in settings.actions] == [
+        "evcs_evcs",
+        "min_soc",
+        "max_discharge",
+        "override_setpoint",
+    ]
+    override = settings.actions[-1]
+    assert (override.service, override.path) == ("com.victronenergy.hub4", "/Overrides/Setpoint")
+    assert (override.value, override.instance) == (None, None)  # kein Gerät mit Instanz
+
+
+def test_override_action_comes_behind_every_evcs_section(cfg: Config) -> None:
+    second = cfg.wallboxes["evcs"].model_copy(update={"safe_a": 10})
+    instances = cfg.victron.instances.model_copy(update={"evcharger": {40: "evcs", 41: "evcs2"}})
+    victron = cfg.victron.model_copy(update={"instances": instances, "live_allowed": True})
+    changed = cfg.model_copy(
+        update={"victron": victron, "wallboxes": {**cfg.wallboxes, "evcs2": second}}
+    )
+    names = [a.name for a in parse_settings(render_config(changed)).actions]
+    assert names == ["evcs_evcs", "evcs_evcs2", "min_soc", "max_discharge", "override_setpoint"]
+
+
+def test_override_action_leaves_the_other_actions_alone(cfg: Config) -> None:
+    without = parse_settings(render_config(cfg)).actions
+    with_override = parse_settings(render_config(with_victron_live(cfg))).actions
+    assert with_override[:-1] == without
+
+
+def test_without_victron_live_the_file_says_why_there_is_no_override_action(cfg: Config) -> None:
+    text = render_config(cfg)
+    assert text.endswith("\n\n" + OVERRIDE_HINT)
+    assert "[action:override_setpoint]" not in text
+    assert OVERRIDE_HINT not in render_config(with_victron_live(cfg))
+
+
 def test_rendered_config_parses(cfg: Config) -> None:
     settings = parse_settings(render_config(cfg))
     assert [a.name for a in settings.actions] == ["evcs_evcs", "min_soc", "max_discharge"]
@@ -166,3 +233,12 @@ def test_main_reports_an_unwritable_out(tmp_path: Path, capsys) -> None:
     err = capsys.readouterr().err
     assert "gibt-es-nicht" in err  # die Meldung nennt den Pfad
     assert "Traceback" not in err
+
+
+def test_main_writes_the_override_action_for_a_live_victron(tmp_path: Path, capsys) -> None:
+    config = _config_file(tmp_path, lambda raw: raw["victron"].update(live_allowed=True))
+    assert main(["--config", str(config)]) == 0
+    captured = capsys.readouterr()
+    assert captured.out.endswith(OVERRIDE_SECTION)
+    assert parse_settings(captured.out).actions[-1].name == "override_setpoint"
+    assert captured.err == ""

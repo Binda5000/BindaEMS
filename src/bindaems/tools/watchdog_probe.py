@@ -10,9 +10,9 @@ Die Probe spricht MQTT mit dem Cerbo. Sie schreibt dort nur den Heartbeat des Wa
 1. fragt den Watchdog nach Version und Zustand,
 2. macht ihn mit Heartbeats scharf,
 3. lässt die Heartbeats ausbleiben, bis er auslöst,
-4. wartet ohne Heartbeat, bis seine Aktionen mit allen Wiederholungen durch sein müssen, liest
-   die Zahl der fehlgeschlagenen Aktionen und nimmt die Heartbeats wieder auf, bis er wieder
-   scharf ist,
+4. wartet ohne Heartbeat, bis seine Aktionen mit allen Wiederholungen durch sein müssen, nimmt die
+   Heartbeats wieder auf, bis er wieder scharf ist, und liest erst dann die Zahl der
+   fehlgeschlagenen Aktionen,
 5. und gibt ihn mit der 0 frei.
 
 **Die Probe löst den Watchdog aus:** Er setzt die EVCS auf den sicheren Strom und schreibt Min-SOC
@@ -22,7 +22,11 @@ währenddessen (Regelbetrieb an, ein Victron- oder EVCS-Aktor live gewünscht), 
 Heartbeats, und der Watchdog löst nicht aus.
 
 Die Pause in Schritt 4 ist nötig: Wird der Watchdog wieder scharf, bricht sein Aktionslauf ab, und
-eine Aktion, die noch auf ihre nächste Wiederholung wartet, kommt nicht mehr zum Zug.
+eine Aktion, die noch auf ihre nächste Wiederholung wartet, kommt nicht mehr zum Zug. Die Zahl der
+fehlgeschlagenen Aktionen (``/LastTripFailures``) ist erst nach „Wieder scharf“ der Endstand: Der
+Lauf ist dann zu Ende, entweder vollständig oder durch das Wiederscharfwerden abgebrochen. Die
+Zeile „Auslösung ohne Heartbeat“ entsteht darum erst dann, steht im Bericht aber vor „Wieder
+scharf“.
 
 Bricht die Probe ab, nachdem die Heartbeats liefen (Strg+C, Verbindungsverlust, Fehler), versucht
 sie, den Watchdog mit dem Heartbeat 0 freizugeben: Sonst löste er später unbeaufsichtigt aus oder
@@ -226,18 +230,22 @@ class _Probe:
         self._findings.append(await self._arm("Scharf nach Heartbeat", t.arm_wait_s))
         trips_before = self._values.get("TripCount")
         elapsed = await self._trip()
-        if elapsed is not None:
-            try:
-                await self._pause(t.actions_wait_s)
-            except BaseException:
-                # Abbruch vor dem Ende des Aktionslaufs: Der Befund zur Auslösung bleibt erhalten.
-                self._findings.append(self._trip_finding(elapsed, trips_before, final=False))
-                raise
         # Mit der Auslösung steht /LastTripFailures auf 0; den Endstand bekommt der Pfad, wenn der
-        # Aktionslauf endet. Die Pause ohne Heartbeat lässt ihn mit allen Wiederholungen zu Ende
-        # laufen: Würde der Watchdog vorher wieder scharf, bräche der Lauf ab.
+        # Aktionslauf endet. Die Pause ohne Heartbeat lässt den Lauf mit allen Wiederholungen zu
+        # Ende laufen: Würde der Watchdog vorher wieder scharf, bräche er ab. Verbindlich ist die
+        # Zahl aber erst, wenn der Watchdog wieder scharf ist, denn dann ist der Lauf zu Ende.
+        # Darum entsteht die Zeile zur Auslösung erst jetzt, steht aber vor „Wieder scharf“.
+        try:
+            if elapsed is not None:
+                await self._pause(t.actions_wait_s)
+            rearmed = await self._arm("Wieder scharf", t.rearm_wait_s)
+        except BaseException:
+            # Abbruch, bevor der Watchdog wieder scharf war: Der Befund zur Auslösung bleibt
+            # erhalten, die Zahl der fehlgeschlagenen Aktionen ist aber noch nicht der Endstand.
+            self._findings.append(self._trip_finding(elapsed, trips_before, final=False))
+            raise
         self._findings.append(self._trip_finding(elapsed, trips_before, final=True))
-        self._findings.append(await self._arm("Wieder scharf", t.rearm_wait_s))
+        self._findings.append(rearmed)
         self._findings.append(await self._release())
 
     async def _release_after_abort(self) -> None:
@@ -291,14 +299,14 @@ class _Probe:
                 "fail",
                 f"nach {de(round(t.timeout_s + t.trip_slack_s))} s nicht ausgelöst",
             )
-        failures = _as_int(self._values.get("LastTripFailures"))
+        failures = _as_int(self._values.get("LastTripFailures"))  # jetzt, nicht schon vorher
         detail = (
             f"ausgelöst nach {de(round(elapsed))} s, "
             f"Auslösungen {_count(trips_before)} → {_count(self._values.get('TripCount'))}, "
             f"fehlgeschlagene Aktionen {_count(failures)}"
         )
         status: Status = "ok" if failures == 0 else "warn"  # unbekannt gilt nicht als fehlerfrei
-        if not final:  # die Fehlerzahl ist erst am Ende des Aktionslaufs verbindlich
+        if not final:  # die Fehlerzahl ist erst nach „Wieder scharf“ der Endstand
             detail += " (Abbruch vor dem Ende des Aktionslaufs)"
             status = "warn"
         return Finding(ITEM, title, status, detail)

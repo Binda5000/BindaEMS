@@ -48,17 +48,17 @@ def test_read_details() -> None:
         "watchdog.trip_count": 2,
         "watchdog.last_trip_time": 1791600000,
         "watchdog.last_trip_failures": 1,
-        "watchdog.version": "1.0.0",
+        "watchdog.version": WATCHDOG_VERSION,
     }
     assert read_watchdog(snap(values, kind=STATE)) == WatchdogStatus(
-        W.TRIPPED, 2, datetime.fromtimestamp(1791600000, UTC), 1, "1.0.0"
+        W.TRIPPED, 2, datetime.fromtimestamp(1791600000, UTC), 1, WATCHDOG_VERSION
     )
     assert read_watchdog(snap({"watchdog.last_trip_time": 0}, kind=STATE)).last_trip is None
 
 
 def test_alarm_when_tripped() -> None:
     last = datetime.fromtimestamp(1791600000, UTC)
-    status = WatchdogStatus(W.TRIPPED, 3, last, 2, "1.0.0")
+    status = WatchdogStatus(W.TRIPPED, 3, last, 2, WATCHDOG_VERSION)
     assert watchdog_alarms(status, required=False, now=T0) == [
         Alarm(
             "watchdog.tripped",
@@ -76,12 +76,15 @@ def test_unavailable_only_when_required() -> None:
     assert watchdog_alarms(unknown, required=True, now=T0)[0].message == (
         "Watchdog am Cerbo antwortet nicht; Victron und EVCS bleiben im Dry-Run."
     )
-    disabled = WatchdogStatus(W.DISABLED, 0, None, 0, "1.0.0")
+    disabled = WatchdogStatus(W.DISABLED, 0, None, 0, WATCHDOG_VERSION)
     assert watchdog_alarms(disabled, required=True, now=T0)[0].message == (
         "Watchdog am Cerbo ist deaktiviert; Victron und EVCS bleiben im Dry-Run."
     )
     assert (
-        watchdog_alarms(WatchdogStatus(W.WAITING, 0, None, 0, "1.0.0"), required=True, now=T0) == []
+        watchdog_alarms(
+            WatchdogStatus(W.WAITING, 0, None, 0, WATCHDOG_VERSION), required=True, now=T0
+        )
+        == []
     )
 
 
@@ -91,7 +94,7 @@ def test_version_mismatch_warns() -> None:
         Alarm(
             "watchdog.version",
             Severity.WARNING,
-            "Watchdog-Version 0.9.0 am Cerbo, erwartet 1.0.0; bitte mit install.sh aktualisieren.",
+            "Watchdog-Version 0.9.0 am Cerbo, erwartet 1.1.0; bitte mit install.sh aktualisieren.",
             T0,
         )
     ]
@@ -115,7 +118,7 @@ def test_only_ok_values_count(quality: Quality) -> None:
         "watchdog.trip_count": 2,
         "watchdog.last_trip_time": 1791600000,
         "watchdog.last_trip_failures": 1,
-        "watchdog.version": "1.0.0",
+        "watchdog.version": WATCHDOG_VERSION,
         "watchdog.heartbeat": 7,
         "watchdog.timeout_s": 90,
     }
@@ -172,7 +175,7 @@ def test_reads_what_the_topics_deliver(cfg: Config) -> None:
         "TripCount": 3,
         "LastTripTime": 1791600000,
         "LastTripFailures": 1,
-        "Version": "1.0.0",
+        "Version": WATCHDOG_VERSION,
         "Heartbeat": 7,
         "TimeoutSeconds": 90,
     }
@@ -182,7 +185,7 @@ def test_reads_what_the_topics_deliver(cfg: Config) -> None:
         for update in parse_message(f"N/{P}/bindaems/0/{path}", payload, P, resolver):
             values[update.signal] = update.value
     assert read_watchdog(snap(values, kind=STATE)) == WatchdogStatus(
-        W.TRIPPED, 3, datetime.fromtimestamp(1791600000, UTC), 1, "1.0.0", 7, 90.0
+        W.TRIPPED, 3, datetime.fromtimestamp(1791600000, UTC), 1, WATCHDOG_VERSION, 7, 90.0
     )
 
 

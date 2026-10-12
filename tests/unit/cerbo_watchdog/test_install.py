@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
+from bindaems_watchdog import VERSION
 
 ROOT = Path("cerbo-watchdog")
 SCRIPTS = ["install.sh", "service/run", "service/log/run"]
@@ -65,9 +66,9 @@ exec sh -c "$command"
     "svc": """#!/bin/sh
 printf 'svc %s\\n' "$*" >>"$FAKE_LOG"
 """,
-    "dbus": """#!/bin/sh
+    "dbus": f"""#!/bin/sh
 printf 'dbus %s\\n' "$*" >>"$FAKE_LOG"
-case $3 in /Version) echo "'1.0.0'" ;; /State) echo 0 ;; esac
+case $3 in /Version) echo "'{VERSION}'" ;; /State) echo 0 ;; esac
 """,
     "python3": """#!/bin/sh
 case $* in *load_settings*) exec "$REAL_PYTHON" "$@" ;; esac
@@ -185,7 +186,7 @@ def test_install_sets_up_the_device(device: Device) -> None:
     assert not any(call.startswith("svc ") for call in calls)  # svscan startet ihn selbst
     assert list(device.tmp.iterdir()) == []  # das Übertragungsverzeichnis ist wieder weg
     assert "dbus -y com.victronenergy.bindaems /Version GetValue" in calls
-    assert "Version: '1.0.0'" in result.stdout and "Zustand: 0 (0 wartet" in result.stdout
+    assert f"Version: '{VERSION}'" in result.stdout and "Zustand: 0 (0 wartet" in result.stdout
 
 
 def test_update_replaces_the_block_and_restarts(device: Device) -> None:

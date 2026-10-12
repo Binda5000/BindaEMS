@@ -36,6 +36,7 @@ from bindaems.app.forecast.openmeteo import OPEN_METEO_URL
 from bindaems.app.runtime import AppRuntime
 from bindaems.core.adapters.base import AdapterHealth
 from bindaems.core.runtime import CoreRuntime
+from bindaems.core.watchdog_client.status import WATCHDOG_VERSION
 from bindaems.shared.config import Config, Secrets
 from bindaems.shared.domain import SignalKind
 from bindaems.shared.influx.lineprotocol import epoch_ms
@@ -73,7 +74,7 @@ VICTRON_STATE: dict[str, float | str] = {
     "wallbox.evcs.gx_mode": 0.0,  # Modus, wie ihn der Cerbo liest
     **{f"ess.schedule.{k}.day": -7.0 for k in range(5)},  # negativ: Ladefenster aus
     "watchdog.state": 0.0,  # 0 = wartet
-    "watchdog.version": "1.0.0",
+    "watchdog.version": WATCHDOG_VERSION,
     "watchdog.trip_count": 0.0,
     "watchdog.last_trip_time": 0.0,  # 0 = nie
     "watchdog.last_trip_failures": 0.0,

@@ -86,6 +86,10 @@ class SimulatedCerbo:
     kommt alle 10 ms. Die Abstände sind großzügig (Heartbeat der Probe 0,05 s gegen 0,5 s Lücke),
     damit der Test auf einer belasteten CI nicht flackert. ``enabled=False`` ergibt einen
     deaktivierten Watchdog.
+
+    Mit ``failures_after_rearm`` meldet der Cerbo den Endstand von ``LastTripFailures`` erst beim
+    Wechsel nach „scharf“, der auf eine Auslösung folgt: Bis dahin bleibt der Pfad auf 0, dann
+    springt er auf diesen Wert, noch vor dem Zustand (wie bei einem Abbruch des Aktionslaufs).
     """
 
     def __init__(
@@ -99,6 +103,7 @@ class SimulatedCerbo:
         gap_s: float = 0.5,
         retries: int = SIM_RETRIES,
         retry_s: float = SIM_RETRY_S,
+        failures_after_rearm: int | None = None,
     ) -> None:
         settings = replace(
             EXAMPLE,
@@ -110,6 +115,7 @@ class SimulatedCerbo:
             retry_s=retry_s,
         )
         self.access = access if access is not None else plant()
+        self._failures_after_rearm = failures_after_rearm
         self._logic = WatchdogLogic(settings, armed_at_start=False, now=time.monotonic())
         self._service = WatchdogService(
             settings,
@@ -189,9 +195,20 @@ class SimulatedCerbo:
         """``publish`` des Dienstes: Wie ein D-Bus-Pfad meldet er nur eine Änderung."""
         if self._paths.get(path) == value:
             return
-        self._paths[path] = value
+        if self._failures_after_rearm is not None:
+            if path == "/LastTripFailures":
+                return  # der Endstand erscheint erst, wenn der Watchdog wieder scharf ist
+            if path == "/State" and value == ARMED and self.tripped_at is not None:
+                self._announce("/LastTripFailures", self._failures_after_rearm)  # vor dem Zustand
         if path == "/State" and value == TRIPPED:
             self.tripped_at = time.monotonic()
+        self._announce(path, value)
+
+    def _announce(self, path: str, value: object) -> None:
+        """Setzt den Pfad und meldet ihn, wenn sich der Wert ändert."""
+        if self._paths.get(path) == value:
+            return
+        self._paths[path] = value
         self._notify(path[1:], value)
 
     def _notify(self, name: str, value: object) -> None:
@@ -353,6 +370,16 @@ async def test_probe_passes_against_simulated_watchdog() -> None:
         findings = await run_probe(cerbo, P, FAST)
     assert [f.title for f in findings] == TITLES
     assert {f.status for f in findings} == {"ok"}
+
+
+async def test_trip_failures_are_read_after_rearming() -> None:
+    # meldet den Endstand erst beim Wiederscharfwerden
+    async with SimulatedCerbo(failures_after_rearm=1) as cerbo:
+        findings = await run_probe(cerbo, P, FAST)
+    trip = next(f for f in findings if f.title == "Auslösung ohne Heartbeat")
+    assert "fehlgeschlagene Aktionen 1" in trip.detail
+    assert [f.title for f in findings] == TITLES  # die Reihenfolge der Zeilen bleibt
+    assert [f.status for f in findings] == ["ok", "ok", "ok", "warn", "ok", "ok"]
 
 
 async def test_probe_without_answer_stops_after_first_step() -> None:
@@ -697,9 +724,12 @@ async def test_probe_names_an_internal_error_and_still_releases() -> None:
         ("Watchdog erreichbar", "ok"),
         ("Watchdog-Version", "ok"),
         ("Scharf nach Heartbeat", "ok"),
-        ("Auslösung ohne Heartbeat", "ok"),  # nach der Pause verbindlich, vor dem Fehler
+        # Der Fehler kommt beim ersten Heartbeat nach der Pause, vor dem Wiederscharfwerden: Die
+        # Zeile bleibt, aber die Zahl der fehlgeschlagenen Aktionen ist noch nicht der Endstand.
+        ("Auslösung ohne Heartbeat", "warn"),
         ("Interner Fehler der Probe", "fail"),
     ]
+    assert findings[3].detail.endswith("(Abbruch vor dem Ende des Aktionslaufs)")
     assert findings[-1].detail == "RuntimeError: kaputt"
     assert cerbo.heartbeats()[-1] == 0
     assert cerbo.state == WAITING

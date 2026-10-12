@@ -3,4 +3,4 @@
 from __future__ import annotations
 
 # Muss ``WATCHDOG_VERSION`` in ``src/bindaems/core/watchdog_client/status.py`` entsprechen.
-VERSION = "1.0.0"
+VERSION = "1.1.0"

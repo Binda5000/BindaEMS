@@ -110,7 +110,7 @@ it('zeigt die eingeschränkte Betriebsart, den gesperrten Aktor und den ausgelö
 	expect(screen.getByText(reason)).toBeInTheDocument();
 	const watchdog = within(card('Watchdog am Cerbo'));
 	expect(watchdog.getByText('ausgelöst')).toBeInTheDocument();
-	expect(watchdog.getByText('0.9.0 (erwartet 1.0.0)')).toBeInTheDocument();
+	expect(watchdog.getByText('0.9.0 (erwartet 1.1.0)')).toBeInTheDocument();
 	const actuators = within(card('Aktoren'));
 	expect(actuators.getByText('gesperrt: Dynamic ESS ist aktiv (Modus 1).')).toBeInTheDocument();
 });
@@ -245,7 +245,7 @@ it('zeigt Heartbeat, Auslösungen, letzte Auslösung, fehlgeschlagene Aktionen u
 			trip_count: 3,
 			last_trip: '2026-10-09T07:30:00+00:00',
 			last_trip_failures: 1,
-			version: '1.0.0'
+			version: '1.1.0'
 		})
 	});
 	const watchdog = card('Watchdog am Cerbo');
@@ -254,7 +254,7 @@ it('zeigt Heartbeat, Auslösungen, letzte Auslösung, fehlgeschlagene Aktionen u
 	expect(fact(watchdog, 'Auslösungen')).toHaveTextContent(/^3$/);
 	expect(fact(watchdog, 'Letzte Auslösung')).toHaveTextContent(/^09\.10\.2026, 09:30$/);
 	expect(fact(watchdog, 'Fehlgeschlagene Aktionen')).toHaveTextContent(/^1$/);
-	expect(fact(watchdog, 'Version')).toHaveTextContent(/^1\.0\.0$/);
+	expect(fact(watchdog, 'Version')).toHaveTextContent(/^1\.1\.0$/);
 });
 
 it('zeigt den wartenden Watchdog der Demo ohne bisherige Auslösung', async () => {
@@ -265,7 +265,7 @@ it('zeigt den wartenden Watchdog der Demo ohne bisherige Auslösung', async () =
 	expect(fact(watchdog, 'Auslösungen')).toHaveTextContent(/^0$/);
 	expect(fact(watchdog, 'Letzte Auslösung')).toHaveTextContent(/^nie$/);
 	expect(fact(watchdog, 'Fehlgeschlagene Aktionen')).toHaveTextContent(/^0$/);
-	expect(fact(watchdog, 'Version')).toHaveTextContent(/^1\.0\.0$/);
+	expect(fact(watchdog, 'Version')).toHaveTextContent(/^1\.1\.0$/);
 });
 
 it('zeigt ohne Antwort des Watchdogs Striche statt „nie“ und 0', async () => {

@@ -4,7 +4,7 @@ from collections.abc import Iterable
 import pytest
 from bindaems_watchdog.actions import ActionRunner
 from bindaems_watchdog.config import Action
-from tests.unit.cerbo_watchdog.fakes import FakeAccess
+from tests.unit.cerbo_watchdog.fakes import DbusArray, FakeAccess
 
 SETTINGS_PATH = ("com.victronenergy.settings", "/Settings/CGwacs/BatteryLife/MinimumSocLimit")
 MIN_SOC = Action("min_soc", *SETTINGS_PATH, 20)
@@ -77,6 +77,10 @@ def test_null_value_compares_with_invalid() -> None:
 
 EVCS = Action("evcs_evcs", "com.victronenergy.evcharger", "/SetCurrent", 6, instance=40)
 
+# Die Aktion „Netz-Sollwert-Override aufheben“, wie die config.ini sie beschreibt (value = null)
+OVERRIDE_ITEM = ("com.victronenergy.hub4", "/Overrides/Setpoint")
+CLEAR_OVERRIDE = Action("override_setpoint", *OVERRIDE_ITEM, None)
+
 
 class SilentAccess(FakeAccess):
     """Der Dienst antwortet nicht: Jedes Lesen wirft."""
@@ -91,6 +95,14 @@ class ClampingAccess(FakeAccess):
     def set_value(self, service: str, path: str, value: object) -> bool:
         self.writes.append((service, path, value))
         self.values[(service, path)] = 25
+        return True
+
+
+class HoldingAccess(FakeAccess):
+    """Der Dienst nimmt jedes Schreiben an und ändert nichts."""
+
+    def set_value(self, service: str, path: str, value: object) -> bool:
+        self.writes.append((service, path, value))
         return True
 
 
@@ -240,3 +252,41 @@ def test_abort_leaves_actions_without_an_attempt_open() -> None:
         0,
         [],
     )
+
+
+def test_override_action_clears_a_set_override_with_none() -> None:
+    access = FakeAccess({OVERRIDE_ITEM: 1500.0})
+    runner = ActionRunner(access, [CLEAR_OVERRIDE], retries=0, retry_s=5.0)
+    run(runner, [0.0])
+    assert access.writes == [(*OVERRIDE_ITEM, None)]  # None heißt ungültig; kein Zahlenwert
+    assert (runner.results, runner.failures) == ({"override_setpoint": "ok"}, 0)
+
+
+@pytest.mark.parametrize(
+    "cleared",
+    [None, [], DbusArray()],
+    ids=["None", "leere Liste", "leeres Array wie von dbus-python"],
+)
+def test_override_action_leaves_a_cleared_override_alone(cleared: object) -> None:
+    # Lesen zuerst, nur schreiben, was abweicht: Ein ungültiger Override ist schon der Sicherwert.
+    access = FakeAccess({OVERRIDE_ITEM: cleared})
+    runner = ActionRunner(access, [CLEAR_OVERRIDE], retries=0, retry_s=5.0)
+    run(runner, [0.0])
+    assert (access.writes, runner.results) == ([], {"override_setpoint": "unverändert"})
+
+
+@pytest.mark.parametrize("override", [0, 0.0, [0], DbusArray([500.0])], ids=repr)
+def test_override_action_treats_only_invalid_as_cleared(override: object) -> None:
+    # Auch 0 W ist ein Override: Nur „ungültig“ heißt, dass das EMS ihn nicht hält.
+    access = FakeAccess({OVERRIDE_ITEM: override})
+    runner = ActionRunner(access, [CLEAR_OVERRIDE], retries=0, retry_s=5.0)
+    run(runner, [0.0])
+    assert access.writes == [(*OVERRIDE_ITEM, None)]
+    assert runner.results == {"override_setpoint": "ok"}
+
+
+def test_override_action_fails_when_the_override_stays_set() -> None:
+    access = HoldingAccess({OVERRIDE_ITEM: 1500.0})
+    runner = ActionRunner(access, [CLEAR_OVERRIDE], retries=0, retry_s=5.0)
+    run(runner, [0.0])
+    assert (runner.results, runner.failures) == ({"override_setpoint": "fehlgeschlagen"}, 1)

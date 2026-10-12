@@ -28,3 +28,5 @@ value = 20
 service = com.victronenergy.settings
 path = /Settings/CGwacs/MaxDischargePower
 value = -1
+
+; Netz-Sollwert-Override: ohne victron.live_allowed unberührt (Aktion override_setpoint, seit Watchdog 1.1.0)

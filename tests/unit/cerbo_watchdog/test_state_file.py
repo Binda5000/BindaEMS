@@ -1,5 +1,6 @@
 import json
 import os
+import stat
 from pathlib import Path
 from unittest.mock import Mock
 
@@ -140,7 +141,10 @@ def test_content_is_on_disk_before_it_replaces_the_old_file(
     real_fsync, real_replace = os.fsync, os.replace
 
     def fsync(fd: int) -> None:
-        steps.append(("fsync", temp.read_text()))
+        if stat.S_ISDIR(os.fstat(fd).st_mode):  # nach dem Umbenennen: das Verzeichnis
+            steps.append(("fsync Verzeichnis", ""))
+        else:
+            steps.append(("fsync", temp.read_text()))
         real_fsync(fd)
 
     def replace(src: str, dst: str) -> None:
@@ -151,4 +155,122 @@ def test_content_is_on_disk_before_it_replaces_the_old_file(
     monkeypatch.setattr("bindaems_watchdog.state_file.os.replace", replace)
     write_state(str(tmp_path / "state.json"), StoredState(armed=True, trip_count=3))
     written = (tmp_path / "state.json").read_text()
-    assert steps == [("fsync", written), ("replace", written)]
+    assert steps == [("fsync", written), ("replace", written), ("fsync Verzeichnis", "")]
+
+
+# Das Verzeichnis sichern: Erst damit übersteht auch das Umbenennen einen Stromausfall.
+
+
+def test_write_state_syncs_the_directory(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    synced: list[int] = []
+    real_fsync = os.fsync
+    monkeypatch.setattr(os, "fsync", lambda fd: synced.append(fd) or real_fsync(fd))
+    write_state(str(tmp_path / "state.json"), StoredState(armed=True))
+    assert len(synced) == 2  # Datei und Verzeichnis
+
+
+def record_steps(monkeypatch: pytest.MonkeyPatch) -> list[str]:
+    """Merkt sich Datei-fsync, Umbenennen und Verzeichnis-fsync in der Reihenfolge des Aufrufs."""
+    steps: list[str] = []
+    real_fsync, real_replace = os.fsync, os.replace
+
+    def fsync(fd: int) -> None:
+        steps.append("fsync Verzeichnis" if stat.S_ISDIR(os.fstat(fd).st_mode) else "fsync Datei")
+        real_fsync(fd)
+
+    def replace(src: str, dst: str) -> None:
+        steps.append("replace")
+        real_replace(src, dst)
+
+    monkeypatch.setattr(os, "fsync", fsync)
+    monkeypatch.setattr(os, "replace", replace)
+    return steps
+
+
+def test_directory_is_synced_after_the_replace(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    steps = record_steps(monkeypatch)
+    write_state(str(tmp_path / "state.json"), StoredState(armed=True))
+    assert steps == ["fsync Datei", "replace", "fsync Verzeichnis"]
+
+
+def test_the_directory_of_a_relative_path_is_synced(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    steps = record_steps(monkeypatch)
+    write_state("state.json", StoredState(armed=True))
+    assert steps == ["fsync Datei", "replace", "fsync Verzeichnis"]
+
+
+def test_directory_is_opened_read_only_and_closed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    opened: list[tuple[str, int, int]] = []  # Pfad, Flags, Deskriptor
+    closed: list[int] = []
+    real_open, real_close = os.open, os.close
+
+    def tracking_open(path: str, flags: int, *args: int) -> int:
+        fd = real_open(path, flags, *args)
+        opened.append((path, flags, fd))
+        return fd
+
+    def tracking_close(fd: int) -> None:
+        closed.append(fd)
+        real_close(fd)
+
+    monkeypatch.setattr(os, "open", tracking_open)
+    monkeypatch.setattr(os, "close", tracking_close)
+    write_state(str(tmp_path / "state.json"), StoredState(armed=True))
+    ((path, flags, fd),) = opened
+    assert (path, flags) == (str(tmp_path), os.O_RDONLY)
+    assert closed == [fd]
+
+
+def test_a_directory_that_cannot_be_opened_does_not_fail_the_write(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(os, "open", Mock(side_effect=PermissionError(13, "Permission denied")))
+    path = str(tmp_path / "state.json")
+    write_state(path, StoredState(armed=True, trip_count=4))  # der Inhalt steht schon
+    assert read_state(path) == (StoredState(armed=True, trip_count=4), None)
+    assert names(tmp_path) == ["state.json"]
+
+
+def test_a_failing_directory_sync_does_not_fail_the_write(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    closed: list[int] = []
+    real_fsync, real_close = os.fsync, os.close
+
+    def fsync(fd: int) -> None:
+        if stat.S_ISDIR(os.fstat(fd).st_mode):
+            raise OSError(22, "Invalid argument")  # z. B. ein Dateisystem ohne Verzeichnis-fsync
+        real_fsync(fd)
+
+    def close(fd: int) -> None:
+        closed.append(fd)
+        real_close(fd)
+
+    monkeypatch.setattr(os, "fsync", fsync)
+    monkeypatch.setattr(os, "close", close)
+    path = str(tmp_path / "state.json")
+    write_state(path, StoredState(armed=True, trip_count=4))
+    assert read_state(path) == (StoredState(armed=True, trip_count=4), None)
+    assert names(tmp_path) == ["state.json"]
+    assert len(closed) == 1  # der Deskriptor des Verzeichnisses ist trotzdem zu
+
+
+def test_a_failing_file_sync_still_fails_the_write(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Nur das Sichern des Verzeichnisses ist nachsichtig: Steht der Inhalt nicht sicher auf der
+    # Platte, kommt der Fehler durch, und die alte Datei bleibt.
+    path = str(tmp_path / "state.json")
+    write_state(path, StoredState(armed=True, trip_count=1))
+    monkeypatch.setattr(os, "fsync", Mock(side_effect=OSError(5, "Input/output error")))
+    with pytest.raises(OSError, match="Input/output error"):
+        write_state(path, StoredState(armed=False, trip_count=2))
+    assert read_state(path) == (StoredState(armed=True, trip_count=1), None)
+    assert names(tmp_path) == ["state.json"]

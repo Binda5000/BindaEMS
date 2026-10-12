@@ -5,6 +5,9 @@ Der Totmann-Schalter der Anlage (Spec 8.6): ein kleiner Python-Dienst auf dem Vi
 Heartbeat. Bleibt er aus, weil die VM, das Netz oder der core ausgefallen ist, stellt der Watchdog
 selbst den sicheren Zustand her.
 
+Die aktuelle Version ist **1.1.0**; das EMS erwartet genau sie (`/Version`). Läuft noch eine andere,
+meldet es „bitte mit install.sh aktualisieren“ (siehe „Aktualisieren“).
+
 ## Was der Watchdog tut
 
 ### Zustände
@@ -31,9 +34,13 @@ Die Zeiten stehen im Abschnitt `[watchdog]` der `config.ini`:
   dem Cerbo ist das der D-Bus-Pfad `/Heartbeat`. Angenommen werden nur ganze Zahlen ab 0.
 - Die **0 gibt den Watchdog frei:** Er geht ohne Auslösung zurück auf „wartet“. Das EMS sendet
   sie, sobald kein Victron- oder EVCS-Aktor mehr live angefordert ist.
-- Ob der Watchdog scharf ist, steht in `/data/bindaems-watchdog/state.json`. Nach einem Neustart
-  des Cerbo startet er wieder scharf, und das EMS hat `timeout_s`, sich zu melden. Lässt sich die
-  Datei nicht schreiben (z. B. `/data` voll), versucht er es jede Sekunde erneut.
+- Ob der Watchdog scharf oder ausgelöst ist, steht in `/data/bindaems-watchdog/state.json`; beides
+  gilt dort als „scharf“. Nach einem Neustart des Cerbo startet er deshalb scharf, und das EMS hat
+  `timeout_s`, sich zu melden. Bleibt der Heartbeat danach aus, löst er erneut aus: Die Aktionen
+  lesen zuerst und schreiben nur, was abweicht. Die Datei wird samt Verzeichnis auf die Platte
+  gesichert (`fsync`); scheitert nur das Sichern des Verzeichnisses, ist das kein Fehler, denn der
+  Inhalt steht schon. Lässt sich die Datei nicht schreiben (z. B. `/data` voll), versucht er es
+  jede Sekunde erneut.
 
 ### Aktionen bei der Auslösung
 
@@ -43,6 +50,11 @@ Sicherwert:
 - EVCS auf den sicheren Strom (`/SetCurrent` des evcharger-Dienstes mit der eingetragenen Instanz)
 - Min-SOC auf die USV-Reserve
 - Entladegrenze unbegrenzt (`-1`)
+- Netz-Sollwert-Override des EMS aufheben (`/Overrides/Setpoint` des Dienstes
+  `com.victronenergy.hub4`, Wert `null`): nur mit `victron.live_allowed`. Ohne die Freigabe von
+  Victron gehört der Override nicht dem EMS, denn Dynamic ESS nutzt ihn; der Watchdog lässt ihn
+  dann unberührt. `null` steht für „ungültig“ (auf D-Bus ein leeres Array): Der Watchdog schreibt
+  es so, und ein Override, der schon ungültig ist, gilt als erledigt, ohne Schreiben.
 
 Jede Aktion liest zuerst und schreibt nur, wenn der Wert abweicht; danach liest sie zurück und
 vergleicht. Zahlen gelten bis `tolerance` (Standard 0,5) als gleich. Ein gescheiterter Versuch
@@ -62,7 +74,7 @@ fehlgeschlagenen Aktionen. Solange der Watchdog wartet oder scharf ist, schreibt
 | `/LastTripTime` | letzte Auslösung in Unix-Sekunden, 0 = nie |
 | `/LastTripFailures` | fehlgeschlagene Aktionen der letzten Auslösung; 0, bis ihr Lauf endet |
 | `/TimeoutSeconds` | `timeout_s` |
-| `/Version` | Version des Watchdogs; das EMS warnt, wenn sie nicht zu seiner passt |
+| `/Version` | Version des Watchdogs (1.1.0); das EMS warnt, wenn sie nicht zu seiner passt |
 
 ## Voraussetzungen
 
@@ -85,8 +97,10 @@ docker compose run --rm -T --entrypoint python ems-core \
 ```
 
 Erst wenn das Werkzeug ohne Fehler endet, ersetzt `mv` die bisherige Datei; mit `> config.ini`
-bliebe nach einem Fehler eine leere Datei zurück. Das Format zeigt `config.ini.example`. Das
-Werkzeug meldet auf der Fehlerausgabe, was die Datei nicht leisten kann:
+bliebe nach einem Fehler eine leere Datei zurück. Das Format zeigt `config.ini.example`. Mit
+`victron.live_allowed` hängt das Werkzeug die Aktion `override_setpoint` an (seit Version 1.1.0);
+ohne steht an ihrer Stelle eine Kommentarzeile. Das Werkzeug meldet auf der Fehlerausgabe, was die
+Datei nicht leisten kann:
 
 - Eine EVCS ohne GX-Instanz in `victron.instances.evcharger` ergibt eine Warnung (und einen
   Kommentar in der Datei): Der Watchdog setzt für sie keinen sicheren Strom.
@@ -132,9 +146,12 @@ ssh root@cerbo.lan dbus -y com.victronenergy.bindaems /State GetValue
 
 Ob die Kette vom EMS bis zu den Aktionen funktioniert, zeigt die Watchdog-Probe (Prüfprotokoll
 Teil 2, Spec 17.2 Punkt 5). **Die Probe löst den Watchdog aus:** Er setzt die EVCS auf den sicheren
-Strom und schreibt Min-SOC und Entladegrenze, wenn sie abweichen. Sie fragt deshalb vorher nach.
-Nach der Auslösung wartet sie 45 s ohne Heartbeat, damit der Aktionslauf mit allen Wiederholungen
-zu Ende kommt; erst dann liest sie die Zahl der fehlgeschlagenen Aktionen.
+Strom und schreibt Min-SOC und Entladegrenze, wenn sie abweichen; mit `victron.live_allowed` hebt
+er auch den Netz-Sollwert-Override auf. Sie fragt deshalb vorher nach. Nach der Auslösung wartet
+sie 45 s ohne Heartbeat, damit der Aktionslauf mit allen Wiederholungen zu Ende kommt. Die Zahl
+der fehlgeschlagenen Aktionen (`/LastTripFailures`) liest sie erst, wenn der Watchdog wieder scharf
+ist: Dann ist der Lauf zu Ende, und der Wert ist der Endstand. Die Zeile „Auslösung ohne Heartbeat“
+steht im Bericht trotzdem vor „Wieder scharf“.
 
 ```bash
 cd /opt/bindaems
@@ -158,15 +175,30 @@ und später auslösen oder ausgelöst bleiben. Zurück geht es, indem du die Pro
 0 ist: `dbus -y com.victronenergy.bindaems /State GetValue`.
 
 Nach der Probe stehen die EVCS auf dem sicheren Strom, der Min-SOC auf der USV-Reserve und die
-Entladegrenze auf unbegrenzt, sofern sie vorher abwichen. Prüfe alle drei und stelle sie wieder
-ein, wie du sie haben willst.
+Entladegrenze auf unbegrenzt, sofern sie vorher abwichen; mit `victron.live_allowed` ist auch der
+Netz-Sollwert-Override aufgehoben. Prüfe alle und stelle sie wieder ein, wie du sie haben willst.
 
 ## Aktualisieren
 
 Erzeuge die `config.ini` neu, falls sich die `config.yaml` geändert hat, und rufe `install.sh`
 wie bei der Installation auf. Das Skript ersetzt Programm, `config.ini` und den Block in
-`/data/rc.local` und startet den Dienst neu. `state.json` bleibt: Ein scharfer Watchdog startet
-wieder scharf.
+`/data/rc.local` und startet den Dienst neu. `state.json` bleibt: Ein scharfer oder ausgelöster
+Watchdog startet wieder scharf.
+
+### Von 1.0.0 auf 1.1.0
+
+Neu in 1.1.0:
+
+- Ein ausgelöster Watchdog übersteht einen Neustart des Cerbo als „scharf“ (siehe „Heartbeat und
+  Freigabe mit 0“).
+- `state.json` wird samt Verzeichnis auf die Platte gesichert.
+- Mit `victron.live_allowed` hebt der Watchdog bei einer Auslösung den Netz-Sollwert-Override auf
+  (siehe „Aktionen bei der Auslösung“).
+- Die Watchdog-Probe liest die Zahl der fehlgeschlagenen Aktionen erst nach „Wieder scharf“.
+
+Erzeuge die `config.ini` neu (sie enthält die neue Aktion, sobald `victron.live_allowed` gilt) und
+rufe `install.sh` auf. Bis dahin meldet das EMS: „Watchdog-Version 1.0.0 am Cerbo, erwartet 1.1.0;
+bitte mit install.sh aktualisieren.“
 
 ## Entfernen
 

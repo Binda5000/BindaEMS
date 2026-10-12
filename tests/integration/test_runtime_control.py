@@ -26,6 +26,7 @@ from bindaems.core.control.actuator import Confirmation
 from bindaems.core.control.intent import INTENT_FILE_PROBLEM
 from bindaems.core.persistence.files import read_json, write_json_atomic
 from bindaems.core.runtime import CoreRuntime
+from bindaems.core.watchdog_client.status import WATCHDOG_VERSION
 from bindaems.shared.config import Config, Secrets
 from bindaems.shared.control import ActuatorMode, CommandKind, Intent
 from bindaems.shared.decisions import DecisionResult
@@ -203,7 +204,7 @@ async def test_health_lists_actuators_and_watchdog(runtime_env) -> None:
         "last_trip": None,
         "last_trip_failures": None,
         "version": None,
-        "expected_version": "1.0.0",
+        "expected_version": WATCHDOG_VERSION,
         "heartbeat": "off",
         "required": False,
     }
@@ -227,7 +228,7 @@ WATCHDOG_ARMED = {
     "watchdog.trip_count": 2,
     "watchdog.last_trip_time": 1760000000,  # 09.10.2025, 08:53:20 UTC
     "watchdog.last_trip_failures": 0,
-    "watchdog.version": "1.0.0",
+    "watchdog.version": WATCHDOG_VERSION,
 }
 
 
@@ -415,8 +416,8 @@ async def test_health_reports_intent_live_actuator_and_watchdog(runtime_env) -> 
         "trip_count": 2,
         "last_trip": "2025-10-09T08:53:20+00:00",
         "last_trip_failures": 0,
-        "version": "1.0.0",
-        "expected_version": "1.0.0",
+        "version": WATCHDOG_VERSION,
+        "expected_version": WATCHDOG_VERSION,
         "heartbeat": "active",
         "required": True,
     }

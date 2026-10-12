@@ -8,8 +8,9 @@ Aufruf::
 Heartbeat-Takt, Timeout, USV-Reserve und sicherer EVCS-Strom stehen so nur in der ``config.yaml``.
 Die Datei liest ``cerbo-watchdog/bindaems_watchdog/config.py`` auf dem Cerbo; das Format zeigt
 ``cerbo-watchdog/config.ini.example``. Der Watchdog schreibt nur, was in dieser Datei steht – das
-EMS kann sie zur Laufzeit nicht ändern. Ohne ``--out`` geht der Text auf die Standardausgabe;
-nach einem Fehler ist sie leer, darum ersetzt erst ``mv`` die bisherige Datei.
+EMS kann sie zur Laufzeit nicht ändern. Mit ``victron.live_allowed`` hebt der Watchdog bei einer
+Auslösung auch den Netz-Sollwert-Override des EMS auf. Ohne ``--out`` geht der Text auf die
+Standardausgabe; nach einem Fehler ist sie leer, darum ersetzt erst ``mv`` die bisherige Datei.
 
 Exitcode 2 mit der Meldung auf stderr: ungültige ``config.yaml``, ein Heartbeat-Takt, zu dem der
 Watchdog die Datei ablehnen würde, oder eine Zieldatei, die sich nicht schreiben lässt. Eine EVCS
@@ -35,6 +36,10 @@ _HEADER = [
     "; BindaEMS-Watchdog – erzeugt mit „python -m bindaems.tools.watchdog_config“ aus config.yaml.",
     "; Nicht von Hand ändern: config.yaml anpassen, neu erzeugen und mit install.sh übertragen.",
 ]
+_NO_OVERRIDE_ACTION = (
+    "; Netz-Sollwert-Override: ohne victron.live_allowed unberührt "
+    "(Aktion override_setpoint, seit Watchdog 1.1.0)"
+)
 
 
 def render_config(cfg: Config) -> str:
@@ -42,8 +47,10 @@ def render_config(cfg: Config) -> str:
 
     Eine EVCS ohne passende ``evcharger``-Instanz in ``victron.instances.evcharger`` bekommt keinen
     Abschnitt, sondern eine Kommentarzeile: Der Watchdog findet den GX-Dienst nur über die
-    Instanz. Ist 2,5 × ``heartbeat_s`` nicht kleiner als ``timeout_s``, wirft die Funktion einen
-    ``ConfigError``: Der Watchdog lehnt eine solche Datei beim Start ab.
+    Instanz. Mit ``victron.live_allowed`` folgt als letzter Abschnitt die Aktion, die den
+    Netz-Sollwert-Override aufhebt (``_override_block``). Ist 2,5 × ``heartbeat_s`` nicht kleiner
+    als ``timeout_s``, wirft die Funktion einen ``ConfigError``: Der Watchdog lehnt eine solche
+    Datei beim Start ab.
     """
     watchdog = cfg.victron.watchdog
     timeout = f"{watchdog.timeout_s:g}"
@@ -81,8 +88,27 @@ def render_config(cfg: Config) -> str:
             "path = /Settings/CGwacs/MaxDischargePower",
             "value = -1",
         ],
+        _override_block(cfg),
     ]
     return "\n\n".join("\n".join(block) for block in blocks) + "\n"
+
+
+def _override_block(cfg: Config) -> list[str]:
+    """Die Aktion, die den Netz-Sollwert-Override des EMS aufhebt, nur mit ``victron.live_allowed``.
+
+    ``value = null`` ist für den Watchdog der Wert „ungültig“: Auf D-Bus heißt das kein Override.
+    Ohne die Freigabe von Victron gehört der Override nicht dem EMS, denn Dynamic ESS nutzt ihn;
+    der Watchdog lässt ihn dann unberührt, und eine Kommentarzeile sagt es.
+    """
+    if not cfg.victron.live_allowed:
+        return [_NO_OVERRIDE_ACTION]
+    return [
+        "; Netz-Sollwert-Override des EMS aufheben (victron.live_allowed)",
+        "[action:override_setpoint]",
+        "service = com.victronenergy.hub4",
+        "path = /Overrides/Setpoint",
+        "value = null",
+    ]
 
 
 def _evcs(cfg: Config) -> list[tuple[str, EvcsConfig, int | None]]:

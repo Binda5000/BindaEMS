@@ -145,7 +145,11 @@ class WatchdogService:
             _log.info("Zustand: %s → %s", STATE_NAMES[self._state], STATE_NAMES[state])
             self._state = state
             self._send("/State", state)
-            self._unsaved = StoredState(state == ARMED, self._trip_count, self._last_trip_time)
+            # Auch „ausgelöst“ wird als „scharf“ gespeichert (Spec 8.6): Nach einem Neustart des
+            # Cerbo startet der Watchdog scharf und löst erneut aus, wenn der Heartbeat ausbleibt.
+            self._unsaved = StoredState(
+                state in (ARMED, TRIPPED), self._trip_count, self._last_trip_time
+            )
         self._store()
 
     def _end_run(self, aborted: bool) -> None:

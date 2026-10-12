@@ -1,7 +1,7 @@
 """Die Zustandsdatei des Watchdogs (``state.json``).
 
-Sie hält fest, ob der Watchdog scharf war, damit er nach einem Neustart des Cerbo wieder scharf
-startet, und die Zähler der Auslösungen (Spec 8.6).
+Sie hält fest, ob der Watchdog scharf oder ausgelöst war, damit er nach einem Neustart des Cerbo
+wieder scharf startet, und die Zähler der Auslösungen (Spec 8.6).
 """
 
 from __future__ import annotations
@@ -17,7 +17,11 @@ UNREADABLE = "state.json unlesbar; der Watchdog startet scharf."
 
 @dataclass(frozen=True)
 class StoredState:
-    """Was der Watchdog über einen Neustart hinweg behält."""
+    """Was der Watchdog über einen Neustart hinweg behält.
+
+    ``armed`` gilt für „scharf“ und für „ausgelöst“: Auch ein ausgelöster Watchdog startet wieder
+    scharf und löst erneut aus, wenn der Heartbeat danach ausbleibt.
+    """
 
     armed: bool = False
     trip_count: int = 0
@@ -51,9 +55,11 @@ def write_state(path: str, state: StoredState) -> None:
 
     Der Inhalt geht zuerst nach ``<path>.tmp`` im selben Verzeichnis, wird mit ``flush`` und
     ``os.fsync`` auf die Platte gebracht und ersetzt dann die Datei: Ein Leser sieht immer den
-    alten oder den neuen Inhalt, auch wenn der Strom mitten im Schreiben ausfällt. Bei einem
-    Fehler bleibt die alte Datei, die temporäre wird entfernt, und der Fehler (``OSError``) wird
-    weitergegeben. Es schreibt nur ein Prozess; die temporäre Datei hat einen festen Namen.
+    alten oder den neuen Inhalt, auch wenn der Strom mitten im Schreiben ausfällt. Danach sichert
+    ``write_state`` auch das Verzeichnis, damit das Ersetzen einen Stromausfall übersteht. Bei
+    einem Fehler bleibt die alte Datei, die temporäre wird entfernt, und der Fehler (``OSError``)
+    wird weitergegeben; nur das Sichern des Verzeichnisses darf scheitern, denn der Inhalt steht
+    dann schon. Es schreibt nur ein Prozess; die temporäre Datei hat einen festen Namen.
     """
     directory = os.path.dirname(path)
     if directory:
@@ -74,6 +80,21 @@ def write_state(path: str, state: StoredState) -> None:
         with contextlib.suppress(OSError):  # fehlt sie oder geht es nicht, zählt der erste Fehler
             os.remove(temp)
         raise
+    _sync_directory(directory or ".")
+
+
+def _sync_directory(directory: str) -> None:
+    """Sichert den Eintrag der Datei im Verzeichnis (``fsync`` des Verzeichnisses).
+
+    Ein Fehler kommt nicht durch: Der Inhalt steht schon an seinem Platz. Fällt der Strom aus,
+    bevor das Verzeichnis gesichert ist, gilt im schlimmsten Fall der alte Stand.
+    """
+    with contextlib.suppress(OSError):
+        fd = os.open(directory, os.O_RDONLY)
+        try:
+            os.fsync(fd)
+        finally:
+            os.close(fd)
 
 
 def _from_json(data: object) -> Optional[StoredState]:
