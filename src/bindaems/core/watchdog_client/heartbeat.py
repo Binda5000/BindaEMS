@@ -1,8 +1,20 @@
 """Heartbeat an den Totmann-Watchdog am Cerbo (Spec 8.6).
 
-Die Laufzeit ruft ``HeartbeatClient.on_cycle`` einmal je Regelzyklus auf. Der Client sendet nur,
-solange ein Victron- oder EVCS-Aktor live angefordert ist (``required``), und gibt den Watchdog mit
-einer einzelnen 0 frei, sobald das endet. Beim Herunterfahren sendet er nichts: Dann soll der
+Die Laufzeit ruft ``HeartbeatClient.on_cycle`` einmal je Regelzyklus auf. Der Zähler läuft nur,
+solange der core wirklich regelt:
+
+- ``required`` ist der Bedarf: Ein Victron- oder EVCS-Aktor mit ``live_allowed`` ist live gewünscht
+  (Regelbetrieb an und Betriebsart live) oder wird gerade übergeben. Ohne Regelbetrieb gibt es
+  keinen Bedarf.
+- ``allowed`` heißt, dass der Zähler jetzt hinausgehen darf: Der Zyklus war fehlerfrei, und das Gate
+  lässt es zu. Fehlt es, bleibt der Zähler aus, und der Watchdog löst nach seinem Timeout aus.
+
+Ohne Bedarf gibt der Client den Watchdog mit einer einzelnen 0 frei, aber nur, wenn
+``release_allowed`` gilt (kein Aktor kann noch Werte des EMS halten). Ist der Watchdog später noch
+„scharf“ und meldet einen Zähler dieses core, ging die 0 verloren und geht erneut hinaus. Einen
+ausgelösten Watchdog ohne Bedarf räumt der Client nach einer Weile mit der 0 auf. Die zuletzt
+gesendeten Zähler stehen in ``recent``: Nur ein Watchdog, der einen davon zurückmeldet, ist für
+diesen core scharf (``armed_for_core``). Beim Herunterfahren sendet der Client nichts: Dann soll der
 Watchdog auslösen, falls der core nicht rechtzeitig zurückkommt. Die Zeit kommt als Argument.
 """
 
@@ -12,10 +24,18 @@ from collections.abc import Callable
 from datetime import datetime
 from typing import Final, Literal
 
+from bindaems.core.watchdog_client.status import WatchdogState
+
 HEARTBEAT_MAX: Final = 2**31 - 1  # größter Wert eines D-Bus-Int32
 RELEASE: Final = 0  # Der Zähler läuft von 1 bis HEARTBEAT_MAX, die 0 gibt den Watchdog frei.
 # Der Regelzyklus darf um diese Zeit früher dran sein als das Intervall (Takt-Jitter).
 INTERVAL_TOLERANCE_S: Final = 0.05
+# So viele der zuletzt gesendeten Zähler erkennt der core als seine eigenen.
+RECENT_KEPT: Final = 3
+# Zeigt der Watchdog so viele Intervalle nach der Freigabe noch „scharf“, geht die 0 erneut hinaus.
+RELEASE_RESEND_FACTOR: Final = 2.0
+# So lange muss „ausgelöst“ ohne Bedarf anstehen, bis der core den Watchdog mit der 0 aufräumt.
+TRIPPED_RELEASE_S: Final = 60.0
 
 HeartbeatPhase = Literal["off", "active", "released"]
 
@@ -29,6 +49,8 @@ class HeartbeatClient:
     - ``"off"``: noch kein Heartbeat gesendet
     - ``"active"``: Heartbeats laufen
     - ``"released"``: der Watchdog ist mit der 0 freigegeben
+
+    Eine wiederholte Freigabe und das Aufräumen nach einer Auslösung ändern den Status nicht.
     """
 
     def __init__(self, send: Callable[[int], bool], interval_s: float, *, first: int = 1) -> None:
@@ -37,6 +59,10 @@ class HeartbeatClient:
         self._next = first
         self._status: HeartbeatPhase = "off"
         self._last_sent: datetime | None = None
+        # Unveränderlich und beim Senden ersetzt: Die API liest den Stand aus einem anderen Thread.
+        self._recent: tuple[int, ...] = ()
+        self._zero_sent: datetime | None = None  # die letzte 0, gleich aus welchem Grund
+        self._tripped_since: datetime | None = None  # seit wann „ausgelöst“ ohne Bedarf ansteht
 
     @property
     def status(self) -> HeartbeatPhase:
@@ -47,23 +73,97 @@ class HeartbeatClient:
         """Zeitpunkt des letzten erfolgreich gesendeten Zählers; nach der Freigabe ``None``."""
         return self._last_sent
 
-    def on_cycle(self, now: datetime, *, required: bool) -> None:
-        """Sendet bei ``required`` den Zähler, wenn er fällig ist, sonst einmal die Freigabe.
+    @property
+    def recent(self) -> tuple[int, ...]:
+        """Die zuletzt gesendeten Zähler (höchstens ``RECENT_KEPT``), der neueste zuletzt.
 
-        Fällig ist der Zähler, wenn noch nichts gesendet wurde oder seit dem letzten Senden
-        mindestens das Intervall abzüglich ``INTERVAL_TOLERANCE_S`` vergangen ist. Die Freigabe
-        folgt nur auf aktive Heartbeats, einmal.
+        Die Freigabe löscht sie nicht: Eine verlorene 0 erkennt der core daran, dass der Watchdog
+        noch einen dieser Zähler zeigt.
+        """
+        return self._recent
+
+    def on_cycle(
+        self,
+        now: datetime,
+        *,
+        required: bool,
+        allowed: bool = True,
+        release_allowed: bool = True,
+        watchdog: WatchdogState = WatchdogState.UNKNOWN,
+        echo: int | None = None,
+    ) -> None:
+        """Sendet den Zähler oder eine 0, je nach Bedarf; höchstens einen Wert je Zyklus.
+
+        ``watchdog`` ist der Zustand des Watchdogs und ``echo`` sein ``/Heartbeat`` (``None``:
+        unbekannt), beide so, wie der core sie liest.
+
+        Mit ``required`` gibt es nie eine 0. Der Zähler geht nur bei ``allowed`` hinaus, und zwar,
+        wenn er fällig ist: wenn noch nichts gesendet wurde oder seit dem letzten Senden mindestens
+        das Intervall abzüglich ``INTERVAL_TOLERANCE_S`` vergangen ist.
+
+        Ohne ``required`` sendet der Client eine 0 nur mit ``release_allowed``, und zwar
+
+        - die Freigabe, einmal, solange der Status ``"active"`` ist;
+        - die Freigabe erneut, wenn der Status ``"released"`` ist, der Watchdog noch „scharf“ zeigt
+          und seit der letzten 0 ``RELEASE_RESEND_FACTOR`` × Intervall vergangen sind. Meldet der
+          Watchdog dabei einen fremden Zähler (nicht aus ``recent``), hat ein anderer ihn scharf
+          gemacht: Dann bleibt er es. Ein unbekanntes Echo hält die Wiederholung nicht auf;
+        - zum Aufräumen, wenn der Watchdog „ausgelöst“ meldet und das seit ``TRIPPED_RELEASE_S``
+          ansteht (gezählt ab dem ersten Zyklus, der ihn so sieht), danach höchstens einmal je
+          ``TRIPPED_RELEASE_S``.
         """
         if required:
-            if self._due(now) and self._send(self._next):
+            self._tripped_since = None
+            if allowed and self._due(now) and self._send(self._next):
                 self._last_sent = now
                 self._status = "active"
+                self._recent = (*self._recent, self._next)[-RECENT_KEPT:]
                 self._next = self._next + 1 if self._next < HEARTBEAT_MAX else 1
-        elif self._status == "active" and self._send(RELEASE):
-            self._status = "released"
-            self._last_sent = None
+            return
+        tripped = release_allowed and watchdog is WatchdogState.TRIPPED
+        if not tripped:
+            self._tripped_since = None
+        elif self._tripped_since is None:
+            self._tripped_since = now
+        if not release_allowed:
+            return
+        if self._status == "active":
+            if self._send_zero(now):
+                self._status = "released"
+                self._last_sent = None
+        elif self._release_lost(now, watchdog, echo) or self._tripped_long_enough(now):
+            self._send_zero(now)
 
     def _due(self, now: datetime) -> bool:
         if self._last_sent is None:
             return True
         return (now - self._last_sent).total_seconds() >= self._interval_s - INTERVAL_TOLERANCE_S
+
+    def _send_zero(self, now: datetime) -> bool:
+        """Sendet die 0 und merkt sich den Zeitpunkt für die Wiederholung und das Aufräumen."""
+        if not self._send(RELEASE):
+            return False
+        self._zero_sent = now
+        if self._tripped_since is not None:
+            self._tripped_since = now  # die nächste 0 zum Aufräumen erst in TRIPPED_RELEASE_S
+        return True
+
+    def _release_lost(self, now: datetime, watchdog: WatchdogState, echo: int | None) -> bool:
+        """Ob die Freigabe verloren ging.
+
+        Das gilt, wenn der Client freigegeben hat, der Watchdog aber nach ``RELEASE_RESEND_FACTOR``
+        × Intervall noch „scharf“ zeigt, mit einem eigenen Zähler oder ohne bekanntes Echo.
+        """
+        if self._status != "released" or watchdog is not WatchdogState.ARMED:
+            return False
+        if echo is not None and echo not in self._recent:
+            return False
+        zero = self._zero_sent
+        return (
+            zero is not None
+            and (now - zero).total_seconds() >= RELEASE_RESEND_FACTOR * self._interval_s
+        )
+
+    def _tripped_long_enough(self, now: datetime) -> bool:
+        since = self._tripped_since
+        return since is not None and (now - since).total_seconds() >= TRIPPED_RELEASE_S

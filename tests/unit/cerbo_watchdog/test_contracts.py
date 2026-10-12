@@ -81,7 +81,13 @@ def test_the_core_reads_what_the_watchdog_publishes() -> None:
             signals[update.signal] = update.value
     assert signals["watchdog.timeout_s"] == 90 and signals["watchdog.heartbeat"] is None
     assert read_watchdog(snap(signals, kind=SignalKind.STATE)) == WatchdogStatus(
-        WatchdogState.ARMED, 3, datetime.fromtimestamp(1791600000, UTC), 0, VERSION
+        WatchdogState.ARMED,
+        3,
+        datetime.fromtimestamp(1791600000, UTC),
+        0,
+        VERSION,
+        heartbeat=None,  # noch kein Zähler geschrieben
+        timeout_s=90.0,
     )
 
 

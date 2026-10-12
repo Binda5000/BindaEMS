@@ -10,6 +10,7 @@ from bindaems.core.watchdog_client.status import (
     WATCHDOG_VERSION,
     WatchdogState,
     WatchdogStatus,
+    armed_for_core,
     read_watchdog,
     watchdog_alarms,
 )
@@ -114,6 +115,8 @@ def test_only_ok_values_count(quality: Quality) -> None:
         "watchdog.last_trip_time": 1791600000,
         "watchdog.last_trip_failures": 1,
         "watchdog.version": "1.0.0",
+        "watchdog.heartbeat": 7,
+        "watchdog.timeout_s": 90,
     }
     assert read_watchdog(snap(values, kind=STATE, quality=quality)) == WatchdogStatus.unknown()
 
@@ -169,6 +172,8 @@ def test_reads_what_the_topics_deliver(cfg: Config) -> None:
         "LastTripTime": 1791600000,
         "LastTripFailures": 1,
         "Version": "1.0.0",
+        "Heartbeat": 7,
+        "TimeoutSeconds": 90,
     }
     values = {}
     for path, value in delivered.items():
@@ -176,7 +181,7 @@ def test_reads_what_the_topics_deliver(cfg: Config) -> None:
         for update in parse_message(f"N/{P}/bindaems/0/{path}", payload, P, resolver):
             values[update.signal] = update.value
     assert read_watchdog(snap(values, kind=STATE)) == WatchdogStatus(
-        W.TRIPPED, 3, datetime.fromtimestamp(1791600000, UTC), 1, "1.0.0"
+        W.TRIPPED, 3, datetime.fromtimestamp(1791600000, UTC), 1, "1.0.0", 7, 90.0
     )
 
 
@@ -233,3 +238,146 @@ def test_alarms_come_in_table_order() -> None:
         "watchdog.unavailable",
         "watchdog.version",
     ]
+
+
+# --- Echo und Timeout: scharf für diesen core -------------------------------------------------
+
+
+def status(**changes: Any) -> WatchdogStatus:
+    """Ein scharfer Watchdog mit Echo 7 und dem erwarteten Timeout von 90 s; ``changes`` ändert."""
+    fields = {
+        "state": WatchdogState.ARMED,
+        "trip_count": 0,
+        "last_trip": None,
+        "last_trip_failures": 0,
+        "version": WATCHDOG_VERSION,
+        "heartbeat": 7,
+        "timeout_s": 90.0,
+    }
+    return WatchdogStatus(**(fields | changes))
+
+
+def test_armed_for_core_needs_echo_and_timeout() -> None:
+    assert armed_for_core(status(), (5, 6, 7), 90.0)
+    # Zähler eines früheren Laufs
+    assert not armed_for_core(status(heartbeat=1234), (5, 6, 7), 90.0)
+    assert not armed_for_core(status(timeout_s=120.0), (5, 6, 7), 90.0)
+    assert not armed_for_core(status(state=WatchdogState.TRIPPED), (5, 6, 7), 90.0)
+
+
+def test_timeout_mismatch_alarm() -> None:
+    alarms = watchdog_alarms(status(timeout_s=120.0), False, T0, expected_timeout_s=90.0)
+    assert [(a.id, a.message) for a in alarms] == [
+        (
+            "watchdog.timeout",
+            "Watchdog-Timeout 120 s am Cerbo, erwartet 90 s; "
+            "config.ini neu erzeugen und mit install.sh übertragen.",
+        )
+    ]
+
+
+@pytest.mark.parametrize("state", [s for s in W if s is not W.ARMED])
+def test_only_an_armed_watchdog_is_armed_for_the_core(state: WatchdogState) -> None:
+    assert not armed_for_core(status(state=state), (5, 6, 7), 90.0)
+
+
+@pytest.mark.parametrize("changes", [{"heartbeat": None}, {"timeout_s": None}])
+def test_unknown_echo_or_timeout_is_not_armed_for_the_core(changes: dict[str, Any]) -> None:
+    assert not armed_for_core(status(**changes), (5, 6, 7), 90.0)
+
+
+@pytest.mark.parametrize("echo", [5, 6, 7])
+def test_each_recent_counter_arms_for_the_core(echo: int) -> None:
+    assert armed_for_core(status(heartbeat=echo), (5, 6, 7), 90.0)
+
+
+@pytest.mark.parametrize("echo", [4, 8, 0])
+def test_a_counter_outside_recent_does_not_arm_for_the_core(echo: int) -> None:
+    assert not armed_for_core(status(heartbeat=echo), (5, 6, 7), 90.0)
+
+
+def test_nothing_sent_yet_is_never_armed_for_the_core() -> None:
+    assert not armed_for_core(status(), (), 90.0)
+
+
+def test_armed_for_core_compares_the_timeout_as_a_number() -> None:
+    assert armed_for_core(status(timeout_s=90.0), (7,), 90)  # 90 == 90.0
+    assert armed_for_core(status(timeout_s=90.5), (7,), 90.5)
+    assert not armed_for_core(status(timeout_s=90.5), (7,), 90.0)
+
+
+def test_timeout_alarm_is_an_error_since_now() -> None:
+    (alarm,) = watchdog_alarms(status(timeout_s=120.0), False, T0, expected_timeout_s=90.0)
+    assert (alarm.severity, alarm.since) == (Severity.ERROR, T0)
+
+
+@pytest.mark.parametrize("required", [True, False])
+def test_timeout_alarm_does_not_depend_on_required(required: bool) -> None:
+    alarms = watchdog_alarms(status(timeout_s=120.0), required, T0, expected_timeout_s=90.0)
+    assert [a.id for a in alarms] == ["watchdog.timeout"]
+
+
+def test_timeout_alarm_writes_numbers_the_german_way() -> None:
+    alarms = watchdog_alarms(status(timeout_s=90.5), False, T0, expected_timeout_s=90.0)
+    assert alarms[0].message.startswith("Watchdog-Timeout 90,5 s am Cerbo, erwartet 90 s;")
+    alarms = watchdog_alarms(status(timeout_s=90.0), False, T0, expected_timeout_s=120.5)
+    assert alarms[0].message.startswith("Watchdog-Timeout 90 s am Cerbo, erwartet 120,5 s;")
+
+
+@pytest.mark.parametrize(
+    ("actual", "expected"),
+    [(90.0, 90.0), (90.0, 90), (None, 90.0), (120.0, None)],
+    ids=["equal", "equal-as-number", "unknown-at-cerbo", "nothing-expected"],
+)
+def test_no_timeout_alarm_when_equal_or_unknown(
+    actual: float | None, expected: float | None
+) -> None:
+    alarms = watchdog_alarms(status(timeout_s=actual), True, T0, expected_timeout_s=expected)
+    assert alarms == []
+
+
+def test_timeout_is_not_compared_without_an_expected_one() -> None:
+    assert watchdog_alarms(status(timeout_s=120.0), True, T0) == []
+
+
+def test_timeout_alarm_sits_between_unavailable_and_version() -> None:
+    last = datetime.fromtimestamp(1791600000, UTC)
+    tripped = status(state=W.TRIPPED, last_trip=last, version="0.9.0", timeout_s=120.0)
+    assert [a.id for a in watchdog_alarms(tripped, True, T0, expected_timeout_s=90.0)] == [
+        "watchdog.tripped",
+        "watchdog.timeout",
+        "watchdog.version",
+    ]
+    disabled = status(state=W.DISABLED, version="0.9.0", timeout_s=120.0)
+    assert [a.id for a in watchdog_alarms(disabled, True, T0, expected_timeout_s=90.0)] == [
+        "watchdog.unavailable",
+        "watchdog.timeout",
+        "watchdog.version",
+    ]
+
+
+def test_read_echo_and_timeout() -> None:
+    values = {"watchdog.state": 1, "watchdog.heartbeat": 7, "watchdog.timeout_s": 90}
+    read = read_watchdog(snap(values, kind=STATE))
+    assert (read.heartbeat, read.timeout_s) == (7, 90.0)
+    assert isinstance(read.timeout_s, float)
+
+
+def test_fractional_timeout_is_kept() -> None:
+    assert read_watchdog(snap({"watchdog.timeout_s": 90.5}, kind=STATE)).timeout_s == 90.5
+
+
+def test_missing_echo_and_timeout_stay_unknown() -> None:
+    read = read_watchdog(snap({"watchdog.state": 1}, kind=STATE))
+    assert (read.heartbeat, read.timeout_s) == (None, None)
+    assert (WatchdogStatus.unknown().heartbeat, WatchdogStatus.unknown().timeout_s) == (None, None)
+
+
+@pytest.mark.parametrize("value", [None, True, "7", 1.5, float("nan"), float("inf")])
+def test_unusable_echo_is_unknown(value: Any) -> None:
+    assert read_watchdog(snap({"watchdog.heartbeat": value}, kind=STATE)).heartbeat is None
+
+
+@pytest.mark.parametrize("value", [None, True, "90", float("nan"), float("inf")])
+def test_unusable_timeout_is_unknown(value: Any) -> None:
+    assert read_watchdog(snap({"watchdog.timeout_s": value}, kind=STATE)).timeout_s is None

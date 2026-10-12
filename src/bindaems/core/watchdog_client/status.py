@@ -2,18 +2,20 @@
 
 Der Victron-Adapter schreibt die Werte des D-Bus-Dienstes ``com.victronenergy.bindaems`` als
 ``watchdog.*``-Signale in den Zustandsspeicher. ``read_watchdog`` macht daraus den Status,
-``watchdog_alarms`` die Alarme. Beides ist rein: Die Zeit kommt als Argument.
+``armed_for_core`` sagt, ob der Watchdog für diesen core scharf ist, und ``watchdog_alarms`` liefert
+die Alarme. Alles ist rein: Die Zeit kommt als Argument.
 """
 
 from __future__ import annotations
 
+from collections.abc import Collection
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Final
 
-from bindaems.core.safety.types import finite_number
 from bindaems.shared.domain import Alarm, Severity, Snapshot, Value
+from bindaems.shared.numbers import de, finite_number
 
 # Muss ``VERSION`` in ``cerbo-watchdog/bindaems_watchdog/__init__.py`` entsprechen.
 WATCHDOG_VERSION: Final = "1.0.0"
@@ -46,7 +48,9 @@ class WatchdogStatus:
     """Was der core vom Watchdog weiß; ``None`` heißt unbekannt.
 
     ``last_trip`` ist der Zeitpunkt der letzten Auslösung (``None``: nie oder unbekannt),
-    ``last_trip_failures`` die Zahl der Aktionen, die dabei fehlgeschlagen sind.
+    ``last_trip_failures`` die Zahl der Aktionen, die dabei fehlgeschlagen sind. ``heartbeat`` ist
+    das Echo: der Zähler, den der Watchdog zuletzt angenommen hat (``/Heartbeat``). ``timeout_s``
+    ist das Timeout, mit dem er arbeitet (``/TimeoutSeconds``).
     """
 
     state: WatchdogState
@@ -54,6 +58,8 @@ class WatchdogStatus:
     last_trip: datetime | None
     last_trip_failures: int | None
     version: str | None
+    heartbeat: int | None = None
+    timeout_s: float | None = None
 
     @property
     def armed(self) -> bool:
@@ -74,14 +80,41 @@ def read_watchdog(snap: Snapshot) -> WatchdogStatus:
         last_trip=_trip_time(snap.ok("watchdog.last_trip_time")),
         last_trip_failures=_integer(snap.ok("watchdog.last_trip_failures")),
         version=version if isinstance(version, str) else None,
+        heartbeat=_integer(snap.ok("watchdog.heartbeat")),
+        timeout_s=finite_number(snap.ok("watchdog.timeout_s")),
     )
 
 
-def watchdog_alarms(status: WatchdogStatus, required: bool, now: datetime) -> list[Alarm]:
+def armed_for_core(status: WatchdogStatus, recent: Collection[int], timeout_s: float) -> bool:
+    """Ob der Watchdog für diesen core scharf ist, nicht nur irgendwie (Spec 8.6).
+
+    Das gilt, wenn er scharf ist, als Echo einen der zuletzt gesendeten Zähler (``recent``) zeigt
+    und das erwartete Timeout hat. Ein unbekanntes Echo oder Timeout zählt nicht: Hat ein früherer
+    Lauf oder ein Werkzeug den Watchdog scharf gemacht, schützt er diesen core nicht, denn sein
+    Heartbeat kommt nicht von hier. Das Timeout wird als Zahl verglichen, 90 gleicht 90,0.
+    """
+    return (
+        status.armed
+        and status.heartbeat is not None
+        and status.heartbeat in recent
+        and status.timeout_s is not None
+        and status.timeout_s == timeout_s
+    )
+
+
+def watchdog_alarms(
+    status: WatchdogStatus,
+    required: bool,
+    now: datetime,
+    *,
+    expected_timeout_s: float | None = None,
+) -> list[Alarm]:
     """Alarme zum Status; ``required`` heißt: Der Betrieb braucht den Watchdog.
 
-    Ausgelöst und falsche Version melden sich unabhängig von ``required``, „antwortet nicht“ und
-    „deaktiviert“ nur, wenn der Watchdog gebraucht wird.
+    Ausgelöst, falsches Timeout und falsche Version melden sich unabhängig von ``required``,
+    „antwortet nicht“ und „deaktiviert“ nur, wenn der Watchdog gebraucht wird. Das Timeout wird mit
+    ``expected_timeout_s`` (``victron.watchdog.timeout_s``) verglichen, sobald beide bekannt sind;
+    ohne erwartetes Timeout entfällt der Vergleich.
     """
     alarms: list[Alarm] = []
     if status.state is WatchdogState.TRIPPED:
@@ -94,6 +127,17 @@ def watchdog_alarms(status: WatchdogStatus, required: bool, now: datetime) -> li
         alarms.append(Alarm("watchdog.unavailable", Severity.ERROR, _NO_ANSWER_TEXT, now))
     if required and status.state is WatchdogState.DISABLED:
         alarms.append(Alarm("watchdog.unavailable", Severity.ERROR, _DISABLED_TEXT, now))
+    if (
+        expected_timeout_s is not None
+        and status.timeout_s is not None
+        and status.timeout_s != expected_timeout_s
+    ):
+        text = (
+            f"Watchdog-Timeout {de(status.timeout_s)} s am Cerbo, "
+            f"erwartet {de(expected_timeout_s)} s; "
+            "config.ini neu erzeugen und mit install.sh übertragen."
+        )
+        alarms.append(Alarm("watchdog.timeout", Severity.ERROR, text, now))
     if status.version is not None and status.version != WATCHDOG_VERSION:
         text = (
             f"Watchdog-Version {status.version} am Cerbo, erwartet {WATCHDOG_VERSION}; "
