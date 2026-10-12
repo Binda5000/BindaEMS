@@ -69,8 +69,8 @@ Zustimmung des Betreibers). `main` ist seit dem 12.10.2026 auch der Standard-Bra
   `core/actuators`), Vitest mit svelte-check, Prettier und ESLint; dazu E2E mit Playwright.
 - **Offen:**
   - Plan 2c schreiben (siehe „Nächster Schritt“)
-  - an der Anlage: der Rest von Teil 2 (EVCS-Verbindungsabbruch, Victron 17.2-4 und 17.2-8;
-    siehe „Offen an der Anlage“)
+  - an der Anlage: der Rest von Teil 2 (EVCS-Verbindungsabbruch, Victron 17.2-4; siehe „Offen
+    an der Anlage“)
   - die Abnahme der Phase 1 an der Anlage
   - kleine Punkte an der Anlage (siehe „Stand der Installation“): manuelle Punkte von Teil 1 und
     die Log-Zeile der Probe
@@ -278,7 +278,11 @@ Demo-Zugänge: `admin`, `gast` (Lesen) und `sicher` (Admin mit TOTP, Geheimnis
     unterbrochen“.
   - Teil 2 Victron am 12.10.2026 mit vorübergehend abgeschaltetem DESS: Override setzen und mit
     `null` aufheben bestätigt, Ruhezustand `null`, Entladesperre und Netzladen wirken. Neu: Der
-    Override verschwindet nach 5 min ohne Auffrischen. Offen sind 17.2-4 und 17.2-8.
+    Override verschwindet nach 5 min ohne Auffrischen. Am Abend in einem zweiten Lauf 17.2-8
+    „Importlimit“ bestanden: Mit einer Last, die eine Phase über 20 A gebracht hätte, blieb L3 bei
+    höchstens 19,4 A, der Akku lieferte dabei 3072 W. Ein Vorlauf mit dem Multi auf „Nur Laden“
+    (charger only) ergab 33,3 A auf L3 ohne Beitrag des Akkus: In diesem Modus wirkt das
+    Importlimit nicht. Offen ist 17.2-4.
   - Teil 2 Tesla am 12.10.2026 bestanden (drei Läufe und Schlaf-Test): Das Auto folgt
     Strombefehlen über Tessie, „Laden aus und an“ wirkt, ein schlafendes Auto wird nicht geweckt
     (10 min Schlaf-Test). Ein erster Befehl auf 5 A wirkt über Tessie nicht, obwohl Tessie ihn
@@ -312,9 +316,10 @@ Demo-Zugänge: `admin`, `gast` (Lesen) und `sicher` (Admin mit TOTP, Geheimnis
 - **Offen an der Anlage, als Nächstes (Plan 2b):**
   1. EVCS: den Schritt „Verbindung unterbrochen“ nachholen (Punkt `evcs` erneut, die Rückfrage
      mit `j` beantworten und das Netzwerkkabel der EVCS ziehen, wenn das Werkzeug es verlangt).
-  2. Victron: 17.2-4 „Kein Akku ins Auto“ (während ein Auto an der EVCS lädt) und 17.2-8
-     „Importlimit“ nachholen. Dynamic ESS dafür wieder vorübergehend abschalten (Entscheidung des
-     Betreibers vom 12.10.2026) und danach wieder einschalten.
+  2. Victron: 17.2-4 „Kein Akku ins Auto“ nachholen, während ein Auto an der EVCS lädt (die
+     übrigen Rückfragen mit `n`). Dynamic ESS dafür wieder vorübergehend abschalten
+     (Entscheidung des Betreibers vom 12.10.2026) und danach wieder einschalten. Der Multi muss
+     dabei auf „Ein“ stehen.
   3. Die Berichte nach `docs/verification/` übernehmen.
   - Teil 2 schreibt auf die Geräte: nicht während der 7 Tage der Abnahme Phase 1 und ihres
     24-h-Mitschnitts (`docs/verification/abnahme-phase-1.md`, 4.2 und 4.3).
@@ -383,7 +388,10 @@ Punkte aufgreifen:
   - **Bei „Regelbetrieb aus“ darf 2c nicht regeln,** auch nicht in DEGRADED oder SAFE mit dem
     Übergabe-Grund: Dort gehören dem core nur die Sicherwerte der Übergabe.
   - **Importlimit:** Peak Shaving steht an der Anlage bei 20 A je Phase mit „immer“ (gewollt,
-    Spec 8.1). Phasenwächter und Setpoint-Kompensation müssen das berücksichtigen.
+    Spec 8.1). Phasenwächter und Setpoint-Kompensation müssen das berücksichtigen. Es wirkt nur,
+    solange der Multi auf „Ein“ steht: Mit „Nur Laden“ stieg L3 am 12.10.2026 auf 33,3 A, nahe
+    an der 35-A-Sicherung. Der core liest `vebus.mode`, prüft ihn aber noch nicht; eine
+    Selbstprüfung mit Warnung, wenn der Multi nicht auf „Ein“ (3) steht, gehört in 2c.
   - `SafetyContext.modes` muss `ActuatorMode`-Werte enthalten; ein String „live“ bliebe still im
     Dry-Run. `wallbox_phase_a` ist nach Netzphasen geschlüsselt (der Erzeuger wendet `phase_map`
     an), und `present[(aktor, current)]` ist der Sollstrom, nicht der Messstrom. Das stellt
