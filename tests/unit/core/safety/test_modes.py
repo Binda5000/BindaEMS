@@ -1,4 +1,5 @@
 from bindaems.core.safety.modes import (
+    REASON_CONTROL_OFF_MODE,
     REASON_HANDBACK_MODE,
     REASON_NOT_ALLOWED,
     REASON_WATCHDOG_MODE,
@@ -28,7 +29,7 @@ def test_live_needs_config_permission(limits) -> None:
 
 
 def test_live_needs_armed_watchdog_for_victron_and_evcs(limits_live) -> None:
-    intent = Intent(version=1, actuators={"wallbox.evcs": LIVE, "victron": LIVE})
+    intent = Intent(version=1, control=True, actuators={"wallbox.evcs": LIVE, "victron": LIVE})
     unarmed = effective_modes(intent, limits_live, watchdog_armed=False)
     assert unarmed["victron"] == ModeInfo(LIVE, DRY, ("Watchdog am Cerbo ist nicht scharf.",))
     assert (
@@ -37,7 +38,7 @@ def test_live_needs_armed_watchdog_for_victron_and_evcs(limits_live) -> None:
 
 
 def test_tesla_live_without_watchdog(limits_live) -> None:
-    intent = Intent(version=1, actuators={"vehicle.tesla": LIVE})
+    intent = Intent(version=1, control=True, actuators={"vehicle.tesla": LIVE})
     assert (
         effective_modes(intent, limits_live, watchdog_armed=False)["vehicle.tesla"].effective
         is LIVE
@@ -58,7 +59,9 @@ def test_watchdog_required_only_for_victron_and_evcs(limits, limits_live) -> Non
 
 def test_live_when_requested_allowed_and_watchdog_armed(limits_live) -> None:
     intent = Intent(
-        version=1, actuators={"victron": LIVE, "wallbox.evcs": LIVE, "vehicle.tesla": LIVE}
+        version=1,
+        control=True,
+        actuators={"victron": LIVE, "wallbox.evcs": LIVE, "vehicle.tesla": LIVE},
     )
     modes = effective_modes(intent, limits_live, watchdog_armed=True)
     assert set(modes.values()) == {ModeInfo(LIVE, LIVE, ())}
@@ -72,7 +75,7 @@ def test_explicit_dry_run_request_has_no_reason(limits_live) -> None:
 
 
 def test_actuator_missing_in_the_intent_requests_dry_run(limits_live) -> None:
-    intent = Intent(version=1, actuators={"wallbox.evcs": LIVE})
+    intent = Intent(version=1, control=True, actuators={"wallbox.evcs": LIVE})
     modes = effective_modes(intent, limits_live, watchdog_armed=True)
     assert modes["victron"] == ModeInfo(DRY, DRY, ())
     assert modes["wallbox.evcs"] == ModeInfo(LIVE, LIVE, ())
@@ -183,3 +186,37 @@ def test_handback_leaves_the_other_actuators_alone(limits_live) -> None:
     assert modes == effective_modes(intent, limits_live, True) | {
         EVCS: ModeInfo(DRY, LIVE, (REASON_HANDBACK_MODE,))
     }
+
+
+# Wirksam live nur im Regelbetrieb (Plan 2b, Präzisierung 3): Ohne ihn ist ein Aktor nur während
+# der Übergabe live.
+
+
+def test_control_off_reason_text() -> None:
+    assert REASON_CONTROL_OFF_MODE == "Regelbetrieb ist aus."
+
+
+def test_live_request_without_control_is_dry_run(limits_live) -> None:
+    off = Intent(version=1, control=False, actuators=ALL_LIVE)
+    modes = effective_modes(off, limits_live, watchdog_armed=True)
+    assert set(modes.values()) == {ModeInfo(LIVE, DRY, (REASON_CONTROL_OFF_MODE,))}
+    on = effective_modes(off.model_copy(update={"control": True}), limits_live, True)
+    assert set(on.values()) == {ModeInfo(LIVE, LIVE, ())}
+
+
+def test_order_of_the_reasons(limits, limits_live) -> None:
+    # zuerst die Freigabe in config.yaml, dann der Regelbetrieb, dann der Watchdog
+    off = Intent(version=1, control=False, actuators={"victron": LIVE})
+    assert effective_modes(off, limits, False)["victron"].reasons == (REASON_NOT_ALLOWED,)
+    assert effective_modes(off, limits_live, False)["victron"].reasons == (REASON_CONTROL_OFF_MODE,)
+    on = off.model_copy(update={"control": True})
+    assert effective_modes(on, limits, False)["victron"].reasons == (REASON_NOT_ALLOWED,)
+    assert effective_modes(on, limits_live, False)["victron"].reasons == (REASON_WATCHDOG_MODE,)
+
+
+def test_handback_without_control_stays_live(limits_live) -> None:
+    off = Intent(version=1, control=False, actuators=ALL_LIVE)
+    modes = effective_modes(off, limits_live, True, handing_back={EVCS})
+    assert modes[EVCS] == ModeInfo(LIVE, LIVE, (REASON_HANDBACK_MODE,))
+    assert modes["victron"] == ModeInfo(LIVE, DRY, (REASON_CONTROL_OFF_MODE,))
+    assert modes["vehicle.tesla"] == ModeInfo(LIVE, DRY, (REASON_CONTROL_OFF_MODE,))

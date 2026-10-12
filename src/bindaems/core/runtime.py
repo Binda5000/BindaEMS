@@ -90,7 +90,12 @@ from bindaems.core.safety.budget import PersistentWriteBudget
 from bindaems.core.safety.inputs import InputCheck
 from bindaems.core.safety.layer import SafetyLayer
 from bindaems.core.safety.limits import ActuatorSpec, HardLimits
-from bindaems.core.safety.locks import LockInfo, LockManager, lock_causes
+from bindaems.core.safety.locks import (
+    LockInfo,
+    LockManager,
+    controlled_elsewhere,
+    lock_causes,
+)
 from bindaems.core.safety.modes import (
     ModeInfo,
     effective_modes,
@@ -302,6 +307,8 @@ class CoreRuntime:
         self._responsible = bool(self.ownership.owned & self._needs_watchdog)
         self._owned = self.ownership.owned
         self._active_locks: dict[str, LockInfo] = {}
+        # Aktoren, deren Sperre bei der letzten Prüfung ein anderes System belegte
+        self._controlled_elsewhere: frozenset[str] = frozenset()
         self._http: httpx.AsyncClient | None = None
         self._writer: InfluxWriter | None = None
         if sink is None:
@@ -846,8 +853,12 @@ class CoreRuntime:
 
         Werte des EMS (Plan 2b, Präzisierung 3), mit ``present``, dem Rücklesen dieses Zyklus:
 
-        - Ein gesperrter Aktor hält ab sofort keine Werte des EMS mehr und wird nicht übergeben,
-          denn ein anderes System regelt ihn; seine Beobachtung endet.
+        - Ein gesperrter Aktor, den nachweislich ein anderes System regelt
+          (``controlled_elsewhere``: ein Alarm ``competitor.*`` oder ein Prüfpunkt mit ``fail``),
+          hält ab sofort keine Werte des EMS mehr und wird nicht übergeben; seine Beobachtung
+          endet. Eine Sperre nur wegen eines nicht lesbaren Prüfpunkts (``unknown``) lässt ihn
+          owned, etwa im ersten Zyklus ohne Daten: Sein Gerät kann noch Werte des EMS halten.
+          Seine Übergabe lehnt dann die Sperre ab, und der Watchdog übernimmt.
         - Ein owned Aktor, der nicht mehr live gewünscht ist, wird übergeben. Zeigt er seine
           Sicherwerte, ist er übergeben, auch wenn der Watchdog sie gesetzt hat, und seine
           Beobachtung endet. Das gilt in jedem Zustand und vor dem Bedarf: Sonst ginge in diesem
@@ -866,8 +877,12 @@ class CoreRuntime:
         if checked:
             competitors = [*self._competitor_alarms, *self._foreign_alarms]
             self.locks.update(now, lock_causes(competitors, self._selfcheck, self.limits))
+            self._controlled_elsewhere = controlled_elsewhere(
+                competitors, self._selfcheck, self.limits
+            )
         self._active_locks = self.locks.active(now)
-        for actuator in self.ownership.drop(self._active_locks):
+        taken = self._controlled_elsewhere.intersection(self._active_locks)
+        for actuator in self.ownership.drop(taken):
             self._forget(actuator)
         intent = self.intents.current
         self._watchdog = read_watchdog(snap)

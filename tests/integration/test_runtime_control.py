@@ -507,11 +507,16 @@ async def test_heartbeat_goes_through_the_victron_adapter(runtime_env, cfg) -> N
 
 
 async def test_no_heartbeat_without_victron_adapter(runtime_env) -> None:
-    rt, _, clock = runtime_env(state=GOOD_STATE, configure=allow_evcs_live)
+    rt, _, clock = runtime_env(state=GOOD_STATE | WATCHDOG_WAITING, configure=allow_evcs_live)
     rt.submit_intent(Intent(version=1, control=True, actuators={"wallbox.evcs": ActuatorMode.LIVE}))
-    run(rt, clock, 1)
-    watchdog = rt.health().watchdog
-    assert (watchdog["required"], watchdog["heartbeat"]) == (True, "off")
+    run(rt, clock, 31)  # ab 30 s wartet das Gate nur noch auf den Watchdog: Der Zähler ist fällig
+    health = rt.health()
+    assert (health.mode, health.mode_reasons) == (
+        "OBSERVE",
+        ["Watchdog am Cerbo ist nicht scharf."],
+    )
+    # Ohne Victron-Adapter nimmt niemand den Zähler an: Er gilt nicht als gesendet.
+    assert (health.watchdog["required"], health.watchdog["heartbeat"]) == (True, "off")
 
 
 # --- Aktoren, sicherer Zustand und Entscheidungslog (Plan 2b) --------------------------------
@@ -996,16 +1001,25 @@ async def test_control_off_hands_back_then_observe(runtime_env) -> None:
     rt.submit_intent(
         Intent(version=2, control=False, actuators={"wallbox.evcs": ActuatorMode.LIVE})
     )
-    run(rt, clock, 1)
-    health = rt.health()
-    assert (health.mode, health.mode_reasons) == (
-        "DEGRADED",
-        ["Regelbetrieb wird beendet: Übergabe der Aktoren läuft."],
-    )
-    assert ("evcharger/40/SetCurrent", 6) in plant.writes
-    run(rt, clock, 3)
+    readback_at = zero_at = None  # Zyklus, in dem die EVCS 6 A meldet bzw. die 0 hinausgeht
+    for cycle in range(4):
+        run(rt, clock, 1)
+        if cycle == 0:  # Übergabe: 6 A gesendet, die EVCS meldet sie erst im nächsten Zyklus
+            health = rt.health()
+            assert (health.mode, health.mode_reasons) == (
+                "DEGRADED",
+                ["Regelbetrieb wird beendet: Übergabe der Aktoren läuft."],
+            )
+            assert ("evcharger/40/SetCurrent", 6) in plant.writes
+        if readback_at is None and rt.store.snapshot().ok("wallbox.evcs.gx_set_current_a") == 6:
+            readback_at = cycle
+        if zero_at is None and 0 in plant.heartbeats():
+            zero_at = cycle
     assert rt.health().mode == "OBSERVE"
     assert plant.heartbeats()[-1] == 0  # Freigabe erst nach der Übergabe
+    # Erst die Sicherwerte, dann das Rücklesen, erst danach die 0: keine Freigabe in einem Zyklus
+    # vor dem, in dem die Sicherwerte zurückgelesen sind.
+    assert readback_at == 1 and zero_at is not None and zero_at >= readback_at
 
 
 async def test_failed_handback_stops_heartbeat(runtime_env) -> None:
@@ -1365,3 +1379,195 @@ async def test_unknown_watchdog_state_is_not_armed(runtime_env) -> None:
     run(rt, clock, 40)
     assert (rt.health().mode, sent) == ("OBSERVE", [])
     assert "watchdog.unavailable" in {a["id"] for a in rt.health().alarms}
+
+
+# Werte des EMS bei Sperren: Nur ein mitregelndes System nimmt sie dem core (Spec 7.9)
+
+EVCS_MODE_UNKNOWN = "EVCS-Modus nicht verfügbar."
+
+
+def stored_live_evcs(runtime_env, plant: Plant, state: dict[str, Any]) -> tuple[CoreRuntime, Any]:
+    """Neustart mit gespeicherter Absicht „Regelbetrieb an, EVCS live“: Die EVCS ist owned."""
+    first, _, _ = runtime_env(configure=allow_evcs_live)
+    live = Intent(version=1, control=True, actuators={"wallbox.evcs": ActuatorMode.LIVE})
+    first.submit_intent(live)
+    rt, _, clock = runtime_env(
+        state=state,
+        configure=allow_evcs_live,
+        mqtt_write=plant.write,
+        before_cycle=plant.before_cycle,
+    )
+    plant.attach(rt.store)
+    assert actuator_health(rt, "wallbox.evcs")["owned"] is True
+    return rt, clock
+
+
+async def test_unreadable_checks_of_the_first_cycle_keep_the_values_of_the_last_run(
+    runtime_env,
+) -> None:
+    plant = Plant(watchdog_state=1)
+    state = GOOD_STATE | {"wallbox.evcs.gx_set_current_a": 16}  # 16 A vom letzten Lauf
+    rt, clock = stored_live_evcs(runtime_env, plant, state)
+    # Der erste Zyklus läuft wie in Produktion, bevor ein Adapter Daten geliefert hat: Der Aufruf
+    # an der Klasse umgeht den Hook der Fixture, der vor jedem Zyklus die Messwerte einspeist.
+    CoreRuntime.cycle_once(rt)
+    clock.advance(1)
+    # Die Prüfpunkte sind nicht lesbar und sperren; ein anderes System belegt das nicht.
+    assert locked(rt)["wallbox.evcs"] == [EVCS_MODE_UNKNOWN]
+    assert actuator_health(rt, "wallbox.evcs")["owned"] is True
+    run(rt, clock, 100)  # ab 1 s mit Daten: Zähler ab 31 s, die Sperre ist bei 70 s frei
+    assert rt.health().mode == "CONTROL" and locked(rt)["wallbox.evcs"] == []
+    assert actuator_health(rt, "wallbox.evcs")["owned"] is True
+    sent = len(plant.heartbeats())
+    plant.follow = False  # die EVCS übernimmt den Sicherwert vorerst nicht
+    rt.submit_intent(Intent(version=2, control=True))  # EVCS auf Dry-Run: Übergabe
+    run(rt, clock, 5)
+    assert ("evcharger/40/SetCurrent", 6) in plant.writes
+    assert 0 not in plant.heartbeats()[sent:]  # keine Freigabe über den 16 A des letzten Laufs
+    state["wallbox.evcs.gx_set_current_a"] = 6  # jetzt zeigt die EVCS den Sicherwert
+    run(rt, clock, 1)
+    assert plant.heartbeats()[-1] == 0  # erst nach dem Rücklesen
+    assert actuator_health(rt, "wallbox.evcs")["owned"] is False
+
+
+async def test_a_check_that_turns_unknown_keeps_the_actuator_owned(runtime_env) -> None:
+    plant = Plant(watchdog_state=1)
+    state = GOOD_STATE | {"wallbox.evcs.gx_set_current_a": 16}
+    rt, clock = stored_live_evcs(runtime_env, plant, state)
+    run(rt, clock, 33)
+    assert rt.health().mode == "CONTROL"
+    state["wallbox.evcs.gx_mode"] = None  # Modbus-Verlust: der Modus ist nicht lesbar
+    run(rt, clock, 10)  # Prüfung bei 40 s
+    assert locked(rt)["wallbox.evcs"] == [EVCS_MODE_UNKNOWN]
+    assert actuator_health(rt, "wallbox.evcs")["owned"] is True
+
+
+@pytest.mark.parametrize(
+    ("change", "reason"),
+    [
+        ({"wallbox.evcs.gx_mode": 1}, "EVCS „evcs“ ist nicht im manuellen Modus (Modus 1)."),
+        (
+            {"wallbox.evcs.gx_set_current_a": 10},
+            "EVCS „evcs“: Strom von außen geändert (10 A statt 6 A).",
+        ),
+    ],
+)
+async def test_a_competing_system_still_takes_the_actuator_at_once(
+    runtime_env, change: dict[str, int], reason: str
+) -> None:
+    plant = Plant(watchdog_state=1)
+    state = GOOD_STATE | {"wallbox.evcs.gx_set_current_a": 16}
+    rt, clock = stored_live_evcs(runtime_env, plant, state)
+    run(rt, clock, 33)
+    state |= {"system.active_in_source": 240}
+    run(rt, clock, 3)  # SAFE: 6 A geschrieben und bestätigt, jetzt erwartet
+    state |= {"system.active_in_source": 1}
+    plant.follow = False
+    state |= change
+    for _ in range(40):  # bis zur Prüfung, die das andere System erkennt
+        run(rt, clock, 1)
+        if locked(rt)["wallbox.evcs"]:
+            break
+    assert locked(rt)["wallbox.evcs"] == [reason]
+    assert actuator_health(rt, "wallbox.evcs")["owned"] is False  # im selben Zyklus
+
+
+# Ein Strom unter dem Sicherwert bleibt stehen: Der sichere Zustand erhöht nie einen Strom
+
+
+def evcs_safe_at_ten(cfg: Config) -> Config:
+    """EVCS live freigegeben, Sicherwert 10 A (die Konfiguration erlaubt min_a ≤ safe_a)."""
+    cfg = allow_evcs_live(cfg)
+    evcs = cfg.wallboxes["evcs"].model_copy(update={"safe_a": 10})
+    return cfg.model_copy(update={"wallboxes": cfg.wallboxes | {"evcs": evcs}})
+
+
+async def test_a_current_below_the_safe_value_stays_in_island_operation(runtime_env) -> None:
+    plant = Plant(watchdog_state=1)
+    state = GOOD_STATE | {"wallbox.evcs.gx_set_current_a": 8, "wallbox.evcs.gx_start_stop": 1}
+    rt, _, clock = runtime_env(
+        state=state,
+        configure=evcs_safe_at_ten,
+        mqtt_write=plant.write,
+        before_cycle=plant.before_cycle,
+    )
+    plant.attach(rt.store)
+    rt.submit_intent(Intent(version=1, control=True, actuators={"wallbox.evcs": ActuatorMode.LIVE}))
+    run(rt, clock, 33)
+    assert rt.health().mode == "CONTROL"
+    sent = plant.heartbeats()
+    state |= {"system.active_in_source": 240}  # Inselbetrieb: SAFE
+    run(rt, clock, 60)
+    assert rt.health().mode == "SAFE"
+    evcs = [d for d in rt.decisions(T0, 100)[0] if d.actuator == "wallbox.evcs"]
+    # nur „Laden aus“; die 8 A bleiben, keine Ablehnung „nicht Richtung sicherer Zustand“
+    assert [(d.kind, d.result) for d in evcs] == [(CommandKind.CHARGING, DecisionResult.OK)]
+    assert not any("urgent.ignored" in d.codes for d in rt.decisions(T0, 100)[0])
+    assert ("evcharger/40/SetCurrent", 10) not in plant.writes
+    assert not [a for a in rt.health().alarms if a["id"].startswith("actuator.failed.")]
+    # Der Heartbeat läuft weiter (bei 40 bis 90 s): Der Watchdog wird nicht aufgegeben.
+    assert plant.heartbeats() == [*sent, *range(sent[-1] + 1, sent[-1] + 7)]
+
+
+# Wirksam live nur im Regelbetrieb, außer bei der Übergabe
+
+VICTRON_PATHS = {
+    "hub4/0/Overrides/Setpoint",
+    "settings/0/Settings/CGwacs/MaxDischargePower",
+    "settings/0/Settings/CGwacs/BatteryLife/MinimumSocLimit",
+}
+
+
+def allow_all_live(cfg: Config) -> Config:
+    cfg = allow_tesla_live(allow_evcs_live(cfg))
+    return cfg.model_copy(update={"victron": cfg.victron.model_copy(update={"live_allowed": True})})
+
+
+async def test_control_off_writes_only_the_handback_in_island_operation(runtime_env) -> None:
+    plant = Plant(
+        watchdog_state=1, follow=False
+    )  # die EVCS übernimmt nichts: Übergabe bleibt offen
+    state = GOOD_STATE | {"wallbox.evcs.gx_set_current_a": 16}
+    rt, _, clock = runtime_env(
+        state=state,
+        configure=allow_all_live,
+        mqtt_write=plant.write,
+        before_cycle=plant.before_cycle,
+    )
+    plant.attach(rt.store)
+    live = {"victron": ActuatorMode.LIVE, "wallbox.evcs": ActuatorMode.LIVE}
+    live |= {"vehicle.tesla": ActuatorMode.LIVE}
+    rt.submit_intent(Intent(version=1, control=True, actuators=live))
+    run(rt, clock, 33)
+    assert rt.health().mode == "CONTROL"
+    rt.ownership.note_sent("wallbox.evcs")  # an Stelle eines Befehls der Regelung (2c)
+    rt.submit_intent(Intent(version=2, control=False, actuators=live))  # Regelbetrieb aus
+    run(rt, clock, 1)
+    assert rt.health().mode == "DEGRADED"  # Übergabe der EVCS läuft
+    state |= {"system.active_in_source": 240}  # Inselbetrieb
+    run(rt, clock, 30)
+    health = rt.health()
+    assert (health.mode, health.mode_reasons[-1]) == (
+        "SAFE",
+        "Regelbetrieb wird beendet: Übergabe der Aktoren läuft.",
+    )
+    assert not any(path in VICTRON_PATHS for path, _ in plant.writes)  # kein MaxDischargePower
+    assert actuator_health(rt, "victron")["owned"] is False  # keine neue Übergabe
+    tesla = [d for d in rt.decisions(T0, 100)[0] if d.actuator == "vehicle.tesla"]
+    assert [(d.kind, d.result) for d in tesla] == [
+        (CommandKind.CURRENT, DecisionResult.DRY_RUN),
+        (CommandKind.CHARGING, DecisionResult.DRY_RUN),
+    ]  # kein Live-Befehl, die Dry-Run-Entscheidung einmal je Vorfall
+    for actuator in ("victron", "vehicle.tesla"):
+        mode = actuator_health(rt, actuator)
+        assert (mode["requested"], mode["effective"], mode["reasons"]) == (
+            "live",
+            "dry_run",
+            ["Regelbetrieb ist aus."],
+        )
+    evcs = actuator_health(rt, "wallbox.evcs")
+    assert (evcs["effective"], evcs["reasons"]) == (
+        "live",
+        ["Übergabe: Sicherwerte werden gesetzt."],
+    )
+    assert ("evcharger/40/SetCurrent", 6) in plant.writes  # geschrieben wird nur die Übergabe

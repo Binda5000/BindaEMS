@@ -4,6 +4,8 @@ Ein mitregelndes System oder ein Prüfpunkt der Selbstprüfung, der nicht stimmt
 prüfbar ist, sperrt das Schreiben auf das betroffene Teilsystem. ``lock_causes`` ordnet die
 Alarme und Prüfpunkte den Aktoren zu. Der ``LockManager`` hält die Sperre, solange eine Ursache
 besteht, und gibt sie erst frei, wenn die Ursache eine einstellbare Zeit lang weg war.
+``controlled_elsewhere`` nennt die Aktoren, deren Sperre ein anderes System belegt; nur sie
+verlieren die Werte des EMS (Plan 2b, Präzisierung 3).
 
 Die Schicht ist rein: Die Zeit kommt als Argument. ``core.checks`` wird nicht importiert; die
 Prüfpunkte der Selbstprüfung beschreibt das Protokoll ``CheckLike``.
@@ -89,6 +91,23 @@ def lock_causes(
         if reason not in reasons:
             reasons.append(reason)
     return causes
+
+
+def controlled_elsewhere(
+    competitors: Sequence[Alarm], selfcheck: Sequence[CheckLike], limits: HardLimits
+) -> frozenset[str]:
+    """Die Aktoren, die nachweislich ein anderes System regelt (7.9; Plan 2b, Präzisierung 3).
+
+    Das sind die Aktoren aus ``lock_causes`` mit einer Ursache, die ein mitregelndes System belegt:
+    einem Alarm ``competitor.*`` (auch ``competitor.foreign.*``) oder einem Prüfpunkt mit Status
+    ``fail``. Ein Prüfpunkt, der nur nicht lesbar ist (``unknown``), sperrt den Aktor zwar, belegt
+    aber kein anderes System: Sein Gerät kann noch Werte des EMS halten.
+    """
+    found = [_alarm_actuator(alarm.id) for alarm in competitors]
+    found += [_check_actuator(check) for check in selfcheck if check.status == "fail"]
+    return frozenset(
+        actuator for actuator in found if actuator is not None and actuator in limits.actuators
+    )
 
 
 def _alarm_actuator(alarm_id: str) -> str | None:

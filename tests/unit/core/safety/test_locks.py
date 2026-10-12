@@ -4,7 +4,7 @@ import pytest
 from tests.helpers import T0
 
 from bindaems.core.checks.selfcheck import CheckResult
-from bindaems.core.safety.locks import LockInfo, LockManager, lock_causes
+from bindaems.core.safety.locks import LockInfo, LockManager, controlled_elsewhere, lock_causes
 from bindaems.shared.domain import Alarm, Severity
 
 S = lambda s: T0 + timedelta(seconds=s)  # noqa: E731
@@ -239,3 +239,57 @@ def test_empty_cause_list_counts_as_no_cause() -> None:
     locks.update(T0, {"victron": ["A"]})
     locks.update(S(10), {"victron": [], "wallbox.evcs": []})
     assert locks.active(S(10)) == {"victron": LockInfo(("A",), T0, S(10))}
+
+
+# Welche Sperren dem core die Werte nehmen (Plan 2b, Präzisierung 3): nur die eines mitregelnden
+# Systems, nicht die eines Prüfpunkts, der bloß nicht lesbar ist.
+
+
+def test_competitor_alarms_mean_another_system_regulates(limits) -> None:
+    competitors = [
+        alarm("competitor.dess", DESS),
+        alarm("competitor.evcs_mode.evcs", EVCS),
+        alarm("competitor.vehicle_schedule.tesla", PLAN),
+    ]
+    assert controlled_elsewhere(competitors, [], limits) == {
+        "victron",
+        "wallbox.evcs",
+        "vehicle.tesla",
+    }
+    window = alarm("competitor.schedule.0", "Victron-Ladefenster 0 ist aktiv.")
+    assert controlled_elsewhere([window], [], limits) == {"victron"}
+
+
+def test_foreign_changes_mean_another_system_regulates(limits) -> None:
+    foreign = alarm("competitor.foreign.wallbox.evcs", "Strom von außen geändert.")
+    assert controlled_elsewhere([foreign], [], limits) == {"wallbox.evcs"}
+
+
+@pytest.mark.parametrize("check_id", ["ess_mode", "batterylife", "min_soc"])
+def test_a_failed_check_means_another_system_regulates(limits, check_id: str) -> None:
+    failed = [CheckResult(check_id, "fail", "Meldung.")]
+    assert controlled_elsewhere([], failed, limits) == {"victron"}
+
+
+@pytest.mark.parametrize(
+    "check_id", ["ess_mode", "batterylife", "min_soc", "dess", "schedules", "evcs_mode.evcs"]
+)
+def test_an_unreadable_check_locks_but_names_no_other_system(limits, check_id: str) -> None:
+    unknown = [CheckResult(check_id, "unknown", "Nicht verfügbar.")]
+    assert lock_causes([], unknown, limits) != {}  # die Sperre bleibt
+    assert controlled_elsewhere([], unknown, limits) == frozenset()
+
+
+def test_other_findings_name_no_other_system(limits) -> None:
+    others = [
+        alarm("plaus.range.grid", "Netzleistung außerhalb des Bereichs."),
+        alarm("competitor.vehicle_schedule.egolf", "Ladeplan im Fahrzeug „e-Golf“ ist aktiv."),
+        alarm("competitor.foreign.wallbox.twc", "Strom von außen geändert."),
+    ]
+    selfcheck = [
+        CheckResult("phases", "fail", "Erwartet 3 Phasen, gemeldet 2."),
+        CheckResult("fresh_data", "fail", "Nicht aktuell: grid.l1.power_w."),
+        CheckResult("min_soc", "warn", "Victron-Min-SOC 30 % liegt über der USV-Reserve 20 %."),
+        CheckResult("dess", "fail", "Dynamic ESS ist aktiv (Modus 1)."),  # steckt im Alarm
+    ]
+    assert controlled_elsewhere(others, selfcheck, limits) == frozenset()

@@ -7,7 +7,8 @@ Der Aktor sagt, ob er steuerbar ist (``capabilities``), welche Werte das Gerät 
 Ausführer, nicht der Aktor.
 
 ``matches`` vergleicht den gesendeten mit dem zurückgelesenen Wert, mit den Toleranzen aus
-Präzisierung 6 des Plans 2b. Die Schicht ist rein: ohne I/O, die Zeit kommt als Argument.
+Präzisierung 6 des Plans 2b; ``at_most`` prüft mit derselben Toleranz nur die Obergrenze. Die
+Schicht ist rein: ohne I/O, die Zeit kommt als Argument.
 """
 
 from __future__ import annotations
@@ -128,3 +129,16 @@ def matches(kind: CommandKind, wanted: CommandValue, actual: CommandValue) -> bo
     if kind == CommandKind.MAX_DISCHARGE and _UNLIMITED in (want, have):
         return want == have
     return abs(want - have) <= _TOLERANCE.get(kind, 0.0) + _ROUNDING
+
+
+def at_most(kind: CommandKind, limit: CommandValue, actual: CommandValue) -> bool:
+    """Liegt der zurückgelesene Wert ``actual`` höchstens bei ``limit``?
+
+    Nach oben gilt die Toleranz der Art aus ``matches`` (der Rand gehört dazu), nach unten keine
+    Grenze. Nur endliche Zahlen zählen: ``bool``, ``None``, NaN und ±∞ liegen nie darunter. Für den
+    sicheren Zustand beim Strom (``safe_state``): Weniger Strom ist sicherer.
+    """
+    want, have = finite_number(limit), finite_number(actual)
+    if want is None or have is None:
+        return False
+    return have <= want + _TOLERANCE.get(kind, 0.0) + _ROUNDING

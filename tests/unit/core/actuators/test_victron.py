@@ -306,7 +306,8 @@ def test_override_is_its_number(value) -> None:
 
 @pytest.mark.parametrize("quality", [Quality.OK, Quality.INVALID])
 def test_no_override_is_none_while_the_cerbo_is_connected(quality) -> None:
-    # Ein null des Cerbo (D-Bus-Wert ungültig) erreicht den Zustandsspeicher als ungültig (R23).
+    # Ein null des Cerbo (D-Bus-Wert ungültig) erreicht den Zustandsspeicher als ungültig: So
+    # meldet der Cerbo „kein Override“ (vorläufig, bis Prüfprotokoll Teil 2, Punkt 17.2-1).
     state = snap({OVERRIDE: None}, quality=quality)
     assert actuator().present(state) == {CommandKind.GRID_SETPOINT: None}
 
@@ -416,7 +417,8 @@ def test_confirm_stays_open_while_nothing_is_read_back(kind) -> None:
 
 @pytest.mark.parametrize("quality", [Quality.OK, Quality.INVALID])
 def test_lifting_the_override_is_confirmed_by_no_override(quality) -> None:
-    # Der Cerbo meldet „kein Override“ als ungültigen Wert; das bestätigt das Aufheben (R23).
+    # Der Cerbo meldet „kein Override“ als ungültigen Wert, nicht als fehlendes Signal; darum
+    # bestätigt dieser Wert das Aufheben mit null.
     victron = actuator()
     state = snap({OVERRIDE: None}, quality=quality)
     assert victron.confirm(CommandKind.GRID_SETPOINT, None, state) == (Confirmation.CONFIRMED, "")
@@ -467,7 +469,8 @@ def test_the_override_and_its_removal_come_back_through_the_real_pipeline(cfg) -
     cerbo.publish(SETPOINT_OVERRIDE_PATH, None)  # der D-Bus-Wert ist ungültig: kein Override
     lifted = cerbo.store.snapshot()
     reading = lifted.get(OVERRIDE)
-    assert reading is not None  # die Annahme hinter R23: das null kommt als ungültiger Wert an
+    # Die Annahme hinter „kein Override“: Das null kommt als ungültiger Wert an, nicht als Lücke.
+    assert reading is not None
     assert (reading.value, reading.quality) == (None, Quality.INVALID)
     assert victron.present(lifted) == {CommandKind.GRID_SETPOINT: None}
     assert victron.confirm(CommandKind.GRID_SETPOINT, None, lifted) == (Confirmation.CONFIRMED, "")

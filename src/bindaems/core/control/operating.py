@@ -18,10 +18,10 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Final
 
-from bindaems.core.safety.modes import REASON_WATCHDOG_MODE
+from bindaems.core.safety.modes import REASON_CONTROL_OFF_MODE, REASON_WATCHDOG_MODE
 from bindaems.shared.control import OperatingState
 
-REASON_CONTROL_OFF: Final = "Regelbetrieb ist aus."
+REASON_CONTROL_OFF: Final = REASON_CONTROL_OFF_MODE  # gleicher Text, eine Quelle
 REASON_NOT_FRESH: Final = "Kritische Messwerte noch nicht 30 s aktuell."
 REASON_PHASES: Final = "3 Phasen mit je einem Gerät nicht bestätigt."
 REASON_WATCHDOG: Final = REASON_WATCHDOG_MODE  # gleicher Text, eine Quelle

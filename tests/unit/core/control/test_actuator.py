@@ -4,7 +4,7 @@ import pytest
 from tests.helpers import T0
 from tests.unit.core.control.fakes import FakeActuator
 
-from bindaems.core.control.actuator import Actuator, Capabilities, Confirmation, matches
+from bindaems.core.control.actuator import Actuator, Capabilities, Confirmation, at_most, matches
 from bindaems.shared.control import CommandKind
 
 K = CommandKind
@@ -124,3 +124,31 @@ def test_values_outside_the_tolerance_do_not_match(kind, wanted, actual) -> None
 )
 def test_values_of_the_wrong_type_never_match(kind, wanted, actual) -> None:
     assert matches(kind, wanted, actual) is False
+
+
+# Höchstens der Grenzwert (der sichere Zustand beim Strom): die Toleranz von ``matches`` nach oben
+
+
+@pytest.mark.parametrize(
+    ("actual", "result"),
+    [
+        (10.0, True),
+        (8.0, True),  # weniger Strom
+        (0.0, True),
+        (10.4, True),  # der Rand der Toleranz gehört dazu
+        (10.41, False),
+        (12.0, False),
+        (None, False),
+        (True, False),
+        (NAN, False),
+        (-INF, False),
+        ("8", False),
+    ],
+)
+def test_at_most_allows_lower_values_and_the_tolerance_above(actual, result) -> None:
+    assert at_most(K.CURRENT, 10.0, actual) is result
+
+
+def test_at_most_needs_a_number_as_limit() -> None:
+    assert at_most(K.CURRENT, None, 8.0) is False
+    assert at_most(K.CURRENT, NAN, 8.0) is False

@@ -9,9 +9,10 @@ bekommen EVCS und Tesla zusätzlich „Laden aus“ (8.4).
 
 - Ein wirksam live geschaltetes Ziel bekommt je Art einen Befehl, wenn der zurückgelesene Wert
   nicht der Sicherwert ist, kein Schreibvorgang offen ist und der letzte Versuch mindestens 10 s
-  her ist. Je Vorfall gibt es höchstens 3 Versuche. Danach ist die Art gescheitert (``failed``,
-  Alarm ``actuator.failed.<aktor>``), bis der Wert stimmt oder der Vorfall endet; das gilt auch,
-  wenn der Aktor danach nicht mehr live ist, etwa weil der Watchdog ausgelöst hat. Eine
+  her ist. Beim Strom gilt ein Wert bis zum Sicherwert als erreicht: Der sichere Zustand erhöht
+  nie einen Strom. Je Vorfall gibt es höchstens 3 Versuche. Danach ist die Art gescheitert
+  (``failed``, Alarm ``actuator.failed.<aktor>``), bis der Wert stimmt oder der Vorfall endet; das
+  gilt auch, wenn der Aktor danach nicht mehr live ist, etwa weil der Watchdog ausgelöst hat. Eine
   gescheiterte Art bekommt keinen Befehl mehr. So bleibt der Heartbeat aus, bis die Sicherwerte
   zurückgelesen sind (Präzisierungen 3 und 5), statt mit jedem Scharfschalten neu anzulaufen.
 - Ein Dry-Run-Ziel bekommt je Art einmal je Vorfall einen Befehl; die Safety-Schicht macht daraus
@@ -30,7 +31,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Final, Literal
 
-from bindaems.core.control.actuator import matches
+from bindaems.core.control.actuator import at_most, matches
 from bindaems.core.safety.limits import HardLimits
 from bindaems.shared.control import Command, CommandKind, CommandValue
 from bindaems.shared.domain import Alarm, Severity
@@ -75,8 +76,10 @@ def safe_values_reached(
 ) -> bool:
     """Hat das Gerät alle Sicherwerte des Ziels? Jede Art muss per ``matches`` passen.
 
-    ``present`` sind die zurückgelesenen Werte je Aktor und Art. Ein unbekannter Ist-Wert (der
-    Eintrag fehlt) passt nie; beim Netz-Sollwert ist ``None`` dagegen ein Wert („kein Override“).
+    Beim Strom genügt ein endlicher Wert bis zum Sicherwert, mit derselben Toleranz nach oben: Ein
+    niedrigerer Strom bleibt stehen. ``present`` sind die zurückgelesenen Werte je Aktor und Art.
+    Ein unbekannter Ist-Wert (der Eintrag fehlt) passt nie; beim Netz-Sollwert ist ``None``
+    dagegen ein Wert („kein Override“).
     """
     return all(
         _reached(present, (target.actuator, kind), value)
@@ -157,7 +160,8 @@ class SafeStateKeeper:
         ``present`` sind die zurückgelesenen Werte, ``pending`` die offenen Schreibvorgänge des
         Ausführers und ``live`` die wirksam live geschalteten Aktoren. Je Ziel und Art gilt:
 
-        - Stimmt der Wert, gibt es keinen Befehl, und eine gescheiterte Art ist es nicht mehr.
+        - Stimmt der Wert (beim Strom: höchstens der Sicherwert), gibt es keinen Befehl, und eine
+          gescheiterte Art ist es nicht mehr.
         - Eine gescheiterte Art bekommt keinen Befehl, weder live noch im Dry-Run.
         - Ist ein Schreibvorgang offen, gibt es keinen Befehl.
         - Dry-Run: ein Befehl je Vorfall.
@@ -233,8 +237,18 @@ def _wanted(limits: HardLimits, target: SafeTarget) -> _Wanted:
 
 
 def _reached(present: Mapping[_Key, CommandValue], key: _Key, value: CommandValue) -> bool:
-    """Stimmt der zurückgelesene Wert mit dem Sicherwert überein? Fehlt er, ist er unbekannt."""
-    return key in present and matches(key[1], value, present[key])
+    """Hat das Gerät den Sicherwert? Fehlt der zurückgelesene Wert, ist er unbekannt.
+
+    Es gilt ``matches``. Beim Strom genügt ein Wert bis zum Sicherwert, mit derselben Toleranz
+    (``at_most``): Weniger Strom ist sicherer, und der sichere Zustand erhöht nie einen Strom
+    (Spec 8.5). Die Safety-Schicht ließe eine Erhöhung als dringenden Befehl ohnehin nicht zu
+    (``toward_safe``).
+    """
+    if key not in present:
+        return False
+    if key[1] == CommandKind.CURRENT:
+        return at_most(key[1], value, present[key])
+    return matches(key[1], value, present[key])
 
 
 def _command(key: _Key, value: CommandValue, reasons: tuple[str, ...]) -> Command:

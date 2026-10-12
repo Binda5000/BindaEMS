@@ -14,7 +14,9 @@ Zurückgelesen wird, was der Cerbo meldet: ``ess.override.setpoint``, ``ess.max_
 Zahl; ohne brauchbaren Wert ist die Art unbekannt. Beim Netz-Sollwert ist „kein Override aktiv“
 (``None``) etwas anderes als „unbekannt“ (die Art fehlt): Ein ``null`` des Cerbo (der D-Bus-Wert
 ist ungültig) erreicht den Zustandsspeicher als ungültiger Wert und heißt „kein Override“, solange
-die Verbindung zum Cerbo steht.
+die Verbindung zum Cerbo steht. Das ist vorläufig: Dass ``null`` den Override aufhebt und der Cerbo
+danach „kein Override“ so meldet, bestätigt erst das Prüfprotokoll Teil 2, Punkt 17.2-1 (Plan 2b,
+Präzisierung 1).
 """
 
 from __future__ import annotations
@@ -83,7 +85,8 @@ class VictronActuator:
         - Eine endliche Zahl mit Qualität ``OK`` ist der Override.
         - Der Wert ``None`` mit Qualität ``OK`` oder ``INVALID`` heißt „kein Override aktiv“
           (``None``), solange der Cerbo verbunden ist. Ein ``null`` des Cerbo (der D-Bus-Wert ist
-          ungültig) erreicht den Zustandsspeicher als ``INVALID``.
+          ungültig) erreicht den Zustandsspeicher als ``INVALID``. Vorläufig, bis das
+          Prüfprotokoll Teil 2, Punkt 17.2-1, das Verhalten des Cerbo bestätigt.
         - Alles andere lässt die Art fehlen: ein fehlendes oder veraltetes Signal, NaN, ±∞, Text,
           ein Wahrheitswert und ``None`` ohne Verbindung zum Cerbo.
         """

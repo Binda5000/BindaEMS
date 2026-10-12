@@ -1,13 +1,14 @@
 """Wirksame Betriebsart je Aktor (Spec 8.7, Regel 8): Dry-Run oder live.
 
 Die Bedienung fordert eine Betriebsart an (``Intent``). Live wird sie nur, wenn die Konfiguration
-den Aktor dafür freigibt (``live_allowed``) und, bei Victron und EVCS, der Watchdog am Cerbo scharf
-ist. Sonst läuft der Aktor im Dry-Run, und die Antwort nennt den Grund.
+den Aktor dafür freigibt (``live_allowed``), die Absicht den Regelbetrieb verlangt und, bei Victron
+und EVCS, der Watchdog am Cerbo scharf ist. Sonst läuft der Aktor im Dry-Run, und die Antwort nennt
+den Grund.
 
 Live gewünscht ist ein Aktor nur im Regelbetrieb (Plan 2b, Präzisierung 2). Hält ein Aktor noch
 Werte des EMS und ist nicht mehr live gewünscht, wird er übergeben (Präzisierung 3): Er bekommt
-seine Sicherwerte und ist dafür wirksam live, sofern er darf. Welche Aktoren übergeben werden,
-kommt als ``handing_back`` von außen.
+seine Sicherwerte und ist dafür wirksam live, sofern er darf, auch ohne Regelbetrieb. Welche
+Aktoren übergeben werden, kommt als ``handing_back`` von außen.
 
 Die Schicht ist rein: Zustand und Zeit kommen als Argumente.
 """
@@ -22,6 +23,7 @@ from bindaems.core.safety.limits import ActuatorSpec, HardLimits
 from bindaems.shared.control import ActuatorMode, Intent
 
 REASON_NOT_ALLOWED: Final = "In config.yaml nicht für den Live-Betrieb freigegeben (live_allowed)."
+REASON_CONTROL_OFF_MODE: Final = "Regelbetrieb ist aus."
 REASON_WATCHDOG_MODE: Final = "Watchdog am Cerbo ist nicht scharf."
 REASON_HANDBACK_MODE: Final = "Übergabe: Sicherwerte werden gesetzt."
 
@@ -54,16 +56,17 @@ def effective_modes(
     """Angeforderte und wirksame Betriebsart je Aktor, in der Reihenfolge von ``limits.actuators``.
 
     Angefordert ist die Betriebsart aus der Absicht, ohne Absicht oder ohne Eintrag für den Aktor
-    Dry-Run. Wirksam ist ``LIVE`` nur bei Anforderung ``LIVE``, mit ``live_allowed`` und, wenn der
-    Aktor den Watchdog braucht, mit scharfem Watchdog. Sonst gilt ``DRY_RUN``, bei angefordertem
-    Live-Betrieb mit dem ersten zutreffenden Grund (``REASON_NOT_ALLOWED`` vor
-    ``REASON_WATCHDOG_MODE``).
+    Dry-Run. Wirksam ist ``LIVE`` nur bei Anforderung ``LIVE``, mit ``live_allowed``, im
+    Regelbetrieb und, wenn der Aktor den Watchdog braucht, mit scharfem Watchdog. Sonst gilt
+    ``DRY_RUN``, bei angefordertem Live-Betrieb mit dem ersten zutreffenden Grund
+    (``REASON_NOT_ALLOWED``, dann ``REASON_CONTROL_OFF_MODE``, dann ``REASON_WATCHDOG_MODE``).
 
     Ein Aktor in ``handing_back`` wird übergeben. Er behält die angeforderte Betriebsart und ist
-    wirksam ``LIVE`` mit ``REASON_HANDBACK_MODE``, wenn dieselben Bedingungen nichts einwenden
-    (Freigabe, Watchdog); sonst ``DRY_RUN`` mit dem Einwand. Was nicht im Katalog steht, zählt
+    wirksam ``LIVE`` mit ``REASON_HANDBACK_MODE``, wenn Freigabe und Watchdog nichts einwenden,
+    auch ohne Regelbetrieb; sonst ``DRY_RUN`` mit dem Einwand. Was nicht im Katalog steht, zählt
     nicht.
     """
+    control = intent is not None and intent.control
     modes: dict[str, ModeInfo] = {}
     for actuator, spec in limits.actuators.items():
         requested = _requested(intent, actuator)
@@ -73,7 +76,7 @@ def effective_modes(
         if requested != ActuatorMode.LIVE:
             modes[actuator] = ModeInfo(requested, ActuatorMode.DRY_RUN, ())
             continue
-        denial = _live_denial(spec, watchdog_armed)
+        denial = _live_denial(spec, watchdog_armed, control=control)
         if denial is None:
             modes[actuator] = ModeInfo(requested, ActuatorMode.LIVE, ())
         else:
@@ -137,10 +140,15 @@ def _handback_mode(requested: ActuatorMode, spec: ActuatorSpec, watchdog_armed: 
     return ModeInfo(requested, ActuatorMode.DRY_RUN, (denial,))
 
 
-def _live_denial(spec: ActuatorSpec, watchdog_armed: bool) -> str | None:
-    """Der erste Grund, aus dem der Aktor nicht live gehen darf; ``None``, wenn er darf."""
+def _live_denial(spec: ActuatorSpec, watchdog_armed: bool, *, control: bool = True) -> str | None:
+    """Der erste Grund, aus dem der Aktor nicht live gehen darf; ``None``, wenn er darf.
+
+    ``control`` sagt, ob die Absicht den Regelbetrieb verlangt; die Übergabe fragt nicht danach.
+    """
     if not spec.live_allowed:
         return REASON_NOT_ALLOWED
+    if not control:
+        return REASON_CONTROL_OFF_MODE
     if spec.needs_watchdog and not watchdog_armed:
         return REASON_WATCHDOG_MODE
     return None

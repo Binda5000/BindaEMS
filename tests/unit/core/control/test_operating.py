@@ -16,7 +16,7 @@ from bindaems.core.control.operating import (
     Transition,
     gate_ready_except_watchdog,
 )
-from bindaems.core.safety.modes import REASON_WATCHDOG_MODE
+from bindaems.core.safety.modes import REASON_CONTROL_OFF_MODE, REASON_WATCHDOG_MODE
 from bindaems.shared.control import OperatingState
 
 S = lambda s: T0 + timedelta(seconds=s)  # noqa: E731
@@ -124,6 +124,7 @@ def test_initial_values() -> None:
 
 def test_reason_texts() -> None:
     assert REASON_CONTROL_OFF == "Regelbetrieb ist aus."
+    assert REASON_CONTROL_OFF == REASON_CONTROL_OFF_MODE  # eine Quelle für den Text
     assert REASON_NOT_FRESH == "Kritische Messwerte noch nicht 30 s aktuell."
     assert REASON_PHASES == "3 Phasen mit je einem Gerät nicht bestätigt."
     assert REASON_WATCHDOG == "Watchdog am Cerbo ist nicht scharf."

@@ -4,7 +4,8 @@ Ein Aktor ist owned, sobald der core ihm einen Wert gesendet hat; beim Start gel
 die die gespeicherte Absicht live anfordert und ``config.yaml`` freigibt (``initially_owned``).
 Ist ein owned Aktor nicht mehr live gewünscht, wird er übergeben: Er bekommt seine Sicherwerte,
 und erst wenn sie zurückgelesen sind, gibt ihn die Laufzeit frei (``release``). Ein gesperrter
-Aktor verliert „owned“ sofort (``drop``), denn ein anderes System regelt ihn.
+Aktor, den nachweislich ein anderes System regelt, verliert „owned“ sofort (``drop``). Eine Sperre,
+die nur ein nicht lesbarer Prüfpunkt verursacht, nimmt ihm die Werte des EMS nicht.
 
 Die Schicht ist rein: Wann ein Aktor übergeben ist, entscheidet die Laufzeit.
 """
@@ -35,7 +36,10 @@ class Ownership:
         self._owned.discard(actuator)
 
     def drop(self, actuators: Iterable[str]) -> frozenset[str]:
-        """Nimmt die Aktoren ohne Übergabe heraus (Sperre) und liefert die, die owned waren."""
+        """Nimmt die Aktoren ohne Übergabe heraus, denn ein anderes System regelt sie.
+
+        Das Ergebnis sind die Aktoren davon, die owned waren.
+        """
         dropped = self._owned.intersection(actuators)
         self._owned -= dropped
         return frozenset(dropped)

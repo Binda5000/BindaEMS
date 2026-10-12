@@ -10,6 +10,8 @@ from bindaems.core.control.safe_state import (
     safe_values,
     safe_values_reached,
 )
+from bindaems.core.safety.limits import HardLimits
+from bindaems.shared.config import Config
 from bindaems.shared.control import Command, CommandKind
 from bindaems.shared.domain import Alarm, Severity
 
@@ -487,3 +489,56 @@ def test_alarms_follow_the_order_of_the_targets(limits_live) -> None:
 def test_keeper_without_commands_has_nothing_failed(limits_live) -> None:
     keeper = SafeStateKeeper(limits_live)
     assert keeper.failed == frozenset() and keeper.alarms(T0, LABELS, {EVCS}) == []
+
+
+# Ein Strom unter dem Sicherwert gilt als erreicht: Der sichere Zustand erhöht nie einen Strom
+# (Spec 8.5). Die Konfiguration erlaubt min_a ≤ safe_a, etwa einen Sicherwert von 10 A.
+
+
+def safe_at_ten(cfg: Config) -> HardLimits:
+    """Grenzen mit einer live freigegebenen EVCS, deren Sicherwert 10 A ist (min_a 6 A)."""
+    evcs = cfg.wallboxes["evcs"].model_copy(update={"safe_a": 10, "live_allowed": True})
+    return HardLimits.from_config(
+        cfg.model_copy(update={"wallboxes": {**cfg.wallboxes, "evcs": evcs}})
+    )
+
+
+def test_a_current_below_the_safe_value_needs_no_command(cfg: Config) -> None:
+    keeper, target = SafeStateKeeper(safe_at_ten(cfg)), [SafeTarget(EVCS, "safe_state")]
+    for seconds in (0, 10, 20, 30, 40):
+        assert sent(keeper, seconds, target, {CUR: 8.0}) == []
+    assert keeper.failed == frozenset() and keeper.alarms(S(40), LABELS, {EVCS}) == []
+
+
+def test_a_current_above_the_safe_value_still_gets_it(cfg: Config) -> None:
+    keeper, target = SafeStateKeeper(safe_at_ten(cfg)), [SafeTarget(EVCS, "safe_state")]
+    assert sent(keeper, 0, target, {CUR: 12.0}) == [(EVCS, CommandKind.CURRENT, 10.0)]
+
+
+def test_above_the_safe_value_the_tolerance_of_matches_applies(cfg: Config) -> None:
+    limits, target = safe_at_ten(cfg), SafeTarget(EVCS, "safe_state")
+    assert safe_values_reached(limits, target, {CUR: 10.4})
+    assert not safe_values_reached(limits, target, {CUR: 10.5})
+    assert not safe_values_reached(limits, target, {CUR: None})  # unbekannt bleibt unbekannt
+    assert not safe_values_reached(limits, target, {CUR: float("nan")})
+    assert not safe_values_reached(limits, target, {})
+
+
+def test_a_handback_with_a_lower_current_is_done_at_once(cfg: Config) -> None:
+    limits = safe_at_ten(cfg)
+    assert safe_values_reached(limits, SafeTarget(EVCS, "handback"), {CUR: 8.0})
+    keeper = SafeStateKeeper(limits)
+    assert sent(keeper, 0, [SafeTarget(EVCS, "handback")], {CUR: 8.0}) == []
+
+
+def test_only_the_current_may_stay_below_its_safe_value(limits_live) -> None:
+    # Eine niedrigere Entladegrenze sperrt das Entladen, ein niedrigerer Min-SOC unterschreitet die
+    # USV-Reserve, und „Laden aus“ bleibt ein Wahrheitswert: Für sie gilt weiter ``matches``.
+    victron = SafeTarget("victron", "safe_state")
+    lower_limit = VICTRON_SAFE | {("victron", CommandKind.MAX_DISCHARGE): 0.0}
+    lower_soc = VICTRON_SAFE | {("victron", CommandKind.MIN_SOC): 10.0}
+    assert not safe_values_reached(limits_live, victron, lower_limit)
+    assert not safe_values_reached(limits_live, victron, lower_soc)
+    stop = SafeTarget(EVCS, "safe_state", stop_charging=True)
+    assert safe_values_reached(limits_live, stop, {CUR: 0.0, CHG: False})
+    assert not safe_values_reached(limits_live, stop, {CUR: 0.0, CHG: True})
