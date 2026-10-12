@@ -387,8 +387,8 @@ den Watchdog zuständig war (Abschnitt 14); sonst starte ihn vorher neu. Die **W
 | `victron` | 17.2-1 bis 17.2-4 und 17.2-8 | Netz-Sollwert-Override, Entladegrenze 0 W, Netzladen und „Kein Akku ins Auto“; das Importlimit wird nur beobachtet |
 
 Die Schritte je Punkt und das Format des Berichts stehen in `docs/verification/README.md`.
-Die Reihenfolge: **EVCS und Tesla jetzt**, gemeinsam mit dem Betreiber, **Victron erst nach dem
-Abschalten von Dynamic ESS**.
+Die Reihenfolge: **EVCS und Tesla jetzt**, gemeinsam mit dem Betreiber, **Victron nur mit
+abgeschaltetem Dynamic ESS** (für den Test genügt es, DESS vorübergehend abzuschalten).
 
 Der Aufruf gilt je Punkt und folgt dem der Probe:
 
@@ -494,19 +494,27 @@ docker compose run --rm -v "$PWD/verification:/out" --entrypoint python ems-core
 
 **Victron und Dynamic ESS**
 
-- Dynamic ESS nullt fremde Overrides (Spec 3.2) und bleibt an, bis Victron live geht (Entscheidung
-  vom 10.10.2026). Der Punkt `victron` läuft darum erst, wenn du DESS vor der Live-Schaltung von
-  Victron abgeschaltet hast. Vorher endet er mit FEHLER „Dynamic ESS ist aktiv (Modus …); die
-  Victron-Punkte erst nach dem Abschalten von DESS.“, ohne zu schreiben.
+- Dynamic ESS nullt fremde Overrides (Spec 3.2) und bleibt im Betrieb an, bis Victron live geht
+  (Entscheidung vom 10.10.2026). Für den Punkt `victron` schaltest du es vorübergehend ab
+  (Entscheidung vom 12.10.2026) und danach wieder ein. Den Modus liest und setzt du am Cerbo:
+
+  ```bash
+  ssh root@<cerbo> dbus -y com.victronenergy.settings /Settings/DynamicEss/Mode GetValue   # notieren
+  ssh root@<cerbo> dbus -y com.victronenergy.settings /Settings/DynamicEss/Mode SetValue 0
+  # … Test …
+  ssh root@<cerbo> dbus -y com.victronenergy.settings /Settings/DynamicEss/Mode SetValue <notierter Wert>
+  ```
+
+  Ist DESS an, endet der Punkt mit FEHLER „Dynamic ESS ist aktiv (Modus …); die Victron-Punkte
+  erst nach dem Abschalten von DESS.“, ohne zu schreiben.
 - Er verweigert ebenso, wenn beim Start ein Netz-Sollwert-Override steht, auch 0 W:
   „Netz-Sollwert-Override aktiv (… W); ein anderes System regelt – vor dem Test aufheben.“ Ohne
   vorgefundenen Override ist er am Ende wieder aufgehoben.
 - „Victron bereit“ wartet bis zur Bestätigungsfrist auf die Werte von Override und Entladegrenze.
   Meldet der Cerbo `ess.override.setpoint` im Ruhezustand gar nicht, enden die Override-Schritte mit
-  „Ausgangswert unbekannt“, ohne zu schreiben. Der erste echte Lauf zeigt, wie der Cerbo den
-  Ruhezustand meldet (die Rückmeldung `null` für „kein Override“ ist vorläufig). Meldet er im
-  Ruhezustand einen Zahlenwert, verweigert das Werkzeug wie oben; dann muss der Ruhezustand neu
-  bewertet werden.
+  „Ausgangswert unbekannt“, ohne zu schreiben. Im Lauf vom 12.10.2026 meldete der Cerbo im
+  Ruhezustand `null`, und `null` hob einen Override auf. Meldet er im Ruhezustand einen
+  Zahlenwert, verweigert das Werkzeug wie oben; dann muss der Ruhezustand neu bewertet werden.
 - Nennt „Victron bereit“ die Entladegrenze als „unbekannt“, brich mit Strg+C ab und starte den
   Punkt neu: Meldet der Cerbo sie erst später, gälte sonst eine von einem abgebrochenen Lauf
   hinterlassene Entladegrenze von 0 W als Ausgangswert und bliebe am Ende stehen.
@@ -929,8 +937,8 @@ Eine erkannte fremde Änderung steht noch nicht darin, nur als Alarm; der Eintra
 
 1. **Watchdog** installieren und die Probe bestehen (Abschnitt 14).
 2. **Prüfprotokoll Teil 2** gemeinsam durchführen (Abschnitt 11): EVCS und Tesla zuerst, Victron
-   nach dem Abschalten von Dynamic ESS. `live_allowed: true` setzt du nur für Aktoren, die
-   bestanden haben.
+   mit vorübergehend abgeschaltetem Dynamic ESS. `live_allowed: true` setzt du nur für Aktoren,
+   die bestanden haben.
 3. **Dry-Run:** Mit der Bedienung in Plan 2d beginnt er. Er dauert 2 Wochen, und die
    Entscheidungen werden gemeinsam gesichtet (Spec 18).
 4. **Live-Schaltung** je Aktor in dieser Reihenfolge (Spec 8.7): EVCS, dann Victron-Setpoint,

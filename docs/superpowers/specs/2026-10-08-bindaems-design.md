@@ -92,7 +92,7 @@ Alles, was in diesem Abschnitt als „zu prüfen“ markiert ist, wird im Prüfp
 - **ESS Mode 3** (externe Regelung, Register 37/40/41 je Phase) hat als einziger Steuerweg einen Victron-Watchdog: Ohne regelmäßiges Schreiben gehen die Multis nach höchstens 60 s in Passthru, laut Feldberichten teils schon nach 10–15 s. Mode 3 verlangt aber eine eigene, sekundenschnelle Netzregelung. **Folge:** Mode 3 wird nicht verwendet.
 - **ESS Mode 2:** Victron regelt selbst, das EMS gibt nur Sollwerte vor. Grid-Setpoint, Min-SOC, maximale Entladeleistung und DVCC-Ladestrom haben **keinen Timeout**.
   - Die klassischen Register (z. B. 2700) sind persistente Settings. Häufiges Schreiben verschleißt den Flash und erzeugt VRM-Logging.
-  - Seit Venus OS 3.50 empfiehlt Victron für häufiges Schreiben den 32-Bit-Setpoint 2716/2717. Laut Community bildet er auf den flüchtigen Override `com.victronenergy.hub4 /Overrides/Setpoint` ab. Der Wert übersteht keinen Neustart, hat aber ebenfalls keinen Timeout.
+  - Seit Venus OS 3.50 empfiehlt Victron für häufiges Schreiben den 32-Bit-Setpoint 2716/2717. Laut Community bildet er auf den flüchtigen Override `com.victronenergy.hub4 /Overrides/Setpoint` ab. Der Wert übersteht keinen Neustart, hat aber ebenfalls keinen Timeout. **Prüfprotokoll Teil 2 vom 12.10.2026:** Der Override verschwand nach 5 min ohne Auffrischen; er hat also doch einen Timeout.
   - **Folgen:** Totmann-Watchdog am Cerbo (8.6), flüchtige Overrides bevorzugt, Schreibbudget für persistente Settings.
 - Beim 32-Bit-Schreiben von 2716 kann Register 2717 mitüberschrieben werden. **Folge:** 2717 wird nicht separat verwendet.
 
@@ -435,8 +435,8 @@ bindaems/
 - **Modbus TCP** ergänzt MQTT. Die Unit-IDs stammen aus der Dienstliste des Cerbo; Register 2717 wird nie separat beschrieben.
 
 **Stand Plan 2b** (`docs/superpowers/plans/2026-10-11-phase-2b-aktoren.md`, Präzisierung 1): Das EMS schreibt am Cerbo nur per MQTT (`W/<portal>/…`) und nur auf Pfade aus einer festen Liste (`writable_paths`); alles andere bleibt lesend.
-- **Netz-Sollwert:** flüchtiger Override `hub4/0/Overrides/Setpoint` in W. `null` hebt ihn auf; das ist vorläufig, bis Teil 2 (17.2-1) es an der Anlage bestätigt.
-- **Entladegrenze:** persistent, `settings/0/Settings/CGwacs/MaxDischargePower` in W (−1 = unbegrenzt). Ob es einen flüchtigen Override dafür gibt, prüft Teil 2 (17.2-2); das EMS schreibt ihn nicht.
+- **Netz-Sollwert:** flüchtiger Override `hub4/0/Overrides/Setpoint` in W. `null` hebt ihn auf, und ohne Override meldet der Cerbo `null` (bestätigt im Prüfprotokoll Teil 2 vom 12.10.2026). Ohne Auffrischen verschwindet ein Override nach 5 min.
+- **Entladegrenze:** persistent, `settings/0/Settings/CGwacs/MaxDischargePower` in W (−1 = unbegrenzt). Einen flüchtigen Override dafür gibt es (`ess.override.maxdischargepower`, Prüfprotokoll Teil 2 vom 12.10.2026); das EMS schreibt ihn in 2b nicht.
 - **Min-SOC:** persistent, `settings/0/Settings/CGwacs/BatteryLife/MinimumSocLimit` in %.
 - **Zurückgelesen** wird über `ess.override.setpoint`, `ess.max_discharge_w` und `ess.min_soc_pct`.
 - Dazu kommen der Heartbeat an den Watchdog (8.6) und die beiden Pfade der EVCS (6.3). Modbus TCP zum Cerbo (Register 2716/2717) bleibt ungenutzt; einen DVCC-Ladestrom und einen flüchtigen Entlade-Override gibt es in 2b nicht.
@@ -1540,7 +1540,7 @@ Die Ergebnisse kommen nach `docs/verification/` mit Datum, Firmwareständen, erw
 8. **Victron-Importlimit:** Wirkung bei Wallbox-Last, als kontrollierter Kurztest.
 
 **Stand Plan 2b** (`docs/superpowers/plans/2026-10-11-phase-2b-aktoren.md`, Präzisierung 11): Das Werkzeug `python -m bindaems.tools.verify_part2 --punkt evcs|tesla|victron` führt die schreibenden Punkte aus (Betriebshandbuch 11). Es fragt wie die Probe vor jedem schreibenden Schritt nach und schreibt den Bericht `JJJJ-MM-TT-pruefprotokoll-teil2-<punkt>.md`; die Punkte heißen 17.2-x. Mit `--yes` beantwortet es alle Rückfragen mit Ja und überspringt Schritte, die einen Handgriff des Betreibers brauchen; der Bericht vermerkt das.
-- **Reihenfolge:** `evcs` (17.2-6 und über die Watchdog-Probe 17.2-5) und `tesla` (17.2-7) jetzt, gemeinsam mit dem Betreiber. `victron` (17.2-1 bis 17.2-4 und 17.2-8) erst nach dem Abschalten von Dynamic ESS, also vor der Live-Schaltung von Victron. Es verweigert, solange DESS aktiv ist, denn DESS nullt fremde Overrides (3.2), und ebenso, wenn beim Start ein Netz-Sollwert-Override steht (auch 0 W), denn dann regelt ein anderes System. Ebenso verweigert es bei einer vorgefundenen Entladegrenze von 0 W (Entladen gesperrt), die ein abgebrochener Lauf hinterlassen haben kann: Als Ausgangswert stellte das Werkzeug sie am Ende wieder her. Vor jedem schreibenden Schritt prüft es DESS erneut.
+- **Reihenfolge:** `evcs` (17.2-6 und über die Watchdog-Probe 17.2-5) und `tesla` (17.2-7) jetzt, gemeinsam mit dem Betreiber. `victron` (17.2-1 bis 17.2-4 und 17.2-8) nur mit abgeschaltetem Dynamic ESS; für den Test schaltet der Betreiber DESS vorübergehend ab (Entscheidung vom 12.10.2026). Es verweigert, solange DESS aktiv ist, denn DESS nullt fremde Overrides (3.2), und ebenso, wenn beim Start ein Netz-Sollwert-Override steht (auch 0 W), denn dann regelt ein anderes System. Ebenso verweigert es bei einer vorgefundenen Entladegrenze von 0 W (Entladen gesperrt), die ein abgebrochener Lauf hinterlassen haben kann: Als Ausgangswert stellte das Werkzeug sie am Ende wieder her. Vor jedem schreibenden Schritt prüft es DESS erneut.
 - **Sicherheit:** Es nutzt dieselben Adapter und Aktoren wie der core und prüft jeden Wert mit den Regeln 1–3, auch die vorgefundenen vor dem ersten Schreiben. Die Rate-Limits der Safety-Schicht (Regel 5) wendet es nicht an, denn der Betreiber bestätigt jeden Schritt. Nach jedem Schrittblock und bei Abbruch (Strg+C) stellt es die vorgefundenen Werte wieder her. Es schreibt höchstens vier persistente Werte je Lauf und weckt den Tesla nicht: Nach einer Rückfrage wartet es auf eine neue Meldung von Tessie, bevor es sendet.
 - **Der core** läuft dabei im Dry-Run weiter. Seine Erkennung fremder Änderungen beobachtet nur Aktoren, die Werte des EMS halten (7.9), und stört nicht.
 
@@ -1674,8 +1674,8 @@ Keiner blockiert die Architektur; geklärt wird jeweils in der genannten Phase.
 
 | Punkt | Wann |
 |---|---|
-| Endgültige Victron-Schreibwege: festgelegt (6.2, Stand Plan 2b); offen ist, ob `null` den Override aufhebt und wie der Cerbo den Ruhezustand meldet | Prüfprotokoll Teil 2, Punkt `victron` (17.2-1 bis 17.2-4), nach dem Abschalten von DESS |
-| Weg für den EVCS-Strom vom Cerbo aus: für EMS und Watchdog festgelegt (GX-Dienst `evcharger`, `/SetCurrent`, 6.3 und 8.6; mit der Watchdog-Probe geübt); offen ist nur, ob die EVCS den Wert übernimmt | Prüfprotokoll Teil 2, Punkt `evcs` (17.2-5 und 17.2-6) |
+| Victron-Schreibwege: festgelegt (6.2, Stand Plan 2b) und an der Anlage bestätigt (Prüfprotokoll Teil 2 vom 12.10.2026: `null` hebt den Override auf und ist der Ruhezustand); offen sind 17.2-4 und 17.2-8 | Prüfprotokoll Teil 2, Punkt `victron`, bei einem weiteren Lauf mit vorübergehend abgeschaltetem DESS |
+| Weg für den EVCS-Strom vom Cerbo aus: für EMS und Watchdog festgelegt (GX-Dienst `evcharger`, `/SetCurrent`, 6.3 und 8.6) und an der Anlage bestätigt (Prüfprotokoll Teil 2 vom 12.10.2026); offen ist nur der Schritt „Verbindung unterbrochen“ | Prüfprotokoll Teil 2, Punkt `evcs` |
 | Werte aus dem Preisblatt Netz NÖ | Inbetriebnahme Phase 3 |
 | ElWG-Sätze | nach Veröffentlichung der SNE-T-V |
 | Entitäts-IDs des e-Golf | Konfiguration in Phase 1 |

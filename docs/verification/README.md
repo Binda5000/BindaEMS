@@ -117,9 +117,9 @@ vorgefundenen Werte wieder her. Bedienung, Rückfragen, Abbruch und Voraussetzun
 Betriebshandbuch, Abschnitt 11. Die Watchdog-Probe (17.2-5) steht im nächsten Abschnitt; der
 Punkt `evcs` führt sie mit aus.
 
-**Reihenfolge:** EVCS und Tesla jetzt, gemeinsam mit dem Betreiber. Victron erst nach dem
-Abschalten von Dynamic ESS, also vor der Live-Schaltung von Victron: Davor verweigert der Punkt,
-ohne zu schreiben.
+**Reihenfolge:** EVCS und Tesla jetzt, gemeinsam mit dem Betreiber. Victron nur mit
+abgeschaltetem Dynamic ESS; für den Test genügt es, DESS vorübergehend abzuschalten
+(Betriebshandbuch 11). Solange DESS an ist, verweigert der Punkt, ohne zu schreiben.
 
 ### Aufruf
 

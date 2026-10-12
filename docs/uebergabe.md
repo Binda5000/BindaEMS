@@ -69,8 +69,8 @@ Zustimmung des Betreibers). `main` ist seit dem 12.10.2026 auch der Standard-Bra
   `core/actuators`), Vitest mit svelte-check, Prettier und ESLint; dazu E2E mit Playwright.
 - **Offen:**
   - Plan 2c schreiben (siehe „Nächster Schritt“)
-  - an der Anlage: Images ausrollen, Watchdog auf 1.1.0, Probe wiederholen, Teil 2 für EVCS und
-    Tesla (siehe „Offen an der Anlage“)
+  - an der Anlage: der Rest von Teil 2 (Tesla mit Schlaf-Test, EVCS-Verbindungsabbruch, Victron
+    17.2-4 und 17.2-8; siehe „Offen an der Anlage“)
   - die Abnahme der Phase 1 an der Anlage
   - kleine Punkte an der Anlage (siehe „Stand der Installation“): manuelle Punkte von Teil 1 und
     die Log-Zeile der Probe
@@ -263,15 +263,25 @@ Demo-Zugänge: `admin`, `gast` (Lesen) und `sicher` (Admin mit TOTP, Geheimnis
 
 ## Stand der Installation beim Betreiber
 
-- Docker auf der VM `192.168.82.20`, Images `latest` vom Stand nach Plan 2a (11.10.2026). Die
-  Images von Plan 2b sind noch nicht ausgerollt.
+- Docker auf der VM `192.168.82.20`, Images `latest` vom Stand nach Plan 2b (ausgerollt am
+  12.10.2026).
 - Reverse Proxy mit HTTPS sowie Tarif und OeMAG-Wert im UI: laut Betreiber eingerichtet
   (11.10.2026). Zum Proxy gehören laut Betriebshandbuch 6: Port 8080 erreicht nur der Proxy,
   `app.trusted_proxies` ist gesetzt, `cookie_secure` steht wieder auf `true`.
 - **Prüfprotokolle** in `docs/verification/`, Bewertungen jeweils am Ende des Protokolls:
   - Preise am 10.10.2026 bestanden (smartENERGY brutto).
   - Teil 1 am 10.10.2026 mit Befunden, am 11.10.2026 mit erreichbarer EVCS wiederholt.
-  - Watchdog-Probe (Teil 2, Punkt 17.2-5) am 11.10.2026 bestanden.
+  - Watchdog-Probe (Teil 2, Punkt 17.2-5) am 11.10.2026 bestanden, am 12.10.2026 mit 1.1.0
+    erneut bestanden.
+  - Teil 2 EVCS am 12.10.2026 bestanden: Schreibweg über den GX-Dienst `evcharger` bestätigt,
+    fremde Änderung erkannt, Watchdog setzt den sicheren Strom. Offen ist „Verbindung
+    unterbrochen“.
+  - Teil 2 Victron am 12.10.2026 mit vorübergehend abgeschaltetem DESS: Override setzen und mit
+    `null` aufheben bestätigt, Ruhezustand `null`, Entladesperre und Netzladen wirken. Neu: Der
+    Override verschwindet nach 5 min ohne Auffrischen. Offen sind 17.2-4 und 17.2-8.
+  - Teil 2 Tesla am 12.10.2026 abgebrochen mit „Fahrzeug nicht zu Hause.“, obwohl das Auto zu
+    Hause war; die Ursache wird geklärt (Position von Tessie oder `site.location`). Der
+    Bericht kommt nach dem nächsten Lauf; der Schlaf-Test steht aus.
 - **Befunde:**
   - Dynamic ESS bleibt nach Entscheidung des Betreibers an, bis Victron live geschaltet wird.
   - Die EVCS (AC22NS, Produkt-ID 0xC026) liest der Cerbo per Modbus TCP unter
@@ -286,8 +296,8 @@ Demo-Zugänge: `admin`, `gast` (Lesen) und `sicher` (Admin mit TOTP, Geheimnis
     `AlwaysPeakShave` = 1). Das ist gewollt (Entscheidung des Betreibers vom 11.10.2026), also
     deutlich unter der 35-A-Sicherung. Bezug über 20 A je Phase deckt der Akku.
   - Akku 96 kWh nutzbar.
-- **Watchdog:** Version 1.0.0 am Cerbo installiert, Probe am 11.10.2026 bestanden. Er wartet,
-  solange der core nichts braucht (kein Aktor im Regelbetrieb live). Version 1.1.0 steht aus.
+- **Watchdog:** Version 1.1.0 am Cerbo installiert (12.10.2026), Probe am selben Tag bestanden.
+  Er wartet, solange der core nichts braucht (kein Aktor im Regelbetrieb live).
 - **HA-Daten in InfluxDB:** Datenbank `homeassistant`, `bindaems` hat READ. HA schreibt mit
   `measurement_attr: entity_id`:
   - Messung = Entität (`sensor.…`), Tags `domain` und `entity_id` (ohne Domain)
@@ -295,18 +305,17 @@ Demo-Zugänge: `admin`, `gast` (Lesen) und `sicher` (Admin mit TOTP, Geheimnis
     `friendly_name_str`
   - Wichtig auch für die Lastprognose aus der HA-Historie.
 - **Offen an der Anlage, als Nächstes (Plan 2b):**
-  1. Die Images ausrollen: `docker compose pull && docker compose up -d` (Betriebshandbuch 4).
-  2. Die `config.ini` neu erzeugen und den Watchdog mit `install.sh` auf 1.1.0 bringen
-     (Betriebshandbuch 14, „Aktualisieren“).
-  3. Die Probe wiederholen (Betriebshandbuch 14, „Probe“).
-  4. Teil 2 für EVCS und Tesla gemeinsam durchführen (Betriebshandbuch 11), ohne `--yes`. Es
-     schreibt auf die Geräte: nicht während der 7 Tage der Abnahme Phase 1 und ihres 24-h-Mitschnitts
-     (`docs/verification/abnahme-phase-1.md`, 4.2 und 4.3).
-  5. Die Berichte nach `docs/verification/` übernehmen.
-  - Danach: Plan 2c. Den Victron-Teil von Teil 2 führt der Betreiber aus, sobald Dynamic ESS aus
-    ist (vor der Live-Schaltung von Victron). Beim ersten echten Lauf ist zu prüfen, wie der Cerbo
-    den Override im Ruhezustand meldet (kein Wert, `null` oder eine Zahl); die Rückmeldung `null`
-    für „kein Override“ ist vorläufig. Dazu die Victron-Punkte im Betriebshandbuch 11.
+  1. Tesla: die Ursache für „Fahrzeug nicht zu Hause.“ klären, dann den Punkt `tesla` und den
+     Schlaf-Test (`--schlafend`) durchführen (Betriebshandbuch 11).
+  2. EVCS: den Schritt „Verbindung unterbrochen“ nachholen (Punkt `evcs` erneut, die Rückfrage
+     mit `j` beantworten und das Netzwerkkabel der EVCS ziehen, wenn das Werkzeug es verlangt).
+  3. Victron: 17.2-4 „Kein Akku ins Auto“ (während ein Auto an der EVCS lädt) und 17.2-8
+     „Importlimit“ nachholen. Dynamic ESS dafür wieder vorübergehend abschalten (Entscheidung des
+     Betreibers vom 12.10.2026) und danach wieder einschalten.
+  4. Die Berichte nach `docs/verification/` übernehmen.
+  - Teil 2 schreibt auf die Geräte: nicht während der 7 Tage der Abnahme Phase 1 und ihres
+    24-h-Mitschnitts (`docs/verification/abnahme-phase-1.md`, 4.2 und 4.3).
+  - Danach: Plan 2c.
 - **Offen an der Anlage, aus Phase 1 und 2a:**
   1. Die manuellen Punkte von Teil 1 nachtragen: Sicherheitsprofil und Modbus-Dienstliste
      (17.1-3), NTP am Cerbo (17.1-12).
@@ -398,6 +407,10 @@ Punkte aufgreifen:
     Aktoren, die die Regelung hält, darf das nicht als fremde Änderung zählen.
   - Nach einem Inselbetrieb bleibt das Laden aus („Laden aus“ des sicheren Zustands); die Regelung
     muss es danach wieder aufnehmen.
+  - **Netz-Sollwert-Override:** Er verschwindet nach 5 min ohne Auffrischen (Prüfprotokoll Teil 2
+    vom 12.10.2026). Die Regelung muss einen gewollten Override vorher auffrischen.
+  - **Entladegrenze:** Es gibt einen flüchtigen Override `ess.override.maxdischargepower`. Prüfen,
+    ob er die persistente Entladegrenze ersetzen kann; das schont den Flash.
 - **Bedienung (2d):**
   - Die Quittierung von Sperren (Spec 7.9) kommt hier; bisher lösen sie sich nur nach
     `safety.lock_release_s`.
