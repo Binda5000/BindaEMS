@@ -9,8 +9,9 @@ Regelung kommt mit Plan 2c, die Bedienung mit Plan 2d.
   **OBSERVE**: nur lesend. Auf ein Gerät schreibt er nur für einen live geschalteten Aktor: den
   Heartbeat an den eigenen Watchdog (Abschnitt 14), solange er regelt, und die Sicherwerte im
   sicheren Zustand und bei der Übergabe am Ende des Live-Betriebs (Abschnitt 13). Einen live
-  gewünschten Aktor gibt es erst mit der Bedienung in Plan 2d. Jeden Befehl, auch im Dry-Run, hält
-  das Entscheidungslog fest (Abschnitt 13).
+  gewünschten Aktor gibt es erst mit der Bedienung in Plan 2d. Das Entscheidungslog hält fest, was
+  er an den Aktoren tut: gesendete Befehle, im Dry-Run die Urteile mit einem Wert und die
+  Ablehnungen der Safety-Schicht (Abschnitt 13).
 - `ems-app` meldet Benutzer an und liefert das Web-UI samt API aus (Abschnitt 12). Sie holt
   Preise und die PV-Prognose, rechnet jede Viertelstunde ab und meldet lesende Sensoren per
   MQTT Discovery an Home Assistant.
@@ -133,7 +134,7 @@ GROUP BY time(1m), *
     und die Warteschlange und beendet sich mit Code 0. Die app schreibt ihre Warteschlange für
     InfluxDB, schließt alle Verbindungen und beendet sich ebenfalls mit Code 0.
   - Der core gibt den Watchdog dabei **nicht** frei. Ist ein Aktor live und dauert ein Neustart
-    länger als 90 s, löst der Watchdog aus (Abschnitt 14).
+    samt 30 s frischer Messwerte länger als 90 s, löst der Watchdog aus (Abschnitt 14).
 - **Logs:**
   - JSON auf stdout. Docker rotiert sie (5 × 10 MB).
 - **Healthcheck:**
@@ -344,7 +345,9 @@ Preise neu von den Quellen, Viertelstunden der letzten 7 Tage aus InfluxDB.
   (Abschnitt 13).
 - Ist ein Victron- oder EVCS-Aktor live, schützt der Watchdog auf dem Cerbo die Anlage während
   des Failovers (Abschnitt 14):
-  - Ist der core binnen 90 s zurück, löst der Watchdog nicht aus.
+  - Ist der core samt 30 s frischer Messwerte (und bestätigter Phasen) binnen 90 s zurück, löst der
+    Watchdog nicht aus: Er sendet den ersten Heartbeat erst, wenn das Gate bis auf den Watchdog
+    offen ist (Abschnitt 13).
   - Sonst löst er genau einmal aus und wird nach 30 s stabilem Heartbeat wieder scharf.
 - Nach einem Failover prüfst du die Uhrzeit (`timedatectl`) und `docker compose ps`.
 
@@ -373,8 +376,9 @@ Das Protokoll liegt danach in `/opt/bindaems/verification/`. Abweichungen gegen�
 Teil 2 (Spec 17.2) **schreibt auf die Geräte** und läuft gemeinsam mit dem Betreiber. Das Werkzeug
 `verify_part2` führt die Punkte aus. Es nutzt dieselben Adapter und Aktoren wie der core, prüft
 jeden Wert mit den Regeln 1–3 der Safety-Schicht und fragt vor jedem schreibenden Schritt nach.
-Der core läuft währenddessen im Dry-Run weiter und stört nicht. Die **Watchdog-Probe** (17.2-5,
-Abschnitt 14) gibt es auch einzeln; der Punkt `evcs` führt sie mit aus.
+Der core läuft währenddessen im Dry-Run weiter und stört nicht, solange er in diesem Lauf nie für
+den Watchdog zuständig war (Abschnitt 14); sonst starte ihn vorher neu. Die **Watchdog-Probe**
+(17.2-5, Abschnitt 14) gibt es auch einzeln; der Punkt `evcs` führt sie mit aus.
 
 | `--punkt` | Spec | Was das Werkzeug schreibt |
 |---|---|---|
@@ -398,7 +402,16 @@ docker compose run --rm -v "$PWD/verification:/out" --entrypoint python ems-core
 
 - Für die anderen Punkte setzt du `--punkt tesla` bzw. `--punkt victron` und den Namen im
   Dateinamen ein. `--wallbox <Name>` wählt bei `evcs` die EVCS und `--fahrzeug <Name>` bei `tesla`
-  das Fahrzeug, wenn es mehrere gibt (Standard: das erste). `--schlafend` gilt nur für `tesla`.
+  das Fahrzeug, wenn es mehrere gibt (Standard: das erste).
+- Den **Schlaf-Test des Tesla** rufst du mit `--punkt tesla --schlafend` auf und gibst ihm mit
+  `--out` einen eigenen Namen. Heißt die Datei wie der Bericht des Tesla-Punkts, überschreibt er
+  ihn:
+
+  ```bash
+  docker compose run --rm -v "$PWD/verification:/out" --entrypoint python ems-core \
+    -m bindaems.tools.verify_part2 --config /config/config.yaml --punkt tesla --schlafend \
+    --out /out/<Datum>-pruefprotokoll-teil2-tesla-schlafend.md
+  ```
 - Wie bei der Probe braucht `docker compose run` ein Terminal, deshalb steht hier kein `-T`. Setze
   für `<Datum>` das Datum (JJJJ-MM-TT) ein. Ohne `--out` ginge der Bericht mit `--rm` verloren.
 - Starte das Werkzeug in `tmux` oder `screen` (siehe „Abbruch mit Strg+C“).
@@ -458,11 +471,16 @@ docker compose run --rm -v "$PWD/verification:/out" --entrypoint python ems-core
 
 **Abbruch mit Strg+C**
 
-- Strg+C bricht den Lauf ab. Das Werkzeug stellt die vorgefundenen Werte wieder her, schreibt den
-  Bericht und endet mit dem Exitcode 130.
+- Strg+C bricht den Lauf ab. Nach dem Start stellt das Werkzeug die vorgefundenen Werte wieder her,
+  schreibt den Bericht und endet mit dem Exitcode 130. Strg+C bei der Startfrage endet ebenfalls mit
+  130, aber ohne Bericht; das Werkzeug hat dann noch nichts geschrieben.
 - Nur Strg+C führt zum Wiederherstellen. Bricht die SSH-Verbindung ab (SIGHUP) oder endet das
   Werkzeug durch `docker stop` (SIGTERM), beendet es sich ohne Wiederherstellen; darum startest du
   es in `tmux` oder `screen`. Prüfe nach einem solchen Ende alle Werte von Hand.
+- Endet das Werkzeug so im Schritt „Sicherer Strom über den Watchdog“ (Punkt `evcs`), kann der
+  Watchdog scharf bleiben und nach 90 s auslösen oder ausgelöst bleiben, denn ein core, der in
+  diesem Lauf nie für den Watchdog zuständig war, gibt ihn nicht frei. Gib ihn dann am Cerbo frei
+  und prüfe `/State`, wie bei einer abgebrochenen Probe (Abschnitt 14, „Probe“).
 - Strg+C während einer Rückfrage wirkt erst nach Enter oder mit einem zweiten Strg+C; danach
   stellt das Werkzeug wieder her. Ein weiteres Strg+C bricht auch das Wiederherstellen ab. Der
   Bericht nennt es („mit Strg+C abgebrochen; die Werte bitte von Hand prüfen“); dann prüfst du die
@@ -486,14 +504,16 @@ docker compose run --rm -v "$PWD/verification:/out" --entrypoint python ems-core
 
 **Bericht**
 
-- Das Werkzeug schreibt `<Datum>-pruefprotokoll-teil2-<punkt>.md` mit `evcs`, `tesla` oder
-  `victron`; der Schlaf-Test des Tesla (`--schlafend`) schreibt
-  `<Datum>-pruefprotokoll-teil2-tesla-schlafend.md`. Der Bericht liegt in
-  `/opt/bindaems/verification/`; übernimm ihn mit Datum nach `docs/verification/`.
+- Ohne `--out` heißt der Bericht `<Datum>-pruefprotokoll-teil2-<punkt>.md` mit `evcs`, `tesla` oder
+  `victron`, beim Schlaf-Test des Tesla (`--schlafend`)
+  `<Datum>-pruefprotokoll-teil2-tesla-schlafend.md`. Im Container gibst du den Namen mit `--out`
+  vor (siehe Aufruf) und wählst für den Schlaf-Test einen anderen als für den Tesla-Punkt. Der
+  Bericht liegt in `/opt/bindaems/verification/`; übernimm ihn mit Datum nach `docs/verification/`.
 - Der Bericht hat je Schritt eine Zeile unter dem Punkt 17.2-x mit OK, WARNUNG, FEHLER oder INFO.
 - Exitcode: 0, wenn kein Schritt FEHLER ist. 1 bei einem FEHLER, einer verneinten Rückfrage vor
   dem Start oder wenn sich der Bericht nicht schreiben ließ. 2 bei ungültiger Konfiguration,
-  ungültigen Secrets oder Aufruf, auch bei `--punkt tesla` ohne Tessie-Token. 130 nach Strg+C.
+  ungültigen Secrets oder Aufruf, auch bei `--punkt tesla` ohne Tessie-Token. 130 nach Strg+C, bei
+  der Startfrage ohne Bericht.
 - Wiederhole die betroffenen Punkte nach jedem Update von Venus OS, der EVCS-Firmware oder der
   Wall-Connector-Firmware (Spec 17).
 
@@ -791,8 +811,8 @@ Spalte „Hinweise“ als „gesperrt: …“.
 
 Aktoren sind `victron`, `wallbox.<name>` für jede EVCS und `vehicle.<name>` für jedes Fahrzeug
 mit Tessie. Der Wall Connector und der e-Golf sind keine Aktoren. Jeder Aktor hat eine
-Betriebsart: **Dry-Run** (die Safety-Schicht prüft und protokolliert jeden Befehl, sendet aber
-nichts) oder **live**.
+Betriebsart: **Dry-Run** (die Safety-Schicht prüft jeden Befehl, der core protokolliert, was er
+senden würde, und sendet nichts) oder **live**.
 
 Ein Aktor läuft nur live, wenn alle vier Bedingungen gelten (Spec 8.7):
 
@@ -816,11 +836,14 @@ auf `false` setzt oder ihn auf anderem Weg aus der `config.yaml` nimmst (etwa ei
 stellst du ihn in der Absicht auf Dry-Run (ab Plan 2d in der Bedienung, bis dahin mit
 `PUT /v1/intent`). Der core übergibt ihn dann (nächster Abschnitt): Er setzt die Sicherwerte und
 sendet erst danach die Freigabe 0. Warte, bis der Aktor unter **System** → „Aktoren“ als „Wirksam“
-nicht mehr „live“ zeigt. Der Watchdog zeigt erst „wartet“, wenn kein anderer Victron- oder
-EVCS-Aktor mehr live bleibt: Hält noch einer Werte des EMS, sendet der core keine 0. Änderst du
-zuerst die `config.yaml`, sieht der core den Aktor nach dem Neustart nicht mehr als live
-angefordert, übergibt ihn nicht und sendet keine 0. Ein scharfer Watchdog löst dann 90 s nach dem
-letzten Heartbeat aus.
+„Dry-Run“ zeigt, ohne den Hinweis „Übergabe: Sicherwerte werden gesetzt.“ oder „Watchdog am Cerbo
+ist nicht scharf.“, und kein Alarm „… Sicherwert für … nicht bestätigt.“ mehr ansteht. Der zweite
+Hinweis erscheint, wenn der Watchdog während der Übergabe ausgelöst hat: Sie kann dann noch offen
+sein, auch wenn „Wirksam“ nicht mehr „live“ zeigt. Der Watchdog zeigt erst „wartet“, wenn kein
+anderer Victron- oder EVCS-Aktor mehr live bleibt: Hält noch einer Werte des EMS, sendet der core
+keine 0. Änderst du zuerst die `config.yaml`, sieht der core den Aktor nach dem Neustart nicht mehr
+als live angefordert, übergibt ihn nicht und sendet keine 0. Ein scharfer Watchdog löst dann 90 s
+nach dem letzten Heartbeat aus.
 
 ### Übergabe am Ende des Live-Betriebs
 
@@ -913,9 +936,12 @@ Ist ein Victron- oder EVCS-Aktor live, beachte den Watchdog (Abschnitt 14):
 - Der Heartbeat hängt am Regelbetrieb. Schaltest du ihn aus, übergibt der core die Aktoren, die
   Werte des EMS halten (siehe „Übergabe“): Er setzt ihre Sicherwerte, sendet danach einmal die
   Freigabe 0 und keine Heartbeats mehr.
-- Ein Neustart des core dauert meist kürzer als die 90 s: Dann löst der Watchdog nicht aus.
-  Dauert die Wartung länger, schalte den Regelbetrieb vorher aus (oder stelle die Aktoren auf
-  Dry-Run) und warte, bis die Übergabe fertig ist. Der Watchdog wartet dann, ohne auszulösen.
+- Ein Neustart des core ist samt 30 s frischer Messwerte (und bestätigter Phasen) meist binnen
+  90 s erledigt: Dann löst der Watchdog nicht aus. Dem Neustart selbst bleiben also nur etwa 60 s,
+  denn der erste Heartbeat geht erst hinaus, wenn das Gate bis auf den Watchdog offen ist
+  (Abschnitt 13, „Gate“). Dauert die Wartung länger, schalte den Regelbetrieb vorher aus (oder
+  stelle die Aktoren auf Dry-Run) und warte, bis die Übergabe fertig ist. Der Watchdog wartet
+  dann, ohne auszulösen.
 - Beim Herunterfahren sendet der core keine Freigabe.
 
 ## 14. Watchdog am Cerbo
@@ -941,11 +967,12 @@ Zustände, Zeiten und D-Bus-Pfade stehen in `cerbo-watchdog/README.md`. Wichtig 
   früherer Lauf ihn scharf gemacht, schützt er diesen core noch nicht. Der core schärft ihn selbst
   (Abschnitt 13, „Gate“).
 - Die Freigabe 0 sendet der core erst, wenn kein Victron- oder EVCS-Aktor mehr Werte des EMS hält
-  (Abschnitt 13, „Übergabe“), und nur, wenn er in diesem Lauf für den Watchdog zuständig war.
-  Eine Probe oder `verify_part2`, die den Watchdog selbst schärfen und auslösen, stört der
-  laufende core deshalb nicht. Ging die 0 verloren, sendet er sie nach dem Doppelten des
-  Heartbeat-Takts erneut, außer der Watchdog zeigt einen fremden Zähler. Steht der Watchdog 60 s
-  lang ohne Bedarf auf „ausgelöst“, räumt er mit der 0 auf.
+  (Abschnitt 13, „Übergabe“), und nur, wenn er in diesem Lauf für den Watchdog zuständig war: ab
+  dem ersten Bedarf oder dem ersten Aktor, der Werte des EMS hält, bis zum nächsten Neustart. Eine
+  Probe oder `verify_part2`, die den Watchdog selbst schärfen und auslösen, stört deshalb nur einen
+  core nicht, der nie zuständig war; war er es, starte ihn vorher neu. Ging die 0 verloren, sendet
+  er sie nach dem Doppelten des Heartbeat-Takts erneut, außer der Watchdog zeigt einen fremden
+  Zähler. Steht der Watchdog 60 s lang ohne Bedarf auf „ausgelöst“, räumt er mit der 0 auf.
 - Heartbeat-Takt und Timeout kommen aus `victron.watchdog` in `config.yaml`.
 - Mit `victron.live_allowed` enthält die `config.ini` die Aktion `override_setpoint` (seit
   Watchdog 1.1.0): Bei einer Auslösung hebt der Watchdog den Netz-Sollwert-Override des EMS auf
@@ -1056,8 +1083,8 @@ mit verstelltem EVCS-Strom aus. Sie
 
 **Die Probe löst den Watchdog aus:** Er setzt die EVCS auf den sicheren Strom und schreibt
 Min-SOC und Entladegrenze, wenn sie abweichen; mit `victron.live_allowed` hebt er auch den
-Netz-Sollwert-Override auf. Wähle einen Zeitpunkt, zu dem das passt. Prüfe danach alle drei Werte
-und stelle sie wieder ein, wie du sie haben willst: den EVCS-Strom, den Min-SOC (jetzt die
+Netz-Sollwert-Override auf. Wähle einen Zeitpunkt, zu dem das passt. Prüfe danach die Werte und
+stelle sie wieder ein, wie du sie haben willst: den EVCS-Strom, den Min-SOC (jetzt die
 USV-Reserve) und die Entladegrenze (jetzt unbegrenzt), mit `victron.live_allowed` auch den
 Override.
 

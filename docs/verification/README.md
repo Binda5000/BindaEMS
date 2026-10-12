@@ -137,6 +137,15 @@ Lokal aus dem Repository geht es mit
 `uv run python -m bindaems.tools.verify_part2 --config deploy/config.yaml --punkt evcs`. Ohne
 `--out` liegt der Bericht dann unter `docs/verification/<Datum>-pruefprotokoll-teil2-<punkt>.md`.
 
+Der Schlaf-Test des Tesla (`--punkt tesla --schlafend`) bekommt im Container mit `--out` einen
+eigenen Namen, sonst überschreibt er den Bericht des Tesla-Punkts desselben Tages:
+
+```bash
+docker compose run --rm -v "$PWD/verification:/out" --entrypoint python ems-core \
+  -m bindaems.tools.verify_part2 --config /config/config.yaml --punkt tesla --schlafend \
+  --out /out/<Datum>-pruefprotokoll-teil2-tesla-schlafend.md
+```
+
 | Option | Bedeutung |
 |---|---|
 | `--punkt evcs`, `tesla` oder `victron` | Pflicht: welcher Punkt läuft |
@@ -197,14 +206,16 @@ Jeder Schritt ist eine Zeile im Bericht. Vor jedem Schritt, der schreibt, fragt 
   `--yes` der Vermerk unter „Rückfragen“). Darunter folgt die Tabelle
   `Punkt | Prüfung | Ergebnis | Details` mit den Punkten 17.2-x; die Ergebnisse lauten OK, WARNUNG,
   FEHLER oder INFO.
-- Mit `--schlafend` heißt die Datei `JJJJ-MM-TT-pruefprotokoll-teil2-tesla-schlafend.md`, damit sie
-  den Bericht des Punkts nicht überschreibt.
+- Ohne `--out` heißt die Datei mit `--schlafend` `JJJJ-MM-TT-pruefprotokoll-teil2-tesla-schlafend.md`,
+  damit sie den Bericht des Punkts nicht überschreibt. Mit `--out`, wie im Aufruf im Container, gilt
+  der Name, den du vorgibst: Gib dem Schlaf-Test dann einen eigenen.
 - Die Zeilen „Wiederherstellen: …“ nennen jeden Wert, den das Werkzeug zurückgesetzt hat. Ein
   FEHLER dort heißt: Den Wert von Hand prüfen.
 - Exitcode 0: Kein Schritt ist FEHLER. 1: ein Schritt ist FEHLER, die Rückfrage vor dem Start wurde
   verneint oder der Bericht ließ sich nicht schreiben (er steht dann auf der Konsole). 2:
   Konfiguration, Secrets oder Aufruf ungültig, auch `--punkt tesla` ohne `BINDAEMS_TESSIE_TOKEN`.
-  130: Strg+C; die Werte sind dann wiederhergestellt, soweit es ging, und der Bericht ist
+  130: Strg+C. Nach dem Start sind die Werte dann wiederhergestellt, soweit es ging, und der
+  Bericht ist geschrieben; bei der Startfrage endet das Werkzeug ohne Bericht und hat noch nichts
   geschrieben.
 
 Den Bericht übernimmst du mit Datum nach `docs/verification/`. Nach jedem Update von Venus OS, der

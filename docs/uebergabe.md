@@ -378,6 +378,12 @@ Punkte aufgreifen:
   - Der LiveFeed der app ignoriert `mode_change`. In 2a reicht die Health-Abfrage alle 10 s.
   - `FakeView` in `tests/integration/test_core_link.py` kennt `intent()`, `submit_intent()` und
     `decisions()` noch nicht.
+- **Watchdog (vor der Live-Schaltung von Victron):**
+  - Die Probe und der Punkt `evcs` von `verify_part2` verstellen vorher nur den EVCS-Strom. Min-SOC,
+    Entladegrenze und die Override-Aktion (mit `victron.live_allowed`) prüft bisher nur
+    `/LastTripFailures` zusammen mit dem Log des Cerbo (Betriebshandbuch 14, „Probe“).
+  - Vor der Live-Schaltung von Victron auch diese Werte vor der Probe verstellen und prüfen, dass
+    die Auslösung sie zurücksetzt.
 
 ## Bewusst offen gelassen
 

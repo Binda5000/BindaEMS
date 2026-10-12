@@ -391,7 +391,7 @@ bindaems/
 ### 6.1 Grundsätze
 
 - **Einheitliche Schnittstelle:** `start()`, `stop()` und `health()`. Messwerte gehen typisiert, mit Zeitstempel und Qualität (`ok`, `stale`, `invalid`) in den Zustand.
-- **Aktor-Adapter** bieten zusätzlich `capabilities()` und `apply(command)`; jeder Schreibbefehl wird durch Zurücklesen bestätigt.
+- **Aktoren** (`core/actuators`) bieten zusätzlich `capabilities()`, `present()`, `send()` und `confirm()` (Protokoll `Actuator` in `core/control`); jeder Schreibbefehl wird bestätigt, bei Victron und EVCS durch Zurücklesen, beim Tesla durch die Antwort von Tessie (6.5).
 - **Testbarkeit:** Zu jedem Adapter gibt es einen Mock bzw. eine Simulator-Variante und aufgezeichnete Antworten für Vertragstests.
 - **Verbindungsabbrüche:** Neuverbindung mit exponentiellem Backoff von 1 s bis 60 s; Timeouts für jede Anfrage.
 - **Frischegrenzen (Defaults):**
