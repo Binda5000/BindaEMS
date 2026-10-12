@@ -52,6 +52,8 @@ Abstand; der Zustand jeweils live von Tessie:
   im Tessie-Cache, mit der ersten Meldung ab 10 s und bis 50 s danach. Zeigt sie den alten Wert,
   meldet er „nicht übernommen“. Dann geht der Befehl ein zweites Mal hinaus: im core als nächster
   Versuch des sicheren Zustands durch die Safety-Schicht, im Werkzeug als Wiederholung („Erster
-  Befehl: …; wiederholt nach … s.“ im Befund). `min_a` kann deshalb bei 5 A bleiben. Ein
-  weiterer Lauf des Punkts `tesla` mit den neuen Images soll zeigen, dass „Verhalten bei 5 A“
-  jetzt wirkt und wie schnell der Cache den neuen Strom zeigt.
+  Befehl: …; wiederholt nach … s.“ im Befund). `min_a` kann deshalb bei 5 A bleiben.
+- **Ergebnis:** Der dritte Lauf mit den neuen Images hat „Verhalten bei 5 A“ bestanden
+  (`2026-10-12-pruefprotokoll-teil2-tesla-3.md`), der Schlaf-Test ebenfalls
+  (`2026-10-12-pruefprotokoll-teil2-tesla-schlafend.md`). Wie schnell der Cache den neuen Strom
+  zeigt, ist offen: Die erste gewertete Meldung kam erst nach rund 30 s.

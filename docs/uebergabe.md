@@ -61,7 +61,7 @@ Zustimmung des Betreibers). `main` ist seit dem 12.10.2026 auch der Standard-Bra
   immer gemeinsam aus demselben Stand ausgerollt (gleiche Compose-Datei, gleiche Image-Tags): Die
   UI-Schemas sind streng, eine abweichende Version zeigt auf der System-Seite nur „Unerwartete
   Antwort vom Server“.
-- **Tests:** 3601 Python-Tests, davon 10 Property-Tests mit Hypothesis (5 für die Safety-Schicht),
+- **Tests:** 3627 Python-Tests, davon 10 Property-Tests mit Hypothesis (5 für die Safety-Schicht),
   und 233 UI-Tests; Abdeckung 96 % insgesamt und 99 % für `core/safety`, `core/control` und
   `core/actuators`.
   Geprüft wird mit ruff, mypy strict (auch für den Watchdog), import-linter (4 Verträge), pytest
@@ -69,8 +69,8 @@ Zustimmung des Betreibers). `main` ist seit dem 12.10.2026 auch der Standard-Bra
   `core/actuators`), Vitest mit svelte-check, Prettier und ESLint; dazu E2E mit Playwright.
 - **Offen:**
   - Plan 2c schreiben (siehe „Nächster Schritt“)
-  - an der Anlage: der Rest von Teil 2 (Tesla mit Schlaf-Test, EVCS-Verbindungsabbruch, Victron
-    17.2-4 und 17.2-8; siehe „Offen an der Anlage“)
+  - an der Anlage: der Rest von Teil 2 (EVCS-Verbindungsabbruch, Victron 17.2-4 und 17.2-8;
+    siehe „Offen an der Anlage“)
   - die Abnahme der Phase 1 an der Anlage
   - kleine Punkte an der Anlage (siehe „Stand der Installation“): manuelle Punkte von Teil 1 und
     die Log-Zeile der Probe
@@ -279,13 +279,14 @@ Demo-Zugänge: `admin`, `gast` (Lesen) und `sicher` (Admin mit TOTP, Geheimnis
   - Teil 2 Victron am 12.10.2026 mit vorübergehend abgeschaltetem DESS: Override setzen und mit
     `null` aufheben bestätigt, Ruhezustand `null`, Entladesperre und Netzladen wirken. Neu: Der
     Override verschwindet nach 5 min ohne Auffrischen. Offen sind 17.2-4 und 17.2-8.
-  - Teil 2 Tesla am 12.10.2026 teilweise bestanden (zwei Läufe): Das Auto folgt Strombefehlen
-    über Tessie (13 → 10 A in 4 s), „Laden aus und an“ wirkt, das schlafende Auto wurde nicht
-    geweckt. Ein Befehl, der den Strom auf 5 A setzt oder von 5 A weggeht, wirkt über Tessie erst
-    beim zweiten Mal, obwohl Tessie den ersten bestätigt (Versuch im Nachtrag zum zweiten
-    Bericht); über die Tesla-App wirkt 5 A sofort. „Fahrzeug nicht zu Hause.“ im ersten
-    Lauf kam von einer falschen `site.location`, die der Betreiber korrigiert hat. Der
-    Schlaf-Test steht aus.
+  - Teil 2 Tesla am 12.10.2026 bestanden (drei Läufe und Schlaf-Test): Das Auto folgt
+    Strombefehlen über Tessie, „Laden aus und an“ wirkt, ein schlafendes Auto wird nicht geweckt
+    (10 min Schlaf-Test). Ein erster Befehl auf 5 A wirkt über Tessie nicht, obwohl Tessie ihn
+    bestätigt; der zweite wirkt (Versuch im Nachtrag zum zweiten Bericht). Seit dem dritten Lauf
+    erkennt der Aktor das im Tessie-Cache, und das Werkzeug wiederholt den Befehl: „Verhalten bei
+    5 A“ bestanden, der Wall Connector war 4 s nach der Wiederholung bei 5 A. „Fahrzeug nicht zu
+    Hause.“ im ersten Lauf kam von einer falschen `site.location`, die der Betreiber korrigiert
+    hat.
 - **Befunde:**
   - Dynamic ESS bleibt nach Entscheidung des Betreibers an, bis Victron live geschaltet wird.
   - Die EVCS (AC22NS, Produkt-ID 0xC026) liest der Cerbo per Modbus TCP unter
@@ -309,16 +310,12 @@ Demo-Zugänge: `admin`, `gast` (Lesen) und `sicher` (Admin mit TOTP, Geheimnis
     `friendly_name_str`
   - Wichtig auch für die Lastprognose aus der HA-Historie.
 - **Offen an der Anlage, als Nächstes (Plan 2b):**
-  1. Tesla: mit den neuen Images (Prüfung im Tessie-Cache und Wiederholung, siehe unten) den
-     Punkt `tesla` wiederholen; „Verhalten bei 5 A“ sollte jetzt wirken, im Befund mit „Erster
-     Befehl: …; wiederholt nach … s.“ Den Schlaf-Test (`--schlafend`) durchführen
-     (Betriebshandbuch 11).
-  2. EVCS: den Schritt „Verbindung unterbrochen“ nachholen (Punkt `evcs` erneut, die Rückfrage
+  1. EVCS: den Schritt „Verbindung unterbrochen“ nachholen (Punkt `evcs` erneut, die Rückfrage
      mit `j` beantworten und das Netzwerkkabel der EVCS ziehen, wenn das Werkzeug es verlangt).
-  3. Victron: 17.2-4 „Kein Akku ins Auto“ (während ein Auto an der EVCS lädt) und 17.2-8
+  2. Victron: 17.2-4 „Kein Akku ins Auto“ (während ein Auto an der EVCS lädt) und 17.2-8
      „Importlimit“ nachholen. Dynamic ESS dafür wieder vorübergehend abschalten (Entscheidung des
      Betreibers vom 12.10.2026) und danach wieder einschalten.
-  4. Die Berichte nach `docs/verification/` übernehmen.
+  3. Die Berichte nach `docs/verification/` übernehmen.
   - Teil 2 schreibt auf die Geräte: nicht während der 7 Tage der Abnahme Phase 1 und ihres
     24-h-Mitschnitts (`docs/verification/abnahme-phase-1.md`, 4.2 und 4.3).
   - Danach: Plan 2c.
@@ -422,8 +419,10 @@ Punkte aufgreifen:
     Safety-Schicht (Spec 6.5, 8.5). Die Regelung muss einen Strom nach `NOT_TAKEN` erneut
     anfordern; als nicht dringender Befehl wartet der Neuversuch dabei auf die 90-s-Regel, wenn 2c
     keine Ausnahme vorsieht. Auch einen bestätigten Befehl nimmt sie nicht als Wirkung, maßgeblich
-    ist der gemessene Strom. Offen vor dem Live-Betrieb des Tesla: die Reserve des sicheren
-    Zustands (Spec 8.5, Nachtrag) und ob die 10 s für den Cache reichen (nächster Lauf).
+    ist der gemessene Strom. Der dritte Lauf vom 12.10.2026 bestätigt Prüfung und Wiederholung.
+    Offen vor dem Live-Betrieb des Tesla: die Reserve des sicheren Zustands (Spec 8.5, Nachtrag)
+    und ob die 10 s für den Cache reichen; im Lauf kam die erste gewertete Meldung erst nach rund
+    30 s, der Verzug ist damit nicht gemessen.
   - **Netz-Sollwert-Override:** Er verschwindet nach 5 min ohne Auffrischen (Prüfprotokoll Teil 2
     vom 12.10.2026). Die Regelung muss einen gewollten Override vorher auffrischen.
   - **Entladegrenze:** Es gibt einen flüchtigen Override `ess.override.maxdischargepower`. Prüfen,
