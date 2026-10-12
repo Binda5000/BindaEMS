@@ -427,9 +427,10 @@ docker compose run --rm -v "$PWD/verification:/out" --entrypoint python ems-core
   wechselndem Strom.
 - `tesla`: `BINDAEMS_TESSIE_TOKEN` steht in der `.env`; ohne endet das Werkzeug mit dem
   Exitcode 2. Das Auto ist wach, zu Hause und angesteckt; wecke es vorher, etwa indem du in der
-  Tesla-App das Laden startest. Das Werkzeug weckt es nie und sendet sonst nichts. Für `--schlafend` muss das Auto dagegen schon schlafen, und Tessie muss sich zu
-  Beginn und am Ende des Tests frisch melden. Ohne frische Meldung von Tessie ist der Schlaf-Test
-  FEHLER „nicht beobachtbar: …“ mit dem Grund (Tessie nicht erreichbar, Wert veraltet).
+  Tesla-App das Laden startest. Das Werkzeug weckt es nie und sendet sonst nichts. Für
+  `--schlafend` muss das Auto dagegen schon schlafen, und Tessie muss sich zu Beginn und am Ende
+  des Tests frisch melden. Ohne frische Meldung von Tessie ist der Schlaf-Test FEHLER „nicht
+  beobachtbar: …“ mit dem Grund (Tessie nicht erreichbar, Wert veraltet).
 - `victron`: Dynamic ESS ist aus (siehe „Victron und Dynamic ESS“), und die Entladegrenze steht
   nicht auf 0 W. Eine Entladegrenze von 0 W (Entladen gesperrt) hinterlässt etwa ein abgebrochener
   Lauf; der Teil verweigert dann ohne zu schreiben, denn er stellte sie am Ende als Ausgangswert
