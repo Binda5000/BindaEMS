@@ -5,7 +5,7 @@
 | Stand | 2026-10-08 |
 | Status | Entwurf zur Freigabe |
 | Umfang | Gesamtsystem, Phasen 1–5 |
-| Branch | `claude/ems-haus-akku-pv-93c0s6` |
+| Branch | `main` |
 
 ## 0. Kurzfassung
 

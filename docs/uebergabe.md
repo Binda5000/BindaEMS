@@ -1,8 +1,7 @@
 # Übergabe an die nächste Session
 
 Stand: 12.10.2026. Plan 2b ist auf `main` (Fast-Forward vom Branch `ccr-e451cb4c-qeg1tm` mit
-Zustimmung des Betreibers). Der Standard-Branch `claude/ems-haus-akku-pv-93c0s6` steht noch auf dem
-Stand davor; ihn nachzuziehen hat der Betreiber nicht beauftragt.
+Zustimmung des Betreibers). `main` ist seit dem 12.10.2026 auch der Standard-Branch auf GitHub.
 
 ## Kurzfassung
 
@@ -98,7 +97,7 @@ Stand davor; ihn nachzuziehen hat der Betreiber nicht beauftragt.
   - Frage nach der Integration (merge, PR oder so lassen)
 - **Git:**
   - Arbeitsbranch ist der Branch, den die Sitzung vorgibt (Plan 2b: `ccr-e451cb4c-qeg1tm`); der
-    Standard-Branch auf GitHub ist `claude/ems-haus-akku-pv-93c0s6`.
+    Standard-Branch auf GitHub ist `main`.
   - Nach `main` nur mit Zustimmung; bisher per Fast-Forward-Merge, Tests auf `main`, dann Push.
   - Pull Requests nur auf ausdrücklichen Wunsch.
   - Commit-Nachrichten auf Deutsch im Stil `fix(ui): …`, mit den Attributionszeilen, die die
@@ -214,8 +213,9 @@ Demo-Zugänge: `admin`, `gast` (Lesen) und `sicher` (Admin mit TOTP, Geheimnis
 - **Demo-Backend beenden:** nicht mit `pkill -f`, das trifft die eigene Shell. Die PID merken
   und gezielt beenden.
 - **ECharts in Node (SSR):** endet nicht von selbst; danach `chart.dispose(); process.exit(0)`.
-- **Standard-Branch:** Auf GitHub ist das `claude/ems-haus-akku-pv-93c0s6`, nicht `main`. Die CI
-  hängt `latest` deshalb ausdrücklich an `refs/heads/main`.
+- **Standard-Branch:** Auf GitHub ist das seit dem 12.10.2026 `main`; der frühere Standard-Branch
+  `claude/ems-haus-akku-pv-93c0s6` ist vollständig in `main` enthalten. Die CI hängt `latest`
+  ausdrücklich an `refs/heads/main`.
 - **Cookies:** Die Sitzungs-Cookies tragen „Secure“. Über `http://` klappt die Anmeldung nur mit
   `app.cookie_secure: false`, und das ist nur zum Testen gedacht. Die Anmeldeseite meldet das
   verworfene Cookie.
