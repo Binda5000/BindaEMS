@@ -29,3 +29,26 @@
   Befehl über Tessie wirkt bei 5 A nicht. Ursache offen, zu klären vor der Live-Schaltung des
   Tesla.
 - **Offen:** die Ursache für 5 A über Tessie und der Schlaf-Test (`--schlafend`).
+
+## Nachtrag vom 12.10.2026: Versuch mit `set_charging_amps` über Tessie
+
+Direkt über die Tessie-API (`wait_for_completion=true`), während das Auto lud, je Befehl 30 s
+Abstand; der Zustand jeweils live von Tessie:
+
+| Befehl | Antwort von Tessie | Strom 30 s danach |
+|---|---|---|
+| 6 A (Auto stand auf 6 A) | `result: true` nach 2,5 s | 6 A |
+| 5 A | `result: true` nach 0,2 s | 6 A, nicht übernommen |
+| 5 A, zweites Mal | `result: true` nach 1,2 s | 5 A |
+| 6 A | `result: true` nach 0,2 s | 5 A, nicht übernommen |
+
+- **Befund:** Ein Befehl, der den Strom auf 5 A setzt oder von 5 A weggeht, wirkt erst beim
+  zweiten Mal. Tessie bestätigt den ersten trotzdem, auffällig schnell. Wechsel zwischen 10 und
+  13 A wirkten in beiden Läufen beim ersten Mal. `result: true` heißt also nicht sicher, dass das
+  Auto den Wert übernommen hat.
+- **Folge:** Das Auto blieb nach dem Versuch auf 5 A stehen; der Betreiber stellt den Strom in der
+  App zurück.
+- **Empfehlung:** `vehicles.tesla.min_a: 6`. Damit fällt der 5-A-Fall weg, und der Sicherwert des
+  Tesla ist 6 A. Danach den Punkt `tesla` wiederholen; „Verhalten bei 6 A“ sollte dann wirken.
+- **Für Plan 2c:** Der Tesla-Aktor soll nach der Bestätigung durch Tessie im Cache prüfen, ob der
+  Wert angekommen ist, und den Befehl sonst einmal wiederholen.

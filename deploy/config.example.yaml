@@ -71,6 +71,8 @@ vehicles:
     name: Tesla Model 3
     usable_kwh: 75
     phases: 3
+    # An der Anlage 6 statt 5: Über Tessie wirkt ein Befehl auf oder von 5 A erst beim zweiten Mal
+    # (Prüfprotokoll Teil 2 vom 12.10.2026, Nachtrag zum zweiten Tesla-Bericht).
     min_a: 5
     max_a: 16
     default_wallbox: twc

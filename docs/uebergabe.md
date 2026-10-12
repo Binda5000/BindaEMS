@@ -281,8 +281,9 @@ Demo-Zugänge: `admin`, `gast` (Lesen) und `sicher` (Admin mit TOTP, Geheimnis
     Override verschwindet nach 5 min ohne Auffrischen. Offen sind 17.2-4 und 17.2-8.
   - Teil 2 Tesla am 12.10.2026 teilweise bestanden (zwei Läufe): Das Auto folgt Strombefehlen
     über Tessie (13 → 10 A in 4 s), „Laden aus und an“ wirkt, das schlafende Auto wurde nicht
-    geweckt. 5 A über Tessie wirkt nicht (Strom bleibt bei 10,1 A, Tessie bestätigt nach 0,5 s),
-    5 A über die Tesla-App schon; die Ursache ist offen. „Fahrzeug nicht zu Hause.“ im ersten
+    geweckt. Ein Befehl, der den Strom auf 5 A setzt oder von 5 A weggeht, wirkt über Tessie erst
+    beim zweiten Mal, obwohl Tessie den ersten bestätigt (Versuch im Nachtrag zum zweiten
+    Bericht); über die Tesla-App wirkt 5 A sofort. „Fahrzeug nicht zu Hause.“ im ersten
     Lauf kam von einer falschen `site.location`, die der Betreiber korrigiert hat. Der
     Schlaf-Test steht aus.
 - **Befunde:**
@@ -308,9 +309,9 @@ Demo-Zugänge: `admin`, `gast` (Lesen) und `sicher` (Admin mit TOTP, Geheimnis
     `friendly_name_str`
   - Wichtig auch für die Lastprognose aus der HA-Historie.
 - **Offen an der Anlage, als Nächstes (Plan 2b):**
-  1. Tesla: klären, warum 5 A über Tessie nicht wirken (über die App schon), und danach
-     `vehicles.tesla.min_a` festlegen. Den Schlaf-Test (`--schlafend`) durchführen
-     (Betriebshandbuch 11).
+  1. Tesla: `vehicles.tesla.min_a: 6` in der `config.yaml` setzen (empfohlen, siehe Nachtrag zum
+     zweiten Tesla-Bericht vom 12.10.2026), den core neu starten und den Punkt `tesla`
+     wiederholen. Den Schlaf-Test (`--schlafend`) durchführen (Betriebshandbuch 11).
   2. EVCS: den Schritt „Verbindung unterbrochen“ nachholen (Punkt `evcs` erneut, die Rückfrage
      mit `j` beantworten und das Netzwerkkabel der EVCS ziehen, wenn das Werkzeug es verlangt).
   3. Victron: 17.2-4 „Kein Akku ins Auto“ (während ein Auto an der EVCS lädt) und 17.2-8
@@ -411,10 +412,11 @@ Punkte aufgreifen:
     Aktoren, die die Regelung hält, darf das nicht als fremde Änderung zählen.
   - Nach einem Inselbetrieb bleibt das Laden aus („Laden aus“ des sicheren Zustands); die Regelung
     muss es danach wieder aufnehmen.
-  - **Tesla-Ladestrom:** Im Prüfprotokoll Teil 2 vom 12.10.2026 wirkte 5 A über Tessie nicht
-    (blieb bei 10,1 A), obwohl Tessie bestätigte; 10 A wirkte. Die Regelung darf einen
-    bestätigten Strombefehl nicht als Wirkung nehmen; maßgeblich ist der gemessene Strom, und
-    `min_a` muss dem kleinsten Strom entsprechen, der über Tessie wirkt.
+  - **Tesla-Ladestrom:** Über Tessie wirkt ein Befehl, der auf 5 A setzt oder von 5 A weggeht, erst
+    beim zweiten Mal, obwohl Tessie den ersten mit `result: true` bestätigt (Prüfprotokoll Teil 2
+    vom 12.10.2026, Nachtrag). Der Tesla-Aktor soll nach der Bestätigung im Cache prüfen, ob der
+    Wert angekommen ist, und sonst einmal wiederholen. Die Regelung nimmt einen bestätigten
+    Befehl nicht als Wirkung; maßgeblich ist der gemessene Strom.
   - **Netz-Sollwert-Override:** Er verschwindet nach 5 min ohne Auffrischen (Prüfprotokoll Teil 2
     vom 12.10.2026). Die Regelung muss einen gewollten Override vorher auffrischen.
   - **Entladegrenze:** Es gibt einen flüchtigen Override `ess.override.maxdischargepower`. Prüfen,
