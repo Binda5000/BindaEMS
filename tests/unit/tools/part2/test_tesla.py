@@ -10,7 +10,14 @@ from pathlib import Path
 import httpx
 import pytest
 from pydantic import SecretStr
-from tests.unit.tools.part2.conftest import AMPS_URL, START_URL, STOP_URL, VIN, put_signal
+from tests.unit.tools.part2.conftest import (
+    AMPS_URL,
+    START_URL,
+    STOP_URL,
+    VIN,
+    put_signal,
+    stray_requests,
+)
 
 from bindaems.core.actuators.tesla import TeslaActuator
 from bindaems.core.adapters.tessie import TessieAdapter
@@ -75,19 +82,24 @@ async def test_current_change_reaches_the_wall_connector(tesla_session, respx_mo
 
 
 async def test_asleep_stops_before_any_command(tesla_session, respx_mock) -> None:
+    stray = stray_requests(respx_mock)  # ohne Route zeichnet respx eine Anfrage nicht auf
     session, _ = tesla_session(state={"vehicle.tesla.online": False})
     findings = await run_tesla(session, session.cfg, "tesla", timings=FAST)
     assert (findings[0].status, findings[0].detail) == (
         "fail",
         "Fahrzeug schläft oder ist offline; es wird nicht geweckt.",
     )
-    assert respx_mock.calls.call_count == 0
+    await asyncio.sleep(0.05)  # ein Befehl im Hintergrund hätte jetzt Zeit gehabt
+    assert respx_mock.calls.call_count == 0 and not stray.called
 
 
 async def test_sleep_check_never_sends(tesla_session, respx_mock) -> None:
+    stray = stray_requests(respx_mock)
     session, _ = tesla_session(state={"vehicle.tesla.online": False})
     findings = await run_tesla(session, session.cfg, "tesla", asleep_check=True, timings=FAST)
+    await asyncio.sleep(0.05)
     assert [f.status for f in findings] == ["ok"] and respx_mock.calls.call_count == 0
+    assert not stray.called
 
 
 # Aufruf
@@ -385,6 +397,7 @@ async def test_charging_off_and_on_names_the_contactor(tesla_session, respx_mock
 
 async def test_declined_charging_step_is_skipped(tesla_session, respx_mock) -> None:
     respx_mock.post(AMPS_URL).respond(json={"result": True})
+    stray = stray_requests(respx_mock)
     asked: list[str] = []
     session, _ = tesla_session(answers=[False], twc_follows=True, asked=asked)
     findings = await run_tesla(session, session.cfg, "tesla", timings=FAST)
@@ -393,6 +406,7 @@ async def test_declined_charging_step_is_skipped(tesla_session, respx_mock) -> N
     )
     assert asked == [CHARGING_QUESTION]
     assert set(commands(respx_mock)) == {"set_charging_amps"}  # weder aus noch an
+    assert not stray.called
 
 
 async def test_the_charging_step_needs_no_hand_so_yes_does_not_skip_it(
@@ -484,6 +498,31 @@ async def test_charging_on_not_confirmed_is_an_error(tesla_session, respx_mock) 
         r"Laden an: Fehler: Tessie meldet result=false\.",
         result.detail,
     )
+
+
+@pytest.mark.parametrize(("recovers", "status"), [(True, "ok"), (False, "fail")])
+async def test_a_charging_on_that_failed_is_sent_again_by_the_restore(
+    tesla_session, respx_mock, recovers: bool, status: str
+) -> None:
+    # Tessie bestätigt „aus“ und lehnt „an“ ab. Der Cache zeigt noch „Charging“, und zuletzt ging
+    # „an“ hinaus; bestätigt aber ist nur „aus“. Das Wiederherstellen nach dem Block sendet „an“
+    # genau einmal noch, und die Zeile dazu steht hinter dem Schritt.
+    respx_mock.post(AMPS_URL).respond(json={"result": True})
+    respx_mock.post(STOP_URL).respond(json={"result": True})
+    starts: list[httpx.Request] = []
+
+    def start(request: httpx.Request) -> httpx.Response:
+        starts.append(request)
+        return httpx.Response(200, json={"result": recovers and len(starts) > 1})
+
+    respx_mock.post(START_URL).mock(side_effect=start)
+    session, _ = tesla_session(answers=[True], twc_follows=True)
+    findings = await run_tesla(session, session.cfg, "tesla", timings=FAST)
+    result = step(findings, "Laden aus und an")
+    assert result.status == "fail"
+    follow_up = findings[findings.index(result) + 1]
+    assert (follow_up.title, follow_up.status) == ("Wiederherstellen: Laden an", status)
+    assert len(starts) == 2  # einmal im Schritt, genau einmal mehr beim Wiederherstellen
 
 
 # Wiederherstellen nach jedem Block (Präzisierung 11)

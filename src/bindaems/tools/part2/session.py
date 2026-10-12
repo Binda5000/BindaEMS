@@ -307,9 +307,11 @@ class Part2Session:
         """Stellt die vorgefundenen Werte wieder her, die nicht mehr stehen; je Wert ein Befund.
 
         Die Reihenfolge ist die umgekehrte des ersten Schreibens. Ein Wert, der schon wieder steht,
-        wird nicht noch einmal geschrieben und ergibt keine Zeile: Das Rücklesen zeigt ihn, und
-        zuletzt gesendet wurde er selbst. Einem Rücklesen, das hinterherhinkt (Tessie-Cache),
-        traut die Sitzung nicht mehr als ihrem letzten Senden.
+        wird nicht noch einmal geschrieben und ergibt keine Zeile: Das Rücklesen zeigt ihn, zuletzt
+        gesendet wurde er selbst, und der letzte bestätigte Schreibvorgang endete bei ihm (falls
+        einer bestätigt wurde). Einem Rücklesen, das hinterherhinkt (Tessie-Cache), traut die
+        Sitzung nicht mehr als ihren Schreibvorgängen: Bestätigt Tessie „aus“ und lehnt „an“ ab,
+        zeigt der Cache noch den vorgefundenen Zustand, und „an“ geht trotzdem noch einmal hinaus.
 
         Jeder Wert hat seine eigene Frist ``timeout_s`` (15 s), mit Warten und erneutem Senden wie
         in ``set_and_confirm``. Der Befund ist OK („Wiederhergestellt …“) oder FEHLER mit dem
@@ -375,14 +377,22 @@ class Part2Session:
         return None
 
     def _in_place(self, key: _Key, original: CommandValue) -> bool:
-        """Steht der vorgefundene Wert wieder? Rücklesen und letztes Senden zeigen ihn beide."""
+        """Steht der vorgefundene Wert wieder?
+
+        Nur wenn das Rücklesen ihn zeigt, er zuletzt gesendet wurde und der letzte bestätigte
+        Schreibvorgang bei ihm endete (oder keiner bestätigt wurde). Das Rücklesen allein genügt
+        nicht, denn der Tessie-Cache hinkt hinterher. Das letzte Senden genügt auch nicht: Lehnt das
+        Gerät den Befehl ab, ist er nie angekommen, und bestätigt bleibt der Wert davor.
+        """
         actuator, kind = key
         present = self.actuators[actuator].present(self.snapshot())
         last = self._sent.get(key, original)
+        confirmed = self._confirmed.get(key, original)
         return (
             kind in present
             and matches(kind, original, present[kind])
             and matches(kind, original, last)
+            and matches(kind, original, confirmed)
         )
 
     async def _restore(self, key: _Key, original: CommandValue, timeout_s: float) -> Finding | None:

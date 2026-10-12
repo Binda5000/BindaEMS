@@ -16,7 +16,7 @@ from bindaems.core.adapters.evcs import EvcsAdapter
 from bindaems.core.adapters.tessie import TessieAdapter
 from bindaems.core.adapters.twc import TwcAdapter
 from bindaems.core.adapters.victron_mqtt import VictronMqttAdapter
-from bindaems.core.control.actuator import Capabilities, Confirmation
+from bindaems.core.control.actuator import Actuator, Capabilities, Confirmation
 from bindaems.core.state.store import StateStore
 from bindaems.shared.config import Config, Secrets
 from bindaems.shared.control import CommandKind, CommandValue
@@ -265,6 +265,61 @@ async def test_restore_trusts_the_last_write_more_than_a_lagging_readback(cfg: C
         ("17.2-7", "Wiederherstellen: Strom 16 A", "ok")
     ]
     assert car.sent == [(CURRENT, 5.0), (CURRENT, 16.0)]
+
+
+def car_session(cfg: Config, car: Actuator) -> Part2Session:
+    """Eine Sitzung mit nur diesem Tesla."""
+    return Part2Session(
+        cfg,
+        store=StateStore(SystemClock()),
+        adapters=[],
+        actuators={car.id: car},
+        ask=lambda _question: False,
+        poll_s=0.01,
+    )
+
+
+@pytest.mark.parametrize(("on_fails", "status"), [(1, "ok"), (2, "fail")])
+async def test_restore_sends_a_value_again_whose_last_write_failed(
+    cfg: Config, on_fails: int, status: str
+) -> None:
+    # Tessie bestätigt „aus“ und lehnt „an“ ab. Der Cache zeigt noch „lädt“, und zuletzt gesendet
+    # wurde „an“, also der vorgefundene Wert. Bestätigt aber ist nur „aus“: Das Laden steht nicht
+    # wieder, und das Wiederherstellen sendet „an“ genau einmal noch.
+    car = LaggingCar(on_fails)
+    session = car_session(cfg, car)
+    assert await session.set_and_confirm("vehicle.tesla", CHARGING, False, 1.0) is not None
+    assert await session.set_and_confirm("vehicle.tesla", CHARGING, True, 1.0) is None
+    rows = await session.restore_after_step(1.0)
+    assert [(f.title, f.status) for f in rows] == [("Wiederherstellen: Laden an", status)]
+    assert car.sent == [(CHARGING, False), (CHARGING, True), (CHARGING, True)]
+
+
+async def test_restore_does_not_repeat_a_failed_write_that_changed_nothing(cfg: Config) -> None:
+    # Gescheitert ist der einzige Schreibvorgang, und er galt dem vorgefundenen Wert: Nichts wurde
+    # bestätigt, also ist auch nichts zu ändern.
+    car = LaggingCar(on_fails=1)
+    session = car_session(cfg, car)
+    assert await session.set_and_confirm("vehicle.tesla", CHARGING, True, 1.0) is None
+    assert await session.restore_after_step(1.0) == []
+    assert car.sent == [(CHARGING, True)]
+
+
+async def test_restore_sends_a_value_again_when_the_last_write_of_it_was_not_confirmed(
+    evcs_session,
+) -> None:
+    # „aus“ ist bestätigt, „an“ kam nie zurück. Zeigt das Rücklesen später wieder „an“ (die EVCS
+    # übernahm es spät, oder der Wert ist veraltet), zählt der letzte bestätigte Wert: Das
+    # Wiederherstellen sendet „an“ noch einmal.
+    session, evcs = evcs_session(state={"wallbox.evcs.gx_start_stop": 1})
+    assert await session.set_and_confirm("wallbox.evcs", CHARGING, False, 0.5) is not None
+    evcs.follow = False
+    assert await session.set_and_confirm("wallbox.evcs", CHARGING, True, 0.05) is None
+    evcs.store.update("wallbox.evcs.gx_start_stop", 1, source="victron", kind=SignalKind.STATE)
+    evcs.follow = True
+    rows = await session.restore(timeout_s=0.5)
+    assert [(f.title, f.status) for f in rows] == [("Wiederherstellen: Laden an", "ok")]
+    assert [v for p, v in evcs.writes if p.endswith("StartStop")] == [0, 1, 1]
 
 
 async def test_restore_after_step_keeps_the_rows_in_the_findings(evcs_session) -> None:
@@ -545,6 +600,34 @@ class StubTesla:
 
     def alarms(self, now: datetime) -> list[Alarm]:
         return []
+
+
+class LaggingCar(StubTesla):
+    """Ein Tesla, dessen Cache immer „lädt“ zeigt, wie ihn Tessie kurz nach dem Befehl noch zeigt.
+
+    Tessie bestätigt jeden Befehl, nur „an“ (``True``) lehnt es ab, und zwar so oft, wie
+    ``on_fails`` sagt.
+    """
+
+    def __init__(self, on_fails: int) -> None:
+        super().__init__(Confirmation.CONFIRMED)
+        self.on_fails = on_fails
+        self._refused = False
+
+    def present(self, snap: Snapshot) -> dict[CommandKind, CommandValue]:
+        return {CHARGING: True}
+
+    def send(self, kind: CommandKind, value: CommandValue) -> str | None:
+        self._refused = value is True and self.on_fails > 0
+        self.on_fails -= 1 if self._refused else 0
+        return super().send(kind, value)
+
+    def confirm(
+        self, kind: CommandKind, value: CommandValue, snap: Snapshot
+    ) -> tuple[Confirmation, str]:
+        if self._refused:
+            return Confirmation.FAILED, "Tessie meldet result=false."
+        return Confirmation.CONFIRMED, ""
 
 
 class WaitingAdapter:

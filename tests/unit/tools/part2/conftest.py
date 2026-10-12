@@ -187,6 +187,18 @@ TESLA_START: Final[Mapping[str, Value]] = {
 }
 
 
+def stray_requests(respx_mock):
+    """Eine Route, die jede Anfrage auffängt, die keine andere Route trifft, und mit 500 antwortet.
+
+    Sie muss die letzte Route sein. Ohne sie wirft respx für eine Anfrage ohne Treffer einen
+    ``AssertionError`` (``AllMockedAssertionError``), ohne sie aufzuzeichnen. Der Aktor schluckt
+    ihn als gescheiterten Befehl, und ``respx_mock.calls`` bliebe leer, auch wenn gesendet wurde.
+    Mit ihr zeigen ``route.called`` und ``respx_mock.calls``, dass etwas gesendet wurde, das der
+    Test nicht erwartet.
+    """
+    return respx_mock.route().respond(500)
+
+
 def put_signal(store: StateStore, name: str, value: Value) -> None:
     """Legt ein Signal des Teils Tesla in den Speicher, wie es sein Adapter täte.
 
