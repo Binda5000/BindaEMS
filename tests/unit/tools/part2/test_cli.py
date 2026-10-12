@@ -10,14 +10,18 @@ from unittest.mock import Mock
 
 import pytest
 import yaml
+from pydantic import SecretStr
 from tests.unit.tools.part2.conftest import FakeEvcs, FakePart
 
 from bindaems.core.adapters.victron_mqtt import MqttMessage
+from bindaems.shared.config import Secrets, load_config
 from bindaems.shared.control import CommandKind
 from bindaems.shared.domain import SignalKind
 from bindaems.shared.timeutil import LOCAL_TZ
 from bindaems.tools import verify_part2
 from bindaems.tools.part2.session import Part2Session
+from bindaems.tools.part2.victron import DEFAULT_TIMINGS as VICTRON_TIMINGS
+from bindaems.tools.part2.victron import VictronTimings, run_victron
 from bindaems.tools.verify_checks import Finding
 from bindaems.tools.verify_part2 import main
 
@@ -132,16 +136,6 @@ def test_ctrl_c_restores_and_returns_130(tmp_path, fake_part) -> None:
 def test_invalid_config_names_the_problem(capsys: pytest.CaptureFixture[str]) -> None:
     assert main(["--config", "/gibt/es/nicht.yaml", "--punkt", "evcs"]) == 2
     assert "Konfiguration ungültig" in capsys.readouterr().err
-
-
-@pytest.mark.parametrize("punkt", ["victron"])
-def test_parts_that_are_not_there_yet_return_2(
-    punkt: str, fake_part: FakePart, capsys: pytest.CaptureFixture[str]
-) -> None:
-    code = main(["--config", "deploy/config.example.yaml", "--punkt", punkt, "--yes"])
-    assert code == 2
-    assert capsys.readouterr().err == f"Punkt „{punkt}“ ist noch nicht umgesetzt.\n"
-    assert fake_part.sessions == []
 
 
 @pytest.mark.parametrize(
@@ -554,7 +548,7 @@ def test_declined_start_of_the_sleep_check_says_that_it_sends_nothing(
     assert fake_part.sessions == []
 
 
-@pytest.mark.parametrize(("punkt", "seconds"), [("evcs", 15.0), ("tesla", 75.0)])
+@pytest.mark.parametrize(("punkt", "seconds"), [("evcs", 15.0), ("tesla", 75.0), ("victron", 15.0)])
 def test_the_final_restore_waits_as_long_as_the_part_does(
     tmp_path: Path, fake_part: FakePart, tessie_token: None, punkt: str, seconds: float
 ) -> None:
@@ -585,6 +579,200 @@ def test_failed_tesla_step_returns_1(
     code, report = run_tesla_cli(tmp_path)
     assert code == 1
     assert "| 17.2-7 | Tesla bereit | FEHLER | Fahrzeug nicht zu Hause. |" in report
+
+
+# Punkt Victron
+
+VICTRON_ARGS = ["--config", "deploy/config.example.yaml", "--punkt", "victron"]
+VICTRON_FINDING = Finding(
+    "17.2-1", "Victron bereit", "ok", "hub4-Overrides vorher: setpoint = null"
+)
+FAST_VICTRON = VictronTimings(confirm_s=0.2, observe_s=0.05, effect_s=0.2, hold_s=0.1, reboot_s=0.2)
+
+
+def run_victron_cli(
+    tmp_path: Path, *extra: str, config: str = "deploy/config.example.yaml"
+) -> tuple[int, str]:
+    """``main`` für den Punkt Victron mit ``--yes``: Exitcode und Bericht (leer, wenn keiner da)."""
+    out = tmp_path / "bericht.md"
+    code = main(["--config", config, "--punkt", "victron", "--yes", "--out", str(out), *extra])
+    return code, out.read_text(encoding="utf-8") if out.exists() else ""
+
+
+def config_without_evcs(tmp_path: Path) -> Path:
+    """Die Beispielkonfiguration ohne EVCS: nur der Wall Connector bleibt."""
+    raw = yaml.safe_load(Path("deploy/config.example.yaml").read_text(encoding="utf-8"))
+    raw["wallboxes"] = {"twc": raw["wallboxes"]["twc"]}
+    raw["victron"]["instances"]["evcharger"] = {}
+    raw["vehicles"]["egolf"]["default_wallbox"] = "twc"
+    config = tmp_path / "ohne-evcs.yaml"
+    config.write_text(yaml.safe_dump(raw), encoding="utf-8")
+    return config
+
+
+def test_victron_part_runs_with_the_timings_of_the_plan(
+    tmp_path: Path, fake_part: FakePart
+) -> None:
+    fake_part.findings = [VICTRON_FINDING]
+    code, report = run_victron_cli(tmp_path)
+    assert code == 0
+    assert fake_part.victron_timings == [VICTRON_TIMINGS]
+    assert verify_part2.PART_RESTORE_S["victron"] == VICTRON_TIMINGS.confirm_s
+    assert fake_part.probe is None and fake_part.tesla_calls == []  # nur der Teil Victron läuft
+    assert report.startswith("# Prüfprotokoll Teil 2 – Victron – ")
+    for row in (
+        "| Werkzeug | verify_part2 |",
+        "| Punkt | victron |",
+        "| Gerät | Victron (ESS) |",
+        "| 17.2-1 | Victron bereit | OK | hub4-Overrides vorher: setpoint = null |",
+    ):
+        assert row in report
+    assert "EVCS-Firmware" not in report
+
+
+def test_victron_needs_no_evcs_and_no_tessie_token(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fake_part: FakePart, victron_session
+) -> None:
+    config = config_without_evcs(tmp_path)
+    session, _ = victron_session(config=load_config(config))
+
+    def build(
+        cfg: object, secrets: object, *, ask: object, unattended: bool = False
+    ) -> Part2Session:
+        return session
+
+    monkeypatch.setattr(verify_part2, "build_session", build)
+    code, report = run_victron_cli(tmp_path, config=str(config))
+    assert code == 0 and len(fake_part.victron_timings) == 1
+    assert "| Gerät | Victron (ESS) |" in report
+
+
+async def test_a_part_that_does_not_exist_is_refused(evcs_session, cfg: object) -> None:
+    session, _ = evcs_session()
+    secrets = Secrets(internal_token=SecretStr("x" * 32))
+    with pytest.raises(ValueError, match="Punkt „nirgends“ ist unbekannt"):
+        await verify_part2._part(session, cfg, secrets, "nirgends", "x", False)  # type: ignore[arg-type]
+
+
+def test_victron_ignores_the_options_of_the_other_parts(
+    tmp_path: Path, fake_part: FakePart
+) -> None:
+    code, _ = run_victron_cli(tmp_path, "--wallbox", "nirgends", "--fahrzeug", "nirgends")
+    assert code == 0 and len(fake_part.victron_timings) == 1
+
+
+def test_the_sleep_check_is_not_for_victron(
+    tmp_path: Path, fake_part: FakePart, capsys: pytest.CaptureFixture[str]
+) -> None:
+    code, _ = run_victron_cli(tmp_path, "--schlafend")
+    assert code == 2
+    assert "--schlafend gilt nur für --punkt tesla." in capsys.readouterr().err
+    assert fake_part.sessions == []
+
+
+def test_yes_is_passed_to_the_victron_part_and_named_in_the_report(
+    tmp_path: Path, fake_part: FakePart
+) -> None:
+    code, report = run_victron_cli(tmp_path)
+    assert code == 0 and fake_part.unattended is True
+    assert "| Rückfragen | mit --yes beantwortet; Schritte mit Handgriff übersprungen |" in report
+
+
+def test_declined_start_names_what_the_victron_part_writes(
+    monkeypatch: pytest.MonkeyPatch, fake_part: FakePart, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr("builtins.input", lambda _prompt: "n")
+    assert main(VICTRON_ARGS) == 1
+    shown = capsys.readouterr().out
+    for text in (
+        "Netz-Sollwert-Override",
+        "Entladegrenze",
+        "höchstens 4 persistente Schreibzugriffe",
+        "Dynamic ESS",
+        "Abgebrochen.",
+    ):
+        assert text in shown
+    assert fake_part.sessions == [] and fake_part.victron_timings == []
+
+
+def test_confirmed_victron_start_runs_the_part(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fake_part: FakePart
+) -> None:
+    monkeypatch.setattr("builtins.input", lambda _prompt: "j")
+    out = tmp_path / "bericht.md"
+    assert main([*VICTRON_ARGS, "--out", str(out)]) == 0
+    assert len(fake_part.victron_timings) == 1 and fake_part.unattended is False
+
+
+def test_failed_victron_step_returns_1(tmp_path: Path, fake_part: FakePart) -> None:
+    fake_part.findings = [Finding("17.2-1", "Victron bereit", "fail", "Cerbo nicht verbunden.")]
+    code, report = run_victron_cli(tmp_path)
+    assert code == 1
+    assert "| 17.2-1 | Victron bereit | FEHLER | Cerbo nicht verbunden. |" in report
+
+
+def test_ctrl_c_in_the_victron_part_restores_with_the_deadline_of_the_part(
+    tmp_path: Path, fake_part: FakePart
+) -> None:
+    fake_part.raise_in_step = KeyboardInterrupt
+    code, report = run_victron_cli(tmp_path)
+    assert code == 130
+    assert (
+        "| 17.2-1 | Abbruch | WARNUNG | mit Strg+C abgebrochen; die übrigen Schritte fehlen |"
+        in report
+    )
+    assert fake_part.restore_timeouts == [15.0] and fake_part.calls == ["restore", "stop"]
+
+
+def test_internal_error_in_the_victron_part_is_reported_after_restoring(
+    tmp_path: Path, fake_part: FakePart
+) -> None:
+    fake_part.raise_in_step = RuntimeError
+    code, report = run_victron_cli(tmp_path)
+    assert code == 1
+    assert "| 17.2-1 | Interner Fehler des Werkzeugs | FEHLER | RuntimeError:" in report
+    assert fake_part.calls == ["restore", "stop"]
+
+
+def test_default_report_path_of_victron(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fake_part: FakePart
+) -> None:
+    config = Path("deploy/config.example.yaml").resolve()
+    monkeypatch.chdir(tmp_path)
+    day = datetime.now(LOCAL_TZ).date().isoformat()
+    assert main(["--config", str(config), "--punkt", "victron", "--yes"]) == 0
+    (report,) = tmp_path.glob("docs/verification/*-pruefprotokoll-teil2-victron.md")
+    assert report.name.endswith("-pruefprotokoll-teil2-victron.md")
+    assert report.name[:10] in {day, datetime.now(LOCAL_TZ).date().isoformat()}
+
+
+def test_the_victron_part_runs_through_main_and_leaves_the_plant_as_found(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fake_part: FakePart, victron_session
+) -> None:
+    # Der echte Teil mit kurzen Fristen: Aufruf, Übergabe der Sitzung, letztes Wiederherstellen.
+    session, cerbo = victron_session(answers=[True] * 4, unattended=True)
+
+    def build(
+        cfg: object, secrets: object, *, ask: object, unattended: bool = False
+    ) -> Part2Session:
+        return session
+
+    async def part(session: Part2Session, cfg: object) -> list[Finding]:
+        return await run_victron(session, cfg, timings=FAST_VICTRON)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(verify_part2, "build_session", build)
+    monkeypatch.setattr(verify_part2, "run_victron", part)
+    code, report = run_victron_cli(tmp_path)
+    assert code == 0
+    for row in ("| Punkt | victron |", "| 17.2-1 | Netz-Sollwert-Override | OK |"):
+        assert row in report
+    assert "| 17.2-2 | Entladesperre | OK |" in report
+    assert cerbo.values["ess.override.setpoint"] is None  # wie vorgefunden
+    assert cerbo.values["ess.max_discharge_w"] == 5000.0
+    assert {path for path, _ in cerbo.writes} <= {
+        "hub4/0/Overrides/Setpoint",
+        "settings/0/Settings/CGwacs/MaxDischargePower",
+    }
 
 
 # Watchdog-Probe und Venus OS

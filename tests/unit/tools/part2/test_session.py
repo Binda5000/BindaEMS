@@ -9,7 +9,7 @@ from functools import partial
 import httpx
 import pytest
 from pydantic import SecretStr
-from tests.unit.tools.part2.conftest import FakeEvcs
+from tests.unit.tools.part2.conftest import FakeCerbo, FakeEvcs
 
 from bindaems.core.actuators.tesla import TeslaActuator
 from bindaems.core.actuators.victron import VictronActuator
@@ -625,6 +625,93 @@ async def test_persistent_settings_are_not_sent_again(cfg: Config) -> None:
     assert len([path for path, _ in writes if path == "hub4/0/Overrides/Setpoint"]) > 1
 
 
+# Persistente Schreibzugriffe: höchstens viermal je Lauf (Entladegrenze und Min-SOC zusammen)
+
+MAX_DISCHARGE, MIN_SOC, GRID_SETPOINT = (
+    CommandKind.MAX_DISCHARGE,
+    CommandKind.MIN_SOC,
+    CommandKind.GRID_SETPOINT,
+)
+BUDGET_USED = "nicht gesendet: höchstens 4 persistente Schreibzugriffe je Lauf."
+
+
+def persistent_writes(cerbo: FakeCerbo) -> list[tuple[str, float | int | None]]:
+    return [(path, value) for path, value in cerbo.writes if "Settings/CGwacs" in path]
+
+
+async def use_up_the_budget(session: Part2Session) -> None:
+    """Vier bestätigte persistente Schreibzugriffe: 0 W, dann 5000 W (vorgefunden), 0 W, 5000 W."""
+    for value in (0.0, 5000.0, 0.0, 5000.0):
+        assert await session.set_and_confirm("victron", MAX_DISCHARGE, value, 0.5) is not None
+
+
+async def test_a_fifth_persistent_write_is_refused_at_once(victron_session) -> None:
+    session, cerbo = victron_session()
+    await use_up_the_budget(session)
+    started = time.monotonic()
+    assert await session.set_and_confirm("victron", MAX_DISCHARGE, 0.0, 5.0) is None
+    assert time.monotonic() - started < 1.0  # kein Warten bis zur Frist: Es würde nie gesendet
+    assert session.failure == BUDGET_USED
+    assert len(persistent_writes(cerbo)) == 4
+
+
+async def test_min_soc_and_the_discharge_limit_share_the_budget(victron_session) -> None:
+    session, cerbo = victron_session()
+    assert await session.set_and_confirm("victron", MAX_DISCHARGE, 0.0, 0.5) is not None
+    assert await session.set_and_confirm("victron", MIN_SOC, 30.0, 0.5) is not None
+    assert await session.set_and_confirm("victron", MAX_DISCHARGE, 1000.0, 0.5) is not None
+    assert await session.set_and_confirm("victron", MIN_SOC, 25.0, 0.5) is not None
+    assert await session.set_and_confirm("victron", MIN_SOC, 20.0, 0.5) is None
+    assert session.failure == BUDGET_USED
+    assert len(persistent_writes(cerbo)) == 4
+
+
+async def test_the_restore_uses_the_budget_too(victron_session) -> None:
+    session, cerbo = victron_session()
+    assert await session.set_and_confirm("victron", MAX_DISCHARGE, 0.0, 0.5) is not None  # 1
+    rows = await session.restore(timeout_s=0.5)  # 2
+    assert [(row.title, row.status) for row in rows] == [
+        ("Wiederherstellen: Entladegrenze 5000 W", "ok")
+    ]
+    assert await session.set_and_confirm("victron", MAX_DISCHARGE, 0.0, 0.5) is not None  # 3
+    assert await session.set_and_confirm("victron", MAX_DISCHARGE, 1000.0, 0.5) is not None  # 4
+    assert await session.set_and_confirm("victron", MAX_DISCHARGE, 2000.0, 0.5) is None
+    assert len(persistent_writes(cerbo)) == 4
+
+
+async def test_the_override_is_not_part_of_the_budget(victron_session) -> None:
+    session, cerbo = victron_session()
+    await use_up_the_budget(session)
+    assert await session.set_and_confirm("victron", GRID_SETPOINT, 500.0, 0.5) is not None
+    assert await session.set_and_confirm("victron", GRID_SETPOINT, None, 0.5) is not None
+    assert [v for p, v in cerbo.writes if p == "hub4/0/Overrides/Setpoint"] == [500.0, None]
+
+
+async def test_a_write_the_cerbo_does_not_take_does_not_use_the_budget(victron_session) -> None:
+    session, cerbo = victron_session(accept=False)
+    for _ in range(6):
+        assert await session.set_and_confirm("victron", MAX_DISCHARGE, 0.0, 0.03) is None
+        assert session.failure == "nicht gesendet: Cerbo-Verbindung: Auftrag nicht angenommen."
+    cerbo.accept = True
+    await use_up_the_budget(session)
+    assert len(persistent_writes(cerbo)) == 4
+
+
+async def test_a_value_that_cannot_be_restored_for_lack_of_budget_is_reported_once(
+    victron_session,
+) -> None:
+    # Die Entladegrenze steht nach dem vierten Schreiben bei 7000 W, vorgefunden waren 5000 W. Das
+    # Wiederherstellen würde ein fünftes Mal schreiben: Es sendet nichts und sagt es einmal.
+    session, cerbo = victron_session()
+    for value in (0.0, 5000.0, 0.0, 7000.0):
+        assert await session.set_and_confirm("victron", MAX_DISCHARGE, value, 0.5) is not None
+    expected = [Finding("17.2-2", "Wiederherstellen: Entladegrenze 5000 W", "fail", BUDGET_USED)]
+    assert await session.restore(timeout_s=0.5) == expected
+    assert await session.restore(timeout_s=0.5) == []  # einmal gemeldet genügt
+    assert len(persistent_writes(cerbo)) == 4
+    assert cerbo.values["ess.max_discharge_w"] == 7000.0
+
+
 # Der vorgefundene Wert muss zu den Regeln 1–3 passen
 
 
@@ -667,6 +754,22 @@ async def test_wait_for_returns_the_seconds_or_none(evcs_session) -> None:
     waited = await session.wait_for(changed, 1.0)
     assert waited is not None and 0.04 <= waited < 1.0
     assert await session.wait_for(lambda _snap: False, 0.05) is None
+
+
+async def test_observe_collects_the_states_over_the_duration(evcs_session) -> None:
+    session, evcs = evcs_session()
+    asyncio.get_running_loop().call_later(0.06, evcs.change_by_hand, 10)
+    snaps = await session.observe(0.15)
+    assert len(snaps) >= 4
+    assert snaps[0].ok("wallbox.evcs.gx_set_current_a") == 16  # der erste sofort
+    assert snaps[-1].ok("wallbox.evcs.gx_set_current_a") == 10  # der letzte nach Ablauf
+    assert [snap.ts for snap in snaps] == sorted(snap.ts for snap in snaps)
+    assert (snaps[-1].ts - snaps[0].ts).total_seconds() >= 0.14
+
+
+async def test_observe_with_no_duration_takes_one_snapshot(evcs_session) -> None:
+    session, _ = evcs_session()
+    assert len(await session.observe(0.0)) == 1
 
 
 def test_record_keeps_and_shows_the_finding(

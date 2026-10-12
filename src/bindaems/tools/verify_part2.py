@@ -14,15 +14,19 @@ den Bericht (Standard: ``docs/verification/<Datum>-pruefprotokoll-teil2-<punkt>.
 ``--schlafend`` ``…-tesla-schlafend.md``, damit er den Bericht des Punkts nicht überschreibt).
 
 ``--yes`` beantwortet alle Rückfragen mit Ja. Schritte, die einen Handgriff des Betreibers
-brauchen (Strom von Hand ändern, Kabel ziehen), entfallen dann als INFO „übersprungen (--yes)“;
-der Bericht nennt ``--yes`` unter „Rückfragen“.
+brauchen (Strom von Hand ändern, Kabel ziehen, den Cerbo neu starten, Last einschalten), entfallen
+dann als INFO „übersprungen (--yes)“; der Bericht nennt ``--yes`` unter „Rückfragen“.
 
 Punkte: ``evcs`` (17.2-6 und der sichere Strom über den Watchdog, 17.2-5) mit ``--wallbox``
 (Standard: die erste EVCS). ``tesla`` (17.2-7) mit ``--fahrzeug`` (Standard: das erste Fahrzeug
 mit Tessie): Die Befehle gehen über Tessie, die Wirkung misst das Werkzeug am Wall Connector, und
 das Fahrzeug wird nie geweckt. ``--schlafend`` prüft stattdessen, ohne etwas zu senden, dass ein
-schlafendes Fahrzeug schläft. ``tesla`` braucht ``BINDAEMS_TESSIE_TOKEN``. ``victron`` ist noch
-nicht umgesetzt.
+schlafendes Fahrzeug schläft. ``tesla`` braucht ``BINDAEMS_TESSIE_TOKEN``. ``victron`` (17.2-1 bis
+17.2-4 und 17.2-8): Override des Netz-Sollwerts, Entladesperre, Netzladen, „kein Akku ins Auto“
+(mit der Leistung aller EVCS) und Importlimit. Es verweigert, solange Dynamic ESS aktiv ist, denn
+DESS nullt fremde Overrides: Der Betreiber schaltet DESS vorher ab, vor der Live-Schaltung von
+Victron. Die Entladegrenze ist eine gespeicherte Einstellung; das Werkzeug schreibt sie je Lauf
+höchstens viermal.
 
 Exitcode 0: kein Befund ist FEHLER. 1: ein Befund ist FEHLER, der Betreiber hat die Rückfrage vor
 dem Start verneint (dann ohne Secrets und ohne Verbindung) oder der Bericht ließ sich nicht
@@ -58,19 +62,20 @@ from bindaems.shared.config import (
     load_config,
     load_secrets,
 )
-from bindaems.shared.control import vehicle_actuator, wallbox_actuator
+from bindaems.shared.control import VICTRON, vehicle_actuator, wallbox_actuator
 from bindaems.shared.timeutil import LOCAL_TZ
 from bindaems.tools.part2.evcs import DEFAULT_TIMINGS as EVCS_TIMINGS
 from bindaems.tools.part2.evcs import run_evcs
+from bindaems.tools.part2.session import MAX_PERSISTENT_WRITES, Part2Session, build_session, minutes
 from bindaems.tools.part2.session import RESTORE_S as SESSION_RESTORE_S
-from bindaems.tools.part2.session import Part2Session, build_session, minutes
 from bindaems.tools.part2.tesla import DEFAULT_TIMINGS as TESLA_TIMINGS
 from bindaems.tools.part2.tesla import run_tesla
+from bindaems.tools.part2.victron import DEFAULT_TIMINGS as VICTRON_TIMINGS
+from bindaems.tools.part2.victron import run_victron
 from bindaems.tools.verify_checks import Finding, render_report
 from bindaems.tools.watchdog_probe import run_probe, timings_from_config
 
 PARTS: Final = ("evcs", "tesla", "victron")
-NOT_YET: Final = frozenset({"victron"})  # bis er umgesetzt ist: Exitcode 2
 TITLES: Final = {"evcs": "EVCS", "tesla": "Tesla", "victron": "Victron"}
 ITEMS: Final = {"evcs": "17.2-6", "tesla": "17.2-7", "victron": "17.2-1"}  # Zeilen des Werkzeugs
 PROBE_ITEM: Final = "17.2-5"
@@ -87,6 +92,14 @@ WARNINGS: Final = {
         "sendet nur an ein wachendes Fahrzeug, das zu Hause angesteckt ist, und weckt es nie. Nach "
         "jedem Schritt und am Ende, auch nach Strg+C, stellt es die vorgefundenen Werte wieder her."
     ),
+    "victron": (
+        "Das Werkzeug setzt am Cerbo kurz den Netz-Sollwert-Override (der Akku lädt dabei aus dem "
+        "Netz) und stellt die Entladegrenze auf 0 W, eine gespeicherte Einstellung (höchstens "
+        f"{MAX_PERSISTENT_WRITES} persistente Schreibzugriffe je Lauf). Es fragt vor jedem "
+        "weiteren schreibenden Schritt nach und verlangt ausgeschaltetes Dynamic ESS; sonst endet "
+        "es ohne zu schreiben. Nach jedem Schritt und am Ende, auch nach Strg+C, stellt es die "
+        "vorgefundenen Werte wieder her."
+    ),
     "tesla-schlafend": (
         "Das Werkzeug prüft am Fahrzeug „{device}“, dass ein schlafendes Auto nicht geweckt wird. "
         "Es sendet nichts und liest nur den Zustand aus dem Tessie-Cache, "
@@ -95,7 +108,11 @@ WARNINGS: Final = {
 }
 # Frist je Wert beim letzten Wiederherstellen: ``confirm_s`` des Teils. Ein Befehl an Tessie kann
 # bis zu 60 s dauern, die 15 s der Sitzung wären dafür zu kurz.
-PART_RESTORE_S: Final = {"evcs": EVCS_TIMINGS.confirm_s, "tesla": TESLA_TIMINGS.confirm_s}
+PART_RESTORE_S: Final = {
+    "evcs": EVCS_TIMINGS.confirm_s,
+    "tesla": TESLA_TIMINGS.confirm_s,
+    "victron": VICTRON_TIMINGS.confirm_s,
+}
 ABORTED: Final = "mit Strg+C abgebrochen; die übrigen Schritte fehlen"
 RESTORE_ABORTED: Final = "mit Strg+C abgebrochen; die Werte bitte von Hand prüfen"
 NO_PORTAL: Final = "Portal-ID konnte nicht ermittelt werden"
@@ -169,11 +186,18 @@ def _vehicle(cfg: Config, name: str | None) -> str:
 
 
 def _device(cfg: Config, args: argparse.Namespace) -> str:
-    """Das Gerät des Punkts: das Fahrzeug für ``tesla``, sonst die EVCS."""
+    """Das Gerät des Punkts: das Fahrzeug für ``tesla``, die Anlage für ``victron``, sonst die EVCS.
+
+    Die Anlage ist der Aktor ``victron``; ``--wallbox`` und ``--fahrzeug`` gelten für sie nicht.
+    """
+    if args.punkt == "victron":
+        return VICTRON
     return _vehicle(cfg, args.fahrzeug) if args.punkt == "tesla" else _wallbox(cfg, args.wallbox)
 
 
 def _actuator_id(punkt: str, device: str) -> str:
+    if punkt == "victron":
+        return device
     return vehicle_actuator(device) if punkt == "tesla" else wallbox_actuator(device)
 
 
@@ -258,7 +282,9 @@ async def _part(
         return await run_evcs(session, cfg, device, probe=_watchdog_probe(cfg, secrets, session))
     if punkt == "tesla":
         return await run_tesla(session, cfg, device, asleep_check=asleep_check)
-    raise ValueError(f"Punkt „{punkt}“ ist noch nicht umgesetzt.")
+    if punkt == "victron":
+        return await run_victron(session, cfg)
+    raise ValueError(f"Punkt „{punkt}“ ist unbekannt.")
 
 
 def _execute(
@@ -395,9 +421,6 @@ def main(argv: list[str] | None = None) -> int:
 
 def _run(args: argparse.Namespace) -> int:
     punkt: str = args.punkt
-    if punkt in NOT_YET:
-        print(f"Punkt „{punkt}“ ist noch nicht umgesetzt.", file=sys.stderr)
-        return 2
     if args.schlafend and punkt != "tesla":
         print("--schlafend gilt nur für --punkt tesla.", file=sys.stderr)
         return 2

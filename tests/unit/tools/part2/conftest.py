@@ -1,14 +1,12 @@
-"""Hilfen der Teil-2-Tests: eine EVCS hinter dem GX-Dienst, ein Tesla am Wall Connector, Sitzungen
-damit und ein Ersatz für main.
-
-Weitere Teile (Victron) legen ihre Fixtures ebenfalls hier ab.
-"""
+"""Hilfen der Teil-2-Tests: eine EVCS hinter dem GX-Dienst, ein Tesla am Wall Connector, ein Cerbo
+mit Victron-Anlage, Sitzungen damit und ein Ersatz für main."""
 
 from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
+from functools import partial
 from typing import Any, Final
 
 import httpx
@@ -17,6 +15,12 @@ from pydantic import SecretStr
 
 from bindaems.core.actuators.evcs import EvcsActuator
 from bindaems.core.actuators.tesla import TeslaActuator
+from bindaems.core.actuators.victron import VictronActuator
+from bindaems.core.adapters.victron_mqtt import (
+    MAX_DISCHARGE_PATH,
+    MIN_SOC_PATH,
+    SETPOINT_OVERRIDE_PATH,
+)
 from bindaems.core.control.actuator import Confirmation
 from bindaems.core.state.store import StateStore
 from bindaems.shared.config import Config, Secrets
@@ -29,6 +33,8 @@ from bindaems.tools.part2.evcs import DEFAULT_TIMINGS, EvcsTimings
 from bindaems.tools.part2.session import Part2Session
 from bindaems.tools.part2.tesla import DEFAULT_TIMINGS as TESLA_TIMINGS
 from bindaems.tools.part2.tesla import TeslaTimings
+from bindaems.tools.part2.victron import DEFAULT_TIMINGS as VICTRON_TIMINGS
+from bindaems.tools.part2.victron import VictronTimings
 from bindaems.tools.verify_checks import Finding
 
 
@@ -376,17 +382,215 @@ async def tesla_session(
         await session.stop()
 
 
+# Die Schreibwege des Cerbo und das Signal, in dem der Wert danach steht
+_CERBO_SIGNALS: Final = {
+    SETPOINT_OVERRIDE_PATH: "ess.override.setpoint",
+    MAX_DISCHARGE_PATH: "ess.max_discharge_w",
+    MIN_SOC_PATH: "ess.min_soc_pct",
+}
+_CERBO_STATE_PREFIXES: Final = ("dess.", "ess.")  # alles andere sind Messwerte
+
+# Die Anlage zu Beginn: Dynamic ESS aus, kein Override, die Entladegrenze steht bei 5000 W, der Akku
+# entlädt mit 50 W, das Netz liefert je Phase 100 W (zusammen 300 W). Keine EVCS lädt.
+VICTRON_START: Final[Mapping[str, Value]] = {
+    "dess.mode": 0,
+    "ess.override.setpoint": None,
+    "ess.max_discharge_w": 5000.0,
+    "ess.min_soc_pct": 20.0,
+    "ess.grid_setpoint_w": 50.0,
+    "grid.l1.power_w": 100.0,
+    "grid.l2.power_w": 100.0,
+    "grid.l3.power_w": 100.0,
+    "grid.l1.current_a": 0.5,
+    "grid.l2.current_a": 0.5,
+    "grid.l3.current_a": 0.5,
+    "battery.power_w": -50.0,
+}
+
+CerboPlant = Callable[["FakeCerbo", str, float | int | None], object]
+
+
+class FakeCerbo:
+    """Der Cerbo für die Teil-2-Tests des Teils Victron.
+
+    ``send`` merkt sich jeden Auftrag in ``writes`` und übernimmt ihn nach ``delay_s`` in den
+    Speicher (``ess.override.setpoint``, ``ess.max_discharge_w``, ``ess.min_soc_pct``), solange
+    ``follow`` gilt. Ein geschriebenes ``None`` erreicht den Speicher wie beim echten Adapter als
+    ungültiger Wert: ``present`` liest ihn bei verbundenem Cerbo als „kein Override“. Mit
+    ``null_clears=False`` bleibt der Override nach ``None`` stehen, mit ``ignore_nulls`` nur
+    nach den nächsten so vielen ``None``. Ohne ``accept`` oder bei getrenntem Cerbo nimmt er
+    keinen Auftrag an (``send`` liefert ``False``, wie der Adapter ohne Sitzung). Die Messwerte
+    für Netz und Akku sind, was der Test hineinlegt (``put``); ``plant`` ist die Anlage dahinter:
+    Sie läuft nach jedem übernommenen Auftrag und darf Messwerte ändern.
+
+    ``restart`` trennt den Cerbo wie ein Neustart und lässt ihn danach seine Werte erneut melden,
+    auf Wunsch erst ``republish_s`` nach dem Verbinden.
+    """
+
+    def __init__(
+        self,
+        store: StateStore,
+        *,
+        delay_s: float = 0.01,
+        follow: bool = True,
+        accept: bool = True,
+        null_clears: bool = True,
+        plant: CerboPlant | None = None,
+    ) -> None:
+        self.store, self.delay_s, self.follow = store, delay_s, follow
+        self.accept, self.null_clears, self.plant = accept, null_clears, plant
+        self.ignore_nulls = 0
+        self.connected = True
+        self.values: dict[str, Value] = {}  # was der Cerbo meldet, auch nach einem Neustart
+        self.writes: list[tuple[str, float | int | None]] = []
+
+    def send(self, path: str, value: float | int | None) -> bool:
+        if path not in _CERBO_SIGNALS:
+            raise ValueError(f"Schreibpfad nicht freigegeben: {path}")
+        if not self.accept or not self.connected:
+            return False
+        self.writes.append((path, value))
+        if self.follow:
+            asyncio.get_running_loop().call_later(self.delay_s, self._apply, path, value)
+        return True
+
+    def put(self, name: str, value: Value) -> None:
+        """Der Cerbo meldet ``name``; Zustände und Einstellungen gelten, Messwerte altern."""
+        self.values[name] = value
+        kind = (
+            SignalKind.STATE if name.startswith(_CERBO_STATE_PREFIXES) else SignalKind.MEASUREMENT
+        )
+        self.store.update(name, value, source="victron", kind=kind)
+
+    def disconnect(self) -> None:
+        self.connected = False
+        self.store.set_connected("victron", False)
+
+    def reconnect(self, *, republish_s: float = 0.0) -> None:
+        """Die Verbindung steht wieder; der Cerbo meldet alle Werte erneut, nach ``republish_s``."""
+        self.connected = True
+        self.store.set_connected("victron", True)
+        if republish_s > 0:
+            asyncio.get_running_loop().call_later(republish_s, self._republish)
+        else:
+            self._republish()
+
+    def restart(
+        self,
+        *,
+        down_s: float,
+        keeps_override: bool,
+        comes_back: bool = True,
+        republish_s: float = 0.0,
+    ) -> None:
+        """Ein Neustart: getrennt, nach ``down_s`` wieder da; der Override bleibt, wenn er bleibt.
+
+        ``republish_s`` ist die Zeit zwischen dem Verbinden und den erneut gemeldeten Werten.
+        """
+        self.disconnect()
+        if not keeps_override:
+            self.values["ess.override.setpoint"] = None
+        if comes_back:
+            asyncio.get_running_loop().call_later(
+                down_s, partial(self.reconnect, republish_s=republish_s)
+            )
+
+    def _republish(self) -> None:
+        for name, value in dict(self.values).items():
+            self.put(name, value)
+
+    def _apply(self, path: str, value: float | int | None) -> None:
+        if value is None:
+            if not self.null_clears:
+                return  # der Override bleibt stehen
+            if self.ignore_nulls > 0:
+                self.ignore_nulls -= 1
+                return
+        self.put(_CERBO_SIGNALS[path], value)
+        if self.plant is not None:
+            self.plant(self, path, value)
+
+
+@pytest.fixture
+def victron_session(cfg: Config) -> Callable[..., tuple[Part2Session, FakeCerbo]]:
+    """Baut eine Sitzung mit einem ``VictronActuator`` über einem ``FakeCerbo`` und einem Betreiber.
+
+    ``answers`` sind die Antworten auf die Rückfragen in ihrer Reihenfolge, ``state`` ergänzt oder
+    ersetzt die Startwerte (``VICTRON_START``, Dynamic ESS aus); ``without`` nimmt Signale aus den
+    Startwerten heraus. Der Cerbo meldet sich wie der Adapter: Zustände gelten, solange er
+    verbunden ist, und nach einem erneuten Verbinden erst, wenn er sie wieder meldet.
+
+    Weitere: ``null_clears``, ``follow`` und ``accept`` gehen an den ``FakeCerbo``, ``plant`` ist
+    die Anlage dahinter (Messwerte nach einem Auftrag). ``react`` ordnet einer Rückfrage (genauer
+    Text) eine Handlung zu, die nach einem Ja am Cerbo geschieht; ``asked`` sammelt die gestellten
+    Rückfragen; ``config`` ersetzt die Beispielkonfiguration; ``resend_s`` und ``unattended`` (wie
+    ``--yes``) gehen an die Sitzung.
+    """
+
+    def build(
+        *,
+        answers: Sequence[bool] = (),
+        state: Mapping[str, Value] | None = None,
+        without: Sequence[str] = (),
+        null_clears: bool = True,
+        follow: bool = True,
+        accept: bool = True,
+        plant: CerboPlant | None = None,
+        react: Mapping[str, Callable[[FakeCerbo], object]] | None = None,
+        asked: list[str] | None = None,
+        config: Config | None = None,
+        resend_s: float | None = None,
+        unattended: bool = False,
+    ) -> tuple[Part2Session, FakeCerbo]:
+        settings = config if config is not None else cfg
+        store = StateStore(SystemClock())
+        # wie der Adapter: aktivitätsbasiert und mit Neuverbinden ungültig; die Frische ist hier
+        # lang, damit ein langsamer Lauf die Messwerte nicht altern lässt
+        store.register_source("victron", 600.0, activity_based=True, invalidate_on_reconnect=True)
+        store.set_connected("victron", True)
+        cerbo = FakeCerbo(store, follow=follow, accept=accept, null_clears=null_clears, plant=plant)
+        start = {name: value for name, value in VICTRON_START.items() if name not in without}
+        for name, value in (start | dict(state or {})).items():
+            cerbo.put(name, value)
+        replies = iter(answers)
+
+        def ask(question: str) -> bool:
+            if asked is not None:
+                asked.append(question)
+            reply = next(replies)
+            if reply and react is not None and question in react:
+                react[question](cerbo)
+            return reply
+
+        actuator = VictronActuator(cerbo.send, lambda: cerbo.connected)
+        extra = {} if resend_s is None else {"resend_s": resend_s}
+        session = Part2Session(
+            settings,
+            store=store,
+            adapters=[],
+            actuators={actuator.id: actuator},
+            ask=ask,
+            poll_s=0.01,
+            unattended=unattended,
+            **extra,
+        )
+        return session, cerbo
+
+    return build
+
+
 @dataclass
 class FakePart:
     """Was ``fake_part`` in ``verify_part2`` ersetzt und beobachtet.
 
-    Der Teil EVCS und der Teil Tesla liefern ``findings`` oder werfen ``raise_in_step``; vorher
+    Die Teile EVCS, Tesla und Victron liefern ``findings`` oder werfen ``raise_in_step``; vorher
     läuft ``before`` mit der Sitzung (etwa um Werte zu schreiben). ``restored`` sagt, ob
     ``restore`` lief, ``restore_timeouts`` nennt die Fristen, mit denen es lief, ``calls`` nennt
     ``restore`` und ``stop`` in der Reihenfolge ihrer Aufrufe; ``raise_in_restore`` bricht das
     Wiederherstellen gleich zu Beginn ab. ``sessions`` sind die gebauten Sitzungen mit ihrer
     EVCS, ``ask``, ``unattended`` und ``probe`` das, was ``main`` übergab, ``tesla_calls``
-    Fahrzeug und ``asleep_check`` jedes Aufrufs des Teils Tesla.
+    Fahrzeug und ``asleep_check`` jedes Aufrufs des Teils Tesla, ``victron_timings`` die Fristen
+    jedes Aufrufs des Teils Victron.
     """
 
     raise_in_step: type[BaseException] | None = None
@@ -403,11 +607,12 @@ class FakePart:
     probe: Callable[[], Awaitable[list[Finding]]] | None = None
     restore_timeouts: list[float | None] = field(default_factory=list)
     tesla_calls: list[tuple[str, bool]] = field(default_factory=list)
+    victron_timings: list[VictronTimings] = field(default_factory=list)
 
 
 @pytest.fixture
 def fake_part(monkeypatch: pytest.MonkeyPatch, evcs_session) -> FakePart:
-    """Ersetzt ``build_session`` (Sitzung mit ``FakeEvcs``), ``run_evcs`` und ``run_tesla``.
+    """Ersetzt ``build_session`` (Sitzung mit ``FakeEvcs``) und die Teile EVCS, Tesla und Victron.
 
     Setzt dazu gültige Secrets in der Umgebung, ohne Tessie-Token. Die Sitzung entsteht aus der
     Konfiguration, die ``main`` geladen hat.
@@ -478,7 +683,14 @@ def fake_part(monkeypatch: pytest.MonkeyPatch, evcs_session) -> FakePart:
         fake.tesla_calls.append((key, asleep_check))
         return await run_part(session)
 
+    async def run_victron(
+        session: Part2Session, cfg: Config, *, timings: VictronTimings = VICTRON_TIMINGS
+    ) -> list[Finding]:
+        fake.victron_timings.append(timings)
+        return await run_part(session)
+
     monkeypatch.setattr(verify_part2, "build_session", build_session)
     monkeypatch.setattr(verify_part2, "run_evcs", run_evcs)
     monkeypatch.setattr(verify_part2, "run_tesla", run_tesla)
+    monkeypatch.setattr(verify_part2, "run_victron", run_victron)
     return fake

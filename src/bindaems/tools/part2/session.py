@@ -24,6 +24,10 @@ Betreiber (Plan 2b, Präzisierung 11). Die Sitzung startet dafür die echten Ada
   die vorgefundenen Werte in umgekehrter Reihenfolge wieder her, auch nach Strg+C. Ein Wert, der
   schon wieder steht, wird nicht noch einmal geschrieben. Auch beim Wiederherstellen schreibt sie
   nur Werte, die die Regeln 1–3 unverändert durchlassen.
+- Persistente Einstellungen (Entladegrenze, Min-SOC) sind Flash am Cerbo: Die Sitzung sendet sie je
+  Lauf höchstens ``MAX_PERSISTENT_WRITES``-mal, das Wiederherstellen eingeschlossen. Danach
+  verweigert sie das Schreiben, ohne zu senden. Der Betreiber muss einen Wert, der so stehen bleibt,
+  von Hand zurückstellen; das Wiederherstellen sagt es einmal als Befund.
 
 Die Teile halten jeden Befund mit ``record`` fest, sobald er feststeht. So nennt der Bericht nach
 einem Abbruch die Schritte bis dahin.
@@ -70,6 +74,10 @@ from bindaems.tools.verify_checks import Finding
 
 RESTORE_S: Final = 15.0  # Frist je wiederherzustellendem Wert, vom Senden bis zur Bestätigung
 RESEND_S: Final = 5.0  # ohne Bestätigung geht derselbe Wert nach so vielen Sekunden noch einmal
+MAX_PERSISTENT_WRITES: Final = 4  # persistente Schreibzugriffe je Lauf, alle Arten zusammen
+PERSISTENT_LIMIT: Final = (
+    f"nicht gesendet: höchstens {MAX_PERSISTENT_WRITES} persistente Schreibzugriffe je Lauf."
+)
 SKIPPED_UNATTENDED: Final = "übersprungen (--yes)"  # Schritt mit Handgriff, aber niemand da
 UNKNOWN_ORIGINAL: Final = "Ausgangswert unbekannt; er ließe sich nicht wiederherstellen."
 STALE_AFTER_QUESTION: Final = "Fahrzeugdaten nach der Rückfrage nicht aktuell."
@@ -193,7 +201,8 @@ class Part2Session:
         self._originals: dict[_Key, CommandValue] = {}
         self._sent: dict[_Key, CommandValue] = {}  # zuletzt angenommener Auftrag
         self._confirmed: dict[_Key, CommandValue] = {}  # zuletzt bestätigter Wert
-        self._unrestorable: set[_Key] = set()  # außerhalb der Grenzen, schon gemeldet
+        self._unrestorable: set[_Key] = set()  # nicht wiederherstellbar, schon gemeldet
+        self._persistent_writes = 0  # angenommene Aufträge für persistente Arten in diesem Lauf
         self._answered: datetime | None = (
             None  # Zeit der letzten Antwort, nach der Uhr des Speichers
         )
@@ -306,6 +315,18 @@ class Part2Session:
                 return None
             await asyncio.sleep(min(self._poll_s, remaining))
 
+    async def observe(self, duration_s: float) -> list[Snapshot]:
+        """Sammelt den Zustand über ``duration_s``: einmal sofort, dann im Abstand ``poll_s``.
+
+        Der letzte Zustand entsteht nach Ablauf der Zeit. Mit ``duration_s`` 0 ist es einer.
+        """
+        started = self.monotonic()
+        snapshots = [self.snapshot()]
+        while (remaining := duration_s - (self.monotonic() - started)) > 0:
+            await asyncio.sleep(min(self._poll_s, remaining))
+            snapshots.append(self.snapshot())
+        return snapshots
+
     async def set_and_confirm(
         self, actuator: str, kind: CommandKind, value: CommandValue, timeout_s: float
     ) -> float | None:
@@ -319,7 +340,9 @@ class Part2Session:
         verloren sein). Vor jedem erneuten Senden liest sie das Ergebnis: Erneut gesendet wird nur,
         solange es offen ist und der Aktor einen neuen Auftrag annimmt; der Tesla nimmt keinen an,
         solange sein Befehl läuft. Persistente Einstellungen (Entladegrenze, Min-SOC) gehen je
-        Aufruf höchstens einmal hinaus. An einen Aktor, der nicht steuerbar ist, geht nie etwas.
+        Aufruf höchstens einmal hinaus und je Lauf höchstens ``MAX_PERSISTENT_WRITES``-mal; danach
+        endet der Aufruf sofort mit ``PERSISTENT_LIMIT`` als Grund. An einen Aktor, der nicht
+        steuerbar ist, geht nie etwas.
 
         Ergebnis sind die Sekunden vom ersten Senden bis zur Bestätigung, sonst ``None``; dann
         nennt ``failure`` den Grund: ging nichts hinaus, warum (Werte nach der Rückfrage nicht
@@ -334,6 +357,9 @@ class Part2Session:
         device = self._checked(actuator, kind, value)
         key = (actuator, kind)
         self.failure = None
+        if self._budget_used_up(kind):
+            self.failure = PERSISTENT_LIMIT
+            return None
         if not await self.fresh_after_question(actuator, timeout_s):
             self.failure = STALE_AFTER_QUESTION
             return None
@@ -420,6 +446,10 @@ class Part2Session:
             raise ValueError(f"{spec.label}: {value!r} für „{kind}“ nicht zulässig: {problems}")
         return device
 
+    def _budget_used_up(self, kind: CommandKind) -> bool:
+        """Wäre ein Auftrag dieser Art der fünfte persistente Schreibzugriff dieses Laufs?"""
+        return kind in PERSISTENT_KINDS and self._persistent_writes >= MAX_PERSISTENT_WRITES
+
     def _resend_due(self, kind: CommandKind, since_last_s: float) -> bool:
         """Ist es Zeit, denselben Wert erneut zu senden? Nie bei persistenten Einstellungen."""
         return kind not in PERSISTENT_KINDS and since_last_s >= self._resend_s
@@ -442,6 +472,8 @@ class Part2Session:
         if first:
             self._originals[key] = present[kind]
         self._sent[key] = value
+        if kind in PERSISTENT_KINDS:
+            self._persistent_writes += 1
         return None
 
     def _in_place(self, key: _Key, original: CommandValue) -> bool:
@@ -476,6 +508,9 @@ class Part2Session:
                 self._unrestorable.add(key)
                 detail = f"Ausgangswert außerhalb der Grenzen, nicht geschrieben: {problems}"
                 return Finding(item, title, "fail", detail)
+            if self._budget_used_up(kind):  # der Wert bliebe verstellt: einmal melden genügt
+                self._unrestorable.add(key)
+                return Finding(item, title, "fail", PERSISTENT_LIMIT)
             waited = await self.set_and_confirm(actuator, kind, original, timeout_s)
         except Exception as exc:  # ein Wert, der sich nicht herstellen lässt, ist ein Befund
             return Finding(item, title, "fail", f"{type(exc).__name__}: {exc}")
