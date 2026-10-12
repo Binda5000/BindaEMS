@@ -12,7 +12,7 @@ import pytest
 from fastapi.testclient import TestClient
 from pydantic import SecretStr
 from structlog.testing import capture_logs
-from tests.helpers import T0, FakeSink, run_until, snap
+from tests.helpers import INTENT_CHARGING_DEFAULTS, T0, FakeSink, run_until, snap
 from tests.integration.conftest import TOKEN
 from tests.integration.plant import Plant
 from tests.unit.core.adapters.conftest import FakeTransport, P
@@ -397,7 +397,15 @@ async def test_health_reports_intent_live_actuator_and_watchdog(runtime_env) -> 
     rt.submit_intent(Intent(version=2, control=True, actuators={"wallbox.evcs": ActuatorMode.LIVE}))
     run(rt, clock, 32)  # Zähler 1 bei 30 s, sein Echo bei 31 s
     health = rt.health()
-    assert health.intent == {"version": 2, "control": True, "actuators": {"wallbox.evcs": "live"}}
+    assert (
+        health.intent
+        == {
+            "version": 2,
+            "control": True,
+            "actuators": {"wallbox.evcs": "live"},
+        }
+        | INTENT_CHARGING_DEFAULTS
+    )
     assert health.actuators[1] == {
         "id": "wallbox.evcs",
         "label": "EVCS „evcs“",

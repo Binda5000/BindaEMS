@@ -273,7 +273,12 @@ class CoreRuntime:
         self._needs_watchdog = frozenset(
             actuator for actuator, spec in self.limits.actuators.items() if spec.needs_watchdog
         )
-        self.intents = IntentStore(cfg.core.data_dir / "intent.json", self.limits)
+        self.intents = IntentStore(
+            cfg.core.data_dir / "intent.json",
+            self.limits,
+            vehicles={key: vehicle.name for key, vehicle in cfg.vehicles.items()},
+            wallboxes=list(cfg.wallboxes),
+        )
         self.intents.load()
         self.locks = LockManager(cfg.safety.lock_release_s)
         self.operating = OperatingStateMachine()

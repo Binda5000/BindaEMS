@@ -75,3 +75,10 @@ EMPTY_DERIVED = Derived(
     phase_import_a={},
     balance_residual_w=None,
 )
+
+# Die Felder der Absicht für die Laderegelung im Standard, so wie JSON-Antwort und Datei sie zeigen
+INTENT_CHARGING_DEFAULTS: dict[str, Any] = {
+    "vehicles": {},
+    "priority": None,
+    "surplus_priority": {"kind": "battery_until_soc", "soc_pct": 30.0},
+}

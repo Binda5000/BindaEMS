@@ -131,10 +131,15 @@ def watchdog_to_json(
 
 
 def _intent_status(reply: IntentReply) -> int:
-    """200 für eine angenommene (auch geklemmte) Absicht, 422 für unbekannte Aktoren, sonst 409."""
+    """200 für eine angenommene (auch geklemmte) Absicht, 422 für ungültigen Inhalt, sonst 409.
+
+    Ungültig sind unbekannte Aktoren (``unknown_actuator``) sowie unbekannte Fahrzeuge oder
+    Wallboxen, eine Wallbox bei mehreren Fahrzeugen und eine unvollständige Priorität
+    (``invalid``).
+    """
     if reply.result != "rejected":
         return status.HTTP_200_OK
-    if reply.rejection == "unknown_actuator":
+    if reply.rejection in ("unknown_actuator", "invalid"):
         return HTTP_UNPROCESSABLE
     return status.HTTP_409_CONFLICT
 

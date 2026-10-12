@@ -5,7 +5,7 @@ import pytest
 from fastapi.testclient import TestClient
 from pydantic import SecretStr
 from structlog.testing import capture_logs
-from tests.helpers import FakeSink
+from tests.helpers import INTENT_CHARGING_DEFAULTS, FakeSink
 from tests.integration.conftest import TOKEN
 
 from bindaems.core.__main__ import _run, main
@@ -303,11 +303,51 @@ def test_intent_over_the_api_is_clamped_kept_and_saved_under_the_data_dir(
     )
     clamped = {"version": 3, "control": True, "actuators": {"wallbox.evcs": "dry_run"}}
     assert rt.intent() == Intent.model_validate(clamped)
-    assert client.get("/v1/intent", headers=auth).json() == {"intent": clamped}
+    full = clamped | INTENT_CHARGING_DEFAULTS  # die Antwort und die Datei nennen auch den Standard
+    assert client.get("/v1/intent", headers=auth).json() == {"intent": full}
     assert read_json(tmp_path / "core" / "intent.json") == {
-        "intent": clamped,
+        "intent": full,
         "accepted_at": clock.now().isoformat(),
     }
+
+
+def test_intent_store_knows_the_vehicles_and_wallboxes_of_the_config(runtime_env) -> None:
+    rt, _, _ = runtime_env()
+    client = TestClient(create_api(rt, SecretStr(TOKEN)))
+    auth = {"Authorization": f"Bearer {TOKEN}"}
+    unknown = {"version": 1, "vehicles": {"golf": {}, "tesla": {"wallbox": "garage"}}}
+    reply = client.put("/v1/intent", json=unknown, headers=auth)
+    assert (reply.status_code, reply.json()) == (
+        422,
+        {
+            "result": "rejected",
+            "version": None,
+            "details": ["Unbekanntes Fahrzeug „golf“.", "Unbekannte Wallbox „garage“ für „tesla“."],
+        },
+    )
+    # Tesla und e-Golf sowie die Wallboxen evcs und twc stehen in der Beispielkonfiguration; die
+    # Hinweise zur Klemmung folgen der Reihenfolge der Fahrzeuge dort, nicht der des Aufrufs
+    far = "2026-10-09T10:00:00Z"  # 24 h nach dem Start der Uhr
+    known = {
+        "version": 1,
+        "vehicles": {
+            "egolf": {"boost_until": far, "wallbox": "twc"},
+            "tesla": {"boost_until": far},
+        },
+        "priority": ["egolf", "tesla"],
+    }
+    reply = client.put("/v1/intent", json=known, headers=auth)
+    assert (reply.status_code, reply.json()) == (
+        200,
+        {
+            "result": "clamped",
+            "version": 1,
+            "details": [
+                "Tesla Model 3: Boost auf 12 h begrenzt, bis 00:00.",
+                "e-Golf: Boost auf 12 h begrenzt, bis 00:00.",
+            ],
+        },
+    )
 
 
 def test_saved_intent_is_loaded_when_the_runtime_starts(runtime_env, tmp_path) -> None:

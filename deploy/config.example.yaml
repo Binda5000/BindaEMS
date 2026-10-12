@@ -11,6 +11,7 @@ grid:
   voltage_nominal_v: 230
   fuse_a: 35            # Hausanschlusssicherung je Phase in A
   fuse_margin_a: 2      # Sicherheitsabstand in A
+  import_limit_a: 20    # Importlimit je Phase in A: Peak Shaving am Cerbo, wirkt nur mit dem Multi auf „Ein“
 
 battery:
   usable_kwh: 30
@@ -82,6 +83,9 @@ vehicles:
     tessie: {vin: 5YJ3E7EB0MF000000}
     # Befehlslimits für Tessie (Spec 6.5)
     commands: {current_interval_s: 90, current_step_a: 2, per_hour: 20, start_stop_per_hour: 6}
+    # Wecken, nur zum Starten: Mindestabstand zweier Weckvorgänge in s und Weckvorgänge je
+    # Kalendertag (Wiener Zeit)
+    wake: {interval_s: 1800, per_day: 6}
   egolf:
     name: e-Golf
     usable_kwh: 38.6
@@ -129,6 +133,18 @@ app:
 # Freigabe einer Sperre nach so vielen Sekunden ohne Ursache (Spec 7.9). So lange besteht auch der
 # Alarm nach einer fremden Änderung von EVCS-Strom, Override oder Tesla-Strom.
 safety: {lock_release_s: 60}
+
+# Laderegelung: Parameter der Lademodi, keine harten Grenzen (die stehen unter grid, battery usw.).
+control:
+  import_margin_a: 1        # Abstand zum Importlimit in A für PV-Überschuss und Min+PV
+  surplus_margin_w: 100     # Marge im Überschuss in W
+  start_after_s: 120        # so lange muss der Überschuss für einen Start reichen
+  stop_after_s: 300         # so lange darunter bis zum Stopp
+  min_on_s: 600             # Mindestlaufzeit nach einem Start
+  min_off_s: 600            # Mindestpause nach einem Stopp
+  reserve_guard_pct: 5      # Abstand über der USV-Reserve in % SOC; darunter folgen auch Sofort und Boost dem Importlimit
+  tesla_average_s: 90       # gleitendes Mittel für den Tesla-Strom
+  tesla_caution_s: 60       # Fenster der vorsichtigen Zuteilung an den Tesla
 
 # Ablage des core (Volume core-data): intent.json, write_budget.json, rate_limits.json und das
 # Entscheidungslog decisions/ (Tagesdateien, höchstens 7 Tage und 50 MB).

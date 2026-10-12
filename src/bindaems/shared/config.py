@@ -53,6 +53,8 @@ class GridConfig(_Model):
     voltage_nominal_v: Annotated[float, Field(gt=0)] = 230.0
     fuse_a: Annotated[float, Field(gt=0, le=200)]
     fuse_margin_a: Annotated[float, Field(ge=0)] = 2.0
+    # Importlimit je Phase in A: Peak Shaving am Cerbo (Spec 8.1), wirkt nur mit dem Multi auf „Ein“
+    import_limit_a: Annotated[float, Field(gt=0)] = 20.0
     # optionale maximale Bezugsleistung in kW (Spec 8.2)
     max_import_kw: Annotated[float, Field(gt=0)] | None = None
 
@@ -60,6 +62,12 @@ class GridConfig(_Model):
     def _margin_below_fuse(self) -> Self:
         if self.fuse_margin_a >= self.fuse_a:
             raise ValueError("fuse_margin_a muss kleiner als fuse_a sein")
+        return self
+
+    @model_validator(mode="after")
+    def _import_limit_below_fuse_margin(self) -> Self:
+        if self.import_limit_a >= self.fuse_a - self.fuse_margin_a:
+            raise ValueError("import_limit_a muss unter fuse_a − fuse_margin_a liegen")
         return self
 
 
@@ -187,6 +195,17 @@ class VehicleCommandLimits(_Model):
         return self
 
 
+class WakeConfig(_Model):
+    """Weckregeln eines Fahrzeugs mit Tessie (Plan 2c-1, Design 7.1).
+
+    Geweckt wird nur zum Starten: höchstens alle ``interval_s`` Sekunden und höchstens
+    ``per_day``-mal je Kalendertag (Wiener Zeit).
+    """
+
+    interval_s: Annotated[float, Field(ge=0)] = 1800.0
+    per_day: Annotated[int, Field(ge=0)] = 6
+
+
 class VehicleConfig(_Model):
     name: str
     usable_kwh: Annotated[float, Field(gt=0)]
@@ -197,6 +216,7 @@ class VehicleConfig(_Model):
     live_allowed: bool = False
     tessie: TessieVehicle | None = None
     commands: VehicleCommandLimits = Field(default_factory=VehicleCommandLimits)
+    wake: WakeConfig = Field(default_factory=WakeConfig)
     soc_entity: str | None = None
     home_radius_m: Annotated[float, Field(gt=0)] = 150.0
 
@@ -295,6 +315,34 @@ class SafetyConfig(_Model):
     lock_release_s: Annotated[float, Field(gt=0, le=3600)] = 60.0
 
 
+class ControlConfig(_Model):
+    """Parameter der Laderegelung (Plan 2c-1, Design 3.2), keine harten Grenzen.
+
+    Die Safety-Schicht prüft weiter gegen ``grid.fuse_a`` und ``grid.fuse_margin_a``.
+
+    - ``import_margin_a``: Abstand zum Importlimit (``grid.import_limit_a``) für PV-Überschuss und
+      Min+PV in A
+    - ``surplus_margin_w``: Marge im Überschuss in W (Spec 7.5)
+    - ``start_after_s``: So lange muss der Überschuss für einen Start reichen.
+    - ``stop_after_s``: So lange liegt er darunter bis zum Stopp.
+    - ``min_on_s``, ``min_off_s``: Mindestlaufzeit nach einem Start, Mindestpause nach einem Stopp
+    - ``reserve_guard_pct``: Abstand über der USV-Reserve in Prozentpunkten SOC; darunter richten
+      sich auch Sofort und Boost am Importlimit aus
+    - ``tesla_average_s``: gleitendes Mittel für den Tesla-Strom
+    - ``tesla_caution_s``: Fenster der vorsichtigen Zuteilung an den Tesla (Spec 7.3)
+    """
+
+    import_margin_a: Annotated[float, Field(ge=0)] = 1.0
+    surplus_margin_w: Annotated[float, Field(ge=0)] = 100.0
+    start_after_s: Annotated[float, Field(ge=0)] = 120.0
+    stop_after_s: Annotated[float, Field(ge=0)] = 300.0
+    min_on_s: Annotated[float, Field(ge=0)] = 600.0
+    min_off_s: Annotated[float, Field(ge=0)] = 600.0
+    reserve_guard_pct: Annotated[float, Field(ge=0, le=100)] = 5.0
+    tesla_average_s: Annotated[float, Field(gt=0)] = 90.0
+    tesla_caution_s: Annotated[float, Field(gt=0)] = 60.0
+
+
 class CoreConfig(_Model):
     """ems-core: Datenablage für den persistenten Zustand der Steuerung."""
 
@@ -316,6 +364,7 @@ class Config(_Model):
     core_api: CoreApiConfig = Field(default_factory=CoreApiConfig)
     app: AppConfig = Field(default_factory=AppConfig)
     safety: SafetyConfig = Field(default_factory=SafetyConfig)
+    control: ControlConfig = Field(default_factory=ControlConfig)
     core: CoreConfig = Field(default_factory=CoreConfig)
 
     @model_validator(mode="after")
@@ -334,6 +383,12 @@ class Config(_Model):
             self.wallboxes
         ):
             raise ValueError("wallbox_priority muss jede Wallbox genau einmal enthalten")
+        return self
+
+    @model_validator(mode="after")
+    def _import_margin_below_import_limit(self) -> Self:
+        if self.control.import_margin_a >= self.grid.import_limit_a:
+            raise ValueError("control.import_margin_a muss kleiner als grid.import_limit_a sein")
         return self
 
     @model_validator(mode="after")

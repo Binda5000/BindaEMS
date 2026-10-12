@@ -4,6 +4,7 @@
     "voltage_nominal_v": 230.0,
     "fuse_a": 35.0,
     "fuse_margin_a": 2.0,
+    "import_limit_a": 20.0,
     "max_import_kw": null
   },
   "battery": {

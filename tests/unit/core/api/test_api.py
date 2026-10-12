@@ -10,13 +10,13 @@ import pytest
 from fastapi.testclient import TestClient
 from pydantic import SecretStr, ValidationError
 from starlette.websockets import WebSocketDisconnect
-from tests.helpers import EMPTY_DERIVED, T0, snap
+from tests.helpers import EMPTY_DERIVED, INTENT_CHARGING_DEFAULTS, T0, snap
 from tests.unit.shared.test_decisions import decision
 
 from bindaems.core.api.app import HealthReport, create_api, snapshot_to_json
 from bindaems.core.control.intent import IntentReply
 from bindaems.core.watchdog_client.status import WATCHDOG_VERSION
-from bindaems.shared.control import Intent
+from bindaems.shared.control import ChargeMode, Intent, VehicleIntent
 from bindaems.shared.decisions import Decision, decision_to_json
 
 TOKEN = "x" * 32
@@ -210,12 +210,43 @@ def test_put_intent_unknown_actuator_is_422(view_client) -> None:
     assert (r.status_code, r.json()["details"]) == (422, ["Unbekannter Aktor „wallbox.twc“."])
 
 
+def test_invalid_charging_intent_is_422(view_client) -> None:
+    client, view = view_client
+    details = (
+        "Unbekanntes Fahrzeug „golf“.",
+        "Unbekannte Wallbox „garage“ für „tesla“.",
+        "Die Priorität muss jedes Fahrzeug genau einmal nennen.",
+    )
+    view.reply = IntentReply("rejected", None, details, "invalid")
+    body = {
+        "version": 1,
+        "vehicles": {"golf": {}, "tesla": {"mode": "now", "wallbox": "garage"}},
+        "priority": ["tesla"],
+    }
+    r = client.put("/v1/intent", json=body, headers=H)
+    assert (r.status_code, r.json()) == (
+        422,
+        {"result": "rejected", "version": None, "details": list(details)},
+    )
+    # der Body mit den Feldern der Laderegelung kommt unverändert beim core an
+    assert view.submitted == [
+        Intent(
+            version=1,
+            vehicles={
+                "golf": VehicleIntent(),
+                "tesla": VehicleIntent(mode=ChargeMode.NOW, wallbox="garage"),
+            },
+            priority=["tesla"],
+        )
+    ]
+
+
 def test_get_intent(view_client) -> None:
     client, view = view_client
     view.current = Intent(version=3)
     assert client.get("/v1/intent").status_code == 401
     assert client.get("/v1/intent", headers=H).json() == {
-        "intent": {"version": 3, "control": False, "actuators": {}}
+        "intent": {"version": 3, "control": False, "actuators": {}} | INTENT_CHARGING_DEFAULTS
     }
 
 
@@ -261,8 +292,19 @@ def test_put_intent_requires_token(view_client) -> None:
         {"control": True},
         {"version": 1, "actuators": {"victron": "an"}},
         {"version": 1, "unbekannt": True},
+        {"version": 1, "vehicles": {"tesla": {"mode": "turbo"}}},
+        {"version": 1, "vehicles": {"tesla": {"boost_until": "2026-10-12T18:00:00"}}},
+        {"version": 1, "surplus_priority": {"kind": "battery_until_soc", "soc_pct": 101}},
     ],
-    ids=["version-0", "ohne-version", "ungueltiger-modus", "fremdfeld"],
+    ids=[
+        "version-0",
+        "ohne-version",
+        "ungueltiger-modus",
+        "fremdfeld",
+        "lademodus",
+        "boost-ohne-zeitzone",
+        "vorrang-soc",
+    ],
 )
 def test_put_intent_with_invalid_body_is_422_and_not_submitted(view_client, body) -> None:
     client, view = view_client

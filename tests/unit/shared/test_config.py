@@ -6,7 +6,16 @@ import pytest
 import yaml
 from pydantic import ValidationError
 
-from bindaems.shared.config import ConfigError, VehicleCommandLimits, load_config, load_secrets
+from bindaems.shared.config import (
+    Config,
+    ConfigError,
+    ControlConfig,
+    GridConfig,
+    VehicleCommandLimits,
+    WakeConfig,
+    load_config,
+    load_secrets,
+)
 
 EXAMPLE = Path("deploy/config.example.yaml")
 
@@ -201,3 +210,114 @@ def test_max_import_must_be_positive(tmp_path: Path) -> None:
     p = write_cfg(tmp_path, lambda d: d["grid"].update(max_import_kw=0))
     with pytest.raises(ConfigError, match=r"grid\.max_import_kw"):
         load_config(p)
+
+
+# Laderegelung (Plan 2c-1): Importlimit, Abschnitt control und Weckregeln
+
+
+def test_charging_defaults(cfg) -> None:
+    assert cfg.grid.import_limit_a == 20.0
+    assert cfg.control == ControlConfig(
+        import_margin_a=1.0,
+        surplus_margin_w=100.0,
+        start_after_s=120.0,
+        stop_after_s=300.0,
+        min_on_s=600.0,
+        min_off_s=600.0,
+        reserve_guard_pct=5.0,
+        tesla_average_s=90.0,
+        tesla_caution_s=60.0,
+    )
+    assert cfg.vehicles["tesla"].wake == WakeConfig(interval_s=1800.0, per_day=6)
+
+
+def test_charging_sections_are_optional(tmp_path: Path, cfg) -> None:
+    def drop(d: dict[str, Any]) -> None:
+        del d["control"], d["grid"]["import_limit_a"], d["vehicles"]["tesla"]["wake"]
+
+    loaded = load_config(write_cfg(tmp_path, drop))
+    # fehlen die Angaben, gelten dieselben Werte, die das Beispiel nennt
+    assert loaded.grid.import_limit_a == cfg.grid.import_limit_a
+    assert loaded.control == ControlConfig() == cfg.control
+    assert loaded.vehicles["tesla"].wake == WakeConfig() == cfg.vehicles["tesla"].wake
+    assert loaded.vehicles["egolf"].wake == WakeConfig()
+
+
+def test_import_limit_must_stay_below_the_fuse_margin() -> None:
+    with pytest.raises(
+        ValidationError, match="import_limit_a muss unter fuse_a − fuse_margin_a liegen"
+    ):
+        GridConfig(fuse_a=35, fuse_margin_a=2, import_limit_a=33)
+    assert GridConfig(fuse_a=35, fuse_margin_a=2, import_limit_a=32.9).import_limit_a == 32.9
+
+
+def test_default_import_limit_needs_a_fuse_above_it() -> None:
+    # mit einer kleinen Sicherung muss das Importlimit ausdrücklich darunter gesetzt werden
+    with pytest.raises(ValidationError, match="import_limit_a muss unter"):
+        GridConfig(fuse_a=20, fuse_margin_a=2)
+    assert GridConfig(fuse_a=20, fuse_margin_a=2, import_limit_a=17).import_limit_a == 17
+
+
+def test_import_margin_must_stay_below_the_import_limit(cfg) -> None:
+    data = cfg.model_dump() | {"control": {"import_margin_a": 20}}
+    with pytest.raises(
+        ValidationError,
+        match=r"control\.import_margin_a muss kleiner als grid\.import_limit_a sein",
+    ):
+        Config.model_validate(data)
+    just_below = cfg.model_dump() | {"control": {"import_margin_a": 19.9}}
+    assert Config.model_validate(just_below).control.import_margin_a == 19.9
+
+
+@pytest.mark.parametrize(
+    ("section", "field", "value"),
+    [
+        ("grid", "import_limit_a", 0),
+        ("control", "import_margin_a", -0.1),
+        ("control", "surplus_margin_w", -1),
+        ("control", "start_after_s", -1),
+        ("control", "stop_after_s", -1),
+        ("control", "min_on_s", -1),
+        ("control", "min_off_s", -1),
+        ("control", "reserve_guard_pct", -1),
+        ("control", "reserve_guard_pct", 100.1),
+        ("control", "tesla_average_s", 0),
+        ("control", "tesla_caution_s", 0),
+        ("control", "unbekannt", 1),
+    ],
+)
+def test_charging_values_are_bounded(
+    tmp_path: Path, section: str, field: str, value: float
+) -> None:
+    p = write_cfg(tmp_path, lambda d: d[section].update({field: value}))
+    with pytest.raises(ConfigError, match=rf"{section}\.{field}"):
+        load_config(p)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [("interval_s", -1), ("per_day", -1), ("per_day", 1.5), ("unbekannt", 1)],
+)
+def test_wake_values_are_bounded(tmp_path: Path, field: str, value: float) -> None:
+    p = write_cfg(tmp_path, lambda d: d["vehicles"]["tesla"]["wake"].update({field: value}))
+    with pytest.raises(ConfigError, match=rf"vehicles\.tesla\.wake\.{field}"):
+        load_config(p)
+
+
+def test_charging_values_may_be_zero(tmp_path: Path) -> None:
+    # 0 heißt: keine Verzögerung bzw. kein Weckvorgang; reserve_guard_pct reicht bis 100
+    def zeros(d: dict[str, Any]) -> None:
+        d["control"].update(
+            import_margin_a=0,
+            surplus_margin_w=0,
+            start_after_s=0,
+            stop_after_s=0,
+            min_on_s=0,
+            min_off_s=0,
+            reserve_guard_pct=100,
+        )
+        d["vehicles"]["tesla"]["wake"].update(interval_s=0, per_day=0)
+
+    loaded = load_config(write_cfg(tmp_path, zeros))
+    assert (loaded.control.start_after_s, loaded.control.reserve_guard_pct) == (0.0, 100.0)
+    assert loaded.vehicles["tesla"].wake == WakeConfig(interval_s=0.0, per_day=0)

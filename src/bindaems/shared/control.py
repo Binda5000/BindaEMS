@@ -1,8 +1,8 @@
 """Steuerungstypen, die core und app gemeinsam brauchen (Spec 11.1).
 
 Aktor-IDs, Befehlsarten, ``Command``, Betriebsarten, Betriebszustände und die Absicht
-(``Intent``). Die Safety-Schicht im core prüft jeden ``Command`` gegen die harten Grenzen
-(Spec 8.3).
+(``Intent``) samt den Lademodi je Fahrzeug. Die Safety-Schicht im core prüft jeden ``Command``
+gegen die harten Grenzen (Spec 8.3).
 """
 
 from __future__ import annotations
@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import Annotated, Final
 
-from pydantic import Field
+from pydantic import AwareDatetime, Field
 
 from bindaems.shared.config import _Model
 
@@ -51,7 +51,8 @@ class Command:
     """Ein Befehl an einen Aktor, so wie die Regelung ihn anfordert.
 
     ``urgent`` markiert einen Befehl Richtung sicherer Zustand (Spec 8.3). ``reasons`` nennt die
-    Gründe der Regelung als Codes für das Entscheidungslog.
+    Gründe der Regelung als Codes für das Entscheidungslog. ``wake`` ist ein Start mit
+    Weckerlaubnis (Plan 2c-1, Design 7.1) und wirkt nur bei ``charging`` mit ``True``.
     """
 
     actuator: str
@@ -59,6 +60,7 @@ class Command:
     value: CommandValue
     urgent: bool = False
     reasons: tuple[str, ...] = ()
+    wake: bool = False
 
 
 class ActuatorMode(StrEnum):
@@ -78,12 +80,58 @@ class OperatingState(StrEnum):
     SAFE = "SAFE"
 
 
-class Intent(_Model):
-    """Absicht der Bedienung (Spec 5.3): Regelbetrieb und Betriebsart je Aktor.
+class ChargeMode(StrEnum):
+    """Lademodus eines Fahrzeugs: PV-Überschuss, Min+PV, Sofort oder Aus (Plan 2c-1, Design 3.1)."""
 
-    ``version`` steigt streng. Ein Aktor, der in ``actuators`` fehlt, läuft im Dry-Run.
+    PV = "pv"
+    MIN_PV = "min_pv"
+    NOW = "now"
+    OFF = "off"
+
+
+class SurplusOrder(StrEnum):
+    """Wer den PV-Überschuss zuerst bekommt: die Autos, der Akku oder der Akku bis zu einem SOC."""
+
+    CARS_FIRST = "cars_first"
+    BATTERY_FIRST = "battery_first"
+    BATTERY_UNTIL_SOC = "battery_until_soc"
+
+
+class SurplusPriority(_Model):
+    """Vorrang beim Überschuss (Spec 7.5); ``soc_pct`` gilt für ``battery_until_soc``."""
+
+    kind: SurplusOrder = SurplusOrder.BATTERY_UNTIL_SOC
+    soc_pct: Annotated[float, Field(ge=0, le=100)] = 30.0
+
+
+class VehicleIntent(_Model):
+    """Absicht für ein Fahrzeug (Plan 2c-1, Design 3.1).
+
+    - ``mode``: der Lademodus; ohne Eintrag in der Absicht lädt ein Fahrzeug im PV-Überschuss
+    - ``boost_until``: Bis dahin lädt das Fahrzeug wie in „Sofort“, längstens bis zum Abstecken.
+      Der core klemmt auf höchstens 12 h nach dem Empfang; ein Zeitpunkt in der Vergangenheit
+      heißt kein Boost.
+    - ``wallbox``: Schlüssel der Wallbox, an der das Fahrzeug hängt; übersteuert die Zuordnung
+      und gilt wie der Boost bis zum Abstecken
+    """
+
+    mode: ChargeMode = ChargeMode.PV
+    boost_until: AwareDatetime | None = None
+    wallbox: str | None = None
+
+
+class Intent(_Model):
+    """Absicht der Bedienung (Spec 5.3): Regelbetrieb, Betriebsart je Aktor und Lademodi.
+
+    ``version`` steigt streng. Ein Aktor, der in ``actuators`` fehlt, läuft im Dry-Run. Für ein
+    Fahrzeug ohne Eintrag in ``vehicles`` gilt ``VehicleIntent()``. ``priority`` nennt die
+    Fahrzeug-Schlüssel in der Reihenfolge, in der sie Überschuss und Strom zugeteilt bekommen;
+    ohne Angabe gilt die Reihenfolge unter ``vehicles`` in ``config.yaml``.
     """
 
     version: Annotated[int, Field(ge=1)]
     control: bool = False
     actuators: dict[str, ActuatorMode] = Field(default_factory=dict)
+    vehicles: dict[str, VehicleIntent] = Field(default_factory=dict)
+    priority: list[str] | None = None
+    surplus_priority: SurplusPriority = Field(default_factory=SurplusPriority)
