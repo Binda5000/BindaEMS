@@ -151,7 +151,10 @@ er auch den Netz-Sollwert-Override auf. Sie fragt deshalb vorher nach. Nach der 
 sie 45 s ohne Heartbeat, damit der Aktionslauf mit allen Wiederholungen zu Ende kommt. Die Zahl
 der fehlgeschlagenen Aktionen (`/LastTripFailures`) liest sie erst, wenn der Watchdog wieder scharf
 ist: Dann ist der Lauf zu Ende, und der Wert ist der Endstand. Die Zeile „Auslösung ohne Heartbeat“
-steht im Bericht trotzdem vor „Wieder scharf“.
+steht im Bericht trotzdem vor „Wieder scharf“. Wird der Watchdog nicht wieder scharf oder endet die
+Probe vorher, kennt sie den Endstand nicht: Die Zeile ist dann eine Warnung, auch bei 0
+fehlgeschlagenen Aktionen, mit dem Zusatz „nicht wieder scharf; Zahl noch nicht der Endstand“ (bei
+einem Abbruch in der Pause „Abbruch vor dem Ende des Aktionslaufs“).
 
 ```bash
 cd /opt/bindaems

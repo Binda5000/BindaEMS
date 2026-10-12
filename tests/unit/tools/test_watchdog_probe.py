@@ -48,6 +48,9 @@ FAST = ProbeTimings(
     rearm_wait_s=2.0,
     release_wait_s=1.0,
 )
+# Zusätze der Zeile „Auslösung ohne Heartbeat“, wenn die Fehlerzahl noch nicht der Endstand ist
+IN_THE_PAUSE = " (Abbruch vor dem Ende des Aktionslaufs)"  # die Probe endete in der Pause
+NOT_REARMED = " (nicht wieder scharf; Zahl noch nicht der Endstand)"
 TITLES = [
     "Watchdog erreichbar",
     "Watchdog-Version",
@@ -378,8 +381,44 @@ async def test_trip_failures_are_read_after_rearming() -> None:
         findings = await run_probe(cerbo, P, FAST)
     trip = next(f for f in findings if f.title == "Auslösung ohne Heartbeat")
     assert "fehlgeschlagene Aktionen 1" in trip.detail
+    assert trip.detail.endswith("fehlgeschlagene Aktionen 1")  # der Endstand, ohne Vorbehalt
     assert [f.title for f in findings] == TITLES  # die Reihenfolge der Zeilen bleibt
     assert [f.status for f in findings] == ["ok", "ok", "ok", "warn", "ok", "ok"]
+
+
+@pytest.mark.parametrize(
+    "make_cerbo",
+    [
+        # Der Endstand (1) erscheint erst beim Wiederscharfwerden, und das dauert 0,5 s.
+        pytest.param(lambda: SimulatedCerbo(failures_after_rearm=1, rearm_s=0.5), id="Endstand"),
+        # Der Aktionslauf hängt in Wiederholungen und läuft noch, wenn die Probe die Zahl liest.
+        pytest.param(
+            lambda: SimulatedCerbo(access=plant(failing_sets=1000), retries=1000, rearm_s=0.5),
+            id="Lauf läuft noch",
+        ),
+    ],
+)
+async def test_failure_count_is_no_all_clear_when_the_watchdog_is_not_rearmed(
+    make_cerbo: Callable[[], SimulatedCerbo],
+) -> None:
+    # Die Wartezeit für „Wieder scharf“ (0,1 s) ist kürzer als das Wiederscharfwerden (0,5 s). Die
+    # Zahl, die die Probe bis dahin gelesen hat (0), ist nicht der Endstand: Die Zeile zur
+    # Auslösung darf nicht „OK, 0“ lauten, sondern ist eine Warnung mit dem Grund.
+    async with make_cerbo() as cerbo:
+        findings = await run_probe(cerbo, P, replace(FAST, rearm_wait_s=0.1))
+    assert [(f.title, f.status) for f in findings] == [
+        ("Watchdog erreichbar", "ok"),
+        ("Watchdog-Version", "ok"),
+        ("Scharf nach Heartbeat", "ok"),
+        ("Auslösung ohne Heartbeat", "warn"),
+        ("Wieder scharf", "fail"),
+        ("Freigabe ohne Auslösung", "ok"),
+    ]
+    assert re.fullmatch(
+        r"ausgelöst nach [12] s, Auslösungen 0 → 1, fehlgeschlagene Aktionen 0"
+        + re.escape(NOT_REARMED),
+        findings[3].detail,
+    )
 
 
 async def test_probe_without_answer_stops_after_first_step() -> None:
@@ -500,7 +539,10 @@ async def test_probe_gives_each_step_its_own_wait() -> None:
     # reichen nicht, die 2 s zum Scharfmachen am Anfang aber schon.
     async with SimulatedCerbo(rearm_s=0.5) as cerbo:
         findings = await run_probe(cerbo, P, replace(FAST, rearm_wait_s=0.1))
-    assert [f.status for f in findings] == ["ok", "ok", "ok", "ok", "fail", "ok"]
+    # Ohne Wiederscharfwerden hat die Probe das Ende des Aktionslaufs nicht gesehen: Die Zeile zur
+    # Auslösung ist eine Warnung, auch wenn sie 0 fehlgeschlagene Aktionen zeigt.
+    assert [f.status for f in findings] == ["ok", "ok", "ok", "warn", "fail", "ok"]
+    assert findings[3].detail.endswith(NOT_REARMED)
     assert findings[4].detail == "nach 0 s nicht scharf (Zustand ausgelöst)"
 
 
@@ -657,6 +699,7 @@ async def test_probe_keeps_the_trip_row_when_the_connection_drops_after_the_trip
         r" \(Abbruch vor dem Ende des Aktionslaufs\)",
         findings[3].detail,
     )
+    assert findings[3].detail.endswith(IN_THE_PAUSE)
     assert cerbo.heartbeats()[-1] == 0
     assert cerbo.state == WAITING
 
@@ -724,12 +767,12 @@ async def test_probe_names_an_internal_error_and_still_releases() -> None:
         ("Watchdog erreichbar", "ok"),
         ("Watchdog-Version", "ok"),
         ("Scharf nach Heartbeat", "ok"),
-        # Der Fehler kommt beim ersten Heartbeat nach der Pause, vor dem Wiederscharfwerden: Die
-        # Zeile bleibt, aber die Zahl der fehlgeschlagenen Aktionen ist noch nicht der Endstand.
+        # Der Fehler kommt beim ersten Heartbeat nach der ganzen Pause, vor dem Wiederscharfwerden:
+        # Die Zeile bleibt, aber die Zahl der fehlgeschlagenen Aktionen ist noch nicht der Endstand.
         ("Auslösung ohne Heartbeat", "warn"),
         ("Interner Fehler der Probe", "fail"),
     ]
-    assert findings[3].detail.endswith("(Abbruch vor dem Ende des Aktionslaufs)")
+    assert findings[3].detail.endswith(NOT_REARMED)  # nicht „Abbruch vor dem Ende des Aktionslaufs“
     assert findings[-1].detail == "RuntimeError: kaputt"
     assert cerbo.heartbeats()[-1] == 0
     assert cerbo.state == WAITING

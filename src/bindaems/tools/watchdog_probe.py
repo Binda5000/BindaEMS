@@ -26,7 +26,10 @@ eine Aktion, die noch auf ihre nächste Wiederholung wartet, kommt nicht mehr zu
 fehlgeschlagenen Aktionen (``/LastTripFailures``) ist erst nach „Wieder scharf“ der Endstand: Der
 Lauf ist dann zu Ende, entweder vollständig oder durch das Wiederscharfwerden abgebrochen. Die
 Zeile „Auslösung ohne Heartbeat“ entsteht darum erst dann, steht im Bericht aber vor „Wieder
-scharf“.
+scharf“. Wird der Watchdog in der Wartezeit nicht wieder scharf oder endet die Probe vorher, hat
+sie das Ende des Laufs nicht gesehen: Die Zeile ist dann höchstens eine Warnung mit dem Grund
+(``NOT_REARMED``, in der Pause ``ABORTED_IN_PAUSE``), auch bei 0 fehlgeschlagenen Aktionen, denn
+die 0 kann der Stand vor dem Ende des Laufs sein.
 
 Bricht die Probe ab, nachdem die Heartbeats liefen (Strg+C, Verbindungsverlust, Fehler), versucht
 sie, den Watchdog mit dem Heartbeat 0 freizugeben: Sonst löste er später unbeaufsichtigt aus oder
@@ -76,6 +79,9 @@ ACTIONS_SLACK_S = 10.0  # Luft nach dem letzten möglichen Versuch des Aktionsla
 WAITING, ARMED, TRIPPED, DISABLED = 0, 1, 2, 3  # Werte von ``/State``
 STATE_NAMES = {WAITING: "wartet", ARMED: "scharf", TRIPPED: "ausgelöst", DISABLED: "deaktiviert"}
 NO_ANSWER = "Keine Antwort von com.victronenergy.bindaems."
+# Zusätze der Zeile „Auslösung ohne Heartbeat“, wenn die Fehlerzahl noch nicht der Endstand ist:
+ABORTED_IN_PAUSE = "Abbruch vor dem Ende des Aktionslaufs"  # die Probe endete in der Pause
+NOT_REARMED = "nicht wieder scharf; Zahl noch nicht der Endstand"  # sie sah ihn nicht wieder scharf
 RELEASE_ATTEMPT_S = 2.0  # so lange versucht die Probe nach einem Abbruch, den Watchdog freizugeben
 UNRELEASED = (
     "Der Watchdog konnte nicht freigegeben werden: Er kann scharf bleiben und später auslösen "
@@ -233,18 +239,21 @@ class _Probe:
         # Mit der Auslösung steht /LastTripFailures auf 0; den Endstand bekommt der Pfad, wenn der
         # Aktionslauf endet. Die Pause ohne Heartbeat lässt den Lauf mit allen Wiederholungen zu
         # Ende laufen: Würde der Watchdog vorher wieder scharf, bräche er ab. Verbindlich ist die
-        # Zahl aber erst, wenn der Watchdog wieder scharf ist, denn dann ist der Lauf zu Ende.
-        # Darum entsteht die Zeile zur Auslösung erst jetzt, steht aber vor „Wieder scharf“.
+        # Zahl aber erst, wenn die Probe den Watchdog wieder scharf gesehen hat, denn dann ist der
+        # Lauf zu Ende. Darum entsteht die Zeile zur Auslösung erst jetzt, steht aber vor „Wieder
+        # scharf“. Sie ist nur dann ohne Vorbehalt, wenn „Wieder scharf“ gelang; sonst – auch bei
+        # einem Fehler oder Abbruch unterwegs – bekommt sie den Grund, der zum Stand passt.
+        note: str | None = ABORTED_IN_PAUSE  # falls die Probe in der Pause endet
         try:
             if elapsed is not None:
                 await self._pause(t.actions_wait_s)
+            note = NOT_REARMED  # falls sie beim Wiederscharfwerden endet
             rearmed = await self._arm("Wieder scharf", t.rearm_wait_s)
         except BaseException:
-            # Abbruch, bevor der Watchdog wieder scharf war: Der Befund zur Auslösung bleibt
-            # erhalten, die Zahl der fehlgeschlagenen Aktionen ist aber noch nicht der Endstand.
-            self._findings.append(self._trip_finding(elapsed, trips_before, final=False))
+            self._findings.append(self._trip_finding(elapsed, trips_before, note=note))
             raise
-        self._findings.append(self._trip_finding(elapsed, trips_before, final=True))
+        note = None if rearmed.status == "ok" else NOT_REARMED
+        self._findings.append(self._trip_finding(elapsed, trips_before, note=note))
         self._findings.append(rearmed)
         self._findings.append(await self._release())
 
@@ -289,7 +298,15 @@ class _Probe:
         """Wartet ``wait_s`` ohne Heartbeat; endet die Verbindung vorher, mit deren Fehler."""
         await self._until(lambda: False, asyncio.get_running_loop().time() + wait_s)
 
-    def _trip_finding(self, elapsed: float | None, trips_before: object, *, final: bool) -> Finding:
+    def _trip_finding(
+        self, elapsed: float | None, trips_before: object, *, note: str | None = None
+    ) -> Finding:
+        """Die Zeile zur Auslösung mit der Fehlerzahl, die ``/LastTripFailures`` jetzt zeigt.
+
+        ``note`` nennt den Grund, warum diese Zahl noch nicht der Endstand ist (``None``: die
+        Probe hat den Watchdog wieder scharf gesehen, der Lauf ist zu Ende). Dann ist die Zeile
+        höchstens eine Warnung, denn eine 0 kann der Stand vor dem Ende des Laufs sein.
+        """
         title = "Auslösung ohne Heartbeat"
         if elapsed is None:
             t = self._timings
@@ -306,8 +323,8 @@ class _Probe:
             f"fehlgeschlagene Aktionen {_count(failures)}"
         )
         status: Status = "ok" if failures == 0 else "warn"  # unbekannt gilt nicht als fehlerfrei
-        if not final:  # die Fehlerzahl ist erst nach „Wieder scharf“ der Endstand
-            detail += " (Abbruch vor dem Ende des Aktionslaufs)"
+        if note is not None:  # die Fehlerzahl ist erst nach „Wieder scharf“ der Endstand
+            detail += f" ({note})"
             status = "warn"
         return Finding(ITEM, title, status, detail)
 
