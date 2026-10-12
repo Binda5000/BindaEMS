@@ -174,18 +174,24 @@ Jeder Schritt ist eine Zeile im Bericht. Vor jedem Schritt, der schreibt, fragt 
     ein und führt die Watchdog-Probe aus; danach muss die EVCS den sicheren Strom haben. Die
     Zeilen der Probe stehen vor diesem Schritt.
 - **`tesla`** (17.2-7): Die Befehle gehen über Tessie, die Wirkung misst das Werkzeug am Wall
-  Connector. Es sendet nur an ein wachendes Auto, das zu Hause angesteckt ist, und weckt es nie.
+  Connector. Es sendet nur an ein waches Auto, das zu Hause angesteckt ist, und weckt es nie.
   - „Tesla bereit“: steuerbar, Ladestrom bekannt und innerhalb der Grenzen.
   - „Ladestrom 10 A“ (falls zwischen Mindest- und Höchststrom) und „Verhalten bei N A“ mit dem
     Mindeststrom `min_a` des Fahrzeugs: Tessie bestätigt den Befehl, dann folgt der Strom am
     Wall Connector.
   - „Laden aus und an“: Der Schütz des Wall Connectors öffnet; danach geht das Laden wieder an.
   - Mit `--schlafend` läuft nur „Schlafendes Auto wird nicht geweckt“: Das Auto muss schon schlafen;
-    10 min lang prüft das Werkzeug, dass der Aktor Befehle verweigert, und sendet nichts.
+    10 min lang prüft das Werkzeug, dass der Aktor Befehle verweigert, und sendet nichts. OK ist der
+    Schritt nur, wenn Tessie zu Beginn und am Ende frisch meldet, dass das Auto schläft; sonst ist
+    er FEHLER „nicht beobachtbar: …“ mit dem Grund (Tessie nicht erreichbar, Wert veraltet).
 - **`victron`** (17.2-1 bis 17.2-4 und 17.2-8): verweigert, solange Dynamic ESS aktiv ist oder ein
-  Netz-Sollwert-Override steht.
-  - „Victron bereit“ (17.2-1): Cerbo verbunden, DESS aus, kein Override.
-  - „Netz-Sollwert-Override“: Override setzen, Wirkung am Netz, mit `null` aufheben.
+  Netz-Sollwert-Override steht. Vor jedem schreibenden Schritt prüft es Dynamic ESS erneut: Geht
+  DESS mitten im Lauf an, ist der Schritt FEHLER, und das Werkzeug schreibt nichts mehr.
+  - „Victron bereit“ (17.2-1): Cerbo verbunden, DESS aus, kein Override, Entladegrenze nicht auf
+    0 W (die hinterlässt etwa ein abgebrochener Lauf; vor dem Test zurücksetzen). Der Befund nennt
+    die vorgefundene Entladegrenze.
+  - „Netz-Sollwert-Override“: Override setzen, Wirkung am Netz, mit `null` aufheben. Ging das
+    Aufheben gar nicht hinaus, nennt der Befund den Sendefehler; über `null` sagt er dann nichts.
   - „Override ohne Timeout“: Der Override bleibt 10 min stehen, ohne dass das Werkzeug ihn auffrischt.
   - „Override nach Neustart des Cerbo“: Du startest den Cerbo neu. Entfällt mit `--yes`.
   - „Zusammenspiel mit dem persistenten Sollwert“: `AcPowerSetPoint` vor und nach den Schritten;
@@ -195,7 +201,7 @@ Jeder Schritt ist eine Zeile im Bericht. Vor jedem Schritt, der schreibt, fragt 
   - „Netzladen“ (17.2-3): Override auf 2000 W (höchstens die Obergrenze für den Netz-Sollwert), der
     Akku lädt aus dem Netz.
   - „Kein Akku ins Auto“ (17.2-4): nur bei ladender EVCS (über 1000 W); der Override entspricht
-    ihrer Leistung, der Akku soll nicht entladen.
+    ihrer Leistung, genau dem Wert, den die Rückfrage nennt. Der Akku soll nicht entladen.
   - „Importlimit“ (17.2-8): Du schaltest eine Last ein, die eine Phase über 20 A bringen würde; das
     Werkzeug beobachtet nur den höchsten Netzstrom. Entfällt mit `--yes`.
 

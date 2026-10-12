@@ -367,6 +367,22 @@ Punkte aufgreifen:
   - Die `inputs` der Entscheidungen enthalten in 2b SOC, Akkuleistung und Netzstrom je Phase;
     Preis, Überschuss, Budget und Plan kommen mit 2c dazu. Weckregeln für den Tesla in den Modi
     Sofort und Geplant kommen ebenfalls mit 2c.
+  - **Vor dem ersten Regelwert:** Die Freigabe 0 erst, wenn für den Aktor kein Schreibvorgang mehr
+    offen ist. Ein Wert der Regelung, der nach der Freigabe noch ankommt, stünde sonst ohne
+    Watchdog.
+  - Das Aufräumen des Entscheidungslogs (`_prune_decisions`) läuft im Zyklus und fällt mit einem
+    gescheiterten Zyklus aus; es gehört in `cycle_once` hinter den Flush.
+  - **Vor der ersten Live-Schaltung:** Der Zähler beginnt in jedem Lauf bei 1, und nach einer
+    bestätigten Freigabe bleiben die eigenen Zähler gemerkt (`HeartbeatClient.recent`). Ein Echo
+    eines früheren Laufs kann so als eigenes gelten. Nach einer bestätigten Freigabe die Zähler
+    vergessen und je Lauf unterscheidbare Startwerte wählen.
+  - In SAFE versucht der core die Sicherwerte auch an einen Tesla, der schläft oder nicht zu Hause
+    ist: Jeder Versuch endet „nicht gesendet“ und erzeugt Entscheidungen, einen Alarm und Einträge
+    im Rate-Limiter.
+  - Setzt der Watchdog bei einer Auslösung Werte, ändern sie sich ohne Schreiben des core. Bei
+    Aktoren, die die Regelung hält, darf das nicht als fremde Änderung zählen.
+  - Nach einem Inselbetrieb bleibt das Laden aus („Laden aus“ des sicheren Zustands); die Regelung
+    muss es danach wieder aufnehmen.
 - **Bedienung (2d):**
   - Die Quittierung von Sperren (Spec 7.9) kommt hier; bisher lösen sie sich nur nach
     `safety.lock_release_s`.
@@ -378,9 +394,12 @@ Punkte aufgreifen:
   - Der LiveFeed der app ignoriert `mode_change`. In 2a reicht die Health-Abfrage alle 10 s.
   - `FakeView` in `tests/integration/test_core_link.py` kennt `intent()`, `submit_intent()` und
     `decisions()` noch nicht.
+  - Entscheidungen tragen die Wanduhr. Springt sie zurück (NTP, Failover), bekommen neue
+    Entscheidungen Zeiten vor dem letzten `since`, und ein Leser, der mit dem `ts` der letzten
+    weiterliest, übersieht sie. Die app braucht dafür einen Abgleich, etwa über die `id`.
 - **Watchdog (vor der Live-Schaltung von Victron):**
-  - Die Probe und der Punkt `evcs` von `verify_part2` verstellen vorher nur den EVCS-Strom. Min-SOC,
-    Entladegrenze und die Override-Aktion (mit `victron.live_allowed`) prüft bisher nur
+  - Nur der Punkt `evcs` von `verify_part2` verstellt vor der Probe etwas, und zwar den EVCS-Strom.
+    Min-SOC, Entladegrenze und die Override-Aktion (mit `victron.live_allowed`) prüft bisher nur
     `/LastTripFailures` zusammen mit dem Log des Cerbo (Betriebshandbuch 14, „Probe“).
   - Vor der Live-Schaltung von Victron auch diese Werte vor der Probe verstellen und prüfen, dass
     die Auslösung sie zurücksetzt.

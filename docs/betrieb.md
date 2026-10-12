@@ -346,8 +346,8 @@ Preise neu von den Quellen, Viertelstunden der letzten 7 Tage aus InfluxDB.
 - Ist ein Victron- oder EVCS-Aktor live, schützt der Watchdog auf dem Cerbo die Anlage während
   des Failovers (Abschnitt 14):
   - Ist der core samt 30 s frischer Messwerte (und bestätigter Phasen) binnen 90 s zurück, löst der
-    Watchdog nicht aus: Er sendet den ersten Heartbeat erst, wenn das Gate bis auf den Watchdog
-    offen ist (Abschnitt 13).
+    Watchdog nicht aus: Der core sendet den ersten Heartbeat erst, wenn das Gate bis auf den
+    Watchdog offen ist (Abschnitt 13).
   - Sonst löst er genau einmal aus und wird nach 30 s stabilem Heartbeat wieder scharf.
 - Nach einem Failover prüfst du die Uhrzeit (`timedatectl`) und `docker compose ps`.
 
@@ -427,8 +427,14 @@ docker compose run --rm -v "$PWD/verification:/out" --entrypoint python ems-core
   wechselndem Strom.
 - `tesla`: `BINDAEMS_TESSIE_TOKEN` steht in der `.env`; ohne endet das Werkzeug mit dem
   Exitcode 2. Das Auto ist wach, zu Hause und angesteckt. Das Werkzeug weckt es nie und sendet
-  sonst nichts. Für `--schlafend` muss das Auto dagegen schon schlafen.
-- `victron`: Dynamic ESS ist aus (siehe „Victron und Dynamic ESS“).
+  sonst nichts. Für `--schlafend` muss das Auto dagegen schon schlafen, und Tessie muss sich zu
+  Beginn und am Ende des Tests frisch melden. Ohne frische Meldung von Tessie ist der Schlaf-Test
+  FEHLER „nicht beobachtbar: …“ mit dem Grund (Tessie nicht erreichbar, Wert veraltet).
+- `victron`: Dynamic ESS ist aus (siehe „Victron und Dynamic ESS“), und die Entladegrenze steht
+  nicht auf 0 W. Eine Entladegrenze von 0 W (Entladen gesperrt) hinterlässt etwa ein abgebrochener
+  Lauf; der Teil verweigert dann ohne zu schreiben, denn er stellte sie am Ende als Ausgangswert
+  wieder her. Setze sie vorher zurück. Geht Dynamic ESS mitten im Lauf an, schreibt der Teil nichts
+  mehr und stellt die vorgefundenen Werte wieder her.
 
 **Rückfragen**
 
@@ -715,7 +721,9 @@ entstehen deshalb nur an diesen Stellen:
 - **Sicherer Zustand:** In SAFE bekommt jeder nicht gesperrte Aktor seine Sicherwerte: Victron den
   aufgehobenen Netz-Sollwert-Override, die Entladegrenze „unbegrenzt“ und den Min-SOC auf der
   USV-Reserve, die EVCS ihren sicheren Strom (`safe_a`) und der Tesla seinen Mindeststrom. Bei
-  Netzausfall (Inselbetrieb) kommt für EVCS und Tesla „Laden aus“ dazu.
+  Netzausfall (Inselbetrieb) kommt für EVCS und Tesla „Laden aus“ dazu. Ein Strom, der schon unter
+  dem Sicherwert liegt, bleibt stehen, auch bei der Übergabe: Der sichere Zustand erhöht nie einen
+  Strom.
 - **Übergabe** am Ende des Live-Betriebs (unten).
 
 Jeder Befehl geht durch die Safety-Schicht. Einem Aktor, der nicht live ist, sendet der core nichts;
@@ -827,9 +835,12 @@ Ein Aktor läuft nur live, wenn alle vier Bedingungen gelten (Spec 8.7):
 
 Der core prüft die Punkte 1 und 4 selbst. Punkt 2 stellst du sicher, bevor du `live_allowed`
 setzt. Das UI zeigt unter **System** → „Aktoren“ je Aktor „Angefordert“, „Wirksam“ und „live
-erlaubt“. Weicht „Wirksam“ ab, nennen die „Hinweise“ den Grund: „In config.yaml nicht für den
-Live-Betrieb freigegeben (live_allowed).“ oder „Watchdog am Cerbo ist nicht scharf.“ Während
-einer Übergabe (nächster Abschnitt) steht dort „Übergabe: Sicherwerte werden gesetzt.“
+erlaubt“. Wirksam live ist ein Aktor nur im Regelbetrieb. Weicht „Wirksam“ ab, nennen die
+„Hinweise“ den Grund: „In config.yaml nicht für den Live-Betrieb freigegeben (live_allowed).“,
+„Regelbetrieb ist aus.“ oder „Watchdog am Cerbo ist nicht scharf.“ Während einer Übergabe (nächster
+Abschnitt) steht dort „Übergabe: Sicherwerte werden gesetzt.“, auch bei ausgeschaltetem
+Regelbetrieb: Dann ist nur der übergebene Aktor wirksam live, die übrigen live angeforderten zeigen
+Dry-Run mit „Regelbetrieb ist aus.“
 
 **Live-Freigabe zurücknehmen:** Bevor du bei einem Victron- oder EVCS-Aktor `live_allowed` wieder
 auf `false` setzt oder ihn auf anderem Weg aus der `config.yaml` nimmst (etwa eine EVCS entfernst),
@@ -870,7 +881,11 @@ sein Gerät kann noch Werte vom letzten Lauf halten.
 - Kann der core nicht schreiben, etwa weil er nach einem Neustart in OBSERVE steht, übergibt er
   nicht und gibt den Watchdog nicht frei. Der Watchdog löst aus, weil der Heartbeat ausbleibt; danach
   geht es weiter wie oben.
-- Gesperrte Aktoren übergibt der core nicht: Ein anderes System regelt sie.
+- Gesperrte Aktoren übergibt der core nicht. Regelt ein anderes System den Aktor (ein
+  mitregelndes System, eine fremde Änderung oder ein Prüfpunkt, der fehlschlägt), hält er sofort
+  keine Werte des EMS mehr. Sperrt ihn nur ein Prüfpunkt, der nicht lesbar ist, etwa im ersten
+  Zyklus nach dem Start, behält er sie: Seine Übergabe scheitert dann an der Sperre, und der
+  Watchdog übernimmt.
 
 ### Entscheidungslog
 
@@ -968,7 +983,8 @@ Zustände, Zeiten und D-Bus-Pfade stehen in `cerbo-watchdog/README.md`. Wichtig 
   (Abschnitt 13, „Gate“).
 - Die Freigabe 0 sendet der core erst, wenn kein Victron- oder EVCS-Aktor mehr Werte des EMS hält
   (Abschnitt 13, „Übergabe“), und nur, wenn er in diesem Lauf für den Watchdog zuständig war: ab
-  dem ersten Bedarf oder dem ersten Aktor, der Werte des EMS hält, bis zum nächsten Neustart. Eine
+  dem ersten Bedarf oder dem ersten Victron- oder EVCS-Aktor, der Werte des EMS hält, bis zum
+  nächsten Neustart. Eine
   Probe oder `verify_part2`, die den Watchdog selbst schärfen und auslösen, stört deshalb nur einen
   core nicht, der nie zuständig war; war er es, starte ihn vorher neu. Ging die 0 verloren, sendet
   er sie nach dem Doppelten des Heartbeat-Takts erneut, außer der Watchdog zeigt einen fremden
@@ -1196,7 +1212,7 @@ Diese Alarme zeigt das UI unter **System** → „core“ → „Alarme“:
 
 | Alarm | Bedeutung und Abhilfe |
 |---|---|
-| Der Watchdog am Cerbo hat ausgelöst und den sicheren Zustand hergestellt. | Der Heartbeat blieb 90 s aus, oder die Probe lief. Suche im Log des core, warum er ausfiel. Nach 30 s stabilem Heartbeat ist der Watchdog wieder scharf; besteht kein Bedarf, räumt der core ihn nach 60 s mit der Freigabe 0 auf (sofern er für den Watchdog zuständig war). Nennt der Alarm fehlgeschlagene Aktionen, prüfe EVCS-Strom, Min-SOC und Entladegrenze von Hand und lies das Log des Cerbo. |
+| Der Watchdog am Cerbo hat ausgelöst und den sicheren Zustand hergestellt. | Der Heartbeat blieb 90 s aus, oder die Probe lief. Suche im Log des core, warum er ausfiel. Nach 30 s stabilem Heartbeat ist der Watchdog wieder scharf; besteht kein Bedarf, räumt der core ihn nach 60 s mit der Freigabe 0 auf (sofern er für den Watchdog zuständig war; sonst räumst du ihn von Hand auf, siehe unter der Tabelle). Nennt der Alarm fehlgeschlagene Aktionen, prüfe EVCS-Strom, Min-SOC und Entladegrenze von Hand und lies das Log des Cerbo. |
 | Watchdog am Cerbo antwortet nicht; Victron und EVCS bleiben im Dry-Run. | Nur wenn der Betrieb den Watchdog braucht (Victron oder EVCS im Regelbetrieb live gewünscht oder in der Übergabe). Prüfe, ob der Dienst auf dem Cerbo läuft (`/State` lesen, Log) und ob der core den Cerbo über MQTT erreicht. |
 | Watchdog am Cerbo ist deaktiviert; Victron und EVCS bleiben im Dry-Run. | Nur wenn der Betrieb den Watchdog braucht. In der `config.ini` steht `enabled = false`. Erzeuge sie neu und übertrage sie. |
 | Watchdog-Version … am Cerbo, erwartet …; bitte mit install.sh aktualisieren. | Siehe „Aktualisieren“. |
@@ -1205,6 +1221,22 @@ Diese Alarme zeigt das UI unter **System** → „core“ → „Alarme“:
 | … ist nach 3 Fehlern in 15 min bis HH:MM nicht steuerbar. | Nur Tesla: Tessie hat 3 Befehle abgelehnt oder nicht beantwortet. Bis zur Uhrzeit (Wiener Zeit) sendet der core nichts an das Fahrzeug. Prüfe das Tessie-Konto und das Log des core. |
 | … von außen geändert (… statt …). | Ein anderes System hat Strom oder Netz-Sollwert-Override geändert, den der core bestätigt hatte (Abschnitt 13, „Sperren“). Der Aktor ist gesperrt. Suche das System (App, Automation, Zeitplan) und schalte es ab. |
 | Gespeicherte Schreibzeiten liegen bis zu … min in der Zukunft; persistente Schreibzugriffe bleiben bis dahin begrenzt. | Die Uhr lief zurück (NTP-Sprung, Failover). Das Schreibbudget für persistente Einstellungen zählt die Einträge in der Zukunft weiter mit; die Begrenzung endet, wenn die Uhr aufgeholt hat. Prüfe `timedatectl`. |
+
+**„Ausgelöst“ von Hand aufräumen:** Seit 1.1.0 übersteht „ausgelöst“ einen Neustart des Cerbo
+(als „scharf“). Räumt kein zuständiger core den Watchdog auf, etwa nach einer abgebrochenen Probe
+oder einem Lauf von `verify_part2`, während der core nie für ihn zuständig war, löst er deshalb nach
+jedem Neustart des Cerbo erneut aus: Er setzt EVCS-Strom, Min-SOC und Entladegrenze wieder auf die
+Sicherwerte und hebt mit `victron.live_allowed` den Override auf. Gib ihn dann von Hand frei wie bei
+einer abgebrochenen Probe (Abschnitt „Probe“), aber nur, solange der core keine Heartbeats sendet
+(Karte „Watchdog am Cerbo“: Heartbeat nicht „aktiv“), und prüfe danach `/State`:
+
+```bash
+ssh root@cerbo.lan 'dbus -y com.victronenergy.bindaems /Heartbeat SetValue 0'
+ssh root@cerbo.lan 'dbus -y com.victronenergy.bindaems /State GetValue'   # 0 = wartet
+```
+
+Zeigt `/State` danach nicht 0, wiederhole die Freigabe und lies das Log des Cerbo (oben, „Logs“).
+Stelle die Werte, die die Auslösungen gesetzt haben, danach wieder ein, wie du sie haben willst.
 
 Die Alarme der Safety-Schicht, des sicheren Zustands, der Aktoren und der fremden Änderungen
 tragen die monotone Zeit des core als „seit“, die übrigen die Wanduhr. Nach einem NTP-Sprung können
