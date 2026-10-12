@@ -10,15 +10,19 @@ Es nutzt dieselben Adapter und Aktoren wie der core (``part2.session``) und prü
 den Regeln 1–3 der Safety-Schicht. Vor dem Start sagt es, was es schreibt, und fragt nach; vor
 jedem weiteren schreibenden Schritt fragt es erneut. Nach jedem Schritt, bei Abbruch (auch Strg+C)
 und am Ende stellt es die vorgefundenen Werte wieder her; dann stoppt es die Adapter und schreibt
-den Bericht (Standard: ``docs/verification/<Datum>-pruefprotokoll-teil2-<punkt>.md``).
+den Bericht (Standard: ``docs/verification/<Datum>-pruefprotokoll-teil2-<punkt>.md``, mit
+``--schlafend`` ``…-tesla-schlafend.md``, damit er den Bericht des Punkts nicht überschreibt).
 
 ``--yes`` beantwortet alle Rückfragen mit Ja. Schritte, die einen Handgriff des Betreibers
 brauchen (Strom von Hand ändern, Kabel ziehen), entfallen dann als INFO „übersprungen (--yes)“;
 der Bericht nennt ``--yes`` unter „Rückfragen“.
 
 Punkte: ``evcs`` (17.2-6 und der sichere Strom über den Watchdog, 17.2-5) mit ``--wallbox``
-(Standard: die erste EVCS). ``tesla`` (mit ``--fahrzeug`` und ``--schlafend``) und ``victron``
-sind noch nicht umgesetzt.
+(Standard: die erste EVCS). ``tesla`` (17.2-7) mit ``--fahrzeug`` (Standard: das erste Fahrzeug
+mit Tessie): Die Befehle gehen über Tessie, die Wirkung misst das Werkzeug am Wall Connector, und
+das Fahrzeug wird nie geweckt. ``--schlafend`` prüft stattdessen, ohne etwas zu senden, dass ein
+schlafendes Fahrzeug schläft. ``tesla`` braucht ``BINDAEMS_TESSIE_TOKEN``. ``victron`` ist noch
+nicht umgesetzt.
 
 Exitcode 0: kein Befund ist FEHLER. 1: ein Befund ist FEHLER, der Betreiber hat die Rückfrage vor
 dem Start verneint (dann ohne Secrets und ohne Verbindung) oder der Bericht ließ sich nicht
@@ -54,15 +58,19 @@ from bindaems.shared.config import (
     load_config,
     load_secrets,
 )
-from bindaems.shared.control import wallbox_actuator
+from bindaems.shared.control import vehicle_actuator, wallbox_actuator
 from bindaems.shared.timeutil import LOCAL_TZ
+from bindaems.tools.part2.evcs import DEFAULT_TIMINGS as EVCS_TIMINGS
 from bindaems.tools.part2.evcs import run_evcs
-from bindaems.tools.part2.session import Part2Session, build_session
+from bindaems.tools.part2.session import RESTORE_S as SESSION_RESTORE_S
+from bindaems.tools.part2.session import Part2Session, build_session, minutes
+from bindaems.tools.part2.tesla import DEFAULT_TIMINGS as TESLA_TIMINGS
+from bindaems.tools.part2.tesla import run_tesla
 from bindaems.tools.verify_checks import Finding, render_report
 from bindaems.tools.watchdog_probe import run_probe, timings_from_config
 
 PARTS: Final = ("evcs", "tesla", "victron")
-NOT_YET: Final = frozenset({"tesla", "victron"})  # bis sie umgesetzt sind: Exitcode 2
+NOT_YET: Final = frozenset({"victron"})  # bis er umgesetzt ist: Exitcode 2
 TITLES: Final = {"evcs": "EVCS", "tesla": "Tesla", "victron": "Victron"}
 ITEMS: Final = {"evcs": "17.2-6", "tesla": "17.2-7", "victron": "17.2-1"}  # Zeilen des Werkzeugs
 PROBE_ITEM: Final = "17.2-5"
@@ -73,10 +81,25 @@ WARNINGS: Final = {
         "Nach jedem Schritt und am Ende, auch nach Strg+C, stellt es die vorgefundenen Werte "
         "wieder her."
     ),
+    "tesla": (
+        "Das Werkzeug stellt am Fahrzeug „{device}“ über Tessie den Ladestrom um und fragt vor dem "
+        "kurzen Ausschalten des Ladens nach. Das Fahrzeug lädt dabei mit wechselndem Strom. Es "
+        "sendet nur an ein wachendes Fahrzeug, das zu Hause angesteckt ist, und weckt es nie. Nach "
+        "jedem Schritt und am Ende, auch nach Strg+C, stellt es die vorgefundenen Werte wieder her."
+    ),
+    "tesla-schlafend": (
+        "Das Werkzeug prüft am Fahrzeug „{device}“, dass ein schlafendes Auto nicht geweckt wird. "
+        "Es sendet nichts und liest nur den Zustand aus dem Tessie-Cache, "
+        f"{minutes(TESLA_TIMINGS.sleep_total_s)} min lang. Das Fahrzeug muss dafür schon schlafen."
+    ),
 }
+# Frist je Wert beim letzten Wiederherstellen: ``confirm_s`` des Teils. Ein Befehl an Tessie kann
+# bis zu 60 s dauern, die 15 s der Sitzung wären dafür zu kurz.
+PART_RESTORE_S: Final = {"evcs": EVCS_TIMINGS.confirm_s, "tesla": TESLA_TIMINGS.confirm_s}
 ABORTED: Final = "mit Strg+C abgebrochen; die übrigen Schritte fehlen"
 RESTORE_ABORTED: Final = "mit Strg+C abgebrochen; die Werte bitte von Hand prüfen"
 NO_PORTAL: Final = "Portal-ID konnte nicht ermittelt werden"
+NO_TESSIE: Final = "Tessie-Token fehlt: BINDAEMS_TESSIE_TOKEN setzen."
 UNATTENDED_META: Final = "mit --yes beantwortet; Schritte mit Handgriff übersprungen"
 VENUS_OS_PATH: Final = "platform/0/Firmware/Installed/Version"
 VERSION_WAIT_S = 5.0  # so lange wartet die Leseanfrage nach der Version von Venus OS
@@ -131,6 +154,27 @@ def _wallbox(cfg: Config, name: str | None) -> str:
     if name not in evcs:
         raise ValueError(f"Keine EVCS „{name}“ in wallboxes.")
     return name
+
+
+def _vehicle(cfg: Config, name: str | None) -> str:
+    """Das Fahrzeug für den Punkt ``tesla``: ``name`` oder das erste Fahrzeug mit Tessie."""
+    tessie = [key for key, vehicle in cfg.vehicles.items() if vehicle.tessie is not None]
+    if name is None:
+        if not tessie:
+            raise ValueError("Kein Fahrzeug mit Tessie in vehicles.")
+        return tessie[0]
+    if name not in tessie:
+        raise ValueError(f"Kein Fahrzeug „{name}“ mit Tessie in vehicles.")
+    return name
+
+
+def _device(cfg: Config, args: argparse.Namespace) -> str:
+    """Das Gerät des Punkts: das Fahrzeug für ``tesla``, sonst die EVCS."""
+    return _vehicle(cfg, args.fahrzeug) if args.punkt == "tesla" else _wallbox(cfg, args.wallbox)
+
+
+def _actuator_id(punkt: str, device: str) -> str:
+    return vehicle_actuator(device) if punkt == "tesla" else wallbox_actuator(device)
 
 
 def _portal(cfg: Config, session: Part2Session) -> str | None:
@@ -201,17 +245,29 @@ async def _venus_os(cfg: Config, secrets: Secrets, portal: str) -> str | None:
 
 
 async def _part(
-    session: Part2Session, cfg: Config, secrets: Secrets, punkt: str, device: str
+    session: Part2Session,
+    cfg: Config,
+    secrets: Secrets,
+    punkt: str,
+    device: str,
+    asleep_check: bool,
 ) -> list[Finding]:
     """Startet die Sitzung und führt den Teil aus."""
     await session.start()
     if punkt == "evcs":
         return await run_evcs(session, cfg, device, probe=_watchdog_probe(cfg, secrets, session))
+    if punkt == "tesla":
+        return await run_tesla(session, cfg, device, asleep_check=asleep_check)
     raise ValueError(f"Punkt „{punkt}“ ist noch nicht umgesetzt.")
 
 
 def _execute(
-    session: Part2Session, cfg: Config, secrets: Secrets, punkt: str, device: str
+    session: Part2Session,
+    cfg: Config,
+    secrets: Secrets,
+    punkt: str,
+    device: str,
+    asleep_check: bool,
 ) -> _Outcome:
     """Teil ausführen, Werte wiederherstellen, Angaben für den Bericht lesen, Sitzung stoppen.
 
@@ -224,7 +280,7 @@ def _execute(
     outcome = _Outcome()
     with asyncio.Runner() as runner:
         try:
-            outcome.findings = runner.run(_part(session, cfg, secrets, punkt, device))
+            outcome.findings = runner.run(_part(session, cfg, secrets, punkt, device, asleep_check))
         except KeyboardInterrupt:
             print(
                 "\nAbgebrochen (Strg+C). Die vorgefundenen Werte werden wiederhergestellt, "
@@ -251,10 +307,16 @@ def _finish(
     device: str,
     outcome: _Outcome,
 ) -> None:
-    """Nach dem Teil: wiederherstellen, Angaben für den Bericht lesen, dann die Sitzung stoppen."""
+    """Nach dem Teil: wiederherstellen, Angaben für den Bericht lesen, dann die Sitzung stoppen.
+
+    Das Wiederherstellen wartet je Wert so lange, wie der Teil auf eine Bestätigung wartet
+    (``PART_RESTORE_S``).
+    """
     item = ITEMS[punkt]
     try:
-        outcome.findings += runner.run(session.restore())
+        outcome.findings += runner.run(
+            session.restore(PART_RESTORE_S.get(punkt, SESSION_RESTORE_S))
+        )
     except KeyboardInterrupt:
         print(f"\nAchtung: Wiederherstellen {RESTORE_ABORTED}.", file=sys.stderr)
         outcome.interrupted = True
@@ -312,7 +374,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--out",
         type=Path,
-        help="Bericht (Standard: docs/verification/<Datum>-pruefprotokoll-teil2-<punkt>.md)",
+        help=(
+            "Bericht (Standard: docs/verification/<Datum>-pruefprotokoll-teil2-<punkt>.md, "
+            "mit --schlafend …-tesla-schlafend.md)"
+        ),
     )
     parser.add_argument("--yes", action="store_true", help="alle Rückfragen mit Ja beantworten")
     parser.add_argument(
@@ -342,11 +407,12 @@ def _run(args: argparse.Namespace) -> int:
         print(exc, file=sys.stderr)
         return 2
     try:
-        device = _wallbox(cfg, args.wallbox)
+        device = _device(cfg, args)
     except ValueError as exc:
         print(exc, file=sys.stderr)
         return 2
-    if not args.yes and not _confirmed(WARNINGS[punkt].format(device=device)):
+    warning = WARNINGS["tesla-schlafend" if args.schlafend else punkt]
+    if not args.yes and not _confirmed(warning.format(device=device)):
         print("Abgebrochen.")
         return 1
     try:
@@ -354,12 +420,16 @@ def _run(args: argparse.Namespace) -> int:
     except ValidationError as exc:
         print(_secrets_error(exc), file=sys.stderr)
         return 2
+    if punkt == "tesla" and secrets.tessie_token is None:
+        print(NO_TESSIE, file=sys.stderr)  # ohne Token wäre Tessie nie erreichbar
+        return 2
     day = datetime.now(LOCAL_TZ).date().isoformat()
-    out = args.out or Path("docs/verification") / f"{day}-pruefprotokoll-teil2-{punkt}.md"
+    stem = f"{day}-pruefprotokoll-teil2-{punkt}" + ("-schlafend" if args.schlafend else "")
+    out = args.out or Path("docs/verification") / f"{stem}.md"
     ask = _auto_yes if args.yes else _ask_operator
     session = build_session(cfg, secrets, ask=ask, unattended=args.yes)
-    outcome = _execute(session, cfg, secrets, punkt, device)
-    label = session.limits.actuators[wallbox_actuator(device)].label
+    outcome = _execute(session, cfg, secrets, punkt, device, args.schlafend)
+    label = session.limits.actuators[_actuator_id(punkt, device)].label
     meta = {"Werkzeug": "verify_part2", "Datum": day, "Punkt": punkt, "Gerät": label}
     if args.yes:
         meta["Rückfragen"] = UNATTENDED_META

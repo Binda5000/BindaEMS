@@ -22,7 +22,7 @@ from bindaems.shared.config import Config, Secrets
 from bindaems.shared.control import CommandKind, CommandValue
 from bindaems.shared.domain import Alarm, SignalKind, Snapshot
 from bindaems.shared.timeutil import SystemClock
-from bindaems.tools.part2.session import Part2Session, build_session
+from bindaems.tools.part2.session import Part2Session, build_session, minutes, seconds
 from bindaems.tools.verify_checks import Finding
 
 CURRENT, CHARGING = CommandKind.CURRENT, CommandKind.CHARGING
@@ -30,6 +30,23 @@ CURRENT, CHARGING = CommandKind.CURRENT, CommandKind.CHARGING
 
 def currents(evcs: FakeEvcs) -> list[float | int | None]:
     return [v for p, v in evcs.writes if p.endswith("SetCurrent")]
+
+
+# Zeiten in Texten
+
+
+@pytest.mark.parametrize(
+    ("value", "text"), [(0.04, "0"), (1.5, "1,5"), (12.34, "12,3"), (75.0, "75"), (0.25, "0,2")]
+)
+def test_seconds_have_one_decimal_and_a_comma(value: float, text: str) -> None:
+    assert seconds(value) == text
+
+
+@pytest.mark.parametrize(
+    ("value", "text"), [(600.0, "10"), (150.0, "2,5"), (60.0, "1"), (90.0, "1,5"), (0.3, "0")]
+)
+def test_minutes_have_one_decimal_and_a_comma(value: float, text: str) -> None:
+    assert minutes(value) == text
 
 
 # Senden und Bestätigen

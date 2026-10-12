@@ -134,7 +134,7 @@ def test_invalid_config_names_the_problem(capsys: pytest.CaptureFixture[str]) ->
     assert "Konfiguration ungültig" in capsys.readouterr().err
 
 
-@pytest.mark.parametrize("punkt", ["tesla", "victron"])
+@pytest.mark.parametrize("punkt", ["victron"])
 def test_parts_that_are_not_there_yet_return_2(
     punkt: str, fake_part: FakePart, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -392,6 +392,199 @@ def test_ctrl_c_during_the_restore_still_stops_and_reports(
         "prüfen |" in report
     )
     assert fake_part.calls == ["restore", "stop"]
+
+
+# Punkt Tesla
+
+TESLA_ARGS = ["--config", "deploy/config.example.yaml", "--punkt", "tesla"]
+TESLA_FINDING = Finding("17.2-7", "Tesla bereit", "ok", "SOC 64 %, Ladestrom 16 A, Charging")
+
+
+@pytest.fixture
+def tessie_token(monkeypatch: pytest.MonkeyPatch, fake_part: FakePart) -> None:
+    """Gültige Secrets mit Tessie-Token (``fake_part`` räumt die Umgebung vorher auf)."""
+    monkeypatch.setenv("BINDAEMS_TESSIE_TOKEN", "tessie-geheim")
+
+
+def run_tesla_cli(
+    tmp_path: Path, *extra: str, config: str = "deploy/config.example.yaml"
+) -> tuple[int, str]:
+    """``main`` für den Punkt Tesla mit ``--yes``: Exitcode und Bericht (leer, falls keiner da)."""
+    out = tmp_path / "bericht.md"
+    code = main(["--config", config, "--punkt", "tesla", "--yes", "--out", str(out), *extra])
+    return code, out.read_text(encoding="utf-8") if out.exists() else ""
+
+
+def config_with_vehicles(tmp_path: Path, *, tessie: bool = True) -> Path:
+    """Die Beispielkonfiguration mit dem e-Golf (ohne Tessie) vor dem Tesla und einem zweiten Auto.
+
+    Mit ``tessie=False`` bleibt nur der e-Golf: kein Fahrzeug mit Tessie.
+    """
+    raw = yaml.safe_load(Path("deploy/config.example.yaml").read_text(encoding="utf-8"))
+    vehicles = raw["vehicles"]
+    zoe = dict(vehicles["tesla"], name="Zweites Auto", tessie={"vin": "5YJ3E7EB0MF000001"})
+    egolf = vehicles["egolf"]
+    raw["vehicles"] = (
+        {"egolf": egolf, "tesla": vehicles["tesla"], "zoe": zoe} if tessie else {"egolf": egolf}
+    )
+    config = tmp_path / "config.yaml"
+    config.write_text(yaml.safe_dump(raw), encoding="utf-8")
+    return config
+
+
+def test_tesla_part_runs_for_the_first_vehicle_with_tessie(
+    tmp_path: Path, fake_part: FakePart, tessie_token: None
+) -> None:
+    fake_part.findings = [TESLA_FINDING]
+    code, report = run_tesla_cli(tmp_path)
+    assert code == 0
+    assert fake_part.tesla_calls == [("tesla", False)]
+    assert fake_part.probe is None  # der Teil EVCS und seine Watchdog-Probe laufen nicht
+    assert report.startswith("# Prüfprotokoll Teil 2 – Tesla – ")
+    for row in (
+        "| Werkzeug | verify_part2 |",
+        "| Punkt | tesla |",
+        "| Gerät | Tesla Model 3 |",
+        "| 17.2-7 | Tesla bereit | OK | SOC 64 %, Ladestrom 16 A, Charging |",
+    ):
+        assert row in report
+    assert "EVCS-Firmware" not in report
+
+
+def test_the_first_vehicle_with_tessie_is_the_default(
+    tmp_path: Path, fake_part: FakePart, tessie_token: None
+) -> None:
+    # Im Beispiel steht der e-Golf (ohne Tessie) vor dem Tesla.
+    code, _ = run_tesla_cli(tmp_path, config=str(config_with_vehicles(tmp_path)))
+    assert code == 0 and fake_part.tesla_calls == [("tesla", False)]
+
+
+def test_vehicle_option_picks_the_vehicle(
+    tmp_path: Path, fake_part: FakePart, tessie_token: None
+) -> None:
+    config = str(config_with_vehicles(tmp_path))
+    code, report = run_tesla_cli(tmp_path, "--fahrzeug", "zoe", config=config)
+    assert code == 0
+    assert fake_part.tesla_calls == [("zoe", False)]
+    assert "| Gerät | Zweites Auto |" in report
+
+
+# der e-Golf steht in vehicles, hat aber kein Tessie
+@pytest.mark.parametrize("name", ["nirgends", "egolf"])
+def test_unknown_vehicle_returns_2(
+    tmp_path: Path,
+    name: str,
+    fake_part: FakePart,
+    tessie_token: None,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    code, _ = run_tesla_cli(tmp_path, "--fahrzeug", name)
+    assert code == 2
+    assert f"Kein Fahrzeug „{name}“ mit Tessie in vehicles." in capsys.readouterr().err
+    assert fake_part.sessions == []
+
+
+def test_no_vehicle_with_tessie_returns_2(
+    tmp_path: Path, fake_part: FakePart, tessie_token: None, capsys: pytest.CaptureFixture[str]
+) -> None:
+    code, _ = run_tesla_cli(tmp_path, config=str(config_with_vehicles(tmp_path, tessie=False)))
+    assert code == 2
+    assert "Kein Fahrzeug mit Tessie in vehicles." in capsys.readouterr().err
+    assert fake_part.sessions == []
+
+
+def test_tesla_needs_the_tessie_token(
+    tmp_path: Path, fake_part: FakePart, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # Ohne Token wäre Tessie nie erreichbar: Das Werkzeug sagt es gleich, statt zu warten.
+    code, _ = run_tesla_cli(tmp_path)
+    assert code == 2
+    assert "BINDAEMS_TESSIE_TOKEN" in capsys.readouterr().err
+    assert fake_part.sessions == []
+
+
+def test_sleep_check_is_passed_on(tmp_path: Path, fake_part: FakePart, tessie_token: None) -> None:
+    fake_part.findings = [Finding("17.2-7", "Schlafendes Auto wird nicht geweckt", "ok", "10 min")]
+    code, report = run_tesla_cli(tmp_path, "--schlafend")
+    assert code == 0
+    assert fake_part.tesla_calls == [("tesla", True)]
+    assert "| 17.2-7 | Schlafendes Auto wird nicht geweckt | OK | 10 min |" in report
+
+
+def test_the_sleep_check_has_its_own_default_report(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fake_part: FakePart, tessie_token: None
+) -> None:
+    # Beide Läufe gehören zum Punkt tesla und finden am selben Tag statt: Der zweite darf den
+    # Bericht des ersten nicht überschreiben.
+    config = str(Path("deploy/config.example.yaml").resolve())
+    monkeypatch.chdir(tmp_path)
+    assert main(["--config", config, "--punkt", "tesla", "--yes"]) == 0
+    assert main(["--config", config, "--punkt", "tesla", "--yes", "--schlafend"]) == 0
+    reports = [report.name.split("-", 3)[3] for report in tmp_path.glob("docs/verification/*")]
+    assert sorted(reports) == [
+        "pruefprotokoll-teil2-tesla-schlafend.md",
+        "pruefprotokoll-teil2-tesla.md",
+    ]
+
+
+def test_declined_start_names_what_the_tesla_part_does(
+    monkeypatch: pytest.MonkeyPatch,
+    fake_part: FakePart,
+    tessie_token: None,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr("builtins.input", lambda _prompt: "n")
+    assert main(TESLA_ARGS) == 1
+    shown = capsys.readouterr().out
+    assert "Fahrzeug „tesla“" in shown and "weckt es nie" in shown and "Abgebrochen." in shown
+    assert fake_part.sessions == [] and fake_part.tesla_calls == []
+
+
+def test_declined_start_of_the_sleep_check_says_that_it_sends_nothing(
+    monkeypatch: pytest.MonkeyPatch,
+    fake_part: FakePart,
+    tessie_token: None,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr("builtins.input", lambda _prompt: "n")
+    assert main([*TESLA_ARGS, "--schlafend"]) == 1
+    shown = capsys.readouterr().out
+    assert "sendet nichts" in shown and "10 min" in shown
+    assert "wieder her" not in shown  # es gibt nichts wiederherzustellen
+    assert fake_part.sessions == []
+
+
+@pytest.mark.parametrize(("punkt", "seconds"), [("evcs", 15.0), ("tesla", 75.0)])
+def test_the_final_restore_waits_as_long_as_the_part_does(
+    tmp_path: Path, fake_part: FakePart, tessie_token: None, punkt: str, seconds: float
+) -> None:
+    # Ein Befehl an Tessie kann 60 s dauern; die 15 s der Sitzung wären zu kurz.
+    out = tmp_path / "bericht.md"
+    argv = ["--config", "deploy/config.example.yaml", "--punkt", punkt, "--yes", "--out", str(out)]
+    assert main(argv) == 0
+    assert fake_part.restore_timeouts == [seconds]
+
+
+def test_ctrl_c_in_the_tesla_part_restores_with_the_deadline_of_the_part(
+    tmp_path: Path, fake_part: FakePart, tessie_token: None
+) -> None:
+    fake_part.raise_in_step = KeyboardInterrupt
+    code, report = run_tesla_cli(tmp_path)
+    assert code == 130
+    assert (
+        "| 17.2-7 | Abbruch | WARNUNG | mit Strg+C abgebrochen; die übrigen Schritte fehlen |"
+        in report
+    )
+    assert fake_part.restore_timeouts == [75.0] and fake_part.calls == ["restore", "stop"]
+
+
+def test_failed_tesla_step_returns_1(
+    tmp_path: Path, fake_part: FakePart, tessie_token: None
+) -> None:
+    fake_part.findings = [Finding("17.2-7", "Tesla bereit", "fail", "Fahrzeug nicht zu Hause.")]
+    code, report = run_tesla_cli(tmp_path)
+    assert code == 1
+    assert "| 17.2-7 | Tesla bereit | FEHLER | Fahrzeug nicht zu Hause. |" in report
 
 
 # Watchdog-Probe und Venus OS

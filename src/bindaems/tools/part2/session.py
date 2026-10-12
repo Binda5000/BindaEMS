@@ -82,6 +82,11 @@ def seconds(value: float) -> str:
     return de(round(value, 1))
 
 
+def minutes(value_s: float) -> str:
+    """Minuten für Texte aus ``value_s`` Sekunden: eine Nachkommastelle, Dezimalkomma (``de``)."""
+    return de(round(value_s / 60, 1))
+
+
 def _show(finding: Finding) -> None:
     """Zeigt einen Befund auf der Konsole, wie er im Bericht steht."""
     label = _LABELS[finding.status]
