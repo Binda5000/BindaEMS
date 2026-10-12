@@ -8,21 +8,29 @@ Seiten zusammen.
 import inspect
 import json
 import re
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 
+import pytest
 from bindaems_watchdog import VERSION, logic, service
 from bindaems_watchdog.actions import ActionRunner
 from bindaems_watchdog.config import parse_settings
 from bindaems_watchdog.logic import WatchdogLogic
 from bindaems_watchdog.service import WatchdogService
 from bindaems_watchdog.state_file import StoredState
-from tests.helpers import snap
+from tests.helpers import T0, snap
 from tests.unit.cerbo_watchdog.fakes import FakeAccess
 
 from bindaems.core.adapters import victron_mqtt
 from bindaems.core.adapters.victron_topics import ROUTES, InstanceResolver, parse_message
-from bindaems.core.watchdog_client.status import WatchdogState, WatchdogStatus, read_watchdog
+from bindaems.core.watchdog_client.status import (
+    WatchdogState,
+    WatchdogStatus,
+    armed_for_core,
+    read_watchdog,
+    watchdog_alarms,
+)
 from bindaems.shared.config import VictronInstances
 from bindaems.shared.domain import SignalKind
 from bindaems.tools import watchdog_probe
@@ -31,9 +39,14 @@ P = "c0619ab1234"
 CODES = {"WAITING": 0, "ARMED": 1, "TRIPPED": 2, "DISABLED": 3}  # Werte von /State (Spec 8.6)
 
 
-def make_service(stored: StoredState) -> WatchdogService:
-    """Der Dienst mit den Einstellungen aus ``config.ini.example``, ohne D-Bus."""
+def make_service(stored: StoredState, timeout_s: float | None = None) -> WatchdogService:
+    """Der Dienst mit den Einstellungen aus ``config.ini.example``, ohne D-Bus.
+
+    ``timeout_s`` ersetzt das Timeout der Datei.
+    """
     settings = parse_settings(Path("cerbo-watchdog/config.ini.example").read_text(encoding="utf-8"))
+    if timeout_s is not None:
+        settings = replace(settings, timeout_s=timeout_s)
     runner = ActionRunner(FakeAccess({}), settings.actions, settings.retries, settings.retry_s)
     return WatchdogService(
         settings,
@@ -48,6 +61,17 @@ def make_service(stored: StoredState) -> WatchdogService:
 
 
 PUBLISHED = [path.removeprefix("/") for path in make_service(StoredState()).values()]
+
+
+def published_signals(watchdog: WatchdogService) -> dict[str, object]:
+    """Die Signale, die der core über die Topic-Tabelle aus den Werten des Dienstes liest."""
+    resolver = InstanceResolver(VictronInstances())
+    signals: dict[str, object] = {}
+    for path, value in watchdog.values().items():
+        payload = json.dumps({"value": value}).encode()
+        for update in parse_message(f"N/{P}/bindaems/0{path}", payload, P, resolver):
+            signals[update.signal] = update.value
+    return signals
 
 
 def test_state_codes_agree_between_watchdog_probe_and_core() -> None:
@@ -73,12 +97,7 @@ def test_every_published_path_has_a_route_and_every_route_a_path() -> None:
 
 def test_the_core_reads_what_the_watchdog_publishes() -> None:
     stored = StoredState(armed=True, trip_count=3, last_trip_time=1791600000)
-    resolver = InstanceResolver(VictronInstances())
-    signals = {}
-    for path, value in make_service(stored).values().items():
-        payload = json.dumps({"value": value}).encode()
-        for update in parse_message(f"N/{P}/bindaems/0{path}", payload, P, resolver):
-            signals[update.signal] = update.value
+    signals = published_signals(make_service(stored))
     assert signals["watchdog.timeout_s"] == 90 and signals["watchdog.heartbeat"] is None
     assert read_watchdog(snap(signals, kind=SignalKind.STATE)) == WatchdogStatus(
         WatchdogState.ARMED,
@@ -89,6 +108,23 @@ def test_the_core_reads_what_the_watchdog_publishes() -> None:
         heartbeat=None,  # noch kein Zähler geschrieben
         timeout_s=90.0,
     )
+
+
+@pytest.mark.parametrize("timeout_s", [90.0, 90.5, 90.999, 120.0, 45.25])
+def test_the_core_accepts_the_timeout_the_watchdog_reports(timeout_s: float) -> None:
+    # Der Dienst meldet /TimeoutSeconds in ganzen Sekunden, die Konfiguration kennt Bruchteile.
+    watchdog = make_service(StoredState(armed=True), timeout_s=timeout_s)
+    watchdog.on_heartbeat(service.HEARTBEAT, 7)  # das Echo des EMS
+    status = read_watchdog(snap(published_signals(watchdog), kind=SignalKind.STATE))
+
+    def timeout_alarms(expected: float) -> list[str]:
+        alarms = watchdog_alarms(status, True, T0, expected_timeout_s=expected)
+        return [alarm.id for alarm in alarms if alarm.id == "watchdog.timeout"]
+
+    assert armed_for_core(status, (5, 6, 7), timeout_s)
+    assert timeout_alarms(timeout_s) == []
+    assert not armed_for_core(status, (5, 6, 7), timeout_s + 30)  # ein anderes Timeout fällt auf
+    assert timeout_alarms(timeout_s + 30) == ["watchdog.timeout"]
 
 
 def test_heartbeat_goes_to_the_only_writable_path_of_the_service(cfg) -> None:

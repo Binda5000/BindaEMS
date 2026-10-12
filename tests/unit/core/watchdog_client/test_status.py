@@ -302,8 +302,28 @@ def test_nothing_sent_yet_is_never_armed_for_the_core() -> None:
 
 def test_armed_for_core_compares_the_timeout_as_a_number() -> None:
     assert armed_for_core(status(timeout_s=90.0), (7,), 90)  # 90 == 90.0
-    assert armed_for_core(status(timeout_s=90.5), (7,), 90.5)
-    assert not armed_for_core(status(timeout_s=90.5), (7,), 90.0)
+
+
+# Der Dienst am Cerbo meldet /TimeoutSeconds als ``int`` der Einstellung: 90,5 erscheint als 90.
+
+
+@pytest.mark.parametrize("configured", [90.0, 90.5, 90.01, 90.999])
+def test_armed_for_core_accepts_the_whole_seconds_the_watchdog_reports(configured: float) -> None:
+    assert armed_for_core(status(timeout_s=90.0), (7,), configured)
+
+
+@pytest.mark.parametrize("reported", [89.0, 91.0, 120.0])
+def test_armed_for_core_does_not_round_a_fractional_configured_timeout(reported: float) -> None:
+    assert not armed_for_core(status(timeout_s=reported), (7,), 90.5)
+    assert not armed_for_core(status(timeout_s=reported), (7,), 90.999)  # abgeschnitten, nicht 91
+
+
+@pytest.mark.parametrize("configured", [float("inf"), float("-inf"), float("nan")])
+def test_a_configured_timeout_that_is_no_finite_number_is_never_armed(configured: float) -> None:
+    # Die Konfiguration lässt inf zu; das darf den Zyklus nicht abbrechen.
+    assert not armed_for_core(status(), (7,), configured)
+    # auch dann nicht, wenn das gemeldete Timeout unbekannt ist: unbekannt ist nicht gleich
+    assert not armed_for_core(status(timeout_s=None), (7,), configured)
 
 
 def test_timeout_alarm_is_an_error_since_now() -> None:
@@ -338,6 +358,37 @@ def test_no_timeout_alarm_when_equal_or_unknown(
 
 def test_timeout_is_not_compared_without_an_expected_one() -> None:
     assert watchdog_alarms(status(timeout_s=120.0), True, T0) == []
+
+
+@pytest.mark.parametrize("configured", [90.5, 90.01, 90.999])
+def test_no_timeout_alarm_for_a_fractional_configured_timeout(configured: float) -> None:
+    # Der Dienst meldet nur die ganzen Sekunden; das ist kein Unterschied zur Konfiguration.
+    assert watchdog_alarms(status(timeout_s=90.0), True, T0, expected_timeout_s=configured) == []
+
+
+def test_timeout_alarm_names_the_configured_value() -> None:
+    # Der Betreiber ändert die config.yaml, und dort steht 90,5 und nicht die 90 des Dienstes.
+    alarms = watchdog_alarms(status(timeout_s=120.0), False, T0, expected_timeout_s=90.5)
+    assert [(a.id, a.message) for a in alarms] == [
+        (
+            "watchdog.timeout",
+            "Watchdog-Timeout 120 s am Cerbo, erwartet 90,5 s; "
+            "config.ini neu erzeugen und mit install.sh übertragen.",
+        )
+    ]
+
+
+def test_timeout_alarm_when_the_watchdog_reports_the_rounded_up_timeout() -> None:
+    alarms = watchdog_alarms(status(timeout_s=91.0), False, T0, expected_timeout_s=90.5)
+    assert [a.id for a in alarms] == ["watchdog.timeout"]
+
+
+@pytest.mark.parametrize("configured", [float("inf"), float("-inf"), float("nan")])
+def test_no_timeout_alarm_for_a_configured_timeout_that_is_no_finite_number(
+    configured: float,
+) -> None:
+    alarms = watchdog_alarms(status(timeout_s=120.0), True, T0, expected_timeout_s=configured)
+    assert alarms == []
 
 
 def test_timeout_alarm_sits_between_unavailable_and_version() -> None:

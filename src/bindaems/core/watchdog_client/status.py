@@ -89,16 +89,18 @@ def armed_for_core(status: WatchdogStatus, recent: Collection[int], timeout_s: f
     """Ob der Watchdog für diesen core scharf ist, nicht nur irgendwie (Spec 8.6).
 
     Das gilt, wenn er scharf ist, als Echo einen der zuletzt gesendeten Zähler (``recent``) zeigt
-    und das erwartete Timeout hat. Ein unbekanntes Echo oder Timeout zählt nicht: Hat ein früherer
-    Lauf oder ein Werkzeug den Watchdog scharf gemacht, schützt er diesen core nicht, denn sein
-    Heartbeat kommt nicht von hier. Das Timeout wird als Zahl verglichen, 90 gleicht 90,0.
+    und das erwartete Timeout meldet. ``timeout_s`` ist das konfigurierte Timeout
+    (``victron.watchdog.timeout_s``), verglichen als Zahl und so, wie der Watchdog es melden kann
+    (``_reportable_timeout``). Ein unbekanntes Echo oder Timeout zählt nicht: Hat ein früherer Lauf
+    oder ein Werkzeug den Watchdog scharf gemacht, schützt er diesen core nicht, denn sein
+    Heartbeat kommt nicht von hier.
     """
     return (
         status.armed
         and status.heartbeat is not None
         and status.heartbeat in recent
         and status.timeout_s is not None
-        and status.timeout_s == timeout_s
+        and status.timeout_s == _reportable_timeout(timeout_s)
     )
 
 
@@ -113,8 +115,10 @@ def watchdog_alarms(
 
     Ausgelöst, falsches Timeout und falsche Version melden sich unabhängig von ``required``,
     „antwortet nicht“ und „deaktiviert“ nur, wenn der Watchdog gebraucht wird. Das Timeout wird mit
-    ``expected_timeout_s`` (``victron.watchdog.timeout_s``) verglichen, sobald beide bekannt sind;
-    ohne erwartetes Timeout entfällt der Vergleich.
+    ``expected_timeout_s`` (``victron.watchdog.timeout_s``) verglichen, sobald beide bekannt sind,
+    und zwar so, wie der Watchdog es melden kann (``_reportable_timeout``); ohne erwartetes
+    Timeout entfällt der Vergleich. Der Text nennt das konfigurierte Timeout, denn das ändert der
+    Betreiber, wenn er die ``config.ini`` neu erzeugt.
     """
     alarms: list[Alarm] = []
     if status.state is WatchdogState.TRIPPED:
@@ -130,7 +134,8 @@ def watchdog_alarms(
     if (
         expected_timeout_s is not None
         and status.timeout_s is not None
-        and status.timeout_s != expected_timeout_s
+        and (reportable := _reportable_timeout(expected_timeout_s)) is not None
+        and status.timeout_s != reportable
     ):
         text = (
             f"Watchdog-Timeout {de(status.timeout_s)} s am Cerbo, "
@@ -145,6 +150,17 @@ def watchdog_alarms(
         )
         alarms.append(Alarm("watchdog.version", Severity.WARNING, text, now))
     return alarms
+
+
+def _reportable_timeout(timeout_s: float) -> int | None:
+    """Das konfigurierte Timeout so, wie der Watchdog am Cerbo es melden kann.
+
+    Der Dienst veröffentlicht ``/TimeoutSeconds`` als ``int`` der Einstellung, schneidet also ab:
+    90,5 erscheint als 90. ``None``, wenn die Einstellung keine endliche Zahl ist (die
+    Konfiguration lässt ``inf`` zu); das darf den Regelzyklus nicht abbrechen.
+    """
+    number = finite_number(timeout_s)
+    return int(number) if number is not None else None
 
 
 def _state(value: Value) -> WatchdogState:
