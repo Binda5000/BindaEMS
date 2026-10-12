@@ -10,7 +10,10 @@ bekommen EVCS und Tesla zusätzlich „Laden aus“ (8.4).
 - Ein wirksam live geschaltetes Ziel bekommt je Art einen Befehl, wenn der zurückgelesene Wert
   nicht der Sicherwert ist, kein Schreibvorgang offen ist und der letzte Versuch mindestens 10 s
   her ist. Je Vorfall gibt es höchstens 3 Versuche. Danach ist die Art gescheitert (``failed``,
-  Alarm ``actuator.failed.<aktor>``), bis der Wert stimmt.
+  Alarm ``actuator.failed.<aktor>``), bis der Wert stimmt oder der Vorfall endet; das gilt auch,
+  wenn der Aktor danach nicht mehr live ist, etwa weil der Watchdog ausgelöst hat. Eine
+  gescheiterte Art bekommt keinen Befehl mehr. So bleibt der Heartbeat aus, bis die Sicherwerte
+  zurückgelesen sind (Präzisierungen 3 und 5), statt mit jedem Scharfschalten neu anzulaufen.
 - Ein Dry-Run-Ziel bekommt je Art einmal je Vorfall einen Befehl; die Safety-Schicht macht daraus
   die Entscheidung „Dry-Run“. Das zählt nicht als Versuch.
 - Ein Vorfall endet, sobald der Aktor kein Ziel mehr ist; der nächste beginnt mit neuen Versuchen.
@@ -88,6 +91,30 @@ class _Attempts:
     live: int = 0  # gesendete Live-Versuche
     last: datetime | None = None  # Zeitpunkt des letzten Live-Versuchs
     dry_run: bool = False  # der Befehl im Dry-Run ist gegeben
+    failed: bool = False  # live gescheitert; gilt, bis der Wert stimmt
+
+    def due(self, now: datetime, live: bool) -> bool:
+        """Ist jetzt ein Befehl fällig? Merkt den Befehl im Dry-Run oder den Live-Versuch.
+
+        Gefragt wird nur bei einer Art ohne Treffer und ohne offenen Schreibvorgang. Sind live alle
+        Versuche verbraucht und ist der letzte mindestens 10 s her, ist die Art ab jetzt
+        gescheitert. Eine gescheiterte Art bekommt keinen Befehl, weder live noch im Dry-Run.
+        """
+        if self.failed:
+            return False
+        if not live:
+            if self.dry_run:
+                return False
+            self.dry_run = True
+            return True
+        if self.last is not None and now - self.last < _RETRY:
+            return False
+        if self.live >= SAFE_ATTEMPTS:
+            self.failed = True
+            return False
+        self.live += 1
+        self.last = now
+        return True
 
 
 class SafeStateKeeper:
@@ -107,9 +134,11 @@ class SafeStateKeeper:
     def failed(self) -> frozenset[_Key]:
         """Die gescheiterten Arten nach dem letzten ``commands``, als (Aktor, Art).
 
-        Gescheitert ist eine Art eines wirksam live geschalteten Ziels, wenn die 3 Versuche
-        verbraucht sind, der Wert nicht stimmt, kein Schreibvorgang offen ist und der letzte
-        Versuch mindestens 10 s her ist.
+        Eine Art scheitert, wenn ihr Ziel wirksam live ist, die 3 Versuche verbraucht sind, der
+        Wert nicht stimmt, kein Schreibvorgang offen ist und der letzte Versuch mindestens 10 s her
+        ist. Sie bleibt gescheitert, bis ihr Wert stimmt oder der Vorfall endet, auch wenn der
+        Aktor inzwischen nicht mehr wirksam live ist. Es zählen nur Arten, die die Ziele des
+        letzten ``commands`` noch verlangen.
         """
         return frozenset(
             (actuator, kind) for actuator, kinds in self._failed.items() for kind in kinds
@@ -128,11 +157,14 @@ class SafeStateKeeper:
         ``present`` sind die zurückgelesenen Werte, ``pending`` die offenen Schreibvorgänge des
         Ausführers und ``live`` die wirksam live geschalteten Aktoren. Je Ziel und Art gilt:
 
-        - Stimmt der Wert oder ist ein Schreibvorgang offen, gibt es keinen Befehl.
+        - Stimmt der Wert, gibt es keinen Befehl, und eine gescheiterte Art ist es nicht mehr.
+        - Eine gescheiterte Art bekommt keinen Befehl, weder live noch im Dry-Run.
+        - Ist ein Schreibvorgang offen, gibt es keinen Befehl.
         - Dry-Run: ein Befehl je Vorfall.
         - Live: ein Befehl, wenn der letzte Versuch mindestens 10 s her ist und noch nicht alle
-          3 Versuche verbraucht sind. Ein Treffer setzt die Versuche nicht zurück. Ein Aktor, der
-          im Vorfall live wird, beginnt bei 0, denn Dry-Run-Befehle zählen nicht.
+          3 Versuche verbraucht sind; sonst scheitert die Art. Ein Treffer setzt die Versuche nicht
+          zurück. Ein Aktor, der im Vorfall live wird, beginnt bei 0, denn Dry-Run-Befehle zählen
+          nicht; Versuche, die er im Vorfall schon hatte, bleiben gezählt.
 
         Die Befehle kommen in der Reihenfolge der Ziele und ihrer Sicherwerte, mit dem Grund des
         Ziels; der Stopp bei Netzausfall mit ``grid_outage``. Ein Aktor, der zweimal als Ziel
@@ -149,23 +181,15 @@ class SafeStateKeeper:
             for kind, (value, reasons) in _wanted(self._limits, target).items():
                 key = (actuator, kind)
                 state = self._attempts.setdefault(key, _Attempts())
-                if _reached(present, key, value) or key in pending:
+                if _reached(present, key, value):
+                    state.failed = False
                     continue
-                if actuator not in live:
-                    if not state.dry_run:
-                        state.dry_run = True
-                        commands.append(_command(key, value, reasons))
-                    continue
-                if state.last is not None and now - state.last < _RETRY:
-                    continue
-                if state.live >= SAFE_ATTEMPTS:
+                if key not in pending and state.due(now, actuator in live):
+                    commands.append(_command(key, value, reasons))
+                if state.failed:
                     kinds = failed.setdefault(actuator, [])
                     if kind not in kinds:
                         kinds.append(kind)
-                    continue
-                state.live += 1
-                state.last = now
-                commands.append(_command(key, value, reasons))
         self._failed = {actuator: tuple(kinds) for actuator, kinds in failed.items()}
         for actuator in self._failed:
             self._failed_since.setdefault(actuator, now)
@@ -176,9 +200,10 @@ class SafeStateKeeper:
     ) -> list[Alarm]:
         """Je Aktor mit gescheiterten Arten der Alarm ``actuator.failed.<aktor>`` (Fehler).
 
-        Der Stand ist der des letzten ``commands``; ``now`` nimmt die Methode wie die anderen
-        Quellen von Alarmen, der Stand hängt aber nicht davon ab. ``since`` ist der Zeitpunkt, zu
-        dem der Aktor in diesem Vorfall zum ersten Mal eine gescheiterte Art hatte.
+        Der Stand ist der des letzten ``commands``: Der Alarm besteht, solange der Aktor eine
+        gescheiterte Art hat (``failed``). ``now`` nimmt die Methode wie die anderen Quellen von
+        Alarmen, der Stand hängt aber nicht davon ab. ``since`` ist der Zeitpunkt, zu dem der Aktor
+        in diesem Vorfall zum ersten Mal eine gescheiterte Art hatte.
 
         Der Text nennt die Arten in der Reihenfolge der Sicherwerte, mehrere als „„a“, „b““. Steht
         der Aktor in ``needs_watchdog`` (Victron, EVCS), folgt „Der Watchdog am Cerbo übernimmt.“

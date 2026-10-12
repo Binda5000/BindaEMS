@@ -277,12 +277,87 @@ def test_live_attempts_stay_with_the_incident(limits_live) -> None:
 
 
 def test_dry_run_actuator_is_not_in_failed(limits_live) -> None:
+    # Ein Ziel, das im Vorfall nie live war, scheitert nie, auch nach einem früheren Vorfall.
     keeper, target = SafeStateKeeper(limits_live), [SafeTarget(EVCS, "safe_state")]
     for seconds in (0, 10, 20, 30):
         sent(keeper, seconds, target, {CUR: 16.0})
     assert keeper.failed == {CUR}
-    sent(keeper, 31, target, {CUR: 16.0}, live=())  # Watchdog nicht mehr scharf
+    sent(keeper, 31, [], {})  # Vorfall endet
+    assert sent(keeper, 32, target, {CUR: 16.0}, live=()) == [(EVCS, CommandKind.CURRENT, 6.0)]
+    for seconds in range(42, 100, 10):
+        assert sent(keeper, seconds, target, {CUR: 16.0}, live=()) == []
+    assert keeper.failed == frozenset() and keeper.alarms(S(92), LABELS, {EVCS}) == []
+
+
+def fail_live(keeper: SafeStateKeeper, target) -> None:
+    """Drei Live-Versuche bei 0, 10 und 20 s ohne Treffer: Bei 30 s ist der Strom gescheitert."""
+    for seconds in (0, 10, 20, 30):
+        sent(keeper, seconds, target, {CUR: 16.0})
+    assert keeper.failed == {CUR}
+
+
+def test_failed_kind_stays_failed_when_no_longer_live(limits_live) -> None:
+    # Der Watchdog löst aus: Die EVCS ist nicht mehr wirksam live, der Strom bleibt gescheitert.
+    keeper, target = SafeStateKeeper(limits_live), [SafeTarget(EVCS, "handback")]
+    fail_live(keeper, target)
+    for seconds in (31, 41, 100):
+        assert sent(keeper, seconds, target, {CUR: 16.0}, live=()) == []  # auch kein Dry-Run
+        assert keeper.failed == {CUR}
+    assert [(a.id, a.since) for a in keeper.alarms(S(100), LABELS, {EVCS})] == [
+        ("actuator.failed.wallbox.evcs", S(30))
+    ]
+
+
+def test_failed_kind_ends_when_the_value_matches_while_not_live(limits_live) -> None:
+    keeper, target = SafeStateKeeper(limits_live), [SafeTarget(EVCS, "handback")]
+    fail_live(keeper, target)
+    sent(keeper, 31, target, {CUR: 16.0}, live=())
+    assert keeper.failed == {CUR}
+    assert sent(keeper, 40, target, {CUR: 6.0}, live=()) == []  # der Watchdog setzt den Sicherwert
+    assert keeper.failed == frozenset() and keeper.alarms(S(40), LABELS, {EVCS}) == []
+
+
+def test_matched_kind_fails_again_only_while_live(limits_live) -> None:
+    keeper, target = SafeStateKeeper(limits_live), [SafeTarget(EVCS, "safe_state")]
+    fail_live(keeper, target)
+    sent(keeper, 31, target, {CUR: 16.0}, live=())  # Watchdog ausgelöst
+    sent(keeper, 40, target, {CUR: 6.0}, live=())  # der Watchdog setzt den Sicherwert
     assert keeper.failed == frozenset()
+    # Der Wert weicht wieder ab, die EVCS ist weiter nicht live: nicht gescheitert, einmal Dry-Run.
+    assert sent(keeper, 50, target, {CUR: 16.0}, live=()) == [(EVCS, CommandKind.CURRENT, 6.0)]
+    assert keeper.failed == frozenset()
+    # Wieder live: Die Versuche des Vorfalls sind verbraucht, die Art scheitert ohne Versuch.
+    assert sent(keeper, 60, target, {CUR: 16.0}) == []
+    assert keeper.failed == {CUR}
+
+
+def test_failed_kind_ends_with_the_incident_while_not_live(limits_live) -> None:
+    keeper, target = SafeStateKeeper(limits_live), [SafeTarget(EVCS, "handback")]
+    fail_live(keeper, target)
+    sent(keeper, 31, target, {CUR: 16.0}, live=())
+    assert keeper.failed == {CUR}
+    sent(keeper, 32, [], {}, live=())  # kein Ziel mehr
+    assert keeper.failed == frozenset() and keeper.alarms(S(32), LABELS, {EVCS}) == []
+
+
+def test_failed_kind_gets_no_new_attempts_when_live_again(limits_live) -> None:
+    keeper, target = SafeStateKeeper(limits_live), [SafeTarget(EVCS, "handback")]
+    fail_live(keeper, target)
+    sent(keeper, 31, target, {CUR: 16.0}, live=())  # Watchdog ausgelöst
+    sent_at = [s for s in (61, 71, 81, 91, 120) if sent(keeper, s, target, {CUR: 16.0})]
+    assert sent_at == [] and keeper.failed == {CUR}  # wieder scharf und live: kein Versuch mehr
+
+
+def test_failure_is_only_established_while_live(limits_live) -> None:
+    # Die 3 Versuche sind verbraucht, aber vor Ablauf der 10 s ist die EVCS nicht mehr live.
+    keeper, target = SafeStateKeeper(limits_live), [SafeTarget(EVCS, "safe_state")]
+    for seconds in (0, 10, 20):
+        sent(keeper, seconds, target, {CUR: 16.0})
+    assert sent(keeper, 30, target, {CUR: 16.0}, live=()) == [(EVCS, CommandKind.CURRENT, 6.0)]
+    assert keeper.failed == frozenset()  # im Dry-Run nicht gescheitert, der Befehl kommt einmal
+    assert sent(keeper, 40, target, {CUR: 16.0}, live=()) == []
+    assert sent(keeper, 50, target, {CUR: 16.0}) == []  # wieder live: gescheitert, ohne Versuch
+    assert keeper.failed == {CUR}
 
 
 def test_new_incident_starts_with_new_attempts(limits_live) -> None:
