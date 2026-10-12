@@ -45,11 +45,13 @@ from bindaems.shared.timeutil import LOCAL_TZ
 COMMAND_TIMEOUT_S: Final = 60.0  # Frist je Befehl, insgesamt und je httpx-Phase (Spec 6.5)
 FAILURES_ALLOWED: Final = 3  # so viele Fehler binnen FAILURE_WINDOW machen ihn nicht steuerbar
 FAILURE_WINDOW: Final = timedelta(minutes=15)  # Zählfenster und Dauer des Zustands danach
-# Prüfung eines bestätigten Stroms im Tessie-Cache: Eine Meldung zählt erst SETTLE_S nach der
-# Bestätigung, wenn der Cache das Auto eingeholt hat; bis VERIFY_S wartet die Prüfung auf eine
-# solche. Beim Laden fragt der Adapter alle 30 s ab, eine Meldung fällt also immer in das Fenster.
+# Prüfung eines bestätigten Stroms im Tessie-Cache. Eine Meldung zählt erst SETTLE_S nach der
+# Bestätigung: Bis dahin, so die noch ungemessene Annahme, hat Tessies Cache das Auto eingeholt.
+# Bis VERIFY_S wartet die Prüfung auf eine solche Meldung. Beim Laden fragt der Adapter alle 30 s
+# ab, dazu kommt die Dauer der Abfrage: Das Fenster von 40 s fängt eine Meldung, solange eine
+# Abfrage höchstens 10 s dauert.
 SETTLE_S: Final = 10.0
-VERIFY_S: Final = 40.0
+VERIFY_S: Final = 50.0
 CHECK_MARGIN_S: Final = 5.0  # so lange vor der Frist des Ausführers endet die Prüfung spätestens
 
 # Gründe, warum der Tesla nicht steuerbar ist (Plan „Texte“); „nach Fehlern“ hat die Uhrzeit und

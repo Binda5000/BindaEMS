@@ -40,8 +40,8 @@ class Confirmation(StrEnum):
 
     ``NOT_TAKEN`` ist ein Scheitern, nach dem derselbe Befehl erneut gesendet werden darf: Das Gerät
     hat ihn bestätigt, den Wert aber nicht übernommen (Tesla über Tessie, Prüfprotokoll Teil 2 vom
-    12.10.2026). Der Aktor sendet dann nicht selbst nach; ein erneuter Befehl geht wie jeder durch
-    die Safety-Schicht.
+    12.10.2026). Der Aktor sendet dann nicht selbst nach; den neuen Versuch gibt der Aufrufer, in
+    der Laufzeit wie jeden Befehl durch die Safety-Schicht.
     """
 
     PENDING = "pending"

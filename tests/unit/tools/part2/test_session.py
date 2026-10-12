@@ -1,6 +1,7 @@
 """Tests der Teil-2-Sitzung: prüfen, senden, bestätigen, wiederherstellen und der Aufbau."""
 
 import asyncio
+import re
 import time
 from collections.abc import Callable
 from datetime import datetime
@@ -29,6 +30,8 @@ from bindaems.tools.verify_checks import Finding
 
 CURRENT, CHARGING = CommandKind.CURRENT, CommandKind.CHARGING
 NOT_TAKEN_10 = "Fahrzeug übernahm 10 A nicht (Tessie meldet 16 A)."
+FIRST_10 = r"Fahrzeug übernahm 10 A nicht \(Tessie meldet 16 A\)"
+SECONDS = r"\d+(,\d)?"  # eine Zeit in Sekunden mit höchstens einer Nachkommastelle
 MAX_DISCHARGE, MIN_SOC, GRID_SETPOINT = (
     CommandKind.MAX_DISCHARGE,
     CommandKind.MIN_SOC,
@@ -538,18 +541,33 @@ async def test_a_value_the_car_did_not_take_is_sent_once_more(cfg: Config) -> No
     car = ForgetfulCar(misses=1)
     session = car_session(cfg, car)
     assert await session.set_and_confirm("vehicle.tesla", CURRENT, 10.0, 5.0) is not None
-    assert (session.repeated, session.failure) == (True, None)
+    assert session.failure is None and session.repetition is not None
+    assert re.fullmatch(
+        rf"Erster Befehl: {FIRST_10}; wiederholt nach {SECONDS} s\.", session.repetition
+    )
+    assert session.with_repetition("bestätigt") == f"bestätigt. {session.repetition}"
     assert car.sent == [(CURRENT, 10.0), (CURRENT, 10.0)]
     assert await session.set_and_confirm("vehicle.tesla", CURRENT, 12.0, 5.0) is not None
-    assert session.repeated is False  # gilt je Aufruf
+    assert session.repetition is None  # gilt je Aufruf
+    assert session.with_repetition("bestätigt") == "bestätigt"
 
 
 async def test_a_value_the_car_did_not_take_twice_is_a_failure(cfg: Config) -> None:
     car = ForgetfulCar(misses=2)
     session = car_session(cfg, car)
     assert await session.set_and_confirm("vehicle.tesla", CURRENT, 10.0, 5.0) is None
-    assert (session.repeated, session.failure) == (True, f"Fehler: {NOT_TAKEN_10}")
+    assert session.failure == f"Fehler: {NOT_TAKEN_10} {session.repetition}"
     assert car.sent == [(CURRENT, 10.0), (CURRENT, 10.0)]  # nur einmal wiederholt
+
+
+async def test_a_repetition_without_confirmation_names_the_deadline_and_the_repetition(
+    cfg: Config,
+) -> None:
+    car = ForgetfulCar(misses=1, hangs=True)
+    session = car_session(cfg, car)
+    assert await session.set_and_confirm("vehicle.tesla", CURRENT, 10.0, 0.2) is None
+    assert session.failure == f"nicht bestätigt nach 0,2 s. {session.repetition}"
+    assert len(car.sent) == 2
 
 
 async def test_no_repetition_to_a_car_that_is_no_longer_controllable(cfg: Config) -> None:
@@ -1014,12 +1032,21 @@ class ForgetfulCar(StubTesla):
     """Ein Tesla, dessen Befehle Tessie bestätigt; die ersten ``misses`` übernimmt er aber nicht.
 
     Jedes Ergebnis steht ``delay_s`` nach dem Senden fest. Mit ``stays_controllable=False`` ist er
-    nach dem ersten Befehl nicht mehr steuerbar (abgesteckt).
+    nach dem ersten Befehl nicht mehr steuerbar (abgesteckt), mit ``hangs`` bleibt jeder Befehl
+    nach den ``misses`` offen.
     """
 
-    def __init__(self, misses: int, *, delay_s: float = 0.0, stays_controllable: bool = True):
+    def __init__(
+        self,
+        misses: int,
+        *,
+        delay_s: float = 0.0,
+        stays_controllable: bool = True,
+        hangs: bool = False,
+    ) -> None:
         super().__init__(Confirmation.CONFIRMED)
         self.misses, self.delay_s, self.stays_controllable = misses, delay_s, stays_controllable
+        self.hangs = hangs
         self.sent_at = 0.0
 
     def capabilities(self, snap: Snapshot, now: datetime) -> Capabilities:
@@ -1038,7 +1065,7 @@ class ForgetfulCar(StubTesla):
             return Confirmation.PENDING, ""
         if len(self.sent) <= self.misses:
             return Confirmation.NOT_TAKEN, NOT_TAKEN_10
-        return Confirmation.CONFIRMED, ""
+        return (Confirmation.PENDING if self.hangs else Confirmation.CONFIRMED), ""
 
 
 class WaitingAdapter:

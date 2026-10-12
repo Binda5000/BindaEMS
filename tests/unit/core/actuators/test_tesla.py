@@ -207,7 +207,7 @@ async def test_token_never_in_failure_text(cfg, respx_mock) -> None:
 
 def test_identity_and_deadline(car) -> None:
     assert (car.id, car.confirm_timeout_s) == ("vehicle.tesla", 75.0)
-    assert (car.settle_s, car.verify_s, CHECK_MARGIN_S) == (10.0, 40.0, 5.0)
+    assert (car.settle_s, car.verify_s, CHECK_MARGIN_S) == (10.0, 50.0, 5.0)
     assert (COMMAND_TIMEOUT_S, FAILURES_ALLOWED, FAILURE_WINDOW) == (60.0, 3, timedelta(minutes=15))
     assert car.confirm_timeout_s > COMMAND_TIMEOUT_S  # das Ende des Befehls kommt vor der Frist
 
@@ -1357,9 +1357,10 @@ async def test_charging_commands_are_not_checked_in_the_cache(cfg, respx_mock) -
 
 
 def test_a_settled_reading_falls_into_the_check_while_charging() -> None:
-    # Beim Laden fragt der Adapter alle 30 s ab: Zwischen SETTLE_S und VERIFY_S nach der
-    # Bestätigung kommt also immer eine Meldung, und die Prüfung endet vor der Frist.
-    assert poll_interval_s("Charging", True) + SETTLE_S <= VERIFY_S
+    # Beim Laden fragt der Adapter alle 30 s ab, dazu kommt die Dauer der Abfrage: Das Fenster
+    # zwischen SETTLE_S und VERIFY_S nach der Bestätigung fängt eine Meldung, solange eine Abfrage
+    # höchstens 10 s dauert. Die Prüfung endet vor der Frist des Ausführers, aber nach dem Befehl.
+    assert VERIFY_S - SETTLE_S >= poll_interval_s("Charging", True) + 10
     assert 0 < CHECK_MARGIN_S < TeslaActuator.confirm_timeout_s - COMMAND_TIMEOUT_S
 
 

@@ -458,11 +458,13 @@ docker compose run --rm -v "$PWD/verification:/out" --entrypoint python ems-core
   Schritt. Zwei vollständige Läufe binnen einer Stunde können deshalb mehr als 6 Start/Stopp-Befehle
   ergeben (die Grenze der Regelung, Spec 6.5).
 - Tesla: Bestätigt ist ein Strom erst, wenn auch der Tessie-Cache ihn zeigt. Der Aktor wertet die
-  erste Meldung ab 10 s nach der Bestätigung durch Tessie, höchstens bis 40 s danach. Zeigt sie
-  noch den alten Wert, sendet das Werkzeug den Befehl einmal erneut; an der Anlage wirkt ein
-  Befehl auf oder von 5 A erst beim zweiten Mal. Der Befund sagt dann „Befehl wiederholt“.
-  „bestätigt nach … s“ schließt die Prüfung ein, die Zeit am Wall Connector zählt ab dem ersten
-  Senden.
+  erste Meldung ab 10 s nach der Bestätigung durch Tessie, höchstens bis 50 s danach; kommt keine,
+  gilt die Bestätigung von Tessie. Zeigt die Meldung noch den alten Wert, sendet das Werkzeug den
+  Befehl einmal erneut; an der Anlage wirkt ein Befehl auf oder von 5 A erst beim zweiten Mal. Der
+  Befund nennt das als „Erster Befehl: Fahrzeug übernahm … A nicht (Tessie meldet … A);
+  wiederholt nach … s.“ „bestätigt nach … s“ schließt die Prüfung ein, die Zeit am Wall Connector
+  zählt ab dem ersten Senden. Ohne Bestätigung nennt der Befund, ob der Wall Connector den
+  Sollstrom erreichte: Dann hinkt nur der Cache, sonst hat das Auto den Strom nicht übernommen.
 
 **Wiederherstellen**
 

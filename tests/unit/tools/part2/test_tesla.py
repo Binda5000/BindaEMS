@@ -25,6 +25,7 @@ from bindaems.core.adapters.tessie import TessieAdapter
 from bindaems.core.adapters.twc import TwcAdapter
 from bindaems.core.state.store import StateStore
 from bindaems.shared.config import Config
+from bindaems.shared.control import CommandKind
 from bindaems.shared.timeutil import SystemClock
 from bindaems.tools.part2.session import Part2Session
 from bindaems.tools.part2.tesla import DEFAULT_TIMINGS, TeslaTimings, run_tesla
@@ -45,6 +46,14 @@ NOT_AT_TWC = r"Wirkung nicht messbar \(nicht am Wall Connector\)"
 
 def step(findings: list[Finding], title: str) -> Finding:
     return next(f for f in findings if f.title == title)
+
+
+def first_command(wanted: int, reported: int) -> str:
+    """Muster für den Satz zur Wiederholung (``Part2Session.repetition``)."""
+    return (
+        rf"Erster Befehl: Fahrzeug übernahm {wanted} A nicht \(Tessie meldet {reported} A\); "
+        rf"wiederholt nach {SECONDS} s\."
+    )
 
 
 def commands(respx_mock) -> list[str]:
@@ -102,13 +111,66 @@ async def test_a_current_the_car_takes_only_the_second_time_is_sent_twice(
     respx_mock.post(AMPS_URL).mock(side_effect=command)
     tessie_reports(twc.store, every_s=0.05, until_s=10.0)  # der Adapter fragt laufend ab
     findings = await run_tesla(session, session.cfg, "tesla", timings=ROOMY)
-    repeated = rf"bestätigt nach {SECONDS} s, Befehl wiederholt, Wall Connector {SECONDS} s"
-    for title in ("Ladestrom 10 A", "Verhalten bei 5 A"):
-        assert re.fullmatch(repeated, step(findings, title).detail)
-    restored = step(findings, "Wiederherstellen: Strom 16 A")
-    assert re.fullmatch(rf"Wiederhergestellt nach {SECONDS} s, Befehl wiederholt", restored.detail)
+    effect = rf"bestätigt nach {SECONDS} s, Wall Connector {SECONDS} s"
+    for title, wanted, before in (("Ladestrom 10 A", 10, 16), ("Verhalten bei 5 A", 5, 10)):
+        assert re.fullmatch(
+            rf"{effect}\. {first_command(wanted, before)}", step(findings, title).detail
+        )
+    restored = step(findings, "Wiederherstellen: Strom 16 A").detail
+    assert re.fullmatch(rf"Wiederhergestellt nach {SECONDS} s\. {first_command(16, 5)}", restored)
     assert sent == ["10", "10", "5", "5", "16", "16"]  # je Wert einmal wiederholt
     assert twc.store.snapshot().ok("vehicle.tesla.charge_amps") == 16  # wiederhergestellt
+
+
+async def test_a_lagging_cache_is_told_apart_by_the_wall_connector(
+    tesla_session, respx_mock
+) -> None:
+    # Das Auto übernimmt jeden Strom, aber der Tessie-Cache zeigt ihn nie: Der Befund nennt die
+    # Wiederholung und dass der Wall Connector beim Sollstrom war, also hinkt nur der Cache.
+    session, twc = tesla_session(answers=[False], check_s=0.5, settle_s=0.1)
+
+    def command(request: httpx.Request) -> httpx.Response:
+        for phase in (1, 2, 3):
+            put_signal(
+                twc.store, f"wallbox.twc.l{phase}.current_a", float(request.url.params["amps"])
+            )
+        return httpx.Response(200, json={"result": True})
+
+    respx_mock.post(AMPS_URL).mock(side_effect=command)
+    tessie_reports(twc.store, every_s=0.05, until_s=10.0)
+    findings = await run_tesla(session, session.cfg, "tesla", timings=ROOMY)
+    result = step(findings, "Ladestrom 10 A")
+    not_taken = r"Fahrzeug übernahm 10 A nicht \(Tessie meldet 16 A\)"
+    assert result.status == "fail"
+    at_twc = rf"Wall Connector bei 10 A nach {SECONDS} s\."
+    assert re.fullmatch(rf"Fehler: {not_taken}\. {first_command(10, 16)} {at_twc}", result.detail)
+
+
+async def test_after_an_abort_during_the_check_the_restore_goes_out_at_once(
+    tesla_session, respx_mock
+) -> None:
+    # Strg+C, während der Aktor den Strom im Cache prüft: Der vorgefundene Strom ersetzt die
+    # Prüfung und geht sofort hinaus, statt auf ihr Ende zu warten.
+    session, twc = tesla_session(check_s=5.0, settle_s=1.0)
+    sent: list[str] = []
+
+    def command(request: httpx.Request) -> httpx.Response:
+        sent.append(request.url.params["amps"])
+        put_signal(twc.store, "vehicle.tesla.charge_amps", int(sent[-1]))  # das Auto übernimmt
+        return httpx.Response(200, json={"result": True})
+
+    respx_mock.post(AMPS_URL).mock(side_effect=command)
+    tessie_reports(twc.store, every_s=0.05, until_s=10.0)
+    current = session.set_and_confirm("vehicle.tesla", CommandKind.CURRENT, 10.0, 5.0)
+    running = asyncio.create_task(current)
+    await asyncio.sleep(0.3)  # Tessie hat bestätigt, die Prüfung wartet noch auf SETTLE_S
+    running.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await running
+    started = time.monotonic()
+    (restored,) = await session.restore(timeout_s=5.0)
+    assert restored.status == "ok" and time.monotonic() - started < 3.0
+    assert sent == ["10", "16"]
 
 
 async def test_asleep_stops_before_any_command(tesla_session, respx_mock) -> None:
@@ -417,7 +479,10 @@ async def test_a_command_tessie_refuses_is_an_error(tesla_session, respx_mock) -
     session, _ = tesla_session(answers=[False])
     findings = await run_tesla(session, session.cfg, "tesla", timings=FAST)
     assert step(findings, "Ladestrom 10 A") == Finding(
-        "17.2-7", "Ladestrom 10 A", "fail", "Fehler: Tessie meldet result=false."
+        "17.2-7",
+        "Ladestrom 10 A",
+        "fail",
+        "Fehler: Tessie meldet result=false. Wall Connector nicht bei 10 A (Ist 16 A).",
     )
 
 
@@ -432,7 +497,10 @@ async def test_a_command_tessie_does_not_answer_names_the_deadline(
     session, _ = tesla_session(answers=[False])
     findings = await run_tesla(session, session.cfg, "tesla", timings=FAST)
     assert step(findings, "Ladestrom 10 A") == Finding(
-        "17.2-7", "Ladestrom 10 A", "fail", "nicht bestätigt nach 0,3 s"
+        "17.2-7",
+        "Ladestrom 10 A",
+        "fail",
+        "nicht bestätigt nach 0,3 s. Wall Connector nicht bei 10 A (Ist 16 A).",
     )
 
 

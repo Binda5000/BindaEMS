@@ -12,7 +12,7 @@ Betreiber (Plan 2b, Präzisierung 11). Die Sitzung startet dafür die echten Ada
   erneut, wenn er ablehnt, und ohne Bestätigung nach ``resend_s`` noch einmal. So übersteht ein
   Wert das Neuverbinden zum Cerbo nach einer langen Rückfrage. Hat das Gerät einen bestätigten
   Wert nicht übernommen (``NOT_TAKEN``, der Tesla bei 5 A), sendet sie ihn einmal erneut, wie der
-  core im sicheren Zustand.
+  core im sicheren Zustand; die Befunde nennen das (``with_repetition``).
 - Vor dem ersten Schreiben je Aktor und Art merkt sie sich den vorgefundenen Wert (``present``).
   Ist er unbekannt, schreibt sie nicht: Er ließe sich nicht wiederherstellen. Dasselbe gilt für
   einen Wert, den die Regeln 1–3 klemmen oder ablehnen würden (``found_problem``): Sie prüft ihn,
@@ -77,7 +77,6 @@ from bindaems.shared.timeutil import SystemClock
 from bindaems.tools.verify_checks import Finding
 
 RESTORE_S: Final = 15.0  # Frist je wiederherzustellendem Wert, vom Senden bis zur Bestätigung
-REPEATED: Final = ", Befehl wiederholt"  # nach NOT_TAKEN ging der Wert ein zweites Mal hinaus
 RESEND_S: Final = 5.0  # ohne Bestätigung geht derselbe Wert nach so vielen Sekunden noch einmal
 MAX_PERSISTENT_WRITES: Final = 4  # persistente Schreibzugriffe je Lauf, alle Arten zusammen
 PERSISTENT_LIMIT: Final = (
@@ -114,6 +113,12 @@ def _show(finding: Finding) -> None:
     """Zeigt einen Befund auf der Konsole, wie er im Bericht steht."""
     label = _LABELS[finding.status]
     print(f"{finding.item} {finding.title}: {label} – {finding.detail}")
+
+
+def _repetition(text: str, after_s: float) -> str:
+    """Der Satz für ``repetition``: was der Aktor zum ersten Befehl meldete, wann er erneut ging."""
+    reason = text.rstrip(".") or "nicht übernommen"
+    return f"Erster Befehl: {reason}; wiederholt nach {seconds(after_s)} s."
 
 
 def _not_controllable(reasons: Sequence[str]) -> str:
@@ -171,8 +176,9 @@ class Part2Session:
 
     ``findings`` sind die Befunde, die die Teile mit ``record`` festhalten. ``failure`` nennt,
     warum der letzte Aufruf von ``set_and_confirm`` keinen bestätigten Wert ergab, ``sent``, ob er
-    einen Auftrag hinausgeschickt hat, ``repeated``, ob er ihn nach ``NOT_TAKEN`` erneut gesendet
-    hat. ``confirmed`` ist der zuletzt bestätigte Wert je Aktor und Art, auch vom Wiederherstellen.
+    einen Auftrag hinausgeschickt hat. ``repetition`` ist ``None`` oder der Satz, dass und warum er
+    den Wert nach ``NOT_TAKEN`` erneut gesendet hat. ``confirmed`` ist der zuletzt bestätigte Wert
+    je Aktor und Art, auch vom Wiederherstellen.
     """
 
     def __init__(
@@ -198,7 +204,7 @@ class Part2Session:
         self.findings: list[Finding] = []
         self.failure: str | None = None
         self.sent = False
-        self.repeated = False
+        self.repetition: str | None = None
         self._store = store
         self._ask = ask
         self._poll_s = poll_s
@@ -355,14 +361,16 @@ class Part2Session:
 
         Meldet der Aktor, das Gerät habe den bestätigten Wert nicht übernommen (``NOT_TAKEN``;
         der Tesla bei Befehlen auf oder von 5 A), sendet die Sitzung denselben Wert sofort einmal
-        erneut, sofern der Aktor steuerbar ist, und die Frist beginnt dafür von vorn.
+        erneut, sofern der Aktor steuerbar ist, und die Frist beginnt dafür von vorn. Das hält
+        ``repetition`` fest, mit dem Text des Aktors und den Sekunden ab dem ersten Senden.
 
         Ergebnis sind die Sekunden vom ersten Senden bis zur Bestätigung, sonst ``None``; dann
         nennt ``failure`` den Grund: ging nichts hinaus (``sent`` ist dann falsch), warum (Werte
         nach der Rückfrage nicht aktuell, nicht steuerbar, abgelehnt, vorgefundener Wert unbekannt
         oder außerhalb der Regeln 1–3), sonst die Frist. Meldet der Aktor ausdrücklich einen
         Fehler (Tesla: Tessie lehnt ab) oder ein zweites ``NOT_TAKEN``, endet das Warten sofort
-        mit „Fehler: …“; ging die Wiederholung nicht hinaus, steht ihr Grund dahinter.
+        mit „Fehler: …“; ging die Wiederholung nicht hinaus, steht ihr Grund dahinter. Nach einer
+        Wiederholung folgt ``repetition`` dem Grund.
 
         Ein Aktor, eine Art oder ein Wert, den die Regeln 1–3 klemmen oder ablehnen würden, ist ein
         Fehler des Werkzeugs (``ValueError``), noch vor jedem Senden. Vor dem ersten angenommenen
@@ -372,7 +380,7 @@ class Part2Session:
         key = (actuator, kind)
         self.failure = None
         self.sent = False
-        self.repeated = False
+        self.repetition = None
         if self._budget_used_up(kind):
             self.failure = PERSISTENT_LIMIT
             return None
@@ -398,16 +406,16 @@ class Part2Session:
                 if state == Confirmation.CONFIRMED:
                     self._confirmed[key] = value
                     return self.monotonic() - first_sent
-                if state == Confirmation.NOT_TAKEN and not self.repeated:
-                    self.repeated = True
+                if state == Confirmation.NOT_TAKEN and self.repetition is None:
                     problem = self._send(device, key, kind, value)
                     if problem is not None:
                         self.failure = f"Fehler: {text} Keine Wiederholung, {problem}"
                         return None
                     started = last_sent = self.monotonic()  # eigene Frist für die Wiederholung
+                    self.repetition = _repetition(text, started - first_sent)
                     state = Confirmation.PENDING
                 if state in (Confirmation.FAILED, Confirmation.NOT_TAKEN):
-                    self.failure = f"Fehler: {text}" if text else "Fehler"
+                    self.failure = self.with_repetition(f"Fehler: {text}" if text else "Fehler")
                     return None
                 now = self.monotonic()
                 # noch offen: denselben Wert erneut, falls der Aktor ihn annimmt (der Tesla nimmt
@@ -418,7 +426,7 @@ class Part2Session:
             remaining = timeout_s - (self.monotonic() - started)
             if remaining <= 0:
                 late = f"nicht bestätigt nach {de(timeout_s)} s"
-                self.failure = blocked if first_sent is None else late
+                self.failure = blocked if first_sent is None else self.with_repetition(late)
                 return None
             await asyncio.sleep(min(self._poll_s, remaining))
 
@@ -457,6 +465,12 @@ class Part2Session:
         rows = await self.restore(timeout_s)
         self.findings.extend(rows)
         return rows
+
+    def with_repetition(self, text: str) -> str:
+        """``text`` und, wenn der letzte Wert wiederholt wurde, ``repetition`` als eigener Satz."""
+        if self.repetition is None:
+            return text
+        return f"{text.rstrip('.')}. {self.repetition}"
 
     def _checked(self, actuator: str, kind: CommandKind, value: CommandValue) -> Actuator:
         """Der Aktor zu ``actuator``, wenn Art und Wert die Regeln 1–3 unverändert passieren."""
@@ -542,8 +556,8 @@ class Part2Session:
             return Finding(item, title, "fail", f"{type(exc).__name__}: {exc}")
         if waited is None:
             return Finding(item, title, "fail", self.failure or "nicht wiederhergestellt")
-        detail = f"Wiederhergestellt nach {seconds(waited)} s"
-        return Finding(item, title, "ok", f"{detail}{REPEATED}" if self.repeated else detail)
+        detail = self.with_repetition(f"Wiederhergestellt nach {seconds(waited)} s")
+        return Finding(item, title, "ok", detail)
 
 
 def build_session(

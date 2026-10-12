@@ -47,13 +47,7 @@ from bindaems.shared.config import Config, TwcConfig, VehicleConfig
 from bindaems.shared.control import CommandKind, CommandValue, vehicle_actuator
 from bindaems.shared.domain import Quality, Snapshot
 from bindaems.shared.numbers import de, finite_number
-from bindaems.tools.part2.session import (
-    REPEATED,
-    STALE_AFTER_QUESTION,
-    Part2Session,
-    minutes,
-    seconds,
-)
+from bindaems.tools.part2.session import STALE_AFTER_QUESTION, Part2Session, minutes, seconds
 from bindaems.tools.verify_checks import Finding, Status
 
 ITEM: Final = "17.2-7"
@@ -201,9 +195,11 @@ class _TeslaSteps:
         """Setzt den Strom; Tessie bestätigt, und der Wall Connector soll ihm folgen.
 
         Bestätigt ist der Strom erst, wenn auch der Tessie-Cache ihn zeigt (``TeslaActuator``), oft
-        10 bis 40 s nach dem Senden. Den Wall Connector beobachtet der Schritt darum schon ab dem
+        10 bis 50 s nach dem Senden. Den Wall Connector beobachtet der Schritt darum schon ab dem
         Senden: Seine Zeit zählt ab dem Senden, bis der Strom dort beim Sollwert ist. Nach der
-        Bestätigung wartet der Schritt noch bis ``effect_s`` darauf.
+        Bestätigung wartet der Schritt noch bis ``effect_s`` darauf. Ohne Bestätigung nennt der
+        Befund, was der Wall Connector bis dahin zeigte; so trennt er „Cache hinkt“ von „Auto
+        übernimmt nicht“. Eine Wiederholung nennt er mit ``Part2Session.with_repetition``.
         """
         session = self._session
         before = session.snapshot()
@@ -218,13 +214,15 @@ class _TeslaSteps:
         try:
             confirmed = await self._set(CommandKind.CURRENT, float(amps))
             if confirmed is None:
-                self._record(title, "fail", self._failure())
+                failure = self._failure()
+                if session.sent and watch is not None:
+                    failure = f"{failure.rstrip('.')}. {self._observed(watch, amps)}"
+                self._record(title, "fail", failure)
                 return
             detail = f"bestätigt nach {seconds(confirmed)} s"
-            if session.repeated:
-                detail += REPEATED
             if watch is None:
-                self._record(title, "ok", f"{detail}; Wirkung nicht messbar ({reason})")
+                unmeasurable = f"{detail}; Wirkung nicht messbar ({reason})"
+                self._record(title, "ok", session.with_repetition(unmeasurable))
                 return
             running = watch
             await session.wait_for(lambda _: running.done(), self._t.effect_s)
@@ -233,11 +231,20 @@ class _TeslaSteps:
             if watch is not None:
                 watch.cancel()
         if waited is not None:
-            self._record(title, "ok", f"{detail}, Wall Connector {seconds(waited)} s")
+            effect = f"{detail}, Wall Connector {seconds(waited)} s"
+            self._record(title, "ok", session.with_repetition(effect))
             return
         actual = _amps(self._wall_connector_current(session.snapshot()))
         text = f"Wall Connector nach {de(self._t.effect_s)} s nicht bei {de(amps)} A (Ist {actual})"
-        self._record(title, "warn", f"{detail}; {text}")
+        self._record(title, "warn", session.with_repetition(f"{detail}; {text}"))
+
+    def _observed(self, watch: asyncio.Task[float | None], amps: int) -> str:
+        """Was der Wall Connector bisher zeigte, als Satz: ab wann der Sollstrom, sonst der Ist."""
+        reached = watch.result() if watch.done() else None
+        if reached is not None:
+            return f"Wall Connector bei {de(amps)} A nach {seconds(reached)} s."
+        actual = _amps(self._wall_connector_current(self._session.snapshot()))
+        return f"Wall Connector nicht bei {de(amps)} A (Ist {actual})."
 
     def _wall_connector_current(self, snap: Snapshot) -> float | None:
         """Der größte Phasenstrom am Wall Connector; ``None``, wenn keine Phase bekannt ist."""
