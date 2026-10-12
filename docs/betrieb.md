@@ -507,6 +507,9 @@ docker compose run --rm -v "$PWD/verification:/out" --entrypoint python ems-core
   Ruhezustand meldet (die Rückmeldung `null` für „kein Override“ ist vorläufig). Meldet er im
   Ruhezustand einen Zahlenwert, verweigert das Werkzeug wie oben; dann muss der Ruhezustand neu
   bewertet werden.
+- Nennt „Victron bereit“ die Entladegrenze als „unbekannt“, brich mit Strg+C ab und starte den
+  Punkt neu: Meldet der Cerbo sie erst später, gälte sonst eine von einem abgebrochenen Lauf
+  hinterlassene Entladegrenze von 0 W als Ausgangswert und bliebe am Ende stehen.
 
 **Bericht**
 

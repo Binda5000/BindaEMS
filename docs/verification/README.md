@@ -182,8 +182,11 @@ Jeder Schritt ist eine Zeile im Bericht. Vor jedem Schritt, der schreibt, fragt 
   - „Laden aus und an“: Der Schütz des Wall Connectors öffnet; danach geht das Laden wieder an.
   - Mit `--schlafend` läuft nur „Schlafendes Auto wird nicht geweckt“: Das Auto muss schon schlafen;
     10 min lang prüft das Werkzeug, dass der Aktor Befehle verweigert, und sendet nichts. OK ist der
-    Schritt nur, wenn Tessie zu Beginn und am Ende frisch meldet, dass das Auto schläft; sonst ist
-    er FEHLER „nicht beobachtbar: …“ mit dem Grund (Tessie nicht erreichbar, Wert veraltet).
+    Schritt nur, wenn Tessie zu Beginn meldet, dass das Auto schläft, und sich am Ende frisch
+    meldet, ohne dass es aufgewacht ist. Ist das Auto zu Beginn wach oder sein Zustand unbekannt,
+    ist der Schritt FEHLER. Fehlt eine Meldung von Tessie, ist er FEHLER „nicht beobachtbar: …“
+    mit dem Grund (Tessie nicht erreichbar, Wert veraltet). Wacht das Auto während der Prüfung
+    auf, ist er WARNUNG „Fahrzeug wurde nach … min wach“.
 - **`victron`** (17.2-1 bis 17.2-4 und 17.2-8): verweigert, solange Dynamic ESS aktiv ist oder ein
   Netz-Sollwert-Override steht. Vor jedem schreibenden Schritt prüft es Dynamic ESS erneut: Geht
   DESS mitten im Lauf an, ist der Schritt FEHLER, und das Werkzeug schreibt nichts mehr.

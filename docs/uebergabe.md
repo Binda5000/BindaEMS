@@ -1,7 +1,8 @@
 # Übergabe an die nächste Session
 
-Stand: 12.10.2026. Neue Arbeit liegt zuerst auf dem Arbeitsbranch
-`claude/ems-haus-akku-pv-93c0s6`; was davon schon auf `main` ist, zeigt `git log main`.
+Stand: 12.10.2026. Plan 2b liegt auf dem Branch `ccr-e451cb4c-qeg1tm`. `main` und der
+Standard-Branch `claude/ems-haus-akku-pv-93c0s6` stehen noch auf dem Stand davor, bis der Betreiber
+der Integration zustimmt; was schon auf `main` ist, zeigt `git log main`.
 
 ## Kurzfassung
 
@@ -41,19 +42,34 @@ Stand: 12.10.2026. Neue Arbeit liegt zuerst auf dem Arbeitsbranch
   - **Noch keine Regelung (2c) und keine Bedienung (2d):** Befehle entstehen nur aus dem sicheren
     Zustand und der Übergabe, und im Regelbetrieb ist noch kein Aktor live. Die Punkte aus „Vor
     einer Live-Schaltung in 2b zu klären“ (Gesamtreview 2a) sind erledigt.
-  - **Der Gesamtreview über den ganzen Branch steht noch aus.**
-    *[PLATZHALTER: Ergebnis des Gesamtreviews hier eintragen.]*
+  - **Gesamtreview über den ganzen Branch:** „bereit mit Korrekturen“, keine kritischen Befunde.
+    Der Fix-Durchgang hat die vier wichtigen Befunde behoben, jeder mit einem Test, der vorher
+    scheiterte:
+    - Eine Sperre, die nur besteht, weil ein Prüfpunkt nicht lesbar ist (etwa im ersten Zyklus
+      nach dem Start), verwirft die Werte des EMS nicht mehr; sonst ging die Übergabe des letzten
+      Laufs verloren.
+    - Ein Strom unter dem Sicherwert gilt als erreicht; der sichere Zustand erhöht nie einen
+      Strom.
+    - Wirksam live ist ein Aktor nur im Regelbetrieb, außer während seiner Übergabe.
+    - Ein wirkungsloser Sicherheitstest prüft jetzt etwas.
+
+    Dazu kamen Punkte im Werkzeug für Teil 2 (Schlaf-Test nur mit frischer Beobachtung, Victron:
+    DESS vor jedem Schreiben, vorgefundene Entladegrenze von 0 W). Das Re-Review hat alles
+    bestätigt. Entscheidungen, geparkte Befunde und aufgeschobene Kleinigkeiten:
+    `docs/superpowers/plans/2026-10-11-phase-2b-entscheidungen.md`.
 - **Images:** `ghcr.io/binda5000/bindaems-core:latest` und `ghcr.io/binda5000/bindaems-app:latest`.
   Sie sind öffentlich, und die CI setzt `latest` bei jedem Push auf `main`. core und app werden
   immer gemeinsam aus demselben Stand ausgerollt (gleiche Compose-Datei, gleiche Image-Tags): Die
   UI-Schemas sind streng, eine abweichende Version zeigt auf der System-Seite nur „Unerwartete
   Antwort vom Server“.
-- **Tests:** *[PLATZHALTER: Testzahlen nach dem Gesamtreview von Plan 2b hier eintragen.]*
+- **Tests:** 3601 Python-Tests, davon 10 Property-Tests mit Hypothesis (5 für die Safety-Schicht),
+  und 233 UI-Tests; Abdeckung 96 % insgesamt und 99 % für `core/safety`, `core/control` und
+  `core/actuators`.
   Geprüft wird mit ruff, mypy strict (auch für den Watchdog), import-linter (4 Verträge), pytest
   mit Abdeckungsgrenzen (≥ 75 % insgesamt, ≥ 90 % für `core/safety`, `core/control` und
   `core/actuators`), Vitest mit svelte-check, Prettier und ESLint; dazu E2E mit Playwright.
 - **Offen:**
-  - Plan 2b: Gesamtreview, Fix-Durchgang und Integration (siehe „Nächster Schritt“)
+  - Plan 2b: Integration nach `main` mit Zustimmung des Betreibers (siehe „Nächster Schritt“)
   - an der Anlage: Images ausrollen, Watchdog auf 1.1.0, Probe wiederholen, Teil 2 für EVCS und
     Tesla (siehe „Offen an der Anlage“)
   - die Abnahme der Phase 1 an der Anlage
@@ -81,7 +97,8 @@ Stand: 12.10.2026. Neue Arbeit liegt zuerst auf dem Arbeitsbranch
   - „Deferred minors“
   - Frage nach der Integration (merge, PR oder so lassen)
 - **Git:**
-  - Arbeitsbranch `claude/ems-haus-akku-pv-93c0s6`.
+  - Arbeitsbranch ist der Branch, den die Sitzung vorgibt (Plan 2b: `ccr-e451cb4c-qeg1tm`); der
+    Standard-Branch auf GitHub ist `claude/ems-haus-akku-pv-93c0s6`.
   - Nach `main` nur mit Zustimmung; bisher per Fast-Forward-Merge, Tests auf `main`, dann Push.
   - Pull Requests nur auf ausdrücklichen Wunsch.
   - Commit-Nachrichten auf Deutsch im Stil `fix(ui): …`, mit den Attributionszeilen, die die
@@ -100,6 +117,7 @@ Stand: 12.10.2026. Neue Arbeit liegt zuerst auf dem Arbeitsbranch
 | `docs/superpowers/plans/2026-10-10-phase-2a-sicherheitsbasis.md` | Plan 2a (Sicherheitsbasis), mit dem Zuschnitt der Phase 2 in 2a–2d und den Präzisierungen gegenüber der Spec |
 | `docs/superpowers/plans/2026-10-10-phase-2a-entscheidungen.md` | Entscheidungen, geparkte Befunde und aufgeschobene Kleinigkeiten aus der Umsetzung von Plan 2a |
 | `docs/superpowers/plans/2026-10-11-phase-2b-aktoren.md` | Plan 2b (Aktoren), 18 Tasks; Entscheidungen des Betreibers vom 11.10.2026, Präzisierungen, Texte |
+| `docs/superpowers/plans/2026-10-11-phase-2b-entscheidungen.md` | Entscheidungen, geparkte Befunde und aufgeschobene Kleinigkeiten aus der Umsetzung von Plan 2b |
 | `docs/betrieb.md` | Betriebshandbuch: Installation, Proxy (6), HA (7), Tarif (8), Sicherung (9), Prüfprotokolle einschließlich Teil 2 (11), Web-UI (12), Betriebszustände, Freigaben, Übergabe und Entscheidungslog (13), Watchdog am Cerbo (14) |
 | `cerbo-watchdog/README.md` | Watchdog: Zustände, Zeiten, D-Bus-Pfade, Installation und Probe |
 | `docs/verification/abnahme-phase-1.md` | Checkliste für die Abnahme der Phase 1 |
@@ -306,8 +324,8 @@ Demo-Zugänge: `admin`, `gast` (Lesen) und `sicher` (Admin mit TOTP, Geheimnis
    (Zuschnitt in `docs/superpowers/plans/2026-10-10-phase-2a-sicherheitsbasis.md`):
    - **2a Sicherheitsbasis:** umgesetzt, im Gesamtreview geprüft und an der Anlage installiert;
      die Watchdog-Probe ist bestanden (11.10.2026).
-   - **2b Aktoren:** umgesetzt und je Task geprüft; der Gesamtreview steht aus (siehe
-     „Kurzfassung“ und „Nächster Schritt“).
+   - **2b Aktoren:** umgesetzt, je Task und im Gesamtreview geprüft; die Integration nach `main`
+     steht aus (siehe „Nächster Schritt“).
      - Aktoren für EVCS, Victron und Tesla mit Dry-Run und Rücklese-Prüfung
      - sicherer Zustand (Spec 8.5) und Übergabe am Ende des Live-Betriebs
      - Entscheidungslog im core (Spool, Stream, `GET /v1/decisions`)
@@ -333,16 +351,14 @@ Demo-Zugänge: `admin`, `gast` (Lesen) und `sicher` (Admin mit TOTP, Geheimnis
      den Weg an der Anlage; das steht noch aus.
    - Geschrieben wird nie der Maximalstrom (5017).
 
-### Nächster Schritt: Gesamtreview von Plan 2b und Abschluss
+### Nächster Schritt: Integration von Plan 2b, dann die Anlage und Plan 2c
 
-1. Der Gesamtreview über den ganzen Branch, danach ein Fix-Durchgang. Ergebnis und Testzahlen
-   kommen in die Kurzfassung (Platzhalter dort).
-2. Die Entscheidungen, geparkten Befunde und aufgeschobenen Kleinigkeiten in
-   `docs/superpowers/plans/2026-10-11-phase-2b-entscheidungen.md` festhalten, wie bei 2a. Die
-   Datei gibt es noch nicht.
-3. Die Abschlussnachricht mit Rulings und Deferred minors, dazu die Frage nach der Integration.
-4. Nach `main` nur mit Zustimmung des Betreibers.
-5. Dann an der Anlage die Schritte aus „Offen an der Anlage“, danach Plan 2c schreiben.
+1. Plan 2b nach `main` nur mit Zustimmung des Betreibers (bisher per Fast-Forward-Merge, Tests
+   auf `main`, dann Push). Gesamtreview, Fix-Durchgang und Re-Review sind erledigt; die
+   Entscheidungen stehen in `docs/superpowers/plans/2026-10-11-phase-2b-entscheidungen.md`.
+2. Dann an der Anlage die Schritte aus „Offen an der Anlage“.
+3. Danach Plan 2c schreiben; die geparkten Befunde aus der Entscheidungsdatei und die Hinweise
+   unten gehören hinein.
 
 ## Hinweise für die Pläne 2c und 2d
 
