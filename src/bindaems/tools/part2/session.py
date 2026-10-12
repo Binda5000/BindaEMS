@@ -246,9 +246,11 @@ class Part2Session:
         Innerhalb der Frist wartet die Sitzung, bis der Aktor steuerbar ist, sendet dann, sendet
         erneut, wenn der Aktor den Auftrag ablehnt (etwa zwischen zwei Sitzungen zum Cerbo), und
         sendet denselben Wert noch einmal, wenn ``resend_s`` lang keine Bestätigung kam (der
-        Auftrag kann mit einer endenden Sitzung verloren sein). Persistente Einstellungen
-        (Entladegrenze, Min-SOC) gehen je Aufruf höchstens einmal hinaus. An einen Aktor, der
-        nicht steuerbar ist, geht nie etwas.
+        Auftrag kann mit einer endenden Sitzung verloren sein). Vor jedem erneuten Senden liest sie
+        das Ergebnis: Erneut gesendet wird nur, solange es offen ist und der Aktor einen neuen
+        Auftrag annimmt; der Tesla nimmt keinen an, solange sein Befehl läuft. Persistente
+        Einstellungen (Entladegrenze, Min-SOC) gehen je Aufruf höchstens einmal hinaus. An einen
+        Aktor, der nicht steuerbar ist, geht nie etwas.
 
         Ergebnis sind die Sekunden vom ersten Senden bis zur Bestätigung, sonst ``None``; dann
         nennt ``failure`` den Grund: ging nichts hinaus, warum (nicht steuerbar, abgelehnt,
@@ -267,15 +269,15 @@ class Part2Session:
         last_sent = started
         blocked = ""  # warum noch nichts hinausging
         while True:
-            now = self.monotonic()
-            if first_sent is None or self._resend_due(kind, now - last_sent):
+            if first_sent is None:
                 problem = self._send(device, key, kind, value)
                 if problem is None:
-                    last_sent = now
-                    first_sent = now if first_sent is None else first_sent
-                elif first_sent is None:
+                    first_sent = last_sent = self.monotonic()
+                else:
                     blocked = problem
             if first_sent is not None:
+                # Erst das Ergebnis lesen, dann erst erneut senden: Ein neuer Auftrag ersetzte beim
+                # Tesla den fertigen Befehl, dessen Ergebnis dann verloren wäre.
                 state, text = device.confirm(kind, value, self.snapshot())
                 if state == Confirmation.CONFIRMED:
                     self._confirmed[key] = value
@@ -283,6 +285,12 @@ class Part2Session:
                 if state == Confirmation.FAILED:
                     self.failure = f"Fehler: {text}" if text else "Fehler"
                     return None
+                now = self.monotonic()
+                # noch offen: denselben Wert erneut, falls der Aktor ihn annimmt (der Tesla nimmt
+                # keinen an, solange sein Befehl läuft)
+                if self._resend_due(kind, now - last_sent):
+                    if self._send(device, key, kind, value) is None:
+                        last_sent = now
             remaining = timeout_s - (self.monotonic() - started)
             if remaining <= 0:
                 late = f"nicht bestätigt nach {de(timeout_s)} s"

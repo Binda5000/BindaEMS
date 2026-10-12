@@ -4,6 +4,7 @@ import asyncio
 import time
 from datetime import datetime
 
+import httpx
 import pytest
 from pydantic import SecretStr
 from tests.unit.tools.part2.conftest import FakeEvcs
@@ -312,6 +313,77 @@ async def test_restore_sends_again_when_a_write_is_lost(evcs_session) -> None:
     restored = await session.restore(timeout_s=1.0)
     assert [(f.title, f.status) for f in restored] == [("Wiederherstellen: Strom 16 A", "ok")]
     assert currents(evcs) == [10, 16, 16]
+
+
+TESSIE_LATENCY_S = 0.12  # Tessie antwortet erst nach dem Befehl, hier länger als resend_s
+AMPS_PATH = "/5YJ3E7EB0MF000000/command/set_charging_amps"
+
+
+def tesla_session(cfg: Config, result: bool, requests: list[httpx.Request]) -> Part2Session:
+    """Eine Sitzung mit dem echten Tesla-Aktor: zu Hause, angesteckt, online, 16 A.
+
+    Tessie antwortet jedem Befehl nach ``TESSIE_LATENCY_S`` mit ``result``; ``requests`` sammelt
+    die Befehle. Erneut senden würde die Sitzung schon nach 0,05 s.
+    """
+
+    async def tessie(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        await asyncio.sleep(TESSIE_LATENCY_S)
+        return httpx.Response(200, json={"result": result})
+
+    store = StateStore(SystemClock())
+    store.register_source("tessie:tesla", 900.0)
+    store.set_connected("tessie:tesla", True)
+    state = {"online": True, "at_home": True, "plugged": True, "charge_amps": 16}
+    for name, value in (state | {"charging_state": "Charging"}).items():
+        store.update(
+            f"vehicle.tesla.{name}", value, source="tessie:tesla", kind=SignalKind.MEASUREMENT
+        )
+    client = httpx.AsyncClient(transport=httpx.MockTransport(tessie))
+    car = TeslaActuator(
+        "tesla",
+        cfg.vehicles["tesla"],
+        SecretStr("tessie-token"),
+        client,
+        lambda: True,
+        clock=SystemClock().now,
+    )
+    return Part2Session(
+        cfg,
+        store=store,
+        adapters=[],
+        actuators={car.id: car},
+        ask=lambda _question: False,
+        poll_s=0.01,
+        resend_s=0.05,
+        cleanup=[client.aclose],
+    )
+
+
+async def test_a_tesla_command_is_sent_once_and_its_result_counts(cfg: Config) -> None:
+    # Läuft der Befehl länger als resend_s, darf weder ein zweiter starten noch das Ergebnis
+    # des ersten verloren gehen.
+    requests: list[httpx.Request] = []
+    session = tesla_session(cfg, True, requests)
+    try:
+        waited = await session.set_and_confirm("vehicle.tesla", CURRENT, 10.0, 1.0)
+    finally:
+        await session.stop()
+    assert waited is not None and waited >= TESSIE_LATENCY_S - 0.01
+    assert [request.url.path for request in requests] == [AMPS_PATH]
+
+
+async def test_a_failed_tesla_command_ends_the_wait_at_once(cfg: Config) -> None:
+    requests: list[httpx.Request] = []
+    session = tesla_session(cfg, False, requests)
+    started = time.monotonic()
+    try:
+        assert await session.set_and_confirm("vehicle.tesla", CURRENT, 10.0, 1.0) is None
+    finally:
+        await session.stop()
+    assert time.monotonic() - started < 0.5
+    assert session.failure == "Fehler: Tessie meldet result=false."
+    assert [request.url.path for request in requests] == [AMPS_PATH]
 
 
 async def test_persistent_settings_are_not_sent_again(cfg: Config) -> None:
