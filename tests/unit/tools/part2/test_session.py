@@ -2,7 +2,9 @@
 
 import asyncio
 import time
+from collections.abc import Callable
 from datetime import datetime
+from functools import partial
 
 import httpx
 import pytest
@@ -20,7 +22,7 @@ from bindaems.core.control.actuator import Actuator, Capabilities, Confirmation
 from bindaems.core.state.store import StateStore
 from bindaems.shared.config import Config, Secrets
 from bindaems.shared.control import CommandKind, CommandValue
-from bindaems.shared.domain import Alarm, SignalKind, Snapshot
+from bindaems.shared.domain import Alarm, SignalKind, Snapshot, Value
 from bindaems.shared.timeutil import SystemClock
 from bindaems.tools.part2.session import Part2Session, build_session, minutes, seconds
 from bindaems.tools.verify_checks import Finding
@@ -391,11 +393,19 @@ TESSIE_LATENCY_S = 0.12  # Tessie antwortet erst nach dem Befehl, hier länger a
 AMPS_PATH = "/5YJ3E7EB0MF000000/command/set_charging_amps"
 
 
-def tesla_session(cfg: Config, result: bool, requests: list[httpx.Request]) -> Part2Session:
+def tesla_session(
+    cfg: Config,
+    result: bool,
+    requests: list[httpx.Request],
+    store: StateStore | None = None,
+    ask: Callable[[str], bool] = lambda _question: False,
+) -> Part2Session:
     """Eine Sitzung mit dem echten Tesla-Aktor: zu Hause, angesteckt, online, 16 A.
 
     Tessie antwortet jedem Befehl nach ``TESSIE_LATENCY_S`` mit ``result``; ``requests`` sammelt
-    die Befehle. Erneut senden würde die Sitzung schon nach 0,05 s.
+    die Befehle. Erneut senden würde die Sitzung schon nach 0,05 s. Mit ``store`` legt der Test den
+    Speicher selbst an und kann später neue Werte von Tessie hineinlegen, ``ask`` beantwortet die
+    Rückfragen.
     """
 
     async def tessie(request: httpx.Request) -> httpx.Response:
@@ -403,7 +413,7 @@ def tesla_session(cfg: Config, result: bool, requests: list[httpx.Request]) -> P
         await asyncio.sleep(TESSIE_LATENCY_S)
         return httpx.Response(200, json={"result": result})
 
-    store = StateStore(SystemClock())
+    store = store if store is not None else StateStore(SystemClock())
     store.register_source("tessie:tesla", 900.0)
     store.set_connected("tessie:tesla", True)
     state = {"online": True, "at_home": True, "plugged": True, "charge_amps": 16}
@@ -425,7 +435,7 @@ def tesla_session(cfg: Config, result: bool, requests: list[httpx.Request]) -> P
         store=store,
         adapters=[],
         actuators={car.id: car},
-        ask=lambda _question: False,
+        ask=ask,
         poll_s=0.01,
         resend_s=0.05,
         cleanup=[client.aclose],
@@ -458,6 +468,133 @@ async def test_a_failed_tesla_command_ends_the_wait_at_once(cfg: Config) -> None
     assert [request.url.path for request in requests] == [AMPS_PATH]
 
 
+# Nach einer Rückfrage: Werte von Tessie, die nicht neuer sind als die Antwort, gelten als unbekannt
+
+STALE = "Fahrzeugdaten nach der Rückfrage nicht aktuell."
+ASLEEP = "Fahrzeug schläft oder ist offline; es wird nicht geweckt."
+
+
+def tessie_reports(store: StateStore, **changes: Value) -> None:
+    """Tessie fragt ab: Jedes Signal des Fahrzeugs bekommt einen neuen Zeitstempel.
+
+    ``changes`` sind neue Werte (``online=False``).
+    """
+    readings = store.snapshot().matching("vehicle.tesla.")
+    values = {name: reading.value for name, reading in readings.items()}
+    values |= {f"vehicle.tesla.{name}": value for name, value in changes.items()}
+    for name, value in values.items():
+        store.update(name, value, source="tessie:tesla", kind=SignalKind.MEASUREMENT)
+
+
+async def test_a_tesla_gets_nothing_until_tessie_reports_after_a_question(cfg: Config) -> None:
+    # Die Rückfrage liest von der Konsole, solange steht auch der Adapter von Tessie. Dessen Werte
+    # bleiben 900 s gültig, doch das Auto kann inzwischen schlafen, und ein Befehl weckte es.
+    requests: list[httpx.Request] = []
+    session = tesla_session(cfg, True, requests)
+    session.ask("Weiter?")
+    try:
+        assert await session.set_and_confirm("vehicle.tesla", CURRENT, 10.0, 0.2) is None
+    finally:
+        await session.stop()
+    assert session.failure == STALE
+    assert requests == []
+
+
+async def test_a_tesla_is_written_once_tessie_has_reported_after_a_question(cfg: Config) -> None:
+    requests: list[httpx.Request] = []
+    store = StateStore(SystemClock())
+    session = tesla_session(cfg, True, requests, store)
+    session.ask("Weiter?")
+    asyncio.get_running_loop().call_later(0.15, tessie_reports, store)
+    try:
+        first = asyncio.create_task(session.set_and_confirm("vehicle.tesla", CURRENT, 10.0, 1.0))
+        await asyncio.sleep(0.1)
+        assert requests == []  # Tessie hat sich noch nicht gemeldet
+        assert await first is not None
+        started = time.monotonic()
+        assert await session.set_and_confirm("vehicle.tesla", CURRENT, 12.0, 1.0) is not None
+        assert time.monotonic() - started < 0.5  # bis zur nächsten Rückfrage wartet nichts mehr
+    finally:
+        await session.stop()
+    assert [request.url.params["amps"] for request in requests] == ["10", "12"]
+
+
+async def test_a_tesla_that_tessie_reports_asleep_after_a_question_gets_nothing(
+    cfg: Config,
+) -> None:
+    requests: list[httpx.Request] = []
+    store = StateStore(SystemClock())
+    session = tesla_session(cfg, True, requests, store)
+    session.ask("Weiter?")
+    asyncio.get_running_loop().call_later(0.05, partial(tessie_reports, store, online=False))
+    try:
+        assert await session.set_and_confirm("vehicle.tesla", CURRENT, 10.0, 0.3) is None
+    finally:
+        await session.stop()
+    assert session.failure == f"nicht steuerbar: {ASLEEP}"
+    assert requests == []
+
+
+async def test_an_aborted_question_counts_like_an_answer(cfg: Config) -> None:
+    # Auch bei Strg+C an der Rückfrage stand der Event-Loop: Das Wiederherstellen danach wartet.
+    def interrupt(_question: str) -> bool:
+        raise KeyboardInterrupt
+
+    requests: list[httpx.Request] = []
+    session = tesla_session(cfg, True, requests, ask=interrupt)
+    with pytest.raises(KeyboardInterrupt):
+        session.ask("Weiter?")
+    try:
+        assert await session.set_and_confirm("vehicle.tesla", CURRENT, 10.0, 0.2) is None
+    finally:
+        await session.stop()
+    assert session.failure == STALE and requests == []
+
+
+async def test_the_restore_after_a_question_waits_for_fresh_values_too(cfg: Config) -> None:
+    requests: list[httpx.Request] = []
+    store = StateStore(SystemClock())
+    session = tesla_session(cfg, True, requests, store)
+    try:
+        assert await session.set_and_confirm("vehicle.tesla", CURRENT, 10.0, 1.0) is not None
+        session.ask("Weiter?")
+        assert await session.restore(timeout_s=0.2) == [
+            Finding("17.2-7", "Wiederherstellen: Strom 16 A", "fail", STALE)
+        ]
+        assert len(requests) == 1  # nichts weiter gesendet
+        asyncio.get_running_loop().call_later(0.05, tessie_reports, store)
+        rows = await session.restore(timeout_s=1.0)
+    finally:
+        await session.stop()
+    assert [(row.title, row.status) for row in rows] == [("Wiederherstellen: Strom 16 A", "ok")]
+    assert [request.url.params["amps"] for request in requests] == ["10", "16"]
+
+
+async def test_fresh_after_question_is_true_without_a_question_and_for_other_actuators(
+    cfg: Config, evcs_session
+) -> None:
+    requests: list[httpx.Request] = []
+    session = tesla_session(cfg, True, requests)
+    try:
+        assert await session.fresh_after_question("vehicle.tesla", 0.0) is True  # keine Rückfrage
+        session.ask("Weiter?")
+        assert await session.fresh_after_question("vehicle.tesla", 0.05) is False
+    finally:
+        await session.stop()
+    local, _ = evcs_session(answers=[True])
+    assert local.ask("Weiter?") is True
+    assert (
+        await local.fresh_after_question("wallbox.evcs", 0.0) is True
+    )  # Werte der EVCS sind lokal
+
+
+async def test_a_question_does_not_hold_back_an_evcs(evcs_session) -> None:
+    session, evcs = evcs_session(answers=[True])
+    assert session.ask("Weiter?") is True
+    assert await session.set_and_confirm("wallbox.evcs", CURRENT, 10.0, 0.2) is not None
+    assert currents(evcs) == [10]
+
+
 async def test_persistent_settings_are_not_sent_again(cfg: Config) -> None:
     # Entladegrenze und Min-SOC sind gespeicherte Einstellungen: je Aufruf höchstens ein
     # Schreiben, auch ohne Bestätigung. Den flüchtigen Override sendet die Sitzung erneut.
@@ -486,6 +623,35 @@ async def test_persistent_settings_are_not_sent_again(cfg: Config) -> None:
     assert writes == [("settings/0/Settings/CGwacs/MaxDischargePower", 0.0)]
     assert await session.set_and_confirm("victron", CommandKind.GRID_SETPOINT, 1000.0, 0.3) is None
     assert len([path for path, _ in writes if path == "hub4/0/Overrides/Setpoint"]) > 1
+
+
+# Der vorgefundene Wert muss zu den Regeln 1–3 passen
+
+
+@pytest.mark.parametrize(
+    ("kind", "value", "problem"),
+    [
+        (CURRENT, 16.0, None),
+        (CURRENT, 6.0, None),
+        (CURRENT, 32.0, "Auf den Höchstwert 16 A begrenzt."),
+        (CURRENT, 3.0, "Unter dem Mindeststrom 6 A; zum Abschalten das Laden beenden."),
+        (CURRENT, 10.5, "Auf ganze Ampere abgerundet: 10,5 A → 10 A."),
+        (CHARGING, True, None),
+        (CHARGING, False, None),
+    ],
+)
+def test_found_problem_names_what_rules_1_to_3_would_change(
+    evcs_session, kind: CommandKind, value: CommandValue, problem: str | None
+) -> None:
+    session, _ = evcs_session()
+    expected = None
+    if problem is not None:
+        shown = {32.0: "Strom 32 A", 3.0: "Strom 3 A", 10.5: "Strom 10,5 A"}[float(value)]
+        expected = (
+            f"Ausgangswert {shown} außerhalb der Grenzen; er ließe sich nicht wiederherstellen: "
+            f"{problem}"
+        )
+    assert session.found_problem("wallbox.evcs", kind, value) == expected
 
 
 # Warten, Festhalten, Start und Stopp

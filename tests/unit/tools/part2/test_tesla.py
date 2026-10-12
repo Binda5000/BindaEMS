@@ -184,6 +184,36 @@ async def test_not_ready_without_a_connection_to_tessie(tesla_session) -> None:
     assert session.actuators["vehicle.tesla"].sent == []
 
 
+@pytest.mark.parametrize(
+    ("amps", "problem"),
+    [
+        (16, "Auf den Höchstwert 13 A begrenzt."),
+        (3, "Unter dem Mindeststrom 5 A; zum Abschalten das Laden beenden."),
+    ],
+)
+async def test_a_found_current_outside_the_limits_is_not_ready(
+    tesla_session, respx_mock, cfg: Config, amps: int, problem: str
+) -> None:
+    # Ein Fahrzeug, das in der App auf 16 A steht, während `max_a` 13 A ist: Das Werkzeug stellte
+    # 10 A und 5 A ein und könnte die 16 A nicht zurückstellen. Es schreibt gar nicht erst.
+    stray = stray_requests(respx_mock)
+    asked: list[str] = []
+    session, _ = tesla_session(
+        config=with_tesla(cfg, max_a=13), state={"vehicle.tesla.charge_amps": amps}, asked=asked
+    )
+    findings = await run_tesla(session, session.cfg, "tesla", timings=FAST)
+    assert findings == [
+        Finding(
+            "17.2-7",
+            "Tesla bereit",
+            "fail",
+            f"Ausgangswert Strom {amps} A außerhalb der Grenzen; er ließe sich nicht "
+            f"wiederherstellen: {problem}",
+        )
+    ]
+    assert asked == [] and session.actuators["vehicle.tesla"].sent == [] and not stray.called
+
+
 async def test_unknown_current_is_not_ready(tesla_session) -> None:
     # Ohne vorgefundenen Ladestrom ließe er sich nicht wiederherstellen.
     session, _ = tesla_session(state={"vehicle.tesla.charge_amps": None})
@@ -523,6 +553,78 @@ async def test_a_charging_on_that_failed_is_sent_again_by_the_restore(
     follow_up = findings[findings.index(result) + 1]
     assert (follow_up.title, follow_up.status) == ("Wiederherstellen: Laden an", status)
     assert len(starts) == 2  # einmal im Schritt, genau einmal mehr beim Wiederherstellen
+
+
+# Nach der Rückfrage: Werte von Tessie, die nicht neuer sind als die Antwort, gelten als unbekannt
+
+
+async def test_a_car_that_fell_asleep_during_the_question_is_not_woken(
+    tesla_session, respx_mock
+) -> None:
+    # Die Rückfrage hielt den Adapter von Tessie an. Die Antwort kam, als das Auto schon schlief;
+    # die ersten Werte danach sagen es. Ein „Laden aus“ weckte es, also geht nichts hinaus.
+    respx_mock.post(AMPS_URL).respond(json={"result": True})
+    stray = stray_requests(respx_mock)  # weder aus noch an hat eine Route
+    session, _ = tesla_session(
+        answers=[True],
+        after_answer={
+            CHARGING_QUESTION: lambda twc: put_signal(twc.store, "vehicle.tesla.online", False)
+        },
+    )
+    findings = await run_tesla(session, session.cfg, "tesla", timings=FAST)
+    assert step(findings, "Laden aus und an") == Finding(
+        "17.2-7", "Laden aus und an", "fail", f"Laden aus: nicht steuerbar: {ASLEEP}"
+    )
+    assert [kind for kind, _ in session.actuators["vehicle.tesla"].sent] == ["current"] * 3
+    assert not stray.called
+
+
+async def test_no_report_from_tessie_after_the_question_is_an_error_and_sends_nothing(
+    tesla_session, respx_mock
+) -> None:
+    respx_mock.post(AMPS_URL).respond(json={"result": True})
+    stray = stray_requests(respx_mock)
+    session, _ = tesla_session(answers=[True], tessie_polls=False)
+    findings = await run_tesla(session, session.cfg, "tesla", timings=FAST)
+    assert step(findings, "Laden aus und an") == Finding(
+        "17.2-7", "Laden aus und an", "fail", "Fahrzeugdaten nach der Rückfrage nicht aktuell."
+    )
+    assert [kind for kind, _ in session.actuators["vehicle.tesla"].sent] == ["current"] * 3
+    assert not stray.called
+
+
+async def test_the_charging_step_waits_for_a_report_from_tessie_after_the_question(
+    tesla_session, respx_mock
+) -> None:
+    # Tessie meldet sich erst 0,15 s nach der Antwort: Vorher geht der Befehl nicht hinaus.
+    reported: list[float] = []
+    stopped: list[float] = []
+
+    def stop(request: httpx.Request) -> httpx.Response:
+        stopped.append(time.monotonic())
+        return httpx.Response(200, json={"result": True})
+
+    respx_mock.post(AMPS_URL).respond(json={"result": True})
+    respx_mock.post(STOP_URL).mock(side_effect=stop)
+    respx_mock.post(START_URL).respond(json={"result": True})
+    session, _ = tesla_session(
+        answers=[True],
+        twc_follows=True,
+        tessie_delay_s=0.15,
+        after_answer={CHARGING_QUESTION: lambda twc: reported.append(time.monotonic())},
+    )
+    findings = await run_tesla(session, session.cfg, "tesla", timings=ROOMY)
+    assert step(findings, "Laden aus und an").status == "ok"
+    assert len(stopped) == 1 and stopped[0] >= reported[0]
+
+
+async def test_a_declined_question_waits_for_nothing(tesla_session, respx_mock) -> None:
+    respx_mock.post(AMPS_URL).respond(json={"result": True})
+    session, _ = tesla_session(answers=[False], twc_follows=True, tessie_polls=False)
+    findings = await run_tesla(session, session.cfg, "tesla", timings=FAST)
+    assert step(findings, "Laden aus und an") == Finding(
+        "17.2-7", "Laden aus und an", "info", "übersprungen"
+    )
 
 
 # Wiederherstellen nach jedem Block (Präzisierung 11)

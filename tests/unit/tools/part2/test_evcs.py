@@ -149,6 +149,33 @@ async def test_unknown_current_is_not_ready(evcs_session) -> None:
     assert evcs.writes == []
 
 
+@pytest.mark.parametrize(
+    ("amps", "problem"),
+    [
+        (32, "Auf den Höchstwert 16 A begrenzt."),
+        (3, "Unter dem Mindeststrom 6 A; zum Abschalten das Laden beenden."),
+    ],
+)
+async def test_a_found_current_outside_the_limits_is_not_ready(
+    evcs_session, amps: int, problem: str
+) -> None:
+    # Ein solcher Strom ließe sich nach dem Test nicht wiederherstellen: Es wird gar nicht erst
+    # geschrieben, und niemand wird gefragt.
+    asked: list[str] = []
+    session, evcs = evcs_session(state={"wallbox.evcs.gx_set_current_a": amps}, asked=asked)
+    findings = await run_evcs(session, session.cfg, "evcs", probe=no_probe, timings=FAST)
+    assert findings == [
+        Finding(
+            "17.2-6",
+            "EVCS bereit",
+            "fail",
+            f"Ausgangswert Strom {amps} A außerhalb der Grenzen; er ließe sich nicht "
+            f"wiederherstellen: {problem}",
+        )
+    ]
+    assert evcs.writes == [] and asked == []
+
+
 # Ströme
 
 
@@ -164,7 +191,13 @@ async def test_unknown_current_is_not_ready(evcs_session) -> None:
 async def test_ten_amps_only_between_min_and_max(
     evcs_session, cfg: Config, limits: dict[str, int], titles: list[str]
 ) -> None:
-    session, _ = evcs_session(answers=[False] * 4, config=with_evcs(cfg, **limits))
+    # Die EVCS steht vorgefunden bei ihrem Höchststrom, denn ein Strom außerhalb der Grenzen ließe
+    # sich nicht wiederherstellen („EVCS bereit“ lehnt ihn ab).
+    session, _ = evcs_session(
+        answers=[False] * 4,
+        config=with_evcs(cfg, **limits),
+        state={"wallbox.evcs.gx_set_current_a": limits["max_a"]},
+    )
     findings = await run_evcs(session, session.cfg, "evcs", probe=no_probe, timings=FAST)
     assert [f.title for f in findings if f.title.startswith("Strom ")] == titles
 
@@ -296,11 +329,17 @@ async def test_no_foreign_change_is_a_warning(evcs_session) -> None:
 
 
 async def test_foreign_change_expects_the_last_confirmed_current(evcs_session, cfg: Config) -> None:
-    # Höchststrom 10 A: Der letzte bestätigte Strom ist 10 A, nicht der vorgefundene (16 A).
+    # Vorgefunden 9 A, Höchststrom 10 A: Der letzte bestätigte Strom ist der wiederhergestellte
+    # (9 A) und nicht der des letzten Stromschritts (10 A).
     config = with_evcs(cfg, min_a=6, safe_a=6, max_a=10)
-    session, _ = evcs_session(answers=[False, True, False, False], hand_change_a=8, config=config)
+    session, _ = evcs_session(
+        answers=[False, True, False, False],
+        hand_change_a=8,
+        config=config,
+        state={"wallbox.evcs.gx_set_current_a": 9},
+    )
     findings = await run_evcs(session, session.cfg, "evcs", probe=no_probe, timings=FAST)
-    assert step(findings, "Fremde Änderung").detail == "erkannt nach 3 Prüfungen (8 A statt 10 A)"
+    assert step(findings, "Fremde Änderung").detail == "erkannt nach 3 Prüfungen (8 A statt 9 A)"
 
 
 async def test_checks_before_the_change_count_too(evcs_session) -> None:
@@ -364,7 +403,11 @@ async def test_no_unplugging_without_the_current_before(evcs_session) -> None:
 
 async def test_interruption_sets_at_most_the_maximum(evcs_session, cfg: Config) -> None:
     config = with_evcs(cfg, min_a=6, safe_a=6, max_a=8)
-    session, evcs = evcs_session(answers=[False, False, True, True, False], config=config)
+    session, evcs = evcs_session(
+        answers=[False, False, True, True, False],
+        config=config,
+        state={"wallbox.evcs.gx_set_current_a": 8},  # vorgefunden innerhalb der Grenzen
+    )
     await run_evcs(session, session.cfg, "evcs", probe=no_probe, timings=FAST)
     assert currents(evcs) == [6, 8, 8]
 

@@ -6,15 +6,18 @@ Fahrzeug bei Befehlen selbst; die Sitzung sendet darum nur, solange der Aktor st
 er am Wall Connector, an dem das Fahrzeug lädt (``default_wallbox``). Der Ladestrom dort ist der
 größte Phasenstrom (``wallbox.<twc>.l1.current_a`` bis ``l3``).
 
-1. **Tesla bereit:** steuerbar und Ladestrom bekannt; nach dem Start wartet der Schritt bis
-   ``confirm_s`` auf die ersten Werte von Tessie und Wall Connector. Sonst endet der Teil ohne
-   Schreiben.
+1. **Tesla bereit:** steuerbar, Ladestrom bekannt und innerhalb der Grenzen (sonst ließe er sich
+   nicht wiederherstellen); nach dem Start wartet der Schritt bis ``confirm_s`` auf die ersten
+   Werte von Tessie und Wall Connector. Sonst endet der Teil ohne Schreiben.
 2. **Ladestrom 10 A** (falls zwischen Mindest- und Höchststrom) und **Verhalten bei** ``min_a``:
    Tessie bestätigt den Befehl, dann wartet der Schritt bis ``effect_s``, bis der Strom am Wall
    Connector höchstens 1,5 A vom Sollstrom abweicht. Ist kein Fahrzeug am Wall Connector oder lag
    der Strom dort schon beim Sollstrom, ist die Wirkung nicht messbar. Das steht im Befund.
-3. **Laden aus und an** (Rückfrage): Tessie bestätigt „aus“, dann wartet der Schritt bis
-   ``effect_s``, bis der Schütz des Wall Connectors offen ist; danach geht das Laden wieder an.
+3. **Laden aus und an** (Rückfrage): Die Rückfrage hält den Adapter von Tessie an, und das Auto
+   kann inzwischen schlafen. Nach der Antwort wartet der Schritt darum bis ``confirm_s`` auf neue
+   Werte von Tessie; kommen keine, endet er mit FEHLER, und es geht nichts hinaus. Dann bestätigt
+   Tessie „aus“, und der Schritt wartet bis ``effect_s``, bis der Schütz des Wall Connectors offen
+   ist; danach geht das Laden wieder an.
 
 Nach jedem Block (die beiden Ströme zählen als einer) stellt ``Part2Session.restore_after_step`` die
 vorgefundenen Werte wieder her, mit ``confirm_s`` als Frist je Wert: Ein Befehl an Tessie kann bis
@@ -38,7 +41,7 @@ from bindaems.shared.config import Config, TwcConfig, VehicleConfig
 from bindaems.shared.control import CommandKind, CommandValue, vehicle_actuator
 from bindaems.shared.domain import Snapshot
 from bindaems.shared.numbers import de, finite_number
-from bindaems.tools.part2.session import Part2Session, minutes, seconds
+from bindaems.tools.part2.session import STALE_AFTER_QUESTION, Part2Session, minutes, seconds
 from bindaems.tools.verify_checks import Finding, Status
 
 ITEM: Final = "17.2-7"
@@ -151,6 +154,10 @@ class _TeslaSteps:
         if current is None:
             self._record(title, "fail", REASON_UNKNOWN_CURRENT)
             return False
+        problem = self._session.found_problem(self._id, CommandKind.CURRENT, current)
+        if problem is not None:
+            self._record(title, "fail", problem)
+            return False
         soc = finite_number(snap.ok(self._signal("soc_pct")))
         state = snap.ok(self._signal("charging_state"))
         soc_text = f"SOC {de(soc)} %" if soc is not None else "SOC unbekannt"
@@ -226,6 +233,11 @@ class _TeslaSteps:
         session = self._session
         if not session.ask(QUESTION_CHARGING):
             self._record(title, "info", SKIPPED)
+            return
+        # Solange die Frage offen war, stand der Adapter von Tessie. Erst wenn er sich wieder
+        # gemeldet hat, ist bekannt, ob das Auto noch wach ist; ein Befehl weckte ein schlafendes.
+        if not await session.fresh_after_question(self._id, self._t.confirm_s):
+            self._record(title, "fail", STALE_AFTER_QUESTION)
             return
         before = session.snapshot()
         off = await self._set(CommandKind.CHARGING, False)

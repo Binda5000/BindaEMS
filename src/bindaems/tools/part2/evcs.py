@@ -2,9 +2,9 @@
 
 Die Schritte schreiben über den GX-Dienst ``evcharger`` wie der core (``Part2Session``):
 
-1. **EVCS bereit:** steuerbar (Instanz, Cerbo verbunden, manueller Modus) und Sollstrom bekannt;
-   nach dem Start wartet der Schritt bis ``confirm_s`` auf diese Werte. Sonst endet der Teil ohne
-   Schreiben.
+1. **EVCS bereit:** steuerbar (Instanz, Cerbo verbunden, manueller Modus), Sollstrom bekannt und
+   innerhalb der Grenzen (sonst ließe er sich nicht wiederherstellen); nach dem Start wartet der
+   Schritt bis ``confirm_s`` auf diese Werte. Sonst endet der Teil ohne Schreiben.
 2. **Strom:** ``min_a``, 10 A (falls dazwischen) und ``max_a``, je mit Rücklesen.
 3. **Laden aus und an** (Rückfrage); lud ein Fahrzeug (über 500 W), dazu die Zeit, bis die
    Leistung unter 100 W fällt.
@@ -158,6 +158,10 @@ class _EvcsSteps:
             return False
         if current is None:
             self._record("EVCS bereit", "fail", REASON_UNKNOWN_CURRENT)
+            return False
+        problem = self._session.found_problem(self._id, CommandKind.CURRENT, current)
+        if problem is not None:
+            self._record("EVCS bereit", "fail", problem)
             return False
         charging = present.get(CommandKind.CHARGING)
         state = "an" if charging is True else "aus" if charging is False else "unbekannt"

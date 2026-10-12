@@ -287,10 +287,18 @@ async def tesla_session(
 
     ``answers`` sind die Antworten auf die Rückfragen in ihrer Reihenfolge, ``state`` ergänzt oder
     ersetzt die Startwerte (``TESLA_START``). Mit ``twc_follows`` übernimmt der Wall Connector den
-    bestätigten Strom als Phasenstrom, öffnet und schließt den Schütz (``FakeTwc``). Weitere:
-    ``asked`` sammelt die gestellten Rückfragen, ``config`` ersetzt die Beispielkonfiguration,
-    ``tessie_connected`` ist die Verbindung zu Tessie, ``unattended`` gilt wie ``--yes``. Nach dem
-    Test stoppt die Fixture die Sitzungen: Laufende Tessie-Befehle enden, der Client schließt.
+    bestätigten Strom als Phasenstrom, öffnet und schließt den Schütz (``FakeTwc``).
+
+    Nach einer Rückfrage steht der Event-Loop, und mit ihm der Adapter von Tessie. Die Fixture
+    stellt nach, was danach geschieht: Tessie meldet nach jeder Antwort ``tessie_delay_s`` später
+    neue Werte, jedes Signal des Fahrzeugs bekommt einen neuen Zeitstempel (``tessie_polls``).
+    ``after_answer`` ordnet einer Rückfrage (genauer Text) eine Handlung zu, die dieser Meldung
+    vorausgeht, etwa dass das Fahrzeug inzwischen schläft.
+
+    Weitere: ``asked`` sammelt die gestellten Rückfragen, ``config`` ersetzt die
+    Beispielkonfiguration, ``tessie_connected`` ist die Verbindung zu Tessie, ``unattended`` gilt
+    wie ``--yes``. Nach dem Test stoppt die Fixture die Sitzungen: Laufende Tessie-Befehle enden,
+    der Client schließt.
     """
     built: list[Part2Session] = []
 
@@ -302,6 +310,9 @@ async def tesla_session(
         asked: list[str] | None = None,
         config: Config | None = None,
         tessie_connected: bool = True,
+        tessie_polls: bool = True,
+        tessie_delay_s: float = 0.02,
+        after_answer: Mapping[str, Callable[[FakeTwc], object]] | None = None,
         unattended: bool = False,
     ) -> tuple[Part2Session, FakeTwc]:
         settings = config if config is not None else cfg
@@ -320,10 +331,22 @@ async def tesla_session(
         )
         replies = iter(answers)
 
+        def report(question: str) -> None:
+            """Tessie fragt wieder ab: erst die Handlung zur Rückfrage, dann neue Zeitstempel."""
+            action = (after_answer or {}).get(question)
+            if action is not None:
+                action(twc)
+            if tessie_polls:
+                for name, reading in store.snapshot().matching("vehicle.tesla.").items():
+                    put_signal(store, name, reading.value)
+
         def ask(question: str) -> bool:
             if asked is not None:
                 asked.append(question)
-            return next(replies)
+            reply = next(replies)
+            if tessie_polls or question in (after_answer or {}):
+                asyncio.get_running_loop().call_later(tessie_delay_s, report, question)
+            return reply
 
         client = httpx.AsyncClient()
         car = WiredTesla(

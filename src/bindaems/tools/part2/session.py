@@ -12,7 +12,14 @@ Betreiber (Plan 2b, Präzisierung 11). Die Sitzung startet dafür die echten Ada
   erneut, wenn er ablehnt, und ohne Bestätigung nach ``resend_s`` noch einmal. So übersteht ein
   Wert das Neuverbinden zum Cerbo nach einer langen Rückfrage.
 - Vor dem ersten Schreiben je Aktor und Art merkt sie sich den vorgefundenen Wert (``present``).
-  Ist er unbekannt, schreibt sie nicht: Er ließe sich nicht wiederherstellen.
+  Ist er unbekannt, schreibt sie nicht: Er ließe sich nicht wiederherstellen. Die Teile prüfen
+  vorher mit ``found_problem``, ob er zu den Regeln 1–3 passt; sonst ließe er sich auch nicht
+  wiederherstellen.
+- Eine Rückfrage liest von der Konsole, solange steht der Event-Loop und mit ihm der Adapter von
+  Tessie. Dessen Werte bleiben 900 s gültig, doch das Auto kann inzwischen schlafen, und ein Befehl
+  weckte es. Werte von Tessie, die nicht neuer sind als die letzte Antwort, gelten darum als
+  unbekannt: Vor dem Schreiben an einen Tesla wartet die Sitzung auf einen neueren Wert
+  (``fresh_after_question``) und sendet sonst nichts.
 - Nach jedem Schritt (``restore_after_step``), bei Abbruch und am Ende (``restore``) stellt sie
   die vorgefundenen Werte in umgekehrter Reihenfolge wieder her, auch nach Strg+C. Ein Wert, der
   schon wieder steht, wird nicht noch einmal geschrieben. Auch beim Wiederherstellen schreibt sie
@@ -27,6 +34,7 @@ from __future__ import annotations
 import asyncio
 import time
 from collections.abc import Awaitable, Callable, Mapping, Sequence
+from datetime import datetime
 from functools import partial
 from types import MappingProxyType
 from typing import Final
@@ -64,6 +72,8 @@ RESTORE_S: Final = 15.0  # Frist je wiederherzustellendem Wert, vom Senden bis z
 RESEND_S: Final = 5.0  # ohne Bestätigung geht derselbe Wert nach so vielen Sekunden noch einmal
 SKIPPED_UNATTENDED: Final = "übersprungen (--yes)"  # Schritt mit Handgriff, aber niemand da
 UNKNOWN_ORIGINAL: Final = "Ausgangswert unbekannt; er ließe sich nicht wiederherstellen."
+STALE_AFTER_QUESTION: Final = "Fahrzeugdaten nach der Rückfrage nicht aktuell."
+CLOUD_SIGNAL: Final = "online"  # dieses Signal des Tesla meldet Tessie bei jeder Abfrage neu
 
 _LABELS: Final = {"ok": "OK", "warn": "WARNUNG", "fail": "FEHLER", "info": "INFO"}
 # Punkt im Prüfprotokoll für die Zeilen des Wiederherstellens: je Familie, bei Victron je Art
@@ -184,6 +194,9 @@ class Part2Session:
         self._sent: dict[_Key, CommandValue] = {}  # zuletzt angenommener Auftrag
         self._confirmed: dict[_Key, CommandValue] = {}  # zuletzt bestätigter Wert
         self._unrestorable: set[_Key] = set()  # außerhalb der Grenzen, schon gemeldet
+        self._answered: datetime | None = (
+            None  # Zeit der letzten Antwort, nach der Uhr des Speichers
+        )
 
     @property
     def confirmed(self) -> Mapping[_Key, CommandValue]:
@@ -219,8 +232,58 @@ class Part2Session:
         return self._store.snapshot()
 
     def ask(self, question: str) -> bool:
-        """Stellt dem Betreiber die Frage; ``True`` heißt Ja."""
-        return self._ask(question)
+        """Stellt dem Betreiber die Frage; ``True`` heißt Ja.
+
+        Die Frage liest von der Konsole, solange steht der Event-Loop mit jedem Adapter. Die Sitzung
+        merkt sich darum, wann die Antwort kam, auch bei Strg+C: Werte von Tessie, die nicht neuer
+        sind, gelten danach als unbekannt (``fresh_after_question``).
+        """
+        try:
+            return self._ask(question)
+        finally:
+            self._answered = self.snapshot().ts
+
+    async def fresh_after_question(self, actuator: str, timeout_s: float) -> bool:
+        """Hat sich Tessie nach der letzten Rückfrage für den Tesla ``actuator`` gemeldet?
+
+        Wartet bis ``timeout_s`` darauf, dass der Zeitstempel von ``online`` neuer ist als die
+        Antwort; der Adapter erneuert ihn bei jeder Abfrage, alle 30 bis 60 s. Ohne Rückfrage und
+        für jeden anderen Aktor (die Werte von EVCS und Cerbo sind lokal) ist es sofort ``True``.
+        Ob das Auto wach ist, entscheiden danach wie sonst die ``capabilities``.
+        """
+        signal = self._cloud_signal(actuator)
+        answered = self._answered
+        if signal is None or answered is None:
+            return True
+
+        def newer(snap: Snapshot) -> bool:
+            reading = snap.get(signal)
+            return reading is not None and reading.ts > answered
+
+        return await self.wait_for(newer, timeout_s) is not None
+
+    def _cloud_signal(self, actuator: str) -> str | None:
+        """Das Signal, dessen Zeitstempel zeigt, dass Tessie sich gemeldet hat; sonst ``None``."""
+        spec = self.limits.actuators.get(actuator)
+        if spec is None or spec.family != "tesla":
+            return None
+        return f"{actuator}.{CLOUD_SIGNAL}"
+
+    def found_problem(self, actuator: str, kind: CommandKind, value: CommandValue) -> str | None:
+        """Warum der vorgefundene Wert ``value`` nicht zum Test taugt; ``None``, wenn er passt.
+
+        Die Sitzung schreibt nur, was die Regeln 1–3 unverändert durchlassen, auch beim
+        Wiederherstellen. Ein vorgefundener Wert, den sie klemmen oder ablehnen würden (ein Strom
+        über ``max_a``, unter ``min_a`` oder nicht ganzzahlig), bliebe nach dem Test verstellt. Die
+        Teile fragen darum in „bereit“, vor dem ersten Schreiben, und enden mit FEHLER.
+        """
+        problems = _range_problems(actuator, kind, value, self.limits)
+        if problems is None:
+            return None
+        return (
+            f"Ausgangswert {_value_text(kind, value)} außerhalb der Grenzen; er ließe sich nicht "
+            f"wiederherstellen: {problems}"
+        )
 
     def record(self, finding: Finding) -> None:
         """Hält einen Befund fest (``findings``) und zeigt ihn auf der Konsole."""
@@ -248,19 +311,21 @@ class Part2Session:
     ) -> float | None:
         """Schreibt ``value`` und bleibt dran, bis der Aktor ihn bestätigt oder die Frist endet.
 
-        Innerhalb der Frist wartet die Sitzung, bis der Aktor steuerbar ist, sendet dann, sendet
-        erneut, wenn der Aktor den Auftrag ablehnt (etwa zwischen zwei Sitzungen zum Cerbo), und
-        sendet denselben Wert noch einmal, wenn ``resend_s`` lang keine Bestätigung kam (der
-        Auftrag kann mit einer endenden Sitzung verloren sein). Vor jedem erneuten Senden liest sie
-        das Ergebnis: Erneut gesendet wird nur, solange es offen ist und der Aktor einen neuen
-        Auftrag annimmt; der Tesla nimmt keinen an, solange sein Befehl läuft. Persistente
-        Einstellungen (Entladegrenze, Min-SOC) gehen je Aufruf höchstens einmal hinaus. An einen
-        Aktor, der nicht steuerbar ist, geht nie etwas.
+        Nach einer Rückfrage wartet die Sitzung bei einem Tesla zuerst bis zur Frist auf neue Werte
+        von Tessie (``fresh_after_question``) und sendet sonst nichts. Dann wartet sie innerhalb der
+        Frist, bis der Aktor steuerbar ist, sendet, sendet erneut, wenn der Aktor den Auftrag
+        ablehnt (etwa zwischen zwei Sitzungen zum Cerbo), und sendet denselben Wert noch einmal,
+        wenn ``resend_s`` lang keine Bestätigung kam (der Auftrag kann mit einer endenden Sitzung
+        verloren sein). Vor jedem erneuten Senden liest sie das Ergebnis: Erneut gesendet wird nur,
+        solange es offen ist und der Aktor einen neuen Auftrag annimmt; der Tesla nimmt keinen an,
+        solange sein Befehl läuft. Persistente Einstellungen (Entladegrenze, Min-SOC) gehen je
+        Aufruf höchstens einmal hinaus. An einen Aktor, der nicht steuerbar ist, geht nie etwas.
 
         Ergebnis sind die Sekunden vom ersten Senden bis zur Bestätigung, sonst ``None``; dann
-        nennt ``failure`` den Grund: ging nichts hinaus, warum (nicht steuerbar, abgelehnt,
-        vorgefundener Wert unbekannt), sonst die Frist. Meldet der Aktor ausdrücklich einen
-        Fehler (Tesla: Tessie lehnt ab), endet das Warten sofort mit „Fehler: …“.
+        nennt ``failure`` den Grund: ging nichts hinaus, warum (Werte nach der Rückfrage nicht
+        aktuell, nicht steuerbar, abgelehnt, vorgefundener Wert unbekannt), sonst die Frist. Meldet
+        der Aktor ausdrücklich einen Fehler (Tesla: Tessie lehnt ab), endet das Warten sofort mit
+        „Fehler: …“.
 
         Ein Aktor, eine Art oder ein Wert, den die Regeln 1–3 klemmen oder ablehnen würden, ist ein
         Fehler des Werkzeugs (``ValueError``), noch vor jedem Senden. Vor dem ersten angenommenen
@@ -269,6 +334,9 @@ class Part2Session:
         device = self._checked(actuator, kind, value)
         key = (actuator, kind)
         self.failure = None
+        if not await self.fresh_after_question(actuator, timeout_s):
+            self.failure = STALE_AFTER_QUESTION
+            return None
         started = self.monotonic()
         first_sent: float | None = None
         last_sent = started
