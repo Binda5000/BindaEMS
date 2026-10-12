@@ -277,14 +277,22 @@ def test_there_is_one_alarm_per_actuator_from_its_latest_detection() -> None:
     assert detector.alarms(at(109), LABELS) != [] and detector.alarms(at(110), LABELS) == []
 
 
-def test_forget_ends_the_alarm_at_once() -> None:
+def test_forget_keeps_the_alarm_and_the_lock_cause_until_hold_s(limits) -> None:
+    # Die Laufzeit vergisst den Aktor, sobald die Sperre ihm „owned“ nimmt. Der Alarm, der die
+    # Sperre trägt, muss das überstehen: Er besteht bis ``hold_s`` nach der Erkennung.
     detector = ForeignChangeDetector(60.0)
     detector.expect(EVCS, CommandKind.CURRENT, 6.0)
-    detector.expect("victron", CommandKind.GRID_SETPOINT, None)
-    for i in range(3):
-        detector.check({CUR: 10, VSET: 500.0}, frozenset(), at(10 * i))
+    checks(detector, [10, 10, 10])  # Erkennung bei 20 s
     detector.forget(EVCS)
-    assert [a.id for a in detector.alarms(at(20), LABELS)] == ["competitor.foreign.victron"]
+    text = "EVCS „evcs“: Strom von außen geändert (10 A statt 6 A)."
+    for seconds in (20, 50, 79):
+        alarms = detector.alarms(at(seconds), LABELS)
+        assert [(a.id, a.message, a.since) for a in alarms] == [
+            ("competitor.foreign.wallbox.evcs", text, at(20))
+        ]
+        assert lock_causes(alarms, [], limits) == {EVCS: [text]}
+    assert detector.alarms(at(80), LABELS) == []
+    assert lock_causes(detector.alarms(at(80), LABELS), [], limits) == {}
 
 
 def test_forget_drops_the_expectation_and_the_counter() -> None:

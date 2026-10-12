@@ -6,8 +6,9 @@ Schreibvorgang offen, ist das ein Treffer. Erst ``hits`` Treffer in Folge gelten
 Änderung (``check``); ab dann ist der neue Wert die Erwartung.
 
 Beobachtet werden der Strom und der Netz-Sollwert-Override (``WATCHED_KINDS``). Jede Erkennung
-besteht als Alarm ``competitor.foreign.<aktor>`` für ``hold_s`` fort (``alarms``). Mit diesem Alarm
-sperrt ``core.safety.locks`` den Aktor wie bei jedem mitregelnden System.
+besteht als Alarm ``competitor.foreign.<aktor>`` für ``hold_s`` fort (``alarms``), auch wenn der
+Aktor inzwischen vergessen ist (``forget``). Mit diesem Alarm sperrt ``core.safety.locks`` den
+Aktor wie bei jedem mitregelnden System.
 
 Die Schicht ist rein: ohne I/O, die Zeit kommt als Argument.
 """
@@ -68,9 +69,9 @@ class ForeignChangeDetector:
 
     Die Laufzeit meldet jeden bestätigten Wert mit ``expect`` und ruft ``check`` bei jeder Prüfung
     auf (alle 10 s). ``alarms`` liefert die Alarme für die Sperren; ``forget`` beendet die
-    Beobachtung eines Aktors, der keine Werte des EMS mehr hält. ``hold_s`` ist die Zeit, die ein
-    Alarm nach der Erkennung besteht (``safety.lock_release_s``), ``hits`` die Zahl der Treffer in
-    Folge. Nicht für mehrere Threads gedacht.
+    Beobachtung eines Aktors, der keine Werte des EMS mehr hält, lässt aber seinen Alarm bestehen.
+    ``hold_s`` ist die Zeit, die ein Alarm nach der Erkennung besteht (``safety.lock_release_s``),
+    ``hits`` die Zahl der Treffer in Folge. Nicht für mehrere Threads gedacht.
     """
 
     def __init__(self, hold_s: float, hits: int = FOREIGN_HITS) -> None:
@@ -89,12 +90,14 @@ class ForeignChangeDetector:
             self._watched[(actuator, kind)] = _Watch(value)
 
     def forget(self, actuator: str) -> None:
-        """Beendet die Beobachtung des Aktors: Erwartungen, Zähler und Erkennung sind vergessen.
+        """Beendet die Beobachtung des Aktors: Erwartungen und Zähler sind vergessen.
 
-        Sein Alarm endet damit sofort. Für einen Aktor ohne Erwartung hat der Aufruf keine Wirkung.
+        Bis zu einem neuen ``expect`` zählt ``check`` für ihn nichts mehr. Seine letzte Erkennung
+        bleibt: Der Alarm besteht weiter, bis ``hold_s`` nach ihr vergangen ist. Die Sperre, die der
+        Alarm trägt, soll nicht enden, weil der Aktor keine Werte des EMS mehr hält. Für einen
+        Aktor ohne Erwartung hat der Aufruf keine Wirkung.
         """
         self._watched = {key: watch for key, watch in self._watched.items() if key[0] != actuator}
-        self._latest.pop(actuator, None)
 
     def check(
         self,
@@ -138,9 +141,9 @@ class ForeignChangeDetector:
         """Je Aktor mit einer Erkennung der Alarm ``competitor.foreign.<aktor>`` (Fehler).
 
         Text und ``since`` stammen aus der letzten Erkennung des Aktors. Der Alarm besteht,
-        solange ``now − since`` unter ``hold_s`` liegt. Der Text nennt Größe, Ist- und Sollwert mit
-        Einheit; beim Netz-Sollwert steht „kein Override“ für ``None``. Ohne Eintrag in ``labels``
-        steht die Aktor-ID im Text.
+        solange ``now − since`` unter ``hold_s`` liegt, auch nach ``forget``. Der Text nennt Größe,
+        Ist- und Sollwert mit Einheit; beim Netz-Sollwert steht „kein Override“ für ``None``. Ohne
+        Eintrag in ``labels`` steht die Aktor-ID im Text.
         """
         alarms: list[Alarm] = []
         for actuator, change in self._latest.items():
