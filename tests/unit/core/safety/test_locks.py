@@ -136,6 +136,42 @@ def test_selfcheck_rows_of_the_rule_table(limits, check_id, status, locks) -> No
     assert result == ({} if locks is None else {locks: ["Meldung."]})
 
 
+def test_foreign_change_alarms_lock_the_named_actuator(limits) -> None:
+    evcs = "EVCS „evcs“: Strom von außen geändert (10 A statt 6 A)."
+    victron = "Victron (ESS): Netz-Sollwert von außen geändert (500 W statt kein Override)."
+    tesla = "Tesla Model 3: Strom von außen geändert (10 A statt 6 A)."
+    competitors = [
+        alarm("competitor.foreign.wallbox.evcs", evcs),
+        alarm("competitor.foreign.victron", victron),
+        alarm("competitor.foreign.vehicle.tesla", tesla),
+    ]
+    assert lock_causes(competitors, [], limits) == {
+        "wallbox.evcs": [evcs],
+        "victron": [victron],
+        "vehicle.tesla": [tesla],
+    }
+
+
+def test_foreign_change_of_something_that_is_no_actuator_is_ignored(limits) -> None:
+    text = "Strom von außen geändert (10 A statt 6 A)."
+    others = [
+        alarm("competitor.foreign.wallbox.twc", text),  # der Wall Connector ist kein Aktor
+        alarm("competitor.foreign.vehicle.egolf", text),  # ein Fahrzeug ohne Tessie auch nicht
+        alarm("competitor.foreign.unbekannt", text),
+        alarm("competitor.foreign.", text),
+    ]
+    assert lock_causes(others, [], limits) == {}
+
+
+def test_foreign_change_joins_the_other_causes_of_the_actuator(limits) -> None:
+    foreign = "Victron (ESS): Netz-Sollwert von außen geändert (500 W statt kein Override)."
+    competitors = [alarm("competitor.dess", DESS), alarm("competitor.foreign.victron", foreign)]
+    selfcheck = [CheckResult("min_soc", "fail", "Victron-Min-SOC 5 % liegt unter der Reserve.")]
+    assert lock_causes(competitors, selfcheck, limits) == {
+        "victron": [DESS, foreign, "Victron-Min-SOC 5 % liegt unter der Reserve."]
+    }
+
+
 def test_equal_texts_appear_once_per_actuator(limits) -> None:
     text = "Ladefenster nicht verfügbar."
     competitors = [alarm("competitor.schedule.1", text)]

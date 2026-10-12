@@ -24,6 +24,7 @@ _ALARM_DESS: Final = "competitor.dess"
 _ALARM_SCHEDULE: Final = "competitor.schedule."
 _ALARM_EVCS_MODE: Final = "competitor.evcs_mode."
 _ALARM_VEHICLE_SCHEDULE: Final = "competitor.vehicle_schedule."
+_ALARM_FOREIGN: Final = "competitor.foreign."
 
 _CHECK_EVCS_MODE: Final = "evcs_mode."
 
@@ -72,6 +73,8 @@ def lock_causes(
     - ``wallbox.<n>``: der Alarm ``competitor.evcs_mode.<n>``; der Prüfpunkt ``evcs_mode.<n>`` bei
       Status ``unknown``
     - ``vehicle.<v>``: der Alarm ``competitor.vehicle_schedule.<v>``
+    - jeder Aktor: der Alarm ``competitor.foreign.<aktor>`` (Strom oder Override von außen
+      geändert, ``core.control.foreign``) sperrt den Aktor, dessen ID der Rest der Alarm-ID ist
 
     Alles andere sperrt nichts: ``phases`` und ``fresh_data`` wirken über das Gate des
     Betriebszustands, und Status ``ok`` und ``warn`` sind keine Ursache.
@@ -96,6 +99,9 @@ def _alarm_actuator(alarm_id: str) -> str | None:
         return wallbox_actuator(alarm_id.removeprefix(_ALARM_EVCS_MODE))
     if alarm_id.startswith(_ALARM_VEHICLE_SCHEDULE):
         return vehicle_actuator(alarm_id.removeprefix(_ALARM_VEHICLE_SCHEDULE))
+    if alarm_id.startswith(_ALARM_FOREIGN):
+        # Der Rest ist die Aktor-ID selbst; ob es sie gibt, prüft ``lock_causes``.
+        return alarm_id.removeprefix(_ALARM_FOREIGN)
     return None
 
 
