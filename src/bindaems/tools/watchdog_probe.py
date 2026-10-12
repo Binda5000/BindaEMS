@@ -16,8 +16,9 @@ Die Probe spricht MQTT mit dem Cerbo. Sie schreibt dort nur den Heartbeat des Wa
 5. und gibt ihn mit der 0 frei.
 
 **Die Probe löst den Watchdog aus:** Er setzt die EVCS auf den sicheren Strom und schreibt Min-SOC
-und Entladegrenze, wenn sie abweichen. Darum fragt das Werkzeug vorher nach; ``--yes`` überspringt
-die Rückfrage. Das Ergebnis ist ein Bericht im Format des Prüfprotokolls Teil 2. Regelt das EMS
+und Entladegrenze, wenn sie abweichen; mit ``victron.live_allowed`` hebt er auch den
+Netz-Sollwert-Override auf. Darum fragt das Werkzeug vorher nach; ``--yes`` überspringt die
+Rückfrage. Das Ergebnis ist ein Bericht im Format des Prüfprotokolls Teil 2. Regelt das EMS
 währenddessen (Regelbetrieb an, ein Victron- oder EVCS-Aktor live gewünscht), sendet es eigene
 Heartbeats, und der Watchdog löst nicht aus.
 
@@ -92,7 +93,8 @@ UNRELEASED = (
 )
 WARNING = (
     "Die Probe löst den Watchdog aus. Er setzt die EVCS auf den sicheren Strom und schreibt "
-    "Min-SOC und Entladegrenze, wenn sie abweichen."
+    "Min-SOC und Entladegrenze, wenn sie abweichen. Mit victron.live_allowed hebt er auch den "
+    "Netz-Sollwert-Override auf."
 )
 
 

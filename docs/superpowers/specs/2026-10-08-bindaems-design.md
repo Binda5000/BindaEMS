@@ -319,6 +319,10 @@ flowchart LR
   - Die Version ist eine streng steigende Zahl. Die app nimmt dafür Millisekunden seit 1970 (ab Plan 2d), damit auch eine aus der Sicherung wiederhergestellte app neuere Versionen erzeugt.
   - Gespeichert wird die angenommene, also geklemmte Absicht (`intent.json` unter `core.data_dir`): „Live“ gilt nur für Aktoren, die `config.yaml` bei der Annahme freigibt.
   - Nach einem Neustart gilt die gespeicherte Absicht weiter. Der core durchläuft trotzdem immer OBSERVE und das Gate (8.1, Ebene 4).
+- **Stand Plan 2b** (`docs/superpowers/plans/2026-10-11-phase-2b-aktoren.md`, Präzisierung 7):
+  - `GET /v1/decisions?since=<ISO-Zeit mit Zeitzone>&limit=<n>` liefert `{"decisions": […], "more": bool}`: die Entscheidungen mit `ts` nach `since`, aufsteigend. `since` ist Pflicht, `limit` hat den Standard 1000 und höchstens 5000; sonst antwortet der core mit 422.
+  - Entscheidungen gleicher Zeit (die eines Zyklus) bleiben beisammen, die Antwort kann deshalb `limit` überschreiten. `more` sagt, ob weitere folgen. Wer weiterliest, nimmt das `ts` der letzten gelieferten als neues `since`; im Query steht das `+` einer Zeitzone als `%2B`.
+  - Der Stream sendet jede Entscheidung sofort als `{"type": "decision", "data": …}`. In den Spool gehen die Entscheidungen eines Zyklus an dessen Ende in einem Zug; der Abruf zeigt sie also erst danach. Die app speichert Entscheidungen erst ab Plan 2d.
 
 ### 5.4 Datenflüsse
 
@@ -361,7 +365,7 @@ bindaems/
   - ruff (Lint und Format)
   - mypy im strict-Modus, für `src` und das Paket `cerbo-watchdog/bindaems_watchdog`
   - pytest, hypothesis, pytest-cov
-  - import-linter; ein Vertrag hält `core/safety` und `core/control` rein: Sie importieren nichts aus Adaptern, API, Laufzeit, Telemetrie, Abrechnung und Selbstprüfung.
+  - import-linter; ein Vertrag hält `core/safety` und `core/control` rein: Sie importieren nichts aus Adaptern, Aktoren, API, Laufzeit, Telemetrie, Abrechnung und Selbstprüfung.
 - **Frontend:** pnpm, SvelteKit mit adapter-static, TypeScript, ECharts, Vitest.
 - **CI (GitHub Actions):** Lint, Typprüfung, Tests mit Abdeckungsgrenzen (16), UI-Build und Container-Images nach GHCR.
 - **`cerbo-watchdog/`** (Plan 2a, `docs/superpowers/plans/2026-10-10-phase-2a-sicherheitsbasis.md`):
@@ -430,9 +434,16 @@ bindaems/
 - **Schreibbudget für persistente Settings:** höchstens 12 pro Stunde und 100 pro Tag, durchgesetzt in der Safety-Schicht.
 - **Modbus TCP** ergänzt MQTT. Die Unit-IDs stammen aus der Dienstliste des Cerbo; Register 2717 wird nie separat beschrieben.
 
+**Stand Plan 2b** (`docs/superpowers/plans/2026-10-11-phase-2b-aktoren.md`, Präzisierung 1): Das EMS schreibt am Cerbo nur per MQTT (`W/<portal>/…`) und nur auf Pfade aus einer festen Liste (`writable_paths`); alles andere bleibt lesend.
+- **Netz-Sollwert:** flüchtiger Override `hub4/0/Overrides/Setpoint` in W. `null` hebt ihn auf; das ist vorläufig, bis Teil 2 (17.2-1) es an der Anlage bestätigt.
+- **Entladegrenze:** persistent, `settings/0/Settings/CGwacs/MaxDischargePower` in W (−1 = unbegrenzt). Ob es einen flüchtigen Override dafür gibt, prüft Teil 2 (17.2-2); das EMS schreibt ihn nicht.
+- **Min-SOC:** persistent, `settings/0/Settings/CGwacs/BatteryLife/MinimumSocLimit` in %.
+- **Zurückgelesen** wird über `ess.override.setpoint`, `ess.max_discharge_w` und `ess.min_soc_pct`.
+- Dazu kommen der Heartbeat an den Watchdog (8.6) und die beiden Pfade der EVCS (6.3). Modbus TCP zum Cerbo (Register 2716/2717) bleibt ungenutzt; einen DVCC-Ladestrom und einen flüchtigen Entlade-Override gibt es in 2b nicht.
+
 ### 6.3 Victron EVCS NS
 
-- **Modbus TCP direkt** an der Wallbox, Unit-ID 1.
+- **Modbus TCP direkt** an der Wallbox, Unit-ID 1, zum Lesen (Schreiben: siehe Stand Plan 2b unten).
 - **Lesen jede Sekunde:** Status, Modus, Start/Stop, Soll- und Ist-Strom, Leistung, Session- und Gesamtenergie. Die Firmware wird beim Start gelesen.
 - **Schreiben:**
   - Start/Stop.
@@ -440,6 +451,11 @@ bindaems/
   - Jede Änderung wird durch Zurücklesen bestätigt.
 - **Modus:** Das EMS stellt ihn **nie** selbst um. Steht er nicht auf „manuell“, sperrt das EMS das Schreiben und meldet einen Alarm (7.9).
 - **Phasenzuordnung** (konfigurierbar): auf welchen Netzphasen die Wallbox-Phasen 1–3 liegen. Der e-Golf nutzt die ersten beiden Wallbox-Phasen (konfigurierbar je Fahrzeug). Die Zuordnung wird über Messungen plausibilisiert.
+
+**Stand Plan 2b** (`docs/superpowers/plans/2026-10-11-phase-2b-aktoren.md`, Präzisierung 1, Entscheidung des Betreibers vom 11.10.2026): Das EMS beschreibt die EVCS über den GX-Dienst `evcharger` des Cerbo, nicht direkt per Modbus. Gelesen wird weiter direkt per Modbus.
+- **Sollstrom:** `W/<portal>/evcharger/<Instanz>/SetCurrent` in ganzen Ampere. **Laden:** `W/<portal>/evcharger/<Instanz>/StartStop`, 1 = an, 0 = aus. Die Instanz steht in `victron.instances.evcharger`; ohne sie ist die EVCS nicht steuerbar.
+- **Zurückgelesen** wird aus dem eigenen Modbus-Abbild (`wallbox.<n>.set_current_a`, `wallbox.<n>.start_stop`), sonst aus den GX-Werten (`gx_set_current_a`, `gx_start_stop`).
+- Den Modus und den Maximalstrom (5017) schreibt das EMS nie. EMS und Watchdog nutzen damit denselben GX-Dienst; dass die EVCS die Werte übernimmt, bestätigt Teil 2 (17.2-5 und 17.2-6).
 
 ### 6.4 Tesla Wall Connector Gen 3
 
@@ -470,6 +486,11 @@ bindaems/
   - Timeout je Befehl 60 s.
   - Nach 3 Fehlern innerhalb von 15 min gilt der Tesla als „nicht steuerbar“ (8.4).
 - **Tesla an der EVCS:** Das EMS setzt `charging_amps` einmalig auf den Maximalwert. Danach regelt nur die EVCS, es gehen keine weiteren Ampere-Befehle an das Auto.
+
+**Stand Plan 2b** (`docs/superpowers/plans/2026-10-11-phase-2b-aktoren.md`, Präzisierung 1 und 6): Die Befehle gehen als `POST https://api.tessie.com/{vin}/command/start_charging`, `…/stop_charging` und `…/set_charging_amps?amps=N`, jeweils mit `wait_for_completion=true` und höchstens 60 s insgesamt.
+- **Bestätigt** ist ein Befehl, wenn Tessie `{"result": true}` liefert. Den Tessie-Cache fragt der core dafür nicht, denn er hinkt dem Fahrzeug hinterher.
+- **Nie wecken:** Tessie weckt das Fahrzeug bei Befehlen selbst. Der core sendet deshalb nur, wenn der Cache `online` meldet und das Fahrzeug zu Hause und angesteckt ist (3.7). Weckregeln für Sofort und Geplant kommen mit Plan 2c. Ohne Tessie-Token (`BINDAEMS_TESSIE_TOKEN`) ist Tessie für den Tesla nie erreichbar.
+- **Fehler:** Der Befehl läuft als Hintergrundaufgabe, der Zyklus wartet nie. Nach 3 Fehlern in 15 min ist der Tesla für 15 min nicht steuerbar (8.4); dazu kommt der Alarm `actuator.unavailable.vehicle.<name>`.
 
 ### 6.6 Home Assistant (lesend)
 
@@ -537,6 +558,11 @@ Zeitbudget: Ein Zyklus dauert höchstens 200 ms. Netzwerkzugriffe laufen asynchr
 3. Lademodi nach Auto-Priorität
 4. Plan-Absicht für den Akku
 
+**Stand Plan 2b** (`docs/superpowers/plans/2026-10-11-phase-2b-aktoren.md`, Präzisierung 5): Schritt 7 gilt so: Ein Zyklus ist fehlerfrei, wenn keine Ausnahme auftrat, für keinen Victron- oder EVCS-Aktor ein Schreibvorgang scheiterte (Fehler, Timeout, nicht gesendet) und keine Sicherwert-Art dieser Aktoren gescheitert ist (8.5).
+- Ein einzelner Fehler lässt nur diesen Heartbeat ausfallen; der nächste fehlerfreie Zyklus holt ihn nach. Erst anhaltende Fehler lassen den Watchdog auslösen.
+- Fehler beim Tesla zählen nicht.
+- Die Schritte 2 bis 5 folgen mit Plan 2c. In 2b entstehen Befehle nur aus dem sicheren Zustand und der Übergabe (8.5).
+
 ### 7.2 Betriebszustände
 
 | Zustand | Bedeutung |
@@ -563,7 +589,7 @@ Zeitbudget: Ein Zyklus dauert höchstens 200 ms. Netzwerkzugriffe laufen asynchr
   - Regelbetrieb in der Absicht
   - kritische Daten seit 30 s frisch
   - 3 Phasen mit je einem Gerät
-  - Watchdog scharf, sobald ein Victron- oder EVCS-Aktor live angefordert ist
+  - Watchdog scharf, sobald ein Victron- oder EVCS-Aktor live gewünscht ist (Regelbetrieb und Betriebsart live; Stand Plan 2b unten)
   - kein Grund für SAFE (Cerbo-Daten veraltet, Netzausfall)
 - Fehlgeschlagene oder nicht prüfbare Victron-Punkte sperren das Teilsystem Victron. Das sind ESS-Modus, BatteryLife, DESS, Ladefenster und Min-SOC unter der Reserve. Ein EVCS-Modus ungleich „manuell“ sperrt diese EVCS.
 - Das wirkt wie die Sperre bei mitregelnden Systemen (7.9), samt Freigabe nach 60 s ohne Ursache. Der core steht dann in DEGRADED, die Sperre ist der Grund.
@@ -571,9 +597,20 @@ Zeitbudget: Ein Zyklus dauert höchstens 200 ms. Netzwerkzugriffe laufen asynchr
 - **Abweichung:** Für Victron ist das so streng wie die Liste oben, denn ein gesperrtes Teilsystem schreibt nie. Die EVCS darf dagegen regeln, obwohl ein Victron-Punkt fehlschlägt. Das ist vertretbar: Die EVCS-Regelung braucht nur Netzmessung und Phasenwächter, nicht den ESS-Modus. Ein Netzladen durch DESS erhöht den gemessenen Bezug, und der Phasenwächter nimmt dann die EVCS zurück.
 - **Übergänge:**
   - START → OBSERVE im ersten Zyklus, immer.
-  - Ohne Absicht oder bei ausgeschaltetem Regelbetrieb steht der core in OBSERVE.
+  - Ohne Absicht oder bei ausgeschaltetem Regelbetrieb steht der core in OBSERVE, bei laufender Übergabe erst danach (Stand Plan 2b unten).
   - CONTROL und DEGRADED → SAFE bei veralteten Cerbo-Daten, Netzausfall (Inselbetrieb) oder nicht bestätigten Phasen. Zurück geht es nur durch das Gate.
   - DEGRADED statt CONTROL gilt bei einem gesperrten Teilsystem, einer nicht erreichbaren EVCS, einem nicht erreichbaren Wall Connector oder Tessie und einem Watchdog, der gebraucht wird und nicht scharf ist.
+
+**Stand Plan 2b** (`docs/superpowers/plans/2026-10-11-phase-2b-aktoren.md`, Präzisierung 2 und 3):
+- **Bedarf:** Den Watchdog braucht der Betrieb, solange ein Victron- oder EVCS-Aktor mit `live_allowed` live gewünscht ist (Regelbetrieb an und Betriebsart live) oder gerade übergeben wird. Ohne Regelbetrieb besteht kein Bedarf.
+- **Scharf** zählt der Watchdog nur für diesen core: `/State` = 1, `/Heartbeat` zeigt einen der drei zuletzt gesendeten Zähler des core, und `/TimeoutSeconds` entspricht `victron.watchdog.timeout_s`. Nur das zählt für das Gate und für die wirksame Betriebsart. Weicht der Timeout ab, kommt der Alarm `watchdog.timeout`.
+- **Heartbeat-Regel:** Den Zähler sendet der core nur bei Bedarf und aus einem fehlerfreien Zyklus (7.1), und zwar
+  - in CONTROL, DEGRADED und SAFE oder
+  - in OBSERVE zum Scharfschalten: wenn alle übrigen Gate-Bedingungen erfüllt sind (Regelbetrieb, Messwerte seit 30 s frisch, Phasen bestätigt, kein Grund für SAFE), der Watchdog nicht schon für diesen core scharf ist, seinen Zustand meldet und sein gemeldeter Timeout zur Konfiguration passt. Sonst bleibt der Heartbeat aus.
+  - Hängt der core nach einem Neustart in OBSERVE, löst der Watchdog deshalb nach `timeout_s` aus und setzt die Sicherwerte. Ein Neustart, der samt 30 s Frische unter 90 s bleibt, löst nichts aus.
+- **Übergabe:** Ein Aktor, der Werte des EMS hält (8.5) und nicht mehr live gewünscht ist (Dry-Run oder Regelbetrieb aus), bekommt seine Sicherwerte als dringende Befehle. Während der Übergabe ist er wirksam live, falls `live_allowed` gilt und bei Victron und EVCS der Watchdog für den core scharf ist. Der Grund lautet „Übergabe: Sicherwerte werden gesetzt.“, und geschrieben werden nur seine Sicherwerte.
+- **Regelbetrieb aus bei laufender Übergabe:** Aus CONTROL und DEGRADED steht der core in DEGRADED mit dem Grund „Regelbetrieb wird beendet: Übergabe der Aktoren läuft.“ Liegen Gründe für SAFE vor (veraltete Daten, Inselbetrieb, nicht bestätigte Phasen), steht er in SAFE mit diesen Gründen und dem Übergabe-Grund. Aus SAFE bleibt er in SAFE mit den aktuellen Gründen für SAFE und dem Übergabe-Grund, bis die Übergabe fertig ist. Erst danach geht er nach OBSERVE.
+- **Kann der core nicht schreiben,** etwa in OBSERVE nach einem Neustart, übergibt er nicht und gibt den Watchdog nicht frei (8.6).
 
 ### 7.3 Phasenwächter (Hausanschluss)
 
@@ -710,7 +747,14 @@ Kurzfristig puffern das ESS und das Victron-Importlimit (Ebene 0).
 - **Stand Plan 2a** (`docs/superpowers/plans/2026-10-10-phase-2a-sicherheitsbasis.md`, Präzisierung 1):
   - Gesperrt wird je Aktor: `victron`, `wallbox.<name>` und `vehicle.<name>`. Die Gründe sind die Texte der Alarme und der Selbstprüfung.
   - Die Freigabe geschieht nur automatisch, nach `safety.lock_release_s` (Standard 60 s) ohne Ursache. Kehrt die Ursache zurück, beginnt die Wartezeit von vorn. Die „Quittierung“ kommt mit der Bedienung in Plan 2d.
-  - Erkannt werden DESS, Ladefenster, ESS-Modus und BatteryLife (über die Selbstprüfung), EVCS-Modus und Tesla-Ladeplan. Die Erkennung fremder Änderungen von EVCS-Strom, Victron-Override und Tesla-Strom kommt mit Plan 2b.
+  - Erkannt werden DESS, Ladefenster, ESS-Modus und BatteryLife (über die Selbstprüfung), EVCS-Modus und Tesla-Ladeplan. Die Erkennung fremder Änderungen von EVCS-Strom, Victron-Override und Tesla-Strom kam mit Plan 2b (siehe unten).
+- **Stand Plan 2b** (`docs/superpowers/plans/2026-10-11-phase-2b-aktoren.md`, Präzisierung 8):
+  - Beobachtet werden der EVCS-Strom, der Victron-Netz-Sollwert-Override und der Tesla-Strom, aber nur bei Aktoren, die Werte des EMS halten (8.5), und erst, nachdem der core einen Wert bestätigt hat. Die Prüfung läuft alle 10 s, zusammen mit der Selbstprüfung: Weicht der Ist-Wert vom erwarteten ab und ist kein eigener Schreibvorgang offen, ist das ein Treffer. Nach 3 Treffern in Folge gilt der Wert als fremd geändert, und ab dann wird der neue Wert erwartet.
+  - Folge ist der Alarm `competitor.foreign.<aktor>` (Fehler). Er besteht `safety.lock_release_s` ab der letzten Erkennung, auch wenn der Aktor danach „vergessen“ wird. Er sperrt den Aktor wie jede andere Ursache (2a), HA zeigt „Mitregelndes System“, und der gesperrte Aktor hält keine Werte des EMS mehr: Er wird nicht übergeben, denn ein anderes System regelt ihn.
+  - Die Erkennung erzeugt Alarm und Sperre, aber noch keinen eigenen Eintrag im Entscheidungslog (kommt mit Plan 2d).
+  - Nach einem gescheiterten Schreibvorgang (Fehler, Timeout) wird die Erwartung für diesen Aktor verworfen: Ein eigener Wert, den das Gerät verspätet übernimmt, sähe sonst fremd aus.
+  - Beim Tesla bestätigt Tessie den Befehl (6.5), sein Cache hinkt dem Fahrzeug hinterher. Ein bestätigter Strom gilt deshalb erst als Erwartung, wenn der Cache ihn zeigt.
+  - Der Tesla-Ladeplan bleibt wie in 2a.
 
 ### 7.10 Entscheidungslog
 
@@ -725,6 +769,11 @@ Kurzfristig puffern das ESS und das Victron-Importlimit (Ebene 0).
   - wichtigste Eingangsgrößen: Preis, SOC, verfügbarer Überschuss, Budget, Planabsicht
   - Ergebnis: ok, Fehler oder Timeout
 - **„Warum?“** im UI setzt sich aus den aktuellen Entscheidungen und der Begründung des Plan-Slots zusammen.
+
+**Stand Plan 2b** (`docs/superpowers/plans/2026-10-11-phase-2b-aktoren.md`, Präzisierung 7):
+- **Umfang:** Protokolliert werden jeder gesendete Befehl mit seinem Ergebnis (ok, Fehler, Timeout oder nicht gesendet), jedes Dry-Run-Urteil, das einen Wert ergäbe, und jede Ablehnung der Safety-Schicht; dieselbe Ablehnung desselben Aktors und derselben Art höchstens alle 60 s. Unveränderte und aufgeschobene Befehle (`UNCHANGED`, `DEFERRED`) erscheinen nicht.
+- **Felder:** `id`, `ts` (Wanduhr, UTC), `actuator`, `kind`, `requested` und `applied`, `dry_run`, `outcome` (Urteil der Safety-Schicht), `result` (`ok`, `error`, `timeout`, `not_sent`, `dry_run` oder `rejected`), `codes` (Gründe des Befehls, dann Befunde der Safety-Schicht), `text` auf Deutsch und `inputs`. In 2b sind das SOC, Akkuleistung und Netzstrom je Phase; Preis, Überschuss, Budget und Plan kommen mit Plan 2c.
+- **Spool:** JSON-Zeilen je Tag unter `core.data_dir/decisions/` (`decisions-JJJJ-MM-TT.jsonl`), höchstens 7 Tage und 50 MB. Ein Fehler beim Schreiben unterbricht den Zyklus nicht, er kommt ins Log. Abruf und Stream: 5.3.
 
 ---
 
@@ -847,6 +896,14 @@ Für diese Schicht gibt es Tests mit zufälligen Eingaben (hypothesis). Sie bele
 - **EVCS:** konfigurierter sicherer Strom (Default 6 A) bzw. Stopp, wenn konfiguriert.
 - **Tesla:** sicherer Strom per Tessie, falls erreichbar; sonst begrenzt der am Wall Connector eingestellte Maximalstrom.
 
+**Stand Plan 2b** (`docs/superpowers/plans/2026-10-11-phase-2b-aktoren.md`, Präzisierung 3 und 4):
+- **Sicherwerte:** Victron: Netz-Sollwert-Override aufgehoben, Entladegrenze −1 (unbegrenzt), Min-SOC = USV-Reserve. EVCS: `safe_a`. Tesla: der Mindeststrom des Fahrzeugs (`min_a`). Bei „Netzausfall (Inselbetrieb).“ kommt für EVCS und Tesla zusätzlich „Laden aus“ dazu (8.4).
+- **Ziele:** In SAFE bekommt jeder nicht gesperrte Aktor seine Sicherwerte. Dazu kommt die Übergabe (unten) in jedem Zustand, in dem der core schreibt (CONTROL, DEGRADED, SAFE).
+- **Ablauf** (`SafeStateKeeper`): Für einen wirksam live geschalteten Aktor sendet der core je Art einen dringenden Befehl, wenn der zurückgelesene Wert nicht der Sicherwert ist, kein Schreibvorgang offen ist und der letzte Versuch mindestens 10 s her ist. Je Vorfall gibt es höchstens 3 Versuche. Danach gilt die Art als gescheitert (Alarm `actuator.failed.<aktor>`), bis der Wert stimmt – auch nach einer Auslösung des Watchdogs, damit kein Heartbeat einen ausgelösten Watchdog wieder schärft. Dry-Run-Aktoren bekommen je Vorfall einmal die Entscheidung „Dry-Run“, ohne Wiederholung. Ein Vorfall endet, sobald der Aktor kein Ziel mehr ist; der nächste beginnt mit neuen Versuchen. Die Befehle tragen den Grund `safe_state`, `handback` oder `grid_outage` und gehen wie jeder Befehl durch die Safety-Schicht (dringend, 8.3).
+- **Übergabe am Ende des Live-Betriebs:** Ein Aktor hält Werte des EMS (owned), sobald der core ihm einen Wert gesendet hat. Beim Start gilt jeder Aktor als solcher, den die gespeicherte Absicht live anfordert und `config.yaml` freigibt, denn sein Gerät kann noch Werte vom letzten Lauf halten. Ist ein solcher Aktor nicht mehr live gewünscht (Dry-Run oder Regelbetrieb aus), bekommt er seine Sicherwerte (Grund `handback`). Sind alle zurückgelesen, ist er übergeben. Dann folgt, wenn kein Victron- oder EVCS-Aktor mehr Werte des EMS hält, die Freigabe 0 des Watchdogs (8.6). Bei Regelbetrieb aus geht der core erst danach nach OBSERVE (7.2). Gesperrte Aktoren (7.9) werden nicht übergeben: Sie halten sofort keine Werte des EMS mehr, denn ein anderes System regelt sie.
+- **Scheitert die Übergabe** (3 Versuche), gibt es einen Alarm und keinen Heartbeat mehr. Bei Victron und EVCS löst der Watchdog aus und setzt die Sicherwerte; sobald der core sie zurückliest, gilt die Übergabe als erledigt, und er gibt frei. Beim Tesla bleibt eine gescheiterte Übergabe offen: Bei Regelbetrieb aus steht der core in DEGRADED mit dem Übergabe-Grund, und der Alarm `actuator.failed.vehicle.<name>` bleibt, bis der Strom des Fahrzeugs den Sicherwert zeigt oder der Tesla wieder live gewünscht ist.
+- **Kann der core nicht schreiben,** etwa in OBSERVE nach einem Neustart, übergibt er nicht und gibt nicht frei. Der Watchdog löst aus, weil der Heartbeat ausbleibt; danach geht es weiter wie oben.
+
 ### 8.6 Totmann-Watchdog am Cerbo
 
 Der Aufbau von `cerbo-watchdog/` steht in 5.6. Plan 2a (`docs/superpowers/plans/2026-10-10-phase-2a-sicherheitsbasis.md`, Präzisierungen 2 und 3) legt die Einzelheiten fest.
@@ -868,9 +925,9 @@ Der Aufbau von `cerbo-watchdog/` steht in 5.6. Plan 2a (`docs/superpowers/plans/
   | `/Version` | Version |
 
 - **Heartbeat nur bei Bedarf, Freigabe mit 0:**
-  - **Wann:** Das EMS schreibt alle 10 s einen Heartbeat (einen Zähler 1, 2, 3, …), aber nur, solange mindestens ein Victron- oder EVCS-Aktor live angefordert ist (Absicht und `live_allowed`), und nur aus einem fehlerfreien Zyklus (7.1, Schritt 7).
+  - **Wann:** Das EMS schreibt alle 10 s einen Heartbeat (einen Zähler 1, 2, 3, …), aber nur, solange der core regelt: Mindestens ein Victron- oder EVCS-Aktor ist im Regelbetrieb live gewünscht (Absicht und `live_allowed`) oder wird gerade übergeben, und der Zyklus war fehlerfrei (7.1, Schritt 7).
   - **Dry-Run:** Ohne Live-Aktor bleibt der Watchdog „wartend“ und greift nie ein. Sonst würde er bei jedem Neustart des EMS, der länger als 90 s dauert, die EVCS auf den sicheren Strom setzen, obwohl das EMS sie gar nicht steuert.
-  - **Freigabe:** Fällt die letzte solche Live-Anforderung weg, sendet das EMS einmal den Wert 0. Der Watchdog geht dann ohne Auslösung zurück auf „wartet“.
+  - **Freigabe:** Fällt der Bedarf weg und sind alle Aktoren übergeben (8.5), sendet das EMS einmal den Wert 0. Der Watchdog geht dann ohne Auslösung zurück auf „wartet“.
   - **Herunterfahren:** Dabei sendet das EMS keine 0. Dauert ein Neustart zu lange, löst der Watchdog deshalb aus.
   - **Grenze:** Ein laufendes EMS kann den Watchdog so abschalten. Es könnte aber ohnehin falsch schreiben; der Watchdog schützt nur vor einem ausgefallenen EMS.
 - **Zeiten:** Bleibt der Heartbeat 90 s aus, löst der Watchdog aus.
@@ -880,7 +937,7 @@ Der Aufbau von `cerbo-watchdog/` steht in 5.6. Plan 2a (`docs/superpowers/plans/
     - EVCS auf den sicheren Strom über den GX-Dienst `evcharger` (`/SetCurrent`); laut Prüfprotokoll Teil 1 liest der Cerbo die EVCS bereits per Modbus TCP
     - Min-SOC auf die USV-Reserve
     - Entladegrenze auf unbegrenzt (−1)
-  - Das Löschen der EMS-Overrides (hub4) kommt mit Plan 2b, sobald das Prüfprotokoll Teil 2 die Pfade festgelegt hat.
+  - Das Löschen der EMS-Overrides (hub4) kam mit Version 1.1.0 (Plan 2b, siehe unten).
   - Der Aktionslauf endet, sobald der Watchdog den Zustand „ausgelöst“ verlässt (Freigabe mit 0 oder wieder scharf). Eine offene Aktion, die schon gescheitert ist, zählt dann als fehlgeschlagen; eine noch nie versuchte bleibt offen.
 - **Konfiguration:**
   - Sicherwerte und Pfade stehen in `/data/bindaems-watchdog/config.ini`.
@@ -891,6 +948,18 @@ Der Aufbau von `cerbo-watchdog/` steht in 5.6. Plan 2a (`docs/superpowers/plans/
 - **Neustart des Cerbo:** Der Watchdog merkt sich „scharf“ in `/data/bindaems-watchdog/state.json` und startet danach wieder scharf. Eine unlesbare Datei gilt als scharf. Schlägt das Speichern fehl, wiederholt er es bis zum Erfolg.
 - **Kein Eingreifen im Normalbetrieb:** Solange der Watchdog wartet oder scharf ist, schreibt er nichts.
 - **Wartung:** Installation und Update über ein SSH-Skript aus dem Repository (Übertragung mit `tar` über ssh). Das EMS prüft die installierte Version und den Status.
+
+**Stand Plan 2b** (`docs/superpowers/plans/2026-10-11-phase-2b-aktoren.md`, Präzisierung 2 und 10):
+- **Version 1.1.0:** Der core erwartet 1.1.0. Läuft noch 1.0.0, meldet er die Warnung „bitte mit install.sh aktualisieren“. Die `config.ini` wird neu erzeugt; sie enthält jetzt eine Kommentarzeile zur Override-Aktion.
+- **Override-Aktion:** Mit `victron.live_allowed` kommt die Aktion „Netz-Sollwert-Override aufheben“ dazu (`com.victronenergy.hub4`, `/Overrides/Setpoint`, Wert `null`). Ohne Victron-Freigabe gehört der Override nicht dem EMS, denn DESS nutzt ihn; er bleibt dann unberührt.
+- **„Ausgelöst“ übersteht einen Neustart des Cerbo als „scharf“:** Bleibt der Heartbeat danach aus, löst der Watchdog erneut aus. Die Aktionen lesen zuerst und schreiben nur, was abweicht. `state.json` und die Dateien des core sichern nach `os.replace` auch das Verzeichnis (`fsync`).
+- **Freigabe-Regeln des core:**
+  - Die 0 sendet er nur ohne Bedarf und wenn kein Victron- oder EVCS-Aktor mehr Werte des EMS halten kann (8.5).
+  - Zeigt der Watchdog 2 × `heartbeat_s` nach der Freigabe noch „scharf“ und keinen fremden Zähler, ging die 0 verloren, und der core sendet sie erneut.
+  - Steht der Watchdog ohne Bedarf und ohne Werte des EMS seit 60 s auf „ausgelöst“, räumt der core mit der 0 auf.
+  - Der core gibt einen Watchdog nur frei (auch beim Aufräumen), wenn er in diesem Lauf für ihn verantwortlich war: Es bestand Bedarf, oder ein Victron- oder EVCS-Aktor hielt Werte des EMS. Eine Probe oder das Teil-2-Werkzeug, die den Watchdog mit eigenen Heartbeats schärfen und auslösen, stört der laufende core damit nicht.
+  - Beim Herunterfahren sendet der core weiter nichts. Den Timeout vergleicht er mit `int(timeout_s)`, weil der Watchdog ihn ganzzahlig meldet.
+- **Probe:** Sie liest `/LastTripFailures` erst nach „Wieder scharf“; nur dann ist die Zahl der Endstand. Sieht sie „Wieder scharf“ nicht, ist die Zeile zur Auslösung eine Warnung mit Zusatz.
 
 ### 8.7 Freigabe von Aktoren (Dry-Run → live)
 
@@ -1140,8 +1209,8 @@ Greift, wenn der Solver scheitert, das Zeitlimit überschritten ist oder das Erg
 | `LedgerSlot` | Abrechnung einer Viertelstunde |
 
 **Stand Plan 2a** (`docs/superpowers/plans/2026-10-10-phase-2a-sicherheitsbasis.md`, Präzisierungen 10 und 11):
-- `Command`, die Befehlsarten, die Betriebsarten, die Betriebszustände und `Intent` liegen in `shared/control.py`. `Verdict` und `SafetyContext` liegen in `core/safety/types.py`, denn nur der core braucht sie. `Decision` folgt mit Plan 2b.
-- Befehlsarten: bei EVCS und Tesla `current` und `charging`, bei Victron `grid_setpoint` (flüchtig) sowie `max_discharge` und `min_soc` (beide persistent). DVCC-Ladestrom und ein flüchtiger Entlade-Override kommen mit Plan 2b oder Phase 3, wenn das Prüfprotokoll Teil 2 die Wege bestätigt.
+- `Command`, die Befehlsarten, die Betriebsarten, die Betriebszustände und `Intent` liegen in `shared/control.py`. `Verdict` und `SafetyContext` liegen in `core/safety/types.py`, denn nur der core braucht sie. `Decision` liegt seit Plan 2b in `shared/decisions.py` (7.10).
+- Befehlsarten: bei EVCS und Tesla `current` und `charging`, bei Victron `grid_setpoint` (flüchtig) sowie `max_discharge` und `min_soc` (beide persistent). DVCC-Ladestrom und ein flüchtiger Entlade-Override kommen, wenn das Prüfprotokoll Teil 2 die Wege bestätigt, mit Phase 3 (Plan 2b setzt sie nicht um).
 
 ### 11.2 InfluxDB 1.x
 
@@ -1351,7 +1420,7 @@ pv:
   - Alternativ: lokaler Build auf der VM mit demselben Compose-File.
 - **Proxmox-HA:**
   - Die VM ist eine HA-Ressource; ZFS-Replikation alle 1–5 min.
-  - Bei einem Failover greift der Watchdog, wenn ein Victron- oder EVCS-Aktor live angefordert ist und der core nicht innerhalb des Timeouts (90 s) wieder Heartbeats sendet. Ohne live angeforderten Aktor wartet der Watchdog und greift nicht ein (8.6). Der core startet danach in OBSERVE.
+  - Bei einem Failover greift der Watchdog, wenn der Betrieb ihn braucht (ein Victron- oder EVCS-Aktor ist im Regelbetrieb live gewünscht, 8.6) und der core nicht innerhalb des Timeouts (90 s) wieder Heartbeats sendet. Ohne einen solchen Aktor wartet der Watchdog und greift nicht ein (8.6). Der core startet danach in OBSERVE.
 - **Betrieb:**
   - **Logs:** strukturiertes JSON auf stdout, mit Docker-Logrotation.
   - **Überwachung:** `/health` pro Dienst; Zustand des EMS als HA-Binary-Sensoren; Grafana-Startdashboard ab Phase 4.
@@ -1384,7 +1453,7 @@ pv:
 - **Szenario-Tests:** historische Tage aus InfluxDB (PV, Last, Preise) laufen durch Planer und simulierten core. Verglichen werden die Kosten mit „Victron allein“; die Werte werden als Regressionsmetrik verfolgt.
 - **Vertragstests für Adapter** mit aufgezeichneten Antworten: MQTT, Modbus-Registerabbilder, Tessie-JSON, TWC-Vitals, smartENERGY, Open-Meteo.
 - **Frontend:** Vitest für die Logik; optional Playwright für die wichtigsten Abläufe.
-- **Abdeckung:** Zeilenabdeckung ≥ 90 % für `core/safety` und `core/control`, sonst ≥ 75 %. Die CI prüft beides mit pytest-cov (Plan 2a).
+- **Abdeckung:** Zeilenabdeckung ≥ 90 % für `core/safety`, `core/control` und `core/actuators`, sonst ≥ 75 %. Die CI prüft beides mit pytest-cov (Plan 2a, seit Plan 2b mit `core/actuators`).
 - **CI:**
   - Ablauf: ruff, mypy, import-linter, pytest (Unit, Property, Contract, Simulator), UI-Build und -Tests, Image-Build.
   - Szenario-Tests laufen nächtlich und bei Änderungen am Planer.
@@ -1455,19 +1524,24 @@ Die Ergebnisse kommen nach `docs/verification/` mit Datum, Firmwareständen, erw
      - ohne Heartbeat warten, bis der Aktionslauf mit allen Wiederholungen zu Ende sein muss ((Wiederholungen + 1) × Abstand + 10 s, also 45 s); sonst bräche das Wiederscharfwerden den Lauf ab
      - die Heartbeats wieder aufnehmen, bis er wieder scharf ist
      - ihn mit der 0 freigeben
-   - Der Bericht (`docs/verification/JJJJ-MM-TT-watchdog-probe.md`) hat zu jedem Schritt eine Zeile unter Punkt 17.2-5. Die Zeile zur Auslösung nennt die Zahl der fehlgeschlagenen Aktionen (`/LastTripFailures`, gelesen nach dieser Pause). Nach jeder Probe prüft der Betreiber zusätzlich im Log des Cerbo die Zeile zum Aktionslauf („abgeschlossen“ oder „abgebrochen“).
-   - Die Probe stellt vorher keine Werte um. Das Wiederherstellen verstellter Werte, auch der hub4-Overrides, kommt mit Plan 2b.
+   - Der Bericht (`docs/verification/JJJJ-MM-TT-watchdog-probe.md`) hat zu jedem Schritt eine Zeile unter Punkt 17.2-5. Die Zeile zur Auslösung nennt die Zahl der fehlgeschlagenen Aktionen (`/LastTripFailures`, gelesen nach „Wieder scharf“, denn erst dann ist sie der Endstand; sieht die Probe es nicht, ist die Zeile eine Warnung mit Zusatz). Nach jeder Probe prüft der Betreiber zusätzlich im Log des Cerbo die Zeile zum Aktionslauf („abgeschlossen“ oder „abgebrochen“).
+   - Die Probe stellt vorher keine Werte um. Das Verstellen und Wiederherstellen von Werten übernimmt das Werkzeug `verify_part2` (Stand Plan 2b unten); der Watchdog hebt mit `victron.live_allowed` auch den hub4-Override auf.
 6. **EVCS:**
    - Start/Stop, Strom 6–16 A, Reaktionszeit
    - Verhalten bei unterbrochener Modbus-Verbindung (behält sie den Strom?)
    - Erkennung externer Änderungen
-   - Weg für den sicheren Strom vom Cerbo aus: für den Watchdog in 8.6 festgelegt (GX-Dienst `evcharger`, `/SetCurrent`), die Watchdog-Probe (Punkt 5) übt ihn. Zu prüfen bleibt, dass die EVCS den Wert übernimmt; dafür den Strom vor der Probe von Hand verstellen
+   - Weg für den Strom vom Cerbo aus: für EMS und Watchdog festgelegt (GX-Dienst `evcharger`, `/SetCurrent`, 6.3 und 8.6), die Watchdog-Probe (Punkt 5) übt ihn. Zu prüfen bleibt, dass die EVCS den Wert übernimmt; dafür den Strom vor der Probe verstellen (`verify_part2 --punkt evcs` tut es selbst, Stand Plan 2b unten)
 7. **Tesla über Tessie:**
    - Latenz und Wirkung von `set_charging_amps` am Wall Connector
    - Verhalten bei 5 A
    - Latenz von Start/Stopp
    - schlafendes Auto wird nicht geweckt
 8. **Victron-Importlimit:** Wirkung bei Wallbox-Last, als kontrollierter Kurztest.
+
+**Stand Plan 2b** (`docs/superpowers/plans/2026-10-11-phase-2b-aktoren.md`, Präzisierung 11): Das Werkzeug `python -m bindaems.tools.verify_part2 --punkt evcs|tesla|victron` führt die schreibenden Punkte aus (Betriebshandbuch 11). Es fragt wie die Probe vor jedem schreibenden Schritt nach und schreibt den Bericht `JJJJ-MM-TT-pruefprotokoll-teil2-<punkt>.md`; die Punkte heißen 17.2-x. Mit `--yes` beantwortet es alle Rückfragen mit Ja und überspringt Schritte, die einen Handgriff des Betreibers brauchen; der Bericht vermerkt das.
+- **Reihenfolge:** `evcs` (17.2-6 und über die Watchdog-Probe 17.2-5) und `tesla` (17.2-7) jetzt, gemeinsam mit dem Betreiber. `victron` (17.2-1 bis 17.2-4 und 17.2-8) erst nach dem Abschalten von Dynamic ESS, also vor der Live-Schaltung von Victron. Es verweigert, solange DESS aktiv ist, denn DESS nullt fremde Overrides (3.2), und ebenso, wenn beim Start ein Netz-Sollwert-Override steht (auch 0 W), denn dann regelt ein anderes System.
+- **Sicherheit:** Es nutzt dieselben Adapter und Aktoren wie der core und prüft jeden Wert mit den Regeln 1–3, auch die vorgefundenen vor dem ersten Schreiben. Die Rate-Limits der Safety-Schicht (Regel 5) wendet es nicht an, denn der Betreiber bestätigt jeden Schritt. Nach jedem Schrittblock und bei Abbruch (Strg+C) stellt es die vorgefundenen Werte wieder her. Es schreibt höchstens vier persistente Werte je Lauf und weckt den Tesla nicht: Nach einer Rückfrage wartet es auf eine neue Meldung von Tessie, bevor es sendet.
+- **Der core** läuft dabei im Dry-Run weiter. Seine Erkennung fremder Änderungen beobachtet nur Aktoren, die Werte des EMS halten (7.9), und stört nicht.
 
 ---
 
@@ -1599,8 +1673,8 @@ Keiner blockiert die Architektur; geklärt wird jeweils in der genannten Phase.
 
 | Punkt | Wann |
 |---|---|
-| Endgültige Victron-Schreibwege | Prüfprotokoll Teil 2 |
-| Weg für den sicheren EVCS-Strom vom Cerbo aus: für den Watchdog in 8.6 festgelegt (GX-Dienst `evcharger`, `/SetCurrent`, geübt mit der Watchdog-Probe); offen ist nur, ob die EVCS den Wert übernimmt | Prüfprotokoll Teil 2 (17.2-5 und 17.2-6) |
+| Endgültige Victron-Schreibwege: festgelegt (6.2, Stand Plan 2b); offen ist, ob `null` den Override aufhebt und wie der Cerbo den Ruhezustand meldet | Prüfprotokoll Teil 2, Punkt `victron` (17.2-1 bis 17.2-4), nach dem Abschalten von DESS |
+| Weg für den EVCS-Strom vom Cerbo aus: für EMS und Watchdog festgelegt (GX-Dienst `evcharger`, `/SetCurrent`, 6.3 und 8.6; mit der Watchdog-Probe geübt); offen ist nur, ob die EVCS den Wert übernimmt | Prüfprotokoll Teil 2, Punkt `evcs` (17.2-5 und 17.2-6) |
 | Werte aus dem Preisblatt Netz NÖ | Inbetriebnahme Phase 3 |
 | ElWG-Sätze | nach Veröffentlichung der SNE-T-V |
 | Entitäts-IDs des e-Golf | Konfiguration in Phase 1 |

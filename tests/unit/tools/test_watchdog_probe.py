@@ -841,7 +841,8 @@ def test_main_aborts_on_every_answer_but_j(monkeypatch, capsys, answer: str) -> 
     secrets.assert_not_called()
     assert (
         "Die Probe löst den Watchdog aus. Er setzt die EVCS auf den sicheren Strom und schreibt "
-        "Min-SOC und Entladegrenze, wenn sie abweichen."
+        "Min-SOC und Entladegrenze, wenn sie abweichen. Mit victron.live_allowed hebt er auch "
+        "den Netz-Sollwert-Override auf."
     ) in capsys.readouterr().out
 
 

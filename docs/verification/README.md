@@ -107,15 +107,119 @@ Lokal aus dem Repository geht es mit
 
 Das Protokoll übernimmst du mit Datum nach `docs/verification/`.
 
-## Teil 2 – Watchdog-Probe (17.2-5)
+## Teil 2 – schreibend (17.2)
 
-Teil 2 (Spec 17.2) schreibt auf Geräte und läuft gemeinsam mit dem Betreiber. Plan 2a liefert dafür
-die Watchdog-Probe; die übrigen Punkte folgen mit Plan 2b. Das Werkzeug
-`bindaems.tools.watchdog_probe` spricht MQTT mit dem Cerbo. Es schreibt dort nur den Heartbeat des
-Watchdogs (`W/<portal>/bindaems/0/Heartbeat`) und sendet den Keepalive.
+Teil 2 (Spec 17.2) schreibt auf Geräte und läuft gemeinsam mit dem Betreiber. Das Werkzeug
+`bindaems.tools.verify_part2` führt die Punkte `evcs`, `tesla` und `victron` aus. Es nutzt
+dieselben Adapter und Aktoren wie der core, prüft jeden Wert mit den Regeln 1–3 der Safety-Schicht
+und fragt vor jedem schreibenden Schritt nach. Nach jedem Schritt und bei Abbruch stellt es die
+vorgefundenen Werte wieder her. Bedienung, Rückfragen, Abbruch und Voraussetzungen stehen im
+Betriebshandbuch, Abschnitt 11. Die Watchdog-Probe (17.2-5) steht im nächsten Abschnitt; der
+Punkt `evcs` führt sie mit aus.
+
+**Reihenfolge:** EVCS und Tesla jetzt, gemeinsam mit dem Betreiber. Victron erst nach dem
+Abschalten von Dynamic ESS, also vor der Live-Schaltung von Victron: Davor verweigert der Punkt,
+ohne zu schreiben.
+
+### Aufruf
+
+Der Aufruf erfolgt auf der VM im Container, mit denselben Secrets wie der core (`.env`):
+
+```bash
+cd /opt/bindaems
+mkdir -p verification && sudo chown 10001 verification
+docker compose run --rm -v "$PWD/verification:/out" --entrypoint python ems-core \
+  -m bindaems.tools.verify_part2 --config /config/config.yaml --punkt evcs \
+  --out /out/<Datum>-pruefprotokoll-teil2-evcs.md
+```
+
+Lokal aus dem Repository geht es mit
+`uv run python -m bindaems.tools.verify_part2 --config deploy/config.yaml --punkt evcs`. Ohne
+`--out` liegt der Bericht dann unter `docs/verification/<Datum>-pruefprotokoll-teil2-<punkt>.md`.
+
+| Option | Bedeutung |
+|---|---|
+| `--punkt evcs`, `tesla` oder `victron` | Pflicht: welcher Punkt läuft |
+| `--config` | Pfad der `config.yaml` (Pflicht) |
+| `--wallbox <Name>` | nur bei `evcs`: die EVCS (Standard: die erste unter `wallboxes`) |
+| `--fahrzeug <Name>` | nur bei `tesla`: das Fahrzeug (Standard: das erste mit `tessie`) |
+| `--schlafend` | nur bei `tesla`: prüft, ohne etwas zu senden, dass ein schlafendes Auto nicht geweckt wird |
+| `--out <Datei>` | der Bericht (Standard siehe oben) |
+| `--yes` | beantwortet alle Rückfragen mit Ja und überspringt Schritte mit Handgriff; nicht empfohlen |
+
+### Punkte und Schritte
+
+Jeder Schritt ist eine Zeile im Bericht. Vor jedem Schritt, der schreibt, fragt das Werkzeug nach.
+
+- **`evcs`** (17.2-6, dazu 17.2-5):
+  - „EVCS bereit“: steuerbar (Instanz, Cerbo verbunden, manueller Modus), Sollstrom bekannt und
+    innerhalb der Grenzen. Sonst endet der Punkt ohne zu schreiben.
+  - „Strom N A“ für den Mindeststrom, 10 A (falls dazwischen) und den Höchststrom aus
+    `wallboxes`, je mit Rücklesen und der Zeit bis zur Bestätigung.
+  - „Laden aus und an“: Bei ladendem Fahrzeug auch die Zeit, bis die Leistung unter 100 W fällt.
+  - „Fremde Änderung“: Du änderst den Strom von Hand; die Erkennung des core (3 Treffer in Folge)
+    muss ihn bemerken. Entfällt mit `--yes`.
+  - „Verbindung unterbrochen“: Du ziehst das Netzwerkkabel der EVCS 60 s ab; der Befund nennt den
+    Strom danach. Entfällt mit `--yes`.
+  - „Sicherer Strom über den Watchdog“ (17.2-5): Das Werkzeug stellt den sicheren Strom plus 4 A
+    ein und führt die Watchdog-Probe aus; danach muss die EVCS den sicheren Strom haben. Die
+    Zeilen der Probe stehen vor diesem Schritt.
+- **`tesla`** (17.2-7): Die Befehle gehen über Tessie, die Wirkung misst das Werkzeug am Wall
+  Connector. Es sendet nur an ein wachendes Auto, das zu Hause angesteckt ist, und weckt es nie.
+  - „Tesla bereit“: steuerbar, Ladestrom bekannt und innerhalb der Grenzen.
+  - „Ladestrom 10 A“ (falls zwischen Mindest- und Höchststrom) und „Verhalten bei N A“ mit dem
+    Mindeststrom `min_a` des Fahrzeugs: Tessie bestätigt den Befehl, dann folgt der Strom am
+    Wall Connector.
+  - „Laden aus und an“: Der Schütz des Wall Connectors öffnet; danach geht das Laden wieder an.
+  - Mit `--schlafend` läuft nur „Schlafendes Auto wird nicht geweckt“: Das Auto muss schon schlafen;
+    10 min lang prüft das Werkzeug, dass der Aktor Befehle verweigert, und sendet nichts.
+- **`victron`** (17.2-1 bis 17.2-4 und 17.2-8): verweigert, solange Dynamic ESS aktiv ist oder ein
+  Netz-Sollwert-Override steht.
+  - „Victron bereit“ (17.2-1): Cerbo verbunden, DESS aus, kein Override.
+  - „Netz-Sollwert-Override“: Override setzen, Wirkung am Netz, mit `null` aufheben.
+  - „Override ohne Timeout“: Der Override bleibt 10 min stehen, ohne dass das Werkzeug ihn auffrischt.
+  - „Override nach Neustart des Cerbo“: Du startest den Cerbo neu. Entfällt mit `--yes`.
+  - „Zusammenspiel mit dem persistenten Sollwert“: `AcPowerSetPoint` vor und nach den Schritten;
+    das Werkzeug schreibt ihn nie.
+  - „Override für die Entladegrenze“ und „Entladesperre“ (17.2-2): Die Entladegrenze geht auf 0 W,
+    der Akku darf danach nicht entladen. Sie ist eine gespeicherte Einstellung.
+  - „Netzladen“ (17.2-3): Override auf 2000 W (höchstens die Obergrenze für den Netz-Sollwert), der
+    Akku lädt aus dem Netz.
+  - „Kein Akku ins Auto“ (17.2-4): nur bei ladender EVCS (über 1000 W); der Override entspricht
+    ihrer Leistung, der Akku soll nicht entladen.
+  - „Importlimit“ (17.2-8): Du schaltest eine Last ein, die eine Phase über 20 A bringen würde; das
+    Werkzeug beobachtet nur den höchsten Netzstrom. Entfällt mit `--yes`.
+
+### Ergebnis
+
+- `JJJJ-MM-TT-pruefprotokoll-teil2-<punkt>.md` enthält den Bericht. Oben stehen die Angaben
+  (Werkzeug, Datum, Punkt, Gerät; dazu Firmware der EVCS und Venus OS, soweit gemeldet, und bei
+  `--yes` der Vermerk unter „Rückfragen“). Darunter folgt die Tabelle
+  `Punkt | Prüfung | Ergebnis | Details` mit den Punkten 17.2-x; die Ergebnisse lauten OK, WARNUNG,
+  FEHLER oder INFO.
+- Mit `--schlafend` heißt die Datei `JJJJ-MM-TT-pruefprotokoll-teil2-tesla-schlafend.md`, damit sie
+  den Bericht des Punkts nicht überschreibt.
+- Die Zeilen „Wiederherstellen: …“ nennen jeden Wert, den das Werkzeug zurückgesetzt hat. Ein
+  FEHLER dort heißt: Den Wert von Hand prüfen.
+- Exitcode 0: Kein Schritt ist FEHLER. 1: ein Schritt ist FEHLER, die Rückfrage vor dem Start wurde
+  verneint oder der Bericht ließ sich nicht schreiben (er steht dann auf der Konsole). 2:
+  Konfiguration, Secrets oder Aufruf ungültig, auch `--punkt tesla` ohne `BINDAEMS_TESSIE_TOKEN`.
+  130: Strg+C; die Werte sind dann wiederhergestellt, soweit es ging, und der Bericht ist
+  geschrieben.
+
+Den Bericht übernimmst du mit Datum nach `docs/verification/`. Nach jedem Update von Venus OS, der
+EVCS-Firmware oder der Wall-Connector-Firmware wiederholst du die betroffenen Punkte.
+
+## Watchdog-Probe (17.2-5)
+
+Die Watchdog-Probe ist Punkt 5 von Teil 2. Sie läuft einzeln mit `bindaems.tools.watchdog_probe`
+oder als Teil des Punkts `evcs` von `verify_part2`, dort mit verstelltem EVCS-Strom. Das Werkzeug
+spricht MQTT mit dem Cerbo. Es schreibt dort nur den Heartbeat des Watchdogs
+(`W/<portal>/bindaems/0/Heartbeat`) und sendet den Keepalive.
 
 **Die Probe löst den Watchdog aus:** Er setzt die EVCS auf den sicheren Strom und schreibt Min-SOC
-und Entladegrenze, wenn sie abweichen. Darum fragt das Werkzeug vorher nach; `--yes` überspringt die
+und Entladegrenze, wenn sie abweichen; mit `victron.live_allowed` hebt er auch den
+Netz-Sollwert-Override auf. Darum fragt das Werkzeug vorher nach; `--yes` überspringt die
 Rückfrage.
 
 | Schritt | Was geprüft wird |
@@ -123,13 +227,13 @@ Rückfrage.
 | Watchdog erreichbar | Der Watchdog antwortet über MQTT mit Version und Zustand. |
 | Watchdog-Version | Die Version ist die, die der core erwartet. |
 | Scharf nach Heartbeat | Heartbeats machen ihn scharf. |
-| Auslösung ohne Heartbeat | Bleiben sie aus, löst er nach dem Timeout aus. Die Probe wartet dann 45 s ohne Heartbeat, bis der Aktionslauf zu Ende ist, und nennt die Zahl der fehlgeschlagenen Aktionen. |
+| Auslösung ohne Heartbeat | Bleiben sie aus, löst er nach dem Timeout aus. Die Probe wartet dann 45 s ohne Heartbeat, bis der Aktionslauf zu Ende ist, und nennt die Zahl der fehlgeschlagenen Aktionen. Die Zahl liest sie erst nach „Wieder scharf“, denn dann ist sie der Endstand; sieht die Probe es nicht, ist die Zeile eine Warnung mit Zusatz. Die Zeile steht trotzdem vor „Wieder scharf“. |
 | Wieder scharf | Mit stabilem Heartbeat wird er nach der Auslösung wieder scharf. |
+| Freigabe ohne Auslösung | Der Heartbeat 0 bringt ihn auf „wartet“, ohne dass er auslöst. |
 
 Prüfe nach jeder Probe auch das Log des Cerbo (Betriebshandbuch 14, „Probe“ und „Logs“): Die Zeile
 „Aktionen abgeschlossen: …“ nennt das Ergebnis jeder Aktion, auch wenn der Bericht 0 fehlgeschlagene
 Aktionen nennt.
-| Freigabe ohne Auslösung | Der Heartbeat 0 bringt ihn auf „wartet“, ohne dass er auslöst. |
 
 ### Aufruf
 
@@ -155,7 +259,8 @@ der Bericht dann unter `docs/verification/<Datum>-watchdog-probe.md`.
   schreiben oder die Rückfrage wurde verneint. 2: Konfiguration oder Secrets ungültig. 130: Strg+C;
   die Probe gibt den Watchdog vorher frei.
 - Die Probe stellt vorher keine Werte um. Sie belegt die Kette vom EMS bis zu den Aktionen, die
-  Auslösung, das erneute Scharfwerden und die Freigabe; verstellte Werte kommen mit Plan 2b.
+  Auslösung, das erneute Scharfwerden und die Freigabe; verstellte Werte bringt der Punkt `evcs`
+  von `verify_part2` ins Spiel.
 
 Den Bericht übernimmst du mit Datum nach `docs/verification/`. Nach jedem Update von Venus OS oder
 der EVCS-Firmware wiederholst du die Probe.

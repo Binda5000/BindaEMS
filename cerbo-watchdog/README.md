@@ -33,7 +33,8 @@ Die Zeiten stehen im Abschnitt `[watchdog]` der `config.ini`:
 - Das EMS schreibt einen Zähler (1, 2, 3, …) per MQTT auf `W/<portal>/bindaems/0/Heartbeat`; auf
   dem Cerbo ist das der D-Bus-Pfad `/Heartbeat`. Angenommen werden nur ganze Zahlen ab 0.
 - Die **0 gibt den Watchdog frei:** Er geht ohne Auslösung zurück auf „wartet“. Das EMS sendet
-  sie, sobald kein Victron- oder EVCS-Aktor mehr live angefordert ist.
+  sie, sobald es den Watchdog nicht mehr braucht und kein Victron- oder EVCS-Aktor mehr Werte des
+  EMS hält, also nach der Übergabe ihrer Sicherwerte.
 - Ob der Watchdog scharf oder ausgelöst ist, steht in `/data/bindaems-watchdog/state.json`; beides
   gilt dort als „scharf“. Nach einem Neustart des Cerbo startet er deshalb scharf, und das EMS hat
   `timeout_s`, sich zu melden. Bleibt der Heartbeat danach aus, löst er erneut aus: Die Aktionen

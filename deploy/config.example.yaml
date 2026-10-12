@@ -32,14 +32,22 @@ victron:
     battery: 512
     pv: {31: huawei}
     acload: {32: obergeschoss}
+    # GX-Dienst der EVCS (Instanz → Schlüssel in wallboxes): Darüber schreibt der core ihren Strom,
+    # und der Watchdog am Cerbo setzt den sicheren Strom. Pflicht, sobald die EVCS live_allowed hat.
     evcharger: {40: evcs}
   expected:
     hub4_mode: 1
     batterylife_states: [10, 11, 12]   # Optimiert ohne BatteryLife: normal, SOC unter Min-SOC, Nachladen
   max_grid_charge_setpoint_w: 8000
   persistent_writes: {per_hour: 12, per_day: 100}
+  # Heartbeat an den Watchdog am Cerbo, solange der core regelt (docs/betrieb.md, Abschnitt 14).
+  # Nach jeder Änderung die config.ini des Watchdogs neu erzeugen und mit install.sh übertragen.
   watchdog: {heartbeat_s: 10, timeout_s: 90}
-  live_allowed: false   # erst nach bestandenem Prüfprotokoll Teil 2 (Spec 8.7)
+  # Freigabe für den Live-Betrieb von Victron (Netz-Sollwert, Entladegrenze, Min-SOC), erst nach
+  # bestandenem Prüfprotokoll Teil 2 (Spec 8.7). Mit true hebt der Watchdog bei einer Auslösung
+  # auch den Netz-Sollwert-Override des EMS auf (config.ini neu erzeugen); ohne bleibt er
+  # unberührt, denn dann nutzt Dynamic ESS den Override.
+  live_allowed: false
 
 wallboxes:
   evcs:
@@ -47,8 +55,10 @@ wallboxes:
     host: evcs.lan
     min_a: 6
     max_a: 16
-    safe_a: 6
+    safe_a: 6                 # sicherer Strom: sicherer Zustand, Übergabe und Watchdog
     phase_map: [L1, L2, L3]   # Wallbox-Phase 1..3 → Netzphase
+    # Freigabe für den Live-Betrieb dieser EVCS; verlangt ihren Eintrag unter
+    # victron.instances.evcharger. Der core schreibt Strom und Laden, nie den Modus.
     live_allowed: false
   twc:
     type: tesla_wall_connector_gen3
@@ -64,7 +74,9 @@ vehicles:
     min_a: 5
     max_a: 16
     default_wallbox: twc
-    live_allowed: false
+    live_allowed: false   # Freigabe für den Live-Betrieb; verlangt den Abschnitt tessie
+    # Der Token steht als BINDAEMS_TESSIE_TOKEN in der .env. Ohne ihn wird der Tesla weder gelesen
+    # noch gesteuert. Befehle gehen über Tessie; das Auto wird nie geweckt.
     tessie: {vin: 5YJ3E7EB0MF000000}
     # Befehlslimits für Tessie (Spec 6.5)
     commands: {current_interval_s: 90, current_step_a: 2, per_hour: 20, start_stop_per_hour: 6}
@@ -112,6 +124,10 @@ app:
   trusted_proxies: [192.168.1.10]   # IP-Adresse des Reverse Proxy
   cookie_secure: true
 
-safety: {lock_release_s: 60}   # Freigabe einer Sperre nach so vielen Sekunden ohne Ursache, Spec 7.9
+# Freigabe einer Sperre nach so vielen Sekunden ohne Ursache (Spec 7.9). So lange besteht auch der
+# Alarm nach einer fremden Änderung von EVCS-Strom, Override oder Tesla-Strom.
+safety: {lock_release_s: 60}
 
+# Ablage des core (Volume core-data): intent.json, write_budget.json, rate_limits.json und das
+# Entscheidungslog decisions/ (Tagesdateien, höchstens 7 Tage und 50 MB).
 core: {data_dir: /data}

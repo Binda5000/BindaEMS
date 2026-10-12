@@ -111,6 +111,7 @@ name = "Safety-Schicht und Betriebszustände bleiben rein"
 type = "forbidden"
 source_modules = ["bindaems.core.safety", "bindaems.core.control"]
 forbidden_modules = [
+    "bindaems.core.actuators",
     "bindaems.core.adapters",
     "bindaems.core.api",
     "bindaems.core.runtime",

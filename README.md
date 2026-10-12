@@ -20,7 +20,7 @@ Voraussetzung: [uv](https://docs.astral.sh/uv/) und Python 3.12.
 ```bash
 uv sync --extra core --extra app --extra dev   # Abhängigkeiten installieren
 uv run pytest                       # Tests
-uv run pytest --cov                 # Tests mit Abdeckung (CI: 75 %, core/safety und core/control 90 %)
+uv run pytest --cov                 # Tests mit Abdeckung (CI: 75 %, core/safety, core/control und core/actuators 90 %)
 uv run ruff check . && uv run mypy src cerbo-watchdog/bindaems_watchdog && uv run lint-imports   # Lint, Typen, Importgrenzen
 ```
 

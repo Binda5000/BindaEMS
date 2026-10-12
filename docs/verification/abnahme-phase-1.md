@@ -117,10 +117,15 @@ Datum: ________ Ergebnis: ☐ bestanden ☐ nicht bestanden Unterschrift: ______
 ### 4.1 Im Code
 
 - Der core publiziert am Cerbo `R/<portal>/keepalive` (Abruf der Werte). Seit Phase 2a kommt der
-  Heartbeat `W/<portal>/bindaems/0/Heartbeat` an den eigenen Watchdog hinzu, aber nur, solange ein
-  Victron- oder EVCS-Aktor live angefordert ist. Das ist vor Plan 2d nie der Fall: Alle Aktoren
-  laufen im Dry-Run, und niemand kann live schalten. Er liest über Modbus nur und schickt an Wall
-  Connector, Tessie und Home Assistant nur `GET`-Anfragen.
+  Heartbeat `W/<portal>/bindaems/0/Heartbeat` an den eigenen Watchdog hinzu, seit Phase 2b haben
+  die Aktoren Schreibwege: MQTT-Aufträge an den Cerbo (Netz-Sollwert-Override, Entladegrenze,
+  Min-SOC, EVCS-Strom und Laden über den GX-Dienst `evcharger`) und `POST`-Befehle an Tessie.
+  Beschrieben wird nur ein live geschalteter Aktor: mit dem Heartbeat, solange der core regelt, und
+  mit den Sicherwerten im sicheren Zustand und bei der Übergabe. Das ist vor Plan 2d nie der Fall:
+  Alle Aktoren laufen im Dry-Run, und live schaltet nur eine Absicht über die interne API
+  (`PUT /v1/intent`), die erst die Bedienung in Plan 2d sendet. Der core liest über Modbus nur und
+  schickt an Wall Connector und Home Assistant nur `GET`-Anfragen; an Tessie gehen Lese-Anfragen,
+  Befehle nur für einen live geschalteten Tesla.
 - Die app schreibt nur nach InfluxDB (Messungen `price`, `forecast`, `ledger`) und auf ihre
   eigenen MQTT-Topics für Home Assistant (Discovery und Zustände unter dem eigenen Präfix).
 - Bis Plan 2d enthält BindaEMS keine Bedienung, die einen Aktor live schaltet; der core läuft im
@@ -139,16 +144,17 @@ mosquitto_sub -h <cerbo> -p 8883 --cafile <cerbo-ca.pem> -v -t 'W/#' | tee w-top
 
 Erwartet: keine Nachricht von BindaEMS. Schreibzugriffe anderer Clients (VRM, Remote Console)
 in dieser Zeit vermeiden oder im Protokoll begründen. Das gilt auch für die Watchdog-Probe
-(Betriebshandbuch 14): Sie sendet Heartbeats unter `W/<portal>/bindaems/0/Heartbeat`, also nicht
-während des Mitschnitts durchführen.
+(Betriebshandbuch 14) und für Teil 2 (Betriebshandbuch 11): Die Probe sendet Heartbeats unter
+`W/<portal>/bindaems/0/Heartbeat`, Teil 2 schreibt auf die Geräte. Beides also nicht während des
+Mitschnitts durchführen.
 
 ### 4.3 Einstellungen vorher und nachher
 
 EVCS-Modus und ESS-Einstellungen (ESS-Modus, BatteryLife, Min-SOC, Dynamic ESS, Ladefenster)
 zu Beginn und am Ende der 7 Tage mit dem Prüfprotokoll Teil 1 erfassen; „System“ →
 Selbstprüfung zeigt sie laufend. Alle Werte sind unverändert. Die Watchdog-Probe setzt EVCS-Strom,
-Min-SOC und Entladegrenze auf die Sicherwerte; führe sie vor dem Beginn der 7 Tage oder nach ihrem
-Ende durch.
+Min-SOC und Entladegrenze auf die Sicherwerte, und Teil 2 verstellt Werte und stellt sie wieder her;
+führe beides vor dem Beginn der 7 Tage oder nach ihrem Ende durch.
 
 | Punkt | Ergebnis |
 |---|---|

@@ -47,20 +47,42 @@ def test_watchdog_config_is_only_replaced_when_generated(doc: str) -> None:
     assert not re.search(r"> config\.ini$", text, re.M)
 
 
+TOOL_COMMAND = re.compile(r"docker compose run [^`]*?-m (bindaems\.tools\.\w+)", re.DOTALL)
+
+
 def test_documented_tool_commands_start_python_directly() -> None:
     # Der ENTRYPOINT des core-Images ist ``python -m bindaems.core``: Ein Werkzeug braucht
-    # ``--entrypoint python``, und das Modul muss es geben.
-    text = Path("docs/betrieb.md").read_text(encoding="utf-8")
-    commands = re.findall(r"docker compose run [^`]*?-m (bindaems\.tools\.\w+)", text, re.DOTALL)
+    # ``--entrypoint python``, und das Modul muss es geben. Das Betriebshandbuch nennt alle.
+    handbook = Path("docs/betrieb.md").read_text(encoding="utf-8")
     assert {
         "bindaems.tools.verify_part1",
+        "bindaems.tools.verify_part2",
         "bindaems.tools.watchdog_config",
         "bindaems.tools.watchdog_probe",
-    } <= set(commands)
-    for module in commands:
-        assert importlib.util.find_spec(module) is not None
-    for block in re.findall(r"docker compose run [^`]*?-m bindaems\.tools\.\w+", text, re.DOTALL):
-        assert "--entrypoint python" in block
+    } <= set(TOOL_COMMAND.findall(handbook))
+    for doc in ("docs/betrieb.md", "docs/verification/README.md", "cerbo-watchdog/README.md"):
+        for command in TOOL_COMMAND.finditer(Path(doc).read_text(encoding="utf-8")):
+            assert importlib.util.find_spec(command[1]) is not None, doc
+            assert "--entrypoint python" in command[0], doc
+
+
+def test_part2_options_in_the_docs_exist(capsys: pytest.CaptureFixture[str]) -> None:
+    # Die Abschnitte zu Teil 2 nennen nur Optionen, die verify_part2 kennt (und Docker-Flags).
+    from bindaems.tools.verify_part2 import main
+
+    with pytest.raises(SystemExit):
+        main(["--help"])
+    known = set(re.findall(r"--[a-z][a-z-]*", capsys.readouterr().out)) | {"--rm", "--entrypoint"}
+    sections = {
+        "docs/betrieb.md": r"### Prüfprotokoll Teil 2\n(.*?)\n### ",
+        "docs/verification/README.md": r"## Teil 2 – schreibend \(17\.2\)\n(.*?)\n## ",
+    }
+    for doc, pattern in sections.items():
+        found = re.search(pattern, Path(doc).read_text(encoding="utf-8"), re.DOTALL)
+        assert found, doc
+        documented = set(re.findall(r"--[a-z][a-z-]*", found[1]))
+        assert {"--punkt", "--out", "--yes", "--schlafend"} <= documented, doc
+        assert documented <= known, f"{doc}: {sorted(documented - known)}"
 
 
 def test_relative_links_in_the_docs_exist() -> None:

@@ -51,7 +51,9 @@ async def _run(cfg: Config, secrets: Secrets) -> int:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="bindaems-core",
-        description="BindaEMS core (Phase 2a: Sicherheitsbasis, noch ohne Aktoren)",
+        description=(
+            "BindaEMS core (Phase 2b: Aktoren, sicherer Zustand und Übergabe, noch ohne Regelung)"
+        ),
     )
     parser.add_argument("--config", type=Path, default=Path("/config/config.yaml"))
     parser.add_argument(
