@@ -2,17 +2,31 @@
 Heartbeat.
 
 Je Zyklus: Snapshot → abgeleitete Größen → Plausibilität → Flusszuordnung → Viertelstunden-
-Summen → Telemetrie → (alle 10 s) Selbstprüfung und mitregelnde Systeme → Eingangsprüfung →
-(nach jeder Prüfung) Sperren → Watchdog, wirksame Betriebsarten und aktive Sperren →
-Betriebszustand → Rücklesen und sicherer Zustand → (beim Start und stündlich) Aufräumen des
-Entscheidungslogs → Stream → Alarme → Heartbeat. Am Ende gehen die Entscheidungen des Zyklus in
-einem Zug in den Spool, auch wenn der Zyklus scheitert.
+Summen → Telemetrie → Rücklesen der Aktoren und der offenen Schreibvorgänge → (alle 10 s)
+Selbstprüfung, mitregelnde Systeme und fremde Änderungen → Eingangsprüfung → (nach jeder
+Prüfung) Sperren → Werte des EMS, Watchdog, wirksame Betriebsarten → Betriebszustand → sicherer
+Zustand und Übergabe → (beim Start und stündlich) Aufräumen des Entscheidungslogs → Stream →
+Alarme → Heartbeat. Am Ende gehen die Entscheidungen des Zyklus in einem Zug in den Spool, auch
+wenn der Zyklus scheitert.
 
-Auf Geräte schreibt der core den Heartbeat an den eigenen Watchdog am Cerbo, den nur aus einem
-Zyklus, der ohne Ausnahme bis zum Ende läuft, und die Sicherwerte des sicheren Zustands (Plan 2b,
-Präzisierung 4). Jeder Befehl geht durch die Safety-Schicht; im Dry-Run wird er nur protokolliert.
-Fristen, Limits, Budget und Versuche laufen auf der Uhr der Safety-Schicht (``AnchoredClock``),
-Messwerte, Viertelstunden und die Zeitpunkte der Entscheidungen auf der Wanduhr.
+Auf Geräte schreibt der core den Heartbeat an den eigenen Watchdog am Cerbo, die Sicherwerte des
+sicheren Zustands und die der Übergabe am Ende des Live-Betriebs (Plan 2b, Präzisierungen 3 und 4).
+Jeder Befehl geht durch die Safety-Schicht; im Dry-Run wird er nur protokolliert. Ein Aktor hält
+Werte des EMS (owned), sobald der core ihm einen Wert gesendet hat; ist er nicht mehr live
+gewünscht, bekommt er seine Sicherwerte und ist erst übergeben, wenn sie zurückgelesen sind. Ändert
+ein anderer einen bestätigten Strom oder Netz-Sollwert, sperrt das den Aktor wie ein mitregelndes
+System (Präzisierung 8).
+
+Den Heartbeat sendet der core nur, solange er regelt (Präzisierung 2): Ein Victron- oder EVCS-Aktor
+ist im Regelbetrieb live gewünscht oder wird übergeben. Der Zähler kommt nur aus einem fehlerfreien
+Zyklus (Präzisierung 5), in CONTROL, DEGRADED und SAFE oder in OBSERVE zum Scharfschalten, wenn das
+Gate nur noch auf den Watchdog wartet. Die Freigabe 0 folgt erst, wenn kein Victron- oder
+EVCS-Aktor mehr Werte des EMS hält, und nur, wenn der core in diesem Lauf für den Watchdog
+zuständig war.
+
+Fristen, Limits, Budget, Versuche und Heartbeat laufen auf der Uhr der Safety-Schicht
+(``AnchoredClock``), Messwerte, Viertelstunden und die Zeitpunkte der Entscheidungen auf der
+Wanduhr.
 """
 
 from __future__ import annotations
@@ -54,30 +68,60 @@ from bindaems.core.api.app import HealthReport, create_api, snapshot_to_json, wa
 from bindaems.core.checks.competitors import detect_competitors
 from bindaems.core.checks.selfcheck import CRITICAL_SIGNALS, FRESH_FOR, CheckResult, run_selfcheck
 from bindaems.core.checks.values import number
-from bindaems.core.control.actuator import Actuator, Capabilities
+from bindaems.core.control.actuator import Actuator, Capabilities, matches
 from bindaems.core.control.context import decision_inputs, safety_context
-from bindaems.core.control.executor import CommandExecutor
+from bindaems.core.control.executor import CommandExecutor, WriteResult
+from bindaems.core.control.foreign import WATCHED_KINDS, ForeignChangeDetector
 from bindaems.core.control.intent import INTENT_FILE_PROBLEM, IntentReply, IntentStore
-from bindaems.core.control.operating import OperatingInputs, OperatingStateMachine, Transition
-from bindaems.core.control.safe_state import SafeStateKeeper, SafeTarget
+from bindaems.core.control.operating import (
+    OperatingInputs,
+    OperatingStateMachine,
+    Transition,
+    gate_ready_except_watchdog,
+)
+from bindaems.core.control.ownership import Ownership
+from bindaems.core.control.safe_state import (
+    SafeStateKeeper,
+    SafeTarget,
+    safe_values,
+    safe_values_reached,
+)
 from bindaems.core.persistence.decision_spool import DecisionSpool
 from bindaems.core.safety.budget import PersistentWriteBudget
 from bindaems.core.safety.inputs import InputCheck
 from bindaems.core.safety.layer import SafetyLayer
 from bindaems.core.safety.limits import ActuatorSpec, HardLimits
 from bindaems.core.safety.locks import LockInfo, LockManager, lock_causes
-from bindaems.core.safety.modes import ModeInfo, effective_modes, watchdog_required
+from bindaems.core.safety.modes import (
+    ModeInfo,
+    effective_modes,
+    initially_owned,
+    live_wanted,
+    watchdog_required,
+)
 from bindaems.core.safety.types import InputStatus
 from bindaems.core.state.derived import Derived, derive
 from bindaems.core.state.plausibility import PlausibilityMonitor, check_grid_counters
 from bindaems.core.state.store import StateStore
 from bindaems.core.telemetry.sampler import TelemetrySampler
 from bindaems.core.watchdog_client.heartbeat import HeartbeatClient
-from bindaems.core.watchdog_client.status import WatchdogStatus, read_watchdog, watchdog_alarms
+from bindaems.core.watchdog_client.status import (
+    WatchdogStatus,
+    armed_for_core,
+    read_watchdog,
+    watchdog_alarms,
+)
 from bindaems.shared.broadcast import Broadcast
 from bindaems.shared.config import Config, EvcsConfig, Secrets
-from bindaems.shared.control import VICTRON, ActuatorMode, CommandKind, Intent, OperatingState
-from bindaems.shared.decisions import Decision, decision_to_json
+from bindaems.shared.control import (
+    VICTRON,
+    ActuatorMode,
+    CommandKind,
+    CommandValue,
+    Intent,
+    OperatingState,
+)
+from bindaems.shared.decisions import Decision, DecisionResult, decision_to_json
 from bindaems.shared.domain import Alarm, Quality, Severity, SlotFlows, Snapshot
 from bindaems.shared.influx.lineprotocol import PointSink
 from bindaems.shared.influx.spool import DiskSpool
@@ -101,6 +145,12 @@ _WRITING_STATES: Final = frozenset(
 )
 # Fähigkeiten eines Aktors vor dem ersten Zyklus: noch nicht geprüft, also nicht steuerbar
 _NOT_CHECKED: Final = Capabilities(False)
+# Ein Schreibvorgang mit diesem Ergebnis kann am Gerät noch verspätet wirken
+_UNCLEAR_RESULTS: Final = frozenset({DecisionResult.ERROR, DecisionResult.TIMEOUT})
+# Bei diesen Familien bestätigt der Befehl selbst (Tessie: ``result: true``), nicht das Rücklesen
+_CONFIRMED_BY_COMMAND: Final = frozenset({"tesla"})
+
+_Key = tuple[str, CommandKind]  # Aktor und Art
 
 
 class _ApiServer(uvicorn.Server):
@@ -132,9 +182,14 @@ def _actuator_json(
     mode: ModeInfo,
     lock: LockInfo | None,
     capabilities: Capabilities,
-    pending: frozenset[tuple[str, CommandKind]],
+    pending: frozenset[_Key],
+    owned: frozenset[str],
 ) -> dict[str, Any]:
-    """Ein Aktor für ``health``; ``pending`` nennt die Arten mit offenem Schreibvorgang."""
+    """Ein Aktor für ``health``.
+
+    ``pending`` nennt die Arten mit offenem Schreibvorgang, ``owned`` die Aktoren, die Werte des
+    EMS halten können (Plan 2b, Präzisierung 3).
+    """
     return {
         "id": spec.id,
         "label": spec.label,
@@ -146,6 +201,7 @@ def _actuator_json(
         "controllable": capabilities.controllable,
         "capability_reasons": list(capabilities.reasons),
         "pending": [kind.value for kind in CommandKind if (spec.id, kind) in pending],
+        "owned": spec.id in owned,
     }
 
 
@@ -190,7 +246,8 @@ class CoreRuntime:
 
         - ``clock`` ist die Wanduhr: Messwerte, Viertelstunden, Zeitpunkte der Entscheidungen.
         - ``safety_clock`` ist die Uhr der Safety-Schicht, standardmäßig ``AnchoredClock``:
-          Fristen, Rate-Limits, Schreibbudget, sicherer Zustand und Tesla-Fehler.
+          Fristen, Rate-Limits, Schreibbudget, sicherer Zustand, Erkennung fremder Änderungen,
+          Heartbeat und Tesla-Fehler.
         - ``mqtt_write`` reiht einen Schreibauftrag (Pfad, Wert) an den Cerbo ein. Ohne ihn
           schreibt der Victron-Adapter (``VictronMqttAdapter.write``); ohne Victron-Adapter wird
           kein Auftrag angenommen.
@@ -207,18 +264,42 @@ class CoreRuntime:
         self.store = StateStore(self._clock)
         self.broadcast = Broadcast()
         self.limits = HardLimits.from_config(cfg)
+        self._needs_watchdog = frozenset(
+            actuator for actuator, spec in self.limits.actuators.items() if spec.needs_watchdog
+        )
         self.intents = IntentStore(cfg.core.data_dir / "intent.json", self.limits)
         self.intents.load()
         self.locks = LockManager(cfg.safety.lock_release_s)
         self.operating = OperatingStateMachine()
         send = watchdog_send if watchdog_send is not None else self._send_heartbeat
         self.heartbeat = HeartbeatClient(send, cfg.victron.watchdog.heartbeat_s)
+        intent = self.intents.current
+        # Das Gerät eines Aktors, den die gespeicherte Absicht live anfordert, kann noch Werte vom
+        # letzten Lauf halten (Plan 2b, Präzisierung 3).
+        self.ownership = Ownership(initially_owned(intent, self.limits))
+        self.foreign = ForeignChangeDetector(cfg.safety.lock_release_s)
+        # Erwartungen, die erst gelten, wenn das Rücklesen den Wert zeigt (``_note_write``)
+        self._awaiting_readback: dict[_Key, CommandValue] = {}
+        self._confirmed_by_command = frozenset(
+            actuator
+            for actuator, spec in self.limits.actuators.items()
+            if spec.family in _CONFIRMED_BY_COMMAND
+        )
         self._inputs = InputCheck()
         # Ergebnis des letzten Zyklus für health(); vor dem ersten Zyklus aus der geladenen Absicht
         self._input_status = InputStatus(True)
         self._watchdog = WatchdogStatus.unknown()
-        self._watchdog_required = watchdog_required(self.intents.current, self.limits)
-        self._modes = effective_modes(self.intents.current, self.limits, self._watchdog.armed)
+        self._watchdog_armed = False  # scharf für diesen core (``armed_for_core``)
+        self._handing_back = self.ownership.handing_back(live_wanted(intent, self.limits))
+        self._watchdog_required = watchdog_required(
+            intent, self.limits, handing_back=self._handing_back
+        )
+        self._modes = effective_modes(intent, self.limits, False, handing_back=self._handing_back)
+        self._gate_ready = False  # das Gate wartet nur noch auf den Watchdog
+        # Zuständig für den Watchdog ab dem ersten Bedarf oder dem ersten owned Victron- oder
+        # EVCS-Aktor, bis zum Ende des Laufs (``_heartbeat``)
+        self._responsible = bool(self.ownership.owned & self._needs_watchdog)
+        self._owned = self.ownership.owned
         self._active_locks: dict[str, LockInfo] = {}
         self._http: httpx.AsyncClient | None = None
         self._writer: InfluxWriter | None = None
@@ -262,9 +343,6 @@ class CoreRuntime:
         )
         self.decision_spool = DecisionSpool(data_dir / "decisions")
         self._labels = {actuator: spec.label for actuator, spec in self.limits.actuators.items()}
-        self._needs_watchdog = frozenset(
-            actuator for actuator, spec in self.limits.actuators.items() if spec.needs_watchdog
-        )
         self.executor = CommandExecutor(self.layer, self.actuators, self._decide, self._labels)
         self.keeper = SafeStateKeeper(self.limits)
         self._cycle_decisions: list[Decision] = []  # Entscheidungen des laufenden Zyklus
@@ -275,6 +353,7 @@ class CoreRuntime:
         self.selfcheck_runs = 0
         self._selfcheck: list[CheckResult] = []
         self._competitor_alarms: list[Alarm] = []
+        self._foreign_alarms: list[Alarm] = []
         self._counter_alarm: Alarm | None = None
         self._last_check: datetime | None = None
         self._alarms: list[Alarm] = []
@@ -397,7 +476,7 @@ class CoreRuntime:
         """
         intent, since = self.intents.current, self.operating.since
         modes, locks = self._modes, self._active_locks
-        capabilities, pending = self._capabilities, self._pending
+        capabilities, pending, owned = self._capabilities, self._pending, self._owned
         return HealthReport(
             mode=self.operating.state.value,
             version=__version__,
@@ -415,6 +494,7 @@ class CoreRuntime:
                     locks.get(actuator),
                     capabilities.get(actuator, _NOT_CHECKED),
                     pending,
+                    owned,
                 )
                 for actuator, spec in self.limits.actuators.items()
             ],
@@ -455,11 +535,14 @@ class CoreRuntime:
         """Ein Regelzyklus; am Ende gehen seine Entscheidungen in den Spool, auch wenn er scheitert.
 
         Eine Ausnahme, auch aus einem Aktor, bricht den Zyklus ab und lässt den Heartbeat ausfallen.
+        Ob ein Zyklus fehlerfrei war, gilt für ihn allein (Plan 2b, Präzisierung 5): Die
+        gescheiterten Schreibvorgänge eines abgebrochenen Zyklus zählen nicht für den nächsten.
         """
         try:
             self._cycle()
         finally:
             self._flush_decisions()
+            self.executor.take_failures()  # Rest eines abgebrochenen Zyklus, sonst schon leer
 
     def _cycle(self) -> None:
         started = self._timer()
@@ -474,53 +557,128 @@ class CoreRuntime:
             self.broadcast.publish({"type": "slot_flows", "data": _slot_json(closed)})
             self._check_counters(closed, now)
         self._sampler.on_cycle(snap, derived)
+        present = self._readback(snap, now, snow)
         checked = self._check_due(now)
         if checked:
             self._competitor_alarms = detect_competitors(snap, self._cfg, now)
             self._selfcheck = run_selfcheck(snap, self._cfg, self.store.ok_since, now)
             self.selfcheck_runs += 1
+            self.foreign.check(present, self.executor.pending(), snow)
+        self._foreign_alarms = self.foreign.alarms(snow, self._labels)
         self._update_operation(snap, plausibility, now, checked=checked)
-        self._control(snap, derived, now, snow)
+        self._control(snap, derived, now, snow, present)
         self._prune_decisions(now, snow)
         state = snapshot_to_json(snap, derived)
         self._last_state = state
         self.broadcast.publish({"type": "state", "data": state})
         self._record_cycle((self._timer() - started) * 1000.0, now)
         counter = [self._counter_alarm] if self._counter_alarm is not None else []
+        watchdog = watchdog_alarms(
+            self._watchdog,
+            self._watchdog_required,
+            now,
+            expected_timeout_s=self._cfg.victron.watchdog.timeout_s,
+        )
         self._update_alarms(
             [
                 *plausibility,
                 *self._competitor_alarms,
+                *self._foreign_alarms,
                 *counter,
                 *self._overrun_alarm(),
-                *watchdog_alarms(self._watchdog, self._watchdog_required, now),
+                *watchdog,
                 *self._operation_alarms(now),
                 *self._control_alarms(snow),
             ]
         )
         # als Letztes: Eine Ausnahme in einem früheren Schritt lässt den Heartbeat ausfallen
-        self.heartbeat.on_cycle(now, required=self._watchdog_required)
+        self._heartbeat(snow)
 
-    def _control(self, snap: Snapshot, derived: Derived, now: datetime, snow: datetime) -> None:
-        """Rücklesen und sicherer Zustand (Plan 2b, Präzisierung 4).
+    def _readback(self, snap: Snapshot, now: datetime, snow: datetime) -> dict[_Key, CommandValue]:
+        """Die zurückgelesenen Werte aller Aktoren je Art; dazu das Rücklesen des Ausführers.
 
-        ``snow`` ist die Zeit der Safety-Schicht, ``now`` die Wanduhr.
-
-        1. Der Ausführer fragt die offenen Schreibvorgänge ab, in jedem Zustand.
-        2. In CONTROL, DEGRADED und SAFE gehen die Befehle des ``SafeStateKeeper`` an den Ausführer
-           und damit durch die Safety-Schicht. Ziele gibt es nur in SAFE (``_safe_targets``).
-        3. In START und OBSERVE bekommt der ``SafeStateKeeper`` keine Ziele; das beendet die
-           Vorfälle, auch eine gescheiterte Art.
-
-        Die Entscheidungen tragen die Wanduhr ``now``. Fähigkeiten und offene Schreibvorgänge
-        bleiben für ``health`` stehen.
+        Der Ausführer fragt in jedem Zustand seine offenen Schreibvorgänge ab, jeder
+        abgeschlossene geht an ``_note_write``. Eine Erwartung, die auf das Rücklesen wartet, gilt
+        ab dem ersten Zyklus, in dem das Gerät den Wert zeigt (``matches``).
         """
         present = {
             (actuator_id, kind): value
             for actuator_id, actuator in self.actuators.items()
             for kind, value in actuator.present(snap).items()
         }
-        self.executor.poll(snap, snow, now)
+        for write in self.executor.poll(snap, snow, now):
+            self._note_write(write)
+        for key, value in list(self._awaiting_readback.items()):
+            if key in present and matches(key[1], value, present[key]):
+                del self._awaiting_readback[key]
+                self.foreign.expect(key[0], key[1], value)
+        return present
+
+    def _note_write(self, write: WriteResult) -> None:
+        """Was ein abgeschlossener Schreibvorgang für die Erkennung fremder Änderungen bedeutet.
+
+        Es zählen nur die beobachteten Arten Strom und Netz-Sollwert (``WATCHED_KINDS``; Plan 2b,
+        Präzisierung 8).
+
+        - **Bestätigt** bei einem owned Aktor: Der Wert ist ab jetzt die Erwartung. Beim Tesla
+          bestätigt Tessie den Befehl (``result: true``), nicht das Rücklesen, und sein Cache hinkt
+          30–60 s hinterher. Seine Erwartung gilt deshalb erst, wenn der Cache den Wert zeigt
+          (``_readback``); bis dahin erwartet die Erkennung beim Tesla nichts. Sonst meldete sie
+          eine fremde Änderung, wo nur der Cache zurückliegt.
+        - **Fehler oder Zeitüberschreitung:** Die Beobachtung des Aktors endet bis zum nächsten
+          bestätigten Wert. Ein eigener Wert, den das Gerät verspätet übernimmt, sähe sonst gegen
+          die alte Erwartung fremd aus.
+        - **Nicht gesendet** kommt hier nicht vor (``CommandExecutor.execute``): Am Gerät hat sich
+          nichts geändert, die Erwartung bleibt.
+        """
+        if write.kind not in WATCHED_KINDS:
+            return
+        actuator = write.actuator
+        if write.result in _UNCLEAR_RESULTS:
+            self._forget(actuator)
+        elif write.result == DecisionResult.OK and actuator in self.ownership.owned:
+            if actuator in self._confirmed_by_command:
+                self.foreign.forget(actuator)
+                self._awaiting_readback[(actuator, write.kind)] = write.value
+            else:
+                self.foreign.expect(actuator, write.kind, write.value)
+
+    def _forget(self, actuator: str) -> None:
+        """Beendet die Beobachtung des Aktors, auch die Erwartungen, die auf das Rücklesen warten.
+
+        Der Alarm einer erkannten fremden Änderung bleibt (``ForeignChangeDetector.forget``).
+        """
+        self.foreign.forget(actuator)
+        self._awaiting_readback = {
+            key: value for key, value in self._awaiting_readback.items() if key[0] != actuator
+        }
+
+    def _control(
+        self,
+        snap: Snapshot,
+        derived: Derived,
+        now: datetime,
+        snow: datetime,
+        present: Mapping[_Key, CommandValue],
+    ) -> None:
+        """Sicherer Zustand und Übergabe (Plan 2b, Präzisierungen 3 und 4).
+
+        ``snow`` ist die Zeit der Safety-Schicht, ``now`` die Wanduhr, ``present`` das Rücklesen
+        dieses Zyklus.
+
+        1. In CONTROL, DEGRADED und SAFE gehen die Befehle des ``SafeStateKeeper`` an den Ausführer
+           und damit durch die Safety-Schicht; die Ziele nennt ``_targets``. Hat der Ausführer den
+           Wert dem Aktor übergeben (der Schreibvorgang ist offen), hält der Aktor Werte des EMS.
+           Ein Befehl, der nicht gesendet wurde, macht ihn nicht dazu.
+        2. In START und OBSERVE bekommt der ``SafeStateKeeper`` keine Ziele; das beendet die
+           Vorfälle, auch eine gescheiterte Art.
+        3. In jedem Zustand: Zeigt ein Aktor, der übergeben wird, seine Sicherwerte, ist er
+           übergeben, auch wenn der Watchdog sie gesetzt hat. Er hält keine Werte des EMS mehr, und
+           seine Beobachtung endet.
+
+        Die Entscheidungen tragen die Wanduhr ``now``. Fähigkeiten, offene Schreibvorgänge und die
+        owned Aktoren bleiben für ``health`` stehen.
+        """
         state = self.operating.state
         if state in _WRITING_STATES:
             live = frozenset(
@@ -528,7 +686,7 @@ class CoreRuntime:
                 for actuator, mode in self._modes.items()
                 if mode.effective == ActuatorMode.LIVE
             )
-            targets = self._safe_targets(snap, state)
+            targets = self._targets(snap, state)
             commands = self.keeper.commands(snow, targets, present, self.executor.pending(), live)
             if commands:
                 ctx = safety_context(
@@ -544,14 +702,35 @@ class CoreRuntime:
                 )
                 inputs = decision_inputs(snap, derived.phase_import_a)
                 for command in commands:
-                    self.executor.execute(command, ctx, snap, now, inputs)
+                    verdict = self.executor.execute(command, ctx, snap, now, inputs)
+                    key = (command.actuator, command.kind)
+                    if verdict is not None and verdict.send and key in self.executor.pending():
+                        self.ownership.note_sent(command.actuator)
         else:
             self.keeper.commands(snow, [], present, self.executor.pending(), frozenset())
+        for actuator in self._handing_back:
+            if safe_values_reached(self.limits, SafeTarget(actuator, "handback"), present):
+                self.ownership.release(actuator)
+                self._forget(actuator)
         self._capabilities = {
             actuator_id: actuator.capabilities(snap, snow)
             for actuator_id, actuator in self.actuators.items()
         }
         self._pending = self.executor.pending()
+        self._owned = self.ownership.owned
+
+    def _targets(self, snap: Snapshot, state: OperatingState) -> list[SafeTarget]:
+        """Die Ziele des Zyklus: zuerst die des sicheren Zustands, dann die Übergaben.
+
+        Beide in der Reihenfolge des Katalogs. Ein Aktor, der in beiden vorkommt, bekommt je Art
+        nur einen Befehl, mit dem Grund des sicheren Zustands (``SafeStateKeeper``).
+        """
+        handback = [
+            SafeTarget(actuator, "handback")
+            for actuator in self.limits.actuators
+            if actuator in self._handing_back
+        ]
+        return [*self._safe_targets(snap, state), *handback]
 
     def _safe_targets(self, snap: Snapshot, state: OperatingState) -> list[SafeTarget]:
         """Die Ziele des sicheren Zustands (Spec 8.4) in der Reihenfolge des Katalogs.
@@ -567,6 +746,43 @@ class CoreRuntime:
             for actuator in self.limits.actuators
             if actuator not in self._active_locks
         ]
+
+    def _heartbeat(self, snow: datetime) -> None:
+        """Heartbeat oder Freigabe am Ende des Zyklus, auf der Uhr der Safety-Schicht.
+
+        Die Regel ist Präzisierung 2 des Plans 2b:
+
+        - **Fehlerfrei** ist der Zyklus (Präzisierung 5), wenn für keinen Victron- oder EVCS-Aktor
+          ein Schreibvorgang scheiterte (Fehler, Zeitüberschreitung, nicht gesendet) und keine
+          Sicherwert-Art dieser Aktoren gescheitert ist; Fehler beim Tesla zählen nicht. Eine
+          Ausnahme bricht den Zyklus schon vorher ab.
+        - **Der Zähler** darf aus einem fehlerfreien Zyklus in CONTROL, DEGRADED und SAFE hinaus und
+          in OBSERVE, wenn das Gate nur noch auf den Watchdog wartet und er nicht schon für diesen
+          core scharf ist (Scharfschalten).
+        - **Die Freigabe 0** nur, wenn kein Victron- oder EVCS-Aktor mehr Werte des EMS hält
+          (Präzisierung 3) und der core in diesem Lauf für den Watchdog zuständig ist: ab dem
+          ersten Bedarf oder dem ersten owned Victron- oder EVCS-Aktor, auch beim Start. Eine Probe
+          oder das Teil-2-Werkzeug machen den Watchdog mit eigenen Heartbeats scharf und lösen ihn
+          aus, während der core im Dry-Run läuft; ein core, der nie zuständig war, gibt ihn nicht
+          frei, auch nicht zum Aufräumen nach der Auslösung.
+        """
+        failures = self.executor.take_failures()
+        owned = self.ownership.owned & self._needs_watchdog
+        if self._watchdog_required or owned:
+            self._responsible = True
+        failed_write = any(write.actuator in self._needs_watchdog for write in failures)
+        failed_kind = any(actuator in self._needs_watchdog for actuator, _ in self.keeper.failed)
+        cycle_ok = not failed_write and not failed_kind
+        state = self.operating.state
+        arming = state == OperatingState.OBSERVE and self._gate_ready and not self._watchdog_armed
+        self.heartbeat.on_cycle(
+            snow,
+            required=self._watchdog_required,
+            allowed=cycle_ok and (state in _WRITING_STATES or arming),
+            release_allowed=self._responsible and not owned,
+            watchdog=self._watchdog.state,
+            echo=self._watchdog.heartbeat,
+        )
 
     def _decide(self, decision: Decision) -> None:
         """Senke des Ausführers: sofort in den Stream, am Ende des Zyklus in den Spool."""
@@ -611,34 +827,75 @@ class CoreRuntime:
     def _update_operation(
         self, snap: Snapshot, plausibility: Sequence[Alarm], now: datetime, *, checked: bool
     ) -> None:
-        """Eingangsprüfung, Sperren, Watchdog, wirksame Betriebsarten und Betriebszustand.
+        """Eingangsprüfung, Sperren, Werte des EMS, Watchdog, Betriebsarten und Betriebszustand.
 
         Die Eingangsprüfung läuft in jedem Zyklus mit den Plausibilitätsalarmen dieses Zyklus
         (ohne den Abrechnungsalarm ``plaus.grid_counter``). Die Sperren bekommen ihre Ursachen nur
-        in Zyklen, in denen Selbstprüfung und Erkennung mitregelnder Systeme liefen.
+        in Zyklen, in denen Selbstprüfung und Erkennung mitregelnder Systeme liefen; eine fremde
+        Änderung (``competitor.foreign.<aktor>``) zählt wie ein mitregelndes System.
+
+        Ein gesperrter Aktor hält ab sofort keine Werte des EMS mehr und wird nicht übergeben, denn
+        ein anderes System regelt ihn (Plan 2b, Präzisierung 3); seine Beobachtung endet. Ein owned
+        Aktor, der nicht mehr live gewünscht ist, wird übergeben. Scharf zählt der Watchdog nur für
+        diesen core (``armed_for_core``): mit dem Echo eines eigenen Zählers und dem erwarteten
+        Timeout. Den Watchdog braucht der Betrieb, solange ein Victron- oder EVCS-Aktor im
+        Regelbetrieb live gewünscht ist oder übergeben wird (Präzisierung 2).
         """
         self._input_status = self._inputs.evaluate(snap, plausibility, now)
         if checked:
-            self.locks.update(
-                now, lock_causes(self._competitor_alarms, self._selfcheck, self.limits)
-            )
+            competitors = [*self._competitor_alarms, *self._foreign_alarms]
+            self.locks.update(now, lock_causes(competitors, self._selfcheck, self.limits))
+        self._active_locks = self.locks.active(now)
+        for actuator in self.ownership.drop(self._active_locks):
+            self._forget(actuator)
         intent = self.intents.current
         self._watchdog = read_watchdog(snap)
-        self._watchdog_required = watchdog_required(intent, self.limits)
-        self._modes = effective_modes(intent, self.limits, self._watchdog.armed)
-        self._active_locks = self.locks.active(now)
+        self._watchdog_armed = armed_for_core(
+            self._watchdog, self.heartbeat.recent, self._cfg.victron.watchdog.timeout_s
+        )
+        self._handing_back = self.ownership.handing_back(live_wanted(intent, self.limits))
+        self._watchdog_required = watchdog_required(
+            intent, self.limits, handing_back=self._handing_back
+        )
+        self._modes = effective_modes(
+            intent, self.limits, self._watchdog_armed, handing_back=self._handing_back
+        )
         inputs = OperatingInputs(
             control_requested=intent is not None and intent.control,
             data_fresh=self._data_fresh(now),
             phases_ok=number(snap, "vebus.phases") == self._cfg.grid.phases,
             watchdog_required=self._watchdog_required,
-            watchdog_armed=self._watchdog.armed,
+            watchdog_armed=self._watchdog_armed,
             safe_reasons=_safe_reasons(snap),
             degraded_reasons=self._degraded_reasons(self._active_locks),
+            handback_pending=self._handback_pending(),
         )
+        self._gate_ready = gate_ready_except_watchdog(inputs)
         transition = self.operating.step(now, inputs)
         if transition is not None:
             self._announce(transition)
+
+    def _handback_pending(self) -> bool:
+        """Läuft noch eine Übergabe, auf die der Betriebszustand warten muss? (Präzisierung 3)
+
+        Victron und EVCS zählen, bis sie übergeben sind: Scheitert ihre Übergabe, übernimmt der
+        Watchdog, und erst seine zurückgelesenen Sicherwerte beenden sie. Ein Aktor ohne Watchdog
+        (Tesla) zählt nicht mehr, sobald alle Arten seiner Übergabe gescheitert sind: Bei ihm
+        bleibt nur der Alarm, statt dass der core mit Regelbetrieb aus in DEGRADED festhängt,
+        solange das Fahrzeug den Wert nicht übernimmt. Er bleibt owned; schreibt der core wieder,
+        beginnt ein neuer Vorfall mit neuen Versuchen.
+
+        Gescheitert heißt: nach dem letzten ``SafeStateKeeper.commands``, also im vorigen Zyklus.
+        """
+        failed = self.keeper.failed
+        return any(
+            actuator in self._needs_watchdog
+            or not all(
+                (actuator, kind) in failed
+                for kind in safe_values(self.limits, SafeTarget(actuator, "handback"))
+            )
+            for actuator in self._handing_back
+        )
 
     def _data_fresh(self, now: datetime) -> bool:
         """Alle ``CRITICAL_SIGNALS`` sind seit mindestens 30 s ununterbrochen ``OK``."""

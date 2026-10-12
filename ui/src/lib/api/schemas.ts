@@ -146,7 +146,7 @@ export const CoreHealthSchema = v.object({
 		version: v.nullable(v.string()),
 		expected_version: v.string(),
 		heartbeat: v.picklist(['off', 'active', 'released']),
-		/** der Betrieb braucht ihn: ein freigegebener Victron- oder EVCS-Aktor ist live angefordert */
+		/** der Betrieb braucht ihn: Victron oder EVCS ist im Regelbetrieb live gewünscht oder wird übergeben */
 		required: v.boolean()
 	}),
 	inputs: v.object({ ok: v.boolean(), problems: v.array(v.string()) })

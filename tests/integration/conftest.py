@@ -36,16 +36,19 @@ def runtime_env(
         extra: Mapping[str, float] | None = None,
         configure: Callable[[Config], Config] | None = None,
         before_cycle: Callable[[], None] | None = None,
+        tessie_token: str | None = None,
         **kwargs: Any,
     ) -> tuple[CoreRuntime, FakeSink, ManualClock]:
         """Laufzeit ohne Adapter; ``before_cycle`` läuft vor jedem Zyklus nach den Messwerten.
 
         Die Uhr der Safety-Schicht ist dieselbe ``ManualClock`` wie die Wanduhr, sofern der Test
-        nicht selbst eine ``safety_clock`` übergibt.
+        nicht selbst eine ``safety_clock`` übergibt. Ohne ``tessie_token`` ist Tessie für den
+        Tesla nie erreichbar.
         """
         clock = ManualClock(datetime.fromisoformat(start))
         sink = FakeSink()
-        secrets = Secrets(internal_token=SecretStr(TOKEN))
+        token = SecretStr(tessie_token) if tessie_token is not None else None
+        secrets = Secrets(internal_token=SecretStr(TOKEN), tessie_token=token)
         # kein Test liest oder schreibt unter /data
         core = cfg.core.model_copy(update={"data_dir": tmp_path / "core"})
         local = cfg.model_copy(update={"core": core})

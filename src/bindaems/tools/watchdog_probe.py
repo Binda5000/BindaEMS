@@ -17,9 +17,9 @@ Die Probe spricht MQTT mit dem Cerbo. Sie schreibt dort nur den Heartbeat des Wa
 
 **Die Probe löst den Watchdog aus:** Er setzt die EVCS auf den sicheren Strom und schreibt Min-SOC
 und Entladegrenze, wenn sie abweichen. Darum fragt das Werkzeug vorher nach; ``--yes`` überspringt
-die Rückfrage. Das Ergebnis ist ein Bericht im Format des Prüfprotokolls Teil 2. Läuft das EMS
-währenddessen mit einem live angeforderten Aktor, sendet es eigene Heartbeats, und der Watchdog
-löst nicht aus.
+die Rückfrage. Das Ergebnis ist ein Bericht im Format des Prüfprotokolls Teil 2. Regelt das EMS
+währenddessen (Regelbetrieb an, ein Victron- oder EVCS-Aktor live gewünscht), sendet es eigene
+Heartbeats, und der Watchdog löst nicht aus.
 
 Die Pause in Schritt 4 ist nötig: Wird der Watchdog wieder scharf, bricht sein Aktionslauf ab, und
 eine Aktion, die noch auf ihre nächste Wiederholung wartet, kommt nicht mehr zum Zug.

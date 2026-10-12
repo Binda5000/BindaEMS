@@ -27,16 +27,23 @@ class Plant:
     ``follow`` gilt.
 
     ``echo`` ist das Echo, bevor der core einen Heartbeat geschrieben hat, etwa der Zähler eines
-    früheren Laufs; ``None`` heißt, der Watchdog meldet keins. Die Signale schreibt sie mit der
-    Quelle ``victron``. ``writes`` hält alle Schreibaufträge in ihrer Reihenfolge.
+    früheren Laufs; ``None`` heißt, der Watchdog meldet keins. Ohne ``accept`` nimmt der Cerbo
+    keinen EVCS-Auftrag an. Die Signale schreibt sie mit der Quelle ``victron``. ``writes`` hält
+    alle Schreibaufträge in ihrer Reihenfolge, auch die abgelehnten.
     """
 
     def __init__(
-        self, *, watchdog_state: int = 0, echo: int | None = None, follow: bool = True
+        self,
+        *,
+        watchdog_state: int = 0,
+        echo: int | None = None,
+        follow: bool = True,
+        accept: bool = True,
     ) -> None:
         self.watchdog_state = watchdog_state
         self.echo = echo
         self.follow = follow
+        self.accept = accept
         self.writes: list[tuple[str, float | int | None]] = []
         self._store: StateStore | None = None
         self._gx: dict[str, Value] = {}  # die übernommenen EVCS-Werte je GX-Signal
@@ -46,12 +53,18 @@ class Plant:
         self._store = store
 
     def write(self, path: str, value: float | int | None) -> bool:
-        """Nimmt einen Schreibauftrag an, wie ``VictronMqttAdapter.write``; immer angenommen."""
+        """Nimmt einen Schreibauftrag an, wie ``VictronMqttAdapter.write``.
+
+        Ein EVCS-Auftrag ohne ``accept`` wird abgelehnt (``False``), jeder andere angenommen.
+        """
         self.writes.append((path, value))
         if path == HEARTBEAT_PATH and isinstance(value, int):
             self.echo = value
-        elif path in FOLLOWED and self.follow:
-            self._gx[FOLLOWED[path]] = value
+        elif path in FOLLOWED:
+            if not self.accept:
+                return False
+            if self.follow:
+                self._gx[FOLLOWED[path]] = value
         return True
 
     def before_cycle(self) -> None:

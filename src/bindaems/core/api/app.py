@@ -32,7 +32,8 @@ class HealthReport(BaseModel):
     - ``intent``: die gültige Absicht als JSON
     - ``actuators``: je Aktor in Katalogreihenfolge angeforderte und wirksame Betriebsart, Freigabe,
       Gründe und Sperrgründe (``locked``); dazu, ob er steuerbar ist (``controllable``), die Gründe,
-      warum nicht (``capability_reasons``), und die Arten mit offenem Schreibvorgang (``pending``)
+      warum nicht (``capability_reasons``), die Arten mit offenem Schreibvorgang (``pending``) und
+      ob er Werte des EMS halten kann, die bei der Übergabe zurückgesetzt werden (``owned``)
     - ``watchdog``: Watchdog am Cerbo und Heartbeat (``watchdog_to_json``)
     - ``inputs``: Ergebnis der Eingangsprüfung (Regel 7)
     """
@@ -97,8 +98,9 @@ def watchdog_to_json(
 ) -> dict[str, Any]:
     """Status des Watchdogs mit der erwarteten Version, dazu Heartbeat und ``required``.
 
-    ``required`` heißt: Der Betrieb braucht den Watchdog (ein Victron- oder EVCS-Aktor ist live
-    angefordert und freigegeben).
+    ``required`` heißt: Der Betrieb braucht den Watchdog. Das gilt, solange ein Victron- oder
+    EVCS-Aktor mit ``live_allowed`` im Regelbetrieb live gewünscht ist oder übergeben wird (Plan 2b,
+    Präzisierung 2); ohne Regelbetrieb und ohne Übergabe nicht.
     """
     last_trip = watchdog.last_trip
     return {
