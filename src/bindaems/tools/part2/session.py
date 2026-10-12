@@ -8,10 +8,15 @@ Betreiber (Plan 2b, Präzisierung 11). Die Sitzung startet dafür die echten Ada
   oder ablehnen, ist das ein Fehler des Werkzeugs (``ValueError``); gesendet wird dann nichts.
 - Gesendet wird nur an einen Aktor, der in diesem Moment steuerbar ist (``capabilities``). Einen
   schlafenden Tesla weckt die Sitzung so nie.
+- Innerhalb der Frist bleibt sie hartnäckig: Sie wartet, bis der Aktor steuerbar ist, sendet
+  erneut, wenn er ablehnt, und ohne Bestätigung nach ``resend_s`` noch einmal. So übersteht ein
+  Wert das Neuverbinden zum Cerbo nach einer langen Rückfrage.
 - Vor dem ersten Schreiben je Aktor und Art merkt sie sich den vorgefundenen Wert (``present``).
   Ist er unbekannt, schreibt sie nicht: Er ließe sich nicht wiederherstellen.
-- ``restore`` stellt am Ende alle gemerkten Werte in umgekehrter Reihenfolge wieder her, auch nach
-  Strg+C. Auch dabei schreibt sie nur Werte, die die Regeln 1–3 unverändert durchlassen.
+- Nach jedem Schritt (``restore_after_step``), bei Abbruch und am Ende (``restore``) stellt sie
+  die vorgefundenen Werte in umgekehrter Reihenfolge wieder her, auch nach Strg+C. Ein Wert, der
+  schon wieder steht, wird nicht noch einmal geschrieben. Auch beim Wiederherstellen schreibt sie
+  nur Werte, die die Regeln 1–3 unverändert durchlassen.
 
 Die Teile halten jeden Befund mit ``record`` fest, sobald er feststeht. So nennt der Bericht nach
 einem Abbruch die Schritte bis dahin.
@@ -23,6 +28,7 @@ import asyncio
 import time
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from functools import partial
+from types import MappingProxyType
 from typing import Final
 
 import httpx
@@ -37,18 +43,26 @@ from bindaems.core.adapters.tessie import TessieAdapter
 from bindaems.core.adapters.twc import TwcAdapter
 from bindaems.core.adapters.victron_mqtt import SOURCE as VICTRON_SOURCE
 from bindaems.core.adapters.victron_mqtt import AiomqttTransport, VictronMqttAdapter
-from bindaems.core.control.actuator import Actuator, Confirmation
+from bindaems.core.control.actuator import Actuator, Confirmation, matches
 from bindaems.core.safety.limits import Family, HardLimits
 from bindaems.core.safety.ranges import check_range
 from bindaems.core.state.store import StateStore
 from bindaems.shared.config import Config, EvcsConfig, Secrets
-from bindaems.shared.control import VICTRON, Command, CommandKind, CommandValue
+from bindaems.shared.control import (
+    PERSISTENT_KINDS,
+    VICTRON,
+    Command,
+    CommandKind,
+    CommandValue,
+)
 from bindaems.shared.domain import Snapshot
 from bindaems.shared.numbers import de, finite_number
 from bindaems.shared.timeutil import SystemClock
 from bindaems.tools.verify_checks import Finding
 
 RESTORE_S: Final = 15.0  # Frist je wiederherzustellendem Wert, vom Senden bis zur Bestätigung
+RESEND_S: Final = 5.0  # ohne Bestätigung geht derselbe Wert nach so vielen Sekunden noch einmal
+SKIPPED_UNATTENDED: Final = "übersprungen (--yes)"  # Schritt mit Handgriff, aber niemand da
 UNKNOWN_ORIGINAL: Final = "Ausgangswert unbekannt; er ließe sich nicht wiederherstellen."
 
 _LABELS: Final = {"ok": "OK", "warn": "WARNUNG", "fail": "FEHLER", "info": "INFO"}
@@ -122,9 +136,14 @@ class Part2Session:
     - ``monotonic`` ist die Uhr für Wartezeiten, auch für die Teile; ``poll_s`` der Abstand, in
       dem Rücklesen und Warten den Speicher ansehen.
     - ``cleanup`` läuft am Ende von ``stop``, etwa um den HTTP-Client zu schließen.
+    - ``resend_s``: so lange wartet ``set_and_confirm`` auf die Bestätigung, bevor es denselben
+      Wert noch einmal sendet.
+    - ``unattended`` (``--yes``): Niemand führt Handgriffe aus; die Teile überspringen Schritte,
+      die einen Handgriff des Betreibers brauchen (``SKIPPED_UNATTENDED``).
 
     ``findings`` sind die Befunde, die die Teile mit ``record`` festhalten. ``failure`` nennt,
-    warum der letzte Aufruf von ``set_and_confirm`` keinen bestätigten Wert ergab.
+    warum der letzte Aufruf von ``set_and_confirm`` keinen bestätigten Wert ergab. ``confirmed``
+    ist der zuletzt bestätigte Wert je Aktor und Art, auch vom Wiederherstellen.
     """
 
     def __init__(
@@ -138,21 +157,33 @@ class Part2Session:
         monotonic: Callable[[], float] = time.monotonic,
         poll_s: float = 0.5,
         cleanup: Sequence[Callable[[], Awaitable[None]]] = (),
+        resend_s: float = RESEND_S,
+        unattended: bool = False,
     ) -> None:
         self.cfg = cfg
         self.limits = HardLimits.from_config(cfg)
         self.adapters: tuple[Adapter, ...] = tuple(adapters)
         self.actuators: Mapping[str, Actuator] = dict(actuators)
         self.monotonic = monotonic
+        self.unattended = unattended
         self.findings: list[Finding] = []
         self.failure: str | None = None
         self._store = store
         self._ask = ask
         self._poll_s = poll_s
+        self._resend_s = resend_s
         self._cleanup = tuple(cleanup)
         self._tasks: list[asyncio.Task[None]] = []
         # die vorgefundenen Werte je Aktor und Art, in der Reihenfolge des ersten Schreibens
         self._originals: dict[_Key, CommandValue] = {}
+        self._sent: dict[_Key, CommandValue] = {}  # zuletzt angenommener Auftrag
+        self._confirmed: dict[_Key, CommandValue] = {}  # zuletzt bestätigter Wert
+        self._unrestorable: set[_Key] = set()  # außerhalb der Grenzen, schon gemeldet
+
+    @property
+    def confirmed(self) -> Mapping[_Key, CommandValue]:
+        """Der zuletzt bestätigte Wert je Aktor und Art, auch vom Wiederherstellen."""
+        return MappingProxyType(self._confirmed)
 
     async def start(self) -> None:
         """Startet jeden Adapter als Task; die Tasks laufen bis ``stop``."""
@@ -210,52 +241,88 @@ class Part2Session:
     async def set_and_confirm(
         self, actuator: str, kind: CommandKind, value: CommandValue, timeout_s: float
     ) -> float | None:
-        """Schreibt ``value`` über den Aktor und wartet höchstens ``timeout_s`` auf die Bestätigung.
+        """Schreibt ``value`` und bleibt dran, bis der Aktor ihn bestätigt oder die Frist endet.
 
-        Ergebnis sind die Sekunden vom Senden bis zur Bestätigung, sonst ``None``; dann nennt
-        ``failure`` den Grund: nicht steuerbar, nicht gesendet (der Aktor lehnt ab, oder der
-        vorgefundene Wert ist unbekannt), ein Fehler beim Bestätigen oder die Frist.
+        Innerhalb der Frist wartet die Sitzung, bis der Aktor steuerbar ist, sendet dann, sendet
+        erneut, wenn der Aktor den Auftrag ablehnt (etwa zwischen zwei Sitzungen zum Cerbo), und
+        sendet denselben Wert noch einmal, wenn ``resend_s`` lang keine Bestätigung kam (der
+        Auftrag kann mit einer endenden Sitzung verloren sein). Persistente Einstellungen
+        (Entladegrenze, Min-SOC) gehen je Aufruf höchstens einmal hinaus. An einen Aktor, der
+        nicht steuerbar ist, geht nie etwas.
+
+        Ergebnis sind die Sekunden vom ersten Senden bis zur Bestätigung, sonst ``None``; dann
+        nennt ``failure`` den Grund: ging nichts hinaus, warum (nicht steuerbar, abgelehnt,
+        vorgefundener Wert unbekannt), sonst die Frist. Meldet der Aktor ausdrücklich einen
+        Fehler (Tesla: Tessie lehnt ab), endet das Warten sofort mit „Fehler: …“.
 
         Ein Aktor, eine Art oder ein Wert, den die Regeln 1–3 klemmen oder ablehnen würden, ist ein
-        Fehler des Werkzeugs (``ValueError``), noch vor jedem Senden. Vor dem ersten erfolgreichen
+        Fehler des Werkzeugs (``ValueError``), noch vor jedem Senden. Vor dem ersten angenommenen
         Senden je Aktor und Art merkt sich die Sitzung den vorgefundenen Wert für ``restore``.
         """
         device = self._checked(actuator, kind, value)
-        self.failure = None
-        snap = self.snapshot()
-        capabilities = device.capabilities(snap, snap.ts)
-        if not capabilities.controllable:
-            self.failure = _not_controllable(capabilities.reasons)
-            return None
         key = (actuator, kind)
-        present = device.present(snap)
-        first = key not in self._originals
-        if first and kind not in present:
-            self.failure = f"nicht gesendet: {UNKNOWN_ORIGINAL}"
-            return None
+        self.failure = None
         started = self.monotonic()
-        refusal = device.send(kind, value)
-        if refusal is not None:
-            self.failure = f"nicht gesendet: {refusal}"
-            return None
-        if first:
-            self._originals[key] = present[kind]
-        return await self._confirmation(device, kind, value, started, timeout_s)
+        first_sent: float | None = None
+        last_sent = started
+        blocked = ""  # warum noch nichts hinausging
+        while True:
+            now = self.monotonic()
+            if first_sent is None or self._resend_due(kind, now - last_sent):
+                problem = self._send(device, key, kind, value)
+                if problem is None:
+                    last_sent = now
+                    first_sent = now if first_sent is None else first_sent
+                elif first_sent is None:
+                    blocked = problem
+            if first_sent is not None:
+                state, text = device.confirm(kind, value, self.snapshot())
+                if state == Confirmation.CONFIRMED:
+                    self._confirmed[key] = value
+                    return self.monotonic() - first_sent
+                if state == Confirmation.FAILED:
+                    self.failure = f"Fehler: {text}" if text else "Fehler"
+                    return None
+            remaining = timeout_s - (self.monotonic() - started)
+            if remaining <= 0:
+                late = f"nicht bestätigt nach {de(timeout_s)} s"
+                self.failure = blocked if first_sent is None else late
+                return None
+            await asyncio.sleep(min(self._poll_s, remaining))
 
     async def restore(self, timeout_s: float = RESTORE_S) -> list[Finding]:
-        """Stellt die vorgefundenen Werte in umgekehrter Reihenfolge wieder her; je Wert ein Befund.
+        """Stellt die vorgefundenen Werte wieder her, die nicht mehr stehen; je Wert ein Befund.
 
-        Jeder Wert hat seine eigene Frist ``timeout_s`` (15 s). Der Befund ist OK
-        („Wiederhergestellt …“) oder FEHLER mit dem Grund; eine Ausnahme wird zum Befund. Ein
-        vorgefundener Wert, den die Regeln 1–3 nicht unverändert durchlassen, wird nicht
-        geschrieben, sondern gemeldet. Die Befunde erscheinen auch auf der Konsole.
+        Die Reihenfolge ist die umgekehrte des ersten Schreibens. Ein Wert, der schon wieder steht,
+        wird nicht noch einmal geschrieben und ergibt keine Zeile: Das Rücklesen zeigt ihn, und
+        zuletzt gesendet wurde er selbst. Einem Rücklesen, das hinterherhinkt (Tessie-Cache),
+        traut die Sitzung nicht mehr als ihrem letzten Senden.
+
+        Jeder Wert hat seine eigene Frist ``timeout_s`` (15 s), mit Warten und erneutem Senden wie
+        in ``set_and_confirm``. Der Befund ist OK („Wiederhergestellt …“) oder FEHLER mit dem
+        Grund; eine Ausnahme wird zum Befund. Ein vorgefundener Wert, den die Regeln 1–3 nicht
+        unverändert durchlassen, wird nicht geschrieben, sondern einmal gemeldet. Die Befunde
+        erscheinen auch auf der Konsole.
         """
         findings: list[Finding] = []
-        for (actuator, kind), original in reversed(list(self._originals.items())):
-            finding = await self._restore(actuator, kind, original, timeout_s)
-            _show(finding)
-            findings.append(finding)
+        for key, original in reversed(list(self._originals.items())):
+            if key in self._unrestorable:
+                continue
+            finding = await self._restore(key, original, timeout_s)
+            if finding is not None:
+                _show(finding)
+                findings.append(finding)
         return findings
+
+    async def restore_after_step(self, timeout_s: float = RESTORE_S) -> list[Finding]:
+        """Nach einem Schritt: ``restore``, die Zeilen gleich in ``findings`` (Präzisierung 11).
+
+        So stehen sie im Bericht hinter ihrem Schritt, und der nächste Schritt beginnt mit den
+        vorgefundenen Werten.
+        """
+        rows = await self.restore(timeout_s)
+        self.findings.extend(rows)
+        return rows
 
     def _checked(self, actuator: str, kind: CommandKind, value: CommandValue) -> Actuator:
         """Der Aktor zu ``actuator``, wenn Art und Wert die Regeln 1–3 unverändert passieren."""
@@ -270,36 +337,52 @@ class Part2Session:
             raise ValueError(f"{spec.label}: {value!r} für „{kind}“ nicht zulässig: {problems}")
         return device
 
-    async def _confirmation(
-        self,
-        device: Actuator,
-        kind: CommandKind,
-        value: CommandValue,
-        started: float,
-        timeout_s: float,
-    ) -> float | None:
-        """Fragt den Aktor alle ``poll_s``, bis er bestätigt, scheitert oder die Frist endet."""
-        while True:
-            state, text = device.confirm(kind, value, self.snapshot())
-            elapsed = self.monotonic() - started
-            if state == Confirmation.CONFIRMED:
-                return elapsed
-            if state == Confirmation.FAILED:
-                self.failure = f"Fehler: {text}" if text else "Fehler"
-                return None
-            if elapsed >= timeout_s:
-                self.failure = f"nicht bestätigt nach {de(timeout_s)} s"
-                return None
-            await asyncio.sleep(min(self._poll_s, timeout_s - elapsed))
+    def _resend_due(self, kind: CommandKind, since_last_s: float) -> bool:
+        """Ist es Zeit, denselben Wert erneut zu senden? Nie bei persistenten Einstellungen."""
+        return kind not in PERSISTENT_KINDS and since_last_s >= self._resend_s
 
-    async def _restore(
-        self, actuator: str, kind: CommandKind, original: CommandValue, timeout_s: float
-    ) -> Finding:
+    def _send(
+        self, device: Actuator, key: _Key, kind: CommandKind, value: CommandValue
+    ) -> str | None:
+        """Sendet, wenn der Aktor steuerbar und der Ausgangswert bekannt ist; sonst der Grund."""
+        snap = self.snapshot()
+        capabilities = device.capabilities(snap, snap.ts)
+        if not capabilities.controllable:
+            return _not_controllable(capabilities.reasons)
+        present = device.present(snap)
+        first = key not in self._originals
+        if first and kind not in present:
+            return f"nicht gesendet: {UNKNOWN_ORIGINAL}"
+        refusal = device.send(kind, value)
+        if refusal is not None:
+            return f"nicht gesendet: {refusal}"
+        if first:
+            self._originals[key] = present[kind]
+        self._sent[key] = value
+        return None
+
+    def _in_place(self, key: _Key, original: CommandValue) -> bool:
+        """Steht der vorgefundene Wert wieder? Rücklesen und letztes Senden zeigen ihn beide."""
+        actuator, kind = key
+        present = self.actuators[actuator].present(self.snapshot())
+        last = self._sent.get(key, original)
+        return (
+            kind in present
+            and matches(kind, original, present[kind])
+            and matches(kind, original, last)
+        )
+
+    async def _restore(self, key: _Key, original: CommandValue, timeout_s: float) -> Finding | None:
+        """Stellt einen Wert wieder her; ``None``, wenn er schon steht."""
+        actuator, kind = key
         item = _restore_item(self.limits.actuators[actuator].family, kind)
         title = f"Wiederherstellen: {_value_text(kind, original)}"
         try:
+            if self._in_place(key, original):
+                return None
             problems = _range_problems(actuator, kind, original, self.limits)
             if problems is not None:
+                self._unrestorable.add(key)
                 detail = f"Ausgangswert außerhalb der Grenzen, nicht geschrieben: {problems}"
                 return Finding(item, title, "fail", detail)
             waited = await self.set_and_confirm(actuator, kind, original, timeout_s)
@@ -310,7 +393,9 @@ class Part2Session:
         return Finding(item, title, "ok", f"Wiederhergestellt nach {seconds(waited)} s")
 
 
-def build_session(cfg: Config, secrets: Secrets, *, ask: Callable[[str], bool]) -> Part2Session:
+def build_session(
+    cfg: Config, secrets: Secrets, *, ask: Callable[[str], bool], unattended: bool = False
+) -> Part2Session:
     """Die Sitzung mit den echten Adaptern und den Aktoren wie im core.
 
     Adapter, alle nur lesend: Victron per MQTT, je EVCS ihr Modbus-Abbild, je Wall Connector seine
@@ -321,7 +406,7 @@ def build_session(cfg: Config, secrets: Secrets, *, ask: Callable[[str], bool]) 
     ``VictronMqttAdapter.write`` und sind steuerbar, solange der Cerbo verbunden ist; die EVCS
     findet ihre Instanz über ihren Schlüssel in ``victron.instances.evcharger``. Je Fahrzeug mit
     ``tessie`` ein Tesla; ohne Token ist Tessie für ihn nie erreichbar. Der gemeinsame HTTP-Client
-    schließt mit ``stop``.
+    schließt mit ``stop``. ``unattended`` gilt mit ``--yes`` (``Part2Session``).
     """
     clock = SystemClock()
     store = StateStore(clock)
@@ -367,5 +452,11 @@ def build_session(cfg: Config, secrets: Secrets, *, ask: Callable[[str], bool]) 
         )
         actuators[car.id] = car
     return Part2Session(
-        cfg, store=store, adapters=adapters, actuators=actuators, ask=ask, cleanup=[http.aclose]
+        cfg,
+        store=store,
+        adapters=adapters,
+        actuators=actuators,
+        ask=ask,
+        cleanup=[http.aclose],
+        unattended=unattended,
     )

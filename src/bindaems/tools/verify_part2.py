@@ -8,9 +8,13 @@ Aufruf::
 Das Werkzeug läuft gemeinsam mit dem Betreiber an der Anlage, der core bleibt dabei im Dry-Run.
 Es nutzt dieselben Adapter und Aktoren wie der core (``part2.session``) und prüft jeden Wert mit
 den Regeln 1–3 der Safety-Schicht. Vor dem Start sagt es, was es schreibt, und fragt nach; vor
-jedem weiteren schreibenden Schritt fragt es erneut. ``--yes`` beantwortet alle Rückfragen mit Ja.
-Am Ende, auch nach Strg+C, stellt es die vorgefundenen Werte wieder her, stoppt die Adapter und
-schreibt den Bericht (Standard: ``docs/verification/<Datum>-pruefprotokoll-teil2-<punkt>.md``).
+jedem weiteren schreibenden Schritt fragt es erneut. Nach jedem Schritt, bei Abbruch (auch Strg+C)
+und am Ende stellt es die vorgefundenen Werte wieder her; dann stoppt es die Adapter und schreibt
+den Bericht (Standard: ``docs/verification/<Datum>-pruefprotokoll-teil2-<punkt>.md``).
+
+``--yes`` beantwortet alle Rückfragen mit Ja. Schritte, die einen Handgriff des Betreibers
+brauchen (Strom von Hand ändern, Kabel ziehen), entfallen dann als INFO „übersprungen (--yes)“;
+der Bericht nennt ``--yes`` unter „Rückfragen“.
 
 Punkte: ``evcs`` (17.2-6 und der sichere Strom über den Watchdog, 17.2-5) mit ``--wallbox``
 (Standard: die erste EVCS). ``tesla`` (mit ``--fahrzeug`` und ``--schlafend``) und ``victron``
@@ -66,12 +70,14 @@ WARNINGS: Final = {
     "evcs": (
         "Das Werkzeug stellt an der EVCS „{device}“ den Ladestrom um und fragt vor jedem weiteren "
         "schreibenden Schritt nach. Ein angestecktes Fahrzeug lädt dabei mit wechselndem Strom. "
-        "Am Ende, auch nach Strg+C, stellt es die vorgefundenen Werte wieder her."
+        "Nach jedem Schritt und am Ende, auch nach Strg+C, stellt es die vorgefundenen Werte "
+        "wieder her."
     ),
 }
 ABORTED: Final = "mit Strg+C abgebrochen; die übrigen Schritte fehlen"
 RESTORE_ABORTED: Final = "mit Strg+C abgebrochen; die Werte bitte von Hand prüfen"
 NO_PORTAL: Final = "Portal-ID konnte nicht ermittelt werden"
+UNATTENDED_META: Final = "mit --yes beantwortet; Schritte mit Handgriff übersprungen"
 VENUS_OS_PATH: Final = "platform/0/Firmware/Installed/Version"
 VERSION_WAIT_S = 5.0  # so lange wartet die Leseanfrage nach der Version von Venus OS
 
@@ -350,10 +356,13 @@ def _run(args: argparse.Namespace) -> int:
         return 2
     day = datetime.now(LOCAL_TZ).date().isoformat()
     out = args.out or Path("docs/verification") / f"{day}-pruefprotokoll-teil2-{punkt}.md"
-    session = build_session(cfg, secrets, ask=_auto_yes if args.yes else _ask_operator)
+    ask = _auto_yes if args.yes else _ask_operator
+    session = build_session(cfg, secrets, ask=ask, unattended=args.yes)
     outcome = _execute(session, cfg, secrets, punkt, device)
     label = session.limits.actuators[wallbox_actuator(device)].label
     meta = {"Werkzeug": "verify_part2", "Datum": day, "Punkt": punkt, "Gerät": label}
+    if args.yes:
+        meta["Rückfragen"] = UNATTENDED_META
     report = render_report(
         outcome.findings, meta | outcome.meta, title=f"Prüfprotokoll Teil 2 – {TITLES[punkt]}"
     )

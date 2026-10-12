@@ -18,7 +18,10 @@ Die Schritte schreiben über den GX-Dienst ``evcharger`` wie der core (``Part2Se
    4 A (höchstens ``max_a``), dann die Watchdog-Probe; danach muss die EVCS den sicheren Strom
    haben. Die Befunde der Probe stehen vor diesem Schritt.
 
-Am Ende stellt ``Part2Session.restore`` die vorgefundenen Werte wieder her (eigene Zeilen).
+Nach jedem Schritt (die Ströme zählen als einer) stellt ``Part2Session.restore_after_step`` die
+vorgefundenen Werte wieder her; ihre Zeilen stehen hinter dem Schritt (Präzisierung 11). Mit
+``--yes`` (``session.unattended``) entfallen die Schritte 4 und 5, denn sie brauchen einen
+Handgriff des Betreibers: INFO „übersprungen (--yes)“.
 """
 
 from __future__ import annotations
@@ -35,7 +38,7 @@ from bindaems.shared.config import Config, EvcsConfig
 from bindaems.shared.control import CommandKind, CommandValue, wallbox_actuator
 from bindaems.shared.domain import Quality, Snapshot
 from bindaems.shared.numbers import de, finite_number
-from bindaems.tools.part2.session import Part2Session, seconds
+from bindaems.tools.part2.session import SKIPPED_UNATTENDED, Part2Session, seconds
 from bindaems.tools.verify_checks import Finding, Status
 
 ITEM: Final = "17.2-6"
@@ -113,7 +116,7 @@ async def run_evcs(
 
 
 class _EvcsSteps:
-    """Die Schritte eines Laufs; merkt sich den zuletzt bestätigten Strom."""
+    """Die Schritte eines Laufs, je mit Wiederherstellen danach."""
 
     def __init__(
         self,
@@ -134,16 +137,14 @@ class _EvcsSteps:
         self._instance = next((gx for gx, name in evcharger.items() if name == key), None)
         self._probe = probe
         self._t = timings
-        self._last_current: float | None = None  # zuletzt bestätigter Strom
 
     async def run(self) -> None:
         if not await self._ready():
             return
-        await self._currents()
-        await self._charging()
-        await self._foreign()
-        await self._interruption()
-        await self._watchdog()
+        steps = (self._currents, self._charging, self._foreign, self._interruption, self._watchdog)
+        for step in steps:
+            await step()
+            await self._session.restore_after_step(self._t.confirm_s)
 
     async def _ready(self) -> bool:
         """EVCS bereit: steuerbar und mit bekanntem Sollstrom, sonst FEHLER und Ende."""
@@ -224,10 +225,13 @@ class _EvcsSteps:
     async def _foreign(self) -> None:
         """Eine Änderung von Hand erkennen wie der core: 3 Treffer in Folge, alle ``check_s``."""
         title = "Fremde Änderung"
+        if self._session.unattended:  # niemand stellt den Strom von Hand um
+            self._record(title, "info", SKIPPED_UNATTENDED)
+            return
         if not self._session.ask(QUESTION_FOREIGN):
             self._record(title, "info", SKIPPED)
             return
-        expected = self._last_current
+        expected = finite_number(self._session.confirmed.get((self._id, CommandKind.CURRENT)))
         if expected is None:  # kein Strom bestätigt: dann der vorgefundene
             snap = self._session.snapshot()
             expected = finite_number(self._actuator.present(snap).get(CommandKind.CURRENT))
@@ -256,6 +260,9 @@ class _EvcsSteps:
     async def _interruption(self) -> None:
         """Behält die EVCS ihren Strom, wenn ihre Verbindung unterbrochen ist?"""
         title = "Verbindung unterbrochen"
+        if self._session.unattended:  # niemand zieht das Kabel
+            self._record(title, "info", SKIPPED_UNATTENDED)
+            return
         if not self._session.ask(QUESTION_UNPLUG):
             self._record(title, "info", SKIPPED)
             return
@@ -316,11 +323,8 @@ class _EvcsSteps:
         self._record(title, "fail", detail, item=WATCHDOG_ITEM)
 
     async def _set(self, kind: CommandKind, value: CommandValue) -> float | None:
-        """``set_and_confirm`` mit ``confirm_s``; merkt sich einen bestätigten Strom."""
-        waited = await self._session.set_and_confirm(self._id, kind, value, self._t.confirm_s)
-        if waited is not None and kind == CommandKind.CURRENT:
-            self._last_current = finite_number(value)
-        return waited
+        """``set_and_confirm`` mit ``confirm_s``."""
+        return await self._session.set_and_confirm(self._id, kind, value, self._t.confirm_s)
 
     def _failure(self) -> str:
         return self._session.failure or f"nicht bestätigt nach {de(self._t.confirm_s)} s"

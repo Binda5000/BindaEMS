@@ -210,8 +210,11 @@ def test_confirmed_start_runs_the_part(
         return "j"
 
     monkeypatch.setattr("builtins.input", reply)
-    assert main([*EVCS, "--out", str(tmp_path / "bericht.md")]) == 0
+    out = tmp_path / "bericht.md"
+    assert main([*EVCS, "--out", str(out)]) == 0
     assert prompts == ["Fortfahren? [j/N] "] and len(fake_part.sessions) == 1
+    assert fake_part.unattended is False  # ohne --yes macht der Betreiber die Handgriffe
+    assert "Rückfragen" not in out.read_text(encoding="utf-8")
 
 
 def test_questions_of_the_steps_need_a_j(
@@ -246,6 +249,15 @@ def test_yes_answers_every_question(
     ask = fake_part.ask
     assert ask is not None and ask("Weiter?") is True
     assert "Weiter? j (--yes)" in capsys.readouterr().out
+
+
+def test_yes_is_named_in_the_report_and_skips_the_handgrips(
+    tmp_path: Path, fake_part: FakePart
+) -> None:
+    code, report = run(tmp_path)
+    assert code == 0
+    assert fake_part.unattended is True  # die Sitzung überspringt die Schritte mit Handgriff
+    assert "| Rückfragen | mit --yes beantwortet; Schritte mit Handgriff übersprungen |" in report
 
 
 # Bericht und Exitcodes

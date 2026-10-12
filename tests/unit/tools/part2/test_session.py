@@ -9,6 +9,7 @@ from pydantic import SecretStr
 from tests.unit.tools.part2.conftest import FakeEvcs
 
 from bindaems.core.actuators.tesla import TeslaActuator
+from bindaems.core.actuators.victron import VictronActuator
 from bindaems.core.adapters.base import AdapterHealth
 from bindaems.core.adapters.evcs import EvcsAdapter
 from bindaems.core.adapters.tessie import TessieAdapter
@@ -43,8 +44,9 @@ async def test_confirmed_write_returns_the_seconds_since_sending(evcs_session) -
 
 
 async def test_not_controllable_sends_nothing(evcs_session) -> None:
+    # Die Sitzung wartet bis zur Frist, ob der Aktor steuerbar wird, und sendet bis dahin nichts.
     session, evcs = evcs_session(state={"wallbox.evcs.gx_mode": 1})
-    assert await session.set_and_confirm("wallbox.evcs", CURRENT, 10.0, 0.5) is None
+    assert await session.set_and_confirm("wallbox.evcs", CURRENT, 10.0, 0.1) is None
     assert session.failure == "nicht steuerbar: EVCS nicht im manuellen Modus."
     assert evcs.writes == []
     assert await session.restore() == []  # nichts geschrieben, nichts herzustellen
@@ -52,7 +54,7 @@ async def test_not_controllable_sends_nothing(evcs_session) -> None:
 
 async def test_refused_send_is_not_confirmed_and_not_remembered(evcs_session) -> None:
     session, evcs = evcs_session(accept=False)
-    assert await session.set_and_confirm("wallbox.evcs", CURRENT, 10.0, 0.5) is None
+    assert await session.set_and_confirm("wallbox.evcs", CURRENT, 10.0, 0.1) is None
     assert session.failure == "nicht gesendet: Cerbo-Verbindung: Auftrag nicht angenommen."
     evcs.accept = True
     assert await session.restore() == []
@@ -66,7 +68,7 @@ async def test_unconfirmed_write_names_the_time(evcs_session) -> None:
 
 async def test_failed_confirmation_ends_the_wait(cfg: Config) -> None:
     # Ein Tesla, dessen Befehl Tessie ablehnt: sofort ein Ergebnis, nicht erst nach der Frist.
-    car = RefusingTesla()
+    car = StubTesla(Confirmation.FAILED)
     session = Part2Session(
         cfg,
         store=StateStore(SystemClock()),
@@ -90,7 +92,7 @@ async def test_failed_confirmation_ends_the_wait(cfg: Config) -> None:
 
 async def test_unknown_original_is_not_written(evcs_session) -> None:
     session, evcs = evcs_session(state={"wallbox.evcs.gx_set_current_a": None})
-    assert await session.set_and_confirm("wallbox.evcs", CURRENT, 10.0, 0.5) is None
+    assert await session.set_and_confirm("wallbox.evcs", CURRENT, 10.0, 0.1) is None
     assert session.failure == (
         "nicht gesendet: Ausgangswert unbekannt; er ließe sich nicht wiederherstellen."
     )
@@ -156,6 +158,7 @@ async def test_restore_does_not_write_an_original_outside_the_limits(evcs_sessio
             "Auf den Höchstwert 16 A begrenzt.",
         )
     ]
+    assert await session.restore() == []  # einmal gemeldet genügt
     assert currents(evcs) == [10]
 
 
@@ -185,7 +188,7 @@ async def test_restore_sends_nothing_to_an_actuator_that_is_not_controllable(evc
     session, evcs = evcs_session()
     await session.set_and_confirm("wallbox.evcs", CURRENT, 10.0, 0.5)
     evcs.store.update("wallbox.evcs.gx_mode", 1, source="victron", kind=SignalKind.STATE)
-    assert await session.restore() == [
+    assert await session.restore(timeout_s=0.1) == [
         Finding(
             "17.2-6",
             "Wiederherstellen: Strom 16 A",
@@ -217,6 +220,128 @@ async def test_restore_reports_an_exception_as_an_error(evcs_session) -> None:
     assert (
         restored[1].title == "Wiederherstellen: Strom 16 A"
     )  # der nächste Wert kommt trotzdem dran
+
+
+async def test_value_back_at_its_original_is_not_written_again(evcs_session) -> None:
+    session, evcs = evcs_session()
+    await session.set_and_confirm("wallbox.evcs", CURRENT, 10.0, 0.5)
+    await session.set_and_confirm("wallbox.evcs", CURRENT, 16.0, 0.5)  # zurück auf 16 A
+    assert await session.restore() == []
+    assert currents(evcs) == [10, 16]
+
+
+async def test_restore_trusts_the_last_write_more_than_a_lagging_readback(cfg: Config) -> None:
+    # Der Tessie-Cache zeigt noch die vorgefundenen 16 A, gesendet sind 5 A: wiederherstellen.
+    car = StubTesla(Confirmation.CONFIRMED)
+    session = Part2Session(
+        cfg,
+        store=StateStore(SystemClock()),
+        adapters=[],
+        actuators={car.id: car},
+        ask=lambda _question: False,
+        poll_s=0.01,
+    )
+    assert await session.set_and_confirm("vehicle.tesla", CURRENT, 5.0, 1.0) is not None
+    restored = await session.restore(timeout_s=1.0)
+    assert [(f.item, f.title, f.status) for f in restored] == [
+        ("17.2-7", "Wiederherstellen: Strom 16 A", "ok")
+    ]
+    assert car.sent == [(CURRENT, 5.0), (CURRENT, 16.0)]
+
+
+async def test_restore_after_step_keeps_the_rows_in_the_findings(evcs_session) -> None:
+    session, _ = evcs_session()
+    await session.set_and_confirm("wallbox.evcs", CURRENT, 10.0, 0.5)
+    rows = await session.restore_after_step(1.0)
+    assert [(f.title, f.status) for f in rows] == [("Wiederherstellen: Strom 16 A", "ok")]
+    assert session.findings == rows
+    assert await session.restore_after_step(1.0) == []  # steht wieder: nichts zu tun
+    assert session.findings == rows
+
+
+# Hartnäckig innerhalb der Frist: warten, bis steuerbar, senden, ohne Bestätigung erneut senden
+
+
+async def test_write_waits_until_the_actuator_is_controllable(evcs_session) -> None:
+    session, evcs = evcs_session()
+    evcs.connected = False  # die Sitzung zum Cerbo ist gerade weg
+    asyncio.get_running_loop().call_later(0.1, setattr, evcs, "connected", True)
+    assert await session.set_and_confirm("wallbox.evcs", CURRENT, 10.0, 1.0) is not None
+    assert currents(evcs) == [10]  # nichts, solange nicht steuerbar
+
+
+async def test_refused_write_is_sent_again_until_accepted(evcs_session) -> None:
+    session, evcs = evcs_session(accept=False)  # zwischen zwei Sitzungen zum Cerbo
+    asyncio.get_running_loop().call_later(0.1, setattr, evcs, "accept", True)
+    assert await session.set_and_confirm("wallbox.evcs", CURRENT, 10.0, 1.0) is not None
+    assert currents(evcs) == [10]
+
+
+async def test_lost_write_is_sent_again(evcs_session) -> None:
+    session, evcs = evcs_session(resend_s=0.05)
+    evcs.lose = 1  # in der Warteschlange einer Sitzung, die gerade endet
+    waited = await session.set_and_confirm("wallbox.evcs", CURRENT, 10.0, 1.0)
+    assert waited is not None and waited >= 0.05  # gezählt ab dem ersten Senden
+    assert currents(evcs) == [10, 10]
+
+
+async def test_restore_waits_until_the_actuator_is_controllable(evcs_session) -> None:
+    session, evcs = evcs_session()
+    await session.set_and_confirm("wallbox.evcs", CURRENT, 10.0, 0.5)
+    evcs.connected = False
+    asyncio.get_running_loop().call_later(0.1, setattr, evcs, "connected", True)
+    restored = await session.restore(timeout_s=1.0)
+    assert [(f.title, f.status) for f in restored] == [("Wiederherstellen: Strom 16 A", "ok")]
+    assert currents(evcs) == [10, 16]
+
+
+async def test_restore_sends_again_after_a_refusal(evcs_session) -> None:
+    session, evcs = evcs_session()
+    await session.set_and_confirm("wallbox.evcs", CURRENT, 10.0, 0.5)
+    evcs.accept = False
+    asyncio.get_running_loop().call_later(0.1, setattr, evcs, "accept", True)
+    restored = await session.restore(timeout_s=1.0)
+    assert [(f.title, f.status) for f in restored] == [("Wiederherstellen: Strom 16 A", "ok")]
+    assert currents(evcs) == [10, 16]
+
+
+async def test_restore_sends_again_when_a_write_is_lost(evcs_session) -> None:
+    session, evcs = evcs_session(resend_s=0.05)
+    await session.set_and_confirm("wallbox.evcs", CURRENT, 10.0, 0.5)
+    evcs.lose = 1
+    restored = await session.restore(timeout_s=1.0)
+    assert [(f.title, f.status) for f in restored] == [("Wiederherstellen: Strom 16 A", "ok")]
+    assert currents(evcs) == [10, 16, 16]
+
+
+async def test_persistent_settings_are_not_sent_again(cfg: Config) -> None:
+    # Entladegrenze und Min-SOC sind gespeicherte Einstellungen: je Aufruf höchstens ein
+    # Schreiben, auch ohne Bestätigung. Den flüchtigen Override sendet die Sitzung erneut.
+    store = StateStore(SystemClock())
+    store.register_source("victron", 5.0)
+    store.set_connected("victron", True)
+    store.update("ess.max_discharge_w", 5000.0, source="victron", kind=SignalKind.STATE)
+    store.update("ess.override.setpoint", None, source="victron", kind=SignalKind.STATE)
+    writes: list[tuple[str, float | int | None]] = []
+
+    def write(path: str, value: float | int | None) -> bool:  # angenommen, nie übernommen
+        writes.append((path, value))
+        return True
+
+    victron = VictronActuator(write, lambda: True)
+    session = Part2Session(
+        cfg,
+        store=store,
+        adapters=[],
+        actuators={victron.id: victron},
+        ask=lambda _question: False,
+        poll_s=0.01,
+        resend_s=0.05,
+    )
+    assert await session.set_and_confirm("victron", CommandKind.MAX_DISCHARGE, 0.0, 0.3) is None
+    assert writes == [("settings/0/Settings/CGwacs/MaxDischargePower", 0.0)]
+    assert await session.set_and_confirm("victron", CommandKind.GRID_SETPOINT, 1000.0, 0.3) is None
+    assert len([path for path, _ in writes if path == "hub4/0/Overrides/Setpoint"]) > 1
 
 
 # Warten, Festhalten, Start und Stopp
@@ -299,13 +424,17 @@ async def test_build_session_without_tessie_token_reads_no_vehicle(cfg: Config) 
         await session.stop()
 
 
-class RefusingTesla:
-    """Ein steuerbarer Tesla mit 16 A, dessen Befehle Tessie mit ``result: false`` beantwortet."""
+class StubTesla:
+    """Ein steuerbarer Tesla; der Cache zeigt immer 16 A, jeder Befehl endet mit ``answer``.
+
+    ``FAILED`` steht für ``result: false`` von Tessie, ``CONFIRMED`` für ``result: true``.
+    """
 
     id = "vehicle.tesla"
     confirm_timeout_s = 75.0
 
-    def __init__(self) -> None:
+    def __init__(self, answer: Confirmation) -> None:
+        self.answer = answer
         self.sent: list[tuple[CommandKind, CommandValue]] = []
 
     def capabilities(self, snap: Snapshot, now: datetime) -> Capabilities:
@@ -321,7 +450,9 @@ class RefusingTesla:
     def confirm(
         self, kind: CommandKind, value: CommandValue, snap: Snapshot
     ) -> tuple[Confirmation, str]:
-        return Confirmation.FAILED, "Tessie meldet result=false."
+        if self.answer == Confirmation.FAILED:
+            return Confirmation.FAILED, "Tessie meldet result=false."
+        return self.answer, ""
 
     def alarms(self, now: datetime) -> list[Alarm]:
         return []

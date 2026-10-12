@@ -31,8 +31,11 @@ class FakeEvcs:
     eine Änderung in VictronConnect.
 
     Mit ``accept=False`` nimmt der Cerbo keinen Auftrag an (``send`` liefert ``False`` und merkt
-    sich nichts). Mit ``charging_power_w`` meldet die EVCS beim Übernehmen von ``StartStop``
-    diese Leistung bei „an“ und 0 W bei „aus“, wie bei einem angesteckten, ladenden Fahrzeug.
+    sich nichts), wie der Victron-Adapter zwischen zwei Sitzungen; ``connected`` ist die Verbindung
+    zum Cerbo, die der Aktor abfragt. ``lose`` Aufträge gehen noch verloren: angenommen und
+    gemerkt, aber nie übernommen, wie in der Warteschlange einer Sitzung, die gerade endet. Mit
+    ``charging_power_w`` meldet die EVCS beim Übernehmen von ``StartStop`` diese Leistung bei „an“
+    und 0 W bei „aus“, wie bei einem angesteckten, ladenden Fahrzeug.
     """
 
     def __init__(
@@ -46,12 +49,17 @@ class FakeEvcs:
     ) -> None:
         self.store, self.delay_s, self.follow = store, delay_s, follow
         self.accept, self.charging_power_w = accept, charging_power_w
+        self.connected = True
+        self.lose = 0
         self.writes: list[tuple[str, float | int | None]] = []
 
     def send(self, path: str, value: float | int | None) -> bool:
         if not self.accept:
             return False
         self.writes.append((path, value))
+        if self.lose > 0:
+            self.lose -= 1
+            return True
         if self.follow:
             signal = "gx_set_current_a" if path.endswith("SetCurrent") else "gx_start_stop"
             asyncio.get_running_loop().call_later(self.delay_s, self._apply, signal, value)
@@ -85,7 +93,8 @@ def evcs_session(cfg: Config) -> Callable[..., tuple[Part2Session, FakeEvcs]]:
     Erweiterungen für weitere Fälle: ``react`` ordnet einer Rückfrage (genauer Text) eine
     Handlung zu, die nach einem Ja an der EVCS geschieht; ``asked`` sammelt die gestellten
     Rückfragen; ``config`` ersetzt die Beispielkonfiguration; ``accept`` und ``charging_power_w``
-    gehen an die ``FakeEvcs``.
+    gehen an die ``FakeEvcs``; ``resend_s`` (sonst der Standard der Sitzung) und ``unattended``
+    (wie ``--yes``) an die Sitzung.
     """
 
     def build(
@@ -99,6 +108,8 @@ def evcs_session(cfg: Config) -> Callable[..., tuple[Part2Session, FakeEvcs]]:
         config: Config | None = None,
         accept: bool = True,
         charging_power_w: float | None = None,
+        resend_s: float | None = None,
+        unattended: bool = False,
     ) -> tuple[Part2Session, FakeEvcs]:
         settings = config if config is not None else cfg
         store = StateStore(SystemClock())
@@ -124,7 +135,11 @@ def evcs_session(cfg: Config) -> Callable[..., tuple[Part2Session, FakeEvcs]]:
                 react[question](evcs)
             return reply
 
-        actuator = EvcsActuator("evcs", settings.wallboxes["evcs"], 40, evcs.send, lambda: True)
+        def connected() -> bool:
+            return evcs.connected
+
+        actuator = EvcsActuator("evcs", settings.wallboxes["evcs"], 40, evcs.send, connected)
+        extra = {} if resend_s is None else {"resend_s": resend_s}
         session = Part2Session(
             settings,
             store=store,
@@ -132,6 +147,8 @@ def evcs_session(cfg: Config) -> Callable[..., tuple[Part2Session, FakeEvcs]]:
             actuators={actuator.id: actuator},
             ask=ask,
             poll_s=0.01,
+            unattended=unattended,
+            **extra,
         )
         return session, evcs
 
@@ -146,7 +163,7 @@ class FakePart:
     der Sitzung (etwa um Werte zu schreiben). ``restored`` sagt, ob ``restore`` lief, ``calls``
     nennt ``restore`` und ``stop`` in der Reihenfolge ihrer Aufrufe; ``raise_in_restore`` bricht
     das Wiederherstellen gleich zu Beginn ab. ``sessions`` sind die gebauten Sitzungen mit ihrer
-    EVCS, ``ask`` und ``probe`` das, was ``main`` übergab.
+    EVCS, ``ask``, ``unattended`` und ``probe`` das, was ``main`` übergab.
     """
 
     raise_in_step: type[BaseException] | None = None
@@ -159,6 +176,7 @@ class FakePart:
     calls: list[str] = field(default_factory=list)
     sessions: list[tuple[Part2Session, FakeEvcs]] = field(default_factory=list)
     ask: Callable[[str], bool] | None = None
+    unattended: bool | None = None
     probe: Callable[[], Awaitable[list[Finding]]] | None = None
 
 
@@ -179,10 +197,12 @@ def fake_part(monkeypatch: pytest.MonkeyPatch, evcs_session) -> FakePart:
         monkeypatch.delenv(f"BINDAEMS_{name}", raising=False)
     monkeypatch.setenv("BINDAEMS_INTERNAL_TOKEN", "x" * 32)
 
-    def build_session(cfg: Config, secrets: Secrets, *, ask: Callable[[str], bool]) -> Part2Session:
-        session, evcs = evcs_session()
+    def build_session(
+        cfg: Config, secrets: Secrets, *, ask: Callable[[str], bool], unattended: bool = False
+    ) -> Part2Session:
+        session, evcs = evcs_session(unattended=unattended)
         fake.sessions.append((session, evcs))
-        fake.ask = ask
+        fake.ask, fake.unattended = ask, unattended
         restore, stop = session.restore, session.stop
 
         async def recorded_restore(*args: object, **kwargs: object) -> list[Finding]:

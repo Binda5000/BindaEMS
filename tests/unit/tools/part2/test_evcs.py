@@ -278,7 +278,10 @@ async def test_charging_off_not_confirmed_is_an_error(evcs_session) -> None:
     assert step(findings, "Laden aus und an") == Finding(
         "17.2-6", "Laden aus und an", "fail", "Laden aus: nicht bestätigt nach 0,2 s"
     )
-    assert [v for p, v in evcs.writes if p.endswith("StartStop")] == [0]  # kein „an“ danach
+    # Kein „an“ im Schritt; die 1 danach ist das Wiederherstellen nach dem Schritt.
+    assert [v for p, v in evcs.writes if p.endswith("StartStop")] == [0, 1]
+    after = findings.index(step(findings, "Laden aus und an")) + 1
+    assert (findings[after].title, findings[after].status) == ("Wiederherstellen: Laden an", "ok")
 
 
 # Fremde Änderung
@@ -333,7 +336,7 @@ async def test_current_after_the_interruption(evcs_session) -> None:
     assert step(findings, "Verbindung unterbrochen") == Finding(
         "17.2-6", "Verbindung unterbrochen", "info", "nach der Unterbrechung 12 A (vorher 10 A)"
     )
-    assert currents(evcs) == [6, 10, 16, 10]
+    assert currents(evcs) == [6, 10, 16, 10, 16]  # danach wieder die vorgefundenen 16 A
 
 
 async def test_old_readings_do_not_count_after_the_interruption(evcs_session) -> None:
@@ -378,12 +381,10 @@ async def test_probe_findings_come_before_the_watchdog_step(evcs_session) -> Non
         return [probe_finding]
 
     findings = await run_evcs(session, session.cfg, "evcs", probe=probe, timings=FAST)
-    assert findings[-2:] == [
-        probe_finding,
-        Finding(
-            "17.2-5", "Sicherer Strom über den Watchdog", "ok", "Watchdog setzte 6 A (vorher 10 A)"
-        ),
-    ]
+    after = findings.index(probe_finding) + 1
+    assert findings[after] == Finding(
+        "17.2-5", "Sicherer Strom über den Watchdog", "ok", "Watchdog setzte 6 A (vorher 10 A)"
+    )
 
 
 async def test_current_the_watchdog_did_not_set_is_an_error(evcs_session) -> None:
@@ -433,19 +434,109 @@ async def test_no_probe_without_the_changed_current(evcs_session) -> None:
     assert probed == []
 
 
-# Wiederherstellen nach dem Teil
+# Wiederherstellen nach jedem Schritt (Präzisierung 11)
 
 
-async def test_restore_brings_back_current_and_charging(evcs_session) -> None:
+async def test_each_step_is_undone_before_the_next(evcs_session) -> None:
     session, evcs = evcs_session(
         answers=[True, True, False, False],
         state={"wallbox.evcs.gx_set_current_a": 12, "wallbox.evcs.gx_start_stop": 0},
         hand_change_a=8,
     )
-    await run_evcs(session, session.cfg, "evcs", probe=no_probe, timings=FAST)
-    restored = await session.restore()
-    assert [(f.title, f.status) for f in restored] == [
+    findings = await run_evcs(session, session.cfg, "evcs", probe=no_probe, timings=FAST)
+    assert [(f.title, f.status) for f in findings][:9] == [
+        ("EVCS bereit", "ok"),
+        ("Strom 6 A", "ok"),
+        ("Strom 10 A", "ok"),
+        ("Strom 16 A", "ok"),
+        ("Wiederherstellen: Strom 12 A", "ok"),
+        ("Laden aus und an", "ok"),
         ("Wiederherstellen: Laden aus", "ok"),
+        ("Fremde Änderung", "ok"),
         ("Wiederherstellen: Strom 12 A", "ok"),
     ]
-    assert evcs.writes[-2:] == [("evcharger/40/StartStop", 0), ("evcharger/40/SetCurrent", 12)]
+    # erwartet wird der zuletzt bestätigte Strom, also der wiederhergestellte
+    assert step(findings, "Fremde Änderung").detail == "erkannt nach 3 Prüfungen (8 A statt 12 A)"
+    assert [v for p, v in evcs.writes if p.endswith("StartStop")] == [0, 1, 0]
+    assert currents(evcs) == [6, 10, 16, 12, 12]
+    assert await session.restore() == []  # am Ende ist nichts mehr offen
+
+
+async def test_charging_found_off_is_off_again_before_the_next_step(evcs_session) -> None:
+    seen: list[object] = []
+
+    def look(evcs: FakeEvcs) -> None:
+        seen.append(evcs.store.snapshot().ok("wallbox.evcs.gx_start_stop"))
+
+    session, _ = evcs_session(
+        answers=[True, True, False, False],
+        state={"wallbox.evcs.gx_start_stop": 0},
+        react={FOREIGN_QUESTION: look},
+    )
+    findings = await run_evcs(session, session.cfg, "evcs", probe=no_probe, timings=FAST)
+    assert seen == [0]  # bei der nächsten Rückfrage ist das Laden wieder aus
+    after = findings.index(step(findings, "Laden aus und an")) + 1
+    assert (findings[after].title, findings[after].status) == ("Wiederherstellen: Laden aus", "ok")
+
+
+async def test_value_back_at_its_original_is_not_written_again(evcs_session) -> None:
+    # vorgefunden 16 A: Der letzte Stromschritt endet dort, also kein weiteres Schreiben.
+    session, evcs = evcs_session(answers=[False] * 4)
+    findings = await run_evcs(session, session.cfg, "evcs", probe=no_probe, timings=FAST)
+    assert not any(f.title.startswith("Wiederherstellen") for f in findings)
+    assert await session.restore() == []
+    assert currents(evcs) == [6, 10, 16]
+
+
+# Hartnäckig innerhalb der Frist, auch für die Schritte selbst
+
+
+async def test_step_write_after_a_reconnect(evcs_session) -> None:
+    # Nach einer langen Rückfrage ist die Sitzung zum Cerbo weg und kommt erst wieder.
+    def reconnecting(evcs: FakeEvcs) -> None:
+        evcs.connected = evcs.accept = False
+        loop = asyncio.get_running_loop()
+        loop.call_later(0.05, setattr, evcs, "connected", True)
+        loop.call_later(0.1, setattr, evcs, "accept", True)
+
+    session, evcs = evcs_session(
+        answers=[True, False, False, False],
+        state={"wallbox.evcs.gx_start_stop": 1},
+        react={CHARGING_QUESTION: reconnecting},
+    )
+    findings = await run_evcs(session, session.cfg, "evcs", probe=no_probe, timings=ROOMY)
+    assert step(findings, "Laden aus und an").status == "ok"
+    assert [v for p, v in evcs.writes if p.endswith("StartStop")] == [0, 1]
+
+
+async def test_lost_step_write_is_sent_again(evcs_session) -> None:
+    session, evcs = evcs_session(answers=[False] * 4, resend_s=0.05)
+    evcs.lose = 1  # die erste Stromvorgabe geht mit der alten Sitzung verloren
+    findings = await run_evcs(session, session.cfg, "evcs", probe=no_probe, timings=ROOMY)
+    assert step(findings, "Strom 6 A").status == "ok"
+    assert currents(evcs) == [6, 6, 10, 16]
+
+
+# Mit --yes
+
+
+async def test_unattended_skips_the_steps_with_a_handgrip(evcs_session) -> None:
+    # Fremde Änderung und Unterbrechung brauchen den Betreiber; die Schreibschritte laufen.
+    asked: list[str] = []
+    session, evcs = evcs_session(
+        answers=[True, True],
+        state={"wallbox.evcs.gx_start_stop": 1},
+        asked=asked,
+        unattended=True,
+    )
+
+    async def probe() -> list[Finding]:
+        evcs.send("evcharger/40/SetCurrent", 6)
+        return []
+
+    findings = await run_evcs(session, session.cfg, "evcs", probe=probe, timings=FAST)
+    assert asked == [CHARGING_QUESTION, WATCHDOG_QUESTION]
+    for title in ("Fremde Änderung", "Verbindung unterbrochen"):
+        assert step(findings, title) == Finding("17.2-6", title, "info", "übersprungen (--yes)")
+    assert step(findings, "Laden aus und an").status == "ok"
+    assert step(findings, "Sicherer Strom über den Watchdog").status == "ok"
