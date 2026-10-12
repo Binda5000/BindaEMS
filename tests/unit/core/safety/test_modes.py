@@ -1,12 +1,17 @@
 from bindaems.core.safety.modes import (
+    REASON_HANDBACK_MODE,
     REASON_NOT_ALLOWED,
+    REASON_WATCHDOG_MODE,
     ModeInfo,
     effective_modes,
+    initially_owned,
+    live_wanted,
     watchdog_required,
 )
 from bindaems.shared.control import ActuatorMode, Intent
 
 LIVE, DRY = ActuatorMode.LIVE, ActuatorMode.DRY_RUN
+EVCS = "wallbox.evcs"
 
 
 def test_without_intent_everything_dry_run(limits) -> None:
@@ -40,8 +45,8 @@ def test_tesla_live_without_watchdog(limits_live) -> None:
 
 
 def test_watchdog_required_only_for_victron_and_evcs(limits, limits_live) -> None:
-    tesla = Intent(version=1, actuators={"vehicle.tesla": LIVE})
-    evcs = Intent(version=1, actuators={"wallbox.evcs": LIVE})
+    tesla = Intent(version=1, control=True, actuators={"vehicle.tesla": LIVE})
+    evcs = Intent(version=1, control=True, actuators={"wallbox.evcs": LIVE})
     assert watchdog_required(evcs, limits_live)
     assert not watchdog_required(tesla, limits_live)
     assert not watchdog_required(evcs, limits)
@@ -83,7 +88,98 @@ def test_first_applicable_reason_wins(limits) -> None:
 
 
 def test_watchdog_required_only_when_live_is_requested(limits_live) -> None:
-    dry = Intent(version=1, actuators={"victron": DRY, "wallbox.evcs": DRY})
+    dry = Intent(version=1, control=True, actuators={"victron": DRY, "wallbox.evcs": DRY})
     assert not watchdog_required(dry, limits_live)
-    assert not watchdog_required(Intent(version=1), limits_live)
-    assert watchdog_required(Intent(version=1, actuators={"victron": LIVE}), limits_live)
+    assert not watchdog_required(Intent(version=1, control=True), limits_live)
+    live = Intent(version=1, control=True, actuators={"victron": LIVE})
+    assert watchdog_required(live, limits_live)
+
+
+# Übergabe am Ende des Live-Betriebs und Bedarf des Watchdogs nur im Regelbetrieb (Plan 2b).
+
+
+def test_initially_owned_ignores_control(limits_live) -> None:
+    intent = Intent(version=1, control=False, actuators={EVCS: ActuatorMode.LIVE})
+    assert initially_owned(intent, limits_live) == {EVCS}
+    assert live_wanted(intent, limits_live) == frozenset()
+
+
+def test_required_needs_control_or_handback(limits_live) -> None:
+    off = Intent(version=1, control=False, actuators={EVCS: ActuatorMode.LIVE})
+    assert not watchdog_required(off, limits_live)
+    assert watchdog_required(off, limits_live, handing_back={EVCS})
+    assert watchdog_required(off.model_copy(update={"control": True}), limits_live)
+
+
+def test_handback_actor_is_live_with_reason(limits_live) -> None:
+    modes = effective_modes(Intent(version=1), limits_live, True, handing_back={EVCS})
+    assert modes[EVCS] == ModeInfo(
+        ActuatorMode.DRY_RUN, ActuatorMode.LIVE, ("Übergabe: Sicherwerte werden gesetzt.",)
+    )
+    unarmed = effective_modes(Intent(version=1), limits_live, False, handing_back={EVCS})
+    assert unarmed[EVCS].effective == ActuatorMode.DRY_RUN
+
+
+# Weitere Fälle zur Übergabe.
+
+ALL_LIVE = {"victron": LIVE, EVCS: LIVE, "vehicle.tesla": LIVE}
+
+
+def test_handback_reason_text() -> None:
+    assert REASON_HANDBACK_MODE == "Übergabe: Sicherwerte werden gesetzt."
+
+
+def test_live_wanted_needs_control_request_and_permission(limits, limits_live) -> None:
+    on = Intent(version=1, control=True, actuators={EVCS: LIVE, "vehicle.tesla": DRY})
+    assert live_wanted(on, limits_live) == {EVCS}
+    assert live_wanted(on, limits) == frozenset()  # nicht freigegeben
+    assert live_wanted(Intent(version=1, control=True, actuators=ALL_LIVE), limits_live) == {
+        "victron",
+        EVCS,
+        "vehicle.tesla",
+    }
+    assert live_wanted(None, limits_live) == frozenset()
+
+
+def test_initially_owned_needs_live_request_and_permission(limits, limits_live) -> None:
+    intent = Intent(version=1, actuators={"victron": LIVE, EVCS: DRY, "vehicle.tesla": LIVE})
+    assert initially_owned(intent, limits_live) == {"victron", "vehicle.tesla"}
+    assert initially_owned(intent, limits) == frozenset()
+    assert initially_owned(None, limits_live) == frozenset()
+
+
+def test_handback_needs_the_watchdog_only_for_victron_and_evcs(limits, limits_live) -> None:
+    assert watchdog_required(None, limits_live, handing_back={"victron"})
+    assert not watchdog_required(None, limits_live, handing_back={"vehicle.tesla"})
+    assert not watchdog_required(None, limits, handing_back={EVCS})  # nicht freigegeben
+    assert not watchdog_required(None, limits_live, handing_back={"kein.aktor"})
+
+
+def test_handback_keeps_a_live_request(limits_live) -> None:
+    # Regelbetrieb aus, die EVCS bleibt live angefordert: Sie wird übergeben.
+    off = Intent(version=1, actuators={EVCS: LIVE})
+    modes = effective_modes(off, limits_live, True, handing_back={EVCS})
+    assert modes[EVCS] == ModeInfo(LIVE, LIVE, (REASON_HANDBACK_MODE,))
+
+
+def test_handback_names_the_objection(limits, limits_live) -> None:
+    unarmed = effective_modes(None, limits_live, False, handing_back={EVCS})
+    assert unarmed[EVCS] == ModeInfo(DRY, DRY, (REASON_WATCHDOG_MODE,))
+    not_allowed = effective_modes(None, limits, True, handing_back={EVCS})
+    assert not_allowed[EVCS] == ModeInfo(DRY, DRY, (REASON_NOT_ALLOWED,))
+
+
+def test_tesla_handback_is_live_without_watchdog(limits_live) -> None:
+    modes = effective_modes(None, limits_live, False, handing_back={"vehicle.tesla"})
+    assert modes["vehicle.tesla"] == ModeInfo(DRY, LIVE, (REASON_HANDBACK_MODE,))
+
+
+def test_handback_leaves_the_other_actuators_alone(limits_live) -> None:
+    intent = Intent(version=1, control=True, actuators={"victron": LIVE})
+    modes = effective_modes(intent, limits_live, True, handing_back={EVCS, "kein.aktor"})
+    assert list(modes) == list(limits_live.actuators)
+    assert modes["victron"] == ModeInfo(LIVE, LIVE, ())
+    assert modes["vehicle.tesla"] == ModeInfo(DRY, DRY, ())
+    assert modes == effective_modes(intent, limits_live, True) | {
+        EVCS: ModeInfo(DRY, LIVE, (REASON_HANDBACK_MODE,))
+    }

@@ -121,7 +121,7 @@ async def test_release_when_live_dropped(runtime_env) -> None:
     rt, _, clock = runtime_env(
         state=GOOD_STATE, configure=allow_evcs_live, watchdog_send=lambda n: sent.append(n) or True
     )
-    rt.submit_intent(Intent(version=1, actuators={"wallbox.evcs": ActuatorMode.LIVE}))
+    rt.submit_intent(Intent(version=1, control=True, actuators={"wallbox.evcs": ActuatorMode.LIVE}))
     run(rt, clock, 2)
     rt.submit_intent(Intent(version=2))
     run(rt, clock, 1)
@@ -133,7 +133,7 @@ async def test_shutdown_sends_no_release(runtime_env) -> None:
     rt, _, clock = runtime_env(
         state=GOOD_STATE, configure=allow_evcs_live, watchdog_send=lambda n: sent.append(n) or True
     )
-    rt.submit_intent(Intent(version=1, actuators={"wallbox.evcs": ActuatorMode.LIVE}))
+    rt.submit_intent(Intent(version=1, control=True, actuators={"wallbox.evcs": ActuatorMode.LIVE}))
     run(rt, clock, 2)
     await rt.shutdown()
     assert sent == [1]
@@ -380,7 +380,7 @@ async def test_health_reports_intent_live_actuator_and_watchdog(runtime_env) -> 
 
 async def test_unarmed_watchdog_keeps_live_request_in_dry_run(runtime_env) -> None:
     rt, _, clock = runtime_env(state=GOOD_STATE, configure=allow_evcs_live)
-    rt.submit_intent(Intent(version=1, actuators={"wallbox.evcs": ActuatorMode.LIVE}))
+    rt.submit_intent(Intent(version=1, control=True, actuators={"wallbox.evcs": ActuatorMode.LIVE}))
     run(rt, clock, 1)
     evcs = rt.health().actuators[1]
     assert (evcs["requested"], evcs["effective"], evcs["reasons"]) == (
@@ -429,7 +429,7 @@ async def test_failed_cycle_sends_no_heartbeat(runtime_env, monkeypatch) -> None
     rt, _, _ = runtime_env(
         configure=allow_evcs_live, watchdog_send=lambda n: sent.append(n) or True
     )
-    rt.submit_intent(Intent(version=1, actuators={"wallbox.evcs": ActuatorMode.LIVE}))
+    rt.submit_intent(Intent(version=1, control=True, actuators={"wallbox.evcs": ActuatorMode.LIVE}))
 
     def broken(*args: object) -> list[Alarm]:
         raise RuntimeError("Testfehler beim Aktualisieren der Alarme")
@@ -445,7 +445,7 @@ async def test_failed_cycle_sends_no_heartbeat(runtime_env, monkeypatch) -> None
 
 async def test_heartbeat_goes_through_the_victron_adapter(runtime_env, cfg) -> None:
     rt, _, _ = runtime_env(state=GOOD_STATE, configure=allow_evcs_live)
-    rt.submit_intent(Intent(version=1, actuators={"wallbox.evcs": ActuatorMode.LIVE}))
+    rt.submit_intent(Intent(version=1, control=True, actuators={"wallbox.evcs": ActuatorMode.LIVE}))
     transport = FakeTransport([rt.cycle_once])  # ein Zyklus während der MQTT-Sitzung
     mqtt = cfg.victron.mqtt.model_copy(update={"portal_id": P})
     victron = VictronMqttAdapter(
@@ -459,7 +459,7 @@ async def test_heartbeat_goes_through_the_victron_adapter(runtime_env, cfg) -> N
 
 async def test_no_heartbeat_without_victron_adapter(runtime_env) -> None:
     rt, _, clock = runtime_env(state=GOOD_STATE, configure=allow_evcs_live)
-    rt.submit_intent(Intent(version=1, actuators={"wallbox.evcs": ActuatorMode.LIVE}))
+    rt.submit_intent(Intent(version=1, control=True, actuators={"wallbox.evcs": ActuatorMode.LIVE}))
     run(rt, clock, 1)
     watchdog = rt.health().watchdog
     assert (watchdog["required"], watchdog["heartbeat"]) == (True, "off")

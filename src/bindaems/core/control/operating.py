@@ -5,6 +5,9 @@ Zustand der core steht und warum. Von OBSERVE oder SAFE nach CONTROL geht es nur
 Es ist offen, wenn keine ``safe_reasons`` vorliegen, die kritischen Messwerte seit 30 s frisch
 sind, die 3 Phasen bestätigt sind und der Watchdog scharf ist, sofern der Betrieb ihn braucht.
 
+Endet der Regelbetrieb, während Aktoren noch übergeben werden (Plan 2b, Präzisierung 3), geht der
+core erst nach der Übergabe nach OBSERVE; bis dahin schreibt er ihre Sicherwerte.
+
 Die Schicht ist rein: Die Zeit kommt als Argument, sie loggt und sendet nichts. Wechselt der
 Zustand, liefert ``step`` eine ``Transition``; Stream-Meldung und Log-Zeile sind Sache der Laufzeit.
 """
@@ -22,6 +25,7 @@ REASON_CONTROL_OFF: Final = "Regelbetrieb ist aus."
 REASON_NOT_FRESH: Final = "Kritische Messwerte noch nicht 30 s aktuell."
 REASON_PHASES: Final = "3 Phasen mit je einem Gerät nicht bestätigt."
 REASON_WATCHDOG: Final = REASON_WATCHDOG_MODE  # gleicher Text, eine Quelle
+REASON_HANDBACK: Final = "Regelbetrieb wird beendet: Übergabe der Aktoren läuft."
 
 _RUNNING: Final = frozenset({OperatingState.CONTROL, OperatingState.DEGRADED})
 
@@ -39,6 +43,7 @@ class OperatingInputs:
     - ``watchdog_armed``: Der Watchdog ist scharf.
     - ``safe_reasons``: Gründe für den sicheren Zustand, etwa veraltete Cerbo-Daten.
     - ``degraded_reasons``: Gründe für den eingeschränkten Betrieb, etwa gesperrte Teilsysteme.
+    - ``handback_pending``: Mindestens ein Aktor wird gerade übergeben (Plan 2b, Präzisierung 3).
     """
 
     control_requested: bool
@@ -48,6 +53,7 @@ class OperatingInputs:
     watchdog_armed: bool
     safe_reasons: tuple[str, ...] = ()
     degraded_reasons: tuple[str, ...] = ()
+    handback_pending: bool = False
 
 
 @dataclass(frozen=True)
@@ -71,17 +77,21 @@ class OperatingStateMachine:
 
     START, OBSERVE und SAFE:
 
-    1. Regelbetrieb aus: OBSERVE mit ``REASON_CONTROL_OFF``.
+    1. Regelbetrieb aus: in SAFE mit ``handback_pending`` bleibt es SAFE mit ``REASON_HANDBACK``,
+       sonst OBSERVE mit ``REASON_CONTROL_OFF``. In START und OBSERVE schreibt der core nicht, eine
+       Übergabe hält ihn dort also nicht.
     2. Gate zu: bleibt in SAFE, sonst OBSERVE; die Gründe sind die Gate-Gründe.
     3. Aus START: OBSERVE ohne Gründe, denn der erste Schritt schaltet nie weiter.
     4. Gate offen: DEGRADED mit den ``degraded_reasons``, wenn es welche gibt, sonst CONTROL.
 
     CONTROL und DEGRADED:
 
-    1. Regelbetrieb aus: OBSERVE mit ``REASON_CONTROL_OFF``.
-    2. ``safe_reasons`` oder Phasen nicht bestätigt: SAFE mit den ``safe_reasons`` und, falls die
+    1. Regelbetrieb aus ohne ``handback_pending``: OBSERVE mit ``REASON_CONTROL_OFF``.
+    2. Regelbetrieb aus mit ``handback_pending``: SAFE wie in Regel 3, mit ``REASON_HANDBACK`` am
+       Ende der Gründe; sonst DEGRADED mit ``REASON_HANDBACK`` allein.
+    3. ``safe_reasons`` oder Phasen nicht bestätigt: SAFE mit den ``safe_reasons`` und, falls die
        Phasen nicht stimmen, ``REASON_PHASES``.
-    3. Sonst DEGRADED mit den ``degraded_reasons`` und, falls der Watchdog benötigt wird und nicht
+    4. Sonst DEGRADED mit den ``degraded_reasons`` und, falls der Watchdog benötigt wird und nicht
        scharf ist, ``REASON_WATCHDOG``; gibt es keinen Grund, CONTROL.
 
     ``data_fresh`` wirkt nur am Gate. Veralten die Cerbo-Daten im laufenden Betrieb, melden die
@@ -127,9 +137,21 @@ class OperatingStateMachine:
         return transition
 
 
+def gate_ready_except_watchdog(inputs: OperatingInputs) -> bool:
+    """Ist das Gate bis auf den Watchdog offen? (Plan 2b, Präzisierung 2: Scharfschalten)
+
+    Ja bei Regelbetrieb, ohne ``safe_reasons``, mit seit 30 s frischen Messwerten und bestätigten
+    Phasen. ``watchdog_required``, ``watchdog_armed``, ``degraded_reasons`` und
+    ``handback_pending`` zählen nicht.
+    """
+    return inputs.control_requested and not _gate_reasons_except_watchdog(inputs)
+
+
 def _decide_gated(state: OperatingState, inputs: OperatingInputs) -> _Outcome:
     """START, OBSERVE und SAFE: Regelbetrieb und Gate entscheiden, ob es weitergeht."""
     if not inputs.control_requested:
+        if state == OperatingState.SAFE and inputs.handback_pending:
+            return OperatingState.SAFE, (REASON_HANDBACK,)
         return OperatingState.OBSERVE, (REASON_CONTROL_OFF,)
     gate = _gate_reasons(inputs)
     if gate:
@@ -141,12 +163,16 @@ def _decide_gated(state: OperatingState, inputs: OperatingInputs) -> _Outcome:
 
 
 def _decide_running(inputs: OperatingInputs) -> _Outcome:
-    """CONTROL und DEGRADED: Regelbetrieb, Gründe für SAFE, sonst die für DEGRADED."""
-    if not inputs.control_requested:
-        return OperatingState.OBSERVE, (REASON_CONTROL_OFF,)
+    """CONTROL und DEGRADED: Regelbetrieb und Übergabe, Gründe für SAFE, sonst die für DEGRADED."""
     safe = list(inputs.safe_reasons)
     if not inputs.phases_ok:
         safe.append(REASON_PHASES)
+    if not inputs.control_requested:
+        if not inputs.handback_pending:
+            return OperatingState.OBSERVE, (REASON_CONTROL_OFF,)
+        if safe:
+            return OperatingState.SAFE, (*safe, REASON_HANDBACK)
+        return OperatingState.DEGRADED, (REASON_HANDBACK,)
     if safe:
         return OperatingState.SAFE, tuple(safe)
     degraded = list(inputs.degraded_reasons)
@@ -163,14 +189,20 @@ def _running_state(degraded_reasons: tuple[str, ...]) -> _Outcome:
 
 def _gate_reasons(inputs: OperatingInputs) -> tuple[str, ...]:
     """Die Gründe, aus denen das Gate zu ist, in fester Reihenfolge; leer, wenn es offen ist."""
+    reasons = _gate_reasons_except_watchdog(inputs)
+    if _watchdog_missing(inputs):
+        reasons.append(REASON_WATCHDOG)
+    return tuple(reasons)
+
+
+def _gate_reasons_except_watchdog(inputs: OperatingInputs) -> list[str]:
+    """Die Gate-Gründe ohne den Watchdog: ``safe_reasons``, Frische, Phasen."""
     reasons = list(inputs.safe_reasons)
     if not inputs.data_fresh:
         reasons.append(REASON_NOT_FRESH)
     if not inputs.phases_ok:
         reasons.append(REASON_PHASES)
-    if _watchdog_missing(inputs):
-        reasons.append(REASON_WATCHDOG)
-    return tuple(reasons)
+    return reasons
 
 
 def _watchdog_missing(inputs: OperatingInputs) -> bool:

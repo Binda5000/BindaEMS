@@ -4,11 +4,17 @@ Die Bedienung fordert eine Betriebsart an (``Intent``). Live wird sie nur, wenn 
 den Aktor dafür freigibt (``live_allowed``) und, bei Victron und EVCS, der Watchdog am Cerbo scharf
 ist. Sonst läuft der Aktor im Dry-Run, und die Antwort nennt den Grund.
 
+Live gewünscht ist ein Aktor nur im Regelbetrieb (Plan 2b, Präzisierung 2). Hält ein Aktor noch
+Werte des EMS und ist nicht mehr live gewünscht, wird er übergeben (Präzisierung 3): Er bekommt
+seine Sicherwerte und ist dafür wirksam live, sofern er darf. Welche Aktoren übergeben werden,
+kommt als ``handing_back`` von außen.
+
 Die Schicht ist rein: Zustand und Zeit kommen als Argumente.
 """
 
 from __future__ import annotations
 
+from collections.abc import Set as AbstractSet
 from dataclasses import dataclass
 from typing import Final
 
@@ -17,14 +23,20 @@ from bindaems.shared.control import ActuatorMode, Intent
 
 REASON_NOT_ALLOWED: Final = "In config.yaml nicht für den Live-Betrieb freigegeben (live_allowed)."
 REASON_WATCHDOG_MODE: Final = "Watchdog am Cerbo ist nicht scharf."
+REASON_HANDBACK_MODE: Final = "Übergabe: Sicherwerte werden gesetzt."
 
 
 @dataclass(frozen=True)
 class ModeInfo:
     """Angeforderte und wirksame Betriebsart eines Aktors.
 
-    ``reasons`` ist leer, wenn die wirksame der angeforderten Betriebsart entspricht. Sonst nennt
-    es, warum ein angeforderter Live-Betrieb nicht gilt: den ersten zutreffenden Grund.
+    ``reasons`` nennt, warum die wirksame Betriebsart nicht einfach die angeforderte ist:
+
+    - ein angeforderter Live-Betrieb, der nicht gilt: der erste zutreffende Grund
+    - eine Übergabe: ``REASON_HANDBACK_MODE``, solange der Aktor dafür live ist, sonst der Grund,
+      aus dem er es nicht ist
+
+    Sonst ist ``reasons`` leer.
     """
 
     requested: ActuatorMode
@@ -33,7 +45,11 @@ class ModeInfo:
 
 
 def effective_modes(
-    intent: Intent | None, limits: HardLimits, watchdog_armed: bool
+    intent: Intent | None,
+    limits: HardLimits,
+    watchdog_armed: bool,
+    *,
+    handing_back: AbstractSet[str] = frozenset(),
 ) -> dict[str, ModeInfo]:
     """Angeforderte und wirksame Betriebsart je Aktor, in der Reihenfolge von ``limits.actuators``.
 
@@ -42,10 +58,18 @@ def effective_modes(
     Aktor den Watchdog braucht, mit scharfem Watchdog. Sonst gilt ``DRY_RUN``, bei angefordertem
     Live-Betrieb mit dem ersten zutreffenden Grund (``REASON_NOT_ALLOWED`` vor
     ``REASON_WATCHDOG_MODE``).
+
+    Ein Aktor in ``handing_back`` wird übergeben. Er behält die angeforderte Betriebsart und ist
+    wirksam ``LIVE`` mit ``REASON_HANDBACK_MODE``, wenn dieselben Bedingungen nichts einwenden
+    (Freigabe, Watchdog); sonst ``DRY_RUN`` mit dem Einwand. Was nicht im Katalog steht, zählt
+    nicht.
     """
     modes: dict[str, ModeInfo] = {}
     for actuator, spec in limits.actuators.items():
         requested = _requested(intent, actuator)
+        if actuator in handing_back:
+            modes[actuator] = _handback_mode(requested, spec, watchdog_armed)
+            continue
         if requested != ActuatorMode.LIVE:
             modes[actuator] = ModeInfo(requested, ActuatorMode.DRY_RUN, ())
             continue
@@ -57,16 +81,43 @@ def effective_modes(
     return modes
 
 
-def watchdog_required(intent: Intent | None, limits: HardLimits) -> bool:
-    """Braucht der Betrieb den Watchdog?
+def live_wanted(intent: Intent | None, limits: HardLimits) -> frozenset[str]:
+    """Die Aktoren, die live gewünscht sind: Regelbetrieb an, live angefordert, ``live_allowed``.
 
-    Ja, wenn ein Aktor, der ihn braucht (Victron, EVCS), freigegeben (``live_allowed``) und live
-    angefordert ist. Ob der Watchdog scharf ist, spielt dabei keine Rolle.
+    Ob der Watchdog scharf ist, spielt keine Rolle; das entscheidet ``effective_modes``.
     """
+    if intent is None or not intent.control:
+        return frozenset()
+    return initially_owned(intent, limits)
+
+
+def initially_owned(intent: Intent | None, limits: HardLimits) -> frozenset[str]:
+    """Die Aktoren, die beim Start als owned gelten (Plan 2b, Präzisierung 3).
+
+    Das sind alle, die die gespeicherte Absicht live anfordert und ``config.yaml`` freigibt, ohne
+    Rücksicht auf den Regelbetrieb: Ihr Gerät kann noch Werte vom letzten Lauf halten.
+    """
+    return frozenset(
+        actuator
+        for actuator, spec in limits.actuators.items()
+        if spec.live_allowed and _requested(intent, actuator) == ActuatorMode.LIVE
+    )
+
+
+def watchdog_required(
+    intent: Intent | None, limits: HardLimits, *, handing_back: AbstractSet[str] = frozenset()
+) -> bool:
+    """Braucht der Betrieb den Watchdog? (Plan 2b, Präzisierung 2)
+
+    Ja, wenn ein Aktor, der ihn braucht (Victron, EVCS), freigegeben ist (``live_allowed``) und
+    live gewünscht ist (``live_wanted``, also nur im Regelbetrieb) oder gerade übergeben wird
+    (``handing_back``). Ob der Watchdog scharf ist, spielt dabei keine Rolle.
+    """
+    wanted = live_wanted(intent, limits)
     return any(
         spec.needs_watchdog
         and spec.live_allowed
-        and _requested(intent, actuator) == ActuatorMode.LIVE
+        and (actuator in wanted or actuator in handing_back)
         for actuator, spec in limits.actuators.items()
     )
 
@@ -76,6 +127,14 @@ def _requested(intent: Intent | None, actuator: str) -> ActuatorMode:
     if intent is None:
         return ActuatorMode.DRY_RUN
     return intent.actuators.get(actuator, ActuatorMode.DRY_RUN)
+
+
+def _handback_mode(requested: ActuatorMode, spec: ActuatorSpec, watchdog_armed: bool) -> ModeInfo:
+    """Betriebsart eines Aktors, der übergeben wird: live für seine Sicherwerte, wenn er darf."""
+    denial = _live_denial(spec, watchdog_armed)
+    if denial is None:
+        return ModeInfo(requested, ActuatorMode.LIVE, (REASON_HANDBACK_MODE,))
+    return ModeInfo(requested, ActuatorMode.DRY_RUN, (denial,))
 
 
 def _live_denial(spec: ActuatorSpec, watchdog_armed: bool) -> str | None:

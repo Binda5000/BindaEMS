@@ -7,12 +7,14 @@ from tests.helpers import T0
 
 from bindaems.core.control.operating import (
     REASON_CONTROL_OFF,
+    REASON_HANDBACK,
     REASON_NOT_FRESH,
     REASON_PHASES,
     REASON_WATCHDOG,
     OperatingInputs,
     OperatingStateMachine,
     Transition,
+    gate_ready_except_watchdog,
 )
 from bindaems.core.safety.modes import REASON_WATCHDOG_MODE
 from bindaems.shared.control import OperatingState
@@ -137,13 +139,14 @@ def test_dataclass_fields() -> None:
         "watchdog_armed",
         "safe_reasons",
         "degraded_reasons",
+        "handback_pending",
     ]
     assert [f.name for f in fields(Transition)] == ["previous", "state", "reasons", "ts"]
 
 
 def test_inputs_reasons_default_to_empty() -> None:
     i = OperatingInputs(True, True, True, False, False)
-    assert (i.safe_reasons, i.degraded_reasons) == ((), ())
+    assert (i.safe_reasons, i.degraded_reasons, i.handback_pending) == ((), (), False)
 
 
 def test_inputs_and_transition_are_frozen() -> None:
@@ -340,3 +343,130 @@ def test_a_run_through_all_states() -> None:
         since = S(second) if changed else since
         assert (machine.state, machine.reasons, machine.since) == (state, reasons, since)
         previous = state
+
+
+# --- Übergabe am Ende des Live-Betriebs (Plan 2b) ----------------------------------------------
+
+
+def test_control_off_waits_for_handback() -> None:
+    machine = in_control()  # vorhandener Helfer: Automat in CONTROL
+    machine.step(T0, inputs(control_requested=False, handback_pending=True))
+    assert (machine.state, machine.reasons) == (
+        OperatingState.DEGRADED,
+        ("Regelbetrieb wird beendet: Übergabe der Aktoren läuft.",),
+    )
+    machine.step(T0, inputs(control_requested=False))
+    assert machine.state == OperatingState.OBSERVE
+
+
+def test_gate_ready_except_watchdog() -> None:
+    assert gate_ready_except_watchdog(inputs(watchdog_required=True, watchdog_armed=False))
+    assert not gate_ready_except_watchdog(inputs(data_fresh=False))
+
+
+# Weitere Fälle zur Übergabe und zum Gate ohne Watchdog.
+
+OFF = {"control_requested": False, "handback_pending": True}
+
+
+def test_handback_reason_text() -> None:
+    assert REASON_HANDBACK == "Regelbetrieb wird beendet: Übergabe der Aktoren läuft."
+
+
+def test_handback_from_degraded_hides_the_degraded_reasons() -> None:
+    machine = in_control()
+    machine.step(S(2), inputs(degraded_reasons=("x",), watchdog_required=True))
+    assert machine.state is O.DEGRADED
+    assert (
+        machine.step(S(3), inputs(**OFF, degraded_reasons=("x",), watchdog_required=True)) is None
+    )
+    assert (machine.state, machine.reasons) == (O.DEGRADED, (REASON_HANDBACK,))
+
+
+@pytest.mark.parametrize(
+    ("trigger", "reasons"),
+    [
+        ({"safe_reasons": ("Netzausfall (Inselbetrieb).",)}, ("Netzausfall (Inselbetrieb).",)),
+        ({"phases_ok": False}, (REASON_PHASES,)),
+        ({"safe_reasons": ("S",), "phases_ok": False}, ("S", REASON_PHASES)),
+    ],
+)
+@pytest.mark.parametrize("before", [{}, {"degraded_reasons": ("x",)}])
+def test_handback_goes_safe_on_safe_reasons(
+    before: dict[str, Any], trigger: dict[str, Any], reasons: tuple[str, ...]
+) -> None:
+    machine = in_control()
+    machine.step(S(2), inputs(**before))
+    previous = machine.state
+    t = machine.step(S(3), inputs(**OFF, **trigger))
+    assert t == Transition(previous, O.SAFE, (*reasons, REASON_HANDBACK), S(3))
+
+
+def test_safe_keeps_waiting_for_the_handback() -> None:
+    machine = in_control()
+    machine.step(S(2), inputs(safe_reasons=("S",)))
+    assert machine.step(S(3), inputs(**OFF, safe_reasons=("S",))) is None
+    assert (machine.state, machine.reasons) == (O.SAFE, (REASON_HANDBACK,))
+    assert machine.step(S(4), inputs(**OFF)) is None  # auch ohne Gründe für SAFE
+    assert (machine.state, machine.reasons) == (O.SAFE, (REASON_HANDBACK,))
+    t = machine.step(S(5), inputs(control_requested=False))
+    assert t == Transition(O.SAFE, O.OBSERVE, (REASON_CONTROL_OFF,), S(5))
+
+
+def test_degraded_handback_ends_in_observe_with_the_control_off_reason() -> None:
+    machine = in_control()
+    machine.step(S(2), inputs(**OFF))
+    t = machine.step(S(3), inputs(control_requested=False))
+    assert t == Transition(O.DEGRADED, O.OBSERVE, (REASON_CONTROL_OFF,), S(3))
+
+
+@pytest.mark.parametrize("first", [{}, {"control_requested": False}])
+def test_observe_does_not_wait_for_a_handback(first: dict[str, Any]) -> None:
+    # In START und OBSERVE schreibt der core nicht und übergibt deshalb nichts.
+    machine = OperatingStateMachine()
+    machine.step(T0, inputs(**first))
+    assert machine.step(S(1), inputs(**OFF)) is None
+    assert (machine.state, machine.reasons) == (O.OBSERVE, (REASON_CONTROL_OFF,))
+
+
+def test_first_step_with_a_pending_handback_goes_to_observe() -> None:
+    t = OperatingStateMachine().step(T0, inputs(**OFF))
+    assert t == Transition(O.START, O.OBSERVE, (REASON_CONTROL_OFF,), T0)
+
+
+def test_handback_with_control_on_changes_nothing() -> None:
+    # Ein Aktor geht in den Dry-Run, der Regelbetrieb läuft weiter: Zustand wie in Plan 2a.
+    machine = in_control()
+    assert machine.step(S(2), inputs(handback_pending=True)) is None
+    assert (machine.state, machine.reasons) == (O.CONTROL, ())
+    t = machine.step(S(3), inputs(handback_pending=True, safe_reasons=("S",)))
+    assert t == Transition(O.CONTROL, O.SAFE, ("S",), S(3))
+    t = machine.step(S(4), inputs(handback_pending=True))
+    assert t == Transition(O.SAFE, O.CONTROL, (), S(4))
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        {},
+        {"watchdog_required": True},
+        {"watchdog_armed": True},
+        {"degraded_reasons": ("x",)},
+        {"handback_pending": True},
+    ],
+)
+def test_gate_ready_ignores_watchdog_and_degraded_reasons(change: dict[str, Any]) -> None:
+    assert gate_ready_except_watchdog(inputs(**change))
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"control_requested": False},
+        {"safe_reasons": ("Netzausfall (Inselbetrieb).",)},
+        {"data_fresh": False},
+        {"phases_ok": False},
+    ],
+)
+def test_gate_not_ready_without_one_of_the_other_conditions(change: dict[str, Any]) -> None:
+    assert not gate_ready_except_watchdog(inputs(**change, watchdog_required=True))
