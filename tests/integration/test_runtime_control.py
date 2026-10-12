@@ -1189,18 +1189,21 @@ async def test_tesla_current_is_watched_only_once_the_cache_shows_it(
     state |= {"system.active_in_source": 240}
     run(rt, clock, 1)  # SAFE bei 31 s: Strom 5 A und Laden aus an Tessie
     await asyncio.sleep(0.01)  # Tessie bestätigt beide
-    state |= {"system.active_in_source": 1}  # Netz wieder da
-    # Die erste frische Meldung zeigt noch 16 A: Der Aktor wiederholt den Strombefehl einmal
-    # (Tessie bestätigt Befehle auf oder von 5 A, ohne dass das Auto sie übernimmt).
-    run(rt, clock, 2)
+    # Der Cache zeigt weiter 16 A: Tessie bestätigt Befehle auf oder von 5 A, ohne dass das Auto
+    # sie übernimmt. Die Meldungen bis SETTLE_S nach der Bestätigung (bei 32 s) zählen noch nicht.
+    run(rt, clock, 10)
+    await asyncio.sleep(0.01)
+    assert amps.call_count == 1
+    # 42 s: nicht übernommen; der sichere Zustand sendet 5 A erneut, durch die Safety-Schicht
+    run(rt, clock, 1)
     await asyncio.sleep(0.01)
     assert amps.call_count == 2
-    run(rt, clock, 28)  # der Cache zeigt noch 16 A: drei Prüfungen, aber noch keine Erwartung
-    assert locked(rt)["vehicle.tesla"] == []
-    state |= {"vehicle.tesla.charge_amps": 5}
-    run(rt, clock, 1)  # der Cache zeigt 5 A: ab jetzt erwartet
+    assert locked(rt)["vehicle.tesla"] == []  # die 16 A im Cache sind keine fremde Änderung
+    state |= {"vehicle.tesla.charge_amps": 5, "system.active_in_source": 1}  # übernommen, Netz da
+    run(rt, clock, 11)  # 53 s: die Meldung zählt, bestätigt; ab jetzt erwartet
     state |= {"vehicle.tesla.charge_amps": 10}
     run(rt, clock, 30)
+    assert amps.call_count == 2
     assert locked(rt)["vehicle.tesla"] == [
         "Tesla Model 3: Strom von außen geändert (10 A statt 5 A)."
     ]

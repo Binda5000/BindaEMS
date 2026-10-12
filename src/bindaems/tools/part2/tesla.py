@@ -10,9 +10,11 @@ größte Phasenstrom (``wallbox.<twc>.l1.current_a`` bis ``l3``).
    nicht wiederherstellen); nach dem Start wartet der Schritt bis ``confirm_s`` auf die ersten
    Werte von Tessie und Wall Connector. Sonst endet der Teil ohne Schreiben.
 2. **Ladestrom 10 A** (falls zwischen Mindest- und Höchststrom) und **Verhalten bei** ``min_a``:
-   Tessie bestätigt den Befehl, dann wartet der Schritt bis ``effect_s``, bis der Strom am Wall
-   Connector höchstens 1,5 A vom Sollstrom abweicht. Ist kein Fahrzeug am Wall Connector oder lag
-   der Strom dort schon beim Sollstrom, ist die Wirkung nicht messbar. Das steht im Befund.
+   Tessie bestätigt den Befehl, und der Tessie-Cache zeigt den Strom (sonst sendet die Sitzung ihn
+   einmal erneut, ``NOT_TAKEN``). Ab dem Senden und bis ``effect_s`` nach der Bestätigung wartet
+   der Schritt, bis der Strom am Wall Connector höchstens 1,5 A vom Sollstrom abweicht. Ist kein
+   Fahrzeug am Wall Connector oder lag der Strom dort schon beim Sollstrom, ist die Wirkung nicht
+   messbar. Das steht im Befund.
 3. **Laden aus und an** (Rückfrage): Die Rückfrage hält den Adapter von Tessie an, und das Auto
    kann inzwischen schlafen. Nach der Antwort wartet der Schritt darum bis ``confirm_s`` auf neue
    Werte von Tessie; kommen keine, endet er mit FEHLER, und es geht nichts hinaus. Dann bestätigt
@@ -45,7 +47,13 @@ from bindaems.shared.config import Config, TwcConfig, VehicleConfig
 from bindaems.shared.control import CommandKind, CommandValue, vehicle_actuator
 from bindaems.shared.domain import Quality, Snapshot
 from bindaems.shared.numbers import de, finite_number
-from bindaems.tools.part2.session import STALE_AFTER_QUESTION, Part2Session, minutes, seconds
+from bindaems.tools.part2.session import (
+    REPEATED,
+    STALE_AFTER_QUESTION,
+    Part2Session,
+    minutes,
+    seconds,
+)
 from bindaems.tools.verify_checks import Finding, Status
 
 ITEM: Final = "17.2-7"
@@ -192,25 +200,40 @@ class _TeslaSteps:
     async def _current(self, title: str, amps: int) -> None:
         """Setzt den Strom; Tessie bestätigt, und der Wall Connector soll ihm folgen.
 
-        Die Zeit am Wall Connector zählt ab dem Senden. Lag der Strom dort schon bei der Bestätigung
-        am Sollwert, ist es die Zeit bis dahin: Die Wirkung kam spätestens dann.
+        Bestätigt ist der Strom erst, wenn auch der Tessie-Cache ihn zeigt (``TeslaActuator``), oft
+        10 bis 40 s nach dem Senden. Den Wall Connector beobachtet der Schritt darum schon ab dem
+        Senden: Seine Zeit zählt ab dem Senden, bis der Strom dort beim Sollwert ist. Nach der
+        Bestätigung wartet der Schritt noch bis ``effect_s`` darauf.
         """
         session = self._session
         before = session.snapshot()
-        tessie = await self._set(CommandKind.CURRENT, float(amps))
-        if tessie is None:
-            self._record(title, "fail", self._failure())
-            return
-        detail = f"Tessie {seconds(tessie)} s"
         reason = self._unmeasurable(before)
         if reason is None and self._at_current(before, amps):
             reason = f"Strom am Wall Connector schon bei {de(amps)} A"
-        if reason is not None:
-            self._record(title, "ok", f"{detail}; Wirkung nicht messbar ({reason})")
-            return
-        waited = await session.wait_for(lambda snap: self._at_current(snap, amps), self._t.effect_s)
+        watch = None
+        if reason is None:  # über den ganzen Schritt: Senden, Wiederholung, Bestätigung, Wirkung
+            limit = 2 * self._t.confirm_s + self._t.effect_s
+            arrived = session.wait_for(lambda snap: self._at_current(snap, amps), limit)
+            watch = asyncio.create_task(arrived)
+        try:
+            confirmed = await self._set(CommandKind.CURRENT, float(amps))
+            if confirmed is None:
+                self._record(title, "fail", self._failure())
+                return
+            detail = f"bestätigt nach {seconds(confirmed)} s"
+            if session.repeated:
+                detail += REPEATED
+            if watch is None:
+                self._record(title, "ok", f"{detail}; Wirkung nicht messbar ({reason})")
+                return
+            running = watch
+            await session.wait_for(lambda _: running.done(), self._t.effect_s)
+            waited = running.result() if running.done() else None
+        finally:
+            if watch is not None:
+                watch.cancel()
         if waited is not None:
-            self._record(title, "ok", f"{detail}, Wall Connector {seconds(tessie + waited)} s")
+            self._record(title, "ok", f"{detail}, Wall Connector {seconds(waited)} s")
             return
         actual = _amps(self._wall_connector_current(session.snapshot()))
         text = f"Wall Connector nach {de(self._t.effect_s)} s nicht bei {de(amps)} A (Ist {actual})"

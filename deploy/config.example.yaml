@@ -72,7 +72,7 @@ vehicles:
     usable_kwh: 75
     phases: 3
     # Über Tessie wirkt ein Befehl auf oder von 5 A erst beim zweiten Mal; der Tesla-Aktor prüft das
-    # im Tessie-Cache und wiederholt ihn dann einmal (Prüfprotokoll Teil 2 vom 12.10.2026).
+    # im Tessie-Cache, dann geht der Befehl erneut hinaus (Prüfprotokoll Teil 2 vom 12.10.2026).
     min_a: 5
     max_a: 16
     default_wallbox: twc

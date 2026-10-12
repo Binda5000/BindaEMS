@@ -36,11 +36,18 @@ _UNLIMITED: Final = -1.0
 
 
 class Confirmation(StrEnum):
-    """Stand des Rücklesens: noch offen, vom Gerät übernommen oder gescheitert."""
+    """Stand des Rücklesens: noch offen, vom Gerät übernommen oder gescheitert.
+
+    ``NOT_TAKEN`` ist ein Scheitern, nach dem derselbe Befehl erneut gesendet werden darf: Das Gerät
+    hat ihn bestätigt, den Wert aber nicht übernommen (Tesla über Tessie, Prüfprotokoll Teil 2 vom
+    12.10.2026). Der Aktor sendet dann nicht selbst nach; ein erneuter Befehl geht wie jeder durch
+    die Safety-Schicht.
+    """
 
     PENDING = "pending"
     CONFIRMED = "confirmed"
     FAILED = "failed"
+    NOT_TAKEN = "not_taken"
 
 
 @dataclass(frozen=True)
@@ -91,7 +98,7 @@ class Actuator(Protocol):
     def confirm(
         self, kind: CommandKind, value: CommandValue, snap: Snapshot
     ) -> tuple[Confirmation, str]:
-        """Hat das Gerät ``value`` übernommen? Der Text nennt bei ``FAILED`` den Grund."""
+        """Hat das Gerät ``value`` übernommen? Der Text nennt den Grund eines Scheiterns."""
         ...
 
     def alarms(self, now: datetime) -> list[Alarm]:

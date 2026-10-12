@@ -135,18 +135,19 @@ class CommandExecutor:
         """Fragt die offenen Schreibvorgänge ab und schließt die fertigen ab.
 
         Jeder abgeschlossene Schreibvorgang ergibt genau eine Entscheidung. Zuerst fragt der
-        Ausführer den Aktor (``confirm``): bestätigt ergibt ``OK``, gescheitert ``ERROR`` mit dem
-        Text des Aktors. Ist der Wert noch offen und die Frist erreicht (``now >= deadline``), ist
-        es ``TIMEOUT``; ein Wert, der genau zur Frist ankommt, gilt also als bestätigt. Sonst bleibt
-        der Schreibvorgang offen. Zurück kommen die abgeschlossenen in der Reihenfolge, in der sie
-        gesendet wurden.
+        Ausführer den Aktor (``confirm``): bestätigt ergibt ``OK``, gescheitert oder nicht
+        übernommen (``NOT_TAKEN``) ``ERROR`` mit dem Text des Aktors; einen neuen Versuch gibt der
+        Aufrufer wie jeden Befehl. Ist der Wert noch offen und die Frist erreicht
+        (``now >= deadline``), ist es ``TIMEOUT``; ein Wert, der genau zur Frist ankommt, gilt also
+        als bestätigt. Sonst bleibt der Schreibvorgang offen. Zurück kommen die abgeschlossenen in
+        der Reihenfolge, in der sie gesendet wurden.
         """
         finished: list[WriteResult] = []
         for key, write in list(self._open.items()):
             status, detail = write.actuator.confirm(key[1], write.verdict.value, snap)
             if status == Confirmation.CONFIRMED:
                 result = DecisionResult.OK
-            elif status == Confirmation.FAILED:
+            elif status in (Confirmation.FAILED, Confirmation.NOT_TAKEN):
                 result = DecisionResult.ERROR
             elif now >= write.deadline:
                 result = DecisionResult.TIMEOUT

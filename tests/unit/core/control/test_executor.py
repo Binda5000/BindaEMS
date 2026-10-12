@@ -442,6 +442,22 @@ def test_failed_confirmation_is_an_error_with_the_actuator_text(
     assert executor.take_failures() == results
 
 
+def test_a_value_the_device_did_not_take_is_an_error(tmp_path, limits_live, monkeypatch) -> None:
+    # Tesla über Tessie: bestätigt, aber nicht übernommen. Ein neuer Versuch ist ein neuer Befehl
+    # durch die Safety-Schicht, etwa der nächste Versuch für den sicheren Zustand.
+    executor, fake, decisions = setup(tmp_path, limits_live)
+    text = "Gerät übernahm 6 A nicht."
+    monkeypatch.setattr(
+        fake, "confirm", lambda kind, value, snapshot: (Confirmation.NOT_TAKEN, text)
+    )
+    executor.execute(SAFE, LIVE_CTX, snap({}), T0, {})
+    results = executor.poll(snap({}), S(1), T0)
+    assert results == [WriteResult(EVCS, CommandKind.CURRENT, 6.0, DecisionResult.ERROR, text)]
+    assert decisions[0].text == f"EVCS „evcs“ (sicherer Zustand): Strom 6 A – Fehler: {text}"
+    assert executor.pending() == frozenset()
+    assert executor.take_failures() == results
+
+
 def test_confirm_gets_the_sent_value_and_the_current_snapshot(
     tmp_path, limits_live, monkeypatch
 ) -> None:

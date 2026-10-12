@@ -28,6 +28,7 @@ from bindaems.tools.part2.session import Part2Session, build_session, minutes, s
 from bindaems.tools.verify_checks import Finding
 
 CURRENT, CHARGING = CommandKind.CURRENT, CommandKind.CHARGING
+NOT_TAKEN_10 = "Fahrzeug übernahm 10 A nicht (Tessie meldet 16 A)."
 MAX_DISCHARGE, MIN_SOC, GRID_SETPOINT = (
     CommandKind.MAX_DISCHARGE,
     CommandKind.MIN_SOC,
@@ -531,6 +532,45 @@ async def test_a_tesla_command_is_sent_once_and_its_result_counts(cfg: Config) -
     assert [request.url.path for request in requests] == [AMPS_PATH]
 
 
+async def test_a_value_the_car_did_not_take_is_sent_once_more(cfg: Config) -> None:
+    # Tessie bestätigt, das Auto übernimmt erst den zweiten Befehl (Prüfprotokoll Teil 2 vom
+    # 12.10.2026): Die Sitzung sendet einmal erneut, wie der core im sicheren Zustand.
+    car = ForgetfulCar(misses=1)
+    session = car_session(cfg, car)
+    assert await session.set_and_confirm("vehicle.tesla", CURRENT, 10.0, 5.0) is not None
+    assert (session.repeated, session.failure) == (True, None)
+    assert car.sent == [(CURRENT, 10.0), (CURRENT, 10.0)]
+    assert await session.set_and_confirm("vehicle.tesla", CURRENT, 12.0, 5.0) is not None
+    assert session.repeated is False  # gilt je Aufruf
+
+
+async def test_a_value_the_car_did_not_take_twice_is_a_failure(cfg: Config) -> None:
+    car = ForgetfulCar(misses=2)
+    session = car_session(cfg, car)
+    assert await session.set_and_confirm("vehicle.tesla", CURRENT, 10.0, 5.0) is None
+    assert (session.repeated, session.failure) == (True, f"Fehler: {NOT_TAKEN_10}")
+    assert car.sent == [(CURRENT, 10.0), (CURRENT, 10.0)]  # nur einmal wiederholt
+
+
+async def test_no_repetition_to_a_car_that_is_no_longer_controllable(cfg: Config) -> None:
+    car = ForgetfulCar(misses=1, stays_controllable=False)
+    session = car_session(cfg, car)
+    assert await session.set_and_confirm("vehicle.tesla", CURRENT, 10.0, 5.0) is None
+    assert session.failure == (
+        f"Fehler: {NOT_TAKEN_10} Keine Wiederholung, nicht steuerbar: Fahrzeug nicht angesteckt."
+    )
+    assert car.sent == [(CURRENT, 10.0)]
+
+
+async def test_the_repetition_gets_its_own_deadline(cfg: Config) -> None:
+    # Jedes Ergebnis kommt 0,3 s nach dem Senden: Die Wiederholung ist erst 0,6 s nach dem ersten
+    # Senden bestätigt, nach der Frist von 0,5 s, die ab dem ersten Senden lief.
+    car = ForgetfulCar(misses=1, delay_s=0.3)
+    session = car_session(cfg, car)
+    assert await session.set_and_confirm("vehicle.tesla", CURRENT, 10.0, 0.5) is not None
+    assert len(car.sent) == 2
+
+
 async def test_a_failed_tesla_command_ends_the_wait_at_once(cfg: Config) -> None:
     requests: list[httpx.Request] = []
     session = tesla_session(cfg, False, requests)
@@ -967,6 +1007,37 @@ class LaggingCar(StubTesla):
     ) -> tuple[Confirmation, str]:
         if self._refused:
             return Confirmation.FAILED, "Tessie meldet result=false."
+        return Confirmation.CONFIRMED, ""
+
+
+class ForgetfulCar(StubTesla):
+    """Ein Tesla, dessen Befehle Tessie bestätigt; die ersten ``misses`` übernimmt er aber nicht.
+
+    Jedes Ergebnis steht ``delay_s`` nach dem Senden fest. Mit ``stays_controllable=False`` ist er
+    nach dem ersten Befehl nicht mehr steuerbar (abgesteckt).
+    """
+
+    def __init__(self, misses: int, *, delay_s: float = 0.0, stays_controllable: bool = True):
+        super().__init__(Confirmation.CONFIRMED)
+        self.misses, self.delay_s, self.stays_controllable = misses, delay_s, stays_controllable
+        self.sent_at = 0.0
+
+    def capabilities(self, snap: Snapshot, now: datetime) -> Capabilities:
+        if self.sent and not self.stays_controllable:
+            return Capabilities(False, ("Fahrzeug nicht angesteckt.",))
+        return Capabilities(True)
+
+    def send(self, kind: CommandKind, value: CommandValue) -> str | None:
+        self.sent_at = time.monotonic()
+        return super().send(kind, value)
+
+    def confirm(
+        self, kind: CommandKind, value: CommandValue, snap: Snapshot
+    ) -> tuple[Confirmation, str]:
+        if time.monotonic() - self.sent_at < self.delay_s:
+            return Confirmation.PENDING, ""
+        if len(self.sent) <= self.misses:
+            return Confirmation.NOT_TAKEN, NOT_TAKEN_10
         return Confirmation.CONFIRMED, ""
 
 

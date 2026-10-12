@@ -77,7 +77,7 @@ async def test_current_change_reaches_the_wall_connector(tesla_session, respx_mo
     step = next(f for f in findings if f.title == "Ladestrom 10 A")
     assert (
         step.status == "ok"
-        and step.detail.startswith("Tessie ")
+        and step.detail.startswith("bestätigt nach ")
         and "Wall Connector" in step.detail
     )
 
@@ -87,8 +87,9 @@ async def test_a_current_the_car_takes_only_the_second_time_is_sent_twice(
 ) -> None:
     # An der Anlage (Prüfprotokoll Teil 2 vom 12.10.2026) bestätigte Tessie jeden Strombefehl, das
     # Auto übernahm einen auf oder von 5 A aber erst beim zweiten. Hier übernimmt es jeden Wert
-    # erst beim zweiten Mal; der Cache meldet, was das Auto eingestellt hat.
-    session, twc = tesla_session(answers=[False], twc_follows=True, check_s=0.5)
+    # erst beim zweiten Mal; der Cache meldet, was das Auto eingestellt hat. Der Aktor meldet
+    # NOT_TAKEN, und die Sitzung sendet einmal erneut.
+    session, twc = tesla_session(answers=[False], twc_follows=True, check_s=0.5, settle_s=0.1)
     sent: list[str] = []
 
     def command(request: httpx.Request) -> httpx.Response:
@@ -101,8 +102,11 @@ async def test_a_current_the_car_takes_only_the_second_time_is_sent_twice(
     respx_mock.post(AMPS_URL).mock(side_effect=command)
     tessie_reports(twc.store, every_s=0.05, until_s=10.0)  # der Adapter fragt laufend ab
     findings = await run_tesla(session, session.cfg, "tesla", timings=ROOMY)
-    status = {f.title: f.status for f in findings}
-    assert status["Ladestrom 10 A"] == "ok" and status["Verhalten bei 5 A"] == "ok"
+    repeated = rf"bestätigt nach {SECONDS} s, Befehl wiederholt, Wall Connector {SECONDS} s"
+    for title in ("Ladestrom 10 A", "Verhalten bei 5 A"):
+        assert re.fullmatch(repeated, step(findings, title).detail)
+    restored = step(findings, "Wiederherstellen: Strom 16 A")
+    assert re.fullmatch(rf"Wiederhergestellt nach {SECONDS} s, Befehl wiederholt", restored.detail)
     assert sent == ["10", "10", "5", "5", "16", "16"]  # je Wert einmal wiederholt
     assert twc.store.snapshot().ok("vehicle.tesla.charge_amps") == 16  # wiederhergestellt
 
@@ -264,7 +268,8 @@ async def test_ready_waits_for_the_values_after_the_start(tesla_session, respx_m
     assert findings[0].status == "ok"
     # der Strom wurde gemessen, der Wall Connector war nicht „ohne Messwerte“
     assert re.fullmatch(
-        rf"Tessie {SECONDS} s, Wall Connector {SECONDS} s", step(findings, "Ladestrom 10 A").detail
+        rf"bestätigt nach {SECONDS} s, Wall Connector {SECONDS} s",
+        step(findings, "Ladestrom 10 A").detail,
     )
 
 
@@ -278,7 +283,9 @@ async def test_current_steps_send_their_amps_and_name_both_times(tesla_session, 
     for title in ("Ladestrom 10 A", "Verhalten bei 5 A"):
         result = step(findings, title)
         assert (result.item, result.status) == ("17.2-7", "ok")
-        assert re.fullmatch(rf"Tessie {SECONDS} s, Wall Connector {SECONDS} s", result.detail)
+        assert re.fullmatch(
+            rf"bestätigt nach {SECONDS} s, Wall Connector {SECONDS} s", result.detail
+        )
     assert amps(respx_mock) == ["10", "5", "16"]  # zuletzt das Wiederherstellen
 
 
@@ -315,7 +322,7 @@ async def test_no_vehicle_at_the_wall_connector_means_no_effect_to_measure(
     for title in ("Ladestrom 10 A", "Verhalten bei 5 A"):
         result = step(findings, title)
         assert result.status == "ok"
-        assert re.fullmatch(rf"Tessie {SECONDS} s; {NOT_AT_TWC}", result.detail)
+        assert re.fullmatch(rf"bestätigt nach {SECONDS} s; {NOT_AT_TWC}", result.detail)
 
 
 async def test_a_vehicle_that_charges_elsewhere_is_not_measured_at_the_wall_connector(
@@ -326,7 +333,7 @@ async def test_a_vehicle_that_charges_elsewhere_is_not_measured_at_the_wall_conn
     session, _ = tesla_session(answers=[False], config=with_tesla(cfg, default_wallbox="evcs"))
     findings = await run_tesla(session, session.cfg, "tesla", timings=FAST)
     assert re.fullmatch(
-        rf"Tessie {SECONDS} s; {NOT_AT_TWC}", step(findings, "Ladestrom 10 A").detail
+        rf"bestätigt nach {SECONDS} s; {NOT_AT_TWC}", step(findings, "Ladestrom 10 A").detail
     )
 
 
@@ -337,7 +344,7 @@ async def test_a_silent_wall_connector_is_named(tesla_session, respx_mock) -> No
     result = step(findings, "Ladestrom 10 A")
     assert result.status == "ok"
     assert re.fullmatch(
-        rf"Tessie {SECONDS} s; Wirkung nicht messbar \(Wall Connector ohne Messwerte\)",
+        rf"bestätigt nach {SECONDS} s; Wirkung nicht messbar \(Wall Connector ohne Messwerte\)",
         result.detail,
     )
 
@@ -352,10 +359,8 @@ async def test_a_current_that_is_already_there_proves_nothing(tesla_session, res
     findings = await run_tesla(session, session.cfg, "tesla", timings=FAST)
     already = step(findings, "Ladestrom 10 A")
     assert already.status == "ok"
-    assert re.fullmatch(
-        rf"Tessie {SECONDS} s; Wirkung nicht messbar \(Strom am Wall Connector schon bei 10 A\)",
-        already.detail,
-    )
+    unmeasurable = r"Wirkung nicht messbar \(Strom am Wall Connector schon bei 10 A\)"
+    assert re.fullmatch(rf"bestätigt nach {SECONDS} s; {unmeasurable}", already.detail)
     # beim nächsten Schritt liegt der Strom weit weg vom Sollwert: Er wird gemessen
     assert "Wall Connector " in step(findings, "Verhalten bei 5 A").detail
     assert "nicht messbar" not in step(findings, "Verhalten bei 5 A").detail
@@ -391,7 +396,7 @@ async def test_a_wall_connector_that_does_not_follow_is_a_warning(
     result = step(findings, "Ladestrom 10 A")
     assert result.status == "warn"
     assert re.fullmatch(
-        rf"Tessie {SECONDS} s; Wall Connector nach 0,3 s nicht bei 10 A \(Ist 16 A\)",
+        rf"bestätigt nach {SECONDS} s; Wall Connector nach 0,3 s nicht bei 10 A \(Ist 16 A\)",
         result.detail,
     )
 
@@ -914,6 +919,6 @@ async def test_the_part_reads_what_the_real_adapters_write(cfg: Config, respx_mo
     )
     for title in ("Ladestrom 10 A", "Verhalten bei 5 A"):
         assert re.fullmatch(
-            rf"Tessie {SECONDS} s, Wall Connector {SECONDS} s", step(findings, title).detail
+            rf"bestätigt nach {SECONDS} s, Wall Connector {SECONDS} s", step(findings, title).detail
         )
     assert step(findings, "Wiederherstellen: Strom 16 A").status == "ok"

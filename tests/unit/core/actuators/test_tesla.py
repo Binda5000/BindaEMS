@@ -15,13 +15,15 @@ from tests.helpers import T0, run_until, snap
 from tests.unit.core.safety.conftest import make_ctx
 
 from bindaems.core.actuators.tesla import (
+    CHECK_MARGIN_S,
     COMMAND_TIMEOUT_S,
     FAILURE_WINDOW,
     FAILURES_ALLOWED,
+    SETTLE_S,
     VERIFY_S,
     TeslaActuator,
 )
-from bindaems.core.adapters.tessie import TessieAdapter
+from bindaems.core.adapters.tessie import TessieAdapter, poll_interval_s
 from bindaems.core.control.actuator import Capabilities, Confirmation
 from bindaems.core.control.executor import CommandExecutor
 from bindaems.core.safety.budget import PersistentWriteBudget
@@ -204,7 +206,8 @@ async def test_token_never_in_failure_text(cfg, respx_mock) -> None:
 
 
 def test_identity_and_deadline(car) -> None:
-    assert (car.id, car.confirm_timeout_s, car.verify_s) == ("vehicle.tesla", 75.0, 40.0)
+    assert (car.id, car.confirm_timeout_s) == ("vehicle.tesla", 75.0)
+    assert (car.settle_s, car.verify_s, CHECK_MARGIN_S) == (10.0, 40.0, 5.0)
     assert (COMMAND_TIMEOUT_S, FAILURES_ALLOWED, FAILURE_WINDOW) == (60.0, 3, timedelta(minutes=15))
     assert car.confirm_timeout_s > COMMAND_TIMEOUT_S  # das Ende des Befehls kommt vor der Frist
 
@@ -1152,118 +1155,180 @@ async def test_a_missing_value_in_the_tessie_cache_is_unknown(cfg, respx_mock, c
 # einen Strombefehl auf oder von 5 A, ohne dass das Auto ihn übernimmt; erst der zweite wirkt.
 
 AMPS = "vehicle.tesla.charge_amps"
+NOT_TAKEN = (Confirmation.NOT_TAKEN, "Fahrzeug übernahm 5 A nicht (Tessie meldet 10 A).")
+CHECKING = "Prüfung des Stroms im Tessie-Cache läuft noch."
+SETTLED = T0 + timedelta(seconds=SETTLE_S)  # ab hier zählt eine Meldung nach der Bestätigung bei T0
+STALE = T0 - timedelta(seconds=5)  # eine Meldung von vor der Bestätigung
 
 
 def cached(at: datetime, amps: Value, *, read_at: datetime | None = None, **kw: Any) -> Snapshot:
     """Snapshot zur Zeit ``at``: das Auto steht bereit, Tessie meldet ``amps`` zur Zeit ``read_at``.
 
-    ``quality`` ändert die Qualität der Strom-Meldung, ``home=False`` lässt die Signale weg, die
-    das Auto steuerbar machen (es gilt dann als schlafend).
+    ``quality`` ändert die Qualität der Strom-Meldung.
     """
     quality = kw.get("quality", Quality.OK)
     readings = {AMPS: Reading(amps, read_at or at, quality, "tessie:tesla", SignalKind.MEASUREMENT)}
-    if kw.get("home", True):
-        for name, value in HOME.items():
-            readings[name] = Reading(value, at, Quality.OK, "tessie:tesla", SignalKind.MEASUREMENT)
+    for name, value in HOME.items():
+        readings[name] = Reading(value, at, Quality.OK, "tessie:tesla", SignalKind.MEASUREMENT)
     return Snapshot(at, readings)
 
 
-STALE = T0 - timedelta(seconds=5)  # eine Meldung von vor der Bestätigung
+async def confirmed_by_tessie(car: TeslaActuator, amps: float = 5.0) -> None:
+    """Sendet den Strom, Tessie bestätigt, und die Prüfung beginnt mit einem Snapshot bei T0."""
+    assert car.send(CommandKind.CURRENT, amps) is None
+    await asyncio.sleep(0.01)
+    assert car.confirm(CommandKind.CURRENT, amps, cached(T0, 10, read_at=STALE)) == PENDING
 
 
-async def test_a_confirmed_current_waits_for_a_fresh_reading(cfg, respx_mock) -> None:
+async def test_a_confirmed_current_waits_for_a_settled_reading(cfg, respx_mock) -> None:
     route = respx_mock.post(URL).respond(json={"result": True})
     async with httpx.AsyncClient() as client:
         car = tesla(cfg, client, [T0])
-        car.send(CommandKind.CURRENT, 5.0)
-        await asyncio.sleep(0.01)
-        # Tessie hat bestätigt, die Meldung ist aber älter: noch offen
-        assert car.confirm(CommandKind.CURRENT, 5.0, cached(T0, 10, read_at=STALE)) == PENDING
-        later = T0 + timedelta(seconds=30)
-        assert car.confirm(CommandKind.CURRENT, 5.0, cached(later, 5)) == CONFIRMED
-    assert route.call_count == 1  # der Wert kam an, keine Wiederholung
+        await confirmed_by_tessie(car)
+        # neu geschrieben, aber noch keine SETTLE_S nach der Bestätigung: Der Cache kann hinken
+        early = SETTLED - timedelta(seconds=1)
+        assert car.confirm(CommandKind.CURRENT, 5.0, cached(early, 10)) == PENDING
+        assert car.confirm(CommandKind.CURRENT, 5.0, cached(SETTLED, 5)) == CONFIRMED
+    assert route.call_count == 1
 
 
-async def test_a_current_the_car_did_not_take_is_sent_once_more(cfg, respx_mock) -> None:
+async def test_a_current_the_car_did_not_take_is_not_taken(cfg, respx_mock) -> None:
     route = respx_mock.post(URL).respond(json={"result": True})
     async with httpx.AsyncClient() as client:
         car = tesla(cfg, client, [T0])
-        car.send(CommandKind.CURRENT, 5.0)
+        await confirmed_by_tessie(car)
+        assert car.confirm(CommandKind.CURRENT, 5.0, cached(SETTLED, 10)) == NOT_TAKEN
+        # Das Ergebnis bleibt bis zum nächsten Senden, auch wenn der Cache später den Wert zeigt
+        later = SETTLED + timedelta(seconds=30)
+        assert car.confirm(CommandKind.CURRENT, 5.0, cached(later, 5)) == NOT_TAKEN
         await asyncio.sleep(0.01)
-        assert car.confirm(CommandKind.CURRENT, 5.0, cached(T0, 10, read_at=STALE)) == PENDING
-        later = T0 + timedelta(seconds=30)
-        # frische Meldung mit dem alten Wert: der Befehl geht ein zweites Mal hinaus
-        assert car.confirm(CommandKind.CURRENT, 5.0, cached(later, 10)) == PENDING
+    assert route.call_count == 1  # der Aktor sendet nicht selbst nach
+
+
+async def test_after_not_taken_the_same_current_goes_out_again(cfg, respx_mock) -> None:
+    route = respx_mock.post(URL).respond(json={"result": True})
+    async with httpx.AsyncClient() as client:
+        car = tesla(cfg, client, [T0])
+        await confirmed_by_tessie(car)
+        assert car.confirm(CommandKind.CURRENT, 5.0, cached(SETTLED, 10)) == NOT_TAKEN
+        assert car.send(CommandKind.CURRENT, 5.0) is None
         await asyncio.sleep(0.01)
-        # Bestätigung der Wiederholung zählt ohne weitere Prüfung, und es bleibt bei einer
-        for _ in range(3):
-            assert car.confirm(CommandKind.CURRENT, 5.0, cached(later, 10)) == CONFIRMED
-            await asyncio.sleep(0.01)
     assert [call.request.url.params["amps"] for call in route.calls] == ["5", "5"]
 
 
-async def test_without_a_fresh_reading_the_confirmation_of_tessie_counts(cfg, respx_mock) -> None:
-    route = respx_mock.post(URL).respond(json={"result": True})
+async def test_not_taken_is_no_failure_of_tessie(cfg, respx_mock) -> None:
+    respx_mock.post(URL).respond(json={"result": True})
+    now = [T0]
     async with httpx.AsyncClient() as client:
-        car = tesla(cfg, client, [T0])
-        car.send(CommandKind.CURRENT, 5.0)
-        await asyncio.sleep(0.01)
-        assert car.confirm(CommandKind.CURRENT, 5.0, cached(T0, 10, read_at=STALE)) == PENDING
-        almost = T0 + timedelta(seconds=VERIFY_S - 1)
-        assert car.confirm(CommandKind.CURRENT, 5.0, cached(almost, 10, read_at=STALE)) == PENDING
-        due = T0 + timedelta(seconds=VERIFY_S)
-        assert car.confirm(CommandKind.CURRENT, 5.0, cached(due, 10, read_at=STALE)) == CONFIRMED
+        car = tesla(cfg, client, now)
+        for _ in range(FAILURES_ALLOWED):
+            await confirmed_by_tessie(car)
+            assert car.confirm(CommandKind.CURRENT, 5.0, cached(SETTLED, 10)) == NOT_TAKEN
+        assert car.capabilities(cached(SETTLED, 10), SETTLED) == Capabilities(True)
+        assert car.alarms(SETTLED) == []
+
+
+async def test_without_a_settled_reading_the_confirmation_of_tessie_counts(cfg, respx_mock) -> None:
+    route = respx_mock.post(URL).respond(json={"result": True})
+    now = [T0]
+    async with httpx.AsyncClient() as client:
+        car = tesla(cfg, client, now)
+        await confirmed_by_tessie(car)  # die Prüfung beginnt bei T0 auf der Uhr des Aktors
+        now[0] = T0 + timedelta(seconds=VERIFY_S - 1)
+        assert car.confirm(CommandKind.CURRENT, 5.0, cached(now[0], 10, read_at=STALE)) == PENDING
+        now[0] = T0 + timedelta(seconds=VERIFY_S)
+        assert car.confirm(CommandKind.CURRENT, 5.0, cached(now[0], 10, read_at=STALE)) == CONFIRMED
     assert route.call_count == 1
 
 
-@pytest.mark.parametrize("quality", [Quality.STALE, Quality.INVALID])
-async def test_a_fresh_reading_needs_quality_ok(cfg, respx_mock, quality) -> None:
+async def test_the_check_ends_before_the_deadline_of_the_executor(cfg, respx_mock) -> None:
+    # Tessie antwortet erst nach 50 s: Die Prüfung endet trotzdem CHECK_MARGIN_S vor der Frist
+    # des Ausführers (ab dem Senden), nicht erst VERIFY_S nach der Bestätigung.
+    respx_mock.post(URL).respond(json={"result": True})
+    now = [T0]
+    async with httpx.AsyncClient() as client:
+        car = tesla(cfg, client, now)
+        assert car.send(CommandKind.CURRENT, 5.0) is None
+        await asyncio.sleep(0.01)
+        now[0] = T0 + timedelta(seconds=50)
+        assert car.confirm(CommandKind.CURRENT, 5.0, cached(now[0], 10, read_at=STALE)) == PENDING
+        end = T0 + timedelta(seconds=car.confirm_timeout_s - CHECK_MARGIN_S)
+        now[0] = end - timedelta(seconds=1)
+        assert car.confirm(CommandKind.CURRENT, 5.0, cached(now[0], 10, read_at=STALE)) == PENDING
+        now[0] = end
+        assert car.confirm(CommandKind.CURRENT, 5.0, cached(now[0], 10, read_at=STALE)) == CONFIRMED
+
+
+@pytest.mark.parametrize(
+    ("value", "quality"), [(10, Quality.STALE), (10, Quality.INVALID), ("10", Quality.OK)]
+)
+async def test_a_settled_reading_needs_quality_ok_and_a_number(
+    cfg, respx_mock, value, quality
+) -> None:
+    respx_mock.post(URL).respond(json={"result": True})
+    async with httpx.AsyncClient() as client:
+        car = tesla(cfg, client, [T0])
+        await confirmed_by_tessie(car)
+        snapshot = cached(SETTLED, value, quality=quality)
+        assert car.confirm(CommandKind.CURRENT, 5.0, snapshot) == PENDING
+
+
+async def test_without_the_signal_the_confirmation_of_tessie_counts(cfg, respx_mock) -> None:
+    respx_mock.post(URL).respond(json={"result": True})
+    async with httpx.AsyncClient() as client:
+        car = tesla(cfg, client, [T0])
+        assert car.send(CommandKind.CURRENT, 5.0) is None
+        await asyncio.sleep(0.01)
+        assert car.confirm(CommandKind.CURRENT, 5.0, snap(HOME)) == CONFIRMED
+
+
+async def test_the_same_current_waits_while_the_check_runs(cfg, respx_mock) -> None:
+    # Das Prüfwerkzeug sendet denselben Wert erneut, wenn die Bestätigung ausbleibt; solange die
+    # Prüfung läuft, wartet er. Ein anderer Strom ersetzt sie sofort, etwa beim Wiederherstellen.
     route = respx_mock.post(URL).respond(json={"result": True})
     async with httpx.AsyncClient() as client:
         car = tesla(cfg, client, [T0])
-        car.send(CommandKind.CURRENT, 5.0)
+        await confirmed_by_tessie(car)
+        assert car.send(CommandKind.CURRENT, 5.0) == CHECKING
+        assert car.send(CommandKind.CURRENT, 13.0) is None
         await asyncio.sleep(0.01)
-        later = T0 + timedelta(seconds=30)
-        assert car.confirm(CommandKind.CURRENT, 5.0, cached(T0, 10, read_at=STALE)) == PENDING
-        assert car.confirm(CommandKind.CURRENT, 5.0, cached(later, 10, quality=quality)) == PENDING
-    assert route.call_count == 1
+        # die neue Prüfung gilt dem neuen Strom
+        assert car.confirm(CommandKind.CURRENT, 13.0, cached(T0, 5, read_at=STALE)) == PENDING
+        assert car.confirm(CommandKind.CURRENT, 13.0, cached(SETTLED, 13)) == CONFIRMED
+    assert [call.request.url.params["amps"] for call in route.calls] == ["5", "13"]
 
 
-async def test_a_car_that_is_not_controllable_is_not_sent_again(cfg, respx_mock) -> None:
+async def test_the_same_current_waits_at_most_until_the_check_ends(cfg, respx_mock) -> None:
+    # Fragt niemand mehr nach (der Ausführer gab auf), sperrt die Prüfung nicht über ihr Ende.
     route = respx_mock.post(URL).respond(json={"result": True})
+    now = [T0]
     async with httpx.AsyncClient() as client:
-        car = tesla(cfg, client, [T0])
-        car.send(CommandKind.CURRENT, 5.0)
+        car = tesla(cfg, client, now)
+        await confirmed_by_tessie(car)
+        now[0] = T0 + timedelta(seconds=car.confirm_timeout_s - CHECK_MARGIN_S - 1)
+        assert car.send(CommandKind.CURRENT, 5.0) == CHECKING
+        now[0] += timedelta(seconds=1)
+        assert car.send(CommandKind.CURRENT, 5.0) is None
         await asyncio.sleep(0.01)
-        assert car.confirm(CommandKind.CURRENT, 5.0, cached(T0, 10, read_at=STALE)) == PENDING
-        later = T0 + timedelta(seconds=30)
-        assert car.confirm(CommandKind.CURRENT, 5.0, cached(later, 10, home=False)) == (
-            Confirmation.FAILED,
-            "Fahrzeug übernahm 5 A nicht (Tessie meldet 10 A). "
-            "Fahrzeug schläft oder ist offline; es wird nicht geweckt. Fahrzeug nicht zu Hause. "
-            "Fahrzeug nicht angesteckt.",
-        )
-    assert route.call_count == 1  # ein schlafendes Auto wird nicht geweckt
+    assert route.call_count == 2
 
 
-async def test_a_failed_repetition_fails(cfg, respx_mock) -> None:
+async def test_a_failed_command_is_not_checked(cfg, respx_mock) -> None:
     route = respx_mock.post(URL)
     route.side_effect = [
-        httpx.Response(200, json={"result": True}),
         httpx.Response(500, json={"result": True}),
+        httpx.Response(200, json={"result": True}),
     ]
     async with httpx.AsyncClient() as client:
         car = tesla(cfg, client, [T0])
-        car.send(CommandKind.CURRENT, 5.0)
+        assert car.send(CommandKind.CURRENT, 5.0) is None
         await asyncio.sleep(0.01)
-        assert car.confirm(CommandKind.CURRENT, 5.0, cached(T0, 10, read_at=STALE)) == PENDING
-        later = T0 + timedelta(seconds=30)
-        assert car.confirm(CommandKind.CURRENT, 5.0, cached(later, 10)) == PENDING
+        failed = (Confirmation.FAILED, "Tessie antwortet mit HTTP 500.")
+        assert car.confirm(CommandKind.CURRENT, 5.0, cached(T0, 10, read_at=STALE)) == failed
+        assert car.confirm(CommandKind.CURRENT, 5.0, cached(SETTLED, 5)) == failed
+        # der nächste Versuch mit demselben Wert geht sofort hinaus
+        assert car.send(CommandKind.CURRENT, 5.0) is None
         await asyncio.sleep(0.01)
-        assert car.confirm(CommandKind.CURRENT, 5.0, cached(later, 10)) == (
-            Confirmation.FAILED,
-            "Tessie antwortet mit HTTP 500.",
-        )
     assert route.call_count == 2
 
 
@@ -1271,16 +1336,13 @@ async def test_a_new_send_starts_a_new_check(cfg, respx_mock) -> None:
     route = respx_mock.post(URL).respond(json={"result": True})
     async with httpx.AsyncClient() as client:
         car = tesla(cfg, client, [T0])
-        car.send(CommandKind.CURRENT, 5.0)
+        await confirmed_by_tessie(car)
+        assert car.confirm(CommandKind.CURRENT, 5.0, cached(SETTLED, 5)) == CONFIRMED
+        assert car.send(CommandKind.CURRENT, 6.0) is None
         await asyncio.sleep(0.01)
-        assert car.confirm(CommandKind.CURRENT, 5.0, cached(T0, 10, read_at=STALE)) == PENDING
-        later = T0 + timedelta(seconds=30)
-        assert car.confirm(CommandKind.CURRENT, 5.0, cached(later, 5)) == CONFIRMED
-        car.send(CommandKind.CURRENT, 6.0)
-        await asyncio.sleep(0.01)
-        # die Meldung von eben ist älter als die neue Bestätigung: wieder offen
-        again = later + timedelta(seconds=1)
-        assert car.confirm(CommandKind.CURRENT, 6.0, cached(again, 5, read_at=later)) == PENDING
+        # die Meldung von eben kam vor der neuen Bestätigung: wieder offen
+        again = SETTLED + timedelta(seconds=1)
+        assert car.confirm(CommandKind.CURRENT, 6.0, cached(again, 5, read_at=SETTLED)) == PENDING
     assert route.call_count == 2
 
 
@@ -1294,9 +1356,11 @@ async def test_charging_commands_are_not_checked_in_the_cache(cfg, respx_mock) -
         assert car.confirm(CommandKind.CHARGING, True, cached(T0, 10, read_at=STALE)) == CONFIRMED
 
 
-def test_the_check_leaves_room_for_command_and_repetition(car) -> None:
-    # Tessie antwortet meist binnen Sekunden: Befehl, Prüfung und Wiederholung passen in die Frist.
-    assert car.verify_s == VERIFY_S and car.confirm_timeout_s - VERIFY_S >= 30
+def test_a_settled_reading_falls_into_the_check_while_charging() -> None:
+    # Beim Laden fragt der Adapter alle 30 s ab: Zwischen SETTLE_S und VERIFY_S nach der
+    # Bestätigung kommt also immer eine Meldung, und die Prüfung endet vor der Frist.
+    assert poll_interval_s("Charging", True) + SETTLE_S <= VERIFY_S
+    assert 0 < CHECK_MARGIN_S < TeslaActuator.confirm_timeout_s - COMMAND_TIMEOUT_S
 
 
 async def test_without_a_check_time_only_tessie_counts(cfg, respx_mock) -> None:
@@ -1305,46 +1369,7 @@ async def test_without_a_check_time_only_tessie_counts(cfg, respx_mock) -> None:
     async with httpx.AsyncClient() as client:
         car = tesla(cfg, client, [T0])
         car.verify_s = 0.0
-        car.send(CommandKind.CURRENT, 5.0)
+        assert car.send(CommandKind.CURRENT, 5.0) is None
         await asyncio.sleep(0.01)
         assert car.confirm(CommandKind.CURRENT, 5.0, cached(T0, 10)) == CONFIRMED
     assert route.call_count == 1
-
-
-async def test_no_new_send_while_the_check_runs(cfg, respx_mock) -> None:
-    # Das Prüfwerkzeug sendet erneut, wenn die Bestätigung ausbleibt: Während der Prüfung im
-    # Cache nimmt der Aktor für die Art nichts an, damit keine Dubletten hinausgehen.
-    route = respx_mock.post(URL).respond(json={"result": True})
-    now = [T0]
-    async with httpx.AsyncClient() as client:
-        car = tesla(cfg, client, now)
-        car.send(CommandKind.CURRENT, 5.0)
-        await asyncio.sleep(0.01)
-        assert car.confirm(CommandKind.CURRENT, 5.0, cached(T0, 10, read_at=STALE)) == PENDING
-        assert car.send(CommandKind.CURRENT, 5.0) == STILL_RUNNING
-        now[0] = T0 + timedelta(seconds=car.confirm_timeout_s)  # eine liegengebliebene Prüfung
-        assert car.send(CommandKind.CURRENT, 6.0) is None  # sperrt nicht länger als die Frist
-        await asyncio.sleep(0.01)
-    assert [call.request.url.params["amps"] for call in route.calls] == ["5", "6"]
-
-
-async def test_a_failed_repetition_ends_the_check(cfg, respx_mock) -> None:
-    route = respx_mock.post(URL)
-    route.side_effect = [
-        httpx.Response(200, json={"result": True}),
-        httpx.Response(200, json={"result": False}),
-        httpx.Response(200, json={"result": True}),
-    ]
-    async with httpx.AsyncClient() as client:
-        car = tesla(cfg, client, [T0])
-        car.send(CommandKind.CURRENT, 5.0)
-        await asyncio.sleep(0.01)
-        assert car.confirm(CommandKind.CURRENT, 5.0, cached(T0, 10, read_at=STALE)) == PENDING
-        later = T0 + timedelta(seconds=30)
-        assert car.confirm(CommandKind.CURRENT, 5.0, cached(later, 10)) == PENDING  # wiederholt
-        await asyncio.sleep(0.01)
-        failed = (Confirmation.FAILED, "Tessie meldet result=false.")
-        assert car.confirm(CommandKind.CURRENT, 5.0, cached(later, 10)) == failed
-        assert car.send(CommandKind.CURRENT, 5.0) is None  # ein neuer Versuch geht hinaus
-        await asyncio.sleep(0.01)
-    assert route.call_count == 3

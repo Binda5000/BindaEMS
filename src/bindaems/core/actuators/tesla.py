@@ -8,12 +8,11 @@ nie: ``send`` startet den Befehl als Aufgabe des Event-Loops und kehrt sofort zu
 fragt, ob sie fertig ist.
 Bestätigt ist ein Befehl, wenn Tessie ``{"result": true}`` liefert (Präzisierung 6). Beim Strom
 reicht das nicht: Tessie bestätigt einen Befehl auf oder von 5 A, ohne dass das Auto ihn übernimmt,
-und erst der zweite wirkt (Prüfprotokoll Teil 2 vom 12.10.2026). Nach der Bestätigung wartet
-``confirm`` darum bis ``verify_s`` auf die nächste frische Meldung des Stroms im Tessie-Cache. Zeigt
-sie einen anderen Wert, geht der Befehl einmal erneut hinaus, aber nur, solange das Auto steuerbar
-ist; die Bestätigung dieser Wiederholung zählt dann ohne weitere Prüfung. Kommt keine frische
-Meldung, gilt die Bestätigung von Tessie wie bisher. Laden an und aus prüft ``confirm`` nicht im
-Cache.
+und erst der zweite wirkt (Prüfprotokoll Teil 2 vom 12.10.2026). Nach der Bestätigung prüft
+``confirm`` den Strom darum im Tessie-Cache (``_verify``). Zeigt Tessie einen anderen Wert, ist das
+Ergebnis ``NOT_TAKEN``. Der Aktor sendet dann nicht selbst nach: Denselben Befehl schickt wieder der
+Aufrufer, in der Laufzeit über die Safety-Schicht als nächsten Versuch für den sicheren Zustand.
+Laden an und aus prüft ``confirm`` nicht im Cache.
 
 Tessie weckt das Fahrzeug bei Befehlen selbst. Der Tesla ist deshalb nur steuerbar, wenn der Cache
 ``online`` meldet und das Fahrzeug zu Hause und angesteckt ist (Spec 3.7, 6.5). Das sagt
@@ -33,7 +32,6 @@ from datetime import datetime, timedelta
 from typing import Final
 
 import httpx
-import structlog
 from pydantic import SecretStr
 
 from bindaems.core.adapters.tessie import TESSIE_BASE_URL
@@ -47,9 +45,12 @@ from bindaems.shared.timeutil import LOCAL_TZ
 COMMAND_TIMEOUT_S: Final = 60.0  # Frist je Befehl, insgesamt und je httpx-Phase (Spec 6.5)
 FAILURES_ALLOWED: Final = 3  # so viele Fehler binnen FAILURE_WINDOW machen ihn nicht steuerbar
 FAILURE_WINDOW: Final = timedelta(minutes=15)  # Zählfenster und Dauer des Zustands danach
-# So lange wartet ein bestätigter Strom auf eine frische Meldung von Tessie: Beim Laden fragt der
-# Adapter alle 30 s ab. Mit Befehl und Wiederholung (je meist unter 3 s) bleibt das in der Frist.
+# Prüfung eines bestätigten Stroms im Tessie-Cache: Eine Meldung zählt erst SETTLE_S nach der
+# Bestätigung, wenn der Cache das Auto eingeholt hat; bis VERIFY_S wartet die Prüfung auf eine
+# solche. Beim Laden fragt der Adapter alle 30 s ab, eine Meldung fällt also immer in das Fenster.
+SETTLE_S: Final = 10.0
 VERIFY_S: Final = 40.0
+CHECK_MARGIN_S: Final = 5.0  # so lange vor der Frist des Ausführers endet die Prüfung spätestens
 
 # Gründe, warum der Tesla nicht steuerbar ist (Plan „Texte“); „nach Fehlern“ hat die Uhrzeit und
 # steht in ``_unavailable_text``
@@ -60,30 +61,29 @@ REASON_UNPLUGGED: Final = "Fahrzeug nicht angesteckt."
 
 # Texte beim Senden und für gescheiterte Befehle
 REASON_RUNNING: Final = "Befehl an Tessie läuft noch."
+REASON_CHECKING: Final = "Prüfung des Stroms im Tessie-Cache läuft noch."
 FAILURE_RESULT_FALSE: Final = "Tessie meldet result=false."
 FAILURE_CANCELLED: Final = "Befehl an Tessie abgebrochen."
 FAILURE_NOT_TAKEN: Final = "Fahrzeug übernahm {wanted} A nicht (Tessie meldet {reported} A)."
 
 _MASK: Final = "***"
 
-log = structlog.get_logger(__name__)
-
 
 @dataclass
 class _Check:
-    """Prüfung eines bestätigten Strombefehls im Tessie-Cache.
+    """Prüfung eines Strombefehls im Tessie-Cache, vom Senden bis zum Ergebnis.
 
-    ``amps`` ist der gesendete Strom in ganzen Ampere, ``since`` die Zeit des ersten Snapshots, in
-    dem ``confirm`` die Bestätigung sah: Erst eine Meldung danach ist frisch. ``started`` ist
-    derselbe Moment auf der Uhr des Aktors; ab da nimmt ``send`` für die Art nichts an, bis die
-    Prüfung endet, höchstens ``confirm_timeout_s`` lang. ``repeated`` sagt, ob der Befehl schon ein
-    zweites Mal hinausging.
+    ``amps`` ist der gesendete Strom in ganzen Ampere, ``sent`` der Zeitpunkt des Sendens auf der
+    Uhr des Aktors. ``since`` ist die Zeit des ersten Snapshots, in dem ``confirm`` die Bestätigung
+    von Tessie sah, ``started`` derselbe Moment auf der Uhr des Aktors. ``outcome`` ist das
+    Ergebnis, sobald es feststeht; es gilt bis zum nächsten ``send`` der Art.
     """
 
     amps: int
+    sent: datetime
     since: datetime | None = None
     started: datetime | None = None
-    repeated: bool = False
+    outcome: tuple[Confirmation, str] | None = None
 
 
 def _unavailable_text(until: datetime) -> str:
@@ -112,12 +112,6 @@ def _request(kind: CommandKind, value: CommandValue) -> tuple[str, dict[str, str
             return f"Ungültiger Wert für „{kind}“."
         return ("start_charging" if value else "stop_charging"), {}
     return f"Tesla kennt die Befehlsart „{kind}“ nicht."
-
-
-def _amps_text(value: object) -> str:
-    """Ein gemeldeter Strom für Texte: die Zahl mit ``de``, sonst „unbekannt“."""
-    number = finite_number(value)
-    return "unbekannt" if number is None else de(number)
 
 
 def _answer_failure(response: httpx.Response) -> str | None:
@@ -151,7 +145,9 @@ class TeslaActuator:
     """
 
     confirm_timeout_s = 75.0  # die 60 s des Befehls und etwas Luft, bis die Aufgabe zu Ende ist
-    verify_s = VERIFY_S  # Prüfzeit im Cache nach der Bestätigung; 0 prüft nur schon frische Werte
+    # Prüfung im Tessie-Cache (``_verify``); ``verify_s`` 0 schaltet sie ab, für Tests ohne Cache
+    settle_s = SETTLE_S
+    verify_s = VERIFY_S
 
     def __init__(
         self,
@@ -223,10 +219,11 @@ class TeslaActuator:
         """Startet den Befehl an Tessie als Aufgabe und kehrt sofort zurück.
 
         ``None``, wenn die Aufgabe läuft; sonst der Grund, warum nicht gesendet wurde: Läuft für
-        die Art noch ein Befehl oder seine Prüfung im Cache, ist es ``REASON_RUNNING``. Eine
-        andere Art, einen Strom, der keine endliche Zahl ist, und ein Laden, das kein
-        Wahrheitswert ist, schickt der Aktor nie. Ob das Fahrzeug erreichbar ist, prüft der
-        Ausführer mit ``capabilities``.
+        die Art noch ein Befehl, ist es ``REASON_RUNNING``. Prüft ``confirm`` denselben Strom noch
+        im Cache, ist es ``REASON_CHECKING``, höchstens bis ``CHECK_MARGIN_S`` vor der Frist des
+        Ausführers; ein anderer Strom ersetzt die Prüfung. Eine andere Art, einen Strom, der keine
+        endliche Zahl ist, und ein Laden, das kein Wahrheitswert ist, schickt der Aktor nie. Ob das
+        Fahrzeug erreichbar ist, prüft der Ausführer mit ``capabilities``.
         """
         request = _request(kind, value)
         if isinstance(request, str):
@@ -234,14 +231,14 @@ class TeslaActuator:
         running = self._tasks.get(kind)
         if running is not None and not running.done():
             return REASON_RUNNING
-        check = self._checks.get(kind)
-        if check is not None and check.started is not None:
-            if self._clock() - check.started < timedelta(seconds=self.confirm_timeout_s):
-                return REASON_RUNNING
         name, params = request
+        amps = int(params["amps"]) if kind == CommandKind.CURRENT else None
+        check = self._checks.get(kind)
+        if check is not None and check.amps == amps and self._checking(check):
+            return REASON_CHECKING
         self._tasks[kind] = asyncio.get_running_loop().create_task(self._command(name, params))
-        if kind == CommandKind.CURRENT:
-            self._checks[kind] = _Check(int(params["amps"]))
+        if amps is not None:
+            self._checks[kind] = _Check(amps, self._clock())
         return None
 
     async def _command(self, name: str, params: dict[str, str]) -> tuple[Confirmation, str]:
@@ -306,63 +303,62 @@ class TeslaActuator:
 
         Das Ergebnis bleibt, bis das nächste ``send`` der Art es ersetzt. Ein abgebrochener Befehl
         ist gescheitert. Wurde für die Art nichts gesendet, bleibt es offen. Bestätigt ist, was
-        Tessie bestätigt; beim Strom prüft ``_check`` das zusätzlich im Tessie-Cache.
+        Tessie bestätigt; beim Strom prüft ``_verify`` das zusätzlich im Tessie-Cache.
         """
         task = self._tasks.get(kind)
         if task is None or not task.done():
             return Confirmation.PENDING, ""
-        if task.cancelled():
-            self._checks.pop(kind, None)
-            return Confirmation.FAILED, FAILURE_CANCELLED
-        result = task.result()
+        result = (Confirmation.FAILED, FAILURE_CANCELLED) if task.cancelled() else task.result()
         check = self._checks.get(kind)
         if check is None:
             return result
-        if result[0] is not Confirmation.CONFIRMED or check.repeated:
-            del self._checks[kind]
-            return result
-        return self._check(kind, check, snap)
+        if check.outcome is None:
+            confirmed = result[0] is Confirmation.CONFIRMED
+            check.outcome = self._verify(check, snap) if confirmed else result
+        return (Confirmation.PENDING, "") if check.outcome is None else check.outcome
 
-    def _check(self, kind: CommandKind, check: _Check, snap: Snapshot) -> tuple[Confirmation, str]:
-        """Zeigt die nächste frische Meldung den bestätigten Strom? Sonst einmal wiederholen.
+    def _verify(self, check: _Check, snap: Snapshot) -> tuple[Confirmation, str] | None:
+        """Zeigt Tessie den bestätigten Strom? ``None``, solange die Prüfung wartet.
 
-        Frisch ist eine Meldung mit Qualität ``OK``, die nach dem ersten Snapshot mit der
-        Bestätigung kam. Ohne Signal im Snapshot lässt sich nichts prüfen; dann gilt die
-        Bestätigung von Tessie, ebenso, wenn bis ``verify_s`` nach der Bestätigung keine frische
-        Meldung kam. Zeigt eine frische Meldung den Strom, ist er bestätigt. Zeigt sie einen
-        anderen, geht der Befehl ein zweites Mal hinaus, wenn das Auto steuerbar ist; sonst ist er
-        gescheitert, und ``capabilities`` nennt die Gründe. Das Auto wird nie geweckt.
+        Es zählt die erste Meldung des Stroms mit Qualität ``OK`` und einer Zahl, die mindestens
+        ``settle_s`` nach dem ersten Snapshot mit der Bestätigung kam: Zeigt sie den Strom, ist er
+        bestätigt, sonst hat das Fahrzeug ihn nicht übernommen (``NOT_TAKEN``; kein Fehler von
+        Tessie, er zählt nicht). Ohne Signal im Snapshot gilt die Bestätigung von Tessie, ebenso
+        ohne solche Meldung bis ``verify_s`` nach der Bestätigung oder bis ``CHECK_MARGIN_S`` vor
+        der Frist des Ausführers. Die Wartezeiten laufen auf der Uhr des Aktors, die Meldungen
+        vergleicht die Prüfung nach den Zeitstempeln des Speichers.
         """
         reading = snap.get(f"vehicle.{self._key}.charge_amps")
         if reading is None:
-            del self._checks[kind]
             return Confirmation.CONFIRMED, ""
-        if check.since is None:
-            check.since, check.started = snap.ts, self._clock()
-        if reading.quality is not Quality.OK or reading.ts <= check.since:
-            if (snap.ts - check.since).total_seconds() >= self.verify_s:
-                del self._checks[kind]
+        now = self._clock()
+        if check.since is None or check.started is None:
+            check.since, check.started = snap.ts, now
+        reported = finite_number(reading.value) if reading.quality is Quality.OK else None
+        if reported is not None and reading.ts >= check.since + timedelta(seconds=self.settle_s):
+            if matches(CommandKind.CURRENT, float(check.amps), reported):
                 return Confirmation.CONFIRMED, ""
-            return Confirmation.PENDING, ""
-        if matches(kind, float(check.amps), finite_number(reading.value)):
-            del self._checks[kind]
+            text = FAILURE_NOT_TAKEN.format(wanted=de(check.amps), reported=de(reported))
+            return Confirmation.NOT_TAKEN, text
+        waited = now - check.started
+        if waited >= timedelta(seconds=self.verify_s) or now >= self._check_end(check):
             return Confirmation.CONFIRMED, ""
-        wanted, reported = de(check.amps), _amps_text(reading.value)
-        capabilities = self.capabilities(snap, self._clock())
-        if not capabilities.controllable:
-            del self._checks[kind]
-            text = FAILURE_NOT_TAKEN.format(wanted=wanted, reported=reported)
-            return Confirmation.FAILED, " ".join((text, *capabilities.reasons))
-        log.info(
-            "Tesla übernahm den Strom nicht, Befehl wiederholt",
-            vehicle=self._name,
-            wanted_a=check.amps,
-            reported_a=reading.value,
+        return None
+
+    def _checking(self, check: _Check) -> bool:
+        """Wartet die Prüfung auf eine Meldung von Tessie, und das vor ihrem spätesten Ende?
+
+        Sie beginnt erst, wenn ``confirm`` die Bestätigung von Tessie sah.
+        """
+        return (
+            check.started is not None
+            and check.outcome is None
+            and self._clock() < self._check_end(check)
         )
-        check.repeated = True
-        request = self._command("set_charging_amps", {"amps": str(check.amps)})
-        self._tasks[kind] = asyncio.get_running_loop().create_task(request)
-        return Confirmation.PENDING, ""
+
+    def _check_end(self, check: _Check) -> datetime:
+        """Das späteste Ende der Prüfung: ``CHECK_MARGIN_S`` vor der Frist des Ausführers."""
+        return check.sent + timedelta(seconds=self.confirm_timeout_s - CHECK_MARGIN_S)
 
     async def aclose(self) -> None:
         """Bricht laufende Befehle ab und wartet, bis ihre Aufgaben zu Ende sind.

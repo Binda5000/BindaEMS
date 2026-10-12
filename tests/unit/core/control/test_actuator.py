@@ -16,6 +16,7 @@ def test_confirmation_values() -> None:
         ("PENDING", "pending"),
         ("CONFIRMED", "confirmed"),
         ("FAILED", "failed"),
+        ("NOT_TAKEN", "not_taken"),
     ]
 
 

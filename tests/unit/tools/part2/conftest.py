@@ -323,10 +323,10 @@ async def tesla_session(
 
     Weitere: ``asked`` sammelt die gestellten Rückfragen, ``config`` ersetzt die
     Beispielkonfiguration, ``tessie_connected`` ist die Verbindung zu Tessie, ``unattended`` gilt
-    wie ``--yes``. ``check_s`` ist die Prüfzeit des Aktors im Tessie-Cache (``verify_s``); mit 0
-    zählt die Bestätigung von Tessie wie vor dieser Prüfung, denn der Cache folgt hier keinem
-    Befehl. Nach dem Test stoppt die Fixture die Sitzungen: Laufende Tessie-Befehle enden,
-    der Client schließt.
+    wie ``--yes``. ``check_s`` und ``settle_s`` sind Prüfzeit und Wartezeit des Aktors im
+    Tessie-Cache (``verify_s``, ``settle_s``); mit ``check_s`` 0 zählt die Bestätigung von Tessie
+    wie vor dieser Prüfung, denn der Cache folgt hier keinem Befehl. Nach dem Test stoppt die
+    Fixture die Sitzungen: Laufende Tessie-Befehle enden, der Client schließt.
     """
     built: list[Part2Session] = []
 
@@ -343,6 +343,7 @@ async def tesla_session(
         after_answer: Mapping[str, Callable[[FakeTwc], object]] | None = None,
         unattended: bool = False,
         check_s: float = 0.0,
+        settle_s: float = 0.0,
     ) -> tuple[Part2Session, FakeTwc]:
         settings = config if config is not None else cfg
         store = StateStore(SystemClock())
@@ -387,7 +388,7 @@ async def tesla_session(
             clock=SystemClock().now,
         )
         car.twc = twc
-        car.verify_s = check_s
+        car.verify_s, car.settle_s = check_s, settle_s
         session = Part2Session(
             settings,
             store=store,

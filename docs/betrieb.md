@@ -457,11 +457,12 @@ docker compose run --rm -v "$PWD/verification:/out" --entrypoint python ems-core
 - Tesla: Das Werkzeug wendet die Rate-Limits der Safety-Schicht nicht an, denn du bestätigst jeden
   Schritt. Zwei vollständige Läufe binnen einer Stunde können deshalb mehr als 6 Start/Stopp-Befehle
   ergeben (die Grenze der Regelung, Spec 6.5).
-- Tesla: Nach der Bestätigung durch Tessie wartet der Aktor bis 40 s auf die nächste frische
-  Meldung des Stroms. Zeigt sie noch den alten Wert, sendet er den Befehl einmal erneut; an der
-  Anlage wirkt ein Befehl auf oder von 5 A erst beim zweiten Mal. Das Log des core bzw. des
-  Werkzeugs meldet das als „Tesla übernahm den Strom nicht, Befehl wiederholt“. Die Zeit bis zur
-  Bestätigung im Bericht schließt diese Prüfung ein.
+- Tesla: Bestätigt ist ein Strom erst, wenn auch der Tessie-Cache ihn zeigt. Der Aktor wertet die
+  erste Meldung ab 10 s nach der Bestätigung durch Tessie, höchstens bis 40 s danach. Zeigt sie
+  noch den alten Wert, sendet das Werkzeug den Befehl einmal erneut; an der Anlage wirkt ein
+  Befehl auf oder von 5 A erst beim zweiten Mal. Der Befund sagt dann „Befehl wiederholt“.
+  „bestätigt nach … s“ schließt die Prüfung ein, die Zeit am Wall Connector zählt ab dem ersten
+  Senden.
 
 **Wiederherstellen**
 

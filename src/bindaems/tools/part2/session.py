@@ -10,7 +10,9 @@ Betreiber (Plan 2b, Präzisierung 11). Die Sitzung startet dafür die echten Ada
   schlafenden Tesla weckt die Sitzung so nie.
 - Innerhalb der Frist bleibt sie hartnäckig: Sie wartet, bis der Aktor steuerbar ist, sendet
   erneut, wenn er ablehnt, und ohne Bestätigung nach ``resend_s`` noch einmal. So übersteht ein
-  Wert das Neuverbinden zum Cerbo nach einer langen Rückfrage.
+  Wert das Neuverbinden zum Cerbo nach einer langen Rückfrage. Hat das Gerät einen bestätigten
+  Wert nicht übernommen (``NOT_TAKEN``, der Tesla bei 5 A), sendet sie ihn einmal erneut, wie der
+  core im sicheren Zustand.
 - Vor dem ersten Schreiben je Aktor und Art merkt sie sich den vorgefundenen Wert (``present``).
   Ist er unbekannt, schreibt sie nicht: Er ließe sich nicht wiederherstellen. Dasselbe gilt für
   einen Wert, den die Regeln 1–3 klemmen oder ablehnen würden (``found_problem``): Sie prüft ihn,
@@ -75,6 +77,7 @@ from bindaems.shared.timeutil import SystemClock
 from bindaems.tools.verify_checks import Finding
 
 RESTORE_S: Final = 15.0  # Frist je wiederherzustellendem Wert, vom Senden bis zur Bestätigung
+REPEATED: Final = ", Befehl wiederholt"  # nach NOT_TAKEN ging der Wert ein zweites Mal hinaus
 RESEND_S: Final = 5.0  # ohne Bestätigung geht derselbe Wert nach so vielen Sekunden noch einmal
 MAX_PERSISTENT_WRITES: Final = 4  # persistente Schreibzugriffe je Lauf, alle Arten zusammen
 PERSISTENT_LIMIT: Final = (
@@ -168,8 +171,8 @@ class Part2Session:
 
     ``findings`` sind die Befunde, die die Teile mit ``record`` festhalten. ``failure`` nennt,
     warum der letzte Aufruf von ``set_and_confirm`` keinen bestätigten Wert ergab, ``sent``, ob er
-    einen Auftrag hinausgeschickt hat. ``confirmed`` ist der zuletzt bestätigte Wert je Aktor und
-    Art, auch vom Wiederherstellen.
+    einen Auftrag hinausgeschickt hat, ``repeated``, ob er ihn nach ``NOT_TAKEN`` erneut gesendet
+    hat. ``confirmed`` ist der zuletzt bestätigte Wert je Aktor und Art, auch vom Wiederherstellen.
     """
 
     def __init__(
@@ -195,6 +198,7 @@ class Part2Session:
         self.findings: list[Finding] = []
         self.failure: str | None = None
         self.sent = False
+        self.repeated = False
         self._store = store
         self._ask = ask
         self._poll_s = poll_s
@@ -349,11 +353,16 @@ class Part2Session:
         endet der Aufruf sofort mit ``PERSISTENT_LIMIT`` als Grund. An einen Aktor, der nicht
         steuerbar ist, geht nie etwas.
 
+        Meldet der Aktor, das Gerät habe den bestätigten Wert nicht übernommen (``NOT_TAKEN``;
+        der Tesla bei Befehlen auf oder von 5 A), sendet die Sitzung denselben Wert sofort einmal
+        erneut, sofern der Aktor steuerbar ist, und die Frist beginnt dafür von vorn.
+
         Ergebnis sind die Sekunden vom ersten Senden bis zur Bestätigung, sonst ``None``; dann
         nennt ``failure`` den Grund: ging nichts hinaus (``sent`` ist dann falsch), warum (Werte
         nach der Rückfrage nicht aktuell, nicht steuerbar, abgelehnt, vorgefundener Wert unbekannt
         oder außerhalb der Regeln 1–3), sonst die Frist. Meldet der Aktor ausdrücklich einen
-        Fehler (Tesla: Tessie lehnt ab), endet das Warten sofort mit „Fehler: …“.
+        Fehler (Tesla: Tessie lehnt ab) oder ein zweites ``NOT_TAKEN``, endet das Warten sofort
+        mit „Fehler: …“; ging die Wiederholung nicht hinaus, steht ihr Grund dahinter.
 
         Ein Aktor, eine Art oder ein Wert, den die Regeln 1–3 klemmen oder ablehnen würden, ist ein
         Fehler des Werkzeugs (``ValueError``), noch vor jedem Senden. Vor dem ersten angenommenen
@@ -363,6 +372,7 @@ class Part2Session:
         key = (actuator, kind)
         self.failure = None
         self.sent = False
+        self.repeated = False
         if self._budget_used_up(kind):
             self.failure = PERSISTENT_LIMIT
             return None
@@ -388,7 +398,15 @@ class Part2Session:
                 if state == Confirmation.CONFIRMED:
                     self._confirmed[key] = value
                     return self.monotonic() - first_sent
-                if state == Confirmation.FAILED:
+                if state == Confirmation.NOT_TAKEN and not self.repeated:
+                    self.repeated = True
+                    problem = self._send(device, key, kind, value)
+                    if problem is not None:
+                        self.failure = f"Fehler: {text} Keine Wiederholung, {problem}"
+                        return None
+                    started = last_sent = self.monotonic()  # eigene Frist für die Wiederholung
+                    state = Confirmation.PENDING
+                if state in (Confirmation.FAILED, Confirmation.NOT_TAKEN):
                     self.failure = f"Fehler: {text}" if text else "Fehler"
                     return None
                 now = self.monotonic()
@@ -524,7 +542,8 @@ class Part2Session:
             return Finding(item, title, "fail", f"{type(exc).__name__}: {exc}")
         if waited is None:
             return Finding(item, title, "fail", self.failure or "nicht wiederhergestellt")
-        return Finding(item, title, "ok", f"Wiederhergestellt nach {seconds(waited)} s")
+        detail = f"Wiederhergestellt nach {seconds(waited)} s"
+        return Finding(item, title, "ok", f"{detail}{REPEATED}" if self.repeated else detail)
 
 
 def build_session(

@@ -48,7 +48,9 @@ Abstand; der Zustand jeweils live von Tessie:
   Auto den Wert übernommen hat.
 - **Folge:** Das Auto blieb nach dem Versuch auf 5 A stehen; der Betreiber stellt den Strom in der
   App zurück.
-- **Umgesetzt am 12.10.2026:** Der Tesla-Aktor wartet nach der Bestätigung durch Tessie bis 40 s
-  auf die nächste frische Meldung des Stroms. Zeigt sie den alten Wert, sendet er den Befehl einmal
-  erneut. `min_a` kann deshalb bei 5 A bleiben. Ein weiterer Lauf des Punkts `tesla` mit den neuen
-  Images soll zeigen, dass „Verhalten bei 5 A“ jetzt wirkt.
+- **Umgesetzt am 12.10.2026:** Der Tesla-Aktor prüft den Strom nach der Bestätigung durch Tessie
+  im Tessie-Cache, mit der ersten Meldung ab 10 s und bis 40 s danach. Zeigt sie den alten Wert,
+  meldet er „nicht übernommen“. Dann geht der Befehl ein zweites Mal hinaus: im core als nächster
+  Versuch des sicheren Zustands durch die Safety-Schicht, im Werkzeug als Wiederholung („Befehl
+  wiederholt“ im Befund). `min_a` kann deshalb bei 5 A bleiben. Ein weiterer Lauf des Punkts
+  `tesla` mit den neuen Images soll zeigen, dass „Verhalten bei 5 A“ jetzt wirkt.

@@ -309,9 +309,9 @@ Demo-Zugänge: `admin`, `gast` (Lesen) und `sicher` (Admin mit TOTP, Geheimnis
     `friendly_name_str`
   - Wichtig auch für die Lastprognose aus der HA-Historie.
 - **Offen an der Anlage, als Nächstes (Plan 2b):**
-  1. Tesla: mit den neuen Images (Wiederholung des Strombefehls, siehe unten) den Punkt `tesla`
-     wiederholen; „Verhalten bei 5 A“ sollte jetzt wirken. Den Schlaf-Test (`--schlafend`)
-     durchführen (Betriebshandbuch 11).
+  1. Tesla: mit den neuen Images (Prüfung im Tessie-Cache und Wiederholung, siehe unten) den
+     Punkt `tesla` wiederholen; „Verhalten bei 5 A“ sollte jetzt wirken, mit „Befehl
+     wiederholt“ im Befund. Den Schlaf-Test (`--schlafend`) durchführen (Betriebshandbuch 11).
   2. EVCS: den Schritt „Verbindung unterbrochen“ nachholen (Punkt `evcs` erneut, die Rückfrage
      mit `j` beantworten und das Netzwerkkabel der EVCS ziehen, wenn das Werkzeug es verlangt).
   3. Victron: 17.2-4 „Kein Akku ins Auto“ (während ein Auto an der EVCS lädt) und 17.2-8
@@ -414,11 +414,12 @@ Punkte aufgreifen:
     muss es danach wieder aufnehmen.
   - **Tesla-Ladestrom:** Über Tessie wirkt ein Befehl, der auf 5 A setzt oder von 5 A weggeht, erst
     beim zweiten Mal, obwohl Tessie den ersten mit `result: true` bestätigt (Prüfprotokoll Teil 2
-    vom 12.10.2026, Nachtrag). Seit dem 12.10.2026 wartet der Tesla-Aktor nach der Bestätigung bis
-    40 s (`VERIFY_S`) auf die nächste frische Meldung des Stroms und sendet den Befehl einmal
-    erneut, wenn sie den alten Wert zeigt; ohne frische Meldung gilt die Bestätigung von Tessie.
-    Die Regelung nimmt trotzdem einen bestätigten Befehl nicht als Wirkung; maßgeblich ist der
-    gemessene Strom.
+    vom 12.10.2026, Nachtrag). Seit dem 12.10.2026 prüft der Tesla-Aktor den Strom nach der
+    Bestätigung im Tessie-Cache (Meldung ab 10 s bis 40 s danach, `SETTLE_S`, `VERIFY_S`) und
+    meldet sonst `NOT_TAKEN`. Er sendet nicht selbst nach: Den neuen Versuch gibt der Aufrufer
+    durch die Safety-Schicht (Spec 6.5, 8.5). Die Regelung muss einen Strom nach `NOT_TAKEN`
+    erneut anfordern; sie nimmt auch einen bestätigten Befehl nicht als Wirkung, maßgeblich ist
+    der gemessene Strom.
   - **Netz-Sollwert-Override:** Er verschwindet nach 5 min ohne Auffrischen (Prüfprotokoll Teil 2
     vom 12.10.2026). Die Regelung muss einen gewollten Override vorher auffrischen.
   - **Entladegrenze:** Es gibt einen flüchtigen Override `ess.override.maxdischargepower`. Prüfen,
