@@ -1,8 +1,8 @@
 # Übergabe an die nächste Session
 
-Stand: 12.10.2026. Plan 2b liegt auf dem Branch `ccr-e451cb4c-qeg1tm`. `main` und der
-Standard-Branch `claude/ems-haus-akku-pv-93c0s6` stehen noch auf dem Stand davor, bis der Betreiber
-der Integration zustimmt; was schon auf `main` ist, zeigt `git log main`.
+Stand: 12.10.2026. Plan 2b ist auf `main` (Fast-Forward vom Branch `ccr-e451cb4c-qeg1tm` mit
+Zustimmung des Betreibers). Der Standard-Branch `claude/ems-haus-akku-pv-93c0s6` steht noch auf dem
+Stand davor; ihn nachzuziehen hat der Betreiber nicht beauftragt.
 
 ## Kurzfassung
 
@@ -69,7 +69,7 @@ der Integration zustimmt; was schon auf `main` ist, zeigt `git log main`.
   mit Abdeckungsgrenzen (≥ 75 % insgesamt, ≥ 90 % für `core/safety`, `core/control` und
   `core/actuators`), Vitest mit svelte-check, Prettier und ESLint; dazu E2E mit Playwright.
 - **Offen:**
-  - Plan 2b: Integration nach `main` mit Zustimmung des Betreibers (siehe „Nächster Schritt“)
+  - Plan 2c schreiben (siehe „Nächster Schritt“)
   - an der Anlage: Images ausrollen, Watchdog auf 1.1.0, Probe wiederholen, Teil 2 für EVCS und
     Tesla (siehe „Offen an der Anlage“)
   - die Abnahme der Phase 1 an der Anlage
@@ -324,8 +324,8 @@ Demo-Zugänge: `admin`, `gast` (Lesen) und `sicher` (Admin mit TOTP, Geheimnis
    (Zuschnitt in `docs/superpowers/plans/2026-10-10-phase-2a-sicherheitsbasis.md`):
    - **2a Sicherheitsbasis:** umgesetzt, im Gesamtreview geprüft und an der Anlage installiert;
      die Watchdog-Probe ist bestanden (11.10.2026).
-   - **2b Aktoren:** umgesetzt, je Task und im Gesamtreview geprüft; die Integration nach `main`
-     steht aus (siehe „Nächster Schritt“).
+   - **2b Aktoren:** umgesetzt, je Task und im Gesamtreview geprüft und auf `main`; an der Anlage
+     noch nicht ausgerollt (siehe „Offen an der Anlage“).
      - Aktoren für EVCS, Victron und Tesla mit Dry-Run und Rücklese-Prüfung
      - sicherer Zustand (Spec 8.5) und Übergabe am Ende des Live-Betriebs
      - Entscheidungslog im core (Spool, Stream, `GET /v1/decisions`)
@@ -351,12 +351,11 @@ Demo-Zugänge: `admin`, `gast` (Lesen) und `sicher` (Admin mit TOTP, Geheimnis
      den Weg an der Anlage; das steht noch aus.
    - Geschrieben wird nie der Maximalstrom (5017).
 
-### Nächster Schritt: Integration von Plan 2b, dann die Anlage und Plan 2c
+### Nächster Schritt: die Anlage und Plan 2c
 
-1. Plan 2b nach `main` nur mit Zustimmung des Betreibers (bisher per Fast-Forward-Merge, Tests
-   auf `main`, dann Push). Gesamtreview, Fix-Durchgang und Re-Review sind erledigt; die
+1. Plan 2b ist auf `main`; Gesamtreview, Fix-Durchgang und Re-Review sind erledigt, die
    Entscheidungen stehen in `docs/superpowers/plans/2026-10-11-phase-2b-entscheidungen.md`.
-2. Dann an der Anlage die Schritte aus „Offen an der Anlage“.
+2. An der Anlage die Schritte aus „Offen an der Anlage“.
 3. Danach Plan 2c schreiben; die geparkten Befunde aus der Entscheidungsdatei und die Hinweise
    unten gehören hinein.
 
