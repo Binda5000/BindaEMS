@@ -106,14 +106,13 @@ def test_the_report_rates_every_metric(cfg) -> None:
     assert rows[-1] == "| Wiederholte Dry-Run-Entscheidungen | 0 | 0 | OK |"
 
 
-def test_each_check_gets_a_line_with_ok_or_its_findings(cfg) -> None:
+def test_each_check_gets_one_line_with_its_findings_if_it_fails(cfg) -> None:
     text = render_report(result_of(cfg, [quiet(0)], [], CHECKS), CONFIG)
     assert section(text, "Szenario-Prüfungen") == [
-        "| Ergebnis | Prüfung |",
-        "|---|---|",
-        "| OK | Alles gut. |",
-        "| FEHLER | Erster Verstoß. |",
-        "| FEHLER | Zweiter Verstoß. |",
+        "| Ergebnis | Prüfung | Befund |",
+        "|---|---|---|",
+        "| OK | Alles gut. | – |",
+        "| FEHLER | Nichts geht. | Erster Verstoß. Zweiter Verstoß. |",
     ]
 
 
@@ -124,8 +123,8 @@ def test_table_cells_escape_the_pipe(cfg) -> None:
     checks = Checks((Check("a | b", passing), Check("c", odd)))
     text = render_report(result_of(cfg, [quiet(0)], [], checks), CONFIG)
     assert section(text, "Szenario-Prüfungen")[2:] == [
-        "| OK | a \\| b |",
-        "| FEHLER | L1 \\| L2<br>zu hoch. |",
+        "| OK | a \\| b | – |",
+        "| FEHLER | c | L1 \\| L2<br>zu hoch. |",
     ]
 
 
@@ -135,8 +134,10 @@ def test_checks_without_a_text_show_their_findings(cfg) -> None:
         result = replace(result, scenario=replace(result.scenario, checks=checks))
         return section(render_report(result, CONFIG), "Szenario-Prüfungen")[2:]
 
-    assert lines_with(failing) == ["| FEHLER | Erster Verstoß. |", "| FEHLER | Zweiter Verstoß. |"]
-    assert lines_with(passing) == ["| OK | Keine Verstöße. |"]
+    assert lines_with(failing) == [
+        "| FEHLER | Prüfungen des Szenarios. | Erster Verstoß. Zweiter Verstoß. |"
+    ]
+    assert lines_with(passing) == ["| OK | Prüfungen des Szenarios. | – |"]
 
 
 def test_the_report_counts_decisions_and_reasons(cfg) -> None:

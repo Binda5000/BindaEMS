@@ -17,6 +17,7 @@ import pytest
 import structlog
 import yaml
 
+import bindaems.tools.sim.__main__ as sim_main
 from bindaems.tools.sim.__main__ import main
 from bindaems.tools.sim.scenarios import SCENARIOS
 
@@ -96,18 +97,39 @@ def test_the_cli_prints_one_line_per_metric_and_logs_only_warnings(tmp_path, cap
 def test_a_failing_run_returns_1(tmp_path, capsys) -> None:
     out = tmp_path / "bericht.md"
     assert main(["--szenario", "abend-sofort", "--stunden", "0.05", "--out", str(out)]) == 1
-    assert "| FEHLER | Die Lastspitze liegt nicht im Lauf. |" in out.read_text(encoding="utf-8")
-    assert (
-        "Szenario-Prüfung: FEHLER – Die Lastspitze liegt nicht im Lauf." in capsys.readouterr().out
-    )
+    check = "Während der Lastspitze liegt der Strom der EVCS unter dem davor."
+    finding = "Die Lastspitze liegt nicht im Lauf."
+    assert f"| FEHLER | {check} | {finding} |" in out.read_text(encoding="utf-8")
+    lines = capsys.readouterr().out.splitlines()
+    assert lines[-2:] == [
+        f"Szenario-Prüfung: FEHLER – {check} Befund: {finding}",
+        f"Bericht: {out}",
+    ]
 
 
-def test_every_run_gets_a_fresh_directory(tmp_path) -> None:
-    # In einem gebrauchten Verzeichnis lehnte der core die Absicht ab: Version 1 ist dort schon
-    # angenommen.
-    out = tmp_path / "bericht.md"
-    for _ in range(2):
+def test_every_run_gets_a_fresh_directory(tmp_path, monkeypatch) -> None:
+    # In einem gebrauchten Verzeichnis nähme der core dieselbe Absicht noch einmal an (eine
+    # Wiederholung mit gleichem Inhalt ist kein Fehler), aber der Lauf läse auch die Entscheidungen
+    # des früheren Laufs: Der zweite Bericht zählte sie doppelt. Darum bekommt jeder Lauf ein
+    # eigenes, leeres Verzeichnis.
+    seen: list[tuple[Path, list[str]]] = []
+    real = sim_main.run_scenario
+
+    def spy(scenario: Any, cfg: Any, data_dir: Path, **kwargs: Any) -> Any:
+        # der Inhalt beim Start des Laufs; zurück geht der Lauf selbst, ``main`` führt ihn aus
+        seen.append((data_dir, sorted(entry.name for entry in data_dir.iterdir())))
+        return real(scenario, cfg, data_dir, **kwargs)
+
+    monkeypatch.setattr(sim_main, "run_scenario", spy)
+    reports = []
+    for n in range(2):
+        out = tmp_path / f"bericht-{n}.md"
         assert main(["--szenario", "reserve", "--stunden", "0.02", "--out", str(out)]) == 0
+        reports.append(out.read_text(encoding="utf-8"))
+    (first, first_entries), (second, second_entries) = seen
+    assert first != second and first_entries == second_entries == []
+    decisions = [report.split("## Entscheidungen")[1] for report in reports]
+    assert decisions[0] == decisions[1] and "| wallbox.evcs | charging | ok | 1 |" in decisions[0]
 
 
 @pytest.mark.parametrize(
@@ -155,3 +177,22 @@ def test_hours_must_be_a_finite_number_above_0(tmp_path, capsys, hours) -> None:
         main(["--szenario", "reserve", "--stunden", hours, "--out", str(tmp_path / "x.md")])
     assert exit_info.value.code == 2
     assert "--stunden" in capsys.readouterr().err
+
+
+def test_hours_beyond_the_scenario_run_the_whole_scenario(tmp_path, monkeypatch, capsys) -> None:
+    durations: list[int | None] = []
+    real = sim_main.run_scenario
+
+    def spy(scenario: Any, cfg: Any, data_dir: Path, *, duration_s: int | None = None) -> Any:
+        durations.append(duration_s)  # verlangt von ``main``; der Lauf selbst ist kurz
+        return real(scenario, cfg, data_dir, duration_s=2)
+
+    monkeypatch.setattr(sim_main, "run_scenario", spy)
+    for hours in (["--stunden", "5"], ["--stunden", "0.5"], []):
+        main(["--szenario", "reserve", *hours, "--out", str(tmp_path / "x.md")])
+    assert durations == [SCENARIOS["reserve"].duration_s, 1800, None]  # „reserve“ dauert 1 h
+    with pytest.raises(SystemExit):
+        main(["--help"])
+    help_text = " ".join(capsys.readouterr().out.split())
+    hours_help = "Dauer in Stunden statt der des Szenarios, höchstens diese;"
+    assert f"--stunden STUNDEN {hours_help} mehr lässt es ganz laufen" in help_text

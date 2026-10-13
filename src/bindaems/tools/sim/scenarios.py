@@ -517,7 +517,12 @@ def _one_current(key: str, amps: float) -> Check:
 
 def _evcs_off_from(key: str, begin_s: int) -> Check:
     """Ab ``begin_s`` lädt die EVCS ``key`` nicht: Kein Auto lädt, ihr letzter Befehl „Laden“
-    mit Wert davor ist „aus“, und danach kommt kein „Laden an“."""
+    mit Wert davor ist „aus“, und danach kommt kein „Laden an“.
+
+    Die Proben kennen Autos, nicht Ladepunkte: „Kein Auto lädt“ heißt darum gar keines, auch an
+    einer anderen Wallbox. Das passt nur zu Szenarien, in denen ab ``begin_s`` an keiner anderen
+    Wallbox ein Auto lädt, wie in „zuordnung“: Dort ist der e-Golf nie angesteckt, der Tesla ab
+    ``UNPLUG_S`` nicht mehr."""
     actuator = wallbox_actuator(key)
     valued = frozenset({DecisionResult.OK, DecisionResult.DRY_RUN})
 

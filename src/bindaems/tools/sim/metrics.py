@@ -27,9 +27,11 @@ Kennzahlen und ihre Grenzen:
 - **Wiederholte Dry-Run-Entscheidungen:** Dry-Run-Entscheidungen, deren Wert gleich dem vorigen
   eigenen Wert der Regelung für Aktor und Art ist (``OwnValue``); keine. Eigene Werte setzt jedes
   Urteil mit Wert und ``UNCHANGED`` (Präzisierung 10); ``UNCHANGED`` steht in keiner Entscheidung,
-  darum bringt der Lauf die eigenen Werte mit. Ohne sie zählen nur die Dry-Run-Entscheidungen
-  selbst. Eine Pause der Regelung, nach der sie ihre Werte vergisst, sieht die Kennzahl nicht; in
-  den Szenarien im Dry-Run kommt keine vor.
+  darum bringt der Lauf die eigenen Werte mit. Vergisst die Regelung sie (``Forgotten``: Pause,
+  ``forget``, „nicht gesendet“), ist die nächste Entscheidung keine Wiederholung. Was sie in sich
+  vergisst (Ladepunkt wieder geregelt, neuer Ansteckvorgang, höhere Stufe der Überlast), sieht die
+  Kennzahl nicht; in den Szenarien im Dry-Run kommt das nach der ersten Entscheidung nicht vor.
+  Ohne eigene Werte zählen nur die Dry-Run-Entscheidungen selbst.
 
 **Übergänge** (Design 13.2: „abgesehen von Übergängen“): Nach einer Änderung darf die Regelung
 ``TRANSITION_S`` über dem Ziel liegen und Akku-Energie in PV-Autos fließen lassen. Lädt in der
@@ -111,6 +113,22 @@ class OwnValue:
     kind: CommandKind
     value: CommandValue
     dry_run: bool
+
+
+@dataclass(frozen=True)
+class Forgotten:
+    """Die Regelung hat letzte eigene Werte vergessen: die des Aktors ``actuator``, mit ``kind``
+    nur die dieser Art; ohne ``actuator`` alle."""
+
+    actuator: str | None = None
+    kind: CommandKind | None = None
+
+    def covers(self, key: tuple[str, CommandKind]) -> bool:
+        """Gilt das Vergessen für Aktor und Art ``key``?"""
+        actuator, kind = key
+        return (self.actuator is None or actuator == self.actuator) and (
+            self.kind is None or kind == self.kind
+        )
 
 
 @dataclass(frozen=True)
@@ -222,14 +240,14 @@ def measure(
     cfg: Config,
     *,
     sent: Mapping[str, datetime] | None = None,
-    own: Sequence[OwnValue] | None = None,
+    own: Sequence[OwnValue | Forgotten] | None = None,
 ) -> Metrics:
     """Die Kennzahlen aus den Proben je Sekunde und den Entscheidungen, aufsteigend nach Zeit.
 
     ``sent`` nennt je Kennung einer Entscheidung den Zeitpunkt, zu dem ihr Befehl gesendet wurde;
     ohne Eintrag gilt der Zeitpunkt der Entscheidung. ``own`` sind die eigenen Werte der Regelung
-    in ihrer Reihenfolge, für die Wiederholungen im Dry-Run. Folgen zählen über
-    aufeinanderfolgende Sekunden (``Sample.t``).
+    und was sie davon vergaß, in ihrer Reihenfolge, für die Wiederholungen im Dry-Run. Folgen zählen
+    über aufeinanderfolgende Sekunden (``Sample.t``).
     """
     grid = cfg.grid
     fuse_target = grid.fuse_a - grid.fuse_margin_a
@@ -388,10 +406,13 @@ def _by_actuator(
     return {actuator: sorted(found) for actuator, found in moments.items()}
 
 
-def _repeated_dry_runs(decisions: Sequence[Decision], own: Sequence[OwnValue] | None) -> int:
+def _repeated_dry_runs(
+    decisions: Sequence[Decision], own: Sequence[OwnValue | Forgotten] | None
+) -> int:
     """Dry-Run-Entscheidungen mit demselben Wert wie der vorige eigene Wert für Aktor und Art.
 
-    Ohne ``own`` sind die eigenen Werte nur die Dry-Run-Entscheidungen selbst.
+    Ein ``Forgotten`` löscht die vorigen Werte, die es nennt. Ohne ``own`` sind die eigenen Werte
+    nur die Dry-Run-Entscheidungen selbst.
     """
     if own is None:
         own = [
@@ -401,9 +422,12 @@ def _repeated_dry_runs(decisions: Sequence[Decision], own: Sequence[OwnValue] | 
         ]
     last: dict[tuple[str, CommandKind], CommandValue] = {}
     repeated = 0
-    for value in own:
-        key = (value.actuator, value.kind)
-        if value.dry_run and key in last and last[key] == value.value:
+    for event in own:
+        if isinstance(event, Forgotten):
+            last = {key: value for key, value in last.items() if not event.covers(key)}
+            continue
+        key = (event.actuator, event.kind)
+        if event.dry_run and key in last and last[key] == event.value:
             repeated += 1
-        last[key] = value.value
+        last[key] = event.value
     return repeated

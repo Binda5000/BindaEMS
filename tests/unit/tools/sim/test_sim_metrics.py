@@ -16,7 +16,14 @@ from typing import Final
 from bindaems.shared.config import load_config
 from bindaems.shared.control import CommandKind, CommandValue
 from bindaems.shared.decisions import Decision, DecisionResult
-from bindaems.tools.sim.metrics import CarSample, OwnValue, Sample, measure, tesla_transition_s
+from bindaems.tools.sim.metrics import (
+    CarSample,
+    Forgotten,
+    OwnValue,
+    Sample,
+    measure,
+    tesla_transition_s,
+)
 
 CFG: Final = load_config(Path("deploy/config.example.yaml"))
 T0: Final = datetime(2026, 6, 21, 8, 0, tzinfo=UTC)  # 10:00 Wiener Zeit
@@ -384,6 +391,23 @@ def test_a_dry_run_decision_repeats_the_previous_own_value() -> None:
     metrics = measure([], [], CFG, own=own)
     assert metrics.repeated_dry_runs == 2
     assert metrics.failures(CFG) == ["Wiederholte Dry-Run-Entscheidungen: 2, Grenze 0."]
+
+
+def test_a_dry_run_decision_after_the_regulation_forgot_is_no_repeat() -> None:
+    # Vergisst die Regelung ihren letzten Wert (forget je Aktor, idle für alle, „nicht gesendet“
+    # je Aktor und Art), entscheidet sie danach neu; das ist keine Wiederholung.
+    current, charging = CommandKind.CURRENT, CommandKind.CHARGING
+    six = OwnValue(TESLA, current, 6.0, dry_run=True)
+    on = OwnValue(TESLA, charging, True, dry_run=True)
+
+    def repeats(*own: OwnValue | Forgotten) -> int:
+        return measure([], [], CFG, own=own).repeated_dry_runs
+
+    assert repeats(six, six) == 1
+    assert repeats(six, Forgotten(TESLA), six) == 0
+    assert repeats(six, Forgotten(EGOLF), six) == 1  # ein anderer Aktor
+    assert repeats(six, Forgotten(), six) == 0  # alle
+    assert repeats(six, on, Forgotten(TESLA, charging), six, on) == 1  # nur „Laden“ vergessen
 
 
 def test_live_decisions_are_no_repeated_dry_runs() -> None:

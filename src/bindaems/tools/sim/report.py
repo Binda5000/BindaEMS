@@ -5,8 +5,8 @@
 - Überschrift mit dem Titel des Szenarios, dann eine Tabelle „Angabe | Wert“: Szenario, simulierte
   Zeit in Wiener Zeit und die Konfiguration, aus der die Grenzen kommen
 - ``## Kennzahlen``: je Kennzahl Wert, Grenze und OK oder FEHLER (``Metrics.figures``)
-- ``## Szenario-Prüfungen``: je Prüfung eine Zeile, OK mit ihrem Satz oder je Verstoß FEHLER mit
-  dessen Satz (``check_lines``)
+- ``## Szenario-Prüfungen``: je Prüfung eine Zeile mit OK oder FEHLER, ihrem Satz und, wenn sie
+  fehlschlägt, ihren Verstößen als Befund (``check_lines``)
 - ``## Entscheidungen``: die Zahl der Entscheidungen je Aktor, Art und Ergebnis, danach die Zahl
   je Code; die Codes sind die Gründe der Regelung und die Befunde der Safety-Schicht
 
@@ -17,6 +17,7 @@ from __future__ import annotations
 
 from collections import Counter
 from collections.abc import Sequence
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Final
@@ -25,12 +26,34 @@ from bindaems.shared.config import load_config
 from bindaems.shared.decisions import Decision
 from bindaems.shared.timeutil import LOCAL_TZ
 from bindaems.tools.sim.runner import SimResult
-from bindaems.tools.sim.scenarios import Checks
+from bindaems.tools.sim.scenarios import Check, Checks
 
 OK: Final = "OK"
 FAILED: Final = "FEHLER"
-NO_FINDINGS: Final = "Keine Verstöße."  # eine Prüfung ohne eigenen Satz, die bestanden ist
+SCENARIO_CHECKS: Final = "Prüfungen des Szenarios."  # Satz zu Prüfungen, die keine ``Checks`` sind
+NO_FINDING: Final = "–"  # Befund einer bestandenen Prüfung
 NO_DECISIONS: Final = "Keine Entscheidungen."
+
+
+@dataclass(frozen=True)
+class CheckLine:
+    """Eine Prüfung des Szenarios im Ergebnis: ihr Satz und je Verstoß einer; ohne bestanden."""
+
+    text: str
+    findings: tuple[str, ...]
+
+    @property
+    def ok(self) -> bool:
+        return not self.findings
+
+    @property
+    def rating(self) -> str:
+        return OK if self.ok else FAILED
+
+    @property
+    def finding(self) -> str:
+        """Die Verstöße in einem Text, ``NO_FINDING`` ohne."""
+        return " ".join(self.findings) if self.findings else NO_FINDING
 
 
 def render_report(result: SimResult, config_path: str) -> str:
@@ -57,9 +80,12 @@ def render_report(result: SimResult, config_path: str) -> str:
         "",
         "## Szenario-Prüfungen",
         "",
-        "| Ergebnis | Prüfung |",
-        "|---|---|",
-        *(f"| {OK if ok else FAILED} | {_cell(text)} |" for ok, text in check_lines(result)),
+        "| Ergebnis | Prüfung | Befund |",
+        "|---|---|---|",
+        *(
+            f"| {line.rating} | {_cell(line.text)} | {_cell(line.finding)} |"
+            for line in check_lines(result)
+        ),
         "",
         "## Entscheidungen",
         "",
@@ -68,22 +94,16 @@ def render_report(result: SimResult, config_path: str) -> str:
     return "\n".join(lines) + "\n"
 
 
-def check_lines(result: SimResult) -> list[tuple[bool, str]]:
-    """Je Prüfung des Szenarios ``(True, ihr Satz)`` oder je Verstoß ``(False, sein Satz)``.
+def check_lines(result: SimResult) -> list[CheckLine]:
+    """Je Prüfung des Szenarios eine ``CheckLine`` mit ihrem Satz und ihren Verstößen.
 
-    Sind die Prüfungen keine ``Checks``, gibt es keine Sätze dazu: dann je Verstoß eine Zeile oder
-    ``NO_FINDINGS``. Die Prüfungen sind reine Funktionen des Ergebnisses; der Bericht ruft sie
-    erneut auf.
+    Sind die Prüfungen keine ``Checks``, gibt es keine Sätze dazu: dann sind sie eine Prüfung mit
+    dem Satz ``SCENARIO_CHECKS``. Die Prüfungen sind reine Funktionen des Ergebnisses; der Bericht
+    ruft sie erneut auf.
     """
     checks = result.scenario.checks
-    if not isinstance(checks, Checks):
-        found = checks(result)
-        return [(False, text) for text in found] or [(True, NO_FINDINGS)]
-    lines: list[tuple[bool, str]] = []
-    for check in checks.items:
-        found = check.find(result)
-        lines += [(False, text) for text in found] or [(True, check.text)]
-    return lines
+    items = checks.items if isinstance(checks, Checks) else (Check(SCENARIO_CHECKS, checks),)
+    return [CheckLine(check.text, tuple(check.find(result))) for check in items]
 
 
 def _span(start: datetime, seconds: int) -> str:

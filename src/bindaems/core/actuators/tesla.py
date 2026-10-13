@@ -58,6 +58,10 @@ FAILURE_WINDOW: Final = timedelta(minutes=15)  # Zählfenster und Dauer des Zust
 # In der Startfolge geht der Strom hinaus, bevor das Auto lädt: Das Fenster von 65 s fängt darum
 # auch eine 60-s-Abfrage, solange sie höchstens 5 s dauert (10 s + 60 s + 5 s = 75 s); beim Laden
 # bleibt reichlich Luft. Ohne das ginge ein verlorener erster Befehl dort oft unbemerkt durch.
+# Die 65 s setzen voraus, dass Tessie binnen etwa 5 s nach dem Senden bestätigt, denn die Prüfung
+# endet spätestens 80 s nach dem Senden (``confirm_timeout_s`` − CHECK_MARGIN_S). Bestätigt Tessie
+# erst nach L > 5 s, bleiben vom Fenster nur 70 − L s (von L + 10 s bis 80 s nach dem Senden). Dann
+# fängt es eine 60-s-Abfrage nur, solange L und die Dauer der Abfrage zusammen höchstens 10 s sind.
 SETTLE_S: Final = 10.0
 VERIFY_S: Final = 75.0
 CHECK_MARGIN_S: Final = 5.0  # so lange vor der Frist des Ausführers endet die Prüfung spätestens

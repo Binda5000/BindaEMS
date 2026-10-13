@@ -6,7 +6,7 @@ Die Läufe sind kurz; die ganzen Szenarien prüft ``tests/integration/test_sim_s
 from __future__ import annotations
 
 import random
-from dataclasses import replace
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from itertools import pairwise
 from typing import Final
@@ -14,12 +14,20 @@ from typing import Final
 import pytest
 
 from bindaems.core.api.app import HealthReport
+from bindaems.core.safety.types import Outcome, Verdict
 from bindaems.shared.config import Config
-from bindaems.shared.control import ActuatorMode, ChargeMode, CommandKind, Intent, VehicleIntent
+from bindaems.shared.control import (
+    ActuatorMode,
+    ChargeMode,
+    Command,
+    CommandKind,
+    Intent,
+    VehicleIntent,
+)
 from bindaems.shared.decisions import Decision, DecisionResult
 from bindaems.shared.timeutil import LOCAL_TZ
 from bindaems.tools.sim import runner
-from bindaems.tools.sim.metrics import CarSample, OwnValue, Sample, measure
+from bindaems.tools.sim.metrics import CarSample, Forgotten, OwnValue, Sample, measure
 from bindaems.tools.sim.model import PlantModel
 from bindaems.tools.sim.runner import SimResult, run_scenario, sent_times
 from bindaems.tools.sim.scenarios import (
@@ -323,11 +331,118 @@ async def test_the_metrics_get_every_own_value_of_the_regulation(
         data_dir = tmp_path / str(live)
         data_dir.mkdir()
         result = await run_scenario(scenario, cfg, data_dir, duration_s=70)
-        assert seen.pop() == [
-            OwnValue(*current, dry_run=False),
-            OwnValue(*charging, dry_run=dry_run),
-        ]
+        own = seen.pop()
+        assert isinstance(own, list)
+        before = own[:-2]
+        assert before and all(isinstance(event, Forgotten) for event in before)
+        assert Forgotten() in before  # bis zum Regelbetrieb ruht die Regelung (idle)
+        # live: Beim Scharfschalten wechselt die EVCS vom Dry-Run nach live (forget)
+        assert (Forgotten("wallbox.evcs") in before) is live
+        assert own[-2:] == [OwnValue(*current, dry_run=False), OwnValue(*charging, dry_run=dry_run)]
         assert [(d.kind, d.requested) for d in result.decisions] == [charging[1:]]
+
+
+class FakeCharger:
+    """Was der Lauf an der Laderegelung einhüllt; merkt sich die Aufrufe."""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, object]] = []
+
+    def note_verdict(self, command: object, verdict: object, *, not_sent: bool = False) -> None:
+        self.calls.append(("note_verdict", not_sent))
+
+    def forget(self, actuators: object) -> None:
+        self.calls.append(("forget", actuators))
+
+    def idle(self, now: object) -> None:
+        self.calls.append(("idle", now))
+
+
+@dataclass
+class FakeRuntime:
+    charger: FakeCharger = field(default_factory=FakeCharger)
+
+
+def verdict_for(command: Command, outcome: Outcome, *, dry_run: bool) -> Verdict:
+    value = None if outcome is Outcome.REJECTED else command.value
+    return Verdict(command, outcome, value, (), dry_run)
+
+
+SIX: Final = Command("vehicle.tesla", CommandKind.CURRENT, 6.0)
+ON: Final = Command("wallbox.evcs", CommandKind.CHARGING, True)
+
+
+def wrapped() -> tuple[FakeCharger, list[OwnValue | Forgotten]]:
+    """Eine Laderegelung, eingehüllt vom Lauf, und die Liste ihrer eigenen Werte."""
+    rt = FakeRuntime()
+    return rt.charger, runner._own_values(rt)  # type: ignore[arg-type]
+
+
+def dry_run_six(charger: FakeCharger) -> None:
+    """Ein Dry-Run-Urteil „Strom 6 A“ an den Tesla."""
+    charger.note_verdict(SIX, verdict_for(SIX, Outcome.ACCEPTED, dry_run=True))
+
+
+def repeats(cfg: Config, own: list[OwnValue | Forgotten]) -> int:
+    return measure([], [], cfg, own=own).repeated_dry_runs
+
+
+def test_verdicts_with_a_value_or_unchanged_are_own_values(cfg) -> None:
+    charger, own = wrapped()
+    dry_run_six(charger)
+    charger.note_verdict(SIX, verdict_for(SIX, Outcome.UNCHANGED, dry_run=True))
+    charger.note_verdict(SIX, verdict_for(SIX, Outcome.DEFERRED, dry_run=True))  # setzt nichts
+    charger.note_verdict(SIX, None)  # nicht betrachtet: setzt nichts
+    dry_run_six(charger)
+    assert own == [
+        OwnValue("vehicle.tesla", CommandKind.CURRENT, 6.0, dry_run=True),
+        OwnValue("vehicle.tesla", CommandKind.CURRENT, 6.0, dry_run=False),
+        OwnValue("vehicle.tesla", CommandKind.CURRENT, 6.0, dry_run=True),
+    ]
+    assert repeats(cfg, own) == 1  # das letzte Urteil wiederholt den Wert von UNCHANGED
+    assert charger.calls == [("note_verdict", False)] * 5  # die Regelung bekommt jeden Aufruf
+
+
+def test_a_verdict_that_was_not_sent_is_no_own_value(cfg) -> None:
+    # Ein Wert stand fest, ging aber nicht hinaus: Die Regelung löscht ihren Wert dieser Art,
+    # und das nächste Urteil mit demselben Wert ist keine Wiederholung.
+    charger, own = wrapped()
+    dry_run_six(charger)
+    charger.note_verdict(SIX, verdict_for(SIX, Outcome.ACCEPTED, dry_run=False), not_sent=True)
+    dry_run_six(charger)
+    assert own[1] == Forgotten("vehicle.tesla", CommandKind.CURRENT)
+    assert repeats(cfg, own) == 0
+    assert charger.calls == [
+        ("note_verdict", False),
+        ("note_verdict", True),
+        ("note_verdict", False),
+    ]
+
+
+def test_forget_drops_the_own_values_of_its_actuators(cfg) -> None:
+    charger, own = wrapped()
+    dry_run_six(charger)
+    charger.forget({"wallbox.evcs", "vehicle.tesla"})
+    charger.forget(set())
+    dry_run_six(charger)
+    assert own[1:3] == [Forgotten("vehicle.tesla"), Forgotten("wallbox.evcs")]
+    assert repeats(cfg, own) == 0
+    assert charger.calls[1:3] == [("forget", {"wallbox.evcs", "vehicle.tesla"}), ("forget", set())]
+    charger.forget({"wallbox.evcs"})  # ein anderer Aktor: Der Wert des Tesla gilt weiter
+    dry_run_six(charger)
+    assert repeats(cfg, own) == 1
+
+
+def test_idle_drops_all_own_values(cfg) -> None:
+    charger, own = wrapped()
+    dry_run_six(charger)
+    charger.note_verdict(ON, verdict_for(ON, Outcome.ACCEPTED, dry_run=True))
+    charger.idle(T0)
+    dry_run_six(charger)
+    charger.note_verdict(ON, verdict_for(ON, Outcome.ACCEPTED, dry_run=True))
+    assert own[2] == Forgotten()
+    assert repeats(cfg, own) == 0
+    assert ("idle", T0) in charger.calls
 
 
 # --- Prüfungen der Szenarien ----------------------------------------------------------------------

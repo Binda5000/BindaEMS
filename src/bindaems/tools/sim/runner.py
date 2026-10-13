@@ -19,8 +19,9 @@ Je simulierter Sekunde:
 Am Ende liest der Lauf alle Entscheidungen und fährt die Laufzeit herunter. Die Kennzahlen kommen
 aus Proben und Entscheidungen; für die Befehle an Tessie gilt dabei der Zeitpunkt, zu dem sie
 Tessie erreichten (``sent_times``), nicht der ihres späteren Ergebnisses. Dazu sammelt der Lauf die
-eigenen Werte der Regelung (``OwnValue``): Er hüllt ``rt.charger.note_verdict`` ein, denn
-``UNCHANGED`` setzt den letzten eigenen Wert, ohne dass eine Entscheidung entsteht.
+eigenen Werte der Regelung (``OwnValue``) und was sie davon vergisst (``Forgotten``): Er hüllt
+``note_verdict``, ``forget`` und ``idle`` von ``rt.charger`` ein, denn ``UNCHANGED`` setzt den
+letzten eigenen Wert, ohne dass eine Entscheidung entsteht.
 """
 
 from __future__ import annotations
@@ -28,7 +29,7 @@ from __future__ import annotations
 import asyncio
 import random
 from collections import defaultdict
-from collections.abc import Sequence
+from collections.abc import Collection, Sequence
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -54,7 +55,7 @@ from bindaems.shared.control import (
 from bindaems.shared.decisions import Decision, DecisionResult
 from bindaems.shared.influx.lineprotocol import Point
 from bindaems.shared.timeutil import ManualClock
-from bindaems.tools.sim.metrics import CarSample, Metrics, OwnValue, Sample, measure
+from bindaems.tools.sim.metrics import CarSample, Forgotten, Metrics, OwnValue, Sample, measure
 from bindaems.tools.sim.model import PlantModel
 from bindaems.tools.sim.scenarios import Action, Scenario
 
@@ -194,23 +195,39 @@ async def run_scenario(
     return replace(result, failures=[*metrics.failures(cfg), *scenario.checks(result)])
 
 
-def _own_values(rt: CoreRuntime) -> list[OwnValue]:
-    """Hüllt ``rt.charger.note_verdict`` ein; die Liste füllt sich mit den eigenen Werten.
+def _own_values(rt: CoreRuntime) -> list[OwnValue | Forgotten]:
+    """Hüllt ``note_verdict``, ``forget`` und ``idle`` von ``rt.charger`` ein; die Liste füllt sich
+    mit den eigenen Werten der Regelung und dem, was sie davon vergisst, in ihrer Reihenfolge.
 
     Eigen ist jedes Urteil über einen Befehl der Regelung, das ihren letzten Wert setzt: mit Wert
-    oder ``UNCHANGED`` (Präzisierung 10).
+    oder ``UNCHANGED`` (Präzisierung 10). „Nicht gesendet“ (``not_sent``) setzt keinen, es löscht
+    den Wert dieser Art; ``forget`` vergisst die Werte der genannten Aktoren, ``idle`` alle. Die
+    Regelung bekommt jeden Aufruf unverändert.
     """
-    own: list[OwnValue] = []
-    note = rt.charger.note_verdict
+    own: list[OwnValue | Forgotten] = []
+    charger = rt.charger
+    note, forget, idle = charger.note_verdict, charger.forget, charger.idle
 
     def noted(command: Command, verdict: Verdict | None, *, not_sent: bool = False) -> None:
-        if verdict is not None and (verdict.sendable or verdict.outcome == Outcome.UNCHANGED):
+        if not_sent:
+            own.append(Forgotten(command.actuator, command.kind))
+        elif verdict is not None and (verdict.sendable or verdict.outcome == Outcome.UNCHANGED):
             dry_run = verdict.sendable and verdict.dry_run
             own.append(OwnValue(command.actuator, command.kind, command.value, dry_run=dry_run))
         note(command, verdict, not_sent=not_sent)
 
-    # Der Simulator beobachtet die Regelung von außen; die Methode bleibt dieselbe.
-    rt.charger.note_verdict = noted  # type: ignore[method-assign]
+    def forgot(actuators: Collection[str]) -> None:
+        own.extend(Forgotten(actuator) for actuator in sorted(actuators))
+        forget(actuators)
+
+    def idled(now: datetime) -> None:
+        own.append(Forgotten())
+        idle(now)
+
+    # Der Simulator beobachtet die Regelung von außen; die Methoden bleiben dieselben.
+    charger.note_verdict = noted  # type: ignore[method-assign]
+    charger.forget = forgot  # type: ignore[method-assign]
+    charger.idle = idled  # type: ignore[method-assign]
     return own
 
 
