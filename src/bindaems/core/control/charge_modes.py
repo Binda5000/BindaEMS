@@ -85,7 +85,8 @@ class ModeInput:
     - ``enough``: Anteil und Grenze tragen den Mindeststrom
     - ``observed_charging``: ob das Auto lädt; nur der erste Schritt und ``resumed`` lesen es
     - ``new_session``: der Schritt beginnt einen neuen Ansteckvorgang
-    - ``resumed``: der erste Regelzyklus nach dem Start des core oder nach einer Pause
+    - ``resumed``: der erste Regelzyklus nach dem Start des core oder nach einer Pause, ob des
+      ganzen core oder nur dieses Ladepunkts; ``new_session`` geht ihm vor
     """
 
     mode: Effective
@@ -145,17 +146,19 @@ class ModeMachine:
 
         1. ``plugged is False``: aus. Zeiten, letzter Modus und Pause sind vergessen; der nächste
            Ansteckvorgang beginnt frisch. Auch dieser Schritt zählt: Der nächste ist kein erster
-           Schritt. Ein neuer Ansteckvorgang kommt mit ``new_session`` über Regel 5; ohne sie fehlt
+           Schritt. Ein neuer Ansteckvorgang kommt mit ``new_session`` über Regel 4; ohne sie fehlt
            der letzte Modus, und der Schritt gilt über Regel 6 als Moduswechsel.
         2. ``plugged is None``: die letzte Entscheidung halten, vor der ersten: aus. Der Schritt
            schreibt nichts fort, auch den Modus nicht, und zählt nicht als erster: Der erste
            Schritt ist der erste mit bekanntem Ansteckzustand, und ein ``resumed`` im unbekannten
            gilt für den nächsten bekannten.
         3. ``complete``: aus.
-        4. Erster Schritt oder ``resumed``: PV übernimmt den beobachteten Zustand
+        4. ``new_session``: PV und Aus aus, sonst an. Ein neuer Ansteckvorgang geht der Übernahme
+           vor, auch im ersten Schritt und mit ``resumed``: Ein Auto, das darin selbst gestartet
+           hat, beginnt in PV und Aus ohne Laden. Die Übernahme ist damit verbraucht.
+        5. Erster Schritt oder ``resumed``: PV übernimmt den beobachteten Zustand
            (``observed_charging is True``), eine Mindestlaufzeit gilt als erfüllt. Aus ist aus,
            alles andere an.
-        5. ``new_session``: PV und Aus aus, sonst an.
         6. Moduswechsel gegenüber dem letzten Schritt, auch ohne einen letzten Modus: sofort, ohne
            Zeiten und ohne Mindestzeiten. Aus ist aus, Sofort, Boost und Min+PV sind an, PV ist an
            genau dann, wenn ``enough is True``.
@@ -185,10 +188,10 @@ class ModeMachine:
             self._charging = False
             return ModeDecision(False, None)
 
-        if take_over:
-            return self._begin(now, inp.mode, _takes_over(inp))
         if inp.new_session:
             return self._begin(now, inp.mode, inp.mode not in (Effective.PV, Effective.OFF))
+        if take_over:
+            return self._begin(now, inp.mode, _takes_over(inp))
         if inp.mode is not self._mode:
             return self._begin(now, inp.mode, _follows_mode(inp))
         return self._continue(now, inp.mode)
@@ -253,7 +256,7 @@ class ModeMachine:
 
 
 def _takes_over(inp: ModeInput) -> bool:
-    """Regel 4: PV übernimmt den beobachteten Zustand, Aus ist aus, alles andere an."""
+    """Regel 5: PV übernimmt den beobachteten Zustand, Aus ist aus, alles andere an."""
     if inp.mode is Effective.PV:
         return inp.observed_charging is True
     return inp.mode is not Effective.OFF

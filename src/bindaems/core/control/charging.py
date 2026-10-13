@@ -13,7 +13,9 @@ Ein Zyklus (``step``) geht so (Präzisierungen 4 bis 11):
 4. Je geregeltem Ladepunkt der Modus (``ModeMachine``), Überlast, Strom und Befehle. Die Maschine
    eines Ladepunkts, der nicht geregelt wird, wartet; wird er wieder geregelt (auch im ersten
    Zyklus nach dem Start oder nach ``idle``), bekommt sie einmal ``resumed`` und übernimmt den
-   beobachteten Zustand (Präzisierung 9).
+   beobachteten Zustand (Präzisierung 9). Begann in der Zwischenzeit ein Ansteckvorgang, bekommt
+   sie stattdessen ``new_session``: PV und Aus beginnen dann ohne Laden, auch wenn das Auto selbst
+   gestartet hat. So beim Tesla, den Tessie erst nach dem Wall Connector als angesteckt meldet.
 
 Die Regelung schickt nur Änderungen (Präzisierung 10): Der letzte eigene Wert je Aktor und Art
 folgt den Urteilen (``note_verdict``) und den Ergebnissen (``note_result``). Sie vergisst ihn, wo
@@ -280,6 +282,9 @@ class ChargeController:
         # Fahrzeug und Aktor je Ladepunkt, der im letzten Zyklus geregelt wurde; leer nach dem
         # Start und nach ``idle``: Dann übernimmt jeder geregelte Ladepunkt (``resumed``).
         self._regulated: set[tuple[str, str]] = set()
+        # Fahrzeuge, deren Ansteckvorgang begann, als ihr Ladepunkt nicht geregelt wurde: Ihre
+        # Maschine bekommt ihn im ersten geregelten Schritt (``new_session`` statt ``resumed``).
+        self._unseen_sessions: set[str] = set()
         self._last = _LastValues()
         self._views: dict[str, _View] = {}
         self._reasons: dict[str, str] = {}  # der letzte Grund des letzten Befehls je Fahrzeug
@@ -317,10 +322,13 @@ class ChargeController:
             free = None if grant is None else grant.free_a
             views[key] = _View(modes[key], vehicle, free)
             actuator = regulated.get(key)
-            if point is None or actuator is None:
-                continue  # ungeregelt: Die Maschine wartet, bis der Ladepunkt geregelt wird
+            if point is None or actuator is None:  # ungeregelt: Die Maschine wartet
+                if vehicle.new_session:
+                    self._unseen_sessions.add(key)
+                continue
             back = (key, actuator) not in self._regulated  # wieder geregelt: Übernahme
-            if back or vehicle.new_session:
+            session = vehicle.new_session or key in self._unseen_sessions
+            if back or session:
                 self._last.forget({actuator})
             decision = self._machines[key].step(
                 now,
@@ -330,10 +338,12 @@ class ChargeController:
                     complete=vehicle.complete,
                     enough=_enough(point, share, free),
                     observed_charging=vehicle.charging,
-                    new_session=vehicle.new_session,
-                    resumed=back,
+                    new_session=session,
+                    resumed=back and not session,  # ein neuer Ansteckvorgang geht vor
                 ),
             )
+            if vehicle.plugged is not None:  # bei unbekanntem bleibt er für den nächsten Schritt
+                self._unseen_sessions.discard(key)
             situation = _Situation(
                 plugged=vehicle.plugged,
                 charging=vehicle.charging,

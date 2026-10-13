@@ -213,7 +213,7 @@ def test_the_timers_run_while_the_car_is_complete() -> None:
     assert machine.step(at(122), inp()) == ModeDecision(True, "pv_surplus")
 
 
-# --- Regel 4: erster Schritt und Wiederaufnahme ---------------------------------------------------
+# --- Regel 5: erster Schritt und Wiederaufnahme ---------------------------------------------------
 
 
 @pytest.mark.parametrize(
@@ -235,9 +235,17 @@ def test_first_step_by_mode(mode, observed, expected) -> None:
     assert machine.charging is expected
 
 
-def test_a_first_step_beats_a_new_session() -> None:
+def test_a_new_session_beats_the_first_step() -> None:
     machine = ModeMachine(TIMERS)
-    assert machine.step(at(0), inp(observed=True, new_session=True)) == ModeDecision(True, None)
+    # ein Auto, das im neuen Ansteckvorgang selbst gestartet hat, übernimmt PV nicht
+    assert machine.step(at(0), inp(observed=True, new_session=True)) == ModeDecision(False, None)
+
+
+def test_a_new_session_beats_resumed() -> None:
+    machine = ModeMachine(TIMERS)
+    run(machine, 0, 121)  # PV lädt seit 120
+    decision = machine.step(at(200), inp(observed=True, new_session=True, resumed=True))
+    assert decision == ModeDecision(False, None)  # neuer Ansteckvorgang statt Übernahme
 
 
 def test_a_restart_sets_both_timers_to_the_current_step() -> None:
@@ -293,7 +301,7 @@ def test_resumed_with_unknown_plug_state_applies_to_the_next_known_step() -> Non
     assert machine.step(at(201), inp(observed=False)) == ModeDecision(False, None)
 
 
-# --- Regel 5: neuer Ansteckvorgang ----------------------------------------------------------------
+# --- Regel 4: neuer Ansteckvorgang (geht der Übernahme vor) ---------------------------------------
 
 
 @pytest.mark.parametrize(

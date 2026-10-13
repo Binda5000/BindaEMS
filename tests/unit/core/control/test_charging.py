@@ -1155,3 +1155,65 @@ def test_a_new_session_forgets_not_taken(cfg) -> None:
         Command("wallbox.evcs", CURRENT, 16.0, reasons=("mode_now",)),
         Command("wallbox.evcs", CHARGING, True, reasons=("mode_now",)),
     ]
+
+
+def late_tessie(s: int, *, away_until: int, reported_at: int) -> dict:
+    """Der Tesla ist bis ``away_until`` weg, dann meldet der Wall Connector ihn, und er lädt von
+    selbst; Tessie meldet „angesteckt“ erst ab ``reported_at``. Bis dahin ist der Aktor weder
+    steuerbar noch weckbar. Vor ``away_until - 50`` stand er angesteckt und steuerbar da.
+    """
+    if s >= reported_at:
+        tesla_obs, controllable = tesla(plugged=True, charging=True), BOTH
+    else:
+        tesla_obs, controllable = tesla(), None
+    if s >= away_until:
+        return {
+            "twc_obs": TESLA_16_A,
+            "tesla_obs": tesla_obs,
+            "controllable": controllable,
+            "grid_obs": grid(l1=18.0, l2=18.0, l3=18.0, grid_w=12420.0),
+        }
+    if s < away_until - 50:
+        return {
+            "twc_obs": twc(connected=True),
+            "tesla_obs": tesla(plugged=True),
+            "controllable": BOTH,
+        }
+    return {"twc_obs": twc(), "tesla_obs": tesla()}
+
+
+@pytest.mark.parametrize(
+    ("away_until", "reported_at", "expected"),
+    [(60, 65, [0, 65]), (10, 15, [15])],
+    ids=["regulated_before", "never_regulated_since_start"],
+)
+def test_a_session_that_begins_unregulated_starts_without_charging(  # Präzisierung 9
+    cfg, away_until, reported_at, expected
+) -> None:
+    def make(cfg, *, s: int):
+        return inputs(cfg, s=s, **late_tessie(s, away_until=away_until, reported_at=reported_at))
+
+    found = run(controller(cfg), cfg, reported_at + 5, make=make)
+    off = Command("vehicle.tesla", CHARGING, False, reasons=("mode_pv",))
+    assert [(t, c.command) for t, c in found if c.command.actuator == "vehicle.tesla"] == [
+        (t, off) for t in expected
+    ]
+
+
+def test_a_remembered_session_waits_for_a_known_plug_state(cfg) -> None:
+    # PV lädt seit 120; von 125 bis 129 ist die EVCS nicht steuerbar, das Auto wird ab- und wieder
+    # angesteckt und lädt von selbst; bei 130 ist der Status unbekannt, ab 131 wieder bekannt.
+    def make(cfg, *, s: int):
+        if s < 125:
+            return inputs(cfg, s=s)
+        if s < 130:
+            seen = evcs(connected=False) if s < 127 else evcs(charging=True)
+            return inputs(cfg, s=s, evcs_obs=seen, controllable={"wallbox.evcs": False})
+        if s == 130:
+            return inputs(cfg, s=s, evcs_obs=evcs(connected=None, charging=None, complete=None))
+        return inputs(cfg, s=s, evcs_obs=evcs(charging=True))
+
+    found = run(controller(cfg), cfg, 132, make=make)
+    assert [c for c in as_commands(found) if c[0] >= 125] == [
+        cmd(131, CHARGING, False, ("mode_pv",))
+    ]
