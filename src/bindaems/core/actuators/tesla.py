@@ -1,4 +1,4 @@
-"""Tesla-Aktor: Befehle gehen über Tessie im Hintergrund, das Fahrzeug wird nie geweckt.
+"""Tesla-Aktor: Befehle über Tessie im Hintergrund; wecken darf nur ein Start mit Weckerlaubnis.
 
 Die drei Befehle (Plan 2b, Präzisierung 1) sind ``start_charging``, ``stop_charging`` und
 ``set_charging_amps``, jeweils als ``POST {TESSIE_BASE_URL}/{vin}/command/<Name>`` mit
@@ -17,6 +17,12 @@ Laden an und aus prüft ``confirm`` nicht im Cache.
 Tessie weckt das Fahrzeug bei Befehlen selbst. Der Tesla ist deshalb nur steuerbar, wenn der Cache
 ``online`` meldet und das Fahrzeug zu Hause und angesteckt ist (Spec 3.7, 6.5). Das sagt
 ``capabilities``; der Ausführer sendet nur, wenn der Aktor steuerbar ist.
+
+Geweckt wird nur durch einen Start mit ausdrücklicher Weckerlaubnis (``Command.wake``, Plan 2c-1,
+Design 7.1): Dafür fragt der Ausführer ``wake_capabilities`` (``WakeStart``) statt ``capabilities``.
+Sie prüft dasselbe in derselben Reihenfolge, nur nicht den Schlaf. Der Start ist ``start_charging``;
+einen eigenen Befehl zum Wecken gibt es nicht, Tessie weckt das Fahrzeug dabei selbst. Strom und
+Stopp gehen weiter nur an ein waches Auto.
 
 ``FAILURES_ALLOWED`` Fehler binnen ``FAILURE_WINDOW`` machen den Tesla für ``FAILURE_WINDOW`` nicht
 steuerbar (Spec 6.5, 8.4), dazu kommt ein Alarm. Der Token erscheint in keinem Text.
@@ -131,7 +137,7 @@ def _answer_failure(response: httpx.Response) -> str | None:
 
 
 class TeslaActuator:
-    """Ein Tesla über Tessie als Aktor (Plan 2b, Präzisierung 1, 6 und 12).
+    """Ein Tesla über Tessie als Aktor (Plan 2b, Präzisierung 1, 6 und 12), auch ``WakeStart``.
 
     ``key`` ist der Schlüssel des Fahrzeugs in ``vehicles``; seine Signale heißen
     ``vehicle.<key>.…``. ``cfg`` braucht einen ``tessie``-Abschnitt, sonst ``ValueError`` wie beim
@@ -186,11 +192,29 @@ class TeslaActuator:
         zählen nur mit Qualität ``OK`` und genau dem Wert ``True``; ein veraltetes oder
         fehlendes Signal ist ein Grund.
         """
+        return self._capabilities(snap, now, asleep_matters=True)
+
+    def wake_capabilities(self, snap: Snapshot, now: datetime) -> Capabilities:
+        """Kann ein Start mit Weckerlaubnis das Fahrzeug erreichen? Wenn nicht, die Gründe.
+
+        Wie ``capabilities``, nur ohne den Schlaf: Gründe in der Reihenfolge Tessie nicht
+        erreichbar, nicht zu Hause, nicht angesteckt, nach Fehlern noch nicht wieder steuerbar.
+        Zu Hause und angesteckt müssen die letzten Werte von Tessie mit Qualität ``OK`` zeigen;
+        ob das Fahrzeug schläft, ist gleich, das Signal ``online`` zählt hier nicht.
+        """
+        return self._capabilities(snap, now, asleep_matters=False)
+
+    def _capabilities(self, snap: Snapshot, now: datetime, *, asleep_matters: bool) -> Capabilities:
+        """Die Gründe für ``capabilities`` und ``wake_capabilities`` an einer Stelle.
+
+        So bleibt die Reihenfolge der Gründe für beide gleich; ``asleep_matters`` schaltet nur den
+        Grund „schläft“ zu oder ab.
+        """
         prefix = f"vehicle.{self._key}."
         reasons: list[str] = []
         if not self._connected():
             reasons.append(REASON_NOT_REACHABLE)
-        if snap.ok(prefix + "online") is not True:
+        if asleep_matters and snap.ok(prefix + "online") is not True:
             reasons.append(REASON_ASLEEP)
         if snap.ok(prefix + "at_home") is not True:
             reasons.append(REASON_AWAY)
@@ -225,7 +249,8 @@ class TeslaActuator:
         im Cache, ist es ``REASON_CHECKING``, höchstens bis ``CHECK_MARGIN_S`` vor der Frist des
         Ausführers; ein anderer Strom ersetzt die Prüfung. Eine andere Art, einen Strom, der keine
         endliche Zahl ist, und ein Laden, das kein Wahrheitswert ist, schickt der Aktor nie. Ob das
-        Fahrzeug erreichbar ist, prüft der Ausführer mit ``capabilities``.
+        Fahrzeug erreichbar ist, prüft der Ausführer mit ``capabilities``, bei einem Start mit
+        Weckerlaubnis mit ``wake_capabilities``.
         """
         request = _request(kind, value)
         if isinstance(request, str):

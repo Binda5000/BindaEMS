@@ -1,8 +1,9 @@
-from dataclasses import replace
+from dataclasses import fields, replace
 from datetime import timedelta
 
+import pytest
 from tests.helpers import T0, snap
-from tests.unit.core.control.fakes import FakeActuator
+from tests.unit.core.control.fakes import FakeActuator, FakeWakeActuator
 from tests.unit.core.safety.conftest import make_ctx
 
 from bindaems.core.control.actuator import Capabilities, Confirmation
@@ -452,7 +453,9 @@ def test_a_value_the_device_did_not_take_is_an_error(tmp_path, limits_live, monk
     )
     executor.execute(SAFE, LIVE_CTX, snap({}), T0, {})
     results = executor.poll(snap({}), S(1), T0)
-    assert results == [WriteResult(EVCS, CommandKind.CURRENT, 6.0, DecisionResult.ERROR, text)]
+    assert results == [
+        WriteResult(EVCS, CommandKind.CURRENT, 6.0, DecisionResult.ERROR, text, not_taken=True)
+    ]
     assert decisions[0].text == f"EVCS „evcs“ (sicherer Zustand): Strom 6 A – Fehler: {text}"
     assert executor.pending() == frozenset()
     assert executor.take_failures() == results
@@ -557,3 +560,209 @@ def test_actuator_without_driver_is_not_sent(tmp_path, limits_live) -> None:
     )
     assert executor.pending() == frozenset()
     assert [f.result for f in executor.take_failures()] == [DecisionResult.NOT_SENT]
+
+
+# --- Start mit Weckerlaubnis (Plan 2c-1, Design 7.1) ---
+
+TESLA = "vehicle.tesla"
+WAKE_START = Command(TESLA, CommandKind.CHARGING, True, wake=True)
+PLAIN_START = Command(TESLA, CommandKind.CHARGING, True)
+NOT_CONTROLLABLE = (
+    "nicht steuerbar: Cerbo nicht verbunden."  # so antwortet ``capabilities`` des Fakes
+)
+NOT_WAKEABLE = "nicht steuerbar: Fahrzeug nicht angesteckt."  # so ``wake_capabilities``
+
+
+def test_wake_start_uses_the_wake_capabilities(tmp_path, limits_live) -> None:
+    car = FakeWakeActuator(TESLA, controllable=False, wakeable=True)
+    executor, decisions = build(tmp_path, limits_live, car)
+    verdict = executor.execute(WAKE_START, make_ctx(), snap({}), T0, {})
+    assert verdict is not None and verdict.send
+    assert car.sent == [(CommandKind.CHARGING, True)]
+    assert executor.pending() == {(TESLA, CommandKind.CHARGING)} and decisions == []
+
+
+def test_a_wake_start_is_confirmed_like_any_write(tmp_path, limits_live) -> None:
+    car = FakeWakeActuator(TESLA, controllable=False, wakeable=True)
+    executor, decisions = build(tmp_path, limits_live, car)
+    executor.execute(WAKE_START, make_ctx(), snap({}), T0, {})
+    car.echo[CommandKind.CHARGING] = True
+    results = executor.poll(snap({}), S(1), T0)
+    assert results == [WriteResult(TESLA, CommandKind.CHARGING, True, DecisionResult.OK, "")]
+    assert decisions[0].text == "vehicle.tesla: Laden an – gesendet und bestätigt."
+    assert executor.pending() == frozenset() and executor.take_failures() == []
+
+
+def test_without_wake_a_sleeping_car_is_not_sent(tmp_path, limits_live) -> None:
+    car = FakeWakeActuator(TESLA, controllable=False, wakeable=True)
+    executor, decisions = build(tmp_path, limits_live, car)
+    executor.execute(PLAIN_START, make_ctx(), snap({}), T0, {})
+    assert car.sent == [] and executor.pending() == frozenset()
+    (decision,) = decisions
+    assert decision.result == DecisionResult.NOT_SENT
+    assert decision.text == f"vehicle.tesla: Laden an – nicht gesendet: {NOT_CONTROLLABLE}"
+    assert [f.detail for f in executor.take_failures()] == [NOT_CONTROLLABLE]
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        Command(TESLA, CommandKind.CURRENT, 10.0, wake=True),  # ein Strom weckt nie
+        Command(TESLA, CommandKind.CHARGING, False, wake=True),  # ein Stopp auch nicht
+    ],
+    ids=["current", "stop"],
+)
+def test_wake_counts_only_for_starting(tmp_path, limits_live, command) -> None:
+    car = FakeWakeActuator(TESLA, controllable=False, wakeable=True)
+    executor, decisions = build(tmp_path, limits_live, car)
+    verdict = executor.execute(command, make_ctx(), snap({}), T0, {})
+    assert verdict is not None and verdict.send  # die Safety-Schicht lässt es zu
+    assert car.sent == [] and executor.pending() == frozenset()
+    assert [d.result for d in decisions] == [DecisionResult.NOT_SENT]
+    assert decisions[0].text.endswith(f"nicht gesendet: {NOT_CONTROLLABLE}")
+
+
+def test_a_wake_start_asks_only_the_wake_capabilities(tmp_path, limits_live) -> None:
+    # Steuerbar, aber nicht weckbar (etwa nicht angesteckt): Für den Start mit Weckerlaubnis
+    # zählt allein ``wake_capabilities``; die Fähigkeiten treten nicht dazu.
+    car = FakeWakeActuator(TESLA, controllable=True, wakeable=False)
+    executor, decisions = build(tmp_path, limits_live, car)
+    executor.execute(WAKE_START, make_ctx(), snap({}), T0, {})
+    assert car.sent == [] and executor.pending() == frozenset()
+    assert decisions[0].text == f"vehicle.tesla: Laden an – nicht gesendet: {NOT_WAKEABLE}"
+    assert [f.detail for f in executor.take_failures()] == [NOT_WAKEABLE]
+
+
+def test_a_plain_start_asks_only_the_capabilities(tmp_path, limits_live) -> None:
+    car = FakeWakeActuator(TESLA, controllable=True, wakeable=False)
+    executor, decisions = build(tmp_path, limits_live, car)
+    executor.execute(PLAIN_START, make_ctx(), snap({}), T0, {})
+    assert car.sent == [(CommandKind.CHARGING, True)] and decisions == []
+
+
+@pytest.mark.parametrize("controllable", [False, True])
+def test_wake_is_ignored_by_an_actuator_without_wake_start(
+    tmp_path, limits_live, controllable
+) -> None:
+    car = FakeActuator(TESLA, controllable=controllable)
+    executor, decisions = build(tmp_path, limits_live, car)
+    executor.execute(WAKE_START, make_ctx(), snap({}), T0, {})
+    if controllable:
+        assert car.sent == [(CommandKind.CHARGING, True)] and decisions == []
+    else:
+        assert car.sent == []
+        assert decisions[0].text.endswith(f"nicht gesendet: {NOT_CONTROLLABLE}")
+
+
+def test_wake_capabilities_are_asked_with_snapshot_and_safety_time(
+    tmp_path, limits_live, monkeypatch
+) -> None:
+    car = FakeWakeActuator(TESLA, controllable=False)
+    executor, _ = build(tmp_path, limits_live, car)
+    asked = []
+
+    def wake_capabilities(snapshot, now):
+        asked.append(("wake", snapshot, now))
+        return Capabilities(True)
+
+    def capabilities(snapshot, now):
+        asked.append(("plain", snapshot, now))
+        return Capabilities(False)
+
+    monkeypatch.setattr(car, "wake_capabilities", wake_capabilities)
+    monkeypatch.setattr(car, "capabilities", capabilities)
+    current = snap({"vehicle.tesla.plugged": True})
+    executor.execute(WAKE_START, make_ctx(now=S(3)), current, S(100), {})
+    assert [(who, now) for who, _, now in asked] == [("wake", S(3))]
+    assert asked[0][1] is current  # und nur die Weckfähigkeiten, nicht auch die anderen
+
+
+def test_a_wake_start_gets_exactly_one_verdict(tmp_path, limits_live) -> None:
+    layer = CountingLayer(limits_live, PersistentWriteBudget(12, 100, tmp_path / "b.json", T0))
+    car = FakeWakeActuator(TESLA, controllable=False)
+    decisions: list[Decision] = []
+    executor = CommandExecutor(layer, {TESLA: car}, decisions.append, {})
+    executor.execute(WAKE_START, make_ctx(), snap({}), T0, {})
+    assert layer.calls == 1 and car.sent == [(CommandKind.CHARGING, True)]
+    assert executor.execute(WAKE_START, make_ctx(), snap({}), T0, {}) is None  # offen
+    assert layer.calls == 1 and len(car.sent) == 1
+
+
+def test_a_wake_start_in_dry_run_is_only_logged(tmp_path, limits) -> None:
+    # Die Weckerlaubnis gilt gegenüber dem Aktor, nicht gegenüber der Safety-Schicht.
+    car = FakeWakeActuator(TESLA, controllable=False, wakeable=True)
+    executor, decisions = build(tmp_path, limits, car)
+    verdict = executor.execute(WAKE_START, make_ctx(modes={}), snap({}), T0, {})
+    assert verdict is not None and verdict.sendable and not verdict.send
+    assert car.sent == [] and executor.pending() == frozenset()
+    assert [d.result for d in decisions] == [DecisionResult.DRY_RUN]
+    assert executor.take_failures() == []
+
+
+def test_the_safety_layer_can_still_reject_a_wake_start(tmp_path, limits_live) -> None:
+    car = FakeWakeActuator(TESLA, controllable=False, wakeable=True)
+    executor, decisions = build(tmp_path, limits_live, car)
+    locked = make_ctx(locks={TESLA: ("Gesperrt.",)})
+    verdict = executor.execute(WAKE_START, locked, snap({}), T0, {})
+    assert verdict is not None and verdict.outcome == Outcome.REJECTED
+    assert car.sent == [] and [d.result for d in decisions] == [DecisionResult.REJECTED]
+
+
+def test_a_wake_start_the_actuator_refuses_is_not_sent(tmp_path, limits_live) -> None:
+    reason = "Befehl an Tessie läuft noch."
+    car = FakeWakeActuator(TESLA, controllable=False, wakeable=True, refuse=reason)
+    executor, decisions = build(tmp_path, limits_live, car)
+    executor.execute(WAKE_START, make_ctx(), snap({}), T0, {})
+    assert decisions[0].result == DecisionResult.NOT_SENT and executor.pending() == frozenset()
+    assert [f.detail for f in executor.take_failures()] == [reason]
+
+
+# --- „Nicht übernommen“ (Prüfprotokoll Teil 2 vom 12.10.2026) ---
+
+
+def test_not_taken_is_marked(tmp_path, limits_live, monkeypatch) -> None:
+    executor, fake, decisions = setup(tmp_path, limits_live)
+    text = "Fahrzeug übernahm 6 A nicht (Tessie meldet 10 A)."
+    monkeypatch.setattr(
+        fake, "confirm", lambda kind, value, snapshot: (Confirmation.NOT_TAKEN, text)
+    )
+    executor.execute(SAFE, LIVE_CTX, snap({}), T0, {})
+    expected = WriteResult(
+        EVCS, CommandKind.CURRENT, 6.0, DecisionResult.ERROR, text, not_taken=True
+    )
+    results = executor.poll(snap({}), S(1), T0)
+    assert results == [expected] and results[0].not_taken is True
+    assert executor.take_failures() == [expected]  # auch der Fehler für den Zyklus trägt es
+    assert [d.result for d in decisions] == [DecisionResult.ERROR]
+
+
+@pytest.mark.parametrize(
+    ("status", "polled_at", "result"),
+    [
+        (Confirmation.CONFIRMED, 1, DecisionResult.OK),
+        (Confirmation.FAILED, 1, DecisionResult.ERROR),
+        (Confirmation.PENDING, 10, DecisionResult.TIMEOUT),
+    ],
+    ids=["confirmed", "failed", "timeout"],
+)
+def test_only_not_taken_is_marked(
+    tmp_path, limits_live, monkeypatch, status, polled_at, result
+) -> None:
+    executor, fake, _ = setup(tmp_path, limits_live)
+    monkeypatch.setattr(fake, "confirm", lambda kind, value, snapshot: (status, "Text."))
+    executor.execute(SAFE, LIVE_CTX, snap({}), T0, {})
+    (write,) = executor.poll(snap({}), S(polled_at), T0)
+    assert (write.result, write.not_taken) == (result, False)
+
+
+def test_not_sent_is_not_marked_as_not_taken(tmp_path, limits_live) -> None:
+    executor, _, _ = setup(tmp_path, limits_live, controllable=False)
+    executor.execute(SAFE, LIVE_CTX, snap({}), T0, {})
+    (failure,) = executor.take_failures()
+    assert (failure.result, failure.not_taken) == (DecisionResult.NOT_SENT, False)
+
+
+def test_write_result_not_taken_is_the_last_field_and_defaults_to_false() -> None:
+    assert fields(WriteResult)[-1].name == "not_taken"
+    plain = WriteResult(EVCS, CommandKind.CURRENT, 6.0, DecisionResult.OK, "")
+    assert plain.not_taken is False

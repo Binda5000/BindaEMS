@@ -6,7 +6,10 @@ Schreibvorgang offen, wird der Befehl gar nicht betrachtet. Das Urteil entscheid
 
 - Soll gesendet werden, prüft der Ausführer die Fähigkeiten des Aktors und sendet. Der
   Schreibvorgang bleibt offen, bis ``poll`` ihn zurückgelesen hat, gescheitert meldet oder die
-  Frist verstreicht.
+  Frist verstreicht. Ein Start mit Weckerlaubnis (``Command.wake`` bei ``charging`` mit ``True``)
+  an einen Aktor mit ``WakeStart`` prüft statt der Fähigkeiten dessen ``wake_capabilities``: Ein
+  schlafendes Fahrzeug kann dafür steuerbar sein. Das Urteil der Safety-Schicht bleibt dasselbe;
+  die Weckerlaubnis gilt nur gegenüber dem Aktor.
 - Im Dry-Run ergibt ein Urteil mit Wert die Entscheidung ``DRY_RUN``, ein abgelehnter Befehl
   ``REJECTED``; dieselbe Ablehnung (Aktor, Art, Befund-Codes) wird höchstens alle 60 s
   protokolliert.
@@ -15,6 +18,8 @@ Schreibvorgang offen, wird der Befehl gar nicht betrachtet. Das Urteil entscheid
 Jeder gesendete Befehl endet in genau einer Entscheidung: bestätigt (``OK``), gescheitert
 (``ERROR``), unbestätigt (``TIMEOUT``) oder nicht gesendet (``NOT_SENT``). Die letzten drei
 Ergebnisse sammelt ``take_failures`` für den fehlerfreien Zyklus (Präzisierung 5 des Plans 2b).
+Hat das Gerät einen bestätigten Wert nicht übernommen (``Confirmation.NOT_TAKEN``), ist das Ergebnis
+``ERROR`` und trägt ``WriteResult.not_taken``; die Regelung fordert den Wert dann erneut an.
 
 Zwei Uhren: ``ctx.now`` und ``now`` sind die Zeit der Safety-Schicht (``AnchoredClock``); mit ihr
 laufen die Fristen und die 60 s der Ablehnungen. ``wall_now`` ist die Wanduhr und nur der Zeitpunkt
@@ -32,7 +37,7 @@ from datetime import datetime, timedelta
 from typing import Final, Protocol
 from uuid import uuid4
 
-from bindaems.core.control.actuator import Actuator, Confirmation
+from bindaems.core.control.actuator import Actuator, Capabilities, Confirmation, WakeStart
 from bindaems.core.safety.layer import SafetyLayer
 from bindaems.core.safety.types import Outcome, SafetyContext, Verdict
 from bindaems.shared.control import Command, CommandKind, CommandValue
@@ -57,7 +62,9 @@ class WriteResult:
 
     ``value`` ist der gesendete Wert (nach der Safety-Schicht), ``result`` eins von ``OK``,
     ``ERROR``, ``TIMEOUT`` und ``NOT_SENT``. ``detail`` nennt den Grund oder den letzten Text des
-    Aktors beim Rücklesen.
+    Aktors beim Rücklesen. ``not_taken`` heißt: Das Gerät hat den bestätigten Wert nicht
+    übernommen (``Confirmation.NOT_TAKEN``); das Ergebnis ist dann ``ERROR``, und derselbe Wert
+    darf erneut angefordert werden.
     """
 
     actuator: str
@@ -65,6 +72,7 @@ class WriteResult:
     value: CommandValue
     result: DecisionResult
     detail: str
+    not_taken: bool = False
 
 
 @dataclass(frozen=True)
@@ -136,11 +144,12 @@ class CommandExecutor:
 
         Jeder abgeschlossene Schreibvorgang ergibt genau eine Entscheidung. Zuerst fragt der
         Ausführer den Aktor (``confirm``): bestätigt ergibt ``OK``, gescheitert oder nicht
-        übernommen (``NOT_TAKEN``) ``ERROR`` mit dem Text des Aktors; einen neuen Versuch gibt der
-        Aufrufer wie jeden Befehl. Ist der Wert noch offen und die Frist erreicht
-        (``now >= deadline``), ist es ``TIMEOUT``; ein Wert, der genau zur Frist ankommt, gilt also
-        als bestätigt. Sonst bleibt der Schreibvorgang offen. Zurück kommen die abgeschlossenen in
-        der Reihenfolge, in der sie gesendet wurden.
+        übernommen (``NOT_TAKEN``) ``ERROR`` mit dem Text des Aktors; bei ``NOT_TAKEN`` trägt das
+        Ergebnis zusätzlich ``not_taken``. Einen neuen Versuch gibt der Aufrufer wie jeden Befehl.
+        Ist der Wert noch offen und die Frist erreicht (``now >= deadline``), ist es ``TIMEOUT``;
+        ein Wert, der genau zur Frist ankommt, gilt also als bestätigt. Sonst bleibt der
+        Schreibvorgang offen. Zurück kommen die abgeschlossenen in der Reihenfolge, in der sie
+        gesendet wurden.
         """
         finished: list[WriteResult] = []
         for key, write in list(self._open.items()):
@@ -154,7 +163,16 @@ class CommandExecutor:
             else:
                 continue
             del self._open[key]
-            finished.append(self._finish(write.verdict, result, detail, wall_now, write.inputs))
+            finished.append(
+                self._finish(
+                    write.verdict,
+                    result,
+                    detail,
+                    wall_now,
+                    write.inputs,
+                    not_taken=status == Confirmation.NOT_TAKEN,
+                )
+            )
         return finished
 
     def pending(self) -> frozenset[tuple[str, CommandKind]]:
@@ -189,13 +207,14 @@ class CommandExecutor:
         """Prüft die Fähigkeiten, übergibt den Wert dem Aktor und öffnet den Schreibvorgang.
 
         Der Grund, wenn nicht gesendet wurde: Der Aktor ist nicht steuerbar oder lehnt den
-        Auftrag ab. Sonst ``None``.
+        Auftrag ab. Sonst ``None``. Bei einem Start mit Weckerlaubnis zählen die Weckfähigkeiten
+        des Aktors statt seiner Fähigkeiten (``_capabilities``).
         """
         command = verdict.command
         actuator = self._actuators.get(command.actuator)
         if actuator is None:  # der Katalog kennt ihn, der Ausführer hat keinen Treiber dafür
             return _not_controllable(("Aktor nicht eingerichtet.",))
-        capabilities = actuator.capabilities(snap, now)
+        capabilities = _capabilities(actuator, verdict, snap, now)
         if not capabilities.controllable:
             return _not_controllable(capabilities.reasons)
         refusal = actuator.send(command.kind, verdict.value)
@@ -214,10 +233,14 @@ class CommandExecutor:
         detail: str,
         wall_now: datetime,
         inputs: Mapping[str, float | None],
+        *,
+        not_taken: bool = False,
     ) -> WriteResult:
         """Schließt einen gesendeten Befehl ab: merkt einen Fehler und schreibt die Entscheidung."""
         command = verdict.command
-        write = WriteResult(command.actuator, command.kind, verdict.value, result, detail)
+        write = WriteResult(
+            command.actuator, command.kind, verdict.value, result, detail, not_taken
+        )
         if result != DecisionResult.OK:
             self._failures.append(write)
         self._decide(verdict, result, wall_now, inputs, detail=detail)
@@ -279,6 +302,26 @@ class CommandExecutor:
         }
         self._rejected[key] = now
         return True
+
+
+def _capabilities(
+    actuator: Actuator, verdict: Verdict, snap: Snapshot, now: datetime
+) -> Capabilities:
+    """Die Fähigkeiten, nach denen der Befehl des Urteils gesendet wird.
+
+    Ein Start mit Weckerlaubnis (``Command.wake``, Art ``charging``, gesendet wird ``True``) an
+    einen Aktor mit ``WakeStart`` fragt dessen ``wake_capabilities``; jeder andere Befehl, auch
+    einer mit ``wake`` bei einem Strom oder einem Stopp, die ``capabilities``.
+    """
+    command = verdict.command
+    if (
+        command.wake
+        and command.kind == CommandKind.CHARGING
+        and verdict.value is True
+        and isinstance(actuator, WakeStart)
+    ):
+        return actuator.wake_capabilities(snap, now)
+    return actuator.capabilities(snap, now)
 
 
 def _not_controllable(reasons: tuple[str, ...]) -> str:

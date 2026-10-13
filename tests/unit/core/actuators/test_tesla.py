@@ -1,4 +1,4 @@
-"""Tests des Tesla-Aktors: Befehle über Tessie im Hintergrund, das Fahrzeug wird nie geweckt."""
+"""Tests des Tesla-Aktors: Befehle über Tessie im Hintergrund, geweckt nur mit Weckerlaubnis."""
 
 import asyncio
 import json
@@ -24,7 +24,7 @@ from bindaems.core.actuators.tesla import (
     TeslaActuator,
 )
 from bindaems.core.adapters.tessie import TessieAdapter, poll_interval_s
-from bindaems.core.control.actuator import Capabilities, Confirmation
+from bindaems.core.control.actuator import Capabilities, Confirmation, WakeStart
 from bindaems.core.control.executor import CommandExecutor
 from bindaems.core.safety.budget import PersistentWriteBudget
 from bindaems.core.safety.layer import SafetyLayer
@@ -322,6 +322,130 @@ async def test_the_deadline_is_shown_in_vienna_time(cfg, respx_mock) -> None:
         )
 
 
+# Fähigkeiten für den Start mit Weckerlaubnis (Plan 2c-1, Design 7.1)
+
+
+def test_wake_capabilities_ignore_sleep(car) -> None:
+    asleep = snap(
+        {
+            "vehicle.tesla.online": False,
+            "vehicle.tesla.at_home": True,
+            "vehicle.tesla.plugged": True,
+        }
+    )
+    assert car.wake_capabilities(asleep, T0) == Capabilities(True)
+    unplugged = snap(
+        {
+            "vehicle.tesla.online": False,
+            "vehicle.tesla.at_home": True,
+            "vehicle.tesla.plugged": False,
+        }
+    )
+    assert car.wake_capabilities(unplugged, T0) == Capabilities(
+        False, ("Fahrzeug nicht angesteckt.",)
+    )
+
+
+def test_wake_capabilities_do_not_need_the_online_signal(car) -> None:
+    without_online = {name: value for name, value in HOME.items() if not name.endswith(".online")}
+    assert car.wake_capabilities(snap(without_online), T0) == Capabilities(True)
+    assert car.wake_capabilities(snap(HOME), T0) == Capabilities(True)  # ein waches Auto auch
+
+
+def test_wake_capabilities_change_nothing_about_the_capabilities(car) -> None:
+    asleep = snap(HOME | {"vehicle.tesla.online": False})
+    assert car.wake_capabilities(asleep, T0).controllable
+    assert car.capabilities(asleep, T0) == Capabilities(False, (ASLEEP,))  # wie bisher
+
+
+@pytest.mark.parametrize(
+    ("connected", "state", "reasons"),
+    [
+        (False, HOME, (NOT_REACHABLE,)),
+        (True, HOME | {"vehicle.tesla.at_home": False}, (AWAY,)),
+        (True, HOME | {"vehicle.tesla.plugged": False}, (UNPLUGGED,)),
+        (
+            True,
+            HOME | {"vehicle.tesla.at_home": False, "vehicle.tesla.plugged": False},
+            (AWAY, UNPLUGGED),
+        ),
+        (False, dict.fromkeys(HOME, False), (NOT_REACHABLE, AWAY, UNPLUGGED)),  # ohne „schläft“
+    ],
+)
+def test_wake_reasons_come_in_this_order(cfg, idle_client, connected, state, reasons) -> None:
+    car = tesla(cfg, idle_client, [T0], connected=lambda: connected)
+    assert car.wake_capabilities(snap(state), T0) == Capabilities(False, reasons)
+
+
+@pytest.mark.parametrize("connected", [True, False])
+@pytest.mark.parametrize("online", [True, False])
+@pytest.mark.parametrize("at_home", [True, False])
+@pytest.mark.parametrize("plugged", [True, False])
+def test_wake_reasons_are_the_reasons_without_asleep(
+    cfg, idle_client, connected, online, at_home, plugged
+) -> None:
+    state = {
+        "vehicle.tesla.online": online,
+        "vehicle.tesla.at_home": at_home,
+        "vehicle.tesla.plugged": plugged,
+    }
+    car = tesla(cfg, idle_client, [T0], connected=lambda: connected)
+    plain = car.capabilities(snap(state), T0)
+    woken = car.wake_capabilities(snap(state), T0)
+    assert woken.reasons == tuple(reason for reason in plain.reasons if reason != ASLEEP)
+    assert woken.controllable == (not woken.reasons)
+
+
+async def test_wake_unavailability_comes_last(cfg, respx_mock) -> None:
+    respx_mock.post(URL).respond(500)
+    now, reachable = [T0], [True]
+    async with httpx.AsyncClient() as client:
+        car = tesla(cfg, client, now, connected=lambda: reachable[0])
+        await fail_at(car, now, 0, 1, 2)
+        reachable[0] = False
+        caps = car.wake_capabilities(snap(dict.fromkeys(HOME, False)), T0 + timedelta(minutes=3))
+    assert caps.reasons == (NOT_REACHABLE, AWAY, UNPLUGGED, AFTER_FAILURES)
+
+
+async def test_not_wakeable_until_the_deadline(cfg, respx_mock) -> None:
+    respx_mock.post(URL).respond(500)
+    now = [T0]
+    async with httpx.AsyncClient() as client:
+        car = tesla(cfg, client, now)
+        await fail_at(car, now, 0, 1, 2)
+        until = T0 + timedelta(minutes=17)  # der dritte Fehler um 2 min, dazu 15 min
+        before = car.wake_capabilities(snap(HOME), until - timedelta(microseconds=1))
+        assert before == Capabilities(False, (AFTER_FAILURES,))
+        assert car.wake_capabilities(snap(HOME), until) == Capabilities(True)
+
+
+def test_stale_invalid_or_missing_signals_are_wake_reasons(car) -> None:
+    expected = Capabilities(False, (AWAY, UNPLUGGED))
+    assert car.wake_capabilities(snap(HOME, quality=Quality.STALE), T0) == expected
+    assert car.wake_capabilities(snap(HOME, quality=Quality.INVALID), T0) == expected
+    assert car.wake_capabilities(snap({}), T0) == expected
+
+
+@pytest.mark.parametrize("value", [None, 1, 1.0, "True", "home"])
+def test_only_true_counts_for_waking_too(car, value) -> None:
+    caps = car.wake_capabilities(snap(dict.fromkeys(HOME, value)), T0)
+    assert caps == Capabilities(False, (AWAY, UNPLUGGED))
+
+
+def test_the_connection_is_asked_on_every_wake_call(cfg, idle_client) -> None:
+    reachable = [True]
+    car = tesla(cfg, idle_client, [T0], connected=lambda: reachable[0])
+    assert car.wake_capabilities(snap(HOME), T0).controllable
+    reachable[0] = False
+    assert car.wake_capabilities(snap(HOME), T0) == Capabilities(False, (NOT_REACHABLE,))
+    reachable[0] = True
+    assert car.wake_capabilities(snap(HOME), T0).controllable
+
+
+def test_the_tesla_is_a_wake_start(car) -> None:
+    assert isinstance(car, WakeStart)
+
+
 # Zurückgelesene Werte
 
 UNUSABLE_AMPS = [
@@ -496,6 +620,7 @@ async def test_charging_must_be_a_boolean(car, stray, value) -> None:
 
 READS = {
     "capabilities": lambda car: car.capabilities(snap(HOME), T0),
+    "wake_capabilities": lambda car: car.wake_capabilities(snap(HOME), T0),
     "present": lambda car: car.present(snap({})),
     "confirm": lambda car: car.confirm(CommandKind.CURRENT, 10.0, snap({})),
     "alarms": lambda car: car.alarms(T0),
@@ -1048,6 +1173,88 @@ async def test_the_executor_sends_nothing_to_a_sleeping_car(
         "Fahrzeug schläft oder ist offline; es wird nicht geweckt."
     )
     assert executor.pending() == frozenset() and not stray.called
+
+
+WAKE_START = Command(TESLA, CommandKind.CHARGING, True, wake=True)
+ASLEEP_HOME = HOME | {"vehicle.tesla.online": False}
+
+
+async def test_the_executor_wakes_a_sleeping_car_for_a_start_with_permission(
+    cfg, respx_mock, limits_live, tmp_path
+) -> None:
+    route = respx_mock.post(command_url("start_charging")).respond(json={"result": True})
+    stray = stray_requests(respx_mock)
+    async with httpx.AsyncClient() as client:
+        executor, decisions = executor_for(tesla(cfg, client, [T0]), limits_live, tmp_path)
+        asleep = snap(ASLEEP_HOME)
+        verdict = executor.execute(WAKE_START, LIVE, asleep, T0, {})
+        assert verdict is not None and verdict.send
+        await asyncio.sleep(0.01)
+        results = executor.poll(asleep, T0 + timedelta(seconds=2), T0)
+    assert [r.result for r in results] == [DecisionResult.OK]
+    assert route.call_count == 1 and not stray.called  # ein Start, an keinen anderen Pfad
+    assert decisions[0].text == "Tesla Model 3: Laden an – gesendet und bestätigt."
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        Command(TESLA, CommandKind.CHARGING, True),  # ohne Weckerlaubnis
+        Command(TESLA, CommandKind.CHARGING, False, wake=True),  # ein Stopp weckt nie
+        Command(TESLA, CommandKind.CURRENT, 10.0, wake=True),  # ein Strom auch nicht
+    ],
+    ids=["no-permission", "stop", "current"],
+)
+async def test_the_executor_sends_nothing_else_to_a_sleeping_car(
+    cfg, respx_mock, limits_live, tmp_path, command
+) -> None:
+    stray = stray_requests(respx_mock)
+    async with httpx.AsyncClient() as client:
+        executor, decisions = executor_for(tesla(cfg, client, [T0]), limits_live, tmp_path)
+        executor.execute(command, LIVE, snap(ASLEEP_HOME), T0, {})
+        await asyncio.sleep(0.01)
+    assert [d.result for d in decisions] == [DecisionResult.NOT_SENT]
+    assert decisions[0].text.endswith(
+        "nicht gesendet: nicht steuerbar: Fahrzeug schläft oder ist offline; es wird nicht geweckt."
+    )
+    assert executor.pending() == frozenset() and not stray.called
+
+
+@pytest.mark.parametrize(
+    ("state", "reason"),
+    [
+        (ASLEEP_HOME | {"vehicle.tesla.at_home": False}, AWAY),
+        (ASLEEP_HOME | {"vehicle.tesla.plugged": False}, UNPLUGGED),
+        ({}, f"{AWAY} {UNPLUGGED}"),  # ohne Werte von Tessie
+    ],
+    ids=["away", "unplugged", "unknown"],
+)
+async def test_the_executor_does_not_wake_a_car_that_is_not_home_and_plugged(
+    cfg, respx_mock, limits_live, tmp_path, state, reason
+) -> None:
+    stray = stray_requests(respx_mock)
+    async with httpx.AsyncClient() as client:
+        executor, decisions = executor_for(tesla(cfg, client, [T0]), limits_live, tmp_path)
+        executor.execute(WAKE_START, LIVE, snap(state), T0, {})
+        await asyncio.sleep(0.01)
+    assert [d.result for d in decisions] == [DecisionResult.NOT_SENT]
+    assert (
+        decisions[0].text == f"Tesla Model 3: Laden an – nicht gesendet: nicht steuerbar: {reason}"
+    )
+    assert executor.pending() == frozenset() and not stray.called
+
+
+async def test_the_executor_does_not_wake_when_tessie_is_not_reachable(
+    cfg, respx_mock, limits_live, tmp_path
+) -> None:
+    stray = stray_requests(respx_mock)
+    async with httpx.AsyncClient() as client:
+        car = tesla(cfg, client, [T0], connected=lambda: False)
+        executor, decisions = executor_for(car, limits_live, tmp_path)
+        executor.execute(WAKE_START, LIVE, snap(ASLEEP_HOME), T0, {})
+        await asyncio.sleep(0.01)
+    assert decisions[0].text.endswith(f"nicht gesendet: nicht steuerbar: {NOT_REACHABLE}")
+    assert not stray.called
 
 
 async def test_a_hanging_tessie_never_blocks_and_times_out_at_the_deadline(

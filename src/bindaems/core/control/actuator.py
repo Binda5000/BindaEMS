@@ -6,6 +6,10 @@ Der Aktor sagt, ob er steuerbar ist (``capabilities``), welche Werte das Gerät 
 (``confirm``), und nennt seine eigenen Alarme (``alarms``). Die Frist fürs Rücklesen überwacht der
 Ausführer, nicht der Aktor.
 
+Ein Aktor, der ein schlafendes Fahrzeug für einen Start wecken darf (der Tesla), erfüllt zusätzlich
+``WakeStart``: ``wake_capabilities`` sagt, ob ein Start mit Weckerlaubnis (``Command.wake``) jetzt
+möglich ist. ``Actuator`` verlangt die Methode nicht; der Ausführer fragt per ``isinstance``.
+
 ``matches`` vergleicht den gesendeten mit dem zurückgelesenen Wert, mit den Toleranzen aus
 Präzisierung 6 des Plans 2b; ``at_most`` prüft mit derselben Toleranz nur die Obergrenze. Die
 Schicht ist rein: ohne I/O, die Zeit kommt als Argument.
@@ -16,7 +20,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
-from typing import Final, Protocol
+from typing import Final, Protocol, runtime_checkable
 
 from bindaems.shared.control import CommandKind, CommandValue
 from bindaems.shared.domain import Alarm, Snapshot
@@ -106,6 +110,25 @@ class Actuator(Protocol):
 
         EVCS und Victron haben keine eigenen. Der Tesla meldet, solange er nach Fehlern gesperrt
         ist.
+        """
+        ...
+
+
+@runtime_checkable
+class WakeStart(Protocol):
+    """Ein Aktor, der für einen Start mit Weckerlaubnis eigene Fähigkeiten meldet (Design 7.1).
+
+    Für einen Befehl ``charging`` mit ``True`` und ``Command.wake`` fragt der Ausführer
+    ``wake_capabilities`` statt ``capabilities``: Ist das Fahrzeug nur deshalb nicht steuerbar, weil
+    es schläft, kann der Start es wecken. Jeden anderen Befehl prüft der Ausführer wie bisher mit
+    ``capabilities``. Wie bei ``Actuator`` blockiert die Methode nicht und wirft nicht.
+    """
+
+    def wake_capabilities(self, snap: Snapshot, now: datetime) -> Capabilities:
+        """Ist ein Start mit Weckerlaubnis zu ``now`` möglich, und wenn nicht, warum nicht?
+
+        Das sind die Gründe von ``capabilities`` ohne die, die der Start selbst aufhebt (bei einem
+        Fahrzeug: dass es schläft).
         """
         ...
 

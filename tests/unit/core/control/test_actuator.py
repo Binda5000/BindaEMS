@@ -1,10 +1,17 @@
 from dataclasses import FrozenInstanceError
 
 import pytest
-from tests.helpers import T0
-from tests.unit.core.control.fakes import FakeActuator
+from tests.helpers import T0, snap
+from tests.unit.core.control.fakes import FakeActuator, FakeWakeActuator
 
-from bindaems.core.control.actuator import Actuator, Capabilities, Confirmation, at_most, matches
+from bindaems.core.control.actuator import (
+    Actuator,
+    Capabilities,
+    Confirmation,
+    WakeStart,
+    at_most,
+    matches,
+)
 from bindaems.shared.control import CommandKind
 
 K = CommandKind
@@ -34,6 +41,25 @@ def test_the_protocol_asks_every_actuator_for_its_alarms() -> None:
 
 def test_the_fake_actuator_has_no_alarms() -> None:
     assert FakeActuator("wallbox.evcs").alarms(T0) == []
+
+
+def test_wake_start_is_checked_by_its_method_alone() -> None:
+    # Ein Aktor gehört zu ``WakeStart``, wenn er ``wake_capabilities`` hat; ``isinstance`` fragt der
+    # Ausführer, ohne dass der Aktor sich eintragen müsste. ``Actuator`` verlangt die Methode nicht.
+    assert isinstance(FakeWakeActuator("vehicle.tesla"), WakeStart)
+    assert not isinstance(FakeActuator("wallbox.evcs"), WakeStart)
+    assert not hasattr(Actuator, "wake_capabilities")
+
+
+def test_wake_capabilities_of_the_fake_are_independent_of_its_capabilities() -> None:
+    car = FakeWakeActuator("vehicle.tesla", controllable=False, wakeable=True)
+    assert car.capabilities(snap({}), T0) == Capabilities(False, ("Cerbo nicht verbunden.",))
+    assert car.wake_capabilities(snap({}), T0) == Capabilities(True)
+    unplugged = FakeWakeActuator("vehicle.tesla", controllable=True, wakeable=False)
+    assert unplugged.capabilities(snap({}), T0) == Capabilities(True)
+    assert unplugged.wake_capabilities(snap({}), T0) == Capabilities(
+        False, ("Fahrzeug nicht angesteckt.",)
+    )
 
 
 @pytest.mark.parametrize(

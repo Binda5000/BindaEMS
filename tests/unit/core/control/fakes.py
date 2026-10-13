@@ -41,3 +41,19 @@ class FakeActuator:
 
     def alarms(self, now: datetime) -> list[Alarm]:
         return []
+
+
+@dataclass
+class FakeWakeActuator(FakeActuator):
+    """Aktor mit Start mit Weckerlaubnis (``WakeStart``): ``wakeable`` sagt, ob er weckbar ist.
+
+    ``controllable`` gilt wie beim ``FakeActuator`` für ``capabilities``, ``wakeable`` für
+    ``wake_capabilities``; beide Antworten sind unabhängig voneinander.
+    """
+
+    wakeable: bool = True
+
+    def wake_capabilities(self, snap: Snapshot, now: datetime) -> Capabilities:
+        if self.wakeable:
+            return Capabilities(True)
+        return Capabilities(False, ("Fahrzeug nicht angesteckt.",))
