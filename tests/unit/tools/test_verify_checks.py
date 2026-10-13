@@ -210,6 +210,19 @@ def test_selfcheck_results_are_mapped_to_items() -> None:
     assert findings[1].detail == "Dynamic ESS ist aktiv (Modus 1)."
 
 
+def test_selfcheck_titles_of_multi_mode_and_import_limit() -> None:
+    findings = check_selfcheck(
+        [
+            CheckResult("multi_mode", "unknown", "Multi-Modus nicht verfügbar."),
+            CheckResult("import_limit", "ok", "Importlimit am Cerbo 20 A wie konfiguriert."),
+        ]
+    )
+    assert [(f.item, f.title, f.status) for f in findings] == [
+        ("17.1-2", "Multi-Modus", "warn"),
+        ("17.1-2", "Importlimit am Cerbo", "ok"),
+    ]
+
+
 def test_battery_values() -> None:
     complete = {
         "battery.soc_pct": 55.0,

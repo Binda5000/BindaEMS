@@ -22,6 +22,8 @@ const SELFCHECKS: Record<string, string> = {
 	dess: 'Dynamic ESS',
 	schedules: 'Victron-Ladefenster',
 	min_soc: 'Min-SOC',
+	multi_mode: 'Multi-Modus',
+	import_limit: 'Importlimit',
 	fresh_data: 'Datenfrische'
 };
 

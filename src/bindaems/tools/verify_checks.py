@@ -51,6 +51,8 @@ _SELFCHECK_ITEMS: dict[str, tuple[str, str]] = {
     "dess": ("17.1-2", "Dynamic ESS"),
     "schedules": ("17.1-2", "Victron-Ladefenster"),
     "min_soc": ("17.1-2", "Min-SOC und USV-Reserve"),
+    "multi_mode": ("17.1-2", "Multi-Modus"),
+    "import_limit": ("17.1-2", "Importlimit am Cerbo"),
     "fresh_data": ("17.1-4", "Datenfrische"),
 }
 _PV_POSITIONS = {0: "AC-In 1", 1: "AC-Out", 2: "AC-In 2"}

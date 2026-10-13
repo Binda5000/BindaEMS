@@ -14,11 +14,9 @@ import {
 } from './view';
 
 it('benennt Selbstprüfungen deutsch', () => {
-	expect(['dess', 'evcs_mode.twc', 'neu'].map(selfcheckLabel)).toEqual([
-		'Dynamic ESS',
-		'EVCS-Modus twc',
-		'neu'
-	]);
+	expect(
+		['dess', 'multi_mode', 'import_limit', 'evcs_mode.twc', 'neu'].map(selfcheckLabel)
+	).toEqual(['Dynamic ESS', 'Multi-Modus', 'Importlimit', 'EVCS-Modus twc', 'neu']);
 });
 
 it('listet Signale mit Wert, Qualität und Alter', () => {
