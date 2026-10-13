@@ -524,11 +524,14 @@ def test_evcs_stop_keeps_the_tesla_at_its_minimum_until_all_stop(cfg) -> None:
         for t, c in found
         if "overload" in c.command.reasons
     ]
+    # Jede höhere Stufe bietet ihre Reaktion allen geregelten Aktoren einmal an.
     assert overload == [
         (3, "vehicle.tesla", CURRENT, 5.0, True),
         (3, "wallbox.evcs", CURRENT, 6.0, True),
+        (6, "vehicle.tesla", CURRENT, 5.0, True),
         (6, "wallbox.evcs", CHARGING, False, True),
         (10, "vehicle.tesla", CHARGING, False, True),
+        (10, "wallbox.evcs", CHARGING, False, True),
     ]
 
 
@@ -540,9 +543,11 @@ def test_overload_starts_nothing(cfg) -> None:
         intent=lambda s: egolf_in(ChargeMode.OFF) if s < 4 else egolf_in(ChargeMode.NOW, 2),
         grid_obs=lambda s: grid(l1=34.0) if s < 5 else grid(),
     )
-    # Überlast ab 3 bis 60 s nach dem Ende bei 5: Sofort setzt nur den Mindeststrom
+    # Überlast ab 3 bis 60 s nach dem Ende bei 5: Sofort setzt nur den Mindeststrom. Mit der
+    # Überlast vergisst die Regelung ihre letzten Werte und bietet „Laden aus“ einmal neu an.
     assert as_commands(found) == [
         cmd(0, CHARGING, False, ("mode_off",)),
+        cmd(3, CHARGING, False, ("mode_off",)),
         cmd(4, CURRENT, 6.0, ("mode_now", "overload"), urgent=True),
         cmd(65, CURRENT, 16.0, ("mode_now",)),
         cmd(65, CHARGING, True, ("mode_now",)),
@@ -1025,3 +1030,128 @@ def test_a_charge_point_that_is_not_controllable_is_load(cfg) -> None:  # Präzi
     c = controller(cfg)
     c.step(inputs(cfg, controllable={"wallbox.evcs": False, "vehicle.tesla": False}))
     assert c.health()[1]["limit_a"] is None
+
+
+# Nachbesserung: Das Gerät ändert sich ohne die Regelung (neuer Ansteckvorgang, Rückkehr in die
+# Regelung, Überlast)
+
+TESLA_16_A = twc(
+    connected=True,
+    charging=True,
+    phase_a=dict.fromkeys(("L1", "L2", "L3"), 16.0),
+    power_w=11040.0,
+)
+BOTH_MODES = pytest.mark.parametrize(
+    ("mode", "code"), [(ChargeMode.PV, "mode_pv"), (ChargeMode.OFF, "mode_off")], ids=["pv", "off"]
+)
+
+
+def plugged_again(s: int) -> dict:
+    """Der Tesla steht bis 10 s am Wall Connector, ist bis 60 s weg und lädt danach von selbst."""
+    if s < 10:
+        return {"twc_obs": twc(connected=True), "tesla_obs": tesla(plugged=True)}
+    if s < 60:
+        return {"twc_obs": twc(), "tesla_obs": tesla()}
+    return {"twc_obs": TESLA_16_A, "tesla_obs": tesla(plugged=True, charging=True)}
+
+
+def tesla_inputs(cfg, *, s: int, l1: float = 18.0, **kw):
+    """Die Eingaben zu ``plugged_again``; ab 60 s zieht der Tesla 16 A je Phase aus dem Netz."""
+    loaded = grid(l1=l1, l2=18.0, l3=18.0, grid_w=12420.0)
+    return inputs(cfg, s=s, grid_obs=grid() if s < 60 else loaded, **plugged_again(s), **kw)
+
+
+@BOTH_MODES
+def test_a_car_that_starts_by_itself_in_a_new_session_is_stopped(cfg, mode, code) -> None:
+    intent = Intent(version=1, control=True, vehicles={"tesla": VehicleIntent(mode=mode)})
+    found = run(controller(cfg), cfg, 70, make=tesla_inputs, intent=intent, controllable=BOTH)
+    off = Command("vehicle.tesla", CHARGING, False, reasons=(code,))
+    assert [(t, c.command) for t, c in found if c.command.actuator == "vehicle.tesla"] == [
+        (0, off),
+        (60, off),  # neuer Ansteckvorgang: Der letzte Wert „aus“ ist vergessen
+    ]
+
+
+@BOTH_MODES
+def test_overload_stops_a_car_that_charges_against_its_mode(cfg, mode, code) -> None:
+    intent = Intent(version=1, control=True, vehicles={"tesla": VehicleIntent(mode=mode)})
+    found = run(
+        controller(cfg),
+        cfg,
+        120,
+        make=tesla_inputs,
+        intent=intent,
+        controllable=BOTH,
+        l1=lambda s: 36.0 if s >= 90 else 18.0,  # ab 90 s über der Sicherung
+    )
+    off = Command("vehicle.tesla", CHARGING, False, reasons=(code,))
+    urgent = Command("vehicle.tesla", CHARGING, False, urgent=True, reasons=(code, "overload"))
+    # Der Tesla lädt weiter (Dry-Run): Jede Stufe der Überlast stoppt ihn dringend.
+    assert [(t, c.command) for t, c in found if c.command.actuator == "vehicle.tesla"] == [
+        (0, off),
+        (60, off),
+        (93, urgent),  # MINIMUM
+        (96, urgent),  # EVCS_STOP
+        (100, urgent),  # ALL_STOP
+    ]
+
+
+def test_a_charge_point_back_under_control_is_taken_over(cfg) -> None:  # Präzisierung 9
+    # Der Tesla lädt bei 12,8 kW Überschuss; von 10 bis 409 s ist er nicht steuerbar.
+    found = run(
+        controller(cfg),
+        cfg,
+        420,
+        twc_obs=TESLA_16_A,
+        tesla_obs=tesla(plugged=True, charging=True),
+        controllable=lambda s: {"wallbox.evcs": True, "vehicle.tesla": not 10 <= s < 410},
+        present={("vehicle.tesla", CURRENT): 16.0, ("vehicle.tesla", CHARGING): True},
+        grid_obs=grid(l1=18.0, l2=18.0, l3=18.0, grid_w=-1860.0),
+    )
+    charging = [
+        (t, c.command.value)
+        for t, c in found
+        if c.command.actuator == "vehicle.tesla" and c.command.kind == CHARGING
+    ]
+    assert charging == [(0, True), (410, True)]  # Übernahme statt Stopp, wie nach einer Pause
+
+
+def test_after_a_pause_each_overload_stage_reacts_again(cfg) -> None:
+    # Der Tesla lädt in Aus von selbst, L1 liegt durchgehend über der Sicherung.
+    c = controller(cfg)
+    against = {
+        "intent": Intent(
+            version=1, control=True, vehicles={"tesla": VehicleIntent(mode=ChargeMode.OFF)}
+        ),
+        "controllable": BOTH,
+        "twc_obs": TESLA_16_A,
+        "tesla_obs": tesla(plugged=True, charging=True),
+        "grid_obs": grid(l1=36.0, l2=18.0, l3=18.0, grid_w=12420.0),
+    }
+    run(c, cfg, 11, **against)  # Stufen bei 3, 6 und 10
+    c.idle(T0 + timedelta(seconds=11))
+    found = []
+    for s in range(20, 31):
+        commands = c.step(inputs(cfg, s=s, **against))
+        accept(c, commands)
+        found.extend((s, x.command) for x in commands if x.command.actuator == "vehicle.tesla")
+    off = Command("vehicle.tesla", CHARGING, False, reasons=("mode_off",))
+    urgent = Command(
+        "vehicle.tesla", CHARGING, False, urgent=True, reasons=("mode_off", "overload")
+    )
+    assert found == [(20, off), (23, urgent), (26, urgent), (30, urgent)]
+
+
+def test_a_new_session_forgets_not_taken(cfg) -> None:
+    c = controller(cfg)
+    now = egolf_in(ChargeMode.NOW)
+    accept(c, c.step(inputs(cfg, intent=now)))  # Strom 16 A, Laden an
+    c.note_result(
+        WriteResult("wallbox.evcs", CURRENT, 16.0, DecisionResult.ERROR, "x", not_taken=True)
+    )
+    accept(c, c.step(inputs(cfg, s=1, intent=now, evcs_obs=evcs(connected=False))))
+    again = c.step(inputs(cfg, s=2, intent=now))  # neuer Ansteckvorgang
+    assert [x.command for x in again] == [
+        Command("wallbox.evcs", CURRENT, 16.0, reasons=("mode_now",)),
+        Command("wallbox.evcs", CHARGING, True, reasons=("mode_now",)),
+    ]
