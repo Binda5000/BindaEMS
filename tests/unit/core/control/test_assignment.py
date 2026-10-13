@@ -182,6 +182,54 @@ def test_tessie_complete_sticks_until_unplugged(cfg) -> None:
     assert not state.vehicles["tesla"].complete
 
 
+@pytest.mark.parametrize("twc_before", [None, False], ids=["never_known", "no_vehicle"])
+def test_tessie_complete_counts_during_a_wall_connector_outage(cfg, twc_before) -> None:
+    a = Assignment(cfg, started=T0)
+    if twc_before is not None:
+        update(a, 0, twc_obs=twc(connected=twc_before))
+    outage = twc(connected=None, charging=None)
+    state = update(
+        a, 1, twc_obs=outage, tesla_obs=tesla(plugged=True, at_home=True, complete=True)
+    ).vehicles["tesla"]
+    assert (state.plugged, state.complete) == (True, True)
+    # ohne laufenden Vorgang wird nichts gehalten: Meldet Tessie es nicht mehr, ist es vorbei
+    state = update(a, 2, twc_obs=outage, tesla_obs=tesla(plugged=True, at_home=True)).vehicles[
+        "tesla"
+    ]
+    assert (state.plugged, state.complete) == (True, False)
+
+
+@pytest.mark.parametrize(
+    ("plugged", "at_home", "complete", "expected"),
+    [
+        (True, True, True, True),
+        (True, True, False, False),
+        (True, True, None, False),
+        (True, False, True, False),  # woanders „geladen“: zählt nicht für diese Wallbox
+        (False, True, True, False),
+        (None, True, True, False),  # offen, ob hier angesteckt: zählt nicht
+        (True, None, True, False),
+    ],
+)
+def test_tessie_complete_without_a_session_counts_only_at_home_and_plugged(
+    cfg, plugged, at_home, complete, expected
+) -> None:
+    state = update(
+        Assignment(cfg, started=T0),
+        0,
+        twc_obs=twc(connected=None),
+        tesla_obs=tesla(plugged=plugged, at_home=at_home, complete=complete),
+    )
+    assert state.vehicles["tesla"].complete is expected
+
+
+def test_complete_reported_by_the_wallbox_counts_without_a_session(cfg) -> None:
+    # So meldet es observe nicht (die EVCS meldet mit „geladen“ immer „verbunden“); die Zuordnung
+    # liest den Wert der Wallbox trotzdem ohne Vorgang, wie den von Tessie.
+    state = update(Assignment(cfg, started=T0), 0, evcs_obs=evcs(connected=None, complete=True))
+    assert state.vehicles["egolf"].complete
+
+
 def test_complete_is_kept_per_vehicle(cfg) -> None:
     a = Assignment(cfg, started=T0)
     assert update(a, 0, evcs_obs=evcs(complete=True)).vehicles["egolf"].complete
@@ -252,18 +300,41 @@ def test_plugged_of_a_car_without_tessie_is_the_wallbox_value(cfg, connected) ->
 
 
 @pytest.mark.parametrize(
-    ("wallbox_charging", "tessie_charging"), [(False, True), (None, True), (True, False)]
+    ("wallbox_charging", "plugged", "at_home", "tessie_charging", "expected"),
+    [
+        (False, True, True, True, False),  # der Wert der Wallbox geht Tessie vor
+        (True, True, True, False, True),
+        # ohne Wert der Wallbox gilt Tessie, wenn es das Auto hier sieht
+        (None, True, True, True, True),
+        (None, True, True, False, False),
+        (None, True, True, None, None),
+        (None, False, True, True, False),  # nicht angesteckt: lädt hier sicher nicht
+        (None, True, False, True, False),  # nicht zu Hause: lädt hier sicher nicht
+        (None, False, False, None, False),
+        (None, None, True, True, None),  # sonst offen
+        (None, True, None, True, None),
+        (None, None, None, True, None),
+    ],
 )
-def test_charging_comes_from_the_wallbox_not_from_tessie(
-    cfg, wallbox_charging, tessie_charging
+def test_charging_is_the_wallbox_value_with_tessie_as_the_fallback(
+    cfg, wallbox_charging, plugged, at_home, tessie_charging, expected
 ) -> None:
+    outage = wallbox_charging is None  # ohne Wert der Wallbox fehlt meist auch „Fahrzeug verbunden“
     state = update(
         Assignment(cfg, started=T0),
         0,
-        twc_obs=twc(connected=True, charging=wallbox_charging),
-        tesla_obs=tesla(plugged=True, charging=tessie_charging),
+        twc_obs=twc(connected=None if outage else True, charging=wallbox_charging),
+        tesla_obs=tesla(plugged=plugged, at_home=at_home, charging=tessie_charging),
     )
-    assert state.vehicles["tesla"].charging is wallbox_charging
+    assert state.vehicles["tesla"].charging is expected
+
+
+@pytest.mark.parametrize("charging", [True, False, None])
+def test_charging_of_a_car_without_tessie_is_the_wallbox_value(cfg, charging) -> None:
+    wallboxes = {"evcs": evcs(charging=charging), "twc": twc()}
+    vehicles = {"tesla": tesla(), "egolf": tesla(plugged=True, at_home=True, charging=True)}
+    state = Assignment(cfg, started=T0).update(T0, T0, None, T0, wallboxes, vehicles)
+    assert state.vehicles["egolf"].charging is charging  # die Werte von Tessie zählen nicht
 
 
 def test_boost_ends_at_its_time_on_the_wall_clock(cfg) -> None:

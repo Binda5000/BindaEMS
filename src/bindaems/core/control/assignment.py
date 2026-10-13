@@ -51,9 +51,12 @@ class VehicleState:
     - ``kind``: ``OVERRIDE`` mit gültiger Übersteuerung, sonst ``UNCLEAR``, solange die Zuordnung
       unklar ist, sonst ``DEFAULT``
     - ``plugged``: ob das Fahrzeug an der Wallbox angesteckt ist (Präzisierung 4)
-    - ``charging``: ob die Wallbox lädt; den Wert von Tessie braucht die Zuordnung dafür nicht
+    - ``charging``: ob das Fahrzeug lädt: der Wert der Wallbox. Fehlt er, gilt Tessie wie bei
+      ``plugged``: Sieht Tessie das Fahrzeug „zu Hause und angesteckt“, zählt sein Ladezustand;
+      sieht Tessie es sicher nicht dort, lädt es nicht; sonst ist es unbekannt.
     - ``complete``: das Fahrzeug war in diesem Ansteckvorgang einmal „geladen“ (laut Tessie oder
-      laut Wallbox), bis zum Abstecken
+      laut Wallbox), bis zum Abstecken. Läuft kein Vorgang, etwa bei einem Ausfall der Wallbox,
+      zählt, was beide jetzt melden.
     - ``new_session``: an der Wallbox hat in diesem Aufruf ein neuer Ansteckvorgang begonnen
     - ``boost_until``: bis wann der Boost gilt; ``None`` ohne aktiven Boost
     """
@@ -206,7 +209,7 @@ class Assignment:
                 wallbox=wallbox_key,
                 kind=kind,
                 plugged=_plugged(wallbox, tessie),
-                charging=wallbox.charging,
+                charging=_charging(wallbox, tessie),
                 complete=self._is_complete(key, wallbox_key, wallbox, tessie),
                 new_session=self._ports[wallbox_key].new,
                 boost_until=self._boost_until(key, entries.get(key), wall_now),
@@ -290,10 +293,17 @@ class Assignment:
 
         Tessie oder die Wallbox meldet es; die Zuordnung hält es, bis der Vorgang endet. Es gehört
         zum Vorgang an der Wallbox, an der das Fahrzeug hängt: Wechselt die Wallbox, beginnt es neu.
+
+        Läuft an der Wallbox kein Vorgang (sie meldet kein Fahrzeug, oder sie fiel aus, bevor sie
+        eins meldete), hält die Zuordnung nichts: Dann zählt, was die Wallbox und Tessie jetzt
+        melden. Tessie zählt dabei nur, wenn es das Fahrzeug „zu Hause und angesteckt“ sieht, wie
+        bei ``plugged``. Für den Wall Connector, der nie „geladen“ meldet, ist Tessie die einzige
+        Quelle.
         """
         port = self._ports[wallbox_key]
         if not port.running:
-            return False
+            tessie_complete = _home_and_plugged(tessie) is True and tessie.complete is True
+            return wallbox.complete is True or tessie_complete
         session = (wallbox_key, port.count)
         if wallbox.complete is True or tessie.complete is True:
             self._charged[key] = session
@@ -386,4 +396,20 @@ def _plugged(wallbox: WallboxObs, tessie: VehicleObs) -> bool | None:
     at_home = _home_and_plugged(tessie)
     if wallbox.connected is False:
         return None if at_home is True else False
+    return at_home
+
+
+def _charging(wallbox: WallboxObs, tessie: VehicleObs) -> bool | None:
+    """Ob das Fahrzeug lädt: der Wert der Wallbox; fehlt er, gilt Tessie wie bei ``plugged``.
+
+    Sieht Tessie das Fahrzeug „zu Hause und angesteckt“, zählt sein Ladezustand. Sieht es das
+    Fahrzeug sicher nicht dort (nicht angesteckt oder nicht zu Hause), lädt es dort nicht. Sonst ist
+    es unbekannt. ``tessie`` ist ``NO_VEHICLE_DATA`` für ein Fahrzeug ohne Tessie; dann zählt nur
+    die Wallbox.
+    """
+    if wallbox.charging is not None:
+        return wallbox.charging
+    at_home = _home_and_plugged(tessie)
+    if at_home is True:
+        return tessie.charging
     return at_home
