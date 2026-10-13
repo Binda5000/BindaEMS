@@ -104,6 +104,27 @@ def test_peak_shaving_only_above_the_reserve(model) -> None:
     assert model.grid_a["L1"] == pytest.approx(8000.0 / 230)
 
 
+def test_discharge_stops_exactly_at_the_reserve(model) -> None:
+    # 0,005 % über der Reserve sind 1,5 Wh von 30 kWh: In dieser Sekunde liefert der Akku nur
+    # 5400 W statt der 9000 W des Hauses, dann nichts mehr. Er sinkt nie unter die Reserve.
+    model.soc_pct = 20.005
+    model.house_w = (3000.0, 3000.0, 3000.0)
+    model.step(T0)
+    assert model.battery_w == pytest.approx(-5400.0)
+    assert model.soc_pct == 20.0
+    assert model.grid_a["L1"] == pytest.approx((3000.0 - 1800.0) / 230)
+    model.step(at(1))
+    assert (model.battery_w, model.soc_pct) == (0.0, 20.0)
+
+
+def test_peak_shaving_stops_exactly_at_the_reserve(model) -> None:
+    model.soc_pct = 20.005
+    model.house_w = (8000.0, 300.0, 300.0)  # ESS und Peak Shaving wollten 9133 W
+    model.step(T0)
+    assert model.battery_w == pytest.approx(-5400.0)
+    assert model.soc_pct == 20.0
+
+
 def test_soc_follows_the_battery_power(model, store, clock) -> None:
     # 3000 W aus dem Akku 360 s lang sind 300 Wh, 1 % von 30 kWh.
     model.house_w = (1000.0, 1000.0, 1000.0)

@@ -13,7 +13,8 @@ AC-Eingang, gleich auf drei Phasen. Je Phase gilt ``P_acout = Haus + Wallboxen``
 
 - **ESS** (Multi „Ein“): Der Akku gleicht die Summe der Phasen aus,
   ``clamp(PV − Lasten, −max_discharge_w, max_charge_w)``, je Phase ein Drittel. Bei SOC ≤ Reserve
-  entlädt er nicht, bei 100 % lädt er nicht.
+  entlädt er nicht, und in der Sekunde, in der er sie erreicht, nur bis zu ihr; bei 100 % lädt er
+  nicht.
 - **Peak Shaving:** Liegt eine Phase über ``grid.import_limit_a``, entlädt der Multi dieser Phase
   zusätzlich, bis höchstens ``max_discharge_w / 3``, nur über der Reserve.
 - **„Nur Laden“** (``charger_only``, ``vebus.mode`` 1): Der Akku entlädt nie, kein Peak Shaving.
@@ -443,7 +444,11 @@ class PlantModel:
         self.soc_pct = min(100.0, max(0.0, soc))
 
     def _ess(self, loads: dict[Phase, float]) -> dict[Phase, float]:
-        """Die Akkuleistung je Phase am Netz, positiv beim Laden: ESS, dann Peak Shaving."""
+        """Die Akkuleistung je Phase am Netz, positiv beim Laden: ESS, dann Peak Shaving.
+
+        Entladen darf der Akku im Schritt höchstens bis zur Reserve (``_above_reserve_w``); liefe
+        er darüber hinaus, kürzt das jede Phase im selben Verhältnis.
+        """
         battery = self._cfg.battery
         total = self.pv_w - sum(loads.values())
         total = min(max(total, -battery.max_discharge_w), battery.max_charge_w)
@@ -461,7 +466,16 @@ class PlantModel:
             over_w = loads[phase] + share[phase] - self.pv_w / 3 - limit_w
             if over_w > 0:
                 share[phase] = max(share[phase] - over_w, floor_w)
+        drawn_w, above_w = -sum(share.values()), self._above_reserve_w()
+        if drawn_w > above_w:
+            share = {phase: power * above_w / drawn_w for phase, power in share.items()}
         return share
+
+    def _above_reserve_w(self) -> float:
+        """Die Entladeleistung, mit der der Akku in einem Schritt genau die Reserve erreicht."""
+        battery = self._cfg.battery
+        above_kwh = (self.soc_pct - battery.reserve_soc_pct) / 100 * battery.usable_kwh
+        return above_kwh * 3_600_000 / STEP_S
 
     # --- Signale ----------------------------------------------------------------------------------
 
