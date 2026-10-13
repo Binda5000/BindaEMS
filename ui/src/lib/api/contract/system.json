@@ -121,7 +121,35 @@
       "inputs": {
         "ok": true,
         "problems": []
-      }
+      },
+      "vehicles": [
+        {
+          "id": "tesla",
+          "name": "Tesla Model 3",
+          "mode": null,
+          "boost_until": null,
+          "wallbox": null,
+          "assignment": null,
+          "limit_a": null,
+          "plugged": null,
+          "charging": null,
+          "wakes_today": 0,
+          "reason": null
+        },
+        {
+          "id": "egolf",
+          "name": "e-Golf",
+          "mode": null,
+          "boost_until": null,
+          "wallbox": null,
+          "assignment": null,
+          "limit_a": null,
+          "plugged": null,
+          "charging": null,
+          "wakes_today": 0,
+          "reason": null
+        }
+      ]
     }
   },
   "components": [

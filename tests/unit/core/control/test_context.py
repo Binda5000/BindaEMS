@@ -42,6 +42,22 @@ def test_missing_setpoint_is_unknown() -> None:
     assert build(snap({})).base_grid_setpoint_w is None
 
 
+def test_vehicle_wallbox_reaches_the_context() -> None:
+    ctx = safety_context(
+        now=T0,
+        operating=OperatingState.CONTROL,
+        modes={},
+        locks={},
+        inputs=InputStatus(True),
+        snap=snap({}),
+        phase_import_a=PHASE_IMPORT,
+        wallbox_phase_a={},
+        present={},
+        vehicle_wallbox={"vehicle.tesla": "twc"},
+    )
+    assert ctx.vehicle_wallbox == {"vehicle.tesla": "twc"}
+
+
 def test_decision_inputs() -> None:
     s = snap({"battery.power_w": -1500.0, "battery.soc_pct": 46.0})
     assert decision_inputs(s, {"L1": 1.5, "L2": None, "L3": -0.5}) == {

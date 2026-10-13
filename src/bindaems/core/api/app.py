@@ -44,6 +44,9 @@ class HealthReport(BaseModel):
       ob er Werte des EMS halten kann, die bei der Übergabe zurückgesetzt werden (``owned``)
     - ``watchdog``: Watchdog am Cerbo und Heartbeat (``watchdog_to_json``)
     - ``inputs``: Ergebnis der Eingangsprüfung (Regel 7)
+    - ``vehicles``: je Fahrzeug in der Reihenfolge von ``config.yaml`` der Stand der Laderegelung
+      (``ChargeController.health``): Modus mit Boost bis, Wallbox und Zuordnung, Grenze des
+      Phasenwächters, angesteckt, lädt, Weckvorgänge heute und der letzte Grund (Plan 2c-1)
     """
 
     mode: Literal["START", "OBSERVE", "CONTROL", "DEGRADED", "SAFE"]
@@ -60,6 +63,7 @@ class HealthReport(BaseModel):
         default_factory=lambda: watchdog_to_json(WatchdogStatus.unknown(), "off", required=False)
     )
     inputs: dict[str, Any] = Field(default_factory=lambda: {"ok": True, "problems": []})
+    vehicles: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class CurrentIntent(BaseModel):

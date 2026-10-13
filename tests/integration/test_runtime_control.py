@@ -13,7 +13,7 @@ from fastapi.testclient import TestClient
 from pydantic import SecretStr
 from structlog.testing import capture_logs
 from tests.helpers import INTENT_CHARGING_DEFAULTS, T0, FakeSink, run_until, snap
-from tests.integration.conftest import TOKEN
+from tests.integration.conftest import GOOD_STATE, TOKEN, allow_evcs_live, live_evcs, run
 from tests.integration.plant import Plant
 from tests.unit.core.adapters.conftest import FakeTransport, P
 
@@ -23,6 +23,7 @@ from bindaems.core.actuators.victron import VictronActuator
 from bindaems.core.adapters.victron_mqtt import VictronMqttAdapter
 from bindaems.core.api.app import create_api
 from bindaems.core.control.actuator import Confirmation
+from bindaems.core.control.charging import ChargeController
 from bindaems.core.control.intent import INTENT_FILE_PROBLEM
 from bindaems.core.persistence.files import read_json, write_json_atomic
 from bindaems.core.runtime import CoreRuntime
@@ -33,24 +34,21 @@ from bindaems.shared.decisions import DecisionResult
 from bindaems.shared.domain import Alarm, Severity, SignalKind
 from bindaems.shared.timeutil import ManualClock
 
-GOOD_STATE = {
-    "vebus.phases": 3,
-    "ess.hub4_mode": 1,
-    "ess.batterylife_state": 10,
-    "dess.mode": 0,
-    "ess.schedule.0.day": -7,
-    "ess.min_soc_pct": 20,
-    "wallbox.evcs.gx_mode": 0,
-}
 DESS = "Dynamic ESS ist aktiv (Modus 1). Das EMS darf Victron nicht steuern."
 # Watchdog am Cerbo wartet und meldet das konfigurierte Timeout: Der core darf ihn scharf machen
 WATCHDOG_WAITING = {"watchdog.state": 0, "watchdog.timeout_s": 90}
 
 
-def run(rt, clock, seconds: int) -> None:
-    for _ in range(seconds):
-        rt.cycle_once()
-        clock.advance(1)
+@pytest.fixture(autouse=True)
+def without_charging_commands(monkeypatch) -> None:
+    """Die Laderegelung schickt in diesen Tests keine Befehle.
+
+    Sie halten sicheren Zustand, Übergabe, Heartbeat und fremde Änderungen fest (Plan 2b). Ihre
+    Daten (Sollstrom der EVCS 16 A, kein Status, kein Messstrom) lassen die Regelung die EVCS zu
+    Recht senken (Design 5.5), und den Tesla mit Tessie regelte sie ebenso. Das Zusammenspiel mit
+    der Regelung prüft ``test_runtime_charging.py``.
+    """
+    monkeypatch.setattr(ChargeController, "step", lambda self, inputs: [])
 
 
 def record_broadcast(rt) -> list[dict[str, Any]]:
@@ -65,27 +63,9 @@ def record_broadcast(rt) -> list[dict[str, Any]]:
     return messages
 
 
-def allow_evcs_live(cfg: Config) -> Config:
-    evcs = cfg.wallboxes["evcs"].model_copy(update={"live_allowed": True})
-    return cfg.model_copy(update={"wallboxes": cfg.wallboxes | {"evcs": evcs}})
-
-
 def allow_tesla_live(cfg: Config) -> Config:
     tesla = cfg.vehicles["tesla"].model_copy(update={"live_allowed": True})
     return cfg.model_copy(update={"vehicles": cfg.vehicles | {"tesla": tesla}})
-
-
-def live_evcs(runtime_env, *, plant: Plant, state: dict, **kw: Any):
-    rt, _, clock = runtime_env(
-        state=state,
-        configure=allow_evcs_live,
-        mqtt_write=plant.write,
-        before_cycle=plant.before_cycle,
-        **kw,
-    )
-    plant.attach(rt.store)
-    rt.submit_intent(Intent(version=1, control=True, actuators={"wallbox.evcs": ActuatorMode.LIVE}))
-    return rt, clock
 
 
 async def test_starts_in_start_then_observe(runtime_env) -> None:

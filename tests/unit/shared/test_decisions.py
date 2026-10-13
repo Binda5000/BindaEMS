@@ -368,6 +368,41 @@ def test_reasons_are_named_in_german(reasons: tuple[str, ...], expected: str) ->
     assert text == f"{expected}: Strom 8 A – gesendet und bestätigt."
 
 
+def test_charging_reasons_have_texts() -> None:
+    text = decision_text(
+        "EVCS „evcs“",
+        CommandKind.CURRENT,
+        8.0,
+        DecisionResult.DRY_RUN,
+        reasons=("mode_pv", "pv_surplus"),
+    )
+    assert text == "EVCS „evcs“ (PV-Überschuss, Überschuss): Strom 8 A – Dry-Run, nicht gesendet."
+
+
+@pytest.mark.parametrize(
+    ("code", "expected"),
+    [
+        ("mode_pv", "PV-Überschuss"),
+        ("mode_min_pv", "Min+PV"),
+        ("mode_now", "Sofort"),
+        ("mode_off", "Aus"),
+        ("boost", "Boost"),
+        ("pv_surplus", "Überschuss"),
+        ("phase_limit", "Phasengrenze"),
+        ("import_limit", "Importlimit"),
+        ("reserve_guard", "Schutz der USV-Reserve"),
+        ("overload", "Überlast"),
+        ("wake", "Wecken"),
+        ("not_taken_retry", "erneut nach „nicht übernommen“"),
+        ("assignment_unclear", "Zuordnung unklar"),
+        ("resume_after_outage", "Wiederaufnahme nach Ausfall"),
+    ],
+)
+def test_every_charging_reason_is_named_in_german(code: str, expected: str) -> None:
+    text = decision_text("V", CommandKind.CURRENT, 8.0, DecisionResult.OK, reasons=(code,))
+    assert text == f"V ({expected}): Strom 8 A – gesendet und bestätigt."
+
+
 def test_findings_follow_the_sentence_separated_by_spaces() -> None:
     text = decision_text(
         "V",

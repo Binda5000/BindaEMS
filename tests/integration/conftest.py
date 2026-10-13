@@ -8,10 +8,12 @@ from typing import Any
 import pytest
 from pydantic import SecretStr
 from tests.helpers import FakeSink
+from tests.integration.plant import Plant
 from tests.unit.core.state.conftest import BASE
 
 from bindaems.core.runtime import CoreRuntime
 from bindaems.shared.config import Config, Secrets
+from bindaems.shared.control import ActuatorMode, Intent
 from bindaems.shared.domain import SignalKind, Value
 from bindaems.shared.timeutil import ManualClock
 
@@ -22,6 +24,44 @@ VALUES: dict[str, float] = BASE | {
     "battery.power_w": 600.0,
     "battery.soc_pct": 50.0,
 }
+# Die Selbstprüfung besteht: drei Phasen, ESS wie erwartet, kein Dynamic ESS, kein Ladefenster,
+# Min-SOC bei der USV-Reserve, EVCS im manuellen Modus
+GOOD_STATE = {
+    "vebus.phases": 3,
+    "ess.hub4_mode": 1,
+    "ess.batterylife_state": 10,
+    "dess.mode": 0,
+    "ess.schedule.0.day": -7,
+    "ess.min_soc_pct": 20,
+    "wallbox.evcs.gx_mode": 0,
+}
+
+
+def run(rt, clock, seconds: int) -> None:
+    """``seconds`` Zyklen; nach jedem geht die Uhr eine Sekunde weiter."""
+    for _ in range(seconds):
+        rt.cycle_once()
+        clock.advance(1)
+
+
+def allow_evcs_live(cfg: Config) -> Config:
+    """Die Konfiguration mit ``live_allowed`` für die EVCS „evcs“."""
+    evcs = cfg.wallboxes["evcs"].model_copy(update={"live_allowed": True})
+    return cfg.model_copy(update={"wallboxes": cfg.wallboxes | {"evcs": evcs}})
+
+
+def live_evcs(runtime_env, *, plant: Plant, state: dict, **kw: Any):
+    """Laufzeit an der Anlage ``plant`` mit der Absicht „Regelbetrieb an, EVCS live“."""
+    rt, _, clock = runtime_env(
+        state=state,
+        configure=allow_evcs_live,
+        mqtt_write=plant.write,
+        before_cycle=plant.before_cycle,
+        **kw,
+    )
+    plant.attach(rt.store)
+    rt.submit_intent(Intent(version=1, control=True, actuators={"wallbox.evcs": ActuatorMode.LIVE}))
+    return rt, clock
 
 
 @pytest.fixture

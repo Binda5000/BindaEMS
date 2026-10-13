@@ -5,17 +5,18 @@ Je Zyklus: Snapshot → abgeleitete Größen → Plausibilität → Flusszuordnu
 Summen → Telemetrie → Rücklesen der Aktoren und der offenen Schreibvorgänge → (alle 10 s)
 Selbstprüfung, mitregelnde Systeme und fremde Änderungen → Eingangsprüfung → (nach jeder
 Prüfung) Sperren → Werte des EMS, Watchdog, wirksame Betriebsarten → Betriebszustand → sicherer
-Zustand und Übergabe → (beim Start und stündlich) Aufräumen des Entscheidungslogs → Stream →
-Alarme → Heartbeat. Am Ende gehen die Entscheidungen des Zyklus in einem Zug in den Spool, auch
-wenn der Zyklus scheitert.
+Zustand, Übergabe und Laderegelung → (beim Start und stündlich) Aufräumen des Entscheidungslogs →
+Stream → Alarme → Heartbeat. Am Ende gehen die Entscheidungen des Zyklus in einem Zug in den
+Spool, auch wenn der Zyklus scheitert.
 
 Auf Geräte schreibt der core den Heartbeat an den eigenen Watchdog am Cerbo, die Sicherwerte des
-sicheren Zustands und die der Übergabe am Ende des Live-Betriebs (Plan 2b, Präzisierungen 3 und 4).
-Jeder Befehl geht durch die Safety-Schicht; im Dry-Run wird er nur protokolliert. Ein Aktor hält
-Werte des EMS (owned), sobald der core ihm einen Wert gesendet hat; ist er nicht mehr live
-gewünscht, bekommt er seine Sicherwerte und ist erst übergeben, wenn sie zurückgelesen sind. Ändert
-ein anderer einen bestätigten Strom oder Netz-Sollwert, sperrt das den Aktor wie ein mitregelndes
-System (Präzisierung 8).
+sicheren Zustands und die der Übergabe am Ende des Live-Betriebs (Plan 2b, Präzisierungen 3 und 4)
+und die Befehle der Laderegelung an EVCS und Tesla (Plan 2c-1, Design 4.2). Jeder Befehl geht
+durch die Safety-Schicht; im Dry-Run wird er nur protokolliert. Ein Aktor hält Werte des EMS
+(owned), sobald der core ihm einen Wert gesendet hat; ist er nicht mehr live gewünscht, bekommt er
+seine Sicherwerte und ist erst übergeben, wenn sie zurückgelesen sind. Ändert ein anderer einen
+bestätigten Strom oder Netz-Sollwert, sperrt das den Aktor wie ein mitregelndes System
+(Präzisierung 8).
 
 Den Heartbeat sendet der core nur, solange er regelt (Präzisierung 2): Ein Victron- oder EVCS-Aktor
 ist im Regelbetrieb live gewünscht oder wird übergeben. Der Zähler kommt nur aus einem fehlerfreien
@@ -68,7 +69,9 @@ from bindaems.core.api.app import HealthReport, create_api, snapshot_to_json, wa
 from bindaems.core.checks.competitors import detect_competitors
 from bindaems.core.checks.selfcheck import CRITICAL_SIGNALS, FRESH_FOR, CheckResult, run_selfcheck
 from bindaems.core.checks.values import number
-from bindaems.core.control.actuator import Actuator, Capabilities, matches
+from bindaems.core.control.actuator import Actuator, Capabilities, WakeStart, matches
+from bindaems.core.control.charge_inputs import ChargeInputs, observe
+from bindaems.core.control.charging import ChargeCommand, ChargeController
 from bindaems.core.control.context import decision_inputs, safety_context
 from bindaems.core.control.executor import CommandExecutor, WriteResult
 from bindaems.core.control.foreign import WATCHED_KINDS, ForeignChangeDetector
@@ -103,7 +106,7 @@ from bindaems.core.safety.modes import (
     live_wanted,
     watchdog_required,
 )
-from bindaems.core.safety.types import InputStatus
+from bindaems.core.safety.types import InputStatus, SafetyContext, Verdict
 from bindaems.core.state.derived import Derived, derive
 from bindaems.core.state.plausibility import PlausibilityMonitor, check_grid_counters
 from bindaems.core.state.store import StateStore
@@ -122,6 +125,7 @@ from bindaems.shared.config import Config, EvcsConfig, Secrets
 from bindaems.shared.control import (
     VICTRON,
     ActuatorMode,
+    Command,
     CommandKind,
     CommandValue,
     Intent,
@@ -149,6 +153,8 @@ PRUNE_INTERVAL: Final = timedelta(hours=1)
 _WRITING_STATES: Final = frozenset(
     {OperatingState.CONTROL, OperatingState.DEGRADED, OperatingState.SAFE}
 )
+# Nur in diesen Betriebszuständen regelt die Laderegelung, und nur bei Regelbetrieb (Design 4.3)
+_CHARGING_STATES: Final = frozenset({OperatingState.CONTROL, OperatingState.DEGRADED})
 # Fähigkeiten eines Aktors vor dem ersten Zyklus: noch nicht geprüft, also nicht steuerbar
 _NOT_CHECKED: Final = Capabilities(False)
 # Ein Schreibvorgang mit diesem Ergebnis kann am Gerät noch verspätet wirken
@@ -247,17 +253,22 @@ class CoreRuntime:
         watchdog_send: Callable[[int], bool] | None = None,
         safety_clock: Clock | None = None,
         mqtt_write: Callable[[str, float | int | None], bool] | None = None,
+        http_client: httpx.AsyncClient | None = None,
     ) -> None:
-        """Die Laufzeit mit Adaptern, Aktoren, Safety-Schicht und Entscheidungslog.
+        """Die Laufzeit mit Adaptern, Aktoren, Safety-Schicht, Laderegelung und Entscheidungslog.
 
-        - ``clock`` ist die Wanduhr: Messwerte, Viertelstunden, Zeitpunkte der Entscheidungen.
+        - ``clock`` ist die Wanduhr: Messwerte, Viertelstunden, Zeitpunkte der Entscheidungen,
+          ``boost_until`` und der Kalendertag des Weckkontingents.
         - ``safety_clock`` ist die Uhr der Safety-Schicht, standardmäßig ``AnchoredClock``:
           Fristen, Rate-Limits, Schreibbudget, sicherer Zustand, Erkennung fremder Änderungen,
-          Heartbeat und Tesla-Fehler.
+          Heartbeat, Tesla-Fehler und die Zeiten der Laderegelung.
         - ``mqtt_write`` reiht einen Schreibauftrag (Pfad, Wert) an den Cerbo ein. Ohne ihn
           schreibt der Victron-Adapter (``VictronMqttAdapter.write``); ohne Victron-Adapter wird
           kein Auftrag angenommen.
         - ``watchdog_send`` stellt den Heartbeat zu; ohne ihn geht er über ``mqtt_write``.
+        - ``http_client`` ist der gemeinsame HTTP-Client von Wall Connector, Tessie, Tesla-Aktor
+          und InfluxDB; ohne ihn legt die Laufzeit beim ersten Bedarf einen an. ``shutdown``
+          schließt ihn in beiden Fällen.
         """
         self._cfg = cfg
         self._secrets = secrets
@@ -306,6 +317,7 @@ class CoreRuntime:
             intent, self.limits, handing_back=self._handing_back
         )
         self._modes = effective_modes(intent, self.limits, False, handing_back=self._handing_back)
+        self._effective: dict[str, ActuatorMode] = {}  # wirksame Betriebsarten im letzten Zyklus
         self._gate_ready = False  # das Gate wartet nur noch auf den Watchdog
         # Zuständig für den Watchdog ab dem ersten Bedarf oder dem ersten owned Victron- oder
         # EVCS-Aktor, bis zum Ende des Laufs (``_heartbeat``)
@@ -314,7 +326,7 @@ class CoreRuntime:
         self._active_locks: dict[str, LockInfo] = {}
         # Aktoren, deren Sperre bei der letzten Prüfung ein anderes System belegte
         self._controlled_elsewhere: frozenset[str] = frozenset()
-        self._http: httpx.AsyncClient | None = None
+        self._http: httpx.AsyncClient | None = http_client  # der gemeinsame (``_http_client``)
         self._writer: InfluxWriter | None = None
         if sink is None:
             telemetry = cfg.telemetry
@@ -358,11 +370,15 @@ class CoreRuntime:
         self._labels = {actuator: spec.label for actuator, spec in self.limits.actuators.items()}
         self.executor = CommandExecutor(self.layer, self.actuators, self._decide, self._labels)
         self.keeper = SafeStateKeeper(self.limits)
+        # Die Laderegelung lebt so lange wie die Laufzeit; ``started`` ist die Wanduhr beim Start
+        # der Regelung (Zuordnung). Ihr Zustand lebt nur im Speicher (Design 4.1).
+        self.charger = ChargeController(cfg, self.limits, started=self._clock.now())
         self._cycle_decisions: list[Decision] = []  # Entscheidungen des laufenden Zyklus
         self._last_prune: datetime | None = None
-        # Stand des letzten Zyklus für health()
+        # Stand des letzten Zyklus für health(); die Fahrzeuge vor dem ersten Zyklus ohne Stand
         self._capabilities: dict[str, Capabilities] = {}
         self._pending: frozenset[tuple[str, CommandKind]] = frozenset()
+        self._vehicle_health: list[dict[str, Any]] = self.charger.health()
         self.selfcheck_runs = 0
         self._selfcheck: list[CheckResult] = []
         self._competitor_alarms: list[Alarm] = []
@@ -490,6 +506,7 @@ class CoreRuntime:
         intent, since = self.intents.current, self.operating.since
         modes, locks = self._modes, self._active_locks
         capabilities, pending, owned = self._capabilities, self._pending, self._owned
+        vehicles = self._vehicle_health
         return HealthReport(
             mode=self.operating.state.value,
             version=__version__,
@@ -515,6 +532,7 @@ class CoreRuntime:
                 self._watchdog, self.heartbeat.status, required=self._watchdog_required
             ),
             inputs={"ok": self._input_status.ok, "problems": list(self._input_status.problems)},
+            vehicles=vehicles,
         )
 
     def state(self) -> dict[str, Any]:
@@ -610,9 +628,11 @@ class CoreRuntime:
     def _readback(self, snap: Snapshot, now: datetime, snow: datetime) -> dict[_Key, CommandValue]:
         """Die zurückgelesenen Werte aller Aktoren je Art; dazu das Rücklesen des Ausführers.
 
-        Der Ausführer fragt in jedem Zustand seine offenen Schreibvorgänge ab, jeder
-        abgeschlossene geht an ``_note_write``. Eine Erwartung, die auf das Rücklesen wartet, gilt
-        ab dem ersten Zyklus, in dem das Gerät den Wert zeigt (``matches``).
+        Der Ausführer fragt in jedem Zustand seine offenen Schreibvorgänge ab. Jeder
+        abgeschlossene geht an ``_note_write`` und an die Laderegelung (``note_result``), auch
+        einer des Keepers: Ein Ergebnis, das nicht zu ihrem letzten eigenen Wert passt, lässt sie
+        unberührt. Eine Erwartung, die auf das Rücklesen wartet, gilt ab dem ersten Zyklus, in dem
+        das Gerät den Wert zeigt (``matches``).
         """
         present = {
             (actuator_id, kind): value
@@ -621,6 +641,7 @@ class CoreRuntime:
         }
         for write in self.executor.poll(snap, snow, now):
             self._note_write(write)
+            self.charger.note_result(write)
         for key, value in list(self._awaiting_readback.items()):
             if key in present and matches(key[1], value, present[key]):
                 del self._awaiting_readback[key]
@@ -674,57 +695,177 @@ class CoreRuntime:
         snow: datetime,
         present: Mapping[_Key, CommandValue],
     ) -> None:
-        """Sicherer Zustand und Übergabe (Plan 2b, Präzisierungen 3 und 4).
+        """Sicherer Zustand und Übergabe (Plan 2b, Präzisierungen 3 und 4), dann die Laderegelung.
 
         ``snow`` ist die Zeit der Safety-Schicht, ``now`` die Wanduhr, ``present`` das Rücklesen
-        dieses Zyklus.
+        dieses Zyklus. Die Reihenfolge folgt Design 4.2:
 
-        1. In CONTROL, DEGRADED und SAFE gehen die Befehle des ``SafeStateKeeper`` an den Ausführer
-           und damit durch die Safety-Schicht; die Ziele nennt ``_targets``. Hat der Ausführer den
-           Wert dem Aktor übergeben (der Schreibvorgang ist offen), hält der Aktor Werte des EMS.
-           Ein Befehl, der nicht gesendet wurde, macht ihn nicht dazu.
-        2. In START und OBSERVE bekommt der ``SafeStateKeeper`` keine Ziele; das beendet die
-           Vorfälle, auch eine gescheiterte Art.
+        1. Die Fähigkeiten aller Aktoren.
+        2. Die Befehle des ``SafeStateKeeper`` (``_keeper_commands``).
+        3. Die Befehle der Laderegelung (``_charge_commands``); ohne Regelung ruht sie.
+        4. Ein ``SafetyContext`` für alle Befehle, mit der Wallbox je Fahrzeug aus der Zuordnung
+           der Laderegelung (``vehicle_wallbox``).
+        5. Erst die Befehle des Keepers, dann die der Regelung gehen an den Ausführer und damit
+           durch die Safety-Schicht (``_execute``). Die der Regelung schreiben zu den Eingaben jeder
+           Entscheidung ihre eigenen ins Log: Überschuss, Grenze des Wächters und Ist-Werte.
+        6. Jedes Urteil über einen Befehl der Regelung geht an sie zurück (``note_verdict``), auch
+           ``None``. ``not_sent`` heißt: Das Urteil ließ senden, aber danach ist kein
+           Schreibvorgang offen.
 
         Übergeben ist ein Aktor schon vorher, in ``_update_operation``. Die Entscheidungen tragen
-        die Wanduhr ``now``. Fähigkeiten, offene Schreibvorgänge und die owned Aktoren bleiben für
-        ``health`` stehen.
+        die Wanduhr ``now``. Fähigkeiten, offene Schreibvorgänge, die owned Aktoren und der Stand
+        der Laderegelung je Fahrzeug bleiben für ``health`` stehen.
         """
-        state = self.operating.state
-        if state in _WRITING_STATES:
-            live = frozenset(
-                actuator
-                for actuator, mode in self._modes.items()
-                if mode.effective == ActuatorMode.LIVE
-            )
-            targets = self._targets(snap, state)
-            commands = self.keeper.commands(snow, targets, present, self.executor.pending(), live)
-            if commands:
-                ctx = safety_context(
-                    now=snow,
-                    operating=state,
-                    modes={actuator: mode.effective for actuator, mode in self._modes.items()},
-                    locks={actuator: lock.reasons for actuator, lock in self._active_locks.items()},
-                    inputs=self._input_status,
-                    snap=snap,
-                    phase_import_a=derived.phase_import_a,
-                    wallbox_phase_a=derived.wallbox_phase_a,
-                    present=present,
-                )
-                inputs = decision_inputs(snap, derived.phase_import_a)
-                for command in commands:
-                    verdict = self.executor.execute(command, ctx, snap, now, inputs)
-                    key = (command.actuator, command.kind)
-                    if verdict is not None and verdict.send and key in self.executor.pending():
-                        self.ownership.note_sent(command.actuator)
-        else:
-            self.keeper.commands(snow, [], present, self.executor.pending(), frozenset())
-        self._capabilities = {
+        capabilities = {
             actuator_id: actuator.capabilities(snap, snow)
             for actuator_id, actuator in self.actuators.items()
         }
+        keeper = self._keeper_commands(snap, snow, present)
+        charging = self._charge_commands(snap, derived, now, snow, present, capabilities)
+        if keeper or charging:
+            ctx = safety_context(
+                now=snow,
+                operating=self.operating.state,
+                modes={actuator: mode.effective for actuator, mode in self._modes.items()},
+                locks={actuator: lock.reasons for actuator, lock in self._active_locks.items()},
+                inputs=self._input_status,
+                snap=snap,
+                phase_import_a=derived.phase_import_a,
+                wallbox_phase_a=derived.wallbox_phase_a,
+                present=present,
+                vehicle_wallbox=self.charger.vehicle_wallbox(),
+            )
+            inputs = decision_inputs(snap, derived.phase_import_a)
+            for command in keeper:
+                self._execute(command, ctx, snap, now, inputs)
+            for charge in charging:
+                command = charge.command
+                verdict, sent = self._execute(command, ctx, snap, now, {**inputs, **charge.inputs})
+                not_sent = verdict is not None and verdict.send and not sent
+                self.charger.note_verdict(command, verdict, not_sent=not_sent)
+        self._capabilities = capabilities
         self._pending = self.executor.pending()
         self._owned = self.ownership.owned
+        self._vehicle_health = self.charger.health()
+
+    def _keeper_commands(
+        self, snap: Snapshot, snow: datetime, present: Mapping[_Key, CommandValue]
+    ) -> list[Command]:
+        """Die Befehle des ``SafeStateKeeper`` in diesem Zyklus.
+
+        In CONTROL, DEGRADED und SAFE für die Ziele aus ``_targets``, live nur an die wirksam live
+        geschalteten Aktoren. In START und OBSERVE bekommt er keine Ziele; das beendet die
+        Vorfälle, auch eine gescheiterte Art, und es gibt keine Befehle.
+        """
+        state, pending = self.operating.state, self.executor.pending()
+        if state not in _WRITING_STATES:
+            self.keeper.commands(snow, [], present, pending, frozenset())
+            return []
+        live = frozenset(
+            actuator
+            for actuator, mode in self._modes.items()
+            if mode.effective == ActuatorMode.LIVE
+        )
+        return self.keeper.commands(snow, self._targets(snap, state), present, pending, live)
+
+    def _charge_commands(
+        self,
+        snap: Snapshot,
+        derived: Derived,
+        now: datetime,
+        snow: datetime,
+        present: Mapping[_Key, CommandValue],
+        capabilities: Mapping[str, Capabilities],
+    ) -> list[ChargeCommand]:
+        """Die Befehle der Laderegelung in diesem Zyklus, in der Reihenfolge der Priorität.
+
+        Sie regelt nur in CONTROL und DEGRADED bei eingeschaltetem Regelbetrieb (Design 4.3). In
+        jedem anderen Zyklus ruht sie (``idle`` mit der Zeit der Safety-Schicht): in START,
+        OBSERVE und SAFE, ohne Absicht und bei ausgeschaltetem Regelbetrieb, auch während der
+        Übergabe danach.
+
+        Wechselt die wirksame Betriebsart eines Aktors gegenüber dem letzten Zyklus (Dry-Run ↔
+        live), vergisst die Regelung vor ``step`` ihre letzten Werte für ihn: Ein Dry-Run-Urteil
+        zählte sonst als gesendet, und nach dem Scharfschalten ginge etwa „Laden an“ erst mit der
+        nächsten Änderung des Wunsches hinaus. Die Betriebsarten merkt sich die Laufzeit in jedem
+        Zyklus, auch ohne Regelung; ``idle`` vergisst ohnehin alles.
+        """
+        intent = self.intents.current
+        effective = {actuator: mode.effective for actuator, mode in self._modes.items()}
+        switched = {a for a, mode in effective.items() if self._effective.get(a, mode) != mode}
+        self._effective = effective
+        if self.operating.state not in _CHARGING_STATES or intent is None or not intent.control:
+            self.charger.idle(snow)
+            return []
+        self.charger.forget(switched)
+        return self.charger.step(
+            self._charge_inputs(snap, derived, now, snow, present, capabilities, intent)
+        )
+
+    def _charge_inputs(
+        self,
+        snap: Snapshot,
+        derived: Derived,
+        now: datetime,
+        snow: datetime,
+        present: Mapping[_Key, CommandValue],
+        capabilities: Mapping[str, Capabilities],
+        intent: Intent,
+    ) -> ChargeInputs:
+        """Die Eingaben eines Zyklus der Laderegelung (Design 4.2).
+
+        - Die Zeiten der Regelung laufen auf der Uhr der Safety-Schicht (``snow``); die Wanduhr
+          ``now`` gilt für ``boost_until`` und den Kalendertag des Weckkontingents.
+        - Weckbar ist ein Aktor mit ``WakeStart``, dessen ``wake_capabilities`` einen Start mit
+          Weckerlaubnis zulassen; jeder andere ist es nie.
+        - Blockiert sind die Arten mit offenem Schreibvorgang und jede Art eines Aktors, der
+          übergeben wird: Die Übergabe geht der Regelung vor.
+        - Die Annahmezeit liest die Laufzeit nach der Absicht ``intent`` (``IntentStore``); so ist
+          sie nie älter als deren Annahme.
+        """
+        grid, wallboxes, vehicles = observe(snap, derived, self._cfg, self.store.connected)
+        handing_back = {(actuator, kind) for actuator in self._handing_back for kind in CommandKind}
+        return ChargeInputs(
+            now=snow,
+            wall_now=now,
+            grid=grid,
+            wallboxes=wallboxes,
+            vehicles=vehicles,
+            present=present,
+            controllable={actuator: c.controllable for actuator, c in capabilities.items()},
+            wakeable={
+                actuator_id: isinstance(actuator, WakeStart)
+                and actuator.wake_capabilities(snap, snow).controllable
+                for actuator_id, actuator in self.actuators.items()
+            },
+            blocked=self.executor.pending() | handing_back,
+            intent=intent,
+            accepted_at=self.intents.accepted_at,
+        )
+
+    def _execute(
+        self,
+        command: Command,
+        ctx: SafetyContext,
+        snap: Snapshot,
+        now: datetime,
+        inputs: Mapping[str, float | None],
+    ) -> tuple[Verdict | None, bool]:
+        """Gibt einen Befehl an den Ausführer: sein Urteil und ob der Wert übergeben wurde.
+
+        Übergeben ist er, wenn das Urteil senden ließ und der Schreibvorgang danach offen ist.
+        Dann hält der Aktor Werte des EMS (``Ownership.note_sent``); ein Befehl, der nicht
+        gesendet wurde, macht ihn nicht dazu.
+        """
+        verdict = self.executor.execute(command, ctx, snap, now, inputs)
+        sent = (
+            verdict is not None
+            and verdict.send
+            and (command.actuator, command.kind) in self.executor.pending()
+        )
+        if sent:
+            self.ownership.note_sent(command.actuator)
+        return verdict, sent
 
     def _targets(self, snap: Snapshot, state: OperatingState) -> list[SafeTarget]:
         """Die Ziele des Zyklus: zuerst die des sicheren Zustands, dann die Übergaben.

@@ -27,7 +27,9 @@ den Wert schon hat:
 - für den Aktor eines Ladepunkts, wenn er wieder geregelt wird, mit einem neuen Ansteckvorgang und
   wenn ein gemerkter Vorgang die Maschine erreicht; jedes davon geschieht einmal,
 - mit jeder höheren Stufe der Überlast für alle geregelten Aktoren: Jede Stufe bietet ihre
-  Reaktion einmal an.
+  Reaktion einmal an,
+- für die Aktoren, die ``forget`` nennt; die Laufzeit tut das beim Wechsel der wirksamen
+  Betriebsart (Dry-Run ↔ live), denn ein Dry-Run-Urteil zählte sonst als gesendet.
 
 Nach „nicht übernommen“ fordert die Regelung den Wert als normalen Befehl erneut an
 (``not_taken_retry``, Design 7.2): Er wartet auf die 90-s-Regel und die Stundenlimits, auch wenn er
@@ -489,6 +491,16 @@ class ChargeController:
         self._level = OverloadLevel.NONE
         self._views = {}
         self._vehicle_wallbox = {}
+
+    def forget(self, actuators: Collection[str]) -> None:
+        """Vergisst die letzten eigenen Werte und die Merker ``not_taken_retry`` dieser Aktoren.
+
+        Der nächste ``step`` bietet ihnen den Wunsch wieder an; hat das Gerät den Wert schon,
+        antwortet die Safety-Schicht ``UNCHANGED``. Die Laufzeit ruft das, wenn die wirksame
+        Betriebsart eines Aktors wechselt (Dry-Run ↔ live): Ein Dry-Run-Urteil zählte sonst als
+        gesendet.
+        """
+        self._last.forget(actuators)
 
     def vehicle_wallbox(self) -> dict[str, str | None]:
         """Fahrzeug-Aktor → Wallbox für die Phasenvorhersage der Safety-Schicht.

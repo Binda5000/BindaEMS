@@ -121,6 +121,7 @@ def test_health_report_defaults_keep_existing_calls_valid() -> None:
             "required": False,
         },
         "inputs": {"ok": True, "problems": []},
+        "vehicles": [],
     }
 
 

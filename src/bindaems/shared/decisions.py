@@ -37,11 +37,26 @@ _FIELDS: Final = frozenset(
     }
 )
 
-# Gründe, die der Text deutsch nennt; andere Codes erscheinen unverändert.
+# Gründe, die der Text deutsch nennt; andere Codes erscheinen unverändert. Zuerst die des sicheren
+# Zustands und der Übergabe, dann die der Laderegelung (Plan 2c-1, „Texte“).
 _REASON_TEXT: Final = {
     "safe_state": "sicherer Zustand",
     "handback": "Übergabe",
     "grid_outage": "Netzausfall",
+    "mode_pv": "PV-Überschuss",
+    "mode_min_pv": "Min+PV",
+    "mode_now": "Sofort",
+    "mode_off": "Aus",
+    "boost": "Boost",
+    "pv_surplus": "Überschuss",
+    "phase_limit": "Phasengrenze",
+    "import_limit": "Importlimit",
+    "reserve_guard": "Schutz der USV-Reserve",
+    "overload": "Überlast",
+    "wake": "Wecken",
+    "not_taken_retry": "erneut nach „nicht übernommen“",
+    "assignment_unclear": "Zuordnung unklar",
+    "resume_after_outage": "Wiederaufnahme nach Ausfall",
 }
 
 
@@ -288,8 +303,9 @@ def decision_text(
     """Der Text einer Entscheidung: ``{label}{ (Gründe)}: {Befehl} – {Ergebnis}.``
 
     Danach folgen, mit Leerzeichen verbunden, die Befundtexte der Safety-Schicht. ``value`` ist der
-    angewendete Wert, sonst der angeforderte. ``reasons`` sind Codes: ``safe_state``, ``handback``
-    und ``grid_outage`` erscheinen deutsch, andere unverändert; mehrere stehen mit „, “ getrennt.
+    angewendete Wert, sonst der angeforderte. ``reasons`` sind Codes: die des sicheren Zustands, der
+    Übergabe und der Laderegelung (``_REASON_TEXT``) erscheinen deutsch, andere unverändert; mehrere
+    stehen mit „, “ getrennt.
     ``detail`` gehört zu „Fehler“ und „nicht gesendet“. Der Satz endet auf einen Punkt; hat das
     Detail schon einen, kommt kein zweiter dazu. Ein Wert, der nicht zur Art passt (etwa NaN),
     erscheint, wie er ist: Auch eine abgelehnte, ungültige Anfrage lässt sich protokollieren.

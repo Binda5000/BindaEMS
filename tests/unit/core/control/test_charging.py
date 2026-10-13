@@ -213,6 +213,19 @@ def test_deferred_is_offered_again_and_unchanged_counts_as_sent(cfg) -> None:
     assert controller.step(inputs(cfg, s=2)) == []
 
 
+def test_forget_offers_the_same_wish_again(cfg) -> None:
+    ctrl = controller(cfg)
+    run(ctrl, cfg, 121)  # Start bei 120 s mit 8 A
+    ctrl.forget({"vehicle.tesla"})  # ein anderer Aktor: Die EVCS behält ihre Werte
+    assert ctrl.step(inputs(cfg, s=121)) == []
+    ctrl.forget({"wallbox.evcs"})
+    again = [(122, found.command) for found in ctrl.step(inputs(cfg, s=122))]
+    assert again == [
+        cmd(122, CURRENT, 8.0, ("mode_pv", "pv_surplus")),
+        cmd(122, CHARGING, True, ("mode_pv", "pv_surplus")),
+    ]
+
+
 def test_a_failure_offers_the_value_again(cfg) -> None:
     controller = ChargeController(cfg, HardLimits.from_config(cfg), started=T0)
     run(controller, cfg, 121)  # Start bei 120 mit 8 A

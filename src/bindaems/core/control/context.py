@@ -13,6 +13,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from datetime import datetime
+from types import MappingProxyType
 from typing import Final
 
 from bindaems.core.safety.types import InputStatus, SafetyContext
@@ -40,13 +41,17 @@ def safety_context(
     phase_import_a: Mapping[Phase, float | None],
     wallbox_phase_a: Mapping[str, Mapping[Phase, float]],
     present: Mapping[tuple[str, CommandKind], CommandValue],
+    vehicle_wallbox: Mapping[str, str | None] = MappingProxyType({}),
 ) -> SafetyContext:
     """Der Kontext für die Befehle eines Zyklus; ``now`` ist die Zeit der Safety-Schicht.
 
+    ``vehicle_wallbox`` nennt je Fahrzeug-Aktor die Wallbox aus der Zuordnung der Laderegelung
+    (``ChargeController.vehicle_wallbox``). Fehlt ein Fahrzeug darin oder steht dort ``None``, ist
+    seine Wallbox unbekannt, und die Phasenvorhersage rechnet vorsichtig mit allen drei Phasen; ohne
+    Angabe gilt das für jedes Fahrzeug.
+
     Was nicht aus den Argumenten übernommen wird:
 
-    - ``vehicle_wallbox`` ist leer: Welches Fahrzeug an welcher Wallbox hängt, ist noch unbekannt,
-      und die Phasenvorhersage rechnet dann vorsichtig mit allen drei Phasen.
     - ``battery_discharge_w`` ist ``max(−battery.power_w, 0)``; die Akkuleistung ist beim Laden
       positiv.
     - ``soc_pct`` ist ``battery.soc_pct``.
@@ -62,7 +67,7 @@ def safety_context(
         inputs=inputs,
         phase_import_a=phase_import_a,
         wallbox_phase_a=wallbox_phase_a,
-        vehicle_wallbox={},
+        vehicle_wallbox=vehicle_wallbox,
         present=present,
         battery_discharge_w=None if battery_w is None else max(-battery_w, 0.0),
         soc_pct=_number(snap, "battery.soc_pct"),
