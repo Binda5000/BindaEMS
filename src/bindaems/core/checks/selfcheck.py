@@ -24,6 +24,10 @@ CRITICAL_SIGNALS = (
 )
 FRESH_FOR = timedelta(seconds=30)
 
+_MULTI_ON = 3  # VE.Bus-Modus „Ein“ (1 „Nur Laden“, 2 „Nur Wechselrichter“, 4 „Aus“)
+_IMPORT_LIMIT_OFF = -1  # AcInputLimit des Cerbo: Importlimit aus
+_IMPORT_LIMIT_TOLERANCE_A = 0.5  # erst eine größere Abweichung vom konfigurierten Wert warnt
+
 
 @dataclass(frozen=True)
 class CheckResult:
@@ -95,6 +99,43 @@ def _min_soc(snap: Snapshot, cfg: Config) -> CheckResult:
     return CheckResult("min_soc", "ok", "Victron-Min-SOC entspricht der USV-Reserve.")
 
 
+def _multi_mode(snap: Snapshot) -> CheckResult:
+    """Ohne „Ein“ wirkt das Importlimit des Cerbo nicht.
+
+    Der Prüfpunkt warnt nur und sperrt nichts (``lock_causes`` kennt ihn nicht).
+    """
+    v = number(snap, "vebus.mode")
+    if v is None:
+        return CheckResult("multi_mode", "unknown", "Multi-Modus nicht verfügbar.")
+    if v == _MULTI_ON:
+        return CheckResult("multi_mode", "ok", "Multi auf „Ein“.")
+    return CheckResult(
+        "multi_mode",
+        "warn",
+        f"Multi nicht auf „Ein“ (Modus {fmt(v)}); das Importlimit wirkt nicht.",
+    )
+
+
+def _import_limit(snap: Snapshot, cfg: Config) -> CheckResult:
+    """Das Importlimit am Cerbo soll dem konfigurierten entsprechen; −1 heißt „aus“.
+
+    Der Prüfpunkt warnt nur und sperrt nichts (``lock_causes`` kennt ihn nicht). Eine Abweichung
+    bis ``_IMPORT_LIMIT_TOLERANCE_A`` zählt noch als konfiguriert.
+    """
+    v, expected = number(snap, "settings.cgwacs.acinputlimit"), cfg.grid.import_limit_a
+    if v is None:
+        return CheckResult("import_limit", "warn", "Importlimit am Cerbo nicht verfügbar.")
+    if v == _IMPORT_LIMIT_OFF:
+        return CheckResult("import_limit", "warn", "Importlimit am Cerbo aus.")
+    if abs(v - expected) > _IMPORT_LIMIT_TOLERANCE_A:
+        return CheckResult(
+            "import_limit",
+            "warn",
+            f"Importlimit am Cerbo {fmt(v)} A, konfiguriert {fmt(expected)} A.",
+        )
+    return CheckResult("import_limit", "ok", f"Importlimit am Cerbo {fmt(v)} A wie konfiguriert.")
+
+
 def _evcs_modes(snap: Snapshot, cfg: Config) -> list[CheckResult]:
     results = []
     for name, wallbox in cfg.wallboxes.items():
@@ -135,6 +176,8 @@ def run_selfcheck(
         _dess(snap),
         _schedules(snap),
         _min_soc(snap, cfg),
+        _multi_mode(snap),
+        _import_limit(snap, cfg),
         *_evcs_modes(snap, cfg),
         _fresh_data(ok_since, now),
     ]

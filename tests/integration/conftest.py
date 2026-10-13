@@ -25,7 +25,8 @@ VALUES: dict[str, float] = BASE | {
     "battery.soc_pct": 50.0,
 }
 # Die Selbstprüfung besteht: drei Phasen, ESS wie erwartet, kein Dynamic ESS, kein Ladefenster,
-# Min-SOC bei der USV-Reserve, EVCS im manuellen Modus
+# Min-SOC bei der USV-Reserve, Multi auf „Ein“, Importlimit wie konfiguriert, EVCS im manuellen
+# Modus
 GOOD_STATE = {
     "vebus.phases": 3,
     "ess.hub4_mode": 1,
@@ -33,6 +34,8 @@ GOOD_STATE = {
     "dess.mode": 0,
     "ess.schedule.0.day": -7,
     "ess.min_soc_pct": 20,
+    "vebus.mode": 3,
+    "settings.cgwacs.acinputlimit": 20,
     "wallbox.evcs.gx_mode": 0,
 }
 

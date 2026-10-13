@@ -45,6 +45,11 @@ def test_warn_ok_and_core_checks_do_not_lock(limits) -> None:
     assert lock_causes([], selfcheck, limits) == {}
 
 
+def test_the_new_checks_lock_nothing(limits) -> None:
+    checks = [CheckResult("multi_mode", "warn", "x"), CheckResult("import_limit", "warn", "y")]
+    assert lock_causes([], checks, limits) == {}
+
+
 def test_non_actuators_are_ignored(limits) -> None:
     egolf = alarm("competitor.vehicle_schedule.egolf", "Ladeplan im Fahrzeug „e-Golf“ ist aktiv.")
     assert lock_causes([egolf], [], limits) == {}
@@ -129,6 +134,8 @@ def test_other_alarms_do_not_lock(limits) -> None:
         ("evcs_mode.evcs", "ok", None),
         ("phases", "unknown", None),
         ("fresh_data", "unknown", None),
+        # anders als ess_mode sperrt der Multi-Modus auch ohne Wert nichts
+        ("multi_mode", "unknown", None),
     ],
 )
 def test_selfcheck_rows_of_the_rule_table(limits, check_id, status, locks) -> None:

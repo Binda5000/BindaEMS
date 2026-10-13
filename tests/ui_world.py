@@ -71,6 +71,8 @@ VICTRON_STATE: dict[str, float | str] = {
     "ess.batterylife_state": 10.0,
     "ess.min_soc_pct": 20.0,
     "dess.mode": 0.0,
+    "vebus.mode": 3.0,  # Multi auf „Ein“
+    "settings.cgwacs.acinputlimit": 20.0,  # Importlimit am Cerbo wie konfiguriert
     "wallbox.evcs.gx_mode": 0.0,  # Modus, wie ihn der Cerbo liest
     **{f"ess.schedule.{k}.day": -7.0 for k in range(5)},  # negativ: Ladefenster aus
     "watchdog.state": 0.0,  # 0 = wartet

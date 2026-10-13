@@ -45,6 +45,16 @@
           "message": "Victron-Min-SOC entspricht der USV-Reserve."
         },
         {
+          "id": "multi_mode",
+          "status": "ok",
+          "message": "Multi auf „Ein“."
+        },
+        {
+          "id": "import_limit",
+          "status": "ok",
+          "message": "Importlimit am Cerbo 20 A wie konfiguriert."
+        },
+        {
           "id": "evcs_mode.evcs",
           "status": "ok",
           "message": "EVCS im manuellen Modus."

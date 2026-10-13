@@ -1,9 +1,10 @@
 from datetime import timedelta
 
+import pytest
 from tests.helpers import T0, snap
 
 from bindaems.core.checks.selfcheck import CRITICAL_SIGNALS, CheckResult, run_selfcheck
-from bindaems.shared.domain import SignalKind
+from bindaems.shared.domain import Quality, SignalKind
 
 STATE = SignalKind.STATE
 GOOD = {
@@ -13,6 +14,8 @@ GOOD = {
     "dess.mode": 0,
     "ess.schedule.0.day": -7,
     "ess.min_soc_pct": 20,
+    "vebus.mode": 3,
+    "settings.cgwacs.acinputlimit": 20,
     "wallbox.evcs.gx_mode": 0,  # wie der Cerbo die EVCS liest
 }
 
@@ -34,6 +37,8 @@ def test_all_ok(cfg) -> None:
         ("dess", "ok"),
         ("schedules", "ok"),
         ("min_soc", "ok"),
+        ("multi_mode", "ok"),
+        ("import_limit", "ok"),
         ("evcs_mode.evcs", "ok"),
         ("fresh_data", "ok"),
     ]
@@ -44,6 +49,8 @@ def test_all_ok(cfg) -> None:
     assert res["dess"].message == "Dynamic ESS ist aus."
     assert res["schedules"].message == "Keine Victron-Ladefenster aktiv."
     assert res["min_soc"].message == "Victron-Min-SOC entspricht der USV-Reserve."
+    assert res["multi_mode"].message == "Multi auf „Ein“."
+    assert res["import_limit"].message == "Importlimit am Cerbo 20 A wie konfiguriert."
     assert res["evcs_mode.evcs"].message == "EVCS im manuellen Modus."
     assert res["fresh_data"].message == "Kritische Messwerte seit mindestens 30 s aktuell."
 
@@ -103,6 +110,69 @@ def test_min_soc_above_reserve_warns(cfg) -> None:
     assert res["min_soc"].message == "Victron-Min-SOC 30 % liegt über der USV-Reserve 20 %."
 
 
+@pytest.mark.parametrize(
+    ("mode", "expected"),
+    [
+        (3, ("ok", "Multi auf „Ein“.")),
+        (1, ("warn", "Multi nicht auf „Ein“ (Modus 1); das Importlimit wirkt nicht.")),
+        (None, ("unknown", "Multi-Modus nicht verfügbar.")),
+    ],
+)
+def test_multi_mode(cfg, mode, expected) -> None:
+    values = {} if mode is None else {"vebus.mode": mode}
+    result = next(
+        r for r in run_selfcheck(snap(values), cfg, lambda s: None, T0) if r.id == "multi_mode"
+    )
+    assert (result.status, result.message) == expected
+
+
+@pytest.mark.parametrize(
+    ("limit", "expected"),
+    [
+        (20, ("ok", "Importlimit am Cerbo 20 A wie konfiguriert.")),
+        (20.4, ("ok", "Importlimit am Cerbo 20.4 A wie konfiguriert.")),
+        (25, ("warn", "Importlimit am Cerbo 25 A, konfiguriert 20 A.")),
+        (-1, ("warn", "Importlimit am Cerbo aus.")),
+        (None, ("warn", "Importlimit am Cerbo nicht verfügbar.")),
+    ],
+)
+def test_import_limit(cfg, limit, expected) -> None:
+    values = {} if limit is None else {"settings.cgwacs.acinputlimit": limit}
+    result = next(
+        r for r in run_selfcheck(snap(values), cfg, lambda s: None, T0) if r.id == "import_limit"
+    )
+    assert (result.status, result.message) == expected
+
+
+@pytest.mark.parametrize(
+    ("limit", "status"), [(19.4, "warn"), (19.5, "ok"), (20.5, "ok"), (20.6, "warn")]
+)
+def test_import_limit_warns_only_above_half_an_ampere(cfg, limit, status) -> None:
+    result = by_id(run_selfcheck(snap({"settings.cgwacs.acinputlimit": limit}), cfg, fresh, T0))
+    assert result["import_limit"].status == status
+
+
+def test_import_limit_follows_the_configured_value(cfg) -> None:
+    changed = cfg.model_copy(update={"grid": cfg.grid.model_copy(update={"import_limit_a": 25.0})})
+
+    def message(limit: float) -> str:
+        values = {"settings.cgwacs.acinputlimit": limit}
+        return by_id(run_selfcheck(snap(values), changed, fresh, T0))["import_limit"].message
+
+    assert message(25) == "Importlimit am Cerbo 25 A wie konfiguriert."
+    assert message(20) == "Importlimit am Cerbo 20 A, konfiguriert 25 A."
+
+
+@pytest.mark.parametrize("quality", [Quality.STALE, Quality.INVALID])
+def test_new_checks_ignore_values_that_are_not_ok(cfg, quality) -> None:
+    values = {"vebus.mode": 3, "settings.cgwacs.acinputlimit": 20}
+    res = by_id(run_selfcheck(snap(values, quality=quality), cfg, fresh, T0))
+    assert res["multi_mode"] == CheckResult("multi_mode", "unknown", "Multi-Modus nicht verfügbar.")
+    assert res["import_limit"] == CheckResult(
+        "import_limit", "warn", "Importlimit am Cerbo nicht verfügbar."
+    )
+
+
 def test_missing_signal_is_unknown(cfg) -> None:
     values = {k: v for k, v in GOOD.items() if k != "vebus.phases"}
     res = by_id(run_selfcheck(snap(values, kind=STATE), cfg, lambda s: T0, T0))
@@ -118,6 +188,7 @@ def test_all_unknown_without_signals(cfg) -> None:
         "dess": "DESS-Modus nicht verfügbar.",
         "schedules": "Ladefenster nicht verfügbar.",
         "min_soc": "Victron-Min-SOC nicht verfügbar.",
+        "multi_mode": "Multi-Modus nicht verfügbar.",
         "evcs_mode.evcs": "EVCS-Modus nicht verfügbar.",
     }
 
