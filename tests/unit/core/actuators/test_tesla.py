@@ -205,11 +205,14 @@ async def test_token_never_in_failure_text(cfg, respx_mock) -> None:
 # Kennung, Frist und Aufbau
 
 
-def test_identity_and_deadline(car) -> None:
-    assert (car.id, car.confirm_timeout_s) == ("vehicle.tesla", 75.0)
-    assert (car.settle_s, car.verify_s, CHECK_MARGIN_S) == (10.0, 50.0, 5.0)
+def test_identity_and_deadline(car, cfg) -> None:
+    assert (car.id, car.confirm_timeout_s) == ("vehicle.tesla", 85.0)
+    assert (car.settle_s, car.verify_s, CHECK_MARGIN_S) == (10.0, 75.0, 5.0)
     assert (COMMAND_TIMEOUT_S, FAILURES_ALLOWED, FAILURE_WINDOW) == (60.0, 3, timedelta(minutes=15))
     assert car.confirm_timeout_s > COMMAND_TIMEOUT_S  # das Ende des Befehls kommt vor der Frist
+    # Die Frist endet vor dem nächsten erlaubten Strombefehl (90-s-Regel): Ein Neuversuch nach
+    # „nicht übernommen“ wartet nie auf einen offenen Schreibvorgang.
+    assert car.confirm_timeout_s < cfg.vehicles["tesla"].commands.current_interval_s
 
 
 def test_the_key_names_the_vehicle(cfg, idle_client) -> None:
@@ -1271,11 +1274,11 @@ async def test_a_hanging_tessie_never_blocks_and_times_out_at_the_deadline(
         executor, decisions = executor_for(tesla(cfg, client, [T0]), limits_live, tmp_path)
         executor.execute(SET_CURRENT, LIVE, snap(HOME), T0, {})  # kehrt sofort zurück
         await asyncio.sleep(0)
-        assert executor.poll(snap(HOME), T0 + timedelta(seconds=74), T0) == []
-        results = executor.poll(snap(HOME), T0 + timedelta(seconds=75), T0)
+        assert executor.poll(snap(HOME), T0 + timedelta(seconds=84), T0) == []
+        results = executor.poll(snap(HOME), T0 + timedelta(seconds=85), T0)
         assert [r.result for r in results] == [DecisionResult.TIMEOUT]
         # Tessie antwortet noch nicht: Die Art ist belegt, ein weiterer Befehl wird nicht gesendet.
-        later = replace(LIVE, now=T0 + timedelta(seconds=80))
+        later = replace(LIVE, now=T0 + timedelta(seconds=90))
         executor.execute(SAFE_CURRENT, later, snap(HOME), T0, {})
         assert decisions[-1].result == DecisionResult.NOT_SENT
         assert decisions[-1].text.startswith(
@@ -1569,6 +1572,32 @@ def test_a_settled_reading_falls_into_the_check_while_charging() -> None:
     # höchstens 10 s dauert. Die Prüfung endet vor der Frist des Ausführers, aber nach dem Befehl.
     assert VERIFY_S - SETTLE_S >= poll_interval_s("Charging", True) + 10
     assert 0 < CHECK_MARGIN_S < TeslaActuator.confirm_timeout_s - COMMAND_TIMEOUT_S
+
+
+def test_the_check_also_catches_the_poll_of_a_car_that_does_not_charge_yet() -> None:
+    # In der Startfolge geht der Strom hinaus, bevor das Auto lädt; dann fragt der Adapter nur
+    # alle 60 s ab. Das Fenster fängt auch diese Abfrage, solange sie höchstens 5 s dauert, und
+    # die Frist des Ausführers schneidet es nicht ab, wenn Tessie sofort bestätigt.
+    plugged_s = poll_interval_s("Stopped", True)
+    assert plugged_s == 60.0
+    assert VERIFY_S - SETTLE_S >= plugged_s + 5
+    assert TeslaActuator.confirm_timeout_s - CHECK_MARGIN_S >= VERIFY_S
+
+
+async def test_a_reading_70_s_after_the_confirmation_still_counts(cfg, respx_mock) -> None:
+    # Die Startfolge: Der Befehl auf 5 A geht verloren, und die nächste Abfrage des Adapters kommt
+    # erst 70 s nach der Bestätigung. Sie zählt noch und zeigt, dass das Auto ihn nicht übernahm.
+    respx_mock.post(URL).respond(json={"result": True})
+    now = [T0]
+    async with httpx.AsyncClient() as client:
+        car = tesla(cfg, client, now)
+        await confirmed_by_tessie(car)  # die Prüfung beginnt bei T0
+        for waited_s in (30, 60, 69):
+            now[0] = T0 + timedelta(seconds=waited_s)
+            stale = cached(now[0], 10, read_at=STALE)  # noch die Meldung von vor der Bestätigung
+            assert car.confirm(CommandKind.CURRENT, 5.0, stale) == PENDING
+        now[0] = T0 + timedelta(seconds=70)
+        assert car.confirm(CommandKind.CURRENT, 5.0, cached(now[0], 10)) == NOT_TAKEN
 
 
 async def test_without_a_check_time_only_tessie_counts(cfg, respx_mock) -> None:

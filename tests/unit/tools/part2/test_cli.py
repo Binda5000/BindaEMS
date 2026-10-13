@@ -549,7 +549,7 @@ def test_declined_start_of_the_sleep_check_says_that_it_sends_nothing(
     assert fake_part.sessions == []
 
 
-@pytest.mark.parametrize(("punkt", "seconds"), [("evcs", 15.0), ("tesla", 75.0), ("victron", 15.0)])
+@pytest.mark.parametrize(("punkt", "seconds"), [("evcs", 15.0), ("tesla", 85.0), ("victron", 15.0)])
 def test_the_final_restore_waits_as_long_as_the_part_does(
     tmp_path: Path, fake_part: FakePart, tessie_token: None, punkt: str, seconds: float
 ) -> None:
@@ -570,7 +570,7 @@ def test_ctrl_c_in_the_tesla_part_restores_with_the_deadline_of_the_part(
         "| 17.2-7 | Abbruch | WARNUNG | mit Strg+C abgebrochen; die übrigen Schritte fehlen |"
         in report
     )
-    assert fake_part.restore_timeouts == [75.0] and fake_part.calls == ["restore", "stop"]
+    assert fake_part.restore_timeouts == [85.0] and fake_part.calls == ["restore", "stop"]
 
 
 def test_failed_tesla_step_returns_1(

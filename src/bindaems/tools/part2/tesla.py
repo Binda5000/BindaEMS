@@ -42,7 +42,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Final
 
-from bindaems.core.actuators.tesla import REASON_ASLEEP, REASON_NOT_REACHABLE
+from bindaems.core.actuators.tesla import REASON_ASLEEP, REASON_NOT_REACHABLE, TeslaActuator
 from bindaems.shared.config import Config, TwcConfig, VehicleConfig
 from bindaems.shared.control import CommandKind, CommandValue, vehicle_actuator
 from bindaems.shared.domain import Quality, Snapshot
@@ -74,16 +74,16 @@ TWC_SILENT: Final = "Wall Connector ohne Messwerte"
 class TeslaTimings:
     """Fristen der Schritte in Sekunden.
 
-    - ``confirm_s``: Frist für Tessie je Befehl, auch beim Wiederherstellen (die 60 s des Befehls
-      und etwas Luft, wie ``TeslaActuator.confirm_timeout_s``); so lange wartet der Schritt
-      „Tesla bereit“ auch auf die ersten Werte
+    - ``confirm_s``: Frist für Tessie je Befehl, auch beim Wiederherstellen: die Frist des
+      Aktors (``TeslaActuator.confirm_timeout_s``), die den Befehl und seine Prüfung im
+      Tessie-Cache umfasst; so lange wartet der Schritt „Tesla bereit“ auch auf die ersten Werte
     - ``effect_s``: so lange wartet ein Schritt nach der Bestätigung auf die Wirkung am Wall
       Connector
     - ``sleep_total_s``: so lange dauert die Prüfung des schlafenden Fahrzeugs
     - ``sleep_check_s``: Abstand ihrer Prüfungen
     """
 
-    confirm_s: float = 75.0
+    confirm_s: float = TeslaActuator.confirm_timeout_s
     effect_s: float = 90.0
     sleep_total_s: float = 600.0
     sleep_check_s: float = 60.0
@@ -194,12 +194,13 @@ class _TeslaSteps:
     async def _current(self, title: str, amps: int) -> None:
         """Setzt den Strom; Tessie bestätigt, und der Wall Connector soll ihm folgen.
 
-        Bestätigt ist der Strom erst, wenn auch der Tessie-Cache ihn zeigt (``TeslaActuator``), oft
-        10 bis 50 s nach dem Senden. Den Wall Connector beobachtet der Schritt darum schon ab dem
-        Senden: Seine Zeit zählt ab dem Senden, bis der Strom dort beim Sollwert ist. Nach der
-        Bestätigung wartet der Schritt noch bis ``effect_s`` darauf. Ohne Bestätigung nennt der
-        Befund, was der Wall Connector bis dahin zeigte; so trennt er „Cache hinkt“ von „Auto
-        übernimmt nicht“. Eine Wiederholung nennt er mit ``Part2Session.with_repetition``.
+        Bestätigt ist der Strom erst, wenn auch der Tessie-Cache ihn zeigt (``TeslaActuator``), je
+        nach Abfragetakt des Adapters 10 bis 75 s nach dem Senden. Den Wall Connector beobachtet
+        der Schritt darum schon ab dem Senden: Seine Zeit zählt ab dem Senden, bis der Strom dort
+        beim Sollwert ist. Nach der Bestätigung wartet der Schritt noch bis ``effect_s`` darauf.
+        Ohne Bestätigung nennt der Befund, was der Wall Connector bis dahin zeigte; so trennt er
+        „Cache hinkt“ von „Auto übernimmt nicht“. Eine Wiederholung nennt er mit
+        ``Part2Session.with_repetition``.
         """
         session = self._session
         before = session.snapshot()

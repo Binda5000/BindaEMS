@@ -200,9 +200,9 @@ async def test_sleep_check_never_sends(tesla_session, respx_mock) -> None:
 
 def test_the_timings_default_to_the_values_of_the_plan() -> None:
     assert DEFAULT_TIMINGS == TeslaTimings(
-        confirm_s=75.0, effect_s=90.0, sleep_total_s=600.0, sleep_check_s=60.0
+        confirm_s=85.0, effect_s=90.0, sleep_total_s=600.0, sleep_check_s=60.0
     )
-    # Tessie hat für einen Befehl bis zu 75 s: so lange wartet auch der Teil
+    # Befehl und Prüfung im Tessie-Cache dauern bis zu 85 s: so lange wartet auch der Teil
     assert DEFAULT_TIMINGS.confirm_s == TeslaActuator.confirm_timeout_s
 
 

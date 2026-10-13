@@ -53,11 +53,13 @@ FAILURES_ALLOWED: Final = 3  # so viele Fehler binnen FAILURE_WINDOW machen ihn 
 FAILURE_WINDOW: Final = timedelta(minutes=15)  # Zählfenster und Dauer des Zustands danach
 # Prüfung eines bestätigten Stroms im Tessie-Cache. Eine Meldung zählt erst SETTLE_S nach der
 # Bestätigung: Bis dahin, so die noch ungemessene Annahme, hat Tessies Cache das Auto eingeholt.
-# Bis VERIFY_S wartet die Prüfung auf eine solche Meldung. Beim Laden fragt der Adapter alle 30 s
-# ab, dazu kommt die Dauer der Abfrage: Das Fenster von 40 s fängt eine Meldung, solange eine
-# Abfrage höchstens 10 s dauert.
+# Bis VERIFY_S wartet die Prüfung auf eine solche Meldung. Der Adapter fragt beim Laden alle 30 s
+# ab, angesteckt und ohne zu laden alle 60 s (``poll_interval_s`` in ``core.adapters.tessie``).
+# In der Startfolge geht der Strom hinaus, bevor das Auto lädt: Das Fenster von 65 s fängt darum
+# auch eine 60-s-Abfrage, solange sie höchstens 5 s dauert (10 s + 60 s + 5 s = 75 s); beim Laden
+# bleibt reichlich Luft. Ohne das ginge ein verlorener erster Befehl dort oft unbemerkt durch.
 SETTLE_S: Final = 10.0
-VERIFY_S: Final = 50.0
+VERIFY_S: Final = 75.0
 CHECK_MARGIN_S: Final = 5.0  # so lange vor der Frist des Ausführers endet die Prüfung spätestens
 
 # Gründe, warum der Tesla nicht steuerbar ist (Plan „Texte“); „nach Fehlern“ hat die Uhrzeit und
@@ -152,7 +154,9 @@ class TeslaActuator:
     bevor der Eigentümer den Client schließt.
     """
 
-    confirm_timeout_s = 75.0  # die 60 s des Befehls und etwas Luft, bis die Aufgabe zu Ende ist
+    # die 60 s des Befehls und Platz für die Prüfung im Cache (VERIFY_S nach der Bestätigung, endet
+    # CHECK_MARGIN_S vor dieser Frist); unter den 90 s bis zum nächsten erlaubten Strombefehl
+    confirm_timeout_s = 85.0
     # Prüfung im Tessie-Cache (``_verify``); ``verify_s`` 0 schaltet sie ab, für Tests ohne Cache
     settle_s = SETTLE_S
     verify_s = VERIFY_S
