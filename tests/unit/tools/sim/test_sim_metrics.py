@@ -1,0 +1,336 @@
+"""Tests der Kennzahlen des Simulators (Design 13.2, Präzisierung 16).
+
+Die erwarteten Werte sind von Hand gerechnet, mit den Grenzen der Beispielkonfiguration: Sicherung
+35 A, Ziel an der Sicherung 33 A, Ziel am Importlimit 19 A (gezählt ab 19,5 A), Tesla-Strombefehle
+mindestens 90 s auseinander, höchstens 6 Weckvorgänge je Wiener Tag im Abstand von 1800 s.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Mapping
+from dataclasses import replace
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
+from typing import Final
+
+from bindaems.shared.config import load_config
+from bindaems.shared.control import CommandKind, CommandValue
+from bindaems.shared.decisions import Decision, DecisionResult
+from bindaems.tools.sim.metrics import CarSample, Sample, measure, tesla_transition_s
+
+CFG: Final = load_config(Path("deploy/config.example.yaml"))
+T0: Final = datetime(2026, 6, 21, 8, 0, tzinfo=UTC)  # 10:00 Wiener Zeit
+
+EGOLF: Final = "wallbox.evcs"
+TESLA: Final = "vehicle.tesla"
+
+
+def car(current_a: float = 0.0, *, mode: str = "pv", min_a: int = 6, phases: int = 2) -> CarSample:
+    """Ein Auto, das mit ``current_a`` lädt (0: lädt nicht), auf ``phases`` Phasen."""
+    return CarSample(
+        charging=current_a > 0,
+        current_a=current_a,
+        power_w=current_a * phases * 230.0,
+        mode=mode,
+        min_a=min_a,
+    )
+
+
+def tesla(current_a: float = 0.0, *, mode: str = "pv") -> CarSample:
+    return car(current_a, mode=mode, min_a=5, phases=3)
+
+
+def sample(
+    t: int,
+    *,
+    l1: float = 0.0,
+    l2: float = 0.0,
+    l3: float = 0.0,
+    feed: float = 0.0,
+    battery_w: float = 0.0,
+    soc_pct: float = 60.0,
+    cars: Mapping[str, CarSample] | None = None,
+) -> Sample:
+    """Eine Probe mit sonst ruhigen Werten: Netzstrom ``l1`` bis ``l3``, ``feed`` aus dem Akku auf
+    L1, kein Auto lädt."""
+    return Sample(
+        t=t,
+        grid_a={"L1": l1, "L2": l2, "L3": l3},
+        battery_feed_a={"L1": feed, "L2": 0.0, "L3": 0.0},
+        battery_w=battery_w,
+        soc_pct=soc_pct,
+        cars=cars if cars is not None else {"tesla": tesla(), "egolf": car()},
+    )
+
+
+def decision(
+    seconds: float,
+    actuator: str,
+    kind: CommandKind,
+    value: CommandValue,
+    *,
+    result: DecisionResult = DecisionResult.OK,
+    codes: tuple[str, ...] = ("mode_pv", "pv_surplus"),
+) -> Decision:
+    """Eine Entscheidung ``seconds`` nach ``T0``; die Kennung nennt Aktor, Art und Zeit."""
+    return Decision(
+        id=f"{actuator}/{kind}/{seconds}",
+        ts=T0 + timedelta(seconds=seconds),
+        actuator=actuator,
+        kind=kind,
+        requested=value,
+        applied=value,
+        dry_run=result is DecisionResult.DRY_RUN,
+        outcome="accepted",
+        result=result,
+        codes=codes,
+        text="",
+        inputs={},
+    )
+
+
+def test_quiet_samples_pass_every_limit() -> None:
+    metrics = measure([sample(t) for t in range(10)], [], CFG)
+    assert metrics.failures(CFG) == []
+    assert (metrics.max_phase_a, metrics.over_33_s, metrics.battery_share_pct) == (0.0, 0, 0.0)
+
+
+# --- Netzstrom ------------------------------------------------------------------------------------
+
+
+def test_longest_time_above_33_a() -> None:
+    samples = [sample(t, l1=34.0 if 5 <= t < 12 else 20.0) for t in range(20)]
+    assert measure(samples, [], CFG).over_33_s == 7
+
+
+def test_time_above_33_a_counts_any_phase_and_breaks_at_33_a() -> None:
+    # 0–4 s L1 über 33 A, 5 s genau 33 A (nicht darüber), 6–16 s erst L2, dann L3 darüber: 11 s
+    levels = [{"l1": 34.0}] * 5 + [{"l1": 33.0}] + [{"l2": 33.5}] * 6 + [{"l3": 40.0}] * 5
+    metrics = measure([sample(t, **level) for t, level in enumerate(levels)], [], CFG)
+    assert metrics.over_33_s == 11
+    assert metrics.failures(CFG) == [
+        "Höchster Phasenstrom: 40 A, Grenze 35 A.",
+        "Längste Zeit über 33 A: 11 s, Grenze 10 s.",
+    ]
+
+
+def test_highest_phase_current_up_to_the_fuse() -> None:
+    metrics = measure([sample(0, l2=35.0), sample(1, l3=-36.0)], [], CFG)
+    assert metrics.max_phase_a == 35.0  # Einspeisung zählt nicht
+    assert metrics.failures(CFG) == []
+    over = measure([sample(0, l3=35.04321)], [], CFG)
+    assert over.failures(CFG) == ["Höchster Phasenstrom: 35,04 A, Grenze 35 A."]
+    barely = measure([sample(0, l1=35.001)], [], CFG)  # gerundet 35,00: zeigt den genauen Wert
+    assert barely.failures(CFG) == ["Höchster Phasenstrom: 35,001 A, Grenze 35 A."]
+
+
+# --- Ziel in PV-Modi und Akku-Energie -------------------------------------------------------------
+
+
+def pv_run(seconds: int, *, egolf: CarSample, tesla_car: CarSample | None = None) -> list[Sample]:
+    """Ruhig, dann ``seconds`` lang L1 bei 15 A und 5 A aus dem Akku (20 A > 19,5 A), dann ruhig."""
+    cars = {"tesla": tesla_car or tesla(), "egolf": egolf}
+    return [
+        sample(t, l1=15.0, feed=5.0, cars=cars) if 3 <= t < 3 + seconds else sample(t, cars=cars)
+        for t in range(seconds + 6)
+    ]
+
+
+def test_time_over_the_target_in_pv_modes() -> None:
+    metrics = measure(pv_run(11, egolf=car(8.0)), [], CFG)
+    assert (metrics.over_target_s, metrics.over_target_tesla_s) == (11, 0)
+    assert metrics.failures(CFG) == ["Längste Zeit über dem Ziel in PV-Modi: 11 s, Grenze 10 s."]
+    assert measure(pv_run(10, egolf=car(8.0, mode="min_pv")), [], CFG).failures(CFG) == []
+
+
+def test_time_over_the_target_counts_only_pv_cars_above_their_minimum() -> None:
+    assert measure(pv_run(30, egolf=car(6.4)), [], CFG).over_target_s == 0  # am Mindeststrom
+    assert measure(pv_run(30, egolf=car(6.5)), [], CFG).over_target_s == 30
+    assert measure(pv_run(30, egolf=car(16.0, mode="now")), [], CFG).over_target_s == 0
+    assert measure(pv_run(30, egolf=car()), [], CFG).over_target_s == 0  # niemand lädt
+    # lädt ein Auto in Sofort mit, zählt die Sekunde nicht
+    both = pv_run(30, egolf=car(8.0), tesla_car=tesla(16.0, mode="now"))
+    assert measure(both, [], CFG).over_target_s == 0
+
+
+def test_a_charging_tesla_may_stay_a_tesla_transition_over_the_target() -> None:
+    # Übergang mit Tesla: zwei Strombefehle im Abstand von 90 s und 20 s, also 200 s
+    metrics = measure(pv_run(200, egolf=car(), tesla_car=tesla(8.0)), [], CFG)
+    assert (metrics.over_target_s, metrics.over_target_tesla_s) == (0, 200)
+    assert metrics.failures(CFG) == []
+    longer = measure(pv_run(201, egolf=car(8.0), tesla_car=tesla(8.0)), [], CFG)
+    assert longer.failures(CFG) == [
+        "Längste Zeit über dem Ziel in PV-Modi, Tesla lädt: 201 s, Grenze 200 s."
+    ]
+
+
+def test_battery_share_of_pv_cars() -> None:
+    # 30 Proben: PV-Auto 4000 W, Entladung 600 W in den ersten 20; die ersten 10 s sind ein
+    # Übergang, 10 zählen → 6000 / 120 000 = 5 %. Mit 22 zählen 12 → 6 %, ein Verstoß.
+    def run(discharging: int) -> list[Sample]:
+        cars = {"tesla": tesla(), "egolf": CarSample(True, 8.7, 4000.0, "pv", 6)}
+        return [
+            sample(t, battery_w=-600.0 if t < discharging else 0.0, cars=cars) for t in range(30)
+        ]
+
+    assert measure(run(20), [], CFG).battery_share_pct == 5.0
+    assert measure(run(20), [], CFG).failures(CFG) == []
+    assert measure(run(22), [], CFG).failures(CFG) == ["Akku-Energie in PV-Autos: 6 %, Grenze 5 %."]
+
+
+def test_battery_share_counts_only_what_the_pv_cars_draw() -> None:
+    # 14 s Entladung von 3000 W in ein PV-Auto mit 2000 W: nach dem Übergang zählen 4 × 2000 W.
+    # Danach 2 s am Mindeststrom (zählen gar nicht), dann 26 s ohne Entladung: 8000 / 80 000.
+    full = CarSample(True, 8.7, 2000.0, "pv", 6)
+    minimum = CarSample(True, 6.0, 2760.0, "pv", 6)
+    samples = [
+        *(sample(t, battery_w=-3000.0, cars={"egolf": full}) for t in range(14)),
+        *(sample(t, battery_w=-3000.0, cars={"egolf": minimum}) for t in range(14, 16)),
+        *(sample(t, battery_w=0.0, cars={"egolf": full}) for t in range(16, 42)),
+    ]
+    assert measure(samples, [], CFG).battery_share_pct == 10.0
+
+
+def battery_run(seconds: int, key: str, *, quiet: int = 0, cfg=CFG) -> float:
+    """Der Akku-Anteil: ``seconds`` lang 2000 W aus dem Akku in das PV-Auto ``key`` mit 4000 W,
+    dann ``quiet`` Sekunden ohne Entladung."""
+    car_4000 = CarSample(True, 8.7, 4000.0, "pv", 5)
+    samples = [
+        sample(t, battery_w=-2000.0 if t < seconds else 0.0, cars={key: car_4000})
+        for t in range(seconds + quiet)
+    ]
+    return measure(samples, [], cfg).battery_share_pct
+
+
+def test_battery_energy_in_a_tesla_transition_does_not_count() -> None:
+    assert battery_run(150, "tesla") == 0.0  # ganz im Übergang von 200 s
+    assert battery_run(250, "tesla") == 10.0  # die letzten 50 s: 100 000 / 1 000 000
+
+
+def test_battery_energy_counts_after_10_s_without_the_tesla() -> None:
+    assert battery_run(30, "egolf", quiet=70) == 10.0  # die letzten 20 s: 40 000 / 400 000
+
+
+def test_the_tesla_transition_comes_from_the_config() -> None:
+    commands = CFG.vehicles["tesla"].commands.model_copy(update={"current_interval_s": 60})
+    tesla_cfg = CFG.vehicles["tesla"].model_copy(update={"commands": commands})
+    cfg = CFG.model_copy(update={"vehicles": {**CFG.vehicles, "tesla": tesla_cfg}})
+    assert tesla_transition_s(cfg) == 140.0  # 2 × 60 + 20
+    assert battery_run(150, "tesla", quiet=50, cfg=cfg) == 2.5  # die letzten 10 s: 20 000 / 800 000
+
+
+# --- Starts ---------------------------------------------------------------------------------------
+
+
+def test_starts_per_car_in_a_sliding_hour() -> None:
+    # Der e-Golf lädt bei 0 s schon (kein Start), startet bei 10, 1000, 2000, 3000 und 3609 s:
+    # in [10, 3610) sind es 5. Ohne den bei 3609 s (später bei 3610 s) höchstens 4.
+    def run(last: int) -> list[Sample]:
+        starts = {10, 1000, 2000, 3000, last}
+        stops = {start - 5 for start in starts} | {5}
+        charging = True
+        samples = []
+        for t in range(3700):
+            charging = (charging or t in starts) and t not in stops
+            samples.append(sample(t, cars={"egolf": car(8.0 if charging else 0.0)}))
+        return samples
+
+    assert measure(run(3609), [], CFG).starts_per_hour == 5
+    assert measure(run(3609), [], CFG).failures(CFG) == ["Starts je Auto und Stunde: 5, Grenze 4."]
+    assert measure(run(3610), [], CFG).starts_per_hour == 4
+
+
+# --- Tesla ----------------------------------------------------------------------------------------
+
+
+def test_tesla_intervals_ignore_urgent_commands() -> None:
+    # Entscheidungen bei 0, 60 (mit urgent.bypass) und 95 s → kürzester Abstand 95 s
+    decisions = [
+        decision(0, TESLA, CommandKind.CURRENT, 10.0),
+        decision(
+            60, TESLA, CommandKind.CURRENT, 5.0, codes=("mode_now", "overload", "urgent.bypass")
+        ),
+        decision(95, TESLA, CommandKind.CURRENT, 8.0, result=DecisionResult.DRY_RUN),
+    ]
+    assert measure([], decisions, CFG).tesla_interval_s == 95.0
+
+
+def test_tesla_intervals_count_only_ok_and_dry_run_currents() -> None:
+    decisions = [
+        decision(0, TESLA, CommandKind.CURRENT, 10.0),
+        decision(30, TESLA, CommandKind.CURRENT, 5.0, result=DecisionResult.ERROR),
+        decision(40, TESLA, CommandKind.CURRENT, 5.0, result=DecisionResult.NOT_SENT),
+        decision(50, TESLA, CommandKind.CHARGING, True),
+        decision(60, EGOLF, CommandKind.CURRENT, 8.0),
+        decision(80, TESLA, CommandKind.CURRENT, 12.0),
+    ]
+    metrics = measure([], decisions, CFG)
+    assert metrics.tesla_interval_s == 80.0
+    assert metrics.failures(CFG) == ["Kürzester Abstand der Tesla-Strombefehle: 80 s, Grenze 90 s."]
+    assert measure([], decisions[:1], CFG).tesla_interval_s is None  # nur ein Befehl
+
+
+def test_tesla_intervals_use_the_time_of_sending() -> None:
+    # bestätigt nach 45 bzw. 12 s: gesendet 90 s auseinander, entschieden 57 s auseinander
+    first = decision(45, TESLA, CommandKind.CURRENT, 10.0)
+    second = decision(102, TESLA, CommandKind.CURRENT, 12.0)
+    sent = {first.id: T0, second.id: T0 + timedelta(seconds=90)}
+    assert measure([], [first, second], CFG).tesla_interval_s == 57.0
+    assert measure([], [first, second], CFG, sent=sent).tesla_interval_s == 90.0
+
+
+def wake(at: datetime, *, result: DecisionResult = DecisionResult.OK) -> Decision:
+    """Ein Weckstart zur Wanduhr ``at``."""
+    found = decision(0, TESLA, CommandKind.CHARGING, True, result=result)
+    codes = ("mode_pv", "pv_surplus", "wake")
+    return replace(found, id=f"wake/{at.isoformat()}", ts=at, codes=codes)
+
+
+def vienna(day: int, hour: int, minute: int = 0, second: int = 0) -> datetime:
+    """Oktober 2026 in Wiener Zeit (UTC+2), als UTC."""
+    return datetime(2026, 10, day, hour, minute, second, tzinfo=UTC) - timedelta(hours=2)
+
+
+def test_wakes_count_per_vienna_day() -> None:
+    # 22:30 und 23:45 am 12., 00:15 am 13.: höchstens 2 je Tag, Abstand mindestens 30 min
+    wakes = [wake(vienna(12, 22, 30)), wake(vienna(12, 23, 45)), wake(vienna(13, 0, 15))]
+    metrics = measure([], wakes, CFG)
+    assert (metrics.wakes_per_day, metrics.wake_interval_s) == (2, 1800.0)
+    assert metrics.failures(CFG) == []
+
+
+def test_too_many_or_too_close_wakes() -> None:
+    seven = [wake(vienna(12, hour)) for hour in range(8, 15)]
+    assert measure([], seven, CFG).failures(CFG) == ["Weckvorgänge je Tag: 7, Grenze 6."]
+    close = [wake(vienna(12, 8)), wake(vienna(12, 8, 29, 59))]
+    assert measure([], close, CFG).failures(CFG) == [
+        "Kürzester Abstand der Weckvorgänge: 1799 s, Grenze 1800 s."
+    ]
+    rejected = [wake(vienna(12, 8)), wake(vienna(12, 8, 1), result=DecisionResult.REJECTED)]
+    assert measure([], rejected, CFG).wakes_per_day == 1  # ohne Wert zählt er nicht
+
+
+# --- Dry-Run --------------------------------------------------------------------------------------
+
+
+def test_repeated_dry_run_decisions() -> None:
+    # EVCS current 10, 10, 11 (dry_run) → 1
+    dry = DecisionResult.DRY_RUN
+    decisions = [
+        decision(0, EGOLF, CommandKind.CURRENT, 10.0, result=dry),
+        decision(5, EGOLF, CommandKind.CHARGING, True, result=dry),
+        decision(10, EGOLF, CommandKind.CURRENT, 10.0, result=dry),
+        decision(15, EGOLF, CommandKind.CURRENT, 11.0, result=dry),
+    ]
+    metrics = measure([], decisions, CFG)
+    assert metrics.repeated_dry_runs == 1
+    assert metrics.failures(CFG) == ["Wiederholte Dry-Run-Entscheidungen: 1, Grenze 0."]
+
+
+def test_live_decisions_are_no_repeated_dry_runs() -> None:
+    decisions = [
+        decision(0, EGOLF, CommandKind.CURRENT, 10.0),
+        decision(10, EGOLF, CommandKind.CURRENT, 10.0),
+        decision(20, EGOLF, CommandKind.CURRENT, 10.0, result=DecisionResult.DRY_RUN),
+    ]
+    assert measure([], decisions, CFG).repeated_dry_runs == 0

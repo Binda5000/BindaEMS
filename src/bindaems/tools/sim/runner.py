@@ -1,0 +1,270 @@
+"""Lauf eines Szenarios: die echte Laufzeit des core gegen das Anlagenmodell (Design 13.1).
+
+``run_scenario`` baut die Laufzeit wie im Betrieb, nur ohne Adapter und API: Safety-Schicht,
+Ausführer, Laderegelung und die echten Aktoren. Die ``ManualClock`` ist Wanduhr und Uhr der
+Safety-Schicht. Gefälscht sind nur die Geräte dahinter (Plan 2c-1, Präzisierung 16): Der core
+schreibt über ``PlantModel.mqtt_write`` und erreicht Tessie über ``httpx.MockTransport`` mit
+``PlantModel.tessie``; die Telemetrie verwirft ein ``_Discard``.
+
+Je simulierter Sekunde:
+
+1. die Ereignisse der Sekunde
+2. ``model.step`` und ``model.publish``
+3. ``rt.cycle_once()``
+4. zehnmal ``await asyncio.sleep(0)``: Die Befehle an Tessie laufen bis zu ihrer Antwort
+5. ``model.resolve``: Tessie beantwortet, was fällig ist
+6. eine Probe (``Sample``), alle ``HEALTH_EVERY_S`` dazu die Gesundheit
+7. die Uhr eine Sekunde weiter
+
+Am Ende liest der Lauf alle Entscheidungen und fährt die Laufzeit herunter. Die Kennzahlen kommen
+aus Proben und Entscheidungen; für die Befehle an Tessie gilt dabei der Zeitpunkt, zu dem sie
+Tessie erreichten (``sent_times``), nicht der ihres späteren Ergebnisses.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import random
+from collections import defaultdict
+from collections.abc import Sequence
+from dataclasses import dataclass, replace
+from datetime import datetime, timedelta
+from pathlib import Path
+from typing import Final
+
+import httpx
+from pydantic import SecretStr
+
+from bindaems.core.api.app import HealthReport
+from bindaems.core.runtime import CoreRuntime
+from bindaems.shared.config import Config, EvcsConfig, Secrets
+from bindaems.shared.control import (
+    ActuatorMode,
+    CommandKind,
+    CommandValue,
+    Intent,
+    VehicleIntent,
+    vehicle_actuator,
+    wallbox_actuator,
+)
+from bindaems.shared.decisions import Decision, DecisionResult
+from bindaems.shared.influx.lineprotocol import Point
+from bindaems.shared.timeutil import ManualClock
+from bindaems.tools.sim.metrics import CarSample, Metrics, Sample, measure
+from bindaems.tools.sim.model import PlantModel
+from bindaems.tools.sim.scenarios import Action, Scenario
+
+HEALTH_EVERY_S: Final = 10  # so oft hält der Lauf die Gesundheit des core fest
+SETTLE_ROUNDS: Final = 10  # Runden des Event-Loops nach jedem Zyklus
+READ_LIMIT: Final = 1000  # Entscheidungen je Lesen
+# Ergebnisse eines Befehls, der Tessie erreicht hat
+_SENT_RESULTS: Final = frozenset({DecisionResult.OK, DecisionResult.ERROR, DecisionResult.TIMEOUT})
+# Der Simulator erreicht kein Netz: Die Tokens gehen nur an das Modell.
+_INTERNAL_TOKEN: Final = "simulator-ohne-netz-" + "0" * 16
+_TESSIE_TOKEN: Final = "simulator"  # noqa: S105 - kein Geheimnis: erreicht nur das Modell
+
+
+@dataclass(frozen=True)
+class SimResult:
+    """Das Ergebnis eines Laufs.
+
+    - ``scenario``: das Szenario, ``metrics``: seine Kennzahlen
+    - ``decisions``: alle Entscheidungen des core, aufsteigend
+    - ``health``: alle ``HEALTH_EVERY_S`` die Gesundheit, mit der Sekunde des Laufs
+    - ``samples``: je Sekunde eine Probe
+    - ``failures``: die Verstöße gegen Kennzahlen und eigene Prüfungen, je ein Satz
+    """
+
+    scenario: Scenario
+    metrics: Metrics
+    decisions: list[Decision]
+    health: list[tuple[int, HealthReport]]
+    samples: list[Sample]
+    failures: list[str]
+
+
+class _Discard:
+    """Die Telemetrie des Laufs: Der Simulator schreibt keine Messpunkte."""
+
+    def write(self, point: Point) -> None:
+        del point
+
+
+def sim_config(cfg: Config, data_dir: Path) -> Config:
+    """Die Konfiguration des Laufs: ``data_dir`` als Ablage des core, jede EVCS und jedes
+    Fahrzeug mit Tessie für den Live-Betrieb freigegeben."""
+    wallboxes = {
+        key: wallbox.model_copy(update={"live_allowed": True})
+        if isinstance(wallbox, EvcsConfig)
+        else wallbox
+        for key, wallbox in cfg.wallboxes.items()
+    }
+    vehicles = {
+        key: vehicle.model_copy(update={"live_allowed": True})
+        if vehicle.tessie is not None
+        else vehicle
+        for key, vehicle in cfg.vehicles.items()
+    }
+    core = cfg.core.model_copy(update={"data_dir": data_dir})
+    return cfg.model_copy(update={"wallboxes": wallboxes, "vehicles": vehicles, "core": core})
+
+
+def _intent(scenario: Scenario, cfg: Config) -> Intent:
+    """Die Absicht des Szenarios; mit ``live`` sind EVCS und Fahrzeuge mit Tessie live."""
+    if not scenario.live:
+        return scenario.intent
+    live = {
+        wallbox_actuator(key): ActuatorMode.LIVE
+        for key, wallbox in cfg.wallboxes.items()
+        if isinstance(wallbox, EvcsConfig)
+    } | {
+        vehicle_actuator(key): ActuatorMode.LIVE
+        for key, vehicle in cfg.vehicles.items()
+        if vehicle.tessie is not None
+    }
+    return scenario.intent.model_copy(update={"actuators": scenario.intent.actuators | live})
+
+
+async def run_scenario(
+    scenario: Scenario, cfg: Config, data_dir: Path, *, duration_s: int | None = None
+) -> SimResult:
+    """Lässt das Szenario laufen, ``duration_s`` Sekunden statt seiner Dauer, wenn angegeben.
+
+    ``data_dir`` nimmt die Ablage des core auf (Absicht, Limits, Entscheidungslog). Eine Ausnahme
+    im Zyklus bricht den Lauf ab; die Laufzeit fährt trotzdem herunter.
+    """
+    cfg = sim_config(cfg, data_dir)
+    seconds = scenario.duration_s if duration_s is None else duration_s
+    clock = ManualClock(scenario.start)
+    model = PlantModel(cfg, random.Random(scenario.seed))  # noqa: S311 - Saat der Simulation
+    scenario.setup(model)
+    requests: list[tuple[datetime, str]] = []
+
+    async def tessie(request: httpx.Request) -> httpx.Response:
+        requests.append((clock.now(), request.url.path))
+        return await model.tessie(request)
+
+    secrets = Secrets(
+        internal_token=SecretStr(_INTERNAL_TOKEN), tessie_token=SecretStr(_TESSIE_TOKEN)
+    )
+    rt = CoreRuntime(
+        cfg,
+        secrets,
+        clock=clock,
+        safety_clock=clock,
+        adapters=[],
+        sink=_Discard(),
+        serve_api=False,
+        mqtt_write=model.mqtt_write,
+        http_client=httpx.AsyncClient(transport=httpx.MockTransport(tessie)),
+    )
+    try:
+        model.attach(rt.store)
+        reply = rt.submit_intent(_intent(scenario, cfg))
+        if reply.result == "rejected":
+            raise ValueError(f"Absicht des Szenarios abgelehnt: {' '.join(reply.details)}")
+        events = _by_second(scenario.events)
+        samples: list[Sample] = []
+        health: list[tuple[int, HealthReport]] = []
+        for t in range(seconds):
+            for action in events.get(t, ()):
+                action(model, rt)
+            now = clock.now()
+            model.step(now)
+            model.publish(rt.store, now)
+            rt.cycle_once()
+            for _ in range(SETTLE_ROUNDS):
+                await asyncio.sleep(0)
+            model.resolve(now)
+            samples.append(_sample(t, model, cfg, rt.intent(), now))
+            if t % HEALTH_EVERY_S == 0:
+                health.append((t, rt.health()))
+            clock.advance(1)
+        decisions = _decisions(rt, scenario.start)
+    finally:
+        await rt.shutdown()
+    metrics = measure(samples, decisions, cfg, sent=sent_times(decisions, requests, cfg))
+    result = SimResult(scenario, metrics, decisions, health, samples, [])
+    return replace(result, failures=[*metrics.failures(cfg), *scenario.checks(result)])
+
+
+def _by_second(events: Sequence[tuple[int, Action]]) -> dict[int, list[Action]]:
+    found: dict[int, list[Action]] = defaultdict(list)
+    for second, action in events:
+        found[second].append(action)
+    return found
+
+
+def _sample(t: int, model: PlantModel, cfg: Config, intent: Intent | None, now: datetime) -> Sample:
+    """Die Probe nach Sekunde ``t``; der Modus je Auto laut Absicht, mit Boost bis ``now``."""
+    amps, power = model.car_a, model.car_w
+    cars: dict[str, CarSample] = {}
+    for key, vehicle in cfg.vehicles.items():
+        entry = (intent.vehicles.get(key) if intent is not None else None) or VehicleIntent()
+        boost = entry.boost_until is not None and now < entry.boost_until
+        plugged = model.cars[key].wallbox
+        wallbox = cfg.wallboxes[plugged] if plugged is not None else None
+        evcs_min = wallbox.min_a if isinstance(wallbox, EvcsConfig) else 0  # eigener der EVCS
+        cars[key] = CarSample(
+            charging=amps[key] > 0,
+            current_a=amps[key],
+            power_w=power[key],
+            mode="boost" if boost else entry.mode.value,
+            min_a=max(vehicle.min_a, evcs_min),
+            complete=model.cars[key].complete,
+        )
+    return Sample(
+        t=t,
+        grid_a=dict(model.grid_a),
+        battery_feed_a=dict(model.battery_feed_a),
+        battery_w=model.battery_w,
+        soc_pct=model.soc_pct,
+        cars=cars,
+    )
+
+
+def _decisions(rt: CoreRuntime, start: datetime) -> list[Decision]:
+    """Alle Entscheidungen seit ``start``, aufsteigend."""
+    found: list[Decision] = []
+    since = start - timedelta(microseconds=1)
+    while True:
+        batch, more = rt.decisions(since, READ_LIMIT)
+        found.extend(batch)
+        if not more or not batch:
+            return found
+        since = batch[-1].ts
+
+
+def sent_times(
+    decisions: Sequence[Decision], requests: Sequence[tuple[datetime, str]], cfg: Config
+) -> dict[str, datetime]:
+    """Je gesendeter Entscheidung an ein Fahrzeug mit Tessie der Zeitpunkt, zu dem ihr Befehl
+    Tessie erreichte.
+
+    ``requests`` sind Zeit und Pfad jeder Anfrage an Tessie. Gesendet ist eine Entscheidung mit
+    Ergebnis ``ok``, ``error`` oder ``timeout``. Ihr Befehl ist die letzte Anfrage mit seinem Pfad
+    vor ihrem Zeitpunkt: Je Aktor und Art ist höchstens ein Befehl offen, und sein Ergebnis kommt
+    frühestens eine Sekunde nach dem Senden.
+    """
+    prefixes = {
+        vehicle_actuator(key): f"/{vehicle.tessie.vin}/command/"
+        for key, vehicle in cfg.vehicles.items()
+        if vehicle.tessie is not None
+    }
+    sent: dict[str, datetime] = {}
+    for decision in decisions:
+        prefix = prefixes.get(decision.actuator)
+        if prefix is None or decision.result not in _SENT_RESULTS:
+            continue
+        path = prefix + _command(decision.kind, decision.applied)
+        earlier = [at for at, found in requests if found == path and at < decision.ts]
+        if earlier:
+            sent[decision.id] = earlier[-1]
+    return sent
+
+
+def _command(kind: CommandKind, value: CommandValue) -> str:
+    """Der Name des Tessie-Befehls wie im Tesla-Aktor."""
+    if kind is CommandKind.CURRENT:
+        return "set_charging_amps"
+    return "start_charging" if value is True else "stop_charging"
