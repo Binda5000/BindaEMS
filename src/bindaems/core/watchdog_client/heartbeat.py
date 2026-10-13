@@ -10,12 +10,16 @@ solange der core wirklich regelt:
   lässt es zu. Fehlt es, bleibt der Zähler aus, und der Watchdog löst nach seinem Timeout aus.
 
 Ohne Bedarf gibt der Client den Watchdog mit einer einzelnen 0 frei, aber nur, wenn
-``release_allowed`` gilt (kein Aktor kann noch Werte des EMS halten). Ist der Watchdog später noch
-„scharf“ und meldet einen Zähler dieses core, ging die 0 verloren und geht erneut hinaus. Einen
-ausgelösten Watchdog ohne Bedarf räumt der Client nach einer Weile mit der 0 auf. Die zuletzt
-gesendeten Zähler stehen in ``recent``: Nur ein Watchdog, der einen davon zurückmeldet, ist für
-diesen core scharf (``armed_for_core``). Beim Herunterfahren sendet der Client nichts: Dann soll der
-Watchdog auslösen, falls der core nicht rechtzeitig zurückkommt. Die Zeit kommt als Argument.
+``release_allowed`` gilt (kein Aktor kann noch Werte des EMS halten, und für keinen ist ein
+Schreibvorgang offen). Ist der Watchdog später noch „scharf“ und meldet einen Zähler dieses core,
+ging die 0 verloren und geht erneut hinaus. Einen ausgelösten Watchdog ohne Bedarf räumt der Client
+nach einer Weile mit der 0 auf. Die zuletzt gesendeten Zähler stehen in ``recent``: Nur ein
+Watchdog, der einen davon zurückmeldet, ist für diesen core scharf (``armed_for_core``). Zeigt der
+Watchdog nach der Freigabe „wartet“ oder das Echo 0, ist sie bestätigt, und der Client vergisst die
+Zähler. Den ersten Zähler eines Laufs (``first``) bildet ``heartbeat_start`` aus der Startzeit: Er
+unterscheidet sich von dem früherer Läufe und von den Zählern der Probe und des Teil-2-Werkzeugs
+(1, 2, 3, …). Beim Herunterfahren sendet der Client nichts: Dann soll der Watchdog auslösen, falls
+der core nicht rechtzeitig zurückkommt. Die Zeit kommt als Argument.
 """
 
 from __future__ import annotations
@@ -37,7 +41,23 @@ RELEASE_RESEND_FACTOR: Final = 2.0
 # So lange muss „ausgelöst“ ohne Bedarf anstehen, bis der core den Watchdog mit der 0 aufräumt.
 TRIPPED_RELEASE_S: Final = 60.0
 
+# Der Startwert eines Laufs liegt in [START_OFFSET, START_OFFSET + START_SPAN): über den Zählern der
+# Werkzeuge (1, 2, 3, …) und weit unter HEARTBEAT_MAX.
+START_OFFSET: Final = 1_000_000
+START_SPAN: Final = 1_000_000_000
+
 HeartbeatPhase = Literal["off", "active", "released"]
+
+
+def heartbeat_start(now: datetime) -> int:
+    """Der erste Zähler eines Laufs: ``START_OFFSET`` plus die Unix-Sekunden modulo ``START_SPAN``.
+
+    Jeder Lauf beginnt so bei einem anderen Wert als die früheren Läufe und als die Probe und das
+    Teil-2-Werkzeug, die bei 1 beginnen und 1, 2, 3, … zählen. Ein Zähler, den ein früherer Lauf
+    oder ein Werkzeug im Watchdog hinterließ, gilt dann nicht als Zähler dieses core
+    (``armed_for_core``). Der Wert liegt unter 1,001 Milliarden, weit unter ``HEARTBEAT_MAX``.
+    """
+    return START_OFFSET + int(now.timestamp()) % START_SPAN
 
 
 class HeartbeatClient:
@@ -77,8 +97,8 @@ class HeartbeatClient:
     def recent(self) -> tuple[int, ...]:
         """Die zuletzt gesendeten Zähler (höchstens ``RECENT_KEPT``), der neueste zuletzt.
 
-        Die Freigabe löscht sie nicht: Eine verlorene 0 erkennt der core daran, dass der Watchdog
-        noch einen dieser Zähler zeigt.
+        Die Freigabe löscht sie nicht, erst ihre Bestätigung (``on_cycle``): Eine verlorene 0
+        erkennt der core daran, dass der Watchdog noch einen dieser Zähler zeigt.
         """
         return self._recent
 
@@ -101,6 +121,11 @@ class HeartbeatClient:
         wenn er fällig ist: wenn noch nichts gesendet wurde oder seit dem letzten Senden mindestens
         das Intervall abzüglich ``INTERVAL_TOLERANCE_S`` vergangen ist.
 
+        Bestätigt ist die Freigabe, wenn der Status ``"released"`` ist und der Watchdog „wartet“
+        oder das Echo 0 zeigt. Dann sind die Zähler dieses Laufs vergessen (``recent``). Der
+        Zustand, den der Zyklus kennt, in dem die 0 hinausgeht, stammt von davor und bestätigt sie
+        nicht; erst der nächste Aufruf tut es.
+
         Ohne ``required`` sendet der Client eine 0 nur mit ``release_allowed``, und zwar
 
         - die Freigabe, einmal, solange der Status ``"active"`` ist;
@@ -112,6 +137,8 @@ class HeartbeatClient:
           ansteht (gezählt ab dem ersten Zyklus, der ihn so sieht), danach höchstens einmal je
           ``TRIPPED_RELEASE_S``.
         """
+        if self._status == "released" and (watchdog is WatchdogState.WAITING or echo == RELEASE):
+            self._recent = ()
         if required:
             self._tripped_since = None
             if allowed and self._due(now) and self._send(self._next):

@@ -13,7 +13,14 @@ from fastapi.testclient import TestClient
 from pydantic import SecretStr
 from structlog.testing import capture_logs
 from tests.helpers import INTENT_CHARGING_DEFAULTS, T0, FakeSink, run_until, snap
-from tests.integration.conftest import GOOD_STATE, TOKEN, allow_evcs_live, live_evcs, run
+from tests.integration.conftest import (
+    GOOD_STATE,
+    TOKEN,
+    allow_evcs_live,
+    allow_tesla_live,
+    live_evcs,
+    run,
+)
 from tests.integration.plant import Plant
 from tests.unit.core.adapters.conftest import FakeTransport, P
 
@@ -61,11 +68,6 @@ def record_broadcast(rt) -> list[dict[str, Any]]:
 
     rt.broadcast.publish = both
     return messages
-
-
-def allow_tesla_live(cfg: Config) -> Config:
-    tesla = cfg.vehicles["tesla"].model_copy(update={"live_allowed": True})
-    return cfg.model_copy(update={"vehicles": cfg.vehicles | {"tesla": tesla}})
 
 
 async def test_starts_in_start_then_observe(runtime_env) -> None:

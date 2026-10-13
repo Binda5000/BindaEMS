@@ -1,9 +1,10 @@
 """Sicherer Zustand und Übergabe: Sicherwerte mit höchstens 3 Versuchen je Vorfall (Spec 8.4, 8.5).
 
 Die Ziele (``SafeTarget``) nennt die Laufzeit (Plan 2b, Präzisierungen 3 und 4): in SAFE jeden
-nicht gesperrten Aktor, in jedem Zustand, in dem der core schreibt, dazu jeden Aktor, der übergeben
-wird. Die Sicherwerte kommen aus ``HardLimits.safe_commands``; bei Netzausfall (Inselbetrieb)
-bekommen EVCS und Tesla zusätzlich „Laden aus“ (8.4).
+nicht gesperrten Aktor, außer einem Tesla, der laut Tessie nicht lädt (Plan 2c-1, Design 10), in
+jedem Zustand, in dem der core schreibt, dazu jeden Aktor, der übergeben wird. Die Sicherwerte
+kommen aus ``HardLimits.safe_commands``; bei Netzausfall (Inselbetrieb) bekommen EVCS und Tesla
+zusätzlich „Laden aus“ (8.4).
 
 ``SafeStateKeeper.commands`` liefert je Zyklus die dringenden Befehle dafür:
 

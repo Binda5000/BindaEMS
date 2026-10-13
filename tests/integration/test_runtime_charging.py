@@ -1,20 +1,22 @@
 """Laufzeit mit der Laderegelung im Regelzyklus (Plan 2c-1): Entscheidungen der Regelung im
 Dry-Run und live, Neustart während des Ladens, Übergabe, Health je Fahrzeug und der gemeinsame
-HTTP-Client."""
+HTTP-Client, dazu die geparkten Befunde aus 2b (Design 10): Freigabe des Watchdogs, Aufräumen des
+Entscheidungslogs, Heartbeat-Zähler, sicherer Zustand mit dem Tesla und Auslösung des Watchdogs."""
 
 import asyncio
-from datetime import timedelta
+from datetime import datetime, timedelta
 from typing import Any
 
 import httpx
 import pytest
 from tests.helpers import T0
-from tests.integration.conftest import GOOD_STATE, allow_evcs_live, live_evcs, run
+from tests.integration.conftest import GOOD_STATE, allow_evcs_live, allow_tesla_live, live_evcs, run
 from tests.integration.plant import Plant
 
 from bindaems.core.control.charging import ChargeController
 from bindaems.shared.control import ActuatorMode, ChargeMode, CommandKind, Intent, VehicleIntent
 from bindaems.shared.decisions import Decision, DecisionResult
+from bindaems.shared.domain import SignalKind
 
 # Überschuss 5000 W: 4500 W Einspeisung + 600 W Laden des Akkus (SOC 50 % ≥ 30 %) − 100 W Marge
 SURPLUS = {**{f"grid.l{n}.power_w": -1500.0 for n in (1, 2, 3)}, "grid.power_w": -4500.0}
@@ -387,3 +389,214 @@ async def test_a_given_http_client_is_the_shared_one(runtime_env) -> None:
     assert requests == ["/5YJ3E7EB0MF000000/command/set_charging_amps"]
     await rt.shutdown()
     assert client.is_closed  # der gemeinsame Client schließt mit der Laufzeit
+
+
+# --- Geparkte Befunde aus 2b (Design 10) -------------------------------------------------------
+
+
+def hand_over_with_an_open_write(runtime_env, monkeypatch, key: tuple[str, CommandKind]):
+    """Regelbetrieb aus, die EVCS ist übergeben, aber für ``key`` meldet der Ausführer 20 s lang
+    einen offenen Schreibvorgang. Zurück kommen die Anlage, die Laufzeit und die Uhr.
+
+    Wie ``test_control_off_hands_back_then_observe`` (2b), nur mit der Regelung: Sie senkt die EVCS
+    bei 31 s auf 6 A und hält so Werte des EMS. Mit der neuen Absicht zeigt die EVCS den Sicherwert
+    schon, die Übergabe ist im ersten Zyklus fertig, und nur der offene Schreibvorgang kann die
+    Freigabe noch aufhalten.
+    """
+    plant = Plant(watchdog_state=1)
+    state = GOOD_STATE | {"wallbox.evcs.gx_set_current_a": 16}
+    rt, clock = live_evcs(runtime_env, plant=plant, state=state)
+    run(rt, clock, 36)
+    assert actuator_health(rt, "wallbox.evcs")["owned"] is True
+    open_until = clock.now() + timedelta(seconds=20)
+    real = rt.executor.pending
+
+    def pending() -> frozenset[tuple[str, CommandKind]]:
+        return real() | {key} if clock.now() < open_until else real()
+
+    monkeypatch.setattr(rt.executor, "pending", pending)
+    live = {"wallbox.evcs": ActuatorMode.LIVE}
+    rt.submit_intent(Intent(version=2, control=False, actuators=live))  # Regelbetrieb aus
+    return plant, rt, clock
+
+
+async def test_release_waits_for_pending_writes(runtime_env, monkeypatch) -> None:
+    key = ("wallbox.evcs", CommandKind.CURRENT)
+    plant, rt, clock = hand_over_with_an_open_write(runtime_env, monkeypatch, key)
+    run(rt, clock, 19)  # bei 0 bis 18 s nach der Übergabe
+    evcs = actuator_health(rt, "wallbox.evcs")
+    assert evcs["owned"] is False  # übergeben, die EVCS hält keine Werte des EMS mehr
+    assert evcs["pending"] == ["current"]  # aber ein Schreibvorgang ist offen
+    assert plant.heartbeats() == [1]  # keine Freigabe
+    assert rt.heartbeat.recent == (1,)
+    run(rt, clock, 3)  # ab 20 s ist er nicht mehr offen
+    assert plant.heartbeats() == [1, 0]
+    assert rt.health().watchdog["heartbeat"] == "released"
+    run(rt, clock, 1)  # die Anlage meldet das Echo 0: Die Freigabe ist bestätigt
+    assert rt.heartbeat.recent == ()  # der core vergisst seine Zähler
+
+
+@pytest.mark.parametrize(
+    "key", [("wallbox.evcs", CommandKind.CHARGING), ("victron", CommandKind.GRID_SETPOINT)]
+)
+async def test_release_waits_for_every_write_of_a_watchdog_actuator(
+    runtime_env, monkeypatch, key
+) -> None:
+    plant, rt, clock = hand_over_with_an_open_write(runtime_env, monkeypatch, key)
+    run(rt, clock, 19)
+    assert plant.heartbeats() == [1]  # auch wenn es nicht die Art ist, die übergeben wurde
+    run(rt, clock, 3)
+    assert plant.heartbeats() == [1, 0]
+
+
+async def test_release_does_not_wait_for_a_tesla_write(runtime_env, monkeypatch) -> None:
+    key = ("vehicle.tesla", CommandKind.CURRENT)  # der Watchdog schützt den Tesla nicht
+    plant, rt, clock = hand_over_with_an_open_write(runtime_env, monkeypatch, key)
+    run(rt, clock, 2)
+    assert actuator_health(rt, "vehicle.tesla")["pending"] == ["current"]
+    assert plant.heartbeats() == [1, 0]
+
+
+async def test_release_waits_for_a_write_the_evcs_has_not_taken(runtime_env) -> None:
+    plant = Plant(watchdog_state=1, follow=False)  # die EVCS übernimmt nichts
+    rt, clock = live_evcs(runtime_env, plant=plant, state=dict(EGOLF_PLUGGED), extra=SURPLUS)
+    run(rt, clock, 32 + 120)  # Start bei 151 s: 10 A und „Laden an“ gesendet, nicht übernommen
+    assert evcs_writes(plant) == START
+    live = {"wallbox.evcs": ActuatorMode.LIVE}
+    rt.submit_intent(Intent(version=2, control=False, actuators=live))  # Regelbetrieb aus
+    run(rt, clock, 5)  # die EVCS zeigt den Sicherstrom 6 A: übergeben, beide Schreibvorgänge offen
+    evcs = actuator_health(rt, "wallbox.evcs")
+    assert (evcs["owned"], evcs["pending"]) == (False, ["current", "charging"])
+    assert 0 not in plant.heartbeats()  # keine Freigabe, solange 10 A noch ankommen könnten
+    run(rt, clock, 10)  # nach 10 s ohne Rücklesen enden sie mit TIMEOUT
+    assert actuator_health(rt, "wallbox.evcs")["pending"] == []
+    assert plant.heartbeats()[-1] == 0
+
+
+@pytest.mark.parametrize("step", ["_control", "_record_cycle"])  # vor und nach der früheren Stelle
+async def test_prune_runs_after_a_failed_cycle(runtime_env, monkeypatch, step) -> None:
+    rt, _, clock = runtime_env()
+    pruned: list[datetime] = []
+    monkeypatch.setattr(rt.decision_spool, "prune", pruned.append)
+    monkeypatch.setattr(rt, step, lambda *a: (_ for _ in ()).throw(RuntimeError("Test")))
+    with pytest.raises(RuntimeError):
+        rt.cycle_once()
+    assert pruned == [clock.now()]  # nach der Wanduhr, im ersten Zyklus
+
+
+async def test_default_heartbeat_starts_with_the_run_value(runtime_env) -> None:
+    plant = Plant(watchdog_state=1)
+    rt, clock = live_evcs(
+        runtime_env,
+        plant=plant,
+        state=dict(GOOD_STATE),
+        start="2026-10-12T12:00:00+00:00",
+        heartbeat_first=None,  # ohne Angabe: der Startwert des Laufs
+    )
+    run(rt, clock, 32)  # Zähler bei 30 s, sein Echo bei 31 s: scharf, CONTROL
+    assert plant.heartbeats() == [792_806_400]
+    assert rt.health().mode == "CONTROL"  # der Watchdog zeigt den Zähler als den eigenen
+    run(rt, clock, 10)
+    assert plant.heartbeats() == [792_806_400, 792_806_401]
+
+
+def safe_tesla(runtime_env, car: dict[str, bool], *, tessie_stale: bool = False):
+    """Der live geschaltete Tesla im sicheren Zustand; ``car`` sind seine Werte von Tessie.
+
+    Tessie ist verbunden, die Werte stammen von dort (``vehicle.tesla.<name>``). Bei 32 s steht
+    der core in CONTROL, dann veralten die Cerbo-Daten (und mit ``tessie_stale`` auch die von
+    Tessie). 45 s SAFE umfassen die drei Versuche des Keepers im Abstand von 10 s und den Alarm.
+    Zurück kommen die Laufzeit und die Entscheidungen des sicheren Zustands.
+    """
+    rt, _, clock = runtime_env(state=GOOD_STATE, configure=allow_tesla_live, tessie_token="t")
+    rt.store.register_source("tessie:tesla", 900.0)
+    rt.store.set_connected("tessie:tesla", True)
+    for name, value in car.items():
+        rt.store.update(
+            f"vehicle.tesla.{name}", value, source="tessie:tesla", kind=SignalKind.STATE
+        )
+    rt.submit_intent(
+        Intent(version=1, control=True, actuators={"vehicle.tesla": ActuatorMode.LIVE})
+    )
+    run(rt, clock, 32)
+    assert rt.health().mode == "CONTROL"
+    since = clock.now() - timedelta(microseconds=1)
+    rt.store.set_connected("victron", False)  # Cerbo-Daten veraltet
+    if tessie_stale:
+        rt.store.set_connected("tessie:tesla", False)
+    run(rt, clock, 45)
+    assert rt.health().mode == "SAFE"
+    return rt, rt.decisions(since, 1000)[0]
+
+
+def alarm_ids(rt) -> set[str]:
+    return {alarm["id"] for alarm in rt.health().alarms}
+
+
+async def test_safe_state_skips_a_sleeping_tesla(runtime_env) -> None:
+    rt, decisions = safe_tesla(runtime_env, {"online": False, "at_home": True, "plugged": True})
+    # Victron und EVCS bekommen ihre Sicherwerte (im Dry-Run); der Tesla lädt nicht: keine Versuche,
+    # die nicht gesendet werden, und kein Alarm
+    assert {d.actuator for d in decisions} == {"victron", "wallbox.evcs"}
+    assert "actuator.failed.vehicle.tesla" not in alarm_ids(rt)
+
+
+@pytest.mark.parametrize("signal", ["at_home", "plugged"])
+async def test_safe_state_skips_an_absent_or_unplugged_tesla(runtime_env, signal) -> None:
+    car = {"online": True, "at_home": True, "plugged": True} | {signal: False}
+    rt, decisions = safe_tesla(runtime_env, car)
+    assert {d.actuator for d in decisions} == {"victron", "wallbox.evcs"}
+    assert "actuator.failed.vehicle.tesla" not in alarm_ids(rt)
+
+
+@pytest.mark.parametrize(
+    ("car", "tessie_stale"),
+    [
+        ({}, False),  # Tessie hat noch nichts gemeldet
+        ({"online": False, "at_home": True, "plugged": True}, True),  # der Wert ist veraltet
+    ],
+    ids=["unknown", "stale"],
+)
+async def test_safe_state_keeps_a_tesla_whose_state_is_not_known(
+    runtime_env, car, tessie_stale
+) -> None:
+    rt, decisions = safe_tesla(runtime_env, car, tessie_stale=tessie_stale)
+    tesla = [d for d in decisions if d.actuator == "vehicle.tesla"]
+    assert [(d.kind, d.result, d.codes[0]) for d in tesla] == [
+        (CommandKind.CURRENT, DecisionResult.NOT_SENT, "safe_state")
+    ] * 3  # ein veralteter oder fehlender Wert sagt nicht, dass es nicht lädt
+    assert "actuator.failed.vehicle.tesla" in alarm_ids(rt)
+
+
+async def test_watchdog_trip_forgets_the_expectations(runtime_env) -> None:
+    """Wie ``test_foreign_change_locks_the_evcs`` (2b), nur mit der Regelung: Sie schreibt 10 A,
+    das erwartet der core danach. In 2b stand die Erwartung nach dem sicheren Zustand bei 6 A, also
+    beim Wert des Watchdogs; so hätte der Test nichts geprüft.
+    """
+    plant = Plant(watchdog_state=1)
+    state = dict(EGOLF_PLUGGED)
+    rt, clock = live_evcs(runtime_env, plant=plant, state=state, extra=SURPLUS)
+    run(rt, clock, 32 + 121)  # Start bei 151 s mit 10 A, bestätigt bei 152 s: ab jetzt erwartet
+    plant.watchdog_state = 2  # der Watchdog löst aus und setzt den Sicherstrom
+    plant.follow = False
+    state["wallbox.evcs.gx_set_current_a"] = 6
+    run(rt, clock, 40)  # drei Prüfungen im Abstand von 10 s fänden die „fremde“ Änderung
+    assert "watchdog.tripped" in alarm_ids(rt)
+    assert "competitor.foreign.wallbox.evcs" not in alarm_ids(rt)
+    assert actuator_health(rt, "wallbox.evcs")["locked"] == []
+
+
+@pytest.mark.parametrize(
+    ("watchdog_state", "foreign"), [(1, True), (2, False)], ids=["armed", "tripped"]
+)
+async def test_watchdog_trip_forgets_the_expectations_of_victron(
+    runtime_env, watchdog_state, foreign
+) -> None:
+    plant = Plant(watchdog_state=1)
+    state = GOOD_STATE | {"ess.override.setpoint": None}  # kein Override aktiv
+    rt, clock = live_evcs(runtime_env, plant=plant, state=state)
+    run(rt, clock, 33)
+    rt.foreign.expect("victron", CommandKind.GRID_SETPOINT, 100.0)  # an Stelle eines Befehls
+    plant.watchdog_state = watchdog_state  # ausgelöst: Der Watchdog hebt den Override auf
+    run(rt, clock, 40)
+    assert ("competitor.foreign.victron" in alarm_ids(rt)) is foreign

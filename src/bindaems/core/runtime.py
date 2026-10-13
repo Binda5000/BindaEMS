@@ -5,9 +5,9 @@ Je Zyklus: Snapshot → abgeleitete Größen → Plausibilität → Flusszuordnu
 Summen → Telemetrie → Rücklesen der Aktoren und der offenen Schreibvorgänge → (alle 10 s)
 Selbstprüfung, mitregelnde Systeme und fremde Änderungen → Eingangsprüfung → (nach jeder
 Prüfung) Sperren → Werte des EMS, Watchdog, wirksame Betriebsarten → Betriebszustand → sicherer
-Zustand, Übergabe und Laderegelung → (beim Start und stündlich) Aufräumen des Entscheidungslogs →
-Stream → Alarme → Heartbeat. Am Ende gehen die Entscheidungen des Zyklus in einem Zug in den
-Spool, auch wenn der Zyklus scheitert.
+Zustand, Übergabe und Laderegelung → Stream → Alarme → Heartbeat. Am Ende gehen die Entscheidungen
+des Zyklus in einem Zug in den Spool, und (beim Start und stündlich) räumt der core das
+Entscheidungslog auf, beides auch dann, wenn der Zyklus scheitert.
 
 Auf Geräte schreibt der core den Heartbeat an den eigenen Watchdog am Cerbo, die Sicherwerte des
 sicheren Zustands und die der Übergabe am Ende des Live-Betriebs (Plan 2b, Präzisierungen 3 und 4)
@@ -21,9 +21,10 @@ bestätigten Strom oder Netz-Sollwert, sperrt das den Aktor wie ein mitregelndes
 Den Heartbeat sendet der core nur, solange er regelt (Präzisierung 2): Ein Victron- oder EVCS-Aktor
 ist im Regelbetrieb live gewünscht oder wird übergeben. Der Zähler kommt nur aus einem fehlerfreien
 Zyklus (Präzisierung 5), in CONTROL, DEGRADED und SAFE oder in OBSERVE zum Scharfschalten, wenn das
-Gate nur noch auf den Watchdog wartet und er das konfigurierte Timeout meldet. Die Freigabe 0 folgt
-erst, wenn kein Victron- oder EVCS-Aktor mehr Werte des EMS hält, und nur, wenn der core in diesem
-Lauf für den Watchdog zuständig war.
+Gate nur noch auf den Watchdog wartet und er das konfigurierte Timeout meldet. Jeder Lauf beginnt
+mit einem anderen Zähler (``heartbeat_start``). Die Freigabe 0 folgt erst, wenn kein Victron- oder
+EVCS-Aktor mehr Werte des EMS hält und für keinen von ihnen ein Schreibvorgang offen ist, und nur,
+wenn der core in diesem Lauf für den Watchdog zuständig war.
 
 Fristen, Limits, Budget, Versuche und Heartbeat laufen auf der Uhr der Safety-Schicht
 (``AnchoredClock``), Messwerte, Viertelstunden und die Zeitpunkte der Entscheidungen auf der
@@ -111,7 +112,7 @@ from bindaems.core.state.derived import Derived, derive
 from bindaems.core.state.plausibility import PlausibilityMonitor, check_grid_counters
 from bindaems.core.state.store import StateStore
 from bindaems.core.telemetry.sampler import TelemetrySampler
-from bindaems.core.watchdog_client.heartbeat import HeartbeatClient
+from bindaems.core.watchdog_client.heartbeat import HeartbeatClient, heartbeat_start
 from bindaems.core.watchdog_client.status import (
     WatchdogState,
     WatchdogStatus,
@@ -161,6 +162,8 @@ _NOT_CHECKED: Final = Capabilities(False)
 _UNCLEAR_RESULTS: Final = frozenset({DecisionResult.ERROR, DecisionResult.TIMEOUT})
 # Bei diesen Familien bestätigt der Befehl selbst (Tessie: ``result: true``), nicht das Rücklesen
 _CONFIRMED_BY_COMMAND: Final = frozenset({"tesla"})
+# Tessie-Signale des Fahrzeugs: Ist eines ``False``, lädt es nicht (schläft, weg, abgesteckt)
+_NOT_CHARGING_SIGNALS: Final = ("online", "at_home", "plugged")
 
 _Key = tuple[str, CommandKind]  # Aktor und Art
 
@@ -217,6 +220,19 @@ def _actuator_json(
     }
 
 
+def _tesla_not_charging(snap: Snapshot, spec: ActuatorSpec) -> bool:
+    """Lädt der Tesla laut Tessie nicht? Dann bekommt er im sicheren Zustand keinen Sicherwert.
+
+    Das gilt für einen Tesla, bei dem ``online``, ``at_home`` oder ``plugged`` mit Qualität ``OK``
+    ``False`` ist: Er schläft, ist nicht zu Hause oder nicht angesteckt. Ein fehlender oder
+    veralteter Wert genügt nicht, denn dann kann er laden. Die Signale heißen wie der Aktor
+    (``vehicle.<k>.online``).
+    """
+    return spec.family == "tesla" and any(
+        snap.ok(f"{spec.id}.{name}") is False for name in _NOT_CHARGING_SIGNALS
+    )
+
+
 def _safe_reasons(snap: Snapshot) -> tuple[str, ...]:
     """Gründe für den sicheren Zustand: veraltete Cerbo-Daten und Inselbetrieb.
 
@@ -254,6 +270,7 @@ class CoreRuntime:
         safety_clock: Clock | None = None,
         mqtt_write: Callable[[str, float | int | None], bool] | None = None,
         http_client: httpx.AsyncClient | None = None,
+        heartbeat_first: int | None = None,
     ) -> None:
         """Die Laufzeit mit Adaptern, Aktoren, Safety-Schicht, Laderegelung und Entscheidungslog.
 
@@ -269,6 +286,9 @@ class CoreRuntime:
         - ``http_client`` ist der gemeinsame HTTP-Client von Wall Connector, Tessie, Tesla-Aktor
           und InfluxDB; ohne ihn legt die Laufzeit beim ersten Bedarf einen an. ``shutdown``
           schließt ihn in beiden Fällen.
+        - ``heartbeat_first`` ist der erste Zähler des Heartbeats. Ohne ihn beginnt jeder Lauf mit
+          einem eigenen Wert aus der Startzeit der Wanduhr (``heartbeat_start``), anders als frühere
+          Läufe und die Zähler 1, 2, 3, … der Probe und des Teil-2-Werkzeugs.
         """
         self._cfg = cfg
         self._secrets = secrets
@@ -294,7 +314,10 @@ class CoreRuntime:
         self.locks = LockManager(cfg.safety.lock_release_s)
         self.operating = OperatingStateMachine()
         send = watchdog_send if watchdog_send is not None else self._send_heartbeat
-        self.heartbeat = HeartbeatClient(send, cfg.victron.watchdog.heartbeat_s)
+        first = (
+            heartbeat_first if heartbeat_first is not None else heartbeat_start(self._clock.now())
+        )
+        self.heartbeat = HeartbeatClient(send, cfg.victron.watchdog.heartbeat_s, first=first)
         intent = self.intents.current
         # Das Gerät eines Aktors, den die gespeicherte Absicht live anfordert, kann noch Werte vom
         # letzten Lauf halten (Plan 2b, Präzisierung 3).
@@ -565,6 +588,9 @@ class CoreRuntime:
     def cycle_once(self) -> None:
         """Ein Regelzyklus; am Ende gehen seine Entscheidungen in den Spool, auch wenn er scheitert.
 
+        Danach räumt der core das Entscheidungslog auf (``_prune_decisions``), ebenfalls auch dann:
+        Ein Zyklus, der dauernd scheitert, ließe es sonst wachsen.
+
         Eine Ausnahme, auch aus einem Aktor, bricht den Zyklus ab und lässt den Heartbeat ausfallen.
         Ob ein Zyklus fehlerfrei war, gilt für ihn allein (Plan 2b, Präzisierung 5): Die
         gescheiterten Schreibvorgänge eines abgebrochenen Zyklus zählen nicht für den nächsten.
@@ -573,6 +599,7 @@ class CoreRuntime:
             self._cycle()
         finally:
             self._flush_decisions()
+            self._prune_decisions(self._clock.now(), self._safety_clock.now())
             self.executor.take_failures()  # Rest eines abgebrochenen Zyklus, sonst schon leer
 
     def _cycle(self) -> None:
@@ -598,7 +625,6 @@ class CoreRuntime:
         self._foreign_alarms = self.foreign.alarms(snow, self._labels)
         self._update_operation(snap, plausibility, now, present, checked=checked)
         self._control(snap, derived, now, snow, present)
-        self._prune_decisions(now, snow)
         state = snapshot_to_json(snap, derived)
         self._last_state = state
         self.broadcast.publish({"type": "state", "data": state})
@@ -892,16 +918,19 @@ class CoreRuntime:
     def _safe_targets(self, snap: Snapshot, state: OperatingState) -> list[SafeTarget]:
         """Die Ziele des sicheren Zustands (Spec 8.4) in der Reihenfolge des Katalogs.
 
-        In SAFE ist das jeder nicht gesperrte Aktor; bei Netzausfall (Inselbetrieb) bekommen EVCS
-        und Tesla zusätzlich „Laden aus“. In den anderen Zuständen gibt es keine Ziele.
+        In SAFE ist das jeder nicht gesperrte Aktor, außer einem Tesla, der laut Tessie nicht lädt
+        (``_tesla_not_charging``): Für ihn gäbe es nur Versuche, die nicht gesendet werden, dazu den
+        Alarm ``actuator.failed`` und Einträge im Rate-Limiter. Bei Netzausfall (Inselbetrieb)
+        bekommen EVCS und Tesla zusätzlich „Laden aus“. In den anderen Zuständen gibt es keine
+        Ziele.
         """
         if state != OperatingState.SAFE:
             return []
         island = number(snap, "system.active_in_source") == ISLAND_SOURCE
         return [
             SafeTarget(actuator, "safe_state", stop_charging=island)
-            for actuator in self.limits.actuators
-            if actuator not in self._active_locks
+            for actuator, spec in self.limits.actuators.items()
+            if actuator not in self._active_locks and not _tesla_not_charging(snap, spec)
         ]
 
     def _heartbeat(self, snow: datetime) -> None:
@@ -920,7 +949,9 @@ class CoreRuntime:
           core, und der core hielte ihn aus OBSERVE heraus endlos am Leben. So bleibt der Zähler
           aus, ein scharfer Watchdog löst aus, und der Alarm ``watchdog.timeout`` nennt die Abhilfe.
         - **Die Freigabe 0** nur, wenn kein Victron- oder EVCS-Aktor mehr Werte des EMS hält
-          (Präzisierung 3) und der core in diesem Lauf für den Watchdog zuständig ist: ab dem
+          (Präzisierung 3), für keinen von ihnen ein Schreibvorgang offen ist, gleich ob ihn der
+          Keeper oder die Laderegelung sendete (Design 4.5: Er könnte sonst nach der Freigabe am
+          Gerät ankommen), und der core in diesem Lauf für den Watchdog zuständig ist: ab dem
           ersten Bedarf oder dem ersten owned Victron- oder EVCS-Aktor, auch beim Start. Eine Probe
           oder das Teil-2-Werkzeug machen den Watchdog mit eigenen Heartbeats scharf und lösen ihn
           aus, während der core im Dry-Run läuft; ein core, der nie zuständig war, gibt ihn nicht
@@ -928,6 +959,7 @@ class CoreRuntime:
         """
         failures = self.executor.take_failures()
         owned = self.ownership.owned & self._needs_watchdog
+        writing = any(actuator in self._needs_watchdog for actuator, _ in self.executor.pending())
         if self._watchdog_required or owned:
             self._responsible = True
         failed_write = any(write.actuator in self._needs_watchdog for write in failures)
@@ -945,7 +977,7 @@ class CoreRuntime:
             snow,
             required=self._watchdog_required,
             allowed=cycle_ok and (state in _WRITING_STATES or arming),
-            release_allowed=self._responsible and not owned,
+            release_allowed=self._responsible and not owned and not writing,
             watchdog=self._watchdog.state,
             echo=self._watchdog.heartbeat,
         )
@@ -968,10 +1000,12 @@ class CoreRuntime:
     def _prune_decisions(self, now: datetime, snow: datetime) -> None:
         """Räumt das Entscheidungslog im ersten Zyklus und danach stündlich auf.
 
-        Die Stunde zählt auf der Uhr der Safety-Schicht (``snow``): Ein Sprung der Wanduhr häuft
-        das Aufräumen nicht und setzt es nicht aus. Das Alter der Tagesdateien misst der Spool an
-        der Wanduhr (``now``), denn nach ihr sind die Entscheidungen datiert. Ein Fehler kommt ins
-        Log und unterbricht den Zyklus nicht; der nächste Versuch folgt eine Stunde später.
+        ``cycle_once`` ruft es nach dem Flush der Entscheidungen auf, auch nach einem gescheiterten
+        Zyklus. Die Stunde zählt auf der Uhr der Safety-Schicht (``snow``): Ein Sprung der Wanduhr
+        häuft das Aufräumen nicht und setzt es nicht aus. Das Alter der Tagesdateien misst der
+        Spool an der Wanduhr (``now``), denn nach ihr sind die Entscheidungen datiert. Ein Fehler
+        kommt ins Log und unterbricht den Zyklus nicht; der nächste Versuch folgt eine Stunde
+        später.
         """
         last = self._last_prune
         if last is not None and snow - last < PRUNE_INTERVAL:
@@ -1025,6 +1059,10 @@ class CoreRuntime:
           Watchdog; beim Tesla bleibt der Alarm, bis sein Strom stimmt oder er wieder live
           gewünscht ist.
 
+        Meldet der Watchdog „ausgelöst“, vergisst die Laufzeit in jedem Zyklus die Erwartungen der
+        Erkennung fremder Änderungen für Victron und EVCS (``_forget``): Was er setzt, ist keine
+        fremde Änderung (Design 10). Neue Erwartungen entstehen erst wieder aus bestätigten Werten.
+
         Scharf zählt der Watchdog nur für diesen core (``armed_for_core``): mit dem Echo eines
         eigenen Zählers und dem erwarteten Timeout. Den Watchdog braucht der Betrieb, solange ein
         Victron- oder EVCS-Aktor im Regelbetrieb live gewünscht ist oder übergeben wird
@@ -1044,6 +1082,9 @@ class CoreRuntime:
             self.charger.forget({actuator})
         intent = self.intents.current
         self._watchdog = read_watchdog(snap)
+        if self._watchdog.state is WatchdogState.TRIPPED:
+            for actuator in self._needs_watchdog:
+                self._forget(actuator)
         self._watchdog_armed = armed_for_core(
             self._watchdog, self.heartbeat.recent, self._cfg.victron.watchdog.timeout_s
         )

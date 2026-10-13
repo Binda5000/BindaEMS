@@ -1,11 +1,11 @@
 from collections.abc import Callable, Iterable
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from tests.helpers import T0
 
-from bindaems.core.watchdog_client.heartbeat import HEARTBEAT_MAX, HeartbeatClient
-from bindaems.core.watchdog_client.status import WatchdogState
+from bindaems.core.watchdog_client.heartbeat import HEARTBEAT_MAX, HeartbeatClient, heartbeat_start
+from bindaems.core.watchdog_client.status import WatchdogState, WatchdogStatus, armed_for_core
 
 S = lambda s: T0 + timedelta(seconds=s)  # noqa: E731
 
@@ -439,3 +439,105 @@ def test_recent_follows_the_wrap() -> None:
     client.on_cycle(S(0), required=True)
     client.on_cycle(S(10), required=True)
     assert (sent, client.recent) == ([HEARTBEAT_MAX, 1], (HEARTBEAT_MAX, 1))
+
+
+# --- Startwert je Lauf ------------------------------------------------------------------------
+
+
+def test_start_value_differs_per_run() -> None:
+    noon = datetime(2026, 10, 12, 12, 0, tzinfo=UTC)
+    assert heartbeat_start(noon) == 792_806_400
+    assert heartbeat_start(noon + timedelta(seconds=1)) == 792_806_401
+    assert 1_000_000 <= heartbeat_start(datetime(2100, 1, 1, tzinfo=UTC)) <= HEARTBEAT_MAX
+
+
+def test_start_value_stays_above_the_counters_of_the_tools_and_below_the_maximum() -> None:
+    # Die Probe und das Teil-2-Werkzeug zählen 1, 2, 3, …; der Startwert beginnt erst bei 1 000 000.
+    assert heartbeat_start(datetime.fromtimestamp(0, UTC)) == 1_000_000
+    assert heartbeat_start(datetime.fromtimestamp(999_999_999, UTC)) == 1_000_999_999
+    assert heartbeat_start(datetime.fromtimestamp(1_000_000_000, UTC)) == 1_000_000  # wieder unten
+
+
+# --- Eine bestätigte Freigabe lässt den core seine Zähler vergessen ---------------------------
+
+
+def test_confirmed_release_forgets_own_counters() -> None:
+    sent: list[int] = []
+    client = HeartbeatClient(lambda v: sent.append(v) or True, 10.0, first=5)
+    for s in (0, 10, 20):
+        client.on_cycle(S(s), required=True)
+    assert client.recent == (5, 6, 7)
+    client.on_cycle(S(30), required=False, watchdog=WatchdogState.ARMED, echo=7)
+    assert client.recent == (5, 6, 7)  # Freigabe gesendet, noch nicht bestätigt
+    client.on_cycle(S(31), required=False, watchdog=WatchdogState.WAITING, echo=0)
+    assert client.recent == ()
+
+
+@pytest.mark.parametrize(
+    ("watchdog", "echo"),
+    [
+        (WatchdogState.WAITING, None),  # „wartet“ genügt, auch ohne bekanntes Echo
+        (WatchdogState.WAITING, 3),
+        (WatchdogState.ARMED, 0),  # das Echo 0 genügt, gleich was der Zustand sagt
+    ],
+)
+def test_the_release_is_confirmed_by_waiting_or_by_echo_zero(
+    watchdog: WatchdogState, echo: int | None
+) -> None:
+    _, client = _released_with_counters_1_to_3()
+    client.on_cycle(S(22), required=False, watchdog=watchdog, echo=echo)
+    assert client.recent == ()
+
+
+@pytest.mark.parametrize(
+    ("watchdog", "echo"),
+    [
+        (WatchdogState.ARMED, 3),  # noch der letzte Zähler: die 0 ging vielleicht verloren
+        (WatchdogState.ARMED, None),
+        (WatchdogState.TRIPPED, 3),
+        (WatchdogState.DISABLED, None),
+        (WatchdogState.UNKNOWN, None),
+    ],
+)
+def test_an_unconfirmed_release_keeps_the_counters(
+    watchdog: WatchdogState, echo: int | None
+) -> None:
+    _, client = _released_with_counters_1_to_3()
+    client.on_cycle(S(22), required=False, watchdog=watchdog, echo=echo)
+    assert client.recent == (1, 2, 3)
+
+
+def test_the_state_seen_with_the_release_does_not_confirm_it() -> None:
+    # Der Zustand, den der Zyklus kennt, in dem die 0 hinausgeht, stammt von davor.
+    sent, client = recording(10.0)
+    client.on_cycle(S(0), required=True)
+    client.on_cycle(S(1), required=False, watchdog=WatchdogState.WAITING, echo=0)
+    assert (sent, client.recent) == ([1, 0], (1,))
+    client.on_cycle(S(2), required=False, watchdog=WatchdogState.WAITING, echo=0)
+    assert client.recent == ()
+
+
+def test_waiting_does_not_confirm_a_release_that_was_never_sent() -> None:
+    # Beim Scharfschalten meldet der Watchdog „wartet“, während die Zähler schon hinausgehen.
+    _, client = recording(10.0)
+    for s in (0, 10, 20):
+        client.on_cycle(S(s), required=True, watchdog=WatchdogState.WAITING, echo=0)
+    assert client.recent == (1, 2, 3)
+
+
+def test_counting_goes_on_after_a_confirmed_release() -> None:
+    sent, client = recording(10.0)
+    client.on_cycle(S(0), required=True)
+    client.on_cycle(S(1), required=False)
+    client.on_cycle(S(2), required=False, watchdog=WatchdogState.WAITING, echo=0)
+    client.on_cycle(S(3), required=True)
+    assert (sent, client.recent) == ([1, 0, 2], (2,))
+
+
+def test_after_a_confirmed_release_the_old_counters_arm_nothing_for_this_core() -> None:
+    # Die Probe macht den Watchdog nach der Freigabe mit 1, 2, 3, … scharf: Das ist nicht der core.
+    _, client = _released_with_counters_1_to_3()
+    probe = WatchdogStatus(WatchdogState.ARMED, None, None, None, None, heartbeat=2, timeout_s=90)
+    assert armed_for_core(probe, client.recent, 90.0) is True  # solange die Freigabe offen ist
+    client.on_cycle(S(22), required=False, watchdog=WatchdogState.WAITING, echo=0)
+    assert armed_for_core(probe, client.recent, 90.0) is False

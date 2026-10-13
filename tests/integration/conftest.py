@@ -50,6 +50,12 @@ def allow_evcs_live(cfg: Config) -> Config:
     return cfg.model_copy(update={"wallboxes": cfg.wallboxes | {"evcs": evcs}})
 
 
+def allow_tesla_live(cfg: Config) -> Config:
+    """Die Konfiguration mit ``live_allowed`` für das Fahrzeug „tesla“."""
+    tesla = cfg.vehicles["tesla"].model_copy(update={"live_allowed": True})
+    return cfg.model_copy(update={"vehicles": cfg.vehicles | {"tesla": tesla}})
+
+
 def live_evcs(runtime_env, *, plant: Plant, state: dict, **kw: Any):
     """Laufzeit an der Anlage ``plant`` mit der Absicht „Regelbetrieb an, EVCS live“."""
     rt, _, clock = runtime_env(
@@ -83,7 +89,8 @@ def runtime_env(
 
         Die Uhr der Safety-Schicht ist dieselbe ``ManualClock`` wie die Wanduhr, sofern der Test
         nicht selbst eine ``safety_clock`` übergibt. Ohne ``tessie_token`` ist Tessie für den
-        Tesla nie erreichbar.
+        Tesla nie erreichbar. Der Heartbeat beginnt bei 1 (``heartbeat_first``), damit die Tests
+        ihre Zähler 1, 2, … behalten; ``heartbeat_first=None`` gibt den Startwert des Laufs.
         """
         clock = ManualClock(datetime.fromisoformat(start))
         sink = FakeSink()
@@ -93,6 +100,7 @@ def runtime_env(
         core = cfg.core.model_copy(update={"data_dir": tmp_path / "core"})
         local = cfg.model_copy(update={"core": core})
         kwargs.setdefault("safety_clock", clock)
+        kwargs.setdefault("heartbeat_first", 1)
         rt = CoreRuntime(
             configure(local) if configure is not None else local,
             secrets,
