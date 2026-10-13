@@ -12,6 +12,7 @@ from tests.helpers import T0
 from tests.integration.conftest import GOOD_STATE, allow_evcs_live, live_evcs, run
 from tests.integration.plant import Plant
 
+from bindaems.core.control.charging import ChargeController
 from bindaems.shared.control import ActuatorMode, ChargeMode, CommandKind, Intent, VehicleIntent
 from bindaems.shared.decisions import Decision, DecisionResult
 
@@ -104,8 +105,9 @@ async def test_live_evcs_follows_the_surplus(runtime_env) -> None:
     ]
 
 
-def evcs_writes(plant: Plant) -> list[tuple[str, float | int | None]]:
-    return [write for write in plant.writes if write[0].startswith("evcharger/")]
+def evcs_writes(plant: Plant, since: int = 0) -> list[tuple[str, float | int | None]]:
+    """Die Schreibaufträge an die EVCS ab dem Auftrag Nummer ``since``."""
+    return [write for write in plant.writes[since:] if write[0].startswith("evcharger/")]
 
 
 START = [("evcharger/40/SetCurrent", 10), ("evcharger/40/StartStop", 1)]
@@ -168,7 +170,8 @@ async def test_the_safety_context_knows_the_wallbox_of_each_vehicle(
     monkeypatch.setattr(rt.executor, "execute", spy)
     rt.submit_intent(Intent(version=1, control=True))
     run(rt, clock, 31)  # erster Regelzyklus bei 30 s: „Laden aus“, die EVCS hat es schon
-    assert seen == [{"vehicle.tesla": "twc"}]  # der e-Golf hat keinen eigenen Aktor
+    assert seen  # der e-Golf hat keinen eigenen Aktor, der Tesla hängt am Wall Connector
+    assert all(entry == {"vehicle.tesla": "twc"} for entry in seen)
 
 
 async def test_a_sleeping_tesla_gets_a_wake_start(runtime_env) -> None:
@@ -260,6 +263,79 @@ async def test_handback_gets_no_charging_commands(runtime_env) -> None:
     assert after == [(CommandKind.CHARGING, False, DecisionResult.DRY_RUN, ("mode_off",))]
 
 
+async def test_after_the_handback_the_dry_run_decides_the_wish_again(runtime_env) -> None:
+    plant = Plant(watchdog_state=1)
+    rt, clock = live_evcs(runtime_env, plant=plant, state=dict(EGOLF_PLUGGED), extra=SURPLUS)
+    run(rt, clock, 32 + 121)  # Start bei 151 s mit 10 A und „Laden an“, bestätigt bei 152 s
+    since = clock.now() - timedelta(microseconds=1)
+    rt.submit_intent(Intent(version=2, control=True))  # EVCS im Dry-Run: Übergabe
+    run(rt, clock, 6)  # 6 A bei 153 s, zurückgelesen bei 154 s; Mindestabstand 5 s
+    assert actuator_health(rt, "wallbox.evcs")["owned"] is False
+    found = [
+        (d.kind, d.requested, d.result, d.codes)
+        for d in rt.decisions(since, 1000)[0]
+        if "handback" not in d.codes
+    ]  # „Laden an“ hat die EVCS schon: UNCHANGED
+    assert found == [(CommandKind.CURRENT, 10.0, DecisionResult.DRY_RUN, ("mode_pv", "pv_surplus"))]
+
+
+async def test_rearming_during_a_handback_sends_the_wish_again(runtime_env) -> None:
+    plant = Plant(watchdog_state=1)
+    state = dict(EGOLF_PLUGGED)
+    rt, clock = live_evcs(runtime_env, plant=plant, state=state, extra=SURPLUS)
+    run(rt, clock, 32 + 121)  # Start bei 151 s mit 10 A, bestätigt bei 152 s
+    state |= {"wallbox.evcs.gx_set_current_a": 10, "wallbox.evcs.gx_start_stop": 1}
+    plant.follow = False  # die EVCS übernimmt den Sicherwert erst später
+    rt.submit_intent(Intent(version=2, control=True))  # EVCS im Dry-Run: Übergabe, 6 A offen
+    run(rt, clock, 1)
+    live = {"wallbox.evcs": ActuatorMode.LIVE}
+    rt.submit_intent(Intent(version=3, control=True, actuators=live))  # wieder live, noch offen
+    run(rt, clock, 1)
+    state["wallbox.evcs.gx_set_current_a"] = 6  # die EVCS zeigt den Sicherwert des Keepers
+    mark = len(plant.writes)
+    run(rt, clock, 5)  # Mindestabstand 5 s seit den 6 A
+    assert evcs_writes(plant, mark) == [("evcharger/40/SetCurrent", 10)]
+
+
+async def test_after_a_foreign_takeover_the_regulation_sends_again(runtime_env) -> None:
+    plant = Plant(watchdog_state=1)
+    state = dict(EGOLF_PLUGGED)
+    rt, clock = live_evcs(runtime_env, plant=plant, state=state, extra=SURPLUS)
+    run(rt, clock, 32 + 121)  # Start bei 151 s mit 10 A, bestätigt bei 152 s: ab jetzt erwartet
+    state |= {"wallbox.evcs.gx_set_current_a": 16, "wallbox.evcs.gx_start_stop": 1}
+    plant.follow = False  # ein anderes System stellt 16 A ein
+    mark = len(plant.writes)
+    run(rt, clock, 28)  # die dritte Prüfung bei 180 s erkennt es: gesperrt, nicht mehr owned
+    assert actuator_health(rt, "wallbox.evcs")["owned"] is False
+    run(rt, clock, 120)  # die Sperre fällt bei 300 s
+    assert evcs_writes(plant, mark) == [("evcharger/40/SetCurrent", 10)]
+
+
+async def test_an_error_in_the_regulation_costs_the_keeper_no_attempt(
+    runtime_env, monkeypatch
+) -> None:
+    plant = Plant(watchdog_state=1)
+    rt, clock = live_evcs(runtime_env, plant=plant, state=dict(EGOLF_PLUGGED), extra=SURPLUS)
+    run(rt, clock, 32 + 121)  # Start bei 151 s, bestätigt bei 152 s: Die EVCS hält Werte des EMS
+
+    def broken(self, inputs):
+        raise RuntimeError("Testfehler in der Regelung")
+
+    rt.submit_intent(Intent(version=2, control=True))  # EVCS im Dry-Run: Übergabe
+    with monkeypatch.context() as patch:
+        patch.setattr(ChargeController, "step", broken)
+        for _ in range(35):  # länger als die drei Versuche des Keepers
+            with pytest.raises(RuntimeError, match="in der Regelung"):
+                rt.cycle_once()
+            clock.advance(1)
+    assert evcs_writes(plant) == START  # kein Sicherwert, solange der Zyklus scheitert
+    run(rt, clock, 2)  # die Regelung geht wieder: 6 A gesendet, dann zurückgelesen
+    assert evcs_writes(plant) == [*START, ("evcharger/40/SetCurrent", 6)]
+    assert not rt.keeper.failed
+    assert not [a for a in rt.health().alarms if a["id"].startswith("actuator.failed.")]
+    assert actuator_health(rt, "wallbox.evcs")["owned"] is False  # übergeben
+
+
 async def test_health_lists_vehicles(runtime_env) -> None:
     rt, _, clock = runtime_env(state=EGOLF_PLUGGED, extra=SURPLUS)
     rt.submit_intent(Intent(version=1, control=True))
@@ -307,7 +383,7 @@ async def test_a_given_http_client_is_the_shared_one(runtime_env) -> None:
     client = httpx.AsyncClient(transport=httpx.MockTransport(answer))
     rt, _, _ = runtime_env(http_client=client, tessie_token="t")
     assert rt.actuators["vehicle.tesla"].send(CommandKind.CURRENT, 10.0) is None
-    await asyncio.sleep(0.01)  # der Befehl läuft im Hintergrund
+    await asyncio.wait(asyncio.all_tasks() - {asyncio.current_task()})  # der Befehl im Hintergrund
     assert requests == ["/5YJ3E7EB0MF000000/command/set_charging_amps"]
     await rt.shutdown()
     assert client.is_closed  # der gemeinsame Client schließt mit der Laufzeit

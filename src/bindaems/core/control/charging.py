@@ -28,8 +28,9 @@ den Wert schon hat:
   wenn ein gemerkter Vorgang die Maschine erreicht; jedes davon geschieht einmal,
 - mit jeder höheren Stufe der Überlast für alle geregelten Aktoren: Jede Stufe bietet ihre
   Reaktion einmal an,
-- für die Aktoren, die ``forget`` nennt; die Laufzeit tut das beim Wechsel der wirksamen
-  Betriebsart (Dry-Run ↔ live), denn ein Dry-Run-Urteil zählte sonst als gesendet.
+- für die Aktoren, die ``forget`` nennt: Die Laufzeit tut das beim Wechsel der wirksamen
+  Betriebsart (Dry-Run ↔ live), denn ein Dry-Run-Urteil zählte sonst als gesendet, nach einem
+  Wert des Keepers und wenn ein anderes System den Aktor übernimmt.
 
 Nach „nicht übernommen“ fordert die Regelung den Wert als normalen Befehl erneut an
 (``not_taken_retry``, Design 7.2): Er wartet auf die 90-s-Regel und die Stundenlimits, auch wenn er
@@ -496,9 +497,10 @@ class ChargeController:
         """Vergisst die letzten eigenen Werte und die Merker ``not_taken_retry`` dieser Aktoren.
 
         Der nächste ``step`` bietet ihnen den Wunsch wieder an; hat das Gerät den Wert schon,
-        antwortet die Safety-Schicht ``UNCHANGED``. Die Laufzeit ruft das, wenn die wirksame
-        Betriebsart eines Aktors wechselt (Dry-Run ↔ live): Ein Dry-Run-Urteil zählte sonst als
-        gesendet.
+        antwortet die Safety-Schicht ``UNCHANGED``. Die Laufzeit ruft das, wo der letzte eigene Wert
+        nicht mehr gilt: beim Wechsel der wirksamen Betriebsart (Dry-Run ↔ live), denn ein
+        Dry-Run-Urteil zählte sonst als gesendet, und wenn sich das Gerät ohne die Regelung ändert
+        (ein Wert des Keepers, ein anderes System übernimmt den Aktor).
         """
         self._last.forget(actuators)
 

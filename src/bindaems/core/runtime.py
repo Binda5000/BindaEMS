@@ -698,16 +698,21 @@ class CoreRuntime:
         """Sicherer Zustand und Übergabe (Plan 2b, Präzisierungen 3 und 4), dann die Laderegelung.
 
         ``snow`` ist die Zeit der Safety-Schicht, ``now`` die Wanduhr, ``present`` das Rücklesen
-        dieses Zyklus. Die Reihenfolge folgt Design 4.2:
+        dieses Zyklus. Ausgeführt wird in der Reihenfolge von Design 4.2, berechnet in dieser:
 
-        1. Die Fähigkeiten aller Aktoren.
-        2. Die Befehle des ``SafeStateKeeper`` (``_keeper_commands``).
-        3. Die Befehle der Laderegelung (``_charge_commands``); ohne Regelung ruht sie.
+        1. Die Fähigkeiten aller Aktoren. Für jeden Aktor, dessen wirksame Betriebsart wechselte
+           (``_switched_modes``), vergisst die Regelung ihre letzten Werte.
+        2. Die Befehle der Laderegelung (``_charge_commands``); ohne Regelung ruht sie.
+        3. Erst danach die des ``SafeStateKeeper`` (``_keeper_commands``): Er zählt einen Versuch
+           schon beim Berechnen. Ein Fehler in der Regelung bricht den Zyklus so ab, bevor er
+           einen Versuch verbraucht.
         4. Ein ``SafetyContext`` für alle Befehle, mit der Wallbox je Fahrzeug aus der Zuordnung
            der Laderegelung (``vehicle_wallbox``).
         5. Erst die Befehle des Keepers, dann die der Regelung gehen an den Ausführer und damit
-           durch die Safety-Schicht (``_execute``). Die der Regelung schreiben zu den Eingaben jeder
-           Entscheidung ihre eigenen ins Log: Überschuss, Grenze des Wächters und Ist-Werte.
+           durch die Safety-Schicht (``_execute``). Übergibt der Ausführer einen Wert des Keepers,
+           vergisst die Regelung ihre Werte für diesen Aktor: Das Gerät ändert sich ohne sie. Die
+           Befehle der Regelung schreiben zu den Eingaben jeder Entscheidung ihre eigenen ins Log:
+           Überschuss, Grenze des Wächters und Ist-Werte.
         6. Jedes Urteil über einen Befehl der Regelung geht an sie zurück (``note_verdict``), auch
            ``None``. ``not_sent`` heißt: Das Urteil ließ senden, aber danach ist kein
            Schreibvorgang offen.
@@ -720,8 +725,9 @@ class CoreRuntime:
             actuator_id: actuator.capabilities(snap, snow)
             for actuator_id, actuator in self.actuators.items()
         }
-        keeper = self._keeper_commands(snap, snow, present)
+        self.charger.forget(self._switched_modes())
         charging = self._charge_commands(snap, derived, now, snow, present, capabilities)
+        keeper = self._keeper_commands(snap, snow, present)
         if keeper or charging:
             ctx = safety_context(
                 now=snow,
@@ -737,7 +743,8 @@ class CoreRuntime:
             )
             inputs = decision_inputs(snap, derived.phase_import_a)
             for command in keeper:
-                self._execute(command, ctx, snap, now, inputs)
+                if self._execute(command, ctx, snap, now, inputs)[1]:
+                    self.charger.forget({command.actuator})
             for charge in charging:
                 command = charge.command
                 verdict, sent = self._execute(command, ctx, snap, now, {**inputs, **charge.inputs})
@@ -747,6 +754,18 @@ class CoreRuntime:
         self._pending = self.executor.pending()
         self._owned = self.ownership.owned
         self._vehicle_health = self.charger.health()
+
+    def _switched_modes(self) -> set[str]:
+        """Die Aktoren, deren wirksame Betriebsart seit dem letzten Zyklus gewechselt hat.
+
+        Gemerkt wird in jedem Zyklus, auch ohne Regelung. Ein Wechsel (Dry-Run ↔ live) heißt für
+        die Regelung: Ein Dry-Run-Urteil gilt nicht als gesendet, sonst ginge nach dem
+        Scharfschalten etwa „Laden an“ erst mit der nächsten Änderung des Wunsches hinaus.
+        """
+        effective = {actuator: mode.effective for actuator, mode in self._modes.items()}
+        switched = {a for a, mode in effective.items() if self._effective.get(a, mode) != mode}
+        self._effective = effective
+        return switched
 
     def _keeper_commands(
         self, snap: Snapshot, snow: datetime, present: Mapping[_Key, CommandValue]
@@ -783,21 +802,11 @@ class CoreRuntime:
         jedem anderen Zyklus ruht sie (``idle`` mit der Zeit der Safety-Schicht): in START,
         OBSERVE und SAFE, ohne Absicht und bei ausgeschaltetem Regelbetrieb, auch während der
         Übergabe danach.
-
-        Wechselt die wirksame Betriebsart eines Aktors gegenüber dem letzten Zyklus (Dry-Run ↔
-        live), vergisst die Regelung vor ``step`` ihre letzten Werte für ihn: Ein Dry-Run-Urteil
-        zählte sonst als gesendet, und nach dem Scharfschalten ginge etwa „Laden an“ erst mit der
-        nächsten Änderung des Wunsches hinaus. Die Betriebsarten merkt sich die Laufzeit in jedem
-        Zyklus, auch ohne Regelung; ``idle`` vergisst ohnehin alles.
         """
         intent = self.intents.current
-        effective = {actuator: mode.effective for actuator, mode in self._modes.items()}
-        switched = {a for a, mode in effective.items() if self._effective.get(a, mode) != mode}
-        self._effective = effective
         if self.operating.state not in _CHARGING_STATES or intent is None or not intent.control:
             self.charger.idle(snow)
             return []
-        self.charger.forget(switched)
         return self.charger.step(
             self._charge_inputs(snap, derived, now, snow, present, capabilities, intent)
         )
@@ -1002,9 +1011,11 @@ class CoreRuntime:
         - Ein gesperrter Aktor, den nachweislich ein anderes System regelt
           (``controlled_elsewhere``: ein Alarm ``competitor.*`` oder ein Prüfpunkt mit ``fail``),
           hält ab sofort keine Werte des EMS mehr und wird nicht übergeben; seine Beobachtung
-          endet. Eine Sperre nur wegen eines nicht lesbaren Prüfpunkts (``unknown``) lässt ihn
-          owned, etwa im ersten Zyklus ohne Daten: Sein Gerät kann noch Werte des EMS halten.
-          Seine Übergabe lehnt dann die Sperre ab, und der Watchdog übernimmt.
+          endet, und die Laderegelung vergisst ihre letzten Werte für ihn (``charger.forget``):
+          Sein Gerät ändert sich ohne sie. Eine Sperre nur wegen eines nicht lesbaren Prüfpunkts
+          (``unknown``) lässt ihn owned, etwa im ersten Zyklus ohne Daten: Sein Gerät kann noch
+          Werte des EMS halten. Seine Übergabe lehnt dann die Sperre ab, und der Watchdog
+          übernimmt.
         - Ein owned Aktor, der nicht mehr live gewünscht ist, wird übergeben. Zeigt er seine
           Sicherwerte, ist er übergeben, auch wenn der Watchdog sie gesetzt hat, und seine
           Beobachtung endet. Das gilt in jedem Zustand und vor dem Bedarf: Sonst ginge in diesem
@@ -1030,6 +1041,7 @@ class CoreRuntime:
         taken = self._controlled_elsewhere.intersection(self._active_locks)
         for actuator in self.ownership.drop(taken):
             self._forget(actuator)
+            self.charger.forget({actuator})
         intent = self.intents.current
         self._watchdog = read_watchdog(snap)
         self._watchdog_armed = armed_for_core(
