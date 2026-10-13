@@ -833,3 +833,55 @@ def test_an_override_to_the_wall_connector_regulates_the_tesla_as_usual(cfg) -> 
         Command("vehicle.tesla", CURRENT, 11.0, urgent=True, reasons=reasons),
         Command("vehicle.tesla", CHARGING, True, reasons=reasons),
     ]
+
+
+# Nachbesserung: Der erneute Befehl nach „nicht übernommen“ ist normal (Design 7.2)
+
+
+def not_taken(c: ChargeController, amps: float, reported: float) -> None:
+    c.note_result(
+        WriteResult(
+            "vehicle.tesla",
+            CURRENT,
+            amps,
+            DecisionResult.ERROR,
+            f"Fahrzeug übernahm {amps:.0f} A nicht (Tessie meldet {reported:.0f} A).",
+            not_taken=True,
+        )
+    )
+
+
+def test_a_lowering_at_the_fuse_is_retried_as_a_normal_command(cfg) -> None:
+    # Sofort: frei 33 − (41 − 16) = 8; die Senkung unter den Ist-Strom ist dringend. Übernimmt das
+    # Fahrzeug sie nicht, wartet der erneute Befehl wie jeder normale auf die 90-s-Regel.
+    c = controller(cfg)
+    lowered = {**TESLA_CHARGING, "grid_obs": grid(l1=41.0)}
+    first = c.step(tesla_inputs(cfg, 0, **lowered))
+    accept(c, first)
+    assert first[0].command == Command(
+        "vehicle.tesla", CURRENT, 8.0, urgent=True, reasons=("mode_now", "phase_limit")
+    )
+    not_taken(c, 8.0, 16.0)
+    again = c.step(tesla_inputs(cfg, 1, **lowered))
+    assert [x.command for x in again] == [
+        Command(
+            "vehicle.tesla", CURRENT, 8.0, reasons=("mode_now", "phase_limit", "not_taken_retry")
+        )
+    ]
+
+
+def test_a_not_taken_overload_minimum_is_retried_normally_and_the_stop_stays_urgent(cfg) -> None:
+    # L1 liegt über der Sicherung: Mindeststrom bei 3 (MINIMUM), nicht übernommen. Der erneute
+    # Befehl bei 4 ist normal; die Überlast eskaliert weiter, bis „Laden aus“ bei 10 (ALL_STOP).
+    c = controller(cfg)
+    over = {**TESLA_CHARGING, "grid_obs": grid(l1=36.0)}
+    found = steps(c, cfg, range(4), make=tesla_inputs, **over)
+    not_taken(c, 5.0, 13.0)
+    found += steps(c, cfg, range(4, 11), make=tesla_inputs, **over)
+    reasons = ("mode_now", "overload")
+    assert [(t, x) for t, x in of(found, "vehicle.tesla") if "overload" in x.reasons] == [
+        (3, Command("vehicle.tesla", CURRENT, 5.0, urgent=True, reasons=reasons)),
+        (4, Command("vehicle.tesla", CURRENT, 5.0, reasons=(*reasons, "not_taken_retry"))),
+        (6, Command("vehicle.tesla", CURRENT, 5.0, urgent=True, reasons=reasons)),  # EVCS_STOP
+        (10, Command("vehicle.tesla", CHARGING, False, urgent=True, reasons=reasons)),
+    ]

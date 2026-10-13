@@ -29,6 +29,11 @@ den Wert schon hat:
 - mit jeder höheren Stufe der Überlast für alle geregelten Aktoren: Jede Stufe bietet ihre
   Reaktion einmal an.
 
+Nach „nicht übernommen“ fordert die Regelung den Wert als normalen Befehl erneut an
+(``not_taken_retry``, Design 7.2): Er wartet auf die 90-s-Regel und die Stundenlimits, auch wenn er
+sonst dringend wäre (Präzisierung 11). Dringend bleibt das „Laden aus“ der Überlast, eine andere
+Art: „Nicht übernommen“ meldet nur der Strom des Tesla.
+
 Tesla, Zuordnung und Wiederaufnahme (Design 7 bis 9; die Bausteine stehen in ``charging_tesla``):
 
 - Ein Fahrzeug mit Tessie am Wall Connector bekommt ``floor(min(Mittel des Wunsches, niedrigster
@@ -457,7 +462,7 @@ class ChargeController:
         ``ERROR``, ``TIMEOUT`` und ``NOT_SENT`` löschen den letzten eigenen Wert dieser Art, aber
         nur, wenn er dem Ergebnis entspricht: Befehle des Keepers mit anderem Wert bleiben ohne
         Wirkung. Trägt das Ergebnis ``not_taken``, nennt der nächste Befehl dieser Art zusätzlich
-        ``not_taken_retry``.
+        ``not_taken_retry`` und ist normal, nie dringend (Design 7.2).
         """
         self._last.finished(result)
 
@@ -750,8 +755,10 @@ class ChargeController:
         stoppt sie auch seinen Modus (``force_stop``), damit danach die Mindestpause gilt. Ab
         ``MINIMUM`` stoppt sie dringend auch ein Auto, das lädt, obwohl sein Modus aus will (etwa
         selbst gestartet), außer solange die Zuordnung unklar ist. Beides gilt auch bei unbekanntem
-        Ansteckzustand. Ein Aktor, der nicht steuerbar ist (geregelt ist er dann nur, weil er
-        weckbar ist), bekommt höchstens den Weckstart.
+        Ansteckzustand. Dringend sind die Befehle wegen Überlast und eine Senkung unter den
+        Ist-Strom, wenn das Ziel die Sicherung ist (Präzisierung 11), außer als erneuter Befehl
+        nach „nicht übernommen“ (``_command``). Ein Aktor, der nicht steuerbar ist (geregelt ist
+        er dann nur, weil er weckbar ist), bekommt höchstens den Weckstart.
         """
         level = situation.level
         stop = level >= OverloadLevel.ALL_STOP or (point.evcs and level >= OverloadLevel.EVCS_STOP)
@@ -895,9 +902,17 @@ class ChargeController:
         urgent: bool = False,
         wake: bool = False,
     ) -> Command:
-        """Der Befehl samt ``not_taken_retry``, wenn die Art zuletzt nicht übernommen wurde."""
-        retry = (NOT_TAKEN_RETRY,) if self._last.retry((actuator, kind)) else ()
-        return Command(actuator, kind, value, urgent=urgent, reasons=(*reasons, *retry), wake=wake)
+        """Der Befehl samt ``not_taken_retry``, wenn die Art zuletzt nicht übernommen wurde.
+
+        Dieser erneute Befehl ist immer normal (Design 7.2): Er wartet auf die 90-s-Regel und die
+        Stundenlimits, auch wenn er sonst dringend wäre, etwa als Senkung an der Sicherung oder
+        wegen Überlast. Die Sicherheit bleibt bei der Überlast, deren „Laden aus“ (eine andere
+        Art) dringend bleibt.
+        """
+        retry = self._last.retry((actuator, kind))
+        if retry:
+            reasons, urgent = (*reasons, NOT_TAKEN_RETRY), False
+        return Command(actuator, kind, value, urgent=urgent, reasons=reasons, wake=wake)
 
 
 def _mode(key: str, vehicle: VehicleState, intent: Intent | None) -> Effective:
