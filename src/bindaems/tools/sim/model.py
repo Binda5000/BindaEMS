@@ -31,11 +31,15 @@ Bleibt der Heartbeat danach ``victron.watchdog.timeout_s`` aus, löst er aus, un
 GX-Instanz bekommt ihren ``safe_a``. Die 0 gibt ihn frei; er wartet. Als Echo meldet er den zuletzt
 angenommenen Heartbeat, auch die 0.
 
-**Ausfälle** (``outages``, Namen aus ``OUTAGES``): „evcs“ und „twc“ liefern keine Werte, ihre
-Quellen sind getrennt. Bei „tessie“ kommen keine neuen Werte, die alten veralten nach 900 s, und
-Befehle enden mit HTTP 503; die Quelle bleibt verbunden, weil auch der echte Tessie-Adapter sie bei
-Fehlern nicht trennt. Bei „cerbo“ kommen keine Werte über ``victron``, und ``mqtt_write`` liefert
-``False``. „grid“ ist der Inselbetrieb. Die Geräte selbst laufen weiter.
+**Ausfälle** (``outages``, Namen aus ``OUTAGES``): „evcs“ ist der Verlust der Modbus-Verbindung
+zum core: Die Quelle ``evcs`` ist getrennt und liefert nichts, die GX-Werte über ``victron`` kommen
+weiter, wie wenn nur der Netzweg zwischen core und EVCS bricht. „twc“ liefert keine Werte, die
+Quelle ist getrennt. Bei „tessie“ scheitern die Abfragen, und der nächste Versuch folgt nach dem
+Backoff des Adapters (60 s, dann doppelt, höchstens 900 s), auch nach dem Ausfall; die alten Werte
+veralten nach 900 s, und Befehle enden mit HTTP 503. Die Quelle bleibt verbunden, weil auch der
+echte Tessie-Adapter sie bei Fehlern nicht trennt. Bei „cerbo“ kommen keine Werte über
+``victron``, und ``mqtt_write`` liefert ``False``. „grid“ ist der Inselbetrieb. Die Geräte selbst
+laufen weiter.
 
 **Fremder Regler** (``foreign``): Alle ``FOREIGN_EVERY`` stellt er direkt am Gerät jede EVCS auf
 einen Sollstrom aus ``FOREIGN_EVCS_A`` mit Laden an und jeden Tesla auf einen Strom aus
@@ -276,7 +280,13 @@ class PlantModel:
     # --- Geräte und Messgrößen ------------------------------------------------------------------
 
     def plug(self, vehicle: str, wallbox: str) -> None:
-        """Steckt das Fahrzeug an die Wallbox; beide müssen frei sein, sonst ``ValueError``."""
+        """Steckt das Fahrzeug an die Wallbox; beide müssen frei sein, sonst ``ValueError``.
+
+        Ein angesteckter Tesla startet nicht von selbst: Er lädt erst mit
+        ``Tesla.charge_enabled = True``, das ein Szenario für ein Auto setzt, das selbst startet
+        (Präzisierung 9), oder ein Befehl ``start_charging``. An der EVCS lädt ein Auto, sobald
+        ``Evcs.start_stop`` 1 ist.
+        """
         car, box = self.cars[vehicle], self.wallboxes[wallbox]
         if box.car is not None:
             raise ValueError(f"Wallbox „{wallbox}“ ist belegt.")
@@ -458,10 +468,14 @@ class PlantModel:
     def publish(self, store: StateStore, now: datetime) -> None:
         """Schreibt die Signale wie die Adapter, mit Quelle, Art und Zeitstempel ``now``.
 
+        ``now`` muss die aktuelle Zeit der Uhr des Speichers sein: Nach einer Wiederverbindung
+        gelten ``victron``-Werte, die älter sind als sie, als veraltet
+        (``invalidate_on_reconnect``).
+
         Eine ausgefallene Quelle liefert nichts; ``victron``, EVCS und Wall Connector sind dann
         getrennt, Tessie bleibt verbunden wie beim Adapter. Tessie liefert nur zu den Abfragezeiten
-        seines Adapters und ist wie dieser erst nach der ersten Abfrage verbunden; nach einem
-        Ausfall fragt das Modell sofort wieder ab.
+        seines Adapters, nach gescheiterten Abfragen mit dessen Backoff, und ist wie dieser erst
+        nach der ersten gelungenen Abfrage verbunden.
         """
         cerbo_up = CERBO not in self.outages
         store.set_connected(VICTRON_SOURCE, cerbo_up)
@@ -482,10 +496,7 @@ class PlantModel:
                     store.update(f"wallbox.{key}.{name}", value, source=key, kind=kind, ts=now)
             store.set_connected(key, TWC not in self.outages)
         for key, tesla in self.teslas.items():
-            if TESSIE in self.outages:
-                tesla.next_poll = None  # nach dem Ausfall fragt das Modell sofort wieder ab
-                continue
-            values = tesla.poll(now, self._volts)
+            values = tesla.poll(now, self._volts, reachable=TESSIE not in self.outages)
             if values is None:
                 continue
             source = f"tessie:{key}"

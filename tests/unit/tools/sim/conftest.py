@@ -7,6 +7,7 @@ import random
 from collections.abc import AsyncIterator, Coroutine
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from typing import Any, Final
 
 import httpx
@@ -14,12 +15,12 @@ import pytest
 
 from bindaems.core.adapters.tessie import TESSIE_BASE_URL
 from bindaems.core.state.store import StateStore
-from bindaems.shared.config import Config
+from bindaems.shared.config import Config, load_config
 from bindaems.shared.timeutil import ManualClock
 from bindaems.tools.sim.model import PlantModel
 
 T0: Final = datetime(2026, 10, 12, 16, 0, tzinfo=UTC)  # 18:00 Wiener Zeit
-VIN: Final = "5YJ3E7EB0MF000000"  # die VIN der Beispielkonfiguration
+VIN: Final = load_config(Path("deploy/config.example.yaml")).vehicles["tesla"].tessie.vin
 WAIT: Final = {"wait_for_completion": "true"}  # wie der Tesla-Aktor
 
 

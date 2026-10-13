@@ -44,13 +44,18 @@ from bindaems.core.adapters.tessie import parse_state, poll_interval_s
 from bindaems.core.state.derived import PHASES
 from bindaems.shared.config import EvcsConfig, LatLon, Phase, PhaseMap, TwcConfig, VehicleConfig
 from bindaems.shared.domain import Value
+from bindaems.shared.retry import Backoff
 
 DEFAULT_SOC_PCT: Final = 50.0  # SOC eines Autos, solange das Szenario keinen setzt
 TESLA_LIMIT_PCT: Final = 80.0  # Ladelimit des Tesla; dort meldet er „Complete“
 SLEEP_AFTER: Final = timedelta(minutes=15)  # so lange nach dem letzten Laden oder Befehl schläft er
 WAKE_S: Final = 30.0  # so lange weckt Tessie ein schlafendes Auto, bevor der Befehl wirkt
 TESSIE_DELAY_S: Final = (0.2, 2.5)  # Antwortzeit von Tessie in s, gleichverteilt
-LOST_AMPS: Final = 5  # der erste Befehl auf diesen Strom geht verloren (Prüfprotokoll Teil 2)
+# der erste Strombefehl auf oder von diesem Strom geht verloren (Prüfprotokoll Teil 2)
+LOST_AMPS: Final = 5
+# Backoff des Tessie-Adapters nach einer gescheiterten Abfrage: 60 s, dann doppelt, höchstens 900 s
+RETRY_FIRST_S: Final = 60.0
+RETRY_MAX_S: Final = 900.0
 # die Befehle des Tesla-Aktors (``core.actuators.tesla``), die Tessie hier kennt
 COMMANDS: Final = frozenset({"start_charging", "stop_charging", "set_charging_amps"})
 
@@ -115,10 +120,12 @@ class Tesla(Car):
     - **Schlaf:** ``SLEEP_AFTER`` nach dem letzten Laden oder Befehl (``tick``).
     - **Tessie:** ``handle`` nimmt einen Befehl des Tesla-Aktors an. Die Antwort kommt mit
       ``resolve`` nach ``TESSIE_DELAY_S``, bei schlafendem Auto erst nach dem Wecken (``WAKE_S``
-      dazu); erst dann wirkt der Befehl. Der erste Befehl auf ``LOST_AMPS`` geht verloren: Tessie
-      meldet ``result: true``, der Strom bleibt.
+      dazu); erst dann wirkt der Befehl. Der erste Strombefehl auf oder von ``LOST_AMPS`` geht
+      verloren: Tessie meldet ``result: true``, der Strom bleibt; derselbe Befehl noch einmal
+      wirkt.
     - **Cache:** ``poll`` liefert die Werte, wie der Tessie-Adapter sie speichert, nur zu seinen
-      Abfragezeiten. ``next_poll`` ist die nächste; ``None`` heißt sofort.
+      Abfragezeiten, nach gescheiterten Abfragen mit seinem Backoff. ``next_poll`` ist die nächste;
+      ``None`` heißt sofort.
     """
 
     def __init__(self, key: str, cfg: VehicleConfig, home: LatLon, rng: random.Random) -> None:
@@ -136,6 +143,7 @@ class Tesla(Car):
         self._rng = rng
         self._last_active: datetime | None = None
         self._last_amps: int | None = None  # der Strom des letzten Befehls ``set_charging_amps``
+        self._retry = Backoff(initial=RETRY_FIRST_S, maximum=RETRY_MAX_S)
         self._requests: list[_Request] = []
 
     def accepts_a(self) -> float:
@@ -186,15 +194,22 @@ class Tesla(Car):
             "drive_state": {"latitude": self._home.lat, "longitude": self._home.lon},
         }
 
-    def poll(self, now: datetime, voltage_v: float) -> dict[str, Value] | None:
-        """Die Werte einer Abfrage des Tessie-Caches, wenn eine fällig ist; sonst ``None``.
+    def poll(self, now: datetime, voltage_v: float, *, reachable: bool) -> dict[str, Value] | None:
+        """Die Werte einer fälligen, gelungenen Abfrage des Tessie-Caches; sonst ``None``.
 
         Wie im Tessie-Adapter macht ``parse_state`` aus dem Zustand die Werte, und
         ``poll_interval_s`` gibt die Zeit bis zur nächsten Abfrage: 30 s beim Laden, 60 s
-        angesteckt, sonst 600 s.
+        angesteckt, sonst 600 s. Ist Tessie nicht erreichbar (``reachable``), scheitert die fällige
+        Abfrage, und die nächste folgt nach dem Backoff des Adapters: ``RETRY_FIRST_S``, dann
+        jeweils doppelt so lange, höchstens ``RETRY_MAX_S``. Eine gelungene Abfrage setzt ihn
+        zurück.
         """
         if self.next_poll is not None and now < self.next_poll:
             return None
+        if not reachable:
+            self.next_poll = now + timedelta(seconds=self._retry.next())
+            return None
+        self._retry.reset()
         values = parse_state(self.state(voltage_v), self._home, self._radius_m)
         charging, plugged = values["charging_state"], values["plugged"]
         wait_s = poll_interval_s(
@@ -237,14 +252,15 @@ class Tesla(Car):
             request.answer.set_result(httpx.Response(200, json={"result": True}))
 
     def _execute(self, request: _Request, now: datetime) -> None:
-        """Der Befehl wirkt am Auto; der erste auf ``LOST_AMPS`` geht verloren."""
+        """Der Befehl wirkt am Auto; der erste Strombefehl auf oder von ``LOST_AMPS`` nicht."""
         self.wake(now)
         if request.name == "start_charging":
             self.charge_enabled = True
         elif request.name == "stop_charging":
             self.charge_enabled = False
         elif request.amps is not None:
-            lost = request.amps == LOST_AMPS and self._last_amps != LOST_AMPS
+            crossing = (request.amps == LOST_AMPS) != (self.charge_amps == LOST_AMPS)
+            lost = crossing and self._last_amps != request.amps
             self._last_amps = request.amps
             if not lost:
                 self.charge_amps = request.amps

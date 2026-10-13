@@ -6,6 +6,7 @@ Phase).
 """
 
 import random
+from datetime import datetime
 
 import pytest
 from tests.integration.conftest import GOOD_STATE
@@ -323,22 +324,45 @@ async def test_tessie_outage_keeps_its_source_like_the_adapter(model, store, clo
         assert reading is not None and reading.ts == T0 and reading.quality is Quality.STALE
         assert store.connected("tessie:tesla") is True
         model.outages.discard("tessie")
-        run(model, store, clock, 1)  # nach dem Ausfall fragt das Modell gleich wieder ab
+        # gescheitert bei 60, 120, 240 und 480 s; der nächste Versuch bei 480 + 480 = 960 s
+        run(model, store, clock, 59)  # bis 959 s
+        reading = store.snapshot().get(signal)
+        assert reading is not None and reading.ts == T0
+        run(model, store, clock, 1)
     reading = store.snapshot().get(signal)
-    assert reading is not None and reading.ts == at(901) and reading.quality is Quality.OK
+    assert reading is not None and reading.ts == at(960) and reading.quality is Quality.OK
     assert not model.teslas["tesla"].charge_enabled  # der Befehl mit 503 wirkte nicht
 
 
-def test_after_a_tessie_outage_the_model_polls_at_once(model, store, clock) -> None:
-    # Vereinfachung des Modells: Nach dem Ausfall fragt es sofort ab, nicht erst zur geplanten Zeit.
-    model.plug("tesla", "twc")
-    run(model, store, clock, 1)  # Abfrage bei T0, die nächste wäre bei 60 s
+def test_tessie_retries_with_the_backoff_of_the_adapter(model, store, clock) -> None:
+    # Wie der Tessie-Adapter: Nach einer gescheiterten Abfrage wartet er 60 s, dann jeweils das
+    # Doppelte, höchstens 900 s. Die erste gelungene setzt das zurück, danach gilt wieder der Takt.
+    model.plug("tesla", "twc")  # angesteckt, lädt nicht: Abfrage alle 60 s
+
+    def polled_at() -> datetime:
+        reading = store.snapshot().get("vehicle.tesla.charging_state")
+        assert reading is not None
+        return reading.ts
+
+    run(model, store, clock, 1)  # Abfrage bei 0 s
     model.outages.add("tessie")
-    run(model, store, clock, 2)
+    # gescheitert bei 60 s (geplant), 60 + 60 = 120, 120 + 120 = 240, 240 + 240 = 480 und
+    # 480 + 480 = 960 s; der nächste Versuch nach höchstens 900 s
+    run(model, store, clock, 999)  # bis 999 s
     model.outages.discard("tessie")
-    run(model, store, clock, 1)  # T0 + 3 s
-    reading = store.snapshot().get("vehicle.tesla.charging_state")
-    assert reading is not None and reading.ts == at(3)
+    run(model, store, clock, 860)  # bis 1859 s
+    assert polled_at() == T0
+    run(model, store, clock, 1)
+    assert polled_at() == at(960 + 900)
+    run(model, store, clock, 60)  # wieder im Takt: 1860 + 60 s
+    assert polled_at() == at(1860 + 60)
+    model.outages.add("tessie")  # die Abfrage bei 1980 s scheitert
+    run(model, store, clock, 61)  # bis 1981 s
+    model.outages.discard("tessie")
+    run(model, store, clock, 58)  # bis 2039 s
+    assert polled_at() == at(1920)
+    run(model, store, clock, 1)
+    assert polled_at() == at(1980 + 60)  # der Backoff begann nach dem Erfolg wieder bei 60 s
 
 
 def test_tessie_outage_before_the_first_poll_never_connects(model, store, clock) -> None:

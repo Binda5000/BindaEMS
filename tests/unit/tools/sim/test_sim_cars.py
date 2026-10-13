@@ -353,9 +353,25 @@ async def test_the_first_command_to_5_a_is_lost(model, store, clock) -> None:
         await command(model, store, clock, client, "set_charging_amps", amps="5")
         assert tesla.charge_amps == 5
         await command(model, store, clock, client, "set_charging_amps", amps="12")
+        await command(model, store, clock, client, "set_charging_amps", amps="12")  # von 5 A
         assert tesla.charge_amps == 12
         await command(model, store, clock, client, "set_charging_amps", amps="5")
         assert tesla.charge_amps == 12  # wieder der erste Befehl auf 5 A
+
+
+async def test_the_first_command_from_5_a_is_lost(model, store, clock) -> None:
+    # Tesla 5 A; set_charging_amps 8 → result true, Strom bleibt 5; derselbe Befehl erneut → 8
+    tesla = model.teslas["tesla"]
+    tesla.charge_amps = 5
+    model.plug("tesla", "twc")
+    async with tessie_client(model) as client:
+        await tick(model, store, clock, 1)
+        first = await command(model, store, clock, client, "set_charging_amps", amps="8")
+        assert first.json() == {"result": True} and tesla.charge_amps == 5
+        await command(model, store, clock, client, "set_charging_amps", amps="8")
+        assert tesla.charge_amps == 8
+        await command(model, store, clock, client, "set_charging_amps", amps="10")
+        assert tesla.charge_amps == 10  # ohne 5 A wirkt schon der erste Befehl
 
 
 def test_tessie_values_change_only_at_poll_times(model, store, clock) -> None:
