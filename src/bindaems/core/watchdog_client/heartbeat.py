@@ -15,11 +15,12 @@ Schreibvorgang offen). Ist der Watchdog später noch „scharf“ und meldet ein
 ging die 0 verloren und geht erneut hinaus. Einen ausgelösten Watchdog ohne Bedarf räumt der Client
 nach einer Weile mit der 0 auf. Die zuletzt gesendeten Zähler stehen in ``recent``: Nur ein
 Watchdog, der einen davon zurückmeldet, ist für diesen core scharf (``armed_for_core``). Zeigt der
-Watchdog nach der Freigabe „wartet“ oder das Echo 0, ist sie bestätigt, und der Client vergisst die
-Zähler. Den ersten Zähler eines Laufs (``first``) bildet ``heartbeat_start`` aus der Startzeit: Er
-unterscheidet sich von dem früherer Läufe und von den Zählern der Probe und des Teil-2-Werkzeugs
-(1, 2, 3, …). Beim Herunterfahren sendet der Client nichts: Dann soll der Watchdog auslösen, falls
-der core nicht rechtzeitig zurückkommt. Die Zeit kommt als Argument.
+Watchdog nach der Freigabe das Echo 0 oder „wartet“ ohne einen eigenen Zähler als Echo, ist sie
+bestätigt, und der Client vergisst die Zähler. Den ersten Zähler eines Laufs (``first``) bildet
+``heartbeat_start`` aus der Startzeit: Er unterscheidet sich von dem früherer Läufe und von den
+Zählern der Probe und des Teil-2-Werkzeugs (1, 2, 3, …). Beim Herunterfahren sendet der Client
+nichts: Dann soll der Watchdog auslösen, falls der core nicht rechtzeitig zurückkommt. Die Zeit
+kommt als Argument.
 """
 
 from __future__ import annotations
@@ -64,7 +65,9 @@ class HeartbeatClient:
     """Sendet den Heartbeat-Zähler im Takt ``interval_s`` und die Freigabe 0 am Ende.
 
     ``send`` stellt einen Wert zu und meldet, ob das geklappt hat. Der Zustand ändert sich erst nach
-    einem erfolgreichen Senden; sonst folgt der nächste Versuch im nächsten Zyklus. ``status``:
+    einem erfolgreichen Senden; sonst folgt der nächste Versuch im nächsten Zyklus. ``first`` ist
+    der erste Zähler und liegt zwischen 1 und ``HEARTBEAT_MAX``, sonst gibt es einen
+    ``ValueError``: Die 0 ist die Freigabe, und mehr passt nicht in einen D-Bus-Int32. ``status``:
 
     - ``"off"``: noch kein Heartbeat gesendet
     - ``"active"``: Heartbeats laufen
@@ -74,6 +77,10 @@ class HeartbeatClient:
     """
 
     def __init__(self, send: Callable[[int], bool], interval_s: float, *, first: int = 1) -> None:
+        if not 1 <= first <= HEARTBEAT_MAX:
+            raise ValueError(
+                f"Der erste Zähler {first} muss zwischen 1 und {HEARTBEAT_MAX} liegen."
+            )
         self._send = send
         self._interval_s = interval_s
         self._next = first
@@ -121,10 +128,11 @@ class HeartbeatClient:
         wenn er fällig ist: wenn noch nichts gesendet wurde oder seit dem letzten Senden mindestens
         das Intervall abzüglich ``INTERVAL_TOLERANCE_S`` vergangen ist.
 
-        Bestätigt ist die Freigabe, wenn der Status ``"released"`` ist und der Watchdog „wartet“
-        oder das Echo 0 zeigt. Dann sind die Zähler dieses Laufs vergessen (``recent``). Der
-        Zustand, den der Zyklus kennt, in dem die 0 hinausgeht, stammt von davor und bestätigt sie
-        nicht; erst der nächste Aufruf tut es.
+        Bestätigt ist die Freigabe, wenn der Status ``"released"`` ist und der Watchdog das Echo 0
+        zeigt (``_release_confirmed``) oder „wartet“, ohne einen eigenen Zähler aus ``recent`` als
+        Echo zu zeigen. Dann sind die Zähler dieses Laufs vergessen (``recent``). Der Zustand, den
+        der Zyklus kennt, in dem die 0 hinausgeht, stammt von davor und bestätigt sie nicht; erst
+        der nächste Aufruf tut es.
 
         Ohne ``required`` sendet der Client eine 0 nur mit ``release_allowed``, und zwar
 
@@ -137,7 +145,7 @@ class HeartbeatClient:
           ansteht (gezählt ab dem ersten Zyklus, der ihn so sieht), danach höchstens einmal je
           ``TRIPPED_RELEASE_S``.
         """
-        if self._status == "released" and (watchdog is WatchdogState.WAITING or echo == RELEASE):
+        if self._status == "released" and self._release_confirmed(watchdog, echo):
             self._recent = ()
         if required:
             self._tripped_since = None
@@ -174,6 +182,18 @@ class HeartbeatClient:
         if self._tripped_since is not None:
             self._tripped_since = now  # die nächste 0 zum Aufräumen erst in TRIPPED_RELEASE_S
         return True
+
+    def _release_confirmed(self, watchdog: WatchdogState, echo: int | None) -> bool:
+        """Ob der Watchdog die Freigabe angenommen hat.
+
+        Das Echo ist der zuletzt geschriebene ``/Heartbeat``: Die 0 darin ist eindeutig. „Wartet“
+        allein genügt nicht, denn vor dem Scharfschalten zeigt der Watchdog es auch, wenn die 0 nie
+        ankam; dann steht noch einer der eigenen Zähler im Echo. Ein unbekanntes Echo oder der
+        Zähler eines anderen (Probe, Werkzeug) widerspricht dem „wartet“ nicht.
+        """
+        if echo == RELEASE:
+            return True
+        return watchdog is WatchdogState.WAITING and echo not in self._recent
 
     def _release_lost(self, now: datetime, watchdog: WatchdogState, echo: int | None) -> bool:
         """Ob die Freigabe verloren ging.

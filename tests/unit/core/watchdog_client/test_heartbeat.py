@@ -84,6 +84,14 @@ def test_first_counter_is_configurable() -> None:
     assert sent == [41, 42]
 
 
+@pytest.mark.parametrize("first", [0, -1, HEARTBEAT_MAX + 1])
+def test_the_first_counter_must_be_a_counter(first: int) -> None:
+    # Die 0 ist die Freigabe, und mehr als HEARTBEAT_MAX passt nicht in einen D-Bus-Int32.
+    _, send = recorder()
+    with pytest.raises(ValueError, match="erste Zähler"):
+        HeartbeatClient(send, 10.0, first=first)
+
+
 def test_waits_for_the_interval_with_a_tolerance_of_50_ms() -> None:
     sent, send = recorder()
     client = HeartbeatClient(send, 10.0)
@@ -476,12 +484,14 @@ def test_confirmed_release_forgets_own_counters() -> None:
 @pytest.mark.parametrize(
     ("watchdog", "echo"),
     [
-        (WatchdogState.WAITING, None),  # „wartet“ genügt, auch ohne bekanntes Echo
-        (WatchdogState.WAITING, 3),
-        (WatchdogState.ARMED, 0),  # das Echo 0 genügt, gleich was der Zustand sagt
+        (WatchdogState.WAITING, 0),  # das Echo ist der zuletzt geschriebene Wert: die 0 kam an
+        (WatchdogState.ARMED, 0),  # das Echo 0 genügt in jedem Zustand
+        (WatchdogState.TRIPPED, 0),
+        (WatchdogState.WAITING, None),  # „wartet“ ohne eigenen Zähler im Echo
+        (WatchdogState.WAITING, 9999),  # der Zähler eines anderen, etwa der Probe
     ],
 )
-def test_the_release_is_confirmed_by_waiting_or_by_echo_zero(
+def test_the_release_is_confirmed_by_echo_zero_or_by_waiting_without_an_own_counter(
     watchdog: WatchdogState, echo: int | None
 ) -> None:
     _, client = _released_with_counters_1_to_3()
@@ -492,8 +502,13 @@ def test_the_release_is_confirmed_by_waiting_or_by_echo_zero(
 @pytest.mark.parametrize(
     ("watchdog", "echo"),
     [
+        # Vor dem Scharfschalten zeigt der Watchdog „wartet“, ob die 0 ankam oder nicht; der eigene
+        # Zähler im Echo sagt, dass sie noch nicht ankam.
+        (WatchdogState.WAITING, 3),
+        (WatchdogState.WAITING, 1),
         (WatchdogState.ARMED, 3),  # noch der letzte Zähler: die 0 ging vielleicht verloren
         (WatchdogState.ARMED, None),
+        (WatchdogState.ARMED, 9999),  # scharf mit dem Zähler eines anderen: keine Bestätigung
         (WatchdogState.TRIPPED, 3),
         (WatchdogState.DISABLED, None),
         (WatchdogState.UNKNOWN, None),
@@ -515,6 +530,20 @@ def test_the_state_seen_with_the_release_does_not_confirm_it() -> None:
     assert (sent, client.recent) == ([1, 0], (1,))
     client.on_cycle(S(2), required=False, watchdog=WatchdogState.WAITING, echo=0)
     assert client.recent == ()
+
+
+def test_a_release_lost_during_arming_is_sent_again() -> None:
+    # Vor dem Scharfschalten meldet der Watchdog „wartet“, ob die 0 ankam oder nicht.
+    waiting, armed = WatchdogState.WAITING, WatchdogState.ARMED
+    sent, client = recording(10.0)
+    client.on_cycle(S(0), required=True, watchdog=waiting)  # Zähler 1, der Watchdog wartet
+    client.on_cycle(S(1), required=False, watchdog=waiting, echo=1)  # die 0 geht verloren
+    client.on_cycle(S(2), required=False, watchdog=waiting, echo=1)  # das Echo ist noch Zähler 1
+    assert (sent, client.recent) == ([1, 0], (1,))  # keine Bestätigung: Die Zähler bleiben
+    client.on_cycle(S(20), required=False, watchdog=armed, echo=1)
+    assert sent == [1, 0]  # noch keine 2 × Intervall seit der 0
+    client.on_cycle(S(21), required=False, watchdog=armed, echo=1)
+    assert sent == [1, 0, 0]  # scharf mit dem eigenen Zähler: Die 0 geht erneut hinaus
 
 
 def test_waiting_does_not_confirm_a_release_that_was_never_sent() -> None:

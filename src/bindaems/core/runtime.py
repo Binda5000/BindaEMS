@@ -286,9 +286,10 @@ class CoreRuntime:
         - ``http_client`` ist der gemeinsame HTTP-Client von Wall Connector, Tessie, Tesla-Aktor
           und InfluxDB; ohne ihn legt die Laufzeit beim ersten Bedarf einen an. ``shutdown``
           schließt ihn in beiden Fällen.
-        - ``heartbeat_first`` ist der erste Zähler des Heartbeats. Ohne ihn beginnt jeder Lauf mit
-          einem eigenen Wert aus der Startzeit der Wanduhr (``heartbeat_start``), anders als frühere
-          Läufe und die Zähler 1, 2, 3, … der Probe und des Teil-2-Werkzeugs.
+        - ``heartbeat_first`` ist der erste Zähler des Heartbeats (1 bis ``HEARTBEAT_MAX``, sonst
+          ``ValueError``). Ohne ihn beginnt jeder Lauf mit einem eigenen Wert aus der Startzeit der
+          Wanduhr (``heartbeat_start``), anders als frühere Läufe und die Zähler 1, 2, 3, … der
+          Probe und des Teil-2-Werkzeugs.
         """
         self._cfg = cfg
         self._secrets = secrets
