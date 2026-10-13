@@ -58,7 +58,8 @@ def test_the_first_five_scenarios_in_the_order_of_the_design() -> None:
         7200,
     )
     assert SCENARIOS["nur-laden"].start == T0
-    assert all(scenario.live and scenario.intent.control for scenario in SCENARIOS.values())
+    first_five = list(SCENARIOS.values())[:5]
+    assert all(scenario.live and scenario.intent.control for scenario in first_five)
 
 
 # --- Wetter --------------------------------------------------------------------------------------
