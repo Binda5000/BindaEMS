@@ -1,0 +1,524 @@
+"""Anlagenmodell des Simulators: Netz, ESS, Akku, PV, Watchdog, Ausfälle und fremder Regler.
+
+Der Simulator lässt die echte Laufzeit des core mit ihren echten Aktoren gegen dieses Modell laufen
+(Plan 2c-1, Präzisierung 16). Je simulierter Sekunde ruft der Lauf ``step`` (eine Sekunde Physik)
+und ``publish`` (die Signale in den Zustandsspeicher), nach dem Zyklus des core ``resolve`` (fällige
+Antworten von Tessie). Der core schreibt über ``mqtt_write`` statt über den Victron-Adapter und
+erreicht Tessie über ``tessie``, den Handler für ``httpx.MockTransport``.
+
+**Topologie** (Design 13.1): Haus und Wallboxen hängen am AC-Ausgang der Multis, die PV am
+AC-Eingang, gleich auf drei Phasen. Je Phase gilt ``P_acout = Haus + Wallboxen``,
+``P_acin = P_acout + Akku`` und am Netz ``P_netz = P_acin − PV``; die Spannung ist
+``grid.voltage_nominal_v``.
+
+- **ESS** (Multi „Ein“): Der Akku gleicht die Summe der Phasen aus,
+  ``clamp(PV − Lasten, −max_discharge_w, max_charge_w)``, je Phase ein Drittel. Bei SOC ≤ Reserve
+  entlädt er nicht, bei 100 % lädt er nicht.
+- **Peak Shaving:** Liegt eine Phase über ``grid.import_limit_a``, entlädt der Multi dieser Phase
+  zusätzlich, bis höchstens ``max_discharge_w / 3``, nur über der Reserve.
+- **„Nur Laden“** (``charger_only``, ``vebus.mode`` 1): Der Akku entlädt nie, kein Peak Shaving.
+- **Inselbetrieb** (Ausfall „grid“): Am Netz 0 W und 0 V, ``system.active_in_source`` 240. Die PV
+  am AC-Eingang steht still; der Akku trägt die Lasten, auch unter der Reserve.
+
+**Signale** entstehen wie an der Anlage: Der Cerbo liefert Topics (``<Dienst>/<Instanz>/<Pfad>``),
+die EVCS ihren Registerblock, der Wall Connector seine Vitals, Tessie den Zustand des Fahrzeugs
+(``cars``). Die Parser der echten Adapter machen daraus die Signale mit Namen, Quelle, Art und
+Einheit; so unterscheidet der core das Modell nicht von der Anlage. Für die Selbstprüfung meldet der
+Cerbo, was eine richtig eingestellte Anlage meldet.
+
+**Watchdog** am Cerbo (``bindaems/0/…``): Ein Heartbeat über 0 macht ihn nach ``REARM_S`` scharf.
+Bleibt der Heartbeat danach ``victron.watchdog.timeout_s`` aus, löst er aus, und jede EVCS mit
+GX-Instanz bekommt ihren ``safe_a``. Die 0 gibt ihn frei; er wartet. Als Echo meldet er den zuletzt
+angenommenen Heartbeat, auch die 0.
+
+**Ausfälle** (``outages``, Namen aus ``OUTAGES``): „evcs“, „twc“ und „tessie“ liefern keine Werte,
+ihre Quellen sind getrennt, Befehle an Tessie enden mit HTTP 503. Bei „cerbo“ kommen keine Werte
+über ``victron``, und ``mqtt_write`` liefert ``False``. „grid“ ist der Inselbetrieb. Die Geräte
+selbst laufen weiter.
+
+**Fremder Regler** (``foreign``): Alle ``FOREIGN_EVERY`` stellt er direkt am Gerät jede EVCS auf
+einen Sollstrom aus ``FOREIGN_EVCS_A`` mit Laden an und jeden Tesla auf einen Strom aus
+``FOREIGN_TESLA_A``.
+
+Den Zufall liefert das übergebene ``random.Random``; eine Uhr liest das Modell nie. Schreibaufträge
+und Befehle an Tessie gelten zur Zeit des letzten ``step``.
+"""
+
+from __future__ import annotations
+
+import random
+from datetime import datetime, timedelta
+from typing import Final
+
+import httpx
+
+from bindaems.core.adapters.evcs import BLOCK_START, decode_block
+from bindaems.core.adapters.evcs import FRESHNESS_S as EVCS_FRESHNESS_S
+from bindaems.core.adapters.tessie import FRESHNESS_S as TESSIE_FRESHNESS_S
+from bindaems.core.adapters.tessie import TESSIE_BASE_URL
+from bindaems.core.adapters.twc import FRESHNESS_S as TWC_FRESHNESS_S
+from bindaems.core.adapters.twc import parse_vitals
+from bindaems.core.adapters.victron_mqtt import FRESHNESS_S as VICTRON_FRESHNESS_S
+from bindaems.core.adapters.victron_mqtt import (
+    HEARTBEAT_PATH,
+    MAX_DISCHARGE_PATH,
+    MIN_SOC_PATH,
+    SETPOINT_OVERRIDE_PATH,
+    evcharger_path,
+    writable_paths,
+)
+from bindaems.core.adapters.victron_mqtt import SOURCE as VICTRON_SOURCE
+from bindaems.core.adapters.victron_topics import InstanceResolver, parse_message
+from bindaems.core.state.derived import PHASES
+from bindaems.core.state.store import StateStore
+from bindaems.core.watchdog_client.status import WATCHDOG_VERSION
+from bindaems.shared.config import Config, EvcsConfig, Phase, VictronInstances
+from bindaems.shared.domain import SignalKind, Value
+from bindaems.tools.sim.cars import Car, Evcs, GxPath, Tesla, WallConnector
+from bindaems.tools.watchdog_config import REARM_S
+
+EVCS: Final = "evcs"
+TWC: Final = "twc"
+TESSIE: Final = "tessie"
+CERBO: Final = "cerbo"
+GRID: Final = "grid"
+OUTAGES: Final = frozenset({EVCS, TWC, TESSIE, CERBO, GRID})
+
+STEP_S: Final = 1.0  # ein Schritt ist eine Sekunde
+BATTERY_SOC_PCT: Final = 50.0  # SOC des Akkus, solange das Szenario keinen setzt
+FOREIGN_EVERY: Final = timedelta(seconds=45)
+FOREIGN_EVCS_A: Final = (6, 16)
+FOREIGN_TESLA_A: Final = (5, 16)
+
+# Werte des Cerbo
+GRID_SOURCE: Final = 1  # ``system.active_in_source``: Netz am AC-Eingang
+ISLAND_SOURCE: Final = 240  # kein Netz am AC-Eingang, die Multis versorgen das Haus
+MULTI_ON: Final = 3  # ``vebus.mode`` „Ein“
+MULTI_CHARGER_ONLY: Final = 1  # „Nur Laden“
+HUB4_MODE: Final = 1  # ESS mit Phasenkompensation: Der Akku gleicht die Summe der Phasen aus
+BATTERYLIFE_STATE: Final = 10  # „Optimiert ohne BatteryLife“, normal
+SCHEDULE_OFF: Final = -7  # Tag eines abgeschalteten Ladefensters
+_SETTINGS: Final = "settings/0/Settings"
+_PORTAL: Final = "sim"  # Portal-ID der Topics; die Abbildung des Adapters vergleicht nur mit ihr
+
+# Zustände des Watchdogs (``/State``)
+WAITING, ARMED, TRIPPED = 0, 1, 2
+
+
+def _instance(configured: int | None) -> int:
+    """Die Instanz eines Geräts am Cerbo; ohne Eintrag nimmt der Adapter die erste, die er sieht."""
+    return configured if configured is not None else 0
+
+
+class _Routes:
+    """Topic des Cerbo → Signale, über die Abbildung des Victron-Adapters; je Topic einmal."""
+
+    def __init__(self, instances: VictronInstances) -> None:
+        self._resolver = InstanceResolver(instances)
+        self._signals: dict[str, tuple[tuple[str, SignalKind], ...]] = {}
+
+    def __call__(self, topic: str) -> tuple[tuple[str, SignalKind], ...]:
+        signals = self._signals.get(topic)
+        if signals is None:
+            message = f"N/{_PORTAL}/{topic}"
+            updates = parse_message(message, b'{"value": 0}', _PORTAL, self._resolver)
+            if not updates:
+                raise ValueError(f"Kein Signal zum Topic {topic}")
+            signals = tuple((update.signal, update.kind) for update in updates)
+            self._signals[topic] = signals
+        return signals
+
+
+class _Watchdog:
+    """Der Totmann-Watchdog am Cerbo, so weit der Simulator ihn braucht.
+
+    Ein Heartbeat über 0 beginnt einen Lauf; ``REARM_S`` danach ist er scharf. Bleibt der Heartbeat
+    ``timeout_s`` aus, während er scharf ist, löst er aus (``tick``). Die 0 gibt ihn frei. Werte,
+    die der echte Watchdog ablehnt (keine ganze Zahl ≥ 0), ändern nichts.
+    """
+
+    def __init__(self, timeout_s: float) -> None:
+        self.timeout_s = int(timeout_s)  # so meldet ihn der Watchdog
+        self._timeout = timedelta(seconds=timeout_s)
+        self.state = WAITING
+        self.echo: int | None = None
+        self.trips = 0
+        self.last_trip = 0  # Unix-Sekunden, 0 = nie
+        self._run_start: datetime | None = None
+        self._last_seen: datetime | None = None
+
+    def heartbeat(self, value: float | int | None, now: datetime) -> None:
+        """Ein Heartbeat zur Zeit ``now``: über 0 ein Lebenszeichen, die 0 die Freigabe."""
+        if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+            return
+        self.echo = value
+        self._last_seen = now
+        if value == 0:
+            self.state = WAITING
+            self._run_start = None
+        elif self._run_start is None:
+            self._run_start = now
+
+    def tick(self, now: datetime) -> bool:
+        """Prüft die Zeiten; ``True`` heißt: jetzt ausgelöst."""
+        if self.state == ARMED:
+            if self._last_seen is not None and now - self._last_seen >= self._timeout:
+                self.state = TRIPPED
+                self._run_start = None
+                self.trips += 1
+                self.last_trip = int(now.timestamp())
+                return True
+        elif self._run_start is not None and now - self._run_start >= timedelta(seconds=REARM_S):
+            self.state = ARMED
+        return False
+
+    def topics(self) -> dict[str, Value]:
+        """Die Pfade des Dienstes ``com.victronenergy.bindaems``."""
+        return {
+            "bindaems/0/State": self.state,
+            "bindaems/0/TripCount": self.trips,
+            "bindaems/0/LastTripTime": self.last_trip,
+            "bindaems/0/LastTripFailures": 0,
+            "bindaems/0/TimeoutSeconds": self.timeout_s,
+            "bindaems/0/Version": WATCHDOG_VERSION,
+            HEARTBEAT_PATH: self.echo,
+        }
+
+
+class PlantModel:
+    """Die simulierte Anlage hinter dem core.
+
+    Stellgrößen der Szenarien:
+
+    - ``pv_w``: PV-Leistung gesamt in W
+    - ``house_w``: Hauslast je Phase L1, L2, L3 in W
+    - ``soc_pct``: SOC des Akkus; das Modell führt ihn mit der Akkuleistung fort
+    - ``charger_only``: Multi auf „Nur Laden“ statt „Ein“
+    - ``outages``: laufende Ausfälle aus ``OUTAGES``
+    - ``foreign``: der fremde Regler ist an
+    - die Geräte: ``wallboxes`` (``Evcs`` und ``WallConnector``), ``cars`` (``teslas`` davon mit
+      Tessie); ``plug`` und ``unplug`` stecken an und ab
+
+    Messgrößen für die Kennzahlen, Stand des letzten ``step``:
+
+    - ``grid_a``: Netzstrom je Phase, positiv beim Bezug
+    - ``battery_feed_a``: was der Multi je Phase aus dem Akku liefert
+    - ``battery_w``: Akkuleistung, positiv beim Laden, und ``soc_pct``
+    - ``car_a``, ``car_w``: Strom je Phase und Ladeleistung je Fahrzeug
+    """
+
+    def __init__(self, cfg: Config, rng: random.Random) -> None:
+        self._cfg = cfg
+        self._rng = rng
+        self._volts = cfg.grid.voltage_nominal_v
+        self.pv_w = 0.0
+        self.house_w: tuple[float, float, float] = (0.0, 0.0, 0.0)
+        self.soc_pct = BATTERY_SOC_PCT
+        self.charger_only = False
+        self.outages: set[str] = set()
+        self.foreign = False
+        self.grid_a: dict[Phase, float] = dict.fromkeys(PHASES, 0.0)
+        self.battery_feed_a: dict[Phase, float] = dict.fromkeys(PHASES, 0.0)
+        self.battery_w = 0.0
+        self.cars: dict[str, Car] = {}
+        self.teslas: dict[str, Tesla] = {}
+        for key, vehicle in cfg.vehicles.items():
+            if vehicle.tessie is None:
+                self.cars[key] = Car(key, vehicle)
+            else:
+                self.cars[key] = self.teslas[key] = Tesla(key, vehicle, cfg.site.location, rng)
+        self._by_vin = {tesla.vin: tesla for tesla in self.teslas.values()}
+        instances = cfg.victron.instances
+        self.wallboxes: dict[str, Evcs | WallConnector] = {}
+        self._evcs: dict[str, Evcs] = {}
+        self._twcs: dict[str, WallConnector] = {}
+        for key, wallbox in cfg.wallboxes.items():
+            if isinstance(wallbox, EvcsConfig):
+                gx = next((i for i, name in instances.evcharger.items() if name == key), None)
+                self.wallboxes[key] = self._evcs[key] = Evcs(key, wallbox, gx)
+            else:
+                self.wallboxes[key] = self._twcs[key] = WallConnector(key, wallbox)
+        self._writable = writable_paths(cfg.victron)
+        gx_paths: tuple[GxPath, ...] = ("SetCurrent", "StartStop")
+        self._gx_paths = {
+            evcharger_path(evcs.instance, path): (evcs, path)
+            for evcs in self._evcs.values()
+            if evcs.instance is not None
+            for path in gx_paths
+        }
+        self._grid_instance = _instance(instances.grid)
+        self._vebus_instance = _instance(instances.vebus)
+        self._pv_instances = list(instances.pv) or [0]
+        self._routes = _Routes(instances)
+        # Einstellungen am Cerbo, wie die Selbstprüfung sie erwartet; die Schreibpfade für Victron
+        # sind dieselben Topics
+        self._settings: dict[str, Value] = {
+            f"{_SETTINGS}/CGwacs/Hub4Mode": HUB4_MODE,
+            f"{_SETTINGS}/CGwacs/BatteryLife/State": BATTERYLIFE_STATE,
+            f"{_SETTINGS}/CGwacs/BatteryLife/Schedule/Charge/0/Day": SCHEDULE_OFF,
+            f"{_SETTINGS}/CGwacs/AcPowerSetPoint": 0,
+            f"{_SETTINGS}/CGwacs/AcInputLimit": cfg.grid.import_limit_a,
+            f"{_SETTINGS}/DynamicEss/Mode": 0,
+            MIN_SOC_PATH: cfg.battery.reserve_soc_pct,
+            MAX_DISCHARGE_PATH: -1,
+            SETPOINT_OVERRIDE_PATH: None,
+        }
+        self._watchdog = _Watchdog(cfg.victron.watchdog.timeout_s)
+        self._foreign_next: datetime | None = None
+        self._now: datetime | None = None
+        # Leistungen je Phase im letzten Schritt, für die Topics des Cerbo
+        self._pv_now_w = 0.0
+        self._grid_w: dict[Phase, float] = dict.fromkeys(PHASES, 0.0)
+        self._ac_in_w: dict[Phase, float] = dict.fromkeys(PHASES, 0.0)
+        self._ac_out_w: dict[Phase, float] = dict.fromkeys(PHASES, 0.0)
+
+    # --- Geräte und Messgrößen ------------------------------------------------------------------
+
+    def plug(self, vehicle: str, wallbox: str) -> None:
+        """Steckt das Fahrzeug an die Wallbox; beide müssen frei sein, sonst ``ValueError``."""
+        car, box = self.cars[vehicle], self.wallboxes[wallbox]
+        if box.car is not None:
+            raise ValueError(f"Wallbox „{wallbox}“ ist belegt.")
+        if car.wallbox is not None:
+            raise ValueError(f"Fahrzeug „{vehicle}“ steckt schon an „{car.wallbox}“.")
+        box.car, car.wallbox = car, wallbox
+
+    def unplug(self, vehicle: str) -> None:
+        """Steckt das Fahrzeug ab; es zieht keinen Strom mehr."""
+        car = self.cars[vehicle]
+        if car.wallbox is not None:
+            self.wallboxes[car.wallbox].car = None
+        car.wallbox = None
+        car.current_a = 0.0
+
+    @property
+    def car_a(self) -> dict[str, float]:
+        """Der Strom je Phase jedes Fahrzeugs im letzten Schritt."""
+        return {key: car.current_a for key, car in self.cars.items()}
+
+    @property
+    def car_w(self) -> dict[str, float]:
+        """Die Ladeleistung jedes Fahrzeugs im letzten Schritt."""
+        return {key: car.current_a * car.phases * self._volts for key, car in self.cars.items()}
+
+    # --- Wege des core --------------------------------------------------------------------------
+
+    def attach(self, store: StateStore) -> None:
+        """Registriert die Quellen wie die Adapter: ``victron`` ereignisgesteuert, dazu je EVCS,
+        Wall Connector und Fahrzeug mit Tessie eine Quelle mit der Frischegrenze ihres Adapters."""
+        store.register_source(
+            VICTRON_SOURCE, VICTRON_FRESHNESS_S, activity_based=True, invalidate_on_reconnect=True
+        )
+        for key in self._evcs:
+            store.register_source(key, EVCS_FRESHNESS_S)
+        for key in self._twcs:
+            store.register_source(key, TWC_FRESHNESS_S)
+        for key in self.teslas:
+            store.register_source(f"tessie:{key}", TESSIE_FRESHNESS_S)
+
+    def mqtt_write(self, path: str, value: float | int | None) -> bool:
+        """Der MQTT-Schreibweg des core zum Cerbo, wie ``VictronMqttAdapter.write``.
+
+        Nur Pfade aus ``writable_paths``, sonst ``ValueError``. Während des Ausfalls „cerbo“ ist das
+        Ergebnis ``False``, und nichts geschieht. Sonst wirkt der Auftrag zur Zeit des letzten
+        ``step``: der Heartbeat beim Watchdog, Sollstrom und Laden an/aus bei der EVCS (verzögert),
+        die Einstellungen sofort am Cerbo.
+        """
+        if path not in self._writable:
+            raise ValueError(f"Schreibpfad nicht freigegeben: {path}")
+        if CERBO in self.outages:
+            return False
+        now = self._time()
+        if path == HEARTBEAT_PATH:
+            self._watchdog.heartbeat(value, now)
+        elif path in self._gx_paths:
+            evcs, name = self._gx_paths[path]
+            if value is not None:
+                evcs.write(name, value, now)
+        elif path in self._settings:
+            self._settings[path] = value
+        return True
+
+    async def tessie(self, request: httpx.Request) -> httpx.Response:
+        """Tessie für die Teslas des Modells, als Handler für ``httpx.MockTransport``.
+
+        Bekannt ist nur ``POST {TESSIE_BASE_URL}/{vin}/command/<Name>`` für eine VIN des Modells;
+        alles andere ergibt 404. Während des Ausfalls „tessie“ kommt sofort 503. Sonst wartet die
+        Antwort, bis ``resolve`` sie freigibt (``Tesla.handle``).
+        """
+        url = request.url
+        parts = url.path.split("/")
+        tesla = self._by_vin.get(parts[1]) if len(parts) == 4 and parts[2] == "command" else None
+        if f"{url.scheme}://{url.host}" != TESSIE_BASE_URL or request.method != "POST":
+            tesla = None
+        if tesla is None:
+            return httpx.Response(404)
+        if TESSIE in self.outages:
+            return httpx.Response(503)
+        return await tesla.handle(parts[3], url.params, self._time())
+
+    def resolve(self, now: datetime) -> None:
+        """Gibt die fälligen Antworten von Tessie frei; erst dann wirken die Befehle."""
+        for tesla in self.teslas.values():
+            tesla.resolve(now)
+
+    def _time(self) -> datetime:
+        if self._now is None:
+            raise RuntimeError("PlantModel.step fehlt: Das Modell hat noch keine Zeit.")
+        return self._now
+
+    # --- Physik ---------------------------------------------------------------------------------
+
+    def step(self, now: datetime) -> None:
+        """Eine Sekunde Physik bis ``now``.
+
+        In dieser Reihenfolge: fremder Regler, Watchdog, Wallboxen (fällige Aufträge, dann der Strom
+        der Autos), Schlaf der Teslas, Lasten, ESS und Akku. Ein unbekannter Ausfall ist ein
+        ``ValueError``.
+        """
+        unknown = self.outages - OUTAGES
+        if unknown:
+            raise ValueError(f"Unbekannter Ausfall: {', '.join(sorted(unknown))}")
+        self._now = now
+        self._run_foreign(now)
+        if self._watchdog.tick(now):
+            for evcs in self._evcs.values():
+                if evcs.instance is not None:
+                    evcs.write("SetCurrent", evcs.cfg.safe_a, now)
+        for wallbox in self.wallboxes.values():
+            wallbox.step(now, STEP_S, self._volts)
+        for tesla in self.teslas.values():
+            tesla.tick(now)
+        self._balance()
+
+    def _run_foreign(self, now: datetime) -> None:
+        """Der fremde Regler: alle ``FOREIGN_EVERY`` neue Werte direkt an den Geräten."""
+        if not self.foreign:
+            self._foreign_next = None
+            return
+        if self._foreign_next is not None and now < self._foreign_next:
+            return
+        self._foreign_next = now + FOREIGN_EVERY
+        for evcs in self._evcs.values():
+            evcs.set_current_a = self._rng.randint(*FOREIGN_EVCS_A)
+            evcs.start_stop = 1
+        for tesla in self.teslas.values():
+            tesla.wake(now)
+            tesla.charge_amps = self._rng.randint(*FOREIGN_TESLA_A)
+
+    def _balance(self) -> None:
+        """Lasten, Akku und Netz je Phase, dann der SOC des Akkus."""
+        volts = self._volts
+        loads = dict(zip(PHASES, self.house_w, strict=True))
+        for wallbox in self.wallboxes.values():
+            for phase, amps in wallbox.phase_a().items():
+                loads[phase] += amps * volts
+        if GRID in self.outages:
+            self._pv_now_w = 0.0
+            battery = {phase: -load for phase, load in loads.items()}
+            ac_in = dict.fromkeys(PHASES, 0.0)
+            grid = dict.fromkeys(PHASES, 0.0)
+        else:
+            self._pv_now_w = self.pv_w
+            battery = self._ess(loads)
+            ac_in = {phase: loads[phase] + battery[phase] for phase in PHASES}
+            grid = {phase: ac_in[phase] - self.pv_w / 3 for phase in PHASES}
+        self._ac_out_w, self._ac_in_w, self._grid_w = loads, ac_in, grid
+        self.grid_a = {phase: grid[phase] / volts for phase in PHASES}
+        self.battery_feed_a = {phase: max(0.0, -battery[phase]) / volts for phase in PHASES}
+        self.battery_w = sum(battery.values())
+        kwh = self.battery_w * STEP_S / 3_600_000
+        soc = self.soc_pct + kwh / self._cfg.battery.usable_kwh * 100
+        self.soc_pct = min(100.0, max(0.0, soc))
+
+    def _ess(self, loads: dict[Phase, float]) -> dict[Phase, float]:
+        """Die Akkuleistung je Phase am Netz, positiv beim Laden: ESS, dann Peak Shaving."""
+        battery = self._cfg.battery
+        total = self.pv_w - sum(loads.values())
+        total = min(max(total, -battery.max_discharge_w), battery.max_charge_w)
+        may_discharge = not self.charger_only and self.soc_pct > battery.reserve_soc_pct
+        if not may_discharge:
+            total = max(total, 0.0)
+        if self.soc_pct >= 100.0:
+            total = min(total, 0.0)
+        share = dict.fromkeys(PHASES, total / 3)
+        if not may_discharge:
+            return share
+        limit_w = self._cfg.grid.import_limit_a * self._volts
+        floor_w = -battery.max_discharge_w / 3
+        for phase in PHASES:
+            over_w = loads[phase] + share[phase] - self.pv_w / 3 - limit_w
+            if over_w > 0:
+                share[phase] = max(share[phase] - over_w, floor_w)
+        return share
+
+    # --- Signale ----------------------------------------------------------------------------------
+
+    def publish(self, store: StateStore, now: datetime) -> None:
+        """Schreibt die Signale wie die Adapter, mit Quelle, Art und Zeitstempel ``now``.
+
+        Eine ausgefallene Quelle ist getrennt und liefert nichts. Tessie liefert nur zu den
+        Abfragezeiten seines Adapters; nach einem Ausfall fragt er sofort wieder ab.
+        """
+        cerbo_up = CERBO not in self.outages
+        store.set_connected(VICTRON_SOURCE, cerbo_up)
+        if cerbo_up:
+            for topic, value in self._cerbo().items():
+                for signal, kind in self._routes(topic):
+                    store.update(signal, value, source=VICTRON_SOURCE, kind=kind, ts=now)
+        for key, evcs in self._evcs.items():
+            if EVCS not in self.outages:
+                for name, value in decode_block(BLOCK_START, evcs.registers()).items():
+                    kind = SignalKind.MEASUREMENT if name == "current_a" else SignalKind.STATE
+                    store.update(f"wallbox.{key}.{name}", value, source=key, kind=kind, ts=now)
+            store.set_connected(key, EVCS not in self.outages)
+        for key, twc in self._twcs.items():
+            if TWC not in self.outages:
+                vitals = parse_vitals(twc.vitals(self._volts), twc.phase_map)
+                for name, (value, kind) in vitals.items():
+                    store.update(f"wallbox.{key}.{name}", value, source=key, kind=kind, ts=now)
+            store.set_connected(key, TWC not in self.outages)
+        for key, tesla in self.teslas.items():
+            source = f"tessie:{key}"
+            if TESSIE in self.outages:
+                tesla.next_poll = None
+                store.set_connected(source, False)
+                continue
+            for name, value in (tesla.poll(now, self._volts) or {}).items():
+                store.update(
+                    f"vehicle.{key}.{name}",
+                    value,
+                    source=source,
+                    kind=SignalKind.MEASUREMENT,
+                    ts=now,
+                )
+            store.set_connected(source, True)
+
+    def _cerbo(self) -> dict[str, Value]:
+        """Die Topics des Cerbo (``<Dienst>/<Instanz>/<Pfad>``) mit ihren Werten."""
+        island = GRID in self.outages
+        grid, vebus = f"grid/{self._grid_instance}", f"vebus/{self._vebus_instance}"
+        topics: dict[str, Value] = {
+            f"{grid}/Ac/Power": sum(self._grid_w.values()),
+            f"{vebus}/Ac/NumberOfPhases": self._cfg.grid.phases,
+            f"{vebus}/Mode": MULTI_CHARGER_ONLY if self.charger_only else MULTI_ON,
+            "system/0/Dc/Battery/Soc": self.soc_pct,
+            "system/0/Dc/Battery/Power": self.battery_w,
+            "system/0/Ac/ActiveIn/Source": ISLAND_SOURCE if island else GRID_SOURCE,
+        }
+        for n, phase in enumerate(PHASES, 1):
+            topics[f"{grid}/Ac/L{n}/Power"] = self._grid_w[phase]
+            topics[f"{grid}/Ac/L{n}/Current"] = self.grid_a[phase]
+            topics[f"{grid}/Ac/L{n}/Voltage"] = 0.0 if island else self._volts
+            topics[f"{vebus}/Ac/ActiveIn/L{n}/P"] = self._ac_in_w[phase]
+            topics[f"{vebus}/Ac/Out/L{n}/P"] = self._ac_out_w[phase]
+        pv_w = self._pv_now_w / len(self._pv_instances)  # gleich auf die Wechselrichter
+        for instance in self._pv_instances:
+            topics[f"pvinverter/{instance}/Ac/Power"] = pv_w
+            for n in range(1, 4):
+                topics[f"pvinverter/{instance}/Ac/L{n}/Power"] = pv_w / 3
+        for evcs in self._evcs.values():
+            if evcs.instance is not None:
+                for path, value in evcs.gx(self._volts).items():
+                    topics[f"evcharger/{evcs.instance}/{path}"] = value
+        return topics | self._settings | self._watchdog.topics()
