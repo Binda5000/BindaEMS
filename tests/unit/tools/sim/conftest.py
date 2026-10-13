@@ -4,10 +4,10 @@ from __future__ import annotations
 
 import asyncio
 import random
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Coroutine
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
-from typing import Final
+from typing import Any, Final
 
 import httpx
 import pytest
@@ -79,6 +79,14 @@ async def tick(model: PlantModel, store: StateStore, clock: ManualClock, seconds
         model.resolve(now)
         await settle()
         clock.advance(1)
+
+
+async def at_once(request: Coroutine[Any, Any, httpx.Response]) -> httpx.Response:
+    """Eine Anfrage, die das Modell sofort beantwortet, ohne auf ``resolve`` zu warten."""
+    answer = asyncio.create_task(request)
+    await settle()
+    assert answer.done(), "Tessie wartet auf resolve"
+    return answer.result()
 
 
 @asynccontextmanager

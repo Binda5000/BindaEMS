@@ -31,10 +31,11 @@ Bleibt der Heartbeat danach ``victron.watchdog.timeout_s`` aus, löst er aus, un
 GX-Instanz bekommt ihren ``safe_a``. Die 0 gibt ihn frei; er wartet. Als Echo meldet er den zuletzt
 angenommenen Heartbeat, auch die 0.
 
-**Ausfälle** (``outages``, Namen aus ``OUTAGES``): „evcs“, „twc“ und „tessie“ liefern keine Werte,
-ihre Quellen sind getrennt, Befehle an Tessie enden mit HTTP 503. Bei „cerbo“ kommen keine Werte
-über ``victron``, und ``mqtt_write`` liefert ``False``. „grid“ ist der Inselbetrieb. Die Geräte
-selbst laufen weiter.
+**Ausfälle** (``outages``, Namen aus ``OUTAGES``): „evcs“ und „twc“ liefern keine Werte, ihre
+Quellen sind getrennt. Bei „tessie“ kommen keine neuen Werte, die alten veralten nach 900 s, und
+Befehle enden mit HTTP 503; die Quelle bleibt verbunden, weil auch der echte Tessie-Adapter sie bei
+Fehlern nicht trennt. Bei „cerbo“ kommen keine Werte über ``victron``, und ``mqtt_write`` liefert
+``False``. „grid“ ist der Inselbetrieb. Die Geräte selbst laufen weiter.
 
 **Fremder Regler** (``foreign``): Alle ``FOREIGN_EVERY`` stellt er direkt am Gerät jede EVCS auf
 einen Sollstrom aus ``FOREIGN_EVCS_A`` mit Laden an und jeden Tesla auf einen Strom aus
@@ -457,8 +458,10 @@ class PlantModel:
     def publish(self, store: StateStore, now: datetime) -> None:
         """Schreibt die Signale wie die Adapter, mit Quelle, Art und Zeitstempel ``now``.
 
-        Eine ausgefallene Quelle ist getrennt und liefert nichts. Tessie liefert nur zu den
-        Abfragezeiten seines Adapters; nach einem Ausfall fragt er sofort wieder ab.
+        Eine ausgefallene Quelle liefert nichts; ``victron``, EVCS und Wall Connector sind dann
+        getrennt, Tessie bleibt verbunden wie beim Adapter. Tessie liefert nur zu den Abfragezeiten
+        seines Adapters und ist wie dieser erst nach der ersten Abfrage verbunden; nach einem
+        Ausfall fragt das Modell sofort wieder ab.
         """
         cerbo_up = CERBO not in self.outages
         store.set_connected(VICTRON_SOURCE, cerbo_up)
@@ -479,12 +482,14 @@ class PlantModel:
                     store.update(f"wallbox.{key}.{name}", value, source=key, kind=kind, ts=now)
             store.set_connected(key, TWC not in self.outages)
         for key, tesla in self.teslas.items():
-            source = f"tessie:{key}"
             if TESSIE in self.outages:
-                tesla.next_poll = None
-                store.set_connected(source, False)
+                tesla.next_poll = None  # nach dem Ausfall fragt das Modell sofort wieder ab
                 continue
-            for name, value in (tesla.poll(now, self._volts) or {}).items():
+            values = tesla.poll(now, self._volts)
+            if values is None:
+                continue
+            source = f"tessie:{key}"
+            for name, value in values.items():
                 store.update(
                     f"vehicle.{key}.{name}",
                     value,

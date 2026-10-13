@@ -9,7 +9,16 @@ import random
 
 import pytest
 from tests.integration.conftest import GOOD_STATE
-from tests.unit.tools.sim.conftest import T0, at, run
+from tests.unit.tools.sim.conftest import (
+    T0,
+    WAIT,
+    at,
+    at_once,
+    command_url,
+    run,
+    tessie_client,
+    tick,
+)
 
 from bindaems.core.adapters.victron_mqtt import HEARTBEAT_PATH, MIN_SOC_PATH
 from bindaems.core.checks.selfcheck import run_selfcheck
@@ -277,7 +286,6 @@ def test_cerbo_outage_stops_victron_values_and_writes(model, store, clock) -> No
     [
         ("evcs", "evcs", "wallbox.evcs.current_a"),
         ("twc", "twc", "wallbox.twc.l1.current_a"),
-        ("tessie", "tessie:tesla", "vehicle.tesla.charging_state"),
     ],
 )
 def test_device_outage_disconnects_its_source(model, store, clock, outage, source, signal) -> None:
@@ -294,6 +302,51 @@ def test_device_outage_disconnects_its_source(model, store, clock, outage, sourc
     reading = store.snapshot().get(signal)
     assert reading is not None and reading.ts == at(3) and reading.quality is Quality.OK
     assert store.connected(source) is True
+
+
+async def test_tessie_outage_keeps_its_source_like_the_adapter(model, store, clock) -> None:
+    # Der echte Tessie-Adapter trennt seine Quelle bei Fehlern nicht: Es kommen keine neuen Werte,
+    # die alten veralten nach 900 s, und Befehle enden mit 503.
+    signal = "vehicle.tesla.charging_state"
+    model.plug("tesla", "twc")
+    async with tessie_client(model) as client:
+        await tick(model, store, clock, 1)  # Abfrage bei T0, die nächste wäre bei 60 s
+        model.outages.add("tessie")
+        response = await at_once(client.post(command_url("start_charging"), params=WAIT))
+        assert response.status_code == 503
+        run(model, store, clock, 120)  # bis T0 + 120 s, ohne Abfrage
+        reading = store.snapshot().get(signal)
+        assert reading is not None and reading.ts == T0 and reading.quality is Quality.OK
+        assert store.connected("tessie:tesla") is True
+        run(model, store, clock, 780)  # bis T0 + 900 s; die Uhr steht auf 901 s
+        reading = store.snapshot().get(signal)
+        assert reading is not None and reading.ts == T0 and reading.quality is Quality.STALE
+        assert store.connected("tessie:tesla") is True
+        model.outages.discard("tessie")
+        run(model, store, clock, 1)  # nach dem Ausfall fragt das Modell gleich wieder ab
+    reading = store.snapshot().get(signal)
+    assert reading is not None and reading.ts == at(901) and reading.quality is Quality.OK
+    assert not model.teslas["tesla"].charge_enabled  # der Befehl mit 503 wirkte nicht
+
+
+def test_after_a_tessie_outage_the_model_polls_at_once(model, store, clock) -> None:
+    # Vereinfachung des Modells: Nach dem Ausfall fragt es sofort ab, nicht erst zur geplanten Zeit.
+    model.plug("tesla", "twc")
+    run(model, store, clock, 1)  # Abfrage bei T0, die nächste wäre bei 60 s
+    model.outages.add("tessie")
+    run(model, store, clock, 2)
+    model.outages.discard("tessie")
+    run(model, store, clock, 1)  # T0 + 3 s
+    reading = store.snapshot().get("vehicle.tesla.charging_state")
+    assert reading is not None and reading.ts == at(3)
+
+
+def test_tessie_outage_before_the_first_poll_never_connects(model, store, clock) -> None:
+    # Verbunden ist Tessie wie beim Adapter erst nach der ersten Abfrage.
+    model.outages.add("tessie")
+    run(model, store, clock, 5)
+    assert store.connected("tessie:tesla") is False
+    assert store.snapshot().get("vehicle.tesla.soc_pct") is None
 
 
 def test_evcs_outage_keeps_the_gx_values(model, store, clock) -> None:

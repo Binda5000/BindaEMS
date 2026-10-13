@@ -11,6 +11,7 @@ from tests.unit.tools.sim.conftest import (
     VIN,
     WAIT,
     at,
+    at_once,
     command_url,
     run,
     settle,
@@ -47,14 +48,6 @@ async def command(model, store, clock, client, name: str, **params: str) -> http
             break
         await tick(model, store, clock, 1)
     assert answer.done(), "keine Antwort von Tessie binnen 40 s"
-    return answer.result()
-
-
-async def at_once(request) -> httpx.Response:
-    """Eine Anfrage, die das Modell sofort beantwortet, ohne auf ``resolve`` zu warten."""
-    answer = asyncio.create_task(request)
-    await settle()
-    assert answer.done(), "Tessie wartet auf resolve"
     return answer.result()
 
 
