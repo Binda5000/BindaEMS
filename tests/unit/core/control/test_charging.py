@@ -128,6 +128,55 @@ def test_now_is_lowered_urgently_at_the_fuse(cfg) -> None:
     ]
 
 
+def test_now_starts_only_when_the_limit_carries_the_minimum(cfg) -> None:  # Design 5.3
+    # Der e-Golf in Sofort, angesteckt, lädt nicht. Bis 4 s ist auf L1 frei 33 − 30,3 = 2,7 A,
+    # weniger als sein Mindeststrom: Der Strom geht auf 6 A, „Laden an“ wartet. Ab 5 s ist frei
+    # 33 − 27 = 6 A: Jetzt startet er.
+    reasons = ("mode_now", "phase_limit")
+    found = run(
+        controller(cfg),
+        cfg,
+        10,
+        intent=egolf_in(ChargeMode.NOW),
+        grid_obs=lambda s: grid(l1=30.3 if s < 5 else 27.0),
+    )
+    assert as_commands(found) == [cmd(0, CURRENT, 6.0, reasons), cmd(5, CHARGING, True, reasons)]
+
+
+def test_min_pv_starts_when_the_fuse_carries_the_minimum(cfg) -> None:  # Design 5.3, 6.3
+    # Min+PV: Der Mindeststrom geht dem Importlimit vor, nicht der Sicherung. Bis 4 s ist auf L1 an
+    # der Sicherung frei 33 − 30,3 = 2,7 A: kein Start. Ab 5 s 33 − 25 = 8 A: Start mit 6 A, obwohl
+    # am Importlimit 19 − 25 = −6 A frei sind.
+    reasons = ("mode_min_pv", "import_limit")
+    found = run(
+        controller(cfg),
+        cfg,
+        10,
+        intent=egolf_in(ChargeMode.MIN_PV),
+        grid_obs=lambda s: grid(l1=30.3 if s < 5 else 25.0),
+    )
+    assert as_commands(found) == [cmd(0, CURRENT, 6.0, reasons), cmd(5, CHARGING, True, reasons)]
+
+
+def test_a_charging_car_keeps_charging_below_the_minimum(cfg) -> None:  # Design 5.3
+    # Lädt es schon, geht es auf den Mindeststrom; „Laden an“ beim Übernehmen bleibt.
+    charging = evcs(charging=True, phase_a={"L1": 10.0, "L2": 10.0, "L3": 0.0}, power_w=4600.0)
+    found = run(
+        controller(cfg),
+        cfg,
+        1,
+        intent=egolf_in(ChargeMode.NOW),
+        evcs_obs=charging,
+        present=at_evcs(10.0, True),
+        grid_obs=grid(l1=40.3),  # frei 33 − (40,3 − 10) = 2,7 A
+    )
+    reasons = ("mode_now", "phase_limit")
+    assert as_commands(found) == [
+        cmd(0, CURRENT, 6.0, reasons, urgent=True),
+        cmd(0, CHARGING, True, reasons),
+    ]
+
+
 def test_reserve_guard_limits_now_to_the_import_target(cfg) -> None:
     found = run(
         ChargeController(cfg, HardLimits.from_config(cfg), started=T0),
@@ -949,13 +998,11 @@ def test_the_guard_rounds_the_free_current_down(cfg) -> None:
 
 
 def test_an_unknown_load_allows_only_the_minimum(cfg) -> None:  # Design 5.5
+    # Die Phase gilt als voll: höchstens der Mindeststrom, und ein Start unterbleibt.
     c = controller(cfg)
     found = c.step(inputs(cfg, intent=egolf_in(ChargeMode.NOW), grid_obs=grid(l1=None)))
     reasons = ("mode_now", "phase_limit")
-    assert [x.command for x in found] == [
-        Command("wallbox.evcs", CURRENT, 6.0, reasons=reasons),
-        Command("wallbox.evcs", CHARGING, True, reasons=reasons),
-    ]
+    assert [x.command for x in found] == [Command("wallbox.evcs", CURRENT, 6.0, reasons=reasons)]
     assert c.health()[1]["limit_a"] is None
 
 

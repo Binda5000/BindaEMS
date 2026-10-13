@@ -70,6 +70,11 @@ Dazu legt die Regelung fest:
 - Überlast startet und weckt nichts: Ab ``MINIMUM`` gibt es kein „Laden an“, nur den
   Mindeststrom. Ein Auto, das lädt, obwohl sein Modus aus will (etwa selbst gestartet), stoppt
   sie dringend, außer solange die Zuordnung unklar ist.
+- Ein Start („Laden an“, auch der Weckstart) folgt nur, wenn die Grenze des Wächters den
+  Mindeststrom des Autos trägt (Design 5.3), in Min+PV die Grenze an der Sicherung, denn dort geht
+  der Mindeststrom dem Importlimit vor (Design 6.3). Ist die Grenze unbekannt, unterbleibt er
+  (Design 5.5). Trägt sie ihn wieder, startet das Auto nach den Regeln seines Modus. Ein Auto, das
+  schon lädt, betrifft das nicht: Es geht auf den Mindeststrom.
 - Ein Start wartet, solange sein Strom gesendet werden muss, aber blockiert ist.
 - Ist der Ansteckzustand unbekannt, sinkt der Strom nur unter den Ist-Strom, wenn der Wächter es
   verlangt; „Laden aus“ kommt dann nur wegen Überlast.
@@ -298,6 +303,8 @@ class _Situation:
       Wert im Fenster; ``share``: der Anteil am Überschuss (``None`` ohne)
     - ``level``: die Überlast; ``unclear``: die Zuordnung ist unklar
     - ``resume``: die erste Startfolge nach einer Pause steht noch aus
+    - ``carries``: Die Grenze des Wächters ist bekannt und trägt den Mindeststrom, in Min+PV an der
+      Sicherung; nur dann darf ein Auto, das nicht lädt, starten (Design 5.3).
     """
 
     plugged: bool | None
@@ -311,6 +318,7 @@ class _Situation:
     level: OverloadLevel
     unclear: bool
     resume: bool
+    carries: bool
 
     @property
     def head(self) -> tuple[str, ...]:
@@ -419,6 +427,7 @@ class ChargeController:
                 level=cycle.level,
                 unclear=vehicle.kind is AssignmentKind.UNCLEAR,
                 resume=key in self._resume,
+                carries=free is not None and limit + self._extra_a(modes[key]) >= point.min_a,
             )
             found = self._maximum(key, modes[key], inputs) if key in at_the_evcs else []
             found += self._regulate(now, point, actuator, situation, inputs)
@@ -772,7 +781,8 @@ class ChargeController:
         Ansteckzustand. Dringend sind die Befehle wegen Überlast und eine Senkung unter den
         Ist-Strom, wenn das Ziel die Sicherung ist (Präzisierung 11), außer als erneuter Befehl
         nach „nicht übernommen“ (``_command``). Ein Aktor, der nicht steuerbar ist (geregelt ist
-        er dann nur, weil er weckbar ist), bekommt höchstens den Weckstart.
+        er dann nur, weil er weckbar ist), bekommt höchstens den Weckstart. Starten darf ein Auto,
+        das nicht lädt, nur, wenn die Grenze seinen Mindeststrom trägt (``carries``).
         """
         level = situation.level
         stop = level >= OverloadLevel.ALL_STOP or (point.evcs and level >= OverloadLevel.EVCS_STOP)
@@ -782,8 +792,9 @@ class ChargeController:
             charge = False
         blocked = inputs.blocked
         minimum = level >= OverloadLevel.MINIMUM
+        may_start = not minimum and (situation.carries or situation.charging is True)
         if inputs.controllable.get(actuator) is not True:
-            if charge and not minimum and situation.plugged is True:
+            if charge and may_start and situation.plugged is True:
                 return self._wake(point.vehicle, actuator, situation, blocked)
             return []
         head = situation.head
@@ -813,9 +824,16 @@ class ChargeController:
             reasons,
             blocked,
             urgent=urgent,
-            start=not minimum,
+            start=may_start,
             resume=situation.resume,
         )
+
+    def _extra_a(self, mode: Effective) -> float:
+        """Was die Grenze für einen Start mehr trägt: in Min+PV den Abstand vom Importziel zum Ziel
+        an der Sicherung, denn dort geht der Mindeststrom dem Importlimit vor (Design 6.3)."""
+        if mode is Effective.MIN_PV:
+            return self._guard.fuse_target_a - self._guard.import_target_a
+        return 0.0
 
     def _wake(
         self, key: str, actuator: str, situation: _Situation, blocked: frozenset[_Key]

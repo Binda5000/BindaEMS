@@ -178,7 +178,13 @@ async def test_the_safety_context_knows_the_wallbox_of_each_vehicle(
 
 async def test_a_sleeping_tesla_gets_a_wake_start(runtime_env) -> None:
     car = {"online": False, "at_home": True, "plugged": True, "charging_state": "Stopped"}
-    state = GOOD_STATE | {f"vehicle.tesla.{name}": value for name, value in car.items()}
+    # Wall Connector und EVCS melden ihre Ströme (0 A): Die Grenze ist bekannt und trägt den
+    # Mindeststrom (frei 33 − 4,3 A). Ohne sie gälten die Phasen als voll, und der Start
+    # unterbliebe (Design 5.5).
+    wallboxes = {"wallbox.twc.vehicle_connected": True, "wallbox.evcs.current_a": 0.0} | {
+        f"wallbox.twc.l{n}.current_a": 0.0 for n in (1, 2, 3)
+    }
+    state = GOOD_STATE | wallboxes | {f"vehicle.tesla.{name}": v for name, v in car.items()}
     rt, _, clock = runtime_env(state=state, tessie_token="t")
     rt.store.register_source("tessie:tesla", 900.0)
     rt.store.set_connected("tessie:tesla", True)
@@ -193,7 +199,7 @@ async def test_a_sleeping_tesla_gets_a_wake_start(runtime_env) -> None:
             CommandKind.CHARGING,
             True,
             DecisionResult.DRY_RUN,
-            ("mode_now", "phase_limit", "wake"),
+            ("mode_now", "wake"),
         )
     ]
     assert rt.health().vehicles[0]["wakes_today"] == 1  # zählt auch im Dry-Run

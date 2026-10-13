@@ -475,6 +475,22 @@ def test_a_wake_start_waits_for_a_known_plug_state(cfg) -> None:  # Präzisierun
     ]
 
 
+def test_a_wake_start_waits_until_the_limit_carries_the_minimum(cfg) -> None:  # Design 5.3
+    # Der schlafende Tesla in Sofort: Bis 4 s ist auf L1 frei 33 − 30 = 3 A, weniger als 5 A. Er
+    # bekommt den niedrigsten freien Wert der letzten 60 s: Der Weckstart folgt erst bei 65 s.
+    found = run(
+        controller(cfg),
+        cfg,
+        70,
+        make=tesla_inputs,
+        intent=TESLA_NOW,
+        tesla_obs=tesla(plugged=True, asleep=True),
+        grid_obs=lambda s: grid(l1=30.0) if s < 5 else grid(),
+        **ONLY_WAKEABLE,
+    )
+    assert of(found, "vehicle.tesla") == [(65, WAKE)]
+
+
 def test_a_blocked_wake_start_waits(cfg) -> None:
     found = run(
         controller(cfg),
