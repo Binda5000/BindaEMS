@@ -7,10 +7,12 @@ Kennzahlen und ihre Grenzen:
 - **Längste Zeit über dem Ziel an der Sicherung** (``fuse_a − fuse_margin_a``): die längste Folge
   von Sekunden mit einer Phase darüber, höchstens ``OVER_FUSE_TARGET_S``.
 - **Längste Zeit über dem Ziel in PV-Modi:** Gezählt werden Sekunden, in denen mindestens ein Auto
-  lädt, alle ladenden Autos laut Absicht in PV-Überschuss oder Min+PV stehen und keines mit weniger
-  als Mindeststrom + ``MINIMUM_MARGIN_A`` lädt (Stopp-Minuten, Mindeststrom von Min+PV). Der Wert
-  ist die längste Folge solcher Sekunden mit einer Phase, deren ``grid_a + battery_feed_a`` über
-  dem Ziel am Importlimit + ``TARGET_TOLERANCE_A`` liegt. Höchstens ein Übergang (siehe unten).
+  lädt, alle ladenden Autos laut Absicht in PV-Überschuss oder Min+PV stehen, ihren Ladepunkt die
+  Regelung live steuert (``CarSample.steered``; im Dry-Run stellt ihn ein anderer) und keines mit
+  weniger als Mindeststrom + ``MINIMUM_MARGIN_A`` lädt (Stopp-Minuten, Mindeststrom von Min+PV).
+  Der Wert ist die längste Folge solcher Sekunden mit einer Phase, deren
+  ``grid_a + battery_feed_a`` über dem Ziel am Importlimit + ``TARGET_TOLERANCE_A`` liegt.
+  Höchstens ein Übergang (siehe unten).
 - **Akku-Energie in PV-Autos:** ``Σ min(Entladung, Leistung der Autos)`` geteilt durch die
   ``Σ Leistung der Autos``, in denselben Sekunden; höchstens ``BATTERY_SHARE_PCT``. In jeder
   ununterbrochenen Folge dieser Sekunden mit Entladung zählt die Entladung erst nach einem Übergang.
@@ -22,8 +24,12 @@ Kennzahlen und ihre Grenzen:
 - **Weckvorgänge:** Entscheidungen mit dem Grund ``wake`` und einem Wert (nicht abgelehnt);
   höchstens ``wake.per_day`` je Kalendertag in Wiener Zeit, im Abstand von mindestens
   ``wake.interval_s``.
-- **Wiederholte Dry-Run-Entscheidungen:** je Aktor und Art aufeinanderfolgende
-  Dry-Run-Entscheidungen mit gleichem ``requested``; keine.
+- **Wiederholte Dry-Run-Entscheidungen:** Dry-Run-Entscheidungen, deren Wert gleich dem vorigen
+  eigenen Wert der Regelung für Aktor und Art ist (``OwnValue``); keine. Eigene Werte setzt jedes
+  Urteil mit Wert und ``UNCHANGED`` (Präzisierung 10); ``UNCHANGED`` steht in keiner Entscheidung,
+  darum bringt der Lauf die eigenen Werte mit. Ohne sie zählen nur die Dry-Run-Entscheidungen
+  selbst. Eine Pause der Regelung, nach der sie ihre Werte vergisst, sieht die Kennzahl nicht; in
+  den Szenarien im Dry-Run kommt keine vor.
 
 **Übergänge** (Design 13.2: „abgesehen von Übergängen“): Nach einer Änderung darf die Regelung
 ``TRANSITION_S`` über dem Ziel liegen und Akku-Energie in PV-Autos fließen lassen. Lädt in der
@@ -50,7 +56,7 @@ from itertools import pairwise
 from typing import Final
 
 from bindaems.shared.config import Config, Phase, VehicleConfig
-from bindaems.shared.control import CommandKind, vehicle_actuator
+from bindaems.shared.control import CommandKind, CommandValue, vehicle_actuator
 from bindaems.shared.decisions import Decision, DecisionResult
 from bindaems.shared.numbers import de
 from bindaems.shared.timeutil import LOCAL_TZ
@@ -79,7 +85,8 @@ class CarSample:
     ``charging`` heißt, es zieht Strom; ``current_a`` ist sein Strom je Phase, ``power_w`` seine
     Ladeleistung. ``mode`` ist der Modus laut Absicht (``pv``, ``min_pv``, ``now``, ``off`` oder
     ``boost``), ``min_a`` der Mindeststrom seines Ladepunkts. ``complete`` heißt, es hat sein
-    Ladelimit erreicht („Complete“).
+    Ladelimit erreicht („Complete“). ``steered`` heißt, die Regelung steuert seinen Ladepunkt live;
+    sonst stellt ihn ein anderer, etwa im Dry-Run der fremde Regler.
     """
 
     charging: bool
@@ -88,6 +95,22 @@ class CarSample:
     mode: str
     min_a: int
     complete: bool = False
+    steered: bool = True
+
+
+@dataclass(frozen=True)
+class OwnValue:
+    """Ein eigener Wert der Regelung (Präzisierung 10): das Urteil über einen ihrer Befehle, das
+    den letzten eigenen Wert setzt, also eines mit Wert oder ``UNCHANGED``.
+
+    ``value`` ist der angeforderte Wert; ``dry_run`` heißt, das Urteil ergab eine
+    Dry-Run-Entscheidung.
+    """
+
+    actuator: str
+    kind: CommandKind
+    value: CommandValue
+    dry_run: bool
 
 
 @dataclass(frozen=True)
@@ -199,12 +222,14 @@ def measure(
     cfg: Config,
     *,
     sent: Mapping[str, datetime] | None = None,
+    own: Sequence[OwnValue] | None = None,
 ) -> Metrics:
     """Die Kennzahlen aus den Proben je Sekunde und den Entscheidungen, aufsteigend nach Zeit.
 
     ``sent`` nennt je Kennung einer Entscheidung den Zeitpunkt, zu dem ihr Befehl gesendet wurde;
-    ohne Eintrag gilt der Zeitpunkt der Entscheidung. Folgen zählen über aufeinanderfolgende
-    Sekunden (``Sample.t``).
+    ohne Eintrag gilt der Zeitpunkt der Entscheidung. ``own`` sind die eigenen Werte der Regelung
+    in ihrer Reihenfolge, für die Wiederholungen im Dry-Run. Folgen zählen über
+    aufeinanderfolgende Sekunden (``Sample.t``).
     """
     grid = cfg.grid
     fuse_target = grid.fuse_a - grid.fuse_margin_a
@@ -240,7 +265,7 @@ def measure(
         tesla_interval_s=_shortest_gap(currents, times),
         wakes_per_day=_wakes_per_day(wakes, times),
         wake_interval_s=_shortest_gap(wakes, times),
-        repeated_dry_runs=_repeated_dry_runs(decisions),
+        repeated_dry_runs=_repeated_dry_runs(decisions, own),
     )
 
 
@@ -257,10 +282,12 @@ def _tesla_configs(cfg: Config) -> list[VehicleConfig]:
 
 
 def _pv_only(sample: Sample) -> bool:
-    """Lädt mindestens ein Auto, alle ladenden in PV-Modi und keins am Mindeststrom?"""
+    """Lädt mindestens ein Auto, alle ladenden live gesteuert, in PV-Modi und keins am
+    Mindeststrom?"""
     charging = [car for car in sample.cars.values() if car.charging]
     return bool(charging) and all(
-        car.mode in PV_MODES and car.current_a >= car.min_a + MINIMUM_MARGIN_A for car in charging
+        car.steered and car.mode in PV_MODES and car.current_a >= car.min_a + MINIMUM_MARGIN_A
+        for car in charging
     )
 
 
@@ -361,15 +388,22 @@ def _by_actuator(
     return {actuator: sorted(found) for actuator, found in moments.items()}
 
 
-def _repeated_dry_runs(decisions: Sequence[Decision]) -> int:
-    """Dry-Run-Entscheidungen je Aktor und Art mit demselben ``requested`` wie die vorige."""
-    last: dict[tuple[str, CommandKind], object] = {}
+def _repeated_dry_runs(decisions: Sequence[Decision], own: Sequence[OwnValue] | None) -> int:
+    """Dry-Run-Entscheidungen mit demselben Wert wie der vorige eigene Wert für Aktor und Art.
+
+    Ohne ``own`` sind die eigenen Werte nur die Dry-Run-Entscheidungen selbst.
+    """
+    if own is None:
+        own = [
+            OwnValue(d.actuator, d.kind, d.requested, dry_run=True)
+            for d in decisions
+            if d.result is DecisionResult.DRY_RUN
+        ]
+    last: dict[tuple[str, CommandKind], CommandValue] = {}
     repeated = 0
-    for decision in decisions:
-        if decision.result is not DecisionResult.DRY_RUN:
-            continue
-        key = (decision.actuator, decision.kind)
-        if key in last and last[key] == decision.requested:
+    for value in own:
+        key = (value.actuator, value.kind)
+        if value.dry_run and key in last and last[key] == value.value:
             repeated += 1
-        last[key] = decision.requested
+        last[key] = value.value
     return repeated

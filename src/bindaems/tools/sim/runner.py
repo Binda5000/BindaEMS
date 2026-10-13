@@ -18,7 +18,9 @@ Je simulierter Sekunde:
 
 Am Ende liest der Lauf alle Entscheidungen und fährt die Laufzeit herunter. Die Kennzahlen kommen
 aus Proben und Entscheidungen; für die Befehle an Tessie gilt dabei der Zeitpunkt, zu dem sie
-Tessie erreichten (``sent_times``), nicht der ihres späteren Ergebnisses.
+Tessie erreichten (``sent_times``), nicht der ihres späteren Ergebnisses. Dazu sammelt der Lauf die
+eigenen Werte der Regelung (``OwnValue``): Er hüllt ``rt.charger.note_verdict`` ein, denn
+``UNCHANGED`` setzt den letzten eigenen Wert, ohne dass eine Entscheidung entsteht.
 """
 
 from __future__ import annotations
@@ -37,9 +39,11 @@ from pydantic import SecretStr
 
 from bindaems.core.api.app import HealthReport
 from bindaems.core.runtime import CoreRuntime
+from bindaems.core.safety.types import Outcome, Verdict
 from bindaems.shared.config import Config, EvcsConfig, Secrets
 from bindaems.shared.control import (
     ActuatorMode,
+    Command,
     CommandKind,
     CommandValue,
     Intent,
@@ -50,7 +54,7 @@ from bindaems.shared.control import (
 from bindaems.shared.decisions import Decision, DecisionResult
 from bindaems.shared.influx.lineprotocol import Point
 from bindaems.shared.timeutil import ManualClock
-from bindaems.tools.sim.metrics import CarSample, Metrics, Sample, measure
+from bindaems.tools.sim.metrics import CarSample, Metrics, OwnValue, Sample, measure
 from bindaems.tools.sim.model import PlantModel
 from bindaems.tools.sim.scenarios import Action, Scenario
 
@@ -158,6 +162,7 @@ async def run_scenario(
         mqtt_write=model.mqtt_write,
         http_client=httpx.AsyncClient(transport=httpx.MockTransport(tessie)),
     )
+    own = _own_values(rt)
     try:
         model.attach(rt.store)
         reply = rt.submit_intent(_intent(scenario, cfg))
@@ -183,9 +188,30 @@ async def run_scenario(
         decisions = _decisions(rt, scenario.start)
     finally:
         await rt.shutdown()
-    metrics = measure(samples, decisions, cfg, sent=sent_times(decisions, requests, cfg))
+    sent = sent_times(decisions, requests, cfg)
+    metrics = measure(samples, decisions, cfg, sent=sent, own=own)
     result = SimResult(scenario, metrics, decisions, health, samples, [])
     return replace(result, failures=[*metrics.failures(cfg), *scenario.checks(result)])
+
+
+def _own_values(rt: CoreRuntime) -> list[OwnValue]:
+    """Hüllt ``rt.charger.note_verdict`` ein; die Liste füllt sich mit den eigenen Werten.
+
+    Eigen ist jedes Urteil über einen Befehl der Regelung, das ihren letzten Wert setzt: mit Wert
+    oder ``UNCHANGED`` (Präzisierung 10).
+    """
+    own: list[OwnValue] = []
+    note = rt.charger.note_verdict
+
+    def noted(command: Command, verdict: Verdict | None, *, not_sent: bool = False) -> None:
+        if verdict is not None and (verdict.sendable or verdict.outcome == Outcome.UNCHANGED):
+            dry_run = verdict.sendable and verdict.dry_run
+            own.append(OwnValue(command.actuator, command.kind, command.value, dry_run=dry_run))
+        note(command, verdict, not_sent=not_sent)
+
+    # Der Simulator beobachtet die Regelung von außen; die Methode bleibt dieselbe.
+    rt.charger.note_verdict = noted  # type: ignore[method-assign]
+    return own
 
 
 def _by_second(events: Sequence[tuple[int, Action]]) -> dict[int, list[Action]]:
@@ -196,7 +222,8 @@ def _by_second(events: Sequence[tuple[int, Action]]) -> dict[int, list[Action]]:
 
 
 def _sample(t: int, model: PlantModel, cfg: Config, intent: Intent | None, now: datetime) -> Sample:
-    """Die Probe nach Sekunde ``t``; der Modus je Auto laut Absicht, mit Boost bis ``now``."""
+    """Die Probe nach Sekunde ``t``; der Modus je Auto laut Absicht, mit Boost bis ``now``, und
+    ob die Regelung seinen Ladepunkt live steuert (``_steered``)."""
     amps, power = model.car_a, model.car_w
     cars: dict[str, CarSample] = {}
     for key, vehicle in cfg.vehicles.items():
@@ -212,6 +239,7 @@ def _sample(t: int, model: PlantModel, cfg: Config, intent: Intent | None, now: 
             mode="boost" if boost else entry.mode.value,
             min_a=max(vehicle.min_a, evcs_min),
             complete=model.cars[key].complete,
+            steered=_steered(key, plugged, cfg, intent),
         )
     return Sample(
         t=t,
@@ -221,6 +249,20 @@ def _sample(t: int, model: PlantModel, cfg: Config, intent: Intent | None, now: 
         soc_pct=model.soc_pct,
         cars=cars,
     )
+
+
+def _steered(key: str, wallbox: str | None, cfg: Config, intent: Intent | None) -> bool:
+    """Steuert die Regelung den Ladepunkt des Fahrzeugs ``key`` an ``wallbox`` live?
+
+    Der Ladepunkt ist an einer EVCS deren Aktor, an einem Wall Connector das Fahrzeug selbst; live
+    ist er mit der Betriebsart ``live`` in der Absicht. Ein Fahrzeug ohne Tessie hat keinen Aktor,
+    die Absicht kann es also nicht live schalten; ein abgestecktes hat keinen Ladepunkt.
+    """
+    if wallbox is None or intent is None:
+        return False
+    at_evcs = isinstance(cfg.wallboxes[wallbox], EvcsConfig)
+    actuator = wallbox_actuator(wallbox) if at_evcs else vehicle_actuator(key)
+    return intent.actuators.get(actuator) is ActuatorMode.LIVE
 
 
 def _decisions(rt: CoreRuntime, start: datetime) -> list[Decision]:

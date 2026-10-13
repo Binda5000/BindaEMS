@@ -16,7 +16,7 @@ from typing import Final
 from bindaems.shared.config import load_config
 from bindaems.shared.control import CommandKind, CommandValue
 from bindaems.shared.decisions import Decision, DecisionResult
-from bindaems.tools.sim.metrics import CarSample, Sample, measure, tesla_transition_s
+from bindaems.tools.sim.metrics import CarSample, OwnValue, Sample, measure, tesla_transition_s
 
 CFG: Final = load_config(Path("deploy/config.example.yaml"))
 T0: Final = datetime(2026, 6, 21, 8, 0, tzinfo=UTC)  # 10:00 Wiener Zeit
@@ -151,6 +151,31 @@ def test_time_over_the_target_counts_only_pv_cars_above_their_minimum() -> None:
     # lädt ein Auto in Sofort mit, zählt die Sekunde nicht
     both = pv_run(30, egolf=car(8.0), tesla_car=tesla(16.0, mode="now"))
     assert measure(both, [], CFG).over_target_s == 0
+
+
+def test_cars_the_regulation_does_not_steer_live_are_no_pv_cars() -> None:
+    # Im Dry-Run stellt ein fremder Regler die Ladepunkte: Was er tut, messen die PV-Kennzahlen
+    # nicht, auch wenn die Absicht die Autos in PV führt (Entscheidung des Koordinators zu Task 15).
+    steered = CarSample(True, 8.7, 4000.0, "pv", 6)
+
+    def run(egolf: CarSample) -> list[Sample]:
+        return [
+            sample(t, l1=15.0, feed=5.0, battery_w=-2000.0, cars={"egolf": egolf})
+            for t in range(60)
+        ]
+
+    # gesteuert: 60 s über dem Ziel; Entladung 2000 W nach 10 s Übergang, 50 × 2000 / 60 × 4000
+    metrics = measure(run(steered), [], CFG)
+    assert (metrics.over_target_s, round(metrics.battery_share_pct, 2)) == (60, 41.67)
+    foreign = measure(run(replace(steered, steered=False)), [], CFG)
+    assert (foreign.over_target_s, foreign.battery_share_pct) == (0, 0.0)
+    # lädt neben einem gesteuerten Auto eines, das ein anderer stellt, zählt die Sekunde nicht
+    mixed = {"egolf": steered, "tesla": replace(tesla(8.0), steered=False)}
+    together = measure(
+        [sample(t, l1=25.0, battery_w=-2000.0, cars=mixed) for t in range(60)], [], CFG
+    )
+    assert (together.over_target_s, together.over_target_tesla_s) == (0, 0)
+    assert together.battery_share_pct == 0.0
 
 
 def test_a_charging_tesla_may_stay_a_tesla_transition_over_the_target() -> None:
@@ -325,6 +350,40 @@ def test_repeated_dry_run_decisions() -> None:
     metrics = measure([], decisions, CFG)
     assert metrics.repeated_dry_runs == 1
     assert metrics.failures(CFG) == ["Wiederholte Dry-Run-Entscheidungen: 1, Grenze 0."]
+
+
+def test_a_dry_run_decision_after_an_own_change_is_no_repeat() -> None:
+    # Präzisierung 10: UNCHANGED setzt den letzten eigenen Wert ohne Entscheidung. Die Regelung
+    # will 6 A, dann 5 A (der fremde Regler hat schon 5 A), dann wieder 6 A: zwei gleiche
+    # Dry-Run-Entscheidungen hintereinander, aber jede für eine eigene Änderung.
+    dry = DecisionResult.DRY_RUN
+    decisions = [
+        decision(880, TESLA, CommandKind.CURRENT, 6.0, result=dry),
+        decision(1114, TESLA, CommandKind.CURRENT, 6.0, result=dry),
+    ]
+    own = [
+        OwnValue(TESLA, CommandKind.CURRENT, 6.0, dry_run=True),
+        OwnValue(TESLA, CommandKind.CURRENT, 5.0, dry_run=False),  # UNCHANGED
+        OwnValue(TESLA, CommandKind.CURRENT, 6.0, dry_run=True),
+    ]
+    assert measure([], decisions, CFG).repeated_dry_runs == 1  # ohne die eigenen Werte
+    assert measure([], decisions, CFG, own=own).repeated_dry_runs == 0
+
+
+def test_a_dry_run_decision_repeats_the_previous_own_value() -> None:
+    current, charging = CommandKind.CURRENT, CommandKind.CHARGING
+    own = [
+        OwnValue(TESLA, current, 6.0, dry_run=True),
+        OwnValue(EGOLF, current, 6.0, dry_run=True),  # ein anderer Aktor
+        OwnValue(TESLA, charging, True, dry_run=True),  # eine andere Art
+        OwnValue(TESLA, current, 6.0, dry_run=True),  # wiederholt
+        OwnValue(TESLA, current, 7.0, dry_run=False),  # mit Wert gesendet
+        OwnValue(TESLA, current, 7.0, dry_run=True),  # wiederholt den gesendeten
+        OwnValue(TESLA, current, 7.0, dry_run=False),  # UNCHANGED: keine Entscheidung
+    ]
+    metrics = measure([], [], CFG, own=own)
+    assert metrics.repeated_dry_runs == 2
+    assert metrics.failures(CFG) == ["Wiederholte Dry-Run-Entscheidungen: 2, Grenze 0."]
 
 
 def test_live_decisions_are_no_repeated_dry_runs() -> None:

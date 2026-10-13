@@ -15,11 +15,11 @@ import pytest
 
 from bindaems.core.api.app import HealthReport
 from bindaems.shared.config import Config
-from bindaems.shared.control import ChargeMode, CommandKind, Intent, VehicleIntent
+from bindaems.shared.control import ActuatorMode, ChargeMode, CommandKind, Intent, VehicleIntent
 from bindaems.shared.decisions import Decision, DecisionResult
 from bindaems.shared.timeutil import LOCAL_TZ
 from bindaems.tools.sim import runner
-from bindaems.tools.sim.metrics import CarSample, Sample, measure
+from bindaems.tools.sim.metrics import CarSample, OwnValue, Sample, measure
 from bindaems.tools.sim.model import PlantModel
 from bindaems.tools.sim.runner import SimResult, run_scenario, sent_times
 from bindaems.tools.sim.scenarios import (
@@ -259,6 +259,74 @@ async def test_decisions_are_read_page_by_page(cfg, tmp_path, monkeypatch) -> No
     started = [(d.kind, d.requested) for d in result.decisions if d.actuator == "wallbox.evcs"]
     assert started == [(CommandKind.CURRENT, 13.0), (CommandKind.CHARGING, True)]  # Importziel
     assert len({d.ts for d in result.decisions}) == len(result.decisions)  # Gruppen je Zyklus
+
+
+async def test_samples_name_the_cars_the_regulation_steers_live(cfg, tmp_path) -> None:
+    def crossed(model: PlantModel) -> None:
+        model.plug("tesla", "evcs")  # an der EVCS steuert die Regelung die EVCS
+        model.plug("egolf", "twc")  # ohne Tessie am Wall Connector: nur Last
+
+    def usual(model: PlantModel) -> None:
+        model.plug("tesla", "twc")  # das Fahrzeug selbst; der e-Golf ist abgesteckt
+
+    async def steered(setup: object, *, live: bool, evcs_only: bool = False) -> dict[str, bool]:
+        actuators = {"wallbox.evcs": ActuatorMode.LIVE} if evcs_only else {}
+        scenario = Scenario(
+            name="test",
+            title="Test",
+            start=T0,
+            duration_s=2,
+            seed=1,
+            setup=setup,  # type: ignore[arg-type]
+            intent=Intent(version=1, control=True, actuators=actuators),
+            live=live,
+            events=(),
+            checks=lambda result: [],
+        )
+        data_dir = tmp_path / f"{getattr(setup, '__name__', 'x')}-{live}-{evcs_only}"
+        data_dir.mkdir()
+        result = await run_scenario(scenario, cfg, data_dir)
+        return {key: car.steered for key, car in result.samples[-1].cars.items()}
+
+    assert await steered(crossed, live=True) == {"tesla": True, "egolf": False}
+    assert await steered(usual, live=True) == {"tesla": True, "egolf": False}
+    assert await steered(crossed, live=False) == {"tesla": False, "egolf": False}
+    assert await steered(usual, live=False) == {"tesla": False, "egolf": False}
+    # nur die EVCS live: Der Tesla an ihr ist gesteuert, am Wall Connector nicht
+    assert await steered(crossed, live=False, evcs_only=True) == {"tesla": True, "egolf": False}
+    assert await steered(usual, live=False, evcs_only=True) == {"tesla": False, "egolf": False}
+
+
+async def test_the_metrics_get_every_own_value_of_the_regulation(
+    cfg, tmp_path, monkeypatch
+) -> None:
+    # Präzisierung 10: Eigene Werte setzt jedes Urteil mit Wert und UNCHANGED; UNCHANGED steht in
+    # keiner Entscheidung, darum gibt der Lauf sie der Kennzahl selbst.
+    seen: list[object] = []
+    real = runner.measure
+
+    def measure_spy(*args: object, **kwargs: object) -> object:
+        seen.append(kwargs.get("own"))
+        return real(*args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(runner, "measure", measure_spy)
+
+    def at_13_a(model: PlantModel) -> None:
+        SCENARIOS["reserve"].setup(model)
+        model.wallboxes["evcs"].set_current_a = 13.0  # schon der Strom, den die Regelung will
+
+    current = ("wallbox.evcs", CommandKind.CURRENT, 13.0)
+    charging = ("wallbox.evcs", CommandKind.CHARGING, True)
+    for live, dry_run in ((True, False), (False, True)):
+        scenario = replace(SCENARIOS["reserve"], setup=at_13_a, live=live)
+        data_dir = tmp_path / str(live)
+        data_dir.mkdir()
+        result = await run_scenario(scenario, cfg, data_dir, duration_s=70)
+        assert seen.pop() == [
+            OwnValue(*current, dry_run=False),
+            OwnValue(*charging, dry_run=dry_run),
+        ]
+        assert [(d.kind, d.requested) for d in result.decisions] == [charging[1:]]
 
 
 # --- Prüfungen der Szenarien ----------------------------------------------------------------------
