@@ -1,6 +1,6 @@
-"""Laderegelung: der ``ChargeController`` verbindet die Bausteine je Zyklus (Design 4 bis 6).
+"""Laderegelung: der ``ChargeController`` verbindet die Bausteine je Zyklus (Design 4 bis 9).
 
-Ein Zyklus (``step``) geht so (Präzisierungen 4 bis 11):
+Ein Zyklus (``step``) geht so (Präzisierungen 4 bis 12):
 
 1. Zuordnung (``Assignment``) und der geltende Modus je Fahrzeug, bei aktivem ``boost_until``
    Boost. Die Reihenfolge ist ``intent.priority``, wenn sie jedes Fahrzeug der Konfiguration genau
@@ -16,6 +16,7 @@ Ein Zyklus (``step``) geht so (Präzisierungen 4 bis 11):
    beobachteten Zustand (Präzisierung 9). Begann in der Zwischenzeit ein Ansteckvorgang, bekommt
    sie stattdessen ``new_session``: PV und Aus beginnen dann ohne Laden, auch wenn das Auto selbst
    gestartet hat. So beim Tesla, den Tessie erst nach dem Wall Connector als angesteckt meldet.
+   Der gemerkte Vorgang erreicht die Maschine im ersten Schritt mit bekanntem Ansteckzustand.
 
 Die Regelung schickt nur Änderungen (Präzisierung 10): Der letzte eigene Wert je Aktor und Art
 folgt den Urteilen (``note_verdict``) und den Ergebnissen (``note_result``). Sie vergisst ihn, wo
@@ -23,9 +24,33 @@ sich das Gerät ohne sie geändert haben kann; die Safety-Schicht antwortet ``UN
 den Wert schon hat:
 
 - nach einer Pause (``idle``) für alle Aktoren,
-- bei einem neuen Ansteckvorgang und wenn ein Ladepunkt wieder geregelt wird für seinen Aktor,
+- für den Aktor eines Ladepunkts, wenn er wieder geregelt wird, mit einem neuen Ansteckvorgang und
+  wenn ein gemerkter Vorgang die Maschine erreicht; jedes davon geschieht einmal,
 - mit jeder höheren Stufe der Überlast für alle geregelten Aktoren: Jede Stufe bietet ihre
   Reaktion einmal an.
+
+Tesla, Zuordnung und Wiederaufnahme (Design 7 bis 9; die Bausteine stehen in ``charging_tesla``):
+
+- Ein Fahrzeug mit Tessie am Wall Connector bekommt ``floor(min(Mittel des Wunsches, niedrigster
+  freier Wert))`` über ``control.tesla_average_s`` bzw. ``control.tesla_caution_s``, in seinem
+  Strombereich (Präzisierung 12). Der Wunsch zählt nur, solange das Auto laden kann. Beide
+  Fenster beginnen mit jedem neuen Ansteckvorgang und nach ``idle`` neu; wird der Ladepunkt nur
+  wieder geregelt, behalten sie ihre Werte.
+- Will der Modus starten und ist der Aktor nicht steuerbar, aber weckbar, kommt ein Start mit
+  Weckerlaubnis (``wake``) ohne Strom: bei bekanntem Ansteckzustand, ohne Überlast und im
+  Weckkontingent. Das Kontingent zählt jeden Weckstart mit einem Urteil mit Wert.
+- „Tesla an der EVCS“: Hängt ein Fahrzeug mit Tessie laut Übersteuerung an einer EVCS, bekommt es
+  einmal je Ansteckvorgang seinen Höchststrom mit dem Modus als Grund, sobald es steuerbar ist und
+  die EVCS geregelt wird; geregelt wird dann die EVCS. Erledigt ist das wie jeder Befehl
+  (Präzisierung 10); nach ``idle`` geht es noch einmal hinaus.
+- Solange die Zuordnung unklar ist (Präzisierung 5), gibt es kein „Laden an/aus“ nach dem Modus;
+  der Strom sinkt nur, wenn der Wächter weniger als den Ist-Strom erlaubt, nie unter den
+  Mindeststrom. Die Gründe sind ``(Modus, "assignment_unclear", Ursache)``. Die Überlast setzt
+  weiter den Mindeststrom und stoppt ab ``EVCS_STOP``. Fahrzeuge mit Tessie pausieren
+  (Präzisierung 6).
+- Nach ``idle`` trägt die erste Startfolge (Strom und ``charging=True``) je Fahrzeug zusätzlich
+  ``resume_after_outage``, bis die Safety-Schicht ihren Start mit Wert oder ``UNCHANGED``
+  beurteilt. Das gilt erst, wenn seit dem Start des core schon geregelt wurde.
 
 Dazu legt die Regelung fest:
 
@@ -34,8 +59,9 @@ Dazu legt die Regelung fest:
   ``cars_w``, und nur diese Autos wünschen Strom. Sonst nähme ein abgestecktes Auto in Sofort den
   anderen ``max_a × U × Phasen`` weg, und die Leistung eines ungeregelt ladenden Autos gälte als
   Überschuss; sein Strom ist aber Last (Design 9).
-- Überlast startet nichts: Ab ``MINIMUM`` gibt es kein „Laden an“, nur den Mindeststrom. Ein
-  Auto, das lädt, obwohl sein Modus aus will (etwa selbst gestartet), stoppt sie dringend.
+- Überlast startet und weckt nichts: Ab ``MINIMUM`` gibt es kein „Laden an“, nur den
+  Mindeststrom. Ein Auto, das lädt, obwohl sein Modus aus will (etwa selbst gestartet), stoppt
+  sie dringend, außer solange die Zuordnung unklar ist.
 - Ein Start wartet, solange sein Strom gesendet werden muss, aber blockiert ist.
 - Ist der Ansteckzustand unbekannt, sinkt der Strom nur unter den Ist-Strom, wenn der Wächter es
   verlangt; „Laden aus“ kommt dann nur wegen Überlast.
@@ -43,8 +69,8 @@ Dazu legt die Regelung fest:
   ihn das erste nach Priorität. So zählt ihr Strom nur einmal.
 
 Die Schicht ist rein: Die Zeit kommt mit den Eingaben, auf der Uhr der Safety-Schicht
-(``ChargeInputs.now``); nur ``boost_until`` gilt nach der Wanduhr. Nicht für mehrere Threads
-gedacht.
+(``ChargeInputs.now``); nur ``boost_until`` und der Kalendertag des Weckkontingents gelten nach
+der Wanduhr. Nicht für mehrere Threads gedacht.
 """
 
 from __future__ import annotations
@@ -70,6 +96,12 @@ from bindaems.core.control.charge_modes import (
     ModeInput,
     ModeMachine,
     ModeTimers,
+)
+from bindaems.core.control.charging_tesla import (
+    ASSIGNMENT_UNCLEAR,
+    WAKE,
+    EvcsOverrides,
+    TeslaPolicy,
 )
 from bindaems.core.control.executor import WriteResult
 from bindaems.core.control.phase_guard import (
@@ -105,6 +137,7 @@ from bindaems.shared.timeutil import ensure_utc
 PV_SURPLUS: Final = "pv_surplus"  # der Wert kommt aus dem Anteil am Überschuss
 OVERLOAD: Final = "overload"  # der Befehl folgt aus der Überlast
 NOT_TAKEN_RETRY: Final = "not_taken_retry"  # erneut nach „nicht übernommen“
+RESUME_AFTER_OUTAGE: Final = "resume_after_outage"  # die erste Startfolge nach einer Pause
 
 _Key = tuple[str, CommandKind]  # Aktor und Art
 
@@ -184,14 +217,20 @@ class _LastValues:
         """Ob der nächste Befehl dieser Art ``not_taken_retry`` trägt."""
         return key in self._retry
 
-    def judged(self, command: Command, verdict: Verdict | None, *, not_sent: bool) -> None:
-        """Das Urteil über einen eigenen Befehl (``ChargeController.note_verdict``)."""
+    def judged(self, command: Command, verdict: Verdict | None, *, not_sent: bool) -> bool:
+        """Das Urteil über einen eigenen Befehl (``ChargeController.note_verdict``).
+
+        Wahr, wenn es den Wert gesetzt hat: ein Urteil mit Wert oder ``UNCHANGED``, gesendet.
+        """
         key = (command.actuator, command.kind)
         if not_sent:
             self._sent.pop(key, None)
-        elif verdict is not None and (verdict.sendable or verdict.outcome == Outcome.UNCHANGED):
-            self._sent[key] = _Sent(command.value, verdict.value)
-            self._retry.discard(key)
+            return False
+        if verdict is None or not (verdict.sendable or verdict.outcome == Outcome.UNCHANGED):
+            return False
+        self._sent[key] = _Sent(command.value, verdict.value)
+        self._retry.discard(key)
+        return True
 
     def finished(self, result: WriteResult) -> None:
         """Das Ergebnis eines gesendeten Befehls (``ChargeController.note_result``)."""
@@ -227,8 +266,8 @@ class _Cycle:
     """Was ein Zyklus für alle Fahrzeuge gemeinsam rechnet (Phasenwächter und Überschuss).
 
     Je Fahrzeug: ``shares`` der Anteil am Überschuss (nur wer am Überschuss teilnimmt),
-    ``wanted`` der Wunsch in A (ohne Eintrag 0), ``targets`` Ziel und Grund (``phase_target``) und
-    ``grants`` die Zuteilung des Wächters (nur geregelte Ladepunkte).
+    ``wanted`` der Wunsch in A (nur wer laden kann), ``targets`` Ziel und Grund
+    (``phase_target``) und ``grants`` die Zuteilung des Wächters (nur geregelte Ladepunkte).
     """
 
     surplus: float | None
@@ -246,8 +285,11 @@ class _Situation:
     - ``plugged``, ``charging``: angesteckt und lädt laut Zuordnung; ``None`` unbekannt
     - ``mode`` und ``decision``: der geltende Modus und das Urteil seiner ``ModeMachine``
     - ``cause``: woran sich das Ziel des Wächters richtet (``phase_target``)
-    - ``wanted``: der Wunsch in A, ``share``: der Anteil am Überschuss (``None`` ohne)
-    - ``free``: was der Wächter frei lässt (``None`` unbekannt), ``level``: die Überlast
+    - ``wanted``: der Wunsch in A, beim Tesla am Wall Connector das abgerundete Mittel
+    - ``limit``: die Grenze des Wächters in A, beim Tesla am Wall Connector der niedrigste freie
+      Wert im Fenster; ``share``: der Anteil am Überschuss (``None`` ohne)
+    - ``level``: die Überlast; ``unclear``: die Zuordnung ist unklar
+    - ``resume``: die erste Startfolge nach einer Pause steht noch aus
     """
 
     plugged: bool | None
@@ -256,18 +298,27 @@ class _Situation:
     decision: ModeDecision
     cause: GuardCause
     wanted: int
+    limit: int
     share: int | None
-    free: float | None
     level: OverloadLevel
+    unclear: bool
+    resume: bool
+
+    @property
+    def head(self) -> tuple[str, ...]:
+        """Die ersten Gründe: der Modus, bei unklarer Zuordnung danach ``assignment_unclear``."""
+        code = MODE_CODES[self.mode]
+        return (code, ASSIGNMENT_UNCLEAR) if self.unclear else (code,)
 
 
 class ChargeController:
-    """Die Laderegelung: je Zyklus Befehle an EVCS und Tesla (Design 4 bis 6).
+    """Die Laderegelung: je Zyklus Befehle an EVCS und Tesla (Design 4 bis 9).
 
     Der Zustand lebt nur im Speicher: eine Zuordnung für die ganze Lebensdauer, je Fahrzeug eine
-    ``ModeMachine``, der Überlastwächter samt der Stufe des letzten Zyklus, die geregelten
-    Ladepunkte des letzten Zyklus und die letzten eigenen Werte je Aktor und Art. ``started`` ist
-    die Wanduhr beim Start der Regelung (``Assignment``).
+    ``ModeMachine`` und eine ``TeslaPolicy`` (Fenster und Weckkontingent), der Überlastwächter samt
+    der Stufe des letzten Zyklus, die geregelten Ladepunkte des letzten Zyklus, die letzten eigenen
+    Werte je Aktor und Art und die Fahrzeuge, deren erste Startfolge nach einer Pause aussteht.
+    ``started`` ist die Wanduhr beim Start der Regelung (``Assignment``).
     """
 
     def __init__(self, cfg: Config, limits: HardLimits, *, started: datetime) -> None:
@@ -277,6 +328,8 @@ class ChargeController:
         self._assignment = Assignment(cfg, started=started)
         timers = ModeTimers.from_config(cfg.control)
         self._machines = {key: ModeMachine(timers) for key in cfg.vehicles}
+        self._tesla = {key: TeslaPolicy(cfg.control, v.wake) for key, v in cfg.vehicles.items()}
+        self._vehicles = {vehicle_actuator(key): key for key in cfg.vehicles}  # Aktor → Fahrzeug
         self._overload = OverloadGuard(self._guard)
         self._level = OverloadLevel.NONE  # die Stufe der Überlast im letzten Zyklus
         # Fahrzeug und Aktor je Ladepunkt, der im letzten Zyklus geregelt wurde; leer nach dem
@@ -285,19 +338,28 @@ class ChargeController:
         # Fahrzeuge, deren Ansteckvorgang begann, als ihr Ladepunkt nicht geregelt wurde: Ihre
         # Maschine bekommt ihn im ersten geregelten Schritt (``new_session`` statt ``resumed``).
         self._unseen_sessions: set[str] = set()
+        self._overrides = EvcsOverrides(cfg)  # „Tesla an der EVCS“
+        self._resume: set[str] = set()  # Fahrzeuge, deren erste Startfolge nach ``idle`` aussteht
+        self._stepped = False  # seit dem Start schon geregelt: erst danach ist ``idle`` ein Ausfall
         self._last = _LastValues()
         self._views: dict[str, _View] = {}
         self._reasons: dict[str, str] = {}  # der letzte Grund des letzten Befehls je Fahrzeug
         self._vehicle_wallbox: dict[str, str | None] = {}
+        # Die Uhren des letzten ``step``: für das Weckkontingent in ``note_verdict`` und ``health``
+        self._now = self._wall_now = started
 
     def step(self, inputs: ChargeInputs) -> list[ChargeCommand]:
         """Ein Regelzyklus; die Befehle kommen in der Reihenfolge der Priorität.
 
-        Befehle bekommt nur ein geregelter Ladepunkt mit steuerbarem Aktor, und nur für Arten, die
-        nicht in ``inputs.blocked`` stehen; je Ladepunkt kommt der Strom vor „Laden an“. Ablauf und
-        Regeln stehen im Docstring des Moduls.
+        Befehle bekommt nur ein geregelter Ladepunkt, und nur für Arten, die nicht in
+        ``inputs.blocked`` stehen; je Ladepunkt kommt der Strom vor „Laden an“. Ein Aktor, der
+        nicht steuerbar ist, bekommt höchstens den Weckstart; ein Fahrzeug an der EVCS bekommt
+        seinen Höchststrom vor den Befehlen an die EVCS. Ablauf und Regeln stehen im Docstring des
+        Moduls.
         """
         now, intent = inputs.now, inputs.intent
+        self._now, self._wall_now = now, inputs.wall_now
+        self._stepped = True
         state = self._assignment.update(
             now, inputs.wall_now, intent, inputs.accepted_at, inputs.wallboxes, inputs.vehicles
         )
@@ -313,6 +375,10 @@ class ChargeController:
         if cycle.level > self._level:  # jede höhere Stufe bietet ihre Reaktion einmal an
             self._last.forget(set(regulated.values()))
         self._level = cycle.level
+        # Kommt ein Fahrzeug an eine EVCS, vergisst die Regelung die Werte seines Aktors: So geht
+        # sein Höchststrom einmal je Ansteckvorgang hinaus (``_maximum``).
+        at_the_evcs, arrived = self._overrides.update(state.vehicles)
+        self._last.forget(arrived)
 
         commands: list[ChargeCommand] = []
         views: dict[str, _View] = {}
@@ -326,40 +392,33 @@ class ChargeController:
                 if vehicle.new_session:
                     self._unseen_sessions.add(key)
                 continue
-            back = (key, actuator) not in self._regulated  # wieder geregelt: Übernahme
-            session = vehicle.new_session or key in self._unseen_sessions
-            if back or session:
-                self._last.forget({actuator})
-            decision = self._machines[key].step(
-                now,
-                ModeInput(
-                    mode=modes[key],
-                    plugged=vehicle.plugged,
-                    complete=vehicle.complete,
-                    enough=_enough(point, share, free),
-                    observed_charging=vehicle.charging,
-                    new_session=session,
-                    resumed=back and not session,  # ein neuer Ansteckvorgang geht vor
-                ),
-            )
-            if vehicle.plugged is not None:  # bei unbekanntem bleibt er für den nächsten Schritt
-                self._unseen_sessions.discard(key)
+            enough = _enough(point, share, free)
+            decision = self._decide(now, key, actuator, vehicle, modes[key], enough)
+            if point.evcs:
+                wanted = cycle.wanted.get(key, 0)
+                limit = point.min_a if free is None else math.floor(free)
+            else:  # der Tesla am Wall Connector: Fenster (Präzisierung 12)
+                wanted, limit = self._tesla[key].limits(now, cycle.wanted.get(key), free)
             situation = _Situation(
                 plugged=vehicle.plugged,
                 charging=vehicle.charging,
                 mode=modes[key],
                 decision=decision,
                 cause=cycle.targets[key][1],
-                wanted=cycle.wanted.get(key, 0),
+                wanted=wanted,
+                limit=limit,
                 share=share,
-                free=free,
                 level=cycle.level,
+                unclear=vehicle.kind is AssignmentKind.UNCLEAR,
+                resume=key in self._resume,
             )
-            found = self._regulate(now, point, actuator, situation, inputs)
+            found = self._maximum(key, modes[key], inputs) if key in at_the_evcs else []
+            found += self._regulate(now, point, actuator, situation, inputs)
             if found:
                 self._reasons[key] = found[-1].reasons[-1]
-            facts = _facts(actuator, cycle.surplus, free, inputs.present)
-            commands.extend(ChargeCommand(command, facts) for command in found)
+            for command in found:
+                facts = _facts(command.actuator, cycle.surplus, free, inputs.present)
+                commands.append(ChargeCommand(command, facts))
 
         self._regulated = set(regulated.items())
         self._views = views
@@ -376,12 +435,21 @@ class ChargeController:
         """Merkt das Urteil der Safety-Schicht über einen eigenen Befehl (Präzisierung 10).
 
         Ein Urteil mit Wert (gesendet oder Dry-Run) und ``UNCHANGED`` setzen den letzten eigenen
-        Wert; der Befehl trägt danach kein ``not_taken_retry`` mehr. ``DEFERRED``, ``REJECTED``
-        und ``None`` (der Ausführer hat den Befehl nicht betrachtet) setzen nichts: Die Regelung
-        bietet ihn im nächsten Zyklus wieder an. ``not_sent`` (ein Wert stand fest, ging aber
-        nicht hinaus) löscht den letzten Wert.
+        Wert; der Befehl trägt danach kein ``not_taken_retry`` mehr. Ist es ein Start
+        (``charging=True``), ist damit auch die erste Startfolge nach einer Pause erledigt.
+        ``DEFERRED``, ``REJECTED`` und ``None`` (der Ausführer hat den Befehl nicht betrachtet)
+        setzen nichts: Die Regelung bietet ihn im nächsten Zyklus wieder an. ``not_sent`` (ein Wert
+        stand fest, ging aber nicht hinaus) löscht den letzten Wert.
+
+        Ein Weckstart (``Command.wake``) mit einem Urteil mit Wert zählt im Weckkontingent, live wie
+        im Dry-Run und auch mit ``not_sent`` (Präzisierung 12); die Zeit ist die des letzten
+        ``step``.
         """
-        self._last.judged(command, verdict, not_sent=not_sent)
+        started = command.kind is _CHARGING and command.value is True
+        if self._last.judged(command, verdict, not_sent=not_sent) and started:
+            self._resume -= {key for key, actor in self._regulated if actor == command.actuator}
+        if command.wake and verdict is not None and verdict.sendable:
+            self._tesla[self._vehicles[command.actuator]].note_wake(self._now, self._wall_now)
 
     def note_result(self, result: WriteResult) -> None:
         """Merkt das Ergebnis eines gesendeten Befehls (Präzisierung 10).
@@ -397,14 +465,21 @@ class ChargeController:
         """Ein Zyklus ohne Regelung (Präzisierung 9): Die Regelung vergisst ihre letzten Befehle.
 
         Im nächsten ``step`` gilt jeder geregelte Ladepunkt als wieder geregelt: Seine Maschine
-        bekommt ``resumed``. Die Überlast beginnt mit einem neuen Wächter und der Stufe ``NONE``;
-        der alte wertete die Lücke sonst als durchgehend. Die Zuordnung bleibt, damit ein
-        beendeter Boost nicht wieder auflebt. ``health`` und ``vehicle_wallbox`` sind bis zum
-        nächsten ``step`` unbekannt; der letzte Grund je Fahrzeug bleibt. ``now`` ist die Zeit der
+        bekommt ``resumed``. Lief die Regelung seit dem Start schon, trägt danach die erste
+        Startfolge je Fahrzeug ``resume_after_outage``; Pausen vor dem ersten ``step`` (START,
+        OBSERVE) sind kein Ausfall. Die Fenster des Tesla beginnen neu (Präzisierung 12), die
+        Überlast mit einem neuen Wächter und der Stufe ``NONE``; die alten werteten die Lücke sonst
+        als durchgehend. Die Zuordnung bleibt, damit ein beendeter Boost nicht wieder auflebt; das
+        Weckkontingent bleibt ebenso. ``health`` und ``vehicle_wallbox`` sind bis zum nächsten
+        ``step`` unbekannt; der letzte Grund je Fahrzeug bleibt. ``now`` ist die Zeit der
         Safety-Schicht; das Vergessen braucht sie nicht.
         """
         self._last.forget()
         self._regulated = set()
+        if self._stepped:
+            self._resume = set(self._cfg.vehicles)
+        for tesla in self._tesla.values():
+            tesla.restart()
         self._overload = OverloadGuard(self._guard)
         self._level = OverloadLevel.NONE
         self._views = {}
@@ -425,9 +500,10 @@ class ChargeController:
         Die Felder: ``id``, ``name``, ``mode`` (Wert von ``Effective``), ``boost_until`` (ISO in
         UTC), ``wallbox``, ``assignment`` (Wert von ``AssignmentKind``), ``limit_a`` (freier Strom
         des Phasenwächters, nur für einen geregelten Ladepunkt), ``plugged``, ``charging``,
-        ``wakes_today`` und ``reason``, der letzte Grund des letzten Befehls für das Fahrzeug.
-        Ohne ``step`` seit dem Start oder seit ``idle`` ist alles außer ``id``, ``name``,
-        ``wakes_today`` und ``reason`` unbekannt (``None``).
+        ``wakes_today`` (Weckstarts am Kalendertag des letzten ``step``, Wiener Zeit) und
+        ``reason``, der letzte Grund des letzten Befehls für das Fahrzeug. Ohne ``step`` seit dem
+        Start oder seit ``idle`` ist alles außer ``id``, ``name``, ``wakes_today`` und ``reason``
+        unbekannt (``None``).
         """
         entries: list[dict[str, Any]] = []
         for key, vehicle in self._cfg.vehicles.items():
@@ -445,7 +521,7 @@ class ChargeController:
                     "limit_a": None if view is None else view.limit_a,
                     "plugged": None if state is None else state.plugged,
                     "charging": None if state is None else state.charging,
-                    "wakes_today": 0,
+                    "wakes_today": self._tesla[key].wakes_today(self._wall_now),
                     "reason": self._reasons.get(key),
                 }
             )
@@ -606,6 +682,60 @@ class ChargeController:
             holding_min=mode is Effective.PV and self._machines[point.vehicle].charging,
         )
 
+    def _decide(
+        self,
+        now: datetime,
+        key: str,
+        actuator: str,
+        vehicle: VehicleState,
+        mode: Effective,
+        enough: bool | None,
+    ) -> ModeDecision:
+        """Die Maschine eines geregelten Ladepunkts; beginnt er, vergisst die Regelung ihre Werte.
+
+        Der Ladepunkt beginnt, wenn er wieder geregelt wird (``back``), mit einem neuen
+        Ansteckvorgang und wenn ein gemerkter Vorgang die Maschine erreicht, also beim ersten
+        bekannten Ansteckzustand. Jedes davon geschieht einmal: Dann vergisst die Regelung die
+        letzten Werte des Aktors. Mit einem Ansteckvorgang beginnen auch die Fenster des Tesla neu.
+        """
+        back = (key, actuator) not in self._regulated  # wieder geregelt: Übernahme
+        remembered = key in self._unseen_sessions
+        reached = remembered and vehicle.plugged is not None  # der gemerkte Vorgang kommt an
+        if vehicle.new_session or reached:
+            self._tesla[key].restart()
+        if back or vehicle.new_session or reached:
+            self._last.forget({actuator})
+        if vehicle.plugged is not None:  # bei unbekanntem bleibt er für den nächsten Schritt
+            self._unseen_sessions.discard(key)
+        session = vehicle.new_session or remembered
+        return self._machines[key].step(
+            now,
+            ModeInput(
+                mode=mode,
+                plugged=vehicle.plugged,
+                complete=vehicle.complete,
+                enough=enough,
+                observed_charging=vehicle.charging,
+                new_session=session,
+                resumed=back and not session,  # ein neuer Ansteckvorgang geht vor
+            ),
+        )
+
+    def _maximum(self, key: str, mode: Effective, inputs: ChargeInputs) -> list[Command]:
+        """„Tesla an der EVCS“: der Höchststrom an das Fahrzeug selbst, sobald es steuerbar ist.
+
+        Er geht hinaus, solange er sich gegenüber dem letzten eigenen Wert ändert; ``step``
+        vergisst den je Ansteckvorgang. Grund ist der Modus.
+        """
+        actuator = vehicle_actuator(key)
+        value = float(self._cfg.vehicles[key].max_a)
+        steerable = inputs.controllable.get(actuator) is True
+        if not steerable or (actuator, _CURRENT) in inputs.blocked:
+            return []
+        if not self._changed((actuator, _CURRENT), value):
+            return []
+        return [self._command(actuator, _CURRENT, value, (MODE_CODES[mode],))]
+
     def _regulate(
         self,
         now: datetime,
@@ -614,13 +744,14 @@ class ChargeController:
         situation: _Situation,
         inputs: ChargeInputs,
     ) -> list[Command]:
-        """Überlast, Strom und Befehle für einen geregelten Ladepunkt (Präzisierungen 8 bis 11).
+        """Überlast, Strom und Befehle für einen geregelten Ladepunkt (Präzisierungen 8 bis 12).
 
         Stoppt die Überlast den Ladepunkt (``ALL_STOP``, bei einer EVCS schon ``EVCS_STOP``),
         stoppt sie auch seinen Modus (``force_stop``), damit danach die Mindestpause gilt. Ab
         ``MINIMUM`` stoppt sie dringend auch ein Auto, das lädt, obwohl sein Modus aus will (etwa
-        selbst gestartet). Beides gilt auch bei unbekanntem Ansteckzustand. Ein Aktor, der nicht
-        steuerbar ist, bekommt nichts.
+        selbst gestartet), außer solange die Zuordnung unklar ist. Beides gilt auch bei unbekanntem
+        Ansteckzustand. Ein Aktor, der nicht steuerbar ist (geregelt ist er dann nur, weil er
+        weckbar ist), bekommt höchstens den Weckstart.
         """
         level = situation.level
         stop = level >= OverloadLevel.ALL_STOP or (point.evcs and level >= OverloadLevel.EVCS_STOP)
@@ -628,58 +759,82 @@ class ChargeController:
         if stop and charge:
             self._machines[point.vehicle].force_stop(now)
             charge = False
-        if inputs.controllable.get(actuator) is not True:
-            return []
-        code = MODE_CODES[situation.mode]
         blocked = inputs.blocked
         minimum = level >= OverloadLevel.MINIMUM
-        if stop or (minimum and not charge and situation.charging is True):
-            return self._switch_off(actuator, (code, OVERLOAD), blocked, urgent=True)
-        limit = point.min_a if situation.free is None else math.floor(situation.free)
+        if inputs.controllable.get(actuator) is not True:
+            if charge and not minimum and situation.plugged is True:
+                return self._wake(point.vehicle, actuator, situation, blocked)
+            return []
+        head = situation.head
+        against = minimum and not charge and situation.charging is True and not situation.unclear
+        if stop or against:
+            return self._switch_off(actuator, (*head, OVERLOAD), blocked, urgent=True)
         present_a = finite_number(inputs.present.get((actuator, _CURRENT)))
-        if situation.plugged is None:
-            return self._hold(point, actuator, situation, limit, present_a, blocked)
+        if situation.plugged is None or situation.unclear:
+            return self._hold(point, actuator, situation, present_a, blocked)
         if not charge:
-            off = (code, PV_SURPLUS) if situation.decision.reason == PV_SURPLUS else (code,)
+            off = (*head, PV_SURPLUS) if situation.decision.reason == PV_SURPLUS else head
             return self._switch_off(actuator, off, blocked, urgent=False)
         reasons: tuple[str, ...]
         if minimum:
-            value, reasons = point.min_a, (code, OVERLOAD)
+            value, reasons = point.min_a, (*head, OVERLOAD)
         else:
-            value = min(max(min(situation.wanted, limit), point.min_a), point.max_a)
-            reasons = (code, *_why(situation, limit))
+            value = min(max(min(situation.wanted, situation.limit), point.min_a), point.max_a)
+            reasons = (*head, *_why(situation))
         urgent = minimum or (
             situation.cause is GuardCause.PHASE_LIMIT
             and present_a is not None
             and value < present_a
         )
         return self._charge(
-            actuator, float(value), reasons, blocked, urgent=urgent, start=not minimum
+            actuator,
+            float(value),
+            reasons,
+            blocked,
+            urgent=urgent,
+            start=not minimum,
+            resume=situation.resume,
         )
+
+    def _wake(
+        self, key: str, actuator: str, situation: _Situation, blocked: frozenset[_Key]
+    ) -> list[Command]:
+        """Der Start mit Weckerlaubnis (Design 7.1): ``charging=True`` mit ``wake``, ohne Strom.
+
+        Er kommt, wenn ``charging=True`` sich ändert, nicht blockiert ist und das Weckkontingent ihn
+        erlaubt. Die Gründe sind die eines Starts, danach ``wake``.
+        """
+        on = (actuator, _CHARGING)
+        if on in blocked or not self._changed(on, True):
+            return []
+        if not self._tesla[key].may_wake(self._now, self._wall_now):
+            return []
+        resumed = (RESUME_AFTER_OUTAGE,) if situation.resume else ()
+        reasons = (*situation.head, *_why(situation), *resumed, WAKE)
+        return [self._command(actuator, _CHARGING, True, reasons, wake=True)]
 
     def _hold(
         self,
         point: _Point,
         actuator: str,
         situation: _Situation,
-        limit: int,
         present_a: float | None,
         blocked: frozenset[_Key],
     ) -> list[Command]:
-        """Unbekannt angesteckt (Präzisierung 4): kein „Laden an/aus“, nur eine Senkung.
+        """Kein „Laden an/aus“, nur eine Senkung (Präzisierungen 4 und 5).
 
-        Der Strom sinkt nur, wenn der Wächter (oder die Überlast) weniger als den bekannten
-        Ist-Strom erlaubt, nie unter ``min_a``.
+        So bei unbekanntem Ansteckzustand und solange die Zuordnung unklar ist: Der Strom sinkt
+        nur, wenn der Wächter (oder die Überlast) weniger als den bekannten Ist-Strom erlaubt, nie
+        unter ``min_a``.
         """
         if present_a is None or (actuator, _CURRENT) in blocked:
             return []
-        code = MODE_CODES[situation.mode]
         reasons: tuple[str, ...]
         if situation.level >= OverloadLevel.MINIMUM:
-            value, reasons, urgent = point.min_a, (code, OVERLOAD), True
+            value, reasons, urgent = point.min_a, (*situation.head, OVERLOAD), True
         else:
-            value = min(max(limit, point.min_a), point.max_a)
-            reasons = (code, situation.cause.value)
+            value = min(max(situation.limit, point.min_a), point.max_a)
+            reasons = (*situation.head, situation.cause.value)
             urgent = situation.cause is GuardCause.PHASE_LIMIT
         if value >= present_a or not self._changed((actuator, _CURRENT), float(value)):
             return []
@@ -694,19 +849,26 @@ class ChargeController:
         *,
         urgent: bool,
         start: bool,
+        resume: bool,
     ) -> list[Command]:
         """Laden: der Strom, wenn er sich ändert; für einen Start danach ``charging=True``.
 
         Ein Start (``charging=True`` ändert sich) folgt erst auf den Strom: Muss der gesendet
-        werden und ist er blockiert, wartet der Start. ``start`` ist falsch bei Überlast.
+        werden und ist er blockiert, wartet der Start. ``start`` ist falsch bei Überlast. Steht ein
+        Start an und ist es die erste Startfolge nach einer Pause (``resume``), tragen Strom und
+        Start zusätzlich ``resume_after_outage``.
         """
+        current, on = (actuator, _CURRENT), (actuator, _CHARGING)
+        send = self._changed(current, value)
+        if send and current in blocked:
+            return []
+        starting = start and self._changed(on, True)
+        if starting and resume:
+            reasons = (*reasons, RESUME_AFTER_OUTAGE)
         found: list[Command] = []
-        if self._changed((actuator, _CURRENT), value):
-            if (actuator, _CURRENT) in blocked:
-                return []
+        if send:
             found.append(self._command(actuator, _CURRENT, value, reasons, urgent=urgent))
-        on = (actuator, _CHARGING)
-        if start and on not in blocked and self._changed(on, True):
+        if starting and on not in blocked:
             found.append(self._command(actuator, _CHARGING, True, reasons))
         return found
 
@@ -731,10 +893,11 @@ class ChargeController:
         reasons: tuple[str, ...],
         *,
         urgent: bool = False,
+        wake: bool = False,
     ) -> Command:
         """Der Befehl samt ``not_taken_retry``, wenn die Art zuletzt nicht übernommen wurde."""
         retry = (NOT_TAKEN_RETRY,) if self._last.retry((actuator, kind)) else ()
-        return Command(actuator, kind, value, urgent=urgent, reasons=(*reasons, *retry))
+        return Command(actuator, kind, value, urgent=urgent, reasons=(*reasons, *retry), wake=wake)
 
 
 def _mode(key: str, vehicle: VehicleState, intent: Intent | None) -> Effective:
@@ -785,21 +948,21 @@ def _enough(point: _Point | None, share: int | None, free: float | None) -> bool
     return share >= point.min_a and free >= point.min_a
 
 
-def _why(situation: _Situation, limit: int) -> tuple[str, ...]:
+def _why(situation: _Situation) -> tuple[str, ...]:
     """Der Grund nach dem Modus-Code, wenn das Auto lädt und keine Überlast herrscht.
 
     ``pv_surplus``, wenn der Wert aus dem Anteil kommt (in PV oder Min+PV liegt der Wunsch nicht
-    über der Grenze ``limit`` des Wächters) oder die Zeiten von PV-Überschuss gerade gestartet
-    haben; sonst der Grund des Ziels (``GuardCause``), wenn der Wächter kappt; sonst keiner.
+    über der Grenze des Wächters) oder die Zeiten von PV-Überschuss gerade gestartet haben; sonst
+    der Grund des Ziels (``GuardCause``), wenn der Wächter kappt; sonst keiner.
     """
     from_share = (
         situation.share is not None
         and situation.mode in _SURPLUS_MODES
-        and situation.wanted <= limit
+        and situation.wanted <= situation.limit
     )
     if from_share or situation.decision.reason == PV_SURPLUS:
         return (PV_SURPLUS,)
-    if limit < situation.wanted:
+    if situation.limit < situation.wanted:
         return (situation.cause.value,)
     return ()
 
@@ -817,9 +980,10 @@ def _facts(
     free: float | None,
     present: Mapping[_Key, CommandValue],
 ) -> dict[str, float | None]:
-    """Die Eingaben der Befehle eines Ladepunkts für das Entscheidungslog (Präzisierung 13).
+    """Die Eingaben eines Befehls an ``actuator`` für das Entscheidungslog (Präzisierung 13).
 
     Die Ist-Werte kommen aus ``present``; im Dry-Run sind das die Werte des fremden Reglers.
+    ``free`` ist der freie Strom des Ladepunkts, zu dem der Befehl gehört.
     """
     charging = present.get((actuator, _CHARGING))
     return {

@@ -422,9 +422,10 @@ def test_after_a_pause_pv_takes_over_a_charging_car_again(cfg) -> None:  # Präz
     assert as_commands(found)[-1] == cmd(300, CHARGING, False, ("mode_pv", "pv_surplus"))
     c.idle(T0 + timedelta(seconds=301))
     resumed = c.step(inputs(cfg, s=400, **charging))
+    reasons = ("mode_pv", "resume_after_outage")  # die erste Startfolge nach der Pause
     assert [(400, x.command) for x in resumed] == [
-        cmd(400, CURRENT, 6.0, ("mode_pv",)),
-        cmd(400, CHARGING, True, ("mode_pv",)),
+        cmd(400, CURRENT, 6.0, reasons),
+        cmd(400, CHARGING, True, reasons),
     ]
 
 
@@ -443,9 +444,10 @@ def test_after_a_pause_the_overload_counts_anew(cfg) -> None:
         commands = c.step(inputs(cfg, s=s, **over))
         accept(c, commands)
         found.extend((s, x.command) for x in commands)
+    resumed = ("mode_now", "phase_limit", "resume_after_outage")
     assert found == [
-        cmd(4, CURRENT, 15.0, ("mode_now", "phase_limit"), urgent=True),
-        cmd(4, CHARGING, True, ("mode_now", "phase_limit")),
+        cmd(4, CURRENT, 15.0, resumed, urgent=True),
+        cmd(4, CHARGING, True, resumed),
         cmd(7, CURRENT, 6.0, ("mode_now", "overload"), urgent=True),
     ]
 
@@ -1008,7 +1010,7 @@ def test_a_pause_forgets_not_taken_too(cfg) -> None:
     )
     c.idle(T0 + timedelta(seconds=121))
     resumed = c.step(inputs(cfg, s=200, evcs_obs=evcs(charging=True)))
-    reasons = ("mode_pv", "pv_surplus")
+    reasons = ("mode_pv", "pv_surplus", "resume_after_outage")
     assert [x.command for x in resumed] == [
         Command("wallbox.evcs", CURRENT, 8.0, reasons=reasons),
         Command("wallbox.evcs", CHARGING, True, reasons=reasons),
@@ -1216,4 +1218,64 @@ def test_a_remembered_session_waits_for_a_known_plug_state(cfg) -> None:
     found = run(controller(cfg), cfg, 132, make=make)
     assert [c for c in as_commands(found) if c[0] >= 125] == [
         cmd(131, CHARGING, False, ("mode_pv",))
+    ]
+
+
+def test_a_remembered_session_forgets_the_last_values_once(cfg) -> None:
+    # PV lädt seit 0 mit 16 A. Von 10 bis 14 ist die EVCS nicht steuerbar; der e-Golf wird ab- und
+    # wieder angesteckt. Ab 15 ist der Status unbekannt, und das Importlimit verlangt 11 A: Die
+    # Senkung geht einmal hinaus, nicht jede Sekunde.
+    unknown = replace(AT_16_A, connected=None, charging=None, complete=None)
+
+    def make(cfg, *, s: int):
+        if s < 10:
+            return inputs(cfg, s=s, evcs_obs=AT_16_A, present=at_evcs(16.0, True))
+        if s < 15:
+            seen = evcs(connected=False) if s < 12 else AT_16_A
+            not_controllable = {"wallbox.evcs": False}
+            return inputs(cfg, s=s, evcs_obs=seen, controllable=not_controllable)
+        return inputs(
+            cfg,
+            s=s,
+            evcs_obs=unknown,
+            present=at_evcs(16.0, True),
+            grid_obs=grid(l1=24.0, l2=18.0),  # frei 19 − (24 − 16) = 11
+        )
+
+    found = run(controller(cfg), cfg, 25, make=make)
+    assert [c for c in as_commands(found) if c[0] >= 10] == [
+        cmd(15, CURRENT, 11.0, ("mode_pv", "import_limit"))
+    ]
+
+
+def test_a_remembered_session_reaching_the_machine_forgets_once_more(cfg) -> None:
+    # Sofort lädt mit 16 A. Wie oben wird der e-Golf neu angesteckt, während die EVCS nicht
+    # steuerbar ist; bei 15 ist der Status unbekannt, und die Sicherung verlangt 9 A. Bei 16 ist er
+    # bekannt: Der gemerkte Vorgang erreicht die Maschine, und die Regelung vergisst ihre Werte
+    # noch einmal, denn das Gerät kann sich mit dem neuen Vorgang geändert haben.
+    unknown = replace(AT_16_A, connected=None, charging=None, complete=None)
+    now = egolf_in(ChargeMode.NOW)
+
+    def make(cfg, *, s: int):
+        if s < 10:
+            return inputs(cfg, s=s, intent=now, evcs_obs=AT_16_A, present=at_evcs(16.0, True))
+        if s < 15:
+            seen = evcs(connected=False) if s < 12 else AT_16_A
+            not_controllable = {"wallbox.evcs": False}
+            return inputs(cfg, s=s, intent=now, evcs_obs=seen, controllable=not_controllable)
+        return inputs(
+            cfg,
+            s=s,
+            intent=now,
+            evcs_obs=unknown if s == 15 else AT_16_A,
+            present=at_evcs(16.0, True),
+            grid_obs=grid(l1=40.0, l2=18.0),  # frei 33 − (40 − 16) = 9
+        )
+
+    found = run(controller(cfg), cfg, 17, make=make)
+    reasons = ("mode_now", "phase_limit")
+    assert [c for c in as_commands(found) if c[0] >= 10] == [
+        cmd(15, CURRENT, 9.0, reasons, urgent=True),
+        cmd(16, CURRENT, 9.0, reasons, urgent=True),
+        cmd(16, CHARGING, True, reasons),
     ]
