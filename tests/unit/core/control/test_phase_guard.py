@@ -98,7 +98,12 @@ def test_target_per_mode(full, soc, expected) -> None:
 
 
 def test_causes_are_the_reason_codes() -> None:
-    assert [str(cause) for cause in GuardCause] == ["import_limit", "reserve_guard", "phase_limit"]
+    assert [str(cause) for cause in GuardCause] == [
+        "import_limit",
+        "reserve_guard",
+        "phase_limit",
+        "peak_guard",
+    ]
 
 
 # --- Last je Phase --------------------------------------------------------------------------------

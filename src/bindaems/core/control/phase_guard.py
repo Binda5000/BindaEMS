@@ -37,11 +37,16 @@ CLEAR_AFTER_S: Final = 60.0  # so lange alle Phasen höchstens am Sicherungsziel
 
 
 class GuardCause(StrEnum):
-    """Woran sich das Ziel eines Autos richtet; der Wert ist der Grund-Code im Entscheidungslog."""
+    """Woran sich das Ziel eines Autos richtet; der Wert ist der Grund-Code im Entscheidungslog.
+
+    Den Grund ``peak_guard`` nennt auch der Akku-Sollwert, wenn das Budget des 15-min-Wächters den
+    Override senkt (Plan 2c-2a, Präzisierung 6).
+    """
 
     IMPORT_LIMIT = "import_limit"  # das Importlimit am Cerbo (Peak Shaving)
     RESERVE_GUARD = "reserve_guard"  # der Schutz der USV-Reserve: wie das Importlimit
     PHASE_LIMIT = "phase_limit"  # die Sicherung
+    PEAK_GUARD = "peak_guard"  # der 15-min-Wächter
 
 
 @dataclass(frozen=True)

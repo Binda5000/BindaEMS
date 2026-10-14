@@ -10,9 +10,13 @@ einmal, nicht schrittweise wie der Code:
 - ``Support``: der SOC-Stand aus dem letzten Wert, der die Schwelle erreicht oder unter die
   Hysterese fällt; die Überbrückung aus den Läufen ohne Fehlbetrag im ganzen Verlauf, nicht mit den
   zwei Zeitpunkten, die die Unterstützung sich merkt.
+- der Bedarf aus ``BatteryController.assess`` über Verläufe von Zyklen (Design 10.4): ``wanted_w``
+  nie negativ, nie über dem Fehlbetrag der Autos, nie mehr mit höherem ``support_max_w`` oder mit
+  geltender Unterstützung.
 """
 
 from datetime import timedelta
+from pathlib import Path
 
 import pytest
 from hypothesis import example, given, settings
@@ -23,12 +27,14 @@ from bindaems.core.control.battery import (
     BRIDGE_END_S,
     SUPPORT_MODES,
     BatteryCar,
+    BatteryController,
+    BatteryNeed,
     Support,
     allowed,
     deficits,
 )
 from bindaems.core.control.charge_modes import Effective
-from bindaems.shared.config import ControlConfig
+from bindaems.shared.config import ControlConfig, load_config
 
 # --- Fehlbetrag und erlaubter Anteil --------------------------------------------------------------
 
@@ -46,6 +52,12 @@ CARS = st.lists(
 def wanted_grid_w(cars, deficit, shares) -> float:
     """``W``: die Summe über die Autos von max(0, Fehlbetrag − erlaubt) (Design 5.3)."""
     return sum(max(0.0, deficit[car.wallbox] - shares[car.wallbox]) for car in cars)
+
+
+def drawn_beyond_pv_w(pv, house, cars) -> float:
+    """Was die Autos zusammen über den Rest der PV hinaus ziehen: ihr Fehlbetrag zusammen."""
+    pv_rest_w = max(0.0, max(pv, 0.0) - max(house, 0.0))  # was nach dem Haus von der PV bleibt
+    return max(0.0, sum(car.power_w for car in cars) - pv_rest_w)
 
 
 @given(pv=WATTS, house=WATTS, cars=CARS, support_on=st.booleans(), limit=LIMITS_W)
@@ -82,9 +94,7 @@ def test_the_deficits_add_up_to_what_the_cars_draw_beyond_the_pv(pv, house, cars
     assert list(deficit) == [car.wallbox for car in cars]
     for car in cars:
         assert 0.0 <= deficit[car.wallbox] <= car.power_w + 1e-9
-    pv_rest_w = max(0.0, max(pv, 0.0) - max(house, 0.0))  # was nach dem Haus von der PV bleibt
-    drawn_w = sum(car.power_w for car in cars)
-    assert sum(deficit.values()) == pytest.approx(max(0.0, drawn_w - pv_rest_w), abs=1e-6)
+    assert sum(deficit.values()) == pytest.approx(drawn_beyond_pv_w(pv, house, cars), abs=1e-6)
 
 
 @given(pv=WATTS, house=WATTS, cars=CARS)
@@ -263,3 +273,74 @@ def test_reset_forgets_the_whole_history(before, after) -> None:
     support.reset()
     later = samples_from(after, start=earlier[-1][0] + 1)
     assert run(support, later) == expected(later)
+
+
+# --- Bedarf aus assess (Design 10.4) --------------------------------------------------------------
+
+CFG = load_config(Path("deploy/config.example.yaml"))
+
+# Ein Zyklus: Sekunden seit dem vorigen, SOC, PV, Haus und Autos. Die langen Abstände lassen die
+# Überbrückung über support_max_s laufen; dann ist die Unterstützung wegen der Zeit gesperrt.
+CYCLES = st.lists(
+    st.tuples(
+        st.sampled_from([1, 30, 120, 600]),
+        st.none() | st.floats(0.0, 100.0),
+        WATTS,
+        WATTS,
+        CARS,
+    ),
+    min_size=1,
+    max_size=8,
+)
+
+
+def controller(support_max_w: float) -> BatteryController:
+    control = CFG.control.model_copy(update={"support_max_w": support_max_w})
+    return BatteryController(CFG.model_copy(update={"control": control}))
+
+
+def assessed(battery, cycles, socs=None) -> list[BatteryNeed]:
+    """Der Bedarf aus ``assess`` je Zyklus; ``socs`` ersetzt, wenn angegeben, den SOC der Zyklen."""
+    if socs is None:
+        socs = [soc for _, soc, *_ in cycles]
+    found, second = [], 0
+    for (gap, _, pv, house, cars), soc in zip(cycles, socs, strict=True):
+        second += gap
+        need = battery.assess(T0 + timedelta(seconds=second), soc, pv, house, cars)
+        assert need is not None
+        found.append(need)
+    return found
+
+
+@settings(deadline=None)
+@given(cycles=CYCLES, limit=LIMITS_W)
+def test_need_from_assess_is_never_negative_nor_above_the_deficit(cycles, limit) -> None:
+    for (_, _, pv, house, cars), need in zip(
+        cycles, assessed(controller(limit), cycles), strict=True
+    ):
+        assert all(watts >= 0.0 for watts in need.grid_w.values())
+        assert 0.0 <= need.wanted_w <= drawn_beyond_pv_w(pv, house, cars) + 1e-6
+
+
+@settings(deadline=None)
+@given(cycles=CYCLES, limits=st.tuples(LIMITS_W, LIMITS_W).map(sorted))  # support_max_w: a ≤ b
+def test_a_higher_support_limit_never_means_more_grid_from_assess(cycles, limits) -> None:
+    low_w, high_w = limits
+    low, high = assessed(controller(low_w), cycles), assessed(controller(high_w), cycles)
+    for less, more in zip(high, low, strict=True):
+        assert less.wanted_w <= more.wanted_w + 1e-6
+
+
+@settings(deadline=None)
+@given(
+    cycles=CYCLES,
+    limit=LIMITS_W,
+    soc_on=st.floats(70.0, 100.0),  # erreicht support_soc_pct
+    soc_off=st.none() | st.floats(0.0, 70.0, exclude_max=True),  # erreicht ihn nie
+)
+def test_support_never_means_more_grid_from_assess(cycles, limit, soc_on, soc_off) -> None:
+    supported = assessed(controller(limit), cycles, socs=[soc_on] * len(cycles))
+    alone = assessed(controller(limit), cycles, socs=[soc_off] * len(cycles))
+    for with_battery, without in zip(supported, alone, strict=True):
+        assert without.support != "on"
+        assert with_battery.wanted_w <= without.wanted_w + 1e-6

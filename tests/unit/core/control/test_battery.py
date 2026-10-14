@@ -97,6 +97,13 @@ def test_negative_pv_and_house_count_as_zero() -> None:
     assert deficits(-20.0, -5.0, [car(power=1000.0)]) == {"evcs": 1000.0}
 
 
+def test_unknown_pv_or_house_makes_the_need_unknown() -> None:  # Review Focus 3
+    for unknown in (None, math.nan, math.inf, -math.inf):
+        assert deficits(unknown, 1000.0, [car()]) is None
+        assert deficits(6000.0, unknown, [car()]) is None
+        assert deficits(unknown, 1000.0, []) is None  # auch ohne Autos
+
+
 def test_negative_car_power_counts_as_zero() -> None:
     assert deficits(0.0, 0.0, [car(power=-30.0)]) == {"evcs": 0.0}
     cars = [car("a", power=-30.0), car("b", power=1000.0)]  # die −30 W geben nichts zurück
