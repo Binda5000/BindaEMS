@@ -20,7 +20,7 @@ from enum import StrEnum
 from types import MappingProxyType
 from typing import Final
 
-from bindaems.core.control.timing import held_since
+from bindaems.core.control.timing import held_since, lasted
 from bindaems.shared.config import ControlConfig
 
 # Grund-Code: Der Wert kommt aus dem Anteil am Überschuss, oder die Zeiten von PV-Überschuss
@@ -248,13 +248,13 @@ class ModeMachine:
     def _may_start(self, now: datetime) -> bool:
         """Der Überschuss reicht seit ``start_after_s``, und die Mindestpause ist um."""
         timers = self._timers
-        reached = _lasted(self._enough_since, now, timers.start_after_s)
+        reached = lasted(self._enough_since, now, timers.start_after_s)
         return reached and _passed(self._stopped_at, now, timers.min_off_s)
 
     def _may_stop(self, now: datetime) -> bool:
         """Der Überschuss fehlt seit ``stop_after_s``, und die Mindestlaufzeit ist um."""
         timers = self._timers
-        reached = _lasted(self._short_since, now, timers.stop_after_s)
+        reached = lasted(self._short_since, now, timers.stop_after_s)
         return reached and _passed(self._started_at, now, timers.min_on_s)
 
 
@@ -270,11 +270,6 @@ def _follows_mode(inp: ModeInput) -> bool:
     if inp.mode is Effective.PV:
         return inp.enough is True
     return inp.mode is not Effective.OFF
-
-
-def _lasted(since: datetime | None, now: datetime, limit_s: float) -> bool:
-    """Ob etwas seit ``since`` mindestens ``limit_s`` Sekunden gilt; ohne Zeitpunkt nein."""
-    return since is not None and (now - since).total_seconds() >= limit_s
 
 
 def _passed(since: datetime | None, now: datetime, limit_s: float) -> bool:

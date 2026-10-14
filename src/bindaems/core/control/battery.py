@@ -31,7 +31,7 @@ from bindaems.core.control.charge_modes import Effective
 from bindaems.core.control.executor import WriteResult
 from bindaems.core.control.last_values import ControlCommand, Key, LastValues
 from bindaems.core.control.phase_guard import GuardCause
-from bindaems.core.control.timing import held_since
+from bindaems.core.control.timing import held_since, lasted
 from bindaems.core.safety.types import Verdict
 from bindaems.shared.config import Config, ControlConfig
 from bindaems.shared.control import VICTRON, Command, CommandKind, CommandValue
@@ -186,15 +186,10 @@ class Support:
     def _follow_bridging(self, now: datetime, has_deficit: bool) -> None:
         """Beginnt die Überbrückung mit dem ersten Fehlbetrag und beendet sie nach 60 s ohne."""
         self._clear_since = held_since(self._clear_since, not has_deficit, now)
-        if self._bridging_since is not None and _lasted(self._clear_since, now, BRIDGE_END_S):
+        if self._bridging_since is not None and lasted(self._clear_since, now, BRIDGE_END_S):
             self._bridging_since = None
         if has_deficit and self._bridging_since is None:
             self._bridging_since = now
-
-
-def _lasted(since: datetime | None, now: datetime, limit_s: float) -> bool:
-    """Ob etwas seit ``since`` mindestens ``limit_s`` Sekunden gilt; ohne Zeitpunkt nein."""
-    return since is not None and (now - since).total_seconds() >= limit_s
 
 
 def allowed(

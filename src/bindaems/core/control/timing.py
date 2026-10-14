@@ -1,6 +1,7 @@
 """Zeit-Hilfen, die mehrere Bausteine der Regelung teilen.
 
 - ``held_since``: seit wann eine Bedingung ununterbrochen gilt
+- ``lasted``: ob etwas seit einem Zeitpunkt mindestens so lange gilt
 
 Die Schicht ist rein: Die Zeit kommt als Argument.
 """
@@ -15,3 +16,8 @@ def held_since(since: datetime | None, holds: bool, now: datetime) -> datetime |
     if not holds:
         return None
     return now if since is None else since
+
+
+def lasted(since: datetime | None, now: datetime, limit_s: float) -> bool:
+    """Ob etwas seit ``since`` mindestens ``limit_s`` Sekunden gilt; ohne Zeitpunkt nein."""
+    return since is not None and (now - since).total_seconds() >= limit_s
