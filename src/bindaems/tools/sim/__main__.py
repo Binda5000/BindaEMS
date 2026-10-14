@@ -8,9 +8,10 @@ Fahrzeuge ``tesla`` und ``egolf``.
 
 Jeder Lauf bekommt ein frisches Verzeichnis für die Ablage des core: In einem gebrauchten gälten
 Absicht, Rate-Limits und Schreibbudget eines früheren Laufs weiter, und seine Entscheidungen kämen
-zu denen des neuen. Auf die Standardausgabe kommt je Kennzahl eine Zeile, dann je Prüfung des
-Szenarios eine, mit ihren Verstößen als Befund, wenn sie fehlschlägt; der Bericht
-(``report.render_report``) geht nach ``--out``. Geloggt wird erst ab WARNING.
+zu denen des neuen. Auf die Standardausgabe kommt je Kennzahl eine Zeile, dann je Informationszahl
+eine (ohne Grenze), dann je Prüfung des Szenarios eine, mit ihren Verstößen als Befund, wenn sie
+fehlschlägt; der Bericht (``report.render_report``) geht nach ``--out``. Geloggt wird erst ab
+WARNING.
 
 Rückgabe: 0, wenn alle Kennzahlen und Prüfungen bestehen, sonst 1; 2 bei unbekanntem Szenario,
 einer Konfiguration, die fehlt, ungültig ist oder die Geräte der Szenarien nicht hat, und einem
@@ -100,6 +101,8 @@ def main(argv: list[str] | None = None) -> int:
     for figure in result.metrics.figures(cfg):
         rating = OK if figure.ok else FAILED
         print(f"{figure.name}: {figure.value} (Grenze {figure.limit}) – {rating}")
+    for info in result.metrics.info():
+        print(f"{info.name}: {info.value} (zur Information)")
     for line in check_lines(result):
         finding = "" if line.ok else f" Befund: {line.finding}"
         print(f"Szenario-Prüfung: {line.rating} – {line.text}{finding}")

@@ -88,8 +88,12 @@ def test_the_cli_prints_one_line_per_metric_and_logs_only_warnings(tmp_path, cap
     assert lines[0].endswith(" A (Grenze 35 A) – OK")
     assert lines[9] == "Wiederholte Dry-Run-Entscheidungen: 0 (Grenze 0) – OK"
     assert lines[10:] == [
+        "Akku-Energie in PV-Autos, roh (mit Übergängen): 0 % (zur Information)",
+        "Zurückstellungen wegen des Stundenlimits an „tesla“: 0 (zur Information)",
         "Szenario-Prüfung: OK – Eine Entscheidung nennt „reserve_guard“.",
-        "Szenario-Prüfung: OK – Der SOC sinkt nie unter 20 %.",
+        "Szenario-Prüfung: OK – Unter der Reserve-Absicherung liegt keine Phase länger als 10 s "
+        "über dem Importziel (Last ohne Akku-Hilfe).",
+        "Szenario-Prüfung: OK – Der SOC sinkt nie unter 20 % (Invariante des Modells).",
         f"Bericht: {out}",
     ]  # kein Log der Laufzeit: Ihre Wechsel des Betriebszustands sind INFO
 

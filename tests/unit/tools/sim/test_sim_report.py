@@ -106,6 +106,26 @@ def test_the_report_rates_every_metric(cfg) -> None:
     assert rows[-1] == "| Wiederholte Dry-Run-Entscheidungen | 0 | 0 | OK |"
 
 
+def test_the_report_lists_the_information_figures_without_a_limit(cfg) -> None:
+    held = decision(
+        30, "vehicle.tesla", CommandKind.CURRENT, 8.0, DecisionResult.DEFERRED, "rate.per_hour"
+    )
+    text = render_report(result_of(cfg, [quiet(t) for t in range(60)], [held], CHECKS), CONFIG)
+    assert section(text, "Informationszahlen") == [
+        "| Zahl | Wert |",
+        "|---|---|",
+        "| Akku-Energie in PV-Autos, roh (mit Übergängen) | 0 % |",
+        "| Zurückstellungen wegen des Stundenlimits an „tesla“ | 1 |",
+    ]
+    headings = [line for line in text.splitlines() if line.startswith("## ")]
+    assert headings == [
+        "## Kennzahlen",
+        "## Informationszahlen",
+        "## Szenario-Prüfungen",
+        "## Entscheidungen",
+    ]
+
+
 def test_each_check_gets_one_line_with_its_findings_if_it_fails(cfg) -> None:
     text = render_report(result_of(cfg, [quiet(0)], [], CHECKS), CONFIG)
     assert section(text, "Szenario-Prüfungen") == [

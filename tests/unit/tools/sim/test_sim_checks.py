@@ -296,6 +296,19 @@ def test_exactly_one_wake(cfg) -> None:
     assert found(wake, later) == ["2 Weckvorgänge an „tesla“, verlangt genau einer."]
 
 
+def test_a_deferred_wake_or_current_is_no_command(cfg) -> None:
+    # Zurückgestellt (Stundenlimit) ging nichts hinaus: Das ist weder ein Weckvorgang noch eine
+    # weitere Entscheidung „Strom 16 A“.
+    deferred = DecisionResult.DEFERRED
+    one_wake, sixteen = check("tesla-schlaeft", 0), check("zuordnung", 1)
+    held = with_codes(decision(1400, TESLA, CHARGING, True, deferred), "wake", "rate.start_stop")
+    wake = with_codes(decision(1506, TESLA, CHARGING, True, OK), "mode_pv", "wake")
+    assert one_wake.find(result_of(cfg, "tesla-schlaeft", decisions=[held, wake])) == []
+    later = with_codes(decision(600, TESLA, CURRENT, 16.0, deferred), "mode_now", "rate.per_hour")
+    sent = decision(654, TESLA, CURRENT, 16.0, OK)
+    assert sixteen.find(result_of(cfg, "zuordnung", decisions=[later, sent])) == []
+
+
 def test_the_tesla_must_charge_at_the_end(cfg) -> None:
     charging = check("tesla-schlaeft", 1)
     assert charging.text == "„tesla“ lädt am Ende."

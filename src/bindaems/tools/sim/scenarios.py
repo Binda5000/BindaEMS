@@ -47,6 +47,7 @@ from bindaems.shared.control import (
 from bindaems.shared.decisions import DecisionResult
 from bindaems.shared.numbers import de
 from bindaems.shared.timeutil import LOCAL_TZ
+from bindaems.tools.sim.metrics import TRANSITION_S
 from bindaems.tools.sim.model import CERBO, EVCS, GRID, TESSIE, TWC, PlantModel
 
 if TYPE_CHECKING:
@@ -74,7 +75,7 @@ PEAK_S: Final = (20 * MINUTE_S, 25 * MINUTE_S)  # … von 20 bis 25 min
 PEAK_REACTION_S: Final = 10  # so lange darf die Regelung auf die Spitze reagieren
 RAMP_W: Final = 3000.0  # Rampe auf L1 bei „Nur Laden“ …
 RAMP_S: Final = (20 * MINUTE_S, 40 * MINUTE_S)  # … von 20 bis 40 min, danach bleibt die Last
-RESERVE_PCT: Final = 20.0  # unter diese USV-Reserve sinkt der SOC nie (Szenario „reserve“)
+RESERVE_PCT: Final = 20.0  # unter diese USV-Reserve entlädt das Modell nie (Szenario „reserve“)
 RESERVE_L1_W: Final = 1000.0  # dort mehr Hauslast auf L1: frei ≈ 13 A unter dem Importziel
 SUNNY_TESLA_PCT: Final = 72.0  # SOC des Tesla in „sonnig“: „Complete“ nach etwa einer Stunde
 CLOUDY_TESLA_PCT: Final = 75.0  # dasselbe in „wolkig“, wo er im Mittel weniger Strom bekommt
@@ -107,6 +108,8 @@ WAKE: Final = "wake"  # Grund eines Weckstarts
 UNCLEAR: Final = "unclear"  # Zuordnung „unklar“ in der Gesundheit
 SAFE: Final = "SAFE"
 FOREIGN_ALARM: Final = "competitor.foreign."  # Anfang der Alarme fremder Änderungen
+# Entscheidungen ohne Urteil mit Wert: abgelehnt oder wegen eines Stundenlimits zurückgestellt
+_HELD_BACK: Final = frozenset({DecisionResult.REJECTED, DecisionResult.DEFERRED})
 
 
 @dataclass(frozen=True)
@@ -385,12 +388,34 @@ def _named(code: str) -> Check:
 
 
 def _reserve_kept(result: SimResult) -> list[str]:
-    """Der SOC sinkt nie unter ``RESERVE_PCT``."""
+    """Der SOC sinkt nie unter ``RESERVE_PCT``: eine Invariante des Modells, keine Prüfung der
+    Regelung. Am Netz entlädt das Modell den Akku nie unter die USV-Reserve (``PlantModel``, ESS
+    und Peak Shaving), was immer die Regelung tut; scheitern kann die Prüfung nur an einem Fehler
+    des Modells. Ob die Regelung die Reserve schützt, prüft ``_import_target_kept``."""
     lowest = min((s.soc_pct for s in result.samples), default=RESERVE_PCT)
     if lowest < RESERVE_PCT:
         shown = de(round(lowest, 4))
         return [f"SOC bis {shown} %, unter der USV-Reserve von {de(RESERVE_PCT)} %."]
     return []
+
+
+def _import_target_kept(result: SimResult) -> list[str]:
+    """Unter der Reserve-Absicherung hält die Regelung das Importziel (Design 5.2), auch in Sofort.
+
+    Solange der SOC unter USV-Reserve + ``control.reserve_guard_pct`` liegt und ein Auto live über
+    seinem Mindeststrom lädt, liegt außerhalb von Übergängen (``TRANSITION_S``) keine Phase mit der
+    Last ohne Akku-Hilfe über dem Ziel am Importlimit samt Toleranz
+    (``Metrics.reserve_over_target_s``). An der Anlage zöge Peak Shaving den Akku sonst unter die
+    Reserve; im Modell hält der Akku sie selbst ein (``_reserve_kept``), darum prüft erst diese
+    Prüfung die Regelung.
+    """
+    longest = result.metrics.reserve_over_target_s
+    if longest <= TRANSITION_S:
+        return []
+    return [
+        f"Unter der Reserve-Absicherung {longest} s am Stück über dem Importziel, verlangt "
+        f"höchstens {TRANSITION_S} s."
+    ]
 
 
 def _multi_mode_warns(result: SimResult) -> list[str]:
@@ -429,16 +454,15 @@ def _charges_at_the_end(key: str) -> Check:
 
 
 def _one_wake(key: str) -> Check:
-    """Genau ein Weckvorgang: eine Entscheidung mit dem Grund ``wake`` und einem Wert."""
+    """Genau ein Weckvorgang: eine Entscheidung mit dem Grund ``wake`` und einem Wert, also weder
+    abgelehnt noch zurückgestellt."""
     actuator = vehicle_actuator(key)
 
     def find(result: SimResult) -> list[str]:
         wakes = [
             d
             for d in result.decisions
-            if d.actuator == actuator
-            and WAKE in d.codes
-            and d.result is not DecisionResult.REJECTED
+            if d.actuator == actuator and WAKE in d.codes and d.result not in _HELD_BACK
         ]
         if len(wakes) == 1:
             return []
@@ -497,14 +521,18 @@ def _unclear_before(key: str, until_s: int) -> Check:
 
 
 def _one_current(key: str, amps: float) -> Check:
-    """Genau eine Entscheidung über den Strom ``amps`` an das Fahrzeug ``key``."""
+    """Genau eine Entscheidung über den Strom ``amps`` an das Fahrzeug ``key``; eine
+    zurückgestellte zählt nicht, denn ihr Befehl kommt danach noch einmal."""
     actuator = vehicle_actuator(key)
 
     def find(result: SimResult) -> list[str]:
         found = [
             d
             for d in result.decisions
-            if d.actuator == actuator and d.kind is CommandKind.CURRENT and d.requested == amps
+            if d.actuator == actuator
+            and d.kind is CommandKind.CURRENT
+            and d.requested == amps
+            and d.result is not DecisionResult.DEFERRED
         ]
         if len(found) == 1:
             return []
@@ -649,7 +677,14 @@ def _reserve() -> Scenario:
     def more_on_l1(t: int) -> float:
         return RESERVE_L1_W
 
-    kept = Check(f"Der SOC sinkt nie unter {de(RESERVE_PCT)} %.", _reserve_kept)
+    target = Check(
+        "Unter der Reserve-Absicherung liegt keine Phase länger als "
+        f"{TRANSITION_S} s über dem Importziel (Last ohne Akku-Hilfe).",
+        _import_target_kept,
+    )
+    kept = Check(
+        f"Der SOC sinkt nie unter {de(RESERVE_PCT)} % (Invariante des Modells).", _reserve_kept
+    )
     return Scenario(
         name="reserve",
         title="Sofort knapp über der USV-Reserve",
@@ -660,7 +695,7 @@ def _reserve() -> Scenario:
         intent=_intent(egolf=ChargeMode.NOW),
         live=True,
         events=_weather(start, duration_s, seed, l1=more_on_l1),
-        checks=Checks((_named("reserve_guard"), kept)),
+        checks=Checks((_named("reserve_guard"), target, kept)),
     )
 
 

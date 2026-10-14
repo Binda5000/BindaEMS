@@ -251,6 +251,22 @@ def test_the_tesla_transition_comes_from_the_config() -> None:
     assert battery_run(150, "tesla", quiet=50, cfg=cfg) == 2.5  # die letzten 10 s: 20 000 / 800 000
 
 
+def test_the_raw_battery_share_keeps_the_transitions() -> None:
+    # Informationszahl ohne Grenze: Ganz im Übergang des Tesla ist die Kennzahl 0 %, roh kommt die
+    # Hälfte seiner Energie aus dem Akku (2000 von 4000 W). Wie die Kennzahl zählt sie nur Sekunden
+    # mit PV-Autos: Ein Auto in Sofort zählt nicht.
+    car_4000 = CarSample(True, 8.7, 4000.0, "pv", 5)
+    samples = [sample(t, battery_w=-2000.0, cars={"tesla": car_4000}) for t in range(150)]
+    metrics = measure(samples, [], CFG)
+    assert (metrics.battery_share_pct, metrics.battery_share_raw_pct) == (0.0, 50.0)
+    assert metrics.failures(CFG) == []
+    now = [
+        sample(t, battery_w=-2000.0, cars={"egolf": replace(car_4000, mode="now")})
+        for t in range(30)
+    ]
+    assert measure(now, [], CFG).battery_share_raw_pct == 0.0
+
+
 # --- Starts ---------------------------------------------------------------------------------------
 
 
@@ -342,6 +358,13 @@ def test_too_many_or_too_close_wakes() -> None:
     assert measure([], rejected, CFG).wakes_per_day == 1  # ohne Wert zählt er nicht
 
 
+def test_a_deferred_wake_start_is_no_wake() -> None:
+    # Zurückgestellt (Stundenlimit) ist kein Urteil mit Wert: kein Weckvorgang, wie im Kontingent.
+    deferred = wake(vienna(12, 8, 1), result=DecisionResult.DEFERRED)
+    assert measure([], [wake(vienna(12, 8)), deferred], CFG).wakes_per_day == 1
+    assert measure([], [deferred, wake(vienna(12, 8, 2))], CFG).wake_interval_s is None
+
+
 # --- Dry-Run --------------------------------------------------------------------------------------
 
 
@@ -410,6 +433,20 @@ def test_a_dry_run_decision_after_the_regulation_forgot_is_no_repeat() -> None:
     assert repeats(six, on, Forgotten(TESLA, charging), six, on) == 1  # nur „Laden“ vergessen
 
 
+def test_deferred_decisions_are_no_dry_run_decisions() -> None:
+    # Eine Zurückstellung ist keine Dry-Run-Entscheidung und kein eigener Wert der Regelung: Die
+    # Dry-Run-Entscheidung über 12 A nach zwei zurückgestellten über 12 A ist keine Wiederholung.
+    dry, deferred = DecisionResult.DRY_RUN, DecisionResult.DEFERRED
+    hourly = ("mode_pv", "pv_surplus", "rate.per_hour")
+    decisions = [
+        decision(0, TESLA, CommandKind.CURRENT, 10.0, result=dry),
+        decision(600, TESLA, CommandKind.CURRENT, 12.0, result=deferred, codes=hourly),
+        decision(660, TESLA, CommandKind.CURRENT, 12.0, result=deferred, codes=hourly),
+        decision(3600, TESLA, CommandKind.CURRENT, 12.0, result=dry),
+    ]
+    assert measure([], decisions, CFG).repeated_dry_runs == 0
+
+
 def test_live_decisions_are_no_repeated_dry_runs() -> None:
     decisions = [
         decision(0, EGOLF, CommandKind.CURRENT, 10.0),
@@ -417,3 +454,61 @@ def test_live_decisions_are_no_repeated_dry_runs() -> None:
         decision(20, EGOLF, CommandKind.CURRENT, 10.0, result=DecisionResult.DRY_RUN),
     ]
     assert measure([], decisions, CFG).repeated_dry_runs == 0
+
+
+# --- Reserve-Absicherung und Informationszahlen ---------------------------------------------------
+
+
+def test_longest_time_above_the_import_target_under_the_reserve_guard() -> None:
+    # Unter USV-Reserve + Absicherung (20 + 5 = 25 %) richtet sich auch Sofort am Importziel aus
+    # (19 A, gezählt ab 19,5 A). Gezählt wird die Last ohne Akku-Hilfe, solange ein Auto live über
+    # seinem Mindeststrom lädt: auf L1 von 5 bis 15 s 15 + 5 = 20 A.
+    sofort = CarSample(True, 13.0, 5980.0, "now", 6)
+
+    def longest(soc_pct: float, egolf: CarSample = sofort) -> int:
+        samples = [
+            sample(
+                t,
+                l1=15.0 if 5 <= t < 16 else 10.0,
+                feed=5.0,
+                soc_pct=soc_pct,
+                cars={"egolf": egolf},
+            )
+            for t in range(30)
+        ]
+        return measure(samples, [], CFG).reserve_over_target_s
+
+    assert longest(24.9) == 11
+    assert longest(25.0) == 0  # ohne Absicherung lädt Sofort bis zur Sicherung
+    assert longest(24.9, replace(sofort, current_a=6.4)) == 0  # am Mindeststrom
+    assert longest(24.9, replace(sofort, steered=False)) == 0  # stellt ein anderer
+    assert longest(24.9, replace(sofort, charging=False, current_a=0.0)) == 0  # lädt nicht
+
+
+def test_deferrals_for_the_hourly_limit_per_vehicle_with_tessie() -> None:
+    # Informationszahl ohne Grenze: die Entscheidungen „zurückgestellt“ wegen eines Stundenlimits,
+    # je Fahrzeug mit Tessie; andere Ergebnisse, Befunde und Aktoren zählen nicht.
+    deferred = DecisionResult.DEFERRED
+    decisions = [
+        decision(0, TESLA, CommandKind.CURRENT, 8.0, result=deferred, codes=("rate.per_hour",)),
+        decision(
+            60, TESLA, CommandKind.CHARGING, False, result=deferred, codes=("rate.start_stop",)
+        ),
+        decision(70, TESLA, CommandKind.CURRENT, 8.0, result=DecisionResult.DRY_RUN),
+        decision(80, TESLA, CommandKind.CURRENT, 9.0, result=deferred, codes=("rate.interval",)),
+        decision(90, EGOLF, CommandKind.CURRENT, 8.0, result=deferred, codes=("rate.per_hour",)),
+    ]
+    metrics = measure([], decisions, CFG)
+    assert metrics.hourly_deferrals == {"tesla": 2}
+    assert metrics.failures(CFG) == []
+
+
+def test_the_information_figures_name_their_values() -> None:
+    car_4000 = CarSample(True, 8.7, 4000.0, "pv", 5)
+    samples = [sample(t, battery_w=-2000.0, cars={"tesla": car_4000}) for t in range(150)]
+    deferred = decision(0, TESLA, CommandKind.CURRENT, 8.0, result=DecisionResult.DEFERRED)
+    metrics = measure(samples, [replace(deferred, codes=("rate.per_hour",))], CFG)
+    assert [(info.name, info.value) for info in metrics.info()] == [
+        ("Akku-Energie in PV-Autos, roh (mit Übergängen)", "50 %"),
+        ("Zurückstellungen wegen des Stundenlimits an „tesla“", "1"),
+    ]

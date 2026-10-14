@@ -21,9 +21,9 @@ Kennzahlen und ihre Grenzen:
 - **Kürzester Abstand der Tesla-Strombefehle:** Entscheidungen über den Strom eines Fahrzeugs mit
   Tessie mit Ergebnis ``ok`` oder Dry-Run, ohne Befund ``urgent.bypass``; mindestens
   ``commands.current_interval_s``.
-- **Weckvorgänge:** Entscheidungen mit dem Grund ``wake`` und einem Wert (nicht abgelehnt);
-  höchstens ``wake.per_day`` je Kalendertag in Wiener Zeit, im Abstand von mindestens
-  ``wake.interval_s``.
+- **Weckvorgänge:** Entscheidungen mit dem Grund ``wake`` und einem Wert (nicht abgelehnt, nicht
+  zurückgestellt); höchstens ``wake.per_day`` je Kalendertag in Wiener Zeit, im Abstand von
+  mindestens ``wake.interval_s``.
 - **Wiederholte Dry-Run-Entscheidungen:** Dry-Run-Entscheidungen, deren Wert gleich dem vorigen
   eigenen Wert der Regelung für Aktor und Art ist (``OwnValue``); keine. Eigene Werte setzt jedes
   Urteil mit Wert und ``UNCHANGED`` (Präzisierung 10); ``UNCHANGED`` steht in keiner Entscheidung,
@@ -31,7 +31,19 @@ Kennzahlen und ihre Grenzen:
   ``forget``, „nicht gesendet“), ist die nächste Entscheidung keine Wiederholung. Was sie in sich
   vergisst (Ladepunkt wieder geregelt, neuer Ansteckvorgang, höhere Stufe der Überlast), sieht die
   Kennzahl nicht; in den Szenarien im Dry-Run kommt das nach der ersten Entscheidung nicht vor.
-  Ohne eigene Werte zählen nur die Dry-Run-Entscheidungen selbst.
+  Ohne eigene Werte zählen nur die Dry-Run-Entscheidungen selbst. Eine Entscheidung
+  „zurückgestellt“ ist weder eine Dry-Run-Entscheidung noch ein eigener Wert.
+
+**Informationszahlen** ohne Grenze (``Metrics.info``): der rohe Anteil der Akku-Energie in PV-Autos,
+in denselben Sekunden, aber ohne die Ausnahme der Übergänge (eine Kennzahl von 0 % kann ganz aus
+Übergängen bestehen), und je Fahrzeug mit Tessie die Entscheidungen „zurückgestellt“ wegen eines
+Stundenlimits (``rate.per_hour``, ``rate.start_stop``). Das Log hält dieselbe Zurückstellung
+höchstens einmal je Minute fest.
+
+Für die Prüfung des Szenarios „reserve“ misst ``measure`` außerdem die längste Zeit über dem Ziel am
+Importlimit, solange die Reserve-Absicherung gilt (SOC unter ``battery.reserve_soc_pct +
+control.reserve_guard_pct``; dann richten sich auch Sofort und Boost am Importlimit aus). Gerechnet
+wird wie bei der Zeit über dem Ziel in PV-Modi, nur in jedem Modus.
 
 **Übergänge** (Design 13.2: „abgesehen von Übergängen“): Nach einer Änderung darf die Regelung
 ``TRANSITION_S`` über dem Ziel liegen und Akku-Energie in PV-Autos fließen lassen. Lädt in der
@@ -57,6 +69,7 @@ from datetime import datetime
 from itertools import pairwise
 from typing import Final
 
+from bindaems.core.safety.rate import HOURLY_LIMITS
 from bindaems.shared.config import Config, Phase, VehicleConfig
 from bindaems.shared.control import CommandKind, CommandValue, vehicle_actuator
 from bindaems.shared.decisions import Decision, DecisionResult
@@ -78,6 +91,8 @@ URGENT_BYPASS: Final = "urgent.bypass"  # Befund eines dringenden Befehls ohne M
 SHOWN_DIGITS: Final = 2  # Nachkommastellen der Werte in Texten
 
 _COMMANDED: Final = frozenset({DecisionResult.OK, DecisionResult.DRY_RUN})
+# Entscheidungen ohne Urteil mit Wert: Ihr Befehl ging weder hinaus noch in den Dry-Run.
+_HELD_BACK: Final = frozenset({DecisionResult.REJECTED, DecisionResult.DEFERRED})
 
 
 @dataclass(frozen=True)
@@ -159,6 +174,14 @@ class Figure:
 
 
 @dataclass(frozen=True)
+class Info:
+    """Eine Informationszahl ohne Grenze: Name und Wert als Text, der Wert mit Einheit."""
+
+    name: str
+    value: str
+
+
+@dataclass(frozen=True)
 class Metrics:
     """Die Kennzahlen eines Laufs; ``None`` heißt, es gab nichts zu messen.
 
@@ -172,6 +195,11 @@ class Metrics:
     - ``wakes_per_day``, ``wake_interval_s``: die meisten Weckvorgänge eines Wiener Tages und ihr
       kürzester Abstand in s
     - ``repeated_dry_runs``: wiederholte Dry-Run-Entscheidungen
+    - ``battery_share_raw_pct``: Akku-Energie in PV-Autos in %, roh mit den Übergängen (Information)
+    - ``hourly_deferrals``: je Fahrzeug mit Tessie die Entscheidungen „zurückgestellt“ wegen eines
+      Stundenlimits (Information)
+    - ``reserve_over_target_s``: längste Folge über dem Ziel am Importlimit unter der
+      Reserve-Absicherung; die Grenze setzt die Prüfung des Szenarios „reserve“
     """
 
     max_phase_a: float
@@ -184,6 +212,9 @@ class Metrics:
     wakes_per_day: int
     wake_interval_s: float | None
     repeated_dry_runs: int
+    battery_share_raw_pct: float
+    hourly_deferrals: Mapping[str, int]
+    reserve_over_target_s: int
 
     def figures(self, cfg: Config) -> list[Figure]:
         """Jede Kennzahl mit Wert und Grenze, in der Reihenfolge von Design 13.2."""
@@ -216,6 +247,19 @@ class Metrics:
             for figure in self.figures(cfg)
             if not figure.ok
         ]
+
+    def info(self) -> list[Info]:
+        """Die Informationszahlen ohne Grenze: der rohe Akku-Anteil, dann die Zurückstellungen
+        wegen eines Stundenlimits je Fahrzeug mit Tessie, in der Reihenfolge der Konfiguration."""
+        raw = Info(
+            "Akku-Energie in PV-Autos, roh (mit Übergängen)",
+            f"{de(round(self.battery_share_raw_pct, SHOWN_DIGITS))} %",
+        )
+        deferred = [
+            Info(f"Zurückstellungen wegen des Stundenlimits an „{key}“", de(count))
+            for key, count in self.hourly_deferrals.items()
+        ]
+        return [raw, *deferred]
 
 
 def _at_most(name: str, value: float, limit: float, unit: str = " s") -> Figure:
@@ -252,12 +296,15 @@ def measure(
     grid = cfg.grid
     fuse_target = grid.fuse_a - grid.fuse_margin_a
     target = grid.import_limit_a - cfg.control.import_margin_a + TARGET_TOLERANCE_A
+    guard_soc = cfg.battery.reserve_soc_pct + cfg.control.reserve_guard_pct
     teslas = frozenset(key for key, vehicle in cfg.vehicles.items() if vehicle.tessie is not None)
     counted = [s for s in samples if _pv_only(s)]
     over_target = [s for s in counted if any(_helped_a(s, p) > target for p in s.grid_a)]
     runs: dict[bool, list[list[Sample]]] = {False: [], True: []}  # lädt ein Tesla in der Folge?
     for run in _runs(over_target):
         runs[any(_charging(s, teslas) for s in run)].append(run)
+    guarded = [s for s in samples if s.soc_pct < guard_soc and _steered_above_minimum(s)]
+    over_guarded = [s for s in guarded if any(_helped_a(s, p) > target for p in s.grid_a)]
     times = _times(decisions, sent or {})
     teslas_on = frozenset(vehicle_actuator(key) for key in teslas)
     currents = [
@@ -271,19 +318,28 @@ def measure(
     wakes = [
         d
         for d in decisions
-        if d.actuator in teslas_on and WAKE in d.codes and d.result is not DecisionResult.REJECTED
+        if d.actuator in teslas_on and WAKE in d.codes and d.result not in _HELD_BACK
     ]
     return Metrics(
         max_phase_a=max((amps for s in samples for amps in s.grid_a.values()), default=0.0),
         over_33_s=_longest(_runs(s for s in samples if max(s.grid_a.values()) > fuse_target)),
         over_target_s=_longest(runs[False]),
         over_target_tesla_s=_longest(runs[True]),
-        battery_share_pct=_battery_share_pct(counted, teslas, tesla_transition_s(cfg)),
+        battery_share_pct=_battery_share_pct(
+            counted, teslas, skip_s=TRANSITION_S, tesla_skip_s=tesla_transition_s(cfg)
+        ),
         starts_per_hour=_starts_per_hour(samples),
         tesla_interval_s=_shortest_gap(currents, times),
         wakes_per_day=_wakes_per_day(wakes, times),
         wake_interval_s=_shortest_gap(wakes, times),
         repeated_dry_runs=_repeated_dry_runs(decisions, own),
+        battery_share_raw_pct=_battery_share_pct(counted, teslas, skip_s=0, tesla_skip_s=0),
+        hourly_deferrals={
+            key: _hourly_deferrals(decisions, vehicle_actuator(key))
+            for key in cfg.vehicles
+            if key in teslas
+        },
+        reserve_over_target_s=_longest(_runs(over_guarded)),
     )
 
 
@@ -302,10 +358,16 @@ def _tesla_configs(cfg: Config) -> list[VehicleConfig]:
 def _pv_only(sample: Sample) -> bool:
     """Lädt mindestens ein Auto, alle ladenden live gesteuert, in PV-Modi und keins am
     Mindeststrom?"""
+    return _steered_above_minimum(sample) and all(
+        car.mode in PV_MODES for car in sample.cars.values() if car.charging
+    )
+
+
+def _steered_above_minimum(sample: Sample) -> bool:
+    """Lädt mindestens ein Auto, alle ladenden live gesteuert und keins am Mindeststrom?"""
     charging = [car for car in sample.cars.values() if car.charging]
     return bool(charging) and all(
-        car.steered and car.mode in PV_MODES and car.current_a >= car.min_a + MINIMUM_MARGIN_A
-        for car in charging
+        car.steered and car.current_a >= car.min_a + MINIMUM_MARGIN_A for car in charging
     )
 
 
@@ -334,12 +396,13 @@ def _longest(runs: Iterable[Sequence[Sample]]) -> int:
 
 
 def _battery_share_pct(
-    samples: Sequence[Sample], teslas: Iterable[str], tesla_transition: float
+    samples: Sequence[Sample], teslas: Iterable[str], *, skip_s: float, tesla_skip_s: float
 ) -> float:
     """Der Anteil der Akku-Energie an der Energie der ladenden Autos in %, ohne die Übergänge.
 
-    In jeder Folge aufeinanderfolgender Sekunden mit Entladung zählen die ersten ``TRANSITION_S``
-    nicht, lädt darin ein Fahrzeug aus ``teslas``, die ersten ``tesla_transition``.
+    In jeder Folge aufeinanderfolgender Sekunden mit Entladung zählen die ersten ``skip_s`` nicht,
+    lädt darin ein Fahrzeug aus ``teslas``, die ersten ``tesla_skip_s``. Mit 0 und 0 ist der
+    Anteil roh.
     """
     cars = sum(_cars_w(sample) for sample in samples)
     if cars <= 0:
@@ -348,7 +411,7 @@ def _battery_share_pct(
     discharge = 0.0
     for run in _runs(sample for sample in samples if sample.battery_w < 0):
         tesla = any(_charging(sample, keys) for sample in run)
-        skipped = math.ceil(tesla_transition if tesla else TRANSITION_S)
+        skipped = math.ceil(tesla_skip_s if tesla else skip_s)
         discharge += sum(min(-sample.battery_w, _cars_w(sample)) for sample in run[skipped:])
     return 100.0 * discharge / cars
 
@@ -404,6 +467,17 @@ def _by_actuator(
     for decision in decisions:
         moments[decision.actuator].append(times[decision.id])
     return {actuator: sorted(found) for actuator, found in moments.items()}
+
+
+def _hourly_deferrals(decisions: Sequence[Decision], actuator: str) -> int:
+    """Die Entscheidungen „zurückgestellt“ des Aktors mit dem Befund eines Stundenlimits."""
+    return sum(
+        1
+        for d in decisions
+        if d.actuator == actuator
+        and d.result is DecisionResult.DEFERRED
+        and not HOURLY_LIMITS.isdisjoint(d.codes)
+    )
 
 
 def _repeated_dry_runs(

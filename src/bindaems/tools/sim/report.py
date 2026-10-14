@@ -5,6 +5,8 @@
 - Überschrift mit dem Titel des Szenarios, dann eine Tabelle „Angabe | Wert“: Szenario, simulierte
   Zeit in Wiener Zeit und die Konfiguration, aus der die Grenzen kommen
 - ``## Kennzahlen``: je Kennzahl Wert, Grenze und OK oder FEHLER (``Metrics.figures``)
+- ``## Informationszahlen``: Zahlen ohne Grenze, die eine Kennzahl einordnen (``Metrics.info``):
+  der rohe Akku-Anteil mit den Übergängen und die Zurückstellungen wegen eines Stundenlimits
 - ``## Szenario-Prüfungen``: je Prüfung eine Zeile mit OK oder FEHLER, ihrem Satz und, wenn sie
   fehlschlägt, ihren Verstößen als Befund (``check_lines``)
 - ``## Entscheidungen``: die Zahl der Entscheidungen je Aktor, Art und Ergebnis, danach die Zahl
@@ -77,6 +79,12 @@ def render_report(result: SimResult, config_path: str) -> str:
             f"| {f.name} | {f.value} | {f.limit} | {OK if f.ok else FAILED} |"
             for f in result.metrics.figures(cfg)
         ),
+        "",
+        "## Informationszahlen",
+        "",
+        "| Zahl | Wert |",
+        "|---|---|",
+        *(f"| {_cell(info.name)} | {info.value} |" for info in result.metrics.info()),
         "",
         "## Szenario-Prüfungen",
         "",

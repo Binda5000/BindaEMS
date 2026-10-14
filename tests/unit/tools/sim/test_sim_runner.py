@@ -36,6 +36,7 @@ from bindaems.tools.sim.scenarios import (
     HOUSE_W,
     SCENARIOS,
     SUN_PEAK_W,
+    Checks,
     Scenario,
     sun_w,
 )
@@ -458,11 +459,11 @@ def result_of(
     return SimResult(SCENARIOS["reserve"], metrics, decisions or [], health or [], samples, [])
 
 
-def egolf_at(t: int, current_a: float, *, soc_pct: float = 60.0) -> Sample:
-    """Der e-Golf mit ``current_a`` nach Sekunde ``t``, sonst ruhig."""
+def egolf_at(t: int, current_a: float, *, soc_pct: float = 60.0, l1: float = 0.0) -> Sample:
+    """Der e-Golf mit ``current_a`` nach Sekunde ``t``, ``l1`` A auf L1 am Netz, sonst ruhig."""
     car = CarSample(current_a > 0, current_a, current_a * 460.0, "now", 6)
     quiet = {"L1": 0.0, "L2": 0.0, "L3": 0.0}
-    return Sample(t, quiet, quiet, 0.0, soc_pct, {"egolf": car})
+    return Sample(t, quiet | {"L1": l1}, quiet, 0.0, soc_pct, {"egolf": car})
 
 
 def one_after_the_other(
@@ -528,6 +529,38 @@ def test_the_reserve_is_kept_and_named(cfg) -> None:
     assert check(result_of(cfg, low)) == [
         "Keine Entscheidung mit „reserve_guard“.",
         "SOC bis 19,9988 %, unter der USV-Reserve von 20 %.",
+    ]
+
+
+def test_the_reserve_checks_name_the_regulation_and_the_model() -> None:
+    checks = SCENARIOS["reserve"].checks
+    assert isinstance(checks, Checks)
+    assert [check.text for check in checks.items] == [
+        "Eine Entscheidung nennt „reserve_guard“.",
+        "Unter der Reserve-Absicherung liegt keine Phase länger als 10 s über dem Importziel "
+        "(Last ohne Akku-Hilfe).",
+        "Der SOC sinkt nie unter 20 % (Invariante des Modells).",
+    ]
+
+
+def test_the_reserve_guard_must_hold_the_import_target(cfg) -> None:
+    # SOC 23 % liegt unter Reserve + Absicherung (25 %): Sofort richtet sich am Importziel aus
+    # (19 A, gezählt ab 19,5 A). Mehr als 10 s am Stück darüber ist ein Fehler der Regelung.
+    checks = SCENARIOS["reserve"].checks
+    assert isinstance(checks, Checks)
+    target = checks.items[1]
+
+    def found(seconds_over: int) -> list[str]:
+        samples = [
+            egolf_at(t, 13.0, soc_pct=23.0, l1=20.0 if t < seconds_over else 18.0)
+            for t in range(60)
+        ]
+        result = replace(result_of(cfg, samples), metrics=measure(samples, [], cfg))
+        return target.find(result)
+
+    assert found(10) == []
+    assert found(11) == [
+        "Unter der Reserve-Absicherung 11 s am Stück über dem Importziel, verlangt höchstens 10 s."
     ]
 
 
