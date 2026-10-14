@@ -24,6 +24,23 @@ mit Boost (``_Boost``) und das Abstecken (``_Unplug``).
 Abweichungen von der Tabelle des Plans (Entscheidung des Koordinators zu Task 14): In ``sonnig``
 und ``wolkig`` steht der Tesla knapp unter seinem Ladelimit, und die Prüfungen verlangen, dass die
 Autos nacheinander laden; ``reserve`` hat 1 kW mehr Hauslast auf L1, damit das Importziel greift.
+
+Die Szenarien für Akku und Spitzen (Plan 2c-2a, Design 10.2) schalten Victron live. Abweichungen
+von der Tabelle des Plans 2c-2a, weil ihre Erwartung im Modell nicht zu schaffen ist:
+
+- In ``akku-minpv`` und ``spitze-15min`` steht der Tesla zu Beginn auf seinem Mindeststrom von
+  5 A (``TESLA_MIN_A``). Sonst lädt er nach dem Start 90 s mit 16 A: Der erste Befehl auf 5 A geht
+  über Tessie verloren, und der Neuversuch folgt im Abstand von ``current_interval_s`` (Plan 2c-1,
+  Design 7.2). In ``akku-minpv`` liefert der Akku dann bis zu 5,8 kW in die Autos, denn Regel 2
+  begrenzt den Override auf ``max_grid_charge_setpoint_w`` (8 kW). In ``spitze-15min`` fällt die
+  erste Drosselung in diese Zeit: Der Wächter drosselt den Tesla bis zum Mindeststrom und den
+  e-Golf um den Rest im selben Schritt (Präzisierung 11), und der Tesla folgt erst nach dem
+  Neuversuch.
+- In ``schieflast-pv`` kommt die schwere Last auf L1 erst nach 10 min dazu (``UNBALANCED_FROM_S``),
+  wenn der e-Golf schon lädt. Von Anfang an startete er nie: Der Phasenwächter zählt die
+  Ladeleistung des Akkus zur Last der Phase (Plan 2c-1, Design 5.1) und lässt auf L1 nur etwa 3 A
+  frei, weniger als den Mindeststrom. Lädt der e-Golf, lädt der Akku auf jeder Phase je Ampere des
+  e-Golf 2/3 A weniger, und das Importziel bindet ihn zwischen Mindest- und Höchststrom.
 """
 
 from __future__ import annotations
@@ -38,6 +55,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final
 
 from bindaems.shared.control import (
+    VICTRON,
     ChargeMode,
     CommandKind,
     Intent,
@@ -46,13 +64,19 @@ from bindaems.shared.control import (
     wallbox_actuator,
 )
 from bindaems.shared.decisions import DecisionResult
-from bindaems.shared.numbers import de
+from bindaems.shared.numbers import de, finite_number
 from bindaems.shared.timeutil import LOCAL_TZ
-from bindaems.tools.sim.metrics import TRANSITION_S
+from bindaems.tools.sim.metrics import (
+    MINIMUM_MARGIN_A,
+    PV_MODES,
+    TRANSITION_S,
+    battery_into_car_pct,
+)
 from bindaems.tools.sim.model import CERBO, EVCS, GRID, TESSIE, TWC, PlantModel
 
 if TYPE_CHECKING:
     from bindaems.core.runtime import CoreRuntime
+    from bindaems.shared.decisions import Decision
     from bindaems.tools.sim.metrics import Sample
     from bindaems.tools.sim.runner import SimResult
 
@@ -102,6 +126,34 @@ RESUMED_S: Final = 60 * MINUTE_S  # ab hier laden in „ausfaelle“ wieder beid
 OVERRIDE_S: Final = 10 * MINUTE_S  # „zuordnung“: Übersteuerung „tesla“ an „evcs“ …
 UNPLUG_S: Final = 40 * MINUTE_S  # … Abstecken …
 EVCS_OFF_S: Final = 41 * MINUTE_S  # … und ab hier lädt die EVCS nicht mehr
+
+# Szenarien für Akku und Spitzen (Plan 2c-2a, Design 10.2)
+SETTLED_S: Final = 2 * MINUTE_S  # ab hier prüfen „akku-sofort“, „boost-abend“, „override-stunde“
+CAR_FROM_BATTERY_PCT: Final = 5.0  # „akku-wolkig“: so viel der Energie des e-Golf aus dem Akku
+TESLA_MIN_A: Final = 5  # „akku-minpv“, „spitze-15min“: Strom im Tesla zu Beginn (Mindeststrom)
+# „akku-minpv“: Akku in die Autos höchstens SUPPORT_W von bis s nach dem ersten Laden (die
+# Unterstützung endet nach support_max_s, 900 s), ab GRID_ONLY_S danach höchstens GRID_ONLY_W
+SUPPORT_W: Final = 3200.0
+SUPPORT_S: Final = (10, 890)
+GRID_ONLY_W: Final = 200.0
+GRID_ONLY_S: Final = 930
+LOADS_ABOVE_W: Final = 8300.0  # „akku-sofort“: Ziehen Autos und Haus mehr, …
+GRID_BETWEEN_W: Final = (7800.0, 8200.0)  # … liegt der Netzbezug hier, um 8 kW (Regel 2)
+BOOST_SOC_PCT: Final = 25.0  # „boost-abend“: Über diesem SOC (Reserve + reserve_guard_pct) …
+BOOST_GRID_W: Final = 300.0  # … zieht das Haus höchstens so viel aus dem Netz
+OVERRIDE_AGE_S: Final = 245.0  # „override-stunde“: höchstens so lange seit dem letzten Schreiben
+VICTRON_DECISIONS: Final = 5  # … und höchstens so viele Entscheidungen an Victron
+LOCKED_FROM_S: Final = MINUTE_S  # „dess-an“: ab hier ist Victron für den Akku-Sollwert gesperrt
+PEAK_TARGET_KW: Final = 8.0  # „spitze-15min“: das 15-min-Ziel; der Lauf beginnt …
+PEAK_LEAD_S: Final = MINUTE_S  # … so lange vor 18:00, der core regelt ab der Viertelstunde
+QUARTER_S: Final = 15 * MINUTE_S
+PEAK_QUARTERS: Final = 3  # … so viele Viertelstunden ab 18:00 prüft er, je mit höchstens …
+QUARTER_KWH: Final = 2.02  # … so viel Netzbezug (8 kW · 0,25 h + 1 %) …
+PEAK_BOOST_S: Final = 46 * MINUTE_S  # … und ab hier (18:45) lädt der e-Golf in Boost
+UNBALANCED_PV_W: Final = 12000.0  # „schieflast-pv“: konstante PV …
+UNBALANCED_L1_W: Final = 5500.0  # … und so viel mehr Last auf L1 …
+UNBALANCED_FROM_S: Final = 10 * MINUTE_S  # … ab hier, wenn der e-Golf schon lädt
+PEAK_GUARD: Final = "peak_guard"  # Grund einer Drosselung durch den 15-min-Wächter
 
 TESLA: Final = "tesla"  # Schlüssel der Fahrzeuge und Wallboxen in der Konfiguration
 EGOLF: Final = "egolf"
@@ -433,15 +485,16 @@ def _evcs_lower_during_the_peak(result: SimResult) -> list[str]:
     return [f"EVCS-Strom während der Spitze bis {de(max(during))} A, davor {de(before[0])} A."]
 
 
-def _named(code: str) -> Check:
-    """Mindestens eine Entscheidung nennt den Grund ``code``."""
+def _named(code: str, *, at: str | None = None) -> Check:
+    """Mindestens eine Entscheidung nennt den Grund ``code``, mit ``at`` eine an diesen Aktor."""
+    where = "" if at is None else f" an „{at}“"
 
     def find(result: SimResult) -> list[str]:
-        if any(code in d.codes for d in result.decisions):
+        if any(code in d.codes and at in (None, d.actuator) for d in result.decisions):
             return []
-        return [f"Keine Entscheidung mit „{code}“."]
+        return [f"Keine Entscheidung{where} mit „{code}“."]
 
-    return Check(f"Eine Entscheidung nennt „{code}“.", find)
+    return Check(f"Eine Entscheidung{where} nennt „{code}“.", find)
 
 
 def _reserve_kept(result: SimResult) -> list[str]:
@@ -663,6 +716,280 @@ def _no_foreign_alarm(result: SimResult) -> list[str]:
             if alarm["id"].startswith(FOREIGN_ALARM):
                 return [f"Alarm „{alarm['id']}“ bei {t} s."]
     return []
+
+
+# --- Prüfungen für Akku und Spitzen --------------------------------------------------------------
+
+
+def _second(result: SimResult, ts: datetime) -> int:
+    """Die Sekunde des Laufs, in der der Zeitpunkt ``ts`` liegt."""
+    return math.floor((ts - result.scenario.start).total_seconds())
+
+
+def _hhmm(start: datetime, t: int) -> str:
+    """Die Sekunde ``t`` eines Laufs ab ``start`` als Wiener Uhrzeit, etwa „18:45“."""
+    return f"{(start + timedelta(seconds=t)).astimezone(LOCAL_TZ):%H:%M}"
+
+
+def _at(decisions: Sequence[Decision], actuator: str) -> list[Decision]:
+    return [d for d in decisions if d.actuator == actuator]
+
+
+def _cars_w(sample: Sample) -> float:
+    """Die Leistung der ladenden Autos in W."""
+    return sum(car.power_w for car in sample.cars.values() if car.charging)
+
+
+def _above(
+    samples: Sequence[Sample], value: Callable[[Sample], float], limit: float, what: str
+) -> list[str]:
+    """Ein Satz, wenn ``value`` in einer der ``samples`` über ``limit`` W liegt: die erste solche
+    Sekunde, wie viele es sind und der höchste Wert, auf ganze W gerundet (``_watts``)."""
+    over = [(s.t, value(s)) for s in samples if value(s) > limit]
+    if not over:
+        return []
+    (t, watts), (_, worst) = over[0], max(over, key=lambda found: found[1])
+
+    def shown(found: float) -> str:
+        return _watts(found, lambda rounded: rounded <= limit)
+
+    return [
+        f"{what} bei {t} s {shown(watts)} W, verlangt höchstens {de(limit)} W "
+        f"({len(over)} s darüber, bis {shown(worst)} W)."
+    ]
+
+
+def _watts(value: float, hides: Callable[[float], bool]) -> str:
+    """Eine Leistung auf ganze W für einen Satz über einen Verstoß; ungerundet, wenn der gerundete
+    Wert den Verstoß verdeckte (``hides``), wie bei den Kennzahlen."""
+    rounded = round(value)
+    return de(value if hides(rounded) else rounded)
+
+
+def _from_battery_at_most(key: str, limit_pct: float) -> Check:
+    """Höchstens ``limit_pct`` der Energie des Autos ``key`` kommen aus dem Akku
+    (``battery_into_car_pct``, ohne Übergänge). Lädt es nie, ist das ein Verstoß: Die Prüfung
+    hätte nichts gemessen."""
+
+    def find(result: SimResult) -> list[str]:
+        pct = battery_into_car_pct(result.samples, key)
+        if pct is None:
+            return [f"„{key}“ lädt nie."]
+        if pct <= limit_pct:
+            return []
+        shown = de(round(pct, 2))
+        return [f"„{key}“ lädt zu {shown} % aus dem Akku, verlangt höchstens {de(limit_pct)} %."]
+
+    text = (
+        f"Höchstens {de(limit_pct)} % der Energie von „{key}“ kommen aus dem Akku (ohne Übergänge)."
+    )
+    return Check(text, find)
+
+
+def _battery_into_cars_w(sample: Sample) -> float:
+    """Was der Akku in die Autos liefert: ``max(0, Entladung − Haus)``, ohne PV."""
+    return max(0.0, max(0.0, -sample.battery_w) - sample.house_w)
+
+
+def _support_then_grid(result: SimResult) -> list[str]:
+    """Der Akku liefert in die Autos ab ``SUPPORT_S[0]`` nach dem ersten Laden bis ``SUPPORT_S[1]``
+    danach höchstens ``SUPPORT_W``, ab ``GRID_ONLY_S`` danach höchstens ``GRID_ONLY_W``
+    (``_battery_into_cars_w``). Das erste Laden ist die erste Sekunde, in der ein Auto lädt."""
+    samples = result.samples
+    first = next((s.t for s in samples if _any_charging(s)), None)
+    if first is None:
+        return ["Kein Auto lädt."]
+    begin, end = first + SUPPORT_S[0], first + SUPPORT_S[1]
+    support = [s for s in samples if begin <= s.t <= end]
+    grid = [s for s in samples if s.t >= first + GRID_ONLY_S]
+    if not grid:
+        return [f"Der Lauf endet vor {first + GRID_ONLY_S} s."]
+    what = "Akku in die Autos"
+    return [
+        *_above(support, _battery_into_cars_w, SUPPORT_W, what),
+        *_above(grid, _battery_into_cars_w, GRID_ONLY_W, what),
+    ]
+
+
+def _grid_at_the_setpoint_cap(result: SimResult) -> list[str]:
+    """Ab ``SETTLED_S`` liegt der Netzbezug in jeder Sekunde, in der Autos und Haus mehr als
+    ``LOADS_ABOVE_W`` ziehen, in ``GRID_BETWEEN_W``; es muss solche Sekunden geben."""
+    low, high = GRID_BETWEEN_W
+    loaded = [
+        s for s in result.samples if s.t >= SETTLED_S and _cars_w(s) + s.house_w > LOADS_ABOVE_W
+    ]
+    if not loaded:
+        return [f"Autos und Haus ziehen ab {SETTLED_S} s nie mehr als {de(LOADS_ABOVE_W)} W."]
+    outside = [s for s in loaded if not low <= s.grid_w <= high]
+    if not outside:
+        return []
+    first = outside[0]
+    shown = _watts(first.grid_w, lambda rounded: low <= rounded <= high)
+    return [
+        f"Netzbezug bei {first.t} s {shown} W, verlangt {de(low)} bis {de(high)} W "
+        f"({len(outside)} s außerhalb)."
+    ]
+
+
+def _no_victron_number(result: SimResult) -> list[str]:
+    """Keine Entscheidung an Victron nennt eine Zahl, also einen Override."""
+    for d in _at(result.decisions, VICTRON):
+        watts = finite_number(d.requested)
+        if watts is not None:
+            return [f"Entscheidung an „{VICTRON}“ bei {_second(result, d.ts)} s: {de(watts)} W."]
+    return []
+
+
+def _battery_carries_the_house(result: SimResult) -> list[str]:
+    """Ab ``SETTLED_S`` liegt der Netzbezug höchstens bei ``BOOST_GRID_W``, solange der SOC über
+    ``BOOST_SOC_PCT`` liegt; es muss solche Sekunden geben."""
+    above = [s for s in result.samples if s.t >= SETTLED_S and s.soc_pct > BOOST_SOC_PCT]
+    if not above:
+        return [f"Der SOC liegt ab {SETTLED_S} s nie über {de(BOOST_SOC_PCT)} %."]
+    return _above(above, lambda s: s.grid_w, BOOST_GRID_W, "Netzbezug")
+
+
+def _override_kept(result: SimResult) -> list[str]:
+    """Ab ``SETTLED_S`` gilt in jeder Probe ein Override, zuletzt vor höchstens
+    ``OVERRIDE_AGE_S`` geschrieben; gemeldet wird der erste Verstoß."""
+    after = [s for s in result.samples if s.t >= SETTLED_S]
+    if not after:
+        return [f"Der Lauf endet vor {SETTLED_S} s."]
+    for s in after:
+        if s.override_w is None or s.override_age_s is None:
+            return [f"Bei {s.t} s gilt kein Override."]
+        if s.override_age_s > OVERRIDE_AGE_S:
+            age = de(round(s.override_age_s))
+            return [
+                f"Bei {s.t} s ist der Override vor {age} s geschrieben, verlangt höchstens "
+                f"{de(OVERRIDE_AGE_S)} s."
+            ]
+    return []
+
+
+def _few_victron_decisions(result: SimResult) -> list[str]:
+    """Höchstens ``VICTRON_DECISIONS`` Entscheidungen an Victron."""
+    count = len(_at(result.decisions, VICTRON))
+    if count <= VICTRON_DECISIONS:
+        return []
+    return [f"{count} Entscheidungen an „{VICTRON}“, verlangt höchstens {VICTRON_DECISIONS}."]
+
+
+def _no_victron_decision(result: SimResult) -> list[str]:
+    """Keine Entscheidung an Victron; gemeldet wird die erste."""
+    found = _at(result.decisions, VICTRON)
+    if not found:
+        return []
+    first = found[0]
+    watts = finite_number(first.requested)
+    shown = "kein Override" if watts is None else f"{de(watts)} W"
+    return [
+        f"Entscheidungen an „{VICTRON}“: {len(found)}, die erste bei "
+        f"{_second(result, first.ts)} s ({shown})."
+    ]
+
+
+def _battery_locked(result: SimResult) -> list[str]:
+    """Ab ``LOCKED_FROM_S`` zeigt jede Gesundheit den Akku-Sollwert gesperrt (``locked``)."""
+    states = [(t, health.battery.get("state")) for t, health in result.health if t >= LOCKED_FROM_S]
+    if not states:
+        return [f"Der Lauf endet vor {LOCKED_FROM_S} s."]
+    for t, state in states:
+        if state != "locked":
+            shown = "ohne Wert" if state is None else f"„{state}“"
+            return [f"„battery.state“ bei {t} s {shown}, verlangt „locked“."]
+    return []
+
+
+def _quarters_within(start: datetime) -> Check:
+    """Der Netzbezug der ``PEAK_QUARTERS`` Viertelstunden ab ``PEAK_LEAD_S`` liegt je höchstens
+    bei ``QUARTER_KWH``: ``Σ max(0, Netzbezug) · 1 s`` über die Proben der Viertelstunde.
+    ``start`` ist der Beginn des Szenarios, für die Uhrzeiten im Text."""
+
+    def find(result: SimResult) -> list[str]:
+        found: list[str] = []
+        for begin in begins:
+            shown = _hhmm(result.scenario.start, begin)
+            inside = [s for s in result.samples if begin <= s.t < begin + QUARTER_S]
+            if len(inside) < QUARTER_S:
+                found.append(f"Die Viertelstunde ab {shown} liegt nicht ganz im Lauf.")
+                continue
+            kwh = sum(max(0.0, s.grid_w) for s in inside) / 3_600_000
+            if kwh > QUARTER_KWH:
+                found.append(
+                    f"Netzbezug der Viertelstunde ab {shown}: {de(round(kwh, 3))} kWh, verlangt "
+                    f"höchstens {de(QUARTER_KWH)} kWh."
+                )
+        return found
+
+    begins = [PEAK_LEAD_S + k * QUARTER_S for k in range(PEAK_QUARTERS)]
+    *first, last = (_hhmm(start, begin) for begin in begins)
+    text = (
+        f"Netzbezug der Viertelstunden ab {', '.join(first)} und {last} je höchstens "
+        f"{de(QUARTER_KWH)} kWh."
+    )
+    return Check(text, find)
+
+
+def _named_before(code: str, until_s: int, start: datetime) -> Check:
+    """Vor ``until_s`` nennt mindestens eine Entscheidung den Grund ``code``. ``start`` ist der
+    Beginn des Szenarios, für die Uhrzeit im Text."""
+
+    def find(result: SimResult) -> list[str]:
+        if any(code in d.codes and _second(result, d.ts) < until_s for d in result.decisions):
+            return []
+        return [f"Keine Entscheidung mit „{code}“ vor {until_s} s."]
+
+    return Check(f"Eine Entscheidung vor {_hhmm(start, until_s)} nennt „{code}“.", find)
+
+
+def _not_named_from(code: str, actuator: str, from_s: int, start: datetime) -> Check:
+    """Ab ``from_s`` nennt keine Entscheidung an ``actuator`` den Grund ``code``. ``start`` ist der
+    Beginn des Szenarios, für die Uhrzeit im Text."""
+
+    def find(result: SimResult) -> list[str]:
+        found = [
+            d
+            for d in _at(result.decisions, actuator)
+            if code in d.codes and _second(result, d.ts) >= from_s
+        ]
+        if not found:
+            return []
+        return [
+            f"Entscheidungen an „{actuator}“ mit „{code}“ ab {from_s} s: {len(found)}, die erste "
+            f"bei {_second(result, found[0].ts)} s."
+        ]
+
+    shown = _hhmm(start, from_s)
+    return Check(f"Ab {shown} nennt keine Entscheidung an „{actuator}“ „{code}“.", find)
+
+
+def _now_throttled_last(key: str, actuator: str) -> Check:
+    """Bei der ersten Drosselung des Autos ``key`` in Sofort (der ersten Entscheidung an seinen
+    Aktor ``actuator`` mit ``peak_guard``, während die Probe es in Sofort zeigt) lädt kein Auto in
+    PV-Überschuss oder Min+PV über seinem Mindeststrom + ``MINIMUM_MARGIN_A`` (Design 6.3). Ohne
+    eine solche Drosselung ist das ein Verstoß: Die Prüfung hätte nichts gemessen."""
+
+    def find(result: SimResult) -> list[str]:
+        by_second = {s.t: s for s in result.samples}
+        for d in _at(result.decisions, actuator):
+            sample = by_second.get(_second(result, d.ts))
+            if PEAK_GUARD in d.codes and sample is not None and sample.cars[key].mode == "now":
+                return [
+                    f"Bei der ersten Drosselung von „{key}“ ({sample.t} s) lädt „{other}“ "
+                    f"({car.mode}) mit {de(car.current_a)} A, Mindeststrom {car.min_a} A."
+                    for other, car in sample.cars.items()
+                    if car.mode in PV_MODES
+                    and car.charging
+                    and car.current_a > car.min_a + MINIMUM_MARGIN_A
+                ]
+        return [f"Keine Drosselung von „{key}“ in Sofort."]
+
+    text = (
+        f"Bei der ersten Drosselung von „{key}“ in Sofort lädt kein Auto in PV-Überschuss oder "
+        f"Min+PV über Mindeststrom + {de(MINIMUM_MARGIN_A)} A."
+    )
+    return Check(text, find)
 
 
 # --- Szenarien 1 bis 5 ----------------------------------------------------------------------------
@@ -917,6 +1244,234 @@ def _dry_run() -> Scenario:
     )
 
 
+# --- Szenarien 11 bis 18: Akku und Spitzen, Victron live ------------------------------------------
+
+
+def _akku_wolkig() -> Scenario:
+    """Ohne Unterstützung (SOC unter ``support_soc_pct``) liefert der Akku dem e-Golf nichts
+    (Design 5.1, 5.2): Was ihm unter Wolken fehlt, holt der Override aus dem Netz."""
+    start, duration_s, seed = SUMMER, HOUR_S, 11
+    return Scenario(
+        name="akku-wolkig",
+        title="PV unter Wolken, SOC 60 %",
+        start=start,
+        duration_s=duration_s,
+        seed=seed,
+        setup=partial(_setup, soc_pct=60.0, tesla=None),
+        intent=_intent(egolf=ChargeMode.PV),
+        live=True,
+        events=_weather(start, duration_s, seed, pv=_cloudy(start, duration_s, seed)),
+        checks=Checks(
+            (
+                _from_battery_at_most(EGOLF, CAR_FROM_BATTERY_PCT),
+                _named("battery_comp", at=VICTRON),
+            )
+        ),
+        victron_live=True,
+    )
+
+
+def _akku_minpv() -> Scenario:
+    """Mit Unterstützung liefert der Akku den Autos in Min+PV zusammen höchstens
+    ``support_max_w``, nach ``support_max_s`` nichts mehr (Design 5.2). Der Tesla steht zu Beginn
+    auf 5 A (Abweichung, Docstring des Moduls)."""
+    start, duration_s, seed = EVENING, 30 * MINUTE_S, 12
+    supported = Check(
+        f"Akku in die Autos (Entladung − Haus): ab {SUPPORT_S[0]} s nach dem ersten Laden bis "
+        f"{SUPPORT_S[1]} s danach höchstens {de(SUPPORT_W)} W, ab {GRID_ONLY_S} s danach "
+        f"höchstens {de(GRID_ONLY_W)} W.",
+        _support_then_grid,
+    )
+    return Scenario(
+        name="akku-minpv",
+        title="Min+PV ohne Sonne, SOC 80 %",
+        start=start,
+        duration_s=duration_s,
+        seed=seed,
+        setup=partial(_setup, soc_pct=80.0, tesla_amps=TESLA_MIN_A),
+        intent=_intent(tesla=ChargeMode.MIN_PV, egolf=ChargeMode.MIN_PV),
+        live=True,
+        events=_weather(start, duration_s, seed),
+        checks=Checks((supported,)),
+        victron_live=True,
+    )
+
+
+def _akku_sofort() -> Scenario:
+    """In Sofort liefert der Akku nur, was über ``max_grid_charge_setpoint_w`` hinausgeht
+    (Design 5.4, Regel 2)."""
+    start, duration_s, seed = EVENING, 30 * MINUTE_S, 13
+    low, high = GRID_BETWEEN_W
+    capped = Check(
+        f"Ab {de(SETTLED_S / MINUTE_S)} min liegt der Netzbezug in jeder Sekunde, in der Autos und "
+        f"Haus mehr als {de(LOADS_ABOVE_W)} W ziehen, zwischen {de(low)} und {de(high)} W.",
+        _grid_at_the_setpoint_cap,
+    )
+    return Scenario(
+        name="akku-sofort",
+        title="Sofort am Abend, beide Autos",
+        start=start,
+        duration_s=duration_s,
+        seed=seed,
+        setup=partial(_setup, soc_pct=60.0),
+        intent=_intent(tesla=ChargeMode.NOW, egolf=ChargeMode.NOW),
+        live=True,
+        events=_weather(start, duration_s, seed),
+        checks=Checks((capped,)),
+        victron_live=True,
+    )
+
+
+def _boost_abend() -> Scenario:
+    """In Boost darf der Akku alles liefern (Design 5.2, Entscheidung 2): Es gibt keinen Override.
+    Über der Reserve-Absicherung trägt der Akku Haus und Auto; unter die USV-Reserve entlädt das
+    Modell nie."""
+    start, duration_s, seed = EVENING, 45 * MINUTE_S, 14
+    boost = VehicleIntent(boost_until=start + timedelta(seconds=duration_s))
+    house = Check(
+        f"Solange der SOC über {de(BOOST_SOC_PCT)} % liegt, ab {de(SETTLED_S / MINUTE_S)} min "
+        f"Netzbezug höchstens {de(BOOST_GRID_W)} W.",
+        _battery_carries_the_house,
+    )
+    kept = Check(
+        f"Der SOC sinkt nie unter {de(RESERVE_PCT)} % (Invariante des Modells).", _reserve_kept
+    )
+    return Scenario(
+        name="boost-abend",
+        title="Boost am Abend",
+        start=start,
+        duration_s=duration_s,
+        seed=seed,
+        setup=partial(_setup, soc_pct=35.0, tesla=None),
+        intent=Intent(version=1, control=True, vehicles={EGOLF: boost}),
+        live=True,
+        events=_weather(start, duration_s, seed),
+        checks=Checks(
+            (
+                Check(f"Keine Entscheidung an „{VICTRON}“ mit einer Zahl.", _no_victron_number),
+                house,
+                kept,
+            )
+        ),
+        victron_live=True,
+    )
+
+
+def _override_stunde() -> Scenario:
+    """Ein Override bleibt eine Stunde lang: Die Regelung frischt ihn alle ``override_refresh_s``
+    auf, ohne Eintrag im Log und ohne Alarm einer fremden Änderung (Design 5.5)."""
+    start, duration_s, seed = EVENING, HOUR_S, 15
+    kept = Check(
+        f"Ab {de(SETTLED_S / MINUTE_S)} min gilt in jeder Sekunde ein Override, zuletzt vor "
+        f"höchstens {de(OVERRIDE_AGE_S)} s geschrieben.",
+        _override_kept,
+    )
+    few = Check(
+        f"Höchstens {VICTRON_DECISIONS} Entscheidungen an „{VICTRON}“.", _few_victron_decisions
+    )
+    return Scenario(
+        name="override-stunde",
+        title="Eine Stunde mit aktivem Override",
+        start=start,
+        duration_s=duration_s,
+        seed=seed,
+        setup=partial(_setup, soc_pct=50.0, tesla=None),
+        intent=_intent(egolf=ChargeMode.NOW),
+        live=True,
+        events=_weather(start, duration_s, seed),
+        checks=Checks((kept, Check("Kein Alarm „competitor.foreign.*“.", _no_foreign_alarm), few)),
+        victron_live=True,
+    )
+
+
+def _dess_an() -> Scenario:
+    """Mit Dynamic ESS ist Victron gesperrt: Der Akku-Sollwert sendet nichts, auch keine
+    Ablehnung, und die Wallbox lädt weiter (Design 5.6)."""
+    start, duration_s, seed = EVENING, 30 * MINUTE_S, 16
+    locked = Check(
+        f"Ab {de(LOCKED_FROM_S / MINUTE_S)} min zeigt jede Gesundheit „battery.state“ „locked“.",
+        _battery_locked,
+    )
+    return Scenario(
+        name="dess-an",
+        title="Dynamic ESS an",
+        start=start,
+        duration_s=duration_s,
+        seed=seed,
+        setup=partial(_setup, soc_pct=60.0, tesla=None, dess=True),
+        intent=_intent(egolf=ChargeMode.NOW),
+        live=True,
+        events=_weather(start, duration_s, seed),
+        checks=Checks(
+            (
+                Check(f"Keine Entscheidung an „{VICTRON}“.", _no_victron_decision),
+                locked,
+                _charges_at_the_end(EGOLF),
+            )
+        ),
+        victron_live=True,
+    )
+
+
+def _spitze_15min() -> Scenario:
+    """Der 15-min-Wächter hält das Ziel von 8 kW (Design 6): Er drosselt in der Reihenfolge der
+    Modi, der Akku überbrückt den Rest; Boost drosselt er nie. Der Lauf beginnt ``PEAK_LEAD_S``
+    vor 18:00: Nach dem Start beobachtet der core rund 60 s und regelt so ab der Viertelstunde um
+    18:00; die angebrochene davor ist lückenhaft. Von 18:45 an lädt der e-Golf in Boost, darum
+    prüft der Lauf die Viertelstunde ab 18:45 nicht. Der Tesla steht zu Beginn auf 5 A
+    (Abweichung, Docstring des Moduls)."""
+    start, duration_s, seed = EVENING - timedelta(seconds=PEAK_LEAD_S), 75 * MINUTE_S, 17
+    boost = _Boost(2, EGOLF, start + timedelta(seconds=duration_s))
+    return Scenario(
+        name="spitze-15min",
+        title="15-min-Ziel 8 kW",
+        start=start,
+        duration_s=duration_s,
+        seed=seed,
+        setup=partial(_setup, soc_pct=60.0, tesla_amps=TESLA_MIN_A),
+        intent=_intent(tesla=ChargeMode.MIN_PV, egolf=ChargeMode.NOW),
+        live=True,
+        events=(*_weather(start, duration_s, seed), (PEAK_BOOST_S, boost)),
+        checks=Checks(
+            (
+                _quarters_within(start),
+                _named_before(PEAK_GUARD, PEAK_BOOST_S, start),
+                _not_named_from(PEAK_GUARD, wallbox_actuator(EVCS_BOX), PEAK_BOOST_S, start),
+                _now_throttled_last(EGOLF, wallbox_actuator(EVCS_BOX)),
+            )
+        ),
+        victron_live=True,
+        control=MappingProxyType({"peak_target_kw": PEAK_TARGET_KW}),
+    )
+
+
+def _schieflast_pv() -> Scenario:
+    """Mit schwerer Last auf L1 bindet das Importziel den e-Golf in PV zwischen Mindest- und
+    Höchststrom, ohne Rauschen bei etwa 9 A (Punkt 6 der Liste „Vor der Live-Schaltung“). Die Last
+    kommt erst nach 10 min dazu, wenn der e-Golf lädt (Abweichung, Docstring des Moduls)."""
+    start, duration_s, seed = SUMMER, HOUR_S, 18
+
+    def pv(t: int) -> float:
+        return UNBALANCED_PV_W
+
+    def heavy(t: int) -> float:
+        return UNBALANCED_L1_W if t >= UNBALANCED_FROM_S else 0.0
+
+    return Scenario(
+        name="schieflast-pv",
+        title="PV mit schwerer Last auf L1",
+        start=start,
+        duration_s=duration_s,
+        seed=seed,
+        setup=partial(_setup, soc_pct=60.0, tesla=None),
+        intent=_intent(egolf=ChargeMode.PV),
+        live=True,
+        events=_weather(start, duration_s, seed, pv=pv, l1=heavy),
+        checks=Checks((_named("import_limit", at=wallbox_actuator(EVCS_BOX)),)),
+        victron_live=True,
+    )
+
+
 SCENARIOS: Final[dict[str, Scenario]] = {
     scenario.name: scenario
     for scenario in (
@@ -930,5 +1485,13 @@ SCENARIOS: Final[dict[str, Scenario]] = {
         _ausfaelle(),
         _zuordnung(),
         _dry_run(),
+        _akku_wolkig(),
+        _akku_minpv(),
+        _akku_sofort(),
+        _boost_abend(),
+        _override_stunde(),
+        _dess_an(),
+        _spitze_15min(),
+        _schieflast_pv(),
     )
 }

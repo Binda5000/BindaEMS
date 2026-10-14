@@ -21,24 +21,30 @@ NAMES = [
     "zuordnung",
     "dry-run",
 ]
+# die Szenarien für Akku und Spitzen (Plan 2c-2a, Design 10.2), mit Victron live
+NEW = [
+    "akku-wolkig",
+    "akku-minpv",
+    "akku-sofort",
+    "boost-abend",
+    "override-stunde",
+    "dess-an",
+    "spitze-15min",
+    "schieflast-pv",
+]
 
 
 def test_all_scenarios_are_listed() -> None:
-    assert list(SCENARIOS) == [
-        "sonnig",
-        "wolkig",
-        "abend-sofort",
-        "reserve",
-        "nur-laden",
-        "tesla-5a",
-        "tesla-schlaeft",
-        "ausfaelle",
-        "zuordnung",
-        "dry-run",
-    ]
+    assert list(SCENARIOS) == [*NAMES, *NEW]
 
 
-@pytest.mark.parametrize("name", NAMES)
+def test_battery_and_peak_scenarios_are_registered() -> None:
+    assert list(SCENARIOS)[-8:] == NEW
+    assert all(SCENARIOS[name].victron_live for name in NEW)
+    assert not any(SCENARIOS[name].victron_live for name in list(SCENARIOS)[:10])
+
+
+@pytest.mark.parametrize("name", [*NAMES, *NEW])
 async def test_scenario(name, cfg, tmp_path) -> None:
     result = await run_scenario(SCENARIOS[name], cfg, tmp_path)
     assert result.failures == []

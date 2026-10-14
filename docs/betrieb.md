@@ -1706,13 +1706,15 @@ umzusetzen, je mit Befund und möglicher Abhilfe (ausführlicher in `docs/ueberg
 
 Der Anlagensimulator `bindaems.tools.sim` lässt die echte Laufzeit des core mit ihren echten Aktoren
 gegen ein Modell der Anlage laufen, in simulierter Zeit (ein Zyklus je Sekunde). Das Modell hat ein
-Netz mit Sicherung, PV, Hauslast, den Akku mit ESS und Peak Shaving, die EVCS mit dem e-Golf, den Wall
-Connector mit dem Tesla und Tessie, Ausfälle und einen fremden Regler wie evcc. Gefälscht sind nur die
-Geräte: Parser der Adapter, Aktoren, Safety-Schicht und Laderegelung sind die echten, und das Modell
-zeigt sich so, wie die Geräte und Adapter es tun. Der Simulator verbindet sich mit nichts und schreibt
-nichts auf die Geräte; er braucht weder Tokens noch Netz. Die Szenarien sind deterministisch.
+Netz mit Sicherung, PV, Hauslast, den Akku mit ESS, Peak Shaving und dem Override des Netz-Sollwerts
+(er verfällt 300 s nach dem letzten Schreiben; mit Dynamic ESS verwirft der Cerbo ihn), die EVCS mit
+dem e-Golf, den Wall Connector mit dem Tesla und Tessie, Ausfälle und einen fremden Regler wie evcc.
+Gefälscht sind nur die Geräte: Parser der Adapter, Aktoren, Safety-Schicht und Regelung sind die
+echten, und das Modell zeigt sich so, wie die Geräte und Adapter es tun. Der Simulator verbindet sich
+mit nichts und schreibt nichts auf die Geräte; er braucht weder Tokens noch Netz. Die Szenarien sind
+deterministisch.
 
-In der CI läuft jedes der zehn Szenarien bei jedem Push (`tests/integration/test_sim_scenarios.py`).
+In der CI läuft jedes der achtzehn Szenarien bei jedem Push (`tests/integration/test_sim_scenarios.py`).
 Von Hand lässt du eines laufen, etwa um nach einer Änderung von `grid` oder `control` in `config.yaml`
 zu sehen, ob die Regelung noch hält.
 
@@ -1737,7 +1739,7 @@ docker compose run --rm -v "$PWD/verification:/out" --entrypoint python ems-core
   --out /out/<Datum>-simulation-wolkig.md
 ```
 
-- `--szenario NAME` (Pflicht): eines der zehn Szenarien unten.
+- `--szenario NAME` (Pflicht): eines der achtzehn Szenarien unten.
 - `--out PFAD` (Pflicht): der Bericht als Markdown. Fehlende Ordner legt das Werkzeug an.
 - `--config PFAD`: die Konfiguration, aus der Grenzen, Fahrzeuge und Wallboxen kommen; ohne Angabe
   `deploy/config.example.yaml`, relativ zum aktuellen Verzeichnis. Die Szenarien brauchen die
@@ -1827,8 +1829,9 @@ gelten für die Beispielkonfiguration.
 ### Szenarien
 
 Alle Szenarien starten mit angesteckten, nicht ladenden Autos und einem wachen Tesla, soweit die
-Tabelle nichts anderes sagt. Der Regelbetrieb ist an, die Aktoren der Regelung sind live (außer in
-`dry-run`).
+Tabelle nichts anderes sagt. Der Regelbetrieb ist an, EVCS und Tesla sind live (außer in `dry-run`).
+Victron (der Akku-Sollwert) entscheidet in den ersten zehn Szenarien im Dry-Run mit; in den acht für
+Akku und Spitzen, ab `akku-wolkig`, ist er live.
 
 | Name | Titel, Dauer | Anlage und Ereignisse | Prüfung des Szenarios |
 |---|---|---|---|
@@ -1842,9 +1845,29 @@ Tabelle nichts anderes sagt. Der Regelbetrieb ist an, die Aktoren der Regelung s
 | `ausfaelle` | Ausfälle einzeln, Netzausfall mit Wiederaufnahme, 1,5 h | beide Sofort; Ausfälle: EVCS 10–15 min, Wall Connector 20–25, Tessie 30–35, Cerbo 40–41, Netz 50–53 | SAFE in den Fenstern von Cerbo und Netz; ab 60 min laden beide; eine Entscheidung nennt „resume_after_outage“. |
 | `zuordnung` | Zuordnung unklar und Übersteuerung, 1 h | Tesla an der EVCS; Übersteuerung `tesla: evcs` (Version 2) bei 10 min; Abstecken bei 40 min | Die Gesundheit zeigt „unklar“ vor 10 min; genau eine Entscheidung „Strom 16 A“ an den Tesla; ab 41 min lädt die EVCS nicht. |
 | `dry-run` | Dry-Run neben einem fremden Regler, 1 h | wie `wolkig`, fremder Regler an, alle Aktoren im Dry-Run | keine wiederholte Dry-Run-Entscheidung; mindestens eine Dry-Run-Entscheidung an EVCS und Tesla; kein Alarm „competitor.foreign.*“ |
+| `akku-wolkig` | PV unter Wolken, SOC 60 %, 1 h | 21.06.2026 ab 10:00, Wolken wie `wolkig`, Akku 60 %, nur der e-Golf, in PV | Höchstens 5 % der Energie des e-Golf kommen aus dem Akku (ohne Übergänge); eine Entscheidung an `victron` nennt „battery_comp“. |
+| `akku-minpv` | Min+PV ohne Sonne, SOC 80 %, 30 min | 12.10.2026 ab 18:00, keine PV, Akku 80 %, beide in Min+PV, der Tesla zu Beginn auf 5 A | Der Akku liefert in die Autos (Entladung − Haus) ab 10 s nach dem ersten Laden bis 890 s danach höchstens 3200 W (`support_max_w`), ab 930 s danach höchstens 200 W (`support_max_s`, 900 s). |
+| `akku-sofort` | Sofort am Abend, beide Autos, 30 min | Akku 60 %, beide in Sofort | Ab 2 min liegt der Netzbezug in jeder Sekunde, in der Autos und Haus mehr als 8300 W ziehen, zwischen 7800 und 8200 W: Der Akku liefert nur den Teil über `max_grid_charge_setpoint_w` (8 kW). |
+| `boost-abend` | Boost am Abend, 45 min | Akku 35 %, nur der e-Golf, in Boost bis zum Ende | Keine Entscheidung an `victron` mit einer Zahl; solange der SOC über 25 % liegt, ab 2 min Netzbezug höchstens 300 W; der SOC sinkt nie unter 20 % (Invariante des Modells). |
+| `override-stunde` | Eine Stunde mit aktivem Override, 1 h | Akku 50 %, nur der e-Golf, in Sofort | Ab 2 min gilt in jeder Sekunde ein Override, zuletzt vor höchstens 245 s geschrieben (Auffrischen alle 240 s); kein Alarm „competitor.foreign.*“; höchstens 5 Entscheidungen an `victron` (das Auffrischen steht nicht im Log). |
+| `dess-an` | Dynamic ESS an, 30 min | Akku 60 %, Dynamic ESS an, nur der e-Golf, in Sofort | Keine Entscheidung an `victron`; ab 1 min zeigt die Gesundheit `battery.state` „locked“; der e-Golf lädt am Ende. |
+| `spitze-15min` | 15-min-Ziel 8 kW, 75 min | 12.10.2026 ab 17:59, `control.peak_target_kw` 8, Akku 60 %, Tesla in Min+PV (zu Beginn auf 5 A), e-Golf in Sofort, ab 18:45 in Boost bis zum Ende | Netzbezug der Viertelstunden ab 18:00, 18:15 und 18:30 je höchstens 2,02 kWh; vor 18:45 nennt eine Entscheidung „peak_guard“, ab 18:45 keine an `wallbox.evcs`; bei der ersten Drosselung des e-Golf in Sofort lädt kein Auto in PV-Überschuss oder Min+PV über Mindeststrom + 0,5 A. |
+| `schieflast-pv` | PV mit schwerer Last auf L1, 1 h | 21.06.2026 ab 10:00, PV konstant 12 kW, Akku 60 %, nur der e-Golf, in PV; ab 10 min 5,5 kW mehr Last auf L1 | Eine Entscheidung an `wallbox.evcs` nennt „import_limit“: Das Importziel bindet den e-Golf zwischen Mindest- und Höchststrom. |
 
 Die Verteilung ist gierig nach Priorität (Abschnitt „Laderegelung“): Mit höchstens 10 kW PV laden die
 Autos in `sonnig` und `wolkig` nacheinander, darum steht der Tesla dort nahe an seinem Ladelimit.
+
+Drei der Szenarien für Akku und Spitzen weichen vom Plan ab, weil sich seine Erwartung dort im Modell
+nicht erfüllen lässt:
+
+- In `akku-minpv` und `spitze-15min` steht der Tesla zu Beginn auf 5 A. Sonst lädt er nach dem Start
+  90 s mit 16 A, bis der zweite Befehl auf 5 A wirkt (der erste geht über Tessie verloren). In
+  `akku-minpv` lieferte der Akku dann bis zu 5,8 kW in die Autos, denn der Override ist auf
+  `max_grid_charge_setpoint_w` (8 kW) begrenzt; in `spitze-15min` drosselte der Wächter Tesla und
+  e-Golf im selben Schritt, und der Tesla folgte erst nach 90 s.
+- In `schieflast-pv` kommt die Last auf L1 erst nach 10 min, wenn der e-Golf schon lädt. Liegt sie von
+  Anfang an, startet er nicht: Der Phasenwächter zählt die Ladeleistung des Akkus zur Last der Phase
+  und lässt auf L1 nur rund 3 A frei, weniger als den Mindeststrom.
 
 ### Was das Modell nicht leistet
 
