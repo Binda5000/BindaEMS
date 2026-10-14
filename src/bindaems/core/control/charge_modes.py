@@ -1,7 +1,7 @@
 """Lademodi je Fahrzeug mit Start- und Stopp-Zeit und Mindestzeiten (Design 6.3, 6.4).
 
-- ``Effective``, ``MODE_CODES`` und ``FULL_POWER``: der geltende Modus, sein Grund-Code im
-  Entscheidungslog und die Modi mit vollem Strom
+- ``Effective``, ``MODE_CODES``, ``FULL_POWER`` und ``PV_SURPLUS``: der geltende Modus, sein
+  Grund-Code im Entscheidungslog, die Modi mit vollem Strom und der Grund-Code ``pv_surplus``
 - ``ModeTimers``: die Zeiten aus ``control`` der Konfiguration
 - ``ModeInput`` und ``ModeDecision``: Eingaben und Urteil eines Schritts
 - ``ModeMachine``: der Zustand eines Fahrzeugs; sie entscheidet nur, ob geladen werden soll,
@@ -20,9 +20,12 @@ from enum import StrEnum
 from types import MappingProxyType
 from typing import Final
 
+from bindaems.core.control.timing import held_since
 from bindaems.shared.config import ControlConfig
 
-_PV_SURPLUS: Final = "pv_surplus"  # Grund, wenn die Zeiten von PV-Überschuss ein Urteil ergaben
+# Grund-Code: Der Wert kommt aus dem Anteil am Überschuss, oder die Zeiten von PV-Überschuss
+# haben gerade einen Start oder Stopp ergeben.
+PV_SURPLUS: Final = "pv_surplus"
 
 
 class Effective(StrEnum):
@@ -182,8 +185,8 @@ class ModeMachine:
             return ModeDecision(False, None)
 
         enough = inp.enough is True
-        self._enough_since = _since(self._enough_since, enough, now)
-        self._short_since = _since(self._short_since, not enough, now)
+        self._enough_since = held_since(self._enough_since, enough, now)
+        self._short_since = held_since(self._short_since, not enough, now)
         if inp.complete:
             self._charging = False
             return ModeDecision(False, None)
@@ -235,11 +238,11 @@ class ModeMachine:
         if not self._charging and self._may_start(now):
             self._charging = True
             self._started_at = now
-            return ModeDecision(True, _PV_SURPLUS)
+            return ModeDecision(True, PV_SURPLUS)
         if self._charging and self._may_stop(now):
             self._charging = False
             self._stopped_at = now
-            return ModeDecision(False, _PV_SURPLUS)
+            return ModeDecision(False, PV_SURPLUS)
         return ModeDecision(self._charging, None)
 
     def _may_start(self, now: datetime) -> bool:
@@ -267,13 +270,6 @@ def _follows_mode(inp: ModeInput) -> bool:
     if inp.mode is Effective.PV:
         return inp.enough is True
     return inp.mode is not Effective.OFF
-
-
-def _since(since: datetime | None, holds: bool, now: datetime) -> datetime | None:
-    """Seit wann eine Bedingung ununterbrochen gilt: ``since`` bleibt, solange sie gilt."""
-    if not holds:
-        return None
-    return now if since is None else since
 
 
 def _lasted(since: datetime | None, now: datetime, limit_s: float) -> bool:

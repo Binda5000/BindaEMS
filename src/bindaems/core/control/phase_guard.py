@@ -24,6 +24,7 @@ from enum import IntEnum, StrEnum
 from types import MappingProxyType
 from typing import Final
 
+from bindaems.core.control.timing import held_since
 from bindaems.shared.config import Config, Phase
 from bindaems.shared.numbers import finite_number
 
@@ -244,9 +245,9 @@ class OverloadGuard:
         over_target = any(a > limits.fuse_target_a for a in known)
         over_fuse = any(a > limits.fuse_a for a in known)
         calm = len(known) == len(amps) and all(a <= limits.fuse_target_a for a in known)
-        self._over_target_since = _since(self._over_target_since, over_target, now)
-        self._over_fuse_since = _since(self._over_fuse_since, over_fuse, now)
-        self._calm_since = _since(self._calm_since, calm, now)
+        self._over_target_since = held_since(self._over_target_since, over_target, now)
+        self._over_fuse_since = held_since(self._over_fuse_since, over_fuse, now)
+        self._calm_since = held_since(self._calm_since, calm, now)
 
         over_target_s = _elapsed_s(self._over_target_since, now)
         if _elapsed_s(self._over_fuse_since, now) >= ALL_STOP_AFTER_S:
@@ -261,13 +262,6 @@ class OverloadGuard:
         if _elapsed_s(self._calm_since, now) >= CLEAR_AFTER_S:
             self._level = OverloadLevel.NONE  # dann hat keine Phase mehr einen Lauf darüber
         return self._level
-
-
-def _since(since: datetime | None, holds: bool, now: datetime) -> datetime | None:
-    """Seit wann eine Bedingung ununterbrochen gilt: ``since`` bleibt, solange sie gilt."""
-    if not holds:
-        return None
-    return now if since is None else since
 
 
 def _elapsed_s(since: datetime | None, now: datetime) -> float:

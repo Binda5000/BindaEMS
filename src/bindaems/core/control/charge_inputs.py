@@ -4,6 +4,7 @@
   sieht und was sie am Netz und am Akku misst
 - ``ChargeInputs``: alles, was ein Zyklus der Regelung braucht
 - ``observe``: liest die Beobachtungen aus dem Snapshot und den abgeleiteten Größen
+- ``ok_number``: der Wert eines Signals als endliche Zahl mit Qualität ``OK``, sonst ``None``
 
 Ein Wert zählt nur mit Qualität ``OK`` und als endliche Zahl (``finite_number``); sonst ist er
 unbekannt (``None``). Geschätzt wird nicht. Was die Beobachtungen für Zuordnung, Last und Modi
@@ -168,8 +169,8 @@ def _grid_obs(snap: Snapshot, derived: Derived) -> GridObs:
         phase_import_a={p: finite_number(derived.phase_import_a.get(p)) for p in PHASES},
         battery_feed_a={p: _battery_feed_a(snap, p) for p in PHASES},
         grid_w=finite_number(derived.grid_w),
-        battery_w=_number(snap, "battery.power_w"),
-        soc_pct=_number(snap, "battery.soc_pct"),
+        battery_w=ok_number(snap, "battery.power_w"),
+        soc_pct=ok_number(snap, "battery.soc_pct"),
     )
 
 
@@ -180,9 +181,9 @@ def _battery_feed_a(snap: Snapshot, phase: Phase) -> float | None:
     ``MIN_VOLTAGE_FOR_CURRENT_V`` liegt.
     """
     line = phase.lower()
-    out_w = _number(snap, f"vebus.{line}.ac_out_power_w")
-    in_w = _number(snap, f"vebus.{line}.ac_in_power_w")
-    volts = _number(snap, f"grid.{line}.voltage_v")
+    out_w = ok_number(snap, f"vebus.{line}.ac_out_power_w")
+    in_w = ok_number(snap, f"vebus.{line}.ac_in_power_w")
+    volts = ok_number(snap, f"grid.{line}.voltage_v")
     if out_w is None or in_w is None or volts is None or volts < MIN_VOLTAGE_FOR_CURRENT_V:
         return None
     return max(0.0, out_w - in_w) / volts
@@ -216,7 +217,7 @@ def _evcs_state(snap: Snapshot, key: str) -> _State:
     (geladen); 1 heißt verbunden. Jeder andere Code heißt „verbunden, lädt nicht“; das ist eine
     Annahme (Präzisierung 4).
     """
-    status = _number(snap, f"wallbox.{key}.status")
+    status = ok_number(snap, f"wallbox.{key}.status")
     if status is None:
         return None, None, None
     return status != EVCS_DISCONNECTED, status == EVCS_CHARGING, status == EVCS_CHARGED
@@ -233,7 +234,7 @@ def _twc_charging(snap: Snapshot, prefix: str) -> bool | None:
 
     Fehlt ein Strom, gilt, ob das Schütz geschlossen ist; das ist unbekannt, wenn es fehlt.
     """
-    currents = [_number(snap, f"{prefix}{p.lower()}.current_a") for p in PHASES]
+    currents = [ok_number(snap, f"{prefix}{p.lower()}.current_a") for p in PHASES]
     known = [current for current in currents if current is not None]
     if len(known) < len(currents):
         return _flag(snap, prefix + "contactor_closed")
@@ -268,8 +269,8 @@ def _vehicle_obs(snap: Snapshot, key: str, *, reachable: bool) -> VehicleObs:
         complete=None if state is None else state == _TESSIE_COMPLETE,
         asleep=None if online is None else not online,
         at_home=_flag(snap, prefix + "at_home"),
-        actual_current_a=_number(snap, prefix + "actual_current_a"),
-        phases=_phase_count(_number(snap, prefix + "phases")),
+        actual_current_a=ok_number(snap, prefix + "actual_current_a"),
+        phases=_phase_count(ok_number(snap, prefix + "phases")),
     )
 
 
@@ -280,7 +281,7 @@ def _phase_count(value: float | None) -> int | None:
     return int(value)
 
 
-def _number(snap: Snapshot, signal: str) -> float | None:
+def ok_number(snap: Snapshot, signal: str) -> float | None:
     """Der Wert des Signals als endliche Zahl mit Qualität ``OK``; sonst ``None`` (unbekannt)."""
     return finite_number(snap.ok(signal))
 

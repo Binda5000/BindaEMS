@@ -108,6 +108,7 @@ from bindaems.core.control.charge_inputs import (
 from bindaems.core.control.charge_modes import (
     FULL_POWER,
     MODE_CODES,
+    PV_SURPLUS,
     Effective,
     ModeDecision,
     ModeInput,
@@ -121,6 +122,7 @@ from bindaems.core.control.charging_tesla import (
     TeslaPolicy,
 )
 from bindaems.core.control.executor import WriteResult
+from bindaems.core.control.last_values import ControlCommand, Key, LastValues
 from bindaems.core.control.phase_guard import (
     PHASES,
     Claim,
@@ -135,7 +137,7 @@ from bindaems.core.control.phase_guard import (
 )
 from bindaems.core.control.surplus import SurplusCar, share_surplus, surplus_w
 from bindaems.core.safety.limits import HardLimits
-from bindaems.core.safety.types import Outcome, Verdict
+from bindaems.core.safety.types import Verdict
 from bindaems.shared.config import Config, EvcsConfig, Phase, PhaseMap
 from bindaems.shared.control import (
     Command,
@@ -147,35 +149,17 @@ from bindaems.shared.control import (
     vehicle_actuator,
     wallbox_actuator,
 )
-from bindaems.shared.decisions import DecisionResult
 from bindaems.shared.numbers import finite_number
 from bindaems.shared.timeutil import ensure_utc
 
-PV_SURPLUS: Final = "pv_surplus"  # der Wert kommt aus dem Anteil am Überschuss
 OVERLOAD: Final = "overload"  # der Befehl folgt aus der Überlast
-NOT_TAKEN_RETRY: Final = "not_taken_retry"  # erneut nach „nicht übernommen“
 RESUME_AFTER_OUTAGE: Final = "resume_after_outage"  # die erste Startfolge nach einer Pause
 
-_Key = tuple[str, CommandKind]  # Aktor und Art
+ChargeCommand = ControlCommand  # der Name der Laderegelung für ihren Befehl
 
 _CURRENT: Final = CommandKind.CURRENT
 _CHARGING: Final = CommandKind.CHARGING
 _SURPLUS_MODES: Final = frozenset({Effective.PV, Effective.MIN_PV})  # Wunsch aus dem Anteil
-# Diese Ergebnisse löschen den letzten eigenen Wert: Das Gerät hat ihn vielleicht nicht.
-_FAILED: Final = frozenset({DecisionResult.ERROR, DecisionResult.TIMEOUT, DecisionResult.NOT_SENT})
-
-
-@dataclass(frozen=True)
-class ChargeCommand:
-    """Ein Befehl der Laderegelung und seine Eingaben für das Entscheidungslog (Präzisierung 13).
-
-    ``inputs`` nennt ``surplus_w`` (Überschuss in W), ``limit_a`` (freier Strom des Phasenwächters
-    für den Ladepunkt), ``actual_current_a`` (Ist-Sollstrom des Aktors) und ``actual_charging``
-    (1.0 lädt, 0.0 lädt nicht); ``None`` heißt unbekannt.
-    """
-
-    command: Command
-    inputs: Mapping[str, float | None]
 
 
 @dataclass(frozen=True)
@@ -199,79 +183,6 @@ class _Point:
     max_a: int
     measured: Mapping[Phase, float] | None
     regulated: bool
-
-
-@dataclass(frozen=True)
-class _Sent:
-    """Der letzte eigene Wert: angefordert (``requested``) und nach der Safety-Schicht.
-
-    Mit ``requested`` vergleicht die Regelung, ob sich ein Wert ändert; ``applied`` ist der Wert,
-    den ein Ergebnis des Ausführers nennt (``WriteResult.value``).
-    """
-
-    requested: CommandValue
-    applied: CommandValue
-
-
-class _LastValues:
-    """Die letzten eigenen Werte je Aktor und Art und die Merker ``not_taken_retry`` (Präz. 10).
-
-    Gesetzt wird ein Wert durch ein Urteil mit Wert oder ``UNCHANGED`` (``judged``), gelöscht
-    durch ein gescheitertes Ergebnis mit passendem Wert (``finished``) oder durch ``forget``: dort,
-    wo sich das Gerät ohne die Regelung geändert haben kann.
-    """
-
-    def __init__(self) -> None:
-        self._sent: dict[_Key, _Sent] = {}
-        self._retry: set[_Key] = set()  # der nächste Befehl dieser Art trägt ``not_taken_retry``
-
-    def changed(self, key: _Key, value: CommandValue) -> bool:
-        """Ob ``value`` vom letzten eigenen Wert dieser Art abweicht; ohne einen immer."""
-        last = self._sent.get(key)
-        return last is None or last.requested != value
-
-    def requested(self, key: _Key) -> CommandValue | None:
-        """Der letzte eigene Wert dieser Art, wie angefordert; ``None`` ohne einen."""
-        last = self._sent.get(key)
-        return None if last is None else last.requested
-
-    def retry(self, key: _Key) -> bool:
-        """Ob der nächste Befehl dieser Art ``not_taken_retry`` trägt."""
-        return key in self._retry
-
-    def judged(self, command: Command, verdict: Verdict | None, *, not_sent: bool) -> bool:
-        """Das Urteil über einen eigenen Befehl (``ChargeController.note_verdict``).
-
-        Wahr, wenn es den Wert gesetzt hat: ein Urteil mit Wert oder ``UNCHANGED``, gesendet.
-        """
-        key = (command.actuator, command.kind)
-        if not_sent:
-            self._sent.pop(key, None)
-            return False
-        if verdict is None or not (verdict.sendable or verdict.outcome == Outcome.UNCHANGED):
-            return False
-        self._sent[key] = _Sent(command.value, verdict.value)
-        self._retry.discard(key)
-        return True
-
-    def finished(self, result: WriteResult) -> None:
-        """Das Ergebnis eines gesendeten Befehls (``ChargeController.note_result``)."""
-        key = (result.actuator, result.kind)
-        last = self._sent.get(key)
-        if result.result not in _FAILED or last is None or last.applied != result.value:
-            return
-        del self._sent[key]
-        if result.not_taken:
-            self._retry.add(key)
-
-    def forget(self, actuators: Collection[str] | None = None) -> None:
-        """Vergisst Werte und Merker dieser Aktoren, ohne Angabe die aller Aktoren."""
-        if actuators is None:
-            self._sent.clear()
-            self._retry.clear()
-            return
-        self._sent = {key: last for key, last in self._sent.items() if key[0] not in actuators}
-        self._retry = {key for key in self._retry if key[0] not in actuators}
 
 
 @dataclass(frozen=True)
@@ -366,7 +277,7 @@ class ChargeController:
         self._overrides = EvcsOverrides(cfg)  # „Tesla an der EVCS“
         self._resume: set[str] = set()  # Fahrzeuge, deren erste Startfolge nach ``idle`` aussteht
         self._stepped = False  # seit dem Start schon geregelt: erst danach ist ``idle`` ein Ausfall
-        self._last = _LastValues()
+        self._last = LastValues()
         self._views: dict[str, _View] = {}
         self._reasons: dict[str, str] = {}  # der letzte Grund des letzten Befehls je Fahrzeug
         self._vehicle_wallbox: dict[str, str | None] = {}
@@ -784,7 +695,7 @@ class ChargeController:
             return []
         if not self._changed((actuator, _CURRENT), value):
             return []
-        return [self._command(actuator, _CURRENT, value, (MODE_CODES[mode],))]
+        return [self._last.command(actuator, _CURRENT, value, (MODE_CODES[mode],))]
 
     def _regulate(
         self,
@@ -802,9 +713,10 @@ class ChargeController:
         selbst gestartet), außer solange die Zuordnung unklar ist. Beides gilt auch bei unbekanntem
         Ansteckzustand. Dringend sind die Befehle wegen Überlast und eine Senkung unter den
         Ist-Strom, wenn das Ziel die Sicherung ist (Präzisierung 11), außer als erneuter Befehl
-        nach „nicht übernommen“ (``_command``). Ein Aktor, der nicht steuerbar ist (geregelt ist
-        er dann nur, weil er weckbar ist), bekommt höchstens den Weckstart. Starten darf ein Auto,
-        das nicht lädt, nur, wenn die Grenze seinen Mindeststrom trägt (``carries``).
+        nach „nicht übernommen“ (``LastValues.command``). Ein Aktor, der nicht steuerbar ist
+        (geregelt ist er dann nur, weil er weckbar ist), bekommt höchstens den Weckstart. Starten
+        darf ein Auto, das nicht lädt, nur, wenn die Grenze seinen Mindeststrom trägt
+        (``carries``).
         """
         level = situation.level
         stop = level >= OverloadLevel.ALL_STOP or (point.evcs and level >= OverloadLevel.EVCS_STOP)
@@ -858,7 +770,7 @@ class ChargeController:
         return 0.0
 
     def _wake(
-        self, key: str, actuator: str, situation: _Situation, blocked: frozenset[_Key]
+        self, key: str, actuator: str, situation: _Situation, blocked: frozenset[Key]
     ) -> list[Command]:
         """Der Start mit Weckerlaubnis (Design 7.1): ``charging=True`` mit ``wake``, ohne Strom.
 
@@ -872,7 +784,7 @@ class ChargeController:
             return []
         resumed = (RESUME_AFTER_OUTAGE,) if situation.resume else ()
         reasons = (*situation.head, *_why(situation), *resumed, WAKE)
-        return [self._command(actuator, _CHARGING, True, reasons, wake=True)]
+        return [self._last.command(actuator, _CHARGING, True, reasons, wake=True)]
 
     def _hold(
         self,
@@ -880,7 +792,7 @@ class ChargeController:
         actuator: str,
         situation: _Situation,
         present_a: float | None,
-        blocked: frozenset[_Key],
+        blocked: frozenset[Key],
     ) -> list[Command]:
         """Kein „Laden an/aus“, nur eine Senkung (Präzisierungen 4 und 5).
 
@@ -899,14 +811,14 @@ class ChargeController:
             urgent = situation.cause is GuardCause.PHASE_LIMIT
         if value >= present_a or not self._changed((actuator, _CURRENT), float(value)):
             return []
-        return [self._command(actuator, _CURRENT, float(value), reasons, urgent=urgent)]
+        return [self._last.command(actuator, _CURRENT, float(value), reasons, urgent=urgent)]
 
     def _charge(
         self,
         actuator: str,
         value: float,
         reasons: tuple[str, ...],
-        blocked: frozenset[_Key],
+        blocked: frozenset[Key],
         *,
         urgent: bool,
         start: bool,
@@ -930,45 +842,23 @@ class ChargeController:
             reasons = (*reasons, RESUME_AFTER_OUTAGE)
         found: list[Command] = []
         if send:
-            found.append(self._command(actuator, _CURRENT, value, reasons, urgent=urgent))
+            found.append(self._last.command(actuator, _CURRENT, value, reasons, urgent=urgent))
         if starting and on not in blocked:
-            found.append(self._command(actuator, _CHARGING, True, reasons))
+            found.append(self._last.command(actuator, _CHARGING, True, reasons))
         return found
 
     def _switch_off(
-        self, actuator: str, reasons: tuple[str, ...], blocked: frozenset[_Key], *, urgent: bool
+        self, actuator: str, reasons: tuple[str, ...], blocked: frozenset[Key], *, urgent: bool
     ) -> list[Command]:
         """Nicht laden: ``charging=False``, wenn es sich ändert, ohne Strom."""
         off = (actuator, _CHARGING)
         if off in blocked or not self._changed(off, False):
             return []
-        return [self._command(actuator, _CHARGING, False, reasons, urgent=urgent)]
+        return [self._last.command(actuator, _CHARGING, False, reasons, urgent=urgent)]
 
-    def _changed(self, key: _Key, value: CommandValue) -> bool:
+    def _changed(self, key: Key, value: CommandValue) -> bool:
         """Ob ``value`` vom letzten eigenen Wert dieser Art abweicht; ohne einen immer."""
         return self._last.changed(key, value)
-
-    def _command(
-        self,
-        actuator: str,
-        kind: CommandKind,
-        value: CommandValue,
-        reasons: tuple[str, ...],
-        *,
-        urgent: bool = False,
-        wake: bool = False,
-    ) -> Command:
-        """Der Befehl samt ``not_taken_retry``, wenn die Art zuletzt nicht übernommen wurde.
-
-        Dieser erneute Befehl ist immer normal (Design 7.2): Er wartet auf die 90-s-Regel und die
-        Stundenlimits, auch wenn er sonst dringend wäre, etwa als Senkung an der Sicherung oder
-        wegen Überlast. Die Sicherheit bleibt bei der Überlast, deren „Laden aus“ (eine andere
-        Art) dringend bleibt.
-        """
-        retry = self._last.retry((actuator, kind))
-        if retry:
-            reasons, urgent = (*reasons, NOT_TAKEN_RETRY), False
-        return Command(actuator, kind, value, urgent=urgent, reasons=reasons, wake=wake)
 
 
 def _mode(key: str, vehicle: VehicleState, intent: Intent | None) -> Effective:
@@ -1049,7 +939,7 @@ def _facts(
     actuator: str,
     surplus: float | None,
     free: float | None,
-    present: Mapping[_Key, CommandValue],
+    present: Mapping[Key, CommandValue],
 ) -> dict[str, float | None]:
     """Die Eingaben eines Befehls an ``actuator`` für das Entscheidungslog (Präzisierung 13).
 

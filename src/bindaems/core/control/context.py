@@ -16,6 +16,7 @@ from datetime import datetime
 from types import MappingProxyType
 from typing import Final
 
+from bindaems.core.control.charge_inputs import ok_number
 from bindaems.core.safety.types import InputStatus, SafetyContext
 from bindaems.shared.config import Phase
 from bindaems.shared.control import ActuatorMode, CommandKind, CommandValue, OperatingState
@@ -23,11 +24,6 @@ from bindaems.shared.domain import Snapshot
 from bindaems.shared.numbers import finite_number
 
 _PHASES: Final[tuple[Phase, ...]] = ("L1", "L2", "L3")
-
-
-def _number(snap: Snapshot, signal: str) -> float | None:
-    """Der Wert des Signals als endliche Zahl mit Qualität ``OK``; sonst ``None`` (unbekannt)."""
-    return finite_number(snap.ok(signal))
 
 
 def safety_context(
@@ -58,7 +54,7 @@ def safety_context(
     - ``base_grid_setpoint_w`` ist ``ess.grid_setpoint_w``, der persistente Netz-Sollwert.
     - ``grid_budget_w`` ist ``None``: Es gibt noch kein 15-min-Budget.
     """
-    battery_w = _number(snap, "battery.power_w")
+    battery_w = ok_number(snap, "battery.power_w")
     return SafetyContext(
         now=now,
         operating=operating,
@@ -70,8 +66,8 @@ def safety_context(
         vehicle_wallbox=vehicle_wallbox,
         present=present,
         battery_discharge_w=None if battery_w is None else max(-battery_w, 0.0),
-        soc_pct=_number(snap, "battery.soc_pct"),
-        base_grid_setpoint_w=_number(snap, "ess.grid_setpoint_w"),
+        soc_pct=ok_number(snap, "battery.soc_pct"),
+        base_grid_setpoint_w=ok_number(snap, "ess.grid_setpoint_w"),
         grid_budget_w=None,
     )
 
@@ -85,8 +81,8 @@ def decision_inputs(
     ``grid_l1_a`` bis ``grid_l3_a`` (Netzbezug je Phase in A, positiv bei Bezug).
     """
     inputs: dict[str, float | None] = {
-        "soc_pct": _number(snap, "battery.soc_pct"),
-        "battery_w": _number(snap, "battery.power_w"),
+        "soc_pct": ok_number(snap, "battery.soc_pct"),
+        "battery_w": ok_number(snap, "battery.power_w"),
     }
     for phase in _PHASES:
         inputs[f"grid_{phase.lower()}_a"] = finite_number(phase_import_a.get(phase))
