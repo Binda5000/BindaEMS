@@ -108,9 +108,11 @@ der Standard-Branch auf GitHub.
   mit Abdeckungsgrenzen (≥ 75 % insgesamt, ≥ 90 % für `core/safety`, `core/control` und
   `core/actuators`), Vitest mit svelte-check, Prettier und ESLint; dazu E2E mit Playwright.
 - **Offen:**
-  - an der Anlage: Images ausrollen, Dry-Run neben evcc beginnen (vorher die EVCS-Hysterese
-    entscheiden), der Rest von Teil 2 (EVCS-Verbindungsabbruch, Victron 17.2-4; siehe „Offen an der
-    Anlage“)
+  - vor dem Dry-Run: die EVCS-Hysterese einbauen (vom Betreiber am 14.10.2026 beschlossen, noch
+    nicht umgesetzt; Liste „Vor der Live-Schaltung“, Punkt 8)
+  - an der Anlage: Images ausrollen, Dry-Run neben evcc beginnen, der Rest von Teil 2
+    (EVCS-Verbindungsabbruch, Victron 17.2-4; siehe „Offen an der Anlage“)
+  - kleine Nacharbeiten aus dem Gesamtreview von 2c-1 (siehe „Offen an der Anlage“)
   - vor der Live-Schaltung von EVCS und Tesla (2d): die Liste „Vor der Live-Schaltung“ (siehe
     „Offen an der Anlage“)
   - Plan 2c-2 („Akku und Spitzen“) schreiben, danach Plan 2d (siehe „Nächster Schritt“)
@@ -400,8 +402,8 @@ Demo-Zugänge: `admin`, `gast` (Lesen) und `sicher` (Admin mit TOTP, Geheimnis
      auf die Geräte, und die Teil-2-Werkzeuge schreiben nicht mit: Sie schreiben nur, wenn du sie
      aufrufst. Die Entscheidungen liest der Betreiber bis 2d über die Dateien bzw.
      `GET /v1/decisions`.
-     - Vorher entscheidet der Betreiber über die EVCS-Hysterese (Punkt 8 der Liste „Vor der
-       Live-Schaltung“ unten); sonst beginnt der Dry-Run mit rund 100 EVCS-Entscheidungen je Stunde
+     - Vorher die EVCS-Hysterese einbauen (Punkt 8 der Liste „Vor der Live-Schaltung“ unten, vom
+       Betreiber beschlossen); sonst beginnt der Dry-Run mit rund 100 EVCS-Entscheidungen je Stunde
        PV-Laden.
      - Das Stundenbudget des Tesla kappt den Vergleich bei Wolken (Punkt 1 unten); seit der
        Fix-Welle steht das als „zurückgestellt“ im Log.
@@ -454,14 +456,31 @@ Demo-Zugänge: `admin`, `gast` (Lesen) und `sicher` (Admin mit TOTP, Geheimnis
     7. **Technische Schulden vor 2c-2:** `charging.py` (rund 1040 Zeilen) und `runtime.py` (rund
        1290) sind groß, Hilfsfunktionen wie `_since`, `_number` und `PV_SURPLUS` gibt es doppelt.
        Abhilfe: aufteilen und zusammenführen, bevor 2c-2 dazukommt.
-    8. **EVCS-Hysterese (vor dem Dry-Run zu entscheiden):** Der EVCS-Strom wechselt mit dem Rauschen
-       der Hauslast zwischen zwei ganzen Ampere (im Simulator 77 bis 112 Befehle bzw.
-       Dry-Run-Entscheidungen je Stunde PV-Laden). Abhilfe: Erhöhen erst ab einem Anteil von
-       Sollwert + 1 A + etwa 0,3 A oder nach etwa 30 s, Senken sofort; das weicht von Design 6.5 ab
-       („folgt jede Sekunde“), darum entscheidet der Betreiber.
+    8. **EVCS-Hysterese (vor dem Dry-Run einbauen):** Der EVCS-Strom wechselt mit dem Rauschen der
+       Hauslast zwischen zwei ganzen Ampere (im Simulator 77 bis 112 Befehle bzw.
+       Dry-Run-Entscheidungen je Stunde PV-Laden). Der Betreiber hat am 14.10.2026 entschieden, eine
+       Hysterese einzubauen; sie ist noch nicht umgesetzt. Vorschlag: Erhöhen erst ab einem Anteil
+       von Sollwert + 1 A + etwa 0,3 A (oder nach etwa 30 s), Senken sofort, nur für die EVCS. Das
+       weicht von Design 6.5 ab („folgt jede Sekunde“); Design und Betriebshandbuch dabei
+       nachziehen, die Simulator-Szenarien müssen grün bleiben.
 
     Dazu kommen die Punkte „Offen vor dem Live-Betrieb des Tesla“ (Reserve des sicheren Zustands,
     Annahmen des Prüffensters) unter „Hinweise für die Pläne 2c-2 und 2d“.
+  - **Kleine Nacharbeiten aus dem Gesamtreview von 2c-1** (ohne Einfluss auf das Verhalten):
+    1. Doku: In `docs/betrieb.md` („Dry-Run-Vergleich“) sind die „22 Dry-Run-Entscheidungen“ des
+       Szenarios `dry-run` die Summe; an den Tesla gehen 20. Spec 7.10 soll sagen, dass der Wert
+       `applied` einer zurückgestellten Entscheidung nie angewendet wurde. Spec 7.5 und Design 6.1
+       sagen noch absolut „nimmt nie Leistung aus dem Akku“; richtig ist: Der Anteil rechnet nie mit
+       Akku-Leistung, aus dem Akku lädt ein PV-Auto trotzdem in den Stopp-Minuten am Mindeststrom,
+       in Übergängen und beim Tesla unter Wolken (wie im Betriebshandbuch).
+    2. Entscheidungslog: Die Drossel für „zurückgestellt“ und „abgelehnt“ (höchstens einmal je 60 s)
+       unterscheidet Aktor, Art und Befund, nicht den Wert. Folgt auf einen zurückgestellten Start
+       binnen 60 s ein zurückgestellter Stopp mit demselben Befund, fehlt der Stopp bis zu eine
+       Minute im Log.
+    3. Öffentliches Repository: Private LAN-Adressen der Anlage (VM und EVCS) stehen seit Phase 1
+       und 2a in `docs/uebergabe.md`, in Plan 2a, im Prüfprotokoll Teil 1, in einem Docstring von
+       `src/bindaems/tools/verify_checks.py` und in Tests. In einem eigenen Commit durch
+       Platzhalter ersetzen (die Git-Historie behält sie).
 - **Offen an der Anlage, aus Phase 1 und 2a:**
   1. Die manuellen Punkte von Teil 1 nachtragen: Sicherheitsprofil und Modbus-Dienstliste
      (17.1-3), NTP am Cerbo (17.1-12).
@@ -660,8 +679,9 @@ Absätzen „Stand Plan 2c-1“ der Spec:
 
 - Die EVCS folgt dem Überschuss in ganzen Ampere (Totband 1 A, 5 s Abstand in der Safety-Schicht). In
   den PV-Szenarien des Simulators waren das 77 bis 112 Strombefehle je Stunde, auch weil das
-  Rauschen der Hauslast an der Abrundungsgrenze liegt. Über eine Hysterese beim Erhöhen entscheidet
-  der Betreiber vor dem Dry-Run (Liste „Vor der Live-Schaltung“, Punkt 8).
+  Rauschen der Hauslast an der Abrundungsgrenze liegt. Eine Hysterese beim Erhöhen hat der Betreiber
+  am 14.10.2026 beschlossen; sie ist noch einzubauen, vor dem Dry-Run (Liste „Vor der
+  Live-Schaltung“, Punkt 8).
 - Bei schnell wechselnden Wolken deckt der Hausakku einen spürbaren Teil der PV-Ladung des Tesla,
   denn der Tesla darf seinem Mittel nur alle 90 s folgen. Im Simulator (`wolkig`) waren es rund 40 %
   seiner Ladeenergie, roh gerechnet: Die Kennzahl „Akku-Energie in PV-Autos“ nimmt die Übergänge aus
