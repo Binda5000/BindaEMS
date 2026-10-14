@@ -1,3 +1,4 @@
+from collections.abc import Callable
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -59,6 +60,15 @@ def cycle(link: RegulationLink, cfg, when: datetime) -> None:
     link.finish(when)
 
 
+def idle_cycle(link: RegulationLink, when: datetime, *calls: Callable[[], object]) -> None:
+    """Ein Zyklus ohne Regelung (START, OBSERVE, SAFE); ``calls`` laufen vor ``idle``."""
+    link.start_cycle()
+    for call in calls:
+        call()
+    link.idle(when)
+    link.finish(when)
+
+
 def kernel_idle(link: RegulationLink, monkeypatch) -> list[datetime]:
     """Die Zeiten, zu denen der Kern ``idle`` bekommt; er ruht dabei wirklich."""
     idled: list[datetime] = []
@@ -98,6 +108,39 @@ def test_the_alarm_keeps_the_start_of_the_streak_and_ends_with_a_good_cycle(
         assert link.alarms() == [Alarm(CONTROL_EXCEPTION, Severity.ERROR, MESSAGE, NOW)]
     cycle(link, cfg, NOW + timedelta(seconds=2))
     assert not link.failed
+    assert link.alarms() == []
+
+
+def test_the_alarm_outlasts_cycles_without_regulation(cfg, monkeypatch) -> None:
+    # Präzisierung 15: Der Alarm gilt, solange der letzte Zyklus mit Regelung scheiterte; etwa in
+    # SAFE, nachdem der Watchdog ohne Heartbeat auslöste.
+    link = link_for(cfg)
+    with monkeypatch.context() as patch:
+        patch.setattr(link.regulation, "step", broken)
+        cycle(link, cfg, NOW)
+        cycle(link, cfg, NOW + timedelta(seconds=1))
+    for s in (2, 3):  # ohne Regelung und ohne Ausnahme
+        idle_cycle(link, NOW + timedelta(seconds=s))
+        assert not link.failed
+        assert link.alarms() == [Alarm(CONTROL_EXCEPTION, Severity.ERROR, MESSAGE, NOW)]
+    cycle(link, cfg, NOW + timedelta(seconds=4))  # Regelung ohne Ausnahme: Die Folge endet
+    assert link.alarms() == []
+
+
+def test_an_exception_without_regulation_starts_or_continues_the_streak(cfg, monkeypatch) -> None:
+    link = link_for(cfg)
+    with monkeypatch.context() as patch:
+        patch.setattr(link.regulation, "forget", broken)
+        idle_cycle(link, NOW, lambda: link.forget({"wallbox.evcs"}))  # beginnt die Folge
+    assert link.failed
+    assert link.alarms() == [Alarm(CONTROL_EXCEPTION, Severity.ERROR, MESSAGE, NOW)]
+    idle_cycle(link, NOW + timedelta(seconds=1))
+    with monkeypatch.context() as patch:
+        patch.setattr(link.regulation, "note_result", broken)
+        idle_cycle(link, NOW + timedelta(seconds=2), lambda: link.note_result(RESULT))
+    assert link.failed
+    assert link.alarms() == [Alarm(CONTROL_EXCEPTION, Severity.ERROR, MESSAGE, NOW)]
+    cycle(link, cfg, NOW + timedelta(seconds=3))
     assert link.alarms() == []
 
 

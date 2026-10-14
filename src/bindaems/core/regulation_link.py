@@ -17,9 +17,12 @@ Wirft ein Aufruf des Kerns, gilt der Zyklus als gescheitert (``failed``, ab ``st
 - Die Laufzeit führt danach keinen Befehl der Regelung mehr aus, und der Heartbeat bleibt aus; die
   Befehle des Keepers laufen weiter.
 - Health und Alarme des Kerns bleiben auf dem Stand des letzten Zyklus ohne Ausnahme.
-- Der Alarm ``control.exception`` (Fehler) gilt, solange Zyklen mit Ausnahme aufeinander folgen.
-  ``since`` ist die Wanduhr des ersten davon; der Text nennt den Typ der ersten Ausnahme des
-  letzten.
+- Der Alarm ``control.exception`` (Fehler) gilt, solange der letzte Zyklus mit Regelung scheiterte:
+  Eine Folge gescheiterter Zyklen beginnt mit dem ersten Zyklus mit Ausnahme, auch einem ohne
+  Regelung, und endet erst mit einem Zyklus, in dem der Kern regelte (``step``) und nichts warf.
+  Ein Zyklus ohne Regelung und ohne Ausnahme, etwa in SAFE, lässt den Alarm stehen. ``since`` ist
+  die Wanduhr des ersten gescheiterten Zyklus der Folge; der Text nennt den Typ der ersten
+  Ausnahme des letzten.
 - Das Log nennt die erste Ausnahme einer Folge mit Traceback, jede weitere als eine Zeile.
 
 Nicht für mehrere Threads gedacht, außer ``health`` und ``alarms``.
@@ -67,8 +70,10 @@ class RegulationLink:
         # Safety-Schicht) und für den Start eines neu gebauten Kerns (Wanduhr)
         self._snow = self._wall_now = started
         self._failed = False
+        self._regulated = False  # in diesem Zyklus regelte der Kern (``step``) ohne Ausnahme
         self._error: str | None = None  # der Typ der ersten Ausnahme im Zyklus
-        self._failed_since: datetime | None = None  # Wanduhr des ersten gescheiterten Zyklus
+        # Wanduhr des ersten gescheiterten Zyklus der laufenden Folge; ``None`` ohne Folge
+        self._failed_since: datetime | None = None
         self._traced = False  # die Folge gescheiterter Zyklen hat ihren Traceback im Log
         self._health = self.regulation.health()
         self._alarms: list[Alarm] = []  # die des Kerns
@@ -87,6 +92,7 @@ class RegulationLink:
     def start_cycle(self) -> None:
         """Am Anfang jedes Zyklus, vor dem Rücklesen: Der Zyklus ist noch nicht gescheitert."""
         self._failed = False
+        self._regulated = False
         self._error = None
 
     def step(
@@ -141,7 +147,9 @@ class RegulationLink:
                 intent=intent,
                 accepted_at=accepted_at,
             )
-            return self.regulation.step(RegulationInputs(charge))
+            commands = self.regulation.step(RegulationInputs(charge))
+            self._regulated = True
+            return commands
 
         return self._call("step", regulate, [])
 
@@ -185,29 +193,39 @@ class RegulationLink:
         return self._call("grid_budget_w", self.regulation.grid_budget_w, None)
 
     def finish(self, wall_now: datetime) -> None:
-        """Am Ende des Regelteils: legt Health und Alarme des Kerns ab, dazu ``control.exception``.
+        """Am Ende des Regelteils: legt Health und Alarme des Kerns ab und führt die Folge.
 
-        Nach einer Ausnahme in diesem Zyklus, auch in ``health`` oder ``alarms`` selbst, bleibt
-        der Stand des letzten Zyklus ohne Ausnahme. Ein Zyklus ohne beendet die Folge.
+        - **Mit Ausnahme** in diesem Zyklus, auch in ``health`` oder ``alarms`` selbst: Health und
+          Alarme des Kerns bleiben auf dem Stand des letzten Zyklus ohne Ausnahme. Die Folge
+          gescheiterter Zyklen beginnt mit ``since`` = ``wall_now`` oder geht weiter, auch in
+          einem Zyklus ohne Regelung.
+        - **Mit Regelung** (``step``) **ohne Ausnahme:** Die Folge endet.
+        - **Ohne Regelung und ohne Ausnahme,** etwa in SAFE: Die Folge bleibt, wie sie ist
+          (Präzisierung 15: „solange der letzte Zyklus mit Regelung scheiterte“).
+
+        ``failed`` gilt dagegen nur für diesen Zyklus.
         """
         self._wall_now = wall_now
         health = self._call("health", self.regulation.health, self._health)
         alarms = self._call("alarms", lambda: self.regulation.alarms(wall_now), self._alarms)
-        if not self._failed:
-            self._health, self._alarms = health, alarms
-            self._failed_since, self._exception, self._traced = None, None, False
+        if self._failed:
+            if self._failed_since is None:
+                self._failed_since = wall_now
+            message = f"Regelung ausgesetzt: Ausnahme {self._error} im Regelzyklus."
+            self._exception = Alarm(CONTROL_EXCEPTION, Severity.ERROR, message, self._failed_since)
             return
-        if self._failed_since is None:
-            self._failed_since = wall_now
-        message = f"Regelung ausgesetzt: Ausnahme {self._error} im Regelzyklus."
-        self._exception = Alarm(CONTROL_EXCEPTION, Severity.ERROR, message, self._failed_since)
+        self._health, self._alarms = health, alarms
+        if self._regulated:
+            self._failed_since, self._exception, self._traced = None, None, False
 
     def health(self) -> dict[str, Any]:
         """Der abgelegte Stand des Kerns; vor dem ersten ``finish`` der des frisch gebauten."""
         return self._health
 
     def alarms(self) -> list[Alarm]:
-        """Die abgelegten Alarme des Kerns, dazu ``control.exception`` nach ``finish``."""
+        """Die abgelegten Alarme des Kerns, dazu ``control.exception``, solange eine Folge
+        gescheiterter Zyklen läuft: ab dem ``finish`` ihres ersten Zyklus bis zu dem eines
+        Zyklus mit Regelung ohne Ausnahme."""
         exception = [] if self._exception is None else [self._exception]
         return [*self._alarms, *exception]
 
