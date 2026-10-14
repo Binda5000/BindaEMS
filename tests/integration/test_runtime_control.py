@@ -32,6 +32,7 @@ from bindaems.core.api.app import create_api
 from bindaems.core.control.actuator import Confirmation
 from bindaems.core.control.charging import ChargeController
 from bindaems.core.control.intent import INTENT_FILE_PROBLEM
+from bindaems.core.control.peak_guard import NO_LIMITS
 from bindaems.core.persistence.files import read_json, write_json_atomic
 from bindaems.core.runtime import CoreRuntime
 from bindaems.core.watchdog_client.status import WATCHDOG_VERSION
@@ -53,9 +54,10 @@ def without_charging_commands(monkeypatch) -> None:
     Sie halten sicheren Zustand, Übergabe, Heartbeat und fremde Änderungen fest (Plan 2b). Ihre
     Daten (Sollstrom der EVCS 16 A, kein Status, kein Messstrom) lassen die Regelung die EVCS zu
     Recht senken (Design 5.5), und den Tesla mit Tessie regelte sie ebenso. Das Zusammenspiel mit
-    der Regelung prüft ``test_runtime_charging.py``.
+    der Regelung prüft ``test_runtime_charging.py``. Der Kern gibt der Laderegelung die Grenzen des
+    15-min-Wächters mit (``peak``).
     """
-    monkeypatch.setattr(ChargeController, "step", lambda self, inputs: [])
+    monkeypatch.setattr(ChargeController, "step", lambda self, inputs, peak=NO_LIMITS: [])
 
 
 def record_broadcast(rt) -> list[dict[str, Any]]:

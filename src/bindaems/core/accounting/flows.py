@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from datetime import datetime
 
 from bindaems.shared.domain import SlotFlows, Snapshot
@@ -65,6 +66,20 @@ def _counter(snap: Snapshot, signal: str) -> float | None:
     return float(value)
 
 
+@dataclass(frozen=True)
+class SlotProgress:
+    """Der laufende Slot bis zum letzten Abtastpunkt (``SlotAccumulator.current``).
+
+    - ``slot_start``: sein Beginn (UTC)
+    - ``flows_wh``: die Energie je Fluss bisher in Wh, nach dem Halteprinzip bis zum letzten Punkt
+    - ``covered_s``: die Sekunden darin mit bekannter Bilanz
+    """
+
+    slot_start: datetime
+    flows_wh: Mapping[str, float]
+    covered_s: float
+
+
 class SlotAccumulator:
     """Integriert Flussleistungen nach dem Halteprinzip zu Energien je Viertelstunde.
 
@@ -75,6 +90,9 @@ class SlotAccumulator:
     Slots abzieht; was hier fehlt, darf er nicht abziehen. ``flows_w=None`` heißt „Bilanz
     unbekannt“: Das folgende Intervall zählt nicht als abgedeckt, Slotgrenzen und Zählerstände
     werden trotzdem fortgeschrieben.
+
+    ``current`` zeigt den laufenden Slot, bevor er sich schließt: Daraus misst der 15-min-Wächter
+    die Viertelstunde (Plan 2c-2a, Präzisierung 9).
     """
 
     def __init__(self, counter_signals: Sequence[str], max_gap_s: float = HOLD_MAX_S) -> None:
@@ -113,6 +131,16 @@ class SlotAccumulator:
                     self._start[signal] = value
                 self._last[signal] = value
         return closed
+
+    def current(self) -> SlotProgress | None:
+        """Der laufende Slot bis zum letzten ``add``; ``None`` vor dem ersten und nach ``flush``.
+
+        ``flows_wh`` ist eine Kopie: Spätere Aufrufe von ``add`` ändern sie nicht. Das Intervall
+        über eine Slotgrenze gehört zum früheren Slot, ein neuer Slot beginnt deshalb leer.
+        """
+        if self._slot is None:
+            return None
+        return SlotProgress(self._slot, dict(self._flows_wh), self._covered_s)
 
     def flush(self) -> SlotFlows | None:
         """Gibt den laufenden Slot einmal aus (z. B. beim Herunterfahren)."""

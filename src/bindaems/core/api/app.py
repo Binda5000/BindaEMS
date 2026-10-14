@@ -53,6 +53,11 @@ class HealthReport(BaseModel):
       ``soc``, ``time``, ``mode``), ``bridging_s`` (Sekunden der laufenden Überbrückung) und
       ``refresh_age_s`` (Sekunden seit dem letzten Urteil mit Wert über den Override); was fehlt,
       ist ``null``
+    - ``peak``: der Stand des 15-min-Wächters (``PeakGuard.health``, Plan 2c-2a): ``state``
+      (``off``, ``gap``, ``active``, ``exceeded``), ``target_kw`` (das Ziel), ``energy_kwh`` (der
+      Netzbezug der Viertelstunde bisher, ohne Boost), ``projected_kw`` (die Hochrechnung),
+      ``budget_kw`` (``P_zul``), ``reduction_kw`` (die verlangte Senkung, mindestens 0) und
+      ``quarter_end`` (das Ende der Viertelstunde, ISO in UTC); was fehlt, ist ``null``
     """
 
     mode: Literal["START", "OBSERVE", "CONTROL", "DEGRADED", "SAFE"]
@@ -71,6 +76,7 @@ class HealthReport(BaseModel):
     inputs: dict[str, Any] = Field(default_factory=lambda: {"ok": True, "problems": []})
     vehicles: list[dict[str, Any]] = Field(default_factory=list)
     battery: dict[str, Any] = Field(default_factory=dict)
+    peak: dict[str, Any] = Field(default_factory=dict)
 
 
 class CurrentIntent(BaseModel):

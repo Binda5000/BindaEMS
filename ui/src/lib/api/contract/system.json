@@ -167,6 +167,15 @@
         "support": null,
         "bridging_s": null,
         "refresh_age_s": null
+      },
+      "peak": {
+        "state": "off",
+        "target_kw": null,
+        "energy_kwh": null,
+        "projected_kw": null,
+        "budget_kw": null,
+        "reduction_kw": null,
+        "quarter_end": null
       }
     }
   },

@@ -13,7 +13,9 @@ Die Regelung erreicht die Laufzeit nur über ``RegulationLink`` (Plan 2c-2a, Des
 die Eingaben des Regelungs-Kerns, gibt ihm Urteile und Ergebnisse zurück und legt seine Health und
 Alarme ab. Eine Ausnahme in der Regelung setzt nur die Regelung aus (Präzisierung 15): Der Zyklus
 läuft mit den Befehlen des Keepers weiter, aber ohne Heartbeat, und der Alarm
-``control.exception`` gilt.
+``control.exception`` gilt. Der 15-min-Wächter der Regelung misst die Viertelstunde wie die
+Abrechnung: aus den Flüssen des Zyklus und dem laufenden Slot (Präzisierung 9). Sein Budget gilt
+im selben Zyklus auch für die Safety-Schicht (``grid_budget_w``, Regel 2).
 
 Auf Geräte schreibt der core den Heartbeat an den eigenen Watchdog am Cerbo, die Sicherwerte des
 sicheren Zustands und die der Übergabe am Ende des Live-Betriebs (Plan 2b, Präzisierungen 3 und 4),
@@ -578,6 +580,7 @@ class CoreRuntime:
             inputs={"ok": self._input_status.ok, "problems": list(self._input_status.problems)},
             vehicles=regulation["vehicles"],
             battery=regulation["battery"],
+            peak=regulation["peak"],
         )
 
     def state(self) -> dict[str, Any]:
@@ -634,7 +637,8 @@ class CoreRuntime:
         snap = self.store.snapshot()
         derived = derive(snap, self._cfg)
         plausibility = self._plausibility.evaluate(snap, derived, now)
-        closed = self._accumulator.add(now, self._flows(derived), snap)
+        flows = self._flows(derived)  # für die Abrechnung und den 15-min-Wächter
+        closed = self._accumulator.add(now, flows, snap)
         if closed is not None:
             self._sampler.write_slot_flows(closed)
             self.broadcast.publish({"type": "slot_flows", "data": _slot_json(closed)})
@@ -649,7 +653,7 @@ class CoreRuntime:
             self.foreign.check(present, self.executor.pending(), snow)
         self._foreign_alarms = self.foreign.alarms(snow, self._labels)
         self._update_operation(snap, plausibility, now, present, checked=checked)
-        self._control(snap, derived, now, snow, present)
+        self._control(snap, derived, flows, now, snow, present)
         state = snapshot_to_json(snap, derived)
         self._last_state = state
         self.broadcast.publish({"type": "state", "data": state})
@@ -749,6 +753,7 @@ class CoreRuntime:
         self,
         snap: Snapshot,
         derived: Derived,
+        flows: Mapping[str, float] | None,
         now: datetime,
         snow: datetime,
         present: Mapping[_Key, CommandValue],
@@ -756,7 +761,8 @@ class CoreRuntime:
         """Sicherer Zustand und Übergabe (Plan 2b, Präzisierungen 3 und 4), dann die Regelung.
 
         ``snow`` ist die Zeit der Safety-Schicht, ``now`` die Wanduhr, ``present`` das Rücklesen
-        dieses Zyklus. Ausgeführt wird in der Reihenfolge von Design 4.2, berechnet in dieser:
+        dieses Zyklus, ``flows`` seine Flüsse (``None`` heißt Bilanz unbekannt). Ausgeführt wird in
+        der Reihenfolge von Design 4.2, berechnet in dieser:
 
         1. Die Fähigkeiten aller Aktoren. Für jeden Aktor, dessen wirksame Betriebsart wechselte
            (``_switched_modes``), vergisst die Regelung ihre letzten Werte.
@@ -768,12 +774,15 @@ class CoreRuntime:
            Übergabe geht der Regelung vor. Die Annahmezeit liest die Laufzeit nach der Absicht
            (``IntentStore``); so ist sie nie älter als deren Annahme. Die Sperren bekommt sie wie
            der ``SafetyContext``: Ist Victron gesperrt, sendet der Akku-Sollwert nichts
-           (Plan 2c-2a, Präzisierung 8).
+           (Plan 2c-2a, Präzisierung 8). Für den 15-min-Wächter bekommt sie ``flows`` und den
+           laufenden Slot der Abrechnung, schon mit diesem Zyklus (``SlotAccumulator.current``,
+           Präzisierung 9).
         3. Erst danach die des ``SafeStateKeeper`` (``_keeper_commands``): Er zählt einen Versuch
            schon beim Berechnen. Bricht der Zyklus davor ab, hat er so keinen verbraucht; eine
            Ausnahme der Regelung selbst fängt ``RegulationLink``.
         4. Ein ``SafetyContext`` für alle Befehle, mit der Wallbox je Fahrzeug aus der Zuordnung
-           der Laderegelung (``vehicle_wallbox``).
+           der Laderegelung (``vehicle_wallbox``) und dem Budget des 15-min-Wächters aus diesem
+           Zyklus (``grid_budget_w``, Regel 2; Präzisierung 12). Ruht die Regelung, gibt es keins.
         5. Erst die Befehle des Keepers, dann die der Regelung gehen an den Ausführer und damit
            durch die Safety-Schicht (``_execute``). Übergibt der Ausführer einen Wert des Keepers,
            vergisst die Regelung ihre Werte für diesen Aktor: Das Gerät ändert sich ohne sie. Die
@@ -813,6 +822,8 @@ class CoreRuntime:
                 blocked=self.executor.pending() | handback,
                 connected=self.store.connected,
                 locks=locks,
+                flows=flows,
+                slot=self._accumulator.current(),
             )
         else:
             self.regulation.idle(snow)
@@ -830,6 +841,7 @@ class CoreRuntime:
                 wallbox_phase_a=derived.wallbox_phase_a,
                 present=present,
                 vehicle_wallbox=self.regulation.vehicle_wallbox(),
+                grid_budget_w=self.regulation.grid_budget_w(),
             )
             inputs = decision_inputs(snap, derived.phase_import_a)
             for command in keeper:

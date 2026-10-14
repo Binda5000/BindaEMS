@@ -3,23 +3,31 @@
 - ``RegulationInputs``: die Eingaben eines Zyklus der Regelung
 - ``Regulation``: der Kern; er hält die Bausteine der Regelung und verteilt jeden Aufruf an sie
 - ``battery_cars``: die Autos für den Akku-Sollwert (Präzisierung 4)
+- ``peak_cars``: die Autos für den 15-min-Wächter (Präzisierung 11)
 
-Die Bausteine sind die Laderegelung (``ChargeController``) und der Akku-Sollwert
-(``BatteryController``). Ein Zyklus (``step``) rechnet in der Reihenfolge von Präzisierung 3:
+Die Bausteine sind die Laderegelung (``ChargeController``), der Akku-Sollwert
+(``BatteryController``) und der 15-min-Wächter (``PeakGuard``). Ein Zyklus (``step``) rechnet in der
+Reihenfolge von Präzisierung 3:
 
-1. die Laderegelung,
+1. die Laderegelung mit den Grenzen und der Start-Sperre, die der Wächter im vorigen Zyklus
+   bestimmt hat,
 2. die Autos je Wallbox aus der Zuordnung und den Modi dieses Zyklus
    (``ChargeController.cars``), dazu die Wallboxen ohne Fahrzeug (``battery_cars``),
 3. Fehlbetrag und erlaubten Akku-Anteil (``BatteryController.assess``),
-4. den Override (``BatteryController.decide``).
+4. den Wächter (``PeakGuard.step``): das Budget für diesen Zyklus, die Grenzen für den nächsten,
+5. den Override (``BatteryController.decide``) mit diesem Budget.
 
-Die Befehle kommen in dieser Reihenfolge: erst die der Ladepunkte, dann der Override. Beide
-Bausteine laufen auf der Uhr der Safety-Schicht (``ChargeInputs.now``). Den 15-min-Wächter gibt es
-noch nicht: Der Override rechnet ohne Budget, ``alarms`` und ``grid_budget_w`` haben nichts zu
-melden.
+Die Grenzen des Wächters wirken so einen Zyklus später; dafür rechnen Akku-Sollwert und Wächter mit
+Zuordnung und Modi desselben Zyklus wie die Laderegelung. Die Befehle kommen in dieser Reihenfolge:
+erst die der Ladepunkte, dann der Override. Laderegelung und Akku-Sollwert laufen auf der Uhr der
+Safety-Schicht (``ChargeInputs.now``), der Wächter auf der Wanduhr (``ChargeInputs.wall_now``), wie
+die Viertelstunden der Abrechnung. Sein Budget gilt nach ``step`` auch für die Safety-Schicht
+(``grid_budget_w``, Regel 2), sein Alarm ``peak.exceeded`` bis zum Ende seiner Viertelstunde
+(``alarms``).
 
 Urteile und Ergebnisse zum Override (``victron``, ``grid_setpoint``) gehen nur an den
-Akku-Sollwert, alle anderen nur an die Laderegelung; ``forget`` und ``idle`` erreichen beide.
+Akku-Sollwert, alle anderen nur an die Laderegelung; ``forget`` erreicht beide, ``idle`` alle drei
+Bausteine.
 
 Der Kern fängt keine Ausnahme; das tut die Verdrahtung neben der Laufzeit (``RegulationLink``,
 Plan 2c-2a, Präzisierung 15). Die Schicht ist rein: Die Zeit kommt mit den Eingaben. Nicht für
@@ -33,17 +41,19 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Final
 
-from bindaems.core.control.battery import BatteryCar, BatteryController
+from bindaems.core.control.battery import BatteryCar, BatteryController, BatteryNeed
 from bindaems.core.control.charge_inputs import ChargeInputs, WallboxObs
 from bindaems.core.control.charge_modes import Effective
 from bindaems.core.control.charging import CarView, ChargeController
 from bindaems.core.control.executor import WriteResult
 from bindaems.core.control.last_values import ControlCommand, Key
+from bindaems.core.control.peak_guard import NO_LIMITS, PeakCar, PeakGuard, PeakLimits, QuarterObs
 from bindaems.core.safety.limits import HardLimits
 from bindaems.core.safety.types import Verdict
 from bindaems.shared.config import Config
 from bindaems.shared.control import VICTRON, ChargeMode, Command, CommandKind, GuestIntent
 from bindaems.shared.domain import Alarm
+from bindaems.shared.timeutil import slot_end
 
 _SETPOINT: Final[Key] = (VICTRON, CommandKind.GRID_SETPOINT)  # der Override des Akku-Sollwerts
 
@@ -59,6 +69,8 @@ class RegulationInputs:
       ``Derived.house_load_w``)
     - ``base_setpoint_w``: der Basis-Sollwert ``ess.grid_setpoint_w`` in W
     - ``locks``: die Gründe der Sperren je Aktor, wie im ``SafetyContext``
+    - ``quarter``: die laufende Viertelstunde für den 15-min-Wächter, wie die Abrechnung sie zählt
+      (Präzisierung 9); ``None`` heißt nicht da
     """
 
     charge: ChargeInputs
@@ -66,39 +78,58 @@ class RegulationInputs:
     house_w: float | None = None
     base_setpoint_w: float | None = None
     locks: Mapping[str, tuple[str, ...]] = field(default_factory=dict)
+    quarter: QuarterObs | None = None
 
 
 class Regulation:
     """Der Regelungs-Kern: je Zyklus die Befehle seiner Bausteine.
 
-    ``charger`` ist die Laderegelung, ``battery`` der Akku-Sollwert. ``started`` ist die Wanduhr
-    beim Start der Regelung (``ChargeController``). Der Zustand lebt nur im Speicher.
+    ``charger`` ist die Laderegelung, ``battery`` der Akku-Sollwert, ``peak_guard`` der
+    15-min-Wächter. ``started`` ist die Wanduhr beim Start der Regelung (``ChargeController``).
+    Der Kern hält die Vorgaben des Wächters aus dem letzten Zyklus (``PeakLimits``): ``NO_LIMITS``
+    nach dem Start und nach ``idle``. Der Zustand lebt nur im Speicher.
     """
 
     def __init__(self, cfg: Config, limits: HardLimits, *, started: datetime) -> None:
         self._cfg = cfg
         self.charger = ChargeController(cfg, limits, started=started)
         self.battery = BatteryController(cfg)
+        self.peak_guard = PeakGuard(cfg.control, cfg.battery.reserve_soc_pct)
+        self._peak: PeakLimits = NO_LIMITS  # die Vorgaben des Wächters aus dem letzten Zyklus
 
     def step(self, inputs: RegulationInputs) -> list[ControlCommand]:
         """Ein Regelzyklus (Präzisierung 3): die Befehle der Ladepunkte in der Reihenfolge der
         Priorität, dahinter der Override.
+
+        Die Laderegelung bekommt Grenzen und Start-Sperre des 15-min-Wächters aus dem vorigen
+        Zyklus; sein Budget aus diesem Zyklus gilt schon für den Override. Der Wächter misst
+        ``inputs.quarter`` mit den Autos von ``peak_cars``, dem gewollten Netzbezug ``W`` vor dem
+        Wächter (``BatteryNeed.wanted_w``, ohne Bedarf unbekannt), dem Basis-Sollwert und dem SOC.
 
         Victron ist für den Override gesperrt, wenn ``inputs.locks`` für ``victron`` Gründe nennt,
         und steuerbar nach ``charge.controllable``. Ein offener Schreibvorgang für den Override oder
         eine Übergabe von Victron (``charge.blocked``) hält nur seinen Befehl dieses Zyklus zurück.
         """
         charge = inputs.charge
-        commands = self.charger.step(charge)
+        commands = self.charger.step(charge, self._peak)
         guest = (GuestIntent() if charge.intent is None else charge.intent.guest).mode
-        cars = battery_cars(self._cfg, self.charger.cars(), charge.wallboxes, guest)
+        views = self.charger.cars()
+        cars = battery_cars(self._cfg, views, charge.wallboxes, guest)
         battery = self.battery
         need = battery.assess(charge.now, charge.grid.soc_pct, inputs.pv_w, inputs.house_w, cars)
+        self._peak = self.peak_guard.step(
+            charge.wall_now,
+            inputs.quarter,
+            peak_cars(views, need),
+            wanted_w=None if need is None else need.wanted_w,
+            base_w=inputs.base_setpoint_w,
+            soc_pct=charge.grid.soc_pct,
+        )
         override = battery.decide(
             charge.now,
             need,
             base_w=inputs.base_setpoint_w,
-            budget_w=None,  # ohne 15-min-Wächter kein Budget
+            budget_w=self._peak.budget_w,
             present=charge.present,
             controllable=charge.controllable.get(VICTRON) is True,
             locked=bool(inputs.locks.get(VICTRON)),
@@ -130,26 +161,44 @@ class Regulation:
         self.battery.forget(actuators)
 
     def idle(self, now: datetime) -> None:
-        """Ein Zyklus ohne Regelung für beide Bausteine; ``now`` ist die Zeit der Safety-Schicht."""
+        """Ein Zyklus ohne Regelung für alle drei Bausteine.
+
+        ``now`` ist die Zeit der Safety-Schicht. Für den Wächter ist die laufende Viertelstunde
+        danach lückenhaft, und seine Vorgaben verfallen (``NO_LIMITS``): Solange die Regelung ruht,
+        gibt es kein Budget.
+        """
         self.charger.idle(now)
         self.battery.idle()
+        self.peak_guard.idle()
+        self._peak = NO_LIMITS
 
     def vehicle_wallbox(self) -> dict[str, str | None]:
         """Fahrzeug-Aktor → Wallbox aus der Zuordnung der Laderegelung, für die Safety-Schicht."""
         return self.charger.vehicle_wallbox()
 
     def health(self) -> dict[str, Any]:
-        """Der Stand des letzten Zyklus: ``vehicles`` je Fahrzeug (``ChargeController.health``)
-        und ``battery`` (``BatteryController.health``)."""
-        return {"vehicles": self.charger.health(), "battery": self.battery.health()}
+        """Der Stand des letzten Zyklus: ``vehicles`` je Fahrzeug (``ChargeController.health``),
+        ``battery`` (``BatteryController.health``) und ``peak`` (``PeakGuard.health``)."""
+        return {
+            "vehicles": self.charger.health(),
+            "battery": self.battery.health(),
+            "peak": self.peak_guard.health(),
+        }
 
     def alarms(self, wall_now: datetime) -> list[Alarm]:
-        """Die Alarme der Regelung zur Wanduhr ``wall_now``; bisher keine."""
-        return []
+        """Die Alarme der Regelung zur Wanduhr ``wall_now``: die des Wächters (``peak.exceeded``),
+        solange ``wall_now`` in der Viertelstunde ihres ``since`` liegt.
+
+        Der Wächter kennt die Zeit nur aus seinen Schritten. Ruht die Regelung, etwa in OBSERVE
+        oder bei ausgeschaltetem Regelbetrieb, hielte er den Alarm über das Ende seiner
+        Viertelstunde hinaus; ``RegulationLink.finish`` fragt deshalb in jedem Zyklus.
+        """
+        return [alarm for alarm in self.peak_guard.alarms() if wall_now < slot_end(alarm.since)]
 
     def grid_budget_w(self) -> float | None:
-        """Das 15-min-Budget für den ``SafetyContext``; bisher keins (``None``)."""
-        return None
+        """Das 15-min-Budget für den ``SafetyContext`` (Regel 2): ``budget_w`` des Wächters aus dem
+        letzten ``step`` (Präzisierung 12); ``None`` ohne Budget und solange die Regelung ruht."""
+        return self._peak.budget_w
 
 
 def battery_cars(
@@ -177,3 +226,30 @@ def battery_cars(
         else:
             found.append(BatteryCar(key, mode, seen.power_w, seen.charging))
     return found
+
+
+def peak_cars(cars: Sequence[CarView], need: BatteryNeed | None) -> list[PeakCar]:
+    """Die Autos für den 15-min-Wächter: je Ladepunkt aus ``cars`` eins, in dieser Reihenfolge.
+
+    ``cars`` kommt aus ``ChargeController.cars``, in der Reihenfolge der Priorität; der Rang ist
+    die Stelle darin, 0 die höchste. Der Netzanteil ist der von ``need`` für die Wallbox
+    (``BatteryNeed.grid_w``, Präzisierung 11), ohne Bedarf 0 W. Ein Ladepunkt, den die
+    Laderegelung nicht regelt (``CarView.regulated``), hat 0 W Netzanteil, wird also nie gedrosselt:
+    Eine Grenze wirkte dort nicht, und was er ihr nicht folgte, stünde bis zum Ende der
+    Viertelstunde aus (``pending_w``) und schmälerte die Drosselung der anderen. Seinen Anteil in
+    Boost zieht der Wächter trotzdem ab. Wallboxen ohne Fahrzeug sind keine Autos des Wächters: Er
+    kann sie nicht drosseln, ihr Netzanteil steht aber im gewollten Netzbezug ``W``.
+    """
+    grid_w: Mapping[str, float] = {} if need is None else need.grid_w
+    return [
+        PeakCar(
+            vehicle=car.vehicle,
+            wallbox=car.wallbox,
+            mode=car.mode,
+            rank=rank,
+            power_w=car.power_w,
+            grid_w=grid_w.get(car.wallbox, 0.0) if car.regulated else 0.0,
+            min_w=car.min_w,
+        )
+        for rank, car in enumerate(cars)
+    ]

@@ -9,9 +9,11 @@ from tests.helpers import T0, snap
 from tests.unit.core.control.fakes import FakeActuator, FakeWakeActuator
 from tests.unit.core.state.conftest import BASE
 
+from bindaems.core.accounting.flows import SlotProgress
 from bindaems.core.control.actuator import Capabilities
 from bindaems.core.control.executor import WriteResult
 from bindaems.core.control.last_values import ControlCommand
+from bindaems.core.control.peak_guard import PEAK_EXCEEDED, QuarterObs
 from bindaems.core.control.regulation import Regulation, RegulationInputs
 from bindaems.core.regulation_link import CONTROL_EXCEPTION, RegulationLink
 from bindaems.core.safety.limits import HardLimits
@@ -37,7 +39,8 @@ def link_for(cfg) -> RegulationLink:
 
 
 def step(link: RegulationLink, cfg, when: datetime = NOW, **kw: Any) -> list[ControlCommand]:
-    """Ein Schritt mit leerem Snapshot (alles unbekannt), ``when`` auf beiden Uhren."""
+    """Ein Schritt mit leerem Snapshot (alles unbekannt), ``when`` auf beiden Uhren, ohne Flüsse
+    und ohne Slot."""
     empty = snap({})
     args: dict[str, Any] = {
         "snap": empty,
@@ -52,14 +55,17 @@ def step(link: RegulationLink, cfg, when: datetime = NOW, **kw: Any) -> list[Con
         "blocked": frozenset(),
         "connected": lambda source: None,
         "locks": {},
+        "flows": None,
+        "slot": None,
     }
     return link.step(**(args | kw))
 
 
-def cycle(link: RegulationLink, cfg, when: datetime) -> None:
-    """Ein Zyklus mit Regelung, wie ihn die Laufzeit führt (ohne Befehle auszuführen)."""
+def cycle(link: RegulationLink, cfg, when: datetime, **kw: Any) -> None:
+    """Ein Zyklus mit Regelung, wie ihn die Laufzeit führt (ohne Befehle auszuführen); ``kw`` geht
+    an ``step``."""
     link.start_cycle()
-    step(link, cfg, when)
+    step(link, cfg, when, **kw)
     link.finish(when)
 
 
@@ -219,6 +225,45 @@ def test_step_builds_the_inputs_of_the_battery(cfg, monkeypatch) -> None:  # Pla
     assert built(snap(BASE | {"ess.grid_setpoint_w": math.inf})) == (3000.0, None, None, {})
     stale = snap(BASE | walls | {"ess.grid_setpoint_w": 50.0}, quality=Quality.STALE)
     assert built(stale) == (None, None, None, {})
+
+
+def test_step_builds_the_quarter_of_the_guard(cfg, monkeypatch) -> None:  # Präzisierung 9
+    link = link_for(cfg)
+    seen: list[RegulationInputs] = []
+    monkeypatch.setattr(link.regulation, "step", lambda inputs: seen.append(inputs) or [])
+
+    def built(**kw: Any) -> QuarterObs | None:
+        link.start_cycle()
+        step(link, cfg, **kw)
+        return seen[-1].quarter
+
+    energy = {"grid>house": 2.0, "grid>wb:evcs": 1.0, "pv>house": 5.0, "battery>wb:evcs": 0.5}
+    slot = SlotProgress(T0, energy, 2.0)
+    flows = {"grid>house": 3600.0, "grid>wb:evcs": 1800.0, "grid>battery": 600.0, "pv>house": 900.0}
+    # Energie bisher und Leistung des Zyklus zählen die Flüsse aus dem Netz, auch ins Auto und in
+    # den Akku; je Wallbox in der Reihenfolge von config.yaml ihr Netzanteil des Zyklus, auch 0 W.
+    expected = QuarterObs(T0, 3.0, 6000.0, {"evcs": 1800.0, "twc": 0.0})
+    assert built(flows=flows, slot=slot) == expected
+    # Ohne Flüsse (Bilanz unbekannt) ist die Leistung unbekannt, ohne Slot fehlt die Viertelstunde.
+    assert built(flows=None, slot=slot) == QuarterObs(T0, 3.0, None, {})
+    assert built(flows=flows, slot=None) is None
+
+
+def test_the_alarm_of_the_guard_ends_with_its_quarter_without_regulation(cfg) -> None:
+    # Präzisierung 14: ``finish`` fragt die Alarme des Kerns in jedem Zyklus, auch ohne Regelung. So
+    # endet „überschritten“ mit seiner Viertelstunde, obwohl der Wächter keinen Schritt mehr macht.
+    control = cfg.control.model_copy(update={"peak_target_kw": 8.0})
+    link = link_for(cfg.model_copy(update={"control": control}))
+    for s in range(61):  # 9080 W aus dem Netz ab dem Beginn der Viertelstunde
+        slot = SlotProgress(T0, {"grid>house": 9080.0 * s / 3600}, float(s))
+        cycle(link, cfg, NOW + timedelta(seconds=s), flows={"grid>house": 9080.0}, slot=slot)
+    [alarm] = link.alarms()
+    assert (alarm.id, alarm.since) == (PEAK_EXCEEDED, NOW + timedelta(seconds=60))
+    end = NOW + timedelta(minutes=15)
+    idle_cycle(link, end - timedelta(seconds=1))  # die Regelung ruht, etwa in OBSERVE
+    assert link.alarms() == [alarm]
+    idle_cycle(link, end)
+    assert link.alarms() == []
 
 
 def test_health_shows_the_last_cycle_without_exception(cfg, monkeypatch) -> None:

@@ -23,8 +23,8 @@ Die Bausteine stehen in eigenen Modulen: ``charge_points`` (Ladepunkte und ihre 
 Zuordnung und Wiederaufnahme).
 
 Nach jedem ``step`` zeigt ``cars`` je Ladepunkt das Auto mit Modus und Leistung (``CarView``): Damit
-rechnet der Akku-Sollwert mit Zuordnung und Modi desselben Zyklus (Plan 2c-2a, Präzisierungen 3
-und 4).
+rechnen Akku-Sollwert und 15-min-Wächter mit Zuordnung und Modi desselben Zyklus (Plan 2c-2a,
+Präzisierungen 3 und 4).
 
 Dazu legt die Regelung fest:
 
@@ -156,6 +156,8 @@ class CarView:
       erreichbar ist und beides kennt.
     - ``charging``: ob das Fahrzeug lädt, aus der Zuordnung
     - ``min_w``: die Mindestleistung des Ladepunkts, ``min_a × U × Zahl seiner Phasen``
+    - ``regulated``: ob die Laderegelung den Ladepunkt regelt (``ChargePoint.regulated``); nur
+      dann wirkt eine Grenze des 15-min-Wächters
 
     ``U`` ist ``grid.voltage_nominal_v``.
     """
@@ -166,6 +168,7 @@ class CarView:
     power_w: float | None
     charging: bool | None
     min_w: float
+    regulated: bool
 
 
 @dataclass(frozen=True)
@@ -450,10 +453,10 @@ class ChargeController:
     def cars(self) -> tuple[CarView, ...]:
         """Je Ladepunkt des letzten ``step`` sein Auto, in der Reihenfolge der Priorität.
 
-        Für den Akku-Sollwert (Plan 2c-2a, Präzisierungen 3 und 4). Jeder Ladepunkt zählt, auch
-        einer, der nicht geregelt wird oder an dem das Auto nicht angesteckt ist: Er bleibt der
-        Ladepunkt seines Fahrzeugs, und auch solange evcc lädt, zählt sein Auto. Vor dem ersten
-        ``step`` und nach ``idle`` leer.
+        Für Akku-Sollwert und 15-min-Wächter (Plan 2c-2a, Präzisierungen 3 und 4). Jeder
+        Ladepunkt zählt, auch einer, der nicht geregelt wird (``CarView.regulated``) oder an dem
+        das Auto nicht angesteckt ist: Er bleibt der Ladepunkt seines Fahrzeugs, und auch solange
+        evcc lädt, zählt sein Auto. Vor dem ersten ``step`` und nach ``idle`` leer.
         """
         return self._cars
 
@@ -811,7 +814,9 @@ def _car_view(
     if power_w is None and cfg.vehicles[point.vehicle].tessie is not None:
         power_w = _tessie_w(inputs.vehicles.get(point.vehicle, NO_VEHICLE_DATA), volts)
     min_w = point.min_a * volts * len(point.phases)
-    return CarView(point.vehicle, point.wallbox, mode, power_w, vehicle.charging, min_w)
+    return CarView(
+        point.vehicle, point.wallbox, mode, power_w, vehicle.charging, min_w, point.regulated
+    )
 
 
 def _tessie_w(tessie: VehicleObs, volts: float) -> float | None:

@@ -58,6 +58,23 @@ def test_vehicle_wallbox_reaches_the_context() -> None:
     assert ctx.vehicle_wallbox == {"vehicle.tesla": "twc"}
 
 
+def test_grid_budget_reaches_the_context() -> None:  # Plan 2c-2a, Präzisierung 12
+    ctx = safety_context(
+        now=T0,
+        operating=OperatingState.CONTROL,
+        modes={},
+        locks={},
+        inputs=InputStatus(True),
+        snap=snap({}),
+        phase_import_a=PHASE_IMPORT,
+        wallbox_phase_a={},
+        present={},
+        grid_budget_w=5700.0,
+    )
+    assert ctx.grid_budget_w == 5700.0
+    assert build(snap({})).grid_budget_w is None  # ohne Angabe keins
+
+
 def test_decision_inputs() -> None:
     s = snap({"battery.power_w": -1500.0, "battery.soc_pct": 46.0})
     assert decision_inputs(s, {"L1": 1.5, "L2": None, "L3": -0.5}) == {

@@ -3,9 +3,10 @@
 ``RegulationLink`` ist alles, was die Laufzeit von der Regelung sieht:
 
 - Er baut je Zyklus die Eingaben des Kerns (``Regulation``) und gibt Urteile, Ergebnisse,
-  ``forget`` und ``idle`` an ihn weiter. Die Eingaben sind die der Laderegelung (Plan 2c-1) und
-  die des Akku-Sollwerts: PV und Hauslast aus den abgeleiteten Größen, der Basis-Sollwert
-  ``ess.grid_setpoint_w`` und die Sperren des Zyklus.
+  ``forget`` und ``idle`` an ihn weiter. Die Eingaben sind die der Laderegelung (Plan 2c-1),
+  die des Akku-Sollwerts (PV und Hauslast aus den abgeleiteten Größen, der Basis-Sollwert
+  ``ess.grid_setpoint_w`` und die Sperren des Zyklus) und die Viertelstunde des 15-min-Wächters
+  aus den Flüssen des Zyklus und dem laufenden Slot der Abrechnung (Präzisierung 9).
 - Er legt am Ende des Regelteils Health und Alarme des Kerns ab (``finish``). ``health`` und
   ``alarms`` lesen nur diesen Stand und dürfen deshalb aus einem anderen Thread kommen.
 - Er fängt jede Ausnahme des Kerns (Präzisierung 15).
@@ -38,10 +39,12 @@ from typing import Any, Final, TypeVar
 
 import structlog
 
+from bindaems.core.accounting.flows import SlotProgress, wb_key
 from bindaems.core.control.actuator import Actuator, Capabilities, WakeStart
 from bindaems.core.control.charge_inputs import ChargeInputs, observe, ok_number
 from bindaems.core.control.executor import WriteResult
 from bindaems.core.control.last_values import ControlCommand, Key
+from bindaems.core.control.peak_guard import QuarterObs
 from bindaems.core.control.regulation import Regulation, RegulationInputs
 from bindaems.core.safety.limits import HardLimits
 from bindaems.core.safety.types import Verdict
@@ -53,6 +56,7 @@ from bindaems.shared.domain import Alarm, Severity, Snapshot
 log = structlog.get_logger(__name__)
 
 CONTROL_EXCEPTION: Final = "control.exception"
+_FROM_GRID: Final = "grid>"  # der Anfang der Schlüssel aller Flüsse aus dem Netz (``allocate``)
 
 _T = TypeVar("_T")
 
@@ -106,6 +110,8 @@ class RegulationLink:
         blocked: frozenset[Key],
         connected: Callable[[str], bool | None],
         locks: Mapping[str, tuple[str, ...]],
+        flows: Mapping[str, float] | None,
+        slot: SlotProgress | None,
     ) -> list[ControlCommand]:
         """Ein Zyklus mit Regelung: die Befehle des Kerns, nach einer Ausnahme keine.
 
@@ -123,7 +129,10 @@ class RegulationLink:
 
         Dazu die des Akku-Sollwerts (Plan 2c-2a): PV (``derived.pv_total_w``) und Hauslast
         (``derived.house_load_w``), der Basis-Sollwert ``ess.grid_setpoint_w`` (``ok_number``) und
-        die Sperren ``locks``, die Gründe je Aktor wie im ``SafetyContext``.
+        die Sperren ``locks``, die Gründe je Aktor wie im ``SafetyContext``. Und die Viertelstunde
+        des 15-min-Wächters (``quarter``) aus ``flows``, den Flüssen dieses Zyklus (``allocate``;
+        ``None`` heißt Bilanz unbekannt), und ``slot``, dem laufenden Slot der Abrechnung bis zu
+        diesem Zyklus (``SlotAccumulator.current``).
 
         Auch eine Ausnahme beim Bauen der Eingaben setzt nur die Regelung aus.
         """
@@ -155,6 +164,7 @@ class RegulationLink:
                     house_w=derived.house_load_w,
                     base_setpoint_w=ok_number(snap, "ess.grid_setpoint_w"),
                     locks=locks,
+                    quarter=self._quarter(flows, slot),
                 )
             )
             self._regulated = True
@@ -238,6 +248,25 @@ class RegulationLink:
         exception = [] if self._exception is None else [self._exception]
         return [*self._alarms, *exception]
 
+    def _quarter(
+        self, flows: Mapping[str, float] | None, slot: SlotProgress | None
+    ) -> QuarterObs | None:
+        """Die laufende Viertelstunde für den 15-min-Wächter (Präzisierung 9); ohne Slot ``None``.
+
+        - ``grid_wh``: die Energie der Flüsse aus dem Netz (``grid>*``) im Slot bisher
+        - ``grid_w``: die Leistung der Flüsse aus dem Netz in diesem Zyklus; ohne ``flows`` ``None``
+        - ``wallbox_grid_w``: je Wallbox in der Reihenfolge von ``wallbox_order`` ihr Netzanteil in
+          diesem Zyklus (``grid>wb:<w>``), ohne Eintrag 0 W; ohne ``flows`` leer
+        """
+        if slot is None:
+            return None
+        start, energy_wh = slot.slot_start, _from_grid(slot.flows_wh)
+        if flows is None:
+            return QuarterObs(start, energy_wh, None, {})
+        order = self._cfg.wallbox_order
+        shares = {wallbox: flows.get(wb_key("grid", wallbox), 0.0) for wallbox in order}
+        return QuarterObs(start, energy_wh, _from_grid(flows), shares)
+
     def _call(self, name: str, call: Callable[[], _T], fallback: _T) -> _T:
         """Ruft den Kern; nach einer Ausnahme in diesem Zyklus ruht er, und es gilt ``fallback``.
 
@@ -266,3 +295,8 @@ class RegulationLink:
         else:
             self._traced = True
             log.exception("Ausnahme in der Regelung, Regelung ausgesetzt", call=name)
+
+
+def _from_grid(flows: Mapping[str, float]) -> float:
+    """Die Summe der Flüsse aus dem Netz (``grid>*``): ins Haus, in die Autos und in den Akku."""
+    return sum((value for key, value in flows.items() if key.startswith(_FROM_GRID)), 0.0)

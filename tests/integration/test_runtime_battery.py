@@ -1,8 +1,10 @@
 """Laufzeit mit dem Akku-Sollwert im Regelzyklus (Plan 2c-2a, Design 5): der Override im Dry-Run
 und live, die Sperre durch Dynamic ESS, das Auffrischen ohne Eintrag im Log, der gewollte Verfall
-des Overrides ohne Alarm „fremde Änderung“ und Health."""
+des Overrides ohne Alarm „fremde Änderung“ und Health. Dazu der 15-min-Wächter (Design 6): sein
+Budget für Akku-Sollwert und Safety-Schicht (Regel 2) und sein Alarm in Health."""
 
-from datetime import timedelta
+import math
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import pytest
@@ -11,6 +13,8 @@ from tests.integration.conftest import GOOD_STATE, allow_victron_live, run
 from tests.integration.plant import Plant
 from tests.integration.test_runtime_charging import alarm_ids
 
+from bindaems.core.control.peak_guard import PEAK_EXCEEDED
+from bindaems.shared.config import Config
 from bindaems.shared.control import (
     VICTRON,
     ActuatorMode,
@@ -44,6 +48,23 @@ EGOLF_CHARGING = GOOD_STATE | {
 }
 EGOLF_NOW = {"egolf": VehicleIntent(mode=ChargeMode.NOW)}
 FOREIGN = "competitor.foreign.victron"
+# Der e-Golf in Sofort mit 7360 W (16 A auf zwei Phasen), das Haus braucht wie oben 1720 W. Der Akku
+# gibt 2400 W ab, 6680 W kommen aus dem Netz.
+FULL = EVENING | {
+    "wallbox.evcs.power_w": 7360.0,
+    "wallbox.evcs.current_a": 16.0,
+    "grid.power_w": 6680.0,
+    **{f"grid.l{n}.power_w": 6680.0 / 3 for n in (1, 2, 3)},
+}
+# evcc hält 16 A und „Laden an“; der Basis-Sollwert ist 1000 W, kein Override
+EGOLF_FULL = EGOLF_CHARGING | {
+    "wallbox.evcs.gx_set_current_a": 16,
+    "wallbox.evcs.gx_current_a": 16,
+    "ess.grid_setpoint_w": 1000,
+}
+# Die erste ganze Viertelstunde: Die Regelung beginnt erst um 10:00:30 (CONTROL ab 30 s), die
+# Viertelstunde davor ist lückenhaft.
+QUARTER = datetime(2026, 10, 8, 10, 15, tzinfo=UTC)
 
 
 def victron_decisions(rt) -> list[Decision]:
@@ -55,6 +76,12 @@ def victron_decisions(rt) -> list[Decision]:
 def override_writes(plant: Plant) -> list[float | int | None]:
     """Die Werte aller Schreibaufträge an den Override, in ihrer Reihenfolge."""
     return [value for path, value in plant.writes if path == OVERRIDE_PATH]
+
+
+def peak_target(cfg: Config) -> Config:
+    """Die Konfiguration mit dem Ziel 8 kW für den 15-min-Wächter."""
+    control = cfg.control.model_copy(update={"peak_target_kw": 8.0})
+    return cfg.model_copy(update={"control": control})
 
 
 def dry_run(runtime_env, state: dict[str, Any]):
@@ -167,4 +194,62 @@ async def test_health_shows_the_battery(runtime_env) -> None:
         "support": "soc",  # der Tesla am Wall Connector in PV-Überschuss; SOC unter 70 %
         "bridging_s": None,
         "refresh_age_s": 0.0,
+    }
+
+
+async def test_peak_budget_reaches_the_safety_layer(runtime_env) -> None:  # Präzisierung 12
+    rt, _, clock = runtime_env(state=dict(EGOLF_FULL), extra=FULL, configure=peak_target)
+    rt.submit_intent(Intent(version=1, control=True, vehicles=EGOLF_NOW))  # Victron im Dry-Run
+    budgets: dict[datetime, float | None] = {}
+    states: dict[datetime, str] = {}
+    for _ in range(17 * 60):  # bis 10:16:59
+        now = clock.now()
+        rt.cycle_once()
+        budgets[now], states[now] = rt.regulation.grid_budget_w(), rt.health().peak["state"]
+        clock.advance(1)
+    # Review Focus 4: Die Regelung beginnt mitten in der Viertelstunde; bis zur nächsten ist sie
+    # lückenhaft, ohne Budget.
+    assert {(states[t], budgets[t]) for t in budgets if t < QUARTER} == {("gap", None)}
+    after = [t for t in budgets if t >= QUARTER]
+    assert {states[t] for t in after} == {"active"}  # die Hochrechnung bleibt bei 6680 W
+    assert all(isinstance(budgets[t], float) and math.isfinite(budgets[t]) for t in after)
+    # Der Akku-Sollwert will 1000 + 7360 W. Ab 10:15 senkt ihn das Budget P_zul (dann 7700 W, es
+    # steigt mit der Viertelstunde) mit dem Grund ``peak_guard``; der Override jeder Entscheidung
+    # liegt höchstens bei P_zul ihres Zyklus.
+    decisions = [d for d in victron_decisions(rt) if d.ts >= QUARTER]
+    assert [(d.ts, d.requested) for d in decisions] == [
+        (QUARTER, 7700.0),
+        (QUARTER + timedelta(seconds=116), 7900.0),
+    ]
+    assert decisions[0].codes == ("battery_comp", "peak_guard")
+    assert all(d.applied <= budgets[d.ts] for d in decisions)
+    # Um 10:16:56 ist P_zul 7895,3 W, das Ziel auf 10 W gerundet 7900 W: Regel 2 kappt es am Budget.
+    assert decisions[1].applied == pytest.approx(7895.31, abs=0.01)
+    assert decisions[1].codes == ("battery_comp", "peak_guard", "range.ceiling")
+
+
+async def test_peak_exceeded_is_an_alarm_in_health(runtime_env) -> None:  # Präzisierung 14
+    # Dynamic ESS hält Victron (gesperrt), der Akku hilft nicht: e-Golf und Haus ziehen 9080 W aus
+    # dem Netz, mehr als das Ziel 8 kW.
+    drawn = FULL | {
+        **{f"vebus.l{n}.ac_in_power_w": 1300.0 for n in (1, 2, 3)},
+        "battery.power_w": 0.0,
+        "grid.power_w": 9080.0,
+        **{f"grid.l{n}.power_w": 9080.0 / 3 for n in (1, 2, 3)},
+    }
+    state = EGOLF_FULL | {"dess.mode": 1}
+    rt, _, clock = runtime_env(state=state, extra=drawn, configure=peak_target)
+    rt.submit_intent(Intent(version=1, control=True, vehicles=EGOLF_NOW))
+    run(rt, clock, 16 * 60)  # bis 10:15:59: 59 s über dem Ziel
+    assert rt.health().mode == "DEGRADED"  # Regelbetrieb mit gesperrtem Victron
+    assert rt.health().peak["state"] == "active"
+    assert PEAK_EXCEEDED not in alarm_ids(rt)
+    run(rt, clock, 1)  # 10:16:00: 60 s
+    assert rt.health().peak["state"] == "exceeded"
+    [alarm] = [alarm for alarm in rt.health().alarms if alarm["id"] == PEAK_EXCEEDED]
+    assert alarm == {
+        "id": PEAK_EXCEEDED,
+        "severity": "warning",
+        "message": "15-min-Ziel überschritten: 9,1 kW in der Viertelstunde bis 12:30.",
+        "since": "2026-10-08T10:16:00+00:00",
     }

@@ -38,6 +38,7 @@ def safety_context(
     wallbox_phase_a: Mapping[str, Mapping[Phase, float]],
     present: Mapping[tuple[str, CommandKind], CommandValue],
     vehicle_wallbox: Mapping[str, str | None] = MappingProxyType({}),
+    grid_budget_w: float | None = None,
 ) -> SafetyContext:
     """Der Kontext für die Befehle eines Zyklus; ``now`` ist die Zeit der Safety-Schicht.
 
@@ -46,13 +47,17 @@ def safety_context(
     seine Wallbox unbekannt, und die Phasenvorhersage rechnet vorsichtig mit allen drei Phasen; ohne
     Angabe gilt das für jedes Fahrzeug.
 
+    ``grid_budget_w`` ist das Budget des 15-min-Wächters aus diesem Zyklus
+    (``Regulation.grid_budget_w``, Plan 2c-2a, Präzisierung 12): ``P_zul``, solange der Wächter
+    aktiv oder überschritten ist und der SOC über ``reserve_soc_pct + reserve_guard_pct`` liegt.
+    Regel 2 begrenzt den Netz-Sollwert damit; ``None`` (ohne Angabe) heißt kein Budget.
+
     Was nicht aus den Argumenten übernommen wird:
 
     - ``battery_discharge_w`` ist ``max(−battery.power_w, 0)``; die Akkuleistung ist beim Laden
       positiv.
     - ``soc_pct`` ist ``battery.soc_pct``.
     - ``base_grid_setpoint_w`` ist ``ess.grid_setpoint_w``, der persistente Netz-Sollwert.
-    - ``grid_budget_w`` ist ``None``: Es gibt noch kein 15-min-Budget.
     """
     battery_w = ok_number(snap, "battery.power_w")
     return SafetyContext(
@@ -68,7 +73,7 @@ def safety_context(
         battery_discharge_w=None if battery_w is None else max(-battery_w, 0.0),
         soc_pct=ok_number(snap, "battery.soc_pct"),
         base_grid_setpoint_w=ok_number(snap, "ess.grid_setpoint_w"),
-        grid_budget_w=None,
+        grid_budget_w=grid_budget_w,
     )
 
 

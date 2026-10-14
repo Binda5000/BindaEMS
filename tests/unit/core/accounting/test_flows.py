@@ -1,9 +1,9 @@
 from datetime import UTC, datetime, timedelta
 
 import pytest
-from tests.helpers import snap
+from tests.helpers import T0, snap
 
-from bindaems.core.accounting.flows import SlotAccumulator, allocate, wb_key
+from bindaems.core.accounting.flows import SlotAccumulator, SlotProgress, allocate, wb_key
 from bindaems.shared.timeutil import HOLD_MAX_S
 
 
@@ -163,6 +163,33 @@ def test_unknown_flows_do_not_count_as_covered() -> None:
     assert slot.covered_s == pytest.approx(1.0)  # nur die Sekunde mit bekannten Flüssen
     assert slot.flows_wh == {"pv>house": pytest.approx(1.0)}
     assert slot.counters["grid.energy_import_kwh"] == (1.0, 1.2)
+
+
+def test_current_reports_the_running_slot() -> None:  # Plan 2c-2a, Präzisierung 9
+    acc = SlotAccumulator(counter_signals=[])
+    assert acc.current() is None
+    acc.add(T0, {"grid>house": 3600.0}, snap({}))
+    acc.add(T0 + timedelta(seconds=2), {"grid>house": 3600.0}, snap({}))
+    progress = acc.current()
+    assert (progress.slot_start, dict(progress.flows_wh), progress.covered_s) == (
+        T0,
+        {"grid>house": 2.0},
+        2.0,
+    )
+
+
+def test_current_is_a_copy_and_starts_anew_with_the_next_slot() -> None:
+    acc = SlotAccumulator(counter_signals=[])
+    acc.add(T0, {"grid>house": 3600.0}, snap({}))
+    acc.add(T0 + timedelta(seconds=1), {"grid>house": 3600.0}, snap({}))
+    before = acc.current()
+    acc.add(T0 + timedelta(seconds=2), {"grid>house": 3600.0}, snap({}))
+    assert before == SlotProgress(T0, {"grid>house": 1.0}, 1.0)  # spätere ``add`` ändern sie nicht
+    # Das Intervall über die Slotgrenze zählt zum früheren Slot: Der neue beginnt leer.
+    acc.add(T0 + timedelta(minutes=15), {"grid>house": 3600.0}, snap({}))
+    assert acc.current() == SlotProgress(T0 + timedelta(minutes=15), {}, 0.0)
+    acc.flush()
+    assert acc.current() is None  # nach ``flush`` läuft kein Slot
 
 
 def test_accumulator_never_reports_more_than_a_slot() -> None:
