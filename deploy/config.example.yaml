@@ -147,6 +147,7 @@ control:
   reserve_guard_pct: 5      # Abstand über der USV-Reserve in % SOC; darunter folgen auch Sofort und Boost dem Importlimit
   tesla_average_s: 90       # gleitendes Mittel für den Tesla-Strom
   tesla_caution_s: 60       # Fenster der vorsichtigen Zuteilung an den Tesla
+  evcs_hysteresis_a: 0.5    # EVCS-Strom steigt erst ab Sollwert + 1 A + diesem Wert; sinkt sofort
 
 # Ablage des core (Volume core-data): intent.json, write_budget.json, rate_limits.json und das
 # Entscheidungslog decisions/ (Tagesdateien, höchstens 7 Tage und 50 MB).

@@ -330,6 +330,8 @@ class ControlConfig(_Model):
       sich auch Sofort und Boost am Importlimit aus
     - ``tesla_average_s``: gleitendes Mittel für den Tesla-Strom
     - ``tesla_caution_s``: Fenster der vorsichtigen Zuteilung an den Tesla (Spec 7.3)
+    - ``evcs_hysteresis_a``: Hysterese der EVCS beim Erhöhen in A (Design 6.5): Ihr Strom steigt
+      erst, wenn der Anteil am Überschuss ihn um 1 A plus diesen Wert übersteigt
     """
 
     import_margin_a: Annotated[float, Field(ge=0)] = 1.0
@@ -341,6 +343,7 @@ class ControlConfig(_Model):
     reserve_guard_pct: Annotated[float, Field(ge=0, le=100)] = 5.0
     tesla_average_s: Annotated[float, Field(gt=0)] = 90.0
     tesla_caution_s: Annotated[float, Field(gt=0)] = 60.0
+    evcs_hysteresis_a: Annotated[float, Field(ge=0)] = 0.5
 
 
 class CoreConfig(_Model):

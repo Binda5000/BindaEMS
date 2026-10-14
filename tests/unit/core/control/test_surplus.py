@@ -215,3 +215,38 @@ def test_the_result_keeps_the_order_of_the_cars() -> None:
 def test_no_cars_get_no_shares() -> None:
     assert share_surplus(5000.0, [], U) == {}
     assert share_surplus(None, [], U) == {}
+
+
+# --- Hysterese der EVCS (Design 6.5) --------------------------------------------------------------
+
+HELD = replace(EGOLF, held_a=8, hysteresis_a=0.5)  # 1 A sind beim e-Golf 460 W
+
+
+@pytest.mark.parametrize(
+    ("available_w", "car", "expected"),
+    [
+        (3680.0, HELD, 8),  # Anteil 8,0 A: Er bleibt.
+        (4369.0, HELD, 8),  # knapp unter 8 + 1 + 0,5 A: Er bleibt.
+        (4370.0, HELD, 9),  # 9,5 A: Er steigt, auf abgerundet 9,5 − 0,5.
+        (5289.0, HELD, 10),  # knapp unter 11,5 A: 10, mit 0,5 A Abstand nach unten
+        (5290.0, HELD, 11),
+        (3679.0, HELD, 7),  # unter 8 A: Er sinkt sofort.
+        (2300.0, replace(HELD, minimum=True), 6),  # Min+PV: nie unter den Mindeststrom
+        (7452.0, replace(HELD, held_a=15), 15),  # 16,2 A: Auch vor dem Höchststrom bleibt er.
+        (7590.0, replace(HELD, held_a=15), 16),
+        (9200.0, replace(HELD, held_a=16, max_a=10), 10),  # begrenzt auf max_a
+    ],
+)
+def test_a_held_current_rises_only_from_one_ampere_plus_the_hysteresis(
+    available_w, car, expected
+) -> None:
+    assert share_surplus(available_w, [car], U) == {"egolf": expected}
+
+
+def test_the_next_car_gets_the_rest_after_the_held_current() -> None:
+    # Anteil des e-Golf 9,4 A: Er hält 8 A, der Rest 4324 − 3680 = 644 W geht weiter.
+    assert share_surplus(4324.0, [HELD, SINGLE], U) == {"egolf": 8, "single": 2}
+
+
+def test_without_a_held_current_the_share_is_rounded_down() -> None:
+    assert share_surplus(4324.0, [replace(HELD, held_a=None)], U) == {"egolf": 9}

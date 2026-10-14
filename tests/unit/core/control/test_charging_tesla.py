@@ -98,6 +98,21 @@ def test_tesla_current_follows_the_90_s_average(cfg) -> None:
     assert currents(found) == [(0, 10.0), (71, 11.0), (89, 12.0)]
 
 
+def test_the_evcs_hysteresis_leaves_the_tesla_alone(cfg) -> None:  # Design 6.5
+    # Anteil 7038 / 690 = 10,2 A, ab 1 s 7728 / 690 = 11,2 A: Das Mittel erreicht 11 A, sobald der
+    # Wert von 0 s älter als 90 s ist. Mit der Hysterese der EVCS bliebe der Wunsch bei 10 A.
+    found = run(
+        controller(cfg),
+        cfg,
+        100,
+        make=tesla_inputs,
+        grid_obs=lambda s: grid(grid_w=-7138.0 if s == 0 else -7828.0),
+        tesla_obs=tesla(plugged=True, charging=True),
+        twc_obs=TWC_10_A,
+    )
+    assert currents(found) == [(0, 10.0), (91, 11.0)]
+
+
 def test_tesla_gets_the_lowest_free_value_of_60_s(cfg) -> None:
     found = run(
         controller(cfg),

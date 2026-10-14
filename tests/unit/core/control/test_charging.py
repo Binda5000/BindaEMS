@@ -93,6 +93,56 @@ def test_pv_follows_the_surplus(cfg) -> None:
     ]
 
 
+AT_8_A = evcs(charging=True, phase_a={"L1": 8.0, "L2": 8.0, "L3": 0.0}, power_w=3680.0)
+
+
+def with_control(cfg, **update):
+    """Die Konfiguration mit geänderten Werten im Abschnitt ``control``."""
+    return cfg.model_copy(update={"control": cfg.control.model_copy(update=update)})
+
+
+@pytest.mark.parametrize(
+    ("hysteresis", "expected"),
+    [
+        (0.5, [(131, 9.0), (141, 8.0)]),  # 9,4 A halten 8 A, erst 9,5 A erhöhen
+        (0.0, [(121, 9.0), (141, 8.0)]),  # ohne Hysterese abgerundet wie bisher
+    ],
+)
+def test_pv_raises_the_evcs_current_only_from_one_ampere_plus_the_hysteresis(
+    cfg, hysteresis, expected
+) -> None:  # Design 6.5
+    def grid_at(s: int):
+        if s <= 120:
+            return grid()  # Anteil 3900 / 460 = 8,48 A: Start mit 8 A
+        if s <= 130:
+            return grid(grid_w=-744.0)  # Anteil (3680 + 744 − 100) / 460 = 9,4 A
+        if s <= 140:
+            return grid(grid_w=-790.0)  # 9,5 A
+        return grid(grid_w=-514.0)  # 8,9 A: unter dem Strom, er sinkt sofort
+
+    cfg = with_control(cfg, evcs_hysteresis_a=hysteresis)
+    found = run(
+        controller(cfg),
+        cfg,
+        142,
+        evcs_obs=lambda s: AT_8_A if s > 120 else evcs(),
+        grid_obs=grid_at,
+    )
+    reasons = ("mode_pv", "pv_surplus")
+    assert [c for c in as_commands(found) if c[0] > 120] == [
+        cmd(t, CommandKind.CURRENT, value, reasons) for t, value in expected
+    ]
+
+
+def test_without_an_own_value_the_evcs_takes_the_rounded_share(cfg) -> None:  # Design 6.5
+    c = controller(cfg)
+    run(c, cfg, 121)  # Start mit 8 A bei 120 s
+    c.forget({"wallbox.evcs"})  # etwa nach einem Wert des Keepers
+    found = c.step(inputs(cfg, s=121, evcs_obs=AT_8_A, grid_obs=grid(grid_w=-744.0)))
+    # Anteil 9,4 A: Ohne eigenen Wert hält die Regelung nichts, sie rundet ab.
+    assert [x.command.value for x in found if x.command.kind is CURRENT] == [9.0]
+
+
 def test_import_limit_caps_the_current(cfg) -> None:
     charging = evcs(charging=True, phase_a={"L1": 10.0, "L2": 10.0, "L3": 0.0}, power_w=4600.0)
     found = run(

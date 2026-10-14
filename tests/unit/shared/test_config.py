@@ -227,6 +227,7 @@ def test_charging_defaults(cfg) -> None:
         reserve_guard_pct=5.0,
         tesla_average_s=90.0,
         tesla_caution_s=60.0,
+        evcs_hysteresis_a=0.5,
     )
     assert cfg.vehicles["tesla"].wake == WakeConfig(interval_s=1800.0, per_day=6)
 
@@ -283,6 +284,7 @@ def test_import_margin_must_stay_below_the_import_limit(cfg) -> None:
         ("control", "reserve_guard_pct", 100.1),
         ("control", "tesla_average_s", 0),
         ("control", "tesla_caution_s", 0),
+        ("control", "evcs_hysteresis_a", -0.1),
         ("control", "unbekannt", 1),
     ],
 )
@@ -315,9 +317,11 @@ def test_charging_values_may_be_zero(tmp_path: Path) -> None:
             min_on_s=0,
             min_off_s=0,
             reserve_guard_pct=100,
+            evcs_hysteresis_a=0,
         )
         d["vehicles"]["tesla"]["wake"].update(interval_s=0, per_day=0)
 
     loaded = load_config(write_cfg(tmp_path, zeros))
     assert (loaded.control.start_after_s, loaded.control.reserve_guard_pct) == (0.0, 100.0)
+    assert loaded.control.evcs_hysteresis_a == 0.0
     assert loaded.vehicles["tesla"].wake == WakeConfig(interval_s=0.0, per_day=0)

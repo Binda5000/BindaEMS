@@ -80,6 +80,10 @@ Dazu legt die Regelung fest:
   verlangt; „Laden aus“ kommt dann nur wegen Überlast.
 - Eine Wallbox ist höchstens ein Ladepunkt: Hängen nach der Zuordnung zwei Fahrzeuge an ihr, hat
   ihn das erste nach Priorität. So zählt ihr Strom nur einmal.
+- An einer EVCS hält die Verteilung den zuletzt angeforderten Strom (Hysterese
+  ``control.evcs_hysteresis_a``, Design 6.5): Er sinkt sofort mit dem Anteil, steigt aber erst,
+  wenn der Anteil ihn um 1 A plus die Hysterese übersteigt. Ohne eigenen Wert (nach dem Start, nach
+  ``idle`` und für die Aktoren von ``forget``) wird nur abgerundet.
 
 Die Schicht ist rein: Die Zeit kommt mit den Eingaben, auf der Uhr der Safety-Schicht
 (``ChargeInputs.now``); nur ``boost_until`` und der Kalendertag des Weckkontingents gelten nach
@@ -225,6 +229,11 @@ class _LastValues:
         """Ob ``value`` vom letzten eigenen Wert dieser Art abweicht; ohne einen immer."""
         last = self._sent.get(key)
         return last is None or last.requested != value
+
+    def requested(self, key: _Key) -> CommandValue | None:
+        """Der letzte eigene Wert dieser Art, wie angefordert; ``None`` ohne einen."""
+        last = self._sent.get(key)
+        return None if last is None else last.requested
 
     def retry(self, key: _Key) -> bool:
         """Ob der nächste Befehl dieser Art ``not_taken_retry`` trägt."""
@@ -699,7 +708,11 @@ class ChargeController:
         return reserved
 
     def _surplus_car(self, point: _Point, mode: Effective) -> SurplusCar:
-        """Das Auto des Ladepunkts in der Verteilung; ein ladendes PV-Auto hält ``min_a``."""
+        """Das Auto des Ladepunkts in der Verteilung; ein ladendes PV-Auto hält ``min_a``.
+
+        An einer EVCS hält die Verteilung den zuletzt angeforderten Strom mit der Hysterese
+        ``control.evcs_hysteresis_a`` (Design 6.5); ohne eigenen Wert rundet sie nur ab.
+        """
         return SurplusCar(
             key=point.vehicle,
             full_power=mode in FULL_POWER,
@@ -708,7 +721,16 @@ class ChargeController:
             min_a=point.min_a,
             max_a=point.max_a,
             holding_min=mode is Effective.PV and self._machines[point.vehicle].charging,
+            held_a=self._held_a(point),
+            hysteresis_a=self._cfg.control.evcs_hysteresis_a,
         )
+
+    def _held_a(self, point: _Point) -> int | None:
+        """Der zuletzt angeforderte Strom einer EVCS in ganzen A; sonst ``None``."""
+        if not point.evcs or point.actuator is None:
+            return None
+        held = finite_number(self._last.requested((point.actuator, _CURRENT)))
+        return None if held is None else math.floor(held)
 
     def _decide(
         self,

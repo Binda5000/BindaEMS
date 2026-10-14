@@ -1,9 +1,10 @@
-"""PV-Überschuss und seine Verteilung auf die Autos (Design 6.1, 6.2, Präzisierung 7).
+"""PV-Überschuss und seine Verteilung auf die Autos (Design 6.1, 6.2, 6.5, Präzisierung 7).
 
 Zwei reine Rechnungen; Leistungen sind in W, Ströme in ganzen A je Phase des Autos:
 
 - ``surplus_w``: der Überschuss ``P_verf``, den die Autos zusammen bekommen (6.1)
-- ``share_surplus``: seine Verteilung auf die Autos in der Reihenfolge ihrer Priorität (6.2)
+- ``share_surplus``: seine Verteilung auf die Autos in der Reihenfolge ihrer Priorität (6.2), an
+  einer EVCS mit Hysterese beim Erhöhen (6.5)
 
 Vorzeichen wie überall: Netzleistung positiv bei Bezug, Akkuleistung positiv beim Laden. Ein
 fehlender Wert ist ``None`` (unbekannt), ebenso ein Wert, der keine endliche Zahl ist
@@ -79,6 +80,9 @@ class SurplusCar:
     - ``min_a``, ``max_a``: Mindest- und Höchststrom des Autos
     - ``holding_min``: ein PV-Auto in seinen Stopp-Minuten; es lädt noch mit dem Mindeststrom und
       verbraucht ihn vom Überschuss, auch wenn sein Anteil darunter liegt
+    - ``held_a``, ``hysteresis_a``: die Hysterese an einer EVCS (Design 6.5). ``held_a`` ist der
+      Strom, den die Regelung zuletzt angefordert hat, ``None`` ohne; dann wird nur abgerundet. Der
+      Anteil sinkt sofort unter ihn, steigt aber erst ab ``held_a + 1 + hysteresis_a`` A.
     """
 
     key: str
@@ -88,6 +92,8 @@ class SurplusCar:
     min_a: int
     max_a: int
     holding_min: bool = False
+    held_a: int | None = None
+    hysteresis_a: float = 0.0
 
 
 def share_surplus(
@@ -101,8 +107,9 @@ def share_surplus(
 
     1. Autos mit ``full_power`` bekommen ``max_a``. Ihre Leistung ``max_a × U × n`` geht vorab vom
        Rest ab, wo sie auch stehen. Der Phasenwächter bleibt außen vor (Präzisierung 7).
-    2. Die übrigen kommen der Reihe nach. Ihr Strom ist ``clamp(floor(Rest / (U × n)), 0, max_a)``.
-       Bei ``minimum`` ist er mindestens ``min_a``. Liegt er unter ``min_a``, bleibt er so stehen.
+    2. Die übrigen kommen der Reihe nach. Ihr Strom ist ``clamp(floor(Rest / (U × n)), 0, max_a)``,
+       mit ``held_a`` nach der Hysterese (``SurplusCar``). Bei ``minimum`` ist er mindestens
+       ``min_a``. Liegt er unter ``min_a``, bleibt er so stehen.
     3. Vom Rest geht danach der Strom ab, den das Auto verbraucht: sein Anteil, wenn er mindestens
        ``min_a`` ist. Liegt er darunter, ``min_a`` mit ``holding_min``, sonst nichts: Ein Auto unter
        dem Mindeststrom lädt nicht und lässt den Rest den folgenden Autos.
@@ -142,10 +149,26 @@ def _unknown_share(car: SurplusCar) -> int | None:
 def _share_a(car: SurplusCar, rest_w: float, voltage_v: float) -> int:
     """Der Anteil des PV-Autos am Rest: abgerundet, nie negativ, höchstens ``max_a``.
 
-    Bei ``minimum`` ist er mindestens ``min_a``; sonst darf er darunter liegen.
+    Mit ``held_a`` bleibt er dort, bis der Rest ihn um 1 A plus ``hysteresis_a`` übersteigt
+    (``_hysteresis``). Bei ``minimum`` ist er mindestens ``min_a``; sonst darf er darunter liegen.
     """
-    current_a = min(max(math.floor(rest_w / (voltage_v * car.phases)), 0), car.max_a)
+    exact_a = rest_w / (voltage_v * car.phases)
+    current_a = math.floor(exact_a) if car.held_a is None else _hysteresis(car, car.held_a, exact_a)
+    current_a = min(max(current_a, 0), car.max_a)
     return max(current_a, car.min_a) if car.minimum else current_a
+
+
+def _hysteresis(car: SurplusCar, held_a: int, exact_a: float) -> int:
+    """Die Hysterese (Design 6.5): ``exact_a`` ist der Rest in A, ``held_a`` der gehaltene Strom.
+
+    Unter ``held_a`` sinkt der Strom sofort auf abgerundet ``exact_a``. Erhöht wird erst ab
+    ``held_a + 1 + hysteresis_a``, und dann auf abgerundet ``exact_a − hysteresis_a``: So liegt der
+    neue Strom wieder mindestens ``hysteresis_a`` unter dem Rest. Dazwischen bleibt ``held_a``.
+    """
+    current_a = math.floor(exact_a)
+    if current_a < held_a:
+        return current_a
+    return max(math.floor(exact_a - car.hysteresis_a), held_a)
 
 
 def _used_a(car: SurplusCar, current_a: int) -> int:
