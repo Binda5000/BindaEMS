@@ -92,12 +92,13 @@ Stand an der Anlage am 14.10.2026: 2c-1 ist nicht ausgerollt; evcc regelt beide 
 8. **Sperren (Design 5.6).** Gesperrt ist Victron, wenn `SafetyContext.locks` für `victron` Gründe nennt; nicht steuerbar nach seinen Fähigkeiten. In beiden Fällen sendet der Akku-Sollwert nichts und vergisst seine Werte; Fehlbetrag, Unterstützung und Ziel rechnet er weiter für Health. Ein offener Schreibvorgang oder eine Übergabe von Victron (`ChargeInputs.blocked`) hält nur den Befehl dieses Zyklus zurück.
 9. **15-min-Wächter: Messung (Design 6.1).**
    - **Quelle:** `SlotAccumulator.current()` (neu) liefert den laufenden Slot. Die Energie bisher ist die Summe seiner Flüsse `grid>*`, die Leistung des Zyklus die Summe der Flüsse `grid>*` aus `allocate`.
-   - **Boost:** Je Wallbox kommt ihr Netzanteil des Zyklus (`grid>wb:<w>`) mit. Der Wächter integriert ihn für die Autos in Boost selbst und zieht ihn ab.
+   - **Boost:** Je Wallbox kommt ihr Netzanteil des Zyklus (`grid>wb:<w>`) mit. Der Wächter integriert ihn für die Autos in Boost selbst und zieht ihn ab, nach dem Halteprinzip der Abrechnung und über dieselben Lücken (`HOLD_MAX_S` = 5 s in `shared/timeutil.py`, auch Standard von `SlotAccumulator`); sonst passten `E_bisher` und die abgezogene Boost-Energie nach einem Stocken nicht zusammen.
    - **Uhr:** Der Wächter rechnet ganz auf der Wanduhr (`wall_now`), wie die Viertelstunden der Abrechnung.
    - **Lückenhaft** ist eine Viertelstunde bis zu ihrem Ende, wenn eins davon eintritt:
      - Zwischen zwei Zyklen mit bekannter Leistung liegen mehr als 10 s (`GAP_S`).
      - Der erste Zyklus mit bekannter Leistung kommt später als 10 s nach ihrem Beginn, etwa nach dem Start des core.
      - Die Regelung ruhte (`idle`).
+     - Die Wanduhr springt innerhalb der Viertelstunde zurück.
 10. **Vergleich (Design 6.2).**
     - **Verlangte Senkung** = `max(Mittel, Basis + W) − P_zul`, mit `W` vor dem Wächter und dem Mittel der letzten 30 s (ohne Boost).
     - **Warum `Basis + W`:** Mit Victron live begrenzt Regel 2 den Override auf `P_zul`. ESS hielte den Netzbezug so immer unter `P_zul`, ganz aus dem Akku, und die Wallboxen würden nie gedrosselt (gegen die Reihenfolge von Design 6.3). Mit `W` drosselt der Wächter, sobald die Autos mehr Netz wollen, als das Budget trägt; das Mittel fängt den Rest, etwa einen Akku am Min-SOC.
@@ -114,9 +115,10 @@ Stand an der Anlage am 14.10.2026: 2c-1 ist nicht ausgerollt; evcc regelt beide 
       - in umgekehrter Reihenfolge (Sofort vor Min+PV vor PV-Überschuss, innerhalb einer Stufe die höchste Priorität zuerst)
       - die erste Grenze, für die `P_zul − max(Mittel, Basis + W) ≥ ihre Senkung + 1000 W`
     - Mit dem Ende der Viertelstunde fallen alle Grenzen weg.
+    - **Wer gedrosselt wird:** nur ein Auto an einem Ladepunkt, den die Laderegelung regelt; ein ungeregeltes Auto in Boost zählt nur für den Boost-Anteil. Verlässt ein Auto die Liste, wechselt es den Modus oder geht es in Boost oder Aus, fällt seine Grenze still weg (ohne neue Wartezeit).
 12. **Akku-Anforderung und Budget (Design 5.3 Punkt 2, 6.2, 6.3 Punkt 2).**
     - **Budget:** `PeakLimits.budget_w` ist `P_zul`, solange der Wächter aktiv oder überschritten ist und der SOC über `battery.reserve_soc_pct + control.reserve_guard_pct` liegt. Sonst ist es `None`, auch bei unbekanntem SOC.
-    - **Wirkung:** Der Akku-Sollwert setzt `W' = max(0, min(W, budget_w − Basis))`. Dasselbe Budget geht als `grid_budget_w` in den `SafetyContext`.
+    - **Wirkung:** Der Akku-Sollwert setzt `W' = max(0, min(W, floor10(budget_w) − Basis))` mit `floor10(x) = 10 · floor(x / 10)`; so liegt `T` nie über dem Budget, und Regel 2 muss nicht auf einen Wert außerhalb des Zehner-Rasters klemmen. Dasselbe Budget geht als `grid_budget_w` in den `SafetyContext`.
     - **Folge:** Der Akku überbrückt genau, was die Wallboxen nicht oder noch nicht bringen, und die Schwelle der Unterstützung gilt dafür nicht. Unter der Schwelle senkt weder der Akku-Sollwert noch Regel 2 den Override für den Wächter; dann bleiben die Wallboxen, sonst gilt die Überschreitung.
     - **Abweichung von Design 4.3:** `grid_budget_w` ist nicht immer `P_zul`, sondern nur über der Schwelle; sonst entlüde Regel 2 den Akku bis zum Min-SOC.
 13. **Letzte 120 s (Design 6.4).** Ab 120 s vor dem Ende der Viertelstunde startet kein Auto, dessen Mindestleistung über `P_zul − Mittel` liegt (`PeakLimits.no_start`, ohne Boost). Die Laderegelung behandelt das wie eine Grenze, die den Mindeststrom nicht trägt; ein Auto, das lädt, betrifft es nicht.
@@ -830,7 +832,7 @@ git commit -m "feat(core): Fehlbetrag der Autos und Akku-Unterstützung nach Mod
   - `class BatteryController`:
     - `__init__(self, cfg: Config) -> None`
     - `assess(self, now: datetime, soc_pct: float | None, pv_w: float | None, house_w: float | None, cars: Sequence[BatteryCar]) -> BatteryNeed | None`: `None`, wenn PV, Haus oder `deficits` unbekannt sind. Dann bleibt `Support` unberührt.
-    - `decide(self, now: datetime, need: BatteryNeed | None, *, base_w: float | None, budget_w: float | None, present: Mapping[Key, CommandValue], controllable: bool, locked: bool, blocked: bool) -> list[ControlCommand]`: höchstens ein Befehl an `(VICTRON, GRID_SETPOINT)` nach den Präzisierungen 6 bis 8, mit `W' = max(0, min(W, budget_w − base_w))` bei einem Budget (Präzisierung 12)
+    - `decide(self, now: datetime, need: BatteryNeed | None, *, base_w: float | None, budget_w: float | None, present: Mapping[Key, CommandValue], controllable: bool, locked: bool, blocked: bool) -> list[ControlCommand]`: höchstens ein Befehl an `(VICTRON, GRID_SETPOINT)` nach den Präzisierungen 6 bis 8, mit `W' = max(0, min(W, floor10(budget_w) − base_w))` bei einem Budget (Präzisierung 12)
     - `note_verdict(self, command: Command, verdict: Verdict | None, *, not_sent: bool = False) -> None`: über `LastValues.judged`. Ein Urteil mit Wert (`sendable`, ohne `not_sent`) merkt `now` des letzten `decide` als Zeit fürs Auffrischen.
     - `note_result(self, result: WriteResult) -> None`, `forget(self, actuators: Collection[str]) -> None`
     - `idle(self) -> None`: vergisst die Werte und beginnt `Support` neu
