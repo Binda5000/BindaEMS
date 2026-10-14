@@ -505,6 +505,32 @@ def test_the_cars_charge_one_after_the_other(cfg) -> None:
     ]
 
 
+def evcs_decision(seconds: int, kind: CommandKind, result: DecisionResult) -> Decision:
+    value = 9.0 if kind is CommandKind.CURRENT else True
+    return replace(tessie_decision(seconds, kind, value, result), actuator="wallbox.evcs")
+
+
+def test_the_evcs_follows_the_sun_with_few_current_commands(cfg) -> None:  # Design 6.5
+    sunny = SCENARIOS["sonnig"].checks
+    # Der e-Golf lädt von 3150 bis 6000 s, 47,5 min: 7 Strombefehle sind 8,8 je Stunde.
+    samples = one_after_the_other(tesla_until=3000, egolf_from=3150)
+    seven = [evcs_decision(3150 + 60 * i, CommandKind.CURRENT, DecisionResult.OK) for i in range(7)]
+    eighth = evcs_decision(5000, CommandKind.CURRENT, DecisionResult.OK)
+    assert sunny(result_of(cfg, samples, seven)) == []
+    assert sunny(result_of(cfg, samples, [*seven, eighth])) == [
+        "8 Strombefehle an die EVCS in 47,5 min Laden von „egolf“: 10,1 je Stunde, verlangt "
+        "höchstens 10."
+    ]
+    # Es zählen nur Strombefehle mit Wert an die EVCS.
+    others = [
+        evcs_decision(5000, CommandKind.CURRENT, DecisionResult.REJECTED),
+        evcs_decision(5001, CommandKind.CURRENT, DecisionResult.DEFERRED),
+        evcs_decision(5002, CommandKind.CHARGING, DecisionResult.OK),
+        tessie_decision(5003, CommandKind.CURRENT, 9.0, DecisionResult.OK),
+    ]
+    assert sunny(result_of(cfg, samples, [*seven, *others])) == []
+
+
 def test_the_evcs_must_drop_during_the_peak(cfg) -> None:
     check = SCENARIOS["abend-sofort"].checks
     before = [egolf_at(1199, 15.0)]

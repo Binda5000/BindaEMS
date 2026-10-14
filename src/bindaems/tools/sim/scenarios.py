@@ -79,6 +79,8 @@ RESERVE_PCT: Final = 20.0  # unter diese USV-Reserve entlädt das Modell nie (Sz
 RESERVE_L1_W: Final = 1000.0  # dort mehr Hauslast auf L1: frei ≈ 13 A unter dem Importziel
 SUNNY_TESLA_PCT: Final = 72.0  # SOC des Tesla in „sonnig“: „Complete“ nach etwa einer Stunde
 CLOUDY_TESLA_PCT: Final = 75.0  # dasselbe in „wolkig“, wo er im Mittel weniger Strom bekommt
+# „sonnig“: höchstens so viele Strombefehle an die EVCS je Stunde Laden des e-Golf (Design 6.5)
+EVCS_CURRENTS_PER_HOUR: Final = 10
 
 FIVE_A_PV_W: Final = 4600.0  # konstante PV in „tesla-5a“: Der Anteil des Tesla ist 5 A …
 FIVE_A: Final = 5.0  # … und mit diesem Strom lädt er am Ende
@@ -362,6 +364,28 @@ def _one_after_the_other_check(*, tesla_min: float, egolf_min: float) -> Check:
     return Check(text, partial(_one_after_the_other, tesla_min=tesla_min, egolf_min=egolf_min))
 
 
+def _few_evcs_currents(result: SimResult) -> list[str]:
+    """Höchstens ``EVCS_CURRENTS_PER_HOUR`` Strombefehle an die EVCS je Stunde, in der der e-Golf
+    lädt (Hysterese, Design 6.5). Es zählen Entscheidungen mit Wert, nicht zurückgestellte oder
+    abgelehnte. Lädt er nicht, gibt es nichts zu prüfen; das meldet ``_one_after_the_other``."""
+    minutes = _minutes(result.samples, EGOLF)
+    if minutes == 0:
+        return []
+    evcs = wallbox_actuator(EVCS_BOX)
+    count = sum(
+        1
+        for d in result.decisions
+        if d.actuator == evcs and d.kind is CommandKind.CURRENT and d.result not in _HELD_BACK
+    )
+    per_hour = count * MINUTE_S / minutes
+    if per_hour <= EVCS_CURRENTS_PER_HOUR:
+        return []
+    return [
+        f"{count} Strombefehle an die EVCS in {de(round(minutes, 1))} min Laden von „egolf“: "
+        f"{de(round(per_hour, 1))} je Stunde, verlangt höchstens {EVCS_CURRENTS_PER_HOUR}."
+    ]
+
+
 def _evcs_lower_during_the_peak(result: SimResult) -> list[str]:
     """Ab ``PEAK_REACTION_S`` nach Beginn der Spitze liegt der Strom der EVCS unter dem davor."""
     begin, end = PEAK_S
@@ -613,8 +637,14 @@ def _no_foreign_alarm(result: SimResult) -> list[str]:
 
 def _sonnig() -> Scenario:
     """Die Verteilung ist gierig nach Priorität (Design 6.2): Mit höchstens 10 kW PV laden die
-    Autos nacheinander, erst der Tesla bis „Complete“, dann der e-Golf."""
+    Autos nacheinander, erst der Tesla bis „Complete“, dann der e-Golf. Dem Rauschen der Hauslast
+    folgt die EVCS dank der Hysterese nicht (Design 6.5)."""
     start, duration_s, seed = SUMMER, 2 * HOUR_S, 1
+    few = Check(
+        f"Höchstens {EVCS_CURRENTS_PER_HOUR} Strombefehle an die EVCS je Stunde, in der „egolf“ "
+        "lädt (Hysterese).",
+        _few_evcs_currents,
+    )
     return Scenario(
         name="sonnig",
         title="Sonniger Tag, beide Autos im PV-Modus",
@@ -625,7 +655,7 @@ def _sonnig() -> Scenario:
         intent=_intent(tesla=ChargeMode.PV, egolf=ChargeMode.PV),
         live=True,
         events=_weather(start, duration_s, seed, pv=_sun(start)),
-        checks=Checks((_one_after_the_other_check(tesla_min=45.0, egolf_min=45.0),)),
+        checks=Checks((_one_after_the_other_check(tesla_min=45.0, egolf_min=45.0), few)),
     )
 
 
