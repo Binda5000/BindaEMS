@@ -1,7 +1,9 @@
 # Übergabe an die nächste Session
 
-Stand: 12.10.2026. Plan 2b ist auf `main` (Fast-Forward vom Branch `ccr-e451cb4c-qeg1tm` mit
-Zustimmung des Betreibers). `main` ist seit dem 12.10.2026 auch der Standard-Branch auf GitHub.
+Stand: 14.10.2026. Plan 2c-1 (Laderegelung) ist umgesetzt und je Task geprüft; er liegt auf dem
+Branch `ccr-e451cb4c-qeg1tm`, der Gesamtreview und die Integration nach `main` folgen. Plan 2b ist
+auf `main` (Fast-Forward vom selben Branch mit Zustimmung des Betreibers). `main` ist seit dem
+12.10.2026 auch der Standard-Branch auf GitHub.
 
 ## Kurzfassung
 
@@ -22,9 +24,9 @@ Zustimmung des Betreibers). `main` ist seit dem 12.10.2026 auch der Standard-Bra
   18 Tasks; Entscheidung des Betreibers vom 11.10.2026: subagent-driven):
   - Aktoren in `core/actuators`: EVCS (schreibt über den GX-Dienst `evcharger` des Cerbo, liest
     weiter per Modbus), Victron (Netz-Sollwert-Override, Entladegrenze und Min-SOC per MQTT) und
-    Tesla (Befehle über Tessie im Hintergrund, weckt das Auto nie). Jeder Befehl geht durch den
-    Ausführer (`core/control`), die Safety-Schicht und das Rücklesen; im Dry-Run wird er nur
-    protokolliert.
+    Tesla (Befehle über Tessie im Hintergrund; geweckt wird das Auto seit 2c-1 nur durch einen
+    Start mit Weckerlaubnis). Jeder Befehl geht durch den Ausführer (`core/control`), die
+    Safety-Schicht und das Rücklesen; im Dry-Run wird er nur protokolliert.
   - sicherer Zustand und Übergabe am Ende des Live-Betriebs: erst die Sicherwerte, dann die Freigabe
     des Watchdogs
   - Heartbeat nur, solange der core regelt, und nur aus einem fehlerfreien Zyklus. Der core schärft
@@ -38,9 +40,9 @@ Zustimmung des Betreibers). `main` ist seit dem 12.10.2026 auch der Standard-Bra
   - Werkzeug `verify_part2` für das Prüfprotokoll Teil 2 (EVCS, Tesla, Victron)
   - `core/actuators` gehört zum Importvertrag (die Safety-Schicht importiert es nicht) und zur
     Abdeckungsgrenze von 90 %
-  - **Noch keine Regelung (2c) und keine Bedienung (2d):** Befehle entstehen nur aus dem sicheren
-    Zustand und der Übergabe, und im Regelbetrieb ist noch kein Aktor live. Die Punkte aus „Vor
-    einer Live-Schaltung in 2b zu klären“ (Gesamtreview 2a) sind erledigt.
+  - **Stand 2b:** Befehle entstanden nur aus dem sicheren Zustand und der Übergabe; die Regelung
+    kam mit 2c-1, die Bedienung kommt mit 2d. Die Punkte aus „Vor einer Live-Schaltung in 2b zu
+    klären“ (Gesamtreview 2a) sind erledigt.
   - **Gesamtreview über den ganzen Branch:** „bereit mit Korrekturen“, keine kritischen Befunde.
     Der Fix-Durchgang hat die vier wichtigen Befunde behoben, jeder mit einem Test, der vorher
     scheiterte:
@@ -56,21 +58,51 @@ Zustimmung des Betreibers). `main` ist seit dem 12.10.2026 auch der Standard-Bra
     DESS vor jedem Schreiben, vorgefundene Entladegrenze von 0 W). Das Re-Review hat alles
     bestätigt. Entscheidungen, geparkte Befunde und aufgeschobene Kleinigkeiten:
     `docs/superpowers/plans/2026-10-11-phase-2b-entscheidungen.md`.
+- **Phase 2c-1 (Laderegelung) ist umgesetzt und je Task geprüft** (Plan:
+  `docs/superpowers/plans/2026-10-12-phase-2c1-laderegelung.md`, Design:
+  `docs/superpowers/specs/2026-10-12-phase-2c1-laderegelung-design.md`, 16 Tasks; der Betreiber hat 2c
+  am 12.10.2026 in 2c-1 und 2c-2 geteilt, Ausführung subagent-driven):
+  - Der core regelt die beiden Ladepunkte (EVCS und Tesla) selbst. Die Bausteine liegen rein in
+    `core/control` (Aufbau unten):
+    - Lademodi je Auto: PV-Überschuss (Standard), Min+PV, Sofort, Aus und Boost. Die Absicht bekommt
+      `vehicles`, `priority` und `surplus_priority`; Ungültiges lehnt der core mit `invalid` ab.
+    - Phasenwächter mit Zielen je Modus, Last ohne Akku-Hilfe und Überlast-Stufen
+    - Tesla: gleitendes Mittel und 90-s-Regel, Weckstart mit Erlaubnis und Kontingent, erneutes
+      Anfordern nach „nicht übernommen“ (nie dringend)
+    - vereinfachte Zuordnung Auto ↔ Wallbox mit Übersteuerung und „unklar“ (die volle Erkennung
+      folgt mit 2c-2), Degradation der Ladepunkte und Wiederaufnahme nach einem Inselbetrieb
+  - Die geparkten Befunde aus 2b sind erledigt: Freigabe 0 erst ohne offenen Schreibvorgang,
+    Aufräumen des Entscheidungslogs auch nach einem gescheiterten Zyklus, Heartbeat-Startwert je
+    Lauf mit bestätigter Freigabe, SAFE ohne einen Tesla, der nicht lädt, und eine Auslösung des
+    Watchdogs lässt die Erwartungen der Erkennung fremder Änderungen vergessen.
+  - Selbstprüfung `multi_mode` und `import_limit`; Health mit `vehicles`; die Entscheidungen tragen
+    Überschuss, Grenze des Wächters und Ist-Werte (im Dry-Run die von evcc).
+  - Der Anlagensimulator `bindaems.tools.sim` lässt die echte Laufzeit mit echten Aktoren in
+    simulierter Zeit gegen ein Modell der Anlage laufen. Zehn Szenarien sind in der CI grün
+    (Betriebshandbuch, „Simulator“).
+  - **Beim Bau geändert:** Das Prüffenster des Tesla-Stroms im Tessie-Cache reicht jetzt von 10 bis
+    75 s nach der Bestätigung (Frist 85 s, vorher 10 bis 50 s und 75 s). Der Simulator zeigte, dass
+    das alte Fenster die 60-s-Abfrage eines angesteckten, noch nicht ladenden Autos nur mit etwa zwei
+    Dritteln Wahrscheinlichkeit fing, ein verlorener 5-A-Befehl blieb unbemerkt. Die übrigen
+    Änderungen gegenüber Plan und Design stehen im Kopf des Designs und in den Absätzen „Stand
+    Plan 2c-1“ der Spec.
+  - **Noch nicht:** Befehle an Victron und der 15-min-Wächter (2c-2), die Bedienung (2d). Live ist
+    weiterhin kein Aktor.
 - **Images:** `ghcr.io/binda5000/bindaems-core:latest` und `ghcr.io/binda5000/bindaems-app:latest`.
   Sie sind öffentlich, und die CI setzt `latest` bei jedem Push auf `main`. core und app werden
   immer gemeinsam aus demselben Stand ausgerollt (gleiche Compose-Datei, gleiche Image-Tags): Die
   UI-Schemas sind streng, eine abweichende Version zeigt auf der System-Seite nur „Unerwartete
   Antwort vom Server“.
-- **Tests:** 3627 Python-Tests, davon 10 Property-Tests mit Hypothesis (5 für die Safety-Schicht),
-  und 233 UI-Tests; Abdeckung 96 % insgesamt und 99 % für `core/safety`, `core/control` und
-  `core/actuators`.
+- **Tests:** 4575 Python-Tests, davon 16 Property-Tests mit Hypothesis (5 für die Safety-Schicht,
+  6 für den Phasenwächter), und 233 UI-Tests; Abdeckung 97 % insgesamt und 99 % für `core/safety`,
+  `core/control` und `core/actuators`.
   Geprüft wird mit ruff, mypy strict (auch für den Watchdog), import-linter (4 Verträge), pytest
   mit Abdeckungsgrenzen (≥ 75 % insgesamt, ≥ 90 % für `core/safety`, `core/control` und
   `core/actuators`), Vitest mit svelte-check, Prettier und ESLint; dazu E2E mit Playwright.
 - **Offen:**
-  - Plan 2c schreiben (siehe „Nächster Schritt“)
-  - an der Anlage: der Rest von Teil 2 (EVCS-Verbindungsabbruch, Victron 17.2-4; siehe „Offen
-    an der Anlage“)
+  - an der Anlage: Images ausrollen, Dry-Run neben evcc beginnen, der Rest von Teil 2
+    (EVCS-Verbindungsabbruch, Victron 17.2-4; siehe „Offen an der Anlage“)
+  - Plan 2c-2 („Akku und Spitzen“) schreiben, danach Plan 2d (siehe „Nächster Schritt“)
   - die Abnahme der Phase 1 an der Anlage
   - kleine Punkte an der Anlage (siehe „Stand der Installation“): manuelle Punkte von Teil 1 und
     die Log-Zeile der Probe
@@ -87,6 +119,10 @@ Zustimmung des Betreibers). `main` ist seit dem 12.10.2026 auch der Standard-Bra
   - Plan 2a lief mit `superpowers:subagent-driven-development`: je Task ein Implementierer und ein
     Reviewer, ein Ledger mit Rulings und aufgeschobenen Kleinigkeiten, am Ende der Gesamtreview.
   - Plan 2b lief ebenso subagent-driven (Entscheidung des Betreibers vom 11.10.2026).
+  - Plan 2c-1 lief ebenso (Entscheidung des Betreibers vom 12.10.2026). Für die Szenarien des
+    Simulators galt: Scheitert eines, liegt der Fehler zuerst in der Regelung (eigener
+    `fix(core)`-Commit mit Test); ein Szenario ändert man nur, wenn es physikalisch nicht zu
+    schaffen ist.
   - Befunde werden nach ihrer Wirkung neu bewertet. Critical und Important kommen in einen
     Fix-Durchgang, jeder mit einem Test, der vorher scheitert. Minors werden gesammelt und auf
     Wunsch erledigt („bitte die kleinigkeiten erledigen“).
@@ -109,7 +145,7 @@ Zustimmung des Betreibers). `main` ist seit dem 12.10.2026 auch der Standard-Bra
 
 | Dokument | Inhalt |
 |---|---|
-| `docs/superpowers/specs/2026-10-08-bindaems-design.md` | Spec, verbindlich. Wichtig: 8 Sicherheit, 13 Web-UI, 14 Login, 17 Prüfprotokoll, 18 Phasenplan, 19 offene Punkte |
+| `docs/superpowers/specs/2026-10-08-bindaems-design.md` | Spec, verbindlich. Wichtig: 7 Regelung, 8 Sicherheit, 13 Web-UI, 14 Login, 17 Prüfprotokoll, 18 Phasenplan, 19 offene Punkte. Die Absätze „Stand Plan 2a/2b/2c-1“ gehen dem älteren Text davor vor |
 | `docs/superpowers/plans/2026-10-08-phase-1a-fundament-datenerfassung.md` | Plan 1a (core) |
 | `docs/superpowers/plans/2026-10-09-phase-1b-app-backend.md` | Plan 1b (app) |
 | `docs/superpowers/plans/2026-10-09-phase-1c-web-ui.md` | Plan 1c (UI), mit Anhang A zu den API-Formen |
@@ -117,7 +153,9 @@ Zustimmung des Betreibers). `main` ist seit dem 12.10.2026 auch der Standard-Bra
 | `docs/superpowers/plans/2026-10-10-phase-2a-entscheidungen.md` | Entscheidungen, geparkte Befunde und aufgeschobene Kleinigkeiten aus der Umsetzung von Plan 2a |
 | `docs/superpowers/plans/2026-10-11-phase-2b-aktoren.md` | Plan 2b (Aktoren), 18 Tasks; Entscheidungen des Betreibers vom 11.10.2026, Präzisierungen, Texte |
 | `docs/superpowers/plans/2026-10-11-phase-2b-entscheidungen.md` | Entscheidungen, geparkte Befunde und aufgeschobene Kleinigkeiten aus der Umsetzung von Plan 2b |
-| `docs/betrieb.md` | Betriebshandbuch: Installation, Proxy (6), HA (7), Tarif (8), Sicherung (9), Prüfprotokolle einschließlich Teil 2 (11), Web-UI (12), Betriebszustände, Freigaben, Übergabe und Entscheidungslog (13), Watchdog am Cerbo (14) |
+| `docs/superpowers/specs/2026-10-12-phase-2c1-laderegelung-design.md` | Design 2c-1 (Laderegelung), umgesetzt; der Kopf nennt, was sich beim Bau geändert hat |
+| `docs/superpowers/plans/2026-10-12-phase-2c1-laderegelung.md` | Plan 2c-1, 16 Tasks; Präzisierungen gegenüber dem Design, Texte, Szenarien des Simulators |
+| `docs/betrieb.md` | Betriebshandbuch: Installation, Proxy (6), HA (7), Tarif (8), Sicherung (9), Prüfprotokolle einschließlich Teil 2 (11), Web-UI (12), Betriebszustände, Freigaben, Übergabe und Entscheidungslog (13), Watchdog am Cerbo (14); am Ende „Laderegelung“ (Modi, Absicht, Dry-Run-Vergleich mit evcc, Umstieg) und „Simulator“ |
 | `cerbo-watchdog/README.md` | Watchdog: Zustände, Zeiten, D-Bus-Pfade, Installation und Probe |
 | `docs/verification/abnahme-phase-1.md` | Checkliste für die Abnahme der Phase 1 |
 | `docs/verification/README.md` | Prüfprotokoll Teil 1, Preise, Teil 2 (`verify_part2`) und Watchdog-Probe: Aufruf und Ergebnis |
@@ -136,15 +174,24 @@ Zustimmung des Betreibers). `main` ist seit dem 12.10.2026 auch der Standard-Bra
     - `control/`: Betriebszustände (`operating.py`) und Absicht (`intent.py`, Datei `intent.json`);
       seit 2b die Aktor-Schnittstelle und der Ausführer (`actuator.py`, `executor.py`), der sichere
       Zustand (`safe_state.py`), die Übergabe (`ownership.py`), die Erkennung fremder Änderungen
-      (`foreign.py`) und der Aufbau des `SafetyContext` (`context.py`). Auch rein.
+      (`foreign.py`) und der Aufbau des `SafetyContext` (`context.py`); seit 2c-1 die Laderegelung
+      (nächster Punkt). Auch rein.
+    - Die Laderegelung in `control/` (seit 2c-1):
+      - `phase_guard.py`: Phasenwächter (Ziele je Modus, Last, Verteilung, Überlast)
+      - `surplus.py`: Überschuss und seine Verteilung auf die Autos
+      - `charge_modes.py`: Lademodi mit Start-, Stopp- und Mindestzeiten
+      - `charge_inputs.py`: Eingaben aus Snapshot und abgeleiteten Größen
+      - `assignment.py`: Zuordnung, Ansteckvorgänge, Boost und Übersteuerung
+      - `tesla_policy.py`, `charging_tesla.py`: gleitendes Mittel, Weckkontingent, Tesla-Besonderheiten
+      - `charging.py`: der `ChargeController` verbindet die Bausteine je Zyklus
     - `actuators/`: die konkreten Aktoren für EVCS (GX-Dienst `evcharger`), Victron (MQTT) und
       Tesla (Tessie)
     - `persistence/`: atomare JSON-Dateien (mit `fsync` des Verzeichnisses) und das Entscheidungslog
       (`decision_spool.py`)
     - `watchdog_client/`: Watchdog-Status lesen und Heartbeat senden
   - Auf Geräte schreibt der core den Heartbeat, die Sicherwerte im sicheren Zustand und die der
-    Übergabe am Ende des Live-Betriebs. Die Regelung folgt mit 2c. Jeder Befehl geht durch die
-    `SafetyLayer`.
+    Übergabe am Ende des Live-Betriebs und seit 2c-1 die Befehle der Laderegelung an EVCS und
+    Tesla (nie an Victron; das folgt mit 2c-2). Jeder Befehl geht durch die `SafetyLayer`.
 - **`src/bindaems/app`**
   - FastAPI mit SQLite (SQLAlchemy Core)
   - Login, Sitzungen, TOTP, CSRF, Rollen
@@ -155,8 +202,9 @@ Zustimmung des Betreibers). `main` ist seit dem 12.10.2026 auch der Standard-Bra
   - liefert das UI unter `/` aus
 - **`src/bindaems/shared`:** Konfiguration, Domänentypen (auch `control.py`: Befehle, Betriebsarten,
   Absicht; `decisions.py`: Entscheidung und ihr deutscher Text), Zeit (`AnchoredClock`), Influx-Client.
-  **`src/bindaems/tools`:** Prüfprotokoll Teil 1, `watchdog_config`, `watchdog_probe` und
-  `verify_part2` (mit dem Paket `part2/`).
+  **`src/bindaems/tools`:** Prüfprotokoll Teil 1, `watchdog_config`, `watchdog_probe`,
+  `verify_part2` (mit dem Paket `part2/`) und der Anlagensimulator `sim/` (Modell, Fahrzeuge,
+  Lauf, Kennzahlen, Szenarien, Bericht).
 - **`cerbo-watchdog/`**
   - Python-Dienst für Venus OS (Python ≥ 3.8, nur Standardbibliothek und die Module des Geräts)
   - die Logik (`bindaems_watchdog/logic.py`) ist rein und in der CI getestet, die D-Bus-Anbindung
@@ -188,6 +236,9 @@ uv run coverage report --include="src/bindaems/core/safety/*,src/bindaems/core/c
 
 # nur der Cerbo-Watchdog (läuft ohne D-Bus)
 uv run pytest tests/unit/cerbo_watchdog -q
+
+# Anlagensimulator: ein Szenario von Hand (Betriebshandbuch, „Simulator“); Rückgabe 0 = alles grün
+uv run python -m bindaems.tools.sim --szenario wolkig --out bericht.md
 
 # UI
 cd ui && pnpm check && pnpm lint && pnpm test
@@ -256,15 +307,30 @@ Demo-Zugänge: `admin`, `gast` (Lesen) und `sicher` (Admin mit TOTP, Geheimnis
   Änderungen, Heartbeat und Tesla-Fehler laufen auf der `AnchoredClock` (Wanduhr beim Start plus
   monotone Zeit). Messwerte, Viertelstunden und die Zeitpunkte der Entscheidungen bleiben bei der
   Wanduhr. Darum tragen Alarme der Safety-Schicht, des sicheren Zustands, der Aktoren und der
-  fremden Änderungen eine andere Zeit als „seit“ als die übrigen (Betriebshandbuch 14).
+  fremden Änderungen eine andere Zeit als „seit“ als die übrigen (Betriebshandbuch 14). Die
+  Laderegelung (2c-1) hält es ebenso: Ihre Zeiten (Timer, Fenster, Überlast, Weckabstand) laufen auf
+  der Uhr der Safety-Schicht (`ChargeInputs.now`), `boost_until` und der Kalendertag des
+  Weckkontingents (Wiener Zeit) nach der Wanduhr (`ChargeInputs.wall_now`).
 - **Tests mit respx und Tessie (2b):** Eine Anfrage ohne passende Route fängt der Tesla-Aktor als
   Fehler ab, und respx zeichnet sie nicht auf. Wer prüft, dass nichts gesendet wird, braucht eine
   Catch-all-Route und zählt deren Aufrufe.
+- **Tests der Laderegelung (2c-1):** Fehlen die Ströme von EVCS und Wall Connector (auch 0 A), gilt
+  jede Phase als voll, und kein Auto startet (Design 5.5). Die gemeinsamen Vorgaben stehen in
+  `tests/unit/core/control/charge_helpers.py`. Die Regelung sendet nur Änderungen; wer einem Aktor
+  Befehle gibt, ohne dass sie es sieht, ruft `ChargeController.forget` auf (die Laufzeit tut das für
+  Keeper, Übergabe, fremde Systeme und den Wechsel der Betriebsart).
+- **Simulator (2c-1):** Er nutzt die echten Aktoren und die Parser der Adapter. Ändert man deren
+  Zeiten, Texte oder Signale, ändern sich die Szenarien mit. Alle zehn Szenarien laufen in
+  `tests/integration/test_sim_scenarios.py` mit je 8 bis 20 s; die volle CI-Prüfung braucht deshalb
+  rund 12 min. Die Szenarien sind deterministisch (feste Saat).
+- **Dokumentationstests (2c-1):** `tests/unit/test_docs.py` prüft die JSON-Beispiele, die Tabelle der
+  Gründe und die Optionen des Simulators im Betriebshandbuch gegen den Code. Ändert man die Absicht,
+  einen Grund-Text oder die Optionen von `bindaems.tools.sim`, schlägt er an, bis das Handbuch stimmt.
 
 ## Stand der Installation beim Betreiber
 
 - Docker auf der VM `192.168.82.20`, Images `latest` vom Stand nach Plan 2b (ausgerollt am
-  12.10.2026).
+  12.10.2026). Plan 2c-1 ist noch nicht ausgerollt.
 - Reverse Proxy mit HTTPS sowie Tarif und OeMAG-Wert im UI: laut Betreiber eingerichtet
   (11.10.2026). Zum Proxy gehören laut Betriebshandbuch 6: Port 8080 erreicht nur der Proxy,
   `app.trusted_proxies` ist gesetzt, `cookie_secure` steht wieder auf `true`.
@@ -313,17 +379,28 @@ Demo-Zugänge: `admin`, `gast` (Lesen) und `sicher` (Admin mit TOTP, Geheimnis
   - Felder `value`, `unit_of_measurement_str`, `device_class_str`, `state_class_str`,
     `friendly_name_str`
   - Wichtig auch für die Lastprognose aus der HA-Historie.
-- **Offen an der Anlage, als Nächstes (Plan 2b):**
-  1. EVCS: den Schritt „Verbindung unterbrochen“ nachholen (Punkt `evcs` erneut, die Rückfrage
-     mit `j` beantworten und das Netzwerkkabel der EVCS ziehen, wenn das Werkzeug es verlangt).
-  2. Victron: 17.2-4 „Kein Akku ins Auto“ nachholen, während ein Auto an der EVCS lädt (die
-     übrigen Rückfragen mit `n`). Dynamic ESS dafür wieder vorübergehend abschalten
-     (Entscheidung des Betreibers vom 12.10.2026) und danach wieder einschalten. Der Multi muss
-     dabei auf „Ein“ stehen.
-  3. Die Berichte nach `docs/verification/` übernehmen.
+- **Offen an der Anlage, als Nächstes (nach Plan 2c-1):**
+  1. Die Images ausrollen: `docker compose pull && docker compose up -d` (Betriebshandbuch 4). Die
+     neuen Felder `grid.import_limit_a`, `control` und `vehicles.<name>.wake` haben Standardwerte;
+     prüfe sie anhand von `deploy/config.example.yaml`. Der Watchdog bleibt unverändert (1.1.0).
+  2. Den Dry-Run neben evcc beginnen: eine Absicht mit `"control": true` per `PUT /v1/intent`, alle
+     Aktoren bleiben im Dry-Run (Betriebshandbuch, „Laderegelung“). Der core sendet dabei nichts
+     auf die Geräte, und die Teil-2-Werkzeuge schreiben nicht mit: Sie schreiben nur, wenn du sie
+     aufrufst. Die Entscheidungen liest der Betreiber bis 2d über die Dateien bzw.
+     `GET /v1/decisions`.
+  3. EVCS-Teil-2 „Verbindung unterbrochen“ und Victron 17.2-4 nachholen:
+     - EVCS: den Schritt „Verbindung unterbrochen“ (Punkt `evcs` erneut, die Rückfrage mit `j`
+       beantworten und das Netzwerkkabel der EVCS ziehen, wenn das Werkzeug es verlangt).
+     - Victron: 17.2-4 „Kein Akku ins Auto“, während ein Auto an der EVCS lädt (die übrigen
+       Rückfragen mit `n`). Dynamic ESS dafür wieder vorübergehend abschalten (Entscheidung des
+       Betreibers vom 12.10.2026) und danach wieder einschalten. Der Multi muss dabei auf „Ein“
+       stehen.
+     - Die Berichte nach `docs/verification/` übernehmen.
+     - Das verstellt Ströme an EVCS und Tesla, während evcc sie regelt: Notiere die Zeit, damit du
+       die Entscheidungen dieser Zeit beim Vergleich mit evcc ausnimmst.
   - Teil 2 schreibt auf die Geräte: nicht während der 7 Tage der Abnahme Phase 1 und ihres
     24-h-Mitschnitts (`docs/verification/abnahme-phase-1.md`, 4.2 und 4.3).
-  - Danach: Plan 2c.
+  - Danach: Plan 2c-2, dann 2d.
 - **Offen an der Anlage, aus Phase 1 und 2a:**
   1. Die manuellen Punkte von Teil 1 nachtragen: Sicherheitsprofil und Modbus-Dienstliste
      (17.1-3), NTP am Cerbo (17.1-12).
@@ -341,57 +418,77 @@ Demo-Zugänge: `admin`, `gast` (Lesen) und `sicher` (Admin mit TOTP, Geheimnis
    (Zuschnitt in `docs/superpowers/plans/2026-10-10-phase-2a-sicherheitsbasis.md`):
    - **2a Sicherheitsbasis:** umgesetzt, im Gesamtreview geprüft und an der Anlage installiert;
      die Watchdog-Probe ist bestanden (11.10.2026).
-   - **2b Aktoren:** umgesetzt, je Task und im Gesamtreview geprüft und auf `main`; an der Anlage
-     noch nicht ausgerollt (siehe „Offen an der Anlage“).
+   - **2b Aktoren:** umgesetzt, je Task und im Gesamtreview geprüft, auf `main` und an der Anlage
+     ausgerollt (12.10.2026); das Prüfprotokoll Teil 2 ist bis auf zwei Schritte bestanden (siehe
+     „Offen an der Anlage“).
      - Aktoren für EVCS, Victron und Tesla mit Dry-Run und Rücklese-Prüfung
      - sicherer Zustand (Spec 8.5) und Übergabe am Ende des Live-Betriebs
      - Entscheidungslog im core (Spool, Stream, `GET /v1/decisions`)
      - Erkennung fremder Änderungen (Spec 7.9)
      - Werkzeug `verify_part2` für das Prüfprotokoll Teil 2, schreibend und gemeinsam mit dem
-       Betreiber (Spec 17.2); an der Anlage noch nicht ausgeführt
+       Betreiber (Spec 17.2); an der Anlage am 12.10.2026 ausgeführt
      - Watchdog 1.1.0 mit der Aktion für den hub4-Override
-   - **2c Regelung:** Regelzyklus, Phasenwächter, 15-min-Wächter, Modi Sofort, PV, Min+PV, Aus und
-     Boost, Akku-Unterstützung, Zuordnung Auto ↔ Wallbox, Degradationsstufen und der
-     Anlagensimulator mit Regelkreistests in der CI.
+   - **2c Regelung**, geteilt (Entscheidung des Betreibers vom 12.10.2026):
+     - **2c-1 Laderegelung:** umgesetzt und je Task geprüft, an der Anlage noch nicht ausgerollt
+       (siehe Kurzfassung): Modi Sofort, PV, Min+PV, Aus und Boost, Phasenwächter, Tesla-Steuerung,
+       vereinfachte Zuordnung Auto ↔ Wallbox, Degradation der Ladepunkte, Anlagensimulator mit
+       Regelkreistests in der CI.
+     - **2c-2 Akku und Spitzen:** Befehle der Regelung an Victron (Akku-Unterstützung und
+       Setpoint-Kompensation, Spec 7.6 und 7.7, Auffrischen des Overrides vor seinem Timeout von
+       5 min), 15-min-Wächter (Spec 7.4) und die volle Zuordnungserkennung (Spec 7.8). Der Plan ist
+       noch zu schreiben.
    - **2d Bedienung:** Absicht aus der app (Regelbetrieb, Live-Schalter mit Bestätigung, Lademodi,
      Ziele, Boost, Zuordnung), Entscheidungslog in SQLite, UI-Seiten „Laden“ und „Entscheidungen“,
-     HA-Bedienelemente und Benachrichtigungen. Mit 2d beginnt der Dry-Run.
+     HA-Bedienelemente und Benachrichtigungen. Der Dry-Run beginnt schon nach 2c-1 per
+     `PUT /v1/intent`; die Bedienung macht ihn bequemer.
 
-   Nach 2c und 2d kommt die Abnahme der Phase 2: 2 Wochen Dry-Run, dann die Live-Schaltung je
-   Aktor in der Reihenfolge EVCS, Victron, Tesla.
+   Die Abnahme der Phase 2 besteht aus 2 Wochen Dry-Run, der schon nach 2c-1 beginnt, während 2c-2
+   und 2d entstehen, und der Live-Schaltung danach. Abweichend von der Spec gehen EVCS und Tesla
+   **gemeinsam** live, erst nach 2d, mit dem Live-Schalter im UI und ganz abgeschaltetem evcc;
+   Victron folgt nach 2c-2, wenn Dynamic ESS aus ist (Design 2c-1, Abschnitt 14).
 
    **EVCS in 2b:**
    - **Lesen:** Seit der korrigierten IP-Whitelist antwortet die EVCS BindaEMS direkt per Modbus
      (Prüfprotokoll Teil 1 vom 11.10.2026); gelesen wird weiter so.
    - **Schreiben:** über den GX-Dienst `evcharger` des Cerbo (`/SetCurrent`, `/StartStop`), wie
-     der Watchdog (Entscheidung des Betreibers vom 11.10.2026). Das Prüfprotokoll Teil 2 bestätigt
-     den Weg an der Anlage; das steht noch aus.
+     der Watchdog (Entscheidung des Betreibers vom 11.10.2026). Das Prüfprotokoll Teil 2 hat den Weg
+     an der Anlage am 12.10.2026 bestätigt.
    - Geschrieben wird nie der Maximalstrom (5017).
 
-### Nächster Schritt: die Anlage und Plan 2c
+### Nächster Schritt: die Anlage und Plan 2c-2
 
 1. Plan 2b ist auf `main`; Gesamtreview, Fix-Durchgang und Re-Review sind erledigt, die
-   Entscheidungen stehen in `docs/superpowers/plans/2026-10-11-phase-2b-entscheidungen.md`.
+   Entscheidungen stehen in `docs/superpowers/plans/2026-10-11-phase-2b-entscheidungen.md`. Plan
+   2c-1 ist umgesetzt und je Task geprüft; Gesamtreview und Integration nach `main` folgen. Seine
+   Entscheidungen stehen im Kopf des Designs und in den Absätzen „Stand Plan 2c-1“ der Spec.
 2. An der Anlage die Schritte aus „Offen an der Anlage“.
-3. Danach Plan 2c schreiben; die geparkten Befunde aus der Entscheidungsdatei und die Hinweise
-   unten gehören hinein.
+3. Danach Plan 2c-2 („Akku und Spitzen“) schreiben; die Hinweise unten gehören hinein. Dann folgt
+   Plan 2d.
+   - **Hinweis für 2d:** Eine neue Version der Absicht bindet jedes Fahrzeug neu, das `boost_until`
+     oder `wallbox` nennt. 2d darf deshalb einen abgelaufenen Boost, den es aus `GET /v1/intent`
+     übernommen hat, nicht zurückschicken: In der nächsten Version fehlen `boost_until` und
+     `wallbox`, wo der Boost oder die Übersteuerung nicht mehr gelten soll.
 
-## Hinweise für die Pläne 2c und 2d
+## Hinweise für die Pläne 2c-2 und 2d
 
-Aus den Reviews der Pläne 2a und 2b. Die Pläne 2c und 2d gibt es noch nicht; sie sollen diese
-Punkte aufgreifen:
+Aus den Reviews der Pläne 2a bis 2c-1. Die Pläne 2c-2 und 2d gibt es noch nicht; sie sollen diese
+Punkte aufgreifen. Was Plan 2c-1 aus der früheren Liste erledigt hat (Freigabe erst ohne offenen
+Schreibvorgang, Aufräumen des Entscheidungslogs, Heartbeat-Zähler je Lauf, SAFE ohne Tesla, der nicht
+lädt, Auslösung des Watchdogs, Laden nach einem Inselbetrieb, Selbstprüfung des Multi-Modus), steht in
+der Kurzfassung.
 
-- **Regelung (2c):**
+- **Regelung (2c-2):**
   - Befehle der Regelung gehen durch `CommandExecutor.execute`: Er ruft `SafetyLayer.authorize`
     genau einmal je betrachtetem Befehl auf, denn `authorize` verändert Rate-Limiter und
-    Schreibbudget.
-  - **Bei „Regelbetrieb aus“ darf 2c nicht regeln,** auch nicht in DEGRADED oder SAFE mit dem
+    Schreibbudget. Die Laderegelung zeigt das Muster: Sie berechnet Befehle, die Laufzeit führt sie aus
+    und gibt jedes Urteil mit `note_verdict` an sie zurück.
+  - **Bei „Regelbetrieb aus“ darf auch 2c-2 nicht regeln,** nicht in DEGRADED oder SAFE mit dem
     Übergabe-Grund: Dort gehören dem core nur die Sicherwerte der Übergabe.
   - **Importlimit:** Peak Shaving steht an der Anlage bei 20 A je Phase mit „immer“ (gewollt,
-    Spec 8.1). Phasenwächter und Setpoint-Kompensation müssen das berücksichtigen. Es wirkt nur,
-    solange der Multi auf „Ein“ steht: Mit „Nur Laden“ stieg L3 am 12.10.2026 auf 33,3 A, nahe
-    an der 35-A-Sicherung. Der core liest `vebus.mode`, prüft ihn aber noch nicht; eine
-    Selbstprüfung mit Warnung, wenn der Multi nicht auf „Ein“ (3) steht, gehört in 2c.
+    Spec 8.1). Es wirkt nur, solange der Multi auf „Ein“ steht: Mit „Nur Laden“ stieg L3 am
+    12.10.2026 auf 33,3 A, nahe an der 35-A-Sicherung. Seit 2c-1 warnen die Selbstprüfungen
+    `multi_mode` und `import_limit`, und der Phasenwächter rechnet ohne die Hilfe des Akkus. Die
+    Setpoint-Kompensation muss das Importlimit berücksichtigen.
   - `SafetyContext.modes` muss `ActuatorMode`-Werte enthalten; ein String „live“ bliebe still im
     Dry-Run. `wallbox_phase_a` ist nach Netzphasen geschlüsselt (der Erzeuger wendet `phase_map`
     an), und `present[(aktor, current)]` ist der Sollstrom, nicht der Messstrom. Das stellt
@@ -399,43 +496,40 @@ Punkte aufgreifen:
   - `grid_budget_w` darf nie NaN oder ±∞ sein (Erzeuger ist der 15-min-Wächter). Heute ist es
     `None`, denn es gibt noch kein Budget.
   - `VictronMqttAdapter.write` nur aus dem Event-Loop-Thread aufrufen; es reiht nur ein.
-  - Die `inputs` der Entscheidungen enthalten in 2b SOC, Akkuleistung und Netzstrom je Phase;
-    Preis, Überschuss, Budget und Plan kommen mit 2c dazu. Weckregeln für den Tesla in den Modi
-    Sofort und Geplant kommen ebenfalls mit 2c.
-  - **Vor dem ersten Regelwert:** Die Freigabe 0 erst, wenn für den Aktor kein Schreibvorgang mehr
-    offen ist. Ein Wert der Regelung, der nach der Freigabe noch ankommt, stünde sonst ohne
-    Watchdog.
-  - Das Aufräumen des Entscheidungslogs (`_prune_decisions`) läuft im Zyklus und fällt mit einem
-    gescheiterten Zyklus aus; es gehört in `cycle_once` hinter den Flush.
-  - **Vor der ersten Live-Schaltung:** Der Zähler beginnt in jedem Lauf bei 1, und nach einer
-    bestätigten Freigabe bleiben die eigenen Zähler gemerkt (`HeartbeatClient.recent`). Ein Echo
-    eines früheren Laufs kann so als eigenes gelten. Nach einer bestätigten Freigabe die Zähler
-    vergessen und je Lauf unterscheidbare Startwerte wählen.
-  - In SAFE versucht der core die Sicherwerte auch an einen Tesla, der schläft oder nicht zu Hause
-    ist: Jeder Versuch endet „nicht gesendet“ und erzeugt Entscheidungen, einen Alarm und Einträge
-    im Rate-Limiter.
-  - Setzt der Watchdog bei einer Auslösung Werte, ändern sie sich ohne Schreiben des core. Bei
-    Aktoren, die die Regelung hält, darf das nicht als fremde Änderung zählen.
-  - Nach einem Inselbetrieb bleibt das Laden aus („Laden aus“ des sicheren Zustands); die Regelung
-    muss es danach wieder aufnehmen.
+  - Die `inputs` der Entscheidungen enthalten seit 2c-1 SOC, Akkuleistung, Netzstrom je Phase,
+    Überschuss, Grenze des Wächters und Ist-Werte; Preis, Budget und Plan kommen mit 2c-2 bzw.
+    Phase 3 dazu. Weckregeln für den Tesla im Modus „Geplant“ kommen mit Phase 4.
   - **Tesla-Ladestrom:** Über Tessie wirkt ein Befehl, der auf 5 A setzt oder von 5 A weggeht, erst
     beim zweiten Mal, obwohl Tessie den ersten mit `result: true` bestätigt (Prüfprotokoll Teil 2
-    vom 12.10.2026, Nachtrag). Seit dem 12.10.2026 prüft der Tesla-Aktor den Strom nach der
-    Bestätigung im Tessie-Cache, mit der ersten Meldung ab 10 s bis 50 s danach (`SETTLE_S`,
-    `VERIFY_S`). Zeigt sie einen anderen Strom, meldet er `NOT_TAKEN`; ohne Meldung gilt Tessies
-    Bestätigung. Er sendet nicht selbst nach: Den neuen Versuch gibt der Aufrufer durch die
-    Safety-Schicht (Spec 6.5, 8.5). Die Regelung muss einen Strom nach `NOT_TAKEN` erneut
-    anfordern; als nicht dringender Befehl wartet der Neuversuch dabei auf die 90-s-Regel, wenn 2c
-    keine Ausnahme vorsieht. Auch einen bestätigten Befehl nimmt sie nicht als Wirkung, maßgeblich
-    ist der gemessene Strom. Der dritte Lauf vom 12.10.2026 bestätigt Prüfung und Wiederholung.
-    Offen vor dem Live-Betrieb des Tesla: die Reserve des sicheren Zustands (Spec 8.5, Nachtrag)
-    und ob die 10 s für den Cache reichen; im Lauf kam die erste gewertete Meldung erst nach rund
-    30 s, der Verzug ist damit nicht gemessen.
+    vom 12.10.2026, Nachtrag). Der Tesla-Aktor prüft den Strom nach der Bestätigung im Tessie-Cache:
+    Es zählt die erste Meldung 10 bis 75 s danach (`SETTLE_S`, `VERIFY_S`; die Frist beträgt 85 s).
+    So fängt das Fenster auch die 60-s-Abfrage eines angesteckten, noch nicht ladenden Autos.
+    Zeigt die Meldung einen anderen Strom, meldet der Aktor `NOT_TAKEN`; ohne Meldung gilt Tessies
+    Bestätigung. Er sendet nicht selbst nach. Die Laderegelung fordert den Strom seit 2c-1 als
+    normalen Befehl erneut an (Grund `not_taken_retry`), er wartet auf die 90-s-Regel. Auch einen
+    bestätigten Befehl nimmt sie nicht als Wirkung, maßgeblich ist der gemessene Strom. Offen vor dem
+    Live-Betrieb des Tesla:
+    - **Reserve des sicheren Zustands** (Spec 8.5): Bei Netzausfall sendet der Keeper dem Tesla
+      „Laden aus“ alle 10 s erneut, bis der Cache es zeigt, beim Laden bis zu 30 s. Das kostet bis
+      zu 3 der 6 Start/Stopp-Befehle je Stunde und alle 3 Versuche des Vorfalls. Zahl und Abstand der
+      Versuche oder `min_a` prüfen.
+    - **Annahmen des Fensters:** Tessie bestätigt binnen etwa 5 s (bei einer langsameren Antwort
+      verkürzt sich das Fenster), und der Cache zeigt das Auto binnen 10 s. Im Lauf vom 12.10.2026
+      kam die erste gewertete Meldung erst nach rund 30 s; der Verzug ist damit nicht gemessen.
   - **Netz-Sollwert-Override:** Er verschwindet nach 5 min ohne Auffrischen (Prüfprotokoll Teil 2
     vom 12.10.2026). Die Regelung muss einen gewollten Override vorher auffrischen.
   - **Entladegrenze:** Es gibt einen flüchtigen Override `ess.override.maxdischargepower`. Prüfen,
     ob er die persistente Entladegrenze ersetzen kann; das schont den Flash.
 - **Bedienung (2d):**
+  - **Boost und Übersteuerung:** Eine neue Version der Absicht bindet jedes Fahrzeug neu, das
+    `boost_until` oder `wallbox` nennt. 2d darf deshalb einen abgelaufenen Boost, den es aus
+    `GET /v1/intent` übernommen hat, nicht zurückschicken.
+  - Die Absicht kennt seit 2c-1 `vehicles`, `priority` und `surplus_priority` (Spec 5.3). Der core
+    lehnt mit 422 und den Gründen in `details` ab: unbekannte Fahrzeuge oder Wallboxen, eine Wallbox
+    für mehrere Fahrzeuge und eine Priorität, die nicht jedes Fahrzeug genau einmal nennt. Die app
+    zeigt diese Sätze.
+  - `GET /v1/health` nennt je Fahrzeug (`vehicles`) Modus, Boost bis, Wallbox, Zuordnung, Grenze,
+    angesteckt, lädt, Weckvorgänge heute und den letzten Grund; die UI-Seite „Laden“ kann sie nutzen.
   - Die Quittierung von Sperren (Spec 7.9) kommt hier; bisher lösen sie sich nur nach
     `safety.lock_release_s`.
   - Die app nimmt für die Version der Absicht Millisekunden seit 1970.
@@ -497,3 +591,20 @@ Entschieden in Phase 2a; die Rulings stehen im Plan (Präzisierungen) bzw. im Co
   einen Fehler-Alarm). Nach einem Verbindungsabbruch zum core bleiben die Karten „Aktoren“ und
   „Watchdog am Cerbo“ bis etwa 25 s ohne Hinweis stehen. Die Datei `ui/src/routes/system/+page.svelte`
   hat rund 500 Zeilen; bei weiterem Wachstum gehören die Karten in eigene Komponenten.
+
+Entschieden in Phase 2c-1; die Rulings stehen im Plan (Präzisierungen), im Kopf des Designs und in den
+Absätzen „Stand Plan 2c-1“ der Spec:
+
+- Die EVCS folgt dem Überschuss in ganzen Ampere (Totband 1 A, 5 s Abstand in der Safety-Schicht). In
+  den PV-Szenarien des Simulators waren das bis zu rund 100 Strombefehle je Stunde, auch weil das
+  Rauschen der Hauslast an der Abrundungsgrenze liegt. Eine Hysterese beim Erhöhen wäre eine
+  Erweiterung.
+- Bei schnell wechselnden Wolken deckt der Hausakku einen spürbaren Teil der PV-Ladung des Tesla (im
+  Simulator bis zu etwa 38 %), denn der Tesla darf seinem Mittel nur alle 90 s folgen. Das nimmt das
+  Design in Kauf (Design 6.5). Eine Abhilfe wäre, den Tesla im PV-Modus am vorsichtigen Minimum statt
+  am Mittel zu führen; das wäre eine Designänderung und eine Entscheidung des Betreibers.
+- Ohne Ströme von EVCS oder Wall Connector startet die Regelung kein Auto (Design 5.5), auch wenn die
+  Grenze sonst reichte.
+- Der Tessie-Adapter trennt seine Quelle bei fehlschlagenden Abfragen nicht (nur beim Abbruch). Die
+  Stufe „Tessie nicht erreichbar: Tesla nicht steuerbar“ (Spec 8.4) greift an der Anlage darum erst
+  über die Fehler-Sperre des Aktors oder das Veralten der Werte nach 900 s.

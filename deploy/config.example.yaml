@@ -79,7 +79,9 @@ vehicles:
     default_wallbox: twc
     live_allowed: false   # Freigabe für den Live-Betrieb; verlangt den Abschnitt tessie
     # Der Token steht als BINDAEMS_TESSIE_TOKEN in der .env. Ohne ihn wird der Tesla weder gelesen
-    # noch gesteuert. Befehle gehen über Tessie; das Auto wird nie geweckt.
+    # noch gesteuert. Befehle gehen über Tessie. Geweckt wird das Auto seit Plan 2c-1 nur durch einen
+    # Start, den der Lademodus will, und nur im Kontingent von `wake` unten; Strom und Stopp gehen
+    # nur an ein waches Auto.
     tessie: {vin: 5YJ3E7EB0MF000000}
     # Befehlslimits für Tessie (Spec 6.5)
     commands: {current_interval_s: 90, current_step_a: 2, per_hour: 20, start_stop_per_hour: 6}

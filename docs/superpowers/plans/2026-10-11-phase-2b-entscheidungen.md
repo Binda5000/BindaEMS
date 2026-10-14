@@ -162,6 +162,7 @@ die für 2c wichtigen stehen zusätzlich unter „Geparkte Befunde“.
 - Task 9: heartbeat.py:13-14 Der Modul-Docstring lässt das erneute Senden bei unbekanntem Echo aus.
 - Task 9: test_status.py:184 Neue Felder werden positional übergeben.
 - Task 9: (mit Lösungsvorschlag) Sobald eine Freigabe bestätigt ist (Watchdog WAITING / Echo 0), `recent` leeren, damit kleine Zähler einer späteren Probe nicht für eigene des core gehalten werden (R30 a). (geparkt, siehe „Geparkte Befunde“)
+  - Stand Plan 2c-1: Die Freigabe gilt nur mit Echo 0 (in jedem Zustand) oder mit „wartet“ und einem fremden Echo als bestätigt; „WAITING“ allein genügt nicht. Siehe Spec 8.6 und `docs/betrieb.md`, Abschnitt 14.
 - Task 10: foreign.py:128-136 Ein vorhandener, aber falsch typisierter Istwert (NaN/±∞/bool/Text) zählt als Treffer und wird die neue Erwartung → erkennt bei jeder 3. Prüfung erneut („unbekannt statt unbekannt“); heute unerreichbar (Aktoren lassen nicht endliche Messwerte weg).
 - Task 10: foreign.py:29-36 Drei parallele Tabellen (`WATCHED_KINDS`, `_NAMES`, `_UNITS`), abgesichert durch `test_every_watched_kind_has_an_alarm_text`.
 - Task 11: Jede Test-Laufzeit baut den gemeinsamen httpx-Client (~5 s für die Suite).

@@ -30,8 +30,10 @@ Die Zeiten stehen im Abschnitt `[watchdog]` der `config.ini`:
 
 ### Heartbeat und Freigabe mit 0
 
-- Das EMS schreibt einen Zähler (1, 2, 3, …) per MQTT auf `W/<portal>/bindaems/0/Heartbeat`; auf
-  dem Cerbo ist das der D-Bus-Pfad `/Heartbeat`. Angenommen werden nur ganze Zahlen ab 0.
+- Das EMS schreibt einen aufsteigenden Zähler per MQTT auf `W/<portal>/bindaems/0/Heartbeat`; auf
+  dem Cerbo ist das der D-Bus-Pfad `/Heartbeat`. Angenommen werden nur ganze Zahlen ab 0. Der core
+  beginnt jeden Lauf bei `1_000_000 + Unix-Sekunden mod 1_000_000_000` (seit Plan 2c-1), die Probe und
+  das Teil-2-Werkzeug zählen 1, 2, 3, …: So unterscheidet er seine Zähler von denen früherer Läufe.
 - Die **0 gibt den Watchdog frei:** Er geht ohne Auslösung zurück auf „wartet“. Das EMS sendet
   sie, sobald es den Watchdog nicht mehr braucht und kein Victron- oder EVCS-Aktor mehr Werte des
   EMS hält, also nach der Übergabe ihrer Sicherwerte.

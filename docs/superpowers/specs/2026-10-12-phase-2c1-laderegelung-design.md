@@ -1,6 +1,51 @@
 # Phase 2c-1 – Laderegelung: Design
 
-Stand 12.10.2026, im Brainstorming mit dem Betreiber abgestimmt. Grundlage ist die Spec
+**Stand: umgesetzt mit Plan 2c-1** (14.10.2026). Der Plan
+`docs/superpowers/plans/2026-10-12-phase-2c1-laderegelung.md` setzt dieses Design um; seine
+Präzisierungen gehen diesem Dokument vor, wo sie abweichen. Die Spec enthält dazu die Absätze „Stand
+Plan 2c-1“ (5.3, 6.5, 7.1 bis 7.3, 7.5, 7.8, 7.9, 8.4 bis 8.6, 16, 18). Beim Bau haben sich diese
+Punkte geändert oder sind dazugekommen:
+
+- **Dringend (4.4, 5.4):** Jeder erneute Versuch nach „nicht übernommen“ ist ein normaler Befehl, nie
+  dringend, auch der einer Senkung wegen Überlast oder an der Sicherung; er wartet auf die 90-s-Regel
+  (7.2). Ein Befehl wegen Überlast, der neu entsteht, weil die Stufe stieg, ist kein Neuversuch und
+  bleibt dringend, höchstens einmal je Stufe. Dringend sind sonst nur die Reaktionen auf Überlast und
+  Senkungen unter den Ist-Strom, wenn das Ziel die Sicherung ist (Sofort oder Boost ohne
+  Reserve-Schutz); Senkungen am Importlimit sind normal.
+- **Start (5.3, 5.5):** „Laden an“, auch der Weckstart, folgt nur, solange die Grenze des Wächters für
+  das Auto mindestens seinen Mindeststrom beträgt. Ist sie kleiner oder unbekannt, startet das Auto
+  nicht; in Min+PV zählt die Grenze an der Sicherung (6.3). Ein Auto, das schon lädt, geht auf den
+  Mindeststrom.
+- **Reihenfolge im Zyklus (4.2):** Die Laufzeit berechnet die Befehle der Regelung vor denen des
+  Keepers. Ausgeführt werden erst die des Keepers, dann die der Regelung, durch einen gemeinsamen
+  `SafetyContext`. Die Regelung vergisst ihre letzten eigenen Werte für einen Aktor, wenn seine
+  wirksame Betriebsart wechselt (Dry-Run ↔ live), der Keeper ihm einen Wert übergibt oder ein anderes
+  System ihn übernimmt, und nach einer Pause für alle Aktoren.
+- **Freigabe und Heartbeat (4.5, 10):** Die Freigabe 0 gilt als bestätigt, wenn der Watchdog in jedem
+  Zustand das Echo 0 meldet oder „wartet“ mit einem Echo meldet, das keiner der eigenen Zähler ist;
+  erst dann vergisst der core seine Zähler. Der Zähler beginnt je Lauf bei
+  `1_000_000 + Unix-Sekunden mod 1_000_000_000`.
+- **Sicherer Zustand (10):** SAFE zielt nicht auf einen Tesla, bei dem Tessie `online`, `at_home` oder
+  `plugged` mit Qualität OK als `False` meldet. Eine Auslösung des Watchdogs lässt den core die
+  Erwartungen der Erkennung fremder Änderungen für Victron und EVCS vergessen.
+- **Prüfung des Tesla-Stroms (7.2):** Das Fenster im Tessie-Cache reicht von 10 bis 75 s nach der
+  Bestätigung, die Frist des Aktors beträgt 85 s. Die Startfolge sendet den Strom, während das Auto
+  angesteckt ist, aber noch nicht lädt; Tessie fragt dann nur alle 60 s ab. Annahme: Tessie bestätigt
+  binnen etwa 5 s.
+- **Selbstprüfung (11):** Die Prüfpunkte `multi_mode` (UI: „Multi-Modus“) und `import_limit` (UI:
+  „Importlimit“) warnen nur und sperren nichts.
+- **Entscheidungslog (12):** Den Modus tragen die Gründe (`mode_*`, `boost`), denn `inputs` enthält nur
+  Zahlen. Neu je Befehl sind `surplus_w`, `limit_a`, `actual_current_a` und `actual_charging`
+  (1 = lädt, 0 = nicht); im Dry-Run sind die Ist-Werte die von evcc.
+- **Simulator (13):** Er nutzt die echten Aktoren statt gefälschter, die Geräte dahinter sind
+  nachgebildet. Die Übergänge, die die Kennzahl der Akku-Energie in PV-Autos ausnimmt, dauern 10 s,
+  beim ladenden Tesla 200 s (`2 × commands.current_interval_s + 20`); dieselben 200 s ersetzen die
+  100 s aus Präzisierung 16. Mit höchstens 10 kW PV laden zwei PV-Autos nacheinander (6.2). Die
+  PV-Kennzahlen zählen nur Autos, deren Ladepunkt die Regelung live steuert, und im Dry-Run zählt eine
+  Entscheidung nur als wiederholt, wenn ihr Wert dem vorigen eigenen Wert der Regelung gleicht
+  (`UNCHANGED` eingeschlossen).
+
+Entwurf vom 12.10.2026, im Brainstorming mit dem Betreiber abgestimmt. Grundlage ist die Spec
 `docs/superpowers/specs/2026-10-08-bindaems-design.md`, vor allem 1.2, 1.3, 7.1–7.5, 7.8, 8.3, 8.4
 und 18. Verweise wie „Spec 7.3“ beziehen sich auf sie. Dieses Dokument präzisiert und ändert sie
 für Plan 2c-1; wo es abweicht, gilt es (Abschnitt 14). Die Vorgänger sind die Pläne 2a und 2b

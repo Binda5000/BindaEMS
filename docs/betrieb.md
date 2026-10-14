@@ -1,23 +1,29 @@
 # Betrieb von BindaEMS
 
-Stand: Phase 2b (Aktoren). Auf der VM laufen zwei Dienste. Sie **regeln noch nichts**: Die
-Regelung kommt mit Plan 2c, die Bedienung mit Plan 2d.
+Stand: Phase 2c-1 (Laderegelung). Auf der VM laufen zwei Dienste. Der core **regelt** seit Plan
+2c-1 die beiden Ladepunkte (EVCS und Tesla), **sendet aber nichts**, solange ihre Aktoren im Dry-Run
+sind: Er protokolliert dann nur, was er täte, und evcc regelt weiter (Abschnitt „Laderegelung“ am
+Ende). Die Befehle an Victron (Akku) folgen mit Plan 2c-2, die Bedienung in UI und HA mit Plan 2d.
 
 - `ems-core` liest Cerbo GX, EVCS, Wall Connector, Tessie und Home Assistant und schreibt
-  Telemetrie nach InfluxDB. Er kennt Betriebszustände, Freigaben und Sperren (Abschnitt 13) und
-  hat Aktoren für Victron, EVCS und Tesla. Ohne Absicht der Bedienung bleibt er im Zustand
-  **OBSERVE**: nur lesend. Auf ein Gerät schreibt er nur für einen live geschalteten Aktor: den
-  Heartbeat an den eigenen Watchdog (Abschnitt 14), solange er regelt, und die Sicherwerte im
-  sicheren Zustand und bei der Übergabe am Ende des Live-Betriebs (Abschnitt 13). Einen live
-  gewünschten Aktor gibt es erst mit der Bedienung in Plan 2d. Das Entscheidungslog hält fest, was
-  er an den Aktoren tut: gesendete Befehle, im Dry-Run die Urteile mit einem Wert und die
-  Ablehnungen der Safety-Schicht (Abschnitt 13).
+  Telemetrie nach InfluxDB. Er kennt Betriebszustände, Freigaben und Sperren (Abschnitt 13), hat
+  Aktoren für Victron, EVCS und Tesla und regelt die beiden Ladepunkte. Ohne Absicht der Bedienung
+  bleibt er im Zustand **OBSERVE**: nur lesend. Auf ein Gerät schreibt er nur für einen live
+  geschalteten Aktor: den Heartbeat an den eigenen Watchdog (Abschnitt 14), solange er regelt, die
+  Sicherwerte im sicheren Zustand und bei der Übergabe am Ende des Live-Betriebs (Abschnitt 13) und
+  die Befehle der Laderegelung an EVCS und Tesla. Einen live gewünschten Aktor gibt es erst nach
+  Plan 2d. Das Entscheidungslog hält fest, was er an den Aktoren tut: gesendete Befehle, im Dry-Run
+  die Urteile mit einem Wert und die Ablehnungen der Safety-Schicht (Abschnitt 13).
 - `ems-app` meldet Benutzer an und liefert das Web-UI samt API aus (Abschnitt 12). Sie holt
   Preise und die PV-Prognose, rechnet jede Viertelstunde ab und meldet lesende Sensoren per
   MQTT Discovery an Home Assistant.
 
 Dazu kommt der **Watchdog** auf dem Cerbo, den du einmal installierst (Abschnitt 14). Er ist der
 Totmann-Schalter der Anlage und greift nur ein, wenn ein live geschalteter core ausfällt.
+
+Am Ende des Handbuchs stehen die Abschnitte „Laderegelung“ (Lademodi, Absicht, Dry-Run-Vergleich mit
+evcc, Umstieg, Hinweise für die Anlage) und „Simulator“ (die Szenarien der CI von Hand laufen
+lassen).
 
 ## 1. Voraussetzungen der VM
 
@@ -147,8 +153,9 @@ GROUP BY time(1m), *
     kurzzeitig einkommentieren. Danach fragst du so ab:
     `curl -H "Authorization: Bearer $BINDAEMS_INTERNAL_TOKEN" http://127.0.0.1:8081/v1/health`.
   - `/v1/health` nennt auch Betriebszustand mit Gründen, Aktoren (steuerbar, offene
-    Schreibvorgänge, ob sie Werte des EMS halten) und Watchdog, `/v1/intent` die gültige Absicht
-    und `/v1/decisions` das Entscheidungslog (Abschnitt 13).
+    Schreibvorgänge, ob sie Werte des EMS halten), Watchdog und je Fahrzeug den Stand der
+    Laderegelung (`vehicles`, Abschnitt „Laderegelung“), `/v1/intent` die gültige Absicht und
+    `/v1/decisions` das Entscheidungslog (Abschnitt 13).
 - **Lokaler Build:**
   - Statt GHCR geht das auch mit einem Checkout des Repositorys.
   - Im Ordner `deploy/` mit `docker compose build` bauen, dann `docker compose up -d`.
@@ -418,8 +425,8 @@ docker compose run --rm -v "$PWD/verification:/out" --entrypoint python ems-core
 
 **Voraussetzungen**
 
-- core und app laufen mit den Images von Plan 2b (Abschnitt 4). Der Watchdog am Cerbo ist auf
-  1.1.0 (Abschnitt 14), denn der Punkt `evcs` führt die Watchdog-Probe aus.
+- core und app laufen mit den Images von Plan 2b oder neuer (Abschnitt 4). Der Watchdog am Cerbo
+  ist auf 1.1.0 (Abschnitt 14), denn der Punkt `evcs` führt die Watchdog-Probe aus.
 - `live_allowed` brauchst du nicht: Das Werkzeug schreibt unabhängig davon und fragt dich bei jedem
   Schritt. `live_allowed: true` setzt du erst für Aktoren, die bestanden haben.
 - `evcs`: Die EVCS steht im manuellen Modus und hat ihre Instanz unter
@@ -458,8 +465,10 @@ docker compose run --rm -v "$PWD/verification:/out" --entrypoint python ems-core
   Schritt. Zwei vollständige Läufe binnen einer Stunde können deshalb mehr als 6 Start/Stopp-Befehle
   ergeben (die Grenze der Regelung, Spec 6.5).
 - Tesla: Bestätigt ist ein Strom erst, wenn auch der Tessie-Cache ihn zeigt. Der Aktor wertet die
-  erste Meldung ab 10 s nach der Bestätigung durch Tessie, höchstens bis 50 s danach; kommt keine,
-  gilt die Bestätigung von Tessie. Zeigt die Meldung noch den alten Wert, sendet das Werkzeug den
+  erste Meldung ab 10 s nach der Bestätigung durch Tessie, höchstens bis 75 s danach (die Frist je
+  Befehl beträgt 85 s ab dem Senden; das Werkzeug wartet so lange); kommt keine, gilt die
+  Bestätigung von Tessie. Das Fenster ist so lang, weil Tessie ein angestecktes, noch nicht ladendes
+  Auto nur alle 60 s abfragt. Zeigt die Meldung noch den alten Wert, sendet das Werkzeug den
   Befehl einmal erneut; an der Anlage wirkt ein Befehl auf oder von 5 A erst beim zweiten Mal. Der
   Befund nennt das als „Erster Befehl: Fahrzeug übernahm … A nicht (Tessie meldet … A);
   wiederholt nach … s.“ „bestätigt nach … s“ schließt die Prüfung ein, die Zeit am Wall Connector
@@ -734,28 +743,35 @@ Der core arbeitet mit fünf Betriebszuständen (Spec 7.2). Du siehst sie im UI u
 | `DEGRADED` | Eingeschränkt | Wie CONTROL, aber mit Einschränkung: ein Teilsystem ist gesperrt, ein Gerät ist nicht erreichbar oder der Watchdog fehlt; auch bei ausgeschaltetem Regelbetrieb, solange die Übergabe der Aktoren läuft. Die Gründe nennen es. |
 | `SAFE` | Sicherer Zustand | Kritische Daten fehlen, die Phasen stimmen nicht oder das Netz ist ausgefallen. Der core setzt die Sicherwerte der Aktoren, und es gibt einen Alarm „Sicherer Zustand: …“. |
 
-Seit Plan 2b hat der core Aktoren, aber noch keine Regelung (sie kommt mit Plan 2c). Befehle
-entstehen deshalb nur an diesen Stellen:
+Befehle entstehen an diesen Stellen:
 
 - **Heartbeat** an den Watchdog (Abschnitt 14), nur solange der core regelt.
 - **Sicherer Zustand:** In SAFE bekommt jeder nicht gesperrte Aktor seine Sicherwerte: Victron den
   aufgehobenen Netz-Sollwert-Override, die Entladegrenze „unbegrenzt“ und den Min-SOC auf der
-  USV-Reserve, die EVCS ihren sicheren Strom (`safe_a`) und der Tesla seinen Mindeststrom. Bei
-  Netzausfall (Inselbetrieb) kommt für EVCS und Tesla „Laden aus“ dazu. Ein Strom, der schon unter
-  dem Sicherwert liegt, bleibt stehen, auch bei der Übergabe: Der sichere Zustand erhöht nie einen
-  Strom.
+  USV-Reserve, die EVCS ihren sicheren Strom (`safe_a`) und der Tesla seinen Mindeststrom. Ein
+  Tesla, der laut Tessie nicht lädt (er schläft, ist nicht zu Hause oder nicht angesteckt), bekommt
+  nichts: Für ihn gäbe es nur Versuche, die nicht gesendet werden, samt Alarm. Bei Netzausfall
+  (Inselbetrieb) kommt für EVCS und Tesla „Laden aus“ dazu. Ein Strom, der schon unter dem Sicherwert
+  liegt, bleibt stehen, auch bei der Übergabe: Der sichere Zustand erhöht nie einen Strom.
 - **Übergabe** am Ende des Live-Betriebs (unten).
+- **Laderegelung** (seit Plan 2c-1, Abschnitt „Laderegelung“): Strom und „Laden an/aus“ der EVCS und
+  des Tesla. Sie regelt nur in CONTROL und DEGRADED bei eingeschaltetem Regelbetrieb.
 
 Jeder Befehl geht durch die Safety-Schicht. Einem Aktor, der nicht live ist, sendet der core nichts;
 sein Befehl steht dann als „Dry-Run“ im Entscheidungslog. In CONTROL schreibt der core sonst
-nichts.
+nichts. Die Laderegelung schreibt nie auf Victron; die Befehle an den Akku folgen mit Plan 2c-2.
+
+Der sichere Zustand und die Übergabe gehen der Regelung vor: Ein Aktor, den der core gerade
+übergibt, bekommt von ihr nichts, und in jedem Zyklus führt der core erst deren Befehle aus, dann die
+der Regelung.
 
 ### Absicht und Regelbetrieb
 
-Die Bedienung legt in einer **Absicht** fest, ob der core regeln soll („Regelbetrieb“) und in
-welcher Betriebsart jeder Aktor läuft. Die app sendet sie ab Plan 2d. Bis dahin gibt es keine
-Absicht: Der core steht in OBSERVE mit dem Grund „Regelbetrieb ist aus.“, alle Aktoren laufen im
-Dry-Run, und ein installierter Watchdog wartet.
+Die Bedienung legt in einer **Absicht** fest, ob der core regeln soll („Regelbetrieb“), in welcher
+Betriebsart jeder Aktor läuft und, seit Plan 2c-1, in welchem Lademodus jedes Fahrzeug lädt. Die app
+sendet sie ab Plan 2d. Bis dahin gibt es keine Absicht, solange du keine sendest (`PUT /v1/intent`,
+Abschnitt „Laderegelung“): Der core steht in OBSERVE mit dem Grund „Regelbetrieb ist aus.“, alle
+Aktoren laufen im Dry-Run, und ein installierter Watchdog wartet.
 
 - Der core speichert die zuletzt angenommene Absicht in `/data/intent.json` (Volume
   `core-data`) und nutzt sie nach einem Neustart weiter. Er durchläuft trotzdem immer OBSERVE
@@ -795,7 +811,7 @@ Die Gründe stehen im UI unter der Betriebsart:
 
 | Grund | Bedeutung und Abhilfe |
 |---|---|
-| Regelbetrieb ist aus. | Die Absicht verlangt keinen Regelbetrieb, oder es gibt noch keine. Bis Plan 2d ist das der Normalfall. |
+| Regelbetrieb ist aus. | Die Absicht verlangt keinen Regelbetrieb, oder es gibt noch keine. Ohne eine Absicht per `PUT /v1/intent` ist das bis Plan 2d der Normalfall. |
 | Kritische Messwerte noch nicht 30 s aktuell. | Nach dem Start oder einer Störung brauchen die Messwerte 30 s. Hält es an, prüfe die Selbstprüfung „Datenfrische“ und den Adapter `victron`. |
 | 3 Phasen mit je einem Gerät nicht bestätigt. | Der Cerbo meldet nicht die erwartete Phasenzahl. Siehe Selbstprüfung „Phasen (vebus)“. |
 | Watchdog am Cerbo ist nicht scharf. | Ein Victron- oder EVCS-Aktor ist live gewünscht, der Watchdog aber nicht für diesen core scharf: Er ist nicht scharf, zeigt keinen Zähler des core oder meldet ein anderes Timeout (Abschnitt 14). |
@@ -917,7 +933,10 @@ Der core hält jede Entscheidung zu einem Befehl fest (Spec 7.10):
 - jede Ablehnung der Safety-Schicht (dieselbe Ablehnung desselben Aktors höchstens alle 60 s).
 
 Ein Eintrag lautet etwa: `EVCS „evcs“ (sicherer Zustand): Strom 6 A – gesendet und bestätigt.`
-Eine erkannte fremde Änderung steht noch nicht darin, nur als Alarm; der Eintrag kommt mit Plan 2d.
+Die Laderegelung nennt ihre Gründe in Klammern, etwa
+`EVCS „evcs“ (PV-Überschuss, Überschuss): Strom 8 A – Dry-Run, nicht gesendet.` (alle Gründe und
+Eingaben: Abschnitt „Laderegelung“). Eine erkannte fremde Änderung steht noch nicht darin, nur als
+Alarm; der Eintrag kommt mit Plan 2d.
 
 - **Auf der Platte:** `/data/decisions/` im Volume `core-data`, eine Datei je Tag
   (`decisions-JJJJ-MM-TT.jsonl`, UTC-Datum) mit einer JSON-Zeile je Entscheidung. Der core behält
@@ -948,10 +967,11 @@ Eine erkannte fremde Änderung steht noch nicht darin, nur als Alarm; der Eintra
 2. **Prüfprotokoll Teil 2** gemeinsam durchführen (Abschnitt 11): EVCS und Tesla zuerst, Victron
    mit vorübergehend abgeschaltetem Dynamic ESS. `live_allowed: true` setzt du nur für Aktoren,
    die bestanden haben.
-3. **Dry-Run:** Mit der Bedienung in Plan 2d beginnt er. Er dauert 2 Wochen, und die
-   Entscheidungen werden gemeinsam gesichtet (Spec 18).
-4. **Live-Schaltung** je Aktor in dieser Reihenfolge (Spec 8.7): EVCS, dann Victron-Setpoint,
-   dann Tesla.
+3. **Dry-Run neben evcc:** Er beginnt mit den Images von Plan 2c-1 und einer Absicht per
+   `PUT /v1/intent` (Abschnitt „Laderegelung“). Er dauert 2 Wochen, und die Entscheidungen werden
+   gemeinsam gesichtet (Spec 18). Mit der Bedienung in Plan 2d wird er bequemer.
+4. **Live-Schaltung:** EVCS und Tesla gemeinsam nach Plan 2d, mit abgeschaltetem evcc (Abschnitt
+   „Laderegelung“, „Umstieg von evcc“). Victron folgt nach Plan 2c-2 (Spec 8.7).
 5. Vor der Live-Schaltung von Victron schaltest du Dynamic ESS ab (Entscheidung vom 10.10.2026);
    danach läuft der Victron-Teil von Teil 2.
 
@@ -959,8 +979,8 @@ Eine erkannte fremde Änderung steht noch nicht darin, nur als Alarm; der Eintra
 
 Für ein Update des core gilt der Ablauf aus Spec 15:
 
-1. Regelbetrieb auf OBSERVE schalten (ab Plan 2d in der Bedienung; vorher steht der core ohnehin
-   in OBSERVE).
+1. Regelbetrieb auf OBSERVE schalten (ab Plan 2d in der Bedienung; bis dahin mit `PUT /v1/intent`
+   und `"control": false`, ohne Absicht steht der core ohnehin in OBSERVE).
 2. Update einspielen: `docker compose pull && docker compose up -d` (Abschnitt 4).
 3. Selbstprüfung abwarten: Die kritischen Messwerte müssen wieder 30 s aktuell sein, und unter
    **System** zeigt die Selbstprüfung keinen Fehler.
@@ -996,19 +1016,31 @@ Zustände, Zeiten und D-Bus-Pfade stehen in `cerbo-watchdog/README.md`. Wichtig 
 
 - Ohne Bedarf schickt der core keinen Heartbeat. Der Watchdog wartet dann und greift nie ein.
   Bedarf besteht, solange ein Victron- oder EVCS-Aktor im Regelbetrieb live gewünscht ist oder
-  übergeben wird; bis zur Bedienung in Plan 2d gibt es ihn nicht.
+  übergeben wird; bis zur Live-Schaltung nach Plan 2d gibt es ihn nicht.
 - Den Watchdog wertet der core nur als scharf, wenn er einen der zuletzt gesendeten Zähler des
   core zeigt und das Timeout aus `victron.watchdog.timeout_s` meldet. Hat eine Probe oder ein
   früherer Lauf ihn scharf gemacht, schützt er diesen core noch nicht. Der core schärft ihn selbst
   (Abschnitt 13, „Gate“).
 - Die Freigabe 0 sendet der core erst, wenn kein Victron- oder EVCS-Aktor mehr Werte des EMS hält
-  (Abschnitt 13, „Übergabe“), und nur, wenn er in diesem Lauf für den Watchdog zuständig war: ab
-  dem ersten Bedarf oder dem ersten Victron- oder EVCS-Aktor, der Werte des EMS hält, bis zum
-  nächsten Neustart. Eine
-  Probe oder `verify_part2`, die den Watchdog selbst schärfen und auslösen, stört deshalb nur einen
-  core nicht, der nie zuständig war; war er es, starte ihn vorher neu. Ging die 0 verloren, sendet
-  er sie nach dem Doppelten des Heartbeat-Takts erneut, außer der Watchdog zeigt einen fremden
-  Zähler. Steht der Watchdog 60 s lang ohne Bedarf auf „ausgelöst“, räumt er mit der 0 auf.
+  (Abschnitt 13, „Übergabe“) **und für keinen von ihnen ein Schreibvorgang offen ist**, gleich ob
+  ihn die Sicherwerte oder die Laderegelung gesendet haben: Ein Wert, der nach der Freigabe noch
+  ankäme, stünde sonst ohne Watchdog. Außerdem sendet er sie nur, wenn er in diesem Lauf für den
+  Watchdog zuständig war: ab dem ersten Bedarf oder dem ersten Victron- oder EVCS-Aktor, der Werte
+  des EMS hält, bis zum nächsten Neustart. Eine Probe oder `verify_part2`, die den Watchdog selbst
+  schärfen und auslösen, stört deshalb nur einen core nicht, der nie zuständig war; war er es,
+  starte ihn vorher neu. Ging die 0 verloren, sendet er sie nach dem Doppelten des Heartbeat-Takts
+  erneut, außer der Watchdog zeigt einen fremden Zähler. Steht der Watchdog 60 s lang ohne Bedarf auf
+  „ausgelöst“, räumt er mit der 0 auf.
+- **Bestätigt** ist die Freigabe erst, wenn der Watchdog das Echo 0 meldet (in jedem Zustand) oder
+  „wartet“ meldet und als Echo keinen der eigenen Zähler zeigt. Erst dann vergisst der core seine
+  Zähler. „Wartet“ allein genügt nicht: Der Watchdog zeigt es vor dem Scharfschalten auch, wenn die 0
+  verloren ging; dann steht noch ein eigener Zähler im Echo, und der core muss die 0 erneut senden
+  können.
+- **Startwert je Lauf:** Der erste Zähler eines Laufs ist `1_000_000 + Unix-Sekunden mod
+  1_000_000_000` (am 12.10.2026 um 12:00 UTC ist das `792806400`). Probe und `verify_part2` zählen
+  dagegen 1, 2, 3, …. So gilt der Zähler eines früheren Laufs oder eines Werkzeugs nie als Zähler
+  dieses core. Liest du `/Heartbeat` am Cerbo, ist eine Zahl in dieser Größenordnung der Zähler des
+  core, eine kleine stammt von einer Probe oder einem Werkzeug.
 - Heartbeat-Takt und Timeout kommen aus `victron.watchdog` in `config.yaml`.
 - Mit `victron.live_allowed` enthält die `config.ini` die Aktion `override_setpoint` (seit
   Watchdog 1.1.0): Bei einer Auslösung hebt der Watchdog den Netz-Sollwert-Override des EMS auf
@@ -1016,6 +1048,8 @@ Zustände, Zeiten und D-Bus-Pfade stehen in `cerbo-watchdog/README.md`. Wichtig 
   er unberührt, denn dann nutzt Dynamic ESS den Override.
 - Jede Aktion liest zuerst und schreibt nur, wenn der Wert vom Sicherwert abweicht. Danach liest
   sie zurück und wiederholt bei Fehlern (6-mal im Abstand von 5 s).
+- Was der Watchdog bei einer Auslösung setzt, gilt nicht als fremde Änderung: Meldet er „ausgelöst“,
+  vergisst der core die Erwartungen der Erkennung für Victron und EVCS (Abschnitt 13, „Sperren“).
 - Nach einer Auslösung wird der Watchdog wieder scharf, sobald der Heartbeat 30 s lang stabil
   läuft.
 - Nach einem Neustart des Cerbo startet ein scharfer oder ausgelöster Watchdog (seit 1.1.0) wieder
@@ -1027,9 +1061,9 @@ Zustände, Zeiten und D-Bus-Pfade stehen in `cerbo-watchdog/README.md`. Wichtig 
 
 ### Voraussetzungen
 
-- core und app laufen mit den Images von Plan 2b, beide aus demselben Stand. Rolle sie zuerst aus:
-  `docker compose pull && docker compose up -d` (Abschnitt 4). Sonst fehlen im Image des core die
-  Werkzeuge `bindaems.tools.watchdog_config`, `bindaems.tools.watchdog_probe` und
+- core und app laufen mit den Images von Plan 2b oder neuer, beide aus demselben Stand. Rolle sie
+  zuerst aus: `docker compose pull && docker compose up -d` (Abschnitt 4). Sonst fehlen im Image des
+  core die Werkzeuge `bindaems.tools.watchdog_config`, `bindaems.tools.watchdog_probe` und
   `bindaems.tools.verify_part2`, und die System-Seite kann den Status des Watchdogs nicht zeigen.
 - Venus OS mit Python ≥ 3.8 (`install.sh` prüft das) und SSH-Zugang als `root` zum Cerbo
   (Root-Passwort setzen und SSH einschalten, siehe die Victron-Anleitung „Root Access“). Am
@@ -1237,7 +1271,7 @@ Diese Alarme zeigt das UI unter **System** → „core“ → „Alarme“:
 | Watchdog am Cerbo ist deaktiviert; Victron und EVCS bleiben im Dry-Run. | Nur wenn der Betrieb den Watchdog braucht. In der `config.ini` steht `enabled = false`. Erzeuge sie neu und übertrage sie. |
 | Watchdog-Version … am Cerbo, erwartet …; bitte mit install.sh aktualisieren. | Siehe „Aktualisieren“. |
 | Watchdog-Timeout … s am Cerbo, erwartet … s; config.ini neu erzeugen und mit install.sh übertragen. | Die `config.ini` am Cerbo passt nicht zu `victron.watchdog.timeout_s`. Der core schärft den Watchdog dann nicht (Abschnitt 13, „Gate“); ein scharfer Watchdog löst aus. Erzeuge die `config.ini` neu und übertrage sie. |
-| … Sicherwert für „…“ nicht bestätigt. (bei Victron und EVCS mit dem Zusatz „Der Watchdog am Cerbo übernimmt.“) | Der Aktor hat seine Sicherwerte nach 3 Versuchen nicht angenommen, im sicheren Zustand oder bei der Übergabe. Victron und EVCS setzt dann der Watchdog. Prüfe das Gerät (Cerbo verbunden, EVCS im manuellen Modus, Tessie erreichbar) und das Entscheidungslog. Der Alarm endet, wenn der Wert stimmt oder der Aktor kein Ziel mehr ist. |
+| … Sicherwert für „…“ nicht bestätigt. (bei Victron und EVCS mit dem Zusatz „Der Watchdog am Cerbo übernimmt.“) | Der Aktor hat seine Sicherwerte nach 3 Versuchen nicht angenommen, im sicheren Zustand oder bei der Übergabe. Victron und EVCS setzt dann der Watchdog. Prüfe das Gerät (Cerbo verbunden, EVCS im manuellen Modus, Tessie erreichbar) und das Entscheidungslog. Der Alarm endet, wenn der Wert stimmt oder der Aktor kein Ziel mehr ist. Ein Tesla, der bei der Übergabe schläft, bekommt den Alarm, bis er aufwacht (Abschnitt „Laderegelung“, Hinweise für die Anlage). |
 | … ist nach 3 Fehlern in 15 min bis HH:MM nicht steuerbar. | Nur Tesla: Tessie hat 3 Befehle abgelehnt oder nicht beantwortet. Bis zur Uhrzeit (Wiener Zeit) sendet der core nichts an das Fahrzeug. Prüfe das Tessie-Konto und das Log des core. |
 | … von außen geändert (… statt …). | Ein anderes System hat Strom oder Netz-Sollwert-Override geändert, den der core bestätigt hatte (Abschnitt 13, „Sperren“). Der Aktor ist gesperrt. Suche das System (App, Automation, Zeitplan) und schalte es ab. |
 | Gespeicherte Schreibzeiten liegen bis zu … min in der Zukunft; persistente Schreibzugriffe bleiben bis dahin begrenzt. | Die Uhr lief zurück (NTP-Sprung, Failover). Das Schreibbudget für persistente Einstellungen zählt die Einträge in der Zukunft weiter mit; die Begrenzung endet, wenn die Uhr aufgeholt hat. Prüfe `timedatectl`. |
@@ -1261,3 +1295,469 @@ Stelle die Werte, die die Auslösungen gesetzt haben, danach wieder ein, wie du 
 Die Alarme der Safety-Schicht, des sicheren Zustands, der Aktoren und der fremden Änderungen
 tragen die monotone Zeit des core als „seit“, die übrigen die Wanduhr. Nach einem NTP-Sprung können
 sie bis zum nächsten Neustart des core voneinander abweichen.
+
+**Selbstprüfung:** Die Punkte der Selbstprüfung stehen im UI unter **System** → „core“ →
+„Selbstprüfung“. Seit Plan 2c-1 gibt es zwei neue. Sie **warnen nur und sperren nichts**: Der
+Phasenwächter bleibt auch ohne Importlimit sicher, denn er rechnet ohne die Hilfe des Akkus
+(Abschnitt „Laderegelung“).
+
+| Prüfpunkt im UI | Meldung | Status | Bedeutung und Abhilfe |
+|---|---|---|---|
+| Multi-Modus (`multi_mode`) | Multi auf „Ein“. | ok | |
+| | Multi nicht auf „Ein“ (Modus …); das Importlimit wirkt nicht. | Warnung | Der Multi steht nicht auf „Ein“ (`vebus.mode` ist nicht 3), etwa auf „Nur Laden“. Dann wirkt Peak Shaving nicht: Am 12.10.2026 stieg L3 so auf 33,3 A, nahe an der Sicherung. Stelle den Multi am Cerbo auf „Ein“. |
+| | Multi-Modus nicht verfügbar. | unbekannt | Der Cerbo meldet `vebus.mode` nicht (Adapter `victron`, Selbstprüfung „Datenfrische“ prüfen). |
+| Importlimit (`import_limit`) | Importlimit am Cerbo … A wie konfiguriert. | ok | Der Wert am Cerbo (`settings.cgwacs.acinputlimit`) entspricht `grid.import_limit_a`, mit höchstens 0,5 A Abweichung. |
+| | Importlimit am Cerbo … A, konfiguriert … A. | Warnung | Cerbo und `config.yaml` stimmen nicht überein. Passe das Importlimit am Cerbo oder `grid.import_limit_a` an; der Phasenwächter richtet PV-Überschuss und Min+PV am konfigurierten Wert aus. |
+| | Importlimit am Cerbo aus. | Warnung | Peak Shaving ist am Cerbo abgeschaltet (Wert −1). Stelle am Cerbo das Importlimit je Phase mit „immer“ auf den Wert von `grid.import_limit_a` (Standard 20 A). |
+| | Importlimit am Cerbo nicht verfügbar. | Warnung | Der Wert fehlt; prüfe den Adapter `victron`. |
+
+## Laderegelung
+
+Seit Plan 2c-1 regelt der core die beiden Ladepunkte selbst: die EVCS mit dem e-Golf und den Wall
+Connector mit dem Tesla. Er schreibt dabei nur Strom und „Laden an/aus“ der EVCS und des Tesla (den
+Tesla über Tessie), nie auf Victron; die Befehle an den Akku folgen mit Plan 2c-2. Jeder Befehl geht
+durch die Safety-Schicht (Abschnitt 13). **Solange ein Aktor im Dry-Run ist, sendet der core nichts**
+und protokolliert nur, was er täte. Live gehen EVCS und Tesla erst nach Plan 2d, gemeinsam und mit
+abgeschaltetem evcc (unten, „Umstieg von evcc“).
+
+### Wann der core regelt
+
+- Nur in **CONTROL** und **DEGRADED** und nur bei eingeschaltetem Regelbetrieb (`"control": true` in
+  der Absicht). In START, OBSERVE und SAFE, ohne Absicht und bei ausgeschaltetem Regelbetrieb ruht
+  die Regelung, auch während der Übergabe nach dem Ausschalten des Regelbetriebs.
+- Die Regelung sendet nur **Änderungen**: einen Wert erst, wenn er sich vom letzten eigenen
+  unterscheidet. Im Dry-Run entsteht so nicht alle 5 s eine Entscheidung, obwohl evcc andere Werte
+  einstellt.
+- Ein gesperrter Aktor schreibt nicht (Abschnitt 13, „Sperren“). Ein Tesla, der schläft, nicht zu
+  Hause oder nicht angesteckt ist, bekommt weder Strom noch Stopp. Ein schlafendes Auto, das zu
+  Hause angesteckt ist, erreicht nur ein Start mit Weckerlaubnis (unten, „Tesla“).
+
+### Lademodi
+
+Jedes Fahrzeug hat einen Lademodus. Ohne Eintrag in der Absicht lädt es im **PV-Überschuss**.
+
+| Modus | Wert | Verhalten | Grenze je Phase |
+|---|---|---|---|
+| PV-Überschuss | `pv` | Startet, wenn der Überschuss den Mindeststrom des Autos `control.start_after_s` (120 s) lang trägt, und stoppt, wenn er `control.stop_after_s` (300 s) lang darunter liegt. Dazwischen lädt das Auto am Mindeststrom weiter; die Lücke deckt der Akku über den Eigenverbrauch von ESS. | Importlimit minus Abstand: 20 − 1 = 19 A |
+| Min+PV | `min_pv` | Lädt immer mindestens mit dem Mindeststrom, darüber wie PV-Überschuss. Der Mindeststrom geht dem Importlimit vor, nicht der Sicherung. | wie PV-Überschuss; für den Mindeststrom die Sicherung |
+| Sofort | `now` | Voller Strom innerhalb der Grenze, auch aus dem Akku: unter dem Importlimit über den Eigenverbrauch von ESS, darüber über Peak Shaving. | Sicherung minus Abstand: 35 − 2 = 33 A |
+| Aus | `off` | Stoppt das Laden und hält es gestoppt. | – |
+| Boost | `boost_until` | Wie Sofort bis zu diesem Zeitpunkt oder bis zum Abstecken; danach gilt wieder der eingestellte Modus. | wie Sofort |
+
+Die Zahlen gelten für die Beispielkonfiguration (`grid.fuse_a` 35 A, `grid.fuse_margin_a` 2 A,
+`grid.import_limit_a` 20 A, `control.import_margin_a` 1 A); alle Werte stehen in `config.yaml`.
+
+- Liegt der SOC unter USV-Reserve + `control.reserve_guard_pct` (5 %) oder ist er unbekannt, richten
+  sich auch Sofort und Boost am Importlimit aus (Grund „Schutz der USV-Reserve“): Peak Shaving soll
+  den Akku nicht unter die Reserve ziehen.
+- Ein **Moduswechsel** wirkt sofort, ohne Startzeit, Stoppzeit und Mindestzeiten.
+- Nach einem Start lädt ein Auto mindestens `control.min_on_s` (600 s), nach einem Stopp startet es
+  frühestens nach `control.min_off_s` (600 s) wieder. Das sind höchstens 3 Start/Stopp-Zyklen je Auto
+  und Stunde.
+- Ein Auto startet nur, wenn die Grenze des Phasenwächters für es mindestens seinen Mindeststrom
+  trägt (in Min+PV die Grenze an der Sicherung). Ist sie kleiner oder unbekannt, bleibt es aus; ein
+  Auto, das schon lädt, geht auf den Mindeststrom.
+- Es gibt **kein Ziel-SOC**: Die Autos stoppen an ihrem eigenen Ladelimit, der e-Golf lädt bis voll.
+  Meldet ein Auto „geladen“, startet die Regelung es erst nach dem Abstecken wieder.
+- **Abgesteckt:** Die Regelung will „Laden aus“; die EVCS bekommt das einmal. Bei einem **neuen
+  Ansteckvorgang** beginnen PV-Überschuss und Aus mit „Laden aus“, auch wenn das Auto selbst
+  gestartet hat. Sofort, Boost und Min+PV starten sofort.
+- **Neustart des core, während ein Auto lädt:** Es gibt keinen sofortigen Stopp oder Start. Ein Auto
+  im PV-Überschuss lädt mit Überschuss weiter; ohne Überschuss stoppt es frühestens nach
+  `stop_after_s` ab dem ersten Regelzyklus. Das gilt auch nach jeder Pause der Regelung (SAFE,
+  OBSERVE, Regelbetrieb aus).
+- **Überschuss:** Er ergibt sich aus der Ladeleistung der Autos, dem Netzbezug und dem Akku, abzüglich
+  `control.surplus_margin_w` (100 W). Entlädt der Akku, zählt das immer gegen den Überschuss: Ein
+  PV-Auto nimmt nie Leistung aus dem Akku. Lädt er, zählt seine Leistung nur, wenn die Autos
+  Vorrang haben (`surplus_priority`, unten). Fehlt ein Messwert, startet kein PV-Auto.
+- **Verteilung:** Die Autos kommen in der Reihenfolge `priority` dran, und jedes bekommt bis zu
+  seinem Höchststrom, bevor das nächste etwas sieht. Mit höchstens 10 kW PV laden zwei PV-Autos
+  deshalb nacheinander, nicht gleichzeitig: erst der Tesla (bis zu 11 kW), dann der e-Golf. Sofort
+  und Boost ziehen ihren vollen Strom vom Überschuss ab, bevor die PV-Autos ihren Anteil bekommen.
+
+### Phasenwächter und Überlast
+
+- Der Wächter rechnet je Phase die **Last ohne die eigenen Wallboxen und ohne die Hilfe des Akkus**:
+  Netzstrom plus der Strom, den der Multi aus dem Akku liefert, minus der gemessene Strom der
+  geregelten Wallboxen. So bleibt die Sicherung auch dann geschützt, wenn der Akku plötzlich nicht
+  mehr liefert. Was das Ziel der Phase (Tabelle oben) darüber frei lässt, teilt er den Autos in der
+  Reihenfolge `priority` zu.
+- Fehlt der Messwert einer Phase, gilt sie als voll: Ein ladendes Auto bekommt höchstens seinen
+  Mindeststrom, ein Start unterbleibt. Fällt eine Wallbox aus, rechnet der Wächter sie mit einem
+  Zuschlag als Last (EVCS mit `safe_a`, ein Tesla ohne Strom von Wall Connector und Tessie mit
+  `max_a`, jeweils auf allen Phasen).
+- **Überlast**, gemessen am echten Netzstrom und in allen Modi: Liegt eine Phase 3 s lang über 33 A,
+  gehen EVCS und Tesla auf den Mindeststrom; hält das weitere 3 s an, stoppt die EVCS. Liegt eine
+  Phase 10 s lang über der Sicherung (35 A), stoppt alles Laden. Aufgehoben wird die Stufe, wenn
+  alle Phasen 60 s lang höchstens bei 33 A liegen. Nach einem Stopp wegen Überlast gilt die
+  Mindestpause. Überlast startet und weckt nichts, und sie stoppt auch ein Auto, das selbst
+  gestartet hat.
+- **Dringend** sind nur die Befehle wegen Überlast und Senkungen unter den Ist-Strom, wenn das Ziel
+  die Sicherung ist (Sofort und Boost ohne Schutz der Reserve): Sie umgehen die Mindestabstände der
+  Safety-Schicht. Alle anderen Befehle sind normal, auch Senkungen am Importlimit (die fängt Peak
+  Shaving ab). **Jeder erneute Versuch nach „nicht übernommen“ ist normal und nie dringend**, auch
+  der einer Senkung wegen Überlast; er wartet auf die 90-s-Regel. Ein Befehl wegen Überlast, der neu
+  entsteht, weil die Stufe stieg, ist kein Neuversuch und bleibt dringend, höchstens einmal je Stufe.
+- Regel 4 der Safety-Schicht prüft jeden Befehl weiterhin unabhängig vom Wächter.
+
+### Absicht per PUT /v1/intent
+
+Bis zur Bedienung in Plan 2d setzt du Lademodi per `PUT /v1/intent` an die interne API des core. Den
+Zugang richtest du ein wie in Abschnitt 4, „Diagnose“ (Port 8081 kurzzeitig veröffentlichen);
+`$BINDAEMS_INTERNAL_TOKEN` ist der Wert aus der `.env`. Die Absicht ist **vollständig**: Sie ersetzt
+die bisherige, und was fehlt, gilt als Standard. `GET /v1/intent` zeigt die gültige.
+
+```json
+{
+  "version": 12,
+  "control": true,
+  "vehicles": {
+    "tesla": {"mode": "min_pv"},
+    "egolf": {"mode": "now", "boost_until": "2026-10-14T20:00:00+02:00"}
+  },
+  "priority": ["tesla", "egolf"],
+  "surplus_priority": {"kind": "battery_until_soc", "soc_pct": 30}
+}
+```
+
+```bash
+curl -X PUT -H "Authorization: Bearer $BINDAEMS_INTERNAL_TOKEN" -H "Content-Type: application/json" \
+  --data @intent.json http://127.0.0.1:8081/v1/intent
+```
+
+| Feld | Werte | Standard |
+|---|---|---|
+| `version` | ganze Zahl ab 1, streng steigend | – |
+| `control` | `true` schaltet den Regelbetrieb ein | `false` |
+| `actuators` | je Aktor-ID (`wallbox.evcs`, `vehicle.tesla`, …) `dry_run` oder `live` | Dry-Run |
+| `vehicles.<Schlüssel>.mode` | `pv`, `min_pv`, `now`, `off` | `pv` |
+| `vehicles.<Schlüssel>.boost_until` | Zeitpunkt mit Zeitzone, höchstens 12 h nach dem Senden | kein Boost |
+| `vehicles.<Schlüssel>.wallbox` | Schlüssel einer Wallbox; übersteuert die Zuordnung (unten) | keine Übersteuerung |
+| `priority` | alle Fahrzeug-Schlüssel genau einmal, in der Reihenfolge der Zuteilung | Reihenfolge unter `vehicles` in `config.yaml` |
+| `surplus_priority` | `kind`: `cars_first`, `battery_first` oder `battery_until_soc` (dann mit `soc_pct`) | `battery_until_soc`, 30 % |
+
+- Die Schlüssel der Fahrzeuge und Wallboxen sind die aus `config.yaml` (im Beispiel `tesla`, `egolf`
+  und `evcs`, `twc`).
+- `surplus_priority` sagt, wer den PV-Überschuss zuerst bekommt: `cars_first` die Autos (die
+  Ladeleistung des Akkus zählt zum Überschuss), `battery_first` zuerst der Akku, `battery_until_soc`
+  die Autos, sobald der Akku den SOC `soc_pct` erreicht hat.
+- **Version:** Sie muss über der gültigen liegen. Dieselbe Version mit gleichem Inhalt gilt als
+  Wiederholung. Bis zu Plan 2d genügt eine kleine, steigende Zahl; die app nimmt später Millisekunden
+  seit 1970, was größer bleibt.
+- **Antwort** (`{"result": …, "version": …, "details": […]}`):
+  - `accepted`: angenommen.
+  - `clamped`: angenommen, aber geklemmt. `details` nennt es: „{Name}: Boost auf 12 h begrenzt, bis
+    {HH:MM}.“ (Wiener Zeit) oder, dass ein Aktor ohne `live_allowed` im Dry-Run bleibt.
+  - `rejected` mit Status 422, mit je einem Satz in `details`: ein unbekanntes Fahrzeug
+    (`Unbekanntes Fahrzeug „x“.`), eine unbekannte Wallbox (`Unbekannte Wallbox „w“ für „v“.`), eine
+    Wallbox bei mehreren Fahrzeugen (`Wallbox „w“ ist mehreren Fahrzeugen zugeordnet.`), eine
+    Priorität, die nicht jedes Fahrzeug genau einmal nennt (`Die Priorität muss jedes Fahrzeug genau
+    einmal nennen.`) oder ein unbekannter Aktor.
+  - `rejected` mit Status 409: Die Version ist veraltet oder schon mit anderem Inhalt angenommen.
+- **Boost und Übersteuerung** gelten bis zum Ende des Ansteckvorgangs der Wallbox, an der das
+  Fahrzeug laut Absicht hängt: Meldet sie ein Fahrzeug, am laufenden Vorgang, sonst am nächsten.
+  Danach gelten sie erst wieder mit einer neuen Version. **Eine neue Version bindet jedes Fahrzeug
+  neu, das `boost_until` oder `wallbox` nennt**, auch wenn der Boost oder die Übersteuerung beim
+  Abstecken schon endete. Nimm solche Einträge aus der nächsten Version, wenn sie nicht wieder
+  gelten sollen. Nach einem Neustart des core springt ein Boost vom Vortag nicht beim nächsten
+  Anstecken an.
+- Der core speichert die gültige Absicht (`intent.json`) und nutzt sie nach einem Neustart weiter.
+  Eine gespeicherte Absicht aus Plan 2b lädt mit den Standardwerten.
+- **Regelbetrieb aus:** `{"version": …, "control": false}`. Der core übergibt die Aktoren und geht
+  dann nach OBSERVE (Abschnitt 13).
+
+Für den **Dry-Run** genügt `{"version": …, "control": true}` mit einer Version über der gültigen:
+Alle Aktoren bleiben im Dry-Run, und alle Fahrzeuge laden im PV-Überschuss, wie heute mit evcc.
+
+### Zuordnung Auto und Wallbox
+
+- **Standard:** Jedes Fahrzeug hängt an seiner `default_wallbox` (Tesla am Wall Connector, e-Golf an
+  der EVCS).
+- **Unklar** wird die Zuordnung, wenn die Indizien 60 s lang widersprechen: Der Tesla meldet über
+  Tessie „zu Hause“ und „angesteckt“, der Wall Connector meldet kein Fahrzeug, die EVCS aber eines
+  (Bild „Tesla an der EVCS“). Dann pausieren die Tesla-Befehle, und die EVCS behält ihren Strom;
+  nur der Phasenwächter senkt ihn. Start und Stopp nach Modus entfallen. Der Hinweis steht in
+  `GET /v1/health` (`vehicles`, Feld `assignment`: `unclear`) und im Entscheidungslog (Grund
+  „Zuordnung unklar“). Unbekannte Werte widersprechen nie.
+- **Übersteuerung:** Steht der Tesla an der EVCS, setzt du `"wallbox": "evcs"` bei `tesla`. Das gilt
+  bis zum Abstecken und hebt „unklar“ sofort auf. Der core setzt den Tesla-Strom dann einmal auf
+  `vehicles.tesla.max_a` und regelt nur noch die EVCS. Der e-Golf hat dann keinen Ladepunkt.
+
+```json
+{"version": 13, "control": true, "vehicles": {"tesla": {"mode": "now", "wallbox": "evcs"}}}
+```
+
+- Die vollständige Erkennung mit Hypothesen und Zeitkorrelation (Spec 7.8) kommt mit Plan 2c-2.
+
+### Tesla
+
+- **Strom:** Der Tesla folgt dem Mittel des Wunschstroms über `control.tesla_average_s` (90 s) und dem
+  niedrigsten freien Wert der letzten `control.tesla_caution_s` (60 s), nimmt davon den kleineren
+  Wert und rundet ab. Die Safety-Schicht lässt eine Änderung ab 2 A Unterschied und höchstens alle
+  90 s zu. Die schnellen Schwankungen fängt die EVCS ab.
+- **5 A:** Über Tessie wirkt ein Befehl auf oder von 5 A erst beim zweiten Mal. Der Tesla-Aktor prüft
+  den Strom deshalb im Tessie-Cache (10 bis 75 s nach der Bestätigung, Frist 85 s) und meldet sonst
+  „nicht übernommen“. Die Regelung fordert denselben Wert dann erneut an (Grund `not_taken_retry`),
+  als normalen Befehl, der auf die 90-s-Regel wartet. Ein Wechsel auf oder von 5 A dauert dadurch
+  etwa 2 min länger.
+- **Wecken** (Entscheidung des Betreibers vom 12.10.2026): Der core weckt den Tesla nur für einen
+  gewollten Start. Der Start trägt eine Weckerlaubnis; Tessie weckt das Auto dabei selbst. Das
+  Kontingent steht je Fahrzeug in `config.yaml` unter `wake`: mindestens `interval_s` (1800 s)
+  zwischen zwei Weckstarts und höchstens `per_day` (6) je Kalendertag in Wiener Zeit. Der Dry-Run
+  zählt mit, damit der Vergleich mit evcc ehrlich bleibt. Die Entscheidung trägt den Grund „Wecken“,
+  `GET /v1/health` zeigt `wakes_today`. Das Auto muss laut Tessie zu Hause und angesteckt sein.
+- Ohne `BINDAEMS_TESSIE_TOKEN` ist der Tesla nie erreichbar; die EVCS regelt dann allein.
+
+### Dry-Run-Vergleich mit evcc
+
+Im Dry-Run neben evcc stellt evcc die Ladepunkte, und BindaEMS entscheidet daneben. Jede Entscheidung
+hält fest, was BindaEMS täte **und** was gerade eingestellt ist, also den Wert von evcc. So
+vergleichst du zwei Wochen lang, ohne dass etwas auf die Geräte geschrieben wird.
+
+1. Images von Plan 2c-1 ausrollen (Abschnitt 4); `live_allowed` bleibt `false`.
+2. Eine Absicht senden: `{"version": …, "control": true}` (oben). Nach 30 s frischen Messwerten geht
+   der core nach CONTROL, alle Aktoren bleiben im Dry-Run.
+3. Entscheidungen lesen (Zugang wie in Abschnitt 13, „Entscheidungslog“). Das Beispiel listet mit
+   `jq` je Dry-Run-Entscheidung Zeit, Aktor, Art, den Wert von BindaEMS und den eingestellten Wert
+   von evcc:
+
+   ```bash
+   SINCE=$(date -u -d '1 day ago' +%Y-%m-%dT%H:%M:%S)%2B00:00
+   curl -s -H "Authorization: Bearer $BINDAEMS_INTERNAL_TOKEN" \
+     "http://127.0.0.1:8081/v1/decisions?since=$SINCE&limit=5000" \
+     | jq -r '.decisions[] | select(.dry_run) | [.ts, .actuator, .kind, .requested,
+         (if .kind == "charging" then .inputs.actual_charging else .inputs.actual_current_a end),
+         (.codes | join(","))] | @tsv'
+   ```
+
+Ein Eintrag im Rohformat (hier aus dem Simulator):
+
+```json
+{
+  "id": "5affd9dcf2ab406fb896f1e5500505b5",
+  "ts": "2026-06-21T08:00:30+00:00",
+  "actuator": "vehicle.tesla",
+  "kind": "current",
+  "requested": 9.0,
+  "applied": 9.0,
+  "dry_run": true,
+  "outcome": "accepted",
+  "result": "dry_run",
+  "codes": ["mode_pv", "pv_surplus"],
+  "text": "Tesla Model 3 (PV-Überschuss, Überschuss): Strom 9 A – Dry-Run, nicht gesendet.",
+  "inputs": {"soc_pct": 59.9, "battery_w": -3809.1, "grid_l1_a": 5.1, "grid_l2_a": 4.8,
+             "grid_l3_a": -9.9, "surplus_w": 6440.9, "limit_a": 28.4,
+             "actual_current_a": 5.0, "actual_charging": 1.0}
+}
+```
+
+- `requested` ist der Wert, den BindaEMS einstellen würde; `inputs.actual_current_a` und
+  `inputs.actual_charging` sind im Dry-Run die Werte, die evcc eingestellt hat. Im Beispiel würde
+  BindaEMS dem Tesla 9 A geben, evcc hat 5 A eingestellt.
+- Den **Modus** tragen die Gründe (`mode_*`, `boost`), denn `inputs` enthält nur Zahlen.
+- Es erscheinen nur **Änderungen** und Ablehnungen der Safety-Schicht (dieselbe Ablehnung höchstens
+  alle 60 s). Die EVCS folgt dem Überschuss in ganzen Ampere: Im Simulator waren es bis zu rund 100
+  Strombefehle je Stunde, rechne im Dry-Run mit entsprechend vielen Entscheidungen.
+
+| Grund (`codes`) | Text im Log | Bedeutung |
+|---|---|---|
+| `mode_pv`, `mode_min_pv`, `mode_now`, `mode_off` | PV-Überschuss, Min+PV, Sofort, Aus | der Lademodus des Fahrzeugs |
+| `boost` | Boost | Ein Boost gilt (er steht an Stelle des Modus). |
+| `pv_surplus` | Überschuss | Der Wert kommt aus dem Anteil am Überschuss, oder die Zeiten des PV-Überschusses haben einen Start oder Stopp ergeben. |
+| `phase_limit` | Phasengrenze | Der Wächter kappt am Ziel der Sicherung (Sofort, Boost). |
+| `import_limit` | Importlimit | Der Wächter kappt am Importlimit (PV-Überschuss, Min+PV). |
+| `reserve_guard` | Schutz der USV-Reserve | Sofort oder Boost richtet sich wegen eines niedrigen SOC am Importlimit aus. |
+| `overload` | Überlast | Befehl wegen Überlast (Mindeststrom oder Stopp). |
+| `wake` | Wecken | Start mit Weckerlaubnis an ein schlafendes Auto. |
+| `not_taken_retry` | erneut nach „nicht übernommen“ | Der Tesla hat den Strom nicht übernommen; die Regelung fordert ihn erneut an. |
+| `assignment_unclear` | Zuordnung unklar | Die Zuordnung Auto–Wallbox ist unklar (oben). |
+| `resume_after_outage` | Wiederaufnahme nach Ausfall | Der erste Start nach einer Pause der Regelung (SAFE, Inselbetrieb, Regelbetrieb aus). |
+
+Nach den Gründen der Regelung stehen in `codes` die Befunde der Safety-Schicht (etwa
+`urgent.bypass`). Die **Eingaben** (`inputs`) einer Entscheidung der Regelung sind:
+
+| Eingabe | Bedeutung |
+|---|---|
+| `soc_pct`, `battery_w` | Akku-SOC in % und Akkuleistung in W (positiv beim Laden) |
+| `grid_l1_a` bis `grid_l3_a` | Netzbezug je Phase in A (positiv bei Bezug) |
+| `surplus_w` | der verfügbare PV-Überschuss in W (`P_verf`) |
+| `limit_a` | der freie Strom, den der Phasenwächter dem Ladepunkt lässt, in A |
+| `actual_current_a` | der Ist-Sollstrom des Aktors in A (im Dry-Run: der von evcc) |
+| `actual_charging` | der Ist-Zustand: 1 = lädt, 0 = lädt nicht (im Dry-Run: der von evcc) |
+
+`null` heißt unbekannt. `GET /v1/health` zeigt je Fahrzeug (`vehicles`, in der Reihenfolge von
+`config.yaml`) Modus, Boost bis, Wallbox, Zuordnung, Grenze, angesteckt, lädt, Weckvorgänge heute
+und den letzten Grund.
+
+### Umstieg von evcc
+
+Heute regelt evcc beide Ladepunkte, nicht den Victron; BindaEMS löst es ab. Die Live-Schaltung folgt
+nach Plan 2d, mit dem Live-Schalter im UI (Spec 8.7), und zwar so:
+
+1. Der Dry-Run lief 2 Wochen, und die Entscheidungen sind gemeinsam gesichtet (Spec 18).
+2. Das Prüfprotokoll Teil 2 ist für EVCS und Tesla bestanden, bei der EVCS einschließlich des
+   Schritts „Verbindung unterbrochen“, und der Watchdog ist scharf (Abschnitt 14).
+3. `live_allowed: true` steht für `wallboxes.evcs` und `vehicles.tesla` (Abschnitt 13).
+4. **Beide Ladepunkte gehen gemeinsam live, und evcc wird ganz abgeschaltet,** nicht nur einer.
+   Beide Autos teilen sich Überschuss und Phasenwächter; ein Regler für das eine Auto und evcc für
+   das andere würden um denselben Überschuss konkurrieren. Schreibt evcc nach der Live-Schaltung
+   weiter, erkennt der core die fremde Änderung und sperrt den Aktor nach 3 Prüfungen im Abstand von
+   10 s (Abschnitt 13, „Sperren“).
+5. Victron bleibt im Dry-Run, bis Plan 2c-2 da ist und Dynamic ESS aus ist.
+
+Zurück zu evcc: beide Aktoren in der Absicht auf Dry-Run stellen, die Übergabe abwarten (Abschnitt
+13) und erst dann evcc wieder starten.
+
+### Hinweise für die Anlage
+
+- **Tessie fragt bei abgestecktem Auto nur alle 600 s ab.** Die Regelung erfährt „angesteckt“ vom
+  Tesla darum bis zu 10 min später als der Wall Connector. Ein Tesla, der beim Anstecken selbst zu
+  laden beginnt, lädt bis dahin ungeregelt.
+- **Ein Selbststart innerhalb eines laufenden Vorgangs** (etwa aus der Tesla-App) wird nicht
+  korrigiert: Die Regelung sendet nur Änderungen und kennt ihren letzten Wert bereits. Nur die
+  Überlast-Stufen greifen dann ein.
+- **Ein schlafender Tesla, den der core gerade übergibt,** hält die Übergabe offen, bis er aufwacht.
+  Solange kann der Alarm „… Sicherwert für … nicht bestätigt.“ (`actuator.failed.vehicle.tesla`)
+  anstehen (Abschnitt 14, „Meldungen des core“).
+- **Schnell wechselnde Wolken:** Dann deckt der Hausakku einen spürbaren Teil der PV-Ladung des
+  Tesla. Der Tesla darf seinen Strom nur alle 90 s ändern, und ein Wechsel auf oder von 5 A braucht
+  zwei Befehle; das nimmt das Design in Kauf (Design 6.5). Im Simulator kam bei Wolken im Wechsel
+  alle 30 bis 180 s bis zu etwa 38 % der Ladeenergie des Tesla aus dem Akku. Der e-Golf folgt den
+  Wolken binnen Sekunden.
+- **Vor der Live-Schaltung des Tesla:** Im sicheren Zustand bei Netzausfall sendet der core dem
+  Tesla „Laden aus“ alle 10 s erneut, bis der Tessie-Cache es zeigt; beim Laden dauert das bis zu
+  30 s. Das kostet bis zu 3 der 6 Start/Stopp-Befehle je Stunde und alle 3 Versuche des Vorfalls.
+  Prüfe vorher die Zahl der Versuche, ihren Abstand oder `min_a` (Spec 8.5).
+
+## Simulator
+
+Der Anlagensimulator `bindaems.tools.sim` lässt die echte Laufzeit des core mit ihren echten Aktoren
+gegen ein Modell der Anlage laufen, in simulierter Zeit (ein Zyklus je Sekunde). Das Modell hat ein
+Netz mit Sicherung, PV, Hauslast, den Akku mit ESS und Peak Shaving, die EVCS mit dem e-Golf, den Wall
+Connector mit dem Tesla und Tessie, Ausfälle und einen fremden Regler wie evcc. Gefälscht sind nur die
+Geräte: Parser der Adapter, Aktoren, Safety-Schicht und Laderegelung sind die echten, und das Modell
+zeigt sich so, wie die Geräte und Adapter es tun. Der Simulator verbindet sich mit nichts und schreibt
+nichts auf die Geräte; er braucht weder Tokens noch Netz. Die Szenarien sind deterministisch.
+
+In der CI läuft jedes der zehn Szenarien bei jedem Push (`tests/integration/test_sim_scenarios.py`).
+Von Hand lässt du eines laufen, etwa um nach einer Änderung von `grid` oder `control` in `config.yaml`
+zu sehen, ob die Regelung noch hält.
+
+### Aufruf
+
+Im Checkout, mit der Beispielkonfiguration `deploy/config.example.yaml`:
+
+```bash
+uv run python -m bindaems.tools.sim --szenario wolkig --out bericht.md
+```
+
+Auf der VM im Image des core. Dort gibt es `deploy/config.example.yaml` nicht, du gibst deshalb deine
+`config.yaml` an:
+
+```bash
+cd /opt/bindaems
+mkdir -p verification && sudo chown 10001 verification   # der Container läuft als UID 10001
+docker compose run --rm -v "$PWD/verification:/out" --entrypoint python ems-core \
+  -m bindaems.tools.sim --szenario wolkig --config /config/config.yaml \
+  --out /out/<Datum>-simulation-wolkig.md
+```
+
+- `--szenario NAME` (Pflicht): eines der zehn Szenarien unten.
+- `--out PFAD` (Pflicht): der Bericht als Markdown. Fehlende Ordner legt das Werkzeug an.
+- `--config PFAD`: die Konfiguration, aus der Grenzen, Fahrzeuge und Wallboxen kommen. Die
+  Szenarien brauchen die Wallboxen `evcs` (EVCS) und `twc` (Wall Connector) und die Fahrzeuge `tesla`
+  (mit Tessie) und `egolf`.
+- `--stunden H`: Dauer in Stunden statt der des Szenarios, **höchstens diese**; ein größerer Wert
+  lässt das Szenario ganz laufen, denn seine Ereignisse und Prüfungen enden mit seiner Dauer.
+- Jeder Lauf bekommt ein **frisches temporäres Verzeichnis** für die Ablage des core (Absicht,
+  Rate-Limits, Entscheidungen). Er berührt `/data` nie und sieht nichts von früheren Läufen.
+- Ein Szenario braucht für 1 bis 2 h simulierte Zeit rund 10 bis 25 s Rechenzeit.
+
+Die Standardausgabe zeigt je Kennzahl eine Zeile, dann je Prüfung des Szenarios eine und am Ende den
+Pfad des Berichts. Ein Ausschnitt aus `tesla-5a`:
+
+```text
+Höchster Phasenstrom: 0,28 A (Grenze 35 A) – OK
+…
+Wiederholte Dry-Run-Entscheidungen: 0 (Grenze 0) – OK
+Szenario-Prüfung: OK – Eine Entscheidung nennt „not_taken_retry“.
+Szenario-Prüfung: OK – „tesla“ lädt am Ende mit 5 A.
+Bericht: bericht.md
+```
+
+Schlägt etwas fehl, steht statt OK `FEHLER`, bei einer Prüfung des Szenarios mit „Befund: …“.
+
+**Rückgabewert:**
+- **0**, wenn alle Kennzahlen und Prüfungen bestehen.
+- **1**, wenn eine Kennzahl oder eine Prüfung des Szenarios fehlschlägt.
+- **2** bei einem unbekannten Szenario, einer fehlenden oder ungültigen Konfiguration, einer
+  Konfiguration ohne die Geräte der Szenarien (siehe `--config`), einem ungültigen `--stunden` oder
+  einem Bericht, der sich nicht schreiben lässt.
+
+### Bericht
+
+Der Bericht ist eine Markdown-Datei:
+
+- Überschrift mit dem Titel des Szenarios und eine Tabelle „Angabe | Wert“ mit Szenario, simulierter
+  Zeit (Wiener Zeit) und Konfiguration.
+- **Kennzahlen:** eine Tabelle „Kennzahl | Wert | Grenze | Ergebnis“, das Ergebnis ist OK oder FEHLER.
+- **Szenario-Prüfungen:** eine Tabelle „Ergebnis | Prüfung | Befund“ mit einer Zeile je Prüfung. Der
+  Befund nennt bei FEHLER die Verstöße, sonst „–“.
+- **Entscheidungen:** die Zahl der Entscheidungen des core je Aktor, Art und Ergebnis, danach je
+  Grund (die Gründe aus dem Abschnitt „Laderegelung“).
+
+### Kennzahlen
+
+Jedes Szenario misst dieselben Kennzahlen. Die Grenzen kommen aus der Konfiguration; die Zahlen unten
+gelten für die Beispielkonfiguration.
+
+| Kennzahl | Grenze | Gemessen |
+|---|---|---|
+| Höchster Phasenstrom | ≤ 35 A (`grid.fuse_a`) | der größte Netzstrom einer Phase |
+| Längste Zeit über 33 A | ≤ 10 s | die längste Folge von Sekunden mit einer Phase über `fuse_a − fuse_margin_a` |
+| Längste Zeit über dem Ziel in PV-Modi | ≤ 10 s | die längste Folge von Sekunden, in der eine Phase (mit Akku-Hilfe gerechnet) über dem Ziel am Importlimit (19 A) liegt, mit 0,5 A Toleranz. Es zählen nur Sekunden, in denen alle ladenden Autos im PV-Überschuss oder in Min+PV stehen, die Regelung ihre Ladepunkte live steuert und keines mit weniger als Mindeststrom + 0,5 A lädt (Stopp-Minuten, Mindeststrom von Min+PV). |
+| … Tesla lädt | ≤ 200 s | dieselbe Messung für Folgen, in denen der Tesla lädt. Ein Wechsel auf oder von 5 A braucht zwei Strombefehle im Abstand von 90 s, dazu Antwort und Prüfung im Cache: `2 × commands.current_interval_s + 20`. |
+| Akku-Energie in PV-Autos | ≤ 5 % | der Anteil der Akku-Energie an der Energie der PV-Autos, in denselben Sekunden. **Übergänge zählen nicht:** die ersten 10 s einer ununterbrochenen Folge mit Entladung, lädt der Tesla, die ersten 200 s. |
+| Starts je Auto und Stunde | ≤ 4 | Wechsel von „lädt nicht“ zu „lädt“ im Modell, in einem gleitenden Fenster von einer Stunde |
+| Kürzester Abstand der Tesla-Strombefehle | ≥ 90 s | der Abstand am Fahrzeug (Zeitpunkt des Sendens) zwischen Entscheidungen über den Tesla-Strom mit Ergebnis ok oder Dry-Run, ohne dringende Befehle; „–“, wenn weniger als zwei zählen |
+| Weckvorgänge je Tag | ≤ `wake.per_day` | Entscheidungen mit dem Grund „Wecken“ und einem Wert, je Kalendertag in Wiener Zeit |
+| Kürzester Abstand der Weckvorgänge | ≥ `wake.interval_s` | der Abstand zweier solcher Entscheidungen |
+| Wiederholte Dry-Run-Entscheidungen | 0 | Dry-Run-Entscheidungen, deren Wert dem vorigen eigenen Wert der Regelung für Aktor und Art gleicht |
+
+- Die beiden PV-Kennzahlen zählen nur Autos, deren Ladepunkt die Regelung **live** steuert. Im Dry-Run
+  stellt ein anderer Regler die Ladepunkte, und gemessen werden soll die Regelung.
+- Als „eigener Wert“ der Regelung zählt auch ein Wert, den die Safety-Schicht mit „unverändert“
+  beantwortete. Vergisst die Regelung ihre Werte (Pause, Wechsel der Betriebsart), beginnt die
+  Zählung neu.
+- Die Lastsprünge der Szenarien sind so bemessen, dass ein korrekt regelnder core 35 A halten kann.
+
+### Szenarien
+
+Alle Szenarien starten mit angesteckten, nicht ladenden Autos und einem wachen Tesla, soweit die
+Tabelle nichts anderes sagt. Der Regelbetrieb ist an, die Aktoren der Regelung sind live (außer in
+`dry-run`).
+
+| Name | Titel, Dauer | Anlage und Ereignisse | Prüfung des Szenarios |
+|---|---|---|---|
+| `sonnig` | Sonniger Tag, beide Autos im PV-Modus, 2 h | 21.06.2026 ab 10:00, PV bis 9 kW, Akku 60 %, Tesla nahe an seinem Ladelimit | Erst lädt der Tesla bis „Complete“ (mindestens 45 min), danach der e-Golf (mindestens 45 min). |
+| `wolkig` | Wolkiger Tag, beide Autos im PV-Modus, 2 h | wie `sonnig`, Sonne und Wolke im Wechsel alle 30 bis 180 s | wie `sonnig`, je mindestens 20 min |
+| `abend-sofort` | Abends beide Autos auf Sofort, mit Lastspitze, 1 h | 12.10.2026 ab 18:00, keine PV, Akku 60 %, L1 +2,5 kW von 20 bis 25 min | Der Strom der EVCS liegt während der Spitze unter dem davor. |
+| `reserve` | Sofort knapp über der USV-Reserve, 1 h | Akku 23 %, dauerhaft 1 kW mehr Last auf L1, nur der e-Golf | Eine Entscheidung nennt „reserve_guard“; der SOC sinkt nie unter 20 %. |
+| `nur-laden` | Multi auf „Nur Laden“ mit Sofort, 1 h | L1 +3 kW als Rampe von 20 bis 40 min | Die Selbstprüfung `multi_mode` warnt. |
+| `tesla-5a` | Tesla auf 5 A mit verlorenem erstem Befehl, 1 h | PV konstant 4,6 kW, Tesla angesteckt mit 10 A, e-Golf abgesteckt | Eine Entscheidung nennt „not_taken_retry“; der Tesla lädt am Ende mit 5 A. |
+| `tesla-schlaeft` | Schlafender Tesla im PV-Modus, 1 h | 21.06.2026 ab 09:00, PV steigt in 30 min auf 6 kW | Genau ein Weckvorgang; der Tesla lädt am Ende. |
+| `ausfaelle` | Ausfälle einzeln, Netzausfall mit Wiederaufnahme, 1,5 h | beide Sofort; Ausfälle: EVCS 10–15 min, Wall Connector 20–25, Tessie 30–35, Cerbo 40–41, Netz 50–53 | SAFE in den Fenstern von Cerbo und Netz; ab 60 min laden beide; eine Entscheidung nennt „resume_after_outage“. |
+| `zuordnung` | Zuordnung unklar und Übersteuerung, 1 h | Tesla an der EVCS; Übersteuerung `tesla: evcs` (Version 2) bei 10 min; Abstecken bei 40 min | Die Gesundheit zeigt „unklar“ vor 10 min; genau eine Entscheidung „Strom 16 A“ an den Tesla; ab 41 min lädt die EVCS nicht. |
+| `dry-run` | Dry-Run neben einem fremden Regler, 1 h | wie `wolkig`, fremder Regler an, alle Aktoren im Dry-Run | keine wiederholte Dry-Run-Entscheidung; mindestens eine Dry-Run-Entscheidung an EVCS und Tesla; kein Alarm „competitor.foreign.*“ |
+
+Die Verteilung ist gierig nach Priorität (Abschnitt „Laderegelung“): Mit höchstens 10 kW PV laden die
+Autos in `sonnig` und `wolkig` nacheinander, darum steht der Tesla dort nahe an seinem Ladelimit.
+
+### Was das Modell nicht leistet
+
+Der Simulator zeigt, ob die Regelung bei bestimmten Lasten, Wolken und Ausfällen die Grenzen hält. Die
+Zeiten von Tessie (Antwort nach 0,2 bis 2,5 s, Abfragen alle 30, 60 oder 600 s), der verlorene erste
+5-A-Befehl und die Ladekurven der Autos sind Annahmen aus dem Prüfprotokoll Teil 2 und der Spec. Ein
+Tessie-Ausfall trennt wie beim echten Adapter die Quelle nicht: Die Werte veralten, Befehle scheitern
+mit HTTP 503, und die Abfragen laufen im Backoff des Adapters (60 s, verdoppelt bis 900 s). Ein grüner
+Simulator ersetzt weder das Prüfprotokoll Teil 2 noch den Dry-Run an der Anlage.

@@ -1,4 +1,5 @@
 import importlib.util
+import json
 import re
 from pathlib import Path
 
@@ -21,6 +22,89 @@ def test_operations_guide_describes_the_web_ui() -> None:
     text = Path("docs/betrieb.md").read_text(encoding="utf-8")
     for topic in ("## 12. Web-UI", "App installieren", "Sitzung", "Bestätigungscode"):
         assert topic in text
+
+
+def test_operations_guide_describes_charging() -> None:
+    text = Path("docs/betrieb.md").read_text(encoding="utf-8")
+    for topic in ("## Laderegelung", "## Simulator", '"vehicles"', "-m bindaems.tools.sim"):
+        assert topic in text
+
+
+def _guide_section(heading: str) -> str:
+    """Der Abschnitt ``## heading`` des Betriebshandbuchs bis zum nächsten ``## ``."""
+    text = Path("docs/betrieb.md").read_text(encoding="utf-8")
+    return text.split(f"\n## {heading}\n", 1)[1].split("\n## ", 1)[0]
+
+
+def test_json_examples_of_the_charging_section_are_valid() -> None:
+    # Die Beispiele sind eine Absicht für PUT /v1/intent und ein Eintrag von GET /v1/decisions: Die
+    # Modelle des core müssen sie lesen können, sonst führt das Handbuch in die Irre.
+    from bindaems.shared.control import Intent
+    from bindaems.shared.decisions import decision_from_json
+
+    examples = re.findall(r"```json\n(.*?)\n```", _guide_section("Laderegelung"), re.DOTALL)
+    data = [json.loads(example) for example in examples]
+    assert [("version" in item) for item in data].count(True) >= 2
+    for item in data:
+        if "version" in item:
+            Intent.model_validate(item)
+        else:
+            decision_from_json(item)
+
+
+# die Gründe der Laderegelung (Plan 2c-1, „Texte“)
+CHARGING_REASONS = {
+    "mode_pv",
+    "mode_min_pv",
+    "mode_now",
+    "mode_off",
+    "boost",
+    "pv_surplus",
+    "phase_limit",
+    "import_limit",
+    "reserve_guard",
+    "overload",
+    "wake",
+    "not_taken_retry",
+    "assignment_unclear",
+    "resume_after_outage",
+}
+
+
+def test_reason_codes_in_the_guide_match_the_decision_log() -> None:
+    # Die Tabelle der Gründe nennt jeden Code mit dem Text, den das Entscheidungslog zeigt.
+    from bindaems.shared.control import CommandKind
+    from bindaems.shared.decisions import DecisionResult, decision_text
+
+    documented: dict[str, str] = {}
+    for line in _guide_section("Laderegelung").splitlines():
+        cells = [cell.strip() for cell in line.strip().strip("|").split("|")]
+        codes = re.findall(r"`(\w+)`", cells[0]) if len(cells) >= 3 else []
+        if line.startswith("| `") and codes and set(codes) <= CHARGING_REASONS:
+            labels = [label.strip() for label in cells[1].split(", ")]
+            assert len(labels) == len(codes), line
+            documented.update(zip(codes, labels, strict=True))
+    assert set(documented) == CHARGING_REASONS
+    for code, label in documented.items():
+        shown = decision_text(
+            "A", CommandKind.CURRENT, 8.0, DecisionResult.DRY_RUN, reasons=(code,)
+        )
+        assert f"({label})" in shown, code
+
+
+def test_simulator_section_matches_the_tool(capsys: pytest.CaptureFixture[str]) -> None:
+    # Die Szenarien und Optionen im Handbuch gibt es, und das Werkzeug kennt keine ungenannten.
+    from bindaems.tools.sim.__main__ import main
+    from bindaems.tools.sim.scenarios import SCENARIOS
+
+    with pytest.raises(SystemExit):
+        main(["--help"])
+    known = set(re.findall(r"--[a-z][a-z-]*", capsys.readouterr().out))
+    section = _guide_section("Simulator")
+    documented = set(re.findall(r"--[a-z][a-z-]*", section)) - {"--rm", "--entrypoint"}
+    assert documented == known - {"--help"}
+    scenarios = re.findall(r"^\| `([a-z0-9-]+)` \|", section, re.MULTILINE)
+    assert scenarios == list(SCENARIOS)
 
 
 def test_operations_guide_describes_operating_states_and_the_watchdog() -> None:
