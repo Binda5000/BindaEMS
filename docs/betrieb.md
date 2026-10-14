@@ -1591,7 +1591,7 @@ Ein Eintrag im Rohformat (hier aus dem Simulator):
   Stundenlimits des Tesla (dieselbe Ablehnung bzw. Zurückstellung höchstens alle 60 s). Eine
   Zurückstellung ist keine Entscheidung, die BindaEMS ausführte: Sie zeigt, dass der Vergleich beim
   Tesla dort abbricht, bis das Budget wieder Platz hat (im Simulator in `dry-run` 14 Einträge je
-  Stunde neben 22 Dry-Run-Entscheidungen). Die EVCS folgt dem Überschuss in ganzen Ampere mit
+  Stunde neben 20 Dry-Run-Entscheidungen an den Tesla). Die EVCS folgt dem Überschuss in ganzen Ampere mit
   Hysterese (oben, „Lademodi“): Im Simulator waren es bei ruhiger Sonne (`sonnig`) 3 Strombefehle
   in knapp einer Stunde PV-Laden, unter wechselnden Wolken (`wolkig`) rund 40 je Stunde.
 

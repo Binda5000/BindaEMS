@@ -287,8 +287,10 @@ Befehl weiterhin unabhängig vom Phasenwächter.
 - `P_autos`: Ladeleistung aller Autos jetzt.
 - `P_netz`: Netzleistung, positiv bei Bezug.
 - `P_akku_anrechenbar`:
-  - Entlädt der Akku, zählt seine Leistung immer, und zwar negativ. So nimmt ein PV-Auto nie
-    Leistung aus dem Akku, auch nicht, wenn Dynamic ESS gerade ins Netz verkauft.
+  - Entlädt der Akku, zählt seine Leistung immer, und zwar negativ. So rechnet der Anteil eines
+    PV-Autos nie mit Leistung aus dem Akku, auch nicht, wenn Dynamic ESS gerade ins Netz verkauft.
+    Aus dem Akku lädt es trotzdem, wo es dem Überschuss nicht sofort folgt: in den Stopp-Minuten am
+    Mindeststrom (6.3), in Übergängen und beim Tesla unter schnellen Wolken (6.5).
   - Lädt der Akku, zählt seine Leistung nur, wenn die Autos Vorrang haben: bei `cars_first`
     immer, bei `battery_first` nie, bei `battery_until_soc` ab diesem SOC.
 - Fehlt eine dieser Größen, ist der Überschuss unbekannt: PV-Autos starten nicht, und ein

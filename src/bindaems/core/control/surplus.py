@@ -37,8 +37,8 @@ def surplus_w(
     Bezug), ``battery_w`` die Akkuleistung (positiv beim Laden) und ``margin_w`` der Abzug
     ``control.surplus_margin_w``. ``anrechenbar`` ist die Akkuleistung, die der Überschuss mitzählt:
 
-    - Entlädt der Akku, zählt seine Leistung immer, und zwar negativ. So nimmt ein PV-Auto nie
-      Leistung aus dem Akku.
+    - Entlädt der Akku, zählt seine Leistung immer, und zwar negativ. So rechnet der Anteil eines
+      PV-Autos nie mit Leistung aus dem Akku.
     - Lädt der Akku, zählt seine Leistung nur, wenn die Autos Vorrang haben: bei ``cars_first``
       immer, bei ``battery_first`` nie, bei ``battery_until_soc`` ab einem bekannten SOC von
       mindestens ``priority.soc_pct``. Ein unbekannter SOC zählt nicht.
