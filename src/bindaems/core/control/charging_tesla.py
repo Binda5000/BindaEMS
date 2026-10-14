@@ -5,7 +5,33 @@ Die Bausteine, die ``ChargeController`` für Fahrzeuge mit Tessie braucht (Präz
 - ``TeslaPolicy``: je Fahrzeug das gleitende Mittel des Wunsches, das vorsichtige Minimum des
   freien Stroms und das Weckkontingent
 - ``EvcsOverrides``: die Fahrzeuge mit Tessie, die laut Übersteuerung an einer EVCS hängen
+- ``maximum_command`` und ``wake_command``: der Höchststrom „Tesla an der EVCS“ und der Start mit
+  Weckerlaubnis, jeweils als Befehl
+- ``tessie_current``: der Strom, den Tessie meldet, auf den Phasen der Wallbox
 - die Gründe ``wake`` und ``assignment_unclear``
+
+Tesla, Zuordnung und Wiederaufnahme (Design 7 bis 9; ``ChargeController`` verbindet die Bausteine):
+
+- Ein Fahrzeug mit Tessie am Wall Connector bekommt ``floor(min(Mittel des Wunsches, niedrigster
+  freier Wert))`` über ``control.tesla_average_s`` bzw. ``control.tesla_caution_s``, in seinem
+  Strombereich (Präzisierung 12). Der Wunsch zählt nur, solange das Auto laden kann. Beide
+  Fenster beginnen mit jedem neuen Ansteckvorgang und nach ``idle`` neu; wird der Ladepunkt nur
+  wieder geregelt, behalten sie ihre Werte.
+- Will der Modus starten und ist der Aktor nicht steuerbar, aber weckbar, kommt ein Start mit
+  Weckerlaubnis (``wake``) ohne Strom: bei bekanntem Ansteckzustand, ohne Überlast und im
+  Weckkontingent. Das Kontingent zählt jeden Weckstart mit einem Urteil mit Wert.
+- „Tesla an der EVCS“: Hängt ein Fahrzeug mit Tessie laut Übersteuerung an einer EVCS, bekommt es
+  einmal je Ansteckvorgang seinen Höchststrom mit dem Modus als Grund, sobald es steuerbar ist und
+  die EVCS geregelt wird; geregelt wird dann die EVCS. Erledigt ist das wie jeder Befehl
+  (Präzisierung 10); nach ``idle`` geht es noch einmal hinaus.
+- Solange die Zuordnung unklar ist (Präzisierung 5), gibt es kein „Laden an/aus“ nach dem Modus;
+  der Strom sinkt nur, wenn der Wächter weniger als den Ist-Strom erlaubt, nie unter den
+  Mindeststrom. Die Gründe sind ``(Modus, "assignment_unclear", Ursache)``. Die Überlast setzt
+  weiter den Mindeststrom und stoppt ab ``EVCS_STOP``. Fahrzeuge mit Tessie pausieren
+  (Präzisierung 6).
+- Nach ``idle`` trägt die erste Startfolge (Strom und ``charging=True``) je Fahrzeug zusätzlich
+  ``resume_after_outage``, bis die Safety-Schicht ihren Start mit Wert oder ``UNCHANGED``
+  beurteilt. Das gilt erst, wenn seit dem Start des core schon geregelt wurde.
 
 Die Schicht ist rein: Die Zeit kommt als Argument, auf der Uhr der Safety-Schicht; nur der
 Kalendertag des Weckkontingents gilt nach der Wanduhr.
@@ -19,10 +45,13 @@ from datetime import datetime
 from typing import Final
 
 from bindaems.core.control.assignment import AssignmentKind, VehicleState
+from bindaems.core.control.charge_inputs import ChargeInputs, VehicleObs
+from bindaems.core.control.charge_modes import MODE_CODES, Effective
+from bindaems.core.control.last_values import Key, LastValues
 from bindaems.core.control.phase_guard import SlidingMin
 from bindaems.core.control.tesla_policy import MovingAverage, WakeQuota
-from bindaems.shared.config import Config, ControlConfig, EvcsConfig, WakeConfig
-from bindaems.shared.control import vehicle_actuator
+from bindaems.shared.config import Config, ControlConfig, EvcsConfig, Phase, PhaseMap, WakeConfig
+from bindaems.shared.control import Command, CommandKind, vehicle_actuator
 
 WAKE: Final = "wake"  # ein Start mit Weckerlaubnis
 ASSIGNMENT_UNCLEAR: Final = "assignment_unclear"  # die Zuordnung ist unklar (Präzisierung 5)
@@ -116,3 +145,50 @@ class EvcsOverrides:
         arrived = {vehicle_actuator(k) for k, w in found.items() if self._seen.get(k) != w}
         self._seen = found
         return set(found), arrived
+
+
+def maximum_command(
+    cfg: Config, last: LastValues, key: str, mode: Effective, inputs: ChargeInputs
+) -> list[Command]:
+    """„Tesla an der EVCS“: der Höchststrom an das Fahrzeug selbst, sobald es steuerbar ist.
+
+    Er geht hinaus, solange er sich gegenüber dem letzten eigenen Wert ändert;
+    ``ChargeController.step`` vergisst den je Ansteckvorgang. Grund ist der Modus.
+    """
+    actuator = vehicle_actuator(key)
+    value = float(cfg.vehicles[key].max_a)
+    steerable = inputs.controllable.get(actuator) is True
+    if not steerable or (actuator, CommandKind.CURRENT) in inputs.blocked:
+        return []
+    if not last.changed((actuator, CommandKind.CURRENT), value):
+        return []
+    return [last.command(actuator, CommandKind.CURRENT, value, (MODE_CODES[mode],))]
+
+
+def wake_command(
+    last: LastValues,
+    policy: TeslaPolicy,
+    now: datetime,
+    wall_now: datetime,
+    actuator: str,
+    reasons: tuple[str, ...],
+    blocked: frozenset[Key],
+) -> list[Command]:
+    """Der Start mit Weckerlaubnis (Design 7.1): ``charging=True`` mit ``wake``, ohne Strom.
+
+    Er kommt, wenn ``charging=True`` sich ändert, nicht blockiert ist und das Weckkontingent ihn
+    erlaubt. Die Gründe ``reasons`` baut die Regelung: die eines Starts, danach ``wake``.
+    """
+    on = (actuator, CommandKind.CHARGING)
+    if on in blocked or not last.changed(on, True):
+        return []
+    if not policy.may_wake(now, wall_now):
+        return []
+    return [last.command(actuator, CommandKind.CHARGING, True, reasons, wake=True)]
+
+
+def tessie_current(tessie: VehicleObs, phase_map: PhaseMap) -> dict[Phase, float] | None:
+    """Der Strom aus Tessie auf den ersten ``phases`` Phasen der ``phase_map``; sonst ``None``."""
+    if not tessie.reachable or tessie.actual_current_a is None or tessie.phases is None:
+        return None
+    return {phase: tessie.actual_current_a for phase in phase_map[: tessie.phases]}

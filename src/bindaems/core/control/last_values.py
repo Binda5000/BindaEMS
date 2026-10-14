@@ -6,6 +6,25 @@
 - ``ControlCommand``: ein Befehl der Regelung samt seinen Eingaben für das Entscheidungslog
 - ``NOT_TAKEN_RETRY``: der Grund eines Befehls, der nach „nicht übernommen“ erneut kommt
 
+Die Regelung schickt nur Änderungen (Plan 2c-1, Präzisierung 10): Der letzte eigene Wert je Aktor
+und Art folgt den Urteilen (``note_verdict``) und den Ergebnissen (``note_result``). Sie vergisst
+ihn, wo sich das Gerät ohne sie geändert haben kann; die Safety-Schicht antwortet ``UNCHANGED``,
+wenn es den Wert schon hat:
+
+- nach einer Pause (``idle``) für alle Aktoren,
+- für den Aktor eines Ladepunkts, wenn er wieder geregelt wird, mit einem neuen Ansteckvorgang und
+  wenn ein gemerkter Vorgang die Maschine erreicht; jedes davon geschieht einmal,
+- mit jeder höheren Stufe der Überlast für alle geregelten Aktoren: Jede Stufe bietet ihre
+  Reaktion einmal an,
+- für die Aktoren, die ``forget`` nennt: Die Laufzeit tut das beim Wechsel der wirksamen
+  Betriebsart (Dry-Run ↔ live), denn ein Dry-Run-Urteil zählte sonst als gesendet, nach einem
+  Wert des Keepers und wenn ein anderes System den Aktor übernimmt.
+
+Nach „nicht übernommen“ fordert die Regelung den Wert als normalen Befehl erneut an
+(``not_taken_retry``, Plan 2c-1, Design 7.2): Er wartet auf die 90-s-Regel und die Stundenlimits,
+auch wenn er sonst dringend wäre (Plan 2c-1, Präzisierung 11). Dringend bleibt das „Laden aus“ der
+Überlast, eine andere Art: „Nicht übernommen“ meldet nur der Strom des Tesla.
+
 Die Schicht ist rein: Sie rechnet nur mit den Urteilen und Ergebnissen, die sie bekommt.
 """
 

@@ -5,9 +5,9 @@ Ein Zyklus (``step``) geht so (Präzisierungen 4 bis 12):
 1. Zuordnung (``Assignment``) und der geltende Modus je Fahrzeug, bei aktivem ``boost_until``
    Boost. Die Reihenfolge ist ``intent.priority``, wenn sie jedes Fahrzeug der Konfiguration genau
    einmal nennt, sonst die von ``config.yaml``; Einträge für unbekannte Fahrzeuge zählen nicht.
-2. Ladepunkte (``_Point``): Aktor, Phasen, Strombereich, gemessener Strom und ob er geregelt wird
-   (Präzisierungen 5 und 6). Daraus die Last je Phase samt Zuschlägen (``phase_loads``) und die
-   Stufe der Überlast am echten Netzstrom (``OverloadGuard``).
+2. Ladepunkte (``ChargePoint``): Aktor, Phasen, Strombereich, gemessener Strom und ob er geregelt
+   wird (Präzisierungen 5 und 6). Daraus die Last je Phase samt Zuschlägen (``phase_loads``) und
+   die Stufe der Überlast am echten Netzstrom (``OverloadGuard``).
 3. Überschuss (``surplus_w``) und seine Verteilung (``share_surplus``), dann die Zuteilung des
    Wächters (``allocate``), beides in der Reihenfolge der Priorität.
 4. Je geregeltem Ladepunkt der Modus (``ModeMachine``), Überlast, Strom und Befehle. Die Maschine
@@ -18,47 +18,9 @@ Ein Zyklus (``step``) geht so (Präzisierungen 4 bis 12):
    gestartet hat. So beim Tesla, den Tessie erst nach dem Wall Connector als angesteckt meldet.
    Der gemerkte Vorgang erreicht die Maschine im ersten Schritt mit bekanntem Ansteckzustand.
 
-Die Regelung schickt nur Änderungen (Präzisierung 10): Der letzte eigene Wert je Aktor und Art
-folgt den Urteilen (``note_verdict``) und den Ergebnissen (``note_result``). Sie vergisst ihn, wo
-sich das Gerät ohne sie geändert haben kann; die Safety-Schicht antwortet ``UNCHANGED``, wenn es
-den Wert schon hat:
-
-- nach einer Pause (``idle``) für alle Aktoren,
-- für den Aktor eines Ladepunkts, wenn er wieder geregelt wird, mit einem neuen Ansteckvorgang und
-  wenn ein gemerkter Vorgang die Maschine erreicht; jedes davon geschieht einmal,
-- mit jeder höheren Stufe der Überlast für alle geregelten Aktoren: Jede Stufe bietet ihre
-  Reaktion einmal an,
-- für die Aktoren, die ``forget`` nennt: Die Laufzeit tut das beim Wechsel der wirksamen
-  Betriebsart (Dry-Run ↔ live), denn ein Dry-Run-Urteil zählte sonst als gesendet, nach einem
-  Wert des Keepers und wenn ein anderes System den Aktor übernimmt.
-
-Nach „nicht übernommen“ fordert die Regelung den Wert als normalen Befehl erneut an
-(``not_taken_retry``, Design 7.2): Er wartet auf die 90-s-Regel und die Stundenlimits, auch wenn er
-sonst dringend wäre (Präzisierung 11). Dringend bleibt das „Laden aus“ der Überlast, eine andere
-Art: „Nicht übernommen“ meldet nur der Strom des Tesla.
-
-Tesla, Zuordnung und Wiederaufnahme (Design 7 bis 9; die Bausteine stehen in ``charging_tesla``):
-
-- Ein Fahrzeug mit Tessie am Wall Connector bekommt ``floor(min(Mittel des Wunsches, niedrigster
-  freier Wert))`` über ``control.tesla_average_s`` bzw. ``control.tesla_caution_s``, in seinem
-  Strombereich (Präzisierung 12). Der Wunsch zählt nur, solange das Auto laden kann. Beide
-  Fenster beginnen mit jedem neuen Ansteckvorgang und nach ``idle`` neu; wird der Ladepunkt nur
-  wieder geregelt, behalten sie ihre Werte.
-- Will der Modus starten und ist der Aktor nicht steuerbar, aber weckbar, kommt ein Start mit
-  Weckerlaubnis (``wake``) ohne Strom: bei bekanntem Ansteckzustand, ohne Überlast und im
-  Weckkontingent. Das Kontingent zählt jeden Weckstart mit einem Urteil mit Wert.
-- „Tesla an der EVCS“: Hängt ein Fahrzeug mit Tessie laut Übersteuerung an einer EVCS, bekommt es
-  einmal je Ansteckvorgang seinen Höchststrom mit dem Modus als Grund, sobald es steuerbar ist und
-  die EVCS geregelt wird; geregelt wird dann die EVCS. Erledigt ist das wie jeder Befehl
-  (Präzisierung 10); nach ``idle`` geht es noch einmal hinaus.
-- Solange die Zuordnung unklar ist (Präzisierung 5), gibt es kein „Laden an/aus“ nach dem Modus;
-  der Strom sinkt nur, wenn der Wächter weniger als den Ist-Strom erlaubt, nie unter den
-  Mindeststrom. Die Gründe sind ``(Modus, "assignment_unclear", Ursache)``. Die Überlast setzt
-  weiter den Mindeststrom und stoppt ab ``EVCS_STOP``. Fahrzeuge mit Tessie pausieren
-  (Präzisierung 6).
-- Nach ``idle`` trägt die erste Startfolge (Strom und ``charging=True``) je Fahrzeug zusätzlich
-  ``resume_after_outage``, bis die Safety-Schicht ihren Start mit Wert oder ``UNCHANGED``
-  beurteilt. Das gilt erst, wenn seit dem Start des core schon geregelt wurde.
+Die Bausteine stehen in eigenen Modulen: ``charge_points`` (Ladepunkte und ihre Verteilung),
+``last_values`` (nur Änderungen schicken, „nicht übernommen“) und ``charging_tesla`` (Tesla,
+Zuordnung und Wiederaufnahme).
 
 Dazu legt die Regelung fest:
 
@@ -99,12 +61,7 @@ from datetime import datetime
 from typing import Any, Final
 
 from bindaems.core.control.assignment import Assignment, AssignmentKind, VehicleState
-from bindaems.core.control.charge_inputs import (
-    NO_VEHICLE_DATA,
-    ChargeInputs,
-    VehicleObs,
-    WallboxObs,
-)
+from bindaems.core.control.charge_inputs import ChargeInputs
 from bindaems.core.control.charge_modes import (
     FULL_POWER,
     MODE_CODES,
@@ -115,16 +72,27 @@ from bindaems.core.control.charge_modes import (
     ModeMachine,
     ModeTimers,
 )
+from bindaems.core.control.charge_points import (
+    ChargePoint,
+    can_charge,
+    cars_w,
+    charge_points,
+    enough,
+    holding_a,
+    reserved_a,
+    wanted_a,
+)
 from bindaems.core.control.charging_tesla import (
     ASSIGNMENT_UNCLEAR,
     WAKE,
     EvcsOverrides,
     TeslaPolicy,
+    maximum_command,
+    wake_command,
 )
 from bindaems.core.control.executor import WriteResult
 from bindaems.core.control.last_values import ControlCommand, Key, LastValues
 from bindaems.core.control.phase_guard import (
-    PHASES,
     Claim,
     Grant,
     GuardCause,
@@ -138,7 +106,7 @@ from bindaems.core.control.phase_guard import (
 from bindaems.core.control.surplus import SurplusCar, share_surplus, surplus_w
 from bindaems.core.safety.limits import HardLimits
 from bindaems.core.safety.types import Verdict
-from bindaems.shared.config import Config, EvcsConfig, Phase, PhaseMap
+from bindaems.shared.config import Config
 from bindaems.shared.control import (
     Command,
     CommandKind,
@@ -147,7 +115,6 @@ from bindaems.shared.control import (
     SurplusPriority,
     VehicleIntent,
     vehicle_actuator,
-    wallbox_actuator,
 )
 from bindaems.shared.numbers import finite_number
 from bindaems.shared.timeutil import ensure_utc
@@ -160,29 +127,6 @@ ChargeCommand = ControlCommand  # der Name der Laderegelung für ihren Befehl
 _CURRENT: Final = CommandKind.CURRENT
 _CHARGING: Final = CommandKind.CHARGING
 _SURPLUS_MODES: Final = frozenset({Effective.PV, Effective.MIN_PV})  # Wunsch aus dem Anteil
-
-
-@dataclass(frozen=True)
-class _Point:
-    """Der Ladepunkt eines Fahrzeugs an seiner Wallbox in einem Zyklus (Präzisierungen 5 und 6).
-
-    - ``actuator``: ``wallbox.<w>`` an einer EVCS, ``vehicle.<v>`` für ein Fahrzeug mit Tessie am
-      Wall Connector; ``None`` für eins ohne Tessie dort, das nur Last ist
-    - ``evcs``: der Ladepunkt ist eine EVCS (Überlast ``EVCS_STOP``)
-    - ``phases``, ``min_a``, ``max_a``: die Netzphasen und der Strombereich
-    - ``measured``: der gemessene Strom je Netzphase; ``None`` heißt unbekannt
-    - ``regulated``: Der Ladepunkt wird geregelt; sonst bleibt sein Strom Last.
-    """
-
-    vehicle: str
-    wallbox: str
-    actuator: str | None
-    evcs: bool
-    phases: tuple[Phase, ...]
-    min_a: int
-    max_a: int
-    measured: Mapping[Phase, float] | None
-    regulated: bool
 
 
 @dataclass(frozen=True)
@@ -301,7 +245,7 @@ class ChargeController:
         )
         order = self._order(intent)
         modes = {key: _mode(key, state.vehicles[key], intent) for key in order}
-        points = self._points(order, state.vehicles, inputs)
+        points = charge_points(self._cfg, self._limits, order, state.vehicles, inputs)
         cycle = self._allocate(order, modes, points, state.vehicles, inputs)
         regulated = {
             key: point.actuator
@@ -312,7 +256,7 @@ class ChargeController:
             self._last.forget(set(regulated.values()))
         self._level = cycle.level
         # Kommt ein Fahrzeug an eine EVCS, vergisst die Regelung die Werte seines Aktors: So geht
-        # sein Höchststrom einmal je Ansteckvorgang hinaus (``_maximum``).
+        # sein Höchststrom einmal je Ansteckvorgang hinaus (``maximum_command``).
         at_the_evcs, arrived = self._overrides.update(state.vehicles)
         self._last.forget(arrived)
 
@@ -328,8 +272,9 @@ class ChargeController:
                 if vehicle.new_session:
                     self._unseen_sessions.add(key)
                 continue
-            enough = _enough(point, share, free)
-            decision = self._decide(now, key, actuator, vehicle, modes[key], enough)
+            decision = self._decide(
+                now, key, actuator, vehicle, modes[key], enough(point, share, free)
+            )
             if point.evcs:
                 wanted = cycle.wanted.get(key, 0)
                 limit = point.min_a if free is None else math.floor(free)
@@ -349,7 +294,11 @@ class ChargeController:
                 resume=key in self._resume,
                 carries=free is not None and limit + self._extra_a(modes[key]) >= point.min_a,
             )
-            found = self._maximum(key, modes[key], inputs) if key in at_the_evcs else []
+            found = (
+                maximum_command(self._cfg, self._last, key, modes[key], inputs)
+                if key in at_the_evcs
+                else []
+            )
             found += self._regulate(now, point, actuator, situation, inputs)
             if found:
                 self._reasons[key] = found[-1].reasons[-1]
@@ -487,71 +436,11 @@ class ChargeController:
             return list(priority)
         return configured
 
-    def _points(
-        self, order: Sequence[str], vehicles: Mapping[str, VehicleState], inputs: ChargeInputs
-    ) -> dict[str, _Point]:
-        """Die Ladepunkte je Fahrzeug mit Wallbox; eine Wallbox hat das erste nach Priorität."""
-        points: dict[str, _Point] = {}
-        taken: set[str] = set()
-        for key in order:
-            wallbox = vehicles[key].wallbox
-            if wallbox is None or wallbox in taken:
-                continue
-            taken.add(wallbox)
-            points[key] = self._point(key, wallbox, vehicles[key].kind, inputs)
-        return points
-
-    def _point(
-        self, key: str, wallbox_key: str, kind: AssignmentKind, inputs: ChargeInputs
-    ) -> _Point:
-        """Der Ladepunkt des Fahrzeugs ``key`` an der Wallbox ``wallbox_key`` (Präzisierung 6).
-
-        Geregelt ist er, wenn sein Aktor steuerbar ist (am Wall Connector auch nur weckbar), er
-        nicht pausiert (ein Fahrzeug mit Tessie, solange die Zuordnung unklar ist) und seine
-        Wallbox erreichbar ist oder Tessie seinen Strom kennt.
-        """
-        vehicle = self._cfg.vehicles[key]
-        wallbox = self._cfg.wallboxes[wallbox_key]
-        seen = inputs.wallboxes[wallbox_key]
-        tessie = NO_VEHICLE_DATA
-        if vehicle.tessie is not None:
-            tessie = inputs.vehicles.get(key, NO_VEHICLE_DATA)
-        measured = seen.phase_a if seen.reachable else _tessie_current(tessie, wallbox.phase_map)
-        if isinstance(wallbox, EvcsConfig):
-            evcs_actuator = wallbox_actuator(wallbox_key)
-            actuator: str | None = evcs_actuator
-            unclear = kind is AssignmentKind.UNCLEAR  # Präzisierung 5: die ganze EVCS
-            phases = wallbox.phase_map if unclear else wallbox.phase_map[: vehicle.phases]
-            min_a = wallbox.min_a if unclear else max(wallbox.min_a, vehicle.min_a)
-            max_a = wallbox.max_a if unclear else min(wallbox.max_a, vehicle.max_a)
-            steerable = inputs.controllable.get(evcs_actuator) is True
-            paused = False
-        else:
-            candidate = vehicle_actuator(key)
-            actuator = candidate if candidate in self._limits.actuators else None
-            phases = wallbox.phase_map[: vehicle.phases]
-            min_a, max_a = vehicle.min_a, min(vehicle.max_a, wallbox.max_a)
-            steerable = actuator is not None and (
-                inputs.controllable.get(actuator) is True or inputs.wakeable.get(actuator) is True
-            )
-            paused = kind is AssignmentKind.UNCLEAR
-        return _Point(
-            vehicle=key,
-            wallbox=wallbox_key,
-            actuator=actuator,
-            evcs=isinstance(wallbox, EvcsConfig),
-            phases=phases,
-            min_a=min_a,
-            max_a=max_a,
-            measured=measured,
-            regulated=steerable and not paused and (seen.reachable or measured is not None),
-        )
-
     def _allocate(
         self,
         order: Sequence[str],
         modes: Mapping[str, Effective],
-        points: Mapping[str, _Point],
+        points: Mapping[str, ChargePoint],
         vehicles: Mapping[str, VehicleState],
         inputs: ChargeInputs,
     ) -> _Cycle:
@@ -567,13 +456,13 @@ class ChargeController:
             grid.phase_import_a,
             grid.battery_feed_a,
             [(point.phases, point.measured) for point in regulated],
-            self._reserved(list(points.values()), inputs.wallboxes),
+            reserved_a(self._cfg, list(points.values()), inputs.wallboxes),
         )
         level = self._overload.update(inputs.now, grid.phase_import_a)
-        able = [p for p in regulated if _can_charge(vehicles[p.vehicle], modes[p.vehicle])]
+        able = [p for p in regulated if can_charge(vehicles[p.vehicle], modes[p.vehicle])]
         intent = inputs.intent
         surplus = surplus_w(
-            cars_w=_cars_w(able, inputs.wallboxes),
+            cars_w=cars_w(able, inputs.wallboxes),
             grid_w=grid.grid_w,
             battery_w=grid.battery_w,
             soc_pct=grid.soc_pct,
@@ -582,7 +471,7 @@ class ChargeController:
         )
         cars = [self._surplus_car(point, modes[point.vehicle]) for point in able]
         shares = share_surplus(surplus, cars, self._limits.voltage_v)
-        wanted = {p.vehicle: _wanted(p, modes[p.vehicle], shares.get(p.vehicle)) for p in able}
+        wanted = {p.vehicle: wanted_a(p, modes[p.vehicle], shares.get(p.vehicle)) for p in able}
         targets = {
             key: phase_target(
                 self._guard, full_power=modes[key] in FULL_POWER, soc_pct=grid.soc_pct
@@ -590,35 +479,14 @@ class ChargeController:
             for key in order
         }
         claims = [
-            Claim(p.vehicle, p.phases, targets[p.vehicle][0], wanted.get(p.vehicle, 0), _holding(p))
+            Claim(
+                p.vehicle, p.phases, targets[p.vehicle][0], wanted.get(p.vehicle, 0), holding_a(p)
+            )
             for p in regulated
         ]
         return _Cycle(surplus, shares, wanted, targets, allocate(loads, claims), level)
 
-    def _reserved(
-        self, points: Sequence[_Point], wallboxes: Mapping[str, WallboxObs]
-    ) -> dict[Phase, float]:
-        """Die Zuschläge bei Ausfällen je Phase, nur ohne geregelten Ladepunkt (Präzisierung 6).
-
-        - Eine EVCS, die nicht erreichbar ist: ``safe_a`` auf allen Phasen ihrer ``phase_map``,
-          auch ohne Fahrzeug an ihr.
-        - Ein Fahrzeug am Wall Connector, der nicht erreichbar ist, ohne Strom aus Tessie: das
-          ``max_a`` seines Ladepunkts auf allen drei Phasen. Geregelt ist dieser Ladepunkt nie.
-        """
-        regulated = {point.wallbox for point in points if point.regulated}
-        reserved = dict.fromkeys(PHASES, 0.0)
-        for key, wallbox in self._cfg.wallboxes.items():
-            out = not wallboxes[key].reachable
-            if out and isinstance(wallbox, EvcsConfig) and key not in regulated:
-                for phase in wallbox.phase_map:
-                    reserved[phase] += wallbox.safe_a
-        for point in points:
-            if not point.evcs and point.measured is None and not wallboxes[point.wallbox].reachable:
-                for phase in PHASES:
-                    reserved[phase] += point.max_a
-        return reserved
-
-    def _surplus_car(self, point: _Point, mode: Effective) -> SurplusCar:
+    def _surplus_car(self, point: ChargePoint, mode: Effective) -> SurplusCar:
         """Das Auto des Ladepunkts in der Verteilung; ein ladendes PV-Auto hält ``min_a``.
 
         An einer EVCS hält die Verteilung den zuletzt angeforderten Strom mit der Hysterese
@@ -636,7 +504,7 @@ class ChargeController:
             hysteresis_a=self._cfg.control.evcs_hysteresis_a,
         )
 
-    def _held_a(self, point: _Point) -> int | None:
+    def _held_a(self, point: ChargePoint) -> int | None:
         """Der zuletzt angeforderte Strom einer EVCS in ganzen A; sonst ``None``."""
         if not point.evcs or point.actuator is None:
             return None
@@ -682,25 +550,10 @@ class ChargeController:
             ),
         )
 
-    def _maximum(self, key: str, mode: Effective, inputs: ChargeInputs) -> list[Command]:
-        """„Tesla an der EVCS“: der Höchststrom an das Fahrzeug selbst, sobald es steuerbar ist.
-
-        Er geht hinaus, solange er sich gegenüber dem letzten eigenen Wert ändert; ``step``
-        vergisst den je Ansteckvorgang. Grund ist der Modus.
-        """
-        actuator = vehicle_actuator(key)
-        value = float(self._cfg.vehicles[key].max_a)
-        steerable = inputs.controllable.get(actuator) is True
-        if not steerable or (actuator, _CURRENT) in inputs.blocked:
-            return []
-        if not self._changed((actuator, _CURRENT), value):
-            return []
-        return [self._last.command(actuator, _CURRENT, value, (MODE_CODES[mode],))]
-
     def _regulate(
         self,
         now: datetime,
-        point: _Point,
+        point: ChargePoint,
         actuator: str,
         situation: _Situation,
         inputs: ChargeInputs,
@@ -772,23 +625,19 @@ class ChargeController:
     def _wake(
         self, key: str, actuator: str, situation: _Situation, blocked: frozenset[Key]
     ) -> list[Command]:
-        """Der Start mit Weckerlaubnis (Design 7.1): ``charging=True`` mit ``wake``, ohne Strom.
+        """Der Weckstart (Design 7.1): Die Gründe sind die eines Starts, danach ``wake``.
 
-        Er kommt, wenn ``charging=True`` sich ändert, nicht blockiert ist und das Weckkontingent ihn
-        erlaubt. Die Gründe sind die eines Starts, danach ``wake``.
+        ``wake_command`` entscheidet, ob und wann er kommt; die Gründe baut die Regelung.
         """
-        on = (actuator, _CHARGING)
-        if on in blocked or not self._changed(on, True):
-            return []
-        if not self._tesla[key].may_wake(self._now, self._wall_now):
-            return []
         resumed = (RESUME_AFTER_OUTAGE,) if situation.resume else ()
         reasons = (*situation.head, *_why(situation), *resumed, WAKE)
-        return [self._last.command(actuator, _CHARGING, True, reasons, wake=True)]
+        return wake_command(
+            self._last, self._tesla[key], self._now, self._wall_now, actuator, reasons, blocked
+        )
 
     def _hold(
         self,
-        point: _Point,
+        point: ChargePoint,
         actuator: str,
         situation: _Situation,
         present_a: float | None,
@@ -869,46 +718,6 @@ def _mode(key: str, vehicle: VehicleState, intent: Intent | None) -> Effective:
     return Effective((VehicleIntent() if entry is None else entry).mode.value)
 
 
-def _can_charge(vehicle: VehicleState, mode: Effective) -> bool:
-    """Ob das Auto am Überschuss teilnimmt: nicht abgesteckt, nicht „geladen“, nicht Aus."""
-    return vehicle.plugged is not False and not vehicle.complete and mode is not Effective.OFF
-
-
-def _cars_w(points: Sequence[_Point], wallboxes: Mapping[str, WallboxObs]) -> float | None:
-    """Die Ladeleistung an den Wallboxen dieser Ladepunkte; ``None``, wenn eine fehlt."""
-    total = 0.0
-    for point in points:
-        power = wallboxes[point.wallbox].power_w
-        if power is None:
-            return None
-        total += power
-    return total
-
-
-def _wanted(point: _Point, mode: Effective, share: int | None) -> int:
-    """Der Wunsch eines Autos, das laden kann: Sofort und Boost ``max_a``, sonst der Anteil.
-
-    PV wünscht den Anteil, ohne Wert 0; Min+PV den Anteil, mindestens ``min_a``.
-    """
-    if mode in FULL_POWER:
-        return point.max_a
-    if mode is Effective.MIN_PV:
-        return max(share or 0, point.min_a)
-    return share or 0
-
-
-def _holding(point: _Point) -> float:
-    """Der größte gemessene Strom des Ladepunkts; er bleibt für die folgenden Autos belegt."""
-    return max(point.measured.values(), default=0.0) if point.measured is not None else 0.0
-
-
-def _enough(point: _Point | None, share: int | None, free: float | None) -> bool | None:
-    """Ob Anteil und freier Strom den Mindeststrom tragen; ``None``, wenn eins davon fehlt."""
-    if point is None or share is None or free is None:
-        return None
-    return share >= point.min_a and free >= point.min_a
-
-
 def _why(situation: _Situation) -> tuple[str, ...]:
     """Der Grund nach dem Modus-Code, wenn das Auto lädt und keine Überlast herrscht.
 
@@ -926,13 +735,6 @@ def _why(situation: _Situation) -> tuple[str, ...]:
     if situation.limit < situation.wanted:
         return (situation.cause.value,)
     return ()
-
-
-def _tessie_current(tessie: VehicleObs, phase_map: PhaseMap) -> dict[Phase, float] | None:
-    """Der Strom aus Tessie auf den ersten ``phases`` Phasen der ``phase_map``; sonst ``None``."""
-    if not tessie.reachable or tessie.actual_current_a is None or tessie.phases is None:
-        return None
-    return {phase: tessie.actual_current_a for phase in phase_map[: tessie.phases]}
 
 
 def _facts(
