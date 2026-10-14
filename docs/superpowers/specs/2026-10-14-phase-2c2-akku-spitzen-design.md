@@ -1,6 +1,10 @@
 # Phase 2c-2 – Akku und Spitzen: Design
 
-**Stand: Entwurf vom 14.10.2026**, im Brainstorming mit dem Betreiber abgestimmt (Abschnitt 2).
+**Stand: freigegeben am 14.10.2026**, im Brainstorming mit dem Betreiber abgestimmt (Abschnitt 2).
+Umgesetzt wird es in Plan 2c-2a (`docs/superpowers/plans/2026-10-14-phase-2c2a-akku-spitzen.md`) und
+Plan 2c-2b. Plan 2c-2a präzisiert einige Punkte und weicht in zweien ab: Ein Auffrischen geht auch
+innerhalb des Totbands durch (zu Abschnitt 8), und das 15-min-Budget erreicht Regel 2 nur über dem
+Schutz der USV-Reserve (zu 4.3).
 Grundlage ist die Spec `docs/superpowers/specs/2026-10-08-bindaems-design.md`, vor allem 7.1, 7.4,
 7.6 bis 7.8, 7.10, 8.3, 8.5 und 18, und das Design von 2c-1
 (`docs/superpowers/specs/2026-10-12-phase-2c1-laderegelung-design.md`, „Design 2c-1“). Verweise wie

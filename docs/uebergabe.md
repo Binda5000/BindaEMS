@@ -5,8 +5,10 @@ Stand: 14.10.2026. Plan 2c-1 (Laderegelung) ist umgesetzt, je Task und im Gesamt
 `main` (Stand `18c575a`, wie die Branches `ccr-e451cb4c-qeg1tm` und `ccr-9778345e-t3x44k` zu Beginn
 der folgenden Sitzung). Danach sind die EVCS-Hysterese (Freigabe des Betreibers vom 14.10.2026) und
 die kleinen Nacharbeiten aus dem Gesamtreview dazugekommen; beides ist per Fast-Forward auf `main`
-(`47a09a7`, mit Zustimmung des Betreibers vom 14.10.2026). Das Design für 2c-2 ist geschrieben und
-wartet auf die Durchsicht des Betreibers (`docs/superpowers/specs/2026-10-14-phase-2c2-akku-spitzen-design.md`).
+(`47a09a7`, mit Zustimmung des Betreibers vom 14.10.2026). Das Design für 2c-2 hat der Betreiber am
+14.10.2026 freigegeben (`docs/superpowers/specs/2026-10-14-phase-2c2-akku-spitzen-design.md`). Plan
+2c-2a ist geschrieben und wartet auf seine Durchsicht
+(`docs/superpowers/plans/2026-10-14-phase-2c2a-akku-spitzen.md`).
 `main` ist seit dem 12.10.2026 auch der Standard-Branch auf GitHub.
 
 ## Kurzfassung
@@ -120,14 +122,13 @@ wartet auf die Durchsicht des Betreibers (`docs/superpowers/specs/2026-10-14-pha
   mit Abdeckungsgrenzen (≥ 75 % insgesamt, ≥ 90 % für `core/safety`, `core/control` und
   `core/actuators`), Vitest mit svelte-check, Prettier und ESLint; dazu E2E mit Playwright.
 - **Offen:**
-  - Durchsicht des Designs 2c-2 durch den Betreiber, danach Plan 2c-2a (Umbau, Akku-Sollwert,
-    15-min-Wächter) und Plan 2c-2b (Zuordnungserkennung)
+  - Durchsicht von Plan 2c-2a (Umbau, Akku-Sollwert, 15-min-Wächter) durch den Betreiber und seine
+    Umsetzung, danach Plan 2c-2b (Zuordnungserkennung)
   - an der Anlage: Images ausrollen, Dry-Run neben evcc beginnen, der Rest von Teil 2
     (EVCS-Verbindungsabbruch, Victron 17.2-4; siehe „Offen an der Anlage“)
   - vor der Live-Schaltung von EVCS und Tesla (2d): die Liste „Vor der Live-Schaltung“ (siehe
     „Offen an der Anlage“)
-  - die Pläne 2c-2a und 2c-2b nach dem Design 2c-2 schreiben, danach Plan 2d (siehe „Nächster
-    Schritt“)
+  - Plan 2c-2b nach dem Design 2c-2 schreiben, danach Plan 2d (siehe „Nächster Schritt“)
   - die Abnahme der Phase 1 an der Anlage
   - kleine Punkte an der Anlage (siehe „Stand der Installation“): manuelle Punkte von Teil 1 und
     die Log-Zeile der Probe
@@ -181,6 +182,7 @@ wartet auf die Durchsicht des Betreibers (`docs/superpowers/specs/2026-10-14-pha
 | `docs/superpowers/specs/2026-10-12-phase-2c1-laderegelung-design.md` | Design 2c-1 (Laderegelung), umgesetzt; der Kopf nennt, was sich beim Bau geändert hat |
 | `docs/superpowers/plans/2026-10-12-phase-2c1-laderegelung.md` | Plan 2c-1, 16 Tasks; Präzisierungen gegenüber dem Design, Texte, Szenarien des Simulators |
 | `docs/superpowers/specs/2026-10-14-phase-2c2-akku-spitzen-design.md` | Design 2c-2 (Akku-Sollwert, 15-min-Wächter, Zuordnungserkennung), Entscheidungen des Betreibers vom 14.10.2026; Umsetzung in den Plänen 2c-2a und 2c-2b |
+| `docs/superpowers/plans/2026-10-14-phase-2c2a-akku-spitzen.md` | Plan 2c-2a, 14 Tasks: Umbau, Akku-Sollwert, 15-min-Wächter, Simulator; Präzisierungen gegenüber dem Design, Texte, Szenarien |
 | `docs/betrieb.md` | Betriebshandbuch: Installation, Proxy (6), HA (7), Tarif (8), Sicherung (9), Prüfprotokolle einschließlich Teil 2 (11), Web-UI (12), Betriebszustände, Freigaben, Übergabe und Entscheidungslog (13), Watchdog am Cerbo (14); am Ende „Laderegelung“ (Modi, Absicht, Dry-Run-Vergleich mit evcc, Umstieg) und „Simulator“ |
 | `cerbo-watchdog/README.md` | Watchdog: Zustände, Zeiten, D-Bus-Pfade, Installation und Probe |
 | `docs/verification/abnahme-phase-1.md` | Checkliste für die Abnahme der Phase 1 |
@@ -550,8 +552,9 @@ Demo-Zugänge: `admin`, `gast` (Lesen) und `sicher` (Admin mit TOTP, Geheimnis
    den Absätzen „Stand Plan 2c-1“ der Spec, die offenen Punkte vor der Live-Schaltung in „Offen an
    der Anlage“.
 2. An der Anlage die Schritte aus „Offen an der Anlage“.
-3. Danach die Pläne 2c-2a und 2c-2b nach dem Design 2c-2
-   (`docs/superpowers/specs/2026-10-14-phase-2c2-akku-spitzen-design.md`); die Hinweise unten sind
+3. Plan 2c-2a liegt zur Durchsicht vor (`docs/superpowers/plans/2026-10-14-phase-2c2a-akku-spitzen.md`);
+   nach Freigabe und Umsetzung folgt Plan 2c-2b nach dem Design 2c-2
+   (`docs/superpowers/specs/2026-10-14-phase-2c2-akku-spitzen-design.md`). Die Hinweise unten sind
    dort eingearbeitet. Dann folgt Plan 2d.
    - **Hinweis für 2d:** Eine neue Version der Absicht bindet jedes Fahrzeug neu, das `boost_until`
      oder `wallbox` nennt. 2d darf deshalb einen abgelaufenen Boost, den es aus `GET /v1/intent`
