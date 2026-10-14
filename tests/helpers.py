@@ -76,9 +76,11 @@ EMPTY_DERIVED = Derived(
     balance_residual_w=None,
 )
 
-# Die Felder der Absicht für die Laderegelung im Standard, so wie JSON-Antwort und Datei sie zeigen
+# Die Felder der Absicht für die Laderegelung und den Gast im Standard, so wie JSON-Antwort und
+# Datei sie zeigen
 INTENT_CHARGING_DEFAULTS: dict[str, Any] = {
     "vehicles": {},
     "priority": None,
     "surplus_priority": {"kind": "battery_until_soc", "soc_pct": 30.0},
+    "guest": {"mode": "pv"},
 }

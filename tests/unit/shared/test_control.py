@@ -10,6 +10,7 @@ from bindaems.shared.control import (
     ChargeMode,
     Command,
     CommandKind,
+    GuestIntent,
     Intent,
     SurplusOrder,
     SurplusPriority,
@@ -125,3 +126,35 @@ def test_command_wake_is_the_last_field_and_defaults_to_false() -> None:
     start = Command("vehicle.tesla", CommandKind.CHARGING, True)
     assert start.wake is False
     assert Command("vehicle.tesla", CommandKind.CHARGING, True, wake=True).wake is True
+
+
+# Modus des Gastes in der Absicht (Plan 2c-2a, Design 3.1)
+
+
+def test_guest_charges_in_pv_by_default() -> None:
+    assert Intent(version=1).guest == GuestIntent(mode=ChargeMode.PV)
+    assert (
+        Intent.model_validate({"version": 2, "guest": {"mode": "now"}}).guest.mode is ChargeMode.NOW
+    )
+
+
+def test_guest_is_the_last_field_of_the_intent() -> None:
+    assert list(Intent.model_fields)[-1] == "guest"
+
+
+def test_guest_shows_its_mode_as_in_the_api() -> None:
+    assert Intent(version=1).model_dump(mode="json")["guest"] == {"mode": "pv"}
+    for mode in ChargeMode:
+        intent = Intent.model_validate({"version": 1, "guest": {"mode": mode.value}})
+        assert intent.model_dump(mode="json")["guest"] == {"mode": mode.value}
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [{"mode": "turbo"}, {"boost_until": "2026-10-12T18:00:00+02:00"}, {"wallbox": "evcs"}],
+    ids=["modus", "boost", "wallbox"],
+)
+def test_guest_has_only_a_mode(bad: dict[str, object]) -> None:
+    # kein Boost und keine Übersteuerung der Wallbox für einen Gast
+    with pytest.raises(ValidationError):
+        Intent.model_validate({"version": 1, "guest": bad})

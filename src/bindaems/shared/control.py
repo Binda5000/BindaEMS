@@ -120,13 +120,24 @@ class VehicleIntent(_Model):
     wallbox: str | None = None
 
 
+class GuestIntent(_Model):
+    """Modus eines Autos ohne Fahrzeug der Konfiguration, eines Gastes (Plan 2c-2a, Design 3.1).
+
+    Es gibt für ihn weder Boost noch Übersteuerung der Wallbox. Ohne Angabe lädt ein Gast im
+    PV-Überschuss.
+    """
+
+    mode: ChargeMode = ChargeMode.PV
+
+
 class Intent(_Model):
     """Absicht der Bedienung (Spec 5.3): Regelbetrieb, Betriebsart je Aktor und Lademodi.
 
     ``version`` steigt streng. Ein Aktor, der in ``actuators`` fehlt, läuft im Dry-Run. Für ein
     Fahrzeug ohne Eintrag in ``vehicles`` gilt ``VehicleIntent()``. ``priority`` nennt die
     Fahrzeug-Schlüssel in der Reihenfolge, in der sie Überschuss und Strom zugeteilt bekommen;
-    ohne Angabe gilt die Reihenfolge unter ``vehicles`` in ``config.yaml``.
+    ohne Angabe gilt die Reihenfolge unter ``vehicles`` in ``config.yaml``. ``guest`` nennt den
+    Modus für ein Auto ohne Fahrzeug der Konfiguration; ohne Angabe gilt ``GuestIntent()``.
     """
 
     version: Annotated[int, Field(ge=1)]
@@ -135,3 +146,4 @@ class Intent(_Model):
     vehicles: dict[str, VehicleIntent] = Field(default_factory=dict)
     priority: list[str] | None = None
     surplus_priority: SurplusPriority = Field(default_factory=SurplusPriority)
+    guest: GuestIntent = Field(default_factory=GuestIntent)

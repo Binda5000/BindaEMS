@@ -136,7 +136,8 @@ app:
 # Alarm nach einer fremden Änderung von EVCS-Strom, Override oder Tesla-Strom.
 safety: {lock_release_s: 60}
 
-# Laderegelung: Parameter der Lademodi, keine harten Grenzen (die stehen unter grid, battery usw.).
+# Laderegelung, Akku-Sollwert und 15-min-Wächter: Parameter, keine harten Grenzen (die stehen unter
+# grid, battery usw.).
 control:
   import_margin_a: 1        # Abstand zum Importlimit in A für PV-Überschuss und Min+PV
   surplus_margin_w: 100     # Marge im Überschuss in W
@@ -148,6 +149,14 @@ control:
   tesla_average_s: 90       # gleitendes Mittel für den Tesla-Strom
   tesla_caution_s: 60       # Fenster der vorsichtigen Zuteilung an den Tesla
   evcs_hysteresis_a: 0.5    # EVCS-Strom steigt erst ab Sollwert + 1 A + diesem Wert; sinkt sofort
+  support_soc_pct: 70       # ab diesem SOC in % stützt der Akku Autos in PV-Überschuss und Min+PV
+  support_hysteresis_pct: 5 # gesperrt wird die Unterstützung erst unter Schwelle minus diesem Wert
+  support_max_w: 3000       # höchstens so viel Akkuleistung in W für diese Autos zusammen
+  support_max_s: 900        # längste Überbrückung am Stück in s
+  setpoint_deadband_w: 200  # Abstand in W, ab dem ein Override entsteht oder sich ändert
+  override_refresh_s: 240   # so oft in s frischt der core einen Override auf; höchstens 280, der Cerbo verwirft ihn nach 300 s
+  # peak_target_kw: 8   # Ziel des 15-min-Wächters in kW; ohne Wert ruht er
+  peak_margin_kw: 0.3       # Marge der Hochrechnung des Wächters in kW
 
 # Ablage des core (Volume core-data): intent.json, write_budget.json, rate_limits.json und das
 # Entscheidungslog decisions/ (Tagesdateien, höchstens 7 Tage und 50 MB).

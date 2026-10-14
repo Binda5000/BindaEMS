@@ -325,3 +325,73 @@ def test_charging_values_may_be_zero(tmp_path: Path) -> None:
     assert (loaded.control.start_after_s, loaded.control.reserve_guard_pct) == (0.0, 100.0)
     assert loaded.control.evcs_hysteresis_a == 0.0
     assert loaded.vehicles["tesla"].wake == WakeConfig(interval_s=0.0, per_day=0)
+
+
+# Akku-Sollwert und 15-min-Wächter (Plan 2c-2a): Parameter im Abschnitt control
+
+
+def test_battery_and_peak_defaults(cfg) -> None:
+    control = cfg.control
+    assert (control.support_soc_pct, control.support_hysteresis_pct) == (70.0, 5.0)
+    assert (control.support_max_w, control.support_max_s) == (3000.0, 900.0)
+    assert (control.setpoint_deadband_w, control.override_refresh_s) == (200.0, 240.0)
+    assert (control.peak_target_kw, control.peak_margin_kw) == (None, 0.3)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("support_soc_pct", -1),
+        ("support_soc_pct", 101),
+        ("support_hysteresis_pct", -1),
+        ("support_max_w", -1),
+        ("support_max_s", -1),
+        ("setpoint_deadband_w", -1),
+        ("override_refresh_s", 0),
+        ("override_refresh_s", 281),
+        ("peak_target_kw", 0),
+        ("peak_target_kw", -1),
+        ("peak_margin_kw", -0.1),
+    ],
+)
+def test_invalid_battery_and_peak_values_are_rejected(field: str, value: float) -> None:
+    with pytest.raises(ValidationError) as caught:
+        ControlConfig(**{field: value})
+    # abgelehnt wegen des Werts, nicht weil das Feld unbekannt ist (extra="forbid")
+    assert [error["type"] for error in caught.value.errors()] != ["extra_forbidden"]
+
+
+def test_override_refresh_may_reach_280_s() -> None:
+    assert ControlConfig(override_refresh_s=280).override_refresh_s == 280
+
+
+def test_battery_and_peak_values_may_sit_on_their_bounds() -> None:
+    # 0 heißt: keine Schwelle, keine Hysterese, keine Unterstützung, kein Abstand, keine Marge
+    zeros = ControlConfig(
+        support_soc_pct=0,
+        support_hysteresis_pct=0,
+        support_max_w=0,
+        support_max_s=0,
+        setpoint_deadband_w=0,
+        peak_margin_kw=0,
+    )
+    assert (zeros.support_soc_pct, zeros.support_hysteresis_pct) == (0.0, 0.0)
+    assert (zeros.support_max_w, zeros.support_max_s) == (0.0, 0.0)
+    assert (zeros.setpoint_deadband_w, zeros.peak_margin_kw) == (0.0, 0.0)
+    assert ControlConfig(support_soc_pct=100).support_soc_pct == 100.0
+    assert ControlConfig(peak_target_kw=0.1).peak_target_kw == 0.1
+
+
+def test_peak_target_is_set_in_the_config_file(tmp_path: Path) -> None:
+    p = write_cfg(tmp_path, lambda d: d["control"].update(peak_target_kw=8))
+    assert load_config(p).control.peak_target_kw == 8.0
+
+
+def test_commented_peak_target_of_the_example_is_valid_when_enabled(tmp_path: Path) -> None:
+    # der Betreiber nimmt die Zeile aus dem Beispiel, indem er das „#“ entfernt
+    text = EXAMPLE.read_text(encoding="utf-8")
+    assert "\n  # peak_target_kw: 8 " in text
+    enabled = tmp_path / "config.yaml"
+    uncommented = text.replace("\n  # peak_target_kw: 8", "\n  peak_target_kw: 8", 1)
+    enabled.write_text(uncommented, encoding="utf-8")
+    assert load_config(enabled).control.peak_target_kw == 8.0

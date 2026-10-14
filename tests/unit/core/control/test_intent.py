@@ -21,6 +21,7 @@ from bindaems.core.safety.limits import HardLimits
 from bindaems.shared.control import (
     ActuatorMode,
     ChargeMode,
+    GuestIntent,
     Intent,
     SurplusOrder,
     SurplusPriority,
@@ -457,6 +458,7 @@ def test_charging_intent_is_accepted_saved_and_reloaded(tmp_path, limits) -> Non
         },
         priority=["egolf", "tesla"],
         surplus_priority=SurplusPriority(kind=SurplusOrder.CARS_FIRST, soc_pct=50.0),
+        guest=GuestIntent(mode=ChargeMode.MIN_PV),
     )
     store = charging_store(tmp_path, limits)
     assert store.submit(intent, T0) == IntentReply("accepted", 2)
@@ -472,6 +474,7 @@ def test_charging_intent_is_accepted_saved_and_reloaded(tmp_path, limits) -> Non
             },
             "priority": ["egolf", "tesla"],
             "surplus_priority": {"kind": "cars_first", "soc_pct": 50.0},
+            "guest": {"mode": "min_pv"},
         },
         "accepted_at": T0.isoformat(),
     }
@@ -660,3 +663,42 @@ def test_intent_file_from_2b_loads_with_defaults(tmp_path, limits) -> None:  # R
     assert (store.current.vehicles, store.current.priority) == ({}, None)
     assert store.current.surplus_priority == SurplusPriority()
     assert store.accepted_at == T0
+
+
+def test_intent_file_from_2c1_loads_with_the_guest_default(tmp_path, limits) -> None:
+    # so schrieb der core in Plan 2c-1: Lademodi, aber noch kein „guest“
+    sent = {
+        "version": 4,
+        "control": True,
+        "actuators": {"wallbox.evcs": "dry_run"},
+        "vehicles": {
+            "tesla": {"mode": "now", "boost_until": None, "wallbox": "evcs"},
+            "egolf": {"mode": "min_pv", "boost_until": None, "wallbox": None},
+        },
+        "priority": ["egolf", "tesla"],
+        "surplus_priority": {"kind": "cars_first", "soc_pct": 50.0},
+    }
+    write_json_atomic(tmp_path / "intent.json", {"intent": sent, "accepted_at": T0.isoformat()})
+    store = charging_store(tmp_path, limits)
+    store.load()
+    assert store.load_problem is None
+    assert store.current.guest.mode is ChargeMode.PV
+    assert (store.current.version, store.current.control) == (4, True)
+    assert store.current.vehicles["tesla"].mode is ChargeMode.NOW
+    assert store.accepted_at == T0
+    # die app sendet dieselbe Absicht weiter ohne „guest“: eine Wiederholung, kein Konflikt
+    resent = Intent.model_validate(sent)
+    assert store.submit(resent, T0 + timedelta(minutes=1)) == IntentReply("accepted", 4)
+
+
+def test_guest_mode_belongs_to_the_content_of_an_intent(tmp_path, limits) -> None:
+    store = charging_store(tmp_path, limits)
+    assert store.submit(Intent(version=1, guest=GuestIntent(mode=ChargeMode.NOW)), T0) == (
+        IntentReply("accepted", 1)
+    )
+    # dieselbe Version mit anderem Modus ist ein Konflikt, die nächste Version ersetzt ihn
+    assert store.submit(Intent(version=1), T0) == IntentReply(
+        "rejected", 1, ("Version 1 ist bereits mit anderem Inhalt angenommen.",), "stale"
+    )
+    assert store.submit(Intent(version=2), T0) == IntentReply("accepted", 2)
+    assert store.current.guest.mode is ChargeMode.PV

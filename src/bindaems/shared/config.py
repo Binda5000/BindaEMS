@@ -332,6 +332,18 @@ class ControlConfig(_Model):
     - ``tesla_caution_s``: Fenster der vorsichtigen Zuteilung an den Tesla (Spec 7.3)
     - ``evcs_hysteresis_a``: Hysterese der EVCS beim Erhöhen in A (Design 6.5): Ihr Strom steigt
       erst, wenn der Anteil am Überschuss ihn um 1 A plus diesen Wert übersteigt
+
+    Akku-Sollwert und 15-min-Wächter (Plan 2c-2a, Design 3.2): Die Unterstützung ist die
+    Akkuleistung für Autos in PV-Überschuss und Min+PV (Spec 7.6).
+
+    - ``support_soc_pct``: Ab diesem SOC in % ist sie möglich.
+    - ``support_hysteresis_pct``: Gesperrt wird sie erst unter der Schwelle minus diesem Wert.
+    - ``support_max_w``: höchstens so viel Akkuleistung in W für diese Autos zusammen
+    - ``support_max_s``: längste Überbrückung am Stück in s
+    - ``setpoint_deadband_w``: Abstand in W, ab dem ein Override entsteht oder sich ändert
+    - ``override_refresh_s``: So oft in s frischt der core einen Override auf (Cerbo-Timeout 300 s)
+    - ``peak_target_kw``: Ziel des 15-min-Wächters in kW; ohne Wert ruht er
+    - ``peak_margin_kw``: Marge der Hochrechnung des Wächters in kW (Spec 7.4)
     """
 
     import_margin_a: Annotated[float, Field(ge=0)] = 1.0
@@ -344,6 +356,15 @@ class ControlConfig(_Model):
     tesla_average_s: Annotated[float, Field(gt=0)] = 90.0
     tesla_caution_s: Annotated[float, Field(gt=0)] = 60.0
     evcs_hysteresis_a: Annotated[float, Field(ge=0)] = 0.5
+    support_soc_pct: Annotated[float, Field(ge=0, le=100)] = 70.0
+    support_hysteresis_pct: Annotated[float, Field(ge=0)] = 5.0
+    support_max_w: Annotated[float, Field(ge=0)] = 3000.0
+    support_max_s: Annotated[float, Field(ge=0)] = 900.0
+    setpoint_deadband_w: Annotated[float, Field(ge=0)] = 200.0
+    # höchstens 280 s: 20 s Reserve zum Timeout des Override am Cerbo (300 s)
+    override_refresh_s: Annotated[float, Field(gt=0, le=280)] = 240.0
+    peak_target_kw: Annotated[float, Field(gt=0)] | None = None
+    peak_margin_kw: Annotated[float, Field(ge=0)] = 0.3
 
 
 class CoreConfig(_Model):
