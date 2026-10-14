@@ -14,7 +14,6 @@ from tests.helpers import T0
 from tests.integration.conftest import GOOD_STATE, allow_evcs_live, allow_tesla_live, live_evcs, run
 from tests.integration.plant import Plant
 
-from bindaems.core.control.charging import ChargeController
 from bindaems.shared.control import ActuatorMode, ChargeMode, CommandKind, Intent, VehicleIntent
 from bindaems.shared.decisions import Decision, DecisionResult
 from bindaems.shared.domain import SignalKind
@@ -365,31 +364,6 @@ async def test_after_a_foreign_takeover_the_regulation_sends_again(runtime_env) 
     assert actuator_health(rt, "wallbox.evcs")["owned"] is False
     run(rt, clock, 120)  # die Sperre fällt bei 300 s
     assert evcs_writes(plant, mark) == [("evcharger/40/SetCurrent", 10)]
-
-
-async def test_an_error_in_the_regulation_costs_the_keeper_no_attempt(
-    runtime_env, monkeypatch
-) -> None:
-    plant = Plant(watchdog_state=1)
-    rt, clock = live_evcs(runtime_env, plant=plant, state=dict(EGOLF_PLUGGED), extra=SURPLUS)
-    run(rt, clock, 32 + 121)  # Start bei 151 s, bestätigt bei 152 s: Die EVCS hält Werte des EMS
-
-    def broken(self, inputs):
-        raise RuntimeError("Testfehler in der Regelung")
-
-    rt.submit_intent(Intent(version=2, control=True))  # EVCS im Dry-Run: Übergabe
-    with monkeypatch.context() as patch:
-        patch.setattr(ChargeController, "step", broken)
-        for _ in range(35):  # länger als die drei Versuche des Keepers
-            with pytest.raises(RuntimeError, match="in der Regelung"):
-                rt.cycle_once()
-            clock.advance(1)
-    assert evcs_writes(plant) == START  # kein Sicherwert, solange der Zyklus scheitert
-    run(rt, clock, 2)  # die Regelung geht wieder: 6 A gesendet, dann zurückgelesen
-    assert evcs_writes(plant) == [*START, ("evcharger/40/SetCurrent", 6)]
-    assert not rt.keeper.failed
-    assert not [a for a in rt.health().alarms if a["id"].startswith("actuator.failed.")]
-    assert actuator_health(rt, "wallbox.evcs")["owned"] is False  # übergeben
 
 
 async def test_health_lists_vehicles(runtime_env) -> None:

@@ -1,0 +1,244 @@
+from datetime import datetime, timedelta
+from typing import Any
+
+import pytest
+from structlog.testing import capture_logs
+from tests.helpers import T0, snap
+from tests.unit.core.control.fakes import FakeActuator, FakeWakeActuator
+
+from bindaems.core.control.actuator import Capabilities
+from bindaems.core.control.executor import WriteResult
+from bindaems.core.control.last_values import ControlCommand
+from bindaems.core.control.regulation import Regulation, RegulationInputs
+from bindaems.core.regulation_link import CONTROL_EXCEPTION, RegulationLink
+from bindaems.core.safety.limits import HardLimits
+from bindaems.core.safety.types import Outcome, Verdict
+from bindaems.core.state.derived import derive
+from bindaems.shared.control import Command, CommandKind, Intent
+from bindaems.shared.decisions import DecisionResult
+from bindaems.shared.domain import Alarm, Severity
+
+NOW = T0
+INTENT = Intent(version=1, control=True)
+MESSAGE = "Regelung ausgesetzt: Ausnahme RuntimeError im Regelzyklus."
+TEN = Command("wallbox.evcs", CommandKind.CURRENT, 10.0)
+RESULT = WriteResult("wallbox.evcs", CommandKind.CURRENT, 10.0, DecisionResult.OK, "")
+
+
+def broken(*args: object, **kwargs: object) -> Any:
+    raise RuntimeError("kaputt")
+
+
+def link_for(cfg) -> RegulationLink:
+    return RegulationLink(cfg, HardLimits.from_config(cfg), started=T0)
+
+
+def step(link: RegulationLink, cfg, when: datetime = NOW, **kw: Any) -> list[ControlCommand]:
+    """Ein Schritt mit leerem Snapshot (alles unbekannt), ``when`` auf beiden Uhren."""
+    empty = snap({})
+    args: dict[str, Any] = {
+        "snap": empty,
+        "derived": derive(empty, cfg),
+        "now": when,
+        "snow": when,
+        "present": {},
+        "capabilities": {},
+        "actuators": {},
+        "intent": INTENT,
+        "accepted_at": None,
+        "blocked": frozenset(),
+        "connected": lambda source: None,
+    }
+    return link.step(**(args | kw))
+
+
+def cycle(link: RegulationLink, cfg, when: datetime) -> None:
+    """Ein Zyklus mit Regelung, wie ihn die Laufzeit führt (ohne Befehle auszuführen)."""
+    link.start_cycle()
+    step(link, cfg, when)
+    link.finish(when)
+
+
+def kernel_idle(link: RegulationLink, monkeypatch) -> list[datetime]:
+    """Die Zeiten, zu denen der Kern ``idle`` bekommt; er ruht dabei wirklich."""
+    idled: list[datetime] = []
+    original = link.regulation.idle
+
+    def idle(now: datetime) -> None:
+        idled.append(now)
+        original(now)
+
+    monkeypatch.setattr(link.regulation, "idle", idle)
+    return idled
+
+
+# Vorgaben des Plans
+
+
+def test_a_throwing_kernel_fails_the_cycle_and_rests(cfg, monkeypatch) -> None:
+    link = link_for(cfg)
+    idled = kernel_idle(link, monkeypatch)
+    monkeypatch.setattr(link.regulation, "step", broken)
+    link.start_cycle()
+    assert step(link, cfg) == []
+    assert link.failed
+    assert idled == [NOW]
+    link.finish(NOW)
+    assert link.alarms() == [Alarm(CONTROL_EXCEPTION, Severity.ERROR, MESSAGE, NOW)]
+
+
+def test_the_alarm_keeps_the_start_of_the_streak_and_ends_with_a_good_cycle(
+    cfg, monkeypatch
+) -> None:
+    link = link_for(cfg)
+    with monkeypatch.context() as patch:
+        patch.setattr(link.regulation, "step", broken)
+        cycle(link, cfg, NOW)
+        cycle(link, cfg, NOW + timedelta(seconds=1))
+        assert link.alarms() == [Alarm(CONTROL_EXCEPTION, Severity.ERROR, MESSAGE, NOW)]
+    cycle(link, cfg, NOW + timedelta(seconds=2))
+    assert not link.failed
+    assert link.alarms() == []
+
+
+def test_a_throwing_note_verdict_fails_the_cycle(cfg, monkeypatch) -> None:
+    link = link_for(cfg)
+    idled = kernel_idle(link, monkeypatch)
+    monkeypatch.setattr(link.regulation, "note_verdict", broken)
+    link.start_cycle()
+    step(link, cfg)
+    link.note_verdict(TEN, Verdict(TEN, Outcome.ACCEPTED, 10.0, (), True))
+    assert link.failed
+    assert idled == [NOW]
+    link.start_cycle()
+    assert not link.failed
+
+
+# Weitere Fälle
+
+
+def test_step_builds_the_charge_inputs(cfg, monkeypatch) -> None:
+    link = link_for(cfg)
+    seen: list[RegulationInputs] = []
+    monkeypatch.setattr(link.regulation, "step", lambda inputs: seen.append(inputs) or [])
+    present = {("wallbox.evcs", CommandKind.CURRENT): 6.0}
+    blocked = frozenset({("wallbox.evcs", CommandKind.CHARGING)})
+    accepted = NOW - timedelta(hours=1)
+    sources = {"evcs": False, "tessie:tesla": True}  # die EVCS getrennt, der Wall Connector nie
+    link.start_cycle()
+    step(
+        link,
+        cfg,
+        now=NOW + timedelta(seconds=2),  # Wanduhr
+        snow=NOW,  # Uhr der Safety-Schicht
+        present=present,
+        capabilities={"wallbox.evcs": Capabilities(True), "vehicle.tesla": Capabilities(False)},
+        actuators={
+            "wallbox.evcs": FakeActuator("wallbox.evcs"),
+            "vehicle.tesla": FakeWakeActuator("vehicle.tesla", controllable=False),
+        },
+        accepted_at=accepted,
+        blocked=blocked,
+        connected=sources.get,
+    )
+    [charge] = [inputs.charge for inputs in seen]
+    assert (charge.now, charge.wall_now) == (NOW, NOW + timedelta(seconds=2))
+    assert charge.present == present
+    assert charge.controllable == {"wallbox.evcs": True, "vehicle.tesla": False}
+    assert charge.wakeable == {"wallbox.evcs": False, "vehicle.tesla": True}
+    assert (charge.blocked, charge.intent, charge.accepted_at) == (blocked, INTENT, accepted)
+    reachable = {key: obs.reachable for key, obs in charge.wallboxes.items()}
+    assert reachable == {"evcs": False, "twc": True}
+    assert charge.vehicles["tesla"].reachable is True
+
+
+def test_health_shows_the_last_cycle_without_exception(cfg, monkeypatch) -> None:
+    link = link_for(cfg)
+    fresh = Regulation(cfg, HardLimits.from_config(cfg), started=T0).health()
+    assert link.health() == fresh  # vor dem ersten ``finish``
+    cycle(link, cfg, NOW)
+    good = link.health()
+    assert good != fresh
+    monkeypatch.setattr(link.regulation, "step", broken)
+    cycle(link, cfg, NOW + timedelta(seconds=1))
+    assert link.regulation.health() == fresh  # der Kern ruht
+    assert link.health() == good
+
+
+@pytest.mark.parametrize(
+    ("name", "call", "fallback"),
+    [
+        ("note_result", lambda link: link.note_result(RESULT), None),
+        ("forget", lambda link: link.forget({"wallbox.evcs"}), None),
+        ("vehicle_wallbox", lambda link: link.vehicle_wallbox(), {}),
+        ("grid_budget_w", lambda link: link.grid_budget_w(), None),
+    ],
+)
+def test_every_call_of_the_kernel_is_guarded(cfg, monkeypatch, name, call, fallback) -> None:
+    link = link_for(cfg)
+    idled = kernel_idle(link, monkeypatch)
+    monkeypatch.setattr(link.regulation, name, broken)
+    link.start_cycle()
+    assert call(link) == fallback
+    assert link.failed
+    assert idled == [T0]
+
+
+@pytest.mark.parametrize("name", ["health", "alarms"])
+def test_a_throwing_health_or_alarms_fails_the_cycle(cfg, monkeypatch, name) -> None:
+    link = link_for(cfg)
+    before = link.health()
+    monkeypatch.setattr(link.regulation, name, broken)
+    cycle(link, cfg, NOW)
+    assert link.failed
+    assert link.health() == before
+    assert link.alarms() == [Alarm(CONTROL_EXCEPTION, Severity.ERROR, MESSAGE, NOW)]
+
+
+def test_after_an_exception_the_kernel_rests_until_the_next_cycle(cfg, monkeypatch) -> None:
+    link = link_for(cfg)
+    steps: list[RegulationInputs] = []
+    monkeypatch.setattr(link.regulation, "forget", broken)
+    monkeypatch.setattr(link.regulation, "step", lambda inputs: steps.append(inputs) or [])
+    link.start_cycle()
+    link.forget({"wallbox.evcs"})
+    assert step(link, cfg) == []
+    assert steps == []
+    link.start_cycle()
+    step(link, cfg)
+    assert len(steps) == 1
+
+
+def test_a_throwing_idle_rebuilds_the_kernel(cfg, monkeypatch) -> None:
+    link = link_for(cfg)
+    old = link.regulation
+    monkeypatch.setattr(old, "step", broken)
+    monkeypatch.setattr(old, "idle", broken)
+    link.start_cycle()
+    assert step(link, cfg) == []
+    assert link.failed
+    assert link.regulation is not old
+    assert link.charger is link.regulation.charger
+    rebuilt = link.regulation
+    monkeypatch.setattr(rebuilt, "idle", broken)  # auch ohne Ausnahme davor
+    link.start_cycle()
+    link.idle(NOW)
+    assert link.failed
+    assert link.regulation is not rebuilt
+    cycle(link, cfg, NOW + timedelta(seconds=1))  # der neue Kern regelt
+    assert not link.failed
+
+
+def test_the_log_shows_the_first_exception_of_a_streak_with_traceback(cfg, monkeypatch) -> None:
+    link = link_for(cfg)
+    with capture_logs() as logs, monkeypatch.context() as patch:
+        patch.setattr(link.regulation, "step", broken)
+        cycle(link, cfg, NOW)
+        cycle(link, cfg, NOW + timedelta(seconds=1))
+    with capture_logs() as later:
+        cycle(link, cfg, NOW + timedelta(seconds=2))  # ohne Ausnahme: Die Folge endet
+        monkeypatch.setattr(link.regulation, "step", broken)
+        cycle(link, cfg, NOW + timedelta(seconds=3))
+    assert [(e["log_level"], e.get("exc_info")) for e in logs] == [("error", True), ("error", None)]
+    assert "kaputt" in logs[1]["error"]
+    assert [e.get("exc_info") for e in later] == [True]

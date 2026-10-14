@@ -5,9 +5,15 @@ Je Zyklus: Snapshot → abgeleitete Größen → Plausibilität → Flusszuordnu
 Summen → Telemetrie → Rücklesen der Aktoren und der offenen Schreibvorgänge → (alle 10 s)
 Selbstprüfung, mitregelnde Systeme und fremde Änderungen → Eingangsprüfung → (nach jeder
 Prüfung) Sperren → Werte des EMS, Watchdog, wirksame Betriebsarten → Betriebszustand → sicherer
-Zustand, Übergabe und Laderegelung → Stream → Alarme → Heartbeat. Am Ende gehen die Entscheidungen
+Zustand, Übergabe und Regelung → Stream → Alarme → Heartbeat. Am Ende gehen die Entscheidungen
 des Zyklus in einem Zug in den Spool, und (beim Start und stündlich) räumt der core das
 Entscheidungslog auf, beides auch dann, wenn der Zyklus scheitert.
+
+Die Regelung erreicht die Laufzeit nur über ``RegulationLink`` (Plan 2c-2a, Design 4.3): Er baut
+die Eingaben des Regelungs-Kerns, gibt ihm Urteile und Ergebnisse zurück und legt seine Health und
+Alarme ab. Eine Ausnahme in der Regelung setzt nur die Regelung aus (Präzisierung 15): Der Zyklus
+läuft mit den Befehlen des Keepers weiter, aber ohne Heartbeat, und der Alarm
+``control.exception`` gilt.
 
 Auf Geräte schreibt der core den Heartbeat an den eigenen Watchdog am Cerbo, die Sicherwerte des
 sicheren Zustands und die der Übergabe am Ende des Live-Betriebs (Plan 2b, Präzisierungen 3 und 4)
@@ -20,11 +26,11 @@ bestätigten Strom oder Netz-Sollwert, sperrt das den Aktor wie ein mitregelndes
 
 Den Heartbeat sendet der core nur, solange er regelt (Präzisierung 2): Ein Victron- oder EVCS-Aktor
 ist im Regelbetrieb live gewünscht oder wird übergeben. Der Zähler kommt nur aus einem fehlerfreien
-Zyklus (Präzisierung 5), in CONTROL, DEGRADED und SAFE oder in OBSERVE zum Scharfschalten, wenn das
-Gate nur noch auf den Watchdog wartet und er das konfigurierte Timeout meldet. Jeder Lauf beginnt
-mit einem anderen Zähler (``heartbeat_start``). Die Freigabe 0 folgt erst, wenn kein Victron- oder
-EVCS-Aktor mehr Werte des EMS hält und für keinen von ihnen ein Schreibvorgang offen ist, und nur,
-wenn der core in diesem Lauf für den Watchdog zuständig war.
+Zyklus (Präzisierung 5) ohne Ausnahme in der Regelung, in CONTROL, DEGRADED und SAFE oder in
+OBSERVE zum Scharfschalten, wenn das Gate nur noch auf den Watchdog wartet und er das konfigurierte
+Timeout meldet. Jeder Lauf beginnt mit einem anderen Zähler (``heartbeat_start``). Die Freigabe 0
+folgt erst, wenn kein Victron- oder EVCS-Aktor mehr Werte des EMS hält und für keinen von ihnen ein
+Schreibvorgang offen ist, und nur, wenn der core in diesem Lauf für den Watchdog zuständig war.
 
 Fristen, Limits, Budget, Versuche und Heartbeat laufen auf der Uhr der Safety-Schicht
 (``AnchoredClock``), Messwerte, Viertelstunden und die Zeitpunkte der Entscheidungen auf der
@@ -70,9 +76,8 @@ from bindaems.core.api.app import HealthReport, create_api, snapshot_to_json, wa
 from bindaems.core.checks.competitors import detect_competitors
 from bindaems.core.checks.selfcheck import CRITICAL_SIGNALS, FRESH_FOR, CheckResult, run_selfcheck
 from bindaems.core.checks.values import number
-from bindaems.core.control.actuator import Actuator, Capabilities, WakeStart, matches
-from bindaems.core.control.charge_inputs import ChargeInputs, observe
-from bindaems.core.control.charging import ChargeCommand, ChargeController
+from bindaems.core.control.actuator import Actuator, Capabilities, matches
+from bindaems.core.control.charging import ChargeController
 from bindaems.core.control.context import decision_inputs, safety_context
 from bindaems.core.control.executor import CommandExecutor, WriteResult
 from bindaems.core.control.foreign import WATCHED_KINDS, ForeignChangeDetector
@@ -90,6 +95,7 @@ from bindaems.core.control.safe_state import (
     safe_values_reached,
 )
 from bindaems.core.persistence.decision_spool import DecisionSpool
+from bindaems.core.regulation_link import RegulationLink
 from bindaems.core.safety.budget import PersistentWriteBudget
 from bindaems.core.safety.inputs import InputCheck
 from bindaems.core.safety.layer import SafetyLayer
@@ -154,8 +160,9 @@ PRUNE_INTERVAL: Final = timedelta(hours=1)
 _WRITING_STATES: Final = frozenset(
     {OperatingState.CONTROL, OperatingState.DEGRADED, OperatingState.SAFE}
 )
-# Nur in diesen Betriebszuständen regelt die Laderegelung, und nur bei Regelbetrieb (Design 4.3)
-_CHARGING_STATES: Final = frozenset({OperatingState.CONTROL, OperatingState.DEGRADED})
+# Nur in diesen Betriebszuständen läuft die Regelung, und nur bei Regelbetrieb (Plan 2c-1,
+# Design 4.3)
+_REGULATION_STATES: Final = frozenset({OperatingState.CONTROL, OperatingState.DEGRADED})
 # Fähigkeiten eines Aktors vor dem ersten Zyklus: noch nicht geprüft, also nicht steuerbar
 _NOT_CHECKED: Final = Capabilities(False)
 # Ein Schreibvorgang mit diesem Ergebnis kann am Gerät noch verspätet wirken
@@ -272,13 +279,13 @@ class CoreRuntime:
         http_client: httpx.AsyncClient | None = None,
         heartbeat_first: int | None = None,
     ) -> None:
-        """Die Laufzeit mit Adaptern, Aktoren, Safety-Schicht, Laderegelung und Entscheidungslog.
+        """Die Laufzeit mit Adaptern, Aktoren, Safety-Schicht, Regelung und Entscheidungslog.
 
         - ``clock`` ist die Wanduhr: Messwerte, Viertelstunden, Zeitpunkte der Entscheidungen,
           ``boost_until`` und der Kalendertag des Weckkontingents.
         - ``safety_clock`` ist die Uhr der Safety-Schicht, standardmäßig ``AnchoredClock``:
           Fristen, Rate-Limits, Schreibbudget, sicherer Zustand, Erkennung fremder Änderungen,
-          Heartbeat, Tesla-Fehler und die Zeiten der Laderegelung.
+          Heartbeat, Tesla-Fehler und die Zeiten der Regelung.
         - ``mqtt_write`` reiht einen Schreibauftrag (Pfad, Wert) an den Cerbo ein. Ohne ihn
           schreibt der Victron-Adapter (``VictronMqttAdapter.write``); ohne Victron-Adapter wird
           kein Auftrag angenommen.
@@ -394,15 +401,14 @@ class CoreRuntime:
         self._labels = {actuator: spec.label for actuator, spec in self.limits.actuators.items()}
         self.executor = CommandExecutor(self.layer, self.actuators, self._decide, self._labels)
         self.keeper = SafeStateKeeper(self.limits)
-        # Die Laderegelung lebt so lange wie die Laufzeit; ``started`` ist die Wanduhr beim Start
-        # der Regelung (Zuordnung). Ihr Zustand lebt nur im Speicher (Design 4.1).
-        self.charger = ChargeController(cfg, self.limits, started=self._clock.now())
+        # Die Regelung lebt so lange wie die Laufzeit; ``started`` ist die Wanduhr beim Start der
+        # Regelung (Zuordnung). Ihr Zustand lebt nur im Speicher (Plan 2c-1, Design 4.1).
+        self.regulation = RegulationLink(cfg, self.limits, started=self._clock.now())
         self._cycle_decisions: list[Decision] = []  # Entscheidungen des laufenden Zyklus
         self._last_prune: datetime | None = None
-        # Stand des letzten Zyklus für health(); die Fahrzeuge vor dem ersten Zyklus ohne Stand
+        # Stand des letzten Zyklus für health()
         self._capabilities: dict[str, Capabilities] = {}
         self._pending: frozenset[tuple[str, CommandKind]] = frozenset()
-        self._vehicle_health: list[dict[str, Any]] = self.charger.health()
         self.selfcheck_runs = 0
         self._selfcheck: list[CheckResult] = []
         self._competitor_alarms: list[Alarm] = []
@@ -416,6 +422,12 @@ class CoreRuntime:
         self._last_state: dict[str, Any] | None = None
         self._run_task: asyncio.Task[None] | None = None
         self._api_server: _ApiServer | None = None
+
+    @property
+    def charger(self) -> ChargeController:
+        """Die Laderegelung des Kerns (``RegulationLink.charger``); der Simulator hüllt ihre
+        Aufrufe ein."""
+        return self.regulation.charger
 
     # --- Aufbau -------------------------------------------------------------------------
 
@@ -530,7 +542,7 @@ class CoreRuntime:
         intent, since = self.intents.current, self.operating.since
         modes, locks = self._modes, self._active_locks
         capabilities, pending, owned = self._capabilities, self._pending, self._owned
-        vehicles = self._vehicle_health
+        vehicles = self.regulation.health()["vehicles"]
         return HealthReport(
             mode=self.operating.state.value,
             version=__version__,
@@ -593,8 +605,10 @@ class CoreRuntime:
         Ein Zyklus, der dauernd scheitert, ließe es sonst wachsen.
 
         Eine Ausnahme, auch aus einem Aktor, bricht den Zyklus ab und lässt den Heartbeat ausfallen.
-        Ob ein Zyklus fehlerfrei war, gilt für ihn allein (Plan 2b, Präzisierung 5): Die
-        gescheiterten Schreibvorgänge eines abgebrochenen Zyklus zählen nicht für den nächsten.
+        Nur eine Ausnahme in der Regelung fängt ``RegulationLink``: Sie setzt die Regelung aus, und
+        der Zyklus läuft ohne Heartbeat weiter (Plan 2c-2a, Präzisierung 15). Ob ein Zyklus
+        fehlerfrei war, gilt für ihn allein (Plan 2b, Präzisierung 5): Die gescheiterten
+        Schreibvorgänge eines abgebrochenen Zyklus zählen nicht für den nächsten.
         """
         try:
             self._cycle()
@@ -604,6 +618,7 @@ class CoreRuntime:
             self.executor.take_failures()  # Rest eines abgebrochenen Zyklus, sonst schon leer
 
     def _cycle(self) -> None:
+        self.regulation.start_cycle()
         started = self._timer()
         now = self._clock.now()
         snow = self._safety_clock.now()
@@ -647,6 +662,7 @@ class CoreRuntime:
                 *watchdog,
                 *self._operation_alarms(now),
                 *self._control_alarms(snow),
+                *self.regulation.alarms(),
             ]
         )
         # als Letztes: Eine Ausnahme in einem früheren Schritt lässt den Heartbeat ausfallen
@@ -656,8 +672,8 @@ class CoreRuntime:
         """Die zurückgelesenen Werte aller Aktoren je Art; dazu das Rücklesen des Ausführers.
 
         Der Ausführer fragt in jedem Zustand seine offenen Schreibvorgänge ab. Jeder
-        abgeschlossene geht an ``_note_write`` und an die Laderegelung (``note_result``), auch
-        einer des Keepers: Ein Ergebnis, das nicht zu ihrem letzten eigenen Wert passt, lässt sie
+        abgeschlossene geht an ``_note_write`` und an die Regelung (``note_result``), auch einer
+        des Keepers: Ein Ergebnis, das nicht zu ihrem letzten eigenen Wert passt, lässt sie
         unberührt. Eine Erwartung, die auf das Rücklesen wartet, gilt ab dem ersten Zyklus, in dem
         das Gerät den Wert zeigt (``matches``).
         """
@@ -668,7 +684,7 @@ class CoreRuntime:
         }
         for write in self.executor.poll(snap, snow, now):
             self._note_write(write)
-            self.charger.note_result(write)
+            self.regulation.note_result(write)
         for key, value in list(self._awaiting_readback.items()):
             if key in present and matches(key[1], value, present[key]):
                 del self._awaiting_readback[key]
@@ -722,17 +738,23 @@ class CoreRuntime:
         snow: datetime,
         present: Mapping[_Key, CommandValue],
     ) -> None:
-        """Sicherer Zustand und Übergabe (Plan 2b, Präzisierungen 3 und 4), dann die Laderegelung.
+        """Sicherer Zustand und Übergabe (Plan 2b, Präzisierungen 3 und 4), dann die Regelung.
 
         ``snow`` ist die Zeit der Safety-Schicht, ``now`` die Wanduhr, ``present`` das Rücklesen
         dieses Zyklus. Ausgeführt wird in der Reihenfolge von Design 4.2, berechnet in dieser:
 
         1. Die Fähigkeiten aller Aktoren. Für jeden Aktor, dessen wirksame Betriebsart wechselte
            (``_switched_modes``), vergisst die Regelung ihre letzten Werte.
-        2. Die Befehle der Laderegelung (``_charge_commands``); ohne Regelung ruht sie.
+        2. Die Befehle der Regelung (``RegulationLink.step``). Sie regelt nur in CONTROL und
+           DEGRADED bei eingeschaltetem Regelbetrieb (Plan 2c-1, Design 4.3). In jedem anderen
+           Zyklus ruht sie (``idle``): in START, OBSERVE und SAFE, ohne Absicht und bei
+           ausgeschaltetem Regelbetrieb, auch während der Übergabe danach. Blockiert sind für sie
+           die Arten mit offenem Schreibvorgang und jede Art eines Aktors, der übergeben wird: Die
+           Übergabe geht der Regelung vor. Die Annahmezeit liest die Laufzeit nach der Absicht
+           (``IntentStore``); so ist sie nie älter als deren Annahme.
         3. Erst danach die des ``SafeStateKeeper`` (``_keeper_commands``): Er zählt einen Versuch
-           schon beim Berechnen. Ein Fehler in der Regelung bricht den Zyklus so ab, bevor er
-           einen Versuch verbraucht.
+           schon beim Berechnen. Bricht der Zyklus davor ab, hat er so keinen verbraucht; eine
+           Ausnahme der Regelung selbst fängt ``RegulationLink``.
         4. Ein ``SafetyContext`` für alle Befehle, mit der Wallbox je Fahrzeug aus der Zuordnung
            der Laderegelung (``vehicle_wallbox``).
         5. Erst die Befehle des Keepers, dann die der Regelung gehen an den Ausführer und damit
@@ -743,19 +765,40 @@ class CoreRuntime:
         6. Jedes Urteil über einen Befehl der Regelung geht an sie zurück (``note_verdict``), auch
            ``None``. ``not_sent`` heißt: Das Urteil ließ senden, aber danach ist kein
            Schreibvorgang offen.
+        7. Am Ende legt ``RegulationLink.finish`` Health und Alarme der Regelung ab.
 
-        Übergeben ist ein Aktor schon vorher, in ``_update_operation``. Die Entscheidungen tragen
-        die Wanduhr ``now``. Fähigkeiten, offene Schreibvorgänge, die owned Aktoren und der Stand
-        der Laderegelung je Fahrzeug bleiben für ``health`` stehen.
+        Warf die Regelung in diesem Zyklus (``RegulationLink.failed``, Plan 2c-2a,
+        Präzisierung 15), führt die Laufzeit keinen ihrer Befehle mehr aus; die des Keepers laufen
+        trotzdem. Übergeben ist ein Aktor schon vorher, in ``_update_operation``. Die
+        Entscheidungen tragen die Wanduhr ``now``. Fähigkeiten, offene Schreibvorgänge und die
+        owned Aktoren bleiben für ``health`` stehen.
         """
         capabilities = {
             actuator_id: actuator.capabilities(snap, snow)
             for actuator_id, actuator in self.actuators.items()
         }
-        self.charger.forget(self._switched_modes())
-        charging = self._charge_commands(snap, derived, now, snow, present, capabilities)
+        self.regulation.forget(self._switched_modes())
+        intent = self.intents.current
+        if self.operating.state in _REGULATION_STATES and intent is not None and intent.control:
+            handback = {(actuator, kind) for actuator in self._handing_back for kind in CommandKind}
+            regulated = self.regulation.step(
+                snap=snap,
+                derived=derived,
+                now=now,
+                snow=snow,
+                present=present,
+                capabilities=capabilities,
+                actuators=self.actuators,
+                intent=intent,
+                accepted_at=self.intents.accepted_at,
+                blocked=self.executor.pending() | handback,
+                connected=self.store.connected,
+            )
+        else:
+            self.regulation.idle(snow)
+            regulated = []
         keeper = self._keeper_commands(snap, snow, present)
-        if keeper or charging:
+        if keeper or regulated:
             ctx = safety_context(
                 now=snow,
                 operating=self.operating.state,
@@ -766,21 +809,23 @@ class CoreRuntime:
                 phase_import_a=derived.phase_import_a,
                 wallbox_phase_a=derived.wallbox_phase_a,
                 present=present,
-                vehicle_wallbox=self.charger.vehicle_wallbox(),
+                vehicle_wallbox=self.regulation.vehicle_wallbox(),
             )
             inputs = decision_inputs(snap, derived.phase_import_a)
             for command in keeper:
                 if self._execute(command, ctx, snap, now, inputs)[1]:
-                    self.charger.forget({command.actuator})
-            for charge in charging:
-                command = charge.command
-                verdict, sent = self._execute(command, ctx, snap, now, {**inputs, **charge.inputs})
+                    self.regulation.forget({command.actuator})
+            for found in regulated:
+                if self.regulation.failed:
+                    break
+                command = found.command
+                verdict, sent = self._execute(command, ctx, snap, now, {**inputs, **found.inputs})
                 not_sent = verdict is not None and verdict.send and not sent
-                self.charger.note_verdict(command, verdict, not_sent=not_sent)
+                self.regulation.note_verdict(command, verdict, not_sent=not_sent)
         self._capabilities = capabilities
         self._pending = self.executor.pending()
         self._owned = self.ownership.owned
-        self._vehicle_health = self.charger.health()
+        self.regulation.finish(now)
 
     def _switched_modes(self) -> set[str]:
         """Die Aktoren, deren wirksame Betriebsart seit dem letzten Zyklus gewechselt hat.
@@ -813,71 +858,6 @@ class CoreRuntime:
             if mode.effective == ActuatorMode.LIVE
         )
         return self.keeper.commands(snow, self._targets(snap, state), present, pending, live)
-
-    def _charge_commands(
-        self,
-        snap: Snapshot,
-        derived: Derived,
-        now: datetime,
-        snow: datetime,
-        present: Mapping[_Key, CommandValue],
-        capabilities: Mapping[str, Capabilities],
-    ) -> list[ChargeCommand]:
-        """Die Befehle der Laderegelung in diesem Zyklus, in der Reihenfolge der Priorität.
-
-        Sie regelt nur in CONTROL und DEGRADED bei eingeschaltetem Regelbetrieb (Design 4.3). In
-        jedem anderen Zyklus ruht sie (``idle`` mit der Zeit der Safety-Schicht): in START,
-        OBSERVE und SAFE, ohne Absicht und bei ausgeschaltetem Regelbetrieb, auch während der
-        Übergabe danach.
-        """
-        intent = self.intents.current
-        if self.operating.state not in _CHARGING_STATES or intent is None or not intent.control:
-            self.charger.idle(snow)
-            return []
-        return self.charger.step(
-            self._charge_inputs(snap, derived, now, snow, present, capabilities, intent)
-        )
-
-    def _charge_inputs(
-        self,
-        snap: Snapshot,
-        derived: Derived,
-        now: datetime,
-        snow: datetime,
-        present: Mapping[_Key, CommandValue],
-        capabilities: Mapping[str, Capabilities],
-        intent: Intent,
-    ) -> ChargeInputs:
-        """Die Eingaben eines Zyklus der Laderegelung (Design 4.2).
-
-        - Die Zeiten der Regelung laufen auf der Uhr der Safety-Schicht (``snow``); die Wanduhr
-          ``now`` gilt für ``boost_until`` und den Kalendertag des Weckkontingents.
-        - Weckbar ist ein Aktor mit ``WakeStart``, dessen ``wake_capabilities`` einen Start mit
-          Weckerlaubnis zulassen; jeder andere ist es nie.
-        - Blockiert sind die Arten mit offenem Schreibvorgang und jede Art eines Aktors, der
-          übergeben wird: Die Übergabe geht der Regelung vor.
-        - Die Annahmezeit liest die Laufzeit nach der Absicht ``intent`` (``IntentStore``); so ist
-          sie nie älter als deren Annahme.
-        """
-        grid, wallboxes, vehicles = observe(snap, derived, self._cfg, self.store.connected)
-        handing_back = {(actuator, kind) for actuator in self._handing_back for kind in CommandKind}
-        return ChargeInputs(
-            now=snow,
-            wall_now=now,
-            grid=grid,
-            wallboxes=wallboxes,
-            vehicles=vehicles,
-            present=present,
-            controllable={actuator: c.controllable for actuator, c in capabilities.items()},
-            wakeable={
-                actuator_id: isinstance(actuator, WakeStart)
-                and actuator.wake_capabilities(snap, snow).controllable
-                for actuator_id, actuator in self.actuators.items()
-            },
-            blocked=self.executor.pending() | handing_back,
-            intent=intent,
-            accepted_at=self.intents.accepted_at,
-        )
 
     def _execute(
         self,
@@ -942,7 +922,9 @@ class CoreRuntime:
         - **Fehlerfrei** ist der Zyklus (Präzisierung 5), wenn für keinen Victron- oder EVCS-Aktor
           ein Schreibvorgang scheiterte (Fehler, Zeitüberschreitung, nicht gesendet) und keine
           Sicherwert-Art dieser Aktoren gescheitert ist; Fehler beim Tesla zählen nicht. Eine
-          Ausnahme bricht den Zyklus schon vorher ab.
+          Ausnahme bricht den Zyklus schon vorher ab; eine in der Regelung fängt
+          ``RegulationLink``, und der Zyklus ist dann nicht fehlerfrei (``failed``, Plan 2c-2a,
+          Präzisierung 15).
         - **Der Zähler** darf aus einem fehlerfreien Zyklus in CONTROL, DEGRADED und SAFE hinaus und
           in OBSERVE zum Scharfschalten: wenn das Gate nur noch auf den Watchdog wartet, er nicht
           schon für diesen core scharf ist, seinen Zustand meldet und das konfigurierte Timeout
@@ -951,7 +933,7 @@ class CoreRuntime:
           aus, ein scharfer Watchdog löst aus, und der Alarm ``watchdog.timeout`` nennt die Abhilfe.
         - **Die Freigabe 0** nur, wenn kein Victron- oder EVCS-Aktor mehr Werte des EMS hält
           (Präzisierung 3), für keinen von ihnen ein Schreibvorgang offen ist, gleich ob ihn der
-          Keeper oder die Laderegelung sendete (Design 4.5: Er könnte sonst nach der Freigabe am
+          Keeper oder die Regelung sendete (Design 4.5: Er könnte sonst nach der Freigabe am
           Gerät ankommen), und der core in diesem Lauf für den Watchdog zuständig ist: ab dem
           ersten Bedarf oder dem ersten owned Victron- oder EVCS-Aktor, auch beim Start. Eine Probe
           oder das Teil-2-Werkzeug machen den Watchdog mit eigenen Heartbeats scharf und lösen ihn
@@ -965,7 +947,7 @@ class CoreRuntime:
             self._responsible = True
         failed_write = any(write.actuator in self._needs_watchdog for write in failures)
         failed_kind = any(actuator in self._needs_watchdog for actuator, _ in self.keeper.failed)
-        cycle_ok = not failed_write and not failed_kind
+        cycle_ok = not failed_write and not failed_kind and not self.regulation.failed
         state = self.operating.state
         arming = (
             state == OperatingState.OBSERVE
@@ -1046,7 +1028,7 @@ class CoreRuntime:
         - Ein gesperrter Aktor, den nachweislich ein anderes System regelt
           (``controlled_elsewhere``: ein Alarm ``competitor.*`` oder ein Prüfpunkt mit ``fail``),
           hält ab sofort keine Werte des EMS mehr und wird nicht übergeben; seine Beobachtung
-          endet, und die Laderegelung vergisst ihre letzten Werte für ihn (``charger.forget``):
+          endet, und die Regelung vergisst ihre letzten Werte für ihn (``RegulationLink.forget``):
           Sein Gerät ändert sich ohne sie. Eine Sperre nur wegen eines nicht lesbaren Prüfpunkts
           (``unknown``) lässt ihn owned, etwa im ersten Zyklus ohne Daten: Sein Gerät kann noch
           Werte des EMS halten. Seine Übergabe lehnt dann die Sperre ab, und der Watchdog
@@ -1080,7 +1062,7 @@ class CoreRuntime:
         taken = self._controlled_elsewhere.intersection(self._active_locks)
         for actuator in self.ownership.drop(taken):
             self._forget(actuator)
-            self.charger.forget({actuator})
+            self.regulation.forget({actuator})
         intent = self.intents.current
         self._watchdog = read_watchdog(snap)
         if self._watchdog.state is WatchdogState.TRIPPED:
