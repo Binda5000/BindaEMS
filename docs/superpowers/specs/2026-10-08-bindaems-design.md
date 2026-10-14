@@ -739,7 +739,7 @@ Kurzfristig puffern das ESS und das Victron-Importlimit (Ebene 0).
 - **Verteilung** (gierig nach `priority`):
   1. Sofort und Boost ziehen ihren vollen Strom `max_a × U × Phasen` vom Überschuss ab, bevor PV-Autos ihren Anteil bekommen; der Phasenwächter bleibt dabei außen vor. Das ist vorsichtig, wenn der Wächter sie kappt.
   2. Ein PV-Auto in seinen Stopp-Minuten verbraucht seinen Mindeststrom vom Überschuss.
-  3. Den Rest bekommen PV-Überschuss und Min+PV in der Reihenfolge `priority`, jedes bis zu seinem Höchststrom. Strom = abgerundet Leistung / (`grid.voltage_nominal_v` · Phasen), begrenzt auf Mindest- und Höchststrom.
+  3. Den Rest bekommen PV-Überschuss und Min+PV in der Reihenfolge `priority`, jedes bis zu seinem Höchststrom. Strom = abgerundet Leistung / (`grid.voltage_nominal_v` · Phasen), begrenzt auf Mindest- und Höchststrom. **An der EVCS mit Hysterese** (Design 2c-1, 6.5; Entscheidung des Betreibers vom 14.10.2026): Ihr Strom sinkt sofort mit dem Anteil, steigt aber erst, wenn der Anteil den zuletzt angeforderten Strom um 1 A plus `control.evcs_hysteresis_a` (0,5 A) übersteigt, und dann auf den abgerundeten Anteil minus die Hysterese. Die folgenden Autos bekommen den Rest nach dem gehaltenen Strom. Sonst folgte die EVCS dem Rauschen der Hauslast an jeder Ampere-Grenze.
   4. Danach gilt die Grenze des Phasenwächters (7.3).
 
   Wegen der gierigen Verteilung laden zwei PV-Autos bei höchstens 10 kW PV nacheinander, nicht gleichzeitig: Der Tesla nimmt bis zu 11 kW, der e-Golf bekommt erst, was er übrig lässt (Szenarien `sonnig` und `wolkig`, 16).

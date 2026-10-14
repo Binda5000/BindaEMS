@@ -50,6 +50,11 @@ Punkte geändert oder sind dazugekommen:
   (mit den Übergängen) und die Entscheidungen „zurückgestellt“ je Fahrzeug mit Tessie. In `reserve`
   prüft eine eigene Prüfung, dass die Regelung unter der Reserve-Absicherung das Importziel hält;
   „SOC nie unter 20 %“ ist nur eine Invariante des Modells.
+- **EVCS-Hysterese (6.5, nach dem Gesamtreview):** Die EVCS folgt dem Überschuss nicht mehr jede
+  Sekunde. Ihr Strom sinkt sofort mit dem Anteil, steigt aber erst, wenn der Anteil den zuletzt
+  angeforderten Strom um 1 A plus `control.evcs_hysteresis_a` (0,5 A) übersteigt (Entscheidung des
+  Betreibers vom 14.10.2026). Sonst folgte der Strom dem Rauschen der Hauslast: im Simulator 77 bzw.
+  101 Strombefehle in `sonnig` bzw. `wolkig`, mit der Hysterese 3 bzw. 44. `sonnig` prüft das.
 
 Entwurf vom 12.10.2026, im Brainstorming mit dem Betreiber abgestimmt. Grundlage ist die Spec
 `docs/superpowers/specs/2026-10-08-bindaems-design.md`, vor allem 1.2, 1.3, 7.1–7.5, 7.8, 8.3, 8.4
@@ -136,6 +141,7 @@ Neue Felder in `config.yaml` mit Standardwerten:
 | `control.reserve_guard_pct` | 5 | über der USV-Reserve: darunter richten sich auch Sofort und Boost am Importlimit aus |
 | `control.tesla_average_s` | 90 | gleitendes Mittel für den Tesla-Strom |
 | `control.tesla_caution_s` | 60 | Fenster der vorsichtigen Zuteilung an den Tesla (Spec 7.3) |
+| `control.evcs_hysteresis_a` | 0,5 | Hysterese der EVCS beim Erhöhen in A (Abschnitt 6.5; seit dem 14.10.2026) |
 | `vehicles.<name>.wake.interval_s` | 1800 | Mindestabstand zweier Weckvorgänge |
 | `vehicles.<name>.wake.per_day` | 6 | Weckvorgänge je Kalendertag (Wiener Zeit) |
 
@@ -329,6 +335,16 @@ Befehl weiterhin unabhängig vom Phasenwächter.
 ### 6.5 Stromänderungen
 
 - **EVCS:** folgt jede Sekunde; die Safety-Schicht verlangt 1 A Totband und 5 s Abstand.
+  **Geändert am 14.10.2026 (Hysterese):** In PV-Überschuss und Min+PV hält die Verteilung den
+  zuletzt angeforderten Strom `S`. Liegt der abgerundete Anteil darunter, sinkt der Strom sofort
+  auf ihn. Erhöht wird erst ab einem Anteil von `S + 1 A + control.evcs_hysteresis_a`, und dann auf
+  den abgerundeten Anteil minus `control.evcs_hysteresis_a`; dazwischen bleibt `S`. Ohne eigenen
+  Wert (nach dem Start, einer Pause, einem Wert des Keepers, einer fremden Übernahme oder dem
+  Wechsel zwischen Dry-Run und live) wird nur abgerundet. Folgende Autos bekommen den Rest nach dem
+  gehaltenen Strom. Ganz ruhig bleibt der Strom, solange das Rauschen des Anteils von Spitze zu
+  Spitze unter der Hysterese liegt; im Simulator (Rauschen ±0,33 A beim e-Golf) blieben mit 0,5 A in
+  `sonnig` 3 Strombefehle in knapp einer Stunde. Der e-Golf bekommt dafür etwas weniger (dort 1 bis
+  1,5 % seiner Ladeenergie); das lädt der Hausakku.
 - **Tesla:** folgt dem gleitenden Mittel über `control.tesla_average_s`, ab 2 A Unterschied und
   höchstens alle 90 s (`vehicles.<name>.commands`). Die schnellen Schwankungen fangen die EVCS bzw.
   der Akku ab (Spec 7.5).

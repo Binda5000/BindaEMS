@@ -1381,6 +1381,15 @@ Die Zahlen gelten für die Beispielkonfiguration (`grid.fuse_a` 35 A, `grid.fuse
   seinem Höchststrom, bevor das nächste etwas sieht. Mit höchstens 10 kW PV laden zwei PV-Autos
   deshalb nacheinander, nicht gleichzeitig: erst der Tesla (bis zu 11 kW), dann der e-Golf. Sofort
   und Boost ziehen ihren vollen Strom vom Überschuss ab, bevor die PV-Autos ihren Anteil bekommen.
+- **EVCS mit Hysterese** (`control.evcs_hysteresis_a`, 0,5 A): In PV-Überschuss und Min+PV sinkt
+  der Strom der EVCS sofort mit dem Anteil, steigt aber erst, wenn der Anteil den zuletzt
+  angeforderten Strom um 1 A plus die Hysterese übersteigt, und dann auf den abgerundeten Anteil
+  minus die Hysterese. Lädt der e-Golf mit 8 A, geht er bei einem Anteil von 9,5 A auf 9 A, bei
+  7,9 A sofort auf 7 A. So folgt die EVCS nicht dem Rauschen der Hauslast (im Simulator in `sonnig`
+  3 statt 77 Strombefehle in knapp einer Stunde). Was sie dabei liegen lässt, lädt der Hausakku.
+  Ohne eigenen Wert (nach einem Neustart, einer Pause, einem Wert des Keepers oder dem Wechsel
+  zwischen Dry-Run und live) rundet die Regelung einmal nur ab. `0` schaltet die Hysterese ab; der
+  Tesla folgt ohnehin seinem gleitenden Mittel (unten, „Tesla“).
 
 ### Phasenwächter und Überlast
 
@@ -1579,9 +1588,9 @@ Ein Eintrag im Rohformat (hier aus dem Simulator):
   Stundenlimits des Tesla (dieselbe Ablehnung bzw. Zurückstellung höchstens alle 60 s). Eine
   Zurückstellung ist keine Entscheidung, die BindaEMS ausführte: Sie zeigt, dass der Vergleich beim
   Tesla dort abbricht, bis das Budget wieder Platz hat (im Simulator in `dry-run` 14 Einträge je
-  Stunde neben 22 Dry-Run-Entscheidungen). Die EVCS folgt dem Überschuss in ganzen Ampere: Im
-  Simulator waren es 77 bis 112 Strombefehle je Stunde PV-Laden, rechne im Dry-Run mit
-  entsprechend vielen Entscheidungen (zur Hysterese: „Hinweise für die Anlage“).
+  Stunde neben 22 Dry-Run-Entscheidungen). Die EVCS folgt dem Überschuss in ganzen Ampere mit
+  Hysterese (oben, „Lademodi“): Im Simulator waren es bei ruhiger Sonne (`sonnig`) 3 Strombefehle
+  in knapp einer Stunde PV-Laden, unter wechselnden Wolken (`wolkig`) rund 40 je Stunde.
 
 | Grund (`codes`) | Text im Log | Bedeutung |
 |---|---|---|
@@ -1674,12 +1683,7 @@ umzusetzen, je mit Befund und möglicher Abhilfe (ausführlicher in `docs/ueberg
 7. **Technische Schulden vor 2c-2:** `core/control/charging.py` und `core/runtime.py` sind groß, und
    einige Hilfsfunktionen gibt es doppelt. Abhilfe: aufteilen und zusammenführen, bevor 2c-2
    dazukommt.
-8. **EVCS-Hysterese (vor dem Dry-Run zu entscheiden):** Der EVCS-Strom wechselt mit dem Rauschen der
-   Hauslast zwischen zwei ganzen Ampere, im Simulator 77 bis 112 Befehle bzw. Dry-Run-Entscheidungen
-   je Stunde PV-Laden. Abhilfe: Erhöhen erst ab einem Anteil von Sollwert + 1 A + etwa 0,3 A oder
-   nach etwa 30 s, Senken sofort; das weicht von Design 6.5 ab („folgt jede Sekunde“), darum
-   entscheidet der Betreiber.
-9. **Sicherer Zustand bei Netzausfall:** Der core sendet dem Tesla „Laden aus“ alle 10 s erneut, bis
+8. **Sicherer Zustand bei Netzausfall:** Der core sendet dem Tesla „Laden aus“ alle 10 s erneut, bis
    der Tessie-Cache es zeigt; beim Laden dauert das bis zu 30 s und kostet bis zu 3 der 6
    Start/Stopp-Befehle je Stunde und alle 3 Versuche des Vorfalls. Abhilfe: die Zahl der Versuche,
    ihren Abstand oder `min_a` prüfen (Spec 8.5).
@@ -1690,7 +1694,10 @@ umzusetzen, je mit Befund und möglicher Abhilfe (ausführlicher in `docs/ueberg
   („geladen“), bliebe ein Auto in PV nach dem ersten Stopp stehen, bis es abgesteckt wird;
 - was Tessie für `charger_phases` meldet;
 - ob „unklar“ fälschlich erscheint, wenn der Tesla den Wall Connector verlässt, während der e-Golf
-  an der EVCS hängt (Tessie meldet `plugged` bis zu 60 s veraltet).
+  an der EVCS hängt (Tessie meldet `plugged` bis zu 60 s veraltet);
+- wie oft die EVCS ihren Strom ändert: Folgt sie bei ruhiger Sonne trotz der Hysterese noch dem
+  Rauschen (deutlich mehr Strom-Entscheidungen an `wallbox.evcs` als im Simulator, etwa über 10 je
+  Stunde), hebe `control.evcs_hysteresis_a` an (oben, „Lademodi“).
 
 ## Simulator
 
@@ -1822,8 +1829,8 @@ Tabelle nichts anderes sagt. Der Regelbetrieb ist an, die Aktoren der Regelung s
 
 | Name | Titel, Dauer | Anlage und Ereignisse | Prüfung des Szenarios |
 |---|---|---|---|
-| `sonnig` | Sonniger Tag, beide Autos im PV-Modus, 2 h | 21.06.2026 ab 10:00, PV bis 9 kW, Akku 60 %, Tesla nahe an seinem Ladelimit | Erst lädt der Tesla bis „Complete“ (mindestens 45 min), danach der e-Golf (mindestens 45 min). |
-| `wolkig` | Wolkiger Tag, beide Autos im PV-Modus, 2 h | wie `sonnig`, Sonne und Wolke im Wechsel alle 30 bis 180 s | wie `sonnig`, je mindestens 20 min |
+| `sonnig` | Sonniger Tag, beide Autos im PV-Modus, 2 h | 21.06.2026 ab 10:00, PV bis 9 kW, Akku 60 %, Tesla nahe an seinem Ladelimit | Erst lädt der Tesla bis „Complete“ (mindestens 45 min), danach der e-Golf (mindestens 45 min); höchstens 10 Strombefehle an die EVCS je Stunde, in der der e-Golf lädt (Hysterese, Abschnitt „Laderegelung“). |
+| `wolkig` | Wolkiger Tag, beide Autos im PV-Modus, 2 h | wie `sonnig`, Sonne und Wolke im Wechsel alle 30 bis 180 s | Erst lädt der Tesla bis „Complete“, danach der e-Golf, je mindestens 20 min. |
 | `abend-sofort` | Abends beide Autos auf Sofort, mit Lastspitze, 1 h | 12.10.2026 ab 18:00, keine PV, Akku 60 %, L1 +2,5 kW von 20 bis 25 min | Der Strom der EVCS liegt während der Spitze unter dem davor. |
 | `reserve` | Sofort knapp über der USV-Reserve, 1 h | Akku 23 %, dauerhaft 1 kW mehr Last auf L1, nur der e-Golf | Eine Entscheidung nennt „reserve_guard“; unter der Reserve-Absicherung (SOC unter 25 %) liegt keine Phase länger als 10 s mit der Last ohne Akku-Hilfe über dem Importziel (19 A, mit 0,5 A Toleranz), solange ein Auto live über seinem Mindeststrom lädt; der SOC sinkt nie unter 20 % (eine Invariante des Modells, das am Netz nie unter die Reserve entlädt: Sie prüft das Modell, nicht die Regelung). |
 | `nur-laden` | Multi auf „Nur Laden“ mit Sofort, 1 h | L1 +3 kW als Rampe von 20 bis 40 min | Die Selbstprüfung `multi_mode` warnt. |

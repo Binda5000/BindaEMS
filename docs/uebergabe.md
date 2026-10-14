@@ -1,10 +1,11 @@
 # Übergabe an die nächste Session
 
 Stand: 14.10.2026. Plan 2c-1 (Laderegelung) ist umgesetzt, je Task und im Gesamtreview geprüft
-(„mit Korrekturen“, keine kritischen Befunde), und die Fix-Welle danach ist umgesetzt. Er liegt auf
-dem Branch `ccr-e451cb4c-qeg1tm`; die Integration nach `main` folgt. Plan 2b ist auf `main`
-(Fast-Forward vom selben Branch mit Zustimmung des Betreibers). `main` ist seit dem 12.10.2026 auch
-der Standard-Branch auf GitHub.
+(„mit Korrekturen“, keine kritischen Befunde), und die Fix-Welle danach ist umgesetzt. Er ist auf
+`main` (Stand `18c575a`, wie die Branches `ccr-e451cb4c-qeg1tm` und `ccr-9778345e-t3x44k` zu Beginn
+der folgenden Sitzung). Danach ist die EVCS-Hysterese dazugekommen (Freigabe des Betreibers vom
+14.10.2026); sie liegt auf dem Branch `ccr-9778345e-t3x44k`, die Integration nach `main` folgt mit
+Zustimmung. `main` ist seit dem 12.10.2026 auch der Standard-Branch auf GitHub.
 
 ## Kurzfassung
 
@@ -94,6 +95,15 @@ der Standard-Branch auf GitHub.
     Regelung; „SOC nie unter 20 %“ ist als Invariante des Modells gekennzeichnet. Dazu ein Test zur
     Dringlichkeit beim Steigen der Überlast-Stufe, Korrekturen der Doku und die Liste „Vor der
     Live-Schaltung von EVCS und Tesla“ (siehe „Offen an der Anlage“).
+  - **EVCS-Hysterese (danach, Design 6.5):** Der EVCS-Strom sinkt sofort mit dem Anteil am
+    Überschuss, steigt aber erst, wenn der Anteil den zuletzt angeforderten Strom um 1 A plus
+    `control.evcs_hysteresis_a` (0,5 A) übersteigt, und dann auf den abgerundeten Anteil minus die
+    Hysterese. Im Simulator sinken die EVCS-Strombefehle in `sonnig` von 77 auf 3 (knapp eine Stunde
+    PV-Laden) und in `wolkig` von 101 auf 44 (dort folgt der e-Golf den Wolken); der e-Golf bekommt
+    dafür 1 bis 1,5 % weniger Energie, die der Hausakku lädt. `sonnig` prüft höchstens 10 Befehle je
+    Stunde. Gegenüber dem Vorschlag aus dem Gesamtreview (0,3 A oder nach 30 s) hat der Betreiber
+    nach einer Messung 0,5 A ohne den 30-s-Pfad freigegeben: 0,3 A liegt unter dem Rauschen des
+    Simulators (±0,33 A beim e-Golf), und der 30-s-Pfad brachte mehr Flattern statt weniger.
   - **Noch nicht:** Befehle an Victron und der 15-min-Wächter (2c-2), die Bedienung (2d). Live ist
     weiterhin kein Aktor.
 - **Images:** `ghcr.io/binda5000/bindaems-core:latest` und `ghcr.io/binda5000/bindaems-app:latest`.
@@ -101,15 +111,14 @@ der Standard-Branch auf GitHub.
   immer gemeinsam aus demselben Stand ausgerollt (gleiche Compose-Datei, gleiche Image-Tags): Die
   UI-Schemas sind streng, eine abweichende Version zeigt auf der System-Seite nur „Unerwartete
   Antwort vom Server“.
-- **Tests:** 4595 Python-Tests, davon 16 Property-Tests mit Hypothesis (5 für die Safety-Schicht,
+- **Tests:** 4613 Python-Tests, davon 16 Property-Tests mit Hypothesis (5 für die Safety-Schicht,
   6 für den Phasenwächter), und 233 UI-Tests; Abdeckung 97 % insgesamt und 99 % für `core/safety`,
   `core/control` und `core/actuators`.
   Geprüft wird mit ruff, mypy strict (auch für den Watchdog), import-linter (4 Verträge), pytest
   mit Abdeckungsgrenzen (≥ 75 % insgesamt, ≥ 90 % für `core/safety`, `core/control` und
   `core/actuators`), Vitest mit svelte-check, Prettier und ESLint; dazu E2E mit Playwright.
 - **Offen:**
-  - vor dem Dry-Run: die EVCS-Hysterese einbauen (vom Betreiber am 14.10.2026 beschlossen, noch
-    nicht umgesetzt; Liste „Vor der Live-Schaltung“, Punkt 8)
+  - die Integration der EVCS-Hysterese nach `main` (mit Zustimmung)
   - an der Anlage: Images ausrollen, Dry-Run neben evcc beginnen, der Rest von Teil 2
     (EVCS-Verbindungsabbruch, Victron 17.2-4; siehe „Offen an der Anlage“)
   - kleine Nacharbeiten aus dem Gesamtreview von 2c-1 (siehe „Offen an der Anlage“)
@@ -145,8 +154,8 @@ der Standard-Branch auf GitHub.
   - „Deferred minors“
   - Frage nach der Integration (merge, PR oder so lassen)
 - **Git:**
-  - Arbeitsbranch ist der Branch, den die Sitzung vorgibt (Plan 2b: `ccr-e451cb4c-qeg1tm`); der
-    Standard-Branch auf GitHub ist `main`.
+  - Arbeitsbranch ist der Branch, den die Sitzung vorgibt (Plan 2b und 2c-1: `ccr-e451cb4c-qeg1tm`,
+    EVCS-Hysterese: `ccr-9778345e-t3x44k`); der Standard-Branch auf GitHub ist `main`.
   - Nach `main` nur mit Zustimmung; bisher per Fast-Forward-Merge, Tests auf `main`, dann Push.
   - Pull Requests nur auf ausdrücklichen Wunsch.
   - Commit-Nachrichten auf Deutsch im Stil `fix(ui): …`, mit den Attributionszeilen, die die
@@ -333,6 +342,10 @@ Demo-Zugänge: `admin`, `gast` (Lesen) und `sicher` (Admin mit TOTP, Geheimnis
   `tests/unit/core/control/charge_helpers.py`. Die Regelung sendet nur Änderungen; wer einem Aktor
   Befehle gibt, ohne dass sie es sieht, ruft `ChargeController.forget` auf (die Laufzeit tut das für
   Keeper, Übergabe, fremde Systeme und den Wechsel der Betriebsart).
+- **Tests mit der EVCS-Hysterese:** Die EVCS hält ihren zuletzt angeforderten Strom, bis der Anteil
+  ihn um 1 A plus `control.evcs_hysteresis_a` (0,5 A) übersteigt. Ein Test, der eine Erhöhung an
+  der EVCS erwartet, braucht also einen Anteil ab Sollwert + 1,5 A oder setzt die Hysterese auf 0
+  (`with_control` in `tests/unit/core/control/test_charging.py`). Senkungen wirken sofort.
 - **Simulator (2c-1):** Er nutzt die echten Aktoren und die Parser der Adapter. Ändert man deren
   Zeiten, Texte oder Signale, ändern sich die Szenarien mit. Alle zehn Szenarien laufen in
   `tests/integration/test_sim_scenarios.py` mit je etwa 5 bis 20 s; die volle CI-Prüfung braucht
@@ -394,24 +407,28 @@ Demo-Zugänge: `admin`, `gast` (Lesen) und `sicher` (Admin mit TOTP, Geheimnis
     `friendly_name_str`
   - Wichtig auch für die Lastprognose aus der HA-Historie.
 - **Offen an der Anlage, als Nächstes (nach Plan 2c-1):**
-  1. Die Images ausrollen: `docker compose pull && docker compose up -d` (Betriebshandbuch 4). Die
-     neuen Felder `grid.import_limit_a`, `control` und `vehicles.<name>.wake` haben Standardwerte;
-     prüfe sie anhand von `deploy/config.example.yaml`. Der Watchdog bleibt unverändert (1.1.0).
+  1. Die Images ausrollen: `docker compose pull && docker compose up -d` (Betriebshandbuch 4),
+     nachdem die EVCS-Hysterese auf `main` ist. Die neuen Felder `grid.import_limit_a`, `control`
+     (seit der Hysterese auch `control.evcs_hysteresis_a`) und `vehicles.<name>.wake` haben
+     Standardwerte; prüfe sie anhand von `deploy/config.example.yaml`. Der Watchdog bleibt
+     unverändert (1.1.0).
   2. Den Dry-Run neben evcc beginnen: eine Absicht mit `"control": true` per `PUT /v1/intent`, alle
      Aktoren bleiben im Dry-Run (Betriebshandbuch, „Laderegelung“). Der core sendet dabei nichts
      auf die Geräte, und die Teil-2-Werkzeuge schreiben nicht mit: Sie schreiben nur, wenn du sie
      aufrufst. Die Entscheidungen liest der Betreiber bis 2d über die Dateien bzw.
      `GET /v1/decisions`.
-     - Vorher die EVCS-Hysterese einbauen (Punkt 8 der Liste „Vor der Live-Schaltung“ unten, vom
-       Betreiber beschlossen); sonst beginnt der Dry-Run mit rund 100 EVCS-Entscheidungen je Stunde
-       PV-Laden.
+     - Die EVCS-Hysterese ist eingebaut (14.10.2026). Ohne sie hätte der Dry-Run mit rund 100
+       EVCS-Entscheidungen je Stunde PV-Laden begonnen; im Simulator sind es jetzt 3 bei ruhiger
+       Sonne und rund 40 unter wechselnden Wolken.
      - Das Stundenbudget des Tesla kappt den Vergleich bei Wolken (Punkt 1 unten); seit der
        Fix-Welle steht das als „zurückgestellt“ im Log.
      - **An der Anlage im Dry-Run prüfen:** welcher EVCS-Status bei angestecktem Auto auf
        „Laden aus“ (`StartStop` = 0) folgt (ist es 3, bliebe ein Auto in PV nach dem ersten Stopp
        auf „geladen“ stehen, bis es abgesteckt wird); was Tessie für `charger_phases` meldet; ob
        „unklar“ fälschlich erscheint, wenn der Tesla den Wall Connector verlässt, während der e-Golf
-       an der EVCS hängt (Tessie meldet `plugged` bis zu 60 s veraltet).
+       an der EVCS hängt (Tessie meldet `plugged` bis zu 60 s veraltet); wie oft die EVCS bei ruhiger
+       Sonne ihren Strom ändert (deutlich über 10 Entscheidungen je Stunde heißt: Das Rauschen an der
+       Anlage ist größer als die Hysterese, `control.evcs_hysteresis_a` anheben).
   3. EVCS-Teil-2 „Verbindung unterbrochen“ und Victron 17.2-4 nachholen:
      - EVCS: den Schritt „Verbindung unterbrochen“ (Punkt `evcs` erneut, die Rückfrage mit `j`
        beantworten und das Netzwerkkabel der EVCS ziehen, wenn das Werkzeug es verlangt).
@@ -456,13 +473,6 @@ Demo-Zugänge: `admin`, `gast` (Lesen) und `sicher` (Admin mit TOTP, Geheimnis
     7. **Technische Schulden vor 2c-2:** `charging.py` (rund 1040 Zeilen) und `runtime.py` (rund
        1290) sind groß, Hilfsfunktionen wie `_since`, `_number` und `PV_SURPLUS` gibt es doppelt.
        Abhilfe: aufteilen und zusammenführen, bevor 2c-2 dazukommt.
-    8. **EVCS-Hysterese (vor dem Dry-Run einbauen):** Der EVCS-Strom wechselt mit dem Rauschen der
-       Hauslast zwischen zwei ganzen Ampere (im Simulator 77 bis 112 Befehle bzw.
-       Dry-Run-Entscheidungen je Stunde PV-Laden). Der Betreiber hat am 14.10.2026 entschieden, eine
-       Hysterese einzubauen; sie ist noch nicht umgesetzt. Vorschlag: Erhöhen erst ab einem Anteil
-       von Sollwert + 1 A + etwa 0,3 A (oder nach etwa 30 s), Senken sofort, nur für die EVCS. Das
-       weicht von Design 6.5 ab („folgt jede Sekunde“); Design und Betriebshandbuch dabei
-       nachziehen, die Simulator-Szenarien müssen grün bleiben.
 
     Dazu kommen die Punkte „Offen vor dem Live-Betrieb des Tesla“ (Reserve des sicheren Zustands,
     Annahmen des Prüffensters) unter „Hinweise für die Pläne 2c-2 und 2d“.
@@ -540,9 +550,10 @@ Demo-Zugänge: `admin`, `gast` (Lesen) und `sicher` (Admin mit TOTP, Geheimnis
 1. Plan 2b ist auf `main`; Gesamtreview, Fix-Durchgang und Re-Review sind erledigt, die
    Entscheidungen stehen in `docs/superpowers/plans/2026-10-11-phase-2b-entscheidungen.md`. Plan
    2c-1 ist umgesetzt, je Task und im Gesamtreview geprüft, und die Fix-Welle danach ist umgesetzt;
-   die Integration nach `main` folgt. Seine Entscheidungen stehen im Kopf des Designs und in den
-   Absätzen „Stand Plan 2c-1“ der Spec, die offenen Punkte vor der Live-Schaltung in „Offen an der
-   Anlage“.
+   er ist auf `main`. Die EVCS-Hysterese danach liegt auf `ccr-9778345e-t3x44k`, die Integration
+   nach `main` folgt mit Zustimmung. Die Entscheidungen von 2c-1 stehen im Kopf des Designs und in
+   den Absätzen „Stand Plan 2c-1“ der Spec, die offenen Punkte vor der Live-Schaltung in „Offen an
+   der Anlage“.
 2. An der Anlage die Schritte aus „Offen an der Anlage“.
 3. Danach Plan 2c-2 („Akku und Spitzen“) schreiben; die Hinweise unten gehören hinein. Dann folgt
    Plan 2d.
@@ -677,11 +688,13 @@ Entschieden in Phase 2a; die Rulings stehen im Plan (Präzisierungen) bzw. im Co
 Entschieden in Phase 2c-1; die Rulings stehen im Plan (Präzisierungen), im Kopf des Designs und in den
 Absätzen „Stand Plan 2c-1“ der Spec:
 
-- Die EVCS folgt dem Überschuss in ganzen Ampere (Totband 1 A, 5 s Abstand in der Safety-Schicht). In
-  den PV-Szenarien des Simulators waren das 77 bis 112 Strombefehle je Stunde, auch weil das
-  Rauschen der Hauslast an der Abrundungsgrenze liegt. Eine Hysterese beim Erhöhen hat der Betreiber
-  am 14.10.2026 beschlossen; sie ist noch einzubauen, vor dem Dry-Run (Liste „Vor der
-  Live-Schaltung“, Punkt 8).
+- Die EVCS folgt dem Überschuss in ganzen Ampere mit Hysterese beim Erhöhen
+  (`control.evcs_hysteresis_a`, 0,5 A; Design 6.5). Ganz ruhig bleibt ihr Strom nur, solange das
+  Rauschen des Anteils von Spitze zu Spitze unter der Hysterese liegt; sonst flattert er seltener,
+  aber weiter. Den Wert stellt man nach dem Dry-Run nach, ohne neues Image. Ein Zeitpfad („erhöhen
+  nach etwa 30 s“) fehlt bewusst: In der Messung brachte er mehr Flattern statt weniger. Bleibt der
+  Überschuss ruhig knapp über einer Stufe, lässt die EVCS bis zu 1,5 A liegen; das lädt der
+  Hausakku.
 - Bei schnell wechselnden Wolken deckt der Hausakku einen spürbaren Teil der PV-Ladung des Tesla,
   denn der Tesla darf seinem Mittel nur alle 90 s folgen. Im Simulator (`wolkig`) waren es rund 40 %
   seiner Ladeenergie, roh gerechnet: Die Kennzahl „Akku-Energie in PV-Autos“ nimmt die Übergänge aus
