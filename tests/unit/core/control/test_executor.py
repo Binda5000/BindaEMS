@@ -10,6 +10,7 @@ from bindaems.core.control.actuator import Capabilities, Confirmation
 from bindaems.core.control.executor import CommandExecutor, WriteResult
 from bindaems.core.safety.budget import PersistentWriteBudget
 from bindaems.core.safety.layer import SafetyLayer
+from bindaems.core.safety.limits import HardLimits
 from bindaems.core.safety.types import Outcome
 from bindaems.shared.control import VICTRON, Command, CommandKind, OperatingState
 from bindaems.shared.decisions import Decision, DecisionResult
@@ -766,3 +767,116 @@ def test_write_result_not_taken_is_the_last_field_and_defaults_to_false() -> Non
     assert fields(WriteResult)[-1].name == "not_taken"
     plain = WriteResult(EVCS, CommandKind.CURRENT, 6.0, DecisionResult.OK, "")
     assert plain.not_taken is False
+
+
+# --- Zurückstellungen wegen der Stundenlimits (Spec 7.10, Stand Plan 2c-1) ---
+
+STOP_TESLA = Command(TESLA, CommandKind.CHARGING, False, reasons=("mode_off",))
+CURRENT_TESLA = Command(TESLA, CommandKind.CURRENT, 10.0, reasons=("mode_pv", "pv_surplus"))
+DRY_RUN_CTX = make_ctx(modes={})  # alles im Dry-Run: Es bleibt kein Schreibvorgang offen
+
+
+def tesla_limits(cfg, *, per_hour: int, start_stop: int) -> HardLimits:
+    """Die harten Grenzen der Beispielkonfiguration mit kleineren Stundenlimits des Tesla."""
+    tesla = cfg.vehicles["tesla"]
+    commands = tesla.commands.model_copy(
+        update={"per_hour": per_hour, "start_stop_per_hour": start_stop}
+    )
+    vehicles = {**cfg.vehicles, "tesla": tesla.model_copy(update={"commands": commands})}
+    return HardLimits.from_config(cfg.model_copy(update={"vehicles": vehicles}))
+
+
+def at(executor: CommandExecutor, command: Command, seconds: float, ctx=DRY_RUN_CTX):
+    """Führt den Befehl ``seconds`` nach ``T0`` aus, auf beiden Uhren."""
+    return executor.execute(command, replace(ctx, now=S(seconds)), snap({}), S(seconds), {})
+
+
+def test_a_deferral_for_the_start_stop_limit_is_logged_once_a_minute(tmp_path, limits) -> None:
+    # Höchstens 6 Start/Stopp je Stunde: Der siebte wird zurückgestellt. Das steht im Log, damit
+    # der Dry-Run-Vergleich nicht stumm abbricht; dieselbe Zurückstellung höchstens alle 60 s.
+    executor, decisions = build(tmp_path, limits, FakeActuator(TESLA))
+    for seconds in range(6):
+        at(executor, STOP_TESLA, seconds)
+    verdict = at(executor, STOP_TESLA, 6)
+    assert verdict is not None and verdict.outcome == Outcome.DEFERRED
+    for seconds in (30, 65, 66):
+        at(executor, STOP_TESLA, seconds)
+    results = [d.result for d in decisions]
+    assert results == [DecisionResult.DRY_RUN] * 6 + [DecisionResult.DEFERRED] * 2
+    assert [d.ts for d in decisions[6:]] == [S(6), S(66)]
+    assert decisions[6] == Decision(
+        id="d6",
+        ts=S(6),
+        actuator=TESLA,
+        kind=CommandKind.CHARGING,
+        requested=False,
+        applied=False,
+        dry_run=True,
+        outcome="deferred",
+        result=DecisionResult.DEFERRED,
+        codes=("mode_off", "rate.start_stop"),
+        text=(
+            "vehicle.tesla (Aus): Laden aus – zurückgestellt. "
+            "Höchstens 6 Start/Stopp pro Stunde erreicht."
+        ),
+        inputs={},
+    )
+    assert executor.pending() == frozenset() and executor.take_failures() == []
+
+
+def test_a_deferral_for_the_commands_per_hour_is_logged(tmp_path, cfg) -> None:
+    # Höchstens 2 Befehle je Stunde: Der dritte, ein Strom, wird zurückgestellt und protokolliert.
+    # Wie im Dry-Run nennt der Text den Wert nach der Safety-Schicht (16 statt 20 A).
+    limits = tesla_limits(cfg, per_hour=2, start_stop=2)
+    executor, decisions = build(tmp_path, limits, FakeActuator(TESLA))
+    at(executor, STOP_TESLA, 0)
+    at(executor, replace(STOP_TESLA, value=True), 1)
+    verdict = at(executor, replace(CURRENT_TESLA, value=20.0), 2)
+    assert verdict is not None and verdict.outcome == Outcome.DEFERRED
+    deferred = decisions[-1]
+    assert (deferred.result, deferred.requested, deferred.applied) == (
+        DecisionResult.DEFERRED,
+        20.0,
+        16.0,
+    )
+    assert deferred.codes == ("mode_pv", "pv_surplus", "range.max", "rate.per_hour")
+    assert deferred.text == (
+        "vehicle.tesla (PV-Überschuss, Überschuss): Strom 16 A – zurückgestellt. "
+        "Auf den Höchstwert 16 A begrenzt. Höchstens 2 Befehle pro Stunde erreicht."
+    )
+
+
+def test_a_deferral_for_the_minimum_interval_is_not_logged(tmp_path, limits) -> None:
+    # Auch die 90-s-Regel des Tesla stellt zurück, aber sie ist kein Stundenlimit: kein Eintrag.
+    executor, decisions = build(tmp_path, limits, FakeActuator(TESLA))
+    at(executor, CURRENT_TESLA, 0)
+    verdict = at(executor, replace(CURRENT_TESLA, value=12.0), 30)
+    assert verdict is not None and verdict.outcome == Outcome.DEFERRED
+    assert [f.code for f in verdict.findings] == ["rate.interval"]
+    assert [d.result for d in decisions] == [DecisionResult.DRY_RUN]
+
+
+def test_deferrals_and_rejections_do_not_hold_back_each_other(tmp_path, limits) -> None:
+    # Gleicher Aktor und gleiche Art: Eine Zurückstellung unterdrückt keine Ablehnung und umgekehrt.
+    executor, decisions = build(tmp_path, limits, FakeActuator(TESLA))
+    locked = make_ctx(modes={}, locks={TESLA: ("Gesperrt.",)})
+    for seconds in range(6):
+        at(executor, STOP_TESLA, seconds)
+    series = [(6, DRY_RUN_CTX), (7, locked), (8, DRY_RUN_CTX), (9, locked)]
+    series += [(66, DRY_RUN_CTX), (67, locked)]
+    for seconds, ctx in series:
+        at(executor, STOP_TESLA, seconds, ctx)
+    assert [(d.ts, d.result) for d in decisions[6:]] == [
+        (S(6), DecisionResult.DEFERRED),
+        (S(7), DecisionResult.REJECTED),
+        (S(66), DecisionResult.DEFERRED),
+        (S(67), DecisionResult.REJECTED),
+    ]
+
+
+def test_the_deferral_interval_runs_on_the_safety_clock(tmp_path, limits) -> None:
+    executor, decisions = build(tmp_path, limits, FakeActuator(TESLA))
+    for seconds in range(9):  # die Wanduhr springt um Stunden, die Safety-Uhr um Sekunden
+        ctx = replace(DRY_RUN_CTX, now=S(seconds))
+        executor.execute(STOP_TESLA, ctx, snap({}), T0 + timedelta(hours=seconds), {})
+    assert [d.result for d in decisions].count(DecisionResult.DEFERRED) == 1

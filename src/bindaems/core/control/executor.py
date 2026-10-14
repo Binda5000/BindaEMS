@@ -13,7 +13,11 @@ Schreibvorgang offen, wird der Befehl gar nicht betrachtet. Das Urteil entscheid
 - Im Dry-Run ergibt ein Urteil mit Wert die Entscheidung ``DRY_RUN``, ein abgelehnter Befehl
   ``REJECTED``; dieselbe Ablehnung (Aktor, Art, Befund-Codes) wird höchstens alle 60 s
   protokolliert.
-- ``UNCHANGED`` und ``DEFERRED`` ergeben keine Entscheidung.
+- Ein Befehl, den ein Stundenlimit zurückstellt (``DEFERRED`` mit dem Befund ``rate.per_hour`` oder
+  ``rate.start_stop``, beim Tesla), ergibt die Entscheidung ``DEFERRED``; auch dieselbe
+  Zurückstellung höchstens alle 60 s. Ablehnungen und Zurückstellungen halten einander dabei nicht
+  zurück. So bricht der Dry-Run-Vergleich am Stundenlimit nicht stumm ab.
+- ``UNCHANGED`` und jede andere Zurückstellung (etwa ``rate.interval``) ergeben keine Entscheidung.
 
 Jeder gesendete Befehl endet in genau einer Entscheidung: bestätigt (``OK``), gescheitert
 (``ERROR``), unbestätigt (``TIMEOUT``) oder nicht gesendet (``NOT_SENT``). Die letzten drei
@@ -22,8 +26,8 @@ Hat das Gerät einen bestätigten Wert nicht übernommen (``Confirmation.NOT_TAK
 ``ERROR`` und trägt ``WriteResult.not_taken``; die Regelung fordert den Wert dann erneut an.
 
 Zwei Uhren: ``ctx.now`` und ``now`` sind die Zeit der Safety-Schicht (``AnchoredClock``); mit ihr
-laufen die Fristen und die 60 s der Ablehnungen. ``wall_now`` ist die Wanduhr und nur der Zeitpunkt
-der Entscheidung.
+laufen die Fristen und die 60 s der Ablehnungen und Zurückstellungen. ``wall_now`` ist die Wanduhr
+und nur der Zeitpunkt der Entscheidung.
 
 Die Schicht ist rein: Die Zeit kommt als Argument, Aktoren und Entscheidungslog erreicht sie nur
 über die Protokolle ``Actuator`` und ``DecisionSink``.
@@ -39,15 +43,17 @@ from uuid import uuid4
 
 from bindaems.core.control.actuator import Actuator, Capabilities, Confirmation, WakeStart
 from bindaems.core.safety.layer import SafetyLayer
+from bindaems.core.safety.rate import HOURLY_LIMITS
 from bindaems.core.safety.types import Outcome, SafetyContext, Verdict
 from bindaems.shared.control import Command, CommandKind, CommandValue
 from bindaems.shared.decisions import Decision, DecisionResult, decision_text
 from bindaems.shared.domain import Snapshot
 
-_REJECTION_INTERVAL: Final = timedelta(seconds=60)  # dieselbe Ablehnung höchstens so oft
+_REPEAT_INTERVAL: Final = timedelta(seconds=60)  # dieselbe Ablehnung bzw. Zurückstellung so oft
 
 _Key = tuple[str, CommandKind]  # Aktor und Art: ein Schreibvorgang je Schlüssel
-_RejectionKey = tuple[str, CommandKind, tuple[str, ...]]  # dazu die Codes der Befunde
+# Ergebnis (Ablehnung oder Zurückstellung), Aktor, Art und die Codes der Befunde
+_RepeatKey = tuple[DecisionResult, str, CommandKind, tuple[str, ...]]
 
 
 class DecisionSink(Protocol):
@@ -111,7 +117,7 @@ class CommandExecutor:
         self._new_id = new_id
         self._open: dict[_Key, _Open] = {}
         self._failures: list[WriteResult] = []
-        self._rejected: dict[_RejectionKey, datetime] = {}  # wann zuletzt protokolliert
+        self._repeated: dict[_RepeatKey, datetime] = {}  # wann zuletzt protokolliert
 
     def execute(
         self,
@@ -135,8 +141,10 @@ class CommandExecutor:
             self._send(verdict, ctx.now, snap, wall_now, inputs)
         elif verdict.sendable:  # ein Wert steht fest, aber der Aktor ist im Dry-Run
             self._decide(verdict, DecisionResult.DRY_RUN, wall_now, inputs)
-        elif verdict.outcome == Outcome.REJECTED and self._rejection_due(verdict, ctx.now):
-            self._decide(verdict, DecisionResult.REJECTED, wall_now, inputs)
+        else:
+            result = _held_back(verdict)
+            if result is not None and self._due(verdict, result, ctx.now):
+                self._decide(verdict, result, wall_now, inputs)
         return verdict
 
     def poll(self, snap: Snapshot, now: datetime, wall_now: datetime) -> list[WriteResult]:
@@ -259,7 +267,7 @@ class CommandExecutor:
         command = verdict.command
         label = self._labels.get(command.actuator, command.actuator)
         # Der Text nennt den Wert nach der Safety-Schicht; ohne einen (Ablehnung) den angeforderten.
-        shown = verdict.value if verdict.sendable else command.value
+        shown = command.value if verdict.outcome == Outcome.REJECTED else verdict.value
         findings = verdict.findings
         decision = Decision(
             id=self._new_id(),
@@ -285,23 +293,40 @@ class CommandExecutor:
         )
         self._sink(decision)
 
-    def _rejection_due(self, verdict: Verdict, now: datetime) -> bool:
-        """Soll diese Ablehnung protokolliert werden? Dieselbe höchstens alle 60 s.
+    def _due(self, verdict: Verdict, result: DecisionResult, now: datetime) -> bool:
+        """Soll diese Ablehnung bzw. Zurückstellung (``result``) protokolliert werden?
 
-        „Dieselbe“ heißt gleicher Aktor, gleiche Art und gleiche Befund-Codes. Die 60 s laufen auf
-        der Zeit der Safety-Schicht, ab der letzten protokollierten Ablehnung.
+        Dieselbe höchstens alle 60 s: gleiches Ergebnis, gleicher Aktor, gleiche Art und gleiche
+        Befund-Codes. Eine Ablehnung hält so keine Zurückstellung zurück und umgekehrt. Die 60 s
+        laufen auf der Zeit der Safety-Schicht, ab der letzten protokollierten.
         """
         command = verdict.command
-        key = (command.actuator, command.kind, tuple(finding.code for finding in verdict.findings))
-        last = self._rejected.get(key)
-        if last is not None and now - last < _REJECTION_INTERVAL:
+        codes = tuple(finding.code for finding in verdict.findings)
+        key = (result, command.actuator, command.kind, codes)
+        last = self._repeated.get(key)
+        if last is not None and now - last < _REPEAT_INTERVAL:
             return False
         # Was länger als 60 s zurückliegt, zählt nicht mehr und kann gehen.
-        self._rejected = {
-            old: when for old, when in self._rejected.items() if now - when < _REJECTION_INTERVAL
+        self._repeated = {
+            old: when for old, when in self._repeated.items() if now - when < _REPEAT_INTERVAL
         }
-        self._rejected[key] = now
+        self._repeated[key] = now
         return True
+
+
+def _held_back(verdict: Verdict) -> DecisionResult | None:
+    """Das Ergebnis eines Urteils, das nichts sendet, aber ins Log gehört; sonst ``None``.
+
+    ``REJECTED`` für eine Ablehnung, ``DEFERRED`` für eine Zurückstellung wegen eines Stundenlimits
+    (``HOURLY_LIMITS``). Andere Zurückstellungen und ``UNCHANGED`` gehören nicht hinein.
+    """
+    if verdict.outcome == Outcome.REJECTED:
+        return DecisionResult.REJECTED
+    if verdict.outcome == Outcome.DEFERRED and any(
+        finding.code in HOURLY_LIMITS for finding in verdict.findings
+    ):
+        return DecisionResult.DEFERRED
+    return None
 
 
 def _capabilities(

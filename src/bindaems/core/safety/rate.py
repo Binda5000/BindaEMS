@@ -25,6 +25,10 @@ VICTRON_OVERRIDE_INTERVAL_S: Final = 2.0  # Victron: Netz-Sollwert
 EVCS_DEADBAND_A: Final = 1.0
 VICTRON_DEADBAND_W: Final = 50.0
 
+PER_HOUR: Final = "rate.per_hour"  # Befund: Befehle je Stunde erreicht
+START_STOP: Final = "rate.start_stop"  # Befund: Start/Stopp je Stunde erreicht
+HOURLY_LIMITS: Final = frozenset({PER_HOUR, START_STOP})  # die Befunde der Stundenlimits
+
 _WINDOW_S: Final = 3600.0  # Fenster der Stundenlimits
 _SAME_BELOW: Final = 1e-9  # Zahlen mit geringerem Abstand sind gleich
 _ALL_KINDS: Final = tuple(CommandKind)
@@ -66,15 +70,13 @@ class RateLimiter:
         if tesla is None:
             return None
         if self._count(actuator, _ALL_KINDS, now) >= tesla.per_hour:
-            return Finding(
-                "rate.per_hour", f"Höchstens {tesla.per_hour} Befehle pro Stunde erreicht."
-            )
+            return Finding(PER_HOUR, f"Höchstens {tesla.per_hour} Befehle pro Stunde erreicht.")
         if (
             command.kind == CommandKind.CHARGING
             and self._count(actuator, (CommandKind.CHARGING,), now) >= tesla.start_stop_per_hour
         ):
             text = f"Höchstens {tesla.start_stop_per_hour} Start/Stopp pro Stunde erreicht."
-            return Finding("rate.start_stop", text)
+            return Finding(START_STOP, text)
         return None
 
     def record(self, command: Command, now: datetime) -> None:

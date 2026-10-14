@@ -1,9 +1,9 @@
 """Entscheidungen: Typ, JSON-Form und deutscher Text (Spec 7.10).
 
 Jeder Befehl an einen Aktor endet in einer Entscheidung: gesendet, nicht gesendet, im Dry-Run nur
-geprüft oder abgelehnt. Der core schreibt sie in sein Log und sendet sie als Stream; die app liest
-sie später. Der Text ist deutsch und steht fest (``decision_text``), damit Bedienung und Log
-dasselbe sagen.
+geprüft, abgelehnt oder wegen eines Stundenlimits zurückgestellt. Der core schreibt sie in sein Log
+und sendet sie als Stream; die app liest sie später. Der Text ist deutsch und steht fest
+(``decision_text``), damit Bedienung und Log dasselbe sagen.
 """
 
 from __future__ import annotations
@@ -69,6 +69,7 @@ class DecisionResult(StrEnum):
     NOT_SENT = "not_sent"  # hätte gesendet werden sollen, ging aber nicht (nicht steuerbar)
     DRY_RUN = "dry_run"  # der Aktor ist nicht live: geprüft, nicht gesendet
     REJECTED = "rejected"  # die Safety-Schicht hat den Befehl abgelehnt
+    DEFERRED = "deferred"  # die Safety-Schicht hat ihn wegen eines Stundenlimits zurückgestellt
 
 
 _RESULT_TEXT: Final = {
@@ -76,6 +77,7 @@ _RESULT_TEXT: Final = {
     DecisionResult.TIMEOUT: "nicht bestätigt (Zeitüberschreitung)",
     DecisionResult.DRY_RUN: "Dry-Run, nicht gesendet",
     DecisionResult.REJECTED: "abgelehnt",
+    DecisionResult.DEFERRED: "zurückgestellt",
 }
 # Diese Ergebnisse nennen ein Detail, falls es eins gibt: „Fehler: …“, „nicht gesendet: …“.
 _RESULT_WITH_DETAIL: Final = {

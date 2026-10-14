@@ -893,9 +893,11 @@ class ChargeController:
         """Laden: der Strom, wenn er sich ändert; für einen Start danach ``charging=True``.
 
         Ein Start (``charging=True`` ändert sich) folgt erst auf den Strom: Muss der gesendet
-        werden und ist er blockiert, wartet der Start. ``start`` ist falsch bei Überlast. Steht ein
-        Start an und ist es die erste Startfolge nach einer Pause (``resume``), tragen Strom und
-        Start zusätzlich ``resume_after_outage``.
+        werden und ist er blockiert, wartet der Start. ``start`` ist falsch bei Überlast und bei
+        einem Auto, das nicht lädt, auch dann, wenn die Grenze des Wächters seinen Mindeststrom
+        nicht trägt oder unbekannt ist (Design 5.3, 5.5; ``_Situation.carries``). Steht ein Start
+        an und ist es die erste Startfolge nach einer Pause (``resume``), tragen Strom und Start
+        zusätzlich ``resume_after_outage``.
         """
         current, on = (actuator, _CURRENT), (actuator, _CHARGING)
         send = self._changed(current, value)

@@ -120,6 +120,12 @@ def test_json_round_trip_of_every_result(result: DecisionResult) -> None:
     assert back.result is result
 
 
+def test_a_deferral_is_written_as_deferred() -> None:
+    # Zurückgestellt wegen eines Stundenlimits (Spec 7.10, Stand Plan 2c-1)
+    deferred = decision(outcome="deferred", result=DecisionResult.DEFERRED)
+    assert decision_to_json(deferred)["result"] == "deferred"
+
+
 def test_json_round_trip_without_codes_and_inputs() -> None:
     d = decision(codes=(), inputs={})
     data = decision_to_json(d)
@@ -335,6 +341,7 @@ def test_command_text_per_kind(kind: CommandKind, value: Any, expected: str) -> 
         (DecisionResult.TIMEOUT, "ohne Belang", "nicht bestätigt (Zeitüberschreitung)."),
         (DecisionResult.DRY_RUN, "ohne Belang", "Dry-Run, nicht gesendet."),
         (DecisionResult.REJECTED, "ohne Belang", "abgelehnt."),
+        (DecisionResult.DEFERRED, "ohne Belang", "zurückgestellt."),
         (DecisionResult.ERROR, "Verbindung weg", "Fehler: Verbindung weg."),
         (DecisionResult.ERROR, "Verbindung weg.", "Fehler: Verbindung weg."),
         (DecisionResult.ERROR, "", "Fehler."),

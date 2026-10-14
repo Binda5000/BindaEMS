@@ -901,3 +901,40 @@ def test_a_not_taken_overload_minimum_is_retried_normally_and_the_stop_stays_urg
         (6, Command("vehicle.tesla", CURRENT, 5.0, urgent=True, reasons=reasons)),  # EVCS_STOP
         (10, Command("vehicle.tesla", CHARGING, False, urgent=True, reasons=reasons)),
     ]
+
+
+def deferred_steps(c: ChargeController, cfg, seconds: range, **kw) -> list:
+    """Wie ``steps`` mit ``tesla_inputs``, aber die Safety-Schicht stellt jeden Befehl zurück."""
+    found = []
+    for s in seconds:
+        commands = c.step(tesla_inputs(cfg, s, **kw))
+        accept(c, commands, Outcome.DEFERRED)
+        found.extend((s, x) for x in commands)
+    return found
+
+
+def test_a_rising_overload_level_sends_its_minimum_fresh_while_a_retry_waits(cfg) -> None:
+    # Präzisierung 11: Der Mindeststrom bei 3 (MINIMUM) wird nicht übernommen. Sein Neuversuch ist
+    # normal und wartet auf die 90-s-Regel (zurückgestellt bei 4 und 5). Steigt die Stufe bei 6 auf
+    # EVCS_STOP, entsteht der Befehl der höheren Stufe frisch und dringend, ohne „not_taken_retry“,
+    # und nur einmal. Wird auch er nicht übernommen, ist der Neuversuch auf dieser Stufe wieder
+    # normal (8 und 9).
+    c = controller(cfg)
+    over = {**TESLA_CHARGING, "grid_obs": grid(l1=36.0)}
+    found = steps(c, cfg, range(4), make=tesla_inputs, **over)
+    not_taken(c, 5.0, 13.0)
+    found += deferred_steps(c, cfg, range(4, 6), **over)
+    found += steps(c, cfg, range(6, 8), make=tesla_inputs, **over)
+    not_taken(c, 5.0, 13.0)
+    found += deferred_steps(c, cfg, range(8, 10), **over)
+    reasons = ("mode_now", "overload")
+    fresh = Command("vehicle.tesla", CURRENT, 5.0, urgent=True, reasons=reasons)
+    retry = Command("vehicle.tesla", CURRENT, 5.0, reasons=(*reasons, "not_taken_retry"))
+    assert [(t, x) for t, x in of(found, "vehicle.tesla") if "overload" in x.reasons] == [
+        (3, fresh),
+        (4, retry),
+        (5, retry),
+        (6, fresh),  # EVCS_STOP: die Reaktion der höheren Stufe, kein Neuversuch
+        (8, retry),
+        (9, retry),
+    ]
