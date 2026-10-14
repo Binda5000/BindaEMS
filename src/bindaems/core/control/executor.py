@@ -10,9 +10,9 @@ Schreibvorgang offen, wird der Befehl gar nicht betrachtet. Das Urteil entscheid
   an einen Aktor mit ``WakeStart`` prüft statt der Fähigkeiten dessen ``wake_capabilities``: Ein
   schlafendes Fahrzeug kann dafür steuerbar sein. Das Urteil der Safety-Schicht bleibt dasselbe;
   die Weckerlaubnis gilt nur gegenüber dem Aktor.
-- Im Dry-Run ergibt ein Urteil mit Wert die Entscheidung ``DRY_RUN``, ein abgelehnter Befehl
-  ``REJECTED``; dieselbe Ablehnung (Aktor, Art, angeforderter Wert, Befund-Codes) wird höchstens
-  alle 60 s protokolliert.
+- Im Dry-Run ergibt ein Urteil mit Wert die Entscheidung ``DRY_RUN`` (nicht bei einem Auffrischen,
+  siehe unten), ein abgelehnter Befehl ``REJECTED``; dieselbe Ablehnung (Aktor, Art, angeforderter
+  Wert, Befund-Codes) wird höchstens alle 60 s protokolliert.
 - Ein Befehl, den ein Stundenlimit zurückstellt (``DEFERRED`` mit dem Befund ``rate.per_hour`` oder
   ``rate.start_stop``, beim Tesla), ergibt die Entscheidung ``DEFERRED``; auch dieselbe
   Zurückstellung höchstens alle 60 s. Ablehnungen und Zurückstellungen halten einander dabei nicht
@@ -24,6 +24,12 @@ Jeder gesendete Befehl endet in genau einer Entscheidung: bestätigt (``OK``), g
 Ergebnisse sammelt ``take_failures`` für den fehlerfreien Zyklus (Präzisierung 5 des Plans 2b).
 Hat das Gerät einen bestätigten Wert nicht übernommen (``Confirmation.NOT_TAKEN``), ist das Ergebnis
 ``ERROR`` und trägt ``WriteResult.not_taken``; die Regelung fordert den Wert dann erneut an.
+
+Eine Ausnahme ist das Auffrischen eines Overrides (``Command.refresh``, Plan 2c-2a, Präzisierung 7):
+Es kommt in festem Abstand (``control.override_refresh_s``, Standard 240 s) mit dem Wert, den der
+Cerbo schon hat, und füllte sonst das Log. Für einen solchen Befehl entsteht bei ``DRY_RUN`` und bei
+``OK`` keine Entscheidung. ``WriteResult`` und ``take_failures`` bleiben, wie sie sind, und alles
+andere steht im Log wie bei jedem Befehl: die Ablehnung, ``ERROR``, ``TIMEOUT`` und ``NOT_SENT``.
 
 Zwei Uhren: ``ctx.now`` und ``now`` sind die Zeit der Safety-Schicht (``AnchoredClock``); mit ihr
 laufen die Fristen und die 60 s der Ablehnungen und Zurückstellungen. ``wall_now`` ist die Wanduhr
@@ -50,6 +56,8 @@ from bindaems.shared.decisions import Decision, DecisionResult, decision_text
 from bindaems.shared.domain import Snapshot
 
 _REPEAT_INTERVAL: Final = timedelta(seconds=60)  # dieselbe Ablehnung bzw. Zurückstellung so oft
+# Diese Ergebnisse stehen für ein Auffrischen (``Command.refresh``) nicht im Log, alle anderen schon
+_QUIET_REFRESH: Final = frozenset({DecisionResult.OK, DecisionResult.DRY_RUN})
 
 _Key = tuple[str, CommandKind]  # Aktor und Art: ein Schreibvorgang je Schlüssel
 # Ergebnis (Ablehnung oder Zurückstellung), Aktor, Art, angeforderter Wert und die Codes der Befunde
@@ -150,10 +158,11 @@ class CommandExecutor:
     def poll(self, snap: Snapshot, now: datetime, wall_now: datetime) -> list[WriteResult]:
         """Fragt die offenen Schreibvorgänge ab und schließt die fertigen ab.
 
-        Jeder abgeschlossene Schreibvorgang ergibt genau eine Entscheidung. Zuerst fragt der
-        Ausführer den Aktor (``confirm``): bestätigt ergibt ``OK``, gescheitert oder nicht
-        übernommen (``NOT_TAKEN``) ``ERROR`` mit dem Text des Aktors; bei ``NOT_TAKEN`` trägt das
-        Ergebnis zusätzlich ``not_taken``. Einen neuen Versuch gibt der Aufrufer wie jeden Befehl.
+        Jeder abgeschlossene Schreibvorgang ergibt genau eine Entscheidung, außer ein bestätigtes
+        Auffrischen (``Command.refresh``). Zuerst fragt der Ausführer den Aktor (``confirm``):
+        bestätigt ergibt ``OK``, gescheitert oder nicht übernommen (``NOT_TAKEN``) ``ERROR`` mit
+        dem Text des Aktors; bei ``NOT_TAKEN`` trägt das Ergebnis zusätzlich ``not_taken``. Einen
+        neuen Versuch gibt der Aufrufer wie jeden Befehl.
         Ist der Wert noch offen und die Frist erreicht (``now >= deadline``), ist es ``TIMEOUT``;
         ein Wert, der genau zur Frist ankommt, gilt also als bestätigt. Sonst bleibt der
         Schreibvorgang offen. Zurück kommen die abgeschlossenen in der Reihenfolge, in der sie
@@ -263,8 +272,13 @@ class CommandExecutor:
         *,
         detail: str = "",
     ) -> None:
-        """Gibt die Entscheidung zu ``verdict`` an die Senke."""
+        """Gibt die Entscheidung zu ``verdict`` an die Senke.
+
+        Ein Auffrischen (``Command.refresh``) ergibt bei ``OK`` und bei ``DRY_RUN`` keine.
+        """
         command = verdict.command
+        if command.refresh and result in _QUIET_REFRESH:
+            return
         label = self._labels.get(command.actuator, command.actuator)
         # Der Text nennt den Wert nach der Safety-Schicht; ohne einen (Ablehnung) den angeforderten.
         shown = command.value if verdict.outcome == Outcome.REJECTED else verdict.value

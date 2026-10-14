@@ -121,11 +121,18 @@ def test_invalid_charging_fields_are_rejected(bad: dict[str, object]) -> None:
         Intent.model_validate({"version": 1} | bad)
 
 
-def test_command_wake_is_the_last_field_and_defaults_to_false() -> None:
-    assert fields(Command)[-1].name == "wake"
+def test_command_wake_defaults_to_false() -> None:
     start = Command("vehicle.tesla", CommandKind.CHARGING, True)
     assert start.wake is False
     assert Command("vehicle.tesla", CommandKind.CHARGING, True, wake=True).wake is True
+
+
+def test_command_refresh_is_the_last_field_and_defaults_to_false() -> None:
+    # ``wake`` behält seinen Platz davor; neue Felder kommen nur hinten dazu.
+    assert [field.name for field in fields(Command)][-2:] == ["wake", "refresh"]
+    plain = Command("victron", CommandKind.GRID_SETPOINT, 2000.0)
+    assert plain.refresh is False
+    assert Command("victron", CommandKind.GRID_SETPOINT, 2000.0, refresh=True).refresh is True
 
 
 # Modus des Gastes in der Absicht (Plan 2c-2a, Design 3.1)

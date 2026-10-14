@@ -834,3 +834,102 @@ def test_failing_rate_file_write_is_logged_and_the_window_holds(
     assert [(e["log_level"], e["event"]) for e in logs] == [("error", RATE_FILE_UNWRITTEN)] * 6
     assert (deferred.outcome, deferred.findings[-1].code) == (Outcome.DEFERRED, "rate.start_stop")
     assert list(tmp_path.iterdir()) == []
+
+
+# Auffrischen eines Overrides (Plan 2c-2a, Präzisierung 7)
+
+SETPOINT = ("victron", K.GRID_SETPOINT)
+
+
+def test_refresh_sends_the_same_override(layer) -> None:
+    refresh = Command("victron", K.GRID_SETPOINT, 2000.0, refresh=True)
+    verdict = layer.authorize(refresh, make_ctx(present={SETPOINT: 2000.0}))
+    assert (verdict.outcome, verdict.value, verdict.send) == (Outcome.ACCEPTED, 2000.0, True)
+    plain = Command("victron", K.GRID_SETPOINT, 2000.0)
+    unchanged = layer.authorize(plain, make_ctx(now=S(5), present={SETPOINT: 2000.0}))
+    assert unchanged.outcome is Outcome.UNCHANGED
+
+
+def test_refresh_passes_inside_the_deadband(layer) -> None:
+    refresh = Command("victron", K.GRID_SETPOINT, 2000.0, refresh=True)
+    verdict = layer.authorize(refresh, make_ctx(present={SETPOINT: 1990.0}))
+    assert (verdict.outcome, verdict.value, verdict.findings) == (Outcome.ACCEPTED, 2000.0, ())
+    plain = Command("victron", K.GRID_SETPOINT, 2000.0)
+    inside = layer.authorize(plain, make_ctx(now=S(5), present={SETPOINT: 1990.0}))
+    assert (inside.outcome, [f.code for f in inside.findings]) == (
+        Outcome.UNCHANGED,
+        ["rate.deadband"],
+    )
+
+
+def test_refresh_keeps_interval_lock_and_state(layer) -> None:
+    refresh = Command("victron", K.GRID_SETPOINT, 2000.0, refresh=True)
+    present = {SETPOINT: 2000.0}
+    assert layer.authorize(refresh, make_ctx(present=present)).outcome is Outcome.ACCEPTED
+    early = layer.authorize(refresh, make_ctx(now=S(1), present=present))
+    assert (early.outcome, early.value, early.findings[-1].code) == (
+        Outcome.DEFERRED,
+        2000.0,
+        "rate.interval",
+    )
+    locked = make_ctx(now=S(2), locks={"victron": ("DESS",)}, present=present)
+    verdict = layer.authorize(refresh, locked)
+    assert (verdict.outcome, verdict.findings[-1].code) == (Outcome.REJECTED, "lock")
+    safe = make_ctx(now=S(2), operating=OperatingState.SAFE, present=present)
+    verdict = layer.authorize(refresh, safe)
+    assert (verdict.outcome, verdict.findings[-1].code) == (Outcome.REJECTED, "state.inactive")
+    dry = layer.authorize(refresh, make_ctx(now=S(2), modes={}, present=present))
+    assert (dry.outcome, dry.dry_run, dry.send) == (Outcome.ACCEPTED, True, False)
+
+
+def test_refresh_is_still_clamped_by_the_budget(layer) -> None:
+    # Regel 2 senkt den Override von Zyklus zu Zyklus; hält der Cerbo schon den geklemmten Wert,
+    # wäre ein Befehl ohne ``refresh`` ``UNCHANGED``.
+    refresh = Command("victron", K.GRID_SETPOINT, 2000.0, refresh=True)
+    ctx = make_ctx(grid_budget_w=1500.0, present={SETPOINT: 1500.0})
+    verdict = layer.authorize(refresh, ctx)
+    assert (verdict.outcome, verdict.value, [f.code for f in verdict.findings]) == (
+        Outcome.CLAMPED,
+        1500.0,
+        ["range.ceiling"],
+    )
+    assert verdict.send
+
+
+def test_refresh_is_still_reduced_by_the_phases(layer) -> None:
+    # Regel 4 lässt keinen Anstieg zu: Der Wert fällt auf den, den der Cerbo schon hält.
+    refresh = Command("victron", K.GRID_SETPOINT, 1700.0, refresh=True)
+    ctx = make_ctx(phase_import_a={"L1": 33.0, "L2": 20.0, "L3": 10.0}, present={SETPOINT: 1680.0})
+    verdict = layer.authorize(refresh, ctx)
+    assert (verdict.outcome, verdict.value, [f.code for f in verdict.findings]) == (
+        Outcome.REDUCED,
+        1680.0,
+        ["phase.reduced"],
+    )
+    assert verdict.send
+
+
+def test_refresh_is_never_urgent(layer) -> None:
+    command = Command("victron", K.GRID_SETPOINT, 2000.0, urgent=True, refresh=True)
+    verdict = layer.authorize(command, make_ctx(present={SETPOINT: 2000.0}))
+    assert (verdict.outcome, verdict.findings[0].code) == (Outcome.ACCEPTED, "urgent.ignored")
+    early = layer.authorize(command, make_ctx(now=S(1), present={SETPOINT: 2000.0}))
+    assert (early.outcome, [f.code for f in early.findings]) == (
+        Outcome.DEFERRED,
+        ["urgent.ignored", "rate.interval"],
+    )
+    # auch in SAFE nicht, obwohl der Wert dem des Cerbo gleicht, also Richtung sicher geht
+    safe = make_ctx(now=S(5), operating=OperatingState.SAFE, present={SETPOINT: 2000.0})
+    in_safe = layer.authorize(command, safe)
+    assert (in_safe.outcome, [f.code for f in in_safe.findings]) == (
+        Outcome.REJECTED,
+        ["urgent.ignored", "state.inactive"],
+    )
+
+
+def test_refresh_does_nothing_for_other_kinds(layer) -> None:
+    command = Command("wallbox.evcs", K.CURRENT, 10.0, refresh=True)
+    ctx = make_ctx(present={("wallbox.evcs", K.CURRENT): 10.0})
+    assert layer.authorize(command, ctx).outcome is Outcome.UNCHANGED
+    inside = make_ctx(now=S(5), present={("wallbox.evcs", K.CURRENT): 10.4})
+    assert layer.authorize(command, inside).outcome is Outcome.UNCHANGED

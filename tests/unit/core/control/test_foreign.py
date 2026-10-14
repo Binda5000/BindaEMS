@@ -323,3 +323,114 @@ def test_every_watched_kind_has_an_alarm_text(kind) -> None:
     for i in range(3):
         detector.check({("a", kind): 20.0}, frozenset(), at(10 * i))
     assert len(detector.alarms(at(20), {})) == 1
+
+
+# Die Erwartung eines Overrides verfällt mit dem Override (Plan 2c-2a, Präzisierung 7)
+
+NONE_PRESENT = {("victron", CommandKind.GRID_SETPOINT): None}
+
+
+def test_override_expectation_lapses_with_the_override() -> None:
+    detector = ForeignChangeDetector(60.0)
+    detector.expect(
+        "victron", CommandKind.GRID_SETPOINT, 2000.0, lapses_at=T0 + timedelta(seconds=300)
+    )
+    found = [
+        detector.check(NONE_PRESENT, frozenset(), T0 + timedelta(seconds=s))
+        for s in (300, 310, 320)
+    ]
+    assert found == [[], [], []]
+    assert detector.alarms(at(320), LABELS) == []
+
+
+def test_a_refreshed_expectation_still_finds_a_foreign_change() -> None:
+    detector = ForeignChangeDetector(60.0)
+    detector.expect("victron", CommandKind.GRID_SETPOINT, 2000.0, lapses_at=at(300))
+    # Das Auffrischen bei 240 s bestätigt den Wert neu: Die Frist läuft nun bis 240 s + 300 s.
+    detector.expect("victron", CommandKind.GRID_SETPOINT, 2000.0, lapses_at=at(540))
+    found = [detector.check(NONE_PRESENT, frozenset(), at(s)) for s in (300, 310, 320)]
+    assert found == [
+        [],
+        [],
+        [ForeignChange("victron", CommandKind.GRID_SETPOINT, 2000.0, None, at(320))],
+    ]
+    assert [a.message for a in detector.alarms(at(320), LABELS)] == [
+        "Victron (ESS): Netz-Sollwert von außen geändert (kein Override statt 2000 W)."
+    ]
+
+
+def test_an_expectation_counts_until_it_lapses() -> None:
+    detector = ForeignChangeDetector(60.0)
+    detector.expect("victron", CommandKind.GRID_SETPOINT, 2000.0, lapses_at=at(300))
+    found = [detector.check(NONE_PRESENT, frozenset(), at(s)) for s in (270, 280, 290)]
+    assert found[:2] == [[], []]
+    assert found[2] == [ForeignChange("victron", CommandKind.GRID_SETPOINT, 2000.0, None, at(290))]
+
+
+def test_a_hit_at_the_deadline_does_not_count() -> None:
+    detector = ForeignChangeDetector(60.0)
+    detector.expect("victron", CommandKind.GRID_SETPOINT, 2000.0, lapses_at=at(300))
+    # zwei Treffer vor der Frist, der dritte käme genau zur Frist: Sie verfällt ohne Treffer.
+    assert [detector.check(NONE_PRESENT, frozenset(), at(s)) for s in (280, 290, 300)] == [[]] * 3
+    detector.expect("victron", CommandKind.GRID_SETPOINT, 2000.0)  # ohne Frist, Zähler bei 0
+    assert [detector.check(NONE_PRESENT, frozenset(), at(s)) for s in (310, 320)] == [[], []]
+    assert len(detector.check(NONE_PRESENT, frozenset(), at(330))) == 1
+
+
+@pytest.mark.parametrize("pending", [frozenset(), frozenset({VSET})], ids=["free", "pending"])
+def test_the_expectation_lapses_whatever_the_cerbo_reports(pending) -> None:
+    # Ob der Wert unbekannt ist oder ein Schreibvorgang offen: Nach der Frist ist kein Override mehr
+    # zu erwarten. Käme der Wert danach zurück, wäre „kein Override“ sonst eine fremde Änderung.
+    detector = ForeignChangeDetector(60.0)
+    detector.expect("victron", CommandKind.GRID_SETPOINT, 2000.0, lapses_at=at(300))
+    assert detector.check({}, pending, at(300)) == []
+    found = [detector.check(NONE_PRESENT, frozenset(), at(s)) for s in (310, 320, 330)]
+    assert found == [[], [], []]
+
+
+def test_an_expectation_without_a_deadline_never_lapses() -> None:
+    detector = ForeignChangeDetector(60.0)
+    detector.expect("victron", CommandKind.GRID_SETPOINT, 2000.0)
+    found = [detector.check(NONE_PRESENT, frozenset(), at(s)) for s in (10_000, 10_010, 10_020)]
+    assert [len(f) for f in found] == [0, 0, 1]
+
+
+def test_a_new_expect_without_a_deadline_removes_the_old_one() -> None:
+    detector = ForeignChangeDetector(60.0)
+    detector.expect("victron", CommandKind.GRID_SETPOINT, 2000.0, lapses_at=at(300))
+    detector.expect("victron", CommandKind.GRID_SETPOINT, 2000.0)
+    found = [detector.check(NONE_PRESENT, frozenset(), at(s)) for s in (300, 310, 320)]
+    assert [len(f) for f in found] == [0, 0, 1]
+
+
+def test_a_deadline_belongs_to_the_pair_it_was_given_for() -> None:
+    detector = ForeignChangeDetector(60.0)
+    detector.expect("victron", CommandKind.GRID_SETPOINT, 2000.0, lapses_at=at(300))
+    detector.expect("victron", CommandKind.CURRENT, 6.0)  # ein anderes Paar desselben Aktors
+    detector.expect(EVCS, CommandKind.CURRENT, 6.0)  # und das Paar eines anderen Aktors
+    other = ("victron", CommandKind.CURRENT)
+    present = {VSET: None, other: 10.0, CUR: 10.0}
+    found = [detector.check(present, frozenset(), at(s)) for s in (300, 310, 320)]
+    assert [[(c.actuator, c.kind) for c in changes] for changes in found] == [[], [], [other, CUR]]
+
+
+def test_a_detected_change_is_expected_without_the_old_deadline() -> None:
+    # Die Frist gehört zum bestätigten Override, nicht zu dem, was danach von außen kam.
+    detector = ForeignChangeDetector(60.0)
+    detector.expect("victron", CommandKind.GRID_SETPOINT, 2000.0, lapses_at=at(300))
+    for s in (0, 10, 20):
+        detector.check(NONE_PRESENT, frozenset(), at(s))  # erkannt: kein Override statt 2000 W
+    found = [detector.check({VSET: 700.0}, frozenset(), at(s)) for s in (300, 310, 320)]
+    assert [len(f) for f in found] == [0, 0, 1]
+    assert found[2][0] == ForeignChange("victron", CommandKind.GRID_SETPOINT, None, 700.0, at(320))
+
+
+@pytest.mark.parametrize(
+    "kind", [CommandKind.CHARGING, CommandKind.MAX_DISCHARGE, CommandKind.MIN_SOC]
+)
+def test_a_deadline_for_an_unwatched_kind_does_nothing(kind) -> None:
+    detector = ForeignChangeDetector(60.0)
+    detector.expect(EVCS, kind, 6.0, lapses_at=at(300))
+    for i in range(4):
+        assert detector.check({(EVCS, kind): 10.0}, frozenset(), at(300 + 10 * i)) == []
+    assert detector.alarms(at(340), LABELS) == []

@@ -895,3 +895,86 @@ def test_the_deferral_interval_runs_on_the_safety_clock(tmp_path, limits) -> Non
         ctx = replace(DRY_RUN_CTX, now=S(seconds))
         executor.execute(STOP_TESLA, ctx, snap({}), T0 + timedelta(hours=seconds), {})
     assert [d.result for d in decisions].count(DecisionResult.DEFERRED) == 1
+
+
+# --- Auffrischen eines Overrides (Plan 2c-2a, Präzisierung 7) ---
+
+SETPOINT = (VICTRON, CommandKind.GRID_SETPOINT)
+REFRESH = Command(VICTRON, CommandKind.GRID_SETPOINT, 2000.0, refresh=True)
+HOLDING = make_ctx(present={SETPOINT: 2000.0})  # der Cerbo hält den Override schon
+SETPOINT_TIMEOUT = "Victron (ESS): Netz-Sollwert 2000 W – nicht bestätigt (Zeitüberschreitung)."
+
+
+def test_a_successful_refresh_is_not_logged(tmp_path, limits_live) -> None:
+    victron = FakeActuator(VICTRON)
+    executor, decisions = build(tmp_path, limits_live, victron)
+    verdict = executor.execute(REFRESH, HOLDING, snap({}), T0, {})
+    assert verdict is not None and verdict.send  # trotz gleichem Wert gesendet, nicht UNCHANGED
+    assert victron.sent == [(CommandKind.GRID_SETPOINT, 2000.0)]
+    assert executor.pending() == {SETPOINT} and decisions == []
+    victron.echo[CommandKind.GRID_SETPOINT] = 2000.0
+    results = executor.poll(snap({}), S(1), T0)
+    assert results == [
+        WriteResult(VICTRON, CommandKind.GRID_SETPOINT, 2000.0, DecisionResult.OK, "")
+    ]
+    assert decisions == [] and executor.pending() == frozenset() and executor.take_failures() == []
+    # Derselbe Aktor und dieselbe Art mit neuem Wert und ohne ``refresh`` steht im Log.
+    change = Command(VICTRON, CommandKind.GRID_SETPOINT, 2500.0)
+    assert executor.execute(change, replace(HOLDING, now=S(5)), snap({}), S(5), {}).send
+    victron.echo[CommandKind.GRID_SETPOINT] = 2500.0
+    executor.poll(snap({}), S(6), S(6))
+    assert [(d.result, d.requested) for d in decisions] == [(DecisionResult.OK, 2500.0)]
+
+
+def test_a_dry_run_refresh_is_not_logged(tmp_path, limits) -> None:
+    victron = FakeActuator(VICTRON)
+    executor, decisions = build(tmp_path, limits, victron)
+    ctx = make_ctx(modes={}, present={SETPOINT: 2000.0})
+    verdict = executor.execute(REFRESH, ctx, snap({}), T0, {})
+    assert verdict is not None and verdict.sendable and not verdict.send
+    assert (verdict.outcome, verdict.value) == (Outcome.ACCEPTED, 2000.0)
+    assert victron.sent == [] and decisions == [] and executor.pending() == frozenset()
+    assert executor.take_failures() == []
+    # Ohne ``refresh`` und mit neuem Wert ergibt dasselbe Urteil eine Entscheidung.
+    change = Command(VICTRON, CommandKind.GRID_SETPOINT, 2500.0)
+    executor.execute(change, replace(ctx, now=S(5)), snap({}), S(5), {})
+    assert [(d.result, d.requested) for d in decisions] == [(DecisionResult.DRY_RUN, 2500.0)]
+
+
+def test_a_failed_or_rejected_refresh_is_logged(tmp_path, limits_live) -> None:
+    victron = FakeActuator(VICTRON)
+    executor, decisions = build(tmp_path, limits_live, victron)
+    executor.execute(REFRESH, HOLDING, snap({}), T0, {})
+    (timeout,) = executor.poll(snap({}), S(10), S(10))  # nie zurückgelesen
+    assert timeout == WriteResult(
+        VICTRON, CommandKind.GRID_SETPOINT, 2000.0, DecisionResult.TIMEOUT, ""
+    )
+    assert [(d.result, d.text) for d in decisions] == [(DecisionResult.TIMEOUT, SETPOINT_TIMEOUT)]
+    assert executor.take_failures() == [timeout]
+    locked = replace(HOLDING, now=S(20), locks={VICTRON: ("Dynamic ESS ist aktiv.",)})
+    verdict = executor.execute(REFRESH, locked, snap({}), S(20), {})
+    assert verdict is not None and verdict.outcome == Outcome.REJECTED
+    assert [d.result for d in decisions] == [DecisionResult.TIMEOUT, DecisionResult.REJECTED]
+    assert decisions[-1].codes == ("lock",)
+    assert executor.take_failures() == []  # eine Ablehnung ist kein Fehler beim Schreiben
+
+
+@pytest.mark.parametrize(
+    ("how", "result"),
+    [("not_controllable", DecisionResult.NOT_SENT), ("failed", DecisionResult.ERROR)],
+)
+def test_a_refresh_that_goes_wrong_in_other_ways_is_logged_too(
+    tmp_path, limits_live, monkeypatch, how, result
+) -> None:
+    victron = FakeActuator(VICTRON, controllable=how != "not_controllable")
+    executor, decisions = build(tmp_path, limits_live, victron)
+    if how == "failed":
+        monkeypatch.setattr(
+            victron,
+            "confirm",
+            lambda kind, value, snapshot: (Confirmation.FAILED, "Cerbo meldet 0."),
+        )
+    executor.execute(REFRESH, HOLDING, snap({}), T0, {})
+    executor.poll(snap({}), S(1), T0)
+    assert [d.result for d in decisions] == [result]
+    assert [f.result for f in executor.take_failures()] == [result]

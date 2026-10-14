@@ -14,6 +14,11 @@ von der Implementierung noch einmal um und lesen die Grenzen direkt aus der Konf
 Jeder geprüfte Befehl bekommt eine frische SafetyLayer mit eigenem Schreibbudget. Die Budgets eines
 Falls liegen in dessen eigenem temporären Verzeichnis, denn hypothesis verträgt keine
 funktionsbezogenen Fixtures wie ``tmp_path``.
+
+Ein Befehl mit ``refresh`` (Auffrischen eines Overrides, Plan 2c-2a) kommt in denselben Strategien
+vor. Er ist nie dringend; sonst gelten für ihn alle Regeln wie ohne ``refresh``, nur das Totband des
+Netz-Sollwerts fällt weg. Das prüft der Vergleich mit demselben Befehl ohne ``refresh`` in
+``test_refresh_differs_from_a_plain_command_only_by_the_deadband``.
 """
 
 import json
@@ -27,7 +32,7 @@ from itertools import pairwise
 from pathlib import Path
 from typing import Any
 
-from hypothesis import given, settings
+from hypothesis import example, given, settings
 from hypothesis import strategies as st
 from tests.helpers import T0
 from tests.unit.core.safety.conftest import PHASES, make_ctx
@@ -317,13 +322,14 @@ STRAYS = [  # an den Wall Connector (kein Aktor) oder in einer Art, die der Akto
     if kind not in KINDS.get(actuator, ())
 ]
 URGENT = st.booleans()
+REFRESH = weighted((3, False), (1, True))  # etwa jeder vierte Befehl frischt einen Override auf
 
 
 @st.composite
 def commands(draw: st.DrawFn, pairs: st.SearchStrategy[tuple[str, CommandKind]]) -> Command:
     """Ein Befehl an Aktor und Art aus ``pairs``, mit einem Wert meist nahe den Grenzen der Art."""
     actuator, kind = draw(pairs)
-    return Command(actuator, kind, draw(VALUES[kind]), urgent=draw(URGENT))
+    return Command(actuator, kind, draw(VALUES[kind]), urgent=draw(URGENT), refresh=draw(REFRESH))
 
 
 ANY_COMMAND = commands(mixed((8, st.sampled_from(PAIRS)), (1, st.sampled_from(STRAYS))))
@@ -441,7 +447,8 @@ class Batch:
 def batches(draw: st.DrawFn) -> Batch:
     """Die Gates sind meist offen; sonst ist eines zu, eine Sperre trifft einen zufälligen Aktor."""
     batch = [
-        Command(actuator, kind, draw(VALUES[kind]), urgent=draw(URGENT)) for actuator, kind in PAIRS
+        Command(actuator, kind, draw(VALUES[kind]), urgent=draw(URGENT), refresh=draw(REFRESH))
+        for actuator, kind in PAIRS
     ]
     batch.append(draw(STRAY_COMMAND))
     ctx = context(draw, draw(CLOSED_GATE), draw(LOCKED_TARGET))
@@ -537,6 +544,64 @@ def gate_cases(draw: st.DrawFn) -> GateCase:
     )
 
 
+# Abstand des Ist-Werts vom Wert des Befehls je Art: gleich, im Totband, an dessen Rand, darüber
+NEAR_OFFSETS = {
+    K.GRID_SETPOINT: (0.0, 10.0, -10.0, 49.0, -49.0, 50.0, -50.0, 300.0),  # W, Totband 50 W
+    K.CURRENT: (0.0, 0.5, -0.5, 1.0, -1.0, 2.0, -2.0, 3.0),  # A, Totband EVCS 1 A, Tesla 2 A
+    K.MAX_DISCHARGE: (0.0, 10.0, -10.0, 300.0),  # W, ohne Totband, aber „gleicher Wert“
+    K.MIN_SOC: (0.0, 0.5, -0.5, 5.0),  # %, ohne Totband, aber „gleicher Wert“
+}
+SETPOINT = (VICTRON, K.GRID_SETPOINT)
+
+
+@dataclass(frozen=True)
+class RefreshCase:
+    """Ein Befehl, im selben Kontext ohne und mit ``refresh`` geprüft.
+
+    ``command`` trägt ``urgent`` wie gezogen. Die Probe ist derselbe Befehl ohne ``refresh`` und
+    nicht dringend; das Auffrischen derselbe mit ``refresh``. Hat der Befehl einen Wert, neben den
+    ein Ist-Wert passt, prüft der Fall beide mit mehreren Ist-Werten (``contexts``: gleich, im
+    Totband, am Rand, darüber), damit ``rate.unchanged`` und ``rate.deadband`` in jedem Lauf
+    vorkommen. ``recent`` und ``exhausted`` wie bei ``Batch``.
+    """
+
+    command: Command
+    ctx: SafetyContext
+    recent: bool
+    exhausted: bool
+
+    def contexts(self) -> list[SafetyContext]:
+        """Der Kontext mit mehreren Ist-Werten nahe dem Wert des Befehls; sonst nur er selbst."""
+        command, value = self.command, self.command.value
+        key, actual = (command.actuator, command.kind), number(value)
+        if command.kind == K.CHARGING and isinstance(value, bool):
+            actuals = [value, not value]
+        elif actual is not None and command.kind in NEAR_OFFSETS:
+            actuals = [actual + offset for offset in NEAR_OFFSETS[command.kind]]
+        else:
+            return [self.ctx]
+        return [replace(self.ctx, present={**self.ctx.present, key: near}) for near in actuals]
+
+    def checks(self) -> Checks:
+        """Je Kontext die Probe, dann dasselbe als Auffrischen."""
+        plain = replace(self.command, urgent=False, refresh=False)
+        refreshed = replace(self.command, refresh=True)
+        return [(command, ctx) for ctx in self.contexts() for command in (plain, refreshed)]
+
+
+REFRESH_COMMAND = commands(
+    mixed((3, st.just(SETPOINT)), (2, st.sampled_from(PAIRS)), (1, st.sampled_from(STRAYS)))
+)
+
+
+@st.composite
+def refresh_cases(draw: st.DrawFn) -> RefreshCase:
+    """Ein Befehl, meist ein Netz-Sollwert, in einem Kontext mit meist offenen Gates."""
+    command = draw(REFRESH_COMMAND)
+    ctx = context(draw, draw(CLOSED_GATE), command.actuator)
+    return RefreshCase(command, ctx, draw(HISTORY), draw(HISTORY))
+
+
 def generous(at: datetime) -> SafetyContext:
     """Regelbetrieb, alles live, ohne Netzbezug (33 A Spielraum je Phase), ohne Ist-Werte."""
     return make_ctx(now=at, phase_import_a=dict.fromkeys(PHASES, 0.0))
@@ -551,7 +616,9 @@ PREVIOUS = {  # ein harmloser Befehl derselben Art, der im großzügigen Kontext
 }
 
 
-def authorize_each(case: Batch | GateCase) -> list[tuple[Command, SafetyContext, Verdict]]:
+def authorize_each(
+    case: Batch | GateCase | RefreshCase,
+) -> list[tuple[Command, SafetyContext, Verdict]]:
     """Prüft jeden Befehl des Falls in seinem Kontext an einer frischen SafetyLayer.
 
     Jede hat ihr eigenes Schreibbudget, eine eigene Datei im temporären Verzeichnis des Falls. Mit
@@ -614,15 +681,53 @@ def test_gate_lock_inputs_and_dry_run(case: GateCase) -> None:
         if verdict.sendable:
             assert command.kind in KINDS.get(command.actuator, ()), verdict  # nie an Nicht-Aktoren
             assert not ctx.locks.get(command.actuator), (verdict, ctx)
-            # dringend zählt nur, wenn der angeforderte und der gesendete Wert Richtung sicher gehen
+            # dringend zählt nur, wenn der angeforderte und der gesendete Wert Richtung sicher
+            # gehen; ein Auffrischen ist nie dringend
             sent = replace(command, value=verdict.value)
-            urgent_safe = command.urgent and safer(command, ctx) and safer(sent, ctx)
+            urgent_safe = (
+                command.urgent and not command.refresh and safer(command, ctx) and safer(sent, ctx)
+            )
             assert ctx.operating in (OperatingState.CONTROL, OperatingState.DEGRADED) or (
                 urgent_safe and ctx.operating == OperatingState.SAFE
             ), (verdict, ctx)
             assert ctx.inputs.ok or urgent_safe, (verdict, ctx)
         live = ctx.modes.get(command.actuator) is ActuatorMode.LIVE
         assert verdict.send == (verdict.sendable and live), (verdict, ctx)
+
+
+BAND_CODES = frozenset({"rate.unchanged", "rate.deadband"})  # die Befunde des Totbands
+
+
+def setpoint_case(*, recent: bool, urgent: bool = False) -> RefreshCase:
+    """Ein Netz-Sollwert von 2000 W im großzügigen Kontext: Die Gates sind offen."""
+    command = Command(VICTRON, K.GRID_SETPOINT, 2000.0, urgent=urgent)
+    return RefreshCase(command, generous(T0), recent=recent, exhausted=False)
+
+
+@settings(max_examples=300, deadline=None)
+@given(refresh_cases())
+@example(setpoint_case(recent=False))  # Totband und gleicher Wert fallen weg, der Wert geht hinaus
+@example(setpoint_case(recent=True))  # ... aber der Mindestabstand von 2 s gilt
+@example(setpoint_case(recent=False, urgent=True))  # ein dringendes Auffrischen ist es nicht
+def test_refresh_differs_from_a_plain_command_only_by_the_deadband(case: RefreshCase) -> None:
+    results = authorize_each(case)
+    for (_, _, plain), (_, _, refreshed) in zip(results[::2], results[1::2], strict=True):
+        codes = [finding.code for finding in plain.findings]
+        # Ein Auffrischen ist nie dringend: kein ``urgent.bypass``, ``urgent.ignored`` ist erlaubt.
+        got = [finding.code for finding in refreshed.findings if finding.code != "urgent.ignored"]
+        assert "urgent.bypass" not in got, refreshed
+        if case.command.kind == K.GRID_SETPOINT and plain.outcome is Outcome.UNCHANGED:
+            # Allein das Totband fällt weg; Mindestabstand, Erfassen und Ergebnis laufen weiter.
+            assert codes[-1] in BAND_CODES, plain
+            assert refreshed.value == plain.value, (plain, refreshed)
+            if case.recent:  # eben erst ging ein Befehl durch: der Mindestabstand von 2 s greift
+                assert refreshed.outcome is Outcome.DEFERRED, refreshed
+                assert got == [*codes[:-1], "rate.interval"], refreshed
+            else:
+                assert refreshed.outcome in SENDABLE, refreshed
+                assert got == codes[:-1], refreshed
+        else:  # sonst gelten Sperre, Zustand, Betriebsart, Regeln 1–4 und Mindestabstand wie ohne
+            assert (refreshed.outcome, refreshed.value, got) == (plain.outcome, plain.value, codes)
 
 
 # --- Folgen ---------------------------------------------------------------------------------------
@@ -635,6 +740,7 @@ RATE_COMMAND = mixed(
     (3, st.floats(5, 16).map(lambda a: Command(TESLA, K.CURRENT, a))),
     (2, st.booleans().map(lambda on: Command(TESLA, K.CHARGING, on))),
     (2, st.floats(0, 8_000).map(lambda w: Command(VICTRON, K.GRID_SETPOINT, w))),
+    (1, st.floats(0, 8_000).map(lambda w: Command(VICTRON, K.GRID_SETPOINT, w, refresh=True))),
 )
 BUDGET_COMMAND = mixed(
     (1, st.floats(RESERVE, 100).map(lambda soc: Command(VICTRON, K.MIN_SOC, soc))),

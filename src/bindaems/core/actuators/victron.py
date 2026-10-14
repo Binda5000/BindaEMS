@@ -36,6 +36,10 @@ from bindaems.shared.control import VICTRON, CommandKind, CommandValue
 from bindaems.shared.domain import Alarm, Quality, Snapshot
 from bindaems.shared.numbers import finite_number
 
+# So lange hält der Cerbo einen Override ohne Schreiben; danach fällt er zurück (Prüfprotokoll
+# Teil 2). Die Regelung frischt ihn davor auf (``control.override_refresh_s``, höchstens 280 s).
+OVERRIDE_TIMEOUT_S: Final = 300.0
+
 # Schreibpfade je Art
 _PATHS: Final = {
     CommandKind.GRID_SETPOINT: SETPOINT_OVERRIDE_PATH,

@@ -10,6 +10,12 @@ besteht als Alarm ``competitor.foreign.<aktor>`` für ``hold_s`` fort (``alarms`
 Aktor inzwischen vergessen ist (``forget``). Mit diesem Alarm sperrt ``core.safety.locks`` den
 Aktor wie bei jedem mitregelnden System.
 
+Ein Override verfällt am Cerbo 300 s nach dem letzten Schreiben. Die Erwartung einer Zahl kann
+deshalb mit einer Frist verfallen (``expect`` mit ``lapses_at``, Plan 2c-2a, Präzisierung 7): Ab
+der Frist beobachtet ``check`` sie nicht mehr. So ist der gewollte Rückfall, wenn die Regelung den
+Override nicht auffrischt, keine fremde Änderung. Ein neues ``expect`` (etwa nach dem Auffrischen)
+ersetzt die Erwartung samt Frist.
+
 Die Schicht ist rein: ohne I/O, die Zeit kommt als Argument.
 """
 
@@ -57,11 +63,13 @@ class ForeignChange:
 class _Watch:
     """Die Erwartung eines Paars und sein Zähler.
 
-    ``count`` sind die Treffer in Folge seit der letzten Übereinstimmung.
+    ``count`` sind die Treffer in Folge seit der letzten Übereinstimmung. ``lapses_at`` ist der
+    Zeitpunkt, ab dem die Erwartung entfällt; ``None`` heißt ohne Frist.
     """
 
     expected: CommandValue
     count: int = 0
+    lapses_at: datetime | None = None
 
 
 class ForeignChangeDetector:
@@ -80,14 +88,24 @@ class ForeignChangeDetector:
         self._watched: dict[_Key, _Watch] = {}
         self._latest: dict[str, ForeignChange] = {}  # die letzte Erkennung je Aktor
 
-    def expect(self, actuator: str, kind: CommandKind, value: CommandValue) -> None:
+    def expect(
+        self,
+        actuator: str,
+        kind: CommandKind,
+        value: CommandValue,
+        *,
+        lapses_at: datetime | None = None,
+    ) -> None:
         """Das EMS hat ``value`` am Gerät bestätigt: Ab jetzt wird es dort erwartet.
 
-        Der Zähler der Treffer beginnt wieder bei 0. Für eine Art, die nicht in ``WATCHED_KINDS``
-        steht, hat der Aufruf keine Wirkung.
+        Der Zähler der Treffer beginnt wieder bei 0. Mit ``lapses_at`` entfällt die Erwartung in
+        ``check`` ab diesem Zeitpunkt ohne Treffer: Ein Override verfällt am Cerbo, wenn niemand ihn
+        auffrischt, und das ist keine fremde Änderung. Ein neues ``expect`` ersetzt die Erwartung
+        samt Frist; ohne ``lapses_at`` gilt sie ohne Frist. Für eine Art, die nicht in
+        ``WATCHED_KINDS`` steht, hat der Aufruf keine Wirkung.
         """
         if kind in WATCHED_KINDS:
-            self._watched[(actuator, kind)] = _Watch(value)
+            self._watched[(actuator, kind)] = _Watch(value, lapses_at=lapses_at)
 
     def forget(self, actuator: str) -> None:
         """Beendet die Beobachtung des Aktors: Erwartungen und Zähler sind vergessen.
@@ -111,16 +129,22 @@ class ForeignChangeDetector:
         ``None`` „kein Override“, ein fehlender Eintrag „unbekannt“), ``pending`` die offenen
         Schreibvorgänge des Ausführers. Nur Paare mit Erwartung zählen; für jedes gilt:
 
+        - Ist die Frist der Erwartung erreicht (``now >= lapses_at``), entfällt sie ohne Treffer,
+          gleich was ``present`` und ``pending`` zum Paar sagen. Erst ein neues ``expect`` lässt
+          das Paar wieder beobachten.
         - Mit offenem Schreibvorgang wird das Paar übergangen, der Zähler bleibt.
         - Ein unbekannter Ist-Wert ist weder Treffer noch Übereinstimmung, der Zähler bleibt.
         - Passt der Ist-Wert (``matches``), beginnt der Zähler wieder bei 0.
         - Sonst ist es ein Treffer. Beim ``hits``-ten Treffer in Folge ist die Änderung erkannt:
-          Der Ist-Wert wird die neue Erwartung, und der Zähler beginnt wieder bei 0.
+          Der Ist-Wert wird die neue Erwartung, ohne Frist, und der Zähler beginnt wieder bei 0.
 
         Die Erkennungen kommen in der Reihenfolge der Erwartungen.
         """
         found: list[ForeignChange] = []
-        for key, watch in self._watched.items():
+        for key, watch in list(self._watched.items()):
+            if watch.lapses_at is not None and now >= watch.lapses_at:
+                del self._watched[key]  # verfallen wie der Override selbst: kein Treffer
+                continue
             if key in pending or key not in present:
                 continue
             actuator, kind = key
@@ -132,7 +156,8 @@ class ForeignChangeDetector:
             if watch.count < self._needed:
                 continue
             change = ForeignChange(actuator, kind, watch.expected, actual, now)
-            watch.expected, watch.count = actual, 0
+            # Die neue Erwartung ist der fremde Wert, ohne die Frist des eigenen Overrides.
+            self._watched[key] = _Watch(actual)
             self._latest[actuator] = change
             found.append(change)
         return found
