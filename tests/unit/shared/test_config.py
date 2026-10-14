@@ -395,3 +395,40 @@ def test_commented_peak_target_of_the_example_is_valid_when_enabled(tmp_path: Pa
     uncommented = text.replace("\n  # peak_target_kw: 8", "\n  peak_target_kw: 8", 1)
     enabled.write_text(uncommented, encoding="utf-8")
     assert load_config(enabled).control.peak_target_kw == 8.0
+
+
+# Endliche Werte: Override und grid_budget_w sind nie NaN oder ±∞, also nimmt die Konfiguration
+# solche Werte für die neuen Felder nicht an
+
+BATTERY_AND_PEAK_FIELDS = (
+    "support_soc_pct",
+    "support_hysteresis_pct",
+    "support_max_w",
+    "support_max_s",
+    "setpoint_deadband_w",
+    "override_refresh_s",
+    "peak_target_kw",
+    "peak_margin_kw",
+)
+
+
+@pytest.mark.parametrize(
+    "value", [float("inf"), float("-inf"), float("nan")], ids=["inf", "-inf", "nan"]
+)
+@pytest.mark.parametrize("field", BATTERY_AND_PEAK_FIELDS)
+def test_battery_and_peak_values_must_be_finite(field: str, value: float) -> None:
+    with pytest.raises(ValidationError) as caught:
+        ControlConfig(**{field: value})
+    # Die Prüfung auf endliche Zahlen greift vor den Grenzen, auch bei support_soc_pct und
+    # override_refresh_s, die schon ein Maximum haben.
+    assert [error["type"] for error in caught.value.errors()] == ["finite_number"]
+
+
+@pytest.mark.parametrize("field", BATTERY_AND_PEAK_FIELDS)
+def test_infinite_battery_and_peak_values_in_the_config_file_are_rejected(
+    tmp_path: Path, field: str
+) -> None:
+    # in YAML steht unendlich als „.inf“
+    p = write_cfg(tmp_path, lambda d: d["control"].update({field: float("inf")}))
+    with pytest.raises(ConfigError, match=rf"control\.{field}"):
+        load_config(p)

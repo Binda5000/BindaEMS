@@ -334,7 +334,8 @@ class ControlConfig(_Model):
       erst, wenn der Anteil am Überschuss ihn um 1 A plus diesen Wert übersteigt
 
     Akku-Sollwert und 15-min-Wächter (Plan 2c-2a, Design 3.2): Die Unterstützung ist die
-    Akkuleistung für Autos in PV-Überschuss und Min+PV (Spec 7.6).
+    Akkuleistung für Autos in PV-Überschuss und Min+PV (Spec 7.6). Diese Werte sind endlich;
+    unendliche Werte und NaN lehnt die Konfiguration ab.
 
     - ``support_soc_pct``: Ab diesem SOC in % ist sie möglich.
     - ``support_hysteresis_pct``: Gesperrt wird sie erst unter der Schwelle minus diesem Wert.
@@ -356,15 +357,15 @@ class ControlConfig(_Model):
     tesla_average_s: Annotated[float, Field(gt=0)] = 90.0
     tesla_caution_s: Annotated[float, Field(gt=0)] = 60.0
     evcs_hysteresis_a: Annotated[float, Field(ge=0)] = 0.5
-    support_soc_pct: Annotated[float, Field(ge=0, le=100)] = 70.0
-    support_hysteresis_pct: Annotated[float, Field(ge=0)] = 5.0
-    support_max_w: Annotated[float, Field(ge=0)] = 3000.0
-    support_max_s: Annotated[float, Field(ge=0)] = 900.0
-    setpoint_deadband_w: Annotated[float, Field(ge=0)] = 200.0
+    support_soc_pct: Annotated[float, Field(ge=0, le=100, allow_inf_nan=False)] = 70.0
+    support_hysteresis_pct: Annotated[float, Field(ge=0, allow_inf_nan=False)] = 5.0
+    support_max_w: Annotated[float, Field(ge=0, allow_inf_nan=False)] = 3000.0
+    support_max_s: Annotated[float, Field(ge=0, allow_inf_nan=False)] = 900.0
+    setpoint_deadband_w: Annotated[float, Field(ge=0, allow_inf_nan=False)] = 200.0
     # höchstens 280 s: 20 s Reserve zum Timeout des Override am Cerbo (300 s)
-    override_refresh_s: Annotated[float, Field(gt=0, le=280)] = 240.0
-    peak_target_kw: Annotated[float, Field(gt=0)] | None = None
-    peak_margin_kw: Annotated[float, Field(ge=0)] = 0.3
+    override_refresh_s: Annotated[float, Field(gt=0, le=280, allow_inf_nan=False)] = 240.0
+    peak_target_kw: Annotated[float, Field(gt=0, allow_inf_nan=False)] | None = None
+    peak_margin_kw: Annotated[float, Field(ge=0, allow_inf_nan=False)] = 0.3
 
 
 class CoreConfig(_Model):
