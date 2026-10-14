@@ -14,11 +14,13 @@ from tests.integration.plant import Plant
 from tests.integration.test_runtime_charging import alarm_ids
 
 from bindaems.core.control.peak_guard import PEAK_EXCEEDED
+from bindaems.core.safety.types import SafetyContext, Verdict
 from bindaems.shared.config import Config
 from bindaems.shared.control import (
     VICTRON,
     ActuatorMode,
     ChargeMode,
+    Command,
     CommandKind,
     Intent,
     VehicleIntent,
@@ -197,12 +199,22 @@ async def test_health_shows_the_battery(runtime_env) -> None:
     }
 
 
-async def test_peak_budget_reaches_the_safety_layer(runtime_env) -> None:  # Präzisierung 12
+async def test_peak_budget_reaches_the_safety_layer(runtime_env, monkeypatch) -> None:
+    # Präzisierung 12: Das Budget eines Zyklus gilt für den Akku-Sollwert und, im SafetyContext
+    # desselben Zyklus, für Regel 2.
     rt, _, clock = runtime_env(state=dict(EGOLF_FULL), extra=FULL, configure=peak_target)
     rt.submit_intent(Intent(version=1, control=True, vehicles=EGOLF_NOW))  # Victron im Dry-Run
+    contexts: list[SafetyContext] = []  # der Kontext jeder Prüfung durch die Safety-Schicht
+    authorize = rt.layer.authorize
+
+    def checked(command: Command, ctx: SafetyContext) -> Verdict:
+        contexts.append(ctx)
+        return authorize(command, ctx)
+
+    monkeypatch.setattr(rt.layer, "authorize", checked)
     budgets: dict[datetime, float | None] = {}
     states: dict[datetime, str] = {}
-    for _ in range(17 * 60):  # bis 10:16:59
+    for _ in range(18 * 60):  # bis 10:17:59
         now = clock.now()
         rt.cycle_once()
         budgets[now], states[now] = rt.regulation.grid_budget_w(), rt.health().peak["state"]
@@ -214,18 +226,19 @@ async def test_peak_budget_reaches_the_safety_layer(runtime_env) -> None:  # Pr�
     assert {states[t] for t in after} == {"active"}  # die Hochrechnung bleibt bei 6680 W
     assert all(isinstance(budgets[t], float) and math.isfinite(budgets[t]) for t in after)
     # Der Akku-Sollwert will 1000 + 7360 W. Ab 10:15 senkt ihn das Budget P_zul (dann 7700 W, es
-    # steigt mit der Viertelstunde) mit dem Grund ``peak_guard``; der Override jeder Entscheidung
-    # liegt höchstens bei P_zul ihres Zyklus.
+    # steigt mit der Viertelstunde), auf 10 W abgerundet, mit dem Grund ``peak_guard``. Der
+    # Override jeder Entscheidung liegt höchstens bei P_zul ihres Zyklus; Regel 2 greift nicht ein.
     decisions = [d for d in victron_decisions(rt) if d.ts >= QUARTER]
-    assert [(d.ts, d.requested) for d in decisions] == [
-        (QUARTER, 7700.0),
-        (QUARTER + timedelta(seconds=116), 7900.0),
+    assert [(d.ts, d.requested, d.applied) for d in decisions] == [
+        (QUARTER, 7700.0, 7700.0),
+        (QUARTER + timedelta(seconds=119), 7900.0, 7900.0),  # P_zul 7901,1 W
     ]
-    assert decisions[0].codes == ("battery_comp", "peak_guard")
+    assert {d.codes for d in decisions} == {("battery_comp", "peak_guard")}
     assert all(d.applied <= budgets[d.ts] for d in decisions)
-    # Um 10:16:56 ist P_zul 7895,3 W, das Ziel auf 10 W gerundet 7900 W: Regel 2 kappt es am Budget.
-    assert decisions[1].applied == pytest.approx(7895.31, abs=0.01)
-    assert decisions[1].codes == ("battery_comp", "peak_guard", "range.ceiling")
+    # Jeder Befehl geht mit dem Budget seines Zyklus durch die Safety-Schicht, ab 10:15 auch die
+    # Overrides dieser Entscheidungen.
+    assert {d.ts for d in decisions} <= {ctx.now for ctx in contexts}
+    assert all(ctx.grid_budget_w == budgets[ctx.now] for ctx in contexts)
 
 
 async def test_peak_exceeded_is_an_alarm_in_health(runtime_env) -> None:  # Präzisierung 14

@@ -229,16 +229,23 @@ def battery_cars(
 
 
 def peak_cars(cars: Sequence[CarView], need: BatteryNeed | None) -> list[PeakCar]:
-    """Die Autos für den 15-min-Wächter: je Ladepunkt aus ``cars`` eins, in dieser Reihenfolge.
+    """Die Autos für den 15-min-Wächter aus ``cars``, in dieser Reihenfolge: jedes, dessen
+    Ladepunkt die Laderegelung regelt (``CarView.regulated``), und jedes in Boost.
 
     ``cars`` kommt aus ``ChargeController.cars``, in der Reihenfolge der Priorität; der Rang ist
-    die Stelle darin, 0 die höchste. Der Netzanteil ist der von ``need`` für die Wallbox
-    (``BatteryNeed.grid_w``, Präzisierung 11), ohne Bedarf 0 W. Ein Ladepunkt, den die
-    Laderegelung nicht regelt (``CarView.regulated``), hat 0 W Netzanteil, wird also nie gedrosselt:
-    Eine Grenze wirkte dort nicht, und was er ihr nicht folgte, stünde bis zum Ende der
-    Viertelstunde aus (``pending_w``) und schmälerte die Drosselung der anderen. Seinen Anteil in
-    Boost zieht der Wächter trotzdem ab. Wallboxen ohne Fahrzeug sind keine Autos des Wächters: Er
-    kann sie nicht drosseln, ihr Netzanteil steht aber im gewollten Netzbezug ``W``.
+    die Stelle darin, 0 die höchste, auch wenn ein Auto davor fehlt. Der Netzanteil ist der von
+    ``need`` für die Wallbox (``BatteryNeed.grid_w``, Präzisierung 11), ohne Bedarf 0 W.
+
+    - **Ungeregelt, nicht in Boost:** Das Auto fehlt. Eine Grenze wirkte an seinem Ladepunkt nicht,
+      und was es ihr nicht folgte, stünde bis zum Ende der Viertelstunde aus (``pending_w``) und
+      schmälerte die Drosselung der anderen. Weil es fehlt, verliert es beim Wächter still auch
+      eine Grenze aus der Zeit, als sein Ladepunkt noch geregelt war; Drosselung, ``pending_w`` und
+      Start-Sperre übergehen es. Sein Netzanteil steht weiter im gewollten Netzbezug ``W``.
+    - **In Boost:** Das Auto zählt immer, geregelt oder nicht: Seinen Netzanteil zieht der Wächter
+      als Energie in Boost ab. Gedrosselt wird es nie.
+
+    Wallboxen ohne Fahrzeug sind keine Autos des Wächters: Er kann sie nicht drosseln, ihr
+    Netzanteil steht aber in ``W``.
     """
     grid_w: Mapping[str, float] = {} if need is None else need.grid_w
     return [
@@ -248,8 +255,9 @@ def peak_cars(cars: Sequence[CarView], need: BatteryNeed | None) -> list[PeakCar
             mode=car.mode,
             rank=rank,
             power_w=car.power_w,
-            grid_w=grid_w.get(car.wallbox, 0.0) if car.regulated else 0.0,
+            grid_w=grid_w.get(car.wallbox, 0.0),
             min_w=car.min_w,
         )
         for rank, car in enumerate(cars)
+        if car.regulated or car.mode is Effective.BOOST
     ]

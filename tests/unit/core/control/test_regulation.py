@@ -4,7 +4,7 @@ from typing import Any
 
 import pytest
 from tests.helpers import T0
-from tests.unit.core.control.charge_helpers import CONTROLLABLE, evcs, inputs, twc
+from tests.unit.core.control.charge_helpers import CONTROLLABLE, evcs, inputs, tesla, twc
 
 from bindaems.core.control.battery import BatteryCar, BatteryNeed
 from bindaems.core.control.charge_inputs import ChargeInputs
@@ -41,6 +41,21 @@ EGOLF_NOW = Intent(version=1, control=True, vehicles={"egolf": VehicleIntent(mod
 EGOLF_W = 7360.0
 DRAWN_W = 9080.0
 QUARTER_END = T0 + timedelta(minutes=15)
+# Der Tesla lädt am Wall Connector mit 16 A auf drei Phasen (11040 W); beide Autos in Sofort.
+TESLA_16_A = twc(
+    connected=True,
+    charging=True,
+    phase_a=dict.fromkeys(("L1", "L2", "L3"), 16.0),
+    power_w=11040.0,
+)
+BOTH_NOW = Intent(
+    version=1,
+    control=True,
+    vehicles={
+        "egolf": VehicleIntent(mode=ChargeMode.NOW),
+        "tesla": VehicleIntent(mode=ChargeMode.NOW),
+    },
+)
 
 
 def with_target(cfg: Config) -> Config:
@@ -49,20 +64,40 @@ def with_target(cfg: Config) -> Config:
     return cfg.model_copy(update={"control": control})
 
 
-def quarter(s: int) -> QuarterObs:
-    """Die Viertelstunde ab ``T0`` nach ``s`` Sekunden mit ``DRAWN_W`` aus dem Netz."""
-    return QuarterObs(T0, DRAWN_W * s / 3600, DRAWN_W, {"evcs": EGOLF_W})
+def quarter(s: int, drawn_w: float = DRAWN_W) -> QuarterObs:
+    """Die Viertelstunde ab ``T0`` nach ``s`` Sekunden mit ``drawn_w`` aus dem Netz; an der EVCS
+    davon 7360 W (zählt nur in Boost)."""
+    return QuarterObs(T0, drawn_w * s / 3600, drawn_w, {"evcs": EGOLF_W})
 
 
 def peak_cycle(
-    regulation: Regulation, cfg: Config, s: int, *, base_w: float = 0.0, **kw: Any
+    regulation: Regulation,
+    cfg: Config,
+    s: int,
+    *,
+    base_w: float = 0.0,
+    pv_w: float = 0.0,
+    drawn_w: float = DRAWN_W,
+    lag: timedelta = timedelta(0),
+    **kw: Any,
 ) -> list[ControlCommand]:
     """Ein Zyklus ``s`` Sekunden nach ``T0`` mit der Viertelstunde (``quarter``); jeder Befehl wird
-    angenommen. ``base_w`` ist der Basis-Sollwert, ``kw`` geht an ``inputs``."""
-    charge = inputs(cfg, s=s, evcs_obs=evcs(charging=True, power_w=EGOLF_W), intent=EGOLF_NOW, **kw)
+    angenommen.
+
+    ``base_w`` ist der Basis-Sollwert, ``pv_w`` die PV, ``drawn_w`` der Netzbezug; die Uhr der
+    Safety-Schicht geht um ``lag`` nach. ``kw`` ändert die Eingaben der Laderegelung (``inputs``),
+    ohne Angabe der e-Golf in Sofort mit 7360 W an der EVCS.
+    """
+    given = {"evcs_obs": evcs(charging=True, power_w=EGOLF_W), "intent": EGOLF_NOW} | kw
+    charge = inputs(cfg, s=s, **given)
+    charge = replace(charge, now=charge.now - lag)
     found = regulation.step(
         RegulationInputs(
-            charge, pv_w=0.0, house_w=1720.0, base_setpoint_w=base_w, quarter=quarter(s)
+            charge,
+            pv_w=pv_w,
+            house_w=1720.0,
+            base_setpoint_w=base_w,
+            quarter=quarter(s, drawn_w),
         )
     )
     for command in (x.command for x in found):
@@ -307,17 +342,64 @@ def test_the_budget_counts_in_the_same_cycle(cfg) -> None:  # Präzisierungen 3 
     assert found[-1].inputs["target_w"] == 6700.0
 
 
+def test_the_wanted_grid_counts_when_it_is_above_the_mean(cfg) -> None:  # Präzisierung 10
+    # Der Akku gibt 2400 W ab, aus dem Netz kommen nur 6680 W. Mit dem Basis-Sollwert 1000 W will
+    # der Akku-Sollwert aber 1000 + 7360 = 8360 W, und danach rechnet der Wächter: 8360 − 7700 =
+    # 660 W Senkung. Im nächsten Zyklus geht der e-Golf auf 6700 W, das sind 14 A.
+    peak = with_target(cfg)
+    regulation = Regulation(peak, HardLimits.from_config(peak), started=T0)
+    peak_cycle(regulation, peak, 0, base_w=1000.0, drawn_w=6680.0)
+    assert regulation.health()["peak"]["reduction_kw"] == 0.66
+    second = currents(peak_cycle(regulation, peak, 1, base_w=1000.0, drawn_w=6680.0))
+    assert second == [
+        Command("wallbox.evcs", CommandKind.CURRENT, 14.0, reasons=("mode_now", "peak_guard"))
+    ]
+
+
 @pytest.mark.parametrize(("steerable", "caps"), [(True, {"egolf": 5980.0}), (False, {})])
 def test_only_a_regulated_car_gets_a_cap(cfg, monkeypatch, steerable, caps) -> None:
-    # Ist die EVCS nicht steuerbar, regelt die Laderegelung den Ladepunkt des e-Golf nicht: Eine
-    # Grenze wirkte dort nie, und was er ihr nicht folgte, schmälerte die Drosselung der anderen.
-    # Das Budget gilt in beiden Fällen.
+    # Ist die EVCS nicht steuerbar, regelt die Laderegelung den Ladepunkt des e-Golf nicht: Er fehlt
+    # bei den Autos des Wächters (``peak_cars``), denn eine Grenze wirkte dort nie. Das Budget gilt
+    # in beiden Fällen.
     peak = with_target(cfg)
     regulation = Regulation(peak, HardLimits.from_config(peak), started=T0)
     seen = charger_limits(regulation, monkeypatch)
     for s in (0, 1):
         peak_cycle(regulation, peak, s, controllable={**CONTROLLABLE, "wallbox.evcs": steerable})
     assert seen == [NO_LIMITS, PeakLimits(budget_w=7700.0, caps_w=caps)]
+
+
+def test_a_car_whose_point_is_no_longer_regulated_loses_its_cap(cfg, monkeypatch) -> None:
+    # Präzisierung 11: Beide Autos laden in Sofort. Die PV (9720 W) deckt das Haus und 8000 W des
+    # Tesla, 10400 W kommen aus dem Netz. Der Wächter senkt zuerst den e-Golf (die niedrigere
+    # Priorität) um 2700 W auf 4660 W. Ab 1 s ist die EVCS nicht steuerbar: Der e-Golf fehlt bei
+    # den Autos des Wächters und verliert still seine Grenze. Nach 30 s bekommt der Tesla die ganze
+    # verlangte Senkung; was der e-Golf seiner Grenze nicht folgte, zählt nicht mehr.
+    peak = with_target(cfg)
+    regulation = Regulation(peak, HardLimits.from_config(peak), started=T0)
+    seen = charger_limits(regulation, monkeypatch)
+    tesla_charging = {"twc_obs": TESLA_16_A, "tesla_obs": tesla(plugged=True, charging=True)}
+    reduction_w: list[float] = []
+    for s in range(32):
+        steerable = {"wallbox.evcs": s == 0, "vehicle.tesla": True}
+        kw = {"controllable": steerable, "intent": BOTH_NOW, **tesla_charging}
+        peak_cycle(regulation, peak, s, pv_w=9720.0, drawn_w=10400.0, **kw)
+        reduction_w.append(regulation.health()["peak"]["reduction_kw"] * 1000)
+    assert seen[1].caps_w == {"egolf": 4660.0}
+    assert [limits.caps_w for limits in seen[2:31]] == [{}] * 29  # still, ohne Änderung
+    assert seen[31].caps_w == pytest.approx({"tesla": 11040.0 - reduction_w[30]})
+
+
+def test_an_unregulated_car_in_boost_counts_for_the_boost_share(cfg) -> None:  # Präzisierung 9
+    # Der e-Golf lädt in Boost an der EVCS, die nicht steuerbar ist: Seine 7360 W aus dem Netz
+    # zählen trotzdem außerhalb des Budgets. Für die Hochrechnung bleibt das Haus mit 1720 W.
+    peak = with_target(cfg)
+    regulation = Regulation(peak, HardLimits.from_config(peak), started=T0)
+    until = T0 + timedelta(hours=1)
+    boost = Intent(version=1, control=True, vehicles={"egolf": VehicleIntent(boost_until=until)})
+    unsteerable = {**CONTROLLABLE, "wallbox.evcs": False}
+    peak_cycle(regulation, peak, 0, intent=boost, controllable=unsteerable)
+    assert regulation.health()["peak"]["projected_kw"] == 1.72
 
 
 def test_peak_cars_follow_the_charge_points() -> None:  # Präzisierungen 4 und 11
@@ -331,10 +413,16 @@ def test_peak_cars_follow_the_charge_points() -> None:  # Präzisierungen 4 und 
         PeakCar("tesla", "twc", Effective.PV, 0, 0.0, 0.0, 3450.0),
         PeakCar("egolf", "evcs", Effective.MIN_PV, 1, 4140.0, 3140.0, 2760.0),
     ]
-    # Ohne Bedarf hat kein Auto einen Netzanteil, ebenso ein Ladepunkt, der nicht geregelt wird.
-    assert [car.grid_w for car in peak_cars(views, None)] == [0.0, 0.0]
-    unregulated = (views[0], replace(views[1], regulated=False))
-    assert [car.grid_w for car in peak_cars(unregulated, need)] == [0.0, 0.0]
+    assert [car.grid_w for car in peak_cars(views, None)] == [0.0, 0.0]  # ohne Bedarf
+    # Ein Ladepunkt, den die Laderegelung nicht regelt, fehlt, außer in Boost; der Rang der
+    # anderen bleibt ihre Stelle in ``cars``.
+    unregulated = replace(views[0], regulated=False)
+    found = peak_cars((unregulated, views[1]), need)
+    assert [(car.vehicle, car.rank) for car in found] == [("egolf", 1)]
+    boost = replace(unregulated, mode=Effective.BOOST)
+    assert peak_cars((boost, views[1]), need)[0] == PeakCar(
+        "tesla", "twc", Effective.BOOST, 0, 0.0, 0.0, 3450.0
+    )
 
 
 def test_the_alarm_of_the_guard_ends_with_its_quarter(cfg) -> None:  # Präzisierung 14
@@ -351,6 +439,20 @@ def test_the_alarm_of_the_guard_ends_with_its_quarter(cfg) -> None:  # Präzisie
     regulation.idle(T0 + timedelta(seconds=61))
     assert regulation.alarms(QUARTER_END - timedelta(microseconds=1)) == [alarm]
     assert regulation.alarms(QUARTER_END) == []
+
+
+def test_the_guard_runs_on_the_wall_clock(cfg) -> None:  # Global Constraints: Zeit
+    # Die Uhr der Safety-Schicht geht einen Tag nach. Viertelstunde, Alarm und Health des Wächters
+    # folgen der Wanduhr (``ChargeInputs.wall_now``), wie die Viertelstunden der Abrechnung.
+    peak = with_target(cfg)
+    regulation = Regulation(peak, HardLimits.from_config(peak), started=T0)
+    for s in range(61):
+        peak_cycle(regulation, peak, s, lag=timedelta(days=1))
+    assert regulation.grid_budget_w() is not None  # die Viertelstunde der Abrechnung passt
+    health = regulation.health()["peak"]
+    assert (health["state"], health["quarter_end"]) == ("exceeded", QUARTER_END.isoformat())
+    [alarm] = regulation.alarms(T0 + timedelta(seconds=60))
+    assert alarm.since == T0 + timedelta(seconds=60)
 
 
 def test_idle_rests_the_guard_and_drops_its_limits(cfg, monkeypatch) -> None:  # Review Focus 4

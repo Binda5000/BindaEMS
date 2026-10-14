@@ -459,6 +459,20 @@ def test_budget_counts_from_the_base(cfg) -> None:
     assert found.inputs["target_w"] == 2000.0
 
 
+def test_budget_counts_rounded_down_to_10_w(cfg) -> None:  # Präzisierung 12, Global Constraints
+    # Mit dem Budget 7895,31 W lägen W' bei 7895,31 W und das Ziel auf 10 W gerundet bei 7900 W,
+    # über dem Budget: Regel 2 kappte den Override auf einen Wert, der kein Vielfaches von 10 W ist.
+    budget = {**FREE, "budget_w": 7895.31}
+    [found] = BatteryController(cfg).decide(T0, need(9000.0), **budget)
+    assert found.command == setpoint(7890.0, "battery_comp", "peak_guard")
+    assert found.inputs["target_w"] == 7890.0
+    # Auch mit einer Basis, die kein Vielfaches von 10 W ist, bleibt das Ziel darunter.
+    based = {**budget, "base_w": 55.0}
+    [found] = BatteryController(cfg).decide(T0, need(9000.0), **based)
+    assert found.command == setpoint(7890.0, "battery_comp", "peak_guard")
+    assert found.inputs["target_w"] == 7835.0
+
+
 def test_budget_above_the_need_changes_nothing(cfg) -> None:
     [found] = BatteryController(cfg).decide(T0, need(5000.0), **{**FREE, "budget_w": 5000.0})
     assert found.command == setpoint(5000.0, "battery_comp")

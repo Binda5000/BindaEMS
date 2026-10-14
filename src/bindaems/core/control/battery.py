@@ -289,7 +289,8 @@ class BatteryController:
 
     - **Ziel:** ``T = round10(Basis + W')`` mit ``round10(x) = 10 · floor(x / 10 + 0,5)`` und der
       Basis ``ess.grid_setpoint_w``. ``W'`` ist ``W`` nach dem Budget des 15-min-Wächters:
-      ``max(0, min(W, Budget − Basis))``, ohne Budget ``W``.
+      ``max(0, min(W, floor10(Budget) − Basis))`` mit ``floor10(x) = 10 · floor(x / 10)``, ohne
+      Budget ``W``. Mit ``W'`` über 0 liegt ``T`` so nie über dem Budget.
     - **An, aus und Änderung** gegenüber dem letzten eigenen Wert: Ist er eine Zahl, heißt ``W'``
       unter ``setpoint_deadband_w / 2`` „kein Override“ (``None``); sonst gilt ``T``, wenn es
       mindestens ``setpoint_deadband_w`` von ihm abweicht. Ist er „kein Override“ oder gibt es
@@ -545,13 +546,22 @@ def _round10(watts: float) -> float:
     return 10.0 * math.floor(watts / 10 + 0.5)
 
 
+def _floor10(watts: float) -> float:
+    """Auf 10 W abgerundet: ``10 · floor(x / 10)``."""
+    return 10.0 * math.floor(watts / 10)
+
+
 def _guarded(
     wanted_w: float, base_w: float | None, budget_w: float | None
 ) -> tuple[float, bool] | None:
     """``W'`` nach dem Budget des 15-min-Wächters und ob das Budget ``W`` gesenkt hat.
 
-    Mit Budget ist ``W' = max(0, min(W, Budget − Basis))`` (Präzisierung 12), ohne ``W' = W``. Mit
-    Budget müssen die Basis bekannt und das Budget eine endliche Zahl sein, sonst ist ``W'``
+    Mit Budget ist ``W' = max(0, min(W, floor10(Budget) − Basis))`` (Präzisierung 12), ohne
+    ``W' = W``. Das Budget zählt auf 10 W abgerundet: Liegt ``W'`` über 0, ist ``Basis + W'``
+    höchstens ``floor10(Budget)``, und das Ziel ``round10(Basis + W')`` liegt nie über dem Budget.
+    Regel 2 kappt den Override also nicht auf einen Wert, der kein Vielfaches von 10 W ist, und
+    das Entscheidungslog bleibt ohne ``range.ceiling``. Bei ``W' = 0`` gibt es keinen Override.
+    Mit Budget müssen die Basis bekannt und das Budget eine endliche Zahl sein, sonst ist ``W'``
     unbekannt (``None``).
     """
     if budget_w is None:
@@ -559,7 +569,7 @@ def _guarded(
     budget = finite_number(budget_w)
     if budget is None or base_w is None:
         return None
-    guarded_w = max(0.0, min(wanted_w, budget - base_w))
+    guarded_w = max(0.0, min(wanted_w, _floor10(budget) - base_w))
     return guarded_w, guarded_w < wanted_w
 
 
