@@ -11,8 +11,8 @@ Schreibvorgang offen, wird der Befehl gar nicht betrachtet. Das Urteil entscheid
   schlafendes Fahrzeug kann dafür steuerbar sein. Das Urteil der Safety-Schicht bleibt dasselbe;
   die Weckerlaubnis gilt nur gegenüber dem Aktor.
 - Im Dry-Run ergibt ein Urteil mit Wert die Entscheidung ``DRY_RUN``, ein abgelehnter Befehl
-  ``REJECTED``; dieselbe Ablehnung (Aktor, Art, Befund-Codes) wird höchstens alle 60 s
-  protokolliert.
+  ``REJECTED``; dieselbe Ablehnung (Aktor, Art, angeforderter Wert, Befund-Codes) wird höchstens
+  alle 60 s protokolliert.
 - Ein Befehl, den ein Stundenlimit zurückstellt (``DEFERRED`` mit dem Befund ``rate.per_hour`` oder
   ``rate.start_stop``, beim Tesla), ergibt die Entscheidung ``DEFERRED``; auch dieselbe
   Zurückstellung höchstens alle 60 s. Ablehnungen und Zurückstellungen halten einander dabei nicht
@@ -52,8 +52,8 @@ from bindaems.shared.domain import Snapshot
 _REPEAT_INTERVAL: Final = timedelta(seconds=60)  # dieselbe Ablehnung bzw. Zurückstellung so oft
 
 _Key = tuple[str, CommandKind]  # Aktor und Art: ein Schreibvorgang je Schlüssel
-# Ergebnis (Ablehnung oder Zurückstellung), Aktor, Art und die Codes der Befunde
-_RepeatKey = tuple[DecisionResult, str, CommandKind, tuple[str, ...]]
+# Ergebnis (Ablehnung oder Zurückstellung), Aktor, Art, angeforderter Wert und die Codes der Befunde
+_RepeatKey = tuple[DecisionResult, str, CommandKind, CommandValue, tuple[str, ...]]
 
 
 class DecisionSink(Protocol):
@@ -296,13 +296,14 @@ class CommandExecutor:
     def _due(self, verdict: Verdict, result: DecisionResult, now: datetime) -> bool:
         """Soll diese Ablehnung bzw. Zurückstellung (``result``) protokolliert werden?
 
-        Dieselbe höchstens alle 60 s: gleiches Ergebnis, gleicher Aktor, gleiche Art und gleiche
-        Befund-Codes. Eine Ablehnung hält so keine Zurückstellung zurück und umgekehrt. Die 60 s
-        laufen auf der Zeit der Safety-Schicht, ab der letzten protokollierten.
+        Dieselbe höchstens alle 60 s: gleiches Ergebnis, gleicher Aktor, gleiche Art, gleicher
+        angeforderter Wert und gleiche Befund-Codes. Eine Ablehnung hält so keine Zurückstellung
+        zurück und umgekehrt, ein Start keinen Stopp. Die 60 s laufen auf der Zeit der
+        Safety-Schicht, ab der letzten protokollierten.
         """
         command = verdict.command
         codes = tuple(finding.code for finding in verdict.findings)
-        key = (result, command.actuator, command.kind, codes)
+        key = (result, command.actuator, command.kind, command.value, codes)
         last = self._repeated.get(key)
         if last is not None and now - last < _REPEAT_INTERVAL:
             return False

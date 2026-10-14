@@ -824,6 +824,21 @@ def test_a_deferral_for_the_start_stop_limit_is_logged_once_a_minute(tmp_path, l
     assert executor.pending() == frozenset() and executor.take_failures() == []
 
 
+def test_a_deferred_stop_right_after_a_deferred_start_is_logged_too(tmp_path, limits) -> None:
+    # Die 60 s gelten je Wert: Ein zurückgestellter Stopp binnen 60 s nach einem zurückgestellten
+    # Start mit demselben Befund fehlte sonst bis zu eine Minute im Log.
+    executor, decisions = build(tmp_path, limits, FakeActuator(TESLA))
+    for seconds in range(6):
+        at(executor, STOP_TESLA, seconds)
+    start = replace(STOP_TESLA, value=True)
+    for seconds, command in ((6, start), (7, STOP_TESLA), (8, start), (9, STOP_TESLA)):
+        at(executor, command, seconds)
+    assert [(d.ts, d.requested, d.result) for d in decisions[6:]] == [
+        (S(6), True, DecisionResult.DEFERRED),
+        (S(7), False, DecisionResult.DEFERRED),
+    ]
+
+
 def test_a_deferral_for_the_commands_per_hour_is_logged(tmp_path, cfg) -> None:
     # Höchstens 2 Befehle je Stunde: Der dritte, ein Strom, wird zurückgestellt und protokolliert.
     # Wie im Dry-Run nennt der Text den Wert nach der Safety-Schicht (16 statt 20 A).

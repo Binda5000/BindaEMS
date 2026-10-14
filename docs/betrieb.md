@@ -930,11 +930,14 @@ Der core hält jede Entscheidung zu einem Befehl fest (Spec 7.10):
 - jeden gesendeten Befehl mit seinem Ergebnis („gesendet und bestätigt“, „Fehler“, „nicht
   bestätigt“ oder „nicht gesendet“),
 - im Dry-Run jedes Urteil, das einen Wert ergäbe („Dry-Run, nicht gesendet“),
-- jede Ablehnung der Safety-Schicht (dieselbe Ablehnung desselben Aktors höchstens alle 60 s),
+- jede Ablehnung der Safety-Schicht (dieselbe Ablehnung höchstens alle 60 s),
 - seit Plan 2c-1 jeden Befehl, den ein Stundenlimit des Tesla zurückstellt („zurückgestellt“,
   Ergebnis `deferred`, mit dem Befund `rate.per_hour` oder `rate.start_stop`; dieselbe
   Zurückstellung höchstens alle 60 s). Andere Zurückstellungen, etwa wegen der 90-s-Regel, und
   unveränderte Werte erscheinen nicht.
+
+„Dieselbe“ heißt: gleicher Aktor, gleiche Art, gleicher angeforderter Wert und gleiche Befunde. Ein
+zurückgestellter Stopp kurz nach einem zurückgestellten Start erscheint also beide Male.
 
 Ein Eintrag lautet etwa: `EVCS „evcs“ (sicherer Zustand): Strom 6 A – gesendet und bestätigt.`
 Die Laderegelung nennt ihre Gründe in Klammern, etwa
