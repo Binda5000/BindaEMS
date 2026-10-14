@@ -25,6 +25,7 @@ from bindaems.core.control.charge_inputs import (
     VehicleObs,
     WallboxObs,
 )
+from bindaems.core.control.peak_guard import NO_LIMITS, PeakLimits
 from bindaems.core.safety.types import Outcome, Verdict
 from bindaems.core.state.derived import PHASES
 from bindaems.shared.config import Config
@@ -145,17 +146,20 @@ def run(
     seconds: int,
     *,
     make: Callable[..., ChargeInputs] = inputs,
+    peak: PeakLimits | Callable[[int], PeakLimits] = NO_LIMITS,
     **kw: Any,
 ) -> list[tuple[int, ChargeCommand]]:
     """Ein Schritt je Sekunde ``0 … seconds − 1``; zurück kommen ``(Sekunde, Befehl)``.
 
     Jedes ``kw`` ist eine feste Eingabe oder eine Funktion der Sekunde; ``make(cfg, s=s, …)`` baut
-    daraus die Eingaben. Alle Befehle werden angenommen (``accept``).
+    daraus die Eingaben. ``peak`` sind die Grenzen des 15-min-Wächters, fest oder als Funktion der
+    Sekunde. Alle Befehle werden angenommen (``accept``).
     """
     found: list[tuple[int, ChargeCommand]] = []
     for s in range(seconds):
         resolved = {key: value(s) if callable(value) else value for key, value in kw.items()}
-        commands = controller.step(make(cfg, s=s, **resolved))
+        limits = peak(s) if callable(peak) else peak
+        commands = controller.step(make(cfg, s=s, **resolved), limits)
         accept(controller, commands)
         found.extend((s, command) for command in commands)
     return found

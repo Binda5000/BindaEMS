@@ -125,7 +125,7 @@ def test_budget_after_the_formula() -> None:  # Design 6.2
     limits = run(g, 0, 300, wh=lambda s: 1000.0 if s == 300 else 0.0)
     # 18:05: (2000 Wh − 1000 Wh) · 3600 / 600 s − 300 W
     assert limits.budget_w == 5700.0
-    assert limits.caps_w == {}  # Drosselung und Start-Sperre folgen in Task 10
+    assert limits.caps_w == {}  # ohne Autos keine Grenzen und keine Start-Sperre
     assert limits.no_start == frozenset()
     health = g.health()
     assert health["budget_kw"] == 5.7

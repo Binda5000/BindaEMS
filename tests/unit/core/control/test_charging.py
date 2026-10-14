@@ -9,6 +9,7 @@ from tests.unit.core.control.charge_helpers import accept, evcs, grid, inputs, r
 from bindaems.core.control.charge_modes import Effective
 from bindaems.core.control.charging import CarView, ChargeController
 from bindaems.core.control.executor import WriteResult
+from bindaems.core.control.peak_guard import NO_LIMITS, PeakLimits
 from bindaems.core.safety.limits import HardLimits
 from bindaems.core.safety.types import Outcome, Verdict
 from bindaems.shared.control import (
@@ -1434,4 +1435,172 @@ def test_a_remembered_session_reaching_the_machine_forgets_once_more(cfg) -> Non
         cmd(15, CURRENT, 9.0, reasons, urgent=True),
         cmd(16, CURRENT, 9.0, reasons, urgent=True),
         cmd(16, CHARGING, True, reasons),
+    ]
+
+
+# Plan 2c-2a: Grenzen des 15-min-Wächters (Präzisierungen 11 und 13)
+
+NOW_AT_16_A = {
+    "intent": egolf_in(ChargeMode.NOW),
+    "evcs_obs": AT_16_A,
+    "present": at_evcs(16.0, True),
+}
+
+
+def test_peak_cap_limits_the_current_with_its_reason(cfg) -> None:
+    # Der e-Golf lädt an der EVCS in Sofort mit 16 A; frei sind 33 − (18 − 16) = 31 A. Die Grenze
+    # des 15-min-Wächters 4600 W ist 4600 / (230 V · 2 Phasen) = 10 A.
+    c = controller(cfg)
+    found = c.step(
+        inputs(cfg, grid_obs=grid(l1=18.0, l2=18.0), **NOW_AT_16_A),
+        PeakLimits(caps_w={"egolf": 4600.0}),
+    )
+    reasons = ("mode_now", "peak_guard")
+    assert [x.command for x in found] == [
+        Command("wallbox.evcs", CURRENT, 10.0, reasons=reasons),  # nicht dringend
+        Command("wallbox.evcs", CHARGING, True, reasons=reasons),
+    ]
+    # Entscheidungslog und Health nennen weiter den freien Strom des Phasenwächters.
+    assert found[0].inputs["limit_a"] == 31.0
+    assert c.health()[1]["limit_a"] == 31.0
+
+
+def test_peak_cap_below_the_minimum_stops_a_pv_car_by_its_rules(cfg) -> None:
+    # Der e-Golf lädt in PV mit 8 A, sein Anteil an 3680 + 1380 − 100 = 4960 W sind 10 A. Die Grenze
+    # 0 W lässt keinen Strom frei: Der Strom geht auf den Mindeststrom, und „Laden aus“ folgt nach
+    # den Regeln von PV-Überschuss, erst nach stop_after_s (300 s).
+    charging = {
+        "evcs_obs": AT_8_A,
+        "present": at_evcs(8.0, True),
+        "grid_obs": grid(l1=10.0, l2=10.0, grid_w=-1380.0),
+    }
+    found = run(controller(cfg), cfg, 302, peak=PeakLimits(caps_w={"egolf": 0.0}), **charging)
+    assert as_commands(found) == [
+        cmd(0, CURRENT, 6.0, ("mode_pv", "peak_guard")),
+        cmd(0, CHARGING, True, ("mode_pv", "peak_guard")),
+        cmd(300, CHARGING, False, ("mode_pv", "pv_surplus")),
+    ]
+    # Ohne Grenze lädt er mit seinem Anteil weiter.
+    reasons = ("mode_pv", "pv_surplus")
+    assert as_commands(run(controller(cfg), cfg, 302, **charging)) == [
+        cmd(0, CURRENT, 10.0, reasons),
+        cmd(0, CHARGING, True, reasons),
+    ]
+
+
+def test_no_start_waits(cfg) -> None:  # Präzisierung 13
+    # Der e-Golf in Min+PV ist angesteckt und lädt nicht: In der Start-Sperre bleibt „Laden an“ aus;
+    # fällt sie weg, startet er nach den Regeln seines Modus.
+    reasons = ("mode_min_pv", "pv_surplus")
+    min_pv = {"intent": egolf_in(ChargeMode.MIN_PV), "grid_obs": grid(grid_w=2000.0)}
+    blocked = PeakLimits(no_start=frozenset({"egolf"}))
+    found = run(controller(cfg), cfg, 10, peak=blocked, **min_pv)
+    assert as_commands(found) == [cmd(0, CURRENT, 6.0, reasons)]
+    found = run(controller(cfg), cfg, 10, **min_pv)
+    assert as_commands(found) == [cmd(0, CURRENT, 6.0, reasons), cmd(0, CHARGING, True, reasons)]
+    found = run(controller(cfg), cfg, 10, peak=lambda s: blocked if s < 5 else NO_LIMITS, **min_pv)
+    assert as_commands(found) == [cmd(0, CURRENT, 6.0, reasons), cmd(5, CHARGING, True, reasons)]
+
+
+def test_no_start_leaves_a_charging_car_alone(cfg) -> None:  # Präzisierung 13
+    situation = inputs(cfg, grid_obs=grid(l1=18.0, l2=18.0), **NOW_AT_16_A)
+    blocked = PeakLimits(no_start=frozenset({"egolf"}))
+    found = controller(cfg).step(situation, blocked)
+    assert found == controller(cfg).step(situation)
+    assert [x.command.kind for x in found] == [CURRENT, CHARGING]
+
+
+def test_boost_ignores_peak_limits(cfg) -> None:
+    until = T0 + timedelta(hours=2)
+    intent = Intent(version=1, control=True, vehicles={"egolf": VehicleIntent(boost_until=until)})
+    situation = inputs(cfg, intent=intent, grid_obs=grid(l1=20.0, l2=20.0))
+    limits = PeakLimits(caps_w={"egolf": 0.0}, no_start=frozenset({"egolf"}))
+    found = controller(cfg).step(situation, limits)
+    assert found == controller(cfg).step(situation)
+    assert [x.command for x in found] == [
+        Command("wallbox.evcs", CURRENT, 13.0, reasons=("boost", "phase_limit")),
+        Command("wallbox.evcs", CHARGING, True, reasons=("boost", "phase_limit")),
+    ]
+
+
+def test_a_peak_cap_that_does_not_bind_changes_nothing(cfg) -> None:
+    # Frei sind 33 − (40 − 16) = 9 A; die Grenze 4600 W sind 10 A: Es bleibt beim Phasenwächter.
+    capped = PeakLimits(caps_w={"egolf": 4600.0})
+    situation = inputs(cfg, grid_obs=grid(l1=40.0, l2=18.0), **NOW_AT_16_A)
+    without = controller(cfg).step(situation)
+    assert controller(cfg).step(situation, capped) == without
+    reasons = ("mode_now", "phase_limit")
+    assert without[0].command == Command("wallbox.evcs", CURRENT, 9.0, urgent=True, reasons=reasons)
+    # Ein unbekannter freier Strom bleibt unbekannt: höchstens der Mindeststrom, kein Start.
+    unknown = inputs(cfg, intent=egolf_in(ChargeMode.NOW), grid_obs=grid(l1=None))
+    without = controller(cfg).step(unknown)
+    assert controller(cfg).step(unknown, capped) == without
+    assert [x.command for x in without] == [Command("wallbox.evcs", CURRENT, 6.0, reasons=reasons)]
+
+
+def test_a_lowering_the_fuse_demands_stays_urgent_below_a_peak_cap(cfg) -> None:
+    # Wieder 9 A frei an der Sicherung, die Grenze 3680 W ist aber 3680 / 460 = 8 A: Der Strom geht
+    # auf 8 A mit dem Grund des 15-min-Wächters. Dringend bleibt die Senkung, weil die Sicherung
+    # allein sie schon verlangt; mit 31 A frei ist dieselbe Senkung normal.
+    capped = PeakLimits(caps_w={"egolf": 3680.0})
+    reasons = ("mode_now", "peak_guard")
+    fuse = controller(cfg).step(inputs(cfg, grid_obs=grid(l1=40.0, l2=18.0), **NOW_AT_16_A), capped)
+    assert fuse[0].command == Command("wallbox.evcs", CURRENT, 8.0, urgent=True, reasons=reasons)
+    free = controller(cfg).step(inputs(cfg, grid_obs=grid(l1=18.0, l2=18.0), **NOW_AT_16_A), capped)
+    assert free[0].command == Command("wallbox.evcs", CURRENT, 8.0, reasons=reasons)
+
+
+@pytest.mark.parametrize(("l1", "urgent"), [(18.0, False), (40.0, True)], ids=["cap", "fuse_too"])
+def test_unknown_plug_state_lowers_to_the_peak_cap(cfg, l1, urgent) -> None:  # Präzisierung 4
+    # Bei unbekanntem Ansteckzustand sinkt der Strom nur für eine Grenze, auch für die des
+    # 15-min-Wächters (8 A); dringend nur, wenn die Sicherung es verlangt (bei 40 A auf L1 9 A).
+    unknown = replace(AT_16_A, connected=None, charging=None, complete=None)
+    situation = inputs(
+        cfg,
+        intent=egolf_in(ChargeMode.NOW),
+        evcs_obs=unknown,
+        present=at_evcs(16.0, True),
+        grid_obs=grid(l1=l1, l2=18.0),
+    )
+    found = controller(cfg).step(situation, PeakLimits(caps_w={"egolf": 3680.0}))
+    reasons = ("mode_now", "peak_guard")
+    assert [x.command for x in found] == [
+        Command("wallbox.evcs", CURRENT, 8.0, urgent=urgent, reasons=reasons)
+    ]
+
+
+def test_the_tesla_window_sees_the_capped_free_current(cfg) -> None:  # Präzisierung 12
+    # Der Tesla in Sofort am Wall Connector; die Grenze 6900 W ist 6900 / (230 V · 3 Phasen) = 10 A
+    # und gilt nur in der ersten Sekunde. Das vorsichtige Fenster (tesla_caution_s, 60 s) hält die
+    # 10 A, bis sie herausfallen.
+    tesla_now = Intent(version=1, control=True, vehicles={"tesla": NOW})
+    capped = PeakLimits(caps_w={"tesla": 6900.0})
+    found = run(
+        controller(cfg),
+        cfg,
+        62,
+        intent=tesla_now,
+        peak=lambda s: capped if s == 0 else NO_LIMITS,
+        **TESLA_PLUGGED,
+    )
+    reasons = ("mode_now", "peak_guard")
+    assert [(t, c.command) for t, c in found if c.command.actuator == "vehicle.tesla"] == [
+        (0, Command("vehicle.tesla", CURRENT, 10.0, reasons=reasons)),
+        (0, Command("vehicle.tesla", CHARGING, True, reasons=reasons)),
+        (61, Command("vehicle.tesla", CURRENT, 16.0, reasons=("mode_now",))),
+    ]
+
+
+def test_a_cap_at_the_minimum_power_carries_the_minimum_current(cfg) -> None:
+    # Mit 229,7 V ist die Mindestleistung des e-Golf 6 A · 229,7 V · 2 = 2756,4 W; zurückgerechnet
+    # landet sie knapp unter 6 A. Die Grenze genau am Boden trägt trotzdem den Mindeststrom: Der
+    # e-Golf in Sofort startet mit 6 A.
+    grid_229 = cfg.grid.model_copy(update={"voltage_nominal_v": 229.7})
+    odd = cfg.model_copy(update={"grid": grid_229})
+    limits = PeakLimits(caps_w={"egolf": 6 * 229.7 * 2})
+    found = controller(odd).step(inputs(odd, intent=egolf_in(ChargeMode.NOW)), limits)
+    reasons = ("mode_now", "peak_guard")
+    assert [x.command for x in found] == [
+        Command("wallbox.evcs", CURRENT, 6.0, reasons=reasons),
+        Command("wallbox.evcs", CHARGING, True, reasons=reasons),
     ]

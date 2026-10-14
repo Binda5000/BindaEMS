@@ -1,7 +1,7 @@
-"""Eigenschaften des 15-min-Wächters, Teil 1 (Design 6.1, 6.2; Präzisierungen 9, 10, 12, 14).
+"""Eigenschaften des 15-min-Wächters (Design 6.1 bis 6.3; Präzisierungen 9 bis 12 und 14).
 
-hypothesis erzeugt Energien, Zeitpunkte, Ziele und Verläufe von Schritten. Die Orakel rechnen aus
-der Definition noch einmal, nicht schrittweise wie der Code:
+hypothesis erzeugt Energien, Zeitpunkte, Ziele, Autos und Verläufe von Schritten. Die Orakel rechnen
+aus der Definition noch einmal, nicht schrittweise wie der Code:
 
 - das Budget ``P_zul``: immer endlich und gleich ``(Ziel · 250 − E) · 3600 / max(1, Rest) − Marge``;
   für jede endliche Energie nie NaN oder ±∞ (Global Constraint ``grid_budget_w``), auch wenn die
@@ -12,7 +12,13 @@ der Definition noch einmal, nicht schrittweise wie der Code:
   endlich und nie negativ, wo sie das nicht sein dürfen, und
   - „lückenhaft“ gilt in derselben Viertelstunde, bis sie endet,
   - „überschritten“ gilt in derselben Viertelstunde, bis sie endet, und nur dann steht der Alarm,
-  - eine neue Viertelstunde beginnt nicht überschritten.
+  - eine neue Viertelstunde beginnt nicht überschritten,
+  - ein Auto in Boost bekommt nie eine Grenze und steht nie in der Start-Sperre.
+- die Drosselung (``throttle``) mit beliebigen Autos, Grenzen und Senkungen: Sie hält die
+  Reihenfolge von Design 6.3 ein (Stufen und darin die Priorität), lässt Boost und Aus aus, setzt
+  keine Grenze unter den Boden und senkt zusammen nie mehr als verlangt, aber so viel, wie sie kann.
+- beliebige Verläufe ohne Lücke mit Autos, die ihren Modus wechseln: Eine Grenze steigt nie, je
+  Schritt fällt höchstens eine weg, und zwischen zwei Änderungen liegen mindestens ``SETTLE_S``.
 """
 
 import math
@@ -24,7 +30,15 @@ from hypothesis import example, given, settings
 from hypothesis import strategies as st
 
 from bindaems.core.control.charge_modes import Effective
-from bindaems.core.control.peak_guard import NO_LIMITS, PeakCar, PeakGuard, QuarterObs
+from bindaems.core.control.peak_guard import (
+    NO_LIMITS,
+    SETTLE_S,
+    Cap,
+    PeakCar,
+    PeakGuard,
+    QuarterObs,
+    throttle,
+)
 from bindaems.shared.config import ControlConfig
 from bindaems.shared.timeutil import SLOT, slot_end, slot_start
 
@@ -116,6 +130,7 @@ def test_the_reduction_is_finite_for_any_finite_wanted_grid_and_base(
 # --- Verläufe -------------------------------------------------------------------------------------
 
 EGOLF_BOOST = PeakCar("egolf", "evcs", Effective.BOOST, 0, 3600.0, 3600.0, 1380.0)
+TESLA_NOW = PeakCar("tesla", "twc", Effective.NOW, 1, 11040.0, 11040.0, 3450.0)  # drosselbar
 
 # Ein Schritt: Sekunden seit dem vorigen (negativ: die Wanduhr springt zurück), die Viertelstunde
 # (richtig, fehlend oder die eines anderen Slots), Bilanz, Energie bisher und Netzanteil der
@@ -165,15 +180,16 @@ def test_any_course_of_steps_keeps_the_guard_consistent(steps) -> None:
         now += timedelta(seconds=seconds)
         quarter = observation(kind, now, grid_w, wh, share)
         usable = kind == "right" and math.isfinite(wh)
-        limits = guard.step(now, quarter, [EGOLF_BOOST], 0.0, 0.0, 60.0)  # darf nie werfen
+        limits = guard.step(now, quarter, [EGOLF_BOOST, TESLA_NOW], 0.0, 0.0, 60.0)  # wirft nie
         health, alarms = guard.health(), guard.alarms()
         state = health["state"]
 
         assert state in {"gap", "active", "exceeded"}
         assert health["quarter_end"] == slot_end(now).isoformat()
         assert bool(alarms) == (state == "exceeded")
-        assert limits.caps_w == {}  # Drosselung und Start-Sperre folgen in Task 10
-        assert limits.no_start == frozenset()
+        assert set(limits.caps_w) <= {"tesla"}  # Boost nie
+        assert all(3450.0 <= cap_w < 11040.0 for cap_w in limits.caps_w.values())  # über dem Boden
+        assert limits.no_start <= {"tesla"}
         for key in ("energy_kwh", "projected_kw", "budget_kw", "reduction_kw"):
             assert health[key] is None or math.isfinite(health[key])
         for key in ("energy_kwh", "reduction_kw"):
@@ -200,3 +216,150 @@ def test_any_course_of_steps_keeps_the_guard_consistent(steps) -> None:
                 if was == "gap" and then_usable and usable:  # die Lücke gilt bis zum Ende
                     assert state == "gap"
         before = (now, state, alarms, usable)
+
+
+# --- Drosselung -----------------------------------------------------------------------------------
+
+LEVEL = {Effective.PV: 0, Effective.MIN_PV: 1, Effective.NOW: 2}  # die Stufen in ihrer Reihenfolge
+POWER = st.floats(0.0, 11000.0)
+TOLERANCE_W = 1e-6  # Rundung der Gleitkommazahlen
+
+
+def floor_w(car: PeakCar) -> float:
+    """Der Boden eines Autos: in PV-Überschuss 0 W, in Min+PV und Sofort seine Mindestleistung."""
+    return 0.0 if car.mode is Effective.PV else car.min_w
+
+
+def turn(car: PeakCar) -> tuple[int, int]:
+    """Wann ein Auto an der Reihe ist: nach seiner Stufe, darin die niedrigste Priorität zuerst."""
+    return LEVEL[car.mode], -car.rank
+
+
+@st.composite
+def throttle_cases(draw):
+    """Bis zu sechs Autos mit eindeutigem Rang, zum Teil mit Grenze, und eine Senkung in W.
+
+    Leistung und Netzanteil sind unabhängig voneinander, die Leistung ist auch unbekannt; eine alte
+    Grenze kann unter dem Boden liegen, wie nach einem Wechsel des Modus.
+    """
+    ranks = draw(st.permutations(range(draw(st.integers(0, 6)))))
+    cars, caps = [], {}
+    for index, rank in enumerate(ranks):
+        car = PeakCar(
+            f"car{index}",
+            f"wb{index}",
+            draw(st.sampled_from(list(Effective))),
+            rank,
+            draw(POWER | st.none()),
+            draw(st.just(0.0) | POWER),
+            # min_a × U × Phasen, auch mit einer Spannung, deren Produkt nicht glatt aufgeht
+            draw(
+                st.sampled_from([1380.0, 2760.0, 3450.0, 4140.0, 7360.0])
+                | st.floats(1000.0, 8000.0)
+            ),
+        )
+        cars.append(car)
+        if draw(st.booleans()):
+            caps[car.vehicle] = Cap(draw(POWER), draw(st.floats(1.0, 11000.0)))
+    return cars, caps, draw(st.floats(-1000.0, 40000.0))
+
+
+A = PeakCar("a", "twc", Effective.NOW, 0, 7000.0, 7000.0, 3450.0)
+B = PeakCar("b", "evcs", Effective.MIN_PV, 1, 4000.0, 4000.0, 2760.0)
+C = PeakCar("c", "x", Effective.PV, 2, 3000.0, 3000.0, 1380.0)
+SMALL_C = PeakCar("c", "x", Effective.PV, 2, 3000.0, 600.0, 1380.0)  # wenig Netzanteil
+FIRST = {"a": Cap(6240.0, 760.0), "b": Cap(2760.0, 1240.0), "c": Cap(0.0, 3000.0)}
+# 8 A · 229,7 V · 1 Phase: 6349,103 W − (6349,103 W − 1837,6 W) rundet auf 1837,5999999999995 W.
+ODD_FLOOR = PeakCar("odd", "w", Effective.NOW, 0, 6349.103, 11000.0, 8 * 229.7)
+
+
+@settings(max_examples=500, deadline=None)
+@given(throttle_cases())
+@example(([A, B, C], {}, 5000.0))  # Design 6.3: 0 W, 2760 W und 6240 W
+@example(([A, SMALL_C], {}, 3000.0))  # „c“ bleibt über seinem Boden, „a“ trägt den Rest
+@example(([A, B, C], FIRST, 1000.0))  # von den Grenzen aus: nur „a“ kann noch sinken
+@example(([ODD_FLOOR], {}, 40000.0))  # bis zum Boden, nicht ein Bit darunter
+def test_throttling_keeps_the_order_and_leaves_boost_alone(case) -> None:
+    # Ein Auto sinkt höchstens um seinen Netzanteil (Präzisierung 11). Wer vor einem gesenkten Auto
+    # an der Reihe ist, ist daher an seinem Boden oder um seinen ganzen Netzanteil gesenkt, nicht
+    # unbedingt an seinem Boden, wie die Skizze des Tests in Task 10 des Plans sagt.
+    cars, before, amount_w = case
+    after = throttle(cars, before, amount_w)
+
+    start = {}  # der Ausgang je Auto: seine Grenze oder, ohne Grenze, seine Leistung
+    for car in cars:
+        cap = before.get(car.vehicle)
+        start[car.vehicle] = car.power_w if cap is None else cap.cap_w
+    cut = {}  # die Senkung dieses Schritts je Auto
+    assert set(before) <= set(after)  # Drosseln hebt keine Grenze auf
+    for car in cars:
+        old, new = before.get(car.vehicle), after.get(car.vehicle)
+        if new == old:
+            continue
+        assert car.mode in LEVEL  # nie Boost oder Aus
+        assert start[car.vehicle] is not None
+        # Keine Grenze unter dem Boden. Gleich dem Ausgang ist sie nur, wenn die Senkung unter der
+        # Rundung liegt (ein Netzanteil von 1e-308 W).
+        assert floor_w(car) <= new.cap_w <= start[car.vehicle]
+        cut[car.vehicle] = start[car.vehicle] - new.cap_w
+        assert cut[car.vehicle] <= car.grid_w + TOLERANCE_W  # höchstens sein Netzanteil
+        assert new.cut_w == pytest.approx(cut[car.vehicle] + (0.0 if old is None else old.cut_w))
+    assert sum(cut.values()) <= max(0.0, amount_w) + TOLERANCE_W  # nie mehr als verlangt
+
+    def exhausted(car: PeakCar) -> bool:
+        """Ob das Auto nicht weiter sinken kann.
+
+        Es hat keinen Netzanteil oder keinen Ausgang, oder es ist an seinem Boden (oder darunter)
+        oder um seinen ganzen Netzanteil gesenkt.
+        """
+        begin = start[car.vehicle]
+        if car.grid_w <= 0.0 or begin is None:
+            return True
+        done_w = cut.get(car.vehicle, 0.0)
+        return begin - done_w <= floor_w(car) + TOLERANCE_W or done_w >= car.grid_w - TOLERANCE_W
+
+    throttleable = [car for car in cars if car.mode in LEVEL]
+    for car in throttleable:
+        if car.vehicle in cut:  # Wer vor ihm an der Reihe ist, kann nicht weiter sinken.
+            assert all(exhausted(other) for other in throttleable if turn(other) < turn(car))
+    if sum(cut.values()) < amount_w - TOLERANCE_W:  # weniger als verlangt: Keins kann mehr sinken.
+        assert all(exhausted(car) for car in throttleable)
+
+
+# Ein Verlauf ohne Lücke ab 18:00:00 (höchstens 800 s): Sekunden seit dem vorigen Schritt, ``W`` und
+# der Stand zweier Autos (Modus, Leistung, Netzanteil). Mit E 0 Wh und Mittel 0 W steigt ``P_zul``
+# von 7700 W an: Erst drosselt der Wächter, später hebt er auf.
+CAR_STATE = st.tuples(st.sampled_from(list(Effective)), POWER | st.none(), POWER)
+COURSE = st.lists(
+    st.tuples(st.sampled_from([1, 1, 1, 2, 5, 10]), st.floats(0.0, 20000.0), CAR_STATE, CAR_STATE),
+    min_size=1,
+    max_size=80,
+)
+
+
+@settings(max_examples=300, deadline=None)
+@given(COURSE)
+def test_caps_never_rise_and_change_only_after_settling(course) -> None:  # Präzisierung 11
+    guard = PeakGuard(ControlConfig(peak_target_kw=8.0), reserve_soc_pct=20.0)
+    now = QUARTER
+    before: dict[str, float] = {}  # die Grenzen des vorigen Schritts
+    changed = None  # die letzte Änderung einer Grenze
+    for index, (seconds, wanted_w, *states) in enumerate(course):
+        if index:
+            now += timedelta(seconds=seconds)
+        cars = [
+            PeakCar(f"car{rank}", f"wb{rank}", mode, rank, power_w, grid_w, 2760.0)
+            for rank, (mode, power_w, grid_w) in enumerate(states)
+        ]
+        quarter = QuarterObs(slot_start(now), 0.0, 0.0, {})
+        caps = dict(guard.step(now, quarter, cars, wanted_w, 0.0, 60.0).caps_w)
+
+        throttleable = {car.vehicle for car in cars if car.mode in LEVEL}
+        assert set(caps) <= throttleable  # nie Boost oder Aus
+        kept = {vehicle: cap for vehicle, cap in before.items() if vehicle in throttleable}
+        assert len(set(kept) - set(caps)) <= 1  # höchstens ein Aufheben je Schritt
+        assert all(caps[vehicle] <= kept[vehicle] for vehicle in caps if vehicle in kept)
+        if caps != kept:  # gesetzt, gesenkt oder aufgehoben; Boost und Aus fallen still weg
+            assert changed is None or (now - changed).total_seconds() >= SETTLE_S
+            changed = now
+        before = caps

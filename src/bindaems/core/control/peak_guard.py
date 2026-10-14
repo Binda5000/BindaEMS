@@ -1,18 +1,20 @@
-"""15-min-Wächter, Teil 1: Messung, Budget, Hochrechnung und Zustände.
+"""15-min-Wächter: Messung, Budget, Hochrechnung, Zustände, Drosselung und Start-Sperre.
 
-Plan 2c-2a, Design 6.1 bis 6.4 und 9, Präzisierungen 9, 10, 12 und 14. Leistungen in W, Energien in
-Wh; ``health`` zeigt kW und kWh.
+Plan 2c-2a, Design 6.1 bis 6.4 und 9, Präzisierungen 9 bis 14. Leistungen in W, Energien in Wh;
+``health`` zeigt kW und kWh.
 
 - ``QuarterObs``: die laufende Viertelstunde, wie die Abrechnung sie zählt
 - ``PeakCar``: ein Auto für den Wächter
 - ``PeakLimits`` und ``NO_LIMITS``: was der Wächter den anderen Bausteinen vorgibt
-- ``PeakGuard``: Messung, Lücken, ``P_zul``, Hochrechnung, verlangte Senkung und Budget für den Akku
-  und der Zustand ``off``, ``gap``, ``active`` oder ``exceeded``
+- ``Cap``, ``throttle``, ``lift``, ``pending_w`` und ``no_start``: Drosselung, Aufheben und
+  Start-Sperre als reine Rechnungen (Präzisierungen 11 und 13)
+- ``PeakGuard``: Messung, Lücken, ``P_zul``, Hochrechnung, verlangte Senkung, Budget für den Akku,
+  die Grenzen je Fahrzeug über die Viertelstunde, die Start-Sperre und der Zustand ``off``, ``gap``,
+  ``active`` oder ``exceeded``
 
-Die Drosselung der Wallboxen (``caps_w``) und die Start-Sperre (``no_start``) folgen in Teil 2; bis
-dahin bleiben sie leer. Ein fehlender Wert ist ``None`` (unbekannt), ebenso ein Wert, der keine
-endliche Zahl ist (``finite_number``). Die Schicht ist rein: Die Zeit kommt als Argument, auf der
-Wanduhr, wie die Viertelstunden der Abrechnung. Springt sie, stürzt der Wächter nicht ab.
+Ein fehlender Wert ist ``None`` (unbekannt), ebenso ein Wert, der keine endliche Zahl ist
+(``finite_number``). Die Schicht ist rein: Die Zeit kommt als Argument, auf der Wanduhr, wie die
+Viertelstunden der Abrechnung. Springt sie, stürzt der Wächter nicht ab.
 """
 
 from __future__ import annotations
@@ -33,12 +35,17 @@ from bindaems.shared.timeutil import HOLD_MAX_S, LOCAL_TZ, slot_end, slot_start
 GAP_S: Final = 10.0  # mehr als so lange ohne bekannte Leistung: Die Viertelstunde ist lückenhaft
 MEAN_S: Final = 30.0  # das Fenster des Mittels vom Netzbezug ohne Boost
 EXCEEDED_AFTER_S: Final = 60.0  # so lange ununterbrochen über dem Ziel: überschritten
+SETTLE_S: Final = 30.0  # so lange nach der letzten Änderung einer Grenze keine neue Änderung
+RELEASE_W: Final = 1000.0  # so viel Spielraum über ihrer Senkung hinaus hebt eine Grenze auf
+LAST_S: Final = 120.0  # in den letzten so vielen Sekunden der Viertelstunde gilt die Start-Sperre
 PEAK_EXCEEDED: Final = "peak.exceeded"  # die ID des Alarms (Design 9)
 
 PeakState = Literal["off", "gap", "active", "exceeded"]  # der Zustand des Wächters (Health)
 
 _QUARTER_H: Final = 0.25  # die Länge einer Viertelstunde in h
 _MIN_REST_S: Final = 1.0  # kürzeste Restzeit der Rechnung: Am Ende wird nicht durch 0 geteilt
+# Die Stufen der Drosselung in ihrer Reihenfolge (Design 6.3); Boost und Aus gehören zu keiner.
+_LEVELS: Final = (Effective.PV, Effective.MIN_PV, Effective.NOW)
 
 
 @dataclass(frozen=True)
@@ -73,8 +80,8 @@ class PeakCar:
     - ``grid_w``: sein Netzanteil (Präzisierung 11)
     - ``min_w``: die Mindestleistung seines Ladepunkts
 
-    Teil 1 liest nur ``wallbox`` und ``mode``: Es zieht den Netzanteil der Autos in Boost ab. Die
-    übrigen Felder braucht die Drosselung (Teil 2).
+    Die Messung liest nur ``wallbox`` und ``mode``: Sie zieht den Netzanteil der Autos in Boost ab.
+    Die übrigen Felder brauchen Drosselung und Start-Sperre.
     """
 
     vehicle: str
@@ -92,8 +99,10 @@ class PeakLimits:
 
     - ``budget_w``: das Budget ``P_zul`` in W für den Akku-Sollwert und die Safety-Schicht; ``None``
       heißt keins
-    - ``caps_w``: die Leistungsgrenze je Fahrzeug in W (Teil 2)
-    - ``no_start``: die Fahrzeuge, die nicht starten sollen (Teil 2)
+    - ``caps_w``: die Leistungsgrenze je Fahrzeug in W (Präzisierung 11)
+    - ``no_start``: die Fahrzeuge, die nicht starten sollen (Präzisierung 13)
+
+    Grenzen und Start-Sperre nennen nie ein Fahrzeug in Boost oder Aus.
     """
 
     budget_w: float | None = None
@@ -102,6 +111,19 @@ class PeakLimits:
 
 
 NO_LIMITS: Final = PeakLimits()  # keine Vorgabe: Der Wächter ruht, oder die Messung fehlt
+
+
+@dataclass(frozen=True)
+class Cap:
+    """Die Grenze eines gedrosselten Autos (Präzisierung 11); Leistungen in W.
+
+    - ``cap_w``: die Leistungsgrenze
+    - ``cut_w``: die gesamte Senkung des Autos, seit es die Grenze hat; an ihr misst sich das
+      Aufheben
+    """
+
+    cap_w: float
+    cut_w: float
 
 
 @dataclass(frozen=True)
@@ -128,6 +150,8 @@ class _Running:
     - ``boost_wh``: die Energie der Autos in Boost bisher
     - ``over_since``: seit wann die Hochrechnung ununterbrochen über dem Ziel liegt
     - ``exceeded``: der Alarm, sobald die Viertelstunde überschritten ist
+    - ``caps``: die Grenzen je Fahrzeug; ``changed``: der letzte Schritt, in dem eine Grenze
+      entstand, sank oder aufgehoben wurde, ``None`` vor der ersten Änderung
     """
 
     start: datetime
@@ -136,6 +160,8 @@ class _Running:
     boost_wh: float = 0.0
     over_since: datetime | None = None
     exceeded: Alarm | None = None
+    caps: dict[str, Cap] = field(default_factory=dict)
+    changed: datetime | None = None
 
 
 @dataclass(frozen=True)
@@ -144,6 +170,8 @@ class _Calc:
 
     - ``energy_wh``: ``E_bisher`` ohne Boost
     - ``allowed_w``: ``P_zul``; mit dem Budget unter 0 ist es negativ
+    - ``rest_s``: ``t_rest``, die Restzeit der Viertelstunde in s, mindestens 1 s
+    - ``mean_w``: das Mittel des Netzbezugs ohne Boost; ``None`` ohne einen Wert im Fenster
     - ``projection_w``: die Hochrechnung auf die mittlere Leistung der Viertelstunde; ``None`` ohne
       Mittel
     - ``reduction_w``: die verlangte Senkung, auch unter 0; ``None`` ohne Mittel
@@ -151,6 +179,8 @@ class _Calc:
 
     energy_wh: float
     allowed_w: float
+    rest_s: float
+    mean_w: float | None
     projection_w: float | None
     reduction_w: float | None
 
@@ -187,14 +217,13 @@ class _Last:
 
 
 class PeakGuard:
-    """Der 15-min-Wächter, Teil 1: misst die Viertelstunde, rechnet und entscheidet den Zustand.
+    """Der 15-min-Wächter: misst die Viertelstunde, rechnet, drosselt und entscheidet den Zustand.
 
     Ohne ``control.peak_target_kw`` ruht er ganz: ``NO_LIMITS`` und Zustand ``off``. Sonst ist die
     laufende Viertelstunde ``slot_start(wall_now)`` bis ``slot_end(wall_now)``. Eine ``QuarterObs``
     gilt, wenn sie da ist, ihr ``start`` der Beginn dieser Viertelstunde ist und ``grid_wh`` eine
     endliche Zahl; sonst zählt sie wie keine. Die Leistung eines Schritts ist bekannt, wenn seine
-    ``QuarterObs`` gilt und ``grid_w`` eine endliche Zahl ist. Die Regeln (Präzisierungen 9, 10, 12
-    und 14):
+    ``QuarterObs`` gilt und ``grid_w`` eine endliche Zahl ist. Die Regeln (Präzisierungen 9 bis 14):
 
     - **Boost:** Der Netzanteil der Wallboxen der Autos in Boost zählt außerhalb des Budgets. Der
       Wächter integriert ihn nach dem Halteprinzip der Abrechnung: Der Anteil des vorigen Schritts
@@ -221,8 +250,15 @@ class PeakGuard:
     - **Hochrechnung und Senkung:** Die Hochrechnung ist ``(E_bisher + Mittel · t_rest) / 0,25 h``.
       Die verlangte Senkung ist ``max(Mittel, Basis + W) − P_zul``, bei unbekanntem ``W`` oder
       unbekannter Basis oder wenn ``Basis + W`` keine endliche Zahl ist ``Mittel − P_zul``; Health
-      zeigt sie mindestens 0. Beide brauchen das Mittel; ``P_zul`` braucht es nicht. In diesem Teil
-      ändert die Senkung keine Grenze.
+      zeigt sie mindestens 0. Beide brauchen das Mittel; ``P_zul`` braucht es nicht.
+    - **Drosselung:** Die Grenzen je Fahrzeug gelten bis zum Ende der Viertelstunde. Zuerst
+      verliert ein Auto, das nicht mehr unter ``cars`` steht oder in Boost oder Aus ist, still seine
+      Grenze; wechselt es nur zwischen PV-Überschuss, Min+PV und Sofort, behält es sie. Dann, mit
+      Mittel und frühestens ``SETTLE_S`` nach der letzten Änderung: Ist die Senkung über 0, drosselt
+      der Wächter um ``Senkung − ausstehend`` (``throttle``, ``pending_w``); sonst hebt er mit dem
+      Spielraum ``−Senkung`` höchstens eine Grenze auf (``lift``). Eine Grenze, die dabei entsteht,
+      sinkt oder wegfällt, ist eine Änderung; die erste einer Viertelstunde darf sofort kommen.
+    - **Start-Sperre:** ``no_start`` mit ``t_rest``, ``P_zul`` und dem Mittel.
     - **Überschritten:** Liegt die Hochrechnung ``EXCEEDED_AFTER_S`` lang ohne Unterbrechung über
       dem Ziel, ist die Viertelstunde überschritten, bis zu ihrem Ende, auch wenn danach eine Lücke
       folgt oder die ``QuarterObs`` fehlt. Gezählt wird nur in Schritten, die rechnen; ein Schritt,
@@ -230,9 +266,11 @@ class PeakGuard:
       Moment; Text und ``since`` bleiben bis zum Ende der Viertelstunde fest.
 
     Ein Schritt rechnet, wenn seine ``QuarterObs`` gilt, die Viertelstunde keine Lücke hat und
-    ``P_zul`` endlich ist; nur dann gibt es Hochrechnung, Senkung und ``budget_w``, sonst
-    ``NO_LIMITS``. Der Zustand ist der erste, der zutrifft: ``off`` (kein Ziel), ``exceeded``,
-    ``gap`` (der Schritt rechnet nicht), sonst ``active``.
+    ``P_zul`` endlich ist; nur dann gibt es Hochrechnung, Senkung, ``budget_w``, Grenzen und
+    Start-Sperre, sonst ``NO_LIMITS``. Ein Schritt, der nicht rechnet, vergisst die Grenzen und ihre
+    letzte Änderung, wie das Ende der Viertelstunde. Grenzen und Start-Sperre hängen nicht vom SOC
+    ab, nur ``budget_w``. Der Zustand ist der erste, der zutrifft: ``off`` (kein Ziel),
+    ``exceeded``, ``gap`` (der Schritt rechnet nicht), sonst ``active``.
 
     Die Wanduhr darf springen: Ein Sprung zurück beginnt das Mittel neu (``MovingAverage`` verlangt
     eine steigende Zeit) und macht die laufende Viertelstunde lückenhaft, ein Schritt im selben
@@ -262,7 +300,7 @@ class PeakGuard:
         """Ein Zyklus zum Zeitpunkt ``wall_now`` (Wanduhr): misst, rechnet und gibt Grenzen vor.
 
         - ``quarter``: die laufende Viertelstunde; ``None`` heißt nicht da
-        - ``cars``: die Autos; hier zählen die in Boost
+        - ``cars``: die Autos, je Fahrzeug höchstens eins; die Priorität steht in ``rank``
         - ``wanted_w``: der gewollte Netzbezug ``W`` vor dem Wächter in W, ``base_w``: die Basis
           (``ess.grid_setpoint_w``); ist einer unbekannt, zählt für die Senkung nur das Mittel
         - ``soc_pct``: der SOC des Akkus in %; unbekannt gibt kein Budget für den Akku
@@ -291,7 +329,11 @@ class PeakGuard:
         else:
             state = "gap" if calc is None else "active"
         self._last = _Last(state, end, calc)
-        return self._limits(calc, soc_pct)
+        if calc is None:
+            running.caps, running.changed = {}, None  # wie am Ende der Viertelstunde
+            return NO_LIMITS
+        self._adjust(running, wall_now, calc, cars)
+        return self._limits(running, calc, cars, soc_pct)
 
     def idle(self) -> None:
         """Ein Zyklus ohne Regelung: Die laufende Viertelstunde ist lückenhaft bis zu ihrem Ende.
@@ -384,12 +426,12 @@ class PeakGuard:
             return None  # ein absurdes ``grid_wh`` lässt die Rechnung überlaufen
         mean_w = self._mean.value(now)
         if mean_w is None:
-            return _Calc(energy_wh, allowed_w, None, None)
+            return _Calc(energy_wh, allowed_w, rest_s, None, None, None)
         projection_w = (energy_wh + mean_w * rest_s / 3600.0) / _QUARTER_H
         wanted, base = finite_number(wanted_w), finite_number(base_w)
         with_base_w = None if wanted is None or base is None else finite_number(base + wanted)
         need_w = mean_w if with_base_w is None else max(mean_w, with_base_w)
-        return _Calc(energy_wh, allowed_w, projection_w, need_w - allowed_w)
+        return _Calc(energy_wh, allowed_w, rest_s, mean_w, projection_w, need_w - allowed_w)
 
     def _watch(
         self, running: _Running, now: datetime, end: datetime, calc: _Calc | None, target_w: float
@@ -408,12 +450,129 @@ class PeakGuard:
             )
             running.exceeded = Alarm(PEAK_EXCEEDED, Severity.WARNING, text, now)
 
-    def _limits(self, calc: _Calc | None, soc_pct: float | None) -> PeakLimits:
-        """Die Grenzen eines Schritts: Das Budget geht an den Akku, wenn der SOC es zulässt."""
+    def _adjust(
+        self, running: _Running, now: datetime, calc: _Calc, cars: Sequence[PeakCar]
+    ) -> None:
+        """Die Grenzen eines Schritts, der rechnet: drosseln oder aufheben (Präzisierung 11).
+
+        Was wegfällt, weil sein Auto geht oder in Boost oder Aus wechselt, ist keine Änderung.
+        """
+        modes = {car.vehicle: car.mode for car in cars}
+        caps = {
+            vehicle: cap for vehicle, cap in running.caps.items() if modes.get(vehicle) in _LEVELS
+        }
+        reduction_w, changed = calc.reduction_w, running.changed
+        if reduction_w is not None and (changed is None or lasted(changed, now, SETTLE_S)):
+            if reduction_w > 0.0:
+                found = throttle(cars, caps, reduction_w - pending_w(cars, caps))
+            else:
+                found = lift(cars, caps, -reduction_w)
+            if found != caps:
+                running.changed = now
+            caps = found
+        running.caps = caps
+
+    def _limits(
+        self, running: _Running, calc: _Calc, cars: Sequence[PeakCar], soc_pct: float | None
+    ) -> PeakLimits:
+        """Die Vorgaben eines Schritts, der rechnet (Präzisierungen 11 bis 13).
+
+        Das Budget geht an den Akku, wenn der SOC es zulässt; Grenzen und Start-Sperre gelten
+        unabhängig davon.
+        """
         soc = finite_number(soc_pct)
-        if calc is None or soc is None or soc <= self._budget_above_pct:
-            return NO_LIMITS
-        return PeakLimits(budget_w=calc.allowed_w)
+        above = soc is not None and soc > self._budget_above_pct
+        return PeakLimits(
+            budget_w=calc.allowed_w if above else None,
+            caps_w={vehicle: cap.cap_w for vehicle, cap in running.caps.items()},
+            no_start=no_start(cars, calc.rest_s, calc.allowed_w, calc.mean_w),
+        )
+
+
+def throttle(cars: Sequence[PeakCar], caps: Mapping[str, Cap], amount_w: float) -> dict[str, Cap]:
+    """Drosselt die Autos zusammen um höchstens ``amount_w`` (Präzisierung 11).
+
+    Die Reihenfolge ist PV-Überschuss, Min+PV, Sofort, innerhalb einer Stufe zuerst das Auto mit der
+    niedrigsten Priorität (dem höchsten ``rank``). Je Auto ist ``Ausgang`` seine Grenze oder, ohne
+    Grenze, seine Leistung, und der Boden in PV-Überschuss 0 W, sonst ``min_w``. Es sinkt um
+    ``min(Rest, Netzanteil, Ausgang − Boden)``, wenn das über 0 liegt; die neue Grenze ist
+    ``Ausgang`` minus diese Senkung, nie unter dem Boden, und ``cut_w`` wächst um sie. Ein Auto ohne
+    Netzanteil (ein Anteil, der keine endliche Zahl ist, zählt 0 W) oder ohne Ausgang (ohne Grenze
+    und ohne bekannte Leistung) bleibt, wie es ist, ebenso jedes in Boost oder Aus. Zurück kommen
+    alle Grenzen, die von ``caps`` mit den neuen.
+    """
+    found = dict(caps)
+    rest_w = amount_w
+    for car in _in_order(cars):
+        if rest_w <= 0.0:
+            break
+        cap = found.get(car.vehicle)
+        start_w = finite_number(car.power_w) if cap is None else cap.cap_w
+        if start_w is None:
+            continue
+        floor_w = _floor_w(car)
+        cut_w = min(rest_w, finite_number(car.grid_w) or 0.0, start_w - floor_w)
+        if cut_w > 0.0:
+            total_w = cut_w if cap is None else cap.cut_w + cut_w
+            found[car.vehicle] = Cap(max(floor_w, start_w - cut_w), total_w)
+            rest_w -= cut_w
+    return found
+
+
+def lift(cars: Sequence[PeakCar], caps: Mapping[str, Cap], headroom_w: float) -> dict[str, Cap]:
+    """Hebt höchstens eine Grenze ganz auf (Präzisierung 11).
+
+    ``headroom_w`` ist der Spielraum ``P_zul − max(Mittel, Basis + W)``. In umgekehrter Reihenfolge
+    der Drosselung (Sofort, Min+PV, PV-Überschuss, innerhalb einer Stufe die höchste Priorität
+    zuerst) fällt die erste Grenze weg, deren Senkung ``cut_w`` plus ``RELEASE_W`` höchstens der
+    Spielraum ist. Zurück kommen die übrigen Grenzen.
+    """
+    for car in reversed(_in_order(cars)):
+        cap = caps.get(car.vehicle)
+        if cap is not None and cap.cut_w + RELEASE_W <= headroom_w:
+            return {vehicle: kept for vehicle, kept in caps.items() if vehicle != car.vehicle}
+    return dict(caps)
+
+
+def pending_w(cars: Sequence[PeakCar], caps: Mapping[str, Cap]) -> float:
+    """Was die gedrosselten Autos ihrer Grenze noch nicht gefolgt sind, in W (Präzisierung 11).
+
+    Je Auto mit Grenze ``max(0, Leistung − Grenze)``; ohne bekannte Leistung gilt es als nicht
+    gefolgt, und seine ganze Senkung ``cut_w`` steht aus.
+    """
+    total_w = 0.0
+    for car in cars:
+        cap = caps.get(car.vehicle)
+        if cap is not None:
+            power_w = finite_number(car.power_w)
+            total_w += cap.cut_w if power_w is None else max(0.0, power_w - cap.cap_w)
+    return total_w
+
+
+def no_start(
+    cars: Sequence[PeakCar], rest_s: float, allowed_w: float, mean_w: float | None
+) -> frozenset[str]:
+    """Die Fahrzeuge, die nicht starten sollen (Präzisierung 13).
+
+    In den letzten ``LAST_S`` Sekunden der Viertelstunde (``rest_s`` ist ``t_rest``) jedes Auto in
+    PV-Überschuss, Min+PV oder Sofort, dessen Mindestleistung über ``P_zul − Mittel`` liegt, ob es
+    lädt oder nicht; die Laderegelung hält nur ein Auto an, das nicht lädt. Ohne Mittel keins.
+    """
+    if rest_s > LAST_S or mean_w is None:
+        return frozenset()
+    room_w = allowed_w - mean_w
+    return frozenset(car.vehicle for car in cars if car.mode in _LEVELS and car.min_w > room_w)
+
+
+def _in_order(cars: Sequence[PeakCar]) -> list[PeakCar]:
+    """Die Autos, die der Wächter drosselt, in der Reihenfolge der Drosselung (Design 6.3)."""
+    levels = [car for car in cars if car.mode in _LEVELS]
+    return sorted(levels, key=lambda car: (_LEVELS.index(car.mode), -car.rank))
+
+
+def _floor_w(car: PeakCar) -> float:
+    """Der Boden der Drosselung: in PV-Überschuss 0 W, in Min+PV und Sofort ``min_w``."""
+    return 0.0 if car.mode is Effective.PV else car.min_w
 
 
 def _boost_w(wallbox_grid_w: Mapping[str, float], cars: Sequence[PeakCar]) -> float:

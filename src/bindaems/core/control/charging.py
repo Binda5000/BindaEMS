@@ -41,6 +41,16 @@ Dazu legt die Regelung fest:
   der Mindeststrom dem Importlimit vor (Design 6.3). Ist die Grenze unbekannt, unterbleibt er
   (Design 5.5). Trägt sie ihn wieder, startet das Auto nach den Regeln seines Modus. Ein Auto, das
   schon lädt, betrifft das nicht: Es geht auf den Mindeststrom.
+- Grenzen und Start-Sperre des 15-min-Wächters (``PeakLimits`` aus dem vorigen Zyklus, Plan 2c-2a,
+  Präzisierungen 3, 11 und 13) gelten für jedes Auto außer in Boost. Die Grenze eines Fahrzeugs in
+  W wird zu ``W / (U · Phasen des Ladepunkts)`` A. Liegt sie unter dem freien Strom des Wächters,
+  gilt sie an dessen Stelle mit dem Grund ``peak_guard``, schon für den Überschuss (``enough``) und
+  das Fenster des Tesla: Ein Auto in PV stoppt dann nach den Regeln seines Modus, Min+PV und
+  Sofort halten den Mindeststrom. Ein unbekannter freier Strom bleibt unbekannt. Eine Senkung wegen
+  der Grenze ist nie dringend; was die Sicherung allein verlangt, bleibt es. Ein Fahrzeug in
+  ``no_start`` startet nicht, wie bei einer Grenze, die den Mindeststrom nicht trägt; ein Auto, das
+  lädt, betrifft das nicht. Als ``limit_a`` nennen Health und Entscheidungslog weiter den freien
+  Strom des Phasenwächters.
 - Ein Start wartet, solange sein Strom gesendet werden muss, aber blockiert ist.
 - Ist der Ansteckzustand unbekannt, sinkt der Strom nur unter den Ist-Strom, wenn der Wächter es
   verlangt; „Laden aus“ kommt dann nur wegen Überlast.
@@ -96,6 +106,7 @@ from bindaems.core.control.charging_tesla import (
 )
 from bindaems.core.control.executor import WriteResult
 from bindaems.core.control.last_values import ControlCommand, Key, LastValues
+from bindaems.core.control.peak_guard import NO_LIMITS, PeakLimits
 from bindaems.core.control.phase_guard import (
     Claim,
     Grant,
@@ -189,14 +200,20 @@ class _Situation:
 
     - ``plugged``, ``charging``: angesteckt und lädt laut Zuordnung; ``None`` unbekannt
     - ``mode`` und ``decision``: der geltende Modus und das Urteil seiner ``ModeMachine``
-    - ``cause``: woran sich das Ziel des Wächters richtet (``phase_target``)
+    - ``cause``: woran sich die Grenze richtet: das Ziel des Wächters (``phase_target``) oder
+      ``PEAK_GUARD``, wenn die Grenze des 15-min-Wächters kappt
+    - ``fuse_a``: Kappt die Grenze des 15-min-Wächters und ist die Sicherung das Ziel, der freie
+      Strom des Wächters abgerundet; sonst ``None``. Was die Sicherung allein verlangt, bleibt
+      dringend (``_urgent``).
     - ``wanted``: der Wunsch in A, beim Tesla am Wall Connector das abgerundete Mittel
-    - ``limit``: die Grenze des Wächters in A, beim Tesla am Wall Connector der niedrigste freie
-      Wert im Fenster; ``share``: der Anteil am Überschuss (``None`` ohne)
+    - ``limit``: die Grenze in A, der freie Strom nach der Grenze des 15-min-Wächters, beim Tesla am
+      Wall Connector der niedrigste Wert davon im Fenster; ``share``: der Anteil am Überschuss
+      (``None`` ohne)
     - ``level``: die Überlast; ``unclear``: die Zuordnung ist unklar
     - ``resume``: die erste Startfolge nach einer Pause steht noch aus
-    - ``carries``: Die Grenze des Wächters ist bekannt und trägt den Mindeststrom, in Min+PV an der
-      Sicherung; nur dann darf ein Auto, das nicht lädt, starten (Design 5.3).
+    - ``carries``: Die Grenze ist bekannt und trägt den Mindeststrom, in Min+PV an der Sicherung,
+      und das Fahrzeug steht nicht in der Start-Sperre des 15-min-Wächters; nur dann darf ein Auto,
+      das nicht lädt, starten (Design 5.3, 6.4).
     """
 
     plugged: bool | None
@@ -204,6 +221,7 @@ class _Situation:
     mode: Effective
     decision: ModeDecision
     cause: GuardCause
+    fuse_a: int | None
     wanted: int
     limit: int
     share: int | None
@@ -258,14 +276,15 @@ class ChargeController:
         # Die Uhren des letzten ``step``: für das Weckkontingent in ``note_verdict`` und ``health``
         self._now = self._wall_now = started
 
-    def step(self, inputs: ChargeInputs) -> list[ChargeCommand]:
+    def step(self, inputs: ChargeInputs, peak: PeakLimits = NO_LIMITS) -> list[ChargeCommand]:
         """Ein Regelzyklus; die Befehle kommen in der Reihenfolge der Priorität.
 
         Befehle bekommt nur ein geregelter Ladepunkt, und nur für Arten, die nicht in
         ``inputs.blocked`` stehen; je Ladepunkt kommt der Strom vor „Laden an“. Ein Aktor, der
         nicht steuerbar ist, bekommt höchstens den Weckstart; ein Fahrzeug an der EVCS bekommt
-        seinen Höchststrom vor den Befehlen an die EVCS. Ablauf und Regeln stehen im Docstring des
-        Moduls.
+        seinen Höchststrom vor den Befehlen an die EVCS. ``peak`` sind Grenzen und Start-Sperre des
+        15-min-Wächters (Plan 2c-2a, Präzisierungen 3, 11 und 13); ohne sie gilt keine. Ablauf und
+        Regeln stehen im Docstring des Moduls.
         """
         now, intent = inputs.now, inputs.intent
         self._now, self._wall_now = now, inputs.wall_now
@@ -302,27 +321,38 @@ class ChargeController:
                 if vehicle.new_session:
                     self._unseen_sessions.add(key)
                 continue
-            decision = self._decide(
-                now, key, actuator, vehicle, modes[key], enough(point, share, free)
-            )
+            mode, target = modes[key], cycle.targets[key][1]
+            # Die Grenze des 15-min-Wächters: Liegt sie unter dem freien Strom, gilt sie an dessen
+            # Stelle, schon für den Überschuss und das Fenster des Tesla.
+            cause, free_a, fuse_a = target, free, None
+            cap_a = self._cap_a(point, mode, peak)
+            if cap_a is not None and free is not None and cap_a < free:
+                cause, free_a = GuardCause.PEAK_GUARD, cap_a
+                if target is GuardCause.PHASE_LIMIT:
+                    fuse_a = math.floor(free)
+            decision = self._decide(now, key, actuator, vehicle, mode, enough(point, share, free_a))
             if point.evcs:
                 wanted = cycle.wanted.get(key, 0)
-                limit = point.min_a if free is None else math.floor(free)
+                limit = point.min_a if free_a is None else math.floor(free_a)
             else:  # der Tesla am Wall Connector: Fenster (Präzisierung 12)
-                wanted, limit = self._tesla[key].limits(now, cycle.wanted.get(key), free)
+                wanted, limit = self._tesla[key].limits(now, cycle.wanted.get(key), free_a)
+            locked = mode is not Effective.BOOST and key in peak.no_start  # die Start-Sperre
             situation = _Situation(
                 plugged=vehicle.plugged,
                 charging=vehicle.charging,
-                mode=modes[key],
+                mode=mode,
                 decision=decision,
-                cause=cycle.targets[key][1],
+                cause=cause,
+                fuse_a=fuse_a,
                 wanted=wanted,
                 limit=limit,
                 share=share,
                 level=cycle.level,
                 unclear=vehicle.kind is AssignmentKind.UNCLEAR,
                 resume=key in self._resume,
-                carries=free is not None and limit + self._extra_a(modes[key]) >= point.min_a,
+                carries=not locked
+                and free_a is not None
+                and limit + self._extra_a(mode) >= point.min_a,
             )
             found = (
                 maximum_command(self._cfg, self._last, key, modes[key], inputs)
@@ -610,8 +640,9 @@ class ChargeController:
         ``MINIMUM`` stoppt sie dringend auch ein Auto, das lädt, obwohl sein Modus aus will (etwa
         selbst gestartet), außer solange die Zuordnung unklar ist. Beides gilt auch bei unbekanntem
         Ansteckzustand. Dringend sind die Befehle wegen Überlast und eine Senkung unter den
-        Ist-Strom, wenn das Ziel die Sicherung ist (Präzisierung 11), außer als erneuter Befehl
-        nach „nicht übernommen“ (``LastValues.command``). Ein Aktor, der nicht steuerbar ist
+        Ist-Strom, wenn das Ziel die Sicherung ist (Präzisierung 11; kappt die Grenze des
+        15-min-Wächters, nur was die Sicherung allein verlangt, ``_urgent``), außer als erneuter
+        Befehl nach „nicht übernommen“ (``LastValues.command``). Ein Aktor, der nicht steuerbar ist
         (geregelt ist er dann nur, weil er weckbar ist), bekommt höchstens den Weckstart. Starten
         darf ein Auto, das nicht lädt, nur, wenn die Grenze seinen Mindeststrom trägt
         (``carries``).
@@ -645,11 +676,7 @@ class ChargeController:
         else:
             value = min(max(min(situation.wanted, situation.limit), point.min_a), point.max_a)
             reasons = (*head, *_why(situation))
-        urgent = minimum or (
-            situation.cause is GuardCause.PHASE_LIMIT
-            and present_a is not None
-            and value < present_a
-        )
+        urgent = minimum or _urgent(situation, point, value, present_a, situation.wanted)
         return self._charge(
             actuator,
             float(value),
@@ -666,6 +693,20 @@ class ChargeController:
         if mode is Effective.MIN_PV:
             return self._guard.fuse_target_a - self._guard.import_target_a
         return 0.0
+
+    def _cap_a(self, point: ChargePoint, mode: Effective, peak: PeakLimits) -> float | None:
+        """Die Grenze des 15-min-Wächters für den Ladepunkt in A: ``W / (U · Zahl seiner Phasen)``.
+
+        Auf 1e-9 A gerundet: Eine Grenze genau an der Mindestleistung ``min_a × U × Phasen`` ergibt
+        so wieder ``min_a``, auch wenn die Gleitkommarechnung knapp darunter landet. ``None`` ohne
+        Grenze, in Boost und bei einer Grenze, die keine endliche Zahl ist.
+        """
+        if mode is Effective.BOOST:
+            return None
+        cap_w = finite_number(peak.caps_w.get(point.vehicle))
+        if cap_w is None:
+            return None
+        return round(cap_w / (self._limits.voltage_v * len(point.phases)), 9)
 
     def _wake(
         self, key: str, actuator: str, situation: _Situation, blocked: frozenset[Key]
@@ -691,8 +732,8 @@ class ChargeController:
         """Kein „Laden an/aus“, nur eine Senkung (Präzisierungen 4 und 5).
 
         So bei unbekanntem Ansteckzustand und solange die Zuordnung unklar ist: Der Strom sinkt
-        nur, wenn der Wächter (oder die Überlast) weniger als den bekannten Ist-Strom erlaubt, nie
-        unter ``min_a``.
+        nur, wenn der Wächter, die Grenze des 15-min-Wächters oder die Überlast weniger als den
+        bekannten Ist-Strom erlaubt, nie unter ``min_a``.
         """
         if present_a is None or (actuator, _CURRENT) in blocked:
             return []
@@ -702,7 +743,7 @@ class ChargeController:
         else:
             value = min(max(situation.limit, point.min_a), point.max_a)
             reasons = (*situation.head, situation.cause.value)
-            urgent = situation.cause is GuardCause.PHASE_LIMIT
+            urgent = _urgent(situation, point, value, present_a, point.max_a)  # ohne Wunsch
         if value >= present_a or not self._changed((actuator, _CURRENT), float(value)):
             return []
         return [self._last.command(actuator, _CURRENT, float(value), reasons, urgent=urgent)]
@@ -787,8 +828,8 @@ def _why(situation: _Situation) -> tuple[str, ...]:
     """Der Grund nach dem Modus-Code, wenn das Auto lädt und keine Überlast herrscht.
 
     ``pv_surplus``, wenn der Wert aus dem Anteil kommt (in PV oder Min+PV liegt der Wunsch nicht
-    über der Grenze des Wächters) oder die Zeiten von PV-Überschuss gerade gestartet haben; sonst
-    der Grund des Ziels (``GuardCause``), wenn der Wächter kappt; sonst keiner.
+    über der Grenze) oder die Zeiten von PV-Überschuss gerade gestartet haben; sonst der Grund der
+    Grenze (``GuardCause``, auch ``peak_guard``), wenn sie kappt; sonst keiner.
     """
     from_share = (
         situation.share is not None
@@ -800,6 +841,26 @@ def _why(situation: _Situation) -> tuple[str, ...]:
     if situation.limit < situation.wanted:
         return (situation.cause.value,)
     return ()
+
+
+def _urgent(
+    situation: _Situation, point: ChargePoint, value: int, present_a: float | None, wanted: int
+) -> bool:
+    """Ob eine Senkung auf ``value`` dringend ist (Präzisierung 11).
+
+    Dringend ist eine Senkung unter den Ist-Strom, wenn die Grenze sich nach der Sicherung richtet.
+    Kappt die Grenze des 15-min-Wächters (``fuse_a``), nur dann, wenn schon die Sicherung allein mit
+    dem Wunsch ``wanted`` unter den Ist-Strom senkte: Eine Senkung wegen dieser Grenze ist nie
+    dringend (Plan 2c-2a, Präzisierung 11), sie nimmt aber auch der Sicherung nichts.
+    """
+    if present_a is None or value >= present_a:
+        return False
+    if situation.cause is GuardCause.PHASE_LIMIT:
+        return True
+    fuse_a = situation.fuse_a
+    if fuse_a is None:
+        return False
+    return min(max(min(wanted, fuse_a), point.min_a), point.max_a) < present_a
 
 
 def _facts(
