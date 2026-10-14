@@ -55,7 +55,7 @@ Danach folgt die Abnahme der Phase 2 (Spec 18):
 3. Vor der Live-Schaltung von Victron schaltet der Betreiber Dynamic ESS ab (Entscheidung vom 10.10.2026).
 
 Stand an der Anlage (Angabe des Betreibers vom 10.10.2026):
-- `wallboxes.evcs.host` steht schon auf 192.168.81.41.
+- `wallboxes.evcs.host` steht schon auf der Adresse, unter der der Cerbo die EVCS liest.
 - Das Peak-Shaving-Importlimit steht schon knapp unter der Hausanschlusssicherung, bei etwa 33 A (Ebene 0).
   - Nachtrag 11.10.2026: Beide Prüfprotokolle lesen 20 A je Phase; laut Betreiber ist das gewollt.
 - **Offen vor 2b:** Das eigene EVCS-Registerabbild enthält trotz richtiger Adresse nur Nullen (Prüfprotokoll Teil 1, 17.1-8).

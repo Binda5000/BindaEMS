@@ -263,7 +263,7 @@ def check_peak_shaving(snap: Snapshot) -> Finding:
 
 
 def evcharger_connection(topics: Mapping[str, str], instance: int) -> str | None:
-    """Wie der Cerbo eine Wallbox anspricht, z. B. „Modbus TCP 192.168.81.41“."""
+    """Wie der Cerbo eine Wallbox anspricht, z. B. „Modbus TCP 192.0.2.41“."""
     suffix = f"/evcharger/{instance}/Mgmt/Connection"
     for topic, payload in topics.items():
         if topic.endswith(suffix):

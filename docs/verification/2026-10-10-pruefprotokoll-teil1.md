@@ -58,10 +58,10 @@
 - **EVCS-Registerabbild leer (17.1-8):** Die Register 5000–5199 sind alle 0, auch Produkt-ID
   und Firmware. Der „manuelle Modus“ stammte aus Register 5009 = 0 und war damit nicht belegt.
   - Die Rohdaten zeigen den Weg des Cerbo: `evcharger/40/Mgmt/Connection` = „Modbus TCP
-    192.168.81.41“ (`dbus-modbus-client`), Produkt-ID 49190 = 0xC026, Modell AC22NS, Modus 0
+    <Adresse der EVCS>“ (`dbus-modbus-client`), Produkt-ID 49190 = 0xC026, Modell AC22NS, Modus 0
     (manuell), Firmware 133631. Die EVCS ist also über Modbus TCP erreichbar und tatsächlich
     im manuellen Modus.
-  - Nachtrag: Laut Betreiber stand `wallboxes.evcs.host` schon auf 192.168.81.41. Die
+  - Nachtrag: Laut Betreiber stand `wallboxes.evcs.host` schon auf derselben Adresse. Die
     Adresse erklärt die Nullen also nicht. BindaEMS liest wie der Cerbo: Funktionscode 3,
     Unit-ID 1, ab Register 5000.
   - Diagnose vom 10.10.2026 (nur lesend, aus dem core-Container):

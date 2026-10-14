@@ -356,7 +356,7 @@ Demo-Zugänge: `admin`, `gast` (Lesen) und `sicher` (Admin mit TOTP, Geheimnis
 
 ## Stand der Installation beim Betreiber
 
-- Docker auf der VM `192.168.82.20`, Images `latest` vom Stand nach Plan 2b (ausgerollt am
+- Docker auf einer VM im LAN des Betreibers, Images `latest` vom Stand nach Plan 2b (ausgerollt am
   12.10.2026). Plan 2c-1 ist noch nicht ausgerollt.
 - Reverse Proxy mit HTTPS sowie Tarif und OeMAG-Wert im UI: laut Betreiber eingerichtet
   (11.10.2026). Zum Proxy gehören laut Betriebshandbuch 6: Port 8080 erreicht nur der Proxy,
@@ -386,8 +386,8 @@ Demo-Zugänge: `admin`, `gast` (Lesen) und `sicher` (Admin mit TOTP, Geheimnis
     hat.
 - **Befunde:**
   - Dynamic ESS bleibt nach Entscheidung des Betreibers an, bis Victron live geschaltet wird.
-  - Die EVCS (AC22NS, Produkt-ID 0xC026) liest der Cerbo per Modbus TCP unter
-    192.168.81.41. BindaEMS bekam unter derselben Adresse zuerst nur Nullen. Ursache war die
+  - Die EVCS (AC22NS, Produkt-ID 0xC026) liest der Cerbo per Modbus TCP unter ihrer
+    LAN-Adresse. BindaEMS bekam unter derselben Adresse zuerst nur Nullen. Ursache war die
     IP-Whitelist der EVCS: Die Adresse der VM stand nicht darauf. Die EVCS nimmt die Verbindung
     dann trotzdem an und liefert nur Nullen. Seit der Betreiber die Whitelist am 11.10.2026
     korrigiert hat, liest BindaEMS ihre Register selbst (Firmware v2.09, manueller Modus).

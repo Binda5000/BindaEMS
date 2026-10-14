@@ -13,7 +13,7 @@ vi.mock('$lib/api/endpoints', async (original) => ({
 }));
 vi.mock('$app/navigation', () => ({ goto }));
 const { state } = vi.hoisted(() => ({
-	state: { url: new URL('http://192.168.82.20:8080/login?next=%2F') }
+	state: { url: new URL('http://192.0.2.20:8080/login?next=%2F') }
 }));
 vi.mock('$app/state', () => ({ page: state }));
 

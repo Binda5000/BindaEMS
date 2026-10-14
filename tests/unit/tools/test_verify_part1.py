@@ -216,7 +216,7 @@ def test_empty_evcs_register_block_names_the_cerbo_path(tmp_path, monkeypatch) -
     # Prüfprotokoll 10.10.2026: eigenes Registerabbild leer, der Cerbo las die EVCS problemlos
     async def cerbo(self, duration_s: float) -> None:
         self.topics["N/c0619ab1234/evcharger/40/Mgmt/Connection"] = (
-            '{"value":"Modbus TCP 192.168.81.41"}'
+            '{"value":"Modbus TCP 192.0.2.41"}'
         )
         self.samples.append(self.store.snapshot())
 
@@ -242,7 +242,7 @@ def test_empty_evcs_register_block_names_the_cerbo_path(tmp_path, monkeypatch) -
     report, _ = _outputs(out)
     assert (
         "| 17.1-8 | EVCS-Registerabbild leer | WARNUNG | Alle 200 Register sind 0. Der Cerbo liest "
-        "die EVCS über „Modbus TCP 192.168.81.41“. Die EVCS antwortet über Modbus TCP nur "
+        "die EVCS über „Modbus TCP 192.0.2.41“. Die EVCS antwortet über Modbus TCP nur "
         "Adressen auf ihrer IP-Whitelist; prüfe dort die Adresse von BindaEMS, dann host, port "
         "und unit_id der Wallbox in config.yaml. |"
     ) in report
