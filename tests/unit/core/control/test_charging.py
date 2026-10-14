@@ -1,3 +1,4 @@
+import math
 from dataclasses import replace
 from datetime import timedelta
 
@@ -5,7 +6,8 @@ import pytest
 from tests.helpers import T0
 from tests.unit.core.control.charge_helpers import accept, evcs, grid, inputs, run, tesla, twc
 
-from bindaems.core.control.charging import ChargeController
+from bindaems.core.control.charge_modes import Effective
+from bindaems.core.control.charging import CarView, ChargeController
 from bindaems.core.control.executor import WriteResult
 from bindaems.core.safety.limits import HardLimits
 from bindaems.core.safety.types import Outcome, Verdict
@@ -899,6 +901,50 @@ def test_health_before_the_first_step_and_after_a_pause(cfg) -> None:
     accept(c, c.step(inputs(cfg)))
     c.idle(T0 + timedelta(seconds=1))
     assert c.health()[1] == {"id": "egolf", "name": "e-Golf", **unknown, "reason": "mode_pv"}
+
+
+def test_cars_show_the_points_of_the_last_step(cfg) -> None:  # Plan 2c-2a, Präzisierung 4
+    c = controller(cfg)
+    assert c.cars() == ()
+    charging = evcs(charging=True, power_w=2760.0)
+    c.step(inputs(cfg, evcs_obs=charging, intent=egolf_in(ChargeMode.NOW)))
+    # Je Ladepunkt nach Priorität: Der Tesla hat seinen am Wall Connector auch abgesteckt, er lädt
+    # nicht (0 W). ``min_w`` ist min_a × 230 V × Phasen: 5 A × 3 beim Tesla, 6 A × 2 beim e-Golf.
+    assert c.cars() == (
+        CarView("tesla", "twc", Effective.PV, 0.0, False, 3450.0),
+        CarView("egolf", "evcs", Effective.NOW, 2760.0, True, 2760.0),
+    )
+    first = Intent(
+        version=2,
+        control=True,
+        vehicles={"egolf": VehicleIntent(mode=ChargeMode.NOW)},
+        priority=["egolf", "tesla"],
+    )
+    c.step(inputs(cfg, s=1, evcs_obs=charging, intent=first))
+    assert [car.vehicle for car in c.cars()] == ["egolf", "tesla"]
+    c.idle(T0 + timedelta(seconds=2))
+    assert c.cars() == ()
+
+
+def test_cars_take_the_power_from_tessie_without_the_wallbox(cfg) -> None:
+    # Präzisierung 4 (Plan 2c-2a): Fehlt die Leistung der Wallbox, gilt beim Fahrzeug mit Tessie
+    # actual_current_a × phases × 230 V, wenn Tessie erreichbar ist und beides kennt.
+    c = controller(cfg)
+    plugged = tesla(plugged=True, charging=True, actual_current_a=10.0, phases=3)
+    c.step(inputs(cfg, twc_obs=TWC_OUT, tesla_obs=plugged))
+    assert c.cars()[0] == CarView("tesla", "twc", Effective.PV, 6900.0, True, 3450.0)
+    unknown = [
+        replace(plugged, reachable=False),
+        replace(plugged, actual_current_a=None),
+        replace(plugged, phases=None),
+    ]
+    for s, seen in enumerate(unknown, 1):
+        c.step(inputs(cfg, s=s, twc_obs=TWC_OUT, tesla_obs=seen))
+        assert c.cars()[0].power_w is None
+    # Eine Leistung der Wallbox, die keine endliche Zahl ist, fehlt ebenso.
+    odd = twc(connected=True, charging=True, power_w=math.nan)
+    c.step(inputs(cfg, s=4, twc_obs=odd, tesla_obs=plugged))
+    assert c.cars()[0] == CarView("tesla", "twc", Effective.PV, 6900.0, True, 3450.0)
 
 
 def test_without_an_intent_every_vehicle_charges_in_pv(cfg) -> None:

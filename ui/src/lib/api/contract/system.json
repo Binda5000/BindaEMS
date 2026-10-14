@@ -159,7 +159,15 @@
           "wakes_today": 0,
           "reason": null
         }
-      ]
+      ],
+      "battery": {
+        "state": "idle",
+        "target_w": null,
+        "override_w": null,
+        "support": null,
+        "bridging_s": null,
+        "refresh_age_s": null
+      }
     }
   },
   "components": [

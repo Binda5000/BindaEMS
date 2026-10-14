@@ -47,6 +47,12 @@ class HealthReport(BaseModel):
     - ``vehicles``: je Fahrzeug in der Reihenfolge von ``config.yaml`` der Stand der Laderegelung
       (``ChargeController.health``): Modus mit Boost bis, Wallbox und Zuordnung, Grenze des
       Phasenwächters, angesteckt, lädt, Weckvorgänge heute und der letzte Grund (Plan 2c-1)
+    - ``battery``: der Stand des Akku-Sollwerts (``BatteryController.health``, Plan 2c-2a):
+      ``state`` (``ok``, ``unknown``, ``locked``, ``idle``), ``target_w`` (gewollter Netzbezug
+      nach dem 15-min-Wächter), ``override_w`` (der letzte eigene Override), ``support`` (``on``,
+      ``soc``, ``time``, ``mode``), ``bridging_s`` (Sekunden der laufenden Überbrückung) und
+      ``refresh_age_s`` (Sekunden seit dem letzten Urteil mit Wert über den Override); was fehlt,
+      ist ``null``
     """
 
     mode: Literal["START", "OBSERVE", "CONTROL", "DEGRADED", "SAFE"]
@@ -64,6 +70,7 @@ class HealthReport(BaseModel):
     )
     inputs: dict[str, Any] = Field(default_factory=lambda: {"ok": True, "problems": []})
     vehicles: list[dict[str, Any]] = Field(default_factory=list)
+    battery: dict[str, Any] = Field(default_factory=dict)
 
 
 class CurrentIntent(BaseModel):

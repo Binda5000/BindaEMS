@@ -1,10 +1,11 @@
-"""Simulierte Anlage für die Laufzeit-Tests (Plan 2b): Watchdog am Cerbo und EVCS „evcs“."""
+"""Simulierte Anlage für die Laufzeit-Tests (Plan 2b): Watchdog am Cerbo, EVCS „evcs“ und der
+Override des Netz-Sollwerts."""
 
 from __future__ import annotations
 
 from typing import Final
 
-from bindaems.core.adapters.victron_mqtt import HEARTBEAT_PATH
+from bindaems.core.adapters.victron_mqtt import HEARTBEAT_PATH, SETPOINT_OVERRIDE_PATH
 from bindaems.core.state.store import StateStore
 from bindaems.core.watchdog_client.status import WATCHDOG_VERSION
 from bindaems.shared.domain import SignalKind, Value
@@ -16,6 +17,8 @@ FOLLOWED: Final = {
     "evcharger/40/SetCurrent": "wallbox.evcs.gx_set_current_a",
     "evcharger/40/StartStop": "wallbox.evcs.gx_start_stop",
 }
+# Der Override des Netz-Sollwerts und das Signal, mit dem der Cerbo ihn meldet
+OVERRIDE: Final = {SETPOINT_OVERRIDE_PATH: "ess.override.setpoint"}
 
 
 class Plant:
@@ -23,8 +26,9 @@ class Plant:
 
     ``write`` ist der MQTT-Schreibweg des core. Vor jedem Zyklus (``before_cycle``) meldet sie den
     Watchdog (``watchdog_state``, Echo des zuletzt geschriebenen Heartbeats, ``timeout_s``,
-    Version ``WATCHDOG_VERSION``) und übernimmt geschriebene EVCS-Werte als GX-Werte, solange
-    ``follow`` gilt.
+    Version ``WATCHDOG_VERSION``) und übernimmt geschriebene EVCS-Werte als GX-Werte und den
+    Override als ``ess.override.setpoint``, solange ``follow`` gilt. Der Override verfällt hier
+    nie von selbst.
 
     ``echo`` ist das Echo, bevor der core einen Heartbeat geschrieben hat, etwa der Zähler eines
     früheren Laufs; ``None`` heißt, der Watchdog meldet keins, ebenso bei ``timeout_s``. Ohne
@@ -48,7 +52,7 @@ class Plant:
         self.timeout_s = timeout_s
         self.writes: list[tuple[str, float | int | None]] = []
         self._store: StateStore | None = None
-        self._gx: dict[str, Value] = {}  # die übernommenen EVCS-Werte je GX-Signal
+        self._followed: dict[str, Value] = {}  # die übernommenen Werte je Signal
 
     def attach(self, store: StateStore) -> None:
         """Verbindet die Anlage mit dem Zustandsspeicher des core."""
@@ -66,11 +70,13 @@ class Plant:
             if not self.accept:
                 return False
             if self.follow:
-                self._gx[FOLLOWED[path]] = value
+                self._followed[FOLLOWED[path]] = value
+        elif path in OVERRIDE and self.follow:
+            self._followed[OVERRIDE[path]] = value
         return True
 
     def before_cycle(self) -> None:
-        """Meldet den Watchdog und, solange ``follow`` gilt, die übernommenen EVCS-Werte."""
+        """Meldet den Watchdog und, solange ``follow`` gilt, die übernommenen Werte."""
         if self._store is None:
             raise RuntimeError("Plant.attach fehlt: kein Zustandsspeicher")
         signals: dict[str, Value] = {
@@ -82,7 +88,7 @@ class Plant:
         if self.echo is not None:
             signals["watchdog.heartbeat"] = self.echo
         if self.follow:
-            signals |= self._gx
+            signals |= self._followed
         for signal, value in signals.items():
             self._store.update(signal, value, source=SOURCE, kind=SignalKind.STATE)
 

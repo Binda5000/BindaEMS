@@ -410,6 +410,32 @@ def test_every_charging_reason_is_named_in_german(code: str, expected: str) -> N
     assert text == f"V ({expected}): Strom 8 A – gesendet und bestätigt."
 
 
+def test_battery_reasons_have_texts() -> None:  # Plan 2c-2a, „Texte“
+    text = decision_text(
+        "Victron (ESS)",
+        CommandKind.GRID_SETPOINT,
+        2340.0,
+        DecisionResult.DRY_RUN,
+        reasons=("battery_comp",),
+    )
+    assert text == (
+        "Victron (ESS) (Akku nicht ins Auto): Netz-Sollwert 2340 W – Dry-Run, nicht gesendet."
+    )
+
+
+@pytest.mark.parametrize(
+    ("code", "expected"),
+    [
+        ("battery_comp", "Akku nicht ins Auto"),
+        ("battery_support", "Akku-Unterstützung"),
+        ("peak_guard", "15-min-Wächter"),
+    ],
+)
+def test_every_battery_reason_is_named_in_german(code: str, expected: str) -> None:
+    text = decision_text("V", CommandKind.GRID_SETPOINT, 2000.0, DecisionResult.OK, reasons=(code,))
+    assert text == f"V ({expected}): Netz-Sollwert 2000 W – gesendet und bestätigt."
+
+
 def test_findings_follow_the_sentence_separated_by_spaces() -> None:
     text = decision_text(
         "V",

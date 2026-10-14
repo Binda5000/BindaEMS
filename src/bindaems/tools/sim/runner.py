@@ -1,10 +1,10 @@
 """Lauf eines Szenarios: die echte Laufzeit des core gegen das Anlagenmodell (Design 13.1).
 
 ``run_scenario`` baut die Laufzeit wie im Betrieb, nur ohne Adapter und API: Safety-Schicht,
-Ausführer, Laderegelung und die echten Aktoren. Die ``ManualClock`` ist Wanduhr und Uhr der
-Safety-Schicht. Gefälscht sind nur die Geräte dahinter (Plan 2c-1, Präzisierung 16): Der core
-schreibt über ``PlantModel.mqtt_write`` und erreicht Tessie über ``httpx.MockTransport`` mit
-``PlantModel.tessie``; die Telemetrie verwirft ein ``_Discard``.
+Ausführer, Regelung (Laderegelung und Akku-Sollwert) und die echten Aktoren. Die ``ManualClock``
+ist Wanduhr und Uhr der Safety-Schicht. Gefälscht sind nur die Geräte dahinter (Plan 2c-1,
+Präzisierung 16): Der core schreibt über ``PlantModel.mqtt_write`` und erreicht Tessie über
+``httpx.MockTransport`` mit ``PlantModel.tessie``; die Telemetrie verwirft ein ``_Discard``.
 
 Je simulierter Sekunde:
 
@@ -20,8 +20,10 @@ Am Ende liest der Lauf alle Entscheidungen und fährt die Laufzeit herunter. Die
 aus Proben und Entscheidungen; für die Befehle an Tessie gilt dabei der Zeitpunkt, zu dem sie
 Tessie erreichten (``sent_times``), nicht der ihres späteren Ergebnisses. Dazu sammelt der Lauf die
 eigenen Werte der Regelung (``OwnValue``) und was sie davon vergisst (``Forgotten``): Er hüllt
-``note_verdict``, ``forget`` und ``idle`` von ``rt.charger`` ein, denn ``UNCHANGED`` setzt den
-letzten eigenen Wert, ohne dass eine Entscheidung entsteht.
+``note_verdict``, ``forget`` und ``idle`` von ``rt.regulation`` ein (``RegulationLink``), denn
+``UNCHANGED`` setzt den letzten eigenen Wert, ohne dass eine Entscheidung entsteht. So sieht die
+Kennzahl auch die eigenen Werte des Akku-Sollwerts und die Pause nach einer Ausnahme in der
+Regelung, denn der Link ruft dafür sein eigenes ``idle`` (Plan 2c-2a, Präzisierung 17).
 """
 
 from __future__ import annotations
@@ -196,23 +198,26 @@ async def run_scenario(
 
 
 def _own_values(rt: CoreRuntime) -> list[OwnValue | Forgotten]:
-    """Hüllt ``note_verdict``, ``forget`` und ``idle`` von ``rt.charger`` ein; die Liste füllt sich
-    mit den eigenen Werten der Regelung und dem, was sie davon vergisst, in ihrer Reihenfolge.
+    """Hüllt ``note_verdict``, ``forget`` und ``idle`` von ``rt.regulation`` ein; die Liste füllt
+    sich mit den eigenen Werten der Regelung und dem, was sie davon vergisst, in ihrer Reihenfolge.
 
     Eigen ist jedes Urteil über einen Befehl der Regelung, das ihren letzten Wert setzt: mit Wert
     oder ``UNCHANGED`` (Präzisierung 10). „Nicht gesendet“ (``not_sent``) setzt keinen, es löscht
-    den Wert dieser Art; ``forget`` vergisst die Werte der genannten Aktoren, ``idle`` alle. Die
-    Regelung bekommt jeden Aufruf unverändert.
+    den Wert dieser Art; ``forget`` vergisst die Werte der genannten Aktoren, ``idle`` alle. Das
+    Auffrischen eines Overrides (``Command.refresh`` beim Netz-Sollwert) setzt den Wert erneut,
+    ergibt im Dry-Run aber keine Entscheidung: Es zählt nicht als Dry-Run (``OwnValue.dry_run``).
+    Die Regelung bekommt jeden Aufruf unverändert.
     """
     own: list[OwnValue | Forgotten] = []
-    charger = rt.charger
-    note, forget, idle = charger.note_verdict, charger.forget, charger.idle
+    regulation = rt.regulation
+    note, forget, idle = regulation.note_verdict, regulation.forget, regulation.idle
 
     def noted(command: Command, verdict: Verdict | None, *, not_sent: bool = False) -> None:
         if not_sent:
             own.append(Forgotten(command.actuator, command.kind))
         elif verdict is not None and (verdict.sendable or verdict.outcome == Outcome.UNCHANGED):
-            dry_run = verdict.sendable and verdict.dry_run
+            refresh = command.refresh and command.kind is CommandKind.GRID_SETPOINT
+            dry_run = verdict.sendable and verdict.dry_run and not refresh
             own.append(OwnValue(command.actuator, command.kind, command.value, dry_run=dry_run))
         note(command, verdict, not_sent=not_sent)
 
@@ -220,14 +225,14 @@ def _own_values(rt: CoreRuntime) -> list[OwnValue | Forgotten]:
         own.extend(Forgotten(actuator) for actuator in sorted(actuators))
         forget(actuators)
 
-    def idled(now: datetime) -> None:
+    def idled(snow: datetime) -> None:
         own.append(Forgotten())
-        idle(now)
+        idle(snow)
 
     # Der Simulator beobachtet die Regelung von außen; die Methoden bleiben dieselben.
-    charger.note_verdict = noted  # type: ignore[method-assign]
-    charger.forget = forgot  # type: ignore[method-assign]
-    charger.idle = idled  # type: ignore[method-assign]
+    regulation.note_verdict = noted  # type: ignore[method-assign]
+    regulation.forget = forgot  # type: ignore[method-assign]
+    regulation.idle = idled  # type: ignore[method-assign]
     return own
 
 

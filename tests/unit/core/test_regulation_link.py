@@ -1,3 +1,4 @@
+import math
 from collections.abc import Callable
 from datetime import datetime, timedelta
 from typing import Any
@@ -6,6 +7,7 @@ import pytest
 from structlog.testing import capture_logs
 from tests.helpers import T0, snap
 from tests.unit.core.control.fakes import FakeActuator, FakeWakeActuator
+from tests.unit.core.state.conftest import BASE
 
 from bindaems.core.control.actuator import Capabilities
 from bindaems.core.control.executor import WriteResult
@@ -17,7 +19,7 @@ from bindaems.core.safety.types import Outcome, Verdict
 from bindaems.core.state.derived import derive
 from bindaems.shared.control import Command, CommandKind, Intent
 from bindaems.shared.decisions import DecisionResult
-from bindaems.shared.domain import Alarm, Severity
+from bindaems.shared.domain import Alarm, Quality, Severity, Snapshot
 
 NOW = T0
 INTENT = Intent(version=1, control=True)
@@ -49,6 +51,7 @@ def step(link: RegulationLink, cfg, when: datetime = NOW, **kw: Any) -> list[Con
         "accepted_at": None,
         "blocked": frozenset(),
         "connected": lambda source: None,
+        "locks": {},
     }
     return link.step(**(args | kw))
 
@@ -195,6 +198,29 @@ def test_step_builds_the_charge_inputs(cfg, monkeypatch) -> None:
     assert charge.vehicles["tesla"].reachable is True
 
 
+def test_step_builds_the_inputs_of_the_battery(cfg, monkeypatch) -> None:  # Plan 2c-2a
+    link = link_for(cfg)
+    seen: list[RegulationInputs] = []
+    monkeypatch.setattr(link.regulation, "step", lambda inputs: seen.append(inputs) or [])
+
+    def built(current: Snapshot, **kw: Any) -> tuple[Any, ...]:
+        link.start_cycle()
+        step(link, cfg, snap=current, derived=derive(current, cfg), **kw)
+        found = seen[-1]
+        return found.pv_w, found.house_w, found.base_setpoint_w, found.locks
+
+    # PV 3000 W; die Hauslast ist der Verbrauch (3000 − 1500) + (900 + 3000) W ohne die Wallboxen
+    walls = {f"wallbox.{name}.power_w": 0.0 for name in cfg.wallboxes}
+    locks = {"victron": ("Dynamic ESS ist aktiv.",)}
+    current = snap(BASE | walls | {"ess.grid_setpoint_w": 50.0})
+    assert built(current, locks=locks) == (3000.0, 5400.0, 50.0, locks)
+    # Ohne Leistung der Wallboxen ist die Hauslast unbekannt; der Basis-Sollwert zählt nur als
+    # endliche Zahl mit Qualität OK.
+    assert built(snap(BASE | {"ess.grid_setpoint_w": math.inf})) == (3000.0, None, None, {})
+    stale = snap(BASE | walls | {"ess.grid_setpoint_w": 50.0}, quality=Quality.STALE)
+    assert built(stale) == (None, None, None, {})
+
+
 def test_health_shows_the_last_cycle_without_exception(cfg, monkeypatch) -> None:
     link = link_for(cfg)
     fresh = Regulation(cfg, HardLimits.from_config(cfg), started=T0).health()
@@ -261,7 +287,6 @@ def test_a_throwing_idle_rebuilds_the_kernel(cfg, monkeypatch) -> None:
     assert step(link, cfg) == []
     assert link.failed
     assert link.regulation is not old
-    assert link.charger is link.regulation.charger
     rebuilt = link.regulation
     monkeypatch.setattr(rebuilt, "idle", broken)  # auch ohne Ausnahme davor
     link.start_cycle()

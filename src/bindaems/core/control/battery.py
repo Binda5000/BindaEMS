@@ -417,8 +417,11 @@ class BatteryController:
         ihn. ``DEFERRED``, ``REJECTED`` und ``None`` ändern nichts: Der Akku-Sollwert bietet den
         Befehl im nächsten Zyklus wieder an, auch ein Auffrischen. Ein Urteil mit Wert
         (``sendable``, ohne ``not_sent``), live wie im Dry-Run, merkt die Zeit des letzten
-        ``decide`` fürs Auffrischen, wenn der Wert ein Override ist (eine Zahl).
+        ``decide`` fürs Auffrischen, wenn der Wert ein Override ist (eine Zahl). Ein Urteil über
+        einen anderen Befehl als den Override ändert nichts: Es verschöbe sonst das Auffrischen.
         """
+        if (command.actuator, command.kind) != _SETPOINT:
+            return
         judged = self._last.judged(command, verdict, not_sent=not_sent)
         if judged and verdict is not None and verdict.sendable:
             self._refreshed = None if self._cycle is None else self._cycle.now
@@ -429,8 +432,11 @@ class BatteryController:
 
         ``ERROR``, ``TIMEOUT`` und ``NOT_SENT`` löschen den letzten eigenen Wert, wenn er dem
         Ergebnis entspricht, und damit die Zeit des Auffrischens: Der nächste Zyklus sendet den
-        Wert neu, als normalen Befehl. Ergebnisse des Keepers mit anderem Wert bleiben ohne Wirkung.
+        Wert neu, als normalen Befehl. Ergebnisse des Keepers mit anderem Wert bleiben ohne Wirkung,
+        ebenso jedes Ergebnis einer anderen Art oder eines anderen Aktors.
         """
+        if (result.actuator, result.kind) != _SETPOINT:
+            return
         self._last.finished(result)
         self._settle()
 

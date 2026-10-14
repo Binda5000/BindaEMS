@@ -483,6 +483,23 @@ def test_budget_needs_the_base_and_a_finite_value(cfg, budget) -> None:
 # --- Vergessen, Pause und Health ------------------------------------------------------------------
 
 
+def test_verdicts_and_results_of_other_commands_change_nothing(cfg) -> None:
+    # Verteidigung in der Tiefe: Der Kern gibt dem Akku-Sollwert nur den Override. Ein Urteil über
+    # einen anderen Befehl setzt keinen eigenen Wert und verschiebt das Auffrischen nicht.
+    battery = holding(cfg, 2000.0)
+    assert battery.decide(at(100), need(2000.0), **FREE) == []
+    current = Command("wallbox.evcs", CommandKind.CURRENT, 10.0)
+    battery.note_verdict(current, Verdict(current, Outcome.ACCEPTED, 10.0, (), True))
+    limit = Command(VICTRON, CommandKind.MAX_DISCHARGE, 2000.0)
+    battery.note_verdict(limit, Verdict(limit, Outcome.ACCEPTED, 2000.0, (), False))
+    error = DecisionResult.ERROR
+    battery.note_result(WriteResult("wallbox.evcs", CommandKind.CURRENT, 10.0, error, ""))
+    battery.note_result(WriteResult(VICTRON, CommandKind.MAX_DISCHARGE, 2000.0, error, ""))
+    assert (battery.health()["override_w"], battery.health()["refresh_age_s"]) == (2000.0, 100.0)
+    [found] = battery.decide(at(240), need(2000.0), **FREE)
+    assert found.command == setpoint(2000.0, "battery_comp", refresh=True)
+
+
 def test_forget_drops_the_own_value_of_victron(cfg) -> None:
     battery = holding(cfg, 2000.0)
     battery.forget({"wallbox.evcs"})

@@ -59,6 +59,12 @@ def allow_tesla_live(cfg: Config) -> Config:
     return cfg.model_copy(update={"vehicles": cfg.vehicles | {"tesla": tesla}})
 
 
+def allow_victron_live(cfg: Config) -> Config:
+    """Die Konfiguration mit ``live_allowed`` für Victron."""
+    victron = cfg.victron.model_copy(update={"live_allowed": True})
+    return cfg.model_copy(update={"victron": victron})
+
+
 def live_evcs(runtime_env, *, plant: Plant, state: dict, **kw: Any):
     """Laufzeit an der Anlage ``plant`` mit der Absicht „Regelbetrieb an, EVCS live“."""
     rt, _, clock = runtime_env(

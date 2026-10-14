@@ -38,7 +38,8 @@ _FIELDS: Final = frozenset(
 )
 
 # Gründe, die der Text deutsch nennt; andere Codes erscheinen unverändert. Zuerst die des sicheren
-# Zustands und der Übergabe, dann die der Laderegelung (Plan 2c-1, „Texte“).
+# Zustands und der Übergabe, dann die der Laderegelung (Plan 2c-1, „Texte“), dann die des
+# Akku-Sollwerts und des 15-min-Wächters (Plan 2c-2a, „Texte“).
 _REASON_TEXT: Final = {
     "safe_state": "sicherer Zustand",
     "handback": "Übergabe",
@@ -57,6 +58,9 @@ _REASON_TEXT: Final = {
     "not_taken_retry": "erneut nach „nicht übernommen“",
     "assignment_unclear": "Zuordnung unklar",
     "resume_after_outage": "Wiederaufnahme nach Ausfall",
+    "battery_comp": "Akku nicht ins Auto",
+    "battery_support": "Akku-Unterstützung",
+    "peak_guard": "15-min-Wächter",
 }
 
 
@@ -306,8 +310,8 @@ def decision_text(
 
     Danach folgen, mit Leerzeichen verbunden, die Befundtexte der Safety-Schicht. ``value`` ist der
     angewendete Wert, sonst der angeforderte. ``reasons`` sind Codes: die des sicheren Zustands, der
-    Übergabe und der Laderegelung (``_REASON_TEXT``) erscheinen deutsch, andere unverändert; mehrere
-    stehen mit „, “ getrennt.
+    Übergabe, der Laderegelung, des Akku-Sollwerts und des 15-min-Wächters (``_REASON_TEXT``)
+    erscheinen deutsch, andere unverändert; mehrere stehen mit „, “ getrennt.
     ``detail`` gehört zu „Fehler“ und „nicht gesendet“. Der Satz endet auf einen Punkt; hat das
     Detail schon einen, kommt kein zweiter dazu. Ein Wert, der nicht zur Art passt (etwa NaN),
     erscheint, wie er ist: Auch eine abgelehnte, ungültige Anfrage lässt sich protokollieren.

@@ -22,6 +22,10 @@ Die Bausteine stehen in eigenen Modulen: ``charge_points`` (Ladepunkte und ihre 
 ``last_values`` (nur Änderungen schicken, „nicht übernommen“) und ``charging_tesla`` (Tesla,
 Zuordnung und Wiederaufnahme).
 
+Nach jedem ``step`` zeigt ``cars`` je Ladepunkt das Auto mit Modus und Leistung (``CarView``): Damit
+rechnet der Akku-Sollwert mit Zuordnung und Modi desselben Zyklus (Plan 2c-2a, Präzisierungen 3
+und 4).
+
 Dazu legt die Regelung fest:
 
 - Am Überschuss nimmt ein geregelter Ladepunkt nur teil, wenn sein Auto laden kann: nicht
@@ -61,7 +65,7 @@ from datetime import datetime
 from typing import Any, Final
 
 from bindaems.core.control.assignment import Assignment, AssignmentKind, VehicleState
-from bindaems.core.control.charge_inputs import ChargeInputs
+from bindaems.core.control.charge_inputs import NO_VEHICLE_DATA, ChargeInputs, VehicleObs
 from bindaems.core.control.charge_modes import (
     FULL_POWER,
     MODE_CODES,
@@ -127,6 +131,30 @@ ChargeCommand = ControlCommand  # der Name der Laderegelung für ihren Befehl
 _CURRENT: Final = CommandKind.CURRENT
 _CHARGING: Final = CommandKind.CHARGING
 _SURPLUS_MODES: Final = frozenset({Effective.PV, Effective.MIN_PV})  # Wunsch aus dem Anteil
+
+
+@dataclass(frozen=True)
+class CarView:
+    """Das Auto eines Ladepunkts im letzten ``step`` (Plan 2c-2a, Präzisierung 4); ``None`` heißt
+    unbekannt.
+
+    - ``vehicle``, ``wallbox``: das Fahrzeug und die Wallbox des Ladepunkts aus der Zuordnung
+    - ``mode``: der geltende Modus des Fahrzeugs, mit Boost
+    - ``power_w``: die Ladeleistung in W, die die Wallbox misst. Fehlt sie oder ist sie keine
+      endliche Zahl, bei einem Fahrzeug mit Tessie ``actual_current_a × phases × U``, wenn Tessie
+      erreichbar ist und beides kennt.
+    - ``charging``: ob das Fahrzeug lädt, aus der Zuordnung
+    - ``min_w``: die Mindestleistung des Ladepunkts, ``min_a × U × Zahl seiner Phasen``
+
+    ``U`` ist ``grid.voltage_nominal_v``.
+    """
+
+    vehicle: str
+    wallbox: str
+    mode: Effective
+    power_w: float | None
+    charging: bool | None
+    min_w: float
 
 
 @dataclass(frozen=True)
@@ -197,8 +225,9 @@ class ChargeController:
     Der Zustand lebt nur im Speicher: eine Zuordnung für die ganze Lebensdauer, je Fahrzeug eine
     ``ModeMachine`` und eine ``TeslaPolicy`` (Fenster und Weckkontingent), der Überlastwächter samt
     der Stufe des letzten Zyklus, die geregelten Ladepunkte des letzten Zyklus, die letzten eigenen
-    Werte je Aktor und Art und die Fahrzeuge, deren erste Startfolge nach einer Pause aussteht.
-    ``started`` ist die Wanduhr beim Start der Regelung (``Assignment``).
+    Werte je Aktor und Art, die Fahrzeuge, deren erste Startfolge nach einer Pause aussteht, und
+    die Autos des letzten Zyklus (``cars``). ``started`` ist die Wanduhr beim Start der Regelung
+    (``Assignment``).
     """
 
     def __init__(self, cfg: Config, limits: HardLimits, *, started: datetime) -> None:
@@ -223,6 +252,7 @@ class ChargeController:
         self._stepped = False  # seit dem Start schon geregelt: erst danach ist ``idle`` ein Ausfall
         self._last = LastValues()
         self._views: dict[str, _View] = {}
+        self._cars: tuple[CarView, ...] = ()  # je Ladepunkt des letzten ``step`` (``cars``)
         self._reasons: dict[str, str] = {}  # der letzte Grund des letzten Befehls je Fahrzeug
         self._vehicle_wallbox: dict[str, str | None] = {}
         # Die Uhren des letzten ``step``: für das Weckkontingent in ``note_verdict`` und ``health``
@@ -308,6 +338,10 @@ class ChargeController:
 
         self._regulated = set(regulated.items())
         self._views = views
+        self._cars = tuple(
+            _car_view(self._cfg, point, modes[key], state.vehicles[key], inputs)
+            for key, point in points.items()
+        )
         self._vehicle_wallbox = {
             vehicle_actuator(key): None if v.kind is AssignmentKind.UNCLEAR else v.wallbox
             for key, v in state.vehicles.items()
@@ -356,8 +390,8 @@ class ChargeController:
         OBSERVE) sind kein Ausfall. Die Fenster des Tesla beginnen neu (Präzisierung 12), die
         Überlast mit einem neuen Wächter und der Stufe ``NONE``; die alten werteten die Lücke sonst
         als durchgehend. Die Zuordnung bleibt, damit ein beendeter Boost nicht wieder auflebt; das
-        Weckkontingent bleibt ebenso. ``health`` und ``vehicle_wallbox`` sind bis zum nächsten
-        ``step`` unbekannt; der letzte Grund je Fahrzeug bleibt. ``now`` ist die Zeit der
+        Weckkontingent bleibt ebenso. ``health``, ``vehicle_wallbox`` und ``cars`` sind bis zum
+        nächsten ``step`` unbekannt; der letzte Grund je Fahrzeug bleibt. ``now`` ist die Zeit der
         Safety-Schicht; das Vergessen braucht sie nicht.
         """
         self._last.forget()
@@ -369,6 +403,7 @@ class ChargeController:
         self._overload = OverloadGuard(self._guard)
         self._level = OverloadLevel.NONE
         self._views = {}
+        self._cars = ()
         self._vehicle_wallbox = {}
 
     def forget(self, actuators: Collection[str]) -> None:
@@ -381,6 +416,16 @@ class ChargeController:
         (ein Wert des Keepers, ein anderes System übernimmt den Aktor).
         """
         self._last.forget(actuators)
+
+    def cars(self) -> tuple[CarView, ...]:
+        """Je Ladepunkt des letzten ``step`` sein Auto, in der Reihenfolge der Priorität.
+
+        Für den Akku-Sollwert (Plan 2c-2a, Präzisierungen 3 und 4). Jeder Ladepunkt zählt, auch
+        einer, der nicht geregelt wird oder an dem das Auto nicht angesteckt ist: Er bleibt der
+        Ladepunkt seines Fahrzeugs, und auch solange evcc lädt, zählt sein Auto. Vor dem ersten
+        ``step`` und nach ``idle`` leer.
+        """
+        return self._cars
 
     def vehicle_wallbox(self) -> dict[str, str | None]:
         """Fahrzeug-Aktor → Wallbox für die Phasenvorhersage der Safety-Schicht.
@@ -716,6 +761,26 @@ def _mode(key: str, vehicle: VehicleState, intent: Intent | None) -> Effective:
         return Effective.BOOST
     entry = None if intent is None else intent.vehicles.get(key)
     return Effective((VehicleIntent() if entry is None else entry).mode.value)
+
+
+def _car_view(
+    cfg: Config, point: ChargePoint, mode: Effective, vehicle: VehicleState, inputs: ChargeInputs
+) -> CarView:
+    """Das Auto des Ladepunkts für ``cars`` (Plan 2c-2a, Präzisierung 4; Regeln: ``CarView``)."""
+    volts = cfg.grid.voltage_nominal_v
+    power_w = finite_number(inputs.wallboxes[point.wallbox].power_w)
+    if power_w is None and cfg.vehicles[point.vehicle].tessie is not None:
+        power_w = _tessie_w(inputs.vehicles.get(point.vehicle, NO_VEHICLE_DATA), volts)
+    min_w = point.min_a * volts * len(point.phases)
+    return CarView(point.vehicle, point.wallbox, mode, power_w, vehicle.charging, min_w)
+
+
+def _tessie_w(tessie: VehicleObs, volts: float) -> float | None:
+    """Die Ladeleistung laut Tessie, ``actual_current_a × phases × volts``; ``None``, wenn Tessie
+    nicht erreichbar ist oder eins davon fehlt."""
+    if not tessie.reachable or tessie.actual_current_a is None or tessie.phases is None:
+        return None
+    return finite_number(tessie.actual_current_a * tessie.phases * volts)
 
 
 def _why(situation: _Situation) -> tuple[str, ...]:

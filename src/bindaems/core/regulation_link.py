@@ -3,7 +3,9 @@
 ``RegulationLink`` ist alles, was die Laufzeit von der Regelung sieht:
 
 - Er baut je Zyklus die Eingaben des Kerns (``Regulation``) und gibt Urteile, Ergebnisse,
-  ``forget`` und ``idle`` an ihn weiter.
+  ``forget`` und ``idle`` an ihn weiter. Die Eingaben sind die der Laderegelung (Plan 2c-1) und
+  die des Akku-Sollwerts: PV und Hauslast aus den abgeleiteten Größen, der Basis-Sollwert
+  ``ess.grid_setpoint_w`` und die Sperren des Zyklus.
 - Er legt am Ende des Regelteils Health und Alarme des Kerns ab (``finish``). ``health`` und
   ``alarms`` lesen nur diesen Stand und dürfen deshalb aus einem anderen Thread kommen.
 - Er fängt jede Ausnahme des Kerns (Präzisierung 15).
@@ -37,8 +39,7 @@ from typing import Any, Final, TypeVar
 import structlog
 
 from bindaems.core.control.actuator import Actuator, Capabilities, WakeStart
-from bindaems.core.control.charge_inputs import ChargeInputs, observe
-from bindaems.core.control.charging import ChargeController
+from bindaems.core.control.charge_inputs import ChargeInputs, observe, ok_number
 from bindaems.core.control.executor import WriteResult
 from bindaems.core.control.last_values import ControlCommand, Key
 from bindaems.core.control.regulation import Regulation, RegulationInputs
@@ -80,11 +81,6 @@ class RegulationLink:
         self._exception: Alarm | None = None  # ``control.exception``
 
     @property
-    def charger(self) -> ChargeController:
-        """Die Laderegelung des Kerns; der Simulator hüllt ihre Aufrufe ein."""
-        return self.regulation.charger
-
-    @property
     def failed(self) -> bool:
         """Ob in diesem Zyklus ein Aufruf des Kerns warf."""
         return self._failed
@@ -109,6 +105,7 @@ class RegulationLink:
         accepted_at: datetime | None,
         blocked: frozenset[Key],
         connected: Callable[[str], bool | None],
+        locks: Mapping[str, tuple[str, ...]],
     ) -> list[ControlCommand]:
         """Ein Zyklus mit Regelung: die Befehle des Kerns, nach einer Ausnahme keine.
 
@@ -123,6 +120,10 @@ class RegulationLink:
         - ``blocked`` nennt die Arten, für die in diesem Zyklus kein Befehl kommt: offene
           Schreibvorgänge und die Aktoren in Übergabe.
         - ``accepted_at`` ist die Annahmezeit der Absicht ``intent``.
+
+        Dazu die des Akku-Sollwerts (Plan 2c-2a): PV (``derived.pv_total_w``) und Hauslast
+        (``derived.house_load_w``), der Basis-Sollwert ``ess.grid_setpoint_w`` (``ok_number``) und
+        die Sperren ``locks``, die Gründe je Aktor wie im ``SafetyContext``.
 
         Auch eine Ausnahme beim Bauen der Eingaben setzt nur die Regelung aus.
         """
@@ -147,7 +148,15 @@ class RegulationLink:
                 intent=intent,
                 accepted_at=accepted_at,
             )
-            commands = self.regulation.step(RegulationInputs(charge))
+            commands = self.regulation.step(
+                RegulationInputs(
+                    charge,
+                    pv_w=derived.pv_total_w,
+                    house_w=derived.house_load_w,
+                    base_setpoint_w=ok_number(snap, "ess.grid_setpoint_w"),
+                    locks=locks,
+                )
+            )
             self._regulated = True
             return commands
 

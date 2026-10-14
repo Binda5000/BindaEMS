@@ -16,13 +16,15 @@ läuft mit den Befehlen des Keepers weiter, aber ohne Heartbeat, und der Alarm
 ``control.exception`` gilt.
 
 Auf Geräte schreibt der core den Heartbeat an den eigenen Watchdog am Cerbo, die Sicherwerte des
-sicheren Zustands und die der Übergabe am Ende des Live-Betriebs (Plan 2b, Präzisierungen 3 und 4)
-und die Befehle der Laderegelung an EVCS und Tesla (Plan 2c-1, Design 4.2). Jeder Befehl geht
-durch die Safety-Schicht; im Dry-Run wird er nur protokolliert. Ein Aktor hält Werte des EMS
-(owned), sobald der core ihm einen Wert gesendet hat; ist er nicht mehr live gewünscht, bekommt er
-seine Sicherwerte und ist erst übergeben, wenn sie zurückgelesen sind. Ändert ein anderer einen
-bestätigten Strom oder Netz-Sollwert, sperrt das den Aktor wie ein mitregelndes System
-(Präzisierung 8).
+sicheren Zustands und die der Übergabe am Ende des Live-Betriebs (Plan 2b, Präzisierungen 3 und 4),
+die Befehle der Laderegelung an EVCS und Tesla (Plan 2c-1, Design 4.2) und den Override des
+Akku-Sollwerts an Victron (Plan 2c-2a, Design 5). Jeder Befehl geht durch die Safety-Schicht; im
+Dry-Run wird er nur protokolliert. Ein Aktor hält Werte des EMS (owned), sobald der core ihm einen
+Wert gesendet hat; ist er nicht mehr live gewünscht, bekommt er seine Sicherwerte und ist erst
+übergeben, wenn sie zurückgelesen sind. Ändert ein anderer einen bestätigten Strom oder
+Netz-Sollwert, sperrt das den Aktor wie ein mitregelndes System (Präzisierung 8). Ein Override
+verfällt am Cerbo 300 s nach dem Schreiben (``OVERRIDE_TIMEOUT_S``), seine Erwartung in der
+Erkennung ebenso, ab der Bestätigung (Plan 2c-2a, Präzisierung 7).
 
 Den Heartbeat sendet der core nur, solange er regelt (Präzisierung 2): Ein Victron- oder EVCS-Aktor
 ist im Regelbetrieb live gewünscht oder wird übergeben. Der Zähler kommt nur aus einem fehlerfreien
@@ -60,7 +62,7 @@ from bindaems import __version__
 from bindaems.core.accounting.flows import SlotAccumulator, allocate
 from bindaems.core.actuators.evcs import EvcsActuator
 from bindaems.core.actuators.tesla import TeslaActuator
-from bindaems.core.actuators.victron import VictronActuator
+from bindaems.core.actuators.victron import OVERRIDE_TIMEOUT_S, VictronActuator
 from bindaems.core.adapters.base import Adapter
 from bindaems.core.adapters.evcs import EvcsAdapter, PymodbusReader
 from bindaems.core.adapters.homeassistant import HaAdapter
@@ -77,7 +79,6 @@ from bindaems.core.checks.competitors import detect_competitors
 from bindaems.core.checks.selfcheck import CRITICAL_SIGNALS, FRESH_FOR, CheckResult, run_selfcheck
 from bindaems.core.checks.values import number
 from bindaems.core.control.actuator import Actuator, Capabilities, matches
-from bindaems.core.control.charging import ChargeController
 from bindaems.core.control.context import decision_inputs, safety_context
 from bindaems.core.control.executor import CommandExecutor, WriteResult
 from bindaems.core.control.foreign import WATCHED_KINDS, ForeignChangeDetector
@@ -143,6 +144,7 @@ from bindaems.shared.domain import Alarm, Quality, Severity, SlotFlows, Snapshot
 from bindaems.shared.influx.lineprotocol import PointSink
 from bindaems.shared.influx.spool import DiskSpool
 from bindaems.shared.influx.writer import InfluxWriter
+from bindaems.shared.numbers import finite_number
 from bindaems.shared.timeutil import AnchoredClock, Clock, SystemClock
 
 log = structlog.get_logger(__name__)
@@ -238,6 +240,18 @@ def _tesla_not_charging(snap: Snapshot, spec: ActuatorSpec) -> bool:
     return spec.family == "tesla" and any(
         snap.ok(f"{spec.id}.{name}") is False for name in _NOT_CHARGING_SIGNALS
     )
+
+
+def _lapses_at(write: WriteResult, snow: datetime) -> datetime | None:
+    """Wann die Erwartung eines bestätigten Werts verfällt (Plan 2c-2a, Präzisierung 7).
+
+    Ein Override mit Zahl verfällt am Cerbo ``OVERRIDE_TIMEOUT_S`` nach dem letzten Schreiben;
+    seine Erwartung ebenso, ab der Bestätigung zur Zeit der Safety-Schicht ``snow``. Jeder andere
+    Wert, auch „kein Override“, gilt ohne Frist (``None``).
+    """
+    if write.kind == CommandKind.GRID_SETPOINT and finite_number(write.value) is not None:
+        return snow + timedelta(seconds=OVERRIDE_TIMEOUT_S)
+    return None
 
 
 def _safe_reasons(snap: Snapshot) -> tuple[str, ...]:
@@ -423,12 +437,6 @@ class CoreRuntime:
         self._run_task: asyncio.Task[None] | None = None
         self._api_server: _ApiServer | None = None
 
-    @property
-    def charger(self) -> ChargeController:
-        """Die Laderegelung des Kerns (``RegulationLink.charger``); der Simulator hüllt ihre
-        Aufrufe ein."""
-        return self.regulation.charger
-
     # --- Aufbau -------------------------------------------------------------------------
 
     def _http_client(self) -> httpx.AsyncClient:
@@ -542,7 +550,7 @@ class CoreRuntime:
         intent, since = self.intents.current, self.operating.since
         modes, locks = self._modes, self._active_locks
         capabilities, pending, owned = self._capabilities, self._pending, self._owned
-        vehicles = self.regulation.health()["vehicles"]
+        regulation = self.regulation.health()
         return HealthReport(
             mode=self.operating.state.value,
             version=__version__,
@@ -568,7 +576,8 @@ class CoreRuntime:
                 self._watchdog, self.heartbeat.status, required=self._watchdog_required
             ),
             inputs={"ok": self._input_status.ok, "problems": list(self._input_status.problems)},
-            vehicles=vehicles,
+            vehicles=regulation["vehicles"],
+            battery=regulation["battery"],
         )
 
     def state(self) -> dict[str, Any]:
@@ -672,10 +681,10 @@ class CoreRuntime:
         """Die zurückgelesenen Werte aller Aktoren je Art; dazu das Rücklesen des Ausführers.
 
         Der Ausführer fragt in jedem Zustand seine offenen Schreibvorgänge ab. Jeder
-        abgeschlossene geht an ``_note_write`` und an die Regelung (``note_result``), auch einer
-        des Keepers: Ein Ergebnis, das nicht zu ihrem letzten eigenen Wert passt, lässt sie
-        unberührt. Eine Erwartung, die auf das Rücklesen wartet, gilt ab dem ersten Zyklus, in dem
-        das Gerät den Wert zeigt (``matches``).
+        abgeschlossene geht mit der Zeit der Safety-Schicht ``snow`` an ``_note_write`` und an die
+        Regelung (``note_result``), auch einer des Keepers: Ein Ergebnis, das nicht zu ihrem
+        letzten eigenen Wert passt, lässt sie unberührt. Eine Erwartung, die auf das Rücklesen
+        wartet, gilt ab dem ersten Zyklus, in dem das Gerät den Wert zeigt (``matches``).
         """
         present = {
             (actuator_id, kind): value
@@ -683,7 +692,7 @@ class CoreRuntime:
             for kind, value in actuator.present(snap).items()
         }
         for write in self.executor.poll(snap, snow, now):
-            self._note_write(write)
+            self._note_write(write, snow)
             self.regulation.note_result(write)
         for key, value in list(self._awaiting_readback.items()):
             if key in present and matches(key[1], value, present[key]):
@@ -691,13 +700,18 @@ class CoreRuntime:
                 self.foreign.expect(key[0], key[1], value)
         return present
 
-    def _note_write(self, write: WriteResult) -> None:
+    def _note_write(self, write: WriteResult, snow: datetime) -> None:
         """Was ein abgeschlossener Schreibvorgang für die Erkennung fremder Änderungen bedeutet.
 
         Es zählen nur die beobachteten Arten Strom und Netz-Sollwert (``WATCHED_KINDS``; Plan 2b,
-        Präzisierung 8).
+        Präzisierung 8). ``snow`` ist die Zeit der Safety-Schicht, auf der die Erkennung läuft.
 
-        - **Bestätigt** bei einem owned Aktor: Der Wert ist ab jetzt die Erwartung. Beim Tesla
+        - **Bestätigt** bei einem owned Aktor: Der Wert ist ab jetzt die Erwartung. Ein Override
+          mit Zahl verfällt am Cerbo ``OVERRIDE_TIMEOUT_S`` nach dem Schreiben, wenn niemand ihn
+          auffrischt; seine Erwartung verfällt ebenso, ``OVERRIDE_TIMEOUT_S`` nach der Bestätigung
+          (Plan 2c-2a, Präzisierung 7). Jedes bestätigte Auffrischen erneuert sie. So ist der
+          gewollte Rückfall keine fremde Änderung, wenn die Regelung ruht, gesperrt ist, das Ziel
+          nicht kennt oder eine Ausnahme wirft. „Kein Override“ gilt ohne Frist. Beim Tesla
           bestätigt Tessie den Befehl (``result: true``), nicht das Rücklesen, und sein Cache hinkt
           30–60 s hinterher. Seine Erwartung gilt deshalb erst, wenn der Cache den Wert zeigt
           (``_readback``); bis dahin erwartet die Erkennung beim Tesla nichts. Sonst meldete sie
@@ -718,7 +732,8 @@ class CoreRuntime:
                 self.foreign.forget(actuator)
                 self._awaiting_readback[(actuator, write.kind)] = write.value
             else:
-                self.foreign.expect(actuator, write.kind, write.value)
+                lapses_at = _lapses_at(write, snow)
+                self.foreign.expect(actuator, write.kind, write.value, lapses_at=lapses_at)
 
     def _forget(self, actuator: str) -> None:
         """Beendet die Beobachtung des Aktors, auch die Erwartungen, die auf das Rücklesen warten.
@@ -751,7 +766,9 @@ class CoreRuntime:
            ausgeschaltetem Regelbetrieb, auch während der Übergabe danach. Blockiert sind für sie
            die Arten mit offenem Schreibvorgang und jede Art eines Aktors, der übergeben wird: Die
            Übergabe geht der Regelung vor. Die Annahmezeit liest die Laufzeit nach der Absicht
-           (``IntentStore``); so ist sie nie älter als deren Annahme.
+           (``IntentStore``); so ist sie nie älter als deren Annahme. Die Sperren bekommt sie wie
+           der ``SafetyContext``: Ist Victron gesperrt, sendet der Akku-Sollwert nichts
+           (Plan 2c-2a, Präzisierung 8).
         3. Erst danach die des ``SafeStateKeeper`` (``_keeper_commands``): Er zählt einen Versuch
            schon beim Berechnen. Bricht der Zyklus davor ab, hat er so keinen verbraucht; eine
            Ausnahme der Regelung selbst fängt ``RegulationLink``.
@@ -761,7 +778,8 @@ class CoreRuntime:
            durch die Safety-Schicht (``_execute``). Übergibt der Ausführer einen Wert des Keepers,
            vergisst die Regelung ihre Werte für diesen Aktor: Das Gerät ändert sich ohne sie. Die
            Befehle der Regelung schreiben zu den Eingaben jeder Entscheidung ihre eigenen ins Log:
-           Überschuss, Grenze des Wächters und Ist-Werte.
+           die der Ladepunkte Überschuss, Grenze des Wächters und Ist-Werte, der Override PV,
+           Hauslast, Autos, Fehlbetrag, erlaubten Anteil, Ziel und Ist-Override.
         6. Jedes Urteil über einen Befehl der Regelung geht an sie zurück (``note_verdict``), auch
            ``None``. ``not_sent`` heißt: Das Urteil ließ senden, aber danach ist kein
            Schreibvorgang offen.
@@ -778,6 +796,7 @@ class CoreRuntime:
             for actuator_id, actuator in self.actuators.items()
         }
         self.regulation.forget(self._switched_modes())
+        locks = {actuator: lock.reasons for actuator, lock in self._active_locks.items()}
         intent = self.intents.current
         if self.operating.state in _REGULATION_STATES and intent is not None and intent.control:
             handback = {(actuator, kind) for actuator in self._handing_back for kind in CommandKind}
@@ -793,6 +812,7 @@ class CoreRuntime:
                 accepted_at=self.intents.accepted_at,
                 blocked=self.executor.pending() | handback,
                 connected=self.store.connected,
+                locks=locks,
             )
         else:
             self.regulation.idle(snow)
@@ -803,7 +823,7 @@ class CoreRuntime:
                 now=snow,
                 operating=self.operating.state,
                 modes={actuator: mode.effective for actuator, mode in self._modes.items()},
-                locks={actuator: lock.reasons for actuator, lock in self._active_locks.items()},
+                locks=locks,
                 inputs=self._input_status,
                 snap=snap,
                 phase_import_a=derived.phase_import_a,

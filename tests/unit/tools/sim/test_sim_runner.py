@@ -14,9 +14,12 @@ from typing import Final
 import pytest
 
 from bindaems.core.api.app import HealthReport
+from bindaems.core.regulation_link import RegulationLink
+from bindaems.core.safety.limits import HardLimits
 from bindaems.core.safety.types import Outcome, Verdict
 from bindaems.shared.config import Config
 from bindaems.shared.control import (
+    VICTRON,
     ActuatorMode,
     ChargeMode,
     Command,
@@ -268,7 +271,11 @@ async def test_decisions_are_read_page_by_page(cfg, tmp_path, monkeypatch) -> No
     result = await run_scenario(SCENARIOS["reserve"], cfg, tmp_path, duration_s=70)
     started = [(d.kind, d.requested) for d in result.decisions if d.actuator == "wallbox.evcs"]
     assert started == [(CommandKind.CURRENT, 13.0), (CommandKind.CHARGING, True)]  # Importziel
-    assert len({d.ts for d in result.decisions}) == len(result.decisions)  # Gruppen je Zyklus
+    # Mit „Laden an“ entscheidet im selben Zyklus der Akku-Sollwert (Dry-Run): Diese Gruppe reicht
+    # über das Limit hinaus und kommt doch ganz und nur einmal.
+    assert [d.actuator for d in result.decisions] == ["wallbox.evcs", "wallbox.evcs", VICTRON]
+    assert result.decisions[1].ts == result.decisions[2].ts
+    assert len({d.id for d in result.decisions}) == len(result.decisions)
 
 
 async def test_samples_name_the_cars_the_regulation_steers_live(cfg, tmp_path) -> None:
@@ -327,24 +334,31 @@ async def test_the_metrics_get_every_own_value_of_the_regulation(
 
     current = ("wallbox.evcs", CommandKind.CURRENT, 13.0)
     charging = ("wallbox.evcs", CommandKind.CHARGING, True)
+    override = (VICTRON, CommandKind.GRID_SETPOINT, 5980.0)  # e-Golf in Sofort: 13 A × 2 × 230 V
     for live, dry_run in ((True, False), (False, True)):
         scenario = replace(SCENARIOS["reserve"], setup=at_13_a, live=live)
         data_dir = tmp_path / str(live)
         data_dir.mkdir()
         result = await run_scenario(scenario, cfg, data_dir, duration_s=70)
-        own = seen.pop()
-        assert isinstance(own, list)
+        seen_own = seen.pop()
+        assert isinstance(seen_own, list)
+        # Lädt der e-Golf (im Modell nur, wenn die EVCS live ist), entscheidet der Akku-Sollwert im
+        # Dry-Run mit; auch seine eigenen Werte bekommt die Kennzahl (Präzisierung 17).
+        battery = [e for e in seen_own if isinstance(e, OwnValue) and e.actuator == VICTRON]
+        assert battery == ([OwnValue(*override, dry_run=True)] if live else [])
+        own = [event for event in seen_own if event not in battery]
         before = own[:-2]
         assert before and all(isinstance(event, Forgotten) for event in before)
         assert Forgotten() in before  # bis zum Regelbetrieb ruht die Regelung (idle)
         # live: Beim Scharfschalten wechselt die EVCS vom Dry-Run nach live (forget)
         assert (Forgotten("wallbox.evcs") in before) is live
         assert own[-2:] == [OwnValue(*current, dry_run=False), OwnValue(*charging, dry_run=dry_run)]
-        assert [(d.kind, d.requested) for d in result.decisions] == [charging[1:]]
+        evcs = [(d.kind, d.requested) for d in result.decisions if d.actuator == "wallbox.evcs"]
+        assert evcs == [charging[1:]]
 
 
-class FakeCharger:
-    """Was der Lauf an der Laderegelung einhüllt; merkt sich die Aufrufe."""
+class FakeRegulation:
+    """Was der Lauf an der Regelung (``rt.regulation``) einhüllt; merkt sich die Aufrufe."""
 
     def __init__(self) -> None:
         self.calls: list[tuple[str, object]] = []
@@ -361,7 +375,7 @@ class FakeCharger:
 
 @dataclass
 class FakeRuntime:
-    charger: FakeCharger = field(default_factory=FakeCharger)
+    regulation: object = field(default_factory=FakeRegulation)
 
 
 def verdict_for(command: Command, outcome: Outcome, *, dry_run: bool) -> Verdict:
@@ -371,17 +385,19 @@ def verdict_for(command: Command, outcome: Outcome, *, dry_run: bool) -> Verdict
 
 SIX: Final = Command("vehicle.tesla", CommandKind.CURRENT, 6.0)
 ON: Final = Command("wallbox.evcs", CommandKind.CHARGING, True)
+OVERRIDE: Final = Command(VICTRON, CommandKind.GRID_SETPOINT, 2340.0, reasons=("battery_comp",))
+NO_OVERRIDE: Final = Command(VICTRON, CommandKind.GRID_SETPOINT, None, reasons=("battery_comp",))
 
 
-def wrapped() -> tuple[FakeCharger, list[OwnValue | Forgotten]]:
-    """Eine Laderegelung, eingehüllt vom Lauf, und die Liste ihrer eigenen Werte."""
-    rt = FakeRuntime()
-    return rt.charger, runner._own_values(rt)  # type: ignore[arg-type]
+def wrapped() -> tuple[FakeRegulation, list[OwnValue | Forgotten]]:
+    """Eine Regelung, eingehüllt vom Lauf, und die Liste ihrer eigenen Werte."""
+    regulation = FakeRegulation()
+    return regulation, runner._own_values(FakeRuntime(regulation))  # type: ignore[arg-type]
 
 
-def dry_run_six(charger: FakeCharger) -> None:
+def dry_run_six(regulation: FakeRegulation) -> None:
     """Ein Dry-Run-Urteil „Strom 6 A“ an den Tesla."""
-    charger.note_verdict(SIX, verdict_for(SIX, Outcome.ACCEPTED, dry_run=True))
+    regulation.note_verdict(SIX, verdict_for(SIX, Outcome.ACCEPTED, dry_run=True))
 
 
 def repeats(cfg: Config, own: list[OwnValue | Forgotten]) -> int:
@@ -389,31 +405,32 @@ def repeats(cfg: Config, own: list[OwnValue | Forgotten]) -> int:
 
 
 def test_verdicts_with_a_value_or_unchanged_are_own_values(cfg) -> None:
-    charger, own = wrapped()
-    dry_run_six(charger)
-    charger.note_verdict(SIX, verdict_for(SIX, Outcome.UNCHANGED, dry_run=True))
-    charger.note_verdict(SIX, verdict_for(SIX, Outcome.DEFERRED, dry_run=True))  # setzt nichts
-    charger.note_verdict(SIX, None)  # nicht betrachtet: setzt nichts
-    dry_run_six(charger)
+    regulation, own = wrapped()
+    dry_run_six(regulation)
+    regulation.note_verdict(SIX, verdict_for(SIX, Outcome.UNCHANGED, dry_run=True))
+    regulation.note_verdict(SIX, verdict_for(SIX, Outcome.DEFERRED, dry_run=True))  # setzt nichts
+    regulation.note_verdict(SIX, None)  # nicht betrachtet: setzt nichts
+    dry_run_six(regulation)
     assert own == [
         OwnValue("vehicle.tesla", CommandKind.CURRENT, 6.0, dry_run=True),
         OwnValue("vehicle.tesla", CommandKind.CURRENT, 6.0, dry_run=False),
         OwnValue("vehicle.tesla", CommandKind.CURRENT, 6.0, dry_run=True),
     ]
     assert repeats(cfg, own) == 1  # das letzte Urteil wiederholt den Wert von UNCHANGED
-    assert charger.calls == [("note_verdict", False)] * 5  # die Regelung bekommt jeden Aufruf
+    assert regulation.calls == [("note_verdict", False)] * 5  # die Regelung bekommt jeden Aufruf
 
 
 def test_a_verdict_that_was_not_sent_is_no_own_value(cfg) -> None:
     # Ein Wert stand fest, ging aber nicht hinaus: Die Regelung löscht ihren Wert dieser Art,
     # und das nächste Urteil mit demselben Wert ist keine Wiederholung.
-    charger, own = wrapped()
-    dry_run_six(charger)
-    charger.note_verdict(SIX, verdict_for(SIX, Outcome.ACCEPTED, dry_run=False), not_sent=True)
-    dry_run_six(charger)
+    regulation, own = wrapped()
+    dry_run_six(regulation)
+    not_sent = verdict_for(SIX, Outcome.ACCEPTED, dry_run=False)
+    regulation.note_verdict(SIX, not_sent, not_sent=True)
+    dry_run_six(regulation)
     assert own[1] == Forgotten("vehicle.tesla", CommandKind.CURRENT)
     assert repeats(cfg, own) == 0
-    assert charger.calls == [
+    assert regulation.calls == [
         ("note_verdict", False),
         ("note_verdict", True),
         ("note_verdict", False),
@@ -421,29 +438,79 @@ def test_a_verdict_that_was_not_sent_is_no_own_value(cfg) -> None:
 
 
 def test_forget_drops_the_own_values_of_its_actuators(cfg) -> None:
-    charger, own = wrapped()
-    dry_run_six(charger)
-    charger.forget({"wallbox.evcs", "vehicle.tesla"})
-    charger.forget(set())
-    dry_run_six(charger)
+    regulation, own = wrapped()
+    dry_run_six(regulation)
+    regulation.forget({"wallbox.evcs", "vehicle.tesla"})
+    regulation.forget(set())
+    dry_run_six(regulation)
     assert own[1:3] == [Forgotten("vehicle.tesla"), Forgotten("wallbox.evcs")]
     assert repeats(cfg, own) == 0
-    assert charger.calls[1:3] == [("forget", {"wallbox.evcs", "vehicle.tesla"}), ("forget", set())]
-    charger.forget({"wallbox.evcs"})  # ein anderer Aktor: Der Wert des Tesla gilt weiter
-    dry_run_six(charger)
+    forgotten = [("forget", {"wallbox.evcs", "vehicle.tesla"}), ("forget", set())]
+    assert regulation.calls[1:3] == forgotten
+    regulation.forget({"wallbox.evcs"})  # ein anderer Aktor: Der Wert des Tesla gilt weiter
+    dry_run_six(regulation)
     assert repeats(cfg, own) == 1
 
 
 def test_idle_drops_all_own_values(cfg) -> None:
-    charger, own = wrapped()
-    dry_run_six(charger)
-    charger.note_verdict(ON, verdict_for(ON, Outcome.ACCEPTED, dry_run=True))
-    charger.idle(T0)
-    dry_run_six(charger)
-    charger.note_verdict(ON, verdict_for(ON, Outcome.ACCEPTED, dry_run=True))
+    regulation, own = wrapped()
+    dry_run_six(regulation)
+    regulation.note_verdict(ON, verdict_for(ON, Outcome.ACCEPTED, dry_run=True))
+    regulation.idle(T0)
+    dry_run_six(regulation)
+    regulation.note_verdict(ON, verdict_for(ON, Outcome.ACCEPTED, dry_run=True))
     assert own[2] == Forgotten()
     assert repeats(cfg, own) == 0
-    assert ("idle", T0) in charger.calls
+    assert ("idle", T0) in regulation.calls
+
+
+def test_own_values_of_the_battery_are_recorded(cfg) -> None:  # Präzisierung 17
+    # Der Lauf hüllt die ganze Regelung ein, also auch den Akku-Sollwert. Kommt ein Override nach
+    # einem UNCHANGED für „kein Override“ wieder, ist er keine Wiederholung.
+    regulation, own = wrapped()
+    regulation.note_verdict(OVERRIDE, verdict_for(OVERRIDE, Outcome.ACCEPTED, dry_run=True))
+    regulation.note_verdict(NO_OVERRIDE, verdict_for(NO_OVERRIDE, Outcome.UNCHANGED, dry_run=True))
+    regulation.note_verdict(OVERRIDE, verdict_for(OVERRIDE, Outcome.ACCEPTED, dry_run=True))
+    assert own == [
+        OwnValue(VICTRON, CommandKind.GRID_SETPOINT, 2340.0, dry_run=True),
+        OwnValue(VICTRON, CommandKind.GRID_SETPOINT, None, dry_run=False),
+        OwnValue(VICTRON, CommandKind.GRID_SETPOINT, 2340.0, dry_run=True),
+    ]
+    assert repeats(cfg, own) == 0
+    dry_runs = [value for value in own if isinstance(value, OwnValue) and value.dry_run]
+    assert repeats(cfg, dry_runs) == 1  # ohne das UNCHANGED dazwischen eine Wiederholung
+
+
+def test_a_refresh_is_an_own_value_without_a_decision(cfg) -> None:
+    # Im Dry-Run entsteht für das Auffrischen keine Entscheidung: Es setzt den eigenen Wert erneut,
+    # ist aber keine wiederholte Dry-Run-Entscheidung.
+    regulation, own = wrapped()
+    regulation.note_verdict(OVERRIDE, verdict_for(OVERRIDE, Outcome.ACCEPTED, dry_run=True))
+    refresh = replace(OVERRIDE, refresh=True)
+    regulation.note_verdict(refresh, verdict_for(refresh, Outcome.ACCEPTED, dry_run=True))
+    assert own[-1] == OwnValue(VICTRON, CommandKind.GRID_SETPOINT, 2340.0, dry_run=False)
+    assert repeats(cfg, own) == 0
+    # Bei einer anderen Art hat ``refresh`` keine Wirkung: Die Entscheidung entsteht.
+    six = replace(SIX, refresh=True)
+    dry_run_six(regulation)
+    regulation.note_verdict(six, verdict_for(six, Outcome.ACCEPTED, dry_run=True))
+    assert own[-1] == OwnValue("vehicle.tesla", CommandKind.CURRENT, 6.0, dry_run=True)
+    assert repeats(cfg, own) == 1
+
+
+def test_a_pause_after_an_exception_drops_all_own_values(cfg, monkeypatch) -> None:
+    # Wirft der Kern, ruht er über ``RegulationLink.idle``: Das Einhüllen sieht auch diese Pause.
+    link = RegulationLink(cfg, HardLimits.from_config(cfg), started=T0)
+    own = runner._own_values(FakeRuntime(link))  # type: ignore[arg-type]
+
+    def broken(*args: object, **kwargs: object) -> None:
+        raise RuntimeError("Testfehler in der Regelung")
+
+    monkeypatch.setattr(link.regulation, "note_verdict", broken)
+    link.start_cycle()
+    link.note_verdict(OVERRIDE, verdict_for(OVERRIDE, Outcome.ACCEPTED, dry_run=True))
+    assert link.failed
+    assert own == [OwnValue(VICTRON, CommandKind.GRID_SETPOINT, 2340.0, dry_run=True), Forgotten()]
 
 
 # --- Prüfungen der Szenarien ----------------------------------------------------------------------
