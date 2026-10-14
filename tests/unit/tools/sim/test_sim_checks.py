@@ -1,6 +1,7 @@
 """Tests der Szenarien 6 bis 10: Aufbau, Ereignisse und Prüfungen an Hand gebauten Ergebnissen.
 
-Die ganzen Läufe prüft ``tests/integration/test_sim_scenarios.py``.
+Dazu das Ereignis ``_Boost`` und die Option ``dess`` von ``_setup``, die die Szenarien von Akku und
+Spitzen brauchen. Die ganzen Läufe prüft ``tests/integration/test_sim_scenarios.py``.
 """
 
 from __future__ import annotations
@@ -233,6 +234,72 @@ def test_the_override_is_a_new_version_of_the_valid_intent(cfg) -> None:
     ((at, unplug),) = actions("zuordnung", _Unplug)
     unplug(model, None)
     assert at == 2400 and tesla.wallbox is None and model.wallboxes["evcs"].car is None
+
+
+def test_boost_is_a_new_version_of_the_valid_intent_with_boost_until(cfg) -> None:
+    from bindaems.tools.sim.scenarios import _Boost
+
+    model = set_up(cfg, "zuordnung")  # das Ereignis braucht vom Modell nichts
+    until = T0 + timedelta(minutes=45)
+    boost = _Boost(2, "egolf", until)
+    assert (boost.version, boost.vehicle, boost.until) == (2, "egolf", until)
+    # Sonst bleibt die gültige Absicht, auch Modus und Wallbox des Fahrzeugs.
+    current = Intent(
+        version=1,
+        control=True,
+        actuators={EVCS: ActuatorMode.LIVE},
+        vehicles={
+            "tesla": VehicleIntent(mode=ChargeMode.PV),
+            "egolf": VehicleIntent(mode=ChargeMode.NOW, wallbox="evcs"),
+        },
+    )
+    rt = FakeRuntime(current)
+    boost(model, rt)  # type: ignore[arg-type]
+    assert rt.sent == [
+        current.model_copy(
+            update={
+                "version": 2,
+                "vehicles": {
+                    "tesla": VehicleIntent(mode=ChargeMode.PV),
+                    "egolf": VehicleIntent(mode=ChargeMode.NOW, wallbox="evcs", boost_until=until),
+                },
+            }
+        )
+    ]
+    # Ein Fahrzeug ohne Eintrag bekommt den Standard und den Boost.
+    rt = FakeRuntime(Intent(version=1, control=True))
+    boost(model, rt)  # type: ignore[arg-type]
+    assert [i.vehicles for i in rt.sent] == [{"egolf": VehicleIntent(boost_until=until)}]
+    assert rt.sent[0].version == 2 and rt.sent[0].control
+
+
+def test_a_rejected_boost_stops_the_run(cfg) -> None:
+    from bindaems.tools.sim.scenarios import _Boost
+
+    model = set_up(cfg, "zuordnung")
+    boost = _Boost(2, "egolf", T0 + timedelta(minutes=45))
+    rt = FakeRuntime(Intent(version=1, control=True))
+    rt.reply = IntentReply("rejected", 1, ("Unbekanntes Fahrzeug „egolf“.",))
+    with pytest.raises(ValueError, match="Boost abgelehnt: Unbekanntes Fahrzeug"):
+        boost(model, rt)  # type: ignore[arg-type]
+    rt.reply = IntentReply("clamped", 2, ("Boost auf 12 h begrenzt, bis 06:00.",))
+    boost(model, rt)  # type: ignore[arg-type]  # geklemmt ist angenommen
+    rt.current = None
+    with pytest.raises(ValueError, match="Boost ohne gültige Absicht"):
+        boost(model, rt)  # type: ignore[arg-type]
+
+
+def test_setup_switches_dynamic_ess_on_request(cfg) -> None:
+    from bindaems.tools.sim.scenarios import _setup
+
+    without = PlantModel(cfg, random.Random(1))  # noqa: S311 - Saat der Simulation
+    _setup(without, soc_pct=60.0)
+    assert without.dess is False
+    with_dess = PlantModel(cfg, random.Random(1))  # noqa: S311 - Saat der Simulation
+    _setup(with_dess, soc_pct=60.0, dess=True)
+    assert with_dess.dess is True
+    assert with_dess.soc_pct == 60.0  # der Rest des Aufbaus wie sonst
+    assert all(not set_up(cfg, name).dess for name in list(SCENARIOS)[:10])
 
 
 def test_the_dry_run_runs_beside_a_foreign_controller(cfg) -> None:

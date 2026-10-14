@@ -12,7 +12,9 @@ from itertools import pairwise
 from typing import Final
 
 import pytest
+from pydantic import ValidationError
 
+from bindaems.core.adapters.victron_mqtt import SETPOINT_OVERRIDE_PATH
 from bindaems.core.api.app import HealthReport
 from bindaems.core.regulation_link import RegulationLink
 from bindaems.core.safety.limits import HardLimits
@@ -39,8 +41,10 @@ from bindaems.tools.sim.scenarios import (
     HOUSE_W,
     SCENARIOS,
     SUN_PEAK_W,
+    Action,
     Checks,
     Scenario,
+    _Boost,
     sun_w,
 )
 
@@ -355,6 +359,156 @@ async def test_the_metrics_get_every_own_value_of_the_regulation(
         assert own[-2:] == [OwnValue(*current, dry_run=False), OwnValue(*charging, dry_run=dry_run)]
         evcs = [(d.kind, d.requested) for d in result.decisions if d.actuator == "wallbox.evcs"]
         assert evcs == [charging[1:]]
+
+
+# --- Victron live, Steuerwerte, Boost und die Felder der Probe ------------------------------------
+
+
+def bare_scenario(
+    *, events: tuple[tuple[int, Action], ...] = (), duration_s: int = 5, **changes: object
+) -> Scenario:
+    """Ein Szenario ohne Aufbau, mit der Absicht „Regelbetrieb“ und ohne Prüfungen."""
+    scenario = Scenario(
+        name="test",
+        title="Test",
+        start=T0,
+        duration_s=duration_s,
+        seed=1,
+        setup=lambda model: None,
+        intent=Intent(version=1, control=True),
+        live=False,
+        events=events,
+        checks=lambda result: [],
+    )
+    return replace(scenario, **changes)
+
+
+def test_victron_live_scenarios_allow_and_switch_victron(cfg, tmp_path) -> None:
+    assert not cfg.victron.live_allowed
+    assert not runner.sim_config(cfg, tmp_path).victron.live_allowed  # wie bisher
+    allowed = runner.sim_config(cfg, tmp_path, victron=True)
+    assert allowed.victron.live_allowed and allowed.wallboxes["evcs"].live_allowed
+    assert allowed.vehicles["tesla"].live_allowed and allowed.core.data_dir == tmp_path
+    assert not cfg.victron.live_allowed  # die übergebene Konfiguration bleibt, wie sie ist
+    # ``live`` schaltet EVCS und Tesla, ``victron_live`` dazu Victron
+    scenario = SCENARIOS["reserve"]
+    live = {"wallbox.evcs": ActuatorMode.LIVE, "vehicle.tesla": ActuatorMode.LIVE}
+    assert runner._intent(scenario, cfg).actuators == live
+    with_victron = runner._intent(replace(scenario, victron_live=True), cfg)
+    assert with_victron.actuators == live | {VICTRON: ActuatorMode.LIVE}
+    assert with_victron.model_copy(update={"actuators": live}) == runner._intent(scenario, cfg)
+    # ``victron_live`` allein schaltet nur Victron
+    only = runner._intent(replace(scenario, live=False, victron_live=True), cfg)
+    assert only.actuators == {VICTRON: ActuatorMode.LIVE}
+    # ohne beides bleibt es bei der Absicht des Szenarios
+    dry = replace(scenario, live=False)
+    assert runner._intent(dry, cfg) == dry.intent and VICTRON not in dry.intent.actuators
+
+
+def test_scenario_control_values_reach_the_config(cfg, tmp_path) -> None:
+    assert cfg.control.peak_target_kw is None and cfg.control.support_max_w == 3000.0
+    values = {"peak_target_kw": 8.0, "support_max_w": 2500.0}
+    config = runner.sim_config(cfg, tmp_path, control=values)
+    assert (config.control.peak_target_kw, config.control.support_max_w) == (8.0, 2500.0)
+    assert config.control == cfg.control.model_copy(update=values)  # sonst unverändert
+    assert cfg.control.peak_target_kw is None  # die übergebene Konfiguration bleibt
+    assert runner.sim_config(cfg, tmp_path).control == cfg.control
+    for invalid in ({"peak_target_kw": -1.0}, {"peak_target_kw": float("nan")}, {"peak_target": 8}):
+        with pytest.raises(ValidationError):
+            runner.sim_config(cfg, tmp_path, control=invalid)
+
+
+def test_a_scenario_keeps_victron_in_the_dry_run_unless_it_says_otherwise() -> None:
+    plain = bare_scenario()
+    assert plain.victron_live is False and plain.control == {}
+    with pytest.raises(TypeError):
+        plain.control["peak_target_kw"] = 8.0  # type: ignore[index]
+    existing = list(SCENARIOS.values())[:10]  # die zehn bestehenden Szenarien
+    assert all(not s.victron_live and not s.control for s in existing)
+
+
+async def test_a_victron_live_run_follows_the_override_of_the_core(cfg, tmp_path) -> None:
+    # „reserve“: Der e-Golf lädt in Sofort mit 13 A × 2 Phasen × 230 V = 5980 W, und der
+    # Akku-Sollwert verlangt dafür 5980 W Netzbezug. Mit Victron live schreibt der core den Override
+    # ans Modell, und der ESS folgt ihm: Der Netzbezug ist der Override, der Akku trägt nur das
+    # Haus. Im Dry-Run (wie bisher) bleibt es bei der Entscheidung.
+    results = {}
+    for name, scenario in (
+        ("live", replace(SCENARIOS["reserve"], victron_live=True)),
+        ("dry", SCENARIOS["reserve"]),
+    ):
+        data_dir = tmp_path / name
+        data_dir.mkdir()
+        results[name] = await run_scenario(scenario, cfg, data_dir, duration_s=100)
+    live, dry = results["live"], results["dry"]
+    first, last = live.samples[0], live.samples[-1]
+    assert (first.override_w, first.override_age_s) == (None, None)
+    assert last.override_w == 5980.0 and last.override_age_s is not None
+    assert 0.0 <= last.override_age_s < 100.0
+    assert last.grid_w == pytest.approx(5980.0)
+    cars_w = sum(car.power_w for car in last.cars.values())
+    assert last.battery_w == pytest.approx(5980.0 - last.house_w - cars_w)  # das Haus aus dem Akku
+    battery = (CommandKind.GRID_SETPOINT, 5980.0)
+    assert [(d.kind, d.requested, d.result) for d in live.decisions if d.actuator == VICTRON] == [
+        (*battery, DecisionResult.OK)
+    ]
+    assert [(d.kind, d.requested, d.result) for d in dry.decisions if d.actuator == VICTRON] == [
+        (*battery, DecisionResult.DRY_RUN)
+    ]
+    assert dry.samples[-1].override_w is None
+    assert dry.samples[-1].grid_w == pytest.approx(0.0, abs=1.0)  # AcPowerSetPoint 0
+
+
+async def test_scenario_control_values_switch_the_peak_guard_on(cfg, tmp_path) -> None:
+    # Ohne Ziel ruht der Wächter (``peak.state`` „off“); mit ``peak_target_kw`` kennt der core das
+    # Ziel und arbeitet (hier, nach dem Start des core mitten im Lauf, mit einer Lücke).
+    peaks = {}
+    for name, control in (("off", {}), ("on", {"peak_target_kw": 8.0})):
+        data_dir = tmp_path / name
+        data_dir.mkdir()
+        scenario = replace(SCENARIOS["reserve"], control=control)
+        result = await run_scenario(scenario, cfg, data_dir, duration_s=100)
+        peaks[name] = result.health[-1][1].peak
+    assert (peaks["off"]["state"], peaks["off"]["target_kw"]) == ("off", None)
+    assert peaks["on"]["state"] != "off" and peaks["on"]["target_kw"] == 8.0
+
+
+async def test_samples_carry_grid_pv_house_and_override(cfg, tmp_path) -> None:
+    # SOC 50 %: PV 2000 W, Haus 300 + 400 + 500 = 1200 W; der Akku nimmt die 800 W, am Netz bleibt
+    # nichts. Der Override 1500 W, den ein Ereignis vor der Physik der Sekunde 2 schreibt (zur Zeit
+    # des Schritts von Sekunde 1), hebt den Netzbezug auf 1500 W. In Sekunde 4 fällt das Netz aus.
+    def weather(model: PlantModel, rt: object) -> None:
+        model.pv_w = 2000.0
+        model.house_w = (300.0, 400.0, 500.0)
+
+    def override(model: PlantModel, rt: object) -> None:
+        assert model.mqtt_write(SETPOINT_OVERRIDE_PATH, 1500.0)
+
+    def island(model: PlantModel, rt: object) -> None:
+        model.outages.add("grid")
+
+    scenario = bare_scenario(events=((0, weather), (2, override), (4, island)), duration_s=6)
+    samples = (await run_scenario(scenario, cfg, tmp_path)).samples
+    for sample in samples[:2]:
+        assert (sample.pv_w, sample.house_w) == (2000.0, 1200.0)
+        assert sample.grid_w == pytest.approx(0.0)
+        assert (sample.override_w, sample.override_age_s) == (None, None)
+    for t, sample in enumerate(samples[2:4], 2):
+        assert (sample.override_w, sample.override_age_s) == (1500.0, t - 1.0)
+        assert (sample.pv_w, sample.house_w) == (2000.0, 1200.0)
+        assert sample.grid_w == pytest.approx(1500.0)
+    for t, sample in enumerate(samples[4:], 4):  # Inselbetrieb: keine PV am AC-Eingang, kein Netz
+        assert (sample.pv_w, sample.house_w, sample.grid_w) == (0.0, 1200.0, 0.0)
+        assert (sample.override_w, sample.override_age_s) == (1500.0, t - 1.0)
+
+
+async def test_a_boost_event_shows_in_the_samples(cfg, tmp_path) -> None:
+    # Ab Sekunde 3 lädt der e-Golf in Boost bis zum absoluten Ende T0 + 8 s (``now < boost_until``).
+    boost = _Boost(2, "egolf", T0 + timedelta(seconds=8))
+    scenario = bare_scenario(events=((3, boost),), duration_s=12)
+    result = await run_scenario(scenario, cfg, tmp_path)
+    assert [s.cars["egolf"].mode for s in result.samples] == ["pv"] * 3 + ["boost"] * 5 + ["pv"] * 4
+    assert {s.cars["tesla"].mode for s in result.samples} == {"pv"}
 
 
 class FakeRegulation:

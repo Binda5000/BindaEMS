@@ -6,6 +6,11 @@ ist Wanduhr und Uhr der Safety-Schicht. Gefälscht sind nur die Geräte dahinter
 Präzisierung 16): Der core schreibt über ``PlantModel.mqtt_write`` und erreicht Tessie über
 ``httpx.MockTransport`` mit ``PlantModel.tessie``; die Telemetrie verwirft ein ``_Discard``.
 
+Die Konfiguration des Laufs macht ``sim_config``: Ablage des core, EVCS und Fahrzeuge mit Tessie
+für den Live-Betrieb freigegeben, mit ``Scenario.victron_live`` auch Victron, und die Werte von
+``Scenario.control`` über ``ControlConfig``. Die Absicht schaltet dieselben Aktoren live
+(``_intent``).
+
 Je simulierter Sekunde:
 
 1. die Ereignisse der Sekunde
@@ -31,11 +36,12 @@ from __future__ import annotations
 import asyncio
 import random
 from collections import defaultdict
-from collections.abc import Collection, Sequence
+from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Final
+from types import MappingProxyType
+from typing import Any, Final
 
 import httpx
 from pydantic import SecretStr
@@ -43,8 +49,9 @@ from pydantic import SecretStr
 from bindaems.core.api.app import HealthReport
 from bindaems.core.runtime import CoreRuntime
 from bindaems.core.safety.types import Outcome, Verdict
-from bindaems.shared.config import Config, EvcsConfig, Secrets
+from bindaems.shared.config import Config, ControlConfig, EvcsConfig, Secrets
 from bindaems.shared.control import (
+    VICTRON,
     ActuatorMode,
     Command,
     CommandKind,
@@ -97,9 +104,19 @@ class _Discard:
         del point
 
 
-def sim_config(cfg: Config, data_dir: Path) -> Config:
+def sim_config(
+    cfg: Config,
+    data_dir: Path,
+    *,
+    victron: bool = False,
+    control: Mapping[str, Any] = MappingProxyType({}),
+) -> Config:
     """Die Konfiguration des Laufs: ``data_dir`` als Ablage des core, jede EVCS und jedes
-    Fahrzeug mit Tessie für den Live-Betrieb freigegeben."""
+    Fahrzeug mit Tessie für den Live-Betrieb freigegeben, mit ``victron`` auch Victron.
+
+    ``control`` überschreibt Werte von ``ControlConfig``; ein ungültiger Wert oder ein unbekannter
+    Name ist ein ``ValidationError``.
+    """
     wallboxes = {
         key: wallbox.model_copy(update={"live_allowed": True})
         if isinstance(wallbox, EvcsConfig)
@@ -113,22 +130,35 @@ def sim_config(cfg: Config, data_dir: Path) -> Config:
         for key, vehicle in cfg.vehicles.items()
     }
     core = cfg.core.model_copy(update={"data_dir": data_dir})
-    return cfg.model_copy(update={"wallboxes": wallboxes, "vehicles": vehicles, "core": core})
+    changes: dict[str, Any] = {
+        "wallboxes": wallboxes,
+        "vehicles": vehicles,
+        "core": core,
+        "control": ControlConfig.model_validate(cfg.control.model_dump() | dict(control)),
+    }
+    if victron:
+        changes["victron"] = cfg.victron.model_copy(update={"live_allowed": True})
+    return cfg.model_copy(update=changes)
 
 
 def _intent(scenario: Scenario, cfg: Config) -> Intent:
-    """Die Absicht des Szenarios; mit ``live`` sind EVCS und Fahrzeuge mit Tessie live."""
-    if not scenario.live:
+    """Die Absicht des Szenarios; mit ``live`` sind EVCS und Fahrzeuge mit Tessie live, mit
+    ``victron_live`` dazu Victron."""
+    live: dict[str, ActuatorMode] = {}
+    if scenario.live:
+        live = {
+            wallbox_actuator(key): ActuatorMode.LIVE
+            for key, wallbox in cfg.wallboxes.items()
+            if isinstance(wallbox, EvcsConfig)
+        } | {
+            vehicle_actuator(key): ActuatorMode.LIVE
+            for key, vehicle in cfg.vehicles.items()
+            if vehicle.tessie is not None
+        }
+    if scenario.victron_live:
+        live[VICTRON] = ActuatorMode.LIVE
+    if not live:
         return scenario.intent
-    live = {
-        wallbox_actuator(key): ActuatorMode.LIVE
-        for key, wallbox in cfg.wallboxes.items()
-        if isinstance(wallbox, EvcsConfig)
-    } | {
-        vehicle_actuator(key): ActuatorMode.LIVE
-        for key, vehicle in cfg.vehicles.items()
-        if vehicle.tessie is not None
-    }
     return scenario.intent.model_copy(update={"actuators": scenario.intent.actuators | live})
 
 
@@ -140,7 +170,7 @@ async def run_scenario(
     ``data_dir`` nimmt die Ablage des core auf (Absicht, Limits, Entscheidungslog). Eine Ausnahme
     im Zyklus bricht den Lauf ab; die Laufzeit fährt trotzdem herunter.
     """
-    cfg = sim_config(cfg, data_dir)
+    cfg = sim_config(cfg, data_dir, victron=scenario.victron_live, control=scenario.control)
     seconds = scenario.duration_s if duration_s is None else duration_s
     clock = ManualClock(scenario.start)
     model = PlantModel(cfg, random.Random(scenario.seed))  # noqa: S311 - Saat der Simulation
@@ -245,7 +275,8 @@ def _by_second(events: Sequence[tuple[int, Action]]) -> dict[int, list[Action]]:
 
 def _sample(t: int, model: PlantModel, cfg: Config, intent: Intent | None, now: datetime) -> Sample:
     """Die Probe nach Sekunde ``t``; der Modus je Auto laut Absicht, mit Boost bis ``now``, und
-    ob die Regelung seinen Ladepunkt live steuert (``_steered``)."""
+    ob die Regelung seinen Ladepunkt live steuert (``_steered``). Dazu Netz, PV, Haus und Override
+    des Modells im Schritt."""
     amps, power = model.car_a, model.car_w
     cars: dict[str, CarSample] = {}
     for key, vehicle in cfg.vehicles.items():
@@ -270,6 +301,11 @@ def _sample(t: int, model: PlantModel, cfg: Config, intent: Intent | None, now: 
         battery_w=model.battery_w,
         soc_pct=model.soc_pct,
         cars=cars,
+        grid_w=model.grid_w,
+        pv_w=model.pv_now_w,
+        house_w=sum(model.house_w),
+        override_w=model.override_w,
+        override_age_s=model.override_age_s,
     )
 
 

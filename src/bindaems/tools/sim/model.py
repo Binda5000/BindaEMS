@@ -11,15 +11,23 @@ AC-Eingang, gleich auf drei Phasen. Je Phase gilt ``P_acout = Haus + Wallboxen``
 ``P_acin = P_acout + Akku`` und am Netz ``P_netz = P_acin − PV``; die Spannung ist
 ``grid.voltage_nominal_v``.
 
-- **ESS** (Multi „Ein“): Der Akku gleicht die Summe der Phasen aus,
-  ``clamp(PV − Lasten, −max_discharge_w, max_charge_w)``, je Phase ein Drittel. Bei SOC ≤ Reserve
-  entlädt er nicht, und in der Sekunde, in der er sie erreicht, nur bis zu ihr; bei 100 % lädt er
-  nicht.
+- **ESS** (Multi „Ein“): Der Akku regelt die Summe der Phasen auf den Netz-Sollwert ``S``,
+  ``clamp(PV − Lasten + S, −max_discharge_w, max_charge_w)``, je Phase ein Drittel. ``S`` ist der
+  Override, solange er gilt, sonst ``AcPowerSetPoint`` (was keine Zahl ist, zählt als 0). Bei
+  SOC ≤ Reserve entlädt der Akku nicht, und in der Sekunde, in der er sie erreicht, nur bis zu
+  ihr; bei 100 % lädt er nicht.
 - **Peak Shaving:** Liegt eine Phase über ``grid.import_limit_a``, entlädt der Multi dieser Phase
   zusätzlich, bis höchstens ``max_discharge_w / 3``, nur über der Reserve.
 - **„Nur Laden“** (``charger_only``, ``vebus.mode`` 1): Der Akku entlädt nie, kein Peak Shaving.
 - **Inselbetrieb** (Ausfall „grid“): Am Netz 0 W und 0 V, ``system.active_in_source`` 240. Die PV
   am AC-Eingang steht still; der Akku trägt die Lasten, auch unter der Reserve.
+
+**Override des Netz-Sollwerts** (``hub4/0/Overrides/Setpoint``, Plan 2c-2a, Präzisierung 17): Eine
+Zahl, die der core dorthin schreibt, gilt als ``S`` und verfällt ``OVERRIDE_TIMEOUT_S`` nach dem
+letzten Schreiben einer Zahl; ``None`` hebt ihn auf. Was keine endliche Zahl ist, ändert nichts.
+Mit Dynamic ESS (``dess``) verwirft der Cerbo den Override und nimmt keinen an: Ein
+Schreibauftrag liefert ``True`` und wirkt nicht. Der Cerbo meldet den Override unter seinem Pfad,
+ohne ihn ``None``, und ``Settings/DynamicEss/Mode`` mit 1 bei Dynamic ESS, sonst mit 0.
 
 **Signale** entstehen wie an der Anlage: Der Cerbo liefert Topics (``<Dienst>/<Instanz>/<Pfad>``),
 die EVCS ihren Registerblock, der Wall Connector seine Vitals, Tessie den Zustand des Fahrzeugs
@@ -40,7 +48,7 @@ Backoff des Adapters (60 s, dann doppelt, höchstens 900 s), auch nach dem Ausfa
 veralten nach 900 s, und Befehle enden mit HTTP 503. Die Quelle bleibt verbunden, weil auch der
 echte Tessie-Adapter sie bei Fehlern nicht trennt. Bei „cerbo“ kommen keine Werte über
 ``victron``, und ``mqtt_write`` liefert ``False``. „grid“ ist der Inselbetrieb. Die Geräte selbst
-laufen weiter.
+laufen weiter, auch ein Override am Cerbo bis zu seinem Verfall.
 
 **Fremder Regler** (``foreign``): Alle ``FOREIGN_EVERY`` stellt er direkt am Gerät jede EVCS auf
 einen Sollstrom aus ``FOREIGN_EVCS_A`` mit Laden an und jeden Tesla auf einen Strom aus
@@ -58,6 +66,7 @@ from typing import Final
 
 import httpx
 
+from bindaems.core.actuators.victron import OVERRIDE_TIMEOUT_S
 from bindaems.core.adapters.evcs import BLOCK_START, decode_block
 from bindaems.core.adapters.evcs import FRESHNESS_S as EVCS_FRESHNESS_S
 from bindaems.core.adapters.tessie import FRESHNESS_S as TESSIE_FRESHNESS_S
@@ -80,6 +89,7 @@ from bindaems.core.state.store import StateStore
 from bindaems.core.watchdog_client.status import WATCHDOG_VERSION
 from bindaems.shared.config import Config, EvcsConfig, Phase, VictronInstances
 from bindaems.shared.domain import SignalKind, Value
+from bindaems.shared.numbers import finite_number
 from bindaems.tools.sim.cars import Car, Evcs, GxPath, Tesla, WallConnector
 from bindaems.tools.watchdog_config import REARM_S
 
@@ -105,6 +115,9 @@ HUB4_MODE: Final = 1  # ESS mit Phasenkompensation: Der Akku gleicht die Summe d
 BATTERYLIFE_STATE: Final = 10  # „Optimiert ohne BatteryLife“, normal
 SCHEDULE_OFF: Final = -7  # Tag eines abgeschalteten Ladefensters
 _SETTINGS: Final = "settings/0/Settings"
+_AC_SETPOINT: Final = f"{_SETTINGS}/CGwacs/AcPowerSetPoint"  # der Basis-Sollwert des Netzes
+_DESS_MODE: Final = f"{_SETTINGS}/DynamicEss/Mode"  # 0 aus, 1 an
+_OVERRIDE_TIMEOUT: Final = timedelta(seconds=OVERRIDE_TIMEOUT_S)
 _PORTAL: Final = "sim"  # Portal-ID der Topics; die Abbildung des Adapters vergleicht nur mit ihr
 
 # Zustände des Watchdogs (``/State``)
@@ -202,14 +215,21 @@ class PlantModel:
     - ``charger_only``: Multi auf „Nur Laden“ statt „Ein“
     - ``outages``: laufende Ausfälle aus ``OUTAGES``
     - ``foreign``: der fremde Regler ist an
+    - ``dess``: Dynamic ESS ist an; der Cerbo meldet ``Settings/DynamicEss/Mode`` 1, verwirft den
+      Override und nimmt keinen an
     - die Geräte: ``wallboxes`` (``Evcs`` und ``WallConnector``), ``cars`` (``teslas`` davon mit
       Tessie); ``plug`` und ``unplug`` stecken an und ab
 
     Messgrößen für die Kennzahlen, Stand des letzten ``step``:
 
     - ``grid_a``: Netzstrom je Phase, positiv beim Bezug
+    - ``grid_w``: Netzleistung, die Summe der Phasen, positiv beim Bezug
     - ``battery_feed_a``: was der Multi je Phase aus dem Akku liefert
     - ``battery_w``: Akkuleistung, positiv beim Laden, und ``soc_pct``
+    - ``pv_now_w``: die PV-Leistung des Schritts; im Inselbetrieb 0, anders als die Stellgröße
+      ``pv_w``
+    - ``override_w``, ``override_age_s``: der Override, der im Schritt gilt, und die Sekunden seit
+      seinem letzten Schreiben; ohne Override beide ``None``
     - ``car_a``, ``car_w``: Strom je Phase und Ladeleistung je Fahrzeug
     """
 
@@ -223,9 +243,14 @@ class PlantModel:
         self.charger_only = False
         self.outages: set[str] = set()
         self.foreign = False
+        self.dess = False
         self.grid_a: dict[Phase, float] = dict.fromkeys(PHASES, 0.0)
+        self.grid_w = 0.0
         self.battery_feed_a: dict[Phase, float] = dict.fromkeys(PHASES, 0.0)
         self.battery_w = 0.0
+        self.pv_now_w = 0.0
+        self.override_w: float | None = None
+        self.override_age_s: float | None = None
         self.cars: dict[str, Car] = {}
         self.teslas: dict[str, Tesla] = {}
         for key, vehicle in cfg.vehicles.items():
@@ -257,23 +282,23 @@ class PlantModel:
         self._pv_instances = list(instances.pv) or [0]
         self._routes = _Routes(instances)
         # Einstellungen am Cerbo, wie die Selbstprüfung sie erwartet; die Schreibpfade für Victron
-        # sind dieselben Topics
+        # sind dieselben Topics. Der Override und der Modus von Dynamic ESS fehlen hier: Sie hängen
+        # vom Zustand des Modells ab (``_override``, ``dess``).
         self._settings: dict[str, Value] = {
             f"{_SETTINGS}/CGwacs/Hub4Mode": HUB4_MODE,
             f"{_SETTINGS}/CGwacs/BatteryLife/State": BATTERYLIFE_STATE,
             f"{_SETTINGS}/CGwacs/BatteryLife/Schedule/Charge/0/Day": SCHEDULE_OFF,
-            f"{_SETTINGS}/CGwacs/AcPowerSetPoint": 0,
+            _AC_SETPOINT: 0,
             f"{_SETTINGS}/CGwacs/AcInputLimit": cfg.grid.import_limit_a,
-            f"{_SETTINGS}/DynamicEss/Mode": 0,
             MIN_SOC_PATH: cfg.battery.reserve_soc_pct,
             MAX_DISCHARGE_PATH: -1,
-            SETPOINT_OVERRIDE_PATH: None,
         }
+        # der Override des Netz-Sollwerts: Wert und Zeit seines letzten Schreibens
+        self._override: tuple[float, datetime] | None = None
         self._watchdog = _Watchdog(cfg.victron.watchdog.timeout_s)
         self._foreign_next: datetime | None = None
         self._now: datetime | None = None
         # Leistungen je Phase im letzten Schritt, für die Topics des Cerbo
-        self._pv_now_w = 0.0
         self._grid_w: dict[Phase, float] = dict.fromkeys(PHASES, 0.0)
         self._ac_in_w: dict[Phase, float] = dict.fromkeys(PHASES, 0.0)
         self._ac_out_w: dict[Phase, float] = dict.fromkeys(PHASES, 0.0)
@@ -334,7 +359,7 @@ class PlantModel:
         Nur Pfade aus ``writable_paths``, sonst ``ValueError``. Während des Ausfalls „cerbo“ ist das
         Ergebnis ``False``, und nichts geschieht. Sonst wirkt der Auftrag zur Zeit des letzten
         ``step``: der Heartbeat beim Watchdog, Sollstrom und Laden an/aus bei der EVCS (verzögert),
-        die Einstellungen sofort am Cerbo.
+        der Override des Netz-Sollwerts (``_write_override``), die Einstellungen sofort am Cerbo.
         """
         if path not in self._writable:
             raise ValueError(f"Schreibpfad nicht freigegeben: {path}")
@@ -343,6 +368,8 @@ class PlantModel:
         now = self._time()
         if path == HEARTBEAT_PATH:
             self._watchdog.heartbeat(value, now)
+        elif path == SETPOINT_OVERRIDE_PATH:
+            self._write_override(value, now)
         elif path in self._gx_paths:
             evcs, name = self._gx_paths[path]
             if value is not None:
@@ -350,6 +377,19 @@ class PlantModel:
         elif path in self._settings:
             self._settings[path] = value
         return True
+
+    def _write_override(self, value: float | int | None, now: datetime) -> None:
+        """Ein Schreibauftrag an den Override: Eine Zahl setzt ihn und die Zeit des Schreibens,
+        ``None`` hebt ihn auf. Was keine endliche Zahl ist (``bool``, Text, NaN, ±∞), ändert nichts,
+        wie beim Watchdog. Mit Dynamic ESS nimmt der Cerbo den Auftrag an, und er wirkt nicht."""
+        if self.dess:
+            return
+        if value is None:
+            self._override = None
+            return
+        number = finite_number(value)
+        if number is not None:
+            self._override = (number, now)
 
     async def tessie(self, request: httpx.Request) -> httpx.Response:
         """Tessie für die Teslas des Modells, als Handler für ``httpx.MockTransport``.
@@ -385,8 +425,8 @@ class PlantModel:
         """Eine Sekunde Physik bis ``now``.
 
         In dieser Reihenfolge: fremder Regler, Watchdog, Wallboxen (fällige Aufträge, dann der Strom
-        der Autos), Schlaf der Teslas, Lasten, ESS und Akku. Ein unbekannter Ausfall ist ein
-        ``ValueError``.
+        der Autos), Schlaf der Teslas, Verfall des Overrides, Lasten, ESS und Akku. Ein unbekannter
+        Ausfall ist ein ``ValueError``.
         """
         unknown = self.outages - OUTAGES
         if unknown:
@@ -401,7 +441,20 @@ class PlantModel:
             wallbox.step(now, STEP_S, self._volts)
         for tesla in self.teslas.values():
             tesla.tick(now)
+        self._expire_override(now)
         self._balance()
+
+    def _expire_override(self, now: datetime) -> None:
+        """Der Override am Cerbo zur Zeit ``now``: Er verfällt ``OVERRIDE_TIMEOUT_S`` nach dem
+        letzten Schreiben (bei 300 s ist er weg) und mit Dynamic ESS sofort. Danach stehen
+        ``override_w`` und ``override_age_s`` für diesen Schritt fest."""
+        if self._override is not None and (
+            self.dess or now - self._override[1] >= _OVERRIDE_TIMEOUT
+        ):
+            self._override = None
+        override = self._override
+        self.override_w = None if override is None else override[0]
+        self.override_age_s = None if override is None else (now - override[1]).total_seconds()
 
     def _run_foreign(self, now: datetime) -> None:
         """Der fremde Regler: alle ``FOREIGN_EVERY`` neue Werte direkt an den Geräten."""
@@ -426,17 +479,18 @@ class PlantModel:
             for phase, amps in wallbox.phase_a().items():
                 loads[phase] += amps * volts
         if GRID in self.outages:
-            self._pv_now_w = 0.0
+            self.pv_now_w = 0.0
             battery = {phase: -load for phase, load in loads.items()}
             ac_in = dict.fromkeys(PHASES, 0.0)
             grid = dict.fromkeys(PHASES, 0.0)
         else:
-            self._pv_now_w = self.pv_w
+            self.pv_now_w = self.pv_w
             battery = self._ess(loads)
             ac_in = {phase: loads[phase] + battery[phase] for phase in PHASES}
             grid = {phase: ac_in[phase] - self.pv_w / 3 for phase in PHASES}
         self._ac_out_w, self._ac_in_w, self._grid_w = loads, ac_in, grid
         self.grid_a = {phase: grid[phase] / volts for phase in PHASES}
+        self.grid_w = sum(grid.values())
         self.battery_feed_a = {phase: max(0.0, -battery[phase]) / volts for phase in PHASES}
         self.battery_w = sum(battery.values())
         kwh = self.battery_w * STEP_S / 3_600_000
@@ -446,11 +500,12 @@ class PlantModel:
     def _ess(self, loads: dict[Phase, float]) -> dict[Phase, float]:
         """Die Akkuleistung je Phase am Netz, positiv beim Laden: ESS, dann Peak Shaving.
 
-        Entladen darf der Akku im Schritt höchstens bis zur Reserve (``_above_reserve_w``); liefe
-        er darüber hinaus, kürzt das jede Phase im selben Verhältnis.
+        Der ESS regelt die Summe der Phasen auf den Netz-Sollwert (``_setpoint_w``). Entladen darf
+        der Akku im Schritt höchstens bis zur Reserve (``_above_reserve_w``); liefe er darüber
+        hinaus, kürzt das jede Phase im selben Verhältnis.
         """
         battery = self._cfg.battery
-        total = self.pv_w - sum(loads.values())
+        total = self.pv_w - sum(loads.values()) + self._setpoint_w()
         total = min(max(total, -battery.max_discharge_w), battery.max_charge_w)
         may_discharge = not self.charger_only and self.soc_pct > battery.reserve_soc_pct
         if not may_discharge:
@@ -470,6 +525,13 @@ class PlantModel:
         if drawn_w > above_w:
             share = {phase: power * above_w / drawn_w for phase, power in share.items()}
         return share
+
+    def _setpoint_w(self) -> float:
+        """Der Netz-Sollwert des ESS in W, positiv beim Bezug: der Override, solange er gilt, sonst
+        ``AcPowerSetPoint``; was keine Zahl ist, zählt als 0."""
+        if self._override is not None:
+            return self._override[0]
+        return finite_number(self._settings[_AC_SETPOINT]) or 0.0
 
     def _above_reserve_w(self) -> float:
         """Die Entladeleistung, mit der der Akku in einem Schritt genau die Reserve erreicht."""
@@ -529,7 +591,7 @@ class PlantModel:
         island = GRID in self.outages
         grid, vebus = f"grid/{self._grid_instance}", f"vebus/{self._vebus_instance}"
         topics: dict[str, Value] = {
-            f"{grid}/Ac/Power": sum(self._grid_w.values()),
+            f"{grid}/Ac/Power": self.grid_w,
             f"{vebus}/Ac/NumberOfPhases": self._cfg.grid.phases,
             f"{vebus}/Mode": MULTI_CHARGER_ONLY if self.charger_only else MULTI_ON,
             "system/0/Dc/Battery/Soc": self.soc_pct,
@@ -542,7 +604,7 @@ class PlantModel:
             topics[f"{grid}/Ac/L{n}/Voltage"] = 0.0 if island else self._volts
             topics[f"{vebus}/Ac/ActiveIn/L{n}/P"] = self._ac_in_w[phase]
             topics[f"{vebus}/Ac/Out/L{n}/P"] = self._ac_out_w[phase]
-        pv_w = self._pv_now_w / len(self._pv_instances)  # gleich auf die Wechselrichter
+        pv_w = self.pv_now_w / len(self._pv_instances)  # gleich auf die Wechselrichter
         for instance in self._pv_instances:
             topics[f"pvinverter/{instance}/Ac/Power"] = pv_w
             for n in range(1, 4):
@@ -551,4 +613,6 @@ class PlantModel:
             if evcs.instance is not None:
                 for path, value in evcs.gx(self._volts).items():
                     topics[f"evcharger/{evcs.instance}/{path}"] = value
+        topics[SETPOINT_OVERRIDE_PATH] = None if self._override is None else self._override[0]
+        topics[_DESS_MODE] = int(self.dess)
         return topics | self._settings | self._watchdog.topics()

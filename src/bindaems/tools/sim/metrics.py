@@ -45,6 +45,12 @@ Importlimit, solange die Reserve-Absicherung gilt (SOC unter ``battery.reserve_s
 control.reserve_guard_pct``; dann richten sich auch Sofort und Boost am Importlimit aus). Gerechnet
 wird wie bei der Zeit über dem Ziel in PV-Modi, nur in jedem Modus.
 
+**Akku ins Auto** (``battery_into_car_pct``, Plan 2c-2a, Präzisierung 17) ist keine Kennzahl des
+Berichts, sondern eine Funktion für die Prüfungen eines Szenarios: der Anteil der Energie eines
+Autos, die aus dem Akku kam. Gezählt wird in allen Sekunden, in denen das Auto lädt, auch am
+Mindeststrom und in jedem Modus; die PV deckt zuerst das Haus, der Akku dann dessen Rest, und was
+von der Entladung bleibt, geht an die ladenden Autos in der Reihenfolge von ``Sample.cars``.
+
 **Übergänge** (Design 13.2: „abgesehen von Übergängen“): Nach einer Änderung darf die Regelung
 ``TRANSITION_S`` über dem Ziel liegen und Akku-Energie in PV-Autos fließen lassen. Lädt in der
 Folge ein Fahrzeug mit Tessie, gilt ``tesla_transition_s``: Ein Wechsel auf oder von 5 A braucht
@@ -153,6 +159,12 @@ class Sample:
     ``grid_a`` ist der Netzstrom je Phase (positiv beim Bezug), ``battery_feed_a`` was der Multi je
     Phase aus dem Akku liefert, ``battery_w`` die Akkuleistung (positiv beim Laden), ``soc_pct`` der
     SOC und ``cars`` je Fahrzeug seine Probe.
+
+    Dazu, alle in W: ``grid_w`` die Netzleistung (Summe der Phasen, positiv beim Bezug), ``pv_w``
+    die PV-Leistung des Schritts (im Inselbetrieb 0) und ``house_w`` die Hauslast ohne die
+    Wallboxen. ``override_w`` ist der Override des Netz-Sollwerts, der im Schritt galt, und
+    ``override_age_s`` die Sekunden seit seinem letzten Schreiben; ohne Override sind beide
+    ``None``.
     """
 
     t: int
@@ -161,6 +173,11 @@ class Sample:
     battery_w: float
     soc_pct: float
     cars: Mapping[str, CarSample]
+    grid_w: float = 0.0
+    pv_w: float = 0.0
+    house_w: float = 0.0
+    override_w: float | None = None
+    override_age_s: float | None = None
 
 
 @dataclass(frozen=True)
@@ -419,6 +436,42 @@ def _battery_share_pct(
 def _cars_w(sample: Sample) -> float:
     """Die Leistung der ladenden Autos."""
     return sum(car.power_w for car in sample.cars.values() if car.charging)
+
+
+def battery_into_car_pct(samples: Sequence[Sample], key: str) -> float | None:
+    """Der Anteil der Energie des Autos ``key``, die aus dem Akku kam, in %; ``None``, wenn es nie
+    lädt.
+
+    Gezählt wird in allen Sekunden, in denen das Auto lädt, auch am Mindeststrom, in jedem Modus
+    und gleich, wer seinen Ladepunkt steuert. In jeder Sekunde nimmt die PV zuerst das Haus
+    (``Sample.house_w``), der Akku dann dessen Rest, und von der Entladung bleibt der Rest für die
+    Autos: Lädt mehr als ein Auto, bekommt das Auto ``key`` davon, was nach den ladenden Autos vor
+    ihm in ``Sample.cars`` übrig ist (nie unter 0). Aus dem Akku kommt ``min(Leistung des Autos,
+    Rest)``. In jeder Folge aufeinanderfolgender Sekunden, in denen das Auto lädt und der Akku
+    entlädt, zählen die ersten ``TRANSITION_S`` nicht (wie bei der Akku-Energie in PV-Autos); einen
+    längeren Übergang für den Tesla gibt es nicht, denn die Funktion kennt die Konfiguration nicht.
+    Der Nenner ist die Energie des Autos in allen seinen Ladesekunden.
+    """
+    charging = [sample for sample in samples if key in sample.cars and sample.cars[key].charging]
+    energy = sum(sample.cars[key].power_w for sample in charging)
+    if energy <= 0:
+        return None
+    from_battery = 0.0
+    for run in _runs(sample for sample in charging if sample.battery_w < 0):
+        from_battery += sum(_battery_into_car_w(sample, key) for sample in run[TRANSITION_S:])
+    return 100.0 * from_battery / energy
+
+
+def _battery_into_car_w(sample: Sample, key: str) -> float:
+    """Die Leistung in W, die in der Probe aus dem Akku ins ladende Auto ``key`` geht."""
+    discharge = max(0.0, -sample.battery_w)
+    rest = max(0.0, discharge - max(0.0, sample.house_w - sample.pv_w))
+    for other, car in sample.cars.items():
+        if other == key:
+            break
+        if car.charging:
+            rest = max(0.0, rest - car.power_w)
+    return min(sample.cars[key].power_w, rest)
 
 
 def _starts_per_hour(samples: Sequence[Sample]) -> int:

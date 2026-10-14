@@ -13,6 +13,8 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Final
 
+import pytest
+
 from bindaems.shared.config import load_config
 from bindaems.shared.control import CommandKind, CommandValue
 from bindaems.shared.decisions import Decision, DecisionResult
@@ -21,6 +23,7 @@ from bindaems.tools.sim.metrics import (
     Forgotten,
     OwnValue,
     Sample,
+    battery_into_car_pct,
     measure,
     tesla_transition_s,
 )
@@ -57,9 +60,11 @@ def sample(
     battery_w: float = 0.0,
     soc_pct: float = 60.0,
     cars: Mapping[str, CarSample] | None = None,
+    pv_w: float = 0.0,
+    house_w: float = 0.0,
 ) -> Sample:
     """Eine Probe mit sonst ruhigen Werten: Netzstrom ``l1`` bis ``l3``, ``feed`` aus dem Akku auf
-    L1, kein Auto lädt."""
+    L1, kein Auto lädt; ``pv_w`` und ``house_w`` sind PV und Hauslast in W."""
     return Sample(
         t=t,
         grid_a={"L1": l1, "L2": l2, "L3": l3},
@@ -67,6 +72,8 @@ def sample(
         battery_w=battery_w,
         soc_pct=soc_pct,
         cars=cars if cars is not None else {"tesla": tesla(), "egolf": car()},
+        pv_w=pv_w,
+        house_w=house_w,
     )
 
 
@@ -265,6 +272,124 @@ def test_the_raw_battery_share_keeps_the_transitions() -> None:
         for t in range(30)
     ]
     assert measure(now, [], CFG).battery_share_raw_pct == 0.0
+
+
+# --- Akku ins Auto --------------------------------------------------------------------------------
+
+EGOLF_2000 = CarSample(True, 4.3, 2000.0, "pv", 6)  # lädt mit 2000 W
+
+
+def into_car(
+    seconds: int,
+    cars: Mapping[str, CarSample],
+    *,
+    battery_w: float = -1400.0,
+    pv_w: float = 500.0,
+    house_w: float = 900.0,
+) -> list[Sample]:
+    """``seconds`` gleiche Proben, wenn nichts anderes steht: PV 500 W, Haus 900 W, Entladung
+    1400 W. Das Haus nimmt zuerst die PV und dann 400 W vom Akku; 1000 W der Entladung bleiben."""
+    return [
+        sample(t, battery_w=battery_w, pv_w=pv_w, house_w=house_w, cars=cars)
+        for t in range(seconds)
+    ]
+
+
+def test_battery_into_car_counts_after_pv_and_house() -> None:
+    # PV 500 W, Haus 900 W, Entladung 1400 W, Auto 2000 W: 1000 W Akku ins Auto in der Sekunde. Von
+    # 20 Sekunden zählen die ersten 10 (Übergang) nicht: 10 × 1000 W von 20 × 2000 W.
+    assert battery_into_car_pct(into_car(20, {"egolf": EGOLF_2000}), "egolf") == 25.0
+
+
+def test_a_second_charging_car_gets_only_the_rest() -> None:
+    # Vom Rest nach dem Haus (1000 W) nimmt der Tesla, der in ``cars`` vor dem e-Golf steht, zuerst:
+    # 600 W. Dem e-Golf bleiben 400 W von seinen 2000 W; der Tesla bekommt alle seine 600 W.
+    cars = {"tesla": CarSample(True, 0.9, 600.0, "pv", 5), "egolf": EGOLF_2000}
+    samples = into_car(20, cars)
+    assert battery_into_car_pct(samples, "tesla") == 50.0  # 10 × 600 W von 20 × 600 W
+    assert battery_into_car_pct(samples, "egolf") == 10.0  # 10 × 400 W von 20 × 2000 W
+    # Nimmt der Tesla mehr, als der Rest hergibt, bleibt dem e-Golf nichts (nie unter 0).
+    big = {"tesla": CarSample(True, 2.2, 1500.0, "pv", 5), "egolf": EGOLF_2000}
+    assert battery_into_car_pct(into_car(20, big), "egolf") == 0.0
+    assert battery_into_car_pct(into_car(20, big), "tesla") == pytest.approx(100 / 3)  # 10 × 1000
+    # Ein Auto, das nicht lädt, nimmt nichts.
+    idle = {"tesla": CarSample(False, 0.0, 600.0, "pv", 5), "egolf": EGOLF_2000}
+    assert battery_into_car_pct(into_car(20, idle), "egolf") == 25.0
+
+
+def test_the_transition_of_each_discharge_run_does_not_count() -> None:
+    # Eine Folge mit Entladung hat 15 Sekunden: Die ersten 10 zählen nicht, 5 × 1000 W. Dann 3
+    # Sekunden ohne Entladung (das Auto lädt weiter) und eine zweite Folge mit 12 Sekunden:
+    # 2 × 1000 W.
+    levels = [-1400.0] * 15 + [0.0] * 3 + [-1400.0] * 12
+    samples = [
+        sample(t, battery_w=w, pv_w=500.0, house_w=900.0, cars={"egolf": EGOLF_2000})
+        for t, w in enumerate(levels)
+    ]
+    assert battery_into_car_pct(samples, "egolf") == pytest.approx(100 * 7000 / (30 * 2000))
+
+
+def test_a_car_that_stops_for_a_second_starts_a_new_transition() -> None:
+    # Die Entladung dauert 25 Sekunden, das Auto lädt aber bei 12 s nicht: zwei Folgen mit je 12
+    # Sekunden Laden, in jeder zählen 2 Sekunden: 4 × 1000 W von 24 × 2000 W.
+    stopped = CarSample(False, 0.0, 0.0, "pv", 6)
+    samples = [
+        sample(
+            t,
+            battery_w=-1400.0,
+            pv_w=500.0,
+            house_w=900.0,
+            cars={"egolf": stopped if t == 12 else EGOLF_2000},
+        )
+        for t in range(25)
+    ]
+    assert battery_into_car_pct(samples, "egolf") == pytest.approx(100 * 4000 / (24 * 2000))
+
+
+def test_battery_into_car_counts_at_the_minimum_current_and_in_every_mode() -> None:
+    # Anders als die Kennzahl der PV-Autos zählt hier jede Sekunde, in der das Auto lädt: auch am
+    # Mindeststrom (6 A auf 2 Phasen, 2760 W), in Sofort und wenn ein anderer den Ladepunkt stellt.
+    minimum = CarSample(True, 6.0, 2760.0, "min_pv", 6)
+    expected = pytest.approx(100 * 10000 / (20 * 2760))
+    assert battery_into_car_pct(into_car(20, {"egolf": minimum}), "egolf") == expected
+    foreign_now = replace(minimum, mode="now", steered=False)
+    assert battery_into_car_pct(into_car(20, {"egolf": foreign_now}), "egolf") == expected
+
+
+def test_battery_into_car_needs_more_than_the_house_takes() -> None:
+    # Haus 1500 W, keine PV: Der Akku trägt mit seinen 1400 W nur das Haus.
+    house = into_car(20, {"egolf": EGOLF_2000}, pv_w=0.0, house_w=1500.0)
+    assert battery_into_car_pct(house, "egolf") == 0.0
+    # PV über der Hauslast: Die ganze Entladung bleibt für das Auto, 10 × 1400 W von 20 × 2000 W.
+    sunny = into_car(20, {"egolf": EGOLF_2000}, pv_w=2000.0, house_w=900.0)
+    assert battery_into_car_pct(sunny, "egolf") == 35.0
+    # Ohne Entladung kommt nichts aus dem Akku (aber das Auto lädt: 0 %, nicht ``None``).
+    charging = into_car(20, {"egolf": EGOLF_2000}, battery_w=500.0)
+    assert battery_into_car_pct(charging, "egolf") == 0.0
+
+
+def test_battery_into_car_is_none_without_charging() -> None:
+    idle = into_car(20, {"tesla": car(), "egolf": car()})
+    assert battery_into_car_pct(idle, "egolf") is None
+    assert battery_into_car_pct([], "egolf") is None
+    # ein Auto, das in den Proben fehlt
+    assert battery_into_car_pct(into_car(20, {"egolf": EGOLF_2000}), "tesla") is None
+
+
+def test_the_figures_of_the_run_do_not_include_battery_into_car() -> None:
+    metrics = measure(into_car(20, {"egolf": EGOLF_2000}), [], CFG)
+    assert [figure.name for figure in metrics.figures(CFG)] == [
+        "Höchster Phasenstrom",
+        "Längste Zeit über 33 A",
+        "Längste Zeit über dem Ziel in PV-Modi",
+        "Längste Zeit über dem Ziel in PV-Modi, Tesla lädt",
+        "Akku-Energie in PV-Autos",
+        "Starts je Auto und Stunde",
+        "Kürzester Abstand der Tesla-Strombefehle",
+        "Weckvorgänge je Tag",
+        "Kürzester Abstand der Weckvorgänge",
+        "Wiederholte Dry-Run-Entscheidungen",
+    ]
 
 
 # --- Starts ---------------------------------------------------------------------------------------

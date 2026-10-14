@@ -1,11 +1,11 @@
 """Szenarien des Simulators (Design 13.2): Anlage, Absicht, Wetter, Ereignisse und Prüfungen.
 
 Ein ``Scenario`` beschreibt einen Lauf (``runner.run_scenario``): Start in UTC, Dauer, Saat, den
-Aufbau des Modells (``setup``), die Absicht (``intent``; ``live`` schaltet die Aktoren der Regelung
-live), die Ereignisse je Sekunde und die eigenen Prüfungen am Ergebnis (``checks``). Ort,
-PV-Wechselrichter und alle Grenzen kommen aus der Konfiguration des Laufs, in der CI aus
-``deploy/config.example.yaml``; die Szenarien nennen deren Fahrzeuge ``tesla`` und ``egolf`` und
-Wallboxen ``twc`` und ``evcs``.
+Aufbau des Modells (``setup``), die Absicht (``intent``; ``live`` schaltet EVCS und Fahrzeuge mit
+Tessie live, ``victron_live`` dazu Victron), Werte für die Regelung (``control``), die Ereignisse je
+Sekunde und die eigenen Prüfungen am Ergebnis (``checks``). Ort, PV-Wechselrichter und alle Grenzen
+kommen aus der Konfiguration des Laufs, in der CI aus ``deploy/config.example.yaml``; die Szenarien
+nennen deren Fahrzeuge ``tesla`` und ``egolf`` und Wallboxen ``twc`` und ``evcs``.
 
 **Prüfungen** sind ``Checks``: je ``Check`` ein Satz, was er verlangt, und eine Funktion, die je
 Verstoß einen Satz liefert. So zeigt der Bericht jede Prüfung mit OK oder FEHLER.
@@ -18,8 +18,8 @@ der Saat des Szenarios; dieselbe Saat ergibt dieselben Werte, auch in einem zwei
 
 Zu Beginn stecken die Autos an ihrer Standard-Wallbox, laden aber nicht, und der Tesla ist wach,
 soweit ein Szenario nichts anderes sagt. Die Absicht verlangt den Regelbetrieb. Andere Ereignisse
-sind Ausfälle (``_Outage``), eine neue Version der Absicht mit Übersteuerung (``_Override``) und
-das Abstecken (``_Unplug``).
+sind Ausfälle (``_Outage``), eine neue Version der Absicht mit Übersteuerung (``_Override``) oder
+mit Boost (``_Boost``) und das Abstecken (``_Unplug``).
 
 Abweichungen von der Tabelle des Plans (Entscheidung des Koordinators zu Task 14): In ``sonnig``
 und ``wolkig`` steht der Tesla knapp unter seinem Ladelimit, und die Prüfungen verlangen, dass die
@@ -30,11 +30,12 @@ from __future__ import annotations
 
 import math
 import random
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from functools import partial
-from typing import TYPE_CHECKING, Final
+from types import MappingProxyType
+from typing import TYPE_CHECKING, Any, Final
 
 from bindaems.shared.control import (
     ChargeMode,
@@ -140,10 +141,13 @@ class Scenario:
     - ``name``: Name für den Aufruf, ``title``: Überschrift des Berichts
     - ``start``: Beginn in UTC, ``duration_s``: Dauer in s, ``seed``: Saat aller Zufallswerte
     - ``setup``: stellt das Modell vor der ersten Sekunde ein (Akku, Autos, Multi)
-    - ``intent``: die Absicht; mit ``live`` sind die Aktoren der Regelung (EVCS und Fahrzeuge mit
-      Tessie) live, sonst im Dry-Run
+    - ``intent``: die Absicht; mit ``live`` sind EVCS und Fahrzeuge mit Tessie live, sonst im
+      Dry-Run
     - ``events``: Sekunde und Aktion, vor der Physik dieser Sekunde, in ihrer Reihenfolge
     - ``checks``: die eigenen Prüfungen, meist ``Checks``; je Verstoß ein Satz
+    - ``victron_live``: Victron (der Akku-Sollwert) ist zusätzlich live; ohne bleibt es im Dry-Run
+    - ``control``: Werte für ``ControlConfig``, die die Konfiguration des Laufs überschreiben, etwa
+      ``{"peak_target_kw": 8.0}``; ein ungültiger Wert ist ein ``ValidationError``
     """
 
     name: str
@@ -156,6 +160,8 @@ class Scenario:
     live: bool
     events: tuple[tuple[int, Action], ...]
     checks: Callable[[SimResult], list[str]]
+    victron_live: bool = False
+    control: Mapping[str, Any] = MappingProxyType({})
 
 
 @dataclass(frozen=True, slots=True)
@@ -184,6 +190,25 @@ class _Outage:
             model.outages.discard(self.name)
 
 
+def _new_version(
+    rt: CoreRuntime, version: int, vehicle: str, change: Mapping[str, Any], event: str
+) -> None:
+    """Reicht die gültige Absicht als Version ``version`` ein, mit dem Eintrag des Fahrzeugs
+    ``vehicle`` um ``change`` geändert (``event`` nennt das Ereignis in den Fehlern).
+
+    Sonst bleibt die gültige Absicht, wie sie ist, auch ihre Betriebsarten. Ohne gültige Absicht
+    und bei einer Ablehnung bricht der Lauf ab (``ValueError``).
+    """
+    current = rt.intent()
+    if current is None:
+        raise ValueError(f"{event} ohne gültige Absicht.")
+    entry = current.vehicles.get(vehicle, VehicleIntent())
+    vehicles = current.vehicles | {vehicle: entry.model_copy(update=change)}
+    reply = rt.submit_intent(current.model_copy(update={"version": version, "vehicles": vehicles}))
+    if reply.result == "rejected":
+        raise ValueError(f"{event} abgelehnt: {' '.join(reply.details)}")
+
+
 @dataclass(frozen=True, slots=True)
 class _Override:
     """Eine neue Version der Absicht: Das Fahrzeug ``vehicle`` hängt an der Wallbox ``wallbox``.
@@ -197,18 +222,24 @@ class _Override:
     wallbox: str
 
     def __call__(self, model: PlantModel, rt: CoreRuntime) -> None:
-        current = rt.intent()
-        if current is None:
-            raise ValueError("Übersteuerung ohne gültige Absicht.")
-        entry = current.vehicles.get(self.vehicle, VehicleIntent())
-        vehicles = current.vehicles | {
-            self.vehicle: entry.model_copy(update={"wallbox": self.wallbox})
-        }
-        reply = rt.submit_intent(
-            current.model_copy(update={"version": self.version, "vehicles": vehicles})
-        )
-        if reply.result == "rejected":
-            raise ValueError(f"Übersteuerung abgelehnt: {' '.join(reply.details)}")
+        _new_version(rt, self.version, self.vehicle, {"wallbox": self.wallbox}, "Übersteuerung")
+
+
+@dataclass(frozen=True, slots=True)
+class _Boost:
+    """Eine neue Version der Absicht: Das Fahrzeug ``vehicle`` lädt in Boost bis ``until``.
+
+    Das Ende ist absolut (UTC), denn ein Ereignis kennt den Beginn des Szenarios nicht; das
+    Szenario rechnet es aus seinem ``start``. Sonst wie ``_Override``: Die gültige Absicht bleibt,
+    wie sie ist; ohne gültige Absicht und bei einer Ablehnung bricht der Lauf ab (``ValueError``).
+    """
+
+    version: int
+    vehicle: str
+    until: datetime
+
+    def __call__(self, model: PlantModel, rt: CoreRuntime) -> None:
+        _new_version(rt, self.version, self.vehicle, {"boost_until": self.until}, "Boost")
 
 
 @dataclass(frozen=True, slots=True)
@@ -296,9 +327,10 @@ def _setup(
     tesla_amps: int | None = None,
     tesla_starts: bool = False,
     asleep: bool = False,
+    dess: bool = False,
 ) -> None:
-    """Akku, Multi und fremder Regler; der Tesla an der Wallbox ``tesla``, der e-Golf an
-    ``egolf`` (``None``: abgesteckt).
+    """Akku, Multi, fremder Regler und Dynamic ESS (``dess``); der Tesla an der Wallbox ``tesla``,
+    der e-Golf an ``egolf`` (``None``: abgesteckt).
 
     Für den Tesla, wenn angegeben: SOC ``tesla_soc_pct`` und Strom ``tesla_amps``. Mit
     ``tesla_starts`` hat er „Laden an“ im Auto und lädt, sobald die Wallbox Strom gibt; mit
@@ -307,6 +339,7 @@ def _setup(
     model.soc_pct = soc_pct
     model.charger_only = charger_only
     model.foreign = foreign
+    model.dess = dess
     car = model.teslas[TESLA]
     if tesla is not None:
         model.plug(TESLA, tesla)

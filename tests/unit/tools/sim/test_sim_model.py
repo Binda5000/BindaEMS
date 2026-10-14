@@ -21,7 +21,7 @@ from tests.unit.tools.sim.conftest import (
     tick,
 )
 
-from bindaems.core.adapters.victron_mqtt import HEARTBEAT_PATH, MIN_SOC_PATH
+from bindaems.core.adapters.victron_mqtt import HEARTBEAT_PATH, MIN_SOC_PATH, SETPOINT_OVERRIDE_PATH
 from bindaems.core.checks.selfcheck import run_selfcheck
 from bindaems.core.control.charge_inputs import observe
 from bindaems.core.state.derived import PHASES, derive
@@ -153,6 +153,250 @@ def test_island_runs_the_loads_from_the_battery_without_pv(model, store, clock) 
     run(model, store, clock, 1)
     assert store.snapshot().ok("system.active_in_source") == 1
     assert model.battery_w == pytest.approx(1000.0)  # PV deckt die Lasten, der Rest lädt
+
+
+# --- Override des Netz-Sollwerts, Verfall und Dynamic ESS ----------------------------------------
+
+AC_SETPOINT = "settings/0/Settings/CGwacs/AcPowerSetPoint"
+DESS_MODE = "settings/0/Settings/DynamicEss/Mode"
+HOUSE_900 = (300.0, 300.0, 300.0)  # Hauslast 300 W je Phase, zusammen 900 W
+
+
+def test_ess_follows_the_override(model) -> None:
+    # PV 0, Haus 300 W je Phase: Der ESS regelt den Netzbezug auf den Override. Der Akku lädt mit
+    # 3000 − 900 = 2100 W, je Phase 700 W, und am Netz liegen je Phase 300 + 700 = 1000 W an.
+    model.house_w = HOUSE_900
+    model.step(T0)
+    assert model.mqtt_write(SETPOINT_OVERRIDE_PATH, 3000.0)
+    model.step(at(1))
+    assert model.grid_w == pytest.approx(3000.0)
+    assert model.battery_w == pytest.approx(2100.0)
+    assert model.override_w == 3000.0
+    assert model.grid_a == pytest.approx(dict.fromkeys(PHASES, 1000.0 / 230))
+    assert model.battery_feed_a == pytest.approx(dict.fromkeys(PHASES, 0.0))
+
+
+def test_the_override_counts_the_pv(model) -> None:
+    # PV 2000 W, Haus 900 W, Override 1500 W: Der Akku lädt mit 2000 − 900 + 1500 = 2600 W.
+    model.pv_w = 2000.0
+    model.house_w = HOUSE_900
+    model.step(T0)
+    model.mqtt_write(SETPOINT_OVERRIDE_PATH, 1500.0)
+    model.step(at(1))
+    assert model.grid_w == pytest.approx(1500.0)
+    assert model.battery_w == pytest.approx(2600.0)
+
+
+def test_without_an_override_the_ess_follows_the_ac_power_setpoint(model) -> None:
+    # Basis-Sollwert 500 W: 500 W Netzbezug heißt 900 − 500 = 400 W aus dem Akku. Der Override geht
+    # vor, und ohne ihn gilt der Basis-Sollwert wieder.
+    model.house_w = HOUSE_900
+    model._settings[AC_SETPOINT] = 500
+    model.step(T0)
+    assert model.grid_w == pytest.approx(500.0) and model.battery_w == pytest.approx(-400.0)
+    assert model.override_w is None
+    model.mqtt_write(SETPOINT_OVERRIDE_PATH, 2000.0)
+    model.step(at(1))
+    assert model.grid_w == pytest.approx(2000.0) and model.battery_w == pytest.approx(1100.0)
+    model.step(at(300))
+    assert model.grid_w == pytest.approx(500.0) and model.override_w is None
+
+
+@pytest.mark.parametrize("value", [None, "500", True, float("nan"), float("inf")])
+def test_an_ac_power_setpoint_that_is_no_number_counts_as_0(model, value) -> None:
+    model.house_w = HOUSE_900
+    model._settings[AC_SETPOINT] = value
+    model.step(T0)
+    assert model.grid_w == pytest.approx(0.0) and model.battery_w == pytest.approx(-900.0)
+
+
+@pytest.mark.parametrize(
+    ("override_w", "soc_pct", "battery_w"),
+    [
+        (20000.0, 60.0, 10000.0),  # lädt höchstens mit 10 kW
+        (20000.0, 100.0, 0.0),  # ein voller Akku lädt nicht
+        (-20000.0, 60.0, -12000.0),  # entlädt höchstens mit 12 kW
+        (-20000.0, 20.0, 0.0),  # an der Reserve entlädt er nicht
+    ],
+)
+def test_the_limits_of_the_ess_bind_the_override(model, override_w, soc_pct, battery_w) -> None:
+    model.house_w = HOUSE_900
+    model.step(T0)
+    model.soc_pct = soc_pct
+    model.mqtt_write(SETPOINT_OVERRIDE_PATH, override_w)
+    model.step(at(1))
+    assert model.battery_w == pytest.approx(battery_w)
+    assert model.grid_w == pytest.approx(900.0 + battery_w)
+    assert model.override_w == override_w  # er gilt weiter, nur der ESS kann ihm nicht folgen
+
+
+def test_peak_shaving_binds_the_override(model) -> None:
+    # Haus 8000/300/300 W und Override 8600 W: Der ESS ließe L1 mit 8000 W am Netz (34,8 A); Peak
+    # Shaving hält die Phase bei 20 A und entlädt dafür 3400 W.
+    model.house_w = (8000.0, 300.0, 300.0)
+    model.step(T0)
+    model.mqtt_write(SETPOINT_OVERRIDE_PATH, 8600.0)
+    model.step(at(1))
+    assert model.grid_a["L1"] == pytest.approx(20.0)
+    assert model.battery_w == pytest.approx(-3400.0)
+    assert model.grid_w == pytest.approx(4600.0 + 600.0)
+
+
+def test_override_expires_300_s_after_the_last_write(model) -> None:
+    # geschrieben bei T0: bei T0 + 299 s noch da, bei T0 + 300 s weg; der ESS regelt wieder auf
+    # AcPowerSetPoint 0 (der Akku trägt das Haus)
+    model.house_w = HOUSE_900
+    model.step(T0)
+    model.mqtt_write(SETPOINT_OVERRIDE_PATH, 3000.0)
+    model.step(at(299))
+    assert (model.override_w, model.override_age_s) == (3000.0, 299.0)
+    assert model.grid_w == pytest.approx(3000.0)
+    model.step(at(300))
+    assert (model.override_w, model.override_age_s) == (None, None)
+    assert model.grid_w == pytest.approx(0.0) and model.battery_w == pytest.approx(-900.0)
+
+
+def test_a_new_write_restarts_the_300_s(model) -> None:
+    # geschrieben bei T0 und erneut bei T0 + 240 s: Der zweite Wert gilt bis T0 + 539 s, und das
+    # Alter zählt ab dem letzten Schreiben
+    model.house_w = HOUSE_900
+    model.step(T0)
+    model.mqtt_write(SETPOINT_OVERRIDE_PATH, 3000.0)
+    model.step(at(240))
+    assert model.override_age_s == 240.0
+    model.mqtt_write(SETPOINT_OVERRIDE_PATH, 2000.0)
+    model.step(at(300))  # der erste Wert wäre hier verfallen
+    assert (model.override_w, model.override_age_s) == (2000.0, 60.0)
+    assert model.grid_w == pytest.approx(2000.0)
+    model.step(at(539))
+    assert (model.override_w, model.override_age_s) == (2000.0, 299.0)
+    model.step(at(540))
+    assert (model.override_w, model.override_age_s) == (None, None)
+
+
+def test_none_removes_the_override(model) -> None:
+    model.house_w = HOUSE_900
+    model.step(T0)
+    model.mqtt_write(SETPOINT_OVERRIDE_PATH, 3000)  # auch eine ganze Zahl ist eine Zahl
+    model.step(at(1))
+    assert model.override_w == 3000.0 and type(model.override_w) is float
+    assert model.mqtt_write(SETPOINT_OVERRIDE_PATH, None) is True
+    model.step(at(2))
+    assert (model.override_w, model.override_age_s) == (None, None)
+    assert model.grid_w == pytest.approx(0.0)
+
+
+@pytest.mark.parametrize("value", [True, "3000", float("nan"), float("inf"), -float("inf")])
+def test_a_value_that_is_no_number_changes_nothing(model, value) -> None:
+    # Der Cerbo nimmt den Auftrag an; der Override und die Zeit seines Schreibens bleiben.
+    model.step(T0)
+    model.mqtt_write(SETPOINT_OVERRIDE_PATH, 1500.0)
+    assert model.mqtt_write(SETPOINT_OVERRIDE_PATH, value) is True
+    model.step(at(1))
+    assert (model.override_w, model.override_age_s) == (1500.0, 1.0)
+
+
+def test_dess_drops_and_ignores_the_override(model, store, clock) -> None:
+    model.house_w = HOUSE_900
+    run(model, store, clock, 1)
+    assert model.mqtt_write(SETPOINT_OVERRIDE_PATH, 3000.0)
+    run(model, store, clock, 1)
+    snap = store.snapshot()
+    assert (model.override_w, snap.ok("ess.override.setpoint"), snap.ok("dess.mode")) == (
+        3000.0,
+        3000.0,
+        0,
+    )
+    model.dess = True  # Dynamic ESS verwirft den Override
+    run(model, store, clock, 1)
+    snap = store.snapshot()
+    assert (model.override_w, model.override_age_s) == (None, None)
+    assert model.grid_w == pytest.approx(0.0) and model.battery_w == pytest.approx(-900.0)
+    reading = snap.get("ess.override.setpoint")
+    assert reading is not None and reading.value is None and reading.quality is Quality.INVALID
+    assert snap.ok("dess.mode") == 1
+    # ein neuer Auftrag wird angenommen und wirkt nicht, auch nicht vor dem nächsten Schritt
+    assert model.mqtt_write(SETPOINT_OVERRIDE_PATH, 2500.0) is True
+    assert model._cerbo()[SETPOINT_OVERRIDE_PATH] is None
+    assert model.mqtt_write(SETPOINT_OVERRIDE_PATH, None) is True
+    run(model, store, clock, 1)
+    assert model.override_w is None and model.grid_w == pytest.approx(0.0)
+    # ohne Dynamic ESS wirkt der Auftrag wieder
+    model.dess = False
+    assert model.mqtt_write(SETPOINT_OVERRIDE_PATH, 2500.0) is True
+    run(model, store, clock, 1)
+    assert (model.override_w, store.snapshot().ok("dess.mode")) == (2500.0, 0)
+
+
+def test_the_cerbo_reports_the_override_and_the_dess_mode(model, store, clock) -> None:
+    run(model, store, clock, 1)
+    topics = model._cerbo()
+    assert topics[SETPOINT_OVERRIDE_PATH] is None and topics[DESS_MODE] == 0
+    model.mqtt_write(SETPOINT_OVERRIDE_PATH, 3000.0)
+    run(model, store, clock, 1)
+    topics = model._cerbo()
+    assert topics[SETPOINT_OVERRIDE_PATH] == 3000.0 and topics[DESS_MODE] == 0
+    model.dess = True
+    run(model, store, clock, 1)
+    topics = model._cerbo()
+    assert topics[SETPOINT_OVERRIDE_PATH] is None and topics[DESS_MODE] == 1
+
+
+def test_dess_makes_the_selfcheck_fail(model, store, clock, cfg) -> None:
+    # Die Selbstprüfung sperrt Victron, sobald der Cerbo Dynamic ESS meldet.
+    model.dess = True
+    run(model, store, clock, 1)
+    results = run_selfcheck(store.snapshot(), cfg, store.ok_since, clock.now())
+    assert next(r.status for r in results if r.id == "dess") == "fail"
+
+
+def test_a_cerbo_outage_refuses_override_writes_but_not_the_override(model) -> None:
+    # Der Auftrag scheitert; der Override am Gerät läuft weiter und verfällt 300 s nach seinem
+    # letzten Schreiben, auch mitten im Ausfall.
+    model.house_w = HOUSE_900
+    model.step(T0)
+    model.mqtt_write(SETPOINT_OVERRIDE_PATH, 3000.0)
+    model.outages.add("cerbo")
+    assert model.mqtt_write(SETPOINT_OVERRIDE_PATH, 2000.0) is False
+    assert model.mqtt_write(SETPOINT_OVERRIDE_PATH, None) is False
+    model.step(at(100))
+    assert (model.override_w, model.override_age_s) == (3000.0, 100.0)
+    model.step(at(300))
+    assert model.override_w is None
+    assert model.mqtt_write(SETPOINT_OVERRIDE_PATH, 2000.0) is False  # setzt keinen
+    model.step(at(301))
+    assert model.override_w is None
+    model.outages.discard("cerbo")
+    assert model.mqtt_write(SETPOINT_OVERRIDE_PATH, 2000.0) is True
+    model.step(at(302))
+    assert model.override_w == 2000.0
+
+
+def test_grid_power_is_the_sum_of_the_phases(model) -> None:
+    # 15 kW PV, Haus 900 W: Der Akku nimmt 10 kW, 4100 W gehen ins Netz (negativ); Bezug ist
+    # positiv.
+    model.pv_w = 15000.0
+    model.house_w = HOUSE_900
+    model.step(T0)
+    assert model.grid_w == pytest.approx(-4100.0)
+    assert model.grid_w == pytest.approx(sum(model.grid_a.values()) * 230.0)
+    model.pv_w = 0.0
+    model.charger_only = True  # der Akku entlädt nicht: Das Haus kommt vom Netz
+    model.step(at(1))
+    assert model.grid_w == pytest.approx(900.0)
+
+
+def test_the_pv_of_the_step_is_zero_on_the_island(model) -> None:
+    model.pv_w = 3000.0
+    model.step(T0)
+    assert model.pv_now_w == 3000.0
+    model.outages.add("grid")
+    model.step(at(1))
+    assert model.pv_now_w == 0.0 and model.grid_w == 0.0
+    assert model.pv_w == 3000.0  # die Stellgröße des Szenarios bleibt
+    model.outages.discard("grid")
+    model.step(at(2))
+    assert model.pv_now_w == 3000.0
 
 
 # --- Was der core sieht --------------------------------------------------------------------------
