@@ -4,6 +4,7 @@ HTTP-Client, dazu die geparkten Befunde aus 2b (Design 10): Freigabe des Watchdo
 Entscheidungslogs, Heartbeat-Zähler, sicherer Zustand mit dem Tesla und Auslösung des Watchdogs."""
 
 import asyncio
+import json
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -203,6 +204,53 @@ async def test_a_sleeping_tesla_gets_a_wake_start(runtime_env) -> None:
         )
     ]
     assert rt.health().vehicles[0]["wakes_today"] == 1  # zählt auch im Dry-Run
+
+
+async def test_a_wake_start_deferred_by_the_hourly_limit_is_logged(runtime_env, tmp_path) -> None:
+    # Spec 7.10, Stand Plan 2c-1: Die 6 Start/Stopp der letzten Stunde sind verbraucht; die Datei
+    # der Rate-Limits bringt sie wie nach einem Neustart mit. Der Weckstart wird zurückgestellt: Das
+    # steht im Log (dieselbe Zurückstellung höchstens einmal je Minute), die Regelung bietet ihn in
+    # jedem Zyklus wieder an, und das Weckkontingent zählt ihn nicht.
+    entries = [
+        {
+            "actuator": "vehicle.tesla",
+            "kind": "charging",
+            "ts": (T0 - timedelta(minutes=50 - n)).isoformat(),
+        }
+        for n in range(6)
+    ]
+    data_dir = tmp_path / "core"
+    data_dir.mkdir()
+    rates = {"version": 1, "entries": entries}
+    (data_dir / "rate_limits.json").write_text(json.dumps(rates), encoding="utf-8")
+    car = {"online": False, "at_home": True, "plugged": True, "charging_state": "Stopped"}
+    wallboxes = {"wallbox.twc.vehicle_connected": True, "wallbox.evcs.current_a": 0.0} | {
+        f"wallbox.twc.l{n}.current_a": 0.0 for n in (1, 2, 3)
+    }
+    state = GOOD_STATE | wallboxes | {f"vehicle.tesla.{name}": v for name, v in car.items()}
+    rt, _, clock = runtime_env(state=state, tessie_token="t")
+    rt.store.register_source("tessie:tesla", 900.0)
+    rt.store.set_connected("tessie:tesla", True)
+    now = {"tesla": VehicleIntent(mode=ChargeMode.NOW)}
+    rt.submit_intent(Intent(version=1, control=True, vehicles=now))
+    run(rt, clock, 31)
+    found = [(d.actuator, d.kind, d.requested, d.result, d.codes) for d in charging_decisions(rt)]
+    assert found == [
+        (
+            "vehicle.tesla",
+            CommandKind.CHARGING,
+            True,
+            DecisionResult.DEFERRED,
+            ("mode_now", "wake", "rate.start_stop"),
+        )
+    ]
+    assert charging_decisions(rt)[0].text == (
+        "Tesla Model 3 (Sofort, Wecken): Laden an – zurückgestellt. "
+        "Höchstens 6 Start/Stopp pro Stunde erreicht."
+    )
+    run(rt, clock, 60)
+    assert [d.result for d in charging_decisions(rt)] == [DecisionResult.DEFERRED] * 2
+    assert rt.health().vehicles[0]["wakes_today"] == 0
 
 
 async def test_restart_while_charging_does_not_stop(runtime_env) -> None:  # Review Focus 1
