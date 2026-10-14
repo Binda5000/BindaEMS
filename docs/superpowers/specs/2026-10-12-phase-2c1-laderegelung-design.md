@@ -36,14 +36,20 @@ Punkte geändert oder sind dazugekommen:
   „Importlimit“) warnen nur und sperren nichts.
 - **Entscheidungslog (12):** Den Modus tragen die Gründe (`mode_*`, `boost`), denn `inputs` enthält nur
   Zahlen. Neu je Befehl sind `surplus_w`, `limit_a`, `actual_current_a` und `actual_charging`
-  (1 = lädt, 0 = nicht); im Dry-Run sind die Ist-Werte die von evcc.
+  (1 = lädt, 0 = nicht); im Dry-Run sind die Ist-Werte die von evcc. Stellt ein Stundenlimit des
+  Tesla einen Befehl zurück (`rate.per_hour`, `rate.start_stop`), steht das als Entscheidung mit dem
+  neuen Ergebnis `deferred` („zurückgestellt“) im Log, dieselbe höchstens alle 60 s (Fix-Welle nach
+  dem Gesamtreview); sonst bräche der Dry-Run-Vergleich beim Tesla stumm ab.
 - **Simulator (13):** Er nutzt die echten Aktoren statt gefälschter, die Geräte dahinter sind
   nachgebildet. Die Übergänge, die die Kennzahl der Akku-Energie in PV-Autos ausnimmt, dauern 10 s,
   beim ladenden Tesla 200 s (`2 × commands.current_interval_s + 20`); dieselben 200 s ersetzen die
   100 s aus Präzisierung 16. Mit höchstens 10 kW PV laden zwei PV-Autos nacheinander (6.2). Die
   PV-Kennzahlen zählen nur Autos, deren Ladepunkt die Regelung live steuert, und im Dry-Run zählt eine
   Entscheidung nur als wiederholt, wenn ihr Wert dem vorigen eigenen Wert der Regelung gleicht
-  (`UNCHANGED` eingeschlossen).
+  (`UNCHANGED` eingeschlossen). Zur Information ohne Grenze nennt der Bericht den rohen Akku-Anteil
+  (mit den Übergängen) und die Entscheidungen „zurückgestellt“ je Fahrzeug mit Tessie. In `reserve`
+  prüft eine eigene Prüfung, dass die Regelung unter der Reserve-Absicherung das Importziel hält;
+  „SOC nie unter 20 %“ ist nur eine Invariante des Modells.
 
 Entwurf vom 12.10.2026, im Brainstorming mit dem Betreiber abgestimmt. Grundlage ist die Spec
 `docs/superpowers/specs/2026-10-08-bindaems-design.md`, vor allem 1.2, 1.3, 7.1–7.5, 7.8, 8.3, 8.4
@@ -316,9 +322,9 @@ Befehl weiterhin unabhängig vom Phasenwächter.
 - Nach einem Start lädt ein Auto mindestens `control.min_on_s`, nach einem Stopp startet es
   frühestens nach `control.min_off_s` wieder. Überlast (Abschnitt 5.4) und Moduswechsel heben das
   auf.
-- Mit 10 min je Richtung sind das höchstens 3 Start/Stopp-Zyklen je Auto und Stunde: unter der
-  Abnahmegrenze von 4 (Spec 1.3) und im Limit des Tesla von 6 Start/Stopp-Befehlen je Stunde
-  (Spec 6.5).
+- Mit 10 min je Richtung sind das höchstens 3 Start/Stopp-Zyklen je Auto und Stunde: innerhalb der
+  Abnahmegrenze von höchstens 4 (Spec 1.3) und im Limit des Tesla von 6 Start/Stopp-Befehlen je
+  Stunde (Spec 6.5).
 
 ### 6.5 Stromänderungen
 
@@ -421,8 +427,9 @@ gemeldete Ausgangswerte im Teil-2-Werkzeug (bleibt geparkt).
 ## 11. Selbstprüfung und Health
 
 - **Multi-Modus:** Steht der Multi nicht auf „Ein“ (`vebus.mode` ≠ 3), gibt es eine Warnung: Das
-  Importlimit wirkt dann nicht (Prüfprotokoll Teil 2 vom 12.10.2026: 33,3 A auf L3 mit „Nur
-  Laden“). Der Phasenwächter bleibt trotzdem sicher, weil er ohne die Hilfe des Akkus rechnet
+  Importlimit wirkt dann nicht (Vorlauf zum zweiten Lauf von Teil 2 Victron am 12.10.2026: 33,3 A
+  auf L3 mit „Nur Laden“, festgehalten in `docs/uebergabe.md`; das Prüfprotokoll enthält nur den
+  ersten Lauf). Der Phasenwächter bleibt trotzdem sicher, weil er ohne die Hilfe des Akkus rechnet
   (Abschnitt 5.1).
 - **Importlimit:** Der core liest das Importlimit des Cerbo
   (`settings/0/Settings/CGwacs/AcInputLimit`, in Teil 1 am 10. und 11.10.2026 mit 20 A gemeldet),

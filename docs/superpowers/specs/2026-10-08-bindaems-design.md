@@ -323,11 +323,12 @@ flowchart LR
   - `GET /v1/decisions?since=<ISO-Zeit mit Zeitzone>&limit=<n>` liefert `{"decisions": […], "more": bool}`: die Entscheidungen mit `ts` nach `since`, aufsteigend. `since` ist Pflicht, `limit` hat den Standard 1000 und höchstens 5000; sonst antwortet der core mit 422.
   - Entscheidungen gleicher Zeit (die eines Zyklus) bleiben beisammen, die Antwort kann deshalb `limit` überschreiten. `more` sagt, ob weitere folgen. Wer weiterliest, nimmt das `ts` der letzten gelieferten als neues `since`; im Query steht das `+` einer Zeitzone als `%2B`.
   - Der Stream sendet jede Entscheidung sofort als `{"type": "decision", "data": …}`. In den Spool gehen die Entscheidungen eines Zyklus an dessen Ende in einem Zug; der Abruf zeigt sie also erst danach. Die app speichert Entscheidungen erst ab Plan 2d.
-- **Stand Plan 2c-1** (`docs/superpowers/plans/2026-10-12-phase-2c1-laderegelung.md`, Präzisierungen 2 und 3, Design 3.1):
+- **Stand Plan 2c-1** (`docs/superpowers/plans/2026-10-12-phase-2c1-laderegelung.md`, Präzisierungen 2 und 3, Design 3.1 und 11):
   - **Neue Felder der Absicht:** `vehicles.<Schlüssel>` mit `mode` (`pv`, `min_pv`, `now`, `off`; Standard `pv`), `boost_until` (Zeitpunkt mit Zeitzone) und `wallbox` (Schlüssel einer Wallbox; übersteuert die Zuordnung). Dazu kommen `priority` (die Fahrzeug-Schlüssel in der Reihenfolge der Zuteilung; Standard: die Reihenfolge unter `vehicles` in `config.yaml`) und `surplus_priority` (`cars_first`, `battery_first` oder `battery_until_soc` mit `soc_pct`; Standard `battery_until_soc` mit 30 %, siehe 7.5). Ein Fahrzeug ohne Eintrag lädt im PV-Überschuss, und eine gespeicherte Absicht aus Plan 2b lädt mit diesen Standardwerten.
   - **Ablehnung `invalid`** (Status 422, die Gründe stehen in `details`): ein unbekanntes Fahrzeug, eine unbekannte Wallbox, eine Wallbox, die mehreren Fahrzeugen zugeordnet ist, und eine Priorität, die nicht jedes Fahrzeug genau einmal nennt. Unbekannte Aktoren lehnt der core weiter mit `unknown_actuator` ab.
   - **Klemmung des Boosts:** Der core klemmt `boost_until` auf höchstens 12 h nach dem Empfang. Empfang ist die Annahme der Version (`accepted_at`, gespeichert in `intent.json`); die Antwort ist dann `clamped` mit dem Hinweis „{Name}: Boost auf 12 h begrenzt, bis {HH:MM}.“ (Wiener Zeit). Eine Wiederholung derselben Version klemmt gegen denselben Zeitpunkt und bleibt so eine Wiederholung, auch nach einem Neustart. Ein `boost_until` in der Vergangenheit ist kein Fehler; es gibt dann keinen Boost.
   - **Bindung an den Ansteckvorgang:** Boost und Übersteuerung gelten bis zum Ende des Ansteckvorgangs der Wallbox, an der das Fahrzeug laut Absicht hängt (7.8), danach erst wieder mit einer neuen Version. Eine neue Version bindet jedes Fahrzeug neu, das `boost_until` oder `wallbox` nennt. Wer eine neue Absicht aus der gültigen ableitet (die app ab Plan 2d), darf deshalb einen abgelaufenen Boost nicht zurückschicken.
+  - **Health:** `GET /v1/health` hat `vehicles`, je Fahrzeug in der Reihenfolge von `config.yaml` den Stand der Laderegelung (`ChargeController.health`): `id`, `name`, `mode`, `boost_until`, `wallbox`, `assignment`, `limit_a`, `plugged`, `charging`, `wakes_today` und `reason`, der letzte Grund des letzten Befehls.
   - **Gespeicherte Absicht und Konfiguration:** Der core prüft die gespeicherte Absicht beim Laden nicht gegen `config.yaml`; sie kann aus einem Lauf mit anderer Konfiguration stammen. Die Regelung ignoriert Einträge für unbekannte Fahrzeuge und eine Übersteuerung auf eine unbekannte Wallbox (ein `boost_until` desselben Eintrags gilt weiter, an der Standard-Wallbox). Eine Priorität, die nicht genau die Fahrzeuge der Konfiguration nennt, fällt auf deren Reihenfolge zurück.
 
 ### 5.4 Datenflüsse
@@ -644,7 +645,7 @@ Zeitbudget: Ein Zyklus dauert höchstens 200 ms. Netzwerkzugriffe laufen asynchr
 - **Kann der core nicht schreiben,** etwa in OBSERVE nach einem Neustart, übergibt er nicht und gibt den Watchdog nicht frei (8.6).
 
 **Stand Plan 2c-1** (`docs/superpowers/plans/2026-10-12-phase-2c1-laderegelung.md`, Präzisierung 15, Design 11): Die Selbstprüfung hat zwei neue Prüfpunkte, die nur warnen und nichts sperren:
-- **`multi_mode`:** Der Multi steht auf „Ein“ (`vebus.mode` 3). Sonst wirkt das Importlimit nicht (Prüfprotokoll Teil 2 vom 12.10.2026: 33,3 A auf L3 mit „Nur Laden“). Ist der Modus nicht lesbar, ist der Punkt `unknown`.
+- **`multi_mode`:** Der Multi steht auf „Ein“ (`vebus.mode` 3). Sonst wirkt das Importlimit nicht: In einem Vorlauf zum zweiten Lauf von Teil 2 Victron am 12.10.2026 stieg L3 mit „Nur Laden“ auf 33,3 A (festgehalten in `docs/uebergabe.md`, „Stand der Installation“; das Prüfprotokoll Teil 2 Victron enthält nur den ersten Lauf). Ist der Modus nicht lesbar, ist der Punkt `unknown`.
 - **`import_limit`:** Das Importlimit am Cerbo (`settings.cgwacs.acinputlimit`) entspricht `grid.import_limit_a`. Eine Abweichung über 0,5 A, −1 („aus“) und ein fehlender Wert sind eine Warnung.
 - Der Phasenwächter bleibt auch dann sicher, denn er rechnet ohne die Hilfe des Akkus (7.3).
 
@@ -742,7 +743,7 @@ Kurzfristig puffern das ESS und das Victron-Importlimit (Ebene 0).
   4. Danach gilt die Grenze des Phasenwächters (7.3).
 
   Wegen der gierigen Verteilung laden zwei PV-Autos bei höchstens 10 kW PV nacheinander, nicht gleichzeitig: Der Tesla nimmt bis zu 11 kW, der e-Golf bekommt erst, was er übrig lässt (Szenarien `sonnig` und `wolkig`, 16).
-- **Zeiten gegen Flattern:** PV-Überschuss startet, wenn der Anteil den Mindeststrom `control.start_after_s` (120 s) lang trägt, und stoppt, wenn er `control.stop_after_s` (300 s) lang darunter liegt; bis dahin lädt das Auto am Mindeststrom weiter. Nach einem Start läuft es mindestens `control.min_on_s` (600 s), nach einem Stopp startet es frühestens nach `control.min_off_s` (600 s) wieder. Das sind höchstens 3 Start/Stopp-Zyklen je Auto und Stunde (Spec 1.3: unter 4) und im Limit des Tesla von 6 Start/Stopp-Befehlen je Stunde (6.5). Ein Moduswechsel wirkt sofort, ohne diese Zeiten. Min+PV lädt immer mindestens mit dem Mindeststrom; dieser geht dem Importlimit vor, nicht der Sicherung.
+- **Zeiten gegen Flattern:** PV-Überschuss startet, wenn der Anteil den Mindeststrom `control.start_after_s` (120 s) lang trägt, und stoppt, wenn er `control.stop_after_s` (300 s) lang darunter liegt; bis dahin lädt das Auto am Mindeststrom weiter. Nach einem Start läuft es mindestens `control.min_on_s` (600 s), nach einem Stopp startet es frühestens nach `control.min_off_s` (600 s) wieder. Das sind höchstens 3 Start/Stopp-Zyklen je Auto und Stunde (Spec 1.3: höchstens 4) und im Limit des Tesla von 6 Start/Stopp-Befehlen je Stunde (6.5). Ein Moduswechsel wirkt sofort, ohne diese Zeiten. Min+PV lädt immer mindestens mit dem Mindeststrom; dieser geht dem Importlimit vor, nicht der Sicherung.
 - **Wann ein Auto lädt:**
   - **Abgesteckt:** Die Regelung will „Laden aus“. Die EVCS bekommt das einmal; der nächste Ansteckvorgang startet so nicht von selbst.
   - **Neuer Ansteckvorgang:** PV-Überschuss und Aus beginnen mit „Laden aus“, auch wenn das Auto selbst gestartet hat. Sofort, Boost und Min+PV starten sofort.
@@ -871,6 +872,10 @@ Kurzfristig puffern das ESS und das Victron-Importlimit (Ebene 0).
 - **Umfang:** Protokolliert werden jeder gesendete Befehl mit seinem Ergebnis (ok, Fehler, Timeout oder nicht gesendet), jedes Dry-Run-Urteil, das einen Wert ergäbe, und jede Ablehnung der Safety-Schicht; dieselbe Ablehnung desselben Aktors und derselben Art höchstens alle 60 s. Unveränderte und aufgeschobene Befehle (`UNCHANGED`, `DEFERRED`) erscheinen nicht.
 - **Felder:** `id`, `ts` (Wanduhr, UTC), `actuator`, `kind`, `requested` und `applied`, `dry_run`, `outcome` (Urteil der Safety-Schicht), `result` (`ok`, `error`, `timeout`, `not_sent`, `dry_run` oder `rejected`), `codes` (Gründe des Befehls, dann Befunde der Safety-Schicht), `text` auf Deutsch und `inputs`. In 2b sind das SOC, Akkuleistung und Netzstrom je Phase; Preis, Überschuss, Budget und Plan kommen mit Plan 2c.
 - **Spool:** JSON-Zeilen je Tag unter `core.data_dir/decisions/` (`decisions-JJJJ-MM-TT.jsonl`), höchstens 7 Tage und 50 MB. Ein Fehler beim Schreiben unterbricht den Zyklus nicht, er kommt ins Log. Abruf und Stream: 5.3.
+
+**Stand Plan 2c-1** (`docs/superpowers/plans/2026-10-12-phase-2c1-laderegelung.md`, Präzisierung 13, Design 12):
+- **Gründe und Eingaben:** Die Entscheidungen der Laderegelung tragen den Modus und den Grund als Codes (`mode_pv`, `mode_min_pv`, `mode_now`, `mode_off`, `boost`, dann etwa `pv_surplus`, `phase_limit`, `import_limit`, `reserve_guard`, `overload`, `wake`, `not_taken_retry`, `assignment_unclear`, `resume_after_outage`). Zu den Eingaben aus 2b kommen `surplus_w`, `limit_a`, `actual_current_a` und `actual_charging` (1 lädt, 0 nicht; im Dry-Run die Ist-Werte des fremden Reglers). Preis, Budget und Plan folgen mit 2c-2 bzw. Phase 3.
+- **Zurückgestellt:** Stellt ein Stundenlimit des Tesla einen Befehl zurück (`DEFERRED` mit dem Befund `rate.per_hour` oder `rate.start_stop`), steht das als Entscheidung mit dem neuen Ergebnis `deferred` („zurückgestellt“) im Log, dieselbe Zurückstellung (Aktor, Art, Befund-Codes) höchstens alle 60 s; Ablehnungen und Zurückstellungen halten einander dabei nicht zurück. Sonst bräche der Dry-Run-Vergleich am Stundenlimit stumm ab. Andere Zurückstellungen (etwa die 90-s-Regel) und `UNCHANGED` erscheinen weiter nicht. `result` ist damit `ok`, `error`, `timeout`, `not_sent`, `dry_run`, `rejected` oder `deferred`.
 
 ---
 
@@ -1089,6 +1094,8 @@ Ein Aktor geht nur live, wenn alle vier Bedingungen erfüllt sind:
 4. Watchdog scharf (gilt für Victron und EVCS)
 
 Reihenfolge der Inbetriebnahme: EVCS, dann Victron-Setpoint, dann Tesla.
+
+**Stand Plan 2c-1** (Design 14): Abweichend davon gehen EVCS und Tesla gemeinsam live, erst nach 2d und mit ganz abgeschaltetem evcc; Victron folgt nach 2c-2 (Abschnitt 18, Stand Plan 2c-1).
 
 ---
 
@@ -1609,8 +1616,9 @@ pv:
   - Höchstens 4 Starts je Auto und Stunde (Spec 1.3).
   - Tesla-Strombefehle mindestens `commands.current_interval_s` (90 s) auseinander, gemessen am Fahrzeug (Zeitpunkt des Sendens); Weckvorgänge höchstens `wake.per_day` je Wiener Kalendertag im Abstand von mindestens `wake.interval_s`.
   - Wiederholte Dry-Run-Entscheidungen: keine. Wiederholt ist eine Dry-Run-Entscheidung nur, wenn ihr Wert dem vorigen eigenen Wert der Regelung für Aktor und Art gleicht; eigene Werte sind auch die, die die Safety-Schicht mit `UNCHANGED` beantwortete. Vergisst die Regelung ihre Werte (7.1), beginnt die Zählung neu.
-  - Alle PV-Kennzahlen zählen nur Autos, deren Ladepunkt die Regelung live steuert; im Dry-Run stellt ein anderer Regler die Ladepunkte.
-- **Abweichungen von der Planung:** Wegen der gierigen Verteilung (7.5) laden die beiden Autos in `sonnig` und `wolkig` nacheinander, der Tesla beginnt dort nahe an seinem Ladelimit; in `reserve` liegt dauerhaft 1 kW mehr Last auf L1, damit das Importziel greift und eine Entscheidung `reserve_guard` entsteht.
+  - Die beiden PV-Kennzahlen (Zeit über dem Ziel in PV-Modi und Akku-Energie in PV-Autos) zählen nur Autos, deren Ladepunkt die Regelung live steuert; im Dry-Run stellt ein anderer Regler die Ladepunkte.
+  - Ohne Grenze nennen Bericht und Ausgabe zwei Informationszahlen: den rohen Anteil der Akku-Energie in PV-Autos (dieselben Sekunden, mit den Übergängen; eine Kennzahl von 0 % kann ganz aus Übergängen bestehen, in `wolkig` ist er 18 %) und je Fahrzeug mit Tessie die Entscheidungen „zurückgestellt“ wegen eines Stundenlimits (7.10).
+- **Abweichungen von der Planung:** Wegen der gierigen Verteilung (7.5) laden die beiden Autos in `sonnig` und `wolkig` nacheinander, der Tesla beginnt dort nahe an seinem Ladelimit; in `reserve` liegt dauerhaft 1 kW mehr Last auf L1, damit das Importziel greift und eine Entscheidung `reserve_guard` entsteht. Dort prüft das Szenario auch, dass unter der Reserve-Absicherung keine Phase mit der Last ohne Akku-Hilfe länger als 10 s über dem Importziel liegt; „der SOC sinkt nie unter 20 %“ ist nur eine Invariante des Modells, das am Netz nie unter die Reserve entlädt.
 
 ---
 

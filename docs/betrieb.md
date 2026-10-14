@@ -769,9 +769,9 @@ der Regelung.
 
 Die Bedienung legt in einer **Absicht** fest, ob der core regeln soll („Regelbetrieb“), in welcher
 Betriebsart jeder Aktor läuft und, seit Plan 2c-1, in welchem Lademodus jedes Fahrzeug lädt. Die app
-sendet sie ab Plan 2d. Bis dahin gibt es keine Absicht, solange du keine sendest (`PUT /v1/intent`,
-Abschnitt „Laderegelung“): Der core steht in OBSERVE mit dem Grund „Regelbetrieb ist aus.“, alle
-Aktoren laufen im Dry-Run, und ein installierter Watchdog wartet.
+sendet sie ab Plan 2d; bis dahin sendest du sie selbst (`PUT /v1/intent`, Abschnitt „Laderegelung“).
+Ohne Absicht steht der core in OBSERVE mit dem Grund „Regelbetrieb ist aus.“, alle Aktoren laufen im
+Dry-Run, und ein installierter Watchdog wartet.
 
 - Der core speichert die zuletzt angenommene Absicht in `/data/intent.json` (Volume
   `core-data`) und nutzt sie nach einem Neustart weiter. Er durchläuft trotzdem immer OBSERVE
@@ -930,7 +930,11 @@ Der core hält jede Entscheidung zu einem Befehl fest (Spec 7.10):
 - jeden gesendeten Befehl mit seinem Ergebnis („gesendet und bestätigt“, „Fehler“, „nicht
   bestätigt“ oder „nicht gesendet“),
 - im Dry-Run jedes Urteil, das einen Wert ergäbe („Dry-Run, nicht gesendet“),
-- jede Ablehnung der Safety-Schicht (dieselbe Ablehnung desselben Aktors höchstens alle 60 s).
+- jede Ablehnung der Safety-Schicht (dieselbe Ablehnung desselben Aktors höchstens alle 60 s),
+- seit Plan 2c-1 jeden Befehl, den ein Stundenlimit des Tesla zurückstellt („zurückgestellt“,
+  Ergebnis `deferred`, mit dem Befund `rate.per_hour` oder `rate.start_stop`; dieselbe
+  Zurückstellung höchstens alle 60 s). Andere Zurückstellungen, etwa wegen der 90-s-Regel, und
+  unveränderte Werte erscheinen nicht.
 
 Ein Eintrag lautet etwa: `EVCS „evcs“ (sicherer Zustand): Strom 6 A – gesendet und bestätigt.`
 Die Laderegelung nennt ihre Gründe in Klammern, etwa
@@ -1367,9 +1371,12 @@ Die Zahlen gelten für die Beispielkonfiguration (`grid.fuse_a` 35 A, `grid.fuse
   `stop_after_s` ab dem ersten Regelzyklus. Das gilt auch nach jeder Pause der Regelung (SAFE,
   OBSERVE, Regelbetrieb aus).
 - **Überschuss:** Er ergibt sich aus der Ladeleistung der Autos, dem Netzbezug und dem Akku, abzüglich
-  `control.surplus_margin_w` (100 W). Entlädt der Akku, zählt das immer gegen den Überschuss: Ein
-  PV-Auto nimmt nie Leistung aus dem Akku. Lädt er, zählt seine Leistung nur, wenn die Autos
-  Vorrang haben (`surplus_priority`, unten). Fehlt ein Messwert, startet kein PV-Auto.
+  `control.surplus_margin_w` (100 W). Entlädt der Akku, zählt das immer gegen den Überschuss: Der
+  Anteil eines PV-Autos rechnet nie mit Leistung aus dem Akku. Aus dem Akku lädt es trotzdem, wenn
+  es dem Überschuss nicht sofort folgt: in den Stopp-Minuten am Mindeststrom (oben), in Übergängen,
+  bis die Regelung nachgezogen hat, und beim Tesla unter schnellen Wolken („Hinweise für die
+  Anlage“, unten). Lädt der Akku, zählt seine Leistung nur, wenn die Autos Vorrang haben
+  (`surplus_priority`, unten). Fehlt ein Messwert, startet kein PV-Auto.
 - **Verteilung:** Die Autos kommen in der Reihenfolge `priority` dran, und jedes bekommt bis zu
   seinem Höchststrom, bevor das nächste etwas sieht. Mit höchstens 10 kW PV laden zwei PV-Autos
   deshalb nacheinander, nicht gleichzeitig: erst der Tesla (bis zu 11 kW), dann der e-Golf. Sofort
@@ -1393,11 +1400,13 @@ Die Zahlen gelten für die Beispielkonfiguration (`grid.fuse_a` 35 A, `grid.fuse
   Mindestpause. Überlast startet und weckt nichts, und sie stoppt auch ein Auto, das selbst
   gestartet hat.
 - **Dringend** sind nur die Befehle wegen Überlast und Senkungen unter den Ist-Strom, wenn das Ziel
-  die Sicherung ist (Sofort und Boost ohne Schutz der Reserve): Sie umgehen die Mindestabstände der
-  Safety-Schicht. Alle anderen Befehle sind normal, auch Senkungen am Importlimit (die fängt Peak
-  Shaving ab). **Jeder erneute Versuch nach „nicht übernommen“ ist normal und nie dringend**, auch
-  der einer Senkung wegen Überlast; er wartet auf die 90-s-Regel. Ein Befehl wegen Überlast, der neu
-  entsteht, weil die Stufe stieg, ist kein Neuversuch und bleibt dringend, höchstens einmal je Stufe.
+  die Sicherung ist (Sofort und Boost ohne Schutz der Reserve): Sie umgehen die Mindestabstände, die
+  Stundenlimits und die Totbänder der Safety-Schicht; nur einen gleichen Wert sendet auch ein
+  dringender Befehl nicht. Alle anderen Befehle sind normal, auch Senkungen am Importlimit (die
+  fängt Peak Shaving ab). **Jeder erneute Versuch nach „nicht übernommen“ ist normal und nie
+  dringend**, auch der einer Senkung wegen Überlast; er wartet auf die 90-s-Regel. Ein Befehl wegen
+  Überlast, der neu entsteht, weil die Stufe stieg, ist kein Neuversuch und bleibt dringend,
+  höchstens einmal je Stufe.
 - Regel 4 der Safety-Schicht prüft jeden Befehl weiterhin unabhängig vom Wächter.
 
 ### Absicht per PUT /v1/intent
@@ -1413,7 +1422,7 @@ die bisherige, und was fehlt, gilt als Standard. `GET /v1/intent` zeigt die gül
   "control": true,
   "vehicles": {
     "tesla": {"mode": "min_pv"},
-    "egolf": {"mode": "now", "boost_until": "2026-10-14T20:00:00+02:00"}
+    "egolf": {"mode": "pv", "boost_until": "2026-10-14T20:00:00+02:00"}
   },
   "priority": ["tesla", "egolf"],
   "surplus_priority": {"kind": "battery_until_soc", "soc_pct": 30}
@@ -1424,6 +1433,9 @@ die bisherige, und was fehlt, gilt als Standard. `GET /v1/intent` zeigt die gül
 curl -X PUT -H "Authorization: Bearer $BINDAEMS_INTERNAL_TOKEN" -H "Content-Type: application/json" \
   --data @intent.json http://127.0.0.1:8081/v1/intent
 ```
+
+Im Beispiel lädt der Tesla in Min+PV und der e-Golf bis 20 Uhr im Boost (wie Sofort), danach
+wieder im PV-Überschuss.
 
 | Feld | Werte | Standard |
 |---|---|---|
@@ -1495,6 +1507,14 @@ Alle Aktoren bleiben im Dry-Run, und alle Fahrzeuge laden im PV-Überschuss, wie
   niedrigsten freien Wert der letzten `control.tesla_caution_s` (60 s), nimmt davon den kleineren
   Wert und rundet ab. Die Safety-Schicht lässt eine Änderung ab 2 A Unterschied und höchstens alle
   90 s zu. Die schnellen Schwankungen fängt die EVCS ab.
+- **Stundenlimit:** Der Tesla bekommt höchstens 20 Befehle je Stunde, davon höchstens 6 Start/Stopp
+  (`vehicles.<name>.commands`: `per_hour`, `start_stop_per_hour`), gezählt in einem gleitenden
+  Fenster, das einen Neustart übersteht. Unter schnellen Wolken kann das Budget aufgebraucht sein
+  (im Simulator in `wolkig` nach 40 min): Weitere Befehle, auch ein Stopp oder der Befehl eines
+  Moduswechsels, werden dann zurückgestellt, bis ein Platz frei wird. Das Entscheidungslog zeigt sie
+  als „zurückgestellt“ (Befund `rate.per_hour` bzw. `rate.start_stop`, dieselbe Zurückstellung
+  höchstens einmal je Minute). Nur dringende Befehle umgehen das Limit („Phasenwächter und
+  Überlast“, oben).
 - **5 A:** Über Tessie wirkt ein Befehl auf oder von 5 A erst beim zweiten Mal. Der Tesla-Aktor prüft
   den Strom deshalb im Tessie-Cache (10 bis 75 s nach der Bestätigung, Frist 85 s) und meldet sonst
   „nicht übernommen“. Die Regelung fordert denselben Wert dann erneut an (Grund `not_taken_retry`),
@@ -1518,14 +1538,14 @@ vergleichst du zwei Wochen lang, ohne dass etwas auf die Geräte geschrieben wir
 2. Eine Absicht senden: `{"version": …, "control": true}` (oben). Nach 30 s frischen Messwerten geht
    der core nach CONTROL, alle Aktoren bleiben im Dry-Run.
 3. Entscheidungen lesen (Zugang wie in Abschnitt 13, „Entscheidungslog“). Das Beispiel listet mit
-   `jq` je Dry-Run-Entscheidung Zeit, Aktor, Art, den Wert von BindaEMS und den eingestellten Wert
-   von evcc:
+   `jq` je Entscheidung eines Aktors im Dry-Run Zeit, Aktor, Art, Ergebnis (`dry_run`, `deferred`
+   für „zurückgestellt“ oder `rejected`), den Wert von BindaEMS und den eingestellten Wert von evcc:
 
    ```bash
    SINCE=$(date -u -d '1 day ago' +%Y-%m-%dT%H:%M:%S)%2B00:00
    curl -s -H "Authorization: Bearer $BINDAEMS_INTERNAL_TOKEN" \
      "http://127.0.0.1:8081/v1/decisions?since=$SINCE&limit=5000" \
-     | jq -r '.decisions[] | select(.dry_run) | [.ts, .actuator, .kind, .requested,
+     | jq -r '.decisions[] | select(.dry_run) | [.ts, .actuator, .kind, .result, .requested,
          (if .kind == "charging" then .inputs.actual_charging else .inputs.actual_current_a end),
          (.codes | join(","))] | @tsv'
    ```
@@ -1555,9 +1575,13 @@ Ein Eintrag im Rohformat (hier aus dem Simulator):
   `inputs.actual_charging` sind im Dry-Run die Werte, die evcc eingestellt hat. Im Beispiel würde
   BindaEMS dem Tesla 9 A geben, evcc hat 5 A eingestellt.
 - Den **Modus** tragen die Gründe (`mode_*`, `boost`), denn `inputs` enthält nur Zahlen.
-- Es erscheinen nur **Änderungen** und Ablehnungen der Safety-Schicht (dieselbe Ablehnung höchstens
-  alle 60 s). Die EVCS folgt dem Überschuss in ganzen Ampere: Im Simulator waren es bis zu rund 100
-  Strombefehle je Stunde, rechne im Dry-Run mit entsprechend vielen Entscheidungen.
+- Es erscheinen nur **Änderungen**, Ablehnungen der Safety-Schicht und Zurückstellungen wegen des
+  Stundenlimits des Tesla (dieselbe Ablehnung bzw. Zurückstellung höchstens alle 60 s). Eine
+  Zurückstellung ist keine Entscheidung, die BindaEMS ausführte: Sie zeigt, dass der Vergleich beim
+  Tesla dort abbricht, bis das Budget wieder Platz hat (im Simulator in `dry-run` 14 Einträge je
+  Stunde neben 22 Dry-Run-Entscheidungen). Die EVCS folgt dem Überschuss in ganzen Ampere: Im
+  Simulator waren es 77 bis 112 Strombefehle je Stunde PV-Laden, rechne im Dry-Run mit
+  entsprechend vielen Entscheidungen (zur Hysterese: „Hinweise für die Anlage“).
 
 | Grund (`codes`) | Text im Log | Bedeutung |
 |---|---|---|
@@ -1574,7 +1598,8 @@ Ein Eintrag im Rohformat (hier aus dem Simulator):
 | `resume_after_outage` | Wiederaufnahme nach Ausfall | Der erste Start nach einer Pause der Regelung (SAFE, Inselbetrieb, Regelbetrieb aus). |
 
 Nach den Gründen der Regelung stehen in `codes` die Befunde der Safety-Schicht (etwa
-`urgent.bypass`). Die **Eingaben** (`inputs`) einer Entscheidung der Regelung sind:
+`urgent.bypass`, bei „zurückgestellt“ `rate.per_hour` oder `rate.start_stop`). Die **Eingaben**
+(`inputs`) einer Entscheidung der Regelung sind:
 
 | Eingabe | Bedeutung |
 |---|---|
@@ -1610,24 +1635,62 @@ Zurück zu evcc: beide Aktoren in der Absicht auf Dry-Run stellen, die Übergabe
 
 ### Hinweise für die Anlage
 
-- **Tessie fragt bei abgestecktem Auto nur alle 600 s ab.** Die Regelung erfährt „angesteckt“ vom
-  Tesla darum bis zu 10 min später als der Wall Connector. Ein Tesla, der beim Anstecken selbst zu
-  laden beginnt, lädt bis dahin ungeregelt.
-- **Ein Selbststart innerhalb eines laufenden Vorgangs** (etwa aus der Tesla-App) wird nicht
-  korrigiert: Die Regelung sendet nur Änderungen und kennt ihren letzten Wert bereits. Nur die
-  Überlast-Stufen greifen dann ein.
 - **Ein schlafender Tesla, den der core gerade übergibt,** hält die Übergabe offen, bis er aufwacht.
   Solange kann der Alarm „… Sicherwert für … nicht bestätigt.“ (`actuator.failed.vehicle.tesla`)
   anstehen (Abschnitt 14, „Meldungen des core“).
 - **Schnell wechselnde Wolken:** Dann deckt der Hausakku einen spürbaren Teil der PV-Ladung des
   Tesla. Der Tesla darf seinen Strom nur alle 90 s ändern, und ein Wechsel auf oder von 5 A braucht
-  zwei Befehle; das nimmt das Design in Kauf (Design 6.5). Im Simulator kam bei Wolken im Wechsel
-  alle 30 bis 180 s bis zu etwa 38 % der Ladeenergie des Tesla aus dem Akku. Der e-Golf folgt den
-  Wolken binnen Sekunden.
-- **Vor der Live-Schaltung des Tesla:** Im sicheren Zustand bei Netzausfall sendet der core dem
-  Tesla „Laden aus“ alle 10 s erneut, bis der Tessie-Cache es zeigt; beim Laden dauert das bis zu
-  30 s. Das kostet bis zu 3 der 6 Start/Stopp-Befehle je Stunde und alle 3 Versuche des Vorfalls.
-  Prüfe vorher die Zahl der Versuche, ihren Abstand oder `min_a` (Spec 8.5).
+  zwei Befehle; das nimmt das Design in Kauf (Design 6.5). Im Simulator (`wolkig`, Wolken im Wechsel
+  alle 30 bis 180 s) kamen so rund 40 % der Ladeenergie des Tesla aus dem Akku. Das ist der rohe
+  Anteil: Die Kennzahl „Akku-Energie in PV-Autos“ nimmt die Übergänge aus und zeigt dort 0 %, denn
+  jede dieser Entladungen fällt in einen Übergang. Den rohen Anteil aller PV-Autos (dort 18 %)
+  nennt der Bericht als Informationszahl (Abschnitt „Simulator“). Der e-Golf folgt den Wolken
+  binnen Sekunden.
+
+**Vor der Live-Schaltung von EVCS und Tesla (nach 2d)** sind diese Punkte zu entscheiden oder
+umzusetzen, je mit Befund und möglicher Abhilfe (ausführlicher in `docs/uebergabe.md`):
+
+1. **Stundenbudget des Tesla:** Unter Wolken verbraucht die Regelung die 20 Befehle je Stunde;
+   danach werden auch ein Stopp und ein Moduswechsel zurückgestellt (im Log „zurückgestellt“); in
+   einer Probe im Simulator wirkte „Aus“ erst nach 19 min. Abhilfe: ein Budget in der Regelung
+   (Plätze für Start/Stopp freihalten, Stromänderungen in PV sparen) und/oder den Stopp nach einem
+   Moduswechsel dringend machen.
+2. **Selbststart im laufenden Vorgang:** Startet das Auto selbst (etwa aus der Tesla-App),
+   korrigiert die Regelung das nicht, denn sie sendet nur Änderungen; „Aus“ hält es nicht gestoppt,
+   PV stoppt es nicht, nur die Überlast-Stufen greifen. Abhilfe: „Laden aus“ erneut senden, wenn das
+   Auto länger als eine Frist gegen den Modus lädt, im Start/Stopp-Budget.
+3. **Ansteckerkennung des Tesla:** Tessie fragt bei abgestecktem Auto nur alle 600 s ab; ein Tesla,
+   der beim Anstecken selbst zu laden beginnt, lädt bis zu 10 min ungeregelt. Abhilfe im Adapter:
+   schneller abfragen, solange das Auto zu Hause oder online ist oder der Wall Connector ein neues
+   Fahrzeug meldet.
+4. **Ausnahme in der Regelung:** Wirft die Regelung in jedem Zyklus, laufen auch Keeper, Stream und
+   Alarme nicht. Abhilfe: die Ausnahme fangen, die Regelung ruhen lassen, Alarm, Heartbeat
+   zurückhalten, den Keeper weiter ausführen.
+5. **5 A beim Tesla:** Befehle auf oder von 5 A gehen über Tessie beim ersten Mal verloren und
+   kosten einen zweiten Befehl. Abhilfe: `vehicles.tesla.min_a: 6` (Design 7.2 legt 5 A fest;
+   Entscheidung des Betreibers).
+6. **Simulator:** Kein PV-Szenario lässt das Importziel binden; „Längste Zeit über dem Ziel in
+   PV-Modi“ prüft darum wenig. Abhilfe: ein PV-Szenario mit schwerer Last auf einer Phase.
+7. **Technische Schulden vor 2c-2:** `core/control/charging.py` und `core/runtime.py` sind groß, und
+   einige Hilfsfunktionen gibt es doppelt. Abhilfe: aufteilen und zusammenführen, bevor 2c-2
+   dazukommt.
+8. **EVCS-Hysterese (vor dem Dry-Run zu entscheiden):** Der EVCS-Strom wechselt mit dem Rauschen der
+   Hauslast zwischen zwei ganzen Ampere, im Simulator 77 bis 112 Befehle bzw. Dry-Run-Entscheidungen
+   je Stunde PV-Laden. Abhilfe: Erhöhen erst ab einem Anteil von Sollwert + 1 A + etwa 0,3 A oder
+   nach etwa 30 s, Senken sofort; das weicht von Design 6.5 ab („folgt jede Sekunde“), darum
+   entscheidet der Betreiber.
+9. **Sicherer Zustand bei Netzausfall:** Der core sendet dem Tesla „Laden aus“ alle 10 s erneut, bis
+   der Tessie-Cache es zeigt; beim Laden dauert das bis zu 30 s und kostet bis zu 3 der 6
+   Start/Stopp-Befehle je Stunde und alle 3 Versuche des Vorfalls. Abhilfe: die Zahl der Versuche,
+   ihren Abstand oder `min_a` prüfen (Spec 8.5).
+
+**Im Dry-Run an der Anlage prüfen:**
+
+- welcher EVCS-Status bei angestecktem Auto auf „Laden aus“ (`StartStop` = 0) folgt: Ist es 3
+  („geladen“), bliebe ein Auto in PV nach dem ersten Stopp stehen, bis es abgesteckt wird;
+- was Tessie für `charger_phases` meldet;
+- ob „unklar“ fälschlich erscheint, wenn der Tesla den Wall Connector verlässt, während der e-Golf
+  an der EVCS hängt (Tessie meldet `plugged` bis zu 60 s veraltet).
 
 ## Simulator
 
@@ -1645,7 +1708,9 @@ zu sehen, ob die Regelung noch hält.
 
 ### Aufruf
 
-Im Checkout, mit der Beispielkonfiguration `deploy/config.example.yaml`:
+Im Checkout, mit der Beispielkonfiguration `deploy/config.example.yaml`, aus dem Wurzelverzeichnis
+des Checkouts (der Standardpfad der Konfiguration ist relativ; anderswo endet der Aufruf mit
+„Datei nicht gefunden“ und Rückgabe 2):
 
 ```bash
 uv run python -m bindaems.tools.sim --szenario wolkig --out bericht.md
@@ -1664,22 +1729,28 @@ docker compose run --rm -v "$PWD/verification:/out" --entrypoint python ems-core
 
 - `--szenario NAME` (Pflicht): eines der zehn Szenarien unten.
 - `--out PFAD` (Pflicht): der Bericht als Markdown. Fehlende Ordner legt das Werkzeug an.
-- `--config PFAD`: die Konfiguration, aus der Grenzen, Fahrzeuge und Wallboxen kommen. Die
-  Szenarien brauchen die Wallboxen `evcs` (EVCS) und `twc` (Wall Connector) und die Fahrzeuge `tesla`
-  (mit Tessie) und `egolf`.
+- `--config PFAD`: die Konfiguration, aus der Grenzen, Fahrzeuge und Wallboxen kommen; ohne Angabe
+  `deploy/config.example.yaml`, relativ zum aktuellen Verzeichnis. Die Szenarien brauchen die
+  Wallboxen `evcs` (EVCS) und `twc` (Wall Connector) und die Fahrzeuge `tesla` (mit Tessie) und
+  `egolf`.
 - `--stunden H`: Dauer in Stunden statt der des Szenarios, **höchstens diese**; ein größerer Wert
-  lässt das Szenario ganz laufen, denn seine Ereignisse und Prüfungen enden mit seiner Dauer.
+  lässt das Szenario ganz laufen, denn seine Ereignisse und Prüfungen enden mit seiner Dauer. Ein
+  kürzerer Lauf ist nur ein Ausschnitt: Prüfungen des Szenarios, die das Ende oder eine Dauer
+  prüfen, können dann scheitern, ohne dass die Regelung fehlt (etwa `sonnig --stunden 0.05`:
+  „„tesla“ erreicht „Complete“ nicht.“, Rückgabe 1).
 - Jeder Lauf bekommt ein **frisches temporäres Verzeichnis** für die Ablage des core (Absicht,
   Rate-Limits, Entscheidungen). Er berührt `/data` nie und sieht nichts von früheren Läufen.
-- Ein Szenario braucht für 1 bis 2 h simulierte Zeit rund 10 bis 25 s Rechenzeit.
+- Ein Szenario braucht für 1 bis 2 h simulierte Zeit etwa 5 bis 20 s Rechenzeit.
 
-Die Standardausgabe zeigt je Kennzahl eine Zeile, dann je Prüfung des Szenarios eine und am Ende den
-Pfad des Berichts. Ein Ausschnitt aus `tesla-5a`:
+Die Standardausgabe zeigt je Kennzahl eine Zeile, dann je Informationszahl eine (ohne Grenze), dann
+je Prüfung des Szenarios eine und am Ende den Pfad des Berichts. Ein Ausschnitt aus `tesla-5a`:
 
 ```text
 Höchster Phasenstrom: 0,28 A (Grenze 35 A) – OK
 …
 Wiederholte Dry-Run-Entscheidungen: 0 (Grenze 0) – OK
+Akku-Energie in PV-Autos, roh (mit Übergängen): 46,47 % (zur Information)
+Zurückstellungen wegen des Stundenlimits an „tesla“: 0 (zur Information)
 Szenario-Prüfung: OK – Eine Entscheidung nennt „not_taken_retry“.
 Szenario-Prüfung: OK – „tesla“ lädt am Ende mit 5 A.
 Bericht: bericht.md
@@ -1701,6 +1772,8 @@ Der Bericht ist eine Markdown-Datei:
 - Überschrift mit dem Titel des Szenarios und eine Tabelle „Angabe | Wert“ mit Szenario, simulierter
   Zeit (Wiener Zeit) und Konfiguration.
 - **Kennzahlen:** eine Tabelle „Kennzahl | Wert | Grenze | Ergebnis“, das Ergebnis ist OK oder FEHLER.
+- **Informationszahlen:** eine Tabelle „Zahl | Wert“ mit Zahlen ohne Grenze, die die Kennzahlen
+  einordnen (unten, „Kennzahlen“).
 - **Szenario-Prüfungen:** eine Tabelle „Ergebnis | Prüfung | Befund“ mit einer Zeile je Prüfung. Der
   Befund nennt bei FEHLER die Verstöße, sonst „–“.
 - **Entscheidungen:** die Zahl der Entscheidungen des core je Aktor, Art und Ergebnis, danach je
@@ -1715,7 +1788,7 @@ gelten für die Beispielkonfiguration.
 |---|---|---|
 | Höchster Phasenstrom | ≤ 35 A (`grid.fuse_a`) | der größte Netzstrom einer Phase |
 | Längste Zeit über 33 A | ≤ 10 s | die längste Folge von Sekunden mit einer Phase über `fuse_a − fuse_margin_a` |
-| Längste Zeit über dem Ziel in PV-Modi | ≤ 10 s | die längste Folge von Sekunden, in der eine Phase (mit Akku-Hilfe gerechnet) über dem Ziel am Importlimit (19 A) liegt, mit 0,5 A Toleranz. Es zählen nur Sekunden, in denen alle ladenden Autos im PV-Überschuss oder in Min+PV stehen, die Regelung ihre Ladepunkte live steuert und keines mit weniger als Mindeststrom + 0,5 A lädt (Stopp-Minuten, Mindeststrom von Min+PV). |
+| Längste Zeit über dem Ziel in PV-Modi | ≤ 10 s | die längste Folge von Sekunden, in der auf einer Phase die Last ohne Akku-Hilfe (Netzstrom plus der Strom, den der Multi auf ihr aus dem Akku liefert) über dem Ziel am Importlimit (19 A) liegt, mit 0,5 A Toleranz. Es zählen nur Sekunden, in denen alle ladenden Autos im PV-Überschuss oder in Min+PV stehen, die Regelung ihre Ladepunkte live steuert und keines mit weniger als Mindeststrom + 0,5 A lädt (Stopp-Minuten, Mindeststrom von Min+PV). |
 | … Tesla lädt | ≤ 200 s | dieselbe Messung für Folgen, in denen der Tesla lädt. Ein Wechsel auf oder von 5 A braucht zwei Strombefehle im Abstand von 90 s, dazu Antwort und Prüfung im Cache: `2 × commands.current_interval_s + 20`. |
 | Akku-Energie in PV-Autos | ≤ 5 % | der Anteil der Akku-Energie an der Energie der PV-Autos, in denselben Sekunden. **Übergänge zählen nicht:** die ersten 10 s einer ununterbrochenen Folge mit Entladung, lädt der Tesla, die ersten 200 s. |
 | Starts je Auto und Stunde | ≤ 4 | Wechsel von „lädt nicht“ zu „lädt“ im Modell, in einem gleitenden Fenster von einer Stunde |
@@ -1724,8 +1797,18 @@ gelten für die Beispielkonfiguration.
 | Kürzester Abstand der Weckvorgänge | ≥ `wake.interval_s` | der Abstand zweier solcher Entscheidungen |
 | Wiederholte Dry-Run-Entscheidungen | 0 | Dry-Run-Entscheidungen, deren Wert dem vorigen eigenen Wert der Regelung für Aktor und Art gleicht |
 
-- Die beiden PV-Kennzahlen zählen nur Autos, deren Ladepunkt die Regelung **live** steuert. Im Dry-Run
-  stellt ein anderer Regler die Ladepunkte, und gemessen werden soll die Regelung.
+- Die beiden PV-Kennzahlen, „Längste Zeit über dem Ziel in PV-Modi“ (beide Zeilen) und „Akku-Energie
+  in PV-Autos“, zählen nur Autos, deren Ladepunkt die Regelung **live** steuert. Im Dry-Run stellt
+  ein anderer Regler die Ladepunkte, und gemessen werden soll die Regelung.
+- **Informationszahlen** ohne Grenze stehen unter der Tabelle der Kennzahlen:
+  - „Akku-Energie in PV-Autos, roh (mit Übergängen)“: derselbe Anteil in denselben Sekunden, aber
+    ohne die Ausnahme der Übergänge. Eine Kennzahl von 0 % kann ganz aus Übergängen bestehen: In
+    `wolkig` ist der rohe Anteil 18 %, in `tesla-5a` 46 % (dort zählen nur die Sekunden mit 10 A vor
+    dem Wechsel auf 5 A; am Mindeststrom zählt keine Sekunde).
+  - „Zurückstellungen wegen des Stundenlimits an …“, je Fahrzeug mit Tessie (in der
+    Beispielkonfiguration `tesla`): die Entscheidungen „zurückgestellt“ (Abschnitt 13,
+    „Entscheidungslog“), also höchstens eine je Minute, Art und Befund. In `wolkig` sind es 12, in
+    `dry-run` 14.
 - Als „eigener Wert“ der Regelung zählt auch ein Wert, den die Safety-Schicht mit „unverändert“
   beantwortete. Vergisst die Regelung ihre Werte (Pause, Wechsel der Betriebsart), beginnt die
   Zählung neu.
@@ -1742,7 +1825,7 @@ Tabelle nichts anderes sagt. Der Regelbetrieb ist an, die Aktoren der Regelung s
 | `sonnig` | Sonniger Tag, beide Autos im PV-Modus, 2 h | 21.06.2026 ab 10:00, PV bis 9 kW, Akku 60 %, Tesla nahe an seinem Ladelimit | Erst lädt der Tesla bis „Complete“ (mindestens 45 min), danach der e-Golf (mindestens 45 min). |
 | `wolkig` | Wolkiger Tag, beide Autos im PV-Modus, 2 h | wie `sonnig`, Sonne und Wolke im Wechsel alle 30 bis 180 s | wie `sonnig`, je mindestens 20 min |
 | `abend-sofort` | Abends beide Autos auf Sofort, mit Lastspitze, 1 h | 12.10.2026 ab 18:00, keine PV, Akku 60 %, L1 +2,5 kW von 20 bis 25 min | Der Strom der EVCS liegt während der Spitze unter dem davor. |
-| `reserve` | Sofort knapp über der USV-Reserve, 1 h | Akku 23 %, dauerhaft 1 kW mehr Last auf L1, nur der e-Golf | Eine Entscheidung nennt „reserve_guard“; der SOC sinkt nie unter 20 %. |
+| `reserve` | Sofort knapp über der USV-Reserve, 1 h | Akku 23 %, dauerhaft 1 kW mehr Last auf L1, nur der e-Golf | Eine Entscheidung nennt „reserve_guard“; unter der Reserve-Absicherung (SOC unter 25 %) liegt keine Phase länger als 10 s mit der Last ohne Akku-Hilfe über dem Importziel (19 A, mit 0,5 A Toleranz), solange ein Auto live über seinem Mindeststrom lädt; der SOC sinkt nie unter 20 % (eine Invariante des Modells, das am Netz nie unter die Reserve entlädt: Sie prüft das Modell, nicht die Regelung). |
 | `nur-laden` | Multi auf „Nur Laden“ mit Sofort, 1 h | L1 +3 kW als Rampe von 20 bis 40 min | Die Selbstprüfung `multi_mode` warnt. |
 | `tesla-5a` | Tesla auf 5 A mit verlorenem erstem Befehl, 1 h | PV konstant 4,6 kW, Tesla angesteckt mit 10 A, e-Golf abgesteckt | Eine Entscheidung nennt „not_taken_retry“; der Tesla lädt am Ende mit 5 A. |
 | `tesla-schlaeft` | Schlafender Tesla im PV-Modus, 1 h | 21.06.2026 ab 09:00, PV steigt in 30 min auf 6 kW | Genau ein Weckvorgang; der Tesla lädt am Ende. |

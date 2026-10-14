@@ -1,9 +1,10 @@
 # Übergabe an die nächste Session
 
-Stand: 14.10.2026. Plan 2c-1 (Laderegelung) ist umgesetzt und je Task geprüft; er liegt auf dem
-Branch `ccr-e451cb4c-qeg1tm`, der Gesamtreview und die Integration nach `main` folgen. Plan 2b ist
-auf `main` (Fast-Forward vom selben Branch mit Zustimmung des Betreibers). `main` ist seit dem
-12.10.2026 auch der Standard-Branch auf GitHub.
+Stand: 14.10.2026. Plan 2c-1 (Laderegelung) ist umgesetzt, je Task und im Gesamtreview geprüft
+(„mit Korrekturen“, keine kritischen Befunde), und die Fix-Welle danach ist umgesetzt. Er liegt auf
+dem Branch `ccr-e451cb4c-qeg1tm`; die Integration nach `main` folgt. Plan 2b ist auf `main`
+(Fast-Forward vom selben Branch mit Zustimmung des Betreibers). `main` ist seit dem 12.10.2026 auch
+der Standard-Branch auf GitHub.
 
 ## Kurzfassung
 
@@ -58,7 +59,7 @@ auf `main` (Fast-Forward vom selben Branch mit Zustimmung des Betreibers). `main
     DESS vor jedem Schreiben, vorgefundene Entladegrenze von 0 W). Das Re-Review hat alles
     bestätigt. Entscheidungen, geparkte Befunde und aufgeschobene Kleinigkeiten:
     `docs/superpowers/plans/2026-10-11-phase-2b-entscheidungen.md`.
-- **Phase 2c-1 (Laderegelung) ist umgesetzt und je Task geprüft** (Plan:
+- **Phase 2c-1 (Laderegelung) ist umgesetzt, je Task und im Gesamtreview geprüft** (Plan:
   `docs/superpowers/plans/2026-10-12-phase-2c1-laderegelung.md`, Design:
   `docs/superpowers/specs/2026-10-12-phase-2c1-laderegelung-design.md`, 16 Tasks; der Betreiber hat 2c
   am 12.10.2026 in 2c-1 und 2c-2 geteilt, Ausführung subagent-driven):
@@ -86,6 +87,13 @@ auf `main` (Fast-Forward vom selben Branch mit Zustimmung des Betreibers). `main
     Dritteln Wahrscheinlichkeit fing, ein verlorener 5-A-Befehl blieb unbemerkt. Die übrigen
     Änderungen gegenüber Plan und Design stehen im Kopf des Designs und in den Absätzen „Stand
     Plan 2c-1“ der Spec.
+  - **Fix-Welle nach dem Gesamtreview:** Stellt ein Stundenlimit des Tesla einen Befehl zurück,
+    steht das jetzt als „zurückgestellt“ im Entscheidungslog (höchstens einmal je Minute); vorher
+    brach der Dry-Run-Vergleich dort stumm ab. Der Simulator nennt den rohen Akku-Anteil und die
+    Zurückstellungen als Informationszahlen und prüft in `reserve` die Reserve-Absicherung der
+    Regelung; „SOC nie unter 20 %“ ist als Invariante des Modells gekennzeichnet. Dazu ein Test zur
+    Dringlichkeit beim Steigen der Überlast-Stufe, Korrekturen der Doku und die Liste „Vor der
+    Live-Schaltung von EVCS und Tesla“ (siehe „Offen an der Anlage“).
   - **Noch nicht:** Befehle an Victron und der 15-min-Wächter (2c-2), die Bedienung (2d). Live ist
     weiterhin kein Aktor.
 - **Images:** `ghcr.io/binda5000/bindaems-core:latest` und `ghcr.io/binda5000/bindaems-app:latest`.
@@ -93,15 +101,18 @@ auf `main` (Fast-Forward vom selben Branch mit Zustimmung des Betreibers). `main
   immer gemeinsam aus demselben Stand ausgerollt (gleiche Compose-Datei, gleiche Image-Tags): Die
   UI-Schemas sind streng, eine abweichende Version zeigt auf der System-Seite nur „Unerwartete
   Antwort vom Server“.
-- **Tests:** 4575 Python-Tests, davon 16 Property-Tests mit Hypothesis (5 für die Safety-Schicht,
+- **Tests:** 4595 Python-Tests, davon 16 Property-Tests mit Hypothesis (5 für die Safety-Schicht,
   6 für den Phasenwächter), und 233 UI-Tests; Abdeckung 97 % insgesamt und 99 % für `core/safety`,
   `core/control` und `core/actuators`.
   Geprüft wird mit ruff, mypy strict (auch für den Watchdog), import-linter (4 Verträge), pytest
   mit Abdeckungsgrenzen (≥ 75 % insgesamt, ≥ 90 % für `core/safety`, `core/control` und
   `core/actuators`), Vitest mit svelte-check, Prettier und ESLint; dazu E2E mit Playwright.
 - **Offen:**
-  - an der Anlage: Images ausrollen, Dry-Run neben evcc beginnen, der Rest von Teil 2
-    (EVCS-Verbindungsabbruch, Victron 17.2-4; siehe „Offen an der Anlage“)
+  - an der Anlage: Images ausrollen, Dry-Run neben evcc beginnen (vorher die EVCS-Hysterese
+    entscheiden), der Rest von Teil 2 (EVCS-Verbindungsabbruch, Victron 17.2-4; siehe „Offen an der
+    Anlage“)
+  - vor der Live-Schaltung von EVCS und Tesla (2d): die Liste „Vor der Live-Schaltung“ (siehe
+    „Offen an der Anlage“)
   - Plan 2c-2 („Akku und Spitzen“) schreiben, danach Plan 2d (siehe „Nächster Schritt“)
   - die Abnahme der Phase 1 an der Anlage
   - kleine Punkte an der Anlage (siehe „Stand der Installation“): manuelle Punkte von Teil 1 und
@@ -314,15 +325,16 @@ Demo-Zugänge: `admin`, `gast` (Lesen) und `sicher` (Admin mit TOTP, Geheimnis
 - **Tests mit respx und Tessie (2b):** Eine Anfrage ohne passende Route fängt der Tesla-Aktor als
   Fehler ab, und respx zeichnet sie nicht auf. Wer prüft, dass nichts gesendet wird, braucht eine
   Catch-all-Route und zählt deren Aufrufe.
-- **Tests der Laderegelung (2c-1):** Fehlen die Ströme von EVCS und Wall Connector (auch 0 A), gilt
-  jede Phase als voll, und kein Auto startet (Design 5.5). Die gemeinsamen Vorgaben stehen in
+- **Tests der Laderegelung (2c-1):** Fehlen die Ströme von EVCS und Wall Connector, gilt jede Phase
+  als voll, und kein Auto startet (Design 5.5). Tests müssen die Ströme darum angeben, auch 0 A; nur
+  ein fehlender Wert macht eine Phase voll. Die gemeinsamen Vorgaben stehen in
   `tests/unit/core/control/charge_helpers.py`. Die Regelung sendet nur Änderungen; wer einem Aktor
   Befehle gibt, ohne dass sie es sieht, ruft `ChargeController.forget` auf (die Laufzeit tut das für
   Keeper, Übergabe, fremde Systeme und den Wechsel der Betriebsart).
 - **Simulator (2c-1):** Er nutzt die echten Aktoren und die Parser der Adapter. Ändert man deren
   Zeiten, Texte oder Signale, ändern sich die Szenarien mit. Alle zehn Szenarien laufen in
-  `tests/integration/test_sim_scenarios.py` mit je 8 bis 20 s; die volle CI-Prüfung braucht deshalb
-  rund 12 min. Die Szenarien sind deterministisch (feste Saat).
+  `tests/integration/test_sim_scenarios.py` mit je etwa 5 bis 20 s; die volle CI-Prüfung braucht
+  deshalb rund 12 min. Die Szenarien sind deterministisch (feste Saat).
 - **Dokumentationstests (2c-1):** `tests/unit/test_docs.py` prüft die JSON-Beispiele, die Tabelle der
   Gründe und die Optionen des Simulators im Betriebshandbuch gegen den Code. Ändert man die Absicht,
   einen Grund-Text oder die Optionen von `bindaems.tools.sim`, schlägt er an, bis das Handbuch stimmt.
@@ -388,6 +400,16 @@ Demo-Zugänge: `admin`, `gast` (Lesen) und `sicher` (Admin mit TOTP, Geheimnis
      auf die Geräte, und die Teil-2-Werkzeuge schreiben nicht mit: Sie schreiben nur, wenn du sie
      aufrufst. Die Entscheidungen liest der Betreiber bis 2d über die Dateien bzw.
      `GET /v1/decisions`.
+     - Vorher entscheidet der Betreiber über die EVCS-Hysterese (Punkt 8 der Liste „Vor der
+       Live-Schaltung“ unten); sonst beginnt der Dry-Run mit rund 100 EVCS-Entscheidungen je Stunde
+       PV-Laden.
+     - Das Stundenbudget des Tesla kappt den Vergleich bei Wolken (Punkt 1 unten); seit der
+       Fix-Welle steht das als „zurückgestellt“ im Log.
+     - **An der Anlage im Dry-Run prüfen:** welcher EVCS-Status bei angestecktem Auto auf
+       „Laden aus“ (`StartStop` = 0) folgt (ist es 3, bliebe ein Auto in PV nach dem ersten Stopp
+       auf „geladen“ stehen, bis es abgesteckt wird); was Tessie für `charger_phases` meldet; ob
+       „unklar“ fälschlich erscheint, wenn der Tesla den Wall Connector verlässt, während der e-Golf
+       an der EVCS hängt (Tessie meldet `plugged` bis zu 60 s veraltet).
   3. EVCS-Teil-2 „Verbindung unterbrochen“ und Victron 17.2-4 nachholen:
      - EVCS: den Schritt „Verbindung unterbrochen“ (Punkt `evcs` erneut, die Rückfrage mit `j`
        beantworten und das Netzwerkkabel der EVCS ziehen, wenn das Werkzeug es verlangt).
@@ -396,11 +418,50 @@ Demo-Zugänge: `admin`, `gast` (Lesen) und `sicher` (Admin mit TOTP, Geheimnis
        Betreibers vom 12.10.2026) und danach wieder einschalten. Der Multi muss dabei auf „Ein“
        stehen.
      - Die Berichte nach `docs/verification/` übernehmen.
-     - Das verstellt Ströme an EVCS und Tesla, während evcc sie regelt: Notiere die Zeit, damit du
-       die Entscheidungen dieser Zeit beim Vergleich mit evcc ausnimmst.
+     - Das verstellt die EVCS (Punkt `evcs`: Strom und „Laden an/aus“) und den Netz-Sollwert und
+       damit den Akku (17.2-4 schreibt nur den Override), während evcc die EVCS regelt; den Tesla
+       berührt keiner der Schritte. Notiere die Zeit, damit du die Entscheidungen dieser Zeit beim
+       Vergleich mit evcc ausnimmst.
   - Teil 2 schreibt auf die Geräte: nicht während der 7 Tage der Abnahme Phase 1 und ihres
     24-h-Mitschnitts (`docs/verification/abnahme-phase-1.md`, 4.2 und 4.3).
   - Danach: Plan 2c-2, dann 2d.
+  - **Vor der Live-Schaltung von EVCS und Tesla (2d)** müssen diese Punkte entschieden oder
+    umgesetzt sein (Gesamtreview von 2c-1; je Befund und mögliche Abhilfe, knapp auch im
+    Betriebshandbuch, „Laderegelung“, „Hinweise für die Anlage“):
+    1. **Stundenbudget des Tesla:** Unter PV-Wolken verbraucht die Regelung die 20 Befehle je
+       Stunde (im Simulator in `wolkig` nach 2410 s; 8 von 19 Strombefehlen gingen an die
+       5-A-Eigenheit). Danach werden auch ein Stopp und ein Moduswechsel zurückgestellt (in einer
+       Probe im Simulator wirkte „Aus“ erst nach 19 min), gegen Design 6.3 („Aus“ stoppt gleich);
+       im Log steht das seit der Fix-Welle als „zurückgestellt“. Abhilfe: ein Budget in der
+       Regelung (Plätze für Start/Stopp freihalten, Stromänderungen in PV sparen) und/oder den Stopp
+       nach einem Moduswechsel dringend machen.
+    2. **Selbststart im laufenden Vorgang:** Startet das Auto selbst (Tesla-App), korrigiert die
+       Regelung das nicht; „Aus“ hält es nicht gestoppt, PV stoppt es nicht. Abhilfe: live „Laden
+       aus“ erneut senden, wenn das Auto länger als N s gegen den Modus lädt, im
+       Start/Stopp-Budget.
+    3. **Ansteckerkennung des Tesla:** Tessie fragt abgesteckt nur alle 600 s ab; ein selbst
+       startender Tesla lädt nach dem Anstecken bis zu 10 min ungeregelt (gegen Präzisierung 9).
+       Abhilfe im Adapter: schneller abfragen, solange das Auto zu Hause oder online ist oder der
+       Wall Connector ein neues Fahrzeug meldet.
+    4. **Ausnahme in der Regelung:** Wirft die Regelung in jedem Zyklus, laufen auch Keeper, Stream
+       und Alarme nicht. Abhilfe: die Ausnahme fangen, die Regelung ruhen lassen, Alarm, Heartbeat
+       zurückhalten, den Keeper weiter ausführen.
+    5. **5-A-Eigenheit:** Befehle auf oder von 5 A gehen über Tessie beim ersten Mal verloren und
+       kosten einen Neuversuch. Abhilfe: `vehicles.tesla.min_a: 6` vermiede diese Befehle (Design
+       7.2 legt 5 A fest; Entscheidung des Betreibers).
+    6. **Simulator:** Kein PV-Szenario lässt das Importziel binden, „Zeit über dem Ziel in PV-Modi“
+       prüft darum wenig. Abhilfe: ein PV-Szenario mit schwerer Last auf einer Phase.
+    7. **Technische Schulden vor 2c-2:** `charging.py` (rund 1040 Zeilen) und `runtime.py` (rund
+       1290) sind groß, Hilfsfunktionen wie `_since`, `_number` und `PV_SURPLUS` gibt es doppelt.
+       Abhilfe: aufteilen und zusammenführen, bevor 2c-2 dazukommt.
+    8. **EVCS-Hysterese (vor dem Dry-Run zu entscheiden):** Der EVCS-Strom wechselt mit dem Rauschen
+       der Hauslast zwischen zwei ganzen Ampere (im Simulator 77 bis 112 Befehle bzw.
+       Dry-Run-Entscheidungen je Stunde PV-Laden). Abhilfe: Erhöhen erst ab einem Anteil von
+       Sollwert + 1 A + etwa 0,3 A oder nach etwa 30 s, Senken sofort; das weicht von Design 6.5 ab
+       („folgt jede Sekunde“), darum entscheidet der Betreiber.
+
+    Dazu kommen die Punkte „Offen vor dem Live-Betrieb des Tesla“ (Reserve des sicheren Zustands,
+    Annahmen des Prüffensters) unter „Hinweise für die Pläne 2c-2 und 2d“.
 - **Offen an der Anlage, aus Phase 1 und 2a:**
   1. Die manuellen Punkte von Teil 1 nachtragen: Sicherheitsprofil und Modbus-Dienstliste
      (17.1-3), NTP am Cerbo (17.1-12).
@@ -429,10 +490,10 @@ Demo-Zugänge: `admin`, `gast` (Lesen) und `sicher` (Admin mit TOTP, Geheimnis
        Betreiber (Spec 17.2); an der Anlage am 12.10.2026 ausgeführt
      - Watchdog 1.1.0 mit der Aktion für den hub4-Override
    - **2c Regelung**, geteilt (Entscheidung des Betreibers vom 12.10.2026):
-     - **2c-1 Laderegelung:** umgesetzt und je Task geprüft, an der Anlage noch nicht ausgerollt
-       (siehe Kurzfassung): Modi Sofort, PV, Min+PV, Aus und Boost, Phasenwächter, Tesla-Steuerung,
-       vereinfachte Zuordnung Auto ↔ Wallbox, Degradation der Ladepunkte, Anlagensimulator mit
-       Regelkreistests in der CI.
+     - **2c-1 Laderegelung:** umgesetzt, je Task und im Gesamtreview geprüft, an der Anlage noch
+       nicht ausgerollt (siehe Kurzfassung): Modi Sofort, PV, Min+PV, Aus und Boost, Phasenwächter,
+       Tesla-Steuerung, vereinfachte Zuordnung Auto ↔ Wallbox, Degradation der Ladepunkte,
+       Anlagensimulator mit Regelkreistests in der CI.
      - **2c-2 Akku und Spitzen:** Befehle der Regelung an Victron (Akku-Unterstützung und
        Setpoint-Kompensation, Spec 7.6 und 7.7, Auffrischen des Overrides vor seinem Timeout von
        5 min), 15-min-Wächter (Spec 7.4) und die volle Zuordnungserkennung (Spec 7.8). Der Plan ist
@@ -459,8 +520,10 @@ Demo-Zugänge: `admin`, `gast` (Lesen) und `sicher` (Admin mit TOTP, Geheimnis
 
 1. Plan 2b ist auf `main`; Gesamtreview, Fix-Durchgang und Re-Review sind erledigt, die
    Entscheidungen stehen in `docs/superpowers/plans/2026-10-11-phase-2b-entscheidungen.md`. Plan
-   2c-1 ist umgesetzt und je Task geprüft; Gesamtreview und Integration nach `main` folgen. Seine
-   Entscheidungen stehen im Kopf des Designs und in den Absätzen „Stand Plan 2c-1“ der Spec.
+   2c-1 ist umgesetzt, je Task und im Gesamtreview geprüft, und die Fix-Welle danach ist umgesetzt;
+   die Integration nach `main` folgt. Seine Entscheidungen stehen im Kopf des Designs und in den
+   Absätzen „Stand Plan 2c-1“ der Spec, die offenen Punkte vor der Live-Schaltung in „Offen an der
+   Anlage“.
 2. An der Anlage die Schritte aus „Offen an der Anlage“.
 3. Danach Plan 2c-2 („Akku und Spitzen“) schreiben; die Hinweise unten gehören hinein. Dann folgt
    Plan 2d.
@@ -596,13 +659,16 @@ Entschieden in Phase 2c-1; die Rulings stehen im Plan (Präzisierungen), im Kopf
 Absätzen „Stand Plan 2c-1“ der Spec:
 
 - Die EVCS folgt dem Überschuss in ganzen Ampere (Totband 1 A, 5 s Abstand in der Safety-Schicht). In
-  den PV-Szenarien des Simulators waren das bis zu rund 100 Strombefehle je Stunde, auch weil das
-  Rauschen der Hauslast an der Abrundungsgrenze liegt. Eine Hysterese beim Erhöhen wäre eine
-  Erweiterung.
-- Bei schnell wechselnden Wolken deckt der Hausakku einen spürbaren Teil der PV-Ladung des Tesla (im
-  Simulator bis zu etwa 38 %), denn der Tesla darf seinem Mittel nur alle 90 s folgen. Das nimmt das
-  Design in Kauf (Design 6.5). Eine Abhilfe wäre, den Tesla im PV-Modus am vorsichtigen Minimum statt
-  am Mittel zu führen; das wäre eine Designänderung und eine Entscheidung des Betreibers.
+  den PV-Szenarien des Simulators waren das 77 bis 112 Strombefehle je Stunde, auch weil das
+  Rauschen der Hauslast an der Abrundungsgrenze liegt. Über eine Hysterese beim Erhöhen entscheidet
+  der Betreiber vor dem Dry-Run (Liste „Vor der Live-Schaltung“, Punkt 8).
+- Bei schnell wechselnden Wolken deckt der Hausakku einen spürbaren Teil der PV-Ladung des Tesla,
+  denn der Tesla darf seinem Mittel nur alle 90 s folgen. Im Simulator (`wolkig`) waren es rund 40 %
+  seiner Ladeenergie, roh gerechnet: Die Kennzahl „Akku-Energie in PV-Autos“ nimmt die Übergänge aus
+  und zeigt dort 0 %, der Bericht nennt den rohen Anteil aller PV-Autos (18 %) als
+  Informationszahl. Das nimmt das Design in Kauf (Design 6.5). Eine Abhilfe wäre, den Tesla im
+  PV-Modus am vorsichtigen Minimum statt am Mittel zu führen; das wäre eine Designänderung und eine
+  Entscheidung des Betreibers.
 - Ohne Ströme von EVCS oder Wall Connector startet die Regelung kein Auto (Design 5.5), auch wenn die
   Grenze sonst reichte.
 - Der Tessie-Adapter trennt seine Quelle bei fehlschlagenden Abfragen nicht (nur beim Abbruch). Die
