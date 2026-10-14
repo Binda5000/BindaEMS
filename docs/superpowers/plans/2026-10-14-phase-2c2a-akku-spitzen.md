@@ -440,7 +440,7 @@ git commit -m "refactor(core): Laderegelung in Ladepunkte, Tesla-Teil und Contro
       - `vehicle_wallbox(self) -> dict[str, str | None]`, ohne Ergebnis `{}`; `grid_budget_w(self) -> float | None`, ohne Ergebnis `None`
       - `start_cycle(self) -> None`: am Anfang jedes Zyklus, vor dem Rücklesen; danach ist `failed` falsch
       - `failed: bool` (Eigenschaft): In diesem Zyklus warf ein Aufruf des Kerns.
-      - `finish(self, wall_now: datetime) -> None`: legt am Ende des Regelteils Health und Alarme des Kerns ab (`health`, `alarms`). Der Alarm `control.exception` gilt, solange Zyklen mit `failed` aufeinander folgen; `since` ist der erste davon.
+      - `finish(self, wall_now: datetime) -> None`: legt am Ende des Regelteils Health und Alarme des Kerns ab (`health`, `alarms`). Der Alarm `control.exception` gilt ab dem ersten Zyklus mit `failed` bis zu einem Zyklus, in dem `step` ohne Ausnahme lief; Zyklen ohne Regelung und ohne Ausnahme lassen ihn stehen (Präzisierung 15). `since` ist der erste gescheiterte Zyklus.
       - `health(self) -> dict[str, Any]`: der abgelegte Stand, vor dem ersten `finish` der des frisch gebauten Kerns
       - `alarms(self) -> list[Alarm]`: die abgelegten Alarme des Kerns, dazu `control.exception` nach `finish`
 
