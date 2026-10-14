@@ -54,9 +54,9 @@ class Command:
     Gründe der Regelung als Codes für das Entscheidungslog. ``wake`` ist ein Start mit
     Weckerlaubnis (Plan 2c-1, Design 7.1) und wirkt nur bei ``charging`` mit ``True``. ``refresh``
     ist das Auffrischen eines Overrides mit gleichem Wert (Plan 2c-2a, Design 8) und wirkt nur bei
-    ``grid_setpoint``: Dort entfällt für die Safety-Schicht das Totband. Ein solcher Befehl gilt
-    nie als dringend, und der Ausführer schreibt für ihn keine Entscheidung, solange er gelingt
-    oder im Dry-Run bleibt.
+    ``grid_setpoint``, bei jeder anderen Art gar nicht. Dort entfällt für die Safety-Schicht das
+    Totband, das Auffrischen gilt nie als dringend, und der Ausführer schreibt dafür keine
+    Entscheidung, solange es gelingt oder im Dry-Run bleibt.
     """
 
     actuator: str

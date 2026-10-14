@@ -13,11 +13,12 @@ das Schreibbudget nur mit dem exakten Sicherwert seiner Art. Sperren und die Reg
 für ihn.
 
 Ein Befehl mit ``refresh`` frischt einen Override mit gleichem Wert auf (Plan 2c-2a, Design 8): Der
-Cerbo verwirft den Override nach 300 s ohne Schreiben. Ein solcher Befehl ist nie dringend. Beim
-Netz-Sollwert entfällt für ihn das Totband ganz, denn die Regeln 2 und 4 ändern den Wert von Zyklus
-zu Zyklus leicht, und ein Wert, den der Cerbo nur um weniger als 50 W anders hält, ergäbe sonst
-``UNCHANGED``, und der Override verfiele. Sperren, Zustand, Betriebsart, Regeln 1–4 und der
-Mindestabstand gelten für ihn wie für jeden Befehl.
+Cerbo verwirft den Override nach 300 s ohne Schreiben. Das gibt es nur beim Netz-Sollwert; bei jeder
+anderen Art hat ``refresh`` keine Wirkung, auch nicht auf einen dringenden Befehl. Ein solches
+Auffrischen ist nie dringend, und das Totband entfällt für es ganz, denn die Regeln 2 und 4 ändern
+den Wert von Zyklus zu Zyklus leicht, und ein Wert, den der Cerbo nur um weniger als 50 W anders
+hält, ergäbe sonst ``UNCHANGED``, und der Override verfiele. Sperren, Zustand, Betriebsart,
+Regeln 1–4 und der Mindestabstand gelten für es wie für jeden Befehl.
 
 Zeit, Messwerte, Freigaben und Sperren kommen über den ``SafetyContext``. Gedächtnis haben nur der
 Rate-Limiter und das Schreibbudget: Sie erfassen jeden Befehl, der einen Wert zum Senden ergibt.
@@ -105,9 +106,10 @@ class SafetyLayer:
 
         1. Aktor im Katalog und Art beim Aktor erlaubt, sonst ``REJECTED``.
         2. ``urgent_ok``: dringend, und ``toward_safe`` gilt für den angeforderten Wert und für den
-           Wert nach den Regeln 1–3 (lehnen sie ab, nie). Ein Befehl mit ``refresh`` ist nie
-           ``urgent_ok``. Ist der Befehl als dringend markiert, aber nicht ``urgent_ok``, kommt
-           ``urgent.ignored`` dazu, und er wird normal geprüft.
+           Wert nach den Regeln 1–3 (lehnen sie ab, nie). Ein Auffrischen (``refresh`` beim
+           Netz-Sollwert) ist nie ``urgent_ok``; bei anderen Arten hat ``refresh`` keine Wirkung.
+           Ist der Befehl als dringend markiert, aber nicht ``urgent_ok``, kommt ``urgent.ignored``
+           dazu, und er wird normal geprüft.
         3. Zustand CONTROL oder DEGRADED, oder ``urgent_ok`` in SAFE; sonst ``REJECTED``.
         4. Gesperrter Aktor: ``REJECTED``, auch bei ``urgent_ok``.
         5. Betriebsart: Dry-Run, außer der Aktor steht in ``ctx.modes`` auf ``LIVE``.
@@ -155,12 +157,15 @@ class SafetyLayer:
 
         # 2. Dringend und nachweislich Richtung sicherer Zustand, mit dem angeforderten Wert und mit
         #    dem Wert nach den Regeln 1–3, denn diese können ihn wieder davon wegbringen. Die Regeln
-        #    sind rein: Ihr Ergebnis wird hier schon berechnet, zählt aber erst in Schritt 7. Ein
-        #    Auffrischen ist nie dringend: Es hat Zeit und hält Mindestabstand und Zustand ein.
+        #    sind rein: Ihr Ergebnis wird hier schon berechnet, zählt aber erst in Schritt 7.
+        #    Ein Auffrischen des Overrides ist nie dringend: Es hat Zeit und hält Mindestabstand und
+        #    Zustand ein. Es betrifft nur den Netz-Sollwert; bei anderen Arten hat ``refresh`` keine
+        #    Wirkung.
+        refreshing = command.refresh and command.kind == CommandKind.GRID_SETPOINT
         ranged = check_range(command, limits, ctx.grid_budget_w)
         urgent_ok = (
             command.urgent
-            and not command.refresh
+            and not refreshing
             and not ranged.reject
             and toward_safe(command, ctx, limits)
             and toward_safe(replace(command, value=ranged.value), ctx, limits)
@@ -199,7 +204,6 @@ class SafetyLayer:
 
         # 9. Totband (Regel 5); dringend zählt nur ein gleicher Wert. Ein Auffrischen des Overrides
         #    hat keins: Der Wert soll hinausgehen, auch wenn der Cerbo ihn schon (fast) hält.
-        refreshing = command.refresh and command.kind == CommandKind.GRID_SETPOINT
         band = None if refreshing else deadband(command, value, ctx, limits)
         if band is not None and (not urgent_ok or band.code == "rate.unchanged"):
             return verdict(Outcome.UNCHANGED, value, band)

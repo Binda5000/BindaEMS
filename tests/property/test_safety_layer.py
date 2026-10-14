@@ -16,9 +16,10 @@ Falls liegen in dessen eigenem temporären Verzeichnis, denn hypothesis verträg
 funktionsbezogenen Fixtures wie ``tmp_path``.
 
 Ein Befehl mit ``refresh`` (Auffrischen eines Overrides, Plan 2c-2a) kommt in denselben Strategien
-vor. Er ist nie dringend; sonst gelten für ihn alle Regeln wie ohne ``refresh``, nur das Totband des
-Netz-Sollwerts fällt weg. Das prüft der Vergleich mit demselben Befehl ohne ``refresh`` in
-``test_refresh_differs_from_a_plain_command_only_by_the_deadband``.
+vor. Beim Netz-Sollwert ist er nie dringend; sonst gelten für ihn alle Regeln wie ohne ``refresh``,
+nur das Totband fällt weg. Bei jeder anderen Art hat ``refresh`` keine Wirkung: Das Urteil ist
+dasselbe wie ohne, auch für einen dringenden Befehl. Das prüft der Vergleich mit demselben Befehl
+ohne ``refresh`` in ``test_refresh_differs_from_a_plain_command_only_by_the_deadband``.
 """
 
 import json
@@ -83,6 +84,11 @@ HOUR_S, DAY_S = 3600.0, 86400.0
 
 
 # --- Orakel ---------------------------------------------------------------------------------------
+
+
+def refreshing(command: Command) -> bool:
+    """Frischt der Befehl einen Override auf? ``refresh`` zählt nur beim Netz-Sollwert."""
+    return command.refresh and command.kind == K.GRID_SETPOINT
 
 
 def number(value: object) -> float | None:
@@ -558,11 +564,11 @@ SETPOINT = (VICTRON, K.GRID_SETPOINT)
 class RefreshCase:
     """Ein Befehl, im selben Kontext ohne und mit ``refresh`` geprüft.
 
-    ``command`` trägt ``urgent`` wie gezogen. Die Probe ist derselbe Befehl ohne ``refresh`` und
-    nicht dringend; das Auffrischen derselbe mit ``refresh``. Hat der Befehl einen Wert, neben den
-    ein Ist-Wert passt, prüft der Fall beide mit mehreren Ist-Werten (``contexts``: gleich, im
-    Totband, am Rand, darüber), damit ``rate.unchanged`` und ``rate.deadband`` in jedem Lauf
-    vorkommen. ``recent`` und ``exhausted`` wie bei ``Batch``.
+    ``command`` trägt ``urgent`` wie gezogen. Die Probe ist derselbe Befehl ohne ``refresh``, beim
+    Netz-Sollwert zudem nicht dringend; das Auffrischen ist derselbe mit ``refresh``. Hat der Befehl
+    einen Wert, neben den ein Ist-Wert passt, prüft der Fall beide mit mehreren Ist-Werten
+    (``contexts``: gleich, im Totband, am Rand, darüber), damit ``rate.unchanged`` und
+    ``rate.deadband`` in jedem Lauf vorkommen. ``recent`` und ``exhausted`` wie bei ``Batch``.
     """
 
     command: Command
@@ -583,8 +589,13 @@ class RefreshCase:
         return [replace(self.ctx, present={**self.ctx.present, key: near}) for near in actuals]
 
     def checks(self) -> Checks:
-        """Je Kontext die Probe, dann dasselbe als Auffrischen."""
-        plain = replace(self.command, urgent=False, refresh=False)
+        """Je Kontext die Probe, dann dasselbe als Auffrischen.
+
+        Beim Netz-Sollwert ist die Probe nicht dringend, denn ein Auffrischen ist es nie. Bei den
+        anderen Arten bleibt ``urgent``, wie gezogen: ``refresh`` hat dort keine Wirkung.
+        """
+        urgent = self.command.urgent and self.command.kind != K.GRID_SETPOINT
+        plain = replace(self.command, urgent=urgent, refresh=False)
         refreshed = replace(self.command, refresh=True)
         return [(command, ctx) for ctx in self.contexts() for command in (plain, refreshed)]
 
@@ -682,10 +693,13 @@ def test_gate_lock_inputs_and_dry_run(case: GateCase) -> None:
             assert command.kind in KINDS.get(command.actuator, ()), verdict  # nie an Nicht-Aktoren
             assert not ctx.locks.get(command.actuator), (verdict, ctx)
             # dringend zählt nur, wenn der angeforderte und der gesendete Wert Richtung sicher
-            # gehen; ein Auffrischen ist nie dringend
+            # gehen; ein Auffrischen des Overrides ist nie dringend
             sent = replace(command, value=verdict.value)
             urgent_safe = (
-                command.urgent and not command.refresh and safer(command, ctx) and safer(sent, ctx)
+                command.urgent
+                and not refreshing(command)
+                and safer(command, ctx)
+                and safer(sent, ctx)
             )
             assert ctx.operating in (OperatingState.CONTROL, OperatingState.DEGRADED) or (
                 urgent_safe and ctx.operating == OperatingState.SAFE
@@ -704,19 +718,43 @@ def setpoint_case(*, recent: bool, urgent: bool = False) -> RefreshCase:
     return RefreshCase(command, generous(T0), recent=recent, exhausted=False)
 
 
+def current_case(*, recent: bool, **changes: Any) -> RefreshCase:
+    """Ein dringender Strom von 6 A an die EVCS; ab 6 A Ist-Strom geht er Richtung sicher.
+
+    ``changes`` ersetzt Felder des großzügigen Kontexts.
+    """
+    command = Command(EVCS, K.CURRENT, 6.0, urgent=True)
+    return RefreshCase(command, replace(generous(T0), **changes), recent=recent, exhausted=False)
+
+
 @settings(max_examples=300, deadline=None)
 @given(refresh_cases())
-@example(setpoint_case(recent=False))  # Totband und gleicher Wert fallen weg, der Wert geht hinaus
-@example(setpoint_case(recent=True))  # ... aber der Mindestabstand von 2 s gilt
-@example(setpoint_case(recent=False, urgent=True))  # ein dringendes Auffrischen ist es nicht
+# Netz-Sollwert: Totband und gleicher Wert fallen weg, der Wert geht hinaus; der Mindestabstand von
+# 2 s gilt weiter; ein Auffrischen ist nie dringend, auch wenn der Befehl es verlangt
+@example(setpoint_case(recent=False))
+@example(setpoint_case(recent=True))
+@example(setpoint_case(recent=False, urgent=True))
+# andere Arten: Ein dringender Strom umgeht den Mindestabstand und darf in SAFE senden, auch mit
+# refresh, denn dort hat es keine Wirkung
+@example(current_case(recent=True))
+@example(current_case(recent=False, operating=OperatingState.SAFE))
 def test_refresh_differs_from_a_plain_command_only_by_the_deadband(case: RefreshCase) -> None:
     results = authorize_each(case)
     for (_, _, plain), (_, _, refreshed) in zip(results[::2], results[1::2], strict=True):
+        if case.command.kind != K.GRID_SETPOINT:
+            # Bei jeder anderen Art hat refresh keine Wirkung, auch nicht auf dringende Befehle.
+            assert (refreshed.outcome, refreshed.value, refreshed.findings, refreshed.dry_run) == (
+                plain.outcome,
+                plain.value,
+                plain.findings,
+                plain.dry_run,
+            )
+            continue
         codes = [finding.code for finding in plain.findings]
         # Ein Auffrischen ist nie dringend: kein ``urgent.bypass``, ``urgent.ignored`` ist erlaubt.
         got = [finding.code for finding in refreshed.findings if finding.code != "urgent.ignored"]
         assert "urgent.bypass" not in got, refreshed
-        if case.command.kind == K.GRID_SETPOINT and plain.outcome is Outcome.UNCHANGED:
+        if plain.outcome is Outcome.UNCHANGED:
             # Allein das Totband fällt weg; Mindestabstand, Erfassen und Ergebnis laufen weiter.
             assert codes[-1] in BAND_CODES, plain
             assert refreshed.value == plain.value, (plain, refreshed)

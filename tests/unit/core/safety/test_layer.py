@@ -933,3 +933,24 @@ def test_refresh_does_nothing_for_other_kinds(layer) -> None:
     assert layer.authorize(command, ctx).outcome is Outcome.UNCHANGED
     inside = make_ctx(now=S(5), present={("wallbox.evcs", K.CURRENT): 10.4})
     assert layer.authorize(command, inside).outcome is Outcome.UNCHANGED
+
+
+@pytest.mark.parametrize("refresh", [False, True], ids=["plain", "refresh"])
+def test_refresh_does_not_touch_urgent_commands_of_other_kinds(layer, refresh) -> None:
+    # ``refresh`` wirkt nur beim Netz-Sollwert: Ein dringender Strom Richtung sicher geht mit und
+    # ohne das Merkmal gleich durch, den Mindestabstand umgeht er, und in SAFE ist er erlaubt.
+    layer.authorize(Command(EVCS, K.CURRENT, 10.0), evcs_at(0, 8.0))
+    urgent = Command(EVCS, K.CURRENT, 6.0, urgent=True, refresh=refresh)
+    bypass = layer.authorize(urgent, evcs_at(3, 10.0))
+    assert (bypass.outcome, bypass.value, bypass.findings) == (
+        Outcome.ACCEPTED,
+        6.0,
+        (URGENT_BYPASS,),
+    )
+    in_safe = layer.authorize(urgent, evcs_at(60, 16.0, operating=OperatingState.SAFE))
+    assert (in_safe.outcome, in_safe.value, in_safe.findings, in_safe.send) == (
+        Outcome.ACCEPTED,
+        6.0,
+        (),
+        True,
+    )

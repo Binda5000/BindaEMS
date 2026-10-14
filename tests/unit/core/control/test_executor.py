@@ -978,3 +978,19 @@ def test_a_refresh_that_goes_wrong_in_other_ways_is_logged_too(
     executor.poll(snap({}), S(1), T0)
     assert [d.result for d in decisions] == [result]
     assert [f.result for f in executor.take_failures()] == [result]
+
+
+def test_a_refresh_of_another_kind_is_logged_like_any_command(tmp_path, limits_live) -> None:
+    # ``refresh`` wirkt nur beim Netz-Sollwert: Ein Strom mit dem Merkmal steht im Log wie jeder.
+    executor, fake, decisions = setup(tmp_path, limits_live)
+    command = Command(EVCS, CommandKind.CURRENT, 12.0, reasons=("mode_pv",), refresh=True)
+    dry = make_ctx(modes={}, present={(EVCS, CommandKind.CURRENT): 16.0})
+    executor.execute(command, dry, snap({}), T0, {})
+    assert [d.text for d in decisions] == [
+        "EVCS „evcs“ (PV-Überschuss): Strom 12 A – Dry-Run, nicht gesendet."
+    ]
+    assert executor.execute(command, replace(LIVE_CTX, now=S(5)), snap({}), S(5), {}).send
+    fake.echo[CommandKind.CURRENT] = 12.0
+    executor.poll(snap({}), S(6), S(6))
+    assert [d.result for d in decisions] == [DecisionResult.DRY_RUN, DecisionResult.OK]
+    assert decisions[-1].text == "EVCS „evcs“ (PV-Überschuss): Strom 12 A – gesendet und bestätigt."

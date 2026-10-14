@@ -25,11 +25,13 @@ Ergebnisse sammelt ``take_failures`` für den fehlerfreien Zyklus (Präzisierung
 Hat das Gerät einen bestätigten Wert nicht übernommen (``Confirmation.NOT_TAKEN``), ist das Ergebnis
 ``ERROR`` und trägt ``WriteResult.not_taken``; die Regelung fordert den Wert dann erneut an.
 
-Eine Ausnahme ist das Auffrischen eines Overrides (``Command.refresh``, Plan 2c-2a, Präzisierung 7):
-Es kommt in festem Abstand (``control.override_refresh_s``, Standard 240 s) mit dem Wert, den der
-Cerbo schon hat, und füllte sonst das Log. Für einen solchen Befehl entsteht bei ``DRY_RUN`` und bei
-``OK`` keine Entscheidung. ``WriteResult`` und ``take_failures`` bleiben, wie sie sind, und alles
-andere steht im Log wie bei jedem Befehl: die Ablehnung, ``ERROR``, ``TIMEOUT`` und ``NOT_SENT``.
+Eine Ausnahme ist das Auffrischen eines Overrides (``Command.refresh`` beim Netz-Sollwert, Plan
+2c-2a, Präzisierung 7): Es kommt in festem Abstand (``control.override_refresh_s``, Standard
+240 s) mit dem Wert, den der Cerbo schon hat, und füllte sonst das Log. Für einen solchen Befehl
+entsteht bei ``DRY_RUN`` und bei ``OK`` keine Entscheidung. ``WriteResult`` und ``take_failures``
+bleiben, wie sie sind, und alles andere steht im Log wie bei jedem Befehl: die Ablehnung,
+``ERROR``, ``TIMEOUT`` und ``NOT_SENT``. Bei jeder anderen Art hat ``refresh`` keine Wirkung: Auch
+ein Strom mit dem Merkmal steht im Log wie jeder andere.
 
 Zwei Uhren: ``ctx.now`` und ``now`` sind die Zeit der Safety-Schicht (``AnchoredClock``); mit ihr
 laufen die Fristen und die 60 s der Ablehnungen und Zurückstellungen. ``wall_now`` ist die Wanduhr
@@ -56,7 +58,7 @@ from bindaems.shared.decisions import Decision, DecisionResult, decision_text
 from bindaems.shared.domain import Snapshot
 
 _REPEAT_INTERVAL: Final = timedelta(seconds=60)  # dieselbe Ablehnung bzw. Zurückstellung so oft
-# Diese Ergebnisse stehen für ein Auffrischen (``Command.refresh``) nicht im Log, alle anderen schon
+# Diese Ergebnisse stehen für ein Auffrischen eines Overrides nicht im Log, alle anderen schon
 _QUIET_REFRESH: Final = frozenset({DecisionResult.OK, DecisionResult.DRY_RUN})
 
 _Key = tuple[str, CommandKind]  # Aktor und Art: ein Schreibvorgang je Schlüssel
@@ -159,10 +161,10 @@ class CommandExecutor:
         """Fragt die offenen Schreibvorgänge ab und schließt die fertigen ab.
 
         Jeder abgeschlossene Schreibvorgang ergibt genau eine Entscheidung, außer ein bestätigtes
-        Auffrischen (``Command.refresh``). Zuerst fragt der Ausführer den Aktor (``confirm``):
-        bestätigt ergibt ``OK``, gescheitert oder nicht übernommen (``NOT_TAKEN``) ``ERROR`` mit
-        dem Text des Aktors; bei ``NOT_TAKEN`` trägt das Ergebnis zusätzlich ``not_taken``. Einen
-        neuen Versuch gibt der Aufrufer wie jeden Befehl.
+        Auffrischen eines Overrides (``Command.refresh`` beim Netz-Sollwert). Zuerst fragt der
+        Ausführer den Aktor (``confirm``): bestätigt ergibt ``OK``, gescheitert oder nicht
+        übernommen (``NOT_TAKEN``) ``ERROR`` mit dem Text des Aktors; bei ``NOT_TAKEN`` trägt das
+        Ergebnis zusätzlich ``not_taken``. Einen neuen Versuch gibt der Aufrufer wie jeden Befehl.
         Ist der Wert noch offen und die Frist erreicht (``now >= deadline``), ist es ``TIMEOUT``;
         ein Wert, der genau zur Frist ankommt, gilt also als bestätigt. Sonst bleibt der
         Schreibvorgang offen. Zurück kommen die abgeschlossenen in der Reihenfolge, in der sie
@@ -274,10 +276,11 @@ class CommandExecutor:
     ) -> None:
         """Gibt die Entscheidung zu ``verdict`` an die Senke.
 
-        Ein Auffrischen (``Command.refresh``) ergibt bei ``OK`` und bei ``DRY_RUN`` keine.
+        Ein Auffrischen eines Overrides (``Command.refresh`` beim Netz-Sollwert) ergibt bei ``OK``
+        und bei ``DRY_RUN`` keine.
         """
         command = verdict.command
-        if command.refresh and result in _QUIET_REFRESH:
+        if _is_refresh(command) and result in _QUIET_REFRESH:
             return
         label = self._labels.get(command.actuator, command.actuator)
         # Der Text nennt den Wert nach der Safety-Schicht; ohne einen (Ablehnung) den angeforderten.
@@ -327,6 +330,11 @@ class CommandExecutor:
         }
         self._repeated[key] = now
         return True
+
+
+def _is_refresh(command: Command) -> bool:
+    """Frischt der Befehl einen Override auf? ``Command.refresh`` zählt nur beim Netz-Sollwert."""
+    return command.refresh and command.kind == CommandKind.GRID_SETPOINT
 
 
 def _held_back(verdict: Verdict) -> DecisionResult | None:
