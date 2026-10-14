@@ -1,4 +1,4 @@
-"""15-min-Wächter, Teil 2: Drosselung, Aufheben und Start-Sperre (Design 6.3, 6.4).
+"""15-min-Wächter: Drosselung, Aufheben und Start-Sperre (Design 6.3, 6.4).
 
 Plan 2c-2a, Präzisierungen 11 und 13. Aufbau wie in ``test_peak_guard.py``: Ziel 8 kW, Marge 0,3 kW,
 ein Schritt je Sekunde ab 18:00:00 mit Mittel 0 und ohne Autos; bei 18:05:00 ist E 1000 Wh, also
@@ -40,6 +40,12 @@ B = PeakCar("b", "evcs", Effective.MIN_PV, 1, 4000.0, 4000.0, 2760.0)
 C = PeakCar("c", "x", Effective.PV, 2, 3000.0, 3000.0, 1380.0)
 CARS = [A, B, C]
 FIRST = {"c": 0.0, "b": 2760.0, "a": 6240.0}  # die Grenzen nach der Senkung 5000 W um 18:05:00
+# dieselben Grenzen mit ihrer Senkung und dem Modus, in dem sie entstanden
+FIRST_CAPS = {
+    "a": Cap(6240.0, 760.0, Effective.NOW),
+    "b": Cap(2760.0, 1240.0, Effective.MIN_PV),
+    "c": Cap(0.0, 3000.0, Effective.PV),
+}
 
 
 def at(seconds: float) -> datetime:
@@ -188,11 +194,12 @@ def test_a_car_below_its_floor_or_without_a_starting_point_is_skipped() -> None:
     other = PeakCar("other", "w1", Effective.NOW, 0, 7000.0, 7000.0, 3450.0)
     below = PeakCar("below", "w2", Effective.NOW, 1, 2000.0, 2000.0, 3450.0)
     unknown = PeakCar("unknown", "w3", Effective.NOW, 2, None, 5000.0, 3450.0)
-    assert throttle([other, below, unknown], {}, 1000.0) == {"other": Cap(6000.0, 1000.0)}
-    # Mit einer Grenze hat das Auto ohne Leistung einen Ausgang, und die Senkung wächst.
-    assert throttle([unknown], {"unknown": Cap(5000.0, 500.0)}, 1000.0) == {
-        "unknown": Cap(4000.0, 1500.0)
+    assert throttle([other, below, unknown], {}, 1000.0) == {
+        "other": Cap(6000.0, 1000.0, Effective.NOW)
     }
+    # Mit einer Grenze hat das Auto ohne Leistung einen Ausgang, und die Senkung wächst.
+    before = {"unknown": Cap(5000.0, 500.0, Effective.NOW)}
+    assert throttle([unknown], before, 1000.0) == {"unknown": Cap(4000.0, 1500.0, Effective.NOW)}
 
 
 def test_a_grid_share_below_the_way_to_the_floor_leaves_the_car_above_it() -> None:
@@ -203,17 +210,16 @@ def test_a_grid_share_below_the_way_to_the_floor_leaves_the_car_above_it() -> No
 
 
 def test_nothing_to_throttle_changes_nothing() -> None:
-    caps = {"a": Cap(6240.0, 760.0)}
+    caps = {"a": Cap(6240.0, 760.0, Effective.NOW)}
     assert throttle(CARS, caps, 0.0) == caps
     assert throttle(CARS, caps, -100.0) == caps
     assert throttle([replace(C, mode=Effective.OFF)], {}, 5000.0) == {}
 
 
 def test_pending_counts_what_has_not_followed() -> None:  # Präzisierung 11
-    caps = {"a": Cap(6240.0, 760.0), "b": Cap(2760.0, 1240.0), "c": Cap(0.0, 3000.0)}
     cars = [replace(A, power_w=6000.0), replace(B, power_w=None), C]
     # „a“ liegt unter seiner Grenze (0 W), „b“ ohne Leistung zählt seine Senkung, „c“ 3000 W − 0 W.
-    assert pending_w(cars, caps) == 4240.0
+    assert pending_w(cars, FIRST_CAPS) == 4240.0
     assert pending_w(cars, {}) == 0.0
 
 
@@ -262,6 +268,20 @@ def test_only_one_cap_lifts_per_step() -> None:  # Präzisierung 11
     assert later(g, 390, -ALLOWED_W).caps_w == {}
 
 
+def test_within_a_level_the_highest_priority_is_lifted_first() -> None:
+    # Zwei Autos in Sofort: Die Senkung 5000 W nimmt „second“ (Rang 1) 3550 W bis zu seinem Boden
+    # und „first“ (Rang 0) 1450 W. Der Spielraum von 5700 W trüge beide Grenzen; zuerst fällt die
+    # von „first“, dem Auto mit der höchsten Priorität.
+    first = PeakCar("first", "twc", Effective.NOW, 0, 7000.0, 7000.0, 3450.0)
+    second = PeakCar("second", "evcs", Effective.NOW, 1, 7000.0, 7000.0, 3450.0)
+    both = [first, second]
+    capped = {"second": 3450.0, "first": 5550.0}
+    g = guard()
+    assert at_18_05(both, 10700.0, g).caps_w == capped
+    assert all(caps == capped for caps in hold(g, 301, 329, 5000.0, both))
+    assert later(g, 330, -ALLOWED_W, both).caps_w == {"second": 3450.0}
+
+
 def test_the_lift_takes_the_first_cap_the_headroom_carries() -> None:
     small = replace(C, grid_w=600.0)  # „c“ verliert 600 W, „a“ 2400 W
     g = guard()
@@ -272,8 +292,8 @@ def test_the_lift_takes_the_first_cap_the_headroom_carries() -> None:
 
 
 def test_lift_removes_one_whole_cap() -> None:
-    caps = {"a": Cap(6240.0, 760.0), "b": Cap(2760.0, 1240.0), "c": Cap(0.0, 3000.0)}
-    assert lift(CARS, caps, 10000.0) == {"b": Cap(2760.0, 1240.0), "c": Cap(0.0, 3000.0)}
+    caps = FIRST_CAPS
+    assert lift(CARS, caps, 10000.0) == {"b": caps["b"], "c": caps["c"]}
     assert lift(CARS, caps, 1759.0) == caps
     assert lift(CARS, caps, -100.0) == caps
 
@@ -329,15 +349,24 @@ def test_a_car_in_boost_or_off_or_gone_loses_its_cap_silently(cars) -> None:
     assert later(g, 333, 5000.0).caps_w == FIRST
 
 
-def test_a_car_that_changes_its_mode_keeps_its_cap() -> None:
-    # „b“ wechselt von Min+PV in PV-Überschuss und behält seine Grenze. Die nächste Drosselung senkt
-    # es in der Stufe von PV-Überschuss bis 0: nach „c“ (Rang 2, an seinem Boden), vor „a“.
-    switched = [A, replace(B, mode=Effective.PV), C]
+def test_a_car_that_changes_its_mode_loses_its_cap() -> None:
+    # „c“, in PV-Überschuss auf 0 W gedrosselt, wechselt in Sofort. Die Grenze gilt nur in dem
+    # Modus, in dem sie entstand, und fällt still weg; sonst läge sie unter seinem Boden in Sofort
+    # (1380 W), und es könnte nicht starten (Design 6.3).
+    switched = [A, B, replace(C, mode=Effective.NOW)]
+    unswitched = {"a": 6240.0, "b": 2760.0}
     g = guard()
     at_18_05(CARS, 10700.0, g)
-    hold(g, 301, 311, 5000.0)
-    assert all(caps == FIRST for caps in hold(g, 312, 329, 5000.0, switched))
-    assert later(g, 330, 6000.0, switched).caps_w == {"a": 6240.0, "b": 1760.0, "c": 0.0}
+    assert all(caps == unswitched for caps in hold(g, 303, 329, 2000.0, switched))
+    # Nach der Wartezeit drosselt der Wächter es wieder, in der Reihenfolge: Senkung 3000 W,
+    # ausstehend 760 W + 1240 W. „c“ ist jetzt in Sofort und vor „a“ an der Reihe (Rang 2) und sinkt
+    # von seiner Leistung aus um 1000 W, höchstens bis zu seinem Boden.
+    assert later(g, 330, 3000.0, switched).caps_w == {**unswitched, "c": 2000.0}
+    # Auch nach der Wartezeit ist der Wegfall keine Änderung: Um 18:05:30 gibt es nichts zu senken,
+    # um 18:05:33 drosselt der Wächter „c“ ohne neue Wartezeit.
+    g = throttled()
+    assert later(g, 330, 2000.0, switched).caps_w == unswitched
+    assert later(g, 333, 3000.0, switched).caps_w == {**unswitched, "c": 2000.0}
 
 
 # --- Start-Sperre ---------------------------------------------------------------------------------

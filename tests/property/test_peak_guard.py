@@ -17,8 +17,9 @@ aus der Definition noch einmal, nicht schrittweise wie der Code:
 - die Drosselung (``throttle``) mit beliebigen Autos, Grenzen und Senkungen: Sie hält die
   Reihenfolge von Design 6.3 ein (Stufen und darin die Priorität), lässt Boost und Aus aus, setzt
   keine Grenze unter den Boden und senkt zusammen nie mehr als verlangt, aber so viel, wie sie kann.
-- beliebige Verläufe ohne Lücke mit Autos, die ihren Modus wechseln: Eine Grenze steigt nie, je
-  Schritt fällt höchstens eine weg, und zwischen zwei Änderungen liegen mindestens ``SETTLE_S``.
+- beliebige Verläufe ohne Lücke mit Autos, die ihren Modus wechseln: Eine Grenze steigt nie und
+  überlebt keinen Wechsel des Modus, je Schritt hebt der Wächter höchstens eine auf, und zwischen
+  zwei Änderungen liegen mindestens ``SETTLE_S``.
 """
 
 import math
@@ -239,8 +240,9 @@ def turn(car: PeakCar) -> tuple[int, int]:
 def throttle_cases(draw):
     """Bis zu sechs Autos mit eindeutigem Rang, zum Teil mit Grenze, und eine Senkung in W.
 
-    Leistung und Netzanteil sind unabhängig voneinander, die Leistung ist auch unbekannt; eine alte
-    Grenze kann unter dem Boden liegen, wie nach einem Wechsel des Modus.
+    Leistung und Netzanteil sind unabhängig voneinander, die Leistung ist auch unbekannt. Eine alte
+    Grenze trägt den Modus ihres Autos und ist sonst beliebig, auch unter dem Boden: Die reine
+    Rechnung verträgt jede.
     """
     ranks = draw(st.permutations(range(draw(st.integers(0, 6)))))
     cars, caps = [], {}
@@ -260,7 +262,7 @@ def throttle_cases(draw):
         )
         cars.append(car)
         if draw(st.booleans()):
-            caps[car.vehicle] = Cap(draw(POWER), draw(st.floats(1.0, 11000.0)))
+            caps[car.vehicle] = Cap(draw(POWER), draw(st.floats(1.0, 11000.0)), car.mode)
     return cars, caps, draw(st.floats(-1000.0, 40000.0))
 
 
@@ -268,7 +270,11 @@ A = PeakCar("a", "twc", Effective.NOW, 0, 7000.0, 7000.0, 3450.0)
 B = PeakCar("b", "evcs", Effective.MIN_PV, 1, 4000.0, 4000.0, 2760.0)
 C = PeakCar("c", "x", Effective.PV, 2, 3000.0, 3000.0, 1380.0)
 SMALL_C = PeakCar("c", "x", Effective.PV, 2, 3000.0, 600.0, 1380.0)  # wenig Netzanteil
-FIRST = {"a": Cap(6240.0, 760.0), "b": Cap(2760.0, 1240.0), "c": Cap(0.0, 3000.0)}
+FIRST = {
+    "a": Cap(6240.0, 760.0, Effective.NOW),
+    "b": Cap(2760.0, 1240.0, Effective.MIN_PV),
+    "c": Cap(0.0, 3000.0, Effective.PV),
+}
 # 8 A · 229,7 V · 1 Phase: 6349,103 W − (6349,103 W − 1837,6 W) rundet auf 1837,5999999999995 W.
 ODD_FLOOR = PeakCar("odd", "w", Effective.NOW, 0, 6349.103, 11000.0, 8 * 229.7)
 
@@ -301,6 +307,7 @@ def test_throttling_keeps_the_order_and_leaves_boost_alone(case) -> None:
         # Keine Grenze unter dem Boden. Gleich dem Ausgang ist sie nur, wenn die Senkung unter der
         # Rundung liegt (ein Netzanteil von 1e-308 W).
         assert floor_w(car) <= new.cap_w <= start[car.vehicle]
+        assert new.mode is car.mode  # die Grenze gilt im Modus, in dem sie entstand
         cut[car.vehicle] = start[car.vehicle] - new.cap_w
         assert cut[car.vehicle] <= car.grid_w + TOLERANCE_W  # höchstens sein Netzanteil
         assert new.cut_w == pytest.approx(cut[car.vehicle] + (0.0 if old is None else old.cut_w))
@@ -343,6 +350,7 @@ def test_caps_never_rise_and_change_only_after_settling(course) -> None:  # Prä
     guard = PeakGuard(ControlConfig(peak_target_kw=8.0), reserve_soc_pct=20.0)
     now = QUARTER
     before: dict[str, float] = {}  # die Grenzen des vorigen Schritts
+    modes_before: dict[str, Effective] = {}  # die Modi des vorigen Schritts
     changed = None  # die letzte Änderung einer Grenze
     for index, (seconds, wanted_w, *states) in enumerate(course):
         if index:
@@ -354,12 +362,13 @@ def test_caps_never_rise_and_change_only_after_settling(course) -> None:  # Prä
         quarter = QuarterObs(slot_start(now), 0.0, 0.0, {})
         caps = dict(guard.step(now, quarter, cars, wanted_w, 0.0, 60.0).caps_w)
 
-        throttleable = {car.vehicle for car in cars if car.mode in LEVEL}
-        assert set(caps) <= throttleable  # nie Boost oder Aus
-        kept = {vehicle: cap for vehicle, cap in before.items() if vehicle in throttleable}
+        modes = {car.vehicle: car.mode for car in cars}
+        assert all(modes[vehicle] in LEVEL for vehicle in caps)  # nie Boost oder Aus
+        # Eine Grenze bleibt nur im selben Modus; nach einem Wechsel fällt sie still weg.
+        kept = {v: cap for v, cap in before.items() if modes.get(v) is modes_before.get(v)}
         assert len(set(kept) - set(caps)) <= 1  # höchstens ein Aufheben je Schritt
         assert all(caps[vehicle] <= kept[vehicle] for vehicle in caps if vehicle in kept)
-        if caps != kept:  # gesetzt, gesenkt oder aufgehoben; Boost und Aus fallen still weg
+        if caps != kept:  # gesetzt, gesenkt oder aufgehoben, nicht still weggefallen
             assert changed is None or (now - changed).total_seconds() >= SETTLE_S
             changed = now
-        before = caps
+        before, modes_before = caps, modes

@@ -120,10 +120,12 @@ class Cap:
     - ``cap_w``: die Leistungsgrenze
     - ``cut_w``: die gesamte Senkung des Autos, seit es die Grenze hat; an ihr misst sich das
       Aufheben
+    - ``mode``: der Modus, in dem das Auto gedrosselt wurde; nur in ihm gilt die Grenze
     """
 
     cap_w: float
     cut_w: float
+    mode: Effective
 
 
 @dataclass(frozen=True)
@@ -252,12 +254,14 @@ class PeakGuard:
       unbekannter Basis oder wenn ``Basis + W`` keine endliche Zahl ist ``Mittel − P_zul``; Health
       zeigt sie mindestens 0. Beide brauchen das Mittel; ``P_zul`` braucht es nicht.
     - **Drosselung:** Die Grenzen je Fahrzeug gelten bis zum Ende der Viertelstunde. Zuerst
-      verliert ein Auto, das nicht mehr unter ``cars`` steht oder in Boost oder Aus ist, still seine
-      Grenze; wechselt es nur zwischen PV-Überschuss, Min+PV und Sofort, behält es sie. Dann, mit
-      Mittel und frühestens ``SETTLE_S`` nach der letzten Änderung: Ist die Senkung über 0, drosselt
-      der Wächter um ``Senkung − ausstehend`` (``throttle``, ``pending_w``); sonst hebt er mit dem
-      Spielraum ``−Senkung`` höchstens eine Grenze auf (``lift``). Eine Grenze, die dabei entsteht,
-      sinkt oder wegfällt, ist eine Änderung; die erste einer Viertelstunde darf sofort kommen.
+      verliert ein Auto still seine Grenze, wenn es nicht mehr unter ``cars`` steht oder seinen
+      Modus gewechselt hat, auch zwischen PV-Überschuss, Min+PV und Sofort: Eine Grenze gilt nur
+      im Modus, in dem sie entstand; sonst bliebe etwa ein Auto, das in PV-Überschuss auf 0 W
+      gedrosselt wurde, in Sofort unter seinem Boden. Dann, mit Mittel und frühestens
+      ``SETTLE_S`` nach der letzten Änderung: Ist die Senkung über 0, drosselt der Wächter um
+      ``Senkung − ausstehend`` (``throttle``, ``pending_w``); sonst hebt er mit dem Spielraum
+      ``−Senkung`` höchstens eine Grenze auf (``lift``). Eine Grenze, die dabei entsteht, sinkt
+      oder wegfällt, ist eine Änderung; die erste einer Viertelstunde darf sofort kommen.
     - **Start-Sperre:** ``no_start`` mit ``t_rest``, ``P_zul`` und dem Mittel.
     - **Überschritten:** Liegt die Hochrechnung ``EXCEEDED_AFTER_S`` lang ohne Unterbrechung über
       dem Ziel, ist die Viertelstunde überschritten, bis zu ihrem Ende, auch wenn danach eine Lücke
@@ -455,11 +459,13 @@ class PeakGuard:
     ) -> None:
         """Die Grenzen eines Schritts, der rechnet: drosseln oder aufheben (Präzisierung 11).
 
-        Was wegfällt, weil sein Auto geht oder in Boost oder Aus wechselt, ist keine Änderung.
+        Eine Grenze bleibt nur, solange ihr Auto unter ``cars`` steht, im Modus, in dem es sie
+        bekam. Was so wegfällt, weil das Auto geht oder seinen Modus wechselt (auch nach Boost oder
+        Aus), ist keine Änderung.
         """
         modes = {car.vehicle: car.mode for car in cars}
         caps = {
-            vehicle: cap for vehicle, cap in running.caps.items() if modes.get(vehicle) in _LEVELS
+            vehicle: cap for vehicle, cap in running.caps.items() if modes.get(vehicle) is cap.mode
         }
         reduction_w, changed = calc.reduction_w, running.changed
         if reduction_w is not None and (changed is None or lasted(changed, now, SETTLE_S)):
@@ -496,10 +502,10 @@ def throttle(cars: Sequence[PeakCar], caps: Mapping[str, Cap], amount_w: float) 
     niedrigsten Priorität (dem höchsten ``rank``). Je Auto ist ``Ausgang`` seine Grenze oder, ohne
     Grenze, seine Leistung, und der Boden in PV-Überschuss 0 W, sonst ``min_w``. Es sinkt um
     ``min(Rest, Netzanteil, Ausgang − Boden)``, wenn das über 0 liegt; die neue Grenze ist
-    ``Ausgang`` minus diese Senkung, nie unter dem Boden, und ``cut_w`` wächst um sie. Ein Auto ohne
-    Netzanteil (ein Anteil, der keine endliche Zahl ist, zählt 0 W) oder ohne Ausgang (ohne Grenze
-    und ohne bekannte Leistung) bleibt, wie es ist, ebenso jedes in Boost oder Aus. Zurück kommen
-    alle Grenzen, die von ``caps`` mit den neuen.
+    ``Ausgang`` minus diese Senkung, nie unter dem Boden, im Modus des Autos, und ``cut_w`` wächst
+    um sie. Ein Auto ohne Netzanteil (ein Anteil, der keine endliche Zahl ist, zählt 0 W) oder ohne
+    Ausgang (ohne Grenze und ohne bekannte Leistung) bleibt, wie es ist, ebenso jedes in Boost oder
+    Aus. Zurück kommen alle Grenzen, die von ``caps`` mit den neuen.
     """
     found = dict(caps)
     rest_w = amount_w
@@ -514,7 +520,7 @@ def throttle(cars: Sequence[PeakCar], caps: Mapping[str, Cap], amount_w: float) 
         cut_w = min(rest_w, finite_number(car.grid_w) or 0.0, start_w - floor_w)
         if cut_w > 0.0:
             total_w = cut_w if cap is None else cap.cut_w + cut_w
-            found[car.vehicle] = Cap(max(floor_w, start_w - cut_w), total_w)
+            found[car.vehicle] = Cap(max(floor_w, start_w - cut_w), total_w, car.mode)
             rest_w -= cut_w
     return found
 

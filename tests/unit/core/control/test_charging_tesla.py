@@ -7,6 +7,7 @@ from tests.unit.core.control.charge_helpers import accept, evcs, grid, inputs, r
 
 from bindaems.core.control.charging import ChargeController
 from bindaems.core.control.executor import WriteResult
+from bindaems.core.control.peak_guard import NO_LIMITS, PeakLimits
 from bindaems.core.safety.limits import HardLimits
 from bindaems.core.safety.types import Outcome, Verdict
 from bindaems.shared.config import WakeConfig
@@ -518,6 +519,23 @@ def test_a_blocked_wake_start_waits(cfg) -> None:
         **ONLY_WAKEABLE,
     )
     assert of(found, "vehicle.tesla") == [(1, WAKE)]
+
+
+def test_no_start_holds_back_the_wake_start(cfg) -> None:  # Plan 2c-2a, Präzisierung 13
+    # Der schlafende Tesla in Sofort lädt nicht: In der Start-Sperre des 15-min-Wächters bleibt
+    # der Weckstart aus; fällt sie bei 2 s weg, folgt er.
+    blocked = PeakLimits(no_start=frozenset({"tesla"}))
+    found = run(
+        controller(cfg),
+        cfg,
+        3,
+        make=tesla_inputs,
+        intent=TESLA_NOW,
+        tesla_obs=tesla(plugged=True, asleep=True),
+        peak=lambda s: blocked if s < 2 else NO_LIMITS,
+        **ONLY_WAKEABLE,
+    )
+    assert of(found, "vehicle.tesla") == [(2, WAKE)]
 
 
 def test_overload_wakes_nothing(cfg) -> None:

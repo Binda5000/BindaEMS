@@ -325,7 +325,7 @@ class ChargeController:
             # Die Grenze des 15-min-Wächters: Liegt sie unter dem freien Strom, gilt sie an dessen
             # Stelle, schon für den Überschuss und das Fenster des Tesla.
             cause, free_a, fuse_a = target, free, None
-            cap_a = self._cap_a(point, mode, peak)
+            cap_a = self._cap_a(point, mode, peak.caps_w.get(key))
             if cap_a is not None and free is not None and cap_a < free:
                 cause, free_a = GuardCause.PEAK_GUARD, cap_a
                 if target is GuardCause.PHASE_LIMIT:
@@ -355,7 +355,7 @@ class ChargeController:
                 and limit + self._extra_a(mode) >= point.min_a,
             )
             found = (
-                maximum_command(self._cfg, self._last, key, modes[key], inputs)
+                maximum_command(self._cfg, self._last, key, mode, inputs)
                 if key in at_the_evcs
                 else []
             )
@@ -674,7 +674,7 @@ class ChargeController:
         if minimum:
             value, reasons = point.min_a, (*head, OVERLOAD)
         else:
-            value = min(max(min(situation.wanted, situation.limit), point.min_a), point.max_a)
+            value = _current_a(point, situation.wanted, situation.limit)
             reasons = (*head, *_why(situation))
         urgent = minimum or _urgent(situation, point, value, present_a, situation.wanted)
         return self._charge(
@@ -694,19 +694,17 @@ class ChargeController:
             return self._guard.fuse_target_a - self._guard.import_target_a
         return 0.0
 
-    def _cap_a(self, point: ChargePoint, mode: Effective, peak: PeakLimits) -> float | None:
-        """Die Grenze des 15-min-Wächters für den Ladepunkt in A: ``W / (U · Zahl seiner Phasen)``.
+    def _cap_a(self, point: ChargePoint, mode: Effective, cap_w: float | None) -> float | None:
+        """Die Grenze ``cap_w`` des 15-min-Wächters für den Ladepunkt in A: ``W / (U · Phasen)``.
 
         Auf 1e-9 A gerundet: Eine Grenze genau an der Mindestleistung ``min_a × U × Phasen`` ergibt
         so wieder ``min_a``, auch wenn die Gleitkommarechnung knapp darunter landet. ``None`` ohne
         Grenze, in Boost und bei einer Grenze, die keine endliche Zahl ist.
         """
-        if mode is Effective.BOOST:
+        watts = finite_number(cap_w)
+        if mode is Effective.BOOST or watts is None:
             return None
-        cap_w = finite_number(peak.caps_w.get(point.vehicle))
-        if cap_w is None:
-            return None
-        return round(cap_w / (self._limits.voltage_v * len(point.phases)), 9)
+        return round(watts / (self._limits.voltage_v * len(point.phases)), 9)
 
     def _wake(
         self, key: str, actuator: str, situation: _Situation, blocked: frozenset[Key]
@@ -741,7 +739,7 @@ class ChargeController:
         if situation.level >= OverloadLevel.MINIMUM:
             value, reasons, urgent = point.min_a, (*situation.head, OVERLOAD), True
         else:
-            value = min(max(situation.limit, point.min_a), point.max_a)
+            value = _current_a(point, point.max_a, situation.limit)  # ohne Wunsch
             reasons = (*situation.head, situation.cause.value)
             urgent = _urgent(situation, point, value, present_a, point.max_a)  # ohne Wunsch
         if value >= present_a or not self._changed((actuator, _CURRENT), float(value)):
@@ -843,6 +841,15 @@ def _why(situation: _Situation) -> tuple[str, ...]:
     return ()
 
 
+def _current_a(point: ChargePoint, wanted: int, limit: int) -> int:
+    """Der Strom aus Wunsch und Grenze im Strombereich des Ladepunkts.
+
+    ``min(max(min(wanted, limit), min_a), max_a)``: nicht über Wunsch und Grenze, aber nie unter
+    ``min_a`` und nie über ``max_a``. Ohne Wunsch (``_hold``) steht dafür ``max_a``.
+    """
+    return min(max(min(wanted, limit), point.min_a), point.max_a)
+
+
 def _urgent(
     situation: _Situation, point: ChargePoint, value: int, present_a: float | None, wanted: int
 ) -> bool:
@@ -860,7 +867,7 @@ def _urgent(
     fuse_a = situation.fuse_a
     if fuse_a is None:
         return False
-    return min(max(min(wanted, fuse_a), point.min_a), point.max_a) < present_a
+    return _current_a(point, wanted, fuse_a) < present_a
 
 
 def _facts(
