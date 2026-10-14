@@ -4,6 +4,7 @@ import pytest
 from tests.helpers import snap
 
 from bindaems.core.accounting.flows import SlotAccumulator, allocate, wb_key
+from bindaems.shared.timeutil import HOLD_MAX_S
 
 
 def test_wb_key() -> None:
@@ -102,6 +103,20 @@ def test_accumulator_skips_gaps() -> None:
     acc.add(t, {"pv>house": 1000.0}, snap({}))
     acc.add(t + timedelta(seconds=10), {"pv>house": 1000.0}, snap({}))
     assert acc.flush().covered_s == 0.0
+
+
+def test_accumulator_bridges_up_to_the_hold_limit_by_default() -> None:
+    # HOLD_MAX_S gilt für die Abrechnung wie für den 15-min-Wächter: Er integriert damit die
+    # Energie der Autos in Boost, die er von der Energie dieses Slots abzieht.
+    assert HOLD_MAX_S == 5.0
+    acc = SlotAccumulator(counter_signals=[])
+    t = datetime(2026, 10, 8, 9, 0, tzinfo=UTC)
+    acc.add(t, {"pv>house": 3600.0}, snap({}))
+    acc.add(t + timedelta(seconds=5), {"pv>house": 3600.0}, snap({}))  # 5 s: gilt noch
+    acc.add(t + timedelta(seconds=11), {"pv>house": 3600.0}, snap({}))  # 6 s: bleibt offen
+    slot = acc.flush()
+    assert slot.flows_wh["pv>house"] == pytest.approx(5.0)
+    assert slot.covered_s == pytest.approx(5.0)
 
 
 def test_accumulator_slots_across_dst_change() -> None:

@@ -3,7 +3,10 @@
 hypothesis erzeugt Energien, Zeitpunkte, Ziele und Verläufe von Schritten. Die Orakel rechnen aus
 der Definition noch einmal, nicht schrittweise wie der Code:
 
-- das Budget ``P_zul``: immer endlich und gleich ``(Ziel · 250 − E) · 3600 / max(1, Rest) − Marge``
+- das Budget ``P_zul``: immer endlich und gleich ``(Ziel · 250 − E) · 3600 / max(1, Rest) − Marge``;
+  für jede endliche Energie nie NaN oder ±∞ (Global Constraint ``grid_budget_w``), auch wenn die
+  Rechnung überläuft
+- die verlangte Senkung: endlich, auch wenn Basis und ``W`` es für sich sind und ihre Summe nicht
 - beliebige Verläufe von Schritten, auch mit Lücken, fehlender Viertelstunde, Werten, die keine
   Zahlen sind, und einer Wanduhr, die springt: Der Wächter wirft nie, die Werte in Health sind
   endlich und nie negativ, wo sie das nicht sein dürfen, und
@@ -13,6 +16,7 @@ der Definition noch einmal, nicht schrittweise wie der Code:
 """
 
 import math
+import sys
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -34,6 +38,28 @@ def at(seconds: float) -> datetime:
 # --- Budget ---------------------------------------------------------------------------------------
 
 
+FINITE = st.floats(allow_nan=False, allow_infinity=False)
+
+
+def run_to(
+    second, energy_wh, *, target_kw=8.0, margin_kw=0.3, grid_w=0.0, wanted_w=0.0, base_w=0.0
+):
+    """Ein Wächter, der ab 18:00:00 alle 10 s einen Schritt bekam; der letzte bei ``second``.
+
+    Ein Schritt alle 10 s hält die Viertelstunde frei von Lücken; der letzte trägt die Energie.
+    Zurück kommen der Wächter und die Grenzen des letzten Schritts.
+    """
+    control = ControlConfig(peak_target_kw=target_kw, peak_margin_kw=margin_kw)
+    guard = PeakGuard(control, reserve_soc_pct=20.0)
+    moments = [float(moment) for moment in range(0, 900, 10) if moment < second] + [second]
+    limits = NO_LIMITS
+    for moment in moments:
+        now = at(moment)
+        quarter = QuarterObs(slot_start(now), energy_wh if moment == second else 0.0, grid_w, {})
+        limits = guard.step(now, quarter, (), wanted_w, base_w, 60.0)
+    return guard, limits
+
+
 @settings(max_examples=200, deadline=None)
 @given(
     energy_wh=st.floats(0.0, 10000.0),
@@ -46,15 +72,7 @@ def at(seconds: float) -> datetime:
 @example(energy_wh=10000.0, millis=0, target_kw=1.0, margin_kw=0.0)  # weit über dem Budget
 def test_budget_is_finite_and_follows_the_formula(energy_wh, millis, target_kw, margin_kw) -> None:
     second = millis / 1000
-    control = ControlConfig(peak_target_kw=target_kw, peak_margin_kw=margin_kw)
-    guard = PeakGuard(control, reserve_soc_pct=20.0)
-    # Ein Schritt alle 10 s hält die Viertelstunde frei von Lücken; der letzte trägt die Energie.
-    moments = [float(moment) for moment in range(0, 900, 10) if moment < second] + [second]
-    limits = NO_LIMITS
-    for moment in moments:
-        now = at(moment)
-        quarter = QuarterObs(slot_start(now), energy_wh if moment == second else 0.0, 0.0, {})
-        limits = guard.step(now, quarter, (), 0.0, 0.0, 60.0)
+    guard, limits = run_to(second, energy_wh, target_kw=target_kw, margin_kw=margin_kw)
 
     expected_w = (target_kw * 250 - energy_wh) * 3600 / max(1.0, 900 - second) - margin_kw * 1000
     assert guard.health()["state"] == "active"
@@ -62,6 +80,37 @@ def test_budget_is_finite_and_follows_the_formula(energy_wh, millis, target_kw, 
     assert math.isfinite(limits.budget_w)
     assert limits.budget_w == pytest.approx(expected_w, rel=1e-9, abs=1e-6)
     assert guard.health()["budget_kw"] * 1000 == pytest.approx(expected_w, rel=1e-9, abs=1e-6)
+
+
+@settings(max_examples=200, deadline=None)
+@given(energy_wh=st.floats(0.0, sys.float_info.max), millis=st.integers(0, 899_999))
+@example(energy_wh=1e306, millis=300_000)  # (2000 − E) · 3600 läuft über
+@example(energy_wh=sys.float_info.max, millis=0)
+def test_the_budget_is_never_nan_or_infinite(energy_wh, millis) -> None:
+    # ``P_zul`` ist endlich, oder der Schritt rechnet nicht
+    guard, limits = run_to(millis / 1000, energy_wh)
+    assert limits.budget_w is None or math.isfinite(limits.budget_w)
+    budget_kw = guard.health()["budget_kw"]
+    assert budget_kw is None or math.isfinite(budget_kw)
+
+
+@settings(max_examples=200, deadline=None)
+@given(
+    wanted_w=FINITE | st.none(),
+    base_w=FINITE | st.none(),
+    mean_w=st.floats(0.0, 1e5),
+    energy_wh=st.floats(0.0, 10000.0),
+)
+@example(wanted_w=1e308, base_w=1e308, mean_w=6000.0, energy_wh=1000.0)  # die Summe läuft über
+@example(wanted_w=-1e308, base_w=-1e308, mean_w=6000.0, energy_wh=1000.0)
+def test_the_reduction_is_finite_for_any_finite_wanted_grid_and_base(
+    wanted_w, base_w, mean_w, energy_wh
+) -> None:
+    guard, _ = run_to(300, energy_wh, grid_w=mean_w, wanted_w=wanted_w, base_w=base_w)
+    reduction_kw = guard.health()["reduction_kw"]
+    assert reduction_kw is not None
+    assert math.isfinite(reduction_kw)
+    assert reduction_kw >= 0.0
 
 
 # --- Verläufe -------------------------------------------------------------------------------------

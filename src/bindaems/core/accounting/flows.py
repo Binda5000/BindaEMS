@@ -7,7 +7,7 @@ from collections.abc import Mapping, Sequence
 from datetime import datetime
 
 from bindaems.shared.domain import SlotFlows, Snapshot
-from bindaems.shared.timeutil import SLOT, slot_start
+from bindaems.shared.timeutil import HOLD_MAX_S, SLOT, slot_start
 
 
 def wb_key(source: str, wallbox: str) -> str:
@@ -70,11 +70,14 @@ class SlotAccumulator:
 
     Die Leistung eines Abtastpunkts gilt bis zum nächsten; das Intervall wird dem Slot des
     früheren Punkts zugerechnet, aber nur bis zu ``max_gap_s`` – längere Lücken bleiben offen
-    und senken ``covered_s``. ``flows_w=None`` heißt „Bilanz unbekannt“: Das folgende Intervall
-    zählt nicht als abgedeckt, Slotgrenzen und Zählerstände werden trotzdem fortgeschrieben.
+    und senken ``covered_s``. Die Grenze ist standardmäßig ``HOLD_MAX_S``: Mit demselben Wert
+    integriert der 15-min-Wächter die Energie der Autos in Boost, die er von der Energie dieses
+    Slots abzieht; was hier fehlt, darf er nicht abziehen. ``flows_w=None`` heißt „Bilanz
+    unbekannt“: Das folgende Intervall zählt nicht als abgedeckt, Slotgrenzen und Zählerstände
+    werden trotzdem fortgeschrieben.
     """
 
-    def __init__(self, counter_signals: Sequence[str], max_gap_s: float = 5.0) -> None:
+    def __init__(self, counter_signals: Sequence[str], max_gap_s: float = HOLD_MAX_S) -> None:
         self._signals = list(counter_signals)
         self._max_gap_s = max_gap_s
         self._slot: datetime | None = None

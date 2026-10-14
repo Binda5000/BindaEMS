@@ -10,11 +10,14 @@ from __future__ import annotations
 import time as _time  # ``time`` heißt hier schon die Uhrzeit-Klasse aus ``datetime``
 from collections.abc import Callable
 from datetime import UTC, date, datetime, time, timedelta
-from typing import Protocol
+from typing import Final, Protocol
 from zoneinfo import ZoneInfo
 
 SLOT = timedelta(minutes=15)
 LOCAL_TZ = ZoneInfo("Europe/Vienna")
+# Der längste Abstand in s zwischen zwei Abtastpunkten, den die Integration nach dem Halteprinzip
+# überbrückt. Die Abrechnung (``SlotAccumulator``) und der 15-min-Wächter rechnen beide damit.
+HOLD_MAX_S: Final = 5.0
 
 
 def ensure_utc(dt: datetime) -> datetime:

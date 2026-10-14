@@ -4,7 +4,9 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import pytest
+from tests.helpers import snap
 
+from bindaems.core.accounting.flows import SlotAccumulator
 from bindaems.core.control.charge_modes import Effective
 from bindaems.core.control.peak_guard import (
     EXCEEDED_AFTER_S,
@@ -19,7 +21,7 @@ from bindaems.core.control.peak_guard import (
 )
 from bindaems.shared.config import ControlConfig
 from bindaems.shared.domain import Alarm, Severity
-from bindaems.shared.timeutil import LOCAL_TZ, slot_start
+from bindaems.shared.timeutil import HOLD_MAX_S, LOCAL_TZ, slot_start
 
 QUARTER = datetime(2026, 10, 14, 16, 0, tzinfo=UTC)  # 18:00 Wiener Zeit
 NEXT_QUARTER = QUARTER + timedelta(minutes=15)  # 18:15
@@ -90,6 +92,7 @@ def draw(watts: float) -> Callable[[int], float]:
 
 def test_constants() -> None:
     assert GAP_S == 10.0
+    assert HOLD_MAX_S == 5.0  # so weit integriert die Abrechnung, und der Wächter mit ihr
     assert MEAN_S == 30.0
     assert EXCEEDED_AFTER_S == 60.0
     assert PEAK_EXCEEDED == "peak.exceeded"
@@ -164,6 +167,29 @@ def test_the_remaining_time_is_at_least_one_second() -> None:
     run(g, 0, 890, every=10)
     assert step(g, 899).budget_w == 2000.0 * 3600.0 - 300.0  # noch 1 s
     assert step(g, 899.5).budget_w == 2000.0 * 3600.0 - 300.0  # noch 0,5 s: gerechnet wird mit 1 s
+
+
+def test_a_budget_that_is_not_finite_makes_the_step_a_gap() -> None:
+    # Global Constraint: grid_budget_w ist nie NaN oder ±∞. Mit absurdem grid_wh läuft
+    # (2000 Wh − 1e306 Wh) · 3600 über, und der Schritt rechnet nicht.
+    g = guard()
+    run(g, 0, 5)
+    assert step(g, 6, wh=1e306) == NO_LIMITS
+    assert g.health() == {
+        "state": "gap",
+        "target_kw": 8.0,
+        **NO_VALUES,
+        "quarter_end": NEXT_QUARTER.isoformat(),
+    }
+    assert step(g, 7).budget_w is not None  # nur dieser Schritt: Die Viertelstunde ist keine Lücke
+
+
+def test_a_budget_that_is_not_finite_does_not_end_exceeded() -> None:
+    g = guard()
+    run(g, 0, 60, grid_w=12300.0, wh=draw(12300.0))
+    assert step(g, 61, grid_w=12300.0, wh=1e306) == NO_LIMITS
+    assert g.health()["state"] == "exceeded"
+    assert values(g) == NO_VALUES
 
 
 def test_the_margin_comes_from_the_configuration() -> None:
@@ -269,6 +295,46 @@ def test_a_boost_interval_after_a_step_without_a_balance_is_not_integrated() -> 
     assert g.health()["energy_kwh"] == pytest.approx(0.099)
 
 
+@pytest.mark.parametrize(("stall_s", "boost_wh"), [(1, 1.0), (5, 5.0), (6, 0.0), (10, 0.0)])
+def test_a_boost_interval_counts_only_up_to_the_hold_limit(stall_s, boost_wh) -> None:
+    # HOLD_MAX_S = 5 s: So weit integriert auch die Abrechnung. Was sie nicht zählt, steht nicht in
+    # grid_wh und darf nicht als Boost davon abgezogen werden.
+    g = guard()
+    kw = {"grid_w": 3600.0, "wallbox_grid_w": SHARE, "cars": [EGOLF_BOOST], "wh": 100.0}
+    step(g, 0, **kw)
+    step(g, stall_s, **kw)  # 3600 W über stall_s Sekunden
+    assert g.health()["state"] == "active"  # bis 10 s ist es keine Lücke
+    assert g.health()["energy_kwh"] == pytest.approx((100.0 - boost_wh) / 1000.0)
+
+
+def accounted_wh(seconds: Sequence[int], flows: Mapping[str, float]) -> tuple[float, float]:
+    """Was die Abrechnung nach den Abtastpunkten ``seconds`` zählt, in Wh.
+
+    Der Netzbezug und davon der der Wallbox „evcs“. Der Integrator hat die Standardgrenze, wie in
+    der Laufzeit.
+    """
+    accumulator = SlotAccumulator([])
+    for second in seconds:
+        accumulator.add(at(second), flows, snap({}))
+    counted = accumulator.flush().flows_wh
+    grid_wh = sum(wh for key, wh in counted.items() if key.startswith("grid>"))
+    return grid_wh, counted.get("grid>wb:evcs", 0.0)
+
+
+def test_the_boost_energy_lines_up_with_the_accumulator_across_a_stall() -> None:
+    # Dieselben Abtastpunkte für die Abrechnung und den Wächter, mit einer Pause von 6 s (3 bis 9)
+    # und einer von 5 s (11 bis 16): Die Abrechnung zählt die lange nicht, die kurze schon.
+    seconds = [0, 1, 2, 3, 9, 10, 11, 16, 17, 18]
+    flows = {"grid>house": 500.0, "grid>wb:evcs": 3600.0}  # Netz 4100 W, davon 3600 W ins Auto
+    g = guard()
+    for index, second in enumerate(seconds):
+        grid_wh, boost_wh = accounted_wh(seconds[: index + 1], flows)
+        step(g, second, grid_w=4100.0, wh=grid_wh, wallbox_grid_w=SHARE, cars=[EGOLF_BOOST])
+        # E_bisher des Wächters = Netzbezug der Abrechnung − ihre Energie an der Wallbox in Boost
+        assert g.health()["energy_kwh"] * 1000 == pytest.approx(grid_wh - boost_wh, abs=1e-9)
+    assert boost_wh == pytest.approx(12.0)  # 3 + 2 + 5 + 2 s zu 3600 W; die 6 s fehlen
+
+
 def test_the_mean_is_current_when_the_next_quarter_starts() -> None:
     g = guard()
     run(g, 300, 899, grid_w=9000.0)  # die Viertelstunde ist lückenhaft, das Mittel läuft trotzdem
@@ -319,7 +385,14 @@ def test_wanted_grid_counts_when_it_is_higher_than_the_mean(
 
 @pytest.mark.parametrize(
     ("wanted_w", "base_w"),
-    [(None, 0.0), (10700.0, None), (None, None), (math.nan, 0.0), (10700.0, math.inf)],
+    [
+        (None, 0.0),
+        (10700.0, None),
+        (None, None),
+        (math.nan, 0.0),
+        (10700.0, math.inf),
+        (1e308, 1e308),  # beide endlich, aber die Summe läuft über: gilt wie unbekannt
+    ],
 )
 def test_an_unknown_wanted_grid_or_base_leaves_only_the_mean(wanted_w, base_w) -> None:
     g = guard()
@@ -490,27 +563,46 @@ def test_a_quarter_of_another_slot_counts_as_missing() -> None:
 # --- Sprünge der Wanduhr --------------------------------------------------------------------------
 
 
-def test_a_clock_that_jumps_back_counts_no_negative_interval() -> None:
+def test_two_steps_at_the_same_instant_count_no_interval() -> None:
     g = guard()
     boost = {"grid_w": 3600.0, "wallbox_grid_w": SHARE, "cars": [EGOLF_BOOST]}
     run(g, 0, 20, wh=lambda s: 100.0, **boost)  # 20 Wh Boost
     assert g.health()["energy_kwh"] == pytest.approx(0.08)
-    step(g, 15, wh=100.0, **boost)  # die Wanduhr springt 5 s zurück: kein negatives Intervall
-    assert g.health()["energy_kwh"] == pytest.approx(0.08)
     # derselbe Zeitpunkt noch einmal: Ein Intervall von 0 zählt nichts
-    step(g, 15, wh=100.0, **boost)
+    step(g, 20, wh=100.0, **boost)
     assert g.health()["energy_kwh"] == pytest.approx(0.08)
-    step(g, 16, wh=100.0, **boost)  # von hier an läuft sie wieder: 1 Wh
+    step(g, 21, wh=100.0, **boost)  # von hier an läuft sie weiter: 1 Wh
     assert g.health()["energy_kwh"] == pytest.approx(0.079)
+    assert g.health()["state"] == "active"
+
+
+def test_a_clock_that_jumps_back_within_the_quarter_makes_it_a_gap() -> None:
+    g = guard()
+    run(g, 0, 20)
+    assert g.health()["state"] == "active"
+    # Die Wanduhr springt 5 s zurück (NTP): Die Viertelstunde ist lückenhaft bis zu ihrem Ende.
+    assert step(g, 15) == NO_LIMITS
+    assert g.health() == {
+        "state": "gap",
+        "target_kw": 8.0,
+        **NO_VALUES,
+        "quarter_end": NEXT_QUARTER.isoformat(),
+    }
+    assert run(g, 16, 899) == NO_LIMITS  # trotz Werten jede Sekunde
+    assert g.health()["state"] == "gap"
+    step(g, NEXT_S)  # die nächste Viertelstunde beginnt normal
     assert g.health()["state"] == "active"
 
 
 def test_a_clock_that_jumps_back_starts_the_mean_anew() -> None:
     g = guard()
-    run(g, 0, 20, grid_w=9000.0)
-    step(g, 10, grid_w=3000.0)  # zurückgesprungen: Das Mittel beginnt neu
-    step(g, 11, grid_w=3000.0)
-    assert g.health()["projected_kw"] == pytest.approx(3000 * 889 / 3600 * 4 / 1000)
+    run(g, 860, 880, grid_w=9000.0)  # der erste Schritt mitten drin: lückenhaft, das Mittel läuft
+    # Die Wanduhr springt auf 18:14:30 zurück: Das Mittel beginnt neu.
+    run(g, 870, 899, grid_w=3000.0)
+    step(g, NEXT_S, grid_w=0.0)
+    # 30 Werte zu 3000 W und 0 W; die 9000 W von vor dem Sprung sind weg. Mit E = 0 und dem ganzen
+    # Rest von 900 s ist die Hochrechnung gleich dem Mittel.
+    assert g.health()["projected_kw"] == pytest.approx(30 * 3000 / 31 / 1000)
 
 
 def test_a_step_in_another_quarter_than_the_previous_starts_that_quarter_anew() -> None:

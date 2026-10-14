@@ -28,7 +28,7 @@ from bindaems.core.control.timing import held_since, lasted
 from bindaems.shared.config import ControlConfig
 from bindaems.shared.domain import Alarm, Severity
 from bindaems.shared.numbers import de, finite_number
-from bindaems.shared.timeutil import LOCAL_TZ, slot_end, slot_start
+from bindaems.shared.timeutil import HOLD_MAX_S, LOCAL_TZ, slot_end, slot_start
 
 GAP_S: Final = 10.0  # mehr als so lange ohne bekannte Leistung: Die Viertelstunde ist lückenhaft
 MEAN_S: Final = 30.0  # das Fenster des Mittels vom Netzbezug ohne Boost
@@ -199,39 +199,45 @@ class PeakGuard:
     - **Boost:** Der Netzanteil der Wallboxen der Autos in Boost zählt außerhalb des Budgets. Der
       Wächter integriert ihn nach dem Halteprinzip der Abrechnung: Der Anteil des vorigen Schritts
       gilt bis zu diesem, wenn der vorige Schritt eine bekannte Leistung hatte, in derselben
-      Viertelstunde lag und der Abstand über 0 und höchstens ``GAP_S`` liegt. ``E_bisher`` ist
-      ``grid_wh`` minus diese Energie, nicht unter 0. Das Mittel der letzten ``MEAN_S`` Sekunden
-      nimmt in jedem Schritt mit bekannter Leistung ``grid_w`` minus den Anteil dieses Schritts auf,
-      auch in einer lückenhaften Viertelstunde: So ist es aktuell, wenn die nächste beginnt.
+      Viertelstunde lag und der Abstand über 0 und höchstens ``HOLD_MAX_S`` liegt, so weit wie die
+      Abrechnung integriert (``SlotAccumulator``). Was dort in ``grid_wh`` fehlt, darf er nicht als
+      Boost davon abziehen. ``E_bisher`` ist ``grid_wh`` minus diese Energie, nicht unter 0. Das
+      Mittel der letzten ``MEAN_S`` Sekunden nimmt in jedem Schritt mit bekannter Leistung
+      ``grid_w`` minus den Anteil dieses Schritts auf, auch in einer lückenhaften Viertelstunde: So
+      ist es aktuell, wenn die nächste beginnt.
     - **Lücken:** Eine Viertelstunde ist lückenhaft bis zu ihrem Ende, sobald in einem Schritt
       mehr als ``GAP_S`` seit dem letzten Schritt mit bekannter Leistung vergangen sind; gab es in
       ihr noch keinen, zählt ihr Beginn. So ist auch eine Viertelstunde lückenhaft, in der der
       erste Schritt später als ``GAP_S`` nach ihrem Beginn kommt (der Start des core mitten
-      drin). Ruhte die Regelung (``idle``), ist die laufende Viertelstunde ebenfalls lückenhaft.
-      Die nächste beginnt normal: Ein Schritt in einer anderen Viertelstunde als der vorige beginnt
-      diese neu, ohne Lücke, ohne Boost-Energie und nicht überschritten.
+      drin). Ruhte die Regelung (``idle``) oder sprang die Wanduhr innerhalb der Viertelstunde
+      zurück, ist sie ebenfalls lückenhaft. Die nächste beginnt normal: Ein Schritt in einer
+      anderen Viertelstunde als der vorige beginnt diese neu, ohne Lücke, ohne Boost-Energie und
+      nicht überschritten.
     - **Budget:** ``P_zul = (Ziel · 0,25 h − E_bisher) / t_rest − peak_margin_kw`` mit
-      ``t_rest = max(1 s, Ende − wall_now)``, also immer endlich. Als ``PeakLimits.budget_w`` geht
-      es hinaus, wenn der SOC bekannt ist und über ``reserve_soc_pct + reserve_guard_pct`` liegt;
-      sonst ist es ``None``. Health zeigt ``P_zul`` in jedem Fall.
+      ``t_rest = max(1 s, Ende − wall_now)``. Als ``PeakLimits.budget_w`` geht es hinaus, wenn der
+      SOC bekannt ist und über ``reserve_soc_pct + reserve_guard_pct`` liegt; sonst ist es
+      ``None``. Health zeigt ``P_zul`` in jedem Fall. Es ist nie NaN oder ±∞: Ist ``P_zul`` keine
+      endliche Zahl (``grid_wh`` so groß, dass die Rechnung überläuft), rechnet der Schritt nicht.
     - **Hochrechnung und Senkung:** Die Hochrechnung ist ``(E_bisher + Mittel · t_rest) / 0,25 h``.
       Die verlangte Senkung ist ``max(Mittel, Basis + W) − P_zul``, bei unbekanntem ``W`` oder
-      unbekannter Basis ``Mittel − P_zul``; Health zeigt sie mindestens 0. Beide brauchen das
-      Mittel; ``P_zul`` braucht es nicht. In diesem Teil ändert die Senkung keine Grenze.
+      unbekannter Basis oder wenn ``Basis + W`` keine endliche Zahl ist ``Mittel − P_zul``; Health
+      zeigt sie mindestens 0. Beide brauchen das Mittel; ``P_zul`` braucht es nicht. In diesem Teil
+      ändert die Senkung keine Grenze.
     - **Überschritten:** Liegt die Hochrechnung ``EXCEEDED_AFTER_S`` lang ohne Unterbrechung über
       dem Ziel, ist die Viertelstunde überschritten, bis zu ihrem Ende, auch wenn danach eine Lücke
       folgt oder die ``QuarterObs`` fehlt. Gezählt wird nur in Schritten, die rechnen; ein Schritt,
       der nicht rechnet, unterbricht. Der Alarm ``peak.exceeded`` nennt die Hochrechnung in diesem
       Moment; Text und ``since`` bleiben bis zum Ende der Viertelstunde fest.
 
-    Ein Schritt rechnet, wenn seine ``QuarterObs`` gilt und die Viertelstunde keine Lücke hat; nur
-    dann gibt es Hochrechnung, Senkung und ``budget_w``, sonst ``NO_LIMITS``. Der Zustand ist der
-    erste, der zutrifft: ``off`` (kein Ziel), ``exceeded``, ``gap`` (der Schritt rechnet nicht),
-    sonst ``active``.
+    Ein Schritt rechnet, wenn seine ``QuarterObs`` gilt, die Viertelstunde keine Lücke hat und
+    ``P_zul`` endlich ist; nur dann gibt es Hochrechnung, Senkung und ``budget_w``, sonst
+    ``NO_LIMITS``. Der Zustand ist der erste, der zutrifft: ``off`` (kein Ziel), ``exceeded``,
+    ``gap`` (der Schritt rechnet nicht), sonst ``active``.
 
-    Die Wanduhr darf springen: Ein Abstand von 0 oder weniger zählt keine Boost-Energie, ein Sprung
-    zurück beginnt das Mittel neu (``MovingAverage`` verlangt eine steigende Zeit). Der Zustand lebt
-    nur im Speicher. Nicht für mehrere Threads gedacht.
+    Die Wanduhr darf springen: Ein Sprung zurück beginnt das Mittel neu (``MovingAverage`` verlangt
+    eine steigende Zeit) und macht die laufende Viertelstunde lückenhaft, ein Schritt im selben
+    Moment wie der vorige zählt keine Boost-Energie. Der Zustand lebt nur im Speicher. Nicht für
+    mehrere Threads gedacht.
     """
 
     def __init__(self, control: ControlConfig, reserve_soc_pct: float) -> None:
@@ -336,14 +342,18 @@ class PeakGuard:
     def _follow(self, now: datetime, start: datetime, known: bool, boost_w: float) -> _Running:
         """Zählt den Schritt zur laufenden Viertelstunde: Boost-Energie und Lücken."""
         prev = self._prev
-        if prev is not None and now < prev.time:
+        jumped_back = prev is not None and now < prev.time
+        if jumped_back:
             self._mean.clear()  # Die Wanduhr sprang zurück: Das Fenster des Mittels beginnt neu.
         running = self._running
         if running is None or running.start != start:
             running = self._running = _Running(start)  # die erste oder eine andere Viertelstunde
+        elif jumped_back:
+            # Innerhalb der Viertelstunde zurück: Boost-Energie und Mittel passen nicht mehr.
+            running.gappy = True
         if prev is not None and prev.known and prev.start == start:
             interval_s = (now - prev.time).total_seconds()
-            if 0.0 < interval_s <= GAP_S:
+            if 0.0 < interval_s <= HOLD_MAX_S:
                 running.boost_wh += prev.boost_w * interval_s / 3600.0
         since = running.start if running.last_known is None else running.last_known
         if (now - since).total_seconds() > GAP_S:
@@ -361,16 +371,24 @@ class PeakGuard:
         wanted_w: float | None,
         base_w: float | None,
         target_w: float,
-    ) -> _Calc:
-        """``P_zul``, Hochrechnung und verlangte Senkung eines Schritts, der rechnet."""
+    ) -> _Calc | None:
+        """``P_zul``, Hochrechnung und verlangte Senkung eines Schritts, der rechnet.
+
+        ``None``, wenn ``P_zul`` keine endliche Zahl ist: Das Budget ist nie NaN oder ±∞.
+        """
         rest_s = max(_MIN_REST_S, (end - now).total_seconds())
-        allowed_w = (target_w * _QUARTER_H - energy_wh) * 3600.0 / rest_s - self._margin_w
+        allowed_w = finite_number(
+            (target_w * _QUARTER_H - energy_wh) * 3600.0 / rest_s - self._margin_w
+        )
+        if allowed_w is None:
+            return None  # ein absurdes ``grid_wh`` lässt die Rechnung überlaufen
         mean_w = self._mean.value(now)
         if mean_w is None:
             return _Calc(energy_wh, allowed_w, None, None)
         projection_w = (energy_wh + mean_w * rest_s / 3600.0) / _QUARTER_H
         wanted, base = finite_number(wanted_w), finite_number(base_w)
-        need_w = mean_w if wanted is None or base is None else max(mean_w, base + wanted)
+        with_base_w = None if wanted is None or base is None else finite_number(base + wanted)
+        need_w = mean_w if with_base_w is None else max(mean_w, with_base_w)
         return _Calc(energy_wh, allowed_w, projection_w, need_w - allowed_w)
 
     def _watch(
