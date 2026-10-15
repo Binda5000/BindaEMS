@@ -2252,14 +2252,17 @@ gegen ein Modell der Anlage laufen, in simulierter Zeit (ein Zyklus je Sekunde).
 Netz mit Sicherung, PV, Hauslast, den Akku mit ESS, Peak Shaving und dem Override des Netz-Sollwerts
 (er verfällt 300 s nach dem letzten Schreiben; mit Dynamic ESS verwirft der Cerbo ihn), die EVCS mit
 dem e-Golf, den Wall Connector mit dem Tesla und Tessie, Ausfälle und einen fremden Regler wie evcc.
-Gefälscht sind nur die Geräte: Parser der Adapter, Aktoren, Safety-Schicht und Regelung sind die
-echten, und das Modell zeigt sich so, wie die Geräte und Adapter es tun. Der Simulator verbindet sich
-mit nichts und schreibt nichts auf die Geräte; er braucht weder Tokens noch Netz. Die Szenarien sind
-deterministisch.
+Für die Zuordnung kommen Home Assistant dazu, das den e-Golf zu Hause oder weg meldet, ein Gast ohne
+Tessie, der auf 1 bis 3 Phasen lädt, und ein Tesla, der woanders angesteckt ist: Tessie meldet ihn
+zu Hause und angesteckt, er steckt aber an keiner Wallbox. Jedes Auto lässt sich an jede Wallbox
+stecken. Gefälscht sind nur die Geräte: Parser der Adapter, Aktoren, Safety-Schicht und Regelung
+sind die echten, und das Modell zeigt sich so, wie die Geräte und Adapter es tun. Der Simulator
+verbindet sich mit nichts und schreibt nichts auf die Geräte; er braucht weder Tokens noch Netz. Die
+Szenarien sind deterministisch.
 
-In der CI läuft jedes der achtzehn Szenarien bei jedem Push (`tests/integration/test_sim_scenarios.py`),
-dazu eine Abwandlung von `spitze-15min` (Tesla in Boost, e-Golf in Sofort, Ziel 5 kW), die den
-Boost-Anteil des Wächters prüft (oben, „Messung“).
+In der CI läuft jedes der einundzwanzig Szenarien bei jedem Push
+(`tests/integration/test_sim_scenarios.py`), dazu eine Abwandlung von `spitze-15min` (Tesla in
+Boost, e-Golf in Sofort, Ziel 5 kW), die den Boost-Anteil des Wächters prüft (oben, „Messung“).
 Von Hand lässt du eines laufen, etwa um nach einer Änderung von `grid` oder `control` in `config.yaml`
 zu sehen, ob die Regelung noch hält.
 
@@ -2284,12 +2287,14 @@ docker compose run --rm -v "$PWD/verification:/out" --entrypoint python ems-core
   --out /out/<Datum>-simulation-wolkig.md
 ```
 
-- `--szenario NAME` (Pflicht): eines der achtzehn Szenarien unten.
+- `--szenario NAME` (Pflicht): eines der einundzwanzig Szenarien unten.
 - `--out PFAD` (Pflicht): der Bericht als Markdown. Fehlende Ordner legt das Werkzeug an.
 - `--config PFAD`: die Konfiguration, aus der Grenzen, Fahrzeuge und Wallboxen kommen; ohne Angabe
   `deploy/config.example.yaml`, relativ zum aktuellen Verzeichnis. Die Szenarien brauchen die
   Wallboxen `evcs` (EVCS) und `twc` (Wall Connector) und die Fahrzeuge `tesla` (mit Tessie) und
-  `egolf`.
+  `egolf`. `egolf-twc` und `gast-evcs` bestehen nur mit `home_entity` beim e-Golf: Ohne Home
+  Assistant erkennt der core den e-Golf am Wall Connector nicht und schließt ihn an der EVCS nicht
+  aus.
 - `--stunden H`: Dauer in Stunden statt der des Szenarios, **höchstens diese**; ein größerer Wert
   lässt das Szenario ganz laufen, denn seine Ereignisse und Prüfungen enden mit seiner Dauer. Ein
   kürzerer Lauf ist nur ein Ausschnitt: Prüfungen des Szenarios, die das Ende oder eine Dauer
@@ -2298,7 +2303,7 @@ docker compose run --rm -v "$PWD/verification:/out" --entrypoint python ems-core
 - Jeder Lauf bekommt ein **frisches temporäres Verzeichnis** für die Ablage des core (Absicht,
   Rate-Limits, Entscheidungen). Er berührt `/data` nie und sieht nichts von früheren Läufen.
 - Ein Szenario braucht für 30 min bis 2 h simulierte Zeit etwa 3 bis 13 s Rechenzeit; alle
-  achtzehn zusammen rund 2 min.
+  einundzwanzig zusammen rund 2,5 min.
 
 Die Standardausgabe zeigt je Kennzahl eine Zeile, dann je Informationszahl eine (ohne Grenze), dann
 je Prüfung des Szenarios eine und am Ende den Pfad des Berichts. Ein Ausschnitt aus `tesla-5a`:
@@ -2374,10 +2379,12 @@ gelten für die Beispielkonfiguration.
 
 ### Szenarien
 
-Alle Szenarien starten mit angesteckten, nicht ladenden Autos und einem wachen Tesla, soweit die
-Tabelle nichts anderes sagt. Der Regelbetrieb ist an, EVCS und Tesla sind live (außer in `dry-run`).
+Alle Szenarien starten mit angesteckten, nicht ladenden Autos an ihren Standard-Wallboxen und einem
+wachen Tesla, soweit die Tabelle nichts anderes sagt; der Gast steht abgesteckt, und Home Assistant
+meldet den e-Golf zu Hause. Der Regelbetrieb ist an, EVCS und Tesla sind live (außer in `dry-run`).
 Victron (der Akku-Sollwert) entscheidet in den ersten zehn Szenarien im Dry-Run mit; in den acht für
-Akku und Spitzen, ab `akku-wolkig`, ist er live.
+Akku und Spitzen, ab `akku-wolkig`, ist er live, in den drei für die Zuordnung, ab `tesla-evcs`,
+wieder im Dry-Run.
 
 | Name | Titel, Dauer | Anlage und Ereignisse | Prüfung des Szenarios |
 |---|---|---|---|
@@ -2389,7 +2396,7 @@ Akku und Spitzen, ab `akku-wolkig`, ist er live.
 | `tesla-5a` | Tesla auf 5 A mit verlorenem erstem Befehl, 1 h | PV konstant 4,6 kW, Tesla angesteckt mit 10 A, e-Golf abgesteckt | Eine Entscheidung nennt „not_taken_retry“; der Tesla lädt am Ende mit 5 A. |
 | `tesla-schlaeft` | Schlafender Tesla im PV-Modus, 1 h | 21.06.2026 ab 09:00, PV steigt in 30 min auf 6 kW | Genau ein Weckvorgang; der Tesla lädt am Ende. |
 | `ausfaelle` | Ausfälle einzeln, Netzausfall mit Wiederaufnahme, 1,5 h | beide Sofort; Ausfälle: EVCS 10–15 min, Wall Connector 20–25, Tessie 30–35, Cerbo 40–41, Netz 50–53 | SAFE in den Fenstern von Cerbo und Netz; ab 60 min laden beide; eine Entscheidung nennt „resume_after_outage“. |
-| `zuordnung` | Zuordnung unklar und Übersteuerung, 1 h | Tesla an der EVCS; Übersteuerung `tesla: evcs` (Version 2) bei 10 min; Abstecken bei 40 min | Die Gesundheit zeigt „unklar“ vor 10 min; genau eine Entscheidung „Strom 16 A“ an den Tesla; ab 41 min lädt die EVCS nicht. |
+| `zuordnung` | Zuordnung unklar und Übersteuerung, 1 h | Tesla woanders angesteckt (Tessie: zu Hause und angesteckt, an keiner Wallbox); e-Golf in Sofort an der EVCS, die schon vor dem Start des core lädt; Übersteuerung `egolf: evcs` (Version 2) bei 10 min; Abstecken des e-Golf bei 40 min | Die Gesundheit zeigt den e-Golf vor 10 min „unklar“ (ein echter Widerspruch: Tessie und der Ausschluss stützen den Tesla an der EVCS, die Phasen-Signatur des e-Golf schließt ihn aus); ab 11 min zeigt sie kein Fahrzeug „unklar“; ab 41 min lädt die EVCS nicht. |
 | `dry-run` | Dry-Run neben einem fremden Regler, 1 h | wie `wolkig`, fremder Regler an, alle Aktoren im Dry-Run | keine wiederholte Dry-Run-Entscheidung; mindestens eine Dry-Run-Entscheidung an EVCS und Tesla; kein Alarm „competitor.foreign.*“ |
 | `akku-wolkig` | PV unter Wolken, SOC 60 %, 1 h | 21.06.2026 ab 10:00, Wolken wie `wolkig`, Akku 60 %, nur der e-Golf, in PV | Höchstens 5 % der Energie des e-Golf kommen aus dem Akku (ohne Übergänge); eine Entscheidung an `victron` nennt „battery_comp“. |
 | `akku-minpv` | Min+PV ohne Sonne, SOC 80 %, 30 min | 12.10.2026 ab 18:00, keine PV, Akku 80 %, beide in Min+PV, der Tesla zu Beginn auf 5 A | Der Akku liefert in die Autos (Entladung − Haus) ab 10 s nach dem ersten Laden bis 890 s danach höchstens 3200 W (`support_max_w` von 3000 W plus das Totband des Overrides von 200 W); nach `support_max_s` (900 s), ab 930 s nach dem ersten Laden, höchstens 200 W (das Totband). |
@@ -2399,6 +2406,9 @@ Akku und Spitzen, ab `akku-wolkig`, ist er live.
 | `dess-an` | Dynamic ESS an, 30 min | Akku 60 %, Dynamic ESS an, nur der e-Golf, in Sofort | Keine Entscheidung an `victron`; ab 1 min zeigt die Gesundheit `battery.state` „locked“; der e-Golf lädt am Ende. |
 | `spitze-15min` | 15-min-Ziel 8 kW, 75 min | 12.10.2026 ab 17:59, `control.peak_target_kw` 8, Akku 60 %, Tesla in Min+PV, e-Golf in Sofort, ab 18:45 in Boost bis zum Ende | Netzbezug der Viertelstunden ab 18:00, 18:15 und 18:30 je höchstens 2,02 kWh; vor 18:45 nennt eine Entscheidung „peak_guard“, ab 18:45 keine an `wallbox.evcs`; bei der ersten Drosselung des e-Golf in Sofort lädt kein Auto in PV-Überschuss oder Min+PV über Mindeststrom + 0,5 A (belegt im Simulator wenig, unten). |
 | `schieflast-pv` | PV mit schwerer Last auf L1, 1 h | 21.06.2026 ab 10:00, PV konstant 12 kW, Akku 60 %, nur der e-Golf, in PV; ab 10 min 5,5 kW mehr Last auf L1 | Eine Entscheidung an `wallbox.evcs` nennt „import_limit“: Das Importziel bindet den e-Golf zwischen Mindest- und Höchststrom. |
+| `tesla-evcs` | Tesla an der EVCS ohne Übersteuerung, 30 min | 12.10.2026 ab 18:00, keine PV, Akku 60 %, Tesla an der EVCS mit 10 A im Auto, in Sofort; e-Golf abgesteckt | Die Gesundheit zeigt den Tesla vor 3 min „erkannt“; genau eine Entscheidung „Strom 16 A“ an den Tesla (sein `max_a`); er lädt am Ende mit 16 A: Die EVCS regelt in seinem Modus. |
+| `egolf-twc` | e-Golf am Wall Connector, 30 min | Akku 60 %, e-Golf am Wall Connector, in PV; Tesla abgesteckt | Ab 4 min zeigt die Gesundheit am Wall Connector den e-Golf, erkannt; keine Entscheidung an `vehicle.tesla`; der e-Golf lädt am Ende mit 16 A, als Last, die die Regelung nicht steuert. |
+| `gast-evcs` | Gast an der EVCS, e-Golf weg, 30 min | Akku 60 %, Gast mit 3 Phasen an der EVCS, Modus des Gastes Sofort; e-Golf abgesteckt und laut Home Assistant weg; Tesla abgesteckt | Ab 3 min zeigt die Gesundheit an der EVCS den Gast (`guest`), erkannt; er lädt am Ende mit 16 A im Modus des Gastes. |
 
 Die Verteilung ist gierig nach Priorität (Abschnitt „Laderegelung“): Mit höchstens 10 kW PV laden die
 Autos in `sonnig` und `wolkig` nacheinander, darum steht der Tesla dort nahe an seinem Ladelimit.
@@ -2424,6 +2434,17 @@ drosselte, bestünde die Prüfung: Seine Senkung des e-Golf um 1 A fiele um 18:0
 Phasenwächters zusammen, der den e-Golf neben dem Tesla mit 16 A ebenfalls auf 15 A begrenzt, und
 die Entscheidung nennte dann `phase_limit`, nicht `peak_guard`. Die Reihenfolge der Drosselung
 prüfen `tests/unit/core/control/test_peak_throttle.py` und `tests/property/test_peak_guard.py`.
+
+In den Szenarien für die Zuordnung zeigt `GET /v1/health`, wer wo steht (`vehicles` und
+`wallboxes`). Nach dem Start beobachtet der core rund 60 s; erst dann regelt er, und die Erkennung
+beginnt, die 60 s ohne Unterbrechung braucht. So ist im Simulator der Tesla in `tesla-evcs` nach
+2 min erkannt, ebenso der Gast in `gast-evcs`, der e-Golf in `egolf-twc` nach 3 min, denn die
+Phasen-Signatur braucht davor 60 s Laden; bis dahin steht am Wall Connector ein angenommener Gast.
+`zuordnung` ist ab 3 min unklar: erst 60 s Phasen-Signatur, dann 60 s Widerspruch. `tesla-evcs`
+prüft „erkannt“ darum vor 3 min, nicht binnen 2 min wie im Design, dessen 2 min ab dem Beginn der
+Regelung zählen. In `zuordnung` lädt die EVCS den e-Golf schon vor dem Start des core: So schließt
+die Phasen-Signatur den Tesla an der EVCS im selben Zyklus aus, in dem er dort sonst erkannt wäre,
+denn Tessie und der Ausschluss stützen ihn von Anfang an.
 
 ### Was das Modell nicht leistet
 

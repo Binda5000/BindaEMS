@@ -1,7 +1,10 @@
 """Tests der Szenarien 6 bis 10: Aufbau, Ereignisse und Prüfungen an Hand gebauten Ergebnissen.
 
 Dazu das Ereignis ``_Boost`` und die Option ``dess`` von ``_setup``, die die Szenarien von Akku und
-Spitzen brauchen. Die ganzen Läufe prüft ``tests/integration/test_sim_scenarios.py``.
+Spitzen brauchen, die Optionen von ``_setup`` und ``_intent`` für Gast, Home Assistant und den
+Tesla woanders und die Szenarien für die Zuordnung (Plan 2c-2b, Design 10.3): ``zuordnung``,
+``tesla-evcs``, ``egolf-twc`` und ``gast-evcs``. Die ganzen Läufe prüft
+``tests/integration/test_sim_scenarios.py``.
 """
 
 from __future__ import annotations
@@ -89,7 +92,9 @@ def cars_at(t: int, tesla_a: float = 0.0, egolf_a: float = 0.0) -> Sample:
     return Sample(t, quiet, quiet, 0.0, 60.0, cars)
 
 
-def health(mode: str = "CONTROL", *, vehicles: Any = (), alarms: Any = ()) -> HealthReport:
+def health(
+    mode: str = "CONTROL", *, vehicles: Any = (), alarms: Any = (), wallboxes: Any = ()
+) -> HealthReport:
     return HealthReport(
         mode=mode,
         version="0",
@@ -98,6 +103,7 @@ def health(mode: str = "CONTROL", *, vehicles: Any = (), alarms: Any = ()) -> He
         alarms=list(alarms),
         cycle_ms_p95=None,
         vehicles=list(vehicles),
+        wallboxes=list(wallboxes),
     )
 
 
@@ -119,6 +125,13 @@ def check(name: str, index: int) -> Any:
     checks = SCENARIOS[name].checks
     assert isinstance(checks, Checks)
     return checks.items[index]
+
+
+def shown_once(cfg: Config, name: str, at: int, who: str, kind: str) -> SimResult:
+    """Bis 20 min alle 10 s eine Gesundheit; nur die bei ``at`` zeigt ``who`` mit ``kind``."""
+    vehicles = [{"id": who, "assignment": kind}]
+    reports = [(t, health(vehicles=vehicles if t == at else [])) for t in range(0, 1200, 10)]
+    return result_of(cfg, name, states=reports)
 
 
 # --- Aufbau und Ereignisse -----------------------------------------------------------------------
@@ -215,10 +228,8 @@ class FakeRuntime:
 def test_the_override_is_a_new_version_of_the_valid_intent(cfg) -> None:
     from bindaems.tools.sim.scenarios import _Override, _Unplug
 
-    model = set_up(cfg, "zuordnung")
-    tesla = model.teslas["tesla"]
-    assert (tesla.wallbox, tesla.charge_amps, tesla.charge_enabled) == ("evcs", 10, True)
-    assert (model.wallboxes["evcs"].start_stop, model.cars["egolf"].wallbox) == (0, None)
+    model = set_up(cfg, "zuordnung")  # der e-Golf an der EVCS, der Tesla woanders
+    egolf = model.cars["egolf"]
     ((at, override),) = actions("zuordnung", _Override)
     live = {TESLA: ActuatorMode.LIVE, EVCS: ActuatorMode.LIVE}
     current = SCENARIOS["zuordnung"].intent.model_copy(update={"actuators": live})
@@ -228,11 +239,11 @@ def test_the_override_is_a_new_version_of_the_valid_intent(cfg) -> None:
         current.model_copy(
             update={
                 "version": 2,
-                "vehicles": {"tesla": VehicleIntent(mode=ChargeMode.NOW, wallbox="evcs")},
+                "vehicles": {"egolf": VehicleIntent(mode=ChargeMode.NOW, wallbox="evcs")},
             }
         )
     ]
-    rt.reply = IntentReply("rejected", 1, ("Unbekannte Wallbox „evcs“ für „tesla“.",))
+    rt.reply = IntentReply("rejected", 1, ("Unbekannte Wallbox „evcs“ für „egolf“.",))
     with pytest.raises(ValueError, match="Übersteuerung abgelehnt: Unbekannte Wallbox"):
         override(model, rt)  # type: ignore[arg-type]
     rt.current = None
@@ -240,7 +251,7 @@ def test_the_override_is_a_new_version_of_the_valid_intent(cfg) -> None:
         override(model, rt)  # type: ignore[arg-type]
     ((at, unplug),) = actions("zuordnung", _Unplug)
     unplug(model, None)
-    assert at == 2400 and tesla.wallbox is None and model.wallboxes["evcs"].car is None
+    assert at == 2400 and egolf.wallbox is None and model.wallboxes["evcs"].car is None
 
 
 def test_boost_is_a_new_version_of_the_valid_intent_with_boost_until(cfg) -> None:
@@ -386,6 +397,60 @@ def test_the_dry_run_runs_beside_a_foreign_controller(cfg) -> None:
     assert factors == set(CLOUD_FACTORS)  # wie „wolkig“: Sonne und Wolken im Wechsel
 
 
+def test_the_assignment_scenarios_follow_the_table_of_the_plan(cfg) -> None:
+    # Plan 2c-2b, Task 8: alle abends, live und mit Victron im Dry-Run, ohne PV
+    from bindaems.tools.sim.scenarios import HOUSE_NOISE_W, HOUSE_W, _Weather
+
+    table = {
+        "zuordnung": ("Zuordnung unklar und Übersteuerung", 3600, 9),
+        "tesla-evcs": ("Tesla an der EVCS ohne Übersteuerung", 1800, 19),
+        "egolf-twc": ("e-Golf am Wall Connector", 1800, 20),
+        "gast-evcs": ("Gast an der EVCS, e-Golf weg", 1800, 21),
+    }
+    for name, (title, duration_s, seed) in table.items():
+        scenario = SCENARIOS[name]
+        found = (scenario.title, scenario.start, scenario.duration_s, scenario.seed)
+        assert found == (title, vienna(10, 12, 18), duration_s, seed), name
+        assert scenario.live and not scenario.victron_live and scenario.intent.control, name
+        assert dict(scenario.control) == {}, name
+        weather = [(t, action) for t, action in scenario.events if isinstance(action, _Weather)]
+        assert [t for t, _ in weather] == list(range(duration_s)), name
+        probe = PlantModel(cfg, random.Random(1))  # noqa: S311 - Saat der Simulation
+        weather[-1][1](probe, None)  # type: ignore[arg-type]  # das Wetter braucht keine Laufzeit
+        assert probe.pv_w == 0.0, name
+        assert all(abs(watts - HOUSE_W) <= HOUSE_NOISE_W for watts in probe.house_w), name
+    others = {
+        name: [t for t, action in SCENARIOS[name].events if not isinstance(action, _Weather)]
+        for name in table
+    }  # nur „zuordnung“ hat Übersteuerung und Abstecken (oben)
+    assert others == {"zuordnung": [600, 2400], "tesla-evcs": [], "egolf-twc": [], "gast-evcs": []}
+
+
+def test_the_assignment_setups_place_the_cars(cfg) -> None:
+    now, pv = ChargeMode.NOW, ChargeMode.PV
+    table = {
+        # Name: Wallbox von Tesla, e-Golf und Gast; weg laut Home Assistant; Tesla woanders
+        # angesteckt; EVCS schon auf „Laden an“; Modi laut Absicht; Modus des Gastes
+        "zuordnung": (None, "evcs", None, set(), True, 1, {"egolf": now}, pv),
+        "tesla-evcs": ("evcs", None, None, set(), False, 0, {"tesla": now}, pv),
+        "egolf-twc": (None, "twc", None, set(), False, 0, {"egolf": pv}, pv),
+        "gast-evcs": (None, None, "evcs", {"egolf"}, False, 0, {}, now),
+    }
+    for name, (tesla, egolf, guest, away, elsewhere, evcs_on, modes, guest_mode) in table.items():
+        model = set_up(cfg, name)
+        cars = model.cars
+        found = (cars["tesla"].wallbox, cars["egolf"].wallbox, cars[GUEST_CAR].wallbox)
+        assert found == (tesla, egolf, guest), name
+        assert (model.away, model.teslas["tesla"].elsewhere) == (away, elsewhere), name
+        assert model.wallboxes["evcs"].start_stop == evcs_on, name
+        assert (model.soc_pct, cars[GUEST_CAR].phases) == (60.0, 3), name
+        intent = SCENARIOS[name].intent
+        assert {key: entry.mode for key, entry in intent.vehicles.items()} == modes, name
+        assert intent.guest == GuestIntent(mode=guest_mode), name
+    tesla = set_up(cfg, "tesla-evcs").teslas["tesla"]
+    assert (tesla.charge_amps, tesla.charge_enabled) == (10, True)  # lädt selbst, 10 A im Auto
+
+
 # --- Prüfungen -----------------------------------------------------------------------------------
 
 
@@ -434,13 +499,13 @@ def test_a_deferred_wake_or_current_is_no_command(cfg) -> None:
     # Zurückgestellt (Stundenlimit) ging nichts hinaus: Das ist weder ein Weckvorgang noch eine
     # weitere Entscheidung „Strom 16 A“.
     deferred = DecisionResult.DEFERRED
-    one_wake, sixteen = check("tesla-schlaeft", 0), check("zuordnung", 1)
+    one_wake, sixteen = check("tesla-schlaeft", 0), check("tesla-evcs", 1)
     held = with_codes(decision(1400, TESLA, CHARGING, True, deferred), "wake", "rate.start_stop")
     wake = with_codes(decision(1506, TESLA, CHARGING, True, OK), "mode_pv", "wake")
     assert one_wake.find(result_of(cfg, "tesla-schlaeft", decisions=[held, wake])) == []
     later = with_codes(decision(600, TESLA, CURRENT, 16.0, deferred), "mode_now", "rate.per_hour")
     sent = decision(654, TESLA, CURRENT, 16.0, OK)
-    assert sixteen.find(result_of(cfg, "zuordnung", decisions=[later, sent])) == []
+    assert sixteen.find(result_of(cfg, "tesla-evcs", decisions=[later, sent])) == []
 
 
 def test_the_tesla_must_charge_at_the_end(cfg) -> None:
@@ -520,24 +585,63 @@ def test_a_decision_must_name_resume_after_outage(cfg) -> None:
     assert resumed.find(result_of(cfg, "ausfaelle", decisions=[start])) == []
 
 
-def test_the_health_must_show_the_tesla_detected_before_the_override(cfg) -> None:
-    detected = check("zuordnung", 0)
-    assert detected.text == "Die Gesundheit zeigt „tesla“ vor 10 min „erkannt“."
+def test_the_health_must_show_unclear_before_the_override(cfg) -> None:
+    unclear = check("zuordnung", 0)
+    assert unclear.text == "Die Gesundheit zeigt „egolf“ vor 10 min „unklar“."
 
-    def shown(at: int, who: str = "tesla", kind: str = "detected") -> SimResult:
-        vehicles = [{"id": who, "assignment": kind}]
-        reports = [(t, health(vehicles=vehicles if t == at else [])) for t in range(0, 1200, 10)]
-        return result_of(cfg, "zuordnung", states=reports)
+    def found(at: int, who: str = "egolf", kind: str = "unclear") -> list[str]:
+        return unclear.find(shown_once(cfg, "zuordnung", at, who, kind))
 
-    assert detected.find(shown(590)) == []
-    message = ["Die Gesundheit zeigt „tesla“ vor 600 s nie „erkannt“."]
-    assert detected.find(shown(600)) == message
-    assert detected.find(shown(590, "egolf")) == message
-    assert detected.find(shown(590, kind="unclear")) == message
+    assert found(590) == []
+    message = ["Die Gesundheit zeigt „egolf“ vor 600 s nie „unklar“."]
+    assert found(600) == message
+    assert found(590, "tesla") == message
+    assert found(590, kind="detected") == message
+
+
+def test_after_the_override_nothing_may_be_unclear(cfg) -> None:
+    clear = check("zuordnung", 1)
+    assert clear.text == "Ab 11 min zeigt die Gesundheit kein Fahrzeug „unklar“."
+
+    def found(unclear: dict[int, str], *, until: int = 1200) -> list[str]:
+        """Alle 10 s bis ``until`` eine Gesundheit: ``unclear`` nennt je Sekunde das Fahrzeug, das
+        sie „unklar“ zeigt; sonst zeigt sie den Tesla angenommen und den e-Golf übersteuert."""
+
+        def vehicles(t: int) -> list[dict[str, str]]:
+            return [
+                {"id": key, "assignment": "unclear" if unclear.get(t) == key else usual}
+                for key, usual in (("tesla", "default"), ("egolf", "override"))
+            ]
+
+        reports = [(t, health(vehicles=vehicles(t))) for t in range(0, until, 10)]
+        return clear.find(result_of(cfg, "zuordnung", states=reports))
+
+    assert found({}) == []
+    assert found({650: "egolf"}) == []  # vor 11 min zählt nicht
+    assert found({700: "egolf"}) == ["Bei 700 s zeigt die Gesundheit „egolf“ „unklar“."]
+    assert found({660: "tesla", 700: "egolf"}) == [  # nur die erste
+        "Bei 660 s zeigt die Gesundheit „tesla“ „unklar“."
+    ]
+    assert found({}, until=660) == ["Der Lauf endet vor 660 s."]
+
+
+def test_the_tesla_must_be_detected_within_3_min(cfg) -> None:
+    # Design 10.3: binnen 2 min ab dem Beginn der Regelung; sie beginnt im Simulator nach 60 s
+    detected = check("tesla-evcs", 0)
+    assert detected.text == "Die Gesundheit zeigt „tesla“ vor 3 min „erkannt“."
+
+    def found(at: int, who: str = "tesla", kind: str = "detected") -> list[str]:
+        return detected.find(shown_once(cfg, "tesla-evcs", at, who, kind))
+
+    assert found(170) == []
+    message = ["Die Gesundheit zeigt „tesla“ vor 180 s nie „erkannt“."]
+    assert found(180) == message
+    assert found(170, "egolf") == message
+    assert found(170, kind="default") == message
 
 
 def test_exactly_one_decision_tesla_current_16_a(cfg) -> None:
-    sixteen = check("zuordnung", 1)
+    sixteen = check("tesla-evcs", 1)
     assert sixteen.text == "Genau eine Entscheidung „Strom 16 A“ an „tesla“."
     one = decision(654, TESLA, CURRENT, 16.0, OK)
     others = [
@@ -547,7 +651,7 @@ def test_exactly_one_decision_tesla_current_16_a(cfg) -> None:
     ]
 
     def found(*decisions: Decision) -> list[str]:
-        return sixteen.find(result_of(cfg, "zuordnung", decisions=list(decisions)))
+        return sixteen.find(result_of(cfg, "tesla-evcs", decisions=list(decisions)))
 
     assert found(one, *others) == []
     assert found(*others) == ["0 Entscheidungen „Strom 16 A“ an „tesla“, verlangt genau eine."]
@@ -608,6 +712,89 @@ def test_the_dry_run_must_decide_without_repeats_and_alarms(cfg) -> None:
     assert alarms.find(result_of(cfg, "dry-run", states=reports)) == [
         "Alarm „competitor.foreign.wallbox.evcs“ bei 10 s."
     ]
+
+
+def test_the_wall_connector_must_show_the_egolf(cfg) -> None:
+    occupied = check("egolf-twc", 0)
+    assert occupied.text == "Ab 4 min steht an „twc“ laut Gesundheit „egolf“, erkannt."
+
+    def found(changes: dict[int, dict[str, Any]], *, until: int = 600) -> list[str]:
+        """Alle 10 s bis ``until`` eine Gesundheit: an der EVCS niemand, am Wall Connector der
+        e-Golf, erkannt; ``changes`` ändert den Eintrag des Wall Connectors je Sekunde."""
+
+        def wallboxes(t: int) -> list[dict[str, Any]]:
+            twc = {"id": "twc", "occupant": "egolf", "assignment": "detected"} | changes.get(t, {})
+            return [{"id": "evcs", "occupant": None, "assignment": None}, twc]
+
+        reports = [(t, health(wallboxes=wallboxes(t))) for t in range(0, until, 10)]
+        return occupied.find(result_of(cfg, "egolf-twc", states=reports))
+
+    assert found({}) == []
+    assert found({230: {"occupant": "guest", "assignment": "default"}}) == []  # vor 4 min
+    message = ["Bei 300 s steht an „twc“ nicht „egolf“, erkannt."]
+    assert found({300: {"occupant": "guest"}}) == message
+    assert found({300: {"assignment": "default"}}) == message
+    assert found({300: {"id": "evcs"}}) == message  # erkannt, aber an der EVCS
+    assert found({300: {"occupant": "guest"}, 400: {"occupant": None}}) == message  # die erste
+    assert found({}, until=240) == ["Der Lauf endet vor 240 s."]
+
+
+def test_no_decision_may_reach_the_tesla(cfg) -> None:
+    none = check("egolf-twc", 1)
+    assert none.text == "Keine Entscheidung an „vehicle.tesla“."
+    evcs = decision(60, EVCS, CURRENT, 16.0, OK)
+    assert none.find(result_of(cfg, "egolf-twc", decisions=[evcs])) == []
+    tesla = decision(90, TESLA, CURRENT, 16.0, OK)
+    assert none.find(result_of(cfg, "egolf-twc", decisions=[evcs, tesla])) == [
+        "1 Entscheidungen an „vehicle.tesla“, die erste bei 90 s."
+    ]
+    # Jede zählt, auch eine abgelehnte und eine im Dry-Run.
+    refused = decision(120.5, TESLA, CHARGING, True, REJECTED)
+    dry = decision(150, TESLA, CURRENT, 5.0, DRY_RUN)
+    assert none.find(result_of(cfg, "egolf-twc", decisions=[refused, dry])) == [
+        "2 Entscheidungen an „vehicle.tesla“, die erste bei 120 s."
+    ]
+
+
+def test_the_evcs_must_show_the_guest(cfg) -> None:
+    occupied = check("gast-evcs", 0)
+    assert occupied.text == "Ab 3 min steht an „evcs“ laut Gesundheit „guest“, erkannt."
+
+    def found(detected_from: int) -> list[str]:
+        """Alle 10 s bis 5 min eine Gesundheit: an der EVCS der Gast, angenommen, ab
+        ``detected_from`` erkannt; am Wall Connector niemand."""
+
+        def wallboxes(t: int) -> list[dict[str, Any]]:
+            kind = "detected" if t >= detected_from else "default"
+            evcs = {"id": "evcs", "occupant": "guest", "assignment": kind}
+            return [evcs, {"id": "twc", "occupant": None, "assignment": None}]
+
+        reports = [(t, health(wallboxes=wallboxes(t))) for t in range(0, 300, 10)]
+        return occupied.find(result_of(cfg, "gast-evcs", states=reports))
+
+    assert found(120) == [] and found(180) == []
+    assert found(190) == ["Bei 180 s steht an „evcs“ nicht „guest“, erkannt."]
+
+
+def test_the_cars_must_charge_with_16_a_at_the_end(cfg) -> None:
+    # Abends ohne PV laden der Tesla und der Gast so nur in Sofort, der e-Golf als Last am Wall
+    # Connector, den die Regelung nicht steuert.
+    texts = {
+        ("tesla-evcs", 2): "„tesla“ lädt am Ende mit 16 A.",
+        ("egolf-twc", 2): "„egolf“ lädt am Ende mit 16 A.",
+        ("gast-evcs", 1): "„gast“ lädt am Ende mit 16 A.",
+    }
+    assert {(name, index): check(name, index).text for name, index in texts} == texts
+    full = check("gast-evcs", 1)
+
+    def ending(amps: float) -> SimResult:
+        sample = cars_at(0)
+        guest = CarSample(amps > 0, amps, amps * 3 * 230.0, "now", 6)
+        samples = [replace(sample, cars={**sample.cars, GUEST_CAR: guest})]
+        return result_of(cfg, "gast-evcs", samples=samples)
+
+    assert full.find(ending(16.0)) == []
+    assert full.find(ending(6.0)) == ["„gast“ lädt am Ende mit 6 A, verlangt 16 A."]
 
 
 def test_every_scenario_has_described_checks() -> None:

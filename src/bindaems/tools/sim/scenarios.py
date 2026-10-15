@@ -50,6 +50,23 @@ Min+PV drosselte, bestünde die Prüfung: Seine Senkung des e-Golf um 1 A fiele 
 Phasenwächters zusammen, und die Entscheidung nennte ``phase_limit``, nicht ``peak_guard``. Die
 Reihenfolge der Drosselung sichern ``tests/unit/core/control/test_peak_throttle.py`` und
 ``tests/property/test_peak_guard.py``.
+
+Die Szenarien für die Zuordnung (Plan 2c-2b, Design 10.3) lassen Victron im Dry-Run. ``zuordnung``
+ändert sich bewusst (Design 10.3): Das Bild „Tesla an der EVCS“ ist jetzt erkannt und steht in
+``tesla-evcs``; ``zuordnung`` prüft „unklar“ an einem echten Widerspruch. Der Tesla steckt dort
+woanders (``tesla_elsewhere``), Tessie meldet ihn zu Hause und angesteckt, und weil der Wall
+Connector leer ist, stützt ihn an der EVCS auch der Ausschluss; dort lädt aber der e-Golf auf zwei
+Phasen, und die Phasen-Signatur schließt den Tesla aus. Die EVCS lädt den e-Golf schon vor dem
+Start des core (``evcs_on``): So zählt die Phasen-Signatur im selben Zyklus, in dem die 60 s des
+Tesla als Kandidat um wären, und er wird nie kurz erkannt. Lüde die EVCS erst auf den ersten
+Befehl der Regelung, gälte der Tesla dort einige Sekunden als erkannt, und die EVCS regelte so
+lange in seinem Modus. Unklar ist die Zuordnung so ab rund 3 min: Nach dem Start beobachtet der
+core rund 60 s, dann folgen 60 s Phasen-Signatur und 60 s Widerspruch.
+
+Abweichung von der Tabelle des Plans 2c-2b (Entscheidung des Koordinators zu Task 8):
+``tesla-evcs`` verlangt „erkannt“ vor 3 min statt binnen 2 min (Design 10.3). Die Erkennung beginnt
+erst mit der Regelung, rund 60 s nach dem Start, und braucht 60 s; die 2 min des Designs zählen ab
+dem Beginn der Regelung.
 """
 
 from __future__ import annotations
@@ -63,6 +80,7 @@ from functools import partial
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final
 
+from bindaems.core.control.fleet import GUEST
 from bindaems.shared.control import (
     VICTRON,
     ChargeMode,
@@ -122,8 +140,8 @@ EVCS_CURRENTS_PER_HOUR: Final = 10
 
 FIVE_A_PV_W: Final = 4600.0  # konstante PV in „tesla-5a“: Der Anteil des Tesla ist 5 A …
 FIVE_A: Final = 5.0  # … und mit diesem Strom lädt er am Ende
-TESLA_START_A: Final = 10  # Strom im Tesla zu Beginn von „tesla-5a“ und „zuordnung“
-TESLA_MAX_A: Final = 16.0  # Höchststrom des Tesla in der Beispielkonfiguration („zuordnung“)
+TESLA_START_A: Final = 10  # Strom im Tesla zu Beginn von „tesla-5a“ und „tesla-evcs“
+TESLA_MAX_A: Final = 16.0  # Höchststrom des Tesla in der Beispielkonfiguration („tesla-evcs“)
 SLEEPY_PV_W: Final = 6000.0  # „tesla-schlaeft“: Die PV steigt linear auf 6 kW …
 SLEEPY_RAMP_S: Final = 30 * MINUTE_S  # … in 30 min und bleibt dann
 # „ausfaelle“: je Ausfall Name, Beginn und Ende in Minuten, einer nach dem anderen
@@ -136,7 +154,7 @@ OUTAGE_MIN: Final = (
 )
 SAFE_OUTAGES: Final = (CERBO, GRID)  # bei diesen Ausfällen ist der core im sicheren Zustand
 RESUMED_S: Final = 60 * MINUTE_S  # ab hier laden in „ausfaelle“ wieder beide Autos
-OVERRIDE_S: Final = 10 * MINUTE_S  # „zuordnung“: Übersteuerung „tesla“ an „evcs“ …
+OVERRIDE_S: Final = 10 * MINUTE_S  # „zuordnung“: Übersteuerung „egolf“ an „evcs“ …
 UNPLUG_S: Final = 40 * MINUTE_S  # … Abstecken …
 EVCS_OFF_S: Final = 41 * MINUTE_S  # … und ab hier lädt die EVCS nicht mehr
 
@@ -704,8 +722,8 @@ def _evcs_off_from(key: str, begin_s: int) -> Check:
 
     Die Proben kennen Autos, nicht Ladepunkte: „Kein Auto lädt“ heißt darum gar keines, auch an
     einer anderen Wallbox. Das passt nur zu Szenarien, in denen ab ``begin_s`` an keiner anderen
-    Wallbox ein Auto lädt, wie in „zuordnung“: Dort ist der e-Golf nie angesteckt, der Tesla ab
-    ``UNPLUG_S`` nicht mehr."""
+    Wallbox ein Auto lädt, wie in „zuordnung“: Dort steckt der Tesla an keiner Wallbox, der e-Golf
+    ab ``UNPLUG_S`` nicht mehr."""
     actuator = wallbox_actuator(key)
     valued = frozenset({DecisionResult.OK, DecisionResult.DRY_RUN})
 
@@ -1026,6 +1044,68 @@ def _now_throttled_last(key: str, actuator: str) -> Check:
     return Check(text, find)
 
 
+# --- Prüfungen für die Zuordnung -----------------------------------------------------------------
+
+
+def _clear_from(from_s: int) -> Check:
+    """Ab ``from_s`` zeigt keine Gesundheit ein Fahrzeug mit der Zuordnung ``UNCLEAR``; der Befund
+    nennt die erste, die eins zeigt. Gibt es ab ``from_s`` keine Gesundheit, ist das ein Verstoß:
+    Die Prüfung hätte nichts gesehen."""
+    word = _SHOWN[UNCLEAR]
+
+    def find(result: SimResult) -> list[str]:
+        after = [(t, health) for t, health in result.health if t >= from_s]
+        if not after:
+            return [f"Der Lauf endet vor {from_s} s."]
+        for t, health in after:
+            for vehicle in health.vehicles:
+                if vehicle["assignment"] == UNCLEAR:
+                    return [f"Bei {t} s zeigt die Gesundheit „{vehicle['id']}“ „{word}“."]
+        return []
+
+    text = f"Ab {de(from_s / MINUTE_S)} min zeigt die Gesundheit kein Fahrzeug „{word}“."
+    return Check(text, find)
+
+
+def _occupied_from(wallbox: str, occupant: str, from_s: int) -> Check:
+    """Ab ``from_s`` zeigt jede Gesundheit an der Wallbox ``wallbox`` (``health.wallboxes``) das
+    Auto ``occupant``, den Schlüssel eines Fahrzeugs oder ``GUEST``, erkannt (``DETECTED``);
+    gemeldet wird die erste, die es nicht tut. Gibt es ab ``from_s`` keine Gesundheit, ist das ein
+    Verstoß: Die Prüfung hätte nichts gesehen."""
+
+    def find(result: SimResult) -> list[str]:
+        after = [(t, health) for t, health in result.health if t >= from_s]
+        if not after:
+            return [f"Der Lauf endet vor {from_s} s."]
+        for t, health in after:
+            if not any(
+                entry["id"] == wallbox
+                and entry["occupant"] == occupant
+                and entry["assignment"] == DETECTED
+                for entry in health.wallboxes
+            ):
+                return [f"Bei {t} s steht an „{wallbox}“ nicht „{occupant}“, erkannt."]
+        return []
+
+    minutes = de(from_s / MINUTE_S)
+    text = f"Ab {minutes} min steht an „{wallbox}“ laut Gesundheit „{occupant}“, erkannt."
+    return Check(text, find)
+
+
+def _no_decision_at(actuator: str) -> Check:
+    """Keine Entscheidung an den Aktor ``actuator``, mit welchem Ergebnis auch immer; der Befund
+    nennt ihre Zahl und die Sekunde der ersten."""
+
+    def find(result: SimResult) -> list[str]:
+        found = _at(result.decisions, actuator)
+        if not found:
+            return []
+        first = _second(result, found[0].ts)
+        return [f"{len(found)} Entscheidungen an „{actuator}“, die erste bei {first} s."]
+
+    return Check(f"Keine Entscheidung an „{actuator}“.", find)
+
+
 # --- Szenarien 1 bis 5 ----------------------------------------------------------------------------
 
 
@@ -1220,18 +1300,20 @@ def _ausfaelle() -> Scenario:
 
 
 def _zuordnung() -> Scenario:
-    """Der Tesla steht an der EVCS: Die Erkennung findet ihn dort (Plan 2c-2b, Präzisierung 4),
-    bevor die Übersteuerung ihn dort festlegt; mit der Erkennung bekommt er einmal seinen
-    Höchststrom, die Übersteuerung an derselben EVCS schickt keinen zweiten (Plan 2c-2b,
-    Präzisierung 7). Das Abstecken beendet die Übersteuerung (Präzisierung 3)."""
+    """Ein echter Widerspruch macht die Zuordnung unklar (Plan 2c-2b, Präzisierung 4): Der Tesla
+    steckt woanders, Tessie meldet ihn aber zu Hause und angesteckt; Tessie und der Ausschluss
+    stützen ihn so an der EVCS, wo die Phasen-Signatur des e-Golf ihn ausschließt. Die
+    Übersteuerung des e-Golf an die EVCS hebt „unklar“ sofort auf (Plan 2c-1, Präzisierung 5), das
+    Abstecken beendet sie (Plan 2c-1, Präzisierung 3), und danach lädt die EVCS nicht mehr. Warum
+    die EVCS schon vor dem Start des core lädt, steht im Docstring des Moduls."""
     start, duration_s, seed = EVENING, HOUR_S, 9
     events = (
-        (OVERRIDE_S, _Override(2, TESLA, EVCS_BOX)),
-        (UNPLUG_S, _Unplug(TESLA)),
+        (OVERRIDE_S, _Override(2, EGOLF, EVCS_BOX)),
+        (UNPLUG_S, _Unplug(EGOLF)),
     )
     checks = (
-        _shown_before(TESLA, DETECTED, OVERRIDE_S),
-        _one_current(TESLA, TESLA_MAX_A),
+        _shown_before(EGOLF, UNCLEAR, OVERRIDE_S),
+        _clear_from(OVERRIDE_S + MINUTE_S),
         _evcs_off_from(EVCS_BOX, EVCS_OFF_S),
     )
     return Scenario(
@@ -1240,15 +1322,8 @@ def _zuordnung() -> Scenario:
         start=start,
         duration_s=duration_s,
         seed=seed,
-        setup=partial(
-            _setup,
-            soc_pct=60.0,
-            tesla=EVCS_BOX,
-            egolf=None,
-            tesla_amps=TESLA_START_A,
-            tesla_starts=True,
-        ),
-        intent=_intent(tesla=ChargeMode.NOW),
+        setup=partial(_setup, soc_pct=60.0, tesla=None, tesla_elsewhere=True, evcs_on=True),
+        intent=_intent(egolf=ChargeMode.NOW),
         live=True,
         events=(*_weather(start, duration_s, seed), *events),
         checks=Checks(checks),
@@ -1507,6 +1582,98 @@ def _schieflast_pv() -> Scenario:
     )
 
 
+# --- Szenarien 19 bis 21: Zuordnung, Victron im Dry-Run -------------------------------------------
+
+
+def _tesla_evcs() -> Scenario:
+    """Der Tesla steht ohne Übersteuerung an der EVCS: Die Erkennung findet ihn dort (Plan 2c-2b,
+    Präzisierung 4), er bekommt einmal seinen Höchststrom, und die EVCS regelt in seinem Modus
+    (Plan 2c-2b, Präzisierung 7). Abends ohne PV lüde er in PV-Überschuss nicht; mit 16 A am Ende
+    lädt er in Sofort. „Erkannt“ verlangt die Prüfung vor 3 min statt binnen 2 min (Abweichung,
+    Docstring des Moduls)."""
+    start, duration_s, seed = EVENING, 30 * MINUTE_S, 19
+    checks = (
+        _shown_before(TESLA, DETECTED, 3 * MINUTE_S),
+        _one_current(TESLA, TESLA_MAX_A),
+        _charges_with(TESLA, TESLA_MAX_A),
+    )
+    return Scenario(
+        name="tesla-evcs",
+        title="Tesla an der EVCS ohne Übersteuerung",
+        start=start,
+        duration_s=duration_s,
+        seed=seed,
+        setup=partial(
+            _setup,
+            soc_pct=60.0,
+            tesla=EVCS_BOX,
+            egolf=None,
+            tesla_amps=TESLA_START_A,
+            tesla_starts=True,
+        ),
+        intent=_intent(tesla=ChargeMode.NOW),
+        live=True,
+        events=_weather(start, duration_s, seed),
+        checks=Checks(checks),
+    )
+
+
+def _egolf_twc() -> Scenario:
+    """Der e-Golf steht am Wall Connector: Home Assistant und die Phasen-Signatur stützen ihn dort,
+    Tessie schließt den Tesla aus, und die Erkennung findet den e-Golf (Plan 2c-2b, Präzisierung 4).
+    Der Tesla bekommt keinen Befehl. Der Wall Connector hat für den e-Golf keinen Aktor: Der e-Golf
+    lädt als Last mit 16 A, obwohl er in PV-Überschuss steht und abends keine PV scheint. Bis zur
+    Erkennung steht dort ein angenommener Gast."""
+    start, duration_s, seed = EVENING, 30 * MINUTE_S, 20
+    checks = (
+        _occupied_from(WALL_CONNECTOR, EGOLF, 4 * MINUTE_S),
+        _no_decision_at(vehicle_actuator(TESLA)),
+        _charges_with(EGOLF, 16.0),
+    )
+    return Scenario(
+        name="egolf-twc",
+        title="e-Golf am Wall Connector",
+        start=start,
+        duration_s=duration_s,
+        seed=seed,
+        setup=partial(_setup, soc_pct=60.0, tesla=None, egolf=WALL_CONNECTOR),
+        intent=_intent(egolf=ChargeMode.PV),
+        live=True,
+        events=_weather(start, duration_s, seed),
+        checks=Checks(checks),
+    )
+
+
+def _gast_evcs() -> Scenario:
+    """Ein Gast mit 3 Phasen steht an der EVCS, der e-Golf ist weg: Tessie schließt den Tesla aus,
+    Home Assistant den e-Golf, und die Erkennung findet den Gast (Plan 2c-2b, Präzisierung 4). Die
+    EVCS lädt ihn im Modus des Gastes (Plan 2c-2b, Präzisierung 6): Abends ohne PV lüde er in
+    PV-Überschuss nicht; mit 16 A am Ende lädt er in Sofort."""
+    start, duration_s, seed = EVENING, 30 * MINUTE_S, 21
+    return Scenario(
+        name="gast-evcs",
+        title="Gast an der EVCS, e-Golf weg",
+        start=start,
+        duration_s=duration_s,
+        seed=seed,
+        setup=partial(
+            _setup,
+            soc_pct=60.0,
+            tesla=None,
+            egolf=None,
+            guest=EVCS_BOX,
+            guest_phases=3,
+            away=frozenset({EGOLF}),
+        ),
+        intent=_intent(guest_mode=ChargeMode.NOW),
+        live=True,
+        events=_weather(start, duration_s, seed),
+        checks=Checks(
+            (_occupied_from(EVCS_BOX, GUEST, 3 * MINUTE_S), _charges_with(GUEST_CAR, 16.0))
+        ),
+    )
+
+
 SCENARIOS: Final[dict[str, Scenario]] = {
     scenario.name: scenario
     for scenario in (
@@ -1528,5 +1695,8 @@ SCENARIOS: Final[dict[str, Scenario]] = {
         _dess_an(),
         _spitze_15min(),
         _schieflast_pv(),
+        _tesla_evcs(),
+        _egolf_twc(),
+        _gast_evcs(),
     )
 }
