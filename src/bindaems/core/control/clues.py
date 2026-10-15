@@ -17,6 +17,12 @@ Tessie fragt ein abgestecktes Auto nur alle 600 s ab und erfährt vom Anstecken 
 des Vorgangs nur mit Werten, die mindestens ``TESSIE_SETTLE_S`` danach abgefragt wurden. Die
 zeitliche Korrelation misst dagegen gerade das Intervall zwischen zwei Meldungen von Tessie.
 
+Stromvergleich und zeitliche Korrelation sagen nichts über ein Fahrzeug, das Tessie nicht zu Hause
+sieht (``at_home`` falsch; unbekannt zählt nicht als woanders): Es steht an keiner Wallbox der
+Anlage, und Tessie schließt es dort ohnehin aus. Lädt ein Auto an einer fremden Säule mit demselben
+Strom wie ein Gast bei uns, stützten es sonst Strom und Phasen an der Wallbox des Gastes, während
+Tessie es ausschließt: ein falscher Widerspruch.
+
 Die 60 s von Stromvergleich und Phasen-Signatur laufen auf der Uhr der Safety-Schicht, die
 Zeitstempel von Tessie und die Beginne der Vorgänge auf der Wanduhr (Präzisierung 10). Die Schicht
 ist rein: Die Zeit kommt als Argument.
@@ -47,7 +53,8 @@ _PHASE_COUNTS: Final = tuple(range(1, len(PHASES) + 1))  # auf so vielen Phasen 
 class Clue(StrEnum):
     """Welches Indiz es ist, in der Reihenfolge der Tabelle von Design 7.2.
 
-    Der Wert ist sein Name im Health.
+    Der Wert ist sein Name im Health. ``CURRENT`` und ``TIMING`` gibt es nicht für ein Fahrzeug, das
+    Tessie nicht zu Hause sieht.
     """
 
     TESSIE = "tessie"  # Tessie sieht das Fahrzeug zu Hause und angesteckt, oder sicher nicht
@@ -166,10 +173,12 @@ class ClueTracker:
 
         1. Die Beginne der Vorgänge merken und das Fenster jedes Fahrzeugs mit Tessie fortführen.
         2. Die Zeiten von Stromvergleich und Phasen-Signatur fortführen. Fehlt die Bedingung einen
-           Zyklus lang oder ändert sich ihr Wert, beginnen sie neu; ohne Vorgang gilt keine.
+           Zyklus lang oder ändert sich ihr Wert, beginnen sie neu; ohne Vorgang gilt keine. Für
+           ein Fahrzeug, das Tessie nicht zu Hause sieht, gilt kein Stromvergleich.
         3. Je Wallbox mit Vorgang und je Fahrzeug die Indizien nennen, die etwas sagen: die
            Wallboxen und Fahrzeuge in der Reihenfolge von ``config.yaml``, je Paar die Indizien in
-           der von ``Clue``.
+           der von ``Clue``. Die zeitliche Korrelation sagt für ein Fahrzeug, das Tessie nicht zu
+           Hause sieht, nichts.
         """
         self._remember_starts(wall_now, sessions)
         for key, window in self._windows.items():
@@ -193,7 +202,7 @@ class ClueTracker:
                 verdicts = (
                     (Clue.TESSIE, home_and_plugged(tessie) if counts else None),
                     (Clue.CURRENT, self._current_verdict(now, wallbox_key, vehicle_key)),
-                    (Clue.TIMING, self._timing_verdict(wallbox_key, vehicle_key, start)),
+                    (Clue.TIMING, self._timing_verdict(wallbox_key, vehicle_key, start, tessie)),
                     (Clue.PHASES, self._phases_verdict(now, wallbox_key, vehicle.phases)),
                     (Clue.HOME, homes.get(vehicle_key)),
                     (Clue.ELSEWHERE, True if elsewhere else None),
@@ -231,7 +240,8 @@ class ClueTracker:
         """Führt die Zeiten von Stromvergleich und Phasen-Signatur fort (Präzisierung 2).
 
         Eine Zeit läuft, solange ihre Bedingung gilt, und nur an einer Wallbox mit Vorgang. Der
-        Stromvergleich zählt Tessies Werte nur, wenn sie für den Vorgang gelten (``_settled``).
+        Stromvergleich zählt Tessies Werte nur, wenn sie für den Vorgang gelten (``_settled``), und
+        nicht für ein Auto, das Tessie nicht zu Hause sieht (``_currents_fit``).
         """
         for wallbox_key in self._cfg.wallboxes:
             running = wallbox_key in sessions
@@ -275,18 +285,19 @@ class ClueTracker:
         return None
 
     def _timing_verdict(
-        self, wallbox_key: str, vehicle_key: str, start: datetime | None
+        self, wallbox_key: str, vehicle_key: str, start: datetime | None, tessie: VehicleObs
     ) -> bool | None:
         """Zeitliche Korrelation: ``True``, wenn der Vorgang als einziger im Fenster begann.
 
         Das Fenster kommt von Tessie (``_Window.bounds``). Ohne beide Grenzen, ohne bekannten Beginn
         des Vorgangs oder mit einem Beginn außerhalb des Fensters gibt es kein Indiz, ebenso wenn in
         derselben Zeit ein Vorgang an einer anderen Wallbox begann, auch ein schon beendeter. Sie
-        schließt nie aus.
+        schließt nie aus. Sieht Tessie das Auto nicht zu Hause, gibt es sie nicht; ist der Ort
+        unbekannt, gilt sie wie sonst.
         """
         window = self._windows.get(vehicle_key)
         bounds = window.bounds() if window is not None else None
-        if start is None or bounds is None:
+        if start is None or bounds is None or tessie.at_home is False:
             return None
         first, last = bounds
         if not first <= start <= last:
@@ -337,9 +348,14 @@ def _currents_fit(wallbox: WallboxObs, tessie: VehicleObs) -> bool | None:
     bekannt ist: Tessie meldet „Charging“ schon, bevor Strom fließt. Die Ströme passen, wenn die
     Wallbox auf genau so vielen Phasen wie das Auto mindestens ``PHASE_ON_A`` misst und jeder dieser
     Ströme höchstens ``MATCH_A`` vom Strom des Autos abweicht.
+
+    Auch ``None``, wenn Tessie das Auto nicht zu Hause sieht: Es lädt woanders, und sein Strom sagt
+    nichts über unsere Wallbox. Ist der Ort unbekannt, gilt der Vergleich wie sonst.
     """
     live, amps = _live_currents(wallbox), tessie.actual_current_a
     if live is None or tessie.charging is not True or tessie.phases is None:
+        return None
+    if tessie.at_home is False:
         return None
     if amps is None or amps < PHASE_ON_A:
         return None

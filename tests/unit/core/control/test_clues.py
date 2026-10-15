@@ -371,6 +371,43 @@ def test_current_comparison_starts_again_when_the_result_changes(cfg) -> None:
 
 
 @pytest.mark.parametrize(
+    ("at_home", "amps", "expected"),
+    [
+        pytest.param(True, 16.0, {ev("evcs", "tesla", Clue.CURRENT)}, id="zu Hause, passt"),
+        pytest.param(None, 16.0, {ev("evcs", "tesla", Clue.CURRENT)}, id="Ort unbekannt, passt"),
+        pytest.param(
+            True, 10.0, {ev("evcs", "tesla", Clue.CURRENT, False)}, id="zu Hause, passt nicht"
+        ),
+        pytest.param(False, 16.0, set(), id="woanders, passt"),
+        pytest.param(False, 10.0, set(), id="woanders, passt nicht"),
+    ],
+)
+def test_current_comparison_says_nothing_about_a_tesla_that_is_away(
+    cfg, at_home, amps, expected
+) -> None:
+    # ein Tesla an einer öffentlichen Säule lädt mit 16 A auf drei Phasen wie der Gast bei uns
+    tracker, car = ClueTracker(cfg), charging_tesla(amps, at_home=at_home)
+    seen: set[Evidence] = set()
+    for s in range(121):
+        seen |= of(clues(tracker, s, evcs_obs=AT_16, tesla_obs=car), Clue.CURRENT)
+    assert seen == expected
+
+
+def test_current_comparison_starts_again_when_the_tesla_comes_home(cfg) -> None:
+    tracker = ClueTracker(cfg)
+    for s in range(100):  # woanders gilt der Vergleich nicht, auch nach 60 s nicht
+        clues(tracker, s, evcs_obs=AT_16, tesla_obs=charging_tesla(16.0, at_home=False))
+    home = charging_tesla(16.0)
+    assert all(
+        of(clues(tracker, s, evcs_obs=AT_16, tesla_obs=home), Clue.CURRENT) == set()
+        for s in range(100, 160)
+    )
+    assert of(clues(tracker, 160, evcs_obs=AT_16, tesla_obs=home), Clue.CURRENT) == {
+        ev("evcs", "tesla", Clue.CURRENT)
+    }
+
+
+@pytest.mark.parametrize(
     "wallbox",
     [
         pytest.param(evcs(charging=False, phase_a=TWO), id="lädt nicht"),
@@ -435,6 +472,23 @@ def test_timing_needs_a_known_start(cfg) -> None:
     unplugged(tracker)
     found = clues(tracker, 600, sessions=AT_EVCS, tesla_obs=tesla(plugged=True, plugged_at=at(600)))
     assert of(found, Clue.TIMING) == set()
+
+
+@pytest.mark.parametrize(
+    ("at_home", "supports"),
+    [
+        pytest.param(True, True, id="zu Hause"),
+        pytest.param(None, True, id="Ort unbekannt"),
+        pytest.param(False, False, id="woanders"),
+    ],
+)
+def test_timing_says_nothing_about_a_tesla_that_is_away(cfg, at_home, supports) -> None:
+    tracker = ClueTracker(cfg)
+    unplugged(tracker)
+    # das Fenster von Tessie reicht über den Beginn des Vorgangs
+    car = tesla(plugged=True, at_home=at_home, plugged_at=at(600))
+    found = clues(tracker, 700, sessions={"evcs": at(100)}, tesla_obs=car)
+    assert (ev("evcs", "tesla", Clue.TIMING) in found) is supports
 
 
 def test_unknown_tessie_values_leave_the_window_alone(cfg) -> None:
