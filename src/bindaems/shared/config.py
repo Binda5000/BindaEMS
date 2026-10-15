@@ -358,8 +358,10 @@ class ControlConfig(_Model):
 
     - ``tesla_reserve_commands``: So viele Befehle je Stunde hält die Regelung für den Tesla frei.
       Ist das Budget (``vehicles.<v>.commands.per_hour``) bis auf diese Reserve verbraucht, ändert
-      sie seinen Strom nur noch, wenn der Phasenwächter es verlangt. Der Wert liegt unter
-      ``per_hour`` jedes Fahrzeugs mit Tessie.
+      sie seinen Strom nur noch, wenn ein Wächter es verlangt. Die Reserve hält Start, Stopp und Aus
+      nicht zurück; die Limits der Safety-Schicht (``per_hour``, ``start_stop_per_hour``) gelten
+      weiter, nur der Stopp in „Aus“ umgeht sie. Der Wert liegt unter ``per_hour`` jedes Fahrzeugs
+      mit Tessie.
     """
 
     import_margin_a: Annotated[float, Field(ge=0)] = 1.0

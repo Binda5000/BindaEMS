@@ -65,8 +65,9 @@ Dazu legt die Regelung fest:
 - Reserve im Stundenbudget des Tesla (Plan 2d, Präzisierung 9): Hat der Tesla am Wall Connector
   ``per_hour − control.tesla_reserve_commands`` Befehle in der Stunde, geht ein Strombefehl nur
   noch hinaus, wenn er den Strom senkt und der Ist-Strom über der Grenze des Wächters liegt, oder
-  wenn er dringend ist. Starts, Stopps und der Höchststrom an der EVCS sind davon frei. Ein
-  zurückgehaltener Strombefehl erscheint nicht im Log.
+  wenn er dringend ist. Ist der Ist-Strom unbekannt, hält die Reserve nichts zurück. Starts samt
+  ihrem Strom, Stopps und der Höchststrom an der EVCS sind davon frei. Ein zurückgehaltener
+  Strombefehl erscheint nicht im Log.
 - Ist der Ansteckzustand unbekannt, sinkt der Strom nur unter den Ist-Strom, wenn der Wächter es
   verlangt; „Laden aus“ kommt dann nur wegen Überlast.
 - Eine Wallbox ist höchstens ein Ladepunkt: Hängen nach der Zuordnung zwei Fahrzeuge an ihr, hat
@@ -312,9 +313,8 @@ class ChargeController:
         self._vehicle_wallbox: dict[str, str | None] = {}
         # Die Uhren des letzten ``step``: für das Weckkontingent in ``note_verdict`` und ``health``
         self._now = self._wall_now = started
-        self._commands_hour: Mapping[
-            str, int
-        ] = {}  # die Befehle der letzten Stunde im letzten step
+        # die Befehle der letzten Stunde im letzten ``step``
+        self._commands_hour: Mapping[str, int] = {}
 
     def step(self, inputs: ChargeInputs, peak: PeakLimits = NO_LIMITS) -> list[ChargeCommand]:
         """Ein Regelzyklus; die Befehle kommen in der Reihenfolge der Priorität.
@@ -865,7 +865,8 @@ class ChargeController:
         """Laden: der Strom, wenn er sich ändert; für einen Start danach ``charging=True``.
 
         ``held`` hält den Strombefehl zurück (Reserve des Stundenbudgets, ``_reserved``); er
-        erscheint dann nicht im Log, und der Start geht trotzdem hinaus.
+        erscheint dann nicht im Log. Gehört er zu einem Start, hält ihn die Reserve nicht zurück:
+        Der Strom geht vor dem Start hinaus.
 
         Ein Start (``charging=True`` ändert sich) folgt erst auf den Strom: Muss der gesendet
         werden und ist er blockiert, wartet der Start. ``start`` ist falsch bei Überlast und bei
@@ -875,10 +876,10 @@ class ChargeController:
         zusätzlich ``resume_after_outage``.
         """
         current, on = (actuator, _CURRENT), (actuator, _CHARGING)
-        send = self._changed(current, value) and not held
+        starting = start and self._changed(on, True)
+        send = self._changed(current, value) and not (held and not starting)
         if send and current in blocked:
             return []
-        starting = start and self._changed(on, True)
         if starting and resume:
             reasons = (*reasons, RESUME_AFTER_OUTAGE)
         found: list[Command] = []
@@ -903,8 +904,9 @@ class ChargeController:
         Nur beim Tesla am Wall Connector, dessen Aktor ``ChargeInputs.commands_hour`` nennt: Hat er
         ``per_hour − tesla_reserve_commands`` Befehle in der Stunde erreicht, geht ein Strombefehl
         nur noch hinaus, wenn er den Ist-Strom senkt und der Ist-Strom über der Grenze des Wächters
-        (``limit``) liegt. Ohne bekannten Ist-Strom bleibt er zurück. Starts, Stopps, der
-        Höchststrom an der EVCS und dringende Befehle prüft die Reserve nicht.
+        (``limit``) liegt. Ist der Ist-Strom unbekannt, hält die Reserve nichts zurück. Starts samt
+        ihrem Strom, Stopps, der Höchststrom an der EVCS und dringende Befehle prüft sie nicht
+        (``_charge`` nimmt den Strom eines Starts aus).
         """
         used = inputs.commands_hour.get(actuator)
         if point.evcs or used is None:
@@ -912,7 +914,9 @@ class ChargeController:
         per_hour = self._limits.vehicle_commands[actuator].per_hour
         if used < per_hour - self._cfg.control.tesla_reserve_commands:
             return False
-        return present_a is None or not (value < present_a and present_a > limit)
+        if present_a is None:
+            return False
+        return not (value < present_a and present_a > limit)
 
     def _switch_off(
         self, actuator: str, reasons: tuple[str, ...], blocked: frozenset[Key], *, urgent: bool

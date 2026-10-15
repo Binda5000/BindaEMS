@@ -1986,18 +1986,16 @@ def test_off_stop_passes_an_exhausted_hourly_budget(cfg, tmp_path) -> None:
 
 
 def test_reserve_holds_back_pv_current_changes(cfg) -> None:
-    surplus = dict(
-        TESLA_CHARGING,
-        tesla_obs=tesla(plugged=True, charging=True, actual_current_a=6.0),
-        grid_obs=grid(l1=-4.0, l2=-4.0, l3=-4.0, grid_w=-8000.0),
-    )
     present = {**AT_TESLA, ("vehicle.tesla", CURRENT): 6.0}
-    held = run(controller(cfg), cfg, 200, present=present, commands_hour=FULL_HOUR, **surplus)
+    kw = {
+        "tesla_obs": tesla(plugged=True, charging=True, actual_current_a=6.0),
+        "grid_obs": grid(l1=-4.0, l2=-4.0, l3=-4.0, grid_w=-8000.0),
+    }
+    settle = {"grid_obs": grid(grid_w=3000.0)}  # erst wenig Überschuss, dann viel
+    _, held = charging_tesla(cfg, present, settle=settle, commands_hour=FULL_HOUR, **kw)
     assert tesla_commands(held, CURRENT) == []
-    free = run(
-        controller(cfg), cfg, 200, present=present, commands_hour={"vehicle.tesla": 15}, **surplus
-    )
-    assert [c.value for c in tesla_commands(free, CURRENT)][:1] == [16.0]
+    _, free = charging_tesla(cfg, present, settle=settle, commands_hour={"vehicle.tesla": 15}, **kw)
+    assert tesla_commands(free, CURRENT) != []  # bei 15 Befehlen steigt der Strom
 
 
 def test_reserve_lets_guard_reductions_through(cfg) -> None:
@@ -2016,6 +2014,9 @@ def test_reserve_does_not_hold_starts_and_stops(cfg) -> None:
     )
     start = run(controller(cfg), cfg, 5, present=AT_TESLA, commands_hour=FULL_HOUR, **waiting)
     assert [c.value for c in tesla_commands(start, CHARGING)] == [True]
+    assert [c.value for c in tesla_commands(start, CURRENT)] == [
+        16.0
+    ]  # der Strom geht vor dem Start
     stop = run(
         controller(cfg),
         cfg,
@@ -2026,6 +2027,88 @@ def test_reserve_does_not_hold_starts_and_stops(cfg) -> None:
         **TESLA_CHARGING,
     )
     assert [c.value for c in tesla_commands(stop, CHARGING)] == [True, False]  # Start, dann Stopp
+
+
+def charging_tesla(cfg, present, *, settle=None, **kw):
+    """Ein Tesla, der lädt und seine Werte kennt (``step`` 0 mit ``settle``); danach ``step`` 1 bis
+    199 mit ``kw``."""
+    c = controller(cfg)
+    accept(c, c.step(inputs(cfg, present=present, **TESLA_CHARGING | (settle or {}))))
+    found = []
+    for s in range(1, 200):
+        commands = c.step(inputs(cfg, s=s, present=present, **TESLA_CHARGING | kw))
+        accept(c, commands)
+        found.extend((s, x) for x in commands)
+    return c, found
+
+
+def test_reserve_holds_back_a_reduction_that_no_guard_asks_for(cfg) -> None:
+    less = {
+        "grid_obs": grid(grid_w=3000.0)
+    }  # weniger Überschuss: der Wunsch sinkt, die Grenze nicht
+    c, free = charging_tesla(cfg, AT_TESLA, commands_hour={"vehicle.tesla": 0}, **less)
+    assert c.health()[0]["limit_a"] == 33.0
+    assert [x.value for x in tesla_commands(free, CURRENT)][:1] == [13.0]
+    _, held = charging_tesla(cfg, AT_TESLA, commands_hour=FULL_HOUR, **less)
+    assert tesla_commands(held, CURRENT) == []
+
+
+def test_reserve_lets_a_phase_limit_reduction_through(cfg) -> None:
+    now = Intent(version=1, control=True, vehicles={"tesla": NOW})
+    crowded = grid(l1=36.0, l2=36.0, l3=36.0)  # über der Sicherung: dringend, Grund phase_limit
+    found = run(
+        controller(cfg),
+        cfg,
+        3,
+        intent=now,
+        present=AT_TESLA,
+        grid_obs=crowded,
+        commands_hour=FULL_HOUR,
+        **TESLA_CHARGING,
+    )
+    [current] = tesla_commands(found, CURRENT)
+    assert (current.value, current.urgent, current.reasons) == (
+        13.0,
+        True,
+        ("mode_now", "phase_limit"),
+    )
+
+
+UNKNOWN_CURRENT = {k: v for k, v in AT_TESLA.items() if k != ("vehicle.tesla", CURRENT)}
+
+
+def test_reserve_does_not_hold_the_current_of_a_start(cfg) -> None:
+    now = Intent(version=1, control=True, vehicles={"tesla": NOW})
+    waiting = dict(
+        TESLA_CHARGING, tesla_obs=tesla(plugged=True, charging=False, actual_current_a=0.0)
+    )
+    found = run(
+        controller(cfg),
+        cfg,
+        3,
+        intent=now,
+        present={**UNKNOWN_CURRENT, ("vehicle.tesla", CHARGING): False},
+        grid_obs=grid(l1=41.0, l2=41.0, l3=41.0),  # der Wächter lässt 8 A
+        commands_hour=FULL_HOUR,
+        **waiting,
+    )
+    sent = [
+        (c.kind, c.value) for c in tesla_commands(found, CURRENT) + tesla_commands(found, CHARGING)
+    ]
+    assert sent == [(CURRENT, 8.0), (CHARGING, True)]  # der Strom vor dem Start
+
+
+def test_reserve_holds_nothing_back_while_the_current_is_unknown(cfg) -> None:
+    now = Intent(version=1, control=True, vehicles={"tesla": NOW})
+    crowded = grid(l1=41.0, l2=41.0, l3=41.0)
+    _, found = charging_tesla(
+        cfg, UNKNOWN_CURRENT, intent=now, grid_obs=crowded, commands_hour=FULL_HOUR
+    )
+    assert [x.value for x in tesla_commands(found, CURRENT)][:1] == [8.0]
+    _, free = charging_tesla(
+        cfg, UNKNOWN_CURRENT, intent=now, grid_obs=crowded, commands_hour={"vehicle.tesla": 0}
+    )
+    assert tesla_commands(found, CURRENT) == tesla_commands(free, CURRENT)
 
 
 def test_reserve_does_not_touch_the_evcs(cfg) -> None:
