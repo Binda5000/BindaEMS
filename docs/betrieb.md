@@ -1,11 +1,11 @@
 # Betrieb von BindaEMS
 
-Stand: Phase 2c-2a (Akku und Spitzen). Auf der VM laufen zwei Dienste. Der core **regelt** seit Plan
-2c-1 die beiden Ladepunkte (EVCS und Tesla) und seit Plan 2c-2a den Akku (Override an Victron) und
-die Spitzen (15-min-Wächter), **sendet aber nichts**, solange ihre Aktoren im Dry-Run sind: Er
+Stand: Phase 2c-2b (Zuordnungserkennung). Auf der VM laufen zwei Dienste. Der core **regelt** seit Plan
+2c-1 die beiden Ladepunkte (EVCS und Tesla), seit Plan 2c-2a den Akku (Override an Victron) und die
+Spitzen (15-min-Wächter) und **erkennt** seit Plan 2c-2b selbst, welches Auto an welcher Wallbox
+steht, auch ein Gast. Er **sendet aber nichts**, solange ihre Aktoren im Dry-Run sind: Er
 protokolliert dann nur, was er täte, und evcc regelt weiter (Abschnitte „Laderegelung“ und „Akku und
-Spitzen“ am Ende). Die volle Zuordnungserkennung folgt mit Plan 2c-2b, die Bedienung in UI und HA mit
-Plan 2d.
+Spitzen“ am Ende). Die Bedienung in UI und HA folgt mit Plan 2d.
 
 - `ems-core` liest Cerbo GX, EVCS, Wall Connector, Tessie und Home Assistant und schreibt
   Telemetrie nach InfluxDB. Er kennt Betriebszustände, Freigaben und Sperren (Abschnitt 13), hat
@@ -25,10 +25,10 @@ Plan 2d.
 Dazu kommt der **Watchdog** auf dem Cerbo, den du einmal installierst (Abschnitt 14). Er ist der
 Totmann-Schalter der Anlage und greift nur ein, wenn ein live geschalteter core ausfällt.
 
-Am Ende des Handbuchs stehen die Abschnitte „Laderegelung“ (Lademodi, Absicht, Dry-Run-Vergleich mit
-evcc, Umstieg, Hinweise für die Anlage), „Akku und Spitzen“ (Akku-Sollwert, 15-min-Wächter, Health,
-Victron in den Dry-Run und live, Alarme) und „Simulator“ (die Szenarien der CI von Hand laufen
-lassen).
+Am Ende des Handbuchs stehen die Abschnitte „Laderegelung“ (Lademodi, Absicht, Zuordnung Auto und
+Wallbox, Dry-Run-Vergleich mit evcc, Umstieg, Hinweise für die Anlage), „Akku und Spitzen“
+(Akku-Sollwert, 15-min-Wächter, Health, Victron in den Dry-Run und live, Alarme) und „Simulator“ (die
+Szenarien der CI von Hand laufen lassen).
 
 ## 1. Voraussetzungen der VM
 
@@ -159,7 +159,8 @@ GROUP BY time(1m), *
     `curl -H "Authorization: Bearer $BINDAEMS_INTERNAL_TOKEN" http://127.0.0.1:8081/v1/health`.
   - `/v1/health` nennt auch Betriebszustand mit Gründen, Aktoren (steuerbar, offene
     Schreibvorgänge, ob sie Werte des EMS halten), Watchdog, je Fahrzeug den Stand der
-    Laderegelung (`vehicles`, Abschnitt „Laderegelung“) sowie den Akku-Sollwert (`battery`) und den
+    Laderegelung (`vehicles`) und je Wallbox, wer dort steht (`wallboxes`; beide Abschnitt
+    „Laderegelung“, „Zuordnung Auto und Wallbox“) sowie den Akku-Sollwert (`battery`) und den
     15-min-Wächter (`peak`, Abschnitt „Akku und Spitzen“), `/v1/intent` die gültige Absicht und
     `/v1/decisions` das Entscheidungslog (Abschnitt 13).
 - **Lokaler Build:**
@@ -1344,8 +1345,9 @@ Phasenwächter bleibt auch ohne Importlimit sicher, denn er rechnet ohne die Hil
 Seit Plan 2c-1 regelt der core die beiden Ladepunkte selbst: die EVCS mit dem e-Golf und den Wall
 Connector mit dem Tesla. Er schreibt dabei nur Strom und „Laden an/aus“ der EVCS und des Tesla (den
 Tesla über Tessie). Der Akku und die Spitzen folgen im Abschnitt „Akku und Spitzen“ (seit Plan
-2c-2a). Jeder Befehl geht durch die Safety-Schicht (Abschnitt 13). **Solange ein Aktor im Dry-Run
-ist, sendet der core nichts** und protokolliert nur, was er täte. Live gehen EVCS und Tesla erst
+2c-2a). Welches Auto an welcher Wallbox steht, erkennt der core seit Plan 2c-2b selbst (unten,
+„Zuordnung Auto und Wallbox“). Jeder Befehl geht durch die Safety-Schicht (Abschnitt 13). **Solange
+ein Aktor im Dry-Run ist, sendet der core nichts** und protokolliert nur, was er täte. Live gehen EVCS und Tesla erst
 nach Plan 2d, gemeinsam und mit abgeschaltetem evcc (unten, „Umstieg von evcc“).
 
 ### Wann der core regelt
@@ -1489,18 +1491,19 @@ wieder im PV-Überschuss.
 | `vehicles.<Schlüssel>.wallbox` | Schlüssel einer Wallbox; übersteuert die Zuordnung (unten) | keine Übersteuerung |
 | `priority` | alle Fahrzeug-Schlüssel genau einmal, in der Reihenfolge der Zuteilung | Reihenfolge unter `vehicles` in `config.yaml` |
 | `surplus_priority` | `kind`: `cars_first`, `battery_first` oder `battery_until_soc` (dann mit `soc_pct`) | `battery_until_soc`, 30 % |
-| `guest.mode` | `pv`, `min_pv`, `now`, `off`: der Modus eines Gastes, eines Autos ohne Fahrzeug in `config.yaml`, an einer Wallbox ohne Fahrzeug (unten); kein Boost, keine Übersteuerung | `pv` |
+| `guest.mode` | `pv`, `min_pv`, `now`, `off`: der Modus eines Gastes, also eines Autos, das nicht in `config.yaml` steht (Abschnitt „Zuordnung Auto und Wallbox“); kein Boost, keine Übersteuerung | `pv` |
 
 - Die Schlüssel der Fahrzeuge und Wallboxen sind die aus `config.yaml` (im Beispiel `tesla`, `egolf`
   und `evcs`, `twc`).
 - `surplus_priority` sagt, wer den PV-Überschuss zuerst bekommt: `cars_first` die Autos (die
   Ladeleistung des Akkus zählt zum Überschuss), `battery_first` zuerst der Akku, `battery_until_soc`
   die Autos, sobald der Akku den SOC `soc_pct` erreicht hat.
-- `guest.mode` ist der Modus eines **Gastes**, also eines Autos, das nicht in `config.yaml` steht,
-  an einer Wallbox ohne zugeordnetes Fahrzeug. Boost und Übersteuerung der Wallbox gibt es für einen
-  Gast nicht; unter `vehicles` lehnt der core ihn als unbekanntes Fahrzeug ab (422). Bis Plan 2c-2b
-  zählt der Modus nur für den Akku-Sollwert (Abschnitt „Akku und Spitzen“): Die Laderegelung regelt
-  einen Gast noch nicht, und erkannt wird er erst mit der Zuordnungserkennung.
+- `guest.mode` ist der Modus eines **Gastes**, also eines Autos, das nicht in `config.yaml` steht.
+  Boost und Übersteuerung der Wallbox gibt es für einen Gast nicht; unter `vehicles` lehnt der core
+  ihn als unbekanntes Fahrzeug ab (422). Wer ein Gast ist, erkennt der core selbst. An einer EVCS
+  regelt er den Gast in diesem Modus, am Wall Connector zählt der Modus für den Akku-Sollwert
+  (Abschnitt „Zuordnung Auto und Wallbox“ und „Akku und Spitzen“). Die Auswahl in UI und HA folgt
+  mit Plan 2d; bis dahin setzt du den Modus hier.
 - **Version:** Sie muss über der gültigen liegen. Dieselbe Version mit gleichem Inhalt gilt als
   Wiederholung. Bis zu Plan 2d genügt eine kleine, steigende Zahl; die app nimmt später Millisekunden
   seit 1970, was größer bleibt.
@@ -1531,23 +1534,260 @@ Alle Aktoren bleiben im Dry-Run, und alle Fahrzeuge laden im PV-Überschuss, wie
 
 ### Zuordnung Auto und Wallbox
 
-- **Standard:** Jedes Fahrzeug hängt an seiner `default_wallbox` (Tesla am Wall Connector, e-Golf an
-  der EVCS).
-- **Unklar** wird die Zuordnung, wenn die Indizien 60 s lang widersprechen: Der Tesla meldet über
-  Tessie „zu Hause“ und „angesteckt“, der Wall Connector meldet kein Fahrzeug, die EVCS aber eines
-  (Bild „Tesla an der EVCS“). Dann pausieren die Tesla-Befehle, und die EVCS behält ihren Strom;
-  nur der Phasenwächter senkt ihn. Start und Stopp nach Modus entfallen. Der Hinweis steht in
-  `GET /v1/health` (`vehicles`, Feld `assignment`: `unclear`) und im Entscheidungslog (Grund
-  „Zuordnung unklar“). Unbekannte Werte widersprechen nie.
-- **Übersteuerung:** Steht der Tesla an der EVCS, setzt du `"wallbox": "evcs"` bei `tesla`. Das gilt
-  bis zum Abstecken und hebt „unklar“ sofort auf. Der core setzt den Tesla-Strom dann einmal auf
-  `vehicles.tesla.max_a` und regelt nur noch die EVCS. Der e-Golf hat dann keinen Ladepunkt.
+Seit Plan 2c-2b bestimmt der core selbst, wer an einer Wallbox steht. Das gilt für jede Wallbox, die
+ein Fahrzeug meldet (ein laufender Ansteckvorgang): Dort steht ein Fahrzeug aus `config.yaml` oder
+ein **Gast**, also ein Auto, das `config.yaml` nicht kennt. Ein Fahrzeug steht höchstens an einer
+Wallbox, und ohne Vorgang steht dort niemand. Boost, Übersteuerung und „geladen“ hängen wie bisher
+am Ansteckvorgang. Die Erkennung schreibt nichts auf die Geräte: Sie bestimmt nur, welches Auto die
+Regelung an welcher Wallbox sieht. Die Szenarien `zuordnung`, `tesla-evcs`, `egolf-twc` und
+`gast-evcs` spielen die typischen Bilder durch (Abschnitt „Simulator“).
+
+**Wer steht wo.** Je Zyklus, solange die Zuordnung nicht unklar ist, in dieser Reihenfolge:
+
+1. **Übersteuerung** (`override`): Ein Fahrzeug mit gültiger Übersteuerung steht an der Wallbox,
+   die du in der Absicht nennst (unten).
+2. **Erkannt** (`detected`): An jeder anderen Wallbox mit Vorgang steht das Fahrzeug oder der Gast,
+   den der core dort erkannt hat (siehe „Entscheidung“).
+3. **Angenommen** (`default`): An jeder übrigen Wallbox mit Vorgang steht ihr Standardfahrzeug, das
+   erste Fahrzeug in `config.yaml` mit dieser `default_wallbox` (Tesla am Wall Connector, e-Golf an
+   der EVCS), wenn es dort nicht ausgeschlossen ist und noch an keiner Wallbox steht. Sonst steht
+   dort ein **Gast, angenommen**. Das gilt, solange die Indizien für eine Erkennung nicht reichen.
+   Das Standardfahrzeug an seiner Standard-Wallbox regelt der core angenommen wie erkannt.
+4. **Sonst:** Ein Fahrzeug, das nirgends steht, hängt an seiner Standard-Wallbox, wenn dort kein
+   Vorgang läuft und keine Übersteuerung sie belegt (`default`; angesteckt ist es dort nicht).
+   Sonst hat es keine Wallbox.
+
+Widersprechen sich die Indizien, ist die Zuordnung **unklar** (`unclear`, siehe „Entscheidung“).
+
+**Indizien.** Der core wertet je Wallbox mit Vorgang und je Fahrzeug aus `config.yaml` sechs Indizien
+aus. Jedes zählt für sich: Es **stützt** das Fahrzeug an der Wallbox, **schließt es dort aus** oder
+sagt nichts. Unbekannte Werte (Tessie oder Home Assistant nicht erreichbar, `unknown`) sprechen für
+nichts und schließen nichts aus. Health nennt die Indizien je Wallbox (unten).
+
+- **Tessie** (`tessie`): Das Indiz stützt das Fahrzeug an jeder Wallbox mit Vorgang, wenn Tessie es
+  zu Hause und angesteckt meldet. Meldet Tessie sicher, dass es nicht angesteckt oder nicht zu Hause
+  ist, schließt es das Fahrzeug an jeder Wallbox aus.
+- **Stromvergleich** (`current`): Laden die Wallbox und das Auto laut Tessie (mindestens 1 A,
+  Phasenzahl bekannt), vergleicht der core die Ströme. Sie passen, wenn die Wallbox auf genau so
+  vielen Netzphasen mindestens 1 A misst, wie Tessie Phasen meldet, und jeder dieser Ströme höchstens
+  1 A vom Strom des Autos abweicht. Passen sie 60 s ohne Unterbrechung, stützt das Indiz das
+  Fahrzeug an dieser Wallbox; passen sie 60 s nicht, schließt es das Fahrzeug dort aus. Unter 1 A
+  lädt das Auto hier nicht: Tessie meldet „Charging“ schon, bevor Strom fließt.
+- **Zeitliche Korrelation** (`timing`): Das Fenster, in dem das Auto angesteckt wurde, reicht nach den
+  Zeitstempeln von Tessies Werten von der letzten Meldung „nicht angesteckt“ (60 s früher gezählt)
+  bis zur ersten Meldung „angesteckt“ danach. Begann der Vorgang der Wallbox in diesem Fenster und
+  in derselben Zeit an keiner anderen Wallbox ein Vorgang, stützt das Indiz das Fahrzeug an dieser
+  Wallbox. Es schließt nie aus.
+- **Phasen-Signatur** (`phases`): Lädt die Wallbox und misst sie 60 s ohne Unterbrechung auf
+  derselben Zahl n von Netzphasen mindestens 1 A, stützt das Indiz jedes Fahrzeug mit `phases: n` in
+  `config.yaml` und schließt jedes andere dort aus.
+- **Home Assistant** (`home`): Meldet `home_entity` des Fahrzeugs `home`, stützt das Indiz das
+  Fahrzeug an jeder Wallbox mit Vorgang. Jeder andere Zustand schließt es an jeder aus.
+- **Ausschluss** (`elsewhere`): Meldet Tessie das Fahrzeug zu Hause und angesteckt, und meldet jede
+  andere Wallbox sicher kein Fahrzeug, stützt das Indiz das Fahrzeug an dieser Wallbox: Es muss
+  irgendwo stecken.
+
+`tessie`, `current`, `timing` und `elsewhere` gibt es nur für ein Fahrzeug mit `tessie` in
+`config.yaml` (der Tesla), `home` nur für eines mit `home_entity`, die Phasen-Signatur für jedes.
+Fehlt eine Bedingung von Stromvergleich oder Phasen-Signatur einen Zyklus lang, beginnen ihre 60 s
+neu. Einen Gast stützt kein Indiz: Der core erkennt ihn daran, dass alle Fahrzeuge dort ausgeschlossen
+sind.
+
+- **Tessie meldet verspätet.** Tessie fragt ein abgestecktes Auto nur alle 600 s ab und erfährt vom
+  Anstecken mit Verzug: Ein Wert aus einer Abfrage vor oder kurz nach dem Beginn eines Vorgangs sagt
+  über diesen Vorgang nichts. Darum zählen `tessie`, `current` und `elsewhere` an einer Wallbox nur
+  mit Werten, die mindestens 60 s nach dem Beginn ihres Vorgangs abgefragt wurden (lief der Vorgang
+  schon beim Start des core, zählen sie immer). So bleibt der Tesla, der am Wall Connector ankommt,
+  dort „angenommen“ und geregelt wie bisher, bis Tessie ihn neu abgefragt hat. Ohne diese Regel
+  schlösse ihn sein letzter Wert „nicht angesteckt“ für bis zu 10 min aus, und er lüde als
+  angenommener Gast ungeregelt mit dem Höchststrom des Wall Connectors. Die zeitliche Korrelation
+  misst dagegen gerade das Intervall zwischen zwei Meldungen von Tessie.
+- **Auto nicht zu Hause.** Sieht Tessie ein Auto nicht zu Hause, gibt es für dieses Auto weder
+  `current` noch `timing`: Es lädt woanders, und `tessie` schließt es an jeder Wallbox ohnehin aus.
+  Auch `elsewhere` verlangt „zu Hause und angesteckt“, nicht schon „angesteckt“. Sonst stützten ein
+  Tesla an einer fremden Ladesäule und ein dreiphasiger Gast bei dir mit demselben Strom den Tesla an
+  deiner Wallbox, während Tessie ihn ausschlösse: ein falscher Widerspruch.
+
+**Entscheidung.** Je Wallbox mit Vorgang und je Fahrzeug:
+
+- **Kandidat** ist ein Fahrzeug an einer Wallbox mit mindestens 2 stützenden Indizien und keinem,
+  das es ausschließt.
+- **Erkannt** ist es dort, wenn es 60 s ohne Unterbrechung Kandidat ist und an keiner anderen
+  Wallbox Kandidat ist. Sind an einer Wallbox zwei Fahrzeuge erkannt, gilt keins, und die Wallbox
+  fällt auf „angenommen“ zurück.
+- **Ausgeschlossen** ist ein Fahrzeug an einer Wallbox, wenn ein Indiz es dort ausschließt oder es
+  laut Übersteuerung an einer anderen Wallbox steht. Ein **Gast** ist an einer Wallbox erkannt, wenn
+  dort jedes Fahrzeug aus `config.yaml` 60 s ohne Unterbrechung ausgeschlossen ist, etwa weil der
+  e-Golf laut Home Assistant nicht zu Hause und der Tesla laut Tessie nicht angesteckt ist oder
+  weil die Phasen-Signatur zu keinem Fahrzeug passt.
+- Die 60 s von „erkannt“ und „Gast“ beginnen neu, sobald ihre Bedingung einen Zyklus lang fehlt, und
+  enden mit dem Vorgang.
+- **Übersteuerung geht vor:** An der Wallbox einer Übersteuerung entscheidet die Erkennung nicht
+  (kein Fahrzeug, kein Gast), und das übersteuerte Fahrzeug ist an jeder anderen Wallbox
+  ausgeschlossen. Health zeigt die Indizien einer übersteuerten Wallbox trotzdem.
+- **Widerspruch** ist: Ein Fahrzeug ist an zwei Wallboxen Kandidat, oder es ist nirgends Kandidat und
+  hat an einer Wallbox 2 stützende Indizien und eins, das es ausschließt. Ein Fahrzeug, das an einer
+  Wallbox Kandidat ist und an der anderen 2 Stützen und einen Ausschluss hat, widerspricht sich
+  nicht: Tessie und die Phasen-Signatur stützen den Tesla an jeder Wallbox, an der ein Auto mit drei
+  Phasen lädt, und ein dreiphasiger Gast an der EVCS neben dem Tesla am Wall Connector machte die
+  Zuordnung sonst immer unklar, obwohl der Stromvergleich beide trennt.
+- **Unklar** wird die Zuordnung, wenn ein Widerspruch 60 s ohne Unterbrechung besteht, und wieder
+  klar nach 60 s ohne Widerspruch. Eine aktive Übersteuerung hebt „unklar“ sofort auf. Solange sie
+  unklar ist, gilt alles wie vor der Erkennung: Jedes Fahrzeug ohne Übersteuerung steht an seiner
+  Standard-Wallbox, sofern keine Übersteuerung sie belegt, und es steht kein Gast an einer Wallbox.
+  Dann pausieren die Tesla-Befehle, und die EVCS behält ihren Strom; nur der Phasenwächter senkt
+  ihn. Start und Stopp nach Modus entfallen. Der Hinweis steht in `GET /v1/health` und im
+  Entscheidungslog (Grund „Zuordnung unklar“).
+
+**Folgen für die Regelung.** Für einen Gast gilt das Gleiche, ob er erkannt ist oder „Gast,
+angenommen“:
+
+| Wer steht wo | Die Regelung |
+|---|---|
+| Tesla an der EVCS (erkannt oder übersteuert) | Mit jeder Ankunft an der EVCS bekommt der Tesla einmal `vehicles.tesla.max_a`, sobald er steuerbar und die EVCS geregelt ist; danach regelt die EVCS mit seinen Phasen und Grenzen in seinem Modus. Wechselt an derselben EVCS nur die Art (erkannt oder übersteuert), ist das keine Ankunft. |
+| e-Golf am Wall Connector | Dafür gibt es keinen Aktor: Der e-Golf ist Last für Phasenwächter und 15-min-Wächter, für den Akku-Sollwert zählt sein Modus. Der Tesla-Aktor bekommt keine Befehle. |
+| Gast an der EVCS | Die EVCS regelt wie für jedes Fahrzeug, im Modus `guest.mode`, mit `min_a` und `max_a` der EVCS und auf allen Phasen ihrer `phase_map`. In der Priorität steht der Gast hinter den Fahrzeugen; der 15-min-Wächter kann ihn drosseln. |
+| Gast am Wall Connector | Last wie der e-Golf dort; für den Akku-Sollwert zählt `guest.mode`. Fällt der Wall Connector aus, rechnet der Phasenwächter mit dessen `max_a` als Zuschlag. |
+
+**Grund `assignment_detected`.** Ab einer neuen Erkennung tragen die Befehle des Autos zuletzt den
+Grund `assignment_detected` („Zuordnung erkannt“), bis zum ersten Zyklus mit Befehlen für das Auto,
+der Höchststrom an den Tesla eingeschlossen. Neu erkannt ist ein Auto, das an seiner Wallbox erkannt
+ist, wenn dort im vorigen Zyklus ein anderes Auto oder keins stand; ein angenommenes Auto, das die
+Erkennung bestätigt, ist nicht neu erkannt. Ist das Auto vorher nicht mehr erkannt, entfällt der
+Grund. Ein zurückgestellter erster Befehl kommt ohne den Grund wieder, und war der Tesla bei der
+Erkennung nicht steuerbar, trägt sein späteres `max_a` ihn nicht. Im Entscheidungslog steht etwa:
+`Tesla Model 3 (Sofort, Zuordnung erkannt): Strom 16 A – gesendet und bestätigt.`
+
+**`home_entity` einrichten.** Home Assistant sagt dem core, ob ein Fahrzeug zu Hause ist (Indiz
+`home`). Das ist vor allem für den e-Golf nötig, den Tessie nicht kennt; Home Assistant liefert von
+ihm außer dem SOC nur „zu Hause“. Trage dazu in `config.yaml` beim Fahrzeug einen `device_tracker`
+ein; der Zustand `home` heißt zu Hause:
+
+```yaml
+vehicles:
+  egolf:
+    # ...
+    home_entity: device_tracker.egolf
+```
+
+- `home_entity` verlangt den Abschnitt `homeassistant` in `config.yaml`, sonst lehnt der core die
+  Konfiguration ab: `vehicles.egolf.home_entity verlangt einen homeassistant-Abschnitt`. Der core
+  liest Home Assistant mit `BINDAEMS_HA_TOKEN` aus der `.env`; ohne das Token bleibt der Wert
+  unbekannt.
+- Der core abonniert die Entität selbst und nur lesend (Signal `vehicle.<Schlüssel>.home_state`). Du
+  trägst sie nicht zusätzlich unter `homeassistant.entities` ein. Nach einer Änderung startest du den
+  core neu (Abschnitt 13, „Wartung“).
+- Jeder Zustand außer `home` (`not_home`, eine Zone) heißt nicht zu Hause. `unknown`, `unavailable`
+  und eine unterbrochene Verbindung zu Home Assistant heißen unbekannt: Das Indiz sagt dann nichts.
+  Home Assistant meldet jede Änderung, ein alter Wert gilt nicht als veraltet (anders als bei
+  Tessie, oben).
+- Der `device_tracker` sollte das Ankommen binnen einer Minute melden. **Meldet er es spät,** gilt
+  der e-Golf bis dahin als nicht zu Hause, also an der EVCS als ausgeschlossen: Dort steht ein
+  **Gast, angenommen**, und die EVCS lädt im Modus des Gastes (`guest.mode`, Standard
+  PV-Überschuss), nicht im Modus des e-Golf. Dasselbe gilt, solange ein Tracker zu Hause kurz
+  `not_home` meldet.
+
+**Gast.** Je Wallbox gibt es einen Gast, im Health `guest` mit dem Namen „Gast“; so steht ein Gast
+nie an zwei Wallboxen. Der Gast hat keinen Eintrag in `config.yaml` und keine Tessie-Werte.
+
+- **Modus:** Der Gast lädt im Modus `guest.mode` der Absicht, Standard PV-Überschuss; Boost und
+  Übersteuerung gibt es für ihn nicht. Du setzt den Modus per `PUT /v1/intent` (Zugang und Aufruf
+  wie oben); die Absicht ist vollständig, nimm also die übrigen Einträge mit. Die Auswahl in UI und
+  HA folgt mit Plan 2d.
+
+```json
+{
+  "version": 14,
+  "control": true,
+  "vehicles": {"tesla": {"mode": "min_pv"}, "egolf": {"mode": "pv"}},
+  "guest": {"mode": "now"}
+}
+```
+
+- **Wo:** An einer EVCS regelt der core den Gast wie jedes Fahrzeug (Tabelle oben). Am Wall
+  Connector kann er ihn nicht regeln: Dort ist der Gast Last, und `guest.mode` zählt nur für den
+  Akku-Sollwert.
+- **Grenze:** Ein Gast mit zwei Phasen sieht für den core aus wie der e-Golf, solange dieser laut
+  Home Assistant zu Hause ist: Die Phasen-Signatur schließt den e-Golf dann nicht aus.
+
+**Übersteuerung (wie bisher).** Steht ein Fahrzeug an einer anderen Wallbox, als der core
+annimmt, oder ist die Zuordnung unklar, setzt du `"wallbox"` bei dem Fahrzeug, etwa
+`"wallbox": "evcs"` bei `tesla`. Das gilt bis zum Abstecken, geht der Erkennung vor und hebt „unklar“
+sofort auf. Steht der Tesla so an der EVCS, setzt der core den Tesla-Strom einmal auf
+`vehicles.tesla.max_a` und regelt nur noch die EVCS. Der e-Golf hat dann keinen Ladepunkt.
 
 ```json
 {"version": 13, "control": true, "vehicles": {"tesla": {"mode": "now", "wallbox": "evcs"}}}
 ```
 
-- Die vollständige Erkennung mit Hypothesen und Zeitkorrelation (Spec 7.8) kommt mit Plan 2c-2b.
+**Health.** `GET /v1/health` (Zugang wie in Abschnitt 4, „Diagnose“) nennt in `wallboxes` je
+Wallbox, in der Reihenfolge von `config.yaml`, wer dort im letzten Zyklus stand und warum. Ein
+Ausschnitt aus dem Simulator (`zuordnung`, 190 s nach Beginn): Der Tesla steckt an einer Steckdose,
+an keiner Wallbox, und der e-Golf lädt an der EVCS auf zwei Phasen.
+
+```json
+{
+  "wallboxes": [
+    {
+      "id": "evcs",
+      "occupant": "egolf",
+      "name": "e-Golf",
+      "assignment": "unclear",
+      "indicators": [
+        {"vehicle": "tesla", "clue": "tessie", "supports": true},
+        {"vehicle": "tesla", "clue": "phases", "supports": false},
+        {"vehicle": "tesla", "clue": "elsewhere", "supports": true},
+        {"vehicle": "egolf", "clue": "phases", "supports": true},
+        {"vehicle": "egolf", "clue": "home", "supports": true}
+      ]
+    },
+    {
+      "id": "twc",
+      "occupant": null,
+      "name": null,
+      "assignment": null,
+      "indicators": []
+    }
+  ]
+}
+```
+
+Tessie und der Ausschluss stützen den Tesla an der EVCS, die Phasen-Signatur (zwei Phasen) schließt
+ihn dort aus: Er ist nirgends Kandidat und hat dort 2 Stützen und einen Ausschluss, das ist ein
+Widerspruch. Er dauerte 60 s ohne Unterbrechung, darum ist die Zuordnung unklar, und an der EVCS
+steht der e-Golf als Standardfahrzeug. Am Wall Connector läuft kein Vorgang.
+
+| Feld | Bedeutung |
+|---|---|
+| `wallboxes[].id` | der Schlüssel der Wallbox in `config.yaml` |
+| `wallboxes[].occupant` | der Schlüssel des Fahrzeugs in `config.yaml`, `guest` für einen Gast, `null` ohne Vorgang. Auch `null`, solange die Zuordnung unklar ist und an der Wallbox kein Fahrzeug aus `config.yaml` steht (`assignment` ist dann `unclear`). |
+| `wallboxes[].name` | der Name des Fahrzeugs (`name` in `config.yaml`), `Gast` oder `null` |
+| `wallboxes[].assignment` | `detected` (erkannt), `default` (angenommen), `override` oder `unclear`; `null` ohne Vorgang |
+| `wallboxes[].indicators` | die Indizien des letzten Zyklus an dieser Wallbox, je `vehicle` (Schlüssel aus `config.yaml`), `clue` (`tessie`, `current`, `timing`, `phases`, `home` oder `elsewhere`) und `supports` (`true`: stützt das Fahrzeug an der Wallbox, `false`: schließt es dort aus). Die Fahrzeuge stehen wie in `config.yaml`, je Fahrzeug die Indizien in der Reihenfolge von „Indizien“ oben. Stromvergleich und Phasen-Signatur erscheinen erst nach ihren 60 s. Leer ohne Vorgang. |
+| `vehicles[].assignment` | `detected`, `default`, `override` oder `unclear`; `null` vor dem ersten Zyklus und nach einer Pause der Regelung. `vehicles` nennt nur die Fahrzeuge aus `config.yaml`; einen Gast zeigt `wallboxes`. |
+
+Vor dem ersten Zyklus und nach einer Pause der Regelung (OBSERVE, Regelbetrieb aus, SAFE) sind
+`occupant`, `name` und `assignment` `null`, und `indicators` ist leer.
+
+**Inbetriebnahme.** Die Erkennung läuft im Dry-Run mit (Design 2c-2, 11.1, Punkt 3): Sie liest nur.
+Die Befehle, die aus ihr folgen (der Höchststrom an einen Tesla an der EVCS, die Regelung eines
+Gastes), stehen als Dry-Run-Entscheidungen im Log, mit dem Grund „Zuordnung erkannt“. Health zeigt,
+wer wo steht, solange der core regelt (Abschnitt „Wann der core regelt“: CONTROL oder DEGRADED und
+`"control": true` in der Absicht); sonst ruht die Regelung, und `wallboxes` zeigt niemanden. Prüfe in
+den ersten Tagen:
+
+1. **Steht an jeder Wallbox mit Auto das richtige?** (`wallboxes[].occupant`). Ein Fahrzeug an seiner
+   Standard-Wallbox zeigt „angenommen“, bis genug Indizien reichen: Der e-Golf braucht neben `home`
+   die Phasen-Signatur, also 60 s Laden und danach 60 s Kandidatur. Ein Auto, das nicht lädt, bleibt
+   „angenommen“, wenn keine zwei Indizien es stützen. Das ändert die Regelung nicht.
+2. **Bleibt „unklar“ aus?** Zeigt Health `unclear`, lies `indicators`: Welches Fahrzeug hat 2
+   stützende Indizien und eins, das es ausschließt? Bis die Ursache klar ist, hilft eine
+   Übersteuerung (oben).
+3. **Wie schnell meldet `home_entity` das Ankommen des e-Golf?** Steht nach dem Anstecken an der
+   EVCS zuerst ein Gast, meldet der Tracker zu spät (oben).
+4. **Tesla an der EVCS, e-Golf am Wall Connector, Gast:** Steckt eines davon an, prüfst du, ob Health
+   es erkennt. Rechne mit einigen Minuten: Die Erkennung braucht 60 s ohne Unterbrechung, und Tessie
+   meldet ein neu angestecktes Auto bis zu 10 min verspätet.
 
 ### Tesla
 
@@ -1643,6 +1883,7 @@ Ein Eintrag im Rohformat (hier aus dem Simulator):
 | `wake` | Wecken | Start mit Weckerlaubnis an ein schlafendes Auto. |
 | `not_taken_retry` | erneut nach „nicht übernommen“ | Der Tesla hat den Strom nicht übernommen; die Regelung fordert ihn erneut an. |
 | `assignment_unclear` | Zuordnung unklar | Die Zuordnung Auto–Wallbox ist unklar (oben). |
+| `assignment_detected` | Zuordnung erkannt | Der Befehl folgt aus einer neuen Erkennung: Der core hat ein Auto an seiner Wallbox erkannt, etwa den Höchststrom an den Tesla an der EVCS (oben). |
 | `resume_after_outage` | Wiederaufnahme nach Ausfall | Der erste Start nach einer Pause der Regelung (SAFE, Inselbetrieb, Regelbetrieb aus). |
 
 Nach den Gründen der Regelung stehen in `codes` die Befunde der Safety-Schicht (etwa
@@ -1660,7 +1901,8 @@ Nach den Gründen der Regelung stehen in `codes` die Befunde der Safety-Schicht 
 
 `null` heißt unbekannt. `GET /v1/health` zeigt je Fahrzeug (`vehicles`, in der Reihenfolge von
 `config.yaml`) Modus, Boost bis, Wallbox, Zuordnung, Grenze, angesteckt, lädt, Weckvorgänge heute
-und den letzten Grund.
+und den letzten Grund. Je Wallbox (`wallboxes`) zeigt es, wer dort steht, die Art der Zuordnung und
+die Indizien (oben, „Zuordnung Auto und Wallbox“).
 
 ### Umstieg von evcc
 
@@ -1741,7 +1983,11 @@ umzusetzen, je mit Befund und möglicher Abhilfe (ausführlicher in `docs/ueberg
   („geladen“), bliebe ein Auto in PV nach dem ersten Stopp stehen, bis es abgesteckt wird;
 - was Tessie für `charger_phases` meldet;
 - ob „unklar“ fälschlich erscheint, wenn der Tesla den Wall Connector verlässt, während der e-Golf
-  an der EVCS hängt (Tessie meldet `plugged` bis zu 60 s veraltet);
+  an der EVCS hängt (Tessie meldet `plugged` bis zu 60 s veraltet); die Indizien stehen in
+  `GET /v1/health` unter `wallboxes`;
+- ob die Zuordnung stimmt: wer laut `wallboxes` an jeder Wallbox steht, wann ein Tesla an der EVCS,
+  ein e-Golf am Wall Connector oder ein Gast erkannt wird und wie schnell `home_entity` das Ankommen
+  des e-Golf meldet (oben, „Zuordnung Auto und Wallbox“, „Inbetriebnahme“);
 - wie oft die EVCS ihren Strom ändert: Folgt sie bei ruhiger Sonne trotz der Hysterese noch dem
   Rauschen (deutlich mehr Strom-Entscheidungen an `wallbox.evcs` als im Simulator, etwa über 10 je
   Stunde), hebe `control.evcs_hysteresis_a` an (oben, „Lademodi“).
@@ -1798,10 +2044,12 @@ so weit er darf.
   Tessie, rechnet der core ihn aus dem Ist-Strom, den Phasen und der Nennspannung. Der **gewollte
   Netzbezug** ist die Summe über die Autos von Fehlbetrag minus erlaubtem Akku-Anteil, nie unter 0;
   die Hauslast deckt der Akku immer.
-- **Welche Autos zählen:** erst die Fahrzeuge mit Ladepunkt nach `priority`, dann jede Wallbox ohne
-  zugeordnetes Fahrzeug in der Reihenfolge von `config.yaml`. Es zählt der geltende Modus aus der
-  Absicht von BindaEMS (mit Boost), auch solange evcc die Ladepunkte regelt. Für eine Wallbox ohne
-  Fahrzeug gilt der Modus des **Gastes** (`guest.mode`, Abschnitt „Absicht per PUT /v1/intent“).
+- **Welche Autos zählen:** erst die Autos mit Ladepunkt nach `priority`, erst die Fahrzeuge, dahinter
+  die Gäste (Abschnitt „Zuordnung Auto und Wallbox“), dann jede Wallbox ohne Ladepunkt, an der
+  niemand steht, in der Reihenfolge von `config.yaml`. Es zählt der geltende Modus aus der Absicht
+  von BindaEMS (mit Boost), auch solange evcc die Ladepunkte regelt. Für einen Gast und für eine
+  Wallbox, an der niemand steht, gilt der Modus des **Gastes** (`guest.mode`, Abschnitt „Absicht per
+  PUT /v1/intent“).
 
 Den **erlaubten Akku-Anteil** bestimmt der Modus des Autos:
 
@@ -2407,8 +2655,8 @@ wieder im Dry-Run.
 | `spitze-15min` | 15-min-Ziel 8 kW, 75 min | 12.10.2026 ab 17:59, `control.peak_target_kw` 8, Akku 60 %, Tesla in Min+PV, e-Golf in Sofort, ab 18:45 in Boost bis zum Ende | Netzbezug der Viertelstunden ab 18:00, 18:15 und 18:30 je höchstens 2,02 kWh; vor 18:45 nennt eine Entscheidung „peak_guard“, ab 18:45 keine an `wallbox.evcs`; bei der ersten Drosselung des e-Golf in Sofort lädt kein Auto in PV-Überschuss oder Min+PV über Mindeststrom + 0,5 A (belegt im Simulator wenig, unten). |
 | `schieflast-pv` | PV mit schwerer Last auf L1, 1 h | 21.06.2026 ab 10:00, PV konstant 12 kW, Akku 60 %, nur der e-Golf, in PV; ab 10 min 5,5 kW mehr Last auf L1 | Eine Entscheidung an `wallbox.evcs` nennt „import_limit“: Das Importziel bindet den e-Golf zwischen Mindest- und Höchststrom. |
 | `tesla-evcs` | Tesla an der EVCS ohne Übersteuerung, 30 min | 12.10.2026 ab 18:00, keine PV, Akku 60 %, Tesla an der EVCS mit 10 A im Auto, in Sofort; e-Golf abgesteckt | Die Gesundheit zeigt den Tesla vor 3 min „erkannt“; genau eine Entscheidung „Strom 16 A“ an den Tesla (sein `max_a`); er lädt am Ende mit 16 A: Die EVCS regelt in seinem Modus. |
-| `egolf-twc` | e-Golf am Wall Connector, 30 min | Akku 60 %, e-Golf am Wall Connector, in PV; Tesla abgesteckt | Ab 4 min zeigt die Gesundheit am Wall Connector den e-Golf, erkannt; keine Entscheidung an `vehicle.tesla`; der e-Golf lädt am Ende mit 16 A, als Last, die die Regelung nicht steuert. |
-| `gast-evcs` | Gast an der EVCS, e-Golf weg, 30 min | Akku 60 %, Gast mit 3 Phasen an der EVCS, Modus des Gastes Sofort; e-Golf abgesteckt und laut Home Assistant weg; Tesla abgesteckt | Ab 3 min zeigt die Gesundheit an der EVCS den Gast (`guest`), erkannt; er lädt am Ende mit 16 A im Modus des Gastes. |
+| `egolf-twc` | e-Golf am Wall Connector, 30 min | 12.10.2026 ab 18:00, keine PV, Akku 60 %, e-Golf am Wall Connector, in PV; Tesla abgesteckt | Ab 4 min zeigt die Gesundheit am Wall Connector den e-Golf, erkannt; keine Entscheidung an `vehicle.tesla`; der e-Golf lädt am Ende mit 16 A, als Last, die die Regelung nicht steuert. |
+| `gast-evcs` | Gast an der EVCS, e-Golf weg, 30 min | 12.10.2026 ab 18:00, keine PV, Akku 60 %, Gast mit 3 Phasen an der EVCS, Modus des Gastes Sofort; e-Golf abgesteckt und laut Home Assistant weg; Tesla abgesteckt | Ab 3 min zeigt die Gesundheit an der EVCS den Gast (`guest`), erkannt; er lädt am Ende mit 16 A im Modus des Gastes. |
 
 Die Verteilung ist gierig nach Priorität (Abschnitt „Laderegelung“): Mit höchstens 10 kW PV laden die
 Autos in `sonnig` und `wolkig` nacheinander, darum steht der Tesla dort nahe an seinem Ladelimit.

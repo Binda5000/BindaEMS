@@ -8,9 +8,12 @@ die kleinen Nacharbeiten aus dem Gesamtreview dazugekommen; beides ist per Fast-
 (`47a09a7`, mit Zustimmung des Betreibers vom 14.10.2026). Das Design für 2c-2 hat der Betreiber am
 14.10.2026 freigegeben (`docs/superpowers/specs/2026-10-14-phase-2c2-akku-spitzen-design.md`).
 **Plan 2c-2a (Akku und Spitzen) ist umgesetzt, je Task und im Gesamtreview geprüft, und die
-Fix-Welle danach ist umgesetzt** (`docs/superpowers/plans/2026-10-14-phase-2c2a-akku-spitzen.md`). Er
-liegt auf dem Branch `ccr-9778345e-t3x44k`; die Integration nach `main` steht aus. Als Nächstes folgt
-Plan 2c-2b (Zuordnungserkennung, Design 2c-2, Abschnitt 7).
+Fix-Welle danach ist umgesetzt** (`docs/superpowers/plans/2026-10-14-phase-2c2a-akku-spitzen.md`).
+**Plan 2c-2b (Zuordnungserkennung) ist umgesetzt und je Task geprüft; der Gesamtreview steht aus**
+(`docs/superpowers/plans/2026-10-15-phase-2c2b-zuordnung.md`). Beide Pläne liegen auf dem Branch
+`ccr-9778345e-t3x44k`; die Integration nach `main` steht aus. Als Nächstes folgt Plan 2d (Bedienung
+in UI und HA), an der Anlage danach die Inbetriebnahme Punkt 3 (Design 2c-2, 11.1): Die Erkennung
+läuft im Dry-Run mit, und Health zeigt, wer wo steht.
 `main` ist seit dem 12.10.2026 auch der Standard-Branch auf GitHub.
 
 ## Kurzfassung
@@ -149,24 +152,57 @@ Plan 2c-2b (Zuordnungserkennung, Design 2c-2, Abschnitt 7).
     Nachrunde danach zwei Restpunkte der Drosselung (alles unter „Bewusst offen gelassen“).
   - **Entschieden und aufgeschoben:** Die Rulings und die aufgeschobenen Kleinigkeiten stehen unter
     „Bewusst offen gelassen“.
-  - **Noch nicht:** die volle Zuordnungserkennung (2c-2b), die Bedienung (2d) und die Planausführung
-    (Phase 3). Live ist weiterhin kein Aktor.
+  - **Noch nicht (Stand nach 2c-2a):** die volle Zuordnungserkennung (kam mit 2c-2b), die Bedienung
+    (2d) und die Planausführung (Phase 3). Live ist weiterhin kein Aktor.
+- **Phase 2c-2b (Zuordnungserkennung) ist umgesetzt und je Task geprüft** (Plan:
+  `docs/superpowers/plans/2026-10-15-phase-2c2b-zuordnung.md`, Design:
+  `docs/superpowers/specs/2026-10-14-phase-2c2-akku-spitzen-design.md`, Abschnitt 7, 9 Tasks;
+  Ausführung subagent-driven; der Gesamtreview steht aus):
+  - **Erkennung** (rein, in `core/control`): `clues.py` wertet je Wallbox mit Ansteckvorgang und je
+    Fahrzeug sechs Indizien aus (Tessie, Stromvergleich, zeitliche Korrelation, Phasen-Signatur, Home
+    Assistant, Ausschluss), `detection.py` entscheidet daraus (Kandidat, erkannt, Gast, Widerspruch,
+    je 60 s ohne Unterbrechung), `fleet.py` führt die Autos der Laderegelung (die Fahrzeuge und je
+    Wallbox ein Gast mit dem Schlüssel `guest@<Wallbox>`), und `assignment.py` sagt je Zyklus, wer wo
+    steht: Übersteuerung, erkannt, angenommen (auch „Gast, angenommen“) oder, nach einem Widerspruch
+    von 60 s, unklar.
+  - **Regelung:** Ein Fahrzeug mit Tessie, das an einer EVCS erkannt ist, regelt die Laderegelung wie
+    mit Übersteuerung (einmal `max_a`, dann regelt die EVCS in seinem Modus). Der e-Golf am Wall
+    Connector ist Last. Ein Gast an der EVCS wird im Modus `guest.mode` geregelt, am Wall Connector
+    ist er Last. Neuer Grund `assignment_detected` („Zuordnung erkannt“).
+  - **Eingaben und Health:** `vehicles.<name>.home_entity` (ein `device_tracker` in Home Assistant, den
+    der core selbst abonniert), die Zeitstempel der Tessie-Werte (`VehicleObs.plugged_at`) und der
+    Beginn jedes Ansteckvorgangs. `GET /v1/health` hat `wallboxes` (je Wallbox `id`, `occupant`,
+    `name`, `assignment` und `indicators`); `vehicles[].assignment` kennt `detected`.
+  - **Simulator:** Home Assistant (der e-Golf zu Hause oder weg), ein Gast ohne Tessie mit 1 bis 3
+    Phasen, ein Tesla, der woanders angesteckt ist, und jedes Auto an jeder Wallbox. Drei Szenarien
+    kamen dazu (`tesla-evcs`, `egolf-twc`, `gast-evcs`), `zuordnung` prüft einen echten Widerspruch;
+    alle 21 laufen grün in `tests/integration/test_sim_scenarios.py` (Betriebshandbuch,
+    „Simulator“). Keines scheiterte an Erkennung oder Regelung.
+  - **Beim Bau geändert:** Tessie-Werte zählen an einer Wallbox erst eine Minute nach dem Beginn des
+    Vorgangs, der Widerspruch ist enger gefasst als im Design (7.3), der Ausschluss verlangt „zu Hause
+    und angesteckt“, und Stromvergleich und zeitliche Korrelation sagen über ein Auto, das Tessie nicht
+    zu Hause sieht, nichts (Kopf des Designs 2c-2; Absatz „Stand Plan 2c-2b“ der Spec, 7.8). Die
+    Rulings und die offenen Punkte stehen unter „Bewusst offen gelassen“.
+  - **Noch nicht:** die Bedienung in UI und HA, auch die Auswahl des Gast-Modus (2d), und die
+    Planausführung (Phase 3). Live ist weiterhin kein Aktor.
 - **Images:** `ghcr.io/binda5000/bindaems-core:latest` und `ghcr.io/binda5000/bindaems-app:latest`.
   Sie sind öffentlich, und die CI setzt `latest` bei jedem Push auf `main`. core und app werden
   immer gemeinsam aus demselben Stand ausgerollt (gleiche Compose-Datei, gleiche Image-Tags): Die
   UI-Schemas sind streng, eine abweichende Version zeigt auf der System-Seite nur „Unerwartete
   Antwort vom Server“.
-- **Tests:** 5158 Python-Tests, davon 35 Property-Tests mit Hypothesis (6 für die Safety-Schicht,
-  6 für den Phasenwächter, 12 für den Akku-Sollwert, 6 für den 15-min-Wächter), und 233 UI-Tests;
-  Abdeckung 97 % insgesamt und 99 % für `core/safety`, `core/control` und `core/actuators`.
+- **Tests:** 5379 Python-Tests, davon 33 Property-Tests mit Hypothesis (6 für die Safety-Schicht,
+  6 für den Phasenwächter, 12 für den Akku-Sollwert, 6 für den 15-min-Wächter, 3 sonstige), und
+  233 UI-Tests; Abdeckung 97 % insgesamt und 99 % für `core/safety`, `core/control` und
+  `core/actuators` (Stand nach Plan 2c-2b).
   Geprüft wird mit ruff, mypy strict (auch für den Watchdog), import-linter (4 Verträge), pytest
   mit Abdeckungsgrenzen (≥ 75 % insgesamt, ≥ 90 % für `core/safety`, `core/control` und
   `core/actuators`), Vitest mit svelte-check, Prettier und ESLint; dazu E2E mit Playwright.
 - **Offen:**
-  - die Integration von Plan 2c-2a nach `main`
-  - Plan 2c-2b (Zuordnungserkennung) nach dem Design 2c-2, Abschnitt 7, schreiben, vom Betreiber
-    durchsehen lassen und umsetzen, danach Plan 2d (siehe „Nächster Schritt“)
-  - an der Anlage: Images ausrollen, Dry-Run neben evcc beginnen, der Rest von Teil 2
+  - der Gesamtreview von Plan 2c-2b und die Integration der Pläne 2c-2a und 2c-2b nach `main`
+  - Plan 2d (Bedienung in UI und HA) nach der Spec schreiben, vom Betreiber durchsehen lassen und
+    umsetzen (siehe „Nächster Schritt“)
+  - an der Anlage: Images ausrollen, Dry-Run neben evcc beginnen und dabei die Inbetriebnahme Punkt 3
+    (die Erkennung läuft im Dry-Run mit, Health zeigt, wer wo steht), der Rest von Teil 2
     (EVCS-Verbindungsabbruch, Victron 17.2-4), Victron in den Dry-Run und live (siehe „Offen an der
     Anlage“)
   - vor der Live-Schaltung von EVCS und Tesla (2d): die Liste „Vor der Live-Schaltung“ (siehe
@@ -196,6 +232,12 @@ Plan 2c-2b (Zuordnungserkennung, Design 2c-2, Abschnitt 7).
     gelassen“). Von den acht neuen Szenarien des Simulators scheiterten drei in der ersten Fassung; bei
     keinem lag der Fehler in der Regelung, und die drei wurden im Aufbau angepasst (Betriebshandbuch,
     „Simulator“). `spitze-15min` startet den Tesla seit der Nachrunde wieder wie geplant.
+  - Plan 2c-2b lief ebenso (subagent-driven): je Task ein Implementierer und ein Reviewer, ein Ledger
+    mit Rulings und aufgeschobenen Kleinigkeiten (ihr Inhalt steht unten unter „Bewusst offen
+    gelassen“). Der Review von Task 2 fand, dass der Ausschluss den Ort des Autos ignorierte; die
+    Fix-Runde (mit Test) hat das behoben, und die Rulings zu Stromvergleich und zeitlicher Korrelation
+    kamen danach dazu. In den drei neuen Szenarien und im umgebauten `zuordnung` lag kein Fehler in der
+    Erkennung oder Regelung.
   - Befunde werden nach ihrer Wirkung neu bewertet. Critical und Important kommen in einen
     Fix-Durchgang, jeder mit einem Test, der vorher scheitert. Minors werden gesammelt und auf
     Wunsch erledigt („bitte die kleinigkeiten erledigen“).
@@ -206,7 +248,8 @@ Plan 2c-2b (Zuordnungserkennung, Design 2c-2, Abschnitt 7).
   - Frage nach der Integration (merge, PR oder so lassen)
 - **Git:**
   - Arbeitsbranch ist der Branch, den die Sitzung vorgibt (Plan 2b und 2c-1: `ccr-e451cb4c-qeg1tm`,
-    EVCS-Hysterese: `ccr-9778345e-t3x44k`); der Standard-Branch auf GitHub ist `main`.
+    EVCS-Hysterese, Plan 2c-2a und 2c-2b: `ccr-9778345e-t3x44k`); der Standard-Branch auf GitHub ist
+    `main`.
   - Nach `main` nur mit Zustimmung; bisher per Fast-Forward-Merge, Tests auf `main`, dann Push.
   - Pull Requests nur auf ausdrücklichen Wunsch.
   - Commit-Nachrichten auf Deutsch im Stil `fix(ui): …`, mit den Attributionszeilen, die die
@@ -218,7 +261,7 @@ Plan 2c-2b (Zuordnungserkennung, Design 2c-2, Abschnitt 7).
 
 | Dokument | Inhalt |
 |---|---|
-| `docs/superpowers/specs/2026-10-08-bindaems-design.md` | Spec, verbindlich. Wichtig: 7 Regelung, 8 Sicherheit, 13 Web-UI, 14 Login, 17 Prüfprotokoll, 18 Phasenplan, 19 offene Punkte. Die Absätze „Stand Plan 2a/2b/2c-1/2c-2a“ gehen dem älteren Text davor vor |
+| `docs/superpowers/specs/2026-10-08-bindaems-design.md` | Spec, verbindlich. Wichtig: 7 Regelung, 8 Sicherheit, 13 Web-UI, 14 Login, 17 Prüfprotokoll, 18 Phasenplan, 19 offene Punkte. Die Absätze „Stand Plan 2a/2b/2c-1/2c-2a/2c-2b“ gehen dem älteren Text davor vor |
 | `docs/superpowers/plans/2026-10-08-phase-1a-fundament-datenerfassung.md` | Plan 1a (core) |
 | `docs/superpowers/plans/2026-10-09-phase-1b-app-backend.md` | Plan 1b (app) |
 | `docs/superpowers/plans/2026-10-09-phase-1c-web-ui.md` | Plan 1c (UI), mit Anhang A zu den API-Formen |
@@ -228,9 +271,10 @@ Plan 2c-2b (Zuordnungserkennung, Design 2c-2, Abschnitt 7).
 | `docs/superpowers/plans/2026-10-11-phase-2b-entscheidungen.md` | Entscheidungen, geparkte Befunde und aufgeschobene Kleinigkeiten aus der Umsetzung von Plan 2b |
 | `docs/superpowers/specs/2026-10-12-phase-2c1-laderegelung-design.md` | Design 2c-1 (Laderegelung), umgesetzt; der Kopf nennt, was sich beim Bau geändert hat |
 | `docs/superpowers/plans/2026-10-12-phase-2c1-laderegelung.md` | Plan 2c-1, 16 Tasks; Präzisierungen gegenüber dem Design, Texte, Szenarien des Simulators |
-| `docs/superpowers/specs/2026-10-14-phase-2c2-akku-spitzen-design.md` | Design 2c-2 (Akku-Sollwert, 15-min-Wächter, Zuordnungserkennung), Entscheidungen des Betreibers vom 14.10.2026; 2c-2a umgesetzt, Abschnitt 7 (Zuordnung) folgt mit Plan 2c-2b; der Kopf nennt, was sich beim Bau geändert hat |
+| `docs/superpowers/specs/2026-10-14-phase-2c2-akku-spitzen-design.md` | Design 2c-2 (Akku-Sollwert, 15-min-Wächter, Zuordnungserkennung), Entscheidungen des Betreibers vom 14.10.2026; 2c-2a und 2c-2b umgesetzt; der Kopf nennt, was sich beim Bau geändert hat |
 | `docs/superpowers/plans/2026-10-14-phase-2c2a-akku-spitzen.md` | Plan 2c-2a, 14 Tasks, umgesetzt: Umbau, Akku-Sollwert, 15-min-Wächter, Simulator; Präzisierungen gegenüber dem Design, Texte, Szenarien |
-| `docs/betrieb.md` | Betriebshandbuch: Installation, Proxy (6), HA (7), Tarif (8), Sicherung (9), Prüfprotokolle einschließlich Teil 2 (11), Web-UI (12), Betriebszustände, Freigaben, Übergabe und Entscheidungslog (13), Watchdog am Cerbo (14); am Ende „Laderegelung“ (Modi, Absicht, Dry-Run-Vergleich mit evcc, Umstieg), „Akku und Spitzen“ (Akku-Sollwert, 15-min-Wächter, Health, Victron in den Dry-Run und live, Alarme) und „Simulator“ |
+| `docs/superpowers/plans/2026-10-15-phase-2c2b-zuordnung.md` | Plan 2c-2b, 9 Tasks, umgesetzt: Zuordnungserkennung, Gast, Health je Wallbox, Simulator; Präzisierungen gegenüber dem Design, Texte, Szenarien |
+| `docs/betrieb.md` | Betriebshandbuch: Installation, Proxy (6), HA (7), Tarif (8), Sicherung (9), Prüfprotokolle einschließlich Teil 2 (11), Web-UI (12), Betriebszustände, Freigaben, Übergabe und Entscheidungslog (13), Watchdog am Cerbo (14); am Ende „Laderegelung“ (Modi, Absicht, Zuordnung Auto und Wallbox, Dry-Run-Vergleich mit evcc, Umstieg), „Akku und Spitzen“ (Akku-Sollwert, 15-min-Wächter, Health, Victron in den Dry-Run und live, Alarme) und „Simulator“ |
 | `cerbo-watchdog/README.md` | Watchdog: Zustände, Zeiten, D-Bus-Pfade, Installation und Probe |
 | `docs/verification/abnahme-phase-1.md` | Checkliste für die Abnahme der Phase 1 |
 | `docs/verification/README.md` | Prüfprotokoll Teil 1, Preise, Teil 2 (`verify_part2`) und Watchdog-Probe: Aufruf und Ergebnis |
@@ -255,13 +299,22 @@ Plan 2c-2b (Zuordnungserkennung, Design 2c-2, Abschnitt 7).
       - `phase_guard.py`: Phasenwächter (Ziele je Modus, Last, Verteilung, Überlast)
       - `surplus.py`: Überschuss und seine Verteilung auf die Autos
       - `charge_modes.py`: Lademodi mit Start-, Stopp- und Mindestzeiten
-      - `charge_inputs.py`: Eingaben aus Snapshot und abgeleiteten Größen
-      - `assignment.py`: Zuordnung, Ansteckvorgänge, Boost und Übersteuerung
+      - `charge_inputs.py`: Eingaben aus Snapshot und abgeleiteten Größen (seit 2c-2b auch `homes`
+        aus Home Assistant und `plugged_at`, die Wanduhr der Tessie-Abfrage)
+      - `assignment.py`: Zuordnung (wer steht wo, seit 2c-2b mit der Erkennung), Ansteckvorgänge, Boost
+        und Übersteuerung
       - `tesla_policy.py`, `charging_tesla.py`: gleitendes Mittel, Weckkontingent, Tesla-Besonderheiten
       - `charging.py`: der `ChargeController` verbindet die Bausteine je Zyklus
       - seit 2c-2a aus `charging.py` ausgelagert: `charge_points.py` (Ladepunkte und Verteilung),
         `charging_tesla.py` (Tesla-Teil), `last_values.py` (Merker der letzten eigenen Werte, die
         Lade- und Akku-Regelung teilen) und `timing.py` (`held_since`, `lasted`)
+    - Zuordnungserkennung in `control/` (seit 2c-2b, rein):
+      - `clues.py`: die sechs Indizien (`Clue`, `Evidence`, `ClueTracker`) und `home_and_plugged`
+      - `detection.py`: die Entscheidung (`Detector`, `Detection`): Kandidat, erkannt, Gast, Widerspruch
+      - `fleet.py`: die Autos der Laderegelung, die Fahrzeuge und je Wallbox ein Gast (`fleet`,
+        `guest_key`, `car_spec`)
+      - `home_signal` und `ha_entities` liegen in `shared/config.py`, denn Laufzeit, Regelung und
+        Simulator brauchen sie
     - Akku und Spitzen in `control/` (seit 2c-2a):
       - `regulation.py`: der Regelungs-Kern `Regulation`, die einzige Schnittstelle der Laufzeit zur
         Regelung (Reihenfolge im Zyklus: Spec 7.1, Stand Plan 2c-2a)
@@ -391,7 +444,8 @@ Demo-Zugänge: `admin`, `gast` (Lesen) und `sicher` (Admin mit TOTP, Geheimnis
 - **Gates für die Safety-Schicht:** `core/safety` und `core/control` dürfen nichts aus
   `core.actuators`, `core.adapters`, `core.api`, `core.runtime`, `core.telemetry`,
   `core.accounting` und `core.checks` importieren, auch nicht über Umwege (import-linter-Vertrag).
-  Das gilt auch für `battery.py`, `peak_guard.py` und `regulation.py`. `core/regulation_link.py` liegt
+  Das gilt auch für `battery.py`, `peak_guard.py`, `regulation.py`, `clues.py`, `detection.py` und
+  `fleet.py`. `core/regulation_link.py` liegt
   außerhalb von `core/control`; dort sind diese Importe erlaubt (es nutzt `core.accounting`).
   Der Vertrag prüft nur die Importe. Konvention, nicht geprüft: Zeit kommt als Argument, Dateien nur
   über `core.persistence.files`. Aktoren erreichen die Schicht nur über das Protokoll `Actuator`,
@@ -405,7 +459,10 @@ Demo-Zugänge: `admin`, `gast` (Lesen) und `sicher` (Admin mit TOTP, Geheimnis
   der Uhr der Safety-Schicht (`ChargeInputs.now`), `boost_until` und der Kalendertag des
   Weckkontingents (Wiener Zeit) nach der Wanduhr (`ChargeInputs.wall_now`). Der Akku-Sollwert
   (Überbrückung, Auffrischen) läuft ebenso auf der Uhr der Safety-Schicht, der 15-min-Wächter auf der
-  Wanduhr, wie die Viertelstunden der Abrechnung; Tests müssen beide Uhren angeben.
+  Wanduhr, wie die Viertelstunden der Abrechnung; Tests müssen beide Uhren angeben. Die Erkennung
+  (2c-2b) hält es wie „unklar“: Die 60 s der Indizien und der Entscheidung laufen auf der Uhr der
+  Safety-Schicht, die zeitliche Korrelation, der Beginn der Vorgänge und die Ausnahme für Tessie-Werte
+  auf der Wanduhr, denn von ihr kommen die Zeitstempel der Signale.
 - **Tests mit respx und Tessie (2b):** Eine Anfrage ohne passende Route fängt der Tesla-Aktor als
   Fehler ab, und respx zeichnet sie nicht auf. Wer prüft, dass nichts gesendet wird, braucht eine
   Catch-all-Route und zählt deren Aufrufe.
@@ -419,26 +476,37 @@ Demo-Zugänge: `admin`, `gast` (Lesen) und `sicher` (Admin mit TOTP, Geheimnis
   ihn um 1 A plus `control.evcs_hysteresis_a` (0,5 A) übersteigt. Ein Test, der eine Erhöhung an
   der EVCS erwartet, braucht also einen Anteil ab Sollwert + 1,5 A oder setzt die Hysterese auf 0
   (`with_control` in `tests/unit/core/control/test_charging.py`). Senkungen wirken sofort.
-- **Simulator (2c-1, 2c-2a):** Er nutzt die echten Aktoren und die Parser der Adapter. Ändert man deren
-  Zeiten, Texte oder Signale, ändern sich die Szenarien mit. Alle achtzehn Szenarien laufen in
+- **Tests der Erkennung (2c-2b):** Die Erkennung braucht 60 s ohne Unterbrechung, und die Phasen-Signatur
+  und der Stromvergleich brauchen vorher 60 s Laden: Ein Test, der „erkannt“ erwartet, läuft mehr als
+  120 s. Das Bild „Tesla an der EVCS“ (Tessie: zu Hause und angesteckt, Wall Connector ohne Fahrzeug,
+  EVCS mit Fahrzeug) ist ein echter Widerspruch nur, wenn die EVCS auf zwei Phasen lädt:
+  `CONTRADICTION` in `tests/unit/core/control/charge_helpers.py`, unklar ab `UNCLEAR_FROM_S` (120 s).
+  Ein e-Golf an einer EVCS, die auf drei Phasen lädt, ergibt widersprüchliche Eingaben (die
+  Phasen-Signatur schließt ihn aus). Tessie-Werte brauchen `plugged_at` (die Wanduhr der Abfrage), und
+  Home Assistant kommt über `homes`; ohne Angabe sagt es über kein Fahrzeug etwas.
+- **Simulator (2c-1, 2c-2a, 2c-2b):** Er nutzt die echten Aktoren und die Parser der Adapter. Ändert man deren
+  Zeiten, Texte oder Signale, ändern sich die Szenarien mit. Alle einundzwanzig Szenarien laufen in
   `tests/integration/test_sim_scenarios.py`, dazu eine Abwandlung von `spitze-15min` für den
-  Boost-Anteil des Wächters; je etwa 3 bis 13 s, zusammen rund 2 min (gemessen auf
+  Boost-Anteil des Wächters; je etwa 3 bis 13 s, zusammen rund 2,5 min (gemessen auf
   der Entwicklungsmaschine); der Job `python` der CI braucht damit 7 bis 11 min, der ganze Ablauf
   mit UI, E2E und Docker 9 bis 12 min (Läufe vom 14. und 15.10.2026). Die Szenarien sind
   deterministisch (feste Saat).
-- **Dokumentationstests (2c-1, 2c-2a):** `tests/unit/test_docs.py` prüft die JSON-Beispiele, die Tabellen
+- **Dokumentationstests (2c-1, 2c-2a, 2c-2b):** `tests/unit/test_docs.py` prüft die JSON-Beispiele, die Tabellen
   der Gründe und die Optionen und Szenarien des Simulators im Betriebshandbuch gegen den Code, im
   Abschnitt „Akku und Spitzen“ außerdem die dokumentierten Standardwerte (die Tabelle der Einstellungen
   gegen `ControlConfig`) und die Felder von Health (das Beispiel gegen `health()` von Akku-Sollwert und
-  Wächter). Ändert man die Absicht, einen Grund-Text, die Optionen von `bindaems.tools.sim`, einen
-  dokumentierten Standardwert oder die Felder von Health, schlägt er an, bis das Handbuch stimmt. Die
-  Werte der Beispiele prüft er nicht, die Zustände von Health nur gegen eine feste Liste im Test, und
-  eine neue Einstellung, die in seiner Liste `BATTERY_SETTINGS` fehlt, bemerkt er nicht.
+  Wächter). Seit 2c-2b prüft er auch den Ausschnitt von Health zu den Wallboxen (Felder und Werte gegen
+  `wallbox_health()`, `AssignmentKind` und `Clue`), dass das Handbuch jede Art der Zuordnung und jedes
+  Indiz nennt, und den Beispielsatz zu `assignment_detected` gegen `decision_text`. Ändert man die
+  Absicht, einen Grund-Text, die Optionen von `bindaems.tools.sim`, einen dokumentierten Standardwert
+  oder die Felder von Health, schlägt er an, bis das Handbuch stimmt. Die Werte der Beispiele prüft er
+  nicht, die Zustände von Health nur gegen eine feste Liste im Test, und eine neue Einstellung, die in
+  seiner Liste `BATTERY_SETTINGS` fehlt, bemerkt er nicht.
 
 ## Stand der Installation beim Betreiber
 
 - Docker auf einer VM im LAN des Betreibers, Images `latest` vom Stand nach Plan 2b (ausgerollt am
-  12.10.2026). Die Pläne 2c-1 und 2c-2a sind noch nicht ausgerollt.
+  12.10.2026). Die Pläne 2c-1, 2c-2a und 2c-2b sind noch nicht ausgerollt.
 - Reverse Proxy mit HTTPS sowie Tarif und OeMAG-Wert im UI: laut Betreiber eingerichtet
   (11.10.2026). Zum Proxy gehören laut Betriebshandbuch 6: Port 8080 erreicht nur der Proxy,
   `app.trusted_proxies` ist gesetzt, `cookie_secure` steht wieder auf `true`.
@@ -488,15 +556,19 @@ Demo-Zugänge: `admin`, `gast` (Lesen) und `sicher` (Admin mit TOTP, Geheimnis
   - Felder `value`, `unit_of_measurement_str`, `device_class_str`, `state_class_str`,
     `friendly_name_str`
   - Wichtig auch für die Lastprognose aus der HA-Historie.
-- **Offen an der Anlage, als Nächstes (nach Plan 2c-2a):**
+- **Offen an der Anlage, als Nächstes (nach Plan 2c-2b):**
   1. Die Images ausrollen: `docker compose pull && docker compose up -d` (Betriebshandbuch 4),
-     nachdem Plan 2c-2a auf `main` ist (die Pläne 2c-1 und 2c-2a rollen zusammen aus). Die neuen
-     Felder `grid.import_limit_a`, `control` (seit der Hysterese auch `control.evcs_hysteresis_a`, seit
-     2c-2a `support_soc_pct`, `support_hysteresis_pct`, `support_max_w`, `support_max_s`,
-     `setpoint_deadband_w`, `override_refresh_s`, `peak_target_kw` und `peak_margin_kw`) und
-     `vehicles.<name>.wake` haben Standardwerte; prüfe sie anhand von `deploy/config.example.yaml`.
-     Der Watchdog bleibt unverändert (1.1.0), und keines der neuen Felder verlangt eine neue
-     `config.ini`. Der 15-min-Wächter ruht ohne `control.peak_target_kw`.
+     nachdem die Pläne 2c-2a und 2c-2b auf `main` sind (die Pläne 2c-1, 2c-2a und 2c-2b rollen
+     zusammen aus). Die neuen Felder `grid.import_limit_a`, `control` (seit der Hysterese auch
+     `control.evcs_hysteresis_a`, seit 2c-2a `support_soc_pct`, `support_hysteresis_pct`,
+     `support_max_w`, `support_max_s`, `setpoint_deadband_w`, `override_refresh_s`, `peak_target_kw`
+     und `peak_margin_kw`), `vehicles.<name>.wake` und seit 2c-2b `vehicles.<name>.home_entity` haben
+     Standardwerte (`home_entity`: keiner); prüfe sie anhand von `deploy/config.example.yaml`. Für den
+     e-Golf trägst du `home_entity` mit dem `device_tracker` aus Home Assistant ein; das verlangt den
+     Abschnitt `homeassistant` in `config.yaml` und `BINDAEMS_HA_TOKEN` in der `.env`
+     (Betriebshandbuch, „Zuordnung Auto und Wallbox“). Der Watchdog bleibt unverändert (1.1.0), und
+     keines der neuen Felder verlangt eine neue `config.ini`. Der 15-min-Wächter ruht ohne
+     `control.peak_target_kw`.
   2. Den Dry-Run neben evcc beginnen: eine Absicht mit `"control": true` per `PUT /v1/intent`, alle
      Aktoren bleiben im Dry-Run (Betriebshandbuch, „Laderegelung“). Der core sendet dabei nichts
      auf die Geräte, und die Teil-2-Werkzeuge schreiben nicht mit: Sie schreiben nur, wenn du sie
@@ -511,9 +583,18 @@ Demo-Zugänge: `admin`, `gast` (Lesen) und `sicher` (Admin mit TOTP, Geheimnis
        „Laden aus“ (`StartStop` = 0) folgt (ist es 3, bliebe ein Auto in PV nach dem ersten Stopp
        auf „geladen“ stehen, bis es abgesteckt wird); was Tessie für `charger_phases` meldet; ob
        „unklar“ fälschlich erscheint, wenn der Tesla den Wall Connector verlässt, während der e-Golf
-       an der EVCS hängt (Tessie meldet `plugged` bis zu 60 s veraltet); wie oft die EVCS bei ruhiger
-       Sonne ihren Strom ändert (deutlich über 10 Entscheidungen je Stunde heißt: Das Rauschen an der
-       Anlage ist größer als die Hysterese, `control.evcs_hysteresis_a` anheben).
+       an der EVCS hängt (Tessie meldet `plugged` bis zu 60 s veraltet; die Indizien stehen in
+       Health unter `wallboxes`); wie oft die EVCS bei ruhiger Sonne ihren Strom ändert (deutlich über
+       10 Entscheidungen je Stunde heißt: Das Rauschen an der Anlage ist größer als die Hysterese,
+       `control.evcs_hysteresis_a` anheben).
+     - **Inbetriebnahme Punkt 3** (Design 2c-2, 11.1; Betriebshandbuch, „Zuordnung Auto und Wallbox“,
+       „Inbetriebnahme“): Die Erkennung läuft im Dry-Run mit, und `GET /v1/health` zeigt unter
+       `wallboxes`, wer wo steht (dafür muss der core regeln: Regelbetrieb an, sonst ruht die
+       Regelung). Prüfe, ob an jeder Wallbox mit Auto das richtige steht, ob „unklar“ ausbleibt, wie
+       schnell `home_entity` das Ankommen des e-Golf meldet (steht nach dem Anstecken zuerst ein
+       „Gast, angenommen“ an der EVCS, ist der Tracker zu spät) und ob ein Tesla an der EVCS, ein
+       e-Golf am Wall Connector und ein Gast erkannt werden (rechne mit einigen Minuten: 60 s
+       Kandidatur, und Tessie meldet ein neu angestecktes Auto bis zu 10 min verspätet).
   3. EVCS-Teil-2 „Verbindung unterbrochen“ und Victron 17.2-4 nachholen (17.2-4 ist Voraussetzung der
      Live-Schaltung von Victron, Punkt 4):
      - EVCS: den Schritt „Verbindung unterbrochen“ (Punkt `evcs` erneut, die Rückfrage mit `j`
@@ -565,7 +646,7 @@ Demo-Zugänge: `admin`, `gast` (Lesen) und `sicher` (Admin mit TOTP, Geheimnis
         300 s.
   - Teil 2 schreibt auf die Geräte: nicht während der 7 Tage der Abnahme Phase 1 und ihres
     24-h-Mitschnitts (`docs/verification/abnahme-phase-1.md`, 4.2 und 4.3).
-  - Danach: Plan 2c-2b, dann 2d.
+  - Danach: Plan 2d.
   - **Vor der Live-Schaltung von EVCS und Tesla (2d)** müssen diese Punkte entschieden oder
     umgesetzt sein (Gesamtreview von 2c-1; je Befund und mögliche Abhilfe, knapp auch im
     Betriebshandbuch, „Laderegelung“, „Hinweise für die Anlage“):
@@ -657,14 +738,15 @@ Demo-Zugänge: `admin`, `gast` (Lesen) und `sicher` (Admin mit TOTP, Geheimnis
      - **2c-2a Akku und Spitzen:** umgesetzt, je Task und im Gesamtreview geprüft, die Integration
        nach `main` steht aus (siehe Kurzfassung): Umbau, Befehle der Regelung an Victron
        (Akku-Unterstützung und Setpoint-Kompensation, Spec 7.6 und 7.7, Auffrischen des Overrides vor
-       seinem Timeout von 5 min), 15-min-Wächter (Spec 7.4), Simulator mit 18 Szenarien.
-     - **2c-2b Zuordnung:** die volle Zuordnungserkennung (Spec 7.8, Design 2c-2, Abschnitt 7) samt
-       Gastfahrzeug und `vehicles.<name>.home_entity`, der Grund `assignment_detected`, Health je
-       Wallbox und im Simulator der e-Golf „zu Hause“ oder „weg“, das Gastfahrzeug, jedes Auto an
-       jeder Wallbox und die Szenarien aus Design 10.3. Der Plan ist noch zu schreiben.
+       seinem Timeout von 5 min), 15-min-Wächter (Spec 7.4), Simulator mit 18 Szenarien (heute 21).
+     - **2c-2b Zuordnung:** umgesetzt und je Task geprüft, der Gesamtreview und die Integration
+       nach `main` stehen aus (siehe Kurzfassung): die volle Zuordnungserkennung (Spec 7.8, Design
+       2c-2, Abschnitt 7) samt Gastfahrzeug und `vehicles.<name>.home_entity`, der Grund
+       `assignment_detected`, Health je Wallbox und im Simulator der e-Golf „zu Hause“ oder „weg“,
+       das Gastfahrzeug, jedes Auto an jeder Wallbox und die Szenarien aus Design 10.3 (jetzt 21).
    - **2d Bedienung:** Absicht aus der app (Regelbetrieb, Live-Schalter mit Bestätigung, Lademodi,
-     Ziele, Boost, Zuordnung), Entscheidungslog in SQLite, UI-Seiten „Laden“ und „Entscheidungen“,
-     HA-Bedienelemente und Benachrichtigungen. Der Dry-Run beginnt schon nach 2c-1 per
+     Ziele, Boost, Zuordnung, Gast-Modus), Entscheidungslog in SQLite, UI-Seiten „Laden“ und
+     „Entscheidungen“, HA-Bedienelemente und Benachrichtigungen. Der Dry-Run beginnt schon nach 2c-1 per
      `PUT /v1/intent`; die Bedienung macht ihn bequemer.
 
    Die Abnahme der Phase 2 besteht aus 2 Wochen Dry-Run, der schon nach 2c-1 beginnt, während 2c-2
@@ -681,7 +763,7 @@ Demo-Zugänge: `admin`, `gast` (Lesen) und `sicher` (Admin mit TOTP, Geheimnis
      an der Anlage am 12.10.2026 bestätigt.
    - Geschrieben wird nie der Maximalstrom (5017).
 
-### Nächster Schritt: Integration, die Anlage und Plan 2c-2b
+### Nächster Schritt: Integration, die Anlage und Plan 2d
 
 1. Plan 2b ist auf `main`; Gesamtreview, Fix-Durchgang und Re-Review sind erledigt, die
    Entscheidungen stehen in `docs/superpowers/plans/2026-10-11-phase-2b-entscheidungen.md`. Plan
@@ -692,17 +774,17 @@ Demo-Zugänge: `admin`, `gast` (Lesen) und `sicher` (Admin mit TOTP, Geheimnis
    der Anlage“.
 2. An der Anlage die Schritte aus „Offen an der Anlage“.
 3. Plan 2c-2a ist umgesetzt und im Gesamtreview geprüft, die Fix-Welle danach ist umgesetzt
-   (`docs/superpowers/plans/2026-10-14-phase-2c2a-akku-spitzen.md`). Es folgt, mit Zustimmung des
-   Betreibers, die Integration nach `main`.
-4. **Plan 2c-2b** (Zuordnungserkennung) nach dem Design 2c-2
-   (`docs/superpowers/specs/2026-10-14-phase-2c2-akku-spitzen-design.md`, Abschnitte 7 und 10.3)
-   schreiben, vom Betreiber durchsehen lassen und umsetzen: `core/control/assignment.py` bekommt die
-   Erkennung („wer steht wo“ je Wallbox mit Indizien, Entscheidung, Gast, angenommen, unklar),
-   dazu `vehicles.<name>.home_entity`, der Grund `assignment_detected`, Health je Wallbox und im
-   Simulator der e-Golf „zu Hause“ oder „weg“, ein Gastfahrzeug und jedes Auto an jeder Wallbox. Das
-   Szenario `zuordnung` ändert sich bewusst (Tesla an der EVCS ist künftig erkannt statt unklar).
-   Von der Gast-Regel gibt es bisher nur die Absicht `guest.mode`. Die Hinweise unten sind im
-   Design eingearbeitet. Dann folgt Plan 2d.
+   (`docs/superpowers/plans/2026-10-14-phase-2c2a-akku-spitzen.md`). Plan 2c-2b ist umgesetzt und je
+   Task geprüft (`docs/superpowers/plans/2026-10-15-phase-2c2b-zuordnung.md`); sein Gesamtreview
+   steht aus. Es folgt, mit Zustimmung des Betreibers, die Integration beider Pläne nach `main`.
+4. **Plan 2d** (Bedienung in UI und HA) nach der Spec (5.3, 8.7, 12 und 13) schreiben, vom Betreiber
+   durchsehen lassen und umsetzen. Dazu gehören die Auswahl des Gast-Modus (`guest.mode`, bisher nur
+   per `PUT /v1/intent`; Plan 2c-2b, Präzisierung 1), die Anzeige von Health je Wallbox
+   (`wallboxes`: wer steht wo, Art, Indizien), die Übersteuerung der Zuordnung und die Tesla-Punkte
+   vor der Live-Schaltung (Liste „Vor der Live-Schaltung“). An der Anlage folgt die
+   **Inbetriebnahme Punkt 3** (Design 2c-2, 11.1): Die Erkennung läuft im Dry-Run mit, und Health
+   zeigt, wer wo steht. Sie braucht nicht 2d, nur die ausgerollten Images; die Schritte stehen unter
+   „Offen an der Anlage“.
    - **Hinweis für 2d:** Eine neue Version der Absicht bindet jedes Fahrzeug neu, das `boost_until`
      oder `wallbox` nennt. 2d darf deshalb einen abgelaufenen Boost, den es aus `GET /v1/intent`
      übernommen hat, nicht zurückschicken: In der nächsten Version fehlen `boost_until` und
@@ -710,8 +792,9 @@ Demo-Zugänge: `admin`, `gast` (Lesen) und `sicher` (Admin mit TOTP, Geheimnis
 
 ## Hinweise für die Pläne 2c-2 und 2d
 
-Aus den Reviews der Pläne 2a bis 2c-2a. Plan 2c-2a hat die Punkte zur Regelung umgesetzt, die Reste
-stehen dort. Die Pläne 2c-2b und 2d gibt es noch nicht; sie sollen die übrigen Punkte aufgreifen. Was
+Aus den Reviews der Pläne 2a bis 2c-2b. Plan 2c-2a hat die Punkte zur Regelung umgesetzt, Plan 2c-2b
+die zur Zuordnung; die Reste stehen dort. Plan 2d gibt es noch nicht; er soll die übrigen Punkte
+aufgreifen. Was
 Plan 2c-1 aus der früheren Liste erledigt hat (Freigabe erst ohne offenen Schreibvorgang, Aufräumen des
 Entscheidungslogs, Heartbeat-Zähler je Lauf, SAFE ohne Tesla, der nicht lädt, Auslösung des Watchdogs,
 Laden nach einem Inselbetrieb, Selbstprüfung des Multi-Modus), steht in der Kurzfassung.
@@ -772,7 +855,12 @@ Laden nach einem Inselbetrieb, Selbstprüfung des Multi-Modus), steht in der Kur
     für mehrere Fahrzeuge und eine Priorität, die nicht jedes Fahrzeug genau einmal nennt. Die app
     zeigt diese Sätze.
   - `GET /v1/health` nennt je Fahrzeug (`vehicles`) Modus, Boost bis, Wallbox, Zuordnung, Grenze,
-    angesteckt, lädt, Weckvorgänge heute und den letzten Grund; die UI-Seite „Laden“ kann sie nutzen.
+    angesteckt, lädt, Weckvorgänge heute und den letzten Grund, und seit 2c-2b je Wallbox
+    (`wallboxes`), wer dort steht, die Art der Zuordnung und die Indizien; die UI-Seite „Laden“ kann
+    sie nutzen. `occupant` ist auch während eines Vorgangs `null`, solange die Zuordnung unklar ist
+    und an der Wallbox kein Fahrzeug der Konfiguration steht.
+  - **Gast-Modus:** `guest.mode` setzt bisher nur `PUT /v1/intent`; die Auswahl in UI und HA gehört zu
+    2d (Plan 2c-2b, Präzisierung 1). Der Modus gilt für jeden Gast an jeder Wallbox.
   - Die Quittierung von Sperren (Spec 7.9) kommt hier; bisher lösen sie sich nur nach
     `safety.lock_release_s`.
   - Die app nimmt für die Version der Absicht Millisekunden seit 1970.
@@ -1074,3 +1162,96 @@ etwas):
   `test_runtime_regulation.py` holt Hilfen aus `test_runtime_charging.py` statt aus einem
   gemeinsamen Modul, und `test_control.py` pinnt die letzten beiden Felder von `Command` sowie
   `test_config.py` den genauen Leerraum der Beispielzeile `peak_target_kw`.
+
+Entschieden in Phase 2c-2b; die Rulings stehen im Plan (Präzisierungen), im Kopf des Designs 2c-2 und
+im Absatz „Stand Plan 2c-2b“ der Spec (7.8). Hier die Entscheidungen mit Kosten, falls sie falsch sind:
+
+- **Ausschluss (`elsewhere`):** Er stützt ein Fahrzeug nur, wenn Tessie es „zu Hause und angesteckt“
+  meldet, nicht schon bei „angesteckt“ (der Plan sagt „angesteckt“). Ein Auto, das woanders angesteckt
+  ist (an einer Ladesäule), steht nie an unserer Wallbox; wörtlich ergäbe der Tesla an einer Ladesäule
+  plus ein dreiphasiger Gast bei uns einen falschen Widerspruch (Tessie schließt aus, Ausschluss und
+  Phasen stützen). Falls falsch: Bei unbekanntem Ort fehlt dieses Indiz; Tessie liefert den Ort
+  praktisch immer.
+- **Stromvergleich und zeitliche Korrelation** geben kein Indiz für ein Auto, das Tessie als „nicht zu
+  Hause“ meldet (ein unbekannter Ort zählt nicht als „woanders“). Sonst ergäbe ein Tesla an einer
+  öffentlichen AC-Säule mit 16 A auf drei Phasen neben einem dreiphasigen Gast bei uns mit 16 A auf
+  drei Phasen einen falschen Widerspruch. Falls falsch: nichts Messbares; ein Auto unterwegs steht nie
+  an unserer Wallbox, und Tessie schließt es ohnehin aus.
+- **„Erkannt“:** Die 60 s zählen die Kandidatur an der Wallbox; „an keiner anderen Wallbox Kandidat“
+  gilt je Zyklus. Nach einem kurzen Konflikt ist ein Fahrzeug sofort erkannt, wenn seine 60 s an der
+  verbliebenen Wallbox schon liefen. Falls falsch: eine um bis zu 60 s frühere Erkennung nach einem
+  Konflikt; ein Konflikt über 60 s macht ohnehin „unklar“, das 60 s nachwirkt.
+- **Zwei erkannte Fahrzeuge an einer Wallbox:** Keins gilt als erkannt, und das ist kein Widerspruch
+  (der Plan: „gilt keins“). Falls falsch: Die Wallbox fiele auf „unklar“ statt auf „angenommen“.
+- **Boost-Bindung:** Ein Boost ohne Übersteuerung bindet an den Ansteckvorgang der Wallbox, an der das
+  Fahrzeug im vorigen Zyklus stand (erkannt, angenommen oder an seiner Standard-Wallbox mit laufendem
+  Vorgang), solange dieser Vorgang noch läuft; sonst wie bisher an die Standard-Wallbox (laufender
+  oder nächster Vorgang). Sonst wirkte ein Boost für den an der EVCS erkannten Tesla dort nicht und
+  spränge beim nächsten Vorgang am Wall Connector an. Falls falsch: Der Boost wirkt an der Wallbox, an
+  der die Zuordnung das Auto sieht; liegt sie falsch, wirkt er am falschen Auto bis zum Abstecken.
+  Die bekannte Grenze steht unten.
+- **Grund `assignment_detected`:** nur bis zum ersten Zyklus mit Befehlen für das Auto (Präzisierung 8
+  wörtlich). Ein zurückgestellter erster Befehl kommt ohne Grund wieder, und ist der Tesla bei der
+  Erkennung nicht steuerbar, trägt sein späteres `max_a` den Grund nicht. Falls falsch: ein fehlender
+  Grund an diesen späteren Befehlen im Log.
+- **Szenario `tesla-evcs`:** Es prüft „erkannt“ vor 3 min statt binnen 2 min. Die Regelung beginnt im
+  Simulator erst nach rund 60 s; Design 10.3 „binnen 2 min“ zählt ab Beginn der Regelung. Falls
+  falsch: eine um 60 s lockerere Prüfung.
+- **Prüfung `_all_charge_from`** („Ab 60 min laden beide Autos“, in `ausfaelle`) übergeht den Gast:
+  „beide Autos“ sind die zwei Fahrzeuge der Konfiguration. Falls falsch: eine Prüfung, die einen Gast
+  nie verlangt.
+- **Health je Wallbox:** `occupant` ist `null` ohne Vorgang und auch während eines Vorgangs, solange
+  die Zuordnung unklar ist und an der Wallbox kein Fahrzeug der Konfiguration steht (`assignment` ist
+  dann `unclear`). Wer `wallboxes` liest, muss `null` also auch bei einem Vorgang abfangen (Betriebshandbuch,
+  „Zuordnung Auto und Wallbox“).
+- **Prüfungen `_clear_from` und `_occupied_from`** des Simulators melden zusätzlich „Der Lauf endet vor
+  {from_s} s.“, wenn nach `from_s` keine Gesundheit mehr kommt (wie andere Prüfungen des Moduls; der
+  Satz fehlt in „Texte“). Falls falsch: ein zusätzlicher Befundsatz.
+
+Offene Punkte aus Plan 2c-2b (nicht umgesetzt):
+
+- **`tools/verify_part1.py`** (Prüfprotokoll 17.1-11) prüft nur `homeassistant.entities`, nicht
+  `home_entity`, denn der core ergänzt diese Zuordnung erst zur Laufzeit (`ha_entities`). Ob der core
+  den `device_tracker` liest, zeigt bis dahin Health: Läuft an einer Wallbox ein Vorgang und ist das
+  Fahrzeug zu Hause, steht dort das Indiz `home` unter `indicators`.
+- **Gast-Schlüssel:** Die Konfiguration verbietet keinen Fahrzeug-Schlüssel der Form `guest@<Wallbox>`;
+  er würde mit dem Schlüssel des Gastes (`fleet.guest_key`) kollidieren. Die Prüfung „ist ein Gast“
+  gibt es in vier Formen (`guest_wallbox`, `key not in cfg.vehicles`, `cfg.vehicles.get`,
+  `key in _tesla`); sie sind gleichwertig, solange kein Schlüssel so beginnt. Abhilfe: der Validator von
+  `Config` lehnt das Präfix ab.
+- **Boost für ein Fahrzeug, dessen Standard-Wallbox ein anderes erkanntes Fahrzeug belegt,** geht
+  verloren: Ein Boost für den e-Golf, während der erkannte Tesla die EVCS belegt, bindet an den Vorgang
+  des Tesla und endet mit ihm (wie in 2c-1 bei Übersteuerung). Nach dem Abstecken des Tesla braucht es
+  eine neue Version der Absicht.
+- **Spätes Ankommen:** Meldet `home_entity` das Ankommen des e-Golf spät, gilt er bis dahin als Gast
+  (angenommen) und lädt im Gast-Modus (`guest.mode`, Standard PV-Überschuss), nicht im Modus des e-Golf.
+  Das Betriebshandbuch nennt es; ob der Tracker an der Anlage schnell genug ist, zeigt die
+  Inbetriebnahme Punkt 3. Dasselbe gilt, solange ein Tracker zu Hause kurz `not_home` meldet.
+- **Gast mit zwei Phasen:** Er sieht für den core aus wie der e-Golf, solange dieser laut Home
+  Assistant zu Hause ist: Die Phasen-Signatur schließt den e-Golf dann nicht aus (im Modell geprüft:
+  Der e-Golf gilt als erkannt). Gäste mit einer oder drei Phasen und jeder Gast, während der e-Golf
+  weg ist, erkennt der core.
+
+Aufgeschobene Kleinigkeiten aus Plan 2c-2b (die inhaltlichen; sie sind klein, keine blockiert etwas):
+
+- **Konfiguration:** `home_entity` ersetzt einen gleichnamigen Eintrag in `homeassistant.entities` (das
+  Signal `vehicle.<name>.home_state`) still; kein Test pinnt den Vorrang.
+- **Tests der Erkennung:** Nicht gepinnt sind die Ausnahme für Home Assistant an einer Wallbox mit
+  bekanntem Beginn des Vorgangs (ohne Tessie-Werte) und die Phasen-Signatur mit einer Phase (n = 1);
+  der Uhrentest erkennt nur gemischte Nutzung der beiden Uhren, nicht einen konsequenten Tausch.
+  Es fehlen Controller-Tests dafür, dass ein neu erkannter Gast an seinen ersten EVCS-Befehlen
+  `assignment_detected` trägt und dass der Merker eines neu erkannten Autos ein `idle` übersteht.
+  `test_wallbox_health_is_empty_before_the_first_step_and_after_idle` prüft nicht, dass der Stand vor
+  `idle` nicht leer war.
+- **Docstrings und Doppelungen:** Der Docstring von `assignment.py` nennt die Boost-Regel ungenau („an
+  dem das Fahrzeug steht“ statt „im vorigen Aufruf stand, solange dieser Vorgang läuft“), und der von
+  `HealthReport` nennt nicht, dass `occupant` bei „unklar“ auch während eines Vorgangs `null` sein
+  kann. `_NOBODY` in `charging.py` wiederholt das Literal „ohne Vorgang“ aus `assignment.py`; ein
+  vom Detektor anderswo erkanntes, übersteuertes Fahrzeug überschriebe seinen Platz in
+  `_place_at_sessions` (heute unmöglich, der Detektor schließt es aus).
+- **Simulator:** `model.py` nimmt für den Gast `next(iter(cfg.wallboxes))` (ohne Wallbox ein Fehler),
+  überschriebe ein Fahrzeug mit dem Schlüssel `gast`, und ein unbekannter Schlüssel in `away` bleibt
+  ohne Wirkung. `runner.py` wiederholt für den Gast die Feldzuordnung der Fahrzeugschleife, und
+  `_clear_from` und `_occupied_from` in `scenarios.py` haben denselben Prolog („ab `from_s`
+  filtern, sonst endet der Lauf“) doppelt. `zuordnung` pinnt „der Tesla ist nie kurz erkannt“ nur über
+  den Test des Aufbaus.

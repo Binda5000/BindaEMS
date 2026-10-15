@@ -39,22 +39,58 @@ def _guide_section(heading: str) -> str:
 
 
 def test_json_examples_of_the_charging_section_are_valid() -> None:
-    # Die Beispiele sind eine Absicht für PUT /v1/intent und ein Eintrag von GET /v1/decisions: Die
-    # Modelle des core müssen sie lesen können, sonst führt das Handbuch in die Irre.
+    # Die Beispiele sind eine Absicht für PUT /v1/intent, ein Ausschnitt von GET /v1/health (die
+    # Wallboxen) und ein Eintrag von GET /v1/decisions: Die Modelle des core müssen sie lesen
+    # können, sonst führt das Handbuch in die Irre. Der Ausschnitt nennt genau die Felder und
+    # Werte, die der core meldet.
+    from datetime import UTC, datetime
+
+    from bindaems.core.control.assignment import AssignmentKind
+    from bindaems.core.control.charging import ChargeController
+    from bindaems.core.control.clues import Clue
+    from bindaems.core.safety.limits import HardLimits
+    from bindaems.shared.config import load_config
     from bindaems.shared.control import Intent
     from bindaems.shared.decisions import decision_from_json
 
+    cfg = load_config(Path("deploy/config.example.yaml"))
+    started = datetime(2026, 10, 12, tzinfo=UTC)
+    fields = set(
+        ChargeController(cfg, HardLimits.from_config(cfg), started=started).wallbox_health()[0]
+    )
     examples = re.findall(r"```json\n(.*?)\n```", _guide_section("Laderegelung"), re.DOTALL)
     data = [json.loads(example) for example in examples]
     assert [("version" in item) for item in data].count(True) >= 2
+    names = {key: vehicle.name for key, vehicle in cfg.vehicles.items()} | {"guest": "Gast"}
+    found: set[str] = set()
     for item in data:
         if "version" in item:
+            found.add("intent")
             Intent.model_validate(item)
+        elif "wallboxes" in item:
+            found.add("health")
+            assert set(item) == {"wallboxes"}
+            assert [wallbox["id"] for wallbox in item["wallboxes"]] == list(cfg.wallboxes)
+            for wallbox in item["wallboxes"]:
+                assert set(wallbox) == fields
+                assert wallbox["assignment"] in {kind.value for kind in AssignmentKind} | {None}
+                occupant = wallbox["occupant"]
+                assert occupant in {*cfg.vehicles, "guest", None}
+                assert wallbox["name"] == names.get(occupant)  # ohne Insassen ist es null
+                if occupant is None and wallbox["assignment"] is not None:
+                    assert wallbox["assignment"] == "unclear"  # im Vorgang steht sonst jemand
+                for indicator in wallbox["indicators"]:
+                    assert set(indicator) == {"vehicle", "clue", "supports"}
+                    assert indicator["vehicle"] in cfg.vehicles
+                    assert indicator["clue"] in {clue.value for clue in Clue}
+                    assert isinstance(indicator["supports"], bool)
         else:
+            found.add("decision")
             decision_from_json(item)
+    assert found == {"intent", "health", "decision"}
 
 
-# die Gründe der Laderegelung (Plan 2c-1, „Texte“)
+# die Gründe der Laderegelung (Plan 2c-1 und 2c-2b, „Texte“)
 CHARGING_REASONS = {
     "mode_pv",
     "mode_min_pv",
@@ -69,6 +105,7 @@ CHARGING_REASONS = {
     "wake",
     "not_taken_retry",
     "assignment_unclear",
+    "assignment_detected",
     "resume_after_outage",
 }
 
@@ -102,6 +139,48 @@ def test_reason_codes_in_the_guide_match_the_decision_log() -> None:
             "A", CommandKind.CURRENT, 8.0, DecisionResult.DRY_RUN, reasons=(code,)
         )
         assert f"({label})" in shown, code
+
+
+def test_operations_guide_describes_the_assignment() -> None:
+    section = _guide_section("Laderegelung")
+    for topic in (
+        "### Zuordnung Auto und Wallbox",
+        "home_entity",
+        '"wallboxes"',
+        "Gast, angenommen",
+        "guest",
+        "detected",
+    ):
+        assert topic in section, topic
+
+
+def test_assignment_kinds_and_clues_in_the_guide_match_the_code() -> None:
+    # Health nennt die Art der Zuordnung und die Indizien mit diesen Werten: Das Handbuch erklärt
+    # jeden.
+    from bindaems.core.control.assignment import AssignmentKind
+    from bindaems.core.control.clues import Clue
+
+    section = _guide_section("Laderegelung")
+    for name in (*(kind.value for kind in AssignmentKind), *(clue.value for clue in Clue)):
+        assert f"`{name}`" in section, name
+
+
+def test_the_detected_reason_example_matches_the_decision_log() -> None:
+    # Der Beispielsatz zu `assignment_detected` ist der, den das Entscheidungslog zeigt.
+    from bindaems.shared.control import CommandKind
+    from bindaems.shared.decisions import DecisionResult, decision_text
+
+    shown = decision_text(
+        "Tesla Model 3",
+        CommandKind.CURRENT,
+        16.0,
+        DecisionResult.OK,
+        reasons=("mode_now", "assignment_detected"),
+    )
+    assert (
+        shown == "Tesla Model 3 (Sofort, Zuordnung erkannt): Strom 16 A – gesendet und bestätigt."
+    )
+    assert shown in _guide_section("Laderegelung")
 
 
 # die Gründe des Akku-Sollwerts und des 15-min-Wächters (Plan 2c-2a, „Texte“)

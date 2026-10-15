@@ -1,11 +1,14 @@
 # Phase 2c-2 – Akku und Spitzen: Design
 
-**Stand: freigegeben am 14.10.2026; Plan 2c-2a umgesetzt (Abschnitte 1 bis 6, 8 bis 11), Abschnitt 7 folgt mit Plan 2c-2b**,
+**Stand: freigegeben am 14.10.2026; Plan 2c-2a umgesetzt (Abschnitte 1 bis 6, 8 bis 11), Plan 2c-2b umgesetzt (Abschnitt 7)**,
 im Brainstorming mit dem Betreiber abgestimmt (Abschnitt 2).
-Umgesetzt wird es in Plan 2c-2a (`docs/superpowers/plans/2026-10-14-phase-2c2a-akku-spitzen.md`, fertig) und
-Plan 2c-2b. Plan 2c-2a präzisiert einige Punkte und weicht in mehreren ab: Ein Auffrischen geht
+Umgesetzt ist es in Plan 2c-2a (`docs/superpowers/plans/2026-10-14-phase-2c2a-akku-spitzen.md`, fertig) und
+Plan 2c-2b (`docs/superpowers/plans/2026-10-15-phase-2c2b-zuordnung.md`, fertig). Plan 2c-2a präzisiert
+einige Punkte und weicht in mehreren ab: Ein Auffrischen geht
 auch innerhalb des Totbands durch (zu Abschnitt 8), das 15-min-Budget erreicht Regel 2 nur über dem
 Schutz der USV-Reserve (zu 4.3), und die Grenzen des Wächters wirken einen Zyklus später (zu 4.2).
+Plan 2c-2b weicht in Abschnitt 7 ab: Tessie-Werte zählen erst eine Minute nach dem Beginn eines
+Vorgangs (zu 7.2), und der Widerspruch ist enger gefasst als in 7.3.
 Die Liste unten nennt, was sich sonst beim Bau geändert hat.
 Grundlage ist die Spec `docs/superpowers/specs/2026-10-08-bindaems-design.md`, vor allem 7.1, 7.4,
 7.6 bis 7.8, 7.10, 8.3, 8.5 und 18, und das Design von 2c-1
@@ -14,7 +17,8 @@ Grundlage ist die Spec `docs/superpowers/specs/2026-10-08-bindaems-design.md`, v
 2c-2a und 2c-2b; wo es abweicht, gilt es (Abschnitt 11.2). Die Hinweise für 2c-2 aus
 `docs/uebergabe.md` („Hinweise für die Pläne 2c-2 und 2d“) sind eingearbeitet.
 
-Die Spec enthält dazu die Absätze „Stand Plan 2c-2a“ (5.3, 7.1, 7.4, 7.6, 7.7, 7.10, 8.3, 16 und 18).
+Die Spec enthält dazu die Absätze „Stand Plan 2c-2a“ (5.3, 7.1, 7.4, 7.6, 7.7, 7.10, 8.3, 16 und 18)
+und „Stand Plan 2c-2b“ (5.3, 7.8, 7.10 und 16).
 Beim Bau haben sich diese Punkte gegenüber dem Design geändert oder sind dazugekommen; die
 Präzisierungen des Plans gehen diesem Dokument vor, wo sie abweichen:
 
@@ -59,6 +63,45 @@ Präzisierungen des Plans gehen diesem Dokument vor, wo sie abweichen:
   `config.ini` des Watchdogs enthält die Aktion, die bei einer Auslösung den Override aufhebt, nur mit
   `live_allowed`, und nur dann prüft die Probe sie. Victron bleibt trotzdem im Dry-Run, bis die
   Absicht es live verlangt (Betriebshandbuch, „Victron in den Dry-Run und live“).
+- **Tessie-Werte und der Beginn eines Vorgangs (7.2, Plan 2c-2b, Präzisierung 3):** Tessie fragt ein
+  abgestecktes Auto nur alle 600 s ab, und die Tesla-API meldet das Anstecken mit Verzug; ein Wert
+  aus einer Abfrage vor oder kurz nach dem Beginn eines Vorgangs sagt über diesen Vorgang nichts.
+  Tessie, Stromvergleich und Ausschluss zählen an einer Wallbox darum nur mit Werten, deren Abfrage
+  mindestens 60 s nach dem Beginn ihres Vorgangs lag (`TESSIE_SETTLE_S`, `VehicleObs.plugged_at`).
+  Ist der Beginn unbekannt (der Vorgang lief schon beim Start des core), zählen sie immer. So bleibt
+  der Tesla, der am Wall Connector ankommt, dort „angenommen“ und geregelt wie in 2c-1, bis Tessie
+  ihn neu abgefragt hat; sonst schlösse ihn sein letzter Wert „nicht angesteckt“ für bis zu 10 min
+  aus, und er lüde als angenommener Gast ungeregelt mit dem Höchststrom des Wall Connectors. Die
+  zeitliche Korrelation misst dagegen das Intervall zwischen zwei Meldungen und braucht die Regel
+  nicht. Für Home Assistant gilt sie nicht, sein Zustand kommt mit jeder Änderung; meldet
+  `home_entity` das Ankommen des e-Golf spät, gilt er bis dahin als Gast (angenommen).
+- **Entscheidung (7.3, Präzisierung 4):** Kandidat ist ein Fahrzeug an einer Wallbox mit mindestens
+  2 stützenden Indizien und keinem, das es ausschließt; erkannt ist es dort nach 60 s ohne
+  Unterbrechung als Kandidat, wenn es an keiner anderen Wallbox Kandidat ist (jeden Zyklus neu
+  geprüft). Sind an einer Wallbox zwei Fahrzeuge erkannt, gilt keins, und das ist kein Widerspruch.
+  Ein Gast ist erkannt, wenn dort jedes Fahrzeug 60 s lang ausgeschlossen ist; ausgeschlossen ist ein
+  Fahrzeug auch, wenn es laut Übersteuerung an einer anderen Wallbox steht, und eine Übersteuerung
+  geht der Erkennung an ihrer Wallbox vor. **Widerspruch (Abweichung vom Wortlaut von 7.3):** Ein
+  Fahrzeug ist an zwei Wallboxen Kandidat, oder es ist nirgends Kandidat und hat an einer Wallbox
+  2 Stützen und einen Ausschluss. Nach dem Wortlaut wäre auch ein Fahrzeug, das an einer Wallbox
+  Kandidat ist und an der anderen 2 Stützen und einen Ausschluss hat, ein Widerspruch; Tessie und
+  die Phasen-Signatur stützen den Tesla aber an jeder Wallbox, an der ein Auto mit drei Phasen lädt,
+  und ein dreiphasiger Gast an der EVCS neben dem Tesla am Wall Connector machte die Zuordnung
+  dann immer unklar, obwohl der Stromvergleich beide trennt. „Unklar“ gilt wie in 2c-1 (60 s hin,
+  60 s zurück, eine aktive Übersteuerung hebt es sofort auf).
+- **Ausschluss (7.2, Entscheidung beim Bau):** Er stützt das Fahrzeug an der Wallbox nur, wenn Tessie
+  es „zu Hause und angesteckt“ meldet und jede andere Wallbox sicher kein Fahrzeug meldet, nicht
+  schon bei „angesteckt“. Ein Auto, das woanders angesteckt ist (an einer Ladesäule), steht nie an
+  einer unserer Wallboxen; wörtlich ergäbe der Tesla an einer Ladesäule neben einem dreiphasigen Gast
+  bei uns einen falschen Widerspruch.
+- **Stromvergleich und zeitliche Korrelation (7.2, Entscheidung beim Bau):** Sie geben kein Indiz für
+  ein Auto, das Tessie als „nicht zu Hause“ meldet (ein unbekannter Ort zählt nicht als „woanders“).
+  Sonst ergäbe ein Tesla an einer öffentlichen AC-Säule mit 16 A auf drei Phasen neben einem
+  dreiphasigen Gast bei uns mit 16 A auf drei Phasen einen falschen Widerspruch; Tessie schließt ein
+  Auto, das nicht zu Hause ist, ohnehin aus.
+- **Szenarien (10.3):** `tesla-evcs` prüft „erkannt“ vor 3 min statt binnen 2 min, denn die Regelung
+  beginnt im Simulator erst nach rund 60 s und die 2 min des Designs zählen ab ihrem Beginn;
+  `zuordnung` prüft einen echten Widerspruch (Betriebshandbuch, „Simulator“).
 
 ## 1. Ziel und Abgrenzung
 
