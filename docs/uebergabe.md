@@ -13,8 +13,9 @@ Fix-Welle danach ist umgesetzt** (`docs/superpowers/plans/2026-10-14-phase-2c2a-
 Fix-Welle danach ist umgesetzt** (`docs/superpowers/plans/2026-10-15-phase-2c2b-zuordnung.md`).
 Beide Pläne sind per Fast-Forward auf `main` (`31721a6`, mit Zustimmung des Betreibers vom
 15.10.2026, Tests auf `main` grün); der Arbeitsbranch `ccr-9778345e-t3x44k` ist danach gelöscht, eine
-neue Sitzung beginnt auf `main`. Offen aus 2c-2b sind drei kleine Doku-Korrekturen (Ende von
-„Bewusst offen gelassen“, „Doku-Korrekturen aus dem Re-Review der Fix-Welle von 2c-2b“). Als
+neue Sitzung beginnt auf `main`. Die drei kleinen Doku-Korrekturen aus 2c-2b (Ende von „Bewusst
+offen gelassen“, „Doku-Korrekturen aus dem Re-Review der Fix-Welle von 2c-2b“) sind seit dem
+15.10.2026 umgesetzt (Branch `claude/project-thread-57rkit`). Als
 Nächstes folgt Plan 2d (Bedienung in UI und HA), an der Anlage danach die Inbetriebnahme Punkt 3
 (Design 2c-2, 11.1): Die Erkennung läuft im Dry-Run mit, und Health zeigt, wer wo steht.
 `main` ist seit dem 12.10.2026 auch der Standard-Branch auf GitHub.
@@ -216,8 +217,6 @@ Nächstes folgt Plan 2d (Bedienung in UI und HA), an der Anlage danach die Inbet
   mit Abdeckungsgrenzen (≥ 75 % insgesamt, ≥ 90 % für `core/safety`, `core/control` und
   `core/actuators`), Vitest mit svelte-check, Prettier und ESLint; dazu E2E mit Playwright.
 - **Offen:**
-  - drei kleine Doku-Korrekturen aus dem Re-Review der Fix-Welle von 2c-2b (der Code stimmt; Liste
-    am Ende von „Bewusst offen gelassen“)
   - Plan 2d (Bedienung in UI und HA) nach der Spec schreiben, vom Betreiber durchsehen lassen und
     umsetzen (siehe „Nächster Schritt“)
   - an der Anlage: Images ausrollen, Dry-Run neben evcc beginnen und dabei die Inbetriebnahme Punkt 3
@@ -1250,8 +1249,9 @@ im Absatz „Stand Plan 2c-2b“ der Spec (7.8). Hier die Entscheidungen mit Kos
   an der EVCS als den Tesla, der nicht ladend am Wall Connector steckt (der Wall Connector zeigte
   „Gast, angenommen“), und einen zweiphasigen Gast am Wall Connector als den e-Golf, der „geladen“ an
   der EVCS steckt. Im Kernfall, e-Golf zweiphasig am Wall Connector und Tesla dreiphasig an der
-  EVCS, sind beide erkannt. Für die Elimination zählen nur Strom und Phasen; eine Übersteuerung des
-  Fahrzeugs an die andere Wallbox zählt nicht (nach dem Gesamtreview entschieden). Falls falsch:
+  EVCS, sind beide erkannt. Für die Elimination zählen nur Strom und Phasen; eine Übersteuerung eines
+  anderen Fahrzeugs an die andere Wallbox zählt nicht (nach dem Gesamtreview entschieden; ein
+  übersteuertes Fahrzeug ist an jeder anderen Wallbox ohnehin ausgeschlossen). Falls falsch:
   Kommt ein zweiter Vorgang hinzu, fällt eine Erkennung, die auf Tessie oder Home Assistant beruht,
   auf „angenommen“ zurück, bis die andere Wallbox das Fahrzeug ausschließt (60 s Laden dort) und es
   60 s Kandidat war, und so lange, wie dort nichts lädt. Die Abweichung beim Widerspruch
@@ -1266,7 +1266,11 @@ im Absatz „Stand Plan 2c-2b“ der Spec (7.8). Hier die Entscheidungen mit Kos
   EVCS als erkannt, an der der e-Golf ohne zu laden steckt: Er bekam `max_a`, und die EVCS lud kurz
   im Modus des Tesla. Falls falsch: Eine Erkennung, die auf Tessie und Ausschluss beruht, kommt nach
   dem Ende eines Vorgangs an der anderen Wallbox erst 60 s nach der ersten Abfrage, die mindestens
-  60 s nach dem Ende liegt; bis dahin bleibt das Fahrzeug angenommen.
+  60 s nach dem Ende liegt; bis dahin bleibt das Fahrzeug angenommen. Das unterbricht auch eine
+  laufende Erkennung: Ist der Tesla nicht ladend an der EVCS über Tessie und zeitliche Korrelation
+  erkannt und verlässt ein zweiphasiger Gast den Wall Connector, zeigt die EVCS rund 2 min lang
+  „angenommen“ (e-Golf oder Gast), dann ist der Tesla neu erkannt, mit einem neuen
+  `assignment_detected`.
 - **Stromvergleich** (nach dem Gesamtreview): Meldet Tessie eine andere Phasenzahl als
   `vehicles.<name>.phases`, sagt er nichts (unplausibel, also unbekannt). „Passt nicht“ zählt an
   einer Wallbox erst mit einem Wert, dessen Abfrage mindestens 60 s nach der letzten Änderung der
@@ -1295,8 +1299,9 @@ Offene Punkte aus Plan 2c-2b (nicht umgesetzt):
   ausschließen; „nicht zu Hause“ steht an jeder Wallbox mit Vorgang sofort.
 - **`home_entity`** ersetzt einen gleichnamigen Eintrag in `homeassistant.entities` (das Signal
   `vehicle.<name>.home_state`) still; kein Test pinnt den Vorrang.
-- **Übersteuerung und Elimination:** Eine Übersteuerung des Fahrzeugs an die andere Wallbox zählt
-  für die Elimination nicht (entschieden nach dem Gesamtreview). Ist etwa der e-Golf an den Wall
+- **Übersteuerung und Elimination:** Eine Übersteuerung eines anderen Fahrzeugs an die andere
+  Wallbox zählt für die Elimination nicht (entschieden nach dem Gesamtreview); ein übersteuertes
+  Fahrzeug ist an jeder anderen Wallbox ohnehin ausgeschlossen. Ist etwa der e-Golf an den Wall
   Connector übersteuert und steht der Tesla an der EVCS, ohne zu laden, bleibt dort „Gast,
   angenommen“ mit dem Modus des Gastes, bis auch der Tesla übersteuert ist.
 - **Phasenzahl der EVCS:** Der core leitet sie aus Leistung und Strom ab (`derived.py`), die nicht
@@ -1328,7 +1333,9 @@ Offene Punkte aus Plan 2c-2b (nicht umgesetzt):
   nur Strom oder Phasen aus, nicht Tessie oder Home Assistant. Ein dreiphasiger Gast an der EVCS neben
   dem Tesla, der nicht ladend am Wall Connector steckt, bleibt so „Gast, angenommen“, der Tesla
   angenommen am Wall Connector (vor der Elimination: der Tesla erkannt an der EVCS, am Wall Connector
-  ein Gast); lädt der Tesla mit anderem Strom, ist der Gast nach rund 2 min erkannt. Ein Gast mit zwei
+  ein Gast); lädt der Tesla mit anderem Strom, ist der Gast nach rund 2 min erkannt, solange sich der
+  Strom an der EVCS nicht ändert (ändert die Regelung ihn oft, etwa alle 45 s, bleibt dort „Gast,
+  angenommen“). Ein Gast mit zwei
   Phasen sieht für den core aus wie der e-Golf, solange dieser laut Home Assistant zu Hause ist, denn
   der e-Golf meldet kein „angesteckt“: Allein an einer Wallbox ist er als e-Golf erkannt, auch wenn der
   e-Golf nicht angesteckt ist, und neben einem zweiten Auto ebenso, sobald dieses auf einer anderen
@@ -1359,8 +1366,9 @@ Aufgeschobene Kleinigkeiten aus Plan 2c-2b (die inhaltlichen; sie sind klein, ke
   filtern, sonst endet der Lauf“) doppelt. `zuordnung` pinnt „der Tesla ist nie kurz erkannt“ nur über
   den Test des Aufbaus.
 
-Doku-Korrekturen aus dem Re-Review der Fix-Welle von 2c-2b (offen; der Code stimmt jeweils, nur die
-Texte sind ungenau; die Zeilen gelten für `31721a6`):
+Doku-Korrekturen aus dem Re-Review der Fix-Welle von 2c-2b (erledigt am 15.10.2026 auf
+`claude/project-thread-57rkit`; der Code stimmte jeweils, nur die Texte waren ungenau; die Zeilen
+gelten für `31721a6`):
 
 - **Kosten der Sperre nach dem Ende eines Vorgangs:** Die Texte sagen, eine Erkennung über Tessie und
   Ausschluss komme nach dem Ende eines Vorgangs an der anderen Wallbox später. Die Sperre unterbricht

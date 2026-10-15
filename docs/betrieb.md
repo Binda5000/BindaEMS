@@ -1623,11 +1623,13 @@ auf zwei Phasen und der Tesla an der EVCS auf drei, schließen die Phasen jeden 
 anderen aus, und der core erkennt beide. Lädt an der anderen Wallbox nichts, stützen `tessie` und
 `home` nicht; stützten sie dann, hielte der core einen dreiphasigen Gast an der EVCS für den Tesla,
 der nicht ladend am Wall Connector steckt, und einen zweiphasigen Gast am Wall Connector für den
-e-Golf, der „geladen“ an der EVCS steckt. Für die Elimination zählen nur Strom und Phasen; steht das
-Fahrzeug laut Übersteuerung an der anderen Wallbox, zählt das nicht. Ist etwa der e-Golf an den
-Wall Connector übersteuert und steht der Tesla an der EVCS, ohne zu laden, stützen ihn dort weder
-`tessie` noch `elsewhere`, und an der EVCS bleibt „Gast, angenommen“ mit dem Modus des Gastes;
-übersteuere dann auch den Tesla. Das weicht von Design 2c-2 (7.2) ab und hat einen Preis:
+e-Golf, der „geladen“ an der EVCS steckt. Für die Elimination zählen nur Strom und Phasen; steht ein
+anderes Fahrzeug laut Übersteuerung an der anderen Wallbox, zählt das nicht (ein übersteuertes
+Fahrzeug ist an jeder anderen Wallbox ohnehin ausgeschlossen). Ist etwa der e-Golf an den Wall
+Connector übersteuert und steht der Tesla an der EVCS, ohne zu laden, bleibt an der EVCS „Gast,
+angenommen“ mit dem Modus des Gastes: Lädt der e-Golf nicht zweiphasig, stützen den Tesla dort weder
+`tessie` noch `elsewhere`; lädt er zweiphasig, stützt `tessie` den Tesla an der EVCS, doch allein
+reicht das nicht. Übersteuere dann auch den Tesla. Das weicht von Design 2c-2 (7.2) ab und hat einen Preis:
 Steckt an der anderen Wallbox ein Auto an, fällt eine Erkennung, die auf Tessie oder Home Assistant
 beruht, auf „angenommen“ zurück, bis die andere Wallbox das Fahrzeug ausschließt (60 s Laden dort)
 und es danach 60 s Kandidat war, also mindestens 2 min, und so lange, wie dort nichts lädt. Ein
@@ -1654,7 +1656,11 @@ Standard-Wallbox und zeigt Health es nicht dort, wo es steht, setzt du eine Übe
   an der der e-Golf steckt und nicht lädt, nach 60 s für erkannt: Der Tesla bekäme `max_a`, und die
   EVCS lüde kurz in seinem Modus. Preis: Eine Erkennung, die auf `tessie` und `elsewhere` beruht,
   kommt nach dem Ende eines Vorgangs an der anderen Wallbox erst 60 s nach der ersten Abfrage, die
-  mindestens 60 s nach dem Ende liegt; bis dahin bleibt das Fahrzeug angenommen.
+  mindestens 60 s nach dem Ende liegt; bis dahin bleibt das Fahrzeug angenommen. Das unterbricht
+  auch eine laufende Erkennung: Ist der Tesla nicht ladend an der EVCS über `tessie` und `timing`
+  erkannt und verlässt ein zweiphasiger Gast den Wall Connector, zeigt die EVCS rund 2 min lang
+  „angenommen“ (e-Golf oder Gast), dann ist der Tesla neu erkannt, mit einem neuen
+  `assignment_detected`.
 - **Stromvergleich nach einer Änderung.** Meldet Tessie eine andere Phasenzahl als `phases` in
   `config.yaml`, gibt es kein `current`: Der Wert ist unplausibel und zählt als unbekannt. „Passt
   nicht“ zählt an einer Wallbox erst mit einem Wert, den Tessie mindestens 60 s nach der letzten
@@ -1787,7 +1793,8 @@ vorbehalten …`).
     Home Assistant nicht aus; an der Wallbox des Gastes tun das nur Strom oder Phasen. Ein
     dreiphasiger Gast an der EVCS neben dem Tesla, der am Wall Connector steckt und nicht lädt,
     bleibt so „Gast, angenommen“; lädt der Tesla mit einem anderen Strom, ist der Gast nach rund
-    2 min erkannt.
+    2 min erkannt, solange sich der Strom an der EVCS nicht ändert. Ändert die Regelung ihn oft
+    (etwa alle 45 s), bleibt dort „Gast, angenommen“ (Stromvergleich nach einer Änderung, oben).
   - **Ein Gast mit zwei Phasen** sieht für den core aus wie der e-Golf, solange dieser laut Home
     Assistant zu Hause ist, denn der e-Golf meldet kein „angesteckt“. Steckt der Gast allein an einer
     Wallbox, ist er als e-Golf erkannt, auch wenn der e-Golf gar nicht angesteckt ist. Neben einem

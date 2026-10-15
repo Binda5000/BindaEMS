@@ -47,7 +47,10 @@ Tessie und Ausschluss; nach 60 s wäre er dort erkannt, bekäme ``max_a``, und d
 seinem Modus. Kosten, falls die Regel falsch ist: Eine Erkennung, die auf Tessie und Ausschluss
 beruht, kommt nach dem Ende eines Vorgangs an einer anderen Wallbox erst 60 s nach der ersten
 Abfrage, die mindestens ``TESSIE_SETTLE_S`` nach dem Ende liegt; bis dahin bleibt das Fahrzeug
-angenommen.
+angenommen. Die Sperre unterbricht auch eine laufende Erkennung: Ist der Tesla nicht ladend an der
+EVCS über Tessie und zeitliche Korrelation erkannt und verlässt ein zweiphasiger Gast den Wall
+Connector, zeigt die EVCS rund 2 min lang „angenommen“ (e-Golf oder Gast), dann ist der Tesla neu
+erkannt, mit einem neuen ``assignment_detected``.
 
 **Stromvergleich:** Meldet Tessie eine andere Phasenzahl als ``phases`` des Fahrzeugs in der
 Konfiguration, sagt er nichts; ein unplausibler Wert zählt als unbekannt. „Passt nicht“ zählt an
