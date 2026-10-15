@@ -11,18 +11,22 @@ import contextlib
 import json
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from contextlib import AbstractAsyncContextManager
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
+from urllib.parse import quote
 
 import httpx
 import structlog
-from pydantic import SecretStr
+from pydantic import SecretStr, ValidationError
 from websockets.asyncio.client import ClientConnection
 from websockets.asyncio.client import connect as ws_connect
 from websockets.exceptions import ConnectionClosed, WebSocketException
 
 from bindaems.app.status import ComponentStatus
 from bindaems.shared.broadcast import Broadcast
+from bindaems.shared.control import Intent
+from bindaems.shared.decisions import Decision, decision_from_json
 from bindaems.shared.domain import Value
 from bindaems.shared.retry import Backoff, StatusLog
 from bindaems.shared.timeutil import LOCAL_TZ, Clock
@@ -31,12 +35,24 @@ log = structlog.get_logger(__name__)
 
 HEALTH_TIMEOUT_S = 5.0
 OPEN_TIMEOUT_S = 5.0
+REQUEST_TIMEOUT_S = 5.0  # Absicht, Entscheidungen und Quittierung
 
 SlotFlowsHandler = Callable[[dict[str, Any]], Awaitable[None]]
+DecisionHandler = Callable[[Decision], Awaitable[None]]
+ModeHandler = Callable[[dict[str, Any]], Awaitable[None]]
+ConnectHandler = Callable[[], Awaitable[None]]
 
 
 class CoreUnavailableError(Exception):
     """Der core ist nicht erreichbar oder lehnt die Verbindung ab."""
+
+
+@dataclass(frozen=True)
+class CoreReply:
+    """Antwort des core mit HTTP-Status und JSON-Objekt, auch bei den erwarteten Fehlerstatus."""
+
+    status: int
+    body: dict[str, Any]
 
 
 class CoreClient:
@@ -65,6 +81,84 @@ class CoreClient:
         if not isinstance(data, dict):
             raise CoreUnavailableError("Antwort ist kein JSON-Objekt")
         return data
+
+    async def _call(
+        self,
+        method: str,
+        path: str,
+        expected: frozenset[int],
+        *,
+        params: Mapping[str, str | int] | None = None,
+        json_body: Mapping[str, Any] | None = None,
+    ) -> CoreReply:
+        """Ruft den core auf; nur die ``expected`` Status kehren als Antwort zurück.
+
+        Netzfehler, Zeitüberschreitung, ein anderer Status (etwa 401 oder 500) und eine Antwort,
+        die kein JSON-Objekt ist, sind ``CoreUnavailableError``.
+        """
+        try:
+            response = await self._http.request(
+                method,
+                f"{self._base}{path}",
+                headers=self._headers(),
+                params=params,
+                json=json_body,
+                timeout=REQUEST_TIMEOUT_S,
+            )
+        except httpx.HTTPError as exc:
+            raise CoreUnavailableError(f"{type(exc).__name__}: {exc}") from exc
+        if response.status_code not in expected:
+            raise CoreUnavailableError(f"HTTP {response.status_code}")
+        try:
+            data = response.json()
+        except ValueError as exc:
+            raise CoreUnavailableError("Antwort ist kein JSON") from exc
+        if not isinstance(data, dict):
+            raise CoreUnavailableError("Antwort ist kein JSON-Objekt")
+        return CoreReply(response.status_code, data)
+
+    async def intent(self) -> Intent | None:
+        """Die gültige Absicht des core; ``None``, wenn er keine hat."""
+        reply = await self._call("GET", "/v1/intent", frozenset({200}))
+        raw = reply.body.get("intent")
+        if raw is None:
+            return None
+        try:
+            return Intent.model_validate(raw)
+        except ValidationError as exc:
+            raise CoreUnavailableError("Absicht des core ist ungültig") from exc
+
+    async def submit_intent(self, intent: Intent) -> CoreReply:
+        """Sendet die Absicht: 200 (angenommen, auch geklemmt), 409 (veraltet) oder 422."""
+        return await self._call(
+            "PUT",
+            "/v1/intent",
+            frozenset({200, 409, 422}),
+            json_body=intent.model_dump(mode="json"),
+        )
+
+    async def decisions(self, since: datetime, limit: int) -> tuple[list[Decision], bool]:
+        """Die Entscheidungen mit ``ts`` nach ``since`` (aufsteigend) und ob weitere folgen."""
+        # ``params`` kodiert das ``+`` der Zeitzone als ``%2B``
+        reply = await self._call(
+            "GET",
+            "/v1/decisions",
+            frozenset({200}),
+            params={"since": since.isoformat(), "limit": limit},
+        )
+        raw, more = reply.body.get("decisions"), reply.body.get("more")
+        if not isinstance(raw, list) or not isinstance(more, bool):
+            raise CoreUnavailableError("Antwort enthält keine Entscheidungen")
+        try:
+            return [decision_from_json(item) for item in raw], more
+        except ValueError as exc:
+            raise CoreUnavailableError(str(exc)) from exc
+
+    async def acknowledge(self, actuator: str) -> CoreReply:
+        """Quittiert die Sperre eines Aktors: 202, 409 (keine Sperre, Ursache) oder 404."""
+        return await self._call(
+            "POST", f"/v1/locks/{quote(actuator, safe='')}/ack", frozenset({202, 404, 409})
+        )
 
     def stream(self) -> AbstractAsyncContextManager[AsyncIterator[dict[str, Any]]]:
         return self._stream()
@@ -143,6 +237,9 @@ class LiveFeed:
         clock: Clock,
         *,
         slot_flows_handlers: Sequence[SlotFlowsHandler] = (),
+        decision_handlers: Sequence[DecisionHandler] = (),
+        mode_handlers: Sequence[ModeHandler] = (),
+        connect_handlers: Sequence[ConnectHandler] = (),
         health_interval_s: float = 10.0,
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
         backoff: Backoff | None = None,
@@ -151,6 +248,10 @@ class LiveFeed:
         self._live = live
         self._clock = clock
         self._handlers = list(slot_flows_handlers)
+        self._decision_handlers = list(decision_handlers)
+        self._mode_handlers = list(mode_handlers)
+        self._connect_handlers = list(connect_handlers)
+        self._health_now = asyncio.Event()
         self._health_interval_s = health_interval_s
         self._sleep = sleep
         self._backoff = backoff or Backoff()
@@ -161,6 +262,10 @@ class LiveFeed:
         async with asyncio.TaskGroup() as tasks:
             tasks.create_task(self._stream_loop(), name="core-stream")
             tasks.create_task(self._health_loop(), name="core-health")
+
+    def refresh_health(self) -> None:
+        """Die nächste Health-Abfrage folgt sofort, ohne den Takt abzuwarten."""
+        self._health_now.set()
 
     def component_status(self) -> ComponentStatus:
         if self._live.connected:
@@ -178,7 +283,9 @@ class LiveFeed:
             try:
                 async with self._client.stream() as messages:
                     async for message in messages:
-                        self._connected()
+                        if not self._live.connected:
+                            self._connected()
+                            await self._run_connect_handlers()
                         self._backoff.reset()
                         await self._dispatch(message)
             except CoreUnavailableError as exc:
@@ -192,11 +299,24 @@ class LiveFeed:
 
     async def _health_loop(self) -> None:
         while True:
+            # vor der Abfrage zurücksetzen: ein Wunsch während der Abfrage löst die nächste aus
+            self._health_now.clear()
             try:
                 self._live.health = await self._client.health()
             except Exception:  # nicht erreichbar: ohne Health weiter
                 self._live.health = None
-            await self._sleep(self._health_interval_s)
+            await self._wait_for_next_health()
+
+    async def _wait_for_next_health(self) -> None:
+        """Wartet den Takt ab oder bis ``refresh_health`` gerufen wird, was zuerst eintritt."""
+        timer = asyncio.ensure_future(self._sleep(self._health_interval_s))
+        wished = asyncio.ensure_future(self._health_now.wait())
+        try:
+            await asyncio.wait({timer, wished}, return_when=asyncio.FIRST_COMPLETED)
+        finally:
+            for task in (timer, wished):
+                task.cancel()
+            await asyncio.gather(timer, wished, return_exceptions=True)
 
     async def _dispatch(self, message: dict[str, Any]) -> None:
         kind, data = message.get("type"), message.get("data")
@@ -213,6 +333,39 @@ class LiveFeed:
                     await handler(data)
                 except Exception:  # ein Empfänger darf den Stream nicht abbrechen
                     log.exception("Verarbeitung von slot_flows fehlgeschlagen")
+        elif kind == "decision":
+            await self._dispatch_decision(data)
+        elif kind == "mode_change" and isinstance(data, dict):
+            self.refresh_health()
+            for mode_handler in self._mode_handlers:
+                try:
+                    await mode_handler(data)
+                except Exception:
+                    log.exception("Verarbeitung von mode_change fehlgeschlagen")
+
+    async def _dispatch_decision(self, data: Any) -> None:
+        try:
+            decision = decision_from_json(data)
+        except ValueError as exc:  # ein ungültiges Objekt wird übergangen, der Stream läuft weiter
+            log.warning("Entscheidung vom core ungültig", error=str(exc))
+            return
+        for decision_handler in self._decision_handlers:
+            try:
+                await decision_handler(decision)
+            except Exception:
+                log.exception("Verarbeitung der Entscheidung fehlgeschlagen")
+
+    async def _run_connect_handlers(self) -> None:
+        """Ruft nach dem Verbindungsaufbau jeden Handler (etwa den Rückstand der Entscheidungen).
+
+        Ein Fehler kommt ins Log. Der Stream wird erst danach weiter gelesen; die Nachrichten
+        dazwischen puffert die Verbindung.
+        """
+        for connect_handler in self._connect_handlers:
+            try:
+                await connect_handler()
+            except Exception:
+                log.exception("Verarbeitung nach dem Verbindungsaufbau fehlgeschlagen")
 
     def _connected(self) -> None:
         if self._live.connected:
