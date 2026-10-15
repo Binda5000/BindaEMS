@@ -544,6 +544,23 @@ def test_the_start_of_a_running_session_is_never_forgotten(cfg) -> None:
         assert of(found, Clue.TIMING) == set()
 
 
+@pytest.mark.parametrize(
+    ("plugged", "at_home", "supports"),
+    [
+        pytest.param(True, True, True, id="zu Hause und angesteckt"),
+        pytest.param(True, False, False, id="angesteckt, aber nicht zu Hause"),
+        pytest.param(True, None, False, id="angesteckt, Ort unbekannt"),
+        pytest.param(False, True, False, id="zu Hause, aber nicht angesteckt"),
+        pytest.param(None, True, False, id="zu Hause, Anstecken unbekannt"),
+    ],
+)
+def test_elsewhere_needs_a_tesla_at_home_and_plugged(cfg, plugged, at_home, supports) -> None:
+    # die andere Wallbox ist leer; an einer fremden Ladesäule stünde das Auto an keiner von ihnen
+    car = tesla(plugged=plugged, at_home=at_home)
+    expected = {ev("evcs", "tesla", Clue.ELSEWHERE)} if supports else set()
+    assert of(clues(ClueTracker(cfg), 0, tesla_obs=car), Clue.ELSEWHERE) == expected
+
+
 def test_every_other_wallbox_must_report_no_car(cfg) -> None:
     three = cfg.model_copy(update={"wallboxes": {**cfg.wallboxes, "twc2": cfg.wallboxes["twc"]}})
     vehicles = {"tesla": tesla(plugged=True), "egolf": NONE}

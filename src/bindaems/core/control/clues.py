@@ -2,12 +2,15 @@
 
 - ``Clue`` und ``Evidence``: welches Indiz es ist und was es an einer Wallbox über ein Fahrzeug sagt
 - ``ClueTracker``: wertet die Indizien je Zyklus aus und führt ihre Zeiten fort
-- ``home_and_plugged``: ob Tessie ein Fahrzeug „zu Hause und angesteckt“ sieht
+- ``home_and_plugged``: ob Tessie ein Fahrzeug „zu Hause und angesteckt“ sieht; darauf stützen
+  sich die Indizien ``TESSIE`` und ``ELSEWHERE``
 
 Indizien gibt es je Wallbox mit laufendem Ansteckvorgang und je Fahrzeug der Konfiguration. Jedes
 zählt für sich: Es stützt das Fahrzeug an der Wallbox, schließt es dort aus oder sagt nichts.
-Unbekannte Werte sprechen für nichts und schließen nichts aus. Was aus den Indizien folgt,
-entscheidet der nächste Baustein.
+Unbekannte Werte sprechen für nichts und schließen nichts aus. Der Ausschluss stützt ein
+Fahrzeug, das Tessie zu Hause und angesteckt sieht, an der Wallbox, wenn jede andere sicher
+leer ist: Ein Auto an einer fremden Ladesäule steht an keiner Wallbox der Anlage. Was aus den
+Indizien folgt, entscheidet der nächste Baustein.
 
 Tessie fragt ein abgestecktes Auto nur alle 600 s ab und erfährt vom Anstecken mit Verzug
 (Präzisierung 3): Tessie, Stromvergleich und Ausschluss zählen an einer Wallbox mit bekanntem Beginn
@@ -52,7 +55,7 @@ class Clue(StrEnum):
     TIMING = "timing"  # zeitliche Korrelation: Der Vorgang begann, als das Auto angesteckt wurde
     PHASES = "phases"  # Phasen-Signatur: auf wie vielen Phasen die Wallbox lädt
     HOME = "home"  # Home Assistant meldet das Fahrzeug zu Hause, oder nicht
-    ELSEWHERE = "elsewhere"  # Ausschluss: Die andere Wallbox meldet kein Fahrzeug
+    ELSEWHERE = "elsewhere"  # Ausschluss: zu Hause und angesteckt, die andere Wallbox leer
 
 
 @dataclass(frozen=True)
@@ -185,7 +188,8 @@ class ClueTracker:
             for vehicle_key, vehicle in self._cfg.vehicles.items():
                 tessie = vehicles[vehicle_key] if vehicle.tessie is not None else NO_VEHICLE_DATA
                 counts = _settled(start, tessie)
-                elsewhere = counts and others_empty and tessie.plugged is True
+                # Ausschluss: zu Hause und angesteckt, und jede andere Wallbox ist leer
+                elsewhere = counts and others_empty and home_and_plugged(tessie) is True
                 verdicts = (
                     (Clue.TESSIE, home_and_plugged(tessie) if counts else None),
                     (Clue.CURRENT, self._current_verdict(now, wallbox_key, vehicle_key)),
