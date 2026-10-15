@@ -2,7 +2,10 @@
 setzt nur die Regelung aus. Keeper, Alarme und Entscheidungslog laufen weiter, der Heartbeat bleibt
 aus, und hört die Ausnahme auf, regelt der nächste Zyklus wieder."""
 
+import asyncio
+from collections.abc import AsyncIterator
 from datetime import datetime, timedelta
+from typing import Any
 
 from tests.integration.conftest import live_evcs, run
 from tests.integration.plant import Plant
@@ -21,6 +24,16 @@ from bindaems.shared.control import ChargeMode, CommandKind, Intent, VehicleInte
 from bindaems.shared.decisions import DecisionResult
 
 SAFE_CURRENT = ("evcharger/40/SetCurrent", 6)  # der Sicherwert der EVCS bei der Übergabe
+
+
+async def waiting(stream: AsyncIterator[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Die Nachrichten, die im Stream schon warten."""
+    found: list[dict[str, Any]] = []
+    while True:
+        try:
+            found.append(await asyncio.wait_for(anext(stream), 0.05))
+        except TimeoutError:
+            return found
 
 
 def throwing(rt, monkeypatch, cycles: int | None = None) -> list[datetime]:
@@ -59,11 +72,17 @@ async def test_exception_in_the_regulation_keeps_the_keeper_running(
     off = {"egolf": VehicleIntent(mode=ChargeMode.OFF)}
     rt.submit_intent(Intent(version=2, control=True, vehicles=off))  # EVCS im Dry-Run
     mark = len(plant.writes)
-    run(rt, clock, 1)  # der erste Zyklus mit Ausnahme: Der Keeper sendet den Sicherwert trotzdem
-    assert evcs_writes(plant, mark) == [SAFE_CURRENT]
-    run(rt, clock, 14)  # kein Zyklus bricht ab; ohne Bestätigung folgt nach 10 s der zweite Versuch
+    async with rt.subscribe() as stream:
+        # der erste Zyklus mit Ausnahme: Der Keeper sendet den Sicherwert trotzdem
+        run(rt, clock, 1)
+        assert evcs_writes(plant, mark) == [SAFE_CURRENT]
+        # kein Zyklus bricht ab; ohne Bestätigung folgt nach 10 s der zweite Versuch
+        run(rt, clock, 14)
+        streamed = await waiting(stream)
     assert len(steps) == 15  # die Regelung warf in jedem Zyklus
     assert evcs_writes(plant, mark) == [SAFE_CURRENT] * 2
+    # Der Stream läuft weiter: In jedem gescheiterten Zyklus ging der Zustand hinaus.
+    assert [m["type"] for m in streamed].count("state") == 15
     during = rt.decisions(since, 1000)[0]
     assert [(d.kind, d.result, d.codes[0]) for d in during] == [
         (CommandKind.CURRENT, DecisionResult.TIMEOUT, "handback"),

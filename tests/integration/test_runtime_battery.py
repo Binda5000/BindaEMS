@@ -13,7 +13,10 @@ from tests.integration.conftest import GOOD_STATE, allow_victron_live, run
 from tests.integration.plant import Plant
 from tests.integration.test_runtime_charging import alarm_ids
 
+from bindaems.core.actuators.victron import OVERRIDE_TIMEOUT_S
+from bindaems.core.control.executor import WriteResult
 from bindaems.core.control.peak_guard import PEAK_EXCEEDED
+from bindaems.core.runtime import _lapses_at
 from bindaems.core.safety.types import SafetyContext, Verdict
 from bindaems.shared.config import Config
 from bindaems.shared.control import (
@@ -183,6 +186,17 @@ async def test_override_that_is_no_longer_refreshed_lapses_without_alarm(
     run(rt, clock, 40)  # drei Prüfungen im Abstand von 10 s fänden eine fremde Änderung
     assert override_writes(plant) == [3680.0]
     assert (FOREIGN in alarm_ids(rt)) is alarm
+
+
+def test_only_a_confirmed_override_with_a_number_lapses() -> None:  # Präzisierung 7
+    # Die Erwartung eines Overrides mit Zahl verfällt OVERRIDE_TIMEOUT_S nach der Bestätigung (Uhr
+    # der Safety-Schicht), wie der Override am Cerbo. „Kein Override“ und jede andere Art gelten
+    # ohne Frist.
+    ok = DecisionResult.OK
+    override = WriteResult(VICTRON, CommandKind.GRID_SETPOINT, 3680.0, ok, "")
+    assert _lapses_at(override, T0) == T0 + timedelta(seconds=OVERRIDE_TIMEOUT_S)
+    assert _lapses_at(WriteResult(VICTRON, CommandKind.GRID_SETPOINT, None, ok, ""), T0) is None
+    assert _lapses_at(WriteResult("wallbox.evcs", CommandKind.CURRENT, 16.0, ok, ""), T0) is None
 
 
 async def test_health_shows_the_battery(runtime_env) -> None:
