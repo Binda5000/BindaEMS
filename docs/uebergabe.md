@@ -180,9 +180,11 @@ läuft im Dry-Run mit, und Health zeigt, wer wo steht.
     „Simulator“). Keines scheiterte an Erkennung oder Regelung.
   - **Beim Bau geändert:** Tessie-Werte zählen an einer Wallbox erst eine Minute nach dem Beginn des
     Vorgangs, der Widerspruch ist enger gefasst als im Design (7.3), der Ausschluss verlangt „zu Hause
-    und angesteckt“, und Stromvergleich und zeitliche Korrelation sagen über ein Auto, das Tessie nicht
-    zu Hause sieht, nichts (Kopf des Designs 2c-2; Absatz „Stand Plan 2c-2b“ der Spec, 7.8). Die
-    Rulings und die offenen Punkte stehen unter „Bewusst offen gelassen“.
+    und angesteckt“, Stromvergleich und zeitliche Korrelation sagen über ein Auto, das Tessie nicht
+    zu Hause sieht, nichts, Tessie und Home Assistant stützen nur, solange genau eine Wallbox einen
+    Vorgang hat, und ein Boost ohne Übersteuerung bindet an den Vorgang, an dem das Fahrzeug steht
+    (Kopf des Designs 2c-2; Absatz „Stand Plan 2c-2b“ der Spec, 7.8). Die Rulings und die offenen
+    Punkte stehen unter „Bewusst offen gelassen“.
   - **Noch nicht:** die Bedienung in UI und HA, auch die Auswahl des Gast-Modus (2d), und die
     Planausführung (Phase 3). Live ist weiterhin kein Aktor.
 - **Images:** `ghcr.io/binda5000/bindaems-core:latest` und `ghcr.io/binda5000/bindaems-app:latest`.
@@ -190,7 +192,7 @@ läuft im Dry-Run mit, und Health zeigt, wer wo steht.
   immer gemeinsam aus demselben Stand ausgerollt (gleiche Compose-Datei, gleiche Image-Tags): Die
   UI-Schemas sind streng, eine abweichende Version zeigt auf der System-Seite nur „Unerwartete
   Antwort vom Server“.
-- **Tests:** 5379 Python-Tests, davon 33 Property-Tests mit Hypothesis (6 für die Safety-Schicht,
+- **Tests:** 5384 Python-Tests, davon 33 Property-Tests mit Hypothesis (6 für die Safety-Schicht,
   6 für den Phasenwächter, 12 für den Akku-Sollwert, 6 für den 15-min-Wächter, 3 sonstige), und
   233 UI-Tests; Abdeckung 97 % insgesamt und 99 % für `core/safety`, `core/control` und
   `core/actuators` (Stand nach Plan 2c-2b).
@@ -483,7 +485,10 @@ Demo-Zugänge: `admin`, `gast` (Lesen) und `sicher` (Admin mit TOTP, Geheimnis
   `CONTRADICTION` in `tests/unit/core/control/charge_helpers.py`, unklar ab `UNCLEAR_FROM_S` (120 s).
   Ein e-Golf an einer EVCS, die auf drei Phasen lädt, ergibt widersprüchliche Eingaben (die
   Phasen-Signatur schließt ihn aus). Tessie-Werte brauchen `plugged_at` (die Wanduhr der Abfrage), und
-  Home Assistant kommt über `homes`; ohne Angabe sagt es über kein Fahrzeug etwas.
+  Home Assistant kommt über `homes`; ohne Angabe sagt es über kein Fahrzeug etwas. Laufen an beiden
+  Wallboxen Vorgänge, stützen Tessie und Home Assistant nicht, sie schließen nur aus: Ein Test, der dann
+  ein Fahrzeug erkannt sehen will, braucht zwei der Indizien Strom, Phasen und zeitliche Korrelation,
+  etwa Strom und Phasen eines ladenden Tesla; den e-Golf erkennt der core so nie.
 - **Simulator (2c-1, 2c-2a, 2c-2b):** Er nutzt die echten Aktoren und die Parser der Adapter. Ändert man deren
   Zeiten, Texte oder Signale, ändern sich die Szenarien mit. Alle einundzwanzig Szenarien laufen in
   `tests/integration/test_sim_scenarios.py`, dazu eine Abwandlung von `spitze-15min` für den
@@ -1207,6 +1212,17 @@ im Absatz „Stand Plan 2c-2b“ der Spec (7.8). Hier die Entscheidungen mit Kos
 - **Prüfungen `_clear_from` und `_occupied_from`** des Simulators melden zusätzlich „Der Lauf endet vor
   {from_s} s.“, wenn nach `from_s` keine Gesundheit mehr kommt (wie andere Prüfungen des Moduls; der
   Satz fehlt in „Texte“). Falls falsch: ein zusätzlicher Befundsatz.
+- **Tessie und Home Assistant bei zwei Vorgängen:** Sie stützen ein Fahrzeug nur, solange genau eine
+  Wallbox einen laufenden Vorgang hat; ausschließen tun sie wie bisher an jeder Wallbox mit Vorgang
+  (Abweichung von Design 7.2 und von Präzisierung 2; entschieden nach dem Review der Doku). Mit zwei
+  Vorgängen sagen „zu Hause und angesteckt“ und „zu Hause“ nicht, an welcher Wallbox das Fahrzeug
+  steht. Zusammen mit der Phasen-Signatur erkannten sie einen dreiphasigen Gast an der EVCS als den
+  Tesla, der nicht ladend am Wall Connector steckt (der Wall Connector zeigte „Gast, angenommen“), und
+  einen zweiphasigen Gast am Wall Connector als den e-Golf, der „geladen“ an der EVCS steckt. Falls
+  falsch: Mit zwei Vorgängen wird ein Fahrzeug nur über Phasen, Strom und Zeit erkannt, sonst bleibt
+  es „angenommen“, meist derselbe Insasse; den e-Golf erkennt der core dann nie, auch nicht am Wall
+  Connector. Die Abweichung beim Widerspruch (Präzisierung 4) greift seitdem nur noch, wenn die
+  zeitliche Korrelation an der anderen Wallbox stützt.
 
 Offene Punkte aus Plan 2c-2b (nicht umgesetzt):
 
@@ -1227,10 +1243,19 @@ Offene Punkte aus Plan 2c-2b (nicht umgesetzt):
   (angenommen) und lädt im Gast-Modus (`guest.mode`, Standard PV-Überschuss), nicht im Modus des e-Golf.
   Das Betriebshandbuch nennt es; ob der Tracker an der Anlage schnell genug ist, zeigt die
   Inbetriebnahme Punkt 3. Dasselbe gilt, solange ein Tracker zu Hause kurz `not_home` meldet.
-- **Gast mit zwei Phasen:** Er sieht für den core aus wie der e-Golf, solange dieser laut Home
-  Assistant zu Hause ist: Die Phasen-Signatur schließt den e-Golf dann nicht aus (im Modell geprüft:
-  Der e-Golf gilt als erkannt). Gäste mit einer oder drei Phasen und jeder Gast, während der e-Golf
-  weg ist, erkennt der core.
+- **Gast-Erkennung:** Erkannt ist ein Gast erst, wenn an seiner Wallbox jedes Fahrzeug der
+  Konfiguration ausgeschlossen ist; bis dahin steht dort „Gast, angenommen“ oder das
+  Standardfahrzeug. Neben einem zweiten Auto stützen Tessie und Home Assistant nicht (Ruling oben),
+  und ein Fahrzeug, das zu Hause angesteckt ist, schließen an der Wallbox des Gastes nur Strom oder
+  Phasen aus. Ein dreiphasiger Gast an der EVCS neben dem Tesla, der nicht ladend am Wall Connector
+  steckt, bleibt so „Gast, angenommen“, der Tesla angenommen am Wall Connector (vor dem Ruling: der
+  Tesla erkannt an der EVCS, am Wall Connector ein Gast); lädt der Tesla mit anderem Strom, ist der
+  Gast nach rund 2 min erkannt. Ein Gast mit zwei Phasen sieht für den core aus wie der e-Golf,
+  solange dieser laut Home Assistant zu Hause ist, denn der e-Golf meldet kein „angesteckt“: Allein an
+  einer Wallbox ist er als e-Golf erkannt, auch wenn der e-Golf nicht angesteckt ist; neben einem
+  zweiten Auto steht an der EVCS der e-Golf angenommen, am Wall Connector ein Gast, angenommen. Den
+  dreiphasigen Gast an der EVCS neben dem Tesla und den zweiphasigen Gast am Wall Connector neben dem
+  e-Golf pinnen Tests in `tests/unit/core/control/test_assignment.py`.
 
 Aufgeschobene Kleinigkeiten aus Plan 2c-2b (die inhaltlichen; sie sind klein, keine blockiert etwas):
 

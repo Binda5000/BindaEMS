@@ -1517,13 +1517,24 @@ wieder im PV-Überschuss.
     Priorität, die nicht jedes Fahrzeug genau einmal nennt (`Die Priorität muss jedes Fahrzeug genau
     einmal nennen.`) oder ein unbekannter Aktor.
   - `rejected` mit Status 409: Die Version ist veraltet oder schon mit anderem Inhalt angenommen.
-- **Boost und Übersteuerung** gelten bis zum Ende des Ansteckvorgangs der Wallbox, an der das
-  Fahrzeug laut Absicht hängt: Meldet sie ein Fahrzeug, am laufenden Vorgang, sonst am nächsten.
-  Danach gelten sie erst wieder mit einer neuen Version. **Eine neue Version bindet jedes Fahrzeug
-  neu, das `boost_until` oder `wallbox` nennt**, auch wenn der Boost oder die Übersteuerung beim
-  Abstecken schon endete. Nimm solche Einträge aus der nächsten Version, wenn sie nicht wieder
-  gelten sollen. Nach einem Neustart des core springt ein Boost vom Vortag nicht beim nächsten
-  Anstecken an.
+- **Boost und Übersteuerung** gelten bis zum Ende des Ansteckvorgangs, an den der core sie bindet:
+  - Eine **Übersteuerung** (auch mit Boost im selben Eintrag) bindet an die Wallbox, die du nennst:
+    Meldet sie ein Fahrzeug, an den laufenden Vorgang, sonst an den nächsten.
+  - Ein **Boost ohne Übersteuerung** bindet an den Vorgang der Wallbox, an der das Fahrzeug beim
+    Setzen steht, erkannt oder angenommen (Health, `vehicles[].wallbox`; Abschnitt „Zuordnung Auto
+    und Wallbox“). Steht es an keiner Wallbox mit Vorgang, bindet er an seine Standard-Wallbox
+    (`default_wallbox`): Meldet sie ein Fahrzeug, an den laufenden Vorgang, sonst an den nächsten.
+    So gilt ein Boost für den Tesla, den der core an der EVCS erkannt hat, dort und springt nicht
+    beim nächsten Anstecken am Wall Connector an.
+  - **Grenze:** Setzt du einen Boost für den e-Golf, während der erkannte Tesla an der EVCS steht,
+    bindet er an den Vorgang des Tesla und endet mit dessen Abstecken (wie bisher, wenn der Tesla
+    an die EVCS übersteuert ist). Steckt danach der e-Golf an, braucht sein Boost eine neue Version.
+
+  Nach dem Ende ihres Vorgangs gelten sie erst wieder mit einer neuen Version. **Eine neue Version
+  bindet jedes Fahrzeug neu, das `boost_until` oder `wallbox` nennt**, auch wenn der Boost oder die
+  Übersteuerung beim Abstecken schon endete. Nimm solche Einträge aus der nächsten Version, wenn sie
+  nicht wieder gelten sollen. Nach einem Neustart des core springt ein Boost vom Vortag nicht beim
+  nächsten Anstecken an.
 - Der core speichert die gültige Absicht (`intent.json`) und nutzt sie nach einem Neustart weiter.
   Eine gespeicherte Absicht aus Plan 2b lädt mit den Standardwerten.
 - **Regelbetrieb aus:** `{"version": …, "control": false}`. Der core übergibt die Aktoren und geht
@@ -1538,7 +1549,10 @@ Seit Plan 2c-2b bestimmt der core selbst, wer an einer Wallbox steht. Das gilt f
 ein Fahrzeug meldet (ein laufender Ansteckvorgang): Dort steht ein Fahrzeug aus `config.yaml` oder
 ein **Gast**, also ein Auto, das `config.yaml` nicht kennt. Ein Fahrzeug steht höchstens an einer
 Wallbox, und ohne Vorgang steht dort niemand. Boost, Übersteuerung und „geladen“ hängen wie bisher
-am Ansteckvorgang. Die Erkennung schreibt nichts auf die Geräte: Sie bestimmt nur, welches Auto die
+an einem Ansteckvorgang. Einen Boost ohne Übersteuerung bindet der core jetzt an den Vorgang der
+Wallbox, an der das Fahrzeug beim Setzen steht, erkannt oder angenommen; steht es an keiner, wie
+bisher an seine Standard-Wallbox (Abschnitt „Absicht per PUT /v1/intent“, mit der Grenze für den
+e-Golf). Die Erkennung schreibt nichts auf die Geräte: Sie bestimmt nur, welches Auto die
 Regelung an welcher Wallbox sieht. Die Szenarien `zuordnung`, `tesla-evcs`, `egolf-twc` und
 `gast-evcs` spielen die typischen Bilder durch (Abschnitt „Simulator“).
 
@@ -1564,9 +1578,10 @@ aus. Jedes zählt für sich: Es **stützt** das Fahrzeug an der Wallbox, **schli
 sagt nichts. Unbekannte Werte (Tessie oder Home Assistant nicht erreichbar, `unknown`) sprechen für
 nichts und schließen nichts aus. Health nennt die Indizien je Wallbox (unten).
 
-- **Tessie** (`tessie`): Das Indiz stützt das Fahrzeug an jeder Wallbox mit Vorgang, wenn Tessie es
-  zu Hause und angesteckt meldet. Meldet Tessie sicher, dass es nicht angesteckt oder nicht zu Hause
-  ist, schließt es das Fahrzeug an jeder Wallbox aus.
+- **Tessie** (`tessie`): Meldet Tessie das Fahrzeug zu Hause und angesteckt, stützt das Indiz es an
+  der Wallbox mit Vorgang, aber nur, solange genau eine Wallbox einen Vorgang hat (unten). Meldet
+  Tessie sicher, dass es nicht angesteckt oder nicht zu Hause ist, schließt es das Fahrzeug an jeder
+  Wallbox mit Vorgang aus.
 - **Stromvergleich** (`current`): Laden die Wallbox und das Auto laut Tessie (mindestens 1 A,
   Phasenzahl bekannt), vergleicht der core die Ströme. Sie passen, wenn die Wallbox auf genau so
   vielen Netzphasen mindestens 1 A misst, wie Tessie Phasen meldet, und jeder dieser Ströme höchstens
@@ -1581,8 +1596,9 @@ nichts und schließen nichts aus. Health nennt die Indizien je Wallbox (unten).
 - **Phasen-Signatur** (`phases`): Lädt die Wallbox und misst sie 60 s ohne Unterbrechung auf
   derselben Zahl n von Netzphasen mindestens 1 A, stützt das Indiz jedes Fahrzeug mit `phases: n` in
   `config.yaml` und schließt jedes andere dort aus.
-- **Home Assistant** (`home`): Meldet `home_entity` des Fahrzeugs `home`, stützt das Indiz das
-  Fahrzeug an jeder Wallbox mit Vorgang. Jeder andere Zustand schließt es an jeder aus.
+- **Home Assistant** (`home`): Meldet `home_entity` des Fahrzeugs `home`, stützt das Indiz es an der
+  Wallbox mit Vorgang, ebenfalls nur, solange genau eine Wallbox einen Vorgang hat. Jeder andere
+  Zustand schließt es an jeder Wallbox mit Vorgang aus; `unknown` und `unavailable` sagen nichts.
 - **Ausschluss** (`elsewhere`): Meldet Tessie das Fahrzeug zu Hause und angesteckt, und meldet jede
   andere Wallbox sicher kein Fahrzeug, stützt das Indiz das Fahrzeug an dieser Wallbox: Es muss
   irgendwo stecken.
@@ -1592,6 +1608,18 @@ nichts und schließen nichts aus. Health nennt die Indizien je Wallbox (unten).
 Fehlt eine Bedingung von Stromvergleich oder Phasen-Signatur einen Zyklus lang, beginnen ihre 60 s
 neu. Einen Gast stützt kein Indiz: Der core erkennt ihn daran, dass alle Fahrzeuge dort ausgeschlossen
 sind.
+
+Stecken an beiden Wallboxen Autos (zwei Vorgänge), stützen `tessie` und `home` nicht; ausschließen
+tun sie weiter an jeder Wallbox. „Zu Hause und angesteckt“ und „zu Hause“ sagen dann nicht, an
+welcher Wallbox das Fahrzeug steht. Mit der Phasen-Signatur hielte der core sonst einen dreiphasigen
+Gast an der EVCS für den Tesla, der nicht ladend am Wall Connector steckt, und einen zweiphasigen Gast
+am Wall Connector für den e-Golf, der „geladen“ an der EVCS steckt. Das weicht von Design 2c-2 (7.2)
+ab und hat einen Preis: Bei zwei Vorgängen erkennt der core ein Fahrzeug nur über Stromvergleich,
+zeitliche Korrelation und Phasen-Signatur, den Tesla also meist erst, wenn er lädt, und den e-Golf
+gar nicht. Sonst bleibt es „angenommen“. An seiner Standard-Wallbox ist das der richtige Insasse;
+steht es an der anderen Wallbox und zeigt Health es dort nicht, setzt du eine Übersteuerung (unten).
+Das gilt auch für den e-Golf, den der core allein am Wall Connector erkannt hat: Steckt an der EVCS
+ein Auto an, zeigt Health ihn nicht mehr am Wall Connector, sondern dort „Gast, angenommen“.
 
 - **Tessie meldet verspätet.** Tessie fragt ein abgestecktes Auto nur alle 600 s ab und erfährt vom
   Anstecken mit Verzug: Ein Wert aus einer Abfrage vor oder kurz nach dem Beginn eines Vorgangs sagt
@@ -1628,9 +1656,9 @@ sind.
 - **Widerspruch** ist: Ein Fahrzeug ist an zwei Wallboxen Kandidat, oder es ist nirgends Kandidat und
   hat an einer Wallbox 2 stützende Indizien und eins, das es ausschließt. Ein Fahrzeug, das an einer
   Wallbox Kandidat ist und an der anderen 2 Stützen und einen Ausschluss hat, widerspricht sich
-  nicht: Tessie und die Phasen-Signatur stützen den Tesla an jeder Wallbox, an der ein Auto mit drei
-  Phasen lädt, und ein dreiphasiger Gast an der EVCS neben dem Tesla am Wall Connector machte die
-  Zuordnung sonst immer unklar, obwohl der Stromvergleich beide trennt.
+  nicht: Ein dreiphasiger Gast an der EVCS neben dem ladenden Tesla am Wall Connector machte die
+  Zuordnung sonst unklar, sobald zeitliche Korrelation und Phasen-Signatur den Tesla auch an der
+  EVCS stützen, obwohl der Stromvergleich beide trennt.
 - **Unklar** wird die Zuordnung, wenn ein Widerspruch 60 s ohne Unterbrechung besteht, und wieder
   klar nach 60 s ohne Widerspruch. Eine aktive Übersteuerung hebt „unklar“ sofort auf. Solange sie
   unklar ist, gilt alles wie vor der Erkennung: Jedes Fahrzeug ohne Übersteuerung steht an seiner
@@ -1707,8 +1735,17 @@ nie an zwei Wallboxen. Der Gast hat keinen Eintrag in `config.yaml` und keine Te
 - **Wo:** An einer EVCS regelt der core den Gast wie jedes Fahrzeug (Tabelle oben). Am Wall
   Connector kann er ihn nicht regeln: Dort ist der Gast Last, und `guest.mode` zählt nur für den
   Akku-Sollwert.
-- **Grenze:** Ein Gast mit zwei Phasen sieht für den core aus wie der e-Golf, solange dieser laut
-  Home Assistant zu Hause ist: Die Phasen-Signatur schließt den e-Golf dann nicht aus.
+- **Grenze:** Erkannt ist ein Gast erst, wenn an seiner Wallbox jedes Fahrzeug aus `config.yaml`
+  ausgeschlossen ist. Bis dahin zeigt Health dort „Gast, angenommen“ oder das Standardfahrzeug.
+  - **Neben einem zweiten Auto** (zwei Vorgänge) stützen Tessie und Home Assistant nicht, sie
+    schließen nur aus (oben). Ein Fahrzeug, das zu Hause angesteckt ist, schließen an der Wallbox des
+    Gastes dann nur Strom oder Phasen aus. Ein dreiphasiger Gast an der EVCS neben dem Tesla, der am
+    Wall Connector steckt und nicht lädt, bleibt so „Gast, angenommen“; lädt der Tesla mit einem
+    anderen Strom, ist der Gast nach rund 2 min erkannt.
+  - **Ein Gast mit zwei Phasen** sieht für den core aus wie der e-Golf, solange dieser laut Home
+    Assistant zu Hause ist, denn der e-Golf meldet kein „angesteckt“. Steckt der Gast allein an einer
+    Wallbox, ist er als e-Golf erkannt, auch wenn der e-Golf gar nicht angesteckt ist. Neben einem
+    zweiten Auto steht an der EVCS der e-Golf angenommen, am Wall Connector ein Gast, angenommen.
 
 **Übersteuerung (wie bisher).** Steht ein Fahrzeug an einer anderen Wallbox, als der core
 annimmt, oder ist die Zuordnung unklar, setzt du `"wallbox"` bei dem Fahrzeug, etwa
@@ -1779,7 +1816,9 @@ den ersten Tagen:
 1. **Steht an jeder Wallbox mit Auto das richtige?** (`wallboxes[].occupant`). Ein Fahrzeug an seiner
    Standard-Wallbox zeigt „angenommen“, bis genug Indizien reichen: Der e-Golf braucht neben `home`
    die Phasen-Signatur, also 60 s Laden und danach 60 s Kandidatur. Ein Auto, das nicht lädt, bleibt
-   „angenommen“, wenn keine zwei Indizien es stützen. Das ändert die Regelung nicht.
+   „angenommen“, wenn keine zwei Indizien es stützen. Stecken an beiden Wallboxen Autos, bleibt der
+   e-Golf immer „angenommen“ und der Tesla, bis er lädt (zwei Vorgänge, oben). Das ändert die
+   Regelung nicht.
 2. **Bleibt „unklar“ aus?** Zeigt Health `unclear`, lies `indicators`: Welches Fahrzeug hat 2
    stützende Indizien und eins, das es ausschließt? Bis die Ursache klar ist, hilft eine
    Übersteuerung (oben).
@@ -1787,7 +1826,9 @@ den ersten Tagen:
    EVCS zuerst ein Gast, meldet der Tracker zu spät (oben).
 4. **Tesla an der EVCS, e-Golf am Wall Connector, Gast:** Steckt eines davon an, prüfst du, ob Health
    es erkennt. Rechne mit einigen Minuten: Die Erkennung braucht 60 s ohne Unterbrechung, und Tessie
-   meldet ein neu angestecktes Auto bis zu 10 min verspätet.
+   meldet ein neu angestecktes Auto bis zu 10 min verspätet. Steckt an der anderen Wallbox ein
+   weiteres Auto, zeigt Health den Gast oft als „Gast, angenommen“ statt erkannt, und den e-Golf am
+   Wall Connector erkennt der core dann nicht (Grenze unter „Gast“).
 
 ### Tesla
 
