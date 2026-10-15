@@ -8,9 +8,9 @@ einige Punkte und weicht in mehreren ab: Ein Auffrischen geht
 auch innerhalb des Totbands durch (zu Abschnitt 8), das 15-min-Budget erreicht Regel 2 nur über dem
 Schutz der USV-Reserve (zu 4.3), und die Grenzen des Wächters wirken einen Zyklus später (zu 4.2).
 Plan 2c-2b weicht in Abschnitt 7 ab: Tessie-Werte zählen erst eine Minute nach dem Beginn eines
-Vorgangs, Tessie und Home Assistant stützen nur bei genau einem Vorgang (beides zu 7.2), der
-Widerspruch ist enger gefasst als in 7.3, und ein Boost ohne Übersteuerung bindet an den Vorgang,
-an dem das Fahrzeug steht (zu 7.1).
+Vorgangs, Tessie und Home Assistant stützen bei mehreren Vorgängen nur nach einer Elimination
+(beides zu 7.2), der Widerspruch ist enger gefasst als in 7.3, und ein Boost ohne Übersteuerung
+bindet an den Vorgang, an dem das Fahrzeug steht (zu 7.1).
 Die Liste unten nennt, was sich sonst beim Bau geändert hat.
 Grundlage ist die Spec `docs/superpowers/specs/2026-10-08-bindaems-design.md`, vor allem 7.1, 7.4,
 7.6 bis 7.8, 7.10, 8.3, 8.5 und 18, und das Design von 2c-1
@@ -89,10 +89,10 @@ Präzisierungen des Plans gehen diesem Dokument vor, wo sie abweichen:
   Kandidat ist und an der anderen 2 Stützen und einen Ausschluss hat, ein Widerspruch. Beschlossen
   wurde das, als Tessie und die Phasen-Signatur den Tesla noch an jeder Wallbox stützten, an der ein
   Auto mit drei Phasen lädt: Ein dreiphasiger Gast an der EVCS neben dem Tesla am Wall Connector
-  machte die Zuordnung dann immer unklar, obwohl der Stromvergleich beide trennt. Seit Tessie nur
-  bei genau einem Vorgang stützt (unten), kommt der Fall nur noch vor, wenn an der anderen Wallbox
-  die zeitliche Korrelation stützt. „Unklar“ gilt wie in 2c-1 (60 s hin, 60 s zurück, eine aktive
-  Übersteuerung hebt es sofort auf).
+  machte die Zuordnung dann immer unklar, obwohl der Stromvergleich beide trennt. Seit der
+  Elimination (unten) kommt der Fall nur noch vor, wenn an der anderen Wallbox die zeitliche
+  Korrelation stützt. „Unklar“ gilt wie in 2c-1 (60 s hin, 60 s zurück, eine aktive Übersteuerung
+  hebt es sofort auf).
 - **Ausschluss (7.2, Entscheidung beim Bau):** Er stützt das Fahrzeug an der Wallbox nur, wenn Tessie
   es „zu Hause und angesteckt“ meldet und jede andere Wallbox sicher kein Fahrzeug meldet, nicht
   schon bei „angesteckt“. Ein Auto, das woanders angesteckt ist (an einer Ladesäule), steht nie an
@@ -103,15 +103,18 @@ Präzisierungen des Plans gehen diesem Dokument vor, wo sie abweichen:
   Sonst ergäbe ein Tesla an einer öffentlichen AC-Säule mit 16 A auf drei Phasen neben einem
   dreiphasigen Gast bei uns mit 16 A auf drei Phasen einen falschen Widerspruch; Tessie schließt ein
   Auto, das nicht zu Hause ist, ohnehin aus.
-- **Tessie und Home Assistant bei zwei Vorgängen (7.2, Entscheidung beim Bau, Abweichung auch von
-  Präzisierung 2):** Sie stützen ein Fahrzeug nur, solange genau eine Wallbox einen laufenden
-  Vorgang hat; ausschließen tun sie wie bisher an jeder Wallbox mit Vorgang. Mit zwei Vorgängen sagen
-  „zu Hause und angesteckt“ und „zu Hause“ nicht, an welcher Wallbox das Fahrzeug steht: Zusammen
-  mit der Phasen-Signatur erkannten sie einen dreiphasigen Gast an der EVCS als den Tesla, der nicht
-  ladend am Wall Connector steckt, und einen zweiphasigen Gast am Wall Connector als den e-Golf, der
-  „geladen“ an der EVCS steckt. Kosten, falls falsch: Mit zwei Vorgängen wird ein Fahrzeug nur über
-  Phasen, Strom und Zeit erkannt, der e-Golf also nie; sonst bleibt es „angenommen“, meist derselbe
-  Insasse.
+- **Elimination (7.2, Entscheidung beim Bau, Abweichung auch von Präzisierung 2):** Tessie und Home
+  Assistant stützen ein Fahrzeug an einer Wallbox mit Vorgang nur, wenn Stromvergleich oder
+  Phasen-Signatur es an jeder anderen Wallbox mit Vorgang ausschließen; bei genau einem Vorgang gilt
+  das immer. Ausschließen tun sie wie bisher an jeder Wallbox mit Vorgang. „Zu Hause (und
+  angesteckt)“ sagt nicht, an welcher Wallbox das Fahrzeug steht: Ohne die Bedingung erkannten sie
+  mit der Phasen-Signatur einen dreiphasigen Gast an der EVCS als den Tesla, der nicht ladend am
+  Wall Connector steckt, und einen zweiphasigen Gast am Wall Connector als den e-Golf, der „geladen“
+  an der EVCS steckt. Lädt der e-Golf zweiphasig am Wall Connector und der Tesla dreiphasig an der
+  EVCS, schließen die Phasen jeden an der Wallbox des anderen aus, und beide sind erkannt wie in 7.2.
+  Kosten, falls falsch: Kommt ein zweiter Vorgang hinzu, fällt eine Erkennung, die auf Tessie oder
+  Home Assistant beruht, auf „angenommen“ zurück, bis die andere Wallbox das Fahrzeug ausschließt
+  (60 s Laden dort) und es 60 s Kandidat war, und so lange, wie dort nichts lädt.
 - **Boost ohne Übersteuerung (7.1, Entscheidung beim Bau):** Er bindet an den Ansteckvorgang der
   Wallbox, an der das Fahrzeug im vorigen Zyklus stand (erkannt, angenommen oder an seiner
   Standard-Wallbox mit laufendem Vorgang), solange dieser Vorgang läuft; sonst wie in 2c-1 an die
