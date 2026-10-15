@@ -26,6 +26,7 @@ from bindaems.shared.control import (
     ChargeMode,
     Command,
     CommandKind,
+    GuestIntent,
     Intent,
     VehicleIntent,
 )
@@ -33,7 +34,7 @@ from bindaems.shared.decisions import Decision, DecisionResult
 from bindaems.shared.timeutil import LOCAL_TZ
 from bindaems.tools.sim import runner
 from bindaems.tools.sim.metrics import CarSample, Forgotten, OwnValue, Sample, measure
-from bindaems.tools.sim.model import PlantModel
+from bindaems.tools.sim.model import GUEST_CAR, PlantModel
 from bindaems.tools.sim.runner import SimResult, run_scenario, sent_times
 from bindaems.tools.sim.scenarios import (
     CLOUD_FACTORS,
@@ -309,13 +310,104 @@ async def test_samples_name_the_cars_the_regulation_steers_live(cfg, tmp_path) -
         result = await run_scenario(scenario, cfg, data_dir)
         return {key: car.steered for key, car in result.samples[-1].cars.items()}
 
-    assert await steered(crossed, live=True) == {"tesla": True, "egolf": False}
-    assert await steered(usual, live=True) == {"tesla": True, "egolf": False}
-    assert await steered(crossed, live=False) == {"tesla": False, "egolf": False}
-    assert await steered(usual, live=False) == {"tesla": False, "egolf": False}
+    def expected(tesla: bool) -> dict[str, bool]:
+        # der e-Golf ist ohne Tessie nie gesteuert, der abgesteckte Gast hinter den Fahrzeugen
+        # der Konfiguration ebenso
+        return {"tesla": tesla, "egolf": False, GUEST_CAR: False}
+
+    assert await steered(crossed, live=True) == expected(True)
+    assert await steered(usual, live=True) == expected(True)
+    assert await steered(crossed, live=False) == expected(False)
+    assert await steered(usual, live=False) == expected(False)
     # nur die EVCS live: Der Tesla an ihr ist gesteuert, am Wall Connector nicht
-    assert await steered(crossed, live=False, evcs_only=True) == {"tesla": True, "egolf": False}
-    assert await steered(usual, live=False, evcs_only=True) == {"tesla": False, "egolf": False}
+    assert await steered(crossed, live=False, evcs_only=True) == expected(True)
+    assert await steered(usual, live=False, evcs_only=True) == expected(False)
+
+
+def guest_intent(mode: ChargeMode, *, evcs_live: bool) -> Intent:
+    """Eine Absicht, die dem Gast den Modus ``mode`` gibt, mit der EVCS live oder im Dry-Run."""
+    actuators = {"wallbox.evcs": ActuatorMode.LIVE} if evcs_live else {}
+    return Intent(version=1, control=True, actuators=actuators, guest=GuestIntent(mode=mode))
+
+
+def test_samples_carry_the_guest_in_the_guest_mode(cfg) -> None:
+    # Der Gast steckt an der EVCS, die Absicht gibt ihm Sofort und schaltet die EVCS live; die EVCS
+    # lädt mit ihrem Sollstrom von 6 A. Die Probe führt ihn hinter den Fahrzeugen der Konfiguration
+    # mit dem Modus „now“, dem Mindeststrom der EVCS und als gesteuert.
+    model = PlantModel(cfg, random.Random(1))  # noqa: S311 - Saat der Simulation
+    intent = guest_intent(ChargeMode.NOW, evcs_live=True)
+    model.wallboxes["evcs"].start_stop = 1
+    model.plug(GUEST_CAR, "evcs")
+    model.step(T0)
+    sample = runner._sample(0, model, cfg, intent, T0)
+    assert list(sample.cars) == ["tesla", "egolf", GUEST_CAR]
+    assert sample.cars[GUEST_CAR] == CarSample(
+        charging=True,
+        current_a=6.0,
+        power_w=6.0 * 3 * 230.0,
+        mode="now",
+        min_a=6,
+        complete=False,
+        steered=True,
+    )
+    model.unplug(GUEST_CAR)
+    model.step(T0 + timedelta(seconds=1))
+    gone = runner._sample(1, model, cfg, intent, T0).cars[GUEST_CAR]
+    assert gone == CarSample(False, 0.0, 0.0, "now", 6, complete=False, steered=False)
+
+
+def test_the_guest_without_an_intent_is_in_pv(cfg) -> None:
+    model = PlantModel(cfg, random.Random(1))  # noqa: S311 - Saat der Simulation
+    model.plug(GUEST_CAR, "evcs")
+    guest = runner._sample(0, model, cfg, None, T0).cars[GUEST_CAR]
+    assert (guest.mode, guest.min_a, guest.steered) == ("pv", 6, False)
+    # eine Absicht ohne Angabe zum Gast: auch PV (``GuestIntent()``)
+    plain = Intent(version=1, control=True)
+    assert runner._sample(0, model, cfg, plain, T0).cars[GUEST_CAR].mode == "pv"
+
+
+def test_a_full_guest_is_complete_in_the_sample(cfg) -> None:
+    model = PlantModel(cfg, random.Random(1))  # noqa: S311 - Saat der Simulation
+    assert runner._sample(0, model, cfg, None, T0).cars[GUEST_CAR].complete is False
+    model.cars[GUEST_CAR].soc_pct = 100.0  # sein Ladelimit
+    assert runner._sample(1, model, cfg, None, T0).cars[GUEST_CAR].complete is True
+
+
+def test_the_guest_at_the_wall_connector_is_not_steered(cfg) -> None:
+    # Ein Auto ohne Tessie hat am Wall Connector keinen Aktor, den die Absicht live schalten kann.
+    model = PlantModel(cfg, random.Random(1))  # noqa: S311 - Saat der Simulation
+    model.plug(GUEST_CAR, "twc")
+    model.step(T0)
+    intent = guest_intent(ChargeMode.MIN_PV, evcs_live=True)
+    guest = runner._sample(0, model, cfg, intent, T0).cars[GUEST_CAR]
+    assert (guest.charging, guest.current_a, guest.power_w) == (True, 16.0, 16.0 * 3 * 230.0)
+    assert (guest.mode, guest.min_a, guest.steered) == ("min_pv", 6, False)
+
+
+def test_the_guest_has_the_minimum_current_of_the_evcs_it_is_plugged_to(cfg) -> None:
+    evcs = cfg.wallboxes["evcs"].model_copy(update={"min_a": 8, "safe_a": 8})
+    config = cfg.model_copy(update={"wallboxes": cfg.wallboxes | {"evcs": evcs}})
+    model = PlantModel(config, random.Random(1))  # noqa: S311 - Saat der Simulation
+    intent = guest_intent(ChargeMode.PV, evcs_live=False)
+    assert runner._sample(0, model, config, intent, T0).cars[GUEST_CAR].min_a == 6  # abgesteckt
+    model.plug(GUEST_CAR, "evcs")
+    assert runner._sample(0, model, config, intent, T0).cars[GUEST_CAR].min_a == 8
+    model.unplug(GUEST_CAR)
+    model.plug(GUEST_CAR, "twc")  # ein Wall Connector hat keinen eigenen Mindeststrom
+    assert runner._sample(0, model, config, intent, T0).cars[GUEST_CAR].min_a == 6
+
+
+async def test_the_unplugged_guest_changes_no_metric(cfg, tmp_path) -> None:
+    # Der abgesteckte Gast zählt überall als „lädt nicht“: Die Kennzahlen eines Laufs sind die der
+    # Proben ohne ihn.
+    result = await run_scenario(SCENARIOS["reserve"], cfg, tmp_path, duration_s=150)
+    assert list(result.samples[-1].cars) == ["tesla", "egolf", GUEST_CAR]
+    assert not any(s.cars[GUEST_CAR].charging for s in result.samples)
+    without = [
+        replace(s, cars={key: car for key, car in s.cars.items() if key != GUEST_CAR})
+        for s in result.samples
+    ]
+    assert measure(without, result.decisions, cfg) == measure(result.samples, result.decisions, cfg)
 
 
 async def test_the_metrics_get_every_own_value_of_the_regulation(

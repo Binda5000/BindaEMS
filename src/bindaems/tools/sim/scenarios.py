@@ -17,9 +17,11 @@ des Szenarios. Die Sonne ist ein halber Sinus über ``DAYLIGHT_H`` Stunden mit `
 der Saat des Szenarios; dieselbe Saat ergibt dieselben Werte, auch in einem zweiten Lauf.
 
 Zu Beginn stecken die Autos an ihrer Standard-Wallbox, laden aber nicht, und der Tesla ist wach,
-soweit ein Szenario nichts anderes sagt. Die Absicht verlangt den Regelbetrieb. Andere Ereignisse
-sind Ausfälle (``_Outage``), eine neue Version der Absicht mit Übersteuerung (``_Override``) oder
-mit Boost (``_Boost``) und das Abstecken (``_Unplug``).
+soweit ein Szenario nichts anderes sagt. Der Gast des Modells (``GUEST_CAR``) steht abgesteckt, und
+Home Assistant meldet den e-Golf zu Hause; ein Szenario ändert das mit ``_setup`` (``guest``,
+``away``). Die Absicht verlangt den Regelbetrieb. Andere Ereignisse sind Ausfälle (``_Outage``),
+eine neue Version der Absicht mit Übersteuerung (``_Override``) oder mit Boost (``_Boost``) und das
+Abstecken (``_Unplug``).
 
 Abweichungen von der Tabelle des Plans (Entscheidung des Koordinators zu Task 14): In ``sonnig``
 und ``wolkig`` steht der Tesla knapp unter seinem Ladelimit, und die Prüfungen verlangen, dass die
@@ -65,6 +67,7 @@ from bindaems.shared.control import (
     VICTRON,
     ChargeMode,
     CommandKind,
+    GuestIntent,
     Intent,
     VehicleIntent,
     vehicle_actuator,
@@ -73,6 +76,7 @@ from bindaems.shared.control import (
 from bindaems.shared.decisions import DecisionResult
 from bindaems.shared.numbers import de, finite_number
 from bindaems.shared.timeutil import LOCAL_TZ
+from bindaems.tools.sim.cars import Evcs
 from bindaems.tools.sim.metrics import (
     MINIMUM_MARGIN_A,
     PV_MODES,
@@ -81,7 +85,7 @@ from bindaems.tools.sim.metrics import (
     cars_w,
     shown_number,
 )
-from bindaems.tools.sim.model import CERBO, EVCS, GRID, TESSIE, TWC, PlantModel
+from bindaems.tools.sim.model import CERBO, EVCS, GRID, GUEST_CAR, TESSIE, TWC, PlantModel
 
 if TYPE_CHECKING:
     from bindaems.core.runtime import CoreRuntime
@@ -395,13 +399,25 @@ def _setup(
     tesla_starts: bool = False,
     asleep: bool = False,
     dess: bool = False,
+    guest: str | None = None,
+    guest_phases: int = 3,
+    away: frozenset[str] = frozenset(),
+    tesla_elsewhere: bool = False,
+    evcs_on: bool = False,
 ) -> None:
     """Akku, Multi, fremder Regler und Dynamic ESS (``dess``); der Tesla an der Wallbox ``tesla``,
     der e-Golf an ``egolf`` (``None``: abgesteckt).
 
     Für den Tesla, wenn angegeben: SOC ``tesla_soc_pct`` und Strom ``tesla_amps``. Mit
     ``tesla_starts`` hat er „Laden an“ im Auto und lädt, sobald die Wallbox Strom gibt; mit
-    ``asleep`` schläft er.
+    ``asleep`` schläft er. Mit ``tesla_elsewhere`` steckt er woanders (``Tesla.elsewhere``): Tessie
+    meldet ihn „Stopped“, obwohl er an keiner Wallbox steckt.
+
+    Der Gast steckt an der Wallbox ``guest`` (``None``: abgesteckt) und lädt auf ``guest_phases``
+    Phasen (1 bis 3). ``away`` nennt die Fahrzeuge, die Home Assistant nicht zu Hause meldet; ohne
+    sind alle zu Hause. Mit ``evcs_on`` steht die EVCS ``EVCS_BOX`` schon vor dem Start des core auf
+    „Laden an“ (ihr Sollstrom ist noch ihr sicherer Strom): Ein Auto an ihr lädt von der ersten
+    Sekunde an.
     """
     model.soc_pct = soc_pct
     model.charger_only = charger_only
@@ -416,14 +432,24 @@ def _setup(
         car.charge_amps = tesla_amps
     car.charge_enabled = tesla_starts
     car.asleep = asleep
+    car.elsewhere = tesla_elsewhere
     if egolf is not None:
         model.plug(EGOLF, egolf)
+    model.cars[GUEST_CAR].phases = guest_phases
+    if guest is not None:
+        model.plug(GUEST_CAR, guest)
+    model.away = set(away)
+    if evcs_on:
+        box = model.wallboxes[EVCS_BOX]
+        if not isinstance(box, Evcs):
+            raise ValueError(f"Wallbox „{EVCS_BOX}“ ist keine EVCS.")
+        box.start_stop = 1
 
 
-def _intent(**modes: ChargeMode) -> Intent:
-    """Die Absicht mit Regelbetrieb und den Modi der Fahrzeuge."""
+def _intent(*, guest_mode: ChargeMode = ChargeMode.PV, **modes: ChargeMode) -> Intent:
+    """Die Absicht mit Regelbetrieb, den Modi der Fahrzeuge und dem Modus des Gastes."""
     vehicles = {key: VehicleIntent(mode=mode) for key, mode in modes.items()}
-    return Intent(version=1, control=True, vehicles=vehicles)
+    return Intent(version=1, control=True, vehicles=vehicles, guest=GuestIntent(mode=guest_mode))
 
 
 # --- Prüfungen -----------------------------------------------------------------------------------
@@ -614,14 +640,16 @@ def _safe_during(name: str, begin_min: int, end_min: int) -> Check:
 
 
 def _all_charge_from(begin_s: int) -> Check:
-    """Ab ``begin_s`` lädt jedes Auto in jeder Sekunde des Laufs."""
+    """Ab ``begin_s`` lädt jedes Fahrzeug der Konfiguration in jeder Sekunde des Laufs. Der Gast
+    (``GUEST_CAR``) steht in jeder Probe, ist aber kein Fahrzeug der Konfiguration und zählt nicht:
+    Abgesteckt lädt er nie."""
 
     def find(result: SimResult) -> list[str]:
         after = [s for s in result.samples if s.t >= begin_s]
         if not after:
             return [f"Der Lauf endet vor {begin_s} s."]
         found: list[str] = []
-        for key in after[0].cars:
+        for key in [key for key in after[0].cars if key != GUEST_CAR]:
             idle = next((s.t for s in after if not s.cars[key].charging), None)
             if idle is not None:
                 found.append(f"„{key}“ lädt bei {idle} s nicht.")

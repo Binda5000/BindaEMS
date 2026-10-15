@@ -31,9 +31,27 @@ ohne ihn ``None``, und ``Settings/DynamicEss/Mode`` mit 1 bei Dynamic ESS, sonst
 
 **Signale** entstehen wie an der Anlage: Der Cerbo liefert Topics (``<Dienst>/<Instanz>/<Pfad>``),
 die EVCS ihren Registerblock, der Wall Connector seine Vitals, Tessie den Zustand des Fahrzeugs
-(``cars``). Die Parser der echten Adapter machen daraus die Signale mit Namen, Quelle, Art und
-Einheit; so unterscheidet der core das Modell nicht von der Anlage. Für die Selbstprüfung meldet der
-Cerbo, was eine richtig eingestellte Anlage meldet.
+(``cars``), Home Assistant den Zustand des ``device_tracker`` eines Fahrzeugs. Die Parser der
+echten Adapter machen daraus die Signale mit Namen, Quelle, Art und Einheit; so unterscheidet der
+core das Modell nicht von der Anlage. Für die Selbstprüfung meldet der Cerbo, was eine richtig
+eingestellte Anlage meldet.
+
+**Home Assistant** (Quelle ``ha``, Plan 2c-2b, Präzisierung 12): Je Fahrzeug mit ``home_entity``
+meldet er ``vehicle.<Schlüssel>.home_state`` (``home_signal``) mit ``home``, für die Fahrzeuge in
+``away`` mit ``not_home``. In der Beispielkonfiguration hat der e-Golf eine ``home_entity``; er ist
+also in jedem Szenario zu Hause, außer ein Szenario nennt ihn in ``away``. Die Quelle gilt wie
+beim Adapter ohne Frischegrenze und mit ``invalidate_on_reconnect``. Sie ist nach dem ersten
+``publish`` verbunden und fällt nie aus (``OUTAGES`` kennt keinen Ausfall für sie); ohne ein
+Fahrzeug mit ``home_entity`` gibt es sie nicht.
+
+**Gast** (``GUEST_CAR``, Präzisierung 12): ein Auto ohne Tessie und ohne Eintrag in der
+Konfiguration, mit 3 Phasen (ein Szenario setzt 1 bis 3), 6 bis 16 A und 50 kWh. Er steht
+abgesteckt, bis ein Szenario ihn ansteckt; jedes Auto lässt sich an jede Wallbox stecken. Der core
+sieht von ihm nur den Strom an der Wallbox, denn er liefert keine Signale eines Fahrzeugs.
+
+**Tesla woanders** (``Tesla.elsewhere``): Er steckt an keiner Wallbox, aber Tessie meldet ihn
+„Stopped“, also angesteckt und zu Hause, wie ein Ladekabel an einer Steckdose. Der core sieht so
+einen echten Widerspruch zwischen Tessie und den Wallboxen.
 
 **Watchdog** am Cerbo (``bindaems/0/…``): Ein Heartbeat über 0 macht ihn nach ``REARM_S`` scharf.
 Bleibt der Heartbeat danach ``victron.watchdog.timeout_s`` aus, löst er aus, und jede EVCS mit
@@ -69,6 +87,8 @@ import httpx
 from bindaems.core.actuators.victron import OVERRIDE_TIMEOUT_S
 from bindaems.core.adapters.evcs import BLOCK_START, decode_block
 from bindaems.core.adapters.evcs import FRESHNESS_S as EVCS_FRESHNESS_S
+from bindaems.core.adapters.homeassistant import SOURCE as HA_SOURCE
+from bindaems.core.adapters.homeassistant import convert_state
 from bindaems.core.adapters.tessie import FRESHNESS_S as TESSIE_FRESHNESS_S
 from bindaems.core.adapters.tessie import TESSIE_BASE_URL
 from bindaems.core.adapters.twc import FRESHNESS_S as TWC_FRESHNESS_S
@@ -87,7 +107,14 @@ from bindaems.core.adapters.victron_topics import InstanceResolver, parse_messag
 from bindaems.core.state.derived import PHASES
 from bindaems.core.state.store import StateStore
 from bindaems.core.watchdog_client.status import WATCHDOG_VERSION
-from bindaems.shared.config import Config, EvcsConfig, Phase, VictronInstances
+from bindaems.shared.config import (
+    Config,
+    EvcsConfig,
+    Phase,
+    VehicleConfig,
+    VictronInstances,
+    home_signal,
+)
 from bindaems.shared.domain import SignalKind, Value
 from bindaems.shared.numbers import finite_number
 from bindaems.tools.sim.cars import Car, Evcs, GxPath, Tesla, WallConnector
@@ -99,12 +126,18 @@ TESSIE: Final = "tessie"
 CERBO: Final = "cerbo"
 GRID: Final = "grid"
 OUTAGES: Final = frozenset({EVCS, TWC, TESSIE, CERBO, GRID})
+GUEST_CAR: Final = "gast"  # Schlüssel des Gastes in ``PlantModel.cars``
+GUEST_MIN_A: Final = 6  # Mindeststrom des Gastes; an einer EVCS gilt ihr eigener, falls höher
 
 STEP_S: Final = 1.0  # ein Schritt ist eine Sekunde
 BATTERY_SOC_PCT: Final = 50.0  # SOC des Akkus, solange das Szenario keinen setzt
 FOREIGN_EVERY: Final = timedelta(seconds=45)
 FOREIGN_EVCS_A: Final = (6, 16)
 FOREIGN_TESLA_A: Final = (5, 16)
+
+# Zustände des ``device_tracker`` in Home Assistant
+HA_HOME: Final = "home"
+HA_AWAY: Final = "not_home"
 
 # Werte des Cerbo
 GRID_SOURCE: Final = 1  # ``system.active_in_source``: Netz am AC-Eingang
@@ -127,6 +160,20 @@ WAITING, ARMED, TRIPPED = 0, 1, 2
 def _instance(configured: int | None) -> int:
     """Die Instanz eines Geräts am Cerbo; ohne Eintrag nimmt der Adapter die erste, die er sieht."""
     return configured if configured is not None else 0
+
+
+def _guest_config(cfg: Config) -> VehicleConfig:
+    """Das Gastfahrzeug: 3 Phasen, 6 bis 16 A und 50 kWh, ohne Tessie. Seine Standard-Wallbox ist
+    die erste der Konfiguration; sie hat im Modell keine Wirkung, denn es steckt kein Auto von
+    selbst an."""
+    return VehicleConfig(
+        name="Gast",
+        usable_kwh=50.0,
+        phases=3,
+        min_a=GUEST_MIN_A,
+        max_a=16,
+        default_wallbox=next(iter(cfg.wallboxes)),
+    )
 
 
 class _Routes:
@@ -217,8 +264,11 @@ class PlantModel:
     - ``foreign``: der fremde Regler ist an
     - ``dess``: Dynamic ESS ist an; der Cerbo meldet ``Settings/DynamicEss/Mode`` 1, verwirft den
       Override und nimmt keinen an
+    - ``away``: die Fahrzeuge, die Home Assistant nicht zu Hause meldet (Schlüssel aus der
+      Konfiguration); ohne Eintrag ist ein Fahrzeug mit ``home_entity`` zu Hause
     - die Geräte: ``wallboxes`` (``Evcs`` und ``WallConnector``), ``cars`` (``teslas`` davon mit
-      Tessie); ``plug`` und ``unplug`` stecken an und ab
+      Tessie, dazu der Gast ``GUEST_CAR`` hinter den Fahrzeugen der Konfiguration); ``plug`` und
+      ``unplug`` stecken an und ab
 
     Messgrößen für die Kennzahlen, Stand des letzten ``step``:
 
@@ -244,6 +294,7 @@ class PlantModel:
         self.outages: set[str] = set()
         self.foreign = False
         self.dess = False
+        self.away: set[str] = set()
         self.grid_a: dict[Phase, float] = dict.fromkeys(PHASES, 0.0)
         self.grid_w = 0.0
         self.battery_feed_a: dict[Phase, float] = dict.fromkeys(PHASES, 0.0)
@@ -258,7 +309,13 @@ class PlantModel:
                 self.cars[key] = Car(key, vehicle)
             else:
                 self.cars[key] = self.teslas[key] = Tesla(key, vehicle, cfg.site.location, rng)
+        # der Gast steht abgesteckt, bis ein Szenario ihn ansteckt
+        self.cars[GUEST_CAR] = Car(GUEST_CAR, _guest_config(cfg))
         self._by_vin = {tesla.vin: tesla for tesla in self.teslas.values()}
+        # die Fahrzeuge, deren ``home_entity`` Home Assistant meldet
+        self._home_keys = tuple(
+            key for key, vehicle in cfg.vehicles.items() if vehicle.home_entity is not None
+        )
         instances = cfg.victron.instances
         self.wallboxes: dict[str, Evcs | WallConnector] = {}
         self._evcs: dict[str, Evcs] = {}
@@ -307,6 +364,7 @@ class PlantModel:
 
     def plug(self, vehicle: str, wallbox: str) -> None:
         """Steckt das Fahrzeug an die Wallbox; beide müssen frei sein, sonst ``ValueError``.
+        Jedes Auto lässt sich an jede Wallbox stecken, auch der Gast.
 
         Ein angesteckter Tesla startet nicht von selbst: Er lädt erst mit
         ``Tesla.charge_enabled = True``, das ein Szenario für ein Auto setzt, das selbst startet
@@ -342,7 +400,9 @@ class PlantModel:
 
     def attach(self, store: StateStore) -> None:
         """Registriert die Quellen wie die Adapter: ``victron`` ereignisgesteuert, dazu je EVCS,
-        Wall Connector und Fahrzeug mit Tessie eine Quelle mit der Frischegrenze ihres Adapters."""
+        Wall Connector und Fahrzeug mit Tessie eine Quelle mit der Frischegrenze ihres Adapters.
+        Hat ein Fahrzeug ``home_entity``, kommt ``ha`` dazu, wie beim HA-Adapter ohne Frischegrenze
+        und mit ``invalidate_on_reconnect``."""
         store.register_source(
             VICTRON_SOURCE, VICTRON_FRESHNESS_S, activity_based=True, invalidate_on_reconnect=True
         )
@@ -352,6 +412,8 @@ class PlantModel:
             store.register_source(key, TWC_FRESHNESS_S)
         for key in self.teslas:
             store.register_source(f"tessie:{key}", TESSIE_FRESHNESS_S)
+        if self._home_keys:
+            store.register_source(HA_SOURCE, None, invalidate_on_reconnect=True)
 
     def mqtt_write(self, path: str, value: float | int | None) -> bool:
         """Der MQTT-Schreibweg des core zum Cerbo, wie ``VictronMqttAdapter.write``.
@@ -551,7 +613,8 @@ class PlantModel:
         Eine ausgefallene Quelle liefert nichts; ``victron``, EVCS und Wall Connector sind dann
         getrennt, Tessie bleibt verbunden wie beim Adapter. Tessie liefert nur zu den Abfragezeiten
         seines Adapters, nach gescheiterten Abfragen mit dessen Backoff, und ist wie dieser erst
-        nach der ersten gelungenen Abfrage verbunden.
+        nach der ersten gelungenen Abfrage verbunden. Home Assistant ist immer verbunden und meldet
+        je Fahrzeug mit ``home_entity`` ``home``, in ``away`` ``not_home``.
         """
         cerbo_up = CERBO not in self.outages
         store.set_connected(VICTRON_SOURCE, cerbo_up)
@@ -585,6 +648,17 @@ class PlantModel:
                     ts=now,
                 )
             store.set_connected(source, True)
+        if self._home_keys:
+            store.set_connected(HA_SOURCE, True)
+            for key in self._home_keys:
+                state = HA_AWAY if key in self.away else HA_HOME
+                store.update(
+                    home_signal(key),
+                    convert_state(state),
+                    source=HA_SOURCE,
+                    kind=SignalKind.STATE,
+                    ts=now,
+                )
 
     def _cerbo(self) -> dict[str, Value]:
         """Die Topics des Cerbo (``<Dienst>/<Instanz>/<Pfad>``) mit ihren Werten."""

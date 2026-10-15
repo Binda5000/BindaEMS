@@ -6,9 +6,13 @@ GX-Dienstes, der Wall Connector seine Vitals, Tessie den Zustand des Fahrzeugs. 
 übersetzen sie die Parser der echten Adapter (``PlantModel.publish``).
 
 - ``Car``: ein Auto mit eigenem Akku. Es zieht, was die Wallbox anbietet, höchstens bis zu seinem
-  Höchststrom, auf seinen Phasen und bis zu seinem Ladelimit.
+  Höchststrom, auf seinen Phasen und bis zu seinem Ladelimit. Auch der Gast des Modells
+  (``model.GUEST_CAR``) ist ein ``Car``: ein Auto ohne Tessie, von dem der core nur den Strom an
+  der Wallbox sieht.
 - ``Tesla``: ein Auto mit Tessie: Laden an/aus und Ladestrom im Auto, Schlaf, die Befehle des
-  Tesla-Aktors über Tessie und die Abfragen des Tessie-Caches.
+  Tesla-Aktors über Tessie und die Abfragen des Tessie-Caches. Mit ``elsewhere`` steckt er an
+  keiner Wallbox der Anlage, aber an einem Ladekabel woanders (einer Steckdose): Tessie meldet ihn
+  „Stopped“, also angesteckt und zu Hause.
 - ``Evcs``: die Victron EVCS NS mit dem angesteckten Auto, geschrieben über den GX-Dienst
   ``evcharger``.
 - ``WallConnector``: der Tesla Wall Connector Gen3 mit dem angesteckten Auto.
@@ -113,10 +117,16 @@ class _Request:
 
 
 class Tesla(Car):
-    """Ein Tesla mit Tessie; Stellgrößen dazu ``charge_amps``, ``charge_enabled`` und ``asleep``.
+    """Ein Tesla mit Tessie; Stellgrößen dazu ``charge_amps``, ``charge_enabled``, ``asleep`` und
+    ``elsewhere``.
 
     - **Laden:** nur wach und mit „Laden an“ im Auto (``charge_enabled``), höchstens mit
       ``charge_amps``; Ladelimit ``TESLA_LIMIT_PCT``.
+    - **Woanders:** Mit ``elsewhere`` steckt er an keiner Wallbox der Anlage, aber an einem
+      Ladekabel, etwa an einer Steckdose (Plan 2c-2b, Präzisierung 12). Tessie meldet ihn dann
+      „Stopped“, also angesteckt, und zu Hause (``state`` liefert immer den Ort der Anlage). So
+      steht Tessie im Widerspruch zu dem, was die Wallboxen zeigen. An einer Wallbox gilt
+      ``elsewhere`` nicht.
     - **Schlaf:** ``SLEEP_AFTER`` nach dem letzten Laden oder Befehl (``tick``).
     - **Tessie:** ``handle`` nimmt einen Befehl des Tesla-Aktors an. Die Antwort kommt mit
       ``resolve`` nach ``TESSIE_DELAY_S``, bei schlafendem Auto erst nach dem Wecken (``WAKE_S``
@@ -137,6 +147,7 @@ class Tesla(Car):
         self.charge_amps: int = cfg.max_a
         self.charge_enabled = False
         self.asleep = False
+        self.elsewhere = False
         self.next_poll: datetime | None = None
         self._home = home
         self._radius_m = cfg.home_radius_m
@@ -168,9 +179,10 @@ class Tesla(Car):
         self._last_active = now
 
     def charging_state(self) -> str:
-        """Der Ladezustand, wie Tessie ihn meldet."""
+        """Der Ladezustand, wie Tessie ihn meldet; ohne Wallbox „Disconnected“, mit ``elsewhere``
+        „Stopped“."""
         if self.wallbox is None:
-            return "Disconnected"
+            return "Stopped" if self.elsewhere else "Disconnected"
         if self.current_a > 0:
             return "Charging"
         return "Complete" if self.complete else "Stopped"

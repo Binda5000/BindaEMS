@@ -16,11 +16,18 @@ import pytest
 from bindaems.core.api.app import HealthReport
 from bindaems.core.control.intent import IntentReply
 from bindaems.shared.config import Config
-from bindaems.shared.control import ActuatorMode, ChargeMode, CommandKind, Intent, VehicleIntent
+from bindaems.shared.control import (
+    ActuatorMode,
+    ChargeMode,
+    CommandKind,
+    GuestIntent,
+    Intent,
+    VehicleIntent,
+)
 from bindaems.shared.decisions import Decision, DecisionResult
 from bindaems.shared.timeutil import LOCAL_TZ
 from bindaems.tools.sim.metrics import CarSample, Sample, measure
-from bindaems.tools.sim.model import PlantModel
+from bindaems.tools.sim.model import GUEST_CAR, PlantModel
 from bindaems.tools.sim.runner import SimResult
 from bindaems.tools.sim.scenarios import CLOUD_FACTORS, SCENARIOS, Checks, sun_w
 
@@ -302,6 +309,66 @@ def test_setup_switches_dynamic_ess_on_request(cfg) -> None:
     assert all(not set_up(cfg, name).dess for name in list(SCENARIOS)[:10])
 
 
+def test_setup_puts_the_guest_and_the_tesla_elsewhere(cfg) -> None:
+    from bindaems.tools.sim.scenarios import _setup
+
+    model = PlantModel(cfg, random.Random(1))  # noqa: S311 - Saat der Simulation
+    _setup(
+        model,
+        soc_pct=60.0,
+        tesla=None,
+        egolf=None,  # sonst steckt der e-Golf schon an der EVCS, und der Gast fände sie belegt
+        tesla_elsewhere=True,
+        guest="evcs",
+        guest_phases=2,
+        away=frozenset({"egolf"}),
+        evcs_on=True,
+    )
+    guest, tesla = model.cars[GUEST_CAR], model.teslas["tesla"]
+    assert (guest.wallbox, guest.phases) == ("evcs", 2)
+    assert model.wallboxes["evcs"].car is guest
+    assert tesla.elsewhere and tesla.wallbox is None
+    assert model.away == {"egolf"}
+    assert model.wallboxes["evcs"].start_stop == 1
+
+
+def test_setup_keeps_the_guest_unplugged_and_everybody_home_unless_asked(cfg) -> None:
+    from bindaems.tools.sim.scenarios import _setup
+
+    model = PlantModel(cfg, random.Random(1))  # noqa: S311 - Saat der Simulation
+    _setup(model, soc_pct=60.0)
+    guest = model.cars[GUEST_CAR]
+    assert (guest.wallbox, guest.phases) == (None, 3)
+    assert not model.teslas["tesla"].elsewhere and model.away == set()
+    assert model.wallboxes["evcs"].start_stop == 0
+    assert model.wallboxes["evcs"].car is model.cars["egolf"]  # wie bisher an der Standard-Wallbox
+    # die bestehenden 18 Szenarien stecken den Gast nie an und schicken niemanden weg
+    for name in list(SCENARIOS)[:18]:
+        existing = set_up(cfg, name)
+        assert existing.cars[GUEST_CAR].wallbox is None and existing.away == set(), name
+
+
+def test_evcs_on_needs_an_evcs_under_that_name(cfg) -> None:
+    from bindaems.tools.sim.scenarios import _setup
+
+    odd = cfg.model_copy(update={"wallboxes": {"evcs": cfg.wallboxes["twc"]}})
+    model = PlantModel(odd, random.Random(1))  # noqa: S311 - Saat der Simulation
+    with pytest.raises(ValueError, match="„evcs“ ist keine EVCS"):
+        _setup(model, soc_pct=60.0, tesla=None, egolf=None, evcs_on=True)
+
+
+def test_the_intent_takes_the_guest_mode_beside_the_vehicle_modes() -> None:
+    from bindaems.tools.sim.scenarios import _intent
+
+    plain = _intent(tesla=ChargeMode.NOW)
+    assert plain.guest == GuestIntent(mode=ChargeMode.PV)  # wie die Absicht ohne Angabe
+    assert plain.vehicles == {"tesla": VehicleIntent(mode=ChargeMode.NOW)}
+    sooner = _intent(egolf=ChargeMode.PV, guest_mode=ChargeMode.NOW)
+    assert sooner.guest == GuestIntent(mode=ChargeMode.NOW)
+    assert sooner.vehicles == {"egolf": VehicleIntent(mode=ChargeMode.PV)}  # kein Fahrzeug „guest“
+    assert (sooner.version, sooner.control) == (1, True)
+
+
 def test_the_dry_run_runs_beside_a_foreign_controller(cfg) -> None:
     model = set_up(cfg, "dry-run")
     assert model.foreign and model.teslas["tesla"].charge_enabled
@@ -428,6 +495,22 @@ def test_both_cars_charge_from_60_min(cfg) -> None:
     assert both.find(run(3650)) == ["„egolf“ lädt bei 3650 s nicht."]
     short = result_of(cfg, "ausfaelle", samples=[cars_at(0, 16.0, 15.0)])
     assert both.find(short) == ["Der Lauf endet vor 3600 s."]
+
+
+def test_the_unplugged_guest_does_not_count_for_both_cars(cfg) -> None:
+    # Der Gast steht in jeder Probe, abgesteckt und ohne Strom: „beide Autos“ sind Tesla und e-Golf.
+    both = check("ausfaelle", 2)
+    idle = CarSample(False, 0.0, 0.0, "pv", 6)
+
+    def sample_at(t: int, *, egolf_idle: bool = False) -> Sample:
+        sample = cars_at(t, 16.0, 15.0)
+        cars = {**sample.cars, GUEST_CAR: idle}
+        return replace(sample, cars={**cars, "egolf": idle} if egolf_idle else cars)
+
+    whole = [sample_at(t) for t in range(3590, 3700)]
+    assert both.find(result_of(cfg, "ausfaelle", samples=whole)) == []
+    gap = [sample_at(t, egolf_idle=t == 3650) for t in range(3590, 3700)]
+    assert both.find(result_of(cfg, "ausfaelle", samples=gap)) == ["„egolf“ lädt bei 3650 s nicht."]
 
 
 def test_a_decision_must_name_resume_after_outage(cfg) -> None:

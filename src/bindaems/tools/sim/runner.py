@@ -18,7 +18,8 @@ Je simulierter Sekunde:
 3. ``rt.cycle_once()``
 4. zehnmal ``await asyncio.sleep(0)``: Die Befehle an Tessie laufen bis zu ihrer Antwort
 5. ``model.resolve``: Tessie beantwortet, was fällig ist
-6. eine Probe (``Sample``), alle ``HEALTH_EVERY_S`` dazu die Gesundheit
+6. eine Probe (``Sample``, mit den Fahrzeugen der Konfiguration und dem Gast), alle
+   ``HEALTH_EVERY_S`` dazu die Gesundheit
 7. die Uhr eine Sekunde weiter
 
 Am Ende liest der Lauf alle Entscheidungen und fährt die Laufzeit herunter. Die Kennzahlen kommen
@@ -56,6 +57,7 @@ from bindaems.shared.control import (
     Command,
     CommandKind,
     CommandValue,
+    GuestIntent,
     Intent,
     VehicleIntent,
     vehicle_actuator,
@@ -65,7 +67,7 @@ from bindaems.shared.decisions import Decision, DecisionResult
 from bindaems.shared.influx.lineprotocol import Point
 from bindaems.shared.timeutil import ManualClock
 from bindaems.tools.sim.metrics import CarSample, Forgotten, Metrics, OwnValue, Sample, measure
-from bindaems.tools.sim.model import PlantModel
+from bindaems.tools.sim.model import GUEST_CAR, GUEST_MIN_A, PlantModel
 from bindaems.tools.sim.scenarios import Action, Scenario
 
 HEALTH_EVERY_S: Final = 10  # so oft hält der Lauf die Gesundheit des core fest
@@ -276,24 +278,38 @@ def _by_second(events: Sequence[tuple[int, Action]]) -> dict[int, list[Action]]:
 def _sample(t: int, model: PlantModel, cfg: Config, intent: Intent | None, now: datetime) -> Sample:
     """Die Probe nach Sekunde ``t``; der Modus je Auto laut Absicht, mit Boost bis ``now``, und
     ob die Regelung seinen Ladepunkt live steuert (``_steered``). Dazu Netz, PV, Haus und Override
-    des Modells im Schritt."""
+    des Modells im Schritt.
+
+    Hinter den Fahrzeugen der Konfiguration steht der Gast (``GUEST_CAR``), auch abgesteckt, dann
+    ohne Strom. Sein Modus ist ``intent.guest.mode``, ohne Absicht PV; Boost kennt er nicht. Sein
+    Mindeststrom ist der der EVCS, an der er steckt, sonst ``GUEST_MIN_A``.
+    """
     amps, power = model.car_a, model.car_w
     cars: dict[str, CarSample] = {}
     for key, vehicle in cfg.vehicles.items():
         entry = (intent.vehicles.get(key) if intent is not None else None) or VehicleIntent()
         boost = entry.boost_until is not None and now < entry.boost_until
         plugged = model.cars[key].wallbox
-        wallbox = cfg.wallboxes[plugged] if plugged is not None else None
-        evcs_min = wallbox.min_a if isinstance(wallbox, EvcsConfig) else 0  # eigener der EVCS
         cars[key] = CarSample(
             charging=amps[key] > 0,
             current_a=amps[key],
             power_w=power[key],
             mode="boost" if boost else entry.mode.value,
-            min_a=max(vehicle.min_a, evcs_min),
+            min_a=max(vehicle.min_a, _evcs_min_a(plugged, cfg)),
             complete=model.cars[key].complete,
             steered=_steered(key, plugged, cfg, intent),
         )
+    guest_mode = (intent.guest if intent is not None else GuestIntent()).mode
+    plugged = model.cars[GUEST_CAR].wallbox
+    cars[GUEST_CAR] = CarSample(
+        charging=amps[GUEST_CAR] > 0,
+        current_a=amps[GUEST_CAR],
+        power_w=power[GUEST_CAR],
+        mode=guest_mode.value,
+        min_a=max(GUEST_MIN_A, _evcs_min_a(plugged, cfg)),
+        complete=model.cars[GUEST_CAR].complete,
+        steered=_steered(GUEST_CAR, plugged, cfg, intent),
+    )
     return Sample(
         t=t,
         grid_a=dict(model.grid_a),
@@ -307,6 +323,12 @@ def _sample(t: int, model: PlantModel, cfg: Config, intent: Intent | None, now: 
         override_w=model.override_w,
         override_age_s=model.override_age_s,
     )
+
+
+def _evcs_min_a(wallbox: str | None, cfg: Config) -> int:
+    """Der eigene Mindeststrom der EVCS ``wallbox``; 0 an einem Wall Connector und abgesteckt."""
+    config = cfg.wallboxes[wallbox] if wallbox is not None else None
+    return config.min_a if isinstance(config, EvcsConfig) else 0
 
 
 def _steered(key: str, wallbox: str | None, cfg: Config, intent: Intent | None) -> bool:

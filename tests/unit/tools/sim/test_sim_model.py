@@ -2,7 +2,7 @@
 
 Die erwarteten Werte sind von Hand gerechnet, mit der Beispielkonfiguration: 230 V, Importlimit
 20 A (4600 W je Phase), Akku 30 kWh, Reserve 20 %, Laden bis 10 kW, Entladen bis 12 kW (4 kW je
-Phase).
+Phase). Dazu Home Assistant, der Gast und der Tesla woanders (Plan 2c-2b, Präzisierung 12).
 """
 
 import random
@@ -28,7 +28,8 @@ from bindaems.core.state.derived import PHASES, derive
 from bindaems.core.watchdog_client.status import WATCHDOG_VERSION, WatchdogState, read_watchdog
 from bindaems.shared.config import VictronInstances
 from bindaems.shared.domain import Quality, SignalKind
-from bindaems.tools.sim.model import PlantModel, _Routes
+from bindaems.tools.sim.cars import Car
+from bindaems.tools.sim.model import GUEST_CAR, PlantModel, _Routes
 
 # --- ESS, Peak Shaving und Akku -----------------------------------------------------------------
 
@@ -526,6 +527,119 @@ def test_sources_age_like_the_adapters(model, store, clock) -> None:
     clock.advance(890)  # T0 + 901 s
     assert quality(tessie) is Quality.STALE
     assert {store.connected(s) for s in ("victron", "evcs", "twc", "tessie:tesla")} == {True}
+
+
+# --- Home Assistant, Gast und Tesla woanders (Plan 2c-2b, Präzisierung 12) ------------------------
+
+
+def test_home_assistant_reports_home_or_away(model, store, clock) -> None:
+    run(model, store, clock, 1)
+    reading = store.snapshot().get("vehicle.egolf.home_state")
+    assert (reading.value, reading.source, reading.kind) == ("home", "ha", SignalKind.STATE)
+    model.away = {"egolf"}
+    run(model, store, clock, 1)
+    assert store.snapshot().ok("vehicle.egolf.home_state") == "not_home"
+
+
+def test_nobody_is_away_unless_a_scenario_says_so(model) -> None:
+    assert model.away == set()
+
+
+def test_home_assistant_reports_every_vehicle_with_a_home_entity(cfg, store, clock) -> None:
+    # nur der Tesla ist weg; der e-Golf bleibt zu Hause
+    tesla = cfg.vehicles["tesla"].model_copy(update={"home_entity": "device_tracker.tesla"})
+    config = cfg.model_copy(update={"vehicles": cfg.vehicles | {"tesla": tesla}})
+    plant = PlantModel(config, random.Random(1))  # noqa: S311 - Saat der Simulation
+    plant.attach(store)
+    plant.away = {"tesla"}
+    run(plant, store, clock, 1)
+    snap = store.snapshot()
+    assert snap.ok("vehicle.tesla.home_state") == "not_home"
+    assert snap.ok("vehicle.egolf.home_state") == "home"
+
+
+def test_without_a_home_entity_there_is_no_home_assistant(cfg, store, clock) -> None:
+    vehicles = {key: v.model_copy(update={"home_entity": None}) for key, v in cfg.vehicles.items()}
+    bare = cfg.model_copy(update={"vehicles": vehicles})
+    plant = PlantModel(bare, random.Random(1))  # noqa: S311 - Saat der Simulation
+    plant.attach(store)
+    plant.away = {"egolf"}
+    run(plant, store, clock, 1)
+    assert store.connected("ha") is None  # die Quelle ist nie registriert worden
+    assert store.snapshot().matching("vehicle.egolf.home_state") == {}
+
+
+def test_the_ha_source_is_registered_like_the_adapter(model, store, clock) -> None:
+    # Wie ``HaAdapter``: ohne Frischegrenze und mit ``invalidate_on_reconnect``; verbunden ist die
+    # Quelle mit dem ersten ``publish``.
+    assert store.connected("ha") is False
+    run(model, store, clock, 1)
+    assert store.connected("ha") is True
+    store.update("probe", 1.0, source="ha", kind=SignalKind.MEASUREMENT, ts=clock.now())
+    clock.advance(100_000)  # ohne Frischegrenze veraltet nicht einmal eine Messung
+    reading = store.snapshot().get("probe")
+    assert reading is not None and reading.quality is Quality.OK
+    store.set_connected("ha", False)  # nach einer Wiederverbindung gilt ein alter Wert nicht mehr
+    store.set_connected("ha", True)
+    reading = store.snapshot().get("vehicle.egolf.home_state")
+    assert reading is not None and reading.ts == T0 and reading.quality is Quality.STALE
+
+
+def test_the_guest_is_a_car_without_tessie_and_stands_unplugged(model, cfg) -> None:
+    guest = model.cars[GUEST_CAR]
+    assert GUEST_CAR == "gast" and GUEST_CAR not in cfg.vehicles
+    assert type(guest) is Car and GUEST_CAR not in model.teslas  # ohne Tessie
+    assert (guest.phases, guest.max_a, guest.usable_kwh) == (3, 16.0, 50.0)
+    assert guest.wallbox is None and model.car_a[GUEST_CAR] == 0.0
+
+
+def test_the_guest_charges_on_its_phases(model, store, clock) -> None:
+    model.cars[GUEST_CAR].phases = 1
+    model.plug(GUEST_CAR, "twc")
+    run(model, store, clock, 1)
+    assert (model.car_a[GUEST_CAR], model.car_w[GUEST_CAR]) == (16.0, 16.0 * 230.0)
+
+
+def test_the_guest_shows_only_at_the_wallbox_it_is_plugged_to(model, store, clock) -> None:
+    # Der Gast hat kein Tessie: Der core sieht von ihm nur den Strom an der Wallbox.
+    model.plug(GUEST_CAR, "twc")
+    run(model, store, clock, 2)
+    snap = store.snapshot()
+    assert snap.matching("vehicle.gast") == {} and not any("gast" in name for name in snap.readings)
+    assert snap.ok("wallbox.twc.l1.current_a") == 16.0
+
+
+def test_a_tesla_plugged_elsewhere_reports_stopped(model) -> None:
+    car = model.teslas["tesla"]
+    car.elsewhere = True
+    values = car.poll(T0, 230.0, reachable=True)
+    assert (car.charging_state(), values["plugged"], values["at_home"]) == ("Stopped", True, True)
+
+
+def test_a_tesla_plugged_elsewhere_is_plugged_and_at_home_for_the_core(model, store, clock) -> None:
+    model.teslas["tesla"].elsewhere = True
+    run(model, store, clock, 1)
+    snap = store.snapshot()
+    assert snap.ok("vehicle.tesla.charging_state") == "Stopped"
+    assert (snap.ok("vehicle.tesla.plugged"), snap.ok("vehicle.tesla.at_home")) == (True, True)
+    assert snap.ok("wallbox.twc.l1.current_a") == 0.0  # an keiner Wallbox, also ohne Strom
+
+
+def test_elsewhere_matters_only_for_a_tesla_without_a_wallbox(model) -> None:
+    car = model.teslas["tesla"]
+    assert car.elsewhere is False and car.charging_state() == "Disconnected"  # wie bisher
+    car.elsewhere = True
+    car.charge_enabled = True
+    model.step(T0)
+    assert (car.current_a, car.charging_state()) == (0.0, "Stopped")  # ohne Wallbox kein Strom
+    model.plug("tesla", "twc")
+    model.step(at(1))
+    assert car.charging_state() == "Charging"  # an einer Wallbox gilt es wie sonst
+    car.soc_pct = car.limit_pct
+    model.step(at(2))
+    assert car.charging_state() == "Complete"
+    model.unplug("tesla")
+    assert car.charging_state() == "Stopped"
 
 
 # --- Ausfälle ------------------------------------------------------------------------------------
