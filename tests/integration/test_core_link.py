@@ -19,7 +19,7 @@ from bindaems.app.core_link import CoreClient, CoreReply, CoreUnavailableError
 from bindaems.core.api.app import AckReply, HealthReport, create_api
 from bindaems.core.control.intent import IntentReply
 from bindaems.shared.control import Intent
-from bindaems.shared.decisions import Decision
+from bindaems.shared.decisions import Decision, DecisionResult
 from bindaems.shared.timeutil import LOCAL_TZ
 
 TOKEN = "x" * 32
@@ -153,8 +153,6 @@ async def test_client_reads_decisions_with_timezone(core_api) -> None:
 
 
 async def test_client_reads_foreign_decisions_and_more(core_api) -> None:
-    from bindaems.shared.decisions import DecisionResult
-
     foreign = decision(result=DecisionResult.FOREIGN, outcome="none", codes=("foreign_change",))
     core_api.view.decision_list = [foreign]
     core_api.view.decision_more = True

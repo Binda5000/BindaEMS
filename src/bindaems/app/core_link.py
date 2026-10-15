@@ -66,21 +66,8 @@ class CoreClient:
         return {"Authorization": f"Bearer {self._token.get_secret_value()}"}
 
     async def health(self) -> dict[str, Any]:
-        try:
-            response = await self._http.get(
-                f"{self._base}/v1/health", headers=self._headers(), timeout=HEALTH_TIMEOUT_S
-            )
-        except httpx.HTTPError as exc:
-            raise CoreUnavailableError(f"{type(exc).__name__}: {exc}") from exc
-        if response.status_code != 200:
-            raise CoreUnavailableError(f"HTTP {response.status_code}")
-        try:
-            data = response.json()
-        except ValueError as exc:
-            raise CoreUnavailableError("Antwort ist kein JSON") from exc
-        if not isinstance(data, dict):
-            raise CoreUnavailableError("Antwort ist kein JSON-Objekt")
-        return data
+        reply = await self._call("GET", "/v1/health", frozenset({200}), timeout_s=HEALTH_TIMEOUT_S)
+        return reply.body
 
     async def _call(
         self,
@@ -90,6 +77,7 @@ class CoreClient:
         *,
         params: Mapping[str, str | int] | None = None,
         json_body: Mapping[str, Any] | None = None,
+        timeout_s: float = REQUEST_TIMEOUT_S,
     ) -> CoreReply:
         """Ruft den core auf; nur die ``expected`` Status kehren als Antwort zurück.
 
@@ -103,7 +91,7 @@ class CoreClient:
                 headers=self._headers(),
                 params=params,
                 json=json_body,
-                timeout=REQUEST_TIMEOUT_S,
+                timeout=timeout_s,
             )
         except httpx.HTTPError as exc:
             raise CoreUnavailableError(f"{type(exc).__name__}: {exc}") from exc
@@ -187,6 +175,17 @@ async def _messages(ws: ClientConnection) -> AsyncIterator[dict[str, Any]]:
     except ConnectionClosed as exc:  # u. a. 4401: Token abgelehnt
         code = exc.rcvd.code if exc.rcvd is not None else None
         raise CoreUnavailableError(f"Stream geschlossen (Code {code})") from exc
+
+
+async def _run_handlers(
+    handlers: Sequence[Callable[..., Awaitable[None]]], what: str, *args: Any
+) -> None:
+    """Ruft jeden Handler mit ``args``; ein Fehler kommt ins Log und bricht den Stream nicht ab."""
+    for handler in handlers:
+        try:
+            await handler(*args)
+        except Exception:
+            log.exception("Verarbeitung fehlgeschlagen", message=what)
 
 
 class LiveState:
@@ -328,20 +327,12 @@ class LiveFeed:
             self._live.alarms = data
             self._live.publish(message)
         elif kind == "slot_flows" and isinstance(data, dict):
-            for handler in self._handlers:
-                try:
-                    await handler(data)
-                except Exception:  # ein Empfänger darf den Stream nicht abbrechen
-                    log.exception("Verarbeitung von slot_flows fehlgeschlagen")
+            await _run_handlers(self._handlers, "slot_flows", data)
         elif kind == "decision":
             await self._dispatch_decision(data)
         elif kind == "mode_change" and isinstance(data, dict):
             self.refresh_health()
-            for mode_handler in self._mode_handlers:
-                try:
-                    await mode_handler(data)
-                except Exception:
-                    log.exception("Verarbeitung von mode_change fehlgeschlagen")
+            await _run_handlers(self._mode_handlers, "mode_change", data)
 
     async def _dispatch_decision(self, data: Any) -> None:
         try:
@@ -349,11 +340,7 @@ class LiveFeed:
         except ValueError as exc:  # ein ungültiges Objekt wird übergangen, der Stream läuft weiter
             log.warning("Entscheidung vom core ungültig", error=str(exc))
             return
-        for decision_handler in self._decision_handlers:
-            try:
-                await decision_handler(decision)
-            except Exception:
-                log.exception("Verarbeitung der Entscheidung fehlgeschlagen")
+        await _run_handlers(self._decision_handlers, "decision", decision)
 
     async def _run_connect_handlers(self) -> None:
         """Ruft nach dem Verbindungsaufbau jeden Handler (etwa den Rückstand der Entscheidungen).
@@ -361,11 +348,7 @@ class LiveFeed:
         Ein Fehler kommt ins Log. Der Stream wird erst danach weiter gelesen; die Nachrichten
         dazwischen puffert die Verbindung.
         """
-        for connect_handler in self._connect_handlers:
-            try:
-                await connect_handler()
-            except Exception:
-                log.exception("Verarbeitung nach dem Verbindungsaufbau fehlgeschlagen")
+        await _run_handlers(self._connect_handlers, "connect")
 
     def _connected(self) -> None:
         if self._live.connected:

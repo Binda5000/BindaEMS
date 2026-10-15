@@ -1,14 +1,19 @@
 import asyncio
 import contextlib
-from collections.abc import AsyncIterator, Callable, Sequence
+from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
 from typing import Any
 
+import httpx
+import pytest
+from pydantic import SecretStr
 from structlog.testing import capture_logs
 from tests.app_helpers import T_APP
 from tests.unit.shared.test_decisions import decision
 
+from bindaems.app import core_link
 from bindaems.app.core_link import (
     ConnectHandler,
+    CoreClient,
     CoreUnavailableError,
     DecisionHandler,
     LiveFeed,
@@ -16,6 +21,7 @@ from bindaems.app.core_link import (
     ModeHandler,
     SlotFlowsHandler,
 )
+from bindaems.shared.control import Intent
 from bindaems.shared.decisions import Decision, decision_to_json
 from bindaems.shared.timeutil import ManualClock
 
@@ -289,3 +295,102 @@ async def test_connect_handler_errors_are_contained() -> None:
     feed, _, _, _ = feed_env([[STATE_MSG]], connect_handlers=[failing, ok])
     await run_feed_until(feed, lambda: bool(calls))
     assert calls == ["ok"]
+
+
+# Fehlerpfade von CoreClient: jede Abweichung der Antwort ist "core nicht erreichbar"
+
+
+def _json(status: int, body: Any) -> Callable[[httpx.Request], httpx.Response]:
+    return lambda request: httpx.Response(status, json=body)
+
+
+def _raising(exc: Exception) -> Callable[[httpx.Request], httpx.Response]:
+    def answer(request: httpx.Request) -> httpx.Response:
+        raise exc
+
+    return answer
+
+
+def _raw(status: int, content: bytes) -> Callable[[httpx.Request], httpx.Response]:
+    return lambda request: httpx.Response(status, content=content)
+
+
+async def _health(client: CoreClient) -> object:
+    return await client.health()
+
+
+async def _intent(client: CoreClient) -> object:
+    return await client.intent()
+
+
+async def _submit(client: CoreClient) -> object:
+    return await client.submit_intent(Intent(version=1))
+
+
+async def _decisions(client: CoreClient) -> object:
+    return await client.decisions(T_APP, 10)
+
+
+async def _acknowledge(client: CoreClient) -> object:
+    return await client.acknowledge("wallbox.evcs")
+
+
+@pytest.mark.parametrize(
+    ("call", "answer"),
+    [
+        pytest.param(_health, _raising(httpx.ReadTimeout("zu langsam")), id="health-timeout"),
+        pytest.param(_intent, _raising(httpx.ReadTimeout("zu langsam")), id="intent-timeout"),
+        pytest.param(_submit, _raising(httpx.ConnectError("weg")), id="submit-network"),
+        pytest.param(_decisions, _raising(httpx.ConnectError("weg")), id="decisions-network"),
+        pytest.param(_acknowledge, _raising(httpx.ConnectError("weg")), id="ack-network"),
+        pytest.param(_health, _raw(200, b"kein json"), id="health-not-json"),
+        pytest.param(_intent, _raw(200, b"<html>"), id="intent-not-json"),
+        pytest.param(_acknowledge, _raw(202, b""), id="ack-empty-body"),
+        pytest.param(_health, _json(200, [1, 2]), id="health-not-an-object"),
+        pytest.param(_intent, _json(200, "text"), id="intent-not-an-object"),
+        pytest.param(_submit, _json(200, None), id="submit-not-an-object"),
+        pytest.param(_health, _json(500, {"detail": "kaputt"}), id="health-500"),
+        pytest.param(_intent, _json(500, {"detail": "kaputt"}), id="intent-500"),
+        pytest.param(_submit, _json(500, {"detail": "kaputt"}), id="submit-500"),
+        pytest.param(_decisions, _json(500, {"detail": "kaputt"}), id="decisions-500"),
+        pytest.param(_acknowledge, _json(500, {"detail": "kaputt"}), id="ack-500"),
+        pytest.param(_intent, _json(401, {"detail": "Token"}), id="intent-401"),
+        pytest.param(_intent, _json(404, {"detail": "weg"}), id="intent-unexpected-404"),
+        pytest.param(_decisions, _json(422, {"detail": "since"}), id="decisions-unexpected-422"),
+        pytest.param(_submit, _json(202, {}), id="submit-unexpected-202"),
+        pytest.param(_acknowledge, _json(200, {"detail": "x"}), id="ack-unexpected-200"),
+        pytest.param(_intent, _json(200, {"intent": {"version": 0}}), id="intent-invalid-object"),
+        pytest.param(_intent, _json(200, {"intent": "text"}), id="intent-not-a-mapping"),
+        pytest.param(_decisions, _json(200, {"decisions": [], "more": "no"}), id="more-not-bool"),
+        pytest.param(_decisions, _json(200, {"decisions": []}), id="more-missing"),
+        pytest.param(_decisions, _json(200, {"decisions": {}, "more": False}), id="not-a-list"),
+        pytest.param(
+            _decisions, _json(200, {"decisions": [{"id": 1}], "more": False}), id="invalid-item"
+        ),
+    ],
+)
+async def test_client_maps_every_deviation_to_core_unavailable(
+    call: Callable[[CoreClient], Awaitable[object]],
+    answer: Callable[[httpx.Request], httpx.Response],
+) -> None:
+    async with httpx.AsyncClient(transport=httpx.MockTransport(answer)) as http:
+        client = CoreClient("http://core.test", SecretStr("x" * 32), http)
+        with pytest.raises(CoreUnavailableError):
+            await call(client)
+
+
+async def test_client_uses_the_health_timeout_for_health_and_five_seconds_otherwise(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(core_link, "HEALTH_TIMEOUT_S", 3.0)
+    timeouts: dict[str, Any] = {}
+
+    def answer(request: httpx.Request) -> httpx.Response:
+        timeouts[request.url.path] = request.extensions["timeout"]
+        return httpx.Response(200, json={"intent": None})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(answer)) as http:
+        client = CoreClient("http://core.test", SecretStr("x" * 32), http)
+        await client.health()
+        await client.intent()
+    assert timeouts["/v1/health"]["read"] == 3.0 and timeouts["/v1/intent"]["read"] == 5.0
