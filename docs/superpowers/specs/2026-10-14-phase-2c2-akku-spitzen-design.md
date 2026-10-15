@@ -1,7 +1,8 @@
 # Phase 2c-2 – Akku und Spitzen: Design
 
-**Stand: freigegeben am 14.10.2026**, im Brainstorming mit dem Betreiber abgestimmt (Abschnitt 2).
-Umgesetzt wird es in Plan 2c-2a (`docs/superpowers/plans/2026-10-14-phase-2c2a-akku-spitzen.md`) und
+**Stand: freigegeben am 14.10.2026; Plan 2c-2a umgesetzt (Abschnitte 1 bis 6, 8 bis 11), Abschnitt 7 folgt mit Plan 2c-2b**,
+im Brainstorming mit dem Betreiber abgestimmt (Abschnitt 2).
+Umgesetzt wird es in Plan 2c-2a (`docs/superpowers/plans/2026-10-14-phase-2c2a-akku-spitzen.md`, fertig) und
 Plan 2c-2b. Plan 2c-2a präzisiert einige Punkte und weicht in zweien ab: Ein Auffrischen geht auch
 innerhalb des Totbands durch (zu Abschnitt 8), und das 15-min-Budget erreicht Regel 2 nur über dem
 Schutz der USV-Reserve (zu 4.3).
@@ -11,6 +12,30 @@ Grundlage ist die Spec `docs/superpowers/specs/2026-10-08-bindaems-design.md`, v
 „Spec 7.6“ beziehen sich auf die Spec. Dieses Dokument präzisiert und ändert sie für die Pläne
 2c-2a und 2c-2b; wo es abweicht, gilt es (Abschnitt 11.2). Die Hinweise für 2c-2 aus
 `docs/uebergabe.md` („Hinweise für die Pläne 2c-2 und 2d“) sind eingearbeitet.
+
+Die Spec enthält dazu die Absätze „Stand Plan 2c-2a“ (5.3, 7.1, 7.4, 7.6, 7.7, 7.10, 8.3, 16 und 18).
+Beim Bau haben sich diese Punkte gegenüber dem Design geändert oder sind dazugekommen; die
+Präzisierungen des Plans gehen diesem Dokument vor, wo sie abweichen:
+
+- **Wächter (6.1, 6.3):** Er integriert Boost nach dem Halteprinzip der Abrechnung und über dieselben
+  Lücken (`HOLD_MAX_S` = 5 s in `shared/timeutil.py`, auch Standard von `SlotAccumulator`). Springt
+  die Wanduhr innerhalb der Viertelstunde zurück, ist sie lückenhaft. `E_bisher` kommt aus der
+  Abrechnung: Was sie nicht überbrückt (Intervalle über 5 s, ein Zyklus ohne Bilanz), fehlt darin.
+- **Vergleich (6.2):** Die verlangte Senkung ist `max(Mittel, Basis + W) − P_zul`, nicht
+  `Mittel − P_zul`; sonst würden die Wallboxen mit Victron live nie gedrosselt.
+- **Drosselung (6.3):** Nur ein Auto an einem Ladepunkt, den die Laderegelung regelt, wird gedrosselt;
+  ein ungeregeltes Auto in Boost zählt nur für den Boost-Anteil. Eine Grenze fällt still weg, wenn das
+  Auto geht, den Modus wechselt oder in Boost oder Aus geht. Eine Senkung wegen der Grenze ist nie
+  dringend; was die Sicherung allein verlangt, bleibt dringend, auch wenn die Grenze niedriger liegt.
+- **Override (5.3, 5.5):** `W' = max(0, min(W, floor10(Budget) − Basis))` hält den Override auf dem
+  Raster von 10 W und nie über dem Budget. Die Erwartung der Erkennung fremder Änderungen verfällt wie
+  der Override 300 s nach ihrer Bestätigung.
+- **Ausnahme (4.5):** `control.exception` bleibt bis zu einem Zyklus mit Regelung ohne Ausnahme,
+  auch während die Regelung ruht (etwa nach dem Ausschalten des Regelbetriebs); `peak.exceeded` endet
+  mit seiner Viertelstunde, auch wenn die Regelung ruht, und `health().peak` zeigt dann weiter den
+  letzten Zustand mit seinem `quarter_end`.
+- **Szenarien (10.2):** `akku-minpv` und `spitze-15min` starten den Tesla bei 5 A, und in
+  `schieflast-pv` kommt die Last auf L1 erst nach 10 min; Gründe im Betriebshandbuch, „Simulator“.
 
 ## 1. Ziel und Abgrenzung
 

@@ -1,19 +1,23 @@
 # Betrieb von BindaEMS
 
-Stand: Phase 2c-1 (Laderegelung). Auf der VM laufen zwei Dienste. Der core **regelt** seit Plan
-2c-1 die beiden Ladepunkte (EVCS und Tesla), **sendet aber nichts**, solange ihre Aktoren im Dry-Run
-sind: Er protokolliert dann nur, was er täte, und evcc regelt weiter (Abschnitt „Laderegelung“ am
-Ende). Die Befehle an Victron (Akku) folgen mit Plan 2c-2, die Bedienung in UI und HA mit Plan 2d.
+Stand: Phase 2c-2a (Akku und Spitzen). Auf der VM laufen zwei Dienste. Der core **regelt** seit Plan
+2c-1 die beiden Ladepunkte (EVCS und Tesla) und seit Plan 2c-2a den Akku (Override an Victron) und
+die Spitzen (15-min-Wächter), **sendet aber nichts**, solange ihre Aktoren im Dry-Run sind: Er
+protokolliert dann nur, was er täte, und evcc regelt weiter (Abschnitte „Laderegelung“ und „Akku und
+Spitzen“ am Ende). Die volle Zuordnungserkennung folgt mit Plan 2c-2b, die Bedienung in UI und HA mit
+Plan 2d.
 
 - `ems-core` liest Cerbo GX, EVCS, Wall Connector, Tessie und Home Assistant und schreibt
   Telemetrie nach InfluxDB. Er kennt Betriebszustände, Freigaben und Sperren (Abschnitt 13), hat
-  Aktoren für Victron, EVCS und Tesla und regelt die beiden Ladepunkte. Ohne Absicht der Bedienung
-  bleibt er im Zustand **OBSERVE**: nur lesend. Auf ein Gerät schreibt er nur für einen live
-  geschalteten Aktor: den Heartbeat an den eigenen Watchdog (Abschnitt 14), solange er regelt, die
-  Sicherwerte im sicheren Zustand und bei der Übergabe am Ende des Live-Betriebs (Abschnitt 13) und
-  die Befehle der Laderegelung an EVCS und Tesla. Einen live gewünschten Aktor gibt es erst nach
-  Plan 2d. Das Entscheidungslog hält fest, was er an den Aktoren tut: gesendete Befehle, im Dry-Run
-  die Urteile mit einem Wert und die Ablehnungen der Safety-Schicht (Abschnitt 13).
+  Aktoren für Victron, EVCS und Tesla und regelt die beiden Ladepunkte, den Akku und die Spitzen.
+  Ohne Absicht der Bedienung bleibt er im Zustand **OBSERVE**: nur lesend. Auf ein Gerät schreibt er
+  nur für einen live geschalteten Aktor: den Heartbeat an den eigenen Watchdog (Abschnitt 14),
+  solange er regelt, die Sicherwerte im sicheren Zustand und bei der Übergabe am Ende des
+  Live-Betriebs (Abschnitt 13) und die Befehle der Regelung an EVCS, Tesla und Victron. Live ist
+  bisher kein Aktor: EVCS und Tesla gehen erst nach Plan 2d live, Victron nach den Schritten im
+  Abschnitt „Akku und Spitzen“. Das Entscheidungslog hält fest, was er an den Aktoren tut: gesendete
+  Befehle, im Dry-Run die Urteile mit einem Wert und die Ablehnungen der Safety-Schicht
+  (Abschnitt 13).
 - `ems-app` meldet Benutzer an und liefert das Web-UI samt API aus (Abschnitt 12). Sie holt
   Preise und die PV-Prognose, rechnet jede Viertelstunde ab und meldet lesende Sensoren per
   MQTT Discovery an Home Assistant.
@@ -22,7 +26,8 @@ Dazu kommt der **Watchdog** auf dem Cerbo, den du einmal installierst (Abschnitt
 Totmann-Schalter der Anlage und greift nur ein, wenn ein live geschalteter core ausfällt.
 
 Am Ende des Handbuchs stehen die Abschnitte „Laderegelung“ (Lademodi, Absicht, Dry-Run-Vergleich mit
-evcc, Umstieg, Hinweise für die Anlage) und „Simulator“ (die Szenarien der CI von Hand laufen
+evcc, Umstieg, Hinweise für die Anlage), „Akku und Spitzen“ (Akku-Sollwert, 15-min-Wächter, Health,
+Victron in den Dry-Run und live, Alarme) und „Simulator“ (die Szenarien der CI von Hand laufen
 lassen).
 
 ## 1. Voraussetzungen der VM
@@ -153,8 +158,9 @@ GROUP BY time(1m), *
     kurzzeitig einkommentieren. Danach fragst du so ab:
     `curl -H "Authorization: Bearer $BINDAEMS_INTERNAL_TOKEN" http://127.0.0.1:8081/v1/health`.
   - `/v1/health` nennt auch Betriebszustand mit Gründen, Aktoren (steuerbar, offene
-    Schreibvorgänge, ob sie Werte des EMS halten), Watchdog und je Fahrzeug den Stand der
-    Laderegelung (`vehicles`, Abschnitt „Laderegelung“), `/v1/intent` die gültige Absicht und
+    Schreibvorgänge, ob sie Werte des EMS halten), Watchdog, je Fahrzeug den Stand der
+    Laderegelung (`vehicles`, Abschnitt „Laderegelung“) sowie den Akku-Sollwert (`battery`) und den
+    15-min-Wächter (`peak`, Abschnitt „Akku und Spitzen“), `/v1/intent` die gültige Absicht und
     `/v1/decisions` das Entscheidungslog (Abschnitt 13).
 - **Lokaler Build:**
   - Statt GHCR geht das auch mit einem Checkout des Repositorys.
@@ -756,10 +762,13 @@ Befehle entstehen an diesen Stellen:
 - **Übergabe** am Ende des Live-Betriebs (unten).
 - **Laderegelung** (seit Plan 2c-1, Abschnitt „Laderegelung“): Strom und „Laden an/aus“ der EVCS und
   des Tesla. Sie regelt nur in CONTROL und DEGRADED bei eingeschaltetem Regelbetrieb.
+- **Akku-Sollwert** (seit Plan 2c-2a, Abschnitt „Akku und Spitzen“): der Netz-Sollwert-Override von
+  Victron, auch sein Auffrischen. Er gilt unter denselben Bedingungen wie die Laderegelung. Entladegrenze
+  und Min-SOC schreibt die Regelung nie.
 
 Jeder Befehl geht durch die Safety-Schicht. Einem Aktor, der nicht live ist, sendet der core nichts;
 sein Befehl steht dann als „Dry-Run“ im Entscheidungslog. In CONTROL schreibt der core sonst
-nichts. Die Laderegelung schreibt nie auf Victron; die Befehle an den Akku folgen mit Plan 2c-2.
+nichts.
 
 Der sichere Zustand und die Übergabe gehen der Regelung vor: Ein Aktor, den der core gerade
 übergibt, bekommt von ihr nichts, und in jedem Zyklus führt der core erst deren Befehle aus, dann die
@@ -849,7 +858,9 @@ Spalte „Hinweise“ als „gesperrt: …“.
 - Eine Freigabe per Hand („Quittierung“) gibt es erst mit der Bedienung in Plan 2d.
 - Solange Dynamic ESS an ist, bleibt Victron gesperrt. Die EVCS darf trotzdem regeln, denn ihre
   Regelung braucht nur die Netzmessung und den Phasenwächter. So kann der Dry-Run auch vor der
-  Live-Schaltung von Victron laufen (Entscheidung des Betreibers vom 10.10.2026).
+  Live-Schaltung von Victron laufen (Entscheidung des Betreibers vom 10.10.2026). Der Akku-Sollwert
+  sendet an einen gesperrten Victron nichts, auch im Dry-Run nicht (Abschnitt „Akku und Spitzen“);
+  sein Dry-Run braucht DESS aus.
 
 ### Dry-Run und live
 
@@ -978,9 +989,10 @@ Alarm; der Eintrag kommt mit Plan 2d.
    `PUT /v1/intent` (Abschnitt „Laderegelung“). Er dauert 2 Wochen, und die Entscheidungen werden
    gemeinsam gesichtet (Spec 18). Mit der Bedienung in Plan 2d wird er bequemer.
 4. **Live-Schaltung:** EVCS und Tesla gemeinsam nach Plan 2d, mit abgeschaltetem evcc (Abschnitt
-   „Laderegelung“, „Umstieg von evcc“). Victron folgt nach Plan 2c-2 (Spec 8.7).
-5. Vor der Live-Schaltung von Victron schaltest du Dynamic ESS ab (Entscheidung vom 10.10.2026);
-   danach läuft der Victron-Teil von Teil 2.
+   „Laderegelung“, „Umstieg von evcc“). Victron geht seit Plan 2c-2a getrennt davon live, sobald
+   Dynamic ESS aus ist (Spec 8.7; Abschnitt „Akku und Spitzen“, „Victron in den Dry-Run und live“).
+5. Für den Dry-Run des Victron-Teils und seine Live-Schaltung schaltest du Dynamic ESS ab
+   (Entscheidungen vom 10.10. und 14.10.2026); danach läuft der Victron-Teil von Teil 2.
 
 ### Wartung
 
@@ -1023,7 +1035,8 @@ Zustände, Zeiten und D-Bus-Pfade stehen in `cerbo-watchdog/README.md`. Wichtig 
 
 - Ohne Bedarf schickt der core keinen Heartbeat. Der Watchdog wartet dann und greift nie ein.
   Bedarf besteht, solange ein Victron- oder EVCS-Aktor im Regelbetrieb live gewünscht ist oder
-  übergeben wird; bis zur Live-Schaltung nach Plan 2d gibt es ihn nicht.
+  übergeben wird; bis zur Live-Schaltung von Victron (Abschnitt „Akku und Spitzen“) und von EVCS und
+  Tesla (nach Plan 2d) gibt es ihn nicht.
 - Den Watchdog wertet der core nur als scharf, wenn er einen der zuletzt gesendeten Zähler des
   core zeigt und das Timeout aus `victron.watchdog.timeout_s` meldet. Hat eine Probe oder ein
   früherer Lauf ihn scharf gemacht, schützt er diesen core noch nicht. Der core schärft ihn selbst
@@ -1202,8 +1215,9 @@ docker compose run --rm -v "$PWD/verification:/out" --entrypoint python ems-core
   danach, dass er wieder auf dem sicheren Strom steht. Von Hand geht es auch.
 - Lass die Probe nie laufen, während ein live geschalteter core Heartbeats sendet: Ihre
   abschließende 0 gibt den Watchdog frei, und ihre Auslösung setzt die Sicherwerte. Das wird mit
-  der Live-Schaltung relevant (nach Plan 2d). Im Dry-Run stört der core die Probe nicht: Er sendet
-  keine Heartbeats und gibt einen Watchdog nicht frei, für den er in diesem Lauf nie zuständig war.
+  der Live-Schaltung relevant (Victron nach Plan 2c-2a, EVCS und Tesla nach Plan 2d). Im Dry-Run
+  stört der core die Probe nicht: Er sendet keine Heartbeats und gibt einen Watchdog nicht frei,
+  für den er in diesem Lauf nie zuständig war.
 - Mit Strg+C brichst du die Probe ab. Sie gibt den Watchdog dann vorher mit dem Heartbeat 0 frei
   und endet mit dem Exitcode 130, ohne Bericht. `docker stop` oder SIGTERM gibt ihn **nicht**
   frei. Gelingt die Freigabe nach einem Abbruch nicht, warnt die Probe auf der Konsole: Der
@@ -1282,6 +1296,8 @@ Diese Alarme zeigt das UI unter **System** → „core“ → „Alarme“:
 | … ist nach 3 Fehlern in 15 min bis HH:MM nicht steuerbar. | Nur Tesla: Tessie hat 3 Befehle abgelehnt oder nicht beantwortet. Bis zur Uhrzeit (Wiener Zeit) sendet der core nichts an das Fahrzeug. Prüfe das Tessie-Konto und das Log des core. |
 | … von außen geändert (… statt …). | Ein anderes System hat Strom oder Netz-Sollwert-Override geändert, den der core bestätigt hatte (Abschnitt 13, „Sperren“). Der Aktor ist gesperrt. Suche das System (App, Automation, Zeitplan) und schalte es ab. |
 | Gespeicherte Schreibzeiten liegen bis zu … min in der Zukunft; persistente Schreibzugriffe bleiben bis dahin begrenzt. | Die Uhr lief zurück (NTP-Sprung, Failover). Das Schreibbudget für persistente Einstellungen zählt die Einträge in der Zukunft weiter mit; die Begrenzung endet, wenn die Uhr aufgeholt hat. Prüfe `timedatectl`. |
+| Regelung ausgesetzt: Ausnahme … im Regelzyklus. (Fehler) | Ein Aufruf der Regelung hat eine Ausnahme geworfen, das ist ein Fehler im core. Die Regelung sendet in dem Zyklus nichts, der Heartbeat bleibt aus; Keeper, Stream, Alarme und Entscheidungslog laufen weiter. Sichere das Log und melde den Fehler (Abschnitt „Akku und Spitzen“, „Alarme“). |
+| 15-min-Ziel überschritten: … kW in der Viertelstunde bis HH:MM. (Warnung) | Die Hochrechnung lag 60 s über `control.peak_target_kw`, und Drosselung und Akku haben es nicht gehalten. Der Alarm endet mit der Viertelstunde (Abschnitt „Akku und Spitzen“, „Alarme“). |
 
 **„Ausgelöst“ von Hand aufräumen:** Seit 1.1.0 übersteht „ausgelöst“ einen Neustart des Cerbo
 (als „scharf“). Räumt kein zuständiger core den Watchdog auf, etwa nach einer abgebrochenen Probe
@@ -1322,10 +1338,10 @@ Phasenwächter bleibt auch ohne Importlimit sicher, denn er rechnet ohne die Hil
 
 Seit Plan 2c-1 regelt der core die beiden Ladepunkte selbst: die EVCS mit dem e-Golf und den Wall
 Connector mit dem Tesla. Er schreibt dabei nur Strom und „Laden an/aus“ der EVCS und des Tesla (den
-Tesla über Tessie), nie auf Victron; die Befehle an den Akku folgen mit Plan 2c-2. Jeder Befehl geht
-durch die Safety-Schicht (Abschnitt 13). **Solange ein Aktor im Dry-Run ist, sendet der core nichts**
-und protokolliert nur, was er täte. Live gehen EVCS und Tesla erst nach Plan 2d, gemeinsam und mit
-abgeschaltetem evcc (unten, „Umstieg von evcc“).
+Tesla über Tessie). Der Akku und die Spitzen folgen im Abschnitt „Akku und Spitzen“ (seit Plan
+2c-2a). Jeder Befehl geht durch die Safety-Schicht (Abschnitt 13). **Solange ein Aktor im Dry-Run
+ist, sendet der core nichts** und protokolliert nur, was er täte. Live gehen EVCS und Tesla erst
+nach Plan 2d, gemeinsam und mit abgeschaltetem evcc (unten, „Umstieg von evcc“).
 
 ### Wann der core regelt
 
@@ -1357,6 +1373,8 @@ Die Zahlen gelten für die Beispielkonfiguration (`grid.fuse_a` 35 A, `grid.fuse
 - Liegt der SOC unter USV-Reserve + `control.reserve_guard_pct` (5 %) oder ist er unbekannt, richten
   sich auch Sofort und Boost am Importlimit aus (Grund „Schutz der USV-Reserve“): Peak Shaving soll
   den Akku nicht unter die Reserve ziehen.
+- **Boost** darf auch aus dem Akku laden und gehört nicht zum Ziel des 15-min-Wächters (Abschnitt
+  „Akku und Spitzen“).
 - Ein **Moduswechsel** wirkt sofort, ohne Startzeit, Stoppzeit und Mindestzeiten.
 - Nach einem Start lädt ein Auto mindestens `control.min_on_s` (600 s), nach einem Stopp startet es
   frühestens nach `control.min_off_s` (600 s) wieder. Das sind höchstens 3 Start/Stopp-Zyklen je Auto
@@ -1415,7 +1433,8 @@ Die Zahlen gelten für die Beispielkonfiguration (`grid.fuse_a` 35 A, `grid.fuse
   die Sicherung ist (Sofort und Boost ohne Schutz der Reserve): Sie umgehen die Mindestabstände, die
   Stundenlimits und die Totbänder der Safety-Schicht; nur einen gleichen Wert sendet auch ein
   dringender Befehl nicht. Alle anderen Befehle sind normal, auch Senkungen am Importlimit (die
-  fängt Peak Shaving ab). **Jeder erneute Versuch nach „nicht übernommen“ ist normal und nie
+  fängt Peak Shaving ab) und wegen einer Grenze des 15-min-Wächters (Abschnitt „Akku und
+  Spitzen“). **Jeder erneute Versuch nach „nicht übernommen“ ist normal und nie
   dringend**, auch der einer Senkung wegen Überlast; er wartet auf die 90-s-Regel. Ein Befehl wegen
   Überlast, der neu entsteht, weil die Stufe stieg, ist kein Neuversuch und bleibt dringend,
   höchstens einmal je Stufe.
@@ -1459,12 +1478,18 @@ wieder im PV-Überschuss.
 | `vehicles.<Schlüssel>.wallbox` | Schlüssel einer Wallbox; übersteuert die Zuordnung (unten) | keine Übersteuerung |
 | `priority` | alle Fahrzeug-Schlüssel genau einmal, in der Reihenfolge der Zuteilung | Reihenfolge unter `vehicles` in `config.yaml` |
 | `surplus_priority` | `kind`: `cars_first`, `battery_first` oder `battery_until_soc` (dann mit `soc_pct`) | `battery_until_soc`, 30 % |
+| `guest.mode` | `pv`, `min_pv`, `now`, `off`: der Modus eines Gastes, eines Autos ohne Fahrzeug in `config.yaml`, an einer Wallbox ohne Fahrzeug (unten); kein Boost, keine Übersteuerung | `pv` |
 
 - Die Schlüssel der Fahrzeuge und Wallboxen sind die aus `config.yaml` (im Beispiel `tesla`, `egolf`
   und `evcs`, `twc`).
 - `surplus_priority` sagt, wer den PV-Überschuss zuerst bekommt: `cars_first` die Autos (die
   Ladeleistung des Akkus zählt zum Überschuss), `battery_first` zuerst der Akku, `battery_until_soc`
   die Autos, sobald der Akku den SOC `soc_pct` erreicht hat.
+- `guest.mode` ist der Modus eines **Gastes**, also eines Autos, das nicht in `config.yaml` steht,
+  an einer Wallbox ohne zugeordnetes Fahrzeug. Boost und Übersteuerung der Wallbox gibt es für einen
+  Gast nicht; unter `vehicles` lehnt der core ihn als unbekanntes Fahrzeug ab (422). Bis Plan 2c-2b
+  zählt der Modus nur für den Akku-Sollwert (Abschnitt „Akku und Spitzen“): Die Laderegelung regelt
+  einen Gast noch nicht, und erkannt wird er erst mit der Zuordnungserkennung.
 - **Version:** Sie muss über der gültigen liegen. Dieselbe Version mit gleichem Inhalt gilt als
   Wiederholung. Bis zu Plan 2d genügt eine kleine, steigende Zahl; die app nimmt später Millisekunden
   seit 1970, was größer bleibt.
@@ -1511,7 +1536,7 @@ Alle Aktoren bleiben im Dry-Run, und alle Fahrzeuge laden im PV-Überschuss, wie
 {"version": 13, "control": true, "vehicles": {"tesla": {"mode": "now", "wallbox": "evcs"}}}
 ```
 
-- Die vollständige Erkennung mit Hypothesen und Zeitkorrelation (Spec 7.8) kommt mit Plan 2c-2.
+- Die vollständige Erkennung mit Hypothesen und Zeitkorrelation (Spec 7.8) kommt mit Plan 2c-2b.
 
 ### Tesla
 
@@ -1640,7 +1665,9 @@ nach Plan 2d, mit dem Live-Schalter im UI (Spec 8.7), und zwar so:
    das andere würden um denselben Überschuss konkurrieren. Schreibt evcc nach der Live-Schaltung
    weiter, erkennt der core die fremde Änderung und sperrt den Aktor nach 3 Prüfungen im Abstand von
    10 s (Abschnitt 13, „Sperren“).
-5. Victron bleibt im Dry-Run, bis Plan 2c-2 da ist und Dynamic ESS aus ist.
+5. Victron geht getrennt davon live, sobald Dynamic ESS aus ist und die Schritte im Abschnitt „Akku
+   und Spitzen“ („Victron in den Dry-Run und live“) erledigt sind. Der Akku-Sollwert rechnet auch
+   neben evcc mit den Modi aus der Absicht von BindaEMS.
 
 Zurück zu evcc: beide Aktoren in der Absicht auf Dry-Run stellen, die Übergabe abwarten (Abschnitt
 13) und erst dann evcc wieder starten.
@@ -1675,17 +1702,21 @@ umzusetzen, je mit Befund und möglicher Abhilfe (ausführlicher in `docs/ueberg
    der beim Anstecken selbst zu laden beginnt, lädt bis zu 10 min ungeregelt. Abhilfe im Adapter:
    schneller abfragen, solange das Auto zu Hause oder online ist oder der Wall Connector ein neues
    Fahrzeug meldet.
-4. **Ausnahme in der Regelung:** Wirft die Regelung in jedem Zyklus, laufen auch Keeper, Stream und
-   Alarme nicht. Abhilfe: die Ausnahme fangen, die Regelung ruhen lassen, Alarm, Heartbeat
-   zurückhalten, den Keeper weiter ausführen.
+4. **Ausnahme in der Regelung** (erledigt mit Plan 2c-2a): Die Verdrahtung der Regelung fängt die
+   Ausnahme und lässt die Regelung ruhen; Keeper, Stream, Alarme und Entscheidungslog laufen weiter,
+   der Heartbeat bleibt aus, und der Alarm `control.exception` steht (Abschnitt „Akku und Spitzen“,
+   „Alarme“).
 5. **5 A beim Tesla:** Befehle auf oder von 5 A gehen über Tessie beim ersten Mal verloren und
-   kosten einen zweiten Befehl. Abhilfe: `vehicles.tesla.min_a: 6` (Design 7.2 legt 5 A fest;
+   kosten einen zweiten Befehl. Seit Plan 2c-2a kommt hinzu: Startet der Tesla nachts in Min+PV mit
+   16 A, liefert der Akku 90 s lang bis zu 5,8 kW in die Autos (Abschnitt „Akku und Spitzen“,
+   „Hinweise für die Anlage“). Abhilfe: `vehicles.tesla.min_a: 6` (Design 7.2 legt 5 A fest;
    Entscheidung des Betreibers).
-6. **Simulator:** Kein PV-Szenario lässt das Importziel binden; „Längste Zeit über dem Ziel in
-   PV-Modi“ prüft darum wenig. Abhilfe: ein PV-Szenario mit schwerer Last auf einer Phase.
-7. **Technische Schulden vor 2c-2:** `core/control/charging.py` und `core/runtime.py` sind groß, und
-   einige Hilfsfunktionen gibt es doppelt. Abhilfe: aufteilen und zusammenführen, bevor 2c-2
-   dazukommt.
+6. **Simulator** (erledigt mit Plan 2c-2a): Das Szenario `schieflast-pv` lässt das Importziel
+   binden (Abschnitt „Simulator“).
+7. **Technische Schulden vor 2c-2** (erledigt mit Plan 2c-2a): Ladepunkte, Verteilung, Tesla-Teil
+   und die Merker der letzten eigenen Werte liegen in eigenen Modulen von `core/control`, die
+   Verdrahtung der Regelung in `core/regulation_link.py`, und die doppelten Hilfen sind
+   zusammengeführt (Zeilenzahlen: `docs/uebergabe.md`).
 8. **Sicherer Zustand bei Netzausfall:** Der core sendet dem Tesla „Laden aus“ alle 10 s erneut, bis
    der Tessie-Cache es zeigt; beim Laden dauert das bis zu 30 s und kostet bis zu 3 der 6
    Start/Stopp-Befehle je Stunde und alle 3 Versuche des Vorfalls. Abhilfe: die Zahl der Versuche,
@@ -1701,6 +1732,443 @@ umzusetzen, je mit Befund und möglicher Abhilfe (ausführlicher in `docs/ueberg
 - wie oft die EVCS ihren Strom ändert: Folgt sie bei ruhiger Sonne trotz der Hysterese noch dem
   Rauschen (deutlich mehr Strom-Entscheidungen an `wallbox.evcs` als im Simulator, etwa über 10 je
   Stunde), hebe `control.evcs_hysteresis_a` an (oben, „Lademodi“).
+
+## Akku und Spitzen
+
+Seit Plan 2c-2a regelt der core auch den **Akku** und die **Spitzen**. Er setzt den
+Netz-Sollwert-Override von Victron (`/Overrides/Setpoint` am Dienst `com.victronenergy.hub4`, kurz
+„Override“) so, dass der Hausakku die Autos nur nach festen Regeln versorgt (Akku-Sollwert), und hält
+auf Wunsch ein Ziel für den Netzbezug je Viertelstunde (15-min-Wächter). An Victron schreibt er dabei
+nur den Override; Entladegrenze und Min-SOC setzt weiter nur der sichere Zustand und die Übergabe
+(Abschnitt 13). Jeder Befehl geht durch die Safety-Schicht. **Solange Victron im Dry-Run ist, sendet
+der core nichts** und protokolliert nur, was er täte. Live geht Victron erst nach den Schritten unter
+„Victron in den Dry-Run und live“ (unten) und nur mit abgeschaltetem Dynamic ESS (DESS).
+
+Die Einstellungen stehen in `config.yaml` unter `control` und haben Standardwerte
+(`deploy/config.example.yaml`):
+
+| Schlüssel | Standard | Bedeutung |
+|---|---|---|
+| `control.support_soc_pct` | 70 | Ab diesem SOC in % stützt der Akku Autos in PV-Überschuss und Min+PV. |
+| `control.support_hysteresis_pct` | 5 | Gesperrt wird diese Unterstützung erst unter der Schwelle minus diesem Wert. |
+| `control.support_max_w` | 3000 | Höchstens so viel Akkuleistung in W für diese Autos zusammen. |
+| `control.support_max_s` | 900 | Längste Überbrückung am Stück in s. |
+| `control.setpoint_deadband_w` | 200 | Totband des Overrides in W: der Abstand, ab dem ein Override entsteht oder sich ändert (unten). |
+| `control.override_refresh_s` | 240 | So oft in s frischt der core einen aktiven Override auf; höchstens 280, denn der Cerbo verwirft ihn nach 300 s. |
+| `control.peak_target_kw` | keiner | Ziel des 15-min-Wächters in kW; ohne Wert ruht er. |
+| `control.peak_margin_kw` | 0,3 | Marge der Hochrechnung des Wächters in kW. |
+| `control.reserve_guard_pct` | 5 | Abstand über der USV-Reserve in Prozentpunkten SOC. Darunter richten sich auch Sofort und Boost am Importlimit aus (Abschnitt „Laderegelung“), und der Wächter gibt dem Akku kein Budget. |
+
+Negative, unendliche und ungültige Werte lehnt der core beim Start ab; `support_soc_pct` liegt
+zwischen 0 und 100, `override_refresh_s` über 0 und höchstens 280, `peak_target_kw` über 0. Nach einer
+Änderung startest du den core neu (Abschnitt 13, „Wartung“). **Keines dieser Felder verlangt eine
+neue `config.ini` des Watchdogs** (Abschnitt 14): Er kennt nur USV-Reserve, sichere Ströme und Zeiten.
+Anders ist es mit `victron.live_allowed` (unten, „Victron in den Dry-Run und live“).
+
+### Akku-Sollwert
+
+Der Override ist der Netzbezug, den der core haben will. ESS regelt den Netzbezug auf ihn, und der
+Akku gleicht alles Übrige aus. Ohne Override gilt der Eigenverbrauch: Der Akku deckt Haus und Autos,
+so weit er darf.
+
+- **Grundsatz:** Wo der Akku nicht ins Auto laden soll, verschiebt der core den Teil der
+  Autoleistung, den sonst der Akku lieferte, aufs Netz: den **Fehlbetrag**. Er setzt den Override
+  nicht auf die ganze Ladeleistung der Autos, denn das holte auch den Teil aus dem Netz, den die PV
+  deckt, und der Akku lüde dafür: Bei 6 kW PV, 1 kW Haus und 5 kW Auto gäbe ein Override von 5 kW
+  5 kW Netzbezug, und der Akku lüde 5 kW. Der Override ist der Basis-Sollwert
+  (`ess.grid_setpoint_w`) plus der gewollte Netzbezug, auf 10 W gerundet; ist der Basis-Sollwert
+  unbekannt, kennt der core auch das Ziel nicht.
+- **Fehlbetrag:** Die PV deckt zuerst die Hauslast (ohne Wallboxen), dann die Autos in der Reihenfolge
+  `priority`, wie die Abrechnung. Was einem Auto danach fehlt, ist sein Fehlbetrag: die Leistung, die
+  es aus Akku oder Netz bezieht. Gemessen wird an der Wallbox; fehlt ihr Wert bei einem Fahrzeug mit
+  Tessie, rechnet der core ihn aus dem Ist-Strom, den Phasen und der Nennspannung. Der **gewollte
+  Netzbezug** ist die Summe über die Autos von Fehlbetrag minus erlaubtem Akku-Anteil, nie unter 0;
+  die Hauslast deckt der Akku immer.
+- **Welche Autos zählen:** erst die Fahrzeuge mit Ladepunkt nach `priority`, dann jede Wallbox ohne
+  zugeordnetes Fahrzeug in der Reihenfolge von `config.yaml`. Es zählt der geltende Modus aus der
+  Absicht von BindaEMS (mit Boost), auch solange evcc die Ladepunkte regelt. Für eine Wallbox ohne
+  Fahrzeug gilt der Modus des **Gastes** (`guest.mode`, Abschnitt „Absicht per PUT /v1/intent“).
+
+Den **erlaubten Akku-Anteil** bestimmt der Modus des Autos:
+
+| Modus | Aus dem Akku erlaubt |
+|---|---|
+| PV-Überschuss, Min+PV | Wenn die Unterstützung gilt (unten): für diese Autos zusammen höchstens `support_max_w`, verteilt in der Reihenfolge `priority`. Sonst nichts. |
+| Sofort, Aus | Nichts. Sofort lädt aus Netz und PV mit vollem Strom. |
+| Boost | Alles, ohne SOC-Schwelle und ohne die Grenzen von Leistung und Dauer. Boost begrenzt nur der Schutz der USV-Reserve (Abschnitt „Lademodi“). |
+
+- **Sofort** bleibt beim vollen Strom. Regel 2 der Safety-Schicht begrenzt den Override auf
+  `victron.max_grid_charge_setpoint_w` (8000 W), die Absicherung und das Budget des Wächters; was
+  darüber hinausgeht, liefert der Akku. Laden zwei Autos in Sofort zusammen mehr als 8 kW, kommt der
+  Rest aus dem Akku (im Simulator, `akku-sofort`: 8 kW Netzbezug). Wer das nicht will, hebt
+  `max_grid_charge_setpoint_w` bis zum Importlimit an. Über dem Importlimit (20 A je Phase) liefert
+  Victron ohnehin aus dem Akku (Peak Shaving).
+- **Unterstützung** heißt: Der Akku liefert Autos in PV-Überschuss und Min+PV ihren Fehlbetrag, bis
+  zu `support_max_w` (3 kW). Sie gilt, wenn
+  - ein Auto in einem dieser Modi steht (sonst zeigt Health `mode`),
+  - der SOC `support_soc_pct` (70 %) erreicht hat und seitdem nicht unter `support_soc_pct −
+    support_hysteresis_pct` (65 %) gefallen ist (sonst `soc`); ein unbekannter SOC sperrt sie im
+    Zyklus, ändert den Stand der Hysterese aber nicht, und
+  - die Überbrückung noch keine `support_max_s` (900 s) dauert (sonst `time`).
+- **Überbrückung:** Sie beginnt mit dem ersten Zyklus, in dem die Autos in PV-Überschuss und Min+PV
+  zusammen mindestens 100 W Fehlbetrag haben (die Hälfte des Totbands), und endet nach 60 s ohne.
+  Nach `support_max_s` ist die Unterstützung gesperrt, bis sie endet. In PV-Überschuss senkt die
+  Laderegelung dann ohnehin auf den echten Überschuss, in Min+PV kommt der Mindeststrom aus dem Netz.
+- **Unter der Schwelle** (SOC unter 70 %) holt der core den Fehlbetrag aus dem Netz: Der Akku bleibt
+  aus dem Auto heraus, etwa in den Lücken unter Wolken (im Simulator, `akku-wolkig`: 0,06 % der Energie
+  des e-Golf kommen aus dem Akku).
+- **Nach einer Pause** der Regelung (Regelbetrieb aus, SAFE, OBSERVE) beginnt der Stand neu: Der SOC
+  muss `support_soc_pct` wieder erreichen.
+- **Totband** (`control.setpoint_deadband_w`, 200 W): Ein Override entsteht erst, wenn der gewollte
+  Netzbezug mindestens 200 W erreicht, und fällt weg („kein Override“), sobald er unter die Hälfte
+  (100 W) sinkt. Dazwischen ändert er sich erst, wenn der neue Wert mindestens 200 W vom letzten
+  eigenen abweicht. Die Safety-Schicht verlangt nur 50 W Unterschied; die 200 W halten das Rauschen
+  der Hauslast vom Override fern.
+- **Auffrischen** (`control.override_refresh_s`, 240 s): Der Cerbo verwirft einen Override nach 300 s
+  ohne Schreiben. Der core sendet einen aktiven Override deshalb alle 240 s erneut, auch mit gleichem
+  Wert, gezählt ab dem letzten Urteil mit Wert.
+  - Die Safety-Schicht lässt das Auffrischen trotz gleichen Werts durch: Weder „unverändert“ noch das
+    Totband von 50 W gelten für es. Die Regeln 2 und 4 ändern den Override von Zyklus zu Zyklus
+    leicht, und ein Auffrischen, das der Cerbo um weniger als 50 W anders hält, bliebe sonst
+    „unverändert“, und der Override verfiele. Sperren, Betriebszustand, Betriebsart, die Regeln 1 bis 4
+    und der Mindestabstand von 2 s gelten wie für jeden Befehl. Ein Auffrischen ist nie dringend.
+  - Ein Auffrischen steht **nicht im Entscheidungslog**, wenn es gelingt (`ok`) oder im Dry-Run ein
+    Urteil ergibt. Abgelehnt, zurückgestellt oder gescheitert steht es dort wie jeder Befehl. Das Log
+    zeigt so nur Änderungen des Overrides: Unter schnell wechselnden Wolken sind es im Simulator
+    (`akku-wolkig`) rund 67 Entscheidungen je Stunde (zwei bis drei je Wolke), bei gleichbleibender
+    Last wenige (`override-stunde`: höchstens 5 in einer Stunde).
+  - Ein zurückgestelltes oder blockiertes Auffrischen folgt im nächsten möglichen Zyklus. Scheitert
+    das Schreiben, sendet der core den Wert danach neu, als normalen Befehl.
+  - Die Erkennung fremder Änderungen (Abschnitt 13, „Sperren“) erwartet einen Override nur 300 s
+    nach der Bestätigung; jedes Auffrischen erneuert die Erwartung. Verfällt der Override gewollt
+    (nächste Punkte), ist das keine fremde Änderung.
+- **Victron gesperrt oder nicht steuerbar** (Dynamic ESS an, ein anderes System regelt, der Cerbo ist
+  nicht verbunden; Abschnitt 13, „Sperren“): Der Akku-Sollwert sendet nichts, auch im Dry-Run nicht,
+  sonst stünde neben DESS jede Sekunde eine Ablehnung im Log, und vergisst seine Werte. Bedarf,
+  Unterstützung und Ziel rechnet er für Health weiter (`battery.state` `locked`). Ein vorhandener
+  Override verfällt nach 300 s von selbst; das ist der gewollte Rückfall auf den Eigenverbrauch. Nach
+  der Sperre beginnt der Akku-Sollwert ohne eigenen Wert. Ein offener Schreibvorgang für den Override
+  oder eine Übergabe von Victron hält nur den Befehl dieses Zyklus zurück.
+- **Fehlende Werte:** Fehlt die PV, die Hauslast oder die Leistung eines Autos, von dem nicht sicher
+  ist, dass es nicht lädt, ist der gewollte Netzbezug unbekannt (ein Auto, das sicher nicht lädt,
+  zählt ohne Messwert mit 0 W). Dann geht kein Befehl hinaus, auch kein Auffrischen (`battery.state`
+  `unknown`), und ein Override verfällt nach 300 s, wenn das anhält. Kommen die Werte zurück, folgt
+  der Override ohne Sprung über „kein Override“.
+- **Die Regelung ruht** (START, OBSERVE, SAFE und bei ausgeschaltetem Regelbetrieb, auch während der
+  Übergabe danach): Der Akku-Sollwert sendet nichts. Sicherer Zustand und Übergabe bleiben beim Keeper,
+  der den Override aufhebt (Abschnitt 13); ist der core ausgefallen, tut es der Watchdog am Cerbo
+  (Abschnitt 14).
+
+### 15-min-Wächter
+
+Der Wächter misst den Netzbezug jeder Viertelstunde (:00, :15, :30, :45, Wiener Zeit), rechnet ihn
+hoch und hält ein Ziel, wenn eins eingestellt ist (Spec 7.4). Er verhindert keine Spitze um jeden
+Preis: Er drosselt die Wallboxen und lässt den Akku überbrücken, und was beides nicht hält, meldet er.
+
+- **Ziel einstellen und abschalten:** Das Ziel ist `control.peak_target_kw`. Ohne Wert (Standard)
+  ruht der Wächter ganz (Health `peak.state` `off`). Zum Einschalten trägst du das Ziel in
+  `config.yaml` ein und startest den core neu; zum Abschalten nimmst du die Zeile wieder heraus und
+  startest neu.
+
+  ```yaml
+  control:
+    peak_target_kw: 8   # Ziel des 15-min-Wächters in kW; ohne Wert ruht er
+  ```
+
+  Das Ziel ist bis Phase 3 das Budget `B`; die Monatsspitze folgt mit dem Leistungspreis (Spec 7.4).
+  Zulässig im Rest der Viertelstunde ist die mittlere Leistung
+  `P_zul = (B · 0,25 h − E_bisher) / t_rest − Marge` mit der Marge `control.peak_margin_kw`
+  (0,3 kW); bei einem Ziel von 8 kW sind das zu Beginn 7,7 kW.
+- **Messung:** `E_bisher` ist der Netzbezug der laufenden Viertelstunde bisher aus derselben
+  Integration wie die Viertelstunden-Bilanz der Abrechnung (`core/accounting`): die Summe der Flüsse
+  aus dem Netz in Haus, Autos und Akku. Der Wächter rechnet ganz auf der Wanduhr, wie die Abrechnung.
+  Boost zählt außerhalb des Ziels (unten).
+  - **Bekannte Grenze:** Kurze Lücken, die die Abrechnung nicht überbrückt, fehlen in `E_bisher`. Die
+    Abrechnung integriert nach dem Halteprinzip und überbrückt höchstens 5 s (`HOLD_MAX_S`, dieselbe
+    Grenze gilt für die Energie der Autos in Boost, die der Wächter abzieht); ein längeres Intervall
+    und ein Zyklus ohne Bilanz zählen nicht. Der Wächter meldet eine Lücke erst ab 10 s (nächster
+    Punkt). Ein Ausfall von 5 bis 10 s lässt `P_zul` in dieser Viertelstunde deshalb etwas zu hoch
+    ausfallen.
+- **Lückenhaft** (Health `gap`) ist eine Viertelstunde bis zu ihrem Ende, wenn
+  - zwischen zwei Zyklen mit bekannter Leistung mehr als 10 s liegen,
+  - der erste Zyklus mit bekannter Leistung später als 10 s nach ihrem Beginn kommt, etwa nach dem
+    Start des core mitten in der Viertelstunde,
+  - die Regelung ruhte (OBSERVE, SAFE, Regelbetrieb aus) oder
+  - die Wanduhr innerhalb der Viertelstunde zurückspringt.
+
+  Der Wächter ruht dann: Er drosselt nicht nach einer halben Messung, und es gibt kein Budget für den
+  Akku und die Safety-Schicht. Die nächste Viertelstunde beginnt normal.
+- **Hochrechnung und Senkung:** Das Mittel ist der Netzbezug der letzten 30 s ohne Boost. Die
+  Hochrechnung ist `(E_bisher + Mittel · t_rest) / 0,25 h`, mit dem Rest der Viertelstunde `t_rest`
+  (mindestens 1 s). Die **verlangte Senkung** ist `max(Mittel, Basis + W) − P_zul`, in Health
+  mindestens 0; `W` ist der gewollte Netzbezug der Autos vor dem Wächter. `W` ist nötig, weil Regel 2
+  mit Victron live den Override auf `P_zul` begrenzt: ESS hielte den Netzbezug dann immer unter
+  `P_zul`, ganz aus dem Akku, und die Wallboxen würden nie gedrosselt. Mit `W` drosselt der Wächter,
+  sobald die Autos mehr Netz wollen, als das Budget trägt; das Mittel fängt den Rest, etwa einen
+  Akku am Min-SOC.
+
+Die Reaktion folgt der Reihenfolge von Spec 7.4:
+
+1. **Wallboxen drosseln.**
+   - Der Wächter senkt den Netzanteil der Autos, ihren Beitrag zu `W`, in umgekehrter Priorität der
+     Modi: erst Autos in PV-Überschuss bis 0 W (sie stoppen dann nach den Regeln ihres Modus), dann
+     Min+PV und zuletzt Sofort, beide höchstens bis zur Mindestleistung des Ladepunkts
+     (`min_a × U × Phasen`); innerhalb einer Stufe zuerst das Auto mit der niedrigsten Priorität.
+     Ein Auto ohne Netzanteil, dessen Leistung die PV deckt, wird nicht gedrosselt.
+   - Das ergibt je Auto eine **Leistungsgrenze** in W. Die Laderegelung rechnet sie in Ampere um
+     (`W / (U · Phasen des Ladepunkts)`) und behandelt sie wie die Grenze des Phasenwächters: Liegt
+     sie unter dem freien Strom, gilt sie, und der Grund der Entscheidung ist `peak_guard`. Sie wirkt
+     frühestens im nächsten Zyklus. Eine Senkung wegen dieser Grenze ist nie dringend; verlangt die
+     Sicherung allein dieselbe Senkung (Sofort oder Boost ohne Reserve-Schutz), bleibt sie es.
+   - Eine **neue Drosselung** kommt nur bei einer Senkung über 0 und frühestens 30 s nach der
+     letzten Änderung einer Grenze (die erste einer Viertelstunde sofort). Gedrosselt wird um die
+     Senkung abzüglich dessen, was gedrosselte Autos ihrer Grenze noch nicht gefolgt sind (ein Tesla
+     folgt erst nach seiner 90-s-Regel).
+   - **Aufgehoben** wird eine Grenze, wenn `P_zul` den Netzbezug (`max(Mittel, Basis + W)`) um
+     mindestens 1 kW plus die Senkung dieses Autos übersteigt, frühestens 30 s nach der letzten
+     Änderung und je Zyklus höchstens eine, in umgekehrter Reihenfolge (Sofort vor Min+PV vor
+     PV-Überschuss, innerhalb einer Stufe die höchste Priorität zuerst). So flattert der Tesla nicht
+     und spart Tessie-Befehle. Mit dem Ende der Viertelstunde fallen alle Grenzen weg.
+   - Gedrosselt wird nur ein Auto an einem Ladepunkt, den die Laderegelung regelt; ein ungeregeltes
+     Auto in Boost zählt nur für den Boost-Anteil. Verlässt ein gedrosseltes Auto die Liste, wechselt
+     es den Modus oder geht es in Boost oder Aus, fällt seine Grenze still weg, ohne neue Wartezeit.
+   - Ein Totband gibt es bei der Drosselung nicht (unten, „Hinweise für die Anlage“).
+2. **Akku stärker entladen.** Der Akku-Sollwert bekommt `P_zul` als Budget und setzt den gewollten
+   Netzbezug auf höchstens dieses Budget: `W' = max(0, min(W, Budget − Basis))`, mit dem Budget auf
+   10 W abgerundet. Der Override liegt so nie über dem Budget und bleibt auf dem Raster von 10 W. Ist
+   das Budget aufgebraucht (`P_zul` unter 0), gibt es keinen Override, und der Akku deckt die Autos,
+   bis die Wallboxen gefolgt sind. Er überbrückt so genau, was die Wallboxen nicht oder noch nicht
+   bringen, etwa bis ein gedrosselter Tesla seiner Grenze folgt; die Schwelle der Unterstützung gilt
+   dafür nicht. Das Budget geht aber nur an den Akku (und an Regel 2), solange der SOC über
+   USV-Reserve + `control.reserve_guard_pct` (5 %) liegt. Sonst und bei unbekanntem SOC gibt es
+   keins, denn Regel 2 entlüde den Akku sonst bis zum Min-SOC; dann bleiben die Wallboxen, sonst gilt
+   Punkt 3.
+3. **Sonst** nimmt der Wächter die Überschreitung hin: Liegt die Hochrechnung 60 s lang ohne
+   Unterbrechung über dem Ziel, ist die Viertelstunde **überschritten** (Health `exceeded`) bis zu
+   ihrem Ende, und der Alarm `peak.exceeded` (unten) meldet es. Gezählt wird nur in Zyklen, die
+   rechnen; ein Zyklus ohne Rechnung unterbricht die 60 s.
+
+- **Die letzten 120 s:** Ab 120 s vor dem Ende einer Viertelstunde startet kein Auto in PV-Überschuss,
+  Min+PV oder Sofort, dessen Mindestleistung über `P_zul − Mittel` liegt. Die Laderegelung behandelt
+  das wie eine Grenze, die den Mindeststrom nicht trägt; der Start wartet auf die nächste
+  Viertelstunde. Ein Auto, das lädt, betrifft das nicht.
+- **Boost** hebt das Ziel für sein Auto auf (bis zum Abstecken, höchstens 12 h): Der Netzanteil seiner
+  Wallbox zählt weder in die Energie bisher noch ins Mittel, und der Wächter drosselt das Auto nie.
+  Der Zähler am Netz und die Viertelstunde der Abrechnung sehen den Boost trotzdem. Die geschätzten
+  Mehrkosten zeigt erst das UI mit dem Leistungspreis (Phase 3).
+- **Im Dry-Run neben evcc** misst der Wächter den Netzbezug, den evcc verursacht. Seine Drosselungen
+  stehen als Dry-Run-Entscheidungen der Wallboxen im Log (Grund `peak_guard`), und `peak.exceeded`
+  zeigt, wie oft das Ziel unter evcc überschritten würde. Die Autos folgen den Grenzen dabei nicht:
+  Die Entscheidungen zeigen, was der Wächter täte, nicht, wie die Viertelstunde dann verliefe.
+
+### Health
+
+`GET /v1/health` (Zugang wie in Abschnitt 4, „Diagnose“) zeigt neben `vehicles` den Stand des
+Akku-Sollwerts (`battery`) und des 15-min-Wächters (`peak`) aus dem letzten Zyklus. Ein Ausschnitt
+(aus dem Simulator, `spitze-15min` mit Ziel 8 kW, kurz nach Beginn der zweiten Viertelstunde,
+gerundet):
+
+```json
+{
+  "battery": {
+    "state": "ok",
+    "target_w": 7590.0,
+    "override_w": 7700.0,
+    "support": "soc",
+    "bridging_s": 907.0,
+    "refresh_age_s": 10.0
+  },
+  "peak": {
+    "state": "active",
+    "target_kw": 8.0,
+    "energy_kwh": 0.021,
+    "projected_kw": 7.9,
+    "budget_kw": 7.7,
+    "reduction_kw": 0.2,
+    "quarter_end": "2026-10-12T16:30:00+00:00"
+  }
+}
+```
+
+Was fehlt, ist `null`. Das UI zeigt diese Werte erst mit Plan 2d.
+
+| Feld | Bedeutung |
+|---|---|
+| `battery.state` | `ok`: Das Ziel ist bekannt, der Akku-Sollwert rechnet. `unknown`: Das Ziel ist unbekannt, weil ein Wert fehlt (PV, Hauslast, Leistung eines ladenden Autos, Basis-Sollwert); es geht kein Befehl hinaus. `locked`: Victron ist gesperrt oder nicht steuerbar, es geht kein Befehl hinaus. `idle`: Die Regelung ruht, oder es gab noch keinen Zyklus. |
+| `battery.target_w` | der gewollte Netzbezug nach dem Wächter (`W'`) in W; `null`, wenn er unbekannt ist |
+| `battery.override_w` | der letzte eigene Override in W; `null` ohne einen und für „kein Override“. Innerhalb des Totbands weicht er von `target_w` ab. |
+| `battery.support` | Stand der Unterstützung: `on` (gilt), `mode` (kein Auto in PV-Überschuss oder Min+PV), `soc` (SOC unter der Schwelle oder unbekannt), `time` (Überbrückung länger als `support_max_s`). Gilt sie nicht, steht der erste zutreffende Grund in der Reihenfolge `mode`, `soc`, `time`. |
+| `battery.bridging_s` | Sekunden der laufenden Überbrückung; `null` ohne |
+| `battery.refresh_age_s` | Sekunden vom letzten Urteil mit Wert über den eigenen Override bis zum letzten Zyklus; er steigt bis zum Auffrischen und beginnt dann neu. `null` ohne Override. |
+| `peak.state` | `off`: kein Ziel. `gap`: Die Viertelstunde ist lückenhaft, oder die Regelung ruht; auch vor dem ersten Zyklus. `active`: Der Wächter rechnet. `exceeded`: Die Viertelstunde ist überschritten (auch während einer Lücke). |
+| `peak.target_kw` | das Ziel in kW; `null` ohne |
+| `peak.energy_kwh` | `E_bisher` ohne Boost in kWh |
+| `peak.projected_kw` | die Hochrechnung der Viertelstunde in kW |
+| `peak.budget_kw` | `P_zul` in kW, auch unter 0 und auch dann, wenn der SOC dem Akku kein Budget erlaubt |
+| `peak.reduction_kw` | die verlangte Senkung in kW, mindestens 0 |
+| `peak.quarter_end` | das Ende der Viertelstunde des letzten Zyklus, ISO-Zeit in UTC |
+
+`peak.energy_kwh`, `peak.projected_kw`, `peak.budget_kw` und `peak.reduction_kw` gibt es nur nach einem
+Zyklus, der rechnet; die Hochrechnung und die Senkung brauchen außerdem das Mittel der letzten 30 s.
+Ruht die Regelung (OBSERVE, Regelbetrieb aus), zeigt `peak` weiter den letzten Zustand ohne Werte
+(`gap`, bei einer überschrittenen Viertelstunde `exceeded`); `quarter_end` nennt die Viertelstunde, auf
+die er sich bezieht. `battery` steht dann auf `idle`.
+
+### Gründe
+
+Das Entscheidungslog (Abschnitt 13) nennt bei Befehlen des Akku-Sollwerts und des Wächters diese
+Gründe in `codes`, vor den Befunden der Safety-Schicht:
+
+| Grund (`codes`) | Text im Log | Bedeutung |
+|---|---|---|
+| `battery_comp` | Akku nicht ins Auto | Der Override verschiebt den Fehlbetrag der Autos aufs Netz. |
+| `battery_support` | Akku-Unterstützung | Nur der Teil über dem erlaubten Akku-Anteil geht aufs Netz. |
+| `peak_guard` | 15-min-Wächter | Der Befehl folgt aus dem 15-min-Wächter: Beim Override hat sein Budget den gewollten Netzbezug gesenkt, bei einer Wallbox gilt seine Leistungsgrenze an Stelle der des Phasenwächters. |
+
+- `battery_support` steht, wenn der Akku zusammen etwas liefern darf, sonst `battery_comp`; dahinter
+  folgt `peak_guard`, wenn das Budget des Wächters den gewollten Netzbezug gesenkt hat.
+- Ein Beispiel: `Victron (ESS) (Akku nicht ins Auto): Netz-Sollwert 2340 W – Dry-Run, nicht
+  gesendet.` Hebt der Akku-Sollwert den Override auf, steht dort „Netz-Sollwert-Override aufheben“.
+- Zu den Eingaben einer Entscheidung des Overrides gehören die der Laderegelung (`soc_pct`,
+  `battery_w`, `grid_l1_a` bis `grid_l3_a`) und diese in W: `pv_w` und `house_w` (PV und Hauslast),
+  `cars_w` (Ladeleistung der Autos), `deficit_w` (Fehlbetrag zusammen), `allowed_w` (erlaubter
+  Akku-Anteil zusammen), `target_w` (der gewollte Netzbezug nach dem Wächter) und `actual_setpoint_w`
+  (der Override laut Cerbo; im Dry-Run unter ESS „kein Override“, also `null`).
+
+Ein Eintrag im Rohformat (hier aus dem Simulator, gerundet):
+
+```json
+{
+  "id": "2f96611b39534a979f8d77bffa04e2bf",
+  "ts": "2026-10-12T16:00:05+00:00",
+  "actuator": "victron",
+  "kind": "grid_setpoint",
+  "requested": 7720.0,
+  "applied": 7720.0,
+  "dry_run": false,
+  "outcome": "accepted",
+  "result": "ok",
+  "codes": ["battery_comp", "peak_guard"],
+  "text": "Victron (ESS) (Akku nicht ins Auto, 15-min-Wächter): Netz-Sollwert 7720 W – gesendet und bestätigt.",
+  "inputs": {"soc_pct": 59.9, "battery_w": -4290.7, "grid_l1_a": 16.0, "grid_l2_a": 16.0,
+             "grid_l3_a": 0.1, "pv_w": 0.0, "house_w": 840.7, "cars_w": 10810.0,
+             "deficit_w": 10810.0, "allowed_w": 0.0, "target_w": 7720.0,
+             "actual_setpoint_w": 7360.0}
+}
+```
+
+Im Beispiel haben die Autos 10,8 kW Fehlbetrag, und der Akku darf nichts liefern (SOC unter 70 %). Das
+Budget des Wächters liegt bei 7,72 kW und senkt den gewollten Netzbezug auf 7720 W (`target_w`); der
+Override geht von 7360 W auf diesen Wert. Liegt der gewollte Netzbezug über
+`victron.max_grid_charge_setpoint_w`, kappt Regel 2 ihn: Dann steht `range.ceiling` hinter den Gründen
+und `applied` unter `requested`.
+
+### Victron in den Dry-Run und live
+
+1. **Images ausrollen** (`docker compose pull && docker compose up -d`, Abschnitt 4). Die neuen Felder
+   haben Standardwerte (`deploy/config.example.yaml`); der Watchdog bleibt unverändert (1.1.0), und
+   keines der neuen Felder verlangt eine neue `config.ini`. Sende eine Absicht mit `"control": true`
+   (Abschnitt „Laderegelung“): Victron bleibt im Dry-Run, solange sie ihn nicht live verlangt.
+2. **DESS aus für den Dry-Run.** Solange DESS an ist, ist Victron gesperrt: Der Akku-Sollwert sendet
+   auch im Dry-Run nichts, und Health zeigt `battery.state` `locked`. Der Dry-Run des Victron-Teils
+   braucht deshalb DESS aus; das Fenster dafür bestimmst du. Bis Phase 3 läuft der Akku dann ohne
+   Preisoptimierung (Eigenverbrauch und die Regeln dieses Abschnitts). Modus lesen, abschalten und
+   zurücksetzen wie in Abschnitt 11, „Victron und Dynamic ESS“.
+3. **Dry-Run auswerten.** Die Entscheidungen an `victron` (Art `grid_setpoint`) zeigen in `requested`,
+   was BindaEMS einstellen würde, und in `inputs.actual_setpoint_w` den Override am Cerbo (unter ESS
+   im Dry-Run `null`). `SINCE` ist wie in „Dry-Run-Vergleich mit evcc“ gesetzt:
+
+   ```bash
+   curl -s -H "Authorization: Bearer $BINDAEMS_INTERNAL_TOKEN" \
+     "http://127.0.0.1:8081/v1/decisions?since=$SINCE&limit=5000" \
+     | jq -r '.decisions[] | select(.actuator == "victron" and .dry_run) | [.ts, .result, .requested,
+         .inputs.actual_setpoint_w, .inputs.deficit_w, .inputs.allowed_w, (.codes | join(","))] | @tsv'
+   ```
+
+   Prüfe die Punkte unter „Hinweise für die Anlage“ (unten).
+4. **Prüfprotokoll Teil 2, Victron 17.2-4 „Kein Akku ins Auto“** bestehen (Abschnitt 11). Es prüft
+   genau den Mechanismus dieses Abschnitts und ist noch offen. Der Punkt `victron` verlangt DESS aus,
+   den Multi auf „Ein“ und ein Auto, das an der EVCS lädt (über 1000 W).
+5. **`victron.live_allowed: true`** in `config.yaml` (Abschnitt 13, „Dry-Run und live“), den core neu
+   starten, dann die `config.ini` neu erzeugen und mit `install.sh` übertragen (Abschnitt 14,
+   „config.ini erzeugen“ und „Installieren“). Die Freigabe allein schaltet Victron nicht live, das
+   tut erst die Absicht (Schritt 7). Mit ihr enthält die `config.ini` aber die Aktion, die bei einer
+   Auslösung den Override aufhebt, und die Probe in Schritt 6 prüft sie nur dann. Design 2c-2 (11.1)
+   nennt die Freigabe nach der Probe; die Reihenfolge hier folgt dieser Abhängigkeit.
+6. **Watchdog-Probe mit vorher verstellten Victron-Werten** (Abschnitt 14, „Probe“). Die Probe
+   verstellt nichts selbst, und der Watchdog schreibt nur, was vom Sicherwert abweicht. Stelle
+   deshalb Min-SOC, Entladegrenze und Override vorher von Hand auf Werte neben dem Sicherwert (Min-SOC
+   etwas über die USV-Reserve, die Entladegrenze auf einen endlichen Wert, den Override auf eine
+   Zahl), notiere die vorgefundenen Werte und prüfe nach der Probe, dass die Auslösung sie
+   zurückgesetzt hat: Min-SOC = USV-Reserve, Entladegrenze −1 (unbegrenzt), Override aufgehoben. Die
+   Pfade am Cerbo sind `com.victronenergy.settings` mit `/Settings/CGwacs/BatteryLife/MinimumSocLimit`
+   und `/Settings/CGwacs/MaxDischargePower` sowie `com.victronenergy.hub4` mit
+   `/Overrides/Setpoint` (`dbus -y … GetValue` und `SetValue`, wie in Abschnitt 11). Danach stellst
+   du die Werte ein, wie du sie haben willst.
+7. **Victron live schalten:** die Absicht verlangt es, bis Plan 2d per `PUT /v1/intent`. Die Absicht
+   ist vollständig (Abschnitt „Absicht per PUT /v1/intent“); dieses Beispiel lässt EVCS und Tesla im
+   Dry-Run:
+
+   ```json
+   {"version": 14, "control": true, "actuators": {"victron": "live"}}
+   ```
+
+   Live läuft Victron nur mit scharfem Watchdog und ohne Sperre, wie jeder Aktor; den Watchdog
+   schärft der core selbst (Abschnitt 13, „Gate“).
+8. **Danach:** DESS bleibt aus. Schaltest du es wieder ein, sperrt sich Victron, und der Override
+   verfällt nach 300 s. Zurück in den Dry-Run geht es wie in Abschnitt 13, „Live-Freigabe
+   zurücknehmen“: Der core übergibt Victron und hebt den Override auf.
+
+### Alarme
+
+Beide Alarme zeigt das UI unter **System** → „core“ → „Alarme“ (Abschnitt 14, „Meldungen des core“).
+
+| Alarm | Stufe | Bedeutung und Abhilfe |
+|---|---|---|
+| `control.exception`: Regelung ausgesetzt: Ausnahme {Typ} im Regelzyklus. | Fehler | Ein Aufruf der Regelung hat eine Ausnahme geworfen; {Typ} ist ihre Art. Das ist ein Fehler im core, kein Bedienfehler. Das Log (`docker compose logs ems-core`) nennt die erste Ausnahme einer Folge mit Traceback: Sichere es und melde den Fehler. |
+| `peak.exceeded`: 15-min-Ziel überschritten: {x} kW in der Viertelstunde bis {HH:MM}. | Warnung | Die Hochrechnung lag 60 s lang über dem Ziel, und weder die Drosselung der Wallboxen noch der Akku halten es. Meist ist es kein Fehler: Prüfe, was den Netzbezug getrieben hat, und hebe das Ziel an oder schalte den Wächter ab. |
+
+- **`control.exception`:**
+  - Die Regelung sendet in einem gescheiterten Zyklus nichts, und der Heartbeat bleibt aus. Keeper
+    (sicherer Zustand, Übergabe), Stream, Alarme und Entscheidungslog laufen weiter. Ein scharfer
+    Watchdog löst nach 90 s ohne Heartbeat aus und setzt die Sicherwerte.
+  - Der Alarm steht, solange der letzte Zyklus mit Regelung scheiterte: Er endet erst mit einem
+    Zyklus, in dem die Regelung ohne Ausnahme lief, auch wenn sie zwischendurch ruht (etwa nach dem
+    Ausschalten des Regelbetriebs oder in SAFE). Der Zeitpunkt „seit“ ist der erste gescheiterte
+    Zyklus der Folge. Während einer Folge gescheiterter Zyklen kann ein älterer Alarm `peak.exceeded`
+    danebenstehen.
+  - Ein Neustart des core räumt den Alarm. Wirft die Regelung danach wieder, schalte den Regelbetrieb
+    aus (Abschnitt „Absicht per PUT /v1/intent“), bis der Fehler behoben ist: Der core übergibt die
+    Aktoren dann mit den Sicherwerten.
+- **`peak.exceeded`:**
+  - {x} ist die Hochrechnung in diesem Moment auf 0,1 kW, {HH:MM} das Ende der Viertelstunde (Wiener
+    Zeit). Text und Zeitpunkt bleiben bis zum Ende der Viertelstunde fest, und der Alarm endet mit
+    ihr, auch wenn die Regelung ruht; Health zeigt `peak` dann weiter mit `quarter_end` der alten
+    Viertelstunde.
+  - Häufige Ursachen: eine große Last im Haus, ein Akku an der Schwelle (SOC nicht über
+    USV-Reserve + `reserve_guard_pct`, dann gibt es kein Budget für ihn) oder ein Ziel unter dem
+    Grundbedarf des Hauses. Ein Auto in Boost zählt nicht mit, ungeregelte Autos drosselt der Wächter
+    nicht.
+
+### Hinweise für die Anlage
+
+- **Der Tesla startet mit 16 A:** Nachts in Min+PV (keine PV, SOC über 70 %) liefert der Akku bis zu
+  3 kW in die Autos (`support_max_w`). Startet der Tesla mit seinem alten Strom von 16 A, lädt er 90 s
+  mit voller Leistung, bis der Befehl auf 5 A wirkt (die 5-A-Eigenheit, Abschnitt „Laderegelung“,
+  „Tesla“): Regel 2 begrenzt den Override auf 8 kW, und der Akku liefert den Rest, im Simulator bis zu
+  5,8 kW in die Autos für 90 s. `akku-minpv` und `spitze-15min` starten den Tesla darum mit 5 A
+  (Abschnitt „Simulator“). `vehicles.tesla.min_a: 6` vermiede die 5-A-Eigenheit und damit diese 90 s.
+- **Im Dry-Run an der Anlage prüfen:**
+  - wie viele Entscheidungen an `victron` je Stunde entstehen: bei ruhiger Last wenige, unter
+    wechselnden Wolken rund 70 (Simulator). Deutlich mehr heißt, dass das Rauschen der Hauslast
+    größer ist als das Totband; hebe `control.setpoint_deadband_w` an.
+  - ob der Wächter bei kleinen Senkungen nachdrosselt (Entscheidungen mit `peak_guard` in kurzer
+    Folge an derselben Wallbox). Die Drosselung hat kein Totband: Nach einer Drosselung klingt das
+    alte 30-s-Mittel genau mit der Wartezeit von 30 s ab, und das Modell des Simulators hat kein
+    Netzrauschen. An der Anlage könnten kleine Nachdrosselungen und eine verzögerte Aufhebung die
+    Folge sein; die Marge `peak_margin_kw` fängt sie ab.
+  - ob `battery.state` `unknown` erscheint (ein Messwert fehlt) oder `locked` (DESS an, ein anderes
+    System regelt).
 
 ## Simulator
 
@@ -1752,7 +2220,7 @@ docker compose run --rm -v "$PWD/verification:/out" --entrypoint python ems-core
   „„tesla“ erreicht „Complete“ nicht.“, Rückgabe 1).
 - Jeder Lauf bekommt ein **frisches temporäres Verzeichnis** für die Ablage des core (Absicht,
   Rate-Limits, Entscheidungen). Er berührt `/data` nie und sieht nichts von früheren Läufen.
-- Ein Szenario braucht für 1 bis 2 h simulierte Zeit etwa 5 bis 20 s Rechenzeit.
+- Ein Szenario braucht für 30 min bis 2 h simulierte Zeit etwa 3 bis 13 s Rechenzeit; alle achtzehn zusammen rund 2 min.
 
 Die Standardausgabe zeigt je Kennzahl eine Zeile, dann je Informationszahl eine (ohne Grenze), dann
 je Prüfung des Szenarios eine und am Ende den Pfad des Berichts. Ein Ausschnitt aus `tesla-5a`:
