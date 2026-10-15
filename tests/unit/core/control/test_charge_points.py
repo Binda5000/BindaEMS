@@ -190,3 +190,31 @@ def test_share_and_free_current_must_both_carry_the_minimum(cfg) -> None:
     assert enough(egolf, None, 20.0) is None  # unbekannt, wenn eins davon fehlt
     assert enough(egolf, 12, None) is None
     assert enough(None, 12, 20.0) is None
+
+
+# Plan 2c-2b: der Gast (Präzisierung 6)
+
+
+def test_a_guest_gets_the_whole_evcs_and_is_load_at_the_wall_connector(cfg) -> None:
+    vehicles = {
+        "tesla": state(None),
+        "egolf": state(None),
+        "guest@evcs": state("evcs"),
+        "guest@twc": state("twc"),
+    }
+    points = charge_points(
+        cfg,
+        HardLimits.from_config(cfg),
+        list(vehicles),
+        vehicles,
+        inputs(cfg, twc_obs=twc(connected=True)),
+    )
+    guest = points["guest@evcs"]
+    assert (guest.actuator, guest.phases, guest.min_a, guest.max_a, guest.regulated) == (
+        "wallbox.evcs",
+        ("L1", "L2", "L3"),
+        6,
+        16,
+        True,
+    )
+    assert (points["guest@twc"].actuator, points["guest@twc"].regulated) == (None, False)

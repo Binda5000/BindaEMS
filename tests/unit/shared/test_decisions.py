@@ -436,6 +436,19 @@ def test_every_battery_reason_is_named_in_german(code: str, expected: str) -> No
     assert text == f"V ({expected}): Netz-Sollwert 2000 W – gesendet und bestätigt."
 
 
+def test_assignment_detected_has_its_text() -> None:  # Plan 2c-2b, „Texte“
+    shown = decision_text(
+        "Tesla Model 3",
+        CommandKind.CURRENT,
+        16.0,
+        DecisionResult.OK,
+        reasons=("mode_now", "assignment_detected"),
+    )
+    assert shown == (
+        "Tesla Model 3 (Sofort, Zuordnung erkannt): Strom 16 A – gesendet und bestätigt."
+    )
+
+
 def test_findings_follow_the_sentence_separated_by_spaces() -> None:
     text = decision_text(
         "V",

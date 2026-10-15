@@ -2,9 +2,11 @@
 
 Ein Zyklus (``step``) geht so (Präzisierungen 4 bis 12):
 
-1. Zuordnung (``Assignment``) und der geltende Modus je Fahrzeug, bei aktivem ``boost_until``
-   Boost. Die Reihenfolge ist ``intent.priority``, wenn sie jedes Fahrzeug der Konfiguration genau
-   einmal nennt, sonst die von ``config.yaml``; Einträge für unbekannte Fahrzeuge zählen nicht.
+1. Zuordnung (``Assignment``) und der geltende Modus je Auto: für ein Fahrzeug bei aktivem
+   ``boost_until`` Boost, für einen Gast ``intent.guest.mode``, nie Boost. Die Reihenfolge der
+   Fahrzeuge ist ``intent.priority``, wenn sie jedes Fahrzeug der Konfiguration genau einmal nennt,
+   sonst die von ``config.yaml``; Einträge für unbekannte Fahrzeuge zählen nicht. Dahinter folgen
+   die Gäste in der Reihenfolge der Wallboxen (``fleet``).
 2. Ladepunkte (``ChargePoint``): Aktor, Phasen, Strombereich, gemessener Strom und ob er geregelt
    wird (Präzisierungen 5 und 6). Daraus die Last je Phase samt Zuschlägen (``phase_loads``) und
    die Stufe der Überlast am echten Netzstrom (``OverloadGuard``).
@@ -21,6 +23,10 @@ Ein Zyklus (``step``) geht so (Präzisierungen 4 bis 12):
 Die Bausteine stehen in eigenen Modulen: ``charge_points`` (Ladepunkte und ihre Verteilung),
 ``last_values`` (nur Änderungen schicken, „nicht übernommen“) und ``charging_tesla`` (Tesla,
 Zuordnung und Wiederaufnahme).
+
+Die Autos sind die Fahrzeuge der Konfiguration und je Wallbox ein Gast (``fleet``, Plan 2c-2b,
+Präzisierung 6). Ein Gast ist ein Auto ohne Tessie, das auf allen Phasen lädt (``car_spec``): An
+einer EVCS wird er wie jedes Auto geregelt, mit ihrem Strombereich; am Wall Connector ist er Last.
 
 Nach jedem ``step`` zeigt ``cars`` je Ladepunkt das Auto mit Modus und Leistung (``CarView``): Damit
 rechnen Akku-Sollwert und 15-min-Wächter mit Zuordnung und Modi desselben Zyklus (Plan 2c-2a,
@@ -56,6 +62,12 @@ Dazu legt die Regelung fest:
   verlangt; „Laden aus“ kommt dann nur wegen Überlast.
 - Eine Wallbox ist höchstens ein Ladepunkt: Hängen nach der Zuordnung zwei Fahrzeuge an ihr, hat
   ihn das erste nach Priorität. So zählt ihr Strom nur einmal.
+- Ein Fahrzeug mit Tessie, das laut Übersteuerung oder Erkennung an einer EVCS steht, bekommt mit
+  jeder Ankunft dort einmal seinen Höchststrom; geregelt wird dann die EVCS mit seinen Phasen und
+  Grenzen in seinem Modus (``EvcsOverrides``; Plan 2c-2b, Präzisierung 7).
+- Ab einer neuen Erkennung (``VehicleState.fresh``) tragen die Befehle eines Autos zuletzt den
+  Grund ``assignment_detected``, bis zum ersten Zyklus mit Befehlen für das Auto, den Höchststrom
+  eingeschlossen. Ist es vorher nicht mehr erkannt, entfällt er (Plan 2c-2b, Präzisierung 8).
 - An einer EVCS hält die Verteilung den zuletzt angeforderten Strom (Hysterese
   ``control.evcs_hysteresis_a``, Design 6.5): Er sinkt sofort mit dem Anteil, steigt aber erst,
   wenn der Anteil ihn um 1 A plus die Hysterese übersteigt. Ohne eigenen Wert (nach dem Start, nach
@@ -70,7 +82,7 @@ from __future__ import annotations
 
 import math
 from collections.abc import Collection, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 from typing import Any, Final
 
@@ -97,6 +109,7 @@ from bindaems.core.control.charge_points import (
     wanted_a,
 )
 from bindaems.core.control.charging_tesla import (
+    ASSIGNMENT_DETECTED,
     ASSIGNMENT_UNCLEAR,
     WAKE,
     EvcsOverrides,
@@ -105,6 +118,7 @@ from bindaems.core.control.charging_tesla import (
     wake_command,
 )
 from bindaems.core.control.executor import WriteResult
+from bindaems.core.control.fleet import car_spec, fleet, guest_wallbox
 from bindaems.core.control.last_values import ControlCommand, Key, LastValues
 from bindaems.core.control.peak_guard import NO_LIMITS, PeakLimits
 from bindaems.core.control.phase_guard import (
@@ -126,6 +140,7 @@ from bindaems.shared.control import (
     Command,
     CommandKind,
     CommandValue,
+    GuestIntent,
     Intent,
     SurplusPriority,
     VehicleIntent,
@@ -149,8 +164,9 @@ class CarView:
     """Das Auto eines Ladepunkts im letzten ``step`` (Plan 2c-2a, Präzisierung 4); ``None`` heißt
     unbekannt.
 
-    - ``vehicle``, ``wallbox``: das Fahrzeug und die Wallbox des Ladepunkts aus der Zuordnung
-    - ``mode``: der geltende Modus des Fahrzeugs, mit Boost
+    - ``vehicle``, ``wallbox``: das Auto (ein Schlüssel aus ``fleet``, auch ein Gast) und die
+      Wallbox des Ladepunkts aus der Zuordnung
+    - ``mode``: der geltende Modus des Autos, mit Boost; für einen Gast ``intent.guest.mode``
     - ``power_w``: die Ladeleistung in W, die die Wallbox misst. Fehlt sie oder ist sie keine
       endliche Zahl, bei einem Fahrzeug mit Tessie ``actual_current_a × phases × U``, wenn Tessie
       erreichbar ist und beides kennt.
@@ -243,12 +259,13 @@ class _Situation:
 class ChargeController:
     """Die Laderegelung: je Zyklus Befehle an EVCS und Tesla (Design 4 bis 9).
 
-    Der Zustand lebt nur im Speicher: eine Zuordnung für die ganze Lebensdauer, je Fahrzeug eine
-    ``ModeMachine`` und eine ``TeslaPolicy`` (Fenster und Weckkontingent), der Überlastwächter samt
-    der Stufe des letzten Zyklus, die geregelten Ladepunkte des letzten Zyklus, die letzten eigenen
-    Werte je Aktor und Art, die Fahrzeuge, deren erste Startfolge nach einer Pause aussteht, und
-    die Autos des letzten Zyklus (``cars``). ``started`` ist die Wanduhr beim Start der Regelung
-    (``Assignment``).
+    Der Zustand lebt nur im Speicher: eine Zuordnung für die ganze Lebensdauer, je Auto aus
+    ``fleet`` (Fahrzeuge und Gäste) eine ``ModeMachine``, je Fahrzeug der Konfiguration eine
+    ``TeslaPolicy`` (Fenster und Weckkontingent), der Überlastwächter samt der Stufe des letzten
+    Zyklus, die geregelten Ladepunkte des letzten Zyklus, die letzten eigenen Werte je Aktor und
+    Art, die Autos, deren erste Startfolge nach einer Pause aussteht, die neu erkannten Autos ohne
+    Befehle seither (``assignment_detected``) und die Autos des letzten Zyklus (``cars``).
+    ``started`` ist die Wanduhr beim Start der Regelung (``Assignment``).
     """
 
     def __init__(self, cfg: Config, limits: HardLimits, *, started: datetime) -> None:
@@ -256,8 +273,10 @@ class ChargeController:
         self._limits = limits
         self._guard = GuardLimits.from_config(cfg)
         self._assignment = Assignment(cfg, started=started)
+        self._fleet = fleet(cfg)  # die Autos: die Fahrzeuge, dahinter je Wallbox ihr Gast
+        self._guests = [key for key in self._fleet if key not in cfg.vehicles]
         timers = ModeTimers.from_config(cfg.control)
-        self._machines = {key: ModeMachine(timers) for key in cfg.vehicles}
+        self._machines = {key: ModeMachine(timers) for key in self._fleet}
         self._tesla = {key: TeslaPolicy(cfg.control, v.wake) for key, v in cfg.vehicles.items()}
         self._vehicles = {vehicle_actuator(key): key for key in cfg.vehicles}  # Aktor → Fahrzeug
         self._overload = OverloadGuard(self._guard)
@@ -269,7 +288,9 @@ class ChargeController:
         # Maschine bekommt ihn im ersten geregelten Schritt (``new_session`` statt ``resumed``).
         self._unseen_sessions: set[str] = set()
         self._overrides = EvcsOverrides(cfg)  # „Tesla an der EVCS“
-        self._resume: set[str] = set()  # Fahrzeuge, deren erste Startfolge nach ``idle`` aussteht
+        self._resume: set[str] = set()  # Autos, deren erste Startfolge nach ``idle`` aussteht
+        # Neu erkannte Autos ohne Befehle seither: Ihre nächsten tragen ``assignment_detected``.
+        self._fresh: set[str] = set()
         self._stepped = False  # seit dem Start schon geregelt: erst danach ist ``idle`` ein Ausfall
         self._last = LastValues()
         self._views: dict[str, _View] = {}
@@ -314,9 +335,15 @@ class ChargeController:
             self._last.forget(set(regulated.values()))
         self._level = cycle.level
         # Kommt ein Fahrzeug an eine EVCS, vergisst die Regelung die Werte seines Aktors: So geht
-        # sein Höchststrom einmal je Ansteckvorgang hinaus (``maximum_command``).
+        # sein Höchststrom einmal je Ankunft hinaus (``maximum_command``).
         at_the_evcs, arrived = self._overrides.update(state.vehicles)
         self._last.forget(arrived)
+        # Neu erkannt (Plan 2c-2b, Präzisierung 8); nicht mehr erkannt, entfällt der Grund.
+        self._fresh = {
+            key
+            for key, vehicle in state.vehicles.items()
+            if vehicle.fresh or (key in self._fresh and vehicle.kind is AssignmentKind.DETECTED)
+        }
 
         commands: list[ChargeCommand] = []
         views: dict[str, _View] = {}
@@ -369,6 +396,9 @@ class ChargeController:
                 else []
             )
             found += self._regulate(now, point, actuator, situation, inputs)
+            if found and key in self._fresh:  # der erste Zyklus mit Befehlen seit der Erkennung
+                found = [replace(c, reasons=(*c.reasons, ASSIGNMENT_DETECTED)) for c in found]
+                self._fresh.discard(key)
             if found:
                 self._reasons[key] = found[-1].reasons[-1]
             for command in found:
@@ -425,18 +455,19 @@ class ChargeController:
 
         Im nächsten ``step`` gilt jeder geregelte Ladepunkt als wieder geregelt: Seine Maschine
         bekommt ``resumed``. Lief die Regelung seit dem Start schon, trägt danach die erste
-        Startfolge je Fahrzeug ``resume_after_outage``; Pausen vor dem ersten ``step`` (START,
-        OBSERVE) sind kein Ausfall. Die Fenster des Tesla beginnen neu (Präzisierung 12), die
-        Überlast mit einem neuen Wächter und der Stufe ``NONE``; die alten werteten die Lücke sonst
-        als durchgehend. Die Zuordnung bleibt, damit ein beendeter Boost nicht wieder auflebt; das
-        Weckkontingent bleibt ebenso. ``health``, ``vehicle_wallbox`` und ``cars`` sind bis zum
-        nächsten ``step`` unbekannt; der letzte Grund je Fahrzeug bleibt. ``now`` ist die Zeit der
-        Safety-Schicht; das Vergessen braucht sie nicht.
+        Startfolge je Auto, auch eines Gastes, ``resume_after_outage``; Pausen vor dem ersten
+        ``step`` (START, OBSERVE) sind kein Ausfall. Die Fenster des Tesla beginnen neu
+        (Präzisierung 12), die Überlast mit einem neuen Wächter und der Stufe ``NONE``; die alten
+        werteten die Lücke sonst als durchgehend. Die Zuordnung bleibt, damit ein beendeter Boost
+        nicht wieder auflebt; das Weckkontingent bleibt ebenso und ein neu erkanntes Auto ohne
+        Befehle seither (``assignment_detected``). ``health``, ``vehicle_wallbox`` und ``cars`` sind
+        bis zum nächsten ``step`` unbekannt; der letzte Grund je Fahrzeug bleibt. ``now`` ist die
+        Zeit der Safety-Schicht; das Vergessen braucht sie nicht.
         """
         self._last.forget()
         self._regulated = set()
         if self._stepped:
-            self._resume = set(self._cfg.vehicles)
+            self._resume = set(self._fleet)
         for tesla in self._tesla.values():
             tesla.restart()
         self._overload = OverloadGuard(self._guard)
@@ -461,8 +492,10 @@ class ChargeController:
 
         Für Akku-Sollwert und 15-min-Wächter (Plan 2c-2a, Präzisierungen 3 und 4). Jeder
         Ladepunkt zählt, auch einer, der nicht geregelt wird (``CarView.regulated``) oder an dem
-        das Auto nicht angesteckt ist: Er bleibt der Ladepunkt seines Fahrzeugs, und auch solange
-        evcc lädt, zählt sein Auto. Vor dem ersten ``step`` und nach ``idle`` leer.
+        das Auto nicht angesteckt ist: Er bleibt der Ladepunkt seines Autos, und auch solange evcc
+        lädt, zählt sein Auto. Auch ein Gast hat einen, mit dem Modus des Gastes: an einer EVCS
+        geregelt, am Wall Connector Last (Plan 2c-2b, Präzisierung 6). Vor dem ersten ``step`` und
+        nach ``idle`` leer.
         """
         return self._cars
 
@@ -476,7 +509,8 @@ class ChargeController:
         return dict(self._vehicle_wallbox)
 
     def health(self) -> list[dict[str, Any]]:
-        """Je Fahrzeug, in der Reihenfolge von ``config.yaml``, der Stand des letzten ``step``.
+        """Je Fahrzeug, in der Reihenfolge von ``config.yaml``, der Stand des letzten ``step``; die
+        Gäste nennt es nicht (Plan 2c-2b, Präzisierung 6).
 
         Die Felder: ``id``, ``name``, ``mode`` (Wert von ``Effective``), ``boost_until`` (ISO in
         UTC), ``wallbox``, ``assignment`` (Wert von ``AssignmentKind``), ``limit_a`` (freier Strom
@@ -509,16 +543,17 @@ class ChargeController:
         return entries
 
     def _order(self, intent: Intent | None) -> list[str]:
-        """Die Fahrzeuge in der Reihenfolge ihrer Priorität.
+        """Die Autos in der Reihenfolge ihrer Priorität: die Fahrzeuge, dahinter die Gäste.
 
-        Das ist ``intent.priority``, wenn sie jedes Fahrzeug der Konfiguration genau einmal nennt
-        und kein anderes; sonst die Reihenfolge von ``config.yaml``.
+        Die Fahrzeuge stehen in der Reihenfolge von ``intent.priority``, wenn sie jedes Fahrzeug der
+        Konfiguration genau einmal nennt und kein anderes; sonst in der von ``config.yaml``. Die
+        Gäste folgen in der Reihenfolge von ``fleet`` (Plan 2c-2b, Präzisierung 6).
         """
         configured = list(self._cfg.vehicles)
         priority = None if intent is None else intent.priority
-        if priority is not None and sorted(priority) == sorted(configured):
-            return list(priority)
-        return configured
+        if priority is None or sorted(priority) != sorted(configured):
+            priority = configured
+        return [*priority, *self._guests]
 
     def _allocate(
         self,
@@ -609,12 +644,13 @@ class ChargeController:
         Der Ladepunkt beginnt, wenn er wieder geregelt wird (``back``), mit einem neuen
         Ansteckvorgang und wenn ein gemerkter Vorgang die Maschine erreicht, also beim ersten
         bekannten Ansteckzustand. Jedes davon geschieht einmal: Dann vergisst die Regelung die
-        letzten Werte des Aktors. Mit einem Ansteckvorgang beginnen auch die Fenster des Tesla neu.
+        letzten Werte des Aktors. Mit einem Ansteckvorgang beginnen auch die Fenster eines
+        Fahrzeugs neu (``TeslaPolicy``); ein Gast hat keine.
         """
         back = (key, actuator) not in self._regulated  # wieder geregelt: Übernahme
         remembered = key in self._unseen_sessions
         reached = remembered and vehicle.plugged is not None  # der gemerkte Vorgang kommt an
-        if vehicle.new_session or reached:
+        if (vehicle.new_session or reached) and key in self._tesla:
             self._tesla[key].restart()
         if back or vehicle.new_session or reached:
             self._last.forget({actuator})
@@ -804,7 +840,13 @@ class ChargeController:
 
 
 def _mode(key: str, vehicle: VehicleState, intent: Intent | None) -> Effective:
-    """Der geltende Modus: Boost, solange er gilt; sonst der Modus der Absicht, ohne Eintrag PV."""
+    """Der geltende Modus: Boost, solange er gilt; sonst der Modus der Absicht, ohne Eintrag PV.
+
+    Für einen Gast gilt ``intent.guest.mode``, ohne Absicht der von ``GuestIntent()``, nie Boost
+    (Plan 2c-2b, Präzisierung 6).
+    """
+    if guest_wallbox(key) is not None:
+        return Effective((GuestIntent() if intent is None else intent.guest).mode.value)
     if vehicle.boost_until is not None:
         return Effective.BOOST
     entry = None if intent is None else intent.vehicles.get(key)
@@ -817,7 +859,7 @@ def _car_view(
     """Das Auto des Ladepunkts für ``cars`` (Plan 2c-2a, Präzisierung 4; Regeln: ``CarView``)."""
     volts = cfg.grid.voltage_nominal_v
     power_w = finite_number(inputs.wallboxes[point.wallbox].power_w)
-    if power_w is None and cfg.vehicles[point.vehicle].tessie is not None:
+    if power_w is None and car_spec(cfg, point.vehicle).tessie:
         power_w = _tessie_w(inputs.vehicles.get(point.vehicle, NO_VEHICLE_DATA), volts)
     min_w = point.min_a * volts * len(point.phases)
     return CarView(

@@ -1,12 +1,13 @@
 """Ladepunkte der Laderegelung und was die Verteilung von ihnen braucht.
 
-- ``ChargePoint``: der Ladepunkt eines Fahrzeugs an seiner Wallbox in einem Zyklus
-- ``charge_points``: die Ladepunkte je Fahrzeug mit Wallbox, in der Reihenfolge der Priorität
+- ``ChargePoint``: der Ladepunkt eines Autos an seiner Wallbox in einem Zyklus
+- ``charge_points``: die Ladepunkte je Auto mit Wallbox, in der Reihenfolge der Priorität
 - ``reserved_a``: die Zuschläge bei Ausfällen je Phase
 - ``can_charge``, ``cars_w``, ``wanted_a``, ``holding_a``, ``enough``: was ein Auto am Überschuss
   und an der Zuteilung des Wächters wünscht, hält und trägt
 
-Die Präzisierungen, auf die dieses Modul verweist, sind die von Plan 2c-1. Die Schicht ist rein:
+Ein Auto ist ein Fahrzeug der Konfiguration oder der Gast einer Wallbox (``fleet``, Plan 2c-2b,
+Präzisierung 6). Präzisierungen ohne Angabe des Plans sind die von Plan 2c-1. Die Schicht ist rein:
 Sie liest nur ihre Argumente.
 """
 
@@ -19,6 +20,7 @@ from bindaems.core.control.assignment import AssignmentKind, VehicleState
 from bindaems.core.control.charge_inputs import NO_VEHICLE_DATA, ChargeInputs, WallboxObs
 from bindaems.core.control.charge_modes import FULL_POWER, Effective
 from bindaems.core.control.charging_tesla import tessie_current
+from bindaems.core.control.fleet import car_spec
 from bindaems.core.control.phase_guard import PHASES
 from bindaems.core.safety.limits import HardLimits
 from bindaems.shared.config import Config, EvcsConfig, Phase
@@ -27,10 +29,11 @@ from bindaems.shared.control import vehicle_actuator, wallbox_actuator
 
 @dataclass(frozen=True)
 class ChargePoint:
-    """Der Ladepunkt eines Fahrzeugs an seiner Wallbox in einem Zyklus (Präzisierungen 5 und 6).
+    """Der Ladepunkt eines Autos an seiner Wallbox in einem Zyklus (Präzisierungen 5 und 6).
 
+    - ``vehicle``: das Auto, ein Schlüssel aus ``fleet``
     - ``actuator``: ``wallbox.<w>`` an einer EVCS, ``vehicle.<v>`` für ein Fahrzeug mit Tessie am
-      Wall Connector; ``None`` für eins ohne Tessie dort, das nur Last ist
+      Wall Connector; ``None`` für eins ohne Tessie und für einen Gast dort, die nur Last sind
     - ``evcs``: der Ladepunkt ist eine EVCS (Überlast ``EVCS_STOP``)
     - ``phases``, ``min_a``, ``max_a``: die Netzphasen und der Strombereich
     - ``measured``: der gemessene Strom je Netzphase; ``None`` heißt unbekannt
@@ -55,7 +58,7 @@ def charge_points(
     vehicles: Mapping[str, VehicleState],
     inputs: ChargeInputs,
 ) -> dict[str, ChargePoint]:
-    """Die Ladepunkte je Fahrzeug mit Wallbox; eine Wallbox hat das erste nach Priorität."""
+    """Die Ladepunkte je Auto mit Wallbox; eine Wallbox hat das erste nach Priorität."""
     points: dict[str, ChargePoint] = {}
     taken: set[str] = set()
     for key in order:
@@ -75,33 +78,37 @@ def _point(
     kind: AssignmentKind,
     inputs: ChargeInputs,
 ) -> ChargePoint:
-    """Der Ladepunkt des Fahrzeugs ``key`` an der Wallbox ``wallbox_key`` (Präzisierung 6).
+    """Der Ladepunkt des Autos ``key`` an der Wallbox ``wallbox_key`` (Präzisierung 6).
+
+    Phasen und Strombereich des Autos kommen aus ``car_spec``: Ein Gast lädt auf allen drei Phasen
+    der ``phase_map``, an einer EVCS in deren Strombereich; am Wall Connector hat er keinen Aktor
+    und ist Last, sein ``max_a`` ist das des Wall Connectors (Plan 2c-2b, Präzisierung 6).
 
     Geregelt ist er, wenn sein Aktor steuerbar ist (am Wall Connector auch nur weckbar), er
     nicht pausiert (ein Fahrzeug mit Tessie, solange die Zuordnung unklar ist) und seine
     Wallbox erreichbar ist oder Tessie seinen Strom kennt.
     """
-    vehicle = cfg.vehicles[key]
+    car = car_spec(cfg, key)
     wallbox = cfg.wallboxes[wallbox_key]
     seen = inputs.wallboxes[wallbox_key]
     tessie = NO_VEHICLE_DATA
-    if vehicle.tessie is not None:
+    if car.tessie:
         tessie = inputs.vehicles.get(key, NO_VEHICLE_DATA)
     measured = seen.phase_a if seen.reachable else tessie_current(tessie, wallbox.phase_map)
     if isinstance(wallbox, EvcsConfig):
         evcs_actuator = wallbox_actuator(wallbox_key)
         actuator: str | None = evcs_actuator
         unclear = kind is AssignmentKind.UNCLEAR  # Präzisierung 5: die ganze EVCS
-        phases = wallbox.phase_map if unclear else wallbox.phase_map[: vehicle.phases]
-        min_a = wallbox.min_a if unclear else max(wallbox.min_a, vehicle.min_a)
-        max_a = wallbox.max_a if unclear else min(wallbox.max_a, vehicle.max_a)
+        phases = wallbox.phase_map if unclear else wallbox.phase_map[: car.phases]
+        min_a = wallbox.min_a if unclear else max(wallbox.min_a, car.min_a)
+        max_a = wallbox.max_a if unclear else min(wallbox.max_a, car.max_a)
         steerable = inputs.controllable.get(evcs_actuator) is True
         paused = False
     else:
         candidate = vehicle_actuator(key)
         actuator = candidate if candidate in limits.actuators else None
-        phases = wallbox.phase_map[: vehicle.phases]
-        min_a, max_a = vehicle.min_a, min(vehicle.max_a, wallbox.max_a)
+        phases = wallbox.phase_map[: car.phases]
+        min_a, max_a = car.min_a, min(car.max_a, wallbox.max_a)
         steerable = actuator is not None and (
             inputs.controllable.get(actuator) is True or inputs.wakeable.get(actuator) is True
         )
@@ -126,8 +133,8 @@ def reserved_a(
 
     - Eine EVCS, die nicht erreichbar ist: ``safe_a`` auf allen Phasen ihrer ``phase_map``,
       auch ohne Fahrzeug an ihr.
-    - Ein Fahrzeug am Wall Connector, der nicht erreichbar ist, ohne Strom aus Tessie: das
-      ``max_a`` seines Ladepunkts auf allen drei Phasen. Geregelt ist dieser Ladepunkt nie.
+    - Ein Auto am Wall Connector, der nicht erreichbar ist, ohne Strom aus Tessie, auch ein Gast:
+      das ``max_a`` seines Ladepunkts auf allen drei Phasen. Geregelt ist dieser Ladepunkt nie.
     """
     regulated = {point.wallbox for point in points if point.regulated}
     reserved = dict.fromkeys(PHASES, 0.0)

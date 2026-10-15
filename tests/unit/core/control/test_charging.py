@@ -26,6 +26,7 @@ from bindaems.shared.control import (
     ChargeMode,
     Command,
     CommandKind,
+    GuestIntent,
     Intent,
     SurplusOrder,
     SurplusPriority,
@@ -857,23 +858,28 @@ def test_a_tesla_that_can_only_be_woken_is_regulated(cfg) -> None:  # Präzisier
 
 
 def test_two_vehicles_at_one_wallbox_count_it_once(cfg) -> None:
-    shared = cfg.vehicles["tesla"].model_copy(update={"default_wallbox": "evcs"})
-    shared_cfg = cfg.model_copy(update={"vehicles": {**cfg.vehicles, "tesla": shared}})
-    c = ChargeController(shared_cfg, HardLimits.from_config(shared_cfg), started=T0)
-    both_now = Intent(version=1, control=True, vehicles={"tesla": NOW, "egolf": NOW})
+    # Beide Fahrzeuge laut Übersteuerung an der EVCS: Ohne sie stünde dort nur eins, das erkannte
+    # oder angenommene (Plan 2c-2b, Präzisierung 5).
+    both_at_the_evcs = Intent(
+        version=1,
+        control=True,
+        vehicles={
+            "tesla": VehicleIntent(mode=ChargeMode.NOW, wallbox="evcs"),
+            "egolf": VehicleIntent(mode=ChargeMode.NOW, wallbox="evcs"),
+        },
+    )
+    c = controller(cfg)
     at_10_a = evcs(charging=True, phase_a=dict.fromkeys(("L1", "L2", "L3"), 10.0), power_w=6900.0)
-    # Tessie sieht den Tesla angesteckt: „nicht angesteckt“ schlösse ihn an der EVCS aus, und dort
-    # stünde ein Gast (Plan 2c-2b, Präzisierung 13)
     found = c.step(
         inputs(
-            shared_cfg,
-            intent=both_now,
+            cfg,
+            intent=both_at_the_evcs,
             evcs_obs=at_10_a,
-            tesla_obs=tesla(plugged=True),
             present=at_evcs(10.0, True),
             grid_obs=grid(l1=12.0, l2=12.0, l3=12.0),
         )
     )
+    assert [(v["wallbox"], v["assignment"]) for v in c.health()] == [("evcs", "override")] * 2
     assert [x.command for x in found] == [
         Command("wallbox.evcs", CURRENT, 16.0, reasons=("mode_now",)),
         Command("wallbox.evcs", CHARGING, True, reasons=("mode_now",)),
@@ -1633,3 +1639,151 @@ def test_a_cap_at_the_minimum_power_carries_the_minimum_current(cfg) -> None:
         Command("wallbox.evcs", CURRENT, 6.0, reasons=reasons),
         Command("wallbox.evcs", CHARGING, True, reasons=reasons),
     ]
+
+
+# Plan 2c-2b: der Gast und der e-Golf am Wall Connector (Präzisierungen 6 und 8)
+
+GUEST_NOW = Intent(version=1, control=True, guest=GuestIntent(mode=ChargeMode.NOW))
+
+
+def test_a_guest_at_the_evcs_charges_in_the_guest_mode(cfg) -> None:  # Design 7.4
+    c = controller(cfg)
+    found = run(c, cfg, 61, intent=GUEST_NOW, homes={"egolf": False})
+    assert [(t, x.command) for t, x in found] == [
+        (0, Command("wallbox.evcs", CURRENT, 16.0, reasons=("mode_now",))),
+        (0, Command("wallbox.evcs", CHARGING, True, reasons=("mode_now",))),
+    ]
+    assert c.health()[1]["wallbox"] is None  # der e-Golf steht nirgends
+
+
+def test_a_guest_at_the_wall_connector_is_load(cfg) -> None:  # Design 7.4
+    c = controller(cfg)
+    twc_16 = twc(
+        connected=True,
+        charging=True,
+        phase_a=dict.fromkeys(("L1", "L2", "L3"), 16.0),
+        power_w=11040.0,
+    )
+    found = run(c, cfg, 61, twc_obs=twc_16, homes={"egolf": False}, controllable=BOTH)
+    assert not any(x.command.actuator == "vehicle.tesla" for _, x in found)
+    guest = next(car for car in c.cars() if car.wallbox == "twc")
+    assert (guest.vehicle, guest.mode, guest.regulated) == ("guest@twc", Effective.PV, False)
+
+
+def test_the_egolf_at_the_wall_connector_is_load_in_its_mode(cfg) -> None:  # Design 7.4
+    c = controller(cfg)
+    egolf = twc(
+        connected=True, charging=True, phase_a={"L1": 16.0, "L2": 16.0, "L3": 0.0}, power_w=7360.0
+    )
+    intent = Intent(
+        version=1, control=True, vehicles={"egolf": VehicleIntent(mode=ChargeMode.MIN_PV)}
+    )
+    found = run(
+        c,
+        cfg,
+        121,
+        twc_obs=egolf,
+        evcs_obs=evcs(connected=False),
+        homes={"egolf": True},
+        intent=intent,
+        controllable=BOTH,
+    )
+    assert not any(x.command.actuator == "vehicle.tesla" for _, x in found)
+    car = next(car for car in c.cars() if car.wallbox == "twc")  # erkannt bei 120 s: Phasen ab 60 s
+    assert (car.vehicle, car.mode, car.regulated) == ("egolf", Effective.MIN_PV, False)
+    assert c.health()[1]["assignment"] == "detected"
+
+
+# Ergänzungen: Rang, neuer Vorgang, Pause und Ausfall beim Gast; Ende des Grundes
+
+
+def test_a_guest_comes_after_every_vehicle(cfg) -> None:  # Präzisierung 6
+    # Der Tesla am Wall Connector und ein Gast an der EVCS, beide in Sofort; die Absicht nennt den
+    # e-Golf vor dem Tesla. Ziel 33 A, Last 2 A: Der Tesla bekommt 16 A, dem Gast bleiben 15 A.
+    intent = Intent(
+        version=1,
+        control=True,
+        vehicles={"tesla": NOW},
+        priority=["egolf", "tesla"],
+        guest=GuestIntent(mode=ChargeMode.NOW),
+    )
+    c = controller(cfg)
+    found = c.step(inputs(cfg, intent=intent, homes={"egolf": False}, **TESLA_PLUGGED))
+    currents = [(x.command.actuator, x.command.value) for x in found if x.command.kind is CURRENT]
+    assert currents == [("vehicle.tesla", 16.0), ("wallbox.evcs", 15.0)]
+    assert [car.vehicle for car in c.cars()] == ["tesla", "guest@evcs"]
+
+
+def test_a_guest_in_a_new_session_starts_in_its_mode(cfg) -> None:  # Präzisierung 6
+    # Bis 4 s meldet die EVCS kein Fahrzeug, der e-Golf steht dort abgesteckt. Ab 5 s steht dort ein
+    # Gast, denn der e-Golf ist nicht zu Hause: Sein neuer Vorgang beginnt in Sofort.
+    found = run(
+        controller(cfg),
+        cfg,
+        7,
+        intent=GUEST_NOW,
+        homes={"egolf": False},
+        evcs_obs=lambda s: evcs() if s >= 5 else evcs(connected=False),
+    )
+    assert as_commands(found) == [
+        cmd(0, CHARGING, False, ("mode_pv",)),
+        cmd(5, CURRENT, 16.0, ("mode_now",)),
+        cmd(5, CHARGING, True, ("mode_now",)),
+    ]
+
+
+def test_after_a_pause_the_first_start_of_a_guest_resumes(cfg) -> None:  # Präzisierung 6
+    # wie bei einem Fahrzeug mit resume_after_outage (Plan 2c-1, Präzisierung 9)
+    c = controller(cfg)
+    guest = {"intent": GUEST_NOW, "homes": {"egolf": False}}
+    run(c, cfg, 2, **guest)  # der Gast an der EVCS startet bei 0
+    c.idle(T0 + timedelta(seconds=2))
+    resumed = ("mode_now", "resume_after_outage")
+    assert [x.command for x in c.step(inputs(cfg, s=10, **guest))] == [
+        Command("wallbox.evcs", CURRENT, 16.0, reasons=resumed),
+        Command("wallbox.evcs", CHARGING, True, reasons=resumed),
+    ]
+
+
+def test_the_peak_guard_can_throttle_a_guest_at_the_evcs(cfg) -> None:  # Präzisierung 6
+    # Der Gast an der EVCS in Sofort lädt auf allen drei Phasen: Die Grenze 4140 W des
+    # 15-min-Wächters ist 4140 / (230 V · 3 Phasen) = 6 A.
+    found = controller(cfg).step(
+        inputs(cfg, intent=GUEST_NOW, homes={"egolf": False}),
+        PeakLimits(caps_w={"guest@evcs": 4140.0}),
+    )
+    reasons = ("mode_now", "peak_guard")
+    assert [x.command for x in found] == [
+        Command("wallbox.evcs", CURRENT, 6.0, reasons=reasons),
+        Command("wallbox.evcs", CHARGING, True, reasons=reasons),
+    ]
+
+
+def test_a_guest_at_a_wall_connector_that_is_out_reserves_its_maximum(cfg) -> None:
+    # Präzisierung 6: Am Wall Connector steht ein Gast, denn Tessie sieht den Tesla abgesteckt; ab
+    # 1 s fällt der Wall Connector aus. Sein Höchststrom zählt als Zuschlag, und die Leistung des
+    # Gastes ist unbekannt: Tessie misst ihn nicht.
+    c = controller(cfg)
+    c.step(inputs(cfg, intent=egolf_in(ChargeMode.NOW), twc_obs=twc(connected=True)))
+    c.step(inputs(cfg, s=1, intent=egolf_in(ChargeMode.NOW), twc_obs=TWC_OUT))
+    assert c.health()[1]["limit_a"] == 15.0  # 33 − 2 − 16
+    assert c.cars()[-1] == CarView("guest@twc", "twc", Effective.PV, None, None, 4140.0, False)
+
+
+def test_the_reason_lapses_when_the_car_is_no_longer_detected(cfg) -> None:  # Präzisierung 8
+    # Der e-Golf lädt am Wall Connector, ab 120 s dort erkannt; Befehle bekommt er dort keine, er
+    # ist Last. Bei 130 s steckt er ab und steht wieder angenommen an der EVCS: Ihr „Laden aus“
+    # trägt den Grund nicht.
+    egolf = twc(
+        connected=True, charging=True, phase_a={"L1": 16.0, "L2": 16.0, "L3": 0.0}, power_w=7360.0
+    )
+    found = run(
+        controller(cfg),
+        cfg,
+        131,
+        twc_obs=lambda s: egolf if s < 130 else twc(),
+        evcs_obs=evcs(connected=False),
+        homes={"egolf": True},
+    )
+    off = ("mode_pv",)
+    assert as_commands(found) == [cmd(0, CHARGING, False, off), cmd(130, CHARGING, False, off)]

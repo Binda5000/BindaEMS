@@ -1193,8 +1193,9 @@ def _ausfaelle() -> Scenario:
 
 def _zuordnung() -> Scenario:
     """Der Tesla steht an der EVCS: Die Erkennung findet ihn dort (Plan 2c-2b, Präzisierung 4),
-    bevor die Übersteuerung ihn dort festlegt; mit ihr bekommt er einmal seinen Höchststrom
-    (Design 8). Das Abstecken beendet die Übersteuerung (Präzisierung 3)."""
+    bevor die Übersteuerung ihn dort festlegt; mit der Erkennung bekommt er einmal seinen
+    Höchststrom, die Übersteuerung an derselben EVCS schickt keinen zweiten (Plan 2c-2b,
+    Präzisierung 7). Das Abstecken beendet die Übersteuerung (Präzisierung 3)."""
     start, duration_s, seed = EVENING, HOUR_S, 9
     events = (
         (OVERRIDE_S, _Override(2, TESLA, EVCS_BOX)),

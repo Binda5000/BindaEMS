@@ -4,11 +4,12 @@ Die Bausteine, die ``ChargeController`` für Fahrzeuge mit Tessie braucht (Präz
 
 - ``TeslaPolicy``: je Fahrzeug das gleitende Mittel des Wunsches, das vorsichtige Minimum des
   freien Stroms und das Weckkontingent
-- ``EvcsOverrides``: die Fahrzeuge mit Tessie, die laut Übersteuerung an einer EVCS hängen
+- ``EvcsOverrides``: die Fahrzeuge mit Tessie, die laut Übersteuerung oder Erkennung an einer EVCS
+  hängen
 - ``maximum_command`` und ``wake_command``: der Höchststrom „Tesla an der EVCS“ und der Start mit
   Weckerlaubnis, jeweils als Befehl
 - ``tessie_current``: der Strom, den Tessie meldet, auf den Phasen der Wallbox
-- die Gründe ``wake`` und ``assignment_unclear``
+- die Gründe ``wake``, ``assignment_unclear`` und ``assignment_detected``
 
 Tesla, Zuordnung und Wiederaufnahme (Design 7 bis 9; ``ChargeController`` verbindet die Bausteine):
 
@@ -20,10 +21,15 @@ Tesla, Zuordnung und Wiederaufnahme (Design 7 bis 9; ``ChargeController`` verbin
 - Will der Modus starten und ist der Aktor nicht steuerbar, aber weckbar, kommt ein Start mit
   Weckerlaubnis (``wake``) ohne Strom: bei bekanntem Ansteckzustand, ohne Überlast und im
   Weckkontingent. Das Kontingent zählt jeden Weckstart mit einem Urteil mit Wert.
-- „Tesla an der EVCS“: Hängt ein Fahrzeug mit Tessie laut Übersteuerung an einer EVCS, bekommt es
-  einmal je Ansteckvorgang seinen Höchststrom mit dem Modus als Grund, sobald es steuerbar ist und
-  die EVCS geregelt wird; geregelt wird dann die EVCS. Erledigt ist das wie jeder Befehl
-  (Präzisierung 10); nach ``idle`` geht es noch einmal hinaus.
+- „Tesla an der EVCS“: Hängt ein Fahrzeug mit Tessie laut Übersteuerung oder Erkennung an einer
+  EVCS (Plan 2c-2b, Präzisierung 7), bekommt es mit jeder Ankunft dort einmal seinen Höchststrom
+  mit dem Modus als Grund, sobald es steuerbar ist und die EVCS geregelt wird; geregelt wird dann
+  die EVCS. Wechselt an derselben EVCS nur die Art (erkannt ↔ Übersteuerung), ist das keine
+  Ankunft. Erledigt ist das wie jeder Befehl (Präzisierung 10); nach ``idle`` geht es noch einmal
+  hinaus.
+- Ab einer neuen Erkennung tragen die Befehle eines Autos zuletzt ``assignment_detected``, bis zum
+  ersten Zyklus mit Befehlen für das Auto, den Höchststrom eingeschlossen; ist es vorher nicht mehr
+  erkannt, entfällt der Grund (Plan 2c-2b, Präzisierung 8).
 - Solange die Zuordnung unklar ist (Präzisierung 5), gibt es kein „Laden an/aus“ nach dem Modus;
   der Strom sinkt nur, wenn der Wächter weniger als den Ist-Strom erlaubt, nie unter den
   Mindeststrom. Die Gründe sind ``(Modus, "assignment_unclear", Ursache)``. Die Überlast setzt
@@ -55,6 +61,11 @@ from bindaems.shared.control import Command, CommandKind, vehicle_actuator
 
 WAKE: Final = "wake"  # ein Start mit Weckerlaubnis
 ASSIGNMENT_UNCLEAR: Final = "assignment_unclear"  # die Zuordnung ist unklar (Präzisierung 5)
+# der Befehl folgt aus einer neuen Erkennung (Plan 2c-2b, Präzisierung 8)
+ASSIGNMENT_DETECTED: Final = "assignment_detected"
+
+# So steht ein Fahrzeug „an der EVCS“ (Plan 2c-2b, Präzisierung 7)
+_AT_THE_EVCS: Final = frozenset({AssignmentKind.OVERRIDE, AssignmentKind.DETECTED})
 
 
 class TeslaPolicy:
@@ -114,11 +125,12 @@ class TeslaPolicy:
 
 
 class EvcsOverrides:
-    """„Tesla an der EVCS“: Fahrzeuge mit Tessie, laut Übersteuerung an einer EVCS (Design 8).
+    """„Tesla an der EVCS“: Fahrzeuge mit Tessie, laut Übersteuerung oder Erkennung an einer EVCS
+    (Design 8; Plan 2c-2b, Präzisierung 7).
 
-    Geregelt wird dann die EVCS mit den Werten des Fahrzeugs; das Fahrzeug selbst bekommt einmal je
-    Ansteckvorgang seinen Höchststrom. Dafür merkt sich die Klasse, an welcher EVCS jedes im letzten
-    Zyklus hing.
+    Geregelt wird dann die EVCS mit den Werten des Fahrzeugs; das Fahrzeug selbst bekommt mit
+    jeder Ankunft an der EVCS einmal seinen Höchststrom. Dafür merkt sich die Klasse, an welcher
+    EVCS jedes im letzten Zyklus hing, gleich mit welcher Art.
     """
 
     def __init__(self, cfg: Config) -> None:
@@ -128,18 +140,23 @@ class EvcsOverrides:
     def update(self, vehicles: Mapping[str, VehicleState]) -> tuple[set[str], set[str]]:
         """Die Fahrzeuge an einer EVCS und die Aktoren derer, die neu an ihre EVCS kamen.
 
-        Neu ist ein Fahrzeug an einer EVCS, an der es im letzten Zyklus nicht hing. Das ist auch
-        jeder neue Ansteckvorgang: Eine Übersteuerung gilt nur für einen Vorgang (Präzisierung 3),
-        und zwischen zwei Vorgängen liegt ein Zyklus, in dem das Fahrzeug nicht an der EVCS hängt.
+        An einer EVCS hängt ein Fahrzeug mit Tessie, das dort übersteuert oder erkannt ist;
+        Schlüssel, die keine Fahrzeuge der Konfiguration sind (Gäste), übergeht die Klasse. Neu ist
+        ein Fahrzeug an einer EVCS, an der es im letzten Zyklus nicht hing; wechselt dort nur die
+        Art, ist es nicht neu. Neu ist es auch mit jedem neuen Ansteckvorgang: Übersteuerung und
+        Erkennung gelten nur für einen Vorgang (Präzisierung 3; Plan 2c-2b, Präzisierung 4), und
+        zwischen zwei Vorgängen liegt ein Zyklus, in dem das Fahrzeug nicht an der EVCS hängt.
         """
         found: dict[str, str] = {}
         for key, state in vehicles.items():
+            vehicle = self._cfg.vehicles.get(key)  # ``None`` für einen Gast
             wallbox = state.wallbox
             if (
-                wallbox is not None
-                and state.kind is AssignmentKind.OVERRIDE
+                vehicle is not None
+                and vehicle.tessie is not None
+                and wallbox is not None
+                and state.kind in _AT_THE_EVCS
                 and isinstance(self._cfg.wallboxes[wallbox], EvcsConfig)
-                and self._cfg.vehicles[key].tessie is not None
             ):
                 found[key] = wallbox
         arrived = {vehicle_actuator(k) for k, w in found.items() if self._seen.get(k) != w}
@@ -153,7 +170,8 @@ def maximum_command(
     """„Tesla an der EVCS“: der Höchststrom an das Fahrzeug selbst, sobald es steuerbar ist.
 
     Er geht hinaus, solange er sich gegenüber dem letzten eigenen Wert ändert;
-    ``ChargeController.step`` vergisst den je Ansteckvorgang. Grund ist der Modus.
+    ``ChargeController.step`` vergisst den mit jeder Ankunft an der EVCS (``EvcsOverrides``). Grund
+    ist der Modus; nach einer neuen Erkennung hängt die Regelung ``assignment_detected`` an.
     """
     actuator = vehicle_actuator(key)
     value = float(cfg.vehicles[key].max_a)

@@ -13,7 +13,8 @@ Reihenfolge von Präzisierung 3:
 1. die Laderegelung mit den Grenzen und der Start-Sperre, die der Wächter im vorigen Zyklus
    bestimmt hat,
 2. die Autos je Wallbox aus der Zuordnung und den Modi dieses Zyklus
-   (``ChargeController.cars``), dazu die Wallboxen ohne Fahrzeug (``battery_cars``),
+   (``ChargeController.cars``, auch ein Gast), dazu die Wallboxen ohne Ladepunkt
+   (``battery_cars``),
 3. Fehlbetrag und erlaubten Akku-Anteil (``BatteryController.assess``),
 4. den Wächter (``PeakGuard.step``) mit dem gewollten Netzbezug, solange Victron handeln kann
    (``peak_wanted_w``); er kennt die feste Grenze von Regel 2: das Budget für diesen Zyklus, die
@@ -228,10 +229,10 @@ def battery_cars(
 ) -> list[BatteryCar]:
     """Die Autos für den Akku-Sollwert in der Reihenfolge von Präzisierung 4.
 
-    Erst je Ladepunkt sein Fahrzeug (``cars``, aus ``ChargeController.cars`` in der Reihenfolge
-    der Priorität), dann jede Wallbox ohne Fahrzeug in der Reihenfolge von ``config.yaml``: mit
-    dem Modus des Gastes (``guest``), der Leistung der Wallbox und ob sie lädt. Eine Wallbox, die
-    ``wallboxes`` nicht nennt, ist ganz unbekannt.
+    Erst je Ladepunkt sein Auto (``cars``, aus ``ChargeController.cars`` in der Reihenfolge der
+    Priorität; ein Gast dort mit dem Modus des Gastes), dann jede Wallbox ohne Ladepunkt in der
+    Reihenfolge von ``config.yaml``: mit dem Modus des Gastes (``guest``), der Leistung der Wallbox
+    und ob sie lädt. Eine Wallbox, die ``wallboxes`` nicht nennt, ist ganz unbekannt.
     """
     found = [BatteryCar(car.wallbox, car.mode, car.power_w, car.charging) for car in cars]
     taken = {car.wallbox for car in cars}
@@ -281,8 +282,9 @@ def peak_cars(cars: Sequence[CarView], need: BatteryNeed | None) -> list[PeakCar
     - **In Boost:** Das Auto zählt immer, geregelt oder nicht: Seinen Netzanteil zieht der Wächter
       als Energie in Boost ab. Gedrosselt wird es nie.
 
-    Wallboxen ohne Fahrzeug sind keine Autos des Wächters: Er kann sie nicht drosseln, ihr
-    Netzanteil steht aber in ``W``.
+    Ein Gast zählt wie jedes Auto; an einer EVCS kann der Wächter ihn drosseln (Plan 2c-2b,
+    Präzisierung 6). Wallboxen ohne Ladepunkt sind keine Autos des Wächters: Er kann sie nicht
+    drosseln, ihr Netzanteil steht aber in ``W``.
     """
     grid_w: Mapping[str, float] = {} if need is None else need.grid_w
     return [

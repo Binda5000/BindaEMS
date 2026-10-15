@@ -981,3 +981,136 @@ def test_a_rising_overload_level_sends_its_minimum_fresh_while_a_retry_waits(cfg
         (8, retry),
         (9, retry),
     ]
+
+
+# Plan 2c-2b: der erkannte Tesla an der EVCS und der Grund „assignment_detected“ (Präzisierungen 7
+# und 8)
+
+DETECTED_AT_THE_EVCS = {  # mit tesla_inputs: zu Hause, angesteckt
+    "twc_obs": twc(connected=False),
+    "evcs_obs": evcs(),
+}
+TESLA_NOW_EGOLF_OFF = Intent(
+    version=1,
+    control=True,
+    vehicles={
+        "tesla": VehicleIntent(mode=ChargeMode.NOW),
+        "egolf": VehicleIntent(mode=ChargeMode.OFF),
+    },
+)
+DETECTED = ("mode_now", "assignment_detected")
+
+
+def test_a_detected_tesla_at_the_evcs_gets_its_maximum_once(cfg) -> None:  # Design 7.4
+    found = run(
+        controller(cfg),
+        cfg,
+        300,
+        make=tesla_inputs,
+        intent=TESLA_NOW_EGOLF_OFF,
+        **DETECTED_AT_THE_EVCS,
+    )
+    assert [c.command for t, c in found if t == 60] == [
+        Command("vehicle.tesla", CURRENT, 16.0, reasons=DETECTED),
+        Command("wallbox.evcs", CURRENT, 16.0, reasons=DETECTED),
+        Command("wallbox.evcs", CHARGING, True, reasons=DETECTED),
+    ]
+    assert [t for t, c in found if c.command.actuator == "vehicle.tesla"] == [60]
+
+
+def test_new_detection_marks_only_the_first_commands(cfg) -> None:  # Review Focus 4
+    found = run(
+        controller(cfg),
+        cfg,
+        300,
+        make=tesla_inputs,
+        intent=TESLA_NOW_EGOLF_OFF,
+        **DETECTED_AT_THE_EVCS,
+    )
+    assert {t for t, c in found if "assignment_detected" in c.command.reasons} == {60}
+
+
+def test_handover_from_the_assumed_to_the_detected_car_starts_once(cfg) -> None:  # Review Focus 4
+    # der e-Golf in Sofort angenommen an der EVCS, ab 60 s der Tesla erkannt (Sofort)
+    both_now = Intent(
+        version=1,
+        control=True,
+        vehicles={
+            "tesla": VehicleIntent(mode=ChargeMode.NOW),
+            "egolf": VehicleIntent(mode=ChargeMode.NOW),
+        },
+    )
+    found = run(
+        controller(cfg), cfg, 300, make=tesla_inputs, intent=both_now, **DETECTED_AT_THE_EVCS
+    )
+    starts = [
+        t
+        for t, c in found
+        if c.command.actuator == "wallbox.evcs"
+        and c.command.kind is CHARGING
+        and c.command.value is True
+    ]
+    assert starts == [0, 60]  # der e-Golf bei 0, nach der Übergabe einmal der Tesla
+    assert [t for t, c in found if c.command.actuator == "vehicle.tesla"] == [60]
+
+
+# Ergänzungen: Ankunft an der EVCS und wie lange der Grund gilt
+
+
+def test_an_override_at_the_same_evcs_is_no_new_arrival(cfg) -> None:  # Präzisierung 7
+    # Erkannt bei 60 s, ab 100 s an dieselbe EVCS übersteuert: Nur die Art wechselt, der
+    # Höchststrom kommt nicht noch einmal.
+    pinned = Intent(
+        version=2,
+        control=True,
+        vehicles={
+            "tesla": VehicleIntent(mode=ChargeMode.NOW, wallbox="evcs"),
+            "egolf": VehicleIntent(mode=ChargeMode.OFF),
+        },
+    )
+    c = controller(cfg)
+    found = run(
+        c,
+        cfg,
+        110,
+        make=tesla_inputs,
+        intent=lambda s: pinned if s >= 100 else TESLA_NOW_EGOLF_OFF,
+        **DETECTED_AT_THE_EVCS,
+    )
+    assert of(found, "vehicle.tesla") == [
+        (60, Command("vehicle.tesla", CURRENT, 16.0, reasons=DETECTED))
+    ]
+    assert (c.health()[0]["wallbox"], c.health()[0]["assignment"]) == ("evcs", "override")
+
+
+def test_the_reason_waits_for_the_first_cycle_with_commands(cfg) -> None:  # Präzisierung 8
+    # Bei der Erkennung (60 s) ist nichts steuerbar: Erst die Befehle bei 61 s tragen den Grund.
+    found = run(
+        controller(cfg),
+        cfg,
+        62,
+        make=tesla_inputs,
+        intent=TESLA_NOW_EGOLF_OFF,
+        controllable=lambda s: {"wallbox.evcs": s != 60, "vehicle.tesla": s != 60},
+        **DETECTED_AT_THE_EVCS,
+    )
+    assert [(t, c.command) for t, c in found if t >= 60] == [
+        (61, Command("vehicle.tesla", CURRENT, 16.0, reasons=DETECTED)),
+        (61, Command("wallbox.evcs", CURRENT, 16.0, reasons=DETECTED)),
+        (61, Command("wallbox.evcs", CHARGING, True, reasons=DETECTED)),
+    ]
+
+
+def test_later_commands_of_a_detected_car_carry_no_reason(cfg) -> None:  # Präzisierung 8
+    # Erkannt bei 60 s: Health nennt den Grund als letzten des Tesla. Ab 100 s liegt L1 bei 25 A:
+    # Der Strom der EVCS sinkt auf 33 − 25 = 8 A, ohne den Grund.
+    c = controller(cfg)
+    detected = {"make": tesla_inputs, "intent": TESLA_NOW_EGOLF_OFF, **DETECTED_AT_THE_EVCS}
+    run(c, cfg, 61, **detected)
+    assert c.health()[0]["reason"] == "assignment_detected"
+    loaded = steps(
+        c, cfg, range(61, 101), grid_obs=lambda s: grid(l1=25.0) if s >= 100 else grid(), **detected
+    )
+    assert [(t, x.command) for t, x in loaded] == [
+        (100, Command("wallbox.evcs", CURRENT, 8.0, reasons=("mode_now", "phase_limit")))
+    ]
