@@ -295,6 +295,10 @@ FIRST = {
 }
 # 8 A · 229,7 V · 1 Phase: 6349,103 W − (6349,103 W − 1837,6 W) rundet auf 1837,5999999999995 W.
 ODD_FLOOR = PeakCar("odd", "w", Effective.NOW, 0, 6349.103, 11000.0, 8 * 229.7)
+# Der Tesla in Min+PV, bei 16 A um 300 W gedrosselt, lädt jetzt an seinem Boden von 5 A.
+TESLA_AT_MIN = PeakCar("tesla", "twc", Effective.MIN_PV, 0, 3450.0, 3450.0, 3450.0)
+TESLA_CAPPED = {"tesla": Cap(10740.0, 300.0, Effective.MIN_PV)}
+EGOLF_NOW = PeakCar("egolf", "evcs", Effective.NOW, 1, 7360.0, 7360.0, 2760.0)
 
 
 @settings(max_examples=500, deadline=None)
@@ -303,6 +307,7 @@ ODD_FLOOR = PeakCar("odd", "w", Effective.NOW, 0, 6349.103, 11000.0, 8 * 229.7)
 @example(([A, SMALL_C], {}, 3000.0))  # „c“ bleibt über seinem Boden, „a“ trägt den Rest
 @example(([A, B, C], FIRST, 1000.0))  # von den Grenzen aus: nur „a“ kann noch sinken
 @example(([ODD_FLOOR], {}, 40000.0))  # bis zum Boden, nicht ein Bit darunter
+@example(([TESLA_AT_MIN, EGOLF_NOW], TESLA_CAPPED, 300.0))  # Ausgang: die Leistung, der Boden
 def test_throttling_keeps_the_order_and_leaves_boost_alone(case) -> None:
     # Ein Auto sinkt höchstens um seinen Netzanteil (Präzisierung 11). Wer vor einem gesenkten Auto
     # an der Reihe ist, ist daher an seinem Boden oder um seinen ganzen Netzanteil gesenkt, nicht
@@ -310,10 +315,15 @@ def test_throttling_keeps_the_order_and_leaves_boost_alone(case) -> None:
     cars, before, amount_w = case
     after = throttle(cars, before, amount_w)
 
-    start = {}  # der Ausgang je Auto: seine Grenze oder, ohne Grenze, seine Leistung
+    # der Ausgang je Auto: das kleinere von Grenze und Leistung, ohne bekannte Leistung die Grenze,
+    # ohne Grenze die Leistung
+    start = {}
     for car in cars:
         cap = before.get(car.vehicle)
-        start[car.vehicle] = car.power_w if cap is None else cap.cap_w
+        if cap is None or car.power_w is None:
+            start[car.vehicle] = car.power_w if cap is None else cap.cap_w
+        else:
+            start[car.vehicle] = min(cap.cap_w, car.power_w)
     cut = {}  # die Senkung dieses Schritts je Auto
     assert set(before) <= set(after)  # Drosseln hebt keine Grenze auf
     for car in cars:

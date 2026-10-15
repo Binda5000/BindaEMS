@@ -530,8 +530,10 @@ def throttle(cars: Sequence[PeakCar], caps: Mapping[str, Cap], amount_w: float) 
     """Drosselt die Autos zusammen um höchstens ``amount_w`` (Präzisierung 11).
 
     Die Reihenfolge ist PV-Überschuss, Min+PV, Sofort, innerhalb einer Stufe zuerst das Auto mit der
-    niedrigsten Priorität (dem höchsten ``rank``). Je Auto ist ``Ausgang`` seine Grenze oder, ohne
-    Grenze, seine Leistung, und der Boden in PV-Überschuss 0 W, sonst ``min_w``. Es sinkt um
+    niedrigsten Priorität (dem höchsten ``rank``). Je Auto ist ``Ausgang`` das kleinere von Grenze
+    und Leistung, ohne bekannte Leistung die Grenze und ohne Grenze die Leistung: Eine Grenze weit
+    über der Leistung, etwa nach einem Wechsel auf den Mindeststrom, schluckt so keine Senkung. Der
+    Boden ist in PV-Überschuss 0 W, sonst ``min_w``. Das Auto sinkt um
     ``min(Rest, Netzanteil, Ausgang − Boden)``, wenn das über 0 liegt; die neue Grenze ist
     ``Ausgang`` minus diese Senkung, nie unter dem Boden, im Modus des Autos, und ``cut_w`` wächst
     um sie. Ein Auto ohne Netzanteil (ein Anteil, der keine endliche Zahl ist, zählt 0 W) oder ohne
@@ -543,8 +545,11 @@ def throttle(cars: Sequence[PeakCar], caps: Mapping[str, Cap], amount_w: float) 
     for car in _in_order(cars):
         if rest_w <= 0.0:
             break
-        cap = found.get(car.vehicle)
-        start_w = finite_number(car.power_w) if cap is None else cap.cap_w
+        cap, power_w = found.get(car.vehicle), finite_number(car.power_w)
+        if cap is None or power_w is None:
+            start_w = power_w if cap is None else cap.cap_w
+        else:
+            start_w = min(cap.cap_w, power_w)
         if start_w is None:
             continue
         floor_w = _floor_w(car)

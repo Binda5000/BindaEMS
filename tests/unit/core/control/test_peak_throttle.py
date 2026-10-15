@@ -211,6 +211,25 @@ def test_a_car_below_its_floor_or_without_a_starting_point_is_skipped() -> None:
     assert throttle([unknown], before, 1000.0) == {"unknown": Cap(4000.0, 1500.0, Effective.NOW)}
 
 
+def test_the_throttle_starts_at_the_real_power_below_the_cap() -> None:  # Präzisierung 11
+    # Der Tesla in Min+PV wurde bei 16 A um 300 W gedrosselt (Grenze 10740 W) und lädt jetzt ohne
+    # PV mit seinem Mindeststrom von 5 A (3450 W), seinem Boden. Sein Ausgang ist das kleinere von
+    # Grenze und Leistung: Er kann nicht weiter sinken, und die 300 W gehen an den e-Golf in Sofort,
+    # statt die Grenze des Tesla wirkungslos auf 10440 W zu senken.
+    tesla = PeakCar("tesla", "twc", Effective.MIN_PV, 0, 3450.0, 3450.0, 3450.0)
+    egolf = PeakCar("egolf", "evcs", Effective.NOW, 1, 7360.0, 7360.0, 2760.0)
+    capped = {"tesla": Cap(10740.0, 300.0, Effective.MIN_PV)}
+    assert throttle([tesla, egolf], capped, 300.0) == {
+        **capped,
+        "egolf": Cap(7060.0, 300.0, Effective.NOW),
+    }
+    # Mit 6 A (4140 W), zwischen Boden und Grenze, sinkt der Tesla von seiner Leistung aus.
+    six_a = replace(tesla, power_w=4140.0, grid_w=4140.0)
+    assert throttle([six_a, egolf], capped, 300.0) == {
+        "tesla": Cap(3840.0, 600.0, Effective.MIN_PV)
+    }
+
+
 def test_a_grid_share_below_the_way_to_the_floor_leaves_the_car_above_it() -> None:
     # Ein Auto sinkt höchstens um seinen Netzanteil (Präzisierung 11): „c“ hat nur 600 W. Die
     # Senkung nimmt ihm diese 600 W, es bleibt über seinem Boden, und „a“ in Sofort trägt den Rest.
