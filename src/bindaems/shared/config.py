@@ -26,6 +26,10 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 Phase = Literal["L1", "L2", "L3"]
 PhaseMap = tuple[Phase, Phase, Phase]
 _DEFAULT_PHASE_MAP: PhaseMap = ("L1", "L2", "L3")
+# So heißen die Gäste der Zuordnung (``core.control.fleet``): ``guest`` im Health und
+# ``guest@<Wallbox>`` als Schlüssel. Ein Fahrzeug darf nicht so heißen.
+_GUEST_KEY = "guest"
+_GUEST_PREFIX = f"{_GUEST_KEY}@"
 
 
 class _Model(BaseModel):
@@ -399,6 +403,11 @@ class Config(_Model):
     @model_validator(mode="after")
     def _cross_references(self) -> Self:
         for key, vehicle in self.vehicles.items():
+            if key == _GUEST_KEY or key.startswith(_GUEST_PREFIX):
+                raise ValueError(
+                    f"vehicles.{key}: Der Schlüssel ist dem Gast der Zuordnung vorbehalten "
+                    f"(„{_GUEST_KEY}“ und „{_GUEST_PREFIX}<Wallbox>“)"
+                )
             if vehicle.default_wallbox not in self.wallboxes:
                 raise ValueError(
                     f"vehicles.{key}.default_wallbox: Wallbox „{vehicle.default_wallbox}“ "

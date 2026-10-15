@@ -6,6 +6,7 @@ import pytest
 import yaml
 from pydantic import ValidationError
 
+from bindaems.core.control.fleet import GUEST, guest_key
 from bindaems.shared.config import (
     Config,
     ConfigError,
@@ -469,3 +470,20 @@ def test_a_vehicle_without_home_entity_adds_no_subscription(tmp_path: Path) -> N
 def test_ha_entities_leave_the_configured_ones_untouched(cfg) -> None:
     ha_entities(cfg)
     assert cfg.homeassistant.entities == {"vehicle.egolf.soc_pct": "sensor.egolf_soc"}
+
+
+@pytest.mark.parametrize("key", [GUEST, guest_key("evcs"), "guest@nowhere"])
+def test_vehicle_keys_of_guests_are_rejected(tmp_path, key) -> None:
+    # Die Gast-Schlüssel der Zuordnung (fleet) wären sonst zweideutig (Gesamtreview, Konfiguration)
+    def mutate(d: dict[str, Any]) -> None:
+        d["vehicles"][key] = d["vehicles"].pop("egolf")
+
+    with pytest.raises(ConfigError, match=rf"vehicles\.{key}: .*Gast"):
+        load_config(write_cfg(tmp_path, mutate))
+
+
+def test_a_vehicle_key_may_merely_contain_guest(tmp_path) -> None:
+    def mutate(d: dict[str, Any]) -> None:
+        d["vehicles"]["guest_car"] = d["vehicles"].pop("egolf")
+
+    assert "guest_car" in load_config(write_cfg(tmp_path, mutate)).vehicles

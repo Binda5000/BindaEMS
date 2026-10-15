@@ -7,7 +7,8 @@
   dazu ``GUEST_NAME`` und ``GUEST_MIN_A``
 
 Ein Gast ist ein Auto, das die Konfiguration nicht kennt (Plan 2c-2b, Präzisierung 6). Je Wallbox
-gibt es einen, mit dem Schlüssel ``guest@<Wallbox>``; so steht ein Gast nie an zwei Wallboxen. Die
+gibt es einen, mit dem Schlüssel ``guest@<Wallbox>``; so steht ein Gast nie an zwei Wallboxen. Ein
+Fahrzeug der Konfiguration heißt nie ``guest`` oder ``guest@…``, das prüft ``shared.config``. Die
 Laderegelung behandelt ihn wie ein Fahrzeug ohne Tessie, das auf allen drei Phasen lädt: an einer
 EVCS mit deren Strombereich, am Wall Connector von ``GUEST_MIN_A`` bis zu dessen ``max_a``. Die
 Schicht ist rein: Sie liest nur ihre Argumente.
