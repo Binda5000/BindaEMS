@@ -35,7 +35,10 @@ von der Tabelle des Plans 2c-2a, weil ihre Erwartung im Modell nicht zu schaffen
   begrenzt den Override auf ``max_grid_charge_setpoint_w`` (8 kW). In ``spitze-15min`` fällt die
   erste Drosselung in diese Zeit: Der Wächter drosselt den Tesla bis zum Mindeststrom und den
   e-Golf um den Rest im selben Schritt (Präzisierung 11), und der Tesla folgt erst nach dem
-  Neuversuch.
+  Neuversuch. Die Prüfung der Reihenfolge an den Strömen scheitert dann, obwohl der Wächter in der
+  richtigen Reihenfolge drosselt, und mit dem Tesla am Mindeststrom (Min+PV ohne PV) ist sie
+  trivial erfüllt; die Reihenfolge der Drosselung sichern
+  ``tests/unit/core/control/test_peak_throttle.py`` und ``tests/property/test_peak_guard.py``.
 - In ``schieflast-pv`` kommt die schwere Last auf L1 erst nach 10 min dazu (``UNBALANCED_FROM_S``),
   wenn der e-Golf schon lädt. Von Anfang an startete er nie: Der Phasenwächter zählt die
   Ladeleistung des Akkus zur Last der Phase (Plan 2c-1, Design 5.1) und lässt auf L1 nur etwa 3 A
@@ -71,6 +74,8 @@ from bindaems.tools.sim.metrics import (
     PV_MODES,
     TRANSITION_S,
     battery_into_car_pct,
+    cars_w,
+    shown_number,
 )
 from bindaems.tools.sim.model import CERBO, EVCS, GRID, TESSIE, TWC, PlantModel
 
@@ -131,10 +136,14 @@ EVCS_OFF_S: Final = 41 * MINUTE_S  # … und ab hier lädt die EVCS nicht mehr
 SETTLED_S: Final = 2 * MINUTE_S  # ab hier prüfen „akku-sofort“, „boost-abend“, „override-stunde“
 CAR_FROM_BATTERY_PCT: Final = 5.0  # „akku-wolkig“: so viel der Energie des e-Golf aus dem Akku
 TESLA_MIN_A: Final = 5  # „akku-minpv“, „spitze-15min“: Strom im Tesla zu Beginn (Mindeststrom)
-# „akku-minpv“: Akku in die Autos höchstens SUPPORT_W von bis s nach dem ersten Laden (die
-# Unterstützung endet nach support_max_s, 900 s), ab GRID_ONLY_S danach höchstens GRID_ONLY_W
+# „akku-minpv“: Akku in die Autos höchstens SUPPORT_W von SUPPORT_FROM_S bis SUPPORT_UNTIL_S nach
+# dem ersten Laden (die Unterstützung endet nach support_max_s, 900 s), ab GRID_ONLY_S danach
+# höchstens GRID_ONLY_W. SUPPORT_W ist support_max_w (3000 W) plus das Totband des Overrides
+# (setpoint_deadband_w, 200 W): So weit darf der Bedarf wandern, ehe der Override folgt.
+# GRID_ONLY_W ist das Totband allein.
 SUPPORT_W: Final = 3200.0
-SUPPORT_S: Final = (10, 890)
+SUPPORT_FROM_S: Final = 10
+SUPPORT_UNTIL_S: Final = 890
 GRID_ONLY_W: Final = 200.0
 GRID_ONLY_S: Final = 930
 LOADS_ABOVE_W: Final = 8300.0  # „akku-sofort“: Ziehen Autos und Haus mehr, …
@@ -735,35 +744,23 @@ def _at(decisions: Sequence[Decision], actuator: str) -> list[Decision]:
     return [d for d in decisions if d.actuator == actuator]
 
 
-def _cars_w(sample: Sample) -> float:
-    """Die Leistung der ladenden Autos in W."""
-    return sum(car.power_w for car in sample.cars.values() if car.charging)
-
-
 def _above(
     samples: Sequence[Sample], value: Callable[[Sample], float], limit: float, what: str
 ) -> list[str]:
     """Ein Satz, wenn ``value`` in einer der ``samples`` über ``limit`` W liegt: die erste solche
-    Sekunde, wie viele es sind und der höchste Wert, auf ganze W gerundet (``_watts``)."""
+    Sekunde, wie viele es sind und der höchste Wert, auf ganze W gerundet (``shown_number``)."""
     over = [(s.t, value(s)) for s in samples if value(s) > limit]
     if not over:
         return []
     (t, watts), (_, worst) = over[0], max(over, key=lambda found: found[1])
 
     def shown(found: float) -> str:
-        return _watts(found, lambda rounded: rounded <= limit)
+        return shown_number(found, 0, lambda number: number <= limit)
 
     return [
         f"{what} bei {t} s {shown(watts)} W, verlangt höchstens {de(limit)} W "
         f"({len(over)} s darüber, bis {shown(worst)} W)."
     ]
-
-
-def _watts(value: float, hides: Callable[[float], bool]) -> str:
-    """Eine Leistung auf ganze W für einen Satz über einen Verstoß; ungerundet, wenn der gerundete
-    Wert den Verstoß verdeckte (``hides``), wie bei den Kennzahlen."""
-    rounded = round(value)
-    return de(value if hides(rounded) else rounded)
 
 
 def _from_battery_at_most(key: str, limit_pct: float) -> Check:
@@ -792,14 +789,15 @@ def _battery_into_cars_w(sample: Sample) -> float:
 
 
 def _support_then_grid(result: SimResult) -> list[str]:
-    """Der Akku liefert in die Autos ab ``SUPPORT_S[0]`` nach dem ersten Laden bis ``SUPPORT_S[1]``
-    danach höchstens ``SUPPORT_W``, ab ``GRID_ONLY_S`` danach höchstens ``GRID_ONLY_W``
-    (``_battery_into_cars_w``). Das erste Laden ist die erste Sekunde, in der ein Auto lädt."""
+    """Der Akku liefert in die Autos ab ``SUPPORT_FROM_S`` nach dem ersten Laden bis
+    ``SUPPORT_UNTIL_S`` danach höchstens ``SUPPORT_W``, ab ``GRID_ONLY_S`` danach höchstens
+    ``GRID_ONLY_W`` (``_battery_into_cars_w``). Das erste Laden ist die erste Sekunde, in der ein
+    Auto lädt."""
     samples = result.samples
     first = next((s.t for s in samples if _any_charging(s)), None)
     if first is None:
         return ["Kein Auto lädt."]
-    begin, end = first + SUPPORT_S[0], first + SUPPORT_S[1]
+    begin, end = first + SUPPORT_FROM_S, first + SUPPORT_UNTIL_S
     support = [s for s in samples if begin <= s.t <= end]
     grid = [s for s in samples if s.t >= first + GRID_ONLY_S]
     if not grid:
@@ -816,7 +814,7 @@ def _grid_at_the_setpoint_cap(result: SimResult) -> list[str]:
     ``LOADS_ABOVE_W`` ziehen, in ``GRID_BETWEEN_W``; es muss solche Sekunden geben."""
     low, high = GRID_BETWEEN_W
     loaded = [
-        s for s in result.samples if s.t >= SETTLED_S and _cars_w(s) + s.house_w > LOADS_ABOVE_W
+        s for s in result.samples if s.t >= SETTLED_S and cars_w(s) + s.house_w > LOADS_ABOVE_W
     ]
     if not loaded:
         return [f"Autos und Haus ziehen ab {SETTLED_S} s nie mehr als {de(LOADS_ABOVE_W)} W."]
@@ -824,7 +822,7 @@ def _grid_at_the_setpoint_cap(result: SimResult) -> list[str]:
     if not outside:
         return []
     first = outside[0]
-    shown = _watts(first.grid_w, lambda rounded: low <= rounded <= high)
+    shown = shown_number(first.grid_w, 0, lambda number: low <= number <= high)
     return [
         f"Netzbezug bei {first.t} s {shown} W, verlangt {de(low)} bis {de(high)} W "
         f"({len(outside)} s außerhalb)."
@@ -905,6 +903,7 @@ def _quarters_within(start: datetime) -> Check:
     """Der Netzbezug der ``PEAK_QUARTERS`` Viertelstunden ab ``PEAK_LEAD_S`` liegt je höchstens
     bei ``QUARTER_KWH``: ``Σ max(0, Netzbezug) · 1 s`` über die Proben der Viertelstunde.
     ``start`` ist der Beginn des Szenarios, für die Uhrzeiten im Text."""
+    begins = [PEAK_LEAD_S + k * QUARTER_S for k in range(PEAK_QUARTERS)]  # Sekunden des Laufs
 
     def find(result: SimResult) -> list[str]:
         found: list[str] = []
@@ -922,7 +921,6 @@ def _quarters_within(start: datetime) -> Check:
                 )
         return found
 
-    begins = [PEAK_LEAD_S + k * QUARTER_S for k in range(PEAK_QUARTERS)]
     *first, last = (_hhmm(start, begin) for begin in begins)
     text = (
         f"Netzbezug der Viertelstunden ab {', '.join(first)} und {last} je höchstens "
@@ -1277,8 +1275,8 @@ def _akku_minpv() -> Scenario:
     auf 5 A (Abweichung, Docstring des Moduls)."""
     start, duration_s, seed = EVENING, 30 * MINUTE_S, 12
     supported = Check(
-        f"Akku in die Autos (Entladung − Haus): ab {SUPPORT_S[0]} s nach dem ersten Laden bis "
-        f"{SUPPORT_S[1]} s danach höchstens {de(SUPPORT_W)} W, ab {GRID_ONLY_S} s danach "
+        f"Akku in die Autos (Entladung − Haus): ab {SUPPORT_FROM_S} s nach dem ersten Laden bis "
+        f"{SUPPORT_UNTIL_S} s danach höchstens {de(SUPPORT_W)} W, ab {GRID_ONLY_S} s danach "
         f"höchstens {de(GRID_ONLY_W)} W.",
         _support_then_grid,
     )
@@ -1419,7 +1417,8 @@ def _spitze_15min() -> Scenario:
     vor 18:00: Nach dem Start beobachtet der core rund 60 s und regelt so ab der Viertelstunde um
     18:00; die angebrochene davor ist lückenhaft. Von 18:45 an lädt der e-Golf in Boost, darum
     prüft der Lauf die Viertelstunde ab 18:45 nicht. Der Tesla steht zu Beginn auf 5 A
-    (Abweichung, Docstring des Moduls)."""
+    (Abweichung, Docstring des Moduls); damit ist die Prüfung der Reihenfolge trivial erfüllt, denn
+    ohne PV lädt er in Min+PV immer mit seinem Mindeststrom."""
     start, duration_s, seed = EVENING - timedelta(seconds=PEAK_LEAD_S), 75 * MINUTE_S, 17
     boost = _Boost(2, EGOLF, start + timedelta(seconds=duration_s))
     return Scenario(
@@ -1447,8 +1446,8 @@ def _spitze_15min() -> Scenario:
 
 def _schieflast_pv() -> Scenario:
     """Mit schwerer Last auf L1 bindet das Importziel den e-Golf in PV zwischen Mindest- und
-    Höchststrom, ohne Rauschen bei etwa 9 A (Punkt 6 der Liste „Vor der Live-Schaltung“). Die Last
-    kommt erst nach 10 min dazu, wenn der e-Golf lädt (Abweichung, Docstring des Moduls)."""
+    Höchststrom (Punkt 6 der Liste „Vor der Live-Schaltung“). Die Last kommt erst nach 10 min dazu,
+    wenn der e-Golf lädt (Abweichung, Docstring des Moduls)."""
     start, duration_s, seed = SUMMER, HOUR_S, 18
 
     def pv(t: int) -> float:

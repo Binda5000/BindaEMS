@@ -250,6 +250,22 @@ def test_the_egolf_takes_at_most_5_pct_from_the_battery(cfg) -> None:
     assert run(-900.0 - 2760.0) == ["„egolf“ lädt zu 66,67 % aus dem Akku, verlangt höchstens 5 %."]
     assert run(-5000.0, amps=0.0) == ["„egolf“ lädt nie."]
 
+    def covered(seconds: int) -> list[str]:
+        """200 s mit 6 A; nach dem Übergang deckt der Akku das Auto ``seconds`` s lang ganz."""
+        samples = [
+            sample(
+                t,
+                battery_w=-900.0 - (2760.0 if 10 <= t < 10 + seconds else 0.0),
+                house_w=900.0,
+                egolf=car(6.0),
+            )
+            for t in range(200)
+        ]
+        return share.find(result_of(cfg, "akku-wolkig", samples=samples))
+
+    assert covered(10) == []  # genau 5 %
+    assert covered(11) == ["„egolf“ lädt zu 5,5 % aus dem Akku, verlangt höchstens 5 %."]
+
 
 def test_a_decision_at_victron_must_name_battery_comp(cfg) -> None:
     named = check("akku-wolkig", 1)
@@ -353,6 +369,10 @@ def test_in_boost_the_battery_carries_the_house_above_25_pct(cfg) -> None:
         return house.find(result_of(cfg, "boost-abend", samples=samples))
 
     assert run({119: 8000.0, 125: 8000.0}) == []  # vor 2 min und bei 25 %
+    assert run({121: 300.0}) == []  # genau an der Grenze
+    assert run({121: 300.1}) == [
+        "Netzbezug bei 121 s 300,1 W, verlangt höchstens 300 W (1 s darüber, bis 300,1 W)."
+    ]
     assert run({121: 400.0}) == [
         "Netzbezug bei 121 s 400 W, verlangt höchstens 300 W (1 s darüber, bis 400 W)."
     ]
@@ -375,6 +395,7 @@ def test_the_override_lasts_the_hour(cfg) -> None:
 
     assert run({}) == []
     assert run({119: (None, None)}) == []  # vor 2 min
+    assert run({130: (7360.0, 245.0)}) == []  # genau an der Grenze
     assert run({130: (None, None)}) == ["Bei 130 s gilt kein Override."]
     assert run({130: (7360.0, 246.0)}) == [
         "Bei 130 s ist der Override vor 246 s geschrieben, verlangt höchstens 245 s."

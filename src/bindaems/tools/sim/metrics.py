@@ -69,7 +69,7 @@ from __future__ import annotations
 
 import math
 from collections import defaultdict
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from itertools import pairwise
@@ -281,12 +281,21 @@ class Metrics:
 
 def _at_most(name: str, value: float, limit: float, unit: str = " s") -> Figure:
     """Ein Wert mit Obergrenze, verglichen genau und gezeigt auf ``SHOWN_DIGITS`` Nachkommastellen;
-    verdeckte die Rundung einen Verstoß, ungerundet."""
-    ok = value <= limit
-    shown = round(value, SHOWN_DIGITS)
-    if not ok and shown <= limit:
-        shown = value
-    return Figure(name, f"{de(shown)}{unit}", f"{de(limit)}{unit}", ok)
+    verdeckte die Rundung einen Verstoß, ungerundet (``shown_number``)."""
+    shown = shown_number(value, SHOWN_DIGITS, lambda number: number <= limit)
+    return Figure(name, f"{shown}{unit}", f"{de(limit)}{unit}", value <= limit)
+
+
+def shown_number(value: float, digits: int, within: Callable[[float], bool]) -> str:
+    """Ein Wert für einen Text (``de``), auf ``digits`` Nachkommastellen gerundet.
+
+    ``within`` sagt, ob eine Zahl in der Grenze des Werts liegt. Liegt der Wert außerhalb, der
+    gerundete aber in ihr, bleibt er ungerundet: Die Rundung verdeckte sonst den Verstoß, etwa
+    „3200 W, verlangt höchstens 3200 W“ für 3200,4 W. Auch die Prüfungen der Szenarien zeigen ihre
+    Werte so.
+    """
+    rounded = round(value, digits)
+    return de(value if not within(value) and within(rounded) else rounded)
 
 
 def _at_least(name: str, value: float | None, limit: float) -> Figure:
@@ -421,7 +430,7 @@ def _battery_share_pct(
     lädt darin ein Fahrzeug aus ``teslas``, die ersten ``tesla_skip_s``. Mit 0 und 0 ist der
     Anteil roh.
     """
-    cars = sum(_cars_w(sample) for sample in samples)
+    cars = sum(cars_w(sample) for sample in samples)
     if cars <= 0:
         return 0.0
     keys = frozenset(teslas)
@@ -429,12 +438,12 @@ def _battery_share_pct(
     for run in _runs(sample for sample in samples if sample.battery_w < 0):
         tesla = any(_charging(sample, keys) for sample in run)
         skipped = math.ceil(tesla_skip_s if tesla else skip_s)
-        discharge += sum(min(-sample.battery_w, _cars_w(sample)) for sample in run[skipped:])
+        discharge += sum(min(-sample.battery_w, cars_w(sample)) for sample in run[skipped:])
     return 100.0 * discharge / cars
 
 
-def _cars_w(sample: Sample) -> float:
-    """Die Leistung der ladenden Autos."""
+def cars_w(sample: Sample) -> float:
+    """Die Leistung der ladenden Autos in W; auch für die Prüfungen der Szenarien."""
     return sum(car.power_w for car in sample.cars.values() if car.charging)
 
 

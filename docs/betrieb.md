@@ -1846,25 +1846,28 @@ Akku und Spitzen, ab `akku-wolkig`, ist er live.
 | `zuordnung` | Zuordnung unklar und Übersteuerung, 1 h | Tesla an der EVCS; Übersteuerung `tesla: evcs` (Version 2) bei 10 min; Abstecken bei 40 min | Die Gesundheit zeigt „unklar“ vor 10 min; genau eine Entscheidung „Strom 16 A“ an den Tesla; ab 41 min lädt die EVCS nicht. |
 | `dry-run` | Dry-Run neben einem fremden Regler, 1 h | wie `wolkig`, fremder Regler an, alle Aktoren im Dry-Run | keine wiederholte Dry-Run-Entscheidung; mindestens eine Dry-Run-Entscheidung an EVCS und Tesla; kein Alarm „competitor.foreign.*“ |
 | `akku-wolkig` | PV unter Wolken, SOC 60 %, 1 h | 21.06.2026 ab 10:00, Wolken wie `wolkig`, Akku 60 %, nur der e-Golf, in PV | Höchstens 5 % der Energie des e-Golf kommen aus dem Akku (ohne Übergänge); eine Entscheidung an `victron` nennt „battery_comp“. |
-| `akku-minpv` | Min+PV ohne Sonne, SOC 80 %, 30 min | 12.10.2026 ab 18:00, keine PV, Akku 80 %, beide in Min+PV, der Tesla zu Beginn auf 5 A | Der Akku liefert in die Autos (Entladung − Haus) ab 10 s nach dem ersten Laden bis 890 s danach höchstens 3200 W (`support_max_w`), ab 930 s danach höchstens 200 W (`support_max_s`, 900 s). |
+| `akku-minpv` | Min+PV ohne Sonne, SOC 80 %, 30 min | 12.10.2026 ab 18:00, keine PV, Akku 80 %, beide in Min+PV, der Tesla zu Beginn auf 5 A | Der Akku liefert in die Autos (Entladung − Haus) ab 10 s nach dem ersten Laden bis 890 s danach höchstens 3200 W (`support_max_w` von 3000 W plus das Totband des Overrides von 200 W); nach `support_max_s` (900 s), ab 930 s nach dem ersten Laden, höchstens 200 W (das Totband). |
 | `akku-sofort` | Sofort am Abend, beide Autos, 30 min | Akku 60 %, beide in Sofort | Ab 2 min liegt der Netzbezug in jeder Sekunde, in der Autos und Haus mehr als 8300 W ziehen, zwischen 7800 und 8200 W: Der Akku liefert nur den Teil über `max_grid_charge_setpoint_w` (8 kW). |
 | `boost-abend` | Boost am Abend, 45 min | Akku 35 %, nur der e-Golf, in Boost bis zum Ende | Keine Entscheidung an `victron` mit einer Zahl; solange der SOC über 25 % liegt, ab 2 min Netzbezug höchstens 300 W; der SOC sinkt nie unter 20 % (Invariante des Modells). |
 | `override-stunde` | Eine Stunde mit aktivem Override, 1 h | Akku 50 %, nur der e-Golf, in Sofort | Ab 2 min gilt in jeder Sekunde ein Override, zuletzt vor höchstens 245 s geschrieben (Auffrischen alle 240 s); kein Alarm „competitor.foreign.*“; höchstens 5 Entscheidungen an `victron` (das Auffrischen steht nicht im Log). |
 | `dess-an` | Dynamic ESS an, 30 min | Akku 60 %, Dynamic ESS an, nur der e-Golf, in Sofort | Keine Entscheidung an `victron`; ab 1 min zeigt die Gesundheit `battery.state` „locked“; der e-Golf lädt am Ende. |
-| `spitze-15min` | 15-min-Ziel 8 kW, 75 min | 12.10.2026 ab 17:59, `control.peak_target_kw` 8, Akku 60 %, Tesla in Min+PV (zu Beginn auf 5 A), e-Golf in Sofort, ab 18:45 in Boost bis zum Ende | Netzbezug der Viertelstunden ab 18:00, 18:15 und 18:30 je höchstens 2,02 kWh; vor 18:45 nennt eine Entscheidung „peak_guard“, ab 18:45 keine an `wallbox.evcs`; bei der ersten Drosselung des e-Golf in Sofort lädt kein Auto in PV-Überschuss oder Min+PV über Mindeststrom + 0,5 A. |
+| `spitze-15min` | 15-min-Ziel 8 kW, 75 min | 12.10.2026 ab 17:59, `control.peak_target_kw` 8, Akku 60 %, Tesla in Min+PV (zu Beginn auf 5 A), e-Golf in Sofort, ab 18:45 in Boost bis zum Ende | Netzbezug der Viertelstunden ab 18:00, 18:15 und 18:30 je höchstens 2,02 kWh; vor 18:45 nennt eine Entscheidung „peak_guard“, ab 18:45 keine an `wallbox.evcs`; bei der ersten Drosselung des e-Golf in Sofort lädt kein Auto in PV-Überschuss oder Min+PV über Mindeststrom + 0,5 A (im Simulator trivial erfüllt). |
 | `schieflast-pv` | PV mit schwerer Last auf L1, 1 h | 21.06.2026 ab 10:00, PV konstant 12 kW, Akku 60 %, nur der e-Golf, in PV; ab 10 min 5,5 kW mehr Last auf L1 | Eine Entscheidung an `wallbox.evcs` nennt „import_limit“: Das Importziel bindet den e-Golf zwischen Mindest- und Höchststrom. |
 
 Die Verteilung ist gierig nach Priorität (Abschnitt „Laderegelung“): Mit höchstens 10 kW PV laden die
 Autos in `sonnig` und `wolkig` nacheinander, darum steht der Tesla dort nahe an seinem Ladelimit.
 
-Drei der Szenarien für Akku und Spitzen weichen vom Plan ab, weil sich seine Erwartung dort im Modell
-nicht erfüllen lässt:
+Drei der Szenarien für Akku und Spitzen weichen von ihrer ursprünglichen Beschreibung ab, weil sich
+deren Erwartung im Modell nicht erfüllen lässt:
 
 - In `akku-minpv` und `spitze-15min` steht der Tesla zu Beginn auf 5 A. Sonst lädt er nach dem Start
   90 s mit 16 A, bis der zweite Befehl auf 5 A wirkt (der erste geht über Tessie verloren). In
   `akku-minpv` lieferte der Akku dann bis zu 5,8 kW in die Autos, denn der Override ist auf
   `max_grid_charge_setpoint_w` (8 kW) begrenzt; in `spitze-15min` drosselte der Wächter Tesla und
-  e-Golf im selben Schritt, und der Tesla folgte erst nach 90 s.
+  e-Golf im selben Schritt, und der Tesla folgte erst nach 90 s. Die Prüfung der Reihenfolge an den
+  Strömen scheiterte dann, obwohl der Wächter in der richtigen Reihenfolge drosselt, und mit dem
+  Tesla am Mindeststrom (Min+PV ohne PV) ist sie trivial erfüllt; die Reihenfolge der Drosselung
+  prüfen `tests/unit/core/control/test_peak_throttle.py` und `tests/property/test_peak_guard.py`.
 - In `schieflast-pv` kommt die Last auf L1 erst nach 10 min, wenn der e-Golf schon lädt. Liegt sie von
   Anfang an, startet er nicht: Der Phasenwächter zählt die Ladeleistung des Akkus zur Last der Phase
   und lässt auf L1 nur rund 3 A frei, weniger als den Mindeststrom.
