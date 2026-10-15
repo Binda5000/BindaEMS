@@ -18,8 +18,10 @@ daraus (Präzisierung 4):
 - Ein **Widerspruch** ist: Ein Fahrzeug ist an zwei Wallboxen Kandidat, oder es ist nirgends
   Kandidat und hat an einer Wallbox mindestens ``CANDIDATE_SUPPORTS`` stützende Indizien und eins,
   das es ausschließt. Das weicht von Design 7.3 ab: Ein Fahrzeug, das an einer Wallbox Kandidat ist,
-  widerspricht sich nicht, weil es an einer anderen Stützen und einen Ausschluss hat. Tessie und
-  Phasen-Signatur stützen den Tesla an jeder Wallbox, an der ein Auto mit drei Phasen lädt.
+  widerspricht sich nicht, weil es an einer anderen Stützen und einen Ausschluss hat. Beschlossen
+  wurde das, weil Tessie und Phasen-Signatur den Tesla an jeder Wallbox stützten, an der ein Auto
+  mit drei Phasen lädt. Seit Tessie nur bei genau einem Vorgang stützt (``clues``), kommt der Fall
+  nur noch vor, wenn an der anderen Wallbox die zeitliche Korrelation stützt.
 
 Die Übersteuerung (``placed``) geht vor: An der Wallbox einer Übersteuerung entscheidet die
 Erkennung nicht (kein Fahrzeug, kein Gast, kein Kandidat), und die übersteuerten Fahrzeuge sind an

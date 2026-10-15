@@ -574,36 +574,45 @@ def with_default(cfg, key: str, wallbox: str):
 
 
 def test_each_wallbox_shows_the_evidence_of_its_session(cfg) -> None:
-    both = {"twc_obs": twc(connected=True), "tesla_obs": tesla(plugged=True)}
-    state = update(Assignment(cfg, started=T0), 0, homes={"egolf": True}, **both)
+    # Tesla nicht angesteckt, e-Golf weg: Bei zwei Vorgängen schließen Tessie und Home Assistant
+    # an jeder Wallbox aus, und an beiden steht ein Gast, angenommen
+    both = {"twc_obs": twc(connected=True), "tesla_obs": tesla()}
+    state = update(Assignment(cfg, started=T0), 0, homes={"egolf": False}, **both)
     assert list(state.wallboxes) == ["evcs", "twc"]
-    for key, occupant in (("evcs", "egolf"), ("twc", "tesla")):
+    for key in ("evcs", "twc"):
         # je Fahrzeug in der Reihenfolge von ``config.yaml``, je Fahrzeug die Indizien nach ``Clue``
         evidence = (
-            Evidence(key, "tesla", Clue.TESSIE, True),
-            Evidence(key, "egolf", Clue.HOME, True),
+            Evidence(key, "tesla", Clue.TESSIE, False),
+            Evidence(key, "egolf", Clue.HOME, False),
         )
-        assert state.wallboxes[key] == WallboxState(occupant, AssignmentKind.DEFAULT, evidence)
+        guest = f"guest@{key}"
+        assert state.wallboxes[key] == WallboxState(guest, AssignmentKind.DEFAULT, evidence)
 
 
 def test_a_default_vehicle_standing_elsewhere_leaves_an_assumed_guest(cfg) -> None:
-    # Der e-Golf lädt am Wall Connector auf zwei Phasen; an der EVCS steht ein Auto, das nicht lädt.
-    # Am Wall Connector ist er ab 60 s Kandidat (Home Assistant, Phasen), bei 120 s erkannt.
-    egolf = twc(connected=True, charging=True, phase_a={"L1": 16.0, "L2": 16.0, "L3": 0.0})
+    # Der Tesla lädt an der EVCS auf drei Phasen; am Wall Connector steht ein Auto, das nicht lädt,
+    # und der e-Golf ist weg. An der EVCS ist der Tesla ab 60 s Kandidat (Strom, Phasen), bei 120 s
+    # erkannt.
+    kw = {
+        "evcs_obs": evcs(charging=True, phase_a=dict.fromkeys(("L1", "L2", "L3"), 16.0)),
+        "twc_obs": twc(connected=True),
+        "tesla_obs": tesla(plugged=True, charging=True, actual_current_a=16.0, phases=3),
+        "homes": {"egolf": False},
+    }
     a = Assignment(cfg, started=T0)
-    states = [update(a, s, twc_obs=egolf, homes={"egolf": True}) for s in range(121)]
+    states = [update(a, s, **kw) for s in range(121)]
     before, after = states[119], states[120]
-    # vorher: der e-Golf angenommen an der EVCS, der Tesla am Wall Connector ausgeschlossen
+    # vorher: an der EVCS ein Gast angenommen, der Tesla angenommen am Wall Connector
     assert (before.wallboxes["evcs"].occupant, before.wallboxes["twc"].occupant) == (
-        "egolf",
-        "guest@twc",
+        "guest@evcs",
+        "tesla",
     )
-    assert (after.vehicles["egolf"].wallbox, after.vehicles["egolf"].fresh) == ("twc", True)
-    # Das Standardfahrzeug der EVCS steht schon am Wall Connector: dort ein Gast, angenommen
-    assert after.wallboxes["evcs"] == WallboxState(
-        "guest@evcs", AssignmentKind.DEFAULT, before.wallboxes["evcs"].evidence
+    assert (after.vehicles["tesla"].wallbox, after.vehicles["tesla"].fresh) == ("evcs", True)
+    # Das Standardfahrzeug des Wall Connectors steht schon an der EVCS: dort ein Gast, angenommen
+    assert after.wallboxes["twc"] == WallboxState(
+        "guest@twc", AssignmentKind.DEFAULT, before.wallboxes["twc"].evidence
     )
-    assert (after.vehicles["tesla"].wallbox, after.vehicles["guest@twc"].wallbox) == (None, None)
+    assert (after.vehicles["egolf"].wallbox, after.vehicles["guest@evcs"].wallbox) == (None, None)
 
 
 def test_a_wallbox_without_a_default_vehicle_assumes_its_guest(cfg) -> None:
@@ -619,14 +628,15 @@ def test_a_wallbox_without_a_default_vehicle_assumes_its_guest(cfg) -> None:
 
 
 def test_while_unclear_a_wallbox_nobody_stands_at_has_no_occupant(cfg) -> None:
-    # Beide Fahrzeuge haben die EVCS als Standard. Beide Wallboxen laden auf drei Phasen: Der Tesla
-    # ist ab 60 s an beiden Kandidat, ein Widerspruch; unklar wie bei CONTRADICTION.
+    # Beide Fahrzeuge haben die EVCS als Standard. Beide Wallboxen laden auf drei Phasen mit dem
+    # Strom des Tesla: Strom und Phasen stützen ihn ab 60 s an beiden, ein Widerspruch; unklar wie
+    # bei CONTRADICTION.
     shared = with_default(cfg, "tesla", "evcs")
-    three = dict.fromkeys(("L1", "L2", "L3"), 10.0)
+    three = dict.fromkeys(("L1", "L2", "L3"), 16.0)
     both = {
         "evcs_obs": evcs(charging=True, phase_a=three),
         "twc_obs": twc(connected=True, charging=True, phase_a=three),
-        "tesla_obs": tesla(plugged=True),
+        "tesla_obs": tesla(plugged=True, charging=True, actual_current_a=16.0, phases=3),
     }
     a = Assignment(shared, started=T0)
     assert not any(update(a, s, **both).unclear for s in range(UNCLEAR_FROM_S))
@@ -674,15 +684,15 @@ def test_a_running_session_keeps_the_detection_while_its_plug_state_is_unknown(c
 def test_the_start_of_a_session_is_on_the_wall_clock(cfg) -> None:  # Präzisierungen 9 und 10
     # Die Wanduhr geht einen Tag nach. Tessies Zeitstempel und der Beginn des Vorgangs zählen auf
     # ihr: Der Tesla kommt bei 1 s an den Wall Connector, Tessie fragt bei 61 s „angesteckt“ ab.
-    # Tessie und zeitliche Korrelation stützen ihn dann, erkannt ist er nach 60 s auf der Uhr der
-    # Safety-Schicht.
+    # Tessie, zeitliche Korrelation und Ausschluss (die EVCS ist leer) stützen ihn dann, erkannt
+    # ist er nach 60 s auf der Uhr der Safety-Schicht.
     wall = T0 - timedelta(days=1)
     a = Assignment(cfg, started=T0)
     kinds = []
     for s in range(122):
         polled = 61 if s >= 61 else 0
         tessie = tesla(plugged=s >= 61, plugged_at=wall + timedelta(seconds=polled))
-        wallboxes = {"evcs": evcs(), "twc": twc(connected=s > 0)}
+        wallboxes = {"evcs": evcs(connected=False), "twc": twc(connected=s > 0)}
         when = timedelta(seconds=s)
         state = a.update(
             T0 + when, wall + when, None, T0, wallboxes, {"tesla": tessie, "egolf": NONE}
@@ -732,15 +742,14 @@ def test_after_an_override_a_new_session_starts_assumed(cfg) -> None:  # Review 
 
 
 def test_an_overridden_vehicle_is_never_detected_elsewhere(cfg) -> None:  # Design 7.1
-    # Der Tesla ist an die EVCS übersteuert. Am Wall Connector lädt ein Auto auf drei Phasen, und
-    # Tessie sieht den Tesla zu Hause und angesteckt: Dort ist er trotzdem ausgeschlossen.
+    # Der Tesla ist an die EVCS übersteuert. Am Wall Connector lädt ein Auto auf drei Phasen mit
+    # dem Strom, den Tessie für den Tesla meldet: Strom und Phasen stützen ihn dort ab 60 s, und er
+    # ist dort trotzdem ausgeschlossen.
     intent = Intent(version=1, control=True, vehicles={"tesla": VehicleIntent(wallbox="evcs")})
     three = twc(connected=True, charging=True, phase_a=dict.fromkeys(("L1", "L2", "L3"), 16.0))
+    car = tesla(plugged=True, charging=True, actual_current_a=16.0, phases=3)
     a = Assignment(cfg, started=T0)
-    states = [
-        update(a, s, intent=intent, twc_obs=three, tesla_obs=tesla(plugged=True))
-        for s in range(121)
-    ]
+    states = [update(a, s, intent=intent, twc_obs=three, tesla_obs=car) for s in range(121)]
     placed = {(state.vehicles["tesla"].wallbox, state.vehicles["tesla"].kind) for state in states}
     assert placed == {("evcs", AssignmentKind.OVERRIDE)}
     # Am Wall Connector ist jedes Fahrzeug ausgeschlossen, der e-Golf ab 60 s nach den Phasen: ein
@@ -830,3 +839,52 @@ def test_a_boost_set_while_plugging_in_binds_to_the_new_session(cfg) -> None:
         True,
         T0 + timedelta(hours=2),
     )
+
+
+# Zwei Vorgänge: Tessie und Home Assistant sagen nicht, an welcher Wallbox ein Fahrzeug steht
+
+
+def test_a_three_phase_guest_is_not_the_tesla_plugged_in_elsewhere(cfg) -> None:
+    # An der EVCS lädt ein Gast auf drei Phasen. Der Tesla steckt zu Hause am Wall Connector und
+    # lädt nicht, der e-Golf ist weg. Stützte Tessie den Tesla an jeder Wallbox mit Vorgang, wäre
+    # er mit der Phasen-Signatur an der EVCS erkannt und am Wall Connector ein Gast angenommen.
+    kw = {
+        "evcs_obs": evcs(charging=True, phase_a=dict.fromkeys(("L1", "L2", "L3"), 16.0)),
+        "twc_obs": twc(connected=True),
+        "tesla_obs": tesla(plugged=True),
+        "homes": {"egolf": False},
+    }
+    a = Assignment(cfg, started=T0)
+    for s in range(181):
+        state = update(a, s, **kw)
+        assert (state.vehicles["tesla"].wallbox, state.vehicles["tesla"].kind) == (
+            "twc",
+            AssignmentKind.DEFAULT,
+        )
+        assert (state.wallboxes["evcs"].occupant, state.wallboxes["evcs"].kind) == (
+            "guest@evcs",
+            AssignmentKind.DEFAULT,
+        )
+        assert not state.unclear
+
+
+def test_a_two_phase_guest_is_not_the_egolf_charged_elsewhere(cfg) -> None:
+    # Der e-Golf steckt „geladen“ an der EVCS und ist laut Home Assistant zu Hause; am Wall
+    # Connector lädt ein Gast auf zwei Phasen. Stützte Home Assistant den e-Golf an jeder Wallbox
+    # mit Vorgang, wäre er mit der Phasen-Signatur am Wall Connector erkannt.
+    kw = {
+        "evcs_obs": evcs(complete=True),
+        "twc_obs": twc(connected=True, charging=True, phase_a={"L1": 16.0, "L2": 16.0, "L3": 0.0}),
+        "homes": {"egolf": True},
+    }
+    a = Assignment(cfg, started=T0)
+    for s in range(181):
+        state = update(a, s, **kw)
+        assert (state.vehicles["egolf"].wallbox, state.vehicles["egolf"].kind) == (
+            "evcs",
+            AssignmentKind.DEFAULT,
+        )
+        assert (state.wallboxes["twc"].occupant, state.wallboxes["twc"].kind) == (
+            "guest@twc",
+            AssignmentKind.DEFAULT,
+        )

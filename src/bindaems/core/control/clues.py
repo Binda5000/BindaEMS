@@ -12,6 +12,15 @@ Fahrzeug, das Tessie zu Hause und angesteckt sieht, an der Wallbox, wenn jede an
 leer ist: Ein Auto an einer fremden Ladesäule steht an keiner Wallbox der Anlage. Was aus den
 Indizien folgt, entscheidet der nächste Baustein.
 
+Tessie („zu Hause und angesteckt“) und Home Assistant („zu Hause“) stützen ein Fahrzeug nur,
+solange genau eine Wallbox einen Vorgang hat; ausschließen tun sie an jeder Wallbox mit Vorgang.
+Das weicht von Design 7.2 und von Präzisierung 2 ab: Bei zwei Vorgängen sagen sie nicht, an
+welcher Wallbox das Fahrzeug steht. Mit der Phasen-Signatur erkannten sie sonst einen
+dreiphasigen Gast an der EVCS als den Tesla, der nicht ladend am Wall Connector steckt, und einen
+zweiphasigen Gast am Wall Connector als den e-Golf, der „geladen“ an der EVCS steckt. Kosten, falls
+die Regel falsch ist: Bei zwei Vorgängen erkennen nur Stromvergleich, zeitliche Korrelation und
+Phasen-Signatur ein Fahrzeug; sonst bleibt es „angenommen“, meist derselbe Insasse.
+
 Tessie fragt ein abgestecktes Auto nur alle 600 s ab und erfährt vom Anstecken mit Verzug
 (Präzisierung 3): Tessie, Stromvergleich und Ausschluss zählen an einer Wallbox mit bekanntem Beginn
 des Vorgangs nur mit Werten, die mindestens ``TESSIE_SETTLE_S`` danach abgefragt wurden. Die
@@ -54,7 +63,8 @@ class Clue(StrEnum):
     """Welches Indiz es ist, in der Reihenfolge der Tabelle von Design 7.2.
 
     Der Wert ist sein Name im Health. ``CURRENT`` und ``TIMING`` gibt es nicht für ein Fahrzeug, das
-    Tessie nicht zu Hause sieht.
+    Tessie nicht zu Hause sieht. ``TESSIE`` und ``HOME`` stützen nur, solange genau eine Wallbox
+    einen Vorgang hat.
     """
 
     TESSIE = "tessie"  # Tessie sieht das Fahrzeug zu Hause und angesteckt, oder sicher nicht
@@ -178,7 +188,8 @@ class ClueTracker:
         3. Je Wallbox mit Vorgang und je Fahrzeug die Indizien nennen, die etwas sagen: die
            Wallboxen und Fahrzeuge in der Reihenfolge von ``config.yaml``, je Paar die Indizien in
            der von ``Clue``. Die zeitliche Korrelation sagt für ein Fahrzeug, das Tessie nicht zu
-           Hause sieht, nichts.
+           Hause sieht, nichts. Tessie und Home Assistant stützen nur, wenn ``sessions`` genau eine
+           Wallbox nennt (``_home_verdict``).
         """
         self._remember_starts(wall_now, sessions)
         for key, window in self._windows.items():
@@ -199,12 +210,13 @@ class ClueTracker:
                 counts = _settled(start, tessie)
                 # Ausschluss: zu Hause und angesteckt, und jede andere Wallbox ist leer
                 elsewhere = counts and others_empty and home_and_plugged(tessie) is True
+                at_home = home_and_plugged(tessie) if counts else None
                 verdicts = (
-                    (Clue.TESSIE, home_and_plugged(tessie) if counts else None),
+                    (Clue.TESSIE, _home_verdict(at_home, len(sessions))),
                     (Clue.CURRENT, self._current_verdict(now, wallbox_key, vehicle_key)),
                     (Clue.TIMING, self._timing_verdict(wallbox_key, vehicle_key, start, tessie)),
                     (Clue.PHASES, self._phases_verdict(now, wallbox_key, vehicle.phases)),
-                    (Clue.HOME, homes.get(vehicle_key)),
+                    (Clue.HOME, _home_verdict(homes.get(vehicle_key), len(sessions))),
                     (Clue.ELSEWHERE, True if elsewhere else None),
                 )
                 found.extend(
@@ -309,6 +321,18 @@ class ClueTracker:
             for other in starts
         )
         return None if began_elsewhere else True
+
+
+def _home_verdict(verdict: bool | None, running: int) -> bool | None:
+    """Was Tessie oder Home Assistant an einer Wallbox sagt, wenn ``running`` Vorgänge laufen.
+
+    „Zu Hause (und angesteckt)“ stützt das Fahrzeug nur, solange genau eine Wallbox einen Vorgang
+    hat: Bei zwei Vorgängen sagt es nicht, an welcher das Fahrzeug steht. Ein Ausschluss gilt an
+    jeder Wallbox mit Vorgang.
+    """
+    if verdict is True and running != 1:
+        return None
+    return verdict
 
 
 def _settled(start: datetime | None, tessie: VehicleObs) -> bool:

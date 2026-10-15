@@ -95,22 +95,46 @@ def test_two_supports_and_an_exclusion_are_a_contradiction(cfg) -> None:
 
 
 def test_an_exclusion_next_to_a_detection_is_no_contradiction(cfg) -> None:  # Präzisierung 4
-    kw = {
-        "sessions": BOTH,
-        # dreiphasiger Gast mit 10 A
-        "evcs_obs": evcs(charging=True, phase_a=dict.fromkeys(PHASES, 10.0)),
-        "twc_obs": twc(connected=True, charging=True, phase_a=dict.fromkeys(PHASES, 16.0)),
-        "tesla_obs": tesla(plugged=True, charging=True, actual_current_a=16.0, phases=3),
-        "homes": {"egolf": False},
-    }
+    # Der Tesla lädt am Wall Connector, dessen Vorgang schon vor dem Start des core lief. Tessie
+    # meldet ihn bei 0 s abgesteckt, dann nichts und bei 61 s angesteckt. Bei 1 s kommt ein
+    # dreiphasiger Gast an die EVCS, der ab 61 s mit 10 A lädt. Bei zwei Vorgängen stützt Tessie
+    # nicht; ab 121 s stützen den Tesla an der EVCS die zeitliche Korrelation und die Phasen, und
+    # der Stromvergleich schließt ihn dort aus. Am Wall Connector stützen ihn Strom und Phasen.
+    started = {"evcs": T0 + timedelta(seconds=1), "twc": None}
+    tesla_twc = twc(connected=True, charging=True, phase_a=dict.fromkeys(PHASES, 16.0))
     d = Detector(cfg)
-    assert not any(detect(d, s, **kw).contradiction for s in range(120))
-    found = detect(d, 120, **kw)
+    alone = {"sessions": {"twc": None}, "evcs_obs": evcs(connected=False), "twc_obs": tesla_twc}
+    detect(d, 0, tesla_obs=tesla(plugged_at=T0), **alone)
+    assert not any(
+        detect(d, s, sessions=started, twc_obs=tesla_twc, tesla_obs=NONE).contradiction
+        for s in range(1, 61)
+    )
+    kw = {
+        "sessions": started,
+        "evcs_obs": evcs(charging=True, phase_a=dict.fromkeys(PHASES, 10.0)),
+        "twc_obs": tesla_twc,
+        "tesla_obs": tesla(
+            plugged=True,
+            charging=True,
+            actual_current_a=16.0,
+            phases=3,
+            plugged_at=T0 + timedelta(seconds=61),
+        ),
+    }
+    for s in range(61, 181):
+        found = detect(d, s, **kw)
+        assert (found.detected, found.contradiction) == ({}, False)
+    found = detect(d, 181, **kw)
     assert (found.detected, found.guests, found.contradiction) == (
         {"twc": "tesla"},
         {"evcs"},
         False,
     )
+    # an der EVCS zwei Stützen und ein Ausschluss, neben der Erkennung am Wall Connector
+    at_the_evcs = {
+        (e.clue, e.supports) for e in found.evidence if (e.wallbox, e.vehicle) == ("evcs", "tesla")
+    }
+    assert at_the_evcs == {(Clue.TIMING, True), (Clue.PHASES, True), (Clue.CURRENT, False)}
 
 
 def test_an_override_pins_its_wallbox(cfg) -> None:
@@ -168,28 +192,26 @@ def test_one_supporting_clue_is_not_enough(cfg) -> None:
 
 
 def test_a_vehicle_is_detected_as_soon_as_it_is_the_candidate_of_one_wallbox_only(cfg) -> None:
-    # beide Wallboxen laden dreiphasig: Tessie und Phasen stützen den Tesla an beiden
+    # Beide Wallboxen laden dreiphasig mit dem Strom des Tesla: Strom und Phasen stützen ihn ab
+    # 60 s an beiden
     kw = {
         "sessions": BOTH,
-        "evcs_obs": evcs(charging=True, phase_a=dict.fromkeys(PHASES, 10.0)),
         "twc_obs": twc(connected=True, charging=True, phase_a=dict.fromkeys(PHASES, 16.0)),
+        "tesla_obs": tesla(plugged=True, charging=True, actual_current_a=16.0, phases=3),
     }
-    idle = tesla(plugged=True)
-    charging = tesla(plugged=True, charging=True, actual_current_a=16.0, phases=3)
+    same = evcs(charging=True, phase_a=dict.fromkeys(PHASES, 16.0))
     d = Detector(cfg)
     for s in range(60):
-        assert not detect(d, s, tesla_obs=idle, **kw).contradiction
-    for s in range(60, 90):
-        found = detect(d, s, tesla_obs=idle, **kw)
+        assert not detect(d, s, evcs_obs=same, **kw).contradiction
+    # Bis 150 s ist er an beiden Kandidat und nirgends erkannt, obwohl er am Wall Connector schon
+    # länger als 60 s zählt
+    for s in range(60, 150):
+        found = detect(d, s, evcs_obs=same, **kw)
         assert (found.contradiction, found.detected) == (True, {})
-    # ab 90 s lädt das Auto, und sein Strom passt erst nach weiteren 60 s zum Wall Connector und
-    # nicht zur EVCS: Bis dahin ist es an beiden Kandidat und nirgends erkannt, obwohl es am Wall
-    # Connector schon länger als 60 s zählt
-    for s in range(90, 150):
-        found = detect(d, s, tesla_obs=charging, **kw)
-        assert (found.contradiction, found.detected) == (True, {})
-    # dann ist es nur noch dort Kandidat und sofort erkannt: Seine 60 s liefen schon
-    found = detect(d, 150, tesla_obs=charging, **kw)
+    # Dann lädt die EVCS mit 10 A, und der Strom stützt ihn dort nicht mehr: Er ist nur noch am
+    # Wall Connector Kandidat und sofort erkannt, seine 60 s liefen schon
+    other = evcs(charging=True, phase_a=dict.fromkeys(PHASES, 10.0))
+    found = detect(d, 150, evcs_obs=other, **kw)
     assert (found.contradiction, found.detected) == (False, {"twc": "tesla"})
 
 
@@ -280,21 +302,27 @@ def test_a_pinned_wallbox_contradicts_nothing(cfg) -> None:
 
 
 def test_an_overridden_vehicle_is_excluded_elsewhere_and_contradicts_nothing(cfg) -> None:
-    # Tessie und Home Assistant stützen den Tesla an beiden Wallboxen, die Phasen schließen ihn an
-    # der EVCS aus; am Wall Connector ist er übersteuert
+    # Der Tesla lädt am Wall Connector, an der EVCS ein dreiphasiger Gast mit demselben Strom:
+    # Strom und Phasen stützen den Tesla ab 60 s an beiden Wallboxen. Am Wall Connector ist er
+    # übersteuert.
+    same = dict.fromkeys(PHASES, 16.0)
     kw = {
         "sessions": BOTH,
-        "evcs_obs": evcs(charging=True, phase_a=TWO),
-        "twc_obs": twc(connected=True),
-        "homes": {"tesla": True},
-        **TESLA_AT_EVCS,
+        "evcs_obs": evcs(charging=True, phase_a=same),
+        "twc_obs": twc(connected=True, charging=True, phase_a=same),
+        "tesla_obs": tesla(plugged=True, charging=True, actual_current_a=16.0, phases=3),
     }
-    assert detect(Detector(cfg), 0, **kw).contradiction  # ohne Übersteuerung: zwei Kandidaten
+    unpinned = Detector(cfg)
+    for s in range(60):
+        detect(unpinned, s, **kw)
+    assert detect(unpinned, 60, **kw).contradiction  # ohne Übersteuerung: zwei Kandidaten
     d = Detector(cfg)
     for s in range(121):
         found = detect(d, s, placed={"tesla": "twc"}, **kw)
-        assert (found.detected, found.guests, found.contradiction) == ({}, frozenset(), False)
-    assert found.excluded == {"evcs": {"tesla"}, "twc": set()}
+        assert (found.detected, found.contradiction) == ({}, False)
+    # An der EVCS ist jedes Fahrzeug ausgeschlossen, der e-Golf ab 60 s nach den Phasen: ein Gast
+    assert found.excluded == {"evcs": {"tesla", "egolf"}, "twc": {"egolf"}}
+    assert found.guests == {"evcs"}
 
 
 def test_a_pinned_wallbox_decides_again_when_the_override_ends(cfg) -> None:
@@ -312,12 +340,12 @@ def test_a_pinned_wallbox_decides_again_when_the_override_ends(cfg) -> None:
 def test_the_evidence_is_the_one_of_the_clues(cfg) -> None:
     wallboxes = {"evcs": evcs(), "twc": twc(connected=True)}
     vehicles = {"tesla": tesla(plugged=True), "egolf": NONE}
-    homes = {"egolf": True}
+    homes = {"egolf": False}  # bei zwei Vorgängen schließt Home Assistant nur aus
     expected = tuple(ClueTracker(cfg).update(T0, T0, BOTH, wallboxes, vehicles, homes))
     found = Detector(cfg).update(T0, T0, BOTH, wallboxes, vehicles, homes, {"egolf": "evcs"})
     assert found.evidence == expected
     # auch die der übersteuerten EVCS
-    assert Evidence("evcs", "egolf", Clue.HOME, True) in found.evidence
+    assert Evidence("evcs", "egolf", Clue.HOME, False) in found.evidence
 
 
 def test_a_tesla_charging_away_is_no_contradiction_next_to_a_three_phase_guest(cfg) -> None:

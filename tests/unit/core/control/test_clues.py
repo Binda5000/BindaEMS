@@ -21,6 +21,7 @@ from bindaems.core.state.derived import PHASES
 # Vorgaben des Plans
 
 AT_EVCS = {"evcs": None}  # an der EVCS läuft ein Vorgang, sein Beginn ist unbekannt
+BOTH = {"evcs": None, "twc": None}  # an beiden Wallboxen läuft ein Vorgang
 TWO = {"L1": 10.0, "L2": 10.0, "L3": 0.0}
 
 
@@ -39,19 +40,10 @@ def ev(wallbox, vehicle, clue, supports=True):
     return Evidence(wallbox, vehicle, clue, supports)
 
 
-def test_tessie_supports_at_every_session_or_excludes(cfg) -> None:
-    both = {"evcs": None, "twc": None}
-    found = clues(
-        ClueTracker(cfg),
-        0,
-        sessions=both,
-        twc_obs=twc(connected=True),
-        tesla_obs=tesla(plugged=True),
-    )
-    assert of(found, Clue.TESSIE) == {
-        ev("evcs", "tesla", Clue.TESSIE),
-        ev("twc", "tesla", Clue.TESSIE),
-    }
+def test_tessie_supports_or_excludes(cfg) -> None:
+    # bei zwei Vorgängen stützt Tessie nicht (unten, Abweichung von Design 7.2)
+    found = clues(ClueTracker(cfg), 0, tesla_obs=tesla(plugged=True))
+    assert of(found, Clue.TESSIE) == {ev("evcs", "tesla", Clue.TESSIE)}
     away = clues(ClueTracker(cfg), 0, tesla_obs=tesla(plugged=True, at_home=False))
     assert of(away, Clue.TESSIE) == {ev("evcs", "tesla", Clue.TESSIE, False)}
     assert of(clues(ClueTracker(cfg), 0), Clue.TESSIE) == {ev("evcs", "tesla", Clue.TESSIE, False)}
@@ -181,11 +173,11 @@ def test_no_evidence_without_a_session(cfg) -> None:
 
 
 def test_evidence_comes_in_a_fixed_order(cfg) -> None:
+    # Tesla nicht angesteckt, e-Golf weg: Bei zwei Vorgängen schließen Tessie und Home Assistant
+    # an jeder Wallbox aus
     wallboxes = {"evcs": evcs(), "twc": twc(connected=True)}
-    vehicles = {"tesla": tesla(plugged=True), "egolf": NONE}
-    found = ClueTracker(cfg).update(
-        T0, T0, {"evcs": None, "twc": None}, wallboxes, vehicles, {"egolf": True}
-    )
+    vehicles = {"tesla": tesla(), "egolf": NONE}
+    found = ClueTracker(cfg).update(T0, T0, BOTH, wallboxes, vehicles, {"egolf": False})
     assert [(e.wallbox, e.vehicle, e.clue) for e in found] == [
         ("evcs", "tesla", Clue.TESSIE),
         ("evcs", "egolf", Clue.HOME),
@@ -662,9 +654,9 @@ def test_the_six_clues_come_in_the_order_of_the_design(cfg) -> None:
 
 def test_evidence_follows_the_configuration_and_not_the_input(cfg) -> None:
     wallboxes = {"twc": twc(connected=True), "evcs": evcs()}
-    vehicles = {"egolf": NONE, "tesla": tesla(plugged=True)}
+    vehicles = {"egolf": NONE, "tesla": tesla()}  # wie oben: Ausschlüsse an beiden Wallboxen
     sessions = {"twc": None, "evcs": None}
-    found = ClueTracker(cfg).update(T0, T0, sessions, wallboxes, vehicles, {"egolf": True})
+    found = ClueTracker(cfg).update(T0, T0, sessions, wallboxes, vehicles, {"egolf": False})
     assert [(e.wallbox, e.vehicle, e.clue) for e in found] == [
         ("evcs", "tesla", Clue.TESSIE),
         ("evcs", "egolf", Clue.HOME),
@@ -681,3 +673,42 @@ def test_the_holds_run_on_the_safety_clock(cfg) -> None:  # Präzisierung 10
         assert of(found, Clue.CURRENT) | of(found, Clue.PHASES) == set()
     found = apart(tracker, 160, sessions=sessions, evcs_obs=AT_16, tesla_obs=car)
     assert {ev("evcs", "tesla", Clue.CURRENT), ev("evcs", "tesla", Clue.PHASES)} <= found
+
+
+# Tessie und Home Assistant stützen nur bei genau einem Vorgang (Abweichung von Design 7.2)
+
+
+def test_tessie_and_home_assistant_support_only_while_one_session_runs(cfg) -> None:
+    # „Zu Hause und angesteckt“ und „zu Hause“ sagen bei zwei Vorgängen nicht, an welcher Wallbox
+    # das Fahrzeug steht
+    home = {"tesla_obs": tesla(plugged=True), "homes": {"egolf": True}}
+    one = clues(ClueTracker(cfg), 0, **home)
+    assert of(one, Clue.TESSIE) | of(one, Clue.HOME) == {
+        ev("evcs", "tesla", Clue.TESSIE),
+        ev("evcs", "egolf", Clue.HOME),
+    }
+    two = clues(ClueTracker(cfg), 0, sessions=BOTH, twc_obs=twc(connected=True), **home)
+    assert of(two, Clue.TESSIE) | of(two, Clue.HOME) == set()
+
+
+@pytest.mark.parametrize(
+    "car",
+    [
+        pytest.param(tesla(), id="Tesla nicht angesteckt"),
+        pytest.param(tesla(plugged=True, at_home=False), id="Tesla nicht zu Hause"),
+    ],
+)
+def test_tessie_and_home_assistant_still_exclude_at_every_session(cfg, car) -> None:
+    found = clues(
+        ClueTracker(cfg),
+        0,
+        sessions=BOTH,
+        twc_obs=twc(connected=True),
+        tesla_obs=car,
+        homes={"egolf": False},
+    )
+    assert of(found, Clue.TESSIE) | of(found, Clue.HOME) == {
+        ev(wallbox, vehicle, clue, False)
+        for wallbox in ("evcs", "twc")
+        for vehicle, clue in (("tesla", Clue.TESSIE), ("egolf", Clue.HOME))
+    }
