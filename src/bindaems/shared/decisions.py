@@ -20,6 +20,9 @@ from bindaems.shared.timeutil import ensure_utc
 
 _SHOWN_MAX: Final = 60  # Zeichen, die ein ungültiger Wert in einem Text einnimmt
 
+# ``outcome`` einer Entscheidung, die kein Urteil der Safety-Schicht ist (eine fremde Änderung)
+NO_VERDICT: Final = "none"
+
 _FIELDS: Final = frozenset(
     {
         "id",
@@ -40,7 +43,7 @@ _FIELDS: Final = frozenset(
 # Gründe, die der Text deutsch nennt; andere Codes erscheinen unverändert. Zuerst die des sicheren
 # Zustands und der Übergabe, dann die der Laderegelung (Plan 2c-1, „Texte“), dann die des
 # Akku-Sollwerts und des 15-min-Wächters (Plan 2c-2a, „Texte“), zuletzt der der Zuordnungserkennung
-# (Plan 2c-2b, „Texte“).
+# (Plan 2c-2b, „Texte“), dazu die der Bedienung (Plan 2d, „Texte“).
 _REASON_TEXT: Final = {
     "safe_state": "sicherer Zustand",
     "handback": "Übergabe",
@@ -63,6 +66,8 @@ _REASON_TEXT: Final = {
     "battery_support": "Akku-Unterstützung",
     "peak_guard": "15-min-Wächter",
     "assignment_detected": "Zuordnung erkannt",
+    "self_start": "Selbststart",
+    "foreign_change": "Änderung von außen",
 }
 
 
@@ -76,6 +81,7 @@ class DecisionResult(StrEnum):
     DRY_RUN = "dry_run"  # der Aktor ist nicht live: geprüft, nicht gesendet
     REJECTED = "rejected"  # die Safety-Schicht hat den Befehl abgelehnt
     DEFERRED = "deferred"  # die Safety-Schicht hat ihn wegen eines Stundenlimits zurückgestellt
+    FOREIGN = "foreign"  # ein fremdes System hat den Wert am Gerät geändert (kein Befehl des EMS)
 
 
 _RESULT_TEXT: Final = {
@@ -85,10 +91,12 @@ _RESULT_TEXT: Final = {
     DecisionResult.REJECTED: "abgelehnt",
     DecisionResult.DEFERRED: "zurückgestellt",
 }
-# Diese Ergebnisse nennen ein Detail, falls es eins gibt: „Fehler: …“, „nicht gesendet: …“.
+# Diese Ergebnisse nennen ein Detail, falls es eins gibt: „Fehler: …“, „nicht gesendet: …“,
+# „von außen geändert: …“.
 _RESULT_WITH_DETAIL: Final = {
     DecisionResult.ERROR: "Fehler",
     DecisionResult.NOT_SENT: "nicht gesendet",
+    DecisionResult.FOREIGN: "von außen geändert",
 }
 
 
@@ -101,7 +109,8 @@ class Decision:
     - ``requested``: der Wert, den die Regelung anfordert; ``applied``: der Wert nach der
       Safety-Schicht (bei einer Ablehnung ``None``)
     - ``dry_run``: der Aktor war nicht live
-    - ``outcome``: Urteil der Safety-Schicht (der Wert von ``Outcome``); ``result``: Ergebnis
+    - ``outcome``: Urteil der Safety-Schicht (der Wert von ``Outcome``, bei einer fremden Änderung
+      ``NO_VERDICT``); ``result``: Ergebnis
     - ``codes``: Gründe des Befehls, dann Befunde der Safety-Schicht
     - ``text``: die Entscheidung auf Deutsch (``decision_text``)
     - ``inputs``: Eingangsgrößen zum Zeitpunkt; ``None`` heißt unbekannt
@@ -291,7 +300,7 @@ def _command_text(kind: CommandKind, value: CommandValue) -> str:
 
 
 def _result_text(result: DecisionResult, detail: str) -> str:
-    """Das Ergebnis als Text; bei Fehler und „nicht gesendet“ mit dem Detail, wenn es eins gibt."""
+    """Das Ergebnis als Text; bei Fehler, „nicht gesendet“ und fremder Änderung mit dem Detail."""
     if result in _RESULT_WITH_DETAIL:
         text = _RESULT_WITH_DETAIL[result]
         return f"{text}: {detail}" if detail else text
@@ -311,12 +320,13 @@ def decision_text(
     """Der Text einer Entscheidung: ``{label}{ (Gründe)}: {Befehl} – {Ergebnis}.``
 
     Danach folgen, mit Leerzeichen verbunden, die Befundtexte der Safety-Schicht. ``value`` ist der
-    angewendete Wert, sonst der angeforderte. ``reasons`` sind Codes: die des sicheren Zustands, der
-    Übergabe, der Laderegelung, des Akku-Sollwerts, des 15-min-Wächters und der Zuordnungserkennung
-    (``_REASON_TEXT``) erscheinen deutsch, andere unverändert; mehrere stehen mit „, “ getrennt.
-    ``detail`` gehört zu „Fehler“ und „nicht gesendet“. Der Satz endet auf einen Punkt; hat das
-    Detail schon einen, kommt kein zweiter dazu. Ein Wert, der nicht zur Art passt (etwa NaN),
-    erscheint, wie er ist: Auch eine abgelehnte, ungültige Anfrage lässt sich protokollieren.
+    angewendete Wert, sonst der angeforderte. ``reasons`` sind Codes: die des sicheren Zustands,
+    der Übergabe, der Laderegelung, des Akku-Sollwerts, des 15-min-Wächters, der
+    Zuordnungserkennung und der Bedienung (``_REASON_TEXT``) erscheinen deutsch, andere
+    unverändert; mehrere stehen mit „, “ getrennt. ``detail`` gehört zu „Fehler“, „nicht
+    gesendet“ und „von außen geändert“. Der Satz endet auf einen Punkt; hat das Detail schon
+    einen, kommt kein zweiter dazu. Ein Wert, der nicht zur Art passt (etwa NaN), erscheint, wie
+    er ist: Auch eine abgelehnte, ungültige Anfrage lässt sich protokollieren.
     """
     head = label
     if reasons:

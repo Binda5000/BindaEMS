@@ -175,14 +175,17 @@ class ForeignChangeDetector:
             if now - change.at >= self._hold:
                 continue
             label, kind = labels.get(actuator, actuator), change.kind
-            actual, expected = _show(kind, change.actual), _show(kind, change.expected)
+            actual, expected = show_value(kind, change.actual), show_value(kind, change.expected)
             message = f"{label}: {_NAMES[kind]} von außen geändert ({actual} statt {expected})."
             alarms.append(Alarm(f"{_ALARM_PREFIX}{actuator}", Severity.ERROR, message, change.at))
         return alarms
 
 
-def _show(kind: CommandKind, value: CommandValue) -> str:
-    """Der Wert im Alarmtext: Zahl mit Einheit, beim Netz-Sollwert ``None`` als „kein Override“."""
+def show_value(kind: CommandKind, value: CommandValue) -> str:
+    """Der Wert im Alarm- und Entscheidungstext: Zahl mit Einheit.
+
+    Beim Netz-Sollwert steht ``None`` für „kein Override“.
+    """
     if kind == CommandKind.GRID_SETPOINT and value is None:
         return _NO_OVERRIDE
     number = finite_number(value)

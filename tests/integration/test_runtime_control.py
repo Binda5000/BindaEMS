@@ -181,6 +181,7 @@ async def test_health_lists_actuators_and_watchdog(runtime_env) -> None:
         "capability_reasons": [],
         "pending": [],
         "owned": False,
+        "watchdog_needed": True,
     }
     assert health.watchdog == {
         "state": "unknown",
@@ -191,6 +192,7 @@ async def test_health_lists_actuators_and_watchdog(runtime_env) -> None:
         "expected_version": WATCHDOG_VERSION,
         "heartbeat": "off",
         "required": False,
+        "armed": False,
     }
     assert health.inputs == {"ok": True, "problems": []}
 
@@ -402,6 +404,7 @@ async def test_health_reports_intent_live_actuator_and_watchdog(runtime_env) -> 
         "capability_reasons": [],
         "pending": [],
         "owned": False,
+        "watchdog_needed": True,
     }
     assert health.watchdog == {
         "state": "armed",
@@ -412,7 +415,17 @@ async def test_health_reports_intent_live_actuator_and_watchdog(runtime_env) -> 
         "expected_version": WATCHDOG_VERSION,
         "heartbeat": "active",
         "required": True,
+        "armed": True,
     }
+
+
+async def test_health_names_armed_watchdog_and_watchdog_need(runtime_env) -> None:
+    rt, _, clock = runtime_env(state=GOOD_STATE)
+    run(rt, clock, 1)
+    report = rt.health()
+    assert report.watchdog["armed"] is False
+    needs = {a["id"]: a["watchdog_needed"] for a in report.actuators}
+    assert needs == {"victron": True, "wallbox.evcs": True, "vehicle.tesla": False}
 
 
 async def test_unarmed_watchdog_keeps_live_request_in_dry_run(runtime_env) -> None:
@@ -1045,6 +1058,56 @@ async def test_foreign_change_locks_the_evcs(runtime_env) -> None:
     run(rt, clock, 40)
     locked = {a["id"]: a["locked"] for a in rt.health().actuators}
     assert locked["wallbox.evcs"] == ["EVCS „evcs“: Strom von außen geändert (10 A statt 6 A)."]
+
+
+def evcs_safe_at_eight(cfg: Config) -> Config:
+    """EVCS live freigegeben, Sicherwert 8 A: Der sichere Zustand bestätigt 8 A (min_a ≤ safe_a)."""
+    cfg = allow_evcs_live(cfg)
+    evcs = cfg.wallboxes["evcs"].model_copy(update={"safe_a": 8})
+    return cfg.model_copy(update={"wallboxes": cfg.wallboxes | {"evcs": evcs}})
+
+
+async def test_foreign_change_is_logged_once(runtime_env) -> None:
+    plant = Plant(watchdog_state=1)
+    state = GOOD_STATE | {"wallbox.evcs.gx_set_current_a": 16, "wallbox.evcs.gx_start_stop": 1}
+    rt, _, clock = runtime_env(
+        state=state,
+        configure=evcs_safe_at_eight,
+        mqtt_write=plant.write,
+        before_cycle=plant.before_cycle,
+    )
+    plant.attach(rt.store)
+    rt.submit_intent(Intent(version=1, control=True, actuators={"wallbox.evcs": ActuatorMode.LIVE}))
+    messages = record_broadcast(rt)
+    run(rt, clock, 33)
+    state |= {"system.active_in_source": 240}
+    run(rt, clock, 3)  # SAFE: 8 A geschrieben und bestätigt, jetzt erwartet
+    assert ("evcharger/40/SetCurrent", 8) in plant.writes
+    state |= {"system.active_in_source": 1, "wallbox.evcs.gx_set_current_a": 10}
+    plant.follow = False
+    run(rt, clock, 40)  # Prüfungen alle 10 s: drei Treffer, dann besteht die Erkennung weiter
+
+    def foreign(decisions: list[Any]) -> list[Any]:
+        return [d for d in decisions if d.result == DecisionResult.FOREIGN]
+
+    found = foreign(rt.decisions(T0, 1000)[0])
+    assert len(found) == 1
+    change = found[0]
+    assert (change.actuator, change.kind, change.requested, change.applied) == (
+        "wallbox.evcs",
+        CommandKind.CURRENT,
+        8.0,
+        10.0,
+    )
+    assert (change.dry_run, change.outcome, change.codes) == (False, "none", ("foreign_change",))
+    assert change.text == (
+        "EVCS „evcs“ (Änderung von außen): Strom 10 A – von außen geändert: erwartet 8 A."
+    )
+    assert set(change.inputs) >= {"soc_pct", "battery_w", "grid_l1_a"}
+    streamed = [m["data"] for m in messages if m["type"] == "decision"]
+    assert [d["id"] for d in streamed if d["result"] == "foreign"] == [change.id]
+    run(rt, clock, 40)  # weiter 10 A: die Erwartung ist der neue Wert, keine zweite Entscheidung
+    assert [d.id for d in foreign(rt.decisions(T0, 1000)[0])] == [change.id]
 
 
 # Nur ein gesendeter Wert macht owned; ein Fehler kostet nur den Heartbeat seines Zyklus

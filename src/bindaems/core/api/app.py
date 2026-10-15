@@ -41,8 +41,10 @@ class HealthReport(BaseModel):
     - ``actuators``: je Aktor in Katalogreihenfolge angeforderte und wirksame Betriebsart, Freigabe,
       Gründe und Sperrgründe (``locked``); dazu, ob er steuerbar ist (``controllable``), die Gründe,
       warum nicht (``capability_reasons``), die Arten mit offenem Schreibvorgang (``pending``) und
-      ob er Werte des EMS halten kann, die bei der Übergabe zurückgesetzt werden (``owned``)
-    - ``watchdog``: Watchdog am Cerbo und Heartbeat (``watchdog_to_json``)
+      ob er Werte des EMS halten kann, die bei der Übergabe zurückgesetzt werden (``owned``), und ob
+      er nur bei scharfem Watchdog live gehen darf (``watchdog_needed``, Plan 2d)
+    - ``watchdog``: Watchdog am Cerbo und Heartbeat (``watchdog_to_json``), dazu ``armed``: scharf
+      für diesen core
     - ``inputs``: Ergebnis der Eingangsprüfung (Regel 7)
     - ``vehicles``: je Fahrzeug in der Reihenfolge von ``config.yaml`` der Stand der Laderegelung
       (``ChargeController.health``): Modus mit Boost bis, Wallbox und Zuordnung, Grenze des
@@ -135,13 +137,15 @@ def snapshot_to_json(snap: Snapshot, derived: Derived) -> dict[str, Any]:
 
 
 def watchdog_to_json(
-    watchdog: WatchdogStatus, heartbeat: HeartbeatPhase, *, required: bool
+    watchdog: WatchdogStatus, heartbeat: HeartbeatPhase, *, required: bool, armed: bool = False
 ) -> dict[str, Any]:
-    """Status des Watchdogs mit der erwarteten Version, dazu Heartbeat und ``required``.
+    """Status des Watchdogs mit der erwarteten Version, dazu Heartbeat, ``required`` und ``armed``.
 
     ``required`` heißt: Der Betrieb braucht den Watchdog. Das gilt, solange ein Victron- oder
     EVCS-Aktor mit ``live_allowed`` im Regelbetrieb live gewünscht ist oder übergeben wird (Plan 2b,
-    Präzisierung 2); ohne Regelbetrieb und ohne Übergabe nicht.
+    Präzisierung 2); ohne Regelbetrieb und ohne Übergabe nicht. ``armed`` heißt: Der Watchdog ist
+    für diesen core scharf (Plan 2d, Präzisierung 16); die Bedienung zeigt es als Bedingung der
+    Live-Schaltung.
     """
     last_trip = watchdog.last_trip
     return {
@@ -153,6 +157,7 @@ def watchdog_to_json(
         "expected_version": WATCHDOG_VERSION,
         "heartbeat": heartbeat,
         "required": required,
+        "armed": armed,
     }
 
 

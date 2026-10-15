@@ -84,7 +84,8 @@
           "controllable": true,
           "capability_reasons": [],
           "pending": [],
-          "owned": false
+          "owned": false,
+          "watchdog_needed": true
         },
         {
           "id": "wallbox.evcs",
@@ -97,7 +98,8 @@
           "controllable": true,
           "capability_reasons": [],
           "pending": [],
-          "owned": false
+          "owned": false,
+          "watchdog_needed": true
         },
         {
           "id": "vehicle.tesla",
@@ -115,7 +117,8 @@
             "Fahrzeug nicht angesteckt."
           ],
           "pending": [],
-          "owned": false
+          "owned": false,
+          "watchdog_needed": false
         }
       ],
       "watchdog": {
@@ -126,7 +129,8 @@
         "version": "1.1.0",
         "expected_version": "1.1.0",
         "heartbeat": "off",
-        "required": false
+        "required": false,
+        "armed": false
       },
       "inputs": {
         "ok": true,

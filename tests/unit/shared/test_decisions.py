@@ -7,6 +7,7 @@ from tests.helpers import T0
 
 from bindaems.shared.control import CommandKind
 from bindaems.shared.decisions import (
+    NO_VERDICT,
     Decision,
     DecisionResult,
     decision_from_json,
@@ -508,3 +509,42 @@ def test_text_shortens_a_long_invalid_value(value: Any) -> None:
     shown = repr(value)[:59] + "…"
     text = decision_text("V", CommandKind.MIN_SOC, value, DecisionResult.REJECTED)
     assert text == f"V: Min-SOC {shown} % – abgelehnt."
+
+
+# Fremde Änderung und Selbststart (Plan 2d, Texte)
+
+
+def test_foreign_change_text() -> None:
+    text = decision_text(
+        "EVCS „evcs“",
+        CommandKind.CURRENT,
+        10.0,
+        DecisionResult.FOREIGN,
+        detail="erwartet 8 A",
+        reasons=("foreign_change",),
+    )
+    assert (
+        text == "EVCS „evcs“ (Änderung von außen): Strom 10 A – von außen geändert: erwartet 8 A."
+    )
+
+
+def test_foreign_change_text_without_detail() -> None:
+    text = decision_text("EVCS „evcs“", CommandKind.CURRENT, 10.0, DecisionResult.FOREIGN)
+    assert text == "EVCS „evcs“: Strom 10 A – von außen geändert."
+
+
+def test_self_start_reason_text() -> None:
+    text = decision_text(
+        "Tesla Model 3",
+        CommandKind.CHARGING,
+        False,
+        DecisionResult.DRY_RUN,
+        reasons=("mode_off", "self_start"),
+    )
+    assert text == "Tesla Model 3 (Aus, Selbststart): Laden aus – Dry-Run, nicht gesendet."
+
+
+def test_foreign_decision_round_trips() -> None:
+    d = decision(result=DecisionResult.FOREIGN, outcome=NO_VERDICT)
+    assert NO_VERDICT == "none"
+    assert decision_from_json(decision_to_json(d)) == d

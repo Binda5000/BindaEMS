@@ -119,6 +119,7 @@ def test_health_report_defaults_keep_existing_calls_valid() -> None:
             "expected_version": WATCHDOG_VERSION,
             "heartbeat": "off",
             "required": False,
+            "armed": False,
         },
         "inputs": {"ok": True, "problems": []},
         "vehicles": [],

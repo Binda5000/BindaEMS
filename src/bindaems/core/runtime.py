@@ -54,6 +54,7 @@ from dataclasses import asdict, replace
 from datetime import datetime, timedelta
 from functools import partial
 from typing import Any, Final
+from uuid import uuid4
 
 import httpx
 import structlog
@@ -83,7 +84,12 @@ from bindaems.core.checks.values import number
 from bindaems.core.control.actuator import Actuator, Capabilities, matches
 from bindaems.core.control.context import decision_inputs, safety_context
 from bindaems.core.control.executor import CommandExecutor, WriteResult
-from bindaems.core.control.foreign import WATCHED_KINDS, ForeignChangeDetector
+from bindaems.core.control.foreign import (
+    WATCHED_KINDS,
+    ForeignChange,
+    ForeignChangeDetector,
+    show_value,
+)
 from bindaems.core.control.intent import INTENT_FILE_PROBLEM, IntentReply, IntentStore
 from bindaems.core.control.operating import (
     OperatingInputs,
@@ -141,7 +147,13 @@ from bindaems.shared.control import (
     Intent,
     OperatingState,
 )
-from bindaems.shared.decisions import Decision, DecisionResult, decision_to_json
+from bindaems.shared.decisions import (
+    NO_VERDICT,
+    Decision,
+    DecisionResult,
+    decision_text,
+    decision_to_json,
+)
 from bindaems.shared.domain import Alarm, Quality, Severity, SlotFlows, Snapshot
 from bindaems.shared.influx.lineprotocol import PointSink
 from bindaems.shared.influx.spool import DiskSpool
@@ -228,7 +240,42 @@ def _actuator_json(
         "capability_reasons": list(capabilities.reasons),
         "pending": [kind.value for kind in CommandKind if (spec.id, kind) in pending],
         "owned": spec.id in owned,
+        "watchdog_needed": spec.needs_watchdog,
     }
+
+
+def foreign_decision(
+    change: ForeignChange, label: str, inputs: Mapping[str, float | None], new_id: str
+) -> Decision:
+    """Die Entscheidung zu einer erkannten fremden Änderung (Plan 2d, Präzisierung 8).
+
+    ``requested`` ist der erwartete, ``applied`` der gefundene Wert; die Änderung ist kein Befehl
+    des EMS und hat kein Urteil der Safety-Schicht (``NO_VERDICT``), und sie ging nie als Dry-Run
+    hinaus. Der Text nennt den gefundenen Wert und, als Detail, den erwarteten. ``ts`` ist die
+    Zeit der Prüfung (``change.at``, auf der Uhr der Safety-Schicht); der Laufzeit-Zyklus setzt
+    dafür die Wanduhr, nach der alle Entscheidungen datiert sind.
+    """
+    return Decision(
+        id=new_id,
+        ts=change.at,
+        actuator=change.actuator,
+        kind=change.kind,
+        requested=change.expected,
+        applied=change.actual,
+        dry_run=False,
+        outcome=NO_VERDICT,
+        result=DecisionResult.FOREIGN,
+        codes=("foreign_change",),
+        text=decision_text(
+            label,
+            change.kind,
+            change.actual,
+            DecisionResult.FOREIGN,
+            detail=f"erwartet {show_value(change.kind, change.expected)}",
+            reasons=("foreign_change",),
+        ),
+        inputs=dict(inputs),
+    )
 
 
 def _tesla_not_charging(snap: Snapshot, spec: ActuatorSpec) -> bool:
@@ -577,7 +624,10 @@ class CoreRuntime:
                 for actuator, spec in self.limits.actuators.items()
             ],
             watchdog=watchdog_to_json(
-                self._watchdog, self.heartbeat.status, required=self._watchdog_required
+                self._watchdog,
+                self.heartbeat.status,
+                required=self._watchdog_required,
+                armed=self._watchdog_armed,
             ),
             inputs={"ok": self._input_status.ok, "problems": list(self._input_status.problems)},
             vehicles=regulation["vehicles"],
@@ -654,7 +704,11 @@ class CoreRuntime:
             self._competitor_alarms = detect_competitors(snap, self._cfg, now)
             self._selfcheck = run_selfcheck(snap, self._cfg, self.store.ok_since, now)
             self.selfcheck_runs += 1
-            self.foreign.check(present, self.executor.pending(), snow)
+            inputs = decision_inputs(snap, derived.phase_import_a)
+            for change in self.foreign.check(present, self.executor.pending(), snow):
+                label = self._labels.get(change.actuator, change.actuator)
+                found = foreign_decision(change, label, inputs, uuid4().hex)
+                self._decide(replace(found, ts=now))
         self._foreign_alarms = self.foreign.alarms(snow, self._labels)
         self._update_operation(snap, plausibility, now, present, checked=checked)
         self._control(snap, derived, flows, now, snow, present)
