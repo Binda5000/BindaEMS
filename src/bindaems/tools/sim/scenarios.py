@@ -28,24 +28,26 @@ Autos nacheinander laden; ``reserve`` hat 1 kW mehr Hauslast auf L1, damit das I
 Die Szenarien für Akku und Spitzen (Plan 2c-2a, Design 10.2) schalten Victron live. Abweichungen
 von der Tabelle des Plans 2c-2a, weil ihre Erwartung im Modell nicht zu schaffen ist:
 
-- In ``akku-minpv`` und ``spitze-15min`` steht der Tesla zu Beginn auf seinem Mindeststrom von
-  5 A (``TESLA_MIN_A``). Sonst lädt er nach dem Start 90 s mit 16 A: Der erste Befehl auf 5 A geht
-  über Tessie verloren, und der Neuversuch folgt im Abstand von ``current_interval_s`` (Plan 2c-1,
-  Design 7.2). In ``akku-minpv`` liefert der Akku dann bis zu 5,8 kW in die Autos, denn Regel 2
-  begrenzt den Override auf ``max_grid_charge_setpoint_w`` (8 kW). In ``spitze-15min`` fiel die
-  erste Drosselung in diese Zeit: Der Wächter drosselte den Tesla bis zum Mindeststrom und den
-  e-Golf um den Rest im selben Schritt (Präzisierung 11), und der Tesla folgte erst nach dem
-  Neuversuch; die Prüfung der Reihenfolge an den Strömen scheiterte, obwohl der Wächter in der
-  richtigen Reihenfolge drosselt. Seit dem Gesamtreview zählt der Wächter ``Basis + W`` nur bis
-  zur festen Grenze von Regel 2 und senkt im ersten Schritt nur den Tesla, um 300 W; der Aufbau
-  mit 5 A blieb. Mit dem Tesla am Mindeststrom (Min+PV ohne PV) ist die Prüfung trivial erfüllt;
-  die Reihenfolge der Drosselung sichern ``tests/unit/core/control/test_peak_throttle.py`` und
-  ``tests/property/test_peak_guard.py``.
+- In ``akku-minpv`` steht der Tesla zu Beginn auf seinem Mindeststrom von 5 A (``TESLA_MIN_A``).
+  Sonst lädt er nach dem Start 90 s mit 16 A: Der erste Befehl auf 5 A geht über Tessie verloren,
+  und der Neuversuch folgt im Abstand von ``current_interval_s`` (Plan 2c-1, Design 7.2). Der Akku
+  liefert dann bis zu 5,8 kW in die Autos, denn Regel 2 begrenzt den Override auf
+  ``max_grid_charge_setpoint_w`` (8 kW).
 - In ``schieflast-pv`` kommt die schwere Last auf L1 erst nach 10 min dazu (``UNBALANCED_FROM_S``),
   wenn der e-Golf schon lädt. Von Anfang an startete er nie: Der Phasenwächter zählt die
   Ladeleistung des Akkus zur Last der Phase (Plan 2c-1, Design 5.1) und lässt auf L1 nur etwa 3 A
   frei, weniger als den Mindeststrom. Lädt der e-Golf, lädt der Akku auf jeder Phase je Ampere des
   e-Golf 2/3 A weniger, und das Importziel bindet ihn zwischen Mindest- und Höchststrom.
+
+``spitze-15min`` startet den Tesla wie im Plan mit 16 A. Die Prüfung der Reihenfolge belegt dort
+trotzdem wenig: In der ersten Viertelstunde senkt der Wächter den Tesla in Min+PV um rund 270 W
+(seine Grenze bindet nicht, denn ohne PV geht er ohnehin auf 5 A), danach deckt die gemerkte
+Senkung das Band unter der festen Grenze von Regel 2 (Plan 2c-2a, Präzisierung 10). Den e-Golf in
+Sofort drosselt er erst ab 18:15, wenn der Tesla mit 5 A lädt. Auch ein Wächter, der Sofort vor
+Min+PV drosselte, bestünde die Prüfung: Seine Senkung des e-Golf um 1 A fiele um 18:00 mit der des
+Phasenwächters zusammen, und die Entscheidung nennte ``phase_limit``, nicht ``peak_guard``. Die
+Reihenfolge der Drosselung sichern ``tests/unit/core/control/test_peak_throttle.py`` und
+``tests/property/test_peak_guard.py``.
 """
 
 from __future__ import annotations
@@ -137,7 +139,7 @@ EVCS_OFF_S: Final = 41 * MINUTE_S  # … und ab hier lädt die EVCS nicht mehr
 # Szenarien für Akku und Spitzen (Plan 2c-2a, Design 10.2)
 SETTLED_S: Final = 2 * MINUTE_S  # ab hier prüfen „akku-sofort“, „boost-abend“, „override-stunde“
 CAR_FROM_BATTERY_PCT: Final = 5.0  # „akku-wolkig“: so viel der Energie des e-Golf aus dem Akku
-TESLA_MIN_A: Final = 5  # „akku-minpv“, „spitze-15min“: Strom im Tesla zu Beginn (Mindeststrom)
+TESLA_MIN_A: Final = 5  # „akku-minpv“: Strom im Tesla zu Beginn (Mindeststrom)
 # „akku-minpv“: Akku in die Autos höchstens SUPPORT_W von SUPPORT_FROM_S bis SUPPORT_UNTIL_S nach
 # dem ersten Laden (die Unterstützung endet nach support_max_s, 900 s), ab GRID_ONLY_S danach
 # höchstens GRID_ONLY_W. SUPPORT_W ist support_max_w (3000 W) plus das Totband des Overrides
@@ -1418,9 +1420,8 @@ def _spitze_15min() -> Scenario:
     Modi, der Akku überbrückt den Rest; Boost drosselt er nie. Der Lauf beginnt ``PEAK_LEAD_S``
     vor 18:00: Nach dem Start beobachtet der core rund 60 s und regelt so ab der Viertelstunde um
     18:00; die angebrochene davor ist lückenhaft. Von 18:45 an lädt der e-Golf in Boost, darum
-    prüft der Lauf die Viertelstunde ab 18:45 nicht. Der Tesla steht zu Beginn auf 5 A
-    (Abweichung, Docstring des Moduls); damit ist die Prüfung der Reihenfolge trivial erfüllt, denn
-    ohne PV lädt er in Min+PV immer mit seinem Mindeststrom."""
+    prüft der Lauf die Viertelstunde ab 18:45 nicht. Der Tesla startet mit 16 A; was die Prüfung
+    der Reihenfolge damit belegt, steht im Docstring des Moduls."""
     start, duration_s, seed = EVENING - timedelta(seconds=PEAK_LEAD_S), 75 * MINUTE_S, 17
     boost = _Boost(2, EGOLF, start + timedelta(seconds=duration_s))
     return Scenario(
@@ -1429,7 +1430,7 @@ def _spitze_15min() -> Scenario:
         start=start,
         duration_s=duration_s,
         seed=seed,
-        setup=partial(_setup, soc_pct=60.0, tesla_amps=TESLA_MIN_A),
+        setup=partial(_setup, soc_pct=60.0),
         intent=_intent(tesla=ChargeMode.MIN_PV, egolf=ChargeMode.NOW),
         live=True,
         events=(*_weather(start, duration_s, seed), (PEAK_BOOST_S, boost)),

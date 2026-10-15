@@ -176,7 +176,7 @@ def test_the_cars_modes_and_battery_of_the_setups(cfg) -> None:
         "akku-sofort": (60.0, "twc", "evcs", 16, False, {"tesla": now, "egolf": now}),
         "override-stunde": (50.0, None, "evcs", 16, False, {"egolf": now}),
         "dess-an": (60.0, None, "evcs", 16, True, {"egolf": now}),
-        "spitze-15min": (60.0, "twc", "evcs", 5, False, {"tesla": min_pv, "egolf": now}),
+        "spitze-15min": (60.0, "twc", "evcs", 16, False, {"tesla": min_pv, "egolf": now}),
         "schieflast-pv": (60.0, None, "evcs", 16, False, {"egolf": pv}),
     }
     for name, (soc, tesla, egolf, amps, dess, modes) in table.items():
