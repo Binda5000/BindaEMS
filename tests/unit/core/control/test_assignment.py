@@ -749,3 +749,57 @@ def test_an_overridden_vehicle_is_never_detected_elsewhere(cfg) -> None:  # Desi
         ("guest@twc", AssignmentKind.DEFAULT),
         ("guest@twc", AssignmentKind.DETECTED),
     ]
+
+
+# Bindung des Boost an den Vorgang, an dem das Fahrzeug steht
+
+
+def test_a_boost_binds_to_the_session_where_the_vehicle_stands(cfg) -> None:
+    # Der Tesla ist an der EVCS erkannt: Ein Boost gilt dort und endet mit dem Abstecken, statt
+    # beim nächsten Anstecken am Wall Connector anzuspringen.
+    a = Assignment(cfg, started=T0)
+    for s in range(61):
+        update(a, s, **PICTURE)
+    until = T0 + timedelta(hours=2)
+    boost = Intent(version=1, control=True, vehicles={"tesla": VehicleIntent(boost_until=until)})
+    there = update(a, 61, intent=boost, **PICTURE).vehicles["tesla"]
+    assert (there.wallbox, there.kind, there.boost_until) == (
+        "evcs",
+        AssignmentKind.DETECTED,
+        until,
+    )
+    gone = update(a, 62, evcs_obs=evcs(connected=False), intent=boost, **PICTURE)
+    assert gone.vehicles["tesla"].boost_until is None
+    # später am Wall Connector angesteckt, Tessie: zu Hause und angesteckt
+    home = {"twc_obs": twc(connected=True), "tesla_obs": tesla(plugged=True, at_home=True)}
+    later = update(a, 63, evcs_obs=evcs(connected=False), intent=boost, **home).vehicles["tesla"]
+    assert (later.wallbox, later.boost_until) == ("twc", None)
+
+
+def test_a_boost_without_a_session_waits_for_the_default_wallbox_as_before(cfg) -> None:
+    # Der e-Golf steht an keiner Wallbox mit Vorgang: Sein Boost bindet wie bisher an den nächsten
+    # Vorgang seiner Standard-Wallbox.
+    a = Assignment(cfg, started=T0)
+    unplugged = {"evcs_obs": evcs(connected=False)}
+    update(a, 0, **unplugged)
+    intent = boosted(1, T0 + timedelta(hours=2))
+    assert update(a, 1, intent=intent, **unplugged).vehicles["egolf"].boost_until is None
+    assert update(a, 2, intent=intent).vehicles["egolf"].boost_until == T0 + timedelta(hours=2)
+
+
+def test_an_override_still_binds_to_its_own_wallbox(cfg) -> None:
+    # Der Tesla ist an der EVCS erkannt und wird an den Wall Connector übersteuert, an dem noch kein
+    # Fahrzeug steht: Die Übersteuerung wartet auf den nächsten Vorgang dort.
+    a = Assignment(cfg, started=T0)
+    for s in range(61):
+        update(a, s, **PICTURE)
+    to_twc = Intent(version=1, control=True, vehicles={"tesla": VehicleIntent(wallbox="twc")})
+    waiting = update(a, 61, intent=to_twc, **PICTURE).vehicles["tesla"]
+    assert (waiting.wallbox, waiting.kind) == ("evcs", AssignmentKind.DETECTED)
+    update(a, 62, evcs_obs=evcs(connected=False), intent=to_twc, **PICTURE)
+    plugged = {"twc_obs": twc(connected=True), "tesla_obs": tesla(plugged=True)}
+    moved = update(a, 63, evcs_obs=evcs(connected=False), intent=to_twc, **plugged)
+    assert (moved.vehicles["tesla"].wallbox, moved.vehicles["tesla"].kind) == (
+        "twc",
+        AssignmentKind.OVERRIDE,
+    )

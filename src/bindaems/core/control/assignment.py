@@ -6,9 +6,11 @@
 
 Die Autos sind die Fahrzeuge der Konfiguration und je Wallbox ein Gast (``fleet``). Die Zuordnung
 zählt die Ansteckvorgänge je Wallbox (Präzisierung 3) samt dem Beginn des laufenden auf der Wanduhr
-(Plan 2c-2b, Präzisierung 9) und bindet Boost und Übersteuerung daran (Design 3.1, 8). Wer an einer
-Wallbox mit Vorgang steht, entscheidet die Erkennung (``Detector``) aus den Indizien. Solange die
-Zuordnung klar ist, steht je Zyklus (Plan 2c-2b, Präzisierung 5):
+(Plan 2c-2b, Präzisierung 9) und bindet Boost und Übersteuerung daran (Design 3.1, 8): eine
+Übersteuerung an den Vorgang ihrer Wallbox, einen Boost ohne Übersteuerung an den, an dem das
+Fahrzeug steht, und steht es an keinem, an den seiner Standard-Wallbox. Wer an einer Wallbox mit
+Vorgang steht, entscheidet die Erkennung (``Detector``) aus den Indizien. Solange die Zuordnung klar
+ist, steht je Zyklus (Plan 2c-2b, Präzisierung 5):
 
 1. jede Übersteuerung an ihrer Wallbox (``OVERRIDE``)
 2. an jeder Wallbox mit Vorgang, in der Reihenfolge von ``config.yaml``, das dort erkannte
@@ -32,7 +34,7 @@ hält „geladen“ bis zum Ende des Vorgangs. Je Wallbox nennt sie, wer dort st
 Die Absicht wird beim Laden nicht gegen ``config.yaml`` geprüft und kann aus einem Lauf mit anderer
 Konfiguration stammen: Ein Eintrag für ein Fahrzeug, das die Konfiguration nicht kennt, und eine
 Übersteuerung auf eine Wallbox, die sie nicht kennt, zählen nicht. Der ``boost_until`` desselben
-Eintrags gilt weiter, an der Standard-Wallbox.
+Eintrags gilt weiter wie ohne Übersteuerung.
 
 Präzisierungen und Design ohne Angabe des Plans sind die von Plan 2c-1. Die Schicht ist rein: Die
 Zeit kommt als Argument und steigt von Aufruf zu Aufruf.
@@ -206,10 +208,10 @@ class _Binding:
 class Assignment:
     """Der Zustand der Zuordnung: Ansteckvorgänge, Bindungen, Erkennung, „geladen“ und „unklar“.
 
-    Der Zustand lebt nur im Speicher, auch der der Erkennung und wer im vorigen Aufruf an jeder
-    Wallbox stand (für ``VehicleState.fresh``). ``started`` ist die Wanduhr beim Start der
-    Regelung: Eine Absicht, die davor angenommen wurde, stammt aus einem früheren Lauf. Nicht für
-    mehrere Threads gedacht.
+    Der Zustand lebt nur im Speicher, auch der der Erkennung, wer im vorigen Aufruf an jeder
+    Wallbox stand (für ``VehicleState.fresh``) und an welchem Vorgang jedes Fahrzeug stand (für
+    ``_bind``). ``started`` ist die Wanduhr beim Start der Regelung: Eine Absicht, die davor
+    angenommen wurde, stammt aus einem früheren Lauf. Nicht für mehrere Threads gedacht.
     """
 
     def __init__(self, cfg: Config, *, started: datetime) -> None:
@@ -225,6 +227,8 @@ class Assignment:
         self._bindings: dict[str, _Binding] = {}
         self._charged: dict[str, tuple[str, int]] = {}  # Auto → (Wallbox, Vorgang), „geladen“
         self._occupants: dict[str, str | None] = {}  # Wallbox → wer im vorigen Aufruf dort stand
+        # Fahrzeug → der laufende Vorgang, an dem es im vorigen Aufruf stand; fehlt ohne einen
+        self._standing: dict[str, _Binding] = {}
         self._unclear = False
         self._contradiction_since: datetime | None = None
         self._calm_since: datetime | None = None
@@ -252,8 +256,10 @@ class Assignment:
            Fahrzeug“ zu „Fahrzeug“, und nur dann ist sein Beginn bekannt. „Kein Fahrzeug“ beendet
            ihn, ein unbekannter Wert ändert nichts.
         2. Bindungen: Bei einer Version, die der Zuordnung neu ist, bindet sie Boost und
-           Übersteuerung jedes Fahrzeugs an den Vorgang seiner Wallbox, den laufenden oder den
-           nächsten (``_bind``). Eine Bindung endet mit ihrem Vorgang.
+           Übersteuerung jedes Fahrzeugs an einen Vorgang (``_bind``): eine Übersteuerung an den
+           ihrer Wallbox, den laufenden oder den nächsten; einen Boost ohne Übersteuerung an den,
+           an dem das Fahrzeug im vorigen Aufruf stand, und stand es an keinem, an den seiner
+           Standard-Wallbox, den laufenden oder den nächsten. Eine Bindung endet mit ihrem Vorgang.
         3. Übersteuerungen: die gültigen, deren Vorgang läuft (``_active_overrides``).
         4. Erkennung (``Detector.update``) mit jedem laufenden Vorgang und seinem Beginn, auch bei
            unbekanntem Wert der Wallbox, und mit den Übersteuerungen als ``placed``.
@@ -279,6 +285,11 @@ class Assignment:
         )
         unclear = self._track_unclear(now, overrides, detection.contradiction)
         places = self._place(overrides, sessions, detection, unclear)
+        self._standing = {  # für ``_bind`` im nächsten Aufruf
+            key: _Binding(wallbox, self._ports[wallbox].count)
+            for key, (wallbox, _) in places.items()
+            if wallbox is not None and wallbox in sessions and key in self._cfg.vehicles
+        }
         walls = {
             key: self._wallbox_state(key, places, sessions, detection)
             for key in self._cfg.wallboxes
@@ -300,12 +311,18 @@ class Assignment:
     def _bind(self, intent: Intent, accepted_at: datetime | None) -> None:
         """Bindet Boost und Übersteuerung einer neuen Version an Ansteckvorgänge (Präzisierung 3).
 
-        Das gilt für jedes Fahrzeug mit ``boost_until`` oder gültiger Übersteuerung, an die Wallbox
-        der Übersteuerung, sonst an die Standard-Wallbox: an den laufenden Vorgang, wenn sie ein
-        Fahrzeug meldet, sonst an den nächsten. Eine Absicht, die vor dem Start der Regelung
-        angenommen wurde oder deren Annahmezeit unbekannt ist, bindet nur an den laufenden: Ein
-        Boost vom Vortag springt nicht beim nächsten Anstecken an. Bindungen früherer Versionen
-        entfallen; die neue Version setzt sie, wo sie noch gelten sollen.
+        Das gilt für jedes Fahrzeug mit ``boost_until`` oder gültiger Übersteuerung. Ohne
+        Übersteuerung bindet der Boost an den Vorgang, an dem das Fahrzeug im vorigen Aufruf stand:
+        erkannt, angenommen oder an seiner Standard-Wallbox mit laufendem Vorgang. So gilt der Boost
+        für den Tesla, der an der EVCS erkannt ist, dort und springt nicht beim nächsten Anstecken
+        am Wall Connector an. Die Zuordnung dieses Aufrufs steht beim Binden noch nicht fest.
+
+        Sonst gilt die Wallbox der Übersteuerung, ohne Übersteuerung die Standard-Wallbox: Die
+        Bindung geht an ihren laufenden Vorgang, wenn sie ein Fahrzeug meldet, sonst an den
+        nächsten. Eine Absicht, die vor dem Start der Regelung angenommen wurde oder deren
+        Annahmezeit unbekannt ist, bindet nur an einen laufenden Vorgang: Ein Boost vom Vortag
+        springt nicht beim nächsten Anstecken an. Bindungen früherer Versionen entfallen; die neue
+        Version setzt sie, wo sie noch gelten sollen.
         """
         restored = accepted_at is None or accepted_at < self._started
         self._bindings.clear()
@@ -313,6 +330,9 @@ class Assignment:
             entry = intent.vehicles.get(key)
             override = self._override_wallbox(entry)
             if entry is None or (entry.boost_until is None and override is None):
+                continue
+            if override is None and key in self._standing:
+                self._bindings[key] = self._standing[key]  # lief im vorigen Aufruf
                 continue
             wallbox = override if override is not None else vehicle.default_wallbox
             port = self._ports[wallbox]
