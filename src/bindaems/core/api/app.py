@@ -60,11 +60,12 @@ class HealthReport(BaseModel):
       ``quarter_end`` (das Ende der Viertelstunde, ISO in UTC); was fehlt, ist ``null``
     - ``wallboxes``: je Wallbox in der Reihenfolge von ``config.yaml``, wer dort steht
       (``ChargeController.wallbox_health``, Plan 2c-2b): ``id``, ``occupant`` (der Schlüssel des
-      Fahrzeugs, ``guest`` oder ``null`` ohne Vorgang), ``name`` (der Name des Fahrzeugs, ``Gast``
-      oder ``null``), ``assignment`` (``detected``, ``default`` für angenommen, ``override``,
-      ``unclear`` oder ``null``) und ``indicators`` (die Indizien des letzten Zyklus, je
-      ``vehicle``, ``clue`` und ``supports``); vor dem ersten Zyklus und nach einer Pause der
-      Regelung steht niemand dort
+      Fahrzeugs, ``guest`` oder ``null``: ohne Vorgang, und auch während eines Vorgangs, solange
+      die Zuordnung unklar ist und dort kein Fahrzeug der Konfiguration steht), ``name`` (der Name
+      des Fahrzeugs, ``Gast`` oder ``null``), ``assignment`` (``detected``, ``default`` für
+      angenommen, ``override``, ``unclear`` oder ``null``) und ``indicators`` (die Indizien des
+      letzten Zyklus, je ``vehicle``, ``clue`` und ``supports``); vor dem ersten Zyklus und nach
+      einer Pause der Regelung steht niemand dort
     """
 
     mode: Literal["START", "OBSERVE", "CONTROL", "DEGRADED", "SAFE"]

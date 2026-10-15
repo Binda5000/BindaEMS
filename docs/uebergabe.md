@@ -9,11 +9,11 @@ die kleinen Nacharbeiten aus dem Gesamtreview dazugekommen; beides ist per Fast-
 14.10.2026 freigegeben (`docs/superpowers/specs/2026-10-14-phase-2c2-akku-spitzen-design.md`).
 **Plan 2c-2a (Akku und Spitzen) ist umgesetzt, je Task und im Gesamtreview geprüft, und die
 Fix-Welle danach ist umgesetzt** (`docs/superpowers/plans/2026-10-14-phase-2c2a-akku-spitzen.md`).
-**Plan 2c-2b (Zuordnungserkennung) ist umgesetzt und je Task geprüft; der Gesamtreview steht aus**
-(`docs/superpowers/plans/2026-10-15-phase-2c2b-zuordnung.md`). Beide Pläne liegen auf dem Branch
-`ccr-9778345e-t3x44k`; die Integration nach `main` steht aus. Als Nächstes folgt Plan 2d (Bedienung
-in UI und HA), an der Anlage danach die Inbetriebnahme Punkt 3 (Design 2c-2, 11.1): Die Erkennung
-läuft im Dry-Run mit, und Health zeigt, wer wo steht.
+**Plan 2c-2b (Zuordnungserkennung) ist umgesetzt, je Task und im Gesamtreview geprüft, und die
+Fix-Welle danach ist umgesetzt** (`docs/superpowers/plans/2026-10-15-phase-2c2b-zuordnung.md`).
+Beide Pläne liegen auf dem Branch `ccr-9778345e-t3x44k`; die Integration nach `main` steht aus. Als
+Nächstes folgt Plan 2d (Bedienung in UI und HA), an der Anlage danach die Inbetriebnahme Punkt 3
+(Design 2c-2, 11.1): Die Erkennung läuft im Dry-Run mit, und Health zeigt, wer wo steht.
 `main` ist seit dem 12.10.2026 auch der Standard-Branch auf GitHub.
 
 ## Kurzfassung
@@ -154,10 +154,10 @@ läuft im Dry-Run mit, und Health zeigt, wer wo steht.
     „Bewusst offen gelassen“.
   - **Noch nicht (Stand nach 2c-2a):** die volle Zuordnungserkennung (kam mit 2c-2b), die Bedienung
     (2d) und die Planausführung (Phase 3). Live ist weiterhin kein Aktor.
-- **Phase 2c-2b (Zuordnungserkennung) ist umgesetzt und je Task geprüft** (Plan:
+- **Phase 2c-2b (Zuordnungserkennung) ist umgesetzt, je Task und im Gesamtreview geprüft** (Plan:
   `docs/superpowers/plans/2026-10-15-phase-2c2b-zuordnung.md`, Design:
   `docs/superpowers/specs/2026-10-14-phase-2c2-akku-spitzen-design.md`, Abschnitt 7, 9 Tasks;
-  Ausführung subagent-driven; der Gesamtreview steht aus):
+  Ausführung subagent-driven):
   - **Erkennung** (rein, in `core/control`): `clues.py` wertet je Wallbox mit Ansteckvorgang und je
     Fahrzeug sechs Indizien aus (Tessie, Stromvergleich, zeitliche Korrelation, Phasen-Signatur, Home
     Assistant, Ausschluss), `detection.py` entscheidet daraus (Kandidat, erkannt, Gast, Widerspruch,
@@ -186,6 +186,18 @@ läuft im Dry-Run mit, und Health zeigt, wer wo steht.
     ohne Übersteuerung bindet an den Vorgang, an dem das Fahrzeug steht (Kopf des Designs 2c-2; Absatz
     „Stand Plan 2c-2b“ der Spec, 7.8). Die Rulings und die offenen Punkte stehen unter „Bewusst offen
     gelassen“.
+  - **Gesamtreview und Fix-Welle:** Der Gesamtreview („mit Korrekturen“, keine kritischen Befunde)
+    fand zwei wichtige Lücken: Ein Tesla, der den Wall Connector verließ, galt mit Tessies
+    veraltetem „angesteckt“ an der EVCS als erkannt und bekam `max_a`, und der Stromvergleich konnte
+    den Tesla an seinem eigenen Wall Connector ausschließen (dann „Gast“, danach „unklar“). Seit der
+    Fix-Welle stützen Tessie und Ausschluss nach dem Ende eines Vorgangs erst mit einem Wert, der
+    mindestens 60 s danach abgefragt wurde; der Stromvergleich wertet eine Phasenzahl von Tessie,
+    die nicht zur Konfiguration passt, als unbekannt, und „passt nicht“ zählt erst mit einem Wert,
+    der mindestens 60 s nach der letzten Stromänderung der Wallbox abgefragt wurde; nach einer Pause
+    der Regelung von mehr als 60 s beginnen die 60 s der Erkennung neu; die Konfiguration lehnt
+    Fahrzeug-Schlüssel `guest` und `guest@…` ab. Dazu kamen drei Prüfungen im Dry-Run, die vor der
+    Live-Schaltung von EVCS und Tesla bestanden sein müssen (Betriebshandbuch, „Hinweise für die
+    Anlage“).
   - **Noch nicht:** die Bedienung in UI und HA, auch die Auswahl des Gast-Modus (2d), und die
     Planausführung (Phase 3). Live ist weiterhin kein Aktor.
 - **Images:** `ghcr.io/binda5000/bindaems-core:latest` und `ghcr.io/binda5000/bindaems-app:latest`.
@@ -193,15 +205,15 @@ läuft im Dry-Run mit, und Health zeigt, wer wo steht.
   immer gemeinsam aus demselben Stand ausgerollt (gleiche Compose-Datei, gleiche Image-Tags): Die
   UI-Schemas sind streng, eine abweichende Version zeigt auf der System-Seite nur „Unerwartete
   Antwort vom Server“.
-- **Tests:** 5388 Python-Tests, davon 33 Property-Tests mit Hypothesis (6 für die Safety-Schicht,
+- **Tests:** 5424 Python-Tests, davon 33 Property-Tests mit Hypothesis (6 für die Safety-Schicht,
   6 für den Phasenwächter, 12 für den Akku-Sollwert, 6 für den 15-min-Wächter, 3 sonstige), und
   233 UI-Tests; Abdeckung 97 % insgesamt und 99 % für `core/safety`, `core/control` und
-  `core/actuators` (Stand nach Plan 2c-2b).
+  `core/actuators` (Stand nach der Fix-Welle von Plan 2c-2b).
   Geprüft wird mit ruff, mypy strict (auch für den Watchdog), import-linter (4 Verträge), pytest
   mit Abdeckungsgrenzen (≥ 75 % insgesamt, ≥ 90 % für `core/safety`, `core/control` und
   `core/actuators`), Vitest mit svelte-check, Prettier und ESLint; dazu E2E mit Playwright.
 - **Offen:**
-  - der Gesamtreview von Plan 2c-2b und die Integration der Pläne 2c-2a und 2c-2b nach `main`
+  - die Integration der Pläne 2c-2a und 2c-2b nach `main`
   - Plan 2d (Bedienung in UI und HA) nach der Spec schreiben, vom Betreiber durchsehen lassen und
     umsetzen (siehe „Nächster Schritt“)
   - an der Anlage: Images ausrollen, Dry-Run neben evcc beginnen und dabei die Inbetriebnahme Punkt 3
@@ -589,12 +601,21 @@ Demo-Zugänge: `admin`, `gast` (Lesen) und `sicher` (Admin mit TOTP, Geheimnis
        Fix-Welle steht das als „zurückgestellt“ im Log.
      - **An der Anlage im Dry-Run prüfen:** welcher EVCS-Status bei angestecktem Auto auf
        „Laden aus“ (`StartStop` = 0) folgt (ist es 3, bliebe ein Auto in PV nach dem ersten Stopp
-       auf „geladen“ stehen, bis es abgesteckt wird); was Tessie für `charger_phases` meldet; ob
-       „unklar“ fälschlich erscheint, wenn der Tesla den Wall Connector verlässt, während der e-Golf
-       an der EVCS hängt (Tessie meldet `plugged` bis zu 60 s veraltet; die Indizien stehen in
-       Health unter `wallboxes`); wie oft die EVCS bei ruhiger Sonne ihren Strom ändert (deutlich über
-       10 Entscheidungen je Stunde heißt: Das Rauschen an der Anlage ist größer als die Hysterese,
-       `control.evcs_hysteresis_a` anheben).
+       auf „geladen“ stehen, bis es abgesteckt wird); welche Phasenzahl Tessie (`charger_phases`)
+       meldet, während der Tesla dreiphasig lädt (weicht sie von `vehicles.tesla.phases` ab, gibt es
+       für ihn keinen Stromvergleich); wie oft die EVCS bei ruhiger Sonne ihren Strom ändert
+       (deutlich über 10 Entscheidungen je Stunde heißt: Das Rauschen an der Anlage ist größer als
+       die Hysterese, `control.evcs_hysteresis_a` anheben).
+     - **Vor der Live-Schaltung von EVCS und Tesla im Dry-Run bestanden** (Betriebshandbuch,
+       „Hinweise für die Anlage“; die Indizien stehen in Health unter `wallboxes`):
+       - Verlässt der Tesla den Wall Connector, während der e-Golf an der EVCS steckt und nicht
+         lädt, bleibt die EVCS „e-Golf, angenommen“, der Tesla wird dort nicht erkannt, und nach
+         ≤ 60 s schließt Tessie ihn aus (Tessie meldet `plugged` bis zu 60 s veraltet).
+       - Lädt der Tesla am Wall Connector und ändert die Regelung seinen Strom, erscheint er dort
+         nie als Gast und die Zuordnung nie als unklar, und `current` schließt ihn dort nie aus.
+       - Ein Gast an der EVCS bleibt nach Stromänderungen erkannt und wechselt nicht zum e-Golf: Der
+         core leitet die Phasenzahl der EVCS aus Leistung und Strom ab, die nicht gleichzeitig
+         gemessen werden, und ein abweichender Zyklus startet die 60 s der Phasen-Signatur neu.
      - **Inbetriebnahme Punkt 3** (Design 2c-2, 11.1; Betriebshandbuch, „Zuordnung Auto und Wallbox“,
        „Inbetriebnahme“): Die Erkennung läuft im Dry-Run mit, und `GET /v1/health` zeigt unter
        `wallboxes`, wer wo steht (dafür muss der core regeln: Regelbetrieb an, sonst ruht die
@@ -782,9 +803,10 @@ Demo-Zugänge: `admin`, `gast` (Lesen) und `sicher` (Admin mit TOTP, Geheimnis
    der Anlage“.
 2. An der Anlage die Schritte aus „Offen an der Anlage“.
 3. Plan 2c-2a ist umgesetzt und im Gesamtreview geprüft, die Fix-Welle danach ist umgesetzt
-   (`docs/superpowers/plans/2026-10-14-phase-2c2a-akku-spitzen.md`). Plan 2c-2b ist umgesetzt und je
-   Task geprüft (`docs/superpowers/plans/2026-10-15-phase-2c2b-zuordnung.md`); sein Gesamtreview
-   steht aus. Es folgt, mit Zustimmung des Betreibers, die Integration beider Pläne nach `main`.
+   (`docs/superpowers/plans/2026-10-14-phase-2c2a-akku-spitzen.md`). Plan 2c-2b ist umgesetzt, je
+   Task und im Gesamtreview geprüft, und die Fix-Welle danach ist umgesetzt
+   (`docs/superpowers/plans/2026-10-15-phase-2c2b-zuordnung.md`). Es folgt, mit Zustimmung des
+   Betreibers, die Integration beider Pläne nach `main`.
 4. **Plan 2d** (Bedienung in UI und HA) nach der Spec (5.3, 8.7, 12 und 13) schreiben, vom Betreiber
    durchsehen lassen und umsetzen. Dazu gehören die Auswahl des Gast-Modus (`guest.mode`, bisher nur
    per `PUT /v1/intent`; Plan 2c-2b, Präzisierung 1), die Anzeige von Health je Wallbox
@@ -1223,26 +1245,71 @@ im Absatz „Stand Plan 2c-2b“ der Spec (7.8). Hier die Entscheidungen mit Kos
   Zusammen mit der Phasen-Signatur erkannten Tessie und Home Assistant sonst einen dreiphasigen Gast
   an der EVCS als den Tesla, der nicht ladend am Wall Connector steckt (der Wall Connector zeigte
   „Gast, angenommen“), und einen zweiphasigen Gast am Wall Connector als den e-Golf, der „geladen“ an
-  der EVCS steckt. Die Elimination ersetzt eine Zwischenregel („nur bei genau einem Vorgang“, Commits
-  `db9e8a2` und `1c1795c`), die den e-Golf bei zwei Vorgängen nie erkannt hätte, auch nicht im
-  Kernfall e-Golf zweiphasig am Wall Connector, Tesla dreiphasig an der EVCS; dort sind jetzt beide
-  erkannt. Falls falsch: Kommt ein zweiter Vorgang hinzu, fällt eine Erkennung, die auf Tessie oder
-  Home Assistant beruht, auf „angenommen“ zurück, bis die andere Wallbox das Fahrzeug ausschließt
-  (60 s Laden dort) und es 60 s Kandidat war, und so lange, wie dort nichts lädt. Die Abweichung beim
-  Widerspruch (Präzisierung 4) greift seitdem nur noch, wenn die zeitliche Korrelation an der anderen
-  Wallbox stützt.
+  der EVCS steckt. Im Kernfall, e-Golf zweiphasig am Wall Connector und Tesla dreiphasig an der
+  EVCS, sind beide erkannt. Für die Elimination zählen nur Strom und Phasen; eine Übersteuerung des
+  Fahrzeugs an die andere Wallbox zählt nicht (nach dem Gesamtreview entschieden). Falls falsch:
+  Kommt ein zweiter Vorgang hinzu, fällt eine Erkennung, die auf Tessie oder Home Assistant beruht,
+  auf „angenommen“ zurück, bis die andere Wallbox das Fahrzeug ausschließt (60 s Laden dort) und es
+  60 s Kandidat war, und so lange, wie dort nichts lädt. Die Abweichung beim Widerspruch
+  (Präzisierung 4) greift seitdem nur noch, wenn die zeitliche Korrelation an der anderen Wallbox
+  stützt.
+- **Tessie nach dem Ende eines Vorgangs** (nach dem Gesamtreview): Endet an einer Wallbox ein
+  Vorgang (sie meldet kein Fahrzeug mehr, oder an ihr beginnt ein neuer), stützen Tessie und
+  Ausschluss ein Fahrzeug an einer anderen Wallbox erst wieder mit einem Wert, dessen Abfrage
+  (`plugged_at`) mindestens 60 s nach diesem Ende lag; ohne `plugged_at` nicht mehr. Ausschlüsse
+  durch Tessie gelten sofort; Stromvergleich, zeitliche Korrelation und Home Assistant bleiben.
+  Sonst galt der Tesla, der den Wall Connector verlässt, mit Tessies veraltetem „angesteckt“ an der
+  EVCS als erkannt, an der der e-Golf ohne zu laden steckt: Er bekam `max_a`, und die EVCS lud kurz
+  im Modus des Tesla. Falls falsch: Eine Erkennung, die auf Tessie und Ausschluss beruht, kommt nach
+  dem Ende eines Vorgangs an der anderen Wallbox erst 60 s nach der ersten Abfrage, die mindestens
+  60 s nach dem Ende liegt; bis dahin bleibt das Fahrzeug angenommen.
+- **Stromvergleich** (nach dem Gesamtreview): Meldet Tessie eine andere Phasenzahl als
+  `vehicles.<name>.phases`, sagt er nichts (unplausibel, also unbekannt). „Passt nicht“ zählt an
+  einer Wallbox erst mit einem Wert, dessen Abfrage mindestens 60 s nach der letzten Änderung der
+  Ströme dieser Wallbox lag; erst dann beginnen die 60 s des Ausschlusses. Änderungen: eine Phase
+  um mehr als 1 A, eine Phase beginnt oder endet zu laden, Laden beginnt oder endet, die Ströme
+  werden bekannt oder unbekannt, der erste beobachtete Zyklus der Wallbox. „Passt“ bleibt. Sonst
+  schloss der Stromvergleich den Tesla an seinem eigenen Wall Connector aus, wenn Tessie eine
+  Stromänderung erst nach 60 s meldete oder eine falsche Phasenzahl: dort ein Gast, nach 60 s
+  „unklar“, die Tesla-Befehle pausierten. Falls falsch: Ein Fahrzeug, das nur der Stromvergleich
+  ausschließt, ist frühestens 60 s nach der ersten Abfrage ausgeschlossen, die 60 s nach der letzten
+  Stromänderung liegt, und nie, solange sich der Strom öfter ändert; bei falscher Phasenzahl fehlt
+  der Stromvergleich ganz.
+- **Beobachtete Zeit** (nach dem Gesamtreview): Liegen zwischen zwei Zyklen der Erkennung mehr als
+  60 s (die Regelung ruhte), beginnen alle 60 s von Indizien und Entscheidung neu; der erste Zyklus
+  danach zählt wie der erste überhaupt, für den Stromvergleich auch als Änderung der Ströme. Die
+  Zeiten von „unklar“ bleiben. Falls falsch: Nach einer Pause dauert jede Erkennung wieder
+  mindestens 60 s, ein Ausschluss durch den Strom 2 min.
 
 Offene Punkte aus Plan 2c-2b (nicht umgesetzt):
 
 - **`tools/verify_part1.py`** (Prüfprotokoll 17.1-11) prüft nur `homeassistant.entities`, nicht
   `home_entity`, denn der core ergänzt diese Zuordnung erst zur Laufzeit (`ha_entities`). Ob der core
-  den `device_tracker` liest, zeigt bis dahin Health: Läuft an einer Wallbox ein Vorgang und ist das
-  Fahrzeug zu Hause, steht dort das Indiz `home` unter `indicators`.
-- **Gast-Schlüssel:** Die Konfiguration verbietet keinen Fahrzeug-Schlüssel der Form `guest@<Wallbox>`;
-  er würde mit dem Schlüssel des Gastes (`fleet.guest_key`) kollidieren. Die Prüfung „ist ein Gast“
-  gibt es in vier Formen (`guest_wallbox`, `key not in cfg.vehicles`, `cfg.vehicles.get`,
-  `key in _tesla`); sie sind gleichwertig, solange kein Schlüssel so beginnt. Abhilfe: der Validator von
-  `Config` lehnt das Präfix ab.
+  den `device_tracker` liest, zeigt bis dahin Health: Läuft nur an einer Wallbox ein Vorgang und ist
+  das Fahrzeug zu Hause, steht dort das Indiz `home` unter `indicators`. Bei zwei Vorgängen steht es
+  dort erst nach der Elimination, wenn Strom oder Phasen das Fahrzeug an der anderen Wallbox
+  ausschließen; „nicht zu Hause“ steht an jeder Wallbox mit Vorgang sofort.
+- **`home_entity`** ersetzt einen gleichnamigen Eintrag in `homeassistant.entities` (das Signal
+  `vehicle.<name>.home_state`) still; kein Test pinnt den Vorrang.
+- **Übersteuerung und Elimination:** Eine Übersteuerung des Fahrzeugs an die andere Wallbox zählt
+  für die Elimination nicht (entschieden nach dem Gesamtreview). Ist etwa der e-Golf an den Wall
+  Connector übersteuert und steht der Tesla an der EVCS, ohne zu laden, bleibt dort „Gast,
+  angenommen“ mit dem Modus des Gastes, bis auch der Tesla übersteuert ist.
+- **Phasenzahl der EVCS:** Der core leitet sie aus Leistung und Strom ab (`derived.py`), die nicht
+  gleichzeitig gemessen werden (Leistung über MQTT vom GX, Strom über Modbus). Ein einziger
+  abweichender Zyklus startet die 60 s der Phasen-Signatur neu; ein Gast an der EVCS, den bei
+  anwesendem e-Golf nur die Phasen vom e-Golf trennen, kann so kurz zum e-Golf wechseln und zurück.
+  Geprüft wird das im Dry-Run (oben, „Vor der Live-Schaltung von EVCS und Tesla“); Abhilfen wären
+  die Leistung je Phase des GX (`wallbox.<id>.l<n>.power_w`) oder eine Toleranz von ein, zwei
+  Zyklen.
+- **Tessies Zeitstempel:** `plugged_at` ist die Zeit der Abfrage von BindaEMS (Präzisierung 9),
+  nicht Tessies eigener Zeitstempel (`charge_state.timestamp`). Tessie antwortet aus seinem Cache;
+  der eigene Zeitstempel würde die Regeln für Beginn, Ende und Stromänderung genauer machen. Das
+  verlangt eine Entscheidung.
+- **Simulator:** Sein Tessie meldet bei jeder Abfrage die Werte des Modells, und die EVCS meldet
+  Leistung und Strom aus demselben Schritt. Es fehlen Regler für die Verzögerung von Tessie und der
+  Leistung der EVCS; die Fälle des Gesamtreviews (veraltetes „angesteckt“, nachhinkender Strom,
+  abweichende Phasenzahl der EVCS) pinnen so nur Unit-Tests.
 - **Boost für ein Fahrzeug, dessen Standard-Wallbox ein anderes erkanntes Fahrzeug belegt,** geht
   verloren: Ein Boost für den e-Golf, während der erkannte Tesla die EVCS belegt, bindet an den Vorgang
   des Tesla und endet mit ihm (wie in 2c-1 bei Übersteuerung). Nach dem Abstecken des Tesla braucht es
@@ -1261,7 +1328,8 @@ Offene Punkte aus Plan 2c-2b (nicht umgesetzt):
   Phasen sieht für den core aus wie der e-Golf, solange dieser laut Home Assistant zu Hause ist, denn
   der e-Golf meldet kein „angesteckt“: Allein an einer Wallbox ist er als e-Golf erkannt, auch wenn der
   e-Golf nicht angesteckt ist, und neben einem zweiten Auto ebenso, sobald dieses auf einer anderen
-  Phasenzahl lädt und den e-Golf so an seiner Wallbox ausschließt; sonst steht an der EVCS der e-Golf
+  Phasenzahl lädt und den e-Golf so an seiner Wallbox ausschließt; sonst bleiben die Wallboxen
+  angenommen, etwa bei einem Gast am Wall Connector neben dem e-Golf an der EVCS: dort der e-Golf
   angenommen, am Wall Connector ein Gast, angenommen. Den dreiphasigen Gast an der EVCS neben dem
   Tesla, den zweiphasigen Gast am Wall Connector neben dem e-Golf, den Kernfall und den Rückfall einer
   Erkennung, wenn ein zweiter Vorgang beginnt, pinnen Tests in
@@ -1269,20 +1337,16 @@ Offene Punkte aus Plan 2c-2b (nicht umgesetzt):
 
 Aufgeschobene Kleinigkeiten aus Plan 2c-2b (die inhaltlichen; sie sind klein, keine blockiert etwas):
 
-- **Konfiguration:** `home_entity` ersetzt einen gleichnamigen Eintrag in `homeassistant.entities` (das
-  Signal `vehicle.<name>.home_state`) still; kein Test pinnt den Vorrang.
-- **Tests der Erkennung:** Nicht gepinnt sind die Ausnahme für Home Assistant an einer Wallbox mit
-  bekanntem Beginn des Vorgangs (ohne Tessie-Werte) und die Phasen-Signatur mit einer Phase (n = 1);
+- **Tests der Erkennung:** Nicht gepinnt ist die Phasen-Signatur mit einer Phase (n = 1);
   der Uhrentest erkennt nur gemischte Nutzung der beiden Uhren, nicht einen konsequenten Tausch.
   Es fehlen Controller-Tests dafür, dass ein neu erkannter Gast an seinen ersten EVCS-Befehlen
   `assignment_detected` trägt und dass der Merker eines neu erkannten Autos ein `idle` übersteht.
   `test_wallbox_health_is_empty_before_the_first_step_and_after_idle` prüft nicht, dass der Stand vor
   `idle` nicht leer war.
-- **Docstrings und Doppelungen:** Der Docstring von `assignment.py` nennt die Boost-Regel ungenau („an
-  dem das Fahrzeug steht“ statt „im vorigen Aufruf stand, solange dieser Vorgang läuft“), und der von
-  `HealthReport` nennt nicht, dass `occupant` bei „unklar“ auch während eines Vorgangs `null` sein
-  kann. `_NOBODY` in `charging.py` wiederholt das Literal „ohne Vorgang“ aus `assignment.py`; ein
-  vom Detektor anderswo erkanntes, übersteuertes Fahrzeug überschriebe seinen Platz in
+- **Docstrings und Doppelungen:** Der Docstring von `assignment.py` nennt die Boost-Regel ungenau
+  („an dem das Fahrzeug steht“ statt „im vorigen Aufruf stand, solange dieser Vorgang läuft“).
+  `_NOBODY` in `charging.py` wiederholt das Literal „ohne Vorgang“ aus `assignment.py`; ein vom
+  Detektor anderswo erkanntes, übersteuertes Fahrzeug überschriebe seinen Platz in
   `_place_at_sessions` (heute unmöglich, der Detektor schließt es aus).
 - **Simulator:** `model.py` nimmt für den Gast `next(iter(cfg.wallboxes))` (ohne Wallbox ein Fehler),
   überschriebe ein Fahrzeug mit dem Schlüssel `gast`, und ein unbekannter Schlüssel in `away` bleibt

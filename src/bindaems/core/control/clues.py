@@ -23,7 +23,11 @@ Lädt dagegen der e-Golf zweiphasig am Wall Connector und der Tesla dreiphasig a
 schließen die Phasen jeden an der Wallbox des anderen aus, und beide sind erkannt. Kosten, falls
 die Regel falsch ist: Kommt ein zweiter Vorgang hinzu, fällt eine Erkennung, die auf Tessie oder
 Home Assistant beruht, auf „angenommen“ zurück, bis die andere Wallbox das Fahrzeug ausschließt
-(``HOLD_S`` Laden dort) und es ``HOLD_S`` Kandidat war, und so lange, wie dort nichts lädt.
+(``HOLD_S`` Laden dort) und es ``HOLD_S`` Kandidat war, und so lange, wie dort nichts lädt. Eine
+Übersteuerung an der anderen Wallbox zählt für die Elimination nicht. Grenze: Ist der e-Golf zu
+Hause, aber nicht angesteckt, und lädt ein zweiphasiger Gast, ist der Gast als e-Golf erkannt, denn
+Home Assistant meldet nur „zu Hause“; das gilt auch bei zwei Vorgängen, wenn die andere Wallbox den
+e-Golf ausschließt.
 
 Tessie fragt ein abgestecktes Auto nur alle 600 s ab und erfährt vom Anstecken mit Verzug
 (Präzisierung 3): Tessie, Stromvergleich und Ausschluss zählen an einer Wallbox mit bekanntem Beginn

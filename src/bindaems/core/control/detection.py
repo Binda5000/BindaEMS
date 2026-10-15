@@ -21,8 +21,10 @@ daraus (Präzisierung 4):
   widerspricht sich nicht, weil es an einer anderen Stützen und einen Ausschluss hat. Beschlossen
   wurde das, weil Tessie und Phasen-Signatur den Tesla an jeder Wallbox stützten, an der ein Auto
   mit drei Phasen lädt. Seit der Elimination (``clues``) stützen Tessie und Home Assistant ein
-  Fahrzeug an einer Wallbox nur, wenn es an jeder anderen ausgeschlossen ist; an der Wallbox, an
-  der es Kandidat ist, ist es das nicht. Der Fall kommt darum nur noch vor, wenn an der anderen
+  Fahrzeug an einer Wallbox nur, wenn Stromvergleich oder Phasen-Signatur es an jeder anderen
+  Wallbox mit Vorgang ausschließen; ein Ausschluss durch Tessie oder Home Assistant und eine
+  Übersteuerung an der anderen Wallbox zählen dafür nicht. An der Wallbox, an der es Kandidat ist,
+  schließen Strom und Phasen es nicht aus. Der Fall kommt darum nur noch vor, wenn an der anderen
   Wallbox die zeitliche Korrelation stützt.
 
 Die Übersteuerung (``placed``) geht vor: An der Wallbox einer Übersteuerung entscheidet die

@@ -77,10 +77,39 @@ Präzisierungen des Plans gehen diesem Dokument vor, wo sie abweichen:
   zeitliche Korrelation misst dagegen das Intervall zwischen zwei Meldungen und braucht die Regel
   nicht. Für Home Assistant gilt sie nicht, sein Zustand kommt mit jeder Änderung; meldet
   `home_entity` das Ankommen des e-Golf spät, gilt er bis dahin als Gast (angenommen).
+- **Tessie-Werte und das Ende eines Vorgangs (7.2, Entscheidung nach dem Gesamtreview):** Dieselbe
+  Regel gilt für Enden. Endet an einer Wallbox ein Vorgang (die Wallbox meldet kein Fahrzeug mehr,
+  oder dort beginnt ein neuer Vorgang), stützen Tessie und Ausschluss ein Fahrzeug an einer anderen
+  Wallbox erst wieder mit einem Wert, dessen Abfrage mindestens 60 s nach diesem Ende lag; ohne
+  Zeitstempel nicht mehr. Ein Ausschluss durch Tessie gilt sofort; Stromvergleich, zeitliche
+  Korrelation und Home Assistant bleiben unverändert. Grund: Fährt der Tesla vom Wall Connector
+  weg, meldet Tessie ihn bis zur nächsten Abfrage (alle 60 s, solange er angesteckt nicht lädt)
+  noch „zu Hause und angesteckt“. An der EVCS, an der der e-Golf steckt und nicht lädt, stützten
+  ihn Tessie und Ausschluss; er war nach 60 s dort erkannt, bekam `max_a`, und die EVCS lud kurz im
+  Modus des Tesla. Kosten, falls falsch: Eine Erkennung, die auf Tessie und Ausschluss beruht, kommt
+  nach dem Ende eines Vorgangs an einer anderen Wallbox erst 60 s nach der ersten Abfrage, die
+  mindestens 60 s nach dem Ende liegt; bis dahin bleibt das Fahrzeug angenommen.
+- **Stromvergleich (7.2, Entscheidung nach dem Gesamtreview):** Meldet Tessie eine andere
+  Phasenzahl als `vehicles.<name>.phases`, sagt er nichts: Der Wert gilt als unplausibel und
+  unbekannt. „Passt nicht“ zählt an einer Wallbox erst mit einem Tessie-Wert, dessen Abfrage
+  mindestens 60 s nach der letzten Änderung der Ströme dieser Wallbox lag; erst dann beginnen die
+  60 s des Ausschlusses. Eine Änderung ist: Eine Phase weicht um mehr als 1 A vom vorigen Zyklus ab,
+  eine Phase beginnt oder endet zu laden (1 A), Laden beginnt oder endet, die Ströme werden bekannt
+  oder unbekannt, oder es ist der erste beobachtete Zyklus der Wallbox. „Passt“ bleibt unverändert.
+  Grund: Tessies Ist-Strom hinkt dem Wall Connector 60 s und mehr nach, und welche Phasenzahl
+  Tessie beim dreiphasigen Laden meldet, ist an der Anlage nicht geprüft. Sonst schloss der
+  Stromvergleich den Tesla an seinem eigenen Wall Connector aus: Dort stand ein Gast, 60 s später
+  war die Zuordnung unklar, und die Tesla-Befehle pausierten. Kosten, falls falsch: Ein Fahrzeug,
+  das nur der Stromvergleich an einer Wallbox ausschließt, ist dort frühestens 60 s nach der ersten
+  Abfrage ausgeschlossen, die 60 s nach der letzten Stromänderung liegt, und nie, solange sich der
+  Strom öfter ändert; bei falscher Phasenzahl fehlt der Stromvergleich ganz.
 - **Entscheidung (7.3, Präzisierung 4):** Kandidat ist ein Fahrzeug an einer Wallbox mit mindestens
   2 stützenden Indizien und keinem, das es ausschließt; erkannt ist es dort nach 60 s ohne
   Unterbrechung als Kandidat, wenn es an keiner anderen Wallbox Kandidat ist (jeden Zyklus neu
-  geprüft). Sind an einer Wallbox zwei Fahrzeuge erkannt, gilt keins, und das ist kein Widerspruch.
+  geprüft). „60 s ohne Unterbrechung“ heißt beobachtete Zeit (Entscheidung nach dem Gesamtreview):
+  Liegen zwischen zwei Zyklen der Erkennung mehr als 60 s, weil die Regelung ruhte, beginnen die
+  60 s von Indizien, Kandidat und Gast neu, die Zeiten von „unklar“ nicht. Sind an einer Wallbox
+  zwei Fahrzeuge erkannt, gilt keins, und das ist kein Widerspruch.
   Ein Gast ist erkannt, wenn dort jedes Fahrzeug 60 s lang ausgeschlossen ist; ausgeschlossen ist ein
   Fahrzeug auch, wenn es laut Übersteuerung an einer anderen Wallbox steht, und eine Übersteuerung
   geht der Erkennung an ihrer Wallbox vor. **Widerspruch (Abweichung vom Wortlaut von 7.3):** Ein
@@ -114,7 +143,10 @@ Präzisierungen des Plans gehen diesem Dokument vor, wo sie abweichen:
   EVCS, schließen die Phasen jeden an der Wallbox des anderen aus, und beide sind erkannt wie in 7.2.
   Kosten, falls falsch: Kommt ein zweiter Vorgang hinzu, fällt eine Erkennung, die auf Tessie oder
   Home Assistant beruht, auf „angenommen“ zurück, bis die andere Wallbox das Fahrzeug ausschließt
-  (60 s Laden dort) und es 60 s Kandidat war, und so lange, wie dort nichts lädt.
+  (60 s Laden dort) und es 60 s Kandidat war, und so lange, wie dort nichts lädt. Grenze: Ist der
+  e-Golf zu Hause, aber nicht angesteckt, und lädt ein zweiphasiger Gast, ist der Gast als e-Golf
+  erkannt; seit der Elimination auch bei zwei Vorgängen, wenn die andere Wallbox den e-Golf
+  ausschließt.
 - **Boost ohne Übersteuerung (7.1, Entscheidung beim Bau):** Er bindet an den Ansteckvorgang der
   Wallbox, an der das Fahrzeug im vorigen Zyklus stand (erkannt, angenommen oder an seiner
   Standard-Wallbox mit laufendem Vorgang), solange dieser Vorgang läuft; sonst wie in 2c-1 an die
