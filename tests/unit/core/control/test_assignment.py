@@ -976,3 +976,56 @@ def test_a_departing_tesla_is_never_detected_at_the_evcs(cfg) -> None:
         ), s
         assert state.vehicles["tesla"].wallbox != "evcs", s
         assert not state.unclear, s
+
+
+# Der Tesla am eigenen Wall Connector (Gesamtreview I-2)
+
+TESLA_TWC_16 = twc(connected=True, charging=True, phase_a=dict.fromkeys(("L1", "L2", "L3"), 16.0))
+TESLA_TWC_10 = twc(connected=True, charging=True, phase_a=dict.fromkeys(("L1", "L2", "L3"), 10.0))
+
+
+def at_its_wall_connector(a, s, twc_obs, tesla_obs):
+    """Der Tesla lädt am Wall Connector, die EVCS ist leer, der e-Golf zu Hause."""
+    return update(
+        a,
+        s,
+        evcs_obs=evcs(connected=False),
+        twc_obs=twc_obs,
+        tesla_obs=tesla_obs,
+        homes={"egolf": True},
+    )
+
+
+def test_a_wrong_phase_count_from_tessie_never_makes_a_guest_of_the_tesla(cfg) -> None:
+    # Tessie meldet zwei Phasen, der Wall Connector misst drei. Der Stromvergleich sagt nichts;
+    # Tessie, Ausschluss und Phasen stützen den Tesla, erkannt ist er nach 60 s.
+    a = Assignment(cfg, started=T0)
+    for s in range(400):
+        car = tesla(
+            plugged=True,
+            charging=True,
+            actual_current_a=16.0,
+            phases=2,
+            plugged_at=T0 + timedelta(seconds=s),
+        )
+        state = at_its_wall_connector(a, s, TESLA_TWC_16, car)
+        kind = AssignmentKind.DEFAULT if s < 60 else AssignmentKind.DETECTED
+        assert (state.wallboxes["twc"].occupant, state.wallboxes["twc"].kind) == ("tesla", kind), s
+        assert not state.unclear, s
+
+
+def test_a_lagging_tessie_never_makes_a_guest_of_the_tesla(cfg) -> None:
+    # Bei 200 s senkt die Regelung den Strom von 16 auf 10 A; Tessie fragt in jedem Zyklus ab und
+    # meldet noch 70 s lang 16 A.
+    a = Assignment(cfg, started=T0)
+    for s in range(600):
+        car = tesla(
+            plugged=True,
+            charging=True,
+            actual_current_a=16.0 if s < 270 else 10.0,
+            phases=3,
+            plugged_at=T0 + timedelta(seconds=s),
+        )
+        state = at_its_wall_connector(a, s, TESLA_TWC_16 if s < 200 else TESLA_TWC_10, car)
+        assert state.wallboxes["twc"].occupant == "tesla", s
+        assert not state.unclear, s

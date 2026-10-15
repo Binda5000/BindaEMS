@@ -97,21 +97,26 @@ def test_two_supports_and_an_exclusion_are_a_contradiction(cfg) -> None:
 def test_an_exclusion_next_to_a_detection_is_no_contradiction(cfg) -> None:  # Präzisierung 4
     # Der Tesla lädt am Wall Connector, dessen Vorgang schon vor dem Start des core lief. Tessie
     # meldet ihn bei 0 s abgesteckt, dann nichts und bei 61 s angesteckt. Bei 1 s kommt ein
-    # dreiphasiger Gast an die EVCS, der ab 61 s mit 10 A lädt. Bei zwei Vorgängen stützt Tessie
-    # nicht; ab 121 s stützen den Tesla an der EVCS die zeitliche Korrelation und die Phasen, und
-    # der Stromvergleich schließt ihn dort aus. Am Wall Connector stützen ihn Strom und Phasen.
+    # dreiphasiger Gast an die EVCS und lädt gleich mit 10 A. Bei zwei Vorgängen stützt Tessie
+    # nicht; ab 61 s stützen den Tesla an der EVCS die zeitliche Korrelation und die Phasen, und ab
+    # 121 s schließt ihn der Stromvergleich dort aus: Tessies Wert von 61 s kam 60 s nach dem
+    # Beginn des Ladens (Gesamtreview I-2). Kandidat ist er an der EVCS so nur 60 s, nie erkannt.
+    # Am Wall Connector stützen ihn Strom und Phasen.
     started = {"evcs": T0 + timedelta(seconds=1), "twc": None}
     tesla_twc = twc(connected=True, charging=True, phase_a=dict.fromkeys(PHASES, 16.0))
+    guest = evcs(charging=True, phase_a=dict.fromkeys(PHASES, 10.0))
     d = Detector(cfg)
     alone = {"sessions": {"twc": None}, "evcs_obs": evcs(connected=False), "twc_obs": tesla_twc}
     detect(d, 0, tesla_obs=tesla(plugged_at=T0), **alone)
     assert not any(
-        detect(d, s, sessions=started, twc_obs=tesla_twc, tesla_obs=NONE).contradiction
+        detect(
+            d, s, sessions=started, evcs_obs=guest, twc_obs=tesla_twc, tesla_obs=NONE
+        ).contradiction
         for s in range(1, 61)
     )
     kw = {
         "sessions": started,
-        "evcs_obs": evcs(charging=True, phase_a=dict.fromkeys(PHASES, 10.0)),
+        "evcs_obs": guest,
         "twc_obs": tesla_twc,
         "tesla_obs": tesla(
             plugged=True,

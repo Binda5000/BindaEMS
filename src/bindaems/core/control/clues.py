@@ -45,6 +45,24 @@ beruht, kommt nach dem Ende eines Vorgangs an einer anderen Wallbox erst 60 s na
 Abfrage, die mindestens ``TESSIE_SETTLE_S`` nach dem Ende liegt; bis dahin bleibt das Fahrzeug
 angenommen.
 
+**Stromvergleich:** Meldet Tessie eine andere Phasenzahl als ``phases`` des Fahrzeugs in der
+Konfiguration, sagt er nichts; ein unplausibler Wert zählt als unbekannt. „Passt nicht“ zählt an
+einer Wallbox erst mit einem Wert, den Tessie mindestens ``TESSIE_SETTLE_S`` nach der letzten
+Änderung der Ströme dieser Wallbox abgefragt hat (``plugged_at``, Wanduhr); erst dann beginnen die
+``HOLD_S`` seines Ausschlusses. Eine Änderung ist: Eine Phase weicht um mehr als ``MATCH_A`` vom
+vorigen Zyklus ab, eine Phase beginnt oder endet zu laden (``PHASE_ON_A``), Laden beginnt oder
+endet, die Ströme werden bekannt oder unbekannt, oder es ist der erste beobachtete Zyklus der
+Wallbox. „Passt“ zählt wie bisher sofort. Grund: Tessies Ist-Strom hinkt dem Wall Connector 60 s
+und mehr nach (Abfrage alle 30 s aus Tessies Cache), und welche Phasenzahl Tessie beim dreiphasigen
+Laden meldet, ist an der Anlage nicht geprüft. Ohne die Regeln schloss der Stromvergleich den Tesla
+an seinem eigenen Wall Connector aus, wenn Tessie eine Stromänderung der Regelung erst nach 60 s
+meldete oder eine falsche Phasenzahl: Dort stand dann ein Gast, 60 s später war die Zuordnung
+unklar, und die Befehle an den Tesla pausierten. Kosten, falls die Regeln falsch sind: Ein
+Fahrzeug, das nur der Stromvergleich an einer Wallbox ausschließt, ist dort frühestens 60 s nach der
+ersten Abfrage ausgeschlossen, die mindestens ``TESSIE_SETTLE_S`` nach der letzten Stromänderung
+liegt, und nie, solange sich der Strom öfter ändert; bei falscher Phasenzahl gibt es für das
+Fahrzeug keinen Stromvergleich.
+
 Stromvergleich und zeitliche Korrelation sagen nichts über ein Fahrzeug, das Tessie nicht zu Hause
 sieht (``at_home`` falsch; unbekannt zählt nicht als woanders): Es steht an keiner Wallbox der
 Anlage, und Tessie schließt es dort ohnehin aus. Lädt ein Auto an einer fremden Säule mit demselben
@@ -171,8 +189,9 @@ class ClueTracker:
     Der Zustand lebt nur im Speicher: seit wann Stromvergleich (je Wallbox und Fahrzeug, mit „passt“
     oder „passt nicht“) und Phasen-Signatur (je Wallbox, mit der Zahl der Phasen) gelten, je
     Fahrzeug mit Tessie das Fenster, in dem es angesteckt wurde, je Wallbox die Beginne ihrer
-    Vorgänge der letzten ``STARTS_KEEP_S``, die Vorgänge des vorigen Zyklus und je Wallbox das
-    letzte Ende eines Vorgangs. Nicht für mehrere Threads gedacht.
+    Vorgänge der letzten ``STARTS_KEEP_S``, die Vorgänge des vorigen Zyklus, je Wallbox das letzte
+    Ende eines Vorgangs, ihre Beobachtung im vorigen Zyklus und die letzte Änderung ihrer Ströme.
+    Nicht für mehrere Threads gedacht.
     """
 
     def __init__(self, cfg: Config) -> None:
@@ -185,6 +204,8 @@ class ClueTracker:
         self._starts: dict[str, list[datetime]] = {key: [] for key in cfg.wallboxes}
         self._running: dict[str, datetime | None] = {}  # die Vorgänge des vorigen Zyklus
         self._ends: dict[str, datetime] = {}  # je Wallbox das letzte Ende auf der Wanduhr
+        self._seen: dict[str, WallboxObs] = {}  # je Wallbox die Beobachtung des vorigen Zyklus
+        self._changed: dict[str, datetime] = {}  # je Wallbox die letzte Stromänderung, Wanduhr
 
     def update(
         self,
@@ -205,11 +226,12 @@ class ClueTracker:
         Assistant es zu Hause meldet (``None``: unbekannt). Alle haben die Schlüssel aus
         ``config.yaml``. Der Ablauf:
 
-        1. Die Beginne und Enden der Vorgänge merken und das Fenster jedes Fahrzeugs mit Tessie
-           fortführen.
+        1. Die Beginne und Enden der Vorgänge und die Änderungen der Ströme merken und das Fenster
+           jedes Fahrzeugs mit Tessie fortführen.
         2. Die Zeiten von Stromvergleich und Phasen-Signatur fortführen. Fehlt die Bedingung einen
            Zyklus lang oder ändert sich ihr Wert, beginnen sie neu; ohne Vorgang gilt keine. Für
-           ein Fahrzeug, das Tessie nicht zu Hause sieht, gilt kein Stromvergleich.
+           ein Fahrzeug, das Tessie nicht zu Hause sieht, gilt kein Stromvergleich, und „passt
+           nicht“ zählt erst ``TESSIE_SETTLE_S`` nach der letzten Änderung der Ströme.
         3. Je Wallbox mit Vorgang und je Fahrzeug die Indizien nennen, die etwas sagen: die
            Wallboxen und Fahrzeuge in der Reihenfolge von ``config.yaml``, je Paar die Indizien in
            der von ``Clue``. Die zeitliche Korrelation sagt für ein Fahrzeug, das Tessie nicht zu
@@ -222,6 +244,7 @@ class ClueTracker:
         """
         self._remember_starts(wall_now, sessions)
         self._remember_ends(wall_now, sessions)
+        self._note_changes(wall_now, wallboxes)
         for key, window in self._windows.items():
             window.observe(vehicles[key])
         self._advance(now, sessions, wallboxes, vehicles)
@@ -303,6 +326,25 @@ class ClueTracker:
             return False
         return (tessie.plugged_at - max(ends)).total_seconds() >= TESSIE_SETTLE_S
 
+    def _note_changes(self, wall_now: datetime, wallboxes: Mapping[str, WallboxObs]) -> None:
+        """Merkt sich je Wallbox die letzte Änderung ihrer Ströme, auf der Wanduhr ``wall_now``.
+
+        Der erste beobachtete Zyklus einer Wallbox ist eine Änderung, sonst ``_currents_changed``.
+        """
+        for key in self._cfg.wallboxes:
+            wallbox, before = wallboxes[key], self._seen.get(key)
+            if before is None or _currents_changed(before, wallbox):
+                self._changed[key] = wall_now
+            self._seen[key] = wallbox
+
+    def _after_change(self, wallbox_key: str, tessie: VehicleObs) -> bool:
+        """Ob Tessies Wert mindestens ``TESSIE_SETTLE_S`` nach der letzten Änderung der Ströme der
+        Wallbox abgefragt wurde (``plugged_at``); ohne ``plugged_at`` nicht."""
+        changed = self._changed.get(wallbox_key)
+        if tessie.plugged_at is None or changed is None:
+            return False
+        return (tessie.plugged_at - changed).total_seconds() >= TESSIE_SETTLE_S
+
     def _advance(
         self,
         now: datetime,
@@ -314,7 +356,10 @@ class ClueTracker:
 
         Eine Zeit läuft, solange ihre Bedingung gilt, und nur an einer Wallbox mit Vorgang. Der
         Stromvergleich zählt Tessies Werte nur, wenn sie für den Vorgang gelten (``_settled``), und
-        nicht für ein Auto, das Tessie nicht zu Hause sieht (``_currents_fit``).
+        nicht für ein Auto, das Tessie nicht zu Hause sieht oder mit einer anderen Phasenzahl als
+        der Konfiguration meldet (``_currents_fit``). „Passt nicht“ zählt erst mit einem Wert, der
+        nach der letzten Änderung der Ströme abgefragt wurde (``_after_change``); vorher sagt der
+        Vergleich nichts.
         """
         for wallbox_key in self._cfg.wallboxes:
             running = wallbox_key in sessions
@@ -330,7 +375,9 @@ class ClueTracker:
                     continue
                 tessie = vehicles[vehicle_key]
                 counts = running and _settled(sessions[wallbox_key], tessie)
-                fits = _currents_fit(wallbox, tessie) if counts else None
+                fits = _currents_fit(wallbox, tessie, vehicle.phases) if counts else None
+                if fits is False and not self._after_change(wallbox_key, tessie):
+                    fits = None  # Tessie kennt die neuen Ströme vielleicht noch nicht
                 for matches in (True, False):
                     current_key = (wallbox_key, vehicle_key, matches)
                     self._currents[current_key] = held_since(
@@ -441,7 +488,7 @@ def _phase_count(wallbox: WallboxObs) -> int | None:
     return len(live) if live else None
 
 
-def _currents_fit(wallbox: WallboxObs, tessie: VehicleObs) -> bool | None:
+def _currents_fit(wallbox: WallboxObs, tessie: VehicleObs, phases: int) -> bool | None:
     """Ob die Ströme von Wallbox und Auto passen (Stromvergleich); ``None``, wenn nicht beide laden.
 
     Das Auto lädt laut Tessie, wenn es lädt, mindestens ``PHASE_ON_A`` zieht und seine Phasenzahl
@@ -449,14 +496,35 @@ def _currents_fit(wallbox: WallboxObs, tessie: VehicleObs) -> bool | None:
     Wallbox auf genau so vielen Phasen wie das Auto mindestens ``PHASE_ON_A`` misst und jeder dieser
     Ströme höchstens ``MATCH_A`` vom Strom des Autos abweicht.
 
+    Auch ``None``, wenn Tessie eine andere Phasenzahl meldet als ``phases`` aus der Konfiguration:
+    Der Wert ist unplausibel und zählt als unbekannt.
+
     Auch ``None``, wenn Tessie das Auto nicht zu Hause sieht: Es lädt woanders, und sein Strom sagt
     nichts über unsere Wallbox. Ist der Ort unbekannt, gilt der Vergleich wie sonst.
     """
     live, amps = _live_currents(wallbox), tessie.actual_current_a
-    if live is None or tessie.charging is not True or tessie.phases is None:
+    if live is None or tessie.charging is not True or tessie.phases != phases:
         return None
     if tessie.at_home is False:
         return None
     if amps is None or amps < PHASE_ON_A:
         return None
     return len(live) == tessie.phases and all(abs(current - amps) <= MATCH_A for current in live)
+
+
+def _currents_changed(before: WallboxObs, now: WallboxObs) -> bool:
+    """Ob sich die Ströme der Wallbox seit dem vorigen Zyklus geändert haben (Stromvergleich).
+
+    Das haben sie, wenn Laden beginnt oder endet, die Ströme bekannt oder unbekannt werden, eine
+    Phase um mehr als ``MATCH_A`` abweicht oder eine Phase beginnt oder endet zu laden
+    (``PHASE_ON_A``).
+    """
+    if (before.charging is True) != (now.charging is True):
+        return True
+    if before.phase_a is None or now.phase_a is None:
+        return (before.phase_a is None) != (now.phase_a is None)
+    return any(
+        abs(now.phase_a[phase] - before.phase_a[phase]) > MATCH_A
+        or (before.phase_a[phase] >= PHASE_ON_A) != (now.phase_a[phase] >= PHASE_ON_A)
+        for phase in PHASES
+    )

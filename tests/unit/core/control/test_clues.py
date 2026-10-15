@@ -40,6 +40,17 @@ def ev(wallbox, vehicle, clue, supports=True):
     return Evidence(wallbox, vehicle, clue, supports)
 
 
+def steady(tracker, s, **kw):
+    """Die Wallboxen messen schon die 60 s vor ``s`` dieselben Ströme, ohne Vorgang und Tessie.
+
+    Ihre letzte Änderung liegt so 60 s vor ``s``: „Passt nicht“ zählt mit einem Wert, den Tessie
+    bei ``s`` abfragt (Gesamtreview I-2). ``kw`` sind ``evcs_obs`` und ``twc_obs`` wie bei
+    ``clues``.
+    """
+    for before in range(s - 60, s):
+        clues(tracker, before, sessions={}, tesla_obs=NONE, **kw)
+
+
 def test_tessie_supports_or_excludes(cfg) -> None:
     # bei zwei Vorgängen stützt Tessie nicht (unten, Abweichung von Design 7.2)
     found = clues(ClueTracker(cfg), 0, tesla_obs=tesla(plugged=True))
@@ -104,8 +115,9 @@ def test_current_comparison_needs_60_s_without_interruption(cfg) -> None:  # Rev
 
 def test_currents_that_do_not_match_exclude_after_60_s(cfg) -> None:
     tracker, two = ClueTracker(cfg), evcs(charging=True, phase_a=TWO)
-    # drei Phasen, die EVCS misst zwei
-    car = tesla(plugged=True, charging=True, actual_current_a=10.0, phases=3)
+    # drei Phasen, die EVCS misst zwei; ihre Ströme sind seit 60 s gleich, Tessie fragt bei 0 s ab
+    steady(tracker, 0, evcs_obs=two)
+    car = tesla(plugged=True, charging=True, actual_current_a=10.0, phases=3, plugged_at=T0)
     for s in range(60):
         clues(tracker, s, evcs_obs=two, tesla_obs=car)
     assert ev("evcs", "tesla", Clue.CURRENT, False) in clues(
@@ -282,67 +294,90 @@ def test_tessie_values_of_the_first_minute_count_for_the_timing_only(
 
 
 @pytest.mark.parametrize(
-    ("wallbox", "car", "expected"),
+    ("wallbox", "car", "expected", "phases"),
     [
         pytest.param(
-            AT_16, charging_tesla(15.0), {ev("evcs", "tesla", Clue.CURRENT)}, id="1 A Abstand"
+            AT_16, charging_tesla(15.0), {ev("evcs", "tesla", Clue.CURRENT)}, 3, id="1 A Abstand"
         ),
         pytest.param(
             AT_16,
             charging_tesla(14.5),
             {ev("evcs", "tesla", Clue.CURRENT, False)},
+            3,
             id="1,5 A Abstand",
+        ),
+        pytest.param(
+            evcs(charging=True, phase_a=TWO),
+            charging_tesla(10.0),
+            {ev("evcs", "tesla", Clue.CURRENT, False)},
+            3,
+            id="Phasenzahl passt nicht",
         ),
         pytest.param(
             AT_16,
             charging_tesla(16.0, phases=2),
-            {ev("evcs", "tesla", Clue.CURRENT, False)},
-            id="Phasenzahl passt nicht",
+            set(),
+            3,
+            id="Tessie meldet eine andere Phasenzahl",
         ),
         pytest.param(
             evcs(charging=True, phase_a={"L1": 16.0, "L2": 16.0, "L3": 0.9}),
             charging_tesla(16.0, phases=2),
             {ev("evcs", "tesla", Clue.CURRENT)},
+            2,
             id="0,9 A ist keine Phase",
         ),
         pytest.param(
             evcs(charging=True, phase_a={"L1": 16.0, "L2": 16.0, "L3": 1.0}),
             charging_tesla(16.0, phases=2),
             {ev("evcs", "tesla", Clue.CURRENT, False)},
+            2,
             id="1 A ist eine Phase",
         ),
         pytest.param(
             evcs(charging=True, phase_a=dict.fromkeys(PHASES, 1.0)),
             charging_tesla(1.0),
             {ev("evcs", "tesla", Clue.CURRENT)},
+            3,
             id="1 A lädt das Auto",
         ),
-        pytest.param(AT_16, charging_tesla(0.9), set(), id="0,9 A lädt das Auto nicht"),
+        pytest.param(AT_16, charging_tesla(0.9), set(), 3, id="0,9 A lädt das Auto nicht"),
         pytest.param(
-            AT_16, replace(charging_tesla(16.0), charging=False), set(), id="Tessie lädt nicht"
+            AT_16, replace(charging_tesla(16.0), charging=False), set(), 3, id="Tessie lädt nicht"
         ),
         pytest.param(
-            AT_16, replace(charging_tesla(16.0), phases=None), set(), id="Phasenzahl unbekannt"
+            AT_16, replace(charging_tesla(16.0), phases=None), set(), 3, id="Phasenzahl unbekannt"
         ),
         pytest.param(
-            AT_16, replace(charging_tesla(16.0), actual_current_a=None), set(), id="Strom unbekannt"
+            AT_16,
+            replace(charging_tesla(16.0), actual_current_a=None),
+            set(),
+            3,
+            id="Strom unbekannt",
         ),
         pytest.param(
             evcs(charging=False, phase_a=dict.fromkeys(PHASES, 16.0)),
             charging_tesla(16.0),
             set(),
+            3,
             id="Wallbox lädt nicht",
         ),
         pytest.param(
             evcs(charging=True, phase_a=None),
             charging_tesla(16.0),
             set(),
+            3,
             id="Ströme der Wallbox unbekannt",
         ),
     ],
 )
-def test_current_comparison_at_the_limits(cfg, wallbox, car, expected) -> None:
-    tracker = ClueTracker(cfg)
+def test_current_comparison_at_the_limits(cfg, wallbox, car, expected, phases) -> None:
+    # ``phases`` hat der Tesla laut Konfiguration; die Ströme der EVCS sind seit 60 s gleich, und
+    # Tessie fragt bei 0 s ab (Gesamtreview I-2)
+    tesla_ = cfg.vehicles["tesla"].model_copy(update={"phases": phases})
+    tracker = ClueTracker(cfg.model_copy(update={"vehicles": {**cfg.vehicles, "tesla": tesla_}}))
+    steady(tracker, 0, evcs_obs=wallbox)
+    car = replace(car, plugged_at=T0)
     for s in range(60):
         clues(tracker, s, evcs_obs=wallbox, tesla_obs=car)
     assert of(clues(tracker, 60, evcs_obs=wallbox, tesla_obs=car), Clue.CURRENT) == expected
@@ -350,9 +385,10 @@ def test_current_comparison_at_the_limits(cfg, wallbox, car, expected) -> None:
 
 def test_current_comparison_starts_again_when_the_result_changes(cfg) -> None:
     tracker = ClueTracker(cfg)
+    steady(tracker, 0, evcs_obs=AT_16)  # die Ströme der EVCS sind seit 60 s gleich
     for s in range(30):
-        clues(tracker, s, evcs_obs=AT_16, tesla_obs=charging_tesla(16.0))  # passt
-    off = charging_tesla(10.0)  # 6 A Abweichung
+        clues(tracker, s, evcs_obs=AT_16, tesla_obs=charging_tesla(16.0, plugged_at=T0))  # passt
+    off = charging_tesla(10.0, plugged_at=at(30))  # 6 A Abweichung
     assert all(
         of(clues(tracker, s, evcs_obs=AT_16, tesla_obs=off), Clue.CURRENT) == set()
         for s in range(30, 90)
@@ -378,7 +414,8 @@ def test_current_comparison_says_nothing_about_a_tesla_that_is_away(
     cfg, at_home, amps, expected
 ) -> None:
     # ein Tesla an einer öffentlichen Säule lädt mit 16 A auf drei Phasen wie der Gast bei uns
-    tracker, car = ClueTracker(cfg), charging_tesla(amps, at_home=at_home)
+    tracker, car = ClueTracker(cfg), charging_tesla(amps, at_home=at_home, plugged_at=T0)
+    steady(tracker, 0, evcs_obs=AT_16)  # die Ströme der EVCS sind seit 60 s gleich
     seen: set[Evidence] = set()
     for s in range(121):
         seen |= of(clues(tracker, s, evcs_obs=AT_16, tesla_obs=car), Clue.CURRENT)
@@ -704,10 +741,12 @@ def test_current_and_phases_elsewhere_let_tessie_and_home_support(cfg) -> None:
         "sessions": BOTH,
         "evcs_obs": evcs(charging=True, phase_a=dict.fromkeys(PHASES, 10.0)),
         "twc_obs": twc(connected=True, charging=True, phase_a=None),
-        "tesla_obs": charging_tesla(16.0),
+        "tesla_obs": charging_tesla(16.0, plugged_at=T0),
         "homes": {"egolf": True},
     }
     tracker = ClueTracker(cfg)
+    # die Ströme sind seit 60 s gleich, Tessie fragt bei 0 s ab (Gesamtreview I-2)
+    steady(tracker, 0, evcs_obs=kw["evcs_obs"], twc_obs=kw["twc_obs"])
     for s in range(60):
         found = clues(tracker, s, **kw)
         assert of(found, Clue.TESSIE) | of(found, Clue.HOME) == set()
@@ -727,7 +766,7 @@ def test_the_elimination_needs_every_other_session(cfg) -> None:
     three = cfg.model_copy(update={"wallboxes": {**cfg.wallboxes, "twc2": cfg.wallboxes["twc"]}})
     sessions = {"evcs": None, "twc": None, "twc2": None}
     at_10 = dict.fromkeys(PHASES, 10.0)
-    vehicles = {"tesla": charging_tesla(16.0), "egolf": NONE}
+    vehicles = {"tesla": charging_tesla(16.0, plugged_at=T0), "egolf": NONE}
 
     def tessie(second):
         tracker = ClueTracker(three)
@@ -736,6 +775,10 @@ def test_the_elimination_needs_every_other_session(cfg) -> None:
             "twc": twc(connected=True, charging=True, phase_a=None),
             "twc2": second,
         }
+        # die Ströme sind seit 60 s gleich, Tessie fragt bei 0 s ab (Gesamtreview I-2)
+        unknown = {"tesla": NONE, "egolf": NONE}
+        for s in range(-60, 0):
+            tracker.update(at(s), at(s), {}, wallboxes, unknown, {})
         for s in range(61):
             found = tracker.update(at(s), at(s), sessions, wallboxes, vehicles, {})
         return of(set(found), Clue.TESSIE)
@@ -884,3 +927,139 @@ def test_home_assistant_needs_no_settling(cfg) -> None:
     assert of(before, Clue.HOME) == set()  # bei zwei Vorgängen erst nach der Elimination
     after = departure_step(tracker, LEFT_S, stale(0), homes=home)
     assert of(after, Clue.HOME) == {ev("evcs", "egolf", Clue.HOME)}
+
+
+# Stromvergleich am eigenen Wall Connector (Gesamtreview I-2): Eine unplausible Phasenzahl von
+# Tessie zählt als unbekannt, und „passt nicht“ zählt erst mit einem Wert, den Tessie mindestens
+# 60 s nach der letzten Änderung der Ströme der Wallbox abgefragt hat
+
+TWC_16 = twc(connected=True, charging=True, phase_a=dict.fromkeys(PHASES, 16.0))
+TWC_10 = twc(connected=True, charging=True, phase_a=dict.fromkeys(PHASES, 10.0))
+AT_TWC = {"twc": None}  # am Wall Connector läuft ein Vorgang, sein Beginn ist unbekannt
+JUMP_S = 200  # da springt der Strom des Wall Connectors von 16 auf 10 A
+
+
+def at_the_twc(tracker, s, wallbox, car, sessions=AT_TWC, evcs_obs=None):
+    """Die Indizien am Wall Connector in der Sekunde ``s``."""
+    found = clues(
+        tracker,
+        s,
+        sessions=sessions,
+        evcs_obs=evcs_obs or evcs(connected=False),
+        twc_obs=wallbox,
+        tesla_obs=car,
+    )
+    return {e for e in found if e.wallbox == "twc"}
+
+
+def test_a_phase_count_from_tessie_other_than_the_configured_one_says_nothing(cfg) -> None:
+    # Der Tesla lädt am Wall Connector mit 3 × 16 A, Tessie meldet zwei Phasen
+    tracker = ClueTracker(cfg)
+    for s in range(200):
+        car = charging_tesla(16.0, phases=2, plugged_at=at(s))
+        assert of(at_the_twc(tracker, s, TWC_16, car), Clue.CURRENT) == set()
+
+
+def lagging(s, lag_s=70):
+    """Tessie fragt in jedem Zyklus ab und meldet bis ``lag_s`` nach ``JUMP_S`` noch 16 A."""
+    return charging_tesla(16.0 if s < JUMP_S + lag_s else 10.0, plugged_at=at(s))
+
+
+def test_a_lagging_tessie_never_excludes_the_tesla_at_its_wall_connector(cfg) -> None:
+    tracker, seen = ClueTracker(cfg), []
+    for s in range(JUMP_S + 200):
+        found = at_the_twc(tracker, s, TWC_16 if s < JUMP_S else TWC_10, lagging(s))
+        seen.append(of(found, Clue.CURRENT))
+    assert ev("twc", "tesla", Clue.CURRENT, False) not in set().union(*seen)
+    # 60 s nach Tessies erstem Wert mit 10 A passt der Strom wieder
+    current = ev("twc", "tesla", Clue.CURRENT)
+    assert [s for s, found in enumerate(seen) if current in found][-1] == JUMP_S + 199
+    assert seen[JUMP_S + 70 + 59] == set() and seen[JUMP_S + 70 + 60] == {current}
+
+
+def test_a_guest_with_a_steady_other_current_is_still_excluded(cfg) -> None:
+    # Der Tesla lädt an der EVCS mit 3 × 16 A, am Wall Connector lädt ein Gast stabil mit 3 × 10 A.
+    # Tessie fragt alle 30 s ab: Der Wert von 60 s ist der erste, der 60 s nach dem ersten Zyklus
+    # der Wallbox abgefragt wurde; 60 s später schließt der Stromvergleich den Tesla dort aus.
+    tracker, excluded = ClueTracker(cfg), []
+    for s in range(200):
+        car = charging_tesla(16.0, plugged_at=at(s - s % 30))
+        found = at_the_twc(tracker, s, TWC_10, car, sessions=BOTH, evcs_obs=AT_16)
+        if ev("twc", "tesla", Clue.CURRENT, False) in found:
+            excluded.append(s)
+    assert excluded == list(range(120, 200))
+
+
+def test_currents_that_match_right_after_a_change_still_support(cfg) -> None:
+    # Der Strom springt bei 200 s auf 10 A, und Tessie meldet gleich 10 A, abgefragt bei 205 s:
+    # „passt“ zählt ohne die 60 s nach der Änderung
+    tracker = ClueTracker(cfg)
+    for s in range(JUMP_S):
+        at_the_twc(tracker, s, TWC_16, NONE)
+    car = charging_tesla(10.0, plugged_at=at(JUMP_S + 5))
+    for s in range(JUMP_S, JUMP_S + 65):
+        found = of(at_the_twc(tracker, s, TWC_10, car), Clue.CURRENT)
+        assert found == (set() if s < JUMP_S + 60 else {ev("twc", "tesla", Clue.CURRENT)})
+
+
+@pytest.mark.parametrize(
+    ("before", "after", "changed"),
+    [
+        pytest.param(
+            {"L1": 16.0, "L2": 16.0, "L3": 16.0},
+            {"L1": 15.0, "L2": 16.0, "L3": 16.0},
+            False,
+            id="1 A weniger",
+        ),
+        pytest.param(
+            {"L1": 16.0, "L2": 16.0, "L3": 16.0},
+            {"L1": 14.9, "L2": 16.0, "L3": 16.0},
+            True,
+            id="mehr als 1 A weniger",
+        ),
+        pytest.param(
+            {"L1": 16.0, "L2": 16.0, "L3": 1.5},
+            {"L1": 16.0, "L2": 16.0, "L3": 0.9},
+            True,
+            id="eine Phase hört auf zu laden",
+        ),
+        pytest.param(
+            {"L1": 16.0, "L2": 16.0, "L3": 0.9},
+            {"L1": 16.0, "L2": 16.0, "L3": 1.0},
+            True,
+            id="eine Phase beginnt zu laden",
+        ),
+    ],
+)
+def test_what_counts_as_a_change_of_the_currents(cfg, before, after, changed) -> None:
+    # Die Wallbox misst 200 s lang ``before``, dann ``after``; Tessie meldet 3 × 20 A, abgefragt
+    # bei 230 s. Ohne Änderung schließt der Stromvergleich ab 260 s aus; nach einer Änderung bei
+    # 200 s nicht, denn der Wert lag keine 60 s danach.
+    tracker = ClueTracker(cfg)
+    for s in range(200):
+        at_the_twc(tracker, s, replace(TWC_16, phase_a=before), NONE)
+    car = charging_tesla(20.0, plugged_at=at(230))
+    for s in range(200, 261):
+        found = of(at_the_twc(tracker, s, replace(TWC_16, phase_a=after), car), Clue.CURRENT)
+    assert (found == {ev("twc", "tesla", Clue.CURRENT, False)}) is not changed
+
+
+@pytest.mark.parametrize(
+    "before",
+    [
+        pytest.param(replace(TWC_16, charging=False), id="Laden beginnt"),
+        pytest.param(replace(TWC_16, charging=None), id="Laden wieder bekannt"),
+        pytest.param(replace(TWC_16, phase_a=None), id="Ströme wieder bekannt"),
+    ],
+)
+def test_charging_that_begins_is_a_change(cfg, before) -> None:
+    # Ab 200 s lädt der Wall Connector mit 3 × 16 A; Tessies Wert von 230 s lag keine 60 s danach.
+    # Dass das Ende des Ladens zählt, zeigt sich erst, wenn es wieder beginnt.
+    tracker = ClueTracker(cfg)
+    for s in range(200):
+        at_the_twc(tracker, s, before, NONE)
+    car = charging_tesla(20.0, plugged_at=at(230))
+    seen = set()
+    for s in range(200, 291):
+        seen |= of(at_the_twc(tracker, s, TWC_16, car), Clue.CURRENT)
+    assert seen == set()
