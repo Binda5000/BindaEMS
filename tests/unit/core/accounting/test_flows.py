@@ -1,9 +1,17 @@
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 
 import pytest
 from tests.helpers import T0, snap
 
-from bindaems.core.accounting.flows import SlotAccumulator, SlotProgress, allocate, wb_key
+from bindaems.core.accounting.flows import (
+    SlotAccumulator,
+    SlotProgress,
+    allocate,
+    derived_flows,
+    wb_key,
+)
+from bindaems.core.state.derived import derive
 from bindaems.shared.timeutil import HOLD_MAX_S
 
 
@@ -67,6 +75,46 @@ def test_allocate_battery_serves_house_before_wallboxes() -> None:
 
 def test_allocate_clamps_negative_inputs() -> None:
     assert allocate(-20, 500, 0, -5, {"evcs": -3}) == {}  # Messrauschen, kein Bedarf
+
+
+def test_derived_flows_follow_the_wallbox_order(cfg) -> None:  # Plan 2c-2a, Präzisierung 9
+    # Ohne PV: Haus 900 W, EVCS 7360 W, Wall Connector 11040 W; der Akku gibt 11940 W ab. Wer zuerst
+    # steht, bekommt den Akku, die andere den Netzbezug; die Summen bleiben gleich. Eine Wallbox
+    # ohne Leistung zählt mit 0 W.
+    derived = replace(
+        derive(snap({}), cfg),
+        pv_total_w=0.0,
+        grid_w=7360.0,
+        battery_w=-11940.0,
+        house_load_w=900.0,
+        wallbox_w={"evcs": 7360.0, "twc": 11040.0},
+    )
+    assert derived_flows(derived, ["evcs", "twc"]) == {
+        "battery>house": 900.0,
+        "battery>wb:evcs": 7360.0,
+        "battery>wb:twc": 3680.0,
+        "grid>wb:twc": 7360.0,
+    }
+    assert derived_flows(derived, ["twc", "evcs"]) == {
+        "battery>house": 900.0,
+        "battery>wb:twc": 11040.0,
+        "grid>wb:evcs": 7360.0,
+    }
+    without = replace(derived, wallbox_w={"evcs": 7360.0, "twc": None})
+    assert derived_flows(without, ["twc", "evcs"]) == {
+        "battery>house": 900.0,
+        "battery>wb:evcs": 7360.0,
+        "battery>grid": 3680.0,
+    }
+
+
+@pytest.mark.parametrize("unknown", ["pv_total_w", "grid_w", "battery_w", "house_load_w"])
+def test_derived_flows_need_the_whole_balance(cfg, unknown) -> None:
+    derived = replace(
+        derive(snap({}), cfg), pv_total_w=0.0, grid_w=0.0, battery_w=0.0, house_load_w=0.0
+    )
+    assert derived_flows(derived, cfg.wallbox_order) == {}
+    assert derived_flows(replace(derived, **{unknown: None}), cfg.wallbox_order) is None
 
 
 def test_accumulator_integrates_and_closes_slot() -> None:

@@ -6,7 +6,8 @@
   ``forget`` und ``idle`` an ihn weiter. Die Eingaben sind die der Laderegelung (Plan 2c-1),
   die des Akku-Sollwerts (PV und Hauslast aus den abgeleiteten Größen, der Basis-Sollwert
   ``ess.grid_setpoint_w`` und die Sperren des Zyklus) und die Viertelstunde des 15-min-Wächters
-  aus den Flüssen des Zyklus und dem laufenden Slot der Abrechnung (Präzisierung 9).
+  aus den Flüssen des Zyklus und dem laufenden Slot der Abrechnung (Präzisierung 9); den
+  Netzanteil der Wallboxen rechnet er dafür mit PV und Akku zuerst für die Wallboxen in Boost.
 - Er legt am Ende des Regelteils Health und Alarme des Kerns ab (``finish``). ``health`` und
   ``alarms`` lesen nur diesen Stand und dürfen deshalb aus einem anderen Thread kommen.
 - Er fängt jede Ausnahme des Kerns (Präzisierung 15).
@@ -39,7 +40,7 @@ from typing import Any, Final, TypeVar
 
 import structlog
 
-from bindaems.core.accounting.flows import SlotProgress, wb_key
+from bindaems.core.accounting.flows import SlotProgress, derived_flows, wb_key
 from bindaems.core.control.actuator import Actuator, Capabilities, WakeStart
 from bindaems.core.control.charge_inputs import ChargeInputs, observe, ok_number
 from bindaems.core.control.executor import WriteResult
@@ -130,13 +131,17 @@ class RegulationLink:
         Dazu die des Akku-Sollwerts (Plan 2c-2a): PV (``derived.pv_total_w``) und Hauslast
         (``derived.house_load_w``), der Basis-Sollwert ``ess.grid_setpoint_w`` (``ok_number``) und
         die Sperren ``locks``, die Gründe je Aktor wie im ``SafetyContext``. Und die Viertelstunde
-        des 15-min-Wächters (``quarter``) aus ``flows``, den Flüssen dieses Zyklus (``allocate``;
-        ``None`` heißt Bilanz unbekannt), und ``slot``, dem laufenden Slot der Abrechnung bis zu
-        diesem Zyklus (``SlotAccumulator.current``).
+        des 15-min-Wächters (``quarter``) aus ``flows``, den Flüssen dieses Zyklus
+        (``derived_flows`` mit ``wallbox_order``; ``None`` heißt Bilanz unbekannt), ``slot``, dem
+        laufenden Slot der Abrechnung bis zu diesem Zyklus (``SlotAccumulator.current``), und den
+        Wallboxen in Boost aus dem letzten Schritt des Kerns (``Regulation.boost_wallboxes``, einen
+        Zyklus alt).
 
         Auch eine Ausnahme beim Bauen der Eingaben setzt nur die Regelung aus.
         """
         self._snow, self._wall_now = snow, now
+        no_boost: frozenset[str] = frozenset()  # ohne Ergebnis keine Wallbox in Boost
+        boost = self._call("boost_wallboxes", self.regulation.boost_wallboxes, no_boost)
 
         def regulate() -> list[ControlCommand]:
             grid, wallboxes, vehicles = observe(snap, derived, self._cfg, connected)
@@ -164,7 +169,7 @@ class RegulationLink:
                     house_w=derived.house_load_w,
                     base_setpoint_w=ok_number(snap, "ess.grid_setpoint_w"),
                     locks=locks,
-                    quarter=self._quarter(flows, slot),
+                    quarter=self._quarter(flows, slot, derived, boost),
                 )
             )
             self._regulated = True
@@ -249,7 +254,11 @@ class RegulationLink:
         return [*self._alarms, *exception]
 
     def _quarter(
-        self, flows: Mapping[str, float] | None, slot: SlotProgress | None
+        self,
+        flows: Mapping[str, float] | None,
+        slot: SlotProgress | None,
+        derived: Derived,
+        boost: Collection[str],
     ) -> QuarterObs | None:
         """Die laufende Viertelstunde für den 15-min-Wächter (Präzisierung 9); ohne Slot ``None``.
 
@@ -257,6 +266,15 @@ class RegulationLink:
         - ``grid_w``: die Leistung der Flüsse aus dem Netz in diesem Zyklus; ohne ``flows`` ``None``
         - ``wallbox_grid_w``: je Wallbox in der Reihenfolge von ``wallbox_order`` ihr Netzanteil in
           diesem Zyklus (``grid>wb:<w>``), ohne Eintrag 0 W; ohne ``flows`` leer
+
+        Den Netzanteil je Wallbox zieht der Wächter für die Autos in Boost ab. Die Flüsse der
+        Abrechnung geben PV und Akku den Wallboxen in der Reihenfolge von ``wallbox_order``; der
+        Akku-Sollwert lässt aber Boost aus dem Akku laden und schickt den Fehlbetrag der anderen
+        Autos ans Netz. Mit Wallboxen in Boost (``boost``) kommt der Netzanteil deshalb aus einer
+        zweiten Zuordnung derselben abgeleiteten Größen (``derived_flows``), in der die Wallboxen in
+        Boost PV und Akku zuerst bekommen, dann die übrigen in der Reihenfolge von
+        ``wallbox_order``. So zieht der Wächter nie den Netzbezug eines anderen Autos als Boost ab.
+        Ohne Wallboxen in Boost ist es der Netzanteil aus ``flows``; die Summen ändern sich nicht.
         """
         if slot is None:
             return None
@@ -264,7 +282,12 @@ class RegulationLink:
         if flows is None:
             return QuarterObs(start, energy_wh, None, {})
         order = self._cfg.wallbox_order
-        shares = {wallbox: flows.get(wb_key("grid", wallbox), 0.0) for wallbox in order}
+        split: Mapping[str, float] = flows
+        if boost:
+            first = [*(w for w in order if w in boost), *(w for w in order if w not in boost)]
+            # dieselbe Bilanz wie ``flows``; fehlte sie, zöge der Wächter nichts als Boost ab
+            split = derived_flows(derived, first) or {}
+        shares = {wallbox: split.get(wb_key("grid", wallbox), 0.0) for wallbox in order}
         return QuarterObs(start, energy_wh, _from_grid(flows), shares)
 
     def _call(self, name: str, call: Callable[[], _T], fallback: _T) -> _T:

@@ -460,6 +460,32 @@ def test_an_unregulated_car_in_boost_counts_for_the_boost_share(cfg) -> None:  #
     assert regulation.health()["peak"]["projected_kw"] == 1.72
 
 
+def test_boost_wallboxes_name_the_wallboxes_of_the_cars_in_boost(cfg) -> None:  # Präzisierung 9
+    # Der Tesla lädt am Wall Connector in Boost, der e-Golf an der EVCS in Sofort: Nur der Wall
+    # Connector ist eine Wallbox in Boost, bis zum nächsten ``step``; vorher und nach ``idle``
+    # keine. Ohne Boost (beide in Sofort) gibt es auch nach einem ``step`` keine.
+    until = T0 + timedelta(hours=1)
+    boost = Intent(
+        version=1,
+        control=True,
+        vehicles={
+            "tesla": VehicleIntent(boost_until=until),
+            "egolf": VehicleIntent(mode=ChargeMode.NOW),
+        },
+    )
+    charging = {"twc_obs": TESLA_16_A, "tesla_obs": tesla(plugged=True, charging=True)}
+    egolf = evcs(charging=True, power_w=EGOLF_W)
+    found: dict[str, frozenset[str]] = {}
+    for name, intent in (("boost", boost), ("now", BOTH_NOW)):
+        regulation = Regulation(cfg, HardLimits.from_config(cfg), started=T0)
+        assert regulation.boost_wallboxes() == frozenset()
+        regulation.step(RegulationInputs(inputs(cfg, intent=intent, evcs_obs=egolf, **charging)))
+        found[name] = regulation.boost_wallboxes()
+        regulation.idle(T0 + timedelta(seconds=1))
+        assert regulation.boost_wallboxes() == frozenset()
+    assert found == {"boost": frozenset({"twc"}), "now": frozenset()}
+
+
 def test_peak_cars_follow_the_charge_points() -> None:  # Präzisierungen 4 und 11
     views = (
         CarView("tesla", "twc", Effective.PV, 0.0, False, 3450.0, True),

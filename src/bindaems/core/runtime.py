@@ -61,7 +61,7 @@ import uvicorn
 from pydantic import SecretStr
 
 from bindaems import __version__
-from bindaems.core.accounting.flows import SlotAccumulator, allocate
+from bindaems.core.accounting.flows import SlotAccumulator, derived_flows
 from bindaems.core.actuators.evcs import EvcsActuator
 from bindaems.core.actuators.tesla import TeslaActuator
 from bindaems.core.actuators.victron import OVERRIDE_TIMEOUT_S, VictronActuator
@@ -637,7 +637,8 @@ class CoreRuntime:
         snap = self.store.snapshot()
         derived = derive(snap, self._cfg)
         plausibility = self._plausibility.evaluate(snap, derived, now)
-        flows = self._flows(derived)  # für die Abrechnung und den 15-min-Wächter
+        # für die Abrechnung und den 15-min-Wächter; ``None`` heißt Bilanz unbekannt
+        flows = derived_flows(derived, self._cfg.wallbox_order)
         closed = self._accumulator.add(now, flows, snap)
         if closed is not None:
             self._sampler.write_slot_flows(closed)
@@ -1178,14 +1179,6 @@ class CoreRuntime:
         if self.intents.load_problem is not None:
             alarms.append(Alarm("intent.file", Severity.WARNING, INTENT_FILE_PROBLEM, now))
         return alarms
-
-    def _flows(self, derived: Derived) -> dict[str, float] | None:
-        pv, grid = derived.pv_total_w, derived.grid_w
-        battery, house = derived.battery_w, derived.house_load_w
-        if pv is None or grid is None or battery is None or house is None:
-            return None  # Bilanz unbekannt: zählt nicht als abgedeckt
-        wallboxes = {name: derived.wallbox_w.get(name) or 0.0 for name in self._cfg.wallbox_order}
-        return allocate(pv, grid, battery, house, wallboxes)
 
     def _check_counters(self, closed: SlotFlows, now: datetime) -> None:
         alarm = check_grid_counters(closed, now)

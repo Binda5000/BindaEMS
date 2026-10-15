@@ -187,6 +187,13 @@ class Regulation:
         """Fahrzeug-Aktor → Wallbox aus der Zuordnung der Laderegelung, für die Safety-Schicht."""
         return self.charger.vehicle_wallbox()
 
+    def boost_wallboxes(self) -> frozenset[str]:
+        """Die Wallboxen der Autos in Boost im letzten ``step`` (``ChargeController.cars``), für
+        den Boost-Anteil der Viertelstunde des Wächters (Präzisierung 9); vor dem ersten ``step``
+        und nach ``idle`` keine. Eine Wallbox ohne Fahrzeug ist nie in Boost: Der Modus des Gastes
+        kennt ihn nicht."""
+        return frozenset(car.wallbox for car in self.charger.cars() if car.mode is Effective.BOOST)
+
     def health(self) -> dict[str, Any]:
         """Der Stand des letzten Zyklus: ``vehicles`` je Fahrzeug (``ChargeController.health``),
         ``battery`` (``BatteryController.health``) und ``peak`` (``PeakGuard.health``)."""

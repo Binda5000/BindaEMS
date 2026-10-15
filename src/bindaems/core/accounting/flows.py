@@ -7,12 +7,30 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 
+from bindaems.core.state.derived import Derived
 from bindaems.shared.domain import SlotFlows, Snapshot
 from bindaems.shared.timeutil import HOLD_MAX_S, SLOT, slot_start
 
 
 def wb_key(source: str, wallbox: str) -> str:
     return f"{source}>wb:{wallbox}"
+
+
+def derived_flows(derived: Derived, wallbox_order: Sequence[str]) -> dict[str, float] | None:
+    """Die Flüsse eines Zyklus aus den abgeleiteten Größen (``allocate``), PV und Akku für die
+    Wallboxen in der Reihenfolge ``wallbox_order``.
+
+    ``None`` heißt Bilanz unbekannt: PV, Netz, Akku oder Hauslast fehlen. Eine Wallbox ohne
+    Leistung zählt mit 0 W. Die Laufzeit nimmt ``Config.wallbox_order`` (Abrechnung); der
+    15-min-Wächter nimmt für seinen Boost-Anteil die Wallboxen in Boost zuerst (Plan 2c-2a,
+    Präzisierung 9). Die Summen je Quelle hängen von der Reihenfolge nicht ab.
+    """
+    pv, grid = derived.pv_total_w, derived.grid_w
+    battery, house = derived.battery_w, derived.house_load_w
+    if pv is None or grid is None or battery is None or house is None:
+        return None  # Bilanz unbekannt: zählt nicht als abgedeckt
+    wallboxes = {name: derived.wallbox_w.get(name) or 0.0 for name in wallbox_order}
+    return allocate(pv, grid, battery, house, wallboxes)
 
 
 def allocate(

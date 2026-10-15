@@ -1,15 +1,17 @@
 import math
 from collections.abc import Callable
+from dataclasses import replace
 from datetime import datetime, timedelta
 from typing import Any
 
 import pytest
 from structlog.testing import capture_logs
 from tests.helpers import T0, snap
+from tests.unit.core.control.charge_helpers import evcs, inputs, tesla, twc
 from tests.unit.core.control.fakes import FakeActuator, FakeWakeActuator
 from tests.unit.core.state.conftest import BASE
 
-from bindaems.core.accounting.flows import SlotProgress
+from bindaems.core.accounting.flows import SlotProgress, allocate, wb_key
 from bindaems.core.control.actuator import Capabilities
 from bindaems.core.control.executor import WriteResult
 from bindaems.core.control.last_values import ControlCommand
@@ -18,8 +20,8 @@ from bindaems.core.control.regulation import Regulation, RegulationInputs
 from bindaems.core.regulation_link import CONTROL_EXCEPTION, RegulationLink
 from bindaems.core.safety.limits import HardLimits
 from bindaems.core.safety.types import Outcome, Verdict
-from bindaems.core.state.derived import derive
-from bindaems.shared.control import Command, CommandKind, Intent
+from bindaems.core.state.derived import PHASES, derive
+from bindaems.shared.control import ChargeMode, Command, CommandKind, Intent, VehicleIntent
 from bindaems.shared.decisions import DecisionResult
 from bindaems.shared.domain import Alarm, Quality, Severity, Snapshot
 
@@ -249,6 +251,48 @@ def test_step_builds_the_quarter_of_the_guard(cfg, monkeypatch) -> None:  # Prä
     assert built(flows=flows, slot=None) is None
 
 
+def test_the_boost_share_comes_after_pv_and_battery(cfg, monkeypatch) -> None:  # Präzisierung 9
+    # Ohne PV lädt der Tesla am Wall Connector in Boost mit 11040 W, der e-Golf an der EVCS in
+    # Sofort mit 7360 W; das Haus braucht 900 W. Der Akku gibt 11940 W ab, 7360 W kommen aus dem
+    # Netz: Der Akku-Sollwert lässt Boost aus dem Akku laden und schickt den e-Golf ans Netz. Die
+    # Flüsse der Abrechnung geben den Akku dagegen zuerst der EVCS (``wallbox_order``) und buchen
+    # den Netzbezug auf den Wall Connector. Der Wächter zöge ihn so als Boost ab und sähe vom
+    # e-Golf nichts.
+    link = link_for(cfg)
+    boost = VehicleIntent(boost_until=NOW + timedelta(hours=1))
+    now = VehicleIntent(mode=ChargeMode.NOW)
+    both = Intent(version=1, control=True, vehicles={"tesla": boost, "egolf": now})
+    charge = inputs(
+        cfg,
+        intent=both,
+        evcs_obs=evcs(charging=True, power_w=7360.0),
+        twc_obs=twc(
+            connected=True, charging=True, phase_a=dict.fromkeys(PHASES, 16.0), power_w=11040.0
+        ),
+        tesla_obs=tesla(plugged=True, charging=True),
+    )
+    link.regulation.step(RegulationInputs(charge))  # der Kern sieht den Tesla in Boost
+    seen: list[RegulationInputs] = []
+    monkeypatch.setattr(link.regulation, "step", lambda found: seen.append(found) or [])
+    wallbox_w = {"evcs": 7360.0, "twc": 11040.0}
+    derived = replace(
+        derive(snap({}), cfg),
+        pv_total_w=0.0,
+        grid_w=7360.0,
+        battery_w=-11940.0,
+        house_load_w=900.0,
+        wallbox_w=wallbox_w,
+    )
+    flows = allocate(0.0, 7360.0, -11940.0, 900.0, wallbox_w)  # die Flüsse der Abrechnung
+    assert (flows.get(wb_key("grid", "evcs")), flows[wb_key("grid", "twc")]) == (None, 7360.0)
+    link.start_cycle()
+    slot = SlotProgress(T0, {}, 0.0)
+    step(link, cfg, NOW + timedelta(seconds=1), derived=derived, flows=flows, slot=slot)
+    # Die Summe bleibt die der Abrechnung; den Netzanteil je Wallbox rechnet der Link mit PV und
+    # Akku zuerst für die Wallboxen in Boost.
+    assert seen[-1].quarter == QuarterObs(T0, 0.0, 7360.0, {"evcs": 7360.0, "twc": 0.0})
+
+
 def test_the_alarm_of_the_guard_ends_with_its_quarter_without_regulation(cfg) -> None:
     # Präzisierung 14: ``finish`` fragt die Alarme des Kerns in jedem Zyklus, auch ohne Regelung. So
     # endet „überschritten“ mit seiner Viertelstunde, obwohl der Wächter keinen Schritt mehr macht.
@@ -296,6 +340,20 @@ def test_every_call_of_the_kernel_is_guarded(cfg, monkeypatch, name, call, fallb
     assert call(link) == fallback
     assert link.failed
     assert idled == [T0]
+
+
+def test_a_throwing_boost_wallboxes_fails_the_cycle_before_the_step(cfg, monkeypatch) -> None:
+    # Präzisierung 15: Auch die Frage nach den Wallboxen in Boost (für die Viertelstunde des
+    # Wächters) ist ein Aufruf des Kerns. Wirft sie, ruht der Kern, und ``step`` erreicht ihn nicht.
+    link = link_for(cfg)
+    idled = kernel_idle(link, monkeypatch)
+    steps: list[RegulationInputs] = []
+    monkeypatch.setattr(link.regulation, "boost_wallboxes", broken)
+    monkeypatch.setattr(link.regulation, "step", lambda found: steps.append(found) or [])
+    link.start_cycle()
+    assert step(link, cfg) == []
+    assert link.failed
+    assert (idled, steps) == ([NOW], [])
 
 
 @pytest.mark.parametrize("name", ["health", "alarms"])
