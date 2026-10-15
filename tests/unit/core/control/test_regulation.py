@@ -1,4 +1,3 @@
-import math
 from collections.abc import Mapping
 from dataclasses import replace
 from datetime import datetime, timedelta
@@ -6,7 +5,7 @@ from typing import Any
 
 import pytest
 from tests.helpers import T0
-from tests.unit.core.control.charge_helpers import CONTROLLABLE, evcs, inputs, tesla, twc
+from tests.unit.core.control.charge_helpers import CONTROLLABLE, evcs, grid, inputs, tesla, twc
 
 from bindaems.core.control.battery import BatteryCar, BatteryNeed
 from bindaems.core.control.charge_inputs import ChargeInputs
@@ -378,11 +377,13 @@ BOTH_CHARGING = {
 }
 
 
-def test_the_wanted_grid_counts_only_up_to_the_fixed_ceiling(cfg, monkeypatch) -> None:
+def test_with_a_budget_the_wanted_grid_counts_only_up_to_the_fixed_ceiling(
+    cfg, monkeypatch
+) -> None:
     # Präzisierung 10 und Design 2c-2, Entscheidung 3: Regel 2 begrenzt den Override auf
-    # ``max_grid_charge_setpoint_w`` (8000 W); was die Autos darüber wollen, liefert der Akku. Der
-    # Netzbezug bleibt so bei 8000 W, unter P_zul eines Ziels von 10 kW (9700 W): Der Wächter
-    # drosselt nicht, obwohl die Autos 18400 W aus dem Netz wollen.
+    # ``max_grid_charge_setpoint_w`` (8000 W); was die Autos darüber wollen, liefert der Akku, der
+    # mit SOC 60 % ein Budget hat. Der Netzbezug bleibt so bei 8000 W, unter P_zul eines Ziels von
+    # 10 kW (9700 W): Der Wächter drosselt nicht, obwohl die Autos 18400 W aus dem Netz wollen.
     peak = with_target(cfg, 10.0)
     regulation = Regulation(peak, HardLimits.from_config(peak), started=T0)
     seen = charger_limits(regulation, monkeypatch)
@@ -398,11 +399,12 @@ def test_the_wanted_grid_counts_only_up_to_the_fixed_ceiling(cfg, monkeypatch) -
     [(None, {"egolf": 7060.0}), ("locked", {}), ("not controllable", {})],
 )
 def test_while_victron_cannot_act_only_the_mean_counts(cfg, monkeypatch, held, caps) -> None:
-    # Präzisierung 10: Ziel 8 kW (P_zul 7700 W), beide Autos in Sofort wie oben, aus dem Netz kommen
-    # 6000 W. Kann Victron handeln, hält der Override den Netzbezug bei der festen Grenze von
-    # Regel 2 (8000 W), 300 W über P_zul: Der Wächter senkt den e-Golf um 300 W auf 7060 W. Ist
-    # Victron gesperrt (etwa durch Dynamic ESS) oder nicht steuerbar, setzt kein Override diesen
-    # Netzbezug durch; dann zählt nur das Mittel, und es liegt unter P_zul.
+    # Präzisierung 10: Ziel 8 kW (P_zul 7700 W), beide Autos in Sofort wie oben, SOC 60 % (ein
+    # Budget für den Akku), aus dem Netz kommen 6000 W. Kann Victron handeln, zählt der gewollte
+    # Netzbezug bis zur festen Grenze von Regel 2 (8000 W), 300 W über P_zul: Der Wächter senkt den
+    # e-Golf um 300 W auf 7060 W. Ist Victron gesperrt (etwa durch Dynamic ESS) oder nicht
+    # steuerbar, setzt kein Override diesen Netzbezug durch; dann zählt nur das Mittel, und es liegt
+    # unter P_zul.
     peak = with_target(cfg)
     regulation = Regulation(peak, HardLimits.from_config(peak), started=T0)
     seen = charger_limits(regulation, monkeypatch)
@@ -412,6 +414,79 @@ def test_while_victron_cannot_act_only_the_mean_counts(cfg, monkeypatch, held, c
         given = {"controllable": victron, **BOTH_CHARGING}
         peak_cycle(regulation, peak, s, drawn_w=6000.0, locks=locks, **given)
     assert seen[1].caps_w == caps
+
+
+# Der Tesla lädt in Min+PV ohne PV mit seinem Mindeststrom von 5 A (3450 W), der e-Golf in Sofort.
+TESLA_5_A = twc(
+    connected=True,
+    charging=True,
+    phase_a=dict.fromkeys(("L1", "L2", "L3"), 5.0),
+    power_w=3450.0,
+)
+MIN_PV_AND_NOW = Intent(
+    version=1,
+    control=True,
+    vehicles={
+        "egolf": VehicleIntent(mode=ChargeMode.NOW),
+        "tesla": VehicleIntent(mode=ChargeMode.MIN_PV),
+    },
+)
+# Victron und beide Ladepunkte sind steuerbar: Der Wächter kann beide Autos drosseln.
+ALL_STEERABLE = {**CONTROLLABLE, "vehicle.tesla": True, VICTRON: True}
+
+
+@pytest.mark.parametrize(
+    ("intent", "twc_obs"),
+    [(MIN_PV_AND_NOW, TESLA_5_A), (BOTH_NOW, TESLA_16_A)],
+    ids=["tesla_min_pv", "both_now"],
+)
+def test_with_a_budget_the_guard_cuts_once_by_the_gap_below_the_ceiling(
+    cfg, monkeypatch, intent, twc_obs
+) -> None:
+    # Präzisierung 10 und Design 2c-2, Entscheidung 3: Ziel 8 kW, P_zul 7700 W liegt 300 W unter der
+    # festen Grenze von Regel 2 (8000 W); der SOC 60 % gibt dem Akku ein Budget, und er hält den
+    # Netzbezug bei 7700 W. Die Autos wollen 10810 W oder 18400 W aus dem Netz. Der Wächter senkt
+    # einmal um 300 W, den e-Golf in Sofort auf 7060 W (der Tesla in Min+PV ist an seinem Boden, in
+    # Sofort hat er die höhere Priorität). Ist der e-Golf mit 15 A (6900 W) gefolgt, senkt er über
+    # fünf Wartezeiten nicht weiter: Was die Autos über 8000 W wollen, liefert der Akku wie ohne
+    # Ziel.
+    peak = with_target(cfg)
+    regulation = Regulation(peak, HardLimits.from_config(peak), started=T0)
+    seen = charger_limits(regulation, monkeypatch)
+    given = {"intent": intent, "twc_obs": twc_obs, "tesla_obs": tesla(plugged=True, charging=True)}
+    for s in range(151):
+        egolf = evcs(charging=True, power_w=EGOLF_W if s < 2 else 6900.0)
+        kw = {"controllable": ALL_STEERABLE, "evcs_obs": egolf, **given}
+        peak_cycle(regulation, peak, s, drawn_w=7700.0, **kw)
+    assert seen[0] == NO_LIMITS
+    assert [limits.caps_w for limits in seen[1:]] == [{"egolf": 7060.0}] * 150
+
+
+@pytest.mark.parametrize(
+    ("target_kw", "reduction_kw", "caps"),
+    [
+        (8.0, 10.7, {"egolf": 2760.0, "tesla": 4940.0}),
+        (6.0, 12.7, {"egolf": 2760.0, "tesla": 3450.0}),
+    ],
+)
+def test_without_a_budget_the_guard_cuts_the_whole_reduction_at_once(
+    cfg, monkeypatch, target_kw, reduction_kw, caps
+) -> None:
+    # Präzisierung 10: Der SOC 25 % liegt nicht über USV-Reserve + reserve_guard_pct (20 % + 5 %),
+    # der Akku hat kein Budget. Regel 2 hält den Override dann bei der festen Grenze (8000 W), aus
+    # dem Netz kommen 8000 W, und beide Autos wollen in Sofort 18400 W. Unter P_zul bringt den
+    # Netzbezug nur die ganze Senkung Basis + W − P_zul, in einem Schritt und in der Reihenfolge:
+    # zuerst der e-Golf (die niedrigere Priorität) bis zu seinem Boden, dann der Tesla. Bei 8 kW
+    # (P_zul 7700 W) sind das 10700 W; bei 6 kW (P_zul 5700 W) 12700 W, mehr, als beide Autos bis zu
+    # ihrem Boden hergeben (4600 W + 7590 W).
+    peak = with_target(cfg, target_kw)
+    regulation = Regulation(peak, HardLimits.from_config(peak), started=T0)
+    seen = charger_limits(regulation, monkeypatch)
+    kw = {"controllable": ALL_STEERABLE, "grid_obs": grid(soc=25.0), **BOTH_CHARGING}
+    peak_cycle(regulation, peak, 0, drawn_w=8000.0, **kw)
+    assert regulation.health()["peak"]["reduction_kw"] == pytest.approx(reduction_kw)
+    peak_cycle(regulation, peak, 1, drawn_w=8000.0, **kw)
+    assert seen[1] == PeakLimits(budget_w=None, caps_w=caps)
 
 
 @pytest.mark.parametrize(("steerable", "caps"), [(True, {"egolf": 5980.0}), (False, {})])
@@ -509,16 +584,14 @@ def test_peak_cars_follow_the_charge_points() -> None:  # Präzisierungen 4 und 
     )
 
 
-def test_peak_wanted_w_counts_up_to_the_fixed_ceiling() -> None:  # Präzisierung 10
-    # 7360 W Fehlbetrag in Sofort: W = 7360 W. Mit der Basis 1000 W und der festen Grenze 8000 W
-    # zählt der Wächter höchstens 7000 W; ohne Basis bleibt W, ohne Bedarf oder ohne Victron nichts.
-    need = BatteryNeed(0.0, 0.0, 7360.0, {"evcs": 7360.0}, {}, "soc", None)
-    assert peak_wanted_w(need, 1000.0, 8000.0, acting=True) == 7000.0
-    assert peak_wanted_w(need, 0.0, 8000.0, acting=True) == 7360.0
-    assert peak_wanted_w(need, None, 8000.0, acting=True) == 7360.0
-    assert peak_wanted_w(need, math.nan, 8000.0, acting=True) == 7360.0
-    assert peak_wanted_w(None, 0.0, 8000.0, acting=True) is None
-    assert peak_wanted_w(need, 0.0, 8000.0, acting=False) is None
+def test_peak_wanted_w_is_w_while_victron_can_act() -> None:  # Präzisierung 10
+    # Beide Autos in Sofort mit 18400 W Fehlbetrag: Der Wächter bekommt W ungekappt, auch über der
+    # festen Grenze von Regel 2 (die Regel mit und ohne Budget kennt er selbst); ohne Bedarf oder
+    # solange Victron nicht handeln kann, nichts.
+    need = BatteryNeed(0.0, 0.0, 18400.0, {"evcs": 7360.0, "twc": 11040.0}, {}, "soc", None)
+    assert peak_wanted_w(need, acting=True) == 18400.0
+    assert peak_wanted_w(None, acting=True) is None
+    assert peak_wanted_w(need, acting=False) is None
 
 
 def test_the_alarm_of_the_guard_ends_with_its_quarter(cfg) -> None:  # Präzisierung 14

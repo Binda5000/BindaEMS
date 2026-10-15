@@ -181,7 +181,8 @@ def test_json_examples_of_the_battery_section_are_valid() -> None:
             found.add("health")
             assert set(item) == {"battery", "peak"}
             assert set(item["battery"]) == set(BatteryController(cfg).health())
-            peak = PeakGuard(cfg.control, cfg.battery.reserve_soc_pct).health()
+            ceiling_w = cfg.victron.max_grid_charge_setpoint_w
+            peak = PeakGuard(cfg.control, cfg.battery.reserve_soc_pct, ceiling_w).health()
             assert set(item["peak"]) == set(peak)
             assert item["battery"]["state"] in {"ok", "unknown", "locked", "idle"}
             assert item["battery"]["support"] in {"on", "soc", "time", "mode", None}

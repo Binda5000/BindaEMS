@@ -119,7 +119,8 @@ class Cap:
 
     - ``cap_w``: die Leistungsgrenze
     - ``cut_w``: die gesamte Senkung des Autos, seit es die Grenze hat; an ihr misst sich das
-      Aufheben
+      Aufheben, und mit Budget für den Akku zählt sie zur gemerkten Senkung ``S`` des Bedarfs
+      (``PeakGuard``, Präzisierung 10)
     - ``mode``: der Modus, in dem das Auto gedrosselt wurde; nur in ihm gilt die Grenze
     """
 
@@ -176,7 +177,7 @@ class _Calc:
     - ``mean_w``: das Mittel des Netzbezugs ohne Boost; ``None`` ohne einen Wert im Fenster
     - ``projection_w``: die Hochrechnung auf die mittlere Leistung der Viertelstunde; ``None`` ohne
       Mittel
-    - ``reduction_w``: die verlangte Senkung, auch unter 0; ``None`` ohne Mittel
+    - ``reduction_w``: die verlangte Senkung ``Bedarf − P_zul``, auch unter 0; ``None`` ohne Mittel
     """
 
     energy_wh: float
@@ -245,22 +246,32 @@ class PeakGuard:
       anderen Viertelstunde als der vorige beginnt diese neu, ohne Lücke, ohne Boost-Energie und
       nicht überschritten.
     - **Budget:** ``P_zul = (Ziel · 0,25 h − E_bisher) / t_rest − peak_margin_kw`` mit
-      ``t_rest = max(1 s, Ende − wall_now)``. Als ``PeakLimits.budget_w`` geht es hinaus, wenn der
-      SOC bekannt ist und über ``reserve_soc_pct + reserve_guard_pct`` liegt; sonst ist es
-      ``None``. Health zeigt ``P_zul`` in jedem Fall. Es ist nie NaN oder ±∞: Ist ``P_zul`` keine
-      endliche Zahl (``grid_wh`` so groß, dass die Rechnung überläuft), rechnet der Schritt nicht.
-    - **Hochrechnung und Senkung:** Die Hochrechnung ist ``(E_bisher + Mittel · t_rest) / 0,25 h``.
-      Die verlangte Senkung ist ``max(Mittel, Basis + W) − P_zul``, bei unbekanntem ``W`` oder
-      unbekannter Basis oder wenn ``Basis + W`` keine endliche Zahl ist ``Mittel − P_zul``; Health
-      zeigt sie mindestens 0. Beide brauchen das Mittel; ``P_zul`` braucht es nicht. ``W`` gibt der
-      Kern so, dass ``Basis + W`` höchstens die feste Grenze von Regel 2 ist, und unbekannt, solange
-      Victron gesperrt oder nicht steuerbar ist (``regulation.peak_wanted_w``). So zählt der
-      Wächter keinen Netzbezug, den kein Override durchsetzen kann.
-    - **Drosselung:** Die Grenzen je Fahrzeug gelten bis zum Ende der Viertelstunde. Zuerst
-      verliert ein Auto still seine Grenze, wenn es nicht mehr unter ``cars`` steht oder seinen
-      Modus gewechselt hat, auch zwischen PV-Überschuss, Min+PV und Sofort: Eine Grenze gilt nur
-      im Modus, in dem sie entstand; sonst bliebe etwa ein Auto, das in PV-Überschuss auf 0 W
-      gedrosselt wurde, in Sofort unter seinem Boden. Dann, mit Mittel und frühestens
+      ``t_rest = max(1 s, Ende − wall_now)``. Der Akku hat ein Budget, wenn der SOC bekannt ist
+      und über ``reserve_soc_pct + reserve_guard_pct`` liegt; dann geht ``P_zul`` als
+      ``PeakLimits.budget_w`` hinaus, sonst ist es ``None``. Health zeigt ``P_zul`` in jedem Fall.
+      Es ist nie NaN oder ±∞: Ist ``P_zul`` keine endliche Zahl (``grid_wh`` so groß, dass die
+      Rechnung überläuft), rechnet der Schritt nicht.
+    - **Hochrechnung und Senkung:** Die Hochrechnung ist ``(E_bisher + Mittel · t_rest) / 0,25 h``,
+      die verlangte Senkung ``Bedarf − P_zul``; Health zeigt sie mindestens 0. Beide brauchen das
+      Mittel; ``P_zul`` braucht es nicht. Der Bedarf ist das Mittel, bei bekanntem ``W`` und
+      bekannter Basis und wenn ``Basis + W`` eine endliche Zahl ist das größere von Mittel und
+      - **mit Budget für den Akku** ``min(Basis + W + S, C) − S``: ``C`` ist die feste Grenze von
+        Regel 2 (``ceiling_w``), ``S`` die Summe der Senkungen ``cut_w`` der Grenzen, die nach dem
+        Aufräumen dieses Schritts bleiben; ``Basis + W + S`` ist so der Netzbezug ohne die
+        Senkungen. Was die Autos über ``C`` wollen, liefert der Akku wie ohne Ziel (Design 2c-2,
+        Entscheidung 3): Der Wächter senkt insgesamt nur um ``min(Basis + W ohne Senkung, C) −
+        P_zul``, einmal und nicht in Stufen.
+      - **ohne Budget** ``Basis + W``: Regel 2 hält den Override dann bei ``C``, und unter
+        ``P_zul`` bringt den Netzbezug nur die ganze Senkung.
+
+      ``W`` gibt der Kern ungekappt und unbekannt, solange Victron gesperrt oder nicht steuerbar
+      ist (``regulation.peak_wanted_w``): So zählt der Wächter keinen Netzbezug, den kein Override
+      durchsetzen kann.
+    - **Drosselung:** Die Grenzen je Fahrzeug gelten bis zum Ende der Viertelstunde. Zuerst, vor
+      dem Bedarf, verliert ein Auto still seine Grenze, wenn es nicht mehr unter ``cars`` steht
+      oder seinen Modus gewechselt hat, auch zwischen PV-Überschuss, Min+PV und Sofort: Eine Grenze
+      gilt nur im Modus, in dem sie entstand; sonst bliebe etwa ein Auto, das in PV-Überschuss auf
+      0 W gedrosselt wurde, in Sofort unter seinem Boden. Dann, mit Mittel und frühestens
       ``SETTLE_S`` nach der letzten Änderung: Ist die Senkung über 0, drosselt der Wächter um
       ``Senkung − ausstehend`` (``throttle``, ``pending_w``); sonst hebt er mit dem Spielraum
       ``−Senkung`` höchstens eine Grenze auf (``lift``). Eine Grenze, die dabei entsteht, sinkt
@@ -275,8 +286,8 @@ class PeakGuard:
     Ein Schritt rechnet, wenn seine ``QuarterObs`` gilt, die Viertelstunde keine Lücke hat und
     ``P_zul`` endlich ist; nur dann gibt es Hochrechnung, Senkung, ``budget_w``, Grenzen und
     Start-Sperre, sonst ``NO_LIMITS``. Ein Schritt, der nicht rechnet, vergisst die Grenzen und ihre
-    letzte Änderung, wie das Ende der Viertelstunde. Grenzen und Start-Sperre hängen nicht vom SOC
-    ab, nur ``budget_w``. Der Zustand ist der erste, der zutrifft: ``off`` (kein Ziel),
+    letzte Änderung, wie das Ende der Viertelstunde. Die Start-Sperre hängt nicht vom SOC ab, die
+    Grenzen nur über den Bedarf. Der Zustand ist der erste, der zutrifft: ``off`` (kein Ziel),
     ``exceeded``, ``gap`` (der Schritt rechnet nicht), sonst ``active``.
 
     Die Wanduhr darf springen: Ein Sprung zurück beginnt das Mittel neu (``MovingAverage`` verlangt
@@ -285,11 +296,13 @@ class PeakGuard:
     mehrere Threads gedacht.
     """
 
-    def __init__(self, control: ControlConfig, reserve_soc_pct: float) -> None:
+    def __init__(self, control: ControlConfig, reserve_soc_pct: float, ceiling_w: float) -> None:
         self._target_kw = control.peak_target_kw
         self._margin_w = control.peak_margin_kw * 1000.0
         # Über diesem SOC geht das Budget an den Akku (Präzisierung 12).
         self._budget_above_pct = reserve_soc_pct + control.reserve_guard_pct
+        # die feste Grenze ``C`` des Overrides nach Regel 2, ohne das Budget (Präzisierung 10)
+        self._ceiling_w = ceiling_w
         self._mean = MovingAverage(MEAN_S)
         self._prev: _Prev | None = None  # der vorige Schritt; ``None`` vor dem ersten
         self._running: _Running | None = None  # die Viertelstunde des letzten Schritts
@@ -308,10 +321,11 @@ class PeakGuard:
 
         - ``quarter``: die laufende Viertelstunde; ``None`` heißt nicht da
         - ``cars``: die Autos, je Fahrzeug höchstens eins; die Priorität steht in ``rank``
-        - ``wanted_w``: der gewollte Netzbezug ``W`` vor dem Wächter in W, vom Kern bis zur festen
-          Grenze von Regel 2 begrenzt; ``base_w``: die Basis (``ess.grid_setpoint_w``); ist einer
-          unbekannt, zählt für die Senkung nur das Mittel
-        - ``soc_pct``: der SOC des Akkus in %; unbekannt gibt kein Budget für den Akku
+        - ``wanted_w``: der gewollte Netzbezug ``W`` vor dem Wächter in W, ungekappt; ``base_w``:
+          die Basis (``ess.grid_setpoint_w``); ist einer unbekannt, zählt für die Senkung nur das
+          Mittel
+        - ``soc_pct``: der SOC des Akkus in %; unbekannt gibt kein Budget für den Akku. Ob er eins
+          hat, bestimmt ``budget_w`` und den Bedarf der Senkung.
         """
         target_kw = self._target_kw
         if target_kw is None:
@@ -322,6 +336,8 @@ class PeakGuard:
         energy_wh = None if obs is None else finite_number(obs.grid_wh)
         power_w = None if obs is None or energy_wh is None else finite_number(obs.grid_w)
         boost_w = 0.0 if obs is None or power_w is None else _boost_w(obs.wallbox_grid_w, cars)
+        soc = finite_number(soc_pct)
+        funded = soc is not None and soc > self._budget_above_pct  # ein Budget für den Akku
 
         running = self._follow(wall_now, start, power_w is not None, boost_w)
         if power_w is not None:
@@ -329,7 +345,11 @@ class PeakGuard:
         calc = None
         if energy_wh is not None and not running.gappy:
             energy_wh = max(0.0, energy_wh - running.boost_wh)
-            calc = self._calc(wall_now, end, energy_wh, wanted_w, base_w, target_w)
+            # Vor dem Bedarf fallen die Grenzen der Autos weg, die gingen oder den Modus wechselten:
+            # Ihre Senkung zählt nicht mehr in ``S``.
+            running.caps = _kept(running.caps, cars)
+            wanted = self._wanted_w(wanted_w, base_w, running.caps if funded else None)
+            calc = self._calc(wall_now, end, energy_wh, wanted, target_w)
         self._watch(running, wall_now, end, calc, target_w)
 
         if running.exceeded is not None:
@@ -341,7 +361,7 @@ class PeakGuard:
             running.caps, running.changed = {}, None  # wie am Ende der Viertelstunde
             return NO_LIMITS
         self._adjust(running, wall_now, calc, cars)
-        return self._limits(running, calc, cars, soc_pct)
+        return self._limits(running, calc, cars, funded)
 
     def idle(self) -> None:
         """Ein Zyklus ohne Regelung: Die laufende Viertelstunde ist lückenhaft bis zu ihrem Ende.
@@ -413,18 +433,36 @@ class PeakGuard:
         self._prev = _Prev(now, start, known, boost_w)
         return running
 
+    def _wanted_w(
+        self, wanted_w: float | None, base_w: float | None, caps: Mapping[str, Cap] | None
+    ) -> float | None:
+        """Der Netzbezug, den die Autos über den Override wollen, für den Bedarf (Präzisierung 10).
+
+        ``caps`` sind die Grenzen nach dem Aufräumen dieses Schritts, wenn der Akku ein Budget hat,
+        sonst ``None``. Mit Budget ist er ``min(Basis + W + S, C) − S`` mit der Summe ``S`` ihrer
+        Senkungen ``cut_w``, ohne Budget ``Basis + W``. ``None``, wenn ``W`` oder die Basis
+        unbekannt ist oder ``Basis + W`` keine endliche Zahl.
+        """
+        wanted, base = finite_number(wanted_w), finite_number(base_w)
+        with_base_w = None if wanted is None or base is None else finite_number(base + wanted)
+        if with_base_w is None or caps is None:
+            return with_base_w
+        cut_w = sum((cap.cut_w for cap in caps.values()), 0.0)
+        return finite_number(min(with_base_w + cut_w, self._ceiling_w) - cut_w)
+
     def _calc(
         self,
         now: datetime,
         end: datetime,
         energy_wh: float,
         wanted_w: float | None,
-        base_w: float | None,
         target_w: float,
     ) -> _Calc | None:
         """``P_zul``, Hochrechnung und verlangte Senkung eines Schritts, der rechnet.
 
-        ``None``, wenn ``P_zul`` keine endliche Zahl ist: Das Budget ist nie NaN oder ±∞.
+        Der Bedarf ist das Mittel oder, mit bekanntem ``wanted_w`` (``_wanted_w``), das größere
+        von beiden. ``None``, wenn ``P_zul`` keine endliche Zahl ist: Das Budget ist nie NaN oder
+        ±∞.
         """
         rest_s = max(_MIN_REST_S, (end - now).total_seconds())
         allowed_w = finite_number(
@@ -436,9 +474,7 @@ class PeakGuard:
         if mean_w is None:
             return _Calc(energy_wh, allowed_w, rest_s, None, None, None)
         projection_w = (energy_wh + mean_w * rest_s / 3600.0) / _QUARTER_H
-        wanted, base = finite_number(wanted_w), finite_number(base_w)
-        with_base_w = None if wanted is None or base is None else finite_number(base + wanted)
-        need_w = mean_w if with_base_w is None else max(mean_w, with_base_w)
+        need_w = mean_w if wanted_w is None else max(mean_w, wanted_w)
         return _Calc(energy_wh, allowed_w, rest_s, mean_w, projection_w, need_w - allowed_w)
 
     def _watch(
@@ -463,37 +499,28 @@ class PeakGuard:
     ) -> None:
         """Die Grenzen eines Schritts, der rechnet: drosseln oder aufheben (Präzisierung 11).
 
-        Eine Grenze bleibt nur, solange ihr Auto unter ``cars`` steht, im Modus, in dem es sie
-        bekam. Was so wegfällt, weil das Auto geht oder seinen Modus wechselt (auch nach Boost oder
-        Aus), ist keine Änderung.
+        ``running.caps`` sind schon aufgeräumt (``_kept``); was dabei wegfiel, ist keine Änderung.
         """
-        modes = {car.vehicle: car.mode for car in cars}
-        caps = {
-            vehicle: cap for vehicle, cap in running.caps.items() if modes.get(vehicle) is cap.mode
-        }
-        reduction_w, changed = calc.reduction_w, running.changed
-        if reduction_w is not None and (changed is None or lasted(changed, now, SETTLE_S)):
-            if reduction_w > 0.0:
-                found = throttle(cars, caps, reduction_w - pending_w(cars, caps))
-            else:
-                found = lift(cars, caps, -reduction_w)
-            if found != caps:
-                running.changed = now
-            caps = found
-        running.caps = caps
+        caps, reduction_w, changed = running.caps, calc.reduction_w, running.changed
+        if reduction_w is None or not (changed is None or lasted(changed, now, SETTLE_S)):
+            return
+        if reduction_w > 0.0:
+            found = throttle(cars, caps, reduction_w - pending_w(cars, caps))
+        else:
+            found = lift(cars, caps, -reduction_w)
+        if found != caps:
+            running.caps, running.changed = found, now
 
     def _limits(
-        self, running: _Running, calc: _Calc, cars: Sequence[PeakCar], soc_pct: float | None
+        self, running: _Running, calc: _Calc, cars: Sequence[PeakCar], funded: bool
     ) -> PeakLimits:
         """Die Vorgaben eines Schritts, der rechnet (Präzisierungen 11 bis 13).
 
-        Das Budget geht an den Akku, wenn der SOC es zulässt; Grenzen und Start-Sperre gelten
+        Das Budget geht an den Akku, wenn der SOC es zulässt (``funded``); die Start-Sperre gilt
         unabhängig davon.
         """
-        soc = finite_number(soc_pct)
-        above = soc is not None and soc > self._budget_above_pct
         return PeakLimits(
-            budget_w=calc.allowed_w if above else None,
+            budget_w=calc.allowed_w if funded else None,
             caps_w={vehicle: cap.cap_w for vehicle, cap in running.caps.items()},
             no_start=no_start(cars, calc.rest_s, calc.allowed_w, calc.mean_w),
         )
@@ -532,10 +559,11 @@ def throttle(cars: Sequence[PeakCar], caps: Mapping[str, Cap], amount_w: float) 
 def lift(cars: Sequence[PeakCar], caps: Mapping[str, Cap], headroom_w: float) -> dict[str, Cap]:
     """Hebt höchstens eine Grenze ganz auf (Präzisierung 11).
 
-    ``headroom_w`` ist der Spielraum ``P_zul − max(Mittel, Basis + W)``. In umgekehrter Reihenfolge
-    der Drosselung (Sofort, Min+PV, PV-Überschuss, innerhalb einer Stufe die höchste Priorität
-    zuerst) fällt die erste Grenze weg, deren Senkung ``cut_w`` plus ``RELEASE_W`` höchstens der
-    Spielraum ist. Zurück kommen die übrigen Grenzen.
+    ``headroom_w`` ist der Spielraum ``P_zul − Bedarf`` mit dem Bedarf der verlangten Senkung
+    (``PeakGuard``, „Hochrechnung und Senkung“). In umgekehrter Reihenfolge der Drosselung
+    (Sofort, Min+PV, PV-Überschuss, innerhalb einer Stufe die höchste Priorität zuerst) fällt die
+    erste Grenze weg, deren Senkung ``cut_w`` plus ``RELEASE_W`` höchstens der Spielraum ist.
+    Zurück kommen die übrigen Grenzen.
     """
     for car in reversed(_in_order(cars)):
         cap = caps.get(car.vehicle)
@@ -572,6 +600,16 @@ def no_start(
         return frozenset()
     room_w = allowed_w - mean_w
     return frozenset(car.vehicle for car in cars if car.mode in _LEVELS and car.min_w > room_w)
+
+
+def _kept(caps: Mapping[str, Cap], cars: Sequence[PeakCar]) -> dict[str, Cap]:
+    """Die Grenzen, die bleiben: die der Autos unter ``cars``, im Modus, in dem sie sie bekamen.
+
+    Was so wegfällt, weil ein Auto geht oder seinen Modus wechselt (auch nach Boost oder Aus),
+    fällt still weg.
+    """
+    modes = {car.vehicle: car.mode for car in cars}
+    return {vehicle: cap for vehicle, cap in caps.items() if modes.get(vehicle) is cap.mode}
 
 
 def _in_order(cars: Sequence[PeakCar]) -> list[PeakCar]:

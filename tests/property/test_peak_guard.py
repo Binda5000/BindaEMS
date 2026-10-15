@@ -6,7 +6,8 @@ aus der Definition noch einmal, nicht schrittweise wie der Code:
 - das Budget ``P_zul``: immer endlich und gleich ``(Ziel · 250 − E) · 3600 / max(1, Rest) − Marge``;
   für jede endliche Energie nie NaN oder ±∞ (Global Constraint ``grid_budget_w``), auch wenn die
   Rechnung überläuft
-- die verlangte Senkung: endlich, auch wenn Basis und ``W`` es für sich sind und ihre Summe nicht
+- die verlangte Senkung: endlich, auch wenn Basis und ``W`` es für sich sind und ihre Summe nicht,
+  mit und ohne Budget für den Akku
 - beliebige Verläufe von Schritten, auch mit Lücken, fehlender Viertelstunde, Werten, die keine
   Zahlen sind, und einer Wanduhr, die springt: Der Wächter wirft nie, die Werte in Health sind
   endlich und nie negativ, wo sie das nicht sein dürfen, und
@@ -17,9 +18,12 @@ aus der Definition noch einmal, nicht schrittweise wie der Code:
 - die Drosselung (``throttle``) mit beliebigen Autos, Grenzen und Senkungen: Sie hält die
   Reihenfolge von Design 6.3 ein (Stufen und darin die Priorität), lässt Boost und Aus aus, setzt
   keine Grenze unter den Boden und senkt zusammen nie mehr als verlangt, aber so viel, wie sie kann.
-- beliebige Verläufe ohne Lücke mit Autos, die ihren Modus wechseln: Eine Grenze steigt nie und
-  überlebt keinen Wechsel des Modus, je Schritt hebt der Wächter höchstens eine auf, und zwischen
-  zwei Änderungen liegen mindestens ``SETTLE_S``.
+- beliebige Verläufe ohne Lücke mit Autos, die ihren Modus wechseln, und einem SOC, der dem Akku
+  ein Budget gibt oder nicht: Eine Grenze steigt nie und überlebt keinen Wechsel des Modus, je
+  Schritt hebt der Wächter höchstens eine auf, und zwischen zwei Änderungen liegen mindestens
+  ``SETTLE_S``.
+
+Die feste Grenze von Regel 2 ist ``CEILING_W`` (8000 W, wie in der Beispielkonfiguration).
 """
 
 import math
@@ -44,10 +48,16 @@ from bindaems.shared.config import ControlConfig
 from bindaems.shared.timeutil import SLOT, slot_end, slot_start
 
 QUARTER = datetime(2026, 10, 14, 16, 0, tzinfo=UTC)  # 18:00 Wiener Zeit
+CEILING_W = 8000.0  # die feste Grenze von Regel 2
 
 
 def at(seconds: float) -> datetime:
     return QUARTER + timedelta(seconds=seconds)
+
+
+def new_guard(control: ControlConfig) -> PeakGuard:
+    """Ein Wächter mit USV-Reserve 20 % (Budget für den Akku über 25 % SOC) und ``CEILING_W``."""
+    return PeakGuard(control, reserve_soc_pct=20.0, ceiling_w=CEILING_W)
 
 
 # --- Budget ---------------------------------------------------------------------------------------
@@ -57,21 +67,28 @@ FINITE = st.floats(allow_nan=False, allow_infinity=False)
 
 
 def run_to(
-    second, energy_wh, *, target_kw=8.0, margin_kw=0.3, grid_w=0.0, wanted_w=0.0, base_w=0.0
+    second,
+    energy_wh,
+    *,
+    target_kw=8.0,
+    margin_kw=0.3,
+    grid_w=0.0,
+    wanted_w=0.0,
+    base_w=0.0,
+    soc=60.0,
 ):
     """Ein Wächter, der ab 18:00:00 alle 10 s einen Schritt bekam; der letzte bei ``second``.
 
     Ein Schritt alle 10 s hält die Viertelstunde frei von Lücken; der letzte trägt die Energie.
     Zurück kommen der Wächter und die Grenzen des letzten Schritts.
     """
-    control = ControlConfig(peak_target_kw=target_kw, peak_margin_kw=margin_kw)
-    guard = PeakGuard(control, reserve_soc_pct=20.0)
+    guard = new_guard(ControlConfig(peak_target_kw=target_kw, peak_margin_kw=margin_kw))
     moments = [float(moment) for moment in range(0, 900, 10) if moment < second] + [second]
     limits = NO_LIMITS
     for moment in moments:
         now = at(moment)
         quarter = QuarterObs(slot_start(now), energy_wh if moment == second else 0.0, grid_w, {})
-        limits = guard.step(now, quarter, (), wanted_w, base_w, 60.0)
+        limits = guard.step(now, quarter, (), wanted_w, base_w, soc)
     return guard, limits
 
 
@@ -115,13 +132,15 @@ def test_the_budget_is_never_nan_or_infinite(energy_wh, millis) -> None:
     base_w=FINITE | st.none(),
     mean_w=st.floats(0.0, 1e5),
     energy_wh=st.floats(0.0, 10000.0),
+    soc=st.sampled_from([60.0, 20.0]),  # mit und ohne Budget für den Akku
 )
-@example(wanted_w=1e308, base_w=1e308, mean_w=6000.0, energy_wh=1000.0)  # die Summe läuft über
-@example(wanted_w=-1e308, base_w=-1e308, mean_w=6000.0, energy_wh=1000.0)
+@example(wanted_w=1e308, base_w=1e308, mean_w=6000.0, energy_wh=1000.0, soc=60.0)  # Überlauf
+@example(wanted_w=-1e308, base_w=-1e308, mean_w=6000.0, energy_wh=1000.0, soc=60.0)
+@example(wanted_w=1e308, base_w=1e308, mean_w=6000.0, energy_wh=1000.0, soc=20.0)
 def test_the_reduction_is_finite_for_any_finite_wanted_grid_and_base(
-    wanted_w, base_w, mean_w, energy_wh
+    wanted_w, base_w, mean_w, energy_wh, soc
 ) -> None:
-    guard, _ = run_to(300, energy_wh, grid_w=mean_w, wanted_w=wanted_w, base_w=base_w)
+    guard, _ = run_to(300, energy_wh, grid_w=mean_w, wanted_w=wanted_w, base_w=base_w, soc=soc)
     reduction_kw = guard.health()["reduction_kw"]
     assert reduction_kw is not None
     assert math.isfinite(reduction_kw)
@@ -173,8 +192,7 @@ def observation(kind, now, grid_w, wh, share) -> QuarterObs | None:
 @example(EXCEEDED_THEN_GAP)
 @example(EXCEEDED_THEN_MISSING)
 def test_any_course_of_steps_keeps_the_guard_consistent(steps) -> None:
-    control = ControlConfig(peak_target_kw=8.0)
-    guard = PeakGuard(control, reserve_soc_pct=20.0)
+    guard = new_guard(ControlConfig(peak_target_kw=8.0))
     now = QUARTER
     before = None  # (Zeitpunkt, Zustand, Alarme, Viertelstunde brauchbar) des vorigen Schritts
     for seconds, kind, grid_w, wh, share in steps:
@@ -333,12 +351,19 @@ def test_throttling_keeps_the_order_and_leaves_boost_alone(case) -> None:
         assert all(exhausted(car) for car in throttleable)
 
 
-# Ein Verlauf ohne Lücke ab 18:00:00 (höchstens 800 s): Sekunden seit dem vorigen Schritt, ``W`` und
-# der Stand zweier Autos (Modus, Leistung, Netzanteil). Mit E 0 Wh und Mittel 0 W steigt ``P_zul``
-# von 7700 W an: Erst drosselt der Wächter, später hebt er auf.
+# Ein Verlauf ohne Lücke ab 18:00:00 (höchstens 800 s): Sekunden seit dem vorigen Schritt, ``W``,
+# der SOC (über der Schwelle des Budgets, darunter oder unbekannt) und der Stand zweier Autos
+# (Modus, Leistung, Netzanteil). Mit E 0 Wh und Mittel 0 W steigt ``P_zul`` von 7700 W an: Erst
+# drosselt der Wächter, später hebt er auf.
 CAR_STATE = st.tuples(st.sampled_from(list(Effective)), POWER | st.none(), POWER)
 COURSE = st.lists(
-    st.tuples(st.sampled_from([1, 1, 1, 2, 5, 10]), st.floats(0.0, 20000.0), CAR_STATE, CAR_STATE),
+    st.tuples(
+        st.sampled_from([1, 1, 1, 2, 5, 10]),
+        st.floats(0.0, 20000.0),
+        st.sampled_from([60.0, 60.0, 20.0, None]),
+        CAR_STATE,
+        CAR_STATE,
+    ),
     min_size=1,
     max_size=80,
 )
@@ -347,12 +372,12 @@ COURSE = st.lists(
 @settings(max_examples=300, deadline=None)
 @given(COURSE)
 def test_caps_never_rise_and_change_only_after_settling(course) -> None:  # Präzisierung 11
-    guard = PeakGuard(ControlConfig(peak_target_kw=8.0), reserve_soc_pct=20.0)
+    guard = new_guard(ControlConfig(peak_target_kw=8.0))
     now = QUARTER
     before: dict[str, float] = {}  # die Grenzen des vorigen Schritts
     modes_before: dict[str, Effective] = {}  # die Modi des vorigen Schritts
     changed = None  # die letzte Änderung einer Grenze
-    for index, (seconds, wanted_w, *states) in enumerate(course):
+    for index, (seconds, wanted_w, soc, *states) in enumerate(course):
         if index:
             now += timedelta(seconds=seconds)
         cars = [
@@ -360,7 +385,7 @@ def test_caps_never_rise_and_change_only_after_settling(course) -> None:  # Prä
             for rank, (mode, power_w, grid_w) in enumerate(states)
         ]
         quarter = QuarterObs(slot_start(now), 0.0, 0.0, {})
-        caps = dict(guard.step(now, quarter, cars, wanted_w, 0.0, 60.0).caps_w)
+        caps = dict(guard.step(now, quarter, cars, wanted_w, 0.0, soc).caps_w)
 
         modes = {car.vehicle: car.mode for car in cars}
         assert all(modes[vehicle] in LEVEL for vehicle in caps)  # nie Boost oder Aus

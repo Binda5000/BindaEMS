@@ -29,6 +29,9 @@ NEXT_S = 900  # die Sekunde, in der die nächste Viertelstunde beginnt
 SHARE = {"evcs": 3600.0}  # Netzanteil der Wallbox „evcs“ im Zyklus
 EGOLF_BOOST = PeakCar("egolf", "evcs", Effective.BOOST, 0, 3600.0, 3600.0, 1380.0)
 NO_VALUES = {"energy_kwh": None, "projected_kw": None, "budget_kw": None, "reduction_kw": None}
+# Die feste Grenze C von Regel 2 allein aus der Absicherung (3 · 230 V · 33 A): Sie liegt über
+# Basis + W jedes Tests, der sie nicht selbst wählt.
+FUSE_CEILING_W = 22770.0
 
 
 def at(seconds: float) -> datetime:
@@ -36,8 +39,12 @@ def at(seconds: float) -> datetime:
     return QUARTER + timedelta(seconds=seconds)
 
 
-def guard(target: float | None = 8.0, **control: float) -> PeakGuard:
-    return PeakGuard(ControlConfig(peak_target_kw=target, **control), reserve_soc_pct=20.0)
+def guard(
+    target: float | None = 8.0, *, ceiling_w: float = FUSE_CEILING_W, **control: float
+) -> PeakGuard:
+    """Ein Wächter mit dem Ziel ``target``, USV-Reserve 20 % und der festen Grenze ``ceiling_w``."""
+    config = ControlConfig(peak_target_kw=target, **control)
+    return PeakGuard(config, reserve_soc_pct=20.0, ceiling_w=ceiling_w)
 
 
 def step(
@@ -381,6 +388,23 @@ def test_wanted_grid_counts_when_it_is_higher_than_the_mean(
         wh=lambda s: 1000.0 if s == 300 else 0.0,
     )
     assert g.health()["reduction_kw"] == pytest.approx(reduction_kw)  # max(...) − P_zul 5700 W
+
+
+@pytest.mark.parametrize(
+    ("soc", "reduction_kw"),
+    [
+        (60.0, 2.3),  # Budget für den Akku: min(Basis + W, C) − P_zul = 8000 W − 5700 W
+        (25.0, 5.0),  # keins: Basis + W − P_zul = 10700 W − 5700 W
+        (None, 5.0),  # ein unbekannter SOC gibt keins
+    ],
+)
+def test_the_wanted_grid_counts_up_to_the_ceiling_only_with_a_budget(soc, reduction_kw) -> None:
+    # Präzisierung 10: W 10700 W liegt über der festen Grenze C = 8000 W, ohne Grenzen (S = 0).
+    # Über C liefert mit Budget der Akku; ohne hält Regel 2 den Override bei C, und erst die ganze
+    # Senkung brächte den Netzbezug unter P_zul. Health zeigt die Senkung aus diesem Bedarf.
+    g = guard(ceiling_w=8000.0)
+    run(g, 0, 300, wanted_w=10700.0, soc=soc, wh=lambda s: 1000.0 if s == 300 else 0.0)
+    assert g.health()["reduction_kw"] == pytest.approx(reduction_kw)
 
 
 @pytest.mark.parametrize(

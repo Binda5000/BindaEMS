@@ -1,9 +1,13 @@
 """15-min-Wächter: Drosselung, Aufheben und Start-Sperre (Design 6.3, 6.4).
 
-Plan 2c-2a, Präzisierungen 11 und 13. Aufbau wie in ``test_peak_guard.py``: Ziel 8 kW, Marge 0,3 kW,
-ein Schritt je Sekunde ab 18:00:00 mit Mittel 0 und ohne Autos; bei 18:05:00 ist E 1000 Wh, also
-``P_zul`` 5700 W, und die Autos kommen dazu (``at_18_05``). Danach hält ``later`` ``P_zul`` bei
-5700 W, sodass die verlangte Senkung ``W − 5700 W`` ist (Basis 0).
+Plan 2c-2a, Präzisierungen 10, 11 und 13. Aufbau wie in ``test_peak_guard.py``: Ziel 8 kW, Marge
+0,3 kW, ein Schritt je Sekunde ab 18:00:00 mit Mittel 0 und ohne Autos; bei 18:05:00 ist E
+1000 Wh, also ``P_zul`` 5700 W, und die Autos kommen dazu (``at_18_05``). Danach hält ``later``
+``P_zul`` bei 5700 W, sodass die verlangte Senkung ``W − 5700 W`` ist (Basis 0). Die feste Grenze
+``C`` von Regel 2 ist dabei ``FUSE_CEILING_W`` und liegt über ``Basis + W + S`` jedes Schritts: Der
+Bedarf ist dann mit und ohne Budget ``max(Mittel, Basis + W)``. Mit ``C`` = 8000 W
+(``CEILING_W``) prüfen die Tests unter „Bedarf mit und ohne Budget“, was gilt, wenn die Autos mehr
+als ``C`` wollen (Präzisierung 10).
 """
 
 from collections.abc import Mapping, Sequence
@@ -34,6 +38,8 @@ from bindaems.shared.timeutil import slot_start
 
 QUARTER = datetime(2026, 10, 14, 16, 0, tzinfo=UTC)  # 18:00 Wiener Zeit
 ALLOWED_W = 5700.0  # P_zul ab 18:05 (``at_18_05`` und ``later``)
+CEILING_W = 8000.0  # C: ``max_grid_charge_setpoint_w`` der Beispielkonfiguration
+FUSE_CEILING_W = 22770.0  # C allein aus der Absicherung, 3 · 230 V · 33 A
 
 A = PeakCar("a", "twc", Effective.NOW, 0, 7000.0, 7000.0, 3450.0)
 B = PeakCar("b", "evcs", Effective.MIN_PV, 1, 4000.0, 4000.0, 2760.0)
@@ -53,8 +59,11 @@ def at(seconds: float) -> datetime:
     return QUARTER + timedelta(seconds=seconds)
 
 
-def guard() -> PeakGuard:
-    return PeakGuard(ControlConfig(peak_target_kw=8.0), reserve_soc_pct=20.0)
+def guard(ceiling_w: float = FUSE_CEILING_W) -> PeakGuard:
+    """Ein Wächter mit Ziel 8 kW, USV-Reserve 20 % (Budget über 25 % SOC) und der festen Grenze
+    ``ceiling_w`` von Regel 2."""
+    control = ControlConfig(peak_target_kw=8.0)
+    return PeakGuard(control, reserve_soc_pct=20.0, ceiling_w=ceiling_w)
 
 
 def step(
@@ -223,7 +232,10 @@ def test_pending_counts_what_has_not_followed() -> None:  # Präzisierung 11
     assert pending_w(cars, {}) == 0.0
 
 
-def test_caps_do_not_depend_on_the_soc() -> None:  # Präzisierung 12: nur das Budget
+def test_below_the_ceiling_the_caps_do_not_depend_on_the_soc() -> None:  # Präzisierung 12
+    # Am SOC hängt das Budget. Die Grenzen hängen nur über den Bedarf an ihm, und solange
+    # Basis + W + S unter der festen Grenze von Regel 2 liegt, ist der Bedarf mit und ohne Budget
+    # derselbe (Präzisierung 10).
     limits = at_18_05(CARS, 10700.0, soc=20.0)  # unter der Schwelle von 25 %
     assert limits.budget_w is None
     assert limits.caps_w == FIRST
@@ -296,6 +308,87 @@ def test_lift_removes_one_whole_cap() -> None:
     assert lift(CARS, caps, 10000.0) == {"b": caps["b"], "c": caps["c"]}
     assert lift(CARS, caps, 1759.0) == caps
     assert lift(CARS, caps, -100.0) == caps
+
+
+# --- Bedarf mit und ohne Budget (Präzisierung 10) -------------------------------------------------
+
+# Ohne PV laden der Tesla am Wall Connector (Rang 0) und der e-Golf an der EVCS (Rang 1, die
+# niedrigere Priorität); was sie laden, wollen sie ganz aus dem Netz. Die feste Grenze ist
+# C = 8000 W.
+TESLA_AT_MIN = PeakCar("tesla", "twc", Effective.MIN_PV, 0, 3450.0, 3450.0, 3450.0)  # 5 A, Boden
+TESLA_NOW = PeakCar("tesla", "twc", Effective.NOW, 0, 11040.0, 11040.0, 3450.0)  # 16 A
+EGOLF_NOW = PeakCar("egolf", "evcs", Effective.NOW, 1, 7360.0, 7360.0, 2760.0)  # 16 A
+EGOLF_15_A = replace(EGOLF_NOW, power_w=6900.0, grid_w=6900.0)  # der Grenze 7060 W gefolgt
+
+
+def held(g: PeakGuard, second: int, cars: Sequence[PeakCar]) -> PeakLimits:
+    """Ein Schritt ``second`` nach 18:00:00 mit SOC 60 %, in dem der Akku den Netzbezug seit
+    18:00:00 bei 7700 W hält; ``W`` ist der Netzanteil der ``cars`` zusammen.
+
+    ``P_zul`` ist zu Beginn 7700 W und steigt danach langsam, weil der Netzbezug unter ``P_zul``
+    plus Marge liegt: ``7700 W + 300 W · s / (900 − s)``.
+    """
+    wanted_w = sum(car.grid_w for car in cars)
+    return step(g, second, cars=cars, wanted_w=wanted_w, wh=7700.0 * second / 3600.0, grid_w=7700.0)
+
+
+@pytest.mark.parametrize("tesla", [TESLA_AT_MIN, TESLA_NOW], ids=["min_pv_at_its_floor", "now"])
+def test_with_a_budget_the_guard_cuts_once_by_the_gap_below_the_ceiling(tesla) -> None:
+    # Der SOC gibt dem Akku ein Budget. Die Autos wollen 10810 W oder 18400 W aus dem Netz, mehr als
+    # C; was darüber liegt, liefert der Akku wie ohne Ziel (Design 2c-2, Entscheidung 3). Der Bedarf
+    # ist max(Mittel, min(Basis + W + S, C) − S), ohne Grenzen (S = 0) also C: Der Wächter senkt um
+    # C − P_zul = 300 W. Sie trägt der e-Golf in Sofort; der Tesla ist in Min+PV an seinem Boden und
+    # hat in Sofort die höhere Priorität.
+    g = guard(CEILING_W)
+    limits = held(g, 0, [tesla, EGOLF_NOW])
+    assert limits.caps_w == {"egolf": 7060.0}
+    assert limits.budget_w == 7700.0
+    assert g.health()["reduction_kw"] == pytest.approx(0.3)
+    # Der e-Golf folgt mit 15 A. Die gemerkte Senkung S = 300 W deckt das Band zwischen P_zul und C:
+    # Der Bedarf ist C − S = 7700 W, und über fünf Wartezeiten senkt der Wächter nicht weiter.
+    followed = [tesla, EGOLF_15_A]
+    assert all(held(g, second, followed).caps_w == {"egolf": 7060.0} for second in range(1, 151))
+    assert g.health()["reduction_kw"] == 0.0
+
+
+def test_only_the_caps_that_stay_count_as_cut() -> None:
+    # S zählt die Senkungen der Grenzen, die nach dem Aufräumen dieses Schritts bleiben. Geht der
+    # e-Golf mit seiner Grenze (300 W), fehlen schon im selben Schritt wieder C − P_zul, denn der
+    # Tesla allein will 11040 W aus dem Netz; nach der Wartezeit senkt der Wächter darum ihn.
+    g = guard(CEILING_W)
+    held(g, 0, [TESLA_NOW, EGOLF_NOW])
+    held(g, 1, [TESLA_NOW, EGOLF_15_A])
+    assert held(g, 2, [TESLA_NOW]).caps_w == {}
+    assert g.health()["reduction_kw"] * 1000 == pytest.approx(300.0 - 600.0 / 898.0)  # C − P_zul
+    assert all(held(g, second, [TESLA_NOW]).caps_w == {} for second in range(3, 30))
+    cut_w = 300.0 - 9000.0 / 870.0  # C − P_zul um 18:00:30
+    assert held(g, 30, [TESLA_NOW]).caps_w == pytest.approx({"tesla": 11040.0 - cut_w})
+
+
+def test_with_a_budget_a_cap_lifts_once_p_zul_is_1_kw_above_the_ceiling() -> None:
+    # Aufheben mit demselben Bedarf: Nach der Senkung des e-Golf um 300 W ist er C − S = 7700 W,
+    # der Spielraum P_zul − 7700 W. Die Grenze fällt bei ihrer Senkung plus 1000 W Spielraum, also
+    # sobald P_zul 1 kW über C liegt. Ohne Netzbezug (E 0 Wh, Mittel 0 W) steigt P_zul =
+    # 2000 Wh · 3600 / Rest − 300 W: um 18:02:05 (Rest 775 s) auf 8990 W, um 18:02:06 auf 9002 W.
+    g = guard(CEILING_W)
+    assert step(g, 0, cars=[TESLA_NOW, EGOLF_NOW], wanted_w=18400.0).caps_w == {"egolf": 7060.0}
+    followed = [TESLA_NOW, EGOLF_15_A]
+    for second in range(1, 126):
+        assert step(g, second, cars=followed, wanted_w=17940.0).caps_w == {"egolf": 7060.0}
+    assert step(g, 126, cars=followed, wanted_w=17940.0).caps_w == {}
+
+
+@pytest.mark.parametrize("soc", [25.0, None])
+def test_without_a_budget_the_guard_cuts_the_whole_reduction_at_once(soc) -> None:
+    # Ohne Budget für den Akku (SOC nicht über 25 % oder unbekannt) hält Regel 2 den Override bei C,
+    # aus dem Netz kommen 8000 W. Unter P_zul (7700 W) bringt den Netzbezug nur die ganze Senkung
+    # Basis + W − P_zul = 18400 W − 7700 W = 10700 W, in einem Schritt und in der Reihenfolge: der
+    # e-Golf (die niedrigere Priorität) bis zu seinem Boden (4600 W), der Tesla um den Rest.
+    g = guard(CEILING_W)
+    limits = step(g, 0, cars=[TESLA_NOW, EGOLF_NOW], wanted_w=18400.0, grid_w=8000.0, soc=soc)
+    assert limits.caps_w == {"egolf": 2760.0, "tesla": 4940.0}
+    assert limits.budget_w is None
+    assert g.health()["reduction_kw"] == pytest.approx(10.7)
 
 
 # --- Ende der Viertelstunde, Lücken und Autos, die gehen -----------------------------------------
