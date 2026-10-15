@@ -1,5 +1,6 @@
 from datetime import timedelta
 
+import pytest
 from tests.helpers import T0
 from tests.unit.core.control.charge_helpers import NONE, evcs, tesla, twc
 
@@ -419,3 +420,37 @@ def test_the_60_s_of_the_guest_run_on_the_safety_clock(cfg) -> None:  # Präzisi
         found = detect(d, s, wall_offset=jumping(s), **GUEST_AT_EVCS)
         assert found.guests == frozenset()
     assert detect(d, 60, wall_offset=jumping(60), **GUEST_AT_EVCS).guests == {"evcs"}
+
+
+# Pausen der Regelung (Gesamtreview M-2): Liegen zwischen zwei Aufrufen mehr als 60 s auf der Uhr
+# der Safety-Schicht, beginnen alle 60 s neu. Der erste Aufruf danach zählt wie der erste überhaupt.
+
+PAUSE_S = 300  # so lange ruht die Regelung, nach 30 s Kandidatur
+BACK_S = 30 + PAUSE_S  # der erste Aufruf nach der Pause
+
+
+def test_after_a_pause_a_candidate_needs_60_s_of_new_observation(cfg) -> None:
+    d = Detector(cfg)
+    for s in range(30):
+        detect(d, s, **TESLA_AT_EVCS)
+    assert all(detect(d, s, **TESLA_AT_EVCS).detected == {} for s in range(BACK_S, BACK_S + 60))
+    assert detect(d, BACK_S + 60, **TESLA_AT_EVCS).detected == {"evcs": "tesla"}
+
+
+def test_after_a_pause_a_guest_needs_60_s_of_new_observation(cfg) -> None:
+    d = Detector(cfg)
+    for s in range(30):
+        detect(d, s, **GUEST_AT_EVCS)
+    assert all(
+        detect(d, s, **GUEST_AT_EVCS).guests == frozenset() for s in range(BACK_S, BACK_S + 60)
+    )
+    assert detect(d, BACK_S + 60, **GUEST_AT_EVCS).guests == {"evcs"}
+
+
+@pytest.mark.parametrize(("gap_s", "detected"), [(60, True), (61, False)])
+def test_only_a_gap_of_more_than_60_s_is_a_pause(cfg, gap_s, detected) -> None:
+    d = Detector(cfg)
+    for s in range(60):
+        detect(d, s, **TESLA_AT_EVCS)
+    found = detect(d, 59 + gap_s, **TESLA_AT_EVCS)
+    assert (found.detected == {"evcs": "tesla"}) is detected

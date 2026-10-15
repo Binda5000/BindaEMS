@@ -1063,3 +1063,35 @@ def test_charging_that_begins_is_a_change(cfg, before) -> None:
     for s in range(200, 291):
         seen |= of(at_the_twc(tracker, s, TWC_16, car), Clue.CURRENT)
     assert seen == set()
+
+
+# Pausen der Regelung (Gesamtreview M-2): Liegen zwischen zwei Aufrufen mehr als 60 s auf der Uhr
+# der Safety-Schicht, beginnen die 60 s von Stromvergleich und Phasen-Signatur neu, und der erste
+# Zyklus danach gilt als Änderung der Ströme jeder Wallbox.
+
+BACK_S = 30 + 300  # nach 30 s Beobachtung ruht die Regelung 5 min
+
+
+def test_after_a_pause_current_and_phases_start_anew(cfg) -> None:
+    tracker, car = ClueTracker(cfg), charging_tesla(16.0)
+    for s in range(30):
+        clues(tracker, s, evcs_obs=AT_16, tesla_obs=car)
+    for s in range(BACK_S, BACK_S + 60):
+        found = clues(tracker, s, evcs_obs=AT_16, tesla_obs=car)
+        assert of(found, Clue.CURRENT) | of(found, Clue.PHASES) == set()
+    found = clues(tracker, BACK_S + 60, evcs_obs=AT_16, tesla_obs=car)
+    assert {ev("evcs", "tesla", Clue.CURRENT), ev("evcs", "tesla", Clue.PHASES)} <= found
+
+
+def test_after_a_pause_the_currents_count_as_changed(cfg) -> None:
+    # Ein Gast lädt am Wall Connector stabil mit 3 × 10 A, der Tesla an der EVCS mit 16 A; Tessie
+    # fragt in jedem Zyklus ab. Vor der Pause ist der Tesla am Wall Connector ab 120 s
+    # ausgeschlossen, danach erst 60 s nach dem ersten Wert, der 60 s nach dem ersten Zyklus kam.
+    tracker, excluded = ClueTracker(cfg), []
+    for s in [*range(200), *range(BACK_S + 170, BACK_S + 300)]:
+        car = charging_tesla(16.0, plugged_at=at(s))
+        found = at_the_twc(tracker, s, TWC_10, car, sessions=BOTH, evcs_obs=AT_16)
+        if ev("twc", "tesla", Clue.CURRENT, False) in found:
+            excluded.append(s)
+    back = BACK_S + 170
+    assert excluded == [*range(120, 200), *range(back + 120, back + 130)]

@@ -2,7 +2,7 @@ from datetime import timedelta
 
 from tests.helpers import T0
 
-from bindaems.core.control.timing import held_since, lasted
+from bindaems.core.control.timing import held_since, interrupted, lasted
 
 
 def test_held_since_keeps_the_start_while_it_holds() -> None:
@@ -32,3 +32,9 @@ def test_lasted_with_limit_zero_holds_from_the_start() -> None:
 
 def test_lasted_does_not_hold_for_a_start_in_the_future() -> None:
     assert not lasted(T0 + timedelta(seconds=5), T0, 0.0)
+
+
+def test_a_gap_longer_than_the_limit_interrupts() -> None:  # Gesamtreview M-2
+    assert not interrupted(None, T0, 60.0)  # der erste Aufruf
+    assert not interrupted(T0, T0 + timedelta(seconds=60), 60.0)  # genau das Limit nicht
+    assert interrupted(T0, T0 + timedelta(seconds=60.1), 60.0)

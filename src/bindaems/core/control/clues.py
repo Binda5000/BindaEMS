@@ -70,8 +70,12 @@ Strom wie ein Gast bei uns, stützten es sonst Strom und Phasen an der Wallbox d
 Tessie es ausschließt: ein falscher Widerspruch.
 
 Die 60 s von Stromvergleich und Phasen-Signatur laufen auf der Uhr der Safety-Schicht, die
-Zeitstempel von Tessie und die Beginne der Vorgänge auf der Wanduhr (Präzisierung 10). Die Schicht
-ist rein: Die Zeit kommt als Argument.
+Zeitstempel von Tessie und die Beginne der Vorgänge auf der Wanduhr (Präzisierung 10). „60 s ohne
+Unterbrechung“ (Design 7.3) heißt beobachtete Zeit: Liegen zwischen zwei Aufrufen mehr als
+``HOLD_S`` auf der Uhr der Safety-Schicht (die Regelung ruhte), beginnen beide neu, und der erste
+Zyklus danach gilt für den Stromvergleich wie der erste beobachtete Zyklus jeder Wallbox: Was sich
+in der Pause geändert hat, ist unbekannt. Beginne und Enden der Vorgänge und Tessies Fenster
+bleiben. Die Schicht ist rein: Die Zeit kommt als Argument.
 """
 
 from __future__ import annotations
@@ -83,7 +87,7 @@ from enum import StrEnum
 from typing import Final
 
 from bindaems.core.control.charge_inputs import NO_VEHICLE_DATA, VehicleObs, WallboxObs
-from bindaems.core.control.timing import held_since, lasted
+from bindaems.core.control.timing import held_since, interrupted, lasted
 from bindaems.core.state.derived import PHASES
 from bindaems.shared.config import Config
 
@@ -190,8 +194,8 @@ class ClueTracker:
     oder „passt nicht“) und Phasen-Signatur (je Wallbox, mit der Zahl der Phasen) gelten, je
     Fahrzeug mit Tessie das Fenster, in dem es angesteckt wurde, je Wallbox die Beginne ihrer
     Vorgänge der letzten ``STARTS_KEEP_S``, die Vorgänge des vorigen Zyklus, je Wallbox das letzte
-    Ende eines Vorgangs, ihre Beobachtung im vorigen Zyklus und die letzte Änderung ihrer Ströme.
-    Nicht für mehrere Threads gedacht.
+    Ende eines Vorgangs, ihre Beobachtung im vorigen Zyklus und die letzte Änderung ihrer Ströme,
+    dazu die Zeit des vorigen Aufrufs. Nicht für mehrere Threads gedacht.
     """
 
     def __init__(self, cfg: Config) -> None:
@@ -206,6 +210,7 @@ class ClueTracker:
         self._ends: dict[str, datetime] = {}  # je Wallbox das letzte Ende auf der Wanduhr
         self._seen: dict[str, WallboxObs] = {}  # je Wallbox die Beobachtung des vorigen Zyklus
         self._changed: dict[str, datetime] = {}  # je Wallbox die letzte Stromänderung, Wanduhr
+        self._last: datetime | None = None  # der vorige Aufruf, Uhr der Safety-Schicht
 
     def update(
         self,
@@ -226,6 +231,8 @@ class ClueTracker:
         Assistant es zu Hause meldet (``None``: unbekannt). Alle haben die Schlüssel aus
         ``config.yaml``. Der Ablauf:
 
+        0. Nach einer Pause (mehr als ``HOLD_S`` seit dem vorigen Aufruf) die Zeiten von
+           Stromvergleich und Phasen-Signatur und die Beobachtungen der Wallboxen vergessen.
         1. Die Beginne und Enden der Vorgänge und die Änderungen der Ströme merken und das Fenster
            jedes Fahrzeugs mit Tessie fortführen.
         2. Die Zeiten von Stromvergleich und Phasen-Signatur fortführen. Fehlt die Bedingung einen
@@ -242,6 +249,11 @@ class ClueTracker:
            anderen Wallbox erst mit einem Wert, der ``TESSIE_SETTLE_S`` danach abgefragt wurde
            (``_after_ends``).
         """
+        if interrupted(self._last, now, HOLD_S):
+            self._currents.clear()
+            self._phases.clear()
+            self._seen.clear()
+        self._last = now
         self._remember_starts(wall_now, sessions)
         self._remember_ends(wall_now, sessions)
         self._note_changes(wall_now, wallboxes)

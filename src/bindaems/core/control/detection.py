@@ -35,7 +35,10 @@ Die Reihenfolge je Zyklus: erst die Indizien, dann Kandidaten, Ausschlüsse und 
 die 60 s. Der Widerspruch hängt nicht von den 60 s ab. Ein Ausschluss, der in einem Zyklus zu
 zählen beginnt, verhindert in diesem Zyklus schon die Erkennung. Die 60 s beginnen neu, sobald ihre
 Bedingung einen Zyklus lang fehlt, und enden mit dem Vorgang. Sie laufen auf der Uhr der
-Safety-Schicht (Präzisierung 10). Die Schicht ist rein: Die Zeit kommt als Argument.
+Safety-Schicht (Präzisierung 10) und zählen nur beobachtete Zeit: Liegen zwischen zwei Aufrufen mehr
+als ``HOLD_S`` (die Regelung ruhte), beginnen sie neu, wie die der Indizien; der erste Aufruf danach
+zählt wie der erste überhaupt. Die Zeiten von „unklar“ (``assignment``) bleiben davon unberührt. Die
+Schicht ist rein: Die Zeit kommt als Argument.
 """
 
 from __future__ import annotations
@@ -48,7 +51,7 @@ from typing import Final
 
 from bindaems.core.control.charge_inputs import VehicleObs, WallboxObs
 from bindaems.core.control.clues import HOLD_S, ClueTracker, Evidence
-from bindaems.core.control.timing import held_since, lasted
+from bindaems.core.control.timing import held_since, interrupted, lasted
 from bindaems.shared.config import Config
 
 # so viele stützende Indizien machen ein Fahrzeug an einer Wallbox zum Kandidaten
@@ -96,8 +99,8 @@ class Detector:
     """Entscheidet je Zyklus, wer an welcher Wallbox steht, und führt die 60 s fort.
 
     Der Zustand lebt nur im Speicher: der ``ClueTracker``, seit wann ein Fahrzeug an einer Wallbox
-    Kandidat ist und seit wann an einer Wallbox jedes Fahrzeug ausgeschlossen ist. Nicht für mehrere
-    Threads gedacht.
+    Kandidat ist, seit wann an einer Wallbox jedes Fahrzeug ausgeschlossen ist, und die Zeit des
+    vorigen Aufrufs. Nicht für mehrere Threads gedacht.
     """
 
     def __init__(self, cfg: Config) -> None:
@@ -106,6 +109,7 @@ class Detector:
         self._all_vehicles = frozenset(cfg.vehicles)
         self._candidates: dict[_Pair, datetime | None] = {}
         self._guests: dict[str, datetime | None] = {}
+        self._last: datetime | None = None  # der vorige Aufruf, Uhr der Safety-Schicht
 
     def update(
         self,
@@ -129,10 +133,14 @@ class Detector:
            60 s ab.
         3. Die 60 s fortführen: Kandidat je Wallbox und Fahrzeug, alle ausgeschlossen je Wallbox.
            Ohne Vorgang oder an einer übersteuerten Wallbox fehlt die Bedingung, die Zeiten fallen
-           weg.
+           weg; nach einer Pause von mehr als ``HOLD_S`` beginnen alle neu.
         4. Wer erkannt ist und wo ein Gast steht.
         """
         found = self._tracker.update(now, wall_now, sessions, wallboxes, vehicles, homes)
+        if interrupted(self._last, now, HOLD_S):
+            self._candidates.clear()
+            self._guests.clear()
+        self._last = now
         reading = _read(self._cfg, found, sessions, placed)
         self._advance(now, reading)
         return Detection(
