@@ -256,9 +256,9 @@ def peak_wanted_w(need: BatteryNeed | None, *, acting: bool) -> float | None:
     - **Ohne Bedarf** (``need`` ist ``None``): ``None``.
     - **Sonst** ``W`` vor dem Wächter (``BatteryNeed.wanted_w``), ungekappt. Was davon über der
       festen Grenze ``C`` von Regel 2 zählt, entscheidet der Wächter: mit Budget für den Akku
-      nichts, denn darüber liefert der Akku (Design 2c-2, Entscheidung 3 und 5.4), ohne Budget
-      alles, denn dann hält Regel 2 den Override bei ``C``, und nur die ganze Senkung bringt den
-      Netzbezug unter ``P_zul``.
+      nichts, denn darüber liefert der Akku (Design 2c-2, Entscheidung 3 und 5.4). Ohne Budget
+      hält Regel 2 den Override bei ``C``: Liegt ``P_zul`` darunter, zählt alles, denn nur die
+      ganze Senkung bringt den Netzbezug unter ``P_zul``; sonst ebenfalls nichts.
     """
     if not acting or need is None:
         return None

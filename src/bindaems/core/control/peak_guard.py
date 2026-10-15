@@ -259,15 +259,18 @@ class PeakGuard:
     - **Hochrechnung und Senkung:** Die Hochrechnung ist ``(E_bisher + Mittel · t_rest) / 0,25 h``,
       die verlangte Senkung ``Bedarf − P_zul``; Health zeigt sie mindestens 0. Beide brauchen das
       Mittel; ``P_zul`` braucht es nicht. Der Bedarf ist das Mittel, bei bekanntem ``W`` und
-      bekannter Basis und wenn ``Basis + W`` eine endliche Zahl ist das größere von Mittel und
-      - **mit Budget für den Akku** ``min(Basis + W + S, C) − S``: ``C`` ist die feste Grenze von
-        Regel 2 (``ceiling_w``), ``S`` die Summe der Senkungen ``cut_w`` der Grenzen, die nach dem
-        Aufräumen dieses Schritts bleiben; ``Basis + W + S`` ist so der Netzbezug ohne die
-        Senkungen. Was die Autos über ``C`` wollen, liefert der Akku wie ohne Ziel (Design 2c-2,
-        Entscheidung 3): Der Wächter senkt insgesamt nur um ``min(Basis + W ohne Senkung, C) −
-        P_zul``, einmal und nicht in Stufen.
-      - **ohne Budget** ``Basis + W``: Regel 2 hält den Override dann bei ``C``, und unter
-        ``P_zul`` bringt den Netzbezug nur die ganze Senkung.
+      bekannter Basis und wenn ``Basis + W`` eine endliche Zahl ist das größere von Mittel und dem,
+      was von ``Basis + W`` zählt (``C`` ist die feste Grenze von Regel 2, ``ceiling_w``):
+      - **mit Budget für den Akku** ``min(Basis + W + S, C) − S``: ``S`` ist die Summe der
+        Senkungen ``cut_w`` der Grenzen, die nach dem Aufräumen dieses Schritts bleiben;
+        ``Basis + W + S`` ist so der Netzbezug ohne die Senkungen. Was die Autos über ``C`` wollen,
+        liefert der Akku wie ohne Ziel (Design 2c-2, Entscheidung 3): Der Wächter senkt insgesamt
+        nur um ``min(Basis + W ohne Senkung, C) − P_zul``, einmal und nicht in Stufen.
+      - **ohne Budget** hält Regel 2 den Override bei ``C``, und der Netzbezug ist höchstens
+        ``min(Basis + W, C)``. Solange ``P_zul`` unter ``C`` liegt, zählt ``Basis + W``: Unter
+        ``P_zul`` bringt den Netzbezug dann nur die ganze Senkung. Sonst zählt
+        ``min(Basis + W, C)``, und es braucht keine Senkung: Was die Autos über ``C`` wollen,
+        liefert der Akku wie ohne Ziel, und ein Akku an seiner Reserve zeigt sich im Mittel.
 
       ``W`` gibt der Kern ungekappt und unbekannt, solange Victron gesperrt oder nicht steuerbar
       ist (``regulation.peak_wanted_w``): So zählt der Wächter keinen Netzbezug, den kein Override
@@ -353,8 +356,10 @@ class PeakGuard:
             # Vor dem Bedarf fallen die Grenzen der Autos weg, die gingen oder den Modus wechselten:
             # Ihre Senkung zählt nicht mehr in ``S``.
             running.caps = _kept(running.caps, cars)
-            wanted = self._wanted_w(wanted_w, base_w, running.caps if funded else None)
-            calc = self._calc(wall_now, end, energy_wh, wanted, target_w)
+            wanted, base = finite_number(wanted_w), finite_number(base_w)
+            with_base_w = None if wanted is None or base is None else finite_number(base + wanted)
+            cut_w = sum((cap.cut_w for cap in running.caps.values()), 0.0) if funded else None
+            calc = self._calc(wall_now, end, energy_wh, target_w, with_base_w, cut_w)
         self._watch(running, wall_now, end, calc, target_w)
 
         if running.exceeded is not None:
@@ -438,36 +443,25 @@ class PeakGuard:
         self._prev = _Prev(now, start, known, boost_w)
         return running
 
-    def _wanted_w(
-        self, wanted_w: float | None, base_w: float | None, caps: Mapping[str, Cap] | None
-    ) -> float | None:
-        """Der Netzbezug, den die Autos über den Override wollen, für den Bedarf (Präzisierung 10).
-
-        ``caps`` sind die Grenzen nach dem Aufräumen dieses Schritts, wenn der Akku ein Budget hat,
-        sonst ``None``. Mit Budget ist er ``min(Basis + W + S, C) − S`` mit der Summe ``S`` ihrer
-        Senkungen ``cut_w``, ohne Budget ``Basis + W``. ``None``, wenn ``W`` oder die Basis
-        unbekannt ist oder ``Basis + W`` keine endliche Zahl.
-        """
-        wanted, base = finite_number(wanted_w), finite_number(base_w)
-        with_base_w = None if wanted is None or base is None else finite_number(base + wanted)
-        if with_base_w is None or caps is None:
-            return with_base_w
-        cut_w = sum((cap.cut_w for cap in caps.values()), 0.0)
-        return finite_number(min(with_base_w + cut_w, self._ceiling_w) - cut_w)
-
     def _calc(
         self,
         now: datetime,
         end: datetime,
         energy_wh: float,
-        wanted_w: float | None,
         target_w: float,
+        with_base_w: float | None,
+        cut_w: float | None,
     ) -> _Calc | None:
         """``P_zul``, Hochrechnung und verlangte Senkung eines Schritts, der rechnet.
 
-        Der Bedarf ist das Mittel oder, mit bekanntem ``wanted_w`` (``_wanted_w``), das größere
-        von beiden. ``None``, wenn ``P_zul`` keine endliche Zahl ist: Das Budget ist nie NaN oder
-        ±∞.
+        - ``with_base_w``: ``Basis + W`` in W; ``None``, wenn ``W`` oder die Basis unbekannt ist
+          oder die Summe keine endliche Zahl
+        - ``cut_w``: die gemerkte Senkung ``S``, die Summe von ``cut_w`` der Grenzen nach dem
+          Aufräumen dieses Schritts, wenn der Akku ein Budget hat; ohne Budget ``None``
+
+        Der Bedarf ist das Mittel oder, mit bekanntem ``with_base_w``, das größere von Mittel und
+        dem, was davon zählt (``_counted_w``). ``None``, wenn ``P_zul`` keine endliche Zahl ist:
+        Das Budget ist nie NaN oder ±∞.
         """
         rest_s = max(_MIN_REST_S, (end - now).total_seconds())
         allowed_w = finite_number(
@@ -479,8 +473,27 @@ class PeakGuard:
         if mean_w is None:
             return _Calc(energy_wh, allowed_w, rest_s, None, None, None)
         projection_w = (energy_wh + mean_w * rest_s / 3600.0) / _QUARTER_H
-        need_w = mean_w if wanted_w is None else max(mean_w, wanted_w)
+        counted_w = None if with_base_w is None else self._counted_w(with_base_w, cut_w, allowed_w)
+        need_w = mean_w if counted_w is None else max(mean_w, counted_w)
         return _Calc(energy_wh, allowed_w, rest_s, mean_w, projection_w, need_w - allowed_w)
+
+    def _counted_w(self, with_base_w: float, cut_w: float | None, allowed_w: float) -> float | None:
+        """Was vom Netzbezug ``Basis + W`` der Autos für den Bedarf zählt (Präzisierung 10).
+
+        ``C`` ist die feste Grenze von Regel 2, ``allowed_w`` ist ``P_zul``.
+
+        - mit Budget für den Akku (``cut_w`` ist ``S``): ``min(Basis + W + S, C) − S``
+        - ohne Budget, solange ``P_zul`` unter ``C`` liegt: ``Basis + W``
+        - ohne Budget sonst: ``min(Basis + W, C)``
+
+        ``None``, wenn die Rechnung mit Budget keine endliche Zahl ergibt.
+        """
+        ceiling_w = self._ceiling_w
+        if cut_w is not None:
+            return finite_number(min(with_base_w + cut_w, ceiling_w) - cut_w)
+        if allowed_w < ceiling_w:
+            return with_base_w
+        return min(with_base_w, ceiling_w)
 
     def _watch(
         self, running: _Running, now: datetime, end: datetime, calc: _Calc | None, target_w: float

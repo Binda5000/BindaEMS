@@ -375,21 +375,26 @@ BOTH_CHARGING = {
     "twc_obs": TESLA_16_A,
     "tesla_obs": tesla(plugged=True, charging=True),
 }
+# Victron und beide Ladepunkte sind steuerbar: Der Wächter kann beide Autos drosseln.
+ALL_STEERABLE = {**CONTROLLABLE, "vehicle.tesla": True, VICTRON: True}
 
 
-def test_with_a_budget_the_wanted_grid_counts_only_up_to_the_fixed_ceiling(
-    cfg, monkeypatch
+@pytest.mark.parametrize("soc", [60.0, 22.0, None], ids=["budget", "no_budget", "unknown_soc"])
+def test_with_p_zul_above_the_fixed_ceiling_the_guard_does_not_throttle(
+    cfg, monkeypatch, soc
 ) -> None:
     # Präzisierung 10 und Design 2c-2, Entscheidung 3: Regel 2 begrenzt den Override auf
-    # ``max_grid_charge_setpoint_w`` (8000 W); was die Autos darüber wollen, liefert der Akku, der
-    # mit SOC 60 % ein Budget hat. Der Netzbezug bleibt so bei 8000 W, unter P_zul eines Ziels von
-    # 10 kW (9700 W): Der Wächter drosselt nicht, obwohl die Autos 18400 W aus dem Netz wollen.
+    # ``max_grid_charge_setpoint_w`` (8000 W), mit und ohne Budget für den Akku; was die Autos
+    # darüber wollen, liefert der Akku. Der Netzbezug bleibt so bei 8000 W, unter P_zul eines Ziels
+    # von 10 kW (9700 W): Der Wächter drosselt nicht, obwohl die Autos 18400 W aus dem Netz wollen,
+    # auch ohne Budget (SOC 22 % oder unbekannt), wo er bei P_zul unter der Grenze die ganze Senkung
+    # verlangte.
     peak = with_target(cfg, 10.0)
     regulation = Regulation(peak, HardLimits.from_config(peak), started=T0)
     seen = charger_limits(regulation, monkeypatch)
-    victron = {**CONTROLLABLE, VICTRON: True}
+    kw = {"controllable": ALL_STEERABLE, "grid_obs": grid(soc=soc), **BOTH_CHARGING}
     for s in range(3):
-        peak_cycle(regulation, peak, s, drawn_w=8000.0, controllable=victron, **BOTH_CHARGING)
+        peak_cycle(regulation, peak, s, drawn_w=8000.0, **kw)
     assert [limits.caps_w for limits in seen] == [{}, {}, {}]
     assert regulation.health()["peak"]["reduction_kw"] == 0.0
 
@@ -431,8 +436,6 @@ MIN_PV_AND_NOW = Intent(
         "tesla": VehicleIntent(mode=ChargeMode.MIN_PV),
     },
 )
-# Victron und beide Ladepunkte sind steuerbar: Der Wächter kann beide Autos drosseln.
-ALL_STEERABLE = {**CONTROLLABLE, "vehicle.tesla": True, VICTRON: True}
 
 
 @pytest.mark.parametrize(
@@ -474,11 +477,11 @@ def test_without_a_budget_the_guard_cuts_the_whole_reduction_at_once(
 ) -> None:
     # Präzisierung 10: Der SOC 25 % liegt nicht über USV-Reserve + reserve_guard_pct (20 % + 5 %),
     # der Akku hat kein Budget. Regel 2 hält den Override dann bei der festen Grenze (8000 W), aus
-    # dem Netz kommen 8000 W, und beide Autos wollen in Sofort 18400 W. Unter P_zul bringt den
-    # Netzbezug nur die ganze Senkung Basis + W − P_zul, in einem Schritt und in der Reihenfolge:
-    # zuerst der e-Golf (die niedrigere Priorität) bis zu seinem Boden, dann der Tesla. Bei 8 kW
-    # (P_zul 7700 W) sind das 10700 W; bei 6 kW (P_zul 5700 W) 12700 W, mehr, als beide Autos bis zu
-    # ihrem Boden hergeben (4600 W + 7590 W).
+    # dem Netz kommen 8000 W, und beide Autos wollen in Sofort 18400 W. Weil P_zul unter der Grenze
+    # liegt, bringt den Netzbezug nur die ganze Senkung Basis + W − P_zul unter P_zul, in einem
+    # Schritt und in der Reihenfolge: zuerst der e-Golf (die niedrigere Priorität) bis zu seinem
+    # Boden, dann der Tesla. Bei 8 kW (P_zul 7700 W) sind das 10700 W; bei 6 kW (P_zul 5700 W)
+    # 12700 W, mehr, als beide Autos bis zu ihrem Boden hergeben (4600 W + 7590 W).
     peak = with_target(cfg, target_kw)
     regulation = Regulation(peak, HardLimits.from_config(peak), started=T0)
     seen = charger_limits(regulation, monkeypatch)

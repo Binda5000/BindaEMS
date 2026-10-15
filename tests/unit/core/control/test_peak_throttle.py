@@ -59,10 +59,10 @@ def at(seconds: float) -> datetime:
     return QUARTER + timedelta(seconds=seconds)
 
 
-def guard(ceiling_w: float = FUSE_CEILING_W) -> PeakGuard:
-    """Ein Wächter mit Ziel 8 kW, USV-Reserve 20 % (Budget über 25 % SOC) und der festen Grenze
-    ``ceiling_w`` von Regel 2."""
-    control = ControlConfig(peak_target_kw=8.0)
+def guard(ceiling_w: float = FUSE_CEILING_W, target_kw: float = 8.0) -> PeakGuard:
+    """Ein Wächter mit dem Ziel ``target_kw``, USV-Reserve 20 % (Budget über 25 % SOC) und der
+    festen Grenze ``ceiling_w`` von Regel 2."""
+    control = ControlConfig(peak_target_kw=target_kw)
     return PeakGuard(control, reserve_soc_pct=20.0, ceiling_w=ceiling_w)
 
 
@@ -384,11 +384,17 @@ def test_only_the_caps_that_stay_count_as_cut() -> None:
     assert held(g, 30, [TESLA_NOW]).caps_w == pytest.approx({"tesla": 11040.0 - cut_w})
 
 
+def p_zul_without_draw(second: float) -> float:
+    """``P_zul`` bei Ziel 8 kW, wenn E 0 Wh bleibt: ``2000 Wh · 3600 / Rest − 300 W``."""
+    return 2000.0 * 3600.0 / (900.0 - second) - 300.0
+
+
 def test_with_a_budget_a_cap_lifts_once_p_zul_is_1_kw_above_the_ceiling() -> None:
-    # Aufheben mit demselben Bedarf: Nach der Senkung des e-Golf um 300 W ist er C − S = 7700 W,
-    # der Spielraum P_zul − 7700 W. Die Grenze fällt bei ihrer Senkung plus 1000 W Spielraum, also
-    # sobald P_zul 1 kW über C liegt. Ohne Netzbezug (E 0 Wh, Mittel 0 W) steigt P_zul =
-    # 2000 Wh · 3600 / Rest − 300 W: um 18:02:05 (Rest 775 s) auf 8990 W, um 18:02:06 auf 9002 W.
+    # Aufheben mit demselben Bedarf, allein aus dem Netzbezug der Autos: Nach der Senkung des e-Golf
+    # um 300 W ist er C − S = 7700 W, der Spielraum P_zul − 7700 W. Die Grenze fällt bei ihrer
+    # Senkung plus 1000 W Spielraum, also sobald P_zul 1 kW über C liegt. Das Mittel bleibt hier 0 W
+    # (E 0 Wh), damit nur dieser Teil des Bedarfs zählt: P_zul ist um 18:02:05 (Rest 775 s) 8990 W,
+    # um 18:02:06 9002 W. Im Betrieb liegt das Mittel dann bei C (nächster Test).
     g = guard(CEILING_W)
     assert step(g, 0, cars=[TESLA_NOW, EGOLF_NOW], wanted_w=18400.0).caps_w == {"egolf": 7060.0}
     followed = [TESLA_NOW, EGOLF_15_A]
@@ -397,17 +403,71 @@ def test_with_a_budget_a_cap_lifts_once_p_zul_is_1_kw_above_the_ceiling() -> Non
     assert step(g, 126, cars=followed, wanted_w=17940.0).caps_w == {}
 
 
+def test_with_a_budget_and_the_grid_at_the_ceiling_a_cap_lifts_1_kw_plus_its_cut_above_it() -> None:
+    # Wie im Betrieb: Der Override liegt beim Budget, höchstens bei C, und der Netzbezug folgt ihm,
+    # bei min(P_zul, C). Steigt P_zul über C, liegt das Mittel bei C und wiegt schwerer als C − S;
+    # die Grenze des e-Golf (300 W) fällt darum erst bei P_zul ≥ C + 300 W + 1000 W = 9300 W, um
+    # 18:02:30 (Rest 750 s), nicht schon bei 9000 W.
+    g = guard(CEILING_W)
+    cars = [TESLA_NOW, EGOLF_NOW]
+    first = step(g, 0, cars=cars, wanted_w=18400.0, grid_w=min(p_zul_without_draw(0), CEILING_W))
+    assert first.caps_w == {"egolf": 7060.0}
+    followed = [TESLA_NOW, EGOLF_15_A]
+    for second in range(1, 150):
+        grid_w = min(p_zul_without_draw(second), CEILING_W)
+        caps = step(g, second, cars=followed, wanted_w=17940.0, grid_w=grid_w).caps_w
+        assert caps == {"egolf": 7060.0}, second
+    assert g.health()["budget_kw"] * 1000 < 9300.0
+    assert step(g, 150, cars=followed, wanted_w=17940.0, grid_w=CEILING_W).caps_w == {}
+    assert g.health()["budget_kw"] == 9.3
+
+
 @pytest.mark.parametrize("soc", [25.0, None])
 def test_without_a_budget_the_guard_cuts_the_whole_reduction_at_once(soc) -> None:
     # Ohne Budget für den Akku (SOC nicht über 25 % oder unbekannt) hält Regel 2 den Override bei C,
-    # aus dem Netz kommen 8000 W. Unter P_zul (7700 W) bringt den Netzbezug nur die ganze Senkung
-    # Basis + W − P_zul = 18400 W − 7700 W = 10700 W, in einem Schritt und in der Reihenfolge: der
-    # e-Golf (die niedrigere Priorität) bis zu seinem Boden (4600 W), der Tesla um den Rest.
+    # aus dem Netz kommen 8000 W. Liegt P_zul darunter (7700 W), bringt den Netzbezug nur die ganze
+    # Senkung Basis + W − P_zul = 18400 W − 7700 W = 10700 W unter P_zul, in einem Schritt und in
+    # der Reihenfolge: der e-Golf (die niedrigere Priorität) bis zu seinem Boden (4600 W), der Tesla
+    # um den Rest.
     g = guard(CEILING_W)
     limits = step(g, 0, cars=[TESLA_NOW, EGOLF_NOW], wanted_w=18400.0, grid_w=8000.0, soc=soc)
     assert limits.caps_w == {"egolf": 2760.0, "tesla": 4940.0}
     assert limits.budget_w is None
     assert g.health()["reduction_kw"] == pytest.approx(10.7)
+
+
+def at_the_ceiling(
+    g: PeakGuard, second: int, soc: float | None, cars: Sequence[PeakCar] = (TESLA_NOW, EGOLF_NOW)
+) -> PeakLimits:
+    """Ein Schritt ``second`` nach 18:00:00 bei Ziel 10 kW, in dem Regel 2 den Netzbezug seit
+    18:00:00 bei C hält; die Autos wollen 18400 W.
+
+    ``P_zul`` ist zu Beginn 9700 W und steigt: ``7700 W + 1800000 W·s / (900 s − s)``.
+    """
+    wh = CEILING_W * second / 3600.0
+    return step(g, second, cars=cars, wanted_w=18400.0, wh=wh, grid_w=CEILING_W, soc=soc)
+
+
+@pytest.mark.parametrize("soc", [22.0, None])
+def test_without_a_budget_and_p_zul_above_the_ceiling_the_guard_cuts_nothing(soc) -> None:
+    # Ziel 10 kW: P_zul ist 9700 W, über C. Auch ohne Budget hält Regel 2 den Override bei C, der
+    # Netzbezug bleibt mit 8000 W unter P_zul, und was die Autos darüber wollen, liefert der Akku
+    # wie ohne Ziel (Design 2c-2, Entscheidung 3). Der Bedarf ist max(Mittel, min(Basis + W, C)) =
+    # 8000 W: Über zwei Wartezeiten senkt der Wächter nichts.
+    g = guard(CEILING_W, target_kw=10.0)
+    assert all(at_the_ceiling(g, second, soc).caps_w == {} for second in range(61))
+    assert g.health()["reduction_kw"] == 0.0
+
+
+def test_a_soc_at_the_threshold_with_p_zul_above_the_ceiling_cuts_nothing() -> None:
+    # Der SOC pendelt um die Schwelle von 25 %: Schritt für Schritt hat der Akku ein Budget und
+    # keins. Liegt P_zul über C, ist der Bedarf in beiden Fällen 8000 W; es entsteht keine Grenze,
+    # die im nächsten Schritt wieder fiele.
+    g = guard(CEILING_W, target_kw=10.0)
+    for second in range(121):
+        limits = at_the_ceiling(g, second, 25.1 if second % 2 else 25.0)
+        assert limits.caps_w == {}, second
+        assert (limits.budget_w is None) == (second % 2 == 0)
 
 
 # --- Ende der Viertelstunde, Lücken und Autos, die gehen -----------------------------------------

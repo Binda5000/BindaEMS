@@ -391,18 +391,25 @@ def test_wanted_grid_counts_when_it_is_higher_than_the_mean(
 
 
 @pytest.mark.parametrize(
-    ("soc", "reduction_kw"),
+    ("ceiling_w", "soc", "reduction_kw"),
     [
-        (60.0, 2.3),  # Budget für den Akku: min(Basis + W, C) − P_zul = 8000 W − 5700 W
-        (25.0, 5.0),  # keins: Basis + W − P_zul = 10700 W − 5700 W
-        (None, 5.0),  # ein unbekannter SOC gibt keins
+        (8000.0, 60.0, 2.3),  # Budget für den Akku: min(Basis + W, C) − P_zul = 8000 W − 5700 W
+        (8000.0, 25.0, 5.0),  # keins, P_zul unter C: Basis + W − P_zul = 10700 W − 5700 W
+        (8000.0, None, 5.0),  # ein unbekannter SOC gibt keins
+        (5700.5, 25.0, 5.0),  # P_zul knapp unter C: noch die ganze Senkung
+        (5700.0, 25.0, 0.0),  # P_zul gleich C: min(Basis + W, C) − P_zul = 0
+        (5000.0, None, 0.0),  # P_zul über C: min(Basis + W, C) − P_zul unter 0
     ],
 )
-def test_the_wanted_grid_counts_up_to_the_ceiling_only_with_a_budget(soc, reduction_kw) -> None:
-    # Präzisierung 10: W 10700 W liegt über der festen Grenze C = 8000 W, ohne Grenzen (S = 0).
-    # Über C liefert mit Budget der Akku; ohne hält Regel 2 den Override bei C, und erst die ganze
-    # Senkung brächte den Netzbezug unter P_zul. Health zeigt die Senkung aus diesem Bedarf.
-    g = guard(ceiling_w=8000.0)
+def test_the_wanted_grid_above_the_ceiling_counts_only_without_a_budget_below_it(
+    ceiling_w, soc, reduction_kw
+) -> None:
+    # Präzisierung 10: W 10700 W liegt über der festen Grenze C, ohne Grenzen (S = 0); P_zul ist
+    # 5700 W. Was die Autos über C wollen, liefert mit Budget der Akku. Ohne Budget hält Regel 2
+    # den Override bei C: Liegt P_zul darunter, brächte erst die ganze Senkung den Netzbezug unter
+    # P_zul; liegt es nicht darunter, bleibt der Netzbezug ohnehin bei höchstens P_zul. Health
+    # zeigt die Senkung aus diesem Bedarf.
+    g = guard(ceiling_w=ceiling_w)
     run(g, 0, 300, wanted_w=10700.0, soc=soc, wh=lambda s: 1000.0 if s == 300 else 0.0)
     assert g.health()["reduction_kw"] == pytest.approx(reduction_kw)
 
