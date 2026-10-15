@@ -11,7 +11,10 @@ die kleinen Nacharbeiten aus dem Gesamtreview dazugekommen; beides ist per Fast-
 Fix-Welle danach ist umgesetzt** (`docs/superpowers/plans/2026-10-14-phase-2c2a-akku-spitzen.md`).
 **Plan 2c-2b (Zuordnungserkennung) ist umgesetzt, je Task und im Gesamtreview geprüft, und die
 Fix-Welle danach ist umgesetzt** (`docs/superpowers/plans/2026-10-15-phase-2c2b-zuordnung.md`).
-Beide Pläne liegen auf dem Branch `ccr-9778345e-t3x44k`; die Integration nach `main` steht aus. Als
+Beide Pläne sind per Fast-Forward auf `main` (`31721a6`, mit Zustimmung des Betreibers vom
+15.10.2026, Tests auf `main` grün); der Arbeitsbranch `ccr-9778345e-t3x44k` ist danach gelöscht, eine
+neue Sitzung beginnt auf `main`. Offen aus 2c-2b sind drei kleine Doku-Korrekturen (Ende von
+„Bewusst offen gelassen“, „Doku-Korrekturen aus dem Re-Review der Fix-Welle von 2c-2b“). Als
 Nächstes folgt Plan 2d (Bedienung in UI und HA), an der Anlage danach die Inbetriebnahme Punkt 3
 (Design 2c-2, 11.1): Die Erkennung läuft im Dry-Run mit, und Health zeigt, wer wo steht.
 `main` ist seit dem 12.10.2026 auch der Standard-Branch auf GitHub.
@@ -213,7 +216,8 @@ Nächstes folgt Plan 2d (Bedienung in UI und HA), an der Anlage danach die Inbet
   mit Abdeckungsgrenzen (≥ 75 % insgesamt, ≥ 90 % für `core/safety`, `core/control` und
   `core/actuators`), Vitest mit svelte-check, Prettier und ESLint; dazu E2E mit Playwright.
 - **Offen:**
-  - die Integration der Pläne 2c-2a und 2c-2b nach `main`
+  - drei kleine Doku-Korrekturen aus dem Re-Review der Fix-Welle von 2c-2b (der Code stimmt; Liste
+    am Ende von „Bewusst offen gelassen“)
   - Plan 2d (Bedienung in UI und HA) nach der Spec schreiben, vom Betreiber durchsehen lassen und
     umsetzen (siehe „Nächster Schritt“)
   - an der Anlage: Images ausrollen, Dry-Run neben evcc beginnen und dabei die Inbetriebnahme Punkt 3
@@ -263,8 +267,8 @@ Nächstes folgt Plan 2d (Bedienung in UI und HA), an der Anlage danach die Inbet
   - Frage nach der Integration (merge, PR oder so lassen)
 - **Git:**
   - Arbeitsbranch ist der Branch, den die Sitzung vorgibt (Plan 2b und 2c-1: `ccr-e451cb4c-qeg1tm`,
-    EVCS-Hysterese, Plan 2c-2a und 2c-2b: `ccr-9778345e-t3x44k`); der Standard-Branch auf GitHub ist
-    `main`.
+    EVCS-Hysterese, Plan 2c-2a und 2c-2b: `ccr-9778345e-t3x44k`, beide nach der Integration
+    gelöscht); der Standard-Branch auf GitHub ist `main`.
   - Nach `main` nur mit Zustimmung; bisher per Fast-Forward-Merge, Tests auf `main`, dann Push.
   - Pull Requests nur auf ausdrücklichen Wunsch.
   - Commit-Nachrichten auf Deutsch im Stil `fix(ui): …`, mit den Attributionszeilen, die die
@@ -764,12 +768,12 @@ Demo-Zugänge: `admin`, `gast` (Lesen) und `sicher` (Admin mit TOTP, Geheimnis
        nicht ausgerollt (siehe Kurzfassung): Modi Sofort, PV, Min+PV, Aus und Boost, Phasenwächter,
        Tesla-Steuerung, vereinfachte Zuordnung Auto ↔ Wallbox, Degradation der Ladepunkte,
        Anlagensimulator mit Regelkreistests in der CI.
-     - **2c-2a Akku und Spitzen:** umgesetzt, je Task und im Gesamtreview geprüft, die Integration
-       nach `main` steht aus (siehe Kurzfassung): Umbau, Befehle der Regelung an Victron
+     - **2c-2a Akku und Spitzen:** umgesetzt, je Task und im Gesamtreview geprüft, auf `main`
+       (`31721a6`, 15.10.2026): Umbau, Befehle der Regelung an Victron
        (Akku-Unterstützung und Setpoint-Kompensation, Spec 7.6 und 7.7, Auffrischen des Overrides vor
        seinem Timeout von 5 min), 15-min-Wächter (Spec 7.4), Simulator mit 18 Szenarien (heute 21).
-     - **2c-2b Zuordnung:** umgesetzt und je Task geprüft, der Gesamtreview und die Integration
-       nach `main` stehen aus (siehe Kurzfassung): die volle Zuordnungserkennung (Spec 7.8, Design
+     - **2c-2b Zuordnung:** umgesetzt, je Task und im Gesamtreview geprüft, die Fix-Welle danach
+       umgesetzt, auf `main` (`31721a6`, 15.10.2026): die volle Zuordnungserkennung (Spec 7.8, Design
        2c-2, Abschnitt 7) samt Gastfahrzeug und `vehicles.<name>.home_entity`, der Grund
        `assignment_detected`, Health je Wallbox und im Simulator der e-Golf „zu Hause“ oder „weg“,
        das Gastfahrzeug, jedes Auto an jeder Wallbox und die Szenarien aus Design 10.3 (jetzt 21).
@@ -792,7 +796,7 @@ Demo-Zugänge: `admin`, `gast` (Lesen) und `sicher` (Admin mit TOTP, Geheimnis
      an der Anlage am 12.10.2026 bestätigt.
    - Geschrieben wird nie der Maximalstrom (5017).
 
-### Nächster Schritt: Integration, die Anlage und Plan 2d
+### Nächster Schritt: die Anlage und Plan 2d
 
 1. Plan 2b ist auf `main`; Gesamtreview, Fix-Durchgang und Re-Review sind erledigt, die
    Entscheidungen stehen in `docs/superpowers/plans/2026-10-11-phase-2b-entscheidungen.md`. Plan
@@ -805,8 +809,8 @@ Demo-Zugänge: `admin`, `gast` (Lesen) und `sicher` (Admin mit TOTP, Geheimnis
 3. Plan 2c-2a ist umgesetzt und im Gesamtreview geprüft, die Fix-Welle danach ist umgesetzt
    (`docs/superpowers/plans/2026-10-14-phase-2c2a-akku-spitzen.md`). Plan 2c-2b ist umgesetzt, je
    Task und im Gesamtreview geprüft, und die Fix-Welle danach ist umgesetzt
-   (`docs/superpowers/plans/2026-10-15-phase-2c2b-zuordnung.md`). Es folgt, mit Zustimmung des
-   Betreibers, die Integration beider Pläne nach `main`.
+   (`docs/superpowers/plans/2026-10-15-phase-2c2b-zuordnung.md`). Beide sind auf `main`
+   (`31721a6`, Fast-Forward mit Zustimmung des Betreibers vom 15.10.2026, Tests auf `main` grün).
 4. **Plan 2d** (Bedienung in UI und HA) nach der Spec (5.3, 8.7, 12 und 13) schreiben, vom Betreiber
    durchsehen lassen und umsetzen. Dazu gehören die Auswahl des Gast-Modus (`guest.mode`, bisher nur
    per `PUT /v1/intent`; Plan 2c-2b, Präzisierung 1), die Anzeige von Health je Wallbox
@@ -1354,3 +1358,29 @@ Aufgeschobene Kleinigkeiten aus Plan 2c-2b (die inhaltlichen; sie sind klein, ke
   `_clear_from` und `_occupied_from` in `scenarios.py` haben denselben Prolog („ab `from_s`
   filtern, sonst endet der Lauf“) doppelt. `zuordnung` pinnt „der Tesla ist nie kurz erkannt“ nur über
   den Test des Aufbaus.
+
+Doku-Korrekturen aus dem Re-Review der Fix-Welle von 2c-2b (offen; der Code stimmt jeweils, nur die
+Texte sind ungenau; die Zeilen gelten für `31721a6`):
+
+- **Kosten der Sperre nach dem Ende eines Vorgangs:** Die Texte sagen, eine Erkennung über Tessie und
+  Ausschluss komme nach dem Ende eines Vorgangs an der anderen Wallbox später. Die Sperre unterbricht
+  aber auch eine laufende Erkennung: Ist der Tesla nicht ladend an der EVCS über Tessie und zeitliche
+  Korrelation erkannt und verlässt ein zweiphasiger Gast den Wall Connector, zeigt die EVCS rund
+  2 min lang „angenommen“ (e-Golf oder Gast), dann ist der Tesla neu erkannt, mit einem neuen
+  `assignment_detected`. Ergänzen in `src/bindaems/core/control/clues.py` (Docstring, um Zeile
+  46-50), `docs/betrieb.md` (um 1655-1657), Spec 7.8 (`2026-10-08-bindaems-design.md`, um 905), im
+  Kopf des Designs 2c-2 (um 88-91) und hier („Tessie nach dem Ende eines Vorgangs“ unter den
+  Entscheidungen nach dem Gesamtreview).
+- **Gast nach rund 2 min erkannt:** Der Satz „lädt der Tesla mit einem anderen Strom, ist der Gast
+  nach rund 2 min erkannt“ (`docs/betrieb.md` um 1789-1790 und hier unter „Gast-Erkennung“) gilt
+  nur, solange sich der Strom an der EVCS nicht ändert. Ändert die Regelung ihn oft (etwa alle
+  45 s), bleibt dort „Gast, angenommen“; der Absatz „Stromvergleich nach einer Änderung“ in
+  `docs/betrieb.md` (um 1672-1673) sagt es richtig. Den Satz einschränken.
+- **Wortlaut der Regel zu Übersteuerung und Elimination:** `docs/betrieb.md` (um 1626-1627),
+  Spec 7.8 (um 908) und hier (Elimination und „Übersteuerung und Elimination“ unter den offenen
+  Punkten) nennen die Übersteuerung des Fahrzeugs selbst an die andere Wallbox. Gemeint ist die
+  Übersteuerung eines anderen Fahrzeugs an der anderen Wallbox; ein übersteuertes Fahrzeug ist an
+  jeder anderen Wallbox ohnehin ausgeschlossen. `detection.py` (um 25-26) und `clues.py` (um 26-27)
+  sagen es richtig. Im Beispiel gilt „stützen ihn dort weder `tessie` noch `elsewhere`“ nur, solange
+  der übersteuerte e-Golf am Wall Connector nicht zweiphasig lädt; lädt er, stützt `tessie` den
+  Tesla an der EVCS, allein reicht das nicht, und es bleibt „Gast, angenommen“.
