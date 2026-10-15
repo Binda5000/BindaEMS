@@ -803,3 +803,30 @@ def test_an_override_still_binds_to_its_own_wallbox(cfg) -> None:
         "twc",
         AssignmentKind.OVERRIDE,
     )
+
+
+def test_a_boost_set_as_the_session_ends_binds_as_before(cfg) -> None:
+    # Der Tesla war an der EVCS erkannt; der Boost kommt im Aufruf, in dem die EVCS kein Fahrzeug
+    # mehr meldet. Dieser Vorgang läuft nicht mehr: Der Boost bindet wie bisher an die
+    # Standard-Wallbox, an den nächsten Vorgang am Wall Connector.
+    a = Assignment(cfg, started=T0)
+    for s in range(61):
+        update(a, s, **PICTURE)
+    until = T0 + timedelta(hours=2)
+    boost = Intent(version=1, control=True, vehicles={"tesla": VehicleIntent(boost_until=until)})
+    update(a, 61, evcs_obs=evcs(connected=False), intent=boost, **PICTURE)
+    home = {"twc_obs": twc(connected=True), "tesla_obs": tesla(plugged=True, at_home=True)}
+    later = update(a, 62, evcs_obs=evcs(connected=False), intent=boost, **home).vehicles["tesla"]
+    assert (later.wallbox, later.boost_until) == ("twc", until)
+
+
+def test_a_boost_set_while_plugging_in_binds_to_the_new_session(cfg) -> None:
+    # Der e-Golf stand an der EVCS ohne Vorgang; der Boost kommt im Aufruf, in dem er ansteckt
+    a = Assignment(cfg, started=T0)
+    update(a, 0, evcs_obs=evcs(connected=False))
+    egolf = update(a, 1, intent=boosted(1, T0 + timedelta(hours=2))).vehicles["egolf"]
+    assert (egolf.wallbox, egolf.new_session, egolf.boost_until) == (
+        "evcs",
+        True,
+        T0 + timedelta(hours=2),
+    )

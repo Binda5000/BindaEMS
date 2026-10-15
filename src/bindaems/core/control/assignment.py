@@ -258,7 +258,7 @@ class Assignment:
         2. Bindungen: Bei einer Version, die der Zuordnung neu ist, bindet sie Boost und
            Übersteuerung jedes Fahrzeugs an einen Vorgang (``_bind``): eine Übersteuerung an den
            ihrer Wallbox, den laufenden oder den nächsten; einen Boost ohne Übersteuerung an den,
-           an dem das Fahrzeug im vorigen Aufruf stand, und stand es an keinem, an den seiner
+           an dem das Fahrzeug im vorigen Aufruf stand, wenn er noch läuft, sonst an den seiner
            Standard-Wallbox, den laufenden oder den nächsten. Eine Bindung endet mit ihrem Vorgang.
         3. Übersteuerungen: die gültigen, deren Vorgang läuft (``_active_overrides``).
         4. Erkennung (``Detector.update``) mit jedem laufenden Vorgang und seinem Beginn, auch bei
@@ -312,10 +312,11 @@ class Assignment:
         """Bindet Boost und Übersteuerung einer neuen Version an Ansteckvorgänge (Präzisierung 3).
 
         Das gilt für jedes Fahrzeug mit ``boost_until`` oder gültiger Übersteuerung. Ohne
-        Übersteuerung bindet der Boost an den Vorgang, an dem das Fahrzeug im vorigen Aufruf stand:
-        erkannt, angenommen oder an seiner Standard-Wallbox mit laufendem Vorgang. So gilt der Boost
-        für den Tesla, der an der EVCS erkannt ist, dort und springt nicht beim nächsten Anstecken
-        am Wall Connector an. Die Zuordnung dieses Aufrufs steht beim Binden noch nicht fest.
+        Übersteuerung bindet der Boost an den Vorgang, an dem das Fahrzeug im vorigen Aufruf stand
+        (erkannt, angenommen oder an seiner Standard-Wallbox), solange er in diesem Aufruf noch
+        läuft. So gilt der Boost für den Tesla, der an der EVCS erkannt ist, dort und springt nicht
+        beim nächsten Anstecken am Wall Connector an. Die Zuordnung dieses Aufrufs steht beim Binden
+        noch nicht fest.
 
         Sonst gilt die Wallbox der Übersteuerung, ohne Übersteuerung die Standard-Wallbox: Die
         Bindung geht an ihren laufenden Vorgang, wenn sie ein Fahrzeug meldet, sonst an den
@@ -331,8 +332,9 @@ class Assignment:
             override = self._override_wallbox(entry)
             if entry is None or (entry.boost_until is None and override is None):
                 continue
-            if override is None and key in self._standing:
-                self._bindings[key] = self._standing[key]  # lief im vorigen Aufruf
+            standing = self._standing.get(key)
+            if override is None and standing is not None and self._runs(standing):
+                self._bindings[key] = standing
                 continue
             wallbox = override if override is not None else vehicle.default_wallbox
             port = self._ports[wallbox]
@@ -349,8 +351,10 @@ class Assignment:
     def _bound(self, key: str) -> bool:
         """Ob die Bindung des Fahrzeugs gilt: Ihr Vorgang läuft an ihrer Wallbox."""
         binding = self._bindings.get(key)
-        if binding is None:
-            return False
+        return binding is not None and self._runs(binding)
+
+    def _runs(self, binding: _Binding) -> bool:
+        """Ob der Vorgang ``binding`` an seiner Wallbox noch läuft."""
         port = self._ports[binding.wallbox]
         return port.running and port.count == binding.session
 
