@@ -127,6 +127,19 @@ def test_query_limits_the_period(store: DecisionStore) -> None:
     assert [item.decision.id for item in found] == ["d5", "d4", "d3"]
 
 
+@pytest.mark.parametrize("needle", ["änderung", "ÄNDERUNG", "Änderung", "ä"])
+def test_text_search_ignores_case_of_umlauts(store: DecisionStore, needle: str) -> None:
+    store.add([decision(id="a", text="Änderung von außen"), decision(id="b", text="Strom 8 A")])
+    found, _ = store.query(DecisionQuery(text=needle))
+    assert [item.decision.id for item in found] == ["a"]
+
+
+def test_text_search_finds_uppercase_umlaut_with_lowercase_needle(store: DecisionStore) -> None:
+    store.add([decision(id="a", text="EVCS „evcs“ (Übersteuerung): Strom 8 A")])
+    found, _ = store.query(DecisionQuery(text="übersteuerung"))
+    assert [item.decision.id for item in found] == ["a"]
+
+
 def test_text_search_takes_wildcards_literally(store: DecisionStore) -> None:
     store.add([decision(id="a", text="Strom 50% mehr"), decision(id="b", text="Strom 500 mehr")])
     found, _ = store.query(DecisionQuery(text="50%"))
@@ -333,6 +346,20 @@ async def test_run_writes_the_buffer_every_second(
     task.cancel()
     assert sleeps[0] == 1.0
     assert _ids(store) == ["s1"]
+
+
+async def test_cancelled_write_keeps_the_buffer(
+    collector: DecisionCollector, store: DecisionStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def cancelled(items):
+        raise asyncio.CancelledError
+
+    monkeypatch.setattr(store, "add", cancelled)
+    await collector.on_decision(SAMPLE)
+    with pytest.raises(asyncio.CancelledError):
+        await collector.flush()
+    monkeypatch.undo()
+    assert await collector.flush() == 1
 
 
 async def test_failed_write_keeps_the_buffer(

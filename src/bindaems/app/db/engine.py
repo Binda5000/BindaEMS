@@ -27,6 +27,10 @@ def open_database(path: Path) -> Engine:
         cursor.execute("PRAGMA busy_timeout=5000")
         cursor.execute("PRAGMA synchronous=NORMAL")
         cursor.close()
+        # SQLites lower() kennt nur ASCII; die Textsuche braucht Umlaute (Entscheidungslog)
+        dbapi_connection.create_function(
+            "ulower", 1, lambda s: s.casefold() if s is not None else None, deterministic=True
+        )
 
     with engine.connect() as conn:
         conn.exec_driver_sql("PRAGMA journal_mode=WAL")  # bleibt in der Datei gespeichert

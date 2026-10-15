@@ -53,7 +53,7 @@ class DecisionQuery:
     """Filter und Seite einer Abfrage; ``before`` ist der ``cursor`` der letzten Zeile der Seite.
 
     ``dry_run=False`` blendet Dry-Run-Entscheidungen aus; ``text`` sucht ohne Beachtung der
-    Groß- und Kleinschreibung.
+    Groß- und Kleinschreibung, auch bei Umlauten (SQL-Funktion ``ulower`` aus ``open_database``).
     """
 
     since: datetime | None = None
@@ -88,7 +88,7 @@ def _stored(row: _Row) -> StoredDecision:
 
 def _like_pattern(text: str) -> str:
     """Das Suchmuster für ``LIKE ... ESCAPE '\\'``: Platzhalter im Text gelten wörtlich."""
-    escaped = text.lower().replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    escaped = text.casefold().replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
     return f"%{escaped}%"
 
 
@@ -151,7 +151,7 @@ class DecisionStore:
         if not q.dry_run:
             conditions.append(table.c.dry_run.is_(False))
         if q.text:
-            conditions.append(func.lower(table.c.text).like(_like_pattern(q.text), escape="\\"))
+            conditions.append(func.ulower(table.c.text).like(_like_pattern(q.text), escape="\\"))
         if q.before is not None:
             # „älter“ heißt nach (ts, seq), nicht nach seq: der Rückstand liefert ältere Zeiten
             # mit höherem seq nach
@@ -233,14 +233,15 @@ class DecisionCollector:
     async def flush(self) -> int:
         """Schreibt den Puffer in einem Zug; liefert die Zahl der neu gespeicherten.
 
-        Schlägt das Schreiben fehl, bleibt der Puffer für den nächsten Versuch erhalten.
+        Schlägt das Schreiben fehl oder wird es abgebrochen, bleibt der Stapel für den nächsten
+        Versuch im Puffer.
         """
         pending, self._buffer = self._buffer, []
         if not pending:
             return 0
         try:
             return await self._store_and_mark(pending)
-        except Exception:
+        except BaseException:  # auch ein Abbruch (Herunterfahren) gibt den Stapel zurück
             self._buffer = pending + self._buffer
             raise
 
