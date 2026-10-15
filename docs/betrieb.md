@@ -1818,10 +1818,11 @@ Den **erlaubten Akku-Anteil** bestimmt der Modus des Autos:
   `max_grid_charge_setpoint_w` bis zum Importlimit an. Über dem Importlimit (20 A je Phase) liefert
   Victron ohnehin aus dem Akku (Peak Shaving). Mit Budget für den Akku zählt der 15-min-Wächter den
   gewollten Netzbezug deshalb nur bis zu dieser festen Grenze (unten, „Hochrechnung und Senkung“):
-  Was der Akku darüber ohnehin liefert, drosselt er nicht, und liegt sein Ziel darunter, senkt er
-  die Autos nur einmal um den Unterschied. Ohne Budget (SOC nicht über USV-Reserve +
-  `reserve_guard_pct`) hält Regel 2 den Override bei der festen Grenze, und der Wächter drosselt die
-  Autos um alles, was über `P_zul` liegt.
+  Was der Akku darüber ohnehin liefert, drosselt er nicht, und liegt `P_zul` darunter, senkt er die
+  Autos nur einmal um den Unterschied. Ohne Budget (SOC nicht über USV-Reserve +
+  `reserve_guard_pct` oder unbekannt) hält Regel 2 den Override ebenfalls bei der festen Grenze:
+  Liegt `P_zul` darunter, drosselt der Wächter die Autos um alles, was über `P_zul` liegt, sonst
+  gar nicht.
 - **Unterstützung** heißt: Der Akku liefert Autos in PV-Überschuss und Min+PV ihren Fehlbetrag, bis
   zu `support_max_w` (3 kW). Sie gilt, wenn
   - ein Auto in einem dieser Modi steht (sonst zeigt Health `mode`),
@@ -1938,17 +1939,21 @@ Preis: Er drosselt die Wallboxen und lässt den Akku überbrücken, und was beid
     Wert aus `max_grid_charge_setpoint_w`, Absicherung und `grid.max_import_kw` (ohne das Budget).
     Mehr Netzbezug setzt kein Override durch; was die Autos darüber wollen, liefert der Akku wie ohne
     Ziel (oben, „Sofort“). Dabei rechnet der Wächter mit dem Netzbezug ohne seine eigenen Senkungen:
-    Der Bedarf ist `min(Basis + W + S, C) − S`, mit der Summe `S` der Senkungen der Grenzen, die er
-    gerade hält. So senkt er insgesamt nur um `min(Basis + W ohne Senkung, C) − P_zul`, und das
-    einmal. Laden etwa Tesla und e-Golf in Sofort mit zusammen 18 kW bei einem Ziel von 8 kW
+    Für den Bedarf zählt `min(Basis + W + S, C) − S`, mit der Summe `S` der Senkungen der Grenzen,
+    die er gerade hält. So senkt er insgesamt nur um `min(Basis + W ohne Senkung, C) − P_zul`, und
+    das einmal. Laden etwa Tesla und e-Golf in Sofort mit zusammen 18 kW bei einem Ziel von 8 kW
     (`P_zul` 7,7 kW), senkt er den e-Golf um 300 W und dann nicht weiter; was über 7,7 kW liegt,
     liefert der Akku. Bei einem Ziel von 10 kW (`P_zul` 9,7 kW) bleibt der Netzbezug bei 8 kW, und
     der Wächter drosselt gar nicht.
-  - **Ohne Budget** (SOC nicht über USV-Reserve + `reserve_guard_pct` oder unbekannt) zählt
-    `Basis + W` ganz. Regel 2 hält den Override dann bei `C`, der Netzbezug folgt ihm bis dorthin,
-    und unter `P_zul` bringt ihn nur die ganze Senkung: Der Wächter senkt die Autos in einem Schritt
-    um alles, was `Basis + W` über `P_zul` liegt, in der Reihenfolge unten und höchstens bis zu
-    ihrem Boden.
+  - **Ohne Budget** (SOC nicht über USV-Reserve + `reserve_guard_pct` oder unbekannt) hält Regel 2
+    den Override bei `C`, und der Netzbezug folgt ihm bis dorthin: Er liegt bei höchstens
+    `min(Basis + W, C)`. Solange `P_zul` unter `C` liegt, zählt `Basis + W` ganz, denn unter
+    `P_zul` bringt den Netzbezug dann nur die ganze Senkung: Der Wächter senkt die Autos in einem
+    Schritt um alles, was `Basis + W` über `P_zul` liegt, in der Reihenfolge unten und höchstens
+    bis zu ihrem Boden. Liegt `P_zul` bei `C` oder darüber, zählt `min(Basis + W, C)`, und der
+    Wächter senkt nichts: Was die Autos über `C` wollen, liefert der Akku wie ohne Ziel, und ein
+    Akku an seiner Reserve zeigt sich im Mittel. Laden etwa Tesla und e-Golf in Sofort mit zusammen
+    18 kW bei einem Ziel von 10 kW (`P_zul` 9,7 kW), drosselt er auch ohne Budget nicht.
   - **Nur das Mittel,** solange Victron gesperrt (etwa durch DESS) oder nicht steuerbar ist: Dann
     setzt kein Override `Basis + W` durch, und der Wächter zählt nur, was das Netz wirklich liefert.
     Ebenso, wenn `W` oder der Basis-Sollwert unbekannt ist.
@@ -1978,10 +1983,12 @@ Die Reaktion folgt der Reihenfolge von Spec 7.4:
    - **Aufgehoben** wird eine Grenze, wenn `P_zul` den Bedarf (oben, „Hochrechnung und Senkung“)
      um mindestens 1 kW plus die Senkung dieses Autos übersteigt, frühestens 30 s nach der letzten
      Änderung und je Zyklus höchstens eine, in umgekehrter Reihenfolge (Sofort vor Min+PV vor
-     PV-Überschuss, innerhalb einer Stufe die höchste Priorität zuerst). Mit Budget und einer
-     Grenze, solange die Autos mehr als die feste Grenze von Regel 2 wollen, ist das der Fall,
-     sobald `P_zul` 1 kW über ihr liegt. So flattert der Tesla nicht und spart Tessie-Befehle. Mit
-     dem Ende der Viertelstunde fallen alle Grenzen weg.
+     PV-Überschuss, innerhalb einer Stufe die höchste Priorität zuerst). Wollen die Autos mit Budget
+     mehr als die feste Grenze von Regel 2, hält der Override den Netzbezug bei ihr, sobald `P_zul`
+     über ihr liegt, und das Mittel zählt mit ihr: Eine Grenze fällt dann, wenn `P_zul` die feste
+     Grenze um 1 kW plus die Senkung dieses Autos übersteigt (im Simulator, `spitze-15min`, bei
+     rund 9,3 kW). So flattert der Tesla nicht und spart Tessie-Befehle. Mit dem Ende der
+     Viertelstunde fallen alle Grenzen weg.
    - Gedrosselt wird nur ein Auto an einem Ladepunkt, den die Laderegelung regelt; ein ungeregeltes
      Auto in Boost zählt nur für den Boost-Anteil. Verlässt ein gedrosseltes Auto die Liste, wechselt
      es den Modus oder geht es in Boost oder Aus, fällt seine Grenze still weg, ohne neue Wartezeit.
@@ -1996,7 +2003,8 @@ Die Reaktion folgt der Reihenfolge von Spec 7.4:
    Das Budget geht aber nur an den Akku (und an Regel 2), solange der SOC über USV-Reserve +
    `control.reserve_guard_pct` (5 %) liegt. Sonst und bei unbekanntem SOC gibt es keins, denn
    Regel 2 entlüde den Akku sonst bis zum Min-SOC; dann bleiben die Wallboxen, die der Wächter um
-   die ganze Senkung drosselt (oben, „Hochrechnung und Senkung“), sonst gilt Punkt 3.
+   die ganze Senkung drosselt, solange `P_zul` unter der festen Grenze von Regel 2 liegt (oben,
+   „Hochrechnung und Senkung“), sonst gilt Punkt 3.
 3. **Sonst** nimmt der Wächter die Überschreitung hin: Liegt die Hochrechnung 60 s lang ohne
    Unterbrechung über dem Ziel, ist die Viertelstunde **überschritten** (Health `exceeded`) bis zu
    ihrem Ende, und der Alarm `peak.exceeded` (unten) meldet es. Gezählt wird nur in Zyklen, die
@@ -2231,8 +2239,9 @@ Beide Alarme zeigt das UI unter **System** → „core“ → „Alarme“ (Absc
     die Autos mehr als die feste Grenze von Regel 2 und liegt `P_zul` darunter, senkt der Wächter
     mit Budget einmal um den Unterschied (bei 8 kW Ziel und Grenze rund 300 W) und rechnet diese
     Senkung danach mit (oben, „Hochrechnung und Senkung“). Im Simulator (`spitze-15min`) geht der
-    e-Golf so in der zweiten und dritten Viertelstunde einmal von 16 auf 15 A, bis `P_zul` 1 kW über
-    der Grenze liegt; in der ersten trifft die Senkung den Tesla, der dort noch mit 16 A lädt.
+    e-Golf so in der zweiten und dritten Viertelstunde einmal von 16 auf 15 A, bis `P_zul` die
+    Grenze um 1 kW plus die Senkung übersteigt (rund 9,3 kW); in der ersten trifft die Senkung den
+    Tesla, der dort noch mit 16 A lädt.
   - ob `battery.state` `unknown` erscheint (ein Messwert fehlt) oder `locked` (DESS an, ein anderes
     System regelt).
 

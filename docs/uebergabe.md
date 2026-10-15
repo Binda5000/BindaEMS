@@ -156,7 +156,7 @@ Plan 2c-2b (Zuordnungserkennung, Design 2c-2, Abschnitt 7).
   immer gemeinsam aus demselben Stand ausgerollt (gleiche Compose-Datei, gleiche Image-Tags): Die
   UI-Schemas sind streng, eine abweichende Version zeigt auf der System-Seite nur „Unerwartete
   Antwort vom Server“.
-- **Tests:** 5149 Python-Tests, davon 35 Property-Tests mit Hypothesis (6 für die Safety-Schicht,
+- **Tests:** 5158 Python-Tests, davon 35 Property-Tests mit Hypothesis (6 für die Safety-Schicht,
   6 für den Phasenwächter, 12 für den Akku-Sollwert, 6 für den 15-min-Wächter), und 233 UI-Tests;
   Abdeckung 97 % insgesamt und 99 % für `core/safety`, `core/control` und `core/actuators`.
   Geprüft wird mit ruff, mypy strict (auch für den Watchdog), import-linter (4 Verträge), pytest
@@ -609,8 +609,8 @@ Demo-Zugänge: `admin`, `gast` (Lesen) und `sicher` (Admin mit TOTP, Geheimnis
        `charging.py` 895 (vorher 1065; die Grenzen des Wächters und `cars()` kamen dazu, der Plan
        nannte rund 700), `runtime.py` 1296 (vorher 1289, geplant rund 1200: Die Verdrahtung ist
        ausgezogen, dafür kamen die Erwartung des Overrides, das Budget und die Viertelstunde des
-       Wächters dazu), `regulation.py` 299, `regulation_link.py` 325, `battery.py` 605, `peak_guard.py`
-       643, `charge_points.py` 183, `charging_tesla.py` 194 und `last_values.py` 164. `charging.py` und
+       Wächters dazu), `regulation.py` 300, `regulation_link.py` 325, `battery.py` 605, `peak_guard.py`
+       661, `charge_points.py` 183, `charging_tesla.py` 194 und `last_values.py` 164. `charging.py` und
        `runtime.py` sind damit weiter groß; ein weiterer Abbau wäre ein eigener Umbau (etwa die
        Drosselfunktionen aus `peak_guard.py` nach `peak_throttle.py`, siehe „Bewusst offen gelassen“).
 
@@ -910,7 +910,7 @@ den Absätzen „Stand Plan 2c-2a“ der Spec. Hier die Entscheidungen mit Koste
   eine Grenze unter dem Boden von Sofort. Das gilt auch für ein Auto, das geht oder in Boost oder
   Aus wechselt (falls falsch: nach einem Moduswechsel kurz mehr Netzbezug, bis die nächste
   Drosselung nach 30 s greift). Die Senkung je Auto ist nie negativ; ohne Leistung zählt ein
-  gedrosseltes Auto als nicht gefolgt. `peak_guard.py` blieb ungeteilt, nach der Nachrunde mit 643
+  gedrosseltes Auto als nicht gefolgt. `peak_guard.py` blieb ungeteilt, nach der Nachrunde mit 661
   Zeilen (falls falsch: ein späterer Umzug der Drosselfunktionen nach `peak_throttle.py`).
 - **Simulator:** `_Boost` trägt das absolute Ende des Boosts. Die Kennzahl der Akku-Energie im Auto
   überspringt je Entladefolge die ersten `TRANSITION_S` s, ohne den Tesla-Fall. Ein Auffrischen im
@@ -977,8 +977,9 @@ des Plans, die Spec (7.4), der Kopf des Designs 2c-2 und das Betriebshandbuch si
   und der Netzbezug lag minutenlang über `P_zul`, während der Wächter in Stufen senkte. Jetzt
   bekommt der Wächter `W` ungekappt und kennt `C` selbst. Mit Budget rechnet er mit dem Netzbezug
   ohne seine eigenen, gemerkten Senkungen und senkt insgesamt nur um den Teil unter `C`, der über
-  `P_zul` liegt, und das einmal; ohne Budget senkt er in einem Schritt um alles, was über `P_zul`
-  liegt. In `spitze-15min` gibt es statt 20 Entscheidungen mit `peak_guard` an der EVCS (Stufen bis
+  `P_zul` liegt, und das einmal; ohne Budget senkt er, solange `P_zul` unter `C` liegt, in einem
+  Schritt um alles, was über `P_zul` liegt, und sonst nicht (Fix-Runde, unten). In `spitze-15min`
+  gibt es statt 20 Entscheidungen mit `peak_guard` an der EVCS (Stufen bis
   10 oder 9 A) noch 2, je einmal von 16 auf 15 A; der e-Golf lädt dort 8,85 statt 7,33 kWh, der
   Akku liefert 6,86 statt 5,24 kWh (mit dem alten Aufbau, den Tesla bei 5 A, wären es 8,76 und
   6,58 kWh), und die geprüften Viertelstunden liegen bei 1,961, 1,964 und 1,964 kWh (vorher 1,955,
@@ -999,6 +1000,20 @@ des Plans, die Spec (7.4), der Kopf des Designs 2c-2 und das Betriebshandbuch si
 - **`spitze-15min` mit 16 A:** Das Szenario startet den Tesla wieder wie im Plan und besteht alle
   Prüfungen; die erste Senkung der Viertelstunde ab 18:00 trifft dort den Tesla, den e-Golf erst
   die ab 18:15. Was die Prüfung der Reihenfolge damit belegt, steht oben unter „Szenarien“.
+- **Fix-Runde nach dem Review der Nachrunde:** Ohne Budget zählte `Basis + W` zunächst immer ganz,
+  auch wenn `P_zul` über `C` lag. Regel 2 hält den Override aber auch ohne Budget bei `C`, und der
+  Netzbezug blieb dann ohnehin unter `P_zul`: Bei einem Ziel von 10 kW (`P_zul` 9,7 kW) und einem
+  SOC an der Schwelle drosselte der Wächter zwei Autos in Sofort mit 18,4 kW um 8,7 kW (e-Golf auf
+  2760 W, Tesla auf 6940 W), obwohl der Netzbezug bei 8 kW blieb; ein SOC, der um die Schwelle
+  pendelte, löste dieselbe Drosselung aus. Jetzt zählt `Basis + W` ohne Budget nur ganz, solange
+  `P_zul` unter `C` liegt, sonst bis `C`; was die Autos darüber wollen, liefert der Akku wie ohne
+  Ziel, und ein Akku an seiner Reserve zeigt sich im Mittel. Die Szenarien ändern sich dadurch
+  nicht (in `spitze-15min` hat der Akku immer ein Budget). Außerdem beschreibt das Handbuch die
+  Schwelle des Aufhebens jetzt richtig: Wollen die Autos mit Budget mehr als `C`, hält der Override
+  den Netzbezug bei `C`, sobald `P_zul` darüber liegt, und das Mittel zählt mit; eine Grenze fällt
+  erst, wenn `P_zul` die Grenze `C` um 1 kW plus ihre Senkung übersteigt (im Simulator bei rund
+  9,3 kW), nicht schon 1 kW darüber. Falls falsch: Ohne Budget verlangt der Wächter knapp unter
+  `C` die ganze Senkung, knapp darüber keine; den Sprung macht die Grenze von Regel 2.
 
 Notizen für später aus Plan 2c-2a:
 

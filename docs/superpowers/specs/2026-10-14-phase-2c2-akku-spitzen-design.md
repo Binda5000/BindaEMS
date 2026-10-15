@@ -36,10 +36,10 @@ Präzisierungen des Plans gehen diesem Dokument vor, wo sie abweichen:
   würden die Wallboxen mit Victron live nie gedrosselt. Mit Budget für den Akku zählt `Basis + W`
   höchstens bis zur festen Grenze von Regel 2 (5.4), denn darüber liefert der Akku (Entscheidung 3),
   und der Wächter rechnet seine eigenen Senkungen mit: Er senkt insgesamt nur um den Teil unter
-  dieser Grenze, der über `P_zul` liegt, und das einmal. Ohne Budget zählt `Basis + W` ganz, denn
-  dann hält Regel 2 den Override bei der Grenze, und nur die ganze Senkung bringt den Netzbezug unter
-  `P_zul`. Solange Victron gesperrt oder nicht steuerbar ist, zählt nur das Mittel (Gesamtreview und
-  Nachrunde).
+  dieser Grenze, der über `P_zul` liegt, und das einmal. Ohne Budget hält Regel 2 den Override bei
+  der Grenze: Liegt `P_zul` darunter, zählt `Basis + W` ganz, denn nur die ganze Senkung bringt den
+  Netzbezug unter `P_zul`; sonst zählt es nur bis zur Grenze, und es braucht keine Senkung. Solange
+  Victron gesperrt oder nicht steuerbar ist, zählt nur das Mittel (Gesamtreview und Nachrunde).
 - **Drosselung (6.3):** Nur ein Auto an einem Ladepunkt, den die Laderegelung regelt, wird gedrosselt;
   ein ungeregeltes Auto in Boost zählt nur für den Boost-Anteil. Eine Grenze fällt still weg, wenn das
   Auto geht, den Modus wechselt oder in Boost oder Aus geht. Je Auto setzt eine Senkung beim
