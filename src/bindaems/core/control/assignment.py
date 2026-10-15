@@ -25,6 +25,7 @@ from enum import StrEnum
 from typing import Final
 
 from bindaems.core.control.charge_inputs import NO_VEHICLE_DATA, VehicleObs, WallboxObs
+from bindaems.core.control.clues import home_and_plugged
 from bindaems.shared.config import Config, EvcsConfig, TwcConfig
 from bindaems.shared.control import Intent, VehicleIntent
 
@@ -302,7 +303,7 @@ class Assignment:
         """
         port = self._ports[wallbox_key]
         if not port.running:
-            tessie_complete = _home_and_plugged(tessie) is True and tessie.complete is True
+            tessie_complete = home_and_plugged(tessie) is True and tessie.complete is True
             return wallbox.complete is True or tessie_complete
         session = (wallbox_key, port.count)
         if wallbox.complete is True or tessie.complete is True:
@@ -364,23 +365,10 @@ class Assignment:
                 and wallbox_key is not None
                 and isinstance(self._cfg.wallboxes[wallbox_key], TwcConfig)
                 and wallboxes[wallbox_key].connected is False
-                and _home_and_plugged(vehicles[key]) is True
+                and home_and_plugged(vehicles[key]) is True
             ):
                 return True
         return False
-
-
-def _home_and_plugged(tessie: VehicleObs) -> bool | None:
-    """Ob Tessie das Fahrzeug „zu Hause und angesteckt“ sieht; ``None``, wenn das offen ist.
-
-    Ist eins von beiden sicher nicht der Fall, ist es das Ganze auch dann nicht, wenn der andere
-    Wert fehlt: Ein Auto, das woanders steht, hängt nicht an unserer Wallbox.
-    """
-    if tessie.plugged is False or tessie.at_home is False:
-        return False
-    if tessie.plugged is True and tessie.at_home is True:
-        return True
-    return None
 
 
 def _plugged(wallbox: WallboxObs, tessie: VehicleObs) -> bool | None:
@@ -393,7 +381,7 @@ def _plugged(wallbox: WallboxObs, tessie: VehicleObs) -> bool | None:
     """
     if wallbox.connected is True:
         return True
-    at_home = _home_and_plugged(tessie)
+    at_home = home_and_plugged(tessie)
     if wallbox.connected is False:
         return None if at_home is True else False
     return at_home
@@ -409,7 +397,7 @@ def _charging(wallbox: WallboxObs, tessie: VehicleObs) -> bool | None:
     """
     if wallbox.charging is not None:
         return wallbox.charging
-    at_home = _home_and_plugged(tessie)
+    at_home = home_and_plugged(tessie)
     if at_home is True:
         return tessie.charging
     return at_home
