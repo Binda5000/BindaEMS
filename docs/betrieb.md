@@ -518,9 +518,11 @@ docker compose run --rm -v "$PWD/verification:/out" --entrypoint python ems-core
 
 **Victron und Dynamic ESS**
 
-- Dynamic ESS nullt fremde Overrides (Spec 3.2) und bleibt im Betrieb an, bis Victron live geht
-  (Entscheidung vom 10.10.2026). Für den Punkt `victron` schaltest du es vorübergehend ab
-  (Entscheidung vom 12.10.2026) und danach wieder ein. Den Modus liest und setzt du am Cerbo:
+- Dynamic ESS nullt fremde Overrides (Spec 3.2). Es bleibt an, bis der Dry-Run des Victron-Teils
+  beginnt; für ihn und für die Live-Schaltung von Victron ist es aus (Entscheidungen vom 10.10. und
+  14.10.2026; Abschnitt „Akku und Spitzen“, „Victron in den Dry-Run und live“). Für den Punkt
+  `victron` schaltest du es vorübergehend ab (Entscheidung vom 12.10.2026) und danach wieder ein,
+  solange der Dry-Run des Victron-Teils nicht läuft. Den Modus liest und setzt du am Cerbo:
 
   ```bash
   ssh root@<cerbo> dbus -y com.victronenergy.settings /Settings/DynamicEss/Mode GetValue   # notieren
@@ -946,6 +948,9 @@ Der core hält jede Entscheidung zu einem Befehl fest (Spec 7.10):
   Ergebnis `deferred`, mit dem Befund `rate.per_hour` oder `rate.start_stop`; dieselbe
   Zurückstellung höchstens alle 60 s). Andere Zurückstellungen, etwa wegen der 90-s-Regel, und
   unveränderte Werte erscheinen nicht.
+- Nicht im Log steht seit Plan 2c-2a ein **Auffrischen** des Netz-Sollwert-Overrides, das gelingt
+  oder im Dry-Run ein Urteil ergibt (Abschnitt „Akku und Spitzen“, „Auffrischen“). Abgelehnt,
+  zurückgestellt oder gescheitert steht es dort wie jeder Befehl.
 
 „Dieselbe“ heißt: gleicher Aktor, gleiche Art, gleicher angeforderter Wert und gleiche Befunde. Ein
 zurückgestellter Stopp kurz nach einem zurückgestellten Start erscheint also beide Male.
@@ -1296,8 +1301,8 @@ Diese Alarme zeigt das UI unter **System** → „core“ → „Alarme“:
 | … ist nach 3 Fehlern in 15 min bis HH:MM nicht steuerbar. | Nur Tesla: Tessie hat 3 Befehle abgelehnt oder nicht beantwortet. Bis zur Uhrzeit (Wiener Zeit) sendet der core nichts an das Fahrzeug. Prüfe das Tessie-Konto und das Log des core. |
 | … von außen geändert (… statt …). | Ein anderes System hat Strom oder Netz-Sollwert-Override geändert, den der core bestätigt hatte (Abschnitt 13, „Sperren“). Der Aktor ist gesperrt. Suche das System (App, Automation, Zeitplan) und schalte es ab. |
 | Gespeicherte Schreibzeiten liegen bis zu … min in der Zukunft; persistente Schreibzugriffe bleiben bis dahin begrenzt. | Die Uhr lief zurück (NTP-Sprung, Failover). Das Schreibbudget für persistente Einstellungen zählt die Einträge in der Zukunft weiter mit; die Begrenzung endet, wenn die Uhr aufgeholt hat. Prüfe `timedatectl`. |
-| Regelung ausgesetzt: Ausnahme … im Regelzyklus. (Fehler) | Ein Aufruf der Regelung hat eine Ausnahme geworfen, das ist ein Fehler im core. Die Regelung sendet in dem Zyklus nichts, der Heartbeat bleibt aus; Keeper, Stream, Alarme und Entscheidungslog laufen weiter. Sichere das Log und melde den Fehler (Abschnitt „Akku und Spitzen“, „Alarme“). |
-| 15-min-Ziel überschritten: … kW in der Viertelstunde bis HH:MM. (Warnung) | Die Hochrechnung lag 60 s über `control.peak_target_kw`, und Drosselung und Akku haben es nicht gehalten. Der Alarm endet mit der Viertelstunde (Abschnitt „Akku und Spitzen“, „Alarme“). |
+| Regelung ausgesetzt: Ausnahme … im Regelzyklus. | Stufe Fehler. Ein Aufruf der Regelung hat eine Ausnahme geworfen, das ist ein Fehler im core. Die Regelung sendet in dem Zyklus nichts, der Heartbeat bleibt aus; Keeper, Stream, Alarme und Entscheidungslog laufen weiter. Sichere das Log und melde den Fehler (Abschnitt „Akku und Spitzen“, „Alarme“). |
+| 15-min-Ziel überschritten: … kW in der Viertelstunde bis HH:MM. | Stufe Warnung. Die Hochrechnung lag 60 s über `control.peak_target_kw`, und Drosselung und Akku haben es nicht gehalten. Der Alarm endet mit der Viertelstunde (Abschnitt „Akku und Spitzen“, „Alarme“). |
 
 **„Ausgelöst“ von Hand aufräumen:** Seit 1.1.0 übersteht „ausgelöst“ einen Neustart des Cerbo
 (als „scharf“). Räumt kein zuständiger core den Watchdog auf, etwa nach einer abgebrochenen Probe
@@ -1361,14 +1366,18 @@ Jedes Fahrzeug hat einen Lademodus. Ohne Eintrag in der Absicht lädt es im **PV
 
 | Modus | Wert | Verhalten | Grenze je Phase |
 |---|---|---|---|
-| PV-Überschuss | `pv` | Startet, wenn der Überschuss den Mindeststrom des Autos `control.start_after_s` (120 s) lang trägt, und stoppt, wenn er `control.stop_after_s` (300 s) lang darunter liegt. Dazwischen lädt das Auto am Mindeststrom weiter; die Lücke deckt der Akku über den Eigenverbrauch von ESS. | Importlimit minus Abstand: 20 − 1 = 19 A |
+| PV-Überschuss | `pv` | Startet, wenn der Überschuss den Mindeststrom des Autos `control.start_after_s` (120 s) lang trägt, und stoppt, wenn er `control.stop_after_s` (300 s) lang darunter liegt. Dazwischen lädt das Auto am Mindeststrom weiter; die Lücke deckt der Akku über den Eigenverbrauch von ESS (ohne Akku-Sollwert). | Importlimit minus Abstand: 20 − 1 = 19 A |
 | Min+PV | `min_pv` | Lädt immer mindestens mit dem Mindeststrom, darüber wie PV-Überschuss. Der Mindeststrom geht dem Importlimit vor, nicht der Sicherung. | wie PV-Überschuss; für den Mindeststrom die Sicherung |
-| Sofort | `now` | Voller Strom innerhalb der Grenze, auch aus dem Akku: unter dem Importlimit über den Eigenverbrauch von ESS, darüber über Peak Shaving. | Sicherung minus Abstand: 35 − 2 = 33 A |
+| Sofort | `now` | Voller Strom innerhalb der Grenze, auch aus dem Akku: unter dem Importlimit über den Eigenverbrauch von ESS (ohne Akku-Sollwert; mit ihm liefert der Akku nur, was der Override nicht trägt), darüber über Peak Shaving. | Sicherung minus Abstand: 35 − 2 = 33 A |
 | Aus | `off` | Stoppt das Laden und hält es gestoppt. | – |
 | Boost | `boost_until` | Wie Sofort bis zu diesem Zeitpunkt oder bis zum Abstecken; danach gilt wieder der eingestellte Modus. | wie Sofort |
 
 Die Zahlen gelten für die Beispielkonfiguration (`grid.fuse_a` 35 A, `grid.fuse_margin_a` 2 A,
 `grid.import_limit_a` 20 A, `control.import_margin_a` 1 A); alle Werte stehen in `config.yaml`.
+
+Was die Tabelle und die Punkte darunter über die Herkunft der Energie sagen (Akku oder Netz), gilt,
+solange Victron im Dry-Run ist, also ohne Akku-Sollwert. Mit Victron live bestimmt der Akku-Sollwert,
+wann der Akku liefert (Abschnitt „Akku und Spitzen“).
 
 - Liegt der SOC unter USV-Reserve + `control.reserve_guard_pct` (5 %) oder ist er unbekannt, richten
   sich auch Sofort und Boost am Importlimit aus (Grund „Schutz der USV-Reserve“): Peak Shaving soll
@@ -1393,11 +1402,13 @@ Die Zahlen gelten für die Beispielkonfiguration (`grid.fuse_a` 35 A, `grid.fuse
   OBSERVE, Regelbetrieb aus).
 - **Überschuss:** Er ergibt sich aus der Ladeleistung der Autos, dem Netzbezug und dem Akku, abzüglich
   `control.surplus_margin_w` (100 W). Entlädt der Akku, zählt das immer gegen den Überschuss: Der
-  Anteil eines PV-Autos rechnet nie mit Leistung aus dem Akku. Aus dem Akku lädt es trotzdem, wenn
-  es dem Überschuss nicht sofort folgt: in den Stopp-Minuten am Mindeststrom (oben), in Übergängen,
-  bis die Regelung nachgezogen hat, und beim Tesla unter schnellen Wolken („Hinweise für die
-  Anlage“, unten). Lädt der Akku, zählt seine Leistung nur, wenn die Autos Vorrang haben
-  (`surplus_priority`, unten). Fehlt ein Messwert, startet kein PV-Auto.
+  Anteil eines PV-Autos rechnet nie mit Leistung aus dem Akku. Ohne Akku-Sollwert lädt es trotzdem
+  aus dem Akku, wenn es dem Überschuss nicht sofort folgt: in den Stopp-Minuten am Mindeststrom
+  (oben), in Übergängen, bis die Regelung nachgezogen hat, und beim Tesla unter schnellen Wolken
+  („Hinweise für die Anlage“, unten). Mit Victron live verschiebt der Akku-Sollwert diesen
+  Fehlbetrag aufs Netz, solange die Unterstützung nicht gilt (Abschnitt „Akku und Spitzen“). Lädt
+  der Akku, zählt seine Leistung nur, wenn die Autos Vorrang haben (`surplus_priority`, unten).
+  Fehlt ein Messwert, startet kein PV-Auto.
 - **Verteilung:** Die Autos kommen in der Reihenfolge `priority` dran, und jedes bekommt bis zu
   seinem Höchststrom, bevor das nächste etwas sieht. Mit höchstens 10 kW PV laden zwei PV-Autos
   deshalb nacheinander, nicht gleichzeitig: erst der Tesla (bis zu 11 kW), dann der e-Golf. Sofort
@@ -1677,14 +1688,16 @@ Zurück zu evcc: beide Aktoren in der Absicht auf Dry-Run stellen, die Übergabe
 - **Ein schlafender Tesla, den der core gerade übergibt,** hält die Übergabe offen, bis er aufwacht.
   Solange kann der Alarm „… Sicherwert für … nicht bestätigt.“ (`actuator.failed.vehicle.tesla`)
   anstehen (Abschnitt 14, „Meldungen des core“).
-- **Schnell wechselnde Wolken:** Dann deckt der Hausakku einen spürbaren Teil der PV-Ladung des
-  Tesla. Der Tesla darf seinen Strom nur alle 90 s ändern, und ein Wechsel auf oder von 5 A braucht
-  zwei Befehle; das nimmt das Design in Kauf (Design 6.5). Im Simulator (`wolkig`, Wolken im Wechsel
-  alle 30 bis 180 s) kamen so rund 40 % der Ladeenergie des Tesla aus dem Akku. Das ist der rohe
-  Anteil: Die Kennzahl „Akku-Energie in PV-Autos“ nimmt die Übergänge aus und zeigt dort 0 %, denn
-  jede dieser Entladungen fällt in einen Übergang. Den rohen Anteil aller PV-Autos (dort 18 %)
-  nennt der Bericht als Informationszahl (Abschnitt „Simulator“). Der e-Golf folgt den Wolken
-  binnen Sekunden.
+- **Schnell wechselnde Wolken:** Ohne Akku-Sollwert (Victron im Dry-Run) deckt dann der Hausakku
+  einen spürbaren Teil der PV-Ladung des Tesla. Der Tesla darf seinen Strom nur alle 90 s ändern,
+  und ein Wechsel auf oder von 5 A braucht zwei Befehle; das nimmt das Design in Kauf (Design 6.5).
+  Im Simulator (`wolkig`, Victron im Dry-Run, Wolken im Wechsel alle 30 bis 180 s) kamen so rund
+  40 % der Ladeenergie des Tesla aus dem Akku. Das ist der rohe Anteil: Die Kennzahl „Akku-Energie
+  in PV-Autos“ nimmt die Übergänge aus und zeigt dort 0 %, denn jede dieser Entladungen fällt in
+  einen Übergang. Den rohen Anteil aller PV-Autos (dort 18 %) nennt der Bericht als Informationszahl
+  (Abschnitt „Simulator“). Der e-Golf folgt den Wolken binnen Sekunden. Mit Victron live verschiebt
+  der Akku-Sollwert den Fehlbetrag des Tesla aufs Netz, solange die Unterstützung nicht gilt
+  (Abschnitt „Akku und Spitzen“).
 
 **Vor der Live-Schaltung von EVCS und Tesla (nach 2d)** sind diese Punkte zu entscheiden oder
 umzusetzen, je mit Befund und möglicher Abhilfe (ausführlicher in `docs/uebergabe.md`):
@@ -1995,8 +2008,8 @@ Was fehlt, ist `null`. Das UI zeigt diese Werte erst mit Plan 2d.
 | Feld | Bedeutung |
 |---|---|
 | `battery.state` | `ok`: Das Ziel ist bekannt, der Akku-Sollwert rechnet. `unknown`: Das Ziel ist unbekannt, weil ein Wert fehlt (PV, Hauslast, Leistung eines ladenden Autos, Basis-Sollwert); es geht kein Befehl hinaus. `locked`: Victron ist gesperrt oder nicht steuerbar, es geht kein Befehl hinaus. `idle`: Die Regelung ruht, oder es gab noch keinen Zyklus. |
-| `battery.target_w` | der gewollte Netzbezug nach dem Wächter (`W'`) in W; `null`, wenn er unbekannt ist |
-| `battery.override_w` | der letzte eigene Override in W; `null` ohne einen und für „kein Override“. Innerhalb des Totbands weicht er von `target_w` ab. |
+| `battery.target_w` | der gewollte Netzbezug nach dem Wächter (`W'`) in W, ohne den Basis-Sollwert; `null`, wenn er unbekannt ist |
+| `battery.override_w` | der letzte eigene Override in W, mit dem Basis-Sollwert (`override_w` ≈ Basis + `target_w`); `null` ohne einen und für „kein Override“. Innerhalb des Totbands weicht er davon ab. |
 | `battery.support` | Stand der Unterstützung: `on` (gilt), `mode` (kein Auto in PV-Überschuss oder Min+PV), `soc` (SOC unter der Schwelle oder unbekannt), `time` (Überbrückung länger als `support_max_s`). Gilt sie nicht, steht der erste zutreffende Grund in der Reihenfolge `mode`, `soc`, `time`. |
 | `battery.bridging_s` | Sekunden der laufenden Überbrückung; `null` ohne |
 | `battery.refresh_age_s` | Sekunden vom letzten Urteil mit Wert über den eigenen Override bis zum letzten Zyklus; er steigt bis zum Auffrischen und beginnt dann neu. `null` ohne Override. |
@@ -2220,7 +2233,8 @@ docker compose run --rm -v "$PWD/verification:/out" --entrypoint python ems-core
   „„tesla“ erreicht „Complete“ nicht.“, Rückgabe 1).
 - Jeder Lauf bekommt ein **frisches temporäres Verzeichnis** für die Ablage des core (Absicht,
   Rate-Limits, Entscheidungen). Er berührt `/data` nie und sieht nichts von früheren Läufen.
-- Ein Szenario braucht für 30 min bis 2 h simulierte Zeit etwa 3 bis 13 s Rechenzeit; alle achtzehn zusammen rund 2 min.
+- Ein Szenario braucht für 30 min bis 2 h simulierte Zeit etwa 3 bis 13 s Rechenzeit; alle
+  achtzehn zusammen rund 2 min.
 
 Die Standardausgabe zeigt je Kennzahl eine Zeile, dann je Informationszahl eine (ohne Grenze), dann
 je Prüfung des Szenarios eine und am Ende den Pfad des Berichts. Ein Ausschnitt aus `tesla-5a`:
@@ -2325,17 +2339,18 @@ Akku und Spitzen, ab `akku-wolkig`, ist er live.
 Die Verteilung ist gierig nach Priorität (Abschnitt „Laderegelung“): Mit höchstens 10 kW PV laden die
 Autos in `sonnig` und `wolkig` nacheinander, darum steht der Tesla dort nahe an seinem Ladelimit.
 
-Drei der Szenarien für Akku und Spitzen weichen von ihrer ursprünglichen Beschreibung ab, weil sich
-deren Erwartung im Modell nicht erfüllen lässt:
+Der Aufbau von drei Szenarien für Akku und Spitzen ist angepasst, weil sich ihre Prüfung im Modell
+sonst nicht erfüllen ließe:
 
-- In `akku-minpv` und `spitze-15min` steht der Tesla zu Beginn auf 5 A. Sonst lädt er nach dem Start
-  90 s mit 16 A, bis der zweite Befehl auf 5 A wirkt (der erste geht über Tessie verloren). In
-  `akku-minpv` lieferte der Akku dann bis zu 5,8 kW in die Autos, denn der Override ist auf
-  `max_grid_charge_setpoint_w` (8 kW) begrenzt; in `spitze-15min` drosselte der Wächter Tesla und
-  e-Golf im selben Schritt, und der Tesla folgte erst nach 90 s. Die Prüfung der Reihenfolge an den
-  Strömen scheiterte dann, obwohl der Wächter in der richtigen Reihenfolge drosselt, und mit dem
-  Tesla am Mindeststrom (Min+PV ohne PV) ist sie trivial erfüllt; die Reihenfolge der Drosselung
-  prüfen `tests/unit/core/control/test_peak_throttle.py` und `tests/property/test_peak_guard.py`.
+- In `akku-minpv` und `spitze-15min` steht der Tesla zu Beginn auf 5 A. Startet er mit seinem alten
+  Strom von 16 A, lädt er nach dem Start 90 s mit 16 A, bis der zweite Befehl auf 5 A wirkt (der
+  erste geht über Tessie verloren). In `akku-minpv` liefert der Akku dann bis zu 5,8 kW in die
+  Autos, denn der Override ist auf `max_grid_charge_setpoint_w` (8 kW) begrenzt; in `spitze-15min`
+  drosselt der Wächter Tesla und e-Golf im selben Schritt, aber der Tesla folgt erst nach 90 s. Die
+  Prüfung der Reihenfolge an den Strömen kann dann nicht bestehen, obwohl der Wächter in der
+  richtigen Reihenfolge drosselt. Mit dem Tesla am Mindeststrom (Min+PV ohne PV) ist sie trivial
+  erfüllt; die Reihenfolge der Drosselung prüfen `tests/unit/core/control/test_peak_throttle.py` und
+  `tests/property/test_peak_guard.py`.
 - In `schieflast-pv` kommt die Last auf L1 erst nach 10 min, wenn der e-Golf schon lädt. Liegt sie von
   Anfang an, startet er nicht: Der Phasenwächter zählt die Ladeleistung des Akkus zur Last der Phase
   und lässt auf L1 nur rund 3 A frei, weniger als den Mindeststrom.

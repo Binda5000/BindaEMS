@@ -141,8 +141,8 @@ folgt Plan 2c-2b (Zuordnungserkennung, Design 2c-2, Abschnitt 7).
     bis 2c-2b nur für den Akku-Sollwert).
   - **Simulator:** Das Modell kennt den Override (ESS folgt ihm, er verfällt nach 300 s, DESS verwirft
     ihn). Acht Szenarien kamen dazu; alle 18 sind in der CI grün (Betriebshandbuch, „Simulator“). Die
-    Regelung brauchte keinen Fix. Drei Szenarien weichen von ihrer ursprünglichen Beschreibung ab
-    (unten, „Bewusst offen gelassen“).
+    Regelung brauchte keinen Fix. Drei Szenarien haben einen angepassten Aufbau (unten,
+    „Bewusst offen gelassen“).
   - **Entschieden und aufgeschoben:** Die Rulings und die aufgeschobenen Kleinigkeiten stehen unter
     „Bewusst offen gelassen“.
   - **Noch nicht:** die volle Zuordnungserkennung (2c-2b), die Bedienung (2d) und die Planausführung
@@ -423,9 +423,9 @@ Demo-Zugänge: `admin`, `gast` (Lesen) und `sicher` (Admin mit TOTP, Geheimnis
   deterministisch (feste Saat).
 - **Dokumentationstests (2c-1, 2c-2a):** `tests/unit/test_docs.py` prüft die JSON-Beispiele, die Tabellen
   der Gründe und die Optionen des Simulators im Betriebshandbuch gegen den Code, im Abschnitt „Akku und
-  Spitzen“ außerdem die Standardwerte der Einstellungen und die Werte von Health. Ändert man die
-  Absicht, einen Grund-Text, die Optionen von `bindaems.tools.sim`, die Felder von `ControlConfig` oder
-  Health, schlägt er an, bis das Handbuch stimmt.
+  Spitzen“ außerdem die Standardwerte der Einstellungen sowie die Feldnamen und Zustände von Health.
+  Ändert man die Absicht, einen Grund-Text, die Optionen von `bindaems.tools.sim`, die Standardwerte
+  von `ControlConfig` oder die Felder und Zustände von Health, schlägt er an, bis das Handbuch stimmt.
 
 ## Stand der Installation beim Betreiber
 
@@ -520,28 +520,34 @@ Demo-Zugänge: `admin`, `gast` (Lesen) und `sicher` (Admin mit TOTP, Geheimnis
        berührt keiner der Schritte. Notiere die Zeit, damit du die Entscheidungen dieser Zeit beim
        Vergleich mit evcc ausnimmst.
   4. **Victron in den Dry-Run und live** (Design 2c-2, 11.1; Betriebshandbuch, „Akku und Spitzen“,
-     „Victron in den Dry-Run und live“):
-     - **DESS aus für den Dry-Run:** Solange DESS an ist, ist Victron gesperrt, und der Akku-Sollwert
-       sendet auch im Dry-Run nichts. Das Fenster dafür bestimmt der Betreiber; bis Phase 3 läuft der
-       Akku dann ohne Preisoptimierung.
-     - **Im Dry-Run beobachten:** wie viele Entscheidungen an `victron` je Stunde entstehen (im
-       Simulator rund 67 unter schnell wechselnden Wolken, `akku-wolkig`), ob das Rauschen der Hauslast
-       das Totband von 200 W übersteigt, und **ob der Wächter bei kleinen Senkungen nachdrosselt**
-       (Entscheidungen mit `peak_guard`). Die Drosselung hat kein Totband: Im Modell gab es keine
-       unnötige Drosselung (6 Änderungen in 4440 Schritten von `spitze-15min`), aber nach einer
-       Drosselung klingt das alte 30-s-Mittel genau mit der Wartezeit von 30 s ab (`SETTLE_S`, eine
-       Sekunde Abstand), und das Modell hat kein Netzrauschen. An der Anlage könnten kleine
-       Nachdrosselungen und eine verzögerte Aufhebung entstehen, die Marge `peak_margin_kw` fängt sie
-       ab. Dann entscheidet der Betreiber, ob ein Totband in die Drosselung kommt (etwa eine Senkung
-       unter 100 W ignorieren).
-     - **Vor Victron live:** Prüfprotokoll Teil 2, Victron 17.2-4 „Kein Akku ins Auto“ (es prüft genau
-       den Mechanismus des Akku-Sollwerts); die Watchdog-Probe mit vorher verstellten Victron-Werten
-       (heute verstellt nur der Punkt `evcs` von `verify_part2` etwas, und zwar den EVCS-Strom; Min-SOC,
-       Entladegrenze und Override verstellt man vorher von Hand und prüft, dass die Auslösung sie
-       zurücksetzt); `victron.live_allowed: true`. Die Override-Aktion steht nur in einer `config.ini`,
-       die mit der Freigabe erzeugt wurde; die Probe braucht sie, deshalb setzt der Betreiber die
-       Freigabe vor der Probe (Design 2c-2, 11.1 nennt sie danach). Die Freigabe allein schaltet
-       Victron nicht live, das tut erst die Absicht (`"actuators": {"victron": "live"}`).
+     „Victron in den Dry-Run und live“), in dieser Reihenfolge (nach dem Ausrollen, Punkt 1):
+     1. **DESS aus für den Dry-Run:** Solange DESS an ist, ist Victron gesperrt, und der Akku-Sollwert
+        sendet auch im Dry-Run nichts. Das Fenster dafür bestimmt der Betreiber; bis Phase 3 läuft der
+        Akku dann ohne Preisoptimierung.
+     2. **Im Dry-Run beobachten:** wie viele Entscheidungen an `victron` je Stunde entstehen (im
+        Simulator rund 67 unter schnell wechselnden Wolken, `akku-wolkig`), ob das Rauschen der
+        Hauslast das Totband von 200 W übersteigt, und **ob der Wächter bei kleinen Senkungen
+        nachdrosselt** (Entscheidungen mit `peak_guard`). Die Drosselung hat kein Totband: Im Modell
+        gab es keine unnötige Drosselung (6 Änderungen in 4440 Schritten von `spitze-15min`), aber
+        nach einer Drosselung klingt das alte 30-s-Mittel genau mit der Wartezeit von 30 s ab
+        (`SETTLE_S`, eine Sekunde Abstand), und das Modell hat kein Netzrauschen. An der Anlage
+        könnten kleine Nachdrosselungen und eine verzögerte Aufhebung entstehen, die Marge
+        `peak_margin_kw` fängt sie ab. Dann entscheidet der Betreiber, ob ein Totband in die
+        Drosselung kommt (etwa eine Senkung unter 100 W ignorieren).
+     3. **Prüfprotokoll Teil 2, Victron 17.2-4 „Kein Akku ins Auto“:** Es prüft genau den
+        Mechanismus des Akku-Sollwerts.
+     4. **`victron.live_allowed: true`** in `config.yaml`, den core neu starten, die `config.ini`
+        neu erzeugen und mit `install.sh` übertragen. Die Override-Aktion steht nur in einer
+        `config.ini`, die mit der Freigabe erzeugt wurde; die Probe braucht sie, deshalb kommt die
+        Freigabe vor der Probe (Design 2c-2, 11.1 nennt sie danach). Die Freigabe allein schaltet
+        Victron nicht live.
+     5. **Watchdog-Probe mit vorher verstellten Victron-Werten:** Heute verstellt nur der Punkt
+        `evcs` von `verify_part2` etwas, und zwar den EVCS-Strom. Min-SOC, Entladegrenze und
+        Override verstellt man vorher von Hand und prüft nach der Probe, dass die Auslösung sie
+        zurückgesetzt hat.
+     6. **Victron live schalten:** per Absicht (`"actuators": {"victron": "live"}`). DESS bleibt
+        danach aus; schaltet man es wieder ein, sperrt sich Victron, und der Override verfällt nach
+        300 s.
   - Teil 2 schreibt auf die Geräte: nicht während der 7 Tage der Abnahme Phase 1 und ihres
     24-h-Mitschnitts (`docs/verification/abnahme-phase-1.md`, 4.2 und 4.3).
   - Danach: Plan 2c-2b, dann 2d.
@@ -824,13 +830,14 @@ Absätzen „Stand Plan 2c-1“ der Spec:
   nach etwa 30 s“) fehlt bewusst: In der Messung brachte er mehr Flattern statt weniger. Bleibt der
   Überschuss ruhig knapp über einer Stufe, lässt die EVCS bis zu 1,5 A liegen; das lädt der
   Hausakku.
-- Bei schnell wechselnden Wolken deckt der Hausakku einen spürbaren Teil der PV-Ladung des Tesla,
-  denn der Tesla darf seinem Mittel nur alle 90 s folgen. Im Simulator (`wolkig`) waren es rund 40 %
-  seiner Ladeenergie, roh gerechnet: Die Kennzahl „Akku-Energie in PV-Autos“ nimmt die Übergänge aus
-  und zeigt dort 0 %, der Bericht nennt den rohen Anteil aller PV-Autos (18 %) als
-  Informationszahl. Das nimmt das Design in Kauf (Design 6.5). Eine Abhilfe wäre, den Tesla im
-  PV-Modus am vorsichtigen Minimum statt am Mittel zu führen; das wäre eine Designänderung und eine
-  Entscheidung des Betreibers.
+- Bei schnell wechselnden Wolken deckt ohne Akku-Sollwert (Victron im Dry-Run) der Hausakku einen
+  spürbaren Teil der PV-Ladung des Tesla, denn der Tesla darf seinem Mittel nur alle 90 s folgen. Im
+  Simulator (`wolkig`, Victron im Dry-Run) waren es rund 40 % seiner Ladeenergie, roh gerechnet: Die
+  Kennzahl „Akku-Energie in PV-Autos“ nimmt die Übergänge aus und zeigt dort 0 %, der Bericht nennt
+  den rohen Anteil aller PV-Autos (18 %) als Informationszahl. Mit Victron live verschiebt der
+  Akku-Sollwert den Fehlbetrag aufs Netz, solange die Unterstützung nicht gilt. Das nimmt das Design
+  in Kauf (Design 6.5). Eine Abhilfe wäre, den Tesla im PV-Modus am vorsichtigen Minimum statt am
+  Mittel zu führen; das wäre eine Designänderung und eine Entscheidung des Betreibers.
 - Ohne Ströme von EVCS oder Wall Connector startet die Regelung kein Auto (Design 5.5), auch wenn die
   Grenze sonst reichte.
 - Der Tessie-Adapter trennt seine Quelle bei fehlschlagenden Abfragen nicht (nur beim Abbruch). Die
@@ -894,9 +901,9 @@ den Absätzen „Stand Plan 2c-2a“ der Spec. Hier die Entscheidungen mit Koste
   überspringt je Entladefolge die ersten `TRANSITION_S` s, ohne den Tesla-Fall. Ein Auffrischen im
   Dry-Run zählt dort als eigener Wert ohne Entscheidung, sonst meldete die Kennzahl falsche
   Wiederholungen.
-- **Szenarien:** Drei weichen von ihrer ursprünglichen Beschreibung ab (Betriebshandbuch,
-  „Simulator“), jedes aus demselben Grund: Die Erwartung ließ sich im Modell nicht erfüllen, obwohl
-  die Regelung Plan und Design folgte. `akku-minpv` und `spitze-15min` starten den Tesla bei 5 A
+- **Szenarien:** Drei haben einen angepassten Aufbau (Betriebshandbuch, „Simulator“), jedes aus
+  demselben Grund: Ihre Prüfung ließ sich im Modell sonst nicht erfüllen, obwohl die Regelung Plan
+  und Design folgte. `akku-minpv` und `spitze-15min` starten den Tesla bei 5 A
   (mit 16 A lädt er 90 s voll, Regel 2 kappt bei 8 kW). Die Reihenfolge-Prüfung in `spitze-15min`
   ist deshalb mit dem Tesla am Mindeststrom trivial erfüllt und im Handbuch so benannt; die
   Reihenfolge belegen die Unit- und Property-Tests der Drosselung (falls falsch: kein

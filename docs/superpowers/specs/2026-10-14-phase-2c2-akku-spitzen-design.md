@@ -3,9 +3,10 @@
 **Stand: freigegeben am 14.10.2026; Plan 2c-2a umgesetzt (Abschnitte 1 bis 6, 8 bis 11), Abschnitt 7 folgt mit Plan 2c-2b**,
 im Brainstorming mit dem Betreiber abgestimmt (Abschnitt 2).
 Umgesetzt wird es in Plan 2c-2a (`docs/superpowers/plans/2026-10-14-phase-2c2a-akku-spitzen.md`, fertig) und
-Plan 2c-2b. Plan 2c-2a präzisiert einige Punkte und weicht in zweien ab: Ein Auffrischen geht auch
-innerhalb des Totbands durch (zu Abschnitt 8), und das 15-min-Budget erreicht Regel 2 nur über dem
-Schutz der USV-Reserve (zu 4.3).
+Plan 2c-2b. Plan 2c-2a präzisiert einige Punkte und weicht in mehreren ab: Ein Auffrischen geht
+auch innerhalb des Totbands durch (zu Abschnitt 8), das 15-min-Budget erreicht Regel 2 nur über dem
+Schutz der USV-Reserve (zu 4.3), und die Grenzen des Wächters wirken einen Zyklus später (zu 4.2).
+Die Liste unten nennt, was sich sonst beim Bau geändert hat.
 Grundlage ist die Spec `docs/superpowers/specs/2026-10-08-bindaems-design.md`, vor allem 7.1, 7.4,
 7.6 bis 7.8, 7.10, 8.3, 8.5 und 18, und das Design von 2c-1
 (`docs/superpowers/specs/2026-10-12-phase-2c1-laderegelung-design.md`, „Design 2c-1“). Verweise wie
@@ -17,6 +18,12 @@ Die Spec enthält dazu die Absätze „Stand Plan 2c-2a“ (5.3, 7.1, 7.4, 7.6, 
 Beim Bau haben sich diese Punkte gegenüber dem Design geändert oder sind dazugekommen; die
 Präzisierungen des Plans gehen diesem Dokument vor, wo sie abweichen:
 
+- **Reihenfolge im Zyklus (4.2):** Der Kern rechnet erst die Laderegelung mit dem Phasenwächter und
+  den Grenzen, die der 15-min-Wächter im vorigen Zyklus bestimmt hat, dann die Autos je Wallbox und
+  den Bedarf des Akkus, dann den 15-min-Wächter und zuletzt den Override (Präzisierung 3, Spec 7.1).
+  Die Grenzen des Wächters wirken so einen Zyklus (1 s) später als in 4.2; dafür rechnen Akku-Sollwert
+  und Wächter mit Zuordnung und Modi desselben Zyklus wie die Laderegelung. Die Befehle kommen wie
+  in 4.2: erst die der Ladepunkte, dann der Override.
 - **Wächter (6.1, 6.3):** Er integriert Boost nach dem Halteprinzip der Abrechnung und über dieselben
   Lücken (`HOLD_MAX_S` = 5 s in `shared/timeutil.py`, auch Standard von `SlotAccumulator`). Springt
   die Wanduhr innerhalb der Viertelstunde zurück, ist sie lückenhaft. `E_bisher` kommt aus der
