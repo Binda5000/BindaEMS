@@ -675,20 +675,75 @@ def test_the_holds_run_on_the_safety_clock(cfg) -> None:  # Präzisierung 10
     assert {ev("evcs", "tesla", Clue.CURRENT), ev("evcs", "tesla", Clue.PHASES)} <= found
 
 
-# Tessie und Home Assistant stützen nur bei genau einem Vorgang (Abweichung von Design 7.2)
+# Elimination: Tessie und Home Assistant stützen an einer Wallbox nur, wenn Strom oder Phasen das
+# Fahrzeug an jeder anderen Wallbox mit Vorgang ausschließen (Abweichung von Design 7.2)
 
 
-def test_tessie_and_home_assistant_support_only_while_one_session_runs(cfg) -> None:
+def test_tessie_and_home_need_the_vehicle_excluded_at_every_other_session(cfg) -> None:
     # „Zu Hause und angesteckt“ und „zu Hause“ sagen bei zwei Vorgängen nicht, an welcher Wallbox
-    # das Fahrzeug steht
+    # das Fahrzeug steht. Bei einem Vorgang gibt es keine andere Wallbox; lädt an der anderen
+    # nichts, schließt dort nichts das Fahrzeug aus.
     home = {"tesla_obs": tesla(plugged=True), "homes": {"egolf": True}}
     one = clues(ClueTracker(cfg), 0, **home)
     assert of(one, Clue.TESSIE) | of(one, Clue.HOME) == {
         ev("evcs", "tesla", Clue.TESSIE),
         ev("evcs", "egolf", Clue.HOME),
     }
-    two = clues(ClueTracker(cfg), 0, sessions=BOTH, twc_obs=twc(connected=True), **home)
-    assert of(two, Clue.TESSIE) | of(two, Clue.HOME) == set()
+    tracker = ClueTracker(cfg)
+    for s in range(121):
+        two = clues(tracker, s, sessions=BOTH, twc_obs=twc(connected=True), **home)
+        assert of(two, Clue.TESSIE) | of(two, Clue.HOME) == set()
+
+
+def test_current_and_phases_elsewhere_let_tessie_and_home_support(cfg) -> None:
+    # Der Tesla lädt laut Tessie mit 16 A am Wall Connector, der seine Ströme nicht meldet; an der
+    # EVCS lädt etwas dreiphasig mit 10 A. Ab 60 s schließen dort der Stromvergleich den Tesla und
+    # die Phasen den e-Golf aus: Tessie und Home Assistant stützen beide am Wall Connector, an der
+    # EVCS keins von beiden.
+    kw = {
+        "sessions": BOTH,
+        "evcs_obs": evcs(charging=True, phase_a=dict.fromkeys(PHASES, 10.0)),
+        "twc_obs": twc(connected=True, charging=True, phase_a=None),
+        "tesla_obs": charging_tesla(16.0),
+        "homes": {"egolf": True},
+    }
+    tracker = ClueTracker(cfg)
+    for s in range(60):
+        found = clues(tracker, s, **kw)
+        assert of(found, Clue.TESSIE) | of(found, Clue.HOME) == set()
+    found = clues(tracker, 60, **kw)
+    eliminated = {ev("evcs", "tesla", Clue.CURRENT, False), ev("evcs", "egolf", Clue.PHASES, False)}
+    assert eliminated <= found
+    assert of(found, Clue.TESSIE) | of(found, Clue.HOME) == {
+        ev("twc", "tesla", Clue.TESSIE),
+        ev("twc", "egolf", Clue.HOME),
+    }
+
+
+def test_the_elimination_needs_every_other_session(cfg) -> None:
+    # Drei Wallboxen mit Vorgang; der Tesla lädt laut Tessie mit 16 A am Wall Connector, der seine
+    # Ströme nicht meldet. Schließt ihn nur die EVCS aus, bleibt der zweite Wall Connector, und
+    # Tessie stützt nicht; schließt ihn auch dieser aus, stützt Tessie am Wall Connector.
+    three = cfg.model_copy(update={"wallboxes": {**cfg.wallboxes, "twc2": cfg.wallboxes["twc"]}})
+    sessions = {"evcs": None, "twc": None, "twc2": None}
+    at_10 = dict.fromkeys(PHASES, 10.0)
+    vehicles = {"tesla": charging_tesla(16.0), "egolf": NONE}
+
+    def tessie(second):
+        tracker = ClueTracker(three)
+        wallboxes = {
+            "evcs": evcs(charging=True, phase_a=at_10),
+            "twc": twc(connected=True, charging=True, phase_a=None),
+            "twc2": second,
+        }
+        for s in range(61):
+            found = tracker.update(at(s), at(s), sessions, wallboxes, vehicles, {})
+        return of(set(found), Clue.TESSIE)
+
+    assert tessie(twc(connected=True)) == set()
+    assert tessie(twc(connected=True, charging=True, phase_a=at_10)) == {
+        ev("twc", "tesla", Clue.TESSIE)
+    }
 
 
 @pytest.mark.parametrize(

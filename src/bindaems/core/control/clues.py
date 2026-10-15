@@ -12,14 +12,18 @@ Fahrzeug, das Tessie zu Hause und angesteckt sieht, an der Wallbox, wenn jede an
 leer ist: Ein Auto an einer fremden Ladesäule steht an keiner Wallbox der Anlage. Was aus den
 Indizien folgt, entscheidet der nächste Baustein.
 
-Tessie („zu Hause und angesteckt“) und Home Assistant („zu Hause“) stützen ein Fahrzeug nur,
-solange genau eine Wallbox einen Vorgang hat; ausschließen tun sie an jeder Wallbox mit Vorgang.
-Das weicht von Design 7.2 und von Präzisierung 2 ab: Bei zwei Vorgängen sagen sie nicht, an
-welcher Wallbox das Fahrzeug steht. Mit der Phasen-Signatur erkannten sie sonst einen
-dreiphasigen Gast an der EVCS als den Tesla, der nicht ladend am Wall Connector steckt, und einen
-zweiphasigen Gast am Wall Connector als den e-Golf, der „geladen“ an der EVCS steckt. Kosten, falls
-die Regel falsch ist: Bei zwei Vorgängen erkennen nur Stromvergleich, zeitliche Korrelation und
-Phasen-Signatur ein Fahrzeug; sonst bleibt es „angenommen“, meist derselbe Insasse.
+**Elimination:** Tessie („zu Hause und angesteckt“) und Home Assistant („zu Hause“) stützen ein
+Fahrzeug an einer Wallbox mit Vorgang nur, wenn Stromvergleich oder Phasen-Signatur es an jeder
+anderen Wallbox mit Vorgang ausschließen; bei genau einem Vorgang gilt das immer. Ausschließen tun
+beide an jeder Wallbox mit Vorgang. Das weicht von Design 7.2 und von Präzisierung 2 ab: „Zu
+Hause“ sagt nicht, an welcher Wallbox das Fahrzeug steht. Mit der Phasen-Signatur erkannten sie
+sonst einen dreiphasigen Gast an der EVCS als den Tesla, der nicht ladend am Wall Connector steckt,
+und einen zweiphasigen Gast am Wall Connector als den e-Golf, der „geladen“ an der EVCS steckt.
+Lädt dagegen der e-Golf zweiphasig am Wall Connector und der Tesla dreiphasig an der EVCS,
+schließen die Phasen jeden an der Wallbox des anderen aus, und beide sind erkannt. Kosten, falls
+die Regel falsch ist: Kommt ein zweiter Vorgang hinzu, fällt eine Erkennung, die auf Tessie oder
+Home Assistant beruht, auf „angenommen“ zurück, bis die andere Wallbox das Fahrzeug ausschließt
+(``HOLD_S`` Laden dort) und es ``HOLD_S`` Kandidat war, und so lange, wie dort nichts lädt.
 
 Tessie fragt ein abgestecktes Auto nur alle 600 s ab und erfährt vom Anstecken mit Verzug
 (Präzisierung 3): Tessie, Stromvergleich und Ausschluss zählen an einer Wallbox mit bekanntem Beginn
@@ -63,8 +67,8 @@ class Clue(StrEnum):
     """Welches Indiz es ist, in der Reihenfolge der Tabelle von Design 7.2.
 
     Der Wert ist sein Name im Health. ``CURRENT`` und ``TIMING`` gibt es nicht für ein Fahrzeug, das
-    Tessie nicht zu Hause sieht. ``TESSIE`` und ``HOME`` stützen nur, solange genau eine Wallbox
-    einen Vorgang hat.
+    Tessie nicht zu Hause sieht. ``TESSIE`` und ``HOME`` stützen nur nach der Elimination: wenn
+    ``CURRENT`` oder ``PHASES`` das Fahrzeug an jeder anderen Wallbox mit Vorgang ausschließen.
     """
 
     TESSIE = "tessie"  # Tessie sieht das Fahrzeug zu Hause und angesteckt, oder sicher nicht
@@ -188,8 +192,10 @@ class ClueTracker:
         3. Je Wallbox mit Vorgang und je Fahrzeug die Indizien nennen, die etwas sagen: die
            Wallboxen und Fahrzeuge in der Reihenfolge von ``config.yaml``, je Paar die Indizien in
            der von ``Clue``. Die zeitliche Korrelation sagt für ein Fahrzeug, das Tessie nicht zu
-           Hause sieht, nichts. Tessie und Home Assistant stützen nur, wenn ``sessions`` genau eine
-           Wallbox nennt (``_home_verdict``).
+           Hause sieht, nichts. Tessie und Home Assistant stützen nur, wenn Stromvergleich oder
+           Phasen-Signatur das Fahrzeug an jeder anderen Wallbox mit Vorgang ausschließen
+           (Elimination, ``_measured_out`` und ``_home_verdict``); die Zeiten dafür sind in Schritt
+           2 schon fortgeführt.
         """
         self._remember_starts(wall_now, sessions)
         for key, window in self._windows.items():
@@ -211,12 +217,18 @@ class ClueTracker:
                 # Ausschluss: zu Hause und angesteckt, und jede andere Wallbox ist leer
                 elsewhere = counts and others_empty and home_and_plugged(tessie) is True
                 at_home = home_and_plugged(tessie) if counts else None
+                # Elimination: Strom oder Phasen schließen es an jeder anderen Wallbox aus
+                eliminated = all(
+                    self._measured_out(now, other, vehicle_key, vehicle.phases)
+                    for other in self._cfg.wallboxes
+                    if other != wallbox_key and other in sessions
+                )
                 verdicts = (
-                    (Clue.TESSIE, _home_verdict(at_home, len(sessions))),
+                    (Clue.TESSIE, _home_verdict(at_home, eliminated)),
                     (Clue.CURRENT, self._current_verdict(now, wallbox_key, vehicle_key)),
                     (Clue.TIMING, self._timing_verdict(wallbox_key, vehicle_key, start, tessie)),
                     (Clue.PHASES, self._phases_verdict(now, wallbox_key, vehicle.phases)),
-                    (Clue.HOME, _home_verdict(homes.get(vehicle_key), len(sessions))),
+                    (Clue.HOME, _home_verdict(homes.get(vehicle_key), eliminated)),
                     (Clue.ELSEWHERE, True if elsewhere else None),
                 )
                 found.extend(
@@ -276,6 +288,20 @@ class ClueTracker:
                         self._currents.get(current_key), fits is matches, now
                     )
 
+    def _measured_out(
+        self, now: datetime, wallbox_key: str, vehicle_key: str, vehicle_phases: int
+    ) -> bool:
+        """Ob Stromvergleich oder Phasen-Signatur das Fahrzeug an der Wallbox ausschließen.
+
+        Nur diese beiden zählen für die Elimination: Die zeitliche Korrelation schließt nie aus,
+        und Tessie und Home Assistant schließen an jeder Wallbox gleich aus. Den Stromvergleich gibt
+        es nur für ein Fahrzeug mit Tessie.
+        """
+        return (
+            self._current_verdict(now, wallbox_key, vehicle_key) is False
+            or self._phases_verdict(now, wallbox_key, vehicle_phases) is False
+        )
+
     def _current_verdict(self, now: datetime, wallbox_key: str, vehicle_key: str) -> bool | None:
         """Stromvergleich: ``HOLD_S`` lang passend ist ``True``, so lang nicht passend ``False``.
 
@@ -323,14 +349,15 @@ class ClueTracker:
         return None if began_elsewhere else True
 
 
-def _home_verdict(verdict: bool | None, running: int) -> bool | None:
-    """Was Tessie oder Home Assistant an einer Wallbox sagt, wenn ``running`` Vorgänge laufen.
+def _home_verdict(verdict: bool | None, eliminated: bool) -> bool | None:
+    """Was Tessie oder Home Assistant über ein Fahrzeug an einer Wallbox mit Vorgang sagt.
 
-    „Zu Hause (und angesteckt)“ stützt das Fahrzeug nur, solange genau eine Wallbox einen Vorgang
-    hat: Bei zwei Vorgängen sagt es nicht, an welcher das Fahrzeug steht. Ein Ausschluss gilt an
-    jeder Wallbox mit Vorgang.
+    „Zu Hause (und angesteckt)“ sagt nicht, an welcher Wallbox das Fahrzeug steht. Es stützt das
+    Fahrzeug darum nur, wenn ``eliminated`` gilt: Stromvergleich oder Phasen-Signatur schließen es
+    an jeder anderen Wallbox mit Vorgang aus; bei genau einem Vorgang gilt das immer. Ein
+    Ausschluss gilt an jeder Wallbox mit Vorgang.
     """
-    if verdict is True and running != 1:
+    if verdict is True and not eliminated:
         return None
     return verdict
 

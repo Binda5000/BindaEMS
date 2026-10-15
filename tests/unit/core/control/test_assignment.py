@@ -841,7 +841,8 @@ def test_a_boost_set_while_plugging_in_binds_to_the_new_session(cfg) -> None:
     )
 
 
-# Zwei Vorgänge: Tessie und Home Assistant sagen nicht, an welcher Wallbox ein Fahrzeug steht
+# Zwei Vorgänge: Tessie und Home Assistant sagen nicht, an welcher Wallbox ein Fahrzeug steht. Sie
+# stützen erst, wenn Strom oder Phasen es an der anderen Wallbox ausschließen (Elimination).
 
 
 def test_a_three_phase_guest_is_not_the_tesla_plugged_in_elsewhere(cfg) -> None:
@@ -888,3 +889,57 @@ def test_a_two_phase_guest_is_not_the_egolf_charged_elsewhere(cfg) -> None:
             "guest@twc",
             AssignmentKind.DEFAULT,
         )
+
+
+def test_egolf_at_the_wall_connector_and_tesla_at_the_evcs_are_both_detected(cfg) -> None:
+    # Der Kernfall: Der e-Golf lädt am Wall Connector auf zwei Phasen, der Tesla an der EVCS auf
+    # drei mit dem Strom, den Tessie meldet. Ab 60 s schließen die Phasen jeden an der Wallbox des
+    # anderen aus: Home Assistant stützt den e-Golf am Wall Connector, Tessie den Tesla an der EVCS.
+    kw = {
+        "evcs_obs": evcs(charging=True, phase_a=dict.fromkeys(("L1", "L2", "L3"), 16.0)),
+        "twc_obs": twc(connected=True, charging=True, phase_a={"L1": 16.0, "L2": 16.0, "L3": 0.0}),
+        "tesla_obs": tesla(plugged=True, charging=True, actual_current_a=16.0, phases=3),
+        "homes": {"egolf": True},
+    }
+    a = Assignment(cfg, started=T0)
+    states = [update(a, s, **kw) for s in range(121)]
+    assert not any(state.unclear for state in states)
+    early = [w.kind for state in states[:120] for w in state.wallboxes.values()]
+    assert AssignmentKind.DETECTED not in early
+    last = states[120]
+    assert [(key, w.occupant, w.kind) for key, w in last.wallboxes.items()] == [
+        ("evcs", "tesla", AssignmentKind.DETECTED),
+        ("twc", "egolf", AssignmentKind.DETECTED),
+    ]
+
+
+def test_a_second_session_suspends_a_detection_resting_on_home_assistant(cfg) -> None:
+    # Der e-Golf lädt allein am Wall Connector und ist dort bei 120 s erkannt (Home Assistant und
+    # Phasen). Bei 200 s steckt an der EVCS ein dreiphasiger Gast an und lädt. Home Assistant stützt
+    # den e-Golf erst wieder, wenn die EVCS ihn nach 60 s Laden ausschließt; nach weiteren 60 s
+    # Kandidatur ist er wieder erkannt. Bis dahin ist er angenommen.
+    egolf = twc(connected=True, charging=True, phase_a={"L1": 16.0, "L2": 16.0, "L3": 0.0})
+    guest = evcs(charging=True, phase_a=dict.fromkeys(("L1", "L2", "L3"), 16.0))
+    a = Assignment(cfg, started=T0)
+    states = [
+        update(
+            a,
+            s,
+            evcs_obs=guest if s >= 200 else evcs(connected=False),
+            twc_obs=egolf,
+            # Tessie fragt den abgesteckten Tesla in jedem Zyklus ab: Ab 260 s zählt der Wert auch
+            # für den Vorgang an der EVCS und schließt den Tesla dort aus
+            tesla_obs=tesla(plugged_at=T0 + timedelta(seconds=s)),
+            homes={"egolf": True},
+        )
+        for s in range(321)
+    ]
+    assert not any(state.unclear for state in states)
+    egolf_at = [(state.vehicles["egolf"].wallbox, state.vehicles["egolf"].kind) for state in states]
+    detected = ("twc", AssignmentKind.DETECTED)
+    # der Rückfall: von 200 s bis 319 s, also 2 min
+    assert [s for s, place in enumerate(egolf_at) if place == detected] == [*range(120, 200), 320]
+    assert {kind for _, kind in egolf_at[200:320]} == {AssignmentKind.DEFAULT}
+    # an der EVCS ist dann jedes Fahrzeug ausgeschlossen: ein erkannter Gast
+    evcs_ = states[320].wallboxes["evcs"]
+    assert (evcs_.occupant, evcs_.kind) == ("guest@evcs", AssignmentKind.DETECTED)

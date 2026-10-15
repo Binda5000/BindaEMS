@@ -20,8 +20,10 @@ daraus (Präzisierung 4):
   das es ausschließt. Das weicht von Design 7.3 ab: Ein Fahrzeug, das an einer Wallbox Kandidat ist,
   widerspricht sich nicht, weil es an einer anderen Stützen und einen Ausschluss hat. Beschlossen
   wurde das, weil Tessie und Phasen-Signatur den Tesla an jeder Wallbox stützten, an der ein Auto
-  mit drei Phasen lädt. Seit Tessie nur bei genau einem Vorgang stützt (``clues``), kommt der Fall
-  nur noch vor, wenn an der anderen Wallbox die zeitliche Korrelation stützt.
+  mit drei Phasen lädt. Seit der Elimination (``clues``) stützen Tessie und Home Assistant ein
+  Fahrzeug an einer Wallbox nur, wenn es an jeder anderen ausgeschlossen ist; an der Wallbox, an
+  der es Kandidat ist, ist es das nicht. Der Fall kommt darum nur noch vor, wenn an der anderen
+  Wallbox die zeitliche Korrelation stützt.
 
 Die Übersteuerung (``placed``) geht vor: An der Wallbox einer Übersteuerung entscheidet die
 Erkennung nicht (kein Fahrzeug, kein Gast, kein Kandidat), und die übersteuerten Fahrzeuge sind an
