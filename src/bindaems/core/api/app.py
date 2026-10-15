@@ -1,13 +1,13 @@
-"""Interne API, mit Token geschützt: Gesundheit, Zustand, Absicht, Entscheidungen, Live-Stream."""
+"""Interne API, mit Token geschützt: Gesundheit, Zustand, Absicht, Quittierung, Entscheidungen."""
 
 from __future__ import annotations
 
 import hmac
 from collections.abc import AsyncIterator, Mapping
 from contextlib import AbstractAsyncContextManager
-from dataclasses import fields
+from dataclasses import dataclass, fields
 from datetime import UTC, datetime
-from typing import Annotated, Any, Literal, Protocol
+from typing import Annotated, Any, Final, Literal, Protocol
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Response, WebSocket, status
 from pydantic import BaseModel, Field, SecretStr
@@ -100,6 +100,27 @@ class IntentResponse(BaseModel):
     details: list[str]
 
 
+@dataclass(frozen=True)
+class AckReply:
+    """Die Antwort des core auf eine Quittierung (Plan 2d, Präzisierung 6).
+
+    ``status``: ``accepted`` (wird im nächsten Zyklus angewendet), ``not_locked`` (der Aktor ist
+    nicht gesperrt), ``cause_present`` (eine Ursache besteht weiter) oder ``unknown`` (kein Aktor
+    des Katalogs). ``detail`` ist der Text für die Bedienung.
+    """
+
+    status: Literal["accepted", "not_locked", "cause_present", "unknown"]
+    detail: str
+
+
+_ACK_STATUS: Final = {
+    "accepted": status.HTTP_202_ACCEPTED,
+    "not_locked": status.HTTP_409_CONFLICT,
+    "cause_present": status.HTTP_409_CONFLICT,
+    "unknown": status.HTTP_404_NOT_FOUND,
+}
+
+
 class CoreView(Protocol):
     def health(self) -> HealthReport: ...
 
@@ -108,6 +129,13 @@ class CoreView(Protocol):
     def intent(self) -> Intent | None: ...
 
     def submit_intent(self, intent: Intent) -> IntentReply: ...
+
+    def acknowledge(self, actuator: str) -> AckReply:
+        """Quittiert die Sperre des Aktors; die Antwort kommt aus dem Stand des letzten Zyklus.
+
+        Eine angenommene Quittierung wendet der core im nächsten Zyklus an. Der Aufruf kommt aus
+        einem anderen Thread als der Zyklus.
+        """
 
     def decisions(self, since: datetime, limit: int) -> tuple[list[Decision], bool]:
         """Die Entscheidungen mit ``ts`` nach ``since``, aufsteigend, und ob weitere folgen.
@@ -254,6 +282,13 @@ def create_api(view: CoreView, token: SecretStr) -> FastAPI:
         return IntentResponse(
             result=reply.result, version=reply.version, details=list(reply.details)
         )
+
+    @app.post("/v1/locks/{actuator}/ack", dependencies=[Depends(require_token)])
+    def ack_lock(actuator: str, response: Response) -> dict[str, str]:
+        """Quittiert die Sperre eines Aktors: 202, ohne Sperre oder mit Ursache 409, sonst 404."""
+        reply = view.acknowledge(actuator)
+        response.status_code = _ACK_STATUS[reply.status]
+        return {"detail": reply.detail}
 
     @app.get("/v1/decisions", dependencies=[Depends(require_token)])
     def get_decisions(since: str | None = None, limit: str | None = None) -> dict[str, Any]:

@@ -28,7 +28,7 @@ from bindaems.core.actuators.evcs import EvcsActuator
 from bindaems.core.actuators.tesla import TeslaActuator
 from bindaems.core.actuators.victron import VictronActuator
 from bindaems.core.adapters.victron_mqtt import VictronMqttAdapter
-from bindaems.core.api.app import create_api
+from bindaems.core.api.app import AckReply, create_api
 from bindaems.core.control.actuator import Confirmation
 from bindaems.core.control.charging import ChargeController
 from bindaems.core.control.intent import INTENT_FILE_PROBLEM
@@ -1058,6 +1058,99 @@ async def test_foreign_change_locks_the_evcs(runtime_env) -> None:
     run(rt, clock, 40)
     locked = {a["id"]: a["locked"] for a in rt.health().actuators}
     assert locked["wallbox.evcs"] == ["EVCS „evcs“: Strom von außen geändert (10 A statt 6 A)."]
+
+
+async def test_acknowledged_foreign_change_unlocks_in_the_next_cycle(runtime_env) -> None:
+    plant = Plant(watchdog_state=1)
+    state = GOOD_STATE | {"wallbox.evcs.gx_set_current_a": 16}
+    rt, clock = live_evcs(runtime_env, plant=plant, state=state)
+    run(rt, clock, 33)
+    state |= {"system.active_in_source": 240}
+    run(rt, clock, 3)  # SAFE: 6 A geschrieben und bestätigt, jetzt erwartet
+    state |= {"system.active_in_source": 1, "wallbox.evcs.gx_set_current_a": 10}
+    plant.follow = False
+    run(rt, clock, 40)
+    assert locked(rt)["wallbox.evcs"] != []
+    assert "competitor.foreign.wallbox.evcs" in {a["id"] for a in rt.health().alarms}
+    reply = rt.acknowledge("wallbox.evcs")
+    assert reply == AckReply(
+        "accepted", "Quittiert. Die Sperre von EVCS „evcs“ löst sich im nächsten Zyklus."
+    )
+    assert locked(rt)["wallbox.evcs"] != []  # die API wendet nichts an, erst der nächste Zyklus
+    run(rt, clock, 1)
+    assert locked(rt)["wallbox.evcs"] == []
+    assert "competitor.foreign.wallbox.evcs" not in {a["id"] for a in rt.health().alarms}
+    assert rt.health().mode == "CONTROL"
+    run(rt, clock, 40)  # die Erwartung bleibt bei 10 A: keine neue Erkennung, keine neue Sperre
+    assert locked(rt)["wallbox.evcs"] == []
+    assert rt.health().mode == "CONTROL"
+
+
+async def test_every_ack_is_logged(runtime_env) -> None:
+    plant = Plant(watchdog_state=1)
+    state = GOOD_STATE | {"wallbox.evcs.gx_set_current_a": 16}
+    rt, clock = live_evcs(runtime_env, plant=plant, state=state)
+    run(rt, clock, 33)
+    state |= {"wallbox.evcs.gx_mode": 1}
+    run(rt, clock, 11)
+    state |= {"wallbox.evcs.gx_mode": 0}
+    run(rt, clock, 11)  # die Ursache fehlt, die Wartezeit läuft
+    assert rt.acknowledge("wallbox.evcs").status == "accepted"
+    with capture_logs() as logs:
+        run(rt, clock, 1)
+    assert [(e["log_level"], e["event"], e["actuator"]) for e in logs if "actuator" in e] == [
+        ("info", "Sperre quittiert", "wallbox.evcs")
+    ]
+    # Zweimal quittiert: Die zweite Quittierung findet keine Sperre mehr und steht im Log.
+    rt._acks.append("wallbox.evcs")
+    with capture_logs() as logs:
+        run(rt, clock, 1)
+    assert [(e["log_level"], e["actuator"]) for e in logs if "actuator" in e] == [
+        ("warning", "wallbox.evcs")
+    ]
+    assert locked(rt)["wallbox.evcs"] == []
+
+
+async def test_ack_with_present_cause_is_refused(runtime_env) -> None:
+    plant = Plant(watchdog_state=1)
+    state = GOOD_STATE | {"wallbox.evcs.gx_set_current_a": 16}
+    rt, clock = live_evcs(runtime_env, plant=plant, state=state)
+    run(rt, clock, 33)
+    state |= {"wallbox.evcs.gx_mode": 1}  # nicht manuell
+    run(rt, clock, 11)
+    before = locked(rt)["wallbox.evcs"]
+    assert before != []
+    reply = rt.acknowledge("wallbox.evcs")
+    assert reply.status == "cause_present"
+    assert reply.detail == f"Ursache besteht weiter: {' '.join(before)}"
+    run(rt, clock, 2)
+    assert locked(rt)["wallbox.evcs"] == before
+
+
+async def test_ack_of_an_unlocked_or_unknown_actuator_is_refused(runtime_env) -> None:
+    rt, _, clock = runtime_env(state=GOOD_STATE)
+    run(rt, clock, 2)
+    assert rt.acknowledge("wallbox.evcs") == AckReply(
+        "not_locked", "EVCS „evcs“ ist nicht gesperrt."
+    )
+    assert rt.acknowledge("x") == AckReply("unknown", "Unbekannter Aktor „x“.")
+    run(rt, clock, 2)
+    assert not rt._acks  # nichts wurde vorgemerkt
+
+
+async def test_ack_of_a_lock_waiting_for_release_is_applied_at_once(runtime_env) -> None:
+    plant = Plant(watchdog_state=1)
+    state = GOOD_STATE | {"wallbox.evcs.gx_set_current_a": 16}
+    rt, clock = live_evcs(runtime_env, plant=plant, state=state)
+    run(rt, clock, 33)
+    state |= {"wallbox.evcs.gx_mode": 1}
+    run(rt, clock, 11)
+    state |= {"wallbox.evcs.gx_mode": 0}  # wieder manuell: die Wartezeit läuft
+    run(rt, clock, 11)
+    assert locked(rt)["wallbox.evcs"] != []
+    assert rt.acknowledge("wallbox.evcs").status == "accepted"
+    run(rt, clock, 1)
+    assert locked(rt)["wallbox.evcs"] == []
 
 
 def evcs_safe_at_eight(cfg: Config) -> Config:

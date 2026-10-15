@@ -434,3 +434,28 @@ def test_a_deadline_for_an_unwatched_kind_does_nothing(kind) -> None:
     for i in range(4):
         assert detector.check({(EVCS, kind): 10.0}, frozenset(), at(300 + 10 * i)) == []
     assert detector.alarms(at(340), LABELS) == []
+
+
+def test_acknowledge_drops_the_alarm_but_keeps_the_new_expectation() -> None:
+    detector = ForeignChangeDetector(60.0)
+    detector.expect(EVCS, CommandKind.CURRENT, 8.0)
+    assert len(checks(detector, [10, 10, 10])) == 1  # Erkennung bei 20 s: 8 → 10 A
+    assert len(detector.alarms(at(30), LABELS)) == 1
+    detector.acknowledge(EVCS)
+    assert detector.alarms(at(30), LABELS) == []
+    assert detector.check({CUR: 10}, frozenset(), at(40)) == []  # 10 A bleibt die Erwartung
+    assert detector.check({CUR: 12}, frozenset(), at(50)) == []  # erster Treffer, noch keine
+    assert detector.alarms(at(50), LABELS) == []
+
+
+def test_acknowledge_keeps_the_other_actuators_and_ignores_unknown_ones() -> None:
+    detector = ForeignChangeDetector(60.0)
+    detector.expect(EVCS, CommandKind.CURRENT, 8.0)
+    detector.expect("victron", CommandKind.GRID_SETPOINT, 0.0)
+    for seconds in (0, 10, 20):
+        detector.check(
+            {CUR: 10, ("victron", CommandKind.GRID_SETPOINT): 500.0}, frozenset(), at(seconds)
+        )
+    detector.acknowledge(EVCS)
+    detector.acknowledge("wallbox.unknown")
+    assert [a.id for a in detector.alarms(at(30), LABELS)] == ["competitor.foreign.victron"]

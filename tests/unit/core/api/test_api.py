@@ -13,7 +13,7 @@ from starlette.websockets import WebSocketDisconnect
 from tests.helpers import EMPTY_DERIVED, INTENT_CHARGING_DEFAULTS, T0, snap
 from tests.unit.shared.test_decisions import decision
 
-from bindaems.core.api.app import HealthReport, create_api, snapshot_to_json
+from bindaems.core.api.app import AckReply, HealthReport, create_api, snapshot_to_json
 from bindaems.core.control.intent import IntentReply
 from bindaems.core.watchdog_client.status import WATCHDOG_VERSION
 from bindaems.shared.control import ChargeMode, Intent, VehicleIntent
@@ -41,6 +41,12 @@ class FakeView:
         self.decision_more = False
         self.decision_calls: list[tuple[datetime, int]] = []
         self.decision_on_loop: list[bool] = []
+        self.ack_reply = AckReply("accepted", "Quittiert.")
+        self.acked: list[str] = []
+
+    def acknowledge(self, actuator: str) -> AckReply:
+        self.acked.append(actuator)
+        return self.ack_reply
 
     def decisions(self, since: datetime, limit: int) -> tuple[list[Decision], bool]:
         self.decision_calls.append((since, limit))
@@ -520,3 +526,31 @@ async def test_real_client_sees_4401_not_http_403() -> None:
     finally:
         server.should_exit = True
         await task
+
+
+@pytest.mark.parametrize(
+    ("reply", "status"),
+    [
+        (
+            AckReply(
+                "accepted", "Quittiert. Die Sperre von EVCS „evcs“ löst sich im nächsten Zyklus."
+            ),
+            202,
+        ),
+        (AckReply("not_locked", "EVCS „evcs“ ist nicht gesperrt."), 409),
+        (AckReply("cause_present", "Ursache besteht weiter: EVCS nicht im manuellen Modus."), 409),
+        (AckReply("unknown", "Unbekannter Aktor „x“."), 404),
+    ],
+)
+def test_ack_route_maps_the_reply(view_client, reply, status) -> None:
+    client, view = view_client
+    view.ack_reply = reply
+    response = client.post("/v1/locks/wallbox.evcs/ack", headers=H)
+    assert (response.status_code, response.json()["detail"]) == (status, reply.detail)
+    assert view.acked == ["wallbox.evcs"]
+
+
+def test_ack_route_requires_the_token(view_client) -> None:
+    client, view = view_client
+    assert client.post("/v1/locks/wallbox.evcs/ack").status_code == 401
+    assert view.acked == []

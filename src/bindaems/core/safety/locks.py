@@ -177,6 +177,19 @@ class LockManager:
             if info.cleared_at is None and not causes.get(actuator):
                 self._locks[actuator] = replace(info, cleared_at=now)
 
+    def acknowledge(self, actuator: str) -> bool:
+        """Gibt die Sperre des Aktors frei, wenn ihre Ursache fehlt (Quittierung, Plan 2d).
+
+        Die Wartezeit ``release_after_s`` entfällt. Nur eine Sperre mit ``cleared_at`` wird
+        entfernt; besteht eine Ursache oder gibt es keine Sperre, ist der Rückgabewert ``False``
+        und nichts ändert sich. Eine spätere Ursache beginnt eine neue Sperre.
+        """
+        info = self._locks.get(actuator)
+        if info is None or info.cleared_at is None:
+            return False
+        del self._locks[actuator]
+        return True
+
     def active(self, now: datetime) -> dict[str, LockInfo]:
         """Die bestehenden Sperren zum Zeitpunkt ``now``.
 

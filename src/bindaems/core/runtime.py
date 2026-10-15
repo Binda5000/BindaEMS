@@ -77,7 +77,13 @@ from bindaems.core.adapters.victron_mqtt import (
     VictronMqttAdapter,
 )
 from bindaems.core.adapters.victron_mqtt import SOURCE as VICTRON_SOURCE
-from bindaems.core.api.app import HealthReport, create_api, snapshot_to_json, watchdog_to_json
+from bindaems.core.api.app import (
+    AckReply,
+    HealthReport,
+    create_api,
+    snapshot_to_json,
+    watchdog_to_json,
+)
 from bindaems.core.checks.competitors import detect_competitors
 from bindaems.core.checks.selfcheck import CRITICAL_SIGNALS, FRESH_FOR, CheckResult, run_selfcheck
 from bindaems.core.checks.values import number
@@ -476,6 +482,9 @@ class CoreRuntime:
         self._selfcheck: list[CheckResult] = []
         self._competitor_alarms: list[Alarm] = []
         self._foreign_alarms: list[Alarm] = []
+        # Quittierungen, die die API angenommen hat; der nächste Zyklus wendet sie an. Die API
+        # läuft in einem anderen Thread als der Zyklus: ``append`` und ``popleft`` sind atomar.
+        self._acks: deque[str] = deque()
         self._counter_alarm: Alarm | None = None
         self._last_check: datetime | None = None
         self._alarms: list[Alarm] = []
@@ -651,6 +660,28 @@ class CoreRuntime:
     def submit_intent(self, intent: Intent) -> IntentReply:
         return self.intents.submit(intent, self._clock.now())
 
+    def acknowledge(self, actuator: str) -> AckReply:
+        """Quittiert die Sperre eines Aktors (Plan 2d, Präzisierung 6).
+
+        Die API ruft das aus einem anderen Thread auf. Die Antwort kommt deshalb aus dem Stand des
+        letzten Zyklus: aus den Sperren und aus den Ursachen ohne den Alarm der fremden Änderung.
+        Fehlt jede andere Ursache, ist die Quittierung angenommen und der Aktor kommt in
+        ``_acks``; angewendet wird sie im nächsten Zyklus (``_apply_acks``).
+        """
+        if actuator not in self.limits.actuators:
+            return AckReply("unknown", f"Unbekannter Aktor „{actuator}“.")
+        label = self._labels[actuator]
+        if actuator not in self._active_locks:
+            return AckReply("not_locked", f"{label} ist nicht gesperrt.")
+        # Die Alarme der fremden Änderung zählen nicht: Die Quittierung lässt sie fallen.
+        causes = lock_causes(self._competitor_alarms, self._selfcheck, self.limits)
+        if reasons := causes.get(actuator):
+            return AckReply("cause_present", f"Ursache besteht weiter: {' '.join(reasons)}")
+        self._acks.append(actuator)
+        return AckReply(
+            "accepted", f"Quittiert. Die Sperre von {label} löst sich im nächsten Zyklus."
+        )
+
     def decisions(self, since: datetime, limit: int) -> tuple[list[Decision], bool]:
         """Die Entscheidungen mit ``ts`` nach ``since`` aus dem Spool, aufsteigend.
 
@@ -710,6 +741,7 @@ class CoreRuntime:
                 found = foreign_decision(change, label, inputs, uuid4().hex)
                 self._decide(replace(found, ts=now))
         self._foreign_alarms = self.foreign.alarms(snow, self._labels)
+        self._apply_acks(now)
         self._update_operation(snap, plausibility, now, present, checked=checked)
         self._control(snap, derived, flows, now, snow, present)
         state = snapshot_to_json(snap, derived)
@@ -1096,6 +1128,28 @@ class CoreRuntime:
             *self.keeper.alarms(snow, self._labels, self._needs_watchdog),
             *(alarm for actuator in self.actuators.values() for alarm in actuator.alarms(snow)),
         ]
+
+    def _apply_acks(self, now: datetime) -> None:
+        """Wendet die Quittierungen an, die die API seit dem letzten Zyklus angenommen hat.
+
+        Je Eintrag: Die Erkennung lässt den Alarm der fremden Änderung fallen (ihre Erwartung
+        bleibt), die Ursachen werden ohne ihn neu ermittelt und der Sperre gemeldet, dann gibt
+        ``locks.acknowledge`` die Sperre frei. Besteht inzwischen eine andere Ursache, bleibt die
+        Sperre; auch das steht im Log. Läuft vor ``_update_operation``, damit der Zyklus mit der
+        freigegebenen Sperre rechnet.
+        """
+        while self._acks:
+            actuator = self._acks.popleft()
+            self.foreign.acknowledge(actuator)
+            self._foreign_alarms = self.foreign.alarms(self._safety_clock.now(), self._labels)
+            competitors = [*self._competitor_alarms, *self._foreign_alarms]
+            self.locks.update(now, lock_causes(competitors, self._selfcheck, self.limits))
+            if self.locks.acknowledge(actuator):
+                log.info("Sperre quittiert", actuator=actuator)
+            else:
+                log.warning(
+                    "Quittierung ohne Wirkung: Ursache besteht oder keine Sperre", actuator=actuator
+                )
 
     def _update_operation(
         self,

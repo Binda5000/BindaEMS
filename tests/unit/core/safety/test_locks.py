@@ -300,3 +300,32 @@ def test_other_findings_name_no_other_system(limits) -> None:
         CheckResult("dess", "fail", "Dynamic ESS ist aktiv (Modus 1)."),  # steckt im Alarm
     ]
     assert controlled_elsewhere(others, selfcheck, limits) == frozenset()
+
+
+def test_acknowledge_releases_a_lock_whose_cause_is_gone() -> None:
+    locks = LockManager(60)
+    locks.update(T0, {"wallbox.evcs": ["EVCS nicht manuell"]})
+    locks.update(T0 + timedelta(seconds=10), {"wallbox.evcs": []})
+    assert locks.acknowledge("wallbox.evcs") is True
+    assert locks.active(T0 + timedelta(seconds=11)) == {}
+
+
+def test_acknowledge_keeps_a_lock_whose_cause_persists() -> None:
+    locks = LockManager(60)
+    locks.update(T0, {"victron": ["Dynamic ESS aktiv"]})
+    assert locks.acknowledge("victron") is False
+    assert "victron" in locks.active(T0)
+
+
+def test_acknowledge_without_a_lock_is_refused() -> None:
+    assert LockManager(60).acknowledge("victron") is False
+
+
+def test_acknowledged_lock_is_locked_again_by_a_new_cause() -> None:
+    locks = LockManager(60)
+    locks.update(T0, {"victron": ["Dynamic ESS aktiv"]})
+    locks.update(T0 + timedelta(seconds=10), {})
+    assert locks.acknowledge("victron") is True
+    locks.update(T0 + timedelta(seconds=20), {"victron": ["Dynamic ESS aktiv"]})
+    info = locks.active(T0 + timedelta(seconds=20))["victron"]
+    assert (info.since, info.cleared_at) == (T0 + timedelta(seconds=20), None)

@@ -117,6 +117,15 @@ class ForeignChangeDetector:
         """
         self._watched = {key: watch for key, watch in self._watched.items() if key[0] != actuator}
 
+    def acknowledge(self, actuator: str) -> None:
+        """Quittiert die Erkennung: Der Alarm des Aktors verschwindet, die Erwartung bleibt.
+
+        Die letzte Erkennung ist vergessen; die Erwartung ist weiter der Wert, den das Gerät nach
+        ihr zeigte, und Zähler und Fristen bleiben. Für einen Aktor ohne Erkennung hat der Aufruf
+        keine Wirkung.
+        """
+        self._latest.pop(actuator, None)
+
     def check(
         self,
         present: Mapping[_Key, CommandValue],
