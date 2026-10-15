@@ -31,14 +31,21 @@ Präzisierungen des Plans gehen diesem Dokument vor, wo sie abweichen:
   Den Netzanteil der Wallboxen in Boost rechnet die Verdrahtung mit PV und Akku zuerst für Boost, wie
   der Akku-Sollwert lädt; sonst zöge der Wächter den Netzbezug eines anderen Autos als Boost ab
   (Gesamtreview).
-- **Vergleich (6.2):** Die verlangte Senkung ist `max(Mittel, Basis + W) − P_zul`, nicht
-  `Mittel − P_zul`; sonst würden die Wallboxen mit Victron live nie gedrosselt. `Basis + W` zählt
-  höchstens bis zur festen Grenze von Regel 2 (5.4), denn darüber liefert der Akku (Entscheidung 3);
-  solange Victron gesperrt oder nicht steuerbar ist, zählt nur das Mittel (Gesamtreview).
+- **Vergleich (6.2):** Die verlangte Senkung misst `P_zul` am größeren von Mittel und dem
+  Netzbezug, den die Autos über den Override wollen (`Basis + W`), nicht am Mittel allein; sonst
+  würden die Wallboxen mit Victron live nie gedrosselt. Mit Budget für den Akku zählt `Basis + W`
+  höchstens bis zur festen Grenze von Regel 2 (5.4), denn darüber liefert der Akku (Entscheidung 3),
+  und der Wächter rechnet seine eigenen Senkungen mit: Er senkt insgesamt nur um den Teil unter
+  dieser Grenze, der über `P_zul` liegt, und das einmal. Ohne Budget zählt `Basis + W` ganz, denn
+  dann hält Regel 2 den Override bei der Grenze, und nur die ganze Senkung bringt den Netzbezug unter
+  `P_zul`. Solange Victron gesperrt oder nicht steuerbar ist, zählt nur das Mittel (Gesamtreview und
+  Nachrunde).
 - **Drosselung (6.3):** Nur ein Auto an einem Ladepunkt, den die Laderegelung regelt, wird gedrosselt;
   ein ungeregeltes Auto in Boost zählt nur für den Boost-Anteil. Eine Grenze fällt still weg, wenn das
-  Auto geht, den Modus wechselt oder in Boost oder Aus geht. Eine Senkung wegen der Grenze ist nie
-  dringend; was die Sicherung allein verlangt, bleibt dringend, auch wenn die Grenze niedriger liegt.
+  Auto geht, den Modus wechselt oder in Boost oder Aus geht. Je Auto setzt eine Senkung beim
+  kleineren von Grenze und Leistung an, sodass eine Grenze weit über der Leistung keine Senkung
+  schluckt (Nachrunde). Eine Senkung wegen der Grenze ist nie dringend; was die Sicherung allein
+  verlangt, bleibt dringend, auch wenn die Grenze niedriger liegt.
 - **Override (5.3, 5.5):** `W' = max(0, min(W, floor10(Budget) − Basis))` hält den Override auf dem
   Raster von 10 W und nie über dem Budget. Die Erwartung der Erkennung fremder Änderungen verfällt wie
   der Override 300 s nach ihrer Bestätigung.
@@ -46,8 +53,8 @@ Präzisierungen des Plans gehen diesem Dokument vor, wo sie abweichen:
   auch während die Regelung ruht (etwa nach dem Ausschalten des Regelbetriebs); `peak.exceeded` endet
   mit seiner Viertelstunde, auch wenn die Regelung ruht, und `health().peak` zeigt dann weiter den
   letzten Zustand mit seinem `quarter_end`.
-- **Szenarien (10.2):** `akku-minpv` und `spitze-15min` starten den Tesla bei 5 A, und in
-  `schieflast-pv` kommt die Last auf L1 erst nach 10 min; Gründe im Betriebshandbuch, „Simulator“.
+- **Szenarien (10.2):** `akku-minpv` startet den Tesla bei 5 A, und in `schieflast-pv` kommt die
+  Last auf L1 erst nach 10 min; Gründe im Betriebshandbuch, „Simulator“.
 - **Inbetriebnahme (11.1):** `victron.live_allowed` kommt vor der Watchdog-Probe, nicht danach. Die
   `config.ini` des Watchdogs enthält die Aktion, die bei einer Auslösung den Override aufhebt, nur mit
   `live_allowed`, und nur dann prüft die Probe sie. Victron bleibt trotzdem im Dry-Run, bis die

@@ -101,8 +101,12 @@ Stand an der Anlage am 14.10.2026: 2c-1 ist nicht ausgerollt; evcc regelt beide 
      - Die Regelung ruhte (`idle`).
      - Die Wanduhr springt innerhalb der Viertelstunde zurück.
 10. **Vergleich (Design 6.2).**
-    - **Verlangte Senkung** = `max(Mittel, Basis + W) − P_zul`, mit `W` vor dem Wächter und dem Mittel der letzten 30 s (ohne Boost).
-    - **`Basis + W` höchstens `C` (Gesamtreview):** Der Kern gibt dem Wächter `W` höchstens bis `C − Basis` (`regulation.peak_wanted_w`), mit der festen Grenze `C` von Regel 2 ohne Budget (`HardLimits.grid_setpoint_max(None)`: `max_grid_charge_setpoint_w`, Absicherung, `max_import_kw`). Mehr Netzbezug setzt kein Override durch; den Rest liefert der Akku (Design, Entscheidung 3). Solange Victron gesperrt (`locks`) oder nicht steuerbar ist, gibt der Kern `W` nicht (`None`), und es zählt nur das Mittel. Das gilt auch für das Aufheben (Präzisierung 11).
+    - **Verlangte Senkung** = `Bedarf − P_zul`, mit `W` vor dem Wächter und dem Mittel der letzten 30 s (ohne Boost). Der Bedarf ist ohne Budget für den Akku `max(Mittel, Basis + W)`, mit Budget `max(Mittel, min(Basis + W + S, C) − S)` (nächster Punkt); sind `W` oder die Basis unbekannt, ist er das Mittel.
+    - **Feste Grenze `C` und gemerkte Senkung `S` (Gesamtreview, Nachrunde):** Der Kern gibt dem Wächter `W` ungekappt (`regulation.peak_wanted_w`) und beim Bau die feste Grenze `C` von Regel 2 ohne Budget (`HardLimits.grid_setpoint_max(None)`: `max_grid_charge_setpoint_w`, Absicherung, `max_import_kw`). Solange Victron gesperrt (`locks`) oder nicht steuerbar ist, gibt der Kern `W` nicht (`None`), und es zählt nur das Mittel.
+      - **Mit Budget** (der SOC ist bekannt und liegt über `reserve_soc_pct + reserve_guard_pct`, wie für `PeakLimits.budget_w`, Präzisierung 12) zählt der Netzbezug der Autos höchstens bis `C`: Mehr setzt kein Override durch, und den Rest liefert der Akku wie ohne Ziel (Design, Entscheidung 3). `S` ist die Summe der gemerkten Senkungen (`cut_w`) der Grenzen, die nach dem Aufräumen dieses Schritts bleiben (die Autos sind noch da, im selben Modus); `Basis + W + S` ist so der Netzbezug ohne die Senkungen. Insgesamt senkt der Wächter nur um `min(Basis + W ohne Senkung, C) − P_zul`, und das einmal.
+      - **Ohne Budget** zählt `Basis + W` ganz: Regel 2 hält den Override bei `C`, der Netzbezug folgt ihm bis dorthin, und unter `P_zul` bringt ihn nur die ganze Senkung.
+      - Derselbe Bedarf gilt für das Aufheben (Präzisierung 11) und für `reduction_kw` in Health (mindestens 0); die Start-Sperre rechnet weiter nur mit dem Mittel (Präzisierung 13).
+      - Bis zur Nachrunde kappte der Kern `W` bei `C − Basis`. Lag `P_zul` unter `C`, blieb die Senkung `C − P_zul`, solange die Autos mehr als `C` wollten: Der Wächter senkte in Stufen von `C − P_zul` je Wartezeit, mit Budget gegen Entscheidung 3, ohne Budget so langsam, dass der Netzbezug minutenlang über `P_zul` lag.
     - **Warum `Basis + W`:** Mit Victron live begrenzt Regel 2 den Override auf `P_zul`. ESS hielte den Netzbezug so immer unter `P_zul`, ganz aus dem Akku, und die Wallboxen würden nie gedrosselt (gegen die Reihenfolge von Design 6.3). Mit `W` drosselt der Wächter, sobald die Autos mehr Netz wollen, als das Budget trägt; das Mittel fängt den Rest, etwa einen Akku am Min-SOC.
     - **`P_zul`** nach Design 6.2 mit `t_rest = max(1 s, Ende − wall_now)`, also immer endlich.
 11. **Drosselung (Design 6.3, Punkt 1).**
@@ -112,10 +116,10 @@ Stand an der Anlage am 14.10.2026: 2c-1 ist nicht ausgerollt; evcc regelt beide 
     - **Neue Drosselung** nur bei Senkung > 0 und frühestens 30 s (`SETTLE_S`) nach der letzten Änderung:
       - Zu senken ist `Senkung − ausstehend`, wobei `ausstehend` = Σ `max(0, Leistung − Grenze)` der gedrosselten Autos.
       - Reihenfolge: PV-Überschuss, dann Min+PV, dann Sofort; innerhalb einer Stufe zuerst das Auto mit der niedrigsten Priorität.
-      - Je Auto: `Ausgang` ist seine Grenze oder, ohne Grenze, seine Leistung. Es senkt um `min(Rest, Netzanteil, Ausgang − Boden)`, und die neue Grenze ist `Ausgang` minus diese Senkung. Gemerkt wird die gesamte Senkung des Autos.
+      - Je Auto: `Ausgang` ist das kleinere von Grenze und Leistung, ohne bekannte Leistung die Grenze und ohne Grenze die Leistung (Nachrunde; vorher immer die Grenze, und eine Grenze weit über der Leistung, etwa beim Tesla in Min+PV nach dem Wechsel auf 5 A, schluckte Senkungen ohne Wirkung). Es senkt um `min(Rest, Netzanteil, Ausgang − Boden)`, und die neue Grenze ist `Ausgang` minus diese Senkung. Gemerkt wird die gesamte Senkung des Autos. `ausstehend` bleibt `max(0, Leistung − Grenze)`.
     - **Aufheben,** ebenfalls frühestens 30 s nach der letzten Änderung und je Zyklus höchstens eine:
       - in umgekehrter Reihenfolge (Sofort vor Min+PV vor PV-Überschuss, innerhalb einer Stufe die höchste Priorität zuerst)
-      - die erste Grenze, für die `P_zul − max(Mittel, Basis + W) ≥ ihre Senkung + 1000 W`
+      - die erste Grenze, für die `P_zul − Bedarf ≥ ihre Senkung + 1000 W`, mit dem Bedarf aus Präzisierung 10
     - Mit dem Ende der Viertelstunde fallen alle Grenzen weg.
     - **Wer gedrosselt wird:** nur ein Auto an einem Ladepunkt, den die Laderegelung regelt; ein ungeregeltes Auto in Boost zählt nur für den Boost-Anteil. Verlässt ein Auto die Liste, wechselt es den Modus oder geht es in Boost oder Aus, fällt seine Grenze still weg (ohne neue Wartezeit).
 12. **Akku-Anforderung und Budget (Design 5.3 Punkt 2, 6.2, 6.3 Punkt 2).**

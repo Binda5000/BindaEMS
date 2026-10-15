@@ -72,8 +72,9 @@ class RegulationInputs:
       ``Derived.house_load_w``)
     - ``base_setpoint_w``: der Basis-Sollwert ``ess.grid_setpoint_w`` in W
     - ``locks``: die Gründe der Sperren je Aktor, wie im ``SafetyContext``
-    - ``quarter``: die laufende Viertelstunde für den 15-min-Wächter, wie die Abrechnung sie zählt
-      (Präzisierung 9); ``None`` heißt nicht da
+    - ``quarter``: die laufende Viertelstunde für den 15-min-Wächter (``QuarterObs``,
+      Präzisierung 9): Energie und Leistung wie die Abrechnung, der Netzanteil je Wallbox mit den
+      Wallboxen in Boost zuerst; ``None`` heißt nicht da
     """
 
     charge: ChargeInputs

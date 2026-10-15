@@ -3,7 +3,8 @@
 Plan 2c-2a, Design 6.1 bis 6.4 und 9, Präzisierungen 9 bis 14. Leistungen in W, Energien in Wh;
 ``health`` zeigt kW und kWh.
 
-- ``QuarterObs``: die laufende Viertelstunde, wie die Abrechnung sie zählt
+- ``QuarterObs``: die laufende Viertelstunde, Energie und Leistung aus der Abrechnung, der
+  Netzanteil je Wallbox mit Boost zuerst
 - ``PeakCar``: ein Auto für den Wächter
 - ``PeakLimits`` und ``NO_LIMITS``: was der Wächter den anderen Bausteinen vorgibt
 - ``Cap``, ``throttle``, ``lift``, ``pending_w`` und ``no_start``: Drosselung, Aufheben und
@@ -50,7 +51,11 @@ _LEVELS: Final = (Effective.PV, Effective.MIN_PV, Effective.NOW)
 
 @dataclass(frozen=True)
 class QuarterObs:
-    """Die laufende Viertelstunde, wie die Abrechnung sie zählt (Präzisierung 9).
+    """Die laufende Viertelstunde (Präzisierung 9).
+
+    Energie und Leistung zählt sie wie die Abrechnung. Den Netzanteil je Wallbox rechnet die
+    Verdrahtung (``RegulationLink``) mit Wallboxen in Boost aus einer zweiten Zuordnung, in der sie
+    PV und Akku zuerst bekommen; sonst ist es der Anteil der Abrechnung.
 
     - ``start``: der Beginn der laufenden Viertelstunde; der Wächter prüft ihn gegen
       ``slot_start(wall_now)``

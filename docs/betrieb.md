@@ -1816,9 +1816,12 @@ Den **erlaubten Akku-Anteil** bestimmt der Modus des Autos:
   darüber hinausgeht, liefert der Akku. Laden zwei Autos in Sofort zusammen mehr als 8 kW, kommt der
   Rest aus dem Akku (im Simulator, `akku-sofort`: 8 kW Netzbezug). Wer das nicht will, hebt
   `max_grid_charge_setpoint_w` bis zum Importlimit an. Über dem Importlimit (20 A je Phase) liefert
-  Victron ohnehin aus dem Akku (Peak Shaving). Der 15-min-Wächter zählt den gewollten Netzbezug
-  deshalb nur bis zu dieser festen Grenze (unten, „Hochrechnung und Senkung“): Was der Akku ohnehin
-  liefert, drosselt er nicht.
+  Victron ohnehin aus dem Akku (Peak Shaving). Mit Budget für den Akku zählt der 15-min-Wächter den
+  gewollten Netzbezug deshalb nur bis zu dieser festen Grenze (unten, „Hochrechnung und Senkung“):
+  Was der Akku darüber ohnehin liefert, drosselt er nicht, und liegt sein Ziel darunter, senkt er
+  die Autos nur einmal um den Unterschied. Ohne Budget (SOC nicht über USV-Reserve +
+  `reserve_guard_pct`) hält Regel 2 den Override bei der festen Grenze, und der Wächter drosselt die
+  Autos um alles, was über `P_zul` liegt.
 - **Unterstützung** heißt: Der Akku liefert Autos in PV-Überschuss und Min+PV ihren Fehlbetrag, bis
   zu `support_max_w` (3 kW). Sie gilt, wenn
   - ein Auto in einem dieser Modi steht (sonst zeigt Health `mode`),
@@ -1905,8 +1908,8 @@ Preis: Er drosselt die Wallboxen und lässt den Akku überbrücken, und was beid
   Abrechnung verteilt PV und Akku dagegen nur in der Reihenfolge von `config.yaml` (erst die EVCS);
   mit ihrer Verteilung zöge der Wächter etwa den Netzbezug des e-Golf in Sofort als Boost des Tesla
   ab und überschritte das Ziel still. Im Simulator (Tesla in Boost, e-Golf in Sofort, Ziel 5 kW)
-  bleibt so jede Viertelstunde bei 1,24 kWh; mit der Verteilung der Abrechnung wären es unbemerkt
-  1,51 kWh. Die Summe des Netzbezugs ist in beiden Rechnungen dieselbe.
+  bleibt so jede Viertelstunde bei 1,20 kWh; mit der Verteilung der Abrechnung lag sie vor dem
+  Gesamtreview unbemerkt bei 1,51 kWh. Die Summe des Netzbezugs ist in beiden Rechnungen dieselbe.
   - **Bekannte Grenze:** Kurze Lücken, die die Abrechnung nicht überbrückt, fehlen in `E_bisher`. Die
     Abrechnung integriert nach dem Halteprinzip und überbrückt höchstens 5 s (`HOLD_MAX_S`, dieselbe
     Grenze gilt für die Energie der Autos in Boost, die der Wächter abzieht); ein längeres Intervall
@@ -1924,20 +1927,31 @@ Preis: Er drosselt die Wallboxen und lässt den Akku überbrücken, und was beid
   Akku und die Safety-Schicht. Die nächste Viertelstunde beginnt normal.
 - **Hochrechnung und Senkung:** Das Mittel ist der Netzbezug der letzten 30 s ohne Boost. Die
   Hochrechnung ist `(E_bisher + Mittel · t_rest) / 0,25 h`, mit dem Rest der Viertelstunde `t_rest`
-  (mindestens 1 s). Die **verlangte Senkung** ist `max(Mittel, Basis + W) − P_zul`, in Health
-  mindestens 0; `W` ist der gewollte Netzbezug der Autos vor dem Wächter. `W` ist nötig, weil Regel 2
-  mit Victron live den Override auf `P_zul` begrenzt: ESS hielte den Netzbezug dann immer unter
-  `P_zul`, ganz aus dem Akku, und die Wallboxen würden nie gedrosselt. Mit `W` drosselt der Wächter,
-  sobald die Autos mehr Netz wollen, als das Budget trägt; das Mittel fängt den Rest, etwa einen
-  Akku am Min-SOC.
-  - **Höchstens bis zur festen Grenze:** `Basis + W` zählt höchstens bis zur festen Grenze von
-    Regel 2, dem kleinsten Wert aus `max_grid_charge_setpoint_w`, Absicherung und
-    `grid.max_import_kw` (ohne das Budget). Mehr Netzbezug setzt kein Override durch; was die Autos
-    darüber hinaus wollen, liefert der Akku (oben, „Sofort“). Laden etwa zwei Autos in Sofort mit
-    zusammen 18 kW bei einem Ziel von 10 kW (`P_zul` 9,7 kW), bleibt der Netzbezug bei 8 kW, und der
-    Wächter drosselt nicht.
+  (mindestens 1 s). Die **verlangte Senkung** ist `Bedarf − P_zul`, in Health mindestens 0. Der
+  Bedarf ist das größere von Mittel und dem Netzbezug, den die Autos über den Override wollen, aus
+  dem Basis-Sollwert und `W`, dem gewollten Netzbezug der Autos vor dem Wächter. `W` ist nötig, weil
+  Regel 2 mit Victron live den Override auf `P_zul` begrenzt: ESS hielte den Netzbezug dann immer
+  unter `P_zul`, ganz aus dem Akku, und die Wallboxen würden nie gedrosselt. Mit `W` drosselt der
+  Wächter, sobald die Autos mehr Netz wollen, als das Budget trägt; das Mittel fängt den Rest, etwa
+  einen Akku am Min-SOC. Wie `W` zählt, hängt am Budget für den Akku (Punkt 2 unten):
+  - **Mit Budget** zählt `Basis + W` höchstens bis zur festen Grenze `C` von Regel 2, dem kleinsten
+    Wert aus `max_grid_charge_setpoint_w`, Absicherung und `grid.max_import_kw` (ohne das Budget).
+    Mehr Netzbezug setzt kein Override durch; was die Autos darüber wollen, liefert der Akku wie ohne
+    Ziel (oben, „Sofort“). Dabei rechnet der Wächter mit dem Netzbezug ohne seine eigenen Senkungen:
+    Der Bedarf ist `min(Basis + W + S, C) − S`, mit der Summe `S` der Senkungen der Grenzen, die er
+    gerade hält. So senkt er insgesamt nur um `min(Basis + W ohne Senkung, C) − P_zul`, und das
+    einmal. Laden etwa Tesla und e-Golf in Sofort mit zusammen 18 kW bei einem Ziel von 8 kW
+    (`P_zul` 7,7 kW), senkt er den e-Golf um 300 W und dann nicht weiter; was über 7,7 kW liegt,
+    liefert der Akku. Bei einem Ziel von 10 kW (`P_zul` 9,7 kW) bleibt der Netzbezug bei 8 kW, und
+    der Wächter drosselt gar nicht.
+  - **Ohne Budget** (SOC nicht über USV-Reserve + `reserve_guard_pct` oder unbekannt) zählt
+    `Basis + W` ganz. Regel 2 hält den Override dann bei `C`, der Netzbezug folgt ihm bis dorthin,
+    und unter `P_zul` bringt ihn nur die ganze Senkung: Der Wächter senkt die Autos in einem Schritt
+    um alles, was `Basis + W` über `P_zul` liegt, in der Reihenfolge unten und höchstens bis zu
+    ihrem Boden.
   - **Nur das Mittel,** solange Victron gesperrt (etwa durch DESS) oder nicht steuerbar ist: Dann
     setzt kein Override `Basis + W` durch, und der Wächter zählt nur, was das Netz wirklich liefert.
+    Ebenso, wenn `W` oder der Basis-Sollwert unbekannt ist.
 
 Die Reaktion folgt der Reihenfolge von Spec 7.4:
 
@@ -1956,11 +1970,18 @@ Die Reaktion folgt der Reihenfolge von Spec 7.4:
      letzten Änderung einer Grenze (die erste einer Viertelstunde sofort). Gedrosselt wird um die
      Senkung abzüglich dessen, was gedrosselte Autos ihrer Grenze noch nicht gefolgt sind (ein Tesla
      folgt erst nach seiner 90-s-Regel).
-   - **Aufgehoben** wird eine Grenze, wenn `P_zul` den Netzbezug (`max(Mittel, Basis + W)`) um
-     mindestens 1 kW plus die Senkung dieses Autos übersteigt, frühestens 30 s nach der letzten
+   - Je Auto setzt die Drosselung bei seiner **Leistung** an, mit Grenze beim kleineren von Grenze
+     und Leistung (ohne bekannte Leistung bei der Grenze). Eine Grenze weit über der Leistung schluckt
+     so keine Senkung: Hat der Wächter etwa den Tesla in Min+PV bei 16 A gedrosselt und lädt er ohne
+     PV inzwischen mit 5 A, an seinem Boden, geht die nächste Senkung an den e-Golf, statt nur die
+     Grenze des Tesla zu senken, die ohnehin nicht bindet.
+   - **Aufgehoben** wird eine Grenze, wenn `P_zul` den Bedarf (oben, „Hochrechnung und Senkung“)
+     um mindestens 1 kW plus die Senkung dieses Autos übersteigt, frühestens 30 s nach der letzten
      Änderung und je Zyklus höchstens eine, in umgekehrter Reihenfolge (Sofort vor Min+PV vor
-     PV-Überschuss, innerhalb einer Stufe die höchste Priorität zuerst). So flattert der Tesla nicht
-     und spart Tessie-Befehle. Mit dem Ende der Viertelstunde fallen alle Grenzen weg.
+     PV-Überschuss, innerhalb einer Stufe die höchste Priorität zuerst). Mit Budget und einer
+     Grenze, solange die Autos mehr als die feste Grenze von Regel 2 wollen, ist das der Fall,
+     sobald `P_zul` 1 kW über ihr liegt. So flattert der Tesla nicht und spart Tessie-Befehle. Mit
+     dem Ende der Viertelstunde fallen alle Grenzen weg.
    - Gedrosselt wird nur ein Auto an einem Ladepunkt, den die Laderegelung regelt; ein ungeregeltes
      Auto in Boost zählt nur für den Boost-Anteil. Verlässt ein gedrosseltes Auto die Liste, wechselt
      es den Modus oder geht es in Boost oder Aus, fällt seine Grenze still weg, ohne neue Wartezeit.
@@ -1970,11 +1991,12 @@ Die Reaktion folgt der Reihenfolge von Spec 7.4:
    10 W abgerundet. Der Override liegt so nie über dem Budget und bleibt auf dem Raster von 10 W. Ist
    das Budget aufgebraucht (`P_zul` unter 0), gibt es keinen Override, und der Akku deckt die Autos,
    bis die Wallboxen gefolgt sind. Er überbrückt so genau, was die Wallboxen nicht oder noch nicht
-   bringen, etwa bis ein gedrosselter Tesla seiner Grenze folgt; die Schwelle der Unterstützung gilt
-   dafür nicht. Das Budget geht aber nur an den Akku (und an Regel 2), solange der SOC über
-   USV-Reserve + `control.reserve_guard_pct` (5 %) liegt. Sonst und bei unbekanntem SOC gibt es
-   keins, denn Regel 2 entlüde den Akku sonst bis zum Min-SOC; dann bleiben die Wallboxen, sonst gilt
-   Punkt 3.
+   bringen, etwa bis ein gedrosselter Tesla seiner Grenze folgt, und liefert wie ohne Ziel, was die
+   Autos über der festen Grenze von Regel 2 wollen; die Schwelle der Unterstützung gilt dafür nicht.
+   Das Budget geht aber nur an den Akku (und an Regel 2), solange der SOC über USV-Reserve +
+   `control.reserve_guard_pct` (5 %) liegt. Sonst und bei unbekanntem SOC gibt es keins, denn
+   Regel 2 entlüde den Akku sonst bis zum Min-SOC; dann bleiben die Wallboxen, die der Wächter um
+   die ganze Senkung drosselt (oben, „Hochrechnung und Senkung“), sonst gilt Punkt 3.
 3. **Sonst** nimmt der Wächter die Überschreitung hin: Liegt die Hochrechnung 60 s lang ohne
    Unterbrechung über dem Ziel, ist die Viertelstunde **überschritten** (Health `exceeded`) bis zu
    ihrem Ende, und der Alarm `peak.exceeded` (unten) meldet es. Gezählt wird nur in Zyklen, die
@@ -1998,8 +2020,9 @@ Die Reaktion folgt der Reihenfolge von Spec 7.4:
 
 `GET /v1/health` (Zugang wie in Abschnitt 4, „Diagnose“) zeigt neben `vehicles` den Stand des
 Akku-Sollwerts (`battery`) und des 15-min-Wächters (`peak`) aus dem letzten Zyklus. Ein Ausschnitt
-(aus dem Simulator, `spitze-15min` mit Ziel 8 kW, kurz nach Beginn der zweiten Viertelstunde,
-gerundet):
+(aus dem Simulator, `spitze-15min` mit Ziel 8 kW, 10 s nach Beginn der zweiten Viertelstunde,
+gerundet; die Senkung kommt dort aus dem Mittel der letzten 30 s, denn bis 18:15 lag der Netzbezug
+bei der festen Grenze von 8 kW):
 
 ```json
 {
@@ -2008,7 +2031,7 @@ gerundet):
     "target_w": 7700.0,
     "override_w": 7700.0,
     "support": "soc",
-    "bridging_s": 907.0,
+    "bridging_s": 906.0,
     "refresh_age_s": 10.0
   },
   "peak": {
@@ -2017,7 +2040,7 @@ gerundet):
     "energy_kwh": 0.021,
     "projected_kw": 7.9,
     "budget_kw": 7.7,
-    "reduction_kw": 0.3,
+    "reduction_kw": 0.2,
     "quarter_end": "2026-10-12T16:30:00+00:00"
   }
 }
@@ -2189,8 +2212,8 @@ Beide Alarme zeigt das UI unter **System** → „core“ → „Alarme“ (Absc
   3 kW in die Autos (`support_max_w`). Startet der Tesla mit seinem alten Strom von 16 A, lädt er 90 s
   mit voller Leistung, bis der Befehl auf 5 A wirkt (die 5-A-Eigenheit, Abschnitt „Laderegelung“,
   „Tesla“): Regel 2 begrenzt den Override auf 8 kW, und der Akku liefert den Rest, im Simulator bis zu
-  5,8 kW in die Autos für 90 s. `akku-minpv` und `spitze-15min` starten den Tesla darum mit 5 A
-  (Abschnitt „Simulator“). `vehicles.tesla.min_a: 6` vermiede die 5-A-Eigenheit und damit diese 90 s.
+  5,8 kW in die Autos für 90 s. `akku-minpv` startet den Tesla darum mit 5 A (Abschnitt
+  „Simulator“). `vehicles.tesla.min_a: 6` vermiede die 5-A-Eigenheit und damit diese 90 s.
 - **Im Dry-Run an der Anlage prüfen:**
   - wie viele Entscheidungen an `victron` je Stunde entstehen: bei ruhiger Last wenige, unter
     wechselnden Wolken rund 70 (Simulator). Deutlich mehr heißt, dass das Rauschen der Hauslast
@@ -2199,12 +2222,17 @@ Beide Alarme zeigt das UI unter **System** → „core“ → „Alarme“ (Absc
     Folge an derselben Wallbox). Die Drosselung hat kein Totband: Nach einer Drosselung klingt das
     alte 30-s-Mittel genau mit der Wartezeit von 30 s ab, und das Modell des Simulators hat kein
     Netzrauschen. An der Anlage könnten kleine Nachdrosselungen und eine verzögerte Aufhebung die
-    Folge sein; die Marge `peak_margin_kw` fängt sie ab. Gewollt sind dagegen Stufen, solange die
-    Autos mehr als die feste Grenze von Regel 2 wollen und `P_zul` unter ihr liegt: Der Wächter
-    verlangt dann je Schritt nur den Unterschied (bei 8 kW Ziel und Grenze rund 300 W), denn eine
-    Drosselung senkt zuerst, was der Akku über der Grenze liefert. Im Simulator (`spitze-15min`) geht
-    der e-Golf so je Viertelstunde in Schritten von 1 A von 16 auf 10 oder 9 A, bis `P_zul` über die
-    Grenze steigt.
+    Folge sein; die Marge `peak_margin_kw` fängt sie ab. Im Simulator gibt es eine solche
+    Nachdrosselung, seit die Drosselung bei der echten Leistung ansetzt: In der Abwandlung von
+    `spitze-15min` mit dem Tesla in Boost und Ziel 5 kW liegt der Netzbezug 3 s lang über dem
+    Override, bis der e-Golf seiner ersten Grenze folgt. 30 s später verlangt das Mittel daraus
+    noch 93 W, und der e-Golf geht von 10 auf 9 A; vorher fiel diese Senkung in den Abstand
+    zwischen seiner Grenze und dem Strom in ganzen Ampere. Stufen sind dabei nicht gewollt: Wollen
+    die Autos mehr als die feste Grenze von Regel 2 und liegt `P_zul` darunter, senkt der Wächter
+    mit Budget einmal um den Unterschied (bei 8 kW Ziel und Grenze rund 300 W) und rechnet diese
+    Senkung danach mit (oben, „Hochrechnung und Senkung“). Im Simulator (`spitze-15min`) geht der
+    e-Golf so in der zweiten und dritten Viertelstunde einmal von 16 auf 15 A, bis `P_zul` 1 kW über
+    der Grenze liegt; in der ersten trifft die Senkung den Tesla, der dort noch mit 16 A lädt.
   - ob `battery.state` `unknown` erscheint (ein Messwert fehlt) oder `locked` (DESS an, ein anderes
     System regelt).
 
@@ -2360,29 +2388,33 @@ Akku und Spitzen, ab `akku-wolkig`, ist er live.
 | `boost-abend` | Boost am Abend, 45 min | Akku 35 %, nur der e-Golf, in Boost bis zum Ende | Keine Entscheidung an `victron` mit einer Zahl; solange der SOC über 25 % liegt, ab 2 min Netzbezug höchstens 300 W; der SOC sinkt nie unter 20 % (Invariante des Modells). |
 | `override-stunde` | Eine Stunde mit aktivem Override, 1 h | Akku 50 %, nur der e-Golf, in Sofort | Ab 2 min gilt in jeder Sekunde ein Override, zuletzt vor höchstens 245 s geschrieben (Auffrischen alle 240 s); kein Alarm „competitor.foreign.*“; höchstens 5 Entscheidungen an `victron` (das Auffrischen steht nicht im Log). |
 | `dess-an` | Dynamic ESS an, 30 min | Akku 60 %, Dynamic ESS an, nur der e-Golf, in Sofort | Keine Entscheidung an `victron`; ab 1 min zeigt die Gesundheit `battery.state` „locked“; der e-Golf lädt am Ende. |
-| `spitze-15min` | 15-min-Ziel 8 kW, 75 min | 12.10.2026 ab 17:59, `control.peak_target_kw` 8, Akku 60 %, Tesla in Min+PV (zu Beginn auf 5 A), e-Golf in Sofort, ab 18:45 in Boost bis zum Ende | Netzbezug der Viertelstunden ab 18:00, 18:15 und 18:30 je höchstens 2,02 kWh; vor 18:45 nennt eine Entscheidung „peak_guard“, ab 18:45 keine an `wallbox.evcs`; bei der ersten Drosselung des e-Golf in Sofort lädt kein Auto in PV-Überschuss oder Min+PV über Mindeststrom + 0,5 A (im Simulator trivial erfüllt). |
+| `spitze-15min` | 15-min-Ziel 8 kW, 75 min | 12.10.2026 ab 17:59, `control.peak_target_kw` 8, Akku 60 %, Tesla in Min+PV, e-Golf in Sofort, ab 18:45 in Boost bis zum Ende | Netzbezug der Viertelstunden ab 18:00, 18:15 und 18:30 je höchstens 2,02 kWh; vor 18:45 nennt eine Entscheidung „peak_guard“, ab 18:45 keine an `wallbox.evcs`; bei der ersten Drosselung des e-Golf in Sofort lädt kein Auto in PV-Überschuss oder Min+PV über Mindeststrom + 0,5 A (belegt im Simulator wenig, unten). |
 | `schieflast-pv` | PV mit schwerer Last auf L1, 1 h | 21.06.2026 ab 10:00, PV konstant 12 kW, Akku 60 %, nur der e-Golf, in PV; ab 10 min 5,5 kW mehr Last auf L1 | Eine Entscheidung an `wallbox.evcs` nennt „import_limit“: Das Importziel bindet den e-Golf zwischen Mindest- und Höchststrom. |
 
 Die Verteilung ist gierig nach Priorität (Abschnitt „Laderegelung“): Mit höchstens 10 kW PV laden die
 Autos in `sonnig` und `wolkig` nacheinander, darum steht der Tesla dort nahe an seinem Ladelimit.
 
-Der Aufbau von drei Szenarien für Akku und Spitzen ist angepasst, weil sich ihre Prüfung im Modell
+Der Aufbau von zwei Szenarien für Akku und Spitzen ist angepasst, weil sich ihre Prüfung im Modell
 sonst nicht erfüllen ließe:
 
-- In `akku-minpv` und `spitze-15min` steht der Tesla zu Beginn auf 5 A. Startet er mit seinem alten
-  Strom von 16 A, lädt er nach dem Start 90 s mit 16 A, bis der zweite Befehl auf 5 A wirkt (der
-  erste geht über Tessie verloren). In `akku-minpv` liefert der Akku dann bis zu 5,8 kW in die
-  Autos, denn der Override ist auf `max_grid_charge_setpoint_w` (8 kW) begrenzt; in `spitze-15min`
-  drosselte der Wächter Tesla und e-Golf im selben Schritt, aber der Tesla folgt erst nach 90 s. Die
-  Prüfung der Reihenfolge an den Strömen konnte dann nicht bestehen, obwohl der Wächter in der
-  richtigen Reihenfolge drosselt. Seit dem Gesamtreview zählt der Wächter `Basis + W` nur bis zur
-  festen Grenze von Regel 2 und senkt im ersten Schritt nur den Tesla, um 300 W; der Aufbau mit 5 A
-  blieb. Mit dem Tesla am Mindeststrom (Min+PV ohne PV) ist die Prüfung trivial erfüllt; die
-  Reihenfolge der Drosselung prüfen `tests/unit/core/control/test_peak_throttle.py` und
-  `tests/property/test_peak_guard.py`.
+- In `akku-minpv` steht der Tesla zu Beginn auf 5 A. Startet er mit seinem alten Strom von 16 A,
+  lädt er nach dem Start 90 s mit 16 A, bis der zweite Befehl auf 5 A wirkt (der erste geht über
+  Tessie verloren). Der Akku liefert dann bis zu 5,8 kW in die Autos, denn der Override ist auf
+  `max_grid_charge_setpoint_w` (8 kW) begrenzt.
 - In `schieflast-pv` kommt die Last auf L1 erst nach 10 min, wenn der e-Golf schon lädt. Liegt sie von
   Anfang an, startet er nicht: Der Phasenwächter zählt die Ladeleistung des Akkus zur Last der Phase
   und lässt auf L1 nur rund 3 A frei, weniger als den Mindeststrom.
+
+`spitze-15min` startet den Tesla wie im Plan mit 16 A und besteht damit alle Prüfungen. Die Prüfung
+der Reihenfolge belegt dort trotzdem wenig. In der ersten Viertelstunde senkt der Wächter den Tesla
+in Min+PV, der noch mit 16 A lädt, um rund 270 W; diese Grenze bindet nicht, denn ohne PV geht er
+ohnehin auf 5 A, und sie steht nicht im Log. Danach deckt die gemerkte Senkung den Unterschied zur
+festen Grenze von Regel 2 (oben, „Hochrechnung und Senkung“), und den e-Golf in Sofort drosselt der
+Wächter erst ab 18:15, wenn der Tesla mit 5 A lädt. Auch ein Wächter, der Sofort vor Min+PV
+drosselte, bestünde die Prüfung: Seine Senkung des e-Golf um 1 A fiele um 18:00 mit der des
+Phasenwächters zusammen, der den e-Golf neben dem Tesla mit 16 A ebenfalls auf 15 A begrenzt, und
+die Entscheidung nennte dann `phase_limit`, nicht `peak_guard`. Die Reihenfolge der Drosselung
+prüfen `tests/unit/core/control/test_peak_throttle.py` und `tests/property/test_peak_guard.py`.
 
 ### Was das Modell nicht leistet
 

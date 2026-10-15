@@ -141,12 +141,12 @@ Plan 2c-2b (Zuordnungserkennung, Design 2c-2, Abschnitt 7).
     bis 2c-2b nur für den Akku-Sollwert).
   - **Simulator:** Das Modell kennt den Override (ESS folgt ihm, er verfällt nach 300 s, DESS verwirft
     ihn). Acht Szenarien kamen dazu; alle 18 sind in der CI grün (Betriebshandbuch, „Simulator“). Die
-    Regelung brauchte keinen Fix. Drei Szenarien haben einen angepassten Aufbau (unten,
+    Regelung brauchte keinen Fix. Zwei Szenarien haben einen angepassten Aufbau (unten,
     „Bewusst offen gelassen“).
-  - **Gesamtreview und Fix-Welle:** Der Gesamtreview fand zwei wichtige Lücken im 15-min-Wächter
-    (gewollter Netzbezug über der festen Grenze von Regel 2, Boost-Anteil aus der Verteilung der
-    Abrechnung) und zwei Kleinigkeiten; die Fix-Welle hat sie behoben (unter „Bewusst offen
-    gelassen“).
+  - **Gesamtreview, Fix-Welle und Nachrunde:** Der Gesamtreview fand zwei wichtige Lücken im
+    15-min-Wächter (gewollter Netzbezug über der festen Grenze von Regel 2, Boost-Anteil aus der
+    Verteilung der Abrechnung) und zwei Kleinigkeiten; die Fix-Welle hat sie behoben, eine
+    Nachrunde danach zwei Restpunkte der Drosselung (alles unter „Bewusst offen gelassen“).
   - **Entschieden und aufgeschoben:** Die Rulings und die aufgeschobenen Kleinigkeiten stehen unter
     „Bewusst offen gelassen“.
   - **Noch nicht:** die volle Zuordnungserkennung (2c-2b), die Bedienung (2d) und die Planausführung
@@ -156,7 +156,7 @@ Plan 2c-2b (Zuordnungserkennung, Design 2c-2, Abschnitt 7).
   immer gemeinsam aus demselben Stand ausgerollt (gleiche Compose-Datei, gleiche Image-Tags): Die
   UI-Schemas sind streng, eine abweichende Version zeigt auf der System-Seite nur „Unerwartete
   Antwort vom Server“.
-- **Tests:** 5135 Python-Tests, davon 35 Property-Tests mit Hypothesis (6 für die Safety-Schicht,
+- **Tests:** 5149 Python-Tests, davon 35 Property-Tests mit Hypothesis (6 für die Safety-Schicht,
   6 für den Phasenwächter, 12 für den Akku-Sollwert, 6 für den 15-min-Wächter), und 233 UI-Tests;
   Abdeckung 97 % insgesamt und 99 % für `core/safety`, `core/control` und `core/actuators`.
   Geprüft wird mit ruff, mypy strict (auch für den Watchdog), import-linter (4 Verträge), pytest
@@ -194,8 +194,8 @@ Plan 2c-2b (Zuordnungserkennung, Design 2c-2, Abschnitt 7).
   - Plan 2c-2a lief ebenso (subagent-driven): je Task ein Implementierer und ein Reviewer, ein Ledger
     mit Rulings und aufgeschobenen Kleinigkeiten (ihr Inhalt steht unten unter „Bewusst offen
     gelassen“). Von den acht neuen Szenarien des Simulators scheiterten drei in der ersten Fassung; bei
-    keinem lag der Fehler in der Regelung, und die drei sind im Aufbau angepasst (Betriebshandbuch,
-    „Simulator“).
+    keinem lag der Fehler in der Regelung, und die drei wurden im Aufbau angepasst (Betriebshandbuch,
+    „Simulator“). `spitze-15min` startet den Tesla seit der Nachrunde wieder wie geplant.
   - Befunde werden nach ihrer Wirkung neu bewertet. Critical und Important kommen in einen
     Fix-Durchgang, jeder mit einem Test, der vorher scheitert. Minors werden gesammelt und auf
     Wunsch erledigt („bitte die kleinigkeiten erledigen“).
@@ -536,15 +536,18 @@ Demo-Zugänge: `admin`, `gast` (Lesen) und `sicher` (Admin mit TOTP, Geheimnis
         Simulator rund 67 unter schnell wechselnden Wolken, `akku-wolkig`), ob das Rauschen der
         Hauslast das Totband von 200 W übersteigt, und **ob der Wächter bei kleinen Senkungen
         nachdrosselt** (Entscheidungen mit `peak_guard`). Die Drosselung hat kein Totband: Im Modell
-        gab es kein Nachdrosseln aus Rauschen, aber nach einer Drosselung klingt das alte 30-s-Mittel
-        genau mit der Wartezeit von 30 s ab (`SETTLE_S`, eine Sekunde Abstand), und das Modell hat
-        kein Netzrauschen. An der Anlage könnten kleine Nachdrosselungen und eine verzögerte Aufhebung
-        entstehen, die Marge `peak_margin_kw` fängt sie ab. Dann entscheidet der Betreiber, ob ein
-        Totband in die Drosselung kommt (etwa eine Senkung unter 100 W ignorieren). Gewollt sind
-        seit der Fix-Welle Stufen: Wollen die Autos mehr als die feste Grenze von Regel 2 und liegt
-        `P_zul` darunter, verlangt der Wächter je Schritt nur den Unterschied (in `spitze-15min` rund
-        300 W, 20 Entscheidungen mit `peak_guard` an der EVCS in 4440 Schritten; je Viertelstunde der
-        e-Golf in Schritten von 1 A von 16 auf 10 oder 9 A).
+        gab es kein Nachdrosseln aus Rauschen, seit der Nachrunde aber eines aus dem alten Mittel
+        (Boost-Abwandlung von `spitze-15min`, unter „Bewusst offen gelassen“). Nach einer Drosselung
+        klingt das alte 30-s-Mittel genau mit der Wartezeit von 30 s ab (`SETTLE_S`, eine Sekunde
+        Abstand), und das Modell hat kein Netzrauschen. An der Anlage könnten kleine Nachdrosselungen
+        und eine verzögerte Aufhebung entstehen, die Marge `peak_margin_kw` fängt sie ab. Dann
+        entscheidet der Betreiber, ob ein Totband in die Drosselung kommt (etwa eine Senkung unter
+        100 W ignorieren). Stufen sind seit der Nachrunde nicht gewollt: Wollen die Autos mehr als
+        die feste Grenze von Regel 2 und liegt `P_zul` darunter, senkt der Wächter mit Budget einmal
+        um den Unterschied (in `spitze-15min` rund 300 W, 2 Entscheidungen mit `peak_guard` an der
+        EVCS in 4440 Schritten: der e-Golf in der zweiten und dritten Viertelstunde je einmal von 16
+        auf 15 A). Mehrere Entscheidungen mit `peak_guard` in kurzer Folge an derselben Wallbox wären
+        also ein Befund.
      3. **Prüfprotokoll Teil 2, Victron 17.2-4 „Kein Akku ins Auto“,** falls es nicht schon unter
         Punkt 3 bestanden ist; DESS ist hier schon aus. Es prüft genau den Mechanismus des
         Akku-Sollwerts.
@@ -591,8 +594,8 @@ Demo-Zugänge: `admin`, `gast` (Lesen) und `sicher` (Admin mit TOTP, Geheimnis
        kosten einen Neuversuch. Seit 2c-2a kommt hinzu: Startet der Tesla nachts in Min+PV mit 16 A,
        lädt er 90 s mit 16 A, bis der Befehl auf 5 A wirkt. Regel 2 begrenzt den Override auf 8 kW, und
        der Akku liefert den Rest: im Simulator bis zu 5,8 kW in die Autos für 90 s, obwohl die
-       Unterstützung auf 3 kW begrenzt ist (`akku-minpv` und `spitze-15min` starten den Tesla deshalb
-       mit 5 A). Abhilfe: `vehicles.tesla.min_a: 6` vermiede diese Befehle (Design 7.2 legt 5 A fest;
+       Unterstützung auf 3 kW begrenzt ist (`akku-minpv` startet den Tesla deshalb mit 5 A).
+       Abhilfe: `vehicles.tesla.min_a: 6` vermiede diese Befehle (Design 7.2 legt 5 A fest;
        Entscheidung des Betreibers).
     6. **Simulator** — erledigt mit Plan 2c-2a: Das Szenario `schieflast-pv` (PV konstant 12 kW,
        5,5 kW mehr Last auf L1 ab 10 min) lässt das Importziel binden. Der e-Golf geht über `import_limit`
@@ -604,10 +607,10 @@ Demo-Zugänge: `admin`, `gast` (Lesen) und `sicher` (Admin mit TOTP, Geheimnis
        doppelten Hilfen sind zusammengeführt (`held_since` und `lasted` in `timing.py`, `ok_number` in
        `charge_inputs.py`, `PV_SURPLUS` in `charge_modes.py`). Die Zeilenzahlen heute (`wc -l`):
        `charging.py` 895 (vorher 1065; die Grenzen des Wächters und `cars()` kamen dazu, der Plan
-       nannte rund 700), `runtime.py` 1303 (vorher 1289, geplant rund 1200: Die Verdrahtung ist
+       nannte rund 700), `runtime.py` 1296 (vorher 1289, geplant rund 1200: Die Verdrahtung ist
        ausgezogen, dafür kamen die Erwartung des Overrides, das Budget und die Viertelstunde des
-       Wächters dazu), `regulation.py` 263, `regulation_link.py` 302, `battery.py` 602, `peak_guard.py`
-       596, `charge_points.py` 183, `charging_tesla.py` 194 und `last_values.py` 164. `charging.py` und
+       Wächters dazu), `regulation.py` 299, `regulation_link.py` 325, `battery.py` 605, `peak_guard.py`
+       643, `charge_points.py` 183, `charging_tesla.py` 194 und `last_values.py` 164. `charging.py` und
        `runtime.py` sind damit weiter groß; ein weiterer Abbau wäre ein eigener Umbau (etwa die
        Drosselfunktionen aus `peak_guard.py` nach `peak_throttle.py`, siehe „Bewusst offen gelassen“).
 
@@ -907,23 +910,27 @@ den Absätzen „Stand Plan 2c-2a“ der Spec. Hier die Entscheidungen mit Koste
   eine Grenze unter dem Boden von Sofort. Das gilt auch für ein Auto, das geht oder in Boost oder
   Aus wechselt (falls falsch: nach einem Moduswechsel kurz mehr Netzbezug, bis die nächste
   Drosselung nach 30 s greift). Die Senkung je Auto ist nie negativ; ohne Leistung zählt ein
-  gedrosseltes Auto als nicht gefolgt. `peak_guard.py` blieb mit 596 Zeilen ungeteilt (falls falsch:
-  ein späterer Umzug der Drosselfunktionen nach `peak_throttle.py`).
+  gedrosseltes Auto als nicht gefolgt. `peak_guard.py` blieb ungeteilt, nach der Nachrunde mit 643
+  Zeilen (falls falsch: ein späterer Umzug der Drosselfunktionen nach `peak_throttle.py`).
 - **Simulator:** `_Boost` trägt das absolute Ende des Boosts. Die Kennzahl der Akku-Energie im Auto
   überspringt je Entladefolge die ersten `TRANSITION_S` s, ohne den Tesla-Fall. Ein Auffrischen im
   Dry-Run zählt dort als eigener Wert ohne Entscheidung, sonst meldete die Kennzahl falsche
   Wiederholungen.
-- **Szenarien:** Drei haben einen angepassten Aufbau (Betriebshandbuch, „Simulator“), jedes aus
+- **Szenarien:** Zwei haben einen angepassten Aufbau (Betriebshandbuch, „Simulator“), beide aus
   demselben Grund: Ihre Prüfung ließ sich im Modell sonst nicht erfüllen, obwohl die Regelung Plan
-  und Design folgte. `akku-minpv` und `spitze-15min` starten den Tesla bei 5 A
-  (mit 16 A lädt er 90 s voll, Regel 2 kappt bei 8 kW). Die Reihenfolge-Prüfung in `spitze-15min`
-  ist deshalb mit dem Tesla am Mindeststrom trivial erfüllt und im Handbuch so benannt; die
-  Reihenfolge belegen die Unit- und Property-Tests der Drosselung (falls falsch: kein
-  Ende-zu-Ende-Beleg; ein Szenario mit einem PV-Auto über dem Mindeststrom im Wächter wäre nötig).
-  `schieflast-pv` bringt die Last auf L1 erst nach 10 min (Notiz unten).
-- **Kein Totband in der Drosselung:** Im Modell war sie nicht nötig; die Beobachtung an der Anlage
-  steht unter „Offen an der Anlage“, Punkt 4 (falls falsch: kleine Nachdrosselungen und verzögerte
-  Aufhebung, begrenzt durch die Marge).
+  und Design folgte. `akku-minpv` startet den Tesla bei 5 A (mit 16 A lädt er 90 s voll, Regel 2
+  kappt bei 8 kW), `schieflast-pv` bringt die Last auf L1 erst nach 10 min (Notiz unten).
+  `spitze-15min` startete den Tesla bis zur Nachrunde ebenfalls bei 5 A; mit ihren Regeln besteht
+  es alle Prüfungen auch mit 16 A, wie im Plan. Seine Prüfung der Reihenfolge belegt trotzdem wenig
+  und ist im Handbuch so benannt: Den e-Golf drosselt der Wächter erst, wenn der Tesla schon am
+  Mindeststrom lädt, und eine falsche Reihenfolge fiele in der ersten Viertelstunde mit einer
+  Senkung des Phasenwächters zusammen. Die Reihenfolge belegen die Unit- und Property-Tests der
+  Drosselung (falls falsch: kein Ende-zu-Ende-Beleg; ein Szenario mit einem PV-Auto über dem
+  Mindeststrom im Wächter wäre nötig).
+- **Kein Totband in der Drosselung:** Im Modell war sie nicht nötig (seit der Nachrunde gibt es dort
+  eine kleine Nachdrosselung aus dem alten Mittel, unten); die Beobachtung an der Anlage steht unter
+  „Offen an der Anlage“, Punkt 4 (falls falsch: kleine Nachdrosselungen und verzögerte Aufhebung,
+  begrenzt durch die Marge).
 
 Der Gesamtreview von Plan 2c-2a (15.10.2026) fand zwei wichtige Lücken in der Verdrahtung des
 15-min-Wächters und zwei Kleinigkeiten. Die Fix-Welle danach hat alle behoben, die beiden Lücken und
@@ -937,19 +944,17 @@ nachgezogen.
   Autos in Sofort mit zusammen 18 kW wären bei einem Ziel von 10 kW um rund 10 kW gedrosselt worden,
   obwohl der Netzbezug ohnehin bei 8 kW blieb. Jetzt gibt der Kern dem Wächter `W` höchstens bis zu
   dieser Grenze, und solange Victron gesperrt oder nicht steuerbar ist, zählt nur das Mittel. In
-  `spitze-15min` (Ziel 8 kW, `P_zul` knapp unter der Grenze) drosselt der Wächter den e-Golf je
-  Viertelstunde in Stufen von 1 A statt in einem Schritt auf 9 A; der e-Golf lädt 0,5 kWh mehr, der
-  Akku liefert 0,5 kWh mehr, und jede geprüfte Viertelstunde bleibt unter 1,96 kWh (Grenze 2,02).
-  Falls falsch: Liegt `P_zul` unter der Grenze und wollen die Autos mehr als sie, drosselt der
-  Wächter weiter in Stufen, bis `P_zul` über die Grenze steigt, obwohl jede Stufe zuerst nur den Akku
-  entlastet.
+  `spitze-15min` (Ziel 8 kW, `P_zul` knapp unter der Grenze) drosselte der Wächter den e-Golf danach
+  je Viertelstunde in Stufen von 1 A statt in einem Schritt auf 9 A. Diese Stufen und die langsame
+  Senkung ohne Budget, die die Kappung mit sich brachte, hat die Nachrunde beseitigt (unten).
 - **Boost-Anteil mit PV und Akku zuerst an Boost:** Den Netzanteil, den der Wächter für Boost abzieht,
   nahm er aus der Verteilung der Abrechnung, die PV und Akku in der Reihenfolge von `config.yaml`
   verteilt (erst die EVCS). Lud der Tesla in Boost und der e-Golf in Sofort, buchte sie den Netzbezug
   des e-Golf auf den Wall Connector, und der Wächter zog ihn als Boost ab: im Simulator 1,51 kWh je
   Viertelstunde bei einem Ziel von 5 kW, ohne `peak.exceeded`. Jetzt rechnet die Verdrahtung den
   Anteil aus denselben abgeleiteten Größen ein zweites Mal, mit PV und Akku zuerst für die Wallboxen
-  in Boost; dieselbe Probe bleibt bei 1,24 kWh (Test in `tests/integration/test_sim_scenarios.py`).
+  in Boost; dieselbe Probe blieb bei 1,24 kWh, seit der Nachrunde bei 1,20 kWh (unten; Test in
+  `tests/integration/test_sim_scenarios.py`).
   Wer in Boost ist, weiß der Link aus dem letzten Zyklus des Kerns (einen Zyklus alt, so
   entschieden).
 - **Kleinigkeiten:** `battery.override_w` in Health ist der angeforderte Wert vor den Regeln 2 und 4
@@ -959,7 +964,41 @@ nachgezogen.
   der Inbetriebnahme im Kopf des Designs 2c-2 und kleine Korrekturen in dieser Übergabe und im
   Betriebshandbuch.
 - **Offen:** Ein Szenario Ende zu Ende mit einem PV-Auto über seinem Mindeststrom im Wächter würde die
-  trivial erfüllte Prüfung der Reihenfolge in `spitze-15min` schließen (oben, „Szenarien“).
+  Lücke der Prüfung der Reihenfolge in `spitze-15min` schließen (oben, „Szenarien“).
+
+Die Nachrunde zu Plan 2c-2a (15.10.2026) hat die beiden Restpunkte der Drosselung geschlossen, die
+nach der Fix-Welle blieben, jeden mit Tests, die vorher scheiterten; die Präzisierungen 10 und 11
+des Plans, die Spec (7.4), der Kopf des Designs 2c-2 und das Betriebshandbuch sind nachgezogen.
+
+- **Senkung bei einem Ziel unter der festen Grenze:** Mit der Kappung bei `C − Basis` blieb die
+  verlangte Senkung `C − P_zul`, solange die Autos mehr als die feste Grenze `C` wollten. Mit Budget
+  für den Akku senkte der Wächter so nach jeder Wartezeit erneut um diesen Unterschied und nahm dem
+  Akku, was er nach Entscheidung 3 über `C` liefert; ohne Budget hält Regel 2 den Override bei `C`,
+  und der Netzbezug lag minutenlang über `P_zul`, während der Wächter in Stufen senkte. Jetzt
+  bekommt der Wächter `W` ungekappt und kennt `C` selbst. Mit Budget rechnet er mit dem Netzbezug
+  ohne seine eigenen, gemerkten Senkungen und senkt insgesamt nur um den Teil unter `C`, der über
+  `P_zul` liegt, und das einmal; ohne Budget senkt er in einem Schritt um alles, was über `P_zul`
+  liegt. In `spitze-15min` gibt es statt 20 Entscheidungen mit `peak_guard` an der EVCS (Stufen bis
+  10 oder 9 A) noch 2, je einmal von 16 auf 15 A; der e-Golf lädt dort 8,85 statt 7,33 kWh, der
+  Akku liefert 6,86 statt 5,24 kWh (mit dem alten Aufbau, den Tesla bei 5 A, wären es 8,76 und
+  6,58 kWh), und die geprüften Viertelstunden liegen bei 1,961, 1,964 und 1,964 kWh (vorher 1,955,
+  1,918 und 1,918, Grenze 2,02). Falls falsch: Eine gemerkte Senkung zählt auch, wenn ihre Grenze
+  nicht mehr bindet, etwa beim Tesla, der von selbst auf 5 A ging; den Unterschied von höchstens
+  `C − P_zul` liefert dann bis zum Ende der Viertelstunde der Akku.
+- **Drosselung bei der echten Leistung:** Ein Auto mit Grenze sank bisher von der Grenze aus. Lag
+  sie weit über seiner Leistung, etwa beim Tesla in Min+PV, den der Wächter bei 16 A drosselte und
+  der ohne PV inzwischen mit 5 A lädt, senkte jede weitere Drosselung nur diese Grenze, ohne
+  Wirkung. Jetzt setzt sie beim kleineren von Grenze und Leistung an: Der Tesla an seinem Boden
+  wird übersprungen, und die Senkung geht an den e-Golf. Eine Folge zeigt die Boost-Abwandlung von
+  `spitze-15min` (Ziel 5 kW): Dort liegt der Netzbezug 3 s lang über dem Override, bis der e-Golf
+  seiner ersten Grenze folgt, und 30 s später verlangt das Mittel daraus noch 93 W. Diese Senkung
+  fiel vorher in den Abstand zwischen der Grenze (4711 W) und dem Strom in ganzen Ampere (10 A,
+  4600 W); jetzt geht der e-Golf von 10 auf 9 A, und die Viertelstunde liegt bei 1,20 statt
+  1,24 kWh. Falls falsch: Eine kleine Senkung aus dem alten Mittel kostet an der Anlage ein Ampere
+  bis zum Aufheben; ein Totband in der Drosselung (Punkt 4 unter „Offen an der Anlage“) finge sie.
+- **`spitze-15min` mit 16 A:** Das Szenario startet den Tesla wieder wie im Plan und besteht alle
+  Prüfungen; die erste Senkung der Viertelstunde ab 18:00 trifft dort den Tesla, den e-Golf erst
+  die ab 18:15. Was die Prüfung der Reihenfolge damit belegt, steht oben unter „Szenarien“.
 
 Notizen für später aus Plan 2c-2a:
 
