@@ -943,3 +943,36 @@ def test_a_second_session_suspends_a_detection_resting_on_home_assistant(cfg) ->
     # an der EVCS ist dann jedes Fahrzeug ausgeschlossen: ein erkannter Gast
     evcs_ = states[320].wallboxes["evcs"]
     assert (evcs_.occupant, evcs_.kind) == ("guest@evcs", AssignmentKind.DETECTED)
+
+
+# Abfahrt mit veraltetem Tessie-Wert (Gesamtreview I-1)
+
+LEFT_S = 600  # da steckt der Tesla am Wall Connector ab und fährt
+
+
+def departing_tesla(s):
+    """Tessie fragt alle 30 s ab und meldet den Tesla noch 90 s nach ``LEFT_S`` angesteckt."""
+    polled = s - s % 30
+    return tesla(plugged=30 <= polled < LEFT_S + 90, plugged_at=T0 + timedelta(seconds=polled))
+
+
+def test_a_departing_tesla_is_never_detected_at_the_evcs(cfg) -> None:
+    # Der e-Golf steckt ab 1 s an der EVCS und lädt nicht, der Tesla ab 2 s am Wall Connector. Bei
+    # 600 s steckt der Tesla ab und fährt. Ab 660 s stützen ihn Tessie und Ausschluss an der EVCS
+    # wieder, aber nur 30 s lang: Dann meldet Tessie ihn abgesteckt.
+    a = Assignment(cfg, started=T0)
+    update(a, 0, evcs_obs=evcs(connected=False), tesla_obs=departing_tesla(0))
+    for s in range(1, 900):
+        state = update(
+            a,
+            s,
+            twc_obs=twc(connected=2 <= s < LEFT_S),
+            tesla_obs=departing_tesla(s),
+            homes={"egolf": True},
+        )
+        assert (state.wallboxes["evcs"].occupant, state.wallboxes["evcs"].kind) == (
+            "egolf",
+            AssignmentKind.DEFAULT,
+        ), s
+        assert state.vehicles["tesla"].wallbox != "evcs", s
+        assert not state.unclear, s

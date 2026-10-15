@@ -1114,3 +1114,46 @@ def test_later_commands_of_a_detected_car_carry_no_reason(cfg) -> None:  # Präz
     assert [(t, x.command) for t, x in loaded] == [
         (100, Command("wallbox.evcs", CURRENT, 8.0, reasons=("mode_now", "phase_limit")))
     ]
+
+
+def test_a_departing_tesla_gets_no_command_from_a_stale_tessie_value(cfg) -> None:  # Gesamtreview
+    # Der e-Golf steckt an der EVCS und lädt nicht (PV-Überschuss, abends ohne PV), der Tesla in
+    # Sofort steckt am Wall Connector. Bei 600 s steckt er ab und fährt; Tessie fragt alle 30 s ab
+    # und meldet ihn noch 90 s angesteckt. Der Tesla wird an der EVCS nie erkannt: Er bekommt dort
+    # kein max_a, und die EVCS lädt nicht in seinem Modus.
+    left_s = 600
+
+    def tessie(s):
+        polled = s - s % 30
+        return tesla(plugged=30 <= polled < left_s + 90, plugged_at=T0 + timedelta(seconds=polled))
+
+    intent = Intent(
+        version=1,
+        control=True,
+        vehicles={
+            "tesla": VehicleIntent(mode=ChargeMode.NOW),
+            "egolf": VehicleIntent(mode=ChargeMode.PV),
+        },
+    )
+    found = run(
+        controller(cfg),
+        cfg,
+        900,
+        make=tesla_inputs,
+        intent=intent,
+        grid_obs=grid(grid_w=500.0),
+        tesla_obs=tessie,
+        twc_obs=lambda s: twc(connected=2 <= s < left_s),
+        evcs_obs=lambda s: evcs(connected=s >= 1),
+        homes={"egolf": True},
+    )
+    assert [x for t, x in found if "assignment_detected" in x.command.reasons] == []
+    # nach der Abfahrt nur „Laden aus“, sobald Tessie ihn abgesteckt meldet (wie in 2c-1)
+    assert [
+        (t, x.command) for t, x in found if t >= left_s and x.command.actuator == "vehicle.tesla"
+    ] == [(690, Command("vehicle.tesla", CHARGING, False, reasons=("mode_now",)))]
+    assert [
+        (t, x.command)
+        for t, x in found
+        if x.command.actuator == "wallbox.evcs" and "mode_now" in x.command.reasons
+    ] == []

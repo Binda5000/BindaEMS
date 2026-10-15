@@ -30,6 +30,21 @@ Tessie fragt ein abgestecktes Auto nur alle 600 s ab und erfährt vom Anstecken 
 des Vorgangs nur mit Werten, die mindestens ``TESSIE_SETTLE_S`` danach abgefragt wurden. Die
 zeitliche Korrelation misst dagegen gerade das Intervall zwischen zwei Meldungen von Tessie.
 
+**Ende eines Vorgangs:** Präzisierung 3 gilt auch für Enden. Endet an einer Wallbox ein Vorgang,
+stützen Tessie und Ausschluss ein Fahrzeug an einer anderen Wallbox erst wieder mit einem Wert, der
+mindestens ``TESSIE_SETTLE_S`` nach diesem Ende abgefragt wurde (``plugged_at``, Wanduhr); ohne
+``plugged_at`` stützen sie nach einem gemerkten Ende nicht mehr. Ein Ende ist der Wegfall der
+Wallbox aus ``sessions`` oder ein neuer Beginn an ihr; gemerkt wird je Wallbox das letzte. Ein
+Ausschluss durch Tessie gilt sofort; Stromvergleich, zeitliche Korrelation und Home Assistant, das
+jede Änderung sofort meldet, bleiben, wie sie sind. Grund: Fährt der Tesla vom Wall Connector weg,
+meldet Tessie ihn bis zur nächsten Abfrage (alle 60 s, solange er angesteckt nicht lädt) noch zu
+Hause und angesteckt. An der EVCS, an der der e-Golf steckt und nicht lädt, stützten ihn dann
+Tessie und Ausschluss; nach 60 s wäre er dort erkannt, bekäme ``max_a``, und die EVCS lüde in
+seinem Modus. Kosten, falls die Regel falsch ist: Eine Erkennung, die auf Tessie und Ausschluss
+beruht, kommt nach dem Ende eines Vorgangs an einer anderen Wallbox erst 60 s nach der ersten
+Abfrage, die mindestens ``TESSIE_SETTLE_S`` nach dem Ende liegt; bis dahin bleibt das Fahrzeug
+angenommen.
+
 Stromvergleich und zeitliche Korrelation sagen nichts über ein Fahrzeug, das Tessie nicht zu Hause
 sieht (``at_home`` falsch; unbekannt zählt nicht als woanders): Es steht an keiner Wallbox der
 Anlage, und Tessie schließt es dort ohnehin aus. Lädt ein Auto an einer fremden Säule mit demselben
@@ -69,6 +84,8 @@ class Clue(StrEnum):
     Der Wert ist sein Name im Health. ``CURRENT`` und ``TIMING`` gibt es nicht für ein Fahrzeug, das
     Tessie nicht zu Hause sieht. ``TESSIE`` und ``HOME`` stützen nur nach der Elimination: wenn
     ``CURRENT`` oder ``PHASES`` das Fahrzeug an jeder anderen Wallbox mit Vorgang ausschließen.
+    ``TESSIE`` und ``ELSEWHERE`` stützen nach dem Ende eines Vorgangs an einer anderen Wallbox erst
+    mit einem Wert, der ``TESSIE_SETTLE_S`` danach abgefragt wurde.
     """
 
     TESSIE = "tessie"  # Tessie sieht das Fahrzeug zu Hause und angesteckt, oder sicher nicht
@@ -153,8 +170,9 @@ class ClueTracker:
 
     Der Zustand lebt nur im Speicher: seit wann Stromvergleich (je Wallbox und Fahrzeug, mit „passt“
     oder „passt nicht“) und Phasen-Signatur (je Wallbox, mit der Zahl der Phasen) gelten, je
-    Fahrzeug mit Tessie das Fenster, in dem es angesteckt wurde, und je Wallbox die Beginne ihrer
-    Vorgänge der letzten ``STARTS_KEEP_S``. Nicht für mehrere Threads gedacht.
+    Fahrzeug mit Tessie das Fenster, in dem es angesteckt wurde, je Wallbox die Beginne ihrer
+    Vorgänge der letzten ``STARTS_KEEP_S``, die Vorgänge des vorigen Zyklus und je Wallbox das
+    letzte Ende eines Vorgangs. Nicht für mehrere Threads gedacht.
     """
 
     def __init__(self, cfg: Config) -> None:
@@ -165,6 +183,8 @@ class ClueTracker:
             key: _Window() for key, vehicle in cfg.vehicles.items() if vehicle.tessie is not None
         }
         self._starts: dict[str, list[datetime]] = {key: [] for key in cfg.wallboxes}
+        self._running: dict[str, datetime | None] = {}  # die Vorgänge des vorigen Zyklus
+        self._ends: dict[str, datetime] = {}  # je Wallbox das letzte Ende auf der Wanduhr
 
     def update(
         self,
@@ -185,7 +205,8 @@ class ClueTracker:
         Assistant es zu Hause meldet (``None``: unbekannt). Alle haben die Schlüssel aus
         ``config.yaml``. Der Ablauf:
 
-        1. Die Beginne der Vorgänge merken und das Fenster jedes Fahrzeugs mit Tessie fortführen.
+        1. Die Beginne und Enden der Vorgänge merken und das Fenster jedes Fahrzeugs mit Tessie
+           fortführen.
         2. Die Zeiten von Stromvergleich und Phasen-Signatur fortführen. Fehlt die Bedingung einen
            Zyklus lang oder ändert sich ihr Wert, beginnen sie neu; ohne Vorgang gilt keine. Für
            ein Fahrzeug, das Tessie nicht zu Hause sieht, gilt kein Stromvergleich.
@@ -195,9 +216,12 @@ class ClueTracker:
            Hause sieht, nichts. Tessie und Home Assistant stützen nur, wenn Stromvergleich oder
            Phasen-Signatur das Fahrzeug an jeder anderen Wallbox mit Vorgang ausschließen
            (Elimination, ``_measured_out`` und ``_home_verdict``); die Zeiten dafür sind in Schritt
-           2 schon fortgeführt.
+           2 schon fortgeführt. Tessie und Ausschluss stützen nach dem Ende eines Vorgangs an einer
+           anderen Wallbox erst mit einem Wert, der ``TESSIE_SETTLE_S`` danach abgefragt wurde
+           (``_after_ends``).
         """
         self._remember_starts(wall_now, sessions)
+        self._remember_ends(wall_now, sessions)
         for key, window in self._windows.items():
             window.observe(vehicles[key])
         self._advance(now, sessions, wallboxes, vehicles)
@@ -213,10 +237,11 @@ class ClueTracker:
             )
             for vehicle_key, vehicle in self._cfg.vehicles.items():
                 tessie = vehicles[vehicle_key] if vehicle.tessie is not None else NO_VEHICLE_DATA
-                counts = _settled(start, tessie)
+                at_home = home_and_plugged(tessie) if _settled(start, tessie) else None
+                if at_home is True and not self._after_ends(wallbox_key, tessie):
+                    at_home = None  # vor dem Ende eines Vorgangs anderswo abgefragt: stützt nicht
                 # Ausschluss: zu Hause und angesteckt, und jede andere Wallbox ist leer
-                elsewhere = counts and others_empty and home_and_plugged(tessie) is True
-                at_home = home_and_plugged(tessie) if counts else None
+                elsewhere = others_empty and at_home is True
                 # Elimination: Strom oder Phasen schließen es an jeder anderen Wallbox aus
                 eliminated = all(
                     self._measured_out(now, other, vehicle_key, vehicle.phases)
@@ -253,6 +278,30 @@ class ClueTracker:
                 for start in starts
                 if start == running or (wall_now - start).total_seconds() <= STARTS_KEEP_S
             ]
+
+    def _remember_ends(self, wall_now: datetime, sessions: Mapping[str, datetime | None]) -> None:
+        """Merkt sich je Wallbox das letzte Ende eines Vorgangs, auf der Wanduhr ``wall_now``.
+
+        Ein Vorgang endet, wenn seine Wallbox aus ``sessions`` fällt oder dort ein anderer Beginn
+        steht als im vorigen Zyklus.
+        """
+        for key, start in self._running.items():
+            if key not in sessions or sessions[key] != start:
+                self._ends[key] = wall_now
+        self._running = dict(sessions)
+
+    def _after_ends(self, wallbox_key: str, tessie: VehicleObs) -> bool:
+        """Ob Tessies Wert nach jedem gemerkten Ende eines Vorgangs an einer anderen Wallbox zählt.
+
+        Das tut er, wenn seine Abfrage (``plugged_at``) mindestens ``TESSIE_SETTLE_S`` nach dem
+        Ende lag; ohne ``plugged_at`` zählt er nach keinem Ende.
+        """
+        ends = [end for key, end in self._ends.items() if key != wallbox_key]
+        if not ends:
+            return True
+        if tessie.plugged_at is None:
+            return False
+        return (tessie.plugged_at - max(ends)).total_seconds() >= TESSIE_SETTLE_S
 
     def _advance(
         self,

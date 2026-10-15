@@ -767,3 +767,120 @@ def test_tessie_and_home_assistant_still_exclude_at_every_session(cfg, car) -> N
         for wallbox in ("evcs", "twc")
         for vehicle, clue in (("tesla", Clue.TESSIE), ("egolf", Clue.HOME))
     }
+
+
+# Abfahrt: Endet an einer Wallbox ein Vorgang, stützen Tessie und Ausschluss ein Fahrzeug an einer
+# anderen Wallbox erst wieder mit einem Wert, der mindestens 60 s nach dem Ende abgefragt wurde
+# (Präzisierung 3, auf Enden angewandt; Gesamtreview I-1)
+
+LEFT_S = 100  # da steckt der Tesla am Wall Connector ab und fährt
+PARKED = {"evcs": None, "twc": None}  # der e-Golf an der EVCS, der Tesla am Wall Connector
+
+
+def departure_step(tracker, s, value, homes=None):
+    """Die Sekunde ``s`` der Abfahrt: Bis ``LEFT_S`` stehen beide Autos, dann ist der Wall
+    Connector leer; der e-Golf lädt nicht. ``value(s)`` ist der Wert, den Tessie meldet."""
+    there = s < LEFT_S
+    return clues(
+        tracker,
+        s,
+        sessions=PARKED if there else AT_EVCS,
+        twc_obs=twc(connected=there),
+        tesla_obs=value(s),
+        homes=homes,
+    )
+
+
+def departure(tracker, until_s, value, homes=None):
+    """Die Abfahrt von 0 s bis ``until_s``; zurück kommen die Indizien der letzten Sekunde."""
+    for s in range(until_s + 1):
+        found = departure_step(tracker, s, value, homes)
+    return found
+
+
+def stale(polled_s):
+    """Tessie meldet den Tesla zu Hause und angesteckt: ab ``polled_s`` mit dem Wert dieser
+    Abfrage, davor mit dem von 0 s."""
+    return lambda s: tesla(plugged=True, plugged_at=at(polled_s if s >= polled_s else 0))
+
+
+def supported(found):
+    """Was Tessie und Ausschluss an der EVCS über den Tesla sagen."""
+    return {e for e in of(found, Clue.TESSIE) | of(found, Clue.ELSEWHERE) if e.wallbox == "evcs"}
+
+
+@pytest.mark.parametrize(
+    ("polled_s", "supports"),
+    [
+        pytest.param(LEFT_S - 30, False, id="vor dem Ende abgefragt"),
+        pytest.param(LEFT_S + 59, False, id="59 s nach dem Ende"),
+        pytest.param(LEFT_S + 60, True, id="60 s nach dem Ende"),
+        pytest.param(LEFT_S + 90, True, id="90 s nach dem Ende"),
+    ],
+)
+def test_after_a_departure_tessie_supports_only_with_a_value_polled_60_s_later(
+    cfg, polled_s, supports
+) -> None:
+    # Der Tesla steckt bei 100 s am Wall Connector ab und fährt; Tessie meldet ihn noch 90 s zu
+    # Hause und angesteckt. An der EVCS steht der e-Golf und lädt nicht.
+    found = departure(ClueTracker(cfg), LEFT_S + 90, stale(polled_s))
+    both = {ev("evcs", "tesla", Clue.TESSIE), ev("evcs", "tesla", Clue.ELSEWHERE)}
+    assert supported(found) == (both if supports else set())
+
+
+def test_after_a_departure_tessie_never_supports_within_60_s(cfg) -> None:
+    # Tessie fragt in jedem Zyklus ab und meldet den Tesla weiter angesteckt
+    tracker, value = ClueTracker(cfg), lambda s: tesla(plugged=True, plugged_at=at(s))
+    for s in range(LEFT_S + 60):
+        found = departure_step(tracker, s, value)
+        if s >= LEFT_S:
+            assert supported(found) == set()
+    assert ev("evcs", "tesla", Clue.ELSEWHERE) in departure_step(tracker, LEFT_S + 60, value)
+
+
+def test_after_a_departure_tessie_still_excludes_at_once(cfg) -> None:
+    # 10 s nach dem Ende meldet Tessie den Tesla abgesteckt: Das schließt ihn an der EVCS sofort aus
+    def value(s):
+        if s < LEFT_S + 10:
+            return tesla(plugged=True, plugged_at=at(0))
+        return tesla(plugged_at=at(LEFT_S + 10))
+
+    found = departure(ClueTracker(cfg), LEFT_S + 10, value)
+    assert supported(found) == {ev("evcs", "tesla", Clue.TESSIE, False)}
+
+
+def test_without_a_timestamp_tessie_supports_no_more_after_an_end(cfg) -> None:
+    found = departure(ClueTracker(cfg), LEFT_S + 300, lambda s: tesla(plugged=True))
+    assert supported(found) == set()
+
+
+def test_a_new_start_at_the_same_wallbox_ends_its_session(cfg) -> None:
+    # Am Wall Connector lädt ein Auto auf zwei Phasen: Ab 60 s schließen die Phasen den Tesla dort
+    # aus, und Tessie stützt ihn an der EVCS. Bei 100 s beginnt am Wall Connector ein neuer
+    # Vorgang, ohne einen Zyklus ohne Fahrzeug dazwischen. Auch das ist ein Ende: Tessies Wert von
+    # 90 s stützt nicht mehr, einer von 160 s wieder.
+    tracker = ClueTracker(cfg)
+    two = twc(connected=True, charging=True, phase_a=TWO)
+
+    def step(s, start_s, polled_s):
+        sessions = {"evcs": None, "twc": at(start_s)}
+        car = tesla(plugged=True, plugged_at=at(polled_s))
+        return supported(clues(tracker, s, sessions=sessions, twc_obs=two, tesla_obs=car))
+
+    for s in range(100):
+        found = step(s, 10, 0)
+    assert found == {ev("evcs", "tesla", Clue.TESSIE)}
+    assert all(step(s, 100, 90) == set() for s in range(100, 160))
+    assert step(160, 100, 160) == {ev("evcs", "tesla", Clue.TESSIE)}
+
+
+def test_home_assistant_needs_no_settling(cfg) -> None:
+    # Home Assistant meldet jede Änderung sofort: Es stützt den e-Golf an einer Wallbox, deren
+    # Vorgang gerade begann (Präzisierung 3), und gleich nach dem Ende eines Vorgangs an der anderen
+    begun = clues(ClueTracker(cfg), 200, sessions={"evcs": at(200)}, homes={"egolf": True})
+    assert of(begun, Clue.HOME) == {ev("evcs", "egolf", Clue.HOME)}
+    tracker, home = ClueTracker(cfg), {"egolf": True}
+    before = departure(tracker, LEFT_S - 1, stale(0), homes=home)
+    assert of(before, Clue.HOME) == set()  # bei zwei Vorgängen erst nach der Elimination
+    after = departure_step(tracker, LEFT_S, stale(0), homes=home)
+    assert of(after, Clue.HOME) == {ev("evcs", "egolf", Clue.HOME)}
