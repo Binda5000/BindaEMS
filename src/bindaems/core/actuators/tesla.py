@@ -54,7 +54,8 @@ FAILURE_WINDOW: Final = timedelta(minutes=15)  # Zählfenster und Dauer des Zust
 # Prüfung eines bestätigten Stroms im Tessie-Cache. Eine Meldung zählt erst SETTLE_S nach der
 # Bestätigung: Bis dahin, so die noch ungemessene Annahme, hat Tessies Cache das Auto eingeholt.
 # Bis VERIFY_S wartet die Prüfung auf eine solche Meldung. Der Adapter fragt beim Laden alle 30 s
-# ab, angesteckt und ohne zu laden alle 60 s (``poll_interval_s`` in ``core.adapters.tessie``).
+# ab, angesteckt und ohne zu laden alle 60 s (``poll_interval_s`` in ``core.adapters.tessie``;
+# zu Hause auch abgesteckt, nach ``poll_soon`` frühestens 10 s nach der letzten Abfrage).
 # In der Startfolge geht der Strom hinaus, bevor das Auto lädt: Das Fenster von 65 s fängt darum
 # auch eine 60-s-Abfrage, solange sie höchstens 5 s dauert (10 s + 60 s + 5 s = 75 s); beim Laden
 # bleibt reichlich Luft. Ohne das ginge ein verlorener erster Befehl dort oft unbemerkt durch.

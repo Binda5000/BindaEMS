@@ -9,10 +9,11 @@ from __future__ import annotations
 
 import asyncio
 import math
+import time
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import replace
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, Final
 
 import httpx
 from pydantic import SecretStr
@@ -28,6 +29,7 @@ FRESHNESS_S = 900.0
 TIMEOUT_S = 20.0
 AUTH_RETRY_S = 900.0
 EARTH_RADIUS_M = 6_371_000.0
+MIN_GAP_S: Final = 10.0  # so lange nach der letzten Abfrage frühestens die nächste (``poll_soon``)
 
 
 def haversine_m(a: LatLon, b: LatLon) -> float:
@@ -80,10 +82,15 @@ def parse_state(data: Mapping[str, Any], home: LatLon, radius_m: float) -> dict[
     }
 
 
-def poll_interval_s(charging_state: str | None, plugged: bool | None) -> float:
+def poll_interval_s(
+    charging_state: str | None, plugged: bool | None, at_home: bool | None
+) -> float:
+    """Die Wartezeit bis zur nächsten Abfrage: 30 s beim Laden, 60 s angesteckt, 60 s abgesteckt
+    zu Hause (``at_home`` wahr; ein Auto, das gleich ansteckt, soll nicht 10 min warten), sonst
+    600 s."""
     if charging_state == "Charging":
         return 30.0
-    if plugged:
+    if plugged or at_home:
         return 60.0
     return 600.0
 
@@ -99,6 +106,7 @@ class TessieAdapter:
         client: httpx.AsyncClient,
         *,
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+        monotonic: Callable[[], float] = time.monotonic,
     ) -> None:
         if cfg.tessie is None:
             raise ValueError(f"Fahrzeug {name}: keine Tessie-Konfiguration")
@@ -111,6 +119,9 @@ class TessieAdapter:
         self._store = store
         self._client = client
         self._sleep = sleep
+        self._monotonic = monotonic
+        self._soon = asyncio.Event()
+        self._last_poll = monotonic()
         self._health = AdapterHealth(name=self._source)
         self._status = StatusLog(self._source)
         self._backoff = Backoff(initial=60.0, maximum=900.0)
@@ -119,14 +130,43 @@ class TessieAdapter:
     def health(self) -> AdapterHealth:
         return replace(self._health)
 
+    def poll_soon(self) -> None:
+        """Die laufende Wartezeit endet, frühestens ``MIN_GAP_S`` nach der letzten Abfrage.
+
+        Die Laufzeit ruft es, wenn an einer Wallbox ein Fahrzeug erscheint: Der Adapter soll nicht
+        bis zur nächsten regulären Abfrage warten, bis er das Angesteckte sieht. Mehrere Aufrufe
+        in einer Wartezeit zählen als einer.
+        """
+        self._soon.set()
+
     async def run(self) -> None:
         try:
             while True:
-                await self._sleep(await self._poll())
+                delay = await self._poll()
+                self._last_poll = self._monotonic()
+                await self._wait(delay)
         except asyncio.CancelledError:
             self._store.set_connected(self._source, False)
             self._health.connected = False
             raise
+
+    async def _wait(self, delay: float) -> None:
+        """Wartet ``delay`` oder bis ``poll_soon`` ruft; dann noch bis ``MIN_GAP_S`` nach der
+        letzten Abfrage."""
+        sleeper = asyncio.ensure_future(self._sleep(delay))
+        woken = asyncio.ensure_future(self._soon.wait())
+        try:
+            await asyncio.wait({sleeper, woken}, return_when=asyncio.FIRST_COMPLETED)
+            interrupted = not sleeper.done()
+        finally:
+            for task in (sleeper, woken):
+                task.cancel()
+            await asyncio.gather(sleeper, woken, return_exceptions=True)
+        if interrupted:
+            gap_s = MIN_GAP_S - (self._monotonic() - self._last_poll)
+            if gap_s > 0:
+                await self._sleep(gap_s)
+        self._soon.clear()
 
     async def _poll(self) -> float:
         """Eine Abfrage; liefert die Wartezeit bis zur nächsten."""
@@ -161,10 +201,11 @@ class TessieAdapter:
         self._status.connected()
         self._health.last_ok = datetime.now(UTC)
         self._backoff.reset()
-        charging, plugged = values["charging_state"], values["plugged"]
+        charging, plugged, at_home = values["charging_state"], values["plugged"], values["at_home"]
         return poll_interval_s(
             charging if isinstance(charging, str) else None,
             plugged if isinstance(plugged, bool) else None,
+            at_home if isinstance(at_home, bool) else None,
         )
 
     def _fail(self, message: str, retry_in_s: float) -> None:

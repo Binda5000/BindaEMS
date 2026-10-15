@@ -392,7 +392,9 @@ def test_tessie_values_change_only_at_poll_times(model, store, clock) -> None:
 
 
 @pytest.mark.parametrize(
-    ("plugged", "charging", "interval"), [(True, True, 30), (True, False, 60), (False, False, 600)]
+    ("plugged", "charging", "interval"),
+    # Das Auto der Simulation steht immer am Ort der Anlage: Abgesteckt fragt Tessie alle 60 s ab
+    [(True, True, 30), (True, False, 60), (False, False, 60)],
 )
 def test_tessie_polls_like_the_adapter(model, store, clock, plugged, charging, interval) -> None:
     tesla = model.teslas["tesla"]

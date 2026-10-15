@@ -17,6 +17,7 @@ from bindaems.core.control.charge_inputs import (
     WallboxObs,
     homes,
     observe,
+    wallbox_connected,
 )
 from bindaems.core.state.derived import derive
 from bindaems.shared.control import CommandKind, Intent
@@ -593,3 +594,18 @@ def test_plugged_at_is_the_time_of_the_value_not_of_the_snapshot(cfg) -> None:
     later = replace(snap({"vehicle.tesla.plugged": True}, ts=at), ts=at + timedelta(seconds=60))
     _, _, vehicles = observe(later, derive(later, cfg), cfg, lambda source: True)
     assert vehicles["tesla"].plugged_at == at
+
+
+def test_wallbox_connected_reads_each_wallbox_as_the_observations_do(cfg) -> None:
+    values = {"wallbox.evcs.status": 1, "wallbox.twc.vehicle_connected": False}
+    assert wallbox_connected(snap(values), cfg) == {"evcs": True, "twc": False}
+    _, wallboxes, _ = obs(cfg, values)
+    assert wallbox_connected(snap(values), cfg) == {
+        key: wallbox.connected for key, wallbox in wallboxes.items()
+    }
+
+
+def test_wallbox_connected_is_unknown_without_a_reading(cfg) -> None:
+    assert wallbox_connected(snap({}), cfg) == {"evcs": None, "twc": None}
+    stale = {"wallbox.evcs.status": 0}
+    assert wallbox_connected(snap(stale, quality=Quality.STALE), cfg)["evcs"] is None

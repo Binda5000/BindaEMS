@@ -1,6 +1,7 @@
 import asyncio
 from datetime import timedelta
 
+import httpx
 import pytest
 from fastapi.testclient import TestClient
 from pydantic import SecretStr
@@ -9,6 +10,7 @@ from tests.helpers import INTENT_CHARGING_DEFAULTS, FakeSink
 from tests.integration.conftest import TOKEN
 
 from bindaems.core.__main__ import _run, main
+from bindaems.core.adapters.tessie import TessieAdapter
 from bindaems.core.api.app import create_api
 from bindaems.core.control.operating import OperatingStateMachine
 from bindaems.core.persistence.files import read_json, write_json_atomic
@@ -376,3 +378,37 @@ def test_unreadable_intent_file_starts_without_intent(runtime_env, tmp_path) -> 
     rt, _, _ = runtime_env()
     assert rt.intent() is None
     assert rt.intents.load_problem is not None
+
+
+def test_new_vehicle_at_a_wallbox_triggers_a_tessie_poll(runtime_env, cfg, monkeypatch) -> None:
+    signal = "wallbox.twc.vehicle_connected"
+    state: dict = {signal: None}  # Zyklus 0: unbekannt
+    rt, _, clock = runtime_env(state=state)
+    adapter = TessieAdapter(
+        "tesla",
+        cfg.vehicles["tesla"],
+        cfg.site.location,
+        SecretStr("tok"),
+        rt.store,
+        httpx.AsyncClient(),
+    )
+    polls: list[str] = []
+    monkeypatch.setattr(adapter, "poll_soon", lambda: polls.append("soon"))
+    rt.adapters.append(adapter)
+
+    def cycle(value) -> int:
+        state[signal] = value
+        rt.cycle_once()
+        clock.advance(1)
+        return len(polls)
+
+    assert cycle(None) == 0
+    assert cycle(True) == 0  # unbekannt -> wahr zählt nicht
+    assert cycle(False) == 0
+    assert cycle(True) == 1  # falsch -> wahr: ein Fahrzeug erscheint
+    assert cycle(True) == 1  # es bleibt: kein weiterer Aufruf
+    assert cycle(False) == 1
+    assert cycle(None) == 1
+    assert cycle(True) == 1  # unbekannt -> wahr zählt nicht
+    assert cycle(False) == 1
+    assert cycle(True) == 2

@@ -88,6 +88,7 @@ from bindaems.core.checks.competitors import detect_competitors
 from bindaems.core.checks.selfcheck import CRITICAL_SIGNALS, FRESH_FOR, CheckResult, run_selfcheck
 from bindaems.core.checks.values import number
 from bindaems.core.control.actuator import Actuator, Capabilities, matches
+from bindaems.core.control.charge_inputs import wallbox_connected
 from bindaems.core.control.context import decision_inputs, safety_context
 from bindaems.core.control.executor import CommandExecutor, WriteResult
 from bindaems.core.control.foreign import (
@@ -492,6 +493,8 @@ class CoreRuntime:
         self._slow_cycles = 0
         self._overrun_since: datetime | None = None
         self._last_state: dict[str, Any] | None = None
+        # Stand der Wallboxen („verbindet ein Fahrzeug“) im letzten Zyklus (``_notice_arrivals``)
+        self._wallbox_connected: dict[str, bool | None] = {}
         self._run_task: asyncio.Task[None] | None = None
         self._api_server: _ApiServer | None = None
 
@@ -719,6 +722,7 @@ class CoreRuntime:
         now = self._clock.now()
         snow = self._safety_clock.now()
         snap = self.store.snapshot()
+        self._notice_arrivals(snap)
         derived = derive(snap, self._cfg)
         plausibility = self._plausibility.evaluate(snap, derived, now)
         # für die Abrechnung und den 15-min-Wächter; ``None`` heißt Bilanz unbekannt
@@ -770,6 +774,23 @@ class CoreRuntime:
         )
         # als Letztes: Eine Ausnahme in einem früheren Schritt lässt den Heartbeat ausfallen
         self._heartbeat(snow)
+
+    def _notice_arrivals(self, snap: Snapshot) -> None:
+        """Erscheint an einer Wallbox ein Fahrzeug, fragen die Tessie-Adapter bald ab.
+
+        Gilt bei einem Wechsel von falsch auf wahr gegenüber dem letzten Zyklus; ein Wert, der
+        unbekannt war oder wird, zählt nicht (Plan 2d, Präzisierung 11).
+        """
+        now = wallbox_connected(snap, self._cfg)
+        arrived = any(
+            connected is True and self._wallbox_connected.get(key) is False
+            for key, connected in now.items()
+        )
+        self._wallbox_connected = now
+        if arrived:
+            for adapter in self.adapters:
+                if isinstance(adapter, TessieAdapter):
+                    adapter.poll_soon()
 
     def _readback(self, snap: Snapshot, now: datetime, snow: datetime) -> dict[_Key, CommandValue]:
         """Die zurückgelesenen Werte aller Aktoren je Art; dazu das Rücklesen des Ausführers.

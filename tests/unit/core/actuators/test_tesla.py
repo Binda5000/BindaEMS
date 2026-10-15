@@ -1570,7 +1570,7 @@ def test_a_settled_reading_falls_into_the_check_while_charging() -> None:
     # Beim Laden fragt der Adapter alle 30 s ab, dazu kommt die Dauer der Abfrage: Das Fenster
     # zwischen SETTLE_S und VERIFY_S nach der Bestätigung fängt eine Meldung, solange eine Abfrage
     # höchstens 10 s dauert. Die Prüfung endet vor der Frist des Ausführers, aber nach dem Befehl.
-    assert VERIFY_S - SETTLE_S >= poll_interval_s("Charging", True) + 10
+    assert VERIFY_S - SETTLE_S >= poll_interval_s("Charging", True, True) + 10
     assert 0 < CHECK_MARGIN_S < TeslaActuator.confirm_timeout_s - COMMAND_TIMEOUT_S
 
 
@@ -1578,7 +1578,7 @@ def test_the_check_also_catches_the_poll_of_a_car_that_does_not_charge_yet() -> 
     # In der Startfolge geht der Strom hinaus, bevor das Auto lädt; dann fragt der Adapter nur
     # alle 60 s ab. Das Fenster fängt auch diese Abfrage, solange sie höchstens 5 s dauert, und
     # die Frist des Ausführers schneidet es nicht ab, wenn Tessie sofort bestätigt.
-    plugged_s = poll_interval_s("Stopped", True)
+    plugged_s = poll_interval_s("Stopped", True, True)
     assert plugged_s == 60.0
     assert VERIFY_S - SETTLE_S >= plugged_s + 5
     assert TeslaActuator.confirm_timeout_s - CHECK_MARGIN_S >= VERIFY_S

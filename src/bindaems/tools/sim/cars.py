@@ -211,10 +211,11 @@ class Tesla(Car):
 
         Wie im Tessie-Adapter macht ``parse_state`` aus dem Zustand die Werte, und
         ``poll_interval_s`` gibt die Zeit bis zur nächsten Abfrage: 30 s beim Laden, 60 s
-        angesteckt, sonst 600 s. Ist Tessie nicht erreichbar (``reachable``), scheitert die fällige
-        Abfrage, und die nächste folgt nach dem Backoff des Adapters: ``RETRY_FIRST_S``, dann
-        jeweils doppelt so lange, höchstens ``RETRY_MAX_S``. Eine gelungene Abfrage setzt ihn
-        zurück.
+        angesteckt oder zu Hause, sonst 600 s. ``state`` meldet immer den Ort der Anlage, das
+        Auto gilt also immer als zu Hause; ``poll_soon`` simuliert er nicht. Ist Tessie nicht
+        erreichbar (``reachable``), scheitert die fällige Abfrage, und die nächste folgt nach dem
+        Backoff des Adapters: ``RETRY_FIRST_S``, dann jeweils doppelt so lange, höchstens
+        ``RETRY_MAX_S``. Eine gelungene Abfrage setzt ihn zurück.
         """
         if self.next_poll is not None and now < self.next_poll:
             return None
@@ -223,10 +224,11 @@ class Tesla(Car):
             return None
         self._retry.reset()
         values = parse_state(self.state(voltage_v), self._home, self._radius_m)
-        charging, plugged = values["charging_state"], values["plugged"]
+        charging, plugged, at_home = values["charging_state"], values["plugged"], values["at_home"]
         wait_s = poll_interval_s(
             charging if isinstance(charging, str) else None,
             plugged if isinstance(plugged, bool) else None,
+            at_home if isinstance(at_home, bool) else None,
         )
         self.next_poll = now + timedelta(seconds=wait_s)
         return values

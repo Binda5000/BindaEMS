@@ -1,13 +1,24 @@
+import asyncio
+import contextlib
 import json
 from pathlib import Path
 
 import httpx
 import pytest
-from tests.helpers import run_until
+from pydantic import SecretStr
+from tests.helpers import T0, run_until
 
-from bindaems.core.adapters.tessie import haversine_m, parse_state, poll_interval_s
+from bindaems.core.adapters.tessie import (
+    MIN_GAP_S,
+    TessieAdapter,
+    haversine_m,
+    parse_state,
+    poll_interval_s,
+)
+from bindaems.core.state.store import StateStore
 from bindaems.shared.config import LatLon
 from bindaems.shared.domain import Quality
+from bindaems.shared.timeutil import ManualClock
 
 FIXTURES = Path(__file__).resolve().parents[3] / "fixtures"
 HOME = LatLon(lat=48.2, lon=16.37)
@@ -40,11 +51,19 @@ def test_parse_state_missing_location() -> None:
     assert parse_state(data, HOME, 150)["at_home"] is None
 
 
-def test_poll_interval() -> None:
-    assert poll_interval_s("Charging", True) == 30.0
-    assert poll_interval_s("Stopped", True) == 60.0
-    assert poll_interval_s("Disconnected", False) == 600.0
-    assert poll_interval_s(None, None) == 600.0
+@pytest.mark.parametrize(
+    ("state", "plugged", "home", "expected"),
+    [
+        ("Charging", True, True, 30.0),
+        ("Stopped", True, False, 60.0),
+        ("Disconnected", False, True, 60.0),
+        ("Disconnected", False, False, 600.0),
+        ("Disconnected", False, None, 600.0),
+        (None, None, None, 600.0),
+    ],
+)
+def test_poll_interval(state, plugged, home, expected) -> None:
+    assert poll_interval_s(state, plugged, home) == expected
 
 
 async def test_adapter_only_requests_state_endpoint(respx_mock, tessie_env) -> None:
@@ -146,3 +165,90 @@ async def test_invalid_token_is_logged(respx_mock, tessie_env) -> None:
     with capture_logs() as logs:
         await run_until(adapter, lambda: bool(adapter.sleeps))
     assert logs[0]["error"] == "Tessie-Token ungültig" and logs[0]["retry_in_s"] == 900.0
+
+
+class _Clock:
+    """Die Uhr des Adapters (``monotonic``), die nur der Test vorstellt."""
+
+    def __init__(self) -> None:
+        self.t = 1000.0
+
+    def __call__(self) -> float:
+        return self.t
+
+
+async def _until(predicate) -> None:
+    for _ in range(200):
+        if predicate():
+            return
+        await asyncio.sleep(0.005)
+    raise AssertionError("Bedingung nicht erfüllt")
+
+
+@contextlib.asynccontextmanager
+async def _running(cfg, sleep, clock):
+    """Ein laufender Adapter mit der Uhr ``clock`` und dem Ersatz ``sleep``."""
+    async with httpx.AsyncClient() as client:
+        adapter = TessieAdapter(
+            "tesla",
+            cfg.vehicles["tesla"],
+            cfg.site.location,
+            SecretStr("tok"),
+            StateStore(ManualClock(T0)),
+            client,
+            sleep=sleep,
+            monotonic=clock,
+        )
+        task = asyncio.create_task(adapter.run())
+        try:
+            yield adapter
+        finally:
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+
+
+async def test_poll_soon_ends_the_wait_after_the_minimum_gap(respx_mock, cfg) -> None:
+    # Auto weg (600 s Wartezeit): poll_soon beendet sie, die nächste Abfrage folgt erst MIN_GAP_S
+    # nach der letzten, nicht nach 600 s
+    away = json.loads(json.dumps(STATE))
+    away["charge_state"]["charging_state"] = "Disconnected"
+    away["drive_state"]["latitude"] = 48.3
+    route = respx_mock.get(URL).respond(json=away)
+    clock = _Clock()
+    sleeps: list[float] = []
+    release = asyncio.Event()
+
+    async def sleep(delay: float) -> None:
+        sleeps.append(delay)
+        # die reguläre Wartezeit endet nur durch poll_soon, die Lücke durch den Test
+        await (release.wait() if delay <= MIN_GAP_S else asyncio.Event().wait())
+
+    async with _running(cfg, sleep, clock) as adapter:
+        await _until(lambda: sleeps == [600.0])
+        assert route.call_count == 1
+        clock.t += 4.0  # poll_soon 4 s nach der letzten Abfrage
+        adapter.poll_soon()
+        await _until(lambda: len(sleeps) == 2)
+        assert sleeps[1] == pytest.approx(MIN_GAP_S - 4.0)
+        assert route.call_count == 1  # die Lücke läuft noch
+        release.set()
+        await _until(lambda: route.call_count == 2)
+        await _until(lambda: sleeps[2:] == [600.0])  # danach wieder die reguläre Wartezeit
+
+
+async def test_poll_soon_after_the_gap_polls_without_further_wait(respx_mock, cfg) -> None:
+    route = respx_mock.get(URL).respond(json=STATE)
+    clock = _Clock()
+    sleeps: list[float] = []
+
+    async def sleep(delay: float) -> None:
+        sleeps.append(delay)
+        await asyncio.Event().wait()
+
+    async with _running(cfg, sleep, clock) as adapter:
+        await _until(lambda: sleeps == [30.0])
+        clock.t += 12.0  # die Mindestzeit ist schon um
+        adapter.poll_soon()
+        await _until(lambda: route.call_count == 2)
+        assert sleeps[:2] == [30.0, 30.0]  # keine zusätzliche Lücke

@@ -4,6 +4,7 @@
   sieht und was sie am Netz und am Akku misst
 - ``ChargeInputs``: alles, was ein Zyklus der Regelung braucht
 - ``observe``: liest die Beobachtungen aus dem Snapshot und den abgeleiteten Größen
+- ``wallbox_connected``: liest je Wallbox, ob sie ein Fahrzeug meldet (``WallboxObs.connected``)
 - ``homes``: liest je Fahrzeug mit ``home_entity``, ob Home Assistant es zu Hause meldet
 - ``ok_number``: der Wert eines Signals als endliche Zahl mit Qualität ``OK``, sonst ``None``
 
@@ -172,6 +173,19 @@ def observe(
         for key, vehicle in cfg.vehicles.items()
     }
     return _grid_obs(snap, derived), wallboxes, vehicles
+
+
+def wallbox_connected(snap: Snapshot, cfg: Config) -> dict[str, bool | None]:
+    """Ob die Wallbox ein Fahrzeug meldet, je Wallbox, wie in ``WallboxObs.connected``.
+
+    ``None`` heißt unbekannt; die Reihenfolge ist die von ``config.yaml``.
+    """
+    return {
+        key: (_twc_state(snap, key) if isinstance(wallbox, TwcConfig) else _evcs_state(snap, key))[
+            0
+        ]
+        for key, wallbox in cfg.wallboxes.items()
+    }
 
 
 def homes(snap: Snapshot, cfg: Config) -> dict[str, bool | None]:
