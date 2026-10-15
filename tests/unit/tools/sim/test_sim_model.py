@@ -642,6 +642,20 @@ def test_elsewhere_matters_only_for_a_tesla_without_a_wallbox(model) -> None:
     assert car.charging_state() == "Stopped"
 
 
+def test_self_start_sets_charge_enabled(model) -> None:
+    # Das Auto startet selbst, etwa aus der App: „Laden an“ im Auto, ohne Befehl des core.
+    from bindaems.tools.sim.scenarios import _SelfStart
+
+    car = model.teslas["tesla"]
+    model.plug("tesla", "twc")
+    model.step(T0)
+    assert (car.charge_enabled, car.current_a) == (False, 0.0)
+    _SelfStart("tesla")(model, None)  # type: ignore[arg-type]  # das Ereignis braucht keine Laufzeit
+    assert car.charge_enabled is True
+    model.step(at(1))
+    assert car.current_a > 0 and car.charging_state() == "Charging"
+
+
 # --- Ausfälle ------------------------------------------------------------------------------------
 
 

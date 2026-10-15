@@ -3,7 +3,8 @@
 Dazu das Ereignis ``_Boost`` und die Option ``dess`` von ``_setup``, die die Szenarien von Akku und
 Spitzen brauchen, die Optionen von ``_setup`` und ``_intent`` für Gast, Home Assistant und den
 Tesla woanders und die Szenarien für die Zuordnung (Plan 2c-2b, Design 10.3): ``zuordnung``,
-``tesla-evcs``, ``egolf-twc`` und ``gast-evcs``. Die ganzen Läufe prüft
+``tesla-evcs``, ``egolf-twc`` und ``gast-evcs``, dazu die Szenarien für „Aus“ und Selbststart des
+Tesla (Plan 2d, Task 6): ``tesla-aus`` und ``tesla-selbststart``. Die ganzen Läufe prüft
 ``tests/integration/test_sim_scenarios.py``.
 """
 
@@ -795,6 +796,136 @@ def test_the_cars_must_charge_with_16_a_at_the_end(cfg) -> None:
 
     assert full.find(ending(16.0)) == []
     assert full.find(ending(6.0)) == ["„gast“ lädt am Ende mit 6 A, verlangt 16 A."]
+
+
+def stop(seconds: float, result: DecisionResult = OK, value: object = False) -> Decision:
+    return decision(seconds, TESLA, CHARGING, value, result)
+
+
+def test_stops_within_finds_a_late_stop(cfg) -> None:
+    within = check("tesla-aus", 0)
+    assert within.text == "„vehicle.tesla“ bekommt „Laden aus“ binnen 10 s nach 45 min."
+
+    def found(*decisions: Decision) -> list[str]:
+        return within.find(result_of(cfg, "tesla-aus", decisions=list(decisions)))
+
+    assert found(stop(2700)) == [] and found(stop(2710)) == []
+    late = ["„vehicle.tesla“ bekam nach 2700 s kein „Laden aus“ binnen 10 s."]
+    assert found(stop(2715)) == late
+    assert found() == late
+    # Davor zählt nicht, ebenso wenig ein Start, ein anderer Aktor oder ein zurückgehaltener Stopp.
+    elsewhere = decision(2705, EVCS, CHARGING, False, OK)
+    assert found(stop(2699), stop(2705, value=True), elsewhere) == late
+    held = [stop(2705, REJECTED), stop(2705, DecisionResult.DEFERRED)]
+    assert found(*held, stop(2705, DecisionResult.FOREIGN)) == late
+    # Auch ein Stopp im Dry-Run oder ein fehlgeschlagener zählt: Der Befehl ging hinaus.
+    assert found(stop(2705, DRY_RUN)) == [] and found(stop(2705, ERROR)) == []
+
+
+def test_the_selfstart_stop_has_210_s(cfg) -> None:
+    within = check("tesla-selbststart", 0)
+    assert within.text == "„vehicle.tesla“ bekommt „Laden aus“ binnen 210 s nach 5 min."
+    result = result_of(cfg, "tesla-selbststart", decisions=[stop(300 + 210)])
+    assert within.find(result) == []
+    result = result_of(cfg, "tesla-selbststart", decisions=[stop(300 + 211)])
+    late = ["„vehicle.tesla“ bekam nach 300 s kein „Laden aus“ binnen 210 s."]
+    assert within.find(result) == late
+
+
+def test_no_deferred_counts_deferred_commands(cfg) -> None:
+    none = check("tesla-aus", 1)
+    assert none.text == "Kein zurückgestellter Befehl „charging“ an „vehicle.tesla“."
+
+    def found(*decisions: Decision) -> list[str]:
+        return none.find(result_of(cfg, "tesla-aus", decisions=list(decisions)))
+
+    deferred = DecisionResult.DEFERRED
+    assert found() == [] and found(stop(2700)) == []
+    # Andere Art, anderer Aktor und andere Ergebnisse gehören nicht dazu.
+    other_kind = decision(100, TESLA, CURRENT, 8.0, deferred)
+    other_actuator = decision(100, EVCS, CHARGING, False, deferred)
+    assert found(other_kind, other_actuator, stop(100, REJECTED)) == []
+    assert found(stop(2800, deferred), stop(2701, deferred)) == [
+        "2 zurückgestellte Befehle „charging“ an „vehicle.tesla“, der erste bei 2701 s."
+    ]
+    assert found(stop(2000, deferred)) == [
+        "1 zurückgestellte Befehle „charging“ an „vehicle.tesla“, der erste bei 2000 s."
+    ]
+
+
+def test_the_tesla_must_not_charge_from_9_min(cfg) -> None:
+    idle = check("tesla-selbststart", 1)
+    assert idle.text == "Ab 9 min lädt „tesla“ nicht."
+
+    def found(*amps: float) -> list[str]:
+        samples = [cars_at(540 - 2 + t, a) for t, a in enumerate(amps)]
+        return idle.find(result_of(cfg, "tesla-selbststart", samples=samples))
+
+    assert found(7.0, 7.0, 0.0, 0.0) == []  # vor 540 s darf er laden
+    assert found(0.0, 0.0, 0.0) == [] and found() == []
+    assert found(0.0, 0.0, 0.0, 6.0) == ["„tesla“ lädt bei 541 s."]
+
+
+def test_a_mode_change_is_a_new_version_of_the_valid_intent(cfg) -> None:
+    from bindaems.tools.sim.scenarios import _Mode
+
+    model = set_up(cfg, "tesla-aus")  # das Ereignis braucht vom Modell nichts
+    ((at, event),) = actions("tesla-aus", _Mode)
+    assert (at, event.version, event.vehicle, event.mode) == (2700, 2, "tesla", ChargeMode.OFF)
+    current = Intent(
+        version=1,
+        control=True,
+        vehicles={
+            "tesla": VehicleIntent(mode=ChargeMode.PV, wallbox="twc"),
+            "egolf": VehicleIntent(mode=ChargeMode.PV),
+        },
+    )
+    rt = FakeRuntime(current)
+    event(model, rt)  # type: ignore[arg-type]
+    assert rt.sent == [
+        current.model_copy(
+            update={
+                "version": 2,
+                "vehicles": {
+                    "tesla": VehicleIntent(mode=ChargeMode.OFF, wallbox="twc"),
+                    "egolf": VehicleIntent(mode=ChargeMode.PV),
+                },
+            }
+        )
+    ]
+    rt.reply = IntentReply("rejected", 1, ("Unbekanntes Fahrzeug „tesla“.",))
+    with pytest.raises(ValueError, match="Moduswechsel abgelehnt: Unbekanntes Fahrzeug"):
+        event(model, rt)  # type: ignore[arg-type]
+    rt.current = None
+    with pytest.raises(ValueError, match="Moduswechsel ohne gültige Absicht"):
+        event(model, rt)  # type: ignore[arg-type]
+
+
+def test_the_new_tesla_scenarios_follow_the_table_of_the_plan(cfg) -> None:
+    from bindaems.tools.sim.scenarios import _SelfStart, _Weather
+
+    aus, selbst = SCENARIOS["tesla-aus"], SCENARIOS["tesla-selbststart"]
+    assert (aus.title, aus.duration_s, aus.live, aus.victron_live) == (
+        "Tesla wird unter Wolken auf Aus gestellt",
+        3600,
+        True,
+        False,
+    )
+    assert (selbst.title, selbst.duration_s, selbst.live, selbst.victron_live) == (
+        "Tesla startet selbst im Modus Aus",
+        1800,
+        True,
+        False,
+    )
+    assert aus.intent.vehicles["tesla"].mode is ChargeMode.PV
+    assert selbst.intent.vehicles["tesla"].mode is ChargeMode.OFF
+    assert [t for t, a in selbst.events if not isinstance(a, _Weather)] == [300]
+    ((_, start),) = actions("tesla-selbststart", _SelfStart)
+    assert start.vehicle == "tesla"
+    model = set_up(cfg, "tesla-selbststart")
+    car = model.teslas["tesla"]
+    assert (car.wallbox, car.charge_enabled) == ("twc", False)
+    assert model.cars["egolf"].wallbox is None
 
 
 def test_every_scenario_has_described_checks() -> None:

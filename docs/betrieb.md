@@ -2618,7 +2618,7 @@ sind die echten, und das Modell zeigt sich so, wie die Geräte und Adapter es tu
 verbindet sich mit nichts und schreibt nichts auf die Geräte; er braucht weder Tokens noch Netz. Die
 Szenarien sind deterministisch.
 
-In der CI läuft jedes der einundzwanzig Szenarien bei jedem Push
+In der CI läuft jedes der dreiundzwanzig Szenarien bei jedem Push
 (`tests/integration/test_sim_scenarios.py`), dazu eine Abwandlung von `spitze-15min` (Tesla in
 Boost, e-Golf in Sofort, Ziel 5 kW), die den Boost-Anteil des Wächters prüft (oben, „Messung“).
 Von Hand lässt du eines laufen, etwa um nach einer Änderung von `grid` oder `control` in `config.yaml`
@@ -2645,7 +2645,7 @@ docker compose run --rm -v "$PWD/verification:/out" --entrypoint python ems-core
   --out /out/<Datum>-simulation-wolkig.md
 ```
 
-- `--szenario NAME` (Pflicht): eines der einundzwanzig Szenarien unten.
+- `--szenario NAME` (Pflicht): eines der dreiundzwanzig Szenarien unten.
 - `--out PFAD` (Pflicht): der Bericht als Markdown. Fehlende Ordner legt das Werkzeug an.
 - `--config PFAD`: die Konfiguration, aus der Grenzen, Fahrzeuge und Wallboxen kommen; ohne Angabe
   `deploy/config.example.yaml`, relativ zum aktuellen Verzeichnis. Die Szenarien brauchen die
@@ -2661,7 +2661,7 @@ docker compose run --rm -v "$PWD/verification:/out" --entrypoint python ems-core
 - Jeder Lauf bekommt ein **frisches temporäres Verzeichnis** für die Ablage des core (Absicht,
   Rate-Limits, Entscheidungen). Er berührt `/data` nie und sieht nichts von früheren Läufen.
 - Ein Szenario braucht für 30 min bis 2 h simulierte Zeit etwa 3 bis 13 s Rechenzeit; alle
-  einundzwanzig zusammen rund 2,5 min.
+  dreiundzwanzig zusammen rund 3 min.
 
 Die Standardausgabe zeigt je Kennzahl eine Zeile, dann je Informationszahl eine (ohne Grenze), dann
 je Prüfung des Szenarios eine und am Ende den Pfad des Berichts. Ein Ausschnitt aus `tesla-5a`:
@@ -2742,7 +2742,7 @@ wachen Tesla, soweit die Tabelle nichts anderes sagt; der Gast steht abgesteckt,
 meldet den e-Golf zu Hause. Der Regelbetrieb ist an, EVCS und Tesla sind live (außer in `dry-run`).
 Victron (der Akku-Sollwert) entscheidet in den ersten zehn Szenarien im Dry-Run mit; in den acht für
 Akku und Spitzen, ab `akku-wolkig`, ist er live, in den drei für die Zuordnung, ab `tesla-evcs`,
-wieder im Dry-Run.
+wieder im Dry-Run, ebenso in den zwei für „Aus“ und Selbststart des Tesla, ab `tesla-aus`.
 
 | Name | Titel, Dauer | Anlage und Ereignisse | Prüfung des Szenarios |
 |---|---|---|---|
@@ -2767,6 +2767,8 @@ wieder im Dry-Run.
 | `tesla-evcs` | Tesla an der EVCS ohne Übersteuerung, 30 min | 12.10.2026 ab 18:00, keine PV, Akku 60 %, Tesla an der EVCS mit 10 A im Auto, in Sofort; e-Golf abgesteckt | Die Gesundheit zeigt den Tesla vor 3 min „erkannt“; genau eine Entscheidung „Strom 16 A“ an den Tesla (sein `max_a`); er lädt am Ende mit 16 A: Die EVCS regelt in seinem Modus. |
 | `egolf-twc` | e-Golf am Wall Connector, 30 min | 12.10.2026 ab 18:00, keine PV, Akku 60 %, e-Golf am Wall Connector, in PV; Tesla abgesteckt | Ab 4 min zeigt die Gesundheit am Wall Connector den e-Golf, erkannt; keine Entscheidung an `vehicle.tesla`; der e-Golf lädt am Ende mit 16 A, als Last, die die Regelung nicht steuert. |
 | `gast-evcs` | Gast an der EVCS, e-Golf weg, 30 min | 12.10.2026 ab 18:00, keine PV, Akku 60 %, Gast mit 3 Phasen an der EVCS, Modus des Gastes Sofort; e-Golf abgesteckt und laut Home Assistant weg; Tesla abgesteckt | Ab 3 min zeigt die Gesundheit an der EVCS den Gast (`guest`), erkannt; er lädt am Ende mit 16 A im Modus des Gastes. |
+| `tesla-aus` | Tesla wird unter Wolken auf Aus gestellt, 1 h | wie `wolkig` (21.06.2026 ab 10:00, Wolken, Akku 60 %, beide in PV), der Tesla mit 45 % SOC; bei 45 min wechselt der Tesla auf Aus (Version 2 der Absicht) | Der Tesla bekommt binnen 10 s nach 45 min „Laden aus“; kein zurückgestellter Befehl „charging“ an `vehicle.tesla`: Der Stopp in Aus ist dringend und läuft an den Stundenlimits vorbei (Abschnitt „Laderegelung“). |
+| `tesla-selbststart` | Tesla startet selbst im Modus Aus, 30 min | 12.10.2026 ab 18:00, keine PV, Akku 60 %, Tesla am Wall Connector mit 50 % SOC, in Aus, gestoppt; e-Golf abgesteckt; bei 5 min startet der Tesla selbst („Laden an“ im Auto, etwa aus der App) | Der Tesla bekommt binnen 210 s nach 5 min „Laden aus“ (120 s gegen den Modus, `control.tesla_against_s`, plus die Abfrage von Tessie alle 60 s, solange er angesteckt ist, plus der Verzug des Befehls); ab 9 min lädt er nicht mehr. |
 
 Die Verteilung ist gierig nach Priorität (Abschnitt „Laderegelung“): Mit höchstens 10 kW PV laden die
 Autos in `sonnig` und `wolkig` nacheinander, darum steht der Tesla dort nahe an seinem Ladelimit.

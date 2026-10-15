@@ -840,6 +840,8 @@ def test_the_evcs_follows_the_sun_with_few_current_commands(cfg) -> None:  # Des
         evcs_decision(5001, CommandKind.CURRENT, DecisionResult.DEFERRED),
         evcs_decision(5002, CommandKind.CHARGING, DecisionResult.OK),
         tessie_decision(5003, CommandKind.CURRENT, 9.0, DecisionResult.OK),
+        # eine fremde Änderung ist kein Befehl der Regelung, auch wenn sie einen Wert nennt
+        evcs_decision(5004, CommandKind.CURRENT, DecisionResult.FOREIGN),
     ]
     assert sunny(result_of(cfg, samples, [*seven, *others])) == []
 

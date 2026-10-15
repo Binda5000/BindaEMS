@@ -188,6 +188,16 @@ PEAK_BOOST_S: Final = 46 * MINUTE_S  # … und ab hier (18:45) lädt der e-Golf 
 UNBALANCED_PV_W: Final = 12000.0  # „schieflast-pv“: konstante PV …
 UNBALANCED_L1_W: Final = 5500.0  # … und so viel mehr Last auf L1 …
 UNBALANCED_FROM_S: Final = 10 * MINUTE_S  # … ab hier, wenn der e-Golf schon lädt
+# Szenarien „Aus“ und Selbststart des Tesla (Plan 2d, Task 6)
+OFF_AT_S: Final = 45 * MINUTE_S  # „tesla-aus“: der Tesla geht auf „Aus“ …
+OFF_WITHIN_S: Final = 10  # … und bekommt binnen so vielen Sekunden „Laden aus“
+OFF_TESLA_PCT: Final = 45.0  # SOC des Tesla in „tesla-aus“: Er lädt auch nach 45 min noch
+SELF_START_S: Final = 5 * MINUTE_S  # „tesla-selbststart“: der Tesla startet selbst …
+# … und bekommt binnen 120 s (control.tesla_against_s) plus 60 s Abfrage von Tessie plus dem
+# Verzug des Befehls „Laden aus“
+SELF_START_WITHIN_S: Final = 210
+IDLE_FROM_S: Final = 9 * MINUTE_S  # … und lädt ab hier nicht mehr
+SELF_START_TESLA_PCT: Final = 50.0
 PEAK_GUARD: Final = "peak_guard"  # Grund einer Drosselung durch den 15-min-Wächter
 
 TESLA: Final = "tesla"  # Schlüssel der Fahrzeuge und Wallboxen in der Konfiguration
@@ -200,8 +210,15 @@ DETECTED: Final = "detected"  # Zuordnung „erkannt“ in der Gesundheit
 _SHOWN: Final = {UNCLEAR: "unklar", DETECTED: "erkannt"}  # so nennen die Prüfungen die Zuordnung
 SAFE: Final = "SAFE"
 FOREIGN_ALARM: Final = "competitor.foreign."  # Anfang der Alarme fremder Änderungen
-# Entscheidungen ohne Urteil mit Wert: abgelehnt oder wegen eines Stundenlimits zurückgestellt
-_HELD_BACK: Final = frozenset({DecisionResult.REJECTED, DecisionResult.DEFERRED})
+# Entscheidungen ohne Befehl der Regelung an den Aktor: abgelehnt, wegen eines Stundenlimits
+# zurückgestellt oder eine fremde Änderung (sie nennt den erwarteten Wert, aber das EMS sendet
+# nichts); neue Ergebnisse zählen so nicht ungefragt als Befehl
+_HELD_BACK: Final = frozenset(
+    {DecisionResult.REJECTED, DecisionResult.DEFERRED, DecisionResult.FOREIGN}
+)
+# dieselben ohne die abgelehnten: Eine abgelehnte Entscheidung zählt als Entscheidung, eine
+# zurückgestellte nicht (ihr Befehl kommt noch einmal), eine fremde Änderung auch nicht
+_NOT_THE_COMMAND: Final = frozenset({DecisionResult.DEFERRED, DecisionResult.FOREIGN})
 
 
 @dataclass(frozen=True)
@@ -329,6 +346,35 @@ class _Boost:
 
     def __call__(self, model: PlantModel, rt: CoreRuntime) -> None:
         _new_version(rt, self.version, self.vehicle, {"boost_until": self.until}, "Boost")
+
+
+@dataclass(frozen=True, slots=True)
+class _Mode:
+    """Eine neue Version der Absicht: Das Fahrzeug ``vehicle`` lädt im Modus ``mode``.
+
+    Sonst wie ``_Override``: Die gültige Absicht bleibt, wie sie ist; ohne gültige Absicht und bei
+    einer Ablehnung bricht der Lauf ab (``ValueError``).
+    """
+
+    version: int
+    vehicle: str
+    mode: ChargeMode
+
+    def __call__(self, model: PlantModel, rt: CoreRuntime) -> None:
+        _new_version(rt, self.version, self.vehicle, {"mode": self.mode}, "Moduswechsel")
+
+
+@dataclass(frozen=True, slots=True)
+class _SelfStart:
+    """Der Tesla ``vehicle`` startet selbst, etwa aus der App: „Laden an“ im Auto, als Ereignis.
+
+    Der core sendet nichts dazu; das Auto lädt, sobald die Wallbox Strom gibt.
+    """
+
+    vehicle: str
+
+    def __call__(self, model: PlantModel, rt: CoreRuntime) -> None:
+        model.teslas[self.vehicle].charge_enabled = True
 
 
 @dataclass(frozen=True, slots=True)
@@ -695,7 +741,8 @@ def _shown_before(key: str, kind: str, until_s: int) -> Check:
 
 def _one_current(key: str, amps: float) -> Check:
     """Genau eine Entscheidung über den Strom ``amps`` an das Fahrzeug ``key``; eine
-    zurückgestellte zählt nicht, denn ihr Befehl kommt danach noch einmal."""
+    zurückgestellte zählt nicht, denn ihr Befehl kommt danach noch einmal, und eine fremde
+    Änderung auch nicht."""
     actuator = vehicle_actuator(key)
 
     def find(result: SimResult) -> list[str]:
@@ -705,7 +752,7 @@ def _one_current(key: str, amps: float) -> Check:
             if d.actuator == actuator
             and d.kind is CommandKind.CURRENT
             and d.requested == amps
-            and d.result is not DecisionResult.DEFERRED
+            and d.result not in _NOT_THE_COMMAND
         ]
         if len(found) == 1:
             return []
@@ -746,6 +793,64 @@ def _evcs_off_from(key: str, begin_s: int) -> Check:
         return found
 
     return Check(f"Ab {de(begin_s / MINUTE_S)} min lädt die EVCS „{key}“ nicht.", find)
+
+
+def _stops_within(actuator: str, at_s: int, within_s: int) -> Check:
+    """Der Aktor ``actuator`` bekommt ab der Sekunde ``at_s`` binnen ``within_s`` s „Laden aus“:
+    eine Entscheidung über ``charging`` mit dem Wert falsch, die ein Befehl war (nicht abgelehnt,
+    zurückgestellt oder eine fremde Änderung); auch ein Dry-Run oder ein Fehlschlag zählt, denn der
+    Befehl ging hinaus."""
+
+    def find(result: SimResult) -> list[str]:
+        begin = result.scenario.start + timedelta(seconds=at_s)
+        end = begin + timedelta(seconds=within_s)
+        stopped = any(
+            d.actuator == actuator
+            and d.kind is CommandKind.CHARGING
+            and d.requested is False
+            and d.result not in _HELD_BACK
+            and begin <= d.ts <= end
+            for d in result.decisions
+        )
+        if stopped:
+            return []
+        return [f"„{actuator}“ bekam nach {at_s} s kein „Laden aus“ binnen {within_s} s."]
+
+    text = f"„{actuator}“ bekommt „Laden aus“ binnen {within_s} s nach {de(at_s / MINUTE_S)} min."
+    return Check(text, find)
+
+
+def _no_deferred(actuator: str, kind: CommandKind) -> Check:
+    """Keine zurückgestellte Entscheidung der Art ``kind`` an den Aktor ``actuator``: Ein
+    Stundenlimit hielt keinen solchen Befehl zurück."""
+
+    def find(result: SimResult) -> list[str]:
+        deferred = [
+            d
+            for d in result.decisions
+            if d.actuator == actuator and d.kind is kind and d.result is DecisionResult.DEFERRED
+        ]
+        if not deferred:
+            return []
+        first = _second(result, min(d.ts for d in deferred))
+        return [
+            f"{len(deferred)} zurückgestellte Befehle „{kind.value}“ an „{actuator}“, "
+            f"der erste bei {first} s."
+        ]
+
+    return Check(f"Kein zurückgestellter Befehl „{kind.value}“ an „{actuator}“.", find)
+
+
+def _idle_from(key: str, begin_s: int) -> Check:
+    """Das Auto ``key`` lädt in keiner Sekunde ab ``begin_s``; der Befund nennt die erste."""
+
+    def find(result: SimResult) -> list[str]:
+        charging = next(
+            (s.t for s in result.samples if s.t >= begin_s and s.cars[key].charging), None
+        )
+        return [] if charging is None else [f"„{key}“ lädt bei {charging} s."]
+
+    return Check(f"Ab {de(begin_s / MINUTE_S)} min lädt „{key}“ nicht.", find)
 
 
 def _any_charging(sample: Sample) -> bool:
@@ -1674,6 +1779,59 @@ def _gast_evcs() -> Scenario:
     )
 
 
+# --- Szenarien 22 und 23: „Aus“ und Selbststart des Tesla -----------------------------------------
+
+
+def _tesla_aus() -> Scenario:
+    """Wie ``wolkig``, doch der Tesla wechselt bei 45 min auf „Aus“ (Plan 2d, Präzisierung 9): Der
+    Stopp ist dringend und kommt binnen 10 s, auch wenn das Stundenbudget des Tesla aufgebraucht
+    ist; ihn hält kein Stundenlimit zurück."""
+    start, duration_s, seed = SUMMER, HOUR_S, 22
+    stop = OFF_AT_S, _Mode(2, TESLA, ChargeMode.OFF)
+    checks = (
+        _stops_within(vehicle_actuator(TESLA), OFF_AT_S, OFF_WITHIN_S),
+        _no_deferred(vehicle_actuator(TESLA), CommandKind.CHARGING),
+    )
+    return Scenario(
+        name="tesla-aus",
+        title="Tesla wird unter Wolken auf Aus gestellt",
+        start=start,
+        duration_s=duration_s,
+        seed=seed,
+        setup=partial(_setup, soc_pct=60.0, tesla_soc_pct=OFF_TESLA_PCT),
+        intent=_intent(tesla=ChargeMode.PV, egolf=ChargeMode.PV),
+        live=True,
+        events=(*_weather(start, duration_s, seed, pv=_cloudy(start, duration_s, seed)), stop),
+        checks=Checks(checks),
+    )
+
+
+def _tesla_selbststart() -> Scenario:
+    """Der Tesla steht am Wall Connector im Modus „Aus“ und lädt nicht; bei 5 min startet er selbst
+    (Plan 2d, Präzisierung 10). Die Regelung sieht es mit der nächsten Abfrage von Tessie (60 s,
+    angesteckt), wartet 120 s und stoppt ihn dann; mit dem Verzug des Befehls bleiben 210 s."""
+    start, duration_s, seed = EVENING, 30 * MINUTE_S, 23
+    checks = (
+        _stops_within(vehicle_actuator(TESLA), SELF_START_S, SELF_START_WITHIN_S),
+        _idle_from(TESLA, IDLE_FROM_S),
+    )
+    return Scenario(
+        name="tesla-selbststart",
+        title="Tesla startet selbst im Modus Aus",
+        start=start,
+        duration_s=duration_s,
+        seed=seed,
+        setup=partial(_setup, soc_pct=60.0, egolf=None, tesla_soc_pct=SELF_START_TESLA_PCT),
+        intent=_intent(tesla=ChargeMode.OFF),
+        live=True,
+        events=(
+            *_weather(start, duration_s, seed),
+            (SELF_START_S, _SelfStart(TESLA)),
+        ),
+        checks=Checks(checks),
+    )
+
+
 SCENARIOS: Final[dict[str, Scenario]] = {
     scenario.name: scenario
     for scenario in (
@@ -1698,5 +1856,7 @@ SCENARIOS: Final[dict[str, Scenario]] = {
         _tesla_evcs(),
         _egolf_twc(),
         _gast_evcs(),
+        _tesla_aus(),
+        _tesla_selbststart(),
     )
 }
