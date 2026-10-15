@@ -560,7 +560,8 @@ def _guarded(
     ``W' = W``. Das Budget zählt auf 10 W abgerundet: Liegt ``W'`` über 0, ist ``Basis + W'``
     höchstens ``floor10(Budget)``, und das Ziel ``round10(Basis + W')`` liegt nie über dem Budget.
     Regel 2 kappt den Override also nicht auf einen Wert, der kein Vielfaches von 10 W ist, und
-    das Entscheidungslog bleibt ohne ``range.ceiling``. Bei ``W' = 0`` gibt es keinen Override.
+    das Entscheidungslog bleibt ohne ``range.ceiling``. Bei ``W' = 0`` gibt es keinen Override,
+    denn ``setpoint_deadband_w`` liegt über 0 (``ControlConfig``).
     Mit Budget müssen die Basis bekannt und das Budget eine endliche Zahl sein, sonst ist ``W'``
     unbekannt (``None``).
     """

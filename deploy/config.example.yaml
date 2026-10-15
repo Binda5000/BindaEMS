@@ -153,7 +153,7 @@ control:
   support_hysteresis_pct: 5 # gesperrt wird die Unterstützung erst unter Schwelle minus diesem Wert
   support_max_w: 3000       # höchstens so viel Akkuleistung in W für diese Autos zusammen
   support_max_s: 900        # längste Überbrückung am Stück in s
-  setpoint_deadband_w: 200  # Abstand in W, ab dem ein Override entsteht oder sich ändert
+  setpoint_deadband_w: 200  # Abstand in W (über 0), ab dem ein Override entsteht oder sich ändert
   override_refresh_s: 240   # so oft in s frischt der core einen Override auf; höchstens 280, der Cerbo verwirft ihn nach 300 s
   # peak_target_kw: 8   # Ziel des 15-min-Wächters in kW; ohne Wert ruht er
   peak_margin_kw: 0.3       # Marge der Hochrechnung des Wächters in kW

@@ -207,10 +207,11 @@ def test_the_deficit_threshold_is_half_the_setpoint_deadband() -> None:
     assert support.update(at(1), 80.0, CARS, {"evcs": 200.0}) == ("on", 0.0)
 
 
-def test_a_deficit_has_to_be_positive_even_without_a_deadband() -> None:
-    support = Support(ControlConfig(setpoint_deadband_w=0.0))
+def test_a_deficit_has_to_be_positive_even_with_the_smallest_deadband() -> None:
+    # Das Totband liegt immer über 0 (``ControlConfig``); die Schwelle ist seine Hälfte.
+    support = Support(ControlConfig(setpoint_deadband_w=0.1))
     assert support.update(at(0), 80.0, CARS, {"evcs": 0.0}) == ("on", None)
-    assert support.update(at(1), 80.0, CARS, {"evcs": 0.1}) == ("on", 0.0)
+    assert support.update(at(1), 80.0, CARS, {"evcs": 0.05}) == ("on", 0.0)
 
 
 def test_the_deficits_of_the_pv_and_min_pv_cars_add_up() -> None:

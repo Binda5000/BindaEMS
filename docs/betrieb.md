@@ -1773,7 +1773,8 @@ Die Einstellungen stehen in `config.yaml` unter `control` und haben Standardwert
 | `control.reserve_guard_pct` | 5 | Abstand über der USV-Reserve in Prozentpunkten SOC. Darunter richten sich auch Sofort und Boost am Importlimit aus (Abschnitt „Laderegelung“), und der Wächter gibt dem Akku kein Budget. |
 
 Negative, unendliche und ungültige Werte lehnt der core beim Start ab; `support_soc_pct` liegt
-zwischen 0 und 100, `override_refresh_s` über 0 und höchstens 280, `peak_target_kw` über 0. Nach einer
+zwischen 0 und 100, `setpoint_deadband_w` und `peak_target_kw` über 0 (ohne Totband entstünde auch
+ohne gewollten Netzbezug ein Override), `override_refresh_s` über 0 und höchstens 280. Nach einer
 Änderung startest du den core neu (Abschnitt 13, „Wartung“). **Keines dieser Felder verlangt eine
 neue `config.ini` des Watchdogs** (Abschnitt 14): Er kennt nur USV-Reserve, sichere Ströme und Zeiten.
 Anders ist es mit `victron.live_allowed` (unten, „Victron in den Dry-Run und live“).

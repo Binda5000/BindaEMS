@@ -341,7 +341,8 @@ class ControlConfig(_Model):
     - ``support_hysteresis_pct``: Gesperrt wird sie erst unter der Schwelle minus diesem Wert.
     - ``support_max_w``: höchstens so viel Akkuleistung in W für diese Autos zusammen
     - ``support_max_s``: längste Überbrückung am Stück in s
-    - ``setpoint_deadband_w``: Abstand in W, ab dem ein Override entsteht oder sich ändert
+    - ``setpoint_deadband_w``: Abstand in W, ab dem ein Override entsteht oder sich ändert; über 0,
+      sonst entstünde auch ohne gewollten Netzbezug ein Override (auf der Basis)
     - ``override_refresh_s``: So oft in s frischt der core einen Override auf (Cerbo-Timeout 300 s)
     - ``peak_target_kw``: Ziel des 15-min-Wächters in kW; ohne Wert ruht er
     - ``peak_margin_kw``: Marge der Hochrechnung des Wächters in kW (Spec 7.4)
@@ -361,7 +362,7 @@ class ControlConfig(_Model):
     support_hysteresis_pct: Annotated[float, Field(ge=0, allow_inf_nan=False)] = 5.0
     support_max_w: Annotated[float, Field(ge=0, allow_inf_nan=False)] = 3000.0
     support_max_s: Annotated[float, Field(ge=0, allow_inf_nan=False)] = 900.0
-    setpoint_deadband_w: Annotated[float, Field(ge=0, allow_inf_nan=False)] = 200.0
+    setpoint_deadband_w: Annotated[float, Field(gt=0, allow_inf_nan=False)] = 200.0
     # höchstens 280 s: 20 s Reserve zum Timeout des Override am Cerbo (300 s)
     override_refresh_s: Annotated[float, Field(gt=0, le=280, allow_inf_nan=False)] = 240.0
     peak_target_kw: Annotated[float, Field(gt=0, allow_inf_nan=False)] | None = None

@@ -347,6 +347,7 @@ def test_battery_and_peak_defaults(cfg) -> None:
         ("support_max_w", -1),
         ("support_max_s", -1),
         ("setpoint_deadband_w", -1),
+        ("setpoint_deadband_w", 0),  # ohne Totband entstünde bei W' = 0 ein Override (Basis)
         ("override_refresh_s", 0),
         ("override_refresh_s", 281),
         ("peak_target_kw", 0),
@@ -366,20 +367,20 @@ def test_override_refresh_may_reach_280_s() -> None:
 
 
 def test_battery_and_peak_values_may_sit_on_their_bounds() -> None:
-    # 0 heißt: keine Schwelle, keine Hysterese, keine Unterstützung, kein Abstand, keine Marge
+    # 0 heißt: keine Schwelle, keine Hysterese, keine Unterstützung, keine Marge
     zeros = ControlConfig(
         support_soc_pct=0,
         support_hysteresis_pct=0,
         support_max_w=0,
         support_max_s=0,
-        setpoint_deadband_w=0,
         peak_margin_kw=0,
     )
     assert (zeros.support_soc_pct, zeros.support_hysteresis_pct) == (0.0, 0.0)
     assert (zeros.support_max_w, zeros.support_max_s) == (0.0, 0.0)
-    assert (zeros.setpoint_deadband_w, zeros.peak_margin_kw) == (0.0, 0.0)
+    assert zeros.peak_margin_kw == 0.0
     assert ControlConfig(support_soc_pct=100).support_soc_pct == 100.0
     assert ControlConfig(peak_target_kw=0.1).peak_target_kw == 0.1
+    assert ControlConfig(setpoint_deadband_w=0.1).setpoint_deadband_w == 0.1  # nur über 0
 
 
 def test_peak_target_is_set_in_the_config_file(tmp_path: Path) -> None:
