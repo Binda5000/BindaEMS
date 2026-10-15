@@ -15,11 +15,14 @@ from tests.unit.core.control.charge_helpers import (
     tesla,
     twc,
 )
+from tests.unit.core.safety.conftest import make_ctx
 
 from bindaems.core.control.charge_modes import Effective
 from bindaems.core.control.charging import CarView, ChargeController
 from bindaems.core.control.executor import WriteResult
 from bindaems.core.control.peak_guard import NO_LIMITS, PeakLimits
+from bindaems.core.safety.budget import PersistentWriteBudget
+from bindaems.core.safety.layer import SafetyLayer
 from bindaems.core.safety.limits import HardLimits
 from bindaems.core.safety.types import Outcome, Verdict
 from bindaems.shared.control import (
@@ -267,7 +270,8 @@ def test_off_stops_at_once(cfg) -> None:
         evcs_obs=evcs(charging=True),
         present=at_evcs(6.0, True),
     )
-    assert as_commands(found) == [cmd(0, CommandKind.CHARGING, False, ("mode_off",))]
+    # Der Stopp in „Aus“ ist dringend (Plan 2d, Präzisierung 9)
+    assert as_commands(found) == [cmd(0, CommandKind.CHARGING, False, ("mode_off",), urgent=True)]
 
 
 def test_min_pv_keeps_its_minimum_without_surplus(cfg) -> None:
@@ -363,7 +367,7 @@ def test_blocked_kind_waits_and_follows_after_result(cfg) -> None:  # Review Foc
         ),
     )
     assert [c for c in as_commands(found) if c[0] >= 130] == [
-        cmd(131, CommandKind.CHARGING, False, ("mode_off",))
+        cmd(131, CommandKind.CHARGING, False, ("mode_off",), urgent=True)
     ]
 
 
@@ -432,6 +436,7 @@ def test_health_per_vehicle(cfg) -> None:
         "plugged": True,
         "charging": False,
         "wakes_today": 0,
+        "commands_hour": None,
         "reason": "mode_pv",
     }
 
@@ -674,8 +679,8 @@ def test_overload_starts_nothing(cfg) -> None:
     # Überlast ab 3 bis 60 s nach dem Ende bei 5: Sofort setzt nur den Mindeststrom. Mit der
     # Überlast vergisst die Regelung ihre letzten Werte und bietet „Laden aus“ einmal neu an.
     assert as_commands(found) == [
-        cmd(0, CHARGING, False, ("mode_off",)),
-        cmd(3, CHARGING, False, ("mode_off",)),
+        cmd(0, CHARGING, False, ("mode_off",), urgent=True),
+        cmd(3, CHARGING, False, ("mode_off",), urgent=True),
         cmd(4, CURRENT, 6.0, ("mode_now", "overload"), urgent=True),
         cmd(65, CURRENT, 16.0, ("mode_now",)),
         cmd(65, CHARGING, True, ("mode_now",)),
@@ -920,6 +925,7 @@ def test_health_before_the_first_step_and_after_a_pause(cfg) -> None:
         "plugged": None,
         "charging": None,
         "wakes_today": 0,
+        "commands_hour": None,
     }
     assert c.health() == [
         {"id": "tesla", "name": "Tesla Model 3", **unknown, "reason": None},
@@ -1259,7 +1265,7 @@ def tesla_inputs(cfg, *, s: int, l1: float = 18.0, **kw):
 def test_a_car_that_starts_by_itself_in_a_new_session_is_stopped(cfg, mode, code) -> None:
     intent = Intent(version=1, control=True, vehicles={"tesla": VehicleIntent(mode=mode)})
     found = run(controller(cfg), cfg, 70, make=tesla_inputs, intent=intent, controllable=BOTH)
-    off = Command("vehicle.tesla", CHARGING, False, reasons=(code,))
+    off = Command("vehicle.tesla", CHARGING, False, urgent=code == "mode_off", reasons=(code,))
     assert [(t, c.command) for t, c in found if c.command.actuator == "vehicle.tesla"] == [
         (0, off),
         (60, off),  # neuer Ansteckvorgang: Der letzte Wert „aus“ ist vergessen
@@ -1278,7 +1284,7 @@ def test_overload_stops_a_car_that_charges_against_its_mode(cfg, mode, code) -> 
         controllable=BOTH,
         l1=lambda s: 36.0 if s >= 90 else 18.0,  # ab 90 s über der Sicherung
     )
-    off = Command("vehicle.tesla", CHARGING, False, reasons=(code,))
+    off = Command("vehicle.tesla", CHARGING, False, urgent=code == "mode_off", reasons=(code,))
     urgent = Command("vehicle.tesla", CHARGING, False, urgent=True, reasons=(code, "overload"))
     # Der Tesla lädt weiter (Dry-Run): Jede Stufe der Überlast stoppt ihn dringend.
     assert [(t, c.command) for t, c in found if c.command.actuator == "vehicle.tesla"] == [
@@ -1329,7 +1335,7 @@ def test_after_a_pause_each_overload_stage_reacts_again(cfg) -> None:
         commands = c.step(inputs(cfg, s=s, **against))
         accept(c, commands)
         found.extend((s, x.command) for x in commands if x.command.actuator == "vehicle.tesla")
-    off = Command("vehicle.tesla", CHARGING, False, reasons=("mode_off",))
+    off = Command("vehicle.tesla", CHARGING, False, urgent=True, reasons=("mode_off",))
     urgent = Command(
         "vehicle.tesla", CHARGING, False, urgent=True, reasons=("mode_off", "overload")
     )
@@ -1910,3 +1916,129 @@ def test_wallbox_health_names_nobody_at_a_wallbox_with_a_session_while_unclear(c
     evcs_ = c.wallbox_health()[0]
     assert (evcs_["occupant"], evcs_["name"], evcs_["assignment"]) == (None, None, "unclear")
     assert {"vehicle": "tesla", "clue": "phases", "supports": False} in evcs_["indicators"]
+
+
+# Plan 2d, Präzisierung 9: „Aus“ sofort und Reserve im Stundenbudget
+
+TESLA_OFF = Intent(version=1, control=True, vehicles={"tesla": VehicleIntent(mode=ChargeMode.OFF)})
+TESLA_CHARGING = {
+    "twc_obs": twc(
+        connected=True,
+        charging=True,
+        phase_a=dict.fromkeys(("L1", "L2", "L3"), 16.0),
+        power_w=11040.0,
+    ),
+    "tesla_obs": tesla(plugged=True, charging=True, actual_current_a=16.0),
+    "evcs_obs": evcs(connected=False),
+    "controllable": BOTH,
+}
+AT_TESLA = {
+    ("vehicle.tesla", CURRENT): 16.0,
+    ("vehicle.tesla", CHARGING): True,
+    ("wallbox.evcs", CURRENT): 6.0,
+    ("wallbox.evcs", CHARGING): False,
+}
+NO_SURPLUS = grid(grid_w=None)  # unbekannter Überschuss: nach 300 s stoppt der Tesla in PV
+FULL_HOUR = {"vehicle.tesla": 16}  # per_hour 20 − Reserve 4
+
+
+def tesla_commands(found, kind) -> list:
+    return [
+        c.command
+        for _, c in found
+        if c.command.actuator == "vehicle.tesla" and c.command.kind == kind
+    ]
+
+
+def test_off_stops_urgently(cfg) -> None:
+    c = controller(cfg)
+    run(c, cfg, 5, present=AT_TESLA, **TESLA_CHARGING)  # PV: Der Tesla lädt weiter
+    found = run(c, cfg, 5, intent=TESLA_OFF, present=AT_TESLA, **TESLA_CHARGING)
+    [stop] = tesla_commands(found, CHARGING)
+    assert (stop.value, stop.urgent, stop.reasons) == (False, True, ("mode_off",))
+
+
+def test_a_stop_in_pv_is_not_urgent(cfg) -> None:
+    found = run(controller(cfg), cfg, 301, present=AT_TESLA, grid_obs=NO_SURPLUS, **TESLA_CHARGING)
+    stop = tesla_commands(found, CHARGING)[-1]  # davor der erste Befehl nach dem Start
+    assert (stop.value, stop.urgent, stop.reasons) == (False, False, ("mode_pv", "pv_surplus"))
+
+
+def test_off_stop_passes_an_exhausted_hourly_budget(cfg, tmp_path) -> None:
+    limits = HardLimits.from_config(cfg)
+    layer = SafetyLayer(limits, PersistentWriteBudget(12, 100, tmp_path / "budget.json", T0))
+    ctx = make_ctx(now=T0 + timedelta(seconds=3000), present=AT_TESLA)
+    for i in range(20):  # per_hour = 20
+        layer.authorize(
+            Command("vehicle.tesla", CURRENT, 6.0 + i % 2 * 2),
+            make_ctx(now=T0 + timedelta(seconds=100 * i)),
+        )
+    assert layer.hourly_count("vehicle.tesla", ctx.now) == 20
+    c = controller(cfg)
+    run(c, cfg, 5, present=AT_TESLA, **TESLA_CHARGING)
+    found = run(c, cfg, 5, intent=TESLA_OFF, present=AT_TESLA, **TESLA_CHARGING)
+    [stop] = tesla_commands(found, CHARGING)
+    verdict = layer.authorize(stop, ctx)
+    assert verdict.outcome is Outcome.ACCEPTED
+    assert [f.code for f in verdict.findings][-1] == "urgent.bypass"
+    normal = layer.authorize(replace(stop, urgent=False), ctx)
+    assert normal.outcome is Outcome.DEFERRED
+
+
+def test_reserve_holds_back_pv_current_changes(cfg) -> None:
+    surplus = dict(
+        TESLA_CHARGING,
+        tesla_obs=tesla(plugged=True, charging=True, actual_current_a=6.0),
+        grid_obs=grid(l1=-4.0, l2=-4.0, l3=-4.0, grid_w=-8000.0),
+    )
+    present = {**AT_TESLA, ("vehicle.tesla", CURRENT): 6.0}
+    held = run(controller(cfg), cfg, 200, present=present, commands_hour=FULL_HOUR, **surplus)
+    assert tesla_commands(held, CURRENT) == []
+    free = run(
+        controller(cfg), cfg, 200, present=present, commands_hour={"vehicle.tesla": 15}, **surplus
+    )
+    assert [c.value for c in tesla_commands(free, CURRENT)][:1] == [16.0]
+
+
+def test_reserve_lets_guard_reductions_through(cfg) -> None:
+    c = controller(cfg)
+    crowded = grid(l1=25.0, l2=25.0, l3=25.0)  # der Wächter lässt 10 A
+    found = run(
+        c, cfg, 5, present=AT_TESLA, commands_hour=FULL_HOUR, grid_obs=crowded, **TESLA_CHARGING
+    )
+    assert c.health()[0]["limit_a"] == 10.0
+    assert [c.value for c in tesla_commands(found, CURRENT)] == [10.0]
+
+
+def test_reserve_does_not_hold_starts_and_stops(cfg) -> None:
+    waiting = dict(
+        TESLA_CHARGING, tesla_obs=tesla(plugged=True, charging=False, actual_current_a=0.0)
+    )
+    start = run(controller(cfg), cfg, 5, present=AT_TESLA, commands_hour=FULL_HOUR, **waiting)
+    assert [c.value for c in tesla_commands(start, CHARGING)] == [True]
+    stop = run(
+        controller(cfg),
+        cfg,
+        301,
+        present=AT_TESLA,
+        grid_obs=NO_SURPLUS,
+        commands_hour=FULL_HOUR,
+        **TESLA_CHARGING,
+    )
+    assert [c.value for c in tesla_commands(stop, CHARGING)] == [True, False]  # Start, dann Stopp
+
+
+def test_reserve_does_not_touch_the_evcs(cfg) -> None:
+    kw = {"present": at_evcs(6.0, True), "evcs_obs": evcs(charging=True)}
+    free = run(controller(cfg), cfg, 5, **kw)
+    crowded = run(controller(cfg), cfg, 5, commands_hour={"wallbox.evcs": 20}, **kw)
+    assert free != [] and as_commands(crowded) == as_commands(free)
+
+
+def test_health_names_commands_of_the_last_hour(cfg) -> None:
+    c = controller(cfg)
+    c.step(inputs(cfg, commands_hour={"vehicle.tesla": 7}))
+    health = {entry["id"]: entry["commands_hour"] for entry in c.health()}
+    assert health == {"tesla": 7, "egolf": None}
+    c.idle(T0 + timedelta(seconds=1))
+    assert [entry["commands_hour"] for entry in c.health()] == [None, None]

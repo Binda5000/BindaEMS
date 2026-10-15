@@ -914,6 +914,7 @@ class CoreRuntime:
                 locks=locks,
                 flows=flows,
                 slot=self._accumulator.current(),
+                hourly_count=lambda actuator: self.layer.hourly_count(actuator, snow),
             )
         else:
             self.regulation.idle(snow)

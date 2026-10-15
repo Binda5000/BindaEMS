@@ -487,3 +487,29 @@ def test_a_vehicle_key_may_merely_contain_guest(tmp_path) -> None:
         d["vehicles"]["guest_car"] = d["vehicles"].pop("egolf")
 
     assert "guest_car" in load_config(write_cfg(tmp_path, mutate)).vehicles
+
+
+def test_reserve_defaults_to_four() -> None:
+    assert load_config(EXAMPLE).control.tesla_reserve_commands == 4
+
+
+def test_reserve_must_stay_below_the_hourly_limit(tmp_path: Path) -> None:
+    def change(d: dict) -> None:
+        d["control"]["tesla_reserve_commands"] = 20  # per_hour 20 aus dem Beispiel
+
+    with pytest.raises(
+        ConfigError,
+        match=r"control\.tesla_reserve_commands muss unter "
+        r"vehicles\.tesla\.commands\.per_hour liegen",
+    ):
+        load_config(write_cfg(tmp_path, change))
+    ok = write_cfg(tmp_path, lambda d: d["control"].update(tesla_reserve_commands=19))
+    assert load_config(ok).control.tesla_reserve_commands == 19
+
+
+def test_reserve_is_free_for_a_vehicle_without_tessie(tmp_path: Path) -> None:
+    def change(d: dict) -> None:
+        d["control"]["tesla_reserve_commands"] = 20
+        d["vehicles"]["tesla"].update(tessie=None, live_allowed=False)
+
+    assert load_config(write_cfg(tmp_path, change)).control.tesla_reserve_commands == 20

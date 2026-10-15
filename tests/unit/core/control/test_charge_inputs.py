@@ -517,6 +517,7 @@ def test_observations_keep_the_order_of_the_configuration(cfg) -> None:
                 "intent",
                 "accepted_at",
                 "homes",
+                "commands_hour",
             ],
         ),
     ],

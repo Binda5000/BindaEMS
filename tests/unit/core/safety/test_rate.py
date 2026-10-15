@@ -534,3 +534,14 @@ def test_restore_keeps_the_order_when_entries_were_recorded_already(limits) -> N
     ]
     rl.record(Command(TESLA, K.CHARGING, False), S(3700))  # S(50) ist dann zu alt, S(100) auch
     assert rl.hourly_entries() == [(TESLA, K.CHARGING, S(150)), (TESLA, K.CHARGING, S(3700))]
+
+
+def test_count_covers_all_kinds_within_the_hour(limits) -> None:
+    rl = RateLimiter(limits)
+    rl.record(Command("vehicle.tesla", K.CURRENT, 10.0), S(100))
+    rl.record(Command("vehicle.tesla", K.CURRENT, 8.0), S(200))
+    rl.record(Command("vehicle.tesla", K.CHARGING, True), T0 + timedelta(minutes=50))
+    rl.record(Command("vehicle.tesla", K.CURRENT, 6.0), T0)
+    now = T0 + timedelta(minutes=61)  # der Eintrag zu T0 liegt 61 min zurück
+    assert rl.count("vehicle.tesla", now) == 3
+    assert rl.count("wallbox.evcs", now) == 0

@@ -60,6 +60,13 @@ Dazu legt die Regelung fest:
   lädt, betrifft das nicht. Als ``limit_a`` nennen Health und Entscheidungslog weiter den freien
   Strom des Phasenwächters.
 - Ein Start wartet, solange sein Strom gesendet werden muss, aber blockiert ist.
+- Der Stopp im Modus „Aus“ ist dringend (Plan 2d, Präzisierung 9): Die Safety-Schicht lässt ihn ohne
+  Mindestabstand und Stundenlimits durch.
+- Reserve im Stundenbudget des Tesla (Plan 2d, Präzisierung 9): Hat der Tesla am Wall Connector
+  ``per_hour − control.tesla_reserve_commands`` Befehle in der Stunde, geht ein Strombefehl nur
+  noch hinaus, wenn er den Strom senkt und der Ist-Strom über der Grenze des Wächters liegt, oder
+  wenn er dringend ist. Starts, Stopps und der Höchststrom an der EVCS sind davon frei. Ein
+  zurückgehaltener Strombefehl erscheint nicht im Log.
 - Ist der Ansteckzustand unbekannt, sinkt der Strom nur unter den Ist-Strom, wenn der Wächter es
   verlangt; „Laden aus“ kommt dann nur wegen Überlast.
 - Eine Wallbox ist höchstens ein Ladepunkt: Hängen nach der Zuordnung zwei Fahrzeuge an ihr, hat
@@ -305,6 +312,9 @@ class ChargeController:
         self._vehicle_wallbox: dict[str, str | None] = {}
         # Die Uhren des letzten ``step``: für das Weckkontingent in ``note_verdict`` und ``health``
         self._now = self._wall_now = started
+        self._commands_hour: Mapping[
+            str, int
+        ] = {}  # die Befehle der letzten Stunde im letzten step
 
     def step(self, inputs: ChargeInputs, peak: PeakLimits = NO_LIMITS) -> list[ChargeCommand]:
         """Ein Regelzyklus; die Befehle kommen in der Reihenfolge der Priorität.
@@ -318,6 +328,7 @@ class ChargeController:
         """
         now, intent = inputs.now, inputs.intent
         self._now, self._wall_now = now, inputs.wall_now
+        self._commands_hour = dict(inputs.commands_hour)
         self._stepped = True
         state = self._assignment.update(
             now,
@@ -484,6 +495,7 @@ class ChargeController:
         self._wallboxes = {}
         self._cars = ()
         self._vehicle_wallbox = {}
+        self._commands_hour = {}
 
     def forget(self, actuators: Collection[str]) -> None:
         """Vergisst die letzten eigenen Werte und die Merker ``not_taken_retry`` dieser Aktoren.
@@ -524,10 +536,11 @@ class ChargeController:
         Die Felder: ``id``, ``name``, ``mode`` (Wert von ``Effective``), ``boost_until`` (ISO in
         UTC), ``wallbox``, ``assignment`` (Wert von ``AssignmentKind``), ``limit_a`` (freier Strom
         des Phasenwächters, nur für einen geregelten Ladepunkt), ``plugged``, ``charging``,
-        ``wakes_today`` (Weckstarts am Kalendertag des letzten ``step``, Wiener Zeit) und
-        ``reason``, der letzte Grund des letzten Befehls für das Fahrzeug. Ohne ``step`` seit dem
-        Start oder seit ``idle`` ist alles außer ``id``, ``name``, ``wakes_today`` und ``reason``
-        unbekannt (``None``).
+        ``wakes_today`` (Weckstarts am Kalendertag des letzten ``step``, Wiener Zeit),
+        ``commands_hour`` (die Befehle der letzten Stunde, nur für ein Fahrzeug mit Tessie, sonst
+        ``None``) und ``reason``, der letzte Grund des letzten Befehls für das Fahrzeug. Ohne
+        ``step`` seit dem Start oder seit ``idle`` ist alles außer ``id``, ``name``,
+        ``wakes_today`` und ``reason`` unbekannt (``None``).
         """
         entries: list[dict[str, Any]] = []
         for key, vehicle in self._cfg.vehicles.items():
@@ -546,6 +559,7 @@ class ChargeController:
                     "plugged": None if state is None else state.plugged,
                     "charging": None if state is None else state.charging,
                     "wakes_today": self._tesla[key].wakes_today(self._wall_now),
+                    "commands_hour": self._commands_hour.get(vehicle_actuator(key)),
                     "reason": self._reasons.get(key),
                 }
             )
@@ -755,7 +769,7 @@ class ChargeController:
             return self._hold(point, actuator, situation, present_a, blocked)
         if not charge:
             off = (*head, PV_SURPLUS) if situation.decision.reason == PV_SURPLUS else head
-            return self._switch_off(actuator, off, blocked, urgent=False)
+            return self._switch_off(actuator, off, blocked, urgent=situation.mode is Effective.OFF)
         reasons: tuple[str, ...]
         if minimum:
             value, reasons = point.min_a, (*head, OVERLOAD)
@@ -763,12 +777,16 @@ class ChargeController:
             value = _current_a(point, situation.wanted, situation.limit)
             reasons = (*head, *_why(situation))
         urgent = minimum or _urgent(situation, point, value, present_a, situation.wanted)
+        held = not urgent and self._reserved(
+            point, actuator, inputs, value=value, present_a=present_a, limit=situation.limit
+        )
         return self._charge(
             actuator,
             float(value),
             reasons,
             blocked,
             urgent=urgent,
+            held=held,
             start=may_start,
             resume=situation.resume,
         )
@@ -840,10 +858,14 @@ class ChargeController:
         blocked: frozenset[Key],
         *,
         urgent: bool,
+        held: bool,
         start: bool,
         resume: bool,
     ) -> list[Command]:
         """Laden: der Strom, wenn er sich ändert; für einen Start danach ``charging=True``.
+
+        ``held`` hält den Strombefehl zurück (Reserve des Stundenbudgets, ``_reserved``); er
+        erscheint dann nicht im Log, und der Start geht trotzdem hinaus.
 
         Ein Start (``charging=True`` ändert sich) folgt erst auf den Strom: Muss der gesendet
         werden und ist er blockiert, wartet der Start. ``start`` ist falsch bei Überlast und bei
@@ -853,7 +875,7 @@ class ChargeController:
         zusätzlich ``resume_after_outage``.
         """
         current, on = (actuator, _CURRENT), (actuator, _CHARGING)
-        send = self._changed(current, value)
+        send = self._changed(current, value) and not held
         if send and current in blocked:
             return []
         starting = start and self._changed(on, True)
@@ -865,6 +887,32 @@ class ChargeController:
         if starting and on not in blocked:
             found.append(self._last.command(actuator, _CHARGING, True, reasons))
         return found
+
+    def _reserved(
+        self,
+        point: ChargePoint,
+        actuator: str,
+        inputs: ChargeInputs,
+        *,
+        value: int,
+        present_a: float | None,
+        limit: int,
+    ) -> bool:
+        """Hält die Reserve des Stundenbudgets den Strombefehl zurück (Präzisierung 9)?
+
+        Nur beim Tesla am Wall Connector, dessen Aktor ``ChargeInputs.commands_hour`` nennt: Hat er
+        ``per_hour − tesla_reserve_commands`` Befehle in der Stunde erreicht, geht ein Strombefehl
+        nur noch hinaus, wenn er den Ist-Strom senkt und der Ist-Strom über der Grenze des Wächters
+        (``limit``) liegt. Ohne bekannten Ist-Strom bleibt er zurück. Starts, Stopps, der
+        Höchststrom an der EVCS und dringende Befehle prüft die Reserve nicht.
+        """
+        used = inputs.commands_hour.get(actuator)
+        if point.evcs or used is None:
+            return False
+        per_hour = self._limits.vehicle_commands[actuator].per_hour
+        if used < per_hour - self._cfg.control.tesla_reserve_commands:
+            return False
+        return present_a is None or not (value < present_a and present_a > limit)
 
     def _switch_off(
         self, actuator: str, reasons: tuple[str, ...], blocked: frozenset[Key], *, urgent: bool

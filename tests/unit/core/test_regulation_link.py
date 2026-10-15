@@ -59,6 +59,7 @@ def step(link: RegulationLink, cfg, when: datetime = NOW, **kw: Any) -> list[Con
         "locks": {},
         "flows": None,
         "slot": None,
+        "hourly_count": lambda actuator: 0,
     }
     return link.step(**(args | kw))
 
@@ -204,6 +205,22 @@ def test_step_builds_the_charge_inputs(cfg, monkeypatch) -> None:
     reachable = {key: obs.reachable for key, obs in charge.wallboxes.items()}
     assert reachable == {"evcs": False, "twc": True}
     assert charge.vehicles["tesla"].reachable is True
+
+
+def test_the_commands_of_the_hour_reach_the_regulation(cfg, monkeypatch) -> None:  # Plan 2d
+    link = link_for(cfg)
+    seen: list[RegulationInputs] = []
+    monkeypatch.setattr(link.regulation, "step", lambda inputs: seen.append(inputs) or [])
+    asked: list[str] = []
+
+    def count(actuator: str) -> int:
+        asked.append(actuator)
+        return 7
+
+    link.start_cycle()
+    step(link, cfg, hourly_count=count)
+    assert seen[-1].charge.commands_hour == {"vehicle.tesla": 7}  # nur das Fahrzeug mit Tessie
+    assert asked == ["vehicle.tesla"]
 
 
 def test_the_home_state_reaches_the_regulation(cfg, monkeypatch) -> None:  # Plan 2c-2b

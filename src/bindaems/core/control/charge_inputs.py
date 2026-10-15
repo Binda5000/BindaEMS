@@ -126,6 +126,8 @@ class ChargeInputs:
     - ``accepted_at``: wann die Absicht angenommen wurde; ``None``, wenn das unbekannt ist
     - ``homes``: je Fahrzeug mit ``home_entity``, ob Home Assistant es zu Hause meldet
       (``homes``); ``None`` heißt unbekannt, ein Fahrzeug ohne ``home_entity`` fehlt
+    - ``commands_hour``: je Aktor eines Fahrzeugs mit Tessie die Befehle im gleitenden
+      Stundenfenster der Safety-Schicht (``SafetyLayer.hourly_count``); andere Aktoren fehlen
     """
 
     now: datetime
@@ -140,6 +142,7 @@ class ChargeInputs:
     intent: Intent | None
     accepted_at: datetime | None
     homes: Mapping[str, bool | None] = field(default_factory=dict)
+    commands_hour: Mapping[str, int] = field(default_factory=dict)
 
 
 def observe(

@@ -237,6 +237,13 @@ class SafetyLayer:
             return verdict(Outcome.CLAMPED, value)
         return verdict(Outcome.ACCEPTED, value)
 
+    def hourly_count(self, actuator: str, now: datetime) -> int:
+        """Zahl der Befehle an den Aktor im Stundenfenster zu ``now``, alle Arten zusammen.
+
+        Die Regelung hält damit eine Reserve des Stundenbudgets frei (Plan 2d, Präzisierung 9).
+        """
+        return self._rate.count(actuator, now)
+
     def alarms(self, now: datetime) -> list[Alarm]:
         """Die aktiven Alarme der Schicht zum Zeitpunkt ``now``: die des Schreibbudgets."""
         return self._budget.alarms(now)

@@ -51,7 +51,7 @@ from bindaems.core.safety.limits import HardLimits
 from bindaems.core.safety.types import Verdict
 from bindaems.core.state.derived import Derived
 from bindaems.shared.config import Config
-from bindaems.shared.control import Command, CommandValue, Intent
+from bindaems.shared.control import Command, CommandValue, Intent, vehicle_actuator
 from bindaems.shared.domain import Alarm, Severity, Snapshot
 
 log = structlog.get_logger(__name__)
@@ -113,6 +113,7 @@ class RegulationLink:
         locks: Mapping[str, tuple[str, ...]],
         flows: Mapping[str, float] | None,
         slot: SlotProgress | None,
+        hourly_count: Callable[[str], int],
     ) -> list[ControlCommand]:
         """Ein Zyklus mit Regelung: die Befehle des Kerns, nach einer Ausnahme keine.
 
@@ -128,6 +129,9 @@ class RegulationLink:
         - ``blocked`` nennt die Arten, für die in diesem Zyklus kein Befehl kommt: offene
           Schreibvorgänge und die Aktoren in Übergabe.
         - ``accepted_at`` ist die Annahmezeit der Absicht ``intent``.
+        - ``hourly_count`` nennt zu einem Aktor die Befehle im Stundenfenster der Safety-Schicht
+          (zur Zeit ``snow``); der Link fragt es für jeden Aktor eines Fahrzeugs mit Tessie
+          (``ChargeInputs.commands_hour``, Plan 2d, Präzisierung 9).
 
         Dazu die des Akku-Sollwerts (Plan 2c-2a): PV (``derived.pv_total_w``) und Hauslast
         (``derived.house_load_w``), der Basis-Sollwert ``ess.grid_setpoint_w`` (``ok_number``) und
@@ -163,6 +167,11 @@ class RegulationLink:
                 intent=intent,
                 accepted_at=accepted_at,
                 homes=homes(snap, self._cfg),
+                commands_hour={
+                    vehicle_actuator(key): hourly_count(vehicle_actuator(key))
+                    for key, vehicle in self._cfg.vehicles.items()
+                    if vehicle.tessie is not None
+                },
             )
             commands = self.regulation.step(
                 RegulationInputs(

@@ -117,12 +117,14 @@ def inputs(
     intent: Intent | None = None,
     accepted_at: datetime | None = T0,
     homes: Mapping[str, bool | None] | None = None,
+    commands_hour: Mapping[str, int] | None = None,
 ) -> ChargeInputs:
     """Die Eingaben eines Zyklus ``s`` Sekunden nach ``T0``, auf beiden Uhren.
 
     Ohne Angabe gelten ``grid()``, ``evcs()``, ``twc()``, ``tesla()`` und für den e-Golf ``NONE``,
     dazu ``PRESENT``, ``CONTROLLABLE``, keine Weckerlaubnis und ``Intent(version=1, control=True)``.
-    ``homes`` fehlt ohne Angabe: Home Assistant sagt dann über kein Fahrzeug etwas. ``cfg`` bleibt
+    ``homes`` fehlt ohne Angabe: Home Assistant sagt dann über kein Fahrzeug etwas;
+    ``commands_hour`` ebenso: Dann hat kein Fahrzeug Befehle der letzten Stunde. ``cfg`` bleibt
     ungenutzt; es steht für die Form, die ``run`` von ``make`` erwartet.
     """
     when = T0 + timedelta(seconds=s)
@@ -142,6 +144,7 @@ def inputs(
         intent=Intent(version=1, control=True) if intent is None else intent,
         accepted_at=accepted_at,
         homes={} if homes is None else dict(homes),
+        commands_hour={} if commands_hour is None else dict(commands_hour),
     )
 
 

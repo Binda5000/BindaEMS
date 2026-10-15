@@ -353,6 +353,13 @@ class ControlConfig(_Model):
     - ``override_refresh_s``: So oft in s frischt der core einen Override auf (Cerbo-Timeout 300 s)
     - ``peak_target_kw``: Ziel des 15-min-Wächters in kW; ohne Wert ruht er
     - ``peak_margin_kw``: Marge der Hochrechnung des Wächters in kW (Spec 7.4)
+
+    Stundenbudget des Tesla (Plan 2d, Präzisierung 9):
+
+    - ``tesla_reserve_commands``: So viele Befehle je Stunde hält die Regelung für den Tesla frei.
+      Ist das Budget (``vehicles.<v>.commands.per_hour``) bis auf diese Reserve verbraucht, ändert
+      sie seinen Strom nur noch, wenn der Phasenwächter es verlangt. Der Wert liegt unter
+      ``per_hour`` jedes Fahrzeugs mit Tessie.
     """
 
     import_margin_a: Annotated[float, Field(ge=0)] = 1.0
@@ -374,6 +381,7 @@ class ControlConfig(_Model):
     override_refresh_s: Annotated[float, Field(gt=0, le=280, allow_inf_nan=False)] = 240.0
     peak_target_kw: Annotated[float, Field(gt=0, allow_inf_nan=False)] | None = None
     peak_margin_kw: Annotated[float, Field(ge=0, allow_inf_nan=False)] = 0.3
+    tesla_reserve_commands: Annotated[int, Field(ge=0)] = 4
 
 
 class CoreConfig(_Model):
@@ -431,6 +439,18 @@ class Config(_Model):
     def _import_margin_below_import_limit(self) -> Self:
         if self.control.import_margin_a >= self.grid.import_limit_a:
             raise ValueError("control.import_margin_a muss kleiner als grid.import_limit_a sein")
+        return self
+
+    @model_validator(mode="after")
+    def _reserve_below_hourly_limit(self) -> Self:
+        for key, vehicle in self.vehicles.items():
+            if vehicle.tessie is not None and (
+                self.control.tesla_reserve_commands >= vehicle.commands.per_hour
+            ):
+                raise ValueError(
+                    f"control.tesla_reserve_commands muss unter vehicles.{key}.commands.per_hour "
+                    "liegen"
+                )
         return self
 
     @model_validator(mode="after")

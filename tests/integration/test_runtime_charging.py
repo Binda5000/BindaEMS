@@ -381,6 +381,7 @@ async def test_health_lists_vehicles(runtime_env) -> None:
         "plugged": None,
         "charging": None,
         "wakes_today": 0,
+        "commands_hour": None,
         "reason": None,
     }
     run(rt, clock, 31)
@@ -398,6 +399,7 @@ async def test_health_lists_vehicles(runtime_env) -> None:
         "plugged": True,
         "charging": False,
         "wakes_today": 0,
+        "commands_hour": None,
         "reason": "mode_pv",  # „Laden aus“ beim Übernehmen, die EVCS hat es schon: UNCHANGED
     }
     assert (vehicles[0]["wallbox"], vehicles[0]["limit_a"]) == ("twc", None)  # nicht geregelt

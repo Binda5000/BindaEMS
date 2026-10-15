@@ -148,6 +148,7 @@
           "plugged": null,
           "charging": null,
           "wakes_today": 0,
+          "commands_hour": null,
           "reason": null
         },
         {
@@ -161,6 +162,7 @@
           "plugged": null,
           "charging": null,
           "wakes_today": 0,
+          "commands_hour": null,
           "reason": null
         }
       ],

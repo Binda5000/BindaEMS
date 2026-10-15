@@ -93,6 +93,10 @@ class RateLimiter:
         while _age_s(now, times[0]) >= _WINDOW_S:  # der neue Eintrag hält die Schleife an
             times.popleft()
 
+    def count(self, actuator: str, now: datetime) -> int:
+        """Zahl der erfassten Befehle des Aktors aller Arten im Stundenfenster zu ``now``."""
+        return self._count(actuator, _ALL_KINDS, now)
+
     def has_hourly_limits(self, actuator: str) -> bool:
         """Gelten für den Aktor Stundenlimits? Das trifft nur den Tesla (Spec 6.5)."""
         return _tesla_commands(self._limits, actuator) is not None

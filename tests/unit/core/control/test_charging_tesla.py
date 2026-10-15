@@ -754,7 +754,7 @@ def test_only_the_first_start_after_a_pause_carries_the_reason(cfg) -> None:
     assert [(t, x.command) for t, x in found] == [
         (131, Command("wallbox.evcs", CURRENT, 16.0, reasons=resumed)),
         (132, Command("wallbox.evcs", CHARGING, True, reasons=resumed)),
-        (133, Command("wallbox.evcs", CHARGING, False, reasons=("mode_off",))),
+        (133, Command("wallbox.evcs", CHARGING, False, urgent=True, reasons=("mode_off",))),
         (134, Command("wallbox.evcs", CHARGING, True, reasons=("mode_now",))),
     ]
 
