@@ -7,10 +7,10 @@ der folgenden Sitzung). Danach sind die EVCS-Hysterese (Freigabe des Betreibers 
 die kleinen Nacharbeiten aus dem Gesamtreview dazugekommen; beides ist per Fast-Forward auf `main`
 (`47a09a7`, mit Zustimmung des Betreibers vom 14.10.2026). Das Design für 2c-2 hat der Betreiber am
 14.10.2026 freigegeben (`docs/superpowers/specs/2026-10-14-phase-2c2-akku-spitzen-design.md`).
-**Plan 2c-2a (Akku und Spitzen) ist umgesetzt und je Task geprüft**
-(`docs/superpowers/plans/2026-10-14-phase-2c2a-akku-spitzen.md`). Er liegt auf dem Branch
-`ccr-9778345e-t3x44k`; der Gesamtreview und die Integration nach `main` stehen aus. Als Nächstes
-folgt Plan 2c-2b (Zuordnungserkennung, Design 2c-2, Abschnitt 7).
+**Plan 2c-2a (Akku und Spitzen) ist umgesetzt, je Task und im Gesamtreview geprüft, und die
+Fix-Welle danach ist umgesetzt** (`docs/superpowers/plans/2026-10-14-phase-2c2a-akku-spitzen.md`). Er
+liegt auf dem Branch `ccr-9778345e-t3x44k`; die Integration nach `main` steht aus. Als Nächstes folgt
+Plan 2c-2b (Zuordnungserkennung, Design 2c-2, Abschnitt 7).
 `main` ist seit dem 12.10.2026 auch der Standard-Branch auf GitHub.
 
 ## Kurzfassung
@@ -112,7 +112,7 @@ folgt Plan 2c-2b (Zuordnungserkennung, Design 2c-2, Abschnitt 7).
     Simulators (±0,33 A beim e-Golf), und der 30-s-Pfad brachte mehr Flattern statt weniger.
   - **Noch nicht (Stand nach 2c-1):** Befehle an Victron und der 15-min-Wächter (kamen mit 2c-2a),
     die Bedienung (2d). Live ist weiterhin kein Aktor.
-- **Phase 2c-2a (Akku und Spitzen) ist umgesetzt und je Task geprüft** (Plan:
+- **Phase 2c-2a (Akku und Spitzen) ist umgesetzt, je Task und im Gesamtreview geprüft** (Plan:
   `docs/superpowers/plans/2026-10-14-phase-2c2a-akku-spitzen.md`, Design:
   `docs/superpowers/specs/2026-10-14-phase-2c2-akku-spitzen-design.md`, 14 Tasks; der Betreiber hat 2c-2
   im Design vom 14.10.2026 (Entscheidung 7) in 2c-2a und 2c-2b geteilt, Ausführung subagent-driven):
@@ -143,6 +143,10 @@ folgt Plan 2c-2b (Zuordnungserkennung, Design 2c-2, Abschnitt 7).
     ihn). Acht Szenarien kamen dazu; alle 18 sind in der CI grün (Betriebshandbuch, „Simulator“). Die
     Regelung brauchte keinen Fix. Drei Szenarien haben einen angepassten Aufbau (unten,
     „Bewusst offen gelassen“).
+  - **Gesamtreview und Fix-Welle:** Der Gesamtreview fand zwei wichtige Lücken im 15-min-Wächter
+    (gewollter Netzbezug über der festen Grenze von Regel 2, Boost-Anteil aus der Verteilung der
+    Abrechnung) und zwei Kleinigkeiten; die Fix-Welle hat sie behoben (unter „Bewusst offen
+    gelassen“).
   - **Entschieden und aufgeschoben:** Die Rulings und die aufgeschobenen Kleinigkeiten stehen unter
     „Bewusst offen gelassen“.
   - **Noch nicht:** die volle Zuordnungserkennung (2c-2b), die Bedienung (2d) und die Planausführung
@@ -152,14 +156,14 @@ folgt Plan 2c-2b (Zuordnungserkennung, Design 2c-2, Abschnitt 7).
   immer gemeinsam aus demselben Stand ausgerollt (gleiche Compose-Datei, gleiche Image-Tags): Die
   UI-Schemas sind streng, eine abweichende Version zeigt auf der System-Seite nur „Unerwartete
   Antwort vom Server“.
-- **Tests:** 5119 Python-Tests, davon 35 Property-Tests mit Hypothesis (6 für die Safety-Schicht,
+- **Tests:** 5135 Python-Tests, davon 35 Property-Tests mit Hypothesis (6 für die Safety-Schicht,
   6 für den Phasenwächter, 12 für den Akku-Sollwert, 6 für den 15-min-Wächter), und 233 UI-Tests;
   Abdeckung 97 % insgesamt und 99 % für `core/safety`, `core/control` und `core/actuators`.
   Geprüft wird mit ruff, mypy strict (auch für den Watchdog), import-linter (4 Verträge), pytest
   mit Abdeckungsgrenzen (≥ 75 % insgesamt, ≥ 90 % für `core/safety`, `core/control` und
   `core/actuators`), Vitest mit svelte-check, Prettier und ESLint; dazu E2E mit Playwright.
 - **Offen:**
-  - der Gesamtreview von Plan 2c-2a und seine Integration nach `main`
+  - die Integration von Plan 2c-2a nach `main`
   - Plan 2c-2b (Zuordnungserkennung) nach dem Design 2c-2, Abschnitt 7, schreiben, vom Betreiber
     durchsehen lassen und umsetzen, danach Plan 2d (siehe „Nächster Schritt“)
   - an der Anlage: Images ausrollen, Dry-Run neben evcc beginnen, der Rest von Teil 2
@@ -417,15 +421,19 @@ Demo-Zugänge: `admin`, `gast` (Lesen) und `sicher` (Admin mit TOTP, Geheimnis
   (`with_control` in `tests/unit/core/control/test_charging.py`). Senkungen wirken sofort.
 - **Simulator (2c-1, 2c-2a):** Er nutzt die echten Aktoren und die Parser der Adapter. Ändert man deren
   Zeiten, Texte oder Signale, ändern sich die Szenarien mit. Alle achtzehn Szenarien laufen in
-  `tests/integration/test_sim_scenarios.py`; je etwa 3 bis 13 s, zusammen rund 2 min (gemessen auf
+  `tests/integration/test_sim_scenarios.py`, dazu eine Abwandlung von `spitze-15min` für den
+  Boost-Anteil des Wächters; je etwa 3 bis 13 s, zusammen rund 2 min (gemessen auf
   der Entwicklungsmaschine); der Job `python` der CI braucht damit 7 bis 11 min, der ganze Ablauf
   mit UI, E2E und Docker 9 bis 12 min (Läufe vom 14. und 15.10.2026). Die Szenarien sind
   deterministisch (feste Saat).
 - **Dokumentationstests (2c-1, 2c-2a):** `tests/unit/test_docs.py` prüft die JSON-Beispiele, die Tabellen
-  der Gründe und die Optionen des Simulators im Betriebshandbuch gegen den Code, im Abschnitt „Akku und
-  Spitzen“ außerdem die Standardwerte der Einstellungen sowie die Feldnamen und Zustände von Health.
-  Ändert man die Absicht, einen Grund-Text, die Optionen von `bindaems.tools.sim`, die Standardwerte
-  von `ControlConfig` oder die Felder und Zustände von Health, schlägt er an, bis das Handbuch stimmt.
+  der Gründe und die Optionen und Szenarien des Simulators im Betriebshandbuch gegen den Code, im
+  Abschnitt „Akku und Spitzen“ außerdem die dokumentierten Standardwerte (die Tabelle der Einstellungen
+  gegen `ControlConfig`) und die Felder von Health (das Beispiel gegen `health()` von Akku-Sollwert und
+  Wächter). Ändert man die Absicht, einen Grund-Text, die Optionen von `bindaems.tools.sim`, einen
+  dokumentierten Standardwert oder die Felder von Health, schlägt er an, bis das Handbuch stimmt. Die
+  Werte der Beispiele prüft er nicht, die Zustände von Health nur gegen eine feste Liste im Test, und
+  eine neue Einstellung, die in seiner Liste `BATTERY_SETTINGS` fehlt, bemerkt er nicht.
 
 ## Stand der Installation beim Betreiber
 
@@ -511,9 +519,9 @@ Demo-Zugänge: `admin`, `gast` (Lesen) und `sicher` (Admin mit TOTP, Geheimnis
      - EVCS: den Schritt „Verbindung unterbrochen“ (Punkt `evcs` erneut, die Rückfrage mit `j`
        beantworten und das Netzwerkkabel der EVCS ziehen, wenn das Werkzeug es verlangt).
      - Victron: 17.2-4 „Kein Akku ins Auto“, während ein Auto an der EVCS lädt (die übrigen
-       Rückfragen mit `n`). Dynamic ESS dafür wieder vorübergehend abschalten (Entscheidung des
-       Betreibers vom 12.10.2026) und danach wieder einschalten. Der Multi muss dabei auf „Ein“
-       stehen.
+       Rückfragen mit `n`). Dieser Punkt kommt vor Punkt 4: Dynamic ESS dafür vorübergehend abschalten
+       (Entscheidung des Betreibers vom 12.10.2026) und danach wieder einschalten; erst ab dem Dry-Run
+       des Victron-Teils (Punkt 4.1) bleibt DESS aus. Der Multi muss dabei auf „Ein“ stehen.
      - Die Berichte nach `docs/verification/` übernehmen.
      - Das verstellt die EVCS (Punkt `evcs`: Strom und „Laden an/aus“) und den Netz-Sollwert und
        damit den Akku (17.2-4 schreibt nur den Override), während evcc die EVCS regelt; den Tesla
@@ -528,14 +536,18 @@ Demo-Zugänge: `admin`, `gast` (Lesen) und `sicher` (Admin mit TOTP, Geheimnis
         Simulator rund 67 unter schnell wechselnden Wolken, `akku-wolkig`), ob das Rauschen der
         Hauslast das Totband von 200 W übersteigt, und **ob der Wächter bei kleinen Senkungen
         nachdrosselt** (Entscheidungen mit `peak_guard`). Die Drosselung hat kein Totband: Im Modell
-        gab es keine unnötige Drosselung (6 Änderungen in 4440 Schritten von `spitze-15min`), aber
-        nach einer Drosselung klingt das alte 30-s-Mittel genau mit der Wartezeit von 30 s ab
-        (`SETTLE_S`, eine Sekunde Abstand), und das Modell hat kein Netzrauschen. An der Anlage
-        könnten kleine Nachdrosselungen und eine verzögerte Aufhebung entstehen, die Marge
-        `peak_margin_kw` fängt sie ab. Dann entscheidet der Betreiber, ob ein Totband in die
-        Drosselung kommt (etwa eine Senkung unter 100 W ignorieren).
-     3. **Prüfprotokoll Teil 2, Victron 17.2-4 „Kein Akku ins Auto“:** Es prüft genau den
-        Mechanismus des Akku-Sollwerts.
+        gab es kein Nachdrosseln aus Rauschen, aber nach einer Drosselung klingt das alte 30-s-Mittel
+        genau mit der Wartezeit von 30 s ab (`SETTLE_S`, eine Sekunde Abstand), und das Modell hat
+        kein Netzrauschen. An der Anlage könnten kleine Nachdrosselungen und eine verzögerte Aufhebung
+        entstehen, die Marge `peak_margin_kw` fängt sie ab. Dann entscheidet der Betreiber, ob ein
+        Totband in die Drosselung kommt (etwa eine Senkung unter 100 W ignorieren). Gewollt sind
+        seit der Fix-Welle Stufen: Wollen die Autos mehr als die feste Grenze von Regel 2 und liegt
+        `P_zul` darunter, verlangt der Wächter je Schritt nur den Unterschied (in `spitze-15min` rund
+        300 W, 20 Entscheidungen mit `peak_guard` an der EVCS in 4440 Schritten; je Viertelstunde der
+        e-Golf in Schritten von 1 A von 16 auf 10 oder 9 A).
+     3. **Prüfprotokoll Teil 2, Victron 17.2-4 „Kein Akku ins Auto“,** falls es nicht schon unter
+        Punkt 3 bestanden ist; DESS ist hier schon aus. Es prüft genau den Mechanismus des
+        Akku-Sollwerts.
      4. **`victron.live_allowed: true`** in `config.yaml`, den core neu starten, die `config.ini`
         neu erzeugen und mit `install.sh` übertragen. Die Override-Aktion steht nur in einer
         `config.ini`, die mit der Freigabe erzeugt wurde; die Probe braucht sie, deshalb kommt die
@@ -639,8 +651,8 @@ Demo-Zugänge: `admin`, `gast` (Lesen) und `sicher` (Admin mit TOTP, Geheimnis
        nicht ausgerollt (siehe Kurzfassung): Modi Sofort, PV, Min+PV, Aus und Boost, Phasenwächter,
        Tesla-Steuerung, vereinfachte Zuordnung Auto ↔ Wallbox, Degradation der Ladepunkte,
        Anlagensimulator mit Regelkreistests in der CI.
-     - **2c-2a Akku und Spitzen:** umgesetzt und je Task geprüft, Gesamtreview und Integration nach
-       `main` stehen aus (siehe Kurzfassung): Umbau, Befehle der Regelung an Victron
+     - **2c-2a Akku und Spitzen:** umgesetzt, je Task und im Gesamtreview geprüft, die Integration
+       nach `main` steht aus (siehe Kurzfassung): Umbau, Befehle der Regelung an Victron
        (Akku-Unterstützung und Setpoint-Kompensation, Spec 7.6 und 7.7, Auffrischen des Overrides vor
        seinem Timeout von 5 min), 15-min-Wächter (Spec 7.4), Simulator mit 18 Szenarien.
      - **2c-2b Zuordnung:** die volle Zuordnungserkennung (Spec 7.8, Design 2c-2, Abschnitt 7) samt
@@ -666,7 +678,7 @@ Demo-Zugänge: `admin`, `gast` (Lesen) und `sicher` (Admin mit TOTP, Geheimnis
      an der Anlage am 12.10.2026 bestätigt.
    - Geschrieben wird nie der Maximalstrom (5017).
 
-### Nächster Schritt: Gesamtreview, die Anlage und Plan 2c-2b
+### Nächster Schritt: Integration, die Anlage und Plan 2c-2b
 
 1. Plan 2b ist auf `main`; Gesamtreview, Fix-Durchgang und Re-Review sind erledigt, die
    Entscheidungen stehen in `docs/superpowers/plans/2026-10-11-phase-2b-entscheidungen.md`. Plan
@@ -676,9 +688,9 @@ Demo-Zugänge: `admin`, `gast` (Lesen) und `sicher` (Admin mit TOTP, Geheimnis
    den Absätzen „Stand Plan 2c-1“ der Spec, die offenen Punkte vor der Live-Schaltung in „Offen an
    der Anlage“.
 2. An der Anlage die Schritte aus „Offen an der Anlage“.
-3. Plan 2c-2a ist umgesetzt (`docs/superpowers/plans/2026-10-14-phase-2c2a-akku-spitzen.md`). Es
-   folgen der Gesamtreview über den ganzen Branch und, mit Zustimmung des Betreibers, die Integration
-   nach `main`.
+3. Plan 2c-2a ist umgesetzt und im Gesamtreview geprüft, die Fix-Welle danach ist umgesetzt
+   (`docs/superpowers/plans/2026-10-14-phase-2c2a-akku-spitzen.md`). Es folgt, mit Zustimmung des
+   Betreibers, die Integration nach `main`.
 4. **Plan 2c-2b** (Zuordnungserkennung) nach dem Design 2c-2
    (`docs/superpowers/specs/2026-10-14-phase-2c2-akku-spitzen-design.md`, Abschnitte 7 und 10.3)
    schreiben, vom Betreiber durchsehen lassen und umsetzen: `core/control/assignment.py` bekommt die
@@ -831,13 +843,13 @@ Absätzen „Stand Plan 2c-1“ der Spec:
   Überschuss ruhig knapp über einer Stufe, lässt die EVCS bis zu 1,5 A liegen; das lädt der
   Hausakku.
 - Bei schnell wechselnden Wolken deckt ohne Akku-Sollwert (Victron im Dry-Run) der Hausakku einen
-  spürbaren Teil der PV-Ladung des Tesla, denn der Tesla darf seinem Mittel nur alle 90 s folgen. Im
-  Simulator (`wolkig`, Victron im Dry-Run) waren es rund 40 % seiner Ladeenergie, roh gerechnet: Die
-  Kennzahl „Akku-Energie in PV-Autos“ nimmt die Übergänge aus und zeigt dort 0 %, der Bericht nennt
-  den rohen Anteil aller PV-Autos (18 %) als Informationszahl. Mit Victron live verschiebt der
-  Akku-Sollwert den Fehlbetrag aufs Netz, solange die Unterstützung nicht gilt. Das nimmt das Design
-  in Kauf (Design 6.5). Eine Abhilfe wäre, den Tesla im PV-Modus am vorsichtigen Minimum statt am
-  Mittel zu führen; das wäre eine Designänderung und eine Entscheidung des Betreibers.
+  spürbaren Teil der PV-Ladung des Tesla, denn der Tesla darf seinem Mittel nur alle 90 s folgen. Das
+  nimmt das Design in Kauf (Design 6.5). Im Simulator (`wolkig`, Victron im Dry-Run) waren es rund
+  40 % seiner Ladeenergie, roh gerechnet: Die Kennzahl „Akku-Energie in PV-Autos“ nimmt die Übergänge
+  aus und zeigt dort 0 %, der Bericht nennt den rohen Anteil aller PV-Autos (18 %) als
+  Informationszahl. Eine Abhilfe wäre, den Tesla im PV-Modus am vorsichtigen Minimum statt am Mittel
+  zu führen; das wäre eine Designänderung und eine Entscheidung des Betreibers. Mit Victron live
+  verschiebt der Akku-Sollwert den Fehlbetrag aufs Netz, solange die Unterstützung nicht gilt.
 - Ohne Ströme von EVCS oder Wall Connector startet die Regelung kein Auto (Design 5.5), auch wenn die
   Grenze sonst reichte.
 - Der Tessie-Adapter trennt seine Quelle bei fehlschlagenden Abfragen nicht (nur beim Abbruch). Die
@@ -913,6 +925,42 @@ den Absätzen „Stand Plan 2c-2a“ der Spec. Hier die Entscheidungen mit Koste
   steht unter „Offen an der Anlage“, Punkt 4 (falls falsch: kleine Nachdrosselungen und verzögerte
   Aufhebung, begrenzt durch die Marge).
 
+Der Gesamtreview von Plan 2c-2a (15.10.2026) fand zwei wichtige Lücken in der Verdrahtung des
+15-min-Wächters und zwei Kleinigkeiten. Die Fix-Welle danach hat alle behoben, die beiden Lücken und
+das Totband je mit einem Test, der vorher scheiterte; die Präzisierungen 9 und 10 des Plans, die
+Absätze „Stand Plan 2c-2a“ der Spec, der Kopf des Designs 2c-2 und das Betriebshandbuch sind
+nachgezogen.
+
+- **Gewollter Netzbezug nur bis zur festen Grenze von Regel 2:** Der Wächter verglich `Basis + W`
+  ungekappt mit `P_zul`. Regel 2 begrenzt den Override aber auf `max_grid_charge_setpoint_w`, die
+  Absicherung und `max_import_kw`, und darüber liefert der Akku (Design 2c-2, Entscheidung 3). Zwei
+  Autos in Sofort mit zusammen 18 kW wären bei einem Ziel von 10 kW um rund 10 kW gedrosselt worden,
+  obwohl der Netzbezug ohnehin bei 8 kW blieb. Jetzt gibt der Kern dem Wächter `W` höchstens bis zu
+  dieser Grenze, und solange Victron gesperrt oder nicht steuerbar ist, zählt nur das Mittel. In
+  `spitze-15min` (Ziel 8 kW, `P_zul` knapp unter der Grenze) drosselt der Wächter den e-Golf je
+  Viertelstunde in Stufen von 1 A statt in einem Schritt auf 9 A; der e-Golf lädt 0,5 kWh mehr, der
+  Akku liefert 0,5 kWh mehr, und jede geprüfte Viertelstunde bleibt unter 1,96 kWh (Grenze 2,02).
+  Falls falsch: Liegt `P_zul` unter der Grenze und wollen die Autos mehr als sie, drosselt der
+  Wächter weiter in Stufen, bis `P_zul` über die Grenze steigt, obwohl jede Stufe zuerst nur den Akku
+  entlastet.
+- **Boost-Anteil mit PV und Akku zuerst an Boost:** Den Netzanteil, den der Wächter für Boost abzieht,
+  nahm er aus der Verteilung der Abrechnung, die PV und Akku in der Reihenfolge von `config.yaml`
+  verteilt (erst die EVCS). Lud der Tesla in Boost und der e-Golf in Sofort, buchte sie den Netzbezug
+  des e-Golf auf den Wall Connector, und der Wächter zog ihn als Boost ab: im Simulator 1,51 kWh je
+  Viertelstunde bei einem Ziel von 5 kW, ohne `peak.exceeded`. Jetzt rechnet die Verdrahtung den
+  Anteil aus denselben abgeleiteten Größen ein zweites Mal, mit PV und Akku zuerst für die Wallboxen
+  in Boost; dieselbe Probe bleibt bei 1,24 kWh (Test in `tests/integration/test_sim_scenarios.py`).
+  Wer in Boost ist, weiß der Link aus dem letzten Zyklus des Kerns (einen Zyklus alt, so
+  entschieden).
+- **Kleinigkeiten:** `battery.override_w` in Health ist der angeforderte Wert vor den Regeln 2 und 4
+  (jetzt so dokumentiert; was der Cerbo hält, zeigt `actual_setpoint_w`), und
+  `control.setpoint_deadband_w` muss über 0 liegen. Dazu kamen Tests für den Stream in einem
+  gescheiterten Zyklus und für die Frist der Erwartung eines Overrides (`_lapses_at`), die Reihenfolge
+  der Inbetriebnahme im Kopf des Designs 2c-2 und kleine Korrekturen in dieser Übergabe und im
+  Betriebshandbuch.
+- **Offen:** Ein Szenario Ende zu Ende mit einem PV-Auto über seinem Mindeststrom im Wächter würde die
+  trivial erfüllte Prüfung der Reihenfolge in `spitze-15min` schließen (oben, „Szenarien“).
+
 Notizen für später aus Plan 2c-2a:
 
 - **Unstimmigkeit aus 2c-1:** Der Überschuss zählt die Ladeleistung des Akkus als verfügbar für die
@@ -966,9 +1014,9 @@ etwas):
   Szenario-Prüfungen runden ihren Wert (ein Verstoß um 0,001 läse sich wie die Grenze); je ein
   Aufruf von `shown_number` behöbe das.
 - **Tests:** Es fehlen Tests dafür, dass der Modus des Gastes aus `intent.guest.mode` kommt (über
-  `Regulation.step`), dass `_lapses_at` für „kein Override“ und für andere Arten als `grid_setpoint`
-  stimmt, dass `start_cycle` den Merker `_regulated` zurücksetzt und dass der Stream in einem
-  gescheiterten Zyklus weiterläuft. Die Hilfe für die 8-kW-Konfiguration steht dreimal in Tests,
+  `Regulation.step`) und dass `start_cycle` den Merker `_regulated` zurücksetzt; die Tests für
+  `_lapses_at` und für den Stream in einem gescheiterten Zyklus kamen mit der Fix-Welle nach dem
+  Gesamtreview. Die Hilfe für die 8-kW-Konfiguration steht dreimal in Tests,
   `test_runtime_regulation.py` holt Hilfen aus `test_runtime_charging.py` statt aus einem
   gemeinsamen Modul, und `test_control.py` pinnt die letzten beiden Felder von `Command` sowie
   `test_config.py` den genauen Leerraum der Beispielzeile `peak_target_kw`.

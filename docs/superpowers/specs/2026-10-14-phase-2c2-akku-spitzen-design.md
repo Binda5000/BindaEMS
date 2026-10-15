@@ -28,8 +28,13 @@ Präzisierungen des Plans gehen diesem Dokument vor, wo sie abweichen:
   Lücken (`HOLD_MAX_S` = 5 s in `shared/timeutil.py`, auch Standard von `SlotAccumulator`). Springt
   die Wanduhr innerhalb der Viertelstunde zurück, ist sie lückenhaft. `E_bisher` kommt aus der
   Abrechnung: Was sie nicht überbrückt (Intervalle über 5 s, ein Zyklus ohne Bilanz), fehlt darin.
+  Den Netzanteil der Wallboxen in Boost rechnet die Verdrahtung mit PV und Akku zuerst für Boost, wie
+  der Akku-Sollwert lädt; sonst zöge der Wächter den Netzbezug eines anderen Autos als Boost ab
+  (Gesamtreview).
 - **Vergleich (6.2):** Die verlangte Senkung ist `max(Mittel, Basis + W) − P_zul`, nicht
-  `Mittel − P_zul`; sonst würden die Wallboxen mit Victron live nie gedrosselt.
+  `Mittel − P_zul`; sonst würden die Wallboxen mit Victron live nie gedrosselt. `Basis + W` zählt
+  höchstens bis zur festen Grenze von Regel 2 (5.4), denn darüber liefert der Akku (Entscheidung 3);
+  solange Victron gesperrt oder nicht steuerbar ist, zählt nur das Mittel (Gesamtreview).
 - **Drosselung (6.3):** Nur ein Auto an einem Ladepunkt, den die Laderegelung regelt, wird gedrosselt;
   ein ungeregeltes Auto in Boost zählt nur für den Boost-Anteil. Eine Grenze fällt still weg, wenn das
   Auto geht, den Modus wechselt oder in Boost oder Aus geht. Eine Senkung wegen der Grenze ist nie
@@ -43,6 +48,10 @@ Präzisierungen des Plans gehen diesem Dokument vor, wo sie abweichen:
   letzten Zustand mit seinem `quarter_end`.
 - **Szenarien (10.2):** `akku-minpv` und `spitze-15min` starten den Tesla bei 5 A, und in
   `schieflast-pv` kommt die Last auf L1 erst nach 10 min; Gründe im Betriebshandbuch, „Simulator“.
+- **Inbetriebnahme (11.1):** `victron.live_allowed` kommt vor der Watchdog-Probe, nicht danach. Die
+  `config.ini` des Watchdogs enthält die Aktion, die bei einer Auslösung den Override aufhebt, nur mit
+  `live_allowed`, und nur dann prüft die Probe sie. Victron bleibt trotzdem im Dry-Run, bis die
+  Absicht es live verlangt (Betriebshandbuch, „Victron in den Dry-Run und live“).
 
 ## 1. Ziel und Abgrenzung
 

@@ -465,7 +465,9 @@ class BatteryController:
         - ``target_w``: der gewollte Netzbezug nach dem Wächter (``W'``); unbekannt ohne Bedarf
           und, bei einem Budget, ohne Basis
         - ``override_w``: der letzte eigene Wert als Zahl; ``None`` ohne einen und für „kein
-          Override“
+          Override“. Es ist der angeforderte Wert, vor den Regeln 2 und 4 der Safety-Schicht: Der
+          Cerbo kann weniger halten, etwa 8000 W, wenn 17 940 W angefordert waren. Was er hält,
+          zeigt ``actual_setpoint_w`` in den Eingaben der Entscheidungen (``_inputs``).
         - ``support`` und ``bridging_s``: Stand der Unterstützung und Sekunden der laufenden
           Überbrückung aus dem Bedarf
         - ``refresh_age_s``: Sekunden vom letzten Urteil mit Wert über einen eigenen Override bis

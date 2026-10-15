@@ -93,6 +93,7 @@ Stand an der Anlage am 14.10.2026: 2c-1 ist nicht ausgerollt; evcc regelt beide 
 9. **15-min-Wächter: Messung (Design 6.1).**
    - **Quelle:** `SlotAccumulator.current()` (neu) liefert den laufenden Slot. Die Energie bisher ist die Summe seiner Flüsse `grid>*`, die Leistung des Zyklus die Summe der Flüsse `grid>*` aus `allocate`.
    - **Boost:** Je Wallbox kommt ihr Netzanteil des Zyklus (`grid>wb:<w>`) mit. Der Wächter integriert ihn für die Autos in Boost selbst und zieht ihn ab, nach dem Halteprinzip der Abrechnung und über dieselben Lücken (`HOLD_MAX_S` = 5 s in `shared/timeutil.py`, auch Standard von `SlotAccumulator`); sonst passten `E_bisher` und die abgezogene Boost-Energie nach einem Stocken nicht zusammen.
+   - **Netzanteil bei Boost (Gesamtreview):** Den Netzanteil je Wallbox rechnet `RegulationLink` mit einer zweiten Zuordnung (`allocate`, über `derived_flows` in `core/accounting/flows.py`) derselben abgeleiteten Größen, mit derselben Regel für unbekannte Werte. Darin bekommen die Wallboxen der Autos in Boost PV und Akku zuerst, dann die übrigen in der Reihenfolge von `wallbox_order`. So lädt der Akku-Sollwert: Boost darf aus dem Akku laden, der Fehlbetrag der anderen Autos geht ans Netz. Die Verteilung der Abrechnung (nur `wallbox_order`) buchte den Netzbezug eines anderen Autos sonst auf die Wallbox in Boost, und der Wächter zöge ihn ab. Die Wallboxen in Boost nennt `Regulation.boost_wallboxes` aus dem letzten Zyklus (einen Zyklus alt), über `_call` gefangen wie jeder Aufruf des Kerns. Ohne Wallbox in Boost bleibt es der Anteil der Abrechnung; `grid_wh` und `grid_w` ändern sich nicht.
    - **Uhr:** Der Wächter rechnet ganz auf der Wanduhr (`wall_now`), wie die Viertelstunden der Abrechnung.
    - **Lückenhaft** ist eine Viertelstunde bis zu ihrem Ende, wenn eins davon eintritt:
      - Zwischen zwei Zyklen mit bekannter Leistung liegen mehr als 10 s (`GAP_S`).
@@ -101,6 +102,7 @@ Stand an der Anlage am 14.10.2026: 2c-1 ist nicht ausgerollt; evcc regelt beide 
      - Die Wanduhr springt innerhalb der Viertelstunde zurück.
 10. **Vergleich (Design 6.2).**
     - **Verlangte Senkung** = `max(Mittel, Basis + W) − P_zul`, mit `W` vor dem Wächter und dem Mittel der letzten 30 s (ohne Boost).
+    - **`Basis + W` höchstens `C` (Gesamtreview):** Der Kern gibt dem Wächter `W` höchstens bis `C − Basis` (`regulation.peak_wanted_w`), mit der festen Grenze `C` von Regel 2 ohne Budget (`HardLimits.grid_setpoint_max(None)`: `max_grid_charge_setpoint_w`, Absicherung, `max_import_kw`). Mehr Netzbezug setzt kein Override durch; den Rest liefert der Akku (Design, Entscheidung 3). Solange Victron gesperrt (`locks`) oder nicht steuerbar ist, gibt der Kern `W` nicht (`None`), und es zählt nur das Mittel. Das gilt auch für das Aufheben (Präzisierung 11).
     - **Warum `Basis + W`:** Mit Victron live begrenzt Regel 2 den Override auf `P_zul`. ESS hielte den Netzbezug so immer unter `P_zul`, ganz aus dem Akku, und die Wallboxen würden nie gedrosselt (gegen die Reihenfolge von Design 6.3). Mit `W` drosselt der Wächter, sobald die Autos mehr Netz wollen, als das Budget trägt; das Mittel fängt den Rest, etwa einen Akku am Min-SOC.
     - **`P_zul`** nach Design 6.2 mit `t_rest = max(1 s, Ende − wall_now)`, also immer endlich.
 11. **Drosselung (Design 6.3, Punkt 1).**
@@ -533,7 +535,7 @@ git commit -m "feat(core): Regelungs-Kern mit eigener Verdrahtung; eine Ausnahme
     | `support_hysteresis_pct` | `5.0` | ≥ 0 |
     | `support_max_w` | `3000.0` | ≥ 0 |
     | `support_max_s` | `900.0` | ≥ 0 |
-    | `setpoint_deadband_w` | `200.0` | ≥ 0 |
+    | `setpoint_deadband_w` | `200.0` | > 0 (Gesamtreview; vorher ≥ 0) |
     | `override_refresh_s` | `240.0` | > 0, ≤ 280 |
     | `peak_target_kw` | `None` | > 0 |
     | `peak_margin_kw` | `0.3` | ≥ 0 |

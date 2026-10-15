@@ -32,13 +32,15 @@ von der Tabelle des Plans 2c-2a, weil ihre Erwartung im Modell nicht zu schaffen
   5 A (``TESLA_MIN_A``). Sonst lädt er nach dem Start 90 s mit 16 A: Der erste Befehl auf 5 A geht
   über Tessie verloren, und der Neuversuch folgt im Abstand von ``current_interval_s`` (Plan 2c-1,
   Design 7.2). In ``akku-minpv`` liefert der Akku dann bis zu 5,8 kW in die Autos, denn Regel 2
-  begrenzt den Override auf ``max_grid_charge_setpoint_w`` (8 kW). In ``spitze-15min`` fällt die
-  erste Drosselung in diese Zeit: Der Wächter drosselt den Tesla bis zum Mindeststrom und den
-  e-Golf um den Rest im selben Schritt (Präzisierung 11), und der Tesla folgt erst nach dem
-  Neuversuch. Die Prüfung der Reihenfolge an den Strömen scheitert dann, obwohl der Wächter in der
-  richtigen Reihenfolge drosselt, und mit dem Tesla am Mindeststrom (Min+PV ohne PV) ist sie
-  trivial erfüllt; die Reihenfolge der Drosselung sichern
-  ``tests/unit/core/control/test_peak_throttle.py`` und ``tests/property/test_peak_guard.py``.
+  begrenzt den Override auf ``max_grid_charge_setpoint_w`` (8 kW). In ``spitze-15min`` fiel die
+  erste Drosselung in diese Zeit: Der Wächter drosselte den Tesla bis zum Mindeststrom und den
+  e-Golf um den Rest im selben Schritt (Präzisierung 11), und der Tesla folgte erst nach dem
+  Neuversuch; die Prüfung der Reihenfolge an den Strömen scheiterte, obwohl der Wächter in der
+  richtigen Reihenfolge drosselt. Seit dem Gesamtreview zählt der Wächter ``Basis + W`` nur bis
+  zur festen Grenze von Regel 2 und senkt im ersten Schritt nur den Tesla, um 300 W; der Aufbau
+  mit 5 A blieb. Mit dem Tesla am Mindeststrom (Min+PV ohne PV) ist die Prüfung trivial erfüllt;
+  die Reihenfolge der Drosselung sichern ``tests/unit/core/control/test_peak_throttle.py`` und
+  ``tests/property/test_peak_guard.py``.
 - In ``schieflast-pv`` kommt die schwere Last auf L1 erst nach 10 min dazu (``UNBALANCED_FROM_S``),
   wenn der e-Golf schon lädt. Von Anfang an startete er nie: Der Phasenwächter zählt die
   Ladeleistung des Akkus zur Last der Phase (Plan 2c-1, Design 5.1) und lässt auf L1 nur etwa 3 A
