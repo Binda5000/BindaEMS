@@ -198,11 +198,13 @@ class Regulation:
 
     def health(self) -> dict[str, Any]:
         """Der Stand des letzten Zyklus: ``vehicles`` je Fahrzeug (``ChargeController.health``),
-        ``battery`` (``BatteryController.health``) und ``peak`` (``PeakGuard.health``)."""
+        ``battery`` (``BatteryController.health``), ``peak`` (``PeakGuard.health``) und
+        ``wallboxes`` je Wallbox (``ChargeController.wallbox_health``, Plan 2c-2b)."""
         return {
             "vehicles": self.charger.health(),
             "battery": self.battery.health(),
             "peak": self.peak_guard.health(),
+            "wallboxes": self.charger.wallbox_health(),
         }
 
     def alarms(self, wall_now: datetime) -> list[Alarm]:

@@ -58,6 +58,13 @@ class HealthReport(BaseModel):
       Netzbezug der Viertelstunde bisher, ohne Boost), ``projected_kw`` (die Hochrechnung),
       ``budget_kw`` (``P_zul``), ``reduction_kw`` (die verlangte Senkung, mindestens 0) und
       ``quarter_end`` (das Ende der Viertelstunde, ISO in UTC); was fehlt, ist ``null``
+    - ``wallboxes``: je Wallbox in der Reihenfolge von ``config.yaml``, wer dort steht
+      (``ChargeController.wallbox_health``, Plan 2c-2b): ``id``, ``occupant`` (der Schlüssel des
+      Fahrzeugs, ``guest`` oder ``null`` ohne Vorgang), ``name`` (der Name des Fahrzeugs, ``Gast``
+      oder ``null``), ``assignment`` (``detected``, ``default`` für angenommen, ``override``,
+      ``unclear`` oder ``null``) und ``indicators`` (die Indizien des letzten Zyklus, je
+      ``vehicle``, ``clue`` und ``supports``); vor dem ersten Zyklus und nach einer Pause der
+      Regelung steht niemand dort
     """
 
     mode: Literal["START", "OBSERVE", "CONTROL", "DEGRADED", "SAFE"]
@@ -77,6 +84,7 @@ class HealthReport(BaseModel):
     vehicles: list[dict[str, Any]] = Field(default_factory=list)
     battery: dict[str, Any] = Field(default_factory=dict)
     peak: dict[str, Any] = Field(default_factory=dict)
+    wallboxes: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class CurrentIntent(BaseModel):

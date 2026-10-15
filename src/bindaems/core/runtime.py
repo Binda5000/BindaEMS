@@ -583,6 +583,7 @@ class CoreRuntime:
             vehicles=regulation["vehicles"],
             battery=regulation["battery"],
             peak=regulation["peak"],
+            wallboxes=regulation["wallboxes"],
         )
 
     def state(self) -> dict[str, Any]:

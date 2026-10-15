@@ -143,6 +143,7 @@ def test_regulation_passes_the_charging_through(cfg) -> None:
     assert found  # „Laden aus“ für den e-Golf in PV-Überschuss
     assert found == charger.step(inputs(cfg))
     assert regulation.health()["vehicles"] == charger.health()
+    assert regulation.health()["wallboxes"] == charger.wallbox_health()
     assert regulation.vehicle_wallbox() == charger.vehicle_wallbox()
 
 
@@ -656,3 +657,8 @@ def test_health_shows_the_guard(cfg) -> None:  # Präzisierung 16
         "reduction_kw": 1.38,
         "quarter_end": QUARTER_END.isoformat(),
     }
+
+
+def test_health_has_the_wallboxes(cfg) -> None:  # Plan 2c-2b, Präzisierung 11
+    health = Regulation(cfg, HardLimits.from_config(cfg), started=T0).health()
+    assert list(health) == ["vehicles", "battery", "peak", "wallboxes"]

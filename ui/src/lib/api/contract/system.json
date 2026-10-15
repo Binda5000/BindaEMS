@@ -176,7 +176,23 @@
         "budget_kw": null,
         "reduction_kw": null,
         "quarter_end": null
-      }
+      },
+      "wallboxes": [
+        {
+          "id": "evcs",
+          "occupant": null,
+          "name": null,
+          "assignment": null,
+          "indicators": []
+        },
+        {
+          "id": "twc",
+          "occupant": null,
+          "name": null,
+          "assignment": null,
+          "indicators": []
+        }
+      ]
     }
   },
   "components": [

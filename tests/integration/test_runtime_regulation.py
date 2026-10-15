@@ -123,9 +123,11 @@ async def test_regulation_recovers_after_the_exception(runtime_env, monkeypatch)
     assert len(steps) == 3
     assert CONTROL_EXCEPTION in alarm_ids(rt)
     assert [v["mode"] for v in rt.health().vehicles] == [None, None]  # noch kein guter Zyklus
+    assert [w["occupant"] for w in rt.health().wallboxes] == [None, None]
     run(rt, clock, 1)
     assert CONTROL_EXCEPTION not in alarm_ids(rt)
     assert rt.health().vehicles[1]["mode"] == "pv"
+    assert [w["occupant"] for w in rt.health().wallboxes] == ["egolf", None]
     run(rt, clock, 125)  # Start nach 120 s mit genug Überschuss
     found = [(d.actuator, d.kind, d.requested, d.result, d.codes) for d in charging_decisions(rt)]
     # dieselben Entscheidungen wie in test_dry_run_decides_only_its_own_changes
@@ -145,3 +147,30 @@ async def test_regulation_recovers_after_the_exception(runtime_env, monkeypatch)
             ("mode_pv", "pv_surplus"),
         ),
     ]
+
+
+async def test_health_reports_who_stands_where(runtime_env) -> None:  # Plan 2c-2b, Präzisierung 11
+    rt, _, clock = runtime_env(state=dict(EGOLF_PLUGGED), extra=SURPLUS)
+    rt.submit_intent(Intent(version=1, control=True))
+    nobody = [
+        {"id": wallbox, "occupant": None, "name": None, "assignment": None, "indicators": []}
+        for wallbox in ("evcs", "twc")
+    ]
+    run(rt, clock, 1)  # OBSERVE: noch keine Regelung
+    assert rt.health().wallboxes == nobody
+    run(rt, clock, 31)  # CONTROL ab 30 s
+    assert rt.health().mode == "CONTROL"
+    wallboxes = rt.health().wallboxes
+    assert [w["id"] for w in wallboxes] == ["evcs", "twc"]
+    # Der e-Golf steht angenommen an der EVCS, an der ein Fahrzeug angesteckt ist; am Wall Connector
+    # läuft kein Vorgang.
+    assert (wallboxes[0]["occupant"], wallboxes[0]["name"], wallboxes[0]["assignment"]) == (
+        "egolf",
+        "e-Golf",
+        "default",
+    )
+    assert wallboxes[1] == nobody[1]
+    # Ohne Regelbetrieb ruht die Regelung (``idle``): Die Gesundheit kennt niemanden mehr.
+    rt.submit_intent(Intent(version=2, control=False))
+    run(rt, clock, 1)
+    assert rt.health().wallboxes == nobody

@@ -1787,3 +1787,126 @@ def test_the_reason_lapses_when_the_car_is_no_longer_detected(cfg) -> None:  # P
     )
     off = ("mode_pv",)
     assert as_commands(found) == [cmd(0, CHARGING, False, off), cmd(130, CHARGING, False, off)]
+
+
+# Plan 2c-2b: Health je Wallbox (Präzisierung 11)
+
+NOBODY = [
+    {"id": wallbox, "occupant": None, "name": None, "assignment": None, "indicators": []}
+    for wallbox in ("evcs", "twc")
+]
+
+
+def test_wallbox_health_shows_who_stands_where(cfg) -> None:
+    c = controller(cfg)
+    run(c, cfg, 61, twc_obs=twc(connected=False), tesla_obs=tesla(plugged=True))
+    assert c.wallbox_health() == [
+        {
+            "id": "evcs",
+            "occupant": "tesla",
+            "name": "Tesla Model 3",
+            "assignment": "detected",
+            "indicators": [
+                {"vehicle": "tesla", "clue": "tessie", "supports": True},
+                {"vehicle": "tesla", "clue": "elsewhere", "supports": True},
+            ],
+        },
+        NOBODY[1],
+    ]
+
+
+def test_wallbox_health_names_a_guest(cfg) -> None:
+    c = controller(cfg)
+    run(c, cfg, 1, homes={"egolf": False})
+    evcs_ = c.wallbox_health()[0]
+    assert (evcs_["occupant"], evcs_["name"], evcs_["assignment"]) == ("guest", "Gast", "default")
+
+
+def test_wallbox_health_names_a_detected_guest(cfg) -> None:
+    # Ab 60 s ist jedes Fahrzeug an der EVCS ausgeschlossen: Der Gast ist erkannt, nicht mehr nur
+    # angenommen. Die Indizien sind die, die die Fahrzeuge dort ausschließen.
+    c = controller(cfg)
+    run(c, cfg, 61, homes={"egolf": False})
+    assert c.wallbox_health()[0] == {
+        "id": "evcs",
+        "occupant": "guest",
+        "name": "Gast",
+        "assignment": "detected",
+        "indicators": [
+            {"vehicle": "tesla", "clue": "tessie", "supports": False},
+            {"vehicle": "egolf", "clue": "home", "supports": False},
+        ],
+    }
+
+
+def test_wallbox_health_is_empty_before_the_first_step_and_after_idle(cfg) -> None:
+    c = controller(cfg)
+    assert c.wallbox_health() == NOBODY
+    run(c, cfg, 1)
+    c.idle(T0 + timedelta(seconds=1))
+    assert c.wallbox_health() == NOBODY
+
+
+def test_wallbox_health_shows_an_assumed_car_and_its_clues(cfg) -> None:
+    # Der e-Golf steht angenommen an der EVCS; die Indizien des Zyklus nennt die Gesundheit auch,
+    # wenn sie nichts entscheiden: Tessie sieht den Tesla dort nicht (er ist nicht angesteckt).
+    c = controller(cfg)
+    run(c, cfg, 1)
+    assert c.wallbox_health() == [
+        {
+            "id": "evcs",
+            "occupant": "egolf",
+            "name": "e-Golf",
+            "assignment": "default",
+            "indicators": [{"vehicle": "tesla", "clue": "tessie", "supports": False}],
+        },
+        NOBODY[1],
+    ]
+
+
+def test_wallbox_health_shows_an_override(cfg) -> None:
+    override = Intent(version=1, control=True, vehicles={"tesla": VehicleIntent(wallbox="evcs")})
+    c = controller(cfg)
+    run(c, cfg, 1, intent=override)
+    evcs_, twc_ = c.wallbox_health()
+    assert (evcs_["occupant"], evcs_["name"], evcs_["assignment"]) == (
+        "tesla",
+        "Tesla Model 3",
+        "override",
+    )
+    assert twc_ == NOBODY[1]
+
+
+def test_wallbox_health_shows_an_unclear_assignment_with_its_contradiction(cfg) -> None:
+    # ``CONTRADICTION``: Tessie und der Ausschluss stützen den Tesla an der EVCS, die
+    # Phasen-Signatur schließt ihn dort aus. Ab 120 s ist die Zuordnung unklar: An der EVCS steht
+    # dann wieder ihr Standardfahrzeug, mit der Art „unklar“, und die Indizien zeigen den
+    # Widerspruch.
+    c = controller(cfg)
+    run(c, cfg, UNCLEAR_FROM_S + 1, **CONTRADICTION)
+    assert c.wallbox_health() == [
+        {
+            "id": "evcs",
+            "occupant": "egolf",
+            "name": "e-Golf",
+            "assignment": "unclear",
+            "indicators": [
+                {"vehicle": "tesla", "clue": "tessie", "supports": True},
+                {"vehicle": "tesla", "clue": "phases", "supports": False},
+                {"vehicle": "tesla", "clue": "elsewhere", "supports": True},
+                {"vehicle": "egolf", "clue": "phases", "supports": True},
+            ],
+        },
+        NOBODY[1],
+    ]
+
+
+def test_wallbox_health_names_nobody_at_a_wallbox_with_a_session_while_unclear(cfg) -> None:
+    # Haben beide Fahrzeuge den Wall Connector als Standard-Wallbox, steht an der EVCS, an der ein
+    # Vorgang läuft, niemand, solange die Zuordnung unklar ist: die Art bleibt „unklar“.
+    cfg = with_vehicle(cfg, "egolf", default_wallbox="twc")
+    c = controller(cfg)
+    run(c, cfg, UNCLEAR_FROM_S + 1, **CONTRADICTION)
+    evcs_ = c.wallbox_health()[0]
+    assert (evcs_["occupant"], evcs_["name"], evcs_["assignment"]) == (None, None, "unclear")
+    assert {"vehicle": "tesla", "clue": "phases", "supports": False} in evcs_["indicators"]

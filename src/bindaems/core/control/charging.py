@@ -30,7 +30,9 @@ einer EVCS wird er wie jedes Auto geregelt, mit ihrem Strombereich; am Wall Conn
 
 Nach jedem ``step`` zeigt ``cars`` je Ladepunkt das Auto mit Modus und Leistung (``CarView``): Damit
 rechnen Akku-Sollwert und 15-min-Wächter mit Zuordnung und Modi desselben Zyklus (Plan 2c-2a,
-Präzisierungen 3 und 4).
+Präzisierungen 3 und 4). Das Health nennt je Fahrzeug der Konfiguration seinen Stand (``health``)
+und je Wallbox, wer dort steht, mit Art und Indizien (``wallbox_health``, Plan 2c-2b,
+Präzisierung 11).
 
 Dazu legt die Regelung fest:
 
@@ -86,7 +88,7 @@ from dataclasses import dataclass, replace
 from datetime import datetime
 from typing import Any, Final
 
-from bindaems.core.control.assignment import Assignment, AssignmentKind, VehicleState
+from bindaems.core.control.assignment import Assignment, AssignmentKind, VehicleState, WallboxState
 from bindaems.core.control.charge_inputs import NO_VEHICLE_DATA, ChargeInputs, VehicleObs
 from bindaems.core.control.charge_modes import (
     FULL_POWER,
@@ -118,7 +120,7 @@ from bindaems.core.control.charging_tesla import (
     wake_command,
 )
 from bindaems.core.control.executor import WriteResult
-from bindaems.core.control.fleet import car_spec, fleet, guest_wallbox
+from bindaems.core.control.fleet import GUEST, car_spec, fleet, guest_wallbox
 from bindaems.core.control.last_values import ControlCommand, Key, LastValues
 from bindaems.core.control.peak_guard import NO_LIMITS, PeakLimits
 from bindaems.core.control.phase_guard import (
@@ -157,6 +159,7 @@ ChargeCommand = ControlCommand  # der Name der Laderegelung für ihren Befehl
 _CURRENT: Final = CommandKind.CURRENT
 _CHARGING: Final = CommandKind.CHARGING
 _SURPLUS_MODES: Final = frozenset({Effective.PV, Effective.MIN_PV})  # Wunsch aus dem Anteil
+_NOBODY: Final = WallboxState(None, None, ())  # an der Wallbox läuft kein Vorgang
 
 
 @dataclass(frozen=True)
@@ -264,8 +267,9 @@ class ChargeController:
     ``TeslaPolicy`` (Fenster und Weckkontingent), der Überlastwächter samt der Stufe des letzten
     Zyklus, die geregelten Ladepunkte des letzten Zyklus, die letzten eigenen Werte je Aktor und
     Art, die Autos, deren erste Startfolge nach einer Pause aussteht, die neu erkannten Autos ohne
-    Befehle seither (``assignment_detected``) und die Autos des letzten Zyklus (``cars``).
-    ``started`` ist die Wanduhr beim Start der Regelung (``Assignment``).
+    Befehle seither (``assignment_detected``), die Autos des letzten Zyklus (``cars``) und wer an
+    jeder Wallbox stand (``wallbox_health``). ``started`` ist die Wanduhr beim Start der Regelung
+    (``Assignment``).
     """
 
     def __init__(self, cfg: Config, limits: HardLimits, *, started: datetime) -> None:
@@ -295,6 +299,8 @@ class ChargeController:
         self._last = LastValues()
         self._views: dict[str, _View] = {}
         self._cars: tuple[CarView, ...] = ()  # je Ladepunkt des letzten ``step`` (``cars``)
+        # wer an welcher Wallbox stand, im letzten ``step`` (``wallbox_health``)
+        self._wallboxes: Mapping[str, WallboxState] = {}
         self._reasons: dict[str, str] = {}  # der letzte Grund des letzten Befehls je Fahrzeug
         self._vehicle_wallbox: dict[str, str | None] = {}
         # Die Uhren des letzten ``step``: für das Weckkontingent in ``note_verdict`` und ``health``
@@ -407,6 +413,7 @@ class ChargeController:
 
         self._regulated = set(regulated.items())
         self._views = views
+        self._wallboxes = state.wallboxes
         self._cars = tuple(
             _car_view(self._cfg, point, modes[key], state.vehicles[key], inputs)
             for key, point in points.items()
@@ -460,9 +467,10 @@ class ChargeController:
         (Präzisierung 12), die Überlast mit einem neuen Wächter und der Stufe ``NONE``; die alten
         werteten die Lücke sonst als durchgehend. Die Zuordnung bleibt, damit ein beendeter Boost
         nicht wieder auflebt; das Weckkontingent bleibt ebenso und ein neu erkanntes Auto ohne
-        Befehle seither (``assignment_detected``). ``health``, ``vehicle_wallbox`` und ``cars`` sind
-        bis zum nächsten ``step`` unbekannt; der letzte Grund je Fahrzeug bleibt. ``now`` ist die
-        Zeit der Safety-Schicht; das Vergessen braucht sie nicht.
+        Befehle seither (``assignment_detected``). ``health``, ``wallbox_health``,
+        ``vehicle_wallbox`` und ``cars`` sind bis zum nächsten ``step`` unbekannt; der letzte Grund
+        je Fahrzeug bleibt. ``now`` ist die Zeit der Safety-Schicht; das Vergessen braucht sie
+        nicht.
         """
         self._last.forget()
         self._regulated = set()
@@ -473,6 +481,7 @@ class ChargeController:
         self._overload = OverloadGuard(self._guard)
         self._level = OverloadLevel.NONE
         self._views = {}
+        self._wallboxes = {}
         self._cars = ()
         self._vehicle_wallbox = {}
 
@@ -538,6 +547,38 @@ class ChargeController:
                     "charging": None if state is None else state.charging,
                     "wakes_today": self._tesla[key].wakes_today(self._wall_now),
                     "reason": self._reasons.get(key),
+                }
+            )
+        return entries
+
+    def wallbox_health(self) -> list[dict[str, Any]]:
+        """Je Wallbox, in der Reihenfolge von ``config.yaml``, wer dort im letzten ``step`` stand
+        (Plan 2c-2b, Präzisierung 11).
+
+        Die Felder: ``id``, ``occupant`` (der Schlüssel des Fahrzeugs, ``guest`` für einen Gast,
+        ``None`` ohne Vorgang), ``name`` (der Name des Fahrzeugs, ``Gast``, ``None``),
+        ``assignment`` (Wert von ``AssignmentKind``, ``None`` ohne Vorgang) und ``indicators``, die
+        Indizien des Zyklus an der Wallbox, je ``vehicle`` (Schlüssel aus ``config.yaml``), ``clue``
+        (Wert von ``Clue``) und ``supports`` (stützt das Fahrzeug an der Wallbox, sonst schließt das
+        Indiz es dort aus). Steht an einer Wallbox mit Vorgang niemand, was nur bei unklarer
+        Zuordnung vorkommt, sind ``occupant`` und ``name`` ``None`` und ``assignment`` ``unclear``.
+        Vor dem ersten ``step`` und nach ``idle`` sind ``occupant``, ``name`` und ``assignment``
+        ``None``, und ``indicators`` ist leer.
+        """
+        entries: list[dict[str, Any]] = []
+        for key in self._cfg.wallboxes:
+            state = self._wallboxes.get(key, _NOBODY)
+            car = state.occupant
+            entries.append(
+                {
+                    "id": key,
+                    "occupant": None if car is None else _occupant(car),
+                    "name": None if car is None else car_spec(self._cfg, car).name,
+                    "assignment": None if state.kind is None else state.kind.value,
+                    "indicators": [
+                        {"vehicle": e.vehicle, "clue": e.clue.value, "supports": e.supports}
+                        for e in state.evidence
+                    ],
                 }
             )
         return entries
@@ -837,6 +878,11 @@ class ChargeController:
     def _changed(self, key: Key, value: CommandValue) -> bool:
         """Ob ``value`` vom letzten eigenen Wert dieser Art abweicht; ohne einen immer."""
         return self._last.changed(key, value)
+
+
+def _occupant(car: str) -> str:
+    """Der Insasse im Health: der Schlüssel des Fahrzeugs, für einen Gast ``guest`` ohne Wallbox."""
+    return car if guest_wallbox(car) is None else GUEST
 
 
 def _mode(key: str, vehicle: VehicleState, intent: Intent | None) -> Effective:
