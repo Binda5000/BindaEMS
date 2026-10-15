@@ -1,5 +1,5 @@
 import math
-from dataclasses import FrozenInstanceError, fields
+from dataclasses import FrozenInstanceError, fields, replace
 from datetime import timedelta
 
 import pytest
@@ -15,6 +15,7 @@ from bindaems.core.control.charge_inputs import (
     GridObs,
     VehicleObs,
     WallboxObs,
+    homes,
     observe,
 )
 from bindaems.core.state.derived import derive
@@ -225,7 +226,7 @@ def test_every_value_is_read_with_quality_ok(cfg) -> None:
         "twc": WallboxObs(True, True, True, None, {"L1": 8.0, "L2": 8.0, "L3": 8.0}, 5520.0),
     }
     assert vehicles == {
-        "tesla": VehicleObs(True, True, True, False, False, True, 11.0, 3),
+        "tesla": VehicleObs(True, True, True, False, False, True, 11.0, 3, T0),
         "egolf": NO_VEHICLE_DATA,
     }
 
@@ -399,7 +400,7 @@ def test_tessie_values(cfg) -> None:
             "vehicle.tesla.phases": 3,
         },
     )
-    assert vehicles["tesla"] == VehicleObs(True, True, True, False, False, False, 11.0, 3)
+    assert vehicles["tesla"] == VehicleObs(True, True, True, False, False, False, 11.0, 3, T0)
 
 
 @pytest.mark.parametrize(
@@ -494,6 +495,7 @@ def test_observations_keep_the_order_of_the_configuration(cfg) -> None:
                 "at_home",
                 "actual_current_a",
                 "phases",
+                "plugged_at",
             ],
         ),
         (
@@ -514,6 +516,7 @@ def test_observations_keep_the_order_of_the_configuration(cfg) -> None:
                 "blocked",
                 "intent",
                 "accepted_at",
+                "homes",
             ],
         ),
     ],
@@ -539,7 +542,53 @@ def test_charge_inputs_bundle(cfg) -> None:
     )
     assert inputs.wallboxes["evcs"] is wallboxes["evcs"]
     assert ("vehicle.tesla", CommandKind.CHARGING) in inputs.blocked
+    assert inputs.homes == {}  # ohne Angabe: kein Fahrzeug mit home_entity
     with pytest.raises(FrozenInstanceError):
         inputs.now = T0 + timedelta(seconds=1)
     with pytest.raises(FrozenInstanceError):
         NO_VEHICLE_DATA.reachable = True
+
+
+# Zuordnung (Plan 2c-2b): Zustand aus Home Assistant und Zeitstempel der Tessie-Werte
+
+
+@pytest.mark.parametrize(
+    ("state", "expected"),
+    [("home", True), ("not_home", False), ("Arbeit", False), (True, None), (None, None)],
+)
+def test_home_comes_from_home_assistant(cfg, state, expected) -> None:
+    assert homes(snap({"vehicle.egolf.home_state": state}), cfg) == {"egolf": expected}
+
+
+def test_a_stale_home_state_is_unknown(cfg) -> None:
+    stale = snap({"vehicle.egolf.home_state": "home"}, quality=Quality.STALE)
+    assert homes(stale, cfg) == {"egolf": None}
+
+
+def test_without_a_home_state_the_vehicle_is_still_listed_as_unknown(cfg) -> None:
+    assert homes(snap({}), cfg) == {"egolf": None}
+
+
+def test_homes_list_the_vehicles_with_a_home_entity_in_the_order_of_the_configuration(cfg) -> None:
+    tesla = cfg.vehicles["tesla"].model_copy(update={"home_entity": "device_tracker.tesla"})
+    both = cfg.model_copy(update={"vehicles": cfg.vehicles | {"tesla": tesla}})
+    values = {"vehicle.tesla.home_state": "not_home", "vehicle.egolf.home_state": "home"}
+    # auch ein Fahrzeug mit Tessie, in der Reihenfolge von config.yaml
+    assert list(homes(snap(values), both).items()) == [("tesla", False), ("egolf", True)]
+    # ohne home_entity fehlt das Fahrzeug, auch wenn sein Signal einen Wert hat
+    assert homes(snap(values), cfg) == {"egolf": True}
+
+
+def test_plugged_at_is_the_time_of_the_tessie_value(cfg) -> None:
+    at = T0 + timedelta(seconds=7)
+    snap_ = snap({"vehicle.tesla.plugged": False}, ts=at)
+    _, _, vehicles = observe(snap_, derive(snap_, cfg), cfg, lambda source: True)
+    assert vehicles["tesla"].plugged_at == at
+    assert obs(cfg, {"vehicle.tesla.plugged": "ja"})[2]["tesla"].plugged_at is None
+
+
+def test_plugged_at_is_the_time_of_the_value_not_of_the_snapshot(cfg) -> None:
+    at = T0 + timedelta(seconds=7)
+    later = replace(snap({"vehicle.tesla.plugged": True}, ts=at), ts=at + timedelta(seconds=60))
+    _, _, vehicles = observe(later, derive(later, cfg), cfg, lambda source: True)
+    assert vehicles["tesla"].plugged_at == at

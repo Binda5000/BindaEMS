@@ -4,6 +4,7 @@
   sieht und was sie am Netz und am Akku misst
 - ``ChargeInputs``: alles, was ein Zyklus der Regelung braucht
 - ``observe``: liest die Beobachtungen aus dem Snapshot und den abgeleiteten Größen
+- ``homes``: liest je Fahrzeug mit ``home_entity``, ob Home Assistant es zu Hause meldet
 - ``ok_number``: der Wert eines Signals als endliche Zahl mit Qualität ``OK``, sonst ``None``
 
 Ein Wert zählt nur mit Qualität ``OK`` und als endliche Zahl (``finite_number``); sonst ist er
@@ -14,12 +15,12 @@ bedeuten, entscheiden die folgenden Bausteine. Die Schicht ist rein: Sie liest n
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Final
 
 from bindaems.core.state.derived import MIN_VOLTAGE_FOR_CURRENT_V, PHASES, Derived
-from bindaems.shared.config import Config, EvcsConfig, Phase, TwcConfig
+from bindaems.shared.config import Config, EvcsConfig, Phase, TwcConfig, home_signal
 from bindaems.shared.control import CommandKind, CommandValue, Intent
 from bindaems.shared.domain import Snapshot
 from bindaems.shared.numbers import finite_number
@@ -33,6 +34,7 @@ TWC_CHARGING_A: Final = 1.0  # ab dieser Summe der Phasenströme lädt der Wall 
 _TESSIE_CHARGING: Final = "Charging"  # Ladezustand, den Tessie meldet, solange das Auto lädt
 _TESSIE_COMPLETE: Final = "Complete"  # Ladezustand, wenn das Auto sein Ladelimit erreicht hat
 _PHASE_COUNTS: Final = (1, 2, 3)  # so viele Phasen kann ein Fahrzeug laden
+_HA_HOME: Final = "home"  # Zustand des device_tracker, wenn das Auto zu Hause ist
 
 _State = tuple[bool | None, bool | None, bool | None]  # verbunden, lädt, geladen
 
@@ -69,6 +71,8 @@ class VehicleObs:
     - ``at_home``: das Fahrzeug ist zu Hause
     - ``actual_current_a``: der Strom, den es zieht, je Phase
     - ``phases``: die Zahl der Phasen, auf denen es lädt: 1, 2 oder 3
+    - ``plugged_at``: die Wanduhr der Abfrage, aus der ``plugged`` stammt (der Zeitstempel des
+      Werts), nicht die des Ansteckens; ``None``, solange ``plugged`` unbekannt ist
     """
 
     reachable: bool
@@ -79,6 +83,7 @@ class VehicleObs:
     at_home: bool | None
     actual_current_a: float | None
     phases: int | None
+    plugged_at: datetime | None = None
 
 
 # Ein Fahrzeug ohne Tessie: Die Regelung sieht nichts von ihm, nur die Wallbox sieht es.
@@ -119,6 +124,8 @@ class ChargeInputs:
       Zyklus kein Befehl
     - ``intent``: die gültige Absicht; ``None``, solange es keine gibt
     - ``accepted_at``: wann die Absicht angenommen wurde; ``None``, wenn das unbekannt ist
+    - ``homes``: je Fahrzeug mit ``home_entity``, ob Home Assistant es zu Hause meldet
+      (``homes``); ``None`` heißt unbekannt, ein Fahrzeug ohne ``home_entity`` fehlt
     """
 
     now: datetime
@@ -132,6 +139,7 @@ class ChargeInputs:
     blocked: frozenset[tuple[str, CommandKind]]
     intent: Intent | None
     accepted_at: datetime | None
+    homes: Mapping[str, bool | None] = field(default_factory=dict)
 
 
 def observe(
@@ -161,6 +169,22 @@ def observe(
         for key, vehicle in cfg.vehicles.items()
     }
     return _grid_obs(snap, derived), wallboxes, vehicles
+
+
+def homes(snap: Snapshot, cfg: Config) -> dict[str, bool | None]:
+    """Ob Home Assistant ein Fahrzeug zu Hause meldet, je Fahrzeug mit ``home_entity``.
+
+    ``True`` heißt Zustand ``home``, ``False`` jeder andere Text. Alles andere ist unbekannt
+    (``None``): ``unknown`` und ``unavailable`` (der HA-Adapter macht sie zu ``None``), ein
+    veralteter Wert und ein Wert, der kein Text ist. Ein Fahrzeug ohne ``home_entity`` fehlt,
+    auch eins mit Tessie; die Reihenfolge ist die von ``config.yaml``.
+    """
+    result: dict[str, bool | None] = {}
+    for key, vehicle in cfg.vehicles.items():
+        if vehicle.home_entity is not None:
+            state = _text(snap, home_signal(key))
+            result[key] = None if state is None else state == _HA_HOME
+    return result
 
 
 def _grid_obs(snap: Snapshot, derived: Derived) -> GridObs:
@@ -271,6 +295,7 @@ def _vehicle_obs(snap: Snapshot, key: str, *, reachable: bool) -> VehicleObs:
         at_home=_flag(snap, prefix + "at_home"),
         actual_current_a=ok_number(snap, prefix + "actual_current_a"),
         phases=_phase_count(ok_number(snap, prefix + "phases")),
+        plugged_at=_flag_at(snap, prefix + "plugged"),
     )
 
 
@@ -290,6 +315,15 @@ def _flag(snap: Snapshot, signal: str) -> bool | None:
     """Der Wert des Signals, wenn er ein Wahrheitswert mit Qualität ``OK`` ist; sonst ``None``."""
     value = snap.ok(signal)
     return value if isinstance(value, bool) else None
+
+
+def _flag_at(snap: Snapshot, signal: str) -> datetime | None:
+    """Der Zeitstempel des Signals, wenn sein Wert ein Wahrheitswert mit Qualität ``OK`` ist.
+
+    Das ist die Wanduhr der Abfrage, aus der der Wert stammt; sonst ``None``.
+    """
+    reading = snap.get(signal)
+    return reading.ts if reading is not None and _flag(snap, signal) is not None else None
 
 
 def _text(snap: Snapshot, signal: str) -> str | None:

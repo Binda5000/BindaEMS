@@ -206,6 +206,19 @@ def test_step_builds_the_charge_inputs(cfg, monkeypatch) -> None:
     assert charge.vehicles["tesla"].reachable is True
 
 
+def test_the_home_state_reaches_the_regulation(cfg, monkeypatch) -> None:  # Plan 2c-2b
+    link = link_for(cfg)
+    seen: list[RegulationInputs] = []
+    monkeypatch.setattr(link.regulation, "step", lambda inputs: seen.append(inputs) or [])
+    current = snap({"vehicle.egolf.home_state": "home"})
+    link.start_cycle()
+    step(link, cfg, snap=current, derived=derive(current, cfg))
+    assert seen[-1].charge.homes == {"egolf": True}
+    link.start_cycle()
+    step(link, cfg)  # leerer Snapshot: Das Fahrzeug fehlt nicht, sein Zustand ist unbekannt
+    assert seen[-1].charge.homes == {"egolf": None}
+
+
 def test_step_builds_the_inputs_of_the_battery(cfg, monkeypatch) -> None:  # Plan 2c-2a
     link = link_for(cfg)
     seen: list[RegulationInputs] = []

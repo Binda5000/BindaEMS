@@ -42,7 +42,7 @@ import structlog
 
 from bindaems.core.accounting.flows import SlotProgress, derived_flows, wb_key
 from bindaems.core.control.actuator import Actuator, Capabilities, WakeStart
-from bindaems.core.control.charge_inputs import ChargeInputs, observe, ok_number
+from bindaems.core.control.charge_inputs import ChargeInputs, homes, observe, ok_number
 from bindaems.core.control.executor import WriteResult
 from bindaems.core.control.last_values import ControlCommand, Key
 from bindaems.core.control.peak_guard import QuarterObs
@@ -121,6 +121,7 @@ class RegulationLink:
         - Die Zeiten der Regelung laufen auf der Uhr der Safety-Schicht (``snow``); die Wanduhr
           ``now`` gilt für ``boost_until`` und den Kalendertag des Weckkontingents.
         - Die Beobachtungen liest ``observe``; ``connected`` sagt, ob eine Quelle verbunden ist.
+          Ob Home Assistant ein Fahrzeug zu Hause meldet, liest ``homes`` (Plan 2c-2b).
         - Steuerbar ist ein Aktor nach seinen Fähigkeiten ``capabilities``. Weckbar ist ein Aktor
           mit ``WakeStart``, dessen ``wake_capabilities`` einen Start mit Weckerlaubnis zulassen;
           jeder andere ist es nie.
@@ -161,6 +162,7 @@ class RegulationLink:
                 blocked=blocked,
                 intent=intent,
                 accepted_at=accepted_at,
+                homes=homes(snap, self._cfg),
             )
             commands = self.regulation.step(
                 RegulationInputs(

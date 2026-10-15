@@ -131,7 +131,7 @@ from bindaems.core.watchdog_client.status import (
     watchdog_alarms,
 )
 from bindaems.shared.broadcast import Broadcast
-from bindaems.shared.config import Config, EvcsConfig, Secrets
+from bindaems.shared.config import Config, EvcsConfig, Secrets, ha_entities
 from bindaems.shared.control import (
     VICTRON,
     ActuatorMode,
@@ -480,7 +480,9 @@ class CoreRuntime:
                 )
             )
         if cfg.homeassistant is not None and secrets.ha_token is not None:
-            adapters.append(HaAdapter(cfg.homeassistant, secrets.ha_token, self.store))
+            # neben homeassistant.entities abonniert der core die home_entity der Fahrzeuge selbst
+            ha = cfg.homeassistant.model_copy(update={"entities": ha_entities(cfg)})
+            adapters.append(HaAdapter(ha, secrets.ha_token, self.store))
         return adapters
 
     def build_actuators(self) -> dict[str, Actuator]:

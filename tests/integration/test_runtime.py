@@ -130,6 +130,15 @@ def test_build_adapters_from_config(cfg) -> None:
     assert [a.name for a in rt.adapters] == ["victron", "evcs", "twc", "tesla", "ha"]
 
 
+def test_build_adapters_subscribes_the_home_entity(cfg) -> None:
+    secrets = Secrets(internal_token=SecretStr(TOKEN), ha_token=SecretStr("h"))
+    rt = CoreRuntime(cfg, secrets, sink=FakeSink(), serve_api=False)
+    ha = next(adapter for adapter in rt.adapters if adapter.name == "ha")
+    assert ha._signals["device_tracker.egolf"] == ["vehicle.egolf.home_state"]
+    # die Entitäten aus homeassistant.entities bleiben abonniert
+    assert ha._signals["sensor.egolf_soc"] == ["vehicle.egolf.soc_pct"]
+
+
 def test_missing_tessie_token_skips_vehicle_with_warning(cfg) -> None:
     with capture_logs() as logs:
         rt = CoreRuntime(

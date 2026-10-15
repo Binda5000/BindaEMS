@@ -218,6 +218,9 @@ class VehicleConfig(_Model):
     commands: VehicleCommandLimits = Field(default_factory=VehicleCommandLimits)
     wake: WakeConfig = Field(default_factory=WakeConfig)
     soc_entity: str | None = None
+    # device_tracker in Home Assistant, ``home`` heißt zu Hause; der core abonniert ihn selbst unter
+    # ``home_signal`` (Plan 2c-2b, Design 3.2)
+    home_entity: str | None = None
     home_radius_m: Annotated[float, Field(gt=0)] = 150.0
 
     @model_validator(mode="after")
@@ -405,6 +408,10 @@ class Config(_Model):
                 raise ValueError(
                     f"vehicles.{key}.soc_entity verlangt einen homeassistant-Abschnitt"
                 )
+            if vehicle.home_entity is not None and self.homeassistant is None:
+                raise ValueError(
+                    f"vehicles.{key}.home_entity verlangt einen homeassistant-Abschnitt"
+                )
         if self.wallbox_priority is not None and sorted(self.wallbox_priority) != sorted(
             self.wallboxes
         ):
@@ -440,6 +447,27 @@ class Config(_Model):
         if self.wallbox_priority is not None:
             return list(self.wallbox_priority)
         return list(self.wallboxes)
+
+
+def home_signal(vehicle: str) -> str:
+    """Das Signal, unter dem der core ``home_entity`` des Fahrzeugs ``vehicle`` abonniert."""
+    return f"vehicle.{vehicle}.home_state"
+
+
+def ha_entities(cfg: Config) -> dict[str, str]:
+    """Signal → Entität, die der core in Home Assistant abonniert (Plan 2c-2b, Präzisierung 9).
+
+    Das sind ``homeassistant.entities`` und dazu je Fahrzeug mit ``home_entity`` ``home_signal`` →
+    ``home_entity``; ohne Abschnitt ``homeassistant`` ist es leer. Die Laufzeit gibt diese
+    Zuordnung dem HA-Adapter.
+    """
+    if cfg.homeassistant is None:
+        return {}
+    entities = dict(cfg.homeassistant.entities)
+    for key, vehicle in cfg.vehicles.items():
+        if vehicle.home_entity is not None:
+            entities[home_signal(key)] = vehicle.home_entity
+    return entities
 
 
 class ConfigError(Exception):

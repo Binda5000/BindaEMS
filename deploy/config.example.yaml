@@ -96,6 +96,9 @@ vehicles:
     max_a: 16
     default_wallbox: evcs
     soc_entity: sensor.egolf_soc
+    # device_tracker des Autos in Home Assistant: `home` heißt zu Hause. Der core abonniert ihn selbst
+    # (Signal vehicle.egolf.home_state); er sollte das Ankommen binnen einer Minute melden.
+    home_entity: device_tracker.egolf
 
 pv:
   planes:

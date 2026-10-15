@@ -13,6 +13,8 @@ from bindaems.shared.config import (
     GridConfig,
     VehicleCommandLimits,
     WakeConfig,
+    ha_entities,
+    home_signal,
     load_config,
     load_secrets,
 )
@@ -433,3 +435,37 @@ def test_infinite_battery_and_peak_values_in_the_config_file_are_rejected(
     p = write_cfg(tmp_path, lambda d: d["control"].update({field: float("inf")}))
     with pytest.raises(ConfigError, match=rf"control\.{field}"):
         load_config(p)
+
+
+# Zuordnung (Plan 2c-2b): home_entity aus Home Assistant
+
+
+def test_home_entity_needs_homeassistant(tmp_path) -> None:
+    def mutate(d: dict[str, Any]) -> None:
+        d.pop("homeassistant")
+        d["vehicles"]["egolf"].pop("soc_entity")  # sonst meldet sich zuerst soc_entity
+
+    with pytest.raises(
+        ConfigError, match=r"vehicles\.egolf\.home_entity verlangt einen homeassistant-Abschnitt"
+    ):
+        load_config(write_cfg(tmp_path, mutate))
+
+
+def test_home_entities_are_subscribed_under_their_signal(cfg) -> None:
+    assert home_signal("egolf") == "vehicle.egolf.home_state"
+    assert ha_entities(cfg) == {
+        "vehicle.egolf.soc_pct": "sensor.egolf_soc",
+        "vehicle.egolf.home_state": "device_tracker.egolf",
+    }
+    assert ha_entities(cfg.model_copy(update={"homeassistant": None})) == {}
+
+
+def test_a_vehicle_without_home_entity_adds_no_subscription(tmp_path: Path) -> None:
+    loaded = load_config(write_cfg(tmp_path, lambda d: d["vehicles"]["egolf"].pop("home_entity")))
+    assert loaded.vehicles["egolf"].home_entity is None
+    assert ha_entities(loaded) == {"vehicle.egolf.soc_pct": "sensor.egolf_soc"}
+
+
+def test_ha_entities_leave_the_configured_ones_untouched(cfg) -> None:
+    ha_entities(cfg)
+    assert cfg.homeassistant.entities == {"vehicle.egolf.soc_pct": "sensor.egolf_soc"}
