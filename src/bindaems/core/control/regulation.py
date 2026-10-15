@@ -3,6 +3,7 @@
 - ``RegulationInputs``: die Eingaben eines Zyklus der Regelung
 - ``Regulation``: der Kern; er hält die Bausteine der Regelung und verteilt jeden Aufruf an sie
 - ``battery_cars``: die Autos für den Akku-Sollwert (Präzisierung 4)
+- ``peak_wanted_w``: der gewollte Netzbezug für den 15-min-Wächter (Präzisierung 10)
 - ``peak_cars``: die Autos für den 15-min-Wächter (Präzisierung 11)
 
 Die Bausteine sind die Laderegelung (``ChargeController``), der Akku-Sollwert
@@ -14,7 +15,9 @@ Reihenfolge von Präzisierung 3:
 2. die Autos je Wallbox aus der Zuordnung und den Modi dieses Zyklus
    (``ChargeController.cars``), dazu die Wallboxen ohne Fahrzeug (``battery_cars``),
 3. Fehlbetrag und erlaubten Akku-Anteil (``BatteryController.assess``),
-4. den Wächter (``PeakGuard.step``): das Budget für diesen Zyklus, die Grenzen für den nächsten,
+4. den Wächter (``PeakGuard.step``) mit dem gewollten Netzbezug bis zur festen Grenze von Regel 2,
+   solange Victron handeln kann (``peak_wanted_w``): das Budget für diesen Zyklus, die Grenzen für
+   den nächsten,
 5. den Override (``BatteryController.decide``) mit diesem Budget.
 
 Die Grenzen des Wächters wirken so einen Zyklus später; dafür rechnen Akku-Sollwert und Wächter mit
@@ -53,6 +56,7 @@ from bindaems.core.safety.types import Verdict
 from bindaems.shared.config import Config
 from bindaems.shared.control import VICTRON, ChargeMode, Command, CommandKind, GuestIntent
 from bindaems.shared.domain import Alarm
+from bindaems.shared.numbers import finite_number
 from bindaems.shared.timeutil import slot_end
 
 _SETPOINT: Final[Key] = (VICTRON, CommandKind.GRID_SETPOINT)  # der Override des Akku-Sollwerts
@@ -92,6 +96,8 @@ class Regulation:
 
     def __init__(self, cfg: Config, limits: HardLimits, *, started: datetime) -> None:
         self._cfg = cfg
+        # die feste Grenze des Overrides nach Regel 2, ohne das Budget des Wächters
+        self._ceiling_w = limits.grid_setpoint_max(None)[0]
         self.charger = ChargeController(cfg, limits, started=started)
         self.battery = BatteryController(cfg)
         self.peak_guard = PeakGuard(cfg.control, cfg.battery.reserve_soc_pct)
@@ -103,8 +109,9 @@ class Regulation:
 
         Die Laderegelung bekommt Grenzen und Start-Sperre des 15-min-Wächters aus dem vorigen
         Zyklus; sein Budget aus diesem Zyklus gilt schon für den Override. Der Wächter misst
-        ``inputs.quarter`` mit den Autos von ``peak_cars``, dem gewollten Netzbezug ``W`` vor dem
-        Wächter (``BatteryNeed.wanted_w``, ohne Bedarf unbekannt), dem Basis-Sollwert und dem SOC.
+        ``inputs.quarter`` mit den Autos von ``peak_cars``, dem gewollten Netzbezug aus
+        ``peak_wanted_w`` (``W`` vor dem Wächter, mit der Basis höchstens die feste Grenze von
+        Regel 2; unbekannt, solange Victron nicht handeln kann), dem Basis-Sollwert und dem SOC.
 
         Victron ist für den Override gesperrt, wenn ``inputs.locks`` für ``victron`` Gründe nennt,
         und steuerbar nach ``charge.controllable``. Ein offener Schreibvorgang für den Override oder
@@ -117,22 +124,26 @@ class Regulation:
         cars = battery_cars(self._cfg, views, charge.wallboxes, guest)
         battery = self.battery
         need = battery.assess(charge.now, charge.grid.soc_pct, inputs.pv_w, inputs.house_w, cars)
+        controllable = charge.controllable.get(VICTRON) is True
+        locked = bool(inputs.locks.get(VICTRON))
+        base_w = inputs.base_setpoint_w
+        acting = controllable and not locked
         self._peak = self.peak_guard.step(
             charge.wall_now,
             inputs.quarter,
             peak_cars(views, need),
-            wanted_w=None if need is None else need.wanted_w,
-            base_w=inputs.base_setpoint_w,
+            wanted_w=peak_wanted_w(need, base_w, self._ceiling_w, acting=acting),
+            base_w=base_w,
             soc_pct=charge.grid.soc_pct,
         )
         override = battery.decide(
             charge.now,
             need,
-            base_w=inputs.base_setpoint_w,
+            base_w=base_w,
             budget_w=self._peak.budget_w,
             present=charge.present,
-            controllable=charge.controllable.get(VICTRON) is True,
-            locked=bool(inputs.locks.get(VICTRON)),
+            controllable=controllable,
+            locked=locked,
             blocked=_SETPOINT in charge.blocked,
         )
         return [*commands, *override]
@@ -226,6 +237,28 @@ def battery_cars(
         else:
             found.append(BatteryCar(key, mode, seen.power_w, seen.charging))
     return found
+
+
+def peak_wanted_w(
+    need: BatteryNeed | None, base_w: float | None, ceiling_w: float, *, acting: bool
+) -> float | None:
+    """Der gewollte Netzbezug ``W`` für den 15-min-Wächter in W (Präzisierung 10); ``None`` heißt
+    unbekannt, dann zählt für die verlangte Senkung nur das Mittel.
+
+    - **Victron kann nicht handeln** (``acting`` falsch: gesperrt oder nicht steuerbar): ``None``.
+      Kein Override setzt dann ``Basis + W`` durch.
+    - **Ohne Bedarf** (``need`` ist ``None``): ``None``.
+    - **Sonst** ``W`` vor dem Wächter (``BatteryNeed.wanted_w``), mit bekannter Basis ``base_w``
+      höchstens ``ceiling_w − Basis``. ``ceiling_w`` ist die feste Grenze ``C`` von Regel 2
+      (``HardLimits.grid_setpoint_max`` ohne Budget): Über ihr hebt kein Override den Netzbezug,
+      und was die Autos darüber hinaus wollen, liefert der Akku (Design 2c-2, Entscheidung 3 und
+      5.4). Ohne bekannte Basis bleibt es ``W``; der Wächter nimmt dann ohnehin nur das Mittel.
+    """
+    if not acting or need is None:
+        return None
+    wanted_w = need.wanted_w
+    base = finite_number(base_w)
+    return wanted_w if base is None else min(wanted_w, ceiling_w - base)
 
 
 def peak_cars(cars: Sequence[CarView], need: BatteryNeed | None) -> list[PeakCar]:

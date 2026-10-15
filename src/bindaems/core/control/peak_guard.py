@@ -252,7 +252,10 @@ class PeakGuard:
     - **Hochrechnung und Senkung:** Die Hochrechnung ist ``(E_bisher + Mittel · t_rest) / 0,25 h``.
       Die verlangte Senkung ist ``max(Mittel, Basis + W) − P_zul``, bei unbekanntem ``W`` oder
       unbekannter Basis oder wenn ``Basis + W`` keine endliche Zahl ist ``Mittel − P_zul``; Health
-      zeigt sie mindestens 0. Beide brauchen das Mittel; ``P_zul`` braucht es nicht.
+      zeigt sie mindestens 0. Beide brauchen das Mittel; ``P_zul`` braucht es nicht. ``W`` gibt der
+      Kern so, dass ``Basis + W`` höchstens die feste Grenze von Regel 2 ist, und unbekannt, solange
+      Victron gesperrt oder nicht steuerbar ist (``regulation.peak_wanted_w``). So zählt der
+      Wächter keinen Netzbezug, den kein Override durchsetzen kann.
     - **Drosselung:** Die Grenzen je Fahrzeug gelten bis zum Ende der Viertelstunde. Zuerst
       verliert ein Auto still seine Grenze, wenn es nicht mehr unter ``cars`` steht oder seinen
       Modus gewechselt hat, auch zwischen PV-Überschuss, Min+PV und Sofort: Eine Grenze gilt nur
@@ -305,8 +308,9 @@ class PeakGuard:
 
         - ``quarter``: die laufende Viertelstunde; ``None`` heißt nicht da
         - ``cars``: die Autos, je Fahrzeug höchstens eins; die Priorität steht in ``rank``
-        - ``wanted_w``: der gewollte Netzbezug ``W`` vor dem Wächter in W, ``base_w``: die Basis
-          (``ess.grid_setpoint_w``); ist einer unbekannt, zählt für die Senkung nur das Mittel
+        - ``wanted_w``: der gewollte Netzbezug ``W`` vor dem Wächter in W, vom Kern bis zur festen
+          Grenze von Regel 2 begrenzt; ``base_w``: die Basis (``ess.grid_setpoint_w``); ist einer
+          unbekannt, zählt für die Senkung nur das Mittel
         - ``soc_pct``: der SOC des Akkus in %; unbekannt gibt kein Budget für den Akku
         """
         target_kw = self._target_kw
