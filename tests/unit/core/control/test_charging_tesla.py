@@ -3,7 +3,17 @@ from datetime import timedelta
 
 import pytest
 from tests.helpers import T0
-from tests.unit.core.control.charge_helpers import accept, evcs, grid, inputs, run, tesla, twc
+from tests.unit.core.control.charge_helpers import (
+    CONTRADICTION,
+    UNCLEAR_FROM_S,
+    accept,
+    evcs,
+    grid,
+    inputs,
+    run,
+    tesla,
+    twc,
+)
 
 from bindaems.core.control.charging import ChargeController
 from bindaems.core.control.executor import WriteResult
@@ -222,19 +232,18 @@ def test_unclear_pauses_the_tesla_and_holds_the_evcs(cfg) -> None:
     found = run(
         controller(cfg),
         cfg,
-        62,
+        UNCLEAR_FROM_S + 2,
         make=tesla_inputs,
+        **CONTRADICTION,
         intent=EGOLF_NOW,
-        twc_obs=twc(connected=False),
-        tesla_obs=tesla(plugged=True),
-        evcs_obs=evcs(charging=True, phase_a=dict.fromkeys(PHASES, 10.0)),
         present=at_evcs(10.0, True),
-        grid_obs=lambda s: grid(l1=36.0) if s == 61 else grid(),
+        grid_obs=lambda s: grid(l1=36.0) if s == UNCLEAR_FROM_S + 1 else grid(),
     )
-    # ab 60 unklar: nichts an den Tesla, kein „Laden an/aus“ an die EVCS; bei 61 frei 33 − 26 = 7
-    assert [(t, c.command) for t, c in found if t >= 60] == [
+    # ab 120 unklar: nichts an den Tesla, kein „Laden an/aus“ an die EVCS; bei 121 frei
+    # 33 − (36 − 10) = 7
+    assert [(t, c.command) for t, c in found if t >= UNCLEAR_FROM_S] == [
         (
-            61,
+            UNCLEAR_FROM_S + 1,
             Command(
                 "wallbox.evcs",
                 CURRENT,
@@ -286,8 +295,12 @@ def test_vehicle_wallbox_for_the_safety_layer(cfg) -> None:
     override = Intent(version=2, control=True, vehicles={"tesla": VehicleIntent(wallbox="evcs")})
     c.step(tesla_inputs(cfg, 1, intent=override, evcs_obs=evcs()))
     assert c.vehicle_wallbox() == {"vehicle.tesla": "evcs"}
+    # „Tesla an der EVCS“: ab 60 s dort erkannt
+    detected = controller(cfg)
+    run(detected, cfg, 61, make=tesla_inputs, twc_obs=twc(connected=False), evcs_obs=evcs())
+    assert detected.vehicle_wallbox() == {"vehicle.tesla": "evcs"}
     unclear = controller(cfg)
-    run(unclear, cfg, 61, make=tesla_inputs, twc_obs=twc(connected=False), evcs_obs=evcs())
+    run(unclear, cfg, UNCLEAR_FROM_S + 1, make=tesla_inputs, **CONTRADICTION)
     assert unclear.vehicle_wallbox() == {"vehicle.tesla": None}
 
 
@@ -670,16 +683,12 @@ def test_tesla_at_the_evcs_gets_its_maximum_again_after_a_pause(cfg) -> None:
     assert found[0].command == MAXIMUM
 
 
-UNCLEAR_EGOLF = {
-    "twc_obs": twc(connected=False),
-    "tesla_obs": tesla(plugged=True),
-    "evcs_obs": evcs(charging=True, phase_a=dict.fromkeys(PHASES, 10.0)),
-    "present": at_evcs(10.0, True),
-}
+# der e-Golf an der EVCS, auf zwei Phasen mit 10 A; unklar ab UNCLEAR_FROM_S
+UNCLEAR_EGOLF = {**CONTRADICTION, "present": at_evcs(10.0, True)}
 
 
 def test_unclear_neither_starts_nor_stops_by_mode(cfg) -> None:  # Design 8
-    # PV ohne Überschuss stoppte bei 300; ab 60 ist die Zuordnung unklar. Ab 400 liegt L1 über dem
+    # PV ohne Überschuss stoppte bei 300; ab 120 ist die Zuordnung unklar. Ab 400 liegt L1 über dem
     # Ziel an der Sicherung: Die Überlast setzt den Mindeststrom, ohne „Laden aus“ nach dem Modus.
     found = run(
         controller(cfg),
@@ -703,13 +712,14 @@ def test_unclear_neither_starts_nor_stops_by_mode(cfg) -> None:  # Design 8
 
 
 def test_unclear_still_stops_for_overload(cfg) -> None:  # Präzisierung 8
+    start = UNCLEAR_FROM_S + 1  # die Überlast beginnt eine Sekunde nach „unklar“
     found = run(
         controller(cfg),
         cfg,
-        68,
+        start + 7,
         make=tesla_inputs,
         intent=EGOLF_NOW,
-        grid_obs=lambda s: grid(l1=34.0) if s >= 61 else grid(),
+        grid_obs=lambda s: grid(l1=34.0) if s >= start else grid(),
         **UNCLEAR_EGOLF,
     )
 
@@ -717,10 +727,10 @@ def test_unclear_still_stops_for_overload(cfg) -> None:  # Präzisierung 8
         reasons = ("mode_now", "assignment_unclear", cause)
         return Command("wallbox.evcs", kind, value, urgent=True, reasons=reasons)
 
-    assert [(t, c) for t, c in of(found, "wallbox.evcs") if t >= 60] == [
-        (61, unclear(CURRENT, 9.0, "phase_limit")),  # frei 33 − (34 − 10)
-        (64, unclear(CURRENT, 6.0, "overload")),  # MINIMUM
-        (67, unclear(CHARGING, False, "overload")),  # EVCS_STOP
+    assert [(t, c) for t, c in of(found, "wallbox.evcs") if t >= UNCLEAR_FROM_S] == [
+        (start, unclear(CURRENT, 9.0, "phase_limit")),  # frei 33 − (34 − 10)
+        (start + 3, unclear(CURRENT, 6.0, "overload")),  # MINIMUM
+        (start + 6, unclear(CHARGING, False, "overload")),  # EVCS_STOP
     ]
 
 

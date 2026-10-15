@@ -293,7 +293,13 @@ class ChargeController:
         self._now, self._wall_now = now, inputs.wall_now
         self._stepped = True
         state = self._assignment.update(
-            now, inputs.wall_now, intent, inputs.accepted_at, inputs.wallboxes, inputs.vehicles
+            now,
+            inputs.wall_now,
+            intent,
+            inputs.accepted_at,
+            inputs.wallboxes,
+            inputs.vehicles,
+            inputs.homes,
         )
         order = self._order(intent)
         modes = {key: _mode(key, state.vehicles[key], intent) for key in order}

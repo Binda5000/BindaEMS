@@ -174,6 +174,8 @@ WALL_CONNECTOR: Final = "twc"
 EVCS_BOX: Final = "evcs"
 WAKE: Final = "wake"  # Grund eines Weckstarts
 UNCLEAR: Final = "unclear"  # Zuordnung „unklar“ in der Gesundheit
+DETECTED: Final = "detected"  # Zuordnung „erkannt“ in der Gesundheit
+_SHOWN: Final = {UNCLEAR: "unklar", DETECTED: "erkannt"}  # so nennen die Prüfungen die Zuordnung
 SAFE: Final = "SAFE"
 FOREIGN_ALARM: Final = "competitor.foreign."  # Anfang der Alarme fremder Änderungen
 # Entscheidungen ohne Urteil mit Wert: abgelehnt oder wegen eines Stundenlimits zurückgestellt
@@ -628,19 +630,21 @@ def _all_charge_from(begin_s: int) -> Check:
     return Check(f"Ab {de(begin_s / MINUTE_S)} min laden beide Autos.", find)
 
 
-def _unclear_before(key: str, until_s: int) -> Check:
-    """Vor ``until_s`` zeigt die Gesundheit für ``key`` mindestens einmal „unklar“."""
+def _shown_before(key: str, kind: str, until_s: int) -> Check:
+    """Vor ``until_s`` zeigt die Gesundheit für ``key`` mindestens einmal die Zuordnung ``kind``,
+    ``UNCLEAR`` oder ``DETECTED``."""
+    word = _SHOWN[kind]
 
     def find(result: SimResult) -> list[str]:
         shown = any(
-            vehicle["id"] == key and vehicle["assignment"] == UNCLEAR
+            vehicle["id"] == key and vehicle["assignment"] == kind
             for t, health in result.health
             if t < until_s
             for vehicle in health.vehicles
         )
-        return [] if shown else [f"Die Gesundheit zeigt „{key}“ vor {until_s} s nie „unklar“."]
+        return [] if shown else [f"Die Gesundheit zeigt „{key}“ vor {until_s} s nie „{word}“."]
 
-    return Check(f"Die Gesundheit zeigt „{key}“ vor {de(until_s / MINUTE_S)} min „unklar“.", find)
+    return Check(f"Die Gesundheit zeigt „{key}“ vor {de(until_s / MINUTE_S)} min „{word}“.", find)
 
 
 def _one_current(key: str, amps: float) -> Check:
@@ -1188,16 +1192,16 @@ def _ausfaelle() -> Scenario:
 
 
 def _zuordnung() -> Scenario:
-    """Der Tesla steht an der EVCS: Die Zuordnung wird unklar (Präzisierung 5), bis die
-    Übersteuerung ihn dort festlegt; er bekommt dann einmal seinen Höchststrom (Design 8). Das
-    Abstecken beendet die Übersteuerung (Präzisierung 3)."""
+    """Der Tesla steht an der EVCS: Die Erkennung findet ihn dort (Plan 2c-2b, Präzisierung 4),
+    bevor die Übersteuerung ihn dort festlegt; mit ihr bekommt er einmal seinen Höchststrom
+    (Design 8). Das Abstecken beendet die Übersteuerung (Präzisierung 3)."""
     start, duration_s, seed = EVENING, HOUR_S, 9
     events = (
         (OVERRIDE_S, _Override(2, TESLA, EVCS_BOX)),
         (UNPLUG_S, _Unplug(TESLA)),
     )
     checks = (
-        _unclear_before(TESLA, OVERRIDE_S),
+        _shown_before(TESLA, DETECTED, OVERRIDE_S),
         _one_current(TESLA, TESLA_MAX_A),
         _evcs_off_from(EVCS_BOX, EVCS_OFF_S),
     )

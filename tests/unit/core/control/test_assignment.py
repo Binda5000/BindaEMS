@@ -2,19 +2,34 @@ from datetime import datetime, timedelta
 
 import pytest
 from tests.helpers import T0
-from tests.unit.core.control.charge_helpers import NONE, evcs, tesla, twc
+from tests.unit.core.control.charge_helpers import (
+    CONTRADICTION,
+    NONE,
+    UNCLEAR_FROM_S,
+    evcs,
+    tesla,
+    twc,
+)
 
-from bindaems.core.control.assignment import Assignment, AssignmentKind, VehicleState
+from bindaems.core.control.assignment import (
+    Assignment,
+    AssignmentKind,
+    VehicleState,
+    WallboxState,
+)
+from bindaems.core.control.clues import Clue, Evidence
 from bindaems.shared.control import Intent, VehicleIntent
 
 # Vorgaben des Plans
 
 
-def update(a, s, *, evcs_obs=None, twc_obs=None, tesla_obs=None, intent=None, accepted_at=T0):
+def update(
+    a, s, *, evcs_obs=None, twc_obs=None, tesla_obs=None, intent=None, accepted_at=T0, homes=None
+):
     wallboxes = {"evcs": evcs_obs or evcs(), "twc": twc_obs or twc()}
     vehicles = {"tesla": tesla_obs or tesla(), "egolf": NONE}
     when = T0 + timedelta(seconds=s)
-    return a.update(when, when, intent, accepted_at, wallboxes, vehicles)
+    return a.update(when, when, intent, accepted_at, wallboxes, vehicles, homes or {})
 
 
 def boosted(version: int, until: datetime) -> Intent:
@@ -24,7 +39,11 @@ def boosted(version: int, until: datetime) -> Intent:
 
 
 def test_default_assignment(cfg) -> None:
-    state = update(Assignment(cfg, started=T0), 0, twc_obs=twc(connected=True))
+    # Der Wall Connector meldet ein Fahrzeug: Tessie sieht den Tesla angesteckt (Plan 2c-2b,
+    # Präzisierung 13; „nicht angesteckt“ schlösse ihn dort aus)
+    state = update(
+        Assignment(cfg, started=T0), 0, twc_obs=twc(connected=True), tesla_obs=tesla(plugged=True)
+    )
     tesla_, egolf = state.vehicles["tesla"], state.vehicles["egolf"]
     assert (tesla_.wallbox, tesla_.kind, tesla_.plugged) == ("twc", AssignmentKind.DEFAULT, True)
     assert (egolf.wallbox, egolf.plugged, state.unclear) == ("evcs", True, False)
@@ -86,48 +105,32 @@ def test_override_moves_the_vehicle_and_frees_its_default(cfg) -> None:
 
 
 def at_the_evcs(a, s, intent=None):
-    return update(
-        a,
-        s,
-        twc_obs=twc(connected=False),
-        tesla_obs=tesla(plugged=True, at_home=True),
-        intent=intent,
-    )
-
-
-def test_contradiction_for_60_s_makes_it_unclear(cfg) -> None:
-    a = Assignment(cfg, started=T0)
-    assert not any(at_the_evcs(a, s).unclear for s in range(60))
-    state = at_the_evcs(a, 60)
-    assert state.unclear and state.vehicles["egolf"].kind == AssignmentKind.UNCLEAR
-    assert state.vehicles["tesla"].plugged is None  # Präzisierung 4
-    for s in range(61, 120):
-        assert update(a, s).unclear
-    assert not update(a, 121).unclear
+    """Ein echter Widerspruch (Plan 2c-2b, Präzisierung 13): unklar ab ``UNCLEAR_FROM_S``."""
+    return update(a, s, **CONTRADICTION, intent=intent)
 
 
 def test_flapping_contradiction_never_turns_unclear(cfg) -> None:  # Review Focus 3
+    # Je UNCLEAR_FROM_S lang das Bild, dann ebenso lang keins: Der Widerspruch beginnt erst mit der
+    # Phasen-Signatur nach 60 s und hält darum je 59 s.
     a = Assignment(cfg, started=T0)
-    for s in range(300):
-        state = at_the_evcs(a, s) if (s // 30) % 2 == 0 else update(a, s)
+    for s in range(4 * UNCLEAR_FROM_S):
+        state = at_the_evcs(a, s) if (s // UNCLEAR_FROM_S) % 2 == 0 else update(a, s)
         assert not state.unclear
 
 
 def test_override_lifts_unclear_at_once(cfg) -> None:
     a = Assignment(cfg, started=T0)
-    for s in range(61):
+    for s in range(UNCLEAR_FROM_S):
         at_the_evcs(a, s)
+    assert at_the_evcs(a, UNCLEAR_FROM_S).unclear
     intent = Intent(version=1, control=True, vehicles={"tesla": VehicleIntent(wallbox="evcs")})
-    assert not at_the_evcs(a, 61, intent).unclear
+    assert not at_the_evcs(a, UNCLEAR_FROM_S + 1, intent).unclear
 
 
 def test_a_tesla_away_is_no_contradiction(cfg) -> None:
+    away = {**CONTRADICTION, "tesla_obs": tesla(plugged=True, at_home=False)}
     a = Assignment(cfg, started=T0)
-    for s in range(120):
-        state = update(
-            a, s, twc_obs=twc(connected=False), tesla_obs=tesla(plugged=True, at_home=False)
-        )
-    assert not state.unclear
+    assert not any(update(a, s, **away).unclear for s in range(2 * UNCLEAR_FROM_S))
 
 
 def test_complete_sticks_until_unplugged(cfg) -> None:
@@ -152,7 +155,8 @@ def test_entries_the_config_does_not_know_are_ignored(cfg) -> None:
         },
     )
     state = update(Assignment(cfg, started=T0), 0, intent=intent)
-    assert list(state.vehicles) == ["tesla", "egolf"]
+    # die Fahrzeuge der Konfiguration, dahinter je Wallbox ihr Gast (Plan 2c-2b, Präzisierung 5)
+    assert list(state.vehicles) == ["tesla", "egolf", "guest@evcs", "guest@twc"]
     # die unbekannte Übersteuerung zählt nicht, der Boost desselben Eintrags bindet an den Standard
     egolf = state.vehicles["egolf"]
     assert (egolf.wallbox, egolf.kind, egolf.boost_until) == ("evcs", AssignmentKind.DEFAULT, until)
@@ -282,12 +286,14 @@ def test_a_vehicle_without_a_wallbox_has_no_values(cfg) -> None:
     ],
 )
 def test_plugged_of_a_car_with_tessie(cfg, twc_connected, plugged, at_home, expected) -> None:
-    state = update(
-        Assignment(cfg, started=T0),
-        0,
-        twc_obs=twc(connected=twc_connected),
-        tesla_obs=tesla(plugged=plugged, at_home=at_home),
-    )
+    # Erst meldet der Wall Connector kein Fahrzeug: Ein Vorgang dort beginnt danach bekannt, und
+    # Tessie zählt für ihn erst mit einer Abfrage 60 s nach seinem Beginn. Bis dahin steht der
+    # Tesla dort angenommen, auch wenn Tessie ihn nicht angesteckt sieht (Plan 2c-2b,
+    # Präzisierungen 3 und 13).
+    a = Assignment(cfg, started=T0)
+    tessie = tesla(plugged=plugged, at_home=at_home)
+    update(a, 0, twc_obs=twc(connected=False), tesla_obs=tessie)
+    state = update(a, 1, twc_obs=twc(connected=twc_connected), tesla_obs=tessie)
     assert state.vehicles["tesla"].plugged is expected
 
 
@@ -402,35 +408,26 @@ def test_a_restored_override_binds_only_to_a_plugged_wallbox(cfg, accepted_at) -
     ],
 )
 def test_unknown_values_never_contradict(cfg, unknown) -> None:
-    contradiction = {
-        "twc_obs": twc(connected=False),
-        "evcs_obs": evcs(),
-        "tesla_obs": tesla(plugged=True, at_home=True),
-    }
     a = Assignment(cfg, started=T0)
-    assert not any(update(a, s, **(contradiction | unknown)).unclear for s in range(300))
+    assert not any(update(a, s, **(CONTRADICTION | unknown)).unclear for s in range(300))
 
 
 def test_no_contradiction_without_a_car_at_the_evcs(cfg) -> None:
+    no_car = {**CONTRADICTION, "evcs_obs": evcs(connected=False)}
     a = Assignment(cfg, started=T0)
     for s in range(300):
-        state = update(
-            a,
-            s,
-            twc_obs=twc(connected=False),
-            evcs_obs=evcs(connected=False),
-            tesla_obs=tesla(plugged=True, at_home=True),
-        )
-        assert not state.unclear
+        assert not update(a, s, **no_car).unclear
 
 
 def test_an_unknown_value_interrupts_the_contradiction(cfg) -> None:
     a = Assignment(cfg, started=T0)
-    for s in range(59):
+    for s in range(UNCLEAR_FROM_S - 1):
         at_the_evcs(a, s)
-    update(a, 59, twc_obs=twc(connected=None), tesla_obs=tesla(plugged=True, at_home=True))
-    assert not any(at_the_evcs(a, s).unclear for s in range(60, 120))
-    assert at_the_evcs(a, 120).unclear
+    # ohne „kein Fahrzeug“ am Wall Connector fehlt der Ausschluss: einen Zyklus kein Widerspruch
+    update(a, UNCLEAR_FROM_S - 1, **{**CONTRADICTION, "twc_obs": twc(connected=None)})
+    later = range(UNCLEAR_FROM_S, UNCLEAR_FROM_S + 60)
+    assert not any(at_the_evcs(a, s).unclear for s in later)
+    assert at_the_evcs(a, UNCLEAR_FROM_S + 60).unclear
 
 
 def test_boost_set_while_the_plug_state_is_unknown_binds_to_the_first_car(cfg) -> None:
@@ -446,10 +443,309 @@ def test_boost_set_while_the_plug_state_is_unknown_binds_to_the_first_car(cfg) -
 def test_an_override_interrupts_the_contradiction(cfg) -> None:
     a = Assignment(cfg, started=T0)
     override = Intent(version=1, control=True, vehicles={"tesla": VehicleIntent(wallbox="evcs")})
-    for s in range(61):
+    for s in range(UNCLEAR_FROM_S + 1):
         at_the_evcs(a, s)
-    assert not at_the_evcs(a, 61, override).unclear
+    assert not at_the_evcs(a, UNCLEAR_FROM_S + 1, override).unclear
     # zurückgenommen: Der Widerspruch zählt von neuem, nicht seit seinem ersten Auftreten
     withdrawn = Intent(version=2, control=True)
-    assert not any(at_the_evcs(a, s, withdrawn).unclear for s in range(62, 122))
-    assert at_the_evcs(a, 122, withdrawn).unclear
+    later = range(UNCLEAR_FROM_S + 2, UNCLEAR_FROM_S + 62)
+    assert not any(at_the_evcs(a, s, withdrawn).unclear for s in later)
+    assert at_the_evcs(a, UNCLEAR_FROM_S + 62, withdrawn).unclear
+
+
+# Plan 2c-2b: Erkennung, wer wo steht und „unklar“ aus einem echten Widerspruch (Präzisierungen 4,
+# 5, 9 und 13)
+
+PICTURE = {"twc_obs": twc(connected=False), "tesla_obs": tesla(plugged=True)}  # „Tesla an der EVCS“
+
+
+def test_tesla_at_the_evcs_is_detected(cfg) -> None:  # Design 7.3, letzter Punkt
+    a = Assignment(cfg, started=T0)
+    assert update(a, 0, **PICTURE).vehicles["egolf"].wallbox == "evcs"  # angenommen
+    for s in range(1, 60):
+        update(a, s, **PICTURE)
+    state = update(a, 60, **PICTURE)
+    tesla_ = state.vehicles["tesla"]
+    assert (tesla_.wallbox, tesla_.kind, tesla_.fresh, tesla_.plugged) == (
+        "evcs",
+        AssignmentKind.DETECTED,
+        True,
+        True,
+    )
+    assert (state.vehicles["egolf"].wallbox, state.unclear) == (None, False)
+    assert (state.wallboxes["evcs"].occupant, state.wallboxes["evcs"].kind) == (
+        "tesla",
+        AssignmentKind.DETECTED,
+    )
+    assert state.wallboxes["twc"] == WallboxState(None, None, ())
+    assert not update(a, 61, **PICTURE).vehicles["tesla"].fresh
+
+
+def test_an_excluded_default_vehicle_makes_an_assumed_guest(cfg) -> None:
+    a = Assignment(cfg, started=T0)
+    state = update(a, 0, homes={"egolf": False})  # e-Golf weg, Tesla nicht angesteckt
+    guest = state.vehicles["guest@evcs"]
+    assert (guest.wallbox, guest.kind, guest.plugged) == ("evcs", AssignmentKind.DEFAULT, True)
+    assert (state.vehicles["egolf"].wallbox, state.vehicles["guest@twc"].wallbox) == (None, None)
+    for s in range(1, 60):
+        update(a, s, homes={"egolf": False})
+    detected = update(a, 60, homes={"egolf": False}).vehicles["guest@evcs"]
+    assert (detected.kind, detected.fresh) == (AssignmentKind.DETECTED, False)  # derselbe Insasse
+
+
+def test_confirming_the_assumed_vehicle_is_no_new_detection(cfg) -> None:
+    egolf = evcs(charging=True, phase_a={"L1": 10.0, "L2": 10.0, "L3": 0.0})
+    a = Assignment(cfg, started=T0)
+    states = [update(a, s, evcs_obs=egolf, homes={"egolf": True}) for s in range(121)]
+    assert (states[119].vehicles["egolf"].kind, states[120].vehicles["egolf"].kind) == (
+        AssignmentKind.DEFAULT,
+        AssignmentKind.DETECTED,
+    )
+    assert not any(state.vehicles["egolf"].fresh for state in states)
+
+
+def test_real_contradiction_makes_it_unclear(cfg) -> None:
+    a = Assignment(cfg, started=T0)
+    assert not any(update(a, s, **CONTRADICTION).unclear for s in range(UNCLEAR_FROM_S))
+    state = update(a, UNCLEAR_FROM_S, **CONTRADICTION)
+    assert state.unclear and state.vehicles["egolf"].kind is AssignmentKind.UNCLEAR
+    assert (state.vehicles["egolf"].wallbox, state.vehicles["guest@evcs"].wallbox) == (
+        "evcs",
+        None,
+    )
+    assert all(update(a, s).unclear for s in range(121, 180))
+    assert not update(a, 181).unclear
+
+
+def test_arriving_tesla_stays_assumed_until_tessie_polls(cfg) -> None:  # Review Focus 1
+    a = Assignment(cfg, started=T0)
+    stale = tesla(plugged=False, at_home=False, plugged_at=T0)  # letzte Abfrage vor dem Anstecken
+    update(a, 0, twc_obs=twc(connected=False), tesla_obs=stale)
+    for s in range(1, 600):
+        state = update(a, s, twc_obs=twc(connected=True), tesla_obs=stale)
+        assert (state.vehicles["tesla"].wallbox, state.vehicles["tesla"].kind) == (
+            "twc",
+            AssignmentKind.DEFAULT,
+        )
+
+
+def test_tessie_offline_assumes_the_default_vehicle(cfg) -> None:  # Review Focus 1
+    a = Assignment(cfg, started=T0)
+    for s in range(300):
+        state = update(a, s, twc_obs=twc(connected=True), tesla_obs=NONE)
+        assert not state.unclear
+    assert (state.vehicles["tesla"].wallbox, state.vehicles["tesla"].kind) == (
+        "twc",
+        AssignmentKind.DEFAULT,
+    )
+
+
+def test_a_new_session_starts_without_the_old_detection(cfg) -> None:  # Review Focus 5
+    a = Assignment(cfg, started=T0)
+    for s in range(61):
+        update(a, s, **PICTURE)
+    gone = update(a, 61, evcs_obs=evcs(connected=False), twc_obs=twc(connected=False))
+    assert (gone.vehicles["tesla"].wallbox, gone.wallboxes["evcs"].occupant) == ("twc", None)
+    assert update(a, 62, **PICTURE).vehicles["egolf"].wallbox == "evcs"  # angenommen
+
+
+def test_override_precedes_detection_until_unplugged(cfg) -> None:
+    intent = Intent(version=1, control=True, vehicles={"egolf": VehicleIntent(wallbox="evcs")})
+    a = Assignment(cfg, started=T0)
+    for s in range(120):
+        state = update(a, s, intent=intent, **PICTURE)
+    assert (state.vehicles["egolf"].kind, state.vehicles["tesla"].wallbox) == (
+        AssignmentKind.OVERRIDE,
+        "twc",
+    )
+    assert (state.wallboxes["evcs"].occupant, state.wallboxes["evcs"].kind) == (
+        "egolf",
+        AssignmentKind.OVERRIDE,
+    )
+
+
+# Ergänzungen: Indizien je Wallbox, wer wo steht, „neu erkannt“, Uhren und der Gast
+
+
+def with_default(cfg, key: str, wallbox: str):
+    """Die Konfiguration mit ``wallbox`` als Standard-Wallbox des Fahrzeugs ``key``."""
+    vehicle = cfg.vehicles[key].model_copy(update={"default_wallbox": wallbox})
+    return cfg.model_copy(update={"vehicles": {**cfg.vehicles, key: vehicle}})
+
+
+def test_each_wallbox_shows_the_evidence_of_its_session(cfg) -> None:
+    both = {"twc_obs": twc(connected=True), "tesla_obs": tesla(plugged=True)}
+    state = update(Assignment(cfg, started=T0), 0, homes={"egolf": True}, **both)
+    assert list(state.wallboxes) == ["evcs", "twc"]
+    for key, occupant in (("evcs", "egolf"), ("twc", "tesla")):
+        # je Fahrzeug in der Reihenfolge von ``config.yaml``, je Fahrzeug die Indizien nach ``Clue``
+        evidence = (
+            Evidence(key, "tesla", Clue.TESSIE, True),
+            Evidence(key, "egolf", Clue.HOME, True),
+        )
+        assert state.wallboxes[key] == WallboxState(occupant, AssignmentKind.DEFAULT, evidence)
+
+
+def test_a_default_vehicle_standing_elsewhere_leaves_an_assumed_guest(cfg) -> None:
+    # Der e-Golf lädt am Wall Connector auf zwei Phasen; an der EVCS steht ein Auto, das nicht lädt.
+    # Am Wall Connector ist er ab 60 s Kandidat (Home Assistant, Phasen), bei 120 s erkannt.
+    egolf = twc(connected=True, charging=True, phase_a={"L1": 16.0, "L2": 16.0, "L3": 0.0})
+    a = Assignment(cfg, started=T0)
+    states = [update(a, s, twc_obs=egolf, homes={"egolf": True}) for s in range(121)]
+    before, after = states[119], states[120]
+    # vorher: der e-Golf angenommen an der EVCS, der Tesla am Wall Connector ausgeschlossen
+    assert (before.wallboxes["evcs"].occupant, before.wallboxes["twc"].occupant) == (
+        "egolf",
+        "guest@twc",
+    )
+    assert (after.vehicles["egolf"].wallbox, after.vehicles["egolf"].fresh) == ("twc", True)
+    # Das Standardfahrzeug der EVCS steht schon am Wall Connector: dort ein Gast, angenommen
+    assert after.wallboxes["evcs"] == WallboxState(
+        "guest@evcs", AssignmentKind.DEFAULT, before.wallboxes["evcs"].evidence
+    )
+    assert (after.vehicles["tesla"].wallbox, after.vehicles["guest@twc"].wallbox) == (None, None)
+
+
+def test_a_wallbox_without_a_default_vehicle_assumes_its_guest(cfg) -> None:
+    shared = with_default(cfg, "tesla", "evcs")  # beide Fahrzeuge an der EVCS
+    plugged = {"twc_obs": twc(connected=True), "tesla_obs": tesla(plugged=True)}
+    state = update(Assignment(shared, started=T0), 0, **plugged)
+    # das Standardfahrzeug der EVCS ist das erste der Konfiguration mit dieser Wallbox
+    assert (state.wallboxes["evcs"].occupant, state.vehicles["egolf"].wallbox) == ("tesla", None)
+    assert (state.wallboxes["twc"].occupant, state.wallboxes["twc"].kind) == (
+        "guest@twc",
+        AssignmentKind.DEFAULT,
+    )
+
+
+def test_while_unclear_a_wallbox_nobody_stands_at_has_no_occupant(cfg) -> None:
+    # Beide Fahrzeuge haben die EVCS als Standard. Beide Wallboxen laden auf drei Phasen: Der Tesla
+    # ist ab 60 s an beiden Kandidat, ein Widerspruch; unklar wie bei CONTRADICTION.
+    shared = with_default(cfg, "tesla", "evcs")
+    three = dict.fromkeys(("L1", "L2", "L3"), 10.0)
+    both = {
+        "evcs_obs": evcs(charging=True, phase_a=three),
+        "twc_obs": twc(connected=True, charging=True, phase_a=three),
+        "tesla_obs": tesla(plugged=True),
+    }
+    a = Assignment(shared, started=T0)
+    assert not any(update(a, s, **both).unclear for s in range(UNCLEAR_FROM_S))
+    state = update(a, UNCLEAR_FROM_S, **both)
+    assert state.unclear
+    assert [(v.wallbox, v.kind) for v in state.vehicles.values()] == [
+        ("evcs", AssignmentKind.UNCLEAR),
+        ("evcs", AssignmentKind.UNCLEAR),
+        (None, AssignmentKind.DEFAULT),  # kein Gast, solange es unklar ist
+        (None, AssignmentKind.DEFAULT),
+    ]
+    assert (state.wallboxes["evcs"].occupant, state.wallboxes["evcs"].kind) == (
+        "tesla",
+        AssignmentKind.UNCLEAR,
+    )
+    nobody = state.wallboxes["twc"]
+    assert (nobody.occupant, nobody.kind) == (None, AssignmentKind.UNCLEAR)
+    assert Evidence("twc", "tesla", Clue.PHASES, True) in nobody.evidence
+
+
+def test_detected_again_after_unclear_is_a_new_detection(cfg) -> None:  # Review Focus 4
+    a = Assignment(cfg, started=T0)
+    for s in range(60):
+        update(a, s, **PICTURE)
+    assert update(a, 60, **PICTURE).vehicles["tesla"].fresh
+    # Die EVCS lädt auf zwei Phasen: der Widerspruch ab 121, unklar ab 181
+    for s in range(61, 181):
+        update(a, s, **CONTRADICTION)
+    unclear = update(a, 181, **CONTRADICTION)
+    assert (unclear.unclear, unclear.wallboxes["evcs"].occupant) == (True, "egolf")
+    assert (unclear.vehicles["tesla"].wallbox, unclear.vehicles["tesla"].plugged) == ("twc", None)
+    # Ohne die Phasen ist der Tesla gleich wieder Kandidat: 60 s später klar und erkannt, neu
+    states = [update(a, s, **PICTURE) for s in range(182, 243)]
+    assert [state.unclear for state in states] == [True] * 60 + [False]
+    assert [state.vehicles["tesla"].fresh for state in states] == [False] * 60 + [True]
+
+
+def test_a_running_session_keeps_the_detection_while_its_plug_state_is_unknown(cfg) -> None:
+    a = Assignment(cfg, started=T0)
+    for s in range(60):
+        update(a, s, evcs_obs=evcs(connected=None) if s == 30 else evcs(), **PICTURE)
+    assert update(a, 60, **PICTURE).vehicles["tesla"].kind is AssignmentKind.DETECTED
+
+
+def test_the_start_of_a_session_is_on_the_wall_clock(cfg) -> None:  # Präzisierungen 9 und 10
+    # Die Wanduhr geht einen Tag nach. Tessies Zeitstempel und der Beginn des Vorgangs zählen auf
+    # ihr: Der Tesla kommt bei 1 s an den Wall Connector, Tessie fragt bei 61 s „angesteckt“ ab.
+    # Tessie und zeitliche Korrelation stützen ihn dann, erkannt ist er nach 60 s auf der Uhr der
+    # Safety-Schicht.
+    wall = T0 - timedelta(days=1)
+    a = Assignment(cfg, started=T0)
+    kinds = []
+    for s in range(122):
+        polled = 61 if s >= 61 else 0
+        tessie = tesla(plugged=s >= 61, plugged_at=wall + timedelta(seconds=polled))
+        wallboxes = {"evcs": evcs(), "twc": twc(connected=s > 0)}
+        when = timedelta(seconds=s)
+        state = a.update(
+            T0 + when, wall + when, None, T0, wallboxes, {"tesla": tessie, "egolf": NONE}
+        )
+        kinds.append((state.vehicles["tesla"].wallbox, state.vehicles["tesla"].kind))
+    assert kinds == [("twc", AssignmentKind.DEFAULT)] * 121 + [("twc", AssignmentKind.DETECTED)]
+
+
+def test_an_assumed_guest_has_the_values_of_its_wallbox_but_no_boost(cfg) -> None:
+    a = Assignment(cfg, started=T0)
+    away = {"homes": {"egolf": False}, "intent": boosted(1, T0 + timedelta(hours=2))}
+    update(a, 0, evcs_obs=evcs(connected=False), **away)
+    # Der e-Golf ist weg; sein Boost gilt an der EVCS, aber dort steht ein Gast
+    guest = update(a, 1, evcs_obs=evcs(charging=True), **away).vehicles["guest@evcs"]
+    assert guest == VehicleState("evcs", AssignmentKind.DEFAULT, True, True, False, True, None)
+    update(a, 2, evcs_obs=evcs(complete=True), **away)
+    state = update(a, 3, **away)
+    assert state.vehicles["guest@evcs"].complete  # bis zum Abstecken
+    nowhere = VehicleState(None, AssignmentKind.DEFAULT, None, None, False, False, None)
+    assert (state.vehicles["egolf"], state.vehicles["guest@twc"]) == (nowhere, nowhere)
+
+
+def test_a_guest_never_takes_the_values_of_tessie(cfg) -> None:
+    # Der Tesla steht am Wall Connector und ist laut Tessie geladen; an der EVCS steht ein Gast
+    full = tesla(plugged=True, charging=True, complete=True)
+    away = {"homes": {"egolf": False}}
+    state = update(
+        Assignment(cfg, started=T0), 0, twc_obs=twc(connected=True), tesla_obs=full, **away
+    )
+    assert (state.vehicles["tesla"].wallbox, state.vehicles["tesla"].complete) == ("twc", True)
+    guest = state.vehicles["guest@evcs"]
+    assert (guest.wallbox, guest.charging, guest.complete) == ("evcs", False, False)
+
+
+def test_after_an_override_a_new_session_starts_assumed(cfg) -> None:  # Review Focus 5
+    intent = Intent(version=1, control=True, vehicles={"egolf": VehicleIntent(wallbox="evcs")})
+    a = Assignment(cfg, started=T0)
+    for s in range(120):
+        update(a, s, intent=intent, **PICTURE)
+    update(a, 120, evcs_obs=evcs(connected=False), intent=intent, **PICTURE)
+    # Die Absicht nennt die Übersteuerung noch, aber ihr Vorgang ist um
+    state = update(a, 121, intent=intent, **PICTURE)
+    assert (state.wallboxes["evcs"].occupant, state.wallboxes["evcs"].kind) == (
+        "egolf",
+        AssignmentKind.DEFAULT,
+    )
+
+
+def test_an_overridden_vehicle_is_never_detected_elsewhere(cfg) -> None:  # Design 7.1
+    # Der Tesla ist an die EVCS übersteuert. Am Wall Connector lädt ein Auto auf drei Phasen, und
+    # Tessie sieht den Tesla zu Hause und angesteckt: Dort ist er trotzdem ausgeschlossen.
+    intent = Intent(version=1, control=True, vehicles={"tesla": VehicleIntent(wallbox="evcs")})
+    three = twc(connected=True, charging=True, phase_a=dict.fromkeys(("L1", "L2", "L3"), 16.0))
+    a = Assignment(cfg, started=T0)
+    states = [
+        update(a, s, intent=intent, twc_obs=three, tesla_obs=tesla(plugged=True))
+        for s in range(121)
+    ]
+    placed = {(state.vehicles["tesla"].wallbox, state.vehicles["tesla"].kind) for state in states}
+    assert placed == {("evcs", AssignmentKind.OVERRIDE)}
+    # Am Wall Connector ist jedes Fahrzeug ausgeschlossen, der e-Golf ab 60 s nach den Phasen: ein
+    # Gast, erkannt bei 120 s
+    assert [(s.wallboxes["twc"].occupant, s.wallboxes["twc"].kind) for s in states[119:]] == [
+        ("guest@twc", AssignmentKind.DEFAULT),
+        ("guest@twc", AssignmentKind.DETECTED),
+    ]

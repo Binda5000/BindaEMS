@@ -4,7 +4,17 @@ from datetime import timedelta
 
 import pytest
 from tests.helpers import T0
-from tests.unit.core.control.charge_helpers import accept, evcs, grid, inputs, run, tesla, twc
+from tests.unit.core.control.charge_helpers import (
+    CONTRADICTION,
+    UNCLEAR_FROM_S,
+    accept,
+    evcs,
+    grid,
+    inputs,
+    run,
+    tesla,
+    twc,
+)
 
 from bindaems.core.control.charge_modes import Effective
 from bindaems.core.control.charging import CarView, ChargeController
@@ -817,18 +827,18 @@ def test_a_vehicle_without_tessie_at_the_wall_connector_is_only_load(cfg) -> Non
 
 def test_unclear_assignment_counts_all_phases_of_the_evcs(cfg) -> None:  # Präzisierung 5
     c = controller(cfg)
-    tesla_at_the_evcs = {
+    contradiction = {
+        **CONTRADICTION,
         "intent": egolf_in(ChargeMode.NOW),
-        "twc_obs": twc(connected=False),
-        "tesla_obs": tesla(plugged=True),
         "grid_obs": grid(l3=30.0),
         "controllable": BOTH,
     }
-    run(c, cfg, 60, **tesla_at_the_evcs)
+    run(c, cfg, UNCLEAR_FROM_S, **contradiction)
     before = c.health()
-    accept(c, c.step(inputs(cfg, s=60, **tesla_at_the_evcs)))
+    accept(c, c.step(inputs(cfg, s=UNCLEAR_FROM_S, **contradiction)))
     after = c.health()
-    assert (before[1]["assignment"], before[1]["limit_a"]) == ("default", 31.0)  # L1, L2
+    # Die EVCS zieht 10 A auf L1 und L2: Ohne sie liegt die Last dort bei 2 − 10 = −8 A
+    assert (before[1]["assignment"], before[1]["limit_a"]) == ("default", 41.0)  # L1, L2
     assert (after[1]["assignment"], after[1]["limit_a"]) == ("unclear", 3.0)  # mit L3
     # der Tesla pausiert: Er wird nicht mehr geregelt (Präzisierung 6)
     assert (before[0]["limit_a"], after[0]["limit_a"]) == (-11.0, None)  # 19 − 30 auf L3
@@ -852,11 +862,14 @@ def test_two_vehicles_at_one_wallbox_count_it_once(cfg) -> None:
     c = ChargeController(shared_cfg, HardLimits.from_config(shared_cfg), started=T0)
     both_now = Intent(version=1, control=True, vehicles={"tesla": NOW, "egolf": NOW})
     at_10_a = evcs(charging=True, phase_a=dict.fromkeys(("L1", "L2", "L3"), 10.0), power_w=6900.0)
+    # Tessie sieht den Tesla angesteckt: „nicht angesteckt“ schlösse ihn an der EVCS aus, und dort
+    # stünde ein Gast (Plan 2c-2b, Präzisierung 13)
     found = c.step(
         inputs(
             shared_cfg,
             intent=both_now,
             evcs_obs=at_10_a,
+            tesla_obs=tesla(plugged=True),
             present=at_evcs(10.0, True),
             grid_obs=grid(l1=12.0, l2=12.0, l3=12.0),
         )
@@ -878,8 +891,15 @@ def test_vehicle_wallbox_for_the_safety_layer(cfg) -> None:
     assert c.vehicle_wallbox() == {"vehicle.tesla": "evcs"}
     c.idle(T0 + timedelta(seconds=2))
     assert c.vehicle_wallbox() == {}
+    # „Tesla an der EVCS“: angenommen am Wall Connector, ab 60 s an der EVCS erkannt
+    picture = {"twc_obs": twc(connected=False), "tesla_obs": tesla(plugged=True)}
+    detected = controller(cfg)
+    run(detected, cfg, 60, **picture)
+    assert detected.vehicle_wallbox() == {"vehicle.tesla": "twc"}
+    detected.step(inputs(cfg, s=60, **picture))
+    assert detected.vehicle_wallbox() == {"vehicle.tesla": "evcs"}
     unclear = controller(cfg)
-    run(unclear, cfg, 61, twc_obs=twc(connected=False), tesla_obs=tesla(plugged=True))
+    run(unclear, cfg, UNCLEAR_FROM_S + 1, **CONTRADICTION)
     assert unclear.vehicle_wallbox() == {"vehicle.tesla": None}
 
 
@@ -1003,18 +1023,17 @@ def test_unclear_uses_the_range_of_the_evcs(cfg) -> None:  # Präzisierung 5
     found = run(
         controller(strict),
         strict,
-        61,
+        UNCLEAR_FROM_S + 1,
+        **CONTRADICTION,
         intent=egolf_in(ChargeMode.NOW),
-        evcs_obs=evcs(charging=True),
-        twc_obs=twc(connected=False),
-        tesla_obs=tesla(plugged=True),
         present=at_evcs(12.0, True),
-        grid_obs=grid(l1=30.0),
+        grid_obs=grid(l1=30.0, feed=(10.0, 0.0, 0.0)),
     )
-    # frei 33 − 30 = 3: mit dem e-Golf sein Mindeststrom 8 A, ab „unklar“ der der EVCS
+    # Last auf L1 ohne die EVCS: 30 A Netz + 10 A aus dem Akku − 10 A der EVCS. Frei 33 − 30 = 3:
+    # mit dem e-Golf sein Mindeststrom 8 A, ab „unklar“ der der EVCS
     assert [(t, c.command.value) for t, c in found if c.command.kind == CURRENT] == [
         (0, 8.0),
-        (60, 6.0),
+        (UNCLEAR_FROM_S, 6.0),
     ]
 
 

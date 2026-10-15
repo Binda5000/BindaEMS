@@ -437,19 +437,20 @@ def test_a_decision_must_name_resume_after_outage(cfg) -> None:
     assert resumed.find(result_of(cfg, "ausfaelle", decisions=[start])) == []
 
 
-def test_the_health_must_show_unclear_before_the_override(cfg) -> None:
-    unclear = check("zuordnung", 0)
-    assert unclear.text == "Die Gesundheit zeigt „tesla“ vor 10 min „unklar“."
+def test_the_health_must_show_the_tesla_detected_before_the_override(cfg) -> None:
+    detected = check("zuordnung", 0)
+    assert detected.text == "Die Gesundheit zeigt „tesla“ vor 10 min „erkannt“."
 
-    def shown(at: int, who: str = "tesla") -> SimResult:
-        vehicles = [{"id": who, "assignment": "unclear"}]
+    def shown(at: int, who: str = "tesla", kind: str = "detected") -> SimResult:
+        vehicles = [{"id": who, "assignment": kind}]
         reports = [(t, health(vehicles=vehicles if t == at else [])) for t in range(0, 1200, 10)]
         return result_of(cfg, "zuordnung", states=reports)
 
-    assert unclear.find(shown(590)) == []
-    message = ["Die Gesundheit zeigt „tesla“ vor 600 s nie „unklar“."]
-    assert unclear.find(shown(600)) == message
-    assert unclear.find(shown(590, "egolf")) == message
+    assert detected.find(shown(590)) == []
+    message = ["Die Gesundheit zeigt „tesla“ vor 600 s nie „erkannt“."]
+    assert detected.find(shown(600)) == message
+    assert detected.find(shown(590, "egolf")) == message
+    assert detected.find(shown(590, kind="unclear")) == message
 
 
 def test_exactly_one_decision_tesla_current_16_a(cfg) -> None:

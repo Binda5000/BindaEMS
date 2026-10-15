@@ -5,6 +5,7 @@ Die Vorgaben sind die Annahmen aller Tests der Laderegelung; ein Test ändert nu
 - ``evcs``: die EVCS mit einem Fahrzeug, ``twc``: der Wall Connector ohne Fahrzeug
 - ``tesla``: der Tesla mit Tessie, abgesteckt; ``NONE``: ein Fahrzeug ohne Tessie (der e-Golf)
 - ``grid``: das Netz mit 2 A je Phase und Überschuss
+- ``CONTRADICTION`` und ``UNCLEAR_FROM_S``: ein echter Widerspruch und ab wann er „unklar“ macht
 - ``inputs``: die Eingaben eines Zyklus aus diesen Vorgaben, ``PRESENT`` und ``CONTROLLABLE``
 - ``accept`` und ``run``: Urteile für die Befehle eines Schritts und Läufe über viele Sekunden
 """
@@ -14,7 +15,7 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import replace
 from datetime import datetime, timedelta
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Final
 
 from tests.helpers import T0
 
@@ -67,6 +68,18 @@ def tesla(**kw: Any) -> VehicleObs:
     Er zieht 0 A und hat 3 Phasen.
     """
     return replace(VehicleObs(True, False, False, False, False, True, 0.0, 3), **kw)
+
+
+# Ein echter Widerspruch (Plan 2c-2b, Präzisierung 13): Tessie sieht den Tesla zu Hause und
+# angesteckt, der Wall Connector meldet kein Fahrzeug, und die EVCS lädt auf zwei Phasen. Tessie und
+# Ausschluss stützen den Tesla an der EVCS, die Phasen-Signatur schließt ihn dort nach 60 s aus: Ab
+# da widerspricht er sich, und nach weiteren 60 s ist die Zuordnung unklar, bei ``UNCLEAR_FROM_S``.
+CONTRADICTION: Final[dict[str, Any]] = {
+    "twc_obs": twc(connected=False),
+    "tesla_obs": tesla(plugged=True),
+    "evcs_obs": evcs(charging=True, phase_a={"L1": 10.0, "L2": 10.0, "L3": 0.0}, power_w=4600.0),
+}
+UNCLEAR_FROM_S: Final = 120
 
 
 def grid(
