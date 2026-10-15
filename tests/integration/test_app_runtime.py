@@ -1,15 +1,20 @@
 import asyncio
 import threading
+from datetime import timedelta
 from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
 from pydantic import SecretStr
+from structlog.testing import capture_logs
 from tests.app_helpers import PASSWORD, T_APP
+from tests.unit.shared.test_decisions import decision
 
+from bindaems.app.control.decisions import DecisionQuery
 from bindaems.app.ha.entities import build_inputs
 from bindaems.app.runtime import AppRuntime
 from bindaems.shared.config import Config, Secrets
+from bindaems.shared.decisions import decision_to_json
 from bindaems.shared.timeutil import ManualClock
 
 TOKEN = "x" * 32
@@ -93,6 +98,43 @@ def test_runtime_wires_routes_and_components(runtime) -> None:
         "/api/state",
     ):
         assert client.get(path).status_code == 200, path
+
+
+async def test_decisions_from_the_stream_reach_the_table(runtime) -> None:
+    await runtime.live_feed._dispatch_decision(decision_to_json(decision(id="x1", ts=T_APP)))
+    await runtime.collector.flush()
+    found, _ = runtime.decisions.query(DecisionQuery())
+    assert [item.decision.id for item in found] == ["x1"]
+
+
+@pytest.mark.respx(assert_all_called=False)
+async def test_connecting_to_the_core_catches_up_the_decisions(runtime, respx_mock) -> None:
+    respx_mock.route().respond(503)
+    with capture_logs() as logs:
+        await runtime.live_feed._run_connect_handlers()
+    assert "Rückstand der Entscheidungen nicht lesbar" in [entry["event"] for entry in logs]
+
+
+@pytest.mark.respx(assert_all_called=False)
+async def test_maintenance_removes_decisions_older_than_the_retention(runtime, respx_mock) -> None:
+    respx_mock.route().respond(503)
+    keep = timedelta(days=runtime._cfg.app.decisions_keep_days)
+    runtime.decisions.add(
+        [
+            decision(id="old", ts=T_APP - keep - timedelta(days=1)),
+            decision(id="young", ts=T_APP - keep + timedelta(days=1)),
+        ]
+    )
+    task = asyncio.create_task(runtime._maintenance_loop())
+    try:
+        for _ in range(100):
+            found, _ = runtime.decisions.query(DecisionQuery())
+            if [item.decision.id for item in found] == ["young"]:
+                break
+            await asyncio.sleep(0.02)
+    finally:
+        task.cancel()
+    assert [item.decision.id for item in found] == ["young"]
 
 
 @pytest.mark.respx(assert_all_called=False)

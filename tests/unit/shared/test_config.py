@@ -8,6 +8,7 @@ from pydantic import ValidationError
 
 from bindaems.core.control.fleet import GUEST, guest_key
 from bindaems.shared.config import (
+    AppConfig,
     Config,
     ConfigError,
     ControlConfig,
@@ -95,6 +96,14 @@ def test_empty_secret_variables_count_as_unset(monkeypatch) -> None:
     monkeypatch.setenv("BINDAEMS_MQTT_PASSWORD", "")
     secrets = load_secrets()
     assert secrets.tessie_token is None and secrets.mqtt_password is None
+
+
+@pytest.mark.parametrize("days", [0, 3651])
+def test_decisions_keep_days_is_limited(days: int) -> None:
+    with pytest.raises(ValidationError):
+        AppConfig(decisions_keep_days=days)
+    assert AppConfig().decisions_keep_days == 180
+    assert AppConfig(decisions_keep_days=3650).decisions_keep_days == 3650
 
 
 def test_app_and_ha_mqtt_from_example() -> None:

@@ -30,6 +30,7 @@ from bindaems.app.consumers.energy import EnergyCache
 from bindaems.app.consumers.routes import consumers_router
 from bindaems.app.consumers.service import ConsumerService
 from bindaems.app.consumers.values import HaRef, HaValueCache
+from bindaems.app.control.decisions import DecisionCollector, DecisionStore
 from bindaems.app.core_link import CoreClient, LiveFeed, LiveState
 from bindaems.app.db.engine import DB_FILENAME, migrate, open_database
 from bindaems.app.forecast.routes import forecast_router
@@ -144,11 +145,16 @@ class AppRuntime:
         self.ledger = LedgerService(
             self.engine, self._clock, self.prices, self.settings, self.audit, self._sink
         )
+        core_client = CoreClient(cfg.app.core_url, secrets.internal_token, self._core_http)
+        self.decisions = DecisionStore(self.engine, self._clock)
+        self.collector = DecisionCollector(self.decisions, core_client, self._sink, self._clock)
         self.live_feed = LiveFeed(
-            CoreClient(cfg.app.core_url, secrets.internal_token, self._core_http),
+            core_client,
             self.live,
             self._clock,
             slot_flows_handlers=[self.ledger.handle_stream_message],
+            decision_handlers=[self.collector.on_decision],
+            connect_handlers=[self.collector.catch_up],
         )
         self.ha_values = HaValueCache(self.reader, ha_database) if ha_database is not None else None
         self.energy = EnergyCache(self.reader, self._clock, ha_database)
@@ -241,6 +247,7 @@ class AppRuntime:
             log.exception("Brutto/Netto aus gespeicherten Preisen nicht bestimmbar")
         jobs: list[tuple[str, Callable[[], Awaitable[None]]]] = [
             ("core-link", self.live_feed.run),
+            ("decisions", self.collector.run),
             ("prices", self.price_scheduler.run),
             ("forecast", self.forecast.run),
             ("influx-writer", self.influx_writer.run),
@@ -347,6 +354,12 @@ class AppRuntime:
                     log.info("Abgelaufene Sitzungen gelöscht", sessions=removed)
             except Exception:
                 log.exception("Pflege der Sitzungen fehlgeschlagen")
+            try:
+                removed = await self.collector.cleanup(self._cfg.app.decisions_keep_days)
+                if removed:
+                    log.info("Alte Entscheidungen gelöscht", decisions=removed)
+            except Exception:
+                log.exception("Pflege der Entscheidungen fehlgeschlagen")
             await asyncio.sleep(HOUR_S)
 
     async def _backup_loop(self) -> None:

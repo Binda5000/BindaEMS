@@ -301,6 +301,7 @@ class AppConfig(_Model):
     trusted_proxies: list[str] = Field(default_factory=list)
     cookie_secure: bool = True
     ui_dir: Path | None = Path("/app/ui")
+    decisions_keep_days: Annotated[int, Field(ge=1, le=3650)] = 180  # Entscheidungslog in SQLite
 
     @field_validator("trusted_proxies")
     @classmethod

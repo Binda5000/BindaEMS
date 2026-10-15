@@ -166,3 +166,25 @@ ledger_slot = Table(
     Column("origin", String(8), nullable=False),
     Column("updated_at", UtcDateTime(), nullable=False),
 )
+
+# Entscheidungslog des core (Spec 7.10): ``id`` ist die des core, ``seq`` die Reihenfolge des
+# Eintreffens (der Rückstand kann ältere Zeiten nachliefern)
+decision_table = Table(
+    "decision",
+    metadata,
+    Column("seq", Integer, primary_key=True),
+    Column("id", String(64), nullable=False),
+    Column("ts", UtcDateTime(), nullable=False),
+    Column("actuator", String(64), nullable=False),
+    Column("kind", String(32), nullable=False),
+    Column("requested", JSON, nullable=True),
+    Column("applied", JSON, nullable=True),
+    Column("dry_run", Boolean, nullable=False),
+    Column("outcome", String(32), nullable=False),
+    Column("result", String(16), nullable=False),
+    Column("codes", JSON, nullable=False),
+    Column("text", Text, nullable=False),
+    Column("inputs", JSON, nullable=False),
+    UniqueConstraint("id", name="uq_decision_id"),
+    Index("ix_decision_ts", "ts"),
+)
