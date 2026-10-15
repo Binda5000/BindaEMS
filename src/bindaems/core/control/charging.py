@@ -72,8 +72,10 @@ Dazu legt die Regelung fest:
   1 A) an einem geregelten Ladepunkt, obwohl sein Modus nicht laden will, und ist die Zuordnung
   klar, vergisst die Regelung nach ``control.tesla_against_s`` ohne Unterbrechung ihren letzten Wert
   für ``charging`` des Aktors: „Laden aus“ geht erneut hinaus, mit dem Grund ``self_start`` nach dem
-  Modus, höchstens alle ``control.tesla_against_retry_s`` je Fahrzeug. Dringend ist es nur im
-  Modus „Aus“ wie jeder Stopp dort. Ein neuer Vorgang und ``idle`` beginnen die Zeiten neu.
+  Modus, höchstens alle ``control.tesla_against_retry_s`` je Fahrzeug. Das gilt nur für Zyklen, in
+  denen der Stopp hinausgehen kann (Aktor steuerbar, ``charging`` nicht blockiert); sonst läuft die
+  Zeit weiter. Dringend ist es nur im Modus „Aus“ wie jeder Stopp dort. Ein neuer Vorgang und
+  ``idle`` beginnen die Zeiten neu.
 - Ist der Ansteckzustand unbekannt, sinkt der Strom nur unter den Ist-Strom, wenn der Wächter es
   verlangt; „Laden aus“ kommt dann nur wegen Überlast.
 - Eine Wallbox ist höchstens ein Ladepunkt: Hängen nach der Zuordnung zwei Fahrzeuge an ihr, hat
@@ -825,8 +827,11 @@ class ChargeController:
 
         Gegen den Modus lädt ein Fahrzeug mit Tessie, wenn Tessie es mit mindestens 1 A ladend
         meldet, der Modus nicht laden will (``decision.charge`` falsch), der Ansteckzustand bekannt
-        und die Zuordnung klar ist. Ist ``AgainstMode.due`` wahr, vergisst die Regelung die Werte
-        des Aktors, damit „Laden aus“ erneut hinausgeht.
+        und die Zuordnung klar ist. ``AgainstMode`` wird nur befragt, wenn der Stopp in diesem
+        Zyklus hinausgehen kann (Aktor steuerbar, ``charging`` nicht blockiert); sonst läuft die
+        Zeit weiter und der Neuversuch bleibt unverbraucht. Ist ``due`` wahr, vergisst die Regelung
+        den letzten Wert für ``charging`` des Aktors (nur diese Art, nicht den Strom und dessen
+        ``not_taken_retry``), damit „Laden aus“ erneut hinausgeht.
         """
         if key not in self._tesla or self._cfg.vehicles[key].tessie is None:
             return False
@@ -841,9 +846,17 @@ class ChargeController:
             and vehicle.plugged is not None
             and vehicle.kind is not AssignmentKind.UNCLEAR
         )
-        due = self._against.due(key, now, against)
+        if not against:
+            self._against.due(key, now, False)  # unterbricht die Zeit
+            return False
+        sendable = inputs.controllable.get(actuator) is True and (
+            (actuator, _CHARGING) not in inputs.blocked
+        )
+        if not sendable:  # der Stopp kann diesen Zyklus nicht hinaus: die Zeit läuft weiter
+            return False
+        due = self._against.due(key, now, True)
         if due:
-            self._last.forget({actuator})
+            self._last.forget_key((actuator, _CHARGING))
         return due
 
     def _extra_a(self, mode: Effective) -> float:

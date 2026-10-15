@@ -145,3 +145,17 @@ def test_forget_without_actuators_forgets_everything() -> None:
 
 def test_charge_command_stays_a_name_of_the_control_command() -> None:
     assert ChargeCommand is ControlCommand
+
+
+def test_forget_key_drops_only_that_kind_with_its_retry_marker() -> None:
+    last = LastValues()
+    charging = ("vehicle.tesla", CommandKind.CHARGING)
+    judge(last, Command("vehicle.tesla", CommandKind.CURRENT, 8.0))
+    judge(last, Command("vehicle.tesla", CommandKind.CHARGING, False))
+    last.finished(written(8.0, DecisionResult.ERROR, not_taken=True))  # Strom: Merker gesetzt
+    judge(last, Command("vehicle.tesla", CommandKind.CHARGING, False))
+    last.forget_key(charging)
+    assert (last.holds(charging), last.changed(charging, False)) == (False, True)
+    assert last.retry(TESLA)  # der Merker des Stroms bleibt
+    last.forget_key(TESLA)
+    assert (last.holds(TESLA), last.retry(TESLA)) == (False, False)

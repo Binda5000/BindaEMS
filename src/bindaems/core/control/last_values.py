@@ -154,6 +154,12 @@ class LastValues:
         if result.not_taken:
             self._retry.add(key)
 
+    def forget_key(self, key: Key) -> None:
+        """Vergisst den Wert und den Merker ``not_taken_retry`` genau dieser Art; andere Arten des
+        Aktors bleiben."""
+        self._sent.pop(key, None)
+        self._retry.discard(key)
+
     def forget(self, actuators: Collection[str] | None = None) -> None:
         """Vergisst Werte und Merker dieser Aktoren, ohne Angabe die aller Aktoren."""
         if actuators is None:

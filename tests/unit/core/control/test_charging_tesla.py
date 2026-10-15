@@ -15,6 +15,8 @@ from tests.unit.core.control.charge_helpers import (
     twc,
 )
 
+from bindaems.core.control.assignment import AssignmentKind, VehicleState
+from bindaems.core.control.charge_modes import ModeDecision
 from bindaems.core.control.charging import ChargeController
 from bindaems.core.control.charging_tesla import AgainstMode
 from bindaems.core.control.executor import WriteResult
@@ -1310,3 +1312,89 @@ def test_an_unregulated_stretch_interrupts_the_self_start_time(cfg) -> None:
     )
     tagged = [t for t, c in of(found, "vehicle.tesla") if "self_start" in c.reasons]
     assert tagged == [280]
+
+
+def test_a_self_start_correction_keeps_the_current_and_its_retry_marker(cfg) -> None:
+    # Bei 0 sinkt die Sicherung den Tesla in Sofort auf 8 A; er übernimmt das nicht. Ab 1 ist der
+    # Modus Aus, der Tesla lädt weiter. Die Korrektur bei 121 vergisst nur „Laden an/aus“: Der
+    # Merker des Stroms bleibt, sein nächster Befehl bleibt ein normaler (Design 7.2).
+    c = controller(cfg)
+    accept(c, c.step(tesla_inputs(cfg, 0, **TESLA_CHARGING, grid_obs=grid(l1=41.0))))
+    not_taken(c, 8.0, 16.0)
+    off = {**TESLA_CHARGING, **SELF_STARTING, "intent": TESLA_OFF}
+    found = steps(c, cfg, range(1, 200), make=tesla_inputs, **off)
+    tagged = [(t, x.command) for t, x in found if "self_start" in x.command.reasons]
+    assert tagged == [(121, SELF_START_OFF)]
+    assert c._last.retry(("vehicle.tesla", CURRENT))
+
+
+@pytest.mark.parametrize("pending", ["blocked", "wake_only"])
+def test_the_self_start_waits_for_a_cycle_that_can_send_it(cfg, pending) -> None:
+    # Von 170 bis 199 kann der Stopp nicht hinaus: „Laden an/aus“ ist blockiert, oder der Tesla ist
+    # nur weckbar. Die Zeit läuft weiter, der Neuversuch bleibt unverbraucht: Der Stopp mit Grund
+    # geht im ersten Zyklus hinaus, der ihn senden kann (200), nicht ohne Grund später.
+    held = lambda s: 170 <= s < 200  # noqa: E731
+    kw = (
+        {"blocked": lambda s: frozenset({("vehicle.tesla", CHARGING)}) if held(s) else frozenset()}
+        if pending == "blocked"
+        else {
+            "controllable": lambda s: {"wallbox.evcs": True, "vehicle.tesla": not held(s)},
+            "wakeable": {"vehicle.tesla": True},
+        }
+    )
+    found = self_start_run(cfg, TESLA_OFF, 400, **kw)
+    stops = [(t, c) for t, c in of(found, "vehicle.tesla") if c.kind == CHARGING and t >= 60]
+    assert stops == [(200, SELF_START_OFF)]
+
+
+def test_the_self_start_ignores_an_unclear_assignment(cfg) -> None:
+    # Bei unklarer Zuordnung zählt das Laden gegen den Modus nicht und unterbricht die Zeit: Die
+    # 120 s beginnen erst mit der klaren Zuordnung (241), der Neuversuch ist nicht verbraucht.
+    c = controller(cfg)
+    decision = ModeDecision(charge=False, reason=None)
+
+    def due(s: int, kind: AssignmentKind) -> bool:
+        state = VehicleState("twc", kind, True, True, False, False, None, False)
+        inp = tesla_inputs(cfg, s, **SELF_STARTING)
+        return c._self_start(inp.now, "tesla", "vehicle.tesla", state, decision, inp)
+
+    unclear, clear = AssignmentKind.UNCLEAR, AssignmentKind.DEFAULT
+    assert [due(s, unclear) for s in (0, 119, 120, 240)] == [False] * 4
+    assert [due(s, clear) for s in (241, 360, 361)] == [False, False, True]
+
+
+EVCS_OFF = Intent(
+    version=1,
+    control=True,
+    vehicles={"tesla": VehicleIntent(mode=ChargeMode.OFF, wallbox="evcs")},
+)
+
+
+def test_a_self_starting_tesla_at_the_evcs_gets_the_stop_at_the_evcs(cfg) -> None:
+    # Geregelt wird die EVCS: Das erneute „Laden aus“ geht an den Aktor des Ladepunkts
+    evcs_charging = evcs(charging=True, phase_a=dict.fromkeys(PHASES, 16.0), power_w=11040.0)
+    started = lambda s: s >= 60  # noqa: E731
+    found = run(
+        controller(cfg),
+        cfg,
+        300,
+        make=tesla_inputs,
+        intent=EVCS_OFF,
+        twc_obs=twc(),
+        evcs_obs=lambda s: evcs_charging if started(s) else evcs(),
+        tesla_obs=lambda s: (
+            tesla(plugged=True, charging=True, actual_current_a=16.0)
+            if started(s)
+            else tesla(plugged=True)
+        ),
+        present=lambda s: at_evcs(16.0, True) if started(s) else at_evcs(0.0, False),
+    )
+    tagged = [(t, x.command) for t, x in found if "self_start" in x.command.reasons]
+    assert tagged == [
+        (
+            180,
+            Command(
+                "wallbox.evcs", CHARGING, False, urgent=True, reasons=("mode_off", "self_start")
+            ),
+        )
+    ]

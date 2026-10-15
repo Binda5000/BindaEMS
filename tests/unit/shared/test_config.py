@@ -404,7 +404,7 @@ def test_commented_peak_target_of_the_example_is_valid_when_enabled(tmp_path: Pa
 # Endliche Werte: Override und grid_budget_w sind nie NaN oder ±∞, also nimmt die Konfiguration
 # solche Werte für die neuen Felder nicht an
 
-BATTERY_AND_PEAK_FIELDS = (
+FINITE_CONTROL_FIELDS = (
     "support_soc_pct",
     "support_hysteresis_pct",
     "support_max_w",
@@ -421,7 +421,7 @@ BATTERY_AND_PEAK_FIELDS = (
 @pytest.mark.parametrize(
     "value", [float("inf"), float("-inf"), float("nan")], ids=["inf", "-inf", "nan"]
 )
-@pytest.mark.parametrize("field", BATTERY_AND_PEAK_FIELDS)
+@pytest.mark.parametrize("field", FINITE_CONTROL_FIELDS)
 def test_battery_and_peak_values_must_be_finite(field: str, value: float) -> None:
     with pytest.raises(ValidationError) as caught:
         ControlConfig(**{field: value})
@@ -430,7 +430,7 @@ def test_battery_and_peak_values_must_be_finite(field: str, value: float) -> Non
     assert [error["type"] for error in caught.value.errors()] == ["finite_number"]
 
 
-@pytest.mark.parametrize("field", BATTERY_AND_PEAK_FIELDS)
+@pytest.mark.parametrize("field", FINITE_CONTROL_FIELDS)
 def test_infinite_battery_and_peak_values_in_the_config_file_are_rejected(
     tmp_path: Path, field: str
 ) -> None:
