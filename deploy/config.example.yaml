@@ -161,6 +161,8 @@ control:
   # peak_target_kw: 8   # Ziel des 15-min-Wächters in kW; ohne Wert ruht er
   peak_margin_kw: 0.3       # Marge der Hochrechnung des Wächters in kW
   tesla_reserve_commands: 4 # Tesla: so viele Befehle je Stunde bleiben frei (unter commands.per_hour); ist das Budget bis darauf verbraucht, ändert die Regelung den Strom nur noch auf Verlangen der Wächter. Die Reserve hält Start, Stopp und Aus nicht zurück; Senkungen der Wächter gehen hinaus (die Limits der Safety-Schicht gelten weiter, nur der Stopp in Aus umgeht sie)
+  tesla_against_s: 120      # Tesla: lädt er so lange in s ohne Unterbrechung gegen seinen Modus (Tessie: mindestens 1 A), sendet die Regelung "Laden aus" erneut
+  tesla_against_retry_s: 600 # Tesla: frühestens so viele s nach diesem Befehl folgt der nächste Versuch, solange er gegen den Modus lädt
 
 # Ablage des core (Volume core-data): intent.json, write_budget.json, rate_limits.json und das
 # Entscheidungslog decisions/ (Tagesdateien, höchstens 7 Tage und 50 MB).

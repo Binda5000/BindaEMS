@@ -413,6 +413,8 @@ BATTERY_AND_PEAK_FIELDS = (
     "override_refresh_s",
     "peak_target_kw",
     "peak_margin_kw",
+    "tesla_against_s",
+    "tesla_against_retry_s",
 )
 
 
@@ -513,3 +515,15 @@ def test_reserve_is_free_for_a_vehicle_without_tessie(tmp_path: Path) -> None:
         d["vehicles"]["tesla"].update(tessie=None, live_allowed=False)
 
     assert load_config(write_cfg(tmp_path, change)).control.tesla_reserve_commands == 20
+
+
+def test_self_start_defaults_to_120_s_and_10_min() -> None:
+    control = load_config(EXAMPLE).control
+    assert (control.tesla_against_s, control.tesla_against_retry_s) == (120.0, 600.0)
+
+
+@pytest.mark.parametrize("field", ["tesla_against_s", "tesla_against_retry_s"])
+@pytest.mark.parametrize("value", [0, -1])
+def test_self_start_times_must_be_positive(field: str, value: float) -> None:
+    with pytest.raises(ValidationError):
+        ControlConfig(**{field: value})

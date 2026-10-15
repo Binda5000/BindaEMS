@@ -9,7 +9,8 @@ Die Bausteine, die ``ChargeController`` für Fahrzeuge mit Tessie braucht (Präz
 - ``maximum_command`` und ``wake_command``: der Höchststrom „Tesla an der EVCS“ und der Start mit
   Weckerlaubnis, jeweils als Befehl
 - ``tessie_current``: der Strom, den Tessie meldet, auf den Phasen der Wallbox
-- die Gründe ``wake``, ``assignment_unclear`` und ``assignment_detected``
+- ``AgainstMode``: wie lange ein Fahrzeug gegen seinen Modus lädt (Selbststart)
+- die Gründe ``wake``, ``assignment_unclear``, ``assignment_detected`` und ``self_start``
 
 Tesla, Zuordnung und Wiederaufnahme (Design 7 bis 9; ``ChargeController`` verbindet die Bausteine):
 
@@ -30,6 +31,10 @@ Tesla, Zuordnung und Wiederaufnahme (Design 7 bis 9; ``ChargeController`` verbin
 - Ab einer neuen Erkennung tragen die Befehle eines Autos zuletzt ``assignment_detected``, bis zum
   ersten Zyklus mit Befehlen für das Auto, den Höchststrom eingeschlossen; ist es vorher nicht mehr
   erkannt, entfällt der Grund (Plan 2c-2b, Präzisierung 8).
+- Selbststart (Plan 2d, Präzisierung 10): Lädt ein Fahrzeug mit Tessie ``control.tesla_against_s``
+  ohne Unterbrechung gegen seinen Modus, vergisst die Regelung ihren letzten Wert für ``charging``;
+  so geht „Laden aus“ erneut hinaus, mit dem Grund ``self_start``, höchstens alle
+  ``control.tesla_against_retry_s``. Ein neuer Vorgang und ``idle`` beginnen neu.
 - Solange die Zuordnung unklar ist (Präzisierung 5), gibt es kein „Laden an/aus“ nach dem Modus;
   der Strom sinkt nur, wenn der Wächter weniger als den Ist-Strom erlaubt, nie unter den
   Mindeststrom. Die Gründe sind ``(Modus, "assignment_unclear", Ursache)``. Die Überlast setzt
@@ -63,6 +68,8 @@ WAKE: Final = "wake"  # ein Start mit Weckerlaubnis
 ASSIGNMENT_UNCLEAR: Final = "assignment_unclear"  # die Zuordnung ist unklar (Präzisierung 5)
 # der Befehl folgt aus einer neuen Erkennung (Plan 2c-2b, Präzisierung 8)
 ASSIGNMENT_DETECTED: Final = "assignment_detected"
+# der Befehl folgt aus einem Auto, das gegen seinen Modus lädt (Plan 2d, Präzisierung 10)
+SELF_START: Final = "self_start"
 
 # So steht ein Fahrzeug „an der EVCS“ (Plan 2c-2b, Präzisierung 7)
 _AT_THE_EVCS: Final = frozenset({AssignmentKind.OVERRIDE, AssignmentKind.DETECTED})
@@ -162,6 +169,42 @@ class EvcsOverrides:
         arrived = {vehicle_actuator(k) for k, w in found.items() if self._seen.get(k) != w}
         self._seen = found
         return set(found), arrived
+
+
+class AgainstMode:
+    """Wie lange ein Fahrzeug gegen seinen Modus lädt, und wann „Laden aus“ erneut hinausgeht
+    (Plan 2d, Präzisierung 10).
+
+    ``due`` bekommt je Zyklus, ob das Fahrzeug gegen den Modus lädt. Wahr ist es, wenn das seit
+    ``against_s`` ohne Unterbrechung gilt und der letzte Neuversuch mindestens ``retry_s``
+    zurückliegt; dann zählt es den Neuversuch. Ein Zyklus ohne ``against`` beginnt die ``against_s``
+    neu. Die Zeit kommt als Argument, auf der Uhr der Safety-Schicht.
+    """
+
+    def __init__(self, against_s: float, retry_s: float) -> None:
+        self._against_s = against_s
+        self._retry_s = retry_s
+        self._since: dict[str, datetime] = {}  # Fahrzeug → seit wann es ununterbrochen dagegen lädt
+        self._retried: dict[str, datetime] = {}  # Fahrzeug → Zeit des letzten Neuversuchs
+
+    def due(self, key: str, now: datetime, against: bool) -> bool:
+        """Ob für ``key`` jetzt ein Neuversuch fällig ist; zählt ihn dann."""
+        if not against:
+            self._since.pop(key, None)
+            return False
+        since = self._since.setdefault(key, now)
+        if (now - since).total_seconds() < self._against_s:
+            return False
+        retried = self._retried.get(key)
+        if retried is not None and (now - retried).total_seconds() < self._retry_s:
+            return False
+        self._retried[key] = now
+        return True
+
+    def clear(self, key: str) -> None:
+        """Ein neuer Vorgang oder eine Pause: ``key`` beginnt neu, ohne Neuversuch davor."""
+        self._since.pop(key, None)
+        self._retried.pop(key, None)
 
 
 def maximum_command(

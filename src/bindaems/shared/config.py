@@ -362,6 +362,14 @@ class ControlConfig(_Model):
       nicht zurück; die Limits der Safety-Schicht (``per_hour``, ``start_stop_per_hour``) gelten
       weiter, nur der Stopp in „Aus“ umgeht sie. Der Wert liegt unter ``per_hour`` jedes Fahrzeugs
       mit Tessie.
+
+    Selbststart des Tesla (Plan 2d, Präzisierung 10):
+
+    - ``tesla_against_s``: So lange in s lädt ein Fahrzeug mit Tessie ohne Unterbrechung gegen
+      seinen Modus (Tessie: lädt mit mindestens 1 A, der Modus will nicht laden, die Zuordnung ist
+      klar), bevor die Regelung „Laden aus“ erneut sendet.
+    - ``tesla_against_retry_s``: Frühestens so viele s später folgt je Fahrzeug ein weiterer
+      Versuch, solange es gegen den Modus lädt.
     """
 
     import_margin_a: Annotated[float, Field(ge=0)] = 1.0
@@ -384,6 +392,8 @@ class ControlConfig(_Model):
     peak_target_kw: Annotated[float, Field(gt=0, allow_inf_nan=False)] | None = None
     peak_margin_kw: Annotated[float, Field(ge=0, allow_inf_nan=False)] = 0.3
     tesla_reserve_commands: Annotated[int, Field(ge=0)] = 4
+    tesla_against_s: Annotated[float, Field(gt=0, allow_inf_nan=False)] = 120.0
+    tesla_against_retry_s: Annotated[float, Field(gt=0, allow_inf_nan=False)] = 600.0
 
 
 class CoreConfig(_Model):

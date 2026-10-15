@@ -16,6 +16,7 @@ from tests.unit.core.control.charge_helpers import (
 )
 
 from bindaems.core.control.charging import ChargeController
+from bindaems.core.control.charging_tesla import AgainstMode
 from bindaems.core.control.executor import WriteResult
 from bindaems.core.control.peak_guard import NO_LIMITS, PeakLimits
 from bindaems.core.safety.limits import HardLimits
@@ -1157,3 +1158,155 @@ def test_a_departing_tesla_gets_no_command_from_a_stale_tessie_value(cfg) -> Non
         for t, x in found
         if x.command.actuator == "wallbox.evcs" and "mode_now" in x.command.reasons
     ] == []
+
+
+# Selbststart (Plan 2d, Präzisierung 10)
+
+
+def test_against_mode_needs_120_s_without_interruption() -> None:
+    against = AgainstMode(120, 600)
+    assert not against.due("tesla", T0, True)
+    assert not against.due("tesla", T0 + timedelta(seconds=119), True)
+    assert against.due("tesla", T0 + timedelta(seconds=120), True)
+
+
+def test_against_mode_retries_at_most_every_10_min() -> None:
+    against = AgainstMode(120, 600)
+    at = lambda s: T0 + timedelta(seconds=s)  # noqa: E731
+    due = [s for s in range(0, 1400) if against.due("tesla", at(s), True)]
+    assert due == [120, 720, 1320]
+
+
+def test_interruption_restarts_the_120_s() -> None:
+    against = AgainstMode(120, 600)
+    at = lambda s: T0 + timedelta(seconds=s)  # noqa: E731
+    assert not against.due("tesla", at(0), True)
+    assert not against.due("tesla", at(60), False)
+    assert [s for s in range(61, 200) if against.due("tesla", at(s), True)] == [181]
+
+
+def test_against_mode_counts_each_vehicle_alone() -> None:
+    against = AgainstMode(120, 600)
+    against.due("tesla", T0, True)
+    assert not against.due("egolf", T0 + timedelta(seconds=120), True)
+    assert against.due("tesla", T0 + timedelta(seconds=120), True)
+
+
+def test_clear_starts_a_new_process() -> None:
+    against = AgainstMode(120, 600)
+    at = lambda s: T0 + timedelta(seconds=s)  # noqa: E731
+    assert [s for s in range(0, 121) if against.due("tesla", at(s), True)] == [120]
+    against.clear("tesla")  # kein Neuversuch-Abstand mehr, die 120 s beginnen neu
+    assert not against.due("tesla", at(121), True)
+    assert not against.due("tesla", at(240), True)
+    assert against.due("tesla", at(241), True)
+
+
+SELF_STARTING = {
+    "twc_obs": TWC_16_A,
+    "tesla_obs": tesla(plugged=True, charging=True, actual_current_a=16.0),
+    "present": at_tesla(16.0, True),
+}
+SELF_START_OFF = Command(
+    "vehicle.tesla", CHARGING, False, urgent=True, reasons=("mode_off", "self_start")
+)
+
+
+def self_start_run(cfg, intent, seconds, *, quiet_until=60, **kw):
+    """Der Tesla ist angesteckt und gestoppt (bestätigt); ab ``quiet_until`` lädt er selbst.
+
+    Tessie meldet ihn bis dahin nicht ladend; der Wall Connector misst dann 0 A.
+    """
+    quiet = {"tesla_obs": tesla(plugged=True), "twc_obs": TWC_ON, "present": at_tesla(0.0, False)}
+
+    def chosen(key):
+        return lambda s: quiet[key] if s < quiet_until else SELF_STARTING[key]
+
+    return run(
+        controller(cfg),
+        cfg,
+        seconds,
+        make=tesla_inputs,
+        intent=intent,
+        **{"grid_obs": grid(grid_w=-3000.0), **{key: chosen(key) for key in quiet}, **kw},
+    )
+
+
+def test_self_starting_tesla_in_off_gets_charging_off_again(cfg) -> None:
+    found = self_start_run(cfg, TESLA_OFF, 300)
+    stops = [(t, c) for t, c in of(found, "vehicle.tesla") if c.kind == CHARGING]
+    assert [t for t, _ in stops if t >= 60] == [180]
+    assert stops[-1][1] == SELF_START_OFF
+
+
+def test_self_start_in_pv_without_surplus(cfg) -> None:
+    intent = Intent(version=1, control=True, vehicles={"tesla": VehicleIntent(mode=ChargeMode.PV)})
+    # Der Netzbezug deckt die 11 kW des ladenden Tesla: kein Überschuss
+    found = self_start_run(cfg, intent, 300, grid_obs=grid(grid_w=12000.0))
+    stops = [(t, c) for t, c in of(found, "vehicle.tesla") if c.kind == CHARGING and t >= 60]
+    assert stops == [
+        (180, Command("vehicle.tesla", CHARGING, False, reasons=("mode_pv", "self_start")))
+    ]
+
+
+def test_self_start_is_retried_at_most_every_10_min(cfg) -> None:
+    found = self_start_run(cfg, TESLA_OFF, 1000)
+    stops = [t for t, c in of(found, "vehicle.tesla") if c.kind == CHARGING and t >= 60]
+    assert stops == [180, 780]
+
+
+def test_no_self_start_below_one_ampere(cfg) -> None:
+    found = self_start_run(
+        cfg,
+        TESLA_OFF,
+        400,
+        tesla_obs=tesla(plugged=True, charging=True, actual_current_a=0.5),
+    )
+    assert [c for _, c in of(found, "vehicle.tesla") if "self_start" in c.reasons] == []
+
+
+def test_no_correction_while_the_assignment_is_unclear(cfg) -> None:
+    intent = Intent(version=1, control=True, vehicles={"tesla": VehicleIntent(mode=ChargeMode.PV)})
+    found = run(
+        controller(cfg),
+        cfg,
+        UNCLEAR_FROM_S + 400,
+        make=tesla_inputs,
+        intent=intent,
+        **{**CONTRADICTION, "tesla_obs": tesla(plugged=True, charging=True, actual_current_a=16.0)},
+    )
+    assert [c for _, c in of(found, "vehicle.tesla") if "self_start" in c.reasons] == []
+
+
+def test_a_tesla_charging_as_its_mode_wants_gets_no_self_start(cfg) -> None:
+    found = self_start_run(cfg, TESLA_NOW, 400)
+    assert [c for _, c in of(found, "vehicle.tesla") if "self_start" in c.reasons] == []
+
+
+def test_a_pause_starts_the_self_start_times_anew(cfg) -> None:
+    # Stopp bei 180; die Pause bei 190 löscht die Zeiten samt dem Abstand zum Neuversuch: Der
+    # nächste Stopp mit Grund folgt 120 s nach der Pause, nicht erst nach 600 s.
+    c = controller(cfg)
+    kw = {
+        "make": tesla_inputs,
+        "intent": TESLA_OFF,
+        "grid_obs": grid(grid_w=-3000.0),
+        **SELF_STARTING,
+    }
+    before = steps(c, cfg, range(60, 191), **kw)
+    c.idle(T0 + timedelta(seconds=191))
+    after = steps(c, cfg, range(200, 400), **kw)
+    tagged = [t for t, x in before + after if "self_start" in x.command.reasons]
+    assert tagged == [180, 320]
+
+
+def test_an_unregulated_stretch_interrupts_the_self_start_time(cfg) -> None:
+    # Von 150 bis 159 ist der Tesla nicht steuerbar, also nicht geregelt: Die 120 s beginnen bei 160
+    found = self_start_run(
+        cfg,
+        TESLA_OFF,
+        400,
+        controllable=lambda s: {"wallbox.evcs": True, "vehicle.tesla": not 150 <= s < 160},
+    )
+    tagged = [t for t, c in of(found, "vehicle.tesla") if "self_start" in c.reasons]
+    assert tagged == [280]

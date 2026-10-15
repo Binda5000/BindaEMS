@@ -68,6 +68,12 @@ Dazu legt die Regelung fest:
   wenn er dringend ist. Ist der Ist-Strom unbekannt, hält die Reserve nichts zurück. Starts samt
   ihrem Strom, Stopps und der Höchststrom an der EVCS sind davon frei. Ein zurückgehaltener
   Strombefehl erscheint nicht im Log.
+- Selbststart (Plan 2d, Präzisierung 10): Lädt ein Fahrzeug mit Tessie laut Tessie (mit mindestens
+  1 A) an einem geregelten Ladepunkt, obwohl sein Modus nicht laden will, und ist die Zuordnung
+  klar, vergisst die Regelung nach ``control.tesla_against_s`` ohne Unterbrechung ihren letzten Wert
+  für ``charging`` des Aktors: „Laden aus“ geht erneut hinaus, mit dem Grund ``self_start`` nach dem
+  Modus, höchstens alle ``control.tesla_against_retry_s`` je Fahrzeug. Dringend ist es nur im
+  Modus „Aus“ wie jeder Stopp dort. Ein neuer Vorgang und ``idle`` beginnen die Zeiten neu.
 - Ist der Ansteckzustand unbekannt, sinkt der Strom nur unter den Ist-Strom, wenn der Wächter es
   verlangt; „Laden aus“ kommt dann nur wegen Überlast.
 - Eine Wallbox ist höchstens ein Ladepunkt: Hängen nach der Zuordnung zwei Fahrzeuge an ihr, hat
@@ -121,7 +127,9 @@ from bindaems.core.control.charge_points import (
 from bindaems.core.control.charging_tesla import (
     ASSIGNMENT_DETECTED,
     ASSIGNMENT_UNCLEAR,
+    SELF_START,
     WAKE,
+    AgainstMode,
     EvcsOverrides,
     TeslaPolicy,
     maximum_command,
@@ -168,6 +176,7 @@ _CURRENT: Final = CommandKind.CURRENT
 _CHARGING: Final = CommandKind.CHARGING
 _SURPLUS_MODES: Final = frozenset({Effective.PV, Effective.MIN_PV})  # Wunsch aus dem Anteil
 _NOBODY: Final = WallboxState(None, None, ())  # an der Wallbox läuft kein Vorgang
+_SELF_START_MIN_A: Final = 1.0  # ab diesem Strom in A lädt ein Fahrzeug laut Tessie
 
 
 @dataclass(frozen=True)
@@ -241,6 +250,8 @@ class _Situation:
       (``None`` ohne)
     - ``level``: die Überlast; ``unclear``: die Zuordnung ist unklar
     - ``resume``: die erste Startfolge nach einer Pause steht noch aus
+    - ``self_start``: Das Fahrzeug lädt seit ``control.tesla_against_s`` gegen seinen Modus, und
+      ein Neuversuch ist fällig; der Stopp trägt dann den Grund ``self_start``
     - ``carries``: Die Grenze ist bekannt und trägt den Mindeststrom, in Min+PV an der Sicherung,
       und das Fahrzeug steht nicht in der Start-Sperre des 15-min-Wächters; nur dann darf ein Auto,
       das nicht lädt, starten (Design 5.3, 6.4).
@@ -259,6 +270,7 @@ class _Situation:
     unclear: bool
     resume: bool
     carries: bool
+    self_start: bool
 
     @property
     def head(self) -> tuple[str, ...]:
@@ -290,6 +302,8 @@ class ChargeController:
         timers = ModeTimers.from_config(cfg.control)
         self._machines = {key: ModeMachine(timers) for key in self._fleet}
         self._tesla = {key: TeslaPolicy(cfg.control, v.wake) for key, v in cfg.vehicles.items()}
+        # Selbststart: je Fahrzeug mit Tessie, wie lange es gegen seinen Modus lädt
+        self._against = AgainstMode(cfg.control.tesla_against_s, cfg.control.tesla_against_retry_s)
         self._vehicles = {vehicle_actuator(key): key for key in cfg.vehicles}  # Aktor → Fahrzeug
         self._overload = OverloadGuard(self._guard)
         self._level = OverloadLevel.NONE  # die Stufe der Überlast im letzten Zyklus
@@ -373,6 +387,7 @@ class ChargeController:
             if point is None or actuator is None:  # ungeregelt: Die Maschine wartet
                 if vehicle.new_session:
                     self._unseen_sessions.add(key)
+                self._against.due(key, now, False)  # ohne Regelung gilt es als unterbrochen
                 continue
             mode, target = modes[key], cycle.targets[key][1]
             # Die Grenze des 15-min-Wächters: Liegt sie unter dem freien Strom, gilt sie an dessen
@@ -406,6 +421,7 @@ class ChargeController:
                 carries=not locked
                 and free_a is not None
                 and limit + self._extra_a(mode) >= point.min_a,
+                self_start=self._self_start(now, key, actuator, vehicle, decision, inputs),
             )
             found = (
                 maximum_command(self._cfg, self._last, key, mode, inputs)
@@ -489,6 +505,8 @@ class ChargeController:
             self._resume = set(self._fleet)
         for tesla in self._tesla.values():
             tesla.restart()
+        for key in self._tesla:
+            self._against.clear(key)
         self._overload = OverloadGuard(self._guard)
         self._level = OverloadLevel.NONE
         self._views = {}
@@ -707,6 +725,7 @@ class ChargeController:
         reached = remembered and vehicle.plugged is not None  # der gemerkte Vorgang kommt an
         if (vehicle.new_session or reached) and key in self._tesla:
             self._tesla[key].restart()
+            self._against.clear(key)
         if back or vehicle.new_session or reached:
             self._last.forget({actuator})
         if vehicle.plugged is not None:  # bei unbekanntem bleibt er für den nächsten Schritt
@@ -769,6 +788,8 @@ class ChargeController:
             return self._hold(point, actuator, situation, present_a, blocked)
         if not charge:
             off = (*head, PV_SURPLUS) if situation.decision.reason == PV_SURPLUS else head
+            if situation.self_start:
+                off = (*off, SELF_START)
             return self._switch_off(actuator, off, blocked, urgent=situation.mode is Effective.OFF)
         reasons: tuple[str, ...]
         if minimum:
@@ -790,6 +811,40 @@ class ChargeController:
             start=may_start,
             resume=situation.resume,
         )
+
+    def _self_start(
+        self,
+        now: datetime,
+        key: str,
+        actuator: str,
+        vehicle: VehicleState,
+        decision: ModeDecision,
+        inputs: ChargeInputs,
+    ) -> bool:
+        """Ob das Fahrzeug lange genug gegen seinen Modus lädt, damit der Stopp erneut hinausgeht.
+
+        Gegen den Modus lädt ein Fahrzeug mit Tessie, wenn Tessie es mit mindestens 1 A ladend
+        meldet, der Modus nicht laden will (``decision.charge`` falsch), der Ansteckzustand bekannt
+        und die Zuordnung klar ist. Ist ``AgainstMode.due`` wahr, vergisst die Regelung die Werte
+        des Aktors, damit „Laden aus“ erneut hinausgeht.
+        """
+        if key not in self._tesla or self._cfg.vehicles[key].tessie is None:
+            return False
+        tessie = inputs.vehicles.get(key, NO_VEHICLE_DATA)
+        current_a = finite_number(tessie.actual_current_a)
+        against = (
+            tessie.reachable
+            and tessie.charging is True
+            and current_a is not None
+            and current_a >= _SELF_START_MIN_A
+            and not decision.charge
+            and vehicle.plugged is not None
+            and vehicle.kind is not AssignmentKind.UNCLEAR
+        )
+        due = self._against.due(key, now, against)
+        if due:
+            self._last.forget({actuator})
+        return due
 
     def _extra_a(self, mode: Effective) -> float:
         """Was die Grenze für einen Start mehr trägt: in Min+PV den Abstand vom Importziel zum Ziel
