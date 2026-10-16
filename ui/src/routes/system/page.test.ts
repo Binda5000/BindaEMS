@@ -21,6 +21,8 @@ const { api, user } = vi.hoisted(() => ({
 		system: vi.fn(),
 		prices: vi.fn(),
 		forecast: vi.fn(),
+		loadForecast: vi.fn(),
+		forecastQuality: vi.fn(),
 		health: vi.fn(),
 		refreshPrices: vi.fn(),
 		control: vi.fn(),
@@ -58,6 +60,9 @@ function reply(changes: Partial<ControlReply> = {}): ControlReply {
 beforeEach(() => {
 	user.role = 'admin';
 	for (const mock of Object.values(api)) mock.mockReset();
+	// die Prognose-Karten warten, solange ein Test sie nicht füllt
+	api.loadForecast.mockReturnValue(new Promise(() => {}));
+	api.forecastQuality.mockReturnValue(new Promise(() => {}));
 	api.control.mockResolvedValue({ core_connected: true, intent: baseIntent() });
 });
 
@@ -72,6 +77,16 @@ it('zeigt gleichlautende Hinweise und Preisfehler ohne abzustürzen', async () =
 	render(Page);
 	expect(await screen.findAllByText(warning)).toHaveLength(2);
 	expect(await screen.findAllByText(error)).toHaveLength(2);
+});
+
+it('zeigt die Karten Lastprognose und Prognosegüte', async () => {
+	showSystem(system());
+	expect(
+		await screen.findByRole('heading', { level: 2, name: 'Lastprognose' })
+	).toBeInTheDocument();
+	expect(screen.getByRole('heading', { level: 2, name: 'Prognosegüte' })).toBeInTheDocument();
+	expect(api.loadForecast).toHaveBeenCalledTimes(1);
+	expect(api.forecastQuality).toHaveBeenCalledWith(14, expect.anything());
 });
 
 // --- Betriebszustand, Aktoren und Watchdog -------------------------------------------------

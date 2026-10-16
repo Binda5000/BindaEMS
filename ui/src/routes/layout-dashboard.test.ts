@@ -11,6 +11,7 @@ const { api } = vi.hoisted(() => ({
 		pricesNow: vi.fn(),
 		prices: vi.fn(),
 		forecast: vi.fn(),
+		loadForecast: vi.fn(),
 		latestDecisions: vi.fn()
 	}
 }));
@@ -23,7 +24,14 @@ vi.mock('$lib/charts/echarts', () => ({ loadECharts: () => new Promise(() => {})
 
 beforeEach(() => {
 	vi.resetAllMocks();
-	for (const name of ['consumers', 'limits', 'pricesNow', 'prices', 'forecast'] as const) {
+	for (const name of [
+		'consumers',
+		'limits',
+		'pricesNow',
+		'prices',
+		'forecast',
+		'loadForecast'
+	] as const) {
 		api[name].mockReturnValue(new Promise(() => {}));
 	}
 	api.system.mockResolvedValue(system());
@@ -82,4 +90,17 @@ it('Warum? meldet einen Fehler und behält den Verweis', async () => {
 	const card = within(why());
 	expect(await card.findByText('core nicht erreichbar.')).toBeInTheDocument();
 	expect(card.getByRole('link', { name: 'Alle Entscheidungen' })).toBeInTheDocument();
+});
+
+it('das Diagramm bleibt, wenn die Lastprognose scheitert, und nennt den Fehler', async () => {
+	const { ApiError } = await import('$lib/api/errors');
+	api.latestDecisions.mockResolvedValue({ decisions: [] });
+	api.loadForecast.mockRejectedValue(new ApiError(503, 'Lastprognose nicht erreichbar.'));
+	render(Page);
+	const chart = screen
+		.getByRole('heading', { level: 2, name: 'Preise und PV heute/morgen' })
+		.closest('section');
+	if (chart === null) throw new Error('Karte „Preise und PV heute/morgen“ fehlt');
+	expect(await within(chart).findByText('Lastprognose nicht erreichbar.')).toBeInTheDocument();
+	expect(within(chart).getByRole('img', { name: /^Diagramm:/ })).toBeInTheDocument();
 });

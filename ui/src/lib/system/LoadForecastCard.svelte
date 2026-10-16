@@ -5,26 +5,17 @@
 	import Notice from '$lib/components/Notice.svelte';
 	import StatusDot from '$lib/components/StatusDot.svelte';
 	import { DASH, formatDateTime, formatEnergy, formatNumber } from '$lib/format';
-	import { addDays, todayVienna } from '$lib/time';
 
 	interface Props {
 		data: LoadForecast | undefined;
 		error: ApiError | null;
-		/** heutiger Tag in Wien (`YYYY-MM-DD`); für Tests */
-		today?: string;
 	}
 
-	let { data, error, today = todayVienna() }: Props = $props();
+	let { data, error }: Props = $props();
 
-	const DAYS = [
-		['Heute', 0],
-		['Morgen', 1],
-		['Übermorgen', 2]
-	] as const;
-
-	function kwh(date: string): string {
-		return formatEnergy(data?.days.find((day) => day.date === date)?.kwh);
-	}
+	// Der Server liefert heute, morgen und übermorgen in dieser Reihenfolge und rechnet den
+	// Tag selbst; die Beschriftung folgt der Stelle, nicht der Uhr des Browsers (Mitternacht).
+	const LABELS = ['Heute', 'Morgen', 'Übermorgen'] as const;
 </script>
 
 <Card title="Lastprognose">
@@ -49,9 +40,9 @@
 					0
 				)} aus Home Assistant
 			</dd>
-			{#each DAYS as [label, offset] (offset)}
+			{#each LABELS as label, index (index)}
 				<dt>{label}</dt>
-				<dd>{kwh(addDays(today, offset))}</dd>
+				<dd>{formatEnergy(data.days[index]?.kwh)}</dd>
 			{/each}
 		</dl>
 	{/if}
