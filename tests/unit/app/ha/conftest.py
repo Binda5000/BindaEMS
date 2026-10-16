@@ -123,7 +123,8 @@ def price_service(store, settings_service) -> PriceService:
 @pytest.fixture
 def forecast_service() -> FakeForecast:
     today = local_day_slots(date(2026, 10, 9))
-    return FakeForecast(PvForecast(T_APP, "open_meteo", dict.fromkeys(today[40:44], 2000.0)))
+    power = dict.fromkeys(today[40:44], 2000.0)
+    return FakeForecast(PvForecast(T_APP, "open_meteo", power, power, power, power, {}))
 
 
 @pytest.fixture

@@ -1,6 +1,7 @@
 """PV-Prognose (P50): Abruf je Fläche, Modell, Summe und Veröffentlichung in InfluxDB.
 
-Die Prognose liegt nur im Speicher; nach einem Neustart wird sie sofort neu abgerufen.
+Die Prognose liegt im Speicher; nach einem Neustart wird sie sofort neu abgerufen. Jede Ausgabe geht
+zusätzlich ins Archiv (Plan 3a, Präzisierung 7), aus dem später Kalibrierung und Kennzahlen kommen.
 """
 
 from __future__ import annotations
@@ -14,6 +15,8 @@ import httpx
 import structlog
 
 from bindaems.app.fetch import FetchError
+from bindaems.app.forecast.archive import Clearness, ForecastArchive, RecordValue
+from bindaems.app.forecast.calibration import clearness_class
 from bindaems.app.forecast.openmeteo import SOURCE, ForecastParseError, fetch_plane, parse_plane
 from bindaems.app.forecast.pv_model import combine, plane_power_w
 from bindaems.app.history.influx import RP_LONG
@@ -36,6 +39,10 @@ class PvForecast:
     issued_at: datetime
     source: str
     p50_w: Mapping[datetime, float]
+    raw_w: Mapping[datetime, float]  # unkalibriert, aus dem Modell
+    p25_w: Mapping[datetime, float]
+    p75_w: Mapping[datetime, float]
+    clearness: Mapping[datetime, Clearness | None]
 
     def day_energy_kwh(self, day: date) -> float | None:
         """Energie des lokalen Tages aus den vorhandenen Slots; ohne Slots ``None``."""
@@ -54,6 +61,7 @@ class ForecastService:
         settings: SettingsService,
         clock: Clock,
         sink: PointSink | None = None,
+        archive: ForecastArchive | None = None,
         *,
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
     ) -> None:
@@ -62,6 +70,7 @@ class ForecastService:
         self._settings = settings
         self._clock = clock
         self._sink = sink
+        self._archive = archive
         self._sleep = sleep
         self._forecast: PvForecast | None = None
         self._error: str | None = None
@@ -73,6 +82,7 @@ class ForecastService:
         """Neue Prognose; scheitert eine Fläche, bleibt die bisherige."""
         model = self._settings.current().settings.pv_model
         planes: list[dict[datetime, float]] = []
+        clearness: dict[datetime, Clearness | None] = {}
         for plane in self._cfg.pv.planes:
             try:
                 raw = await fetch_plane(self._http, self._clock, self._cfg.site.location, plane)
@@ -85,18 +95,45 @@ class ForecastService:
                     "PV-Prognose für Fläche fehlgeschlagen", plane=plane.name, error=str(exc)
                 )
                 return self._forecast
+            if not planes:  # die Klarheit gilt am Standort und kommt aus der ersten Fläche
+                clearness = {
+                    slot.slot_start: clearness_class(slot.ghi_w_m2, slot.diffuse_w_m2)
+                    for slot in weather
+                }
             planes.append(
                 {
                     slot.slot_start: plane_power_w(slot.gti_w_m2, slot.temp_c, plane.kwp, model)
                     for slot in weather
                 }
             )
+        raw_w = combine(planes, self._cfg.pv.inverter_ac_max_w)
+        # Noch ohne Kalibrierung: P50 = roh, das Band hat die Breite null (Task 10 füllt es).
         forecast = PvForecast(
-            self._clock.now(), SOURCE, combine(planes, self._cfg.pv.inverter_ac_max_w)
+            self._clock.now(),
+            SOURCE,
+            raw_w,
+            raw_w,
+            raw_w,
+            raw_w,
+            {slot: clearness.get(slot) for slot in raw_w},
         )
         self._forecast, self._error = forecast, None
         self._publish(forecast)
+        await self._archive_forecast(forecast)
         return forecast
+
+    async def _archive_forecast(self, forecast: PvForecast) -> None:
+        """Ins Archiv schreiben; ein Fehler dort lässt die neue Prognose bestehen."""
+        if self._archive is None:
+            return
+        values = {
+            slot: RecordValue(power_w, forecast.raw_w[slot], forecast.clearness.get(slot))
+            for slot, power_w in forecast.p50_w.items()
+        }
+        try:
+            await asyncio.to_thread(self._archive.record, "pv", forecast.issued_at, values)
+        except Exception as exc:  # das Archiv darf die Prognose nicht verhindern
+            log.warning("PV-Prognose konnte nicht archiviert werden", error=str(exc))
 
     def _publish(self, forecast: PvForecast) -> None:
         if self._sink is None:

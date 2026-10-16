@@ -36,6 +36,7 @@ from bindaems.app.control.intent import CoreDown, IntentService
 from bindaems.app.control.routes import control_router
 from bindaems.app.core_link import CoreClient, LiveFeed, LiveState
 from bindaems.app.db.engine import DB_FILENAME, migrate, open_database
+from bindaems.app.forecast.archive import ForecastArchive
 from bindaems.app.forecast.routes import forecast_router
 from bindaems.app.forecast.service import ForecastService
 from bindaems.app.ha.commands import HaCommandHandler, LogRejections
@@ -147,7 +148,10 @@ class AppRuntime:
             self._sink,
         )
         self.price_scheduler = PriceScheduler(self.pipeline, self.price_store, self._clock)
-        self.forecast = ForecastService(self._http, cfg, self.settings, self._clock, self._sink)
+        self.forecast_archive = ForecastArchive(self.engine)
+        self.forecast = ForecastService(
+            self._http, cfg, self.settings, self._clock, self._sink, self.forecast_archive
+        )
         self.ledger = LedgerService(
             self.engine, self._clock, self.prices, self.settings, self.audit, self._sink
         )

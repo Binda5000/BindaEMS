@@ -1,4 +1,5 @@
-"""Open-Meteo je PV-Fläche: Einstrahlung auf die geneigte Fläche und Lufttemperatur, 15 min.
+"""Open-Meteo je PV-Fläche: Einstrahlung auf die geneigte Fläche, Lufttemperatur sowie globale und
+diffuse Strahlung (für die Klarheit), 15 min.
 
 Der Wert zum Zeitpunkt T ist das Mittel über [T − 15 min, T) und gehört zum Slot, der bei
 T − 15 min beginnt (Plan, Präzisierung 6).
@@ -20,8 +21,14 @@ from bindaems.shared.timeutil import SLOT, Clock
 
 OPEN_METEO_URL = "https://api.open-meteo.com/v1/forecast"
 SOURCE = "open_meteo"
-VARIABLES = ("global_tilted_irradiance", "temperature_2m")
+VARIABLES = (
+    "global_tilted_irradiance",
+    "temperature_2m",
+    "shortwave_radiation",
+    "diffuse_radiation",
+)
 GTI_UNIT = "W/m²"
+RADIATION_UNIT = "W/m²"
 
 
 @dataclass(frozen=True)
@@ -29,6 +36,8 @@ class WeatherSlot:
     slot_start: datetime
     gti_w_m2: float
     temp_c: float
+    ghi_w_m2: float | None = None
+    diffuse_w_m2: float | None = None
 
 
 class ForecastParseError(Exception):
@@ -58,6 +67,21 @@ def _number(value: Any) -> float | None:
     return float(value) if math.isfinite(value) else None
 
 
+def _optional_series(
+    series: dict[str, Any], units: dict[str, Any], name: str, length: int
+) -> list[Any] | None:
+    """Liste einer Strahlungsvariablen; fehlt sie, bleibt nur die Klarheit leer (``None``)."""
+    values = series.get(name)
+    if values is None:
+        return None
+    unit = units.get(name)
+    if unit != RADIATION_UNIT:
+        raise ForecastParseError(f"Einheit von {name} muss {RADIATION_UNIT} sein, nicht „{unit}“")
+    if not isinstance(values, list) or len(values) != length:
+        raise ForecastParseError(f"{name} hat nicht die erwartete Länge")
+    return values
+
+
 def parse_plane(body: str) -> list[WeatherSlot]:
     try:
         data = json.loads(body)
@@ -73,13 +97,15 @@ def parse_plane(body: str) -> list[WeatherSlot]:
     unit = units.get("global_tilted_irradiance")
     if unit != GTI_UNIT:
         raise ForecastParseError(f"Einheit der Einstrahlung muss {GTI_UNIT} sein, nicht „{unit}“")
-    times, gti, temp = (series.get(key) for key in ("time", *VARIABLES))
+    times, gti, temp = (series.get(key) for key in ("time", *VARIABLES[:2]))
     if not isinstance(times, list) or not isinstance(gti, list) or not isinstance(temp, list):
         raise ForecastParseError("time, global_tilted_irradiance oder temperature_2m fehlt")
     if not len(times) == len(gti) == len(temp):
         raise ForecastParseError("Listen ungleich lang")
+    ghi = _optional_series(series, units, "shortwave_radiation", len(times))
+    diffuse = _optional_series(series, units, "diffuse_radiation", len(times))
     slots: list[WeatherSlot] = []
-    for stamp, irradiance, air in zip(times, gti, temp, strict=True):
+    for index, (stamp, irradiance, air) in enumerate(zip(times, gti, temp, strict=True)):
         if irradiance is None or air is None:
             continue
         seconds, irradiance_w, air_c = _number(stamp), _number(irradiance), _number(air)
@@ -89,5 +115,13 @@ def parse_plane(body: str) -> list[WeatherSlot]:
             end = datetime.fromtimestamp(seconds, UTC)
         except (OverflowError, OSError, ValueError) as exc:
             raise ForecastParseError(f"ungültiger Zeitstempel: {stamp!r}") from exc
-        slots.append(WeatherSlot(end - SLOT, irradiance_w, air_c))
+        slots.append(
+            WeatherSlot(
+                end - SLOT,
+                irradiance_w,
+                air_c,
+                _number(ghi[index]) if ghi is not None else None,
+                _number(diffuse[index]) if diffuse is not None else None,
+            )
+        )
     return slots
