@@ -1,0 +1,334 @@
+import asyncio
+from datetime import timedelta
+from typing import Any
+
+import pytest
+from tests.app_helpers import T_APP
+from tests.unit.app.control.conftest import FakeCoreClient, FakeFeed
+
+from bindaems.app.audit import AuditLog
+from bindaems.app.control.intent import (
+    ConflictAgain,
+    CoreDown,
+    IntentService,
+    Rejected,
+    SetActuators,
+    SetAssignment,
+    SetBoost,
+    SetControl,
+    SetGuestMode,
+    SetMode,
+    SetPriority,
+    UnknownTarget,
+    boost_until,
+    derive,
+)
+from bindaems.app.core_link import CoreReply, CoreUnavailableError, LiveState
+from bindaems.shared.control import (
+    ActuatorMode,
+    ChargeMode,
+    Intent,
+    SurplusOrder,
+    SurplusPriority,
+    VehicleIntent,
+)
+from bindaems.shared.influx.lineprotocol import epoch_ms
+
+
+def health(*vehicles: dict[str, Any]) -> dict[str, Any]:
+    return {"vehicles": list(vehicles)}
+
+
+def shown(key: str, **fields: Any) -> dict[str, Any]:
+    base = {"id": key, "mode": "pv", "boost_until": None, "assignment": "default", "wallbox": None}
+    return {**base, **fields}
+
+
+def test_version_is_milliseconds_or_one_more() -> None:
+    assert derive(None, None, SetControl(True), T_APP).version == epoch_ms(T_APP)
+    future = Intent(version=epoch_ms(T_APP) + 50)
+    assert derive(future, None, SetControl(True), T_APP).version == epoch_ms(T_APP) + 51
+
+
+def test_without_intent_the_base_is_version_one_defaults() -> None:
+    new = derive(None, None, SetMode("tesla", ChargeMode.NOW), T_APP)
+    assert new.control is False
+    assert new.actuators == {}
+    assert new.vehicles == {"tesla": VehicleIntent(mode=ChargeMode.NOW)}
+
+
+def test_expired_boost_is_not_sent_back() -> None:
+    current = Intent(
+        version=1, vehicles={"egolf": VehicleIntent(boost_until=T_APP + timedelta(hours=2))}
+    )
+    shown_egolf = shown("egolf", wallbox="evcs")
+    new = derive(current, health(shown_egolf), SetMode("tesla", ChargeMode.NOW), T_APP)
+    assert new.vehicles["egolf"].boost_until is None
+    assert new.vehicles["tesla"].mode is ChargeMode.NOW
+
+
+def test_ended_override_is_not_sent_back() -> None:
+    current = Intent(version=1, vehicles={"egolf": VehicleIntent(wallbox="twc")})
+    new = derive(current, health(shown("egolf", wallbox="evcs")), SetControl(True), T_APP)
+    assert new.vehicles["egolf"].wallbox is None
+
+
+def test_override_at_another_wallbox_is_not_sent_back() -> None:
+    current = Intent(version=1, vehicles={"egolf": VehicleIntent(wallbox="twc")})
+    h = health(shown("egolf", assignment="override", wallbox="evcs"))
+    assert derive(current, h, SetControl(True), T_APP).vehicles["egolf"].wallbox is None
+
+
+def test_active_boost_and_override_stay() -> None:
+    until = T_APP + timedelta(hours=2)
+    current = Intent(version=1, vehicles={"egolf": VehicleIntent(boost_until=until, wallbox="twc")})
+    h = health(shown("egolf", boost_until=until.isoformat(), assignment="override", wallbox="twc"))
+    new = derive(current, h, SetControl(True), T_APP)
+    assert new.vehicles["egolf"].boost_until == until
+    assert new.vehicles["egolf"].wallbox == "twc"
+
+
+def test_unknown_regulation_keeps_a_future_boost() -> None:
+    future = T_APP + timedelta(hours=2)
+    current = Intent(
+        version=1,
+        vehicles={
+            "egolf": VehicleIntent(boost_until=future, wallbox="twc"),
+            "tesla": VehicleIntent(boost_until=T_APP - timedelta(minutes=1), wallbox="evcs"),
+        },
+    )
+    h = health(shown("egolf", mode=None), shown("tesla", mode=None))
+    new = derive(current, h, SetControl(True), T_APP)
+    assert new.vehicles["egolf"].boost_until == future
+    assert new.vehicles["egolf"].wallbox == "twc"
+    assert new.vehicles["tesla"].boost_until is None
+    assert new.vehicles["tesla"].wallbox == "evcs"
+
+
+def test_without_health_a_future_boost_stays_and_a_past_one_goes() -> None:
+    future = T_APP + timedelta(hours=2)
+    current = Intent(
+        version=1,
+        vehicles={
+            "egolf": VehicleIntent(boost_until=future),
+            "tesla": VehicleIntent(boost_until=T_APP),
+        },
+    )
+    new = derive(current, None, SetControl(True), T_APP)
+    assert new.vehicles["egolf"].boost_until == future
+    assert new.vehicles["tesla"].boost_until is None
+
+
+def test_a_stale_boost_of_the_changed_vehicle_is_dropped_too() -> None:
+    until = T_APP + timedelta(hours=2)
+    current = Intent(version=1, vehicles={"tesla": VehicleIntent(boost_until=until)})
+    new = derive(current, health(shown("tesla")), SetMode("tesla", ChargeMode.OFF), T_APP)
+    assert new.vehicles["tesla"] == VehicleIntent(mode=ChargeMode.OFF)
+
+
+def test_boost_on_sets_12_h_and_off_removes_it() -> None:
+    assert boost_until(T_APP) == T_APP + timedelta(hours=12)
+    on = derive(None, None, SetBoost("tesla", True), T_APP)
+    assert on.vehicles["tesla"].boost_until == T_APP + timedelta(hours=12)
+    off = derive(on, health(shown("tesla", boost_until="x")), SetBoost("tesla", False), T_APP)
+    assert off.vehicles["tesla"].boost_until is None
+
+
+def test_assignment_moves_the_override() -> None:
+    current = Intent(version=1, vehicles={"tesla": VehicleIntent(wallbox="evcs")})
+    h = health(shown("tesla", assignment="override", wallbox="evcs"))
+    moved = derive(current, h, SetAssignment("evcs", "egolf"), T_APP)
+    assert moved.vehicles["egolf"].wallbox == "evcs"
+    assert moved.vehicles["tesla"].wallbox is None
+    auto = derive(current, h, SetAssignment("evcs", None), T_APP)
+    assert all(item.wallbox != "evcs" for item in auto.vehicles.values())
+
+
+def test_assignment_leaves_the_override_at_another_wallbox() -> None:
+    current = Intent(version=1, vehicles={"tesla": VehicleIntent(wallbox="twc")})
+    h = health(shown("tesla", assignment="override", wallbox="twc"))
+    new = derive(current, h, SetAssignment("evcs", "egolf"), T_APP)
+    assert new.vehicles["tesla"].wallbox == "twc"
+    assert new.vehicles["egolf"].wallbox == "evcs"
+
+
+def test_other_changes_keep_the_rest() -> None:
+    current = Intent(
+        version=1,
+        control=True,
+        actuators={"victron": ActuatorMode.LIVE},
+        vehicles={"tesla": VehicleIntent(mode=ChargeMode.NOW)},
+    )
+    guest = derive(current, None, SetGuestMode(ChargeMode.OFF), T_APP)
+    assert guest.guest.mode is ChargeMode.OFF
+    assert guest.control is True
+    assert guest.vehicles["tesla"].mode is ChargeMode.NOW
+    surplus = SurplusPriority(kind=SurplusOrder.CARS_FIRST)
+    prio = derive(current, None, SetPriority(["egolf", "tesla"], surplus), T_APP)
+    assert prio.priority == ["egolf", "tesla"]
+    assert prio.surplus_priority == surplus
+    modes = derive(current, None, SetActuators({"wallbox.evcs": ActuatorMode.LIVE}), T_APP)
+    assert modes.actuators == {"victron": ActuatorMode.LIVE, "wallbox.evcs": ActuatorMode.LIVE}
+    off = derive(current, None, SetControl(False), T_APP)
+    assert off.control is False
+    assert off.actuators == {"victron": ActuatorMode.LIVE}
+
+
+def test_derive_does_not_change_its_input() -> None:
+    current = Intent(version=1, vehicles={"tesla": VehicleIntent(wallbox="evcs")})
+    derive(current, health(shown("tesla")), SetMode("tesla", ChargeMode.NOW), T_APP)
+    assert current.vehicles["tesla"] == VehicleIntent(wallbox="evcs")
+
+
+async def test_apply_sends_and_reports(
+    service: IntentService, fake_client: FakeCoreClient, feed: FakeFeed
+) -> None:
+    result = await service.apply(SetControl(True), actor="admin", source="ui")
+    assert result.result == "accepted"
+    assert result.version == epoch_ms(T_APP)
+    assert result.intent.control is True
+    assert fake_client.sent == [result.intent]
+    assert feed.refreshed == 1
+    assert service.cached() == result.intent
+    assert await service.current() == result.intent
+
+
+async def test_clamped_is_success_with_details(
+    service: IntentService, fake_client: FakeCoreClient
+) -> None:
+    body = {"result": "clamped", "version": 7, "details": ["live nicht erlaubt"]}
+    fake_client.replies.append(CoreReply(200, body))
+    result = await service.apply(SetControl(True), actor="admin", source="ui")
+    assert (result.result, result.version, result.details) == ("clamped", 7, ["live nicht erlaubt"])
+
+
+async def test_conflict_reapplies_the_change_on_the_new_intent(
+    service: IntentService, fake_client: FakeCoreClient
+) -> None:
+    def curl() -> CoreReply:
+        # zwischen Holen und Senden hat jemand per curl den Regelbetrieb eingeschaltet
+        fake_client.valid = Intent(version=epoch_ms(T_APP) + 500, control=True)
+        return CoreReply(409, {"result": "rejected", "version": fake_client.valid.version})
+
+    fake_client.replies.append(curl)
+    result = await service.apply(SetMode("tesla", ChargeMode.NOW), actor="admin", source="ui")
+    assert len(fake_client.sent) == 2
+    second = fake_client.sent[1]
+    assert second.control is True
+    assert second.vehicles["tesla"].mode is ChargeMode.NOW
+    assert second.version == epoch_ms(T_APP) + 500 + 1
+    assert result.intent == second
+
+
+async def test_second_conflict_raises(service: IntentService, fake_client: FakeCoreClient) -> None:
+    fake_client.replies += [CoreReply(409, {}), CoreReply(409, {})]
+    with pytest.raises(ConflictAgain):
+        await service.apply(SetControl(True), actor="admin", source="ui")
+    assert len(fake_client.sent) == 2
+
+
+async def test_changes_are_serialised(service: IntentService, fake_client: FakeCoreClient) -> None:
+    first, second = await asyncio.gather(
+        service.apply(SetMode("tesla", ChargeMode.NOW), actor="a", source="ui"),
+        service.apply(SetMode("egolf", ChargeMode.OFF), actor="b", source="ha"),
+    )
+    assert len(fake_client.sent) == 2
+    assert second.intent.vehicles["tesla"].mode is ChargeMode.NOW  # auf der Absicht der ersten
+    assert second.intent.vehicles["egolf"].mode is ChargeMode.OFF
+    assert second.version > first.version
+
+
+async def test_rejection_and_core_down(service: IntentService, fake_client: FakeCoreClient) -> None:
+    fake_client.replies.append(CoreReply(422, {"result": "rejected", "details": ["Unsinn."]}))
+    with pytest.raises(Rejected) as rejected:
+        await service.apply(SetControl(True), actor="admin", source="ui")
+    assert rejected.value.details == ["Unsinn."]
+    fake_client.error = CoreUnavailableError("weg")
+    with pytest.raises(CoreDown):
+        await service.apply(SetControl(True), actor="admin", source="ui")
+    with pytest.raises(CoreDown):
+        await service.current()
+
+
+async def test_failed_change_is_not_audited(
+    service: IntentService, fake_client: FakeCoreClient, audit: AuditLog
+) -> None:
+    fake_client.replies.append(CoreReply(422, {"details": []}))
+    with pytest.raises(Rejected):
+        await service.apply(SetControl(True), actor="admin", source="ui")
+    assert audit.recent() == []
+
+
+async def test_unknown_targets_change_nothing(
+    service: IntentService, fake_client: FakeCoreClient
+) -> None:
+    for change, text in [
+        (SetMode("zoe", ChargeMode.NOW), "Unbekanntes Fahrzeug „zoe“."),
+        (SetBoost("zoe", True), "Unbekanntes Fahrzeug „zoe“."),
+        (SetAssignment("evcs", "zoe"), "Unbekanntes Fahrzeug „zoe“."),
+        (SetAssignment("nirgends", None), "Unbekannte Wallbox „nirgends“."),
+        (SetPriority(["tesla", "zoe"], SurplusPriority()), "Unbekanntes Fahrzeug „zoe“."),
+    ]:
+        with pytest.raises(UnknownTarget) as unknown:
+            await service.apply(change, actor="admin", source="ui")
+        assert unknown.value.text == text
+    assert fake_client.sent == []
+
+
+async def test_change_is_audited(service: IntentService, audit: AuditLog) -> None:
+    result = await service.apply(SetMode("tesla", ChargeMode.NOW), actor="admin", source="ui")
+    entry = audit.recent()[0]
+    assert (entry.actor, entry.source) == ("admin", "ui")
+    assert (entry.action, entry.target) == ("intent.mode", "tesla")
+    assert entry.details == {
+        "from": "pv",
+        "to": "now",
+        "version": result.version,
+        "result": "accepted",
+    }
+
+
+async def test_every_change_type_has_its_action_and_target(
+    service: IntentService, audit: AuditLog
+) -> None:
+    changes = [
+        SetControl(True),
+        SetBoost("tesla", True),
+        SetAssignment("evcs", "egolf"),
+        SetGuestMode(ChargeMode.OFF),
+        SetPriority(["egolf", "tesla"], SurplusPriority(kind=SurplusOrder.CARS_FIRST)),
+        SetActuators({"wallbox.evcs": ActuatorMode.LIVE, "victron": ActuatorMode.LIVE}),
+    ]
+    for change in changes:
+        await service.apply(change, actor="ha", source="ha")
+    entries = [(e.action, e.target, e.details) for e in reversed(audit.recent())]
+    assert [(a, t) for a, t, _ in entries] == [
+        ("intent.control", "regelbetrieb"),
+        ("intent.boost", "tesla"),
+        ("intent.assignment", "evcs"),
+        ("intent.guest_mode", "gast"),
+        ("intent.priority", "vorrang"),
+        ("intent.actuators", "victron,wallbox.evcs"),
+    ]
+    details = [d for _, _, d in entries]
+    assert details[0] is not None
+    assert (details[0]["from"], details[0]["to"]) == (False, True)
+    assert (details[1]["from"], details[1]["to"]) == (
+        None,
+        (T_APP + timedelta(hours=12)).isoformat(),
+    )
+    assert (details[2]["from"], details[2]["to"]) == (None, "egolf")
+    assert (details[3]["from"], details[3]["to"]) == ("pv", "off")
+    assert details[4]["to"]["priority"] == ["egolf", "tesla"]
+    assert details[5]["from"] == {"victron": "dry_run", "wallbox.evcs": "dry_run"}
+    assert details[5]["to"] == {"victron": "live", "wallbox.evcs": "live"}
+
+
+async def test_health_of_the_live_state_cleans_the_base(
+    service: IntentService, fake_client: FakeCoreClient, live: LiveState
+) -> None:
+    until = T_APP + timedelta(hours=3)
+    fake_client.valid = Intent(version=1, vehicles={"egolf": VehicleIntent(boost_until=until)})
+    live.health = health(shown("egolf"))
+    result = await service.apply(SetControl(True), actor="admin", source="ui")
+    assert result.intent.vehicles["egolf"].boost_until is None
