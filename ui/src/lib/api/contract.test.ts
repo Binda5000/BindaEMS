@@ -22,6 +22,7 @@ const SCHEMAS: Record<string, v.GenericSchema> = {
 	'prices-now': s.PricesNowSchema,
 	forecast: s.ForecastSchema,
 	'forecast-load': s.LoadForecastSchema,
+	'forecast-quality': s.QualitySchema,
 	'ledger-days': v.array(s.DaySummarySchema),
 	users: v.array(s.UserSchema),
 	audit: v.array(s.AuditEntrySchema),

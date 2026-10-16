@@ -117,6 +117,8 @@ export const api = {
 	forecast: (o?: Load): Promise<s.Forecast> => get('/api/forecast/pv', s.ForecastSchema, o),
 	loadForecast: (o?: Load): Promise<s.LoadForecast> =>
 		get('/api/forecast/load', s.LoadForecastSchema, o),
+	forecastQuality: (days = 14, o?: Load): Promise<s.Quality> =>
+		get(withQuery('/api/forecast/quality', { days: String(days) }), s.QualitySchema, o),
 	ledgerDays: (first: string, last: string, o?: Load): Promise<s.DaySummary[]> =>
 		get(withQuery('/api/ledger/days', { from: first, to: last }), v.array(s.DaySummarySchema), o),
 	reprice: (first: string, last: string): Promise<{ repriced: number }> =>

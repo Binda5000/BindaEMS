@@ -675,6 +675,23 @@ export const LoadForecastSchema = v.object({
 });
 export type LoadForecast = v.InferOutput<typeof LoadForecastSchema>;
 
+export const QualityRowSchema = v.object({
+	kind: v.picklist(['pv', 'load']),
+	horizon: v.picklist(['h0_6', 'h6_24', 'h24']),
+	/** bewertete Viertelstunden */
+	n: v.number(),
+	/** mittlerer absoluter Fehler in W */
+	mae_w: v.number(),
+	/** mittlerer Fehler (Prognose − Ist) in W */
+	bias_w: v.number(),
+	/** mittlerer absoluter Fehler im Verhältnis zur Ist-Leistung; ohne Ist-Leistung null */
+	rel_mae_pct: NullableNumber
+});
+export type QualityRow = v.InferOutput<typeof QualityRowSchema>;
+
+export const QualitySchema = v.object({ days: v.number(), rows: v.array(QualityRowSchema) });
+export type Quality = v.InferOutput<typeof QualitySchema>;
+
 export const DaySummarySchema = v.object({
 	date: DateText,
 	slots: v.number(),

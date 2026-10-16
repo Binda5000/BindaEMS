@@ -6,20 +6,26 @@ Ohne ``from __future__ import annotations`` (siehe ``auth/routes.py``).
 from datetime import timedelta
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 
 from bindaems.app.auth.service import SessionInfo
 from bindaems.app.auth.web import Guard
 from bindaems.app.forecast.load import LoadForecastService
+from bindaems.app.forecast.quality import ForecastQuality
 from bindaems.app.forecast.service import ForecastService
 from bindaems.app.status import status_json
 from bindaems.shared.timeutil import LOCAL_TZ, Clock
 
 DAYS = 3  # heute, morgen, übermorgen
+QUALITY_DAYS = 14
 
 
 def forecast_router(
-    service: ForecastService, load: LoadForecastService, clock: Clock, guard: Guard
+    service: ForecastService,
+    load: LoadForecastService,
+    quality: ForecastQuality,
+    clock: Clock,
+    guard: Guard,
 ) -> APIRouter:
     router = APIRouter(prefix="/api/forecast")
     Viewer = Annotated[SessionInfo, Depends(guard.require("viewer"))]
@@ -83,6 +89,28 @@ def forecast_router(
                 else {"ledger": 0, "ha": 0}
             ),
             "status": status_json(load.component_status()),
+        }
+
+    @router.get("/quality")
+    def forecast_quality(
+        session: Viewer, days: Annotated[int, Query(ge=1, le=60)] = QUALITY_DAYS
+    ) -> dict[str, Any]:
+        """Kennzahlen der letzten ``days`` lokalen Tage einschließlich heute."""
+        last = clock.now().astimezone(LOCAL_TZ).date()
+        rows = quality.summary(last - timedelta(days=days - 1), last)
+        return {
+            "days": days,
+            "rows": [
+                {
+                    "kind": row.kind,
+                    "horizon": row.horizon,
+                    "n": row.n,
+                    "mae_w": row.mae_w,
+                    "bias_w": row.bias_w,
+                    "rel_mae_pct": row.rel_mae_pct,
+                }
+                for row in rows
+            ],
         }
 
     return router

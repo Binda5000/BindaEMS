@@ -32,6 +32,7 @@ from tests.helpers import FakeSink
 from bindaems.app.consumers.service import ConsumerInput
 from bindaems.app.consumers.values import ENTITY_UNITS_QUERY, HaRef
 from bindaems.app.db.schema import user_table
+from bindaems.app.forecast.archive import RecordValue
 from bindaems.app.forecast.openmeteo import OPEN_METEO_URL
 from bindaems.app.runtime import AppRuntime
 from bindaems.core.adapters.base import AdapterHealth
@@ -44,7 +45,7 @@ from bindaems.shared.control import ChargeMode, CommandKind, Intent, VehicleInte
 from bindaems.shared.decisions import NO_VERDICT, Decision, DecisionResult, decision_text
 from bindaems.shared.domain import SignalKind
 from bindaems.shared.influx.lineprotocol import epoch_ms
-from bindaems.shared.timeutil import Clock, ManualClock
+from bindaems.shared.timeutil import LOCAL_TZ, Clock, ManualClock
 
 T_DEMO = T_APP  # 09.10.2026, 10:00 Ortszeit
 DEMO_PASSWORD = "demo-passwort-1"
@@ -568,6 +569,19 @@ def _create_consumers(app: AppRuntime) -> list[HaRef]:
     return [HaRef.from_consumer(c) for c in app.consumers.list() if c.source_kind == "ha"]
 
 
+def _rate_forecasts(app: AppRuntime) -> None:
+    """Archivierte Prognosen für die vier Slots der Abrechnung, damit die Güte Zeilen hat."""
+    slots = [T_DEMO - timedelta(hours=1) + k * timedelta(minutes=15) for k in range(4)]
+    near = T_DEMO - timedelta(hours=4)  # Vorlauf 3 bis 3,75 h: Klasse 0–6 h
+    far = T_DEMO - timedelta(hours=18)  # Vorlauf 17 bis 17,75 h: Klasse 6–24 h
+    app.forecast_archive.record(
+        "pv", near, {slot: RecordValue(2000.0, 1800.0, "clear") for slot in slots}
+    )
+    app.forecast_archive.record("load", near, {slot: RecordValue(1300.0, 1300.0) for slot in slots})
+    app.forecast_archive.record("load", far, {slot: RecordValue(1100.0, 1100.0) for slot in slots})
+    app.forecast_quality.update(T_DEMO.astimezone(LOCAL_TZ).date())
+
+
 async def build_world(cfg: Config, data_dir: Path, *, ui_dir: Path | None = None) -> World:
     clock = ManualClock(T_DEMO - WARMUP)  # der core läuft vor, danach steht die Uhr auf T_DEMO
     local = _demo_config(cfg, data_dir, ui_dir)
@@ -603,6 +617,7 @@ async def build_world(cfg: Config, data_dir: Path, *, ui_dir: Path | None = None
         for message in _ledger_messages():
             await app.ledger.handle_stream_message(message)
         await app.load_forecast.refresh()  # aus den vier Slots der Abrechnung
+        _rate_forecasts(app)
     except BaseException:
         router.stop(quiet=True)
         raise

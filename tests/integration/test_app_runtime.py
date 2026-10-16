@@ -1,6 +1,6 @@
 import asyncio
 import threading
-from datetime import timedelta
+from datetime import date, timedelta
 from pathlib import Path
 
 import pytest
@@ -186,28 +186,61 @@ async def test_maintenance_removes_decisions_older_than_the_retention(runtime, r
     assert [item.decision.id for item in found] == ["young"]
 
 
-async def test_forecast_nightly_runs_at_start_and_at_0230_local(runtime, monkeypatch) -> None:
+def spy_nightly(runtime, monkeypatch) -> list[tuple]:
     calls: list[tuple] = []
+    monkeypatch.setattr(
+        runtime.forecast_quality, "update", lambda day: calls.append(("quality", day)) or 0
+    )
     monkeypatch.setattr(
         runtime.forecast, "recalibrate", lambda ledger: calls.append(("recalibrate", ledger))
     )
     monkeypatch.setattr(
         runtime.forecast_archive, "cleanup", lambda before: calls.append(("cleanup", before)) or 0
     )
+    return calls
+
+
+async def test_forecast_nightly_runs_at_start_and_at_0230_local(runtime, monkeypatch) -> None:
+    calls = spy_nightly(runtime, monkeypatch)
     sleeps: list[float] = []
     monkeypatch.setattr(asyncio, "sleep", record_then_stop(sleeps, after=1))
     with pytest.raises(StopScheduler):
         await runtime._forecast_nightly_loop()
-    assert calls == [("recalibrate", runtime.ledger), ("cleanup", T_APP - timedelta(days=60))]
+    # beim Start: Güte der letzten 3 Tage (heute, gestern, vorgestern), dann Kalibrierung, Pflege
+    assert calls == [
+        ("quality", date(2026, 10, 9)),
+        ("quality", date(2026, 10, 8)),
+        ("quality", date(2026, 10, 7)),
+        ("recalibrate", runtime.ledger),
+        ("cleanup", T_APP - timedelta(days=60)),
+    ]
     assert sleeps == [16.5 * 3600]  # 10:00 Ortszeit → 02:30 am nächsten Tag
+
+
+async def test_forecast_nightly_after_start_rates_yesterday_and_the_day_before(
+    runtime, monkeypatch
+) -> None:
+    calls = spy_nightly(runtime, monkeypatch)
+    await runtime._forecast_nightly((1, 2))
+    assert calls[:3] == [
+        ("quality", date(2026, 10, 8)),
+        ("quality", date(2026, 10, 7)),
+        ("recalibrate", runtime.ledger),
+    ]
 
 
 async def test_forecast_nightly_survives_errors(runtime, monkeypatch) -> None:
     removed: list[object] = []
+    updated: list[date] = []
 
     def broken(ledger):
         raise RuntimeError("Datenbank gesperrt")
 
+    def broken_quality(day):
+        updated.append(day)
+        raise RuntimeError("Datenbank gesperrt")
+
+    monkeypatch.setattr(runtime.forecast_quality, "update", broken_quality)
     monkeypatch.setattr(runtime.forecast, "recalibrate", broken)
     monkeypatch.setattr(
         runtime.forecast_archive, "cleanup", lambda before: removed.append(before) or 0
@@ -215,8 +248,59 @@ async def test_forecast_nightly_survives_errors(runtime, monkeypatch) -> None:
     monkeypatch.setattr(asyncio, "sleep", record_then_stop([], after=2))
     with capture_logs() as logs, pytest.raises(StopScheduler):
         await runtime._forecast_nightly_loop()
-    assert "Kalibrierung der PV-Prognose fehlgeschlagen" in [e["event"] for e in logs]
+    events = [e["event"] for e in logs]
+    assert "Kennzahlen der Prognosegüte fehlgeschlagen" in events
+    assert "Kalibrierung der PV-Prognose fehlgeschlagen" in events
+    assert len(updated) == 3 + 2  # jeder Tag für sich, auch nach einem Fehler
     assert len(removed) == 2  # die Pflege läuft trotzdem, die Schleife auch nach dem Fehler
+
+
+async def test_first_pv_forecast_waits_for_the_calibration(runtime, monkeypatch) -> None:
+    calls = spy_nightly(runtime, monkeypatch)
+
+    async def forecast_run() -> None:
+        calls.append(("forecast",))
+
+    monkeypatch.setattr(runtime.forecast, "run", forecast_run)
+    task = asyncio.create_task(runtime._forecast_run())
+    await asyncio.sleep(0.05)
+    assert calls == []  # noch nicht kalibriert: kein Abruf mit dem neutralen Modell
+    await runtime._forecast_nightly((0, 1, 2))
+    await asyncio.wait_for(task, timeout=1)
+    names = [c[0] for c in calls]
+    assert names.index("forecast") > names.index("recalibrate")  # erst die Kalibrierung
+
+
+async def test_first_pv_forecast_does_not_wait_forever(runtime, monkeypatch) -> None:
+    started: list[bool] = []
+
+    async def forecast_run() -> None:
+        started.append(True)
+
+    monkeypatch.setattr(runtime.forecast, "run", forecast_run)
+    monkeypatch.setattr("bindaems.app.runtime.FORECAST_CALIBRATION_WAIT_S", 0.05)
+    with capture_logs() as logs:
+        await asyncio.wait_for(runtime._forecast_run(), timeout=1)
+    assert started == [True]
+    assert "Kalibrierung der PV-Prognose dauert zu lange, der Abruf beginnt ohne sie" in [
+        e["event"] for e in logs
+    ]
+
+
+async def test_failed_calibration_still_releases_the_pv_forecast(runtime, monkeypatch) -> None:
+    def broken(ledger):
+        raise RuntimeError("Datenbank gesperrt")
+
+    started: list[bool] = []
+
+    async def forecast_run() -> None:
+        started.append(True)
+
+    monkeypatch.setattr(runtime.forecast, "recalibrate", broken)
+    monkeypatch.setattr(runtime.forecast, "run", forecast_run)
+    await runtime._forecast_nightly(())
+    await asyncio.wait_for(runtime._forecast_run(), timeout=1)
+    assert started == [True]
 
 
 @pytest.mark.respx(assert_all_called=False)

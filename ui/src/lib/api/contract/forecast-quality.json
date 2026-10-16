@@ -1,0 +1,29 @@
+{
+  "days": 14,
+  "rows": [
+    {
+      "kind": "pv",
+      "horizon": "h0_6",
+      "n": 4,
+      "mae_w": 240.0,
+      "bias_w": -120.0,
+      "rel_mae_pct": 11.320754716981133
+    },
+    {
+      "kind": "load",
+      "horizon": "h0_6",
+      "n": 4,
+      "mae_w": 80.0,
+      "bias_w": 20.0,
+      "rel_mae_pct": 6.25
+    },
+    {
+      "kind": "load",
+      "horizon": "h6_24",
+      "n": 4,
+      "mae_w": 180.0,
+      "bias_w": -180.0,
+      "rel_mae_pct": 14.0625
+    }
+  ]
+}

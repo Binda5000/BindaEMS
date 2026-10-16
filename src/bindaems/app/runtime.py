@@ -12,7 +12,7 @@ import contextlib
 import threading
 from collections.abc import Awaitable, Callable, Generator
 from dataclasses import replace
-from datetime import timedelta
+from datetime import date, timedelta
 from functools import partial
 
 import httpx
@@ -37,7 +37,9 @@ from bindaems.app.control.routes import control_router
 from bindaems.app.core_link import CoreClient, LiveFeed, LiveState
 from bindaems.app.db.engine import DB_FILENAME, migrate, open_database
 from bindaems.app.forecast.archive import ForecastArchive
+from bindaems.app.forecast.calibration import pv_threshold_w
 from bindaems.app.forecast.load import LoadForecastService
+from bindaems.app.forecast.quality import ForecastQuality
 from bindaems.app.forecast.routes import forecast_router
 from bindaems.app.forecast.service import ForecastService
 from bindaems.app.ha.commands import HaCommandHandler, LogRejections
@@ -80,6 +82,15 @@ RESTART_S = 10.0
 BACKUP_AT = (3, 15)  # Ortszeit
 FORECAST_NIGHTLY_AT = (2, 30)  # Ortszeit
 FORECAST_KEEP = timedelta(days=60)
+FORECAST_QUALITY_START: tuple[int, ...] = (
+    0,
+    1,
+    2,
+)  # beim Start: heute, gestern, vorgestern (Tage zurück)
+FORECAST_QUALITY_NIGHTLY: tuple[int, ...] = (1, 2)  # nachts: gestern und vorgestern
+FORECAST_CALIBRATION_WAIT_S = (
+    60.0  # so lange wartet der erste PV-Abruf höchstens auf die Kalibrierung
+)
 
 
 class _AppServer(uvicorn.Server):
@@ -161,6 +172,10 @@ class AppRuntime:
         self.load_forecast = LoadForecastService(
             self.ledger, cfg, self.reader, self.forecast_archive, self._clock, self._sink
         )
+        self.forecast_quality = ForecastQuality(
+            self.engine, self.forecast_archive, self.ledger, pv_threshold_w(cfg)
+        )
+        self._forecast_calibrated = asyncio.Event()  # gesetzt nach der ersten Kalibrierung
         core_client = CoreClient(cfg.app.core_url, secrets.internal_token, self._core_http)
         self.decisions = DecisionStore(self.engine, self._clock)
         self.collector = DecisionCollector(self.decisions, core_client, self._sink, self._clock)
@@ -238,7 +253,9 @@ class AppRuntime:
                     self.consumers, self.live, self.ha_values, self.reader, cfg, guard, self.energy
                 ),
                 prices_router(self.prices, self.pipeline, self._clock, guard),
-                forecast_router(self.forecast, self.load_forecast, self._clock, guard),
+                forecast_router(
+                    self.forecast, self.load_forecast, self.forecast_quality, self._clock, guard
+                ),
                 ledger_router(self.ledger, guard),
                 control_router(
                     self.intents,
@@ -324,7 +341,7 @@ class AppRuntime:
             ("core-link", self.live_feed.run),
             ("decisions", self.collector.run),
             ("prices", self.price_scheduler.run),
-            ("forecast", self.forecast.run),
+            ("forecast", self._forecast_run),
             ("load-forecast", self.load_forecast.run),
             ("influx-writer", self.influx_writer.run),
             ("ledger", self._ledger_loop),
@@ -455,19 +472,43 @@ class AppRuntime:
             except Exception:
                 log.exception("Sicherung der Datenbank fehlgeschlagen")
 
+    async def _forecast_run(self) -> None:
+        """PV-Prognose erst nach der ersten Kalibrierung abrufen, höchstens eine Minute lang
+        warten: sonst entstünde die erste Ausgabe mit dem neutralen Modell und bliebe so im
+        Archiv, und eine langsame Datenbank hielte die Prognose nicht auf."""
+        try:
+            await asyncio.wait_for(
+                self._forecast_calibrated.wait(), timeout=FORECAST_CALIBRATION_WAIT_S
+            )
+        except TimeoutError:
+            log.warning("Kalibrierung der PV-Prognose dauert zu lange, der Abruf beginnt ohne sie")
+        await self.forecast.run()
+
     async def _forecast_nightly_loop(self) -> None:
-        """Beim Start und täglich um 02:30 Uhr: PV neu kalibrieren, altes Archiv löschen."""
+        """Beim Start und täglich um 02:30 Uhr: Güte bewerten, PV kalibrieren, Archiv pflegen."""
+        back = FORECAST_QUALITY_START
         while True:
-            await self._forecast_nightly()
+            await self._forecast_nightly(back)
+            back = FORECAST_QUALITY_NIGHTLY
             now = self._clock.now()
             due = next_local(now, lambda t: (t.hour, t.minute) == FORECAST_NIGHTLY_AT)
             await asyncio.sleep((due - now).total_seconds())
 
-    async def _forecast_nightly(self) -> None:
+    async def _forecast_nightly(self, days_back: tuple[int, ...]) -> None:
+        """Güte der Tage ``heute − days_back`` bewerten, dann kalibrieren und das Archiv pflegen."""
+        today = self._clock.now().astimezone(LOCAL_TZ).date()
+        for back in days_back:
+            day: date = today - timedelta(days=back)
+            try:
+                await asyncio.to_thread(self.forecast_quality.update, day)
+            except Exception:
+                log.exception("Kennzahlen der Prognosegüte fehlgeschlagen", day=day.isoformat())
         try:
             await asyncio.to_thread(self.forecast.recalibrate, self.ledger)
         except Exception:
             log.exception("Kalibrierung der PV-Prognose fehlgeschlagen")
+        finally:
+            self._forecast_calibrated.set()  # auch nach einem Fehler: das neutrale Modell gilt
         try:
             removed = await asyncio.to_thread(
                 self.forecast_archive.cleanup, self._clock.now() - FORECAST_KEEP

@@ -16,6 +16,7 @@ from tests.helpers import FakeSink
 from bindaems.app.forecast.archive import ForecastArchive
 from bindaems.app.forecast.load import LoadForecastService
 from bindaems.app.forecast.openmeteo import OPEN_METEO_URL
+from bindaems.app.forecast.quality import ForecastQuality
 from bindaems.app.forecast.routes import forecast_router
 from bindaems.app.forecast.service import ForecastService
 from bindaems.app.ledger.service import LedgerService
@@ -98,5 +99,10 @@ def load_service_with_ha(load_cfg, ledger, reader, archive, now_clock, sink) -> 
 
 
 @pytest.fixture
-def client(make_client, forecast_service, load_service, clock, guard):
-    return make_client(forecast_router(forecast_service, load_service, clock, guard))
+def quality(engine, archive, ledger) -> ForecastQuality:
+    return ForecastQuality(engine, archive, ledger, 100.0)
+
+
+@pytest.fixture
+def client(make_client, forecast_service, load_service, quality, clock, guard):
+    return make_client(forecast_router(forecast_service, load_service, quality, clock, guard))
