@@ -1,0 +1,188 @@
+// Texte und Ableitungen der Seite „Laden“
+import type {
+	AssignmentKind,
+	ChargeMode,
+	Clue,
+	EffectiveMode,
+	Intent,
+	SurplusPriority,
+	VehicleHealth,
+	WallboxHealth
+} from '$lib/api/schemas';
+import { DASH, formatSoc } from '$lib/format';
+import { parseIso } from '$lib/time';
+
+/** Schlüssel eines Fahrzeugs → Anzeigename */
+export type Names = Record<string, string>;
+
+/** Die Modi, die die Bedienung einstellt, in der Reihenfolge der Auswahl */
+export const CHARGE_MODES: readonly ChargeMode[] = ['pv', 'min_pv', 'now', 'off'];
+
+export const SURPLUS_KINDS: readonly SurplusPriority['kind'][] = [
+	'cars_first',
+	'battery_first',
+	'battery_until_soc'
+];
+
+const MODES: Record<EffectiveMode, string> = {
+	pv: 'PV-Überschuss',
+	min_pv: 'Min+PV',
+	now: 'Sofort',
+	off: 'Aus',
+	boost: 'Boost'
+};
+
+const ASSIGNMENTS: Record<AssignmentKind, string> = {
+	detected: 'erkannt',
+	default: 'angenommen',
+	override: 'Übersteuerung',
+	unclear: 'unklar'
+};
+
+/** Satz zum Indiz: [stützt, schließt aus] */
+const CLUES: Record<Clue, readonly [string, string]> = {
+	tessie: ['Tessie: zu Hause und angesteckt', 'Tessie: nicht angesteckt oder nicht zu Hause'],
+	current: ['Strom passt zu Tessie', 'Strom passt nicht zu Tessie'],
+	timing: ['Angesteckt, als der Vorgang begann', 'Angesteckt zu anderer Zeit'],
+	phases: ['Phasenzahl passt', 'Phasenzahl passt nicht'],
+	home: ['Home Assistant: zu Hause', 'Home Assistant: nicht zu Hause'],
+	elsewhere: ['Angesteckt, andere Wallbox leer', 'Andere Wallbox belegt']
+};
+
+/** Gründe des letzten Befehls wie im Entscheidungslog des core (`_REASON_TEXT`) */
+const REASONS: Record<string, string> = {
+	safe_state: 'sicherer Zustand',
+	handback: 'Übergabe',
+	grid_outage: 'Netzausfall',
+	mode_pv: 'PV-Überschuss',
+	mode_min_pv: 'Min+PV',
+	mode_now: 'Sofort',
+	mode_off: 'Aus',
+	boost: 'Boost',
+	pv_surplus: 'Überschuss',
+	phase_limit: 'Phasengrenze',
+	import_limit: 'Importlimit',
+	reserve_guard: 'Schutz der USV-Reserve',
+	overload: 'Überlast',
+	wake: 'Wecken',
+	not_taken_retry: 'erneut nach „nicht übernommen“',
+	assignment_unclear: 'Zuordnung unklar',
+	resume_after_outage: 'Wiederaufnahme nach Ausfall',
+	battery_comp: 'Akku nicht ins Auto',
+	battery_support: 'Akku-Unterstützung',
+	peak_guard: '15-min-Wächter',
+	assignment_detected: 'Zuordnung erkannt',
+	self_start: 'Selbststart',
+	foreign_change: 'Änderung von außen'
+};
+
+const SURPLUS: Record<'cars_first' | 'battery_first', string> = {
+	cars_first: 'Autos zuerst',
+	battery_first: 'Akku zuerst'
+};
+
+export function modeLabel(mode: EffectiveMode | null): string {
+	return mode === null ? DASH : MODES[mode];
+}
+
+export function assignmentLabel(kind: AssignmentKind | null): string {
+	return kind === null ? DASH : ASSIGNMENTS[kind];
+}
+
+export function reasonLabel(code: string | null): string {
+	return code === null ? DASH : (REASONS[code] ?? code);
+}
+
+/** „Tesla Model 3: Strom passt zu Tessie“ */
+export function indicatorText(
+	indicator: { vehicle: string; clue: Clue; supports: boolean },
+	names: Names
+): string {
+	const [supports, excludes] = CLUES[indicator.clue];
+	return `${names[indicator.vehicle] ?? indicator.vehicle}: ${indicator.supports ? supports : excludes}`;
+}
+
+/** Wer an der Wallbox steht: Name des Fahrzeugs, „Gast“ oder „kein Fahrzeug“ */
+export function occupantText(wallbox: WallboxHealth, names: Names): string {
+	if (wallbox.occupant === null) return 'kein Fahrzeug';
+	if (wallbox.occupant === 'guest') return 'Gast';
+	return names[wallbox.occupant] ?? wallbox.name ?? wallbox.occupant;
+}
+
+export function surplusLabel(priority: SurplusPriority): string {
+	if (priority.kind === 'battery_until_soc') {
+		return `Akku bis ${formatSoc(priority.soc_pct)}, dann Autos`;
+	}
+	return SURPLUS[priority.kind];
+}
+
+function swap(order: readonly string[], index: number, other: number): string[] {
+	const result = [...order];
+	if (index < 0 || other < 0 || other >= result.length) return result;
+	[result[index], result[other]] = [result[other]!, result[index]!];
+	return result;
+}
+
+export function moveUp(order: readonly string[], key: string): string[] {
+	const index = order.indexOf(key);
+	return swap(order, index, index - 1);
+}
+
+export function moveDown(order: readonly string[], key: string): string[] {
+	const index = order.indexOf(key);
+	return swap(order, index, index + 1);
+}
+
+/** Reihenfolge der Fahrzeuge: die der Absicht (nur bekannte), fehlende hinten, sonst die der Konfiguration */
+export function priorityOrder(
+	priority: readonly string[] | null,
+	keys: readonly string[]
+): string[] {
+	const known = (priority ?? []).filter((key) => keys.includes(key));
+	return [...known, ...keys.filter((key) => !known.includes(key))];
+}
+
+export interface BoostInfo {
+	active: boolean;
+	/** bis wann der Boost gilt (laut Health, bei wartendem Boost laut Absicht) */
+	until: string | null;
+	/** der Boost gilt, wartet aber auf das Anstecken */
+	pending: boolean;
+}
+
+/** Health zeigt den Boost; wartet er auf das Anstecken, steht er nur in der Absicht. */
+export function boostInfo(vehicle: VehicleHealth, intent: Intent | null, nowMs: number): BoostInfo {
+	if (vehicle.boost_until !== null) {
+		return { active: true, until: vehicle.boost_until, pending: vehicle.boost_pending };
+	}
+	const wanted = intent?.vehicles[vehicle.id]?.boost_until ?? null;
+	const end = wanted === null ? null : parseIso(wanted);
+	if (vehicle.boost_pending && wanted !== null && end !== null && end > nowMs) {
+		return { active: true, until: wanted, pending: true };
+	}
+	return { active: false, until: null, pending: false };
+}
+
+/**
+ * Das Fahrzeug, das auf diese Wallbox übersteuert ist: Die Absicht nennt die Wallbox, und Health
+ * bestätigt die Übersteuerung oder kennt sie noch nicht (wartend, Stand der Regelung unbekannt).
+ * Eine beendete Übersteuerung bleibt in der Absicht stehen, gilt aber nicht.
+ */
+export function overrideVehicle(
+	wallbox: string,
+	vehicles: readonly VehicleHealth[],
+	intent: Intent | null
+): string | null {
+	for (const vehicle of vehicles) {
+		if (intent?.vehicles[vehicle.id]?.wallbox !== wallbox) continue;
+		const active = vehicle.assignment === 'override' && vehicle.wallbox === wallbox;
+		if (active || vehicle.override_pending || vehicle.mode === null) return vehicle.id;
+	}
+	return null;
+}
+
+/** Meldung an einer Karte: Ablehnung des core (Fehler) oder Begrenzung (Warnung) */
+export interface CardNotice {
+	level: 'error' | 'warning';
+	text: string;
+}
