@@ -30,6 +30,8 @@ app = [
     "argon2-cffi>=23.1",
     "pyotp>=2.9",
     "holidays>=0.60",
+    "pulp>=3.3,<4",
+    "highspy>=1.8",
 ]
 dev = [
     "pytest>=8.3",
@@ -68,6 +70,10 @@ allowed-confusables = ["–", "„", "“", "−", "×"]
 python_version = "3.12"
 strict = true
 plugins = ["pydantic.mypy"]
+
+[[tool.mypy.overrides]]
+module = ["pulp", "pulp.*"]  # PuLP hat kein py.typed
+ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

@@ -8,9 +8,11 @@ from typing import Any
 
 from bindaems.app.planning.inputs import (
     BatteryState,
+    PeakMonth,
     PlanInputs,
     PriceInput,
     PriceOrigin,
+    SlotInput,
     assemble_inputs,
 )
 from bindaems.shared.plan import PLAN_VALID, BatteryIntent, Plan, PlanSlot
@@ -182,3 +184,75 @@ def assemble(**overrides: Any) -> PlanInputs:
     pv: Mapping[datetime, float] | None = values.pop("pv")
     load: Mapping[datetime, float] | None = values.pop("load")
     return assemble_inputs(pv_w=pv, load_w=load, **values)
+
+
+SCENARIO_START = "2026-10-16T00:00:00+00:00"
+
+
+def small_battery(**overrides: Any) -> BatteryState:
+    """Akku mit 10 kWh, Reserve 20 %, je 5 kW Laden und Entladen."""
+    values: dict[str, Any] = {
+        "usable_kwh": 10.0,
+        "reserve_pct": 20.0,
+        "max_charge_w": 5000.0,
+        "max_discharge_w": 5000.0,
+        "max_grid_charge_setpoint_w": 8000.0,
+    }
+    values.update(overrides)
+    return state(**values)
+
+
+def month(m: str, peak0: float) -> PeakMonth:
+    """Leistungspreis des Monats ``m`` (``JJJJ-MM``) mit erfundenen Sätzen 300/600 ct je kW."""
+    return PeakMonth(
+        month=m, peak0_kw=peak0, tier_kw=10.0, below_ct_per_kw=300.0, above_ct_per_kw=600.0
+    )
+
+
+def scenario(
+    *,
+    prices: list[float],
+    pv: list[float],
+    load: list[float],
+    soc_pct: float = 50.0,
+    grid_charge: bool = False,
+    battery: BatteryState | None = None,
+    feed_in: float | None = None,
+    peak_months: list[PeakMonth] | None = None,
+    start: str = SCENARIO_START,
+    end_value_ct: float = 0.0,
+    inertia_ct: float | None = None,
+    prev_battery_w: list[float] | None = None,
+) -> PlanInputs:
+    """``PlanInputs`` direkt aus Reihen je Slot (Standardakku wie ``state``), ohne Restwert und
+    ohne Leistungspreis, wenn nicht angegeben; ``prev_battery_w`` gilt für die ersten Slots."""
+    if not len(prices) == len(pv) == len(load):
+        raise ValueError("Preise, PV und Last müssen gleich lang sein")
+    first = at(start)
+    planning_values: dict[str, Any] = {"grid_charge_allowed": grid_charge}
+    if inertia_ct is not None:
+        planning_values["inertia_ct"] = inertia_ct
+    prev = prev_battery_w or []
+    base = battery if battery is not None else state()
+    return PlanInputs(
+        created_at=first,
+        trigger="start",
+        settings_version=1,
+        planning=PlanningSettings(**planning_values),
+        battery=base.model_copy(update={"soc_pct": soc_pct}),
+        month_peak_kw=None,
+        peak_months=peak_months or [],
+        end_value_ct=end_value_ct,
+        slots=[
+            SlotInput(
+                start=first + i * SLOT,
+                import_ct=ct,
+                feed_in_ct=feed_in,
+                origin="primary",
+                pv_w=pv_w,
+                load_w=load_w,
+                prev_battery_w=prev[i] if i < len(prev) else None,
+            )
+            for i, (ct, pv_w, load_w) in enumerate(zip(prices, pv, load, strict=True))
+        ],
+    )
