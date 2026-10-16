@@ -24,7 +24,7 @@ const data: LoadForecast = {
 it('zeigt Stand, Datenbasis und die Energie der drei Tage', () => {
 	render(LoadForecastCard, { data, error: null });
 	expect(screen.getByText('Lastprognose')).toBeTruthy();
-	for (const label of ['Stand', 'Datenbasis', 'Heute', 'Morgen', 'Übermorgen']) {
+	for (const label of ['Stand', 'Datenbasis', 'Heute (ab jetzt)', 'Morgen', 'Übermorgen']) {
 		expect(screen.getByText(label)).toBeTruthy();
 	}
 	expect(screen.getByText('09.10.2026, 10:00')).toBeTruthy();
@@ -49,7 +49,7 @@ it('beschriftet die Tage nach der Stelle, nicht nach der Uhr des Browsers', () =
 	vi.setSystemTime(new Date('2026-10-09T21:59:00Z')); // 23:59 in Wien
 	try {
 		const { rerender } = render(LoadForecastCard, { data, error: null });
-		expect(following('Heute')).toBe('12,3 kWh');
+		expect(following('Heute (ab jetzt)')).toBe('12,3 kWh');
 		vi.setSystemTime(new Date('2026-10-09T22:01:00Z')); // 00:01 am 10. 10.
 		rerender({
 			data: {
@@ -62,7 +62,7 @@ it('beschriftet die Tage nach der Stelle, nicht nach der Uhr des Browsers', () =
 			},
 			error: null
 		});
-		expect(following('Heute')).toBe('14,0 kWh');
+		expect(following('Heute (ab jetzt)')).toBe('14,0 kWh');
 		expect(following('Morgen')).toBe('9,00 kWh');
 		expect(following('Übermorgen')).toBe('7,00 kWh');
 	} finally {

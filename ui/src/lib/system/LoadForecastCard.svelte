@@ -15,7 +15,8 @@
 
 	// Der Server liefert heute, morgen und übermorgen in dieser Reihenfolge und rechnet den
 	// Tag selbst; die Beschriftung folgt der Stelle, nicht der Uhr des Browsers (Mitternacht).
-	const LABELS = ['Heute', 'Morgen', 'Übermorgen'] as const;
+	// Heute zählt nur den Rest des Tages: die Prognose beginnt mit der laufenden Viertelstunde.
+	const LABELS = ['Heute (ab jetzt)', 'Morgen', 'Übermorgen'] as const;
 </script>
 
 <Card title="Lastprognose">
