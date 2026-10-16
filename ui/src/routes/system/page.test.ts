@@ -1,27 +1,65 @@
-import { render, screen, within } from '@testing-library/svelte';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/svelte';
 import * as v from 'valibot';
-import { expect, it, vi } from 'vitest';
+import { beforeEach, expect, it, vi } from 'vitest';
+import controlJson from '$lib/api/contract/control.json';
 import pricesJson from '$lib/api/contract/prices.json';
-import { PricesResponseSchema, type CoreHealth, type SystemResponse } from '$lib/api/schemas';
+import { ApiError } from '$lib/api/errors';
+import {
+	ControlResponseSchema,
+	PricesResponseSchema,
+	type ControlReply,
+	type CoreHealth,
+	type Intent,
+	type Role,
+	type SystemResponse
+} from '$lib/api/schemas';
 import { system } from '$lib/testing/fixtures';
 import Page from './+page.svelte';
 
-const { api } = vi.hoisted(() => ({
+const { api, user } = vi.hoisted(() => ({
 	api: {
 		system: vi.fn(),
 		prices: vi.fn(),
 		forecast: vi.fn(),
 		health: vi.fn(),
-		refreshPrices: vi.fn()
-	}
+		refreshPrices: vi.fn(),
+		control: vi.fn(),
+		setRegulation: vi.fn(),
+		setActuators: vi.fn(),
+		acknowledge: vi.fn()
+	},
+	user: { role: 'admin' as Role }
 }));
 vi.mock('$lib/api/endpoints', async (original) => ({
 	...(await original<typeof import('$lib/api/endpoints')>()),
 	api
 }));
 vi.mock('$app/state', () => ({
-	page: { data: { user: { id: 1, username: 'admin', role: 'admin' } } }
+	page: {
+		data: {
+			get user() {
+				return { id: 1, username: 'bedienen', role: user.role };
+			}
+		}
+	}
 }));
+
+function baseIntent(changes: Partial<Intent> = {}): Intent {
+	const { intent } = v.parse(ControlResponseSchema, controlJson);
+	if (intent === null) throw new Error('control.json enthält keine Absicht');
+	return { ...intent, ...changes };
+}
+
+function reply(changes: Partial<ControlReply> = {}): ControlReply {
+	const intent = baseIntent();
+	return { result: 'accepted', version: intent.version + 1, details: [], intent, ...changes };
+}
+
+beforeEach(() => {
+	user.role = 'admin';
+	for (const mock of Object.values(api)) mock.mockReset();
+	api.control.mockResolvedValue({ core_connected: true, intent: baseIntent() });
+});
 
 it('zeigt gleichlautende Hinweise und Preisfehler ohne abzustürzen', async () => {
 	const warning = 'Tarifbestandteil „Netznutzungsentgelt“ hat noch keinen Wert.';
@@ -295,4 +333,302 @@ it('zeigt ohne Bericht des core Aktoren und Watchdog als nicht verfügbar', asyn
 	expect(within(card('Watchdog am Cerbo')).getByText('Keine Daten vom core')).toBeInTheDocument();
 	expect(fact(card('core'), 'Betriebsart')).toHaveTextContent(/^–$/);
 	expect(fact(card('core'), 'Eingangsdaten')).toHaveTextContent(/^–$/);
+});
+
+// --- Bedienung: Regelbetrieb, Live-Schalter, Quittierung ------------------------------------
+
+const LIVE_BUTTON = 'Live schalten…';
+const EVCS = 'EVCS „evcs“';
+const TESLA = 'Tesla Model 3';
+
+/** Alle Aktoren der Demo-Welt, mit `live_allowed` je Aktor überschrieben */
+function actuatorsWith(
+	changes: Record<string, Partial<CoreHealth['actuators'][number]>>
+): CoreHealth['actuators'] {
+	return demoHealth().actuators.map((actuator) => ({
+		...actuator,
+		live_allowed: true,
+		...changes[actuator.id]
+	}));
+}
+
+function dialog(): HTMLElement {
+	return screen.getByRole('dialog');
+}
+
+/** Öffnet den Live-Dialog und füllt ihn bis auf die genannten Teile aus */
+async function openLive() {
+	await fireEvent.click(await screen.findByRole('button', { name: LIVE_BUTTON }));
+	return within(dialog());
+}
+
+it('Admin schaltet EVCS und Tesla gemeinsam live', async () => {
+	show({ actuators: actuatorsWith({}) });
+	api.setActuators.mockResolvedValue(reply());
+	const live = await openLive();
+	await fireEvent.click(live.getByRole('checkbox', { name: EVCS }));
+	await fireEvent.click(live.getByRole('checkbox', { name: TESLA }));
+	await fireEvent.click(
+		live.getByRole('checkbox', {
+			name: 'Prüfprotokoll Teil 2 für die gewählten Aktoren ist bestanden.'
+		})
+	);
+	await fireEvent.click(live.getByRole('checkbox', { name: 'evcc ist ganz abgeschaltet.' }));
+	await fireEvent.input(live.getByLabelText('Passwort'), { target: { value: 'demo-passwort-1' } });
+	const loaded = api.control.mock.calls.length;
+	await fireEvent.click(live.getByRole('button', { name: 'Live schalten' }));
+	await waitFor(() =>
+		expect(api.setActuators).toHaveBeenCalledWith(
+			{ 'wallbox.evcs': 'live', 'vehicle.tesla': 'live' },
+			'demo-passwort-1',
+			true
+		)
+	);
+	await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+	await waitFor(() => expect(api.control.mock.calls.length).toBeGreaterThan(loaded)); // Absicht neu
+});
+
+it('zeigt im Live-Dialog Titel, Hinweis und die Bedingungen je Aktor', async () => {
+	show({
+		actuators: actuatorsWith({ victron: { locked: ['Dynamic ESS ist aktiv (Modus 1).'] } })
+	});
+	const live = await openLive();
+	expect(live.getByRole('heading', { name: 'Live schalten' })).toBeInTheDocument();
+	expect(live.getByText('EVCS und Tesla gehen gemeinsam live.')).toBeInTheDocument();
+	const conditions = (name: string) =>
+		listItems(following(live.getByRole('checkbox', { name }).closest('label')!));
+	// Watchdog nur bei Victron und EVCS (watchdog_needed); der Watchdog der Demo ist nicht scharf
+	expect(conditions('Victron (ESS)')).toEqual([
+		'live erlaubt: ja',
+		'Watchdog scharf: nein',
+		'Regelbetrieb an: ja',
+		'nicht gesperrt: nein'
+	]);
+	expect(conditions(TESLA)).toEqual([
+		'live erlaubt: ja',
+		'Regelbetrieb an: ja',
+		'nicht gesperrt: ja'
+	]);
+});
+
+it('ohne beide Häkchen bleibt „Live schalten“ gesperrt', async () => {
+	show({ actuators: actuatorsWith({}) });
+	const live = await openLive();
+	const submit = live.getByRole('button', { name: 'Live schalten' });
+	const tests = live.getByRole('checkbox', {
+		name: 'Prüfprotokoll Teil 2 für die gewählten Aktoren ist bestanden.'
+	});
+	await fireEvent.input(live.getByLabelText('Passwort'), { target: { value: 'demo-passwort-1' } });
+	expect(submit).toBeDisabled(); // kein Aktor gewählt
+	expect(live.queryByRole('checkbox', { name: 'evcc ist ganz abgeschaltet.' })).toBeNull();
+	await fireEvent.click(live.getByRole('checkbox', { name: 'Victron (ESS)' }));
+	expect(submit).toBeDisabled(); // Prüfprotokoll fehlt
+	await fireEvent.click(tests);
+	expect(submit).toBeEnabled(); // Victron braucht evcc nicht
+	await fireEvent.click(live.getByRole('checkbox', { name: EVCS }));
+	const evcc = live.getByRole('checkbox', { name: 'evcc ist ganz abgeschaltet.' });
+	expect(submit).toBeDisabled(); // mit EVCS fehlt die zweite Bestätigung
+	await fireEvent.click(evcc);
+	expect(submit).toBeEnabled();
+	await fireEvent.click(tests);
+	expect(submit).toBeDisabled(); // das Prüfprotokoll fehlt wieder
+	expect(api.setActuators).not.toHaveBeenCalled();
+});
+
+it('Aktor ohne live_allowed ist nicht wählbar', async () => {
+	show({ actuators: actuatorsWith({ victron: { live_allowed: false } }) });
+	const live = await openLive();
+	expect(live.getByRole('checkbox', { name: 'Victron (ESS)' })).toBeDisabled();
+	expect(live.getByRole('checkbox', { name: EVCS })).toBeEnabled();
+	const victron = following(
+		live.getByRole('checkbox', { name: 'Victron (ESS)' }).closest('label')!
+	);
+	expect(listItems(victron)[0]).toBe('live erlaubt: nein');
+});
+
+it('falsches Passwort bleibt im Dialog', async () => {
+	show({ actuators: actuatorsWith({}) });
+	api.setActuators.mockRejectedValue(new ApiError(403, 'Passwort falsch.'));
+	const live = await openLive();
+	await fireEvent.click(live.getByRole('checkbox', { name: 'Victron (ESS)' }));
+	await fireEvent.click(
+		live.getByRole('checkbox', {
+			name: 'Prüfprotokoll Teil 2 für die gewählten Aktoren ist bestanden.'
+		})
+	);
+	await fireEvent.input(live.getByLabelText('Passwort'), { target: { value: 'falsch' } });
+	await fireEvent.click(live.getByRole('button', { name: 'Live schalten' }));
+	expect(await live.findByText('Passwort falsch.')).toBeInTheDocument();
+	expect(dialog()).toBeInTheDocument();
+	expect(live.getByLabelText('Passwort')).toHaveValue(''); // das falsche Passwort bleibt nicht stehen
+});
+
+it('Abbrechen schließt den Live-Dialog, ohne etwas zu ändern', async () => {
+	show({ actuators: actuatorsWith({}) });
+	const live = await openLive();
+	await fireEvent.click(live.getByRole('checkbox', { name: 'Victron (ESS)' }));
+	await fireEvent.click(live.getByRole('button', { name: 'Abbrechen' }));
+	await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+	expect(api.setActuators).not.toHaveBeenCalled();
+	// beim nächsten Öffnen ist nichts mehr gewählt
+	const again = await openLive();
+	expect(again.getByRole('checkbox', { name: 'Victron (ESS)' })).not.toBeChecked();
+});
+
+it('Begrenzung durch den core steht nach dem Schalten als Warnung an der Karte', async () => {
+	show({ actuators: actuatorsWith({}) });
+	api.setActuators.mockResolvedValue(
+		reply({ result: 'clamped', details: ['Victron (ESS) bleibt Dry-Run: nicht freigegeben.'] })
+	);
+	const live = await openLive();
+	await fireEvent.click(live.getByRole('checkbox', { name: 'Victron (ESS)' }));
+	await fireEvent.click(
+		live.getByRole('checkbox', {
+			name: 'Prüfprotokoll Teil 2 für die gewählten Aktoren ist bestanden.'
+		})
+	);
+	await fireEvent.input(live.getByLabelText('Passwort'), { target: { value: 'demo-passwort-1' } });
+	await fireEvent.click(live.getByRole('button', { name: 'Live schalten' }));
+	expect(
+		await within(card('Bedienung')).findByText('Victron (ESS) bleibt Dry-Run: nicht freigegeben.')
+	).toBeInTheDocument();
+});
+
+it('Admin stellt alle Live-Aktoren nach Bestätigung auf Dry-Run', async () => {
+	show({
+		actuators: actuatorsWith({
+			'wallbox.evcs': { requested: 'live', effective: 'live' },
+			'vehicle.tesla': { requested: 'live', effective: 'live' }
+		})
+	});
+	api.setActuators.mockResolvedValue(reply());
+	await fireEvent.click(await screen.findByRole('button', { name: 'Auf Dry-Run…' }));
+	const confirm = within(dialog());
+	expect(confirm.getByRole('heading', { name: 'Auf Dry-Run stellen' })).toBeInTheDocument();
+	expect(
+		confirm.getByText('Der core übergibt die gewählten Aktoren und setzt ihre Sicherwerte.')
+	).toBeInTheDocument();
+	expect(confirm.queryByLabelText('Passwort')).toBeNull(); // sicherer Zustand: ohne Passwort
+	await fireEvent.click(confirm.getByRole('button', { name: 'Auf Dry-Run' }));
+	await waitFor(() =>
+		expect(api.setActuators).toHaveBeenCalledWith(
+			{ 'wallbox.evcs': 'dry_run', 'vehicle.tesla': 'dry_run' },
+			null,
+			false
+		)
+	);
+	await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+});
+
+it('„Auf Dry-Run…“ ist gesperrt, solange kein Aktor live ist', async () => {
+	show({ actuators: actuatorsWith({}) });
+	expect(await screen.findByRole('button', { name: 'Auf Dry-Run…' })).toBeDisabled();
+});
+
+it('„Abbrechen“ am Dry-Run-Dialog ändert nichts', async () => {
+	show({ actuators: actuatorsWith({ victron: { requested: 'live', effective: 'live' } }) });
+	await fireEvent.click(await screen.findByRole('button', { name: 'Auf Dry-Run…' }));
+	await fireEvent.click(within(dialog()).getByRole('button', { name: 'Abbrechen' }));
+	await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+	expect(api.setActuators).not.toHaveBeenCalled();
+});
+
+it('Bedienen schaltet den Regelbetrieb, sieht aber keinen Live-Schalter', async () => {
+	user.role = 'operator';
+	show({});
+	api.setRegulation.mockResolvedValue(reply());
+	await screen.findByRole('heading', { level: 2, name: 'Bedienung' });
+	const control = within(card('Bedienung'));
+	const toggle = await control.findByRole('switch', { name: 'Regelbetrieb' });
+	expect(toggle).toBeChecked(); // Absicht der Demo: Regelbetrieb an
+	expect(control.queryByRole('button', { name: LIVE_BUTTON })).toBeNull();
+	expect(control.queryByRole('button', { name: 'Auf Dry-Run…' })).toBeNull();
+	await fireEvent.click(toggle);
+	await waitFor(() => expect(api.setRegulation).toHaveBeenCalledWith(false));
+	expect(screen.queryByRole('button', { name: 'Quittieren' })).toBeNull();
+});
+
+it('Regelbetrieb: Lesen sieht den Stand ohne Schalter', async () => {
+	user.role = 'viewer';
+	show({});
+	await screen.findByRole('heading', { level: 2, name: 'Bedienung' });
+	const control = within(card('Bedienung'));
+	await control.findByText('Regelbetrieb');
+	expect(control.queryByRole('switch')).toBeNull();
+	expect(fact(card('Bedienung'), 'Regelbetrieb')).toHaveTextContent(/^an$/);
+});
+
+it('Regelbetrieb: Ablehnung steht an der Karte, der Schalter springt zurück', async () => {
+	api.control.mockResolvedValue({ core_connected: true, intent: baseIntent({ control: false }) });
+	show({});
+	api.setRegulation.mockRejectedValue(new ApiError(503, 'core nicht erreichbar.'));
+	await screen.findByRole('heading', { level: 2, name: 'Bedienung' });
+	const toggle = await within(card('Bedienung')).findByRole('switch', { name: 'Regelbetrieb' });
+	await waitFor(() => expect(toggle).not.toBeChecked());
+	await fireEvent.click(toggle);
+	expect(await within(card('Bedienung')).findByText('core nicht erreichbar.')).toBeInTheDocument();
+	expect(toggle).not.toBeChecked();
+});
+
+it('Quittieren zeigt die Antwort des core', async () => {
+	const locked = ['Dynamic ESS ist aktiv (Modus 1).'];
+	show({ actuators: actuatorsWith({ 'wallbox.evcs': { locked } }) });
+	api.acknowledge.mockRejectedValue(
+		new ApiError(409, 'Ursache besteht weiter: Dynamic ESS ist aktiv (Modus 1).')
+	);
+	await fireEvent.click(await screen.findByRole('button', { name: 'Quittieren' }));
+	await waitFor(() => expect(api.acknowledge).toHaveBeenCalledWith('wallbox.evcs'));
+	expect(
+		await within(card('Aktoren')).findByText(
+			'Ursache besteht weiter: Dynamic ESS ist aktiv (Modus 1).'
+		)
+	).toBeInTheDocument();
+});
+
+it('Quittieren: die Annahme steht als Hinweis, die Aktoren laden neu', async () => {
+	show({ actuators: actuatorsWith({ victron: { locked: ['Die Ursache fehlt.'] } }) });
+	api.acknowledge.mockResolvedValue({
+		detail: 'Quittiert. Die Sperre von Victron (ESS) löst sich im nächsten Zyklus.'
+	});
+	const loaded = api.system.mock.calls.length;
+	await fireEvent.click(await screen.findByRole('button', { name: 'Quittieren' }));
+	expect(
+		await within(card('Aktoren')).findByText(
+			'Quittiert. Die Sperre von Victron (ESS) löst sich im nächsten Zyklus.'
+		)
+	).toBeInTheDocument();
+	await waitFor(() => expect(api.system.mock.calls.length).toBeGreaterThan(loaded));
+});
+
+it('Quittieren gibt es nur bei einer Sperre und nur für Admins', async () => {
+	show({ actuators: actuatorsWith({}) });
+	await screen.findByRole('button', { name: LIVE_BUTTON });
+	expect(screen.queryByRole('button', { name: 'Quittieren' })).toBeNull(); // nichts gesperrt
+});
+
+it('Bedienen sieht bei einer Sperre kein „Quittieren“', async () => {
+	user.role = 'operator';
+	show({ actuators: actuatorsWith({ victron: { locked: ['Die Ursache fehlt.'] } }) });
+	await within(card('Aktoren')).findByText('gesperrt: Die Ursache fehlt.');
+	expect(screen.queryByRole('button', { name: 'Quittieren' })).toBeNull();
+});
+
+it('Watchdog: die Zeile „Scharf“ zeigt ja oder nein', async () => {
+	show({ watchdog: watchdogWith({ armed: true }) });
+	expect(await within(card('Watchdog am Cerbo')).findByText('Scharf')).toBeInTheDocument();
+	expect(fact(card('Watchdog am Cerbo'), 'Scharf')).toHaveTextContent(/^ja$/);
+});
+
+it('Watchdog: ohne scharfen Watchdog steht „nein“', async () => {
+	showSystem(system());
+	await within(card('Watchdog am Cerbo')).findByText('Scharf');
+	expect(fact(card('Watchdog am Cerbo'), 'Scharf')).toHaveTextContent(/^nein$/);
+});
+
+it('Karte „Bedienung“ steht vor der Karte „Aktoren“', async () => {
+	showSystem(system());
+	await within(card('Aktoren')).findByRole('table');
+	expect(
+		card('Bedienung').compareDocumentPosition(card('Aktoren')) & Node.DOCUMENT_POSITION_FOLLOWING
+	).toBeTruthy();
 });

@@ -10,7 +10,8 @@
 	import { DASH, formatDateTime, formatDay, formatEnergy, formatNumber, NBSP } from '$lib/format';
 	import { live } from '$lib/live.svelte';
 	import { Resource } from '$lib/resource.svelte';
-	import { hasRole } from '$lib/roles';
+	import { canOperate, hasRole } from '$lib/roles';
+	import ControlCard from '$lib/system/ControlCard.svelte';
 	import SignalTable from '$lib/system/SignalTable.svelte';
 	import {
 		actuatorModeLabel,
@@ -26,24 +27,31 @@
 	} from '$lib/system/view';
 	import { todayVienna } from '$lib/time';
 
+	const uid = $props.id();
 	const system = new Resource((o) => api.system(o), { intervalMs: 15_000 });
 	const prices = new Resource((o) => api.prices(null, o), { intervalMs: 300_000 });
 	const forecast = new Resource((o) => api.forecast(o), { intervalMs: 300_000 });
 	const appHealth = new Resource((o) => api.health(o));
+	const control = new Resource((o) => api.control(o), { intervalMs: 15_000 });
 
 	let nowMs = $state(Date.now()); // Alter der Signale zählt jede Sekunde weiter
 	let filter = $state('');
+	let followUp: ReturnType<typeof setTimeout> | undefined;
 
 	onMount(() => {
-		const stops = [system, prices, forecast, appHealth].map((resource) => resource.start());
+		const stops = [system, prices, forecast, appHealth, control].map((resource) =>
+			resource.start()
+		);
 		const clock = setInterval(() => (nowMs = Date.now()), 1000);
 		return () => {
+			clearTimeout(followUp);
 			stops.forEach((stop) => stop());
 			clearInterval(clock);
 		};
 	});
 
 	const admin = $derived(hasRole(page.data.user, 'admin'));
+	const operate = $derived(canOperate(page.data.user));
 	const health = $derived(system.data?.core.health ?? null);
 	const signals = $derived(signalRows(live.state, nowMs, filter));
 	const forecastDays = $derived(
@@ -93,6 +101,32 @@
 		} finally {
 			refreshing = false;
 		}
+	}
+
+	/** Nach einer Bedienung: die Absicht gleich, Health (der Stand der Aktoren) nach 2 s noch einmal. */
+	async function changed() {
+		await Promise.all([control.refresh(), system.refresh()]);
+		clearTimeout(followUp);
+		followUp = setTimeout(() => void system.refresh(), 2000);
+	}
+
+	let acknowledging = $state(false);
+	let acknowledgement = $state<{ level: 'info' | 'warning' | 'error'; text: string } | null>(null);
+
+	/** Die Antwort des core steht als Hinweis unter der Tabelle; 409 nennt, was noch besteht. */
+	async function acknowledge(actuator: string) {
+		acknowledging = true;
+		acknowledgement = null;
+		try {
+			acknowledgement = { level: 'info', text: (await api.acknowledge(actuator)).detail };
+		} catch (error) {
+			acknowledgement = {
+				level: error instanceof ApiError && error.status === 409 ? 'warning' : 'error',
+				text: error instanceof ApiError ? error.detail : 'Unbekannter Fehler'
+			};
+		}
+		await system.refresh();
+		acknowledging = false;
 	}
 
 	function since(iso: string | null): string {
@@ -246,6 +280,16 @@
 		{/if}
 	</Card>
 
+	{#if health}
+		<ControlCard
+			{health}
+			intent={control.data?.intent ?? null}
+			{operate}
+			{admin}
+			onChanged={changed}
+		/>
+	{/if}
+
 	<Card title="Aktoren">
 		{#if health}
 			<div class="scroll">
@@ -263,7 +307,7 @@
 						{#each health.actuators as actuator (actuator.id)}
 							{@const notes = actuatorNotes(actuator)}
 							<tr>
-								<td>{actuator.label}</td>
+								<td id="{uid}-{actuator.id}">{actuator.label}</td>
 								<td>{actuatorModeLabel(actuator.requested)}</td>
 								<td>{actuatorModeLabel(actuator.effective)}</td>
 								<td>{actuator.live_allowed ? 'ja' : 'nein'}</td>
@@ -277,12 +321,26 @@
 									{:else}
 										{DASH}
 									{/if}
+									{#if admin && actuator.locked.length > 0}
+										<button
+											type="button"
+											class="ack"
+											disabled={acknowledging}
+											aria-describedby="{uid}-{actuator.id}"
+											onclick={() => acknowledge(actuator.id)}
+										>
+											Quittieren
+										</button>
+									{/if}
 								</td>
 							</tr>
 						{/each}
 					</tbody>
 				</table>
 			</div>
+			{#if acknowledgement}
+				<Notice level={acknowledgement.level}>{acknowledgement.text}</Notice>
+			{/if}
 		{:else if system.data}
 			<p class="muted">Keine Daten vom core</p>
 		{/if}
@@ -297,6 +355,8 @@
 					<StatusDot state={watchdogDot(watchdog)} label={watchdogStateLabel(watchdog.state)} />
 					<span>{watchdogStateLabel(watchdog.state)}</span>
 				</dd>
+				<dt>Scharf</dt>
+				<dd>{watchdog.armed ? 'ja' : 'nein'}</dd>
 				<dt>Heartbeat</dt>
 				<dd>{heartbeatLabel(watchdog.heartbeat)}</dd>
 				<dt>Auslösungen</dt>
@@ -465,6 +525,10 @@
 
 	.notes {
 		min-width: 12rem;
+	}
+
+	.ack {
+		margin-top: 0.5rem;
 	}
 
 	.scroll {

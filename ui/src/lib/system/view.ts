@@ -1,5 +1,5 @@
 // Texte und Zeilen der System-Seite
-import type { CoreHealth, CoreState, PriceStatus, Reading } from '$lib/api/schemas';
+import type { CoreHealth, CoreState, Intent, PriceStatus, Reading } from '$lib/api/schemas';
 import { DASH, formatNumber } from '$lib/format';
 import { parseIso } from '$lib/time';
 
@@ -90,6 +90,34 @@ export function watchdogVersionText(version: string | null, expected: string): s
 /** Hinweise zu einem Aktor: warum er nicht live läuft, dann wodurch er gesperrt ist */
 export function actuatorNotes(actuator: Pick<Actuator, 'reasons' | 'locked'>): string[] {
 	return [...actuator.reasons, ...actuator.locked.map((reason) => `gesperrt: ${reason}`)];
+}
+
+export interface LiveCondition {
+	label: string;
+	met: boolean;
+}
+
+/**
+ * Die Bedingungen für den Live-Betrieb eines Aktors (Spec 8.7): Freigabe, Watchdog (nur wo der
+ * Betrieb ihn braucht), Regelbetrieb und keine Sperre. Hinweise, keine Sperre des Dialogs: der
+ * core wartet von selbst, bis sie erfüllt sind.
+ */
+export function liveConditions(
+	actuator: Actuator,
+	health: Pick<CoreHealth, 'watchdog'>,
+	intent: Pick<Intent, 'control'> | null
+): LiveCondition[] {
+	return [
+		{ label: 'live erlaubt', met: actuator.live_allowed },
+		...(actuator.watchdog_needed ? [{ label: 'Watchdog scharf', met: health.watchdog.armed }] : []),
+		{ label: 'Regelbetrieb an', met: intent?.control ?? false },
+		{ label: 'nicht gesperrt', met: actuator.locked.length === 0 }
+	];
+}
+
+/** EVCS (`wallbox.*`) und Tesla (`vehicle.*`) übernimmt der core von evcc; Victron nicht. */
+export function needsEvccConfirmation(actuatorIds: string[]): boolean {
+	return actuatorIds.some((id) => id.startsWith('wallbox.') || id.startsWith('vehicle.'));
 }
 
 export function signalValue(value: Reading['v']): string {

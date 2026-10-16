@@ -1,10 +1,12 @@
 import { expect, it } from 'vitest';
 import type { PriceStatus } from '$lib/api/schemas';
-import { coreState, reading } from '$lib/testing/fixtures';
+import { coreState, reading, system } from '$lib/testing/fixtures';
 import {
 	actuatorModeLabel,
 	actuatorNotes,
 	heartbeatLabel,
+	liveConditions,
+	needsEvccConfirmation,
 	modeLabel,
 	selfcheckLabel,
 	signalRows,
@@ -105,4 +107,59 @@ it('nennt Sperren einzeln mit Präfix und lässt einen freien Aktor ohne Hinweis
 		actuatorNotes({ reasons: [], locked: ['EVCS-Modus nicht verfügbar.', 'Netzausfall.'] })
 	).toEqual(['gesperrt: EVCS-Modus nicht verfügbar.', 'gesperrt: Netzausfall.']);
 	expect(actuatorNotes({ reasons: [], locked: [] })).toEqual([]);
+});
+
+function demoHealth() {
+	const { health } = system().core;
+	if (health === null) throw new Error('system.json enthält keinen Gesundheitsbericht');
+	return health;
+}
+
+function actuator(id: string) {
+	const found = demoHealth().actuators.find((item) => item.id === id);
+	if (found === undefined) throw new Error(`Aktor ${id} fehlt in system.json`);
+	return found;
+}
+
+it('liveConditions nennt die vier Bedingungen, den Watchdog nur für Victron und EVCS', () => {
+	const health = demoHealth();
+	const victron = { ...actuator('victron'), live_allowed: true };
+	expect(liveConditions(victron, health, { control: true })).toEqual([
+		{ label: 'live erlaubt', met: true },
+		{ label: 'Watchdog scharf', met: false },
+		{ label: 'Regelbetrieb an', met: true },
+		{ label: 'nicht gesperrt', met: true }
+	]);
+	expect(
+		liveConditions(actuator('vehicle.tesla'), health, { control: true }).map((c) => c.label)
+	).toEqual(['live erlaubt', 'Regelbetrieb an', 'nicht gesperrt']);
+});
+
+it('liveConditions wertet Freigabe, Watchdog, Regelbetrieb und Sperre aus', () => {
+	const health = demoHealth();
+	const armed = { ...health, watchdog: { ...health.watchdog, armed: true } };
+	const evcs = {
+		...actuator('wallbox.evcs'),
+		live_allowed: true,
+		locked: ['Dynamic ESS ist aktiv.']
+	};
+	expect(liveConditions(evcs, armed, { control: false })).toEqual([
+		{ label: 'live erlaubt', met: true },
+		{ label: 'Watchdog scharf', met: true },
+		{ label: 'Regelbetrieb an', met: false },
+		{ label: 'nicht gesperrt', met: false }
+	]);
+	// ohne Absicht regelt der core nichts
+	expect(liveConditions(evcs, armed, null)[2]).toEqual({ label: 'Regelbetrieb an', met: false });
+	expect(liveConditions(actuator('victron'), health, null)[0]).toEqual({
+		label: 'live erlaubt',
+		met: false
+	});
+});
+
+it('needsEvccConfirmation gilt für EVCS und Tesla, nicht für Victron', () => {
+	expect(needsEvccConfirmation(['victron'])).toBe(false);
+	expect(needsEvccConfirmation([])).toBe(false);
+	expect(needsEvccConfirmation(['victron', 'wallbox.evcs'])).toBe(true);
+	expect(needsEvccConfirmation(['vehicle.tesla'])).toBe(true);
 });
