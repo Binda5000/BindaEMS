@@ -23,14 +23,17 @@ export class Acknowledgement {
 		this.busy = true;
 		this.notice = null;
 		try {
-			this.notice = { level: 'info', text: (await api.acknowledge(actuator)).detail };
-		} catch (error) {
-			this.notice = {
-				level: error instanceof ApiError && error.status === 409 ? 'warning' : 'error',
-				text: error instanceof ApiError ? error.detail : 'Unbekannter Fehler'
-			};
+			try {
+				this.notice = { level: 'info', text: (await api.acknowledge(actuator)).detail };
+			} catch (error) {
+				this.notice = {
+					level: error instanceof ApiError && error.status === 409 ? 'warning' : 'error',
+					text: error instanceof ApiError ? error.detail : 'Unbekannter Fehler'
+				};
+			}
+			await this.#after();
+		} finally {
+			this.busy = false; // auch wenn das Neuladen scheitert: sonst bliebe „Quittieren“ gesperrt
 		}
-		await this.#after();
-		this.busy = false;
 	}
 }
