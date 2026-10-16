@@ -738,9 +738,10 @@ Demo-Zugänge: `admin`, `bedienen` (Bedienen), `gast` (Lesen) und `sicher` (Admi
          und Klassen an der Anlage sinnvoll ausfallen, zeigt erst der Betrieb.
        - Die PV-Kalibrierung lernt auch Abregelung (Einspeisegrenze, voller Akku) als niedrigeren
          Faktor.
-     - **Offene Frage an den Betreiber:** Welche HA-Entität zeigt die Hauslast ohne die beiden Wallboxen
-       (für `homeassistant.load_history`, notfalls die Gesamtlast und die abzuziehenden Wallbox-Entitäten)?
-       Ohne Angabe nutzt die Lastprognose nur die Abrechnung.
+     - **Hauslast aus Home Assistant:** entschieden am 16.10.2026: ohne. In HA gibt es keine Entität
+       „nur Hauslast“, und `homeassistant.load_history` bleibt aus. Die Lastprognose lernt nur aus der
+       Abrechnung; sie ist in den ersten Wochen ungenauer, trägt nach etwa 3 Wochen und ist nach 8 Wochen
+       voll.
      Aus den Plänen davor: Die neuen Felder `grid.import_limit_a`, `control` (seit der Hysterese auch
      `control.evcs_hysteresis_a`, seit 2c-2a `support_soc_pct`, `support_hysteresis_pct`,
      `support_max_w`, `support_max_s`, `setpoint_deadband_w`, `override_refresh_s`, `peak_target_kw`
@@ -1010,8 +1011,8 @@ Demo-Zugänge: `admin`, `bedienen` (Bedienen), `gast` (Lesen) und `sicher` (Admi
    - danach der **Plan 3b** „Optimierer und Zeitplan“ (Phase 3, Punkt 3 oben): Brainstorming, Plan,
      Freigabe des Betreibers, Umsetzung
    - an der Anlage das **gemeinsame Ausrollen von 2d und 3a**, sobald 3a auf `main` ist (Punkt „Zu 3a
-     gehört“ unter „Offen an der Anlage“), und die Antwort des Betreibers auf die Frage nach der
-     HA-Entität der Hauslast
+     gehört“ unter „Offen an der Anlage“); die Lastprognose läuft ohne HA-Historie (Entscheidung
+     vom 16.10.2026)
 
 ## Hinweise für die Pläne 2c-2 und 2d
 
