@@ -670,7 +670,7 @@ class CoreRuntime:
         Die API ruft das aus einem anderen Thread auf. Die Antwort kommt deshalb aus dem Stand des
         letzten Zyklus: aus den Sperren und aus den Ursachen ohne den Alarm der fremden Änderung.
         Fehlt jede andere Ursache, ist die Quittierung angenommen und der Aktor kommt in
-        ``_acks``; angewendet wird sie im nächsten Zyklus (``_apply_acks``).
+        ``_acks``; angewendet wird sie im nächsten Zyklus (``_take_acks``, ``_apply_acks``).
         """
         if actuator not in self.limits.actuators:
             return AckReply("unknown", f"Unbekannter Aktor „{actuator}“.")
@@ -735,6 +735,7 @@ class CoreRuntime:
             self._check_counters(closed, now)
         self._sampler.on_cycle(snap, derived)
         present = self._readback(snap, now, snow)
+        acks = self._take_acks()
         checked = self._check_due(now)
         if checked:
             self._competitor_alarms = detect_competitors(snap, self._cfg, now)
@@ -746,7 +747,7 @@ class CoreRuntime:
                 found = foreign_decision(change, label, inputs, uuid4().hex)
                 self._decide(replace(found, ts=now))
         self._foreign_alarms = self.foreign.alarms(snow, self._labels)
-        self._apply_acks(now)
+        self._apply_acks(acks, now)
         self._update_operation(snap, plausibility, now, present, checked=checked)
         self._control(snap, derived, flows, now, snow, present)
         state = snapshot_to_json(snap, derived)
@@ -1152,19 +1153,29 @@ class CoreRuntime:
             *(alarm for actuator in self.actuators.values() for alarm in actuator.alarms(snow)),
         ]
 
-    def _apply_acks(self, now: datetime) -> None:
-        """Wendet die Quittierungen an, die die API seit dem letzten Zyklus angenommen hat.
+    def _take_acks(self) -> list[str]:
+        """Nimmt die Quittierungen, die die API seit dem letzten Zyklus angenommen hat.
 
-        Je Eintrag: Die Erkennung lässt den Alarm der fremden Änderung fallen (ihre Erwartung
-        bleibt), die Ursachen werden ohne ihn neu ermittelt und der Sperre gemeldet, dann gibt
-        ``locks.acknowledge`` die Sperre frei. Besteht inzwischen eine andere Ursache, bleibt die
-        Sperre; auch das steht im Log. Läuft vor ``_update_operation``, damit der Zyklus mit der
-        freigegebenen Sperre rechnet.
+        Ihre Erkennungen lassen hier den Alarm der fremden Änderung fallen (ihre Erwartung bleibt),
+        vor ``foreign.check`` dieses Zyklus: Eine Änderung, die dieser Zyklus neu erkennt, hat der
+        Admin nicht gesehen; ihr Alarm und ihre Sperre bleiben.
         """
+        acks: list[str] = []
         while self._acks:
             actuator = self._acks.popleft()
             self.foreign.acknowledge(actuator)
-            self._foreign_alarms = self.foreign.alarms(self._safety_clock.now(), self._labels)
+            acks.append(actuator)
+        return acks
+
+    def _apply_acks(self, acks: Sequence[str], now: datetime) -> None:
+        """Gibt die Sperren der Quittierungen aus ``_take_acks`` frei.
+
+        Je Eintrag werden die Ursachen mit den Alarmen der fremden Änderung dieses Zyklus neu
+        ermittelt und der Sperre gemeldet, dann gibt ``locks.acknowledge`` die Sperre frei. Besteht
+        inzwischen eine andere Ursache, bleibt die Sperre; auch das steht im Log. Läuft vor
+        ``_update_operation``, damit der Zyklus mit der freigegebenen Sperre rechnet.
+        """
+        for actuator in acks:
             competitors = [*self._competitor_alarms, *self._foreign_alarms]
             self.locks.update(now, lock_causes(competitors, self._selfcheck, self.limits))
             if self.locks.acknowledge(actuator):

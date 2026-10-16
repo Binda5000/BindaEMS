@@ -1086,6 +1086,49 @@ async def test_acknowledged_foreign_change_unlocks_in_the_next_cycle(runtime_env
     assert rt.health().mode == "CONTROL"
 
 
+async def test_ack_does_not_swallow_a_new_foreign_change_of_the_same_cycle(runtime_env) -> None:
+    plant = Plant(watchdog_state=1)
+    state = GOOD_STATE | {"wallbox.evcs.gx_set_current_a": 16}
+    rt, clock = live_evcs(runtime_env, plant=plant, state=state)
+    run(rt, clock, 33)
+    state |= {"system.active_in_source": 240}
+    run(rt, clock, 3)  # SAFE: 6 A geschrieben und bestätigt, jetzt erwartet
+    state |= {"system.active_in_source": 1, "wallbox.evcs.gx_set_current_a": 10}
+    plant.follow = False
+    run(rt, clock, 40)  # Änderung A: 10 A statt 6 A
+    assert locked(rt)["wallbox.evcs"] == ["EVCS „evcs“: Strom von außen geändert (10 A statt 6 A)."]
+    # Gesperrt beobachtet die Erkennung die EVCS nicht mehr. Hier erwartet sie wieder 10 A, wie
+    # nach einem bestätigten Wert, und sieht dann Änderung B: 12 A. Die Quittierung von A kommt
+    # genau vor dem Zyklus, der B erkennt.
+    rt.foreign.expect("wallbox.evcs", CommandKind.CURRENT, 10.0)
+    state |= {"wallbox.evcs.gx_set_current_a": 12}
+    check = rt.foreign.check
+    found: list[Any] = []
+    checks = 0
+
+    def counting(*args: Any) -> Any:
+        nonlocal checks
+        checks += 1
+        changes = check(*args)
+        found.extend(changes)
+        return changes
+
+    rt.foreign.check = counting  # type: ignore[method-assign]
+    for _ in range(60):
+        last = rt._last_check
+        due = last is None or (clock.now() - last).total_seconds() >= 9.95
+        if due and checks == 2:  # der dritte Treffer in Folge erkennt B
+            assert rt.acknowledge("wallbox.evcs").status == "accepted"
+        run(rt, clock, 1)
+        if found:
+            break
+    assert [(change.expected, change.actual) for change in found] == [(10, 12)]
+    b = "EVCS „evcs“: Strom von außen geändert (12 A statt 10 A)."
+    assert locked(rt)["wallbox.evcs"] == [b]  # B behält seine Sperre
+    assert "competitor.foreign.wallbox.evcs" in {a["id"] for a in rt.health().alarms}
+    assert not rt._acks
+
+
 async def test_every_ack_is_logged(runtime_env) -> None:
     plant = Plant(watchdog_state=1)
     state = GOOD_STATE | {"wallbox.evcs.gx_set_current_a": 16}
