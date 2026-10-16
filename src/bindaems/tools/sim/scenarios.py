@@ -1783,9 +1783,12 @@ def _gast_evcs() -> Scenario:
 
 
 def _tesla_aus() -> Scenario:
-    """Wie ``wolkig``, doch der Tesla wechselt bei 45 min auf „Aus“ (Plan 2d, Präzisierung 9): Der
-    Stopp ist dringend und kommt binnen 10 s, auch wenn das Stundenbudget des Tesla aufgebraucht
-    ist; ihn hält kein Stundenlimit zurück."""
+    """Wie ``wolkig``, doch der Tesla wechselt bei 45 min auf „Aus“ (Plan 2d, Präzisierung 9): Er
+    bekommt binnen 10 s „Laden aus“, und kein Befehl „charging“ an ihn wird zurückgestellt.
+
+    Dass der dringende Stopp das Stundenlimit umgeht, belegt das Szenario nicht: Die Reserve
+    (``control.tesla_reserve_commands``) hält das Stundenbudget unter den Wolken offen, es ist nie
+    ausgeschöpft. Das Umgehen prüft der Test ``test_off_stops_urgently`` der Regelung."""
     start, duration_s, seed = SUMMER, HOUR_S, 22
     stop = OFF_AT_S, _Mode(2, TESLA, ChargeMode.OFF)
     checks = (
