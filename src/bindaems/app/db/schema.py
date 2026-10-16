@@ -152,6 +152,33 @@ price_slot = Table(
     Column("updated_at", UtcDateTime(), nullable=False),
 )
 
+# Prognose-Archiv: je Slot und Horizontklasse die Ausgabe, deren Vorlauf der Klassenmitte am
+# nächsten liegt (Plan 3a, Präzisierung 7)
+forecast_record = Table(
+    "forecast_record",
+    metadata,
+    Column("kind", String(8), primary_key=True),  # pv, load
+    Column("slot_start", UtcDateTime(), primary_key=True),
+    Column("horizon", String(8), primary_key=True),  # h0_6, h6_24, h24
+    Column("issued_at", UtcDateTime(), nullable=False),
+    Column("p50_w", Float, nullable=False),
+    Column("raw_w", Float, nullable=False),  # PV: Modell ohne Kalibrierung; Last: wie p50_w
+    Column("clearness", String(8), nullable=True),  # clear, mixed, overcast
+)
+
+# Prognosegüte je lokalem Tag, Art und Horizont (Plan 3a, Präzisierung 10)
+forecast_metric = Table(
+    "forecast_metric",
+    metadata,
+    Column("day", String(10), primary_key=True),  # lokales Datum, ISO
+    Column("kind", String(8), primary_key=True),
+    Column("horizon", String(8), primary_key=True),
+    Column("n", Integer, nullable=False),
+    Column("abs_err_sum_w", Float, nullable=False),
+    Column("err_sum_w", Float, nullable=False),
+    Column("actual_sum_w", Float, nullable=False),
+)
+
 # Abrechnung je Viertelstunde aus den slot_flows des core (Spec 11.4)
 ledger_slot = Table(
     "ledger_slot",
