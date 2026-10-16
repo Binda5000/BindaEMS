@@ -455,6 +455,27 @@ def test_intent_version_is_the_one_of_the_last_step_and_unknown_after_idle(cfg) 
     assert c.intent_version is None
 
 
+def test_intent_version_changes_together_with_the_views(cfg, monkeypatch) -> None:
+    """Scheitert ein Schritt, bevor er seine Ansichten ablegt, nennt Health die alte Version."""
+    until = T0 + timedelta(hours=2)
+    c = controller(cfg)
+    c.step(inputs(cfg, intent=Intent(version=1, control=True)))
+    assert c.intent_version == 1
+
+    def broken(*args, **kwargs):
+        raise RuntimeError("Schritt scheitert")
+
+    monkeypatch.setattr("bindaems.core.control.charging.charge_points", broken)
+    boost = Intent(version=2, control=True, vehicles={"egolf": VehicleIntent(boost_until=until)})
+    with pytest.raises(RuntimeError):
+        c.step(inputs(cfg, s=1, intent=boost))
+    assert c.intent_version == 1  # die Ansichten sind die des vorigen Schritts
+    assert c.health()[1]["boost_pending"] is False
+    monkeypatch.undo()
+    c.step(inputs(cfg, s=2, intent=boost))
+    assert c.intent_version == 2
+
+
 def test_health_shows_a_boost_waiting_for_the_plug_as_pending(cfg) -> None:
     until = T0 + timedelta(hours=2)
     intent = Intent(version=1, control=True, vehicles={"egolf": VehicleIntent(boost_until=until)})

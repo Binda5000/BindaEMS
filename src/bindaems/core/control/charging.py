@@ -356,7 +356,6 @@ class ChargeController:
         now, intent = inputs.now, inputs.intent
         self._now, self._wall_now = now, inputs.wall_now
         self._commands_hour = dict(inputs.commands_hour)
-        self._intent_version = None if intent is None else intent.version
         self._stepped = True
         state = self._assignment.update(
             now,
@@ -453,7 +452,10 @@ class ChargeController:
                 commands.append(ChargeCommand(command, facts))
 
         self._regulated = set(regulated.items())
+        # Version und Ansichten wechseln zusammen: ``health`` läuft in einem anderen Thread und darf
+        # die neue Version nie mit den Ansichten des vorigen Schritts zeigen
         self._views = views
+        self._intent_version = None if intent is None else intent.version
         self._wallboxes = state.wallboxes
         self._cars = tuple(
             _car_view(self._cfg, point, modes[key], state.vehicles[key], inputs)
