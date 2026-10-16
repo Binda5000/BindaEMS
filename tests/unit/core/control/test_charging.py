@@ -455,6 +455,24 @@ def test_intent_version_is_the_one_of_the_last_step_and_unknown_after_idle(cfg) 
     assert c.intent_version is None
 
 
+def test_idle_drops_the_version_before_the_views(cfg) -> None:
+    """Ein Health zwischen den Zuweisungen in ``idle`` zeigt nie die alte Version mit leeren
+    Ansichten (die app hielte Boost und Übersteuerung sonst für beendet)."""
+    seen: list[object] = []
+
+    class Watched(ChargeController):
+        def __setattr__(self, name: str, value: object) -> None:
+            if name == "_views":
+                seen.append(self._intent_version)
+            super().__setattr__(name, value)
+
+    c = controller(cfg)
+    c.step(inputs(cfg, intent=Intent(version=42, control=True)))
+    c.__class__ = Watched
+    c.idle(T0 + timedelta(seconds=1))
+    assert seen == [None]
+
+
 def test_intent_version_changes_together_with_the_views(cfg, monkeypatch) -> None:
     """Scheitert ein Schritt, bevor er seine Ansichten ablegt, nennt Health die alte Version."""
     until = T0 + timedelta(hours=2)

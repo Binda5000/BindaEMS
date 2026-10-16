@@ -525,12 +525,15 @@ class ChargeController:
             self._against.clear(key)
         self._overload = OverloadGuard(self._guard)
         self._level = OverloadLevel.NONE
+        # Erst die Version, dann die Ansichten: Ein Health, das die Version liest, nachdem die
+        # Ansichten leer sind, bekommt ``None``. Liest es sie davor und die Ansichten danach, zeigt
+        # es je Fahrzeug ``mode`` null; das nimmt die app als unbekannten Stand (Präzisierung 2).
+        self._intent_version = None
         self._views = {}
         self._wallboxes = {}
         self._cars = ()
         self._vehicle_wallbox = {}
         self._commands_hour = {}
-        self._intent_version = None
 
     def forget(self, actuators: Collection[str]) -> None:
         """Vergisst die letzten eigenen Werte und die Merker ``not_taken_retry`` dieser Aktoren.
