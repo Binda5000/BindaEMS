@@ -16,10 +16,20 @@ Beide Pläne sind per Fast-Forward auf `main` (`31721a6`, mit Zustimmung des Bet
 neue Sitzung beginnt auf `main`. Die drei kleinen Doku-Korrekturen aus 2c-2b (Ende von „Bewusst
 offen gelassen“, „Doku-Korrekturen aus dem Re-Review der Fix-Welle von 2c-2b“) sind seit dem
 15.10.2026 umgesetzt (Branch `claude/project-thread-57rkit`).
-**Plan 2d (Bedienung in UI und HA) ist umgesetzt** (`docs/superpowers/plans/2026-10-15-phase-2d-bedienung.md`, 18 Tasks, Branch
-`claude/project-thread-o6klxp`); das Gesamtreview und die Integration auf `main` stehen noch aus. Als
-Nächstes folgen an der Anlage das Ausrollen von 2d und die Inbetriebnahme Punkt 3 (Design 2c-2, 11.1):
-Die Erkennung läuft im Dry-Run mit, und Health zeigt, wer wo steht (siehe „Offen an der Anlage“).
+**Plan 2d (Bedienung in UI und HA) ist umgesetzt, im Gesamtreview geprüft, und die Fix-Welle danach
+ist umgesetzt** (`docs/superpowers/plans/2026-10-15-phase-2d-bedienung.md`, 18 Tasks). Er ist per
+Fast-Forward auf `main` (`0198900`, mit Zustimmung des Betreibers vom 16.10.2026, alle Prüfungen auf
+`main` grün: 5762 Python-Tests, 351 Vitest, 14 E2E, Abdeckung 97,5 %).
+Der Betreiber hat **Phase 3 am 16.10.2026 in drei Pläne geteilt**: 3a Tarif und Prognosen (nur app),
+3b Optimierer und Zeitplan (Pläne als Vorschau, Szenario-Tests), 3c Planausführung im core (danach
+2 Wochen Dry-Run, dann geht Victron live); die Vorab-Entscheidungen für 3b und 3c stehen in der
+Einordnung des Plans 3a.
+**Plan 3a (Tarif und Prognosen) ist umgesetzt, je Task und im Gesamtreview geprüft, und die Fix-Welle
+danach ist umgesetzt** (`docs/superpowers/plans/2026-10-16-phase-3a-tarif-prognosen.md`, 14 Tasks,
+Branch `claude/project-thread-syy5yu`); die Integration auf `main` steht noch aus (Zustimmung des
+Betreibers). Als Nächstes folgen die Integration von 3a, dann der Plan 3b, und an der Anlage das
+gemeinsame Ausrollen von 2d und 3a sowie die Inbetriebnahme Punkt 3 (Design 2c-2, 11.1): Die
+Erkennung läuft im Dry-Run mit, und Health zeigt, wer wo steht (siehe „Offen an der Anlage“).
 `main` ist seit dem 12.10.2026 auch der Standard-Branch auf GitHub.
 
 ## Kurzfassung
@@ -206,8 +216,8 @@ Die Erkennung läuft im Dry-Run mit, und Health zeigt, wer wo steht (siehe „Of
     Anlage“).
   - **Noch nicht:** die Bedienung in UI und HA, auch die Auswahl des Gast-Modus (2d), und die
     Planausführung (Phase 3). Live ist weiterhin kein Aktor.
-- **Phase 2d (Bedienung in UI und HA) ist umgesetzt** (Plan: `docs/superpowers/plans/2026-10-15-phase-2d-bedienung.md`, 18 Tasks;
-  Ausführung subagent-driven; Gesamtreview und Integration auf `main` stehen noch aus):
+- **Phase 2d (Bedienung in UI und HA) ist umgesetzt und im Gesamtreview geprüft** (Plan: `docs/superpowers/plans/2026-10-15-phase-2d-bedienung.md`, 18 Tasks;
+  Ausführung subagent-driven; auf `main` seit `0198900`, 16.10.2026):
   - **app, neues Paket `bindaems.app.control`:**
     - `intent.py`: der `IntentService` leitet jede Bedienung aus der gültigen Absicht ab und sendet sie
       an den core. Die Version ist das Größere aus Millisekunden seit 1970 und gültiger Version + 1; bei
@@ -236,28 +246,77 @@ Die Erkennung läuft im Dry-Run mit, und Health zeigt, wer wo steht (siehe „Of
   - **Doku und Tests:** Betriebshandbuch (7, 12, 13, „Laderegelung“), Spec („Stand Plan 2d“ in 5.3, 7.5,
     7.9, 7.10, 8.7, 11.3, 12, 13, 16 und 18) und `tests/unit/test_docs.py`. Das Demo-Backend hat den
     Benutzer `bedienen`; sein core meldet DEGRADED (die Demo-Welt).
+  - **Gesamtreview und Fix-Welle:** Die Fix-Welle hat behoben: die erneute Prüfung der
+    Live-Schaltung je Versuch (auch bei leerer Auswahl), die Quittierung neben einer im selben Zyklus
+    neu erkannten fremden Änderung, den verbrauchten Boost im core (er bindet mit keiner neuen Version
+    wieder), Lademodus `null` in Health als unbekannter Stand, die HA-Auswahl „Zuordnung“ wie im UI,
+    den Tag `kind` der Grafana-Markierungen und das Meldebudget mit eigenem Anteil für Ablehnungen.
   - **Entschieden und aufgeschoben:** Die Rulings und die aufgeschobenen Kleinigkeiten stehen unter
     „Bewusst offen gelassen“.
   - **Noch nicht:** Ziel-SOC, Abfahrt und der Modus „Geplant“ (Phase 4), die Planausführung (Phase 3),
     die Mehrkostenanzeige beim Boost, die Schalter „Netzladen erlaubt“ und „Akku-Unterstützung erlaubt“,
     die Zahl „Unterstützungsschwelle“, die Taste „neu planen“ und die HA-Sensoren Ladeenergie,
     Fertig-um und Ziel erreichbar. Live ist weiterhin kein Aktor.
+- **Phase 3 ist in drei Pläne geteilt** (Entscheidung des Betreibers vom 16.10.2026; Einordnung und
+  Vorab-Entscheidungen im Plan 3a): **3a** Tarif und Prognosen (nur app, `core` unverändert), **3b**
+  Optimierer und Zeitplan (Pläne als Vorschau, der core bekommt sie noch nicht; Szenario-Tests über
+  historische Tage), **3c** Planausführung im core (danach 2 Wochen Dry-Run, dann geht Victron live).
+  Für 3b und 3c gilt vorab: „Victron allein“ ist der Eigenverbrauch des ESS ohne Netzladen und ohne
+  Halten; die Szenario-Tests rechnen im Viertelstundenraster mit einem Akkumodell (die CI mit erzeugten
+  Tagen, die 30 echten Tage laufen an der Anlage); Regel R2 kommt erst mit Phase 4; `HALTEN` setzt der
+  core über den Netz-Sollwert-Override um (Sollwert = Last − PV, nicht unter 0).
+- **Phase 3a (Tarif und Prognosen) ist umgesetzt, je Task und im Gesamtreview geprüft** (Plan:
+  `docs/superpowers/plans/2026-10-16-phase-3a-tarif-prognosen.md`, 14 Tasks; Ausführung
+  subagent-driven; Branch `claude/project-thread-syy5yu`; die Integration auf `main` steht aus):
+  - **Tarif** (`shared/settings.py`, `app/tariff/calc.py`): vier Arten von Bestandteilen. Neu sind
+    der **Leistungspreis** (€/kW/Jahr, Stufe nach ElWG bei 10 kW, Mindestverrechnung 2 kW, gültig ab
+    1.1.2027), Monatsgebühren und Einspeisebestandteile mit Zeitfenstern. Die **Monatsspitze** rechnet
+    die app aus dem Ledger; in HA gibt es den Sensor „Monatsspitze“. Leistungspreis und Gebühren
+    fließen erst ab 3b und 3c in etwas ein. Der Tarif-Editor im UI (Einstellungen) ändert auch
+    Zeitfenster und Gültigkeit.
+  - **Tagestypen und Schätzpreise:** Werktag, Samstag, Sonn- und Feiertag (österreichische Feiertage);
+    der geschätzte Spotpreis ist der Median der letzten 28 Tage je Viertelstunde und Tagestyp, daraus
+    entstehen die Planungspreise (`PriceService.planning`, Herkunft `primary`, `fallback` oder
+    `estimated`).
+  - **Prognosen** (`app/forecast/`): ein Archiv (Migration `0008`, Tabellen `forecast_record` und
+    `forecast_metric`), die PV-Kalibrierung je Stunde und Klarheit mit dem Band P25/P75, die
+    Lastprognose (gewichteter Median über 56 Tage, Halbwertszeit 14 Tage) aus dem Ledger und optional
+    der HA-Historie (`homeassistant.load_history`, braucht `influxdb.ha_database`), die Prognosegüte
+    (MAE, Bias, relativer MAE) und ein Nachtlauf um 02:30.
+  - **API und UI:** `/api/forecast/pv`, `/api/forecast/load` und `/api/forecast/quality`; im UI der
+    Tarif-Editor, das PV-Band im Diagramm der Übersicht und die Karten „Lastprognose“ und
+    „Prognosegüte“ auf der System-Seite. Betrieb: `docs/betrieb.md`, „Prognosen“; Spec: die Absätze
+    „Stand Plan 3a“.
+  - **Ledger-Korrektur:** Der Tageserlös der Einspeisung rechnet je Viertelstunde mit deren
+    Einspeisepreis (Fix-Welle).
+  - **Gesamtreview und Fix-Welle:** Der Gesamtreview („mit Korrekturen“) fand keinen kritischen und
+    einen wichtigen Befund (der Tageserlös ignorierte die Zeitfenster der Einspeisung); die Fix-Welle hat
+    ihn behoben, dazu drei kleine Punkte im UI („Heute (ab jetzt)“ in der Lastprognose, Stufe und
+    Mindestverrechnung in der Tarifansicht, die ElWG-Vorlage mit Beginn 1.1.2027). Das Re-Review war
+    sauber.
+  - **Entschieden und aufgeschoben:** Die Rulings und die aufgeschobenen Kleinigkeiten stehen unter
+    „Bewusst offen gelassen“ („Entschieden in Plan 3a“).
+  - **Noch nicht:** der Optimierer, der Zeitplan und die Szenario-Tests (3b), die Planausführung im
+    core (3c), die Kostenanzeige zu Leistungspreis und Gebühren und eine eigene Seite zur Prognosegüte
+    (Phase 5). Live ist weiterhin kein Aktor, und 3a schaltet nichts an der Anlage.
 - **Images:** `ghcr.io/binda5000/bindaems-core:latest` und `ghcr.io/binda5000/bindaems-app:latest`.
   Sie sind öffentlich, und die CI setzt `latest` bei jedem Push auf `main`. core und app werden
   immer gemeinsam aus demselben Stand ausgerollt (gleiche Compose-Datei, gleiche Image-Tags): Die
   UI-Schemas sind streng, eine abweichende Version zeigt auf der System-Seite nur „Unerwartete
   Antwort vom Server“.
-- **Tests:** 5762 Python-Tests, davon 33 Property-Tests mit Hypothesis (6 für die Safety-Schicht,
-  6 für den Phasenwächter, 12 für den Akku-Sollwert, 6 für den 15-min-Wächter, 3 sonstige), und
-  351 UI-Tests (Vitest) sowie 14 E2E-Tests (Playwright); Abdeckung 97,5 % insgesamt und
-  99 bis 100 % für `core/safety`, `core/control` und `core/actuators` (Stand nach Plan 2d und der
-  Fix-Welle aus dem Gesamtreview).
+- **Tests:** 5927 Python-Tests, davon 33 Property-Tests mit Hypothesis (6 für die Safety-Schicht,
+  6 für den Phasenwächter, 12 für den Akku-Sollwert, 6 für den 15-min-Wächter, 3 sonstige; Plan 3a hat
+  keinen neuen), und 403 UI-Tests (Vitest) sowie 17 E2E-Tests (Playwright); Abdeckung 97,59 %
+  insgesamt und 99 bis 100 % für `core/safety`, `core/control` und `core/actuators` (Stand nach
+  Plan 3a und der Fix-Welle aus dem Gesamtreview; auf `main` mit Plan 2d: 5762, 351 und 14, 97,5 %).
   Geprüft wird mit ruff, mypy strict (auch für den Watchdog), import-linter (4 Verträge), pytest
   mit Abdeckungsgrenzen (≥ 75 % insgesamt, ≥ 90 % für `core/safety`, `core/control` und
   `core/actuators`), Vitest mit svelte-check, Prettier und ESLint; dazu E2E mit Playwright.
 - **Offen:**
-  - Gesamtreview von Plan 2d, danach die Integration auf `main` (siehe „Nächster Schritt“)
-  - an der Anlage: Images von 2d ausrollen, Dry-Run neben evcc beginnen und dabei die Inbetriebnahme Punkt 3
+  - die Integration von Plan 3a auf `main` (mit Zustimmung des Betreibers), danach der Plan 3b (siehe
+    „Nächster Schritt“)
+  - an der Anlage: Images von 2d und 3a ausrollen (Punkt „Zu 3a gehört“ unter „Offen an der Anlage“),
+    Dry-Run neben evcc beginnen und dabei die Inbetriebnahme Punkt 3
     (die Erkennung läuft im Dry-Run mit, Health zeigt, wer wo steht), der Rest von Teil 2
     (EVCS-Verbindungsabbruch, Victron 17.2-4), Victron in den Dry-Run und live (siehe „Offen an der
     Anlage“)
@@ -294,6 +353,11 @@ Die Erkennung läuft im Dry-Run mit, und Health zeigt, wer wo steht (siehe „Of
     Fix-Runde (mit Test) hat das behoben, und die Rulings zu Stromvergleich und zeitlicher Korrelation
     kamen danach dazu. In den drei neuen Szenarien und im umgebauten `zuordnung` lag kein Fehler in der
     Erkennung oder Regelung.
+  - Plan 3a lief ebenso (subagent-driven, 14 Tasks): je Task ein Implementierer und ein Reviewer, ein
+    Ledger mit Rulings und aufgeschobenen Kleinigkeiten (ihr Inhalt steht unten unter „Bewusst offen
+    gelassen“). Jede Task ließ das ganze Repository grün (auch den UI-Vertragstest), darum weitete
+    Task 1 schon das UI-Schema der Tarifbestandteile; der Gesamtreview („mit Korrekturen“) fand einen
+    wichtigen Befund, den die Fix-Welle behob.
   - Befunde werden nach ihrer Wirkung neu bewertet. Critical und Important kommen in einen
     Fix-Durchgang, jeder mit einem Test, der vorher scheitert. Minors werden gesammelt und auf
     Wunsch erledigt („bitte die kleinigkeiten erledigen“).
@@ -305,7 +369,8 @@ Die Erkennung läuft im Dry-Run mit, und Health zeigt, wer wo steht (siehe „Of
 - **Git:**
   - Arbeitsbranch ist der Branch, den die Sitzung vorgibt (Plan 2b und 2c-1: `ccr-e451cb4c-qeg1tm`,
     EVCS-Hysterese, Plan 2c-2a und 2c-2b: `ccr-9778345e-t3x44k`, beide nach der Integration
-    gelöscht); der Standard-Branch auf GitHub ist `main`.
+    gelöscht; Plan 2d: `claude/project-thread-o6klxp`, auf `main`; Plan 3a:
+    `claude/project-thread-syy5yu`, noch nicht integriert); der Standard-Branch auf GitHub ist `main`.
   - Nach `main` nur mit Zustimmung; bisher per Fast-Forward-Merge, Tests auf `main`, dann Push.
   - Pull Requests nur auf ausdrücklichen Wunsch.
   - Commit-Nachrichten auf Deutsch im Stil `fix(ui): …`, mit den Attributionszeilen, die die
@@ -317,7 +382,7 @@ Die Erkennung läuft im Dry-Run mit, und Health zeigt, wer wo steht (siehe „Of
 
 | Dokument | Inhalt |
 |---|---|
-| `docs/superpowers/specs/2026-10-08-bindaems-design.md` | Spec, verbindlich. Wichtig: 7 Regelung, 8 Sicherheit, 13 Web-UI, 14 Login, 17 Prüfprotokoll, 18 Phasenplan, 19 offene Punkte. Die Absätze „Stand Plan 2a/2b/2c-1/2c-2a/2c-2b/2d“ gehen dem älteren Text davor vor |
+| `docs/superpowers/specs/2026-10-08-bindaems-design.md` | Spec, verbindlich. Wichtig: 7 Regelung, 8 Sicherheit, 13 Web-UI, 14 Login, 17 Prüfprotokoll, 18 Phasenplan, 19 offene Punkte. Die Absätze „Stand Plan 2a/2b/2c-1/2c-2a/2c-2b/2d/3a“ gehen dem älteren Text davor vor |
 | `docs/superpowers/plans/2026-10-08-phase-1a-fundament-datenerfassung.md` | Plan 1a (core) |
 | `docs/superpowers/plans/2026-10-09-phase-1b-app-backend.md` | Plan 1b (app) |
 | `docs/superpowers/plans/2026-10-09-phase-1c-web-ui.md` | Plan 1c (UI), mit Anhang A zu den API-Formen |
@@ -330,8 +395,9 @@ Die Erkennung läuft im Dry-Run mit, und Health zeigt, wer wo steht (siehe „Of
 | `docs/superpowers/specs/2026-10-14-phase-2c2-akku-spitzen-design.md` | Design 2c-2 (Akku-Sollwert, 15-min-Wächter, Zuordnungserkennung), Entscheidungen des Betreibers vom 14.10.2026; 2c-2a und 2c-2b umgesetzt; der Kopf nennt, was sich beim Bau geändert hat |
 | `docs/superpowers/plans/2026-10-14-phase-2c2a-akku-spitzen.md` | Plan 2c-2a, 14 Tasks, umgesetzt: Umbau, Akku-Sollwert, 15-min-Wächter, Simulator; Präzisierungen gegenüber dem Design, Texte, Szenarien |
 | `docs/superpowers/plans/2026-10-15-phase-2c2b-zuordnung.md` | Plan 2c-2b, 9 Tasks, umgesetzt: Zuordnungserkennung, Gast, Health je Wallbox, Simulator; Präzisierungen gegenüber dem Design, Texte, Szenarien |
-| `docs/betrieb.md` | Betriebshandbuch: Installation, Proxy (6), HA (7), Tarif (8), Sicherung (9), Prüfprotokolle einschließlich Teil 2 (11), Web-UI mit den Seiten „Laden“ und „Entscheidungen“ (12), Betriebszustände, Absicht, Live-Schalter, Übergabe und Entscheidungslog (13), Watchdog am Cerbo (14); am Ende „Laderegelung“ (Modi, Absicht, Zuordnung Auto und Wallbox, Dry-Run-Vergleich mit evcc, Umstieg), „Akku und Spitzen“ (Akku-Sollwert, 15-min-Wächter, Health, Victron in den Dry-Run und live, Alarme) und „Simulator“ |
-| `docs/superpowers/plans/2026-10-15-phase-2d-bedienung.md` | Plan 2d, 18 Tasks, umgesetzt: Bedienung in UI und HA, Entscheidungslog in SQLite, Tesla vor der Live-Schaltung; Präzisierungen gegenüber der Spec, Texte |
+| `docs/betrieb.md` | Betriebshandbuch: Installation, Proxy (6), HA (7), Tarif (8, seit 3a mit Leistungspreis, Gebühren und Einspeisung), Sicherung (9), Prüfprotokolle einschließlich Teil 2 (11), Web-UI mit den Seiten „Laden“ und „Entscheidungen“ (12), Betriebszustände, Absicht, Live-Schalter, Übergabe und Entscheidungslog (13), Watchdog am Cerbo (14); am Ende „Laderegelung“ (Modi, Absicht, Zuordnung Auto und Wallbox, Dry-Run-Vergleich mit evcc, Umstieg), „Akku und Spitzen“ (Akku-Sollwert, 15-min-Wächter, Health, Victron in den Dry-Run und live, Alarme), „Simulator“ und „Prognosen“ (seit 3a: PV-Kalibrierung, Lastprognose, Prognosegüte, Nachtlauf, Schätzpreise, „An der Anlage prüfen“) |
+| `docs/superpowers/plans/2026-10-15-phase-2d-bedienung.md` | Plan 2d, 18 Tasks, umgesetzt, auf `main`: Bedienung in UI und HA, Entscheidungslog in SQLite, Tesla vor der Live-Schaltung; Präzisierungen gegenüber der Spec, Texte |
+| `docs/superpowers/plans/2026-10-16-phase-3a-tarif-prognosen.md` | Plan 3a, 14 Tasks, umgesetzt (Branch `claude/project-thread-syy5yu`, noch nicht auf `main`): Tarifmodell mit Editor, Monatsspitze, Schätzpreise, Lastprognose, PV-Kalibrierung, Prognosegüte; die Einordnung teilt Phase 3 in 3a, 3b und 3c und nennt die Vorab-Entscheidungen für 3b und 3c |
 | `cerbo-watchdog/README.md` | Watchdog: Zustände, Zeiten, D-Bus-Pfade, Installation und Probe |
 | `docs/verification/abnahme-phase-1.md` | Checkliste für die Abnahme der Phase 1 |
 | `docs/verification/README.md` | Prüfprotokoll Teil 1, Preise, Teil 2 (`verify_part2`) und Watchdog-Probe: Aufruf und Ergebnis |
@@ -397,6 +463,9 @@ Die Erkennung läuft im Dry-Run mit, und Health zeigt, wer wo steht (siehe „Of
   - Einstellungen mit Versionen
   - Preise (smartENERGY und Referenzquelle, Brutto/Netto-Erkennung)
   - PV-Prognose (Open-Meteo), Abrechnung, Verbraucher, Verlauf aus InfluxDB
+  - seit 3a: Tarifrechnung (`tariff/calc.py`), Tagestyp mit Feiertagen (`daytype.py`), Schätzpreise
+    (`prices/estimate.py`) und die Prognosen (`forecast/`: Archiv, Kalibrierung, Lastprognose, Güte,
+    Routen)
   - HA MQTT Discovery mit Bedienelementen (`ha/entities.py`, `ha/publisher.py`), den Befehlen aus
     Home Assistant (`ha/commands.py`, seit 2d) und den Benachrichtigungen (`ha/notify.py`, seit 2d)
   - die Bedienung (`control/`, seit 2d): `intent.py` (Absicht aus der app), `decisions.py`
@@ -576,7 +645,7 @@ Demo-Zugänge: `admin`, `bedienen` (Bedienen), `gast` (Lesen) und `sicher` (Admi
 ## Stand der Installation beim Betreiber
 
 - Docker auf einer VM im LAN des Betreibers, Images `latest` vom Stand nach Plan 2b (ausgerollt am
-  12.10.2026). Die Pläne 2c-1, 2c-2a, 2c-2b und 2d sind noch nicht ausgerollt.
+  12.10.2026). Die Pläne 2c-1, 2c-2a, 2c-2b, 2d und 3a sind noch nicht ausgerollt.
 - Reverse Proxy mit HTTPS sowie Tarif und OeMAG-Wert im UI: laut Betreiber eingerichtet
   (11.10.2026). Zum Proxy gehören laut Betriebshandbuch 6: Port 8080 erreicht nur der Proxy,
   `app.trusted_proxies` ist gesetzt, `cookie_secure` steht wieder auf `true`.
@@ -626,10 +695,10 @@ Demo-Zugänge: `admin`, `bedienen` (Bedienen), `gast` (Lesen) und `sicher` (Admi
   - Felder `value`, `unit_of_measurement_str`, `device_class_str`, `state_class_str`,
     `friendly_name_str`
   - Wichtig auch für die Lastprognose aus der HA-Historie.
-- **Offen an der Anlage, als Nächstes (nach Plan 2d):**
+- **Offen an der Anlage, als Nächstes (nach Plan 3a):**
   1. Die Images ausrollen: `docker compose pull && docker compose up -d` (Betriebshandbuch 4),
-     nachdem Plan 2d auf `main` ist (die Pläne 2c-1, 2c-2a, 2c-2b und 2d rollen zusammen aus). **Zu
-     2d gehört:**
+     nachdem Plan 3a auf `main` ist (die Pläne 2c-1, 2c-2a, 2c-2b, 2d und 3a rollen zusammen aus; 2d ist
+     seit dem 16.10.2026 auf `main`). **Zu 2d gehört:**
      - Die Migration der app (`0007`, Tabelle `decision`) läuft beim Start der app von selbst. Die
        Entscheidungen der letzten 7 Tage holt die app dann aus den Dateien des core nach.
      - `BINDAEMS_HA_TOKEN` braucht jetzt auch die app (für die Benachrichtigungen). Die `.env` gilt
@@ -648,6 +717,30 @@ Demo-Zugänge: `admin`, `bedienen` (Bedienen), `gast` (Lesen) und `sicher` (Admi
        Beachtung der Schreibweise eindeutig, nicht „Automatisch“) und die Objekt-IDs in Home Assistant;
        prüfe die `config.yaml` anhand von `deploy/config.example.yaml`. Der Watchdog bleibt
        unverändert, und keines der neuen Felder verlangt eine neue `config.ini`.
+     **Zu 3a gehört** (Betriebshandbuch, „Prognosen“):
+     - Die Migration der app (`0008`, Tabellen `forecast_record` und `forecast_metric`) läuft beim Start
+       der app von selbst.
+     - Neu und optional: `homeassistant.load_history` mit `entity` und `subtract` (verlangt
+       `influxdb.ha_database`, sonst lehnt die app die Konfiguration beim Start ab); Muster in
+       `deploy/config.example.yaml` und im Betriebshandbuch, „Prognosen“. Ohne sie rechnet die
+       Lastprognose nur aus der Abrechnung.
+     - Den Leistungspreis trägst du im Tarif-Editor (Einstellungen) ein, mit der Vorlage
+       „Leistungspreis (ElWG)“ (Stufe 10 kW, Mindestverrechnung 2 kW, gültig ab 1.1.2027). Die Sätze
+       stehen nicht vor; sie kommen aus dem Preisblatt des Netzbetreibers. Leistungspreis und Gebühren
+       fließen erst ab 3b und 3c in etwas ein.
+     - **Risiken an der Anlage prüfen** (Betriebshandbuch, „Prognosen“, „An der Anlage prüfen“ nennt die
+       Schritte):
+       - Die InfluxQL-Abfrage der HA-Historie ist nicht gegen die echte InfluxDB geprüft: `fill(previous)`
+         auf dem Einheitenfeld und die 56-Tage-Abfrage in Minutenauflösung gegen die 15 s Zeitlimit und die
+         Höchstzahl an Zeilen. Eine scheiternde Abfrage wiederholt die app stündlich; im Log steht dann
+         „Lastverlauf aus Home Assistant nicht lesbar“.
+       - Die Strahlung von Open-Meteo in den Tests ist künstlich erzeugt (kein Mitschnitt); ob Klarheit
+         und Klassen an der Anlage sinnvoll ausfallen, zeigt erst der Betrieb.
+       - Die PV-Kalibrierung lernt auch Abregelung (Einspeisegrenze, voller Akku) als niedrigeren
+         Faktor.
+     - **Offene Frage an den Betreiber:** Welche HA-Entität zeigt die Hauslast ohne die beiden Wallboxen
+       (für `homeassistant.load_history`, notfalls die Gesamtlast und die abzuziehenden Wallbox-Entitäten)?
+       Ohne Angabe nutzt die Lastprognose nur die Abrechnung.
      Aus den Plänen davor: Die neuen Felder `grid.import_limit_a`, `control` (seit der Hysterese auch
      `control.evcs_hysteresis_a`, seit 2c-2a `support_soc_pct`, `support_hysteresis_pct`,
      `support_max_w`, `support_max_s`, `setpoint_deadband_w`, `override_refresh_s`, `peak_target_kw`
@@ -847,7 +940,7 @@ Demo-Zugänge: `admin`, `bedienen` (Bedienen), `gast` (Lesen) und `sicher` (Admi
        2c-2, Abschnitt 7) samt Gastfahrzeug und `vehicles.<name>.home_entity`, der Grund
        `assignment_detected`, Health je Wallbox und im Simulator der e-Golf „zu Hause“ oder „weg“,
        das Gastfahrzeug, jedes Auto an jeder Wallbox und die Szenarien aus Design 10.3 (damals 21, mit 2d 23).
-   - **2d Bedienung:** umgesetzt, auf dem Branch `claude/project-thread-o6klxp`: Absicht aus der app
+   - **2d Bedienung:** umgesetzt, im Gesamtreview geprüft, auf `main` (`0198900`, 16.10.2026): Absicht aus der app
      (Regelbetrieb, Live-Schalter mit Bestätigung, Lademodi, Boost, Zuordnung, Gast-Modus, Vorrang),
      Entscheidungslog in SQLite, UI-Seiten „Laden“ und „Entscheidungen“, HA-Bedienelemente und
      Benachrichtigungen, die Tesla-Punkte vor der Live-Schaltung. Ziel-SOC und Abfahrt gehören zum
@@ -867,7 +960,23 @@ Demo-Zugänge: `admin`, `bedienen` (Bedienen), `gast` (Lesen) und `sicher` (Admi
      an der Anlage am 12.10.2026 bestätigt.
    - Geschrieben wird nie der Maximalstrom (5017).
 
-### Nächster Schritt: Gesamtreview von Plan 2d und die Anlage
+3. **Phase 3**, Planung und Optimierung (Spec 18), in drei Plänen (Entscheidung des Betreibers vom
+   16.10.2026; Einordnung im Plan 3a):
+   - **3a Tarif und Prognosen:** umgesetzt, je Task und im Gesamtreview geprüft, die Fix-Welle danach
+     umgesetzt, auf dem Branch `claude/project-thread-syy5yu`; die Integration auf `main` steht aus
+     (Kurzfassung). Nur app, der core bleibt unverändert.
+   - **3b Optimierer und Zeitplan:** Plan-Typen, Optimierer (HiGHS über PuLP, eigener Prozess,
+     Zeitlimit) nur für den Akku, Regel R1, Wirtschaftlichkeit, Schalter „Netzladen erlaubt“,
+     Planungsablauf mit Speicherung, UI-Seite „Zeitplan“, HA-Sensoren und Taste „neu planen“,
+     Szenario-Test-Umgebung mit dem Vergleich mit „Victron allein“. Pläne entstehen als Vorschau; der
+     core bekommt sie noch nicht. Den Plan schreibt die nächste Sitzung (`superpowers:writing-plans`)
+     und legt ihn dem Betreiber zur Freigabe vor.
+   - **3c Planausführung im core:** Plan in der Absicht, Akku-Absichten `EIGENVERBRAUCH`, `HALTEN` und
+     `NETZLADEN(P)`, Budget des 15-min-Wächters aus der akzeptierten Monatsspitze, Simulator mit
+     Plan-Szenarien, „Plan vs. Ist“. Danach 2 Wochen Dry-Run der Planausführung, dann geht Victron live
+     (Abnahme Phase 3).
+
+### Nächster Schritt: Integration von Plan 3a, Plan 3b und die Anlage
 
 1. Plan 2b ist auf `main`; Gesamtreview, Fix-Durchgang und Re-Review sind erledigt, die
    Entscheidungen stehen in `docs/superpowers/plans/2026-10-11-phase-2b-entscheidungen.md`. Plan
@@ -884,8 +993,9 @@ Demo-Zugänge: `admin`, `bedienen` (Bedienen), `gast` (Lesen) und `sicher` (Admi
    (`31721a6`, Fast-Forward mit Zustimmung des Betreibers vom 15.10.2026, Tests auf `main` grün).
 4. **Plan 2d** (Bedienung in UI und HA) ist umgesetzt (Kurzfassung): die Auswahl des Gast-Modus, die
    Anzeige von Health je Wallbox, die Übersteuerung der Zuordnung und die Tesla-Punkte vor der
-   Live-Schaltung. Es folgen das Gesamtreview und die Integration auf `main` (mit Zustimmung des
-   Betreibers). An der Anlage folgt die
+   Live-Schaltung. Gesamtreview und Fix-Welle sind erledigt, er ist auf `main` (`0198900`,
+   Fast-Forward mit Zustimmung des Betreibers vom 16.10.2026, alle Prüfungen auf `main` grün). An der
+   Anlage folgt die
    **Inbetriebnahme Punkt 3** (Design 2c-2, 11.1): Die Erkennung läuft im Dry-Run mit, und Health
    zeigt, wer wo steht. Sie braucht nicht 2d, nur die ausgerollten Images; die Schritte stehen unter
    „Offen an der Anlage“.
@@ -893,6 +1003,15 @@ Demo-Zugänge: `admin`, `bedienen` (Bedienen), `gast` (Lesen) und `sicher` (Admi
      `boost_until` oder `wallbox` nennt. Die app schickt deshalb einen abgelaufenen Boost nicht
      zurück (`IntentService`, Betriebshandbuch 13, „Absicht und Regelbetrieb“); wer eine Absicht
      per `curl` sendet, lässt beides weg, wo es nicht mehr gelten soll.
+5. **Plan 3a** (Tarif und Prognosen) ist umgesetzt und im Gesamtreview geprüft (Kurzfassung), die
+   Fix-Welle danach ist umgesetzt. Es folgen:
+   - die **Integration auf `main`** (Fast-Forward, Tests auf `main`, dann Push; nur mit Zustimmung des
+     Betreibers)
+   - danach der **Plan 3b** „Optimierer und Zeitplan“ (Phase 3, Punkt 3 oben): Brainstorming, Plan,
+     Freigabe des Betreibers, Umsetzung
+   - an der Anlage das **gemeinsame Ausrollen von 2d und 3a**, sobald 3a auf `main` ist (Punkt „Zu 3a
+     gehört“ unter „Offen an der Anlage“), und die Antwort des Betreibers auf die Frage nach der
+     HA-Entität der Hauslast
 
 ## Hinweise für die Pläne 2c-2 und 2d
 
@@ -1547,3 +1666,103 @@ Aufgeschobene Kleinigkeiten aus Plan 2d (aus den Reviews; keine davon gefährdet
   Anstecken). Der Simulator beschriftet Boost-Sekunden nach der Absicht, nicht nach der Regelung.
 - **Tests:** Einige Prüfungen greifen auf interne Felder zu (`_acks`), die Zeitstempel-Ersetzung der
   fremden Entscheidung ist nur über den Ablauf getestet.
+
+Entschieden in Plan 3a; die Rulings stehen im Ledger der Umsetzung und, soweit sie das Verhalten
+betreffen, im Plan (Präzisierungen) und in den Absätzen „Stand Plan 3a“ der Spec. Hier die
+Entscheidungen mit Kosten, falls sie falsch sind:
+
+- **Jede Task lässt das ganze Repository grün:** Task 1 weitet schon das UI-Schema der
+  Tarifbestandteile (`v.variant('kind', …)`) und schreibt die Vertragsdateien neu; der Plan hatte das
+  für Task 4 vorgesehen und Tasks 1 bis 3 rot gelassen. Falls falsch: etwas UI-Arbeit wandert zwischen
+  den Tasks.
+- **Texte im Tarif-Editor:** Der Plan gilt für das UI, auch wo der Server anders formuliert (Viertelstunde:
+  „Uhrzeit auf einer Viertelstunde, z. B. 10:15“). Zusätzliche Prüftexte, die der Plan nicht listet
+  („Name eingeben“, „Höchstens 80 Zeichen“, „Datum wählen“, „Wert größer 0“, „Wert ab N“, „Wert von 0 bis
+  100“), spiegeln Prüfungen des Servers. Falls falsch: nur Wortlaute.
+- **Abgelehntes Speichern:** Der Hinweis „Bitte die markierten Felder prüfen.“ steht nicht im Plan, ist
+  aber nötig, damit ein gescheiterter Speichervorgang neben „Speichern“ etwas zeigt. Falls falsch: ein
+  Text.
+- **„Neu bewerten“:** Das Formular wird gleich nach dem Speichern geprüft, nicht erst nach dem
+  Neuladen; es ist seit Phase 1c Zustand der Seite. Falls falsch: nur die Erwartung im E2E-Test.
+- **HA-Historie mit Vorlauf:** Die Abfrage holt für jede Entität den letzten Wert vor dem Zeitraum
+  (Seed), denn HA schreibt nur bei Änderung, und eine ruhende Wallbox (abzuziehende Entität) hat tagelang
+  keinen Punkt; sonst fiele jeder Slot weg und `subtract` nützte nichts. Der Review stufte das von
+  „Minor“ auf „Important“ hoch. Falls falsch: eine Seed-Abfrage mehr je Neuaufbau.
+- **Zahlen im UI:** Negative Leistungen stehen mit dem ASCII-Minus aus `format.ts` („-80 W“), nicht mit
+  „−80 W“ wie im Plan, denn `format.ts` ist der verbindliche Formatierer. Falls falsch: ein Formatierer
+  für das ganze UI.
+- **Fix-Welle nach dem Gesamtreview:** Sie nahm den wichtigen Befund (Tageserlös der Einspeisung
+  ignorierte die Zeitfenster) und drei kleine Punkte (Beschriftung „Heute (ab jetzt)“, Stufe und
+  Mindestverrechnung in der Tarifansicht, ElWG-Vorlage mit Name und Beginn 1.1.2027). Der dritte
+  verhindert, dass ein Leistungspreis still für 2026 gilt, wenn 3b damit rechnet. Falls falsch: drei
+  kleine UI-Änderungen zurücknehmen.
+- **Tageserlös ohne Export:** Ein Tag ohne Einspeisung und ohne OeMAG-Wert meldet Erlös 0,0 statt
+  `None`, wie `cost_eur` an Tagen ohne Bezug. Falls falsch: eine Bedingung in `_summary`.
+- **`newComponent` mit `existingKinds`:** Der Parameter ist Pflicht; der erste Leistungspreis wird zur
+  ElWG-Vorlage, und kein Aufrufer löst sie aus Versehen aus. Falls falsch: eine Signatur in einer
+  Hilfsfunktion.
+
+Aufgeschobene Kleinigkeiten aus Plan 3a (aus den Reviews; keine davon gefährdet die Anlage; das
+Ledger nennt sie nach Task):
+
+- **Zwei Fälle, die an der Anlage zählen** (Gesamtreview, M4 und M5):
+  - Der Nachtlauf um 02:30 fällt in der Nacht der Zeitumstellung im März aus (die Stunde gibt es nicht;
+    der Plan schreibt 02:30 vor); der nächste Lauf holt es nach.
+  - `fill(previous)` der HA-Abfrage trägt Werte über lange Ausfälle von Home Assistant fort; der Median
+    dämpft es. Dazu die Risiken unter „Offen an der Anlage“, „Zu 3a gehört“.
+- **Tarif, Server:**
+  - `PowerComponent.tier_kw` lässt unendlich zu (so im Plan).
+  - Die Fehlerpfade des Servers tragen den Tag der Union (`tariff.components.2.energy_per_kwh.value_ct`);
+    das UI schneidet ihn ab.
+  - Ein Einspeise- oder Gebührenbestandteil ohne Wert zählt in der Rechnung still 0; die Warnung der
+    Einstellungen („hat noch keinen Wert“) deckt alle Arten ab.
+  - Es fehlen Tests für den letzten gültigen Tag (einschließlich) bei Gebühren und Leistungspreis und
+    für den Wechsel Dezember zu Januar in `month_peak`; die Verdrahtung von `month_peak` in
+    `runtime._build_ha_inputs` ist ungetestet, und ein Kommentar im ersten Test von `month_peak` ist
+    unglücklich umbrochen.
+- **Tarif-Editor im UI:**
+  - Das Datum prüft nur die Form (2026-13-45 geht durch den Client; der Server lehnt es ab).
+  - Der Wert eines Zeitfensters heißt nur „Wert“ (nicht nach dem Modus), und die Einheit steht
+    außerhalb des Labels.
+  - Die Auswahlgruppen und Schalter haben keine Gruppensemantik und kein `aria-describedby`.
+  - Eine Änderung der Struktur löscht alle Fehler, auch die der OeMAG-Felder; der Hinweis „Bitte die
+    markierten Felder prüfen.“ bleibt danach stehen.
+  - `focusFirstError` tut still nichts, wenn zu einem Fehlerschlüssel des Clients kein Element
+    gezeichnet ist.
+  - Die lokale Variable `window` in `WindowEditor` verdeckt das globale Objekt.
+  - Tests fehlen für: einen Spotbestandteil ohne Wert, Einspeise-Zeitfenster hin und zurück, das Ende
+    24:00.
+- **Tagestyp und Schätzpreise:**
+  - Kein Test für den Frühlingstag mit 92 Slots und für ein naives Datum in `slot_key` (ValueError).
+  - Kein Test für die Untergrenze `jetzt − 28 d` (einschließlich), für die Zeitumstellung (erster
+    Durchlauf von 02:00, Planung über einen Tag mit 100 Slots) und für einen einzigen Wert desselben
+    Tagestyps, der auf die Stufe über alle Tagestypen fällt.
+  - `planning(start < jetzt − 28 d)` kennt gespeicherte Preise vor dem Fenster nicht; es dient nur der
+    Vorausplanung (Hinweis im Docstring).
+- **Archiv, Kalibrierung, Prognosegüte:**
+  - Der Test der Zeitumstellung im Archiv füttert UTC-Schlüssel und übt die lokalen Falten nicht;
+    zwei Schlüssel für denselben Zeitpunkt würden die Zahl in `record` überzählen.
+  - Der Fixture der Strahlung ist künstlich (Docstring in `tests/unit/app/forecast/conftest.py`), und
+    Tests pinnen seine Literale (12,1; 11,5); `test_clearness_comes_from_first_plane` nutzt nur eine
+    Fläche; der Test des Archivfehlers prüft die Warnung nicht, und die Importe von `FIXTURE`
+    sind gemischt.
+  - Kalibrierung: Die Grenze des 30-Tage-Fensters ist ungetestet, Tests schreiben `service._cfg`, und
+    `recalibrate` tut ohne Archiv still nichts.
+  - Der Nachtlauf wartet höchstens 60 s auf die Kalibrierung, und das Budget umfasst die Güte;
+    löst eine Ausnahme vor dem `try/finally` aus, bleibt das Ereignis bis zum Neustart ungesetzt. Der
+    Test der Wartezeit schläft echte 50 ms. Es fehlt ein Test der Zeitumstellung für
+    `ForecastQuality.update`, und die Konstanten in `runtime.py` hat der Formatter umbrochen (Kommentare
+    stehen darüber).
+- **Lastprognose und HA-Historie:**
+  - Ein Lesefehler aus Home Assistant steht nur im Log, der Status bleibt `ok`.
+  - `_ha_ok` ist ein Nebeneffekt der öffentlichen `history()`; die Reihen beider Schemata können sich
+    überlappen; ein leeres Profil wird stündlich neu gebaut (gewollt, Kommentar); ein ungenutzter
+    `monkeypatch`-Parameter; `LoadForecast.p50_w` ist ein veränderliches Dict.
+  - Der Seed mit zwei `last()`-Selektoren kann bei einer Entität in beiden Schemata eine der Reihen
+    wählen; eine HA-Entität, die länger als 7 Tage schweigt, fällt weiter weg.
+- **UI der Prognosen:**
+  - Die Höhe des Bandes `P75 − P25` ist nicht auf 0 begrenzt; ungetestet sind der Ausschluss von „PV P25“
+    in der Legende und verschiedene x-Punkte der Reihen.
+- **Doku:**
+  - Im Betriebshandbuch fehlt beim Band die Schwellenangabe, „`fill(previous)` auf dem Einheitenfeld“
+    ist ungenau formuliert, und die Zeile 3b der Tabelle in Spec 18 kürzt den freigegebenen Wortlaut.
