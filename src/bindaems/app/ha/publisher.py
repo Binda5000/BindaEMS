@@ -51,7 +51,9 @@ class HaTransport(Protocol):
 
     async def subscribe(self, topic: str) -> None: ...
 
-    def messages(self) -> AsyncIterator[tuple[str, bytes]]: ...
+    def messages(self) -> AsyncIterator[tuple[str, bytes, bool]]:
+        """Eingehende Nachrichten als (Topic, Nutzlast, gehalten)."""
+        ...
 
 
 def _payload_bytes(payload: object) -> bytes:
@@ -96,9 +98,9 @@ class AiomqttHaTransport:
     async def subscribe(self, topic: str) -> None:
         await self._client.subscribe(topic, qos=QOS)
 
-    async def messages(self) -> AsyncIterator[tuple[str, bytes]]:
+    async def messages(self) -> AsyncIterator[tuple[str, bytes, bool]]:
         async for message in self._client.messages:
-            yield str(message.topic), _payload_bytes(message.payload)
+            yield str(message.topic), _payload_bytes(message.payload), bool(message.retain)
 
 
 def _cause(exc: BaseException) -> str:
@@ -194,11 +196,14 @@ class HaPublisher:
 
     async def _listen(self, transport: HaTransport, lock: asyncio.Lock) -> None:
         birth = f"{self._cfg.discovery_prefix}/status"
-        async for topic, payload in transport.messages():
+        async for topic, payload, retained in transport.messages():
             if topic == birth and payload.strip() == b"online":
                 async with lock:
                     await self._publish_all(transport)  # HA neu gestartet
             elif self._commands is not None and topic.startswith(self._command_prefix):
+                if retained:  # ein gehaltener Befehl käme bei jeder Verbindung wieder
+                    log.warning("Gehaltener Befehl ignoriert", topic=topic)
+                    continue
                 await self._command(transport, lock, topic[len(self._command_prefix) :], payload)
         raise ConnectionError("Nachrichtenstrom beendet")  # neu verbinden
 

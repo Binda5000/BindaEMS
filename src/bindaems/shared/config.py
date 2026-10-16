@@ -8,6 +8,7 @@ Umgebungsvariablen mit dem Präfix ``BINDAEMS_``.
 from __future__ import annotations
 
 import ipaddress
+import re
 from pathlib import Path
 from typing import Annotated, Any, Literal, Self
 
@@ -30,6 +31,38 @@ _DEFAULT_PHASE_MAP: PhaseMap = ("L1", "L2", "L3")
 # ``guest@<Wallbox>`` als Schlüssel. Ein Fahrzeug darf nicht so heißen.
 _GUEST_KEY = "guest"
 _GUEST_PREFIX = f"{_GUEST_KEY}@"
+# Die Auswahl der Zuordnung in Home Assistant heißt „Automatisch“ oder trägt einen Fahrzeugnamen;
+# kein Fahrzeug darf so heißen (app.ha.entities und app.ha.commands bilden die Namen zurück ab).
+ASSIGNMENT_AUTOMATIC = "Automatisch"
+# Objekt-IDs der Entitäten in Home Assistant (app.ha.entities). Die Konfiguration prüft damit, dass
+# Schlüssel von Fahrzeugen und Wallboxes keine Entität doppeln; ein Test hält die Listen gleich.
+HA_SYSTEM_IDS = (
+    "price_now",
+    "feed_in_price",
+    "pv_forecast_today",
+    "pv_forecast_tomorrow",
+    "grid_power",
+    "pv_power",
+    "battery_power",
+    "house_power",
+    "battery_soc",
+    "ems_mode",
+    "core_online",
+    "problem_competitor",
+    "problem_prices",
+    "problem_device_offline",
+    "watchdog_tripped",
+    "regulation",
+    "guest_mode",
+    "problem_assignment_unclear",
+)
+HA_VEHICLE_SUFFIXES = ("soc", "mode", "boost", "boost_stop", "wallbox")
+HA_WALLBOX_SUFFIXES = ("power", "assignment", "occupant")
+
+
+def ha_object_id(key: str) -> str:
+    """Schlüssel aus ``config.yaml`` als Objekt-ID in Home Assistant (``a-z``, ``0-9``, ``_``)."""
+    return re.sub(r"[^a-z0-9_]+", "_", key.lower()).strip("_") or "x"
 
 
 class _Model(BaseModel):
@@ -226,6 +259,17 @@ class VehicleConfig(_Model):
     # ``home_signal`` (Plan 2c-2b, Design 3.2)
     home_entity: str | None = None
     home_radius_m: Annotated[float, Field(gt=0)] = 150.0
+
+    @field_validator("name")
+    @classmethod
+    def _usable_name(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("name darf nicht leer sein")
+        if value != value.strip():
+            raise ValueError("name darf nicht mit Leerzeichen beginnen oder enden")
+        if value.casefold() == ASSIGNMENT_AUTOMATIC.casefold():
+            raise ValueError(f"„{ASSIGNMENT_AUTOMATIC}“ ist in der Zuordnung vorbehalten")
+        return value
 
     @model_validator(mode="after")
     def _min_below_max(self) -> Self:
@@ -449,6 +493,47 @@ class Config(_Model):
         return self
 
     @model_validator(mode="after")
+    def _vehicle_names_are_unique(self) -> Self:
+        """Namen sind die Optionen der Zuordnung und müssen sich eindeutig zurückabbilden lassen."""
+        seen: dict[str, str] = {}
+        for key, vehicle in self.vehicles.items():
+            folded = vehicle.name.casefold()
+            if folded in seen:
+                raise ValueError(
+                    f"vehicles.{key}.name: „{vehicle.name}“ gibt es schon bei "
+                    f"vehicles.{seen[folded]} (Groß- und Kleinschreibung zählt nicht)"
+                )
+            seen[folded] = key
+        return self
+
+    @model_validator(mode="after")
+    def _ha_object_ids_are_unique(self) -> Self:
+        """Schlüssel dürfen in Home Assistant keine Entität und kein Gerät doppeln."""
+        owners = {object_id: "den Entitäten des Systems" for object_id in HA_SYSTEM_IDS}
+        keys: dict[str, str] = {}
+        for kind, entries, suffixes in (
+            ("vehicles", self.vehicles, HA_VEHICLE_SUFFIXES),
+            ("wallboxes", self.wallboxes, HA_WALLBOX_SUFFIXES),
+        ):
+            for key in entries:
+                oid = ha_object_id(key)
+                if oid in keys:
+                    raise ValueError(
+                        f"{kind}.{key}: Objekt-ID „{oid}“ in Home Assistant gehört schon zu "
+                        f"{keys[oid]}"
+                    )
+                keys[oid] = f"{kind}.{key}"
+                for suffix in suffixes:
+                    entity = f"{oid}_{suffix}"
+                    if entity in owners:
+                        raise ValueError(
+                            f"{kind}.{key}: Die Entität „{entity}“ in Home Assistant gehört "
+                            f"schon zu {owners[entity]}"
+                        )
+                    owners[entity] = f"{kind}.{key}"
+        return self
+
+    @model_validator(mode="after")
     def _import_margin_below_import_limit(self) -> Self:
         if self.control.import_margin_a >= self.grid.import_limit_a:
             raise ValueError("control.import_margin_a muss kleiner als grid.import_limit_a sein")
@@ -489,6 +574,16 @@ class Config(_Model):
         if self.wallbox_priority is not None:
             return list(self.wallbox_priority)
         return list(self.wallboxes)
+
+
+def ha_object_ids(cfg: Config) -> list[str]:
+    """Objekt-IDs aller Entitäten, die ``app.ha.entities`` für diese Konfiguration baut."""
+    ids = list(HA_SYSTEM_IDS)
+    for key in cfg.vehicles:
+        ids += [f"{ha_object_id(key)}_{suffix}" for suffix in HA_VEHICLE_SUFFIXES]
+    for key in cfg.wallboxes:
+        ids += [f"{ha_object_id(key)}_{suffix}" for suffix in HA_WALLBOX_SUFFIXES]
+    return ids
 
 
 def home_signal(vehicle: str) -> str:

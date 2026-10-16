@@ -27,7 +27,7 @@ class FakeTransport:
 
     def __init__(
         self,
-        incoming: Iterable[tuple[str, bytes]],
+        incoming: Iterable[tuple[str, bytes] | tuple[str, bytes, bool]],
         fail_first_connection: bool,
         interval: float,
         stream_error: Exception | None = None,
@@ -64,7 +64,8 @@ class FakeTransport:
         self.streams += 1
         incoming, self._incoming = self._incoming, []
         for item in incoming:
-            yield item
+            topic, payload, *retained = item  # ohne Angabe: nicht gehalten
+            yield topic, payload, bool(retained and retained[0])
         if self.streams == 1 and self._stream_error is not None:
             raise self._stream_error  # laufende Verbindung bricht ab
         if self.streams == 1 and self._stream_ends:
@@ -128,7 +129,7 @@ def forecast_service() -> FakeForecast:
 @pytest.fixture
 def publisher_env(cfg):
     def build(
-        incoming: Iterable[tuple[str, bytes]] = (),
+        incoming: Iterable[tuple[str, bytes] | tuple[str, bytes, bool]] = (),
         fail_first_connection: bool = False,
         stream_error: Exception | None = None,
         stream_ends: bool = False,

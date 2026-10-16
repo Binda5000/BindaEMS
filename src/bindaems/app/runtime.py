@@ -256,7 +256,13 @@ class AppRuntime:
 
     def _build_ha_inputs(self, intent: Intent | None) -> HaInputs:
         return build_inputs(
-            self.live, self.prices, self.price_store, self.forecast, self._clock.now(), intent
+            self.live,
+            self.prices,
+            self.price_store,
+            self.forecast,
+            self._clock.now(),
+            intent,
+            self.settings.current().settings.wallbox_names,
         )
 
     async def _ha_intent(self) -> Intent | None:

@@ -319,7 +319,7 @@ def test_wallbox_and_occupant_sensors_follow_health(cfg) -> None:
             {"id": "twc", "occupant": "guest", "name": "Gast", "assignment": "guest"},
         ],
     )
-    assert state(cfg, "tesla_wallbox", inputs) == "evcs"
+    assert state(cfg, "tesla_wallbox", inputs) == "EVCS"
     assert state(cfg, "egolf_wallbox", inputs) == "keine"
     assert state(cfg, "evcs_occupant", inputs) == "Tesla Model 3"
     assert state(cfg, "twc_occupant", inputs) == "Gast"
@@ -327,6 +327,32 @@ def test_wallbox_and_occupant_sensors_follow_health(cfg) -> None:
     assert state(cfg, "evcs_occupant", empty) == "keins"
     assert state(cfg, "twc_occupant", empty) == "None"  # nicht im Health: unbekannt
     assert state(cfg, "tesla_wallbox", sample_inputs()) == "None"
+
+
+def test_wallbox_sensor_shows_the_display_name(cfg) -> None:
+    # wie im UI: der eigene Name aus den Einstellungen, sonst die Art der Ladestation
+    vehicles = [{"id": "tesla", "wallbox": "evcs"}, {"id": "egolf", "wallbox": "twc"}]
+    plain = sample_inputs(vehicles=vehicles)
+    assert (state(cfg, "tesla_wallbox", plain), state(cfg, "egolf_wallbox", plain)) == (
+        "EVCS",
+        "Wall Connector",
+    )
+    named = sample_inputs(vehicles=vehicles, wallbox_names={"evcs": "Garage links"})
+    assert (state(cfg, "tesla_wallbox", named), state(cfg, "egolf_wallbox", named)) == (
+        "Garage links",
+        "Wall Connector",
+    )
+    unknown = sample_inputs(vehicles=[{"id": "tesla", "wallbox": "weg"}])
+    assert (
+        state(cfg, "tesla_wallbox", unknown) == "weg"
+    )  # nicht in der Konfiguration: der Schlüssel
+
+
+def test_build_inputs_takes_the_wallbox_names(live, price_service, store, forecast_service) -> None:
+    inputs = build_inputs(
+        live, price_service, store, forecast_service, T_APP, wallbox_names={"evcs": "Garage"}
+    )
+    assert inputs.wallbox_names == {"evcs": "Garage"}
 
 
 def test_assignment_unclear_problem(cfg) -> None:
@@ -358,3 +384,16 @@ def test_build_inputs_takes_intent_vehicles_and_wallboxes(
     live.connected = False
     gone = build_inputs(live, price_service, store, forecast_service, T_APP)
     assert (gone.intent, gone.vehicles, gone.wallboxes) == (None, [], [])
+
+
+def test_config_and_entities_agree_on_object_ids(cfg) -> None:
+    # Die Konfiguration prüft Kollisionen mit ihrer eigenen Liste der Objekt-IDs; sie muss stimmen
+    from bindaems.shared.config import ha_object_ids
+
+    assert sorted(ha_object_ids(cfg)) == sorted(e.object_id for e in build_entities(cfg))
+
+
+def test_building_entities_fails_loudly_on_a_duplicate_object_id(cfg) -> None:
+    broken = cfg.model_copy(update={"vehicles": {**cfg.vehicles, "Tesla": cfg.vehicles["tesla"]}})
+    with pytest.raises(ValueError, match="tesla_soc"):
+        build_entities(broken)

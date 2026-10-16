@@ -1,4 +1,5 @@
 import pytest
+from structlog.testing import capture_logs
 from tests.unit.app.control.conftest import FakeCoreClient, FakeFeed
 
 from bindaems.app.audit import AuditLog
@@ -215,13 +216,19 @@ async def test_other_failures_become_notifications(
 
 async def test_unexpected_errors_do_not_escape(handler, intents, rejections) -> None:
     intents.error = RuntimeError("kaputt")
-    await handler("regulation", "ON")
+    with capture_logs() as logs:
+        await handler("regulation", "ON")
     assert rejections.texts == []
+    assert [(e["event"], e["log_level"], e["object_id"]) for e in logs] == [
+        ("Befehl aus Home Assistant fehlgeschlagen", "error", "regulation")
+    ]
 
 
 async def test_a_failing_notification_does_not_escape(handler, rejections) -> None:
     rejections.error = RuntimeError("HA nicht erreichbar")
-    await handler("tesla_mode", "Turbo")
+    with capture_logs() as logs:
+        await handler("tesla_mode", "Turbo")
+    assert [(e["event"], e["log_level"]) for e in logs] == [("Ablehnung nicht gemeldet", "error")]
 
 
 async def test_home_assistant_only_gets_operator_changes(handler, intents, clock) -> None:
@@ -237,7 +244,46 @@ async def test_home_assistant_only_gets_operator_changes(handler, intents, clock
 
 
 async def test_log_rejections_only_logs() -> None:
-    await LogRejections().reject(PREFIX + "x")
+    with capture_logs() as logs:
+        await LogRejections().reject(PREFIX + "x")
+    assert logs == [
+        {
+            "event": "Befehl aus Home Assistant abgelehnt",
+            "text": PREFIX + "x",
+            "log_level": "warning",
+        }
+    ]
+
+
+async def test_a_clock_that_jumps_back_does_not_block_commands(handler, intents, clock) -> None:
+    clock.advance(10.0)
+    await handler("regulation", "ON")
+    clock.advance(-5.0)  # die Uhr springt zurück: der letzte Befehl liegt „in der Zukunft“
+    await handler("regulation", "OFF")
+    assert [change for change, _, _ in intents.applied] == [SetControl(True), SetControl(False)]
+
+
+async def test_the_payload_in_a_rejection_is_cleaned_and_truncated(
+    handler, rejections, clock
+) -> None:
+    await handler("tesla_mode", "Tur\nbo\x00\u202e")
+    clock.advance(1.0)
+    await handler("tesla_mode", "x" * 64)
+    clock.advance(1.0)
+    await handler("tesla_mode", "y" * 65)
+    assert rejections.texts == [
+        PREFIX + "Unbekannte Option „Turbo“ für „Lademodus“.",
+        PREFIX + f"Unbekannte Option „{'x' * 64}“ für „Lademodus“.",
+        PREFIX + f"Unbekannte Option „{'y' * 64}…“ für „Lademodus“.",
+    ]
+
+
+async def test_commands_for_unknown_entities_are_only_debug_logged(handler) -> None:
+    with capture_logs() as logs:
+        await handler("nothing", "ON")
+    assert [(e["event"], e["log_level"]) for e in logs] == [
+        ("Befehl für unbekannte Entität", "debug")
+    ]
 
 
 async def test_command_through_the_real_service_is_audited_as_ha(

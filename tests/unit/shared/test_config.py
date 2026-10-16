@@ -500,6 +500,64 @@ def test_a_vehicle_key_may_merely_contain_guest(tmp_path) -> None:
     assert "guest_car" in load_config(write_cfg(tmp_path, mutate)).vehicles
 
 
+def _rename(vehicle: str, name: str) -> Callable[[dict[str, Any]], None]:
+    def mutate(d: dict[str, Any]) -> None:
+        d["vehicles"][vehicle]["name"] = name
+
+    return mutate
+
+
+@pytest.mark.parametrize(
+    ("name", "message"),
+    [
+        ("", r"vehicles\.egolf\.name: .*nicht leer"),
+        ("   ", r"vehicles\.egolf\.name: .*nicht leer"),
+        (" e-Golf", r"vehicles\.egolf\.name: .*Leerzeichen"),
+        ("e-Golf\n", r"vehicles\.egolf\.name: .*Leerzeichen"),
+        ("Automatisch", r"vehicles\.egolf\.name: .*Automatisch.*vorbehalten"),
+        ("AUTOMATISCH", r"vehicles\.egolf\.name: .*Automatisch.*vorbehalten"),
+        ("tesla model 3", r"vehicles\.tesla\.name: .*vehicles\.egolf"),
+        ("TESLA MODEL 3", r"vehicles\.tesla\.name: .*vehicles\.egolf"),
+    ],
+)
+def test_vehicle_names_must_be_usable_as_options(tmp_path, name, message) -> None:
+    # Die Auswahl der Zuordnung in Home Assistant bildet Namen auf Fahrzeuge ab
+    with pytest.raises(ConfigError, match=message):
+        load_config(write_cfg(tmp_path, _rename("egolf", name)))
+
+
+def test_vehicle_names_may_differ_in_more_than_case(tmp_path) -> None:
+    loaded = load_config(write_cfg(tmp_path, _rename("egolf", "Tesla Model 4")))
+    assert loaded.vehicles["egolf"].name == "Tesla Model 4"
+
+
+def test_vehicle_keys_must_not_collide_as_ha_object_ids(tmp_path) -> None:
+    def mutate(d: dict[str, Any]) -> None:
+        d["vehicles"]["Tesla"] = d["vehicles"].pop("egolf")  # gleiche Objekt-ID wie „tesla“
+
+    with pytest.raises(ConfigError, match=r"vehicles\.tesla: .*Objekt-ID .*tesla.*vehicles\.Tesla"):
+        load_config(write_cfg(tmp_path, mutate))
+
+
+def test_a_vehicle_key_must_not_collide_with_a_wallbox_key(tmp_path) -> None:
+    def mutate(d: dict[str, Any]) -> None:
+        d["vehicles"]["twc"] = d["vehicles"].pop("egolf")
+        d["vehicles"]["twc"]["default_wallbox"] = "twc"
+
+    with pytest.raises(ConfigError, match=r"wallboxes\.twc: .*Objekt-ID .*twc.*vehicles\.twc"):
+        load_config(write_cfg(tmp_path, mutate))
+
+
+@pytest.mark.parametrize(("key", "entity"), [("Guest", "guest_mode"), ("battery", "battery_soc")])
+def test_a_vehicle_key_must_not_collide_with_a_system_entity(tmp_path, key, entity) -> None:
+    # „Guest“ ergäbe die Entität guest_mode des Fahrzeugs neben dem Gast-Lademodus des Systems
+    def mutate(d: dict[str, Any]) -> None:
+        d["vehicles"][key] = d["vehicles"].pop("egolf")
+
+    with pytest.raises(ConfigError, match=rf"vehicles\.{key}: .*{entity}"):
+        load_config(write_cfg(tmp_path, mutate))
+
+
 def test_reserve_defaults_to_four() -> None:
     assert load_config(EXAMPLE).control.tesla_reserve_commands == 4
 

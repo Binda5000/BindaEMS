@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import json
 import math
-import re
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
@@ -21,7 +20,14 @@ from bindaems.app.forecast.service import ForecastService
 from bindaems.app.prices.pipeline import TOMORROW_EXPECTED_FROM
 from bindaems.app.prices.service import PriceService
 from bindaems.app.prices.store import PriceStore
-from bindaems.shared.config import Config, EvcsConfig, HaMqttConfig
+from bindaems.shared.config import (
+    ASSIGNMENT_AUTOMATIC,
+    Config,
+    EvcsConfig,
+    HaMqttConfig,
+    WallboxConfig,
+    ha_object_id,
+)
 from bindaems.shared.control import ChargeMode, Intent, VehicleIntent
 from bindaems.shared.domain import Value
 from bindaems.shared.timeutil import LOCAL_TZ, slot_start
@@ -38,7 +44,7 @@ MODE_LABELS: Final[dict[ChargeMode, str]] = {
     ChargeMode.NOW: "Sofort",
     ChargeMode.OFF: "Aus",
 }
-AUTOMATIC: Final = "Automatisch"  # Zuordnung ohne Übersteuerung
+AUTOMATIC: Final = ASSIGNMENT_AUTOMATIC  # Zuordnung ohne Übersteuerung
 NO_WALLBOX: Final = "keine"
 NO_VEHICLE: Final = "keins"
 UNCLEAR: Final = "unclear"  # ``assignment`` in Health
@@ -72,6 +78,7 @@ class HaInputs:
     intent: Intent | None = None  # gültige Absicht; None = unbekannt
     vehicles: list[dict[str, Any]] = field(default_factory=list)  # Health ``vehicles``
     wallboxes: list[dict[str, Any]] = field(default_factory=list)  # Health ``wallboxes``
+    wallbox_names: dict[str, str] = field(default_factory=dict)  # eigene Namen der Wallboxes
 
 
 @dataclass(frozen=True)
@@ -107,9 +114,9 @@ def on_off(value: bool | None) -> str:
     return "ON" if value else "OFF"
 
 
-def object_id(key: str) -> str:
-    """Schlüssel aus ``config.yaml`` als Objekt-ID (nur ``a-z``, ``0-9`` und ``_``)."""
-    return re.sub(r"[^a-z0-9_]+", "_", key.lower()).strip("_") or "x"
+object_id = (
+    ha_object_id  # Schlüssel aus ``config.yaml`` als Objekt-ID (nur ``a-z``, ``0-9``, ``_``)
+)
 
 
 def _derived_w(key: str) -> Callable[[HaInputs], str]:
@@ -177,13 +184,25 @@ def _assignment_state(cfg: Config, wallbox: str) -> Callable[[HaInputs], str]:
     return value
 
 
-def _vehicle_wallbox(key: str) -> Callable[[HaInputs], str]:
+def wallbox_type_label(wallbox: WallboxConfig) -> str:
+    """Art der Ladestation, wie das UI sie nennt, wenn kein eigener Name eingestellt ist."""
+    return "EVCS" if isinstance(wallbox, EvcsConfig) else "Wall Connector"
+
+
+def _vehicle_wallbox(cfg: Config, key: str) -> Callable[[HaInputs], str]:
+    """Anzeigename der Wallbox des Fahrzeugs wie im UI: eigener Name, sonst die Art."""
+
     def value(inputs: HaInputs) -> str:
         item = _entry(inputs.vehicles, key)
         if item is None:
             return UNKNOWN
         wallbox = item.get("wallbox")
-        return wallbox if isinstance(wallbox, str) else NO_WALLBOX
+        if not isinstance(wallbox, str):
+            return NO_WALLBOX
+        if wallbox in inputs.wallbox_names:
+            return inputs.wallbox_names[wallbox]
+        known = cfg.wallboxes.get(wallbox)
+        return wallbox_type_label(known) if known is not None else wallbox
 
     return value
 
@@ -392,12 +411,12 @@ def build_entities(cfg: Config) -> list[EntitySpec]:
             ),
             _control(f"{oid}_boost", "button", "Boost", device, lambda _: ""),
             _control(f"{oid}_boost_stop", "button", "Boost beenden", device, lambda _: ""),
-            EntitySpec(f"{oid}_wallbox", "sensor", "Wallbox", device, _vehicle_wallbox(key)),
+            EntitySpec(f"{oid}_wallbox", "sensor", "Wallbox", device, _vehicle_wallbox(cfg, key)),
         ]
     options = (AUTOMATIC, *(vehicle.name for vehicle in cfg.vehicles.values()))
     for key, wallbox in cfg.wallboxes.items():
         oid = object_id(key)
-        label = "EVCS" if isinstance(wallbox, EvcsConfig) else "Wall Connector"
+        label = wallbox_type_label(wallbox)
         device = DeviceSpec(f"{NODE_ID}_{oid}", f"BindaEMS {label}", label)
         entities += [
             _power(f"{oid}_power", "Ladeleistung", device, _wallbox_w(key)),
@@ -411,6 +430,10 @@ def build_entities(cfg: Config) -> list[EntitySpec]:
             ),
             EntitySpec(f"{oid}_occupant", "sensor", "Fahrzeug", device, _occupant(key)),
         ]
+    ids = [spec.object_id for spec in entities]
+    for oid in ids:
+        if ids.count(oid) > 1:  # die Konfiguration schließt das aus; hier nie still doppeln
+            raise ValueError(f"Objekt-ID „{oid}“ gehört zu mehreren Entitäten")
     return entities
 
 
@@ -469,6 +492,7 @@ def build_inputs(
     forecast: ForecastService,
     now: datetime,
     intent: Intent | None = None,
+    wallbox_names: Mapping[str, str] | None = None,
 ) -> HaInputs:
     connected = live.connected
     signals: dict[str, Value] = {}
@@ -526,4 +550,5 @@ def build_inputs(
         intent=intent,
         vehicles=_dicts(vehicles),
         wallboxes=_dicts(wallboxes),
+        wallbox_names=dict(wallbox_names or {}),
     )

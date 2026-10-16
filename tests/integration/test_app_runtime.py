@@ -70,7 +70,7 @@ class SilentBroker:
 
     async def messages(self):
         await asyncio.Event().wait()
-        yield ("", b"")  # nie erreicht; macht die Methode zum Generator
+        yield ("", b"", False)  # nie erreicht; macht die Methode zum Generator
 
 
 def test_runtime_wires_routes_and_components(runtime) -> None:

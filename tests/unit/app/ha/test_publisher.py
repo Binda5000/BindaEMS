@@ -1,6 +1,8 @@
 import asyncio
 from collections.abc import Callable
 
+from structlog.testing import capture_logs
+
 from bindaems.app.ha.publisher import AiomqttHaTransport, HaPublisher, allowed_topic
 
 
@@ -222,3 +224,35 @@ async def test_unknown_or_stateless_entities_publish_no_state(publisher_env) -> 
         await asyncio.sleep(0)
     assert transport.count("bindaems/state/tesla_boost") == 0
     assert transport.count("bindaems/state/nothing") == 0
+
+
+async def test_retained_commands_are_ignored(publisher_env) -> None:
+    # Gehaltene Befehle kämen bei jedem Neustart und jeder neuen Verbindung wieder
+    commands = Commands()
+    publisher, transport = publisher_env(
+        incoming=[
+            ("bindaems/cmd/regulation", b"ON", True),
+            ("bindaems/cmd/guest_mode", b"Aus", False),
+        ],
+        commands=commands,
+    )
+    with capture_logs() as logs:
+        await run_publisher_until(publisher, lambda: commands.received)
+        for _ in range(50):
+            await asyncio.sleep(0)
+    assert commands.received == [("guest_mode", "Aus")]
+    assert (
+        transport.count("bindaems/state/regulation") == 1
+    )  # kein Befehl, keine Neuveröffentlichung
+    ignored = [entry for entry in logs if entry["event"] == "Gehaltener Befehl ignoriert"]
+    assert [entry["topic"] for entry in ignored] == ["bindaems/cmd/regulation"]
+
+
+async def test_commands_are_subscribed_again_after_a_reconnect(publisher_env) -> None:
+    publisher, transport = publisher_env(
+        stream_error=ConnectionError("Verbindung verloren"), commands=Commands()
+    )
+    await run_publisher_until(
+        publisher, lambda: transport.connections == 2 and publisher.component_status().ok
+    )
+    assert transport.subscriptions == ["homeassistant/status", "bindaems/cmd/+"] * 2

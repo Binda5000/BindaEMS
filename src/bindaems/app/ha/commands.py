@@ -9,6 +9,7 @@ gemeldet (``Rejections``); keine Ausnahme verlässt den Handler.
 
 from __future__ import annotations
 
+import unicodedata
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -37,6 +38,8 @@ from bindaems.shared.timeutil import Clock
 
 log = structlog.get_logger(__name__)
 
+PAYLOAD_MAX: Final = 64  # so viele Zeichen der Nutzlast nennt eine Ablehnung
+
 ACTOR: Final = "home-assistant"
 SOURCE: Final = "ha"
 RATE_S: Final = 1.0  # höchstens ein Befehl je Sekunde und Entität
@@ -56,6 +59,12 @@ class LogRejections:
 
     async def reject(self, text: str) -> None:
         log.warning("Befehl aus Home Assistant abgelehnt", text=text)
+
+
+def _shown(payload: str) -> str:
+    """Nutzlast für eine Meldung: ohne Steuerzeichen, auf ``PAYLOAD_MAX`` Zeichen gekürzt."""
+    text = "".join(char for char in payload if unicodedata.category(char)[0] != "C")
+    return text if len(text) <= PAYLOAD_MAX else text[:PAYLOAD_MAX] + "…"
 
 
 @dataclass(frozen=True)
@@ -123,18 +132,19 @@ class HaCommandHandler:
     async def __call__(self, object_id: str, payload: str) -> None:
         command = self._commands.get(object_id)
         if command is None:
-            log.warning("Befehl für unbekannte Entität", object_id=object_id)
+            log.debug("Befehl für unbekannte Entität", object_id=object_id)
             return
         now = self._clock.now()
         last = self._last.get(object_id)
-        if last is not None and now - last < timedelta(seconds=RATE_S):
+        # eine zurückgesprungene Uhr (negativer Abstand) zählt als abgelaufen
+        if last is not None and timedelta(0) <= now - last < timedelta(seconds=RATE_S):
             log.info("Befehl verworfen: zu schnell", object_id=object_id)
             return
         self._last[object_id] = now
         change = command.parse(payload)
         if change is None:
             unknown = "Unbekannte Option" if command.option else "Unbekannter Befehl"
-            await self._reject(f"{unknown} „{payload}“ für „{command.name}“.")
+            await self._reject(f"{unknown} „{_shown(payload)}“ für „{command.name}“.")
             return
         try:
             await self._intents.apply(change, actor=ACTOR, source=SOURCE)
