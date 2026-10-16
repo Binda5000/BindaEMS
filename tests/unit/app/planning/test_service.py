@@ -1,29 +1,36 @@
 """Tests des Planungslaufs: Eingangsdaten, Lösen, Plausibilität, Ersatzplan, Speicherung und
-Status (Plan 3b, Task 9)."""
+Status (Plan 3b, Task 9); Auslöser und Schleife des Dienstes (Task 10)."""
 
 from __future__ import annotations
 
 import asyncio
+import contextlib
 from collections.abc import Awaitable, Callable
 from dataclasses import replace
 from datetime import timedelta
 
 import pytest
-from tests.app_helpers import ingest
+from structlog.testing import capture_logs
+from tests.app_helpers import ingest, price_row
 from tests.plan_helpers import (
+    blocking_solver,
     flows_of,
     live_signals,
     month,
     resimulate,
     returns,
     scenario,
+    set_planning,
     small_battery,
+    until,
 )
 
 from bindaems.app.planning.inputs import PlanInputs
 from bindaems.app.planning.optimizer import OptimizerResult, solve
-from bindaems.app.planning.service import PlanningStatus, plan_once
-from bindaems.shared.plan import BatteryIntent
+from bindaems.app.planning.service import PlanningService, PlanningStatus, plan_once
+from bindaems.shared.plan import BatteryIntent, PlanTrigger
+from bindaems.shared.settings import PlanningSettings
+from bindaems.shared.timeutil import SLOT, ManualClock, slot_start
 
 Solver = Callable[[PlanInputs], Awaitable[OptimizerResult]]
 
@@ -166,6 +173,21 @@ async def test_store_error_is_reported_and_raised(service, store, monkeypatch):
         running=False, unavailable=None, last_error="Datenbank voll"
     )
     assert service.current() is None
+
+
+async def test_unavailable_clears_once_inputs_are_complete(service, store, live, monkeypatch):
+    live.connected = False
+    assert await service.replan("slot") is None
+    live.connected = True
+
+    def broken(*args, **kwargs):
+        raise RuntimeError("Datenbank voll")
+
+    monkeypatch.setattr(store, "save", broken)
+    with pytest.raises(RuntimeError):
+        await service.replan("slot")
+    assert service.status().unavailable is None  # die Eingangsdaten waren vollständig
+    assert service.component_status().message == "Noch kein Plan"
 
 
 # --- Eingangsdaten ----------------------------------------------------------------------------
@@ -333,3 +355,212 @@ def test_plan_once_optimizer_budget_uses_peaks():
     result = solve(inputs)
     plan = plan_once(inputs, replace(result, peaks_kw={"2026-10": 6.24}))
     assert plan.source == "optimizer" and plan.slots[0].budget_kw == 6.3
+
+
+# --- Auslöser und Schleife (Task 10) ---------------------------------------------------------
+
+
+def recording(calls: list[PlanInputs]) -> Solver:
+    """Solver, der die Eingangsdaten an ``calls`` hängt und im selben Prozess löst."""
+
+    async def solver(inputs: PlanInputs) -> OptimizerResult:
+        calls.append(inputs)
+        return await asyncio.to_thread(solve, inputs)
+
+    return solver
+
+
+def fast_sleep(clock: ManualClock | None = None) -> Callable[[float], Awaitable[None]]:
+    """Ersatz für das Warten der Schleife: kurz, auf Wunsch rückt die Uhr um die Wartezeit vor."""
+
+    async def sleep(seconds: float) -> None:
+        if clock is not None:
+            clock.advance(timedelta(seconds=seconds))
+        await asyncio.sleep(0.005)
+
+    return sleep
+
+
+@contextlib.asynccontextmanager
+async def running(service: PlanningService):
+    task = asyncio.create_task(service.run())
+    try:
+        yield task
+    finally:
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+
+
+def triggers(calls: list[PlanInputs]) -> list[PlanTrigger]:
+    return [inputs.trigger for inputs in calls]
+
+
+async def test_requests_during_solve_coalesce_into_one_rerun(service_with):
+    gate, calls = asyncio.Event(), []
+    service = service_with(solver=blocking_solver(gate, calls))
+    task = asyncio.create_task(service.run())
+    await until(lambda: len(calls) == 1)  # Lauf „start“ hängt
+    for trigger in ("prices", "pv_forecast", "manual"):
+        service.request(trigger)
+    gate.set()
+    await until(lambda: len(calls) == 2)
+    await asyncio.sleep(0.05)
+    assert [i.trigger for i in calls] == ["start", "manual"]
+    task.cancel()
+
+
+async def test_settings_change_requests_replan(service, settings_service):
+    set_planning(settings_service, PlanningSettings(grid_charge_allowed=True))
+    assert service.pending() == "settings"
+
+
+async def test_irrelevant_settings_change_requests_nothing(service, settings_service):
+    current = settings_service.current()
+    settings_service.update(
+        current.settings.model_copy(update={"wallbox_names": {"evcs": "Garage"}}),
+        base_version=current.version,
+        actor="test",
+        source="ui",
+    )
+    assert service.pending() is None
+
+
+def test_waiting_trigger_stays_unless_manual(service):
+    assert service.pending() is None
+    service.request("prices")
+    service.request("soc")
+    assert service.pending() == "prices"
+    service.request("manual")
+    service.request("slot")
+    assert service.pending() == "manual"
+
+
+async def test_run_plans_at_start(service_with, store):
+    calls: list[PlanInputs] = []
+    service = service_with(solver=recording(calls))
+    async with running(service):
+        await until(lambda: service.current() is not None)
+    assert triggers(calls) == ["start"] and store.latest().trigger == "start"
+    assert service.pending() is None
+
+
+async def test_run_takes_a_trigger_requested_before_the_start(service_with):
+    calls: list[PlanInputs] = []
+    service = service_with(solver=recording(calls))
+    service.request("manual")
+    async with running(service):
+        await until(lambda: len(calls) == 1)
+        await asyncio.sleep(0.05)
+    assert triggers(calls) == ["manual"]
+
+
+async def test_run_plans_one_minute_into_each_slot(service_with, clock):
+    calls: list[PlanInputs] = []
+    service = service_with(solver=recording(calls), sleep=fast_sleep(clock))
+    async with running(service):
+        await until(lambda: len(calls) == 2)
+    assert triggers(calls) == ["start", "slot"]
+    assert calls[1].created_at.isoformat() == "2026-10-16T10:16:00+00:00"  # 10:01 + 15 min
+
+
+async def test_new_pv_forecast_requests_replan(service_with, forecast):
+    calls: list[PlanInputs] = []
+    service = service_with(solver=recording(calls), sleep=fast_sleep())
+    async with running(service):
+        await until(lambda: len(calls) == 1)
+        await asyncio.sleep(0.05)  # die Schleife kennt den Fingerabdruck
+        newer = forecast.forecast.issued_at + timedelta(minutes=5)
+        forecast.forecast = replace(forecast.forecast, issued_at=newer)
+        await until(lambda: len(calls) == 2)
+    assert triggers(calls) == ["start", "pv_forecast"]
+
+
+async def test_new_prices_request_replan(service_with, price_store, clock):
+    calls: list[PlanInputs] = []
+    service = service_with(solver=recording(calls), sleep=fast_sleep())
+    async with running(service):
+        await until(lambda: len(calls) == 1)
+        await asyncio.sleep(0.05)
+        last = slot_start(clock.now()) + 96 * SLOT
+        price_store.save([price_row(last + i * SLOT, 12.0, "primary") for i in range(4)])
+        await until(lambda: len(calls) == 2)
+    assert triggers(calls) == ["start", "prices"]
+
+
+async def test_soc_deviation_requests_replan_once_per_slot(service_with, live):
+    calls: list[PlanInputs] = []
+    service = service_with(solver=recording(calls), sleep=fast_sleep())
+    async with running(service):
+        await until(lambda: len(calls) == 1)
+        live_signals(live, {"battery.soc_pct": 80.0})
+        await until(lambda: len(calls) == 2)
+        live_signals(live, {"battery.soc_pct": 20.0})  # im selben Slot nicht noch einmal
+        await asyncio.sleep(0.1)
+    assert triggers(calls) == ["start", "soc"]
+    assert calls[1].battery.soc_pct == 80.0
+
+
+async def test_month_peak_rise_requests_replan(service_with, ledger):
+    calls: list[PlanInputs] = []
+    service = service_with(solver=recording(calls), sleep=fast_sleep())
+    async with running(service):
+        await until(lambda: len(calls) == 1)
+        ingest(ledger, "2026-10-16T08:00:00+00:00", {"grid>house": 1000})  # 4 kW
+        await until(lambda: len(calls) == 2)
+        await asyncio.sleep(0.1)  # die neue Spitze steht im Plan: kein weiterer Lauf
+    assert triggers(calls) == ["start", "month_peak"] and calls[1].month_peak_kw == 4.0
+
+
+async def test_request_from_another_thread_wakes_the_loop(service_with):
+    calls: list[PlanInputs] = []
+    service = service_with(solver=recording(calls))  # wartet sonst 30 s
+    async with running(service):
+        await until(lambda: len(calls) == 1)
+        await asyncio.to_thread(service.request, "manual")
+        await until(lambda: len(calls) == 2)
+    assert triggers(calls) == ["start", "manual"]
+
+
+async def test_run_logs_errors_and_continues(service_with, store, monkeypatch):
+    save = store.save
+    failures = [RuntimeError("Datenbank gesperrt")]
+
+    def flaky(*args, **kwargs):
+        if failures:
+            raise failures.pop()
+        return save(*args, **kwargs)
+
+    monkeypatch.setattr(store, "save", flaky)
+    service = service_with()
+    with capture_logs() as logs:
+        async with running(service):
+            await until(lambda: service.status().last_error == "Datenbank gesperrt")
+            service.request("manual")
+            await until(lambda: service.current() is not None)
+    assert "Planungslauf fehlgeschlagen" in [entry["event"] for entry in logs]
+    assert service.current().trigger == "manual" and service.status().last_error is None
+
+
+async def test_cancel_stops_the_loop_during_a_run(service_with):
+    gate, calls = asyncio.Event(), []
+    service = service_with(solver=blocking_solver(gate, calls))
+    task = asyncio.create_task(service.run())
+    await until(lambda: len(calls) == 1)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert not service.status().running
+
+
+async def test_failed_watch_is_logged_and_the_run_still_plans(service_with, prices, monkeypatch):
+    def broken(start, end):
+        raise RuntimeError("Datenbank gesperrt")
+
+    monkeypatch.setattr(prices, "slots", broken)
+    service = service_with()
+    with capture_logs() as logs:
+        async with running(service):
+            await until(lambda: service.current() is not None)
+    assert "Auslöser der Planung nicht prüfbar" in [entry["event"] for entry in logs]
+    assert service.current().trigger == "start"

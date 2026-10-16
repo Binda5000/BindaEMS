@@ -51,6 +51,8 @@ from bindaems.app.history.routes import history_router
 from bindaems.app.history.series import build_catalog
 from bindaems.app.ledger.routes import ledger_router
 from bindaems.app.ledger.service import LedgerService
+from bindaems.app.planning.service import PlanningService
+from bindaems.app.planning.store import PlanStore
 from bindaems.app.prices.pipeline import PricePipeline
 from bindaems.app.prices.routes import prices_router
 from bindaems.app.prices.scheduler import PriceScheduler
@@ -172,6 +174,7 @@ class AppRuntime:
         self.load_forecast = LoadForecastService(
             self.ledger, cfg, self.reader, self.forecast_archive, self._clock, self._sink
         )
+        self.plan_store = PlanStore(self.engine)
         self.forecast_quality = ForecastQuality(
             self.engine, self.forecast_archive, self.ledger, pv_threshold_w(cfg)
         )
@@ -189,6 +192,18 @@ class AppRuntime:
         )
         self.intents = IntentService(
             core_client, self.live, self.live_feed, self.audit, self._clock, cfg
+        )
+        # nach der Lastprognose und dem core-Zustand; hört selbst auf geänderte Einstellungen
+        self.planning = PlanningService(
+            cfg,
+            self.settings,
+            self.prices,
+            self.forecast,
+            self.load_forecast,
+            self.ledger,
+            self.live,
+            self.plan_store,
+            self._clock,
         )
         self.ha_values = HaValueCache(self.reader, ha_database) if ha_database is not None else None
         self.energy = EnergyCache(self.reader, self._clock, ha_database)
@@ -230,6 +245,7 @@ class AppRuntime:
             self.pipeline.component_status,
             self.forecast.component_status,
             self.load_forecast.component_status,
+            self.planning.component_status,
             self.ledger.component_status,
             self._influx_status,
         ]
@@ -343,6 +359,7 @@ class AppRuntime:
             ("prices", self.price_scheduler.run),
             ("forecast", self._forecast_run),
             ("load-forecast", self.load_forecast.run),
+            ("planning", self.planning.run),
             ("influx-writer", self.influx_writer.run),
             ("ledger", self._ledger_loop),
             ("maintenance", self._maintenance_loop),
@@ -457,6 +474,14 @@ class AppRuntime:
                     log.info("Alte Entscheidungen gelöscht", decisions=removed)
             except Exception:
                 log.exception("Pflege der Entscheidungen fehlgeschlagen")
+            try:
+                deleted, trimmed = await asyncio.to_thread(
+                    self.plan_store.cleanup, self._clock.now()
+                )
+                if deleted or trimmed:
+                    log.info("Alte Pläne aufgeräumt", deleted=deleted, trimmed=trimmed)
+            except Exception:
+                log.exception("Pflege der Pläne fehlgeschlagen")
             await asyncio.sleep(HOUR_S)
 
     async def _backup_loop(self) -> None:

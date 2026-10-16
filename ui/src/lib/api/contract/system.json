@@ -255,6 +255,13 @@
       "details": {}
     },
     {
+      "name": "planning",
+      "ok": false,
+      "message": "Noch kein Plan",
+      "since": null,
+      "details": {}
+    },
+    {
       "name": "ledger",
       "ok": true,
       "message": "letzte Viertelstunde 09:45",

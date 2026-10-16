@@ -10,6 +10,7 @@ from multiprocessing.connection import Connection
 import pytest
 from tests.plan_helpers import scenario
 
+from bindaems.app.planning import process
 from bindaems.app.planning.inputs import PlanInputs
 from bindaems.app.planning.process import child_main, solve_in_subprocess, solve_inline
 
@@ -32,6 +33,16 @@ def send_garbage(conn: Connection, text: str) -> None:
     """Kind, das kein ``OptimizerResult`` schickt."""
     conn.send("kein Ergebnis")
     conn.close()
+
+
+def broken_solve(inputs: PlanInputs) -> None:
+    raise RuntimeError("HiGHS abgestürzt")
+
+
+def solve_raises(conn: Connection, text: str) -> None:
+    """Kind, dessen Solver eine Ausnahme wirft (der Patch gilt nur im Kindprozess)."""
+    process.solve = broken_solve  # type: ignore[assignment]
+    child_main(conn, text)
 
 
 def no_live_children() -> bool:
@@ -110,3 +121,18 @@ def test_child_main_reports_invalid_inputs() -> None:
     result = parent.recv()
     parent.close()
     assert result.status == "error" and result.flows == () and result.message
+
+
+def test_child_main_reports_solver_exception(monkeypatch) -> None:
+    monkeypatch.setattr(process, "solve", broken_solve)
+    parent, child = multiprocessing.Pipe(duplex=False)
+    child_main(child, small_inputs().model_dump_json())
+    result = parent.recv()
+    parent.close()
+    assert (result.status, result.message, result.flows) == ("error", "HiGHS abgestürzt", ())
+
+
+async def test_solver_exception_in_child_gives_its_message() -> None:
+    result = await solve_in_subprocess(small_inputs(), target=solve_raises)
+    assert (result.status, result.message) == ("error", "HiGHS abgestürzt")
+    assert no_live_children()

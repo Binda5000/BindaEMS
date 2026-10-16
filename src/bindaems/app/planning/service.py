@@ -4,15 +4,22 @@ Ein Lauf sammelt Preise, Prognosen, Monatsspitze und Akkuzustand, löst den Opti
 daraus die Absichten ab, rechnet sie nach und prüft den Plan. Scheitert der Solver oder ist der
 Plan unplausibel, gilt der Ersatzplan mit dem Grund aus „Texte“. Fehlen Eingangsdaten, entsteht
 kein Plan, nur ein Status; der letzte Plan bleibt.
+
+Die Schleife ``run`` (Task 10) plant beim Start, zur Minute 1 jeder Viertelstunde und auf
+Auslöser (``triggers``): Fingerabdrücke von Preisen und Prognosen, SOC und Monatsspitze gegen den
+Plan, geänderte Einstellungen und ``request``. Anfragen während eines Laufs fallen zu einem
+weiteren Lauf zusammen.
 """
 
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import math
+import threading
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Final
 
 import structlog
@@ -37,8 +44,17 @@ from bindaems.app.planning.optimizer import OptimizerResult
 from bindaems.app.planning.plausibility import check_plan
 from bindaems.app.planning.process import OUTER_TIMEOUT_S, Solver, solve_in_subprocess
 from bindaems.app.planning.store import PlanStore
+from bindaems.app.planning.triggers import (
+    WATCH_S,
+    Fingerprint,
+    changed,
+    next_tick,
+    peak_rose,
+    settings_relevant,
+    soc_deviates,
+)
 from bindaems.app.prices.service import PriceService
-from bindaems.app.settings.service import SettingsService
+from bindaems.app.settings.service import SettingsService, SettingsVersion
 from bindaems.app.status import ComponentStatus
 from bindaems.shared.config import Config
 from bindaems.shared.plan import Plan, PlanTrigger
@@ -47,6 +63,7 @@ from bindaems.shared.timeutil import LOCAL_TZ, Clock, slot_start
 log = structlog.get_logger(__name__)
 
 COMPONENT: Final = "planning"
+FINGERPRINT_WINDOW: Final = timedelta(hours=48)
 
 
 @dataclass(frozen=True)
@@ -153,6 +170,14 @@ class PlanningService:
         self._running = False
         self._unavailable: str | None = None
         self._last_error: str | None = None
+        # wartender Auslöser; ``request`` kommt auch aus Worker-Threads (Einstellungen, API)
+        self._pending: PlanTrigger | None = None
+        self._pending_lock = threading.Lock()
+        self._wake = asyncio.Event()
+        self._loop: asyncio.AbstractEventLoop | None = None
+        self._loop_thread: int | None = None
+        self._seen_settings = settings.current().settings
+        settings.on_change(self._on_settings)
         self._plan = store.latest()
 
     def current(self) -> Plan | None:
@@ -161,6 +186,113 @@ class PlanningService:
 
     def status(self) -> PlanningStatus:
         return PlanningStatus(self._running, self._unavailable, self._last_error)
+
+    def pending(self) -> PlanTrigger | None:
+        """Der Auslöser, der auf den nächsten Lauf wartet."""
+        with self._pending_lock:
+            return self._pending
+
+    def request(self, trigger: PlanTrigger) -> None:
+        """Fordert einen Lauf an (threadsicher). Ein wartender Auslöser bleibt, nur ``manual``
+        ersetzt ihn; Anfragen während eines Laufs ergeben so genau einen weiteren Lauf."""
+        with self._pending_lock:
+            if self._pending is None or trigger == "manual":
+                self._pending = trigger
+        loop = self._loop
+        if loop is None or loop.is_closed():
+            return  # ``run`` sieht den Auslöser beim Start
+        if threading.get_ident() == self._loop_thread:
+            self._wake.set()
+        else:
+            with contextlib.suppress(RuntimeError):  # Schleife inzwischen geschlossen
+                loop.call_soon_threadsafe(self._wake.set)
+
+    def _take(self) -> PlanTrigger | None:
+        with self._pending_lock:
+            trigger, self._pending = self._pending, None
+        return trigger
+
+    def _on_settings(self, version: SettingsVersion) -> None:
+        with self._pending_lock:
+            old, self._seen_settings = self._seen_settings, version.settings
+        if settings_relevant(old, version.settings):
+            self.request("settings")
+
+    async def run(self) -> None:
+        """Plant beim Start, zur Viertelstunde und auf Auslöser; prüft alle ``WATCH_S`` s.
+
+        Ein Fehler in einem Durchlauf wird protokolliert, die Schleife läuft weiter; ein Abbruch
+        (``CancelledError``) beendet sie.
+        """
+        self._loop, self._loop_thread = asyncio.get_running_loop(), threading.get_ident()
+        self.request("start")
+        fingerprint: Fingerprint | None = None
+        tick = next_tick(self._clock.now())
+        while True:
+            self._wake.clear()
+            now = self._clock.now()
+            if now >= tick:
+                self.request("slot")
+                tick = next_tick(now)
+            try:
+                fingerprint = await self._watch(fingerprint, now)
+            except Exception:
+                log.exception("Auslöser der Planung nicht prüfbar")
+            trigger = self._take()
+            if trigger is not None:
+                try:
+                    await self.replan(trigger)
+                except Exception:
+                    log.exception("Planungslauf fehlgeschlagen", trigger=trigger)
+            await self._wait(tick)
+
+    async def _watch(self, old: Fingerprint | None, now: datetime) -> Fingerprint:
+        """Prüft Fingerabdrücke, SOC und Monatsspitze und fordert die Auslöser an."""
+        last_price, primary, peak_kw = await asyncio.to_thread(self._observe, now)
+        pv = self._forecast.latest()
+        load = self._load_forecast.latest()
+        new = Fingerprint(
+            last_price=last_price,
+            primary=primary,
+            pv_issued=pv.issued_at if pv is not None else None,
+            load_issued=load.issued_at if load is not None else None,
+        )
+        for trigger in changed(old, new):
+            self.request(trigger)
+        plan = self._plan
+        if plan is not None:
+            # Ein Plan wegen des SOC löst im selben Slot nicht erneut aus: Die lineare Erwartung
+            # ab Slotbeginn passt nicht zu einem Plan, der spät im Slot entstand.
+            replanned = plan.trigger == "soc" and slot_start(plan.created_at) == slot_start(now)
+            soc_pct = _number(self._live.value("battery.soc_pct"))
+            if not replanned and soc_deviates(plan, now, soc_pct):
+                self.request("soc")
+            if plan.valid_at(now) and peak_rose(plan, peak_kw):
+                self.request("month_peak")
+        return new
+
+    def _observe(self, now: datetime) -> tuple[datetime | None, int, float | None]:
+        """Letzter Preis-Slot und ``primary``-Slots in 48 h, Monatsspitze (blockiert)."""
+        start = slot_start(now)
+        views = self._prices.slots(start, start + FINGERPRINT_WINDOW)
+        last_price = max((view.start for view in views), default=None)
+        primary = sum(1 for view in views if view.origin == "primary")
+        peak = self._ledger.month_peak(now.astimezone(LOCAL_TZ).date())
+        return last_price, primary, peak.kw if peak is not None else None
+
+    async def _wait(self, tick: datetime) -> None:
+        """Wartet auf eine Anfrage, höchstens ``WATCH_S`` s und nicht über die Viertelstunde."""
+        if self._wake.is_set():
+            return
+        timeout = max(0.0, min(WATCH_S, (tick - self._clock.now()).total_seconds()))
+        waiter = asyncio.ensure_future(self._wake.wait())
+        sleeper = asyncio.ensure_future(self._sleep(timeout))
+        try:
+            await asyncio.wait({waiter, sleeper}, return_when=asyncio.FIRST_COMPLETED)
+        finally:
+            for task in (waiter, sleeper):
+                task.cancel()
+            await asyncio.gather(waiter, sleeper, return_exceptions=True)
 
     def _battery(self) -> BatteryState | None:
         soc_pct = _number(self._live.value("battery.soc_pct"))
@@ -255,10 +387,11 @@ class PlanningService:
                 log.info("Kein Plan", trigger=trigger, reason=exc.reason)
             self._unavailable = exc.reason
             return None
+        self._unavailable = None  # Eingangsdaten vollständig, auch wenn danach etwas scheitert
         result = await self._solve(inputs)
         plan = plan_once(inputs, result)
         saved = await asyncio.to_thread(self._store.save, plan, inputs)
-        self._plan, self._unavailable = saved, None
+        self._plan = saved
         log.info(
             "Plan erstellt",
             trigger=trigger,

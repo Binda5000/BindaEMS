@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from datetime import date, datetime
 from typing import Any
@@ -23,7 +24,8 @@ from bindaems.app.planning.inputs import (
     SlotInput,
     assemble_inputs,
 )
-from bindaems.app.planning.optimizer import OptimizerResult, SlotFlows
+from bindaems.app.planning.optimizer import OptimizerResult, SlotFlows, solve
+from bindaems.app.settings.service import SettingsService
 from bindaems.shared.plan import PLAN_VALID, BatteryIntent, Plan, PlanSlot
 from bindaems.shared.settings import PlanningSettings, PowerComponent, TariffSettings
 from bindaems.shared.timeutil import SLOT, slot_start
@@ -63,11 +65,21 @@ def sample_slot(
     )
 
 
-def sample_plan(created: str, slots: list[str]) -> Plan:
+def sample_plan(
+    created: str,
+    slots: list[str],
+    *,
+    soc: tuple[float, float] | None = None,
+    month_peak_kw: float | None = None,
+) -> Plan:
     """Plan des Optimierers, erzeugt zu ``created`` (ISO mit Zeitzone), mit Slots ``HH:MM`` am
-    Tag (UTC) der Erzeugung."""
+    Tag (UTC) der Erzeugung; ``soc`` ist der SOC (%) zu Beginn und Ende jedes Slots."""
     created_at = at(created)
     day = created_at.date().isoformat()
+    plan_slots = [sample_slot(start, day=day) for start in slots]
+    if soc is not None:
+        update = {"soc_start_pct": soc[0], "soc_end_pct": soc[1]}
+        plan_slots = [slot.model_copy(update=update) for slot in plan_slots]
     return Plan(
         created_at=created_at,
         trigger="start",
@@ -79,12 +91,12 @@ def sample_plan(created: str, slots: list[str]) -> Plan:
         grid_charge_allowed=False,
         reserve_pct=10.0,
         soc_max_pct=100.0,
-        month_peak_kw=None,
+        month_peak_kw=month_peak_kw,
         power_price=False,
         expected_cost_ct=0.0,
         baseline_cost_ct=0.0,
         issues=[],
-        slots=[sample_slot(start, day=day) for start in slots],
+        slots=plan_slots,
     )
 
 
@@ -366,3 +378,39 @@ def returns(result: OptimizerResult) -> Callable[[PlanInputs], Awaitable[Optimiz
         return result
 
     return solver
+
+
+def blocking_solver(
+    gate: asyncio.Event, calls: list[PlanInputs]
+) -> Callable[[PlanInputs], Awaitable[OptimizerResult]]:
+    """Solver, der die Eingangsdaten an ``calls`` hängt, beim ersten Aufruf auf ``gate`` wartet
+    und dann im selben Prozess löst."""
+
+    async def solver(inputs: PlanInputs) -> OptimizerResult:
+        calls.append(inputs)
+        if len(calls) == 1:
+            await gate.wait()
+        return await asyncio.to_thread(solve, inputs)
+
+    return solver
+
+
+async def until(predicate: Callable[[], bool], max_wait_s: float = 5.0) -> None:
+    """Wartet, bis ``predicate`` gilt; sonst ``AssertionError``."""
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + max_wait_s
+    while not predicate():
+        if loop.time() > deadline:
+            raise AssertionError("Bedingung nicht erfüllt")
+        await asyncio.sleep(0.01)
+
+
+def set_planning(settings: SettingsService, planning: PlanningSettings) -> None:
+    """Speichert ``planning`` als neue Version der Einstellungen."""
+    current = settings.current()
+    settings.update(
+        current.settings.model_copy(update={"planning": planning}),
+        base_version=current.version,
+        actor="test",
+        source="ui",
+    )

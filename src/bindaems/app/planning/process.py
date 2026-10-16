@@ -36,7 +36,11 @@ def child_main(conn: Connection, inputs_json: str) -> None:
         except ValueError as exc:
             conn.send(_failure("error", started, f"Eingangsdaten ungültig: {exc}"))
             return
-        conn.send(solve(inputs))
+        try:
+            result = solve(inputs)
+        except Exception as exc:  # der Elternprozess meldet „Solver fehlgeschlagen: …“
+            result = _failure("error", started, str(exc) or type(exc).__name__)
+        conn.send(result)
     finally:
         conn.close()
 

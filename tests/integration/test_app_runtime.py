@@ -87,6 +87,7 @@ def test_runtime_wires_routes_and_components(runtime) -> None:
         "prices",
         "forecast",
         "load-forecast",
+        "planning",
         "ledger",
         "influx",
         "ha",
@@ -184,6 +185,42 @@ async def test_maintenance_removes_decisions_older_than_the_retention(runtime, r
     finally:
         task.cancel()
     assert [item.decision.id for item in found] == ["young"]
+
+
+async def test_maintenance_cleans_up_old_plans(runtime, monkeypatch) -> None:
+    calls: list[object] = []
+    monkeypatch.setattr(runtime.plan_store, "cleanup", lambda now: calls.append(now) or (2, 3))
+    monkeypatch.setattr(asyncio, "sleep", record_then_stop([], after=0))
+    with capture_logs() as logs, pytest.raises(StopScheduler):
+        await runtime._maintenance_loop()
+    assert calls == [T_APP]
+    entry = next(e for e in logs if e["event"] == "Alte Pläne aufgeräumt")
+    assert (entry["deleted"], entry["trimmed"]) == (2, 3)
+
+
+async def test_maintenance_survives_a_failed_plan_cleanup(runtime, monkeypatch) -> None:
+    def broken(now):
+        raise RuntimeError("Datenbank gesperrt")
+
+    monkeypatch.setattr(runtime.plan_store, "cleanup", broken)
+    monkeypatch.setattr(asyncio, "sleep", record_then_stop([], after=0))
+    with capture_logs() as logs, pytest.raises(StopScheduler):
+        await runtime._maintenance_loop()
+    assert "Pflege der Pläne fehlgeschlagen" in [e["event"] for e in logs]
+
+
+def test_runtime_wires_the_planning(runtime) -> None:
+    assert runtime.planning.current() is None and runtime.planning.pending() is None
+    current = runtime.settings.current()
+    runtime.settings.update(
+        current.settings.model_copy(
+            update={"planning": current.settings.planning.model_copy(update={"margin_ct": 3.0})}
+        ),
+        base_version=current.version,
+        actor="test",
+        source="ui",
+    )
+    assert runtime.planning.pending() == "settings"
 
 
 def spy_nightly(runtime, monkeypatch) -> list[tuple]:
@@ -311,6 +348,8 @@ async def test_runtime_starts_and_stops_cleanly(runtime, respx_mock) -> None:
     await runtime.shutdown()
     await asyncio.wait_for(task, timeout=2)
     assert runtime.pipeline.status().last_attempt is not None  # Preise wurden versucht
+    assert runtime.planning.status().unavailable == "kein SOC vom core"  # Planung lief beim Start
+    assert not runtime.planning.status().running
 
 
 @pytest.mark.respx(assert_all_called=False)
