@@ -2,10 +2,17 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from datetime import date, datetime
 from typing import Any
 
+from bindaems.app.planning.battery_model import (
+    SLOT_H,
+    SimStep,
+    params_of,
+    sim_slots,
+    simulate,
+)
 from bindaems.app.planning.inputs import (
     BatteryState,
     PeakMonth,
@@ -15,6 +22,7 @@ from bindaems.app.planning.inputs import (
     SlotInput,
     assemble_inputs,
 )
+from bindaems.app.planning.optimizer import OptimizerResult, SlotFlows
 from bindaems.shared.plan import PLAN_VALID, BatteryIntent, Plan, PlanSlot
 from bindaems.shared.settings import PlanningSettings, PowerComponent, TariffSettings
 from bindaems.shared.timeutil import SLOT, slot_start
@@ -258,4 +266,53 @@ def scenario(
             )
             for i, (ct, pv_w, load_w) in enumerate(zip(prices, pv, load, strict=True))
         ],
+    )
+
+
+def flow(**flows: float) -> SlotFlows:
+    """Flüsse eines Slots in W; fehlende sind 0. ``soc_end_kwh`` (kWh) ist, wenn nicht
+    angegeben, die Energie, die der Akku in diesem Slot netto aufnimmt (ohne Verluste)."""
+    values = {"pv_h": 0.0, "pv_b": 0.0, "pv_x": 0.0, "gr_h": 0.0, "gr_b": 0.0, "bt_h": 0.0}
+    soc_end_kwh = flows.pop("soc_end_kwh", None)
+    values.update(flows)
+    if soc_end_kwh is None:
+        soc_end_kwh = SLOT_H / 1000 * (values["pv_b"] + values["gr_b"] - values["bt_h"])
+    return SlotFlows(soc_end_kwh=soc_end_kwh, **values)
+
+
+def flows_result(flows: Sequence[SlotFlows]) -> OptimizerResult:
+    """Ergebnis des Optimierers mit diesen Flüssen (Status ``optimal``, ohne Spitzen)."""
+    return OptimizerResult(
+        status="optimal",
+        flows=tuple(flows),
+        peaks_kw={},
+        objective_ct=0.0,
+        solve_ms=0,
+    )
+
+
+def resimulate(inputs: PlanInputs, intents: Sequence[BatteryIntent]) -> list[SimStep]:
+    """Rechnet die Absichten mit dem Akkumodell nach, ab dem SOC des Laufs."""
+    params = params_of(inputs)
+    soc0_kwh = inputs.battery.soc_pct / 100 * params.capacity_kwh
+    return simulate(soc0_kwh, sim_slots(inputs), intents, params)
+
+
+def flows_of(steps: Sequence[SimStep], inputs: PlanInputs | None = None) -> OptimizerResult:
+    """Flüsse einer Nachrechnung als Ergebnis des Optimierers. ``pv_h`` (PV ins Haus) steht in
+    den Schritten nicht; es ist 0, mit ``inputs`` ``min(PV, Last)``."""
+    house_w = [min(s.pv_w, s.load_w) for s in inputs.slots] if inputs else [0.0] * len(steps)
+    return flows_result(
+        [
+            SlotFlows(
+                pv_h=pv_h,
+                pv_b=item.charge_pv_w,
+                pv_x=item.export_w,
+                gr_h=item.import_w - item.charge_grid_w,
+                gr_b=item.charge_grid_w,
+                bt_h=item.discharge_w,
+                soc_end_kwh=item.soc_end_kwh,
+            )
+            for item, pv_h in zip(steps, house_w, strict=True)
+        ]
     )

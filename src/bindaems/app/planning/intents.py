@@ -1,0 +1,58 @@
+"""Ausführbare Akku-Absichten aus den Flüssen des Optimierers (Plan 3b, Präzisierung 7).
+
+Der Optimierer plant Leistungen; ausgeführt wird eine von drei Absichten je Slot. Die Rundung
+auf diese Absichten ist grob, deshalb rechnet der Planungsdienst den Plan danach mit dem
+Akkumodell nach und prüft ihn auf Plausibilität.
+"""
+
+from __future__ import annotations
+
+from math import floor
+from typing import Final
+
+from bindaems.app.planning.battery_model import SLOT_H, params_of, sim_slots
+from bindaems.app.planning.inputs import PlanInputs
+from bindaems.app.planning.optimizer import OptimizerResult, grid_charge_cap_w
+from bindaems.shared.plan import BatteryIntent, BatteryIntentKind
+
+GRID_CHARGE_MIN_W: Final = 100.0  # darunter ist es kein Netzladen
+ROUND_W: Final = 100.0  # Schritt der Netzladeleistung
+HOLD_SHARE: Final = 0.5  # Halten, wenn weniger als dieser Anteil des Eigenverbrauchs entlädt
+HOLD_MIN_W: Final = 100.0  # darunter lohnt es sich nicht, den Akku zu halten
+
+
+def derive_intents(inputs: PlanInputs, result: OptimizerResult) -> list[BatteryIntent]:
+    """Absicht je Slot; ohne Flüsse (keine Lösung) eine leere Liste.
+
+    ``NETZLADEN(P)`` bei Netzladen ab ``GRID_CHARGE_MIN_W`` mit ``P`` auf ``ROUND_W`` gerundet
+    und durch ``GC_t`` begrenzt. Sonst ``HALTEN``, wenn der Optimierer weniger als
+    ``HOLD_SHARE`` dessen entlädt, was der Eigenverbrauch lieferte (mindestens ``HOLD_MIN_W``);
+    die Hälfte ist die Rundung auf die nächste ausführbare Absicht. Sonst ``EIGENVERBRAUCH``.
+    """
+    if not result.flows:
+        return []
+    params = params_of(inputs)
+    slots = sim_slots(inputs)
+    soc_kwh = inputs.battery.soc_pct / 100 * params.capacity_kwh
+    intents: list[BatteryIntent] = []
+    for index, flows in enumerate(result.flows):
+        if flows.gr_b >= GRID_CHARGE_MIN_W:
+            cap_w = grid_charge_cap_w(inputs, index)
+            power_w = min(
+                ROUND_W * floor(flows.gr_b / ROUND_W + 0.5), ROUND_W * floor(cap_w / ROUND_W)
+            )
+            if power_w > 0:
+                intents.append(
+                    BatteryIntent(kind=BatteryIntentKind.NETZLADEN, grid_charge_w=power_w)
+                )
+                soc_kwh = flows.soc_end_kwh
+                continue
+        slot = slots[index]
+        deliverable_w = max(0.0, soc_kwh - params.lo_kwh) * params.eta_dis / SLOT_H * 1000
+        own_w = min(max(0.0, slot.load_w - slot.pv_w), slot.max_discharge_w, deliverable_w)
+        if own_w >= HOLD_MIN_W and flows.bt_h < HOLD_SHARE * own_w:
+            intents.append(BatteryIntent(kind=BatteryIntentKind.HALTEN))
+        else:
+            intents.append(BatteryIntent())
+        soc_kwh = flows.soc_end_kwh
+    return intents
