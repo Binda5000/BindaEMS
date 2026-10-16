@@ -340,6 +340,7 @@ it('zeigt ohne Bericht des core Aktoren und Watchdog als nicht verfügbar', asyn
 const LIVE_BUTTON = 'Live schalten…';
 const EVCS = 'EVCS „evcs“';
 const TESLA = 'Tesla Model 3';
+const PROTOCOL = 'Prüfprotokoll Teil 2 für die gewählten Aktoren ist bestanden.';
 
 /** Alle Aktoren der Demo-Welt, mit `live_allowed` je Aktor überschrieben */
 function actuatorsWith(
@@ -415,23 +416,56 @@ it('ohne beide Häkchen bleibt „Live schalten“ gesperrt', async () => {
 	show({ actuators: actuatorsWith({}) });
 	const live = await openLive();
 	const submit = live.getByRole('button', { name: 'Live schalten' });
-	const tests = live.getByRole('checkbox', {
-		name: 'Prüfprotokoll Teil 2 für die gewählten Aktoren ist bestanden.'
-	});
+	const protocol = () => live.getByRole('checkbox', { name: PROTOCOL });
+	const evcc = () => live.getByRole('checkbox', { name: 'evcc ist ganz abgeschaltet.' });
 	await fireEvent.input(live.getByLabelText('Passwort'), { target: { value: 'demo-passwort-1' } });
 	expect(submit).toBeDisabled(); // kein Aktor gewählt
 	expect(live.queryByRole('checkbox', { name: 'evcc ist ganz abgeschaltet.' })).toBeNull();
 	await fireEvent.click(live.getByRole('checkbox', { name: 'Victron (ESS)' }));
 	expect(submit).toBeDisabled(); // Prüfprotokoll fehlt
-	await fireEvent.click(tests);
+	await fireEvent.click(protocol());
 	expect(submit).toBeEnabled(); // Victron braucht evcc nicht
-	await fireEvent.click(live.getByRole('checkbox', { name: EVCS }));
-	const evcc = live.getByRole('checkbox', { name: 'evcc ist ganz abgeschaltet.' });
-	expect(submit).toBeDisabled(); // mit EVCS fehlt die zweite Bestätigung
-	await fireEvent.click(evcc);
-	expect(submit).toBeEnabled();
-	await fireEvent.click(tests);
+	await fireEvent.click(protocol());
 	expect(submit).toBeDisabled(); // das Prüfprotokoll fehlt wieder
+	expect(api.setActuators).not.toHaveBeenCalled();
+	await fireEvent.click(protocol());
+	await fireEvent.click(live.getByRole('checkbox', { name: EVCS }));
+	expect(evcc()).not.toBeChecked();
+	await fireEvent.click(protocol());
+	expect(submit).toBeDisabled(); // mit EVCS fehlt die zweite Bestätigung
+	await fireEvent.click(evcc());
+	expect(submit).toBeEnabled();
+});
+
+it('ändert sich die Auswahl, gelten die Bestätigungen nicht mehr', async () => {
+	show({ actuators: actuatorsWith({}) });
+	const live = await openLive();
+	const submit = live.getByRole('button', { name: 'Live schalten' });
+	const protocol = () => live.getByRole('checkbox', { name: PROTOCOL });
+	const evcc = () => live.getByRole('checkbox', { name: 'evcc ist ganz abgeschaltet.' });
+	await fireEvent.input(live.getByLabelText('Passwort'), { target: { value: 'demo-passwort-1' } });
+	await fireEvent.click(live.getByRole('checkbox', { name: 'Victron (ESS)' }));
+	await fireEvent.click(protocol());
+	expect(submit).toBeEnabled();
+	// ein Aktor kommt dazu: das Häkchen für die alte Auswahl trägt nicht auf die neue
+	await fireEvent.click(live.getByRole('checkbox', { name: EVCS }));
+	expect(protocol()).not.toBeChecked();
+	expect(evcc()).not.toBeChecked();
+	expect(submit).toBeDisabled();
+	await fireEvent.click(protocol());
+	await fireEvent.click(evcc());
+	expect(submit).toBeEnabled();
+	// ein Aktor fällt weg: wieder beide Häkchen neu
+	await fireEvent.click(live.getByRole('checkbox', { name: 'Victron (ESS)' }));
+	expect(protocol()).not.toBeChecked();
+	expect(evcc()).not.toBeChecked();
+	expect(submit).toBeDisabled();
+	await fireEvent.click(protocol());
+	await fireEvent.click(evcc());
+	await fireEvent.click(live.getByRole('checkbox', { name: EVCS })); // keiner mehr gewählt
+	await fireEvent.click(live.getByRole('checkbox', { name: EVCS }));
+	expect(evcc()).not.toBeChecked();
+	expect(protocol()).not.toBeChecked();
 	expect(api.setActuators).not.toHaveBeenCalled();
 });
 
@@ -475,6 +509,75 @@ it('Abbrechen schließt den Live-Dialog, ohne etwas zu ändern', async () => {
 	expect(again.getByRole('checkbox', { name: 'Victron (ESS)' })).not.toBeChecked();
 });
 
+/**
+ * Esc: der Browser sendet „cancel“ und schließt den Dialog („close“), wenn das nicht abgewiesen
+ * wird. jsdom kennt `close()` nicht, darum wird es nachgestellt. `force` schließt auch nach einer
+ * Abweisung (Chrome lässt das zweite Esc ohne Eingabe dazwischen zu). Liefert, ob „cancel“
+ * abgewiesen wurde.
+ */
+function pressEscape({ force = false } = {}): boolean {
+	const element = dialog() as HTMLDialogElement;
+	const cancel = new Event('cancel', { cancelable: true });
+	element.dispatchEvent(cancel);
+	if (!cancel.defaultPrevented || force) {
+		element.removeAttribute('open');
+		element.dispatchEvent(new Event('close'));
+	}
+	return cancel.defaultPrevented;
+}
+
+it('Esc schließt den Live-Dialog, ohne etwas zu senden, und beim Öffnen ist alles leer', async () => {
+	show({ actuators: actuatorsWith({}) });
+	const live = await openLive();
+	await fireEvent.click(live.getByRole('checkbox', { name: EVCS }));
+	await fireEvent.click(live.getByRole('checkbox', { name: PROTOCOL }));
+	await fireEvent.input(live.getByLabelText('Passwort'), { target: { value: 'demo-passwort-1' } });
+	pressEscape();
+	await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+	expect(api.setActuators).not.toHaveBeenCalled();
+	const again = await openLive();
+	expect(again.getByRole('checkbox', { name: EVCS })).not.toBeChecked();
+	expect(again.getByRole('checkbox', { name: PROTOCOL })).not.toBeChecked();
+	expect(again.getByLabelText('Passwort')).toHaveValue('');
+	expect(again.queryByRole('checkbox', { name: 'evcc ist ganz abgeschaltet.' })).toBeNull();
+});
+
+it('während der Anfrage lässt sich der Live-Dialog nicht schließen', async () => {
+	show({ actuators: actuatorsWith({}) });
+	let finish: (value: ControlReply) => void = () => {};
+	api.setActuators.mockReturnValue(new Promise<ControlReply>((resolve) => (finish = resolve)));
+	const live = await openLive();
+	await fireEvent.click(live.getByRole('checkbox', { name: 'Victron (ESS)' }));
+	await fireEvent.click(live.getByRole('checkbox', { name: PROTOCOL }));
+	await fireEvent.input(live.getByLabelText('Passwort'), { target: { value: 'demo-passwort-1' } });
+	await fireEvent.click(live.getByRole('button', { name: 'Live schalten' }));
+	await waitFor(() => expect(api.setActuators).toHaveBeenCalledTimes(1));
+	expect(live.getByRole('button', { name: 'Abbrechen' })).toBeDisabled();
+	expect(live.getByRole('button', { name: 'Schließen' })).toBeDisabled();
+	expect(pressEscape()).toBe(true); // „cancel“ wird abgewiesen
+	expect(pressEscape({ force: true })).toBe(true); // und ein erzwungenes Schließen öffnet wieder
+	await waitFor(() => expect(screen.getByRole('dialog')).toBeInTheDocument());
+	finish(reply());
+	await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+	expect(api.setActuators).toHaveBeenCalledTimes(1);
+});
+
+it('während der Anfrage lässt sich der Dry-Run-Dialog nicht schließen', async () => {
+	show({ actuators: actuatorsWith({ victron: { requested: 'live', effective: 'live' } }) });
+	let finish: (value: ControlReply) => void = () => {};
+	api.setActuators.mockReturnValue(new Promise<ControlReply>((resolve) => (finish = resolve)));
+	await fireEvent.click(await screen.findByRole('button', { name: 'Auf Dry-Run…' }));
+	const confirm = within(dialog());
+	await fireEvent.click(confirm.getByRole('button', { name: 'Auf Dry-Run' }));
+	await waitFor(() => expect(api.setActuators).toHaveBeenCalledTimes(1));
+	expect(confirm.getByRole('button', { name: 'Abbrechen' })).toBeDisabled();
+	expect(pressEscape()).toBe(true);
+	expect(pressEscape({ force: true })).toBe(true);
+	await waitFor(() => expect(screen.getByRole('dialog')).toBeInTheDocument());
+	finish(reply());
+	await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+});
+
 it('Begrenzung durch den core steht nach dem Schalten als Warnung an der Karte', async () => {
 	show({ actuators: actuatorsWith({}) });
 	api.setActuators.mockResolvedValue(
@@ -494,7 +597,7 @@ it('Begrenzung durch den core steht nach dem Schalten als Warnung an der Karte',
 	).toBeInTheDocument();
 });
 
-it('Admin stellt alle Live-Aktoren nach Bestätigung auf Dry-Run', async () => {
+it('Admin stellt die gewählten Live-Aktoren nach Bestätigung auf Dry-Run', async () => {
 	show({
 		actuators: actuatorsWith({
 			'wallbox.evcs': { requested: 'live', effective: 'live' },
@@ -509,15 +612,43 @@ it('Admin stellt alle Live-Aktoren nach Bestätigung auf Dry-Run', async () => {
 		confirm.getByText('Der core übergibt die gewählten Aktoren und setzt ihre Sicherwerte.')
 	).toBeInTheDocument();
 	expect(confirm.queryByLabelText('Passwort')).toBeNull(); // sicherer Zustand: ohne Passwort
+	// nur die Aktoren, die jetzt live sind, alle vorgewählt
+	expect(confirm.getAllByRole('checkbox').map((box) => (box as HTMLInputElement).checked)).toEqual([
+		true,
+		true
+	]);
+	expect(confirm.queryByRole('checkbox', { name: 'Victron (ESS)' })).toBeNull();
+	await fireEvent.click(confirm.getByRole('checkbox', { name: TESLA }));
 	await fireEvent.click(confirm.getByRole('button', { name: 'Auf Dry-Run' }));
 	await waitFor(() =>
-		expect(api.setActuators).toHaveBeenCalledWith(
-			{ 'wallbox.evcs': 'dry_run', 'vehicle.tesla': 'dry_run' },
-			null,
-			false
-		)
+		expect(api.setActuators).toHaveBeenCalledWith({ 'wallbox.evcs': 'dry_run' }, null, false)
 	);
 	await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+});
+
+it('Dry-Run: ohne gewählten Aktor ist die Taste gesperrt, jedes Öffnen wählt alle vor', async () => {
+	show({
+		actuators: actuatorsWith({
+			'wallbox.evcs': { requested: 'live', effective: 'live' },
+			victron: { requested: 'live', effective: 'live' }
+		})
+	});
+	await fireEvent.click(await screen.findByRole('button', { name: 'Auf Dry-Run…' }));
+	let confirm = within(dialog());
+	const submit = confirm.getByRole('button', { name: 'Auf Dry-Run' });
+	await fireEvent.click(confirm.getByRole('checkbox', { name: 'Victron (ESS)' }));
+	expect(submit).toBeEnabled();
+	await fireEvent.click(confirm.getByRole('checkbox', { name: EVCS }));
+	expect(submit).toBeDisabled();
+	await fireEvent.click(confirm.getByRole('button', { name: 'Abbrechen' }));
+	await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+	expect(api.setActuators).not.toHaveBeenCalled();
+	await fireEvent.click(screen.getByRole('button', { name: 'Auf Dry-Run…' }));
+	confirm = within(dialog());
+	expect(confirm.getAllByRole('checkbox').map((box) => (box as HTMLInputElement).checked)).toEqual([
+		true,
+		true
+	]);
 });
 
 it('„Auf Dry-Run…“ ist gesperrt, solange kein Aktor live ist', async () => {
@@ -600,7 +731,7 @@ it('Quittieren: die Annahme steht als Hinweis, die Aktoren laden neu', async () 
 	await waitFor(() => expect(api.system.mock.calls.length).toBeGreaterThan(loaded));
 });
 
-it('Quittieren gibt es nur bei einer Sperre und nur für Admins', async () => {
+it('Quittieren fehlt für Admins, solange kein Aktor gesperrt ist', async () => {
 	show({ actuators: actuatorsWith({}) });
 	await screen.findByRole('button', { name: LIVE_BUTTON });
 	expect(screen.queryByRole('button', { name: 'Quittieren' })).toBeNull(); // nichts gesperrt

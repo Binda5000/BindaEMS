@@ -4,13 +4,22 @@
 	interface Props {
 		open: boolean;
 		title: string;
+		/** eine Anfrage läuft: Esc und „Schließen“ ändern nichts, bis sie beantwortet ist */
+		busy?: boolean;
 		children: Snippet;
 	}
 
-	let { open = $bindable(false), title, children }: Props = $props();
+	let { open = $bindable(false), title, busy = false, children }: Props = $props();
 
 	const uid = $props.id();
 	let dialog = $state<HTMLDialogElement>();
+
+	function closed() {
+		if (!busy) return void (open = false);
+		// Esc wurde nicht abgewiesen (der Browser lässt es nach dem ersten Mal zu): wieder öffnen
+		if (typeof dialog?.showModal === 'function') dialog.showModal();
+		else dialog?.setAttribute('open', '');
+	}
 
 	$effect(() => {
 		if (!dialog) return;
@@ -24,10 +33,21 @@
 	});
 </script>
 
-<dialog bind:this={dialog} aria-labelledby="{uid}-title" onclose={() => (open = false)}>
+<dialog
+	bind:this={dialog}
+	aria-labelledby="{uid}-title"
+	oncancel={(event) => busy && event.preventDefault()}
+	onclose={closed}
+>
 	<header>
 		<h2 id="{uid}-title">{title}</h2>
-		<button type="button" class="close" aria-label="Schließen" onclick={() => (open = false)}>
+		<button
+			type="button"
+			class="close"
+			aria-label="Schließen"
+			disabled={busy}
+			onclick={() => (open = false)}
+		>
 			×
 		</button>
 	</header>

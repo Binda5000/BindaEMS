@@ -163,3 +163,11 @@ it('needsEvccConfirmation gilt für EVCS und Tesla, nicht für Victron', () => {
 	expect(needsEvccConfirmation(['victron', 'wallbox.evcs'])).toBe(true);
 	expect(needsEvccConfirmation(['vehicle.tesla'])).toBe(true);
 });
+
+it('needsEvccConfirmation hängt nicht an den Schlüsseln der Demo', () => {
+	// die Schlüssel aus wallboxes und vehicles wählt die Konfiguration
+	expect(needsEvccConfirmation(['wallbox.garage'])).toBe(true);
+	expect(needsEvccConfirmation(['vehicle.egolf'])).toBe(true);
+	// ein unbekannter Aktor verlangt im Zweifel die Bestätigung
+	expect(needsEvccConfirmation(['neu'])).toBe(true);
+});

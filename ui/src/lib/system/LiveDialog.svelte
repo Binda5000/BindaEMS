@@ -21,9 +21,10 @@
 	let error = $state<string | null>(null);
 	let busy = $state(false);
 
-	// Jedes Öffnen beginnt leer; auch Esc oder „Abbrechen“ ändern nichts
+	// Beim Öffnen und beim Schließen (Erfolg, Abbrechen, Esc) bleibt nichts stehen, auch kein
+	// Passwort; Esc oder „Abbrechen“ ändern nichts
 	$effect(() => {
-		if (!open) return;
+		void open;
 		selected = {};
 		protocol = false;
 		evcc = false;
@@ -40,26 +41,34 @@
 		chosen.length > 0 && protocol && (!needsEvcc || evcc) && password !== '' && !busy
 	);
 
+	/** Die Bestätigungen gelten für genau die gewählten Aktoren: ändert sich die Wahl, entfallen sie. */
+	function selectionChanged() {
+		protocol = false;
+		evcc = false;
+	}
+
 	async function submit(event: SubmitEvent) {
 		event.preventDefault();
 		if (!ready) return;
 		busy = true;
 		error = null;
+		let reply: ControlReply;
 		try {
 			const modes = Object.fromEntries(chosen.map((id) => [id, 'live' as const]));
-			const reply = await api.setActuators(modes, password, true);
-			open = false;
-			await onDone(reply);
+			reply = await api.setActuators(modes, password, true);
 		} catch (failure) {
 			error = failure instanceof ApiError ? failure.detail : 'Unbekannter Fehler';
 			password = '';
-		} finally {
 			busy = false;
+			return;
 		}
+		busy = false; // erst dann lässt der Dialog sich schließen
+		open = false;
+		await onDone(reply);
 	}
 </script>
 
-<Dialog bind:open title="Live schalten">
+<Dialog bind:open {busy} title="Live schalten">
 	<form onsubmit={submit} novalidate>
 		<ul class="actuators">
 			{#each health.actuators as actuator (actuator.id)}
@@ -69,6 +78,7 @@
 							type="checkbox"
 							disabled={!actuator.live_allowed || busy}
 							bind:checked={selected[actuator.id]}
+							onchange={selectionChanged}
 						/>
 						{actuator.label}
 					</label>
@@ -103,7 +113,7 @@
 
 		<div class="buttons">
 			<button type="submit" disabled={!ready}>Live schalten</button>
-			<button type="button" onclick={() => (open = false)}>Abbrechen</button>
+			<button type="button" disabled={busy} onclick={() => (open = false)}>Abbrechen</button>
 		</div>
 	</form>
 </Dialog>

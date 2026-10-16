@@ -1,10 +1,10 @@
 <script lang="ts">
 	import { api } from '$lib/api/endpoints';
 	import { ApiError } from '$lib/api/errors';
-	import type { ActuatorMode, ControlReply, CoreHealth, Intent } from '$lib/api/schemas';
+	import type { ControlReply, CoreHealth, Intent } from '$lib/api/schemas';
 	import Card from '$lib/components/Card.svelte';
-	import Dialog from '$lib/components/Dialog.svelte';
 	import Notice from '$lib/components/Notice.svelte';
+	import DryRunDialog from './DryRunDialog.svelte';
 	import LiveDialog from './LiveDialog.svelte';
 
 	interface Props {
@@ -17,15 +17,12 @@
 		onChanged: () => Promise<void>;
 	}
 
-	const DRY_RUN: ActuatorMode = 'dry_run';
-
 	let { health, intent, operate, admin, onChanged }: Props = $props();
 
 	let busy = $state(false);
 	let notice = $state<{ level: 'error' | 'warning'; text: string } | null>(null);
 	let liveOpen = $state(false);
 	let dryRunOpen = $state(false);
-	let dryRunError = $state<string | null>(null);
 
 	const regulation = $derived(intent?.control ?? false);
 	const liveIds = $derived(health.actuators.filter((a) => a.requested === 'live').map((a) => a.id));
@@ -36,7 +33,8 @@
 
 	/** Eine Begrenzung durch den core steht als Warnung an der Karte. */
 	async function changed(reply: ControlReply) {
-		if (reply.result === 'clamped') notice = { level: 'warning', text: reply.details.join('\n') };
+		notice =
+			reply.result === 'clamped' ? { level: 'warning', text: reply.details.join('\n') } : null;
 		await onChanged();
 	}
 
@@ -51,21 +49,6 @@
 			notice = { level: 'error', text: failure(error) };
 		}
 		input.checked = regulation; // bei einer Ablehnung zurück auf den Stand des Servers
-		busy = false;
-	}
-
-	async function toDryRun() {
-		busy = true;
-		dryRunError = null;
-		notice = null;
-		try {
-			const modes = Object.fromEntries(liveIds.map((id) => [id, DRY_RUN]));
-			const reply = await api.setActuators(modes, null, false);
-			dryRunOpen = false;
-			await changed(reply);
-		} catch (error) {
-			dryRunError = failure(error);
-		}
 		busy = false;
 	}
 </script>
@@ -97,10 +80,7 @@
 			<button
 				type="button"
 				disabled={busy || liveIds.length === 0}
-				onclick={() => {
-					dryRunError = null;
-					dryRunOpen = true;
-				}}
+				onclick={() => (dryRunOpen = true)}
 			>
 				Auf Dry-Run…
 			</button>
@@ -115,14 +95,7 @@
 {#if admin}
 	<LiveDialog bind:open={liveOpen} {health} {intent} onDone={changed} />
 
-	<Dialog bind:open={dryRunOpen} title="Auf Dry-Run stellen">
-		<p>Der core übergibt die gewählten Aktoren und setzt ihre Sicherwerte.</p>
-		{#if dryRunError}<p class="error" role="alert">{dryRunError}</p>{/if}
-		<div class="buttons">
-			<button type="button" class="primary" disabled={busy} onclick={toDryRun}>Auf Dry-Run</button>
-			<button type="button" onclick={() => (dryRunOpen = false)}>Abbrechen</button>
-		</div>
-	</Dialog>
+	<DryRunDialog bind:open={dryRunOpen} {health} onDone={changed} />
 {/if}
 
 <style>
@@ -148,9 +121,5 @@
 
 	.note {
 		margin-top: 0.75rem;
-	}
-
-	.error {
-		color: var(--error);
 	}
 </style>

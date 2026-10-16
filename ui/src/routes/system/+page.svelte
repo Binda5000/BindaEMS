@@ -11,6 +11,7 @@
 	import { live } from '$lib/live.svelte';
 	import { Resource } from '$lib/resource.svelte';
 	import { canOperate, hasRole } from '$lib/roles';
+	import { Acknowledgement } from '$lib/system/acknowledge.svelte';
 	import ControlCard from '$lib/system/ControlCard.svelte';
 	import SignalTable from '$lib/system/SignalTable.svelte';
 	import {
@@ -110,24 +111,7 @@
 		followUp = setTimeout(() => void system.refresh(), 2000);
 	}
 
-	let acknowledging = $state(false);
-	let acknowledgement = $state<{ level: 'info' | 'warning' | 'error'; text: string } | null>(null);
-
-	/** Die Antwort des core steht als Hinweis unter der Tabelle; 409 nennt, was noch besteht. */
-	async function acknowledge(actuator: string) {
-		acknowledging = true;
-		acknowledgement = null;
-		try {
-			acknowledgement = { level: 'info', text: (await api.acknowledge(actuator)).detail };
-		} catch (error) {
-			acknowledgement = {
-				level: error instanceof ApiError && error.status === 409 ? 'warning' : 'error',
-				text: error instanceof ApiError ? error.detail : 'Unbekannter Fehler'
-			};
-		}
-		await system.refresh();
-		acknowledging = false;
-	}
+	const acknowledgement = new Acknowledgement(() => system.refresh());
 
 	function since(iso: string | null): string {
 		return iso === null ? '' : `seit ${formatDateTime(iso)}`;
@@ -325,9 +309,9 @@
 										<button
 											type="button"
 											class="ack"
-											disabled={acknowledging}
+											disabled={acknowledgement.busy}
 											aria-describedby="{uid}-{actuator.id}"
-											onclick={() => acknowledge(actuator.id)}
+											onclick={() => acknowledgement.run(actuator.id)}
 										>
 											Quittieren
 										</button>
@@ -338,8 +322,8 @@
 					</tbody>
 				</table>
 			</div>
-			{#if acknowledgement}
-				<Notice level={acknowledgement.level}>{acknowledgement.text}</Notice>
+			{#if acknowledgement.notice}
+				<Notice level={acknowledgement.notice.level}>{acknowledgement.notice.text}</Notice>
 			{/if}
 		{:else if system.data}
 			<p class="muted">Keine Daten vom core</p>
