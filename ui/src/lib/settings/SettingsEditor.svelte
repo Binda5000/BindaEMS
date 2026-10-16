@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { untrack } from 'svelte';
+	import { tick, untrack } from 'svelte';
 	import { ApiError, detailText } from '$lib/api/errors';
 	import type { Limits, RuntimeSettings, SettingsCurrent } from '$lib/api/schemas';
 	import Notice from '$lib/components/Notice.svelte';
@@ -52,6 +52,20 @@
 	];
 	const shownHere = (key: string) => SHOWN_KEYS.some((pattern) => pattern.test(key));
 
+	let form: HTMLFormElement;
+	const CHECK_FIELDS = 'Bitte die markierten Felder prüfen.';
+
+	/** Springt zum ersten Fehler: die Seite ist lang und „Speichern“ steht unten */
+	async function focusFirstError() {
+		await tick();
+		const target = form.querySelector<HTMLElement>('[aria-invalid="true"], p.error');
+		if (!target) return;
+		// Fehlertexte von Gruppen (Tarif, Bestandteil, Zeitfenster) haben kein Feld
+		if (!target.matches('input, select, textarea, button')) target.tabIndex = -1;
+		target.focus();
+		target.scrollIntoView?.({ block: 'center' });
+	}
+
 	function describedBy(key: string): string | undefined {
 		return errors[key] ? `${uid}-${key}-error` : undefined;
 	}
@@ -72,6 +86,8 @@
 		const result = applyDraft(current.settings, draft);
 		if ('errors' in result) {
 			errors = result.errors;
+			message = CHECK_FIELDS;
+			await focusFirstError();
 			return;
 		}
 		errors = {};
@@ -89,8 +105,12 @@
 				const known = Object.fromEntries(Object.entries(mapped).filter(([key]) => shownHere(key)));
 				errors = known;
 				const rest = Object.entries(mapped).filter(([key]) => !(key in known));
-				if (rest.length > 0) message = rest.map(([key, text]) => `${key}: ${text}`).join('\n');
-				else if (Object.keys(known).length === 0) message = detailText(detail);
+				const hasKnown = Object.keys(known).length > 0;
+				const restText = rest.map(([key, text]) => `${key}: ${text}`).join('\n');
+				if (rest.length > 0) message = hasKnown ? `${CHECK_FIELDS}\n${restText}` : restText;
+				else if (hasKnown) message = CHECK_FIELDS;
+				else message = detailText(detail);
+				if (hasKnown) await focusFirstError();
 			} else {
 				message = error instanceof ApiError ? error.detail : 'Unbekannter Fehler';
 			}
@@ -106,7 +126,7 @@
 	{/if}
 {/snippet}
 
-<form class="editor" onsubmit={submit} novalidate>
+<form class="editor" bind:this={form} onsubmit={submit} novalidate>
 	{#if message}
 		<Notice level="error">{message}</Notice>
 	{/if}

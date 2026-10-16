@@ -12,7 +12,9 @@ test('Admin ändert das Netzverlustentgelt und bewertet neu', async ({ page }) =
 	await login(page, 'admin');
 	await page.goto('/einstellungen');
 	await page.getByRole('button', { name: 'Bearbeiten' }).click();
-	await valueOf(page, 'Netzverlustentgelt').fill('1,23');
+	// der Demo-Zustand ist geteilt: einen Wert wählen, der vom aktuellen abweicht
+	const loss = valueOf(page, 'Netzverlustentgelt');
+	await loss.fill((await loss.inputValue()) === '1,23' ? '1,24' : '1,23');
 	await page.getByRole('button', { name: 'Speichern' }).click();
 	await expect(page.getByText(/Version \d+ gespeichert/)).toBeVisible();
 	await page.getByRole('button', { name: 'Neu bewerten' }).click();
@@ -27,7 +29,8 @@ test('Konflikt bei gleichzeitiger Änderung behält die Eingaben', async ({ page
 	// ein zweiter Admin speichert dazwischen
 	const current = await (await page.request.get('/api/settings')).json();
 	const csrf = (await page.context().cookies()).find((cookie) => cookie.name === 'bindaems_csrf');
-	const monthly = { ...current.settings.feed_in.monthly_ct, '2026-08': 6.5 };
+	const old = current.settings.feed_in.monthly_ct['2026-08'];
+	const monthly = { ...current.settings.feed_in.monthly_ct, '2026-08': old === 6.5 ? 6.6 : 6.5 };
 	const response = await page.request.put('/api/settings', {
 		data: {
 			base_version: current.version,
@@ -44,20 +47,30 @@ test('Konflikt bei gleichzeitiger Änderung behält die Eingaben', async ({ page
 test('admin edits the SNAP window and saves', async ({ page }) => {
 	await login(page, 'admin');
 	await page.goto('/einstellungen');
+	// der Demo-Zustand ist geteilt: vom aktuellen Wert aus ändern und am Ende zurücksetzen
 	await page.getByRole('button', { name: 'Bearbeiten' }).click();
-	const window = page
+	const factor = page
 		.getByRole('group', { name: GRID, exact: true })
-		.getByRole('group', { name: 'Zeitfenster 1' });
-	const factor = window.getByRole('textbox', { name: 'Wert', exact: true });
-	await expect(factor).toHaveValue('0,8');
-	await factor.fill('0,75');
-	await page.getByRole('button', { name: 'Speichern' }).click();
-	await expect(page.getByText(/Version \d+ gespeichert/)).toBeVisible();
-	// Leseansicht und das Formular zum Neubewerten
-	await expect(page.getByText('Apr–Sep, Mo–So, 10:00–16:00: × 0,75')).toBeVisible();
-	await expect(page.getByRole('button', { name: 'Neu bewerten' })).toBeVisible();
-	await page.reload();
-	await expect(page.getByText('Apr–Sep, Mo–So, 10:00–16:00: × 0,75')).toBeVisible();
+		.getByRole('group', { name: 'Zeitfenster 1' })
+		.getByRole('textbox', { name: 'Wert', exact: true });
+	const original = await factor.inputValue();
+	const changed = original === '0,75' ? '0,8' : '0,75';
+	try {
+		await factor.fill(changed);
+		await page.getByRole('button', { name: 'Speichern' }).click();
+		await expect(page.getByText(/Version \d+ gespeichert/)).toBeVisible();
+		// Leseansicht und das Formular zum Neubewerten
+		await expect(page.getByText(`Apr–Sep, Mo–So, 10:00–16:00: × ${changed}`)).toBeVisible();
+		await expect(page.getByRole('button', { name: 'Neu bewerten' })).toBeVisible();
+		await page.reload();
+		await expect(page.getByText(`Apr–Sep, Mo–So, 10:00–16:00: × ${changed}`)).toBeVisible();
+	} finally {
+		await page.goto('/einstellungen');
+		await page.getByRole('button', { name: 'Bearbeiten' }).click();
+		await factor.fill(original);
+		await page.getByRole('button', { name: 'Speichern' }).click();
+		await expect(page.getByText(/Version \d+ gespeichert/)).toBeVisible();
+	}
 });
 
 test('Tarif-Editor bei 360 px: ohne waagrechtes Scrollen, Bedienelemente mindestens 44 px', async ({

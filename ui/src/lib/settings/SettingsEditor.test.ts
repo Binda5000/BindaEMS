@@ -45,6 +45,56 @@ it('Serverfehler erscheinen am Feld', async () => {
 	await fireEvent.input(LOSS(), { target: { value: '1,23' } });
 	await fireEvent.click(screen.getByRole('button', { name: 'Speichern' }));
 	expect(await screen.findByText('Zahl erwartet')).toBeInTheDocument();
+	expect(screen.getByText('Bitte die markierten Felder prüfen.')).toBeInTheDocument();
+	// der Fokus liegt auf dem ersten fehlerhaften Feld
+	await vi.waitFor(() =>
+		expect(
+			within(screen.getByRole('group', { name: GRID })).getByLabelText('Wert netto')
+		).toHaveFocus()
+	);
+});
+
+it('Serverfehler einer Gruppe: Hinweis oben, Fokus auf dem Fehlertext', async () => {
+	const save = reject422({
+		loc: ['tariff'],
+		msg: 'Leistungspreise dürfen sich zeitlich nicht überschneiden'
+	});
+	render(SettingsEditor, { current: settingsCurrent(), save, onSaved: vi.fn(), onReload: vi.fn() });
+	await fireEvent.click(screen.getByRole('button', { name: 'Speichern' }));
+	expect(await screen.findByText('Bitte die markierten Felder prüfen.')).toBeInTheDocument();
+	await vi.waitFor(() =>
+		expect(
+			screen.getByText('Leistungspreise dürfen sich zeitlich nicht überschneiden')
+		).toHaveFocus()
+	);
+});
+
+it('Prüfung im Editor: Hinweis oben und Fokus auf dem ersten fehlerhaften Feld', async () => {
+	const save = vi.fn();
+	render(SettingsEditor, { current: settingsCurrent(), save, onSaved: vi.fn(), onReload: vi.fn() });
+	await fireEvent.input(screen.getByLabelText('USt. (%)'), { target: { value: 'abc' } });
+	await fireEvent.click(screen.getByRole('button', { name: 'Speichern' }));
+	expect(await screen.findByText('Bitte die markierten Felder prüfen.')).toBeInTheDocument();
+	await vi.waitFor(() => expect(screen.getByLabelText('USt. (%)')).toHaveFocus());
+	expect(save).not.toHaveBeenCalled();
+});
+
+it('Prüfung im Editor: ohne Feld (Monate) bekommt der Fehlertext den Fokus', async () => {
+	render(SettingsEditor, {
+		current: settingsCurrent(),
+		save: vi.fn(),
+		onSaved: vi.fn(),
+		onReload: vi.fn()
+	});
+	const window = within(screen.getByRole('group', { name: GRID })).getByRole('group', {
+		name: 'Zeitfenster 1'
+	});
+	for (const month of ['Apr', 'Mai', 'Jun', 'Jul', 'Aug', 'Sep']) {
+		await fireEvent.click(within(window).getByRole('button', { name: month }));
+	}
+	await fireEvent.click(screen.getByRole('button', { name: 'Speichern' }));
+	expect(await screen.findByText('Bitte die markierten Felder prüfen.')).toBeInTheDocument();
+	await vi.waitFor(() => expect(within(window).getByText('Mindestens ein Monat')).toHaveFocus());
 });
 
 it('meldet nach dem Speichern, ob sich Tarifwerte geändert haben', async () => {
