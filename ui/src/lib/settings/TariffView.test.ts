@@ -28,6 +28,32 @@ it('zeigt Werte mit Einheit', () => {
 	expect(screen.getByText('Grundgebühr Netz').closest('tr')).toHaveTextContent('€/Monat');
 });
 
+it('zeigt Stufe, Satz über der Stufe und Mindestverrechnung des Leistungspreises', () => {
+	const settings = settingsCurrent().settings;
+	settings.tariff.components = settings.tariff.components.map((c) =>
+		c.kind === 'power_per_kw_year'
+			? { ...c, value_eur: 19, value_above_eur: 34.5, tier_kw: 10, minimum_kw: 2 }
+			: c
+	);
+	render(TariffView, { settings });
+	const value = screen.getByText('Leistungspreis (ElWG)').closest('tr')?.querySelector('td.num');
+	expect(value?.textContent?.replace(/\s/g, ' ')).toBe(
+		'19,00 €/kW/Jahr, über 10 kW 34,50 €/kW/Jahr, mind. 2 kW'
+	);
+});
+
+it('zeigt ohne eigenen Satz über der Stufe nur Satz und Mindestverrechnung', () => {
+	const settings = settingsCurrent().settings;
+	settings.tariff.components = settings.tariff.components.map((c) =>
+		c.kind === 'power_per_kw_year'
+			? { ...c, value_eur: 19, value_above_eur: null, tier_kw: 10, minimum_kw: 2 }
+			: c
+	);
+	render(TariffView, { settings });
+	const value = screen.getByText('Leistungspreis (ElWG)').closest('tr')?.querySelector('td.num');
+	expect(value?.textContent?.replace(/\s/g, ' ')).toBe('19,00 €/kW/Jahr, mind. 2 kW');
+});
+
 it('nennt die Art mit denselben Bezeichnungen wie der Editor', () => {
 	render(TariffView, { settings: settingsCurrent().settings });
 	expect(screen.getByText('Leistungspreis (ElWG)').closest('tr')).toHaveTextContent(

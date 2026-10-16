@@ -18,10 +18,18 @@
 					: formatCt(component.value_ct);
 			case 'feed_in_per_kwh':
 				return component.value_ct === null ? null : formatCt(component.value_ct);
-			case 'power_per_kw_year':
-				return component.value_eur === null
-					? null
-					: `${formatNumber(component.value_eur, 2)}${NBSP}€/kW/Jahr`;
+			case 'power_per_kw_year': {
+				if (component.value_eur === null) return null;
+				const rate = (eur: number) => `${formatNumber(eur, 2)}${NBSP}€/kW/Jahr`;
+				const kw = (value: number) =>
+					`${formatNumber(value, Number.isInteger(value) ? 0 : 2)}${NBSP}kW`;
+				const parts = [rate(component.value_eur)];
+				if (component.value_above_eur !== null) {
+					parts.push(`über ${kw(component.tier_kw)} ${rate(component.value_above_eur)}`);
+				}
+				parts.push(`mind. ${kw(component.minimum_kw)}`);
+				return parts.join(', ');
+			}
 			case 'fixed_per_month':
 				return component.value_eur === null
 					? null
