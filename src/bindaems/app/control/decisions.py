@@ -201,10 +201,14 @@ class DecisionStore:
 
 
 def _point(decision: Decision) -> Point:
+    """Markierung für Grafana. Die Entscheidungen eines Zyklus teilen ``ts``; der Tag ``kind``
+    (vier Werte) hält etwa Strom und „Laden an“ einer Startfolge in getrennten Serien, sonst
+    behielte InfluxDB nur den letzten Punkt."""
     return Point(
         MEASUREMENT,
         {
             "actuator": decision.actuator,
+            "kind": str(decision.kind),
             "result": str(decision.result),
             "dry_run": "true" if decision.dry_run else "false",
         },

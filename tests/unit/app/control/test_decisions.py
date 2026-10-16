@@ -297,7 +297,12 @@ async def test_new_decisions_become_grafana_points(
     assert sink.points == [
         Point(
             "decision",
-            {"actuator": "wallbox.evcs", "result": "dry_run", "dry_run": "true"},
+            {
+                "actuator": "wallbox.evcs",
+                "kind": str(SAMPLE.kind),
+                "result": "dry_run",
+                "dry_run": "true",
+            },
             {"text": SAMPLE.text, "codes": "mode_pv,pv_surplus"},
             SAMPLE.ts,
             rp="raw",
@@ -317,6 +322,19 @@ async def test_a_decision_in_the_backlog_and_the_buffer_gets_one_point(
     await collector.catch_up()
     await collector.flush()
     assert len(sink.points) == 1
+
+
+async def test_decisions_of_one_cycle_do_not_overwrite_each_other_in_influx(
+    collector: DecisionCollector, sink: FakeSink
+) -> None:
+    # Startfolge eines Zyklus: Strom, dann Laden an, für denselben Aktor mit gleichem Ergebnis
+    for id_, kind in (("s1", CommandKind.CURRENT), ("s2", CommandKind.CHARGING)):
+        await collector.on_decision(decision(id=id_, kind=kind, result=DecisionResult.DRY_RUN))
+    assert await collector.flush() == 2
+    # InfluxDB behält je Serie (Messung und Tags) und Zeitpunkt nur einen Punkt
+    keys = {(p.measurement, tuple(sorted(p.tags.items())), p.ts) for p in sink.points}
+    assert len(keys) == 2
+    assert [p.tags["kind"] for p in sink.points] == ["current", "charging"]
 
 
 async def test_live_decision_tags(collector: DecisionCollector, sink: FakeSink) -> None:
