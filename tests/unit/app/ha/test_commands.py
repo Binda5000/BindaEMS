@@ -18,6 +18,7 @@ from bindaems.app.control.intent import (
 )
 from bindaems.app.core_link import CoreUnavailableError, LiveState
 from bindaems.app.ha.commands import HaCommandHandler, LogRejections
+from bindaems.app.settings.service import VersionConflictError
 from bindaems.shared.control import ChargeMode, Intent
 from bindaems.shared.timeutil import ManualClock
 
@@ -49,6 +50,27 @@ class FakeRejections:
         self.texts.append(text)
 
 
+class FakePlanning:
+    """Zeichnet die Befehle an die Planung auf; ``error`` wird beim Schalten geworfen."""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple] = []
+        self.error: Exception | None = None
+
+    def set_grid_charge(self, on, *, actor, source):
+        if self.error is not None:
+            raise self.error
+        self.calls.append(("set_grid_charge", on, actor, source))
+
+    def request(self, trigger) -> None:
+        self.calls.append(("request", trigger))
+
+
+@pytest.fixture
+def planning() -> FakePlanning:
+    return FakePlanning()
+
+
 @pytest.fixture
 def intents() -> FakeIntents:
     return FakeIntents()
@@ -60,7 +82,12 @@ def rejections() -> FakeRejections:
 
 
 @pytest.fixture
-def handler(cfg, intents, rejections, clock) -> HaCommandHandler:
+def handler(cfg, intents, rejections, clock, planning) -> HaCommandHandler:
+    return HaCommandHandler(cfg, intents, rejections, clock, planning)  # type: ignore[arg-type]
+
+
+@pytest.fixture
+def bare_handler(cfg, intents, rejections, clock) -> HaCommandHandler:
     return HaCommandHandler(cfg, intents, rejections, clock)  # type: ignore[arg-type]
 
 
@@ -306,3 +333,47 @@ async def test_command_through_the_real_service_is_audited_as_ha(
     clock.advance(1.0)
     await handler("tesla_mode", "Aus")
     assert rejections.texts == [PREFIX + "core nicht erreichbar."]
+
+
+@pytest.mark.parametrize(("payload", "on"), [("ON", True), ("OFF", False)])
+async def test_grid_charge_switch_command(handler, planning, intents, payload, on) -> None:
+    await handler("grid_charge", payload)
+    assert planning.calls == [("set_grid_charge", on, "home-assistant", "ha")]
+    assert intents.applied == []
+
+
+async def test_replan_button_requests_manual(handler, planning) -> None:
+    await handler("replan", "PRESS")
+    assert planning.calls == [("request", "manual")]
+
+
+async def test_unknown_grid_charge_payload_is_rejected(handler, planning, rejections) -> None:
+    await handler("grid_charge", "VIELLEICHT")
+    assert planning.calls == []
+    assert rejections.texts == [PREFIX + "Unbekannter Befehl „VIELLEICHT“ für „Netzladen erlaubt“."]
+
+
+async def test_unknown_replan_payload_is_rejected(handler, planning, rejections) -> None:
+    await handler("replan", "OFF")
+    assert planning.calls == []
+    assert rejections.texts == [PREFIX + "Unbekannter Befehl „OFF“ für „Neu planen“."]
+
+
+async def test_version_conflict_is_rejected_with_its_text(handler, planning, rejections) -> None:
+    planning.error = VersionConflictError(5)
+    await handler("grid_charge", "ON")
+    assert rejections.texts == [PREFIX + str(VersionConflictError(5))]
+
+
+async def test_other_planning_error_is_logged_not_raised(handler, planning, rejections) -> None:
+    planning.error = RuntimeError("kaputt")
+    with capture_logs() as logs:
+        await handler("grid_charge", "ON")
+    assert rejections.texts == []
+    assert any(entry["event"] == "Befehl aus Home Assistant fehlgeschlagen" for entry in logs)
+
+
+async def test_without_planning_the_plan_commands_are_unknown(bare_handler, rejections) -> None:
+    await bare_handler("grid_charge", "ON")
+    await bare_handler("replan", "PRESS")
+    assert rejections.texts == []

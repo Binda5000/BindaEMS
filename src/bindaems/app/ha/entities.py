@@ -19,6 +19,7 @@ from bindaems.app.control.intent import ASSIGNMENT_OVERRIDE
 from bindaems.app.core_link import LiveState
 from bindaems.app.forecast.service import ForecastService
 from bindaems.app.ledger.service import MonthPeak
+from bindaems.app.planning.explain import slot_text
 from bindaems.app.prices.pipeline import TOMORROW_EXPECTED_FROM
 from bindaems.app.prices.service import PriceService
 from bindaems.app.prices.store import PriceStore
@@ -32,7 +33,8 @@ from bindaems.shared.config import (
 )
 from bindaems.shared.control import ChargeMode, Intent, VehicleIntent
 from bindaems.shared.domain import Value
-from bindaems.shared.timeutil import LOCAL_TZ, slot_start
+from bindaems.shared.plan import BatteryIntentKind, Plan, PlanSlot
+from bindaems.shared.timeutil import LOCAL_TZ, SLOT, slot_start
 
 NODE_ID = "bindaems"
 MANUFACTURER = "BindaEMS"
@@ -45,6 +47,12 @@ MODE_LABELS: Final[dict[ChargeMode, str]] = {
     ChargeMode.MIN_PV: "Min+PV",
     ChargeMode.NOW: "Sofort",
     ChargeMode.OFF: "Aus",
+}
+# Zustand der Sensoren „Akku-Plan“: die Absicht des Slots (Texte, „Absichten“)
+INTENT_LABELS: Final[dict[BatteryIntentKind, str]] = {
+    BatteryIntentKind.EIGENVERBRAUCH: "Eigenverbrauch",
+    BatteryIntentKind.HALTEN: "Halten",
+    BatteryIntentKind.NETZLADEN: "Netzladen",
 }
 AUTOMATIC: Final = ASSIGNMENT_AUTOMATIC  # Zuordnung ohne Übersteuerung
 NO_WALLBOX: Final = "keine"
@@ -83,6 +91,10 @@ class HaInputs:
     wallboxes: list[dict[str, Any]] = field(default_factory=list)  # Health ``wallboxes``
     wallbox_names: dict[str, str] = field(default_factory=dict)  # eigene Namen der Wallboxes
     month_peak: MonthPeak | None = None  # höchste Viertelstunde des Monats; None = keine
+    plan: Plan | None = None  # Akkuplan, nur wenn er jetzt gilt
+    plan_now: PlanSlot | None = None  # Slot des Plans zu jetzt
+    plan_next: PlanSlot | None = None  # der Slot danach; None am Ende des Plans
+    grid_charge_allowed: bool | None = None  # Einstellung „Netzladen erlaubt“; None = unbekannt
 
 
 @dataclass(frozen=True)
@@ -278,6 +290,65 @@ def _month_peak_attributes(inputs: HaInputs) -> Mapping[str, Any]:
     return {"slot": None if peak is None else peak.slot_start.astimezone(UTC).isoformat()}
 
 
+def _plan_slot_state(pick: Callable[[HaInputs], PlanSlot | None]) -> Callable[[HaInputs], str]:
+    def value(inputs: HaInputs) -> str:
+        slot = pick(inputs)
+        return UNKNOWN if slot is None else INTENT_LABELS[slot.intent.kind]
+
+    return value
+
+
+def _plan_slot_attributes(
+    pick: Callable[[HaInputs], PlanSlot | None],
+) -> Callable[[HaInputs], Mapping[str, Any]]:
+    def attributes(inputs: HaInputs) -> Mapping[str, Any]:
+        slot = pick(inputs)
+        if slot is None or inputs.plan is None:
+            return {}
+        return {
+            "reason": slot_text(slot),
+            "codes": [reason.code for reason in slot.reasons],
+            "planned_soc_pct": round(slot.soc_end_pct, 1),
+            "grid_charge_w": slot.intent.grid_charge_w,
+            "start": slot.start.astimezone(LOCAL_TZ).isoformat(),
+            "source": inputs.plan.source,
+        }
+
+    return attributes
+
+
+def _plan_now(inputs: HaInputs) -> PlanSlot | None:
+    return inputs.plan_now
+
+
+def _plan_next(inputs: HaInputs) -> PlanSlot | None:
+    return inputs.plan_next
+
+
+def _planned_soc(inputs: HaInputs) -> str:
+    return fmt(None if inputs.plan_now is None else inputs.plan_now.soc_end_pct, 1)
+
+
+def _planned_soc_attributes(inputs: HaInputs) -> Mapping[str, Any]:
+    """SOC (zu Beginn des Slots) je volle Stunde des Plans, Zeiten lokal wie bei ``prices``."""
+    if inputs.plan is None:
+        return {"hourly": []}
+    return {
+        "hourly": [
+            {
+                "start": slot.start.astimezone(LOCAL_TZ).isoformat(),
+                "soc_pct": round(slot.soc_start_pct, 1),
+            }
+            for slot in inputs.plan.slots
+            if slot.start.astimezone(LOCAL_TZ).minute == 0
+        ]
+    }
+
+
+def _budget_kw(inputs: HaInputs) -> str:
+    return fmt(None if inputs.plan_now is None else inputs.plan_now.budget_kw, 1)
+
+
 def _power(oid: str, name: str, device: DeviceSpec, value: Callable[[HaInputs], str]) -> EntitySpec:
     return EntitySpec(
         oid,
@@ -342,6 +413,42 @@ def build_entities(cfg: Config) -> list[EntitySpec]:
             device_class="power",
             state_class="measurement",
             attributes=_month_peak_attributes,
+        ),
+        EntitySpec(
+            "battery_plan_now",
+            "sensor",
+            "Akku-Plan jetzt",
+            main,
+            _plan_slot_state(_plan_now),
+            attributes=_plan_slot_attributes(_plan_now),
+        ),
+        EntitySpec(
+            "battery_plan_next",
+            "sensor",
+            "Akku-Plan nächster Slot",
+            main,
+            _plan_slot_state(_plan_next),
+            attributes=_plan_slot_attributes(_plan_next),
+        ),
+        EntitySpec(
+            "planned_soc",
+            "sensor",
+            "Geplanter SOC",
+            main,
+            _planned_soc,
+            unit="%",
+            state_class="measurement",
+            attributes=_planned_soc_attributes,
+        ),
+        EntitySpec(
+            "budget",
+            "sensor",
+            "Budget",
+            main,
+            _budget_kw,
+            unit="kW",
+            device_class="power",
+            state_class="measurement",
         ),
         _power("grid_power", "Netzleistung", main, _derived_w("grid_w")),
         _power("pv_power", "PV-Leistung", main, _derived_w("pv_total_w")),
@@ -416,6 +523,14 @@ def build_entities(cfg: Config) -> list[EntitySpec]:
             _guest_mode_state,
             tuple(MODE_LABELS.values()),
         ),
+        _control(
+            "grid_charge",
+            "switch",
+            "Netzladen erlaubt",
+            main,
+            lambda i: on_off(i.grid_charge_allowed),
+        ),
+        _control("replan", "button", "Neu planen", main, lambda _: ""),
         EntitySpec(
             "problem_assignment_unclear",
             "binary_sensor",
@@ -534,6 +649,8 @@ def build_inputs(
     intent: Intent | None = None,
     wallbox_names: Mapping[str, str] | None = None,
     month_peak: MonthPeak | None = None,
+    plan: Plan | None = None,
+    grid_charge_allowed: bool | None = None,
 ) -> HaInputs:
     connected = live.connected
     signals: dict[str, Value] = {}
@@ -571,6 +688,7 @@ def build_inputs(
         local.time() >= TOMORROW_EXPECTED_FROM and not store.complete_day(tomorrow)
     )
     latest = forecast.latest()
+    valid = plan if plan is not None and plan.valid_at(now) else None
     return HaInputs(
         core_connected=connected,
         mode=mode if isinstance(mode, str) else None,
@@ -595,4 +713,8 @@ def build_inputs(
         wallboxes=_dicts(wallboxes),
         wallbox_names=dict(wallbox_names or {}),
         month_peak=month_peak,
+        plan=valid,
+        plan_now=valid.slot_at(now) if valid is not None else None,
+        plan_next=valid.slot_at(now + SLOT) if valid is not None else None,
+        grid_charge_allowed=grid_charge_allowed,
     )

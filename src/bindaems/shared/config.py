@@ -42,6 +42,10 @@ HA_SYSTEM_IDS = (
     "pv_forecast_today",
     "pv_forecast_tomorrow",
     "month_peak",
+    "battery_plan_now",
+    "battery_plan_next",
+    "planned_soc",
+    "budget",
     "grid_power",
     "pv_power",
     "battery_power",
@@ -55,6 +59,8 @@ HA_SYSTEM_IDS = (
     "watchdog_tripped",
     "regulation",
     "guest_mode",
+    "grid_charge",
+    "replan",
     "problem_assignment_unclear",
 )
 HA_VEHICLE_SUFFIXES = ("soc", "mode", "boost", "boost_stop", "wallbox")

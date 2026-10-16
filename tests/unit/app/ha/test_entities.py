@@ -6,6 +6,7 @@ from typing import Any
 import pytest
 import yaml
 from tests.app_helpers import T_APP, price_row, sample_inputs
+from tests.plan_helpers import EV, HOLD_REASON, sample_plan
 
 from bindaems.app.ha.entities import (
     EntitySpec,
@@ -41,6 +42,10 @@ def test_entities_from_config(cfg) -> None:
         "pv_forecast_today",
         "pv_forecast_tomorrow",
         "month_peak",
+        "battery_plan_now",
+        "battery_plan_next",
+        "planned_soc",
+        "budget",
         "grid_power",
         "pv_power",
         "battery_power",
@@ -54,6 +59,8 @@ def test_entities_from_config(cfg) -> None:
         "watchdog_tripped",
         "regulation",
         "guest_mode",
+        "grid_charge",
+        "replan",
         "problem_assignment_unclear",
         "tesla_soc",
         "tesla_mode",
@@ -440,3 +447,108 @@ def test_month_peak_sensor_without_peak_is_unknown(cfg) -> None:
     inputs = sample_inputs()
     spec = entity(cfg, "month_peak")
     assert spec.value(inputs) == "None" and spec.attributes(inputs) == {"slot": None}
+
+
+def _plan_inputs(**changes):
+    plan = sample_plan(
+        created="2026-10-16T10:01:00+00:00", slots=["10:00", "10:15"], intents=[HOLD_REASON, EV]
+    )
+    return sample_inputs(plan=plan, plan_now=plan.slots[0], plan_next=plan.slots[1], **changes)
+
+
+def test_plan_now_sensor(cfg) -> None:
+    inputs = _plan_inputs()
+    spec = entity(cfg, "battery_plan_now")
+    assert spec.value(inputs) == "Halten"
+    attrs = spec.attributes(inputs)
+    assert attrs["reason"] == "Akku hält 50 %, weil 18:00–20:00 Uhr 38,0 ct erwartet werden."
+    assert (attrs["codes"], attrs["planned_soc_pct"], attrs["source"]) == (
+        ["HALTEN_FUER_SPITZE"],
+        50.0,
+        "optimizer",
+    )
+    assert (attrs["grid_charge_w"], attrs["start"]) == (0.0, "2026-10-16T12:00:00+02:00")
+    assert entity(cfg, "battery_plan_next").value(inputs) == "Eigenverbrauch"
+    assert (
+        entity(cfg, "battery_plan_next").attributes(inputs)["start"] == "2026-10-16T12:15:00+02:00"
+    )
+
+
+def test_plan_sensors_unknown_without_valid_plan(cfg) -> None:
+    inputs = sample_inputs()
+    names = ("battery_plan_now", "battery_plan_next", "planned_soc", "budget")
+    assert {entity(cfg, oid).value(inputs) for oid in names} == {"None"}
+    assert entity(cfg, "battery_plan_now").attributes(inputs) == {}
+    assert entity(cfg, "planned_soc").attributes(inputs) == {"hourly": []}
+
+
+def test_planned_soc_and_hourly_attribute(cfg) -> None:
+    plan = sample_plan(
+        created="2026-10-16T10:01:00+00:00",
+        slots=["10:00", "10:15", "10:30", "10:45", "11:00"],
+        soc=(40.0, 41.26),
+    )
+    slots = [
+        slot.model_copy(update={"soc_start_pct": 40.0 + i, "budget_kw": 7.14})
+        for i, slot in enumerate(plan.slots)
+    ]
+    plan = plan.model_copy(update={"slots": slots})
+    inputs = sample_inputs(plan=plan, plan_now=slots[1], plan_next=slots[2])
+    spec = entity(cfg, "planned_soc")
+    assert spec.value(inputs) == "41.3"
+    assert spec.attributes(inputs)["hourly"] == [
+        {"start": "2026-10-16T12:00:00+02:00", "soc_pct": 40.0},
+        {"start": "2026-10-16T13:00:00+02:00", "soc_pct": 44.0},
+    ]
+    assert entity(cfg, "budget").value(inputs) == "7.1"
+    assert config_of(cfg, "budget")["unit_of_measurement"] == "kW"
+    assert config_of(cfg, "planned_soc")["unit_of_measurement"] == "%"
+    assert config_of(cfg, "battery_plan_now")["name"] == "Akku-Plan jetzt"
+    assert config_of(cfg, "battery_plan_next")["name"] == "Akku-Plan nächster Slot"
+    assert config_of(cfg, "planned_soc")["name"] == "Geplanter SOC"
+
+
+def test_build_inputs_takes_the_slots_of_a_valid_plan(
+    live, price_service, store, forecast_service
+) -> None:
+    plan = sample_plan(created="2026-10-09T07:58:00+00:00", slots=["08:00", "08:15"])
+    inputs = build_inputs(
+        live, price_service, store, forecast_service, T_APP, plan=plan, grid_charge_allowed=True
+    )
+    assert inputs.plan is plan and inputs.grid_charge_allowed is True
+    assert (inputs.plan_now, inputs.plan_next) == (plan.slots[0], plan.slots[1])
+    last = build_inputs(
+        live, price_service, store, forecast_service, T_APP + timedelta(minutes=15), plan=plan
+    )
+    assert (last.plan_now, last.plan_next) == (plan.slots[1], None)
+
+
+def test_build_inputs_ignores_expired_plan(live, price_service, store, forecast_service) -> None:
+    plan = sample_plan(created="2026-10-09T06:00:00+00:00", slots=["08:00", "08:15"])
+    inputs = build_inputs(live, price_service, store, forecast_service, T_APP, plan=plan)
+    assert (inputs.plan, inputs.plan_now, inputs.plan_next) == (None, None, None)
+    assert (
+        build_inputs(live, price_service, store, forecast_service, T_APP).grid_charge_allowed
+        is None
+    )
+
+
+def test_grid_charge_switch_state_and_discovery(cfg) -> None:
+    assert state(cfg, "grid_charge", sample_inputs(grid_charge_allowed=True)) == "ON"
+    assert state(cfg, "grid_charge", sample_inputs(grid_charge_allowed=False)) == "OFF"
+    assert state(cfg, "grid_charge", sample_inputs()) == "None"
+    data = config_of(cfg, "grid_charge")
+    assert data["command_topic"] == "bindaems/cmd/grid_charge"
+    assert (data["name"], data["payload_on"], data["payload_off"]) == (
+        "Netzladen erlaubt",
+        "ON",
+        "OFF",
+    )
+    assert entity(cfg, "grid_charge").component == "switch"
+
+
+def test_replan_button_discovery(cfg) -> None:
+    data = config_of(cfg, "replan")
+    assert (data["name"], data["payload_press"]) == ("Neu planen", "PRESS")
+    assert data["command_topic"] == "bindaems/cmd/replan" and "state_topic" not in data
+    assert entity(cfg, "replan").device.identifier == "bindaems"

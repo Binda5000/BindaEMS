@@ -9,6 +9,7 @@ gemeldet (``Rejections``); keine Ausnahme verlässt den Handler.
 
 from __future__ import annotations
 
+import asyncio
 import unicodedata
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -17,6 +18,7 @@ from typing import Final, Protocol
 
 import structlog
 
+from bindaems.app.audit import Source
 from bindaems.app.control.intent import (
     Change,
     ConflictAgain,
@@ -33,7 +35,9 @@ from bindaems.app.control.intent import (
 from bindaems.app.control.routes import CONFLICT, CORE_DOWN
 from bindaems.app.core_link import CoreUnavailableError
 from bindaems.app.ha.entities import AUTOMATIC, MODE_LABELS, object_id
+from bindaems.app.settings.service import SettingsVersion, VersionConflictError
 from bindaems.shared.config import Config
+from bindaems.shared.plan import PlanTrigger
 from bindaems.shared.timeutil import Clock
 
 log = structlog.get_logger(__name__)
@@ -46,6 +50,26 @@ RATE_S: Final = 1.0  # höchstens ein Befehl je Sekunde und Entität
 ON: Final = "ON"
 OFF: Final = "OFF"
 PRESS: Final = "PRESS"
+
+
+class PlanningCommands(Protocol):
+    """Was die Planung für Home Assistant tut: Netzladen schalten und Neuplanung anfordern."""
+
+    def set_grid_charge(self, on: bool, *, actor: str, source: Source) -> SettingsVersion: ...
+
+    def request(self, trigger: PlanTrigger) -> None: ...
+
+
+@dataclass(frozen=True)
+class SetGridCharge:
+    """Schalter „Netzladen erlaubt“."""
+
+    on: bool
+
+
+@dataclass(frozen=True)
+class Replan:
+    """Taste „Neu planen“."""
 
 
 class Rejections(Protocol):
@@ -72,11 +96,11 @@ class _Command:
     """Eine Entität mit Befehl: ihr Name für die Meldung und die Zuordnung der Nutzlast."""
 
     name: str
-    parse: Callable[[str], Change | None]  # ``None``: Nutzlast unbekannt
+    parse: Callable[[str], Change | SetGridCharge | Replan | None]  # ``None``: Nutzlast unbekannt
     option: bool  # ``select`` (Option) oder Schalter und Taste (Befehl)
 
 
-def _table(cfg: Config) -> dict[str, _Command]:
+def _table(cfg: Config, planning: bool) -> dict[str, _Command]:
     by_label = {label: mode for mode, label in MODE_LABELS.items()}
 
     def mode(key: str) -> Callable[[str], Change | None]:
@@ -101,10 +125,18 @@ def _table(cfg: Config) -> dict[str, _Command]:
     def regulation(payload: str) -> Change | None:
         return SetControl(payload == ON) if payload in (ON, OFF) else None
 
+    def grid_charge(payload: str) -> SetGridCharge | None:
+        return SetGridCharge(payload == ON) if payload in (ON, OFF) else None
+
     table = {
         "regulation": _Command("Regelbetrieb", regulation, option=False),
         "guest_mode": _Command("Gast-Lademodus", guest, option=True),
     }
+    if planning:
+        table["grid_charge"] = _Command("Netzladen erlaubt", grid_charge, option=False)
+        table["replan"] = _Command(
+            "Neu planen", lambda payload: Replan() if payload == PRESS else None, option=False
+        )
     for key in cfg.vehicles:
         oid = object_id(key)
         table[f"{oid}_mode"] = _Command("Lademodus", mode(key), option=True)
@@ -121,10 +153,17 @@ class HaCommandHandler:
     """Setzt Befehle aus Home Assistant in Änderungen der Absicht um."""
 
     def __init__(
-        self, cfg: Config, intents: IntentService, rejections: Rejections, clock: Clock
+        self,
+        cfg: Config,
+        intents: IntentService,
+        rejections: Rejections,
+        clock: Clock,
+        planning: PlanningCommands | None = None,
     ) -> None:
-        self._commands = _table(cfg)
+        # ohne Planung kennt der Handler „Netzladen erlaubt“ und „Neu planen“ nicht
+        self._commands = _table(cfg, planning is not None)
         self._intents = intents
+        self._planning = planning
         self._rejections = rejections
         self._clock = clock
         self._last: dict[str, datetime] = {}
@@ -147,7 +186,9 @@ class HaCommandHandler:
             await self._reject(f"{unknown} „{_shown(payload)}“ für „{command.name}“.")
             return
         try:
-            await self._intents.apply(change, actor=ACTOR, source=SOURCE)
+            await self._execute(change)
+        except VersionConflictError as exc:
+            await self._reject(str(exc))
         except Rejected as exc:
             await self._reject(" ".join(exc.details))
         except UnknownTarget as exc:
@@ -158,6 +199,16 @@ class HaCommandHandler:
             await self._reject(CONFLICT)
         except Exception:
             log.exception("Befehl aus Home Assistant fehlgeschlagen", object_id=object_id)
+
+    async def _execute(self, change: Change | SetGridCharge | Replan) -> None:
+        planning = self._planning
+        if isinstance(change, SetGridCharge) and planning is not None:
+            # blockiert (Datenbank): nicht in der Ereignisschleife
+            await asyncio.to_thread(planning.set_grid_charge, change.on, actor=ACTOR, source=SOURCE)
+        elif isinstance(change, Replan) and planning is not None:
+            planning.request("manual")
+        elif not isinstance(change, SetGridCharge | Replan):
+            await self._intents.apply(change, actor=ACTOR, source=SOURCE)
 
     async def _reject(self, reason: str) -> None:
         text = f"Befehl aus Home Assistant abgelehnt: {reason}"

@@ -236,7 +236,11 @@ class AppRuntime:
                 self._current_ha_inputs,
                 transport_factory=partial(AiomqttHaTransport, mqtt, secrets.ha_mqtt_password),
                 commands=HaCommandHandler(
-                    cfg, self.intents, self.ha_notifier or LogRejections(), self._clock
+                    cfg,
+                    self.intents,
+                    self.ha_notifier or LogRejections(),
+                    self._clock,
+                    self.planning,
                 ),
             )
         self.settings.on_change(lambda _version: self.pipeline.republish())
@@ -326,6 +330,7 @@ class AppRuntime:
     def _build_ha_inputs(self, intent: Intent | None) -> HaInputs:
         """Läuft im Worker-Thread (``_ha_inputs_loop``): die Datenbankabfrage blockiert nicht."""
         now = self._clock.now()
+        settings = self.settings.current().settings
         return build_inputs(
             self.live,
             self.prices,
@@ -333,8 +338,10 @@ class AppRuntime:
             self.forecast,
             now,
             intent,
-            self.settings.current().settings.wallbox_names,
+            settings.wallbox_names,
             self.ledger.month_peak(now.astimezone(LOCAL_TZ).date()),
+            self.planning.current(),
+            settings.planning.grid_charge_allowed,
         )
 
     async def _ha_intent(self) -> Intent | None:

@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from datetime import date, datetime
-from typing import Any
+from typing import Any, Final
 
 from bindaems.app.core_link import LiveState
 from bindaems.app.planning.battery_model import (
@@ -26,7 +26,14 @@ from bindaems.app.planning.inputs import (
 )
 from bindaems.app.planning.optimizer import OptimizerResult, SlotFlows, solve
 from bindaems.app.settings.service import SettingsService
-from bindaems.shared.plan import PLAN_VALID, BatteryIntent, Plan, PlanSlot
+from bindaems.shared.plan import (
+    PLAN_VALID,
+    BatteryIntent,
+    BatteryIntentKind,
+    Plan,
+    PlanSlot,
+    Reason,
+)
 from bindaems.shared.settings import PlanningSettings, PowerComponent, TariffSettings
 from bindaems.shared.timeutil import SLOT, slot_start
 
@@ -65,18 +72,40 @@ def sample_slot(
     )
 
 
+# Änderungen an einem Slot für ``sample_plan(intents=…)``: Eigenverbrauch und Halten für die Spitze
+EV: Final[dict[str, Any]] = {"intent": BatteryIntent()}
+HOLD_REASON: Final[dict[str, Any]] = {
+    "intent": BatteryIntent(kind=BatteryIntentKind.HALTEN),
+    "reasons": [
+        Reason(
+            code="HALTEN_FUER_SPITZE",
+            params={"soc": 50.0, "von": "18:00", "bis": "20:00", "ct": 38.0},
+        )
+    ],
+}
+
+
 def sample_plan(
     created: str,
     slots: list[str],
     *,
     soc: tuple[float, float] | None = None,
     month_peak_kw: float | None = None,
+    intents: Sequence[Mapping[str, Any]] | None = None,
 ) -> Plan:
     """Plan des Optimierers, erzeugt zu ``created`` (ISO mit Zeitzone), mit Slots ``HH:MM`` am
-    Tag (UTC) der Erzeugung; ``soc`` ist der SOC (%) zu Beginn und Ende jedes Slots."""
+    Tag (UTC) der Erzeugung; ``soc`` ist der SOC (%) zu Beginn und Ende jedes Slots. ``intents``
+    sind Änderungen je Slot (Felder von ``PlanSlot``, z. B. ``HOLD_REASON``), eine je Slot."""
     created_at = at(created)
     day = created_at.date().isoformat()
     plan_slots = [sample_slot(start, day=day) for start in slots]
+    if intents is not None:
+        if len(intents) != len(plan_slots):
+            raise ValueError("Eine Änderung je Slot nötig")
+        plan_slots = [
+            slot.model_copy(update=dict(change))
+            for slot, change in zip(plan_slots, intents, strict=True)
+        ]
     if soc is not None:
         update = {"soc_start_pct": soc[0], "soc_end_pct": soc[1]}
         plan_slots = [slot.model_copy(update=update) for slot in plan_slots]
