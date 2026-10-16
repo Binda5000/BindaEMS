@@ -229,7 +229,6 @@ class PlanningService:
         fingerprint: Fingerprint | None = None
         tick = next_tick(self._clock.now())
         while True:
-            self._wake.clear()
             now = self._clock.now()
             if now >= tick:
                 self.request("slot")
@@ -238,6 +237,9 @@ class PlanningService:
                 fingerprint = await self._watch(fingerprint, now)
             except Exception:
                 log.exception("Auslöser der Planung nicht prüfbar")
+            # Erst hier zurücksetzen: Die Anfragen von Viertelstunde und ``_watch`` nimmt
+            # ``_take`` mit; eine Anfrage während des Laufs weckt die Schleife danach sofort.
+            self._wake.clear()
             trigger = self._take()
             if trigger is not None:
                 try:

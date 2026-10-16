@@ -74,14 +74,15 @@ def soc_deviates(plan: Plan | None, now: datetime, soc_pct: float | None) -> boo
     if plan is None or soc_pct is None:
         return False
     expected = expected_soc_pct(plan, now)
-    return expected is not None and abs(soc_pct - expected) > SOC_DEVIATION_PP
+    # gerundet: genau die Schwelle ist keine Abweichung, auch mit Rundungsrauschen
+    return expected is not None and round(abs(soc_pct - expected), 6) > SOC_DEVIATION_PP
 
 
 def peak_rose(plan: Plan | None, peak_kw: float | None) -> bool:
     """Liegt die Monatsspitze mehr als ``PEAK_RISE_KW`` über der des Plans (ohne: 0)?"""
     if plan is None or peak_kw is None:
         return False
-    return peak_kw - (plan.month_peak_kw or 0.0) > PEAK_RISE_KW
+    return round(peak_kw - (plan.month_peak_kw or 0.0), 6) > PEAK_RISE_KW
 
 
 def settings_relevant(old: RuntimeSettings, new: RuntimeSettings) -> bool:

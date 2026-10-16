@@ -8,6 +8,7 @@ from fastapi.testclient import TestClient
 from pydantic import SecretStr
 from structlog.testing import capture_logs
 from tests.app_helpers import PASSWORD, T_APP, StopScheduler, record_then_stop
+from tests.plan_helpers import until
 from tests.unit.shared.test_decisions import decision
 
 from bindaems.app.control.decisions import DecisionQuery
@@ -344,7 +345,12 @@ async def test_failed_calibration_still_releases_the_pv_forecast(runtime, monkey
 async def test_runtime_starts_and_stops_cleanly(runtime, respx_mock) -> None:
     respx_mock.route().respond(503)  # kein echter Netzverkehr
     task = asyncio.create_task(runtime.run())
-    await asyncio.sleep(0.3)
+    await until(
+        lambda: (
+            runtime.pipeline.status().last_attempt is not None
+            and runtime.planning.status().unavailable is not None
+        )
+    )
     await runtime.shutdown()
     await asyncio.wait_for(task, timeout=2)
     assert runtime.pipeline.status().last_attempt is not None  # Preise wurden versucht

@@ -103,3 +103,13 @@ def test_settings_relevant_for_tariff_and_feed_in():
     tariff = base.tariff.model_copy(update={"vat_pct": 10.0})
     assert settings_relevant(base, base.model_copy(update={"tariff": tariff}))
     assert not settings_relevant(base, base)
+
+
+def test_exact_thresholds_are_no_change_despite_float_noise():
+    plan = sample_plan(created="2026-10-16T10:01:00+00:00", slots=["10:00"], month_peak_kw=4.1)
+    assert 4.15 - 4.1 > 0.05  # Rundungsrauschen
+    assert not peak_rose(plan, 4.15) and peak_rose(plan, 4.16)
+    soc = sample_plan(created="2026-10-16T10:01:00+00:00", slots=["10:00"], soc=(3.3, 3.3))
+    assert 8.3 - 3.3 > 5.0  # Rundungsrauschen
+    moment = at("2026-10-16T10:07:30+00:00")
+    assert not soc_deviates(soc, moment, 8.3) and soc_deviates(soc, moment, 8.4)

@@ -408,6 +408,8 @@ async def test_requests_during_solve_coalesce_into_one_rerun(service_with):
     await asyncio.sleep(0.05)
     assert [i.trigger for i in calls] == ["start", "manual"]
     task.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await task
 
 
 async def test_settings_change_requests_replan(service, settings_service):
@@ -564,3 +566,31 @@ async def test_failed_watch_is_logged_and_the_run_still_plans(service_with, pric
             await until(lambda: service.current() is not None)
     assert "Auslöser der Planung nicht prüfbar" in [entry["event"] for entry in logs]
     assert service.current().trigger == "start"
+
+
+async def test_persistent_trigger_waits_between_runs(service_with, live, forecast, monkeypatch):
+    """Ein anhaltender Auslöser (SOC weicht ab, Eingangsdaten fehlen) plant einmal je Wartezeit,
+    nicht in einer engen Schleife."""
+    sleeps: list[float] = []
+
+    async def sleep(seconds: float) -> None:
+        sleeps.append(seconds)
+        await asyncio.sleep(0.02)
+
+    service = service_with(sleep=sleep)
+    collects: list[PlanTrigger] = []
+    collect = service.collect
+
+    async def counting(trigger: PlanTrigger) -> PlanInputs:
+        collects.append(trigger)
+        return await collect(trigger)
+
+    monkeypatch.setattr(service, "collect", counting)
+    async with running(service):
+        await until(lambda: service.current() is not None)
+        forecast.forecast = None
+        live_signals(live, {"battery.soc_pct": 90.0})
+        await until(lambda: len(sleeps) >= 10)
+    assert service.status().unavailable == "keine PV-Prognose"
+    assert collects.count("soc") >= 5
+    assert len(collects) <= len(sleeps) + 2  # höchstens ein Lauf je Wartezeit
