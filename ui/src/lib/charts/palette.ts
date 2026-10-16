@@ -7,6 +7,8 @@ export interface Palette {
 	importPrice: string;
 	feedIn: string;
 	pv: string;
+	/** Lastprognose */
+	load: string;
 	/** Farben für beliebige Reihen (Verlauf) */
 	series: string[];
 }
@@ -21,6 +23,7 @@ export function readPalette(element: Element = document.documentElement): Palett
 		importPrice: color('--battery', '#1f6feb'),
 		feedIn: color('--ok', '#1a7f37'),
 		pv: color('--pv', '#d18f00'),
+		load: color('--house', '#8250df'),
 		series: [
 			color('--grid', '#6e7781'),
 			color('--pv', '#d18f00'),

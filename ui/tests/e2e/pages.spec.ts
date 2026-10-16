@@ -53,6 +53,34 @@ test('Verbraucher zeigen „Sonstiges“, System zeigt Signale', async ({ page }
 	await expect(page.getByRole('cell', { name: 'pv.huawei.power_w' })).toBeVisible();
 });
 
+test('Übersicht zeichnet das Diagramm mit Prognosen, System zeigt Lastprognose und Prognosegüte', async ({
+	page
+}) => {
+	await login(page, 'gast');
+	const load = page.waitForResponse(
+		(response) => response.url().includes('/api/forecast/load') && response.ok()
+	);
+	await page.goto('/');
+	await load;
+	const chart = page.locator('section', { hasText: 'Preise und PV heute/morgen' });
+	await expect(chart.locator('canvas').first()).toBeVisible();
+	await expect(chart.locator('.notice.error')).toHaveCount(0);
+
+	await page.goto('/system');
+	const loadCard = page.locator('section', {
+		has: page.getByRole('heading', { name: 'Lastprognose' })
+	});
+	await expect(loadCard.getByText('Datenbasis')).toBeVisible();
+	await expect(loadCard.getByText('Übermorgen')).toBeVisible();
+	await expect(loadCard.getByText('Viertelstunden aus BindaEMS')).toBeVisible();
+	const quality = page.locator('section', {
+		has: page.getByRole('heading', { name: 'Prognosegüte' })
+	});
+	await expect(quality.getByText('letzte 14 Tage')).toBeVisible();
+	await expect(quality.getByRole('columnheader', { name: 'MAE relativ' })).toBeVisible();
+	await expect(quality.getByRole('cell', { name: 'bis 6 h' }).first()).toBeVisible();
+});
+
 /** Bedienelemente unter 44 × 44 px (Global Constraints: Mobil zuerst); Links im Text zählen nicht */
 function smallTargets(path: string): string[] {
 	const selector = [

@@ -13,6 +13,8 @@
 	import { canOperate, hasRole } from '$lib/roles';
 	import { Acknowledgement } from '$lib/system/acknowledge.svelte';
 	import ControlCard from '$lib/system/ControlCard.svelte';
+	import LoadForecastCard from '$lib/system/LoadForecastCard.svelte';
+	import QualityCard from '$lib/system/QualityCard.svelte';
 	import SignalTable from '$lib/system/SignalTable.svelte';
 	import {
 		actuatorModeLabel,
@@ -32,6 +34,8 @@
 	const system = new Resource((o) => api.system(o), { intervalMs: 15_000 });
 	const prices = new Resource((o) => api.prices(null, o), { intervalMs: 300_000 });
 	const forecast = new Resource((o) => api.forecast(o), { intervalMs: 300_000 });
+	const loadForecast = new Resource((o) => api.loadForecast(o), { intervalMs: 300_000 });
+	const quality = new Resource((o) => api.forecastQuality(14, o), { intervalMs: 300_000 });
 	const appHealth = new Resource((o) => api.health(o));
 	const control = new Resource((o) => api.control(o), { intervalMs: 15_000 });
 
@@ -40,8 +44,8 @@
 	let followUp: ReturnType<typeof setTimeout> | undefined;
 
 	onMount(() => {
-		const stops = [system, prices, forecast, appHealth, control].map((resource) =>
-			resource.start()
+		const stops = [system, prices, forecast, loadForecast, quality, appHealth, control].map(
+			(resource) => resource.start()
 		);
 		const clock = setInterval(() => (nowMs = Date.now()), 1000);
 		return () => {
@@ -437,6 +441,10 @@
 			</dl>
 		{/if}
 	</Card>
+
+	<LoadForecastCard data={loadForecast.data} error={loadForecast.error} />
+
+	<QualityCard data={quality.data} error={quality.error} />
 
 	<Card title="Signale">
 		<label class="filter">

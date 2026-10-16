@@ -1,6 +1,6 @@
 import type { LineSeriesOption, YAXisComponentOption } from 'echarts';
 import { describe, expect, it } from 'vitest';
-import type { PriceSlot } from '$lib/api/schemas';
+import type { LoadForecast, PriceSlot } from '$lib/api/schemas';
 import { axisTooltip, historyOption, priceForecastOption } from './options';
 import type { Palette } from './palette';
 
@@ -11,6 +11,7 @@ const palette: Palette = {
 	importPrice: '#c00',
 	feedIn: '#090',
 	pv: '#fa0',
+	load: '#80f',
 	series: ['#00f', '#0a0']
 };
 
@@ -31,6 +32,7 @@ describe('Preise und Prognose', () => {
 		const option = priceForecastOption(
 			[slot('2026-10-09T08:00:00+00:00', 13.44), slot('2026-10-09T08:15:00+00:00', 15)],
 			[],
+			null,
 			'2026-10-09T08:05:00+00:00',
 			palette
 		);
@@ -48,17 +50,98 @@ describe('Preise und Prognose', () => {
 		const option = priceForecastOption(
 			[slot('2026-10-09T08:00:00+00:00', 13.44, null)],
 			[{ start: '2026-10-09T08:00:00+00:00', p50_w: 2500, p25_w: 1750, p75_w: 3000 }],
+			null,
 			'2026-10-09T08:05:00+00:00',
 			palette
 		);
 		const series = option.series as LineSeriesOption[];
-		expect(series.map((s) => s.name)).toEqual(['Bezugspreis', 'PV-Prognose']);
-		expect([series[1].yAxisIndex, series[1].data]).toEqual([1, [[at(0), 2.5]]]);
+		expect(series.map((s) => s.name)).toEqual([
+			'Bezugspreis',
+			'PV P25',
+			'PV P25–P75',
+			'PV-Prognose'
+		]);
+		const pv = series.find((s) => s.name === 'PV-Prognose');
+		expect([pv?.yAxisIndex, pv?.data]).toEqual([1, [[at(0), 2.5]]]);
 		expect((option.yAxis as YAXisComponentOption[]).map((axis) => axis.name)).toEqual([
 			'ct/kWh',
 			'kW'
 		]);
 		expect(JSON.stringify(series[0].markLine)).toContain(String(at(5)));
+	});
+
+	const FORECAST = [
+		{ start: '2026-10-09T08:00:00+00:00', p50_w: 2500, p25_w: 1750, p75_w: 3000 },
+		{ start: '2026-10-09T08:15:00+00:00', p50_w: 2600, p25_w: 1800, p75_w: 3200 }
+	];
+	const LOAD: LoadForecast = {
+		issued_at: '2026-10-09T08:00:00+00:00',
+		slots: [
+			{ start: '2026-10-09T08:00:00+00:00', p50_w: 900 },
+			{ start: '2026-10-09T08:15:00+00:00', p50_w: 1100 }
+		],
+		days: [],
+		basis: { ledger: 10, ha: 5 },
+		status: { name: 'load-forecast', ok: true, message: 'ok', since: null, details: {} }
+	};
+	const PRICES = [slot('2026-10-09T08:00:00+00:00', 13.44)];
+	const NOW = '2026-10-09T08:05:00+00:00';
+
+	it('zeichnet das PV-Band und die Lastprognose', () => {
+		const option = priceForecastOption(PRICES, FORECAST, LOAD, NOW, palette);
+		const series = option.series as LineSeriesOption[];
+		expect(series.map((s) => s.name)).toEqual(
+			expect.arrayContaining(['PV-Prognose', 'PV P25–P75', 'Lastprognose'])
+		);
+		const base = series.find((s) => s.name === 'PV P25');
+		const band = series.find((s) => s.name === 'PV P25–P75');
+		const load = series.find((s) => s.name === 'Lastprognose');
+		// gestapelt: unsichtbarer Sockel P25, darüber P75 − P25 (dritter Wert: P75 für den Tooltip)
+		expect(base?.stack).toBe(band?.stack);
+		expect(base?.data).toEqual([
+			[at(0), 1.75],
+			[at(15), 1.8]
+		]);
+		expect(band?.data).toEqual([
+			[at(0), 1.25, 3],
+			[at(15), 1.4, 3.2]
+		]);
+		expect(band?.lineStyle).toMatchObject({ width: 0 });
+		expect(band?.showSymbol).toBe(false);
+		expect(load?.data).toEqual([
+			[at(0), 0.9],
+			[at(15), 1.1]
+		]);
+		expect(load?.lineStyle).toMatchObject({ type: 'dashed' });
+		expect(load?.yAxisIndex).toBe(1);
+	});
+
+	it('funktioniert ohne Lastprognose', () => {
+		const option = priceForecastOption(PRICES, FORECAST, null, NOW, palette);
+		const series = option.series as LineSeriesOption[];
+		expect(series.some((s) => s.name === 'Lastprognose')).toBe(false);
+	});
+
+	it('zeigt die Lastprognose auch ohne PV-Prognose auf der kW-Achse', () => {
+		const option = priceForecastOption(PRICES, [], LOAD, NOW, palette);
+		const axes = option.yAxis as { show: boolean }[];
+		expect(axes[1].show).toBe(true);
+		expect((option.series as LineSeriesOption[]).some((s) => s.name === 'PV P25–P75')).toBe(false);
+	});
+
+	it('führt im Tooltip P25 und P75 des Bandes, nicht die Differenz, und blendet den Sockel aus', () => {
+		const option = priceForecastOption(PRICES, FORECAST, LOAD, NOW, palette);
+		const formatter = (option.tooltip as { formatter: (params: unknown) => string }).formatter;
+		const text = formatter([
+			{ seriesName: 'PV P25', value: [at(0), 1.75] },
+			{ seriesName: 'PV P25–P75', value: [at(0), 1.25, 3] },
+			{ seriesName: 'PV-Prognose', value: [at(0), 2.5] }
+		]);
+		expect(text).toContain('1,75');
+		expect(text).toContain('3,00');
+		expect(text).not.toContain('1,25');
+		expect(text).not.toContain('PV P25:');
+		expect(text).toContain('PV-Prognose');
 	});
 });
 

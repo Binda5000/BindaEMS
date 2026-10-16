@@ -1,7 +1,7 @@
 // Optionen für ECharts: Zeitachse in Wien, Farben nur aus der Palette
 import type { LineSeriesOption } from 'echarts/charts';
 import type { EChartsCoreOption } from 'echarts/core';
-import type { ForecastSlot, HistoryResponse, PriceSlot } from '$lib/api/schemas';
+import type { ForecastSlot, HistoryResponse, LoadForecast, PriceSlot } from '$lib/api/schemas';
 import { DASH, NBSP, formatCt, formatDay, formatNumber, formatTime } from '$lib/format';
 import { parseIso, todayVienna } from '$lib/time';
 import type { Palette } from './palette';
@@ -9,7 +9,8 @@ import type { Palette } from './palette';
 export const SLOT_MS = 900_000;
 
 type Point = [number, number | null];
-type ValueFormat = (value: number) => string;
+/** `point` ist der ganze Datenpunkt `[Zeit, Wert, …]`, falls eine Reihe mehr als einen Wert trägt */
+type ValueFormat = (value: number, point?: unknown[]) => string;
 
 function epoch(iso: string): number {
 	return parseIso(iso) ?? Number.NaN;
@@ -45,8 +46,11 @@ function escapeHtml(text: string): string {
 	return text.replace(/[&<>"']/g, (char) => HTML_ESCAPES[char] ?? char);
 }
 
-/** Tooltip mit der Zeit in Wien und den Werten je Reihe in ihrer Einheit */
-export function axisTooltip(formats: Record<string, ValueFormat>) {
+/**
+ * Tooltip mit der Zeit in Wien und den Werten je Reihe in ihrer Einheit. Reihen mit `null` als
+ * Format bleiben unsichtbar (Hilfsreihen).
+ */
+export function axisTooltip(formats: Record<string, ValueFormat | null>) {
 	return (params: unknown): string => {
 		const items = (Array.isArray(params) ? params : [params]) as {
 			marker?: string;
@@ -55,10 +59,12 @@ export function axisTooltip(formats: Record<string, ValueFormat>) {
 		}[];
 		const first = items[0]?.value;
 		const time = Array.isArray(first) && typeof first[0] === 'number' ? timeLabel(first[0]) : '';
-		const lines = items.map((item) => {
-			const value = Array.isArray(item.value) ? item.value[1] : item.value;
+		const shown = items.filter((item) => formats[item.seriesName ?? ''] !== null);
+		const lines = shown.map((item) => {
+			const point = Array.isArray(item.value) ? item.value : undefined;
+			const value = point ? point[1] : item.value;
 			const format = formats[item.seriesName ?? ''] ?? ((v: number) => formatNumber(v, 1));
-			const text = typeof value === 'number' ? format(value) : DASH;
+			const text = typeof value === 'number' ? format(value, point) : DASH;
 			return `${item.marker ?? ''}${escapeHtml(item.seriesName ?? '')}: <b>${text}</b>`;
 		});
 		return [time, ...lines].join('<br>');
@@ -91,13 +97,21 @@ function valueAxis(name: string, palette: Palette, show = true) {
 	};
 }
 
+/** Band P25–P75: der dritte Wert des Punktes ist P75 (der zweite die Höhe über P25) */
+const bandFormat: ValueFormat = (height, point) => {
+	const upper = point?.[2];
+	return typeof upper === 'number' ? `${kw(upper - height)} bis ${kw(upper)}` : kw(height);
+};
+
 export function priceForecastOption(
 	prices: PriceSlot[],
 	forecast: ForecastSlot[],
+	load: LoadForecast | null,
 	nowIso: string,
 	palette: Palette
 ): EChartsCoreOption {
 	const now = parseIso(nowIso);
+	const loadSlots = load?.slots ?? [];
 	const series: LineSeriesOption[] = [
 		{
 			id: 'import',
@@ -135,26 +149,88 @@ export function priceForecastOption(
 		});
 	}
 	if (forecast.length > 0) {
+		// Band als gestapelte Fläche: unsichtbarer Sockel P25, darüber P75 − P25
+		series.push(
+			{
+				id: 'pv_p25',
+				name: 'PV P25',
+				type: 'line',
+				yAxisIndex: 1,
+				stack: 'pv_band',
+				smooth: true,
+				showSymbol: false,
+				silent: true,
+				data: forecast.map((slot): Point => [epoch(slot.start), slot.p25_w / 1000]),
+				lineStyle: { width: 0 },
+				itemStyle: { color: palette.pv },
+				areaStyle: { opacity: 0 }
+			},
+			{
+				id: 'pv_band',
+				name: 'PV P25–P75',
+				type: 'line',
+				yAxisIndex: 1,
+				stack: 'pv_band',
+				smooth: true,
+				showSymbol: false,
+				data: forecast.map((slot) => [
+					epoch(slot.start),
+					(slot.p75_w - slot.p25_w) / 1000,
+					slot.p75_w / 1000
+				]),
+				lineStyle: { width: 0 },
+				itemStyle: { color: palette.pv },
+				areaStyle: { color: palette.pv, opacity: 0.2 }
+			},
+			{
+				id: 'pv',
+				name: 'PV-Prognose',
+				type: 'line',
+				yAxisIndex: 1,
+				smooth: true,
+				showSymbol: false,
+				data: forecast.map((slot): Point => [epoch(slot.start), slot.p50_w / 1000]),
+				lineStyle: { color: palette.pv },
+				itemStyle: { color: palette.pv }
+			}
+		);
+	}
+	if (loadSlots.length > 0) {
 		series.push({
-			id: 'pv',
-			name: 'PV-Prognose',
+			id: 'load',
+			name: 'Lastprognose',
 			type: 'line',
 			yAxisIndex: 1,
 			smooth: true,
 			showSymbol: false,
-			data: forecast.map((slot): Point => [epoch(slot.start), slot.p50_w / 1000]),
-			lineStyle: { color: palette.pv },
-			itemStyle: { color: palette.pv },
-			areaStyle: { color: palette.pv, opacity: 0.2 }
+			data: loadSlots.map((slot): Point => [epoch(slot.start), slot.p50_w / 1000]),
+			lineStyle: { color: palette.load, type: 'dashed' },
+			itemStyle: { color: palette.load }
 		});
 	}
+	const base = baseOption(palette) as { legend: object };
 	return {
-		...baseOption(palette),
+		...base,
+		// der Sockel des Bandes gehört nicht in die Legende
+		legend: {
+			...base.legend,
+			data: series.map((s) => s.name).filter((name) => name !== 'PV P25')
+		},
 		tooltip: {
 			trigger: 'axis',
-			formatter: axisTooltip({ Bezugspreis: formatCt, Einspeisung: formatCt, 'PV-Prognose': kw })
+			formatter: axisTooltip({
+				Bezugspreis: formatCt,
+				Einspeisung: formatCt,
+				'PV P25': null,
+				'PV P25–P75': bandFormat,
+				'PV-Prognose': kw,
+				Lastprognose: kw
+			})
 		},
-		yAxis: [valueAxis('ct/kWh', palette), valueAxis('kW', palette, forecast.length > 0)],
+		yAxis: [
+			valueAxis('ct/kWh', palette),
+			valueAxis('kW', palette, forecast.length > 0 || loadSlots.length > 0)
+		],
 		series
 	};
 }

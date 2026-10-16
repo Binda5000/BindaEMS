@@ -27,12 +27,13 @@
 	const decisions = new Resource((o) => api.latestDecisions(o), { intervalMs: 30_000 });
 	const prices = new Resource((o) => api.prices(null, o), { intervalMs: 300_000 });
 	const forecast = new Resource((o) => api.forecast(o), { intervalMs: 300_000 });
+	const load = new Resource((o) => api.loadForecast(o), { intervalMs: 300_000 });
 
 	let nowIso = $state(new Date().toISOString()); // „jetzt“ im Diagramm, jede Minute weiter
 
 	onMount(() => {
-		const stops = [system, consumers, limits, pricesNow, prices, forecast, decisions].map((r) =>
-			r.start()
+		const stops = [system, consumers, limits, pricesNow, prices, forecast, load, decisions].map(
+			(r) => r.start()
 		);
 		const clock = setInterval(() => (nowIso = new Date().toISOString()), 60_000);
 		return () => {
@@ -57,10 +58,15 @@
 
 	const forecastSlots = $derived(forecastForChart(forecast.data?.slots ?? [], new Date(nowIso)));
 
-	const chartOption = $derived(
-		priceForecastOption(prices.data?.slots ?? [], forecastSlots, nowIso, palette)
+	// ohne Lastprognose (Abfrage gescheitert) zeigt das Diagramm die übrigen Reihen
+	const loadChart = $derived(
+		load.data ? { ...load.data, slots: forecastForChart(load.data.slots, new Date(nowIso)) } : null
 	);
-	const chartError = $derived(prices.error ?? forecast.error);
+
+	const chartOption = $derived(
+		priceForecastOption(prices.data?.slots ?? [], forecastSlots, loadChart, nowIso, palette)
+	);
+	const chartError = $derived(prices.error ?? forecast.error ?? load.error);
 </script>
 
 <div class="dashboard">
@@ -82,7 +88,7 @@
 			{/if}
 			<EChart
 				option={chartOption}
-				label="Diagramm: Bezugspreis, Einspeisung und PV-Prognose für heute und morgen"
+				label="Diagramm: Bezugspreis, Einspeisung, PV-Prognose mit Band und Lastprognose für heute und morgen"
 			/>
 		</Card>
 	</div>
