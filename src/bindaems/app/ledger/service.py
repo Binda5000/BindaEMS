@@ -202,8 +202,16 @@ def _summary(
     )
     if any(slot.import_wh > 0 and slot.import_price_ct is None for slot in slots):
         cost_eur = None  # ein Bezug ohne Preis macht die Tageskosten unbekannt
-    feed_in = feed_in_price(day_slots[0], settings.feed_in, settings.tariff)
-    revenue_eur = export_kwh * feed_in / 100 if feed_in is not None else None
+    export_prices = [
+        (slot.export_wh, feed_in_price(slot.slot_start, settings.feed_in, settings.tariff))
+        for slot in slots
+        if slot.export_wh > 0
+    ]
+    revenue_eur: float | None = math.fsum(
+        wh / 1000 * price / 100 for wh, price in export_prices if price is not None
+    )
+    if any(price is None for _, price in export_prices):
+        revenue_eur = None  # eine Einspeisung ohne Preis macht den Tageserlös unbekannt
     net_cost_eur = (
         cost_eur - revenue_eur if cost_eur is not None and revenue_eur is not None else None
     )

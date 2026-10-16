@@ -1,9 +1,16 @@
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, date, datetime, time, timedelta
 
 import pytest
-from tests.app_helpers import SLOT_FLOWS_MSG, ingest, price_row, set_feed_in, set_grid_usage
+from tests.app_helpers import (
+    SLOT_FLOWS_MSG,
+    ingest,
+    price_row,
+    set_feed_in,
+    set_grid_usage,
+)
 
 from bindaems.app.ledger.service import MonthPeak, parse_slot_flows
+from bindaems.shared.settings import FeedInComponent, TimeWindow
 from bindaems.shared.timeutil import SLOT
 
 S = datetime(2026, 10, 9, 8, 0, tzinfo=UTC)
@@ -165,6 +172,66 @@ def test_revenue_follows_feed_in_setting_at_read_time(
     assert ledger.days(date(2026, 10, 9), date(2026, 10, 9))[0].revenue_eur == pytest.approx(
         0.3 * 0.08
     )
+
+
+def _set_windowed_feed_in(settings_service, month: str, start: time, end: time) -> None:
+    """OeMAG 7,0 ct und ein Einspeisebestandteil, der im Fenster 5,0 ct statt 0 gilt."""
+    set_feed_in(settings_service, {month: 7.0})
+    settings = settings_service.current().settings
+    bonus = FeedInComponent(
+        id="bonus",
+        name="Bonus",
+        value_ct=0.0,
+        windows=[TimeWindow(start=start, end=end, value_ct=5.0)],
+    )
+    tariff = settings.tariff.model_copy(update={"components": [*settings.tariff.components, bonus]})
+    settings_service.update(
+        settings.model_copy(update={"tariff": tariff}),
+        base_version=settings_service.current().version,
+        actor="test",
+        source="ui",
+    )
+
+
+@pytest.mark.parametrize(
+    ("day", "month", "utc_offset_h"),
+    [
+        (date(2026, 10, 9), "2026-10", 2),
+        (date(2026, 3, 29), "2026-03", 2),  # Sommerzeit beginnt um 02:00 Ortszeit
+        (date(2026, 10, 25), "2026-10", 1),  # Winterzeit beginnt um 03:00 Ortszeit
+    ],
+)
+def test_revenue_applies_feed_in_window_per_slot(
+    ledger, settings_service, day, month, utc_offset_h
+) -> None:
+    _set_windowed_feed_in(settings_service, month, time(10), time(16))
+    export = {"pv>grid": 1000.0}
+    midnight = datetime.combine(day, time(0), tzinfo=UTC) - timedelta(hours=utc_offset_h)
+    ingest(ledger, midnight + timedelta(hours=12), export)  # 12:00 Ortszeit, im Fenster
+    [inside] = ledger.days(day, day)
+    assert inside.revenue_eur == pytest.approx(0.12)
+    ingest(ledger, midnight + timedelta(hours=8), export)  # 08:00 Ortszeit, außerhalb
+    [both] = ledger.days(day, day)
+    assert both.revenue_eur == pytest.approx(0.12 + 0.07)
+    assert both.net_cost_eur is None or both.net_cost_eur == pytest.approx(-both.revenue_eur)
+
+
+def test_revenue_applies_window_in_both_hours_of_repeated_hour(ledger, settings_service) -> None:
+    _set_windowed_feed_in(settings_service, "2026-10", time(2), time(3))
+    export = {"pv>grid": 1000.0}
+    ingest(ledger, "2026-10-25T00:30:00+00:00", export)  # 02:30 CEST
+    ingest(ledger, "2026-10-25T01:30:00+00:00", export)  # 02:30 CET
+    ingest(ledger, "2026-10-25T02:30:00+00:00", export)  # 03:30 CET, außerhalb
+    [day] = ledger.days(date(2026, 10, 25), date(2026, 10, 25))
+    assert day.revenue_eur == pytest.approx(0.12 + 0.12 + 0.07)
+
+
+def test_revenue_unknown_when_any_export_slot_has_no_price(ledger, settings_service) -> None:
+    set_feed_in(settings_service, {"2026-10": 7.0})
+    ingest(ledger, "2026-10-09T08:00:00+00:00", {"pv>grid": 1000.0})
+    assert ledger.days(date(2026, 10, 9), date(2026, 10, 9))[0].revenue_eur == pytest.approx(0.07)
+    ingest(ledger, "2026-09-30T08:00:00+00:00", {"pv>grid": 1000.0})  # vor dem ersten OeMAG-Wert
+    assert ledger.days(date(2026, 9, 30), date(2026, 9, 30))[0].revenue_eur is None
 
 
 def test_fill_missing_prices_and_reprice(ledger, store, settings_service, audit, sink) -> None:

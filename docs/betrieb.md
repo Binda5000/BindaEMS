@@ -460,8 +460,9 @@ Im UI (Admin) unter **Einstellungen**:
   betroffenen Felder.
 - **Versionen** listet alle Stände mit Zeit, Person, Quelle und Kommentar.
 
-Der Einspeiseerlös wird immer erst beim Lesen mit dem Einspeisepreis (OeMAG-Wert plus
-Einspeisebestandteile) berechnet; dafür ist keine Neubewertung nötig.
+Der Einspeiseerlös wird immer erst beim Lesen berechnet, je Viertelstunde mit deren
+Einspeisepreis (OeMAG-Wert plus die in dieser Viertelstunde gültigen Einspeisebestandteile);
+dafür ist keine Neubewertung nötig.
 
 ### Alternative für Skripte (curl)
 
