@@ -1871,8 +1871,8 @@ e-Golf, den der core allein am Wall Connector erkannt hat, steht so lange angeno
 oder nirgends, und am Wall Connector steht „Gast, angenommen“. Steht ein Fahrzeug nicht an seiner
 Standard-Wallbox und zeigt Health es nicht dort, wo es steht, setzt du eine Übersteuerung (unten).
 
-- **Tessie meldet verspätet.** Tessie fragt ein abgestecktes Auto nur alle 600 s ab und erfährt vom
-  Anstecken mit Verzug: Ein Wert aus einer Abfrage vor oder kurz nach dem Beginn eines Vorgangs sagt
+- **Tessie meldet verspätet.** Tessie fragt ein abgestecktes Auto zu Hause alle 60 s ab, eines unterwegs
+  nur alle 600 s, und erfährt vom Anstecken mit Verzug: Ein Wert aus einer Abfrage vor oder kurz nach dem Beginn eines Vorgangs sagt
   über diesen Vorgang nichts. Darum zählen `tessie`, `current` und `elsewhere` an einer Wallbox nur
   mit Werten, die mindestens 60 s nach dem Beginn ihres Vorgangs abgefragt wurden (lief der Vorgang
   schon beim Start des core, zählen sie immer). So bleibt der Tesla, der am Wall Connector ankommt,
@@ -3019,8 +3019,8 @@ gelten für die Beispielkonfiguration.
     dem Wechsel auf 5 A; am Mindeststrom zählt keine Sekunde).
   - „Zurückstellungen wegen des Stundenlimits an …“, je Fahrzeug mit Tessie (in der
     Beispielkonfiguration `tesla`): die Entscheidungen „zurückgestellt“ (Abschnitt 13,
-    „Entscheidungslog“), also höchstens eine je Minute, Art und Befund. In `wolkig` sind es 12, in
-    `dry-run` 14.
+    „Entscheidungslog“), also höchstens eine je Minute, Art und Befund. Seit der Reserve für
+    Tesla-Befehle sind es in `wolkig` und `dry-run` 0.
 - Als „eigener Wert“ der Regelung zählt auch ein Wert, den die Safety-Schicht mit „unverändert“
   beantwortete. Vergisst die Regelung ihre Werte (Pause, Wechsel der Betriebsart), beginnt die
   Zählung neu.

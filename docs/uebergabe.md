@@ -552,7 +552,7 @@ Demo-Zugänge: `admin`, `bedienen` (Bedienen), `gast` (Lesen) und `sicher` (Admi
 - **Simulator (2c-1, 2c-2a, 2c-2b, 2d):** Er nutzt die echten Aktoren und die Parser der Adapter. Ändert man deren
   Zeiten, Texte oder Signale, ändern sich die Szenarien mit. Alle dreiundzwanzig Szenarien laufen in
   `tests/integration/test_sim_scenarios.py`, dazu eine Abwandlung von `spitze-15min` für den
-  Boost-Anteil des Wächters; je etwa 3 bis 13 s, zusammen rund 2,5 min (gemessen auf
+  Boost-Anteil des Wächters; je etwa 3 bis 13 s, zusammen rund 3 min (gemessen auf
   der Entwicklungsmaschine); der Job `python` der CI braucht damit 7 bis 11 min, der ganze Ablauf
   mit UI, E2E und Docker 9 bis 12 min (Läufe vom 14. und 15.10.2026). Die Szenarien sind
   deterministisch (feste Saat).
@@ -841,12 +841,12 @@ Demo-Zugänge: `admin`, `bedienen` (Bedienen), `gast` (Lesen) und `sicher` (Admi
      - **2c-2a Akku und Spitzen:** umgesetzt, je Task und im Gesamtreview geprüft, auf `main`
        (`31721a6`, 15.10.2026): Umbau, Befehle der Regelung an Victron
        (Akku-Unterstützung und Setpoint-Kompensation, Spec 7.6 und 7.7, Auffrischen des Overrides vor
-       seinem Timeout von 5 min), 15-min-Wächter (Spec 7.4), Simulator mit 18 Szenarien (heute 21).
+       seinem Timeout von 5 min), 15-min-Wächter (Spec 7.4), Simulator mit 18 Szenarien (mit 2d heute 23).
      - **2c-2b Zuordnung:** umgesetzt, je Task und im Gesamtreview geprüft, die Fix-Welle danach
        umgesetzt, auf `main` (`31721a6`, 15.10.2026): die volle Zuordnungserkennung (Spec 7.8, Design
        2c-2, Abschnitt 7) samt Gastfahrzeug und `vehicles.<name>.home_entity`, der Grund
        `assignment_detected`, Health je Wallbox und im Simulator der e-Golf „zu Hause“ oder „weg“,
-       das Gastfahrzeug, jedes Auto an jeder Wallbox und die Szenarien aus Design 10.3 (jetzt 21).
+       das Gastfahrzeug, jedes Auto an jeder Wallbox und die Szenarien aus Design 10.3 (damals 21, mit 2d 23).
    - **2d Bedienung:** umgesetzt, auf dem Branch `claude/project-thread-o6klxp`: Absicht aus der app
      (Regelbetrieb, Live-Schalter mit Bestätigung, Lademodi, Boost, Zuordnung, Gast-Modus, Vorrang),
      Entscheidungslog in SQLite, UI-Seiten „Laden“ und „Entscheidungen“, HA-Bedienelemente und
