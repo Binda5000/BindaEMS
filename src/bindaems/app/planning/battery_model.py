@@ -11,11 +11,17 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from math import sqrt
-from typing import Final
+from typing import TYPE_CHECKING, Final
 
 from bindaems.shared.plan import BatteryIntent, BatteryIntentKind
 
+if TYPE_CHECKING:  # ``inputs`` importiert ``eta`` von hier
+    from bindaems.app.planning.inputs import PlanInputs
+
 SLOT_H: Final = 0.25
+LIMIT_NOW_SLOTS: Final = (
+    4  # so viele Slots gelten die BMS-Grenzen (CCL/DCL); ``inputs`` führt sie mit
+)
 
 
 @dataclass(frozen=True)
@@ -129,3 +135,46 @@ def simulate(
         steps.append(result)
         soc = result.soc_end_kwh
     return steps
+
+
+def params_of(inputs: PlanInputs) -> BatteryParams:
+    """Akkugrenzen des Laufs (Präzisierung 5): ein SOC außerhalb von Reserve und Obergrenze
+    verschiebt die jeweilige Grenze, damit das Modell lösbar bleibt."""
+    battery = inputs.battery
+    capacity = battery.usable_kwh
+    soc0 = battery.soc_pct / 100 * capacity
+    efficiency = eta(inputs.planning.roundtrip_pct)
+    return BatteryParams(
+        capacity_kwh=capacity,
+        lo_kwh=min(battery.reserve_pct / 100 * capacity, soc0),
+        hi_kwh=max(battery.soc_max_pct / 100 * capacity, soc0),
+        eta_ch=efficiency,
+        eta_dis=efficiency,
+    )
+
+
+def sim_slots(inputs: PlanInputs) -> list[SimSlot]:
+    """Slots für das Akkumodell; in den ersten ``LIMIT_NOW_SLOTS`` gelten zusätzlich die
+    BMS-Grenzen, soweit bekannt."""
+    battery = inputs.battery
+    result: list[SimSlot] = []
+    for index, slot in enumerate(inputs.slots):
+        max_charge_w = battery.max_charge_w
+        max_discharge_w = battery.max_discharge_w
+        if index < LIMIT_NOW_SLOTS:
+            if battery.limit_now_charge_w is not None:
+                max_charge_w = min(max_charge_w, battery.limit_now_charge_w)
+            if battery.limit_now_discharge_w is not None:
+                max_discharge_w = min(max_discharge_w, battery.limit_now_discharge_w)
+        result.append(
+            SimSlot(
+                start=slot.start,
+                pv_w=slot.pv_w,
+                load_w=slot.load_w,
+                import_ct=slot.import_ct,
+                feed_in_ct=slot.feed_in_ct,
+                max_charge_w=max_charge_w,
+                max_discharge_w=max_discharge_w,
+            )
+        )
+    return result
