@@ -515,6 +515,7 @@ s_1..s_T ∈ [lo, hi];  s_0 = SOC₀ · C
 je PeakMonth k: d1_k ∈ [0, max(0, tier_k − peak0_k)], d2_k ≥ 0
 je t < 4 mit prev_t: dev_t ≥ 0
 
+pv_h = min(PV_t, L_t)                               (PV deckt zuerst das Haus, wie im Akkumodell)
 PV_t = pv_h + pv_b + pv_x
 L_t  = pv_h + gr_h + bt_h
 pv_b + gr_b ≤ P_ch_t · y_t ;  bt_h ≤ P_dis_t · (1 − y_t)
