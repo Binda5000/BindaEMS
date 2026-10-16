@@ -15,6 +15,7 @@ from datetime import datetime, timedelta
 from typing import Any, Final, Literal
 
 from bindaems import __version__
+from bindaems.app.control.intent import ASSIGNMENT_OVERRIDE
 from bindaems.app.core_link import LiveState
 from bindaems.app.forecast.service import ForecastService
 from bindaems.app.prices.pipeline import TOMORROW_EXPECTED_FROM
@@ -76,6 +77,7 @@ class HaInputs:
     pv_tomorrow_kwh: float | None
     watchdog_state: str | None = None  # Zustand des Watchdogs am Cerbo; None = unbekannt
     intent: Intent | None = None  # gültige Absicht; None = unbekannt
+    intent_version: int | None = None  # Health ``intent_version``; None = unbekannt
     vehicles: list[dict[str, Any]] = field(default_factory=list)  # Health ``vehicles``
     wallboxes: list[dict[str, Any]] = field(default_factory=list)  # Health ``wallboxes``
     wallbox_names: dict[str, str] = field(default_factory=dict)  # eigene Namen der Wallboxes
@@ -171,13 +173,29 @@ def _regulation_state(inputs: HaInputs) -> str:
 
 
 def _assignment_state(cfg: Config, wallbox: str) -> Callable[[HaInputs], str]:
-    """„Automatisch“ oder der Name des Fahrzeugs, dessen Absicht diese Wallbox übersteuert."""
+    """„Automatisch“ oder der Name des Fahrzeugs, das diese Wallbox übersteuert.
+
+    Dieselbe Regel wie ``overrideVehicle`` im UI: Die Absicht nennt die Wallbox, und Health
+    bestätigt die Übersteuerung, zeigt sie wartend oder kennt den Stand nicht (``mode`` null,
+    ohne Eintrag, oder Health ist älter als die Absicht). Eine beendete Übersteuerung bleibt in
+    der Absicht stehen, gilt aber nicht.
+    """
 
     def value(inputs: HaInputs) -> str:
-        if inputs.intent is None:
+        intent = inputs.intent
+        if intent is None:
             return UNKNOWN
-        for key, vehicle in inputs.intent.vehicles.items():
-            if vehicle.wallbox == wallbox and key in cfg.vehicles:
+        version = inputs.intent_version
+        current = version is not None and version >= intent.version
+        for key, vehicle in intent.vehicles.items():
+            if vehicle.wallbox != wallbox or key not in cfg.vehicles:
+                continue
+            shown = _entry(inputs.vehicles, key)
+            if not current or shown is None or shown.get("mode") is None:
+                return cfg.vehicles[key].name
+            override = shown.get("assignment") == ASSIGNMENT_OVERRIDE
+            active = override and shown.get("wallbox") == wallbox
+            if active or shown.get("override_pending"):
                 return cfg.vehicles[key].name
         return AUTOMATIC
 
@@ -509,6 +527,7 @@ def build_inputs(
     adapters = health.get("adapters") if health is not None else None
     vehicles = health.get("vehicles") if health is not None else None
     wallboxes = health.get("wallboxes") if health is not None else None
+    intent_version = health.get("intent_version") if health is not None else None
     adapters_offline = (
         [
             adapter["name"]
@@ -548,6 +567,7 @@ def build_inputs(
         pv_tomorrow_kwh=latest.day_energy_kwh(tomorrow) if latest is not None else None,
         watchdog_state=watchdog_state if isinstance(watchdog_state, str) else None,
         intent=intent,
+        intent_version=intent_version if isinstance(intent_version, int) else None,
         vehicles=_dicts(vehicles),
         wallboxes=_dicts(wallboxes),
         wallbox_names=dict(wallbox_names or {}),

@@ -1,6 +1,7 @@
 import json
 from datetime import timedelta
 from pathlib import Path
+from typing import Any
 
 import pytest
 import yaml
@@ -298,6 +299,25 @@ def test_assignment_state_names_the_overriding_vehicle(cfg) -> None:
     inputs = sample_inputs(intent=intent)
     assert state(cfg, "twc_assignment", inputs) == "e-Golf"
     assert state(cfg, "evcs_assignment", inputs) == "Automatisch"
+
+
+def test_assignment_state_shows_the_effective_override_like_the_ui(cfg) -> None:
+    # wie ``overrideVehicle`` im UI: Die Absicht nennt die Wallbox, und Health bestätigt die
+    # Übersteuerung, zeigt sie wartend oder ist nicht aktuell bzw. ohne Stand der Regelung
+    intent = Intent(version=3, vehicles={"egolf": VehicleIntent(wallbox="twc")})
+
+    def at_twc(intent_version: int | None, **egolf: Any) -> str:
+        shown = {"id": "egolf", "mode": "pv", "assignment": "default", "wallbox": None} | egolf
+        inputs = sample_inputs(intent=intent, intent_version=intent_version, vehicles=[shown])
+        return state(cfg, "twc_assignment", inputs)
+
+    assert at_twc(3) == "Automatisch"  # nach dem Abstecken beendet
+    assert at_twc(3, assignment="override", wallbox="twc") == "e-Golf"
+    assert at_twc(3, assignment="override", wallbox="evcs") == "Automatisch"
+    assert at_twc(4, override_pending=True) == "e-Golf"
+    assert at_twc(3, mode=None) == "e-Golf"  # Stand der Regelung unbekannt
+    assert at_twc(2) == "e-Golf"  # Health kennt die Version der Übersteuerung noch nicht
+    assert at_twc(None) == "e-Golf"
 
 
 def test_guest_mode_state(cfg) -> None:
