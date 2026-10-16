@@ -194,7 +194,7 @@ def _summary(
     )
     if any(slot.import_wh > 0 and slot.import_price_ct is None for slot in slots):
         cost_eur = None  # ein Bezug ohne Preis macht die Tageskosten unbekannt
-    feed_in = feed_in_price(day_slots[0], settings.feed_in)
+    feed_in = feed_in_price(day_slots[0], settings.feed_in, settings.tariff)
     revenue_eur = export_kwh * feed_in / 100 if feed_in is not None else None
     net_cost_eur = (
         cost_eur - revenue_eur if cost_eur is not None and revenue_eur is not None else None
@@ -290,7 +290,8 @@ class LedgerService:
         """Punkte ``ledger`` je Fluss: kWh und, wo bekannt, Kosten (+) bzw. Erlös (−) in €."""
         if self._sink is None:
             return
-        feed_in = feed_in_price(start, self._settings.current().settings.feed_in)
+        settings = self._settings.current().settings
+        feed_in = feed_in_price(start, settings.feed_in, settings.tariff)
         for name, wh in sorted(flows_wh.items()):
             kwh = wh / 1000
             fields: dict[str, float] = {"kwh": kwh}

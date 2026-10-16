@@ -30,7 +30,7 @@ def _view(stored: StoredPrice, settings: RuntimeSettings) -> PriceView:
         spot_net_ct=stored.spot_net_ct,
         import_net_ct=price.net_ct,
         import_gross_ct=price.gross_ct,
-        feed_in_ct=feed_in_price(stored.slot_start, settings.feed_in),
+        feed_in_ct=feed_in_price(stored.slot_start, settings.feed_in, settings.tariff),
         origin=stored.origin,
         missing=price.missing,
     )
