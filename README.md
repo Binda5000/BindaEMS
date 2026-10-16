@@ -50,8 +50,9 @@ uv run python -m tests.e2e.ui_server              # API auf http://127.0.0.1:809
 uv run python -m tests.e2e.ui_server --ui-dir ui/build   # liefert zusätzlich das gebaute UI aus
 ```
 
-- Benutzer `admin` (Admin), `sicher` (Admin mit TOTP, Geheimnis `JBSWY3DPEHPK3PXP`) und `gast`
-  (Lesen), Passwort jeweils `demo-passwort-1`.
+- Benutzer `admin` (Admin), `sicher` (Admin mit TOTP, Geheimnis `JBSWY3DPEHPK3PXP`), `bedienen`
+  (Bedienen) und `gast` (Lesen), Passwort jeweils `demo-passwort-1`.
+- Der core der Demo-Welt meldet „Eingeschränkt“ (DEGRADED); das gehört zur Demo und ist kein Fehler.
 - Die Uhr steht auf dem 09.10.2026, 10:00 Ortszeit; die Messwerte schwanken jede Sekunde leicht.
 - Jeder Start beginnt mit einem frischen Stand (neues Temp-Verzeichnis, außer mit `--data-dir`).
 - Die Vertragsdateien `ui/src/lib/api/contract/*.json` entstehen aus derselben Demo-Welt:

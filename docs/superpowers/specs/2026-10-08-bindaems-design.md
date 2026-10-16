@@ -337,6 +337,13 @@ flowchart LR
   - **`guest.mode`** gilt jetzt auch für die Laderegelung: Ein Gast an einer EVCS wird in diesem Modus geregelt (7.8). Die Auswahl in UI und HA folgt weiter mit 2d.
   - **Bindung:** Ein Boost ohne Übersteuerung bindet an den Ansteckvorgang der Wallbox, an der das Fahrzeug steht (erkannt oder angenommen), solange er läuft, sonst wie bisher an die Standard-Wallbox (7.8, „Boost ohne Übersteuerung“).
   - **Health:** `GET /v1/health` hat zusätzlich `wallboxes`: je Wallbox, wer dort steht, die Art der Zuordnung und die Indizien (7.8; Betriebshandbuch, „Zuordnung Auto und Wallbox“). `vehicles[].assignment` kennt zusätzlich `detected`.
+- **Stand Plan 2d** (`docs/superpowers/plans/2026-10-15-phase-2d-bedienung.md`, Präzisierungen 2, 6 und 16; Bedienung: `docs/betrieb.md`, Abschnitt 13, „Absicht und Regelbetrieb“):
+  - **Absicht aus der app:** Jede Bedienung (UI und HA) ist eine Änderung an der gültigen Absicht. Die app holt sie mit `GET /v1/intent`, ändert genau das Bediente, setzt die Version und sendet sie mit `PUT /v1/intent`. Ohne gültige Absicht ist die Basis `Intent(version=1)`: Regelbetrieb aus, alles Dry-Run, alle Fahrzeuge im PV-Überschuss.
+  - **Version:** `max(Millisekunden seit 1970 nach der Uhr der app, gültige Version + 1)`. Die app führt Änderungen nacheinander aus. Antwortet der core mit 409 (die Version ist veraltet, etwa nach einer Absicht per `curl`), holt sie die gültige Absicht neu und wendet die Änderung genau einmal neu an; ein zweites 409 geht als 409 an den Aufrufer. `accepted` und `clamped` sind Erfolg, 422 geht mit den Sätzen aus `details` hinaus, ein nicht erreichbarer core wird zu 503.
+  - **Ableitung:** Beim Ableiten behält ein Fahrzeug `boost_until` nur, wenn Health für es einen Boost zeigt (`vehicles[].boost_until`) oder er auf seinen Ansteckvorgang wartet (`boost_pending`), und `wallbox` nur, wenn Health `assignment: "override"` an genau dieser Wallbox zeigt oder die Übersteuerung wartet (`override_pending`); ein `boost_until` in der Vergangenheit entfällt immer. Health gilt dafür nur, wenn `intent_version` mindestens die gültige Version erreicht; sonst, und bei ausgeschaltetem Regelbetrieb, ist der Stand unbekannt: Ein Boost in der Zukunft und die Übersteuerung bleiben, ein abgelaufener Boost entfällt. Die Regel gilt auch für das Fahrzeug, das die Bedienung gerade ändert, vor der Änderung. So springt ein abgelaufener Boost nie beim nächsten Anstecken an (Stand Plan 2c-1, „Bindung an den Ansteckvorgang“).
+  - **Health:** `GET /v1/health` hat zusätzlich `intent_version` (die Version der Absicht, mit der die Regelung im letzten Zyklus regelte; `null`, solange sie ruht), je Fahrzeug `boost_pending`, `override_pending` und `commands_hour` (die Befehle der letzten Stunde im Fenster der Safety-Schicht, nur für Fahrzeuge mit Tessie) sowie `watchdog.armed` und je Aktor `watchdog_needed` (Victron und EVCS).
+  - **Quittierung:** `POST /v1/locks/{actuator}/ack` (7.9). Der core antwortet sofort aus dem Stand des letzten Zyklus (202 angenommen, 409 ohne Sperre oder bei bestehender Ursache, 404 unbekannt) und wendet die Quittierung im nächsten Zyklus an; die API läuft in einem anderen Thread als der Zyklus.
+  - **Rollen (14):** Die Routen der Bedienung in der app verlangen „Bedienen“; Live-Schaltung und Quittierung verlangen „Admin“.
 
 ### 5.4 Datenflüsse
 
@@ -791,6 +798,13 @@ Kurzfristig puffern das ESS und das Victron-Importlimit (Ebene 0).
   - **Geladen:** Meldet ein Auto „Complete“ bzw. lädt die Wallbox bei angestecktem Auto nicht mehr (EVCS-Status 3), startet die Regelung nicht erneut, bis es abgesteckt war.
 - **Kein Ziel-SOC:** Die Autos stoppen an ihrem eigenen Ladelimit, der e-Golf lädt bis voll. Der Ziel-SOC kommt mit „Geplant“ (Phase 4).
 
+**Stand Plan 2d** (`docs/superpowers/plans/2026-10-15-phase-2d-bedienung.md`, Präzisierungen 9 bis 11, Entscheidung 6; Betrieb: `docs/betrieb.md`, Abschnitt „Laderegelung“, „Tesla“): Die Tesla-Punkte vor der Live-Schaltung sind umgesetzt.
+- **„Aus“ wirkt sofort:** Ein Stopp (`charging=False`), weil der geltende Modus „Aus“ ist, ist dringend. Die Safety-Schicht lässt ihn ohne Mindestabstand und Stundenlimits durch (`urgent.bypass`). Das gilt für den Tesla und die EVCS.
+- **Reserve im Stundenbudget:** `control.tesla_reserve_commands` (Standard 4, ganze Zahl ≥ 0, kleiner als `commands.per_hour` jedes Fahrzeugs mit Tessie). `ChargeInputs.commands_hour` nennt je Aktor eines Fahrzeugs mit Tessie die Befehle im gleitenden Stundenfenster der Safety-Schicht. Erreicht die Zahl `per_hour − tesla_reserve_commands`, sendet die Regelung dem Tesla einen Strombefehl nur noch, wenn er den Strom senkt und der Ist-Strom über der Grenze des Wächters liegt. Starts, Stopps, der Höchststrom „Tesla an der EVCS“ und dringende Befehle sind frei. Ein zurückgehaltener Strombefehl erscheint nicht im Log (wie die 90-s-Regel).
+- **Selbststart:** Lädt ein Fahrzeug mit Tessie laut Tessie (`charging` wahr, Ist-Strom mindestens 1 A) an einem geregelten Ladepunkt, während sein Modus „nicht laden“ ergibt und die Zuordnung klar ist, `control.tesla_against_s` (Standard 120 s) ohne Unterbrechung, vergisst die Regelung ihren letzten Wert für `charging` des Aktors. So geht „Laden aus“ erneut hinaus (Gründe: Modus, `self_start`), je Fahrzeug höchstens alle `control.tesla_against_retry_s` (Standard 600 s). Der Befehl zählt im Start/Stopp-Budget, außer im Modus „Aus“.
+- **Ansteckerkennung (6.5):** Tessie fragt alle 30 s ab, solange das Auto lädt, alle 60 s, solange es angesteckt oder zu Hause ist, sonst alle 600 s. Erscheint an einer Wallbox ein Fahrzeug, fragt der Adapter sofort nach, frühestens 10 s nach der letzten Abfrage.
+- `vehicles.tesla.min_a` bleibt im Code bei 5 A (7.2); für die `config.yaml` der Anlage empfiehlt sich 6 A, das entscheidet der Betreiber dort. Der sichere Zustand bei Netzausfall (8.5) bleibt unverändert.
+
 ### 7.6 Akku-Unterstützung beim Autoladen
 
 - **Parameter (Defaults):**
@@ -947,6 +961,9 @@ Kurzfristig puffern das ESS und das Victron-Importlimit (Ebene 0).
   - Beim Tesla bestätigt Tessie den Befehl (6.5), sein Cache hinkt dem Fahrzeug hinterher. Ein bestätigter Strom gilt deshalb erst als Erwartung, wenn der Cache ihn zeigt.
   - Der Tesla-Ladeplan bleibt wie in 2a.
 - **Stand Plan 2c-1** (`docs/superpowers/plans/2026-10-12-phase-2c1-laderegelung.md`, Design 10, Task 11): Meldet der Watchdog „ausgelöst“, vergisst der core in jedem Zyklus die Erwartungen der Erkennung für Victron und EVCS. Was der Watchdog setzt, ist keine fremde Änderung. Neue Erwartungen entstehen erst wieder aus bestätigten Werten (8.6).
+- **Stand Plan 2d** (`docs/superpowers/plans/2026-10-15-phase-2d-bedienung.md`, Präzisierungen 6 und 8):
+  - **Quittierung:** Eine Sperre gibt außer dem Ablauf der Wartezeit auch ein Admin frei (`POST /v1/locks/{actuator}/ack`, 5.3; im UI die Taste „Quittieren“ in der Spalte „Hinweise“ der Karte „Aktoren“). Quittierbar ist eine Sperre, deren Ursache fehlt (die Wartezeit `safety.lock_release_s` läuft noch) oder deren einzige Ursache der Alarm einer fremden Änderung ist. Die Quittierung gibt die Sperre frei und lässt den Alarm der fremden Änderung fallen; die Erwartung der Erkennung bleibt beim neuen Wert. Besteht eine andere Ursache (DESS aktiv, EVCS nicht manuell, Ladeplan aktiv, ein Prüfpunkt nicht lesbar), lehnt der core mit 409 ab und nennt sie; ohne Sperre 409, bei unbekanntem Aktor 404. Die Quittierung steht im Änderungsprotokoll (`lock.acknowledge`).
+  - **Eintrag im Entscheidungslog:** Jede neue Erkennung einer fremden Änderung wird eine Entscheidung: `kind` wie erkannt, `requested` der erwartete Wert, `applied` der gefundene, `dry_run` falsch, `outcome` `none` (kein Urteil der Safety-Schicht), `result` `foreign`, Grund `foreign_change` (7.10).
 
 ### 7.10 Entscheidungslog
 
@@ -979,6 +996,11 @@ Kurzfristig puffern das ESS und das Victron-Importlimit (Ebene 0).
 
 **Stand Plan 2c-2b** (`docs/superpowers/plans/2026-10-15-phase-2c2b-zuordnung.md`, Präzisierung 8, Design 2c-2, 9):
 - **Grund:** `assignment_detected` („Zuordnung erkannt“) steht an den Befehlen eines Autos nach einer neuen Erkennung (7.8), hinter den Gründen der Laderegelung. Beispiel: `Tesla Model 3 (Sofort, Zuordnung erkannt): Strom 16 A – gesendet und bestätigt.`
+
+**Stand Plan 2d** (`docs/superpowers/plans/2026-10-15-phase-2d-bedienung.md`, Präzisierungen 7 bis 10):
+- **Ergebnis `foreign`:** `result` kennt zusätzlich `foreign` („von außen geändert“) für eine erkannte fremde Änderung (7.9), mit dem Detail „von außen geändert: erwartet {Wert}“. Beispiel: `EVCS „evcs“ (Änderung von außen): Strom 10 A – von außen geändert: erwartet 8 A.` `outcome` ist dabei `none`: Es gibt kein Urteil der Safety-Schicht, denn die Entscheidung stammt nicht von einem Befehl des EMS.
+- **Gründe:** `foreign_change` („Änderung von außen“) steht an dieser Entscheidung; `self_start` („Selbststart“) an dem erneuten „Laden aus“ nach einem Selbststart des Tesla (7.5, Stand Plan 2d). Beispiel: `Tesla Model 3 (Aus, Selbststart): Laden aus – Dry-Run, nicht gesendet.`
+- **In der app:** Die app speichert die Entscheidungen in SQLite (11.3), zeigt sie auf der Seite „Entscheidungen“ und mit „Warum?“ auf der Übersicht (13) und schreibt je neu gespeicherte Entscheidung einen Punkt `decision` nach InfluxDB (Retention Policy `raw`; Tags `actuator`, `result`, `dry_run`; Felder `text` und `codes`) als Markierung für Grafana. Der Stream füllt die Tabelle; nach jedem Verbindungsaufbau holt die app den Rückstand mit `GET /v1/decisions` ab dem jüngsten `ts` der Tabelle minus 10 min (ohne Eintrag ab jetzt minus 7 Tage), seitenweise, und übergeht doppelte `id`. Die Überlappung fängt Rücksprünge der Wanduhr bis 10 min. Die Begründung des Plan-Slots für „Warum?“ kommt mit Phase 3.
 
 ---
 
@@ -1205,6 +1227,11 @@ Ein Aktor geht nur live, wenn alle vier Bedingungen erfüllt sind:
 Reihenfolge der Inbetriebnahme: EVCS, dann Victron-Setpoint, dann Tesla.
 
 **Stand Plan 2c-1** (Design 14): Abweichend davon gehen EVCS und Tesla gemeinsam live, erst nach 2d und mit ganz abgeschaltetem evcc; Victron folgt nach 2c-2 (Abschnitt 18, Stand Plan 2c-1).
+
+**Stand Plan 2d** (`docs/superpowers/plans/2026-10-15-phase-2d-bedienung.md`, Präzisierung 4): Der Live-Schalter ist umgesetzt (UI, System-Seite, Karte „Bedienung“).
+- **Wer und wie:** Nur ein Admin schaltet live oder auf Dry-Run, mehrere Aktoren in einem Zug (`PUT /api/control/actuators`). Wechselt mindestens ein Aktor auf live, verlangt die app das Passwort des Admins (erneut eingegeben; falsch: 403) und die Bestätigung „Prüfprotokoll Teil 2 für die gewählten Aktoren ist bestanden.“ (fehlt sie: 422); im Dialog kommt bei jedem Aktor außer Victron, also bei EVCS und Tesla, „evcc ist ganz abgeschaltet.“ dazu. Ändert sich die Auswahl, entfallen die Bestätigungen. Zurück auf Dry-Run geht es ohne Passwort, mit einfacher Bestätigung; der Dialog wählt alle live angeforderten Aktoren vor.
+- **Die vier Bedingungen:** (1) `live_allowed` prüft der core (er klemmt die Absicht und nennt den Grund in `details`); (2) Prüfprotokoll Teil 2 bestätigt der Admin mit dem Häkchen, denn ein Merkmal dafür gibt es nicht; (3) die Bestätigung im UI ist der Dialog mit Passwort; (4) den Watchdog prüft der core (Health `watchdog.armed`, `actuators[].watchdog_needed`). Der Dialog zeigt je Aktor „live erlaubt“, „Watchdog scharf“ (nur Victron und EVCS), „Regelbetrieb an“ und „nicht gesperrt“ und lässt nur Aktoren mit `live_allowed` wählen; die übrigen sind Hinweise, denn der core wartet von selbst.
+- Home Assistant hat keinen Live-Schalter (12).
 
 ---
 
@@ -1482,6 +1509,8 @@ Greift, wenn der Solver scheitert, das Zeitlimit überschritten ist oder das Erg
 - **Migrationen** mit Alembic.
 - **Backup:** nächtlich per SQLite-Online-Backup nach `/backup`, 14 Generationen. Bei einem Proxmox-Failover kann höchstens ein Replikationsintervall verloren gehen. Die Abrechnung lässt sich aus den InfluxDB-Zählerständen nachrechnen.
 
+**Stand Plan 2d** (`docs/superpowers/plans/2026-10-15-phase-2d-bedienung.md`, Präzisierung 7): Die Tabelle `decision` (Migration `0007`) hat `seq` (aufsteigend, Primärschlüssel), `id` (die `id` des core, eindeutig), `ts`, `actuator`, `kind`, `requested` und `applied` (JSON), `dry_run`, `outcome`, `result`, `codes` (JSON-Liste), `text` und `inputs` (JSON); dazu ein Index auf `ts`. Aufbewahrt werden die Einträge `app.decisions_keep_days` Tage (Standard 180, 1 bis 3650); das Aufräumen gehört zur Wartung der app. `assignment_log` und `charging_session` folgen mit der Statistik (Phase 4): Manuelle Zuordnungen stehen bis dahin im Änderungsprotokoll, erkannte in den Entscheidungen und in Health.
+
 ### 11.4 Viertelstunden-Abrechnung
 
 - **Zuordnung, jede Sekunde im core:**
@@ -1586,6 +1615,15 @@ pv:
 - **Neustart von HA:** Erscheint die Birth-Message (`homeassistant/status` = online), veröffentlicht das EMS Discovery-Daten und Zustände neu.
 - **Benachrichtigungen:** über die HA-WebSocket-API (`call_service` auf einen konfigurierbaren `notify.*`-Dienst und `persistent_notification`).
 
+**Stand Plan 2d** (`docs/superpowers/plans/2026-10-15-phase-2d-bedienung.md`, Präzisierungen 14 und 15; Betrieb: `docs/betrieb.md`, Abschnitt 7):
+- **Entitäten in 2d:**
+  - je Fahrzeug: `select` „Lademodus“ (PV-Überschuss, Min+PV, Sofort, Aus), `button` „Boost“ und „Boost beenden“, `sensor` „Wallbox“
+  - je Wallbox: `select` „Zuordnung“ („Automatisch“ und die Namen der Fahrzeuge), `sensor` „Fahrzeug“ (Name, „Gast“ oder „keins“)
+  - System: `switch` „Regelbetrieb“, `select` „Gast-Lademodus“, `binary_sensor` „Zuordnung unklar“
+  - Nicht in 2d: Ziel-SOC, Abfahrtszeit, Unterstützungsschwelle, „Netzladen erlaubt“, „Akku-Unterstützung erlaubt“, „neu planen“ und die Sensoren Ladeenergie, Fertig-um und Ziel erreichbar (Phase 3 und 4).
+- **Befehle:** über `bindaems/cmd/<objekt>`; eine gehaltene Nachricht ignoriert die app. Höchstens ein Befehl je Sekunde und Entität; nach jedem Befehl, auch einem verworfenen oder abgelehnten, veröffentlicht die app den Zustand der Entität neu. Eine Ablehnung erzeugt die persistente Meldung `bindaems_ha_command` („Befehl aus Home Assistant abgelehnt: …“). Home Assistant hat die Rechte von „Bedienen“ (Quelle `ha` im Änderungsprotokoll); Live-Schaltung und Vorrang gibt es dort nicht. Die Konfiguration lehnt Fahrzeugnamen ab, die leer, mit Leerzeichen am Rand, ohne Beachtung der Schreibweise doppelt oder „Automatisch“ sind, und Schlüssel, deren Objekt-ID in Home Assistant mit einer anderen Entität zusammenfiele.
+- **Benachrichtigungen:** Die app sendet sie, nicht der core (der ruft nie Dienste in Home Assistant auf). Jeder Alarm der Schwere „Fehler“, der 30 s ohne Unterbrechung besteht, wird einmal als `persistent_notification.create` (`notification_id` `bindaems_<Alarm-ID, Punkte als _>`, Titel „BindaEMS“) gemeldet und, falls `homeassistant.notify_service` (`notify.*`) eingestellt ist, über diesen Dienst; verschwindet der Alarm, folgt `persistent_notification.dismiss`. Höchstens 10 Meldungen je Minute über Alarme und Ablehnungen; der Rest geht ins Log. Die app braucht dafür `BINDAEMS_HA_TOKEN` (dieselbe `.env` wie der core); ohne ihn sendet sie nichts, und die Komponente `ha-notify` meldet es.
+
 ---
 
 ## 13. Web-UI
@@ -1608,6 +1646,12 @@ pv:
   | System | Geräte, Datenfrische, Selbstprüfung, mitregelnde Systeme, Watchdog, Prüfprotokoll, Dry-Run- und Live-Schalter |
   | Einstellungen | Laufzeit-Einstellungen und Tarif-Editor; harte Grenzen nur zur Ansicht |
   | Benutzer | nur für Admins |
+
+**Stand Plan 2d** (`docs/superpowers/plans/2026-10-15-phase-2d-bedienung.md`, Präzisierungen 3, 12 und 13; Bedienung: `docs/betrieb.md`, Abschnitt 12):
+- **Navigation:** „Laden“ (Symbol `car`) steht nach „Übersicht“, „Entscheidungen“ (Symbol `list`) nach „System“. Die Bedienelemente erscheinen ab „Bedienen“; „Lesen“ sieht dieselben Seiten ohne sie.
+- **Laden:** je Fahrzeug eine Karte (Ladestand, Wallbox und Art der Zuordnung, angesteckt, lädt, Grenze, letzter Grund, Befehle der letzten Stunde bei Tessie, Lademodus als Auswahl, Boost als Taste „Boost“ bzw. „Boost beenden“ mit „bis HH:MM“ und „wartet auf Anstecken“) und je Wallbox eine Karte (wer dort steht, Art, Indizien als Sätze, Zuordnung als Auswahl „Automatisch“ oder ein Fahrzeug), dazu „Gast“ (Modus) und „Vorrang“ (Reihenfolge, Vorrang beim Überschuss). Ist der Regelbetrieb aus, steht oben ein Hinweis mit der Taste „Regelbetrieb einschalten“. Ziel-SOC, Abfahrt und die Session kommen mit Phase 4.
+- **Entscheidungen:** das Entscheidungslog mit den Filtern Zeitraum, Aktor, Ergebnis, „Dry-Run zeigen“ (Standard an) und Suche im Text; neueste zuerst, 100 je Seite, „Ältere laden“. Auf der **Übersicht** zeigt „Warum?“ je Aktor die jüngste Entscheidung der letzten 24 h mit Alter und einen Verweis auf die Seite.
+- **System:** Die Karte „Bedienung“ hat den Schalter „Regelbetrieb“ (ab „Bedienen“) und für Admins „Live schalten…“ und „Auf Dry-Run…“ (8.7); die Karte „Aktoren“ hat für Admins die Taste „Quittieren“ bei einer Sperre (7.9).
 
 ---
 
@@ -1739,6 +1783,8 @@ pv:
 - **Modell:** Home Assistant ist die Quelle `ha`, wie beim Adapter ohne Frischegrenze und mit `invalidate_on_reconnect`: Je Fahrzeug mit `home_entity` meldet sie `home_signal` mit `home`, für die Fahrzeuge in `PlantModel.away` mit `not_home`; die Beispielkonfiguration hat `home_entity` beim e-Golf. Ein Gast (`GUEST_CAR`) ist ein Auto ohne Tessie (3 Phasen, 6 bis 16 A, 50 kWh), abgesteckt; ein Szenario steckt ihn an und setzt seine Phasen (1 bis 3). Ein Tesla kann woanders angesteckt sein (`Tesla.elsewhere`): Tessie meldet ihn angesteckt und zu Hause, er steckt aber an keiner Wallbox. Jedes Auto lässt sich an jede Wallbox stecken, und ein Szenario kann die EVCS schon vor dem Start des core laden lassen (`evcs_on`).
 - **Drei Szenarien dazu** (jetzt 21): `tesla-evcs` (der Tesla an der EVCS ohne Übersteuerung wird erkannt, bekommt `max_a`, und die EVCS regelt in seinem Modus), `egolf-twc` (der e-Golf am Wall Connector wird erkannt, ist Last, und der Tesla bekommt keine Befehle) und `gast-evcs` (ein Gast mit drei Phasen an der EVCS, der e-Golf weg: Der Gast wird erkannt, und die EVCS lädt in seinem Modus). `zuordnung` prüft jetzt einen echten Widerspruch („unklar“ bis zur Übersteuerung): Der Tesla steckt woanders an, der e-Golf lädt an der EVCS auf zwei Phasen. Das Bild „Tesla an der EVCS“ zeigt `tesla-evcs`. Die übrigen 17 Szenarien bleiben unverändert grün: Ihre Fahrzeuge stehen an ihren Standard-Wallboxen und werden dort erkannt, das ändert ihre Regelung nicht.
 - **Abweichung vom Design (10.3):** `tesla-evcs` prüft „erkannt“ vor 3 min statt binnen 2 min: Die Regelung beginnt im Simulator erst nach rund 60 s, und Design 10.3 zählt ab dem Beginn der Regelung. Die Prüfung „Ab 60 min laden beide Autos“ in `ausfaelle` übergeht den Gast; „beide Autos“ sind die zwei Fahrzeuge der Konfiguration.
+
+**Stand Plan 2d** (`docs/superpowers/plans/2026-10-15-phase-2d-bedienung.md`, Präzisierungen 9 und 10; Szenarien: `docs/betrieb.md`, Abschnitt „Simulator“): Der Anlagensimulator hat zwei Szenarien mehr (jetzt 23): `tesla-aus` (der Tesla geht unter Wolken auf „Aus“ und bekommt binnen 10 s „Laden aus“; kein zurückgestelltes „Laden aus“) und `tesla-selbststart` (der Tesla startet im Modus „Aus“ selbst und wird binnen 210 s gestoppt). Das Modell kennt dafür den Selbststart eines Autos. `tesla-aus` belegt nicht, dass der dringende Stopp die Stundenlimits umgeht: Die Reserve (7.5, Stand Plan 2d) hält das Stundenbudget offen. Das prüft ein Test der Regelung.
 
 ---
 
@@ -1897,6 +1943,11 @@ Es gibt keine Schreibzugriffe auf Geräte.
 - **2c-2a „Akku und Spitzen“** (umgesetzt): Umbau der Laderegelung und der Laufzeit, Akku-Sollwert mit Auffrischen des Overrides (7.6, 7.7), 15-min-Wächter mit optionalem Ziel, Standard aus (7.4), eine Ausnahme der Regelung als Alarm statt Zyklusabbruch (7.1) und der Simulator mit 18 Szenarien (16).
 - **2c-2b „Zuordnung“** (umgesetzt): die volle Zuordnungserkennung (7.8) samt Gastfahrzeug, `vehicles.<name>.home_entity` und Health je Wallbox, dazu der Simulator mit 21 Szenarien (16). Von der Gast-Regel gab es in 2c-2a nur die Absicht `guest.mode`.
 - **Live-Schaltung (Abweichung vom Stand Plan 2c-1):** Victron geht nach 2c-2a live, und damit vor EVCS und Tesla, sobald Dynamic ESS aus ist. Davor stehen das Prüfprotokoll Teil 2, Victron 17.2-4 „Kein Akku ins Auto“, die Watchdog-Probe mit vorher verstellten Victron-Werten und `victron.live_allowed` (`docs/betrieb.md`, Abschnitt „Akku und Spitzen“). Der Dry-Run des Victron-Teils braucht DESS aus; bis Phase 3 läuft der Akku dann ohne Preisoptimierung. EVCS und Tesla gehen wie bisher gemeinsam nach 2d live.
+
+**Stand Plan 2d** (`docs/superpowers/plans/2026-10-15-phase-2d-bedienung.md`): Umgesetzt ist:
+- **2d „Bedienung“** (umgesetzt): Die app sendet die Absicht (Regelbetrieb, Lademodi, Boost, Zuordnung, Gast-Modus, Vorrang, Live-Schalter; 5.3, 8.7), Quittierung von Sperren (7.9), der Eintrag der fremden Änderung (7.10), das Entscheidungslog in SQLite mit Markierungen für Grafana (7.10, 11.3), die UI-Seiten „Laden“ und „Entscheidungen“ mit „Warum?“ (13), in Home Assistant die Bedienelemente und die Benachrichtigungen (12) und die drei Tesla-Punkte vor der Live-Schaltung (7.5: „Aus“ sofort mit Reserve im Stundenbudget, Selbststart, Ansteckerkennung). Der Simulator hat jetzt 23 Szenarien (16).
+- **Nicht in 2d:** Ziel-SOC, Abfahrt und der Modus „Geplant“ (Phase 4), die Mehrkostenanzeige beim Boost, die Schalter „Netzladen erlaubt“ und „Akku-Unterstützung erlaubt“, die Zahl „Unterstützungsschwelle“ und die Taste „neu planen“ (Phase 3 und 4), `assignment_log` und `charging_session` (Phase 4).
+- **Live-Schaltung:** EVCS und Tesla gehen mit dem Live-Schalter gemeinsam live, sobald 2 Wochen Dry-Run gesichtet und die drei Prüfungen zur Zuordnung bestanden sind (`docs/betrieb.md`, „Hinweise für die Anlage“) und evcc ganz abgeschaltet ist. Victron geht wie bisher getrennt live, auch dafür dient der Live-Schalter. Kein Aktor ist live; 2d schaltet nichts an der Anlage.
 
 ### Phase 3 – Akku-Optimierung und Lastspitzen
 

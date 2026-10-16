@@ -24,6 +24,16 @@ def test_operations_guide_describes_the_web_ui() -> None:
         assert topic in text
 
 
+def test_operations_guide_describes_the_operation() -> None:
+    # Die Bedienung in der app und in Home Assistant steht im Handbuch (Plan 2d).
+    web = _guide_section("12. Web-UI")
+    for topic in ("Laden", "Entscheidungen", "Warum?", "Bedienen"):
+        assert topic in web
+    ha = _guide_section("7. Home Assistant über MQTT")
+    for topic in ("Lademodus", "Regelbetrieb", "Boost", "Zuordnung", "notify_service"):
+        assert topic in ha
+
+
 def test_operations_guide_describes_charging() -> None:
     text = Path("docs/betrieb.md").read_text(encoding="utf-8")
     for topic in ("## Laderegelung", "## Simulator", '"vehicles"', "-m bindaems.tools.sim"):
@@ -90,7 +100,7 @@ def test_json_examples_of_the_charging_section_are_valid() -> None:
     assert found == {"intent", "health", "decision"}
 
 
-# die Gründe der Laderegelung (Plan 2c-1 und 2c-2b, „Texte“)
+# die Gründe der Laderegelung (Plan 2c-1, 2c-2b und 2d, „Texte“)
 CHARGING_REASONS = {
     "mode_pv",
     "mode_min_pv",
@@ -107,6 +117,7 @@ CHARGING_REASONS = {
     "assignment_unclear",
     "assignment_detected",
     "resume_after_outage",
+    "self_start",
 }
 
 
@@ -186,7 +197,8 @@ def test_the_detected_reason_example_matches_the_decision_log() -> None:
 # die Gründe des Akku-Sollwerts und des 15-min-Wächters (Plan 2c-2a, „Texte“)
 BATTERY_REASONS = {"battery_comp", "battery_support", "peak_guard"}
 
-# die Einstellungen unter ``control`` für Akku-Sollwert und 15-min-Wächter (Plan 2c-2a, Design 3.2)
+# die Einstellungen unter ``control`` für Akku-Sollwert, 15-min-Wächter (Plan 2c-2a, Design 3.2)
+# und die Tesla-Punkte vor der Live-Schaltung (Plan 2d)
 BATTERY_SETTINGS = {
     "support_soc_pct",
     "support_hysteresis_pct",
@@ -197,6 +209,9 @@ BATTERY_SETTINGS = {
     "peak_target_kw",
     "peak_margin_kw",
     "reserve_guard_pct",
+    "tesla_reserve_commands",
+    "tesla_against_s",
+    "tesla_against_retry_s",
 }
 
 

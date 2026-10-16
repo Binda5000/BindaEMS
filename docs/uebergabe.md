@@ -1,6 +1,6 @@
 # Übergabe an die nächste Session
 
-Stand: 15.10.2026. Plan 2c-1 (Laderegelung) ist umgesetzt, je Task und im Gesamtreview geprüft
+Stand: 16.10.2026. Plan 2c-1 (Laderegelung) ist umgesetzt, je Task und im Gesamtreview geprüft
 („mit Korrekturen“, keine kritischen Befunde), und die Fix-Welle danach ist umgesetzt. Er ist auf
 `main` (Stand `18c575a`, wie die Branches `ccr-e451cb4c-qeg1tm` und `ccr-9778345e-t3x44k` zu Beginn
 der folgenden Sitzung). Danach sind die EVCS-Hysterese (Freigabe des Betreibers vom 14.10.2026) und
@@ -15,9 +15,11 @@ Beide Pläne sind per Fast-Forward auf `main` (`31721a6`, mit Zustimmung des Bet
 15.10.2026, Tests auf `main` grün); der Arbeitsbranch `ccr-9778345e-t3x44k` ist danach gelöscht, eine
 neue Sitzung beginnt auf `main`. Die drei kleinen Doku-Korrekturen aus 2c-2b (Ende von „Bewusst
 offen gelassen“, „Doku-Korrekturen aus dem Re-Review der Fix-Welle von 2c-2b“) sind seit dem
-15.10.2026 umgesetzt (Branch `claude/project-thread-57rkit`). Als
-Nächstes folgt Plan 2d (Bedienung in UI und HA), an der Anlage danach die Inbetriebnahme Punkt 3
-(Design 2c-2, 11.1): Die Erkennung läuft im Dry-Run mit, und Health zeigt, wer wo steht.
+15.10.2026 umgesetzt (Branch `claude/project-thread-57rkit`).
+**Plan 2d (Bedienung in UI und HA) ist umgesetzt** (`docs/superpowers/plans/2026-10-15-phase-2d-bedienung.md`, 18 Tasks, Branch
+`claude/project-thread-o6klxp`); das Gesamtreview und die Integration auf `main` stehen noch aus. Als
+Nächstes folgen an der Anlage das Ausrollen von 2d und die Inbetriebnahme Punkt 3 (Design 2c-2, 11.1):
+Die Erkennung läuft im Dry-Run mit, und Health zeigt, wer wo steht (siehe „Offen an der Anlage“).
 `main` ist seit dem 12.10.2026 auch der Standard-Branch auf GitHub.
 
 ## Kurzfassung
@@ -204,26 +206,62 @@ Nächstes folgt Plan 2d (Bedienung in UI und HA), an der Anlage danach die Inbet
     Anlage“).
   - **Noch nicht:** die Bedienung in UI und HA, auch die Auswahl des Gast-Modus (2d), und die
     Planausführung (Phase 3). Live ist weiterhin kein Aktor.
+- **Phase 2d (Bedienung in UI und HA) ist umgesetzt** (Plan: `docs/superpowers/plans/2026-10-15-phase-2d-bedienung.md`, 18 Tasks;
+  Ausführung subagent-driven; Gesamtreview und Integration auf `main` stehen noch aus):
+  - **app, neues Paket `bindaems.app.control`:**
+    - `intent.py`: der `IntentService` leitet jede Bedienung aus der gültigen Absicht ab und sendet sie
+      an den core. Die Version ist das Größere aus Millisekunden seit 1970 und gültiger Version + 1; bei
+      409 wendet er die Änderung einmal neu an. Boost und Übersteuerung schickt er nur zurück, wo
+      Health sie zeigt.
+    - `decisions.py`: der `DecisionStore` (SQLite, Migration `0007`) und der `DecisionCollector` (Stream,
+      Rückstand, Aufräumen nach 180 Tagen, Markierungen für Grafana).
+    - `routes.py`: `/api/control/…` und `/api/decisions…`. „Bedienen“ ändert Regelbetrieb, Lademodi,
+      Boost, Zuordnung, Gast-Modus und Vorrang; nur „Admin“ schaltet live oder auf Dry-Run und quittiert
+      Sperren.
+  - **core:** eine fremde Änderung wird eine Entscheidung (Ergebnis `foreign`), Quittierung von Sperren
+    (`POST /v1/locks/{actuator}/ack`), und Health nennt `intent_version`, `boost_pending`,
+    `override_pending`, `watchdog.armed`, `actuators[].watchdog_needed` und `vehicles[].commands_hour`.
+  - **Tesla vor der Live-Schaltung:** „Aus“ stoppt sofort (dringend), 4 Befehle je Stunde bleiben frei
+    (`control.tesla_reserve_commands`), ein Selbststart wird nach 120 s erneut gestoppt
+    (`control.tesla_against_s`, `control.tesla_against_retry_s`, Grund `self_start`), und Tessie fragt
+    ein abgestecktes Auto zu Hause alle 60 s ab und sofort bei einem neuen Vorgang. Der Simulator hat
+    dafür `tesla-aus` und `tesla-selbststart`: jetzt 23 Szenarien, alle grün.
+  - **UI:** die Seiten „Laden“ und „Entscheidungen“, „Warum?“ auf der Übersicht, auf der System-Seite die
+    Karte „Bedienung“ (Regelbetrieb, Live-Dialog mit Passwort und Bestätigungen, „Auf Dry-Run“) und die
+    Taste „Quittieren“. Die Rolle „Bedienen“ hat damit erstmals eigene Rechte.
+  - **HA:** Auswahl „Lademodus“, Tasten „Boost“ und „Boost beenden“, Sensor „Wallbox“ je Fahrzeug;
+    Auswahl „Zuordnung“ und Sensor „Fahrzeug“ je Wallbox; Schalter „Regelbetrieb“, Auswahl
+    „Gast-Lademodus“ und „Zuordnung unklar“. Befehle laufen über `bindaems/cmd/…`. Benachrichtigungen
+    bei Fehler-Alarmen und abgelehnten Befehlen.
+  - **Doku und Tests:** Betriebshandbuch (7, 12, 13, „Laderegelung“), Spec („Stand Plan 2d“ in 5.3, 7.5,
+    7.9, 7.10, 8.7, 11.3, 12, 13, 16 und 18) und `tests/unit/test_docs.py`. Das Demo-Backend hat den
+    Benutzer `bedienen`; sein core meldet DEGRADED (die Demo-Welt).
+  - **Entschieden und aufgeschoben:** Die Rulings und die aufgeschobenen Kleinigkeiten stehen unter
+    „Bewusst offen gelassen“.
+  - **Noch nicht:** Ziel-SOC, Abfahrt und der Modus „Geplant“ (Phase 4), die Planausführung (Phase 3),
+    die Mehrkostenanzeige beim Boost, die Schalter „Netzladen erlaubt“ und „Akku-Unterstützung erlaubt“,
+    die Zahl „Unterstützungsschwelle“, die Taste „neu planen“ und die HA-Sensoren Ladeenergie,
+    Fertig-um und Ziel erreichbar. Live ist weiterhin kein Aktor.
 - **Images:** `ghcr.io/binda5000/bindaems-core:latest` und `ghcr.io/binda5000/bindaems-app:latest`.
   Sie sind öffentlich, und die CI setzt `latest` bei jedem Push auf `main`. core und app werden
   immer gemeinsam aus demselben Stand ausgerollt (gleiche Compose-Datei, gleiche Image-Tags): Die
   UI-Schemas sind streng, eine abweichende Version zeigt auf der System-Seite nur „Unerwartete
   Antwort vom Server“.
-- **Tests:** 5424 Python-Tests, davon 33 Property-Tests mit Hypothesis (6 für die Safety-Schicht,
+- **Tests:** 5745 Python-Tests, davon 33 Property-Tests mit Hypothesis (6 für die Safety-Schicht,
   6 für den Phasenwächter, 12 für den Akku-Sollwert, 6 für den 15-min-Wächter, 3 sonstige), und
-  233 UI-Tests; Abdeckung 97 % insgesamt und 99 % für `core/safety`, `core/control` und
-  `core/actuators` (Stand nach der Fix-Welle von Plan 2c-2b).
+  348 UI-Tests (Vitest) sowie 14 E2E-Tests (Playwright); Abdeckung 97,5 % insgesamt und
+  99 % für `core/safety`, `core/control` und `core/actuators` (Stand nach Plan 2d, vor dem
+  Gesamtreview).
   Geprüft wird mit ruff, mypy strict (auch für den Watchdog), import-linter (4 Verträge), pytest
   mit Abdeckungsgrenzen (≥ 75 % insgesamt, ≥ 90 % für `core/safety`, `core/control` und
   `core/actuators`), Vitest mit svelte-check, Prettier und ESLint; dazu E2E mit Playwright.
 - **Offen:**
-  - Plan 2d (Bedienung in UI und HA) nach der Spec schreiben, vom Betreiber durchsehen lassen und
-    umsetzen (siehe „Nächster Schritt“)
-  - an der Anlage: Images ausrollen, Dry-Run neben evcc beginnen und dabei die Inbetriebnahme Punkt 3
+  - Gesamtreview von Plan 2d, danach die Integration auf `main` (siehe „Nächster Schritt“)
+  - an der Anlage: Images von 2d ausrollen, Dry-Run neben evcc beginnen und dabei die Inbetriebnahme Punkt 3
     (die Erkennung läuft im Dry-Run mit, Health zeigt, wer wo steht), der Rest von Teil 2
     (EVCS-Verbindungsabbruch, Victron 17.2-4), Victron in den Dry-Run und live (siehe „Offen an der
     Anlage“)
-  - vor der Live-Schaltung von EVCS und Tesla (2d): die Liste „Vor der Live-Schaltung“ (siehe
+  - vor der Live-Schaltung von EVCS und Tesla: die Liste „Vor der Live-Schaltung“ (siehe
     „Offen an der Anlage“)
   - die Abnahme der Phase 1 an der Anlage
   - kleine Punkte an der Anlage (siehe „Stand der Installation“): manuelle Punkte von Teil 1 und
@@ -279,7 +317,7 @@ Nächstes folgt Plan 2d (Bedienung in UI und HA), an der Anlage danach die Inbet
 
 | Dokument | Inhalt |
 |---|---|
-| `docs/superpowers/specs/2026-10-08-bindaems-design.md` | Spec, verbindlich. Wichtig: 7 Regelung, 8 Sicherheit, 13 Web-UI, 14 Login, 17 Prüfprotokoll, 18 Phasenplan, 19 offene Punkte. Die Absätze „Stand Plan 2a/2b/2c-1/2c-2a/2c-2b“ gehen dem älteren Text davor vor |
+| `docs/superpowers/specs/2026-10-08-bindaems-design.md` | Spec, verbindlich. Wichtig: 7 Regelung, 8 Sicherheit, 13 Web-UI, 14 Login, 17 Prüfprotokoll, 18 Phasenplan, 19 offene Punkte. Die Absätze „Stand Plan 2a/2b/2c-1/2c-2a/2c-2b/2d“ gehen dem älteren Text davor vor |
 | `docs/superpowers/plans/2026-10-08-phase-1a-fundament-datenerfassung.md` | Plan 1a (core) |
 | `docs/superpowers/plans/2026-10-09-phase-1b-app-backend.md` | Plan 1b (app) |
 | `docs/superpowers/plans/2026-10-09-phase-1c-web-ui.md` | Plan 1c (UI), mit Anhang A zu den API-Formen |
@@ -292,7 +330,8 @@ Nächstes folgt Plan 2d (Bedienung in UI und HA), an der Anlage danach die Inbet
 | `docs/superpowers/specs/2026-10-14-phase-2c2-akku-spitzen-design.md` | Design 2c-2 (Akku-Sollwert, 15-min-Wächter, Zuordnungserkennung), Entscheidungen des Betreibers vom 14.10.2026; 2c-2a und 2c-2b umgesetzt; der Kopf nennt, was sich beim Bau geändert hat |
 | `docs/superpowers/plans/2026-10-14-phase-2c2a-akku-spitzen.md` | Plan 2c-2a, 14 Tasks, umgesetzt: Umbau, Akku-Sollwert, 15-min-Wächter, Simulator; Präzisierungen gegenüber dem Design, Texte, Szenarien |
 | `docs/superpowers/plans/2026-10-15-phase-2c2b-zuordnung.md` | Plan 2c-2b, 9 Tasks, umgesetzt: Zuordnungserkennung, Gast, Health je Wallbox, Simulator; Präzisierungen gegenüber dem Design, Texte, Szenarien |
-| `docs/betrieb.md` | Betriebshandbuch: Installation, Proxy (6), HA (7), Tarif (8), Sicherung (9), Prüfprotokolle einschließlich Teil 2 (11), Web-UI (12), Betriebszustände, Freigaben, Übergabe und Entscheidungslog (13), Watchdog am Cerbo (14); am Ende „Laderegelung“ (Modi, Absicht, Zuordnung Auto und Wallbox, Dry-Run-Vergleich mit evcc, Umstieg), „Akku und Spitzen“ (Akku-Sollwert, 15-min-Wächter, Health, Victron in den Dry-Run und live, Alarme) und „Simulator“ |
+| `docs/betrieb.md` | Betriebshandbuch: Installation, Proxy (6), HA (7), Tarif (8), Sicherung (9), Prüfprotokolle einschließlich Teil 2 (11), Web-UI mit den Seiten „Laden“ und „Entscheidungen“ (12), Betriebszustände, Absicht, Live-Schalter, Übergabe und Entscheidungslog (13), Watchdog am Cerbo (14); am Ende „Laderegelung“ (Modi, Absicht, Zuordnung Auto und Wallbox, Dry-Run-Vergleich mit evcc, Umstieg), „Akku und Spitzen“ (Akku-Sollwert, 15-min-Wächter, Health, Victron in den Dry-Run und live, Alarme) und „Simulator“ |
+| `docs/superpowers/plans/2026-10-15-phase-2d-bedienung.md` | Plan 2d, 18 Tasks, umgesetzt: Bedienung in UI und HA, Entscheidungslog in SQLite, Tesla vor der Live-Schaltung; Präzisierungen gegenüber der Spec, Texte |
 | `cerbo-watchdog/README.md` | Watchdog: Zustände, Zeiten, D-Bus-Pfade, Installation und Probe |
 | `docs/verification/abnahme-phase-1.md` | Checkliste für die Abnahme der Phase 1 |
 | `docs/verification/README.md` | Prüfprotokoll Teil 1, Preise, Teil 2 (`verify_part2`) und Watchdog-Probe: Aufruf und Ergebnis |
@@ -358,7 +397,10 @@ Nächstes folgt Plan 2d (Bedienung in UI und HA), an der Anlage danach die Inbet
   - Einstellungen mit Versionen
   - Preise (smartENERGY und Referenzquelle, Brutto/Netto-Erkennung)
   - PV-Prognose (Open-Meteo), Abrechnung, Verbraucher, Verlauf aus InfluxDB
-  - HA MQTT Discovery
+  - HA MQTT Discovery mit Bedienelementen (`ha/entities.py`, `ha/publisher.py`), den Befehlen aus
+    Home Assistant (`ha/commands.py`, seit 2d) und den Benachrichtigungen (`ha/notify.py`, seit 2d)
+  - die Bedienung (`control/`, seit 2d): `intent.py` (Absicht aus der app), `decisions.py`
+    (Entscheidungslog in SQLite und Markierungen für Grafana), `routes.py`
   - liefert das UI unter `/` aus
 - **`src/bindaems/shared`:** Konfiguration, Domänentypen (auch `control.py`: Befehle, Betriebsarten,
   Absicht; `decisions.py`: Entscheidung und ihr deutscher Text), Zeit (`AnchoredClock`), Influx-Client.
@@ -413,7 +455,7 @@ UPDATE_UI_CONTRACT=1 uv run pytest tests/integration/test_ui_contract.py
 uv run python -m tests.e2e.ui_server --port 8099 --ui-dir ui/build
 ```
 
-Demo-Zugänge: `admin`, `gast` (Lesen) und `sicher` (Admin mit TOTP, Geheimnis
+Demo-Zugänge: `admin`, `bedienen` (Bedienen), `gast` (Lesen) und `sicher` (Admin mit TOTP, Geheimnis
 `JBSWY3DPEHPK3PXP`). Das Passwort ist jeweils `demo-passwort-1`.
 
 ## Stolpersteine
@@ -507,14 +549,14 @@ Demo-Zugänge: `admin`, `gast` (Lesen) und `sicher` (Admin mit TOTP, Geheimnis
   schließen sie nur aus. Ein Test, der dann eine Erkennung erwartet, lässt die andere Wallbox auf
   einer anderen Phasenzahl oder mit anderem Strom laden oder stützt das Fahrzeug über Strom und
   Phasen.
-- **Simulator (2c-1, 2c-2a, 2c-2b):** Er nutzt die echten Aktoren und die Parser der Adapter. Ändert man deren
-  Zeiten, Texte oder Signale, ändern sich die Szenarien mit. Alle einundzwanzig Szenarien laufen in
+- **Simulator (2c-1, 2c-2a, 2c-2b, 2d):** Er nutzt die echten Aktoren und die Parser der Adapter. Ändert man deren
+  Zeiten, Texte oder Signale, ändern sich die Szenarien mit. Alle dreiundzwanzig Szenarien laufen in
   `tests/integration/test_sim_scenarios.py`, dazu eine Abwandlung von `spitze-15min` für den
   Boost-Anteil des Wächters; je etwa 3 bis 13 s, zusammen rund 2,5 min (gemessen auf
   der Entwicklungsmaschine); der Job `python` der CI braucht damit 7 bis 11 min, der ganze Ablauf
   mit UI, E2E und Docker 9 bis 12 min (Läufe vom 14. und 15.10.2026). Die Szenarien sind
   deterministisch (feste Saat).
-- **Dokumentationstests (2c-1, 2c-2a, 2c-2b):** `tests/unit/test_docs.py` prüft die JSON-Beispiele, die Tabellen
+- **Dokumentationstests (2c-1, 2c-2a, 2c-2b, 2d):** `tests/unit/test_docs.py` prüft die JSON-Beispiele, die Tabellen
   der Gründe und die Optionen und Szenarien des Simulators im Betriebshandbuch gegen den Code, im
   Abschnitt „Akku und Spitzen“ außerdem die dokumentierten Standardwerte (die Tabelle der Einstellungen
   gegen `ControlConfig`) und die Felder von Health (das Beispiel gegen `health()` von Akku-Sollwert und
@@ -524,12 +566,17 @@ Demo-Zugänge: `admin`, `gast` (Lesen) und `sicher` (Admin mit TOTP, Geheimnis
   Absicht, einen Grund-Text, die Optionen von `bindaems.tools.sim`, einen dokumentierten Standardwert
   oder die Felder von Health, schlägt er an, bis das Handbuch stimmt. Die Werte der Beispiele prüft er
   nicht, die Zustände von Health nur gegen eine feste Liste im Test, und eine neue Einstellung, die in
-  seiner Liste `BATTERY_SETTINGS` fehlt, bemerkt er nicht.
+  seiner Liste `BATTERY_SETTINGS` fehlt, bemerkt er nicht. Seit 2d kennt `CHARGING_REASONS` auch
+  `self_start`, `BATTERY_SETTINGS` die drei Einstellungen `tesla_reserve_commands`,
+  `tesla_against_s` und `tesla_against_retry_s`, und ein Test verlangt, dass Abschnitt 12 des
+  Handbuchs „Laden“, „Entscheidungen“, „Warum?“ und „Bedienen“ nennt und Abschnitt 7 die
+  Bedienelemente (Lademodus, Regelbetrieb, Boost, Zuordnung, `notify_service`). Die Tabelle der
+  Szenarien prüft er gegen `SCENARIOS`; die Zahl im Text (dreiundzwanzig) prüft er mit.
 
 ## Stand der Installation beim Betreiber
 
 - Docker auf einer VM im LAN des Betreibers, Images `latest` vom Stand nach Plan 2b (ausgerollt am
-  12.10.2026). Die Pläne 2c-1, 2c-2a und 2c-2b sind noch nicht ausgerollt.
+  12.10.2026). Die Pläne 2c-1, 2c-2a, 2c-2b und 2d sind noch nicht ausgerollt.
 - Reverse Proxy mit HTTPS sowie Tarif und OeMAG-Wert im UI: laut Betreiber eingerichtet
   (11.10.2026). Zum Proxy gehören laut Betriebshandbuch 6: Port 8080 erreicht nur der Proxy,
   `app.trusted_proxies` ist gesetzt, `cookie_secure` steht wieder auf `true`.
@@ -579,10 +626,29 @@ Demo-Zugänge: `admin`, `gast` (Lesen) und `sicher` (Admin mit TOTP, Geheimnis
   - Felder `value`, `unit_of_measurement_str`, `device_class_str`, `state_class_str`,
     `friendly_name_str`
   - Wichtig auch für die Lastprognose aus der HA-Historie.
-- **Offen an der Anlage, als Nächstes (nach Plan 2c-2b):**
+- **Offen an der Anlage, als Nächstes (nach Plan 2d):**
   1. Die Images ausrollen: `docker compose pull && docker compose up -d` (Betriebshandbuch 4),
-     nachdem die Pläne 2c-2a und 2c-2b auf `main` sind (die Pläne 2c-1, 2c-2a und 2c-2b rollen
-     zusammen aus). Die neuen Felder `grid.import_limit_a`, `control` (seit der Hysterese auch
+     nachdem Plan 2d auf `main` ist (die Pläne 2c-1, 2c-2a, 2c-2b und 2d rollen zusammen aus). **Zu
+     2d gehört:**
+     - Die Migration der app (`0007`, Tabelle `decision`) läuft beim Start der app von selbst. Die
+       Entscheidungen der letzten 7 Tage holt die app dann aus den Dateien des core nach.
+     - `BINDAEMS_HA_TOKEN` braucht jetzt auch die app (für die Benachrichtigungen). Die `.env` gilt
+       schon für beide Dienste; sie hat den Token wegen `home_entity` ohnehin. Ohne ihn meldet die
+       Komponente `ha-notify` unter **System** „Benachrichtigungen aus: BINDAEMS_HA_TOKEN fehlt.“
+     - Optional `homeassistant.notify_service` in `config.yaml` (etwa `notify.mobile_app_handy`) für
+       einen Push auf das Handy; die persistente Meldung in Home Assistant gibt es ohne ihn.
+     - Die ACL des Mosquitto-Benutzers `bindaems` braucht Schreibrechte auf
+       `homeassistant/select/bindaems/#`, `…/switch/…` und `…/button/…` und das Leserecht
+       `bindaems/cmd/#` (Betriebshandbuch 7); sonst bleiben die Bedienelemente aus.
+     - Ein Benutzer mit der Rolle „Bedienen“ ist für Home Assistant nicht nötig; HA hat die Rechte
+       dieser Rolle ohne Benutzer. Für Menschen, die nur bedienen sollen, legst du einen an.
+     - Neue Felder mit Standardwerten: `control.tesla_reserve_commands`, `control.tesla_against_s`,
+       `control.tesla_against_retry_s`, `app.decisions_keep_days`, `homeassistant.notify_service`. Die
+       Konfiguration prüft jetzt Fahrzeugnamen (nicht leer, nicht mit Leerzeichen am Rand, ohne
+       Beachtung der Schreibweise eindeutig, nicht „Automatisch“) und die Objekt-IDs in Home Assistant;
+       prüfe die `config.yaml` anhand von `deploy/config.example.yaml`. Der Watchdog bleibt
+       unverändert, und keines der neuen Felder verlangt eine neue `config.ini`.
+     Aus den Plänen davor: Die neuen Felder `grid.import_limit_a`, `control` (seit der Hysterese auch
      `control.evcs_hysteresis_a`, seit 2c-2a `support_soc_pct`, `support_hysteresis_pct`,
      `support_max_w`, `support_max_s`, `setpoint_deadband_w`, `override_refresh_s`, `peak_target_kw`
      und `peak_margin_kw`), `vehicles.<name>.wake` und seit 2c-2b `vehicles.<name>.home_entity` haben
@@ -592,11 +658,13 @@ Demo-Zugänge: `admin`, `gast` (Lesen) und `sicher` (Admin mit TOTP, Geheimnis
      (Betriebshandbuch, „Zuordnung Auto und Wallbox“). Der Watchdog bleibt unverändert (1.1.0), und
      keines der neuen Felder verlangt eine neue `config.ini`. Der 15-min-Wächter ruht ohne
      `control.peak_target_kw`.
-  2. Den Dry-Run neben evcc beginnen: eine Absicht mit `"control": true` per `PUT /v1/intent`, alle
-     Aktoren bleiben im Dry-Run (Betriebshandbuch, „Laderegelung“). Der core sendet dabei nichts
-     auf die Geräte, und die Teil-2-Werkzeuge schreiben nicht mit: Sie schreiben nur, wenn du sie
-     aufrufst. Die Entscheidungen liest der Betreiber bis 2d über die Dateien bzw.
-     `GET /v1/decisions`.
+  2. Den Dry-Run neben evcc beginnen: den Regelbetrieb im UI einschalten (Karte „Bedienung“ unter
+     **System** oder Seite „Laden“, als „Bedienen“ oder Admin); alle Aktoren bleiben im Dry-Run
+     (Betriebshandbuch, „Laderegelung“; ohne app eine Absicht mit `"control": true` per
+     `PUT /v1/intent`). Der core sendet dabei nichts auf die Geräte, und die Teil-2-Werkzeuge
+     schreiben nicht mit: Sie schreiben nur, wenn du sie aufrufst. Die Entscheidungen sichtet der
+     Betreiber auf der Seite „Entscheidungen“ und in Grafana (Betriebshandbuch 13, „Entscheidungslog“
+     mit der Abfrage für die Markierungen).
      - Die EVCS-Hysterese ist eingebaut (14.10.2026). Ohne sie hätte der Dry-Run mit rund 100
        EVCS-Entscheidungen je Stunde PV-Laden begonnen; im Simulator sind es jetzt 3 bei ruhiger
        Sonne und rund 40 unter wechselnden Wolken.
@@ -678,25 +746,28 @@ Demo-Zugänge: `admin`, `gast` (Lesen) und `sicher` (Admin mit TOTP, Geheimnis
         300 s.
   - Teil 2 schreibt auf die Geräte: nicht während der 7 Tage der Abnahme Phase 1 und ihres
     24-h-Mitschnitts (`docs/verification/abnahme-phase-1.md`, 4.2 und 4.3).
-  - Danach: Plan 2d.
-  - **Vor der Live-Schaltung von EVCS und Tesla (2d)** müssen diese Punkte entschieden oder
-    umgesetzt sein (Gesamtreview von 2c-1; je Befund und mögliche Abhilfe, knapp auch im
-    Betriebshandbuch, „Laderegelung“, „Hinweise für die Anlage“):
-    1. **Stundenbudget des Tesla:** Unter PV-Wolken verbraucht die Regelung die 20 Befehle je
-       Stunde (im Simulator in `wolkig` nach 2410 s; 8 von 19 Strombefehlen gingen an die
-       5-A-Eigenheit). Danach werden auch ein Stopp und ein Moduswechsel zurückgestellt (in einer
-       Probe im Simulator wirkte „Aus“ erst nach 19 min), gegen Design 6.3 („Aus“ stoppt gleich);
-       im Log steht das seit der Fix-Welle als „zurückgestellt“. Abhilfe: ein Budget in der
-       Regelung (Plätze für Start/Stopp freihalten, Stromänderungen in PV sparen) und/oder den Stopp
-       nach einem Moduswechsel dringend machen.
-    2. **Selbststart im laufenden Vorgang:** Startet das Auto selbst (Tesla-App), korrigiert die
-       Regelung das nicht; „Aus“ hält es nicht gestoppt, PV stoppt es nicht. Abhilfe: live „Laden
-       aus“ erneut senden, wenn das Auto länger als N s gegen den Modus lädt, im
-       Start/Stopp-Budget.
-    3. **Ansteckerkennung des Tesla:** Tessie fragt abgesteckt nur alle 600 s ab; ein selbst
-       startender Tesla lädt nach dem Anstecken bis zu 10 min ungeregelt (gegen Präzisierung 9).
-       Abhilfe im Adapter: schneller abfragen, solange das Auto zu Hause oder online ist oder der
-       Wall Connector ein neues Fahrzeug meldet.
+  - **Vor der Live-Schaltung von EVCS und Tesla** waren diese Punkte zu entscheiden oder umzusetzen
+    (Gesamtreview von 2c-1; je Befund und Abhilfe, knapp auch im Betriebshandbuch, „Laderegelung“,
+    „Hinweise für die Anlage“). **Stand nach Plan 2d:** Die Punkte 1 bis 3 sind umgesetzt, 4, 6 und 7
+    waren es schon mit 2c-2a, und 5 und 8 sind mit einer Entscheidung abgeschlossen. Offen ist nur,
+    was an der Anlage zu prüfen ist (Dry-Run, drei Prüfungen zur Zuordnung, Teil 2). Dann gehen EVCS
+    und Tesla gemeinsam mit dem Live-Schalter live (Betriebshandbuch, „Umstieg von evcc“):
+    1. **Stundenbudget des Tesla** — erledigt mit Plan 2d: Unter PV-Wolken verbrauchte die Regelung die
+       20 Befehle je Stunde (im Simulator in `wolkig` nach 2410 s; 8 von 19 Strombefehlen gingen an
+       die 5-A-Eigenheit), und danach wirkten auch ein Stopp und ein Moduswechsel erst später (in
+       einer Probe im Simulator wirkte „Aus“ nach 19 min), gegen Design 6.3. Jetzt ist der Stopp in
+       „Aus“ dringend und umgeht die Stundenlimits, und `control.tesla_reserve_commands` (4) hält
+       Befehle frei: Ist das Budget bis auf die Reserve verbraucht, geht ein Strombefehl nur noch
+       hinaus, wenn er den Strom senkt und der Ist-Strom über der Grenze des Wächters liegt.
+       Starts, Stopps, der Höchststrom an der EVCS und dringende Befehle sind frei. Im Simulator
+       gibt es in `dry-run` und `tesla-aus` keine Zurückstellung wegen des Stundenlimits mehr.
+    2. **Selbststart im laufenden Vorgang** — erledigt mit Plan 2d: Startet das Auto selbst
+       (Tesla-App), sendet die Regelung nach 120 s gegen den Modus „Laden aus“ erneut, je Fahrzeug
+       höchstens alle 600 s, im Start/Stopp-Budget (im Modus „Aus“ dringend). Szenario
+       `tesla-selbststart`: gestoppt binnen 210 s.
+    3. **Ansteckerkennung des Tesla** — erledigt mit Plan 2d: Tessie fragt ein abgestecktes Auto zu
+       Hause alle 60 s ab (sonst weiter alle 600 s) und sofort, frühestens 10 s nach der letzten
+       Abfrage, wenn an einer Wallbox ein Fahrzeug erscheint (`TessieAdapter.poll_soon`).
     4. **Ausnahme in der Regelung** — erledigt mit Plan 2c-2a: `RegulationLink` fängt jede Ausnahme
        des Kerns. Die Regelung ruht in diesem Zyklus (`idle`; wirft auch das, wird der Kern neu
        gebaut), die Laufzeit führt keinen Befehl der Regelung mehr aus, der Heartbeat bleibt aus, und
@@ -708,8 +779,8 @@ Demo-Zugänge: `admin`, `gast` (Lesen) und `sicher` (Admin mit TOTP, Geheimnis
        lädt er 90 s mit 16 A, bis der Befehl auf 5 A wirkt. Regel 2 begrenzt den Override auf 8 kW, und
        der Akku liefert den Rest: im Simulator bis zu 5,8 kW in die Autos für 90 s, obwohl die
        Unterstützung auf 3 kW begrenzt ist (`akku-minpv` startet den Tesla deshalb mit 5 A).
-       Abhilfe: `vehicles.tesla.min_a: 6` vermiede diese Befehle (Design 7.2 legt 5 A fest;
-       Entscheidung des Betreibers).
+       Entscheidung (Plan 2d): Der Code bleibt bei 5 A (Design 7.2). Für die `config.yaml` der
+       Anlage empfiehlt sich `vehicles.tesla.min_a: 6`; das entscheidet der Betreiber dort.
     6. **Simulator** — erledigt mit Plan 2c-2a: Das Szenario `schieflast-pv` (PV konstant 12 kW,
        5,5 kW mehr Last auf L1 ab 10 min) lässt das Importziel binden. Der e-Golf geht über `import_limit`
        von 11 auf 8 A, die längste Zeit über dem Ziel in PV-Modi ist 6 s (Grenze 10 s).
@@ -776,14 +847,15 @@ Demo-Zugänge: `admin`, `gast` (Lesen) und `sicher` (Admin mit TOTP, Geheimnis
        2c-2, Abschnitt 7) samt Gastfahrzeug und `vehicles.<name>.home_entity`, der Grund
        `assignment_detected`, Health je Wallbox und im Simulator der e-Golf „zu Hause“ oder „weg“,
        das Gastfahrzeug, jedes Auto an jeder Wallbox und die Szenarien aus Design 10.3 (jetzt 21).
-   - **2d Bedienung:** Absicht aus der app (Regelbetrieb, Live-Schalter mit Bestätigung, Lademodi,
-     Ziele, Boost, Zuordnung, Gast-Modus), Entscheidungslog in SQLite, UI-Seiten „Laden“ und
-     „Entscheidungen“, HA-Bedienelemente und Benachrichtigungen. Der Dry-Run beginnt schon nach 2c-1 per
-     `PUT /v1/intent`; die Bedienung macht ihn bequemer.
+   - **2d Bedienung:** umgesetzt, auf dem Branch `claude/project-thread-o6klxp`: Absicht aus der app
+     (Regelbetrieb, Live-Schalter mit Bestätigung, Lademodi, Boost, Zuordnung, Gast-Modus, Vorrang),
+     Entscheidungslog in SQLite, UI-Seiten „Laden“ und „Entscheidungen“, HA-Bedienelemente und
+     Benachrichtigungen, die Tesla-Punkte vor der Live-Schaltung. Ziel-SOC und Abfahrt gehören zum
+     Modus „Geplant“ und kommen mit Phase 4.
 
    Die Abnahme der Phase 2 besteht aus 2 Wochen Dry-Run, der schon nach 2c-1 beginnt, während 2c-2
    und 2d entstehen, und der Live-Schaltung danach. Abweichend von der Spec gehen EVCS und Tesla
-   **gemeinsam** live, erst nach 2d, mit dem Live-Schalter im UI und ganz abgeschaltetem evcc;
+   **gemeinsam** live, mit dem Live-Schalter im UI (seit 2d) und ganz abgeschaltetem evcc;
    Victron geht nach 2c-2a live, sobald Dynamic ESS aus ist (Design 2c-1, Abschnitt 14; Design 2c-2,
    Abschnitt 11.1).
 
@@ -795,7 +867,7 @@ Demo-Zugänge: `admin`, `gast` (Lesen) und `sicher` (Admin mit TOTP, Geheimnis
      an der Anlage am 12.10.2026 bestätigt.
    - Geschrieben wird nie der Maximalstrom (5017).
 
-### Nächster Schritt: die Anlage und Plan 2d
+### Nächster Schritt: Gesamtreview von Plan 2d und die Anlage
 
 1. Plan 2b ist auf `main`; Gesamtreview, Fix-Durchgang und Re-Review sind erledigt, die
    Entscheidungen stehen in `docs/superpowers/plans/2026-10-11-phase-2b-entscheidungen.md`. Plan
@@ -810,24 +882,23 @@ Demo-Zugänge: `admin`, `gast` (Lesen) und `sicher` (Admin mit TOTP, Geheimnis
    Task und im Gesamtreview geprüft, und die Fix-Welle danach ist umgesetzt
    (`docs/superpowers/plans/2026-10-15-phase-2c2b-zuordnung.md`). Beide sind auf `main`
    (`31721a6`, Fast-Forward mit Zustimmung des Betreibers vom 15.10.2026, Tests auf `main` grün).
-4. **Plan 2d** (Bedienung in UI und HA) nach der Spec (5.3, 8.7, 12 und 13) schreiben, vom Betreiber
-   durchsehen lassen und umsetzen. Dazu gehören die Auswahl des Gast-Modus (`guest.mode`, bisher nur
-   per `PUT /v1/intent`; Plan 2c-2b, Präzisierung 1), die Anzeige von Health je Wallbox
-   (`wallboxes`: wer steht wo, Art, Indizien), die Übersteuerung der Zuordnung und die Tesla-Punkte
-   vor der Live-Schaltung (Liste „Vor der Live-Schaltung“). An der Anlage folgt die
+4. **Plan 2d** (Bedienung in UI und HA) ist umgesetzt (Kurzfassung): die Auswahl des Gast-Modus, die
+   Anzeige von Health je Wallbox, die Übersteuerung der Zuordnung und die Tesla-Punkte vor der
+   Live-Schaltung. Es folgen das Gesamtreview und die Integration auf `main` (mit Zustimmung des
+   Betreibers). An der Anlage folgt die
    **Inbetriebnahme Punkt 3** (Design 2c-2, 11.1): Die Erkennung läuft im Dry-Run mit, und Health
    zeigt, wer wo steht. Sie braucht nicht 2d, nur die ausgerollten Images; die Schritte stehen unter
    „Offen an der Anlage“.
-   - **Hinweis für 2d:** Eine neue Version der Absicht bindet jedes Fahrzeug neu, das `boost_until`
-     oder `wallbox` nennt. 2d darf deshalb einen abgelaufenen Boost, den es aus `GET /v1/intent`
-     übernommen hat, nicht zurückschicken: In der nächsten Version fehlen `boost_until` und
-     `wallbox`, wo der Boost oder die Übersteuerung nicht mehr gelten soll.
+   - **Boost und Übersteuerung:** Eine neue Version der Absicht bindet jedes Fahrzeug neu, das
+     `boost_until` oder `wallbox` nennt. Die app schickt deshalb einen abgelaufenen Boost nicht
+     zurück (`IntentService`, Betriebshandbuch 13, „Absicht und Regelbetrieb“); wer eine Absicht
+     per `curl` sendet, lässt beides weg, wo es nicht mehr gelten soll.
 
 ## Hinweise für die Pläne 2c-2 und 2d
 
 Aus den Reviews der Pläne 2a bis 2c-2b. Plan 2c-2a hat die Punkte zur Regelung umgesetzt, Plan 2c-2b
-die zur Zuordnung; die Reste stehen dort. Plan 2d gibt es noch nicht; er soll die übrigen Punkte
-aufgreifen. Was
+die zur Zuordnung; die Reste stehen dort. Plan 2d hat die Punkte zur Bedienung umgesetzt (unten); die
+übrigen Reste gehören zu Phase 3. Was
 Plan 2c-1 aus der früheren Liste erledigt hat (Freigabe erst ohne offenen Schreibvorgang, Aufräumen des
 Entscheidungslogs, Heartbeat-Zähler je Lauf, SAFE ohne Tesla, der nicht lädt, Auslösung des Watchdogs,
 Laden nach einem Inselbetrieb, Selbstprüfung des Multi-Modus), steht in der Kurzfassung.
@@ -879,10 +950,10 @@ Laden nach einem Inselbetrieb, Selbstprüfung des Multi-Modus), steht in der Kur
     vom 12.10.2026). Seit 2c-2a frischt die Regelung einen gewollten Override alle 240 s auf.
   - **Entladegrenze (Phase 3):** Es gibt einen flüchtigen Override `ess.override.maxdischargepower`.
     Prüfen, ob er die persistente Entladegrenze ersetzen kann; das schont den Flash.
-- **Bedienung (2d):**
+- **Bedienung (2d umgesetzt; was die Punkte unten für die Pflege bedeuten):**
   - **Boost und Übersteuerung:** Eine neue Version der Absicht bindet jedes Fahrzeug neu, das
-    `boost_until` oder `wallbox` nennt. 2d darf deshalb einen abgelaufenen Boost, den es aus
-    `GET /v1/intent` übernommen hat, nicht zurückschicken.
+    `boost_until` oder `wallbox` nennt. Die app schickt deshalb einen abgelaufenen Boost nicht
+    zurück (`app/control/intent.py`, `_clean`).
   - Die Absicht kennt seit 2c-1 `vehicles`, `priority` und `surplus_priority` (Spec 5.3). Der core
     lehnt mit 422 und den Gründen in `details` ab: unbekannte Fahrzeuge oder Wallboxen, eine Wallbox
     für mehrere Fahrzeuge und eine Priorität, die nicht jedes Fahrzeug genau einmal nennt. Die app
@@ -892,21 +963,22 @@ Laden nach einem Inselbetrieb, Selbstprüfung des Multi-Modus), steht in der Kur
     (`wallboxes`), wer dort steht, die Art der Zuordnung und die Indizien; die UI-Seite „Laden“ kann
     sie nutzen. `occupant` ist auch während eines Vorgangs `null`, solange die Zuordnung unklar ist
     und an der Wallbox kein Fahrzeug der Konfiguration steht.
-  - **Gast-Modus:** `guest.mode` setzt bisher nur `PUT /v1/intent`; die Auswahl in UI und HA gehört zu
-    2d (Plan 2c-2b, Präzisierung 1). Der Modus gilt für jeden Gast an jeder Wallbox.
-  - Die Quittierung von Sperren (Spec 7.9) kommt hier; bisher lösen sie sich nur nach
+  - **Gast-Modus:** `guest.mode` wählt man jetzt im UI (Karte „Gast“) und in HA („Gast-Lademodus“); der
+    Modus gilt für jeden Gast an jeder Wallbox.
+  - Die Quittierung von Sperren (Spec 7.9) gibt es seit 2d; sonst lösen sie sich nach
     `safety.lock_release_s`.
   - Die app nimmt für die Version der Absicht Millisekunden seit 1970.
   - Die app speichert die Entscheidungen (SQLite, Markierungen für Grafana) und holt den Rückstand
     mit `GET /v1/decisions`. Die Zeitzone im Query als `%2B` kodieren.
-  - Eine erkannte fremde Änderung erzeugt in 2b Alarm und Sperre, aber keinen Eintrag im
-    Entscheidungslog; der Eintrag fehlt noch (Spec 7.9).
+  - Eine erkannte fremde Änderung erzeugt neben Alarm und Sperre seit 2d eine Entscheidung (Ergebnis
+    `foreign`).
   - Der LiveFeed der app ignoriert `mode_change`. In 2a reicht die Health-Abfrage alle 10 s.
   - `FakeView` in `tests/integration/test_core_link.py` kennt `intent()`, `submit_intent()` und
     `decisions()` noch nicht.
   - Entscheidungen tragen die Wanduhr. Springt sie zurück (NTP, Failover), bekommen neue
     Entscheidungen Zeiten vor dem letzten `since`, und ein Leser, der mit dem `ts` der letzten
-    weiterliest, übersieht sie. Die app braucht dafür einen Abgleich, etwa über die `id`.
+    weiterliest, übersieht sie. Die app gleicht darum über die `id` ab: Der Rückstand beginnt 10 min
+    vor dem jüngsten `ts` der Tabelle, und doppelte `id` werden übergangen.
 - **Watchdog (vor der Live-Schaltung von Victron):**
   - Nur der Punkt `evcs` von `verify_part2` verstellt vor der Probe etwas, und zwar den EVCS-Strom.
     Min-SOC, Entladegrenze und die Override-Aktion (mit `victron.live_allowed`) prüft bisher nur
@@ -1392,3 +1464,56 @@ gelten für `31721a6`):
   sagen es richtig. Im Beispiel gilt „stützen ihn dort weder `tessie` noch `elsewhere`“ nur, solange
   der übersteuerte e-Golf am Wall Connector nicht zweiphasig lädt; lädt er, stützt `tessie` den
   Tesla an der EVCS, allein reicht das nicht, und es bleibt „Gast, angenommen“.
+
+Entschieden in Plan 2d; die Rulings stehen im Plan (Präzisierungen) und in den Absätzen „Stand Plan 2d“
+der Spec:
+
+- **Bereinigung der Absicht:** Die app schickt Boost und Übersteuerung nur zurück, wo Health sie zeigt
+  (oder wo sie auf einen Ansteckvorgang warten), und vertraut Health nur, wenn seine `intent_version` die
+  gültige Version erreicht; sonst gilt der Stand als unbekannt (Boost in der Zukunft und Übersteuerung
+  bleiben, ein abgelaufener Boost entfällt). Die Regel gilt auch für das Fahrzeug, das die Bedienung
+  gerade ändert, vor der Änderung; die Präzisierung nahm es zuerst aus. Dafür hat Health die Felder
+  `intent_version`, `boost_pending` und `override_pending` bekommen (falls falsch: ein alter Boost
+  könnte nach einer Bedienung beim nächsten Anstecken anspringen).
+- **Version der Absicht:** Millisekunden seit 1970 oder die gültige Version + 1, was größer ist. Nach
+  der ersten Absicht der app braucht eine Absicht per `curl` eine Version aus `GET /v1/intent` plus 1.
+- **Reserve:** Sie hält nur Strombefehle zurück, die den Strom nicht senken oder den Ist-Strom nicht
+  über die Grenze des Wächters; Starts, Stopps, der Höchststrom an der EVCS und dringende Befehle gehen
+  immer. Die Konfiguration lehnt `control.tesla_reserve_commands` ab, der nicht unter `per_hour`
+  jedes Fahrzeugs mit Tessie liegt.
+- **Selbststart:** Die Regelung vergisst nur ihren letzten Wert für „Laden an/aus“, nicht den Strom, und
+  zählt nur Korrekturen, die sie senden kann. Im Modus „Aus“ ist der Befehl dringend und umgeht das
+  Start/Stopp-Limit.
+- **Szenario `tesla-aus`:** Es belegt „Aus wirkt binnen 10 s“, aber nicht, dass der dringende Stopp das
+  Stundenlimit umgeht: Die Reserve hält das Budget unter den Wolken offen, es gibt keine Zurückstellung
+  (Betriebshandbuch, „Simulator“). Das Umgehen prüfen die Tests der Regelung.
+- **Quittierung:** Der core antwortet aus dem Stand des letzten Zyklus und wendet die Quittierung im
+  nächsten an. Quittierbar sind Sperren, deren Ursache fehlt, und solche, deren einzige Ursache der
+  Alarm einer fremden Änderung ist; sonst 409 mit der Ursache. Schreibt der fremde Regler weiter,
+  sperrt die Erkennung nach 3 Prüfungen erneut.
+- **Live-Schalter:** nur im UI, nur für Admins; EVCS und Tesla (jeder Aktor außer Victron) verlangen
+  zusätzlich die Bestätigung, dass evcc ganz abgeschaltet ist. Die Bestätigungen entfallen, wenn sich die
+  Auswahl ändert; „Auf Dry-Run“ wählt alle live angeforderten Aktoren vor und braucht kein Passwort.
+  Ein Merkmal für „Prüfprotokoll Teil 2 bestanden“ gibt es nicht, darum das Häkchen. Der Dialog lässt nur
+  Aktoren mit `live_allowed` wählen.
+- **Entscheidungslog in der app:** Der Rückstand beginnt 10 min vor dem jüngsten `ts` (Rücksprünge der
+  Wanduhr), die `id` des core ist eindeutig, die Textsuche achtet nicht auf Groß- und Kleinschreibung
+  (auch bei Umlauten). Die Quelle des Rückstands sind die Dateien des core (7 Tage): War die app länger
+  weg, fehlen Ältere. Strombefehle, die die Reserve zurückhält, stehen nicht im Log.
+- **Home Assistant:** Gehaltene Nachrichten auf `bindaems/cmd/…` ignoriert die app. Höchstens ein Befehl
+  je Sekunde und Entität; nach jedem Befehl wird der Zustand neu veröffentlicht. HA hat die Rechte von
+  „Bedienen“ ohne Benutzer, aber weder Live-Schalter noch Vorrang. Die Konfiguration lehnt Fahrzeugnamen
+  ab, die leer, gepolstert, ohne Beachtung der Schreibweise doppelt oder „Automatisch“ sind, und
+  Schlüssel, deren Objekt-ID in Home Assistant mit einer anderen Entität zusammenfiele. Der Sensor
+  „Wallbox“ zeigt den Anzeigenamen der Wallbox (eigener Name, sonst „EVCS“ oder „Wall Connector“).
+- **Benachrichtigungen:** Ein Fehler-Alarm wird nach 30 s einmal gemeldet (persistente Meldung
+  `bindaems_<Alarm-ID>` und, falls eingestellt, der `notify`-Dienst) und beim Verschwinden entfernt;
+  höchstens 10 Meldungen je Minute über Alarme und Ablehnungen, der Rest geht ins Log. Ohne
+  `BINDAEMS_HA_TOKEN` meldet die Komponente `ha-notify` „Benachrichtigungen aus: BINDAEMS_HA_TOKEN
+  fehlt.“.
+- **Demo-Backend:** Der core der Demo-Welt meldet DEGRADED. Der Benutzer `bedienen` (Rolle „Bedienen“) ist
+  neu.
+- **Nicht in 2d:** `assignment_log` und `charging_session` (Spec 11.3) folgen mit der Statistik; manuelle
+  Zuordnungen stehen im Änderungsprotokoll, erkannte in den Entscheidungen und in Health.
+
+Aufgeschobene Kleinigkeiten aus Plan 2d: folgt nach dem Gesamtreview.
