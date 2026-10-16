@@ -29,6 +29,7 @@ app = [
     "alembic>=1.13",
     "argon2-cffi>=23.1",
     "pyotp>=2.9",
+    "holidays>=0.60",
 ]
 dev = [
     "pytest>=8.3",
