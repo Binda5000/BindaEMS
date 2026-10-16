@@ -31,7 +31,12 @@ def forecast_router(service: ForecastService, clock: Clock, guard: Guard) -> API
             "source": forecast.source if forecast is not None else None,
             "slots": (
                 [
-                    {"start": slot.isoformat(), "p50_w": power_w}
+                    {
+                        "start": slot.isoformat(),
+                        "p50_w": power_w,
+                        "p25_w": forecast.p25_w[slot],
+                        "p75_w": forecast.p75_w[slot],
+                    }
                     for slot, power_w in sorted(forecast.p50_w.items())
                 ]
                 if forecast is not None

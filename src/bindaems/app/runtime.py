@@ -77,6 +77,8 @@ ENERGY_S = 60.0  # Energie der Verbraucher seit Mitternacht
 HA_INPUTS_S = 5.0
 RESTART_S = 10.0
 BACKUP_AT = (3, 15)  # Ortszeit
+FORECAST_NIGHTLY_AT = (2, 30)  # Ortszeit
+FORECAST_KEEP = timedelta(days=60)
 
 
 class _AppServer(uvicorn.Server):
@@ -322,6 +324,7 @@ class AppRuntime:
             ("ledger", self._ledger_loop),
             ("maintenance", self._maintenance_loop),
             ("backup", self._backup_loop),
+            ("forecast-nightly", self._forecast_nightly_loop),
             ("consumer-energy", self._energy_loop),
         ]
         if self.ha_values is not None:
@@ -445,6 +448,28 @@ class AppRuntime:
                 log.info("Datenbank gesichert", path=str(path))
             except Exception:
                 log.exception("Sicherung der Datenbank fehlgeschlagen")
+
+    async def _forecast_nightly_loop(self) -> None:
+        """Beim Start und täglich um 02:30 Uhr: PV neu kalibrieren, altes Archiv löschen."""
+        while True:
+            await self._forecast_nightly()
+            now = self._clock.now()
+            due = next_local(now, lambda t: (t.hour, t.minute) == FORECAST_NIGHTLY_AT)
+            await asyncio.sleep((due - now).total_seconds())
+
+    async def _forecast_nightly(self) -> None:
+        try:
+            await asyncio.to_thread(self.forecast.recalibrate, self.ledger)
+        except Exception:
+            log.exception("Kalibrierung der PV-Prognose fehlgeschlagen")
+        try:
+            removed = await asyncio.to_thread(
+                self.forecast_archive.cleanup, self._clock.now() - FORECAST_KEEP
+            )
+            if removed:
+                log.info("Alte Prognosen aus dem Archiv gelöscht", records=removed)
+        except Exception:
+            log.exception("Pflege des Prognosearchivs fehlgeschlagen")
 
     async def shutdown(self) -> None:
         """Server und Hintergrundaufgaben beenden, Puffer schreiben, Verbindungen schließen."""

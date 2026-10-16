@@ -63,7 +63,9 @@ it('zeigt die PV-Prognose für heute und morgen, auch bevor die Preise für morg
 	const now = new Date('2026-10-09T08:00:00Z');
 	const forecast = quarterHours('2026-10-08T22:00:00Z', 3 * 96).map((start) => ({
 		start,
-		p50_w: 1000
+		p50_w: 1000,
+		p25_w: 700,
+		p75_w: 1200
 	}));
 	const shown = forecastForChart(forecast, now);
 	expect(shown[0]?.start).toBe('2026-10-08T22:00:00.000Z'); // heute 00:00 in Wien

@@ -645,7 +645,12 @@ export const PricesNowSchema = v.object({
 });
 export type PricesNow = v.InferOutput<typeof PricesNowSchema>;
 
-export const ForecastSlotSchema = v.object({ start: Iso, p50_w: v.number() });
+export const ForecastSlotSchema = v.object({
+	start: Iso,
+	p50_w: v.number(),
+	p25_w: v.number(),
+	p75_w: v.number()
+});
 export type ForecastSlot = v.InferOutput<typeof ForecastSlotSchema>;
 
 export const ForecastSchema = v.object({

@@ -1,3 +1,10 @@
+"""Fixtures der PV-Prognose.
+
+``FIXTURE`` ist eine Open-Meteo-Antwort für eine Südfläche. Ihre Reihen ``shortwave_radiation`` und
+``diffuse_radiation`` sind von Hand erzeugt (das Netz war gesperrt), keine Aufnahme: global =
+0,78 · GTI, Diffusanteil = 1,05 − GTI/800, begrenzt auf 0,12 bis 0,95.
+"""
+
 import asyncio
 from pathlib import Path
 

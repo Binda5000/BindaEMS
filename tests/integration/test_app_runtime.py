@@ -7,7 +7,7 @@ import pytest
 from fastapi.testclient import TestClient
 from pydantic import SecretStr
 from structlog.testing import capture_logs
-from tests.app_helpers import PASSWORD, T_APP
+from tests.app_helpers import PASSWORD, T_APP, StopScheduler, record_then_stop
 from tests.unit.shared.test_decisions import decision
 
 from bindaems.app.control.decisions import DecisionQuery
@@ -182,6 +182,39 @@ async def test_maintenance_removes_decisions_older_than_the_retention(runtime, r
     finally:
         task.cancel()
     assert [item.decision.id for item in found] == ["young"]
+
+
+async def test_forecast_nightly_runs_at_start_and_at_0230_local(runtime, monkeypatch) -> None:
+    calls: list[tuple] = []
+    monkeypatch.setattr(
+        runtime.forecast, "recalibrate", lambda ledger: calls.append(("recalibrate", ledger))
+    )
+    monkeypatch.setattr(
+        runtime.forecast_archive, "cleanup", lambda before: calls.append(("cleanup", before)) or 0
+    )
+    sleeps: list[float] = []
+    monkeypatch.setattr(asyncio, "sleep", record_then_stop(sleeps, after=1))
+    with pytest.raises(StopScheduler):
+        await runtime._forecast_nightly_loop()
+    assert calls == [("recalibrate", runtime.ledger), ("cleanup", T_APP - timedelta(days=60))]
+    assert sleeps == [16.5 * 3600]  # 10:00 Ortszeit → 02:30 am nächsten Tag
+
+
+async def test_forecast_nightly_survives_errors(runtime, monkeypatch) -> None:
+    removed: list[object] = []
+
+    def broken(ledger):
+        raise RuntimeError("Datenbank gesperrt")
+
+    monkeypatch.setattr(runtime.forecast, "recalibrate", broken)
+    monkeypatch.setattr(
+        runtime.forecast_archive, "cleanup", lambda before: removed.append(before) or 0
+    )
+    monkeypatch.setattr(asyncio, "sleep", record_then_stop([], after=2))
+    with capture_logs() as logs, pytest.raises(StopScheduler):
+        await runtime._forecast_nightly_loop()
+    assert "Kalibrierung der PV-Prognose fehlgeschlagen" in [e["event"] for e in logs]
+    assert len(removed) == 2  # die Pflege läuft trotzdem, die Schleife auch nach dem Fehler
 
 
 @pytest.mark.respx(assert_all_called=False)

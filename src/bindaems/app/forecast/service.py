@@ -9,29 +9,55 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
+from typing import Protocol
 
 import httpx
 import structlog
 
 from bindaems.app.fetch import FetchError
-from bindaems.app.forecast.archive import Clearness, ForecastArchive, RecordValue
-from bindaems.app.forecast.calibration import clearness_class
+from bindaems.app.forecast.archive import (
+    Actual,
+    Clearness,
+    ForecastArchive,
+    RecordValue,
+    actuals,
+    horizon_class,
+)
+from bindaems.app.forecast.calibration import (
+    NEUTRAL,
+    NEUTRAL_BANDS,
+    Bands,
+    Calibration,
+    CalPair,
+    ErrPair,
+    apply_band,
+    calibrate,
+    clearness_class,
+    fit_bands,
+    pv_threshold_w,
+)
 from bindaems.app.forecast.openmeteo import SOURCE, ForecastParseError, fetch_plane, parse_plane
 from bindaems.app.forecast.pv_model import combine, plane_power_w
 from bindaems.app.history.influx import RP_LONG
+from bindaems.app.ledger.service import LedgerSlot
 from bindaems.app.schedule import next_local
 from bindaems.app.settings.service import SettingsService
 from bindaems.app.status import ComponentStatus
 from bindaems.shared.config import Config
 from bindaems.shared.influx.lineprotocol import Point, PointSink
-from bindaems.shared.timeutil import LOCAL_TZ, Clock, local_day_slots, slot_start
+from bindaems.shared.timeutil import LOCAL_TZ, Clock, ensure_utc, local_day_slots, slot_start
 
 log = structlog.get_logger(__name__)
 
 FETCH_MINUTE = 7
 RETRY_S = 600.0
 SLOT_HOURS = 0.25
+CALIBRATION_WINDOW = timedelta(days=30)
+
+
+class _SlotSource(Protocol):
+    def slots(self, start: datetime, end: datetime) -> list[LedgerSlot]: ...
 
 
 @dataclass(frozen=True)
@@ -74,6 +100,8 @@ class ForecastService:
         self._sleep = sleep
         self._forecast: PvForecast | None = None
         self._error: str | None = None
+        # beide Modelle gehören zusammen und werden nur gemeinsam ersetzt
+        self._models: tuple[Calibration, Bands] = (NEUTRAL, NEUTRAL_BANDS)
 
     def latest(self) -> PvForecast | None:
         return self._forecast
@@ -106,21 +134,63 @@ class ForecastService:
                     for slot in weather
                 }
             )
-        raw_w = combine(planes, self._cfg.pv.inverter_ac_max_w)
-        # Noch ohne Kalibrierung: P50 = roh, das Band hat die Breite null (Task 10 füllt es).
-        forecast = PvForecast(
-            self._clock.now(),
-            SOURCE,
-            raw_w,
-            raw_w,
-            raw_w,
-            raw_w,
-            {slot: clearness.get(slot) for slot in raw_w},
-        )
+        max_w = self._cfg.pv.inverter_ac_max_w
+        raw_w = combine(planes, max_w)
+        issued_at = self._clock.now()
+        calibration, bands = self._models
+        slot_clearness = {slot: clearness.get(slot) for slot in raw_w}
+        p50_w: dict[datetime, float] = {}
+        p25_w: dict[datetime, float] = {}
+        p75_w: dict[datetime, float] = {}
+        for slot, slot_raw_w in raw_w.items():
+            kind = slot_clearness[slot]
+            hour = slot.astimezone(LOCAL_TZ).hour
+            p50 = min(max(slot_raw_w * calibration.factor(hour, kind), 0.0), max_w)
+            # Slots vor der Ausgabe haben keinen Vorlauf; für sie gilt das kurze Band
+            horizon = horizon_class(slot - issued_at) or "h0_6"
+            p25_w[slot], p50_w[slot], p75_w[slot] = apply_band(
+                p50, bands.band(horizon, kind), max_w
+            )
+        forecast = PvForecast(issued_at, SOURCE, p50_w, raw_w, p25_w, p75_w, slot_clearness)
         self._forecast, self._error = forecast, None
         self._publish(forecast)
         await self._archive_forecast(forecast)
         return forecast
+
+    def recalibrate(self, ledger: _SlotSource) -> None:
+        """Faktoren und Bänder aus Archiv und Abrechnung der letzten 30 Tage neu bestimmen.
+
+        Synchron (Datenbankarbeit; der Aufrufer nimmt ``asyncio.to_thread``). Erst wenn alles
+        gelesen und gerechnet ist, werden beide Modelle gemeinsam ersetzt; bei einem Fehler
+        bleiben die bisherigen.
+        """
+        if self._archive is None:
+            return
+        end = self._clock.now()
+        start = end - CALIBRATION_WINDOW
+        actual: dict[datetime, Actual] = {
+            ensure_utc(slot): value for slot, value in actuals(ledger, start, end).items()
+        }
+        threshold = pv_threshold_w(self._cfg)
+        cal_pairs: list[CalPair] = []
+        err_pairs: list[ErrPair] = []
+        for record in self._archive.records("pv", start, end):
+            slot = ensure_utc(record.slot_start)
+            known = actual.get(slot)
+            if known is None:
+                continue
+            if record.horizon == "h0_6":
+                hour = slot.astimezone(LOCAL_TZ).hour
+                cal_pairs.append(CalPair(hour, record.clearness, record.raw_w, known.pv_w))
+            err_pairs.append(ErrPair(record.horizon, record.clearness, record.p50_w, known.pv_w))
+        models = (calibrate(cal_pairs, threshold), fit_bands(err_pairs, threshold))
+        self._models = models
+        log.info(
+            "PV-Prognose kalibriert",
+            samples=models[0].samples,
+            factors=len(models[0].factors),
+            bands=len(models[1].by_class),
+        )
 
     async def _archive_forecast(self, forecast: PvForecast) -> None:
         """Ins Archiv schreiben; ein Fehler dort lässt die neue Prognose bestehen."""
@@ -138,9 +208,16 @@ class ForecastService:
     def _publish(self, forecast: PvForecast) -> None:
         if self._sink is None:
             return
-        tags = {"kind": "pv", "quantile": "p50"}
-        for slot, power_w in sorted(forecast.p50_w.items()):
-            self._sink.write(Point("forecast", tags, {"kw": power_w / 1000.0}, slot, rp=RP_LONG))
+        for quantile, series in (
+            ("p25", forecast.p25_w),
+            ("p50", forecast.p50_w),
+            ("p75", forecast.p75_w),
+        ):
+            tags = {"kind": "pv", "quantile": quantile}
+            for slot, power_w in sorted(series.items()):
+                self._sink.write(
+                    Point("forecast", tags, {"kw": power_w / 1000.0}, slot, rp=RP_LONG)
+                )
 
     async def run(self) -> None:
         """Sofort abrufen, dann zur Minute 7 jeder Stunde; nach Fehler spätestens nach 10 min."""
@@ -163,4 +240,8 @@ class ForecastService:
         if self._forecast is None:
             return ComponentStatus("forecast", False, "Noch keine PV-Prognose")
         issued = self._forecast.issued_at.astimezone(LOCAL_TZ)
-        return ComponentStatus("forecast", True, f"PV-Prognose von {issued:%H:%M} Uhr")
+        message = f"PV-Prognose von {issued:%H:%M} Uhr"
+        samples = self._models[0].samples
+        if samples > 0:
+            message += f", kalibriert aus {samples} Viertelstunden"
+        return ComponentStatus("forecast", True, message)

@@ -47,7 +47,7 @@ describe('Preise und Prognose', () => {
 	it('zeigt die PV-Prognose in kW auf der zweiten Achse und markiert jetzt', () => {
 		const option = priceForecastOption(
 			[slot('2026-10-09T08:00:00+00:00', 13.44, null)],
-			[{ start: '2026-10-09T08:00:00+00:00', p50_w: 2500 }],
+			[{ start: '2026-10-09T08:00:00+00:00', p50_w: 2500, p25_w: 1750, p75_w: 3000 }],
 			'2026-10-09T08:05:00+00:00',
 			palette
 		);
