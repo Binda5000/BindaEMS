@@ -45,6 +45,7 @@
 	<ol class="order">
 		{#each order as key, index (key)}
 			<li>
+				<span class="num">{index + 1}.</span>
 				<span class="name">{names[key] ?? key}</span>
 				{#if operate}
 					<button
@@ -112,7 +113,7 @@
 	}
 
 	.order {
-		list-style: decimal inside;
+		list-style: none;
 		margin: 0 0 1rem;
 		padding: 0;
 		display: grid;
@@ -124,6 +125,11 @@
 		flex-wrap: wrap;
 		align-items: center;
 		gap: 0.5rem;
+	}
+
+	.num {
+		min-width: 1.5rem;
+		color: var(--muted);
 	}
 
 	.name {

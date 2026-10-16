@@ -3,6 +3,7 @@ import type { Intent, VehicleHealth } from '$lib/api/schemas';
 import {
 	assignmentLabel,
 	boostInfo,
+	healthIsCurrent,
 	indicatorText,
 	modeLabel,
 	moveDown,
@@ -217,5 +218,54 @@ describe('Übersteuerung', () => {
 		expect(
 			overrideVehicle('twc', [vehicle({ id: 'egolf', mode: null, wallbox: null })], intent(pinned))
 		).toBe('egolf');
+	});
+});
+
+describe('Health älter als die Absicht', () => {
+	const now = Date.parse('2026-10-09T09:00:00Z');
+	const future = '2026-10-09T21:00:00+00:00';
+	const boosted = intent({ tesla: { mode: 'pv', boost_until: future, wallbox: null } });
+	const pinned = intent({ egolf: { mode: 'pv', boost_until: null, wallbox: 'twc' } });
+
+	it('erkennt, ob Health die Absicht schon übernommen hat', () => {
+		expect(healthIsCurrent(null, null)).toBe(true);
+		expect(healthIsCurrent(null, intent())).toBe(false);
+		expect(healthIsCurrent(0, intent())).toBe(false);
+		expect(healthIsCurrent(1, intent())).toBe(true);
+		expect(healthIsCurrent(2, intent())).toBe(true);
+	});
+
+	it('zeigt den Boost der Absicht, bis Health ihn bestätigt', () => {
+		expect(boostInfo(vehicle(), boosted, now, false)).toEqual({
+			active: true,
+			until: future,
+			pending: false
+		});
+		// mit aktuellem Health gilt, was Health zeigt
+		expect(boostInfo(vehicle(), boosted, now, true).active).toBe(false);
+	});
+
+	it('zeigt einen beendeten Boost nicht mehr, auch wenn Health ihn noch zeigt', () => {
+		const old = vehicle({ boost_until: '2026-10-09T12:00:00+00:00' });
+		expect(boostInfo(old, intent(), now, false).active).toBe(false);
+		expect(boostInfo(old, intent(), now, true).active).toBe(true);
+	});
+
+	it('übergeht in der Absicht einen Boost in der Vergangenheit', () => {
+		const past = intent({
+			tesla: { mode: 'pv', boost_until: '2026-10-09T08:00:00Z', wallbox: null }
+		});
+		expect(boostInfo(vehicle(), past, now, false).active).toBe(false);
+	});
+
+	it('zeigt die Übersteuerung der Absicht, bis Health sie bestätigt', () => {
+		const vehicles = [vehicle({ id: 'egolf', wallbox: 'evcs', assignment: 'detected' })];
+		expect(overrideVehicle('twc', vehicles, pinned, false)).toBe('egolf');
+		expect(overrideVehicle('twc', vehicles, pinned, true)).toBeNull();
+	});
+
+	it('zeigt eine Übersteuerung nicht mehr, die die Absicht schon beendet hat', () => {
+		const vehicles = [vehicle({ id: 'egolf', wallbox: 'twc', assignment: 'override' })];
+		expect(overrideVehicle('twc', vehicles, intent(), false)).toBeNull();
 	});
 });

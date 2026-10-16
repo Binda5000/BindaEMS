@@ -395,3 +395,32 @@ it('meldet, dass der core fehlt', async () => {
 	expect(await screen.findByText('core nicht erreichbar.')).toBeInTheDocument();
 	expect(screen.queryByRole('combobox')).not.toBeInTheDocument();
 });
+
+it('folgt der Absicht, solange Health älter ist: Zuordnung bleibt auf dem gewählten Fahrzeug', async () => {
+	await show();
+	const pinned = baseIntent({
+		version: 2,
+		vehicles: { egolf: { mode: 'pv', boost_until: null, wallbox: 'twc' } }
+	});
+	api.setWallboxVehicle.mockResolvedValue(reply(pinned));
+	api.control.mockResolvedValue({ core_connected: true, intent: pinned }); // Health hat Version 1
+	const select = within(card('Garage')).getByRole('combobox', { name: 'Zuordnung' });
+	await fireEvent.change(select, { target: { value: 'egolf' } });
+	await waitFor(() => expect(api.setWallboxVehicle).toHaveBeenCalledWith('twc', 'egolf'));
+	await waitFor(() => expect(select).toHaveValue('egolf'));
+});
+
+it('folgt der Absicht, solange Health älter ist: Boost zeigt „Boost beenden“', async () => {
+	await show();
+	const future = new Date(Date.now() + 6 * 3_600_000).toISOString();
+	const boosted = baseIntent({
+		version: 2,
+		vehicles: { tesla: { mode: 'min_pv', boost_until: future, wallbox: null } }
+	});
+	api.setBoost.mockResolvedValue(reply(boosted));
+	api.control.mockResolvedValue({ core_connected: true, intent: boosted }); // Health hat Version 1
+	const tesla = within(card('Tesla Model 3'));
+	await fireEvent.click(tesla.getByRole('button', { name: 'Boost' }));
+	expect(await tesla.findByRole('button', { name: 'Boost beenden' })).toBeInTheDocument();
+	expect(tesla.getByText(/^bis \d\d:\d\d$/)).toBeInTheDocument();
+});

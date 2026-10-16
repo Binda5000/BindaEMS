@@ -150,14 +150,40 @@ export interface BoostInfo {
 	pending: boolean;
 }
 
-/** Health zeigt den Boost; wartet er auf das Anstecken, steht er nur in der Absicht. */
-export function boostInfo(vehicle: VehicleHealth, intent: Intent | null, nowMs: number): BoostInfo {
+/**
+ * Beschreibt Health die gültige Absicht? Nur dann, wenn es ihre Version (oder eine neuere) schon
+ * übernommen hat; sonst zeigt Health den Stand davor, und die Anzeige folgt der Absicht.
+ */
+export function healthIsCurrent(healthVersion: number | null, intent: Intent | null): boolean {
+	return intent === null || (healthVersion !== null && healthVersion >= intent.version);
+}
+
+function futureBoost(vehicle: VehicleHealth, intent: Intent | null, nowMs: number): string | null {
+	const wanted = intent?.vehicles[vehicle.id]?.boost_until ?? null;
+	const end = wanted === null ? null : parseIso(wanted);
+	return wanted !== null && end !== null && end > nowMs ? wanted : null;
+}
+
+/**
+ * Health zeigt den Boost; wartet er auf das Anstecken, steht er nur in der Absicht. Ist Health
+ * älter als die Absicht (`current` falsch), gilt die Absicht: ein Boost in der Zukunft wird gezeigt,
+ * bis Health ihn bestätigt, ein beendeter nicht mehr.
+ */
+export function boostInfo(
+	vehicle: VehicleHealth,
+	intent: Intent | null,
+	nowMs: number,
+	current = true
+): BoostInfo {
+	const wanted = futureBoost(vehicle, intent, nowMs);
+	if (!current) {
+		if (wanted === null) return { active: false, until: null, pending: false };
+		return { active: true, until: vehicle.boost_until ?? wanted, pending: vehicle.boost_pending };
+	}
 	if (vehicle.boost_until !== null) {
 		return { active: true, until: vehicle.boost_until, pending: vehicle.boost_pending };
 	}
-	const wanted = intent?.vehicles[vehicle.id]?.boost_until ?? null;
-	const end = wanted === null ? null : parseIso(wanted);
-	if (vehicle.boost_pending && wanted !== null && end !== null && end > nowMs) {
+	if (vehicle.boost_pending && wanted !== null) {
 		return { active: true, until: wanted, pending: true };
 	}
 	return { active: false, until: null, pending: false };
@@ -166,17 +192,19 @@ export function boostInfo(vehicle: VehicleHealth, intent: Intent | null, nowMs: 
 /**
  * Das Fahrzeug, das auf diese Wallbox übersteuert ist: Die Absicht nennt die Wallbox, und Health
  * bestätigt die Übersteuerung oder kennt sie noch nicht (wartend, Stand der Regelung unbekannt).
- * Eine beendete Übersteuerung bleibt in der Absicht stehen, gilt aber nicht.
+ * Eine beendete Übersteuerung bleibt in der Absicht stehen, gilt aber nicht. Ist Health älter als
+ * die Absicht (`current` falsch), gilt allein die Absicht.
  */
 export function overrideVehicle(
 	wallbox: string,
 	vehicles: readonly VehicleHealth[],
-	intent: Intent | null
+	intent: Intent | null,
+	current = true
 ): string | null {
 	for (const vehicle of vehicles) {
 		if (intent?.vehicles[vehicle.id]?.wallbox !== wallbox) continue;
 		const active = vehicle.assignment === 'override' && vehicle.wallbox === wallbox;
-		if (active || vehicle.override_pending || vehicle.mode === null) return vehicle.id;
+		if (!current || active || vehicle.override_pending || vehicle.mode === null) return vehicle.id;
 	}
 	return null;
 }

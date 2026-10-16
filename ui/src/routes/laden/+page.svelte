@@ -8,7 +8,13 @@
 	import PriorityCard from '$lib/charging/PriorityCard.svelte';
 	import VehicleCard from '$lib/charging/VehicleCard.svelte';
 	import WallboxCard from '$lib/charging/WallboxCard.svelte';
-	import { boostInfo, overrideVehicle, priorityOrder, type CardNotice } from '$lib/charging/view';
+	import {
+		boostInfo,
+		healthIsCurrent,
+		overrideVehicle,
+		priorityOrder,
+		type CardNotice
+	} from '$lib/charging/view';
 	import Notice from '$lib/components/Notice.svelte';
 	import { socEntries } from '$lib/dashboard/socs';
 	import { live } from '$lib/live.svelte';
@@ -52,6 +58,8 @@
 	const regulationOff = $derived(
 		control.data?.core_connected === true && !(intent?.control ?? false)
 	);
+	// Ist Health älter als die Absicht, folgt die Anzeige der Absicht, bis Health sie übernommen hat
+	const current = $derived(healthIsCurrent(health?.intent_version ?? null, intent));
 	const vehicles = $derived(health?.vehicles ?? []);
 	const names = $derived(Object.fromEntries(vehicles.map((vehicle) => [vehicle.id, vehicle.name])));
 	const socs = $derived(socEntries(live.state, limits.data));
@@ -133,7 +141,7 @@
 					{vehicle}
 					wallbox={vehicle.wallbox === null ? null : wallboxLabel(vehicle.wallbox)}
 					mode={intent?.vehicles[vehicle.id]?.mode ?? 'pv'}
-					boost={boostInfo(vehicle, intent, nowMs)}
+					boost={boostInfo(vehicle, intent, nowMs, current)}
 					soc={socs.find((entry) => entry.id === vehicle.id)}
 					{operate}
 					{busy}
@@ -147,7 +155,7 @@
 					{wallbox}
 					title={wallboxLabel(wallbox.id)}
 					{names}
-					assigned={overrideVehicle(wallbox.id, vehicles, intent)}
+					assigned={overrideVehicle(wallbox.id, vehicles, intent, current)}
 					{operate}
 					{busy}
 					notice={notices[`wallbox:${wallbox.id}`] ?? null}
