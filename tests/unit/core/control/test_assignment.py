@@ -18,7 +18,7 @@ from bindaems.core.control.assignment import (
     WallboxState,
 )
 from bindaems.core.control.clues import Clue, Evidence
-from bindaems.shared.control import Intent, VehicleIntent
+from bindaems.shared.control import ChargeMode, Intent, VehicleIntent
 
 # Vorgaben des Plans
 
@@ -72,8 +72,61 @@ def test_boost_ends_when_unplugged(cfg) -> None:
     assert update(a, 0, intent=v1).vehicles["egolf"].boost_until is not None
     update(a, 1, evcs_obs=evcs(connected=False), intent=v1)
     assert update(a, 2, intent=v1).vehicles["egolf"].boost_until is None
-    v2 = boosted(2, T0 + timedelta(hours=2))
+    v2 = boosted(2, T0 + timedelta(hours=3))  # ein neuer Boost
     assert update(a, 3, intent=v2).vehicles["egolf"].boost_until is not None
+
+
+@pytest.mark.parametrize("same_cycle", [False, True])
+def test_a_spent_boost_does_not_come_back_with_a_new_version(cfg, same_cycle) -> None:
+    # Review Focus 1: Der Boost ist gebunden, das Auto lädt und wird abgesteckt. Eine neue Version
+    # mit demselben ``boost_until`` (etwa ein Moduswechsel mit gleich alter Health oder ohne
+    # Stand der Regelung) bindet ihn nicht neu, auch nicht im Zyklus des Absteckens.
+    a = Assignment(cfg, started=T0)
+    until = T0 + timedelta(hours=2)
+    v1 = boosted(1, until)
+    assert update(a, 0, intent=v1).vehicles["egolf"].boost_until == until
+    away = evcs(connected=False)
+    v2 = Intent(
+        version=2,
+        control=True,
+        vehicles={"egolf": VehicleIntent(mode=ChargeMode.NOW, boost_until=until)},
+    )
+    gone = update(a, 1, evcs_obs=away, intent=v2 if same_cycle else v1).vehicles["egolf"]
+    assert (gone.boost_until, gone.boost_pending) == (None, False)
+    waiting = update(a, 2, evcs_obs=away, intent=v2).vehicles["egolf"]
+    assert (waiting.boost_until, waiting.boost_pending) == (None, False)
+    plugged = update(a, 3, intent=v2).vehicles["egolf"]  # wieder angesteckt
+    assert (plugged.boost_until, plugged.boost_pending) == (None, False)
+
+
+def test_a_new_boost_binds_after_a_spent_one(cfg) -> None:
+    a = Assignment(cfg, started=T0)
+    until = T0 + timedelta(hours=2)
+    update(a, 0, intent=boosted(1, until))
+    away = evcs(connected=False)
+    update(a, 1, evcs_obs=away, intent=boosted(1, until))  # der Vorgang endet
+    fresh = until + timedelta(minutes=5)
+    waiting = update(a, 2, evcs_obs=away, intent=boosted(2, fresh)).vehicles["egolf"]
+    assert (waiting.boost_until, waiting.boost_pending) == (None, True)
+    assert update(a, 3, intent=boosted(2, fresh)).vehicles["egolf"].boost_until == fresh
+
+
+def test_a_spent_boost_stays_spent_beside_an_override(cfg) -> None:
+    # Die Übersteuerung bindet weiter an ihren Vorgang, der verbrauchte Boost nicht mit ihr.
+    a = Assignment(cfg, started=T0)
+    until = T0 + timedelta(hours=2)
+    update(a, 0, intent=boosted(1, until))
+    away = evcs(connected=False)
+    update(a, 1, evcs_obs=away, intent=boosted(1, until))
+    both = Intent(
+        version=2,
+        control=True,
+        vehicles={"egolf": VehicleIntent(boost_until=until, wallbox="evcs")},
+    )
+    waiting = update(a, 2, evcs_obs=away, intent=both).vehicles["egolf"]
+    assert (waiting.boost_pending, waiting.override_pending) == (False, True)
+    plugged = update(a, 3, intent=both).vehicles["egolf"]
+    assert (plugged.kind, plugged.boost_until) == (AssignmentKind.OVERRIDE, None)
 
 
 def test_boost_set_before_plugging_in_applies_to_the_next_session(cfg) -> None:

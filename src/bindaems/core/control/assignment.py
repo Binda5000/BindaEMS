@@ -232,6 +232,9 @@ class Assignment:
             self._defaults.setdefault(vehicle.default_wallbox, key)
         self._version: int | None = None  # die letzte Version der Absicht, die gebunden wurde
         self._bindings: dict[str, _Binding] = {}
+        self._boosts: dict[str, datetime] = {}  # Fahrzeug → ``boost_until`` seiner Bindung
+        # Fahrzeug → ``boost_until`` des Boosts, dessen Vorgang endete; höchstens einer je Fahrzeug
+        self._spent: dict[str, datetime] = {}
         self._charged: dict[str, tuple[str, int]] = {}  # Auto → (Wallbox, Vorgang), „geladen“
         self._occupants: dict[str, str | None] = {}  # Wallbox → wer im vorigen Aufruf dort stand
         # Fahrzeug → der laufende Vorgang, an dem es im vorigen Aufruf stand; fehlt ohne einen
@@ -262,7 +265,8 @@ class Assignment:
         1. Ansteckvorgänge je Wallbox: Ein neuer beginnt nur mit dem Wechsel von bekannt „kein
            Fahrzeug“ zu „Fahrzeug“, und nur dann ist sein Beginn bekannt. „Kein Fahrzeug“ beendet
            ihn, ein unbekannter Wert ändert nichts.
-        2. Bindungen: Bei einer Version, die der Zuordnung neu ist, bindet sie Boost und
+        2. Bindungen: Ein Boost, dessen Vorgang endete, ist verbraucht (``_note_spent``). Bei einer
+           Version, die der Zuordnung neu ist, bindet sie Boost und
            Übersteuerung jedes Fahrzeugs an einen Vorgang (``_bind``): eine Übersteuerung an den
            ihrer Wallbox, den laufenden oder den nächsten; einen Boost ohne Übersteuerung an den,
            an dem das Fahrzeug im vorigen Aufruf stand, wenn er noch läuft, sonst an den seiner
@@ -280,6 +284,7 @@ class Assignment:
         """
         for key, port in self._ports.items():
             port.observe(wallboxes[key].connected, wall_now)
+        self._note_spent()
         if intent is not None and intent.version != self._version:
             self._version = intent.version
             self._bind(intent, accepted_at)
@@ -329,26 +334,50 @@ class Assignment:
         Bindung geht an ihren laufenden Vorgang, wenn sie ein Fahrzeug meldet, sonst an den
         nächsten. Eine Absicht, die vor dem Start der Regelung angenommen wurde oder deren
         Annahmezeit unbekannt ist, bindet nur an einen laufenden Vorgang: Ein Boost vom Vortag
-        springt nicht beim nächsten Anstecken an. Bindungen früherer Versionen entfallen; die neue
-        Version setzt sie, wo sie noch gelten sollen.
+        springt nicht beim nächsten Anstecken an. Ein verbrauchter Boost (``_note_spent``) bindet
+        nicht; eine Übersteuerung desselben Eintrags bindet ohne ihn. Bindungen früherer Versionen
+        entfallen; die neue Version setzt sie, wo sie noch gelten sollen.
         """
         restored = accepted_at is None or accepted_at < self._started
         self._bindings.clear()
+        self._boosts.clear()
         for key, vehicle in self._cfg.vehicles.items():
             entry = intent.vehicles.get(key)
             override = self._override_wallbox(entry)
-            if entry is None or (entry.boost_until is None and override is None):
+            boost = entry.boost_until if entry is not None else None
+            if boost is not None and boost == self._spent.get(key):
+                boost = None  # verbraucht: kommt mit keiner Version zurück
+            if boost is None and override is None:
                 continue
             standing = self._standing.get(key)
             if override is None and standing is not None and self._runs(standing):
-                self._bindings[key] = standing
-                continue
-            wallbox = override if override is not None else vehicle.default_wallbox
-            port = self._ports[wallbox]
-            if port.running:
-                self._bindings[key] = _Binding(wallbox, port.count)
-            elif not restored:
-                self._bindings[key] = _Binding(wallbox, port.count + 1)
+                binding: _Binding | None = standing
+            else:
+                wallbox = override if override is not None else vehicle.default_wallbox
+                port = self._ports[wallbox]
+                binding = None
+                if port.running:
+                    binding = _Binding(wallbox, port.count)
+                elif not restored:
+                    binding = _Binding(wallbox, port.count + 1)
+            if binding is not None:
+                self._bindings[key] = binding
+                if boost is not None:
+                    self._boosts[key] = boost
+
+    def _note_spent(self) -> None:
+        """Merkt sich den Boost jeder Bindung, deren Vorgang begonnen und geendet hat.
+
+        Ein so verbrauchter Boost bindet nicht wieder, auch wenn eine neue Version denselben
+        ``boost_until`` trägt (eine Bedienung mit veraltetem Stand, eine Absicht per ``curl``);
+        nur ein anderer ``boost_until``, also ein neuer Boost, bindet. Je Fahrzeug bleibt nur der
+        zuletzt verbrauchte.
+        """
+        for key, binding in self._bindings.items():
+            boost = self._boosts.get(key)
+            started = binding.session <= self._ports[binding.wallbox].count
+            if boost is not None and started and not self._runs(binding):
+                self._spent[key] = boost
 
     def _override_wallbox(self, entry: VehicleIntent | None) -> str | None:
         """Die Wallbox der Übersteuerung im Eintrag, wenn die Konfiguration sie kennt."""
@@ -521,12 +550,8 @@ class Assignment:
         """
         wallbox_key, kind = place
         waiting = self._waiting(key)
-        boost_pending = (
-            waiting
-            and entry is not None
-            and entry.boost_until is not None
-            and wall_now < entry.boost_until
-        )
+        boost = self._boosts.get(key)
+        boost_pending = waiting and boost is not None and wall_now < boost
         override_pending = waiting and self._override_wallbox(entry) is not None
         if wallbox_key is None:
             return VehicleState(
@@ -548,19 +573,18 @@ class Assignment:
             charging=_charging(wallbox, tessie),
             complete=self._is_complete(key, wallbox_key, wallbox, tessie),
             new_session=self._ports[wallbox_key].new,
-            boost_until=self._boost_until(key, entry, wall_now),
+            boost_until=self._boost_until(key, wall_now),
             fresh=fresh,
             boost_pending=boost_pending,
             override_pending=override_pending,
         )
 
-    def _boost_until(
-        self, key: str, entry: VehicleIntent | None, wall_now: datetime
-    ) -> datetime | None:
+    def _boost_until(self, key: str, wall_now: datetime) -> datetime | None:
         """Der Boost des Fahrzeugs: mit gültiger Bindung, bis ``boost_until`` auf der Wanduhr."""
-        if entry is None or entry.boost_until is None or not self._bound(key):
+        boost = self._boosts.get(key)
+        if boost is None or not self._bound(key):
             return None
-        return entry.boost_until if wall_now < entry.boost_until else None
+        return boost if wall_now < boost else None
 
     def _is_complete(
         self, key: str, wallbox_key: str, wallbox: WallboxObs, tessie: VehicleObs
