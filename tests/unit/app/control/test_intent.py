@@ -12,6 +12,7 @@ from bindaems.app.control.intent import (
     ConflictAgain,
     CoreDown,
     IntentService,
+    LiveNotAuthorized,
     Rejected,
     SetActuators,
     SetAssignment,
@@ -349,7 +350,10 @@ async def test_every_change_type_has_its_action_and_target(
         SetAssignment("evcs", "egolf"),
         SetGuestMode(ChargeMode.OFF),
         SetPriority(["egolf", "tesla"], SurplusPriority(kind=SurplusOrder.CARS_FIRST)),
-        SetActuators({"wallbox.evcs": ActuatorMode.LIVE, "victron": ActuatorMode.LIVE}),
+        SetActuators(
+            {"wallbox.evcs": ActuatorMode.LIVE, "victron": ActuatorMode.LIVE},
+            frozenset({"wallbox.evcs", "victron"}),
+        ),
     ]
     for change in changes:
         await service.apply(change, actor="ha", source="ha")
@@ -419,7 +423,27 @@ async def test_cache_follows_the_fetched_and_the_clamped_intent(
         return CoreReply(200, {"result": "clamped", "version": 9, "details": ["geklemmt"]})
 
     fake_client.replies.append(core_clamps)
-    request = SetActuators({"victron": ActuatorMode.LIVE})
+    request = SetActuators({"victron": ActuatorMode.LIVE}, frozenset({"victron"}))
     result = await service.apply(request, actor="admin", source="ui")
     assert result.intent.actuators["victron"] is ActuatorMode.LIVE  # die gesendete
     assert service.cached() == clamped  # der Cache zeigt, was der core geklemmt hat
+
+
+async def test_live_needs_authorization_against_the_base_of_each_attempt(
+    service: IntentService, fake_client: FakeCoreClient
+) -> None:
+    fake_client.valid = Intent(version=3, actuators={"wallbox.evcs": ActuatorMode.LIVE})
+    # schon live: bleibt es ohne Prüfung; Dry-Run braucht nie eine
+    keep = SetActuators({"wallbox.evcs": ActuatorMode.LIVE, "victron": ActuatorMode.DRY_RUN})
+    await service.apply(keep, actor="admin", source="ui")
+    with pytest.raises(LiveNotAuthorized) as refused:
+        await service.apply(
+            SetActuators({"victron": ActuatorMode.LIVE, "wallbox.evcs": ActuatorMode.LIVE}),
+            actor="admin",
+            source="ui",
+        )
+    assert refused.value.actuators == ["victron"]
+    granted = SetActuators({"victron": ActuatorMode.LIVE}, frozenset({"victron"}))
+    result = await service.apply(granted, actor="admin", source="ui")
+    assert result.intent.actuators["victron"] is ActuatorMode.LIVE
+    assert len(fake_client.sent) == 2

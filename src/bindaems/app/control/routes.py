@@ -26,6 +26,7 @@ from bindaems.app.control.intent import (
     ConflictAgain,
     CoreDown,
     IntentService,
+    LiveNotAuthorized,
     Rejected,
     SetActuators,
     SetAssignment,
@@ -47,6 +48,7 @@ CORE_DOWN = "core nicht erreichbar."
 CONFLICT = "Die Absicht wurde gleichzeitig geändert. Bitte erneut versuchen."
 NEEDS_CONFIRMATION = "Bitte bestätige Prüfprotokoll Teil 2."
 WRONG_PASSWORD = "Passwort falsch."  # noqa: S105 (Fehlertext, kein Passwort)
+NO_ACTUATORS = "Keine Aktoren gewählt."
 
 
 class _Body(BaseModel):
@@ -177,17 +179,20 @@ def control_router(
     @router.put("/api/control/actuators")
     async def actuators(body: ActuatorsBody, session: Admin) -> dict[str, Any]:
         # Nur Aktoren, deren Betriebsart auf „live“ wechselt, verlangen Passwort und Häkchen
-        # (Präzisierung 4); dafür zählt die gültige Absicht des core.
+        # (Präzisierung 4); dafür zählt die gültige Absicht des core. Der IntentService prüft
+        # jeden Versuch noch einmal gegen seine Basis (``authorized_live``).
+        if not body.modes:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, NO_ACTUATORS)
         try:
             current = await service.current()
         except CoreDown as exc:
             raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, CORE_DOWN) from exc
         before = current.actuators if current is not None else {}
-        going_live = [
+        going_live = frozenset(
             actuator
             for actuator, mode in body.modes.items()
             if mode is ActuatorMode.LIVE and before.get(actuator) is not ActuatorMode.LIVE
-        ]
+        )
         if going_live:
             try:
                 if body.password is None:
@@ -199,7 +204,16 @@ def control_router(
                 raise HTTPException(status.HTTP_403_FORBIDDEN, WRONG_PASSWORD) from exc
             if not body.confirmed:
                 raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, NEEDS_CONFIRMATION)
-        return await change(SetActuators(body.modes), session)
+        try:
+            return await change(SetActuators(body.modes, going_live), session)
+        except LiveNotAuthorized as exc:
+            # Ein Aktor ist inzwischen nicht mehr live: ohne geprüftes Passwort fehlt das
+            # Passwort, mit ihm die Bestätigung für diesen Aktor.
+            if going_live:
+                raise HTTPException(
+                    status.HTTP_422_UNPROCESSABLE_CONTENT, NEEDS_CONFIRMATION
+                ) from exc
+            raise HTTPException(status.HTTP_403_FORBIDDEN, WRONG_PASSWORD) from exc
 
     @router.post("/api/control/locks/{actuator}/ack")
     async def acknowledge(actuator: str, session: Admin) -> JSONResponse:

@@ -186,6 +186,77 @@ def test_only_actuators_changing_to_live_count(client, auth, fake_client) -> Non
     assert client.put("/api/control/actuators", json=body, headers=admin).status_code == 403
 
 
+def _intents(fake_client: FakeCoreClient, *seen: Intent) -> None:
+    """``intent()`` liefert nacheinander ``seen``, danach immer das letzte (gleichzeitige
+    Änderung zwischen der Prüfung der Route und dem Holen im ``IntentService``)."""
+    queue = list(seen)
+
+    async def intent() -> Intent | None:
+        return queue.pop(0) if len(queue) > 1 else queue[0]
+
+    fake_client.intent = intent  # type: ignore[method-assign]
+    fake_client.valid = seen[-1]
+
+
+def test_concurrent_dry_run_is_not_undone_without_password(client, auth, fake_client) -> None:
+    # Bei der Prüfung ist EVCS live, beim Ableiten hat ein anderer sie auf Dry-Run gestellt
+    _intents(
+        fake_client,
+        Intent(version=3, actuators={"wallbox.evcs": ActuatorMode.LIVE}),
+        Intent(version=4, actuators={"wallbox.evcs": ActuatorMode.DRY_RUN}),
+    )
+    admin = login_as(client, auth, "admin", username="chef")
+    body = {"modes": {"wallbox.evcs": "live"}, "password": None, "confirmed": False}
+    response = client.put("/api/control/actuators", json=body, headers=admin)
+    assert (response.status_code, response.json()["detail"]) == (403, "Passwort falsch.")
+    assert fake_client.sent == []
+    assert fake_client.valid.actuators == {"wallbox.evcs": ActuatorMode.DRY_RUN}
+
+
+def test_conflict_retry_checks_the_live_gate_again(client, auth, fake_client) -> None:
+    fake_client.valid = Intent(version=3, actuators={"wallbox.evcs": ActuatorMode.LIVE})
+
+    def dry_run_meanwhile() -> CoreReply:
+        # zwischen Holen und Senden stellt jemand EVCS auf Dry-Run: der core antwortet 409
+        version = fake_client.sent[-1].version + 1
+        fake_client.valid = Intent(
+            version=version, actuators={"wallbox.evcs": ActuatorMode.DRY_RUN}
+        )
+        return CoreReply(409, {"result": "rejected", "version": version, "details": []})
+
+    admin = login_as(client, auth, "admin", username="chef")
+    fake_client.replies = [dry_run_meanwhile]
+    body = {"modes": {"wallbox.evcs": "live"}, "password": None, "confirmed": False}
+    response = client.put("/api/control/actuators", json=body, headers=admin)
+    assert (response.status_code, response.json()["detail"]) == (403, "Passwort falsch.")
+    assert len(fake_client.sent) == 1  # der zweite Versuch geht nicht hinaus
+    assert fake_client.valid.actuators == {"wallbox.evcs": ActuatorMode.DRY_RUN}
+
+    # Mit Passwort und Häkchen nur für Victron fehlt für EVCS die Bestätigung
+    fake_client.valid = Intent(
+        version=fake_client.valid.version + 1, actuators={"wallbox.evcs": ActuatorMode.LIVE}
+    )
+    fake_client.replies = [dry_run_meanwhile]
+    body = {"modes": {"wallbox.evcs": "live", "victron": "live"}} | {
+        "password": PASSWORD,
+        "confirmed": True,
+    }
+    response = client.put("/api/control/actuators", json=body, headers=admin)
+    assert (response.status_code, response.json()["detail"]) == (
+        422,
+        "Bitte bestätige Prüfprotokoll Teil 2.",
+    )
+    assert len(fake_client.sent) == 2
+    assert fake_client.valid.actuators == {"wallbox.evcs": ActuatorMode.DRY_RUN}
+
+
+def test_empty_modes_give_422(client, auth, fake_client) -> None:
+    admin = login_as(client, auth, "admin", username="chef")
+    response = client.put("/api/control/actuators", json={"modes": {}}, headers=admin)
+    assert (response.status_code, response.json()["detail"]) == (422, "Keine Aktoren gewählt.")
+    assert fake_client.sent == []
+
+
 def test_live_without_live_allowed_is_clamped(client, auth, fake_client) -> None:
     hint = "Victron: in config.yaml nicht für den Live-Betrieb freigegeben; bleibt im Dry-Run."
     fake_client.replies = [

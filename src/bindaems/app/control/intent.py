@@ -84,9 +84,14 @@ class SetPriority:
 
 @dataclass(frozen=True)
 class SetActuators:
-    """Betriebsart der genannten Aktoren; andere Aktoren bleiben unverändert."""
+    """Betriebsart der genannten Aktoren; andere Aktoren bleiben unverändert.
+
+    ``authorized_live`` sind die Aktoren, für die die Route Passwort und Bestätigung geprüft hat.
+    Nur sie dürfen auf „live“ wechseln; ein Aktor, der in der Basis schon live ist, bleibt es ohne.
+    """
 
     modes: dict[str, ActuatorMode]
+    authorized_live: frozenset[str] = frozenset()
 
 
 Change = SetControl | SetMode | SetBoost | SetAssignment | SetGuestMode | SetPriority | SetActuators
@@ -230,6 +235,18 @@ class Rejected(Exception):
         self.details = details
 
 
+class LiveNotAuthorized(Exception):
+    """Ein Aktor ginge auf „live“, ohne dass Passwort und Bestätigung für ihn geprüft sind.
+
+    Das passiert, wenn ihn nach der Prüfung der Route jemand auf Dry-Run gestellt hat (auch beim
+    zweiten Versuch nach einem 409); ``actuators`` sind diese Aktoren.
+    """
+
+    def __init__(self, actuators: list[str]) -> None:
+        super().__init__(", ".join(actuators))
+        self.actuators = actuators
+
+
 class UnknownTarget(Exception):
     """Fahrzeug oder Wallbox gibt es in der Konfiguration nicht; ``text`` ist die 404-Meldung."""
 
@@ -286,6 +303,21 @@ def _audit(change: Change, base: Intent, new: Intent) -> tuple[str, str, Any, An
 
 def _mode(intent: Intent, actuator: str) -> str:
     return intent.actuators.get(actuator, ActuatorMode.DRY_RUN).value
+
+
+def _gate(change: Change, base: Intent) -> None:
+    """Live nur mit Prüfung: gegen die Basis genau dieses Versuchs (Spec 8.7, Präzisierung 4)."""
+    if not isinstance(change, SetActuators):
+        return
+    unchecked = sorted(
+        actuator
+        for actuator, mode in change.modes.items()
+        if mode is ActuatorMode.LIVE
+        and base.actuators.get(actuator) is not ActuatorMode.LIVE
+        and actuator not in change.authorized_live
+    )
+    if unchecked:
+        raise LiveNotAuthorized(unchecked)
 
 
 class IntentService:
@@ -347,7 +379,8 @@ class IntentService:
         """Wendet die Änderung auf die gültige Absicht an und sendet sie.
 
         Fehler: ``UnknownTarget`` (Fahrzeug oder Wallbox unbekannt), ``CoreDown``,
-        ``Rejected`` (422 des core) und ``ConflictAgain`` (zweites 409).
+        ``Rejected`` (422 des core), ``ConflictAgain`` (zweites 409) und ``LiveNotAuthorized``
+        (ein Aktor ginge ohne Prüfung live; die Absicht bleibt unverändert).
         """
         self._check(change)
         async with self._lock:
@@ -357,6 +390,7 @@ class IntentService:
                     self._cached = current
                     now = self._clock.now()
                     base = _base(current, self._live.health, now)
+                    _gate(change, base)
                     new = _derive_from(current, base, change, now)
                     reply = await self._client.submit_intent(new)
                     if reply.status != 409:
