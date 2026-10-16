@@ -28,6 +28,8 @@ log = structlog.get_logger(__name__)
 
 NOTIFY_AFTER_S: Final = 30.0  # so lange besteht ein Fehler-Alarm, bevor er gemeldet wird
 MAX_PER_MINUTE: Final = 10  # höchstens so viele Meldungen je Minute; der Rest geht ins Log
+MAX_REJECTIONS_PER_MINUTE: Final = 4  # davon höchstens so viele für abgelehnte Befehle
+RETRY_AFTER_S: Final = 60.0  # Abstand der Versuche je Alarm, bis Melden oder Entfernen gelingt
 CALL_TIMEOUT_S: Final = 10.0
 CHECK_INTERVAL_S: Final = 1.0
 TITLE: Final = "BindaEMS"
@@ -96,49 +98,68 @@ def _notification_id(alarm_id: str) -> str:
 
 
 class HaNotifier:
-    """Sendet Meldungen an Home Assistant; erfüllt ``Rejections`` für die HA-Befehle."""
+    """Sendet Meldungen an Home Assistant; erfüllt ``Rejections`` für die HA-Befehle.
+
+    Höchstens ``MAX_PER_MINUTE`` Meldungen je Minute, davon höchstens
+    ``MAX_REJECTIONS_PER_MINUTE`` für abgelehnte Befehle: Den Alarmen bleiben so immer
+    mindestens sechs, auch wenn eine Automation eine Flut ungültiger Befehle sendet.
+    """
 
     def __init__(self, call: HaServiceCall, notify_service: str | None, clock: Clock) -> None:
         self._call = call
         self._notify = notify_service.removeprefix("notify.") if notify_service else None
         self._clock = clock
         self._sent: deque[datetime] = deque()  # Zeitpunkte der Meldungen der letzten Minute
+        self._rejected: deque[datetime] = deque()  # davon die der abgelehnten Befehle
         self._active: set[str] = (
             set()
         )  # Meldungen, die ein Alarm in Home Assistant hinterlassen hat
 
-    async def alarm_raised(self, alarm_id: str, text: str) -> None:
+    async def alarm_raised(self, alarm_id: str, text: str) -> bool:
+        """Meldet den Alarm; sagt, ob die persistente Meldung angelegt ist.
+
+        Erst danach geht der ``notify``-Dienst hinaus, einmal: Ein neuer Versuch nach einem
+        Fehlschlag oder über dem Budget schickt ihn so nicht mehrfach aufs Telefon.
+        """
         if not self._allow(text):
-            return
+            return False
         data = {"notification_id": _notification_id(alarm_id), "title": TITLE, "message": text}
-        if await self._safe("persistent_notification", "create", data):
-            self._active.add(alarm_id)
+        if not await self._safe("persistent_notification", "create", data):
+            return False
+        self._active.add(alarm_id)
         if self._notify is not None:
             await self._safe("notify", self._notify, {"title": TITLE, "message": text})
+        return True
 
-    async def alarm_cleared(self, alarm_id: str) -> None:
+    async def alarm_cleared(self, alarm_id: str) -> bool:
+        """Entfernt die Meldung des Alarms; sagt, ob nichts mehr zu entfernen bleibt."""
         if alarm_id not in self._active:
-            return  # nie gemeldet (zu kurz, begrenzt oder fehlgeschlagen): nichts zu entfernen
+            return True  # nie gemeldet (zu kurz, begrenzt oder fehlgeschlagen): nichts zu entfernen
+        data = {"notification_id": _notification_id(alarm_id)}
+        if not await self._safe("persistent_notification", "dismiss", data):
+            return False
         self._active.discard(alarm_id)
-        await self._safe(
-            "persistent_notification", "dismiss", {"notification_id": _notification_id(alarm_id)}
-        )
+        return True
 
     async def reject(self, text: str) -> None:
         """Abgelehnter Befehl aus Home Assistant: eine Meldung, bei jeder neuen ersetzt."""
-        if not self._allow(text):
+        if not self._allow(text, rejection=True):
             return
         data = {"notification_id": REJECTION_ID, "title": TITLE, "message": text}
         await self._safe("persistent_notification", "create", data)
 
-    def _allow(self, text: str) -> bool:
+    def _allow(self, text: str, *, rejection: bool = False) -> bool:
         now = self._clock.now()
-        while self._sent and now - self._sent[0] >= _WINDOW:
-            self._sent.popleft()
-        if len(self._sent) >= MAX_PER_MINUTE:
+        for sent in (self._sent, self._rejected):
+            while sent and now - sent[0] >= _WINDOW:
+                sent.popleft()
+        full = len(self._sent) >= MAX_PER_MINUTE
+        if full or (rejection and len(self._rejected) >= MAX_REJECTIONS_PER_MINUTE):
             log.warning("Benachrichtigung nicht gesendet: zu viele je Minute", text=text)
             return False
         self._sent.append(now)
+        if rejection:
+            self._rejected.append(now)
         return True
 
     async def _safe(self, domain: str, service: str, data: dict[str, Any]) -> bool:
@@ -155,7 +176,13 @@ class HaNotifier:
 
 
 class AlarmNotifications:
-    """Prüft jede Sekunde die Alarme des core und meldet Fehler, die ``NOTIFY_AFTER_S`` bestehen."""
+    """Prüft jede Sekunde die Alarme des core und meldet Fehler, die ``NOTIFY_AFTER_S`` bestehen.
+
+    Ein Alarm gilt erst als gemeldet, wenn ``persistent_notification.create`` gelungen ist. Bis
+    dahin versucht die Prüfung es erneut, solange er besteht, je Alarm höchstens alle
+    ``RETRY_AFTER_S`` (über dem Budget, oder Home Assistant startet gerade neu). Ebenso wird ein
+    gescheitertes Entfernen wiederholt, bis es gelingt oder der Alarm wiederkommt.
+    """
 
     def __init__(
         self,
@@ -171,6 +198,8 @@ class AlarmNotifications:
         self._sleep = sleep
         self._since: dict[str, datetime] = {}  # Fehler-Alarme, seit wann sie ununterbrochen stehen
         self._notified: set[str] = set()
+        self._retry_at: dict[str, datetime] = {}  # nicht gemeldete Alarme: nächster Versuch
+        self._dismiss_at: dict[str, datetime] = {}  # nicht entfernte Meldungen: nächster Versuch
 
     async def run(self) -> None:
         while True:
@@ -182,6 +211,7 @@ class AlarmNotifications:
 
     async def check(self) -> None:
         now = self._clock.now()
+        retry_at = now + timedelta(seconds=RETRY_AFTER_S)
         errors: dict[str, str] = {}
         for alarm in list(self._live.alarms):
             alarm_id = alarm.get("id") if isinstance(alarm, dict) else None
@@ -190,11 +220,26 @@ class AlarmNotifications:
                 errors[alarm_id] = message if isinstance(message, str) and message else alarm_id
         for alarm_id in [a for a in self._since if a not in errors]:
             del self._since[alarm_id]
+            self._retry_at.pop(alarm_id, None)
             if alarm_id in self._notified:
                 self._notified.discard(alarm_id)
-                await self._notifier.alarm_cleared(alarm_id)
+                self._dismiss_at[alarm_id] = now
+        for alarm_id, due in list(self._dismiss_at.items()):
+            if alarm_id in errors:  # wieder da: die neue Meldung ersetzt die alte
+                del self._dismiss_at[alarm_id]
+            elif now >= due:
+                if await self._notifier.alarm_cleared(alarm_id):
+                    del self._dismiss_at[alarm_id]
+                else:
+                    self._dismiss_at[alarm_id] = retry_at
         for alarm_id, text in errors.items():
             since = self._since.setdefault(alarm_id, now)
-            if alarm_id not in self._notified and (now - since).total_seconds() >= NOTIFY_AFTER_S:
-                self._notified.add(alarm_id)  # einmal je Auftreten, auch wenn der Aufruf scheitert
-                await self._notifier.alarm_raised(alarm_id, text)
+            if alarm_id in self._notified or (now - since).total_seconds() < NOTIFY_AFTER_S:
+                continue
+            if alarm_id in self._retry_at and now < self._retry_at[alarm_id]:
+                continue
+            if await self._notifier.alarm_raised(alarm_id, text):
+                self._notified.add(alarm_id)
+                self._retry_at.pop(alarm_id, None)
+            else:
+                self._retry_at[alarm_id] = retry_at

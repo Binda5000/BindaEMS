@@ -12,7 +12,9 @@ from bindaems.app.core_link import LiveState
 from bindaems.app.ha.commands import Rejections
 from bindaems.app.ha.notify import (
     MAX_PER_MINUTE,
+    MAX_REJECTIONS_PER_MINUTE,
     NOTIFY_AFTER_S,
+    RETRY_AFTER_S,
     AlarmNotifications,
     HaNotifier,
     websocket_service_call,
@@ -49,6 +51,13 @@ class Env:
         for _ in range(int(seconds)):
             self.clock.advance(1)
             await self.alarms.check()
+
+
+def _creates(env: Env) -> list[dict[str, Any]]:
+    return [data for domain, service, data in env.calls if (domain, service) == _CREATE]
+
+
+_CREATE = ("persistent_notification", "create")
 
 
 @pytest.fixture
@@ -202,15 +211,15 @@ async def test_rejection_replaces_one_notification(env: Env) -> None:
     ]
 
 
-async def test_service_call_failure_is_logged_and_retried_with_the_next_alarm(env: Env) -> None:
+async def test_service_call_failure_is_logged_and_does_not_count_as_notified(env: Env) -> None:
     env.live.alarms = [_alarm()]
     await env.alarms.check()
     env.failing = True
     with capture_logs() as logs:
         await env.advance(NOTIFY_AFTER_S)  # wirft nicht
-    assert [entry["event"] for entry in logs].count(
-        "Dienstaufruf an Home Assistant fehlgeschlagen"
-    ) == 2
+    failed = [e for e in logs if e["event"] == "Dienstaufruf an Home Assistant fehlgeschlagen"]
+    # ohne persistente Meldung auch kein ``notify``: sonst käme es bei jedem neuen Versuch
+    assert [e["service"] for e in failed] == ["persistent_notification.create"]
     assert env.calls == []
     env.failing = False
     env.live.alarms = [_alarm(), _alarm("competitor.other", message="Zweiter Alarm.")]
@@ -219,7 +228,75 @@ async def test_service_call_failure_is_logged_and_retried_with_the_next_alarm(en
     messages = [
         data["message"] for domain, _, data in env.calls if domain == "persistent_notification"
     ]
-    assert messages == ["Zweiter Alarm."]  # der erste Alarm gilt als gemeldet, nicht wiederholt
+    assert messages == ["Zweiter Alarm."]  # der erste wartet noch auf seinen nächsten Versuch
+
+
+async def test_failed_create_is_retried_while_the_alarm_persists(env: Env) -> None:
+    env.live.alarms = [_alarm()]
+    await env.alarms.check()
+    env.failing = True
+    await env.advance(NOTIFY_AFTER_S)  # der erste Versuch scheitert (HA startet neu)
+    env.failing = False
+    await env.advance(RETRY_AFTER_S - 1)
+    assert env.calls == []  # Abstand zwischen den Versuchen
+    await env.advance(1)
+    assert [(domain, service) for domain, service, _ in env.calls] == [
+        ("persistent_notification", "create"),
+        ("notify", "mobile_app_handy"),
+    ]
+    await env.advance(3 * RETRY_AFTER_S)
+    assert len(env.calls) == 2  # gemeldet: kein weiterer Versuch
+    env.live.alarms = []
+    await env.advance(1)
+    assert env.calls[-1][:2] == ("persistent_notification", "dismiss")
+
+
+async def test_alarm_over_the_budget_is_sent_when_it_frees_up(env: Env) -> None:
+    env.live.alarms = [_alarm(f"competitor.a{n}") for n in range(MAX_PER_MINUTE + 2)]
+    await env.alarms.check()
+    await env.advance(NOTIFY_AFTER_S)
+    assert len(_creates(env)) == MAX_PER_MINUTE
+    await env.advance(RETRY_AFTER_S)  # das Budget ist frei, die beiden Übrigen folgen
+    ids = [data["notification_id"] for data in _creates(env)]
+    assert len(ids) == MAX_PER_MINUTE + 2 == len(set(ids))
+    await env.advance(3 * RETRY_AFTER_S)
+    assert len(_creates(env)) == MAX_PER_MINUTE + 2
+
+
+async def test_rejections_cannot_take_the_share_of_the_alarms(env: Env) -> None:
+    assert (MAX_PER_MINUTE, MAX_REJECTIONS_PER_MINUTE) == (10, 4)
+    with capture_logs() as logs:
+        for n in range(20):  # eine Automation sendet eine Flut ungültiger Befehle
+            await env.notifier.reject(f"Befehl aus Home Assistant abgelehnt: {n}.")
+    assert len(_creates(env)) == MAX_REJECTIONS_PER_MINUTE
+    assert [e["event"] for e in logs].count(
+        "Benachrichtigung nicht gesendet: zu viele je Minute"
+    ) == 20 - MAX_REJECTIONS_PER_MINUTE
+    env.calls.clear()
+    alarms = MAX_PER_MINUTE - MAX_REJECTIONS_PER_MINUTE
+    env.live.alarms = [_alarm(f"competitor.a{n}") for n in range(alarms + 1)]
+    await env.alarms.check()
+    await env.advance(NOTIFY_AFTER_S)  # noch in derselben Minute
+    assert len(_creates(env)) == alarms  # insgesamt höchstens 10 je Minute
+
+
+async def test_failed_dismiss_is_retried(env: Env) -> None:
+    env.live.alarms = [_alarm()]
+    await env.alarms.check()
+    await env.advance(NOTIFY_AFTER_S)
+    env.calls.clear()
+    env.failing = True
+    env.live.alarms = []
+    await env.advance(1)  # das Entfernen scheitert
+    env.failing = False
+    await env.advance(RETRY_AFTER_S - 1)
+    assert env.calls == []
+    await env.advance(1)
+    assert env.calls == [
+        ("persistent_notification", "dismiss", {"notification_id": NOTIFICATION_ID})
+    ]
+    await env.advance(3 * RETRY_AFTER_S)
+    assert len(env.calls) == 1
 
 
 async def test_run_checks_every_second(env: Env) -> None:
