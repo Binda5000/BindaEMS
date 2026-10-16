@@ -116,6 +116,25 @@ def test_unknown_regulation_keeps_a_future_boost() -> None:
     assert new.vehicles["tesla"].wallbox == "evcs"
 
 
+def test_vehicle_without_mode_in_trusted_health_is_unknown() -> None:
+    # Präzisierung 2: ``mode`` null heißt unbekannt, auch wenn die Version passt (etwa ein Health
+    # zwischen den Zuweisungen in ``ChargeController.idle``)
+    future = T_APP + timedelta(hours=2)
+    current = Intent(
+        version=5,
+        vehicles={
+            "egolf": VehicleIntent(boost_until=future, wallbox="twc"),
+            "tesla": VehicleIntent(boost_until=T_APP - timedelta(minutes=1), wallbox="evcs"),
+        },
+    )
+    h = health(shown("egolf", mode=None), shown("tesla", mode=None), intent_version=5)
+    new = derive(current, h, SetControl(True), T_APP)
+    assert new.vehicles["egolf"].boost_until == future
+    assert new.vehicles["egolf"].wallbox == "twc"
+    assert new.vehicles["tesla"].boost_until is None  # ein Boost in der Vergangenheit entfällt
+    assert new.vehicles["tesla"].wallbox == "evcs"
+
+
 def test_health_of_an_older_intent_is_not_trusted() -> None:
     # Boost an, dann sofort eine zweite Bedienung: Health kennt die Version des Boosts noch nicht
     until = T_APP + timedelta(hours=12)

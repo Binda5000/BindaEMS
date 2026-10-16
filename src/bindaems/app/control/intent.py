@@ -127,15 +127,16 @@ def _clean(
     """Entfernt Boost und Übersteuerung, die der core nicht mehr führt (Präzisierung 2).
 
     ``shown`` ist der Eintrag des Fahrzeugs in einem vertrauenswürdigen Health (``_trusted``),
-    sonst ``None``: dann ist der Stand der Regelung unbekannt, ein Boost in der Zukunft und die
-    Übersteuerung bleiben erhalten. Mit Stand bleibt der Boost nur, wenn Health einen zeigt oder
-    er auf seinen Ansteckvorgang wartet (``boost_pending``), die Übersteuerung nur an genau dieser
-    Wallbox oder wartend (``override_pending``). Ein Boost in der Vergangenheit entfällt immer.
+    sonst ``None``. Ohne Eintrag oder mit ``mode`` null ist der Stand der Regelung unbekannt: Ein
+    Boost in der Zukunft und die Übersteuerung bleiben erhalten. Mit Stand bleibt der Boost nur,
+    wenn Health einen zeigt oder er auf seinen Ansteckvorgang wartet (``boost_pending``), die
+    Übersteuerung nur an genau dieser Wallbox oder wartend (``override_pending``). Ein Boost in
+    der Vergangenheit entfällt immer.
     """
     boost, wallbox = vehicle.boost_until, vehicle.wallbox
     if boost is not None and boost <= now:
         boost = None
-    if shown is not None:
+    if shown is not None and shown.get("mode") is not None:
         if shown.get("boost_until") is None and not shown.get("boost_pending"):
             boost = None
         active = shown.get("assignment") == ASSIGNMENT_OVERRIDE and shown.get("wallbox") == wallbox
