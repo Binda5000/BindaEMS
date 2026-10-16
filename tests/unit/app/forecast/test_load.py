@@ -1,6 +1,8 @@
 from datetime import UTC, date, datetime, time, timedelta
 
+import httpx
 import pytest
+from structlog.testing import capture_logs
 from tests.app_helpers import StopScheduler, ingest, record_then_stop
 from tests.unit.app.forecast.conftest import NOW
 
@@ -21,6 +23,7 @@ from bindaems.shared.influx.lineprotocol import epoch_ms
 from bindaems.shared.timeutil import LOCAL_TZ, local_day_slots
 
 URL = "http://influx.lan:8086/query"
+EMPTY = {"results": [{"statement_id": 0}]}
 MIN = 60_000
 
 
@@ -169,7 +172,7 @@ async def test_incomplete_ledger_slot_falls_back_to_ha(
     load_service_with_ha, ledger, respx_mock
 ) -> None:
     ingest(ledger, "2026-10-12T06:00:00+00:00", {"grid>house": 100}, covered_s=600)
-    respx_mock.get(URL).respond(json=_ha("sensor.hausverbrauch", "2026-10-12T06:00:00+00:00", 800))
+    _mock_influx(respx_mock, _ha("sensor.hausverbrauch", "2026-10-12T06:00:00+00:00", 800))
     samples = await load_service_with_ha.history(
         at("2026-10-12T06:00:00+00:00"), at("2026-10-12T06:15:00+00:00")
     )
@@ -180,7 +183,7 @@ async def test_complete_ledger_slots_are_not_read_from_ha(
     load_service_with_ha, ledger, respx_mock
 ) -> None:
     ingest(ledger, "2026-10-12T06:00:00+00:00", {"grid>house": 100, "pv>house": 25})  # 500 W
-    route = respx_mock.get(URL).respond(json=_ha("sensor.hausverbrauch", "2026-10-12T06:15:00Z", 9))
+    route = _mock_influx(respx_mock, _ha("sensor.hausverbrauch", "2026-10-12T06:15:00Z", 9))
     samples = await load_service_with_ha.history(
         at("2026-10-12T06:00:00+00:00"), at("2026-10-12T06:30:00+00:00")
     )
@@ -188,24 +191,111 @@ async def test_complete_ledger_slots_are_not_read_from_ha(
         LoadSample(at("2026-10-12T06:00:00+00:00"), 500.0, "ledger"),
         LoadSample(at("2026-10-12T06:15:00+00:00"), 9.0, "ha"),
     ]
-    assert route.call_count == 1  # eine Abfrage für den ganzen Bereich
+    assert len(_queries(route, seed=False)) == 1  # eine Abfrage für den ganzen Bereich
 
 
 async def test_ha_query_asks_both_schemas_over_the_missing_range(
     load_service_with_ha, ledger, respx_mock
 ) -> None:
     ingest(ledger, "2026-10-12T06:15:00+00:00", {"grid>house": 100})
-    route = respx_mock.get(URL).respond(json={"results": [{"statement_id": 0}]})
+    route = _mock_influx(respx_mock)
     await load_service_with_ha.history(
         at("2026-10-12T06:00:00+00:00"), at("2026-10-12T06:45:00+00:00")
     )
-    request = route.calls.last.request
-    query = request.url.params["q"]
-    assert request.url.params["db"] == "homeassistant"
+    assert {c.request.url.params["db"] for c in route.calls} == {"homeassistant"}
+    (query,) = _queries(route, seed=False)
     assert 'FROM "W","kW","sensor.hausverbrauch"' in query
     assert f"time >= {epoch_ms(at('2026-10-12T06:00:00+00:00'))}ms" in query
     assert f"time < {epoch_ms(at('2026-10-12T06:45:00+00:00'))}ms" in query
     assert 'GROUP BY time(60s),"domain","entity_id" fill(previous)' in query
+
+
+async def test_ha_query_seeds_each_entity_with_its_last_value_before_the_range(
+    load_service_with_ha, ledger, respx_mock
+) -> None:
+    ingest(ledger, "2026-10-12T06:15:00+00:00", {"grid>house": 100})
+    route = _mock_influx(respx_mock)
+    await load_service_with_ha.history(
+        at("2026-10-12T06:00:00+00:00"), at("2026-10-12T06:45:00+00:00")
+    )
+    (query,) = _queries(route, seed=True)
+    first = epoch_ms(at("2026-10-12T06:00:00+00:00"))
+    assert 'FROM "W","kW","sensor.hausverbrauch"' in query
+    assert f"time >= {first - 7 * 86_400_000}ms AND time < {first}ms" in query
+    assert 'SELECT last("value") AS "w"' in query and 'GROUP BY "domain","entity_id"' in query
+
+
+async def test_constant_subtract_entity_with_only_an_old_point_still_yields_samples(
+    load_cfg, ledger, reader, archive, now_clock, respx_mock
+) -> None:
+    service = _service_with_subtract(
+        load_cfg, ledger, reader, archive, now_clock, ["sensor.wallbox"]
+    )
+    first = at("2026-10-12T06:00:00+00:00")
+    long_before = epoch_ms(first - timedelta(days=3))
+    _mock_influx(
+        respx_mock,
+        _ha_series(_ha_rows("sensor.hausverbrauch", first, 800, "W", count=30)),
+        seed=_ha_series(
+            _ha_seed("sensor.wallbox", long_before, 0, "W"),
+            _ha_seed("sensor.hausverbrauch", long_before, 5, "W"),
+        ),
+    )
+    samples = await service.history(first, first + timedelta(minutes=30))
+    assert [(s.slot_start, s.house_w) for s in samples] == [
+        (first, 800.0),
+        (first + timedelta(minutes=15), 800.0),
+    ]
+
+
+async def test_seed_fills_only_the_minutes_before_the_first_point_in_the_range(
+    load_cfg, ledger, reader, archive, now_clock, respx_mock
+) -> None:
+    service = _service_with_subtract(
+        load_cfg, ledger, reader, archive, now_clock, ["sensor.wallbox"]
+    )
+    first = at("2026-10-12T06:00:00+00:00")
+    second = first + timedelta(minutes=15)
+    _mock_influx(
+        respx_mock,
+        _ha_series(
+            _ha_rows("sensor.hausverbrauch", first, 800, "W", count=30),
+            _ha_rows("sensor.wallbox", second + timedelta(minutes=5), 300, "W", count=10),
+        ),
+        seed=_ha_series(_ha_seed("sensor.wallbox", epoch_ms(first - timedelta(days=1)), 100, "W")),
+    )
+    samples = await service.history(first, second + timedelta(minutes=15))
+    # erster Slot: 15 Minuten mit dem Startwert 100; zweiter: 5 Minuten 100, 10 Minuten 300
+    assert [s.house_w for s in samples] == [
+        pytest.approx(700.0),
+        pytest.approx(800 - (5 * 100 + 10 * 300) / 15),
+    ]
+
+
+async def test_units_other_than_w_and_kw_are_dropped_with_one_warning_per_entity(
+    load_service_with_ha, ledger, respx_mock
+) -> None:
+    first = at("2026-10-12T06:00:00+00:00")
+    _mock_influx(
+        respx_mock,
+        _ha_series(_ha_rows("sensor.hausverbrauch", first, 12345, "kWh", count=30)),
+    )
+    with capture_logs() as logs:
+        samples = await load_service_with_ha.history(first, first + timedelta(minutes=30))
+        await load_service_with_ha.history(first, first + timedelta(minutes=30))
+    assert samples == []
+    warnings = [e for e in logs if e["log_level"] == "warning" and "Einheit" in e["event"]]
+    assert len(warnings) == 1 and warnings[0]["entity"] == "sensor.hausverbrauch"
+    assert warnings[0]["units"] == ["kWh"]
+
+
+async def test_rows_without_a_unit_keep_the_w_fallback(load_service_with_ha, respx_mock) -> None:
+    first = at("2026-10-12T06:00:00+00:00")
+    rows = _ha_rows("sensor.hausverbrauch", first, 640, "W", count=15)
+    rows["values"] = [[t, w, None] for t, w, _ in rows["values"]]
+    _mock_influx(respx_mock, _ha_series(rows))
+    samples = await load_service_with_ha.history(first, first + timedelta(minutes=15))
+    assert samples == [LoadSample(first, 640.0, "ha")]
 
 
 async def test_ha_kw_unit_is_scaled_and_subtract_entities_are_removed(
@@ -222,12 +312,13 @@ async def test_ha_kw_unit_is_scaled_and_subtract_entities_are_removed(
         ledger, load_cfg.model_copy(update={"homeassistant": home}), reader, archive, now_clock
     )
     slot = at("2026-10-12T06:00:00+00:00")
-    respx_mock.get(URL).respond(
-        json=_ha_series(
+    _mock_influx(
+        respx_mock,
+        _ha_series(
             _ha_rows("sensor.hausverbrauch", slot, 2.5, "kW"),  # 2500 W
             _ha_rows("sensor.wallbox", slot, 1000, "W"),
             _ha_rows("sensor.boiler", slot, 0.5, "kW", name="kW"),  # Messung je Einheit
-        )
+        ),
     )
     assert await service.history(slot, slot + timedelta(minutes=15)) == [
         LoadSample(slot, 1000.0, "ha")
@@ -249,12 +340,13 @@ async def test_missing_subtract_value_drops_the_slot_and_negative_loads_become_z
     )
     first = at("2026-10-12T06:00:00+00:00")
     second, third = first + timedelta(minutes=15), first + timedelta(minutes=30)
-    respx_mock.get(URL).respond(
-        json=_ha_series(
+    _mock_influx(
+        respx_mock,
+        _ha_series(
             _ha_rows("sensor.hausverbrauch", first, 800, "W", count=45),
             _ha_rows("sensor.wallbox", first, 100, "W", count=15),  # nur im ersten Slot
             _ha_rows("sensor.wallbox", third, 900, "W", count=15),
-        )
+        ),
     )
     samples = await service.history(first, third + timedelta(minutes=15))
     assert [(s.slot_start, s.house_w) for s in samples] == [(first, 700.0), (third, 0.0)]
@@ -392,6 +484,41 @@ def _ha_rows(
     }
 
 
+def _ha_seed(entity: str, ms: int, value: float, unit: str) -> dict[str, object]:
+    """Letzter Wert einer Entität vor dem Bereich (Abfrage ``last``)."""
+    domain, object_id = entity.split(".")
+    return {
+        "name": entity,
+        "tags": {"domain": domain, "entity_id": object_id},
+        "columns": ["time", "w", "u"],
+        "values": [[ms, value, unit]],
+    }
+
+
+def _mock_influx(respx_mock, means: dict | None = None, seed: dict | None = None):
+    """Beantwortet die Minutenmittel (``GROUP BY time``) und die Abfrage des Startwerts getrennt."""
+
+    def answer(request: httpx.Request) -> httpx.Response:
+        is_means = "GROUP BY time" in request.url.params["q"]
+        return httpx.Response(200, json=(means if is_means else seed) or EMPTY)
+
+    return respx_mock.get(URL).mock(side_effect=answer)
+
+
+def _queries(route, *, seed: bool) -> list[str]:
+    queries = [call.request.url.params["q"] for call in route.calls]
+    return [q for q in queries if ("GROUP BY time" not in q) == seed]
+
+
+def _service_with_subtract(load_cfg, ledger, reader, archive, clock, subtract):
+    home = load_cfg.homeassistant.model_copy(
+        update={"load_history": LoadHistoryConfig(entity="sensor.hausverbrauch", subtract=subtract)}
+    )
+    return LoadForecastService(
+        ledger, load_cfg.model_copy(update={"homeassistant": home}), reader, archive, clock
+    )
+
+
 def _ha_series(*series: dict[str, object]) -> dict[str, object]:
     return {"results": [{"statement_id": 0, "series": list(series)}]}
 
@@ -406,10 +533,11 @@ async def test_ha_samples_count_in_the_basis(
     ingest(ledger, at_local(workdays(1)[0], "10:00"), {"grid>house": 125})
     day = workdays(2)[1]
     first = at_local(day, "10:00")
-    respx_mock.get(URL).respond(
-        json=_ha_series(
+    _mock_influx(
+        respx_mock,
+        _ha_series(
             _ha_rows("sensor.hausverbrauch", first, 700, "W", count=15),
-        )
+        ),
     )
     forecast = await load_service_with_ha.refresh()
     assert forecast is not None and forecast.basis == {"ledger": 1, "ha": 1}

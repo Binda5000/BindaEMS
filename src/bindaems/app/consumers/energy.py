@@ -21,7 +21,7 @@ from typing import Any, Final
 import structlog
 
 from bindaems.app.consumers.service import Consumer
-from bindaems.app.consumers.values import HaRef
+from bindaems.app.consumers.values import HaRef, ha_selection
 from bindaems.app.history.influx import (
     RP_RAW,
     InfluxQueryError,
@@ -78,9 +78,13 @@ def _number(value: Any) -> float | None:
     return float(value) if math.isfinite(value) else None
 
 
-def _points(item: Series, scale: float, unit_column: bool = False) -> list[Point]:
+def _points(
+    item: Series, scale: float, unit_column: bool = False, rejected: set[str] | None = None
+) -> list[Point]:
     """Punkte der Spalte ``w``; mit ``unit_column`` bestimmt die Einheit in Spalte ``u``
-    (``W`` oder ``kW``) den Faktor je Zeile, ohne sie gilt ``scale``."""
+    (``W`` oder ``kW``) den Faktor je Zeile. Ohne Einheit in der Zeile gilt ``scale``; eine
+    andere Einheit (z. B. ``kWh``, ``%``) ist keine Leistung: die Zeile entfällt und die Einheit
+    kommt in ``rejected``."""
     column = item.columns.index("w") if "w" in item.columns else 1
     unit = item.columns.index("u") if unit_column and "u" in item.columns else None
     points: list[Point] = []
@@ -88,7 +92,14 @@ def _points(item: Series, scale: float, unit_column: bool = False) -> list[Point
         value = _number(row[column]) if column < len(row) else None
         if value is not None and isinstance(row[0], int):
             recorded = row[unit] if unit is not None and unit < len(row) else None
-            factor = _SCALE.get(recorded, scale) if isinstance(recorded, str) else scale
+            if isinstance(recorded, str):
+                if recorded not in _SCALE:
+                    if rejected is not None:
+                        rejected.add(recorded)
+                    continue
+                factor = _SCALE[recorded]
+            else:
+                factor = scale
             points.append((row[0], value * factor))
     return points
 
@@ -197,14 +208,7 @@ class EnergyCache:
         database = self._ha_database
         if database is None:
             return dict.fromkeys(refs, (None, NO_SERIES))
-        entities = dict.fromkeys((ref.domain, ref.object_id) for ref in refs.values())
-        names = ["W", "kW", *(f"{domain}.{object_id}" for domain, object_id in entities)]
-        measurements = ",".join(quote_ident(name) for name in names)
-        condition = " OR ".join(
-            f"({quote_ident('domain')}={quote_str(domain)} AND "
-            f"{quote_ident('entity_id')}={quote_str(object_id)})"
-            for domain, object_id in entities
-        )
+        measurements, condition = ha_selection(list(refs.values()))
         seed = _Window(window.start_ms - int(HA_SEED.total_seconds() * 1000), window.start_ms)
         # Bezeichner und Werte sind maskiert
         means = (
@@ -233,11 +237,14 @@ class EnergyCache:
         return result
 
 
-def ha_points(series: Sequence[Series], ref: HaRef) -> list[Point]:
+def ha_points(
+    series: Sequence[Series], ref: HaRef, rejected: set[str] | None = None
+) -> list[Point]:
     """Punkte einer Entität aus beiden Schemata (Messung je Einheit oder je Entität).
 
     Bei der Messung je Entität gilt die Einheit aus Spalte ``u``, falls die Abfrage sie liefert,
-    sonst die von ``ref``."""
+    sonst die von ``ref``. Zeilen mit anderer Einheit entfallen; ihre Einheiten kommen in
+    ``rejected``."""
     points: list[Point] = []
     for item in series:
         if (item.tags.get("domain"), item.tags.get("entity_id")) != (ref.domain, ref.object_id):
@@ -249,5 +256,5 @@ def ha_points(series: Sequence[Series], ref: HaRef) -> list[Point]:
         else:
             per_entity = False
         if scale is not None:
-            points.extend(_points(item, scale, per_entity))
+            points.extend(_points(item, scale, per_entity, rejected))
     return points

@@ -19,16 +19,15 @@ from typing import Literal
 
 import structlog
 
-from bindaems.app.consumers.energy import ha_points
-from bindaems.app.consumers.values import HaRef
+from bindaems.app.consumers.energy import HA_SEED, ha_points
+from bindaems.app.consumers.values import HaRef, ha_selection
 from bindaems.app.daytype import DayType, slot_key
 from bindaems.app.forecast.archive import ForecastArchive, RecordValue, SlotSource, actuals
 from bindaems.app.history.influx import (
     RP_LONG,
     InfluxQueryError,
     InfluxReader,
-    quote_ident,
-    quote_str,
+    Series,
 )
 from bindaems.app.schedule import next_local
 from bindaems.app.status import ComponentStatus
@@ -165,6 +164,7 @@ class LoadForecastService:
         self._basis: dict[str, int] = {"ledger": 0, "ha": 0}
         self._profile_day: date | None = None  # lokaler Tag, an dem das Profil gebaut wurde
         self._ha_ok = True  # die HA-Abfrage der letzten Historie hat geklappt
+        self._warned_units: set[str] = set()  # Entitäten mit falscher Einheit, schon gemeldet
 
     def latest(self) -> LoadForecast | None:
         return self._forecast
@@ -188,20 +188,38 @@ class LoadForecastService:
         first, last = missing[0], missing[-1] + SLOT
         try:
             series = await self._reader.query(_ha_query(refs, first, last), database=database)
+            # HA schreibt nur bei Änderung: der Wert vor dem Bereich gilt bis zum ersten Punkt
+            earlier = await self._reader.query(_seed_query(refs, first), database=database)
         except InfluxQueryError as exc:
             self._ha_ok = False
             log.warning("Lastverlauf aus Home Assistant nicht lesbar", error=str(exc))
             return []
-        minutes = [dict(ha_points(series, ref)) for ref in refs]
+        entities = [self._entity_values(series, earlier, ref) for ref in refs]
         samples: list[LoadSample] = []
         for slot in missing:
-            means = [_slot_mean(values, slot) for values in minutes]
+            means = [_slot_mean(entity, slot) for entity in entities]
             main, rest = means[0], means[1:]
             if main is None or any(value is None for value in rest):
                 continue  # fehlt ein Wert, fällt der Slot weg
             house_w = max(0.0, main - sum(value for value in rest if value is not None))
             samples.append(LoadSample(slot, house_w, "ha"))
         return samples
+
+    def _entity_values(
+        self, series: Sequence[Series], earlier: Sequence[Series], ref: HaRef
+    ) -> _Entity:
+        rejected: set[str] = set()
+        minutes = dict(ha_points(series, ref, rejected))
+        seeds = sorted(ha_points(earlier, ref, rejected))
+        name = f"{ref.domain}.{ref.object_id}"
+        if rejected and name not in self._warned_units:
+            self._warned_units.add(name)  # nur einmal je Entität melden
+            log.warning(
+                "Einheit der Lastverlauf-Entität ist weder W noch kW, Werte werden ignoriert",
+                entity=name,
+                units=sorted(rejected),
+            )
+        return _Entity(minutes, min(minutes, default=None), seeds[-1][1] if seeds else None)
 
     async def refresh(self) -> LoadForecast | None:
         """Neue Ausgabe; das Profil wird beim ersten Lauf eines Tages neu gebaut. Scheitert das,
@@ -294,14 +312,7 @@ def _ha_query(refs: Sequence[HaRef], first: datetime, last: datetime) -> str:
     """Minutenmittel der Entitäten in ``[first, last)`` aus beiden Schemata (Messung je Einheit
     ``W``/``kW`` und je Entität); die Einheit der Messung je Entität steht im Feld
     ``unit_of_measurement_str``."""
-    entities = dict.fromkeys((ref.domain, ref.object_id) for ref in refs)
-    names = ["W", "kW", *(f"{domain}.{object_id}" for domain, object_id in entities)]
-    measurements = ",".join(quote_ident(name) for name in names)
-    condition = " OR ".join(
-        f"({quote_ident('domain')}={quote_str(domain)} AND "
-        f"{quote_ident('entity_id')}={quote_str(object_id)})"
-        for domain, object_id in entities
-    )
+    measurements, condition = ha_selection(refs)
     # Bezeichner und Werte sind maskiert
     return (
         f'SELECT mean("value") AS "w", last("unit_of_measurement_str") AS "u" '  # noqa: S608
@@ -311,18 +322,40 @@ def _ha_query(refs: Sequence[HaRef], first: datetime, last: datetime) -> str:
     )
 
 
+def _seed_query(refs: Sequence[HaRef], first: datetime) -> str:
+    """Letzter Wert jeder Entität in den ``HA_SEED`` vor ``first``."""
+    measurements, condition = ha_selection(refs)
+    begin = epoch_ms(first - HA_SEED)
+    # Bezeichner und Werte sind maskiert
+    return (
+        f'SELECT last("value") AS "w", last("unit_of_measurement_str") AS "u" '  # noqa: S608
+        f"FROM {measurements} "
+        f"WHERE time >= {begin}ms AND time < {epoch_ms(first)}ms AND ({condition}) "
+        'GROUP BY "domain","entity_id"'
+    )
+
+
+@dataclass(frozen=True)
+class _Entity:
+    minutes: Mapping[int, float]  # Minutenmittel in W (Millisekunden seit Epoche)
+    earliest: int | None  # erste Minute mit Wert im Bereich
+    seed: float | None  # letzter Wert vor dem Bereich in W
+
+
 def _ref(entity: str) -> HaRef:
     """``sensor.x`` als Entität; die Einheit gilt, wenn HA keine mitschreibt, als W."""
     domain, _, object_id = entity.partition(".")
     return HaRef(domain, object_id, "W")
 
 
-def _slot_mean(minutes: Mapping[int, float], slot: datetime) -> float | None:
-    """Mittel der vorhandenen Minutenwerte des Slots; ohne Wert ``None``."""
-    first = epoch_ms(slot)
-    values = [
-        minutes[first + i * _MINUTE_MS]
-        for i in range(MINUTES_PER_SLOT)
-        if first + i * _MINUTE_MS in minutes
-    ]
+def _slot_mean(entity: _Entity, slot: datetime) -> float | None:
+    """Mittel der Minutenwerte des Slots; Minuten vor dem ersten Punkt im Bereich erhalten den
+    Wert vor dem Bereich. Ohne Wert ``None``."""
+    values: list[float] = []
+    for index in range(MINUTES_PER_SLOT):
+        minute = epoch_ms(slot) + index * _MINUTE_MS
+        if minute in entity.minutes:
+            values.append(entity.minutes[minute])
+        elif entity.seed is not None and (entity.earliest is None or minute < entity.earliest):
+            values.append(entity.seed)
     return sum(values) / len(values) if values else None

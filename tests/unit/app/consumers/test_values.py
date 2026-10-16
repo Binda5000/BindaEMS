@@ -8,6 +8,7 @@ from bindaems.app.consumers.values import (
     build_tree,
     candidates,
     consumer_note,
+    ha_selection,
 )
 
 URL = "http://influx.lan:8086/query"
@@ -196,3 +197,22 @@ def test_tree_negative_other_energy_is_clamped() -> None:
     consumers, power = tree_input([k(1, 800.0)])
     root = build_tree(consumers, power, 2000.0, energy=lambda _: (5.0, None), house_kwh=4.0)
     assert root.other_kwh == 0.0
+
+
+def test_ha_selection_names_both_schemas_and_each_entity_once() -> None:
+    refs = [
+        HaRef("sensor", "haus", "W"),
+        HaRef("sensor", "haus", "kW"),  # dieselbe Entität: nur einmal
+        HaRef("sensor", "wallbox", "W"),
+    ]
+    measurements, condition = ha_selection(refs)
+    assert measurements == '"W","kW","sensor.haus","sensor.wallbox"'
+    assert condition == (
+        "(\"domain\"='sensor' AND \"entity_id\"='haus') OR "
+        "(\"domain\"='sensor' AND \"entity_id\"='wallbox')"
+    )
+
+
+def test_ha_selection_escapes_names() -> None:
+    measurements, condition = ha_selection([HaRef("sensor", "a'b", "W")])
+    assert measurements == '"W","kW","sensor.a\'b"' and "'a\\'b'" in condition

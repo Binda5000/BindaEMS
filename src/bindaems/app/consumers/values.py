@@ -63,6 +63,24 @@ class HaRef:
         return cls(domain, object_id, unit)
 
 
+def ha_selection(refs: Sequence[HaRef]) -> tuple[str, str]:
+    """``FROM``-Liste und ``WHERE``-Bedingung für Entitäten in beiden Schemata.
+
+    Die Liste nennt die Messungen je Einheit (immer ``W`` und ``kW``) und je Entität; die
+    Bedingung wählt die Entitäten über ``domain`` und ``entity_id``. Jede Entität kommt einmal
+    vor. Bezeichner und Werte sind maskiert.
+    """
+    entities = dict.fromkeys((ref.domain, ref.object_id) for ref in refs)
+    names = ["W", "kW", *(f"{domain}.{object_id}" for domain, object_id in entities)]
+    measurements = ",".join(quote_ident(name) for name in names)
+    condition = " OR ".join(
+        f"({quote_ident('domain')}={quote_str(domain)} AND "
+        f"{quote_ident('entity_id')}={quote_str(object_id)})"
+        for domain, object_id in entities
+    )
+    return measurements, condition
+
+
 def _number(value: Any) -> float | None:
     if isinstance(value, bool) or not isinstance(value, int | float):
         return None
@@ -92,15 +110,8 @@ class HaValueCache:
         if not refs:
             self._readings = {}
             return
-        entities = dict.fromkeys((ref.domain, ref.object_id) for ref in refs)
-        # beide Schemata in einer Abfrage: je Einheit (immer W und kW) und je Entität
-        names = ["W", "kW", *(f"{domain}.{object_id}" for domain, object_id in entities)]
-        measurements = ",".join(quote_ident(name) for name in names)
-        condition = " OR ".join(
-            f"({quote_ident('domain')}={quote_str(domain)} AND "
-            f"{quote_ident('entity_id')}={quote_str(object_id)})"
-            for domain, object_id in entities
-        )
+        # beide Schemata in einer Abfrage
+        measurements, condition = ha_selection(refs)
         # Bezeichner und Werte sind maskiert
         query = (
             f'SELECT last("value") AS "v", last({quote_ident(UNIT_FIELD)}) AS "u" '  # noqa: S608

@@ -3,8 +3,10 @@ from datetime import UTC, datetime
 import httpx
 from tests.app_helpers import T_APP, k
 
-from bindaems.app.consumers.energy import EnergyCache, day_start, integrate_wh
+from bindaems.app.consumers.energy import EnergyCache, day_start, ha_points, integrate_wh
 from bindaems.app.consumers.service import Consumer
+from bindaems.app.consumers.values import HaRef
+from bindaems.app.history.influx import Series
 from bindaems.shared.influx.lineprotocol import epoch_ms
 
 URL = "http://influx.lan:8086/query"
@@ -130,3 +132,33 @@ async def test_ha_energy_without_database(respx_mock, reader, clock) -> None:
         None,
         "Signal wird nicht aufgezeichnet",
     )
+
+
+def _entity_series(rows: list[list[object]], columns: list[str]) -> Series:
+    return Series("sensor.x", {"domain": "sensor", "entity_id": "x"}, columns, rows)
+
+
+def test_ha_points_with_unit_column_drops_other_units_and_reports_them() -> None:
+    series = [
+        _entity_series(
+            [[1000, 2.0, "kW"], [2000, 5.0, "kWh"], [3000, 7.0, None], [4000, 80.0, "%"]],
+            ["time", "w", "u"],
+        )
+    ]
+    ref = HaRef("sensor", "x", "W")
+    rejected: set[str] = set()
+    assert ha_points(series, ref, rejected) == [
+        (1000, 2000.0),
+        (3000, 7.0),
+    ]  # None: Einheit der Ref
+    assert rejected == {"kWh", "%"}
+
+
+def test_ha_points_without_unit_column_is_unchanged() -> None:
+    series = [_entity_series([[1000, 2.0], [2000, 5.0]], ["time", "w"])]
+    rejected: set[str] = set()
+    assert ha_points(series, HaRef("sensor", "x", "kW"), rejected) == [
+        (1000, 2000.0),
+        (2000, 5000.0),
+    ]
+    assert rejected == set()
