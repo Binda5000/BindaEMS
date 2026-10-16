@@ -100,6 +100,22 @@ def test_runtime_wires_routes_and_components(runtime) -> None:
         assert client.get(path).status_code == 200, path
 
 
+def test_runtime_wires_the_control_routes(runtime) -> None:
+    client = TestClient(runtime.app, base_url="https://testserver")
+    runtime.auth.create_user("chef", PASSWORD, "admin", actor="cli", source="cli")
+    login = client.post("/api/auth/login", json={"username": "chef", "password": PASSWORD})
+    csrf = {"X-CSRF-Token": login.cookies["bindaems_csrf"]}
+    # der core ist nicht erreichbar (Port 1): lesen geht, bedienen meldet es
+    assert client.get("/api/control").json() == {"core_connected": False, "intent": None}
+    assert client.get("/api/decisions/latest").json() == {"decisions": []}
+    runtime.decisions.add([decision(id="r1", ts=T_APP)])
+    assert [d["id"] for d in client.get("/api/decisions").json()["decisions"]] == ["r1"]
+    changed = client.put("/api/control/regulation", json={"on": True}, headers=csrf)
+    assert (changed.status_code, changed.json()["detail"]) == (503, "core nicht erreichbar.")
+    ack = client.post("/api/control/locks/wallbox.evcs/ack", headers=csrf)
+    assert ack.status_code == 503
+
+
 async def test_decisions_from_the_stream_reach_the_table(runtime) -> None:
     await runtime.live_feed._dispatch_decision(decision_to_json(decision(id="x1", ts=T_APP)))
     await runtime.collector.flush()

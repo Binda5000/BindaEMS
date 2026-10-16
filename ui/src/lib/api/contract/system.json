@@ -2,7 +2,7 @@
   "core": {
     "connected": true,
     "health": {
-      "mode": "OBSERVE",
+      "mode": "DEGRADED",
       "version": "0.1.0",
       "adapters": [
         {
@@ -67,12 +67,31 @@
       ],
       "alarms": [],
       "cycle_ms_p95": 0.0,
-      "mode_since": "2026-10-09T07:59:00+00:00",
+      "mode_since": "2026-10-09T08:00:00+00:00",
       "mode_reasons": [
-        "Regelbetrieb ist aus."
+        "Tessie für „Tesla Model 3“ nicht erreichbar."
       ],
-      "intent": null,
-      "intent_version": null,
+      "intent": {
+        "version": 1,
+        "control": true,
+        "actuators": {},
+        "vehicles": {
+          "tesla": {
+            "mode": "min_pv",
+            "boost_until": null,
+            "wallbox": null
+          }
+        },
+        "priority": null,
+        "surplus_priority": {
+          "kind": "battery_until_soc",
+          "soc_pct": 30.0
+        },
+        "guest": {
+          "mode": "pv"
+        }
+      },
+      "intent_version": 1,
       "actuators": [
         {
           "id": "victron",
@@ -141,15 +160,15 @@
         {
           "id": "tesla",
           "name": "Tesla Model 3",
-          "mode": null,
+          "mode": "min_pv",
           "boost_until": null,
-          "wallbox": null,
-          "assignment": null,
+          "wallbox": "twc",
+          "assignment": "default",
           "limit_a": null,
           "plugged": null,
           "charging": null,
           "wakes_today": 0,
-          "commands_hour": null,
+          "commands_hour": 0,
           "boost_pending": false,
           "override_pending": false,
           "reason": null
@@ -157,10 +176,10 @@
         {
           "id": "egolf",
           "name": "e-Golf",
-          "mode": null,
+          "mode": "pv",
           "boost_until": null,
-          "wallbox": null,
-          "assignment": null,
+          "wallbox": "evcs",
+          "assignment": "default",
           "limit_a": null,
           "plugged": null,
           "charging": null,
@@ -172,10 +191,10 @@
         }
       ],
       "battery": {
-        "state": "idle",
-        "target_w": null,
+        "state": "unknown",
+        "target_w": 0.0,
         "override_w": null,
-        "support": null,
+        "support": "soc",
         "bridging_s": null,
         "refresh_age_s": null
       },

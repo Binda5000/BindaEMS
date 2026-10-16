@@ -1,0 +1,66 @@
+{
+  "decisions": [
+    {
+      "id": "demo-1",
+      "ts": "2026-10-09T07:57:00+00:00",
+      "actuator": "victron",
+      "kind": "grid_setpoint",
+      "requested": 50.0,
+      "applied": 50.0,
+      "dry_run": true,
+      "outcome": "accepted",
+      "result": "dry_run",
+      "codes": [
+        "pv_surplus"
+      ],
+      "text": "Victron (ESS) (Überschuss): Netz-Sollwert 50 W – Dry-Run, nicht gesendet.",
+      "inputs": {
+        "soc_pct": 55.0,
+        "grid_l1_a": 1.2
+      },
+      "cursor": 1
+    },
+    {
+      "id": "demo-3",
+      "ts": "2026-10-09T07:55:00+00:00",
+      "actuator": "wallbox.evcs",
+      "kind": "current",
+      "requested": 8.0,
+      "applied": 8.0,
+      "dry_run": true,
+      "outcome": "accepted",
+      "result": "dry_run",
+      "codes": [
+        "mode_pv",
+        "pv_surplus"
+      ],
+      "text": "EVCS „evcs“ (PV-Überschuss, Überschuss): Strom 8 A – Dry-Run, nicht gesendet.",
+      "inputs": {
+        "soc_pct": 55.0,
+        "grid_l1_a": 1.2
+      },
+      "cursor": 3
+    },
+    {
+      "id": "demo-5",
+      "ts": "2026-10-09T07:52:00+00:00",
+      "actuator": "vehicle.tesla",
+      "kind": "current",
+      "requested": 7.0,
+      "applied": null,
+      "dry_run": true,
+      "outcome": "deferred",
+      "result": "deferred",
+      "codes": [
+        "mode_min_pv",
+        "pv_surplus"
+      ],
+      "text": "Tesla Model 3 (Min+PV, Überschuss): Strom 7 A – zurückgestellt.",
+      "inputs": {
+        "soc_pct": 55.0,
+        "grid_l1_a": 1.2
+      },
+      "cursor": 5
+    }
+  ]
+}

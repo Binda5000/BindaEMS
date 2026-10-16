@@ -1,0 +1,23 @@
+{
+  "core_connected": true,
+  "intent": {
+    "version": 1,
+    "control": true,
+    "actuators": {},
+    "vehicles": {
+      "tesla": {
+        "mode": "min_pv",
+        "boost_until": null,
+        "wallbox": null
+      }
+    },
+    "priority": null,
+    "surplus_priority": {
+      "kind": "battery_until_soc",
+      "soc_pct": 30.0
+    },
+    "guest": {
+      "mode": "pv"
+    }
+  }
+}

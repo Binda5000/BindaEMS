@@ -35,9 +35,13 @@ from bindaems.app.db.schema import user_table
 from bindaems.app.forecast.openmeteo import OPEN_METEO_URL
 from bindaems.app.runtime import AppRuntime
 from bindaems.core.adapters.base import AdapterHealth
+from bindaems.core.api.app import create_api
 from bindaems.core.runtime import CoreRuntime
+from bindaems.core.safety.types import Outcome
 from bindaems.core.watchdog_client.status import WATCHDOG_VERSION
 from bindaems.shared.config import Config, Secrets
+from bindaems.shared.control import ChargeMode, CommandKind, Intent, VehicleIntent
+from bindaems.shared.decisions import NO_VERDICT, Decision, DecisionResult, decision_text
 from bindaems.shared.domain import SignalKind
 from bindaems.shared.influx.lineprotocol import epoch_ms
 from bindaems.shared.timeutil import Clock, ManualClock
@@ -85,6 +89,109 @@ VICTRON_STATE: dict[str, float | str] = {
 TESLA_SOURCE = "tessie:tesla"  # nicht verbunden: der Ladestand gilt als veraltet
 # Vorlauf vor T_DEMO: die Selbstprüfung verlangt seit 30 s aktuelle Messwerte
 WARMUP = timedelta(seconds=60)
+
+# Entscheidungen der Demo (Tabelle ``decision`` der app): je Aktor zwei, darunter eine
+# ``deferred`` und genau eine ``foreign``; die jüngste je Aktor steht in „Warum?“
+_INPUTS = {"soc_pct": 55.0, "grid_l1_a": 1.2}
+
+
+def _decision(
+    id_: str,
+    minutes_ago: int,
+    actuator: str,
+    label: str,
+    kind: CommandKind,
+    value: float | bool,
+    result: DecisionResult,
+    reasons: tuple[str, ...],
+    *,
+    outcome: str = Outcome.ACCEPTED,
+    expected: float | None = None,
+    dry_run: bool = True,
+) -> Decision:
+    detail = f"erwartet {expected:g} A" if expected is not None else ""
+    return Decision(
+        id=id_,
+        ts=T_DEMO - timedelta(minutes=minutes_ago),
+        actuator=actuator,
+        kind=kind,
+        requested=expected if expected is not None else value,
+        applied=value if outcome != Outcome.DEFERRED else None,
+        dry_run=dry_run,
+        outcome=str(outcome),
+        result=result,
+        codes=reasons,
+        text=decision_text(label, kind, value, result, detail=detail, reasons=reasons),
+        inputs=_INPUTS,
+    )
+
+
+DEMO_DECISIONS = [
+    _decision(
+        "demo-1",
+        3,
+        "victron",
+        "Victron (ESS)",
+        CommandKind.GRID_SETPOINT,
+        50.0,
+        DecisionResult.DRY_RUN,
+        ("pv_surplus",),
+    ),
+    _decision(
+        "demo-2",
+        45,
+        "victron",
+        "Victron (ESS)",
+        CommandKind.GRID_SETPOINT,
+        120.0,
+        DecisionResult.DRY_RUN,
+        ("battery_comp",),
+    ),
+    _decision(
+        "demo-3",
+        5,
+        "wallbox.evcs",
+        "EVCS „evcs“",
+        CommandKind.CURRENT,
+        8.0,
+        DecisionResult.DRY_RUN,
+        ("mode_pv", "pv_surplus"),
+    ),
+    _decision(
+        "demo-4",
+        40,
+        "wallbox.evcs",
+        "EVCS „evcs“",
+        CommandKind.CURRENT,
+        10.0,
+        DecisionResult.FOREIGN,
+        ("foreign_change",),
+        outcome=NO_VERDICT,
+        expected=8.0,
+        dry_run=False,
+    ),
+    _decision(
+        "demo-5",
+        8,
+        "vehicle.tesla",
+        "Tesla Model 3",
+        CommandKind.CURRENT,
+        7.0,
+        DecisionResult.DEFERRED,
+        ("mode_min_pv", "pv_surplus"),
+        outcome=Outcome.DEFERRED,
+    ),
+    _decision(
+        "demo-6",
+        90,
+        "vehicle.tesla",
+        "Tesla Model 3",
+        CommandKind.CHARGING,
+        True,
+        DecisionResult.DRY_RUN,
+        ("mode_min_pv", "wake"),
+    ),
+]
 
 # HA-Datenbank: Messung je Entität (measurement_attr: entity_id, wie beim Betreiber) und je
 # Einheit (HA-Standard); Wert und Einheit je Entität
@@ -327,6 +434,23 @@ class _DemoVictron:
         return AdapterHealth(name=self.name, connected=True, last_ok=self._clock.now())
 
 
+def _mount_core_api(
+    router: respx.MockRouter, cfg: Config, core: CoreRuntime, secrets: Secrets
+) -> None:
+    """Leitet die Aufrufe der app an die interne API des core (``app.core_url``) in den
+    echten ``CoreRuntime`` der Demo, ohne Netz: so wirken Bedienung und Quittierung wirklich."""
+    transport = httpx.ASGITransport(app=create_api(core, secrets.internal_token))
+    url = httpx.URL(cfg.app.core_url)
+
+    async def forward(request: httpx.Request) -> httpx.Response:
+        await request.aread()
+        reply = await transport.handle_async_request(request)
+        await reply.aread()
+        return httpx.Response(reply.status_code, headers=reply.headers, content=reply.content)
+
+    router.route(host=url.host, port=url.port).mock(side_effect=forward)
+
+
 def _cycle(core: CoreRuntime, tick: int) -> None:
     for signal, value in measurements(tick).items():
         core.store.update(signal, value, source="victron", kind=SignalKind.MEASUREMENT)
@@ -396,7 +520,12 @@ def _build_core(cfg: Config, secrets: Secrets, clock: ManualClock) -> CoreRuntim
 
 
 def _create_users(app: AppRuntime) -> None:
-    for username, role in (("admin", "admin"), ("sicher", "admin"), ("gast", "viewer")):
+    for username, role in (
+        ("admin", "admin"),
+        ("sicher", "admin"),
+        ("bedienen", "operator"),
+        ("gast", "viewer"),
+    ):
         app.auth.create_user(username, DEMO_PASSWORD, role, actor="cli", source="cli")
     with app.engine.begin() as conn:
         conn.execute(
@@ -447,10 +576,17 @@ async def build_world(cfg: Config, data_dir: Path, *, ui_dir: Path | None = None
     router.start()
     try:
         core = _build_core(local, secrets, clock)
+        _mount_core_api(router, local, core, secrets)
+        # Absicht der Demo: Regelbetrieb an, der Tesla im Modus Min+PV; alles andere im Dry-Run
+        intent = Intent(
+            version=1, control=True, vehicles={"tesla": VehicleIntent(mode=ChargeMode.MIN_PV)}
+        )
+        assert core.submit_intent(intent).result == "accepted"
         app = AppRuntime(local, secrets, clock=clock, serve=False)
         app._sink.bind(asyncio.get_running_loop())  # wie AppRuntime.run
         world = World(app, core, clock, router)
         _create_users(app)
+        app.decisions.add(DEMO_DECISIONS)
         # drei Versionen; Netzverlust, Elektrizitätsabgabe und Förderbeitrag bleiben leer
         set_grid_usage(app.settings, 8.11)
         set_feed_in(app.settings, {"2026-09": 7.3})

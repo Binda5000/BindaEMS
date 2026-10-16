@@ -32,6 +32,16 @@ class FakeCoreClient:
         self.valid: Intent | None = None
         self.replies: list[CoreReply | Callable[[], CoreReply]] = []
         self.sent: list[Intent] = []
+        self.ack_reply = CoreReply(
+            202, {"detail": "Quittiert. Die Sperre von EVCS löst sich im nächsten Zyklus."}
+        )
+        self.acked: list[str] = []
+
+    async def acknowledge(self, actuator: str) -> CoreReply:
+        if self.error is not None:
+            raise self.error
+        self.acked.append(actuator)
+        return self.ack_reply
 
     async def intent(self) -> Intent | None:
         if self.error is not None:

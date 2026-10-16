@@ -34,6 +34,9 @@ GET_ENDPOINTS = {
     "ledger-days": "/api/ledger/days?from=2026-10-08&to=2026-10-09",
     "users": "/api/users",
     "audit": "/api/audit",
+    "control": "/api/control",
+    "decisions": "/api/decisions",
+    "decisions-latest": "/api/decisions/latest",
 }
 OTHER = {
     "live-hello",
@@ -44,6 +47,7 @@ OTHER = {
     "totp-setup",
     "reprice",
     "error-422",
+    "control-reply",
 }
 
 
@@ -87,6 +91,9 @@ def collect_responses(world: World) -> dict[str, object]:
     repriced = client.post("/api/ledger/reprice", json=days, headers=csrf)
     assert repriced.status_code == 200, repriced.text
     actual["reprice"] = repriced.json()
+    changed = client.put("/api/control/vehicles/tesla/mode", json={"mode": "now"}, headers=csrf)
+    assert changed.status_code == 200, changed.text
+    actual["control-reply"] = changed.json()
     return actual
 
 

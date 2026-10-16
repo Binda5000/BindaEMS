@@ -31,6 +31,8 @@ from bindaems.app.consumers.routes import consumers_router
 from bindaems.app.consumers.service import ConsumerService
 from bindaems.app.consumers.values import HaRef, HaValueCache
 from bindaems.app.control.decisions import DecisionCollector, DecisionStore
+from bindaems.app.control.intent import IntentService
+from bindaems.app.control.routes import control_router
 from bindaems.app.core_link import CoreClient, LiveFeed, LiveState
 from bindaems.app.db.engine import DB_FILENAME, migrate, open_database
 from bindaems.app.forecast.routes import forecast_router
@@ -156,6 +158,9 @@ class AppRuntime:
             decision_handlers=[self.collector.on_decision],
             connect_handlers=[self.collector.catch_up],
         )
+        self.intents = IntentService(
+            core_client, self.live, self.live_feed, self.audit, self._clock, cfg
+        )
         self.ha_values = HaValueCache(self.reader, ha_database) if ha_database is not None else None
         self.energy = EnergyCache(self.reader, self._clock, ha_database)
         self.ha_publisher: HaPublisher | None = None
@@ -197,6 +202,16 @@ class AppRuntime:
                 prices_router(self.prices, self.pipeline, self._clock, guard),
                 forecast_router(self.forecast, self._clock, guard),
                 ledger_router(self.ledger, guard),
+                control_router(
+                    self.intents,
+                    self.decisions,
+                    core_client,
+                    self.auth,
+                    self.audit,
+                    guard,
+                    clock=self._clock,
+                    live=self.live,
+                ),
             ],
             ui_dir=cfg.app.ui_dir,
         )
