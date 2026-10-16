@@ -323,6 +323,8 @@ Gerät „BindaEMS“. Live-Schaltung und Vorrang gibt es in Home Assistant nich
   ablehnt oder der nicht ankommt, ändert nichts. Home Assistant zeigt dann die persistente Meldung
   `bindaems_ha_command` mit „Befehl aus Home Assistant abgelehnt: …“; eine neue Ablehnung ersetzt die
   alte. Ist der core nicht erreichbar, lautet der Grund „core nicht erreichbar.“.
+- Die Auswahl „Zuordnung“ zeigt dieselbe Übersteuerung wie das UI: Eine beendete (etwa nach dem
+  Abstecken) zeigt sie als „Automatisch“, eine wartende mit dem Namen des Fahrzeugs.
 - Die Namen in der Auswahl „Zuordnung“ sind die Namen der Fahrzeuge aus `config.yaml`. Die
   Konfiguration lehnt deshalb einen leeren Namen, einen mit Leerzeichen am Rand, einen doppelten (Groß-
   und Kleinschreibung zählt nicht) und den Namen „Automatisch“ ab. Sie lehnt auch Schlüssel von
@@ -350,10 +352,14 @@ homeassistant:
   der Alarm, entfernt die app die persistente Meldung wieder.
 - **Abgelehnte Befehle** aus Home Assistant erscheinen als persistente Meldung `bindaems_ha_command`
   (oben).
-- Höchstens **10 Meldungen je Minute** über alle Alarme und Ablehnungen zusammen; der Rest steht nur im
-  Log der app.
+- Höchstens **10 Meldungen je Minute** über alle Alarme und Ablehnungen zusammen, davon höchstens
+  **4 für Ablehnungen**: Den Alarmen bleiben so immer mindestens 6, auch wenn eine Automation eine Flut
+  ungültiger Befehle sendet. Eine Ablehnung über dem Budget steht nur im Log der app.
 - Ein fehlgeschlagener Aufruf stört nichts; er steht im Log (`Dienstaufruf an Home Assistant
-  fehlgeschlagen`).
+  fehlgeschlagen`). Ein Alarm gilt erst als gemeldet, wenn die persistente Meldung angelegt ist: Über
+  dem Budget oder während Home Assistant neu startet versucht es die app erneut, solange der Alarm
+  besteht, je Alarm höchstens einmal je Minute. Der `notify`-Dienst folgt erst auf die angelegte
+  Meldung, einmal. Auch das Entfernen wiederholt die app so, bis es gelingt.
 - **Ohne `BINDAEMS_HA_TOKEN`** (oder ohne den Abschnitt `homeassistant`) sendet die app nichts. Die
   Komponente `ha-notify` unter **System** zeigt dann „Benachrichtigungen aus: BINDAEMS_HA_TOKEN
   fehlt.“.
@@ -949,10 +955,14 @@ Dry-Run, und ein installierter Watchdog wartet.
   wartet (`boost_pending`), und `wallbox` nur, wenn Health `assignment: "override"` an genau dieser
   Wallbox zeigt oder die Übersteuerung wartet (`override_pending`). Ein `boost_until` in der
   Vergangenheit entfällt immer. Health gilt der app nur, wenn seine `intent_version` mindestens die
-  gültige Version erreicht; sonst, und bei ausgeschaltetem Regelbetrieb, gilt der Stand als
-  unbekannt: Ein Boost in der Zukunft und die Übersteuerung bleiben, ein abgelaufener Boost entfällt.
-  Das gilt auch für das Fahrzeug, das die Bedienung gerade ändert, vor der Änderung. So springt ein
-  alter Boost beim nächsten Anstecken nicht an, auch wenn dazwischen jemand einen Modus geändert hat.
+  gültige Version erreicht; sonst, bei ausgeschaltetem Regelbetrieb und bei einem Fahrzeug, dessen
+  Lademodus Health als `null` zeigt, gilt der Stand als unbekannt: Ein Boost in der Zukunft und die
+  Übersteuerung bleiben, ein abgelaufener Boost entfällt. Das gilt auch für das Fahrzeug, das die
+  Bedienung gerade ändert, vor der Änderung. Dazu merkt sich der core je Fahrzeug den `boost_until`
+  eines Boosts, dessen Ansteckvorgang geendet hat: Eine neue Version mit demselben `boost_until` (etwa
+  aus einem Health, das das Abstecken noch nicht zeigt, oder per `curl`) bindet ihn nicht wieder; nur ein
+  anderer `boost_until`, also ein neuer Boost, bindet. So springt ein alter Boost beim nächsten
+  Anstecken nicht an, auch wenn dazwischen jemand einen Modus geändert hat.
   Die Felder von Health stehen im Abschnitt „Laderegelung“, „Health für die Bedienung“.
 - **Regelbetrieb** schaltest du im UI mit dem Schalter „Regelbetrieb“ (Karte „Bedienung“ unter
   **System**, ab „Bedienen“; auf der Seite „Laden“ mit der Taste „Regelbetrieb einschalten“) oder in
@@ -1028,7 +1038,8 @@ Spalte „Hinweise“ als „gesperrt: …“.
   Ursache der Alarm einer fremden Änderung ist. Der core antwortet sofort aus dem Stand des letzten
   Zyklus („Quittiert. Die Sperre von {Name} löst sich im nächsten Zyklus.“) und wendet die Quittierung im
   nächsten Zyklus an: Er gibt die Sperre frei und lässt den Alarm der fremden Änderung fallen; die
-  Erkennung erwartet den Wert, den das Gerät jetzt hat, als neuen. Besteht eine andere Ursache (Dynamic
+  Erkennung erwartet den Wert, den das Gerät jetzt hat, als neuen. Erkennt dieser Zyklus eine neue
+  fremde Änderung, bleiben deren Alarm und Sperre: Die hast du noch nicht gesehen. Besteht eine andere Ursache (Dynamic
   ESS aktiv, EVCS nicht manuell, Ladeplan aktiv, ein Prüfpunkt nicht lesbar), lehnt der core mit 409 ab
   und nennt sie („Ursache besteht weiter: …“); ohne Sperre sagt er „{Name} ist nicht gesperrt.“. Schreibt
   der fremde Regler weiter (etwa evcc), sperrt die Erkennung nach 3 Prüfungen erneut: Schalte ihn vorher
@@ -1086,7 +1097,10 @@ Dry-Run mit „Regelbetrieb ist aus.“
 Ein falsches Passwort lehnt die app mit „Passwort falsch.“ ab (403), eine fehlende Bestätigung mit
 „Bitte bestätige Prüfprotokoll Teil 2.“ (422); die Absicht bleibt dann unverändert. Gibt `config.yaml`
 einen Aktor nicht frei, klemmt der core und der Aktor bleibt im Dry-Run: Die Karte zeigt den Hinweis des
-core. Passwort und Bestätigung verlangt die app nur für Aktoren, die neu auf live wechseln. Die
+core. Passwort und Bestätigung verlangt die app nur für Aktoren, die neu auf live wechseln. Das prüft
+sie bei jedem Versuch noch einmal gegen die gültige Absicht, auch nach einem 409: Hat jemand einen Aktor
+inzwischen auf Dry-Run gestellt, geht er ohne Passwort und Bestätigung nicht wieder live (dieselben
+Antworten, 403 bzw. 422). Eine leere Auswahl lehnt die app mit „Keine Aktoren gewählt.“ ab (422). Die
 Änderung steht im Änderungsprotokoll (`intent.actuators`, mit den Aktor-IDs). Home Assistant hat den
 Live-Schalter nicht.
 
@@ -1196,8 +1210,8 @@ Eingaben: Abschnitt „Laderegelung“). Eine erkannte fremde Änderung lautet e
   - **Aufbewahrung:** 180 Tage (`app.decisions_keep_days` in `config.yaml`, 1 bis 3650). Die Wartung
     der app räumt Ältere auf.
   - **Grafana:** Je neu gespeicherter Entscheidung schreibt die app einen Punkt `decision` nach InfluxDB
-    (Retention Policy `raw`, 90 Tage), mit den Tags `actuator`, `result` und `dry_run` (`"true"` oder
-    `"false"`), den Feldern `text` und `codes` (mit „,“ verbunden) und dem Zeitpunkt der Entscheidung.
+    (Retention Policy `raw`, 90 Tage), mit den Tags `actuator`, `kind` (Befehlsart), `result` und
+    `dry_run` (`"true"` oder `"false"`), den Feldern `text` und `codes` (mit „,“ verbunden) und dem Zeitpunkt der Entscheidung.
     In Grafana legst du an der InfluxDB-Datenquelle eine Annotation an, etwa für gesendete (nicht
     Dry-Run-)Entscheidungen:
 
