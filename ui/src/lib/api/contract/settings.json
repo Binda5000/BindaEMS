@@ -137,6 +137,14 @@
       "temp_coeff_pct_per_k": -0.35,
       "noct_c": 45.0
     },
+    "planning": {
+      "grid_charge_allowed": false,
+      "margin_ct": 2.0,
+      "roundtrip_pct": 88.0,
+      "wear_ct": 2.0,
+      "end_value_factor": 0.9,
+      "inertia_ct": 0.5
+    },
     "wallbox_names": {
       "twc": "Garage"
     }

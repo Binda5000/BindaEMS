@@ -444,6 +444,14 @@ export const RuntimeSettingsSchema = v.looseObject({
 		temp_coeff_pct_per_k: v.number(),
 		noct_c: v.number()
 	}),
+	planning: v.looseObject({
+		grid_charge_allowed: v.boolean(),
+		margin_ct: v.number(),
+		roundtrip_pct: v.number(),
+		wear_ct: v.number(),
+		end_value_factor: v.number(),
+		inertia_ct: v.number()
+	}),
 	/** eigene Namen der Ladestationen; ohne Eintrag gilt der Typ */
 	wallbox_names: v.optional(v.record(v.string(), v.string()), {})
 });

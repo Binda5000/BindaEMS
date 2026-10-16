@@ -224,6 +224,17 @@ class PvModelSettings(_Model):
     noct_c: Annotated[float, Field(ge=20, le=80)] = 45.0
 
 
+class PlanningSettings(_Model):
+    """Planung des Akkus (Plan 3b): Netzladen, Marge, Wirkungsgrad, Verschleiß, Restwert."""
+
+    grid_charge_allowed: bool = False
+    margin_ct: NonNegative = 2.0  # Mindestgewinn je kWh, damit sich Netzladen lohnt
+    roundtrip_pct: Annotated[float, Field(ge=50, le=100, allow_inf_nan=False)] = 88.0
+    wear_ct: NonNegative = 2.0  # Verschleiß je kWh Durchsatz
+    end_value_factor: Annotated[float, Field(ge=0, le=1, allow_inf_nan=False)] = 0.9
+    inertia_ct: NonNegative = 0.5  # Planträgheit je kWh Abweichung vom vorigen Plan
+
+
 WallboxKey = Annotated[str, Field(min_length=1, max_length=60)]
 DisplayName = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=40)]
 
@@ -233,6 +244,7 @@ class RuntimeSettings(_Model):
     tariff: TariffSettings = Field(default_factory=TariffSettings)
     feed_in: FeedInSettings = Field(default_factory=FeedInSettings)
     pv_model: PvModelSettings = Field(default_factory=PvModelSettings)
+    planning: PlanningSettings = Field(default_factory=PlanningSettings)
     # eigene Namen der Ladestationen (Schlüssel wie in config.yaml); ohne Namen gilt der Typ
     wallbox_names: dict[WallboxKey, DisplayName] = Field(default_factory=dict)
 
