@@ -247,11 +247,11 @@ Die Erkennung läuft im Dry-Run mit, und Health zeigt, wer wo steht (siehe „Of
   immer gemeinsam aus demselben Stand ausgerollt (gleiche Compose-Datei, gleiche Image-Tags): Die
   UI-Schemas sind streng, eine abweichende Version zeigt auf der System-Seite nur „Unerwartete
   Antwort vom Server“.
-- **Tests:** 5745 Python-Tests, davon 33 Property-Tests mit Hypothesis (6 für die Safety-Schicht,
+- **Tests:** 5762 Python-Tests, davon 33 Property-Tests mit Hypothesis (6 für die Safety-Schicht,
   6 für den Phasenwächter, 12 für den Akku-Sollwert, 6 für den 15-min-Wächter, 3 sonstige), und
-  348 UI-Tests (Vitest) sowie 14 E2E-Tests (Playwright); Abdeckung 97,5 % insgesamt und
-  99 % für `core/safety`, `core/control` und `core/actuators` (Stand nach Plan 2d, vor dem
-  Gesamtreview).
+  351 UI-Tests (Vitest) sowie 14 E2E-Tests (Playwright); Abdeckung 97,5 % insgesamt und
+  99 bis 100 % für `core/safety`, `core/control` und `core/actuators` (Stand nach Plan 2d und der
+  Fix-Welle aus dem Gesamtreview).
   Geprüft wird mit ruff, mypy strict (auch für den Watchdog), import-linter (4 Verträge), pytest
   mit Abdeckungsgrenzen (≥ 75 % insgesamt, ≥ 90 % für `core/safety`, `core/control` und
   `core/actuators`), Vitest mit svelte-check, Prettier und ESLint; dazu E2E mit Playwright.
@@ -1508,7 +1508,9 @@ der Spec:
   „Wallbox“ zeigt den Anzeigenamen der Wallbox (eigener Name, sonst „EVCS“ oder „Wall Connector“).
 - **Benachrichtigungen:** Ein Fehler-Alarm wird nach 30 s einmal gemeldet (persistente Meldung
   `bindaems_<Alarm-ID>` und, falls eingestellt, der `notify`-Dienst) und beim Verschwinden entfernt;
-  höchstens 10 Meldungen je Minute über Alarme und Ablehnungen, der Rest geht ins Log. Ohne
+  höchstens 10 Meldungen je Minute, davon höchstens 4 für Ablehnungen, der Rest geht ins Log. Ein
+  Alarm gilt erst als gemeldet, wenn die persistente Meldung angekommen ist; sonst versucht die app es
+  jede Minute erneut, solange er besteht. Ein gescheitertes Entfernen wiederholt sie ebenso. Ohne
   `BINDAEMS_HA_TOKEN` meldet die Komponente `ha-notify` „Benachrichtigungen aus: BINDAEMS_HA_TOKEN
   fehlt.“.
 - **Demo-Backend:** Der core der Demo-Welt meldet DEGRADED. Der Benutzer `bedienen` (Rolle „Bedienen“) ist
@@ -1516,4 +1518,32 @@ der Spec:
 - **Nicht in 2d:** `assignment_log` und `charging_session` (Spec 11.3) folgen mit der Statistik; manuelle
   Zuordnungen stehen im Änderungsprotokoll, erkannte in den Entscheidungen und in Health.
 
-Aufgeschobene Kleinigkeiten aus Plan 2d: folgt nach dem Gesamtreview.
+Aufgeschobene Kleinigkeiten aus Plan 2d (aus den Reviews; keine davon gefährdet die Anlage):
+
+- **Quittierung aus veraltetem Stand:** Die Quittierung gilt der Erkennung, die beim Anwenden steht.
+  War eine neue fremde Änderung schon vor dem Klick erkannt, aber noch nicht auf der Seite des
+  Betreibers, wird sie mitquittiert (Handbuch, Abschnitt 13). Abhilfe wäre, die gesehene Erkennung mit
+  der Quittierung zu senden.
+- **Boost nach Neustart des core:** Der core merkt sich verbrauchte Boosts nur im Speicher. Nach einem
+  Neustart, oder bei Ab- und Anstecken während die Regelung ruht, kann ein alter Boost aus der Absicht
+  an den laufenden Vorgang binden.
+- **`PUT /v1/intent` am core:** Der Notfallweg kennt kein Passwort (Token genügt) und übernimmt jede
+  neuere Version ohne Abgleich der Basis; schreiben app und ein direkter Aufruf im selben Moment, gilt
+  der spätere.
+- **Benachrichtigungen:** Kehrt ein Alarm zurück, während das Entfernen seiner alten Meldung noch
+  aussteht, und verschwindet er vor einer neuen Meldung wieder, bleibt die alte Meldung in Home
+  Assistant stehen. Ablehnungen und Alarme teilen sich die Verbindung zu Home Assistant der Reihe nach.
+- **HA-Befehle:** Die Begrenzung auf einen Befehl je Sekunde misst beim Verarbeiten, nicht beim
+  Eintreffen; antwortet der core langsam, werden gestaute Befehle ausgeführt statt verworfen. Ein
+  Abruf der Absicht neben einer Bedienung kann den Zustand in Home Assistant für bis zu 5 s
+  zurückspringen lassen.
+- **UI:** Die Bestätigungen im Live-Dialog bleiben stehen, wenn eine Aktualisierung die Auswahl über
+  `live_allowed` verkleinert (sichere Richtung). Die URL-Filter der Seite „Entscheidungen“ können bei
+  sehr schnellem Wechsel kurz von der Anzeige abweichen. Ein ungültiger SOC-Wert wird still
+  zurückgesetzt.
+- **Entscheidungslog:** Ein `before`-Zeiger auf eine aufgeräumte Zeile liefert eine leere Seite; fällt
+  die Datenbank aus, wächst der Puffer der app bis zur Rückkehr.
+- **Tesla:** `poll_soon` verkürzt die Wartezeit nach einem Fehler (höchstens eine Abfrage mehr je
+  Anstecken). Der Simulator beschriftet Boost-Sekunden nach der Absicht, nicht nach der Regelung.
+- **Tests:** Einige Prüfungen greifen auf interne Felder zu (`_acks`), die Zeitstempel-Ersetzung der
+  fremden Entscheidung ist nur über den Ablauf getestet.

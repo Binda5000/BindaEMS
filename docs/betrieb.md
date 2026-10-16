@@ -1038,8 +1038,10 @@ Spalte „Hinweise“ als „gesperrt: …“.
   Ursache der Alarm einer fremden Änderung ist. Der core antwortet sofort aus dem Stand des letzten
   Zyklus („Quittiert. Die Sperre von {Name} löst sich im nächsten Zyklus.“) und wendet die Quittierung im
   nächsten Zyklus an: Er gibt die Sperre frei und lässt den Alarm der fremden Änderung fallen; die
-  Erkennung erwartet den Wert, den das Gerät jetzt hat, als neuen. Erkennt dieser Zyklus eine neue
-  fremde Änderung, bleiben deren Alarm und Sperre: Die hast du noch nicht gesehen. Besteht eine andere Ursache (Dynamic
+  Erkennung erwartet den Wert, den das Gerät jetzt hat, als neuen. Erkennt der Zyklus, der die
+  Quittierung anwendet, eine neue fremde Änderung, bleiben deren Alarm und Sperre. Eine neue Änderung,
+  die schon vor deinem Klick erkannt war, aber noch nicht auf deiner Seite stand, quittierst du mit;
+  sieh darum nach dem Quittieren auf die Seite. Besteht eine andere Ursache (Dynamic
   ESS aktiv, EVCS nicht manuell, Ladeplan aktiv, ein Prüfpunkt nicht lesbar), lehnt der core mit 409 ab
   und nennt sie („Ursache besteht weiter: …“); ohne Sperre sagt er „{Name} ist nicht gesperrt.“. Schreibt
   der fremde Regler weiter (etwa evcc), sperrt die Erkennung nach 3 Prüfungen erneut: Schalte ihn vorher
@@ -1211,7 +1213,8 @@ Eingaben: Abschnitt „Laderegelung“). Eine erkannte fremde Änderung lautet e
     der app räumt Ältere auf.
   - **Grafana:** Je neu gespeicherter Entscheidung schreibt die app einen Punkt `decision` nach InfluxDB
     (Retention Policy `raw`, 90 Tage), mit den Tags `actuator`, `kind` (Befehlsart), `result` und
-    `dry_run` (`"true"` oder `"false"`), den Feldern `text` und `codes` (mit „,“ verbunden) und dem Zeitpunkt der Entscheidung.
+    `dry_run` (`"true"` oder `"false"`), den Feldern `text` und `codes` (mit „,“ verbunden) und dem
+    Zeitpunkt der Entscheidung.
     In Grafana legst du an der InfluxDB-Datenquelle eine Annotation an, etwa für gesendete (nicht
     Dry-Run-)Entscheidungen:
 
