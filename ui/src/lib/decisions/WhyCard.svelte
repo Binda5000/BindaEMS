@@ -30,7 +30,7 @@
 		<p class="muted">Keine Entscheidungen in den letzten 24 h.</p>
 	{:else}
 		<ul>
-			{#each decisions as decision, index (index)}
+			{#each decisions as decision (decision.id)}
 				<li>
 					<div class="head">
 						<a href="/entscheidungen?actuator={encodeURIComponent(decision.actuator)}">

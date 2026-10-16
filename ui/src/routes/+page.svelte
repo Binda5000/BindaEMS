@@ -11,11 +11,11 @@
 	import { flowBranches, flowConsumers, wallboxLabels } from '$lib/dashboard/flow';
 	import Notices from '$lib/dashboard/Notices.svelte';
 	import { noticesFrom } from '$lib/dashboard/notices';
-	import WhyCard from '$lib/decisions/WhyCard.svelte';
 	import PriceNow from '$lib/dashboard/PriceNow.svelte';
 	import { forecastForChart } from '$lib/dashboard/prices';
 	import SocList from '$lib/dashboard/SocList.svelte';
 	import { socEntries } from '$lib/dashboard/socs';
+	import WhyCard from '$lib/decisions/WhyCard.svelte';
 	import { live } from '$lib/live.svelte';
 	import { Resource } from '$lib/resource.svelte';
 	import { theme } from '$lib/theme.svelte';

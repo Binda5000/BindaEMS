@@ -21,10 +21,12 @@
 	import { Resource } from '$lib/resource.svelte';
 	import { todayVienna } from '$lib/time';
 
-	// Die Filter stehen in der URL (Links aus „Warum?“ öffnen gefiltert); die Seite liest sie
-	// einmal und schreibt jede Änderung zurück
-	let filters = $state<Filters>(filtersFromParams(page.url.searchParams));
-	let text = $state(filters.text); // Eingabe, gilt erst mit dem Verlassen des Feldes
+	// Die Filter stehen in der URL (Links aus „Warum?“ öffnen gefiltert): Die Seite liest sie beim
+	// Öffnen und bei jeder Änderung der URL von außen (Navigation, Zurück/Vor) und schreibt jede
+	// eigene Änderung zurück
+	const initial = filtersFromParams(page.url.searchParams);
+	let filters = $state<Filters>(initial);
+	let text = $state(initial.text); // Eingabe, gilt erst mit dem Verlassen des Feldes
 
 	let rows = $state.raw<Decision[]>([]);
 	let more = $state(false);
@@ -33,6 +35,7 @@
 	let error = $state.raw<ApiError | null>(null);
 	let query: DecisionQuery = { limit: 0 }; // die Abfrage der ersten Seite, auch für „Ältere laden“
 	let controller: AbortController | undefined;
+	let written: string[] = []; // Suchteile, die die Seite selbst in die URL schrieb und noch erwartet
 
 	const system = new Resource((o) => api.system(o), { retryMs: 30_000 });
 	onMount(() => system.start());
@@ -47,6 +50,10 @@
 	);
 	const rangeChoice = $derived(isDate(filters.range) ? 'date' : filters.range);
 	const last = $derived(rows.at(-1));
+
+	function currentSearch(): string {
+		return page.url.search.replace(/^\?/, '');
+	}
 
 	function fail(e: unknown): ApiError {
 		return e instanceof ApiError ? e : new ApiError(0, e instanceof Error ? e.message : String(e));
@@ -83,18 +90,39 @@
 		return () => run.abort();
 	});
 
-	// Filter zurück in die URL
+	// Filter zurück in die URL (die URL selbst gilt hier nicht als Abhängigkeit)
 	$effect(() => {
 		const search = filtersToParams(filters).toString();
-		if (search !== page.url.search.replace(/^\?/, '')) {
+		untrack(() => {
+			if (search === currentSearch()) return;
+			written.push(search);
 			const target = search === '' ? page.url.pathname : `${page.url.pathname}?${search}`;
 			void goto(target, { replaceState: true, keepFocus: true, noScroll: true });
-		}
+		});
+	});
+
+	// Die URL ändert sich von außen: Filter daraus neu setzen. Was die Seite selbst schrieb, ist
+	// schon gesetzt (die Antwort von `goto` kann hinter einer neueren Eingabe zurückliegen).
+	$effect(() => {
+		const search = currentSearch();
+		untrack(() => {
+			const index = written.indexOf(search);
+			if (index >= 0) {
+				written = written.slice(index + 1);
+				return;
+			}
+			written = [];
+			const next = filtersFromParams(new URLSearchParams(search));
+			if (filtersToParams(next).toString() === filtersToParams(filters).toString()) return;
+			filters = next;
+			text = next.text;
+		});
 	});
 
 	async function loadOlder() {
 		const before = last?.cursor;
 		if (before === undefined || loadingMore) return;
+		// ändert sich ein Filter, bricht die neue Ladung `run` ab: der alte Cursor hängt nichts mehr an
 		const run = controller;
 		loadingMore = true;
 		try {
@@ -177,7 +205,12 @@
 			<Notice level="error">{error.detail}</Notice>
 		{/if}
 		{#if rows.length > 0}
-			<DecisionTable decisions={rows} {names} />
+			{#if loading}
+				<p class="muted" role="status">Lädt …</p>
+			{/if}
+			<div class="rows" class:reloading={loading}>
+				<DecisionTable decisions={rows} {names} />
+			</div>
 		{:else if loading}
 			<p class="muted">Lädt …</p>
 		{:else if !error}
@@ -185,7 +218,9 @@
 		{/if}
 		{#if more && last?.cursor !== undefined}
 			<p class="older">
-				<button type="button" disabled={loadingMore} onclick={loadOlder}>Ältere laden</button>
+				<button type="button" disabled={loadingMore || loading} onclick={loadOlder}
+					>Ältere laden</button
+				>
 			</p>
 		{/if}
 	</Card>
@@ -225,6 +260,10 @@
 		min-height: 2.75rem;
 		color: var(--text);
 		font-size: 1rem;
+	}
+
+	.reloading {
+		opacity: 0.55;
 	}
 
 	.older {

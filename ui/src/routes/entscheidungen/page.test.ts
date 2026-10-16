@@ -1,29 +1,32 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/svelte';
+import { page } from '$app/state';
 import { beforeEach, expect, it, vi } from 'vitest';
 import { decisions, system } from '$lib/testing/fixtures';
 import Page from './+page.svelte';
 
-const { api, goto, location } = vi.hoisted(() => ({
+const { api, goto } = vi.hoisted(() => ({
 	api: { system: vi.fn(), decisions: vi.fn() },
-	goto: vi.fn(),
-	location: { url: 'https://ems.lan/entscheidungen' }
+	goto: vi.fn()
 }));
 vi.mock('$lib/api/endpoints', async (original) => ({
 	...(await original<typeof import('$lib/api/endpoints')>()),
 	api
 }));
 vi.mock('$app/navigation', () => ({ goto }));
-vi.mock('$app/state', () => ({
-	page: {
-		get url() {
-			return new URL(location.url);
-		}
-	}
-}));
+// reaktive URL: Tests ändern sie wie die Navigation des Browsers
+vi.mock('$app/state', async () => {
+	const { SvelteURL } = await import('svelte/reactivity');
+	return { page: { url: new SvelteURL('https://ems.lan/entscheidungen') } };
+});
+
+/** Die URL der Seite wie nach einer Navigation setzen */
+function navigate(search: string) {
+	page.url.search = search;
+}
 
 beforeEach(() => {
 	vi.resetAllMocks();
-	location.url = 'https://ems.lan/entscheidungen';
+	navigate('');
 	api.system.mockResolvedValue(system());
 });
 
@@ -55,8 +58,7 @@ it('filtert nach Aktor ohne Dry-Run', async () => {
 });
 
 it('öffnet gefiltert, wenn die URL Filter trägt', async () => {
-	location.url =
-		'https://ems.lan/entscheidungen?range=week&actuator=wallbox.evcs&result=dry_run&q=%C3%9Cberschuss';
+	navigate('?range=week&actuator=wallbox.evcs&result=dry_run&q=%C3%9Cberschuss');
 	api.decisions.mockResolvedValue(decisions());
 	render(Page);
 	await screen.findAllByRole('row');
@@ -136,4 +138,113 @@ it('meldet einen Fehler des Servers', async () => {
 	render(Page);
 	expect(await screen.findByText('core nicht erreichbar.')).toBeInTheDocument();
 	expect(screen.queryByText('Keine Entscheidungen im Zeitraum.')).not.toBeInTheDocument();
+});
+
+/** Eine Antwort, die der Test selbst abschließt */
+function deferred<T>() {
+	let resolve!: (value: T) => void;
+	const promise = new Promise<T>((done) => (resolve = done));
+	return { promise, resolve };
+}
+
+it('sperrt „Ältere laden“ und dimmt die Zeilen, solange ein Filter neu lädt', async () => {
+	const first = decisions();
+	const reload = deferred<typeof first>();
+	api.decisions.mockResolvedValueOnce({ ...first, more: true }).mockReturnValueOnce(reload.promise);
+	render(Page);
+	const button = await screen.findByRole('button', { name: 'Ältere laden' });
+	expect(button).toBeEnabled();
+	expect(screen.queryByText('Lädt …')).not.toBeInTheDocument();
+
+	await fireEvent.click(screen.getByLabelText('Dry-Run zeigen'));
+	// die alten Zeilen bleiben stehen, mit Hinweis; das Nachladen ist gesperrt
+	expect(await screen.findByText('Lädt …')).toBeInTheDocument();
+	expect(screen.getAllByRole('row')).toHaveLength(1 + first.decisions.length);
+	expect(screen.getByRole('button', { name: 'Ältere laden' })).toBeDisabled();
+
+	reload.resolve({ decisions: [], more: false });
+	expect(await screen.findByText('Keine Entscheidungen im Zeitraum.')).toBeInTheDocument();
+	expect(screen.queryByText('Lädt …')).not.toBeInTheDocument();
+});
+
+it('hängt eine späte Seite mit altem Cursor nicht an die neue Abfrage', async () => {
+	const first = decisions();
+	const older = deferred<typeof first>();
+	const filtered = {
+		decisions: [{ ...first.decisions[1]!, id: 'neu', text: 'Gefilterte Zeile.' }],
+		more: false
+	};
+	api.decisions
+		.mockResolvedValueOnce({ ...first, more: true })
+		.mockReturnValueOnce(older.promise)
+		.mockResolvedValueOnce(filtered);
+	render(Page);
+	await fireEvent.click(await screen.findByRole('button', { name: 'Ältere laden' }));
+	await waitFor(() => expect(api.decisions).toHaveBeenCalledTimes(2));
+
+	await fireEvent.click(screen.getByLabelText('Dry-Run zeigen')); // neuer Filter, solange „Ältere“ lädt
+	expect(await screen.findByText('Gefilterte Zeile.')).toBeInTheDocument();
+	older.resolve({
+		decisions: [{ ...first.decisions[0]!, id: 'alt', cursor: 99, text: 'Alte Seite.' }],
+		more: true
+	});
+	await new Promise((done) => setTimeout(done, 0));
+	expect(screen.queryByText('Alte Seite.')).not.toBeInTheDocument();
+	expect(screen.getAllByRole('row')).toHaveLength(2);
+	expect(screen.queryByRole('button', { name: 'Ältere laden' })).not.toBeInTheDocument(); // more: false
+});
+
+it('setzt die Filter zurück, wenn die URL von außen wechselt', async () => {
+	navigate('?actuator=wallbox.evcs&result=dry_run');
+	api.decisions.mockResolvedValue(decisions());
+	render(Page);
+	await screen.findAllByRole('row');
+	expect(screen.getByLabelText('Ergebnis')).toHaveValue('dry_run');
+
+	// Klick auf „Entscheidungen“ in der Navigation: gleiche Seite, ohne Filter
+	navigate('');
+	await waitFor(() => expect(screen.getByLabelText('Ergebnis')).toHaveValue(''));
+	expect(lastQuery()).toEqual({ since: expect.any(String), limit: 100 });
+	expect(goto).not.toHaveBeenCalled(); // die alten Filter werden nicht zurückgeschrieben
+
+	// Zurück/Vor zu einer Adresse mit Filtern
+	navigate('?actuator=vehicle.tesla&dry_run=false&q=Strom');
+	await waitFor(() =>
+		expect(lastQuery()).toMatchObject({ actuator: 'vehicle.tesla', dry_run: false, text: 'Strom' })
+	);
+	expect(screen.getByLabelText('Dry-Run zeigen')).not.toBeChecked();
+	expect(screen.getByLabelText('Suche im Text')).toHaveValue('Strom');
+	expect(goto).not.toHaveBeenCalled();
+});
+
+it('lädt nicht erneut, wenn die URL nur die eigene Änderung wiedergibt', async () => {
+	api.decisions.mockResolvedValue(decisions());
+	render(Page);
+	await screen.findAllByRole('row');
+	await fireEvent.click(screen.getByLabelText('Dry-Run zeigen'));
+	await waitFor(() => expect(goto).toHaveBeenCalledTimes(1));
+	const calls = api.decisions.mock.calls.length;
+
+	navigate('?dry_run=false'); // die Antwort von `goto`
+	await new Promise((done) => setTimeout(done, 0));
+	expect(api.decisions).toHaveBeenCalledTimes(calls);
+	expect(goto).toHaveBeenCalledTimes(1);
+	expect(screen.getByLabelText('Dry-Run zeigen')).not.toBeChecked();
+});
+
+it('behält eine neuere Eingabe, wenn die URL der vorigen erst danach ankommt', async () => {
+	api.decisions.mockResolvedValue(decisions());
+	render(Page);
+	await screen.findAllByRole('row');
+	await fireEvent.click(screen.getByLabelText('Dry-Run zeigen'));
+	await fireEvent.change(screen.getByLabelText('Ergebnis'), { target: { value: 'ok' } });
+	await waitFor(() => expect(goto).toHaveBeenCalledTimes(2));
+
+	navigate('?dry_run=false'); // die URL der ersten Änderung kommt verspätet
+	await new Promise((done) => setTimeout(done, 0));
+	expect(screen.getByLabelText('Ergebnis')).toHaveValue('ok');
+	navigate('?result=ok&dry_run=false');
+	await new Promise((done) => setTimeout(done, 0));
+	expect(screen.getByLabelText('Ergebnis')).toHaveValue('ok');
+	expect(goto).toHaveBeenCalledTimes(2);
 });
