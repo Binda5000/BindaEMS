@@ -33,7 +33,8 @@
 			newComponent(
 				newKind,
 				NEW_COMPONENT_NAME[newKind],
-				draft.components.map((component) => component.id)
+				draft.components.map((component) => component.id),
+				draft.components.map((component) => component.kind)
 			)
 		);
 		onStructure?.();

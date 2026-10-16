@@ -57,6 +57,23 @@ it('names a new component after its kind and keeps ids unique', async () => {
 	).toEqual(['neue_einspeisung', 'neue_einspeisung_2']);
 });
 
+it('offers the ElWG power price when the settings have none yet', async () => {
+	const { draft } = renderEditor();
+	const power = screen.getByRole('group', { name: 'Leistungspreis (ElWG)' });
+	await press(power, 'Bestandteil entfernen');
+	expect(draft().components.some((c) => c.kind === 'power_per_kw_year')).toBe(false);
+	await fireEvent.change(screen.getByLabelText('Art'), { target: { value: 'power_per_kw_year' } });
+	await press(document.body, 'Bestandteil hinzufügen');
+	expect(draft().components.at(-1)).toMatchObject({
+		kind: 'power_per_kw_year',
+		name: 'Leistungspreis (ElWG)',
+		id: 'leistungspreis_elwg',
+		validFrom: '2027-01-01',
+		tierKw: '10',
+		minimumKw: '2'
+	});
+});
+
 it('never offers to remove the spot price', () => {
 	renderEditor();
 	const spot = screen.getByRole('group', { name: 'Börsenpreis' });

@@ -219,12 +219,23 @@ export function componentId(name: string, existingIds: string[]): string {
 	}
 }
 
-/** Neuer, leerer Bestandteil; die ID folgt aus dem Namen und bleibt danach fest */
+/** Name und Beginn des ElWG-Leistungspreises, wenn noch keiner angelegt ist (Einstellungen vor 3a) */
+const ELWG_POWER_NAME = 'Leistungspreis (ElWG)';
+const ELWG_POWER_VALID_FROM = '2027-01-01';
+
+/**
+ * Neuer, leerer Bestandteil; die ID folgt aus dem Namen und bleibt danach fest. Gibt es noch
+ * keinen Leistungspreis (`existingKinds`), ist der erste die ElWG-Vorlage: Name und Beginn
+ * 1. 1. 2027 sind vorbelegt, Stufe und Mindestverrechnung gelten ohnehin.
+ */
 export function newComponent(
 	kind: ComponentKind,
 	name: string,
-	existingIds: string[]
+	existingIds: string[],
+	existingKinds: ComponentKind[]
 ): ComponentDraft {
+	const elwg = kind === 'power_per_kw_year' && !existingKinds.includes('power_per_kw_year');
+	if (elwg) name = ELWG_POWER_NAME;
 	return {
 		id: componentId(name, existingIds),
 		kind,
@@ -235,7 +246,7 @@ export function newComponent(
 		tierKw: DEFAULT_TIER_KW,
 		minimumKw: DEFAULT_MINIMUM_KW,
 		vat: kind !== 'feed_in_per_kwh', // Einspeisung ohne USt. (Spec 9.1)
-		validFrom: '',
+		validFrom: elwg ? ELWG_POWER_VALID_FROM : '',
 		validUntil: '',
 		windows: []
 	};

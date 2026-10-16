@@ -18,6 +18,7 @@ import {
 
 const settings = () => settingsCurrent().settings;
 const ids = (draft: SettingsDraft) => draft.tariff.components.map((c) => c.id);
+const kinds = (draft: SettingsDraft) => draft.tariff.components.map((c) => c.kind);
 const component = (draft: SettingsDraft, id: string) => {
 	const found = draft.tariff.components.find((c) => c.id === id);
 	if (!found) throw new Error(`${id} fehlt`);
@@ -165,10 +166,35 @@ it('switches a window to a fixed value', () => {
 	});
 });
 
+it('offers the ElWG power price as template when none exists yet', () => {
+	const template = newComponent(
+		'power_per_kw_year',
+		'Neuer Leistungspreis',
+		[],
+		['energy_per_kwh']
+	);
+	expect(template).toMatchObject({
+		id: 'leistungspreis_elwg',
+		name: 'Leistungspreis (ElWG)',
+		validFrom: '2027-01-01',
+		tierKw: '10',
+		minimumKw: '2'
+	});
+	const another = newComponent(
+		'power_per_kw_year',
+		'Neuer Leistungspreis',
+		[],
+		['power_per_kw_year']
+	);
+	expect(another).toMatchObject({ name: 'Neuer Leistungspreis', validFrom: '' });
+	const other = newComponent('fixed_per_month', 'Neue Gebühr', [], []);
+	expect(other).toMatchObject({ name: 'Neue Gebühr', validFrom: '' });
+});
+
 it('adds a power price with tier and minimum', () => {
 	const draft = draftFrom(settings());
 	draft.tariff.components.push({
-		...newComponent('power_per_kw_year', 'Leistung 2028', ids(draft)),
+		...newComponent('power_per_kw_year', 'Leistung 2028', ids(draft), kinds(draft)),
 		value: '34',
 		valueAbove: '68',
 		validFrom: '2028-01-01'
@@ -191,8 +217,8 @@ it('does not mark the tariff as changed for fee and feed-in components', () => {
 	const draft = draftFrom(settings());
 	component(draft, 'grid_base_fee').value = '4,5';
 	draft.tariff.components.push(
-		{ ...newComponent('feed_in_per_kwh', 'Abschlag', ids(draft)), value: '-0,2' },
-		{ ...newComponent('fixed_per_month', 'Zähler', ids(draft)), value: '1' }
+		{ ...newComponent('feed_in_per_kwh', 'Abschlag', ids(draft), kinds(draft)), value: '-0,2' },
+		{ ...newComponent('fixed_per_month', 'Zähler', ids(draft), kinds(draft)), value: '1' }
 	);
 	const result = applyDraft(settings(), draft);
 	if (!('settings' in result)) throw new Error(JSON.stringify(result.errors));
@@ -213,7 +239,7 @@ it('marks the tariff as changed for vat, added and removed energy components', (
 
 	const added = draftFrom(settings());
 	added.tariff.components.push({
-		...newComponent('energy_per_kwh', 'Zuschlag', ids(added)),
+		...newComponent('energy_per_kwh', 'Zuschlag', ids(added), kinds(added)),
 		value: '0,5'
 	});
 	const addedResult = applyDraft(settings(), added);
