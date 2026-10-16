@@ -1,7 +1,7 @@
 import { render, screen } from '@testing-library/svelte';
 import { expect, it } from 'vitest';
 import PlanHeader from './PlanHeader.svelte';
-import { NOW, PLAN, RESPONSE } from '$lib/testing/plan';
+import { PLAN, RESPONSE } from '$lib/testing/plan';
 
 it('shows source, validity and the fallback reason', () => {
 	render(PlanHeader, {
@@ -9,8 +9,7 @@ it('shows source, validity and the fallback reason', () => {
 			...RESPONSE,
 			plan: { ...RESPONSE.plan!, source: 'fallback', fallback_reason: 'Zeitlimit ohne Lösung' }
 		},
-		canOperate: false,
-		now: NOW
+		canOperate: false
 	});
 	expect(screen.getByText('Ersatzplan')).toBeTruthy();
 	expect(screen.getByText('Grund: Zeitlimit ohne Lösung')).toBeTruthy();
@@ -18,7 +17,7 @@ it('shows source, validity and the fallback reason', () => {
 });
 
 it('shows start, validity, trigger and the costs against Victron alone', () => {
-	render(PlanHeader, { data: RESPONSE, canOperate: false, now: NOW });
+	render(PlanHeader, { data: RESPONSE, canOperate: false });
 	expect(screen.getByText('Plan von 10:00 Uhr')).toBeTruthy();
 	expect(screen.getByText('Optimierer')).toBeTruthy();
 	expect(screen.getByText('gültig bis 10:45 Uhr')).toBeTruthy();
@@ -32,8 +31,7 @@ it('shows start, validity, trigger and the costs against Victron alone', () => {
 it('says when the plan has expired', () => {
 	render(PlanHeader, {
 		data: { ...RESPONSE, plan: { ...PLAN, valid: false } },
-		canOperate: false,
-		now: NOW
+		canOperate: false
 	});
 	expect(screen.getByText('Plan abgelaufen')).toBeTruthy();
 	expect(screen.queryByText(/^gültig bis/)).toBeNull();
@@ -43,8 +41,7 @@ it('shows the budget only with a power price', () => {
 	const slots = PLAN.slots.map((s) => ({ ...s, budget_kw: 4.2 }));
 	render(PlanHeader, {
 		data: { ...RESPONSE, plan: { ...PLAN, power_price: true, slots } },
-		canOperate: false,
-		now: NOW
+		canOperate: false
 	});
 	expect(screen.getByText('Budget')).toBeTruthy();
 	expect(screen.getByText('4,2 kW')).toBeTruthy();
@@ -53,8 +50,7 @@ it('shows the budget only with a power price', () => {
 it('lists the issues', () => {
 	render(PlanHeader, {
 		data: { ...RESPONSE, plan: { ...PLAN, issues: ['Preis geschätzt ab 22:00'] } },
-		canOperate: false,
-		now: NOW
+		canOperate: false
 	});
 	expect(screen.getByText('Auffälligkeiten')).toBeTruthy();
 	expect(screen.getByText('Preis geschätzt ab 22:00')).toBeTruthy();
@@ -63,8 +59,7 @@ it('lists the issues', () => {
 it('only shows the grid-charge setting to viewers', () => {
 	render(PlanHeader, {
 		data: { ...RESPONSE, grid_charge_allowed: true },
-		canOperate: false,
-		now: NOW
+		canOperate: false
 	});
 	expect(screen.queryByRole('switch')).toBeNull();
 	expect(screen.getByText('Netzladen erlaubt')).toBeTruthy();
@@ -72,7 +67,7 @@ it('only shows the grid-charge setting to viewers', () => {
 });
 
 it('shows "Plant …" while a run is going', () => {
-	render(PlanHeader, { data: RESPONSE, canOperate: true, now: NOW, replanning: true });
+	render(PlanHeader, { data: RESPONSE, canOperate: true, replanning: true });
 	expect(screen.getByRole('button', { name: 'Plant …' })).toBeDisabled();
 });
 
@@ -83,14 +78,18 @@ it('shows the empty state with the status', () => {
 			grid_charge_allowed: false,
 			plan: null
 		},
-		canOperate: false,
-		now: NOW
+		canOperate: false
 	});
 	expect(screen.getByText('Noch kein Plan.')).toBeTruthy();
 	expect(screen.getByText('Kein Plan: keine PV-Prognose')).toBeTruthy();
 });
 
-it('counts a plan as expired once its end has passed, even if the answer is older', () => {
-	render(PlanHeader, { data: RESPONSE, canOperate: false, now: '2026-10-09T08:46:00+00:00' });
-	expect(screen.getByText('Plan abgelaufen')).toBeTruthy();
+it('trusts the server for validity, not the clock of the browser', () => {
+	// valid_until liegt lange zurück, der Server sagt „gültig“: die Anzeige folgt dem Server
+	render(PlanHeader, {
+		data: { ...RESPONSE, plan: { ...PLAN, valid: true, valid_until: '2020-07-01T00:00:00+00:00' } },
+		canOperate: false
+	});
+	expect(screen.getByText('gültig bis 02:00 Uhr')).toBeTruthy();
+	expect(screen.queryByText('Plan abgelaufen')).toBeNull();
 });

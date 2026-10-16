@@ -2,14 +2,11 @@
 	import type { PlanResponse } from '$lib/api/schemas';
 	import Card from '$lib/components/Card.svelte';
 	import { DASH, formatEur, formatNumber, formatTime, NBSP } from '$lib/format';
-	import { parseIso } from '$lib/time';
 	import { SOURCE_LABELS, TRIGGER_LABELS } from './model';
 
 	interface Props {
 		data: PlanResponse;
 		canOperate: boolean;
-		/** Zeit der Anzeige: ein Plan, dessen Ende vor ihr liegt, ist abgelaufen, auch wenn die Antwort älter ist */
-		now?: string;
 		/** „Neu planen“ wurde ausgelöst und der neue Plan ist noch nicht da */
 		replanning?: boolean;
 		/** der Schalter wird gerade gesetzt */
@@ -22,7 +19,6 @@
 	let {
 		data,
 		canOperate,
-		now,
 		replanning = false,
 		switching = false,
 		onGridCharge,
@@ -30,13 +26,9 @@
 	}: Props = $props();
 
 	const plan = $derived(data.plan);
-	// `valid` stammt vom Server zur Zeit der Antwort; die Viertelstunden danach zählt `now`
-	const valid = $derived.by(() => {
-		if (!plan?.valid) return false;
-		const until = parseIso(plan.valid_until);
-		const at = now === undefined ? null : parseIso(now);
-		return until === null || at === null || at < until;
-	});
+	// ob der Plan noch gilt, sagt allein der Server (`plan.valid`, alle 60 s neu); die Uhr des Browsers
+	// würde bei einer Abweichung dauerhaft „abgelaufen“ zeigen
+	const valid = $derived(plan?.valid ?? false);
 	const running = $derived(replanning || data.status.running);
 	// Budget der akzeptierten Monatsspitze: der erste Slot mit Wert (nur mit Leistungspreis)
 	const budget = $derived(plan?.slots.find((slot) => slot.budget_kw !== null)?.budget_kw ?? null);

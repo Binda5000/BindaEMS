@@ -61,12 +61,33 @@
 		return value ? `${value.id}|${value.created_at}` : '';
 	}
 
+	/** Fragt nach einem Auslöser alle 2 s, bis der Plan wechselt (höchstens 40 s); zeigt „Plant …“ */
+	async function waitForNewPlan(before: string): Promise<void> {
+		replanning = true;
+		try {
+			if (signature(plan.data?.plan) !== before) return; // der neue Plan ist schon da
+			const deadline = Date.now() + POLL_MAX_MS;
+			while (!stopped && Date.now() < deadline) {
+				await new Promise<void>((resolve) => (timer = setTimeout(resolve, POLL_MS)));
+				if (stopped) return;
+				await plan.refresh();
+				if (plan.error === null && signature(plan.data?.plan) !== before) break;
+			}
+		} finally {
+			replanning = false;
+		}
+	}
+
 	async function setGridCharge(on: boolean): Promise<void> {
+		if (replanning) return;
 		switching = true;
 		actionError = null;
+		const before = signature(current);
 		try {
 			await api.setGridCharge(on);
 			await plan.refresh();
+			// die geänderte Einstellung löst eine Neuplanung aus: deren Plan abwarten
+			await waitForNewPlan(before);
 		} catch (error) {
 			actionError = failure(error);
 		} finally {
@@ -81,14 +102,7 @@
 		const before = signature(current);
 		try {
 			await api.replan();
-			// der Lauf dauert einige Sekunden: fragen, bis der Plan wechselt
-			const deadline = Date.now() + POLL_MAX_MS;
-			while (!stopped && Date.now() < deadline) {
-				await new Promise<void>((resolve) => (timer = setTimeout(resolve, POLL_MS)));
-				if (stopped) return;
-				await plan.refresh();
-				if (plan.error === null && signature(plan.data?.plan) !== before) break;
-			}
+			await waitForNewPlan(before);
 		} catch (error) {
 			actionError = failure(error);
 		} finally {
@@ -109,7 +123,6 @@
 		<PlanHeader
 			data={plan.data}
 			canOperate={operate}
-			now={nowIso}
 			{replanning}
 			{switching}
 			onGridCharge={setGridCharge}

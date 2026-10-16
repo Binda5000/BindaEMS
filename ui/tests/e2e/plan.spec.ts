@@ -17,6 +17,8 @@ test('operator plans again', async ({ page }) => {
 	await login(page, 'bedienen');
 	await page.goto('/zeitplan');
 	await expect(page.getByText('Plan von').first()).toBeVisible();
+	// die Gültigkeit sagt der Server, nicht die Uhr des Browsers (die Demo-Uhr steht auf dem 09.10.)
+	await expect(page.getByText('gültig bis 10:45 Uhr')).toBeVisible();
 	await expect(page.getByRole('heading', { name: 'Ablauf' })).toBeVisible();
 	await expect(page.locator('canvas').first()).toBeVisible();
 

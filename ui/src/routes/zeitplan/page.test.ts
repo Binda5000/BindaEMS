@@ -39,13 +39,39 @@ beforeEach(() => {
 	api.replan.mockResolvedValue(undefined);
 });
 
+const NEXT: PlanResponse = {
+	...WITH_WINDOWS,
+	grid_charge_allowed: true,
+	plan: { ...planWithWindows(), id: 2, created_at: '2026-10-09T08:15:00+00:00' }
+};
+
 it('lets operators switch grid charging and replan', async () => {
 	renderPage('operator');
 	await fireEvent.click(await screen.findByRole('switch', { name: 'Netzladen erlaubt' }));
 	await waitFor(() => expect(api.setGridCharge).toHaveBeenCalledWith(true));
+	// der Schalter löst eine Neuplanung aus; die Seite wartet auf den neuen Plan, bevor sie erneut plant
+	api.plan.mockResolvedValue(NEXT);
+	await screen.findByText('Plan von 10:15 Uhr', undefined, { timeout: 5_000 });
+	await waitFor(() => expect(screen.getByRole('button', { name: 'Neu planen' })).toBeEnabled());
 	await fireEvent.click(screen.getByRole('button', { name: 'Neu planen' }));
 	await waitFor(() => expect(api.replan).toHaveBeenCalled());
-});
+}, 15_000);
+
+it('waits for the follow-up plan after the switch and shows "Plant …"', async () => {
+	session.role = 'operator';
+	// Ladung beim Öffnen, Ladung nach dem Schalter: noch der alte Plan, erst danach der neue
+	api.plan
+		.mockResolvedValueOnce(WITH_WINDOWS)
+		.mockResolvedValueOnce(WITH_WINDOWS)
+		.mockResolvedValue(NEXT);
+	render(Page);
+	await fireEvent.click(await screen.findByRole('switch', { name: 'Netzladen erlaubt' }));
+	expect(await screen.findByRole('button', { name: 'Plant …' })).toBeDisabled();
+	await screen.findByText('Plan von 10:15 Uhr', undefined, { timeout: 5_000 });
+	await waitFor(() => expect(screen.getByRole('button', { name: 'Neu planen' })).toBeEnabled());
+	expect(api.replan).not.toHaveBeenCalled();
+	expect(screen.getByRole('switch', { name: 'Netzladen erlaubt' })).toBeChecked();
+}, 15_000);
 
 it('shows the plan with blocks to viewers, without controls', async () => {
 	renderPage('viewer');
