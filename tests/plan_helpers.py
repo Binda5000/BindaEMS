@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from datetime import date, datetime
 from typing import Any
 
+from bindaems.app.core_link import LiveState
 from bindaems.app.planning.battery_model import (
     SLOT_H,
     SimStep,
@@ -346,3 +347,22 @@ def sample_inputs() -> PlanInputs:
         previous=previous_plan(battery_w=-800.0, slots=4),
         settings_version=7,
     )
+
+
+def live_signals(live: LiveState, values: Mapping[str, float]) -> None:
+    """Verbindet ``live`` mit dem core und setzt diese Signale (Qualität ``ok``); vorhandene
+    Signale bleiben."""
+    live.connected = True
+    state = live.state or {}
+    signals = dict(state.get("signals") or {})
+    signals.update({name: {"v": value, "ts": "…", "q": "ok"} for name, value in values.items()})
+    live.state = {**state, "signals": signals}
+
+
+def returns(result: OptimizerResult) -> Callable[[PlanInputs], Awaitable[OptimizerResult]]:
+    """Solver, der unabhängig von den Eingangsdaten ``result`` liefert."""
+
+    async def solver(inputs: PlanInputs) -> OptimizerResult:
+        return result
+
+    return solver
