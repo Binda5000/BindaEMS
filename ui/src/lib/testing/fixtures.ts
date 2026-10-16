@@ -1,5 +1,7 @@
 // Testdaten aus den Vertragsdateien (nur für Tests), jedes Mal frisch durch das Schema geprüft
 import * as v from 'valibot';
+import decisionsLatestJson from '$lib/api/contract/decisions-latest.json';
+import decisionsJson from '$lib/api/contract/decisions.json';
 import ledgerDaysJson from '$lib/api/contract/ledger-days.json';
 import limitsJson from '$lib/api/contract/limits.json';
 import settingsJson from '$lib/api/contract/settings.json';
@@ -7,6 +9,8 @@ import stateJson from '$lib/api/contract/state.json';
 import systemJson from '$lib/api/contract/system.json';
 import {
 	DaySummarySchema,
+	DecisionsResponseSchema,
+	LatestDecisionsResponseSchema,
 	LimitsSchema,
 	ReadingSchema,
 	SettingsCurrentSchema,
@@ -15,6 +19,8 @@ import {
 	type CoreState,
 	type DaySummary,
 	type Derived,
+	type DecisionsResponse,
+	type LatestDecisionsResponse,
 	type Limits,
 	type Reading,
 	type SettingsCurrent,
@@ -55,4 +61,14 @@ export function daySummary(overrides: Partial<DaySummary> = {}): DaySummary {
 
 export function settingsCurrent(): SettingsCurrent {
 	return v.parse(SettingsCurrentSchema, settingsJson);
+}
+
+/** Entscheidungen der Demo-Welt (neueste zuerst, mit `cursor`) */
+export function decisions(): DecisionsResponse {
+	return v.parse(DecisionsResponseSchema, decisionsJson);
+}
+
+/** Je Aktor die jüngste Entscheidung der letzten 24 h */
+export function latestDecisions(): LatestDecisionsResponse {
+	return v.parse(LatestDecisionsResponseSchema, decisionsLatestJson);
 }

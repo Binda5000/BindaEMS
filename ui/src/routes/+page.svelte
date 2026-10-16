@@ -11,6 +11,7 @@
 	import { flowBranches, flowConsumers, wallboxLabels } from '$lib/dashboard/flow';
 	import Notices from '$lib/dashboard/Notices.svelte';
 	import { noticesFrom } from '$lib/dashboard/notices';
+	import WhyCard from '$lib/decisions/WhyCard.svelte';
 	import PriceNow from '$lib/dashboard/PriceNow.svelte';
 	import { forecastForChart } from '$lib/dashboard/prices';
 	import SocList from '$lib/dashboard/SocList.svelte';
@@ -23,13 +24,16 @@
 	const consumers = new Resource((o) => api.consumers(o), { intervalMs: 15_000 });
 	const limits = new Resource((o) => api.limits(o), { retryMs: 30_000 });
 	const pricesNow = new Resource((o) => api.pricesNow(o), { intervalMs: 60_000 });
+	const decisions = new Resource((o) => api.latestDecisions(o), { intervalMs: 30_000 });
 	const prices = new Resource((o) => api.prices(null, o), { intervalMs: 300_000 });
 	const forecast = new Resource((o) => api.forecast(o), { intervalMs: 300_000 });
 
 	let nowIso = $state(new Date().toISOString()); // „jetzt“ im Diagramm, jede Minute weiter
 
 	onMount(() => {
-		const stops = [system, consumers, limits, pricesNow, prices, forecast].map((r) => r.start());
+		const stops = [system, consumers, limits, pricesNow, prices, forecast, decisions].map((r) =>
+			r.start()
+		);
 		const clock = setInterval(() => (nowIso = new Date().toISOString()), 60_000);
 		return () => {
 			stops.forEach((stop) => stop());
@@ -41,6 +45,9 @@
 	const flowItems = $derived(flowConsumers(consumers.data?.tree));
 	const socs = $derived(socEntries(live.state, limits.data));
 	const notices = $derived(noticesFrom(system.data));
+	const actuatorNames = $derived(
+		Object.fromEntries((system.data?.core.health?.actuators ?? []).map((a) => [a.id, a.label]))
+	);
 
 	// Farben neu lesen, wenn hell/dunkel wechselt
 	const palette = $derived.by(() => {
@@ -88,6 +95,12 @@
 	<Card title="Verbraucher">
 		<ConsumerSummary tree={consumers.data?.tree} error={consumers.error} />
 	</Card>
+	<WhyCard
+		decisions={decisions.data?.decisions}
+		error={decisions.error}
+		names={actuatorNames}
+		nowMs={Date.parse(nowIso)}
+	/>
 </div>
 
 <style>
