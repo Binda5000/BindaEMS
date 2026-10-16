@@ -78,13 +78,18 @@ def _number(value: Any) -> float | None:
     return float(value) if math.isfinite(value) else None
 
 
-def _points(item: Series, scale: float) -> list[Point]:
+def _points(item: Series, scale: float, unit_column: bool = False) -> list[Point]:
+    """Punkte der Spalte ``w``; mit ``unit_column`` bestimmt die Einheit in Spalte ``u``
+    (``W`` oder ``kW``) den Faktor je Zeile, ohne sie gilt ``scale``."""
     column = item.columns.index("w") if "w" in item.columns else 1
+    unit = item.columns.index("u") if unit_column and "u" in item.columns else None
     points: list[Point] = []
     for row in item.values:
         value = _number(row[column]) if column < len(row) else None
         if value is not None and isinstance(row[0], int):
-            points.append((row[0], value * scale))
+            recorded = row[unit] if unit is not None and unit < len(row) else None
+            factor = _SCALE.get(recorded, scale) if isinstance(recorded, str) else scale
+            points.append((row[0], value * factor))
     return points
 
 
@@ -219,17 +224,20 @@ class EnergyCache:
             return dict.fromkeys(refs, (None, UNREADABLE))
         result: dict[Key, tuple[float | None, str | None]] = {}
         for key, ref in refs.items():
-            points = _ha_points(today, ref)
+            points = ha_points(today, ref)
             # der letzte Wert vor Mitternacht gilt ab Mitternacht
-            seeds = sorted(_ha_points(earlier, ref))
+            seeds = sorted(ha_points(earlier, ref))
             if seeds:
                 points.append((window.start_ms, seeds[-1][1]))
             result[key] = self._kwh(points, window, None)
         return result
 
 
-def _ha_points(series: Sequence[Series], ref: HaRef) -> list[Point]:
-    """Punkte einer Entität aus beiden Schemata (Messung je Einheit oder je Entität)."""
+def ha_points(series: Sequence[Series], ref: HaRef) -> list[Point]:
+    """Punkte einer Entität aus beiden Schemata (Messung je Einheit oder je Entität).
+
+    Bei der Messung je Entität gilt die Einheit aus Spalte ``u``, falls die Abfrage sie liefert,
+    sonst die von ``ref``."""
     points: list[Point] = []
     for item in series:
         if (item.tags.get("domain"), item.tags.get("entity_id")) != (ref.domain, ref.object_id):
@@ -237,6 +245,9 @@ def _ha_points(series: Sequence[Series], ref: HaRef) -> list[Point]:
         scale = _SCALE.get(item.name)
         if scale is None and item.name == f"{ref.domain}.{ref.object_id}":
             scale = _SCALE[ref.unit]
+            per_entity = True
+        else:
+            per_entity = False
         if scale is not None:
-            points.extend(_points(item, scale))
+            points.extend(_points(item, scale, per_entity))
     return points

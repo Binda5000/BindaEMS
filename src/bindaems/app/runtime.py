@@ -37,6 +37,7 @@ from bindaems.app.control.routes import control_router
 from bindaems.app.core_link import CoreClient, LiveFeed, LiveState
 from bindaems.app.db.engine import DB_FILENAME, migrate, open_database
 from bindaems.app.forecast.archive import ForecastArchive
+from bindaems.app.forecast.load import LoadForecastService
 from bindaems.app.forecast.routes import forecast_router
 from bindaems.app.forecast.service import ForecastService
 from bindaems.app.ha.commands import HaCommandHandler, LogRejections
@@ -157,6 +158,9 @@ class AppRuntime:
         self.ledger = LedgerService(
             self.engine, self._clock, self.prices, self.settings, self.audit, self._sink
         )
+        self.load_forecast = LoadForecastService(
+            self.ledger, cfg, self.reader, self.forecast_archive, self._clock, self._sink
+        )
         core_client = CoreClient(cfg.app.core_url, secrets.internal_token, self._core_http)
         self.decisions = DecisionStore(self.engine, self._clock)
         self.collector = DecisionCollector(self.decisions, core_client, self._sink, self._clock)
@@ -210,6 +214,7 @@ class AppRuntime:
             self.live_feed.component_status,
             self.pipeline.component_status,
             self.forecast.component_status,
+            self.load_forecast.component_status,
             self.ledger.component_status,
             self._influx_status,
         ]
@@ -233,7 +238,7 @@ class AppRuntime:
                     self.consumers, self.live, self.ha_values, self.reader, cfg, guard, self.energy
                 ),
                 prices_router(self.prices, self.pipeline, self._clock, guard),
-                forecast_router(self.forecast, self._clock, guard),
+                forecast_router(self.forecast, self.load_forecast, self._clock, guard),
                 ledger_router(self.ledger, guard),
                 control_router(
                     self.intents,
@@ -320,6 +325,7 @@ class AppRuntime:
             ("decisions", self.collector.run),
             ("prices", self.price_scheduler.run),
             ("forecast", self.forecast.run),
+            ("load-forecast", self.load_forecast.run),
             ("influx-writer", self.influx_writer.run),
             ("ledger", self._ledger_loop),
             ("maintenance", self._maintenance_loop),

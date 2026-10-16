@@ -31,6 +31,7 @@ GET_ENDPOINTS = {
     "prices": "/api/prices",
     "prices-now": "/api/prices/now",
     "forecast": "/api/forecast/pv",
+    "forecast-load": "/api/forecast/load",
     "ledger-days": "/api/ledger/days?from=2026-10-08&to=2026-10-09",
     "users": "/api/users",
     "audit": "/api/audit",

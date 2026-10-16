@@ -602,6 +602,7 @@ async def build_world(cfg: Config, data_dir: Path, *, ui_dir: Path | None = None
         world.step_live()
         for message in _ledger_messages():
             await app.ledger.handle_stream_message(message)
+        await app.load_forecast.refresh()  # aus den vier Slots der Abrechnung
     except BaseException:
         router.stop(quiet=True)
         raise

@@ -114,6 +114,9 @@ homeassistant:
     port: 1883
     username: bindaems
   # notify_service: notify.mobile_app_handy   # zusätzlich zur Meldung in HA: Push auf das Handy
+  # load_history:         # Hauslast aus HA für Zeiten ohne vollständige Abrechnung (Lastprognose);
+  #   entity: sensor.hausverbrauch          # verlangt influxdb.ha_database
+  #   subtract: [sensor.wallbox_leistung]   # Leistungen, die nicht zur Hauslast zählen
 
 influxdb:
   url: http://influx.lan:8086

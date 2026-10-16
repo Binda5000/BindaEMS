@@ -662,6 +662,19 @@ export const ForecastSchema = v.object({
 });
 export type Forecast = v.InferOutput<typeof ForecastSchema>;
 
+export const LoadForecastSlotSchema = v.object({ start: Iso, p50_w: v.number() });
+export type LoadForecastSlot = v.InferOutput<typeof LoadForecastSlotSchema>;
+
+export const LoadForecastSchema = v.object({
+	issued_at: v.nullable(Iso),
+	slots: v.array(LoadForecastSlotSchema),
+	days: v.array(v.object({ date: DateText, kwh: NullableNumber })),
+	/** Viertelstunden des Profils: aus der Abrechnung (BindaEMS) und aus Home Assistant */
+	basis: v.object({ ledger: v.number(), ha: v.number() }),
+	status: ComponentStatusSchema
+});
+export type LoadForecast = v.InferOutput<typeof LoadForecastSchema>;
+
 export const DaySummarySchema = v.object({
 	date: DateText,
 	slots: v.number(),

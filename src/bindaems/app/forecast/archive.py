@@ -70,7 +70,7 @@ class Actual:
     house_w: float
 
 
-class _SlotSource(Protocol):
+class SlotSource(Protocol):
     def slots(self, start: datetime, end: datetime) -> list[LedgerSlot]: ...
 
 
@@ -83,7 +83,7 @@ def actual_from_ledger(slot: LedgerSlot) -> Actual | None:
     return Actual(pv_w=pv_wh * _WH_TO_W, house_w=house_wh * _WH_TO_W)
 
 
-def actuals(ledger: _SlotSource, start: datetime, end: datetime) -> dict[datetime, Actual]:
+def actuals(ledger: SlotSource, start: datetime, end: datetime) -> dict[datetime, Actual]:
     """Ist-Werte der vollständigen Abrechnungs-Slots in ``[start, end)``."""
     result: dict[datetime, Actual] = {}
     for slot in ledger.slots(start, end):

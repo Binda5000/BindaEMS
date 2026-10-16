@@ -608,3 +608,43 @@ def test_notify_service_pattern(tmp_path: Path) -> None:
         with pytest.raises(ConfigError, match="notify_service"):
             load_config(p)
     assert load_config(write_cfg(tmp_path, lambda d: None)).homeassistant.notify_service is None
+
+
+def test_load_history_is_optional_and_checked(tmp_path: Path) -> None:
+    assert load_config(write_cfg(tmp_path, lambda d: None)).homeassistant.load_history is None
+    p = write_cfg(
+        tmp_path,
+        lambda d: d["homeassistant"].update(
+            load_history={"entity": "sensor.hausverbrauch", "subtract": ["sensor.wallbox_leistung"]}
+        ),
+    )
+    history = load_config(p).homeassistant.load_history
+    assert history.entity == "sensor.hausverbrauch" and history.subtract == [
+        "sensor.wallbox_leistung"
+    ]
+    for wrong in ("light.kueche", "sensor.", "sensor.Haus"):
+        p = write_cfg(
+            tmp_path,
+            lambda d, wrong=wrong: d["homeassistant"].update(load_history={"entity": wrong}),
+        )
+        with pytest.raises(ConfigError, match=r"load_history\.entity"):
+            load_config(p)
+    p = write_cfg(
+        tmp_path,
+        lambda d: d["homeassistant"].update(
+            load_history={"entity": "sensor.haus", "subtract": ["switch.x"]}
+        ),
+    )
+    with pytest.raises(ConfigError, match=r"load_history\.subtract"):
+        load_config(p)
+
+
+def test_load_history_needs_ha_database(tmp_path: Path) -> None:
+    def mutate(d: dict[str, Any]) -> None:
+        d["homeassistant"]["load_history"] = {"entity": "sensor.hausverbrauch"}
+        d["influxdb"].pop("ha_database")
+
+    with pytest.raises(
+        ConfigError, match=r"homeassistant\.load_history verlangt influxdb\.ha_database"
+    ):
+        load_config(write_cfg(tmp_path, mutate))

@@ -115,6 +115,8 @@ export const api = {
 	refreshPrices: (): Promise<s.PriceStatus> =>
 		request('POST', '/api/prices/refresh', { schema: s.PriceStatusSchema }),
 	forecast: (o?: Load): Promise<s.Forecast> => get('/api/forecast/pv', s.ForecastSchema, o),
+	loadForecast: (o?: Load): Promise<s.LoadForecast> =>
+		get('/api/forecast/load', s.LoadForecastSchema, o),
 	ledgerDays: (first: string, last: string, o?: Load): Promise<s.DaySummary[]> =>
 		get(withQuery('/api/ledger/days', { from: first, to: last }), v.array(s.DaySummarySchema), o),
 	reprice: (first: string, last: string): Promise<{ repriced: number }> =>

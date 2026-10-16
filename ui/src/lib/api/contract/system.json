@@ -248,6 +248,13 @@
       "details": {}
     },
     {
+      "name": "load-forecast",
+      "ok": true,
+      "message": "Lastprognose von 10:00 Uhr",
+      "since": null,
+      "details": {}
+    },
+    {
       "name": "ledger",
       "ok": true,
       "message": "letzte Viertelstunde 09:45",

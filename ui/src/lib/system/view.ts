@@ -13,6 +13,7 @@ const COMPONENTS: Record<string, string> = {
 	core: 'core',
 	prices: 'Preise',
 	forecast: 'PV-Prognose',
+	'load-forecast': 'Lastprognose',
 	ledger: 'Abrechnung',
 	influx: 'InfluxDB',
 	ha: 'Home Assistant'

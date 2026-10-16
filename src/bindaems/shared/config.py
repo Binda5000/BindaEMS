@@ -311,11 +311,22 @@ class HaMqttConfig(_Model):
     publish_interval_s: Annotated[float, Field(gt=0)] = 10.0
 
 
+HaSensor = Annotated[str, Field(pattern=r"^sensor\.[a-z0-9_]+$")]
+
+
+class LoadHistoryConfig(_Model):
+    """Hauslast aus der HA-Datenbank für Zeiten ohne vollständige Abrechnung (Lastprognose)."""
+
+    entity: HaSensor  # Leistung des Hauses in W oder kW
+    subtract: list[HaSensor] = Field(default_factory=list)  # Leistungen, die nicht zählen
+
+
 class HomeAssistantConfig(_Model):
     url: Annotated[str, Field(pattern=r"^https?://")]
     entities: dict[str, str] = Field(default_factory=dict)
     mqtt: HaMqttConfig | None = None
     notify_service: Annotated[str | None, Field(pattern=r"^notify\.[a-z0-9_]+$")] = None
+    load_history: LoadHistoryConfig | None = None
 
 
 class InfluxConfig(_Model):
@@ -488,6 +499,12 @@ class Config(_Model):
                 raise ValueError(
                     f"vehicles.{key}.home_entity verlangt einen homeassistant-Abschnitt"
                 )
+        if (
+            self.homeassistant is not None
+            and self.homeassistant.load_history is not None
+            and self.influxdb.ha_database is None
+        ):
+            raise ValueError("homeassistant.load_history verlangt influxdb.ha_database")
         if self.wallbox_priority is not None and sorted(self.wallbox_priority) != sorted(
             self.wallboxes
         ):

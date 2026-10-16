@@ -10,7 +10,6 @@ import asyncio
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
-from typing import Protocol
 
 import httpx
 import structlog
@@ -21,6 +20,7 @@ from bindaems.app.forecast.archive import (
     Clearness,
     ForecastArchive,
     RecordValue,
+    SlotSource,
     actuals,
     horizon_class,
 )
@@ -40,7 +40,6 @@ from bindaems.app.forecast.calibration import (
 from bindaems.app.forecast.openmeteo import SOURCE, ForecastParseError, fetch_plane, parse_plane
 from bindaems.app.forecast.pv_model import combine, plane_power_w
 from bindaems.app.history.influx import RP_LONG
-from bindaems.app.ledger.service import LedgerSlot
 from bindaems.app.schedule import next_local
 from bindaems.app.settings.service import SettingsService
 from bindaems.app.status import ComponentStatus
@@ -54,10 +53,6 @@ FETCH_MINUTE = 7
 RETRY_S = 600.0
 SLOT_HOURS = 0.25
 CALIBRATION_WINDOW = timedelta(days=30)
-
-
-class _SlotSource(Protocol):
-    def slots(self, start: datetime, end: datetime) -> list[LedgerSlot]: ...
 
 
 @dataclass(frozen=True)
@@ -157,7 +152,7 @@ class ForecastService:
         await self._archive_forecast(forecast)
         return forecast
 
-    def recalibrate(self, ledger: _SlotSource) -> None:
+    def recalibrate(self, ledger: SlotSource) -> None:
         """Faktoren und Bänder aus Archiv und Abrechnung der letzten 30 Tage neu bestimmen.
 
         Synchron (Datenbankarbeit; der Aufrufer nimmt ``asyncio.to_thread``). Erst wenn alles
