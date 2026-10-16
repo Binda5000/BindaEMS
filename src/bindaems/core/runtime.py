@@ -642,6 +642,7 @@ class CoreRuntime:
                 armed=self._watchdog_armed,
             ),
             inputs={"ok": self._input_status.ok, "problems": list(self._input_status.problems)},
+            intent_version=regulation["intent_version"],
             vehicles=regulation["vehicles"],
             battery=regulation["battery"],
             peak=regulation["peak"],

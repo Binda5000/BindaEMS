@@ -331,6 +331,17 @@ class ChargeController:
         self._now = self._wall_now = started
         # die Befehle der letzten Stunde im letzten ``step``
         self._commands_hour: Mapping[str, int] = {}
+        # die Version der Absicht im letzten ``step``; ``None`` ohne Absicht und nach ``idle``
+        self._intent_version: int | None = None
+
+    @property
+    def intent_version(self) -> int | None:
+        """Die Version der Absicht, mit der der letzte ``step`` regelte (Plan 2d).
+
+        ``None`` ohne Absicht, vor dem ersten ``step`` und nach ``idle``: Dann ist der Stand der
+        Regelung unbekannt.
+        """
+        return self._intent_version
 
     def step(self, inputs: ChargeInputs, peak: PeakLimits = NO_LIMITS) -> list[ChargeCommand]:
         """Ein Regelzyklus; die Befehle kommen in der Reihenfolge der Priorität.
@@ -345,6 +356,7 @@ class ChargeController:
         now, intent = inputs.now, inputs.intent
         self._now, self._wall_now = now, inputs.wall_now
         self._commands_hour = dict(inputs.commands_hour)
+        self._intent_version = None if intent is None else intent.version
         self._stepped = True
         state = self._assignment.update(
             now,
@@ -516,6 +528,7 @@ class ChargeController:
         self._cars = ()
         self._vehicle_wallbox = {}
         self._commands_hour = {}
+        self._intent_version = None
 
     def forget(self, actuators: Collection[str]) -> None:
         """Vergisst die letzten eigenen Werte und die Merker ``not_taken_retry`` dieser Aktoren.
@@ -558,9 +571,12 @@ class ChargeController:
         des Phasenwächters, nur für einen geregelten Ladepunkt), ``plugged``, ``charging``,
         ``wakes_today`` (Weckstarts am Kalendertag des letzten ``step``, Wiener Zeit),
         ``commands_hour`` (die Befehle der letzten Stunde, nur für ein Fahrzeug mit Tessie, sonst
-        ``None``) und ``reason``, der letzte Grund des letzten Befehls für das Fahrzeug. Ohne
-        ``step`` seit dem Start oder seit ``idle`` ist alles außer ``id``, ``name``,
-        ``wakes_today`` und ``reason`` unbekannt (``None``).
+        ``None``), ``boost_pending`` und ``override_pending`` (Boost bzw. Übersteuerung der Absicht
+        gelten noch, warten aber auf einen Ansteckvorgang, der noch nicht begonnen hat; die Felder
+        ``boost_until`` und ``assignment`` zeigen nur, was aktiv ist) und ``reason``, der
+        letzte Grund des letzten Befehls für das Fahrzeug. Ohne ``step`` seit dem Start oder seit
+        ``idle`` ist alles außer ``id``, ``name``, ``wakes_today`` und ``reason`` unbekannt
+        (``None``); ``boost_pending`` und ``override_pending`` sind dann falsch.
         """
         entries: list[dict[str, Any]] = []
         for key, vehicle in self._cfg.vehicles.items():
@@ -580,6 +596,8 @@ class ChargeController:
                     "charging": None if state is None else state.charging,
                     "wakes_today": self._tesla[key].wakes_today(self._wall_now),
                     "commands_hour": self._commands_hour.get(vehicle_actuator(key)),
+                    "boost_pending": state is not None and state.boost_pending,
+                    "override_pending": state is not None and state.override_pending,
                     "reason": self._reasons.get(key),
                 }
             )

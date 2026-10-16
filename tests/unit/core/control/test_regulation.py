@@ -661,4 +661,4 @@ def test_health_shows_the_guard(cfg) -> None:  # Präzisierung 16
 
 def test_health_has_the_wallboxes(cfg) -> None:  # Plan 2c-2b, Präzisierung 11
     health = Regulation(cfg, HardLimits.from_config(cfg), started=T0).health()
-    assert list(health) == ["vehicles", "battery", "peak", "wallboxes"]
+    assert list(health) == ["intent_version", "vehicles", "battery", "peak", "wallboxes"]

@@ -38,6 +38,9 @@ class HealthReport(BaseModel):
     - ``mode``, ``mode_since``, ``mode_reasons``: Betriebszustand, ISO-Zeit des letzten Wechsels
       und die Gründe des Zustands
     - ``intent``: die gültige Absicht als JSON
+    - ``intent_version``: die Version der Absicht, mit der der letzte Regelzyklus regelte; ``null``
+      ohne Absicht und solange die Regelung ruht (Plan 2d). Die app vertraut dem Stand der Regelung
+      in ``vehicles`` nur, wenn diese Version nicht älter ist als die gültige Absicht.
     - ``actuators``: je Aktor in Katalogreihenfolge angeforderte und wirksame Betriebsart, Freigabe,
       Gründe und Sperrgründe (``locked``); dazu, ob er steuerbar ist (``controllable``), die Gründe,
       warum nicht (``capability_reasons``), die Arten mit offenem Schreibvorgang (``pending``) und
@@ -48,7 +51,9 @@ class HealthReport(BaseModel):
     - ``inputs``: Ergebnis der Eingangsprüfung (Regel 7)
     - ``vehicles``: je Fahrzeug in der Reihenfolge von ``config.yaml`` der Stand der Laderegelung
       (``ChargeController.health``): Modus mit Boost bis, Wallbox und Zuordnung, Grenze des
-      Phasenwächters, angesteckt, lädt, Weckvorgänge heute und der letzte Grund (Plan 2c-1)
+      Phasenwächters, angesteckt, lädt, Weckvorgänge heute und der letzte Grund (Plan 2c-1); dazu
+      ``boost_pending`` und ``override_pending`` für Boost und Übersteuerung, die auf ihren
+      Ansteckvorgang warten (Plan 2d)
     - ``battery``: der Stand des Akku-Sollwerts (``BatteryController.health``, Plan 2c-2a):
       ``state`` (``ok``, ``unknown``, ``locked``, ``idle``), ``target_w`` (gewollter Netzbezug
       nach dem 15-min-Wächter), ``override_w`` (der letzte eigene Override), ``support`` (``on``,
@@ -79,6 +84,7 @@ class HealthReport(BaseModel):
     mode_since: str | None = None
     mode_reasons: list[str] = Field(default_factory=list)
     intent: dict[str, Any] | None = None
+    intent_version: int | None = None
     actuators: list[dict[str, Any]] = Field(default_factory=list)
     watchdog: dict[str, Any] = Field(
         default_factory=lambda: watchdog_to_json(WatchdogStatus.unknown(), "off", required=False)

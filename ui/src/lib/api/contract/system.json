@@ -72,6 +72,7 @@
         "Regelbetrieb ist aus."
       ],
       "intent": null,
+      "intent_version": null,
       "actuators": [
         {
           "id": "victron",
@@ -149,6 +150,8 @@
           "charging": null,
           "wakes_today": 0,
           "commands_hour": null,
+          "boost_pending": false,
+          "override_pending": false,
           "reason": null
         },
         {
@@ -163,6 +166,8 @@
           "charging": null,
           "wakes_today": 0,
           "commands_hour": null,
+          "boost_pending": false,
+          "override_pending": false,
           "reason": null
         }
       ],

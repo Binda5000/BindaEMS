@@ -99,6 +99,11 @@ class VehicleState:
     - ``fresh``: neu erkannt (Plan 2c-2b, Präzisierung 5): Das Auto ist an seiner Wallbox erkannt,
       und im vorigen Aufruf stand dort ein anderes Auto oder keins. Wird ein angenommenes Auto
       bestätigt, ist es nicht neu erkannt.
+    - ``boost_pending``, ``override_pending``: Boost bzw. Übersteuerung der Absicht gelten noch,
+      sind aber an einen Ansteckvorgang gebunden, der noch nicht begonnen hat (``_bind`` auf den
+      nächsten Vorgang). Sie sind nicht aktiv: ``boost_until`` bleibt ``None``, und die
+      Übersteuerung wirkt nicht. Endet der Vorgang, an den sie gebunden waren, sind sie weder aktiv
+      noch wartend.
     """
 
     wallbox: str | None
@@ -109,6 +114,8 @@ class VehicleState:
     new_session: bool
     boost_until: datetime | None
     fresh: bool = False
+    boost_pending: bool = False
+    override_pending: bool = False
 
 
 @dataclass(frozen=True)
@@ -353,6 +360,11 @@ class Assignment:
         binding = self._bindings.get(key)
         return binding is not None and self._runs(binding)
 
+    def _waiting(self, key: str) -> bool:
+        """Ob die Bindung des Fahrzeugs auf einen Vorgang wartet, der noch nicht begonnen hat."""
+        binding = self._bindings.get(key)
+        return binding is not None and binding.session > self._ports[binding.wallbox].count
+
     def _runs(self, binding: _Binding) -> bool:
         """Ob der Vorgang ``binding`` an seiner Wallbox noch läuft."""
         port = self._ports[binding.wallbox]
@@ -508,8 +520,26 @@ class Assignment:
         der Eintrag des Fahrzeugs in der Absicht; ``None`` für einen Gast.
         """
         wallbox_key, kind = place
+        waiting = self._waiting(key)
+        boost_pending = (
+            waiting
+            and entry is not None
+            and entry.boost_until is not None
+            and wall_now < entry.boost_until
+        )
+        override_pending = waiting and self._override_wallbox(entry) is not None
         if wallbox_key is None:
-            return VehicleState(None, kind, None, None, False, False, None)
+            return VehicleState(
+                None,
+                kind,
+                None,
+                None,
+                False,
+                False,
+                None,
+                boost_pending=boost_pending,
+                override_pending=override_pending,
+            )
         wallbox = wallboxes[wallbox_key]
         return VehicleState(
             wallbox=wallbox_key,
@@ -520,6 +550,8 @@ class Assignment:
             new_session=self._ports[wallbox_key].new,
             boost_until=self._boost_until(key, entry, wall_now),
             fresh=fresh,
+            boost_pending=boost_pending,
+            override_pending=override_pending,
         )
 
     def _boost_until(

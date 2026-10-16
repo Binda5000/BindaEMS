@@ -115,6 +115,7 @@ def test_health_report_defaults_keep_existing_calls_valid() -> None:
         "mode_since": None,
         "mode_reasons": [],
         "intent": None,
+        "intent_version": None,
         "actuators": [],
         "watchdog": {
             "state": "unknown",

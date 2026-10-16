@@ -437,8 +437,43 @@ def test_health_per_vehicle(cfg) -> None:
         "charging": False,
         "wakes_today": 0,
         "commands_hour": None,
+        "boost_pending": False,
+        "override_pending": False,
         "reason": "mode_pv",
     }
+
+
+def test_intent_version_is_the_one_of_the_last_step_and_unknown_after_idle(cfg) -> None:
+    c = controller(cfg)
+    assert c.intent_version is None
+    intent = Intent(version=42, control=True)
+    c.step(inputs(cfg, intent=intent))
+    assert c.intent_version == 42
+    c.step(inputs(cfg, s=1, intent=Intent(version=43, control=True)))
+    assert c.intent_version == 43
+    c.idle(T0 + timedelta(seconds=3))
+    assert c.intent_version is None
+
+
+def test_health_shows_a_boost_waiting_for_the_plug_as_pending(cfg) -> None:
+    until = T0 + timedelta(hours=2)
+    intent = Intent(version=1, control=True, vehicles={"egolf": VehicleIntent(boost_until=until)})
+    c = controller(cfg)
+    c.step(inputs(cfg, intent=intent, evcs_obs=evcs(connected=False)))
+    egolf = c.health()[1]
+    assert (egolf["boost_until"], egolf["boost_pending"], egolf["override_pending"]) == (
+        None,
+        True,
+        False,
+    )
+    c.step(inputs(cfg, s=1, intent=intent))
+    egolf = c.health()[1]
+    assert egolf["boost_until"] == until.isoformat()
+    assert (egolf["boost_pending"], egolf["override_pending"]) == (False, False)
+    c.step(inputs(cfg, s=2, intent=intent, evcs_obs=evcs(connected=False)))
+    c.step(inputs(cfg, s=3, intent=intent, evcs_obs=evcs(connected=False)))
+    egolf = c.health()[1]
+    assert (egolf["boost_until"], egolf["boost_pending"]) == (None, False)
 
 
 # Weitere Fälle: Festlegungen der Aufgabe
@@ -926,6 +961,8 @@ def test_health_before_the_first_step_and_after_a_pause(cfg) -> None:
         "charging": None,
         "wakes_today": 0,
         "commands_hour": None,
+        "boost_pending": False,
+        "override_pending": False,
     }
     assert c.health() == [
         {"id": "tesla", "name": "Tesla Model 3", **unknown, "reason": None},

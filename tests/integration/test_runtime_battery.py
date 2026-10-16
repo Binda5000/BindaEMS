@@ -151,6 +151,17 @@ async def test_dess_lock_sends_nothing(runtime_env) -> None:  # Review Focus 2
     assert rt.health().battery["state"] == "ok"
 
 
+async def test_health_names_the_intent_version_of_the_last_regulation_step(runtime_env) -> None:
+    rt, clock = dry_run(runtime_env, dict(EGOLF_CHARGING))
+    assert rt.health().intent_version is None  # noch kein Regelzyklus
+    run(rt, clock, 31)
+    assert rt.health().intent_version == 1
+    rt.submit_intent(Intent(version=2, control=True, vehicles=EGOLF_NOW))
+    assert rt.health().intent_version == 1  # die Regelung hat die neue Absicht noch nicht gesehen
+    run(rt, clock, 2)
+    assert rt.health().intent_version == 2
+
+
 async def test_live_override_is_refreshed_without_a_decision(runtime_env) -> None:
     plant = Plant(watchdog_state=1)  # scharf für diesen core, sobald er sein Echo zeigt
     rt, clock = live_victron(runtime_env, plant, dict(EGOLF_CHARGING))

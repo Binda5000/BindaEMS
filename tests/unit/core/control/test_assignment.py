@@ -86,6 +86,36 @@ def test_boost_set_before_plugging_in_applies_to_the_next_session(cfg) -> None:
     assert update(a, 1, intent=intent).vehicles["egolf"].boost_until is not None
 
 
+def test_boost_waiting_for_a_session_is_pending_until_it_runs_and_ends(cfg) -> None:
+    a = Assignment(cfg, started=T0)
+    until = T0 + timedelta(hours=2)
+    intent = boosted(1, until)
+    away = evcs(connected=False)
+    waiting = update(a, 0, evcs_obs=away, intent=intent).vehicles["egolf"]
+    assert (waiting.boost_until, waiting.boost_pending) == (None, True)
+    running = update(a, 1, intent=intent).vehicles["egolf"]  # der Vorgang beginnt
+    assert (running.boost_until, running.boost_pending) == (until, False)
+    update(a, 2, evcs_obs=away, intent=intent)  # der Vorgang endet
+    ended = update(a, 3, evcs_obs=away, intent=intent).vehicles["egolf"]
+    assert (ended.boost_until, ended.boost_pending) == (None, False)
+
+
+def test_override_waiting_for_a_session_is_pending_until_it_runs(cfg) -> None:
+    a = Assignment(cfg, started=T0)
+    intent = Intent(version=1, control=True, vehicles={"tesla": VehicleIntent(wallbox="evcs")})
+    waiting = update(a, 0, evcs_obs=evcs(connected=False), intent=intent).vehicles
+    assert waiting["tesla"].override_pending is True
+    assert (waiting["tesla"].boost_pending, waiting["egolf"].override_pending) == (False, False)
+    assert update(a, 1, intent=intent).vehicles["tesla"].override_pending is False
+
+
+def test_an_expired_boost_is_not_pending(cfg) -> None:
+    a = Assignment(cfg, started=T0)
+    intent = boosted(1, T0 - timedelta(hours=1))
+    state = update(a, 0, evcs_obs=evcs(connected=False), intent=intent)
+    assert state.vehicles["egolf"].boost_pending is False
+
+
 def test_restored_intent_binds_only_a_plugged_car(cfg) -> None:
     a = Assignment(cfg, started=T0)
     intent = boosted(1, T0 + timedelta(hours=2))

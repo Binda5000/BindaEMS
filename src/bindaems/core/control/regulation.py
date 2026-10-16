@@ -197,10 +197,12 @@ class Regulation:
         return frozenset(car.wallbox for car in self.charger.cars() if car.mode is Effective.BOOST)
 
     def health(self) -> dict[str, Any]:
-        """Der Stand des letzten Zyklus: ``vehicles`` je Fahrzeug (``ChargeController.health``),
+        """Der Stand des letzten Zyklus: ``intent_version`` (die Version der Absicht des letzten
+        ``step``, sonst ``None``), ``vehicles`` je Fahrzeug (``ChargeController.health``),
         ``battery`` (``BatteryController.health``), ``peak`` (``PeakGuard.health``) und
         ``wallboxes`` je Wallbox (``ChargeController.wallbox_health``, Plan 2c-2b)."""
         return {
+            "intent_version": self.charger.intent_version,
             "vehicles": self.charger.health(),
             "battery": self.battery.health(),
             "peak": self.peak_guard.health(),
