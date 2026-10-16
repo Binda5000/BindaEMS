@@ -1,6 +1,6 @@
 import { expect, it } from 'vitest';
 import type { AuditEntry } from '$lib/api/schemas';
-import { auditRows, detailLines } from './view';
+import { actionLabel, auditRows, detailLines } from './view';
 
 const entry = (
 	action: string,
@@ -43,4 +43,28 @@ it('filtert nach Bereich und beschriftet Aktionen', () => {
 	expect(rows.map((row) => [row.action, row.target, row.who, row.when])).toEqual([
 		['Verbraucher gelöscht', 'Küche', 'admin (UI)', '09.10.2026, 10:00']
 	]);
+});
+
+it('beschriftet die Bedienung und die Quittierung', () => {
+	const labels = [
+		'intent.control',
+		'intent.mode',
+		'intent.boost',
+		'intent.assignment',
+		'intent.guest_mode',
+		'intent.priority',
+		'intent.actuators',
+		'lock.acknowledge'
+	].map(actionLabel);
+	expect(labels).toEqual([
+		'Regelbetrieb geändert',
+		'Lademodus geändert',
+		'Boost geändert',
+		'Zuordnung geändert',
+		'Gast-Lademodus geändert',
+		'Vorrang geändert',
+		'Betriebsart der Aktoren geändert',
+		'Sperre quittiert'
+	]);
+	expect(actionLabel('unbekannt.aktion')).toBe('unbekannt.aktion');
 });

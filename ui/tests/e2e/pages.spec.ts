@@ -8,6 +8,7 @@ const PAGES = [
 	'/laden',
 	'/system',
 	'/entscheidungen',
+	'/entscheidungen?range=2026-10-09', // Tag der Demo-Uhr: die Tabelle ist gefüllt
 	'/einstellungen',
 	'/benutzer',
 	'/protokoll',

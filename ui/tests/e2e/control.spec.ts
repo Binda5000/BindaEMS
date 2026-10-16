@@ -18,11 +18,11 @@ function modeSelect(page: Page) {
 async function setMode(page: Page, label: string): Promise<void> {
 	await page.goto('/laden');
 	await expect(modeSelect(page)).toBeEnabled();
-	const reply = page.waitForResponse(
-		(response) => response.url().endsWith('/api/control/vehicles/tesla/mode') && response.ok()
+	const reply = page.waitForResponse((response) =>
+		response.url().endsWith('/api/control/vehicles/tesla/mode')
 	);
 	await modeSelect(page).selectOption({ label });
-	await reply;
+	expect((await reply).status()).toBe(200);
 }
 
 test('Bedienen stellt den Tesla auf Sofort', async ({ page, browser }) => {
@@ -46,7 +46,7 @@ test('Bedienen stellt den Tesla auf Sofort', async ({ page, browser }) => {
 			await adminPage.goto('/protokoll');
 			const row = adminPage
 				.getByRole('row')
-				.filter({ hasText: 'intent.mode' })
+				.filter({ hasText: 'Lademodus geändert' })
 				.filter({ hasText: 'bedienen (UI)' });
 			await expect(row.first()).toBeVisible();
 			await expect(row.first()).toContainText('tesla');
@@ -103,8 +103,7 @@ test('Entscheidungen filtern', async ({ page }) => {
 	await page.getByLabel('Zeitraum').selectOption({ label: 'Eigenes Datum' });
 	await page.getByLabel('Datum', { exact: true }).fill('2026-10-09');
 	const rows = page.locator('tbody tr');
-	await expect(rows.first()).toBeVisible();
-	expect(await rows.count()).toBeGreaterThan(1);
+	await expect(rows).toHaveCount(6); // alle Entscheidungen der Demo-Welt
 
 	await page.getByLabel('Ergebnis').selectOption({ label: 'von außen geändert' });
 	await expect(rows).toHaveCount(1);

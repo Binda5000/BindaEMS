@@ -31,7 +31,15 @@ const ACTIONS: Record<string, string> = {
 	'consumer.create': 'Verbraucher angelegt',
 	'consumer.update': 'Verbraucher geändert',
 	'consumer.delete': 'Verbraucher gelöscht',
-	'ledger.reprice': 'Abrechnung neu bewertet'
+	'ledger.reprice': 'Abrechnung neu bewertet',
+	'intent.control': 'Regelbetrieb geändert',
+	'intent.mode': 'Lademodus geändert',
+	'intent.boost': 'Boost geändert',
+	'intent.assignment': 'Zuordnung geändert',
+	'intent.guest_mode': 'Gast-Lademodus geändert',
+	'intent.priority': 'Vorrang geändert',
+	'intent.actuators': 'Betriebsart der Aktoren geändert',
+	'lock.acknowledge': 'Sperre quittiert'
 };
 
 const SOURCES: Record<AuditEntry['source'], string> = {
