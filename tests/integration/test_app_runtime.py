@@ -22,7 +22,7 @@ from bindaems.shared.timeutil import ManualClock
 TOKEN = "x" * 32
 
 
-def make_runtime(cfg: Config, tmp_path: Path) -> AppRuntime:
+def make_runtime(cfg: Config, tmp_path: Path, ha_token: str | None = None) -> AppRuntime:
     """Laufzeit ohne HTTP-Server; core und MQTT zeigen auf Port 1 (scheitern sofort)."""
     assert cfg.homeassistant is not None and cfg.homeassistant.mqtt is not None
     app = cfg.app.model_copy(
@@ -37,7 +37,10 @@ def make_runtime(cfg: Config, tmp_path: Path) -> AppRuntime:
     local = cfg.model_copy(update={"app": app, "homeassistant": homeassistant})
     return AppRuntime(
         local,
-        Secrets(internal_token=SecretStr(TOKEN)),
+        Secrets(
+            internal_token=SecretStr(TOKEN),
+            ha_token=SecretStr(ha_token) if ha_token is not None else None,
+        ),
         clock=ManualClock(T_APP),
         serve=False,
     )
@@ -86,7 +89,13 @@ def test_runtime_wires_routes_and_components(runtime) -> None:
         "ledger",
         "influx",
         "ha",
+        "ha-notify",
     ]
+    notify = next(c for c in body["components"] if c["name"] == "ha-notify")
+    assert (notify["ok"], notify["message"]) == (
+        False,
+        "Benachrichtigungen aus: BINDAEMS_HA_TOKEN fehlt.",
+    )
     assert "Admin „chris“ hat keine Zwei-Faktor-Anmeldung (TOTP)." in body["warnings"]
     for path in (
         "/api/settings",
@@ -100,6 +109,26 @@ def test_runtime_wires_routes_and_components(runtime) -> None:
         "/api/state",
     ):
         assert client.get(path).status_code == 200, path
+
+
+def test_without_token_the_rejections_are_only_logged(runtime) -> None:
+    assert runtime.ha_notifier is None and runtime.alarm_notifications is None
+    assert type(runtime.ha_publisher._commands).__name__ == "HaCommandHandler"
+    assert type(runtime.ha_publisher._commands._rejections).__name__ == "LogRejections"
+
+
+def test_with_token_the_notifier_takes_over_the_rejections(cfg: Config, tmp_path) -> None:
+    rt = make_runtime(cfg, tmp_path, ha_token="h" * 20)
+    try:
+        assert rt.ha_notifier is not None and rt.alarm_notifications is not None
+        assert rt.ha_publisher._commands._rejections is rt.ha_notifier
+        client = TestClient(rt.app, base_url="https://testserver")
+        rt.auth.create_user("chris", PASSWORD, "admin", actor="cli", source="cli")
+        client.post("/api/auth/login", json={"username": "chris", "password": PASSWORD})
+        names = [c["name"] for c in client.get("/api/system").json()["components"]]
+        assert "ha-notify" not in names
+    finally:
+        rt.engine.dispose()
 
 
 def test_runtime_wires_the_control_routes(runtime) -> None:

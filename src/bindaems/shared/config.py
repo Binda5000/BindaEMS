@@ -314,6 +314,7 @@ class HomeAssistantConfig(_Model):
     url: Annotated[str, Field(pattern=r"^https?://")]
     entities: dict[str, str] = Field(default_factory=dict)
     mqtt: HaMqttConfig | None = None
+    notify_service: Annotated[str | None, Field(pattern=r"^notify\.[a-z0-9_]+$")] = None
 
 
 class InfluxConfig(_Model):

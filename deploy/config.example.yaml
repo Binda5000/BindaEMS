@@ -113,6 +113,7 @@ homeassistant:
     host: homeassistant.lan
     port: 1883
     username: bindaems
+  # notify_service: notify.mobile_app_handy   # zusätzlich zur Meldung in HA: Push auf das Handy
 
 influxdb:
   url: http://influx.lan:8086

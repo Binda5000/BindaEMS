@@ -40,6 +40,7 @@ from bindaems.app.forecast.routes import forecast_router
 from bindaems.app.forecast.service import ForecastService
 from bindaems.app.ha.commands import HaCommandHandler, LogRejections
 from bindaems.app.ha.entities import HaInputs, build_entities, build_inputs
+from bindaems.app.ha.notify import AlarmNotifications, HaNotifier, websocket_service_call
 from bindaems.app.ha.publisher import AiomqttHaTransport, HaPublisher
 from bindaems.app.history.influx import InfluxQueryError, InfluxReader
 from bindaems.app.history.routes import history_router
@@ -170,13 +171,32 @@ class AppRuntime:
         self._ha_inputs: HaInputs | None = None
         self._ha_ready = asyncio.Event()  # erste Werte für HA bestimmt
         mqtt = cfg.homeassistant.mqtt if cfg.homeassistant is not None else None
+        self.ha_notifier: HaNotifier | None = None
+        self.alarm_notifications: AlarmNotifications | None = None
+        self._notify_status: ComponentStatus | None = None
+        if cfg.homeassistant is not None:
+            if secrets.ha_token is not None:
+                self.ha_notifier = HaNotifier(
+                    websocket_service_call(cfg.homeassistant.url, secrets.ha_token),
+                    cfg.homeassistant.notify_service,
+                    self._clock,
+                )
+                self.alarm_notifications = AlarmNotifications(
+                    self.live, self.ha_notifier, self._clock
+                )
+            else:
+                self._notify_status = ComponentStatus(
+                    "ha-notify", False, "Benachrichtigungen aus: BINDAEMS_HA_TOKEN fehlt."
+                )
         if mqtt is not None:
             self.ha_publisher = HaPublisher(
                 mqtt,
                 build_entities(cfg),
                 self._current_ha_inputs,
                 transport_factory=partial(AiomqttHaTransport, mqtt, secrets.ha_mqtt_password),
-                commands=HaCommandHandler(cfg, self.intents, LogRejections(), self._clock),
+                commands=HaCommandHandler(
+                    cfg, self.intents, self.ha_notifier or LogRejections(), self._clock
+                ),
             )
         self.settings.on_change(lambda _version: self.pipeline.republish())
 
@@ -189,6 +209,9 @@ class AppRuntime:
         ]
         if self.ha_publisher is not None:
             sources.append(self.ha_publisher.component_status)
+        if self._notify_status is not None:
+            status = self._notify_status
+            sources.append(lambda: status)
         guard = Guard(self.auth, cookie_secure=cfg.app.cookie_secure)
         self.app: FastAPI = create_app(
             [
@@ -301,6 +324,8 @@ class AppRuntime:
                 ("ha-inputs", self._ha_inputs_loop),
                 ("ha", partial(self._ha_loop, self.ha_publisher)),
             ]
+        if self.alarm_notifications is not None:
+            jobs.append(("ha-notify", self.alarm_notifications.run))
         async with asyncio.TaskGroup() as group:
             self._tasks = [
                 group.create_task(self._supervise(name, job), name=name) for name, job in jobs

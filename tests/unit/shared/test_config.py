@@ -594,3 +594,17 @@ def test_self_start_defaults_to_120_s_and_10_min() -> None:
 def test_self_start_times_must_be_positive(field: str, value: float) -> None:
     with pytest.raises(ValidationError):
         ControlConfig(**{field: value})
+
+
+def test_notify_service_pattern(tmp_path: Path) -> None:
+    p = write_cfg(
+        tmp_path, lambda d: d["homeassistant"].update(notify_service="notify.mobile_app_handy")
+    )
+    assert load_config(p).homeassistant.notify_service == "notify.mobile_app_handy"
+    for wrong in ("light.kueche", "notify.", "notify.Handy", "mobile_app_handy"):
+        p = write_cfg(
+            tmp_path, lambda d, wrong=wrong: d["homeassistant"].update(notify_service=wrong)
+        )
+        with pytest.raises(ConfigError, match="notify_service"):
+            load_config(p)
+    assert load_config(write_cfg(tmp_path, lambda d: None)).homeassistant.notify_service is None

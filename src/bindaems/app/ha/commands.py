@@ -49,13 +49,13 @@ PRESS: Final = "PRESS"
 
 
 class Rejections(Protocol):
-    """Meldet einen abgelehnten Befehl (ab Task 17 der ``HaNotifier``)."""
+    """Meldet einen abgelehnten Befehl (mit Token der ``HaNotifier``, sonst ``LogRejections``)."""
 
     async def reject(self, text: str) -> None: ...
 
 
 class LogRejections:
-    """Vorläufiger Ersatz: schreibt die Ablehnung ins Log."""
+    """Ohne HA-Token: schreibt die Ablehnung nur ins Log."""
 
     async def reject(self, text: str) -> None:
         log.warning("Befehl aus Home Assistant abgelehnt", text=text)

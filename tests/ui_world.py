@@ -571,7 +571,9 @@ def _create_consumers(app: AppRuntime) -> list[HaRef]:
 async def build_world(cfg: Config, data_dir: Path, *, ui_dir: Path | None = None) -> World:
     clock = ManualClock(T_DEMO - WARMUP)  # der core läuft vor, danach steht die Uhr auf T_DEMO
     local = _demo_config(cfg, data_dir, ui_dir)
-    secrets = Secrets(internal_token=SecretStr(TOKEN))
+    # mit Token meldet die app keine Komponente „ha-notify“ (der Vertrag bleibt); ihre Aufgaben
+    # laufen in der Demo nicht, es geht nichts an Home Assistant
+    secrets = Secrets(internal_token=SecretStr(TOKEN), ha_token=SecretStr("demo"))
     router = _router(local)
     router.start()
     try:
