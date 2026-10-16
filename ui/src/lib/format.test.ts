@@ -6,6 +6,7 @@ import {
 	formatDay,
 	formatEnergy,
 	formatEur,
+	formatNumberMax,
 	formatPower,
 	formatRatio,
 	formatSoc,
@@ -43,4 +44,13 @@ it('zeigt Zeiten in Wien', () => {
 	expect(formatTime('2026-10-09T08:00:00+00:00')).toBe('10:00');
 	expect(formatDateTime('2026-10-09T08:00:00.123456+00:00')).toBe('09.10.2026, 10:00');
 	expect(formatDay('2026-10-09')).toBe('Fr., 09.10.');
+});
+
+describe('formatNumberMax', () => {
+	it('kürzt überflüssige Nachkommastellen', () => {
+		expect(formatNumberMax(2, 1)).toBe('2');
+		expect(formatNumberMax(2.3, 1)).toBe('2,3');
+		expect(formatNumberMax(2.349, 1)).toBe('2,3');
+		expect(formatNumberMax(-0.01, 1)).toBe('0');
+	});
 });

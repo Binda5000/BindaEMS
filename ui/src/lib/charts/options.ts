@@ -10,7 +10,7 @@ export const SLOT_MS = 900_000;
 
 type Point = [number, number | null];
 /** `point` ist der ganze Datenpunkt `[Zeit, Wert, …]`, falls eine Reihe mehr als einen Wert trägt */
-type ValueFormat = (value: number, point?: unknown[]) => string;
+export type ValueFormat = (value: number, point?: unknown[]) => string;
 
 function epoch(iso: string): number {
 	return parseIso(iso) ?? Number.NaN;
@@ -31,7 +31,7 @@ function steps(slots: PriceSlot[], value: (slot: PriceSlot) => number | null): P
 	return points;
 }
 
-const kw: ValueFormat = (value) => `${formatNumber(value, 2)}${NBSP}kW`;
+export const kw: ValueFormat = (value) => `${formatNumber(value, 2)}${NBSP}kW`;
 
 const HTML_ESCAPES: Record<string, string> = {
 	'&': '&amp;',
@@ -86,7 +86,7 @@ export function baseOption(palette: Palette): EChartsCoreOption {
 	};
 }
 
-function valueAxis(name: string, palette: Palette, show = true) {
+export function valueAxis(name: string, palette: Palette, show = true) {
 	return {
 		type: 'value',
 		name,

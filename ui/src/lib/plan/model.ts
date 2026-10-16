@@ -1,0 +1,87 @@
+// Zeitplan des Akkus: Beschriftungen und die Blöcke des Ablaufs
+import type { BatteryIntentKind, PlanReasonCode, PlanSlot, PlanTrigger } from '$lib/api/schemas';
+import { formatNumberMax } from '$lib/format';
+import { parseIso } from '$lib/time';
+
+export const INTENT_LABELS: Record<BatteryIntentKind, string> = {
+	EIGENVERBRAUCH: 'Eigenverbrauch',
+	HALTEN: 'Halten',
+	NETZLADEN: 'Netzladen'
+};
+
+export const TRIGGER_LABELS: Record<PlanTrigger, string> = {
+	start: 'Start',
+	slot: 'Viertelstunde',
+	prices: 'neue Preise',
+	pv_forecast: 'neue PV-Prognose',
+	load_forecast: 'neue Lastprognose',
+	soc: 'SOC weicht ab',
+	month_peak: 'neue Monatsspitze',
+	settings: 'Einstellungen geändert',
+	manual: 'Neu planen'
+};
+
+export const SOURCE_LABELS = { optimizer: 'Optimierer', fallback: 'Ersatzplan' } as const;
+
+const SLOT_MS = 900_000;
+/** Zusätze zum Hauptcode eines Slots */
+const SUFFIX_CODES: readonly PlanReasonCode[] = ['GESCHAETZT', 'ERSATZPLAN'];
+
+export interface PlanBlock {
+	start: string;
+	end: string;
+	intent: PlanSlot['intent'];
+	gridChargeW: number;
+	/** SOC am Ende des Slots vor dem Block, beim ersten Block der erste Wert */
+	socFrom: number;
+	socTo: number;
+	text: string;
+}
+
+/** Hauptcode eines Slots: der erste Code, der nicht nur „geschätzt“ oder „Ersatzplan“ sagt */
+function mainCode(slot: PlanSlot): string {
+	return slot.codes.find((code) => !SUFFIX_CODES.includes(code)) ?? slot.codes[0] ?? '';
+}
+
+/** Ende der Viertelstunde im Zeitformat des Starts (der Server schreibt `+00:00`) */
+function endOf(slot: PlanSlot): string {
+	const start = parseIso(slot.start);
+	if (start === null) return slot.start;
+	const end = new Date(start + SLOT_MS).toISOString();
+	if (slot.start.endsWith('+00:00')) return end.replace(/\.\d{3}Z$/, '+00:00');
+	return slot.start.includes('.') ? end : end.replace(/\.\d{3}Z$/, 'Z');
+}
+
+/** Aufeinanderfolgende Slots mit gleicher Absicht, gleichem Netzladen und gleichem Hauptcode */
+export function planBlocks(slots: PlanSlot[]): PlanBlock[] {
+	const blocks: PlanBlock[] = [];
+	let key = '';
+	slots.forEach((slot, index) => {
+		const slotKey = `${slot.intent}|${slot.grid_charge_w}|${mainCode(slot)}`;
+		const last = blocks.at(-1);
+		if (last && slotKey === key) {
+			last.end = endOf(slot);
+			last.socTo = slot.soc_pct;
+			return;
+		}
+		key = slotKey;
+		blocks.push({
+			start: slot.start,
+			end: endOf(slot),
+			intent: slot.intent,
+			gridChargeW: slot.grid_charge_w,
+			socFrom: (index > 0 ? slots[index - 1] : slot).soc_pct,
+			socTo: slot.soc_pct,
+			text: slot.text
+		});
+	});
+	return blocks;
+}
+
+/** „Netzladen 2,3 kW“, „Halten“, „Eigenverbrauch“ */
+export function blockLabel(block: PlanBlock): string {
+	const label = INTENT_LABELS[block.intent];
+	return block.intent === 'NETZLADEN' && block.gridChargeW > 0
+		? `${label} ${formatNumberMax(block.gridChargeW / 1000, 1)} kW`
+		: label;
+}

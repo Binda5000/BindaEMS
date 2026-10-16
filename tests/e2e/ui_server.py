@@ -51,15 +51,18 @@ async def serve(args: argparse.Namespace) -> None:
         flush=True,
     )
     ticker = asyncio.create_task(_tick(world))
+    # Der Planungsdienst läuft wie in der app (lifespan ist aus): „Neu planen“ geht durch ihn
+    planner = asyncio.create_task(world.app.planning.run())
     try:
         config = uvicorn.Config(
             world.app.app, host=args.host, port=args.port, log_level="warning", lifespan="off"
         )
         await uvicorn.Server(config).serve()
     finally:
-        ticker.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
-            await ticker
+        for task in (planner, ticker):
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
         world.close()
 
 

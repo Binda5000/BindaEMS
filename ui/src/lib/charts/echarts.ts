@@ -18,6 +18,7 @@ export function loadECharts(): Promise<ECharts> {
 			components.LegendComponent,
 			components.DataZoomComponent,
 			components.MarkLineComponent,
+			components.MarkAreaComponent,
 			renderers.CanvasRenderer
 		]);
 		return core;

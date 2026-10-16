@@ -6,6 +6,7 @@ const PAGES = [
 	'/verlauf',
 	'/verbraucher',
 	'/laden',
+	'/zeitplan',
 	'/system',
 	'/entscheidungen',
 	'/entscheidungen?range=2026-10-09', // Tag der Demo-Uhr: die Tabelle ist gefüllt

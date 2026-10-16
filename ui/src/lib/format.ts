@@ -43,6 +43,14 @@ export function formatNumber(value: number, digits: number): string {
 	return /^-0(,0*)?$/.test(text) ? text.slice(1) : text;
 }
 
+/** Zahl mit höchstens `digits` Nachkommastellen („2“, „2,3“), ohne „-0“. */
+export function formatNumberMax(value: number, digits: number): string {
+	const factor = 10 ** digits;
+	const rounded = Math.round(value * factor) / factor;
+	const text = new Intl.NumberFormat(LOCALE, { maximumFractionDigits: digits }).format(rounded);
+	return text === '-0' ? '0' : text;
+}
+
 function withUnit(value: number, digits: number, unit: string): string {
 	return `${formatNumber(value, digits)}${NBSP}${unit}`;
 }
