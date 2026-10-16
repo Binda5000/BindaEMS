@@ -1269,6 +1269,15 @@ Reihenfolge der Inbetriebnahme: EVCS, dann Victron-Setpoint, dann Tesla.
 - Monatssatz des Leistungspreises: Jahressatz ÷ 12.
 - **Fixtarif-Vergleich:** 30 ct/kWh brutto, all-in (konfigurierbar).
 
+**Stand Plan 3a** (`docs/superpowers/plans/2026-10-16-phase-3a-tarif-prognosen.md`, Präzisierungen 2, 3 und 11; Betrieb: `docs/betrieb.md`, Abschnitt 8): Das vollständige Tarifmodell ist umgesetzt (`shared/settings.py`, `app/tariff/calc.py`). Gegenüber dem Text oben gilt:
+- **Arten (Abweichung):** Die Art heißt `energy_per_kwh`, `power_per_kw_year`, `fixed_per_month` oder `feed_in_per_kwh` und bestimmt auch die Richtung: Bezug (Energie), Monatsspitze (Leistungspreis), Kosten (Gebühr) und Einspeisung. Ein Feld `gilt_fuer` gibt es nicht. Gespeicherte Einstellungen ohne `kind` (vor Plan 3a) laden als Energie; ein Wert `None` heißt „noch nicht eingetragen“, zählt als 0 und löst eine Warnung aus.
+- **Einspeisung (Abweichung):** Der Einspeisepreis ist der OeMAG-Monatswert plus die am Tag gültigen Bestandteile `feed_in_per_kwh` (netto, darf negativ sein, `vat` standardmäßig falsch, Zeitfenster wie bei Energie). Ohne OeMAG-Wert ist er unbekannt.
+- **Leistungspreis (Abweichung):** `value_eur` gilt bis zur Stufe `tier_kw` (Standard 10 kW), `value_above_eur` darüber (leer: wie `value_eur`); die Mindestverrechnung ist ein fester Wert `minimum_kw` (Standard 2 kW), nicht „20 % der vereinbarten Leistung“ (3.9). Verrechnet wird `max(Monatsspitze, minimum_kw)`; Kosten je Monat `(value_eur · min(kW, Stufe) + value_above_eur · max(0, kW − Stufe)) / 12`, mal `1 + USt.` bei `vat`. Es gilt der Bestandteil, der am übergebenen Tag gültig ist; Leistungspreise dürfen sich zeitlich nicht überschneiden. Der Standardbestandteil „Leistungspreis (ElWG)“ gilt ab 1. 1. 2027 und hat keine Sätze: Sie trägt der Betreiber nach der SNE-T-V ein (19.3). Die Rechnung steht bereit, eine Anzeige der Kosten und das Budget des 15-min-Wächters (7.4) folgen mit 3b und 3c.
+- **Gebühren:** `fixed_per_month` (€/Monat netto, `vat`) zählt als Summe der am Tag gültigen Bestandteile, brutto; nur für Statistik und Kostenanzeige, nie im Bezugspreis.
+- **Warnungen:** `Kein Leistungspreis eingetragen; nach ElWG gilt er ab 1. 1. 2027.`, wenn kein Bestandteil dieser Art besteht; bestehende Einstellungen bekommen den Bestandteil nicht von selbst, der Editor bietet ihn an.
+- **Editor (Spec 13, „Bewusst offen gelassen“):** Admins ändern im UI alle Felder samt Zeitfenstern und Gültigkeit, fügen Bestandteile der vier Arten hinzu und entfernen sie; der Börsenpreis bleibt. Die ID eines neuen Bestandteils entsteht aus dem Namen und bleibt fest.
+- **Entscheidung 5 des Plans** (freigegeben am 16. 10. 2026): Der Leistungspreis hat Stufe, Mindestverrechnung und Gültigkeit, aber keine Sätze; die Mindestverrechnung als Anteil der vereinbarten Leistung entfällt.
+
 ### 9.2 Preisdaten
 
 - **Abruf und Prüfung:** wie in 6.7.
@@ -1277,6 +1286,12 @@ Reihenfolge der Inbetriebnahme: EVCS, dann Victron-Setpoint, dann Tesla.
   - Median der letzten 4 Wochen für dieselbe Viertelstunde und denselben Tagestyp (Werktag/Samstag/Sonntag), plus die aktuellen Netzbestandteile.
   - Schätzpreise dienen für den Restwert am Horizontende. Sind weniger als 4 h echte Preise bekannt, verlängern sie den Horizont auf 4 h (5.5); diese Slots sind im Plan als „geschätzt“ markiert.
 - **Neuplanung:** Sobald neue Preise vorliegen, wird neu geplant.
+
+**Stand Plan 3a** (`docs/superpowers/plans/2026-10-16-phase-3a-tarif-prognosen.md`, Präzisierungen 5 und 6; Betrieb: `docs/betrieb.md`, „Prognosen“): Die Schätzpreise sind umgesetzt (`app/prices/estimate.py`, `PriceService.planning`); die gespeicherte Planungsbasis mit Version gehört zu den Eingangsdaten des Plans (3b). Gegenüber dem Text oben gilt:
+- **Schätzung:** Der Börsenpreis (netto) eines Slots ohne gespeicherten Preis ist der Median der gespeicherten `spot_net_ct` derselben lokalen Uhrzeit und desselben Tagestyps in den 28 Tagen vor jetzt (mindestens 2 Werte), sonst derselbe Median ohne Tagestyp, sonst gibt es keinen Schätzpreis. Darauf kommen die Tarifbestandteile wie bei echten Preisen, mit den aktuellen Einstellungen (nicht „plus die aktuellen Netzbestandteile“ auf einen Bruttowert).
+- **Tagestyp (Abweichung):** `workday`, `saturday`, `sunday`; Sonntage und die bundesweiten Feiertage in Österreich (`holidays.country_holidays("AT")`) sind `sunday`. Maßgeblich ist das lokale Datum; an der Zeitumstellung teilen sich beide Durchläufe der Stunde 02:00 bis 03:00 einen Schlüssel.
+- **Herkunft:** `PriceService.planning(start, end, now)` liefert je Slot einen `PlanningPrice` mit Herkunft `primary`, `fallback` oder `estimated`; Slots ohne jeden Preis fehlen. Übersicht, Abrechnung und HA zeigen weiter nur echte Preise. Die Verlängerung des Horizonts auf 4 h (5.5) und die Markierung „geschätzt“ im Plan folgen mit 3b.
+- **Entscheidung 4 des Plans** (freigegeben am 16. 10. 2026): Feiertage zählen wie Sonntage, auch bei den Schätzpreisen.
 
 ### 9.3 Optimierungsmodell
 
@@ -1410,6 +1425,14 @@ Greift, wenn der Solver scheitert, das Zeitlimit überschritten ist oder das Erg
   - Korrekturfaktor begrenzt auf 0,5–1,5.
 - **Quantile P25, P50 und P75:** aus der empirischen Fehlerverteilung, je Horizontklasse (0–6 h, 6–24 h, > 24 h) und Klarheitsklasse.
 
+**Stand Plan 3a** (`docs/superpowers/plans/2026-10-16-phase-3a-tarif-prognosen.md`, Präzisierungen 7, 9 und 10; Betrieb: `docs/betrieb.md`, „Prognosen“): Kalibrierung, Quantile und Kennzahlen der PV-Prognose sind umgesetzt (`app/forecast/`). Gegenüber dem Text oben gilt:
+- **Klarheit:** Open-Meteo liefert zusätzlich `shortwave_radiation` und `diffuse_radiation` (am Standort, aus der Antwort der ersten Fläche). `k = 1 − diffus / global`; `clear` ab 0,6, `mixed` ab 0,3, sonst `overcast`; unter 50 W/m² global keine Klasse. Fehlen die Variablen, bleibt die Klasse leer.
+- **Kalibrierung (Abweichung: Median statt Regression):** je lokaler Stunde und Klarheitsklasse der Median von `Ist / roh` über die Archiv-Einträge der Vorlaufklasse bis 6 h der letzten 30 Tage mit `roh ≥ max(100 W, 2 % der Summe der kWp)`, mindestens 8 Paare; sonst die Stunde über alle Klassen (mindestens 8), sonst 1,0; jeder Faktor auf 0,5 bis 1,5 begrenzt. P50 ist `roh · Faktor`, begrenzt auf 0 bis `pv.inverter_ac_max_w`. Der Median ist unempfindlich gegen einzelne Ausreißer.
+- **Quantile:** je Vorlaufklasse und Klarheitsklasse das 25. und 75. Perzentil (`statistics.quantiles`, `inclusive`) von `Ist / P50` über die Einträge der letzten 30 Tage mit `P50 ≥ Schwelle`, mindestens 20 Paare; sonst über die Vorlaufklasse allein, sonst die Faktoren 0,7 und 1,2. Es gilt `P25 ≤ P50 ≤ P75`, und P75 ist auf `inverter_ac_max_w` begrenzt.
+- **Wann:** Kalibrierung und Quantile beim Start und nächtlich um 02:30 Uhr (lokal), im Speicher; die erste PV-Prognose nach dem Start wartet bis zu 60 s auf die erste Kalibrierung. Jede Ausgabe geht ins Archiv und nach InfluxDB (`forecast`, `kind=pv`, `quantile` `p25`, `p50`, `p75`, Feld `kw`).
+- **Archiv (11.3):** je Slot und Vorlaufklasse (`h0_6`, `h6_24`, `h24`) bleibt die Ausgabe, deren Vorlauf der Klassenmitte (3 h, 15 h, 30 h) am nächsten liegt, bei Gleichstand die neuere. Ist-Werte kommen aus `ledger_slot`, nur aus vollständigen Slots (`covered_s ≥ 855`).
+- **Kennzahlen (Abweichung: Anzeige):** MAE, Bias und relativer MAE je Art und Vorlaufklasse über 14 Tage stehen als Karte „Prognosegüte“ auf der System-Seite und in `GET /api/forecast/quality?days=`. Die Ansicht der Prognosegüte als eigene Seite folgt mit Phase 5 (18).
+
 ### 10.2 Hauslast v1 (Phase 3)
 
 - **Definition:** Gesamtverbrauch ohne beide Wallboxen. Darin enthalten sind u. a. der Proxmox-Cluster und das Obergeschoss.
@@ -1418,6 +1441,13 @@ Greift, wenn der Solver scheitert, das Zeitlimit überschritten ist oder das Erg
   - gewichteter Median der letzten 8 Wochen, Halbwertszeit 2 Wochen
   - optional ein Temperaturterm
 - **Startdaten:** sofort aus der InfluxDB-Historie (HA-Daten und, sobald vorhanden, EMS-Daten).
+
+**Stand Plan 3a** (`docs/superpowers/plans/2026-10-16-phase-3a-tarif-prognosen.md`, Präzisierung 8, Entscheidungen 2 und 3; Betrieb: `docs/betrieb.md`, „Prognosen“): Die Lastprognose v1 ist umgesetzt (`app/forecast/load.py`). Gegenüber dem Text oben gilt:
+- **Startdaten (Abweichung):** Die Historie kommt aus der Abrechnung (`ledger_slot`, Flüsse `*>house`, nur vollständige Viertelstunden). Für Zeiten ohne vollständigen Slot liest die app die HA-Datenbank, wenn `homeassistant.load_history` gesetzt ist: `entity` (W oder kW) minus die Entitäten unter `subtract`, je Viertelstunde aus Minutenmitteln (`fill(previous)`), mindestens 0; fehlt der Wert einer abzuziehenden Entität, fällt der Slot weg. Das verlangt `influxdb.ha_database`. Ohne diese Angabe beginnt das Profil mit den Daten von BindaEMS (seit Phase 1b) und erreicht die 8 Wochen erst nach und nach.
+- **Profil:** je Tagestyp (9.2) und lokaler Uhrzeit der gewichtete Median der letzten 56 Tage, Gewicht `0,5^(Alter / 14 Tage)`. Gewichteter Median: der kleinste Wert, bei dem das kumulierte Gewicht die Hälfte erreicht. Rückfall bei weniger als 3 Stichproben: dieselbe Uhrzeit über alle Tagestypen (mindestens 3), dann der Median aller Stichproben, sonst keine Prognose.
+- **Ausgabe:** stündlich zur Minute 9 für die Slots vom laufenden bis zum Ende des übernächsten lokalen Tages; das Profil wird beim Start und beim ersten Lauf eines neuen lokalen Tages gebaut. Jede Ausgabe geht ins Archiv und nach InfluxDB (`forecast`, `kind=load`, `quantile=p50`).
+- **Kein Temperaturterm** (Entscheidung 3, freigegeben am 16. 10. 2026): Temperatur als Merkmal kommt mit dem Lernmodell (10.3, Phase 5).
+- **Offen an der Anlage:** Die HA-Abfrage ist nur gegen nachgebaute Antworten getestet; die Prüfung steht in `docs/betrieb.md`, „An der Anlage prüfen“. Die Entscheidung 2 des Plans (freigegeben am 16. 10. 2026) fragt den Betreiber, welche HA-Entität die Hauslast ohne die Wallboxen zeigt.
 
 ### 10.3 Lernende Modelle (Phase 5)
 
@@ -1510,6 +1540,11 @@ Greift, wenn der Solver scheitert, das Zeitlimit überschritten ist oder das Erg
 - **Backup:** nächtlich per SQLite-Online-Backup nach `/backup`, 14 Generationen. Bei einem Proxmox-Failover kann höchstens ein Replikationsintervall verloren gehen. Die Abrechnung lässt sich aus den InfluxDB-Zählerständen nachrechnen.
 
 **Stand Plan 2d** (`docs/superpowers/plans/2026-10-15-phase-2d-bedienung.md`, Präzisierung 7): Die Tabelle `decision` (Migration `0007`) hat `seq` (aufsteigend, Primärschlüssel), `id` (die `id` des core, eindeutig), `ts`, `actuator`, `kind`, `requested` und `applied` (JSON), `dry_run`, `outcome`, `result`, `codes` (JSON-Liste), `text` und `inputs` (JSON); dazu ein Index auf `ts`. Aufbewahrt werden die Einträge `app.decisions_keep_days` Tage (Standard 180, 1 bis 3650); das Aufräumen gehört zur Wartung der app. `assignment_log` und `charging_session` folgen mit der Statistik (Phase 4): Manuelle Zuordnungen stehen bis dahin im Änderungsprotokoll, erkannte in den Entscheidungen und in Health.
+
+**Stand Plan 3a** (`docs/superpowers/plans/2026-10-16-phase-3a-tarif-prognosen.md`, Präzisierungen 4, 7 und 10): Migration `0008` (`v0008_forecasts.py`) legt `forecast_record` und `forecast_metric` an. Die Tabelle `month_peak` entfällt: Die Monatsspitze rechnet `LedgerService.month_peak` bei jeder Abfrage aus `ledger_slot` (höchste `import_wh · 4 / 1000` kW im lokalen Monat, früherer Slot bei Gleichstand); das ist schnell genug und kann nicht auseinanderlaufen. Boost zählt mit, denn der Zähler sieht ihn. In Home Assistant erscheint sie als Sensor „Monatsspitze“ (`month_peak`, kW, Attribut `slot`).
+- **`forecast_record`:** `kind` (`pv`, `load`), `slot_start`, `horizon` (`h0_6`, `h6_24`, `h24`), `issued_at`, `p50_w`, `raw_w` (PV: Modell ohne Kalibrierung; Last: wie `p50_w`), `clearness` (PV: `clear`, `mixed`, `overcast` oder leer); Primärschlüssel `(kind, slot_start, horizon)`. Aufbewahrt werden 60 Tage; das Aufräumen gehört zur nächtlichen Prognose-Wartung um 02:30 Uhr.
+- **`forecast_metric`:** `day` (lokales Datum), `kind`, `horizon`, `n`, `abs_err_sum_w`, `err_sum_w`, `actual_sum_w`; Primärschlüssel `(day, kind, horizon)`. Fehler = P50 − Ist, nur Slots mit Ist-Wert; bei PV nur Slots, in denen P50 oder Ist die Schwelle erreichen. Nächtlich um 02:30 Uhr für gestern und vorgestern neu gerechnet, beim Start für heute, gestern und vorgestern.
+- **Weiterhin offen:** `plan` und `plan_inputs` (3b), `price_raw` und `model_registry` (Phase 5).
 
 ### 11.4 Viertelstunden-Abrechnung
 
@@ -1965,6 +2000,23 @@ Es gibt keine Schreibzugriffe auf Geräte.
 - **Abnahme:**
   - Szenario-Tests über mindestens 30 historische Tage: niedrigere Kosten als „Victron allein“, ohne Verletzung von Regel R
   - 2 Wochen Dry-Run, danach live
+
+**Stand Plan 3a** (`docs/superpowers/plans/2026-10-16-phase-3a-tarif-prognosen.md`, Entscheidungen 1 bis 6; die Entscheidungen hat der Betreiber am 16. 10. 2026 so freigegeben): Der Betreiber hat Phase 3 in drei Pläne geteilt. Jeder liefert für sich getestete, lauffähige Software; erst 3c ändert, was der core an Victron sendet.
+
+| Plan | Inhalt | Ergebnis an der Anlage |
+|---|---|---|
+| **3a „Tarif und Prognosen“** (umgesetzt) | Tarifmodell vollständig mit Editor (9.1), Monatsspitze, Schätzpreise (9.2), Lastprognose v1 (10.2), PV-Kalibrierung und Quantile (10.1), Prognosegüte (11.3) | Tarif aus den Preisblättern eingetragen; Prognosen und ihre Güte sichtbar; die Archive füllen sich für 3b |
+| **3b „Optimierer und Zeitplan“** | Plan-Typen in `shared`, Optimierer (HiGHS über PuLP, eigener Prozess, Zeitlimit) nur für den Akku, Regel R1, Wirtschaftlichkeit mit Marge, Schalter „Netzladen erlaubt“, Planträgheit, Plausibilitätsprüfung, Ersatzplan, Erklärungen, Planungsablauf mit Auslösern und Speicherung (`plan`, `plan_inputs`), UI-Seite „Zeitplan“ (36 h), HA-Sensoren zum Plan und Taste „neu planen“, Szenario-Test-Umgebung mit historischen Tagen und der Vergleich mit „Victron allein“ | Pläne entstehen als Vorschau; der core bekommt sie noch nicht |
+| **3c „Planausführung“** | Plan in der Absicht, Prüfung und Gültigkeit im core; Akku-Absichten `EIGENVERBRAUCH`, `HALTEN` und `NETZLADEN(P)`; Plan-Schwelle der Unterstützung (7.6); Budget aus der akzeptierten Monatsspitze für den 15-min-Wächter (7.4); abgelaufener Plan → `EIGENVERBRAUCH`; Preis und Plan-Slot in den `inputs` der Entscheidungen; Simulator mit Wirkungsgrad und Plan-Szenarien; „Plan vs. Ist“ im Zeitplan; Schalter „Akku-Unterstützung erlaubt“ und Zahl „Unterstützungsschwelle“ in UI und HA; Mehrkostenanzeige beim Boost | 2 Wochen Dry-Run der Planausführung, danach geht Victron live |
+
+Die Abnahme der Phase 3 (unten) folgt nach 3c. 3a schaltet nichts an der Anlage und sendet keine Absicht; die Prognosen brauchen die Abrechnung (`ledger_slot`) als Ist-Werte.
+- **Vorab-Entscheidungen für 3b und 3c** (Entscheidung 6, freigegeben am 16. 10. 2026):
+  - **„Victron allein“** ist der Eigenverbrauch des ESS ohne Netzladen und ohne Halten, auf denselben Tagen gerechnet. Dynamic ESS lässt sich nicht nachrechnen.
+  - **Szenario-Tests** rechnen im Viertelstundenraster mit einem Akkumodell, das die Absichten so umsetzt wie der core; der Anlagensimulator im Sekundentakt bleibt für die Regelung (3c bekommt dort Szenarien zur Planausführung). Die CI rechnet mit erzeugten Tagen, denn das Repository ist öffentlich; die 30 echten Tage laufen an der Anlage mit einem Exportwerkzeug.
+  - **Regel R2 kommt mit Phase 4:** In Phase 3 plant der Optimierer nur den Akku; Autos mit Abfahrt und Bedarf gibt es erst mit dem Modus „Geplant“. Sofort, Boost und Min+PV sind von R2 ohnehin ausgenommen.
+  - **`HALTEN`** setzt der core über den Netz-Sollwert-Override um, den er schon schreibt (Sollwert = Last − PV, nicht unter 0, nachgeführt); so braucht es keinen neuen Schreibweg. Der flüchtige Override `ess.override.maxdischargepower` bleibt eine Alternative, die an der Anlage geprüft werden kann.
+- **Prognosegüte als Seite:** Die Ansicht der Prognosegüte als eigene Seite folgt mit Phase 5 (siehe dort); 3a zeigt die Kennzahlen als Karte auf der System-Seite.
+- **Offene Eingaben des Betreibers:** die Sätze des Leistungspreises (19.3, nach der SNE-T-V) und die HA-Entität der Hauslast (10.2, `homeassistant.load_history`).
 
 ### Phase 4 – Geplantes Laden, Statistik, HA komplett
 

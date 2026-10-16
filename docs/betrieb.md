@@ -1,6 +1,6 @@
 # Betrieb von BindaEMS
 
-Stand: Phase 2d (Bedienung in UI und HA). Auf der VM laufen zwei Dienste. Der core **regelt** seit Plan
+Stand: Plan 3a (Tarif und Prognosen) auf dem Stand von Phase 2d (Bedienung in UI und HA). Auf der VM laufen zwei Dienste. Der core **regelt** seit Plan
 2c-1 die beiden Ladepunkte (EVCS und Tesla), seit Plan 2c-2a den Akku (Override an Victron) und die
 Spitzen (15-min-Wächter) und **erkennt** seit Plan 2c-2b selbst, welches Auto an welcher Wallbox
 steht, auch ein Gast. Er **sendet aber nichts**, solange ihre Aktoren im Dry-Run sind: Er
@@ -32,8 +32,9 @@ Totmann-Schalter der Anlage und greift nur ein, wenn ein live geschalteter core 
 
 Am Ende des Handbuchs stehen die Abschnitte „Laderegelung“ (Lademodi, Absicht, Zuordnung Auto und
 Wallbox, Dry-Run-Vergleich mit evcc, Umstieg, Hinweise für die Anlage), „Akku und Spitzen“
-(Akku-Sollwert, 15-min-Wächter, Health, Victron in den Dry-Run und live, Alarme) und „Simulator“ (die
-Szenarien der CI von Hand laufen lassen).
+(Akku-Sollwert, 15-min-Wächter, Health, Victron in den Dry-Run und live, Alarme), „Prognosen“
+(PV-Prognose mit Kalibrierung und Band, Lastprognose, Prognosegüte, Schätzpreise, nächtlicher Lauf)
+und „Simulator“ (die Szenarien der CI von Hand laufen lassen).
 
 ## 1. Voraussetzungen der VM
 
@@ -279,6 +280,7 @@ Entitäten (Gerät „BindaEMS“, sofern nicht anders angegeben):
 | Einspeisepreis | ct/kWh | OeMAG-Wert des Monats |
 | PV-Prognose heute / morgen | kWh | P50 aus Open-Meteo und PV-Modell |
 | Netzleistung, PV-Leistung, Akkuleistung, Hausverbrauch | W | Werte des core |
+| Monatsspitze | kW | höchster Netzbezug einer Viertelstunde im laufenden Monat (Abschnitt 8); Attribut `slot` mit dem Beginn dieser Viertelstunde (ISO-Zeit). „Unbekannt“, solange der Monat keine Abrechnung hat |
 | Akku-SOC | % | |
 | Betriebsart | – | Betriebszustand des core: `START`, `OBSERVE`, `CONTROL`, `DEGRADED` oder `SAFE` (Abschnitt 13), Diagnose |
 | core verbunden | an/aus | Diagnose |
@@ -368,9 +370,60 @@ homeassistant:
 
 Nach der Inbetriebnahme trägst du in den Laufzeit-Einstellungen nach, was die Spec bewusst
 offen lässt: Netznutzungsentgelt (Arbeitspreis), Netzverlustentgelt, Elektrizitätsabgabe,
-Erneuerbaren-Förderbeitrag (alle netto in ct/kWh) und jeden Monat den OeMAG-Marktpreis. Bis
-dahin zählen fehlende Werte als 0, und die Übersicht und die Seite „System“ zeigen Warnungen.
-Jede Änderung ist eine neue Version im Änderungsprotokoll.
+Erneuerbaren-Förderbeitrag (alle netto in ct/kWh), den Leistungspreis, die monatlichen Gebühren
+und jeden Monat den OeMAG-Marktpreis. Bis dahin zählen fehlende Werte als 0, und die Übersicht
+und die Seite „System“ zeigen Warnungen. Jede Änderung ist eine neue Version im
+Änderungsprotokoll.
+
+Der Tarif besteht aus Bestandteilen. Ihre **Art** bestimmt, was sie tun:
+
+| Art im Editor | gilt für | Bedeutung |
+|---|---|---|
+| Energie (ct/kWh) | Bezug | Teil des Bezugspreises je Viertelstunde: Börsenpreis, Lieferantenaufschlag, Netznutzung, Abgaben. Wert netto in ct/kWh, optional mit Zeitfenstern |
+| Leistungspreis (€/kW/Jahr) | Monatsspitze | Preis der höchsten Viertelstunde des Monats (unten) |
+| Monatliche Gebühr (€/Monat) | Kosten | Grundgebühren; nur für Statistik und Kostenanzeige, nie im Bezugspreis |
+| Einspeisung (ct/kWh) | Einspeisung | Zu- oder Abschlag auf den OeMAG-Monatswert, netto, darf negativ sein (etwa ein Entgelt). Standardmäßig ohne USt. |
+
+Aus den Bestandteilen rechnet die app:
+
+- **Bezugspreis je Viertelstunde:** die Summe der Energiebestandteile, die an dem Tag und in dem
+  Zeitfenster gelten, mit USt. bei den Bestandteilen, die „mit USt.“ haben. Fehlt ein Wert,
+  zählt er als 0 und die Übersicht warnt.
+- **Einspeisepreis je Viertelstunde:** der OeMAG-Monatswert plus die gültigen
+  Einspeisebestandteile, mit USt., wo „mit USt.“ gesetzt ist. Gilt für einen Monat noch kein
+  eigener Wert, nimmt die app den jüngsten eingetragenen Monat davor. Ohne einen OeMAG-Wert ist der
+  Einspeisepreis unbekannt.
+- **Leistungspreis (ElWG):** Nach dem ElWG zahlst du ab 1. 1. 2027 für die höchste
+  15-min-Leistung des Monats. Der Bestandteil „Leistungspreis (ElWG)“ ist vorbereitet: Stufe
+  10 kW, Mindestverrechnung 2 kW, gültig ab 1. 1. 2027, aber **ohne Sätze**. Die Sätze in
+  €/kW/Jahr netto (bis und über der Stufe; leer = über der Stufe gilt der Satz bis zur Stufe)
+  trägst du ein, sobald die SNE-T-V sie nennt. Verrechnet wird
+  `max(Monatsspitze, Mindestverrechnung)`; die Kosten eines Monats sind
+  `(Satz bis zur Stufe · min(kW, Stufe) + Satz über der Stufe · max(0, kW − Stufe)) / 12`, mit
+  USt. Es gilt der Leistungspreis, der am Tag gültig ist; zwei Leistungspreise dürfen sich zeitlich
+  nicht überschneiden („Leistungspreise dürfen sich zeitlich nicht überschneiden“). Vor dem
+  Gültigkeitsdatum gibt es keinen Leistungspreis, ohne Satz zählt er 0 mit Warnung.
+- **Gebühren eines Monats:** die Summe der am Tag gültigen monatlichen Gebühren, brutto.
+- **Monatsspitze:** die höchste Viertelstunde des Netzbezugs im Monat aus der Abrechnung
+  (Netzbezug der Viertelstunde in Wh · 4 / 1000 = kW), mit ihrem Beginn. Boost zählt mit, denn der
+  Zähler sieht ihn. Home Assistant bekommt sie als Sensor „Monatsspitze“ (Abschnitt 7). Es gibt
+  dafür keine eigene Tabelle; die Abfrage über die Abrechnung läuft jedes Mal und kann nicht
+  auseinanderlaufen. Der Leistungspreis fließt in Plan 3a noch in keine Anzeige und keine
+  Entscheidung ein; die Rechnung steht bereit, die Kosten und das Budget des 15-min-Wächters
+  folgen mit den Plänen 3b und 3c.
+
+Die **Warnungen** auf der Übersicht und der Seite „System“ nennen, was fehlt:
+
+- `Tarifbestandteil „<Name>“ hat noch keinen Wert.` (für jede Art; beim Leistungspreis, wenn der
+  Satz bis zur Stufe fehlt)
+- `Kein Leistungspreis eingetragen; nach ElWG gilt er ab 1. 1. 2027.` (kein Bestandteil der Art
+  Leistungspreis)
+- `Noch kein OeMAG-Monatswert eingetragen.`
+
+Einstellungen, die vor Plan 3a gespeichert wurden, haben nur Energiebestandteile. Sie laden
+unverändert; die Warnung nennt den fehlenden Leistungspreis, und im Editor legst du ihn mit
+**Bestandteil hinzufügen** (Art „Leistungspreis“) an. Ein YAML-Export aus der Zeit davor lässt sich
+ebenso importieren.
 
 Im UI (Admin) unter **Einstellungen**:
 
@@ -407,8 +460,8 @@ Im UI (Admin) unter **Einstellungen**:
   betroffenen Felder.
 - **Versionen** listet alle Stände mit Zeit, Person, Quelle und Kommentar.
 
-Der Einspeiseerlös wird immer erst beim Lesen mit dem eingetragenen OeMAG-Wert berechnet; dafür
-ist keine Neubewertung nötig.
+Der Einspeiseerlös wird immer erst beim Lesen mit dem Einspeisepreis (OeMAG-Wert plus
+Einspeisebestandteile) berechnet; dafür ist keine Neubewertung nötig.
 
 ### Alternative für Skripte (curl)
 
@@ -2929,6 +2982,156 @@ Beide Alarme zeigt das UI unter **System** → „core“ → „Alarme“ (Absc
     Tesla, der dort noch mit 16 A lädt.
   - ob `battery.state` `unknown` erscheint (ein Messwert fehlt) oder `locked` (DESS an, ein anderes
     System regelt).
+
+## Prognosen
+
+Seit Plan 3a rechnet die app zwei Prognosen, bewertet sie und schätzt fehlende Preise. Das schaltet
+nichts an der Anlage: Die Prognosen sind Anzeige und Eingangsdaten für die Planung (Plan 3b). Sie
+liegen im Speicher der app, jede Ausgabe geht zusätzlich in ein Archiv in SQLite
+(`forecast_record`) und nach InfluxDB (Messung `forecast`, Tags `kind` = `pv` oder `load` und
+`quantile` = `p25`, `p50`, `p75`, Feld `kw`, Retention-Policy `long`). Die Prognosegüte steht in
+`forecast_metric`. Beide Tabellen legt die Migration `0008` beim Start der app an.
+
+### PV-Prognose mit Kalibrierung
+
+Die PV-Prognose holt die app von Open-Meteo, je Fläche, und rechnet sie mit dem PV-Modell in
+Leistung um: stündlich zur Minute 7, beim Start sofort, nach einem Fehler spätestens nach 10 min.
+Sie unterscheidet nach der **Klarheit** des Himmels: `k = 1 − diffuse / globale Strahlung`;
+ab 0,6 ist es `clear`, ab 0,3 `mixed`, sonst `overcast`. Unter 50 W/m² global (Nacht, Dämmerung)
+gibt es keine Klasse.
+
+- **Kalibrierung:** Die app vergleicht die Prognose mit dem, was die PV wirklich geliefert hat
+  (Abrechnung, nur vollständige Viertelstunden). Je lokaler Stunde und Klarheitsklasse gilt der
+  Median von `Ist / Prognose` über die letzten 30 Tage, jeweils für die Ausgaben bis 6 h vor dem
+  Slot. Mindestens 8 Paare je Stunde und Klasse; sonst gilt die Stunde über alle Klassen
+  (mindestens 8), sonst der Faktor 1,0. Jeder Faktor liegt zwischen 0,5 und 1,5. Paare mit
+  weniger als `max(100 W, 2 % der Summe der kWp)` Prognose zählen nicht, denn in der Dämmerung
+  verfälscht das Verhältnis den Faktor. Die Kalibrierung gilt für P50, begrenzt auf 0 bis
+  `pv.inverter_ac_max_w`.
+- **Band P25 bis P75:** Je Vorlaufklasse (bis 6 h, 6 bis 24 h, über 24 h) und Klarheitsklasse
+  bestimmt die app aus den Abweichungen der letzten 30 Tage das 25. und 75. Perzentil von
+  `Ist / P50` (mindestens 20 Paare; sonst über die Vorlaufklasse allein, sonst die Faktoren 0,7
+  und 1,2). Daraus entstehen P25 und P75; es gilt immer P25 ≤ P50 ≤ P75, und P75 geht nie über
+  `pv.inverter_ac_max_w`.
+- **Wann:** Faktoren und Band werden beim Start und jede Nacht um 02:30 Uhr neu gerechnet. Die
+  Karte „System“ zeigt bei der Komponente „forecast“ „PV-Prognose von HH:MM Uhr“, nach der
+  Kalibrierung mit dem Zusatz „, kalibriert aus n Viertelstunden“.
+- **Start:** Die erste PV-Prognose nach dem Start wartet bis zu 60 s auf die erste Kalibrierung.
+  Sonst läge die erste Ausgabe mit dem neutralen Faktor 1,0 im Archiv und verfälschte später die
+  Kalibrierung. Dauert die Kalibrierung länger, beginnt der Abruf ohne sie (Warnung im Log).
+
+### Lastprognose
+
+Die Lastprognose v1 ist ein **Profil der Hauslast**, das ist der Gesamtverbrauch ohne beide
+Wallboxen und ohne Akkuladung:
+
+- **Profil:** je Tagestyp und lokaler Uhrzeit (Viertelstunde) der gewichtete Median der letzten
+  56 Tage. Das Gewicht einer Stichprobe halbiert sich alle 14 Tage. Der Tagestyp ist Werktag,
+  Samstag oder Sonntag; Sonntage und die bundesweiten Feiertage in Österreich zählen als
+  Sonntag. Maßgeblich ist das lokale Datum (Europe/Vienna). Fehlen für einen Tagestyp und eine
+  Uhrzeit mindestens 3 Stichproben, gilt dieselbe Uhrzeit über alle Tagestypen, dann der Median
+  aller Stichproben. Ohne Stichprobe gibt es keine Prognose.
+- **Ausgabe:** stündlich zur Minute 9 für die Viertelstunden vom laufenden Slot bis zum Ende des
+  übernächsten Tages. Das Profil baut die app beim Start und beim ersten Lauf eines neuen Tages
+  neu. Bei einer Zeitumstellung bleibt die Zuordnung über die lokale Uhrzeit; die doppelte Stunde
+  im Oktober hat in beiden Durchläufen den Wert des Profils.
+- **Quellen:** Die Hauslast kommt aus der Abrechnung (`ledger_slot`: Flüsse `*>house`), nur aus
+  vollständigen Viertelstunden. Sie beginnt mit Phase 1b; das Profil hat die vollen 56 Tage erst
+  nach und nach. Für Zeiten ohne vollständigen Abrechnungs-Slot kann die app die
+  **HA-Datenbank** lesen, wenn du in `config.yaml` die Entität der Hauslast nennst:
+
+```yaml
+homeassistant:
+  load_history:
+    entity: sensor.hausverbrauch          # Leistung des Hauses in W oder kW
+    subtract: [sensor.wallbox_leistung]   # Leistungen, die nicht zur Hauslast zählen
+influxdb:
+  ha_database: homeassistant              # verlangt: wie bei den Verbrauchern aus HA
+```
+
+  `entity` ist die Gesamtlast des Hauses; unter `subtract` stehen die Entitäten, die davon
+  abzuziehen sind (hier die beiden Wallboxen, sonst zählte das Autoladen als Hauslast). Die app
+  bildet daraus je Viertelstunde das Mittel der Entität (aus Minutenmitteln) minus die Mittel der
+  abzuziehenden Entitäten, mindestens 0. Fehlt der Wert einer abzuziehenden Entität, fällt die
+  Viertelstunde weg. Ohne `influxdb.ha_database` lehnt die app die Konfiguration beim Start ab.
+  Beide Schemata der HA-Integration gehen wie bei den Verbrauchern (Abschnitt 12, „Verbraucher aus
+  Home Assistant“). Nach einer Änderung startest du die app neu.
+
+Die Seite **System** zeigt die Karte „Lastprognose“ mit „Stand“ (Zeit der letzten Ausgabe),
+„Datenbasis“ („n Viertelstunden aus BindaEMS, m aus Home Assistant“) und der Energie von heute,
+morgen und übermorgen in kWh. Die Komponente „load-forecast“ meldet „Lastprognose von HH:MM Uhr“,
+„Noch keine Daten für die Lastprognose“ (neue Installation ohne Abrechnung) oder
+„Lastprognose fehlgeschlagen: …“. Die Datenbasis gilt für das zuletzt gebaute Profil.
+
+### Prognosegüte
+
+Die app vergleicht jede archivierte Prognose mit dem Ist-Wert aus der Abrechnung (PV: Summe der
+Flüsse `pv>*`, Hauslast: Summe der Flüsse `*>house`; nur vollständige Viertelstunden). Je Slot und
+Vorlaufklasse bleibt die Ausgabe, deren Vorlauf der Klassenmitte am nächsten liegt (3 h, 15 h,
+30 h), so vergleichen die Kennzahlen typische Vorläufe und nicht nur die letzte Ausgabe vor dem
+Slot. Bei PV zählen nur Viertelstunden, in denen Prognose oder Ist die Schwelle erreichen, sonst
+verwässern die Nachtstunden den Fehler.
+
+Je Art (PV, Last) und Vorlaufklasse (bis 6 h, 6 bis 24 h, über 24 h) zeigt die Karte
+**Prognosegüte** auf der Seite „System“ für die letzten 14 Tage:
+
+| Spalte | Bedeutung |
+|---|---|
+| Werte | Zahl der verglichenen Viertelstunden |
+| MAE | mittlerer absoluter Fehler in W: Summe der Beträge der Fehler geteilt durch n |
+| Abweichung | Bias in W: Summe der Fehler geteilt durch n; positiv heißt, die Prognose lag im Mittel zu hoch |
+| MAE relativ | Summe der Beträge der Fehler geteilt durch die Summe der Ist-Werte, in %; ohne Ist „–“ |
+
+Fehler = Prognose (P50) − Ist. Ohne Daten steht „Noch keine Kennzahlen.“ in der Karte. Dieselben
+Zahlen liefert die API, eingeloggt und mit beliebiger Rolle: `GET /api/forecast/quality?days=14`
+(`days` von 1 bis 60). Eine eigene Seite dafür folgt mit Phase 5.
+
+### Nächtlicher Lauf
+
+Jede Nacht um 02:30 Uhr (lokal) und beim Start der app:
+
+1. **Prognosegüte** für gestern und vorgestern neu rechnen (die Abrechnung holt Lücken aus
+   InfluxDB nach, daher die zwei Tage); beim Start für heute, gestern und vorgestern.
+2. **PV neu kalibrieren** (Faktoren und Band).
+3. **Archiv aufräumen:** Prognosen, die älter als 60 Tage sind, werden gelöscht. Die Kennzahlen je
+   Tag bleiben.
+
+Ein Fehler in einem Schritt steht im Log der app (`docker compose logs ems-app`) und hält die
+anderen nicht auf.
+
+### Schätzpreise
+
+Für eine Viertelstunde ohne gespeicherten Börsenpreis schätzt die app den Preis, damit die Planung
+(Plan 3b) über das Ende der bekannten Preise hinaus rechnen kann. Der geschätzte Börsenpreis
+(netto) ist der Median der gespeicherten Preise derselben Uhrzeit und desselben Tagestyps in den
+28 Tagen davor, mindestens 2 Werte; sonst derselbe Median über alle Tagestypen; sonst gibt es
+keinen Schätzpreis. Darauf kommen die Tarifbestandteile wie bei echten Preisen. Die Schätzpreise
+sind als „geschätzt“ gekennzeichnet (Herkunft `estimated`) und stehen nur für die Planung bereit;
+Übersicht, Abrechnung und der Sensor „Bezugspreis“ zeigen weiter nur echte Preise.
+
+### Was du im UI siehst
+
+- **Übersicht**, Diagramm „Preise und PV heute/morgen“: die Reihe „PV-Prognose“ (P50) mit dem
+  Band „PV P25–P75“ und die „Lastprognose“ als Linie. Scheitert die Abfrage einer Prognose,
+  steht der Fehler über dem Diagramm, und die übrigen Reihen bleiben.
+- **System**: die Karten „Lastprognose“ und „Prognosegüte“ (oben) und bei den Komponenten
+  „forecast“ und „load-forecast“ der Stand beider Prognosen.
+
+### An der Anlage prüfen
+
+Plan 3a ist ohne die echte Anlage getestet; zwei Dinge zeigen sich erst im Betrieb:
+
+- **Abfrage der Hauslast aus Home Assistant:** Die InfluxQL-Abfrage (Minutenmittel mit
+  `fill(previous)` auf dem Einheitenfeld, über bis zu 56 Tage in einer Abfrage) ist nur gegen
+  nachgebaute Antworten getestet. Sieh auf der Seite „System“ nach, ob die Karte „Lastprognose“
+  bei „Datenbasis“ Viertelstunden „aus Home Assistant“ nennt (die Zahl ist größer als 0, sobald
+  `load_history` gesetzt ist und die Abrechnung Lücken hat), und ob im Log keine Warnung
+  „Lastverlauf aus Home Assistant nicht lesbar“ oder zur Einheit der Entität steht:
+  `docker compose logs --since 1h ems-app | grep -i "lastverlauf\|lastprofil"`.
+- **Kalibrierung der PV:** Sie braucht etwa eine Woche Archiv, bevor die Faktoren von 1,0
+  abweichen: In den ersten Tagen fehlen je Stunde und Klarheitsklasse die 8 Paare, und das Band
+  steht auf 0,7 bis 1,2. Die Komponente „forecast“ nennt „kalibriert aus n Viertelstunden“, sobald
+  es Faktoren gibt.
 
 ## Simulator
 
