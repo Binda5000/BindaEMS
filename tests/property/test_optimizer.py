@@ -1,6 +1,7 @@
 """Eigenschaften des Optimierers (Präzisierungen 5 und 6) über zufällige kurze Horizonte.
 
-Für jedes Ergebnis mit Lösung: SOC innerhalb der Grenzen, Einspeisung nie über der PV, nie Laden
+Jede Eingabe ist lösbar. Für jedes Ergebnis: SOC innerhalb der Grenzen, Einspeisung nie über der
+PV, das Haus bezieht aus Netz und Akku nie mehr als den Fehlbetrag (PV deckt es zuerst), nie Laden
 und Entladen im selben Slot, kein Netzladen bei ausgeschaltetem Schalter und Regel R1: Nach einem
 Slot mit Netzladen wird bis zum Horizontende nichts mehr eingespeist.
 """
@@ -33,12 +34,12 @@ def horizons(draw: st.DrawFn) -> dict[str, object]:
 def test_optimizer_respects_limits_and_rule_r1(kwargs: dict[str, object]) -> None:
     inputs = scenario(**kwargs)  # type: ignore[arg-type]
     result = solve(inputs)
-    if not result.flows:
-        return
+    assert result.status in ("optimal", "time_limit") and result.flows
     params = params_of(inputs)
     for index, (slot, flow) in enumerate(zip(inputs.slots, result.flows, strict=True)):
         assert params.lo_kwh - 0.01 <= flow.soc_end_kwh <= params.hi_kwh + 0.01
         assert flow.pv_x <= slot.pv_w + 1
+        assert flow.gr_h + flow.bt_h <= max(0.0, slot.load_w - slot.pv_w) + 1
         assert min(flow.pv_b + flow.gr_b, flow.bt_h) <= 1
         if not inputs.planning.grid_charge_allowed:
             assert flow.gr_b == 0

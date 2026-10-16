@@ -222,6 +222,7 @@ def scenario(
     start: str = SCENARIO_START,
     end_value_ct: float = 0.0,
     inertia_ct: float | None = None,
+    margin_ct: float | None = None,
     prev_battery_w: list[float] | None = None,
 ) -> PlanInputs:
     """``PlanInputs`` direkt aus Reihen je Slot (Standardakku wie ``state``), ohne Restwert und
@@ -232,6 +233,8 @@ def scenario(
     planning_values: dict[str, Any] = {"grid_charge_allowed": grid_charge}
     if inertia_ct is not None:
         planning_values["inertia_ct"] = inertia_ct
+    if margin_ct is not None:
+        planning_values["margin_ct"] = margin_ct
     prev = prev_battery_w or []
     base = battery if battery is not None else state()
     return PlanInputs(

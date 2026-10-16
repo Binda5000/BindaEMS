@@ -123,7 +123,12 @@ def _solve(inputs: PlanInputs, time_limit_s: float, gap: float, started: float) 
     def var(name: str, t: int, upper: float | None = None) -> pulp.LpVariable:
         return prob.add_variable(f"{name}_{t}", lowBound=0, upBound=upper)
 
-    pv_h = [var("pv_h", t) for t in range(count)]
+    # PV deckt zuerst das Haus: sonst ginge PV in den Akku und das Haus bezöge aus dem Netz,
+    # verdecktes Netzladen an Schalter, ``GC_t``, Marge und R1 vorbei.
+    pv_h = [
+        prob.add_variable(f"pv_h_{t}", lowBound=cover, upBound=cover)
+        for t, cover in enumerate(min(s.pv_w, s.load_w) for s in inputs.slots)
+    ]
     pv_b = [var("pv_b", t) for t in range(count)]
     pv_x = [var("pv_x", t) for t in range(count)]
     gr_h = [var("gr_h", t) for t in range(count)]
