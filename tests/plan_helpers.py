@@ -232,11 +232,15 @@ def scenario(
     inertia_ct: float | None = None,
     margin_ct: float | None = None,
     prev_battery_w: list[float] | None = None,
+    origins: list[PriceOrigin] | None = None,
 ) -> PlanInputs:
     """``PlanInputs`` direkt aus Reihen je Slot (Standardakku wie ``state``), ohne Restwert und
-    ohne Leistungspreis, wenn nicht angegeben; ``prev_battery_w`` gilt für die ersten Slots."""
+    ohne Leistungspreis, wenn nicht angegeben; ``prev_battery_w`` gilt für die ersten Slots,
+    ``origins`` ist die Herkunft der Preise je Slot (Standard ``primary``)."""
     if not len(prices) == len(pv) == len(load):
         raise ValueError("Preise, PV und Last müssen gleich lang sein")
+    if origins is not None and len(origins) != len(prices):
+        raise ValueError("Herkunft je Preis nötig")
     first = at(start)
     planning_values: dict[str, Any] = {"grid_charge_allowed": grid_charge}
     if inertia_ct is not None:
@@ -259,7 +263,7 @@ def scenario(
                 start=first + i * SLOT,
                 import_ct=ct,
                 feed_in_ct=feed_in,
-                origin="primary",
+                origin=origins[i] if origins is not None else "primary",
                 pv_w=pv_w,
                 load_w=load_w,
                 prev_battery_w=prev[i] if i < len(prev) else None,
