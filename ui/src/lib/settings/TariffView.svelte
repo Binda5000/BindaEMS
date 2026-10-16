@@ -1,20 +1,13 @@
 <script lang="ts">
 	import type { PriceComponent, RuntimeSettings } from '$lib/api/schemas';
 	import { DASH, formatCt, formatNumber, NBSP } from '$lib/format';
-	import { describeWindow, isEnergy, validityText, windowsOf } from './model';
+	import { describeWindow, isEnergy, KIND_LABEL, validityText, windowsOf } from './model';
 
 	interface Props {
 		settings: RuntimeSettings;
 	}
 
 	let { settings }: Props = $props();
-
-	const KIND_LABEL = {
-		energy_per_kwh: 'Energie',
-		feed_in_per_kwh: 'Einspeisung',
-		power_per_kw_year: 'Leistungspreis',
-		fixed_per_month: 'Gebühr'
-	} as const;
 
 	/** Wert netto mit Einheit; `null` = noch nicht eingetragen */
 	function valueText(component: PriceComponent): string | null {
@@ -51,6 +44,7 @@
 		</thead>
 		<tbody>
 			{#each settings.tariff.components as component (component.id)}
+				{@const value = valueText(component)}
 				<tr>
 					<td>{component.name}</td>
 					<td>
@@ -63,10 +57,10 @@
 					<td class="num">
 						{#if isEnergy(component) && component.source === 'spot'}
 							{DASH}
-						{:else if valueText(component) === null}
+						{:else if value === null}
 							<span class="missing">fehlt</span>
 						{:else}
-							{valueText(component)}
+							{value}
 						{/if}
 					</td>
 					<td>{component.vat ? 'ja' : 'nein'}</td>

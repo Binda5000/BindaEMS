@@ -65,6 +65,22 @@ export interface SettingsDraft {
 export type DraftResult =
 	{ settings: RuntimeSettings; tariffChanged: boolean } | { errors: Record<string, string> };
 
+/** Bezeichnung der Arten in Leseansicht und Auswahl des Editors */
+export const KIND_LABEL: Record<ComponentKind, string> = {
+	energy_per_kwh: 'Energie (ct/kWh)',
+	power_per_kw_year: 'Leistungspreis (€/kW/Jahr)',
+	fixed_per_month: 'Monatliche Gebühr (€/Monat)',
+	feed_in_per_kwh: 'Einspeisung (ct/kWh)'
+};
+
+/** Vorbelegter Name eines neuen Bestandteils je Art */
+export const NEW_COMPONENT_NAME: Record<ComponentKind, string> = {
+	energy_per_kwh: 'Neue Energie',
+	power_per_kw_year: 'Neuer Leistungspreis',
+	fixed_per_month: 'Neue Gebühr',
+	feed_in_per_kwh: 'Neue Einspeisung'
+};
+
 const COMPONENT_KINDS: string[] = [
 	'energy_per_kwh',
 	'power_per_kw_year',
@@ -81,8 +97,21 @@ const QUARTER_ERROR = 'Uhrzeit auf einer Viertelstunde, z. B. 10:15';
 const NUMBER_ERROR = 'Zahl, z. B. 8,11';
 const DEFAULT_TIER_KW = '10';
 const DEFAULT_MINIMUM_KW = '2';
-const MONTHS = ['Jän', 'Feb', 'Mär', 'Apr', 'Mai', 'Jun', 'Jul', 'Aug', 'Sep', 'Okt', 'Nov', 'Dez'];
-const WEEKDAYS = ['Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa', 'So']; // 0 = Montag
+export const MONTHS = [
+	'Jän',
+	'Feb',
+	'Mär',
+	'Apr',
+	'Mai',
+	'Jun',
+	'Jul',
+	'Aug',
+	'Sep',
+	'Okt',
+	'Nov',
+	'Dez'
+];
+export const WEEKDAYS = ['Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa', 'So']; // 0 = Montag
 
 /** Dezimalzahl mit Komma oder Punkt; leer = kein Wert */
 export function parseDecimal(text: string): number | null | 'invalid' {
@@ -118,6 +147,18 @@ function windowDraft(window: TimeWindow): WindowDraft {
 		end: window.end.slice(0, 5),
 		mode: byValue ? 'value' : 'factor',
 		amount: decimalText(byValue ? window.value_ct : window.factor)
+	};
+}
+
+/** Neues Zeitfenster: ganzjährig, alle Tage, ganzer Tag, Faktor 1 */
+export function newWindow(): WindowDraft {
+	return {
+		months: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12],
+		weekdays: [0, 1, 2, 3, 4, 5, 6],
+		start: '00:00',
+		end: '00:00',
+		mode: 'factor',
+		amount: '1'
 	};
 }
 

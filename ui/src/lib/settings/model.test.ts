@@ -283,14 +283,34 @@ it('checks validity order, numbers and names of components', () => {
 });
 
 it('maps server errors in windows onto the editor keys', () => {
+	// Modell-Prüfungen (pydantic) nennen kein Feld: der Pfad endet beim Zeitfenster
 	const detail = [
 		{
 			type: 'value_error',
-			loc: ['body', 'settings', 'tariff', 'components', 2, 'energy_per_kwh', 'windows', 0, 'end'],
+			loc: ['body', 'settings', 'tariff', 'components', 2, 'energy_per_kwh', 'windows', 0],
 			msg: 'Value error, Ende muss nach dem Beginn liegen (00:00 = Tagesende)'
 		}
 	];
-	expect(Object.keys(editorFieldErrors(detail, settings()))).toEqual([
-		'tariff.components.2.windows.0.end'
-	]);
+	expect(editorFieldErrors(detail, settings())).toEqual({
+		'tariff.components.2.windows.0': 'Ende muss nach dem Beginn liegen (00:00 = Tagesende)'
+	});
+});
+
+it('maps server errors of a component and of the tariff onto the editor keys', () => {
+	const detail = [
+		{
+			type: 'value_error',
+			loc: ['body', 'settings', 'tariff', 'components', 6, 'power_per_kw_year'],
+			msg: 'Value error, valid_from liegt nach valid_until'
+		},
+		{
+			type: 'value_error',
+			loc: ['body', 'settings', 'tariff'],
+			msg: 'Value error, Leistungspreise dürfen sich zeitlich nicht überschneiden'
+		}
+	];
+	expect(editorFieldErrors(detail, settings())).toEqual({
+		'tariff.components.6': 'valid_from liegt nach valid_until',
+		tariff: 'Leistungspreise dürfen sich zeitlich nicht überschneiden'
+	});
 });

@@ -27,3 +27,13 @@ it('zeigt Werte mit Einheit', () => {
 	expect(screen.getByText('Leistungspreis (ElWG)').closest('tr')).toHaveTextContent('€/kW/Jahr');
 	expect(screen.getByText('Grundgebühr Netz').closest('tr')).toHaveTextContent('€/Monat');
 });
+
+it('nennt die Art mit denselben Bezeichnungen wie der Editor', () => {
+	render(TariffView, { settings: settingsCurrent().settings });
+	expect(screen.getByText('Leistungspreis (ElWG)').closest('tr')).toHaveTextContent(
+		'Leistungspreis (€/kW/Jahr)'
+	);
+	expect(screen.getByText('Grundgebühr Netz').closest('tr')).toHaveTextContent(
+		'Monatliche Gebühr (€/Monat)'
+	);
+});

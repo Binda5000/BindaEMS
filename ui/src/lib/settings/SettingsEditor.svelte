@@ -5,6 +5,7 @@
 	import Notice from '$lib/components/Notice.svelte';
 	import { WALLBOX_NAME_MAX, WALLBOX_TYPES } from '$lib/wallboxes';
 	import { applyDraft, draftFrom, editorFieldErrors } from './model';
+	import TariffEditor from './TariffEditor.svelte';
 
 	interface Props {
 		current: SettingsCurrent;
@@ -38,14 +39,18 @@
 	let conflict = $state(false);
 	let busy = $state(false);
 
-	// Bis zum vollen Tarif-Editor: nur die festen Energiebestandteile sind hier änderbar
-	const EDITABLE_VALUE = /^tariff\.components\.(\d+)\.value_ct$/;
-	function shownHere(key: string): boolean {
-		if (/^(feedIn|prices|wallboxNames)\./.test(key)) return true;
-		const index = EDITABLE_VALUE.exec(key)?.[1];
-		const component = index === undefined ? undefined : draft.tariff.components[Number(index)];
-		return component?.kind === 'energy_per_kwh' && component.source === 'fixed';
-	}
+	// Schlüssel, für die der Editor eine Stelle für den Fehlertext hat; alles andere (z. B. ein
+	// Fehler in der Liste der Monate eines Zeitfensters) erscheint oben als Meldung
+	const COMPONENT_FIELDS =
+		'name|valid_from|valid_until|value_ct|value_eur|value_above_eur|tier_kw|minimum_kw';
+	const WINDOW_FIELDS = 'months|weekdays|start|end|factor|value_ct';
+	const SHOWN_KEYS = [
+		/^(feedIn|prices|wallboxNames)\./,
+		/^tariff(\.components|\.vat_pct|\.fixed_price_gross_ct)?$/,
+		new RegExp(`^tariff\\.components\\.\\d+(\\.(${COMPONENT_FIELDS}))?$`),
+		new RegExp(`^tariff\\.components\\.\\d+\\.windows\\.\\d+(\\.(${WINDOW_FIELDS}))?$`)
+	];
+	const shownHere = (key: string) => SHOWN_KEYS.some((pattern) => pattern.test(key));
 
 	function describedBy(key: string): string | undefined {
 		return errors[key] ? `${uid}-${key}-error` : undefined;
@@ -111,26 +116,7 @@
 		</p>
 	{/if}
 
-	<fieldset>
-		<legend>Tarifbestandteile</legend>
-		<p class="hint">Netto in ct/kWh; leer = noch kein Wert (zählt als 0).</p>
-		{#each draft.tariff.components as component, index (component.id)}
-			{#if component.kind === 'energy_per_kwh' && component.source === 'fixed'}
-				{@const key = `tariff.components.${index}.value_ct`}
-				<div class="field">
-					<label for="{uid}-{component.id}">{component.name} (ct/kWh netto)</label>
-					<input
-						id="{uid}-{component.id}"
-						inputmode="decimal"
-						bind:value={component.value}
-						aria-invalid={errors[key] ? 'true' : undefined}
-						aria-describedby={describedBy(key)}
-					/>
-					{@render fieldError(key)}
-				</div>
-			{/if}
-		{/each}
-	</fieldset>
+	<TariffEditor bind:draft={draft.tariff} {errors} onStructure={() => (errors = {})} />
 
 	<fieldset>
 		<legend>Einspeisung (OeMAG-Marktpreis je Monat)</legend>

@@ -374,18 +374,37 @@ Jede Änderung ist eine neue Version im Änderungsprotokoll.
 
 Im UI (Admin) unter **Einstellungen**:
 
-- **Bearbeiten**: je fester Tarifbestandteil ein Feld „… (ct/kWh netto)“ (Komma oder Punkt,
-  leer = noch kein Wert), die OeMAG-Monatswerte (Monat und ct/kWh, Zeilen hinzufügen oder
-  entfernen), Brutto/Netto der Börsenpreise und die Referenzquelle, dazu ein Kommentar.
-  **Speichern** legt eine neue Version an. Hat inzwischen jemand anderes gespeichert, bleiben
-  deine Eingaben stehen; „Neu laden (Eingaben verwerfen)“ holt den neuen Stand.
+- **Bearbeiten**: öffnet den Editor für den ganzen Tarif. Je Bestandteil (Börsenpreis,
+  Aufschlag, Netzentgelte, Abgaben, Leistungspreis, Gebühren, Einspeisung) gibt es eine Gruppe
+  mit dem Namen, dem Wert netto (Komma oder Punkt, leer = noch kein Wert), „mit USt.“ und der
+  Gültigkeit („gültig ab“ und „gültig bis“, leer = ohne Grenze). Der Börsenpreis hat keinen
+  Wert, er „kommt aus der Preisquelle“. Der Leistungspreis hat zusätzlich die Preise bis zur
+  und über der Stufe, die Stufe (kW) und die Mindestverrechnung (kW).
+  - **Zeitfenster** (bei Energie und Einspeisung, z. B. der SNAP-Sommerfaktor): mit
+    **Zeitfenster hinzufügen** legst du eines an, mit **Zeitfenster entfernen** löschst du es.
+    Du wählst Monate und Wochentage mit den Umschaltern, „von“ und „bis“ in Viertelstunden
+    („24:00“ ist das Tagesende) und entweder einen Faktor auf den Wert des Bestandteils oder
+    einen festen Wert in ct/kWh netto.
+  - **Hinzufügen und entfernen**: Unter „Art“ wählst du Energie, Leistungspreis, Monatliche
+    Gebühr oder Einspeisung und legst mit **Bestandteil hinzufügen** einen neuen an; er trägt
+    zunächst einen Namen nach der Art, den du änderst. Seine interne ID entsteht beim Anlegen
+    aus dem Namen und bleibt danach fest, auch wenn du ihn umbenennst. **Bestandteil entfernen**
+    löscht ihn; der Börsenpreis lässt sich nicht entfernen.
+  - Dazu die **USt. (%)** und der **Fixtarif zum Vergleich** (ct/kWh brutto), außerdem die
+    OeMAG-Monatswerte (Monat und ct/kWh, Zeilen hinzufügen oder entfernen), Brutto/Netto der
+    Börsenpreise, die Referenzquelle, die Namen der Ladestationen und ein Kommentar.
+
+  **Speichern** prüft die Eingaben und legt eine neue Version an. Fehler stehen am Feld, am
+  Zeitfenster oder am Bestandteil (z. B. „Ende muss nach dem Beginn liegen“ oder dass sich
+  zwei Leistungspreise zeitlich überschneiden). Hat inzwischen jemand anderes gespeichert,
+  bleiben deine Eingaben stehen; „Neu laden (Eingaben verwerfen)“ holt den neuen Stand.
 - **Abrechnung neu bewerten**: Die Abrechnung speichert je Viertelstunde den Bezugspreis zum
   Slotzeitpunkt. Nach einer Änderung der Tarifwerte erscheint das Formular mit dem Zeitraum
   vom Monatsbeginn bis heute; **Neu bewerten** rechnet die gewählten Tage mit dem aktuellen
   Tarif neu.
 - **Export und Import**: „Exportieren (YAML)“ lädt die gültigen Einstellungen herunter;
   „YAML-Datei importieren“ übernimmt eine geprüfte Datei als neue Version. Fehler nennen die
-  betroffenen Felder. Zeitfenster der Tarifbestandteile (z. B. Sommer-Faktor) änderst du so.
+  betroffenen Felder.
 - **Versionen** listet alle Stände mit Zeit, Person, Quelle und Kommentar.
 
 Der Einspeiseerlös wird immer erst beim Lesen mit dem eingetragenen OeMAG-Wert berechnet; dafür
