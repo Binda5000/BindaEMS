@@ -9,6 +9,7 @@ und eine beendete Übersteuerung entfernt, dann kommt die Änderung, zuletzt die
 from __future__ import annotations
 
 import asyncio
+import contextlib
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -103,24 +104,44 @@ def _health_vehicles(health: Mapping[str, Any] | None) -> dict[str, Mapping[str,
     return {item["id"]: item for item in raw if isinstance(item, dict) and "id" in item}
 
 
-def _clean(vehicle: VehicleIntent, shown: Mapping[str, Any] | None, now: datetime) -> VehicleIntent:
+def _trusted(current: Intent, health: Mapping[str, Any] | None) -> bool:
+    """Ob Health den Stand der Regelung mit der gültigen Absicht oder einer neueren zeigt.
+
+    Health kommt aus dem letzten Regelzyklus und trägt die Version der Absicht, mit der dieser
+    regelte (``intent_version``). Ist sie älter als die gültige Absicht, kennt Health Boost und
+    Übersteuerung der letzten Bedienung noch nicht; ohne Version (Regelbetrieb aus, Health fehlt)
+    ist der Stand unbekannt.
+    """
+    version = health.get("intent_version") if health is not None else None
+    return isinstance(version, int) and version >= current.version
+
+
+def _clean(
+    key: str, vehicle: VehicleIntent, shown: Mapping[str, Any] | None, now: datetime
+) -> VehicleIntent:
     """Entfernt Boost und Übersteuerung, die der core nicht mehr führt (Präzisierung 2).
 
-    Zeigt Health das Fahrzeug mit einem Modus, ist der Stand der Regelung bekannt: Der Boost bleibt
-    nur, wenn Health einen zeigt, die Übersteuerung nur an genau dieser Wallbox. Ohne Stand
-    (Regelbetrieb aus, Fahrzeug nicht in Health) bleiben beide erhalten, ein Boost nur in der
-    Zukunft. Ein Boost in der Vergangenheit entfällt immer.
+    ``shown`` ist der Eintrag des Fahrzeugs in einem vertrauenswürdigen Health (``_trusted``),
+    sonst ``None``: dann ist der Stand der Regelung unbekannt, ein Boost in der Zukunft und die
+    Übersteuerung bleiben erhalten. Mit Stand bleibt der Boost nur, wenn Health einen zeigt oder
+    er auf seinen Ansteckvorgang wartet (``boost_pending``), die Übersteuerung nur an genau dieser
+    Wallbox oder wartend (``override_pending``). Ein Boost in der Vergangenheit entfällt immer.
     """
     boost, wallbox = vehicle.boost_until, vehicle.wallbox
     if boost is not None and boost <= now:
         boost = None
-    if shown is not None and shown.get("mode") is not None:
-        if shown.get("boost_until") is None:
+    if shown is not None:
+        if shown.get("boost_until") is None and not shown.get("boost_pending"):
             boost = None
-        if not (shown.get("assignment") == ASSIGNMENT_OVERRIDE and shown.get("wallbox") == wallbox):
+        active = shown.get("assignment") == ASSIGNMENT_OVERRIDE and shown.get("wallbox") == wallbox
+        if not (active or shown.get("override_pending")):
             wallbox = None
     if boost == vehicle.boost_until and wallbox == vehicle.wallbox:
         return vehicle
+    if boost != vehicle.boost_until:
+        log.info("Boost nicht zurückgeschickt", vehicle=key, boost_until=str(vehicle.boost_until))
+    if wallbox != vehicle.wallbox:
+        log.info("Übersteuerung nicht zurückgeschickt", vehicle=key, wallbox=vehicle.wallbox)
     return vehicle.model_copy(update={"boost_until": boost, "wallbox": wallbox})
 
 
@@ -128,8 +149,10 @@ def _base(current: Intent | None, health: Mapping[str, Any] | None, now: datetim
     """Die gültige Absicht ohne abgelaufenen Boost und beendete Übersteuerung."""
     if current is None:
         return Intent(version=1)
-    shown = _health_vehicles(health)
-    vehicles = {key: _clean(item, shown.get(key), now) for key, item in current.vehicles.items()}
+    shown = _health_vehicles(health) if _trusted(current, health) else {}
+    vehicles = {
+        key: _clean(key, item, shown.get(key), now) for key, item in current.vehicles.items()
+    }
     return current.model_copy(update={"vehicles": vehicles})
 
 
@@ -171,7 +194,11 @@ def derive(
 
     Die Version ist ``max(Millisekunden seit 1970 nach ``now``, gültige Version + 1)``.
     """
-    base = _base(current, health, now)
+    return _derive_from(current, _base(current, health, now), change, now)
+
+
+def _derive_from(current: Intent | None, base: Intent, change: Change, now: datetime) -> Intent:
+    """Wie ``derive``, aber auf der schon bereinigten Basis ``base``."""
     derived = _apply(change, base, now)
     version = max(epoch_ms(now), (current.version + 1) if current is not None else 1)
     return derived.model_copy(update={"version": version})
@@ -327,9 +354,10 @@ class IntentService:
             try:
                 for attempt in (1, 2):
                     current = await self._client.intent()
+                    self._cached = current
                     now = self._clock.now()
                     base = _base(current, self._live.health, now)
-                    new = derive(current, self._live.health, change, now)
+                    new = _derive_from(current, base, change, now)
                     reply = await self._client.submit_intent(new)
                     if reply.status != 409:
                         break
@@ -338,7 +366,11 @@ class IntentService:
                     raise ConflictAgain
             except CoreUnavailableError as exc:
                 raise CoreDown from exc
-            return self._finish(change, actor, source, base, new, reply)
+            result = self._finish(change, actor, source, base, new, reply)
+        if result.result == "clamped":  # der core hat die Absicht geändert: seine zeigt der Cache
+            with contextlib.suppress(CoreDown):
+                await self.current()
+        return result
 
     def _finish(
         self,

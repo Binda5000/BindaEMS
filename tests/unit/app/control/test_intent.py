@@ -3,6 +3,7 @@ from datetime import timedelta
 from typing import Any
 
 import pytest
+from structlog.testing import capture_logs
 from tests.app_helpers import T_APP
 from tests.unit.app.control.conftest import FakeCoreClient, FakeFeed
 
@@ -35,12 +36,21 @@ from bindaems.shared.control import (
 from bindaems.shared.influx.lineprotocol import epoch_ms
 
 
-def health(*vehicles: dict[str, Any]) -> dict[str, Any]:
-    return {"vehicles": list(vehicles)}
+def health(*vehicles: dict[str, Any], intent_version: int | None = 1) -> dict[str, Any]:
+    """Health, dessen letzter Regelzyklus die Absicht ``intent_version`` benutzte."""
+    return {"intent_version": intent_version, "vehicles": list(vehicles)}
 
 
 def shown(key: str, **fields: Any) -> dict[str, Any]:
-    base = {"id": key, "mode": "pv", "boost_until": None, "assignment": "default", "wallbox": None}
+    base = {
+        "id": key,
+        "mode": "pv",
+        "boost_until": None,
+        "boost_pending": False,
+        "override_pending": False,
+        "assignment": "default",
+        "wallbox": None,
+    }
     return {**base, **fields}
 
 
@@ -97,12 +107,54 @@ def test_unknown_regulation_keeps_a_future_boost() -> None:
             "tesla": VehicleIntent(boost_until=T_APP - timedelta(minutes=1), wallbox="evcs"),
         },
     )
-    h = health(shown("egolf", mode=None), shown("tesla", mode=None))
+    h = health(shown("egolf", mode=None), shown("tesla", mode=None), intent_version=None)
     new = derive(current, h, SetControl(True), T_APP)
     assert new.vehicles["egolf"].boost_until == future
     assert new.vehicles["egolf"].wallbox == "twc"
     assert new.vehicles["tesla"].boost_until is None
     assert new.vehicles["tesla"].wallbox == "evcs"
+
+
+def test_health_of_an_older_intent_is_not_trusted() -> None:
+    # Boost an, dann sofort eine zweite Bedienung: Health kennt die Version des Boosts noch nicht
+    until = T_APP + timedelta(hours=12)
+    current = Intent(
+        version=5, vehicles={"tesla": VehicleIntent(boost_until=until, wallbox="evcs")}
+    )
+    stale = health(shown("tesla"), shown("egolf"), intent_version=4)
+    new = derive(current, stale, SetMode("egolf", ChargeMode.NOW), T_APP)
+    assert new.vehicles["tesla"].boost_until == until
+    assert new.vehicles["tesla"].wallbox == "evcs"
+    same = health(shown("tesla"), shown("egolf"), intent_version=5)
+    assert derive(current, same, SetMode("egolf", ChargeMode.NOW), T_APP).vehicles["tesla"] == (
+        VehicleIntent()
+    )
+    newer = health(shown("tesla"), shown("egolf"), intent_version=6)
+    assert derive(current, newer, SetMode("egolf", ChargeMode.NOW), T_APP).vehicles["tesla"] == (
+        VehicleIntent()
+    )
+
+
+def test_a_past_boost_goes_even_with_health_of_an_older_intent() -> None:
+    current = Intent(version=5, vehicles={"tesla": VehicleIntent(boost_until=T_APP)})
+    new = derive(current, health(shown("tesla"), intent_version=4), SetControl(True), T_APP)
+    assert new.vehicles["tesla"].boost_until is None
+
+
+def test_boost_and_override_waiting_for_the_plug_stay() -> None:
+    until = T_APP + timedelta(hours=12)
+    current = Intent(
+        version=5, vehicles={"tesla": VehicleIntent(boost_until=until, wallbox="evcs")}
+    )
+    waiting = health(
+        shown("tesla", boost_pending=True, override_pending=True, assignment="default"),
+        intent_version=5,
+    )
+    new = derive(current, waiting, SetControl(True), T_APP)
+    assert new.vehicles["tesla"] == VehicleIntent(boost_until=until, wallbox="evcs")
+    only_boost = health(shown("tesla", boost_pending=True), intent_version=5)
+    kept = derive(current, only_boost, SetControl(True), T_APP).vehicles["tesla"]
+    assert (kept.boost_until, kept.wallbox) == (until, None)
 
 
 def test_without_health_a_future_boost_stays_and_a_past_one_goes() -> None:
@@ -332,3 +384,42 @@ async def test_health_of_the_live_state_cleans_the_base(
     live.health = health(shown("egolf"))
     result = await service.apply(SetControl(True), actor="admin", source="ui")
     assert result.intent.vehicles["egolf"].boost_until is None
+
+
+async def test_cleanup_is_logged(
+    service: IntentService, fake_client: FakeCoreClient, live: LiveState
+) -> None:
+    until = T_APP + timedelta(hours=3)
+    fake_client.valid = Intent(
+        version=1, vehicles={"egolf": VehicleIntent(boost_until=until, wallbox="twc")}
+    )
+    live.health = health(shown("egolf"))
+    with capture_logs() as logs:
+        await service.apply(SetControl(True), actor="admin", source="ui")
+    removed = [(e["event"], e["vehicle"]) for e in logs if e["event"].endswith("zurückgeschickt")]
+    assert removed == [
+        ("Boost nicht zurückgeschickt", "egolf"),
+        ("Übersteuerung nicht zurückgeschickt", "egolf"),
+    ]
+
+
+async def test_cache_follows_the_fetched_and_the_clamped_intent(
+    service: IntentService, fake_client: FakeCoreClient
+) -> None:
+    fake_client.valid = Intent(version=3, control=True)
+    fake_client.replies.append(CoreReply(422, {"details": []}))
+    with pytest.raises(Rejected):
+        await service.apply(SetMode("tesla", ChargeMode.OFF), actor="admin", source="ui")
+    assert service.cached() == Intent(version=3, control=True)  # das Geholte, auch ohne Erfolg
+
+    clamped = Intent(version=9, control=True, actuators={"victron": ActuatorMode.DRY_RUN})
+
+    def core_clamps() -> CoreReply:
+        fake_client.valid = clamped
+        return CoreReply(200, {"result": "clamped", "version": 9, "details": ["geklemmt"]})
+
+    fake_client.replies.append(core_clamps)
+    request = SetActuators({"victron": ActuatorMode.LIVE})
+    result = await service.apply(request, actor="admin", source="ui")
+    assert result.intent.actuators["victron"] is ActuatorMode.LIVE  # die gesendete
+    assert service.cached() == clamped  # der Cache zeigt, was der core geklemmt hat
