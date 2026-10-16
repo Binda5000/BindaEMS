@@ -62,7 +62,7 @@ from bindaems.shared.control import Intent
 from bindaems.shared.influx.lineprotocol import Point, PointSink
 from bindaems.shared.influx.spool import DiskSpool
 from bindaems.shared.influx.writer import InfluxWriter
-from bindaems.shared.timeutil import Clock, SystemClock
+from bindaems.shared.timeutil import LOCAL_TZ, Clock, SystemClock
 
 log = structlog.get_logger(__name__)
 
@@ -278,14 +278,17 @@ class AppRuntime:
         return replace(self._ha_inputs, intent=cached)
 
     def _build_ha_inputs(self, intent: Intent | None) -> HaInputs:
+        """Läuft im Worker-Thread (``_ha_inputs_loop``): die Datenbankabfrage blockiert nicht."""
+        now = self._clock.now()
         return build_inputs(
             self.live,
             self.prices,
             self.price_store,
             self.forecast,
-            self._clock.now(),
+            now,
             intent,
             self.settings.current().settings.wallbox_names,
+            self.ledger.month_peak(now.astimezone(LOCAL_TZ).date()),
         )
 
     async def _ha_intent(self) -> Intent | None:

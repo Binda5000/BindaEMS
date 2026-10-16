@@ -11,13 +11,14 @@ import json
 import math
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Any, Final, Literal
 
 from bindaems import __version__
 from bindaems.app.control.intent import ASSIGNMENT_OVERRIDE
 from bindaems.app.core_link import LiveState
 from bindaems.app.forecast.service import ForecastService
+from bindaems.app.ledger.service import MonthPeak
 from bindaems.app.prices.pipeline import TOMORROW_EXPECTED_FROM
 from bindaems.app.prices.service import PriceService
 from bindaems.app.prices.store import PriceStore
@@ -81,6 +82,7 @@ class HaInputs:
     vehicles: list[dict[str, Any]] = field(default_factory=list)  # Health ``vehicles``
     wallboxes: list[dict[str, Any]] = field(default_factory=list)  # Health ``wallboxes``
     wallbox_names: dict[str, str] = field(default_factory=dict)  # eigene Namen der Wallboxes
+    month_peak: MonthPeak | None = None  # höchste Viertelstunde des Monats; None = keine
 
 
 @dataclass(frozen=True)
@@ -267,6 +269,15 @@ def _price_attributes(inputs: HaInputs) -> Mapping[str, Any]:
     }
 
 
+def _month_peak_kw(inputs: HaInputs) -> str:
+    return fmt(None if inputs.month_peak is None else inputs.month_peak.kw, 1)
+
+
+def _month_peak_attributes(inputs: HaInputs) -> Mapping[str, Any]:
+    peak = inputs.month_peak
+    return {"slot": None if peak is None else peak.slot_start.astimezone(UTC).isoformat()}
+
+
 def _power(oid: str, name: str, device: DeviceSpec, value: Callable[[HaInputs], str]) -> EntitySpec:
     return EntitySpec(
         oid,
@@ -320,6 +331,17 @@ def build_entities(cfg: Config) -> list[EntitySpec]:
             lambda i: fmt(i.pv_tomorrow_kwh, 1),
             unit="kWh",
             device_class="energy",
+        ),
+        EntitySpec(
+            "month_peak",
+            "sensor",
+            "Monatsspitze",
+            main,
+            _month_peak_kw,
+            unit="kW",
+            device_class="power",
+            state_class="measurement",
+            attributes=_month_peak_attributes,
         ),
         _power("grid_power", "Netzleistung", main, _derived_w("grid_w")),
         _power("pv_power", "PV-Leistung", main, _derived_w("pv_total_w")),
@@ -511,6 +533,7 @@ def build_inputs(
     now: datetime,
     intent: Intent | None = None,
     wallbox_names: Mapping[str, str] | None = None,
+    month_peak: MonthPeak | None = None,
 ) -> HaInputs:
     connected = live.connected
     signals: dict[str, Value] = {}
@@ -571,4 +594,5 @@ def build_inputs(
         vehicles=_dicts(vehicles),
         wallboxes=_dicts(wallboxes),
         wallbox_names=dict(wallbox_names or {}),
+        month_peak=month_peak,
     )

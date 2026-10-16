@@ -41,6 +41,7 @@ HA_SYSTEM_IDS = (
     "feed_in_price",
     "pv_forecast_today",
     "pv_forecast_tomorrow",
+    "month_peak",
     "grid_power",
     "pv_power",
     "battery_power",

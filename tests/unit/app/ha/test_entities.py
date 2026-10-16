@@ -1,5 +1,5 @@
 import json
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -15,6 +15,7 @@ from bindaems.app.ha.entities import (
     discovery,
     on_off,
 )
+from bindaems.app.ledger.service import MonthPeak
 from bindaems.app.prices.service import PriceService
 from bindaems.shared.config import Config
 from bindaems.shared.control import ChargeMode, Intent, VehicleIntent
@@ -39,6 +40,7 @@ def test_entities_from_config(cfg) -> None:
         "feed_in_price",
         "pv_forecast_today",
         "pv_forecast_tomorrow",
+        "month_peak",
         "grid_power",
         "pv_power",
         "battery_power",
@@ -417,3 +419,24 @@ def test_building_entities_fails_loudly_on_a_duplicate_object_id(cfg) -> None:
     broken = cfg.model_copy(update={"vehicles": {**cfg.vehicles, "Tesla": cfg.vehicles["tesla"]}})
     with pytest.raises(ValueError, match="tesla_soc"):
         build_entities(broken)
+
+
+def test_month_peak_sensor(cfg) -> None:
+    inputs = sample_inputs(month_peak=MonthPeak(7.43, datetime(2026, 10, 5, 17, 15, tzinfo=UTC)))
+    spec = entity(cfg, "month_peak")
+    assert (
+        spec.value(inputs) == "7.4"
+        and spec.attributes(inputs)["slot"] == "2026-10-05T17:15:00+00:00"
+    )
+    assert (spec.name, spec.unit, spec.device_class, spec.state_class) == (
+        "Monatsspitze",
+        "kW",
+        "power",
+        "measurement",
+    )
+
+
+def test_month_peak_sensor_without_peak_is_unknown(cfg) -> None:
+    inputs = sample_inputs()
+    spec = entity(cfg, "month_peak")
+    assert spec.value(inputs) == "None" and spec.attributes(inputs) == {"slot": None}

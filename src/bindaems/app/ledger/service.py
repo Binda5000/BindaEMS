@@ -13,7 +13,7 @@ import math
 import threading
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, date, datetime, time, timedelta
 from typing import Any, Literal
 
 import structlog
@@ -110,6 +110,14 @@ class LedgerSlot:
     export_wh: float
     import_price_ct: float | None
     origin: str
+
+
+@dataclass(frozen=True)
+class MonthPeak:
+    """Höchster Netzbezug einer Viertelstunde im lokalen Monat (Leistungspreis, Spec 7.4)."""
+
+    kw: float
+    slot_start: datetime
 
 
 @dataclass(frozen=True)
@@ -409,6 +417,24 @@ class LedgerService:
         )
         with self._engine.connect() as conn:
             return [_ledger_slot(row) for row in conn.execute(query).all()]
+
+    def month_peak(self, day: date) -> MonthPeak | None:
+        """Höchster Netzbezug einer Viertelstunde im lokalen Monat von ``day`` (früherer Slot bei
+        Gleichstand); ohne Slot im Monat ``None``."""
+        first = datetime.combine(day.replace(day=1), time(0), tzinfo=LOCAL_TZ)
+        after = (first + timedelta(days=32)).replace(day=1)  # erster Tag des Folgemonats
+        query = (
+            select(ledger_slot.c.slot_start, ledger_slot.c.import_wh)
+            .where(ledger_slot.c.slot_start >= first.astimezone(UTC))
+            .where(ledger_slot.c.slot_start < after.astimezone(UTC))
+            .order_by(ledger_slot.c.import_wh.desc(), ledger_slot.c.slot_start.asc())
+            .limit(1)
+        )
+        with self._engine.connect() as conn:
+            row = conn.execute(query).first()
+        if row is None:
+            return None
+        return MonthPeak(row.import_wh * 4 / 1000, ensure_utc(row.slot_start))
 
     def days(self, first: date, last: date) -> list[DaySummary]:
         if first > last:

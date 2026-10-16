@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal
@@ -14,9 +14,11 @@ from bindaems.app.auth.service import AuthService, Role
 from bindaems.app.consumers.service import Consumer, ConsumerInput
 from bindaems.app.fetch import RawResponse
 from bindaems.app.ha.entities import HaInputs
+from bindaems.app.ledger.service import LedgerService
 from bindaems.app.prices.sources import AwattarSource, EnergyChartsSource, SmartEnergySource
 from bindaems.app.prices.store import SlotRow
 from bindaems.app.settings.service import SettingsService
+from bindaems.shared.domain import SlotFlows
 from bindaems.shared.settings import RuntimeSettings
 
 T_APP = datetime(2026, 10, 9, 8, 0, tzinfo=UTC)  # 10:00 Ortszeit
@@ -166,6 +168,17 @@ SLOT_FLOWS_MSG: dict[str, Any] = {
     },
     "counters": {"grid.energy_import_kwh": [100.0, 100.4], "grid.energy_export_kwh": [50.0, 50.3]},
 }
+
+
+def ingest(
+    ledger: LedgerService,
+    when: str | datetime,
+    flows: Mapping[str, float],
+    covered_s: float = 900.0,
+) -> bool:
+    """Trägt einen Slot (ISO-Text oder Zeitpunkt) mit Flüssen in Wh in die Abrechnung ein."""
+    start = datetime.fromisoformat(when) if isinstance(when, str) else when
+    return ledger.ingest(SlotFlows(start.astimezone(UTC), covered_s, dict(flows), {}), "stream")
 
 
 def sample_inputs(**changes: Any) -> HaInputs:

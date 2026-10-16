@@ -1,9 +1,9 @@
 from datetime import UTC, date, datetime, timedelta
 
 import pytest
-from tests.app_helpers import SLOT_FLOWS_MSG, price_row, set_feed_in, set_grid_usage
+from tests.app_helpers import SLOT_FLOWS_MSG, ingest, price_row, set_feed_in, set_grid_usage
 
-from bindaems.app.ledger.service import parse_slot_flows
+from bindaems.app.ledger.service import MonthPeak, parse_slot_flows
 from bindaems.shared.timeutil import SLOT
 
 S = datetime(2026, 10, 9, 8, 0, tzinfo=UTC)
@@ -216,3 +216,35 @@ def test_coverage_of_today_counts_only_past_slots(ledger, clock) -> None:
     assert today.expected_slots == 41
     # ein Tag in der Zukunft hat noch keine Viertelstunde
     assert (tomorrow.expected_slots, tomorrow.coverage, tomorrow.complete) == (0, 0.0, False)
+
+
+def test_month_peak_is_highest_quarter_of_local_month(ledger) -> None:
+    ingest(
+        ledger, "2026-09-30T21:45:00+00:00", {"grid>house": 3000}
+    )  # 30. 9. 23:45 lokal: September
+    ingest(ledger, "2026-10-01T06:00:00+00:00", {"grid>house": 1500})
+    ingest(ledger, "2026-10-05T17:15:00+00:00", {"grid>house": 1200, "grid>wb:evcs": 800})
+    peak = ledger.month_peak(date(2026, 10, 9))
+    assert peak == MonthPeak(8.0, datetime(2026, 10, 5, 17, 15, tzinfo=UTC))
+
+
+def test_month_peak_without_slots_is_none(ledger) -> None:
+    assert ledger.month_peak(date(2026, 10, 9)) is None
+
+
+def test_month_peak_tie_takes_earlier_slot(ledger) -> None:
+    ingest(ledger, "2026-10-07T10:00:00+00:00", {"grid>house": 1000})
+    ingest(ledger, "2026-10-03T10:00:00+00:00", {"grid>house": 1000})
+    peak = ledger.month_peak(date(2026, 10, 20))
+    assert peak == MonthPeak(4.0, datetime(2026, 10, 3, 10, 0, tzinfo=UTC))
+
+
+def test_month_peak_month_edges_follow_local_time_in_winter(ledger) -> None:
+    ingest(ledger, "2026-11-30T22:45:00+00:00", {"grid>house": 900})  # 30. 11. 23:45 lokal
+    ingest(ledger, "2026-11-30T23:00:00+00:00", {"grid>house": 5000})  # 1. 12. 00:00 lokal
+    assert ledger.month_peak(date(2026, 11, 15)) == MonthPeak(
+        3.6, datetime(2026, 11, 30, 22, 45, tzinfo=UTC)
+    )
+    assert ledger.month_peak(date(2026, 12, 1)) == MonthPeak(
+        20.0, datetime(2026, 11, 30, 23, 0, tzinfo=UTC)
+    )
