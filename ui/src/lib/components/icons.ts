@@ -56,5 +56,6 @@ export const ICONS: Record<IconName, Shape[]> = {
 		{ d: 'M15 9h2a2 2 0 0 1 2 2v4a2 2 0 0 0 4 0V8' },
 		{ d: 'M10.5 7l-2 4h3l-2 4' }
 	],
-	car: [{ d: 'M3 16v-3l2-5h14l2 5v3z' }, { cx: 7, cy: 16.5, r: 1.5 }, { cx: 17, cy: 16.5, r: 1.5 }]
+	car: [{ d: 'M3 16v-3l2-5h14l2 5v3z' }, { cx: 7, cy: 16.5, r: 1.5 }, { cx: 17, cy: 16.5, r: 1.5 }],
+	list: [{ d: 'M9 6h12M9 12h12M9 18h12' }, { d: 'M4 6h.01M4 12h.01M4 18h.01' }]
 };

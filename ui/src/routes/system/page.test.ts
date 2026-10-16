@@ -101,7 +101,8 @@ it('zeigt die eingeschränkte Betriebsart, den gesperrten Aktor und den ausgelö
 				effective: 'dry_run',
 				live_allowed: true,
 				reasons: [],
-				locked: ['Dynamic ESS ist aktiv (Modus 1).']
+				locked: ['Dynamic ESS ist aktiv (Modus 1).'],
+				watchdog_needed: true
 			}
 		],
 		watchdog: watchdogWith({ state: 'tripped', version: '0.9.0' })
@@ -156,7 +157,8 @@ it('listet die Aktoren mit Betriebsart, Freigabe und Hinweisen', async () => {
 				effective: 'dry_run',
 				live_allowed: false,
 				reasons: ['In config.yaml nicht für den Live-Betrieb freigegeben (live_allowed).'],
-				locked: ['Dynamic ESS ist aktiv (Modus 1).', 'EVCS-Modus nicht verfügbar.']
+				locked: ['Dynamic ESS ist aktiv (Modus 1).', 'EVCS-Modus nicht verfügbar.'],
+				watchdog_needed: true
 			},
 			{
 				id: 'vehicle.tesla',
@@ -165,7 +167,8 @@ it('listet die Aktoren mit Betriebsart, Freigabe und Hinweisen', async () => {
 				effective: 'dry_run',
 				live_allowed: true,
 				reasons: [],
-				locked: []
+				locked: [],
+				watchdog_needed: true
 			}
 		]
 	});
@@ -213,7 +216,8 @@ it('zeigt gleichlautende Gründe, Probleme und Hinweise ohne abzustürzen', asyn
 				effective: 'dry_run',
 				live_allowed: true,
 				reasons: [same, same],
-				locked: []
+				locked: [],
+				watchdog_needed: true
 			}
 		]
 	});

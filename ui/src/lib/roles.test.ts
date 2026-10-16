@@ -1,5 +1,5 @@
 import { expect, it } from 'vitest';
-import { hasRole } from './roles';
+import { canOperate, hasRole } from './roles';
 
 const user = (role: 'admin' | 'operator' | 'viewer') => ({
 	id: 1,
@@ -14,4 +14,11 @@ it('ordnet die Rollen Lesen < Bedienen < Admin', () => {
 	expect(hasRole(user('operator'), 'operator')).toBe(true);
 	expect(hasRole(user('viewer'), 'operator')).toBe(false);
 	expect(hasRole(null, 'viewer')).toBe(false);
+});
+
+it('Bedienen und Admin dürfen bedienen, Lesen nicht', () => {
+	expect(canOperate(user('operator'))).toBe(true);
+	expect(canOperate(user('admin'))).toBe(true);
+	expect(canOperate(user('viewer'))).toBe(false);
+	expect(canOperate(null)).toBe(false);
 });

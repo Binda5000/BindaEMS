@@ -14,6 +14,23 @@ export const EXPORT_SETTINGS_URL = '/api/settings/export';
 
 const RepriceSchema = v.object({ repriced: v.number() });
 
+const DECISION_FILTERS = ['since', 'until', 'actuator', 'result', 'text'] as const;
+
+/** Query von `GET /api/decisions`: nur gesetzte Filter; `dry_run=false` blendet Dry-Run aus. */
+function decisionParams(query: s.DecisionQuery): Record<string, string> {
+	const params: Record<string, string> = {};
+	for (const name of DECISION_FILTERS) {
+		const value = query[name];
+		if (value !== undefined && value !== '') params[name] = value;
+	}
+	if (query.dry_run !== undefined) params.dry_run = String(query.dry_run);
+	if (query.before !== undefined) params.before = String(query.before);
+	if (query.limit !== undefined) params.limit = String(query.limit);
+	return params;
+}
+
+const encode = encodeURIComponent;
+
 function get<T>(
 	path: string,
 	schema: v.GenericSchema<unknown, T>,
@@ -104,5 +121,52 @@ export const api = {
 		request('POST', '/api/ledger/reprice', {
 			body: { from: first, to: last },
 			schema: RepriceSchema
-		})
+		}),
+
+	// Bedienung (ab „Bedienen“; Live-Schaltung und Quittierung nur Admin)
+	control: (o?: Load): Promise<s.ControlResponse> =>
+		get('/api/control', s.ControlResponseSchema, o),
+	setRegulation: (on: boolean): Promise<s.ControlReply> =>
+		request('PUT', '/api/control/regulation', { body: { on }, schema: s.ControlReplySchema }),
+	setMode: (vehicle: string, mode: s.ChargeMode): Promise<s.ControlReply> =>
+		request('PUT', `/api/control/vehicles/${encode(vehicle)}/mode`, {
+			body: { mode },
+			schema: s.ControlReplySchema
+		}),
+	setBoost: (vehicle: string, on: boolean): Promise<s.ControlReply> =>
+		request('PUT', `/api/control/vehicles/${encode(vehicle)}/boost`, {
+			body: { on },
+			schema: s.ControlReplySchema
+		}),
+	/** `null`: „Automatisch“, die Übersteuerung dieser Wallbox entfällt */
+	setWallboxVehicle: (wallbox: string, vehicle: string | null): Promise<s.ControlReply> =>
+		request('PUT', `/api/control/wallboxes/${encode(wallbox)}/vehicle`, {
+			body: { vehicle },
+			schema: s.ControlReplySchema
+		}),
+	setGuestMode: (mode: s.ChargeMode): Promise<s.ControlReply> =>
+		request('PUT', '/api/control/guest', { body: { mode }, schema: s.ControlReplySchema }),
+	setPriority: (priority: string[], surplus: s.SurplusPriority): Promise<s.ControlReply> =>
+		request('PUT', '/api/control/priority', {
+			body: { priority, surplus_priority: surplus },
+			schema: s.ControlReplySchema
+		}),
+	/** Admin; `password` und `confirmed` nur nötig, wenn ein Aktor auf `live` wechselt */
+	setActuators: (
+		modes: Record<string, s.ActuatorMode>,
+		password: string | null,
+		confirmed: boolean
+	): Promise<s.ControlReply> =>
+		request('PUT', '/api/control/actuators', {
+			body: { modes, password, confirmed },
+			schema: s.ControlReplySchema
+		}),
+	/** Admin; der Status des core (202 oder 409) steht im Fehlertext, die Antwort ist sein Satz */
+	acknowledge: (actuator: string): Promise<s.AckResponse> =>
+		request('POST', `/api/control/locks/${encode(actuator)}/ack`, { schema: s.AckResponseSchema }),
+
+	decisions: (query: s.DecisionQuery, o?: Load): Promise<s.DecisionsResponse> =>
+		get(withQuery('/api/decisions', decisionParams(query)), s.DecisionsResponseSchema, o),
+	latestDecisions: (o?: Load): Promise<s.LatestDecisionsResponse> =>
+		get('/api/decisions/latest', s.LatestDecisionsResponseSchema, o)
 };

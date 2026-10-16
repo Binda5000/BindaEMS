@@ -13,6 +13,11 @@ export function hasRole(user: User | null | undefined, role: Role): boolean {
 	return user != null && ROLE_RANK[user.role] >= ROLE_RANK[role];
 }
 
+/** Bedienen (Regelbetrieb, Lademodi, Boost, Zuordnung) darf ab „Bedienen“. */
+export function canOperate(user: User | null | undefined): boolean {
+	return hasRole(user, 'operator');
+}
+
 /** Für Seiten nur für Admins: sonst die Fehlerseite „Keine Berechtigung“. */
 export function requireAdmin(user: User | null | undefined): void {
 	if (!hasRole(user, 'admin')) error(403, 'Keine Berechtigung');

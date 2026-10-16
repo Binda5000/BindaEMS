@@ -17,7 +17,8 @@ export type IconName =
 	| 'battery'
 	| 'house'
 	| 'wallbox'
-	| 'car';
+	| 'car'
+	| 'list';
 
 export interface NavItem {
 	href: string;
@@ -27,9 +28,11 @@ export interface NavItem {
 
 const PAGES: readonly (NavItem & { adminOnly?: boolean })[] = [
 	{ href: '/', label: 'Übersicht', icon: 'overview' },
+	{ href: '/laden', label: 'Laden', icon: 'car' },
 	{ href: '/verlauf', label: 'Verlauf', icon: 'history' },
 	{ href: '/verbraucher', label: 'Verbraucher', icon: 'consumers' },
 	{ href: '/system', label: 'System', icon: 'system' },
+	{ href: '/entscheidungen', label: 'Entscheidungen', icon: 'list' },
 	{ href: '/einstellungen', label: 'Einstellungen', icon: 'settings' },
 	{ href: '/benutzer', label: 'Benutzer', icon: 'users', adminOnly: true },
 	{ href: '/protokoll', label: 'Protokoll', icon: 'audit', adminOnly: true },

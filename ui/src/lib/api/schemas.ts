@@ -94,7 +94,168 @@ export const CoreStateSchema = v.object({
 export type CoreState = v.InferOutput<typeof CoreStateSchema>;
 
 /** Betriebsart eines Aktors (nicht der Betriebszustand des core) */
-const Mode = v.picklist(['dry_run', 'live']);
+export const ActuatorModeSchema = v.picklist(['dry_run', 'live']);
+export type ActuatorMode = v.InferOutput<typeof ActuatorModeSchema>;
+const Mode = ActuatorModeSchema;
+
+// --- Absicht der Bedienung ---------------------------------------------------------------
+
+/** Lademodus, den die Bedienung einstellt (der geltende Modus „boost“ steht nur in Health) */
+export const ChargeModeSchema = v.picklist(['pv', 'min_pv', 'now', 'off']);
+export type ChargeMode = v.InferOutput<typeof ChargeModeSchema>;
+
+/** Geltender Modus eines Fahrzeugs in Health: der eingestellte, bei aktivem Boost `boost` */
+export const EffectiveModeSchema = v.picklist(['pv', 'min_pv', 'now', 'off', 'boost']);
+export type EffectiveMode = v.InferOutput<typeof EffectiveModeSchema>;
+
+export const SurplusPrioritySchema = v.object({
+	kind: v.picklist(['cars_first', 'battery_first', 'battery_until_soc']),
+	soc_pct: v.number()
+});
+export type SurplusPriority = v.InferOutput<typeof SurplusPrioritySchema>;
+
+export const VehicleIntentSchema = v.object({
+	mode: ChargeModeSchema,
+	boost_until: v.nullable(Iso),
+	wallbox: v.nullable(v.string())
+});
+export type VehicleIntent = v.InferOutput<typeof VehicleIntentSchema>;
+
+/** Die Absicht (`Intent` des core) mit allen Feldern */
+export const IntentSchema = v.object({
+	version: v.number(),
+	control: v.boolean(),
+	actuators: v.record(v.string(), ActuatorModeSchema),
+	vehicles: v.record(v.string(), VehicleIntentSchema),
+	/** Reihenfolge der Fahrzeug-Schlüssel; `null`: die der Konfiguration */
+	priority: v.nullable(v.array(v.string())),
+	surplus_priority: SurplusPrioritySchema,
+	guest: v.object({ mode: ChargeModeSchema })
+});
+export type Intent = v.InferOutput<typeof IntentSchema>;
+
+/** `GET /api/control`: `intent` ist `null`, solange der core fehlt oder keine Absicht hat */
+export const ControlResponseSchema = v.object({
+	core_connected: v.boolean(),
+	intent: v.nullable(IntentSchema)
+});
+export type ControlResponse = v.InferOutput<typeof ControlResponseSchema>;
+
+/** Antwort jeder Änderung: `clamped` zeigt in `details`, was der core begrenzt hat */
+export const ControlReplySchema = v.object({
+	result: v.picklist(['accepted', 'clamped']),
+	version: v.number(),
+	details: v.array(v.string()),
+	intent: IntentSchema
+});
+export type ControlReply = v.InferOutput<typeof ControlReplySchema>;
+
+/** Antwort der Quittierung: der Satz des core */
+export const AckResponseSchema = v.object({ detail: v.string() });
+export type AckResponse = v.InferOutput<typeof AckResponseSchema>;
+
+// --- Entscheidungen ----------------------------------------------------------------------
+
+export const DecisionResultSchema = v.picklist([
+	'ok',
+	'error',
+	'timeout',
+	'not_sent',
+	'dry_run',
+	'rejected',
+	'deferred',
+	'foreign'
+]);
+export type DecisionResult = v.InferOutput<typeof DecisionResultSchema>;
+
+export const DecisionSchema = v.object({
+	/** eindeutig (Wanduhr des core) */
+	id: v.string(),
+	ts: Iso,
+	actuator: v.string(),
+	kind: v.picklist(['current', 'charging', 'grid_setpoint', 'max_discharge', 'min_soc']),
+	requested: v.nullable(v.union([v.number(), v.boolean()])),
+	applied: v.nullable(v.union([v.number(), v.boolean()])),
+	dry_run: v.boolean(),
+	outcome: v.string(),
+	result: DecisionResultSchema,
+	codes: v.array(v.string()),
+	text: v.string(),
+	inputs: v.record(v.string(), NullableNumber),
+	/** Stelle in der Tabelle der app, zum Blättern (`before`); der Stream des core hat keine */
+	cursor: v.optional(v.number())
+});
+export type Decision = v.InferOutput<typeof DecisionSchema>;
+
+export const DecisionsResponseSchema = v.object({
+	decisions: v.array(DecisionSchema),
+	more: v.boolean()
+});
+export type DecisionsResponse = v.InferOutput<typeof DecisionsResponseSchema>;
+
+export const LatestDecisionsResponseSchema = v.object({ decisions: v.array(DecisionSchema) });
+export type LatestDecisionsResponse = v.InferOutput<typeof LatestDecisionsResponseSchema>;
+
+/** Filter und Seite von `GET /api/decisions` */
+export interface DecisionQuery {
+	since?: string;
+	until?: string;
+	actuator?: string;
+	result?: DecisionResult;
+	/** `false` blendet Dry-Run-Entscheidungen aus (Standard des Servers: an) */
+	dry_run?: boolean;
+	text?: string;
+	/** `cursor` der letzten Zeile der Seite */
+	before?: number;
+	limit?: number;
+}
+
+// --- Gesundheitsbericht des core ---------------------------------------------------------
+
+const AssignmentKindSchema = v.picklist(['detected', 'default', 'override', 'unclear']);
+export type AssignmentKind = v.InferOutput<typeof AssignmentKindSchema>;
+
+export const ClueSchema = v.picklist([
+	'tessie',
+	'current',
+	'timing',
+	'phases',
+	'home',
+	'elsewhere'
+]);
+export type Clue = v.InferOutput<typeof ClueSchema>;
+
+export const VehicleHealthSchema = v.object({
+	id: v.string(),
+	name: v.string(),
+	/** `null`: der Stand der Regelung ist unbekannt (Regelbetrieb aus) */
+	mode: v.nullable(EffectiveModeSchema),
+	boost_until: v.nullable(Iso),
+	wallbox: v.nullable(v.string()),
+	assignment: v.nullable(AssignmentKindSchema),
+	limit_a: NullableNumber,
+	plugged: v.nullable(v.boolean()),
+	charging: v.nullable(v.boolean()),
+	wakes_today: v.number(),
+	/** Befehle der letzten Stunde; nur Fahrzeuge mit Tessie */
+	commands_hour: NullableNumber,
+	/** Boost bzw. Übersteuerung gelten, warten aber auf den nächsten Ansteckvorgang */
+	boost_pending: v.boolean(),
+	override_pending: v.boolean(),
+	/** letzter Grund des letzten Befehls (Code) */
+	reason: v.nullable(v.string())
+});
+export type VehicleHealth = v.InferOutput<typeof VehicleHealthSchema>;
+
+export const WallboxHealthSchema = v.object({
+	id: v.string(),
+	/** Schlüssel des Fahrzeugs, `guest` für einen Gast, `null` ohne Vorgang */
+	occupant: v.nullable(v.string()),
+	name: v.nullable(v.string()),
+	assignment: v.nullable(AssignmentKindSchema),
+	indicators: v.array(v.object({ vehicle: v.string(), clue: ClueSchema, supports: v.boolean() }))
+});
+export type WallboxHealth = v.InferOutput<typeof WallboxHealthSchema>;
 
 export const CoreHealthSchema = v.object({
 	mode: v.picklist(['START', 'OBSERVE', 'CONTROL', 'DEGRADED', 'SAFE']),
@@ -125,6 +286,8 @@ export const CoreHealthSchema = v.object({
 	intent: v.nullable(
 		v.object({ version: v.number(), control: v.boolean(), actuators: v.record(v.string(), Mode) })
 	),
+	/** Version der Absicht, die die Regelung zuletzt übernommen hat; `null`: keine */
+	intent_version: v.nullable(v.number()),
 	actuators: v.array(
 		v.object({
 			id: v.string(),
@@ -135,9 +298,13 @@ export const CoreHealthSchema = v.object({
 			/** warum ein angeforderter Live-Betrieb nicht gilt */
 			reasons: v.array(v.string()),
 			/** warum der Aktor gesperrt ist (z. B. wegen eines mitregelnden Systems) */
-			locked: v.array(v.string())
+			locked: v.array(v.string()),
+			/** der Betrieb im Regelbetrieb braucht den Watchdog (Victron, EVCS) */
+			watchdog_needed: v.boolean()
 		})
 	),
+	vehicles: v.array(VehicleHealthSchema),
+	wallboxes: v.array(WallboxHealthSchema),
 	watchdog: v.object({
 		state: v.picklist(['waiting', 'armed', 'tripped', 'disabled', 'unknown']),
 		trip_count: NullableNumber,
@@ -147,7 +314,9 @@ export const CoreHealthSchema = v.object({
 		expected_version: v.string(),
 		heartbeat: v.picklist(['off', 'active', 'released']),
 		/** der Betrieb braucht ihn: Victron oder EVCS ist im Regelbetrieb live gewünscht oder wird übergeben */
-		required: v.boolean()
+		required: v.boolean(),
+		/** der Watchdog ist für diesen core scharf */
+		armed: v.boolean()
 	}),
 	inputs: v.object({ ok: v.boolean(), problems: v.array(v.string()) })
 });

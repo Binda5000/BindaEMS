@@ -31,6 +31,10 @@ const SCHEMAS: Record<string, v.GenericSchema> = {
 	health: s.HealthSchema,
 	'totp-setup': s.TotpSetupSchema,
 	reprice: v.object({ repriced: v.number() }),
+	control: s.ControlResponseSchema,
+	'control-reply': s.ControlReplySchema,
+	decisions: s.DecisionsResponseSchema,
+	'decisions-latest': s.LatestDecisionsResponseSchema,
 	'error-422': s.ValidationErrorSchema
 };
 
@@ -127,7 +131,8 @@ describe('Gesundheitsbericht des core', () => {
 			label: 'Victron (ESS)',
 			live_allowed: true,
 			reasons: [],
-			locked: []
+			locked: [],
+			watchdog_needed: true
 		};
 		expect(
 			check({ actuators: [{ ...actuator, requested: 'live', effective: 'dry_run' }] })
@@ -135,5 +140,60 @@ describe('Gesundheitsbericht des core', () => {
 		expect(
 			check({ actuators: [{ ...actuator, requested: 'live', effective: 'auto' }] })
 		).not.toEqual([]);
+	});
+});
+
+it('Gesundheitsbericht nennt Fahrzeuge, Wallboxen und den scharfen Watchdog', () => {
+	const health = v.parse(s.SystemResponseSchema, files['./contract/system.json']).core.health!;
+	expect(health.watchdog.armed).toBe(false);
+	expect(health.wallboxes.map((w) => w.id)).toEqual(['evcs', 'twc']);
+	expect(health.actuators.find((a) => a.id === 'vehicle.tesla')?.watchdog_needed).toBe(false);
+	expect(health.vehicles.map((x) => [x.id, x.commands_hour])).toEqual([
+		['tesla', 0],
+		['egolf', null]
+	]);
+	expect(health.intent_version).toBe(1);
+});
+
+describe('Bedienung und Entscheidungen', () => {
+	const decisions = files['./contract/decisions.json'] as {
+		decisions: Record<string, unknown>[];
+	};
+	const first = decisions.decisions[0];
+
+	it('akzeptiert jedes Ergebnis einer Entscheidung, auch von außen geändert', () => {
+		for (const result of [
+			'ok',
+			'error',
+			'timeout',
+			'not_sent',
+			'dry_run',
+			'rejected',
+			'deferred',
+			'foreign'
+		]) {
+			expect(issues(s.DecisionSchema, { ...first, result })).toEqual([]);
+		}
+		expect(issues(s.DecisionSchema, { ...first, result: 'unbekannt' })).not.toEqual([]);
+	});
+
+	it('Entscheidungen des core haben keinen Cursor, die der app schon', () => {
+		const { cursor, ...bare } = first;
+		expect(cursor).toBe(1);
+		expect(issues(s.DecisionSchema, bare)).toEqual([]);
+		expect(issues(s.DecisionSchema, first)).toEqual([]);
+	});
+
+	it('akzeptiert eine Antwort ohne Absicht und ohne core', () => {
+		expect(issues(s.ControlResponseSchema, { core_connected: false, intent: null })).toEqual([]);
+	});
+
+	it('lehnt einen unbekannten Lademodus ab', () => {
+		expect(issues(s.ChargeModeSchema, 'sofort')).not.toEqual([]);
+		expect(issues(s.ChargeModeSchema, 'min_pv')).toEqual([]);
+	});
+
+	it('kennt die Antwort der Quittierung', () => {
+		expect(issues(s.AckResponseSchema, { detail: 'Quittiert.' })).toEqual([]);
 	});
 });
