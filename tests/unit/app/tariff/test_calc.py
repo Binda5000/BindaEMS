@@ -3,7 +3,7 @@ from datetime import date, datetime, time
 import pytest
 
 from bindaems.app.tariff.calc import component_net_ct, feed_in_price, import_price
-from bindaems.shared.settings import FeedInSettings, PriceComponent, TariffSettings, TimeWindow
+from bindaems.shared.settings import EnergyComponent, FeedInSettings, TariffSettings, TimeWindow
 
 VALUES = {"grid_usage": 8.0, "grid_loss": 0.6, "electricity_tax": 1.5, "renewables_levy": 0.5}
 
@@ -21,7 +21,7 @@ def tariff() -> TariffSettings:
     return default.model_copy(update={"components": components})
 
 
-def tariff_with_extra(component: PriceComponent) -> TariffSettings:
+def tariff_with_extra(component: EnergyComponent) -> TariffSettings:
     """tariff() plus ein zusätzlicher Bestandteil."""
     base = tariff()
     return base.model_copy(update={"components": [*base.components, component]})
@@ -63,7 +63,7 @@ def test_snap_not_in_october() -> None:
 
 def test_validity_dates_use_local_date() -> None:
     t = tariff_with_extra(
-        PriceComponent(id="alt", name="Alt", value_ct=1.0, valid_until=date(2026, 12, 31))
+        EnergyComponent(id="alt", name="Alt", value_ct=1.0, valid_until=date(2026, 12, 31))
     )
     # 23:45 Ortszeit am 31. 12.
     assert import_price(at("2026-12-31T22:45:00+00:00"), 10.0, t).parts_net.get("alt") == 1.0
@@ -72,7 +72,7 @@ def test_validity_dates_use_local_date() -> None:
 
 
 def test_component_without_vat() -> None:
-    t = tariff_with_extra(PriceComponent(id="frei", name="Frei", value_ct=1.0, vat=False))
+    t = tariff_with_extra(EnergyComponent(id="frei", name="Frei", value_ct=1.0, vat=False))
     price = import_price(at("2026-10-09T08:00:00+00:00"), 10.0, t)
     assert price.gross_ct == pytest.approx(27.16)
 
@@ -90,14 +90,14 @@ def test_negative_spot_passes_through() -> None:
 
 def test_window_with_absolute_value() -> None:
     window = TimeWindow(start=time(0), end=time(6), value_ct=4.0)
-    nacht = PriceComponent(id="nacht", name="Nacht", value_ct=2.0, windows=[window])
+    nacht = EnergyComponent(id="nacht", name="Nacht", value_ct=2.0, windows=[window])
     t = tariff_with_extra(nacht)
     # 04:00 Ortszeit
     assert import_price(at("2026-10-09T02:00:00+00:00"), 10.0, t).parts_net["nacht"] == 4.0
     # 10:00 Ortszeit
     assert import_price(at("2026-10-09T08:00:00+00:00"), 10.0, t).parts_net["nacht"] == 2.0
     # ein Fenster mit value_ct deckt einen fehlenden Grundwert
-    empty = PriceComponent(id="leer", name="Leer", windows=[window])
+    empty = EnergyComponent(id="leer", name="Leer", windows=[window])
     assert component_net_ct(empty, at("2026-10-09T02:00:00+00:00"), 10.0) == 4.0
     missing = import_price(at("2026-10-09T02:00:00+00:00"), 10.0, tariff_with_extra(empty))
     assert missing.missing == ()

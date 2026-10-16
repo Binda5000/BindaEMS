@@ -1,6 +1,12 @@
 // Einstellungen im UI: Entwurf als Text (deutsche Dezimalzahlen), Prüfung wie der Server,
 // Texte für Zeitfenster und Gültigkeit, Zuordnung von Serverfehlern zu den Feldern
-import type { PriceComponent, PriceSettings, RuntimeSettings, TimeWindow } from '$lib/api/schemas';
+import type {
+	EnergyComponent,
+	PriceComponent,
+	PriceSettings,
+	RuntimeSettings,
+	TimeWindow
+} from '$lib/api/schemas';
 import { fieldErrors } from '$lib/api/errors';
 import { todayVienna } from '$lib/time';
 import { WALLBOX_NAME_MAX } from '$lib/wallboxes';
@@ -18,6 +24,12 @@ export interface SettingsDraft {
 export type DraftResult =
 	{ settings: RuntimeSettings; tariffChanged: boolean } | { errors: Record<string, string> };
 
+const COMPONENT_KINDS = [
+	'energy_per_kwh',
+	'power_per_kw_year',
+	'fixed_per_month',
+	'feed_in_per_kwh'
+];
 const DECIMAL_RE = /^-?\d+(?:[.,]\d+)?$/;
 const MONTH_RE = /^\d{4}-(0[1-9]|1[0-2])$/;
 const MONTHS = ['Jän', 'Feb', 'Mär', 'Apr', 'Mai', 'Jun', 'Jul', 'Aug', 'Sep', 'Okt', 'Nov', 'Dez'];
@@ -36,11 +48,24 @@ export function decimalText(value: number | null): string {
 	return value === null ? '' : String(value).replace('.', ',');
 }
 
+/** Energiebestandteil (ct/kWh); nur diese haben `source` und Zeitfenster im Editor */
+export function isEnergy(component: PriceComponent): component is EnergyComponent {
+	return component.kind === 'energy_per_kwh';
+}
+
+/** Zeitfenster des Bestandteils; Leistungspreis und Gebühr haben keine */
+export function windowsOf(component: PriceComponent): TimeWindow[] {
+	return component.kind === 'energy_per_kwh' || component.kind === 'feed_in_per_kwh'
+		? component.windows
+		: [];
+}
+
 /** `wallboxes`: Schlüssel aller Ladestationen aus config.yaml (auch ohne eigenen Namen) */
 export function draftFrom(settings: RuntimeSettings, wallboxes: string[] = []): SettingsDraft {
 	const values: Record<string, string> = {};
 	for (const component of settings.tariff.components) {
-		if (component.source === 'fixed') values[component.id] = decimalText(component.value_ct);
+		if (isEnergy(component) && component.source === 'fixed')
+			values[component.id] = decimalText(component.value_ct);
 	}
 	return {
 		values,
@@ -60,7 +85,8 @@ export function applyDraft(settings: RuntimeSettings, draft: SettingsDraft): Dra
 	const errors: Record<string, string> = {};
 	let tariffChanged = false;
 	const components = settings.tariff.components.map((component) => {
-		if (component.source !== 'fixed' || !(component.id in draft.values)) return component;
+		if (!isEnergy(component) || component.source !== 'fixed' || !(component.id in draft.values))
+			return component;
 		const value = parseDecimal(draft.values[component.id]);
 		if (value === 'invalid') {
 			errors[`values.${component.id}`] = 'Zahl, z. B. 8,11';
@@ -175,7 +201,11 @@ export function editorFieldErrors(
 	const result: Record<string, string> = {};
 	for (const [path, message] of Object.entries(fieldErrors(detail, ['body', 'settings']))) {
 		const parts = path.split('.');
-		let key = path;
+		// pydantic nennt bei der Union der Bestandteile die Art im Pfad: components.2.<kind>.value_ct
+		if (parts[0] === 'tariff' && parts[1] === 'components' && COMPONENT_KINDS.includes(parts[3])) {
+			parts.splice(3, 1);
+		}
+		let key = parts.join('.');
 		if (parts[0] === 'tariff' && parts[1] === 'components' && parts[3] === 'value_ct') {
 			const component = settings.tariff.components[Number(parts[2])];
 			if (component) key = `values.${component.id}`;

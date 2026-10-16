@@ -7,6 +7,7 @@ import {
 	describeWindow,
 	draftFrom,
 	editorFieldErrors,
+	isEnergy,
 	parseDecimal,
 	validityText
 } from './model';
@@ -59,7 +60,7 @@ it('meldet ungültige Werte und doppelte Monate', () => {
 
 it('beschreibt Zeitfenster und Gültigkeit', () => {
 	const gridUsage = settings().tariff.components.find((c) => c.id === 'grid_usage');
-	if (!gridUsage) throw new Error('grid_usage fehlt');
+	if (!gridUsage || !isEnergy(gridUsage)) throw new Error('grid_usage fehlt');
 	expect(describeWindow(gridUsage.windows[0])).toBe('Apr–Sep, Mo–So, 10:00–16:00: × 0,8');
 	expect(validityText({ ...gridUsage, valid_from: null, valid_until: null })).toBe('immer');
 	expect(validityText({ ...gridUsage, valid_from: '2027-01-01', valid_until: null })).toBe(

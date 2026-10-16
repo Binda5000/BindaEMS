@@ -8,6 +8,7 @@
         "tariff",
         "components",
         2,
+        "energy_per_kwh",
         "value_ct"
       ],
       "msg": "Input should be a valid number, unable to parse string as a number",

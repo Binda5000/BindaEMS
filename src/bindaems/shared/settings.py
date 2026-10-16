@@ -1,7 +1,8 @@
 """Laufzeit-Einstellungen (Spec 11.5): im UI änderbar, versioniert in SQLite, als YAML im- und
 exportierbar. Harte Grenzen stehen nie hier, sondern nur in ``config.yaml``.
 
-Tarif v1 (Spec 9.1): nur Energiebestandteile je kWh mit Zeitfenstern, Gültigkeit und USt.
+Tarif (Spec 9.1): Bestandteile in vier Arten – Energie (ct/kWh), Leistungspreis (€/kW/Jahr),
+monatliche Gebühr (€/Monat) und Einspeisung (ct/kWh) –, je mit Gültigkeit und USt.
 """
 
 from __future__ import annotations
@@ -9,7 +10,15 @@ from __future__ import annotations
 from datetime import date, time
 from typing import Annotated, Any, Literal, Self
 
-from pydantic import Field, StringConstraints, field_validator, model_validator
+from pydantic import (
+    Discriminator,
+    Field,
+    PositiveFloat,
+    StringConstraints,
+    Tag,
+    field_validator,
+    model_validator,
+)
 
 from bindaems.shared.config import _Model
 
@@ -64,21 +73,17 @@ class TimeWindow(_Model):
         return self
 
 
-class PriceComponent(_Model):
+class _ComponentBase(_Model):
+    """Gemeinsame Felder aller Tarifbestandteile."""
+
     id: Annotated[str, Field(pattern=r"^[a-z0-9_]{1,40}$")]
     name: Annotated[str, Field(min_length=1, max_length=80)]
-    kind: Literal["energy_per_kwh"] = "energy_per_kwh"
-    source: Literal["fixed", "spot"] = "fixed"
-    value_ct: Ct | None = None  # netto; None = noch nicht eingetragen
     vat: bool = True
     valid_from: date | None = None
     valid_until: date | None = None  # inklusive
-    windows: list[TimeWindow] = Field(default_factory=list)
 
     @model_validator(mode="after")
-    def _consistent(self) -> Self:
-        if self.source == "spot" and self.value_ct is not None:
-            raise ValueError("Der Börsenpreis hat keinen festen Wert (value_ct leer lassen)")
+    def _valid_range(self) -> Self:
         if (
             self.valid_from is not None
             and self.valid_until is not None
@@ -88,22 +93,86 @@ class PriceComponent(_Model):
         return self
 
 
+class EnergyComponent(_ComponentBase):
+    """Arbeitspreis des Bezugs in ct/kWh (netto)."""
+
+    kind: Literal["energy_per_kwh"] = "energy_per_kwh"
+    source: Literal["fixed", "spot"] = "fixed"
+    value_ct: Ct | None = None  # netto; None = noch nicht eingetragen
+    windows: list[TimeWindow] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _consistent(self) -> Self:
+        if self.source == "spot" and self.value_ct is not None:
+            raise ValueError("Der Börsenpreis hat keinen festen Wert (value_ct leer lassen)")
+        return self
+
+
+class FeedInComponent(_ComponentBase):
+    """Zu- oder Abschlag auf die Einspeisung in ct/kWh (netto, darf negativ sein)."""
+
+    kind: Literal["feed_in_per_kwh"] = "feed_in_per_kwh"
+    value_ct: Ct | None = None
+    vat: bool = False
+    windows: list[TimeWindow] = Field(default_factory=list)
+
+
+class PowerComponent(_ComponentBase):
+    """Leistungspreis in €/kW/Jahr (netto), gestuft; verrechnet wird die Monatsspitze."""
+
+    kind: Literal["power_per_kw_year"] = "power_per_kw_year"
+    value_eur: NonNegative | None = None  # bis zur Stufe
+    value_above_eur: NonNegative | None = None  # über der Stufe; None = wie value_eur
+    tier_kw: PositiveFloat = 10.0
+    minimum_kw: NonNegative = 2.0
+
+
+class MonthlyFeeComponent(_ComponentBase):
+    """Feste Gebühr in €/Monat (netto); nur für Statistik und Kostenanzeige."""
+
+    kind: Literal["fixed_per_month"] = "fixed_per_month"
+    value_eur: NonNegative | None = None
+
+
+TariffKind = Literal["energy_per_kwh", "power_per_kw_year", "fixed_per_month", "feed_in_per_kwh"]
+
+
+def _component_kind(value: Any) -> str | None:
+    """Art eines Bestandteils; Daten ohne ``kind`` (vor Plan 3a gespeichert) sind Energie."""
+    kind = (
+        value.get("kind", "energy_per_kwh")
+        if isinstance(value, dict)
+        else getattr(value, "kind", None)
+    )
+    return kind if isinstance(kind, str) else None
+
+
+PriceComponent = Annotated[
+    Annotated[EnergyComponent, Tag("energy_per_kwh")]
+    | Annotated[FeedInComponent, Tag("feed_in_per_kwh")]
+    | Annotated[PowerComponent, Tag("power_per_kw_year")]
+    | Annotated[MonthlyFeeComponent, Tag("fixed_per_month")],
+    Discriminator(_component_kind),
+]
+
 SNAP_WINDOW = TimeWindow(months=[4, 5, 6, 7, 8, 9], start=time(10), end=time(16), factor=0.8)
 
 
 def _default_components() -> list[PriceComponent]:
     """Spec 9.1; Werte nur, wo die Spec sie nennt – der Rest kommt bei der Inbetriebnahme."""
     return [
-        PriceComponent(id="spot", name="Börsenpreis", source="spot"),
-        PriceComponent(id="supplier_markup", name="Lieferantenaufschlag", value_ct=1.2),
-        PriceComponent(
+        EnergyComponent(id="spot", name="Börsenpreis", source="spot"),
+        EnergyComponent(id="supplier_markup", name="Lieferantenaufschlag", value_ct=1.2),
+        EnergyComponent(
             id="grid_usage",
             name="Netznutzungsentgelt Arbeitspreis (Netzebene 7)",
             windows=[SNAP_WINDOW],
         ),
-        PriceComponent(id="grid_loss", name="Netzverlustentgelt"),
-        PriceComponent(id="electricity_tax", name="Elektrizitätsabgabe"),
-        PriceComponent(id="renewables_levy", name="Erneuerbaren-Förderbeitrag"),
+        EnergyComponent(id="grid_loss", name="Netzverlustentgelt"),
+        EnergyComponent(id="electricity_tax", name="Elektrizitätsabgabe"),
+        EnergyComponent(id="renewables_levy", name="Erneuerbaren-Förderbeitrag"),
+        PowerComponent(id="power_price", name="Leistungspreis (ElWG)", valid_from=date(2027, 1, 1)),
+        MonthlyFeeComponent(id="grid_base_fee", name="Grundgebühr Netz"),
     ]
 
 
@@ -117,9 +186,22 @@ class TariffSettings(_Model):
         ids = [component.id for component in self.components]
         if len(set(ids)) != len(ids):
             raise ValueError("Die IDs der Bestandteile müssen eindeutig sein")
-        if sum(component.source == "spot" for component in self.components) != 1:
+        spot = [c for c in self.components if isinstance(c, EnergyComponent) and c.source == "spot"]
+        if len(spot) != 1:
             raise ValueError("Genau ein Bestandteil muss den Börsenpreis liefern (source: spot)")
+        powers = [c for c in self.components if isinstance(c, PowerComponent)]
+        for i, first in enumerate(powers):
+            for second in powers[i + 1 :]:
+                if _overlap(first, second):
+                    raise ValueError("Leistungspreise dürfen sich zeitlich nicht überschneiden")
         return self
+
+
+def _overlap(first: PowerComponent, second: PowerComponent) -> bool:
+    """Schneiden sich die Gültigkeiten (beide Enden inklusive, offen = unbegrenzt)?"""
+    return max(first.valid_from or date.min, second.valid_from or date.min) <= min(
+        first.valid_until or date.max, second.valid_until or date.max
+    )
 
 
 class FeedInSettings(_Model):
@@ -160,8 +242,19 @@ def settings_warnings(settings: RuntimeSettings) -> list[str]:
     warnings = [
         f"Tarifbestandteil „{component.name}“ hat noch keinen Wert."
         for component in settings.tariff.components
-        if component.source == "fixed" and component.value_ct is None
+        if _missing_value(component)
     ]
+    if not any(isinstance(c, PowerComponent) for c in settings.tariff.components):
+        warnings.append("Kein Leistungspreis eingetragen; nach ElWG gilt er ab 1. 1. 2027.")
     if not settings.feed_in.monthly_ct:
         warnings.append("Noch kein OeMAG-Monatswert eingetragen.")
     return warnings
+
+
+def _missing_value(component: PriceComponent) -> bool:
+    """Fehlt der Wert? Der Börsenpreis hat keinen festen Wert und zählt nie als fehlend."""
+    if isinstance(component, EnergyComponent):
+        return component.source == "fixed" and component.value_ct is None
+    if isinstance(component, FeedInComponent):
+        return component.value_ct is None
+    return component.value_eur is None

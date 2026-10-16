@@ -4,8 +4,8 @@ import pytest
 from pydantic import ValidationError
 
 from bindaems.shared.settings import (
+    EnergyComponent,
     FeedInSettings,
-    PriceComponent,
     RuntimeSettings,
     TariffSettings,
     TimeWindow,
@@ -23,6 +23,8 @@ def test_defaults_follow_spec() -> None:
         "grid_loss",
         "electricity_tax",
         "renewables_levy",
+        "power_price",
+        "grid_base_fee",
     ]
     assert s.tariff.components[0].source == "spot"
     assert s.tariff.components[1].value_ct == 1.2 and s.tariff.components[1].vat
@@ -49,7 +51,7 @@ def test_defaults_follow_spec() -> None:
 
 def test_exactly_one_spot_component_required() -> None:
     with pytest.raises(ValidationError, match="Börsenpreis"):
-        TariffSettings(components=[PriceComponent(id="a", name="A", value_ct=1.0)])
+        TariffSettings(components=[EnergyComponent(id="a", name="A", value_ct=1.0)])
 
 
 def test_window_needs_exactly_one_of_factor_and_value() -> None:
@@ -78,5 +80,7 @@ def test_warnings_list_missing_values() -> None:
         "Tarifbestandteil „Netzverlustentgelt“ hat noch keinen Wert.",
         "Tarifbestandteil „Elektrizitätsabgabe“ hat noch keinen Wert.",
         "Tarifbestandteil „Erneuerbaren-Förderbeitrag“ hat noch keinen Wert.",
+        "Tarifbestandteil „Leistungspreis (ElWG)“ hat noch keinen Wert.",
+        "Tarifbestandteil „Grundgebühr Netz“ hat noch keinen Wert.",
         "Noch kein OeMAG-Monatswert eingetragen.",
     ]

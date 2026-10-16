@@ -1,13 +1,40 @@
 <script lang="ts">
-	import type { RuntimeSettings } from '$lib/api/schemas';
+	import type { PriceComponent, RuntimeSettings } from '$lib/api/schemas';
 	import { DASH, formatCt, formatNumber, NBSP } from '$lib/format';
-	import { describeWindow, validityText } from './model';
+	import { describeWindow, isEnergy, validityText, windowsOf } from './model';
 
 	interface Props {
 		settings: RuntimeSettings;
 	}
 
 	let { settings }: Props = $props();
+
+	const KIND_LABEL = {
+		energy_per_kwh: 'Energie',
+		feed_in_per_kwh: 'Einspeisung',
+		power_per_kw_year: 'Leistungspreis',
+		fixed_per_month: 'Gebühr'
+	} as const;
+
+	/** Wert netto mit Einheit; `null` = noch nicht eingetragen */
+	function valueText(component: PriceComponent): string | null {
+		switch (component.kind) {
+			case 'energy_per_kwh':
+				return component.source === 'spot' || component.value_ct === null
+					? null
+					: formatCt(component.value_ct);
+			case 'feed_in_per_kwh':
+				return component.value_ct === null ? null : formatCt(component.value_ct);
+			case 'power_per_kw_year':
+				return component.value_eur === null
+					? null
+					: `${formatNumber(component.value_eur, 2)}${NBSP}€/kW/Jahr`;
+			case 'fixed_per_month':
+				return component.value_eur === null
+					? null
+					: `${formatNumber(component.value_eur, 2)}${NBSP}€/Monat`;
+		}
+	}
 </script>
 
 <div class="scroll">
@@ -26,21 +53,27 @@
 			{#each settings.tariff.components as component (component.id)}
 				<tr>
 					<td>{component.name}</td>
-					<td>{component.source === 'spot' ? 'Börse' : 'fest'}</td>
+					<td>
+						{#if isEnergy(component)}
+							{component.source === 'spot' ? 'Börse' : 'fest'}
+						{:else}
+							{KIND_LABEL[component.kind]}
+						{/if}
+					</td>
 					<td class="num">
-						{#if component.source === 'spot'}
+						{#if isEnergy(component) && component.source === 'spot'}
 							{DASH}
-						{:else if component.value_ct === null}
+						{:else if valueText(component) === null}
 							<span class="missing">fehlt</span>
 						{:else}
-							{formatCt(component.value_ct)}
+							{valueText(component)}
 						{/if}
 					</td>
 					<td>{component.vat ? 'ja' : 'nein'}</td>
 					<td>{validityText(component)}</td>
 					<td>
-						{#if component.windows.length > 0}
-							{#each component.windows as window, index (index)}
+						{#if windowsOf(component).length > 0}
+							{#each windowsOf(component) as window, index (index)}
 								<span class="window">{describeWindow(window)}</span>
 							{/each}
 						{:else}

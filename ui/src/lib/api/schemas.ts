@@ -367,17 +367,61 @@ export const TimeWindowSchema = v.looseObject({
 });
 export type TimeWindow = v.InferOutput<typeof TimeWindowSchema>;
 
-export const PriceComponentSchema = v.looseObject({
+const ComponentBase = {
 	id: v.string(),
 	name: v.string(),
-	kind: v.picklist(['energy_per_kwh']),
+	valid_from: v.nullable(DateText),
+	valid_until: v.nullable(DateText)
+};
+
+/** Arbeitspreis des Bezugs (ct/kWh netto); ohne `kind` gespeicherte Daten liefert der Server als dieses */
+export const EnergyComponentSchema = v.looseObject({
+	...ComponentBase,
+	kind: v.literal('energy_per_kwh'),
 	source: v.picklist(['fixed', 'spot']),
 	value_ct: NullableNumber,
 	vat: v.boolean(),
-	valid_from: v.nullable(DateText),
-	valid_until: v.nullable(DateText),
 	windows: v.array(TimeWindowSchema)
 });
+export type EnergyComponent = v.InferOutput<typeof EnergyComponentSchema>;
+
+/** Zu- oder Abschlag auf die Einspeisung (ct/kWh netto, auch negativ) */
+export const FeedInComponentSchema = v.looseObject({
+	...ComponentBase,
+	kind: v.literal('feed_in_per_kwh'),
+	value_ct: NullableNumber,
+	vat: v.boolean(),
+	windows: v.array(TimeWindowSchema)
+});
+export type FeedInComponent = v.InferOutput<typeof FeedInComponentSchema>;
+
+/** Leistungspreis (€/kW/Jahr netto), gestuft nach `tier_kw` */
+export const PowerComponentSchema = v.looseObject({
+	...ComponentBase,
+	kind: v.literal('power_per_kw_year'),
+	value_eur: NullableNumber,
+	value_above_eur: NullableNumber,
+	tier_kw: v.number(),
+	minimum_kw: v.number(),
+	vat: v.boolean()
+});
+export type PowerComponent = v.InferOutput<typeof PowerComponentSchema>;
+
+/** Monatliche Gebühr (€/Monat netto) */
+export const MonthlyFeeComponentSchema = v.looseObject({
+	...ComponentBase,
+	kind: v.literal('fixed_per_month'),
+	value_eur: NullableNumber,
+	vat: v.boolean()
+});
+export type MonthlyFeeComponent = v.InferOutput<typeof MonthlyFeeComponentSchema>;
+
+export const PriceComponentSchema = v.variant('kind', [
+	EnergyComponentSchema,
+	FeedInComponentSchema,
+	PowerComponentSchema,
+	MonthlyFeeComponentSchema
+]);
 export type PriceComponent = v.InferOutput<typeof PriceComponentSchema>;
 
 export const PriceSettingsSchema = v.looseObject({

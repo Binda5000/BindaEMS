@@ -10,7 +10,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime, time
 
-from bindaems.shared.settings import FeedInSettings, PriceComponent, TariffSettings, TimeWindow
+from bindaems.shared.settings import EnergyComponent, FeedInSettings, TariffSettings, TimeWindow
 from bindaems.shared.timeutil import LOCAL_TZ, ensure_utc
 
 
@@ -35,13 +35,13 @@ def window_applies(window: TimeWindow, local_start: datetime) -> bool:
     return window.start <= clock and (window.end == time(0) or clock < window.end)
 
 
-def _window(component: PriceComponent, local_start: datetime) -> TimeWindow | None:
+def _window(component: EnergyComponent, local_start: datetime) -> TimeWindow | None:
     """Das erste Fenster des Bestandteils, das zum Slot passt."""
     return next((w for w in component.windows if window_applies(w, local_start)), None)
 
 
 def component_net_ct(
-    component: PriceComponent, slot_start: datetime, spot_net_ct: float
+    component: EnergyComponent, slot_start: datetime, spot_net_ct: float
 ) -> float | None:
     """Nettobetrag eines Bestandteils im Slot; ``None``, wenn er an dem Tag nicht gilt."""
     local = _local(slot_start)
@@ -66,6 +66,8 @@ def import_price(slot_start: datetime, spot_net_ct: float, tariff: TariffSetting
     gross = 0.0
     missing: list[str] = []
     for component in tariff.components:
+        if not isinstance(component, EnergyComponent):
+            continue  # Leistungspreis, Gebühren und Einspeisung gehören nicht zum Bezugspreis
         value = component_net_ct(component, slot_start, spot_net_ct)
         if value is None:
             continue

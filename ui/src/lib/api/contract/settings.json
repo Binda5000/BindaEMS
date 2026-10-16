@@ -16,34 +16,34 @@
         {
           "id": "spot",
           "name": "Börsenpreis",
-          "kind": "energy_per_kwh",
-          "source": "spot",
-          "value_ct": null,
           "vat": true,
           "valid_from": null,
           "valid_until": null,
+          "kind": "energy_per_kwh",
+          "source": "spot",
+          "value_ct": null,
           "windows": []
         },
         {
           "id": "supplier_markup",
           "name": "Lieferantenaufschlag",
-          "kind": "energy_per_kwh",
-          "source": "fixed",
-          "value_ct": 1.2,
           "vat": true,
           "valid_from": null,
           "valid_until": null,
+          "kind": "energy_per_kwh",
+          "source": "fixed",
+          "value_ct": 1.2,
           "windows": []
         },
         {
           "id": "grid_usage",
           "name": "Netznutzungsentgelt Arbeitspreis (Netzebene 7)",
-          "kind": "energy_per_kwh",
-          "source": "fixed",
-          "value_ct": 8.11,
           "vat": true,
           "valid_from": null,
           "valid_until": null,
+          "kind": "energy_per_kwh",
+          "source": "fixed",
+          "value_ct": 8.11,
           "windows": [
             {
               "months": [
@@ -73,35 +73,56 @@
         {
           "id": "grid_loss",
           "name": "Netzverlustentgelt",
-          "kind": "energy_per_kwh",
-          "source": "fixed",
-          "value_ct": null,
           "vat": true,
           "valid_from": null,
           "valid_until": null,
+          "kind": "energy_per_kwh",
+          "source": "fixed",
+          "value_ct": null,
           "windows": []
         },
         {
           "id": "electricity_tax",
           "name": "Elektrizitätsabgabe",
-          "kind": "energy_per_kwh",
-          "source": "fixed",
-          "value_ct": null,
           "vat": true,
           "valid_from": null,
           "valid_until": null,
+          "kind": "energy_per_kwh",
+          "source": "fixed",
+          "value_ct": null,
           "windows": []
         },
         {
           "id": "renewables_levy",
           "name": "Erneuerbaren-Förderbeitrag",
-          "kind": "energy_per_kwh",
-          "source": "fixed",
-          "value_ct": null,
           "vat": true,
           "valid_from": null,
           "valid_until": null,
+          "kind": "energy_per_kwh",
+          "source": "fixed",
+          "value_ct": null,
           "windows": []
+        },
+        {
+          "id": "power_price",
+          "name": "Leistungspreis (ElWG)",
+          "vat": true,
+          "valid_from": "2027-01-01",
+          "valid_until": null,
+          "kind": "power_per_kw_year",
+          "value_eur": null,
+          "value_above_eur": null,
+          "tier_kw": 10.0,
+          "minimum_kw": 2.0
+        },
+        {
+          "id": "grid_base_fee",
+          "name": "Grundgebühr Netz",
+          "vat": true,
+          "valid_from": null,
+          "valid_until": null,
+          "kind": "fixed_per_month",
+          "value_eur": null
         }
       ],
       "fixed_price_gross_ct": 30.0
@@ -123,6 +144,8 @@
   "warnings": [
     "Tarifbestandteil „Netzverlustentgelt“ hat noch keinen Wert.",
     "Tarifbestandteil „Elektrizitätsabgabe“ hat noch keinen Wert.",
-    "Tarifbestandteil „Erneuerbaren-Förderbeitrag“ hat noch keinen Wert."
+    "Tarifbestandteil „Erneuerbaren-Förderbeitrag“ hat noch keinen Wert.",
+    "Tarifbestandteil „Leistungspreis (ElWG)“ hat noch keinen Wert.",
+    "Tarifbestandteil „Grundgebühr Netz“ hat noch keinen Wert."
   ]
 }

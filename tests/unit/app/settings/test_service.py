@@ -96,3 +96,28 @@ def test_invalid_stored_settings_fall_back_to_defaults_with_warning(engine, cloc
     service.update(RuntimeSettings(), base_version=1, actor="chris", source="ui")
     assert service.current().version == 2
     assert not service.warnings()[0].startswith("Gespeicherte")
+
+
+OLD_EXPORT = """\
+tariff:
+  vat_pct: 20.0
+  components:
+    - id: spot
+      name: Börsenpreis
+      source: spot
+    - id: grid_usage
+      name: Netznutzungsentgelt Arbeitspreis (Netzebene 7)
+      value_ct: 8.11
+      windows:
+        - months: [4, 5, 6, 7, 8, 9]
+          start: '10:00'
+          end: '16:00'
+          factor: 0.8
+  fixed_price_gross_ct: 30.0
+"""
+
+
+def test_old_yaml_export_imports(service) -> None:
+    version = service.import_yaml(OLD_EXPORT, actor="admin", source="ui")
+    assert all(c.kind == "energy_per_kwh" for c in version.settings.tariff.components)
+    assert [c.id for c in version.settings.tariff.components] == ["spot", "grid_usage"]

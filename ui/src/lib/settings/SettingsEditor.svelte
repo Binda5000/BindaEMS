@@ -1,10 +1,10 @@
 <script lang="ts">
 	import { untrack } from 'svelte';
 	import { ApiError, detailText } from '$lib/api/errors';
-	import type { Limits, RuntimeSettings, SettingsCurrent } from '$lib/api/schemas';
+	import type { EnergyComponent, Limits, RuntimeSettings, SettingsCurrent } from '$lib/api/schemas';
 	import Notice from '$lib/components/Notice.svelte';
 	import { WALLBOX_NAME_MAX, WALLBOX_TYPES } from '$lib/wallboxes';
-	import { applyDraft, draftFrom, editorFieldErrors } from './model';
+	import { applyDraft, draftFrom, editorFieldErrors, isEnergy } from './model';
 
 	interface Props {
 		current: SettingsCurrent;
@@ -38,7 +38,11 @@
 	let conflict = $state(false);
 	let busy = $state(false);
 
-	const fixed = $derived(current.settings.tariff.components.filter((c) => c.source === 'fixed'));
+	const fixed = $derived(
+		current.settings.tariff.components.filter(
+			(c): c is EnergyComponent => isEnergy(c) && c.source === 'fixed'
+		)
+	);
 
 	function describedBy(key: string): string | undefined {
 		return errors[key] ? `${uid}-${key}-error` : undefined;
