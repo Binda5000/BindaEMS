@@ -18,6 +18,7 @@ from sqlalchemy import (
     Table,
     Text,
     UniqueConstraint,
+    false,
 )
 from sqlalchemy.types import TypeDecorator
 
@@ -214,4 +215,30 @@ decision_table = Table(
     Column("inputs", JSON, nullable=False),
     UniqueConstraint("id", name="uq_decision_id"),
     Index("ix_decision_ts", "ts"),
+)
+
+# Akkupläne (Plan 3b): ``data`` ist der ``Plan`` ohne ``id``; die Spalten daneben dienen der Suche
+plan_table = Table(
+    "plan",
+    metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("created_at", UtcDateTime(), nullable=False),
+    Column("trigger", String(16), nullable=False),
+    Column("source", String(10), nullable=False),
+    Column("solver_status", String(12), nullable=True),
+    Column("fallback_reason", String(200), nullable=True),
+    Column("valid_until", UtcDateTime(), nullable=False),
+    Column("settings_version", Integer, nullable=False),
+    Column("expected_cost_ct", Float, nullable=False),
+    Column("trimmed", Boolean, nullable=False, server_default=false()),
+    Column("data", JSON, nullable=False),
+    Index("ix_plan_created_at", "created_at"),
+)
+
+# Eingangsdaten des Plans (``PlanInputs``); sie werden nach ``KEEP_INPUTS`` gelöscht
+plan_inputs_table = Table(
+    "plan_inputs",
+    metadata,
+    Column("plan_id", Integer, primary_key=True, autoincrement=False),
+    Column("data", JSON, nullable=False),
 )

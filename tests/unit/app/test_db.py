@@ -60,7 +60,7 @@ def test_migration_0007_creates_the_decision_table(engine: Engine) -> None:
     assert [c["column_names"] for c in inspector.get_unique_constraints("decision")] == [["id"]]
     assert [i["column_names"] for i in inspector.get_indexes("decision")] == [["ts"]]
     with engine.connect() as conn:
-        assert conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one() == "0008"
+        assert conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one() == "0009"
 
 
 def test_migration_0008_creates_the_forecast_tables_and_downgrades(engine: Engine) -> None:
@@ -108,3 +108,44 @@ def test_migration_0008_creates_the_forecast_tables_and_downgrades(engine: Engin
     assert "forecast_metric" not in inspector.get_table_names()
     with engine.connect() as conn:
         assert conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one() == "0007"
+
+
+def test_migration_0009_creates_the_plan_tables_and_downgrades(engine: Engine) -> None:
+    inspector = inspect(engine)
+    plan = {column["name"]: column for column in inspector.get_columns("plan")}
+    assert list(plan) == [
+        "id",
+        "created_at",
+        "trigger",
+        "source",
+        "solver_status",
+        "fallback_reason",
+        "valid_until",
+        "settings_version",
+        "expected_cost_ct",
+        "trimmed",
+        "data",
+    ]
+    assert [name for name, column in plan.items() if column["nullable"]] == [
+        "solver_status",
+        "fallback_reason",
+    ]
+    assert inspector.get_pk_constraint("plan")["constrained_columns"] == ["id"]
+    assert [i["column_names"] for i in inspector.get_indexes("plan")] == [["created_at"]]
+    inputs = {column["name"]: column for column in inspector.get_columns("plan_inputs")}
+    assert list(inputs) == ["plan_id", "data"]
+    assert not any(column["nullable"] for column in inputs.values())
+    assert inspector.get_pk_constraint("plan_inputs")["constrained_columns"] == ["plan_id"]
+    with engine.connect() as conn:
+        assert conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one() == "0009"
+
+    config = AlembicConfig()
+    config.set_main_option("script_location", str(MIGRATIONS_DIR))
+    with engine.begin() as connection:
+        config.attributes["connection"] = connection
+        command.downgrade(config, "0008")
+    inspector = inspect(engine)
+    assert "plan" not in inspector.get_table_names()
+    assert "plan_inputs" not in inspector.get_table_names()
+    with engine.connect() as conn:
+        assert conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one() == "0008"

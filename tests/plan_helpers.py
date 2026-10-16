@@ -36,10 +36,13 @@ def at(text: str) -> datetime:
     return datetime.fromisoformat(text)
 
 
-def sample_slot(start: str, *, soc_pct: float = 50.0, price_ct: float = 20.0) -> PlanSlot:
-    """Slot ab ``start`` (``HH:MM`` als UTC am 16. 10. 2026): Eigenverbrauch, sonst Nullen."""
+def sample_slot(
+    start: str, *, soc_pct: float = 50.0, price_ct: float = 20.0, day: str = DAY
+) -> PlanSlot:
+    """Slot ab ``start`` (``HH:MM`` als UTC am Tag ``day``, Standard 16. 10. 2026):
+    Eigenverbrauch, sonst Nullen."""
     return PlanSlot(
-        start=at(f"{DAY}T{start}:00+00:00"),
+        start=at(f"{day}T{start}:00+00:00"),
         intent=BatteryIntent(),
         soc_start_pct=soc_pct,
         soc_end_pct=soc_pct,
@@ -60,8 +63,10 @@ def sample_slot(start: str, *, soc_pct: float = 50.0, price_ct: float = 20.0) ->
 
 
 def sample_plan(created: str, slots: list[str]) -> Plan:
-    """Plan des Optimierers, erzeugt zu ``created`` (ISO mit Zeitzone), mit Slots ``HH:MM``."""
+    """Plan des Optimierers, erzeugt zu ``created`` (ISO mit Zeitzone), mit Slots ``HH:MM`` am
+    Tag (UTC) der Erzeugung."""
     created_at = at(created)
+    day = created_at.date().isoformat()
     return Plan(
         created_at=created_at,
         trigger="start",
@@ -78,7 +83,7 @@ def sample_plan(created: str, slots: list[str]) -> Plan:
         expected_cost_ct=0.0,
         baseline_cost_ct=0.0,
         issues=[],
-        slots=[sample_slot(start) for start in slots],
+        slots=[sample_slot(start, day=day) for start in slots],
     )
 
 
@@ -319,4 +324,25 @@ def flows_of(steps: Sequence[SimStep], inputs: PlanInputs | None = None) -> Opti
             )
             for item, pv_h in zip(steps, house_w, strict=True)
         ]
+    )
+
+
+def sample_inputs() -> PlanInputs:
+    """Nicht triviale Eingangsdaten für den Roundtrip: Schätzpreise, Slots ohne Einspeisepreis,
+    ein Monat mit Leistungspreis, eine Monatsspitze und ein voriger Plan (zeitzonenbehaftet)."""
+    prices = [
+        *known(NOW, 12, ct=21.5, feed_in=None),
+        *estimated(NOW + 12 * SLOT, 8, ct=18.25, feed_in=4.5),
+    ]
+    return assemble(
+        trigger="prices",
+        prices=prices,
+        pv=flat(NOW, 20, 1200.0),
+        load=flat(NOW, 20, 450.0),
+        battery=state(soc_pct=42.5, limit_now_charge_w=3000.0, limit_now_discharge_w=None),
+        planning=PlanningSettings(grid_charge_allowed=True, margin_ct=1.5),
+        tariff=with_power_price(value_eur=60.0, above_eur=120.0),
+        month_peak_kw=4.2,
+        previous=previous_plan(battery_w=-800.0, slots=4),
+        settings_version=7,
     )
