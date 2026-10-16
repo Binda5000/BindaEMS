@@ -51,6 +51,7 @@ from bindaems.app.history.routes import history_router
 from bindaems.app.history.series import build_catalog
 from bindaems.app.ledger.routes import ledger_router
 from bindaems.app.ledger.service import LedgerService
+from bindaems.app.planning.routes import planning_router
 from bindaems.app.planning.service import PlanningService
 from bindaems.app.planning.store import PlanStore
 from bindaems.app.prices.pipeline import PricePipeline
@@ -273,6 +274,7 @@ class AppRuntime:
                     self.forecast, self.load_forecast, self.forecast_quality, self._clock, guard
                 ),
                 ledger_router(self.ledger, guard),
+                planning_router(self.planning, self.settings, self._clock, guard),
                 control_router(
                     self.intents,
                     self.decisions,

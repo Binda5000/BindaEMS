@@ -24,6 +24,7 @@ from typing import Final
 
 import structlog
 
+from bindaems.app.audit import Source
 from bindaems.app.core_link import LiveState
 from bindaems.app.forecast.load import LoadForecastService
 from bindaems.app.forecast.service import ForecastService
@@ -54,7 +55,11 @@ from bindaems.app.planning.triggers import (
     soc_deviates,
 )
 from bindaems.app.prices.service import PriceService
-from bindaems.app.settings.service import SettingsService, SettingsVersion
+from bindaems.app.settings.service import (
+    SettingsService,
+    SettingsVersion,
+    VersionConflictError,
+)
 from bindaems.app.status import ComponentStatus
 from bindaems.shared.config import Config
 from bindaems.shared.plan import Plan, PlanTrigger
@@ -217,6 +222,32 @@ class PlanningService:
             old, self._seen_settings = self._seen_settings, version.settings
         if settings_relevant(old, version.settings):
             self.request("settings")
+
+    def set_grid_charge(self, on: bool, *, actor: str, source: Source) -> SettingsVersion:
+        """Schalter „Netzladen erlaubt“ als neue Einstellungsversion (blockiert: Datenbank).
+
+        Kommentar „Netzladen ein“ bzw. „Netzladen aus“. Hat der Schalter schon den Wert, entsteht
+        keine neue Version. Bei einem Versionskonflikt (UI und HA schreiben gleichzeitig) wird
+        einmal auf der neuen Version wiederholt; scheitert auch das, geht der Fehler weiter.
+        """
+        for attempt in (1, 2):
+            current = self._settings.current()
+            if current.settings.planning.grid_charge_allowed == on:
+                return current
+            planning = current.settings.planning.model_copy(update={"grid_charge_allowed": on})
+            settings = current.settings.model_copy(update={"planning": planning})
+            try:
+                return self._settings.update(
+                    settings,
+                    base_version=current.version,
+                    actor=actor,
+                    source=source,
+                    comment="Netzladen ein" if on else "Netzladen aus",
+                )
+            except VersionConflictError:
+                if attempt == 2:
+                    raise
+        raise AssertionError("unerreichbar")  # pragma: no cover - die Schleife kehrt zurück
 
     async def run(self) -> None:
         """Plant beim Start, zur Viertelstunde und auf Auslöser; prüft alle ``WATCH_S`` s.
