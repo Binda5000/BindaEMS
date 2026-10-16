@@ -6,13 +6,29 @@ import pytest
 import yaml
 from tests.app_helpers import T_APP, price_row, sample_inputs
 
-from bindaems.app.ha.entities import EntitySpec, build_entities, build_inputs, discovery, on_off
+from bindaems.app.ha.entities import (
+    EntitySpec,
+    HaInputs,
+    build_entities,
+    build_inputs,
+    discovery,
+    on_off,
+)
 from bindaems.app.prices.service import PriceService
 from bindaems.shared.config import Config
+from bindaems.shared.control import ChargeMode, Intent, VehicleIntent
 
 
 def entity(cfg: Config, object_id: str) -> EntitySpec:
     return next(e for e in build_entities(cfg) if e.object_id == object_id)
+
+
+def state(cfg: Config, object_id: str, inputs: HaInputs) -> str:
+    return entity(cfg, object_id).value(inputs)
+
+
+def config_of(cfg: Config, object_id: str) -> dict:
+    return json.loads(discovery(entity(cfg, object_id), cfg.homeassistant.mqtt)[1])
 
 
 def test_entities_from_config(cfg) -> None:
@@ -33,10 +49,25 @@ def test_entities_from_config(cfg) -> None:
         "problem_prices",
         "problem_device_offline",
         "watchdog_tripped",
+        "regulation",
+        "guest_mode",
+        "problem_assignment_unclear",
         "tesla_soc",
+        "tesla_mode",
+        "tesla_boost",
+        "tesla_boost_stop",
+        "tesla_wallbox",
         "egolf_soc",
+        "egolf_mode",
+        "egolf_boost",
+        "egolf_boost_stop",
+        "egolf_wallbox",
         "evcs_power",
+        "evcs_assignment",
+        "evcs_occupant",
         "twc_power",
+        "twc_assignment",
+        "twc_occupant",
     ]
     names = {e.object_id: e.device.name for e in build_entities(cfg)}
     assert (names["egolf_soc"], names["twc_power"]) == (
@@ -198,3 +229,132 @@ def test_build_inputs_ignores_the_watchdog_of_an_old_report_without_core(
     live.connected = False
     inputs = build_inputs(live, price_service, store, forecast_service, T_APP)
     assert inputs.watchdog_state is None
+
+
+MODES = ["PV-Überschuss", "Min+PV", "Sofort", "Aus"]
+
+
+def test_discovery_of_the_mode_select(cfg) -> None:
+    topic, _ = discovery(entity(cfg, "tesla_mode"), cfg.homeassistant.mqtt)
+    data = config_of(cfg, "tesla_mode")
+    assert topic == "homeassistant/select/bindaems/tesla_mode/config"
+    assert data["command_topic"] == "bindaems/cmd/tesla_mode"
+    assert data["state_topic"] == "bindaems/state/tesla_mode"
+    assert data["options"] == MODES and data["name"] == "Lademodus"
+    assert data["device"]["identifiers"] == ["bindaems_tesla"]
+
+
+def test_discovery_of_the_assignment_select_names_the_vehicles(cfg) -> None:
+    data = config_of(cfg, "evcs_assignment")
+    assert data["options"] == ["Automatisch", "Tesla Model 3", "e-Golf"]
+    assert (data["name"], data["command_topic"]) == ("Zuordnung", "bindaems/cmd/evcs_assignment")
+
+
+def test_discovery_of_the_switch_and_the_guest_select(cfg) -> None:
+    switch = config_of(cfg, "regulation")
+    assert (switch["name"], switch["payload_on"], switch["payload_off"]) == (
+        "Regelbetrieb",
+        "ON",
+        "OFF",
+    )
+    assert switch["command_topic"] == "bindaems/cmd/regulation"
+    guest = config_of(cfg, "guest_mode")
+    assert (guest["name"], guest["options"]) == ("Gast-Lademodus", MODES)
+
+
+def test_discovery_of_the_buttons_has_no_state(cfg) -> None:
+    boost, stop = config_of(cfg, "tesla_boost"), config_of(cfg, "tesla_boost_stop")
+    assert (boost["name"], stop["name"]) == ("Boost", "Boost beenden")
+    assert boost["payload_press"] == stop["payload_press"] == "PRESS"
+    assert boost["command_topic"] == "bindaems/cmd/tesla_boost"
+    assert "state_topic" not in boost
+    topic, _ = discovery(entity(cfg, "tesla_boost"), cfg.homeassistant.mqtt)
+    assert topic == "homeassistant/button/bindaems/tesla_boost/config"
+
+
+def test_sensors_have_no_command_topic(cfg) -> None:
+    assert "command_topic" not in config_of(cfg, "price_now")
+    assert "command_topic" not in config_of(cfg, "tesla_wallbox")
+    assert config_of(cfg, "tesla_wallbox")["name"] == "Wallbox"
+    assert config_of(cfg, "evcs_occupant")["name"] == "Fahrzeug"
+    assert config_of(cfg, "problem_assignment_unclear")["name"] == "Zuordnung unklar"
+
+
+def test_states_follow_the_intent(cfg) -> None:
+    inputs = sample_inputs(
+        intent=Intent(
+            version=3, control=True, vehicles={"tesla": VehicleIntent(mode=ChargeMode.NOW)}
+        )
+    )
+    assert state(cfg, "tesla_mode", inputs) == "Sofort"
+    assert state(cfg, "egolf_mode", inputs) == "PV-Überschuss"
+    assert state(cfg, "regulation", inputs) == "ON"
+    assert state(cfg, "evcs_assignment", inputs) == "Automatisch"
+    assert state(cfg, "guest_mode", inputs) == "PV-Überschuss"
+
+
+def test_assignment_state_names_the_overriding_vehicle(cfg) -> None:
+    intent = Intent(version=3, vehicles={"egolf": VehicleIntent(wallbox="twc")})
+    inputs = sample_inputs(intent=intent)
+    assert state(cfg, "twc_assignment", inputs) == "e-Golf"
+    assert state(cfg, "evcs_assignment", inputs) == "Automatisch"
+
+
+def test_guest_mode_state(cfg) -> None:
+    intent = Intent.model_validate({"version": 1, "guest": {"mode": "off"}})
+    assert state(cfg, "guest_mode", sample_inputs(intent=intent)) == "Aus"
+
+
+def test_control_states_are_unknown_without_an_intent(cfg) -> None:
+    inputs = sample_inputs(intent=None)
+    for oid in ("tesla_mode", "regulation", "guest_mode", "evcs_assignment"):
+        assert state(cfg, oid, inputs) == "None"
+
+
+def test_wallbox_and_occupant_sensors_follow_health(cfg) -> None:
+    inputs = sample_inputs(
+        vehicles=[{"id": "tesla", "wallbox": "evcs", "assignment": "detected"}, {"id": "egolf"}],
+        wallboxes=[
+            {"id": "evcs", "occupant": "tesla", "name": "Tesla Model 3", "assignment": "detected"},
+            {"id": "twc", "occupant": "guest", "name": "Gast", "assignment": "guest"},
+        ],
+    )
+    assert state(cfg, "tesla_wallbox", inputs) == "evcs"
+    assert state(cfg, "egolf_wallbox", inputs) == "keine"
+    assert state(cfg, "evcs_occupant", inputs) == "Tesla Model 3"
+    assert state(cfg, "twc_occupant", inputs) == "Gast"
+    empty = sample_inputs(wallboxes=[{"id": "evcs", "occupant": None, "name": None}])
+    assert state(cfg, "evcs_occupant", empty) == "keins"
+    assert state(cfg, "twc_occupant", empty) == "None"  # nicht im Health: unbekannt
+    assert state(cfg, "tesla_wallbox", sample_inputs()) == "None"
+
+
+def test_assignment_unclear_problem(cfg) -> None:
+    clear = sample_inputs(vehicles=[{"id": "tesla", "assignment": "detected"}])
+    assert state(cfg, "problem_assignment_unclear", clear) == "OFF"
+    unclear_vehicle = sample_inputs(vehicles=[{"id": "tesla", "assignment": "unclear"}])
+    assert state(cfg, "problem_assignment_unclear", unclear_vehicle) == "ON"
+    unclear_wallbox = sample_inputs(
+        vehicles=[{"id": "tesla", "assignment": "detected"}],
+        wallboxes=[{"id": "evcs", "occupant": None, "name": None, "assignment": "unclear"}],
+    )
+    assert state(cfg, "problem_assignment_unclear", unclear_wallbox) == "ON"
+    assert state(cfg, "problem_assignment_unclear", sample_inputs()) == "None"
+
+
+def test_build_inputs_takes_intent_vehicles_and_wallboxes(
+    live, price_service, store, forecast_service
+) -> None:
+    live.health = {
+        **live.health,
+        "vehicles": [{"id": "tesla", "wallbox": "evcs"}, "kaputt"],
+        "wallboxes": [{"id": "evcs", "occupant": None}],
+    }
+    intent = Intent(version=2, control=True)
+    inputs = build_inputs(live, price_service, store, forecast_service, T_APP, intent)
+    assert inputs.intent == intent
+    assert inputs.vehicles == [{"id": "tesla", "wallbox": "evcs"}]
+    assert inputs.wallboxes == [{"id": "evcs", "occupant": None}]
+    live.connected = False
+    gone = build_inputs(live, price_service, store, forecast_service, T_APP)
+    assert (gone.intent, gone.vehicles, gone.wallboxes) == (None, [], [])

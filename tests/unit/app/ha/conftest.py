@@ -8,7 +8,7 @@ from tests.app_helpers import T_APP, price_row, sample_inputs
 from bindaems.app.core_link import LiveState
 from bindaems.app.forecast.service import PvForecast
 from bindaems.app.ha.entities import build_entities
-from bindaems.app.ha.publisher import HaPublisher
+from bindaems.app.ha.publisher import CommandHandler, HaPublisher
 from bindaems.app.prices.service import PriceService
 from bindaems.app.prices.store import PriceStore
 from bindaems.shared.timeutil import local_day_slots
@@ -132,6 +132,7 @@ def publisher_env(cfg):
         fail_first_connection: bool = False,
         stream_error: Exception | None = None,
         stream_ends: bool = False,
+        commands: CommandHandler | None = None,
     ) -> tuple[HaPublisher, FakeTransport]:
         mqtt = cfg.homeassistant.mqtt
         transport = FakeTransport(
@@ -147,6 +148,7 @@ def publisher_env(cfg):
             sample_inputs,
             transport_factory=lambda: transport,
             sleep=transport.sleep,
+            commands=commands,
         )
         return publisher, transport
 

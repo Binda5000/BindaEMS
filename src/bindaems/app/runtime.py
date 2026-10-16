@@ -11,6 +11,7 @@ import asyncio
 import contextlib
 import threading
 from collections.abc import Awaitable, Callable, Generator
+from dataclasses import replace
 from datetime import timedelta
 from functools import partial
 
@@ -31,12 +32,13 @@ from bindaems.app.consumers.routes import consumers_router
 from bindaems.app.consumers.service import ConsumerService
 from bindaems.app.consumers.values import HaRef, HaValueCache
 from bindaems.app.control.decisions import DecisionCollector, DecisionStore
-from bindaems.app.control.intent import IntentService
+from bindaems.app.control.intent import CoreDown, IntentService
 from bindaems.app.control.routes import control_router
 from bindaems.app.core_link import CoreClient, LiveFeed, LiveState
 from bindaems.app.db.engine import DB_FILENAME, migrate, open_database
 from bindaems.app.forecast.routes import forecast_router
 from bindaems.app.forecast.service import ForecastService
+from bindaems.app.ha.commands import HaCommandHandler, LogRejections
 from bindaems.app.ha.entities import HaInputs, build_entities, build_inputs
 from bindaems.app.ha.publisher import AiomqttHaTransport, HaPublisher
 from bindaems.app.history.influx import InfluxQueryError, InfluxReader
@@ -55,6 +57,7 @@ from bindaems.app.settings.routes import settings_router
 from bindaems.app.settings.service import SettingsService
 from bindaems.app.status import ComponentStatus, StatusSource
 from bindaems.shared.config import Config, Secrets
+from bindaems.shared.control import Intent
 from bindaems.shared.influx.lineprotocol import Point, PointSink
 from bindaems.shared.influx.spool import DiskSpool
 from bindaems.shared.influx.writer import InfluxWriter
@@ -173,6 +176,7 @@ class AppRuntime:
                 build_entities(cfg),
                 self._current_ha_inputs,
                 transport_factory=partial(AiomqttHaTransport, mqtt, secrets.ha_mqtt_password),
+                commands=HaCommandHandler(cfg, self.intents, LogRejections(), self._clock),
             )
         self.settings.on_change(lambda _version: self.pipeline.republish())
 
@@ -245,12 +249,25 @@ class AppRuntime:
     def _current_ha_inputs(self) -> HaInputs:
         if self._ha_inputs is None:  # der Publisher startet erst nach den ersten Werten
             raise RuntimeError("Werte für Home Assistant noch nicht bestimmt")
-        return self._ha_inputs
+        cached = self.intents.cached()  # nach einem Befehl gleich die neue Absicht zeigen
+        if cached is None or cached == self._ha_inputs.intent:
+            return self._ha_inputs
+        return replace(self._ha_inputs, intent=cached)
 
-    def _build_ha_inputs(self) -> HaInputs:
+    def _build_ha_inputs(self, intent: Intent | None) -> HaInputs:
         return build_inputs(
-            self.live, self.prices, self.price_store, self.forecast, self._clock.now()
+            self.live, self.prices, self.price_store, self.forecast, self._clock.now(), intent
         )
+
+    async def _ha_intent(self) -> Intent | None:
+        """Die Absicht für HA: ohne gültige die Basis, bei Störung die zuletzt bekannte."""
+        try:
+            return await self.intents.current() or Intent(version=1)
+        except CoreDown:
+            return self.intents.cached()
+        except Exception:
+            log.exception("Absicht für Home Assistant nicht bestimmbar")
+            return self.intents.cached()
 
     # --- Betrieb --------------------------------------------------------------------------
 
@@ -350,7 +367,8 @@ class AppRuntime:
         """Hält die Werte für Home Assistant aktuell (Datenbank im Worker-Thread)."""
         while True:
             try:
-                self._ha_inputs = await asyncio.to_thread(self._build_ha_inputs)
+                intent = await self._ha_intent()
+                self._ha_inputs = await asyncio.to_thread(self._build_ha_inputs, intent)
                 self._ha_ready.set()
             except Exception:
                 log.exception("Werte für Home Assistant nicht bestimmbar")

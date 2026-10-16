@@ -121,9 +121,14 @@ def test_only_allowed_topics_are_published(cfg) -> None:
     assert pattern.fullmatch("homeassistant/sensor/bindaems/price_now/config")
     assert pattern.fullmatch("bindaems/state/price_now/attributes")
     assert pattern.fullmatch("bindaems/status")
+    assert pattern.fullmatch("bindaems/cmd/tesla_mode")
+    for platform in ("select", "switch", "button"):
+        assert pattern.fullmatch(f"homeassistant/{platform}/bindaems/tesla_mode/config")
     for topic in (
-        "bindaems/cmd/mode",
-        "homeassistant/select/bindaems/x/config",
+        "bindaems/cmd/Mode",
+        "bindaems/cmd/mode/extra",
+        "homeassistant/light/bindaems/x/config",
+        "homeassistant/cover/bindaems/x/config",
         "R/abc/keepalive",
         "W/abc/x",
     ):
@@ -145,3 +150,75 @@ async def test_orderly_stop_reports_offline(publisher_env) -> None:
         pass
     assert transport.published[-1] == ("bindaems/status", "offline", True)
     assert not publisher.component_status().ok
+
+
+class Commands:
+    def __init__(self, error: Exception | None = None) -> None:
+        self.received: list[tuple[str, str]] = []
+        self._error = error
+
+    async def __call__(self, object_id: str, payload: str) -> None:
+        self.received.append((object_id, payload))
+        if self._error is not None:
+            raise self._error
+
+
+async def test_commands_are_subscribed_and_forwarded(publisher_env) -> None:
+    commands = Commands()
+    publisher, transport = publisher_env(
+        incoming=[("bindaems/cmd/regulation", b"ON")], commands=commands
+    )
+    await run_publisher_until(publisher, lambda: transport.count("bindaems/state/regulation") == 2)
+    assert commands.received == [("regulation", "ON")]
+    assert transport.subscriptions == ["homeassistant/status", "bindaems/cmd/+"]
+    # Zustand nach dem Befehl neu, obwohl er sich nicht geändert hat; nur diese Entität
+    assert transport.count("bindaems/state/price_now") == 1
+
+
+async def test_without_a_handler_commands_are_not_subscribed(publisher_env) -> None:
+    publisher, transport = publisher_env(incoming=[("bindaems/cmd/regulation", b"ON")])
+    await run_publisher_until(publisher, lambda: transport.published_state("price_now") is not None)
+    assert transport.subscriptions == ["homeassistant/status"]
+    assert transport.count("bindaems/state/regulation") == 1
+
+
+async def test_failing_handler_does_not_stop_the_session_and_state_is_republished(
+    publisher_env,
+) -> None:
+    commands = Commands(RuntimeError("kaputt"))
+    publisher, transport = publisher_env(
+        incoming=[("bindaems/cmd/regulation", b"ON"), ("bindaems/cmd/guest_mode", b"Aus")],
+        commands=commands,
+    )
+    await run_publisher_until(
+        publisher,
+        lambda: (
+            transport.count("bindaems/state/regulation") == 2
+            and transport.count("bindaems/state/guest_mode") == 2
+            and publisher.component_status().ok
+        ),
+    )
+    assert [oid for oid, _ in commands.received] == ["regulation", "guest_mode"]
+    assert transport.connections == 1
+
+
+async def test_payload_is_decoded_and_stripped(publisher_env) -> None:
+    commands = Commands()
+    publisher, _ = publisher_env(
+        incoming=[("bindaems/cmd/tesla_mode", b"Min+PV \n")], commands=commands
+    )
+    await run_publisher_until(publisher, lambda: commands.received)
+    assert commands.received == [("tesla_mode", "Min+PV")]
+
+
+async def test_unknown_or_stateless_entities_publish_no_state(publisher_env) -> None:
+    commands = Commands()
+    publisher, transport = publisher_env(
+        incoming=[("bindaems/cmd/tesla_boost", b"PRESS"), ("bindaems/cmd/nothing", b"x")],
+        commands=commands,
+    )
+    await run_publisher_until(publisher, lambda: len(commands.received) == 2)
+    for _ in range(50):
+        await asyncio.sleep(0)
+    assert transport.count("bindaems/state/tesla_boost") == 0
+    assert transport.count("bindaems/state/nothing") == 0

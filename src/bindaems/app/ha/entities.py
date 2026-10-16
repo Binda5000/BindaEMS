@@ -1,6 +1,8 @@
-"""Home-Assistant-Entitäten der app (Spec 12): nur Sensoren, keine Befehle.
+"""Home-Assistant-Entitäten der app (Spec 12): Sensoren und Bedienelemente (Plan 2d, Präz. 15).
 
 Unbekannte Werte werden als ``None`` veröffentlicht; Home Assistant zeigt dann „unbekannt“.
+Bedienelemente (``select``, ``switch``, ``button``) tragen ``command=True``; ihre Befehle kommen
+über ``{base_topic}/cmd/<object_id>`` und führt ``ha.commands`` aus.
 """
 
 from __future__ import annotations
@@ -9,9 +11,9 @@ import json
 import math
 import re
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta
-from typing import Any, Literal
+from typing import Any, Final, Literal
 
 from bindaems import __version__
 from bindaems.app.core_link import LiveState
@@ -20,6 +22,7 @@ from bindaems.app.prices.pipeline import TOMORROW_EXPECTED_FROM
 from bindaems.app.prices.service import PriceService
 from bindaems.app.prices.store import PriceStore
 from bindaems.shared.config import Config, EvcsConfig, HaMqttConfig
+from bindaems.shared.control import ChargeMode, Intent, VehicleIntent
 from bindaems.shared.domain import Value
 from bindaems.shared.timeutil import LOCAL_TZ, slot_start
 
@@ -27,6 +30,18 @@ NODE_ID = "bindaems"
 MANUFACTURER = "BindaEMS"
 UNKNOWN = "None"
 PRICES_AHEAD = timedelta(hours=36)
+
+# Optionen der Lademodi wie im UI, ohne „Boost“ (Texte, „Home Assistant“)
+MODE_LABELS: Final[dict[ChargeMode, str]] = {
+    ChargeMode.PV: "PV-Überschuss",
+    ChargeMode.MIN_PV: "Min+PV",
+    ChargeMode.NOW: "Sofort",
+    ChargeMode.OFF: "Aus",
+}
+AUTOMATIC: Final = "Automatisch"  # Zuordnung ohne Übersteuerung
+NO_WALLBOX: Final = "keine"
+NO_VEHICLE: Final = "keins"
+UNCLEAR: Final = "unclear"  # ``assignment`` in Health
 
 
 @dataclass(frozen=True)
@@ -54,12 +69,15 @@ class HaInputs:
     pv_today_kwh: float | None
     pv_tomorrow_kwh: float | None
     watchdog_state: str | None = None  # Zustand des Watchdogs am Cerbo; None = unbekannt
+    intent: Intent | None = None  # gültige Absicht; None = unbekannt
+    vehicles: list[dict[str, Any]] = field(default_factory=list)  # Health ``vehicles``
+    wallboxes: list[dict[str, Any]] = field(default_factory=list)  # Health ``wallboxes``
 
 
 @dataclass(frozen=True)
 class EntitySpec:
     object_id: str
-    component: Literal["sensor", "binary_sensor"]
+    component: Literal["sensor", "binary_sensor", "select", "switch", "button"]
     name: str
     device: DeviceSpec
     value: Callable[[HaInputs], str]
@@ -68,6 +86,8 @@ class EntitySpec:
     state_class: str | None = None
     entity_category: str | None = None
     attributes: Callable[[HaInputs], Mapping[str, Any]] | None = None
+    options: tuple[str, ...] = ()  # Auswahl eines ``select``
+    command: bool = False  # nimmt Befehle über ``{base}/cmd/<object_id>`` an
 
 
 def _number(value: Any) -> float | None:
@@ -120,6 +140,81 @@ def _watchdog_tripped(inputs: HaInputs) -> str:
     if state is None or state == "unknown":
         return on_off(None)
     return on_off(state == "tripped")
+
+
+def _entry(entries: Sequence[Mapping[str, Any]], key: str) -> Mapping[str, Any] | None:
+    return next((item for item in entries if item.get("id") == key), None)
+
+
+def _mode_state(key: str) -> Callable[[HaInputs], str]:
+    def value(inputs: HaInputs) -> str:
+        if inputs.intent is None:
+            return UNKNOWN
+        return MODE_LABELS[inputs.intent.vehicles.get(key, VehicleIntent()).mode]
+
+    return value
+
+
+def _guest_mode_state(inputs: HaInputs) -> str:
+    return UNKNOWN if inputs.intent is None else MODE_LABELS[inputs.intent.guest.mode]
+
+
+def _regulation_state(inputs: HaInputs) -> str:
+    return on_off(None if inputs.intent is None else inputs.intent.control)
+
+
+def _assignment_state(cfg: Config, wallbox: str) -> Callable[[HaInputs], str]:
+    """„Automatisch“ oder der Name des Fahrzeugs, dessen Absicht diese Wallbox übersteuert."""
+
+    def value(inputs: HaInputs) -> str:
+        if inputs.intent is None:
+            return UNKNOWN
+        for key, vehicle in inputs.intent.vehicles.items():
+            if vehicle.wallbox == wallbox and key in cfg.vehicles:
+                return cfg.vehicles[key].name
+        return AUTOMATIC
+
+    return value
+
+
+def _vehicle_wallbox(key: str) -> Callable[[HaInputs], str]:
+    def value(inputs: HaInputs) -> str:
+        item = _entry(inputs.vehicles, key)
+        if item is None:
+            return UNKNOWN
+        wallbox = item.get("wallbox")
+        return wallbox if isinstance(wallbox, str) else NO_WALLBOX
+
+    return value
+
+
+def _occupant(key: str) -> Callable[[HaInputs], str]:
+    def value(inputs: HaInputs) -> str:
+        item = _entry(inputs.wallboxes, key)
+        if item is None:
+            return UNKNOWN
+        name = item.get("name")
+        return name if isinstance(name, str) else NO_VEHICLE
+
+    return value
+
+
+def _assignment_unclear(inputs: HaInputs) -> str:
+    entries = [*inputs.vehicles, *inputs.wallboxes]
+    if not entries:
+        return UNKNOWN
+    return on_off(any(item.get("assignment") == UNCLEAR for item in entries))
+
+
+def _control(
+    oid: str,
+    component: Literal["select", "switch", "button"],
+    name: str,
+    device: DeviceSpec,
+    value: Callable[[HaInputs], str],
+    options: tuple[str, ...] = (),
+) -> EntitySpec:
+    return EntitySpec(oid, component, name, device, value, options=options, command=True)
 
 
 def _price_attributes(inputs: HaInputs) -> Mapping[str, Any]:
@@ -253,6 +348,23 @@ def build_entities(cfg: Config) -> list[EntitySpec]:
             _watchdog_tripped,
             device_class="problem",
         ),
+        _control("regulation", "switch", "Regelbetrieb", main, _regulation_state),
+        _control(
+            "guest_mode",
+            "select",
+            "Gast-Lademodus",
+            main,
+            _guest_mode_state,
+            tuple(MODE_LABELS.values()),
+        ),
+        EntitySpec(
+            "problem_assignment_unclear",
+            "binary_sensor",
+            "Zuordnung unklar",
+            main,
+            _assignment_unclear,
+            device_class="problem",
+        ),
     ]
     for key, vehicle in cfg.vehicles.items():
         oid = object_id(key)
@@ -269,22 +381,50 @@ def build_entities(cfg: Config) -> list[EntitySpec]:
                 state_class="measurement",
             )
         )
+        entities += [
+            _control(
+                f"{oid}_mode",
+                "select",
+                "Lademodus",
+                device,
+                _mode_state(key),
+                tuple(MODE_LABELS.values()),
+            ),
+            _control(f"{oid}_boost", "button", "Boost", device, lambda _: ""),
+            _control(f"{oid}_boost_stop", "button", "Boost beenden", device, lambda _: ""),
+            EntitySpec(f"{oid}_wallbox", "sensor", "Wallbox", device, _vehicle_wallbox(key)),
+        ]
+    options = (AUTOMATIC, *(vehicle.name for vehicle in cfg.vehicles.values()))
     for key, wallbox in cfg.wallboxes.items():
         oid = object_id(key)
         label = "EVCS" if isinstance(wallbox, EvcsConfig) else "Wall Connector"
         device = DeviceSpec(f"{NODE_ID}_{oid}", f"BindaEMS {label}", label)
-        entities.append(_power(f"{oid}_power", "Ladeleistung", device, _wallbox_w(key)))
+        entities += [
+            _power(f"{oid}_power", "Ladeleistung", device, _wallbox_w(key)),
+            _control(
+                f"{oid}_assignment",
+                "select",
+                "Zuordnung",
+                device,
+                _assignment_state(cfg, key),
+                options,
+            ),
+            EntitySpec(f"{oid}_occupant", "sensor", "Fahrzeug", device, _occupant(key)),
+        ]
     return entities
 
 
 def discovery(spec: EntitySpec, mqtt: HaMqttConfig) -> tuple[str, str]:
-    """Discovery-Topic und -Payload (kompaktes JSON mit sortierten Schlüsseln)."""
+    """Discovery-Topic und -Payload (kompaktes JSON mit sortierten Schlüsseln).
+
+    Ein Bedienelement trägt zusätzlich ``command_topic`` (``{base}/cmd/<object_id>``); ein
+    ``button`` hat keinen Zustand und darum kein ``state_topic``.
+    """
     base = mqtt.base_topic
     payload: dict[str, Any] = {
         "name": spec.name,
         "unique_id": f"{NODE_ID}_{spec.object_id}",
         "has_entity_name": True,
-        "state_topic": f"{base}/state/{spec.object_id}",
         "availability_topic": f"{base}/status",
         "device": {
             "identifiers": [spec.device.identifier],
@@ -302,12 +442,24 @@ def discovery(spec: EntitySpec, mqtt: HaMqttConfig) -> tuple[str, str]:
         "entity_category": spec.entity_category,
     }
     payload.update({key: value for key, value in optional.items() if value is not None})
+    if spec.component != "button":
+        payload["state_topic"] = f"{base}/state/{spec.object_id}"
+    if spec.command:
+        payload["command_topic"] = f"{base}/cmd/{spec.object_id}"
     if spec.attributes is not None:
         payload["json_attributes_topic"] = f"{base}/state/{spec.object_id}/attributes"
-    if spec.component == "binary_sensor":
+    if spec.component in ("binary_sensor", "switch"):
         payload["payload_on"], payload["payload_off"] = "ON", "OFF"
+    elif spec.component == "select":
+        payload["options"] = list(spec.options)
+    elif spec.component == "button":
+        payload["payload_press"] = "PRESS"
     topic = f"{mqtt.discovery_prefix}/{spec.component}/{NODE_ID}/{spec.object_id}/config"
     return topic, json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+
+
+def _dicts(value: Any) -> list[dict[str, Any]]:
+    return [item for item in value if isinstance(item, dict)] if isinstance(value, list) else []
 
 
 def build_inputs(
@@ -316,6 +468,7 @@ def build_inputs(
     store: PriceStore,
     forecast: ForecastService,
     now: datetime,
+    intent: Intent | None = None,
 ) -> HaInputs:
     connected = live.connected
     signals: dict[str, Value] = {}
@@ -330,6 +483,8 @@ def build_inputs(
     watchdog = health.get("watchdog") if health is not None else None
     watchdog_state = watchdog.get("state") if isinstance(watchdog, dict) else None
     adapters = health.get("adapters") if health is not None else None
+    vehicles = health.get("vehicles") if health is not None else None
+    wallboxes = health.get("wallboxes") if health is not None else None
     adapters_offline = (
         [
             adapter["name"]
@@ -368,4 +523,7 @@ def build_inputs(
         pv_today_kwh=latest.day_energy_kwh(local.date()) if latest is not None else None,
         pv_tomorrow_kwh=latest.day_energy_kwh(tomorrow) if latest is not None else None,
         watchdog_state=watchdog_state if isinstance(watchdog_state, str) else None,
+        intent=intent,
+        vehicles=_dicts(vehicles),
+        wallboxes=_dicts(wallboxes),
     )

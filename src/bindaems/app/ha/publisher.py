@@ -1,7 +1,9 @@
-"""MQTT-Discovery-Publisher für Home Assistant (Spec 12) – nur lesend.
+"""MQTT-Discovery-Publisher für Home Assistant (Spec 12).
 
-Die app abonniert ausschließlich ``<prefix>/status`` (Neustart von HA) und veröffentlicht nur
-Topics, die ``allowed_topic`` erlaubt; Befehle aus HA gibt es in dieser Phase nicht.
+Die app abonniert ``<prefix>/status`` (Neustart von HA) und, mit einem ``CommandHandler``, die
+Befehle ``<base>/cmd/+``. Sie veröffentlicht nur Topics, die ``allowed_topic`` erlaubt. Nach jedem
+Befehl, auch einem verworfenen oder abgelehnten, veröffentlicht sie den Zustand der Entität neu
+(Plan 2d, Präzisierung 15).
 """
 
 from __future__ import annotations
@@ -13,7 +15,7 @@ import re
 import secrets
 from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
 from types import TracebackType
-from typing import Protocol
+from typing import Final, Protocol
 
 import aiomqtt
 import structlog
@@ -28,6 +30,10 @@ from bindaems.shared.retry import Backoff, StatusLog
 log = structlog.get_logger(__name__)
 
 QOS = 1
+COMMAND_SEGMENT: Final = "cmd"
+
+# (object_id, Nutzlast) → Ausführung des Befehls; sie wirft nichts, was die Schleife stört
+CommandHandler = Callable[[str, str], Awaitable[None]]
 OFFLINE_TIMEOUT_S = 2.0
 
 
@@ -105,8 +111,8 @@ def _cause(exc: BaseException) -> str:
 def allowed_topic(mqtt: HaMqttConfig) -> re.Pattern[str]:
     prefix, base = re.escape(mqtt.discovery_prefix), re.escape(mqtt.base_topic)
     return re.compile(
-        rf"^({prefix}/(sensor|binary_sensor)/bindaems/[a-z0-9_]+/config"
-        rf"|{base}/(status|state/[a-z0-9_]+(/attributes)?))$"
+        rf"^({prefix}/(sensor|binary_sensor|select|switch|button)/bindaems/[a-z0-9_]+/config"
+        rf"|{base}/(status|state/[a-z0-9_]+(/attributes)?|{COMMAND_SEGMENT}/[a-z0-9_]+))$"
     )
 
 
@@ -120,6 +126,7 @@ class HaPublisher:
         transport_factory: Callable[[], HaTransport],
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
         backoff: Backoff | None = None,
+        commands: CommandHandler | None = None,
     ) -> None:
         self._cfg = cfg
         self._entities = list(entities)
@@ -128,6 +135,9 @@ class HaPublisher:
         self._sleep = sleep
         self._backoff = backoff or Backoff()
         self._allowed = allowed_topic(cfg)
+        self._commands = commands
+        self._command_prefix = f"{cfg.base_topic}/{COMMAND_SEGMENT}/"
+        self._by_id = {spec.object_id: spec for spec in self._entities}
         self._sent: dict[str, str] = {}  # Topic → zuletzt veröffentlichter Zustand
         self._status_log = StatusLog("ha")
         self._connected = False
@@ -165,6 +175,8 @@ class HaPublisher:
         lock = asyncio.Lock()  # Veröffentlichungen aus beiden Aufgaben nicht verschränken
         await self._publish(transport, f"{self._cfg.base_topic}/status", "online")
         await transport.subscribe(f"{self._cfg.discovery_prefix}/status")
+        if self._commands is not None:
+            await transport.subscribe(f"{self._command_prefix}+")
         async with lock:
             await self._publish_all(transport)
         self._connected, self._error = True, None
@@ -186,7 +198,28 @@ class HaPublisher:
             if topic == birth and payload.strip() == b"online":
                 async with lock:
                     await self._publish_all(transport)  # HA neu gestartet
+            elif self._commands is not None and topic.startswith(self._command_prefix):
+                await self._command(transport, lock, topic[len(self._command_prefix) :], payload)
         raise ConnectionError("Nachrichtenstrom beendet")  # neu verbinden
+
+    async def _command(
+        self, transport: HaTransport, lock: asyncio.Lock, object_id: str, payload: bytes
+    ) -> None:
+        """Reicht den Befehl weiter und veröffentlicht danach den Zustand der Entität neu."""
+        try:
+            if self._commands is not None:
+                await self._commands(object_id, payload.decode(errors="replace").strip())
+        except Exception:  # ein fehlerhafter Befehl darf die MQTT-Schleife nicht beenden
+            log.exception("Befehl aus Home Assistant fehlgeschlagen", object_id=object_id)
+        async with lock:
+            await self._republish(transport, object_id)
+
+    async def _republish(self, transport: HaTransport, object_id: str) -> None:
+        """Veröffentlicht den Zustand einer Entität neu, auch wenn er sich nicht geändert hat."""
+        spec = self._by_id.get(object_id)
+        if spec is None:
+            return
+        await self._publish_entity(transport, spec, self._inputs(), force=True)
 
     async def _publish_all(self, transport: HaTransport) -> None:
         for spec in self._entities:
@@ -196,16 +229,23 @@ class HaPublisher:
 
     async def _publish_states(self, transport: HaTransport, *, force: bool) -> None:
         inputs = self._inputs()
-        base = self._cfg.base_topic
         for spec in self._entities:
-            payloads = [(f"{base}/state/{spec.object_id}", spec.value(inputs))]
-            if spec.attributes is not None:
-                attributes = json.dumps(spec.attributes(inputs), sort_keys=True, ensure_ascii=False)
-                payloads.append((f"{base}/state/{spec.object_id}/attributes", attributes))
-            for topic, payload in payloads:
-                if force or self._sent.get(topic) != payload:
-                    await self._publish(transport, topic, payload)
-                    self._sent[topic] = payload
+            await self._publish_entity(transport, spec, inputs, force=force)
+
+    async def _publish_entity(
+        self, transport: HaTransport, spec: EntitySpec, inputs: HaInputs, *, force: bool
+    ) -> None:
+        if spec.component == "button":  # eine Taste hat keinen Zustand
+            return
+        base = self._cfg.base_topic
+        payloads = [(f"{base}/state/{spec.object_id}", spec.value(inputs))]
+        if spec.attributes is not None:
+            attributes = json.dumps(spec.attributes(inputs), sort_keys=True, ensure_ascii=False)
+            payloads.append((f"{base}/state/{spec.object_id}/attributes", attributes))
+        for topic, payload in payloads:
+            if force or self._sent.get(topic) != payload:
+                await self._publish(transport, topic, payload)
+                self._sent[topic] = payload
 
     async def _publish(self, transport: HaTransport, topic: str, payload: str) -> None:
         if not self._allowed.fullmatch(topic):
