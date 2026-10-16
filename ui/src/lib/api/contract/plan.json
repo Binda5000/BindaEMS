@@ -1,0 +1,1092 @@
+{
+  "status": {
+    "ok": true,
+    "message": "Plan von 10:00 Uhr",
+    "running": false
+  },
+  "grid_charge_allowed": false,
+  "plan": {
+    "id": 1,
+    "created_at": "2026-10-09T08:00:00+00:00",
+    "trigger": "start",
+    "source": "optimizer",
+    "solver_status": "optimal",
+    "fallback_reason": null,
+    "valid_until": "2026-10-09T08:45:00+00:00",
+    "valid": true,
+    "horizon_end": "2026-10-09T22:00:00+00:00",
+    "reserve_pct": 20.0,
+    "soc_max_pct": 100.0,
+    "month_peak_kw": 1.78,
+    "power_price": false,
+    "expected_cost_eur": -0.55,
+    "baseline_cost_eur": -0.55,
+    "issues": [],
+    "slots": [
+      {
+        "start": "2026-10-09T08:00:00+00:00",
+        "intent": "EIGENVERBRAUCH",
+        "grid_charge_w": 0.0,
+        "soc_pct": 57.442719391763355,
+        "pv_w": 4364.737145078125,
+        "load_w": 1240.0,
+        "import_w": 0.0,
+        "export_w": 0.0,
+        "battery_w": 3124.7371450781247,
+        "import_ct": 30.982,
+        "feed_in_ct": 7.3,
+        "estimated": false,
+        "budget_kw": null,
+        "codes": [
+          "PV_LADEN"
+        ],
+        "text": "Akku lädt 3,1 kW aus PV-Überschuss."
+      },
+      {
+        "start": "2026-10-09T08:15:00+00:00",
+        "intent": "EIGENVERBRAUCH",
+        "grid_charge_w": 0.0,
+        "soc_pct": 60.030259653963235,
+        "pv_w": 4549.992625,
+        "load_w": 1240.0,
+        "import_w": 0.0,
+        "export_w": 0.0,
+        "battery_w": 3309.992625,
+        "import_ct": 30.982,
+        "feed_in_ct": 7.3,
+        "estimated": false,
+        "budget_kw": null,
+        "codes": [
+          "PV_LADEN"
+        ],
+        "text": "Akku lädt 3,3 kW aus PV-Überschuss."
+      },
+      {
+        "start": "2026-10-09T08:30:00+00:00",
+        "intent": "EIGENVERBRAUCH",
+        "grid_charge_w": 0.0,
+        "soc_pct": 63.00968263834401,
+        "pv_w": 5051.2906875781255,
+        "load_w": 1240.0,
+        "import_w": 0.0,
+        "export_w": 0.0,
+        "battery_w": 3811.2906875781255,
+        "import_ct": 30.982,
+        "feed_in_ct": 7.3,
+        "estimated": false,
+        "budget_kw": null,
+        "codes": [
+          "PV_LADEN"
+        ],
+        "text": "Akku lädt 3,8 kW aus PV-Überschuss."
+      },
+      {
+        "start": "2026-10-09T08:45:00+00:00",
+        "intent": "EIGENVERBRAUCH",
+        "grid_charge_w": 0.0,
+        "soc_pct": 66.43261673213055,
+        "pv_w": 5618.632005,
+        "load_w": 1240.0,
+        "import_w": 0.0,
+        "export_w": 0.0,
+        "battery_w": 4378.632005,
+        "import_ct": 30.982,
+        "feed_in_ct": 7.3,
+        "estimated": false,
+        "budget_kw": null,
+        "codes": [
+          "PV_LADEN"
+        ],
+        "text": "Akku lädt 4,4 kW aus PV-Überschuss."
+      },
+      {
+        "start": "2026-10-09T09:00:00+00:00",
+        "intent": "EIGENVERBRAUCH",
+        "grid_charge_w": 0.0,
+        "soc_pct": 70.06283743503417,
+        "pv_w": 5883.793926328124,
+        "load_w": 1240.0,
+        "import_w": 0.0,
+        "export_w": 0.0,
+        "battery_w": 4643.793926328124,
+        "import_ct": 37.685,
+        "feed_in_ct": 7.3,
+        "estimated": false,
+        "budget_kw": null,
+        "codes": [
+          "PV_LADEN"
+        ],
+        "text": "Akku lädt 4,6 kW aus PV-Überschuss."
+      },
+      {
+        "start": "2026-10-09T09:15:00+00:00",
+        "intent": "EIGENVERBRAUCH",
+        "grid_charge_w": 0.0,
+        "soc_pct": 73.85068992389975,
+        "pv_w": 6085.437184453125,
+        "load_w": 1240.0,
+        "import_w": 0.0,
+        "export_w": 0.0,
+        "battery_w": 4845.437184453125,
+        "import_ct": 37.685,
+        "feed_in_ct": 7.3,
+        "estimated": false,
+        "budget_kw": null,
+        "codes": [
+          "PV_LADEN"
+        ],
+        "text": "Akku lädt 4,8 kW aus PV-Überschuss."
+      },
+      {
+        "start": "2026-10-09T09:30:00+00:00",
+        "intent": "EIGENVERBRAUCH",
+        "grid_charge_w": 0.0,
+        "soc_pct": 77.56516895259016,
+        "pv_w": 5991.5775388281245,
+        "load_w": 1240.0,
+        "import_w": 0.0,
+        "export_w": 0.0,
+        "battery_w": 4751.5775388281245,
+        "import_ct": 37.685,
+        "feed_in_ct": 7.3,
+        "estimated": false,
+        "budget_kw": null,
+        "codes": [
+          "PV_LADEN"
+        ],
+        "text": "Akku lädt 4,8 kW aus PV-Überschuss."
+      },
+      {
+        "start": "2026-10-09T09:45:00+00:00",
+        "intent": "EIGENVERBRAUCH",
+        "grid_charge_w": 0.0,
+        "soc_pct": 80.99840705340463,
+        "pv_w": 5631.8129350781255,
+        "load_w": 1240.0,
+        "import_w": 0.0,
+        "export_w": 0.0,
+        "battery_w": 4391.8129350781255,
+        "import_ct": 37.685,
+        "feed_in_ct": 7.3,
+        "estimated": false,
+        "budget_kw": null,
+        "codes": [
+          "PV_LADEN"
+        ],
+        "text": "Akku lädt 4,4 kW aus PV-Überschuss."
+      },
+      {
+        "start": "2026-10-09T10:00:00+00:00",
+        "intent": "EIGENVERBRAUCH",
+        "grid_charge_w": 0.0,
+        "soc_pct": 84.12801306407346,
+        "pv_w": 5243.4054603125,
+        "load_w": 1240.0,
+        "import_w": 0.0,
+        "export_w": 0.0,
+        "battery_w": 4003.4054603124996,
+        "import_ct": 35.237,
+        "feed_in_ct": 7.3,
+        "estimated": false,
+        "budget_kw": null,
+        "codes": [
+          "PV_LADEN"
+        ],
+        "text": "Akku lädt 4,0 kW aus PV-Überschuss."
+      },
+      {
+        "start": "2026-10-09T10:15:00+00:00",
+        "intent": "EIGENVERBRAUCH",
+        "grid_charge_w": 0.0,
+        "soc_pct": 86.23165379722626,
+        "pv_w": 3930.986267578125,
+        "load_w": 1240.0,
+        "import_w": 0.0,
+        "export_w": 0.0,
+        "battery_w": 2690.986267578125,
+        "import_ct": 35.237,
+        "feed_in_ct": 7.3,
+        "estimated": false,
+        "budget_kw": null,
+        "codes": [
+          "PV_LADEN"
+        ],
+        "text": "Akku lädt 2,7 kW aus PV-Überschuss."
+      },
+      {
+        "start": "2026-10-09T10:30:00+00:00",
+        "intent": "EIGENVERBRAUCH",
+        "grid_charge_w": 0.0,
+        "soc_pct": 89.35973348779342,
+        "pv_w": 5241.452985078125,
+        "load_w": 1240.0,
+        "import_w": 0.0,
+        "export_w": 0.0,
+        "battery_w": 4001.4529850781246,
+        "import_ct": 35.237,
+        "feed_in_ct": 7.3,
+        "estimated": false,
+        "budget_kw": null,
+        "codes": [
+          "PV_LADEN"
+        ],
+        "text": "Akku lädt 4,0 kW aus PV-Überschuss."
+      },
+      {
+        "start": "2026-10-09T10:45:00+00:00",
+        "intent": "EIGENVERBRAUCH",
+        "grid_charge_w": 0.0,
+        "soc_pct": 92.08315661527612,
+        "pv_w": 4723.8145703125,
+        "load_w": 1240.0,
+        "import_w": 0.0,
+        "export_w": 0.0,
+        "battery_w": 3483.8145703125,
+        "import_ct": 35.237,
+        "feed_in_ct": 7.3,
+        "estimated": false,
+        "budget_kw": null,
+        "codes": [
+          "PV_LADEN"
+        ],
+        "text": "Akku lädt 3,5 kW aus PV-Überschuss."
+      },
+      {
+        "start": "2026-10-09T11:00:00+00:00",
+        "intent": "EIGENVERBRAUCH",
+        "grid_charge_w": 0.0,
+        "soc_pct": 94.54821247258768,
+        "pv_w": 4393.3100478125,
+        "load_w": 1240.0,
+        "import_w": 0.0,
+        "export_w": 0.0,
+        "battery_w": 3153.3100478124998,
+        "import_ct": 35.24,
+        "feed_in_ct": 7.3,
+        "estimated": false,
+        "budget_kw": null,
+        "codes": [
+          "PV_LADEN"
+        ],
+        "text": "Akku lädt 3,2 kW aus PV-Überschuss."
+      },
+      {
+        "start": "2026-10-09T11:15:00+00:00",
+        "intent": "EIGENVERBRAUCH",
+        "grid_charge_w": 0.0,
+        "soc_pct": 97.34051311058887,
+        "pv_w": 4811.9229778125,
+        "load_w": 1240.0,
+        "import_w": 0.0,
+        "export_w": 0.0,
+        "battery_w": 3571.9229778125,
+        "import_ct": 35.24,
+        "feed_in_ct": 7.3,
+        "estimated": false,
+        "budget_kw": null,
+        "codes": [
+          "PV_LADEN"
+        ],
+        "text": "Akku lädt 3,6 kW aus PV-Überschuss."
+      },
+      {
+        "start": "2026-10-09T11:30:00+00:00",
+        "intent": "EIGENVERBRAUCH",
+        "grid_charge_w": 0.0,
+        "soc_pct": 100.0,
+        "pv_w": 4754.90342125,
+        "load_w": 1240.0,
+        "import_w": 0.0,
+        "export_w": 112.87636148517049,
+        "battery_w": 3402.0270597648296,
+        "import_ct": 35.24,
+        "feed_in_ct": 7.3,
+        "estimated": false,
+        "budget_kw": null,
+        "codes": [
+          "PV_LADEN"
+        ],
+        "text": "Akku lädt 3,4 kW aus PV-Überschuss."
+      },
+      {
+        "start": "2026-10-09T11:45:00+00:00",
+        "intent": "EIGENVERBRAUCH",
+        "grid_charge_w": 0.0,
+        "soc_pct": 100.0,
+        "pv_w": 4852.989608203125,
+        "load_w": 1240.0,
+        "import_w": 0.0,
+        "export_w": 3612.9896082031246,
+        "battery_w": 0.0,
+        "import_ct": 35.24,
+        "feed_in_ct": 7.3,
+        "estimated": false,
+        "budget_kw": null,
+        "codes": [
+          "EIGENVERBRAUCH"
+        ],
+        "text": "Akku deckt den Eigenverbrauch."
+      },
+      {
+        "start": "2026-10-09T12:00:00+00:00",
+        "intent": "EIGENVERBRAUCH",
+        "grid_charge_w": 0.0,
+        "soc_pct": 100.0,
+        "pv_w": 5278.309004999999,
+        "load_w": 1240.0,
+        "import_w": 0.0,
+        "export_w": 4038.309004999999,
+        "battery_w": 0.0,
+        "import_ct": 34.805,
+        "feed_in_ct": 7.3,
+        "estimated": false,
+        "budget_kw": null,
+        "codes": [
+          "EIGENVERBRAUCH"
+        ],
+        "text": "Akku deckt den Eigenverbrauch."
+      },
+      {
+        "start": "2026-10-09T12:15:00+00:00",
+        "intent": "EIGENVERBRAUCH",
+        "grid_charge_w": 0.0,
+        "soc_pct": 100.0,
+        "pv_w": 5539.1366913281245,
+        "load_w": 1240.0,
+        "import_w": 0.0,
+        "export_w": 4299.1366913281245,
+        "battery_w": 0.0,
+        "import_ct": 34.805,
+        "feed_in_ct": 7.3,
+        "estimated": false,
+        "budget_kw": null,
+        "codes": [
+          "EIGENVERBRAUCH"
+        ],
+        "text": "Akku deckt den Eigenverbrauch."
+      },
+      {
+        "start": "2026-10-09T12:30:00+00:00",
+        "intent": "EIGENVERBRAUCH",
+        "grid_charge_w": 0.0,
+        "soc_pct": 100.0,
+        "pv_w": 5461.410655312499,
+        "load_w": 1240.0,
+        "import_w": 0.0,
+        "export_w": 4221.410655312499,
+        "battery_w": 0.0,
+        "import_ct": 34.805,
+        "feed_in_ct": 7.3,
+        "estimated": false,
+        "budget_kw": null,
+        "codes": [
+          "EIGENVERBRAUCH"
+        ],
+        "text": "Akku deckt den Eigenverbrauch."
+      },
+      {
+        "start": "2026-10-09T12:45:00+00:00",
+        "intent": "EIGENVERBRAUCH",
+        "grid_charge_w": 0.0,
+        "soc_pct": 100.0,
+        "pv_w": 4951.869145312499,
+        "load_w": 1240.0,
+        "import_w": 0.0,
+        "export_w": 3711.8691453124993,
+        "battery_w": 0.0,
+        "import_ct": 34.805,
+        "feed_in_ct": 7.3,
+        "estimated": false,
+        "budget_kw": null,
+        "codes": [
+          "EIGENVERBRAUCH"
+        ],
+        "text": "Akku deckt den Eigenverbrauch."
+      },
+      {
+        "start": "2026-10-09T13:00:00+00:00",
+        "intent": "EIGENVERBRAUCH",
+        "grid_charge_w": 0.0,
+        "soc_pct": 100.0,
+        "pv_w": 4812.0183,
+        "load_w": 1240.0,
+        "import_w": 0.0,
+        "export_w": 3572.0182999999997,
+        "battery_w": 0.0,
+        "import_ct": 31.338,
+        "feed_in_ct": 7.3,
+        "estimated": false,
+        "budget_kw": null,
+        "codes": [
+          "EIGENVERBRAUCH"
+        ],
+        "text": "Akku deckt den Eigenverbrauch."
+      },
+      {
+        "start": "2026-10-09T13:15:00+00:00",
+        "intent": "EIGENVERBRAUCH",
+        "grid_charge_w": 0.0,
+        "soc_pct": 100.0,
+        "pv_w": 3524.070655078125,
+        "load_w": 1240.0,
+        "import_w": 0.0,
+        "export_w": 2284.070655078125,
+        "battery_w": 0.0,
+        "import_ct": 31.338,
+        "feed_in_ct": 7.3,
+        "estimated": false,
+        "budget_kw": null,
+        "codes": [
+          "EIGENVERBRAUCH"
+        ],
+        "text": "Akku deckt den Eigenverbrauch."
+      },
+      {
+        "start": "2026-10-09T13:30:00+00:00",
+        "intent": "EIGENVERBRAUCH",
+        "grid_charge_w": 0.0,
+        "soc_pct": 100.0,
+        "pv_w": 2865.4117312500002,
+        "load_w": 1240.0,
+        "import_w": 0.0,
+        "export_w": 1625.4117312500002,
+        "battery_w": 0.0,
+        "import_ct": 31.338,
+        "feed_in_ct": 7.3,
+        "estimated": false,
+        "budget_kw": null,
+        "codes": [
+          "EIGENVERBRAUCH"
+        ],
+        "text": "Akku deckt den Eigenverbrauch."
+      },
+      {
+        "start": "2026-10-09T13:45:00+00:00",
+        "intent": "EIGENVERBRAUCH",
+        "grid_charge_w": 0.0,
+        "soc_pct": 100.0,
+        "pv_w": 2643.0464519531247,
+        "load_w": 1240.0,
+        "import_w": 0.0,
+        "export_w": 1403.0464519531247,
+        "battery_w": 0.0,
+        "import_ct": 31.338,
+        "feed_in_ct": 7.3,
+        "estimated": false,
+        "budget_kw": null,
+        "codes": [
+          "EIGENVERBRAUCH"
+        ],
+        "text": "Akku deckt den Eigenverbrauch."
+      },
+      {
+        "start": "2026-10-09T14:00:00+00:00",
+        "intent": "EIGENVERBRAUCH",
+        "grid_charge_w": 0.0,
+        "soc_pct": 100.0,
+        "pv_w": 2138.200320703125,
+        "load_w": 1240.0,
+        "import_w": 0.0,
+        "export_w": 898.2003207031248,
+        "battery_w": 0.0,
+        "import_ct": 37.681000000000004,
+        "feed_in_ct": 7.3,
+        "estimated": false,
+        "budget_kw": null,
+        "codes": [
+          "EIGENVERBRAUCH"
+        ],
+        "text": "Akku deckt den Eigenverbrauch."
+      },
+      {
+        "start": "2026-10-09T14:15:00+00:00",
+        "intent": "EIGENVERBRAUCH",
+        "grid_charge_w": 0.0,
+        "soc_pct": 100.0,
+        "pv_w": 1566.693056328125,
+        "load_w": 1240.0,
+        "import_w": 0.0,
+        "export_w": 326.69305632812507,
+        "battery_w": 0.0,
+        "import_ct": 37.681000000000004,
+        "feed_in_ct": 7.3,
+        "estimated": false,
+        "budget_kw": null,
+        "codes": [
+          "EIGENVERBRAUCH"
+        ],
+        "text": "Akku deckt den Eigenverbrauch."
+      },
+      {
+        "start": "2026-10-09T14:30:00+00:00",
+        "intent": "EIGENVERBRAUCH",
+        "grid_charge_w": 0.0,
+        "soc_pct": 99.62339161354018,
+        "pv_w": 816.052021328125,
+        "load_w": 1240.0,
+        "import_w": 0.0,
+        "export_w": 0.0,
+        "battery_w": -423.94797867187503,
+        "import_ct": 37.681000000000004,
+        "feed_in_ct": 7.3,
+        "estimated": false,
+        "budget_kw": null,
+        "codes": [
+          "EIGENVERBRAUCH"
+        ],
+        "text": "Akku deckt den Eigenverbrauch."
+      },
+      {
+        "start": "2026-10-09T14:45:00+00:00",
+        "intent": "EIGENVERBRAUCH",
+        "grid_charge_w": 0.0,
+        "soc_pct": 98.93641780885288,
+        "pv_w": 466.67373757812504,
+        "load_w": 1240.0,
+        "import_w": 0.0,
+        "export_w": 0.0,
+        "battery_w": -773.326262421875,
+        "import_ct": 37.681000000000004,
+        "feed_in_ct": 7.3,
+        "estimated": false,
+        "budget_kw": null,
+        "codes": [
+          "EIGENVERBRAUCH"
+        ],
+        "text": "Akku deckt den Eigenverbrauch."
+      },
+      {
+        "start": "2026-10-09T15:00:00+00:00",
+        "intent": "EIGENVERBRAUCH",
+        "grid_charge_w": 0.0,
+        "soc_pct": 98.12698353587689,
+        "pv_w": 328.820015078125,
+        "load_w": 1240.0,
+        "import_w": 0.0,
+        "export_w": 0.0,
+        "battery_w": -911.1799849218751,
+        "import_ct": 37.572,
+        "feed_in_ct": 7.3,
+        "estimated": false,
+        "budget_kw": null,
+        "codes": [
+          "EIGENVERBRAUCH"
+        ],
+        "text": "Akku deckt den Eigenverbrauch."
+      },
+      {
+        "start": "2026-10-09T15:15:00+00:00",
+        "intent": "EIGENVERBRAUCH",
+        "grid_charge_w": 0.0,
+        "soc_pct": 97.36522462023517,
+        "pv_w": 382.488154453125,
+        "load_w": 1240.0,
+        "import_w": 0.0,
+        "export_w": 0.0,
+        "battery_w": -857.5118455468751,
+        "import_ct": 37.572,
+        "feed_in_ct": 7.3,
+        "estimated": false,
+        "budget_kw": null,
+        "codes": [
+          "EIGENVERBRAUCH"
+        ],
+        "text": "Akku deckt den Eigenverbrauch."
+      },
+      {
+        "start": "2026-10-09T15:30:00+00:00",
+        "intent": "EIGENVERBRAUCH",
+        "grid_charge_w": 0.0,
+        "soc_pct": 96.50679728013387,
+        "pv_w": 273.668530078125,
+        "load_w": 1240.0,
+        "import_w": 0.0,
+        "export_w": 0.0,
+        "battery_w": -966.3314699218749,
+        "import_ct": 37.572,
+        "feed_in_ct": 7.3,
+        "estimated": false,
+        "budget_kw": null,
+        "codes": [
+          "EIGENVERBRAUCH"
+        ],
+        "text": "Akku deckt den Eigenverbrauch."
+      },
+      {
+        "start": "2026-10-09T15:45:00+00:00",
+        "intent": "EIGENVERBRAUCH",
+        "grid_charge_w": 0.0,
+        "soc_pct": 95.57456875316015,
+        "pv_w": 190.59055007812503,
+        "load_w": 1240.0,
+        "import_w": 0.0,
+        "export_w": 0.0,
+        "battery_w": -1049.409449921875,
+        "import_ct": 37.572,
+        "feed_in_ct": 7.3,
+        "estimated": false,
+        "budget_kw": null,
+        "codes": [
+          "EIGENVERBRAUCH"
+        ],
+        "text": "Akku deckt den Eigenverbrauch."
+      },
+      {
+        "start": "2026-10-09T16:00:00+00:00",
+        "intent": "EIGENVERBRAUCH",
+        "grid_charge_w": 0.0,
+        "soc_pct": 94.50947136166401,
+        "pv_w": 41.020098203124995,
+        "load_w": 1240.0,
+        "import_w": 0.0,
+        "export_w": 0.0,
+        "battery_w": -1198.979901796875,
+        "import_ct": 38.152,
+        "feed_in_ct": 7.3,
+        "estimated": false,
+        "budget_kw": null,
+        "codes": [
+          "EIGENVERBRAUCH"
+        ],
+        "text": "Akku deckt den Eigenverbrauch."
+      },
+      {
+        "start": "2026-10-09T16:15:00+00:00",
+        "intent": "EIGENVERBRAUCH",
+        "grid_charge_w": 0.0,
+        "soc_pct": 93.40793432716002,
+        "pv_w": 0.0,
+        "load_w": 1240.0,
+        "import_w": 0.0,
+        "export_w": 0.0,
+        "battery_w": -1240.0,
+        "import_ct": 38.152,
+        "feed_in_ct": 7.3,
+        "estimated": false,
+        "budget_kw": null,
+        "codes": [
+          "EIGENVERBRAUCH"
+        ],
+        "text": "Akku deckt den Eigenverbrauch."
+      },
+      {
+        "start": "2026-10-09T16:30:00+00:00",
+        "intent": "EIGENVERBRAUCH",
+        "grid_charge_w": 0.0,
+        "soc_pct": 92.30639729265604,
+        "pv_w": 0.0,
+        "load_w": 1240.0,
+        "import_w": 0.0,
+        "export_w": 0.0,
+        "battery_w": -1240.0,
+        "import_ct": 38.152,
+        "feed_in_ct": 7.3,
+        "estimated": false,
+        "budget_kw": null,
+        "codes": [
+          "EIGENVERBRAUCH"
+        ],
+        "text": "Akku deckt den Eigenverbrauch."
+      },
+      {
+        "start": "2026-10-09T16:45:00+00:00",
+        "intent": "EIGENVERBRAUCH",
+        "grid_charge_w": 0.0,
+        "soc_pct": 91.20486025815207,
+        "pv_w": 0.0,
+        "load_w": 1240.0,
+        "import_w": 0.0,
+        "export_w": 0.0,
+        "battery_w": -1240.0,
+        "import_ct": 38.152,
+        "feed_in_ct": 7.3,
+        "estimated": false,
+        "budget_kw": null,
+        "codes": [
+          "EIGENVERBRAUCH"
+        ],
+        "text": "Akku deckt den Eigenverbrauch."
+      },
+      {
+        "start": "2026-10-09T17:00:00+00:00",
+        "intent": "EIGENVERBRAUCH",
+        "grid_charge_w": 0.0,
+        "soc_pct": 90.10332322364808,
+        "pv_w": 0.0,
+        "load_w": 1240.0,
+        "import_w": 0.0,
+        "export_w": 0.0,
+        "battery_w": -1240.0,
+        "import_ct": 37.572,
+        "feed_in_ct": 7.3,
+        "estimated": false,
+        "budget_kw": null,
+        "codes": [
+          "EIGENVERBRAUCH"
+        ],
+        "text": "Akku deckt den Eigenverbrauch."
+      },
+      {
+        "start": "2026-10-09T17:15:00+00:00",
+        "intent": "EIGENVERBRAUCH",
+        "grid_charge_w": 0.0,
+        "soc_pct": 89.0017861891441,
+        "pv_w": 0.0,
+        "load_w": 1240.0,
+        "import_w": 0.0,
+        "export_w": 0.0,
+        "battery_w": -1240.0,
+        "import_ct": 37.572,
+        "feed_in_ct": 7.3,
+        "estimated": false,
+        "budget_kw": null,
+        "codes": [
+          "EIGENVERBRAUCH"
+        ],
+        "text": "Akku deckt den Eigenverbrauch."
+      },
+      {
+        "start": "2026-10-09T17:30:00+00:00",
+        "intent": "EIGENVERBRAUCH",
+        "grid_charge_w": 0.0,
+        "soc_pct": 87.90024915464012,
+        "pv_w": 0.0,
+        "load_w": 1240.0,
+        "import_w": 0.0,
+        "export_w": 0.0,
+        "battery_w": -1240.0,
+        "import_ct": 37.572,
+        "feed_in_ct": 7.3,
+        "estimated": false,
+        "budget_kw": null,
+        "codes": [
+          "EIGENVERBRAUCH"
+        ],
+        "text": "Akku deckt den Eigenverbrauch."
+      },
+      {
+        "start": "2026-10-09T17:45:00+00:00",
+        "intent": "EIGENVERBRAUCH",
+        "grid_charge_w": 0.0,
+        "soc_pct": 86.79871212013613,
+        "pv_w": 0.0,
+        "load_w": 1240.0,
+        "import_w": 0.0,
+        "export_w": 0.0,
+        "battery_w": -1240.0,
+        "import_ct": 37.572,
+        "feed_in_ct": 7.3,
+        "estimated": false,
+        "budget_kw": null,
+        "codes": [
+          "EIGENVERBRAUCH"
+        ],
+        "text": "Akku deckt den Eigenverbrauch."
+      },
+      {
+        "start": "2026-10-09T18:00:00+00:00",
+        "intent": "EIGENVERBRAUCH",
+        "grid_charge_w": 0.0,
+        "soc_pct": 85.69717508563215,
+        "pv_w": 0.0,
+        "load_w": 1240.0,
+        "import_w": 0.0,
+        "export_w": 0.0,
+        "battery_w": -1240.0,
+        "import_ct": 37.655,
+        "feed_in_ct": 7.3,
+        "estimated": false,
+        "budget_kw": null,
+        "codes": [
+          "EIGENVERBRAUCH"
+        ],
+        "text": "Akku deckt den Eigenverbrauch."
+      },
+      {
+        "start": "2026-10-09T18:15:00+00:00",
+        "intent": "EIGENVERBRAUCH",
+        "grid_charge_w": 0.0,
+        "soc_pct": 84.59563805112818,
+        "pv_w": 0.0,
+        "load_w": 1240.0,
+        "import_w": 0.0,
+        "export_w": 0.0,
+        "battery_w": -1240.0,
+        "import_ct": 37.655,
+        "feed_in_ct": 7.3,
+        "estimated": false,
+        "budget_kw": null,
+        "codes": [
+          "EIGENVERBRAUCH"
+        ],
+        "text": "Akku deckt den Eigenverbrauch."
+      },
+      {
+        "start": "2026-10-09T18:30:00+00:00",
+        "intent": "EIGENVERBRAUCH",
+        "grid_charge_w": 0.0,
+        "soc_pct": 83.49410101662419,
+        "pv_w": 0.0,
+        "load_w": 1240.0,
+        "import_w": 0.0,
+        "export_w": 0.0,
+        "battery_w": -1240.0,
+        "import_ct": 37.655,
+        "feed_in_ct": 7.3,
+        "estimated": false,
+        "budget_kw": null,
+        "codes": [
+          "EIGENVERBRAUCH"
+        ],
+        "text": "Akku deckt den Eigenverbrauch."
+      },
+      {
+        "start": "2026-10-09T18:45:00+00:00",
+        "intent": "EIGENVERBRAUCH",
+        "grid_charge_w": 0.0,
+        "soc_pct": 82.39256398212021,
+        "pv_w": 0.0,
+        "load_w": 1240.0,
+        "import_w": 0.0,
+        "export_w": 0.0,
+        "battery_w": -1240.0,
+        "import_ct": 37.655,
+        "feed_in_ct": 7.3,
+        "estimated": false,
+        "budget_kw": null,
+        "codes": [
+          "EIGENVERBRAUCH"
+        ],
+        "text": "Akku deckt den Eigenverbrauch."
+      },
+      {
+        "start": "2026-10-09T19:00:00+00:00",
+        "intent": "EIGENVERBRAUCH",
+        "grid_charge_w": 0.0,
+        "soc_pct": 81.29102694761623,
+        "pv_w": 0.0,
+        "load_w": 1240.0,
+        "import_w": 0.0,
+        "export_w": 0.0,
+        "battery_w": -1240.0,
+        "import_ct": 36.968,
+        "feed_in_ct": 7.3,
+        "estimated": false,
+        "budget_kw": null,
+        "codes": [
+          "EIGENVERBRAUCH"
+        ],
+        "text": "Akku deckt den Eigenverbrauch."
+      },
+      {
+        "start": "2026-10-09T19:15:00+00:00",
+        "intent": "EIGENVERBRAUCH",
+        "grid_charge_w": 0.0,
+        "soc_pct": 80.18948991311224,
+        "pv_w": 0.0,
+        "load_w": 1240.0,
+        "import_w": 0.0,
+        "export_w": 0.0,
+        "battery_w": -1240.0,
+        "import_ct": 36.968,
+        "feed_in_ct": 7.3,
+        "estimated": false,
+        "budget_kw": null,
+        "codes": [
+          "EIGENVERBRAUCH"
+        ],
+        "text": "Akku deckt den Eigenverbrauch."
+      },
+      {
+        "start": "2026-10-09T19:30:00+00:00",
+        "intent": "EIGENVERBRAUCH",
+        "grid_charge_w": 0.0,
+        "soc_pct": 79.08795287860826,
+        "pv_w": 0.0,
+        "load_w": 1240.0,
+        "import_w": 0.0,
+        "export_w": 0.0,
+        "battery_w": -1240.0,
+        "import_ct": 36.968,
+        "feed_in_ct": 7.3,
+        "estimated": false,
+        "budget_kw": null,
+        "codes": [
+          "EIGENVERBRAUCH"
+        ],
+        "text": "Akku deckt den Eigenverbrauch."
+      },
+      {
+        "start": "2026-10-09T19:45:00+00:00",
+        "intent": "EIGENVERBRAUCH",
+        "grid_charge_w": 0.0,
+        "soc_pct": 77.98641584410429,
+        "pv_w": 0.0,
+        "load_w": 1240.0,
+        "import_w": 0.0,
+        "export_w": 0.0,
+        "battery_w": -1240.0,
+        "import_ct": 36.968,
+        "feed_in_ct": 7.3,
+        "estimated": false,
+        "budget_kw": null,
+        "codes": [
+          "EIGENVERBRAUCH"
+        ],
+        "text": "Akku deckt den Eigenverbrauch."
+      },
+      {
+        "start": "2026-10-09T20:00:00+00:00",
+        "intent": "EIGENVERBRAUCH",
+        "grid_charge_w": 0.0,
+        "soc_pct": 76.8848788096003,
+        "pv_w": 0.0,
+        "load_w": 1240.0,
+        "import_w": 0.0,
+        "export_w": 0.0,
+        "battery_w": -1240.0,
+        "import_ct": 36.965,
+        "feed_in_ct": 7.3,
+        "estimated": false,
+        "budget_kw": null,
+        "codes": [
+          "EIGENVERBRAUCH"
+        ],
+        "text": "Akku deckt den Eigenverbrauch."
+      },
+      {
+        "start": "2026-10-09T20:15:00+00:00",
+        "intent": "EIGENVERBRAUCH",
+        "grid_charge_w": 0.0,
+        "soc_pct": 75.78334177509632,
+        "pv_w": 0.0,
+        "load_w": 1240.0,
+        "import_w": 0.0,
+        "export_w": 0.0,
+        "battery_w": -1240.0,
+        "import_ct": 36.965,
+        "feed_in_ct": 7.3,
+        "estimated": false,
+        "budget_kw": null,
+        "codes": [
+          "EIGENVERBRAUCH"
+        ],
+        "text": "Akku deckt den Eigenverbrauch."
+      },
+      {
+        "start": "2026-10-09T20:30:00+00:00",
+        "intent": "EIGENVERBRAUCH",
+        "grid_charge_w": 0.0,
+        "soc_pct": 74.68180474059234,
+        "pv_w": 0.0,
+        "load_w": 1240.0,
+        "import_w": 0.0,
+        "export_w": 0.0,
+        "battery_w": -1240.0,
+        "import_ct": 36.965,
+        "feed_in_ct": 7.3,
+        "estimated": false,
+        "budget_kw": null,
+        "codes": [
+          "EIGENVERBRAUCH"
+        ],
+        "text": "Akku deckt den Eigenverbrauch."
+      },
+      {
+        "start": "2026-10-09T20:45:00+00:00",
+        "intent": "EIGENVERBRAUCH",
+        "grid_charge_w": 0.0,
+        "soc_pct": 73.58026770608835,
+        "pv_w": 0.0,
+        "load_w": 1240.0,
+        "import_w": 0.0,
+        "export_w": 0.0,
+        "battery_w": -1240.0,
+        "import_ct": 36.965,
+        "feed_in_ct": 7.3,
+        "estimated": false,
+        "budget_kw": null,
+        "codes": [
+          "EIGENVERBRAUCH"
+        ],
+        "text": "Akku deckt den Eigenverbrauch."
+      },
+      {
+        "start": "2026-10-09T21:00:00+00:00",
+        "intent": "EIGENVERBRAUCH",
+        "grid_charge_w": 0.0,
+        "soc_pct": 72.47873067158437,
+        "pv_w": 0.0,
+        "load_w": 1240.0,
+        "import_w": 0.0,
+        "export_w": 0.0,
+        "battery_w": -1240.0,
+        "import_ct": 36.577,
+        "feed_in_ct": 7.3,
+        "estimated": false,
+        "budget_kw": null,
+        "codes": [
+          "EIGENVERBRAUCH"
+        ],
+        "text": "Akku deckt den Eigenverbrauch."
+      },
+      {
+        "start": "2026-10-09T21:15:00+00:00",
+        "intent": "EIGENVERBRAUCH",
+        "grid_charge_w": 0.0,
+        "soc_pct": 71.3771936370804,
+        "pv_w": 0.0,
+        "load_w": 1240.0,
+        "import_w": 0.0,
+        "export_w": 0.0,
+        "battery_w": -1240.0,
+        "import_ct": 36.577,
+        "feed_in_ct": 7.3,
+        "estimated": false,
+        "budget_kw": null,
+        "codes": [
+          "EIGENVERBRAUCH"
+        ],
+        "text": "Akku deckt den Eigenverbrauch."
+      },
+      {
+        "start": "2026-10-09T21:30:00+00:00",
+        "intent": "EIGENVERBRAUCH",
+        "grid_charge_w": 0.0,
+        "soc_pct": 70.2756566025764,
+        "pv_w": 0.0,
+        "load_w": 1240.0,
+        "import_w": 0.0,
+        "export_w": 0.0,
+        "battery_w": -1240.0,
+        "import_ct": 36.577,
+        "feed_in_ct": 7.3,
+        "estimated": false,
+        "budget_kw": null,
+        "codes": [
+          "EIGENVERBRAUCH"
+        ],
+        "text": "Akku deckt den Eigenverbrauch."
+      },
+      {
+        "start": "2026-10-09T21:45:00+00:00",
+        "intent": "EIGENVERBRAUCH",
+        "grid_charge_w": 0.0,
+        "soc_pct": 69.17411956807243,
+        "pv_w": 0.0,
+        "load_w": 1240.0,
+        "import_w": 0.0,
+        "export_w": 0.0,
+        "battery_w": -1240.0,
+        "import_ct": 36.577,
+        "feed_in_ct": 7.3,
+        "estimated": false,
+        "budget_kw": null,
+        "codes": [
+          "EIGENVERBRAUCH"
+        ],
+        "text": "Akku deckt den Eigenverbrauch."
+      }
+    ]
+  }
+}

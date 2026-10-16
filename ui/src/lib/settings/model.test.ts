@@ -340,3 +340,71 @@ it('maps server errors of a component and of the tariff onto the editor keys', (
 		tariff: 'Leistungspreise dürfen sich zeitlich nicht überschneiden'
 	});
 });
+
+it('round-trips the planning settings', () => {
+	const current = settings();
+	const result = applyDraft(current, draftFrom(current));
+	expect('settings' in result && result.settings.planning).toEqual(current.planning);
+});
+
+it('shows the planning numbers with a decimal comma', () => {
+	const draft = draftFrom(settings());
+	expect(draft.planning).toEqual({
+		gridChargeAllowed: false,
+		marginCt: '2',
+		roundtripPct: '88',
+		wearCt: '2',
+		endValueFactor: '0,9',
+		inertiaCt: '0,5'
+	});
+});
+
+it('takes over edited planning numbers', () => {
+	const draft = draftFrom(settings());
+	draft.planning = {
+		gridChargeAllowed: true,
+		marginCt: '2,5',
+		roundtripPct: '90',
+		wearCt: '1,5',
+		endValueFactor: '0,8',
+		inertiaCt: '0'
+	};
+	const result = applyDraft(settings(), draft);
+	expect('settings' in result && result.settings.planning).toEqual({
+		grid_charge_allowed: true,
+		margin_ct: 2.5,
+		roundtrip_pct: 90,
+		wear_ct: 1.5,
+		end_value_factor: 0.8,
+		inertia_ct: 0
+	});
+});
+
+it('checks the planning numbers', () => {
+	const draft = draftFrom(settings());
+	draft.planning.roundtripPct = '101';
+	draft.planning.endValueFactor = '1,5';
+	draft.planning.marginCt = '-1';
+	draft.planning.wearCt = 'abc';
+	draft.planning.inertiaCt = '';
+	expect(errorsOf(draft)).toMatchObject({
+		'planning.roundtrip_pct': 'Zahl von 50 bis 100',
+		'planning.end_value_factor': 'Zahl von 0 bis 1, z. B. 0,9',
+		'planning.margin_ct': 'Zahl ab 0, z. B. 2,0',
+		'planning.wear_ct': 'Zahl ab 0, z. B. 2,0',
+		'planning.inertia_ct': 'Zahl ab 0, z. B. 2,0'
+	});
+	draft.planning.roundtripPct = '49,9';
+	expect(errorsOf(draft)['planning.roundtrip_pct']).toBe('Zahl von 50 bis 100');
+});
+
+it('maps server errors of the planning fields to the editor keys', () => {
+	const detail = [
+		{
+			type: 'less_than_equal',
+			loc: ['body', 'settings', 'planning', 'roundtrip_pct'],
+			msg: 'Input should be less than or equal to 100'
+		}
+	];
+	expect(editorFieldErrors(detail, settings())).toHaveProperty('planning.roundtrip_pct');
+});

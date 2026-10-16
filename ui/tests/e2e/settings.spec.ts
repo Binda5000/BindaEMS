@@ -109,3 +109,38 @@ test('Tarif-Editor bei 360 px: ohne waagrechtes Scrollen, Bedienelemente mindest
 	});
 	expect(small).toEqual([]);
 });
+
+test('admin schaltet Netzladen in den Einstellungen der Planung', async ({ page }) => {
+	await login(page, 'admin');
+	await page.goto('/einstellungen');
+	const view = page.getByRole('heading', { name: 'Planung' }).locator('..');
+	await expect(view.getByText('Marge')).toBeVisible();
+	// der Demo-Zustand ist geteilt: vom aktuellen Wert aus ändern und am Ende zurücksetzen
+	await page.getByRole('button', { name: 'Bearbeiten' }).click();
+	const box = page.getByRole('checkbox', { name: 'Netzladen erlaubt' });
+	const original = await box.isChecked();
+	try {
+		await box.setChecked(!original);
+		await page.getByLabel('Marge (ct/kWh)').fill('2,5');
+		await page.getByRole('button', { name: 'Speichern' }).click();
+		await expect(page.getByText(/Version \d+ gespeichert/)).toBeVisible();
+		await expect(view.getByText('2,5 ct/kWh').first()).toBeVisible();
+	} finally {
+		await page.goto('/einstellungen');
+		await page.getByRole('button', { name: 'Bearbeiten' }).click();
+		await box.setChecked(original);
+		await page.getByLabel('Marge (ct/kWh)').fill('2');
+		await page.getByRole('button', { name: 'Speichern' }).click();
+		await expect(page.getByText(/Version \d+ gespeichert/)).toBeVisible();
+	}
+});
+
+test('Einstellungen der Planung melden ungültige Zahlen am Feld', async ({ page }) => {
+	await login(page, 'admin');
+	await page.goto('/einstellungen');
+	await page.getByRole('button', { name: 'Bearbeiten' }).click();
+	await page.getByLabel('Roundtrip-Wirkungsgrad (%)').fill('101');
+	await page.getByRole('button', { name: 'Speichern' }).click();
+	await expect(page.getByText('Zahl von 50 bis 100')).toBeVisible();
+	await expect(page.getByLabel('Roundtrip-Wirkungsgrad (%)')).toBeFocused();
+});

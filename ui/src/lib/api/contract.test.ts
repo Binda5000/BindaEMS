@@ -37,6 +37,8 @@ const SCHEMAS: Record<string, v.GenericSchema> = {
 	'control-reply': s.ControlReplySchema,
 	decisions: s.DecisionsResponseSchema,
 	'decisions-latest': s.LatestDecisionsResponseSchema,
+	plan: s.PlanResponseSchema,
+	'plan-grid-charge': s.GridChargeReplySchema,
 	'error-422': s.ValidationErrorSchema
 };
 
@@ -197,5 +199,34 @@ describe('Bedienung und Entscheidungen', () => {
 
 	it('kennt die Antwort der Quittierung', () => {
 		expect(issues(s.AckResponseSchema, { detail: 'Quittiert.' })).toEqual([]);
+	});
+});
+
+describe('Zeitplan', () => {
+	const demo = files['./contract/plan.json'] as { plan: Record<string, unknown> };
+
+	it('akzeptiert die Antwort ohne Plan', () => {
+		expect(
+			issues(s.PlanResponseSchema, {
+				status: { ok: false, message: 'Noch kein Plan', running: false },
+				grid_charge_allowed: false,
+				plan: null
+			})
+		).toEqual([]);
+	});
+
+	it('akzeptiert einen Ersatzplan mit Grund', () => {
+		const plan = {
+			...demo.plan,
+			source: 'fallback',
+			solver_status: 'timeout',
+			fallback_reason: 'Solver nach 30 s abgebrochen'
+		};
+		expect(issues(s.PlanSchema, plan)).toEqual([]);
+	});
+
+	it('lehnt eine unbekannte Absicht ab', () => {
+		const slots = demo.plan.slots as Record<string, unknown>[];
+		expect(issues(s.PlanSlotSchema, { ...slots[0], intent: 'LADEN' })).not.toEqual([]);
 	});
 });

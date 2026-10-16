@@ -34,6 +34,7 @@ from bindaems.app.consumers.values import ENTITY_UNITS_QUERY, HaRef
 from bindaems.app.db.schema import user_table
 from bindaems.app.forecast.archive import RecordValue
 from bindaems.app.forecast.openmeteo import OPEN_METEO_URL
+from bindaems.app.planning.process import solve_inline
 from bindaems.app.runtime import AppRuntime
 from bindaems.core.adapters.base import AdapterHealth
 from bindaems.core.api.app import create_api
@@ -618,6 +619,10 @@ async def build_world(cfg: Config, data_dir: Path, *, ui_dir: Path | None = None
             await app.ledger.handle_stream_message(message)
         await app.load_forecast.refresh()  # aus den vier Slots der Abrechnung
         _rate_forecasts(app)
+        # Plan aus den Prognosen und Preisen; der Solver läuft im selben Prozess (wie in Tests)
+        app.planning._solver = solve_inline
+        plan = await app.planning.replan("start")
+        assert plan is not None, app.planning.component_status().message
     except BaseException:
         router.stop(quiet=True)
         raise

@@ -172,5 +172,13 @@ export const api = {
 	decisions: (query: s.DecisionQuery, o?: Load): Promise<s.DecisionsResponse> =>
 		get(withQuery('/api/decisions', decisionParams(query)), s.DecisionsResponseSchema, o),
 	latestDecisions: (o?: Load): Promise<s.LatestDecisionsResponse> =>
-		get('/api/decisions/latest', s.LatestDecisionsResponseSchema, o)
+		get('/api/decisions/latest', s.LatestDecisionsResponseSchema, o),
+
+	// Zeitplan des Akkus (Neuplanung und Netzladen: Operator)
+	plan: (o?: Load): Promise<s.PlanResponse> => get('/api/plan', s.PlanResponseSchema, o),
+	replan: async (): Promise<void> => {
+		await request('POST', '/api/plan/replan'); // 202 {queued: true}
+	},
+	setGridCharge: (on: boolean): Promise<s.GridChargeReply> =>
+		request('PUT', '/api/plan/grid-charge', { body: { on }, schema: s.GridChargeReplySchema })
 };

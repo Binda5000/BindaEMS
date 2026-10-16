@@ -5,6 +5,7 @@
 	import Notice from '$lib/components/Notice.svelte';
 	import { WALLBOX_NAME_MAX, WALLBOX_TYPES } from '$lib/wallboxes';
 	import { applyDraft, draftFrom, editorFieldErrors } from './model';
+	import PlanningEditor from './PlanningEditor.svelte';
 	import TariffEditor from './TariffEditor.svelte';
 
 	interface Props {
@@ -45,7 +46,7 @@
 		'name|valid_from|valid_until|value_ct|value_eur|value_above_eur|tier_kw|minimum_kw';
 	const WINDOW_FIELDS = 'months|weekdays|start|end|factor|value_ct';
 	const SHOWN_KEYS = [
-		/^(feedIn|prices|wallboxNames)\./,
+		/^(feedIn|prices|planning|wallboxNames)\./,
 		/^tariff(\.components|\.vat_pct|\.fixed_price_gross_ct)?$/,
 		new RegExp(`^tariff\\.components\\.\\d+(\\.(${COMPONENT_FIELDS}))?$`),
 		new RegExp(`^tariff\\.components\\.\\d+\\.windows\\.\\d+(\\.(${WINDOW_FIELDS}))?$`)
@@ -202,6 +203,8 @@
 			</select>
 		</div>
 	</fieldset>
+
+	<PlanningEditor bind:draft={draft.planning} {errors} />
 
 	{#if Object.keys(draft.wallboxNames).length > 0}
 		<fieldset>

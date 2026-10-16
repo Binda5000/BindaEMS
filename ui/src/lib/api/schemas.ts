@@ -431,6 +431,16 @@ export const PriceSettingsSchema = v.looseObject({
 });
 export type PriceSettings = v.InferOutput<typeof PriceSettingsSchema>;
 
+export const PlanningSettingsSchema = v.looseObject({
+	grid_charge_allowed: v.boolean(),
+	margin_ct: v.number(),
+	roundtrip_pct: v.number(),
+	wear_ct: v.number(),
+	end_value_factor: v.number(),
+	inertia_ct: v.number()
+});
+export type PlanningSettings = v.InferOutput<typeof PlanningSettingsSchema>;
+
 export const RuntimeSettingsSchema = v.looseObject({
 	prices: PriceSettingsSchema,
 	tariff: v.looseObject({
@@ -444,14 +454,7 @@ export const RuntimeSettingsSchema = v.looseObject({
 		temp_coeff_pct_per_k: v.number(),
 		noct_c: v.number()
 	}),
-	planning: v.looseObject({
-		grid_charge_allowed: v.boolean(),
-		margin_ct: v.number(),
-		roundtrip_pct: v.number(),
-		wear_ct: v.number(),
-		end_value_factor: v.number(),
-		inertia_ct: v.number()
-	}),
+	planning: PlanningSettingsSchema,
 	/** eigene Namen der Ladestationen; ohne Eintrag gilt der Typ */
 	wallbox_names: v.optional(v.record(v.string(), v.string()), {})
 });
@@ -772,3 +775,97 @@ export interface ConsumerInput {
 	power_unit?: 'W' | 'kW' | null;
 	sort?: number;
 }
+
+// --- Zeitplan des Akkus (Plan 3b) --------------------------------------------------------
+
+export const BatteryIntentKindSchema = v.picklist(['EIGENVERBRAUCH', 'HALTEN', 'NETZLADEN']);
+export type BatteryIntentKind = v.InferOutput<typeof BatteryIntentKindSchema>;
+
+export const PlanReasonCodeSchema = v.picklist([
+	'NETZLADEN_GUENSTIG',
+	'HALTEN_FUER_SPITZE',
+	'BUDGET_SPITZE',
+	'HALTEN_RESTWERT',
+	'PV_LADEN',
+	'PV_UEBERSCHUSS_ERWARTET',
+	'REGEL_R_BLOCKIERT_NETZLADEN',
+	'NETZLADEN_AUS',
+	'EIGENVERBRAUCH',
+	'GESCHAETZT',
+	'ERSATZPLAN'
+]);
+export type PlanReasonCode = v.InferOutput<typeof PlanReasonCodeSchema>;
+
+export const PlanTriggerSchema = v.picklist([
+	'start',
+	'slot',
+	'prices',
+	'pv_forecast',
+	'load_forecast',
+	'soc',
+	'month_peak',
+	'settings',
+	'manual'
+]);
+export type PlanTrigger = v.InferOutput<typeof PlanTriggerSchema>;
+
+/** Eine Viertelstunde des Plans; Leistungen sind Mittelwerte in W, `text` der fertige Satz */
+export const PlanSlotSchema = v.object({
+	start: Iso,
+	intent: BatteryIntentKindSchema,
+	grid_charge_w: v.number(),
+	soc_pct: v.number(),
+	pv_w: v.number(),
+	load_w: v.number(),
+	import_w: v.number(),
+	export_w: v.number(),
+	/** Netto-Akkuleistung: Laden minus Entladen */
+	battery_w: v.number(),
+	import_ct: v.number(),
+	feed_in_ct: NullableNumber,
+	estimated: v.boolean(),
+	budget_kw: NullableNumber,
+	codes: v.array(PlanReasonCodeSchema),
+	text: v.string()
+});
+export type PlanSlot = v.InferOutput<typeof PlanSlotSchema>;
+
+export const PlanSchema = v.object({
+	id: v.nullable(v.number()),
+	created_at: Iso,
+	trigger: PlanTriggerSchema,
+	source: v.picklist(['optimizer', 'fallback']),
+	solver_status: v.nullable(
+		v.picklist(['optimal', 'time_limit', 'infeasible', 'timeout', 'error'])
+	),
+	fallback_reason: v.nullable(v.string()),
+	valid_until: Iso,
+	/** gilt der Plan jetzt noch? */
+	valid: v.boolean(),
+	horizon_end: Iso,
+	reserve_pct: v.number(),
+	soc_max_pct: v.number(),
+	month_peak_kw: NullableNumber,
+	/** gilt im Horizont ein Leistungspreis? */
+	power_price: v.boolean(),
+	expected_cost_eur: v.number(),
+	baseline_cost_eur: v.number(),
+	issues: v.array(v.string()),
+	slots: v.array(PlanSlotSchema)
+});
+export type Plan = v.InferOutput<typeof PlanSchema>;
+
+/** Antwort von `GET /api/plan`: Status der Komponente, Schalter und der letzte Plan (oder keiner) */
+export const PlanResponseSchema = v.object({
+	status: v.object({ ok: v.boolean(), message: v.string(), running: v.boolean() }),
+	grid_charge_allowed: v.boolean(),
+	plan: v.nullable(PlanSchema)
+});
+export type PlanResponse = v.InferOutput<typeof PlanResponseSchema>;
+
+/** Antwort von `PUT /api/plan/grid-charge` */
+export const GridChargeReplySchema = v.object({
+	grid_charge_allowed: v.boolean(),
+	settings_version: v.number()
+});
+export type GridChargeReply = v.InferOutput<typeof GridChargeReplySchema>;

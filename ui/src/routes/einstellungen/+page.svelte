@@ -11,6 +11,7 @@
 	import ImportExport from '$lib/settings/ImportExport.svelte';
 	import LimitsView from '$lib/settings/LimitsView.svelte';
 	import { defaultRepriceRange } from '$lib/settings/model';
+	import PlanningView from '$lib/settings/PlanningView.svelte';
 	import RepriceForm from '$lib/settings/RepriceForm.svelte';
 	import SettingsEditor from '$lib/settings/SettingsEditor.svelte';
 	import TariffView from '$lib/settings/TariffView.svelte';
@@ -165,6 +166,10 @@
 				<dt>NOCT</dt>
 				<dd>{formatNumber(current.settings.pv_model.noct_c, 0)}{NBSP}°C</dd>
 			</dl>
+		</Card>
+
+		<Card title="Planung">
+			<PlanningView planning={current.settings.planning} />
 		</Card>
 	{:else if !settings.error}
 		<p class="muted">Lädt …</p>

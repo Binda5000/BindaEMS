@@ -2,6 +2,8 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { api } from './endpoints';
 import control from './contract/control-reply.json';
 import decisions from './contract/decisions.json';
+import plan from './contract/plan.json';
+import gridCharge from './contract/plan-grid-charge.json';
 
 const fetchMock = vi.fn();
 
@@ -87,4 +89,30 @@ it('hängt nur gesetzte Filter an die Abfrage der Entscheidungen', async () => {
 		before: '5',
 		limit: '100'
 	});
+});
+
+it('liest den Plan mit GET', async () => {
+	reply(plan);
+	const result = await api.plan();
+	expect(sent()).toMatchObject({ url: '/api/plan', method: 'GET' });
+	expect(result.plan?.slots.length).toBeGreaterThan(0);
+	expect(result.status.message).toBe('Plan von 10:00 Uhr');
+});
+
+it('fordert eine Neuplanung mit POST und CSRF-Token an', async () => {
+	fetchMock.mockResolvedValueOnce(new Response('{"queued":true}', { status: 202 }));
+	await expect(api.replan()).resolves.toBeUndefined();
+	expect(sent()).toMatchObject({ url: '/api/plan/replan', method: 'POST', csrf: 'tok-123' });
+});
+
+it('schaltet das Netzladen mit PUT und prüft die Antwort', async () => {
+	reply(gridCharge);
+	const result = await api.setGridCharge(true);
+	expect(sent()).toEqual({
+		url: '/api/plan/grid-charge',
+		method: 'PUT',
+		body: { on: true },
+		csrf: 'tok-123'
+	});
+	expect(result.grid_charge_allowed).toBe(true);
 });

@@ -39,6 +39,7 @@ GET_ENDPOINTS = {
     "control": "/api/control",
     "decisions": "/api/decisions",
     "decisions-latest": "/api/decisions/latest",
+    "plan": "/api/plan",
 }
 OTHER = {
     "live-hello",
@@ -50,6 +51,7 @@ OTHER = {
     "reprice",
     "error-422",
     "control-reply",
+    "plan-grid-charge",
 }
 
 
@@ -96,6 +98,9 @@ def collect_responses(world: World) -> dict[str, object]:
     changed = client.put("/api/control/vehicles/tesla/mode", json={"mode": "now"}, headers=csrf)
     assert changed.status_code == 200, changed.text
     actual["control-reply"] = changed.json()
+    charge = client.put("/api/plan/grid-charge", json={"on": True}, headers=csrf)
+    assert charge.status_code == 200, charge.text
+    actual["plan-grid-charge"] = charge.json()
     return actual
 
 

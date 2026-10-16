@@ -256,8 +256,8 @@
     },
     {
       "name": "planning",
-      "ok": false,
-      "message": "Noch kein Plan",
+      "ok": true,
+      "message": "Plan von 10:00 Uhr",
       "since": null,
       "details": {}
     },

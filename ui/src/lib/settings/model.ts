@@ -6,6 +6,7 @@ import type {
 	MonthlyFeeComponent,
 	PowerComponent,
 	PriceComponent,
+	PlanningSettings,
 	PriceSettings,
 	RuntimeSettings,
 	TimeWindow
@@ -53,10 +54,21 @@ export interface TariffDraft {
 	components: ComponentDraft[];
 }
 
+/** Planung des Akkus als Text (Zahlen mit Dezimalkomma) */
+export interface PlanningDraft {
+	gridChargeAllowed: boolean;
+	marginCt: string;
+	roundtripPct: string;
+	wearCt: string;
+	endValueFactor: string;
+	inertiaCt: string;
+}
+
 export interface SettingsDraft {
 	tariff: TariffDraft;
 	feedIn: { month: string; ct: string }[];
 	prices: PriceSettings;
+	planning: PlanningDraft;
 	/** eigene Namen der Ladestationen nach Schlüssel; leer = Typname */
 	wallboxNames: Record<string, string>;
 	comment: string;
@@ -95,6 +107,9 @@ const NAME_MAX = 80;
 const ID_MAX = 40;
 const QUARTER_ERROR = 'Uhrzeit auf einer Viertelstunde, z. B. 10:15';
 const NUMBER_ERROR = 'Zahl, z. B. 8,11';
+const NON_NEGATIVE_ERROR = 'Zahl ab 0, z. B. 2,0';
+const PERCENT_ERROR = 'Zahl von 50 bis 100';
+const FACTOR_ERROR = 'Zahl von 0 bis 1, z. B. 0,9';
 const DEFAULT_TIER_KW = '10';
 const DEFAULT_MINIMUM_KW = '2';
 export const MONTHS = [
@@ -252,6 +267,17 @@ export function newComponent(
 	};
 }
 
+function planningDraft(planning: PlanningSettings): PlanningDraft {
+	return {
+		gridChargeAllowed: planning.grid_charge_allowed,
+		marginCt: decimalText(planning.margin_ct),
+		roundtripPct: decimalText(planning.roundtrip_pct),
+		wearCt: decimalText(planning.wear_ct),
+		endValueFactor: decimalText(planning.end_value_factor),
+		inertiaCt: decimalText(planning.inertia_ct)
+	};
+}
+
 /** `wallboxes`: Schlüssel aller Ladestationen aus config.yaml (auch ohne eigenen Namen) */
 export function draftFrom(settings: RuntimeSettings, wallboxes: string[] = []): SettingsDraft {
 	return {
@@ -264,6 +290,7 @@ export function draftFrom(settings: RuntimeSettings, wallboxes: string[] = []): 
 			.sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
 			.map(([month, ct]) => ({ month, ct: decimalText(ct) })),
 		prices: { ...settings.prices },
+		planning: planningDraft(settings.planning),
 		wallboxNames: {
 			...Object.fromEntries(wallboxes.map((key) => [key, ''])),
 			...settings.wallbox_names
@@ -474,6 +501,68 @@ function importPricesChanged(before: RuntimeSettings['tariff'], after: RuntimeSe
 	);
 }
 
+/** Zahl im Bereich [min, max] oder `null` mit Fehlertext unter `key` (leer ist ein Fehler) */
+function planningNumber(
+	text: string,
+	key: string,
+	errors: Record<string, string>,
+	min: number,
+	max: number | null,
+	message: string
+): number | null {
+	const value = parseDecimal(text);
+	if (value === null || value === 'invalid' || value < min || (max !== null && value > max)) {
+		errors[key] = message;
+		return null;
+	}
+	return value;
+}
+
+function applyPlanning(
+	draft: PlanningDraft,
+	errors: Record<string, string>
+): PlanningSettings | null {
+	const before = Object.keys(errors).length;
+	const planning = {
+		grid_charge_allowed: draft.gridChargeAllowed,
+		margin_ct: planningNumber(
+			draft.marginCt,
+			'planning.margin_ct',
+			errors,
+			0,
+			null,
+			NON_NEGATIVE_ERROR
+		),
+		roundtrip_pct: planningNumber(
+			draft.roundtripPct,
+			'planning.roundtrip_pct',
+			errors,
+			50,
+			100,
+			PERCENT_ERROR
+		),
+		wear_ct: planningNumber(draft.wearCt, 'planning.wear_ct', errors, 0, null, NON_NEGATIVE_ERROR),
+		end_value_factor: planningNumber(
+			draft.endValueFactor,
+			'planning.end_value_factor',
+			errors,
+			0,
+			1,
+			FACTOR_ERROR
+		),
+		inertia_ct: planningNumber(
+			draft.inertiaCt,
+			'planning.inertia_ct',
+			errors,
+			0,
+			null,
+			NON_NEGATIVE_ERROR
+		)
+	};
+	if (Object.keys(errors).length > before) return null;
+	return planning as PlanningSettings;
+}
+
 export function applyDraft(settings: RuntimeSettings, draft: SettingsDraft): DraftResult {
 	const errors: Record<string, string> = {};
 	const vatPct = readNumber(draft.tariff.vatPct, 'tariff.vat_pct', errors, {
@@ -515,6 +604,8 @@ export function applyDraft(settings: RuntimeSettings, draft: SettingsDraft): Dra
 		if (valid && typeof ct === 'number') monthly[month] = ct;
 	});
 
+	const planning = applyPlanning(draft.planning, errors);
+
 	const wallboxNames: Record<string, string> = {};
 	for (const [key, text] of Object.entries(draft.wallboxNames)) {
 		const name = text.trim();
@@ -526,7 +617,14 @@ export function applyDraft(settings: RuntimeSettings, draft: SettingsDraft): Dra
 		wallboxNames[key] = name;
 	}
 
-	if (Object.keys(errors).length > 0 || vatPct === null || fixedPrice === null) return { errors };
+	if (
+		Object.keys(errors).length > 0 ||
+		vatPct === null ||
+		fixedPrice === null ||
+		planning === null
+	) {
+		return { errors };
+	}
 	const tariff = {
 		...settings.tariff,
 		vat_pct: vatPct,
@@ -539,6 +637,7 @@ export function applyDraft(settings: RuntimeSettings, draft: SettingsDraft): Dra
 			prices: { ...settings.prices, ...draft.prices },
 			tariff,
 			feed_in: { ...settings.feed_in, monthly_ct: monthly },
+			planning: { ...settings.planning, ...planning },
 			wallbox_names: wallboxNames
 		},
 		tariffChanged: importPricesChanged(settings.tariff, tariff)
