@@ -3,16 +3,31 @@ import error422 from '$lib/api/contract/error-422.json';
 import { settingsCurrent } from '$lib/testing/fixtures';
 import {
 	applyDraft,
+	componentId,
 	defaultRepriceRange,
 	describeWindow,
 	draftFrom,
 	editorFieldErrors,
 	isEnergy,
+	newComponent,
 	parseDecimal,
-	validityText
+	validityText,
+	windowsOf,
+	type SettingsDraft
 } from './model';
 
 const settings = () => settingsCurrent().settings;
+const ids = (draft: SettingsDraft) => draft.tariff.components.map((c) => c.id);
+const component = (draft: SettingsDraft, id: string) => {
+	const found = draft.tariff.components.find((c) => c.id === id);
+	if (!found) throw new Error(`${id} fehlt`);
+	return found;
+};
+const errorsOf = (draft: SettingsDraft) => {
+	const result = applyDraft(settings(), draft);
+	if (!('errors' in result)) throw new Error('Fehler erwartet');
+	return result.errors;
+};
 
 it('liest deutsche Dezimalzahlen', () => {
 	expect(parseDecimal('7,3')).toBe(7.3);
@@ -33,7 +48,7 @@ it('ändert ohne Eingaben nichts', () => {
 it('übernimmt einen Tarifwert mit Komma', () => {
 	const current = settings();
 	const draft = draftFrom(current);
-	draft.values.grid_loss = '1,23';
+	component(draft, 'grid_loss').value = '1,23';
 	const result = applyDraft(current, draft);
 	if (!('settings' in result)) throw new Error(JSON.stringify(result.errors));
 	expect(result.tariffChanged).toBe(true);
@@ -43,7 +58,7 @@ it('übernimmt einen Tarifwert mit Komma', () => {
 it('meldet ungültige Werte und doppelte Monate', () => {
 	const current = settings();
 	const draft = draftFrom(current);
-	draft.values.grid_loss = 'viel';
+	component(draft, 'grid_loss').value = 'viel';
 	draft.feedIn = [
 		{ month: '2026-09', ct: '7,3' },
 		{ month: '2026-09', ct: '8' },
@@ -51,7 +66,7 @@ it('meldet ungültige Werte und doppelte Monate', () => {
 	];
 	expect(applyDraft(current, draft)).toEqual({
 		errors: {
-			'values.grid_loss': 'Zahl, z. B. 8,11',
+			'tariff.components.3.value_ct': 'Zahl, z. B. 8,11',
 			'feedIn.1.month': 'Monat doppelt',
 			'feedIn.2.ct': 'Wert ab 0'
 		}
@@ -73,7 +88,7 @@ it('beschreibt Zeitfenster und Gültigkeit', () => {
 
 it('ordnet Serverfehler dem Feld zu', () => {
 	expect(editorFieldErrors(error422.detail, settings())).toEqual({
-		'values.grid_usage': 'Zahl erwartet'
+		'tariff.components.2.value_ct': 'Zahl erwartet'
 	});
 });
 
@@ -104,4 +119,178 @@ it('übernimmt eigene Namen der Ladestationen, leere entfallen, zu lange sind ei
 			current
 		)
 	).toEqual({ 'wallboxNames.evcs': 'zu lang' });
+});
+
+it('builds ids from names, unique and fixed', () => {
+	expect(componentId('Grundgebühr Lieferant', ['spot'])).toBe('grundgebuehr_lieferant');
+	expect(componentId('Netz', ['netz'])).toBe('netz_2');
+	expect(componentId('Netz', ['netz', 'netz_2'])).toBe('netz_3');
+	expect(componentId('Größe ÄÖÜ ß', [])).toBe('groesse_aeoeue_ss');
+	expect(componentId('  --  ', [])).toBe('bestandteil');
+	expect(componentId('x'.repeat(60), [])).toHaveLength(40);
+	expect(componentId('x'.repeat(60), ['x'.repeat(40)])).toBe(`${'x'.repeat(38)}_2`);
+});
+
+it('round-trips the default tariff without changes', () => {
+	const result = applyDraft(settings(), draftFrom(settings()));
+	expect('settings' in result && result.settings).toEqual(settings());
+	expect('settings' in result && result.tariffChanged).toBe(false);
+});
+
+it('edits a window factor and marks the tariff as changed', () => {
+	const draft = draftFrom(settings());
+	component(draft, 'grid_usage').windows[0].amount = '0,75';
+	const result = applyDraft(settings(), draft);
+	expect('settings' in result && result.tariffChanged).toBe(true);
+	const saved =
+		'settings' in result
+			? result.settings.tariff.components.find((c) => c.id === 'grid_usage')
+			: null;
+	expect(saved && windowsOf(saved)[0].factor).toBe(0.75);
+});
+
+it('switches a window to a fixed value', () => {
+	const draft = draftFrom(settings());
+	const window = component(draft, 'grid_usage').windows[0];
+	window.mode = 'value';
+	window.amount = '5,5';
+	const result = applyDraft(settings(), draft);
+	const saved =
+		'settings' in result
+			? result.settings.tariff.components.find((c) => c.id === 'grid_usage')
+			: null;
+	expect(saved && windowsOf(saved)[0]).toMatchObject({
+		factor: null,
+		value_ct: 5.5
+	});
+});
+
+it('adds a power price with tier and minimum', () => {
+	const draft = draftFrom(settings());
+	draft.tariff.components.push({
+		...newComponent('power_per_kw_year', 'Leistung 2028', ids(draft)),
+		value: '34',
+		valueAbove: '68',
+		validFrom: '2028-01-01'
+	});
+	const result = applyDraft(settings(), draft);
+	const added = 'settings' in result ? result.settings.tariff.components.at(-1) : null;
+	expect(added).toMatchObject({
+		kind: 'power_per_kw_year',
+		id: 'leistung_2028',
+		value_eur: 34,
+		value_above_eur: 68,
+		tier_kw: 10,
+		minimum_kw: 2,
+		valid_from: '2028-01-01'
+	});
+	expect('settings' in result && result.tariffChanged).toBe(false);
+});
+
+it('does not mark the tariff as changed for fee and feed-in components', () => {
+	const draft = draftFrom(settings());
+	component(draft, 'grid_base_fee').value = '4,5';
+	draft.tariff.components.push(
+		{ ...newComponent('feed_in_per_kwh', 'Abschlag', ids(draft)), value: '-0,2' },
+		{ ...newComponent('fixed_per_month', 'Zähler', ids(draft)), value: '1' }
+	);
+	const result = applyDraft(settings(), draft);
+	if (!('settings' in result)) throw new Error(JSON.stringify(result.errors));
+	expect(result.tariffChanged).toBe(false);
+	expect(result.settings.tariff.components.at(-2)).toMatchObject({
+		kind: 'feed_in_per_kwh',
+		value_ct: -0.2,
+		vat: false
+	});
+});
+
+it('marks the tariff as changed for vat, added and removed energy components', () => {
+	const vat = draftFrom(settings());
+	vat.tariff.vatPct = '19,5';
+	const vatResult = applyDraft(settings(), vat);
+	expect('settings' in vatResult && vatResult.tariffChanged).toBe(true);
+	expect('settings' in vatResult && vatResult.settings.tariff.vat_pct).toBe(19.5);
+
+	const added = draftFrom(settings());
+	added.tariff.components.push({
+		...newComponent('energy_per_kwh', 'Zuschlag', ids(added)),
+		value: '0,5'
+	});
+	const addedResult = applyDraft(settings(), added);
+	expect('settings' in addedResult && addedResult.tariffChanged).toBe(true);
+
+	const removed = draftFrom(settings());
+	removed.tariff.components = removed.tariff.components.filter((c) => c.id !== 'grid_loss');
+	const removedResult = applyDraft(settings(), removed);
+	expect('settings' in removedResult && removedResult.tariffChanged).toBe(true);
+});
+
+it('reports a window that ends before it starts', () => {
+	const draft = draftFrom(settings());
+	component(draft, 'grid_usage').windows[0].end = '09:00';
+	expect(errorsOf(draft)['tariff.components.2.windows.0.end']).toBe(
+		'Ende muss nach dem Beginn liegen (00:00 = Tagesende)'
+	);
+});
+
+it('accepts 00:00 as end of day', () => {
+	const draft = draftFrom(settings());
+	component(draft, 'grid_usage').windows[0].end = '00:00';
+	expect('settings' in applyDraft(settings(), draft)).toBe(true);
+});
+
+it('requires a quarter hour', () => {
+	const draft = draftFrom(settings());
+	component(draft, 'grid_usage').windows[0].start = '10:10';
+	expect(errorsOf(draft)['tariff.components.2.windows.0.start']).toBe(
+		'Uhrzeit auf einer Viertelstunde, z. B. 10:15'
+	);
+});
+
+it('requires months, weekdays and an amount in a window', () => {
+	const draft = draftFrom(settings());
+	const window = component(draft, 'grid_usage').windows[0];
+	window.months = [];
+	window.weekdays = [];
+	window.amount = '';
+	expect(errorsOf(draft)).toEqual({
+		'tariff.components.2.windows.0.months': 'Mindestens ein Monat',
+		'tariff.components.2.windows.0.weekdays': 'Mindestens ein Wochentag',
+		'tariff.components.2.windows.0.factor': 'Zahl, z. B. 8,11'
+	});
+});
+
+it('checks validity order, numbers and names of components', () => {
+	const draft = draftFrom(settings());
+	const power = component(draft, 'power_price');
+	power.validFrom = '2028-01-01';
+	power.validUntil = '2027-12-31';
+	power.tierKw = '';
+	power.minimumKw = '-1';
+	power.value = 'x';
+	component(draft, 'grid_base_fee').name = ' ';
+	draft.tariff.vatPct = '120';
+	draft.tariff.fixedPriceCt = '';
+	expect(errorsOf(draft)).toMatchObject({
+		'tariff.components.6.valid_from': '„gültig ab“ liegt nach „gültig bis“',
+		'tariff.components.6.tier_kw': 'Zahl, z. B. 8,11',
+		'tariff.components.6.minimum_kw': 'Wert ab 0',
+		'tariff.components.6.value_eur': 'Zahl, z. B. 8,11',
+		'tariff.components.7.name': 'Name eingeben',
+		'tariff.vat_pct': 'Wert von 0 bis 100',
+		'tariff.fixed_price_gross_ct': 'Zahl, z. B. 8,11'
+	});
+});
+
+it('maps server errors in windows onto the editor keys', () => {
+	const detail = [
+		{
+			type: 'value_error',
+			loc: ['body', 'settings', 'tariff', 'components', 2, 'energy_per_kwh', 'windows', 0, 'end'],
+			msg: 'Value error, Ende muss nach dem Beginn liegen (00:00 = Tagesende)'
+		}
+	];
+	expect(Object.keys(editorFieldErrors(detail, settings()))).toEqual([
+		'tariff.components.2.windows.0.end'
+	]);
 });

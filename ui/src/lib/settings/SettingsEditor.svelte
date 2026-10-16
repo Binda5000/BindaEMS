@@ -1,10 +1,10 @@
 <script lang="ts">
 	import { untrack } from 'svelte';
 	import { ApiError, detailText } from '$lib/api/errors';
-	import type { EnergyComponent, Limits, RuntimeSettings, SettingsCurrent } from '$lib/api/schemas';
+	import type { Limits, RuntimeSettings, SettingsCurrent } from '$lib/api/schemas';
 	import Notice from '$lib/components/Notice.svelte';
 	import { WALLBOX_NAME_MAX, WALLBOX_TYPES } from '$lib/wallboxes';
-	import { applyDraft, draftFrom, editorFieldErrors, isEnergy } from './model';
+	import { applyDraft, draftFrom, editorFieldErrors } from './model';
 
 	interface Props {
 		current: SettingsCurrent;
@@ -38,11 +38,14 @@
 	let conflict = $state(false);
 	let busy = $state(false);
 
-	const fixed = $derived(
-		current.settings.tariff.components.filter(
-			(c): c is EnergyComponent => isEnergy(c) && c.source === 'fixed'
-		)
-	);
+	// Bis zum vollen Tarif-Editor: nur die festen Energiebestandteile sind hier änderbar
+	const EDITABLE_VALUE = /^tariff\.components\.(\d+)\.value_ct$/;
+	function shownHere(key: string): boolean {
+		if (/^(feedIn|prices|wallboxNames)\./.test(key)) return true;
+		const index = EDITABLE_VALUE.exec(key)?.[1];
+		const component = index === undefined ? undefined : draft.tariff.components[Number(index)];
+		return component?.kind === 'energy_per_kwh' && component.source === 'fixed';
+	}
 
 	function describedBy(key: string): string | undefined {
 		return errors[key] ? `${uid}-${key}-error` : undefined;
@@ -78,11 +81,7 @@
 			} else if (error instanceof ApiError && error.status === 422) {
 				const detail = (error.body as { detail?: unknown } | null)?.detail;
 				const mapped = editorFieldErrors(detail, result.settings);
-				const known = Object.fromEntries(
-					Object.entries(mapped).filter(([key]) =>
-						/^(values|feedIn|prices|wallboxNames)\./.test(key)
-					)
-				);
+				const known = Object.fromEntries(Object.entries(mapped).filter(([key]) => shownHere(key)));
 				errors = known;
 				const rest = Object.entries(mapped).filter(([key]) => !(key in known));
 				if (rest.length > 0) message = rest.map(([key, text]) => `${key}: ${text}`).join('\n');
@@ -115,19 +114,21 @@
 	<fieldset>
 		<legend>Tarifbestandteile</legend>
 		<p class="hint">Netto in ct/kWh; leer = noch kein Wert (zählt als 0).</p>
-		{#each fixed as component (component.id)}
-			{@const key = `values.${component.id}`}
-			<div class="field">
-				<label for="{uid}-{component.id}">{component.name} (ct/kWh netto)</label>
-				<input
-					id="{uid}-{component.id}"
-					inputmode="decimal"
-					bind:value={draft.values[component.id]}
-					aria-invalid={errors[key] ? 'true' : undefined}
-					aria-describedby={describedBy(key)}
-				/>
-				{@render fieldError(key)}
-			</div>
+		{#each draft.tariff.components as component, index (component.id)}
+			{#if component.kind === 'energy_per_kwh' && component.source === 'fixed'}
+				{@const key = `tariff.components.${index}.value_ct`}
+				<div class="field">
+					<label for="{uid}-{component.id}">{component.name} (ct/kWh netto)</label>
+					<input
+						id="{uid}-{component.id}"
+						inputmode="decimal"
+						bind:value={component.value}
+						aria-invalid={errors[key] ? 'true' : undefined}
+						aria-describedby={describedBy(key)}
+					/>
+					{@render fieldError(key)}
+				</div>
+			{/if}
 		{/each}
 	</fieldset>
 

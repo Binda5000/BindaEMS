@@ -2,6 +2,9 @@
 // Texte für Zeitfenster und Gültigkeit, Zuordnung von Serverfehlern zu den Feldern
 import type {
 	EnergyComponent,
+	FeedInComponent,
+	MonthlyFeeComponent,
+	PowerComponent,
 	PriceComponent,
 	PriceSettings,
 	RuntimeSettings,
@@ -11,9 +14,47 @@ import { fieldErrors } from '$lib/api/errors';
 import { todayVienna } from '$lib/time';
 import { WALLBOX_NAME_MAX } from '$lib/wallboxes';
 
+export type ComponentKind =
+	'energy_per_kwh' | 'power_per_kw_year' | 'fixed_per_month' | 'feed_in_per_kwh';
+
+/** Zeitfenster als Text: Uhrzeiten „HH:MM“, `amount` ist Faktor oder fester Wert je nach `mode` */
+export interface WindowDraft {
+	months: number[]; // 1–12
+	weekdays: number[]; // 0 = Montag
+	start: string;
+	end: string;
+	mode: 'factor' | 'value';
+	amount: string;
+}
+
+/**
+ * Bestandteil als Text. `value` ist ct/kWh (Energie, Einspeisung) oder €/kW/Jahr bzw. €/Monat
+ * (Leistungspreis, Gebühr); `source`, `valueAbove`, `tierKw`, `minimumKw` und `windows` gelten nur
+ * für die Arten, zu denen sie gehören.
+ */
+export interface ComponentDraft {
+	id: string;
+	kind: ComponentKind;
+	name: string;
+	source: 'fixed' | 'spot';
+	value: string;
+	valueAbove: string;
+	tierKw: string;
+	minimumKw: string;
+	vat: boolean;
+	validFrom: string; // JJJJ-MM-TT oder leer
+	validUntil: string;
+	windows: WindowDraft[];
+}
+
+export interface TariffDraft {
+	vatPct: string;
+	fixedPriceCt: string;
+	components: ComponentDraft[];
+}
+
 export interface SettingsDraft {
-	/** Werte der festen Tarifbestandteile nach ID, netto in ct/kWh */
-	values: Record<string, string>;
+	tariff: TariffDraft;
 	feedIn: { month: string; ct: string }[];
 	prices: PriceSettings;
 	/** eigene Namen der Ladestationen nach Schlüssel; leer = Typname */
@@ -24,7 +65,7 @@ export interface SettingsDraft {
 export type DraftResult =
 	{ settings: RuntimeSettings; tariffChanged: boolean } | { errors: Record<string, string> };
 
-const COMPONENT_KINDS = [
+const COMPONENT_KINDS: string[] = [
 	'energy_per_kwh',
 	'power_per_kw_year',
 	'fixed_per_month',
@@ -32,6 +73,14 @@ const COMPONENT_KINDS = [
 ];
 const DECIMAL_RE = /^-?\d+(?:[.,]\d+)?$/;
 const MONTH_RE = /^\d{4}-(0[1-9]|1[0-2])$/;
+const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+const TIME_RE = /^(\d{2}):(\d{2})(?::00)?$/;
+const NAME_MAX = 80;
+const ID_MAX = 40;
+const QUARTER_ERROR = 'Uhrzeit auf einer Viertelstunde, z. B. 10:15';
+const NUMBER_ERROR = 'Zahl, z. B. 8,11';
+const DEFAULT_TIER_KW = '10';
+const DEFAULT_MINIMUM_KW = '2';
 const MONTHS = ['Jän', 'Feb', 'Mär', 'Apr', 'Mai', 'Jun', 'Jul', 'Aug', 'Sep', 'Okt', 'Nov', 'Dez'];
 const WEEKDAYS = ['Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa', 'So']; // 0 = Montag
 
@@ -60,15 +109,105 @@ export function windowsOf(component: PriceComponent): TimeWindow[] {
 		: [];
 }
 
+function windowDraft(window: TimeWindow): WindowDraft {
+	const byValue = window.value_ct !== null;
+	return {
+		months: [...window.months],
+		weekdays: [...window.weekdays],
+		start: window.start.slice(0, 5),
+		end: window.end.slice(0, 5),
+		mode: byValue ? 'value' : 'factor',
+		amount: decimalText(byValue ? window.value_ct : window.factor)
+	};
+}
+
+function componentDraft(component: PriceComponent): ComponentDraft {
+	const draft: ComponentDraft = {
+		id: component.id,
+		kind: component.kind,
+		name: component.name,
+		source: 'fixed',
+		value: '',
+		valueAbove: '',
+		tierKw: DEFAULT_TIER_KW,
+		minimumKw: DEFAULT_MINIMUM_KW,
+		vat: component.vat,
+		validFrom: component.valid_from ?? '',
+		validUntil: component.valid_until ?? '',
+		windows: windowsOf(component).map(windowDraft)
+	};
+	switch (component.kind) {
+		case 'energy_per_kwh':
+			draft.source = component.source;
+			draft.value = decimalText(component.value_ct);
+			break;
+		case 'feed_in_per_kwh':
+			draft.value = decimalText(component.value_ct);
+			break;
+		case 'power_per_kw_year':
+			draft.value = decimalText(component.value_eur);
+			draft.valueAbove = decimalText(component.value_above_eur);
+			draft.tierKw = decimalText(component.tier_kw);
+			draft.minimumKw = decimalText(component.minimum_kw);
+			break;
+		case 'fixed_per_month':
+			draft.value = decimalText(component.value_eur);
+			break;
+	}
+	return draft;
+}
+
+/** ID aus dem Namen: Kleinbuchstaben, Ziffern und `_`, höchstens 40 Zeichen, unter den vorhandenen eindeutig */
+export function componentId(name: string, existingIds: string[]): string {
+	const base =
+		name
+			.toLowerCase()
+			.replace(/ä/g, 'ae')
+			.replace(/ö/g, 'oe')
+			.replace(/ü/g, 'ue')
+			.replace(/ß/g, 'ss')
+			.replace(/[^a-z0-9]+/g, '_')
+			.replace(/^_+|_+$/g, '')
+			.slice(0, ID_MAX)
+			.replace(/_+$/g, '') || 'bestandteil';
+	if (!existingIds.includes(base)) return base;
+	for (let n = 2; ; n++) {
+		const suffix = `_${n}`;
+		const id = base.slice(0, ID_MAX - suffix.length).replace(/_+$/g, '') + suffix;
+		if (!existingIds.includes(id)) return id;
+	}
+}
+
+/** Neuer, leerer Bestandteil; die ID folgt aus dem Namen und bleibt danach fest */
+export function newComponent(
+	kind: ComponentKind,
+	name: string,
+	existingIds: string[]
+): ComponentDraft {
+	return {
+		id: componentId(name, existingIds),
+		kind,
+		name,
+		source: 'fixed',
+		value: '',
+		valueAbove: '',
+		tierKw: DEFAULT_TIER_KW,
+		minimumKw: DEFAULT_MINIMUM_KW,
+		vat: kind !== 'feed_in_per_kwh', // Einspeisung ohne USt. (Spec 9.1)
+		validFrom: '',
+		validUntil: '',
+		windows: []
+	};
+}
+
 /** `wallboxes`: Schlüssel aller Ladestationen aus config.yaml (auch ohne eigenen Namen) */
 export function draftFrom(settings: RuntimeSettings, wallboxes: string[] = []): SettingsDraft {
-	const values: Record<string, string> = {};
-	for (const component of settings.tariff.components) {
-		if (isEnergy(component) && component.source === 'fixed')
-			values[component.id] = decimalText(component.value_ct);
-	}
 	return {
-		values,
+		tariff: {
+			vatPct: decimalText(settings.tariff.vat_pct),
+			fixedPriceCt: decimalText(settings.tariff.fixed_price_gross_ct),
+			components: settings.tariff.components.map(componentDraft)
+		},
 		feedIn: Object.entries(settings.feed_in.monthly_ct)
 			.sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
 			.map(([month, ct]) => ({ month, ct: decimalText(ct) })),
@@ -81,20 +220,223 @@ export function draftFrom(settings: RuntimeSettings, wallboxes: string[] = []): 
 	};
 }
 
+interface NumberRule {
+	/** leer ist ein Fehler (Feld erlaubt kein `null`) */
+	required?: boolean;
+	/** kleinster erlaubter Wert; darunter „Wert ab …“ */
+	min?: number;
+	/** Wert muss größer als 0 sein */
+	positive?: boolean;
+	max?: number;
+}
+
+/** Zahl aus dem Text; bei Fehler steht er unter `key`, Ergebnis ist dann `null` */
+function readNumber(
+	text: string,
+	key: string,
+	errors: Record<string, string>,
+	rule: NumberRule = {}
+): number | null {
+	const value = parseDecimal(text);
+	if (value === 'invalid' || (value === null && rule.required)) {
+		errors[key] = NUMBER_ERROR;
+		return null;
+	}
+	if (value === null) return null;
+	if (rule.positive && value <= 0) {
+		errors[key] = 'Wert größer 0';
+		return null;
+	}
+	if (rule.min !== undefined && value < rule.min) {
+		errors[key] = `Wert ab ${rule.min}`;
+		return null;
+	}
+	if (rule.max !== undefined && value > rule.max) {
+		errors[key] = `Wert von ${rule.min ?? 0} bis ${rule.max}`;
+		return null;
+	}
+	return value;
+}
+
+/** Minuten seit Mitternacht oder `null`, wenn der Text keine Viertelstunde ist */
+function quarterHour(text: string): number | null {
+	const match = TIME_RE.exec(text.trim());
+	if (!match) return null;
+	const hours = Number(match[1]);
+	const minutes = Number(match[2]);
+	return hours < 24 && minutes % 15 === 0 ? hours * 60 + minutes : null;
+}
+
+function clockText(minutes: number): string {
+	const pad = (n: number) => String(n).padStart(2, '0');
+	return `${pad(Math.floor(minutes / 60))}:${pad(minutes % 60)}:00`;
+}
+
+function applyWindow(
+	draft: WindowDraft,
+	prefix: string,
+	errors: Record<string, string>
+): TimeWindow | null {
+	const before = Object.keys(errors).length;
+	if (draft.months.length === 0) errors[`${prefix}.months`] = 'Mindestens ein Monat';
+	if (draft.weekdays.length === 0) errors[`${prefix}.weekdays`] = 'Mindestens ein Wochentag';
+	const start = quarterHour(draft.start);
+	if (start === null) errors[`${prefix}.start`] = QUARTER_ERROR;
+	// „24:00“ und „00:00“ als Ende heißen beide Tagesende
+	const end = draft.end.trim() === '24:00' ? 0 : quarterHour(draft.end);
+	if (end === null) errors[`${prefix}.end`] = QUARTER_ERROR;
+	else if (start !== null && end !== 0 && end <= start)
+		errors[`${prefix}.end`] = 'Ende muss nach dem Beginn liegen (00:00 = Tagesende)';
+	const byValue = draft.mode === 'value';
+	const amount = readNumber(draft.amount, `${prefix}.${byValue ? 'value_ct' : 'factor'}`, errors, {
+		required: true,
+		min: byValue ? undefined : 0
+	});
+	if (Object.keys(errors).length > before || start === null || end === null) return null;
+	return {
+		months: [...draft.months].sort((a, b) => a - b),
+		weekdays: [...draft.weekdays].sort((a, b) => a - b),
+		start: clockText(start),
+		end: clockText(end),
+		factor: byValue ? null : amount,
+		value_ct: byValue ? amount : null
+	};
+}
+
+function applyComponent(
+	draft: ComponentDraft,
+	prefix: string,
+	errors: Record<string, string>
+): PriceComponent | null {
+	const before = Object.keys(errors).length;
+	const name = draft.name.trim();
+	if (name === '') errors[`${prefix}.name`] = 'Name eingeben';
+	else if (name.length > NAME_MAX) errors[`${prefix}.name`] = `Höchstens ${NAME_MAX} Zeichen`;
+	for (const [field, text] of [
+		['valid_from', draft.validFrom],
+		['valid_until', draft.validUntil]
+	] as const) {
+		if (text.trim() !== '' && !DATE_RE.test(text.trim()))
+			errors[`${prefix}.${field}`] = 'Datum wählen';
+	}
+	const from = draft.validFrom.trim() || null;
+	const until = draft.validUntil.trim() || null;
+	if (from && until && DATE_RE.test(from) && DATE_RE.test(until) && from > until)
+		errors[`${prefix}.valid_from`] = '„gültig ab“ liegt nach „gültig bis“';
+
+	const base = { id: draft.id, name, vat: draft.vat, valid_from: from, valid_until: until };
+	let result: PriceComponent | null = null;
+	switch (draft.kind) {
+		case 'energy_per_kwh':
+		case 'feed_in_per_kwh': {
+			// der Börsenpreis hat keinen festen Wert
+			const spot = draft.kind === 'energy_per_kwh' && draft.source === 'spot';
+			const value = spot ? null : readNumber(draft.value, `${prefix}.value_ct`, errors);
+			const windows = draft.windows.map((window, index) =>
+				applyWindow(window, `${prefix}.windows.${index}`, errors)
+			);
+			if (draft.kind === 'energy_per_kwh') {
+				const energy: EnergyComponent = {
+					...base,
+					kind: 'energy_per_kwh',
+					source: draft.source,
+					value_ct: value,
+					windows: windows.filter((w) => w !== null)
+				};
+				result = energy;
+			} else {
+				const feedIn: FeedInComponent = {
+					...base,
+					kind: 'feed_in_per_kwh',
+					value_ct: value,
+					windows: windows.filter((w) => w !== null)
+				};
+				result = feedIn;
+			}
+			break;
+		}
+		case 'power_per_kw_year': {
+			const power: PowerComponent = {
+				...base,
+				kind: 'power_per_kw_year',
+				value_eur: readNumber(draft.value, `${prefix}.value_eur`, errors, { min: 0 }),
+				value_above_eur: readNumber(draft.valueAbove, `${prefix}.value_above_eur`, errors, {
+					min: 0
+				}),
+				tier_kw:
+					readNumber(draft.tierKw, `${prefix}.tier_kw`, errors, {
+						required: true,
+						positive: true
+					}) ?? 0,
+				minimum_kw:
+					readNumber(draft.minimumKw, `${prefix}.minimum_kw`, errors, { required: true, min: 0 }) ??
+					0
+			};
+			result = power;
+			break;
+		}
+		case 'fixed_per_month': {
+			const fee: MonthlyFeeComponent = {
+				...base,
+				kind: 'fixed_per_month',
+				value_eur: readNumber(draft.value, `${prefix}.value_eur`, errors, { min: 0 })
+			};
+			result = fee;
+			break;
+		}
+	}
+	return Object.keys(errors).length > before ? null : result;
+}
+
+/** Gleiche Werte, unabhängig von der Reihenfolge der Schlüssel */
+function sameValue(a: unknown, b: unknown): boolean {
+	if (Array.isArray(a) || Array.isArray(b)) {
+		return (
+			Array.isArray(a) &&
+			Array.isArray(b) &&
+			a.length === b.length &&
+			a.every((item, index) => sameValue(item, b[index]))
+		);
+	}
+	if (typeof a === 'object' && typeof b === 'object' && a !== null && b !== null) {
+		const keys = new Set([...Object.keys(a), ...Object.keys(b)]);
+		return [...keys].every((key) =>
+			sameValue((a as Record<string, unknown>)[key], (b as Record<string, unknown>)[key])
+		);
+	}
+	return a === b;
+}
+
+/** Ändert sich etwas, das die Bezugspreise berührt (Energiebestandteile, USt.)? */
+function importPricesChanged(before: RuntimeSettings['tariff'], after: RuntimeSettings['tariff']) {
+	if (before.vat_pct !== after.vat_pct) return true;
+	const energy = (components: PriceComponent[]) => components.filter(isEnergy);
+	const was = energy(before.components);
+	const now = energy(after.components);
+	return (
+		was.length !== now.length ||
+		now.some((component) => {
+			const old = was.find((c) => c.id === component.id);
+			return old === undefined || !sameValue(old, component);
+		})
+	);
+}
+
 export function applyDraft(settings: RuntimeSettings, draft: SettingsDraft): DraftResult {
 	const errors: Record<string, string> = {};
-	let tariffChanged = false;
-	const components = settings.tariff.components.map((component) => {
-		if (!isEnergy(component) || component.source !== 'fixed' || !(component.id in draft.values))
-			return component;
-		const value = parseDecimal(draft.values[component.id]);
-		if (value === 'invalid') {
-			errors[`values.${component.id}`] = 'Zahl, z. B. 8,11';
-			return component;
-		}
-		if (value === component.value_ct) return component;
-		tariffChanged = true;
-		return { ...component, value_ct: value };
+	const vatPct = readNumber(draft.tariff.vatPct, 'tariff.vat_pct', errors, {
+		required: true,
+		min: 0,
+		max: 100
+	});
+	const fixedPrice = readNumber(draft.tariff.fixedPriceCt, 'tariff.fixed_price_gross_ct', errors, {
+		required: true,
+		min: 0
+	});
+	const components: PriceComponent[] = [];
+	draft.tariff.components.forEach((component, index) => {
+		const applied = applyComponent(component, `tariff.components.${index}`, errors);
+		if (applied) components.push(applied);
 	});
 
 	const monthly: Record<string, number> = {};
@@ -132,16 +474,22 @@ export function applyDraft(settings: RuntimeSettings, draft: SettingsDraft): Dra
 		wallboxNames[key] = name;
 	}
 
-	if (Object.keys(errors).length > 0) return { errors };
+	if (Object.keys(errors).length > 0 || vatPct === null || fixedPrice === null) return { errors };
+	const tariff = {
+		...settings.tariff,
+		vat_pct: vatPct,
+		components,
+		fixed_price_gross_ct: fixedPrice
+	};
 	return {
 		settings: {
 			...settings,
 			prices: { ...settings.prices, ...draft.prices },
-			tariff: { ...settings.tariff, components },
+			tariff,
 			feed_in: { ...settings.feed_in, monthly_ct: monthly },
 			wallbox_names: wallboxNames
 		},
-		tariffChanged
+		tariffChanged: importPricesChanged(settings.tariff, tariff)
 	};
 }
 
@@ -206,10 +554,7 @@ export function editorFieldErrors(
 			parts.splice(3, 1);
 		}
 		let key = parts.join('.');
-		if (parts[0] === 'tariff' && parts[1] === 'components' && parts[3] === 'value_ct') {
-			const component = settings.tariff.components[Number(parts[2])];
-			if (component) key = `values.${component.id}`;
-		} else if (parts[0] === 'feed_in' && parts[1] === 'monthly_ct' && parts.length >= 3) {
+		if (parts[0] === 'feed_in' && parts[1] === 'monthly_ct' && parts.length >= 3) {
 			const index = months.indexOf(parts[2]);
 			if (index >= 0) key = `feedIn.${index}.${parts.length > 3 ? 'month' : 'ct'}`;
 		} else if (parts[0] === 'wallbox_names' && parts.length >= 2) {
