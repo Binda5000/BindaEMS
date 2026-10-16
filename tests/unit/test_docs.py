@@ -360,6 +360,8 @@ def test_documented_tool_commands_start_python_directly() -> None:
         "bindaems.tools.verify_part2",
         "bindaems.tools.watchdog_config",
         "bindaems.tools.watchdog_probe",
+        "bindaems.tools.export_days",
+        "bindaems.tools.scenario_days",
     } <= set(TOOL_COMMAND.findall(handbook))
     for doc in ("docs/betrieb.md", "docs/verification/README.md", "cerbo-watchdog/README.md"):
         for command in TOOL_COMMAND.finditer(Path(doc).read_text(encoding="utf-8")):
@@ -397,3 +399,126 @@ def test_relative_links_in_the_docs_exist() -> None:
             if not (doc.parent / target.split("#")[0]).exists():
                 missing.append(f"{doc}: {target}")
     assert missing == []
+
+
+def test_operations_guide_describes_planning() -> None:
+    # Der Abschnitt „Planung“ (Plan 3b) nennt Seite, Schalter, Ersatzplan, Taste und den Vergleich.
+    section = _guide_section("Planung")
+    for topic in (
+        "Zeitplan",
+        "Netzladen erlaubt",
+        "Ersatzplan",
+        "Neu planen",
+        "Victron allein",
+        "### An der Anlage prüfen",
+        "export_days",
+        "scenario_days",
+        "/data",
+    ):
+        assert topic in section, topic
+
+
+def test_plan_reasons_in_the_guide_match_the_code() -> None:
+    # Die Tabelle der Grundcodes nennt jeden ReasonCode mit dem Satz, den das UI zeigt; ein
+    # Code, den es nicht gibt, steht nirgends im Abschnitt.
+    from typing import get_args
+
+    from bindaems.app.planning.explain import sentence
+    from bindaems.shared.plan import Reason, ReasonCode
+
+    codes = set(get_args(ReasonCode))
+    examples: dict[str, dict[str, float | str]] = {
+        "NETZLADEN_GUENSTIG": {"kw": 4.0, "ct": 12.3, "um": "18:00", "ct_spaeter": 31.5},
+        "HALTEN_FUER_SPITZE": {"soc": 64.0, "von": "18:00", "bis": "20:00", "ct": 38.0},
+        "BUDGET_SPITZE": {"soc": 55.0, "kw": 6.5},
+        "HALTEN_RESTWERT": {"soc": 40.0, "um": "10:00"},
+        "PV_LADEN": {"kw": 3.2},
+        "PV_UEBERSCHUSS_ERWARTET": {"um": "09:30"},
+        "REGEL_R_BLOCKIERT_NETZLADEN": {"um": "17:00", "kwh": 8.4},
+        "NETZLADEN_AUS": {"ct": 10.0, "um": "18:00", "ct_spaeter": 30.0},
+        "EIGENVERBRAUCH": {},
+        "GESCHAETZT": {},
+        "ERSATZPLAN": {},
+    }
+    assert set(examples) == codes
+    section = _guide_section("Planung")
+    rows: dict[str, str] = {}
+    for line in section.splitlines():
+        cells = [cell.strip() for cell in line.strip().strip("|").split("|")]
+        found = re.fullmatch(r"`([A-Z_]+)`", cells[0]) if line.startswith("| `") else None
+        if found and len(cells) >= 3:
+            rows[found[1]] = cells[1]
+    assert set(rows) == codes
+    for code, shown in rows.items():
+        expected = sentence(Reason(code=code, params=examples[code]))  # type: ignore[arg-type]
+        assert shown == expected, code
+    named = set(re.findall(r"`([A-Z]+_[A-Z_]+)`", section))
+    assert named <= codes, sorted(named - codes)
+
+
+def test_plan_triggers_and_sources_in_the_guide_match_the_code() -> None:
+    # Die Auslöser stehen mit ihrem Wortlaut aus dem UI im Abschnitt, ebenso die Quellen.
+    from typing import get_args
+
+    from bindaems.shared.plan import PlanTrigger
+
+    labels = {
+        "start": "Start",
+        "slot": "Viertelstunde",
+        "prices": "neue Preise",
+        "pv_forecast": "neue PV-Prognose",
+        "load_forecast": "neue Lastprognose",
+        "soc": "SOC weicht ab",
+        "month_peak": "neue Monatsspitze",
+        "settings": "Einstellungen geändert",
+        "manual": "Neu planen",
+    }
+    assert set(labels) == set(get_args(PlanTrigger))
+    section = _guide_section("Planung")
+    for trigger, label in labels.items():
+        assert f"| `{trigger}` | {label} |" in section, trigger
+
+
+def test_planning_entities_in_the_guide_exist() -> None:
+    # Die Tabelle „Home Assistant“ nennt Objekt-ID, Namen und Plattform wie die Entitäten der app.
+    from bindaems.app.ha.entities import build_entities
+    from bindaems.shared.config import load_config
+
+    cfg = load_config(Path("deploy/config.example.yaml"))
+    specs = {spec.object_id: spec for spec in build_entities(cfg)}
+    documented: dict[str, tuple[str, str]] = {}
+    for line in _guide_section("Planung").splitlines():
+        cells = [cell.strip() for cell in line.strip().strip("|").split("|")]
+        found = re.fullmatch(r"`([a-z_]+)`", cells[0]) if line.startswith("| `") else None
+        if found and len(cells) >= 4 and cells[2] in {"sensor", "switch", "button"}:
+            documented[found[1]] = (cells[1], cells[2])
+    assert set(documented) == {
+        "battery_plan_now",
+        "battery_plan_next",
+        "planned_soc",
+        "budget",
+        "grid_charge",
+        "replan",
+    }
+    for oid, (name, component) in documented.items():
+        assert (specs[oid].name, specs[oid].component) == (name, component), oid
+
+
+def test_planning_settings_in_the_guide_match_the_configuration() -> None:
+    # Die Tabelle der Einstellungen „Planung“ nennt jedes Feld mit dem Standardwert.
+    from bindaems.shared.settings import PlanningSettings
+
+    defaults = PlanningSettings()
+    documented: dict[str, str] = {}
+    for line in _guide_section("Planung").splitlines():
+        cells = [cell.strip() for cell in line.strip().strip("|").split("|")]
+        found = re.fullmatch(r"`planning\.(\w+)`", cells[0]) if line.startswith("| `p") else None
+        if found and len(cells) >= 4:
+            documented[found[1]] = cells[2]
+    assert set(documented) == set(PlanningSettings.model_fields)
+    for key, shown in documented.items():
+        value = getattr(defaults, key)
+        if isinstance(value, bool):
+            assert shown == ("ein" if value else "aus"), key
+        else:
+            assert float(shown.replace(",", ".")) == value, key

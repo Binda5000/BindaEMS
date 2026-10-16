@@ -364,6 +364,11 @@ flowchart LR
 - Planungshorizont: vom aktuellen Slot bis zum letzten bekannten Preis, höchstens 36 h.
   - Sind weniger als 4 h Preise bekannt, ergänzt der Planer Schätzpreise und markiert sie als geschätzt (9.2).
 
+**Stand Plan 3b** (`docs/superpowers/plans/2026-10-16-phase-3b-optimierer-zeitplan.md`, Präzisierung 4; Betrieb: `docs/betrieb.md`, „Planung“): Gegenüber dem Text oben gilt:
+- **Grundlage:** `PriceService.planning(aktueller Slot, + 60 h, jetzt)`. Ohne Preis (auch ohne Schätzung) für den aktuellen Slot gibt es keinen Plan.
+- **Horizont:** Bekannt sind die Slots ab dem aktuellen ohne Lücke mit Herkunft `primary` oder `fallback`, höchstens 144 (36 h). Sind es weniger als 16 (4 h), kommen lückenlos Slots mit Herkunft `estimated` dazu, bis 16 erreicht sind. Der Horizont endet vor dem ersten Slot ohne PV- oder Lastprognose; unter 4 Slots gibt es keinen Plan.
+- **Restwert** am Horizontende: `v_end = max(0, (η_dis · Median der Bezugspreise in [Horizontende, +24 h) − Verschleiß) · Vorsichtsfaktor)` in ct je kWh im Akku; ohne Preise dort 0.
+
 ### 5.6 Repository und Werkzeuge
 
 ```
@@ -1367,6 +1372,20 @@ Weitere Variablen:
 - erwarteter SOC, erwartete Flüsse und Kosten
 - Grundcodes für die Erklärung
 
+**Stand Plan 3b** (`docs/superpowers/plans/2026-10-16-phase-3b-optimierer-zeitplan.md`, Präzisierungen 5 bis 8, 11 und Entscheidungen 1 bis 5; Betrieb: `docs/betrieb.md`, „Planung“): Der Optimierer ist umgesetzt (`app/planning/optimizer.py`, `intents.py`, `battery_model.py`), nur für den Akku. Gegenüber dem Text oben gilt:
+- **Ohne Autos:** Es entfallen `pv_ev`, `gr_ev`, `bt_ev`, `e`, `u`, `a_t`, die Fehlmenge und R2 (Phase 4); die Unterstützungsschwelle und der Akku → Auto (7.6) folgen mit 3c.
+- **PV deckt zuerst das Haus:** Der Anteil `pv_h` ist auf `min(PV, Last)` festgelegt. Ohne diese Festlegung dürfte das Modell PV einspeisen und das Haus aus dem Netz versorgen, wenn Einspeise- und Bezugspreis es hergeben, und der Plan ließe sich nicht als Absicht ausführen.
+- **Regel R1 hart, ohne `ρ`:** Ohne Autos ist `z_t = 0` immer zulässig, `ρ` hätte keine Aufgabe. `M_t` ist die PV-Energie ab Slot t (enger als ein festes M). Die Plausibilität prüft R1 zusätzlich an der Nachrechnung (9.5).
+- **Wirtschaftlichkeit als Kosten:** Netzladen zahlt Bezugspreis plus Marge (`m · gr_b` im Ziel), Entladen den Verschleiß `w`; der Roundtrip von 88 % gilt je Richtung als Wurzel (`η_ch = η_dis = √0,88`). Die Spread-Regel prüft die Plausibilität nach.
+- **Planträgheit:** in den ersten 4 Slots `inertia_ct · Δ · |b_t − b_prev,t| / 1000` mit der Netto-Akkuleistung `b = Laden − Entladen` der Nachrechnung des vorigen Plans (Standard 0,5 ct je kWh Abweichung); Slots ohne vorigen Plan bleiben frei.
+- **Akkugrenzen:** `lo = min(Reserve · Kap, SOC₀)`, `hi = max(SOC_max · Kap, SOC₀)`: Ein SOC außerhalb der Grenzen macht das Modell nicht unlösbar. In den ersten 4 Slots gelten zusätzlich die BMS-Grenzen (CCL und DCL mal Spannung), wenn beide bekannt sind. Netzladen je Slot höchstens `min(P_ch, max(0, Netz-Sollwert-Grenze − Last))`, denn der Sollwert bei `NETZLADEN(P)` ist Hauslast + P (7.7). Netzbezug höchstens `grid.max_import_kw`, sonst `(fuse_a − fuse_margin_a) · voltage_nominal_v · 3`.
+- **Leistungspreis im Ziel** nur, wenn im Monat ein Leistungspreis mit Satz gilt; `peak₀ = max(bisherige Monatsspitze, minimum_kw)`. Ein Horizont über das Monatsende bekommt für den neuen Monat eine zweite Spitze mit `peak₀ = minimum_kw`.
+- **Lösen:** HiGHS mit Zeitlimit 20 s und MIP-Gap 0,5 % in einem eigenen Kindprozess (`spawn`, Eingabe als JSON, Ergebnis über eine `Pipe`); die app beendet ihn nach 30 s. Ein Ergebnis „Zeitlimit mit Lösung“ gilt als Ergebnis (`time_limit`).
+- **Absichten aus den Flüssen** (je Slot, mit dem SOC des Optimierers zu Slotbeginn): `NETZLADEN(P)`, wenn `gr_b ≥ 100 W`, mit `P` auf 100 W gerundet und nicht über der Grenze des Slots; sonst `HALTEN`, wenn der Eigenverbrauch mindestens 100 W entladen würde und das Modell weniger als die Hälfte davon entlädt (die Hälfte ist die Rundung auf die nächste ausführbare Absicht; Teilentladungen korrigiert die Neuplanung nach 15 min); sonst `EIGENVERBRAUCH`.
+- **Nachrechnung:** Ein Akkumodell im Viertelstundenraster setzt die Absichten so um, wie der core es mit 3c tut. SOC, Flüsse, Kosten, Spitze und Budget des Plans kommen aus ihm, nicht aus dem Modell.
+- **Budget** (akzeptierte Monatsspitze) je Monat mit Leistungspreis: `ceil(max(Spitze des Optimierers, höchster Bezug der Nachrechnung im Monat) · 10) / 10` kW; ohne Leistungspreis leer.
+- **Schalter Netzladen:** Standard aus (`RuntimeSettings.planning.grid_charge_allowed`); dazu `margin_ct`, `roundtrip_pct`, `wear_ct`, `end_value_factor` und `inertia_ct`.
+
 ### 9.4 Regelbasierter Ersatzplan
 
 Greift, wenn der Solver scheitert, das Zeitlimit überschritten ist oder das Ergebnis unplausibel ist:
@@ -1380,6 +1399,15 @@ Greift, wenn der Solver scheitert, das Zeitlimit überschritten ist oder das Erg
   Geladen wird dann in den günstigsten Slots vor dem teuren Zeitraum.
 - **Geplant:** Zuerst PV, dann die günstigsten Slots vor der Abfahrt (Greedy), unter Beachtung von R2.
 - **Budget:** die bisherige Monatsspitze.
+
+**Stand Plan 3b** (`docs/superpowers/plans/2026-10-16-phase-3b-optimierer-zeitplan.md`, Präzisierung 10; Betrieb: `docs/betrieb.md`, „Planung“, „Ersatzplan“): Der Ersatzplan ist umgesetzt (`app/planning/fallback.py`), nur für den Akku. Gegenüber dem Text oben gilt:
+- **Gründe:** „Zeitlimit ohne Lösung“ (HiGHS ohne Lösung im Zeitlimit), „Solver ohne Lösung (infeasible)“, „Solver nach 30 s abgebrochen“, „Solver fehlgeschlagen: …“ und „Plan unplausibel: {erster Befund}“. Sie stehen im Plan, in der Komponente `planning` und im Kopf der Seite „Zeitplan“.
+- **Grundlage:** `EIGENVERBRAUCH` in allen Slots, nachgerechnet.
+- **Teuer** sind die Slots des heutigen lokalen Tages ab dem aktuellen Slot mit einem Bezugspreis ab dem 80. Perzentil dieser Slots (`statistics.quantiles(…, n=10, method="inclusive")[7]`); bei einheitlichem Preis gibt es keinen. Der SOC **reicht nur knapp**, wenn die Nachrechnung in einem teuren Slot mehr als 100 W aus dem Netz bezieht, weil der Akku leer ist.
+- **Halten:** gegen den ersten knappen teuren Slot bekommt unter den Slots davor, die nicht teuer sind und in der Nachrechnung entladen, der mit dem niedrigsten Preis (bei Gleichstand der frühere) `HALTEN`; neu nachrechnen, bis der Slot gedeckt ist oder kein Kandidat bleibt, dann der nächste knappe teure Slot.
+- **Netzladen** nur bei eingeschaltetem Schalter und nur gegen den ersten teuren Slot, der trotz Halten knapp bleibt: in einem Kandidaten davor (nicht teuer, nach Preis aufsteigend), für den die Spread-Regel mit dem Preis des teuren Slots und R1 an der Nachrechnung gelten. Die Leistung ist die höchste volle 100 W unter der Grenze des Slots.
+- **Budget:** `max(bisherige Monatsspitze, minimum_kw)` in jedem Slot eines Monats mit Leistungspreis.
+- **Geplant (Autos)** folgt mit Phase 4.
 
 ### 9.5 Planungsablauf
 
@@ -1397,6 +1425,23 @@ Greift, wenn der Solver scheitert, das Zeitlimit überschritten ist oder das Erg
   4. Veröffentlichen an core, UI und HA.
 - **Gültigkeit:** 45 min.
 
+**Stand Plan 3b** (`docs/superpowers/plans/2026-10-16-phase-3b-optimierer-zeitplan.md`, Präzisierungen 9, 13, 14 und 16, Entscheidungen 7 und 8; Betrieb: `docs/betrieb.md`, „Planung“): Der Planungsdienst ist umgesetzt (`app/planning/service.py`, `triggers.py`, `plausibility.py`, `process.py`). Gegenüber dem Text oben gilt:
+- **Auslöser über Fingerabdrücke:** Statt Rückrufe in Preisen und Prognosen zu verdrahten, prüft der Dienst alle 30 s. Ohne die Auslöser der Autos (Phase 4) sind es:
+  - `start` einmal beim Start,
+  - `slot` eine Minute nach jedem Slotbeginn,
+  - `prices`, wenn der letzte bekannte Preis-Slot wechselt oder die Zahl der `primary`-Slots in 48 h steigt (weniger löst nicht aus, denn das Fenster verliert mit jeder Viertelstunde einen),
+  - `pv_forecast` und `load_forecast` bei neuer `issued_at`,
+  - `soc`, wenn der SOC mehr als 5 Prozentpunkte vom Plan abweicht (linear im Slot gerechnet); nach einem Plan mit diesem Auslöser löst der SOC im selben Slot nicht erneut aus,
+  - `month_peak`, wenn die Monatsspitze mehr als 0,05 kW über der des Plans liegt,
+  - `settings`, wenn sich `planning`, `tariff` oder `feed_in` ändern (über `SettingsService.on_change`), und
+  - `manual` für „Neu planen“ in UI, HA und API.
+- **Ein Lauf zur Zeit:** Auslöser während eines Laufs ergeben genau einen weiteren.
+- **Ablauf:** Eingangsdaten einfrieren (gespeichert in `plan_inputs`), Lösen im Kindprozess, Absichten ableiten, nachrechnen, prüfen; bei einem Fehler gilt der Ersatzplan (9.4); dann Erklärungen, Speichern, UI und HA. An den core geht der Plan erst mit 3c.
+- **Plausibilität** (Schritt 3): Bilanz von PV und Haus um mehr als 1 W verletzt; SOC des Optimierers oder der Nachrechnung mehr als 0,01 kWh außerhalb `[lo, hi]`; Lade- oder Entladeleistung über der Grenze oder Laden und Entladen gleichzeitig (je mehr als 1 W); `NETZLADEN` bei ausgeschaltetem Schalter; R1 an der Nachrechnung verletzt (nach einem `NETZLADEN`-Slot mehr als 0,1 kWh Einspeisung bis Horizontende); Spread-Regel für einen `NETZLADEN`-Slot nicht erfüllt: kein späterer Slot mit Entladung ≥ 100 W und `π_später · η_rt − π_t − w ≥ m`. Die Spread-Regel entfällt, wenn im Horizont ein Leistungspreis gilt, denn dann darf Netzladen auch einer Spitze ausweichen.
+- **Fehlende Eingangsdaten** ergeben keinen neuen Plan, nur einen Status der Komponente `planning` („Kein Plan: kein SOC vom core“, „… kein Preis für den aktuellen Slot“, „… keine PV-Prognose“, „… keine Lastprognose“, „… zu wenig Daten für einen Plan“); der letzte Plan bleibt bis `valid_until` sichtbar.
+- **Gültigkeit:** 45 min. Ob ein Plan gilt, sagt die API (`valid`), nicht die Uhr des Browsers.
+- **Aufbewahrung:** Das Aufräumen läuft in der stündlichen Wartung der app. Nach 7 Tagen werden `plan_inputs` gelöscht und die Slots des Plans auf die vor `valid_until` gekürzt (`trimmed`); nach 30 Tagen wird der Plan gelöscht.
+
 ### 9.6 Erklärungen
 
 - **Grundcodes je Slot,** zum Beispiel:
@@ -1408,6 +1453,11 @@ Greift, wenn der Solver scheitert, das Zeitlimit überschritten ist oder das Erg
   - `REGEL_R_BLOCKIERT_NETZLADEN`
   - `UNTERSTUETZUNG_RESERVIERT`
 - Deutsche Textvorlagen machen daraus Sätze für UI und HA, etwa: „Akku hält 64 %, weil 18–20 Uhr 38 ct erwartet werden.“
+
+**Stand Plan 3b** (`docs/superpowers/plans/2026-10-16-phase-3b-optimierer-zeitplan.md`, Präzisierung 12, Entscheidung 11; Betrieb: `docs/betrieb.md`, „Planung“, „Erklärungen“): Die Erklärungen sind umgesetzt (`shared/plan.py`, `app/planning/explain.py`). Gegenüber dem Text oben gilt:
+- **Elf Grundcodes:** `NETZLADEN_GUENSTIG`, `HALTEN_FUER_SPITZE`, `BUDGET_SPITZE`, `HALTEN_RESTWERT`, `PV_LADEN`, `PV_UEBERSCHUSS_ERWARTET`, `REGEL_R_BLOCKIERT_NETZLADEN`, `NETZLADEN_AUS`, `EIGENVERBRAUCH`, `GESCHAETZT` und `ERSATZPLAN`. `ZIEL_SOC_ABFAHRT` kommt mit Phase 4, `UNTERSTUETZUNG_RESERVIERT` mit 3c.
+- **Je Slot ein Hauptcode,** dazu `ERSATZPLAN` an erster Stelle im Ersatzplan und `GESCHAETZT` an letzter bei einem Schätzpreis. Der Hauptcode folgt der ersten passenden Regel: `NETZLADEN` → `NETZLADEN_GUENSTIG`; `HALTEN` → `HALTEN_FUER_SPITZE` (später ein Block teurerer Slots mit Entladung), sonst `BUDGET_SPITZE` (später würde ohne Akku das Budget überschritten), sonst `HALTEN_RESTWERT`; sonst `PV_LADEN` bei Laden aus PV ab 100 W; sonst `REGEL_R_BLOCKIERT_NETZLADEN` (Schalter an, Netzladen würde sich lohnen, danach speist die PV mehr als 0,1 kWh ein) oder `NETZLADEN_AUS` (Schalter aus, es würde sich lohnen); sonst `PV_UEBERSCHUSS_ERWARTET` (der Akku entlädt, später lädt ihn die PV); sonst `EIGENVERBRAUCH`. „Lohnt sich“ heißt: ein späterer Slot im Horizont bezieht in der Nachrechnung ≥ 100 W aus dem Netz und erfüllt die Spread-Regel mit dem Preis dieses Slots.
+- **Gespeichert werden nur Codes und Parameter;** der Satz entsteht beim Lesen (`explain.sentence`), so ändern sich Wortlaute ohne Migration. Zahlen haben ein Dezimalkomma, Uhrzeiten sind lokal. Der Text eines Slots sind die Sätze seiner Codes, durch ein Leerzeichen getrennt.
 
 ---
 
@@ -1546,6 +1596,11 @@ Greift, wenn der Solver scheitert, das Zeitlimit überschritten ist oder das Erg
 - **`forecast_metric`:** `day` (lokales Datum), `kind`, `horizon`, `n`, `abs_err_sum_w`, `err_sum_w`, `actual_sum_w`; Primärschlüssel `(day, kind, horizon)`. Fehler = P50 − Ist, nur Slots mit Ist-Wert; bei PV nur Slots, in denen P50 oder Ist die Schwelle erreichen. Nächtlich um 02:30 Uhr für gestern und vorgestern neu gerechnet, beim Start für heute, gestern und vorgestern.
 - **Weiterhin offen:** `plan` und `plan_inputs` (3b), `price_raw` und `model_registry` (Phase 5).
 
+**Stand Plan 3b** (`docs/superpowers/plans/2026-10-16-phase-3b-optimierer-zeitplan.md`, Präzisierungen 2 und 15, Entscheidung 9): Migration `0009` (`v0009_plans.py`) legt `plan` und `plan_inputs` an; damit ist das „offen“ für beide oben erledigt.
+- **`plan`:** `id` (aufsteigend), `created_at`, `trigger`, `source` (`optimizer`, `fallback`), `solver_status`, `fallback_reason`, `valid_until`, `settings_version`, `expected_cost_ct`, `trimmed` und `data` (JSON: der `Plan` ohne `id`, mit Slots, Flüssen, Preisen, Kosten, Budget und Grundcodes); Index auf `created_at`.
+- **`plan_inputs`:** `plan_id` (Primärschlüssel) und `data` (JSON: die eingefrorenen Eingangsdaten `PlanInputs`).
+- **Aufbewahrung:** Nach 7 Tagen werden `plan_inputs` gelöscht und `plan.slots` auf die Slots vor `valid_until` gekürzt (`trimmed` wahr); nach 30 Tagen wird der Plan gelöscht. Ein Plan hat rund 40 KB, bei 100 bis 150 Plänen am Tag; ohne Kürzen wären es rund 190 MB je Monat in SQLite und in jeder der 14 Sicherungen.
+
 ### 11.4 Viertelstunden-Abrechnung
 
 - **Zuordnung, jede Sekunde im core:**
@@ -1659,6 +1714,11 @@ pv:
 - **Befehle:** über `bindaems/cmd/<objekt>`; eine gehaltene Nachricht ignoriert die app. Höchstens ein Befehl je Sekunde und Entität; nach jedem Befehl, auch einem verworfenen oder abgelehnten, veröffentlicht die app den Zustand der Entität neu. Eine Ablehnung erzeugt die persistente Meldung `bindaems_ha_command` („Befehl aus Home Assistant abgelehnt: …“). Home Assistant hat die Rechte von „Bedienen“ (Quelle `ha` im Änderungsprotokoll); Live-Schaltung und Vorrang gibt es dort nicht. Die Konfiguration lehnt Fahrzeugnamen ab, die leer, mit Leerzeichen am Rand, ohne Beachtung der Schreibweise doppelt oder „Automatisch“ sind, und Schlüssel, deren Objekt-ID in Home Assistant mit einer anderen Entität zusammenfiele.
 - **Benachrichtigungen:** Die app sendet sie, nicht der core (der ruft nie Dienste in Home Assistant auf). Jeder Alarm der Schwere „Fehler“, der 30 s ohne Unterbrechung besteht, wird einmal als `persistent_notification.create` (`notification_id` `bindaems_<Alarm-ID, Punkte als _>`, Titel „BindaEMS“) gemeldet und, falls `homeassistant.notify_service` (`notify.*`) eingestellt ist, über diesen Dienst; verschwindet der Alarm, folgt `persistent_notification.dismiss`. Höchstens 10 Meldungen je Minute über Alarme und Ablehnungen, davon höchstens 4 für Ablehnungen (den Alarmen bleiben mindestens 6); eine Ablehnung darüber geht ins Log. Ein Alarm gilt erst als gemeldet, wenn `persistent_notification.create` gelungen ist; bis dahin versucht es die app erneut, solange er besteht, je Alarm höchstens alle 60 s (über dem Budget oder während Home Assistant neu startet); der `notify`-Dienst folgt erst auf die angelegte Meldung. Ein gescheitertes `dismiss` wiederholt sie ebenso. Die app braucht dafür `BINDAEMS_HA_TOKEN` (dieselbe `.env` wie der core); ohne ihn sendet sie nichts, und die Komponente `ha-notify` meldet es.
 
+**Stand Plan 3b** (`docs/superpowers/plans/2026-10-16-phase-3b-optimierer-zeitplan.md`, Präzisierung 17 und Entscheidung 13; Betrieb: `docs/betrieb.md`, Abschnitt 7 und „Planung“): Zum Plan gibt es am Gerät „BindaEMS“:
+- **Sensoren:** `battery_plan_now` „Akku-Plan jetzt“ und `battery_plan_next` „Akku-Plan nächster Slot“ (Zustand: die Absicht „Eigenverbrauch“, „Halten“ oder „Netzladen“; Attribute `reason` (der Satz), `codes`, `planned_soc_pct`, `grid_charge_w`, `start`, `source`), `planned_soc` „Geplanter SOC“ (%, SOC am Ende des aktuellen Slots; Attribut `hourly`: `[{start, soc_pct}]` je volle Stunde) und `budget` „Budget“ (kW, eine Nachkommastelle). Ohne gültigen Plan sind sie „unbekannt“, das Budget auch ohne Leistungspreis.
+- **Bedienelemente:** `grid_charge` Schalter „Netzladen erlaubt“ (zeigt die Einstellung, nicht die des Plans; jede Änderung ist eine neue Version der Einstellungen mit dem Kommentar „Netzladen ein“ bzw. „Netzladen aus“) und `replan` Taste „Neu planen“. Wie alle Befehle aus Home Assistant haben sie die Rechte von „Bedienen“ und die Quelle `ha`.
+- **Weiterhin nicht da:** „Akku-Unterstützung erlaubt“ und die Unterstützungsschwelle (3c).
+
 ---
 
 ## 13. Web-UI
@@ -1687,6 +1747,14 @@ pv:
 - **Laden:** je Fahrzeug eine Karte (Ladestand, Wallbox und Art der Zuordnung, angesteckt, lädt, Grenze, letzter Grund, Befehle der letzten Stunde bei Tessie, Lademodus als Auswahl, Boost als Taste „Boost“ bzw. „Boost beenden“ mit „bis HH:MM“ und „wartet auf Anstecken“) und je Wallbox eine Karte (wer dort steht, Art, Indizien als Sätze, Zuordnung als Auswahl „Automatisch“ oder ein Fahrzeug), dazu „Gast“ (Modus) und „Vorrang“ (Reihenfolge, Vorrang beim Überschuss). Ist der Regelbetrieb aus, steht oben ein Hinweis mit der Taste „Regelbetrieb einschalten“. Ziel-SOC, Abfahrt und die Session kommen mit Phase 4.
 - **Entscheidungen:** das Entscheidungslog mit den Filtern Zeitraum, Aktor, Ergebnis, „Dry-Run zeigen“ (Standard an) und Suche im Text; neueste zuerst, 100 je Seite, „Ältere laden“. Auf der **Übersicht** zeigt „Warum?“ je Aktor die jüngste Entscheidung der letzten 24 h mit Alter und einen Verweis auf die Seite.
 - **System:** Die Karte „Bedienung“ hat den Schalter „Regelbetrieb“ (ab „Bedienen“) und für Admins „Live schalten…“ und „Auf Dry-Run…“ (8.7); die Karte „Aktoren“ hat für Admins die Taste „Quittieren“ bei einer Sperre (7.9).
+
+**Stand Plan 3b** (`docs/superpowers/plans/2026-10-16-phase-3b-optimierer-zeitplan.md`, Präzisierung 17 und Entscheidung 12; Bedienung: `docs/betrieb.md`, Abschnitt 12 und „Planung“):
+- **Navigation:** „Zeitplan“ (Symbol `plan`) steht nach „Laden“.
+- **Zeitplan:** Der Kopf zeigt „Plan von HH:MM Uhr“, die Quelle („Optimierer“ oder „Ersatzplan“, mit „Grund: …“), „gültig bis HH:MM Uhr“ oder „Plan abgelaufen“, den Anlass, die „Erwarteten Kosten“ und „Victron allein“, bei einem Leistungspreis das „Budget“ und die „Auffälligkeiten“ der Prüfung. Ab „Bedienen“ gibt es den Schalter „Netzladen erlaubt“ (er zeigt die aktuelle Einstellung, nicht die des Plans) und die Taste „Neu planen“ („Plant …“ während eines Laufs). Darunter stehen die Diagramme „Preise und Prognosen“ (Bezugspreis, Bezugspreis geschätzt, PV-Prognose, Lastprognose) und „Akku“ (Geplanter SOC, Reserve, die Fenster „Netzladen“ und „Halten“) und der „Ablauf“: Blöcke aus aufeinanderfolgenden Slots mit gleicher Absicht, gleicher Netzladeleistung und gleichem Hauptcode, je mit „HH:MM–HH:MM“, Absicht, „SOC a → b %“ und dem Satz.
+- **Gültigkeit nur vom Server:** Ob der Plan gilt, steht in `valid` der Antwort von `GET /api/plan`; die Seite rechnet nicht mit der Uhr des Browsers. Nach dem Umschalten von „Netzladen erlaubt“ wartet sie auf den Plan, den die geänderte Einstellung auslöst (alle 2 s, höchstens 40 s).
+- **Einstellungen:** Die Gruppe „Planung“ mit „Netzladen erlaubt“, „Marge (ct/kWh)“, „Roundtrip-Wirkungsgrad (%)“, „Verschleiß (ct/kWh)“, „Vorsichtsfaktor Restwert“ und „Planträgheit (ct/kWh)“.
+- **API:** `GET /api/plan` (Lesen), `POST /api/plan/replan` und `PUT /api/plan/grid-charge` (Bedienen).
+- **Nicht in 3b:** „Plan vs. Ist“ (3c).
 
 ---
 
@@ -1820,6 +1888,14 @@ pv:
 - **Abweichung vom Design (10.3):** `tesla-evcs` prüft „erkannt“ vor 3 min statt binnen 2 min: Die Regelung beginnt im Simulator erst nach rund 60 s, und Design 10.3 zählt ab dem Beginn der Regelung. Die Prüfung „Ab 60 min laden beide Autos“ in `ausfaelle` übergeht den Gast; „beide Autos“ sind die zwei Fahrzeuge der Konfiguration.
 
 **Stand Plan 2d** (`docs/superpowers/plans/2026-10-15-phase-2d-bedienung.md`, Präzisierungen 9 und 10; Szenarien: `docs/betrieb.md`, Abschnitt „Simulator“): Der Anlagensimulator hat zwei Szenarien mehr (jetzt 23): `tesla-aus` (der Tesla geht unter Wolken auf „Aus“ und bekommt binnen 10 s „Laden aus“; kein zurückgestelltes „Laden aus“) und `tesla-selbststart` (der Tesla startet im Modus „Aus“ selbst und wird binnen 210 s gestoppt). Das Modell kennt dafür den Selbststart eines Autos. `tesla-aus` belegt nicht, dass der dringende Stopp die Stundenlimits umgeht: Die Reserve (7.5, Stand Plan 2d) hält das Stundenbudget offen. Das prüft ein Test der Regelung.
+
+**Stand Plan 3b** (`docs/superpowers/plans/2026-10-16-phase-3b-optimierer-zeitplan.md`, Präzisierungen 18 und 19, Entscheidungen 1, 2 und 14; Aufruf und Bericht: `docs/betrieb.md`, „Planung“): Die Szenario-Test-Umgebung ist umgesetzt (`tools/scenario/`, `tools/export_days.py`, `tools/scenario_days.py`).
+- **Akkumodell im Viertelstundenraster** statt des Anlagensimulators: Der Lauf plant für jeden Neuplanungszeitpunkt (alle `step_slots` Slots) mit dem Optimierer im selben Prozess, setzt die Absichten des Plans auf den Ist-Werten um und rechnet die Kosten. Der Anlagensimulator im Sekundentakt bleibt für die Regelung (3c bekommt dort Szenarien zur Planausführung).
+- **Prognose und Preise im Lauf:** SOC und Monatsspitze aus dem bisherigen Lauf; die Prognose je Slot ist der Archivwert der Horizontklasse von `Slot − t` (fehlt er: die nächste vorhandene Klasse, sonst der Ist-Wert); Preise bekannt bis Ende heute, ab 14:00 Uhr lokal bis Ende morgen, danach Schätzung als Median des Bezugspreises derselben lokalen Uhrzeit an bis zu 7 Vortagen (mindestens 2 Werte).
+- **„Victron allein“:** `EIGENVERBRAUCH` in allen Slots auf den Ist-Werten, gleicher Start-SOC. Die Kosten sind Energie (Bezug − Einspeisung) plus Leistungspreis je Monat; „bereinigt“ heißt: Kosten des Optimierers minus `(SOC_end − SOC_end,Victron) · η_dis · Median der Bezugspreise des letzten Tages`.
+- **Regel R im Szenario:** Ein Verstoß ist ein angewandter `NETZLADEN`-Slot, nach dem der Plan dieses Zeitpunkts mehr als 0,1 kWh Einspeisung bis zu seinem Horizontende erwartet. Die Informationszahl „Netzladen vor tatsächlicher Einspeisung“ hat keine Grenze, denn Prognosefehler machen sie unvermeidbar. **Bestanden** heißt: bereinigte Kosten höchstens „Victron allein“ und kein Verstoß gegen Regel R.
+- **In der CI** vier erzeugte Tagesarten (`sommer-sonnig`, `winter-spread`, `winter-leistung`, `wechselhaft`) je 2 Tage, neu geplant jede Stunde (jede Viertelstunde brauchte viermal so lange; die Gültigkeit von 45 min deckt die vier Slots einer Stunde), mit einem Beispieltarif aus erfundenen Werten (`tests/integration/test_planning_scenarios.py`). Die Winterarten haben 800 W PV-Spitze, nicht 2000 W: Mit 2000 W lädt der PV-Überschuss den Akku jeden Tag weiter, als der Abend braucht, „Victron allein“ bezieht dann nie zum Spitzenpreis, und es gäbe keinen Vorteil des Netzladens zu messen. Ergebnis (2 Tage, stündlich): Winter rund 1,07 € günstiger als „Victron allein“; Sommer und `wechselhaft` gleich, weil die PV den Akku füllt und „Victron allein“ nie bezieht. Dazu ein Property-Test des Optimierers (`tests/property/test_optimizer.py`): SOC in den Grenzen, Einspeisung nie über der PV, kein gleichzeitiges Laden und Entladen, kein Netzladen bei ausgeschaltetem Schalter, Regel R1.
+- **An der Anlage** exportiert `export_days` echte Tage aus der Datenbank der app (Ist-Werte aus der Abrechnung, Preise, Prognosen je Horizontklasse aus dem Archiv, Monatsspitze vor dem ersten Tag aus den Slots des Monats vor dem ersten Tag); ein Tag ohne Preise oder mit mehr als 4 unvollständigen Slots entfällt und steht in `skipped_days`, und ein übersprungener Tag lässt eine Lücke. `scenario_days` rechnet die Datei, jede Viertelstunde (`--takt 15`), und schreibt den Bericht „Szenario-Vergleich mit Victron allein“. Die Dateien liegen unter `/data` und werden nie eingecheckt; die Abnahme zählt mindestens 30 Tage.
 
 ---
 
@@ -2006,7 +2082,7 @@ Es gibt keine Schreibzugriffe auf Geräte.
 | Plan | Inhalt | Ergebnis an der Anlage |
 |---|---|---|
 | **3a „Tarif und Prognosen“** (umgesetzt) | Tarifmodell vollständig mit Editor (9.1), Monatsspitze, Schätzpreise (9.2), Lastprognose v1 (10.2), PV-Kalibrierung und Quantile (10.1), Prognosegüte (11.3) | Tarif aus den Preisblättern eingetragen; Prognosen und ihre Güte sichtbar; die Archive füllen sich für 3b |
-| **3b „Optimierer und Zeitplan“** | Plan-Typen in `shared`, Optimierer (HiGHS über PuLP, eigener Prozess, Zeitlimit) nur für den Akku, Regel R1, Wirtschaftlichkeit mit Marge, Schalter „Netzladen erlaubt“, Planträgheit, Plausibilitätsprüfung, Ersatzplan, Erklärungen, Planungsablauf mit Auslösern und Speicherung (`plan`, `plan_inputs`), UI-Seite „Zeitplan“ (36 h), HA-Sensoren zum Plan und Taste „neu planen“, Szenario-Test-Umgebung mit historischen Tagen und der Vergleich mit „Victron allein“ | Pläne entstehen als Vorschau; der core bekommt sie noch nicht |
+| **3b „Optimierer und Zeitplan“** (umgesetzt) | Plan-Typen in `shared`, Optimierer (HiGHS über PuLP, eigener Prozess, Zeitlimit) nur für den Akku, Regel R1, Wirtschaftlichkeit mit Marge, Schalter „Netzladen erlaubt“, Planträgheit, Plausibilitätsprüfung, Ersatzplan, Erklärungen, Planungsablauf mit Auslösern und Speicherung (`plan`, `plan_inputs`), UI-Seite „Zeitplan“ (36 h), HA-Sensoren zum Plan und Taste „neu planen“, Szenario-Test-Umgebung mit historischen Tagen und der Vergleich mit „Victron allein“ | Pläne entstehen als Vorschau; der core bekommt sie noch nicht |
 | **3c „Planausführung“** | Plan in der Absicht, Prüfung und Gültigkeit im core; Akku-Absichten `EIGENVERBRAUCH`, `HALTEN` und `NETZLADEN(P)`; Plan-Schwelle der Unterstützung (7.6); Budget aus der akzeptierten Monatsspitze für den 15-min-Wächter (7.4); abgelaufener Plan → `EIGENVERBRAUCH`; Preis und Plan-Slot in den `inputs` der Entscheidungen; Simulator mit Wirkungsgrad und Plan-Szenarien; „Plan vs. Ist“ im Zeitplan; Schalter „Akku-Unterstützung erlaubt“ und Zahl „Unterstützungsschwelle“ in UI und HA; Mehrkostenanzeige beim Boost | 2 Wochen Dry-Run der Planausführung, danach geht Victron live |
 
 Die Abnahme der Phase 3 (unten) folgt nach 3c. 3a schaltet nichts an der Anlage und sendet keine Absicht; die Prognosen brauchen die Abrechnung (`ledger_slot`) als Ist-Werte.
@@ -2017,6 +2093,31 @@ Die Abnahme der Phase 3 (unten) folgt nach 3c. 3a schaltet nichts an der Anlage 
   - **`HALTEN`** setzt der core über den Netz-Sollwert-Override um, den er schon schreibt (Sollwert = Last − PV, nicht unter 0, nachgeführt); so braucht es keinen neuen Schreibweg. Der flüchtige Override `ess.override.maxdischargepower` bleibt eine Alternative, die an der Anlage geprüft werden kann.
 - **Prognosegüte als Seite:** Die Ansicht der Prognosegüte als eigene Seite folgt mit Phase 5 (siehe dort); 3a zeigt die Kennzahlen als Karte auf der System-Seite.
 - **Offene Eingaben des Betreibers:** die Sätze des Leistungspreises (19.3, nach der SNE-T-V) und die HA-Entität der Hauslast (10.2, `homeassistant.load_history`).
+
+**Stand Plan 3b** (`docs/superpowers/plans/2026-10-16-phase-3b-optimierer-zeitplan.md`, Entscheidungen 1 bis 15, so wie der Betreiber sie freigegeben hat; Betrieb: `docs/betrieb.md`, „Planung“): 3b ist umgesetzt; der core bleibt unverändert und bekommt keinen Plan. Pläne entstehen alle 15 min als Vorschau in UI und HA. Die Entscheidungen:
+1. **Absichten aus den Flüssen, dann Nachrechnung:** Das MILP (9.3 ohne Autos) liefert Flüsse; je Slot wird daraus eine Absicht, und SOC, Flüsse, Kosten und Spitze des Plans kommen aus dem Akkumodell, das die Absichten so umsetzt wie später der core.
+2. **Akkumodell im Viertelstundenraster,** rein, für Nachrechnung, Ersatzplan, Plausibilität, Szenarien und „Victron allein“; der Anlagensimulator bleibt für die Regelung.
+3. **Wirtschaftlichkeit als Kosten im Ziel:** Netzladen zahlt `π + Marge`, Entladen den Verschleiß; Roundtrip 88 % geteilt als `η_ch = η_dis = √0,88`. Die Spread-Regel prüft die Plausibilität nach.
+4. **Einstellungen „Planung“** in den Laufzeit-Einstellungen: `grid_charge_allowed` (aus), `margin_ct` 2,0, `roundtrip_pct` 88, `wear_ct` 2,0, `end_value_factor` 0,9, `inertia_ct` 0,5. Admins ändern alles im Editor; „Netzladen erlaubt“ schaltet auch „Bedienen“ im Zeitplan und Home Assistant, jeweils als neue Version mit Eintrag im Änderungsprotokoll.
+5. **Leistungspreis im Ziel** nur, wenn im Monat ein Leistungspreis mit Satz gilt; `peak₀ = max(bisherige Monatsspitze, minimum_kw)`, ein Horizont über das Monatsende bekommt für den neuen Monat eine zweite Spitze.
+6. **Horizont** vom aktuellen Slot bis zum letzten bekannten Preis, höchstens 36 h; unter 4 h bekannt: auf 4 h mit Schätzpreisen verlängert und als „geschätzt“ markiert. Der Restwert kommt aus dem Median der Preise der 24 h nach dem Horizont.
+7. **Eigener Prozess und Zeitlimit:** HiGHS mit 20 s und MIP-Gap 0,5 %, je Lauf ein frischer Kindprozess, nach 30 s beendet; dann Ersatzplan.
+8. **Auslöser ohne die der Autos** (Phase 4): jede Viertelstunde eine Minute nach Slotbeginn, neue Preise, neue PV- oder Lastprognose, SOC mehr als 5 Prozentpunkte vom Plan weg, neue Monatsspitze, geänderte Einstellungen zu Planung oder Tarif, „Neu planen“ in UI und HA. Ein Lauf zur Zeit; Auslöser während eines Laufs ergeben genau einen weiteren. Gültigkeit 45 min.
+9. **Speicherung** in Migration `0009`: `plan` (Kopf, Slots als JSON) und `plan_inputs` (eingefrorene Eingangsdaten). Pläne 30 Tage, Eingangsdaten 7 Tage; nach 7 Tagen werden die Slots eines Plans auf die gekürzt, die er tatsächlich bestimmt hat.
+10. **Ersatzplan** (9.4) nur für den Akku, „SOC reicht nur knapp“ genau definiert.
+11. **Erklärungen:** elf Grundcodes mit Satzvorlagen; gespeichert werden nur Codes und Parameter, der Satz entsteht beim Lesen.
+12. **Seite „Zeitplan“** mit Kopf (Stand, Quelle, gültig bis, Kosten gegenüber „Victron allein“, Budget, Schalter, Taste), Diagramm „Preise und Prognosen“, Diagramm „Akku“ mit geplantem SOC und den Fenstern „Netzladen“ und „Halten“ und dem „Ablauf“ in Blöcken mit Satz. „Plan vs. Ist“ folgt mit 3c.
+13. **Home Assistant:** Sensoren „Akku-Plan jetzt“, „Akku-Plan nächster Slot“, „Geplanter SOC“, „Budget“; Schalter „Netzladen erlaubt“; Taste „Neu planen“.
+14. **Szenarien:** In der CI vier erzeugte Tagesarten je 2 Tage, neu geplant jede Stunde; an der Anlage die exportierten Tage, neu geplant jede Viertelstunde. Regel-R-Verstöße zählen gegen den Plan, der zum Zeitpunkt galt; dazu die Informationszahl „Netzladen vor tatsächlicher Einspeisung“.
+15. **Kein Eingriff in den core,** kein Befehl an Geräte, keine Änderung der Absicht.
+
+Bei der Umsetzung haben diese Punkte die Entscheidungen ergänzt oder enger gefasst:
+- **PV deckt zuerst das Haus:** Der Optimierer legt `pv_h = min(PV, Last)` fest (9.3, Stand Plan 3b).
+- **Auslöser:** Die Viertelstunde kommt eine Minute nach Slotbeginn; `prices` zählt nur einen neuen letzten Preis-Slot oder mehr `primary`-Slots; nach einem Plan wegen `soc` löst der SOC im selben Slot nicht erneut aus (9.5).
+- **Ersatzplan:** Er hält und lädt aus dem Netz jeweils nur gegen den ersten knappen teuren Slot (9.4); die Gründe heißen „Zeitlimit ohne Lösung“, „Solver ohne Lösung (infeasible)“, „Solver nach 30 s abgebrochen“, „Solver fehlgeschlagen: …“ und „Plan unplausibel: {erster Befund}“.
+- **UI:** Ob ein Plan gilt, kommt nur vom Server; nach dem Umschalten von „Netzladen erlaubt“ wartet die Seite auf den Folgeplan (13).
+- **Szenarien:** Die Winterarten haben 800 W PV-Spitze statt 2000 W (16). In der CI sind die Winterarten rund 1,07 € günstiger als „Victron allein“, Sommer und `wechselhaft` gleich.
+- **Weiterhin offen für 3c:** Planausführung im core, Budget für den 15-min-Wächter, Unterstützungsschwelle und Akku → Auto, „Plan vs. Ist“, Szenarien zur Planausführung im Anlagensimulator; Regel R2 und die Autos mit Phase 4.
 
 ### Phase 4 – Geplantes Laden, Statistik, HA komplett
 
