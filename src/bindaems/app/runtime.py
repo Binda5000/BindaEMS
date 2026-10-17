@@ -14,6 +14,7 @@ from collections.abc import Awaitable, Callable, Generator
 from dataclasses import replace
 from datetime import date, timedelta
 from functools import partial
+from typing import Any
 
 import httpx
 import structlog
@@ -49,6 +50,7 @@ from bindaems.app.ha.publisher import AiomqttHaTransport, HaPublisher
 from bindaems.app.history.influx import InfluxQueryError, InfluxReader
 from bindaems.app.history.routes import history_router
 from bindaems.app.history.series import build_catalog
+from bindaems.app.ledger.costing import LedgerCosting
 from bindaems.app.ledger.routes import ledger_router
 from bindaems.app.ledger.service import LedgerService
 from bindaems.app.planning.routes import planning_router
@@ -173,6 +175,10 @@ class AppRuntime:
         self.ledger = LedgerService(
             self.engine, self._clock, self.prices, self.settings, self.audit, self._sink
         )
+        self.costing = LedgerCosting(
+            self.engine, self.ledger, self.settings, usable_kwh=cfg.battery.usable_kwh
+        )
+        self.ledger.on_slots_changed(self.costing.mark_dirty)
         self.load_forecast = LoadForecastService(
             self.ledger, cfg, self.reader, self.forecast_archive, self._clock, self._sink
         )
@@ -188,7 +194,7 @@ class AppRuntime:
             core_client,
             self.live,
             self._clock,
-            slot_flows_handlers=[self.ledger.handle_stream_message],
+            slot_flows_handlers=[self._on_slot_flows],
             decision_handlers=[self.collector.on_decision],
             connect_handlers=[self.collector.catch_up],
         )
@@ -457,6 +463,16 @@ class AppRuntime:
         self._server = _AppServer(config)
         await self._server.serve()
 
+    async def _on_slot_flows(self, data: dict[str, Any]) -> None:
+        await self.ledger.handle_stream_message(data)
+        await self._catch_up_costing()
+
+    async def _catch_up_costing(self) -> None:
+        try:
+            await asyncio.to_thread(self.costing.catch_up)
+        except Exception:
+            log.exception("Einstandspreis des Akkus nicht berechenbar")
+
     async def _ledger_loop(self) -> None:
         """Beim Start die letzten 7 Tage nachtragen, danach stündlich die letzten 6 h."""
         window = BACKFILL_FIRST
@@ -472,6 +488,7 @@ class AppRuntime:
                 log.warning("Nachtrag der Abrechnung nicht möglich", error=str(exc))
             except Exception:
                 log.exception("Nachtrag der Abrechnung fehlgeschlagen")
+            await self._catch_up_costing()
             await asyncio.sleep(HOUR_S)
 
     async def _ha_values_loop(self, cache: HaValueCache) -> None:

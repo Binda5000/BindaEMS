@@ -270,6 +270,18 @@ class LedgerService:
         self._audit = audit
         self._sink = sink
         self._lock = threading.Lock()  # Lesen und Schreiben eines Slots ohne fremde Änderung
+        self._listeners: list[Callable[[datetime], None]] = []
+
+    def on_slots_changed(self, callback: Callable[[datetime], None]) -> None:
+        """``callback(früheste geänderte Viertelstunde)`` nach neuen oder geänderten Slots."""
+        self._listeners.append(callback)
+
+    def _notify(self, start: datetime) -> None:
+        for listener in list(self._listeners):
+            try:
+                listener(start)
+            except Exception:  # ein Listener darf das Speichern nicht scheitern lassen
+                log.exception("Reaktion auf geänderte Abrechnung fehlgeschlagen")
 
     def ingest(self, flows: SlotFlows, origin: Origin) -> bool:
         """Speichert den Slot; ein vorhandener wird nur bei größerer Abdeckung ersetzt."""
@@ -302,6 +314,7 @@ class LedgerService:
                     update(ledger_slot).where(ledger_slot.c.slot_start == start).values(**values)
                 )
         self._publish(start, flows.flows_wh, price)
+        self._notify(start)
         return True
 
     def _publish(self, start: datetime, flows_wh: Mapping[str, float], price: float | None) -> None:
@@ -416,6 +429,8 @@ class LedgerService:
                 changed.append((slot, price))
         for slot, price in changed:
             self._publish(slot.slot_start, slot.flows_wh, price)
+        if changed:
+            self._notify(min(slot.slot_start for slot, _ in changed))
         return len(changed)
 
     def slots(self, start: datetime, end: datetime) -> list[LedgerSlot]:
