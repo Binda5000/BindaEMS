@@ -19,7 +19,7 @@ from bindaems.app.ha.entities import (
 from bindaems.app.ledger.service import MonthPeak
 from bindaems.app.prices.service import PriceService
 from bindaems.shared.config import Config
-from bindaems.shared.control import ChargeMode, Intent, VehicleIntent
+from bindaems.shared.control import ChargeMode, Intent, SupportIntent, VehicleIntent
 
 
 def entity(cfg: Config, object_id: str) -> EntitySpec:
@@ -60,6 +60,8 @@ def test_entities_from_config(cfg) -> None:
         "regulation",
         "guest_mode",
         "grid_charge",
+        "battery_support",
+        "support_soc",
         "replan",
         "problem_assignment_unclear",
         "tesla_soc",
@@ -591,3 +593,71 @@ def test_plan_sensors_carry_the_execution(cfg) -> None:
             for oid in names:
                 attributes = entity(cfg, oid).attributes(inputs)
                 assert attributes["execution"] == state and "preview" not in attributes
+
+
+def test_support_switch_state_and_discovery(cfg) -> None:
+    assert state(cfg, "battery_support", sample_inputs(support_allowed=True)) == "ON"
+    assert state(cfg, "battery_support", sample_inputs(support_allowed=False)) == "OFF"
+    assert state(cfg, "battery_support", sample_inputs()) == "None"
+    data = config_of(cfg, "battery_support")
+    assert data["command_topic"] == "bindaems/cmd/battery_support"
+    assert data["state_topic"] == "bindaems/state/battery_support"
+    assert (data["name"], data["payload_on"], data["payload_off"]) == (
+        "Akku-Unterstützung erlaubt",
+        "ON",
+        "OFF",
+    )
+    assert entity(cfg, "battery_support").component == "switch"
+    assert entity(cfg, "battery_support").device.identifier == "bindaems"
+
+
+def test_number_entity_discovery(cfg) -> None:
+    config = config_of(cfg, "support_soc")
+    assert (
+        config["min"],
+        config["max"],
+        config["step"],
+        config["unit_of_measurement"],
+        config["mode"],
+    ) == (20.0, 100.0, 1.0, "%", "box")
+    assert config["name"] == "Unterstützungsschwelle"
+    assert config["command_topic"] == "bindaems/cmd/support_soc"
+    assert config["state_topic"] == "bindaems/state/support_soc"
+    topic, _ = discovery(entity(cfg, "support_soc"), cfg.homeassistant.mqtt)
+    assert topic == "homeassistant/number/bindaems/support_soc/config"
+    assert entity(cfg, "support_soc").component == "number"
+
+
+def test_number_range_follows_the_ups_reserve(cfg) -> None:
+    battery = cfg.battery.model_copy(update={"reserve_soc_pct": 35.0})
+    shifted = cfg.model_copy(update={"battery": battery})
+    assert (config_of(shifted, "support_soc")["min"]) == 35.0
+
+
+def test_only_the_number_carries_a_range(cfg) -> None:
+    for spec in build_entities(cfg):
+        data = config_of(cfg, spec.object_id)
+        has_range = {"min", "max", "step", "mode"} & set(data)
+        assert bool(has_range) == (spec.component == "number"), spec.object_id
+
+
+def test_support_threshold_state(cfg) -> None:
+    assert state(cfg, "support_soc", sample_inputs(support_soc_pct=65.0)) == "65.0"
+    assert state(cfg, "support_soc", sample_inputs(support_soc_pct=70.0)) == "70.0"
+    assert state(cfg, "support_soc", sample_inputs()) == "None"
+
+
+def test_build_inputs_takes_the_support_from_the_intent_or_the_config(
+    live, price_service, store, forecast_service
+) -> None:
+    def inputs(intent: Intent | None) -> HaInputs:
+        return build_inputs(
+            live, price_service, store, forecast_service, T_APP, intent, support_default_pct=70.0
+        )
+
+    own = inputs(Intent(version=1, support=SupportIntent(allowed=False, soc_pct=55.0)))
+    assert (own.support_allowed, own.support_soc_pct) == (False, 55.0)
+    default = inputs(Intent(version=1))
+    assert (default.support_allowed, default.support_soc_pct) == (True, 70.0)
+    unknown = inputs(None)
+    assert (unknown.support_allowed, unknown.support_soc_pct) == (None, None)

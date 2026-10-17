@@ -124,7 +124,7 @@ def test_only_allowed_topics_are_published(cfg) -> None:
     assert pattern.fullmatch("bindaems/state/price_now/attributes")
     assert pattern.fullmatch("bindaems/status")
     assert pattern.fullmatch("bindaems/cmd/tesla_mode")
-    for platform in ("select", "switch", "button"):
+    for platform in ("select", "switch", "button", "number"):
         assert pattern.fullmatch(f"homeassistant/{platform}/bindaems/tesla_mode/config")
     for topic in (
         "bindaems/cmd/Mode",
@@ -256,3 +256,12 @@ async def test_commands_are_subscribed_again_after_a_reconnect(publisher_env) ->
         publisher, lambda: transport.connections == 2 and publisher.component_status().ok
     )
     assert transport.subscriptions == ["homeassistant/status", "bindaems/cmd/+"] * 2
+
+
+def test_number_topics_are_allowed(cfg) -> None:
+    pattern = allowed_topic(cfg.homeassistant.mqtt)
+    assert pattern.fullmatch("homeassistant/number/bindaems/support_soc/config")
+    assert pattern.fullmatch("bindaems/state/support_soc")
+    assert pattern.fullmatch("bindaems/cmd/support_soc")
+    assert not pattern.fullmatch("homeassistant/number/other/support_soc/config")
+    assert not pattern.fullmatch("homeassistant/numbers/bindaems/support_soc/config")

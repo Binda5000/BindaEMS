@@ -319,10 +319,12 @@ steht die Quelle „ha“.
 | Regelbetrieb | Schalter | schaltet den Regelbetrieb ein oder aus |
 | Gast-Lademodus | Auswahl | der Modus für einen Gast an jeder Wallbox |
 | Netzladen erlaubt | Schalter | die Einstellung „Netzladen erlaubt“ (Abschnitt „Planung“); jede Änderung ist eine neue Version der Einstellungen und löst eine Neuplanung aus |
+| Akku-Unterstützung erlaubt | Schalter | erlaubt oder sperrt die Unterstützung der Autos aus dem Akku (Abschnitt „Akku und Spitzen“, „Akku-Unterstützung bedienen“) |
+| Unterstützungsschwelle | Zahl | die Schwelle in %, von der USV-Reserve bis 100 (Abschnitt „Akku und Spitzen“, „Akku-Unterstützung bedienen“) |
 | Neu planen | Taste | löst eine Neuplanung aus |
 
 Die Bedienelemente stehen am Gerät des Fahrzeugs bzw. der Wallbox, Regelbetrieb, Gast-Lademodus,
-Netzladen erlaubt und Neu planen am Gerät „BindaEMS“. Live-Schaltung und Vorrang gibt es in Home Assistant nicht; sie bleiben im UI.
+Netzladen erlaubt, Akku-Unterstützung erlaubt, Unterstützungsschwelle und Neu planen am Gerät „BindaEMS“. Live-Schaltung und Vorrang gibt es in Home Assistant nicht; sie bleiben im UI.
 
 - **Befehle** kommen über `bindaems/cmd/<Objekt>`. Eine gehaltene (retained) Nachricht auf diesen
   Topics ignoriert die app: Sie käme sonst bei jeder Verbindung wieder.
@@ -1034,7 +1036,8 @@ Dry-Run, und ein installierter Watchdog wartet.
   **Version** ist das Größere aus den Millisekunden seit 1970 (Uhr der app) und der gültigen Version + 1,
   damit auch eine aus der Sicherung wiederhergestellte app neuere Versionen erzeugt. Jede Änderung steht
   im Änderungsprotokoll (Quelle `ui` oder `ha`; Aktionen `intent.control`, `intent.mode`,
-  `intent.boost`, `intent.assignment`, `intent.guest_mode`, `intent.priority`, `intent.actuators`).
+  `intent.boost`, `intent.assignment`, `intent.guest_mode`, `intent.priority`, `intent.actuators`,
+  `control.support`).
 - **`PUT /v1/intent` per `curl` mischt sich über die Version korrekt ein.** Die app führt Änderungen
   nacheinander aus. Antwortet der core mit 409, weil die Version veraltet ist (jemand hat dazwischen eine
   Absicht per `curl` gesendet), holt sie die gültige Absicht neu und wendet die Änderung genau einmal
@@ -2871,6 +2874,32 @@ Zyklus, der rechnet; die Hochrechnung und die Senkung brauchen außerdem das Mit
 Ruht die Regelung (OBSERVE, Regelbetrieb aus), zeigt `peak` weiter den letzten Zustand ohne Werte
 (`gap`, bei einer überschrittenen Viertelstunde `exceeded`); `quarter_end` nennt die Viertelstunde, auf
 die er sich bezieht. `battery` steht dann auf `idle`.
+
+### Akku-Unterstützung bedienen
+
+„Akku-Unterstützung erlaubt“ und die Unterstützungsschwelle gehören zur Absicht wie der Gast-Modus.
+Im UI (Seite „Laden“), in Home Assistant und per API stellen das „Bedienen“ und Admin ein. Eine
+Änderung behält den Plan und steht im Änderungsprotokoll mit der Aktion `control.support`, dem Ziel
+„Akku-Unterstützung“ und dem Wert als Text: „erlaubt, ab 60 %“, „erlaubt, Schwelle aus der
+Konfiguration“ oder „gesperrt“. Standard ist erlaubt mit `control.support_soc_pct` (70 %).
+
+Die Schwelle liegt zwischen der USV-Reserve (`battery.reserve_soc_pct`) und 100 %. Darunter lehnt die
+app die Änderung ab („Unterstützungsschwelle 15 % liegt unter der USV-Reserve (20 %).“), ebenso der
+core für eine Absicht, die per `curl` kommt. Die Planung rechnet mit der Schwelle der Absicht, sobald
+sie gilt.
+
+| Objekt-ID | Name | Plattform | Wert |
+|---|---|---|---|
+| `battery_support` | Akku-Unterstützung erlaubt | switch | `ON`, wenn die Unterstützung erlaubt ist; ein Befehl ändert nur die Erlaubnis, die Schwelle bleibt; schreibend |
+| `support_soc` | Unterstützungsschwelle | number | die Schwelle in %: der Wert der Absicht, ohne Angabe `control.support_soc_pct`; Eingabefeld von der USV-Reserve (20 im Beispiel) bis 100 in Schritten von 1; schreibend |
+
+Ein Wert außerhalb des Bereichs oder keine Zahl wird abgelehnt und ändert nichts; Home Assistant meldet
+dann „Unterstützungsschwelle „150“ liegt außerhalb von 20–100 %.“. Die Zahl behält den Schalter, wie
+der Schalter die Zahl behält.
+
+Per API (ab „Bedienen“, Anmeldung und `X-CSRF-Token` wie in Abschnitt 8): `PUT /api/control/support`
+mit `{"allowed": true, "soc_pct": 60}`; `soc_pct` `null` heißt „Schwelle aus der Konfiguration“. Die
+Antwort ist die der übrigen Bedienungen (`result`, `version`, `details`, `intent`).
 
 ### Gründe
 

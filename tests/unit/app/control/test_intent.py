@@ -23,6 +23,7 @@ from bindaems.app.control.intent import (
     SetMode,
     SetPlan,
     SetPriority,
+    SetSupport,
     UnknownTarget,
     boost_until,
     derive,
@@ -32,6 +33,7 @@ from bindaems.shared.control import (
     ActuatorMode,
     ChargeMode,
     Intent,
+    SupportIntent,
     SurplusOrder,
     SurplusPriority,
     VehicleIntent,
@@ -505,3 +507,79 @@ async def test_plan_change_writes_no_audit_entry(
     await service.apply(SetPlan(plan_of()), actor="planung", source="system")
     assert audit.recent() == []
     assert feed.refreshed == 1  # Health folgt wie nach jeder Änderung
+
+
+def last_audit(audit: AuditLog) -> tuple[str, str | None, Any]:
+    """Aktion, Ziel und neuer Wert (der Kommentar) des jüngsten Eintrags."""
+    entry = audit.recent()[0]
+    assert entry.details is not None
+    return entry.action, entry.target, entry.details["to"]
+
+
+async def test_set_support_changes_the_intent_and_audits(
+    service: IntentService, fake_client: FakeCoreClient, audit: AuditLog, feed: FakeFeed
+) -> None:
+    result = await service.apply(SetSupport(True, 60.0), actor="anna", source="ui")
+    assert fake_client.sent[-1].support == SupportIntent(allowed=True, soc_pct=60.0)
+    assert result.intent.support == SupportIntent(allowed=True, soc_pct=60.0)
+    assert last_audit(audit) == ("control.support", "Akku-Unterstützung", "erlaubt, ab 60 %")
+    entry = audit.recent()[0]
+    assert (entry.actor, entry.source) == ("anna", "ui")
+    assert entry.details == {
+        "from": "erlaubt, Schwelle aus der Konfiguration",
+        "to": "erlaubt, ab 60 %",
+        "version": result.version,
+        "result": "accepted",
+    }
+    assert feed.refreshed == 1
+
+
+async def test_support_audit_comment_for_each_state(
+    service: IntentService, audit: AuditLog
+) -> None:
+    comments = []
+    for change in (SetSupport(True, None), SetSupport(False, 62.5), SetSupport(False, None)):
+        await service.apply(change, actor="ha", source="ha")
+        comments.append(last_audit(audit)[2])
+    assert comments == [
+        "erlaubt, Schwelle aus der Konfiguration",
+        "gesperrt",
+        "gesperrt",
+    ]
+    await service.apply(SetSupport(True, 62.5), actor="ha", source="ha")
+    assert last_audit(audit)[2] == "erlaubt, ab 62.5 %"
+
+
+async def test_support_change_keeps_the_plan_and_the_rest(
+    service: IntentService, fake_client: FakeCoreClient
+) -> None:
+    fake_client.valid = Intent(version=1, control=True, plan=plan_of())
+    result = await service.apply(SetSupport(False, 80.0), actor="admin", source="ui")
+    assert result.intent.plan == plan_of() and result.intent.control is True
+    assert result.intent.support == SupportIntent(allowed=False, soc_pct=80.0)
+
+
+async def test_support_threshold_below_reserve_is_rejected(
+    service: IntentService, fake_client: FakeCoreClient, audit: AuditLog
+) -> None:
+    with pytest.raises(Rejected) as rejected:
+        await service.apply(SetSupport(True, 19.0), actor="admin", source="ui")
+    assert rejected.value.details == [
+        "Unterstützungsschwelle 19 % liegt unter der USV-Reserve (20 %)."
+    ]
+    assert fake_client.sent == [] and audit.recent() == []
+
+
+async def test_support_threshold_above_100_is_rejected(
+    service: IntentService, fake_client: FakeCoreClient
+) -> None:
+    with pytest.raises(Rejected) as rejected:
+        await service.apply(SetSupport(True, 100.5), actor="admin", source="ui")
+    assert rejected.value.details == ["Unterstützungsschwelle 100.5 % liegt über 100 %."]
+    assert fake_client.sent == []
+
+
+async def test_support_threshold_at_the_bounds_is_accepted(service: IntentService) -> None:
+    for soc in (20.0, 100.0, None):
+        result = await service.apply(SetSupport(True, soc), actor="admin", source="ui")
+        assert result.intent.support.soc_pct == soc

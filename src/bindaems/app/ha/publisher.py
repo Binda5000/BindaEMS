@@ -113,7 +113,7 @@ def _cause(exc: BaseException) -> str:
 def allowed_topic(mqtt: HaMqttConfig) -> re.Pattern[str]:
     prefix, base = re.escape(mqtt.discovery_prefix), re.escape(mqtt.base_topic)
     return re.compile(
-        rf"^({prefix}/(sensor|binary_sensor|select|switch|button)/bindaems/[a-z0-9_]+/config"
+        rf"^({prefix}/(sensor|binary_sensor|select|switch|number|button)/bindaems/[a-z0-9_]+/config"
         rf"|{base}/(status|state/[a-z0-9_]+(/attributes)?|{COMMAND_SEGMENT}/[a-z0-9_]+))$"
     )
 

@@ -501,29 +501,57 @@ def test_plan_triggers_and_sources_in_the_guide_match_the_ui() -> None:
         assert f"„{label}“" in section, label
 
 
-def test_planning_entities_in_the_guide_exist() -> None:
-    # Die Tabelle „Home Assistant“ nennt Objekt-ID, Namen und Plattform wie die Entitäten der app.
+HA_PLATFORMS = {"sensor", "switch", "number", "button"}  # Plattformen der Tabellen im Handbuch
+
+
+def _documented_entities(section: str) -> dict[str, tuple[str, str]]:
+    """Objekt-ID → (Name, Plattform) der HA-Tabelle des Abschnitts."""
+    documented: dict[str, tuple[str, str]] = {}
+    for line in _guide_section(section).splitlines():
+        cells = [cell.strip() for cell in line.strip().strip("|").split("|")]
+        found = re.fullmatch(r"`([a-z_]+)`", cells[0]) if line.startswith("| `") else None
+        if found and len(cells) >= 4 and cells[2] in HA_PLATFORMS:
+            documented[found[1]] = (cells[1], cells[2])
+    return documented
+
+
+def _check_entities_exist(documented: dict[str, tuple[str, str]], expected: set[str]) -> None:
     from bindaems.app.ha.entities import build_entities
     from bindaems.shared.config import load_config
 
     cfg = load_config(Path("deploy/config.example.yaml"))
     specs = {spec.object_id: spec for spec in build_entities(cfg)}
-    documented: dict[str, tuple[str, str]] = {}
-    for line in _guide_section("Planung").splitlines():
-        cells = [cell.strip() for cell in line.strip().strip("|").split("|")]
-        found = re.fullmatch(r"`([a-z_]+)`", cells[0]) if line.startswith("| `") else None
-        if found and len(cells) >= 4 and cells[2] in {"sensor", "switch", "button"}:
-            documented[found[1]] = (cells[1], cells[2])
-    assert set(documented) == {
-        "battery_plan_now",
-        "battery_plan_next",
-        "planned_soc",
-        "budget",
-        "grid_charge",
-        "replan",
-    }
+    assert set(documented) == expected
     for oid, (name, component) in documented.items():
         assert (specs[oid].name, specs[oid].component) == (name, component), oid
+
+
+def test_planning_entities_in_the_guide_exist() -> None:
+    # Die Tabelle „Home Assistant“ nennt Objekt-ID, Namen und Plattform wie die Entitäten der app.
+    _check_entities_exist(
+        _documented_entities("Planung"),
+        {
+            "battery_plan_now",
+            "battery_plan_next",
+            "planned_soc",
+            "budget",
+            "grid_charge",
+            "replan",
+        },
+    )
+
+
+def test_support_entities_in_the_guide_exist() -> None:
+    # „Akku-Unterstützung bedienen“: der Schalter und die Zahl (Plattform `number`) mit Namen wie
+    # in der app; die Bedienelemente der Tabelle in Abschnitt 7 nennen dieselben Namen.
+    _check_entities_exist(
+        _documented_entities("Akku und Spitzen"), {"battery_support", "support_soc"}
+    )
+    controls = _guide_section("7. Home Assistant über MQTT")
+    assert "| Akku-Unterstützung erlaubt | Schalter |" in controls
+    assert "| Unterstützungsschwelle | Zahl |" in controls
+    assert "`control.support`" in Path("docs/betrieb.md").read_text(encoding="utf-8")
+    assert "PUT /api/control/support" in _guide_section("Akku und Spitzen")
 
 
 def test_planning_settings_in_the_guide_match_the_configuration() -> None:

@@ -1,3 +1,4 @@
+import json
 from datetime import timedelta
 from urllib.parse import quote
 
@@ -66,6 +67,7 @@ def test_every_change_route_needs_operator_and_a_csrf_token(client, auth) -> Non
         ("/api/control/vehicles/tesla/boost", {"on": True}),
         ("/api/control/wallboxes/evcs/vehicle", {"vehicle": "tesla"}),
         ("/api/control/guest", {"mode": "now"}),
+        ("/api/control/support", {"allowed": True, "soc_pct": 60.0}),
         (
             "/api/control/priority",
             {"priority": ["tesla", "egolf"], "surplus_priority": {"kind": "cars_first"}},
@@ -438,3 +440,68 @@ def test_latest_is_ordered_by_health_with_unknown_last(client, auth, store, live
         "vehicle.unbekannt",
     ]
     assert [d["id"] for d in ordered] == ["3", "2", "1", "4"]
+
+
+def test_support_route_needs_operator(client, auth) -> None:
+    viewer = login_as(client, auth, "viewer")
+    body = {"allowed": True, "soc_pct": 60.0}
+    assert client.put("/api/control/support", json=body, headers=viewer).status_code == 403
+    operator = login_as(client, auth, "operator")
+    assert client.put("/api/control/support", json=body).status_code == 403  # ohne CSRF-Token
+    response = client.put("/api/control/support", json=body, headers=operator)
+    assert response.status_code == 200
+    answer = response.json()
+    assert set(answer) == {"result", "version", "details", "intent"}
+    assert answer["intent"]["support"] == {"allowed": True, "soc_pct": 60.0}
+
+
+def test_support_route_audits_and_keeps_the_threshold_open(client, auth, audit) -> None:
+    operator = login_as(client, auth, "operator", username="anna")
+    response = client.put(
+        "/api/control/support", json={"allowed": False, "soc_pct": None}, headers=operator
+    )
+    assert response.json()["intent"]["support"] == {"allowed": False, "soc_pct": None}
+    entry = audit.recent()[0]
+    assert (entry.actor, entry.source, entry.action) == ("anna", "ui", "control.support")
+    assert entry.details is not None and entry.details["to"] == "gesperrt"
+
+
+def test_support_route_rejects_a_threshold_outside_the_range(client, auth, fake_client) -> None:
+    operator = login_as(client, auth, "operator")
+    low = client.put(
+        "/api/control/support", json={"allowed": True, "soc_pct": 10.0}, headers=operator
+    )
+    assert low.status_code == 422
+    assert low.json()["detail"] == "Unterstützungsschwelle 10 % liegt unter der USV-Reserve (20 %)."
+    high = client.put(
+        "/api/control/support", json={"allowed": True, "soc_pct": 101.0}, headers=operator
+    )
+    assert high.status_code == 422
+    assert fake_client.sent == []
+
+
+def test_support_body_is_strict(client, auth) -> None:
+    operator = login_as(client, auth, "operator")
+    for body in (
+        {"allowed": True, "soc_pct": 60.0, "x": 1},
+        {"allowed": "ja", "soc_pct": 60.0},
+        {"allowed": True, "soc_pct": "60"},
+        {"allowed": True},
+    ):
+        response = client.put(
+            "/api/control/support",
+            content=json.dumps(body),
+            headers={**operator, "content-type": "application/json"},
+        )
+        assert response.status_code == 422, body
+
+
+def test_support_route_rejects_a_threshold_that_is_not_a_number(client, auth, fake_client) -> None:
+    operator = login_as(client, auth, "operator")
+    response = client.put(
+        "/api/control/support",
+        content='{"allowed": true, "soc_pct": NaN}',
+        headers={**operator, "content-type": "application/json"},
+    )
+    assert response.status_code == 422
+    assert fake_client.sent == []

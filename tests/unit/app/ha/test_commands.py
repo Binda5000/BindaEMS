@@ -14,12 +14,13 @@ from bindaems.app.control.intent import (
     SetControl,
     SetGuestMode,
     SetMode,
+    SetSupport,
     UnknownTarget,
 )
 from bindaems.app.core_link import CoreUnavailableError, LiveState
 from bindaems.app.ha.commands import HaCommandHandler, LogRejections
 from bindaems.app.settings.service import VersionConflictError
-from bindaems.shared.control import ChargeMode, Intent
+from bindaems.shared.control import ChargeMode, Intent, SupportIntent
 from bindaems.shared.timeutil import ManualClock
 
 PREFIX = "Befehl aus Home Assistant abgelehnt: "
@@ -31,6 +32,13 @@ class FakeIntents:
     def __init__(self) -> None:
         self.applied: list[tuple[object, str, str]] = []
         self.error: Exception | None = None
+        self.intent: Intent | None = None  # die gültige Absicht, die ``current`` liefert
+        self.current_error: Exception | None = None
+
+    async def current(self) -> Intent | None:
+        if self.current_error is not None:
+            raise self.current_error
+        return self.intent
 
     async def apply(self, change, *, actor, source) -> ChangeResult:
         if self.error is not None:
@@ -260,13 +268,23 @@ async def test_a_failing_notification_does_not_escape(handler, rejections) -> No
 
 async def test_home_assistant_only_gets_operator_changes(handler, intents, clock) -> None:
     """Weder Live-Schaltung (``SetActuators``) noch ``SetPriority`` sind aus HA erreichbar."""
-    payloads = ["ON", "OFF", "PRESS", "Automatisch", "Tesla Model 3", "e-Golf", "Sofort", "live"]
+    payloads = [
+        "ON",
+        "OFF",
+        "PRESS",
+        "Automatisch",
+        "Tesla Model 3",
+        "e-Golf",
+        "Sofort",
+        "live",
+        "60",
+    ]
     for object_id in handler._commands:
         for payload in payloads:
             clock.advance(1.0)
             await handler(object_id, payload)
     assert intents.applied
-    allowed = (SetControl, SetMode, SetBoost, SetAssignment, SetGuestMode)
+    allowed = (SetControl, SetMode, SetBoost, SetAssignment, SetGuestMode, SetSupport)
     assert all(isinstance(change, allowed) for change, _, _ in intents.applied)
 
 
@@ -376,4 +394,96 @@ async def test_other_planning_error_is_logged_not_raised(handler, planning, reje
 async def test_without_planning_the_plan_commands_are_unknown(bare_handler, rejections) -> None:
     await bare_handler("grid_charge", "ON")
     await bare_handler("replan", "PRESS")
+    assert rejections.texts == []
+
+
+async def test_support_switch_keeps_the_threshold(handler, intents, clock) -> None:
+    intents.intent = Intent(version=4, support=SupportIntent(allowed=True, soc_pct=65.0))
+    await handler("battery_support", "OFF")
+    clock.advance(1.0)
+    await handler("battery_support", "ON")
+    assert intents.applied == [
+        (SetSupport(False, 65.0), "home-assistant", "ha"),
+        (SetSupport(True, 65.0), "home-assistant", "ha"),
+    ]
+
+
+async def test_support_switch_without_a_threshold_keeps_the_config_value(handler, intents) -> None:
+    intents.intent = Intent(version=4)
+    await handler("battery_support", "OFF")
+    assert intents.applied == [(SetSupport(False, None), "home-assistant", "ha")]
+
+
+async def test_support_switch_without_an_intent_starts_from_the_defaults(handler, intents) -> None:
+    await handler("battery_support", "OFF")
+    assert intents.applied == [(SetSupport(False, None), "home-assistant", "ha")]
+
+
+async def test_number_sets_the_threshold_and_keeps_the_switch(handler, intents, clock) -> None:
+    intents.intent = Intent(version=4, support=SupportIntent(allowed=False))
+    await handler("support_soc", "60")
+    clock.advance(1.0)
+    await handler("support_soc", "62.5")
+    clock.advance(1.0)
+    await handler("support_soc", " 100.0 ")
+    assert [change for change, _, _ in intents.applied] == [
+        SetSupport(False, 60.0),
+        SetSupport(False, 62.5),
+        SetSupport(False, 100.0),
+    ]
+
+
+async def test_number_command_out_of_range_is_rejected(handler, intents, rejections, clock) -> None:
+    for payload in ("150", "19.9", "-5"):
+        await handler("support_soc", payload)
+        clock.advance(1.0)
+    assert intents.applied == []
+    assert rejections.texts == [
+        PREFIX + "Unterstützungsschwelle „150“ liegt außerhalb von 20–100 %.",
+        PREFIX + "Unterstützungsschwelle „19.9“ liegt außerhalb von 20–100 %.",
+        PREFIX + "Unterstützungsschwelle „-5“ liegt außerhalb von 20–100 %.",
+    ]
+
+
+async def test_number_command_that_is_no_number_is_rejected(
+    handler, intents, rejections, clock
+) -> None:
+    for payload in ("", "viel", "nan", "inf", "6 0"):
+        await handler("support_soc", payload)
+        clock.advance(1.0)
+    assert intents.applied == []
+    assert rejections.texts == [
+        PREFIX + f"Unbekannter Befehl „{shown}“ für „Unterstützungsschwelle“."
+        for shown in ("", "viel", "nan", "inf", "6 0")
+    ]
+
+
+async def test_support_command_while_the_core_is_down_is_rejected(
+    handler, intents, rejections
+) -> None:
+    intents.current_error = CoreDown()
+    await handler("support_soc", "60")
+    assert intents.applied == []
+    assert rejections.texts == [PREFIX + "core nicht erreichbar."]
+
+
+async def test_support_commands_through_the_real_service_are_audited(
+    cfg, audit: AuditLog, clock: ManualClock, rejections
+) -> None:
+    client = FakeCoreClient()
+    service = IntentService(client, LiveState(), FakeFeed(), audit, clock, cfg)  # type: ignore[arg-type]
+    handler = HaCommandHandler(cfg, service, rejections, clock)
+    await handler("support_soc", "60")
+    clock.advance(1.0)
+    await handler("battery_support", "OFF")
+    assert client.valid is not None
+    assert client.valid.support == SupportIntent(allowed=False, soc_pct=60.0)
+    entry = audit.recent()[0]
+    assert (entry.actor, entry.source, entry.action, entry.target) == (
+        "home-assistant",
+        "ha",
+        "control.support",
+        "Akku-Unterstützung",
+    )
+    assert entry.details is not None and entry.details["to"] == "gesperrt"
     assert rejections.texts == []

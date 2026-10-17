@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import math
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -25,6 +26,7 @@ from bindaems.shared.control import (
     ActuatorMode,
     ChargeMode,
     Intent,
+    SupportIntent,
     SurplusPriority,
     VehicleIntent,
 )
@@ -36,6 +38,7 @@ log = structlog.get_logger(__name__)
 
 BOOST_DURATION: Final = timedelta(hours=12)  # der core klemmt ohnehin auf 12 h
 ASSIGNMENT_OVERRIDE: Final = "override"  # ``vehicles[].assignment`` in Health
+SUPPORT_TARGET: Final = "Akku-Unterstützung"  # Ziel im Änderungsprotokoll
 
 
 @dataclass(frozen=True)
@@ -85,6 +88,18 @@ class SetPriority:
 
 
 @dataclass(frozen=True)
+class SetSupport:
+    """Akku-Unterstützung für Autos: erlaubt oder gesperrt und ihre Schwelle in % SOC.
+
+    ``soc_pct`` ``None`` heißt „``control.support_soc_pct``“. Gültig sind USV-Reserve bis 100 %
+    (``IntentService._check``).
+    """
+
+    allowed: bool
+    soc_pct: float | None
+
+
+@dataclass(frozen=True)
 class SetActuators:
     """Betriebsart der genannten Aktoren; andere Aktoren bleiben unverändert.
 
@@ -114,6 +129,7 @@ Change = (
     | SetAssignment
     | SetGuestMode
     | SetPriority
+    | SetSupport
     | SetActuators
     | SetPlan
 )
@@ -207,6 +223,9 @@ def _apply(change: Change, base: Intent, now: datetime) -> Intent:
             return base.model_copy(update={"guest": base.guest.model_copy(update={"mode": mode})})
         case SetPriority(priority=priority, surplus=surplus):
             return base.model_copy(update={"priority": list(priority), "surplus_priority": surplus})
+        case SetSupport(allowed=allowed, soc_pct=soc_pct):
+            support = SupportIntent(allowed=allowed, soc_pct=soc_pct)
+            return base.model_copy(update={"support": support})
         case SetActuators(modes=modes):
             return base.model_copy(update={"actuators": {**base.actuators, **modes}})
         case SetPlan(plan=plan):
@@ -318,6 +337,13 @@ def _audit(change: Change, base: Intent, new: Intent) -> tuple[str, str, Any, An
                 },
                 {"priority": new.priority, "surplus": new.surplus_priority.model_dump(mode="json")},
             )
+        case SetSupport():
+            return (
+                "control.support",
+                SUPPORT_TARGET,
+                _support_comment(base.support),
+                _support_comment(new.support),
+            )
         case SetActuators(modes=modes):
             return (
                 "intent.actuators",
@@ -327,6 +353,16 @@ def _audit(change: Change, base: Intent, new: Intent) -> tuple[str, str, Any, An
             )
         case SetPlan():
             return None
+
+
+def _support_comment(support: SupportIntent) -> str:
+    """Kommentar im Änderungsprotokoll: „erlaubt, ab {soc} %“, „erlaubt, Schwelle aus der
+    Konfiguration“ oder „gesperrt“."""
+    if not support.allowed:
+        return "gesperrt"
+    if support.soc_pct is None:
+        return "erlaubt, Schwelle aus der Konfiguration"
+    return f"erlaubt, ab {support.soc_pct:g} %"
 
 
 def _mode(intent: Intent, actuator: str) -> str:
@@ -388,9 +424,22 @@ class IntentService:
         return intent
 
     def _check(self, change: Change) -> None:
-        """Prüft Fahrzeuge und Wallbox der Änderung gegen ``config.yaml``."""
+        """Prüft Fahrzeuge, Wallbox und Unterstützungsschwelle der Änderung gegen ``config.yaml``.
+
+        Die Schwelle prüft auch der core (``Rejected`` mit demselben Satz); hier scheitert sie vor
+        dem Senden und ohne Eintrag im Änderungsprotokoll.
+        """
         keys: list[str] = []
         match change:
+            case SetSupport(soc_pct=soc) if soc is not None:
+                reserve = self._cfg.battery.reserve_soc_pct
+                if not math.isfinite(soc):
+                    raise Rejected(["Unterstützungsschwelle ist keine endliche Zahl."])
+                if soc < reserve:
+                    below = f"liegt unter der USV-Reserve ({reserve:g} %)."
+                    raise Rejected([f"Unterstützungsschwelle {soc:g} % {below}"])
+                if soc > 100:
+                    raise Rejected([f"Unterstützungsschwelle {soc:g} % liegt über 100 %."])
             case SetMode(vehicle=key) | SetBoost(vehicle=key):
                 keys = [key]
             case SetAssignment(wallbox=wallbox, vehicle=key):

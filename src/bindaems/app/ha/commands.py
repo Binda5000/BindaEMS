@@ -1,7 +1,8 @@
 """Befehle aus Home Assistant (Plan 2d, Präzisierung 15).
 
-Home Assistant hat die Rechte von „Bedienen“: Regelbetrieb, Lademodus, Boost, Zuordnung und
-Gast-Modus. Live-Schaltung (``SetActuators``) und Vorrang (``SetPriority``) gibt es hier nicht.
+Home Assistant hat die Rechte von „Bedienen“: Regelbetrieb, Lademodus, Boost, Zuordnung,
+Gast-Modus und Akku-Unterstützung. Live-Schaltung (``SetActuators``) und Vorrang
+(``SetPriority``) gibt es hier nicht.
 Jeder Befehl wird eine ``Change`` an den ``IntentService``; was Home Assistant sendet, kann nichts
 außer diesen Änderungen auslösen. Ein ungültiger oder abgelehnter Befehl ändert nichts und wird
 gemeldet (``Rejections``); keine Ausnahme verlässt den Handler.
@@ -10,6 +11,7 @@ gemeldet (``Rejections``); keine Ausnahme verlässt den Handler.
 from __future__ import annotations
 
 import asyncio
+import math
 import unicodedata
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -30,6 +32,7 @@ from bindaems.app.control.intent import (
     SetControl,
     SetGuestMode,
     SetMode,
+    SetSupport,
     UnknownTarget,
 )
 from bindaems.app.control.routes import CONFLICT, CORE_DOWN
@@ -37,6 +40,7 @@ from bindaems.app.core_link import CoreUnavailableError
 from bindaems.app.ha.entities import AUTOMATIC, MODE_LABELS, object_id
 from bindaems.app.settings.service import SettingsVersion, VersionConflictError
 from bindaems.shared.config import Config
+from bindaems.shared.control import SupportIntent
 from bindaems.shared.plan import PlanTrigger
 from bindaems.shared.timeutil import Clock
 
@@ -72,6 +76,28 @@ class Replan:
     """Taste „Neu planen“."""
 
 
+@dataclass(frozen=True)
+class SupportSwitch:
+    """Schalter „Akku-Unterstützung erlaubt“; die Schwelle bleibt, wie sie ist."""
+
+    on: bool
+
+
+@dataclass(frozen=True)
+class SupportThreshold:
+    """Zahl „Unterstützungsschwelle“ in %, im Bereich USV-Reserve bis 100; der Schalter bleibt."""
+
+    soc_pct: float
+
+
+class Refused(Exception):
+    """Der Befehl ist gültig geformt, aber nicht erlaubt; ``text`` ist die Meldung."""
+
+    def __init__(self, text: str) -> None:
+        super().__init__(text)
+        self.text = text
+
+
 class Rejections(Protocol):
     """Meldet einen abgelehnten Befehl (mit Token der ``HaNotifier``, sonst ``LogRejections``)."""
 
@@ -96,7 +122,10 @@ class _Command:
     """Eine Entität mit Befehl: ihr Name für die Meldung und die Zuordnung der Nutzlast."""
 
     name: str
-    parse: Callable[[str], Change | SetGridCharge | Replan | None]  # ``None``: Nutzlast unbekannt
+    # ``None``: Nutzlast unbekannt; ``Refused``: bekannt, aber nicht erlaubt
+    parse: Callable[
+        [str], Change | SetGridCharge | Replan | SupportSwitch | SupportThreshold | None
+    ]
     option: bool  # ``select`` (Option) oder Schalter und Taste (Befehl)
 
 
@@ -128,9 +157,29 @@ def _table(cfg: Config, planning: bool) -> dict[str, _Command]:
     def grid_charge(payload: str) -> SetGridCharge | None:
         return SetGridCharge(payload == ON) if payload in (ON, OFF) else None
 
+    reserve = cfg.battery.reserve_soc_pct
+
+    def support_switch(payload: str) -> SupportSwitch | None:
+        return SupportSwitch(payload == ON) if payload in (ON, OFF) else None
+
+    def support_threshold(payload: str) -> SupportThreshold | None:
+        try:
+            soc = float(payload)
+        except ValueError:
+            return None
+        if not math.isfinite(soc):
+            return None
+        if not reserve <= soc <= 100:
+            raise Refused(
+                f"Unterstützungsschwelle „{_shown(payload)}“ liegt außerhalb von {reserve:g}–100 %."
+            )
+        return SupportThreshold(soc)
+
     table = {
         "regulation": _Command("Regelbetrieb", regulation, option=False),
         "guest_mode": _Command("Gast-Lademodus", guest, option=True),
+        "battery_support": _Command("Akku-Unterstützung erlaubt", support_switch, option=False),
+        "support_soc": _Command("Unterstützungsschwelle", support_threshold, option=False),
     }
     if planning:
         table["grid_charge"] = _Command("Netzladen erlaubt", grid_charge, option=False)
@@ -180,7 +229,11 @@ class HaCommandHandler:
             log.info("Befehl verworfen: zu schnell", object_id=object_id)
             return
         self._last[object_id] = now
-        change = command.parse(payload)
+        try:
+            change = command.parse(payload)
+        except Refused as exc:
+            await self._reject(exc.text)
+            return
         if change is None:
             unknown = "Unbekannte Option" if command.option else "Unbekannter Befehl"
             await self._reject(f"{unknown} „{_shown(payload)}“ für „{command.name}“.")
@@ -200,15 +253,31 @@ class HaCommandHandler:
         except Exception:
             log.exception("Befehl aus Home Assistant fehlgeschlagen", object_id=object_id)
 
-    async def _execute(self, change: Change | SetGridCharge | Replan) -> None:
+    async def _execute(
+        self, change: Change | SetGridCharge | Replan | SupportSwitch | SupportThreshold
+    ) -> None:
         planning = self._planning
-        if isinstance(change, SetGridCharge) and planning is not None:
+        if isinstance(change, SupportSwitch | SupportThreshold):
+            await self._intents.apply(await self._support(change), actor=ACTOR, source=SOURCE)
+        elif isinstance(change, SetGridCharge) and planning is not None:
             # blockiert (Datenbank): nicht in der Ereignisschleife
             await asyncio.to_thread(planning.set_grid_charge, change.on, actor=ACTOR, source=SOURCE)
         elif isinstance(change, Replan) and planning is not None:
             planning.request("manual")
-        elif not isinstance(change, SetGridCharge | Replan):
+        elif not isinstance(change, SetGridCharge | Replan | SupportSwitch | SupportThreshold):
             await self._intents.apply(change, actor=ACTOR, source=SOURCE)
+
+    async def _support(self, change: SupportSwitch | SupportThreshold) -> SetSupport:
+        """Die Änderung der Unterstützung auf Basis der gültigen Absicht des core.
+
+        Der Schalter behält die Schwelle, die Zahl den Schalter (ohne Absicht: erlaubt, Schwelle
+        aus der Konfiguration).
+        """
+        current = await self._intents.current()
+        support = current.support if current is not None else SupportIntent()
+        if isinstance(change, SupportSwitch):
+            return SetSupport(change.on, support.soc_pct)
+        return SetSupport(support.allowed, change.soc_pct)
 
     async def _reject(self, reason: str) -> None:
         text = f"Befehl aus Home Assistant abgelehnt: {reason}"

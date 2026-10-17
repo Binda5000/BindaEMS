@@ -60,6 +60,8 @@ HA_SYSTEM_IDS = (
     "regulation",
     "guest_mode",
     "grid_charge",
+    "battery_support",
+    "support_soc",
     "replan",
     "problem_assignment_unclear",
 )

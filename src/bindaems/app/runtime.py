@@ -43,7 +43,7 @@ from bindaems.app.forecast.quality import ForecastQuality
 from bindaems.app.forecast.routes import forecast_router
 from bindaems.app.forecast.service import ForecastService
 from bindaems.app.ha.commands import HaCommandHandler, LogRejections
-from bindaems.app.ha.entities import HaInputs, build_entities, build_inputs
+from bindaems.app.ha.entities import HaInputs, build_entities, build_inputs, support_of
 from bindaems.app.ha.notify import AlarmNotifications, HaNotifier, websocket_service_call
 from bindaems.app.ha.publisher import AiomqttHaTransport, HaPublisher
 from bindaems.app.history.influx import InfluxQueryError, InfluxReader
@@ -348,7 +348,10 @@ class AppRuntime:
         cached = self.intents.cached()  # nach einem Befehl gleich die neue Absicht zeigen
         if cached is None or cached == self._ha_inputs.intent:
             return self._ha_inputs
-        return replace(self._ha_inputs, intent=cached)
+        allowed, soc_pct = support_of(cached, self._cfg.control.support_soc_pct)
+        return replace(
+            self._ha_inputs, intent=cached, support_allowed=allowed, support_soc_pct=soc_pct
+        )
 
     def _build_ha_inputs(self, intent: Intent | None) -> HaInputs:
         """Läuft im Worker-Thread (``_ha_inputs_loop``): die Datenbankabfrage blockiert nicht."""
@@ -365,6 +368,7 @@ class AppRuntime:
             self.ledger.month_peak(now.astimezone(LOCAL_TZ).date()),
             self.planning.current(),
             settings.planning.grid_charge_allowed,
+            support_default_pct=self._cfg.control.support_soc_pct,
         )
 
     async def _ha_intent(self) -> Intent | None:

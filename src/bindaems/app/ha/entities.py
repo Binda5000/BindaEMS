@@ -1,8 +1,8 @@
 """Home-Assistant-Entitäten der app (Spec 12): Sensoren und Bedienelemente (Plan 2d, Präz. 15).
 
 Unbekannte Werte werden als ``None`` veröffentlicht; Home Assistant zeigt dann „unbekannt“.
-Bedienelemente (``select``, ``switch``, ``button``) tragen ``command=True``; ihre Befehle kommen
-über ``{base_topic}/cmd/<object_id>`` und führt ``ha.commands`` aus.
+Bedienelemente (``select``, ``switch``, ``number``, ``button``) tragen ``command=True``; ihre
+Befehle kommen über ``{base_topic}/cmd/<object_id>`` und führt ``ha.commands`` aus.
 """
 
 from __future__ import annotations
@@ -97,12 +97,16 @@ class HaInputs:
     plan_next: PlanSlot | None = None  # der Slot danach; None am Ende des Plans
     grid_charge_allowed: bool | None = None  # Einstellung „Netzladen erlaubt“; None = unbekannt
     execution: ExecutionState | None = None  # Stand der Ausführung des Plans; None = unbekannt
+    support_allowed: bool | None = (
+        None  # „Akku-Unterstützung erlaubt“ der Absicht; None = unbekannt
+    )
+    support_soc_pct: float | None = None  # Unterstützungsschwelle (Absicht, sonst Konfiguration)
 
 
 @dataclass(frozen=True)
 class EntitySpec:
     object_id: str
-    component: Literal["sensor", "binary_sensor", "select", "switch", "button"]
+    component: Literal["sensor", "binary_sensor", "select", "switch", "number", "button"]
     name: str
     device: DeviceSpec
     value: Callable[[HaInputs], str]
@@ -113,6 +117,9 @@ class EntitySpec:
     attributes: Callable[[HaInputs], Mapping[str, Any]] | None = None
     options: tuple[str, ...] = ()  # Auswahl eines ``select``
     command: bool = False  # nimmt Befehle über ``{base}/cmd/<object_id>`` an
+    min: float | None = None  # Bereich und Schritt einer ``number``
+    max: float | None = None
+    step: float | None = None
 
 
 def _number(value: Any) -> float | None:
@@ -186,6 +193,28 @@ def _guest_mode_state(inputs: HaInputs) -> str:
 
 def _regulation_state(inputs: HaInputs) -> str:
     return on_off(None if inputs.intent is None else inputs.intent.control)
+
+
+def _support_allowed_state(inputs: HaInputs) -> str:
+    return on_off(inputs.support_allowed)
+
+
+def _support_soc_state(inputs: HaInputs) -> str:
+    return fmt(inputs.support_soc_pct, 1)
+
+
+def support_of(
+    intent: Intent | None, default_pct: float | None
+) -> tuple[bool | None, float | None]:
+    """„Akku-Unterstützung erlaubt“ und Unterstützungsschwelle für HA aus der Absicht.
+
+    Ohne Schwelle in der Absicht gilt ``default_pct`` (``control.support_soc_pct``); ohne Absicht
+    ist beides unbekannt.
+    """
+    if intent is None:
+        return None, None
+    soc = intent.support.soc_pct
+    return intent.support.allowed, default_pct if soc is None else soc
 
 
 def _assignment_state(cfg: Config, wallbox: str) -> Callable[[HaInputs], str]:
@@ -541,6 +570,25 @@ def build_entities(cfg: Config) -> list[EntitySpec]:
             main,
             lambda i: on_off(i.grid_charge_allowed),
         ),
+        _control(
+            "battery_support",
+            "switch",
+            "Akku-Unterstützung erlaubt",
+            main,
+            _support_allowed_state,
+        ),
+        EntitySpec(
+            "support_soc",
+            "number",
+            "Unterstützungsschwelle",
+            main,
+            _support_soc_state,
+            unit="%",
+            command=True,
+            min=cfg.battery.reserve_soc_pct,
+            max=100.0,
+            step=1.0,
+        ),
         _control("replan", "button", "Neu planen", main, lambda _: ""),
         EntitySpec(
             "problem_assignment_unclear",
@@ -607,7 +655,8 @@ def discovery(spec: EntitySpec, mqtt: HaMqttConfig) -> tuple[str, str]:
     """Discovery-Topic und -Payload (kompaktes JSON mit sortierten Schlüsseln).
 
     Ein Bedienelement trägt zusätzlich ``command_topic`` (``{base}/cmd/<object_id>``); ein
-    ``button`` hat keinen Zustand und darum kein ``state_topic``.
+    ``button`` hat keinen Zustand und darum kein ``state_topic``. Eine ``number`` trägt ``min``,
+    ``max`` und ``step`` und die Eingabe als Feld (``mode`` ``box``).
     """
     base = mqtt.base_topic
     payload: dict[str, Any] = {
@@ -641,6 +690,8 @@ def discovery(spec: EntitySpec, mqtt: HaMqttConfig) -> tuple[str, str]:
         payload["payload_on"], payload["payload_off"] = "ON", "OFF"
     elif spec.component == "select":
         payload["options"] = list(spec.options)
+    elif spec.component == "number":
+        payload.update({"min": spec.min, "max": spec.max, "step": spec.step, "mode": "box"})
     elif spec.component == "button":
         payload["payload_press"] = "PRESS"
     topic = f"{mqtt.discovery_prefix}/{spec.component}/{NODE_ID}/{spec.object_id}/config"
@@ -662,6 +713,7 @@ def build_inputs(
     month_peak: MonthPeak | None = None,
     plan: Plan | None = None,
     grid_charge_allowed: bool | None = None,
+    support_default_pct: float | None = None,
 ) -> HaInputs:
     connected = live.connected
     signals: dict[str, Value] = {}
@@ -711,6 +763,7 @@ def build_inputs(
             grid_charge_allowed=grid_charge_allowed,
         )
     )
+    support_allowed, support_soc_pct = support_of(intent, support_default_pct)
     return HaInputs(
         core_connected=connected,
         mode=mode if isinstance(mode, str) else None,
@@ -740,4 +793,6 @@ def build_inputs(
         plan_next=valid.slot_at(now + SLOT) if valid is not None else None,
         grid_charge_allowed=grid_charge_allowed,
         execution=execution,
+        support_allowed=support_allowed,
+        support_soc_pct=support_soc_pct,
     )

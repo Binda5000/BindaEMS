@@ -428,6 +428,21 @@ async def test_ha_inputs_carry_the_intent(runtime, monkeypatch) -> None:
     assert runtime._current_ha_inputs().intent == Intent(version=6, control=False)
 
 
+async def test_ha_inputs_carry_the_support_of_the_intent_or_the_config(
+    runtime, monkeypatch
+) -> None:
+    default = runtime._cfg.control.support_soc_pct
+    own = Intent(version=5, support=SupportIntent(allowed=False, soc_pct=55.0))
+    inputs = runtime._build_ha_inputs(own)
+    assert (inputs.support_allowed, inputs.support_soc_pct) == (False, 55.0)
+    assert runtime._build_ha_inputs(Intent(version=5)).support_soc_pct == default
+    runtime._ha_inputs = inputs
+    # nach einem Befehl gilt gleich die neue Absicht des Dienstes, auch für die Unterstützung
+    runtime.intents._cached = Intent(version=6, support=SupportIntent(allowed=True))
+    shown = runtime._current_ha_inputs()
+    assert (shown.support_allowed, shown.support_soc_pct) == (True, default)
+
+
 async def test_ha_inputs_carry_the_plan_and_the_grid_charge_switch(runtime, monkeypatch) -> None:
     # Sensoren und Schalter des Plans lesen aus ``inputs.plan`` und ``grid_charge_allowed``.
     plan = sample_plan(T_APP.isoformat(), ["08:00", "08:15"])

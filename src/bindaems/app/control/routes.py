@@ -35,6 +35,7 @@ from bindaems.app.control.intent import (
     SetGuestMode,
     SetMode,
     SetPriority,
+    SetSupport,
     UnknownTarget,
 )
 from bindaems.app.core_link import CoreClient, CoreUnavailableError, LiveState
@@ -65,6 +66,15 @@ class ModeBody(_Body):
 
 class AssignmentBody(_Body):
     vehicle: str | None
+
+
+class SupportBody(_Body):
+    """Akku-Unterstützung; ``soc_pct`` ``null`` heißt „Schwelle aus der Konfiguration“."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    allowed: bool
+    soc_pct: float | None
 
 
 class PriorityBody(_Body):
@@ -171,6 +181,10 @@ def control_router(
     @router.put("/api/control/guest")
     async def guest(body: ModeBody, session: Operator) -> dict[str, Any]:
         return await change(SetGuestMode(body.mode), session)
+
+    @router.put("/api/control/support")
+    async def support(body: SupportBody, session: Operator) -> dict[str, Any]:
+        return await change(SetSupport(body.allowed, body.soc_pct), session)
 
     @router.put("/api/control/priority")
     async def priority(body: PriorityBody, session: Operator) -> dict[str, Any]:
