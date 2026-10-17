@@ -28,6 +28,8 @@ from bindaems.app.auth.routes import audit_router, auth_router, users_router
 from bindaems.app.auth.service import AuthService
 from bindaems.app.auth.web import Guard
 from bindaems.app.backup import backup_database
+from bindaems.app.charging.routes import charging_router
+from bindaems.app.charging.sessions import SessionService
 from bindaems.app.charging.tracker import ChargingTracker
 from bindaems.app.consumers.energy import EnergyCache
 from bindaems.app.consumers.routes import consumers_router
@@ -224,6 +226,9 @@ class AppRuntime:
         # Steckzustand und Belegung nach jeder Abfrage von Health (Plan 4a, Task 3)
         self.charging = ChargingTracker(self.engine, self._clock, cfg, self.live)
         self.live_feed.health_handlers.append(self.charging.wake)
+        self.charging_sessions = SessionService(
+            self.charging, self.ledger, self.costing, self._clock
+        )
         self.ha_values = HaValueCache(self.reader, ha_database) if ha_database is not None else None
         self.energy = EnergyCache(self.reader, self._clock, ha_database)
         self.ha_publisher: HaPublisher | None = None
@@ -296,6 +301,7 @@ class AppRuntime:
                     self.forecast, self.load_forecast, self.forecast_quality, self._clock, guard
                 ),
                 ledger_router(self.ledger, guard),
+                charging_router(self.charging_sessions, cfg, self.settings, guard),
                 planning_router(
                     self.planning,
                     self.settings,

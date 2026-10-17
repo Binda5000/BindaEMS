@@ -586,3 +586,14 @@ def test_plan_execution_texts_in_the_guide_and_the_ui() -> None:
     assert "Vorschau" not in header
     assert "preview" not in section and "Vorschau" not in section
     assert "Attribut `execution`" in section
+
+
+def test_charging_sessions_endpoint_in_the_guide() -> None:
+    # „Ladesessions und Kosten je Auto“: der Endpunkt mit Parametern, Grenzen und Kostenregel.
+    section = _guide_section("8. Tarif und Abrechnung")
+    assert "GET /api/charging/sessions?from=JJJJ-MM-TT&to=JJJJ-MM-TT" in section
+    for text in ("höchstens 400 Tage", "höchstens 200 Einträge", "`guest`", "`unknown`"):
+        assert text in section, text
+    for field in ("pv_kwh", "battery_kwh", "grid_kwh", "cost_eur", "wallbox_name", "vehicle_name"):
+        assert f"`{field}`" in section, field
+    assert "PV-Strom ins Auto kostet 0 ct" in section

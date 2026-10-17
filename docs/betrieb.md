@@ -509,6 +509,27 @@ curl -b jar -H "X-CSRF-Token: $CSRF" -H 'Content-Type: application/json' \
   -d @import.json "$APP/api/settings/import"
 ```
 
+### Ladesessions und Kosten je Auto
+
+`GET /api/charging/sessions?from=JJJJ-MM-TT&to=JJJJ-MM-TT[&vehicle=<Schlüssel>]` (ab „Lesen“) liefert die
+Ladesessions, die die Tage (Wiener Zeit) überdecken, neueste zuerst: höchstens 400 Tage (sonst 422) und
+höchstens 200 Einträge. `vehicle` ist der Schlüssel aus `config.yaml`, `guest` („Gast“) oder `unknown`
+(„Unbekannt“, kein Fahrzeug erkannt). Je Eintrag: `id`, `wallbox` und `wallbox_name`, `vehicle` und
+`vehicle_name`, `start`, `end` (`null` und `open: true`, solange die Session läuft), die Energie
+`kwh` mit den Anteilen `pv_kwh`, `battery_kwh`, `grid_kwh` und `cost_eur`.
+
+- **Zuordnung:** Jede Viertelstunde gehört an einer Wallbox zu der Session, die sie am längsten überdeckt
+  (bei Gleichstand der späteren). Energie ohne Session zählt als „Unbekannt“. Eine laufende Session
+  endet für die Zuordnung bei „jetzt“.
+- **Kosten:** PV-Strom ins Auto kostet 0 ct, Akku-Strom den Einstandspreis des Akkus plus Verschleiß,
+  Netzstrom den Bezugspreis der Viertelstunde. Fehlt der Bezugspreis bei einem Netzanteil, ist
+  `cost_eur` `null` (unbekannt), nie 0; nach dem Nachtragen des Preises stimmt der Wert wieder.
+  Der entgangene Einspeiseerlös gehört nicht dazu.
+
+```bash
+curl -b jar "$APP/api/charging/sessions?from=2026-10-01&to=2026-10-31&vehicle=guest"
+```
+
 ## 9. Sicherung und Wiederherstellung
 
 Die app sichert ihre Datenbank jede Nacht um 03:15 Uhr im laufenden Betrieb in das Volume
