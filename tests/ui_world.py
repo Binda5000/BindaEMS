@@ -35,6 +35,7 @@ from bindaems.app.db.schema import user_table
 from bindaems.app.forecast.archive import RecordValue
 from bindaems.app.forecast.openmeteo import OPEN_METEO_URL
 from bindaems.app.planning.process import solve_inline
+from bindaems.app.planning.service import plan_once
 from bindaems.app.runtime import AppRuntime
 from bindaems.core.adapters.base import AdapterHealth
 from bindaems.core.api.app import create_api
@@ -46,6 +47,7 @@ from bindaems.shared.control import ChargeMode, CommandKind, Intent, VehicleInte
 from bindaems.shared.decisions import NO_VERDICT, Decision, DecisionResult, decision_text
 from bindaems.shared.domain import SignalKind
 from bindaems.shared.influx.lineprotocol import epoch_ms
+from bindaems.shared.plan import Plan
 from bindaems.shared.timeutil import LOCAL_TZ, Clock, ManualClock
 
 T_DEMO = T_APP  # 09.10.2026, 10:00 Ortszeit
@@ -583,6 +585,28 @@ def _rate_forecasts(app: AppRuntime) -> None:
     app.forecast_quality.update(T_DEMO.astimezone(LOCAL_TZ).date())
 
 
+async def _earlier_plan(app: AppRuntime, plan: Plan) -> None:
+    """Ein Plan um 09:01 neben dem von 10:00, damit „Plan gegen Ist“ für 09:00 bis 10:00 Plan
+    und Ist zeigt.
+
+    Er entsteht aus den Eingangsdaten des Plans von 10:00, um eine Stunde zurückgesetzt, und geht
+    nur in die Ablage: aktuell bleibt der Plan von 10:00, den core erreicht er nicht.
+    """
+    assert plan.id is not None
+    inputs = app.planning._store.inputs_of(plan.id)
+    assert inputs is not None
+    hour = timedelta(hours=1)
+    earlier = inputs.model_copy(
+        update={
+            "created_at": T_DEMO - timedelta(minutes=59),
+            "slots": [
+                slot.model_copy(update={"start": slot.start - hour}) for slot in inputs.slots
+            ],
+        }
+    )
+    app.planning._store.save(plan_once(earlier, await solve_inline(earlier)), earlier)
+
+
 async def build_world(cfg: Config, data_dir: Path, *, ui_dir: Path | None = None) -> World:
     clock = ManualClock(T_DEMO - WARMUP)  # der core läuft vor, danach steht die Uhr auf T_DEMO
     local = _demo_config(cfg, data_dir, ui_dir)
@@ -623,6 +647,7 @@ async def build_world(cfg: Config, data_dir: Path, *, ui_dir: Path | None = None
         app.planning._solver = solve_inline
         plan = await app.planning.replan("start")
         assert plan is not None, app.planning.component_status().message
+        await _earlier_plan(app, plan)
     except BaseException:
         router.stop(quiet=True)
         raise

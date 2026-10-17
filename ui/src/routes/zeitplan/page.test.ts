@@ -1,12 +1,20 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/svelte';
 import { beforeEach, expect, it, vi } from 'vitest';
+import * as v from 'valibot';
+import reviewJson from '$lib/api/contract/plan-review.json';
 import { ApiError } from '$lib/api/errors';
-import type { PlanResponse, Role } from '$lib/api/schemas';
+import { PlanReviewSchema, type PlanResponse, type Role } from '$lib/api/schemas';
 import { PLAN, RESPONSE, planWithWindows } from '$lib/testing/plan';
 import Page from './+page.svelte';
 
 const { api, session } = vi.hoisted(() => ({
-	api: { plan: vi.fn(), replan: vi.fn(), setGridCharge: vi.fn() },
+	api: {
+		plan: vi.fn(),
+		planReview: vi.fn(),
+		history: vi.fn(),
+		replan: vi.fn(),
+		setGridCharge: vi.fn()
+	},
 	session: { role: 'operator' as Role }
 }));
 vi.mock('$lib/api/endpoints', async (original) => ({
@@ -25,6 +33,15 @@ vi.mock('$app/state', () => ({
 // ECharts wird nicht geladen: die Diagramme bleiben leer, die Karten darum herum sind das Thema
 vi.mock('$lib/charts/echarts', () => ({ loadECharts: () => new Promise(() => {}) }));
 
+const REVIEW = v.parse(PlanReviewSchema, reviewJson);
+const HISTORY = {
+	rp: 'raw' as const,
+	step_s: 900,
+	series: {
+		'soc.battery': { label: 'Akku-SOC', unit: '%', points: [[1, 50]] as [number, number][] }
+	}
+};
+
 const WITH_WINDOWS: PlanResponse = { ...RESPONSE, plan: planWithWindows() };
 
 function renderPage(role: Role, response: PlanResponse = WITH_WINDOWS): void {
@@ -35,6 +52,8 @@ function renderPage(role: Role, response: PlanResponse = WITH_WINDOWS): void {
 
 beforeEach(() => {
 	vi.resetAllMocks();
+	api.planReview.mockResolvedValue(REVIEW);
+	api.history.mockResolvedValue(HISTORY);
 	api.setGridCharge.mockResolvedValue({ grid_charge_allowed: true, settings_version: 5 });
 	api.replan.mockResolvedValue(undefined);
 });
@@ -153,4 +172,31 @@ it('shows the load error of the plan request', async () => {
 	api.plan.mockRejectedValue(new ApiError(500, 'Fehler beim Laden'));
 	render(Page);
 	expect(await screen.findByText('Fehler beim Laden')).toBeTruthy();
+});
+
+it('shows the card "Plan gegen Ist (heute)" with the SOC of the day of the review', async () => {
+	renderPage('viewer');
+	const card = (await screen.findByRole('heading', { name: 'Plan gegen Ist (heute)' })).closest(
+		'section'
+	)!;
+	await within(card).findByRole('table');
+	expect(within(card).getByText('Netzbezug')).toBeTruthy();
+	expect(within(card).getByText('Bezugskosten')).toBeTruthy();
+	expect(within(card).getByRole('img', { name: 'Plan gegen Ist (heute)' })).toBeTruthy();
+	// der Tag kommt vom Server, nicht von der Uhr des Browsers
+	await waitFor(() =>
+		expect(api.history).toHaveBeenLastCalledWith(
+			['soc.battery'],
+			{ from: '2026-10-08T22:00:00.000Z', to: '2026-10-09T22:00:00.000Z' },
+			expect.anything()
+		)
+	);
+});
+
+it('keeps the plan and says so when "Plan gegen Ist" fails', async () => {
+	api.planReview.mockRejectedValue(new ApiError(500, 'Interner Fehler'));
+	renderPage('viewer');
+	expect(await screen.findByText('Plan gegen Ist ist nicht verfügbar.')).toBeTruthy();
+	expect(screen.getByText('Plan von 10:00 Uhr')).toBeTruthy();
+	expect(screen.queryByText('Interner Fehler')).toBeNull();
 });

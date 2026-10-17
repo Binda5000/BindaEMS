@@ -3,6 +3,7 @@ import { api } from './endpoints';
 import control from './contract/control-reply.json';
 import decisions from './contract/decisions.json';
 import plan from './contract/plan.json';
+import review from './contract/plan-review.json';
 import gridCharge from './contract/plan-grid-charge.json';
 
 const fetchMock = vi.fn();
@@ -108,6 +109,14 @@ it('liest den Plan mit GET', async () => {
 	expect(sent()).toMatchObject({ url: '/api/plan', method: 'GET' });
 	expect(result.plan?.slots.length).toBeGreaterThan(0);
 	expect(result.status.message).toBe('Plan von 10:00 Uhr');
+});
+
+it('liest Plan gegen Ist mit GET', async () => {
+	reply(review);
+	const result = await api.planReview();
+	expect(sent()).toMatchObject({ url: '/api/plan/review', method: 'GET' });
+	expect(result.day).toBe('2026-10-09');
+	expect(result.slots.filter((slot) => slot.planned && slot.actual)).toHaveLength(4);
 });
 
 it('fordert eine Neuplanung mit POST und CSRF-Token an', async () => {

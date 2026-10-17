@@ -39,6 +39,7 @@ const SCHEMAS: Record<string, v.GenericSchema> = {
 	decisions: s.DecisionsResponseSchema,
 	'decisions-latest': s.LatestDecisionsResponseSchema,
 	plan: s.PlanResponseSchema,
+	'plan-review': s.PlanReviewSchema,
 	'plan-grid-charge': s.GridChargeReplySchema,
 	'error-422': s.ValidationErrorSchema
 };

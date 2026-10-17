@@ -12,6 +12,24 @@ test('Gast sieht den Plan ohne Bedienung', async ({ page }) => {
 	await expect(page.getByRole('button', { name: 'Neu planen' })).toHaveCount(0);
 });
 
+test('Gast sieht die Karte „Plan gegen Ist (heute)“ mit einer Tabelle', async ({ page }) => {
+	await login(page, 'gast');
+	await page.goto('/zeitplan');
+	// die Demo-Welt hat für 09:00 bis 10:00 einen Plan (um 09:01) und die Abrechnung dazu
+	const card = page.locator('section', {
+		has: page.getByRole('heading', { name: 'Plan gegen Ist (heute)' })
+	});
+	await expect(card).toBeVisible();
+	const table = card.getByRole('table');
+	await expect(table).toBeVisible();
+	await expect(table.getByRole('columnheader', { name: 'Differenz' })).toBeVisible();
+	for (const label of ['Netzbezug', 'Einspeisung', 'Netzladen', 'Bezugskosten']) {
+		await expect(table.getByRole('rowheader', { name: label })).toBeVisible();
+	}
+	await expect(card.locator('canvas')).toBeVisible();
+	await expect(card.getByText('Plan gegen Ist ist nicht verfügbar.')).toHaveCount(0);
+});
+
 test('operator plans again', async ({ page }) => {
 	const watch = watchPage(page);
 	await login(page, 'bedienen');

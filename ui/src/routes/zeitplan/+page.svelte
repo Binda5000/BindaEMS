@@ -12,15 +12,30 @@
 	import { planBlocks } from '$lib/plan/model';
 	import PlanBlocks from '$lib/plan/PlanBlocks.svelte';
 	import PlanHeader from '$lib/plan/PlanHeader.svelte';
+	import PlanReview from '$lib/plan/PlanReview.svelte';
+	import { SOC_SERIES } from '$lib/plan/review';
 	import { Resource } from '$lib/resource.svelte';
 	import { canOperate } from '$lib/roles';
 	import { theme } from '$lib/theme.svelte';
+	import { localDayRange, todayVienna } from '$lib/time';
 
 	/** So oft fragt die Seite nach „Neu planen“, und so lange höchstens */
 	const POLL_MS = 2000;
 	const POLL_MAX_MS = 40_000;
 
+	const REVIEW_MS = 300_000;
+
 	const plan = new Resource((o) => api.plan(o), { intervalMs: 60_000 });
+	const review = new Resource((o) => api.planReview(o), { intervalMs: REVIEW_MS });
+	// der Ist-SOC gehört zum Tag der Antwort „Plan gegen Ist“ (den bestimmt der Server)
+	let socDay = todayVienna();
+	const soc = new Resource(
+		(o) => {
+			socDay = review.data?.day ?? todayVienna();
+			return api.history([SOC_SERIES], localDayRange(socDay), o);
+		},
+		{ intervalMs: REVIEW_MS }
+	);
 
 	let nowIso = $state(new Date().toISOString()); // „jetzt“ in den Diagrammen, jede Minute weiter
 	let replanning = $state(false);
@@ -30,11 +45,11 @@
 	let timer: ReturnType<typeof setTimeout> | undefined;
 
 	onMount(() => {
-		const stop = plan.start();
+		const stops = [plan.start(), review.start(), soc.start()];
 		const clock = setInterval(() => (nowIso = new Date().toISOString()), 60_000);
 		return () => {
 			stopped = true;
-			stop();
+			for (const stop of stops) stop();
 			clearInterval(clock);
 			clearTimeout(timer);
 		};
@@ -51,6 +66,12 @@
 	});
 	const priceOption = $derived(current ? planPriceOption(current, nowIso, palette) : null);
 	const socOption = $derived(current ? planSocOption(current, nowIso, palette) : null);
+
+	// kommt die Antwort mit einem anderen Tag als dem schon geladenen, den SOC dieses Tages holen
+	$effect(() => {
+		const day = review.data?.day;
+		if (day !== undefined && day !== socDay) void soc.refresh();
+	});
 
 	function failure(error: unknown): string {
 		return error instanceof ApiError ? error.detail : 'Unbekannter Fehler';
@@ -144,6 +165,8 @@
 	{:else if !plan.error}
 		<p class="muted">Lädt …</p>
 	{/if}
+
+	<PlanReview review={review.data} soc={soc.data} error={review.error} {palette} />
 </div>
 
 <style>

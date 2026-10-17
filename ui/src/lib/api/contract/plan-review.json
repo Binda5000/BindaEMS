@@ -1,0 +1,283 @@
+{
+  "day": "2026-10-09",
+  "slots": [
+    {
+      "start": "2026-10-08T22:00:00+00:00",
+      "planned": null,
+      "actual": null
+    },
+    {
+      "start": "2026-10-08T22:15:00+00:00",
+      "planned": null,
+      "actual": null
+    },
+    {
+      "start": "2026-10-08T22:30:00+00:00",
+      "planned": null,
+      "actual": null
+    },
+    {
+      "start": "2026-10-08T22:45:00+00:00",
+      "planned": null,
+      "actual": null
+    },
+    {
+      "start": "2026-10-08T23:00:00+00:00",
+      "planned": null,
+      "actual": null
+    },
+    {
+      "start": "2026-10-08T23:15:00+00:00",
+      "planned": null,
+      "actual": null
+    },
+    {
+      "start": "2026-10-08T23:30:00+00:00",
+      "planned": null,
+      "actual": null
+    },
+    {
+      "start": "2026-10-08T23:45:00+00:00",
+      "planned": null,
+      "actual": null
+    },
+    {
+      "start": "2026-10-09T00:00:00+00:00",
+      "planned": null,
+      "actual": null
+    },
+    {
+      "start": "2026-10-09T00:15:00+00:00",
+      "planned": null,
+      "actual": null
+    },
+    {
+      "start": "2026-10-09T00:30:00+00:00",
+      "planned": null,
+      "actual": null
+    },
+    {
+      "start": "2026-10-09T00:45:00+00:00",
+      "planned": null,
+      "actual": null
+    },
+    {
+      "start": "2026-10-09T01:00:00+00:00",
+      "planned": null,
+      "actual": null
+    },
+    {
+      "start": "2026-10-09T01:15:00+00:00",
+      "planned": null,
+      "actual": null
+    },
+    {
+      "start": "2026-10-09T01:30:00+00:00",
+      "planned": null,
+      "actual": null
+    },
+    {
+      "start": "2026-10-09T01:45:00+00:00",
+      "planned": null,
+      "actual": null
+    },
+    {
+      "start": "2026-10-09T02:00:00+00:00",
+      "planned": null,
+      "actual": null
+    },
+    {
+      "start": "2026-10-09T02:15:00+00:00",
+      "planned": null,
+      "actual": null
+    },
+    {
+      "start": "2026-10-09T02:30:00+00:00",
+      "planned": null,
+      "actual": null
+    },
+    {
+      "start": "2026-10-09T02:45:00+00:00",
+      "planned": null,
+      "actual": null
+    },
+    {
+      "start": "2026-10-09T03:00:00+00:00",
+      "planned": null,
+      "actual": null
+    },
+    {
+      "start": "2026-10-09T03:15:00+00:00",
+      "planned": null,
+      "actual": null
+    },
+    {
+      "start": "2026-10-09T03:30:00+00:00",
+      "planned": null,
+      "actual": null
+    },
+    {
+      "start": "2026-10-09T03:45:00+00:00",
+      "planned": null,
+      "actual": null
+    },
+    {
+      "start": "2026-10-09T04:00:00+00:00",
+      "planned": null,
+      "actual": null
+    },
+    {
+      "start": "2026-10-09T04:15:00+00:00",
+      "planned": null,
+      "actual": null
+    },
+    {
+      "start": "2026-10-09T04:30:00+00:00",
+      "planned": null,
+      "actual": null
+    },
+    {
+      "start": "2026-10-09T04:45:00+00:00",
+      "planned": null,
+      "actual": null
+    },
+    {
+      "start": "2026-10-09T05:00:00+00:00",
+      "planned": null,
+      "actual": null
+    },
+    {
+      "start": "2026-10-09T05:15:00+00:00",
+      "planned": null,
+      "actual": null
+    },
+    {
+      "start": "2026-10-09T05:30:00+00:00",
+      "planned": null,
+      "actual": null
+    },
+    {
+      "start": "2026-10-09T05:45:00+00:00",
+      "planned": null,
+      "actual": null
+    },
+    {
+      "start": "2026-10-09T06:00:00+00:00",
+      "planned": null,
+      "actual": null
+    },
+    {
+      "start": "2026-10-09T06:15:00+00:00",
+      "planned": null,
+      "actual": null
+    },
+    {
+      "start": "2026-10-09T06:30:00+00:00",
+      "planned": null,
+      "actual": null
+    },
+    {
+      "start": "2026-10-09T06:45:00+00:00",
+      "planned": null,
+      "actual": null
+    },
+    {
+      "start": "2026-10-09T07:00:00+00:00",
+      "planned": {
+        "intent": "EIGENVERBRAUCH",
+        "grid_charge_w": 0.0,
+        "soc_end_pct": 57.443,
+        "import_w": 0.0,
+        "export_w": 0.0,
+        "battery_w": 3124.737,
+        "import_cost_ct": 0.0,
+        "plan_id": 2,
+        "source": "optimizer"
+      },
+      "actual": {
+        "import_w": 1780.0,
+        "export_w": 160.0,
+        "battery_w": 600.0,
+        "grid_charge_w": 0.0,
+        "import_cost_ct": 16.626
+      }
+    },
+    {
+      "start": "2026-10-09T07:15:00+00:00",
+      "planned": {
+        "intent": "EIGENVERBRAUCH",
+        "grid_charge_w": 0.0,
+        "soc_end_pct": 60.03,
+        "import_w": 0.0,
+        "export_w": 0.0,
+        "battery_w": 3309.993,
+        "import_cost_ct": 0.0,
+        "plan_id": 2,
+        "source": "optimizer"
+      },
+      "actual": {
+        "import_w": 1700.0,
+        "export_w": 200.0,
+        "battery_w": 800.0,
+        "grid_charge_w": 0.0,
+        "import_cost_ct": 15.878
+      }
+    },
+    {
+      "start": "2026-10-09T07:30:00+00:00",
+      "planned": {
+        "intent": "EIGENVERBRAUCH",
+        "grid_charge_w": 0.0,
+        "soc_end_pct": 63.01,
+        "import_w": 0.0,
+        "export_w": 0.0,
+        "battery_w": 3811.291,
+        "import_cost_ct": 0.0,
+        "plan_id": 2,
+        "source": "optimizer"
+      },
+      "actual": {
+        "import_w": 1620.0,
+        "export_w": 240.0,
+        "battery_w": 1000.0,
+        "grid_charge_w": 0.0,
+        "import_cost_ct": 15.131
+      }
+    },
+    {
+      "start": "2026-10-09T07:45:00+00:00",
+      "planned": {
+        "intent": "EIGENVERBRAUCH",
+        "grid_charge_w": 0.0,
+        "soc_end_pct": 66.433,
+        "import_w": 0.0,
+        "export_w": 0.0,
+        "battery_w": 4378.632,
+        "import_cost_ct": 0.0,
+        "plan_id": 2,
+        "source": "optimizer"
+      },
+      "actual": {
+        "import_w": 1540.0,
+        "export_w": 280.0,
+        "battery_w": 1200.0,
+        "grid_charge_w": 0.0,
+        "import_cost_ct": 14.384
+      }
+    }
+  ],
+  "totals": {
+    "planned": {
+      "import_kwh": 0.0,
+      "export_kwh": 0.0,
+      "grid_charge_kwh": 0.0,
+      "import_cost_eur": 0.0
+    },
+    "actual": {
+      "import_kwh": 1.66,
+      "export_kwh": 0.22,
+      "grid_charge_kwh": 0.0,
+      "import_cost_eur": 0.62
+    }
+  }
+}

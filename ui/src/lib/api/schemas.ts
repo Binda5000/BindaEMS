@@ -905,6 +905,56 @@ export const PlanResponseSchema = v.object({
 });
 export type PlanResponse = v.InferOutput<typeof PlanResponseSchema>;
 
+// --- Plan gegen Ist (Plan 3c) ------------------------------------------------------------
+
+/** Der Slot des damals gültigen Plans; Leistungen sind Mittelwerte der Viertelstunde in W */
+export const ReviewPlannedSchema = v.object({
+	intent: BatteryIntentKindSchema,
+	grid_charge_w: v.number(),
+	/** geplanter SOC am Ende der Viertelstunde */
+	soc_end_pct: v.number(),
+	import_w: v.number(),
+	export_w: v.number(),
+	battery_w: v.number(),
+	import_cost_ct: v.number(),
+	plan_id: v.nullable(v.number()),
+	source: v.picklist(['optimizer', 'fallback'])
+});
+export type ReviewPlanned = v.InferOutput<typeof ReviewPlannedSchema>;
+
+/** Die Abrechnung der Viertelstunde; ohne Bezugspreis sind die Kosten `null` */
+export const ReviewActualSchema = v.object({
+	import_w: v.number(),
+	export_w: v.number(),
+	battery_w: v.number(),
+	grid_charge_w: v.number(),
+	import_cost_ct: NullableNumber
+});
+export type ReviewActual = v.InferOutput<typeof ReviewActualSchema>;
+
+/** Summen über die Viertelstunden mit Plan und Ist; Kosten `null` ohne bekannten Bezugspreis */
+export const ReviewTotalsSchema = v.object({
+	import_kwh: v.number(),
+	export_kwh: v.number(),
+	grid_charge_kwh: v.number(),
+	import_cost_eur: NullableNumber
+});
+export type ReviewTotals = v.InferOutput<typeof ReviewTotalsSchema>;
+
+/** Antwort von `GET /api/plan/review`: die vergangenen Viertelstunden des Tages */
+export const PlanReviewSchema = v.object({
+	day: DateText,
+	slots: v.array(
+		v.object({
+			start: Iso,
+			planned: v.nullable(ReviewPlannedSchema),
+			actual: v.nullable(ReviewActualSchema)
+		})
+	),
+	totals: v.object({ planned: ReviewTotalsSchema, actual: ReviewTotalsSchema })
+});
+export type PlanReview = v.InferOutput<typeof PlanReviewSchema>;
+
 /** Antwort von `PUT /api/plan/grid-charge` */
 export const GridChargeReplySchema = v.object({
 	grid_charge_allowed: v.boolean(),

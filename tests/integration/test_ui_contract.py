@@ -40,6 +40,7 @@ GET_ENDPOINTS = {
     "decisions": "/api/decisions",
     "decisions-latest": "/api/decisions/latest",
     "plan": "/api/plan",
+    "plan-review": "/api/plan/review",
 }
 OTHER = {
     "live-hello",

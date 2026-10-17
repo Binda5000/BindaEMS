@@ -182,6 +182,8 @@ export const api = {
 
 	// Zeitplan des Akkus (Neuplanung und Netzladen: Operator)
 	plan: (o?: Load): Promise<s.PlanResponse> => get('/api/plan', s.PlanResponseSchema, o),
+	/** Plan gegen Ist für heute (der Tag ist der des Servers) */
+	planReview: (o?: Load): Promise<s.PlanReview> => get('/api/plan/review', s.PlanReviewSchema, o),
 	replan: async (): Promise<void> => {
 		await request('POST', '/api/plan/replan'); // 202 {queued: true}
 	},
