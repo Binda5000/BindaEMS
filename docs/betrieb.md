@@ -150,8 +150,10 @@ Zugangsdaten und keine Daten der Anlage; die Datenquelle wählst du beim Import.
 Das Dashboard zeigt vier Zeilen. Der Zeitraum oben gilt für alle Panels außer der letzten Zeile;
 die Zeitzone ist `Europe/Vienna`.
 
-- „Leistung“: die mittlere Leistung (Summe der Phasen) von Netz, PV, Akku, Lasten und Wallboxen
-  aus der Retention Policy `raw`.
+- „Leistung“: die mittlere Leistung (Summe der Phasen) von Netz, PV gesamt, Haus (Verbrauch), Akku
+  und Wallboxen aus der Retention Policy `raw`; PV gesamt und Haus sind die abgeleiteten Werte des
+  core (`pv_total`, `house_load`), einzeln gemessene Lasten kommen als „Einzellast“ dazu. Die PV
+  je Wechselrichter fehlt absichtlich, sie würde doppelt zählen.
 - „Ladestand“: der Ladestand des Akkus und der Fahrzeuge aus `raw`.
 - „Preise“: Bezugspreis brutto und Einspeisevergütung in ct/kWh je Viertelstunde aus `long`. Die
   Preise von morgen erscheinen, sobald sie geholt sind und der Zeitraum bis morgen reicht.

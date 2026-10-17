@@ -17,7 +17,7 @@ import yaml
 from tests.unit.shared.test_decisions import decision
 
 from bindaems.app.control import decisions as decisions_module
-from bindaems.core.telemetry.sampler import RULES
+from bindaems.core.telemetry.sampler import DERIVED_FIELDS, RULES
 
 DASHBOARD = Path("deploy/grafana/bindaems.json")
 SOURCES = Path("src/bindaems")
@@ -52,7 +52,8 @@ KNOWN = {
 }
 # Werte von Tags, die das Dashboard festlegt
 TAG_VALUES = {
-    ("power", "source"): {"grid", "pv", "battery", "load", "wallbox"},
+    ("power", "source"): {"grid", "pv", "battery", "load", "wallbox", "derived"},
+    ("power", "id"): {"house_load", "pv_total"},  # Festlegungen; die übrigen ids sind Geräte
     ("power", "phase"): {"total"},
     ("price", "kind"): {"import_gross", "feed_in"},
 }
@@ -155,8 +156,12 @@ def test_the_rows_hold_the_expected_data() -> None:
             by_row[current] += [target["query"] for target in panel["targets"]]
     joined = {row: "\n".join(queries) for row, queries in by_row.items()}
     assert set(joined) == set(ROWS)
-    for source in ("grid", "pv", "battery", "load", "wallbox"):
+    for source in ("grid", "battery", "load", "wallbox", "derived"):
         assert f"\"source\" = '{source}'" in joined["Leistung"], source
+    # Haus und PV gesamt aus den abgeleiteten Reihen; die PV je Gerät nicht zusätzlich (doppelt)
+    for derived in ("house_load", "pv_total"):
+        assert f"\"id\" = '{derived}'" in joined["Leistung"], derived
+    assert "\"source\" = 'pv'" not in joined["Leistung"]
     assert "\"phase\" = 'total'" in joined["Leistung"]
     assert 'FROM "raw"."power"' in joined["Leistung"]
     assert 'FROM "raw"."soc"' in joined["Ladestand"]
@@ -248,7 +253,11 @@ def test_known_list_matches_the_writers() -> None:
         assert {rule.field for rule in rules} == KNOWN[measurement].fields
         assert {tag for rule in rules for tag in rule.tags} == KNOWN[measurement].tags
     sources = {rule.tags["source"] for rule in RULES if rule.measurement == "power"}
-    assert TAG_VALUES[("power", "source")] <= sources
+    # `derived` steht nicht in RULES: der Sampler schreibt es aus DERIVED_FIELDS (ohne „_w“)
+    derived = {name.removesuffix("_w") for name in DERIVED_FIELDS}
+    assert TAG_VALUES[("power", "source")] - {"derived"} <= sources
+    assert "derived" not in sources
+    assert TAG_VALUES[("power", "id")] <= derived
     # decision: Tags und Felder des Punkts, den die app schreibt, und seine Retention Policy
     point = decisions_module._point(decision(id="x"))
     assert point.measurement == "decision"

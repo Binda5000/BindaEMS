@@ -695,3 +695,5 @@ def test_grafana_section_in_the_guide_matches_the_dashboard() -> None:
     for topic in ("`raw`", "`long`", "90 Tage", "Entscheidungen", "Europe/Vienna"):
         assert topic in text, topic
     assert "keine Zugangsdaten" in text
+    for topic in ("PV gesamt", "Haus (Verbrauch)", "`pv_total`", "`house_load`", "„Einzellast“"):
+        assert topic in text, topic

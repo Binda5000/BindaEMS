@@ -40,7 +40,7 @@
   "timezone": "Europe/Vienna",
   "editable": true,
   "graphTooltip": 1,
-  "schemaVersion": 41,
+  "schemaVersion": 39,
   "version": 1,
   "refresh": "1m",
   "time": {
@@ -89,7 +89,7 @@
       "type": "timeseries",
       "id": 2,
       "title": "Leistungen",
-      "description": "Mittlere Leistung aus den Rohdaten (Retention Policy raw, 90 Tage): Netz, PV, Akku, Lasten und Wallboxen, jeweils die Summe aller Phasen. Die Vorzeichen sind die der Messung.",
+      "description": "Mittlere Leistung aus den Rohdaten (Retention Policy raw, 90 Tage): Netz, PV gesamt, Haus (Verbrauch), Akku, einzeln gemessene Lasten und Wallboxen, jeweils die Summe aller Phasen. PV gesamt und Haus sind die vom Regler abgeleiteten Werte. Die Vorzeichen sind die der Messung.",
       "datasource": {
         "type": "influxdb",
         "uid": "${DS_BINDAEMS}"
@@ -148,10 +148,10 @@
             "uid": "${DS_BINDAEMS}"
           },
           "refId": "B",
-          "query": "SELECT mean(\"p_w\") FROM \"raw\".\"power\" WHERE \"source\" = 'pv' AND \"phase\" = 'total' AND $timeFilter GROUP BY time($__interval), \"id\" fill(null)",
+          "query": "SELECT mean(\"p_w\") FROM \"raw\".\"power\" WHERE \"source\" = 'derived' AND \"id\" = 'pv_total' AND \"phase\" = 'total' AND $timeFilter GROUP BY time($__interval) fill(null)",
           "rawQuery": true,
           "resultFormat": "time_series",
-          "alias": "PV $tag_id"
+          "alias": "PV gesamt"
         },
         {
           "datasource": {
@@ -159,6 +159,17 @@
             "uid": "${DS_BINDAEMS}"
           },
           "refId": "C",
+          "query": "SELECT mean(\"p_w\") FROM \"raw\".\"power\" WHERE \"source\" = 'derived' AND \"id\" = 'house_load' AND \"phase\" = 'total' AND $timeFilter GROUP BY time($__interval) fill(null)",
+          "rawQuery": true,
+          "resultFormat": "time_series",
+          "alias": "Haus"
+        },
+        {
+          "datasource": {
+            "type": "influxdb",
+            "uid": "${DS_BINDAEMS}"
+          },
+          "refId": "D",
           "query": "SELECT mean(\"p_w\") FROM \"raw\".\"power\" WHERE \"source\" = 'battery' AND \"phase\" = 'total' AND $timeFilter GROUP BY time($__interval) fill(null)",
           "rawQuery": true,
           "resultFormat": "time_series",
@@ -169,18 +180,18 @@
             "type": "influxdb",
             "uid": "${DS_BINDAEMS}"
           },
-          "refId": "D",
+          "refId": "E",
           "query": "SELECT mean(\"p_w\") FROM \"raw\".\"power\" WHERE \"source\" = 'load' AND \"phase\" = 'total' AND $timeFilter GROUP BY time($__interval), \"id\" fill(null)",
           "rawQuery": true,
           "resultFormat": "time_series",
-          "alias": "Last $tag_id"
+          "alias": "Einzellast $tag_id"
         },
         {
           "datasource": {
             "type": "influxdb",
             "uid": "${DS_BINDAEMS}"
           },
-          "refId": "E",
+          "refId": "F",
           "query": "SELECT mean(\"p_w\") FROM \"raw\".\"power\" WHERE \"source\" = 'wallbox' AND \"phase\" = 'total' AND $timeFilter GROUP BY time($__interval), \"id\" fill(null)",
           "rawQuery": true,
           "resultFormat": "time_series",
