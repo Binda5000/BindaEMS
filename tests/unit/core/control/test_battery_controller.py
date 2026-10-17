@@ -21,7 +21,7 @@ from bindaems.core.control.phase_guard import GuardCause
 from bindaems.core.control.plan_exec import ActiveSlot
 from bindaems.core.safety.types import Outcome, Verdict
 from bindaems.shared.config import Config
-from bindaems.shared.control import VICTRON, Command, CommandKind
+from bindaems.shared.control import VICTRON, Command, CommandKind, SupportIntent
 from bindaems.shared.decisions import DecisionResult
 from bindaems.shared.plan import BatteryIntent, BatteryIntentKind
 
@@ -41,6 +41,8 @@ IDLE = {
     "support": None,
     "bridging_s": None,
     "refresh_age_s": None,
+    "support_soc_pct": None,
+    "support_source": None,
 }
 
 
@@ -401,6 +403,8 @@ def test_locked_victron_gets_nothing_and_forgets(cfg, held) -> None:  # Review F
         "support": "soc",
         "bridging_s": None,
         "refresh_age_s": None,
+        "support_soc_pct": None,
+        "support_source": None,
     }
     foreign = {**FREE, **held, "present": {SETPOINT: 2000.0}}
     assert battery.decide(at(2), need(0.0), **foreign) == []  # auch kein „kein Override“
@@ -434,6 +438,8 @@ def test_unknown_need_keeps_the_override_without_refresh(cfg, unknown) -> None: 
         "support": support,
         "bridging_s": None,
         "refresh_age_s": 240.0,
+        "support_soc_pct": None,
+        "support_source": None,
     }
     [found] = battery.decide(at(241), need(2050.0), **FREE)
     assert found.command == setpoint(2000.0, "battery_comp", refresh=True)
@@ -558,6 +564,8 @@ def test_health_of_the_battery(cfg) -> None:
         "support": "soc",
         "bridging_s": None,
         "refresh_age_s": 10.0,
+        "support_soc_pct": None,
+        "support_source": None,
     }
     bridging = BatteryNeed(0.0, 0.0, 2100.0, {"evcs": 2100.0}, {"evcs": 0.0}, "time", 950.0)
     assert battery.decide(at(11), bridging, **FREE) == []
@@ -712,3 +720,81 @@ def test_locked_victron_gets_nothing_under_a_plan(cfg) -> None:
     battery = BatteryController(cfg)
     assert battery.decide(T0, found_need, **{**FREE, "locked": True}, active=HOLD_SLOT) == []
     assert (battery.health()["state"], battery.health()["target_w"]) == ("locked", 1800.0)
+
+
+# --- Unterstützung mit Plan-Schwelle und Schalter (Plan 3c, Präzisierung 8) -----------------------
+
+PV_AND_BOOST = (
+    BatteryCar("twc", Effective.PV, 4000.0, True),
+    BatteryCar("evcs", Effective.BOOST, 2000.0, True),
+)
+
+
+def threshold_slot(support_soc_pct: float) -> ActiveSlot:
+    """Ein gültiger Slot im Eigenverbrauch mit dieser Plan-Schwelle."""
+    return ActiveSlot(1, T0, BatteryIntent(), None, None, support_soc_pct)
+
+
+@pytest.mark.parametrize("active", [HOLD_SLOT, grid_charge_slot(2000.0)])
+def test_hold_blocks_support_with_reason_plan(cfg, active) -> None:  # Entscheidung 3
+    # Bei HALTEN und NETZLADEN gibt der Akku nichts ab, auch nicht an Boost: Alles kommt aus dem
+    # Netz, und der Netzanteil je Auto ist sein ganzer Fehlbetrag.
+    found = BatteryController(cfg).assess(T0, 80.0, 500.0, 500.0, PV_AND_BOOST, active=active)
+    assert found is not None
+    assert found.support == "plan"
+    assert found.allowed_w == {"twc": 0.0, "evcs": 0.0}
+    assert found.grid_w == found.deficit_w == {"twc": 4000.0, "evcs": 2000.0}
+
+
+def test_self_consumption_keeps_the_support_and_boost_from_the_battery(cfg) -> None:
+    for active in (None, EV_SLOT):
+        found = BatteryController(cfg).assess(T0, 80.0, 500.0, 500.0, PV_AND_BOOST, active=active)
+        assert found is not None
+        assert (found.support, found.allowed_w) == ("on", {"twc": 3000.0, "evcs": 2000.0})
+        assert found.grid_w == {"twc": 1000.0, "evcs": 0.0}
+
+
+def test_support_switched_off_gives_the_support_cars_nothing(cfg) -> None:
+    # Der Schalter sperrt nur die Unterstützung; Boost lädt im Eigenverbrauch weiter aus dem Akku.
+    off = SupportIntent(allowed=False)
+    found = BatteryController(cfg).assess(T0, 80.0, 500.0, 500.0, PV_AND_BOOST, support=off)
+    assert found is not None
+    assert (found.support, found.allowed_w) == ("off", {"twc": 0.0, "evcs": 2000.0})
+
+
+def test_assess_follows_the_effective_threshold(cfg) -> None:
+    cars = (BatteryCar("evcs", Effective.MIN_PV, 2760.0, True),)
+    planned = BatteryController(cfg).assess(T0, 80.0, 0.0, 500.0, cars, active=threshold_slot(82.0))
+    assert planned is not None
+    assert (planned.support, planned.allowed_w) == ("soc", {"evcs": 0.0})  # unter 82 %
+    own = SupportIntent(soc_pct=85.0)
+    found = BatteryController(cfg).assess(T0, 84.0, 0.0, 500.0, cars, support=own)
+    assert found is not None
+    assert found.support == "soc"
+    found = BatteryController(cfg).assess(
+        T0, 60.0, 0.0, 500.0, cars, support=own.model_copy(update={"soc_pct": 55.0})
+    )
+    assert found is not None
+    assert found.support == "on"
+
+
+def test_health_shows_the_effective_threshold_and_source(cfg) -> None:
+    battery = BatteryController(cfg)
+    cars = (BatteryCar("evcs", Effective.MIN_PV, 2760.0, True),)
+
+    def shown() -> tuple[object, object]:
+        health = battery.health()
+        return health["support_soc_pct"], health["support_source"]
+
+    assert shown() == (None, None)  # vor dem ersten Zyklus
+    battery.assess(T0, 80.0, 0.0, 500.0, cars)
+    assert shown() == (70.0, "config")
+    battery.assess(at(1), 80.0, 0.0, 500.0, cars, support=SupportIntent(soc_pct=75.0))
+    assert shown() == (75.0, "intent")
+    battery.assess(at(2), 80.0, 0.0, 500.0, cars, active=threshold_slot(82.0))
+    assert shown() == (82.0, "plan")
+    # Die Schwelle hängt an keiner Messung: Auch ohne PV ist sie bekannt.
+    assert battery.assess(at(3), 80.0, None, 500.0, cars) is None
+    assert shown() == (70.0, "config")
+    battery.idle()
+    assert battery.health() == IDLE

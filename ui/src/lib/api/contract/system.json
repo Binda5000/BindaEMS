@@ -201,7 +201,9 @@
         "override_w": null,
         "support": "soc",
         "bridging_s": null,
-        "refresh_age_s": null
+        "refresh_age_s": null,
+        "support_soc_pct": 70.0,
+        "support_source": "config"
       },
       "peak": {
         "state": "off",

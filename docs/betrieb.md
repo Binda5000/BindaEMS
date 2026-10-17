@@ -2584,19 +2584,26 @@ Den **erlaubten Akku-Anteil** bestimmt der Modus des Autos:
 - **Unterstützung** heißt: Der Akku liefert Autos in PV-Überschuss und Min+PV ihren Fehlbetrag, bis
   zu `support_max_w` (3 kW). Sie gilt, wenn
   - ein Auto in einem dieser Modi steht (sonst zeigt Health `mode`),
-  - der SOC `support_soc_pct` (70 %) erreicht hat und seitdem nicht unter `support_soc_pct −
-    support_hysteresis_pct` (65 %) gefallen ist (sonst `soc`); ein unbekannter SOC sperrt sie im
+  - „Akku-Unterstützung erlaubt“ in der Absicht an ist (`support.allowed`, sonst `off`),
+  - der gültige Slot des Plans nicht `HALTEN` oder `NETZLADEN` will (sonst `plan`): Dann gibt der
+    Akku keinem Auto etwas, auch nicht in Boost, und jedes Auto lädt ganz aus dem Netz,
+  - der SOC die wirksame Schwelle erreicht hat und seitdem nicht unter Schwelle minus
+    `support_hysteresis_pct` (5 %) gefallen ist (sonst `soc`); ein unbekannter SOC sperrt sie im
     Zyklus, ändert den Stand der Hysterese aber nicht, und
   - die Überbrückung noch keine `support_max_s` (900 s) dauert (sonst `time`).
+- **Wirksame Schwelle:** die Unterstützungsschwelle der Absicht (`support.soc_pct`), ohne Angabe
+  `support_soc_pct` (70 %); liegt die Plan-Schwelle des gültigen Slots höher, gilt sie. Die
+  Hysterese folgt der Schwelle jedes Zyklus: Steigt sie, gilt das neue Band sofort. Health zeigt sie
+  als `battery.support_soc_pct`, ihre Quelle als `battery.support_source`.
 - **Überbrückung:** Sie beginnt mit dem ersten Zyklus, in dem die Autos in PV-Überschuss und Min+PV
   zusammen mindestens 100 W Fehlbetrag haben (die Hälfte des Totbands), und endet nach 60 s ohne.
   Nach `support_max_s` ist die Unterstützung gesperrt, bis sie endet. In PV-Überschuss senkt die
   Laderegelung dann ohnehin auf den echten Überschuss, in Min+PV kommt der Mindeststrom aus dem Netz.
-- **Unter der Schwelle** (SOC unter 70 %) holt der core den Fehlbetrag aus dem Netz: Der Akku bleibt
-  aus dem Auto heraus, etwa in den Lücken unter Wolken (im Simulator, `akku-wolkig`: 0,06 % der Energie
-  des e-Golf kommen aus dem Akku).
+- **Unter der Schwelle** (SOC unter der wirksamen Schwelle, ohne Plan und Einstellung 70 %) holt der
+  core den Fehlbetrag aus dem Netz: Der Akku bleibt aus dem Auto heraus, etwa in den Lücken unter
+  Wolken (im Simulator, `akku-wolkig`: 0,06 % der Energie des e-Golf kommen aus dem Akku).
 - **Nach einer Pause** der Regelung (Regelbetrieb aus, SAFE, OBSERVE) beginnt der Stand neu: Der SOC
-  muss `support_soc_pct` wieder erreichen.
+  muss die wirksame Schwelle wieder erreichen.
 - **Totband** (`control.setpoint_deadband_w`, 200 W): Ein Override entsteht erst, wenn der gewollte
   Netzbezug mindestens 200 W erreicht, und fällt weg („kein Override“), sobald er unter die Hälfte
   (100 W) sinkt. Dazwischen ändert er sich erst, wenn der neue Wert mindestens 200 W vom letzten
@@ -2813,7 +2820,9 @@ bei der festen Grenze von 8 kW):
     "override_w": 7700.0,
     "support": "soc",
     "bridging_s": 906.0,
-    "refresh_age_s": 10.0
+    "refresh_age_s": 10.0,
+    "support_soc_pct": 70.0,
+    "support_source": "config"
   },
   "peak": {
     "state": "active",
@@ -2834,8 +2843,10 @@ Was fehlt, ist `null`. Das UI zeigt diese Werte nicht.
 | `battery.state` | `ok`: Das Ziel ist bekannt, der Akku-Sollwert rechnet. `unknown`: Das Ziel ist unbekannt, weil ein Wert fehlt (PV, Hauslast, Leistung eines ladenden Autos, Basis-Sollwert); es geht kein Befehl hinaus. `locked`: Victron ist gesperrt oder nicht steuerbar, es geht kein Befehl hinaus. `idle`: Die Regelung ruht, oder es gab noch keinen Zyklus. |
 | `battery.target_w` | der gewollte Netzbezug nach dem Wächter (`W'`) in W, ohne den Basis-Sollwert; `null`, wenn er unbekannt ist |
 | `battery.override_w` | der letzte eigene Override in W, mit dem Basis-Sollwert (`override_w` ≈ Basis + `target_w`); `null` ohne einen und für „kein Override“. Innerhalb des Totbands weicht er davon ab. Es ist der angeforderte Wert, vor den Regeln 2 und 4 der Safety-Schicht: Der Cerbo kann weniger halten, etwa 8000 W, wenn 17 940 W angefordert waren. Was er hält, zeigt `inputs.actual_setpoint_w` der Entscheidungen an `victron`. |
-| `battery.support` | Stand der Unterstützung: `on` (gilt), `mode` (kein Auto in PV-Überschuss oder Min+PV), `soc` (SOC unter der Schwelle oder unbekannt), `time` (Überbrückung länger als `support_max_s`). Gilt sie nicht, steht der erste zutreffende Grund in der Reihenfolge `mode`, `soc`, `time`. |
+| `battery.support` | Stand der Unterstützung: `on` (gilt), `mode` (kein Auto in PV-Überschuss oder Min+PV), `off` („Akku-Unterstützung erlaubt“ ist aus), `plan` (der Plan will `HALTEN` oder `NETZLADEN`), `soc` (SOC unter der wirksamen Schwelle oder unbekannt), `time` (Überbrückung länger als `support_max_s`). Gilt sie nicht, steht der erste zutreffende Grund in der Reihenfolge `mode`, `off`, `plan`, `soc`, `time`. |
 | `battery.bridging_s` | Sekunden der laufenden Überbrückung; `null` ohne |
+| `battery.support_soc_pct` | die wirksame Schwelle der Unterstützung in % (oben, „Wirksame Schwelle“); `null` ohne Zyklus |
+| `battery.support_source` | woher sie kommt: `config` (`support_soc_pct`), `intent` (Unterstützungsschwelle der Absicht), `plan` (Plan-Schwelle des gültigen Slots, höher als die eigene); `null` ohne Zyklus |
 | `battery.refresh_age_s` | Sekunden vom letzten Urteil mit Wert über den eigenen Override bis zum letzten Zyklus; er steigt bis zum Auffrischen und beginnt dann neu. `null` ohne Override. |
 | `peak.state` | `off`: kein Ziel. `gap`: Die Viertelstunde ist lückenhaft, oder die Regelung ruht; auch vor dem ersten Zyklus. `active`: Der Wächter rechnet. `exceeded`: Die Viertelstunde ist überschritten (auch während einer Lücke). |
 | `peak.target_kw` | das Ziel in kW; `null` ohne |

@@ -57,7 +57,14 @@ from bindaems.core.control.plan_exec import ActiveSlot, active_slot, plan_health
 from bindaems.core.safety.limits import HardLimits
 from bindaems.core.safety.types import Verdict
 from bindaems.shared.config import Config
-from bindaems.shared.control import VICTRON, ChargeMode, Command, CommandKind, GuestIntent
+from bindaems.shared.control import (
+    VICTRON,
+    ChargeMode,
+    Command,
+    CommandKind,
+    GuestIntent,
+    SupportIntent,
+)
 from bindaems.shared.domain import Alarm
 from bindaems.shared.plan import IntentPlan
 from bindaems.shared.timeutil import slot_end
@@ -128,7 +135,9 @@ class Regulation:
         Als Erstes bestimmt der Zyklus den gültigen Slot des Plans der Absicht zur Wanduhr
         (``active_slot``, Plan 3c, Präzisierung 5); ``active`` und ``health()["plan"]`` zeigen ihn.
         Wächter und Override bekommen ihn: Bei ``HALTEN`` und ``NETZLADEN`` ändert er den gewollten
-        Netzbezug (``plan_wanted_w``, Präzisierung 7).
+        Netzbezug (``plan_wanted_w``, Präzisierung 7). Der Bedarf (``assess``) bekommt ihn mit der
+        Akku-Unterstützung der Absicht (Präzisierung 8): Plan-Schwelle, Schalter und die Sperre bei
+        ``HALTEN`` und ``NETZLADEN``.
         """
         charge = inputs.charge
         plan = None if charge.intent is None else charge.intent.plan
@@ -136,10 +145,19 @@ class Regulation:
         self._plan = plan_health(plan, self._active, charge.wall_now)
         commands = self.charger.step(charge, self._peak)
         guest = (GuestIntent() if charge.intent is None else charge.intent.guest).mode
+        support = SupportIntent() if charge.intent is None else charge.intent.support
         views = self.charger.cars()
         cars = battery_cars(self._cfg, views, charge.wallboxes, guest)
         battery = self.battery
-        need = battery.assess(charge.now, charge.grid.soc_pct, inputs.pv_w, inputs.house_w, cars)
+        need = battery.assess(
+            charge.now,
+            charge.grid.soc_pct,
+            inputs.pv_w,
+            inputs.house_w,
+            cars,
+            support=support,
+            active=self._active,
+        )
         controllable = charge.controllable.get(VICTRON) is True
         locked = bool(inputs.locks.get(VICTRON))
         base_w = inputs.base_setpoint_w
@@ -317,7 +335,9 @@ def peak_cars(cars: Sequence[CarView], need: BatteryNeed | None) -> list[PeakCar
 
     ``cars`` kommt aus ``ChargeController.cars``, in der Reihenfolge der Priorität; der Rang ist
     die Stelle darin, 0 die höchste, auch wenn ein Auto davor fehlt. Der Netzanteil ist der von
-    ``need`` für die Wallbox (``BatteryNeed.grid_w``, Präzisierung 11), ohne Bedarf 0 W.
+    ``need`` für die Wallbox (``BatteryNeed.grid_w``, Präzisierung 11), ohne Bedarf 0 W. Bei
+    ``HALTEN`` und ``NETZLADEN`` ist er der ganze Fehlbetrag, auch in Boost: Der Akku liefert dann
+    keinem Auto etwas (``BatteryController.assess``, Plan 3c, Entscheidung 3).
 
     - **Ungeregelt, nicht in Boost:** Das Auto fehlt. Eine Grenze wirkte an seinem Ladepunkt nicht,
       und was es ihr nicht folgte, stünde bis zum Ende der Viertelstunde aus (``pending_w``) und

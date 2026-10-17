@@ -57,9 +57,10 @@ class HealthReport(BaseModel):
     - ``battery``: der Stand des Akku-Sollwerts (``BatteryController.health``, Plan 2c-2a):
       ``state`` (``ok``, ``unknown``, ``locked``, ``idle``), ``target_w`` (gewollter Netzbezug
       nach dem 15-min-Wächter), ``override_w`` (der letzte eigene Override), ``support`` (``on``,
-      ``soc``, ``time``, ``mode``), ``bridging_s`` (Sekunden der laufenden Überbrückung) und
-      ``refresh_age_s`` (Sekunden seit dem letzten Urteil mit Wert über den Override); was fehlt,
-      ist ``null``
+      ``soc``, ``time``, ``mode``, ``off``, ``plan``), ``bridging_s`` (Sekunden der laufenden
+      Überbrückung), ``refresh_age_s`` (Sekunden seit dem letzten Urteil mit Wert über den
+      Override), ``support_soc_pct`` (die wirksame Schwelle der Unterstützung) und
+      ``support_source`` (``config``, ``intent``, ``plan``; Plan 3c); was fehlt, ist ``null``
     - ``peak``: der Stand des 15-min-Wächters (``PeakGuard.health``, Plan 2c-2a): ``state``
       (``off``, ``gap``, ``active``, ``exceeded``), ``target_kw`` (das Ziel), ``energy_kwh`` (der
       Netzbezug der Viertelstunde bisher, ohne Boost), ``projected_kw`` (die Hochrechnung),

@@ -7,7 +7,7 @@ import pytest
 from tests.helpers import T0
 from tests.unit.core.control.charge_helpers import CONTROLLABLE, evcs, grid, inputs, tesla, twc
 
-from bindaems.core.control.battery import BatteryCar, BatteryNeed
+from bindaems.core.control.battery import BatteryCar, BatteryController, BatteryNeed
 from bindaems.core.control.charge_inputs import ChargeInputs
 from bindaems.core.control.charge_modes import Effective
 from bindaems.core.control.charging import CarView, ChargeController
@@ -39,6 +39,7 @@ from bindaems.shared.control import (
     CommandKind,
     GuestIntent,
     Intent,
+    SupportIntent,
     VehicleIntent,
 )
 from bindaems.shared.decisions import DecisionResult
@@ -825,3 +826,57 @@ def test_guard_sees_the_plan_target(cfg, monkeypatch) -> None:
         VICTRON, CommandKind.GRID_SETPOINT, 4720.0, reasons=("plan_grid_charge",)
     )
     assert found[-1].inputs["plan_grid_charge_w"] == 3000.0
+
+
+# --- Unterstützung und Wächter unter dem Plan (Plan 3c, Präzisierung 8, Entscheidung 3) -----------
+
+HOLD = ActiveSlot(1, T0, BatteryIntent(kind=BatteryIntentKind.HALTEN), None, None, None)
+
+
+def guard_shares(cfg: Config, view: CarView, active: ActiveSlot | None) -> list[float]:
+    """Der Netzanteil, den der Wächter für ``view`` bekommt, mit dem Bedarf bei SOC 80 %, ohne PV
+    und mit 500 W Hauslast."""
+    cars = battery_cars(cfg, (view,), {"twc": twc()}, ChargeMode.PV)
+    need = BatteryController(cfg).assess(T0, 80.0, 0.0, 500.0, cars, active=active)
+    return [car.grid_w for car in peak_cars((view,), need)]
+
+
+def test_under_hold_the_guard_counts_a_support_car_fully_from_the_grid(cfg) -> None:
+    # Der e-Golf in Min+PV mit 2760 W: Im Eigenverbrauch liefert der Akku alles (SOC 80 %), bei
+    # HALTEN ist die Unterstützung gesperrt, und der ganze Fehlbetrag kommt aus dem Netz.
+    view = CarView("egolf", "evcs", Effective.MIN_PV, 2760.0, True, 2760.0, True)
+    assert guard_shares(cfg, view, None) == [0.0]
+    assert guard_shares(cfg, view, HOLD) == [2760.0]
+    assert guard_shares(cfg, view, grid_charge(3000.0)) == [2760.0]
+
+
+def test_under_hold_the_guard_counts_a_boost_car_fully_from_the_grid(cfg) -> None:
+    # Boost darf im Eigenverbrauch aus dem Akku laden (Netzanteil 0), bei HALTEN und NETZLADEN
+    # lädt er aus dem Netz (Entscheidung 3).
+    view = CarView("egolf", "evcs", Effective.BOOST, 7360.0, True, 2760.0, False)
+    assert guard_shares(cfg, view, None) == [0.0]
+    assert guard_shares(cfg, view, HOLD) == [7360.0]
+    assert guard_shares(cfg, view, grid_charge(3000.0)) == [7360.0]
+
+
+def test_regulation_hands_the_support_and_the_slot_to_the_battery(cfg) -> None:
+    # Um 10:05 gilt Eigenverbrauch, um 10:20 HALTEN; an der EVCS lädt nichts in PV-Überschuss,
+    # der SOC ist 60 %.
+    regulation = Regulation(cfg, HardLimits.from_config(cfg), started=T0)
+    intent = Intent(version=1, control=True, plan=PLAN, support=SupportIntent(soc_pct=50.0))
+
+    def cycle(s: int, given: Intent) -> dict[str, Any]:
+        charge = inputs(cfg, s=s, intent=given)
+        regulation.step(RegulationInputs(charge, pv_w=0.0, house_w=500.0, base_setpoint_w=0.0))
+        battery: dict[str, Any] = regulation.health()["battery"]
+        return battery
+
+    found = cycle(5 * 60, intent)
+    assert (found["support"], found["support_soc_pct"], found["support_source"]) == (
+        "on",
+        50.0,
+        "intent",
+    )
+    assert cycle(20 * 60, intent)["support"] == "plan"
+    off = intent.model_copy(update={"support": SupportIntent(allowed=False)})
+    assert cycle(21 * 60, off)["support"] == "off"

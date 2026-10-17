@@ -1,5 +1,6 @@
 import math
 from datetime import datetime, timedelta
+from typing import TypedDict
 
 from tests.helpers import T0
 
@@ -10,9 +11,13 @@ from bindaems.core.control.battery import (
     Support,
     allowed,
     deficits,
+    effective_threshold,
 )
 from bindaems.core.control.charge_modes import Effective
+from bindaems.core.control.plan_exec import ActiveSlot
 from bindaems.shared.config import ControlConfig
+from bindaems.shared.control import SupportIntent
+from bindaems.shared.plan import BatteryIntent
 
 
 def car(
@@ -28,8 +33,16 @@ def at(seconds: float) -> datetime:
     return T0 + timedelta(seconds=seconds)
 
 
+class Cycle(TypedDict):
+    """Schwelle und Schalter eines Zyklus für ``Support.update``."""
+
+    threshold_pct: float
+    allowed: bool
+
+
 CARS = [car(mode=Effective.MIN_PV)]  # ein Auto, für das die Unterstützung gelten kann
 DEFICIT = {"evcs": 500.0}  # weit über der Schwelle von 100 W
+AT_70 = Cycle(threshold_pct=70.0, allowed=True)  # die Schwelle aus der Konfiguration, erlaubt
 
 
 def test_constants() -> None:
@@ -116,36 +129,47 @@ def test_negative_car_power_counts_as_zero() -> None:
 def test_support_needs_70_percent_and_ends_below_65() -> None:
     support, cars, deficit = Support(ControlConfig()), [car(mode=Effective.MIN_PV)], {"evcs": 500.0}
     socs = [69.9, 70.0, 65.0, 64.9, 69.0, 70.0]
-    found = [support.update(at(s), soc, cars, deficit)[0] for s, soc in enumerate(socs)]
+    found = [support.update(at(s), soc, cars, deficit, **AT_70)[0] for s, soc in enumerate(socs)]
     assert found == ["soc", "on", "on", "soc", "soc", "on"]
 
 
 def test_unknown_soc_blocks_without_resetting_the_hysteresis() -> None:
     support = Support(ControlConfig())
     socs = [72.0, None, 66.0]  # „on“, im Zyklus gesperrt, im Band weiter „on“
-    found = [support.update(at(s), soc, CARS, DEFICIT)[0] for s, soc in enumerate(socs)]
+    found = [support.update(at(s), soc, CARS, DEFICIT, **AT_70)[0] for s, soc in enumerate(socs)]
     assert found == ["on", "soc", "on"]
 
 
 def test_unknown_soc_does_not_start_the_support_either() -> None:
     support = Support(ControlConfig())
     socs = [None, 66.0, None, 70.0]
-    found = [support.update(at(s), soc, CARS, DEFICIT)[0] for s, soc in enumerate(socs)]
+    found = [support.update(at(s), soc, CARS, DEFICIT, **AT_70)[0] for s, soc in enumerate(socs)]
     assert found == ["soc", "soc", "soc", "on"]
 
 
 def test_a_soc_that_is_not_a_finite_number_is_unknown() -> None:
     support = Support(ControlConfig())
     socs = [72.0, math.nan, math.inf, -math.inf, 66.0]
-    found = [support.update(at(s), soc, CARS, DEFICIT)[0] for s, soc in enumerate(socs)]
+    found = [support.update(at(s), soc, CARS, DEFICIT, **AT_70)[0] for s, soc in enumerate(socs)]
     assert found == ["on", "soc", "soc", "soc", "on"]
 
 
-def test_soc_thresholds_follow_the_config() -> None:
-    support = Support(ControlConfig(support_soc_pct=50.0, support_hysteresis_pct=10.0))
+def test_soc_thresholds_follow_the_threshold_and_the_config() -> None:
+    support = Support(ControlConfig(support_hysteresis_pct=10.0))
+    at_50 = Cycle(threshold_pct=50.0, allowed=True)
     socs = [49.9, 50.0, 40.0, 39.9, 49.0, 50.0]
-    found = [support.update(at(s), soc, CARS, DEFICIT)[0] for s, soc in enumerate(socs)]
+    found = [support.update(at(s), soc, CARS, DEFICIT, **at_50)[0] for s, soc in enumerate(socs)]
     assert found == ["soc", "on", "on", "soc", "soc", "on"]
+
+
+def test_hysteresis_follows_the_moving_threshold() -> None:  # Plan 3c, Präzisierung 8
+    support = Support(ControlConfig())
+    assert support.update(at(0), 72.0, CARS, DEFICIT, **AT_70)[0] == "on"
+    at_80 = Cycle(threshold_pct=80.0, allowed=True)
+    assert support.update(at(1), 76.0, CARS, DEFICIT, **at_80)[0] == "on"  # nicht unter 80 − 5
+    assert support.update(at(2), 72.0, CARS, DEFICIT, **at_80)[0] == "soc"  # unter 75 %: gesperrt
+    assert support.update(at(3), 68.0, CARS, DEFICIT, **AT_70)[0] == "soc"  # erst ab 70 % wieder
+    assert support.update(at(4), 70.0, CARS, DEFICIT, **AT_70)[0] == "on"
 
 
 # --- Unterstützung: Überbrückung ------------------------------------------------------------------
@@ -156,7 +180,7 @@ def test_bridging_blocks_after_900_s_until_60_s_without_deficit() -> None:
     found = {}
     for second in range(962):
         deficit_w = 500.0 if second < 900 or second == 961 else 0.0
-        found[second] = support.update(at(second), 80.0, CARS, {"evcs": deficit_w})
+        found[second] = support.update(at(second), 80.0, CARS, {"evcs": deficit_w}, **AT_70)
     assert found[0] == ("on", 0.0)
     assert found[899] == ("on", 899.0)
     assert found[900] == ("time", 900.0)
@@ -169,56 +193,59 @@ def test_bridging_blocks_after_900_s_until_60_s_without_deficit() -> None:
 
 def test_time_blocks_for_as_long_as_the_deficit_lasts() -> None:
     support = Support(ControlConfig())
-    assert support.update(at(0), 80.0, CARS, DEFICIT) == ("on", 0.0)
-    assert support.update(at(5000), 80.0, CARS, DEFICIT) == ("time", 5000.0)
+    assert support.update(at(0), 80.0, CARS, DEFICIT, **AT_70) == ("on", 0.0)
+    assert support.update(at(5000), 80.0, CARS, DEFICIT, **AT_70) == ("time", 5000.0)
 
 
 def test_the_longest_bridging_follows_the_config() -> None:
     support = Support(ControlConfig(support_max_s=30.0))
-    assert support.update(at(0), 80.0, CARS, DEFICIT) == ("on", 0.0)
-    assert support.update(at(29), 80.0, CARS, DEFICIT) == ("on", 29.0)
-    assert support.update(at(30), 80.0, CARS, DEFICIT) == ("time", 30.0)
+    assert support.update(at(0), 80.0, CARS, DEFICIT, **AT_70) == ("on", 0.0)
+    assert support.update(at(29), 80.0, CARS, DEFICIT, **AT_70) == ("on", 29.0)
+    assert support.update(at(30), 80.0, CARS, DEFICIT, **AT_70) == ("time", 30.0)
 
 
 def test_a_deficit_within_60_s_continues_the_bridging_and_restarts_the_count() -> None:
     support = Support(ControlConfig())
-    assert support.update(at(0), 80.0, CARS, {"evcs": 500.0}) == ("on", 0.0)
-    assert support.update(at(10), 80.0, CARS, {"evcs": 0.0}) == ("on", 10.0)  # läuft noch
-    assert support.update(at(69), 80.0, CARS, {"evcs": 0.0}) == ("on", 69.0)  # 59 s ohne
-    assert support.update(at(70), 80.0, CARS, {"evcs": 500.0}) == ("on", 70.0)  # dieselbe
-    assert support.update(at(71), 80.0, CARS, {"evcs": 0.0}) == ("on", 71.0)  # die 60 s von vorn
-    assert support.update(at(130), 80.0, CARS, {"evcs": 0.0}) == ("on", 130.0)  # 59 s ohne
-    assert support.update(at(131), 80.0, CARS, {"evcs": 0.0}) == ("on", None)  # 60 s ohne
+    assert support.update(at(0), 80.0, CARS, {"evcs": 500.0}, **AT_70) == ("on", 0.0)
+    assert support.update(at(10), 80.0, CARS, {"evcs": 0.0}, **AT_70) == ("on", 10.0)  # läuft noch
+    assert support.update(at(69), 80.0, CARS, {"evcs": 0.0}, **AT_70) == ("on", 69.0)  # 59 s ohne
+    assert support.update(at(70), 80.0, CARS, {"evcs": 500.0}, **AT_70) == ("on", 70.0)  # dieselbe
+    assert support.update(at(71), 80.0, CARS, {"evcs": 0.0}, **AT_70) == (
+        "on",
+        71.0,
+    )  # die 60 s von vorn
+    assert support.update(at(130), 80.0, CARS, {"evcs": 0.0}, **AT_70) == ("on", 130.0)  # 59 s ohne
+    assert support.update(at(131), 80.0, CARS, {"evcs": 0.0}, **AT_70) == ("on", None)  # 60 s ohne
 
 
 def test_small_deficits_neither_start_nor_extend_the_bridging() -> None:
     support = Support(ControlConfig())
-    assert support.update(at(0), 80.0, CARS, {"evcs": 99.0}) == ("on", None)
-    assert support.update(at(1), 80.0, CARS, {"evcs": 100.0}) == ("on", 0.0)
+    assert support.update(at(0), 80.0, CARS, {"evcs": 99.0}, **AT_70) == ("on", None)
+    assert support.update(at(1), 80.0, CARS, {"evcs": 100.0}, **AT_70) == ("on", 0.0)
     # 99 W gelten als „ohne Fehlbetrag“: Nach 60 s davon ist die Überbrückung beendet.
-    assert support.update(at(2), 80.0, CARS, {"evcs": 99.0}) == ("on", 1.0)
-    assert support.update(at(61), 80.0, CARS, {"evcs": 99.0}) == ("on", 60.0)
-    assert support.update(at(62), 80.0, CARS, {"evcs": 99.0}) == ("on", None)
+    assert support.update(at(2), 80.0, CARS, {"evcs": 99.0}, **AT_70) == ("on", 1.0)
+    assert support.update(at(61), 80.0, CARS, {"evcs": 99.0}, **AT_70) == ("on", 60.0)
+    assert support.update(at(62), 80.0, CARS, {"evcs": 99.0}, **AT_70) == ("on", None)
 
 
 def test_the_deficit_threshold_is_half_the_setpoint_deadband() -> None:
     support = Support(ControlConfig(setpoint_deadband_w=400.0))
-    assert support.update(at(0), 80.0, CARS, {"evcs": 199.0}) == ("on", None)
-    assert support.update(at(1), 80.0, CARS, {"evcs": 200.0}) == ("on", 0.0)
+    assert support.update(at(0), 80.0, CARS, {"evcs": 199.0}, **AT_70) == ("on", None)
+    assert support.update(at(1), 80.0, CARS, {"evcs": 200.0}, **AT_70) == ("on", 0.0)
 
 
 def test_a_deficit_has_to_be_positive_even_with_the_smallest_deadband() -> None:
     # Das Totband liegt immer über 0 (``ControlConfig``); die Schwelle ist seine Hälfte.
     support = Support(ControlConfig(setpoint_deadband_w=0.1))
-    assert support.update(at(0), 80.0, CARS, {"evcs": 0.0}) == ("on", None)
-    assert support.update(at(1), 80.0, CARS, {"evcs": 0.05}) == ("on", 0.0)
+    assert support.update(at(0), 80.0, CARS, {"evcs": 0.0}, **AT_70) == ("on", None)
+    assert support.update(at(1), 80.0, CARS, {"evcs": 0.05}, **AT_70) == ("on", 0.0)
 
 
 def test_the_deficits_of_the_pv_and_min_pv_cars_add_up() -> None:
     support = Support(ControlConfig())
     cars = [car("a", Effective.PV), car("b", Effective.MIN_PV)]
-    assert support.update(at(0), 80.0, cars, {"a": 50.0, "b": 49.0}) == ("on", None)
-    assert support.update(at(1), 80.0, cars, {"a": 50.0, "b": 50.0}) == ("on", 0.0)
+    assert support.update(at(0), 80.0, cars, {"a": 50.0, "b": 49.0}, **AT_70) == ("on", None)
+    assert support.update(at(1), 80.0, cars, {"a": 50.0, "b": 50.0}, **AT_70) == ("on", 0.0)
 
 
 def test_only_cars_in_pv_or_min_pv_count_for_the_bridging() -> None:
@@ -229,11 +256,11 @@ def test_only_cars_in_pv_or_min_pv_count_for_the_bridging() -> None:
         car("d", Effective.OFF),
     ]
     deficit = {"a": 0.0, "b": 5000.0, "c": 4000.0, "d": 3000.0}
-    assert Support(ControlConfig()).update(at(0), 80.0, cars, deficit) == ("on", None)
+    assert Support(ControlConfig()).update(at(0), 80.0, cars, deficit, **AT_70) == ("on", None)
 
 
 def test_a_car_without_an_entry_has_no_deficit() -> None:
-    assert Support(ControlConfig()).update(at(0), 80.0, CARS, {}) == ("on", None)
+    assert Support(ControlConfig()).update(at(0), 80.0, CARS, {}, **AT_70) == ("on", None)
 
 
 # --- Unterstützung: Stand und Neubeginn -----------------------------------------------------------
@@ -241,40 +268,80 @@ def test_a_car_without_an_entry_has_no_deficit() -> None:
 
 def test_without_pv_or_min_pv_cars_the_reason_is_mode() -> None:
     support = Support(ControlConfig())
-    assert support.update(at(0), 80.0, [car(mode=Effective.NOW)], DEFICIT) == ("mode", None)
+    assert support.update(at(0), 80.0, [car(mode=Effective.NOW)], DEFICIT, **AT_70) == (
+        "mode",
+        None,
+    )
 
 
 def test_only_pv_and_min_pv_cars_make_the_support_possible() -> None:
     for mode in Effective:
-        found = Support(ControlConfig()).update(at(0), 80.0, [car(mode=mode)], DEFICIT)[0]
+        found = Support(ControlConfig()).update(at(0), 80.0, [car(mode=mode)], DEFICIT, **AT_70)[0]
         assert found == ("on" if mode in SUPPORT_MODES else "mode")
-    assert Support(ControlConfig()).update(at(0), 80.0, [], {}) == ("mode", None)
+    assert Support(ControlConfig()).update(at(0), 80.0, [], {}, **AT_70) == ("mode", None)
 
 
 def test_the_reason_names_mode_before_soc_before_time() -> None:
     support = Support(ControlConfig())
-    assert support.update(at(0), 80.0, CARS, DEFICIT) == ("on", 0.0)
-    assert support.update(at(900), 80.0, CARS, DEFICIT) == ("time", 900.0)
-    assert support.update(at(901), 60.0, CARS, DEFICIT) == ("soc", 901.0)  # SOC und Zeit sperren
+    assert support.update(at(0), 80.0, CARS, DEFICIT, **AT_70) == ("on", 0.0)
+    assert support.update(at(900), 80.0, CARS, DEFICIT, **AT_70) == ("time", 900.0)
+    assert support.update(at(901), 60.0, CARS, DEFICIT, **AT_70) == (
+        "soc",
+        901.0,
+    )  # SOC und Zeit sperren
     now_only = [car(mode=Effective.NOW)]
-    assert support.update(at(902), 60.0, now_only, DEFICIT) == ("mode", 902.0)  # dazu der Modus
+    assert support.update(at(902), 60.0, now_only, DEFICIT, **AT_70) == (
+        "mode",
+        902.0,
+    )  # dazu der Modus
+
+
+def test_support_switched_off_is_blocked_with_reason_off() -> None:  # Plan 3c, Präzisierung 8
+    support = Support(ControlConfig())
+    off = Cycle(threshold_pct=70.0, allowed=False)
+    assert support.update(T0, 90.0, CARS, DEFICIT, **off) == ("off", 0.0)
+    # Hysterese und Überbrückung laufen mit: Wieder erlaubt, gilt sie sofort, in derselben
+    # Überbrückung.
+    assert support.update(at(1), 68.0, CARS, DEFICIT, **AT_70) == ("on", 1.0)
+
+
+def test_the_plan_blocks_the_support_with_reason_plan() -> None:  # Plan 3c, Präzisierung 8
+    support = Support(ControlConfig())
+    assert support.update(T0, 90.0, CARS, DEFICIT, **AT_70, plan_blocks=True) == ("plan", 0.0)
+    assert support.update(at(1), 68.0, CARS, DEFICIT, **AT_70) == ("on", 1.0)
+
+
+def test_the_reason_names_mode_off_plan_soc_and_time_in_this_order() -> None:
+    support = Support(ControlConfig())
+    off = Cycle(threshold_pct=70.0, allowed=False)
+    now_only = [car(mode=Effective.NOW)]
+    assert support.update(at(0), 60.0, now_only, DEFICIT, **off, plan_blocks=True)[0] == "mode"
+    assert support.update(at(1), 60.0, CARS, DEFICIT, **off, plan_blocks=True)[0] == "off"
+    assert support.update(at(2), 60.0, CARS, DEFICIT, **AT_70, plan_blocks=True)[0] == "plan"
+    assert support.update(at(3), 60.0, CARS, DEFICIT, **AT_70)[0] == "soc"
 
 
 def test_the_soc_state_follows_the_cycles_without_a_support_car() -> None:
     support = Support(ControlConfig())
     now_only = [car(mode=Effective.NOW)]
-    assert support.update(at(0), 72.0, CARS, DEFICIT)[0] == "on"
-    assert support.update(at(1), 60.0, now_only, DEFICIT)[0] == "mode"  # fällt unter 65 %
-    assert support.update(at(2), 68.0, CARS, DEFICIT)[0] == "soc"  # erst ab 70 % wieder
+    assert support.update(at(0), 72.0, CARS, DEFICIT, **AT_70)[0] == "on"
+    assert support.update(at(1), 60.0, now_only, DEFICIT, **AT_70)[0] == "mode"  # fällt unter 65 %
+    assert support.update(at(2), 68.0, CARS, DEFICIT, **AT_70)[0] == "soc"  # erst ab 70 % wieder
 
 
 def test_reset_starts_over_with_the_soc_and_the_bridging() -> None:
     support = Support(ControlConfig())
-    assert support.update(at(0), 72.0, CARS, DEFICIT) == ("on", 0.0)
-    assert support.update(at(1000), 66.0, CARS, DEFICIT) == ("time", 1000.0)
+    assert support.update(at(0), 72.0, CARS, DEFICIT, **AT_70) == ("on", 0.0)
+    assert support.update(at(1000), 66.0, CARS, DEFICIT, **AT_70) == ("time", 1000.0)
     support.reset()
-    assert support.update(at(1001), 66.0, CARS, DEFICIT) == ("soc", 0.0)  # 70 % wieder erreichen
-    assert support.update(at(1002), 70.0, CARS, DEFICIT) == ("on", 1.0)  # neue Überbrückung
+    assert support.update(at(1001), 66.0, CARS, DEFICIT, **AT_70) == (
+        "soc",
+        0.0,
+    )  # 70 % wieder erreichen
+    assert support.update(at(1002), 70.0, CARS, DEFICIT, **AT_70) == (
+        "on",
+        1.0,
+    )  # neue Überbrückung
 
 
 # --- Erlaubter Akku-Anteil ------------------------------------------------------------------------
@@ -329,3 +396,35 @@ def test_without_a_limit_only_boost_gets_something() -> None:
 def test_a_car_without_an_entry_gets_nothing() -> None:
     cars = [car("a", Effective.PV), car("b", Effective.BOOST)]
     assert allowed(cars, {}, support_on=True, support_max_w=3000.0) == {"a": 0.0, "b": 0.0}
+
+
+# --- Wirksame Schwelle (Plan 3c, Präzisierung 8) --------------------------------------------------
+
+
+def slot_with(support_soc_pct: float | None) -> ActiveSlot:
+    """Ein gültiger Slot im Eigenverbrauch mit dieser Plan-Schwelle."""
+    return ActiveSlot(1, T0, BatteryIntent(), None, None, support_soc_pct)
+
+
+def test_plan_threshold_raises_the_effective_threshold() -> None:
+    control = ControlConfig()
+    assert effective_threshold(control, SupportIntent(), slot_with(82.0)) == (82.0, "plan")
+    assert effective_threshold(control, SupportIntent(soc_pct=60.0), slot_with(40.0)) == (
+        60.0,
+        "intent",
+    )
+    assert effective_threshold(control, SupportIntent(), None) == (70.0, "config")
+
+
+def test_the_plan_is_the_source_only_when_it_is_really_higher() -> None:
+    control = ControlConfig()
+    assert effective_threshold(control, SupportIntent(), slot_with(70.0)) == (70.0, "config")
+    assert effective_threshold(control, SupportIntent(), slot_with(None)) == (70.0, "config")
+    assert effective_threshold(control, SupportIntent(soc_pct=90.0), slot_with(82.0)) == (
+        90.0,
+        "intent",
+    )
+    assert effective_threshold(ControlConfig(support_soc_pct=50.0), SupportIntent(), None) == (
+        50.0,
+        "config",
+    )

@@ -222,6 +222,8 @@ async def test_health_shows_the_battery(runtime_env) -> None:
         "support": "soc",  # der Tesla am Wall Connector in PV-Überschuss; SOC unter 70 %
         "bridging_s": None,
         "refresh_age_s": 0.0,
+        "support_soc_pct": 70.0,
+        "support_source": "config",
     }
 
 

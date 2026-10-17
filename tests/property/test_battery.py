@@ -204,7 +204,11 @@ def run(support, samples):
     for second, soc, mode, deficit_w in samples:
         cars = [BatteryCar("evcs", mode, 0.0, True), BatteryCar("twc", Effective.BOOST, 0.0, True)]
         deficit = {"evcs": deficit_w, "twc": 5000.0}
-        answers.append(support.update(T0 + timedelta(seconds=second), soc, cars, deficit))
+        now = T0 + timedelta(seconds=second)
+        threshold_pct = CONTROL.support_soc_pct  # die Schwelle aus der Konfiguration, erlaubt
+        answers.append(
+            support.update(now, soc, cars, deficit, threshold_pct=threshold_pct, allowed=True)
+        )
     return answers
 
 
