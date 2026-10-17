@@ -70,6 +70,26 @@ def test_ingest_keeps_record_with_larger_coverage(ledger) -> None:
     assert ledger.slots(S, S + SLOT)[0].origin == "influx"
 
 
+def test_replacing_a_slot_zeroes_the_flows_it_no_longer_has(
+    ledger, prices_with_10ct, feed_in_7ct, sink
+) -> None:
+    estimate = {"pv>battery": 500.0, "grid>house": 200.0, "pv>grid": 100.0, "pv>house": 100.0}
+    assert ledger.ingest(SlotFlows(S, 0.0, estimate, {}), "estimate")
+    sink.points.clear()
+    assert ledger.ingest(SlotFlows(S, 900.0, {"pv>house": 300.0}, {}), "influx")
+    points = {p.tags["flow"]: p for p in sink.points}
+    assert {flow: p.fields for flow, p in points.items()} == {
+        "pv>house": {"kwh": 0.3},
+        "pv>battery": {"kwh": 0.0},  # die Schätzung hatte den Fluss, der echte Slot nicht
+        "grid>house": {"kwh": 0.0, "eur": 0.0},
+        "pv>grid": {"kwh": 0.0, "eur": 0.0},
+    }
+    assert all(p.ts == S and p.rp == "long" for p in points.values())
+    sink.points.clear()
+    assert not ledger.ingest(SlotFlows(S, 600.0, {"pv>battery": 1.0}, {}), "stream")
+    assert sink.points == []  # nicht ersetzt: nichts zu schreiben
+
+
 async def test_backfill_fills_slots_missed_while_app_was_down(ledger, respx_mock, reader) -> None:
     ledger.ingest(parse_slot_flows(MSG), "stream")
     route = respx_mock.get("http://influx.lan:8086/query").respond(

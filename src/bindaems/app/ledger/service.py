@@ -308,24 +308,43 @@ class LedgerService:
         }
         with self._lock, self._engine.begin() as conn:
             existing = conn.execute(
-                select(ledger_slot.c.covered_s).where(ledger_slot.c.slot_start == start)
+                select(ledger_slot.c.covered_s, ledger_slot.c.flows_wh).where(
+                    ledger_slot.c.slot_start == start
+                )
             ).first()
             if existing is not None and flows.covered_s <= existing.covered_s:
                 return False
+            gone: list[str] = []  # Flüsse des ersetzten Slots, die der neue nicht hat
             if existing is None:
                 conn.execute(insert(ledger_slot).values(slot_start=start, **values))
             else:
+                gone = sorted(set(existing.flows_wh or {}) - set(flows.flows_wh))
                 conn.execute(
                     update(ledger_slot).where(ledger_slot.c.slot_start == start).values(**values)
                 )
-        self._publish(start, flows.flows_wh, price)
+        self._publish(start, flows.flows_wh, price, gone)
         self._notify(start)
         return True
 
-    def _publish(self, start: datetime, flows_wh: Mapping[str, float], price: float | None) -> None:
-        """Punkte ``ledger`` je Fluss: kWh und, wo bekannt, Kosten (+) bzw. Erlös (−) in €."""
+    def _publish(
+        self,
+        start: datetime,
+        flows_wh: Mapping[str, float],
+        price: float | None,
+        gone: Sequence[str] = (),
+    ) -> None:
+        """Punkte ``ledger`` je Fluss: kWh und, wo bekannt, Kosten (+) bzw. Erlös (−) in €.
+
+        ``gone``: Flüsse eines ersetzten Slots, die der neue nicht hat. Sie bekommen 0 kWh (und
+        0 €, wenn der Fluss Kosten oder Erlös tragen kann), sonst blieben ihre alten Punkte in
+        Influx stehen."""
         if self._sink is None:
             return
+        for name in gone:
+            zero: dict[str, float] = {"kwh": 0.0}
+            if name.startswith("grid>") or name.endswith(">grid"):
+                zero["eur"] = 0.0
+            self._sink.write(Point("ledger", {"flow": name}, zero, start, rp=RP_LONG))
         settings = self._settings.current().settings
         feed_in = feed_in_price(start, settings.feed_in, settings.tariff)
         for name, wh in sorted(flows_wh.items()):
