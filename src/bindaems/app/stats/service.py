@@ -310,10 +310,7 @@ class StatsService:
         Schlüssel, ``guest``, ``unknown``. Einträge ohne Energie (Session ohne Ladung) entfallen."""
         start, end = local_day_slots(first)[0], local_day_slots(last)[-1] + SLOT
         by_vehicle = self._sessions.by_vehicle(start, end)
-        sessions: dict[str, int] = {}
-        for session in self._sessions.sessions(first, last):
-            key = session.vehicle or UNKNOWN
-            sessions[key] = sessions.get(key, 0) + 1
+        sessions = self._sessions.count_by_vehicle(first, last)
         configured = list(self._cfg.vehicles)
         extra = sorted(key for key in by_vehicle if key not in (*configured, GUEST, UNKNOWN))
         order = [*configured, *extra, GUEST, UNKNOWN]

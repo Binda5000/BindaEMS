@@ -16,9 +16,12 @@ aus einem Thread bzw. einem synchronen Route-Handler aufrufen.
 from __future__ import annotations
 
 import math
+from bisect import bisect_left
+from collections import Counter
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import date, datetime
+from itertools import accumulate
 from typing import Final
 
 from bindaems.app.charging.tracker import ChargingTracker, StoredSession
@@ -114,25 +117,61 @@ def wallbox_name(cfg: Config, names: Mapping[str, str], key: str) -> str:
     return wallbox_type_label(wallbox) if wallbox is not None else key
 
 
+class SessionLookup:
+    """Findet die Session eines Slots an einer Wallbox, ohne jede Session zu prüfen.
+
+    Je Wallbox liegen die Sessions nach Beginn sortiert; ``bisect`` liefert die, die vor dem
+    Slotende beginnen. Rückwärts geprüft endet die Suche, sobald keine frühere Session mehr über
+    den Slotbeginn hinaus reicht (laufendes Maximum der Enden). Eine offene Session endet bei
+    ``now``. Die Regel bleibt: größte Überdeckung, bei Gleichstand die spätere.
+    """
+
+    def __init__(self, sessions: Sequence[StoredSession], now: datetime) -> None:
+        grouped: dict[str, list[tuple[datetime, datetime, StoredSession]]] = {}
+        for session in sessions:
+            end = session.end if session.end is not None else now
+            grouped.setdefault(session.wallbox, []).append((session.start, end, session))
+        self._index: dict[
+            str,
+            tuple[list[datetime], list[datetime], list[tuple[datetime, datetime, StoredSession]]],
+        ] = {}
+        for wallbox, items in grouped.items():
+            items.sort(key=lambda item: item[0])
+            starts = [start for start, _, _ in items]
+            reach = list(accumulate((end for _, end, _ in items), max))
+            self._index[wallbox] = (starts, reach, items)
+
+    def at(self, wallbox: str, slot: datetime) -> StoredSession | None:
+        """Die Session an ``wallbox`` mit der größten Überdeckung des Slots; sonst ``None``."""
+        entry = self._index.get(wallbox)
+        if entry is None:
+            return None
+        starts, reach, items = entry
+        slot_end = slot + SLOT
+        best: StoredSession | None = None
+        best_key: tuple[float, datetime, int] | None = None
+        index = bisect_left(starts, slot_end)  # items[:index] beginnen vor dem Slotende
+        while index > 0:
+            index -= 1
+            if reach[index] <= slot:  # keine frühere Session reicht in den Slot
+                break
+            start, end, session = items[index]
+            overlap = (min(end, slot_end) - max(start, slot)).total_seconds()
+            if overlap <= 0:
+                continue
+            key = (overlap, start, session.id)
+            if best_key is None or key > best_key:
+                best, best_key = session, key
+        return best
+
+
 def slot_sessions(
     sessions: Sequence[StoredSession], wallbox: str, slot: datetime, now: datetime
 ) -> StoredSession | None:
     """Die Session an ``wallbox`` mit der größten Überdeckung des Slots (bei Gleichstand die
-    spätere); eine offene Session endet bei ``now``. Ohne Überdeckung ``None``."""
-    slot_end = slot + SLOT
-    best: StoredSession | None = None
-    best_key: tuple[float, datetime, int] | None = None
-    for session in sessions:
-        if session.wallbox != wallbox:
-            continue
-        end = session.end if session.end is not None else now
-        overlap = (min(end, slot_end) - max(session.start, slot)).total_seconds()
-        if overlap <= 0:
-            continue
-        key = (overlap, session.start, session.id)
-        if best_key is None or key > best_key:
-            best, best_key = session, key
-    return best
+    spätere); eine offene Session endet bei ``now``. Ohne Überdeckung ``None``. Für viele Slots
+    einmal ``SessionLookup`` bauen."""
+    return SessionLookup(sessions, now).at(wallbox, slot)
 
 
 def attribute(
@@ -145,6 +184,7 @@ def attribute(
     ``vehicle_key``). Jede übergebene Session kommt vor, auch ohne Energie."""
     per_session: dict[int, _Sum] = {session.id: _Sum() for session in sessions}
     per_vehicle: dict[str, _Sum] = {vehicle_key(session): _Sum() for session in sessions}
+    lookup = SessionLookup(sessions, now)
     for slot in slots:
         energy: dict[str, list[float]] = {}  # Wallbox → pv, Akku, Netz in Wh
         for name, wh in slot.flows_wh.items():
@@ -152,7 +192,7 @@ def attribute(
                 if wh > 0 and name.startswith(prefix):
                     energy.setdefault(name[len(prefix) :], [0.0, 0.0, 0.0])[index] += wh
         for wallbox, (pv_wh, battery_wh, grid_wh) in energy.items():
-            session = slot_sessions(sessions, wallbox, slot.slot_start, now)
+            session = lookup.at(wallbox, slot.slot_start)
             cost = _cost_ct(slot, costs.get(slot.slot_start), battery_wh, grid_wh)
             if session is not None:
                 per_session[session.id].add(pv_wh, battery_wh, grid_wh, cost)
@@ -231,6 +271,12 @@ class SessionService:
             )
             for session in found
         ]
+
+    def count_by_vehicle(self, first: date, last: date) -> dict[str, int]:
+        """Anzahl der Sessions je Auto (Schlüssel wie ``vehicle_key``), die die Tage ``first``
+        bis ``last`` (Wiener Zeit) überdecken; zählt nur, ohne Energie zuzuordnen."""
+        start, end = local_day_slots(first)[0], local_day_slots(last)[-1] + SLOT
+        return dict(Counter(vehicle_key(session) for session in self._tracker.sessions(start, end)))
 
     def by_vehicle(self, start: datetime, end: datetime) -> dict[str, FlowSplit]:
         """Energie und Kosten je Auto (``guest``, ``unknown``) in ``[start, end)``; die Energie

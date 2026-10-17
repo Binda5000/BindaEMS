@@ -404,3 +404,23 @@ def test_today_stats_are_unknown_without_data_or_prices(stats) -> None:
     result = stats.today()
     assert result.savings_today_eur is None and result.savings_month_eur is None
     assert result.autarky_today == 0.0
+
+
+def test_year_view_attributes_the_sessions_only_once(stats, engine, monkeypatch) -> None:
+    import bindaems.app.charging.sessions as sessions_module
+
+    calls: list[int] = []
+    original = sessions_module.attribute
+
+    def counted(*args, **kwargs):  # type: ignore[no-untyped-def]
+        calls.append(len(args[0]))
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(sessions_module, "attribute", counted)
+    add_session(engine, T0, T0 + SLOT, "tesla", "twc")
+    add_session(engine, T0 + SLOT, T0 + SLOT * 2, "tesla", "twc")
+    ingest(stats._ledger, T0, {"pv>wb:twc": 1000.0})
+    ingest(stats._ledger, T0 + SLOT, {"pv>wb:twc": 500.0})
+    [tesla] = stats.period("year", TODAY)["vehicles"]
+    assert (tesla["kwh"], tesla["sessions"]) == (1.5, 2)
+    assert len(calls) == 1  # nur die Summen je Auto; die Anzahl ohne Zuordnung

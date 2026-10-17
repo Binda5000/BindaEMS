@@ -229,3 +229,57 @@ def test_session_beyond_the_limit_still_wins_the_shared_slot(
     day = date(2026, 10, 9)
     [newest] = service.sessions(day, day, None, limit=1)
     assert newest.vehicle == "polestar" and newest.split.kwh == 0.25
+
+
+class _CountedSession(StoredSession):
+    """Zählt jeden Zugriff auf ``start``: ein Maß für die geprüften Überdeckungen."""
+
+    reads = 0
+
+    def __getattribute__(self, name: str):  # type: ignore[no-untyped-def]
+        if name == "start":
+            type(self).reads += 1
+        return super().__getattribute__(name)
+
+
+def test_attribution_does_not_scan_every_session_per_slot() -> None:
+    # 200 Tage mit je einer Session und Ladeenergie in jeder Viertelstunde
+    days = 200
+    sessions = [
+        _CountedSession(
+            day + 1,
+            "twc",
+            "tesla",
+            T0 + timedelta(days=day),
+            T0 + timedelta(days=day, hours=10),
+            T0 + timedelta(days=day, hours=10),
+        )
+        for day in range(days)
+    ]
+    slots = [led(T0 + SLOT * index, {"pv>wb:twc": 100.0}) for index in range(days * 96)]
+    _CountedSession.reads = 0
+    by_session, by_vehicle = attribute(slots, {}, sessions, T0 + timedelta(days=days))
+    # früher: jede Session je Slot (200 × 19 200); jetzt wenige je Slot
+    assert _CountedSession.reads <= 4 * (len(slots) + len(sessions))
+    assert by_vehicle["tesla"].kwh == pytest.approx(days * 40 * 0.1)
+    assert by_vehicle[UNKNOWN].kwh == pytest.approx(days * 56 * 0.1)
+    assert all(split.kwh == pytest.approx(4.0) for split in by_session.values())
+
+
+def test_count_by_vehicle_counts_without_attribution(
+    service, engine, ledger, clock, monkeypatch
+) -> None:
+    clock.advance(timedelta(hours=2))
+    add_session(engine, T0, T0 + SLOT)
+    add_session(engine, T0 + SLOT, T0 + SLOT * 2)
+    add_session(engine, T0 + SLOT * 2, T0 + SLOT * 3, "guest")
+    add_session(engine, T0 + SLOT * 3, None, "")  # unbekannt
+    add_session(engine, T0 - timedelta(days=2), T0 - timedelta(days=2) + SLOT)  # davor
+    ingest(ledger, T0, {"pv>wb:twc": 1000.0})
+
+    def no_attribution(*args, **kwargs):  # type: ignore[no-untyped-def]
+        raise AssertionError("Zählen braucht keine Zuordnung")
+
+    monkeypatch.setattr("bindaems.app.charging.sessions.attribute", no_attribution)
+    day = date(2026, 10, 9)
+    assert service.count_by_vehicle(day, day) == {"tesla": 2, GUEST: 1, UNKNOWN: 1}
