@@ -16,7 +16,7 @@ from bindaems.app.control.intent import CoreDown
 from bindaems.app.ha.entities import build_inputs
 from bindaems.app.runtime import AppRuntime
 from bindaems.shared.config import Config, Secrets
-from bindaems.shared.control import Intent
+from bindaems.shared.control import Intent, SupportIntent
 from bindaems.shared.decisions import decision_to_json
 from bindaems.shared.settings import PlanningSettings
 from bindaems.shared.timeutil import ManualClock
@@ -225,6 +225,21 @@ def test_runtime_wires_the_planning(runtime) -> None:
     assert runtime.planning.pending() == "settings"
 
 
+def test_runtime_wires_the_plan_sender(runtime) -> None:
+    # nach jeder Verbindung zum core gleicht der Sender den Plan ab
+    assert runtime.plan_sender.connected in runtime.live_feed.connect_handlers
+    assert runtime.live_feed.connect_handlers[0] == runtime.collector.catch_up
+
+
+def test_planning_takes_the_support_threshold_of_the_intent(runtime, cfg: Config) -> None:
+    assert runtime._support_soc_pct() == cfg.control.support_soc_pct  # noch keine Absicht
+    runtime.intents._cached = Intent(version=2)
+    assert runtime._support_soc_pct() == cfg.control.support_soc_pct  # Absicht ohne Schwelle
+    runtime.intents._cached = Intent(version=3, support=SupportIntent(soc_pct=85.0))
+    assert runtime._support_soc_pct() == 85.0
+    assert runtime.planning._support_pct() == 85.0
+
+
 def spy_nightly(runtime, monkeypatch) -> list[tuple]:
     calls: list[tuple] = []
     monkeypatch.setattr(
@@ -352,6 +367,7 @@ async def test_runtime_starts_and_stops_cleanly(runtime, respx_mock) -> None:
             and runtime.planning.status().unavailable is not None
         )
     )
+    assert "plan-sender" in {job.get_name() for job in runtime._tasks}
     await runtime.shutdown()
     await asyncio.wait_for(task, timeout=2)
     assert runtime.pipeline.status().last_attempt is not None  # Preise wurden versucht

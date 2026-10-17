@@ -249,7 +249,8 @@ class LiveFeed:
         self._handlers = list(slot_flows_handlers)
         self._decision_handlers = list(decision_handlers)
         self._mode_handlers = list(mode_handlers)
-        self._connect_handlers = list(connect_handlers)
+        # öffentlich: Dienste, die nach dem Feed entstehen, hängen sich an (Plan 3c, Task 10)
+        self.connect_handlers = list(connect_handlers)
         self._health_now = asyncio.Event()
         self._health_interval_s = health_interval_s
         self._sleep = sleep
@@ -348,7 +349,7 @@ class LiveFeed:
         Ein Fehler kommt ins Log. Der Stream wird erst danach weiter gelesen; die Nachrichten
         dazwischen puffert die Verbindung.
         """
-        await _run_handlers(self._connect_handlers, "connect")
+        await _run_handlers(self.connect_handlers, "connect")
 
     def _connected(self) -> None:
         if self._live.connected:

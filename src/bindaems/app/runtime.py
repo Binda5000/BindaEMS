@@ -52,6 +52,7 @@ from bindaems.app.history.series import build_catalog
 from bindaems.app.ledger.routes import ledger_router
 from bindaems.app.ledger.service import LedgerService
 from bindaems.app.planning.routes import planning_router
+from bindaems.app.planning.sender import PlanSender
 from bindaems.app.planning.service import PlanningService
 from bindaems.app.planning.store import PlanStore
 from bindaems.app.prices.pipeline import PricePipeline
@@ -205,7 +206,13 @@ class AppRuntime:
             self.live,
             self.plan_store,
             self._clock,
+            support_pct=self._support_soc_pct,
         )
+        # nach Planung und Absicht; hört selbst auf neue Pläne und geänderte Einstellungen
+        self.plan_sender = PlanSender(
+            self.intents, self.planning, self.settings, self.live, self._clock
+        )
+        self.live_feed.connect_handlers.append(self.plan_sender.connected)
         self.ha_values = HaValueCache(self.reader, ha_database) if ha_database is not None else None
         self.energy = EnergyCache(self.reader, self._clock, ha_database)
         self.ha_publisher: HaPublisher | None = None
@@ -319,6 +326,13 @@ class AppRuntime:
             "influx", False, f"InfluxDB nicht erreichbar: {kib:.0f} KiB warten im Puffer"
         )
 
+    def _support_soc_pct(self) -> float:
+        """Unterstützungsschwelle für die Planung: die der Absicht, sonst die Konfiguration."""
+        cached = self.intents.cached()
+        if cached is not None and cached.support.soc_pct is not None:
+            return cached.support.soc_pct
+        return self._cfg.control.support_soc_pct
+
     def _current_ha_inputs(self) -> HaInputs:
         if self._ha_inputs is None:  # der Publisher startet erst nach den ersten Werten
             raise RuntimeError("Werte für Home Assistant noch nicht bestimmt")
@@ -369,6 +383,7 @@ class AppRuntime:
             ("forecast", self._forecast_run),
             ("load-forecast", self.load_forecast.run),
             ("planning", self.planning.run),
+            ("plan-sender", self.plan_sender.run),
             ("influx-writer", self.influx_writer.run),
             ("ledger", self._ledger_loop),
             ("maintenance", self._maintenance_loop),

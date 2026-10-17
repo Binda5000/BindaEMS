@@ -83,6 +83,28 @@ async def test_replan_stores_optimizer_plan(service, store):
     assert len(plan.slots) == 96
 
 
+async def test_listeners_get_the_saved_plan(service):
+    heard = []
+    service.on_plan(lambda plan: heard.append((plan, service.current())))
+    plan = await service.replan("manual")
+    assert heard == [(plan, plan)]  # nach ``self._plan = saved``
+    assert plan.id is not None
+
+
+async def test_listener_errors_are_only_logged(service):
+    def broken(plan):
+        raise RuntimeError("Zuhörer kaputt")
+
+    heard = []
+    service.on_plan(broken)
+    service.on_plan(heard.append)
+    with capture_logs() as logs:
+        plan = await service.replan("manual")
+    assert heard == [plan] and service.current() == plan
+    assert service.status().last_error is None
+    assert any(entry["log_level"] == "error" for entry in logs)
+
+
 async def test_failed_solver_gives_fallback(service_with):
     service = service_with(solver=returns(OptimizerResult("timeout", (), {}, None, 30000)))
     plan = await service.replan("slot")

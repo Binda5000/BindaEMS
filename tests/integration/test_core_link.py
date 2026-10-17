@@ -13,14 +13,23 @@ import pytest
 import uvicorn
 from pydantic import SecretStr
 from tests.helpers import T0
+from tests.plan_helpers import sample_plan, until
+from tests.unit.app.planning.test_sender import FakePlanning
 from tests.unit.shared.test_decisions import decision
 
-from bindaems.app.core_link import CoreClient, CoreReply, CoreUnavailableError
+from bindaems.app.audit import AuditLog
+from bindaems.app.control.intent import IntentService
+from bindaems.app.core_link import CoreClient, CoreReply, CoreUnavailableError, LiveFeed, LiveState
+from bindaems.app.db.engine import migrate, open_database
+from bindaems.app.planning.sender import PlanSender
+from bindaems.app.settings.service import SettingsService
 from bindaems.core.api.app import AckReply, HealthReport, create_api
 from bindaems.core.control.intent import IntentReply
+from bindaems.shared.config import Config
 from bindaems.shared.control import Intent
 from bindaems.shared.decisions import Decision, DecisionResult
-from bindaems.shared.timeutil import LOCAL_TZ
+from bindaems.shared.plan import Plan, intent_plan
+from bindaems.shared.timeutil import LOCAL_TZ, ManualClock
 
 TOKEN = "x" * 32
 
@@ -35,6 +44,7 @@ class FakeView:
         self.decision_calls: list[tuple[datetime, int]] = []
         self.ack_reply = AckReply("accepted", "Quittiert.")
         self.acked: list[str] = []
+        self.hold_stream = False  # wahr: der Stream schickt weiter Zustände, bis die app geht
 
     def intent(self) -> Intent | None:
         return self.current
@@ -65,6 +75,9 @@ class FakeView:
     async def subscribe(self) -> AsyncIterator[AsyncIterator[dict[str, Any]]]:
         async def messages() -> AsyncIterator[dict[str, Any]]:
             yield {"type": "state", "data": self.state()}
+            while self.hold_stream:
+                await asyncio.sleep(0.02)
+                yield {"type": "state", "data": self.state()}
 
         yield messages()
 
@@ -189,3 +202,49 @@ async def test_new_calls_reject_a_wrong_token_as_unavailable(core_api) -> None:
             await client.decisions(T0, 1)
         with pytest.raises(CoreUnavailableError):
             await client.acknowledge("wallbox.evcs")
+
+
+def stored_plan() -> Plan:
+    plan = sample_plan("2026-10-16T10:01:00+00:00", ["10:00", "10:15", "10:30", "10:45"])
+    return plan.model_copy(update={"id": 7})
+
+
+async def test_client_submits_and_reads_an_intent_with_plan(core_api) -> None:
+    intent = Intent(version=5, plan=intent_plan(stored_plan(), grid_charge_allowed=False))
+    async with httpx.AsyncClient(trust_env=False) as http:
+        client = make_client(http, core_api)
+        reply = await client.submit_intent(intent)
+        assert (reply.status, reply.body["result"]) == (200, "accepted")
+        assert (await client.intent()) == intent
+
+
+async def test_reconnect_wakes_the_sender(core_api, cfg: Config, tmp_path) -> None:
+    # Die app verbindet sich mit dem core; danach geht der Plan ohne Warten auf den Takt hinaus.
+    core_api.view.hold_stream = True
+    clock = ManualClock(datetime.fromisoformat("2026-10-16T10:05:00+00:00"))
+    engine = open_database(tmp_path / "app.sqlite3")
+    migrate(engine)
+    audit = AuditLog(engine, clock)
+    settings = SettingsService(engine, clock, audit)
+    async with httpx.AsyncClient(trust_env=False) as http:
+        client = make_client(http, core_api)
+        live = LiveState()
+        feed = LiveFeed(client, live, clock)
+        intents = IntentService(client, live, feed, audit, clock, cfg)
+        plan = stored_plan()
+        sender = PlanSender(intents, FakePlanning(plan), settings, live, clock, interval_s=3600.0)  # type: ignore[arg-type]
+        feed.connect_handlers.append(sender.connected)
+        sending = asyncio.create_task(sender.run())
+        await asyncio.sleep(0.05)  # erster Abgleich vor der Verbindung: nichts gesendet
+        assert core_api.view.submitted == []
+        linking = asyncio.create_task(feed.run())
+        try:
+            await until(lambda: bool(core_api.view.submitted))
+        finally:
+            for task in (sending, linking):
+                task.cancel()
+            await asyncio.gather(sending, linking, return_exceptions=True)
+            core_api.view.hold_stream = False
+    assert core_api.view.submitted[0].plan == intent_plan(plan, grid_charge_allowed=False)
+    assert audit.recent() == []
+    engine.dispose()

@@ -5,6 +5,7 @@ from typing import Any
 import pytest
 from structlog.testing import capture_logs
 from tests.app_helpers import T_APP
+from tests.plan_helpers import sample_plan
 from tests.unit.app.control.conftest import FakeCoreClient, FakeFeed
 
 from bindaems.app.audit import AuditLog
@@ -20,6 +21,7 @@ from bindaems.app.control.intent import (
     SetControl,
     SetGuestMode,
     SetMode,
+    SetPlan,
     SetPriority,
     UnknownTarget,
     boost_until,
@@ -35,11 +37,18 @@ from bindaems.shared.control import (
     VehicleIntent,
 )
 from bindaems.shared.influx.lineprotocol import epoch_ms
+from bindaems.shared.plan import IntentPlan, intent_plan
 
 
 def health(*vehicles: dict[str, Any], intent_version: int | None = 1) -> dict[str, Any]:
     """Health, dessen letzter Regelzyklus die Absicht ``intent_version`` benutzte."""
     return {"intent_version": intent_version, "vehicles": list(vehicles)}
+
+
+def plan_of(plan_id: int = 7) -> IntentPlan:
+    """Bindender Teil eines gespeicherten Plans von ``T_APP`` (vier Slots)."""
+    plan = sample_plan(T_APP.isoformat(), ["08:00", "08:15", "08:30", "08:45"])
+    return intent_plan(plan.model_copy(update={"id": plan_id}), grid_charge_allowed=False)
 
 
 def shown(key: str, **fields: Any) -> dict[str, Any]:
@@ -466,3 +475,33 @@ async def test_live_needs_authorization_against_the_base_of_each_attempt(
     result = await service.apply(granted, actor="admin", source="ui")
     assert result.intent.actuators["victron"] is ActuatorMode.LIVE
     assert len(fake_client.sent) == 2
+
+
+async def test_operator_change_keeps_the_plan(
+    service: IntentService, fake_client: FakeCoreClient
+) -> None:
+    # Review Focus 1: eine Bedienung baut auf der gültigen Absicht samt Plan auf
+    fake_client.valid = Intent(version=1, plan=plan_of())
+    result = await service.apply(SetMode("tesla", ChargeMode.NOW), actor="admin", source="ui")
+    assert fake_client.sent[-1].plan == plan_of()
+    assert result.intent.vehicles["tesla"].mode is ChargeMode.NOW
+
+
+async def test_set_plan_replaces_the_plan_and_keeps_the_rest(
+    service: IntentService, fake_client: FakeCoreClient
+) -> None:
+    fake_client.valid = Intent(version=1, control=True, plan=plan_of(7))
+    result = await service.apply(SetPlan(plan_of(8)), actor="planung", source="system")
+    assert result.intent.plan == plan_of(8)
+    assert result.intent.control is True
+    assert result.version == epoch_ms(T_APP)
+    result = await service.apply(SetPlan(None), actor="planung", source="system")
+    assert result.intent.plan is None
+
+
+async def test_plan_change_writes_no_audit_entry(
+    service: IntentService, audit: AuditLog, feed: FakeFeed
+) -> None:
+    await service.apply(SetPlan(plan_of()), actor="planung", source="system")
+    assert audit.recent() == []
+    assert feed.refreshed == 1  # Health folgt wie nach jeder Änderung

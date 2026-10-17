@@ -187,10 +187,16 @@ class PlanningService:
         self._seen_settings = settings.current().settings
         settings.on_change(self._on_settings)
         self._plan = store.latest()
+        self._plan_listeners: list[Callable[[Plan], None]] = []
 
     def current(self) -> Plan | None:
         """Der zuletzt erzeugte Plan, auch wenn er abgelaufen ist."""
         return self._plan
+
+    def on_plan(self, listener: Callable[[Plan], None]) -> None:
+        """Ruft ``listener`` mit jedem neuen Plan, sobald er gespeichert und aktuell ist (Task 10,
+        Übergabe an den core); Fehler des Zuhörers kommen nur ins Log."""
+        self._plan_listeners.append(listener)
 
     def status(self) -> PlanningStatus:
         return PlanningStatus(self._running, self._unavailable, self._last_error)
@@ -437,6 +443,11 @@ class PlanningService:
             solve_ms=result.solve_ms,
             reason=saved.fallback_reason,
         )
+        for listener in list(self._plan_listeners):
+            try:
+                listener(saved)
+            except Exception:  # ein Zuhörer darf den Lauf nicht scheitern lassen
+                log.exception("Reaktion auf den neuen Plan fehlgeschlagen")
         return saved
 
     async def _solve(self, inputs: PlanInputs) -> OptimizerResult:

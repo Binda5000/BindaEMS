@@ -4,6 +4,7 @@ Jede Bedienung ist eine Änderung an der gültigen Absicht. ``derive`` leitet si
 die gültige Absicht des core (ohne sie ``Intent(version=1)``), davon werden ein abgelaufener Boost
 und eine beendete Übersteuerung entfernt, dann kommt die Änderung, zuletzt die Version. Der
 ``IntentService`` holt die Absicht, sendet die abgeleitete und führt Änderungen nacheinander aus.
+Den Plan (``SetPlan``, Plan 3c) setzt die Planung; er kommt nicht ins Änderungsprotokoll.
 """
 
 from __future__ import annotations
@@ -28,6 +29,7 @@ from bindaems.shared.control import (
     VehicleIntent,
 )
 from bindaems.shared.influx.lineprotocol import epoch_ms
+from bindaems.shared.plan import IntentPlan
 from bindaems.shared.timeutil import Clock
 
 log = structlog.get_logger(__name__)
@@ -94,7 +96,27 @@ class SetActuators:
     authorized_live: frozenset[str] = frozenset()
 
 
-Change = SetControl | SetMode | SetBoost | SetAssignment | SetGuestMode | SetPriority | SetActuators
+@dataclass(frozen=True)
+class SetPlan:
+    """Bindender Teil des Akkuplans (Plan 3c, Entscheidung 1); ``None`` entfernt den Plan.
+
+    Ohne Prüfung gegen die Konfiguration, ohne Freigabe und ohne Eintrag im Änderungsprotokoll:
+    Der Nachweis ist das Plan-Archiv der app.
+    """
+
+    plan: IntentPlan | None
+
+
+Change = (
+    SetControl
+    | SetMode
+    | SetBoost
+    | SetAssignment
+    | SetGuestMode
+    | SetPriority
+    | SetActuators
+    | SetPlan
+)
 
 
 def boost_until(now: datetime) -> datetime:
@@ -187,6 +209,8 @@ def _apply(change: Change, base: Intent, now: datetime) -> Intent:
             return base.model_copy(update={"priority": list(priority), "surplus_priority": surplus})
         case SetActuators(modes=modes):
             return base.model_copy(update={"actuators": {**base.actuators, **modes}})
+        case SetPlan(plan=plan):
+            return base.model_copy(update={"plan": plan})
     return base.model_copy(update={"vehicles": vehicles})
 
 
@@ -264,8 +288,9 @@ def _vehicle(intent: Intent, key: str) -> VehicleIntent:
     return intent.vehicles.get(key, VehicleIntent())
 
 
-def _audit(change: Change, base: Intent, new: Intent) -> tuple[str, str, Any, Any]:
-    """Aktion, Ziel sowie alter und neuer Wert für das Änderungsprotokoll (Texte)."""
+def _audit(change: Change, base: Intent, new: Intent) -> tuple[str, str, Any, Any] | None:
+    """Aktion, Ziel sowie alter und neuer Wert für das Änderungsprotokoll (Texte); ``None`` für
+    eine Änderung ohne Eintrag (``SetPlan``)."""
     match change:
         case SetControl():
             return "intent.control", "regelbetrieb", base.control, new.control
@@ -300,6 +325,8 @@ def _audit(change: Change, base: Intent, new: Intent) -> tuple[str, str, Any, An
                 {key: _mode(base, key) for key in sorted(modes)},
                 {key: _mode(new, key) for key in sorted(modes)},
             )
+        case SetPlan():
+            return None
 
 
 def _mode(intent: Intent, actuator: str) -> str:
@@ -322,7 +349,7 @@ def _gate(change: Change, base: Intent) -> None:
 
 
 class IntentService:
-    """Leitet Bedienungen ab, sendet sie an den core und protokolliert sie.
+    """Leitet Bedienungen ab, sendet sie an den core und protokolliert sie (den Plan nicht).
 
     Änderungen laufen nacheinander (``asyncio.Lock``). Antwortet der core mit 409, weil die Absicht
     inzwischen anders lautet (etwa per ``curl``), holt der Dienst sie neu und wendet die Änderung
@@ -422,14 +449,16 @@ class IntentService:
             raise Rejected(details)
         version = reply.body.get("version")
         version = version if isinstance(version, int) else new.version
-        action, target, before, after = _audit(change, base, new)
-        self._audit.record(
-            actor,
-            source,
-            action,
-            target,
-            {"from": before, "to": after, "version": version, "result": result},
-        )
+        entry = _audit(change, base, new)
+        if entry is not None:
+            action, target, before, after = entry
+            self._audit.record(
+                actor,
+                source,
+                action,
+                target,
+                {"from": before, "to": after, "version": version, "result": result},
+            )
         self._cached = new
         self._feed.refresh_health()
         return ChangeResult(result, version, details, new)
