@@ -235,7 +235,9 @@ FREE_FROM_S: Final = 26 * MINUTE_S  # … hier (Override verfallen, 300 s plus 6
 CARRY_W: Final = 300.0  # … und die Akkuleistung liegt höchstens so viel über −Haus
 BUDGET_CHARGE_W: Final = 6000.0  # „plan-budget“: Netzladen mit dem Budget …
 BUDGET_KW: Final = 4.0
-BUDGET_QUARTER_KWH: Final = 1.02  # … je Viertelstunde höchstens 4 kW · 0,25 h + 0,02 kWh
+BUDGET_QUARTER_KWH: Final = 1.02  # … je Viertelstunde höchstens 4 kW · 0,25 h + 0,02 kWh …
+# … und mindestens so viel: Ohne Plan trüge der Akku das Haus, der Netzbezug bliebe nahe 0
+BUDGET_QUARTER_MIN_KWH: Final = 0.9
 BOOST_FROM_S: Final = MINUTE_S  # „plan-boost“: Boost ab hier …
 BOOSTING_SHARE: Final = 0.9  # … und der e-Golf lädt in mindestens diesem Anteil der Sekunden
 
@@ -1181,10 +1183,11 @@ def _battery_locked(result: SimResult) -> list[str]:
     return []
 
 
-def _quarters_within(start: datetime, limit_kwh: float) -> Check:
+def _quarters_within(start: datetime, limit_kwh: float, low_kwh: float | None = None) -> Check:
     """Der Netzbezug der ``PEAK_QUARTERS`` Viertelstunden ab ``PEAK_LEAD_S`` liegt je höchstens
-    bei ``limit_kwh``: ``Σ max(0, Netzbezug) · 1 s`` über die Proben der Viertelstunde.
-    ``start`` ist der Beginn des Szenarios, für die Uhrzeiten im Text."""
+    bei ``limit_kwh``, mit ``low_kwh`` auch mindestens dort: ``Σ max(0, Netzbezug) · 1 s`` über
+    die Proben der Viertelstunde. ``start`` ist der Beginn des Szenarios, für die Uhrzeiten im
+    Text."""
     begins = [PEAK_LEAD_S + k * QUARTER_S for k in range(PEAK_QUARTERS)]  # Sekunden des Laufs
 
     def find(result: SimResult) -> list[str]:
@@ -1201,13 +1204,20 @@ def _quarters_within(start: datetime, limit_kwh: float) -> Check:
                     f"Netzbezug der Viertelstunde ab {shown}: {de(round(kwh, 3))} kWh, verlangt "
                     f"höchstens {de(limit_kwh)} kWh."
                 )
+            if low_kwh is not None and kwh < low_kwh:
+                found.append(
+                    f"Netzbezug der Viertelstunde ab {shown}: {de(round(kwh, 3))} kWh, verlangt "
+                    f"mindestens {de(low_kwh)} kWh."
+                )
         return found
 
     *first, last = (_hhmm(start, begin) for begin in begins)
-    text = (
-        f"Netzbezug der Viertelstunden ab {', '.join(first)} und {last} je höchstens "
-        f"{de(limit_kwh)} kWh."
+    bound = (
+        f"höchstens {de(limit_kwh)}"
+        if low_kwh is None
+        else f"zwischen {de(low_kwh)} und {de(limit_kwh)}"
     )
+    text = f"Netzbezug der Viertelstunden ab {', '.join(first)} und {last} je {bound} kWh."
     return Check(text, find)
 
 
@@ -2204,7 +2214,9 @@ def _plan_budget() -> Scenario:
     """Pläne mit ``NETZLADEN(6000)`` und ``budget_kw`` 4,0: Das Budget ersetzt
     ``control.peak_target_kw`` (Präzisierung 9), und der Wächter senkt das Netzladen, bis jede
     Viertelstunde höchstens 1 kWh bezieht. Der Lauf beginnt wie ``spitze-15min`` eine Minute vor
-    18:00 und prüft die Viertelstunden ab 18:00."""
+    18:00 und prüft die Viertelstunden ab 18:00. Die Untergrenze und die Gründe ``plan_grid_charge``
+    und ``peak_guard`` belegen, dass der Plan und sein Budget wirken: Ohne Plan trüge der Akku das
+    Haus, und der Netzbezug bliebe nahe 0."""
     start, duration_s, seed = EVENING - timedelta(seconds=PEAK_LEAD_S), 47 * MINUTE_S, 27
     charge = BatteryIntent(kind=BatteryIntentKind.NETZLADEN, grid_charge_w=BUDGET_CHARGE_W)
     return Scenario(
@@ -2220,7 +2232,13 @@ def _plan_budget() -> Scenario:
             *_weather(start, duration_s, seed),
             *_every_quarter(start, duration_s, charge, budget_kw=BUDGET_KW),
         ),
-        checks=Checks((_quarters_within(start, BUDGET_QUARTER_KWH),)),
+        checks=Checks(
+            (
+                _quarters_within(start, BUDGET_QUARTER_KWH, BUDGET_QUARTER_MIN_KWH),
+                _named("plan_grid_charge", at=VICTRON),
+                _named(PEAK_GUARD, at=VICTRON),
+            )
+        ),
         victron_live=True,
     )
 

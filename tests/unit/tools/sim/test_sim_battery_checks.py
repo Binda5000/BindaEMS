@@ -815,10 +815,10 @@ def test_after_the_plan_expires_the_battery_carries_the_house(cfg) -> None:
     ]
 
 
-def test_the_budget_holds_each_quarter_at_1_02_kwh(cfg) -> None:
+def test_the_budget_holds_each_quarter_between_0_9_and_1_02_kwh(cfg) -> None:
     quarters = check("plan-budget", 0)
     assert quarters.text == (
-        "Netzbezug der Viertelstunden ab 18:00, 18:15 und 18:30 je höchstens 1,02 kWh."
+        "Netzbezug der Viertelstunden ab 18:00, 18:15 und 18:30 je zwischen 0,9 und 1,02 kWh."
     )
 
     def run(grid_w: dict[int, float]) -> list[str]:
@@ -829,6 +829,27 @@ def test_the_budget_holds_each_quarter_at_1_02_kwh(cfg) -> None:
     assert run(dict.fromkeys(range(60), 9000.0)) == []  # vor 18:00 zählt nicht
     assert run(dict.fromkeys(range(960, 1860), 4100.0)) == [
         "Netzbezug der Viertelstunde ab 18:15: 1,025 kWh, verlangt höchstens 1,02 kWh."
+    ]
+    # ohne Plan trüge der Akku das Haus: kaum Netzbezug
+    assert run(dict.fromkeys(range(1860, 2760), 900.0)) == [
+        "Netzbezug der Viertelstunde ab 18:30: 0,225 kWh, verlangt mindestens 0,9 kWh."
+    ]
+    assert run(dict.fromkeys(range(960, 1860), 3600.0)) == []  # genau 0,9 kWh
+
+
+def test_the_budget_scenario_names_the_plan_and_the_guard(cfg) -> None:
+    grid, guard = check("plan-budget", 1), check("plan-budget", 2)
+    assert grid.text == "Eine Entscheidung an „victron“ nennt „plan_grid_charge“."
+    assert guard.text == "Eine Entscheidung an „victron“ nennt „peak_guard“."
+    both = decision("plan-budget", 61, VICTRON, SETPOINT, 3700.0, "plan_grid_charge", "peak_guard")
+    plain = decision("plan-budget", 61, VICTRON, SETPOINT, 6900.0, "plan_grid_charge")
+    assert grid.find(result_of(cfg, "plan-budget", decisions=[both])) == []
+    assert guard.find(result_of(cfg, "plan-budget", decisions=[both])) == []
+    assert guard.find(result_of(cfg, "plan-budget", decisions=[plain])) == [
+        "Keine Entscheidung an „victron“ mit „peak_guard“."
+    ]
+    assert grid.find(result_of(cfg, "plan-budget")) == [
+        "Keine Entscheidung an „victron“ mit „plan_grid_charge“."
     ]
 
 
