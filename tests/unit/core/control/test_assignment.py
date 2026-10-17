@@ -868,6 +868,25 @@ def test_a_boost_binds_to_the_session_where_the_vehicle_stands(cfg) -> None:
     assert (later.wallbox, later.boost_until) == ("twc", None)
 
 
+def test_every_new_version_rebinds_a_waiting_boost(cfg) -> None:
+    # Gesamtreview, Minor 5: Jede neue Version bindet neu, auch eine, die nur einen neuen Plan
+    # trägt (seit Plan 3c etwa alle 15 min). Ein Boost, der auf den nächsten Vorgang der
+    # Standard-Wallbox wartet, geht so an den Vorgang, an dem das Fahrzeug inzwischen erkannt ist.
+    a = Assignment(cfg, started=T0)
+    until = T0 + timedelta(hours=2)
+    v1 = Intent(version=1, control=True, vehicles={"tesla": VehicleIntent(boost_until=until)})
+    waiting = update(a, 0, intent=v1, **PICTURE).vehicles["tesla"]
+    assert (waiting.wallbox, waiting.boost_until, waiting.boost_pending) == ("twc", None, True)
+    for s in range(1, 62):
+        detected = update(a, s, intent=v1, **PICTURE).vehicles["tesla"]
+    assert (detected.wallbox, detected.kind) == ("evcs", AssignmentKind.DETECTED)
+    # der Boost wartet weiter auf den Wall Connector
+    assert (detected.boost_until, detected.boost_pending) == (None, True)
+    v2 = v1.model_copy(update={"version": 2})  # derselbe Boost, etwa mit einem neuen Plan
+    moved = update(a, 62, intent=v2, **PICTURE).vehicles["tesla"]
+    assert (moved.wallbox, moved.boost_until, moved.boost_pending) == ("evcs", until, False)
+
+
 def test_a_boost_without_a_session_waits_for_the_default_wallbox_as_before(cfg) -> None:
     # Der e-Golf steht an keiner Wallbox mit Vorgang: Sein Boost bindet wie bisher an den nächsten
     # Vorgang seiner Standard-Wallbox.
