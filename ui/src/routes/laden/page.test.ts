@@ -25,6 +25,7 @@ const { api, user } = vi.hoisted(() => ({
 		setBoost: vi.fn(),
 		setWallboxVehicle: vi.fn(),
 		setGuestMode: vi.fn(),
+		setSupport: vi.fn(),
 		setPriority: vi.fn()
 	},
 	user: { role: 'operator' as Role }
@@ -335,6 +336,73 @@ it('wählt den Gast-Modus', async () => {
 	expect(select).toHaveValue('pv');
 	await fireEvent.change(select, { target: { value: 'now' } });
 	await waitFor(() => expect(api.setGuestMode).toHaveBeenCalledWith('now'));
+});
+
+it('zeigt die Akku-Unterstützung mit der wirksamen Schwelle', async () => {
+	const health = system().core.health!;
+	await show(
+		healthWith({
+			battery: { ...health.battery, support_soc_pct: 82, support_source: 'plan' }
+		})
+	);
+	const support = within(card('Akku-Unterstützung'));
+	expect(support.getByRole('checkbox', { name: 'Akku-Unterstützung erlaubt' })).toBeChecked();
+	expect(support.getByRole('spinbutton', { name: 'Unterstützungsschwelle' })).toHaveValue(null);
+	expect(support.getByText('Wirksam ab 82 % (Plan).')).toBeVisible();
+});
+
+it('kennt die wirksame Schwelle vor dem ersten Zyklus nicht', async () => {
+	const health = system().core.health!;
+	await show(
+		healthWith({ battery: { ...health.battery, support_soc_pct: null, support_source: null } })
+	);
+	expect(
+		within(card('Akku-Unterstützung')).getByText('Wirksame Schwelle unbekannt.')
+	).toBeVisible();
+});
+
+it('schaltet die Akku-Unterstützung aus', async () => {
+	await show();
+	api.setSupport.mockResolvedValue(reply());
+	const box = within(card('Akku-Unterstützung')).getByRole('checkbox', {
+		name: 'Akku-Unterstützung erlaubt'
+	});
+	await fireEvent.click(box);
+	await waitFor(() => expect(api.setSupport).toHaveBeenCalledWith(false, null));
+});
+
+it('übernimmt die Schwelle und prüft sie gegen die USV-Reserve der Grenzen', async () => {
+	await show();
+	api.setSupport.mockResolvedValue(reply());
+	const support = within(card('Akku-Unterstützung'));
+	const field = support.getByRole('spinbutton', { name: 'Unterstützungsschwelle' });
+	expect(field).toHaveAttribute('placeholder', '70');
+	await fireEvent.input(field, { target: { value: '10' } });
+	await fireEvent.click(support.getByRole('button', { name: 'Übernehmen' }));
+	expect(
+		support.getByText('Unterstützungsschwelle „10“ liegt außerhalb von 20–100 %.')
+	).toBeVisible();
+	expect(api.setSupport).not.toHaveBeenCalled();
+	await fireEvent.input(field, { target: { value: '55' } });
+	await fireEvent.click(support.getByRole('button', { name: 'Übernehmen' }));
+	await waitFor(() => expect(api.setSupport).toHaveBeenCalledWith(true, 55));
+});
+
+it('zeigt die Ablehnung des core an der Karte der Akku-Unterstützung', async () => {
+	await show();
+	api.setSupport.mockRejectedValue(new ApiError(422, 'Schwelle abgelehnt.'));
+	const support = within(card('Akku-Unterstützung'));
+	await fireEvent.click(support.getByRole('checkbox', { name: 'Akku-Unterstützung erlaubt' }));
+	expect(await support.findByText('Schwelle abgelehnt.')).toBeVisible();
+});
+
+it('Lesende sehen die Akku-Unterstützung ohne Bedienung', async () => {
+	user.role = 'viewer';
+	await show();
+	const support = within(card('Akku-Unterstützung'));
+	expect(support.queryByRole('checkbox')).toBeNull();
+	expect(support.queryByRole('button')).toBeNull();
+	expect(support.getByText('Wirksam ab 70 % (Konfiguration).')).toBeVisible();
 });
 
 it('ändert den Vorrang der Fahrzeuge', async () => {

@@ -1,0 +1,30 @@
+{
+  "result": "accepted",
+  "version": 1791532800001,
+  "details": [],
+  "intent": {
+    "version": 1791532800001,
+    "control": true,
+    "actuators": {},
+    "vehicles": {
+      "tesla": {
+        "mode": "now",
+        "boost_until": null,
+        "wallbox": null
+      }
+    },
+    "priority": null,
+    "surplus_priority": {
+      "kind": "battery_until_soc",
+      "soc_pct": 30.0
+    },
+    "guest": {
+      "mode": "pv"
+    },
+    "plan": null,
+    "support": {
+      "allowed": false,
+      "soc_pct": 60.0
+    }
+  }
+}

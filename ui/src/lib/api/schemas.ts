@@ -122,6 +122,13 @@ export const VehicleIntentSchema = v.object({
 export type VehicleIntent = v.InferOutput<typeof VehicleIntentSchema>;
 
 /** Die Absicht (`Intent` des core) mit allen Feldern */
+/** Akku-Unterstützung fürs Auto; `soc_pct` `null`: die Schwelle der Konfiguration */
+export const SupportIntentSchema = v.object({
+	allowed: v.boolean(),
+	soc_pct: NullableNumber
+});
+export type SupportIntent = v.InferOutput<typeof SupportIntentSchema>;
+
 export const IntentSchema = v.object({
 	version: v.number(),
 	control: v.boolean(),
@@ -130,7 +137,8 @@ export const IntentSchema = v.object({
 	/** Reihenfolge der Fahrzeug-Schlüssel; `null`: die der Konfiguration */
 	priority: v.nullable(v.array(v.string())),
 	surplus_priority: SurplusPrioritySchema,
-	guest: v.object({ mode: ChargeModeSchema })
+	guest: v.object({ mode: ChargeModeSchema }),
+	support: SupportIntentSchema
 });
 export type Intent = v.InferOutput<typeof IntentSchema>;
 
@@ -225,6 +233,9 @@ export const ClueSchema = v.picklist([
 ]);
 export type Clue = v.InferOutput<typeof ClueSchema>;
 
+export const SupportSourceSchema = v.picklist(['config', 'intent', 'plan']);
+export type SupportSource = v.InferOutput<typeof SupportSourceSchema>;
+
 export const VehicleHealthSchema = v.object({
 	id: v.string(),
 	name: v.string(),
@@ -305,6 +316,12 @@ export const CoreHealthSchema = v.object({
 	),
 	vehicles: v.array(VehicleHealthSchema),
 	wallboxes: v.array(WallboxHealthSchema),
+	/** Akku-Sollwert: die wirksame Schwelle der Unterstützung und woher sie kommt */
+	battery: v.object({
+		/** `null` vor dem ersten Zyklus */
+		support_soc_pct: NullableNumber,
+		support_source: v.nullable(SupportSourceSchema)
+	}),
 	watchdog: v.object({
 		state: v.picklist(['waiting', 'armed', 'tripped', 'disabled', 'unknown']),
 		trip_count: NullableNumber,
@@ -506,6 +523,8 @@ export const LimitsSchema = v.object({
 		max_discharge_w: v.number(),
 		soc_max_pct: v.number()
 	}),
+	/** Konfigurierte Schwelle der Akku-Unterstützung in % (`control.support_soc_pct`) */
+	control: v.object({ support_soc_pct: v.number() }),
 	victron: v.object({
 		max_grid_charge_setpoint_w: v.number(),
 		persistent_writes: v.object({ per_hour: v.number(), per_day: v.number() }),

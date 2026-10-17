@@ -66,6 +66,17 @@ it('sendet Passwort und Bestätigung der Live-Schaltung', async () => {
 	});
 });
 
+it('sendet die Akku-Unterstützung als PUT, auch ohne eigene Schwelle', async () => {
+	reply(control);
+	await api.setSupport(false, null);
+	expect(sent()).toEqual({
+		url: '/api/control/support',
+		method: 'PUT',
+		body: { allowed: false, soc_pct: null },
+		csrf: 'tok-123'
+	});
+});
+
 it('quittiert mit POST und liest den Satz des core', async () => {
 	reply({ detail: 'Quittiert.' });
 	await expect(api.acknowledge('wallbox.evcs')).resolves.toEqual({ detail: 'Quittiert.' });

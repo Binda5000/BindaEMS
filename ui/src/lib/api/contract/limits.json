@@ -14,6 +14,9 @@
     "max_discharge_w": 12000.0,
     "soc_max_pct": 100.0
   },
+  "control": {
+    "support_soc_pct": 70.0
+  },
   "victron": {
     "max_grid_charge_setpoint_w": 8000.0,
     "persistent_writes": {

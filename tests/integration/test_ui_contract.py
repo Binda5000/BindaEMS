@@ -52,6 +52,7 @@ OTHER = {
     "error-422",
     "control-reply",
     "plan-grid-charge",
+    "control-support",
 }
 
 
@@ -101,6 +102,11 @@ def collect_responses(world: World) -> dict[str, object]:
     charge = client.put("/api/plan/grid-charge", json={"on": True}, headers=csrf)
     assert charge.status_code == 200, charge.text
     actual["plan-grid-charge"] = charge.json()
+    support = client.put(
+        "/api/control/support", json={"allowed": False, "soc_pct": 60}, headers=csrf
+    )
+    assert support.status_code == 200, support.text
+    actual["control-support"] = support.json()
     return actual
 
 

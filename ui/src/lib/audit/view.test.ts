@@ -54,6 +54,7 @@ it('beschriftet die Bedienung und die Quittierung', () => {
 		'intent.guest_mode',
 		'intent.priority',
 		'intent.actuators',
+		'control.support',
 		'lock.acknowledge'
 	].map(actionLabel);
 	expect(labels).toEqual([
@@ -64,6 +65,7 @@ it('beschriftet die Bedienung und die Quittierung', () => {
 		'Gast-Lademodus geändert',
 		'Vorrang geändert',
 		'Betriebsart der Aktoren geändert',
+		'Akku-Unterstützung geändert',
 		'Sperre quittiert'
 	]);
 	expect(actionLabel('unbekannt.aktion')).toBe('unbekannt.aktion');

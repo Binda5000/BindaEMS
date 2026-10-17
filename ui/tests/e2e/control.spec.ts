@@ -63,6 +63,69 @@ test('Bedienen stellt den Tesla auf Sofort', async ({ page, browser }) => {
 	}
 });
 
+/** Karte „Akku-Unterstützung“ auf der Seite „Laden“ */
+function supportCard(page: Page) {
+	return page
+		.locator('section')
+		.filter({ has: page.getByRole('heading', { name: 'Akku-Unterstützung', exact: true }) });
+}
+
+async function setSupportAllowed(page: Page, allowed: boolean): Promise<void> {
+	const box = supportCard(page).getByRole('checkbox', { name: 'Akku-Unterstützung erlaubt' });
+	await expect(box).toBeEnabled();
+	const reply = page.waitForResponse((response) => response.url().endsWith('/api/control/support'));
+	await (allowed ? box.check() : box.uncheck());
+	expect((await reply).status()).toBe(200);
+}
+
+test('Bedienen schaltet die Akku-Unterstützung aus', async ({ page, browser }) => {
+	await login(page, 'bedienen');
+	await page.goto('/laden');
+	const box = supportCard(page).getByRole('checkbox', { name: 'Akku-Unterstützung erlaubt' });
+	await expect(box).toBeChecked();
+	await expect(supportCard(page).getByText(/^Wirksam ab 70\s%/)).toBeVisible();
+	try {
+		await setSupportAllowed(page, false);
+
+		// nach dem Neuladen der Seite steht die Unterstützung auf „aus“
+		await page.reload();
+		await expect(box).not.toBeChecked();
+
+		// Lesende sehen den Stand ohne Bedienung
+		const context = await browser.newContext();
+		try {
+			const guestPage = await context.newPage();
+			await login(guestPage, 'gast');
+			await guestPage.goto('/laden');
+			const card = supportCard(guestPage);
+			await expect(card.getByText('nein')).toBeVisible();
+			await expect(card.getByRole('checkbox')).toHaveCount(0);
+		} finally {
+			await context.close();
+		}
+
+		// das Änderungsprotokoll nennt die Änderung (als admin)
+		const adminContext = await browser.newContext();
+		try {
+			const adminPage = await adminContext.newPage();
+			await login(adminPage, 'admin');
+			await adminPage.goto('/protokoll');
+			const row = adminPage
+				.getByRole('row')
+				.filter({ hasText: 'Akku-Unterstützung geändert' })
+				.filter({ hasText: 'bedienen (UI)' });
+			await expect(row.first()).toBeVisible();
+			await expect(row.first()).toContainText('to: gesperrt');
+		} finally {
+			await adminContext.close();
+		}
+	} finally {
+		await setSupportAllowed(page, true);
+		await page.reload();
+		await expect(box).toBeChecked();
+	}
+});
+
 test('Admin öffnet den Live-Dialog und bricht ab', async ({ page }) => {
 	await login(page, 'admin');
 	await page.goto('/system');

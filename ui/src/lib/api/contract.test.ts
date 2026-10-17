@@ -35,6 +35,7 @@ const SCHEMAS: Record<string, v.GenericSchema> = {
 	reprice: v.object({ repriced: v.number() }),
 	control: s.ControlResponseSchema,
 	'control-reply': s.ControlReplySchema,
+	'control-support': s.ControlReplySchema,
 	decisions: s.DecisionsResponseSchema,
 	'decisions-latest': s.LatestDecisionsResponseSchema,
 	plan: s.PlanResponseSchema,

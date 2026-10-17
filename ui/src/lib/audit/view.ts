@@ -39,6 +39,7 @@ const ACTIONS: Record<string, string> = {
 	'intent.guest_mode': 'Gast-Lademodus geändert',
 	'intent.priority': 'Vorrang geändert',
 	'intent.actuators': 'Betriebsart der Aktoren geändert',
+	'control.support': 'Akku-Unterstützung geändert',
 	'lock.acknowledge': 'Sperre quittiert'
 };
 

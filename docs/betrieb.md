@@ -810,7 +810,7 @@ gilt für diesen Browser.
 | Seite | Inhalt |
 |---|---|
 | Übersicht | Energiefluss live mit den Verbrauchern unter dem Haus, Strompreis jetzt und die nächsten 3 h (Balken überfahren, antippen oder mit den Pfeiltasten wählen zeigt den Preis der Viertelstunde), Ladestände, Preise und PV-Prognose für heute und morgen, Hinweise, Verbraucher mit Leistung und Energie seit Mitternacht, „Warum?“ (unten) |
-| Laden | je Fahrzeug und je Wallbox eine Karte, dazu „Gast“ und „Vorrang“; ab „Bedienen“ mit den Bedienelementen (unten, „Laden“) |
+| Laden | je Fahrzeug und je Wallbox eine Karte, dazu „Gast“, „Akku-Unterstützung“ und „Vorrang“; ab „Bedienen“ mit den Bedienelementen (unten, „Laden“) |
 | Zeitplan | der Akkuplan für bis zu 36 h: Kopf mit dem Stand der Ausführung, Quelle, Gültigkeit und Kosten gegenüber „Victron allein“, Diagramme „Preise und Prognosen“ und „Akku“, „Ablauf“ in Blöcken mit Satz; ab „Bedienen“ mit „Netzladen erlaubt“ und „Neu planen“ (Abschnitt „Planung“) |
 | Verlauf | Diagramm mit bis zu 8 Reihen für frei wählbare Tage (höchstens 400), Tagesbilanz mit Abdeckung (Viertelstunden und Anteil der aufgezeichneten Zeit; am laufenden Tag „bis jetzt“, also nur die vergangenen Viertelstunden), Kosten, Erlös, Autarkie und den Tageswerten der Zähler (Differenz über den Tag) für den Abgleich mit VRM |
 | Verbraucher | Verbraucherbaum mit „Sonstiges“, Leistung und Energie seit Mitternacht („Heute“); Admins legen Verbraucher an, ändern und löschen sie |
@@ -2878,7 +2878,10 @@ die er sich bezieht. `battery` steht dann auf `idle`.
 ### Akku-Unterstützung bedienen
 
 „Akku-Unterstützung erlaubt“ und die Unterstützungsschwelle gehören zur Absicht wie der Gast-Modus.
-Im UI (Seite „Laden“), in Home Assistant und per API stellen das „Bedienen“ und Admin ein. Eine
+Im UI (Seite „Laden“, Karte „Akku-Unterstützung“ mit Schalter, Zahlfeld und „Übernehmen“; ein leeres
+Zahlfeld heißt „Schwelle der Konfiguration“), in Home Assistant und per API stellen das „Bedienen“ und
+Admin ein. Die Karte nennt dazu die wirksame Schwelle und ihre Quelle („Wirksam ab 82 % (Plan).“ mit
+„Einstellung“, „Konfiguration“ oder „Plan“); Lesende sehen die Werte ohne Bedienung. Eine
 Änderung behält den Plan und steht im Änderungsprotokoll mit der Aktion `control.support`, dem Ziel
 „Akku-Unterstützung“ und dem Wert als Text: „erlaubt, ab 60 %“, „erlaubt, Schwelle aus der
 Konfiguration“ oder „gesperrt“. Standard ist erlaubt mit `control.support_soc_pct` (70 %).

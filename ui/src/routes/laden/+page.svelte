@@ -3,9 +3,10 @@
 	import { page } from '$app/state';
 	import { api } from '$lib/api/endpoints';
 	import { ApiError } from '$lib/api/errors';
-	import type { ChargeMode, ControlReply, SurplusPriority } from '$lib/api/schemas';
+	import type { ChargeMode, ControlReply, SupportIntent, SurplusPriority } from '$lib/api/schemas';
 	import GuestCard from '$lib/charging/GuestCard.svelte';
 	import PriorityCard from '$lib/charging/PriorityCard.svelte';
+	import SupportCard from '$lib/charging/SupportCard.svelte';
 	import VehicleCard from '$lib/charging/VehicleCard.svelte';
 	import WallboxCard from '$lib/charging/WallboxCard.svelte';
 	import {
@@ -24,6 +25,8 @@
 
 	/** So lange nach einer Änderung dauert es, bis Health sie zeigt. */
 	const SYSTEM_REFRESH_MS = 2000;
+	/** Ohne Absicht ist die Akku-Unterstützung erlaubt, mit der Schwelle der Konfiguration. */
+	const DEFAULT_SUPPORT: SupportIntent = { allowed: true, soc_pct: null };
 	/** Ohne Absicht regelt der core nichts; Gast und Vorrang haben dann diese Werte. */
 	const DEFAULT_SURPLUS: SurplusPriority = { kind: 'battery_until_soc', soc_pct: 30 };
 
@@ -62,6 +65,12 @@
 	const current = $derived(healthIsCurrent(health?.intent_version ?? null, intent));
 	const vehicles = $derived(health?.vehicles ?? []);
 	const names = $derived(Object.fromEntries(vehicles.map((vehicle) => [vehicle.id, vehicle.name])));
+	// Health kennt die wirksame Schwelle erst nach dem ersten Zyklus des Akku-Sollwerts
+	const supportEffective = $derived(
+		health?.battery.support_soc_pct != null && health.battery.support_source !== null
+			? { soc_pct: health.battery.support_soc_pct, source: health.battery.support_source }
+			: null
+	);
 	const socs = $derived(socEntries(live.state, limits.data));
 	const order = $derived(
 		priorityOrder(
@@ -170,6 +179,18 @@
 				notice={notices.guest ?? null}
 				onMode={(mode: ChargeMode) => act('guest', () => api.setGuestMode(mode))}
 			/>
+			{#if limits.data}
+				<SupportCard
+					support={intent?.support ?? DEFAULT_SUPPORT}
+					effective={supportEffective}
+					configured_pct={limits.data.control.support_soc_pct}
+					reserve_pct={limits.data.battery.reserve_soc_pct}
+					{operate}
+					{busy}
+					notice={notices.support ?? null}
+					onChange={(allowed, socPct) => act('support', () => api.setSupport(allowed, socPct))}
+				/>
+			{/if}
 			<PriorityCard
 				{order}
 				{names}

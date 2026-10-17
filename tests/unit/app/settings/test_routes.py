@@ -68,6 +68,7 @@ def test_limits_show_hard_limits_without_hosts_or_vin(client, auth) -> None:
     assert limits["grid"]["fuse_a"] == 35 and limits["battery"]["reserve_soc_pct"] == 20
     assert limits["wallboxes"]["evcs"]["max_a"] == 16
     assert limits["vehicles"]["egolf"]["phases"] == 2
+    assert limits["control"] == {"support_soc_pct": 70.0}  # Schwelle der Akku-Unterstützung
     text = json.dumps(limits)
     assert "host" not in text and "5YJ3E7EB0MF000000" not in text
 

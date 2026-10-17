@@ -150,6 +150,12 @@ export const api = {
 		}),
 	setGuestMode: (mode: s.ChargeMode): Promise<s.ControlReply> =>
 		request('PUT', '/api/control/guest', { body: { mode }, schema: s.ControlReplySchema }),
+	/** `socPct` `null`: die Schwelle der Konfiguration */
+	setSupport: (allowed: boolean, socPct: number | null): Promise<s.ControlReply> =>
+		request('PUT', '/api/control/support', {
+			body: { allowed, soc_pct: socPct },
+			schema: s.ControlReplySchema
+		}),
 	setPriority: (priority: string[], surplus: s.SurplusPriority): Promise<s.ControlReply> =>
 		request('PUT', '/api/control/priority', {
 			body: { priority, surplus_priority: surplus },

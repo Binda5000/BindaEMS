@@ -10,8 +10,10 @@ import {
 	moveUp,
 	occupantText,
 	overrideVehicle,
+	parseSupportThreshold,
 	priorityOrder,
 	reasonLabel,
+	supportHint,
 	surplusLabel
 } from './view';
 
@@ -45,7 +47,8 @@ function intent(vehicles: Intent['vehicles'] = {}): Intent {
 		vehicles,
 		priority: null,
 		surplus_priority: { kind: 'cars_first', soc_pct: 30 },
-		guest: { mode: 'pv' }
+		guest: { mode: 'pv' },
+		support: { allowed: true, soc_pct: null }
 	};
 }
 
@@ -267,5 +270,33 @@ describe('Health älter als die Absicht', () => {
 	it('zeigt eine Übersteuerung nicht mehr, die die Absicht schon beendet hat', () => {
 		const vehicles = [vehicle({ id: 'egolf', wallbox: 'twc', assignment: 'override' })];
 		expect(overrideVehicle('twc', vehicles, intent(), false)).toBeNull();
+	});
+});
+
+describe('Akku-Unterstützung', () => {
+	it('nennt Schwelle und Quelle', () => {
+		expect(supportHint({ soc_pct: 82, source: 'plan' })).toBe('Wirksam ab 82\u00a0% (Plan).');
+		expect(supportHint({ soc_pct: 70, source: 'config' })).toBe(
+			'Wirksam ab 70\u00a0% (Konfiguration).'
+		);
+		expect(supportHint({ soc_pct: 60, source: 'intent' })).toBe(
+			'Wirksam ab 60\u00a0% (Einstellung).'
+		);
+		expect(supportHint(null)).toBe('Wirksame Schwelle unbekannt.');
+	});
+
+	it('prüft die Eingabe der Schwelle gegen Reserve und 100 %', () => {
+		expect(parseSupportThreshold('', 20)).toEqual({ ok: true, soc_pct: null });
+		expect(parseSupportThreshold('  ', 20)).toEqual({ ok: true, soc_pct: null });
+		expect(parseSupportThreshold('20', 20)).toEqual({ ok: true, soc_pct: 20 });
+		expect(parseSupportThreshold('100', 20)).toEqual({ ok: true, soc_pct: 100 });
+		expect(parseSupportThreshold('62.5', 20)).toEqual({ ok: true, soc_pct: 62.5 });
+		expect(parseSupportThreshold('19', 20)).toEqual({
+			ok: false,
+			text: 'Unterstützungsschwelle „19“ liegt außerhalb von 20–100 %.'
+		});
+		expect(parseSupportThreshold('100.5', 20).ok).toBe(false);
+		expect(parseSupportThreshold('abc', 20).ok).toBe(false);
+		expect(parseSupportThreshold('', 20, true).ok).toBe(false);
 	});
 });

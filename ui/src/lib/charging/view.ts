@@ -5,11 +5,12 @@ import type {
 	Clue,
 	EffectiveMode,
 	Intent,
+	SupportSource,
 	SurplusPriority,
 	VehicleHealth,
 	WallboxHealth
 } from '$lib/api/schemas';
-import { DASH, formatSoc } from '$lib/format';
+import { DASH, formatNumberMax, formatSoc } from '$lib/format';
 import { parseIso } from '$lib/time';
 
 /** Schlüssel eines Fahrzeugs → Anzeigename */
@@ -116,6 +117,52 @@ export function surplusLabel(priority: SurplusPriority): string {
 		return `Akku bis ${formatSoc(priority.soc_pct)}, dann Autos`;
 	}
 	return SURPLUS[priority.kind];
+}
+
+const SUPPORT_SOURCES: Record<SupportSource, string> = {
+	intent: 'Einstellung',
+	config: 'Konfiguration',
+	plan: 'Plan'
+};
+
+/** Die wirksame Schwelle der Akku-Unterstützung (Health) und woher sie kommt */
+export interface SupportEffective {
+	soc_pct: number;
+	source: SupportSource;
+}
+
+export function supportSourceLabel(source: SupportSource): string {
+	return SUPPORT_SOURCES[source];
+}
+
+/** „Wirksam ab 82 % (Plan).“; ohne Health ist die Schwelle unbekannt */
+export function supportHint(effective: SupportEffective | null): string {
+	if (effective === null) return 'Wirksame Schwelle unbekannt.';
+	return `Wirksam ab ${formatSoc(effective.soc_pct)} (${supportSourceLabel(effective.source)}).`;
+}
+
+/** Ergebnis der Prüfung des Zahlfelds: `soc_pct` `null` heißt „Schwelle der Konfiguration“ */
+export type SupportThreshold = { ok: true; soc_pct: number | null } | { ok: false; text: string };
+
+/**
+ * Prüft die Eingabe der Unterstützungsschwelle: leer ist erlaubt, sonst gilt USV-Reserve bis 100 %.
+ * `text` ist der Inhalt des Zahlfelds; ein Browser gibt bei Unsinn einen leeren Text zurück, dann
+ * ist `badInput` wahr.
+ */
+export function parseSupportThreshold(
+	text: string,
+	reservePct: number,
+	badInput = false
+): SupportThreshold {
+	if (badInput) return { ok: false, text: 'Unterstützungsschwelle ist keine Zahl.' };
+	if (text.trim() === '') return { ok: true, soc_pct: null };
+	const pct = Number(text);
+	if (Number.isFinite(pct) && pct >= reservePct && pct <= 100) return { ok: true, soc_pct: pct };
+	const shown = Number.isFinite(pct) ? formatNumberMax(pct, 1) : text;
+	return {
+		ok: false,
+		text: `Unterstützungsschwelle „${shown}“ liegt außerhalb von ${formatNumberMax(reservePct, 1)}–100 %.`
+	};
 }
 
 function swap(order: readonly string[], index: number, other: number): string[] {

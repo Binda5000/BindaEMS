@@ -73,6 +73,7 @@ def limits_json(cfg: Config, wallbox_names: Mapping[str, str] | None = None) -> 
     return {
         "grid": cfg.grid.model_dump(mode="json"),
         "battery": cfg.battery.model_dump(mode="json"),
+        "control": {"support_soc_pct": cfg.control.support_soc_pct},
         "victron": {
             "max_grid_charge_setpoint_w": cfg.victron.max_grid_charge_setpoint_w,
             "persistent_writes": cfg.victron.persistent_writes.model_dump(mode="json"),
