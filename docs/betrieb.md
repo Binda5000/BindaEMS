@@ -150,11 +150,11 @@ GROUP BY time(1m), *
   - `latest` ist der Stand von `main`.
   - Zusätzlich gibt es je Commit `sha-<kurz>` und je Release `vX.Y.Z`.
 - **Rollback auf einen Stand vor Plan 3c:**
-  - Ein core vor Plan 3c kann eine `intent.json` mit `plan` oder `support` nicht lesen (er kennt die
-    Felder nicht und lehnt unbekannte ab). Er startet dann ohne Absicht und meldet den Alarm
+  - Ein core vor Plan 3c kann keine `intent.json` lesen, die ein core ab Plan 3c geschrieben hat (sie
+    hat immer die Felder `plan` und `support`, und der ältere core lehnt unbekannte Felder ab). Er startet dann ohne Absicht und meldet den Alarm
     `intent.file` („Gespeicherte Absicht unlesbar; der core startet ohne Absicht (Regelbetrieb
     aus).“): Er regelt nichts, und nichts geht live. Das ist die sichere Richtung, aber Lademodi,
-    Gast-Modus, Priorität, Boost und Übersteuerung fehlen.
+    Gast-Modus, Priorität, die Modi der Aktoren, Boost und Übersteuerung fehlen.
   - Rolle core und app immer gemeinsam zurück (dasselbe Tag). Schalte danach im UI den Regelbetrieb
     wieder ein und stelle Lademodi, Gast-Modus und Priorität neu ein; die erste angenommene Absicht
     beendet den Alarm und überschreibt die Datei. Notiere dir die Einstellungen vorher (Seite
@@ -3439,7 +3439,9 @@ Jedes Umschalten ist eine neue Version der Einstellungen mit dem Kommentar „Ne
 entsteht keine neue Version. Der Plan geht danach neu an den core; bis er dort ist, steht der Stand
 „Der Plan ist noch nicht beim core.“ (unten, „Stand der Ausführung“). Beim Ausschalten geht sofort
 derselbe Plan ohne `Netzladen` an den core, diese Slots werden `Eigenverbrauch`; der neue Plan
-folgt (unten, „Übergabe an den core“).
+folgt (unten, „Übergabe an den core“). Regelt der core in dem Moment nicht (Regelbetrieb aus,
+Neustart), wartet die Übergabe, bis er wieder regelt; ein gespeicherter `Netzladen`-Slot kann dann
+noch etwa 11 s laufen (eine Abfrage der Health und ein Regelzyklus).
 
 ### Übergabe an den core
 

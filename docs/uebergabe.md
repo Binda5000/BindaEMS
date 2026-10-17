@@ -2380,3 +2380,8 @@ den Tasks 4, 6, 7, 11 und 16, die mit Task 17 eingearbeitet sind):
 - **Mehrkosten beim Boost (Task 16):** kein Routentest über eine Monatsgrenze in Wiener Zeit; der Test der
   Stufe mit `tier_kw` 100 wiederholt den linearen Fall; `month_peak_kw` ist der rohe Wert der
   Abrechnung.
+- **Nach der Fix-Welle (Nachprüfung):** Fast nach jeder Übergabe oder Bedienung schreibt die app einmal
+  „Plan wartet, bis der core mit der Absicht regelt“, obwohl der Plan schon beim core ist (die sofortige
+  Abfrage der Health landet vor dem nächsten Regelzyklus; etwa 100 Zeilen am Tag, `sender.py`). Kommt
+  der core innerhalb einer Abfrage (10 s) nach einem Neustart zurück, kann die gespeicherte Health bis
+  zum Wecken beim Verbinden überleben (`core_link.py`, `_connected` leert sie nicht).
