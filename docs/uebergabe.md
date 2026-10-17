@@ -42,8 +42,9 @@ mit Zustimmung des Betreibers per Fast-Forward übernommen, alle Prüfungen grü
 Plan in der Absicht, und der core führt ihn im Regelbetrieb aus, in der Betriebsart, die Victron hat:
 **Solange Victron im Dry-Run ist, rechnet er ihn nur mit und sendet nichts.** Nichts geht von selbst
 live.
-Als Nächstes folgen an der Anlage das gemeinsame Ausrollen von
-2d, 3a, 3b und 3c, die Inbetriebnahme Punkt 3 (Design 2c-2, 11.1: die Erkennung läuft im Dry-Run mit, Health
+An der Anlage sind 2c-1 bis 3b seit dem 17.10.2026 ausgerollt (Stand `6a6904a`), Tarif und Planung
+eingerichtet; der Betreiber hat Wallbox und Tesla am 17.10.2026 live geschaltet und evcc abgeschaltet,
+Victron ist im Dry-Run (DESS an). Als Nächstes folgen an der Anlage das Ausrollen von 3c, die Inbetriebnahme Punkt 3 (Design 2c-2, 11.1: die Erkennung läuft im Dry-Run mit, Health
 zeigt, wer wo steht), **2 Wochen Dry-Run der Planausführung** (DESS dafür aus) und die **30 echten
 Tage** durch `export_days` und `scenario_days`; danach geht Victron live (siehe „Offen an der
 Anlage“).
@@ -803,8 +804,13 @@ Demo-Zugänge: `admin`, `bedienen` (Bedienen), `gast` (Lesen) und `sicher` (Admi
 
 ## Stand der Installation beim Betreiber
 
-- Docker auf einer VM im LAN des Betreibers, Images `latest` vom Stand nach Plan 2b (ausgerollt am
-  12.10.2026). Die Pläne 2c-1, 2c-2a, 2c-2b, 2d, 3a, 3b und 3c sind noch nicht ausgerollt.
+- Docker auf einer VM im LAN des Betreibers, Images `latest` vom Stand nach Plan 3b (`6a6904a`,
+  ausgerollt am 17.10.2026 mit den Plänen 2c-1, 2c-2a, 2c-2b, 2d, 3a und 3b; vorher Stand nach 2b vom
+  12.10.2026). Laut Betreiber sind die Schritte zum Ausrollen erledigt (HA-Token, Mosquitto-ACL,
+  `config.yaml`) und Leistungspreis und Planung eingerichtet. Plan 3c ist noch nicht ausgerollt.
+- Wallbox (`wallbox.evcs`) und Tesla laut Betreiber seit dem 17.10.2026 **live**, evcc abgeschaltet;
+  der Dry-Run neben evcc, die drei Prüfungen der Zuordnung und Teil 2 „Verbindung unterbrochen“ für
+  die Wallbox sind dabei übersprungen worden und stehen noch aus. Victron im Dry-Run (DESS an).
 - Reverse Proxy mit HTTPS sowie Tarif und OeMAG-Wert im UI: laut Betreiber eingerichtet
   (11.10.2026). Zum Proxy gehören laut Betriebshandbuch 6: Port 8080 erreicht nur der Proxy,
   `app.trusted_proxies` ist gesetzt, `cookie_secure` steht wieder auf `true`.
@@ -855,9 +861,10 @@ Demo-Zugänge: `admin`, `bedienen` (Bedienen), `gast` (Lesen) und `sicher` (Admi
     `friendly_name_str`
   - Wichtig auch für die Lastprognose aus der HA-Historie.
 - **Offen an der Anlage, als Nächstes (nach Plan 3c):**
-  1. Die Images ausrollen: `docker compose pull && docker compose up -d` (Betriebshandbuch 4),
-     nachdem Plan 3c auf `main` ist (die Pläne 2c-1, 2c-2a, 2c-2b, 2d, 3a, 3b und 3c rollen zusammen
-     aus; bis 3b ist alles auf `main`). core und app starten dabei neu. **Zu 2d gehört:**
+  1. Die Images ausrollen: `docker compose pull && docker compose up -d` (Betriebshandbuch 4).
+     **2c-1 bis 3b am 17.10.2026 erledigt** (Stand `6a6904a`); offen ist 3c. Weil Wallbox und Tesla
+     live sind, vor dem Update den Regelbetrieb aus und danach wieder an. core und app starten dabei
+     neu. **Zu 2d gehört:**
      - Die Migration der app (`0007`, Tabelle `decision`) läuft beim Start der app von selbst. Die
        Entscheidungen der letzten 7 Tage holt die app dann aus den Dateien des core nach.
      - `BINDAEMS_HA_TOKEN` braucht jetzt auch die app (für die Benachrichtigungen). Die `.env` gilt
