@@ -888,6 +888,66 @@ def test_guard_sees_the_plan_target(cfg, monkeypatch) -> None:
     assert found[-1].inputs["plan_grid_charge_w"] == 3000.0
 
 
+# --- Preis und Plan-Slot in den Entscheidungen (Plan 3c, Präzisierung 10) ------------------------
+
+
+def priced_plan(budget_kw: float | None = 6.0, import_ct: float | None = 31.5) -> IntentPlan:
+    """``PLAN`` (HALTEN im zweiten Slot, ab 10:15) mit Budget und Preis in jedem Slot."""
+    return PLAN.model_copy(
+        update={
+            "slots": [
+                slot.model_copy(update={"budget_kw": budget_kw, "import_ct": import_ct})
+                for slot in PLAN.slots
+            ]
+        }
+    )
+
+
+def regulation_after_step(cfg: Config, plan: IntentPlan | None, s: int = 20 * 60) -> Regulation:
+    """Eine Regelung nach einem Zyklus ``s`` Sekunden nach ``T0`` (Standard 10:20) mit ``plan``."""
+    regulation = Regulation(cfg, HardLimits.from_config(cfg), started=T0)
+    plan_cycle(regulation, cfg, s, plan)
+    return regulation
+
+
+def test_plan_inputs_without_plan_are_empty(cfg) -> None:
+    assert regulation_after_step(cfg, None).plan_inputs() == {}
+    assert Regulation(cfg, HardLimits.from_config(cfg), started=T0).plan_inputs() == {}
+    # Ein Plan ohne Slot dieser Viertelstunde (abgelaufen) bindet nicht.
+    assert regulation_after_step(cfg, priced_plan(), s=46 * 60).plan_inputs() == {}
+
+
+def test_plan_inputs_with_slot(cfg) -> None:
+    found = regulation_after_step(cfg, priced_plan()).plan_inputs()
+    assert found == {
+        "plan_slot_ts": (T0 + timedelta(minutes=15)).timestamp(),
+        "price_ct": 31.5,
+        "budget_kw": 6.0,
+    }
+    assert all(isinstance(value, float) for value in found.values())
+
+
+def test_plan_inputs_omit_what_is_unknown(cfg) -> None:
+    slot_ts = (T0 + timedelta(minutes=15)).timestamp()
+    # Ohne Preis und ohne Ziel (``config.example`` hat keins) bleibt der Beginn des Slots.
+    found = regulation_after_step(cfg, priced_plan(budget_kw=None, import_ct=None)).plan_inputs()
+    assert found == {"plan_slot_ts": slot_ts}
+    # Ohne Budget im Slot ist das Ziel des Wächters das der Konfiguration.
+    with_config = with_target(cfg, 8.0)
+    found = regulation_after_step(with_config, priced_plan(budget_kw=None)).plan_inputs()
+    assert found == {"plan_slot_ts": slot_ts, "price_ct": 31.5, "budget_kw": 8.0}
+    # Das Budget des Slots ersetzt es.
+    found = regulation_after_step(with_config, priced_plan(budget_kw=6.0)).plan_inputs()
+    assert found["budget_kw"] == 6.0
+
+
+def test_plan_inputs_end_with_the_rest_of_the_regulation(cfg) -> None:
+    regulation = regulation_after_step(with_target(cfg, 8.0), priced_plan())
+    assert regulation.plan_inputs() != {}
+    regulation.idle(T0 + timedelta(minutes=21))
+    assert regulation.plan_inputs() == {}  # ohne Slot auch kein Ziel des Wächters
+
+
 # --- Unterstützung und Wächter unter dem Plan (Plan 3c, Präzisierung 8, Entscheidung 3) -----------
 
 HOLD = ActiveSlot(1, T0, BatteryIntent(kind=BatteryIntentKind.HALTEN), None, None, None)

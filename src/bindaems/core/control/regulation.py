@@ -243,6 +243,26 @@ class Regulation:
         ersten ``step`` und solange die Regelung ruht."""
         return self._active
 
+    def plan_inputs(self) -> dict[str, float]:
+        """Die Eingaben, die der Plan zu den Entscheidungen des letzten ``step`` beisteuert
+        (Plan 3c, Präzisierung 10): ``plan_slot_ts`` (Beginn des Slots in Sekunden seit 1970),
+        ``price_ct`` (``import_ct`` des Slots, nur wenn bekannt) und ``budget_kw`` (das Ziel des
+        Wächters in diesem Zyklus, nur wenn gesetzt).
+
+        Ohne gültigen Slot, vor dem ersten ``step`` und solange die Regelung ruht ist es leer: Die
+        Entscheidungen bekommen dann keinen neuen Schlüssel.
+        """
+        active = self._active
+        if active is None:
+            return {}
+        found = {"plan_slot_ts": active.start.timestamp()}
+        if active.import_ct is not None:
+            found["price_ct"] = active.import_ct
+        target_kw = self.peak_guard.target_kw()
+        if target_kw is not None:
+            found["budget_kw"] = target_kw
+        return found
+
     def vehicle_wallbox(self) -> dict[str, str | None]:
         """Fahrzeug-Aktor → Wallbox aus der Zuordnung der Laderegelung, für die Safety-Schicht."""
         return self.charger.vehicle_wallbox()

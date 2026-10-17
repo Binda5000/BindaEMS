@@ -902,7 +902,8 @@ class CoreRuntime:
            vergisst die Regelung ihre Werte für diesen Aktor: Das Gerät ändert sich ohne sie. Die
            Befehle der Regelung schreiben zu den Eingaben jeder Entscheidung ihre eigenen ins Log:
            die der Ladepunkte Überschuss, Grenze des Wächters und Ist-Werte, der Override PV,
-           Hauslast, Autos, Fehlbetrag, erlaubten Anteil, Ziel und Ist-Override.
+           Hauslast, Autos, Fehlbetrag, erlaubten Anteil, Ziel und Ist-Override. Gilt ein Slot des
+           Plans, kommen für alle (``plan_inputs``) Beginn des Slots, Preis und Budget dazu.
         6. Jedes Urteil über einen Befehl der Regelung geht an sie zurück (``note_verdict``), auch
            ``None``. ``not_sent`` heißt: Das Urteil ließ senden, aber danach ist kein
            Schreibvorgang offen.
@@ -963,11 +964,14 @@ class CoreRuntime:
             for command in keeper:
                 if self._execute(command, ctx, snap, now, inputs)[1]:
                     self.regulation.forget({command.actuator})
+            plan_inputs = self.regulation.plan_inputs()
             for found in regulated:
                 if self.regulation.failed:
                     break
                 command = found.command
-                verdict, sent = self._execute(command, ctx, snap, now, {**inputs, **found.inputs})
+                verdict, sent = self._execute(
+                    command, ctx, snap, now, {**inputs, **plan_inputs, **found.inputs}
+                )
                 not_sent = verdict is not None and verdict.send and not sent
                 self.regulation.note_verdict(command, verdict, not_sent=not_sent)
         self._capabilities = capabilities

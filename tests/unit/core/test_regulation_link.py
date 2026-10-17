@@ -360,6 +360,7 @@ def test_health_shows_the_last_cycle_without_exception(cfg, monkeypatch) -> None
         ("forget", lambda link: link.forget({"wallbox.evcs"}), None),
         ("vehicle_wallbox", lambda link: link.vehicle_wallbox(), {}),
         ("grid_budget_w", lambda link: link.grid_budget_w(), None),
+        ("plan_inputs", lambda link: link.plan_inputs(), {}),
     ],
 )
 def test_every_call_of_the_kernel_is_guarded(cfg, monkeypatch, name, call, fallback) -> None:

@@ -2371,10 +2371,14 @@ Nach den Gründen der Regelung stehen in `codes` die Befunde der Safety-Schicht 
 | `limit_a` | der freie Strom, den der Phasenwächter dem Ladepunkt lässt, in A |
 | `actual_current_a` | der Ist-Sollstrom des Aktors in A (im Dry-Run: der von evcc) |
 | `actual_charging` | der Ist-Zustand: 1 = lädt, 0 = lädt nicht (im Dry-Run: der von evcc) |
+| `plan_slot_ts` | nur mit gültigem Slot des Plans: Beginn des Slots in Sekunden seit 1970 (UTC) |
+| `price_ct` | nur mit gültigem Slot, dessen Plan den Bezugspreis nennt: der Preis in ct/kWh |
+| `budget_kw` | nur mit gültigem Slot und gesetztem Ziel des 15-min-Wächters: das Ziel in kW (Budget des Slots, sonst `control.peak_target_kw`) |
 
-`null` heißt unbekannt. `GET /v1/health` zeigt je Fahrzeug (`vehicles`, in der Reihenfolge von
-`config.yaml`) Modus, Boost bis, Wallbox, Zuordnung, Grenze, angesteckt, lädt, Weckvorgänge heute
-und den letzten Grund. Je Wallbox (`wallboxes`) zeigt es, wer dort steht, die Art der Zuordnung und
+`null` heißt unbekannt. Die drei Eingaben des Plans tragen alle Entscheidungen eines Regelzyklus,
+solange ein Slot gilt; ohne gültigen Slot fehlen sie. `GET /v1/health` zeigt je Fahrzeug
+(`vehicles`, in der Reihenfolge von `config.yaml`) Modus, Boost bis, Wallbox, Zuordnung, Grenze,
+angesteckt, lädt, Weckvorgänge heute und den letzten Grund. Je Wallbox (`wallboxes`) zeigt es, wer dort steht, die Art der Zuordnung und
 die Indizien (oben, „Zuordnung Auto und Wallbox“).
 
 ### Health für die Bedienung
@@ -2890,7 +2894,8 @@ Gründe in `codes`, vor den Befunden der Safety-Schicht:
   `cars_w` (Ladeleistung der Autos), `deficit_w` (Fehlbetrag zusammen), `allowed_w` (erlaubter
   Akku-Anteil zusammen), `target_w` (der gewollte Netzbezug nach dem Wächter) und `actual_setpoint_w`
   (der Override laut Cerbo; im Dry-Run unter ESS „kein Override“, also `null`). Gilt ein Slot des
-  Plans, kommt `plan_grid_charge_w` dazu (die Netzladeleistung bei `NETZLADEN`, sonst 0).
+  Plans, kommt `plan_grid_charge_w` dazu (die Netzladeleistung bei `NETZLADEN`, sonst 0), außerdem
+  `plan_slot_ts`, `price_ct` und `budget_kw` wie in der Tabelle oben.
 
 Ein Eintrag im Rohformat (hier aus dem Simulator, gerundet):
 

@@ -335,6 +335,38 @@ async def test_health_shows_the_plan_slot(runtime_env) -> None:
     assert (plan["state"], plan["slot"], plan["intent"]) == ("expired", None, None)
 
 
+PLAN_KEYS = ("plan_slot_ts", "price_ct", "plan_grid_charge_w", "budget_kw")
+
+
+async def test_decisions_carry_price_and_slot(runtime_env) -> None:  # Plan 3c, Präzisierung 10
+    rt, clock = dry_run(runtime_env, dict(EGOLF_CHARGING))
+    run(rt, clock, 31)  # 10:00:31: noch ohne Plan
+    [before] = victron_decisions(rt)
+    assert not [key for key in PLAN_KEYS if key in before.inputs]  # ohne Plan keine neuen Schlüssel
+    intent = Intent(version=2, control=True, vehicles=EGOLF_NOW, plan=hold_plan(T0))
+    assert rt.submit_intent(intent).result == "accepted"
+    run(rt, clock, 15 * 60)  # 10:15:31: der zweite Slot, HALTEN
+    hold = victron_decisions(rt)[-1]
+    assert hold.codes[0] == "plan_hold"
+    assert hold.inputs["plan_slot_ts"] == QUARTER.timestamp()
+    assert hold.inputs["price_ct"] == 21.0
+    assert hold.inputs["plan_grid_charge_w"] == 0.0
+    assert "budget_kw" not in hold.inputs  # weder Budget im Slot noch Ziel in der Konfiguration
+    run(rt, clock, 30 * 60)  # 10:45:31: abgelaufen, die Regelung ist wieder ohne Slot
+    [*_, after] = victron_decisions(rt)
+    assert not [key for key in PLAN_KEYS if key in after.inputs]
+
+
+async def test_decisions_carry_the_guard_target_as_budget(runtime_env) -> None:
+    rt, _, clock = runtime_env(state=dict(EGOLF_CHARGING), extra=EVENING, configure=peak_target)
+    intent = Intent(version=1, control=True, vehicles=EGOLF_NOW, plan=hold_plan(T0))
+    assert rt.submit_intent(intent).result == "accepted"
+    run(rt, clock, 31)  # 10:00:31: Eigenverbrauch; das Ziel des Wächters ist das der Konfiguration
+    [decision] = victron_decisions(rt)
+    assert decision.inputs["budget_kw"] == 8.0
+    assert decision.inputs["plan_slot_ts"] == (QUARTER - timedelta(minutes=15)).timestamp()
+
+
 async def test_plan_is_reported_while_the_regulation_rests(runtime_env) -> None:
     rt, _, clock = runtime_env(state=dict(EGOLF_CHARGING), extra=EVENING)
     intent = Intent(version=1, control=False, plan=hold_plan(T0))  # Regelbetrieb aus

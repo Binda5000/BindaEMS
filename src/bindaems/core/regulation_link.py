@@ -232,6 +232,10 @@ class RegulationLink:
         """Das 15-min-Budget für den ``SafetyContext``; ohne Ergebnis ``None``."""
         return self._call("grid_budget_w", self.regulation.grid_budget_w, None)
 
+    def plan_inputs(self) -> dict[str, float]:
+        """Die Eingaben des Plans für die Entscheidungen dieses Zyklus; ohne Ergebnis keine."""
+        return self._call("plan_inputs", self.regulation.plan_inputs, {})
+
     def finish(self, wall_now: datetime) -> None:
         """Am Ende des Regelteils: legt Health und Alarme des Kerns ab und führt die Folge.
 
