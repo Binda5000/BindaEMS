@@ -4,10 +4,12 @@ zurückgehaltener Entladung, sonst Eigenverbrauch."""
 from __future__ import annotations
 
 import pytest
-from tests.plan_helpers import flow, flows_result, scenario
+from tests.plan_helpers import flow, flows_result, resimulate, scenario, small_battery
 
+from bindaems.app.planning.battery_model import SLOT_H, eta
 from bindaems.app.planning.intents import derive_intents
 from bindaems.app.planning.optimizer import OptimizerResult
+from bindaems.app.planning.plausibility import R1_TOL_KWH, export_after_kwh
 from bindaems.shared.plan import BatteryIntent, BatteryIntentKind
 
 
@@ -75,3 +77,49 @@ def test_no_flows_means_no_intents() -> None:
         status="infeasible", flows=(), peaks_kw={}, objective_ct=None, solve_ms=0
     )
     assert derive_intents(inputs, empty) == []
+
+
+def test_grid_charge_is_cut_so_the_resimulation_keeps_rule_r1() -> None:
+    # Der Optimierer entlädt in Slot 0 nur 900 W (Halten, die Nachrechnung behält 0,24 kWh
+    # mehr), lädt in Slot 1 4 kW aus dem Netz und füllt den Akku danach mit PV genau bis 10 kWh,
+    # ohne Einspeisung (Regel R1 bindet). Ungekürzt speiste die Nachrechnung am Ende rund
+    # 0,26 kWh ein; das Netzladen wird um diese Energie gekürzt (auf 100 W aufgerundet).
+    pv = [0.0, 0.0] + [4586.0] * 4
+    inputs = scenario(
+        prices=[20.0] * 6,
+        pv=pv,
+        load=[2000.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+        battery=small_battery(),
+        soc_pct=50.0,
+        grid_charge=True,
+    )
+    efficiency = eta(inputs.planning.roundtrip_pct)
+    soc = 5.0 - 900 * SLOT_H / 1000 / efficiency
+    flows = [flow(gr_h=1100.0, bt_h=900.0, soc_end_kwh=soc)]
+    soc += 4000 * SLOT_H / 1000 * efficiency
+    flows.append(flow(gr_b=4000.0, soc_end_kwh=soc))
+    for pv_w in pv[2:]:
+        soc = min(10.0, soc + pv_w * SLOT_H / 1000 * efficiency)
+        flows.append(flow(pv_b=pv_w, soc_end_kwh=soc))
+    assert abs(soc - 10.0) < 0.01  # der Optimierer füllt den Akku genau
+
+    intents = derive_intents(inputs, flows_result(flows))
+    assert intents[0].kind == BatteryIntentKind.HALTEN
+    assert intents[1] == BatteryIntent(kind=BatteryIntentKind.NETZLADEN, grid_charge_w=2900)
+    assert export_after_kwh(resimulate(inputs, intents), 1) <= R1_TOL_KWH
+
+
+def test_grid_charge_without_room_left_becomes_halten() -> None:
+    # Schon ohne Netzladen ist der Akku nach der PV voll und speist rund 0,7 kWh ein: Das Netzladen
+    # in Slot 0 fällt ganz weg; der Slot hält den Akku, wie der Optimierer es wollte.
+    inputs = scenario(
+        prices=[20.0] * 2,
+        pv=[0.0, 5000.0],
+        load=[0.0, 0.0],
+        battery=small_battery(),
+        soc_pct=95.0,
+        grid_charge=True,
+    )
+    flows = [flow(gr_b=200.0, soc_end_kwh=9.55), flow(pv_b=1918.0, pv_x=3082.0, soc_end_kwh=10.0)]
+    intents = derive_intents(inputs, flows_result(flows))
+    assert intents[0] == BatteryIntent(kind=BatteryIntentKind.HALTEN)

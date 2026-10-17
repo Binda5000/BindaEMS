@@ -7,12 +7,13 @@ Akkumodell nach und prüft ihn auf Plausibilität.
 
 from __future__ import annotations
 
-from math import floor
+from math import ceil, floor
 from typing import Final
 
-from bindaems.app.planning.battery_model import SLOT_H, params_of, sim_slots
+from bindaems.app.planning.battery_model import SLOT_H, params_of, sim_slots, simulate
 from bindaems.app.planning.inputs import PlanInputs
 from bindaems.app.planning.optimizer import OptimizerResult, grid_charge_cap_w
+from bindaems.app.planning.plausibility import R1_TOL_KWH, export_after_kwh
 from bindaems.shared.plan import BatteryIntent, BatteryIntentKind
 
 GRID_CHARGE_MIN_W: Final = 100.0  # darunter ist es kein Netzladen
@@ -28,6 +29,8 @@ def derive_intents(inputs: PlanInputs, result: OptimizerResult) -> list[BatteryI
     und durch ``GC_t`` begrenzt. Sonst ``HALTEN``, wenn der Optimierer weniger als
     ``HOLD_SHARE`` dessen entlädt, was der Eigenverbrauch lieferte (mindestens ``HOLD_MIN_W``);
     die Hälfte ist die Rundung auf die nächste ausführbare Absicht. Sonst ``EIGENVERBRAUCH``.
+
+    Zuletzt hält ``_keep_rule_r1`` Regel R1 an der Nachrechnung ein.
     """
     if not result.flows:
         return []
@@ -55,4 +58,39 @@ def derive_intents(inputs: PlanInputs, result: OptimizerResult) -> list[BatteryI
         else:
             intents.append(BatteryIntent())
         soc_kwh = flows.soc_end_kwh
-    return intents
+    return _keep_rule_r1(inputs, intents)
+
+
+def _keep_rule_r1(inputs: PlanInputs, intents: list[BatteryIntent]) -> list[BatteryIntent]:
+    """Kürzt Netzladen, bis die Nachrechnung nach keinem ``NETZLADEN``-Slot mehr als
+    ``R1_TOL_KWH`` einspeist.
+
+    Wenn Regel R1 bindet, füllt der Optimierer den Akku bis zum Ende genau; schon die Rundung
+    einer Teilentladung zu ``HALTEN`` lässt die Nachrechnung dann überlaufen und einspeisen. Der
+    letzte betroffene ``NETZLADEN``-Slot lädt um die eingespeiste Energie weniger (auf
+    ``ROUND_W`` aufgerundet); bleibt weniger als ``GRID_CHARGE_MIN_W``, hält er den Akku.
+    """
+    params = params_of(inputs)
+    slots = sim_slots(inputs)
+    soc0_kwh = inputs.battery.soc_pct / 100 * params.capacity_kwh
+    result = list(intents)
+    for _ in range(len(result) * 100):  # jede Runde kürzt um mindestens ``ROUND_W``
+        steps = simulate(soc0_kwh, slots, result, params)
+        late = [
+            index
+            for index, intent in enumerate(result)
+            if intent.kind is BatteryIntentKind.NETZLADEN
+            and export_after_kwh(steps, index) > R1_TOL_KWH
+        ]
+        if not late:
+            break
+        index = late[-1]
+        excess_w = export_after_kwh(steps, index) / SLOT_H * 1000
+        power_w = min(result[index].grid_charge_w, steps[index].charge_grid_w)
+        power_w = ROUND_W * floor((power_w - ROUND_W * ceil(excess_w / ROUND_W)) / ROUND_W)
+        result[index] = (
+            BatteryIntent(kind=BatteryIntentKind.NETZLADEN, grid_charge_w=power_w)
+            if power_w >= GRID_CHARGE_MIN_W
+            else BatteryIntent(kind=BatteryIntentKind.HALTEN)
+        )
+    return result
