@@ -19,7 +19,7 @@ from pydantic import (
 from sqlalchemy import Connection, Engine, Row, delete, insert, select, update
 
 from bindaems.app.audit import AuditLog, Source
-from bindaems.app.db.schema import consumer_table
+from bindaems.app.db.schema import consumer_day, consumer_table
 from bindaems.shared.timeutil import Clock
 
 CORE_REF_RE = re.compile(r"^[a-z0-9_]+(\.[a-z0-9_]+)*\.power_w$")
@@ -186,6 +186,8 @@ class ConsumerService:
             if child is not None:
                 raise ConsumerError("Verbraucher hat Unterverbraucher", 409)
             conn.execute(delete(consumer_table).where(consumer_table.c.id == consumer_id))
+            # SQLite vergibt die Nummer des neuesten Verbrauchers wieder: keine Tage erben
+            conn.execute(delete(consumer_day).where(consumer_day.c.consumer_id == consumer_id))
             self._audit.record(actor, source, "consumer.delete", old.name, conn=conn)
 
     def _check_source(self, data: ConsumerInput) -> None:

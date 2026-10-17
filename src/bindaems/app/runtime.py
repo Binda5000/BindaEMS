@@ -31,7 +31,7 @@ from bindaems.app.backup import backup_database
 from bindaems.app.charging.routes import charging_router
 from bindaems.app.charging.sessions import SessionService
 from bindaems.app.charging.tracker import ChargingTracker
-from bindaems.app.consumers.days import ConsumerDays
+from bindaems.app.consumers.days import FILL_DAYS, ConsumerDays
 from bindaems.app.consumers.energy import EnergyCache
 from bindaems.app.consumers.routes import consumers_router
 from bindaems.app.consumers.service import ConsumerService
@@ -97,6 +97,7 @@ FORECAST_KEEP = timedelta(days=60)
 LEDGER_NIGHTLY_AT = (2, 45)  # Ortszeit, nach der Prognose um 02:30
 LEDGER_CHECK_START_DAYS = 35  # Abgleich beim Start: die letzten 35 vollständigen Tage
 LEDGER_CHECK_NIGHTLY_DAYS = 7  # nachts: die letzten 7
+CONSUMER_DAYS_NIGHTLY = 3  # nachts: fehlende Tage der letzten 3 (gestern, Fehler nachholen)
 LEDGER_ESTIMATE_DAYS = 7  # vor dem Abgleich: Lücken der letzten 7 Tage nachrechnen
 LEDGER_BACKFILL_WAIT_S = (
     600.0  # so lange wartet der Abgleich beim Start höchstens auf den ersten Nachtrag
@@ -662,8 +663,8 @@ class AppRuntime:
     async def _ledger_nightly(self, days: int, *, start: bool = False) -> None:
         """Rechnet die Lücken der letzten 7 Tage nach und gleicht dann die letzten ``days``
         vollständigen Tage (bis gestern) mit den Zählern ab, geschätzte Slots eingeschlossen.
-        Danach speichert er die Energie der Verbraucher: gestern, beim ``start`` die fehlenden
-        Tage der letzten 31.
+        Danach speichert er die Energie der Verbraucher: nachts die fehlenden Tage der letzten 3
+        (gestern, und ein Fehler der Vornacht wird nachgeholt), beim ``start`` die der letzten 31.
 
         Ein Fehler wird protokolliert; die nächste Nacht versucht es wieder, und jeder Schritt läuft
         auch, wenn ein anderer scheitert.
@@ -690,10 +691,9 @@ class AppRuntime:
         except Exception:
             log.exception("Abgleich mit den Zählern fehlgeschlagen")
         try:
-            if start:
-                stored = await self.consumer_days.fill_missing(today)
-            else:
-                stored = int(await self.consumer_days.store(today - timedelta(days=1)) > 0)
+            stored = await self.consumer_days.fill_missing(
+                today, FILL_DAYS if start else CONSUMER_DAYS_NIGHTLY
+            )
             if stored:
                 log.info("Energie der Verbraucher je Tag gespeichert", days=stored)
         except Exception:

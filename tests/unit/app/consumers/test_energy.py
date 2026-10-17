@@ -198,7 +198,8 @@ async def test_window_energy_reads_the_given_window_and_leaves_the_cache_alone(
     start, end = MIDNIGHT - timedelta(days=1), MIDNIGHT
     energy, house = await cache.window_energy([og], start, end)
     assert (cache.since, cache.energy_kwh(og), cache.house_kwh()) == before
-    assert energy == {1: (None, "kein Verlauf seit Mitternacht")} or energy[1][1] is None
+    # der Punkt liegt bei end (Mock ignoriert das Fenster): er zählt nicht
+    assert energy == {1: (0.0, None)}
     assert house is None
     query = route.calls.last.request.url.params["q"]
     assert f"time >= {epoch_ms(start)}ms AND time < {epoch_ms(end)}ms" in query

@@ -166,3 +166,20 @@ def test_sum_is_unknown_when_a_day_is_missing(days, engine) -> None:
     # der Grund des ersten Tages ohne Wert
     assert result[1] == (None, "kein Verlauf seit Mitternacht")
     assert result[2] == (None, NO_DAY)
+
+
+async def test_a_recreated_consumer_does_not_inherit_the_days_of_a_deleted_one(
+    days, engine, service, respx_mock
+) -> None:
+    _consumers(service, "a")
+    (old,) = _consumers(service, "b")
+    respx_mock.get(URL).mock(side_effect=lambda r: _answer(r, {"a": 60, "b": 60, "c": 30}))
+    await days.fill_missing(date(2026, 10, 9), days=2)
+    service.delete(old, actor="chris", source="ui")
+    assert not [key for key in _rows(engine) if key[1] == old]
+    (new,) = _consumers(service, "c")
+    assert new == old  # SQLite vergibt die Nummer des neuesten Verbrauchers wieder
+    assert not [key for key in _rows(engine) if key[1] == new]
+    # die Tage zählen für den neuen Verbraucher als fehlend und werden aus den Rohdaten gefüllt
+    assert await days.fill_missing(date(2026, 10, 9), days=2) == 2
+    assert _rows(engine)[("2026-10-08", new)] == (0.3, None)

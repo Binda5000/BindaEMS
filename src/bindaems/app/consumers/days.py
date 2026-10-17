@@ -43,7 +43,8 @@ class ConsumerDays:
 
         Heute und die Zukunft werden nicht gespeichert (0). Ein Verbraucher, dessen Verlauf nicht
         lesbar war, bekommt keine neue Zeile und behält die alte, damit ein vorübergehender Fehler
-        keinen Tag mit einem falschen Grund belegt; der Tag wird beim nächsten Lauf nachgeholt.
+        keinen Tag mit einem falschen Grund belegt; ``fill_missing`` holt ihn nach (nachts für die
+        letzten Tage, beim Start für die letzten 31).
         """
         if day >= self._today():
             return 0

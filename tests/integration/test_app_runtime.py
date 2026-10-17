@@ -702,7 +702,7 @@ def spy_consumer_days(runtime, monkeypatch) -> dict[str, list]:
     return calls
 
 
-async def test_ledger_nightly_stores_yesterdays_consumer_energy_and_fills_at_start(
+async def test_ledger_nightly_fills_consumer_days_31_at_start_and_3_at_night(
     runtime, monkeypatch
 ) -> None:
     spy_ledger_checks(runtime, monkeypatch)
@@ -712,20 +712,20 @@ async def test_ledger_nightly_stores_yesterdays_consumer_energy_and_fills_at_sta
     monkeypatch.setattr(asyncio, "sleep", record_then_stop([], after=1))
     with pytest.raises(StopScheduler):
         await runtime._ledger_nightly_loop()
-    # beim Start: die fehlenden Tage der letzten 31 (heute ist der 09.10.2026), nicht gestern allein
+    # beim Start: die fehlenden Tage der letzten 31 (heute ist der 09.10.2026), nachts der letzten 3
     assert calls == {"store": [], "fill": [(date(2026, 10, 9), 31)]}
     await runtime._ledger_nightly(7)
-    assert calls == {"store": [date(2026, 10, 8)], "fill": [(date(2026, 10, 9), 31)]}
+    assert calls == {"store": [], "fill": [(date(2026, 10, 9), 31), (date(2026, 10, 9), 3)]}
 
 
 async def test_ledger_nightly_survives_a_failing_consumer_day_step(runtime, monkeypatch) -> None:
     checks = spy_ledger_checks(runtime, monkeypatch)
     estimates = spy_gap_estimator(runtime, monkeypatch)
 
-    async def store(day: date) -> int:
+    async def fill_missing(today: date, days: int = 31) -> int:
         raise RuntimeError("Datenbank gesperrt")
 
-    monkeypatch.setattr(runtime.consumer_days, "store", store)
+    monkeypatch.setattr(runtime.consumer_days, "fill_missing", fill_missing)
     with capture_logs() as logs:
         await runtime._ledger_nightly(7)
     assert "Energie der Verbraucher je Tag nicht gespeichert" in [e["event"] for e in logs]
@@ -742,4 +742,4 @@ async def test_ledger_nightly_stores_consumer_days_even_if_estimate_and_check_fa
     monkeypatch.setattr(runtime.ledger_checks, "run", broken)
     calls = spy_consumer_days(runtime, monkeypatch)
     await runtime._ledger_nightly(7)
-    assert calls["store"] == [date(2026, 10, 8)]
+    assert calls["fill"] == [(date(2026, 10, 9), 3)]
