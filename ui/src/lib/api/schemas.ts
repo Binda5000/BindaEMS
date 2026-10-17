@@ -826,6 +826,8 @@ export const PlanSlotSchema = v.object({
 	feed_in_ct: NullableNumber,
 	estimated: v.boolean(),
 	budget_kw: NullableNumber,
+	/** Plan-Schwelle der Akku-Unterstützung in % */
+	support_soc_pct: NullableNumber,
 	codes: v.array(PlanReasonCodeSchema),
 	text: v.string()
 });

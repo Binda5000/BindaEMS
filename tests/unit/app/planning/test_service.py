@@ -217,6 +217,16 @@ async def test_collect_battery_from_config(service, cfg):
     assert inputs.month_peak_kw is None and inputs.trigger == "start"
 
 
+async def test_collect_support_threshold_defaults_to_the_config(service, cfg):
+    inputs = await service.collect("start")
+    assert inputs.support_soc_pct == cfg.control.support_soc_pct == 70.0
+
+
+async def test_collect_support_threshold_follows_the_given_source(service_with):
+    inputs = await service_with(support_pct=lambda: 82.0).collect("start")
+    assert inputs.support_soc_pct == 82.0
+
+
 async def test_collect_grid_limit_from_max_import(service_with, cfg):
     limited = cfg.model_copy(update={"grid": cfg.grid.model_copy(update={"max_import_kw": 11.0})})
     inputs = await service_with(cfg=limited).collect("start")

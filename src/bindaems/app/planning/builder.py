@@ -7,6 +7,7 @@ und 11), Kosten, Vergleichskosten „Victron allein“ und die Gründe der Erkl�
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from datetime import datetime
 from math import ceil
 
 from bindaems.app.planning.battery_model import SimStep, params_of, sim_slots, simulate
@@ -20,9 +21,10 @@ from bindaems.shared.plan import (
     PlanSource,
     SolverStatus,
 )
-from bindaems.shared.timeutil import LOCAL_TZ, ensure_utc
+from bindaems.shared.timeutil import LOCAL_TZ, SLOT, ensure_utc
 
 _TENTH_EPS = 1e-9  # Gleitkommafehler vor dem Aufrunden auf 0,1 kW
+_SOC_EPS = 1e-9  # Gleitkommafehler vor dem Aufrunden auf ganze Prozent und beim Bedarf null
 
 
 def _resimulate(inputs: PlanInputs, intents: Sequence[BatteryIntent]) -> list[SimStep]:
@@ -75,6 +77,33 @@ def _budgets(
     return [budget_of.get(_month_of(inputs, index)) for index in range(len(inputs.slots))]
 
 
+def support_thresholds(
+    slots: Sequence[PlanSlot], reserve_pct: float
+) -> list[tuple[float, datetime]]:
+    """Plan-Schwelle der Akku-Unterstützung je Slot und der Zeitpunkt, bis zu dem der Plan den Akku
+    braucht (Präzisierung 6).
+
+    Mit der Entladung ``d_t`` eines Slots in Prozentpunkten (``soc_start_pct - soc_end_pct``) gilt
+    rückwärts ``R_N = 0`` und ``R_t = max(0, d_t + R_{t+1})``; die Schwelle ist
+    ``min(100, ceil(reserve_pct + R_t))``. „Bis“ ist der Beginn des ersten späteren Slots mit
+    ``R = 0``, sonst das Horizontende.
+    """
+    count = len(slots)
+    if count == 0:
+        return []
+    starts = [slot.start for slot in slots] + [slots[-1].start + SLOT]
+    need = [0.0] * (count + 1)
+    until = [starts[count]] * (count + 1)
+    for index in range(count - 1, -1, -1):
+        drop = slots[index].soc_start_pct - slots[index].soc_end_pct
+        need[index] = max(0.0, drop + need[index + 1])
+        until[index] = starts[index + 1] if need[index + 1] <= _SOC_EPS else until[index + 1]
+    return [
+        (min(100.0, float(ceil(reserve_pct + need[index] - _SOC_EPS))), until[index])
+        for index in range(count)
+    ]
+
+
 def build_plan(
     inputs: PlanInputs,
     intents: Sequence[BatteryIntent],
@@ -91,13 +120,10 @@ def build_plan(
     params = params_of(inputs)
     steps = _resimulate(inputs, intents)
     budgets = _budgets(inputs, steps, source=source, optimizer_peaks_kw=optimizer_peaks_kw)
-    reasons = reasons_for(inputs, intents, steps, budgets, fallback=source == "fallback")
 
-    slots: list[PlanSlot] = []
-    for slot, intent, item, budget, slot_reasons in zip(
-        inputs.slots, intents, steps, budgets, reasons, strict=True
-    ):
-        slots.append(
+    drafts: list[PlanSlot] = []
+    for slot, intent, item, budget in zip(inputs.slots, intents, steps, budgets, strict=True):
+        drafts.append(
             PlanSlot(
                 start=slot.start,
                 intent=intent,
@@ -115,9 +141,22 @@ def build_plan(
                 estimated=slot.origin == "estimated",
                 cost_ct=item.cost_ct,
                 budget_kw=budget,
-                reasons=slot_reasons,
+                reasons=[],
             )
         )
+    thresholds = support_thresholds(drafts, inputs.battery.reserve_pct)
+    reasons = reasons_for(
+        inputs,
+        intents,
+        steps,
+        budgets,
+        fallback=source == "fallback",
+        thresholds=thresholds,
+    )
+    slots = [
+        draft.model_copy(update={"support_soc_pct": threshold, "reasons": slot_reasons})
+        for draft, (threshold, _), slot_reasons in zip(drafts, thresholds, reasons, strict=True)
+    ]
     return Plan(
         created_at=inputs.created_at,
         trigger=inputs.trigger,

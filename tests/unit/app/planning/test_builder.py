@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import pytest
-from tests.plan_helpers import month, resimulate, scenario
+from tests.plan_helpers import month, resimulate, sample_slot, scenario, small_battery
 
-from bindaems.app.planning.builder import baseline_cost_ct, build_plan
+from bindaems.app.planning.builder import baseline_cost_ct, build_plan, support_thresholds
 from bindaems.app.planning.explain import slot_text
-from bindaems.shared.plan import PLAN_VALID, BatteryIntent, BatteryIntentKind
+from bindaems.shared.plan import PLAN_VALID, BatteryIntent, BatteryIntentKind, PlanSlot
+from bindaems.shared.timeutil import SLOT
 
 EV = BatteryIntent()
 HOLD = BatteryIntent(kind=BatteryIntentKind.HALTEN)
@@ -217,3 +218,111 @@ def test_cost_counts_feed_in_revenue() -> None:
     assert [s.cost_ct for s in plan.slots] == pytest.approx([-3.75, -3.75, 10.0])
     assert plan.expected_cost_ct == pytest.approx(2.5)
     assert plan.baseline_cost_ct == pytest.approx(-7.5)
+
+
+# --- Plan-Schwelle der Akku-Unterstützung (Präzisierung 6) ----------------------------------
+
+
+def slots_from(soc_pct: float, drops: list[float]) -> list[PlanSlot]:
+    """Slots ab 19:00 UTC; ``drops`` sind die Entladungen je Slot in Prozentpunkten (negativ:
+    Laden). Der SOC am Ende eines Slots ist der am Anfang des nächsten."""
+    result: list[PlanSlot] = []
+    for index, drop in enumerate(drops):
+        slot = sample_slot(f"{19 + index // 4:02d}:{index % 4 * 15:02d}")
+        result.append(
+            slot.model_copy(update={"soc_start_pct": soc_pct, "soc_end_pct": soc_pct - drop})
+        )
+        soc_pct -= drop
+    return result
+
+
+def test_thresholds_reserve_the_evening_discharge() -> None:
+    # SOC 60 → 50 → 40 → 30 → 20 (je 10 Punkte Entladung), Reserve 20
+    found = support_thresholds(slots_from(60, [10, 10, 10, 10]), 20.0)
+    assert [t for t, _ in found] == [60.0, 50.0, 40.0, 30.0]
+
+
+def test_thresholds_name_the_horizon_end_while_the_need_lasts() -> None:
+    slots = slots_from(60, [10, 10, 10, 10])
+    assert {um for _, um in support_thresholds(slots, 20.0)} == {slots[-1].start + SLOT}
+
+
+def test_pv_refill_releases_the_threshold() -> None:
+    # Entladung 10, dann Laden 30: R_1 = max(0, -30) = 0, R_0 = 10. Slot 0 braucht seine eigenen
+    # 10 Punkte, Slot 1 vor dem Laden nichts mehr; „bis“ ist der Beginn von Slot 1.
+    slots = slots_from(50, [10, -30])
+    found = support_thresholds(slots, 20.0)
+    assert [t for t, _ in found] == [30.0, 20.0]
+    assert [um for _, um in found] == [slots[1].start, slots[1].start + SLOT]
+
+
+def test_threshold_is_rounded_up_and_capped() -> None:
+    assert [t for t, _ in support_thresholds(slots_from(100, [7.5, 7.5]), 20.0)] == [35.0, 28.0]
+    assert [t for t, _ in support_thresholds(slots_from(100, [50, 50]), 20.0)] == [100.0, 70.0]
+    # Gleitkommafehler über einer ganzen Zahl heben die Schwelle nicht an
+    assert support_thresholds(slots_from(60, [10.0000000001]), 20.0)[0][0] == 30.0
+
+
+def test_thresholds_of_an_empty_plan() -> None:
+    assert support_thresholds([], 20.0) == []
+
+
+def evening(**overrides):
+    """8 Slots bei 3,5 kW Last ohne PV aus 90 % (rund 9,3 Punkte Entladung je Slot bei 10 kWh)."""
+    values = dict(
+        prices=[20.0] * 8,
+        pv=[0.0] * 8,
+        load=[3500.0] * 8,
+        soc_pct=90.0,
+        battery=small_battery(),
+    )
+    return scenario(**{**values, **overrides})
+
+
+def test_slots_carry_the_threshold() -> None:
+    plan = build_plan(evening(), [EV] * 8, source="optimizer", solver_status="optimal")
+    # Der Akku (10 kWh, Reserve 20 %) liefert mit Wirkungsgrad rund 9,3 Punkte je Slot; der Bedarf
+    # des ersten Slots ist alles über der Reserve, der des letzten nur noch der Rest.
+    assert [s.support_soc_pct for s in plan.slots] == [90, 81, 72, 63, 53, 44, 35, 25]
+    assert all(0 <= s.support_soc_pct <= 100 for s in plan.slots)
+
+
+def test_reserved_code_only_above_the_configured_threshold() -> None:
+    plan = build_plan(
+        evening(support_soc_pct=70.0), [EV] * 8, source="optimizer", solver_status="optimal"
+    )
+    codes = [[r.code for r in s.reasons] for s in plan.slots]
+    assert codes[0] == ["EIGENVERBRAUCH", "UNTERSTUETZUNG_RESERVIERT"]
+    assert "UNTERSTUETZUNG_RESERVIERT" in codes[2] and "UNTERSTUETZUNG_RESERVIERT" not in codes[3]
+    assert "UNTERSTUETZUNG_RESERVIERT" not in codes[-1]
+    reserved = plan.slots[0].reasons[1]
+    assert reserved.params == {"soc": 90.0, "um": (plan.slots[-1].start + SLOT).isoformat()}
+
+
+def test_a_higher_configured_threshold_silences_the_code() -> None:
+    plan = build_plan(
+        evening(support_soc_pct=90.0), [EV] * 8, source="optimizer", solver_status="optimal"
+    )
+    assert all(r.code != "UNTERSTUETZUNG_RESERVIERT" for s in plan.slots for r in s.reasons)
+
+
+def test_reserved_code_stands_before_estimated() -> None:
+    inputs = evening(origins=["estimated"] * 8)
+    plan = build_plan(inputs, [EV] * 8, source="optimizer", solver_status="optimal")
+    assert [r.code for r in plan.slots[0].reasons] == [
+        "EIGENVERBRAUCH",
+        "UNTERSTUETZUNG_RESERVIERT",
+        "GESCHAETZT",
+    ]
+
+
+def test_no_reserved_code_in_hold_slots() -> None:
+    plan = build_plan(
+        evening(load=[0.0, 0.0] + [3500.0] * 6),
+        [HOLD] * 2 + [EV] * 6,
+        source="optimizer",
+        solver_status="optimal",
+    )
+    held = [[r.code for r in s.reasons] for s in plan.slots[:2]]
+    assert all("UNTERSTUETZUNG_RESERVIERT" not in codes for codes in held)
+    assert plan.slots[0].support_soc_pct is not None and plan.slots[0].support_soc_pct > 70.0

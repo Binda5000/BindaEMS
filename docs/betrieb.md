@@ -3406,6 +3406,14 @@ Zahlen:
 **Lohnt sich** heißt: Ein späterer Slot im Horizont bezieht in der Nachrechnung mindestens 100 W aus
 dem Netz und erfüllt die Spread-Regel mit dem Preis des Slots.
 
+**Plan-Schwelle** (`support_soc_pct` am Slot, auch in `GET /api/plan`): der SOC, den der Plan für seine
+späteren Entladungen noch braucht, zuzüglich der USV-Reserve und auf ganze Prozent aufgerundet,
+höchstens 100 %. Sie wird rückwärts über den Horizont gerechnet: Der Bedarf eines Slots ist seine
+Entladung in Prozentpunkten plus der Bedarf des nächsten Slots, mindestens 0; ein Slot, in dem die PV
+den Akku wieder lädt, gibt den Bedarf davor frei. Liegt sie in einem `Eigenverbrauch`-Slot über der
+Unterstützungsschwelle, mit der der Plan gerechnet wurde (Standard `control.support_soc_pct`),
+steht dort `UNTERSTUETZUNG_RESERVIERT`.
+
 ### Budget
 
 Mit einem Leistungspreis im Tarif (Abschnitt 8) hat der Plan je Monat ein **Budget**: die Monatsspitze,

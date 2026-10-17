@@ -159,6 +159,7 @@ class PlanningService:
         *,
         solver: Solver = solve_in_subprocess,
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+        support_pct: Callable[[], float] | None = None,
     ) -> None:
         self._cfg = cfg
         self._settings = settings
@@ -171,6 +172,8 @@ class PlanningService:
         self._clock = clock
         self._solver = solver
         self._sleep = sleep
+        # Unterstützungsschwelle der Absicht (Task 10); ohne Quelle gilt die Konfiguration
+        self._support_pct = support_pct or (lambda: cfg.control.support_soc_pct)
         self._lock = asyncio.Lock()  # ein Lauf nach dem anderen
         self._running = False
         self._unavailable: str | None = None
@@ -392,6 +395,7 @@ class PlanningService:
             month_peak_kw=month_peak_kw,
             previous=self._plan,
             settings_version=current.version,
+            support_soc_pct=self._support_pct(),
         )
 
     async def replan(self, trigger: PlanTrigger) -> Plan | None:

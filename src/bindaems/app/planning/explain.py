@@ -77,7 +77,7 @@ _SENTENCES: dict[str, Callable[[Params], str]] = {
     "EIGENVERBRAUCH": lambda _: "Akku deckt den Eigenverbrauch.",
     "UNTERSTUETZUNG_RESERVIERT": lambda p: (
         f"Akku-Unterstützung fürs Auto erst ab {_de(_num(p, 'soc'), 0)} %, weil der Plan den "
-        f"Akku bis {_txt(p, 'um')} Uhr braucht."
+        f"Akku bis {_hhmm(datetime.fromisoformat(_txt(p, 'um')))} Uhr braucht."
     ),
     "GESCHAETZT": lambda _: "Preis geschätzt.",
     "ERSATZPLAN": lambda _: "Ersatzplan.",
@@ -218,18 +218,34 @@ def reasons_for(
     budgets: Sequence[float | None],
     *,
     fallback: bool,
+    thresholds: Sequence[tuple[float, datetime]] | None = None,
 ) -> list[list[Reason]]:
-    """Grundcodes je Slot: ``ERSATZPLAN`` (im Ersatzplan), Hauptcode, ``GESCHAETZT`` (bei
-    Schätzpreis)."""
+    """Grundcodes je Slot: ``ERSATZPLAN`` (im Ersatzplan), Hauptcode, ``UNTERSTUETZUNG_RESERVIERT``
+    (Präzisierung 6), ``GESCHAETZT`` (bei Schätzpreis).
+
+    ``thresholds`` sind Plan-Schwelle und „bis“ je Slot (``support_thresholds``); ohne sie gibt es
+    den Grundcode nie.
+    """
     count = len(inputs.slots)
     if not len(intents) == len(steps) == len(budgets) == count:
         raise ValueError("Absichten, Schritte und Budgets müssen zu den Slots passen")
+    if thresholds is not None and len(thresholds) != count:
+        raise ValueError("Schwellen müssen zu den Slots passen")
     result: list[list[Reason]] = []
     for index, slot in enumerate(inputs.slots):
         reasons: list[Reason] = []
         if fallback:
             reasons.append(Reason(code="ERSATZPLAN"))
         reasons.append(_main_reason(inputs, intents, steps, budgets, index))
+        if thresholds is not None and intents[index].kind is BatteryIntentKind.EIGENVERBRAUCH:
+            soc_pct, until = thresholds[index]
+            if soc_pct > inputs.support_soc_pct:
+                reasons.append(
+                    Reason(
+                        code="UNTERSTUETZUNG_RESERVIERT",
+                        params={"soc": soc_pct, "um": ensure_utc(until).isoformat()},
+                    )
+                )
         if slot.origin == "estimated":
             reasons.append(Reason(code="GESCHAETZT"))
         result.append(reasons)

@@ -37,6 +37,7 @@
         "feed_in_ct": 7.3,
         "estimated": false,
         "budget_kw": null,
+        "support_soc_pct": 20.0,
         "codes": [
           "PV_LADEN"
         ],
@@ -56,6 +57,7 @@
         "feed_in_ct": 7.3,
         "estimated": false,
         "budget_kw": null,
+        "support_soc_pct": 20.0,
         "codes": [
           "PV_LADEN"
         ],
@@ -75,6 +77,7 @@
         "feed_in_ct": 7.3,
         "estimated": false,
         "budget_kw": null,
+        "support_soc_pct": 20.0,
         "codes": [
           "PV_LADEN"
         ],
@@ -94,6 +97,7 @@
         "feed_in_ct": 7.3,
         "estimated": false,
         "budget_kw": null,
+        "support_soc_pct": 20.0,
         "codes": [
           "PV_LADEN"
         ],
@@ -113,6 +117,7 @@
         "feed_in_ct": 7.3,
         "estimated": false,
         "budget_kw": null,
+        "support_soc_pct": 20.0,
         "codes": [
           "PV_LADEN"
         ],
@@ -132,6 +137,7 @@
         "feed_in_ct": 7.3,
         "estimated": false,
         "budget_kw": null,
+        "support_soc_pct": 21.0,
         "codes": [
           "PV_LADEN"
         ],
@@ -151,6 +157,7 @@
         "feed_in_ct": 7.3,
         "estimated": false,
         "budget_kw": null,
+        "support_soc_pct": 25.0,
         "codes": [
           "PV_LADEN"
         ],
@@ -170,6 +177,7 @@
         "feed_in_ct": 7.3,
         "estimated": false,
         "budget_kw": null,
+        "support_soc_pct": 29.0,
         "codes": [
           "PV_LADEN"
         ],
@@ -189,6 +197,7 @@
         "feed_in_ct": 7.3,
         "estimated": false,
         "budget_kw": null,
+        "support_soc_pct": 32.0,
         "codes": [
           "PV_LADEN"
         ],
@@ -208,6 +217,7 @@
         "feed_in_ct": 7.3,
         "estimated": false,
         "budget_kw": null,
+        "support_soc_pct": 35.0,
         "codes": [
           "PV_LADEN"
         ],
@@ -227,6 +237,7 @@
         "feed_in_ct": 7.3,
         "estimated": false,
         "budget_kw": null,
+        "support_soc_pct": 38.0,
         "codes": [
           "PV_LADEN"
         ],
@@ -246,6 +257,7 @@
         "feed_in_ct": 7.3,
         "estimated": false,
         "budget_kw": null,
+        "support_soc_pct": 41.0,
         "codes": [
           "PV_LADEN"
         ],
@@ -265,6 +277,7 @@
         "feed_in_ct": 7.3,
         "estimated": false,
         "budget_kw": null,
+        "support_soc_pct": 43.0,
         "codes": [
           "PV_LADEN"
         ],
@@ -284,6 +297,7 @@
         "feed_in_ct": 7.3,
         "estimated": false,
         "budget_kw": null,
+        "support_soc_pct": 46.0,
         "codes": [
           "PV_LADEN"
         ],
@@ -303,6 +317,7 @@
         "feed_in_ct": 7.3,
         "estimated": false,
         "budget_kw": null,
+        "support_soc_pct": 49.0,
         "codes": [
           "PV_LADEN"
         ],
@@ -322,6 +337,7 @@
         "feed_in_ct": 7.3,
         "estimated": false,
         "budget_kw": null,
+        "support_soc_pct": 51.0,
         "codes": [
           "EIGENVERBRAUCH"
         ],
@@ -341,6 +357,7 @@
         "feed_in_ct": 7.3,
         "estimated": false,
         "budget_kw": null,
+        "support_soc_pct": 51.0,
         "codes": [
           "EIGENVERBRAUCH"
         ],
@@ -360,6 +377,7 @@
         "feed_in_ct": 7.3,
         "estimated": false,
         "budget_kw": null,
+        "support_soc_pct": 51.0,
         "codes": [
           "EIGENVERBRAUCH"
         ],
@@ -379,6 +397,7 @@
         "feed_in_ct": 7.3,
         "estimated": false,
         "budget_kw": null,
+        "support_soc_pct": 51.0,
         "codes": [
           "EIGENVERBRAUCH"
         ],
@@ -398,6 +417,7 @@
         "feed_in_ct": 7.3,
         "estimated": false,
         "budget_kw": null,
+        "support_soc_pct": 51.0,
         "codes": [
           "EIGENVERBRAUCH"
         ],
@@ -417,6 +437,7 @@
         "feed_in_ct": 7.3,
         "estimated": false,
         "budget_kw": null,
+        "support_soc_pct": 51.0,
         "codes": [
           "EIGENVERBRAUCH"
         ],
@@ -436,6 +457,7 @@
         "feed_in_ct": 7.3,
         "estimated": false,
         "budget_kw": null,
+        "support_soc_pct": 51.0,
         "codes": [
           "EIGENVERBRAUCH"
         ],
@@ -455,6 +477,7 @@
         "feed_in_ct": 7.3,
         "estimated": false,
         "budget_kw": null,
+        "support_soc_pct": 51.0,
         "codes": [
           "EIGENVERBRAUCH"
         ],
@@ -474,6 +497,7 @@
         "feed_in_ct": 7.3,
         "estimated": false,
         "budget_kw": null,
+        "support_soc_pct": 51.0,
         "codes": [
           "EIGENVERBRAUCH"
         ],
@@ -493,6 +517,7 @@
         "feed_in_ct": 7.3,
         "estimated": false,
         "budget_kw": null,
+        "support_soc_pct": 51.0,
         "codes": [
           "EIGENVERBRAUCH"
         ],
@@ -512,6 +537,7 @@
         "feed_in_ct": 7.3,
         "estimated": false,
         "budget_kw": null,
+        "support_soc_pct": 51.0,
         "codes": [
           "EIGENVERBRAUCH"
         ],
@@ -531,6 +557,7 @@
         "feed_in_ct": 7.3,
         "estimated": false,
         "budget_kw": null,
+        "support_soc_pct": 51.0,
         "codes": [
           "EIGENVERBRAUCH"
         ],
@@ -550,6 +577,7 @@
         "feed_in_ct": 7.3,
         "estimated": false,
         "budget_kw": null,
+        "support_soc_pct": 51.0,
         "codes": [
           "EIGENVERBRAUCH"
         ],
@@ -569,6 +597,7 @@
         "feed_in_ct": 7.3,
         "estimated": false,
         "budget_kw": null,
+        "support_soc_pct": 50.0,
         "codes": [
           "EIGENVERBRAUCH"
         ],
@@ -588,6 +617,7 @@
         "feed_in_ct": 7.3,
         "estimated": false,
         "budget_kw": null,
+        "support_soc_pct": 49.0,
         "codes": [
           "EIGENVERBRAUCH"
         ],
@@ -607,6 +637,7 @@
         "feed_in_ct": 7.3,
         "estimated": false,
         "budget_kw": null,
+        "support_soc_pct": 49.0,
         "codes": [
           "EIGENVERBRAUCH"
         ],
@@ -626,6 +657,7 @@
         "feed_in_ct": 7.3,
         "estimated": false,
         "budget_kw": null,
+        "support_soc_pct": 48.0,
         "codes": [
           "EIGENVERBRAUCH"
         ],
@@ -645,6 +677,7 @@
         "feed_in_ct": 7.3,
         "estimated": false,
         "budget_kw": null,
+        "support_soc_pct": 47.0,
         "codes": [
           "EIGENVERBRAUCH"
         ],
@@ -664,6 +697,7 @@
         "feed_in_ct": 7.3,
         "estimated": false,
         "budget_kw": null,
+        "support_soc_pct": 46.0,
         "codes": [
           "EIGENVERBRAUCH"
         ],
@@ -683,6 +717,7 @@
         "feed_in_ct": 7.3,
         "estimated": false,
         "budget_kw": null,
+        "support_soc_pct": 45.0,
         "codes": [
           "EIGENVERBRAUCH"
         ],
@@ -702,6 +737,7 @@
         "feed_in_ct": 7.3,
         "estimated": false,
         "budget_kw": null,
+        "support_soc_pct": 44.0,
         "codes": [
           "EIGENVERBRAUCH"
         ],
@@ -721,6 +757,7 @@
         "feed_in_ct": 7.3,
         "estimated": false,
         "budget_kw": null,
+        "support_soc_pct": 43.0,
         "codes": [
           "EIGENVERBRAUCH"
         ],
@@ -740,6 +777,7 @@
         "feed_in_ct": 7.3,
         "estimated": false,
         "budget_kw": null,
+        "support_soc_pct": 41.0,
         "codes": [
           "EIGENVERBRAUCH"
         ],
@@ -759,6 +797,7 @@
         "feed_in_ct": 7.3,
         "estimated": false,
         "budget_kw": null,
+        "support_soc_pct": 40.0,
         "codes": [
           "EIGENVERBRAUCH"
         ],
@@ -778,6 +817,7 @@
         "feed_in_ct": 7.3,
         "estimated": false,
         "budget_kw": null,
+        "support_soc_pct": 39.0,
         "codes": [
           "EIGENVERBRAUCH"
         ],
@@ -797,6 +837,7 @@
         "feed_in_ct": 7.3,
         "estimated": false,
         "budget_kw": null,
+        "support_soc_pct": 38.0,
         "codes": [
           "EIGENVERBRAUCH"
         ],
@@ -816,6 +857,7 @@
         "feed_in_ct": 7.3,
         "estimated": false,
         "budget_kw": null,
+        "support_soc_pct": 37.0,
         "codes": [
           "EIGENVERBRAUCH"
         ],
@@ -835,6 +877,7 @@
         "feed_in_ct": 7.3,
         "estimated": false,
         "budget_kw": null,
+        "support_soc_pct": 36.0,
         "codes": [
           "EIGENVERBRAUCH"
         ],
@@ -854,6 +897,7 @@
         "feed_in_ct": 7.3,
         "estimated": false,
         "budget_kw": null,
+        "support_soc_pct": 35.0,
         "codes": [
           "EIGENVERBRAUCH"
         ],
@@ -873,6 +917,7 @@
         "feed_in_ct": 7.3,
         "estimated": false,
         "budget_kw": null,
+        "support_soc_pct": 34.0,
         "codes": [
           "EIGENVERBRAUCH"
         ],
@@ -892,6 +937,7 @@
         "feed_in_ct": 7.3,
         "estimated": false,
         "budget_kw": null,
+        "support_soc_pct": 33.0,
         "codes": [
           "EIGENVERBRAUCH"
         ],
@@ -911,6 +957,7 @@
         "feed_in_ct": 7.3,
         "estimated": false,
         "budget_kw": null,
+        "support_soc_pct": 32.0,
         "codes": [
           "EIGENVERBRAUCH"
         ],
@@ -930,6 +977,7 @@
         "feed_in_ct": 7.3,
         "estimated": false,
         "budget_kw": null,
+        "support_soc_pct": 30.0,
         "codes": [
           "EIGENVERBRAUCH"
         ],
@@ -949,6 +997,7 @@
         "feed_in_ct": 7.3,
         "estimated": false,
         "budget_kw": null,
+        "support_soc_pct": 29.0,
         "codes": [
           "EIGENVERBRAUCH"
         ],
@@ -968,6 +1017,7 @@
         "feed_in_ct": 7.3,
         "estimated": false,
         "budget_kw": null,
+        "support_soc_pct": 28.0,
         "codes": [
           "EIGENVERBRAUCH"
         ],
@@ -987,6 +1037,7 @@
         "feed_in_ct": 7.3,
         "estimated": false,
         "budget_kw": null,
+        "support_soc_pct": 27.0,
         "codes": [
           "EIGENVERBRAUCH"
         ],
@@ -1006,6 +1057,7 @@
         "feed_in_ct": 7.3,
         "estimated": false,
         "budget_kw": null,
+        "support_soc_pct": 26.0,
         "codes": [
           "EIGENVERBRAUCH"
         ],
@@ -1025,6 +1077,7 @@
         "feed_in_ct": 7.3,
         "estimated": false,
         "budget_kw": null,
+        "support_soc_pct": 25.0,
         "codes": [
           "EIGENVERBRAUCH"
         ],
@@ -1044,6 +1097,7 @@
         "feed_in_ct": 7.3,
         "estimated": false,
         "budget_kw": null,
+        "support_soc_pct": 24.0,
         "codes": [
           "EIGENVERBRAUCH"
         ],
@@ -1063,6 +1117,7 @@
         "feed_in_ct": 7.3,
         "estimated": false,
         "budget_kw": null,
+        "support_soc_pct": 23.0,
         "codes": [
           "EIGENVERBRAUCH"
         ],
@@ -1082,6 +1137,7 @@
         "feed_in_ct": 7.3,
         "estimated": false,
         "budget_kw": null,
+        "support_soc_pct": 22.0,
         "codes": [
           "EIGENVERBRAUCH"
         ],

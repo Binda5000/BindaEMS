@@ -29,6 +29,9 @@ INERTIA_SLOTS: Final = 4  # Planträgheit wirkt auf die ersten Slots
 END_WINDOW: Final = timedelta(hours=24)  # Preise nach dem Horizont für den Restwert
 PRICE_WINDOW: Final = timedelta(hours=60)  # Horizont (36 h) plus Fenster des Restwerts
 
+# Unterstützungsschwelle wie ``control.support_soc_pct``, wenn der Aufrufer keine angibt
+DEFAULT_SUPPORT_SOC_PCT: Final = 70.0
+
 PriceOrigin = Literal["primary", "fallback", "estimated"]
 
 Finite = Annotated[float, Field(allow_inf_nan=False)]
@@ -98,6 +101,7 @@ class PlanInputs(_Model):
     month_peak_kw: Finite | None
     peak_months: list[PeakMonth]
     end_value_ct: Finite  # ct je kWh im Akku am Horizontende
+    support_soc_pct: Finite = DEFAULT_SUPPORT_SOC_PCT  # Schwelle der Akku-Unterstützung in %
     slots: list[SlotInput]
 
 
@@ -207,6 +211,7 @@ def assemble_inputs(
     month_peak_kw: float | None,
     previous: Plan | None,
     settings_version: int,
+    support_soc_pct: float = DEFAULT_SUPPORT_SOC_PCT,
 ) -> PlanInputs:
     """Eingangsdaten eines Laufs; wirft ``PlanningUnavailable``.
 
@@ -254,5 +259,6 @@ def assemble_inputs(
         month_peak_kw=month_peak_kw,
         peak_months=peak_months([s.start for s in slots], tariff, month_peak_kw),
         end_value_ct=end_value_ct(_within(prices, horizon_end, END_WINDOW), planning),
+        support_soc_pct=support_soc_pct,
         slots=slots,
     )

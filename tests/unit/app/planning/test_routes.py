@@ -91,6 +91,7 @@ async def test_get_plan_shape(client_as, planning):
         "feed_in_ct",
         "estimated",
         "budget_kw",
+        "support_soc_pct",
         "codes",
         "text",
     }
@@ -127,6 +128,7 @@ async def test_get_plan_values_follow_the_plan(client_as, planning):
     for item, slot in zip(plan["slots"], stored.slots, strict=True):
         assert item["start"] == slot.start.isoformat() and item["intent"] == slot.intent.kind
         assert item["soc_pct"] == slot.soc_end_pct
+        assert item["support_soc_pct"] == slot.support_soc_pct
         assert item["battery_w"] == slot.charge_pv_w + slot.charge_grid_w - slot.discharge_w
         assert item["codes"] == [reason.code for reason in slot.reasons]
         assert item["text"] == slot_text(slot)

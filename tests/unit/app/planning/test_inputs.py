@@ -197,6 +197,11 @@ def test_inputs_carry_peak_months():
     assert inputs.month_peak_kw == 4.0
 
 
+def test_inputs_carry_the_support_threshold():
+    assert assemble().support_soc_pct == 70.0
+    assert assemble(support_soc_pct=85.0).support_soc_pct == 85.0
+
+
 def test_missing_feed_in_counts_as_zero():
     inputs = assemble(prices=known(NOW, slots=20, feed_in=None))
     assert sim_slots(inputs)[0].feed_in_ct is None  # das Akkumodell rechnet mit 0 ct

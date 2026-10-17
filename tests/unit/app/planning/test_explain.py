@@ -28,7 +28,7 @@ SAMPLE_PARAMS: dict[str, dict[str, float | str]] = {
     "REGEL_R_BLOCKIERT_NETZLADEN": {"um": "12:00", "kwh": 7.25},
     "NETZLADEN_AUS": {"ct": 10.0, "um": "18:00", "ct_spaeter": 40.0},
     "EIGENVERBRAUCH": {},
-    "UNTERSTUETZUNG_RESERVIERT": {"soc": 70.0, "um": "18:00"},
+    "UNTERSTUETZUNG_RESERVIERT": {"soc": 70.0, "um": "2026-10-16T16:00:00+00:00"},
     "GESCHAETZT": {},
     "ERSATZPLAN": {},
 }
@@ -99,6 +99,16 @@ def test_all_sentences_match_the_texts_exactly() -> None:
     assert set(expected) == set(get_args(ReasonCode))
     for code, text in expected.items():
         assert sentence(Reason(code=code, params=SAMPLE_PARAMS[code])) == text  # type: ignore[arg-type]
+
+
+def test_reserved_sentence() -> None:
+    reason = Reason(
+        code="UNTERSTUETZUNG_RESERVIERT",
+        params={"soc": 82, "um": "2026-10-16T19:00:00+00:00"},
+    )
+    assert sentence(reason) == (
+        "Akku-Unterstützung fürs Auto erst ab 82 %, weil der Plan den Akku bis 21:00 Uhr braucht."
+    )
 
 
 def test_every_code_has_a_sentence() -> None:

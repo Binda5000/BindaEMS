@@ -42,6 +42,7 @@ def slot_json(slot: PlanSlot) -> dict[str, Any]:
         "feed_in_ct": slot.feed_in_ct,
         "estimated": slot.estimated,
         "budget_kw": slot.budget_kw,
+        "support_soc_pct": slot.support_soc_pct,
         "codes": [reason.code for reason in slot.reasons],
         "text": slot_text(slot),
     }
