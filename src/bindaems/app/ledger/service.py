@@ -40,7 +40,7 @@ from bindaems.shared.timeutil import (
 
 log = structlog.get_logger(__name__)
 
-Origin = Literal["stream", "influx"]
+Origin = Literal["stream", "influx", "estimate"]
 SLOT_S = SLOT.total_seconds()
 COVERED_TOLERANCE_S = 0.5  # Rundung beim Summieren im core; mehr ist ein Fehler
 FRESH_FOR = timedelta(minutes=30)
@@ -125,6 +125,7 @@ class DaySummary:
     date: date
     slots: int
     expected_slots: int  # vergangene Viertelstunden (heute: bis jetzt)
+    estimated_slots: int  # davon aus Zählerständen nachgerechnet (covered_s = 0)
     complete: bool  # der Tag ist vorbei
     coverage: float
     pv_kwh: float
@@ -220,6 +221,7 @@ def _summary(
         date=day,
         slots=len(slots),
         expected_slots=len(expected),
+        estimated_slots=sum(1 for slot in slots if slot.origin == "estimate"),
         complete=len(expected) == len(day_slots),
         coverage=(
             math.fsum(slot.covered_s for slot in slots) / (len(expected) * SLOT_S)

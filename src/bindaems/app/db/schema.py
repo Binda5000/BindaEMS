@@ -242,3 +242,63 @@ plan_inputs_table = Table(
     Column("plan_id", Integer, primary_key=True, autoincrement=False),
     Column("data", JSON, nullable=False),
 )
+
+# Zuordnung der Wallbox zum Fahrzeug (Plan 4a, Präzisierung 6): eine Zeile je Änderung von
+# ``(occupant, kind)``; ``occupant`` ist der Schlüssel des Fahrzeugs, ``guest`` oder leer
+assignment_log = Table(
+    "assignment_log",
+    metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("ts", UtcDateTime(), nullable=False),
+    Column("wallbox", String(32), nullable=False),
+    Column("occupant", String(32), nullable=False),
+    Column("kind", String(10), nullable=False),
+    Index("ix_assignment_log_wallbox_ts", "wallbox", "ts"),
+)
+
+# Ladesitzung einer Wallbox; ``end`` ist leer, solange sie offen ist
+charging_session = Table(
+    "charging_session",
+    metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("wallbox", String(32), nullable=False),
+    Column("vehicle", String(32), nullable=False),
+    Column("start", UtcDateTime(), nullable=False),
+    Column("end", UtcDateTime(), nullable=True),
+    Column("last_seen", UtcDateTime(), nullable=False),
+    Index("ix_charging_session_start", "start"),
+)
+
+# Einstandspreis des Akkuinhalts am Ende des Slots (Plan 4a, Präzisierung 4)
+ledger_cost = Table(
+    "ledger_cost",
+    metadata,
+    Column("slot_start", UtcDateTime(), primary_key=True),
+    Column("stock_kwh", Float, nullable=False),
+    Column("avg_ct", Float, nullable=True),  # leer ohne Inhalt
+    Column("discharge_ct", Float, nullable=False),
+)
+
+# Abgleich der Abrechnung mit den Zählern je lokalem Tag und Signal (Präzisierung 9)
+ledger_check = Table(
+    "ledger_check",
+    metadata,
+    Column("day", String(10), primary_key=True),  # lokales Datum, ISO
+    Column("signal", String(40), primary_key=True),
+    Column("ledger_kwh", Float, nullable=False),
+    Column("counter_kwh", Float, nullable=True),
+    Column("deviation_pct", Float, nullable=True),
+    Column("flagged", Boolean, nullable=False),
+    Column("note", String(80), nullable=True),
+    Column("checked_at", UtcDateTime(), nullable=False),
+)
+
+# Energie je Verbraucher und lokalem Tag
+consumer_day = Table(
+    "consumer_day",
+    metadata,
+    Column("day", String(10), primary_key=True),  # lokales Datum, ISO
+    Column("consumer_id", Integer, primary_key=True, autoincrement=False),
+    Column("kwh", Float, nullable=True),
+    Column("note", String(80), nullable=True),
+)

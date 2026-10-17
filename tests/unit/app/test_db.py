@@ -5,6 +5,7 @@ from alembic.autogenerate import compare_metadata
 from alembic.config import Config as AlembicConfig
 from alembic.migration import MigrationContext
 from sqlalchemy import Engine, inspect, text
+from sqlalchemy.engine import Inspector
 
 from bindaems.app.db.engine import MIGRATIONS_DIR, migrate, open_database
 from bindaems.app.db.schema import metadata
@@ -60,7 +61,7 @@ def test_migration_0007_creates_the_decision_table(engine: Engine) -> None:
     assert [c["column_names"] for c in inspector.get_unique_constraints("decision")] == [["id"]]
     assert [i["column_names"] for i in inspector.get_indexes("decision")] == [["ts"]]
     with engine.connect() as conn:
-        assert conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one() == "0009"
+        assert conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one() == "0010"
 
 
 def test_migration_0008_creates_the_forecast_tables_and_downgrades(engine: Engine) -> None:
@@ -137,7 +138,7 @@ def test_migration_0009_creates_the_plan_tables_and_downgrades(engine: Engine) -
     assert not any(column["nullable"] for column in inputs.values())
     assert inspector.get_pk_constraint("plan_inputs")["constrained_columns"] == ["plan_id"]
     with engine.connect() as conn:
-        assert conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one() == "0009"
+        assert conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one() == "0010"
 
     config = AlembicConfig()
     config.set_main_option("script_location", str(MIGRATIONS_DIR))
@@ -149,3 +150,80 @@ def test_migration_0009_creates_the_plan_tables_and_downgrades(engine: Engine) -
     assert "plan_inputs" not in inspector.get_table_names()
     with engine.connect() as conn:
         assert conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one() == "0008"
+
+
+def _columns(inspector: Inspector, table: str) -> dict[str, bool]:
+    """Spaltenname -> darf leer sein, in der Reihenfolge der Tabelle."""
+    return {column["name"]: column["nullable"] for column in inspector.get_columns(table)}
+
+
+def test_migration_0010_creates_the_statistics_tables_and_downgrades(engine: Engine) -> None:
+    inspector = inspect(engine)
+    assert _columns(inspector, "assignment_log") == {
+        "id": False,
+        "ts": False,
+        "wallbox": False,
+        "occupant": False,
+        "kind": False,
+    }
+    assert inspector.get_pk_constraint("assignment_log")["constrained_columns"] == ["id"]
+    assert [i["column_names"] for i in inspector.get_indexes("assignment_log")] == [
+        ["wallbox", "ts"]
+    ]
+    assert _columns(inspector, "charging_session") == {
+        "id": False,
+        "wallbox": False,
+        "vehicle": False,
+        "start": False,
+        "end": True,
+        "last_seen": False,
+    }
+    assert inspector.get_pk_constraint("charging_session")["constrained_columns"] == ["id"]
+    assert [i["column_names"] for i in inspector.get_indexes("charging_session")] == [["start"]]
+    assert _columns(inspector, "ledger_cost") == {
+        "slot_start": False,
+        "stock_kwh": False,
+        "avg_ct": True,
+        "discharge_ct": False,
+    }
+    assert inspector.get_pk_constraint("ledger_cost")["constrained_columns"] == ["slot_start"]
+    assert _columns(inspector, "ledger_check") == {
+        "day": False,
+        "signal": False,
+        "ledger_kwh": False,
+        "counter_kwh": True,
+        "deviation_pct": True,
+        "flagged": False,
+        "note": True,
+        "checked_at": False,
+    }
+    assert inspector.get_pk_constraint("ledger_check")["constrained_columns"] == ["day", "signal"]
+    assert _columns(inspector, "consumer_day") == {
+        "day": False,
+        "consumer_id": False,
+        "kwh": True,
+        "note": True,
+    }
+    assert inspector.get_pk_constraint("consumer_day")["constrained_columns"] == [
+        "day",
+        "consumer_id",
+    ]
+    with engine.connect() as conn:
+        assert conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one() == "0010"
+
+    config = AlembicConfig()
+    config.set_main_option("script_location", str(MIGRATIONS_DIR))
+    with engine.begin() as connection:
+        config.attributes["connection"] = connection
+        command.downgrade(config, "0009")
+    tables = inspect(engine).get_table_names()
+    for name in (
+        "assignment_log",
+        "charging_session",
+        "ledger_cost",
+        "ledger_check",
+        "consumer_day",
+    ):
+        assert name not in tables
+    with engine.connect() as conn:
+        assert conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one() == "0009"

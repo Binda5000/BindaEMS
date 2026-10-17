@@ -10,6 +10,7 @@ from tests.app_helpers import (
 )
 
 from bindaems.app.ledger.service import MonthPeak, parse_slot_flows
+from bindaems.shared.domain import SlotFlows
 from bindaems.shared.settings import FeedInComponent, TimeWindow
 from bindaems.shared.timeutil import SLOT
 
@@ -283,6 +284,17 @@ def test_coverage_of_today_counts_only_past_slots(ledger, clock) -> None:
     assert today.expected_slots == 41
     # ein Tag in der Zukunft hat noch keine Viertelstunde
     assert (tomorrow.expected_slots, tomorrow.coverage, tomorrow.complete) == (0, 0.0, False)
+
+
+def test_estimated_slots_are_counted_and_do_not_add_coverage(ledger, clock) -> None:
+    ledger.ingest(parse_slot_flows(MSG), "stream")  # 900 s
+    estimate = SlotFlows(S - SLOT, 0.0, {"pv>house": 50.0}, {})
+    assert ledger.ingest(estimate, "estimate")
+    clock.advance(SLOT)  # 10:15 Ortszeit
+    [day] = ledger.days(date(2026, 10, 9), date(2026, 10, 9))
+    assert (day.slots, day.estimated_slots) == (2, 1)
+    assert day.coverage == pytest.approx(900 / (day.expected_slots * 900))
+    assert day.pv_kwh == pytest.approx(1.05)  # geschätzte Flüsse zählen in die Summen
 
 
 def test_month_peak_is_highest_quarter_of_local_month(ledger) -> None:

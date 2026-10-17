@@ -744,6 +744,8 @@ export const DaySummarySchema = v.object({
 	slots: v.number(),
 	/** vergangene Viertelstunden (am laufenden Tag bis jetzt) */
 	expected_slots: v.number(),
+	/** davon aus Zählerständen nachgerechnet */
+	estimated_slots: v.number(),
 	/** der Tag ist vorbei */
 	complete: v.boolean(),
 	coverage: v.number(),
