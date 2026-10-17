@@ -8,6 +8,7 @@ from collections.abc import AsyncIterator, Callable
 from datetime import timedelta
 
 import pytest
+from structlog.testing import capture_logs
 from tests.plan_helpers import EV, sample_plan, set_planning, until
 from tests.unit.app.control.conftest import FakeCoreClient, FakeFeed
 
@@ -60,6 +61,21 @@ def live_reports(live: LiveState, intent: Intent) -> None:
 def grid_charge(settings: SettingsService, on: bool) -> None:
     planning = settings.current().settings.planning
     set_planning(settings, planning.model_copy(update={"grid_charge_allowed": on}))
+
+
+# Health des core ohne Absicht: bekannt, der core hat keinen Plan
+HEALTH_WITHOUT_INTENT: dict[str, object] = {
+    "mode": "CONTROL",
+    "intent": None,
+    "intent_version": None,
+}
+
+
+@pytest.fixture
+def live(live: LiveState) -> LiveState:
+    """Verbunden (Fixture der Planung) und mit Health."""
+    live.health = dict(HEALTH_WITHOUT_INTENT)
+    return live
 
 
 @pytest.fixture
@@ -133,6 +149,21 @@ async def test_without_connection_the_sync_fails(
     live.connected = False
     assert await sender.sync() == "failed"
     assert fake_client.sent == []
+
+
+async def test_without_health_nothing_is_sent(
+    sender: PlanSender, live: LiveState, fake_client: FakeCoreClient
+) -> None:
+    # Ohne Health ist unbekannt, ob der core den Plan hat; eine Version auf diesem Stand behielte
+    # Boost und Übersteuerung (Review Focus 1)
+    live.health = None
+    with capture_logs() as logs:
+        assert await sender.sync() == "failed"
+        assert await sender.sync() == "failed"
+    assert fake_client.sent == []
+    assert [entry["event"] for entry in logs] == ["Plan wartet auf Health des core"]  # einmal
+    live.health = dict(HEALTH_WITHOUT_INTENT)
+    assert await sender.sync() == "sent"
 
 
 async def test_core_down_is_retried_on_the_next_sync(
@@ -234,6 +265,25 @@ async def test_reconnect_wakes_the_sender(
         assert fake_client.sent == []
         live.connected = True
         await sender.connected()
+        await until(lambda: len(fake_client.sent) == 1)
+
+
+async def test_after_reconnect_the_plan_waits_for_health(
+    intents: IntentService,
+    planning: FakePlanning,
+    settings_service: SettingsService,
+    live: LiveState,
+    clock: ManualClock,
+    fake_client: FakeCoreClient,
+) -> None:
+    # Nach einer Störung fehlt Health bis zur nächsten Abfrage: erst danach geht der Plan hinaus
+    sender = PlanSender(intents, planning, settings_service, live, clock, interval_s=0.02)  # type: ignore[arg-type]
+    live.health = None
+    async with running(sender):
+        await sender.connected()
+        await asyncio.sleep(0.1)  # mehrere Abgleiche im Takt
+        assert fake_client.sent == []
+        live.health = dict(HEALTH_WITHOUT_INTENT)
         await until(lambda: len(fake_client.sent) == 1)
 
 

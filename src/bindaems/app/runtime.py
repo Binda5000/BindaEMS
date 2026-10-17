@@ -212,7 +212,7 @@ class AppRuntime:
         self.plan_sender = PlanSender(
             self.intents, self.planning, self.settings, self.live, self._clock
         )
-        self.live_feed.connect_handlers.append(self.plan_sender.connected)
+        self.live_feed.connect_handlers.append(self._core_connected)
         self.ha_values = HaValueCache(self.reader, ha_database) if ha_database is not None else None
         self.energy = EnergyCache(self.reader, self._clock, ha_database)
         self.ha_publisher: HaPublisher | None = None
@@ -325,6 +325,15 @@ class AppRuntime:
         return ComponentStatus(
             "influx", False, f"InfluxDB nicht erreichbar: {kib:.0f} KiB warten im Puffer"
         )
+
+    async def _core_connected(self) -> None:
+        """Nach jeder Verbindung: Health sofort abfragen, dann den Plan abgleichen.
+
+        Ohne Health sendet der Sender nicht; er gleicht gleich ab, wenn Health noch gilt, sonst
+        nach seinem Takt.
+        """
+        self.live_feed.refresh_health()
+        await self.plan_sender.connected()
 
     def _support_soc_pct(self) -> float:
         """Unterstützungsschwelle für die Planung: die der Absicht, sonst die Konfiguration."""

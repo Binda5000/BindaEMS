@@ -225,10 +225,17 @@ def test_runtime_wires_the_planning(runtime) -> None:
     assert runtime.planning.pending() == "settings"
 
 
-def test_runtime_wires_the_plan_sender(runtime) -> None:
-    # nach jeder Verbindung zum core gleicht der Sender den Plan ab
-    assert runtime.plan_sender.connected in runtime.live_feed.connect_handlers
-    assert runtime.live_feed.connect_handlers[0] == runtime.collector.catch_up
+async def test_runtime_wires_the_plan_sender(runtime, monkeypatch) -> None:
+    # nach jeder Verbindung: erst Health anfordern, dann gleicht der Sender den Plan ab
+    assert runtime.live_feed.connect_handlers == [
+        runtime.collector.catch_up,
+        runtime._core_connected,
+    ]
+    calls: list[str] = []
+    monkeypatch.setattr(runtime.live_feed, "refresh_health", lambda: calls.append("health"))
+    monkeypatch.setattr(runtime.plan_sender, "wake", lambda: calls.append("wake"))
+    await runtime._core_connected()
+    assert calls == ["health", "wake"]
 
 
 def test_planning_takes_the_support_threshold_of_the_intent(runtime, cfg: Config) -> None:

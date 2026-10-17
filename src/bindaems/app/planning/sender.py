@@ -8,6 +8,12 @@ geht nach dem Ausschalten des Schalters sofort derselbe Plan ohne ``NETZLADEN`` 
 Abgeglichen wird beim Start, nach jedem Planungslauf, nach jeder Verbindung zum core, nach jeder
 Änderung der Einstellungen und sonst alle ``interval_s`` s. Ein Fehler wird geloggt, der nächste
 Anstoß versucht es neu. Der Plan kommt nicht ins Änderungsprotokoll (Entscheidung 1).
+
+Ohne Health sendet der Sender nicht: Ob der core den Plan hat, ist dann unbekannt, und die neue
+Version entstünde auf einem Stand, dem ``IntentService`` nicht traut (Boost und Übersteuerung
+blieben). Nach einem Neustart des core gälte sie zudem als nach dem Start angenommen und bände
+einen wiederhergestellten Boost an den nächsten Ansteckvorgang (Review Focus 1). Nach einer
+Verbindung fragt die Laufzeit Health sofort ab; der Plan folgt spätestens nach ``interval_s`` s.
 """
 
 from __future__ import annotations
@@ -60,6 +66,7 @@ class PlanSender:
         self._wake = asyncio.Event()
         self._loop: asyncio.AbstractEventLoop | None = None
         self._loop_thread: int | None = None
+        self._waiting_for_health = False  # einmal geloggt, bis Health wieder da ist
         planning.on_plan(lambda _plan: self.wake())
         settings.on_change(lambda _version: self.wake())
 
@@ -100,12 +107,19 @@ class PlanSender:
 
     async def sync(self) -> SyncResult:
         """Ein Abgleich: ``none`` ohne gültigen Plan, ``current``, wenn der core ihn hat,
-        ``sent`` nach dem Senden und ``failed`` ohne Verbindung oder bei einem Fehler."""
+        ``sent`` nach dem Senden und ``failed`` ohne Verbindung, ohne Health oder bei einem
+        Fehler."""
         wanted = self.wanted()
         if wanted is None:
             return "none"
         if not self._live.connected:
             return "failed"
+        if self._live.health is None:
+            if not self._waiting_for_health:
+                log.info("Plan wartet auf Health des core", plan=wanted.id)
+                self._waiting_for_health = True
+            return "failed"
+        self._waiting_for_health = False
         if self._core_has(wanted):
             return "current"
         fields = {"plan": wanted.id, "grid_charge_allowed": wanted.grid_charge_allowed}

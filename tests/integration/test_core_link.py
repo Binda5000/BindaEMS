@@ -218,8 +218,8 @@ async def test_client_submits_and_reads_an_intent_with_plan(core_api) -> None:
         assert (await client.intent()) == intent
 
 
-async def test_reconnect_wakes_the_sender(core_api, cfg: Config, tmp_path) -> None:
-    # Die app verbindet sich mit dem core; danach geht der Plan ohne Warten auf den Takt hinaus.
+async def test_plan_reaches_the_core_after_connecting(core_api, cfg: Config, tmp_path) -> None:
+    # Erst mit Verbindung und Health des echten core geht der Plan hinaus, ohne Änderungsprotokoll.
     core_api.view.hold_stream = True
     clock = ManualClock(datetime.fromisoformat("2026-10-16T10:05:00+00:00"))
     engine = open_database(tmp_path / "app.sqlite3")
@@ -232,7 +232,8 @@ async def test_reconnect_wakes_the_sender(core_api, cfg: Config, tmp_path) -> No
         feed = LiveFeed(client, live, clock)
         intents = IntentService(client, live, feed, audit, clock, cfg)
         plan = stored_plan()
-        sender = PlanSender(intents, FakePlanning(plan), settings, live, clock, interval_s=3600.0)  # type: ignore[arg-type]
+        # kurzer Takt: Health kommt erst mit der ersten Abfrage des Feeds
+        sender = PlanSender(intents, FakePlanning(plan), settings, live, clock, interval_s=0.05)  # type: ignore[arg-type]
         feed.connect_handlers.append(sender.connected)
         sending = asyncio.create_task(sender.run())
         await asyncio.sleep(0.05)  # erster Abgleich vor der Verbindung: nichts gesendet
