@@ -232,7 +232,7 @@ async def test_runtime_wires_the_plan_sender(runtime, monkeypatch) -> None:
         runtime._core_connected,
     ]
     # nach jeder Abfrage von Health gleicht der Sender ab (Gesamtreview I1)
-    assert runtime.live_feed.health_handlers == [runtime.plan_sender.wake]
+    assert runtime.live_feed.health_handlers == [runtime.plan_sender.wake, runtime.charging.wake]
     calls: list[str] = []
     monkeypatch.setattr(runtime.live_feed, "refresh_health", lambda: calls.append("health"))
     monkeypatch.setattr(runtime.plan_sender, "wake", lambda: calls.append("wake"))
@@ -376,7 +376,7 @@ async def test_runtime_starts_and_stops_cleanly(runtime, respx_mock) -> None:
             and runtime.planning.status().unavailable is not None
         )
     )
-    assert "plan-sender" in {job.get_name() for job in runtime._tasks}
+    assert {"plan-sender", "charging"} <= {job.get_name() for job in runtime._tasks}
     await runtime.shutdown()
     await asyncio.wait_for(task, timeout=2)
     assert runtime.pipeline.status().last_attempt is not None  # Preise wurden versucht

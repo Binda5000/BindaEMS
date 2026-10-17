@@ -28,6 +28,7 @@ from bindaems.app.auth.routes import audit_router, auth_router, users_router
 from bindaems.app.auth.service import AuthService
 from bindaems.app.auth.web import Guard
 from bindaems.app.backup import backup_database
+from bindaems.app.charging.tracker import ChargingTracker
 from bindaems.app.consumers.energy import EnergyCache
 from bindaems.app.consumers.routes import consumers_router
 from bindaems.app.consumers.service import ConsumerService
@@ -220,6 +221,9 @@ class AppRuntime:
         )
         self.live_feed.connect_handlers.append(self._core_connected)
         self.live_feed.health_handlers.append(self.plan_sender.wake)
+        # Steckzustand und Belegung nach jeder Abfrage von Health (Plan 4a, Task 3)
+        self.charging = ChargingTracker(self.engine, self._clock, cfg, self.live)
+        self.live_feed.health_handlers.append(self.charging.wake)
         self.ha_values = HaValueCache(self.reader, ha_database) if ha_database is not None else None
         self.energy = EnergyCache(self.reader, self._clock, ha_database)
         self.ha_publisher: HaPublisher | None = None
@@ -415,6 +419,7 @@ class AppRuntime:
             ("load-forecast", self.load_forecast.run),
             ("planning", self.planning.run),
             ("plan-sender", self.plan_sender.run),
+            ("charging", self.charging.run),
             ("influx-writer", self.influx_writer.run),
             ("ledger", self._ledger_loop),
             ("maintenance", self._maintenance_loop),
