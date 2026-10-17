@@ -4,6 +4,7 @@ import type { Role } from './api/schemas';
 export type IconName =
 	| 'overview'
 	| 'history'
+	| 'stats'
 	| 'consumers'
 	| 'system'
 	| 'settings'
@@ -32,6 +33,7 @@ const PAGES: readonly (NavItem & { adminOnly?: boolean })[] = [
 	{ href: '/laden', label: 'Laden', icon: 'car' },
 	{ href: '/zeitplan', label: 'Zeitplan', icon: 'plan' },
 	{ href: '/verlauf', label: 'Verlauf', icon: 'history' },
+	{ href: '/statistik', label: 'Statistik', icon: 'stats' },
 	{ href: '/verbraucher', label: 'Verbraucher', icon: 'consumers' },
 	{ href: '/system', label: 'System', icon: 'system' },
 	{ href: '/entscheidungen', label: 'Entscheidungen', icon: 'list' },

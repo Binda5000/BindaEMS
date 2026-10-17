@@ -7,6 +7,7 @@ it('zeigt Lesenden und Bedienenden dieselben Seiten', () => {
 		['/laden', 'Laden'],
 		['/zeitplan', 'Zeitplan'],
 		['/verlauf', 'Verlauf'],
+		['/statistik', 'Statistik'],
 		['/verbraucher', 'Verbraucher'],
 		['/system', 'System'],
 		['/entscheidungen', 'Entscheidungen'],
@@ -22,6 +23,7 @@ it('zeigt Admins zusätzlich Benutzer und Protokoll', () => {
 		'/laden',
 		'/zeitplan',
 		'/verlauf',
+		'/statistik',
 		'/verbraucher',
 		'/system',
 		'/entscheidungen',
@@ -38,6 +40,7 @@ it('zeigt Laden und Entscheidungen für alle Rollen mit ihren Symbolen', () => {
 		'/laden',
 		'/zeitplan',
 		'/verlauf',
+		'/statistik',
 		'/verbraucher',
 		'/system',
 		'/entscheidungen',
@@ -48,4 +51,17 @@ it('zeigt Laden und Entscheidungen für alle Rollen mit ihren Symbolen', () => {
 	expect(icons['/laden']).toBe('car');
 	expect(icons['/entscheidungen']).toBe('list');
 	expect(icons['/zeitplan']).toBe('plan');
+});
+
+it('zeigt die Statistik für alle Rollen nach dem Verlauf, mit drei Balken als Symbol', () => {
+	for (const role of ['viewer', 'operator', 'admin'] as const) {
+		const items = navItems(role);
+		const hrefs = items.map((item) => item.href);
+		expect(hrefs.indexOf('/statistik')).toBe(hrefs.indexOf('/verlauf') + 1);
+		expect(items.find((item) => item.href === '/statistik')).toEqual({
+			href: '/statistik',
+			label: 'Statistik',
+			icon: 'stats'
+		});
+	}
 });

@@ -1,7 +1,8 @@
-import type { LineSeriesOption, YAXisComponentOption } from 'echarts';
+import type { BarSeriesOption, LineSeriesOption, YAXisComponentOption } from 'echarts';
 import { describe, expect, it } from 'vitest';
 import type { LoadForecast, PriceSlot } from '$lib/api/schemas';
-import { axisTooltip, historyOption, priceForecastOption } from './options';
+import { stats } from '$lib/testing/fixtures';
+import { axisTooltip, historyOption, priceForecastOption, statsEnergyOption } from './options';
 import type { Palette } from './palette';
 
 const palette: Palette = {
@@ -208,4 +209,87 @@ it('setzt Reihennamen im Tooltip als Text, nicht als HTML', () => {
 	const html = tooltip([{ seriesName: 'SOC <b>Golf</b> & Co', value: [0, 42] }]);
 	expect(html).toContain('SOC &lt;b&gt;Golf&lt;/b&gt; &amp; Co');
 	expect(html).not.toContain('<b>Golf</b>');
+});
+
+describe('Energie der Statistik', () => {
+	const bucket = (start: string, pv: number, imp: number, exp: number, use: number) => ({
+		start,
+		pv_kwh: pv,
+		import_kwh: imp,
+		export_kwh: exp,
+		consumption_kwh: use,
+		net_eur: 0
+	});
+	const month = stats({
+		period: 'month',
+		buckets: [
+			bucket('2026-10-01', 29.037, 0, 4.714, 24.133),
+			bucket('2026-10-02', 18.339, 1.5, 0, 24.133)
+		]
+	});
+
+	it('zeichnet PV, Bezug, Einspeisung und Verbrauch je Tag', () => {
+		const option = statsEnergyOption(month, palette);
+		const series = option.series as (BarSeriesOption | LineSeriesOption)[];
+		expect(series.map((s) => [s.name, s.type])).toEqual([
+			['PV', 'bar'],
+			['Bezug', 'bar'],
+			['Einspeisung', 'bar'],
+			['Verbrauch', 'line']
+		]);
+		expect(series.map((s) => s.data)).toEqual([
+			[29.037, 18.339],
+			[0, 1.5],
+			[4.714, 0],
+			[24.133, 24.133]
+		]);
+		expect((option.xAxis as { data: string[] }).data).toEqual(['01.10.', '02.10.']);
+		expect((option.yAxis as YAXisComponentOption).name).toBe('kWh');
+	});
+
+	it('nimmt die Farben aus der Palette', () => {
+		const series = statsEnergyOption(month, palette).series as {
+			itemStyle: { color: string };
+		}[];
+		expect(series.map((s) => s.itemStyle.color)).toEqual([
+			palette.pv,
+			palette.series[0],
+			palette.feedIn,
+			palette.load
+		]);
+	});
+
+	it('hat an Tagen mit Zeitumstellung 23 bzw. 25 Stunden', () => {
+		const hours = (count: number) =>
+			Array.from({ length: count }, (_, i) => {
+				const at = new Date(Date.UTC(2026, 2, 28, 23) + i * 3_600_000).toISOString();
+				return bucket(at, 0, 0, 0, 0);
+			});
+		for (const count of [23, 25]) {
+			const option = statsEnergyOption(stats({ period: 'day', buckets: hours(count) }), palette);
+			expect((option.xAxis as { data: string[] }).data).toHaveLength(count);
+			expect((option.series as { data: number[] }[])[0].data).toHaveLength(count);
+		}
+	});
+
+	it('beschriftet das Jahr mit Monaten', () => {
+		const option = statsEnergyOption(
+			stats({ period: 'year', buckets: [bucket('2026-01', 0, 0, 0, 0)] }),
+			palette
+		);
+		expect((option.xAxis as { data: string[] }).data).toEqual(['Jän.']);
+	});
+
+	it('zeigt im Tooltip Beschriftung und kWh je Reihe', () => {
+		const option = statsEnergyOption(month, palette);
+		const formatter = (option.tooltip as { formatter: (params: unknown) => string }).formatter;
+		const text = formatter([
+			{ name: '01.10.', seriesName: 'PV', value: 29.037, marker: '' },
+			{ name: '01.10.', seriesName: 'Bezug', value: 0, marker: '' }
+		]);
+		expect(text).toContain('01.10.');
+		expect(text).toContain('PV: <b>29,0');
+		expect(text).toContain('Bezug: <b>0,00');
+		expect(text).toContain('kWh');
+	});
 });

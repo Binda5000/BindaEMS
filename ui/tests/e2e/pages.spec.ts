@@ -4,6 +4,8 @@ import { login, watchPage } from './helpers';
 const PAGES = [
 	'/',
 	'/verlauf',
+	'/statistik',
+	'/statistik?zeitraum=monat&datum=2026-10-09', // Monat der Demo-Welt: Diagramm und Karten gefüllt
 	'/verbraucher',
 	'/laden',
 	'/zeitplan',

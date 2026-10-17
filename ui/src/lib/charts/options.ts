@@ -1,8 +1,23 @@
 // Optionen für ECharts: Zeitachse in Wien, Farben nur aus der Palette
-import type { LineSeriesOption } from 'echarts/charts';
+import type { BarSeriesOption, LineSeriesOption } from 'echarts/charts';
 import type { EChartsCoreOption } from 'echarts/core';
-import type { ForecastSlot, HistoryResponse, LoadForecast, PriceSlot } from '$lib/api/schemas';
-import { DASH, NBSP, formatCt, formatDay, formatNumber, formatTime } from '$lib/format';
+import type {
+	ForecastSlot,
+	HistoryResponse,
+	LoadForecast,
+	PriceSlot,
+	Stats
+} from '$lib/api/schemas';
+import {
+	DASH,
+	NBSP,
+	formatCt,
+	formatDay,
+	formatEnergy,
+	formatNumber,
+	formatTime
+} from '$lib/format';
+import { bucketLabel } from '$lib/stats/view';
 import { parseIso, todayVienna } from '$lib/time';
 import type { Palette } from './palette';
 
@@ -300,6 +315,84 @@ export function historyOption(data: HistoryResponse, palette: Palette): EChartsC
 			offset: Math.floor(index / 2) * 48,
 			splitLine: { show: index === 0, lineStyle: { color: palette.grid } }
 		})),
+		series
+	};
+}
+
+/** Tooltip der Statistik: Beschriftung des Balkens und kWh je Reihe */
+function statsTooltip(params: unknown): string {
+	const items = (Array.isArray(params) ? params : [params]) as {
+		marker?: string;
+		name?: string;
+		seriesName?: string;
+		value?: unknown;
+	}[];
+	const lines = items.map((item) => {
+		const text = typeof item.value === 'number' ? formatEnergy(item.value) : DASH;
+		return `${item.marker ?? ''}${escapeHtml(item.seriesName ?? '')}: <b>${text}</b>`;
+	});
+	return [escapeHtml(items[0]?.name ?? ''), ...lines].join('<br>');
+}
+
+/**
+ * Diagramm „Energie“ der Statistik: PV, Bezug und Einspeisung als Balken, der Verbrauch als Linie,
+ * je Stunde (Tag), Tag (Woche, Monat) oder Monat (Jahr). Die Achse ist eine Rubrikenachse mit den
+ * Beschriftungen aus `bucketLabel`, so zeigt ein Tag mit Zeitumstellung 23 bzw. 25 Balken.
+ */
+export function statsEnergyOption(stats: Stats, palette: Palette): EChartsCoreOption {
+	const labels = stats.buckets.map((bucket) => bucketLabel(stats.period, bucket.start));
+	const colors = {
+		pv: palette.pv,
+		import: palette.series[0] ?? palette.muted,
+		export: palette.feedIn,
+		use: palette.load
+	};
+	const bars = (name: string, color: string, values: number[]): BarSeriesOption => ({
+		name,
+		type: 'bar',
+		data: values,
+		itemStyle: { color },
+		barMaxWidth: 24
+	});
+	const series: (BarSeriesOption | LineSeriesOption)[] = [
+		bars(
+			'PV',
+			colors.pv,
+			stats.buckets.map((b) => b.pv_kwh)
+		),
+		bars(
+			'Bezug',
+			colors.import,
+			stats.buckets.map((b) => b.import_kwh)
+		),
+		bars(
+			'Einspeisung',
+			colors.export,
+			stats.buckets.map((b) => b.export_kwh)
+		),
+		{
+			name: 'Verbrauch',
+			type: 'line',
+			data: stats.buckets.map((b) => b.consumption_kwh),
+			showSymbol: false,
+			lineStyle: { color: colors.use, width: 2 },
+			itemStyle: { color: colors.use }
+		}
+	];
+	return {
+		...baseOption(palette),
+		tooltip: { trigger: 'axis', formatter: statsTooltip },
+		xAxis: {
+			type: 'category',
+			data: labels,
+			axisLabel: { color: palette.muted, hideOverlap: true },
+			axisLine: { lineStyle: { color: palette.grid } },
+			axisTick: { alignWithLabel: true }
+		},
+		yAxis: {
+			...valueAxis('kWh', palette),
+			splitLine: { show: true, lineStyle: { color: palette.grid } }
+		},
 		series
 	};
 }

@@ -14,6 +14,12 @@ export const ICONS: Record<IconName, Shape[]> = {
 		{ x: 3, y: 16, width: 7, height: 5, rx: 1 }
 	],
 	history: [{ d: 'M3 3v18h18' }, { d: 'M7 15l4-5 4 3 5-7' }],
+	// drei Balken
+	stats: [
+		{ x: 4, y: 12, width: 4, height: 8, rx: 1 },
+		{ x: 10, y: 4, width: 4, height: 16, rx: 1 },
+		{ x: 16, y: 9, width: 4, height: 11, rx: 1 }
+	],
 	consumers: [{ d: 'M9 2v6M15 2v6' }, { d: 'M6 8h12v3a6 6 0 0 1-12 0z' }, { d: 'M12 17v5' }],
 	system: [
 		{ x: 3, y: 4, width: 18, height: 7, rx: 1 },

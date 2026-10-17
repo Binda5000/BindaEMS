@@ -1,0 +1,144 @@
+import { fireEvent, render, screen, waitFor } from '@testing-library/svelte';
+import { page } from '$app/state';
+import { afterEach, beforeEach, expect, it, vi } from 'vitest';
+import { stats } from '$lib/testing/fixtures';
+import Page from './+page.svelte';
+
+const { api, goto } = vi.hoisted(() => ({ api: { stats: vi.fn() }, goto: vi.fn() }));
+vi.mock('$lib/api/endpoints', async (original) => ({
+	...(await original<typeof import('$lib/api/endpoints')>()),
+	api
+}));
+vi.mock('$lib/charts/echarts', () => ({ loadECharts: () => new Promise(() => {}) }));
+vi.mock('$app/navigation', () => ({ goto }));
+// reaktive URL: Tests ändern sie wie die Navigation des Browsers
+vi.mock('$app/state', async () => {
+	const { SvelteURL } = await import('svelte/reactivity');
+	return { page: { url: new SvelteURL('https://ems.lan/statistik') } };
+});
+
+/** Die URL der Seite wie nach einer Navigation setzen */
+function navigate(search: string) {
+	page.url.search = search;
+}
+
+beforeEach(() => {
+	vi.useFakeTimers({
+		toFake: ['Date', 'setInterval', 'clearInterval', 'setTimeout', 'clearTimeout']
+	});
+	vi.setSystemTime(new Date('2026-10-09T08:00:00Z')); // 10:00 in Wien
+	vi.resetAllMocks();
+	navigate('');
+	api.stats.mockResolvedValue(stats());
+});
+
+afterEach(() => {
+	vi.useRealTimers();
+});
+
+it('öffnet ohne Parameter mit dem heutigen Tag', async () => {
+	render(Page);
+	expect(screen.getByRole('heading', { name: 'Fr., 09.10.2026' })).toBeInTheDocument();
+	await waitFor(() => expect(api.stats).toHaveBeenCalled());
+	expect(api.stats.mock.lastCall?.slice(0, 2)).toEqual(['day', '2026-10-09']);
+	expect(screen.getByRole('button', { name: 'Tag' })).toHaveAttribute('aria-pressed', 'true');
+});
+
+it('page reads period and date from the URL and reloads on change', async () => {
+	navigate('?zeitraum=woche&datum=2026-10-07');
+	render(Page);
+	expect(screen.getByRole('heading', { name: 'KW 41 · 05.10.–11.10.2026' })).toBeInTheDocument();
+	await waitFor(() => expect(api.stats).toHaveBeenCalledTimes(1));
+	expect(api.stats.mock.lastCall?.slice(0, 2)).toEqual(['week', '2026-10-07']);
+
+	navigate('?zeitraum=monat&datum=2026-09-15');
+	await waitFor(() =>
+		expect(api.stats.mock.lastCall?.slice(0, 2)).toEqual(['month', '2026-09-15'])
+	);
+	expect(screen.getByRole('heading', { name: 'September 2026' })).toBeInTheDocument();
+	expect(screen.getByRole('button', { name: 'Monat' })).toHaveAttribute('aria-pressed', 'true');
+});
+
+it('fällt bei ungültigen Parametern auf Tag und heute zurück', async () => {
+	navigate('?zeitraum=quartal&datum=morgen');
+	render(Page);
+	await waitFor(() => expect(api.stats).toHaveBeenCalled());
+	expect(api.stats.mock.lastCall?.slice(0, 2)).toEqual(['day', '2026-10-09']);
+});
+
+it('wählt den Zeitraum und blättert über die URL', async () => {
+	navigate('?zeitraum=monat&datum=2026-10-09');
+	render(Page);
+	await fireEvent.click(screen.getByRole('button', { name: 'Woche' }));
+	expect(goto).toHaveBeenLastCalledWith(
+		'/statistik?zeitraum=woche&datum=2026-10-09',
+		expect.objectContaining({ keepFocus: true, noScroll: true })
+	);
+	await fireEvent.click(screen.getByRole('button', { name: 'Zurück' }));
+	expect(goto.mock.lastCall?.[0]).toBe('/statistik?zeitraum=monat&datum=2026-09-09');
+	expect(screen.getByRole('button', { name: 'Weiter' })).toBeDisabled();
+	expect(screen.getByRole('button', { name: 'Heute' })).toBeDisabled();
+});
+
+it('blättert in der Vergangenheit vor und springt mit „Heute“ zurück', async () => {
+	navigate('?zeitraum=woche&datum=2026-09-30');
+	render(Page);
+	await fireEvent.click(screen.getByRole('button', { name: 'Weiter' }));
+	expect(goto.mock.lastCall?.[0]).toBe('/statistik?zeitraum=woche&datum=2026-10-07');
+	await fireEvent.click(screen.getByRole('button', { name: 'Heute' }));
+	expect(goto.mock.lastCall?.[0]).toBe('/statistik?zeitraum=woche&datum=2026-10-09');
+});
+
+it('lädt den laufenden Zeitraum jede Minute neu, einen vergangenen nur einmal', async () => {
+	navigate('?zeitraum=monat&datum=2026-10-09');
+	render(Page);
+	await vi.advanceTimersByTimeAsync(0);
+	expect(api.stats).toHaveBeenCalledTimes(1);
+	await vi.advanceTimersByTimeAsync(60_000);
+	expect(api.stats).toHaveBeenCalledTimes(2);
+	await vi.advanceTimersByTimeAsync(120_000);
+	expect(api.stats).toHaveBeenCalledTimes(4);
+
+	api.stats.mockClear();
+	navigate('?zeitraum=monat&datum=2026-09-15');
+	await vi.advanceTimersByTimeAsync(0);
+	expect(api.stats).toHaveBeenCalledTimes(1);
+	await vi.advanceTimersByTimeAsync(5 * 60_000);
+	expect(api.stats).toHaveBeenCalledTimes(1);
+});
+
+it('zeigt Kacheln, Hinweise, Diagramm und Kosten', async () => {
+	navigate('?zeitraum=monat&datum=2026-10-09');
+	render(Page);
+	await screen.findByText('Autarkie');
+	expect(screen.getAllByTestId('tile')).toHaveLength(5);
+	expect(screen.getByText('Abdeckung 95 %')).toBeInTheDocument();
+	expect(screen.getByText('2 Viertelstunden geschätzt')).toBeInTheDocument();
+	expect(screen.getByText('bis jetzt')).toBeInTheDocument();
+	expect(screen.getByRole('img', { name: /Energie/ })).toBeInTheDocument();
+	expect(screen.getByRole('heading', { name: 'Energie' })).toBeInTheDocument();
+	expect(screen.getByRole('cell', { name: 'Grundgebühren' })).toBeInTheDocument();
+});
+
+it('sagt bei einem vergangenen Zeitraum nicht „bis jetzt“', async () => {
+	navigate('?zeitraum=monat&datum=2026-09-15');
+	render(Page);
+	await screen.findByText('Autarkie');
+	expect(screen.queryByText('bis jetzt')).not.toBeInTheDocument();
+});
+
+it('zeigt den Fehler der Abfrage', async () => {
+	const { ApiError } = await import('$lib/api/errors');
+	api.stats.mockRejectedValue(new ApiError(503, 'Statistik nicht verfügbar'));
+	render(Page);
+	expect(await screen.findByText('Statistik nicht verfügbar')).toBeInTheDocument();
+});
+
+it('rückt um Mitternacht auf den neuen Tag weiter', async () => {
+	vi.setSystemTime(new Date('2026-10-09T21:59:00Z')); // 23:59 in Wien
+	render(Page);
+	expect(screen.getByRole('heading', { name: 'Fr., 09.10.2026' })).toBeInTheDocument();
+	await vi.advanceTimersByTimeAsync(2 * 60_000);
+	expect(screen.getByRole('heading', { name: 'Sa., 10.10.2026' })).toBeInTheDocument();
+	expect(api.stats.mock.lastCall?.slice(0, 2)).toEqual(['day', '2026-10-10']);
+});
