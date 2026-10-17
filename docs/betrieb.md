@@ -3447,8 +3447,9 @@ docker compose run --rm -T --entrypoint cat ems-app /data/bericht.md
     Datenbank, nicht schreibbarer Zieldatei und wenn kein Tag exportierbar ist.
 - **`scenario_days`:**
   - Die Tage kommen aus `--tage DATEI` (von `export_days`) oder erzeugt aus `--synthetisch ART` (die
-    Arten oben) mit `--anzahl N` Tagen. Der Bericht geht als Markdown nach `--out` (das Verzeichnis
-    muss existieren).
+    Arten oben) mit `--anzahl N` Tagen. Der Bericht geht als Markdown nach `--out`. Das Verzeichnis
+    muss existieren und beschreibbar sein; das Werkzeug prüft es vor dem Lauf und endet sonst sofort
+    mit 2.
   - `--takt 15` (Standard) plant jede Viertelstunde neu wie der Dienst, `--takt 60` stündlich und viermal
     so schnell. Für die Abnahme zählt `--takt 15`; 30 Tage brauchen einige Minuten.
   - `--netzladen an|aus|einstellung` ersetzt den Schalter „Netzladen erlaubt“ der Datei;

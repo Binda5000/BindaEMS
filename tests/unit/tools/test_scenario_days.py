@@ -72,8 +72,19 @@ def test_scenario_days_rejects_missing_file_and_output_directory(
 ) -> None:
     assert main(["--tage", str(tmp_path / "fehlt.json"), "--out", str(tmp_path / "b.md")]) == 2
     assert "nicht gelesen" in capsys.readouterr().err
+
+
+def test_scenario_days_checks_the_output_directory_before_the_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    runs: list[object] = []
+    monkeypatch.setattr(scenario_days, "run_scenario", lambda *a, **k: runs.append(a))
     code = main(["--synthetisch", "winter-spread", "--out", str(tmp_path / "fehlt" / "b.md")])
     assert code == 2 and "nicht geschrieben" in capsys.readouterr().err
+    monkeypatch.setattr(scenario_days.os, "access", lambda path, mode: False)
+    assert main(["--synthetisch", "winter-spread", "--out", str(tmp_path / "b.md")]) == 2
+    assert "nicht beschreibbar" in capsys.readouterr().err
+    assert runs == []
 
 
 def test_scenario_days_rejects_bad_arguments(tmp_path: Path) -> None:

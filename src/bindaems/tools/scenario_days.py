@@ -13,13 +13,15 @@ Viertelstunde neu wie der Dienst, ``--takt 60`` stündlich (viermal schneller, w
 lässt ihn.
 
 Auf der Standardausgabe steht je Tag eine Zeile, der Bericht geht als Markdown nach ``--out``
-(das Verzeichnis muss existieren). Exitcode 0 bei „Bestanden“ (bereinigte Kosten höchstens
-„Victron allein“, keine Verletzung von Regel R), 1 bei „Nicht bestanden“, 2 bei ungültiger Eingabe.
+(das Verzeichnis muss existieren und beschreibbar sein; geprüft wird vor dem Lauf). Exitcode 0
+bei „Bestanden“ (bereinigte Kosten höchstens „Victron allein“, keine Verletzung von Regel R), 1 bei
+„Nicht bestanden“, 2 bei ungültiger Eingabe.
 """
 
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from datetime import date
 from pathlib import Path
@@ -81,6 +83,15 @@ def main(argv: list[str] | None = None) -> int:
         return exc.code if isinstance(exc.code, int) else 2
     if args.anzahl < 1:
         print("--anzahl muss mindestens 1 sein", file=sys.stderr)
+        return 2
+    folder = args.out.parent
+    if not folder.is_dir():
+        print(f"Bericht nicht geschrieben: Verzeichnis {folder} fehlt", file=sys.stderr)
+        return 2
+    if not os.access(folder, os.W_OK):
+        print(
+            f"Bericht nicht geschrieben: Verzeichnis {folder} nicht beschreibbar", file=sys.stderr
+        )
         return 2
     try:
         data = _load(args)
