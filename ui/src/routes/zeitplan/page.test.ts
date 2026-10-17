@@ -73,6 +73,35 @@ it('waits for the follow-up plan after the switch and shows "Plant …"', async 
 	expect(screen.getByRole('switch', { name: 'Netzladen erlaubt' })).toBeChecked();
 }, 15_000);
 
+it('ignores "Neu planen" while the switch call is still running', async () => {
+	let finish: (value: {
+		grid_charge_allowed: boolean;
+		settings_version: number;
+	}) => void = () => {};
+	api.setGridCharge.mockReturnValue(new Promise((resolve) => (finish = resolve)));
+	renderPage('operator');
+	await fireEvent.click(await screen.findByRole('switch', { name: 'Netzladen erlaubt' }));
+	await waitFor(() => expect(api.setGridCharge).toHaveBeenCalledWith(true));
+	// der Aufruf läuft noch: die Taste ist schon gesperrt, ein Klick plant nicht
+	const button = screen.getByRole('button', { name: /^(Neu planen|Plant …)$/ });
+	await fireEvent.click(button);
+	expect(button).toBeDisabled();
+	expect(api.replan).not.toHaveBeenCalled();
+	api.plan.mockResolvedValue(NEXT);
+	finish({ grid_charge_allowed: true, settings_version: 5 });
+	await screen.findByText('Plan von 10:15 Uhr', undefined, { timeout: 5_000 });
+	await waitFor(() => expect(screen.getByRole('button', { name: 'Neu planen' })).toBeEnabled());
+	expect(api.replan).not.toHaveBeenCalled();
+}, 15_000);
+
+it('frees "Neu planen" again when the switch call fails', async () => {
+	api.setGridCharge.mockRejectedValue(new ApiError(409, 'Einstellungen geändert'));
+	renderPage('operator');
+	await fireEvent.click(await screen.findByRole('switch', { name: 'Netzladen erlaubt' }));
+	await screen.findByText('Einstellungen geändert');
+	expect(screen.getByRole('button', { name: 'Neu planen' })).toBeEnabled();
+});
+
 it('shows the plan with blocks to viewers, without controls', async () => {
 	renderPage('viewer');
 	await screen.findByText('Plan von 10:00 Uhr');

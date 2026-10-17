@@ -81,6 +81,7 @@
 	async function setGridCharge(on: boolean): Promise<void> {
 		if (replanning) return;
 		switching = true;
+		replanning = true; // „Neu planen“ bleibt für den ganzen Ablauf des Schalters gesperrt
 		actionError = null;
 		const before = signature(current);
 		try {
@@ -92,6 +93,7 @@
 			actionError = failure(error);
 		} finally {
 			switching = false;
+			replanning = false;
 		}
 	}
 
