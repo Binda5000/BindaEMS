@@ -184,13 +184,16 @@ Minutenmittel in `long` und lassen sich in Grafana mit der Retention Policy `lon
 - **Tags:**
   - `latest` ist der Stand von `main`.
   - Zusätzlich gibt es je Commit `sha-<kurz>` und je Release `vX.Y.Z`.
-- **Update mit Plan 4a (Statistik):** Plan 4a ändert nur die app. Du baust oder ziehst nur `ems-app`;
-  der core läuft weiter, und der Regelbetrieb bleibt an. Die Schritte stehen am Ende von Abschnitt 8,
-  „Statistik ausrollen (Plan 4a)“.
+- **Update mit Plan 4a (Statistik):** Plan 4a ändert nur die app. Du ziehst und startest nur `ems-app`
+  (`docker compose pull ems-app && docker compose up -d --no-deps ems-app`); der core läuft weiter, und
+  der Regelbetrieb bleibt an. Die Schritte stehen am Ende von Abschnitt 8, „Statistik ausrollen
+  (Plan 4a)“.
 - **Rollback auf einen Stand vor Plan 4a:** Die Migration `0010` der app ist beim Start gelaufen. Eine
-  ältere app kennt die Version `0010` nicht und startet mit dieser Datenbank nicht. Spiele vorher die
-  Sicherung von vor dem Ausrollen ein (Abschnitt 9); die Statistik seit dem Ausrollen geht dabei
-  verloren. Der core ist nicht betroffen.
+  ältere app kennt die Version `0010` nicht und startet mit dieser Datenbank nicht. Spiele die Kopie ein,
+  die du vor dem Ausrollen gemacht hast (`/backup/vor-plan-4a.sqlite3`, Schritt 1 in Abschnitt 8,
+  „Statistik ausrollen (Plan 4a)“; Wiederherstellen wie in Abschnitt 9). Die nächtlichen Sicherungen
+  helfen nur am Tag des Ausrollens, vor 03:15 Uhr: Schon die erste Sicherung danach enthält `0010`. Die
+  Statistik seit dem Ausrollen geht dabei verloren. Der core ist nicht betroffen.
 - **Rollback auf einen Stand vor Plan 3c:**
   - Ein core vor Plan 3c kann keine `intent.json` lesen, die ein core ab Plan 3c geschrieben hat (sie
     hat immer die Felder `plan` und `support`, und der ältere core lehnt unbekannte Felder ab). Er startet dann ohne Absicht und meldet den Alarm
@@ -363,7 +366,8 @@ Entitäten (Gerät „BindaEMS“, sofern nicht anders angegeben):
 Die Sensoren zu Ersparnis, Autarkie und Ladeenergie sind nur lesend. Die app rechnet sie nicht im
 5-s-Takt der übrigen Werte, sondern bei jeder neuen Viertelstunde der Abrechnung und spätestens alle
 15 Minuten neu; scheitert die Rechnung, behalten die Sensoren ihren letzten Wert. Nur über Mitternacht
-hinweg nicht: „Ersparnis heute“ und „Autarkie heute“ zeigen dann „unbekannt“ statt den Wert von gestern.
+hinweg nicht: Dann zeigen alle Statistik-Sensoren (auch „Ersparnis Monat“ und das Attribut `month_pct`)
+„unbekannt“ statt den Wert von gestern.
 Die Zahlen sind dieselben wie in der Statistik je Zeitraum (Abschnitt „Statistik je Zeitraum“,
 `GET /api/stats`). „Ladeenergie“ hat keine Zustandsklasse, denn sie gilt je Session und ist kein
 Zählerstand; Home Assistant führt dafür keine Langzeitstatistik. Welche Session „laufend oder letzte“
@@ -713,23 +717,32 @@ curl -b jar "$APP/api/stats?period=month&date=2026-10-09"
 Plan 4a ändert nur die app. Das Image des core bleibt gleich: Der core läuft weiter, der Regelbetrieb
 bleibt an, und die Aktoren behalten ihre Betriebsart. Es ist keine neue Konfiguration und keine neue
 `config.ini` nötig; die HA-Sensoren der Statistik sind `sensor`-Entitäten und brauchen keine neue
-ACL. Die Statistik liest nur und schreibt nichts auf Geräte. Rolle sie wie die übrigen Pläne
-(Abschnitt 4) mit den Images aus, oder, wenn du lokal baust, nur die app:
+ACL. Die Statistik liest nur und schreibt nichts auf Geräte. Sobald Plan 4a auf `main` ist und das
+Image der app veröffentlicht ist, ziehst du nur die app und startest nur sie, ohne ihre Abhängigkeit
+`ems-core`:
 
 ```bash
 cd /opt/bindaems
-docker compose up -d --build ems-app          # lokaler Build (Checkout im Ordner deploy/)
-# oder mit den Images von GHCR:
-docker compose pull ems-app && docker compose up -d ems-app
+docker compose pull ems-app && docker compose up -d --no-deps ems-app
 ```
 
-1. **Ausrollen:** Der Befehl oben. Währenddessen fehlt das UI kurz; der core regelt weiter, und die
-   app holt die Abrechnung der letzten 7 Tage danach aus InfluxDB nach. Die Sicherung der Nacht
-   reicht als Rückfall (Abschnitt 4, „Rollback auf einen Stand vor Plan 4a“).
-2. **Migration:** Die Migration `0010` läuft beim Start der app von selbst. Sie legt die Tabellen
+`--no-deps` hält Compose davon ab, den core mit anzufassen. Als Alternative baust du die app lokal: im
+`deploy/`-Ordner eines Checkouts (mit `.env` und `config.yaml` dort; der Build-Kontext ist das
+Repository, nicht `/opt/bindaems`) mit `docker compose up -d --build --no-deps ems-app`.
+
+1. **Vorher sichern:** Die Sicherung der Nacht reicht als Rückfall nur bis zum Ausrollen, denn schon die
+   erste Sicherung danach enthält die Migration `0010`. Kopiere deshalb vor dem Ausrollen die Datenbank
+   unter einem Namen, den die Rotation nicht löscht (Abschnitt 9 beschreibt das Volume `backup`):
+   `docker compose stop ems-app`, dann
+   `docker compose run --rm --no-deps --entrypoint sh ems-app -c 'cp /data/bindaems.sqlite3 /backup/vor-plan-4a.sqlite3'`.
+   Der Rollback steht in Abschnitt 4, „Rollback
+   auf einen Stand vor Plan 4a“.
+2. **Ausrollen:** Der Befehl oben. Währenddessen fehlt das UI kurz; der core regelt weiter, und die
+   app holt die Abrechnung der letzten 7 Tage danach aus InfluxDB nach.
+3. **Migration:** Die Migration `0010` läuft beim Start der app von selbst. Sie legt die Tabellen
    `assignment_log`, `charging_session`, `ledger_cost`, `ledger_check` und `consumer_day` an und
    ändert keine vorhandene.
-3. **Erste Werte prüfen:** Öffne die Seite **Statistik** (Abschnitt 12) und stelle „Monat“ ein.
+4. **Erste Werte prüfen:** Öffne die Seite **Statistik** (Abschnitt 12) und stelle „Monat“ ein.
    - **Abgleich:** Beim Start gleicht die app die letzten 35 Tage mit den Zählern ab und wartet dafür
      auf den ersten Nachtrag der Abrechnung (höchstens 10 Minuten). Die Karte „Abgleich mit den
      Zählern“ füllt sich danach; eine Weile steht dort „Noch kein Tag abgeglichen.“ Markierte Tage
@@ -743,12 +756,12 @@ docker compose pull ems-app && docker compose up -d ems-app
      Kosten je Auto sind erst danach da.
    - **Verbraucher:** Die Energie je Verbraucher der letzten 31 Tage holt die app beim Start aus
      InfluxDB (eine Abfrage je Tag); ältere Tage bleiben leer.
-4. **Tarif nachtragen:** OeMAG-Werte und monatliche Gebühren unter **Einstellungen** → „Bearbeiten“
+5. **Tarif nachtragen:** OeMAG-Werte und monatliche Gebühren unter **Einstellungen** → „Bearbeiten“
    eintragen, soweit sie fehlen (Abschnitt 8, Anfang). Ohne OeMAG-Wert sind Einspeiseerlös, Kosten und
    Ersparnis „–“ (unbekannt), ohne Grundgebühr zählt die Kostenzeile „Grundgebühren“ 0 €. Danach die
    Abrechnung der betroffenen Tage neu bewerten; Einstandspreis und Kosten je Auto ziehen von selbst
    nach.
-5. **Grafana-Dashboard importieren (optional):** Abschnitt 3, „Grafana“.
+6. **Grafana-Dashboard importieren (optional):** Abschnitt 3, „Grafana“.
 
 Die Abnahme dieses Teils der Phase 4 steht in `docs/verification/abnahme-phase-4.md`: 30 Tage ab dem
 Ausrollen.

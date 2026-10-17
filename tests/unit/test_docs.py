@@ -50,7 +50,9 @@ def test_rollout_of_plan_4a_in_the_guide() -> None:
     _, found, text = section.partition("### Statistik ausrollen (Plan 4a) ")
     assert found, "Der Unterabschnitt „Statistik ausrollen (Plan 4a)“ fehlt."
     for topic in (
-        "docker compose up -d --build ems-app",
+        "docker compose pull ems-app && docker compose up -d --no-deps ems-app",
+        "docker compose up -d --build --no-deps ems-app",
+        "/backup/vor-plan-4a.sqlite3",
         "Der core läuft weiter",
         "der Regelbetrieb bleibt an",
         "`0010`",

@@ -4,7 +4,8 @@ Je lokalem Tag und Signal steht die Summe der Abrechnung neben der Differenz der
 Mitternacht: ``import``, ``export``, ``pv`` und ``wb:<id>`` je Wallbox. Markiert wird eine
 Abweichung von mehr als 1 % und mehr als 0,1 kWh, PV nie (DC-gekoppelte PV hat keinen Zähler). Fehlt
 ein Zählerstand oder sinkt er (Zählertausch), bleibt der Tag ohne Markierung und trägt den Grund;
-Summen über einen Zeitraum lassen solche Tage aus.
+Summen über einen Zeitraum lassen solche Tage aus (``counter_kwh`` ist ``None``). Ein Tag mit
+0 kWh am Zähler ist nie markiert, zählt aber in den Summen mit.
 """
 
 from __future__ import annotations

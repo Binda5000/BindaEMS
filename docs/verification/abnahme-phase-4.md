@@ -92,9 +92,12 @@ Prüfschritte:
    - **Zeitumstellung:** Der 25.10.2026 hat 100 Viertelstunden; die Abdeckung muss „100 von 100“
      lauten.
    - **ohne erkennbare Ursache:** ein Befund; Tag und Werte festhalten und melden.
-3. Tage ohne Markierung, aber mit Grund (`note`: „Zählerstand fehlt“, „Zähler zurückgesetzt“,
-   „Zähler zeigt 0 kWh“) sind ungeprüft. Ein Grund „Zähler zeigt 0 kWh“ an einem Tag ohne Bezug
-   oder Einspeisung ist erwartet.
+3. Tage ohne Markierung, aber mit Grund „Zählerstand fehlt“ oder „Zähler zurückgesetzt“ (`note`, dabei
+   ist `counter_kwh` `null`) sind ungeprüft und zählen nicht in `totals`. Ein Tag mit „Zähler zeigt
+   0 kWh“ ist nie markiert, geht aber mit seinen Werten in `totals` ein: Ohne Bezug oder Einspeisung
+   an dem Tag (Abrechnung ebenfalls 0) ist das erwartet; steht in der Abrechnung dort mehr als 0 kWh,
+   ist es ein Befund (der Zähler stand still oder die Abrechnung hat Energie, die es nicht gab), und
+   die Summe in `totals` weicht dadurch ab. Trage ihn in die Tabelle ein.
 
 | Tag | Größe | Abweichung (%) | Ursache | erklärt |
 |---|---|---|---|---|

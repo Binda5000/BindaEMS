@@ -488,7 +488,7 @@ Plan 4b „Geplantes Laden“** (ändert den core), nach der Abnahme der Phase 3
   UI-Schemas sind streng, eine abweichende Version zeigt auf der System-Seite nur „Unerwartete
   Antwort vom Server“.
 - **Tests:** 6785 Python-Tests im letzten vollen Lauf von Plan 4a (ohne die Szenarien des Simulators;
-  danach kamen zwei Doku-Tests dazu), davon 40 Property-Tests mit Hypothesis (6 für die Safety-Schicht,
+  danach kam die Dokumentationsrunde mit drei neuen Doku-Tests dazu), davon 40 Property-Tests mit Hypothesis (6 für die Safety-Schicht,
   6 für den Phasenwächter, 13 für den Akku-Sollwert, 7 für den 15-min-Wächter, 8 sonstige; Plan 4a
   brachte drei: die Wasserfall-Regel der Nachrechnung gegen die des core (zwei Tests) und der
   Steckzustand der app gegen den des core), und 619 UI-Tests (Vitest) sowie 27 E2E-Tests (Playwright).
@@ -1145,26 +1145,32 @@ Demo-Zugänge: `admin`, `bedienen` (Bedienen), `gast` (Lesen) und `sicher` (Admi
      danach kommen; mit Punkt 1 zusammen gibt es einen Neustart der app weniger. Die Images von GHCR
      gibt es erst, wenn der Branch auf `main` ist (Gesamtreview, Integration); ein lokaler Build geht
      auch vom Arbeitszweig.
-     1. `docker compose up -d --build ems-app` (oder `docker compose pull ems-app && docker compose up -d
-        ems-app`). Die Migration `0010` läuft beim Start der app. Keine neuen Felder in `config.yaml`,
-        der Watchdog bleibt unverändert, keine neue `config.ini`, keine neue ACL für Mosquitto (die neuen
-        HA-Entitäten sind Sensoren). Sicherung der Nacht als Rückfall: Eine ältere app startet mit der
-        migrierten Datenbank nicht.
-     2. Unter **Statistik** die ersten Werte prüfen: „Monat“ mit Kacheln und Abdeckung; der Abgleich der
+     1. Vorher die Datenbank kopieren (Betriebshandbuch 8, „Statistik ausrollen (Plan 4a)“, Schritt 1:
+        `docker compose stop ems-app`, dann `cp /data/bindaems.sqlite3 /backup/vor-plan-4a.sqlite3` im
+        Container). Das ist der Rückfall: Eine ältere app startet mit der migrierten Datenbank nicht,
+        und schon die erste nächtliche Sicherung nach dem Ausrollen enthält `0010`.
+     2. Ausrollen: `cd /opt/bindaems && docker compose pull ems-app && docker compose up -d --no-deps
+        ems-app` (der core läuft weiter, der Regelbetrieb bleibt an). `/opt/bindaems` hat nur
+        `docker-compose.yml`, `config.yaml` und `.env`, ein Build geht dort nicht; lokal baut man im
+        `deploy/`-Ordner eines Checkouts (mit `.env` und `config.yaml` dort) mit `docker compose up -d
+        --build --no-deps ems-app`. Die Migration `0010` läuft beim Start der app. Keine neuen Felder in
+        `config.yaml`, der Watchdog bleibt unverändert, keine neue `config.ini`, keine neue ACL für
+        Mosquitto (die neuen HA-Entitäten sind Sensoren).
+     3. Unter **Statistik** die ersten Werte prüfen: „Monat“ mit Kacheln und Abdeckung; der Abgleich der
         letzten 35 Tage erscheint nach dem ersten Nachtrag der Abrechnung (höchstens 10 Minuten nach dem
         Start); die Sessions beginnen mit dem Ausrollen, die Ladeenergie davor steht in „Autos“ als
         „Unbekannt“. Der Einstandspreis wird beim ersten Start aus der gesamten Abrechnung gerechnet.
-     3. Im Tarif **OeMAG-Werte und monatliche Grundgebühren** nachtragen (soweit noch nicht geschehen), dann
+     4. Im Tarif **OeMAG-Werte und monatliche Grundgebühren** nachtragen (soweit noch nicht geschehen), dann
         die Abrechnung der betroffenen Tage neu bewerten. Ohne sie sind Einspeiseerlös, Kosten und
         Ersparnis „–“.
-     4. Optional das **Grafana-Dashboard** `deploy/grafana/bindaems.json` importieren (Betriebshandbuch 3,
+     5. Optional das **Grafana-Dashboard** `deploy/grafana/bindaems.json` importieren (Betriebshandbuch 3,
         „Grafana“). Es ist nie gegen eine echte Grafana-Instanz importiert worden; ein Fehler dort ist ein
         Befund. Die Abfragen sind nicht gegen die echte InfluxDB geprüft.
-     5. **Abnahme, Teil Statistik:** 30 Tage ab dem Ausrollen; im Abgleich (`/statistik`, „Monat“, oder
+     6. **Abnahme, Teil Statistik:** 30 Tage ab dem Ausrollen; im Abgleich (`/statistik`, „Monat“, oder
         `GET /api/ledger/checks?from=…&to=…`) liegen Netzbezug und Einspeisung innerhalb ±1 %, markierte
         Tage haben eine Ursache, einzelne Tage stimmen mit dem Zähler des Netzbetreibers, Unterschrift
         (`docs/verification/abnahme-phase-4.md`). Der 25.10.2026 hat 100 Viertelstunden (Zeitumstellung).
-     6. **Risiken, die erst die Anlage zeigt:** Der Abgleich und die Nachrechnung sind nur gegen Fake-Reader
+     7. **Risiken, die erst die Anlage zeigt:** Der Abgleich und die Nachrechnung sind nur gegen Fake-Reader
         und Test-Antworten der InfluxDB gelaufen, nicht gegen die echte: die Abfrage
         `GROUP BY time(30m),"source","id","direction"` auf `long.energy` und die 15-min-Fenster in `raw`.
         Liefert der Abgleich an allen Tagen „Zählerstand fehlt“, stimmen Zeitfenster oder Tags nicht (Spec
@@ -2276,9 +2282,8 @@ die Punkte aus Task 9 und die Punkte B der Fix-Welle):
 
 Entschieden in Plan 3c; die 14 Entscheidungen hat der Betreiber am 17.10.2026 mit dem Plan freigegeben
 (`docs/superpowers/plans/2026-10-17-phase-3c-planausfuehrung.md`, „Vorgeschlagene Entscheidungen“, und
-Spec 18, „Stand Plan 3c“). Die Rulings der Umsetzung stehen im Ledger (nur lokal, nicht im Repository),
-soweit sie das Verhalten betreffen in den Absätzen „Stand Plan 3c“ der Spec. Hier beides mit Kosten,
-falls es falsch ist:
+Spec 18, „Stand Plan 3c“). Die Festlegungen der Umsetzung stehen unten und, soweit sie das Verhalten
+betreffen, in den Absätzen „Stand Plan 3c“ der Spec. Hier beides mit Kosten, falls es falsch ist:
 
 - **Die Entscheidungen (mit der Alternative aus dem Plan):**
   1. **Plan in der Absicht:** nur der bindende Teil (Slots vor `valid_until`, höchstens 8, rund 2 KB),
@@ -2432,8 +2437,7 @@ falls es falsch ist:
     solche Slots kennzeichnen (braucht einen Vermerk, wann ein Plan gesendet wurde) oder es im
     Hilfetext der Karte sagen.
 
-Aufgeschobene Kleinigkeiten aus Plan 3c (aus den Reviews; keine davon gefährdet die Anlage; das Ledger
-nennt sie nach Task). Was spätere Tasks erledigt haben, steht nicht mehr hier (etwa die Doku-Punkte aus
+Aufgeschobene Kleinigkeiten aus Plan 3c (aus den Reviews; keine davon gefährdet die Anlage). Was spätere Tasks erledigt haben, steht nicht mehr hier (etwa die Doku-Punkte aus
 den Tasks 4, 6, 7, 11 und 16, die mit Task 17 eingearbeitet sind):
 
 - **Typen und Prüfung (Tasks 1 und 2):** Der Helfer `_stored` in `tests/unit/shared/test_plan.py` braucht
@@ -2495,9 +2499,9 @@ den Tasks 4, 6, 7, 11 und 16, die mit Task 17 eingearbeitet sind):
 Entschieden in Plan 4a; die 13 Entscheidungen hat der Betreiber am 17.10.2026 mit dem Plan freigegeben
 (`docs/superpowers/plans/2026-10-17-phase-4a-statistik.md`, „Vorgeschlagene Entscheidungen“, und Spec 18,
 „Stand Plan 4a“), mit einer Änderung an den Entscheidungen 4 und 5: PV-Strom, der ins Auto geht (direkt
-oder über den Akku), kostet 0 ct statt den OeMAG-Wert. Die Rulings der Umsetzung stehen im Ledger (nur
-lokal, nicht im Repository), soweit sie das Verhalten betreffen in den Absätzen „Stand Plan 4a“ der Spec
-und im Betriebshandbuch. Hier beides mit Kosten, falls es falsch ist:
+oder über den Akku), kostet 0 ct statt den OeMAG-Wert. Die Festlegungen der Umsetzung stehen unten und,
+soweit sie das Verhalten betreffen, in den Absätzen „Stand Plan 4a“ der Spec und im Betriebshandbuch. Hier
+beides mit Kosten, falls es falsch ist:
 
 - **Die Entscheidungen (mit der Alternative aus dem Plan):**
   1. **Zuschnitt der Phase 4:** 4a „Statistik“ (nur app, UI und `deploy/`), 4b „Geplantes Laden“ (ändert
@@ -2563,8 +2567,9 @@ und im Betriebshandbuch. Hier beides mit Kosten, falls es falsch ist:
     begonnene Tage zählen als 0), Geldbeträge, sobald ein Tag sie nicht kennt. Falls falsch:
     Teilverhältnisse eines laufenden Zeitraums stehen da, wo „unbekannt“ erwartet wird.
   - **Home Assistant:** Einheit `EUR` statt „€“ (ISO 4217, wie `monetary` sie verlangt); „Ladeenergie“
-    ohne Zustandsklasse (HA lehnt `measurement` bei `energy` ab, der Wert gilt je Session); „heute“ zeigt
-    nach einer gescheiterten Rechnung über Mitternacht „unbekannt“ statt den Wert von gestern. Die Prüfung
+    ohne Zustandsklasse (HA lehnt `measurement` bei `energy` ab, der Wert gilt je Session); nach einer
+    gescheiterten Rechnung über Mitternacht zeigen alle Statistik-Sensoren „unbekannt“ statt den Wert von
+    gestern. Die Prüfung
     der Objekt-IDs in `shared/config.py` kennt die vier neuen IDs nicht, denn `shared` blieb unverändert
     (Entscheidung 2): Die app bricht bei einer Kollision beim Start ab, statt dass die Konfiguration sie
     ablehnt. Falls falsch: ein Wortlaut, eine Einheit; bei der IDs-Prüfung eine Fehlermeldung später.
@@ -2578,8 +2583,7 @@ und im Betriebshandbuch. Hier beides mit Kosten, falls es falsch ist:
     folgt dem, was geschrieben wird. Der Abschnitt „Grafana“ ist ein `###` im Abschnitt 3 des
     Betriebshandbuchs (ein neuer `##` verschöbe die Nummern). Falls falsch: keine, nur Lage im Handbuch.
 
-Aufgeschobene Kleinigkeiten aus Plan 4a (aus den Reviews; keine davon gefährdet die Anlage; das Ledger
-nennt sie nach Task). Zuerst, was der Betreiber an der Anlage bemerken kann:
+Aufgeschobene Kleinigkeiten aus Plan 4a (aus den Reviews; keine davon gefährdet die Anlage). Zuerst, was der Betreiber an der Anlage bemerken kann:
 
 - **Grafana:** Ersetzt ein echter Slot eine Schätzung, bleiben die Punkte der Schätzung je Fluss in
   `ledger` stehen, die der echte Slot nicht hat; „Abrechnung je Tag“ kann solche Reste zeigen.
