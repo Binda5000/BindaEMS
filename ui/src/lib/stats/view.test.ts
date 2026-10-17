@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { formatEur, formatRatio } from '$lib/format';
 import { stats } from '$lib/testing/fixtures';
 import type { Stats } from '$lib/api/schemas';
-import { bucketLabel, costRows, hints, savingsRows, tiles } from './view';
+import { bucketLabel, bucketLabels, costRows, hints, savingsRows, tiles } from './view';
 
 function withMoney(money: Partial<Stats['money']>, rest: Partial<Stats> = {}): Stats {
 	const base = stats();
@@ -131,5 +131,36 @@ describe('Beschriftung der Balken', () => {
 		expect(bucketLabel('month', '2026-10-09')).toBe('09.10.');
 		expect(bucketLabel('year', '2026-10')).toBe('Okt.');
 		expect(bucketLabel('year', '2026-01')).toBe('Jän.');
+	});
+});
+
+describe('Beschriftung der Stundenbalken an Tagen mit Zeitumstellung', () => {
+	it('unterscheidet die doppelte Stunde im Herbst nach MESZ und MEZ', () => {
+		const starts = [
+			'2026-10-25T00:00:00+02:00',
+			'2026-10-25T01:00:00+02:00',
+			'2026-10-25T02:00:00+02:00',
+			'2026-10-25T02:00:00+01:00',
+			'2026-10-25T03:00:00+01:00'
+		];
+		expect(bucketLabels('day', starts)).toEqual([
+			'00:00',
+			'01:00',
+			'02:00 MESZ',
+			'02:00 MEZ',
+			'03:00'
+		]);
+	});
+
+	it('liest die Zone aus dem Zeitpunkt, nicht aus dem Versatz im Text', () => {
+		// dieselben Zeitpunkte in UTC geschrieben
+		const starts = ['2026-10-25T00:00:00Z', '2026-10-25T01:00:00Z'];
+		expect(bucketLabels('day', starts)).toEqual(['02:00 MESZ', '02:00 MEZ']);
+	});
+
+	it('lässt ohne doppelte Stunde alles beim Alten', () => {
+		const starts = ['2026-10-08T00:00:00+02:00', '2026-10-08T01:00:00+02:00'];
+		expect(bucketLabels('day', starts)).toEqual(['00:00', '01:00']);
+		expect(bucketLabels('month', ['2026-10-01', '2026-10-02'])).toEqual(['01.10.', '02.10.']);
 	});
 });

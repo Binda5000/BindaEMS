@@ -36,3 +36,9 @@ it('lässt den Leistungspreis in der Woche weg und zeigt unbekannte Beträge als
 	const sum = screen.getByRole('cell', { name: 'Summe' }).closest('tr') as HTMLElement;
 	expect(within(sum).getAllByRole('cell')[1]).toHaveTextContent('–');
 });
+
+it('benennt seine beiden Tabellen', () => {
+	render(CostCard, { stats: stats() });
+	expect(screen.getByRole('table', { name: 'Kosten' })).toBeInTheDocument();
+	expect(screen.getByRole('table', { name: 'Ersparnis' })).toBeInTheDocument();
+});

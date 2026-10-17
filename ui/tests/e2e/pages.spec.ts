@@ -4,7 +4,7 @@ import { login, watchPage } from './helpers';
 const PAGES = [
 	'/',
 	'/verlauf',
-	'/statistik',
+	'/statistik?zeitraum=tag&datum=2026-10-09', // feste Tage: Heute hängt sonst an der echten Uhr
 	'/statistik?zeitraum=monat&datum=2026-10-09', // Monat der Demo-Welt: Diagramm und Karten gefüllt
 	'/verbraucher',
 	'/laden',

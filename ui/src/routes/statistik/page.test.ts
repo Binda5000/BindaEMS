@@ -107,6 +107,22 @@ it('lädt den laufenden Zeitraum jede Minute neu, einen vergangenen nur einmal',
 	expect(api.stats).toHaveBeenCalledTimes(1);
 });
 
+it('versucht einen vergangenen Zeitraum nach einem Fehler nach 30 s erneut', async () => {
+	const { ApiError } = await import('$lib/api/errors');
+	navigate('?zeitraum=monat&datum=2026-09-15');
+	api.stats.mockRejectedValueOnce(new ApiError(503, 'Statistik nicht verfügbar'));
+	render(Page);
+	await vi.advanceTimersByTimeAsync(0);
+	expect(api.stats).toHaveBeenCalledTimes(1);
+	await vi.advanceTimersByTimeAsync(29_000);
+	expect(api.stats).toHaveBeenCalledTimes(1);
+	await vi.advanceTimersByTimeAsync(1_000);
+	expect(api.stats).toHaveBeenCalledTimes(2);
+	await screen.findByText('Autarkie');
+	await vi.advanceTimersByTimeAsync(5 * 60_000);
+	expect(api.stats).toHaveBeenCalledTimes(2); // gelungen: nicht wieder laden
+});
+
 it('zeigt Kacheln, Hinweise, Diagramm und Kosten', async () => {
 	navigate('?zeitraum=monat&datum=2026-10-09');
 	render(Page);

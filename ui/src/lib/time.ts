@@ -38,7 +38,7 @@ export function addDays(date: string, days: number): string {
 }
 
 /** Versatz von Wien gegenüber UTC in Minuten zum Zeitpunkt `ms`. */
-function offsetMinutes(ms: number): number {
+export function offsetMinutes(ms: number): number {
 	const name = part(OFFSET.formatToParts(ms), 'timeZoneName');
 	const match = /GMT([+-])(\d{2}):?(\d{2})?/.exec(name);
 	if (!match) return 0; // „GMT“ ohne Versatz

@@ -28,6 +28,7 @@
 	import { theme } from '$lib/theme.svelte';
 
 	const POLL_MS = 60_000;
+	const RETRY_MS = 30_000;
 
 	// Wiener Datum, jede Minute neu: „heute“ und der laufende Zeitraum rücken um Mitternacht nach
 	let today = $state(todayIso());
@@ -55,7 +56,8 @@
 	$effect(() => {
 		const query = { period, day };
 		const next = new Resource((o) => api.stats(query.period, query.day, o), {
-			intervalMs: running ? POLL_MS : undefined
+			intervalMs: running ? POLL_MS : undefined,
+			retryMs: RETRY_MS
 		});
 		resource = next;
 		return next.start();

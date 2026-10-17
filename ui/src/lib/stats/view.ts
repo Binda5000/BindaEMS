@@ -1,6 +1,7 @@
 // Aufbereitung der Statistik für die Anzeige: Kacheln, Zeilen der Kostenkarte, Hinweise
 import type { Stats } from '$lib/api/schemas';
 import { formatDay, formatEur, formatRatio, formatTime } from '$lib/format';
+import { offsetMinutes, parseIso } from '$lib/time';
 import type { Period } from './period';
 
 export interface Tile {
@@ -115,4 +116,21 @@ export function bucketLabel(period: Period, start: string): string {
 		case 'year':
 			return MONTH_SHORT[Number(start.slice(5, 7)) - 1] ?? start;
 	}
+}
+
+/**
+ * Beschriftungen aller Balken. Am Tag der Umstellung im Herbst gibt es die Stunde 02:00 zweimal;
+ * sie bekommt dann die Zone dazu („02:00 MESZ“, „02:00 MEZ“).
+ */
+export function bucketLabels(period: Period, starts: string[]): string[] {
+	const labels = starts.map((start) => bucketLabel(period, start));
+	if (period !== 'day') return labels;
+	const count = new Map<string, number>();
+	for (const label of labels) count.set(label, (count.get(label) ?? 0) + 1);
+	return labels.map((label, index) => {
+		if ((count.get(label) ?? 0) < 2) return label;
+		const ms = parseIso(starts[index] ?? '');
+		if (ms === null) return label;
+		return `${label} ${offsetMinutes(ms) >= 120 ? 'MESZ' : 'MEZ'}`;
+	});
 }

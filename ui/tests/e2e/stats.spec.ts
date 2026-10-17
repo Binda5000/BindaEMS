@@ -30,6 +30,7 @@ test('Statistik wechselt den Zeitraum und zeigt Diagramm und Kosten', async ({ p
 test('Statistik hat bei 360 px keine waagrechte Scrollleiste', async ({ page }) => {
 	await page.setViewportSize({ width: 360, height: 740 });
 	await login(page, 'gast');
+	await page.clock.setFixedTime(T_DEMO);
 	await page.goto('/statistik?zeitraum=monat&datum=2026-10-09');
 	await expect(page.getByRole('cell', { name: 'Grundgebühren' })).toBeVisible();
 	await expect(page.locator('canvas').first()).toBeVisible();

@@ -17,7 +17,7 @@ import {
 	formatNumber,
 	formatTime
 } from '$lib/format';
-import { bucketLabel } from '$lib/stats/view';
+import { bucketLabels } from '$lib/stats/view';
 import { parseIso, todayVienna } from '$lib/time';
 import type { Palette } from './palette';
 
@@ -337,10 +337,13 @@ function statsTooltip(params: unknown): string {
 /**
  * Diagramm „Energie“ der Statistik: PV, Bezug und Einspeisung als Balken, der Verbrauch als Linie,
  * je Stunde (Tag), Tag (Woche, Monat) oder Monat (Jahr). Die Achse ist eine Rubrikenachse mit den
- * Beschriftungen aus `bucketLabel`, so zeigt ein Tag mit Zeitumstellung 23 bzw. 25 Balken.
+ * Beschriftungen aus `bucketLabels`, so zeigt ein Tag mit Zeitumstellung 23 bzw. 25 Balken.
  */
 export function statsEnergyOption(stats: Stats, palette: Palette): EChartsCoreOption {
-	const labels = stats.buckets.map((bucket) => bucketLabel(stats.period, bucket.start));
+	const labels = bucketLabels(
+		stats.period,
+		stats.buckets.map((bucket) => bucket.start)
+	);
 	const colors = {
 		pv: palette.pv,
 		import: palette.series[0] ?? palette.muted,

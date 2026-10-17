@@ -14,7 +14,7 @@
 </script>
 
 <Card title="Kosten">
-	<table>
+	<table aria-label="Kosten">
 		<tbody>
 			{#each rows as row (row.id)}
 				<tr class:total={row.strong}>
@@ -24,7 +24,7 @@
 			{/each}
 		</tbody>
 	</table>
-	<table class="savings">
+	<table class="savings" aria-label="Ersparnis">
 		<tbody>
 			{#each savings as row (row.id)}
 				<tr>

@@ -259,17 +259,33 @@ describe('Energie der Statistik', () => {
 		]);
 	});
 
-	it('hat an Tagen mit Zeitumstellung 23 bzw. 25 Stunden', () => {
-		const hours = (count: number) =>
+	it('hat an Tagen mit Zeitumstellung 23 bzw. 25 Stunden mit verschiedenen Beschriftungen', () => {
+		// Frühjahr: 28.03. 23:00 UTC bis 29.03. (23 h); Herbst: 24.10. 22:00 UTC bis 25.10. (25 h)
+		const hours = (from: number, count: number) =>
 			Array.from({ length: count }, (_, i) => {
-				const at = new Date(Date.UTC(2026, 2, 28, 23) + i * 3_600_000).toISOString();
+				const at = new Date(from + i * 3_600_000).toISOString();
 				return bucket(at, 0, 0, 0, 0);
 			});
-		for (const count of [23, 25]) {
-			const option = statsEnergyOption(stats({ period: 'day', buckets: hours(count) }), palette);
-			expect((option.xAxis as { data: string[] }).data).toHaveLength(count);
+		const cases: [number, number][] = [
+			[Date.UTC(2026, 2, 28, 23), 23],
+			[Date.UTC(2026, 9, 24, 22), 25]
+		];
+		for (const [from, count] of cases) {
+			const option = statsEnergyOption(
+				stats({ period: 'day', buckets: hours(from, count) }),
+				palette
+			);
+			const labels = (option.xAxis as { data: string[] }).data;
+			expect(labels).toHaveLength(count);
+			expect(new Set(labels).size).toBe(count);
 			expect((option.series as { data: number[] }[])[0].data).toHaveLength(count);
 		}
+		const fall = statsEnergyOption(
+			stats({ period: 'day', buckets: hours(cases[1][0], 25) }),
+			palette
+		);
+		const labels = (fall.xAxis as { data: string[] }).data;
+		expect(labels.slice(1, 5)).toEqual(['01:00', '02:00 MESZ', '02:00 MEZ', '03:00']);
 	});
 
 	it('beschriftet das Jahr mit Monaten', () => {
