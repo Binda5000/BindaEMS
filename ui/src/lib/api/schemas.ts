@@ -858,11 +858,25 @@ export const PlanSchema = v.object({
 });
 export type Plan = v.InferOutput<typeof PlanSchema>;
 
-/** Antwort von `GET /api/plan`: Status der Komponente, Schalter und der letzte Plan (oder keiner) */
+/** Stand der Ausführung des Plans im core (Plan 3c); `live` ist der einzige, der den Plan ausführt */
+export const ExecutionStateSchema = v.picklist([
+	'unreachable',
+	'pending',
+	'off',
+	'idle',
+	'locked',
+	'dry_run',
+	'live'
+]);
+export type ExecutionState = v.InferOutput<typeof ExecutionStateSchema>;
+
+/** Antwort von `GET /api/plan`: Status der Komponente, Schalter, der letzte Plan (oder keiner) und,
+ * solange er gilt, der Stand seiner Ausführung mit dem fertigen Satz */
 export const PlanResponseSchema = v.object({
 	status: v.object({ ok: v.boolean(), message: v.string(), running: v.boolean() }),
 	grid_charge_allowed: v.boolean(),
-	plan: v.nullable(PlanSchema)
+	plan: v.nullable(PlanSchema),
+	execution: v.nullable(v.object({ state: ExecutionStateSchema, text: v.string() }))
 });
 export type PlanResponse = v.InferOutput<typeof PlanResponseSchema>;
 

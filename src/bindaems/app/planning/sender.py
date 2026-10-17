@@ -28,6 +28,7 @@ import structlog
 from bindaems.app.audit import Source
 from bindaems.app.control.intent import ConflictAgain, CoreDown, IntentService, Rejected, SetPlan
 from bindaems.app.core_link import LiveState
+from bindaems.app.planning.execution import core_has_plan
 from bindaems.app.planning.service import PlanningService
 from bindaems.app.settings.service import SettingsService
 from bindaems.shared.plan import IntentPlan, intent_plan
@@ -94,17 +95,6 @@ class PlanSender:
         allowed = self._settings.current().settings.planning.grid_charge_allowed
         return intent_plan(plan, grid_charge_allowed=allowed)
 
-    def _core_has(self, wanted: IntentPlan) -> bool:
-        health = self._live.health
-        intent = health.get("intent") if health is not None else None
-        held = intent.get("plan") if isinstance(intent, dict) else None
-        if not isinstance(held, dict):
-            return False
-        return (held.get("id"), held.get("grid_charge_allowed")) == (
-            wanted.id,
-            wanted.grid_charge_allowed,
-        )
-
     async def sync(self) -> SyncResult:
         """Ein Abgleich: ``none`` ohne gültigen Plan, ``current``, wenn der core ihn hat,
         ``sent`` nach dem Senden und ``failed`` ohne Verbindung, ohne Health oder bei einem
@@ -120,7 +110,7 @@ class PlanSender:
                 self._waiting_for_health = True
             return "failed"
         self._waiting_for_health = False
-        if self._core_has(wanted):
+        if core_has_plan(self._live.health, wanted.id, wanted.grid_charge_allowed):
             return "current"
         fields = {"plan": wanted.id, "grid_charge_allowed": wanted.grid_charge_allowed}
         try:

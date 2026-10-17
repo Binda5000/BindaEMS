@@ -5,6 +5,8 @@ from pathlib import Path
 
 import pytest
 
+from bindaems.app.planning.execution import EXECUTION_TEXTS
+
 
 def test_acceptance_checklist_covers_spec_18() -> None:
     text = Path("docs/verification/abnahme-phase-1.md").read_text(encoding="utf-8")
@@ -544,10 +546,15 @@ def test_planning_settings_in_the_guide_match_the_configuration() -> None:
             assert float(shown.replace(",", ".")) == value, key
 
 
-def test_plan_preview_marker_in_the_guide_and_the_ui() -> None:
-    # Bis Plan 3c führt der core den Plan nicht aus: Seite und Handbuch sagen das wörtlich gleich.
-    line = "Vorschau – der core führt den Plan noch nicht aus."
-    header = Path("ui/src/lib/plan/PlanHeader.svelte").read_text(encoding="utf-8")
+def test_plan_execution_texts_in_the_guide_and_the_ui() -> None:
+    # Jeder Satz zum Stand der Ausführung steht im Handbuch; die Seite zeigt den Satz des Servers
+    # und nicht mehr die Zeile „Vorschau“; das HA-Attribut `execution` ersetzt `preview: true`.
     section = _guide_section("Planung")
-    assert line in header and f"„{line}“" in section
-    assert "`preview: true`" in section
+    for state, text in EXECUTION_TEXTS.items():
+        assert text.replace("{mode}", "{Betriebszustand}") in section, state
+        assert f"| `{state}` |" in section, state
+    assert "| `none` |" in section
+    header = Path("ui/src/lib/plan/PlanHeader.svelte").read_text(encoding="utf-8")
+    assert "Vorschau" not in header
+    assert "preview" not in section and "Vorschau" not in section
+    assert "Attribut `execution`" in section

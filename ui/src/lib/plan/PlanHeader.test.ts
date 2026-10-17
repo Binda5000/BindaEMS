@@ -76,7 +76,8 @@ it('shows the empty state with the status', () => {
 		data: {
 			status: { ok: false, message: 'Kein Plan: keine PV-Prognose', running: false },
 			grid_charge_allowed: false,
-			plan: null
+			plan: null,
+			execution: null
 		},
 		canOperate: false
 	});
@@ -94,11 +95,42 @@ it('trusts the server for validity, not the clock of the browser', () => {
 	expect(screen.queryByText('Plan abgelaufen')).toBeNull();
 });
 
-it('says that the core does not run the plan yet, with and without a plan', () => {
-	const preview = 'Vorschau – der core führt den Plan noch nicht aus.';
-	const { unmount } = render(PlanHeader, { data: RESPONSE, canOperate: true });
-	expect(screen.getByText(preview)).toBeTruthy();
+const EXECUTION_TEXT = {
+	pending: 'Der Plan ist noch nicht beim core.',
+	dry_run: 'Dry-Run: Der core rechnet den Plan mit und sendet nichts an Victron.',
+	live: 'Der core führt den Plan aus.'
+} as const;
+
+it('shows the text of the execution state instead of a preview line', () => {
+	render(PlanHeader, {
+		data: { ...RESPONSE, execution: { state: 'dry_run', text: EXECUTION_TEXT.dry_run } },
+		canOperate: true
+	});
+	expect(screen.getByText(EXECUTION_TEXT.dry_run)).toBeTruthy();
+	expect(screen.queryByText(/Vorschau/)).toBeNull();
+});
+
+it('marks every state but live as a warning', () => {
+	const { unmount } = render(PlanHeader, {
+		data: { ...RESPONSE, execution: { state: 'pending', text: EXECUTION_TEXT.pending } },
+		canOperate: false
+	});
+	expect(screen.getByText(EXECUTION_TEXT.pending).classList.contains('live')).toBe(false);
+	expect(screen.getByText(EXECUTION_TEXT.pending).classList.contains('execution')).toBe(true);
 	unmount();
-	render(PlanHeader, { data: { ...RESPONSE, plan: null }, canOperate: false });
-	expect(screen.getByText(preview)).toBeTruthy();
+	render(PlanHeader, {
+		data: { ...RESPONSE, execution: { state: 'live', text: EXECUTION_TEXT.live } },
+		canOperate: false
+	});
+	const live = screen.getByText(EXECUTION_TEXT.live);
+	expect(live.classList.contains('execution') && live.classList.contains('live')).toBe(true);
+});
+
+it('shows no execution line without a valid plan', () => {
+	const { container } = render(PlanHeader, {
+		data: { ...RESPONSE, plan: null, execution: null },
+		canOperate: false
+	});
+	expect(container.querySelector('.execution')).toBeNull();
+	expect(screen.getByText('Noch kein Plan.')).toBeTruthy();
 });

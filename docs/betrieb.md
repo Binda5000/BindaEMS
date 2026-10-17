@@ -24,8 +24,8 @@ auf der Seite „Entscheidungen“ und in Grafana.
 - `ems-app` meldet Benutzer an und liefert das Web-UI samt API aus (Abschnitt 12). Sie holt
   Preise und die PV-Prognose, rechnet jede Viertelstunde ab und sendet seit Plan 2d die Absicht an
   den core: Regelbetrieb, Lademodi, Boost, Zuordnung und der Live-Schalter (Abschnitt 13). Seit
-  Plan 3b plant sie außerdem den Akku für bis zu 36 h und zeigt den Plan als Vorschau (Seite
-  „Zeitplan“, Abschnitt „Planung“); der core bekommt ihn noch nicht. Sie speichert das
+  Plan 3b plant sie außerdem den Akku für bis zu 36 h und zeigt den Plan samt dem Stand seiner
+  Ausführung im core (Seite „Zeitplan“, Abschnitt „Planung“). Sie speichert das
   Entscheidungslog, meldet Sensoren und Bedienelemente per MQTT Discovery an Home Assistant und
   meldet Alarme dort als Benachrichtigung (Abschnitt 7).
 
@@ -809,7 +809,7 @@ gilt für diesen Browser.
 |---|---|
 | Übersicht | Energiefluss live mit den Verbrauchern unter dem Haus, Strompreis jetzt und die nächsten 3 h (Balken überfahren, antippen oder mit den Pfeiltasten wählen zeigt den Preis der Viertelstunde), Ladestände, Preise und PV-Prognose für heute und morgen, Hinweise, Verbraucher mit Leistung und Energie seit Mitternacht, „Warum?“ (unten) |
 | Laden | je Fahrzeug und je Wallbox eine Karte, dazu „Gast“ und „Vorrang“; ab „Bedienen“ mit den Bedienelementen (unten, „Laden“) |
-| Zeitplan | der Akkuplan für bis zu 36 h als Vorschau: Kopf mit Stand, Quelle, Gültigkeit und Kosten gegenüber „Victron allein“, Diagramme „Preise und Prognosen“ und „Akku“, „Ablauf“ in Blöcken mit Satz; ab „Bedienen“ mit „Netzladen erlaubt“ und „Neu planen“ (Abschnitt „Planung“) |
+| Zeitplan | der Akkuplan für bis zu 36 h: Kopf mit dem Stand der Ausführung, Quelle, Gültigkeit und Kosten gegenüber „Victron allein“, Diagramme „Preise und Prognosen“ und „Akku“, „Ablauf“ in Blöcken mit Satz; ab „Bedienen“ mit „Netzladen erlaubt“ und „Neu planen“ (Abschnitt „Planung“) |
 | Verlauf | Diagramm mit bis zu 8 Reihen für frei wählbare Tage (höchstens 400), Tagesbilanz mit Abdeckung (Viertelstunden und Anteil der aufgezeichneten Zeit; am laufenden Tag „bis jetzt“, also nur die vergangenen Viertelstunden), Kosten, Erlös, Autarkie und den Tageswerten der Zähler (Differenz über den Tag) für den Abgleich mit VRM |
 | Verbraucher | Verbraucherbaum mit „Sonstiges“, Leistung und Energie seit Mitternacht („Heute“); Admins legen Verbraucher an, ändern und löschen sie |
 | System | Komponenten, Hinweise, core (Betriebsart mit Beginn und Gründen, Eingangsdaten, Adapter, Selbstprüfung, Alarme), Bedienung (Regelbetrieb; Admins: „Live schalten…“ und „Auf Dry-Run…“, Abschnitt 13), Aktoren (angefordert, wirksam, Freigabe, Hinweise und Sperren; Admins: „Quittieren“), Watchdog am Cerbo (Abschnitt 14), Preise (Admins: „Preise jetzt abrufen“), PV-Prognose, alle Signale mit Suche |
@@ -852,8 +852,9 @@ nicht erreichbar, steht dort „core nicht erreichbar.“.
 ### Zeitplan
 
 Die Seite **Zeitplan** (Navigation nach „Laden“) zeigt den Plan, den die app für den Akku gerechnet hat,
-als Vorschau: Der core führt ihn noch nicht aus (Plan 3c). Ab „Bedienen“ schaltest du dort „Netzladen
-erlaubt“ und löst „Neu planen“ aus; „Lesen“ sieht dieselbe Seite ohne die Bedienelemente. Aufbau,
+und, in der obersten Zeile, ob der core ihn ausführt (Abschnitt „Planung“, „Stand der Ausführung“).
+Ab „Bedienen“ schaltest du dort „Netzladen erlaubt“ und löst „Neu planen“ aus; „Lesen“ sieht
+dieselbe Seite ohne die Bedienelemente. Aufbau,
 Auslöser, Ersatzplan und die Sätze der Erklärung stehen im Abschnitt „Planung“ am Ende dieses
 Handbuchs.
 
@@ -3196,10 +3197,10 @@ Plan 3a ist ohne die echte Anlage getestet; zwei Dinge zeigen sich erst im Betri
 
 ## Planung
 
-Seit Plan 3b plant die app den Hausakku für bis zu 36 h und zeigt den Plan als **Vorschau**. Der core
-bekommt ihn nicht: Es entsteht kein Befehl an ein Gerät, und die Absicht ändert sich nicht. Die
-Ausführung (Akku-Absichten, Budget für den 15-min-Wächter, abgelaufener Plan) folgt mit Plan 3c.
-Bis dahin regelt der Akku wie bisher (Abschnitt „Akku und Spitzen“). Pläne entstehen etwa alle
+Seit Plan 3b plant die app den Hausakku für bis zu 36 h. Seit Plan 3c übergibt sie den Plan in der
+Absicht an den core, und der core führt ihn aus, solange der Regelbetrieb an ist und Victron in
+seiner Betriebsart arbeitet (Abschnitt „Akku und Spitzen“). Ob das gerade so ist, sagt der **Stand
+der Ausführung** (unten). Pläne entstehen etwa alle
 15 min; jeder wird mit seinen Eingangsdaten in SQLite gespeichert (`plan` und `plan_inputs`, die
 Migration `0009` legt beide Tabellen beim Start der app an).
 
@@ -3207,8 +3208,8 @@ Migration `0009` legt beide Tabellen beim Start der app an).
 
 Die Seite **Zeitplan** steht in der Navigation nach „Laden“ und zeigt den letzten Plan:
 
-- **Kopf:** zuerst die Zeile „Vorschau – der core führt den Plan noch nicht aus.“ (auch ohne
-  Plan), dann „Plan von HH:MM Uhr“, die Quelle („Optimierer“ oder „Ersatzplan“, beim Ersatzplan mit
+- **Kopf:** zuerst der Satz zum Stand der Ausführung (unten; ohne gültigen Plan steht keiner), dann
+  „Plan von HH:MM Uhr“, die Quelle („Optimierer“ oder „Ersatzplan“, beim Ersatzplan mit
   „Grund: …“), „gültig bis HH:MM Uhr“ oder „Plan abgelaufen“, „Anlass“ (der Auslöser, unten), die
   „Erwarteten Kosten“ des Plans und, daneben, was „Victron allein“ im selben Zeitraum kostet. Mit
   einem Leistungspreis kommt das „Budget“ dazu (unten). Unter „Auffälligkeiten“ stehen die Befunde
@@ -3291,8 +3292,29 @@ Umschalten kannst du an drei Stellen, mit denselben Folgen:
 
 Jedes Umschalten ist eine neue Version der Einstellungen mit dem Kommentar „Netzladen ein“ bzw.
 „Netzladen aus“ im Änderungsprotokoll und löst eine Neuplanung aus. Hat der Schalter schon den Wert,
-entsteht keine neue Version. Solange der core den Plan nicht ausführt (Plan 3c), ändert der Schalter
-nur die Vorschau.
+entsteht keine neue Version. Der Plan geht danach neu an den core; bis er dort ist, steht der Stand „Der Plan ist noch nicht
+beim core.“ (oben, „Stand der Ausführung“).
+
+### Stand der Ausführung
+
+Die Zeile oben im Kopf der Seite „Zeitplan“ sagt, was der core mit dem gültigen Plan macht. Die app
+leitet den Stand aus dem Health des core ab; der erste zutreffende der Liste gilt:
+
+| Stand | Satz | Wann |
+|---|---|---|
+| `none` | (keiner) | es gibt keinen gültigen Plan |
+| `unreachable` | Der core ist nicht erreichbar; er führt den Plan nicht aus. | die app ist nicht mit dem core verbunden |
+| `pending` | Der Plan ist noch nicht beim core. | der Plan der Absicht im core hat nicht dieselbe `id` und denselben Stand von „Netzladen erlaubt“ wie der Plan der app (zum Beispiel direkt nach einer Neuplanung oder dem Umschalten); die app sendet ihn innerhalb von 30 s |
+| `off` | Regelbetrieb ist aus: Der core führt den Plan nicht aus. | der Schalter „Regelbetrieb“ steht auf aus |
+| `idle` | Der core regelt gerade nicht ({Betriebszustand}). | der core steht weder in `CONTROL` noch in `DEGRADED`, sondern etwa in `START`, `OBSERVE` oder `SAFE` |
+| `locked` | Victron ist gesperrt: Der core führt den Plan nicht aus. | Victron hat Sperrgründe (Abschnitt „Akku und Spitzen“) |
+| `dry_run` | Dry-Run: Der core rechnet den Plan mit und sendet nichts an Victron. | die wirksame Betriebsart von Victron ist nicht „live“ |
+| `live` | Der core führt den Plan aus. | alles trifft zu |
+
+`{Betriebszustand}` ist der Zustand des core, etwa `SAFE`. Außer bei `live` ist die Zeile in der
+Warnfarbe. In Home Assistant steht der Schlüssel der ersten Spalte im Attribut `execution` der
+Plan-Sensoren (Abschnitt „Home Assistant“). Die Anzeige schaltet nichts: Der Plan wirkt nie ohne
+Regelbetrieb und nie in einer anderen Betriebsart, als Victron hat (Abschnitt „Akku und Spitzen“).
 
 ### Einstellungen „Planung“
 
@@ -3418,15 +3440,17 @@ steht dort `UNTERSTUETZUNG_RESERVIERT`.
 
 Mit einem Leistungspreis im Tarif (Abschnitt 8) hat der Plan je Monat ein **Budget**: die Monatsspitze,
 die er akzeptiert, auf 0,1 kW aufgerundet und mindestens der höchste Netzbezug der Nachrechnung im
-Monat. Ohne Leistungspreis ist es leer. Es ist eine Vorschau: Der 15-min-Wächter im core kennt es
-erst mit Plan 3c.
+Monat. Ohne Leistungspreis ist es leer. Der 15-min-Wächter im core hält es mit Plan 3c (Abschnitt
+„15-min-Wächter“).
 
 ### Home Assistant
 
 Zum Plan meldet die app diese Entitäten am Gerät „BindaEMS“ (Abschnitt 7). Die Sensoren zeigen den
 Plan nur, solange er gilt; sonst sind sie „unbekannt“. Die vier Sensoren `battery_plan_now`,
-`battery_plan_next`, `planned_soc` und `budget` tragen immer das Attribut `preview: true`: Der core
-führt den Plan noch nicht aus (Plan 3c). Automationen sollen sich bis dahin nicht auf ihn verlassen.
+`battery_plan_next`, `planned_soc` und `budget` tragen immer das Attribut `execution`, den Stand der
+Ausführung (oben, „Stand der Ausführung“) als Schlüssel: `none`, `unreachable`, `pending`, `off`, `idle`, `locked`, `dry_run`
+oder `live`. Automationen sollen sich nur auf den Plan verlassen, wenn `execution` den Wert `live`
+hat. Ist der Stand der Einstellung „Netzladen erlaubt“ noch unbekannt, steht `execution` auf `null`.
 
 | Objekt-ID | Name | Plattform | Wert |
 |---|---|---|---|

@@ -285,7 +285,7 @@ class AppRuntime:
                     self.forecast, self.load_forecast, self.forecast_quality, self._clock, guard
                 ),
                 ledger_router(self.ledger, guard),
-                planning_router(self.planning, self.settings, self._clock, guard),
+                planning_router(self.planning, self.settings, self.live, self._clock, guard),
                 control_router(
                     self.intents,
                     self.decisions,

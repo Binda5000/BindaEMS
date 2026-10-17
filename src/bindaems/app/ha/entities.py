@@ -19,6 +19,7 @@ from bindaems.app.control.intent import ASSIGNMENT_OVERRIDE
 from bindaems.app.core_link import LiveState
 from bindaems.app.forecast.service import ForecastService
 from bindaems.app.ledger.service import MonthPeak
+from bindaems.app.planning.execution import ExecutionState, execution_state
 from bindaems.app.planning.explain import slot_text
 from bindaems.app.prices.pipeline import TOMORROW_EXPECTED_FROM
 from bindaems.app.prices.service import PriceService
@@ -95,6 +96,7 @@ class HaInputs:
     plan_now: PlanSlot | None = None  # Slot des Plans zu jetzt
     plan_next: PlanSlot | None = None  # der Slot danach; None am Ende des Plans
     grid_charge_allowed: bool | None = None  # Einstellung „Netzladen erlaubt“; None = unbekannt
+    execution: ExecutionState | None = None  # Stand der Ausführung des Plans; None = unbekannt
 
 
 @dataclass(frozen=True)
@@ -290,8 +292,10 @@ def _month_peak_attributes(inputs: HaInputs) -> Mapping[str, Any]:
     return {"slot": None if peak is None else peak.slot_start.astimezone(UTC).isoformat()}
 
 
-# Der core führt den Plan noch nicht aus (Plan 3c); die Plan-Sensoren sagen das jedem Leser.
-PREVIEW: Final[Mapping[str, Any]] = {"preview": True}
+def _execution(inputs: HaInputs) -> Mapping[str, Any]:
+    """Der Stand der Ausführung (Plan 3c) an jedem Plan-Sensor, mit und ohne Plan; ``None`` heißt
+    unbekannt."""
+    return {"execution": inputs.execution}
 
 
 def _plan_slot_state(pick: Callable[[HaInputs], PlanSlot | None]) -> Callable[[HaInputs], str]:
@@ -308,9 +312,9 @@ def _plan_slot_attributes(
     def attributes(inputs: HaInputs) -> Mapping[str, Any]:
         slot = pick(inputs)
         if slot is None or inputs.plan is None:
-            return dict(PREVIEW)
+            return _execution(inputs)
         return {
-            **PREVIEW,
+            **_execution(inputs),
             "reason": slot_text(slot),
             "codes": [reason.code for reason in slot.reasons],
             "planned_soc_pct": round(slot.soc_end_pct, 1),
@@ -337,9 +341,9 @@ def _planned_soc(inputs: HaInputs) -> str:
 def _planned_soc_attributes(inputs: HaInputs) -> Mapping[str, Any]:
     """SOC (zu Beginn des Slots) je volle Stunde des Plans, Zeiten lokal wie bei ``prices``."""
     if inputs.plan is None:
-        return {**PREVIEW, "hourly": []}
+        return {**_execution(inputs), "hourly": []}
     return {
-        **PREVIEW,
+        **_execution(inputs),
         "hourly": [
             {
                 "start": slot.start.astimezone(LOCAL_TZ).isoformat(),
@@ -349,10 +353,6 @@ def _planned_soc_attributes(inputs: HaInputs) -> Mapping[str, Any]:
             if slot.start.astimezone(LOCAL_TZ).minute == 0
         ],
     }
-
-
-def _preview_attributes(inputs: HaInputs) -> Mapping[str, Any]:
-    return dict(PREVIEW)
 
 
 def _budget_kw(inputs: HaInputs) -> str:
@@ -459,7 +459,7 @@ def build_entities(cfg: Config) -> list[EntitySpec]:
             unit="kW",
             device_class="power",
             state_class="measurement",
-            attributes=_preview_attributes,
+            attributes=_execution,
         ),
         _power("grid_power", "Netzleistung", main, _derived_w("grid_w")),
         _power("pv_power", "PV-Leistung", main, _derived_w("pv_total_w")),
@@ -700,6 +700,17 @@ def build_inputs(
     )
     latest = forecast.latest()
     valid = plan if plan is not None and plan.valid_at(now) else None
+    execution = (
+        None
+        if grid_charge_allowed is None
+        else execution_state(
+            plan,
+            valid=valid is not None,
+            connected=connected,
+            health=live.health,
+            grid_charge_allowed=grid_charge_allowed,
+        )
+    )
     return HaInputs(
         core_connected=connected,
         mode=mode if isinstance(mode, str) else None,
@@ -728,4 +739,5 @@ def build_inputs(
         plan_now=valid.slot_at(now) if valid is not None else None,
         plan_next=valid.slot_at(now + SLOT) if valid is not None else None,
         grid_charge_allowed=grid_charge_allowed,
+        execution=execution,
     )

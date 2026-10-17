@@ -119,7 +119,8 @@ it('shows the empty state', async () => {
 	renderPage('viewer', {
 		status: { ok: false, message: 'Kein Plan: keine PV-Prognose', running: false },
 		grid_charge_allowed: false,
-		plan: null
+		plan: null,
+		execution: null
 	});
 	expect(await screen.findByText('Noch kein Plan.')).toBeTruthy();
 	expect(screen.getByText('Kein Plan: keine PV-Prognose')).toBeTruthy();

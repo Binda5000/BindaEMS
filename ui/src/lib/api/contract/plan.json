@@ -1144,5 +1144,9 @@
         "text": "Akku deckt den Eigenverbrauch."
       }
     ]
+  },
+  "execution": {
+    "state": "pending",
+    "text": "Der Plan ist noch nicht beim core."
   }
 }

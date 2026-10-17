@@ -48,8 +48,10 @@
 </script>
 
 <Card title={plan ? `Plan von ${formatTime(plan.created_at)} Uhr` : 'Plan'}>
-	<!-- Der core führt den Plan erst mit Plan 3c aus; bis dahin ist die Seite eine Vorschau -->
-	<p class="preview">Vorschau – der core führt den Plan noch nicht aus.</p>
+	<!-- Stand der Ausführung im core; ohne gültigen Plan gibt es keinen (`execution` ist `null`) -->
+	{#if data.execution}
+		<p class="execution" class:live={data.execution.state === 'live'}>{data.execution.text}</p>
+	{/if}
 	{#if plan}
 		<p class="line">
 			<span class="tag" class:fallback={plan.source === 'fallback'}
@@ -128,9 +130,15 @@
 		margin: 0 0 0.5rem;
 	}
 
-	.preview {
+	/* nur `live` ist neutral: Jeder andere Stand heißt, dass der core den Plan nicht ausführt */
+	.execution {
 		color: var(--warn);
 		font-weight: 600;
+	}
+
+	.execution.live {
+		color: inherit;
+		font-weight: normal;
 	}
 
 	.tag {

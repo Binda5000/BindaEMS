@@ -205,6 +205,35 @@ def test_build_inputs_without_core_and_prices(
     assert inputs.price_now_ct is None and inputs.prices_missing
 
 
+def test_build_inputs_derives_the_execution(live, price_service, store, forecast_service) -> None:
+    created = datetime(2026, 10, 16, 10, 1, tzinfo=UTC)
+    plan = sample_plan(created.isoformat(), ["10:00", "10:15"]).model_copy(update={"id": 7})
+    now = created + timedelta(minutes=4)
+
+    def execution(at: datetime = now, **changes: Any) -> str | None:
+        return build_inputs(
+            live, price_service, store, forecast_service, at, plan=plan, **changes
+        ).execution
+
+    assert execution(grid_charge_allowed=None) is None  # Schalter unbekannt
+    assert execution(grid_charge_allowed=False) == "pending"
+    live.health = {
+        **live.health,
+        "mode": "CONTROL",
+        "intent": {"control": True, "plan": {"id": 7, "grid_charge_allowed": False}},
+        "actuators": [{"id": "victron", "effective": "live", "locked": []}],
+    }
+    assert execution(grid_charge_allowed=False) == "live"
+    assert (
+        execution(created + timedelta(hours=3), grid_charge_allowed=False) == "none"
+    )  # abgelaufen
+    live.connected = False
+    assert execution(grid_charge_allowed=False) == "unreachable"
+    assert (
+        build_inputs(live, price_service, store, forecast_service, now, grid_charge_allowed=False)
+    ).execution == "none"
+
+
 def test_prices_missing_after_16_when_tomorrow_incomplete(
     live, price_service, store, forecast_service
 ) -> None:
@@ -478,8 +507,8 @@ def test_plan_sensors_unknown_without_valid_plan(cfg) -> None:
     inputs = sample_inputs()
     names = ("battery_plan_now", "battery_plan_next", "planned_soc", "budget")
     assert {entity(cfg, oid).value(inputs) for oid in names} == {"None"}
-    assert entity(cfg, "battery_plan_now").attributes(inputs) == {"preview": True}
-    assert entity(cfg, "planned_soc").attributes(inputs) == {"preview": True, "hourly": []}
+    assert entity(cfg, "battery_plan_now").attributes(inputs) == {"execution": None}
+    assert entity(cfg, "planned_soc").attributes(inputs) == {"execution": None, "hourly": []}
 
 
 def test_planned_soc_and_hourly_attribute(cfg) -> None:
@@ -554,8 +583,11 @@ def test_replan_button_discovery(cfg) -> None:
     assert entity(cfg, "replan").device.identifier == "bindaems"
 
 
-def test_plan_sensors_are_marked_as_preview(cfg) -> None:
-    # Der core führt den Plan noch nicht aus (3c): Jeder Plan-Sensor sagt das, mit und ohne Plan.
+def test_plan_sensors_carry_the_execution(cfg) -> None:
+    # Der Stand der Ausführung (Plan 3c) ersetzt `preview` an jedem Plan-Sensor, mit und ohne Plan.
     names = ("battery_plan_now", "battery_plan_next", "planned_soc", "budget")
-    for inputs in (_plan_inputs(), sample_inputs()):
-        assert all(entity(cfg, oid).attributes(inputs)["preview"] is True for oid in names)
+    for state in ("none", "pending", "dry_run", "live"):
+        for inputs in (_plan_inputs(execution=state), sample_inputs(execution=state)):
+            for oid in names:
+                attributes = entity(cfg, oid).attributes(inputs)
+                assert attributes["execution"] == state and "preview" not in attributes

@@ -10,6 +10,8 @@ from pydantic import BaseModel, ConfigDict
 
 from bindaems.app.auth.service import SessionInfo
 from bindaems.app.auth.web import Guard
+from bindaems.app.core_link import LiveState
+from bindaems.app.planning.execution import execution_state, execution_text
 from bindaems.app.planning.explain import slot_text
 from bindaems.app.planning.service import PlanningService
 from bindaems.app.settings.service import SettingsService, VersionConflictError
@@ -71,7 +73,11 @@ def plan_json(plan: Plan, *, valid: bool) -> dict[str, Any]:
 
 
 def planning_router(
-    service: PlanningService, settings: SettingsService, clock: Clock, guard: Guard
+    service: PlanningService,
+    settings: SettingsService,
+    live: LiveState,
+    clock: Clock,
+    guard: Guard,
 ) -> APIRouter:
     router = APIRouter(prefix="/api/plan")
     Viewer = Annotated[SessionInfo, Depends(guard.require("viewer"))]
@@ -81,14 +87,25 @@ def planning_router(
     def get_plan(session: Viewer) -> dict[str, Any]:
         component = service.component_status()
         plan = service.current()
+        valid = plan is not None and plan.valid_at(clock.now())
+        allowed = settings.current().settings.planning.grid_charge_allowed
+        state = execution_state(
+            plan,
+            valid=valid,
+            connected=live.connected,
+            health=live.health,
+            grid_charge_allowed=allowed,
+        )
+        text = execution_text(state, live.health)
         return {
             "status": {
                 "ok": component.ok,
                 "message": component.message,
                 "running": service.status().running,
             },
-            "grid_charge_allowed": settings.current().settings.planning.grid_charge_allowed,
-            "plan": plan_json(plan, valid=plan.valid_at(clock.now())) if plan is not None else None,
+            "grid_charge_allowed": allowed,
+            "plan": plan_json(plan, valid=valid) if plan is not None else None,
+            "execution": {"state": state, "text": text} if text is not None else None,
         }
 
     @router.post("/replan", status_code=status.HTTP_202_ACCEPTED)

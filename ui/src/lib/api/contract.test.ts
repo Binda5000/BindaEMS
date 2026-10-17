@@ -210,9 +210,21 @@ describe('Zeitplan', () => {
 			issues(s.PlanResponseSchema, {
 				status: { ok: false, message: 'Noch kein Plan', running: false },
 				grid_charge_allowed: false,
-				plan: null
+				plan: null,
+				execution: null
 			})
 		).toEqual([]);
+	});
+
+	it('kennt die sieben Stände der Ausführung', () => {
+		const response = (state: string) => ({
+			...(files['./contract/plan.json'] as object),
+			execution: { state, text: 'Satz' }
+		});
+		for (const state of ['unreachable', 'pending', 'off', 'idle', 'locked', 'dry_run', 'live']) {
+			expect(issues(s.PlanResponseSchema, response(state))).toEqual([]);
+		}
+		expect(issues(s.PlanResponseSchema, response('none'))).not.toEqual([]);
 	});
 
 	it('akzeptiert einen Ersatzplan mit Grund', () => {

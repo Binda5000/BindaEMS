@@ -21,8 +21,8 @@ def planning(service):
 
 
 @pytest.fixture
-def client(make_client, planning, settings_service, clock, guard) -> TestClient:
-    return make_client(planning_router(planning, settings_service, clock, guard))
+def client(make_client, planning, settings_service, live, clock, guard) -> TestClient:
+    return make_client(planning_router(planning, settings_service, live, clock, guard))
 
 
 @pytest.fixture
@@ -64,6 +64,7 @@ def test_get_plan_without_plan(client_as):
         "status": {"ok": False, "message": "Noch kein Plan", "running": False},
         "grid_charge_allowed": False,
         "plan": None,
+        "execution": None,
     }
 
 
@@ -208,3 +209,61 @@ def test_grid_charge_conflict_after_retry_is_409(client_as, settings_service, mo
 def test_grid_charge_switch_requests_a_replan(client_as, planning):
     client_as("operator").put("/api/plan/grid-charge", json={"on": True})
     assert planning.pending() == "settings"
+
+
+def core_holds(live, plan_id: int, **changes) -> None:
+    """Health des core: Absicht mit Regelbetrieb und dem Plan ``plan_id``, Victron im Dry-Run."""
+    live.connected = True
+    live.health = {
+        "mode": "CONTROL",
+        "intent": {
+            "control": True,
+            "plan": {"id": plan_id, "grid_charge_allowed": False},
+        },
+        "actuators": [{"id": "victron", "effective": "dry_run", "locked": []}],
+        **changes,
+    }
+
+
+async def test_plan_route_reports_the_execution(client_as, planning, live):
+    plan = await planning.replan("manual")
+    assert plan is not None
+    api = client_as("viewer")
+    live.health = None  # verbunden, aber noch ohne Health
+    assert api.get("/api/plan").json()["execution"] == {
+        "state": "pending",
+        "text": "Der Plan ist noch nicht beim core.",
+    }
+    core_holds(live, plan.id)
+    assert api.get("/api/plan").json()["execution"] == {
+        "state": "dry_run",
+        "text": "Dry-Run: Der core rechnet den Plan mit und sendet nichts an Victron.",
+    }
+    core_holds(live, plan.id, mode="SAFE")
+    assert api.get("/api/plan").json()["execution"] == {
+        "state": "idle",
+        "text": "Der core regelt gerade nicht (SAFE).",
+    }
+    live.connected = False
+    assert api.get("/api/plan").json()["execution"]["state"] == "unreachable"
+
+
+async def test_plan_route_follows_the_grid_charge_switch(client_as, planning, live):
+    plan = await planning.replan("manual")
+    assert plan is not None
+    core_holds(live, plan.id)
+    api = client_as("viewer")
+    assert api.get("/api/plan").json()["execution"]["state"] == "dry_run"
+    planning.set_grid_charge(True, actor="x", source="ui")  # der core hat den Plan ohne Netzladen
+    assert api.get("/api/plan").json()["execution"]["state"] == "pending"
+
+
+async def test_plan_route_has_no_execution_for_an_expired_plan(client_as, planning, live, clock):
+    from datetime import timedelta
+
+    plan = await planning.replan("manual")
+    assert plan is not None
+    core_holds(live, plan.id)
+    clock.advance(timedelta(hours=2))
+    body = client_as("viewer").get("/api/plan").json()
+    assert body["plan"]["valid"] is False and body["execution"] is None
