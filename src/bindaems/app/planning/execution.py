@@ -55,6 +55,12 @@ def core_has_plan(
     return (held.get("id"), held.get("grid_charge_allowed")) == (plan_id, grid_charge_allowed)
 
 
+def _core_plan_valid(health: Mapping[str, Any]) -> bool:
+    """Ob der Plan beim core gilt (``plan.state`` ``valid`` im Health; Gesamtreview, Minor 1)."""
+    held = health.get("plan")
+    return isinstance(held, dict) and held.get("state") == "valid"
+
+
 def _victron(health: Mapping[str, Any] | None) -> Mapping[str, Any] | None:
     actuators = health.get("actuators") if health is not None else None
     if not isinstance(actuators, list):
@@ -73,7 +79,8 @@ def execution_state(
     """Der erste zutreffende Stand: ``none`` (kein gültiger Plan), ``unreachable`` (nicht
     verbunden), ``pending`` (ohne Health), ``off`` (keine Absicht oder ``intent.control``
     falsch), ``idle`` (``mode`` weder ``CONTROL`` noch ``DEGRADED``), ``pending`` (der core hat
-    diesen Plan nicht), ``locked`` (``victron`` mit Sperrgründen), ``dry_run`` (wirksame
+    diesen Plan nicht oder er gilt dort nicht: ``plan.state`` nicht ``valid``, etwa mit einer
+    Uhrabweichung), ``locked`` (``victron`` mit Sperrgründen), ``dry_run`` (wirksame
     Betriebsart von ``victron`` nicht ``live``), sonst ``live``. ``plan`` ist der gespeicherte
     Plan, ``valid`` ob er jetzt gilt."""
     if plan is None or not valid:
@@ -88,6 +95,8 @@ def execution_state(
     if health.get("mode") not in REGULATING_MODES:
         return "idle"
     if plan.id is None or not core_has_plan(health, plan.id, grid_charge_allowed):
+        return "pending"
+    if not _core_plan_valid(health):
         return "pending"
     victron = _victron(health)
     if victron is not None and victron.get("locked"):

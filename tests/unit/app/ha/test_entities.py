@@ -224,6 +224,7 @@ def test_build_inputs_derives_the_execution(live, price_service, store, forecast
         "mode": "CONTROL",
         "intent": {"control": True, "plan": {"id": 7, "grid_charge_allowed": False}},
         "actuators": [{"id": "victron", "effective": "live", "locked": []}],
+        "plan": {"id": 7, "state": "valid"},
     }
     assert execution(grid_charge_allowed=False) == "live"
     assert (

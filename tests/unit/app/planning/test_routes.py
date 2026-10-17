@@ -218,7 +218,8 @@ def test_grid_charge_switch_requests_a_replan(client_as, planning):
 
 
 def core_holds(live, plan_id: int, **changes) -> None:
-    """Health des core: Absicht mit Regelbetrieb und dem Plan ``plan_id``, Victron im Dry-Run."""
+    """Health des core: Absicht mit Regelbetrieb und dem Plan ``plan_id``, der dort gilt, Victron
+    im Dry-Run."""
     live.connected = True
     live.health = {
         "mode": "CONTROL",
@@ -227,6 +228,7 @@ def core_holds(live, plan_id: int, **changes) -> None:
             "plan": {"id": plan_id, "grid_charge_allowed": False},
         },
         "actuators": [{"id": "victron", "effective": "dry_run", "locked": []}],
+        "plan": {"id": plan_id, "state": "valid"},
         **changes,
     }
 
@@ -250,6 +252,9 @@ async def test_plan_route_reports_the_execution(client_as, planning, live):
         "state": "idle",
         "text": "Der core regelt gerade nicht (SAFE).",
     }
+    # der core hat den Plan, er gilt dort aber nicht (etwa eine Uhrabweichung; Gesamtreview)
+    core_holds(live, plan.id, plan={"id": plan.id, "state": "expired"})
+    assert api.get("/api/plan").json()["execution"]["state"] == "pending"
     live.connected = False
     assert api.get("/api/plan").json()["execution"]["state"] == "unreachable"
 

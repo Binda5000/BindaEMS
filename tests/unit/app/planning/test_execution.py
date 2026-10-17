@@ -32,8 +32,10 @@ def health(
     mode: str = "CONTROL",
     locked: tuple[str, ...] = (),
     effective: str = "live",
+    plan_state: str = "valid",
 ) -> dict[str, Any]:
-    """Health des core, in der der Plan der Absicht ``plan_id`` heißt."""
+    """Health des core, in der der Plan der Absicht ``plan_id`` heißt; ``plan_state`` ist sein
+    Stand beim core."""
     held = (
         None
         if plan_id is None
@@ -46,6 +48,7 @@ def health(
             {"id": "wallbox.evcs", "effective": "live", "locked": []},
             {"id": "victron", "effective": effective, "locked": list(locked)},
         ],
+        "plan": {"id": plan_id, "state": plan_state if plan_id is not None else "none"},
     }
 
 
@@ -61,6 +64,8 @@ CASES: dict[str, Callable[[], dict[str, Any]]] = {
     "control off": lambda: {"health": health(control=False)},
     "observe": lambda: {"health": health(mode="OBSERVE")},
     "safe": lambda: {"health": health(mode="SAFE")},
+    "expired in core": lambda: {"health": health(plan_state="expired")},
+    "core plan state unknown": lambda: {"health": {**health(), "plan": {}}},
     "victron locked": lambda: {"health": health(locked=("foreign",), effective="dry_run")},
     "victron dry": lambda: {"health": health(effective="dry_run")},
     "victron live": lambda: {},
@@ -81,6 +86,8 @@ CASES: dict[str, Callable[[], dict[str, Any]]] = {
         ("control off", "off"),
         ("observe", "idle"),
         ("safe", "idle"),
+        ("expired in core", "pending"),
+        ("core plan state unknown", "pending"),
         ("victron locked", "locked"),
         ("victron dry", "dry_run"),
         ("victron live", "live"),
