@@ -1,6 +1,6 @@
 import asyncio
 import threading
-from datetime import date, timedelta
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -329,10 +329,25 @@ def spy_ledger_checks(runtime, monkeypatch) -> list[tuple[date, date]]:
     return calls
 
 
+def spy_gap_estimator(runtime, monkeypatch, order: list[str] | None = None) -> list[tuple]:
+    calls: list[tuple] = []
+
+    async def run(start, end) -> int:
+        calls.append((start, end))
+        if order is not None:
+            order.append("estimate")
+        return 3
+
+    monkeypatch.setattr(runtime.gap_estimator, "run", run)
+    return calls
+
+
 async def test_ledger_nightly_checks_35_days_at_start_then_7_days_at_0245(
     runtime, monkeypatch
 ) -> None:
     calls = spy_ledger_checks(runtime, monkeypatch)
+    spy_gap_estimator(runtime, monkeypatch)
+    runtime._ledger_backfilled.set()
     sleeps: list[float] = []
     monkeypatch.setattr(asyncio, "sleep", record_then_stop(sleeps, after=1))
     with pytest.raises(StopScheduler):
@@ -343,6 +358,61 @@ async def test_ledger_nightly_checks_35_days_at_start_then_7_days_at_0245(
     calls.clear()
     await runtime._ledger_nightly(7)
     assert calls == [(date(2026, 10, 2), date(2026, 10, 8))]
+
+
+async def test_ledger_nightly_estimates_the_last_7_days_before_the_check(
+    runtime, monkeypatch
+) -> None:
+    order: list[str] = []
+    estimates = spy_gap_estimator(runtime, monkeypatch, order)
+    checks = spy_ledger_checks(runtime, monkeypatch)
+    run_checks = runtime.ledger_checks.run
+
+    async def run(first: date, last: date) -> int:
+        order.append("check")
+        return await run_checks(first, last)
+
+    monkeypatch.setattr(runtime.ledger_checks, "run", run)
+    await runtime._ledger_nightly(35)
+    # vom Beginn des 02.10. bis zum Beginn des 09.10. Ortszeit (Sommerzeit: UTC+2), auch beim Start
+    assert estimates == [
+        (datetime(2026, 10, 1, 22, 0, tzinfo=UTC), datetime(2026, 10, 8, 22, 0, tzinfo=UTC))
+    ]
+    assert order == ["estimate", "check"]
+    assert checks == [(date(2026, 9, 4), date(2026, 10, 8))]
+
+
+async def test_ledger_nightly_catches_up_the_costing_after_new_estimates(
+    runtime, monkeypatch
+) -> None:
+    spy_gap_estimator(runtime, monkeypatch)
+    spy_ledger_checks(runtime, monkeypatch)
+    caught_up: list[bool] = []
+    monkeypatch.setattr(runtime.costing, "catch_up", lambda: caught_up.append(True) or 0)
+    await runtime._ledger_nightly(7)
+    assert caught_up == [True]
+
+
+async def test_ledger_nightly_checks_even_if_the_estimate_fails(runtime, monkeypatch) -> None:
+    from bindaems.app.history.influx import InfluxQueryError
+
+    errors: list[Exception] = [
+        InfluxQueryError("InfluxDB nicht erreichbar"),
+        RuntimeError("Datenbank gesperrt"),
+    ]
+
+    async def run(start, end) -> int:
+        raise errors.pop(0)
+
+    monkeypatch.setattr(runtime.gap_estimator, "run", run)
+    checks = spy_ledger_checks(runtime, monkeypatch)
+    with capture_logs() as logs:
+        await runtime._ledger_nightly(7)
+        await runtime._ledger_nightly(7)
+    events = [e["event"] for e in logs]
+    assert "Nachrechnung der Lücken nicht möglich" in events
+    assert "Nachrechnung der Lücken fehlgeschlagen" in events
+    assert len(checks) == 2  # der Abgleich läuft nach jedem Fehler
 
 
 async def test_ledger_nightly_survives_errors(runtime, monkeypatch) -> None:
@@ -357,6 +427,8 @@ async def test_ledger_nightly_survives_errors(runtime, monkeypatch) -> None:
         raise errors.pop(0)
 
     monkeypatch.setattr(runtime.ledger_checks, "run", run)
+    spy_gap_estimator(runtime, monkeypatch)
+    runtime._ledger_backfilled.set()
     monkeypatch.setattr(asyncio, "sleep", record_then_stop([], after=2))
     with capture_logs() as logs, pytest.raises(StopScheduler):
         await runtime._ledger_nightly_loop()
@@ -365,6 +437,86 @@ async def test_ledger_nightly_survives_errors(runtime, monkeypatch) -> None:
         "Abgleich mit den Zählern nicht möglich",
         "Abgleich mit den Zählern fehlgeschlagen",
     ]  # die Schleife läuft nach jedem Fehler weiter
+
+
+async def test_ledger_nightly_start_run_waits_for_the_first_backfill(runtime, monkeypatch) -> None:
+    # sonst prüft der Start Tage, die der Nachtrag der Abrechnung noch füllt (veraltete Zeilen)
+    calls = spy_ledger_checks(runtime, monkeypatch)
+    estimates = spy_gap_estimator(runtime, monkeypatch)
+    task = asyncio.create_task(runtime._ledger_nightly_loop())
+    try:
+        await asyncio.sleep(0.05)
+        assert calls == [] and estimates == []  # der Nachtrag ist noch nicht fertig
+        runtime._ledger_backfilled.set()
+        await until(lambda: calls != [])
+        assert len(estimates) == 1
+    finally:
+        task.cancel()
+        await asyncio.wait([task])
+
+
+async def test_ledger_loop_releases_the_nightly_run_after_the_backfill(
+    runtime, monkeypatch
+) -> None:
+    order: list[str] = []
+    gate = asyncio.Event()
+
+    async def backfill(reader, start, end) -> int:
+        await gate.wait()
+        order.append("backfill")
+        return 0
+
+    async def run(first: date, last: date) -> int:
+        order.append("check")
+        return 1
+
+    monkeypatch.setattr(runtime.ledger, "backfill", backfill)
+    monkeypatch.setattr(runtime.ledger_checks, "run", run)
+    spy_gap_estimator(runtime, monkeypatch)
+    ledger_task = asyncio.create_task(runtime._ledger_loop())
+    nightly_task = asyncio.create_task(runtime._ledger_nightly_loop())
+    try:
+        await asyncio.sleep(0.05)
+        assert order == []
+        gate.set()
+        await until(lambda: "check" in order)
+        assert order == ["backfill", "check"]  # erst der Nachtrag, dann der Abgleich
+    finally:
+        for task in (ledger_task, nightly_task):
+            task.cancel()
+        await asyncio.wait([ledger_task, nightly_task])
+
+
+@pytest.mark.parametrize("failure", [RuntimeError("Datenbank gesperrt"), "influx"])
+async def test_failed_first_backfill_still_releases_the_nightly_run(
+    runtime, monkeypatch, failure
+) -> None:
+    from bindaems.app.history.influx import InfluxQueryError
+
+    error = InfluxQueryError("InfluxDB nicht erreichbar") if failure == "influx" else failure
+
+    async def backfill(reader, start, end) -> int:
+        raise error
+
+    monkeypatch.setattr(runtime.ledger, "backfill", backfill)
+    monkeypatch.setattr(asyncio, "sleep", record_then_stop([], after=1))
+    assert not runtime._ledger_backfilled.is_set()
+    with pytest.raises(StopScheduler):
+        await runtime._ledger_loop()
+    assert runtime._ledger_backfilled.is_set()  # sonst bliebe der Abgleich beim Start aus
+
+
+async def test_ledger_nightly_start_run_does_not_wait_forever(runtime, monkeypatch) -> None:
+    calls = spy_ledger_checks(runtime, monkeypatch)
+    spy_gap_estimator(runtime, monkeypatch)
+    monkeypatch.setattr("bindaems.app.runtime.LEDGER_BACKFILL_WAIT_S", 0.05)
+    monkeypatch.setattr(asyncio, "sleep", record_then_stop([], after=1))
+    with capture_logs() as logs, pytest.raises(StopScheduler):
+        await asyncio.wait_for(runtime._ledger_nightly_loop(), timeout=1)
+    assert len(calls) == 1
+    assert "Nachtrag der Abrechnung dauert zu lange, der Abgleich beginnt ohne ihn" in [
+        e["event"] for e in logs
+    ]
 
 
 async def test_first_pv_forecast_waits_for_the_calibration(runtime, monkeypatch) -> None:

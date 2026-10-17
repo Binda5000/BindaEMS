@@ -530,6 +530,32 @@ höchstens 200 Einträge. `vehicle` ist der Schlüssel aus `config.yaml`, `guest
 curl -b jar "$APP/api/charging/sessions?from=2026-10-01&to=2026-10-31&vehicle=guest"
 ```
 
+### Lücken nachrechnen
+
+Fehlen Viertelstunden in der Abrechnung (die app war aus, die Verbindung zum core riss ab, InfluxDB
+fehlte beim Nachtragen), rechnet die app sie aus den Zählerständen nach. Das geschieht jede Nacht
+um 02:45 Uhr (Wiener Zeit) für die letzten 7 Tage und beim Start, jeweils vor dem Abgleich mit den
+Zählern, und beim Start erst nach dem ersten Nachtrag der Abrechnung (höchstens 10 Minuten lang).
+
+- **Rechnung:** Je zusammenhängender Lücke liest die app Netzbezug, Einspeisung, PV und die
+  Wallboxen aus den Rohdaten von InfluxDB (`energy` in `raw`) am Rand davor (letzter Wert in den
+  15 Minuten bis zum Beginn) und am Rand danach (erster Wert in den 15 Minuten ab dem Ende), dazu
+  den Ladezustand des Akkus. Die Energie verteilt sich gleichmäßig auf die Viertelstunden der
+  Lücke. Der Akku folgt aus der Änderung des Ladezustands mal der nutzbaren Kapazität (ohne
+  Ladezustand ändert er sich nicht), das Haus ist der Rest der Bilanz; ein negativer Rest gilt als
+  PV ohne Zähler (DC-gekoppelt). PV und Akku decken zuerst das Haus, dann die Wallboxen in der
+  Reihenfolge der Konfiguration, der Rest geht ins Netz. Fehlende PV- oder Wallbox-Zähler zählen 0.
+- **Kennzeichnung:** Geschätzte Viertelstunden tragen die Herkunft `estimate` und die Abdeckung
+  0 s; die Tagesbilanz (`estimated_slots`) zeigt, wie viele es sind. Der Einstandspreis des Akkus
+  und der Abgleich rechnen mit ihnen.
+- **Echte Daten zuerst:** Eine Schätzung ersetzt nie eine vorhandene Viertelstunde. Kommt später
+  eine echte (z. B. aus dem Nachtrag von InfluxDB), ersetzt sie die Schätzung. Ein zweiter Lauf
+  ändert nichts.
+- **Wann eine Lücke leer bleibt:** Fehlt der Zählerstand von Netzbezug oder Einspeisung an einem
+  der beiden Ränder oder ist ein Zähler zurückgesetzt, bleibt die Lücke leer (der Grund steht im
+  Log, Ereignis „Lücke bleibt leer“). Das gilt auch für Lücken über 7 Tage. Ein Ausfall von
+  InfluxDB ergibt eine Warnung; die nächste Nacht versucht es erneut.
+
 ### Abgleich mit den Zählern
 
 Jede Nacht um 02:45 Uhr (Wiener Zeit) vergleicht die app die Abrechnung der letzten 7 vollständigen

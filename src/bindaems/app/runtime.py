@@ -55,6 +55,7 @@ from bindaems.app.history.routes import history_router
 from bindaems.app.history.series import build_catalog
 from bindaems.app.ledger.checks import LedgerChecks
 from bindaems.app.ledger.costing import LedgerCosting
+from bindaems.app.ledger.estimate import GapEstimator
 from bindaems.app.ledger.routes import ledger_router
 from bindaems.app.ledger.service import LedgerService
 from bindaems.app.planning.routes import planning_router
@@ -76,7 +77,7 @@ from bindaems.shared.control import Intent
 from bindaems.shared.influx.lineprotocol import Point, PointSink
 from bindaems.shared.influx.spool import DiskSpool
 from bindaems.shared.influx.writer import InfluxWriter
-from bindaems.shared.timeutil import LOCAL_TZ, Clock, SystemClock
+from bindaems.shared.timeutil import LOCAL_TZ, Clock, SystemClock, local_day_slots
 
 log = structlog.get_logger(__name__)
 
@@ -95,6 +96,10 @@ FORECAST_KEEP = timedelta(days=60)
 LEDGER_NIGHTLY_AT = (2, 45)  # Ortszeit, nach der Prognose um 02:30
 LEDGER_CHECK_START_DAYS = 35  # Abgleich beim Start: die letzten 35 vollständigen Tage
 LEDGER_CHECK_NIGHTLY_DAYS = 7  # nachts: die letzten 7
+LEDGER_ESTIMATE_DAYS = 7  # vor dem Abgleich: Lücken der letzten 7 Tage nachrechnen
+LEDGER_BACKFILL_WAIT_S = (
+    600.0  # so lange wartet der Abgleich beim Start höchstens auf den ersten Nachtrag
+)
 FORECAST_QUALITY_START: tuple[int, ...] = (
     0,
     1,
@@ -187,6 +192,7 @@ class AppRuntime:
         )
         self.ledger.on_slots_changed(self.costing.mark_dirty)
         self.ledger_checks = LedgerChecks(self.engine, self.ledger, self.reader, self._clock, cfg)
+        self.gap_estimator = GapEstimator(self.ledger, self.reader, self._clock, cfg)
         self.load_forecast = LoadForecastService(
             self.ledger, cfg, self.reader, self.forecast_archive, self._clock, self._sink
         )
@@ -195,6 +201,7 @@ class AppRuntime:
             self.engine, self.forecast_archive, self.ledger, pv_threshold_w(cfg)
         )
         self._forecast_calibrated = asyncio.Event()  # gesetzt nach der ersten Kalibrierung
+        self._ledger_backfilled = asyncio.Event()  # gesetzt nach dem ersten Nachtrag (auch Fehler)
         core_client = CoreClient(cfg.app.core_url, secrets.internal_token, self._core_http)
         self.decisions = DecisionStore(self.engine, self._clock)
         self.collector = DecisionCollector(self.decisions, core_client, self._sink, self._clock)
@@ -505,6 +512,8 @@ class AppRuntime:
                 log.warning("Nachtrag der Abrechnung nicht möglich", error=str(exc))
             except Exception:
                 log.exception("Nachtrag der Abrechnung fehlgeschlagen")
+            finally:
+                self._ledger_backfilled.set()  # auch nach einem Fehler: der Abgleich läuft trotzdem
             await self._catch_up_costing()
             await asyncio.sleep(HOUR_S)
 
@@ -627,7 +636,17 @@ class AppRuntime:
             log.exception("Pflege des Prognosearchivs fehlgeschlagen")
 
     async def _ledger_nightly_loop(self) -> None:
-        """Beim Start (35 Tage) und täglich um 02:45 Uhr (7 Tage): Abrechnung gegen Zähler."""
+        """Beim Start (35 Tage) und täglich um 02:45 Uhr (7 Tage): Lücken nachrechnen, dann die
+        Abrechnung gegen die Zähler abgleichen.
+
+        Der Lauf beim Start wartet auf den ersten Nachtrag der Abrechnung (``_ledger_loop``), sonst
+        prüft er Tage, die der Nachtrag noch füllt, und ihre Zeilen blieben bis zum nächsten Start
+        veraltet. Länger als ``LEDGER_BACKFILL_WAIT_S`` wartet er nicht.
+        """
+        try:
+            await asyncio.wait_for(self._ledger_backfilled.wait(), timeout=LEDGER_BACKFILL_WAIT_S)
+        except TimeoutError:
+            log.warning("Nachtrag der Abrechnung dauert zu lange, der Abgleich beginnt ohne ihn")
         days = LEDGER_CHECK_START_DAYS
         while True:
             await self._ledger_nightly(days)
@@ -637,11 +656,24 @@ class AppRuntime:
             await asyncio.sleep((due - now).total_seconds())
 
     async def _ledger_nightly(self, days: int) -> None:
-        """Gleicht die letzten ``days`` vollständigen Tage (bis gestern) mit den Zählern ab.
+        """Rechnet die Lücken der letzten 7 Tage nach und gleicht dann die letzten ``days``
+        vollständigen Tage (bis gestern) mit den Zählern ab, geschätzte Slots eingeschlossen.
 
-        Ein Fehler beim Lesen wird protokolliert; die nächste Nacht versucht es wieder.
+        Ein Fehler wird protokolliert; die nächste Nacht versucht es wieder, und der Abgleich läuft
+        auch, wenn die Nachrechnung scheitert.
         """
         today = self._clock.now().astimezone(LOCAL_TZ).date()
+        try:
+            estimated = await self.gap_estimator.run(
+                local_day_slots(today - timedelta(days=LEDGER_ESTIMATE_DAYS))[0],
+                local_day_slots(today)[0],
+            )
+            if estimated:
+                await self._catch_up_costing()  # der Einstandspreis des Akkus folgt den Schätzungen
+        except InfluxQueryError as exc:
+            log.warning("Nachrechnung der Lücken nicht möglich", error=str(exc))
+        except Exception:
+            log.exception("Nachrechnung der Lücken fehlgeschlagen")
         try:
             checked = await self.ledger_checks.run(
                 today - timedelta(days=days), today - timedelta(days=1)
