@@ -256,10 +256,7 @@ def test_invalid_charging_intent_is_422(view_client) -> None:
 
 def test_put_intent_with_invalid_plan_is_422_with_details(view_client) -> None:
     client, view = view_client
-    details = (
-        "Plan: Slots nicht im Viertelstundenraster oder nicht lückenlos.",
-        "Unterstützungsschwelle 15 % liegt unter der USV-Reserve (20 %).",
-    )
+    details = ("Plan: Slots nicht im Viertelstundenraster oder nicht lückenlos.",)
     view.reply = IntentReply("rejected", None, details, "invalid")
     plan = {
         "id": 7,

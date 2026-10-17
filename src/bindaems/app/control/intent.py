@@ -441,8 +441,10 @@ class IntentService:
     def _check(self, change: Change) -> None:
         """Prüft Fahrzeuge, Wallbox und Unterstützungsschwelle der Änderung gegen ``config.yaml``.
 
-        Die Schwelle prüft auch der core (``Rejected`` mit demselben Satz); hier scheitert sie vor
-        dem Senden und ohne Eintrag im Änderungsprotokoll.
+        Eine eingegebene Schwelle unter der USV-Reserve scheitert hier vor dem Senden und ohne
+        Eintrag im Änderungsprotokoll. Eine gespeicherte, die nach einer höheren Reserve in
+        ``config.yaml`` darunter liegt, hebt der core beim nächsten Senden mit Hinweis auf die
+        Reserve (Gesamtreview, Minor 3).
         """
         keys: list[str] = []
         match change:

@@ -861,11 +861,7 @@ def test_plan_problems_come_in_a_fixed_order_after_the_vehicle_problems(tmp_path
     store = make_store(tmp_path, limits)
     store.submit(Intent(version=1), at("10:00"))
     reply = store.submit(intent.model_copy(update={"version": 2}), at("10:01"))
-    assert reply.details == (
-        *SLOTS_BROKEN,
-        *GRID_CHARGE_OFF,
-        "Unterstützungsschwelle 10 % liegt unter der USV-Reserve (20 %).",
-    )
+    assert reply.details == (*SLOTS_BROKEN, *GRID_CHARGE_OFF)  # die Schwelle klemmt der core
     assert store.current.version == 1  # die gültige Version bleibt
 
 
@@ -992,19 +988,47 @@ def test_same_version_with_another_plan_is_a_conflict(tmp_path, limits) -> None:
     assert store.submit(other, at("10:02")).rejection == "stale"
 
 
-def test_support_threshold_below_reserve_is_invalid(tmp_path, limits) -> None:
-    reply = make_store(tmp_path, limits).submit(
-        Intent(version=1, support=SupportIntent(soc_pct=15.0)), T0
-    )
-    assert (reply.result, reply.rejection) == ("rejected", "invalid")
-    assert reply.details == ("Unterstützungsschwelle 15 % liegt unter der USV-Reserve (20 %).",)
+RAISED = "Unterstützungsschwelle 15 % auf die USV-Reserve (20 %) angehoben."
+
+
+def test_support_threshold_below_reserve_is_raised_to_it(tmp_path, limits) -> None:
+    # Gesamtreview, Minor 3: geklemmt mit Hinweis statt die ganze Absicht abzulehnen
+    store = make_store(tmp_path, limits)
+    reply = store.submit(Intent(version=1, support=SupportIntent(soc_pct=15.0)), T0)
+    assert reply == IntentReply("clamped", 1, (RAISED,))
+    assert store.current.support == SupportIntent(soc_pct=20.0)
+    assert read_json(tmp_path / "intent.json")["intent"]["support"]["soc_pct"] == 20.0
+    # dieselbe Version noch einmal ist eine Wiederholung mit derselben Antwort
+    again = store.submit(Intent(version=1, support=SupportIntent(soc_pct=15.0)), T0)
+    assert again == reply
 
 
 def test_support_threshold_with_decimals_is_shown_as_is(tmp_path, limits) -> None:
     reply = make_store(tmp_path, limits).submit(
         Intent(version=1, support=SupportIntent(soc_pct=19.5)), T0
     )
-    assert reply.details == ("Unterstützungsschwelle 19.5 % liegt unter der USV-Reserve (20 %).",)
+    assert reply.details == ("Unterstützungsschwelle 19.5 % auf die USV-Reserve (20 %) angehoben.",)
+
+
+def test_a_raised_reserve_does_not_block_other_changes(tmp_path, limits) -> None:
+    # Die Reserve stieg in config.yaml über die gespeicherte Schwelle: Moduswechsel und
+    # „Regelbetrieb aus“ gehen weiter durch, die Schwelle steigt auf die Reserve.
+    saved = Intent(
+        version=6,
+        control=True,
+        vehicles={"tesla": VehicleIntent(mode=ChargeMode.NOW)},
+        support=SupportIntent(soc_pct=15.0),
+    )
+    document = {"intent": saved.model_dump(mode="json"), "accepted_at": T0.isoformat()}
+    write_json_atomic(tmp_path / "intent.json", document)
+    store = charging_store(tmp_path, limits)
+    store.load()
+    mode = saved.model_copy(update={"version": 7, "vehicles": {"tesla": VehicleIntent()}})
+    assert store.submit(mode, T0) == IntentReply("clamped", 7, (RAISED,))
+    off = mode.model_copy(update={"version": 8, "control": False})
+    assert store.submit(off, T0) == IntentReply("clamped", 8, (RAISED,))
+    assert store.current.control is False
+    assert store.current.support == SupportIntent(soc_pct=20.0)
 
 
 @pytest.mark.parametrize(
@@ -1018,11 +1042,12 @@ def test_support_at_or_above_reserve_or_unset_is_accepted(tmp_path, limits, supp
     assert read_json(tmp_path / "intent.json")["intent"]["support"] == support.model_dump()
 
 
-def test_blocked_support_below_reserve_is_still_invalid(tmp_path, limits) -> None:
+def test_blocked_support_below_reserve_is_raised_too(tmp_path, limits) -> None:
     reply = make_store(tmp_path, limits).submit(
         Intent(version=1, support=SupportIntent(allowed=False, soc_pct=5.0)), T0
     )
-    assert reply.rejection == "invalid"
+    assert reply.result == "clamped"
+    assert reply.details == ("Unterstützungsschwelle 5 % auf die USV-Reserve (20 %) angehoben.",)
 
 
 def test_saved_intent_without_plan_loads_with_defaults(tmp_path, limits) -> None:

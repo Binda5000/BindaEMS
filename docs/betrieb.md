@@ -1872,15 +1872,16 @@ wieder im PV-Überschuss.
   - `clamped`: angenommen, aber geklemmt. `details` nennt es: „{Name}: Boost auf 12 h begrenzt, bis
     {HH:MM}.“ (Wiener Zeit), dass ein Aktor ohne `live_allowed` im Dry-Run bleibt, „Plan bis {HH:MM}
     begrenzt.“ (`valid_until` höchstens 45 min nach der Annahme, Wiener Zeit) oder „Netzladen auf {W} W
-    begrenzt (maximaler Netzladesetpoint).“ (`victron.max_grid_charge_setpoint_w`). Ein Plan, der
-    schon abgelaufen ist, gilt als angenommen und wirkt nicht.
+    begrenzt (maximaler Netzladesetpoint).“ (`victron.max_grid_charge_setpoint_w`) oder
+    „Unterstützungsschwelle 15 % auf die USV-Reserve (20 %) angehoben.“ (`support.soc_pct` unter
+    `battery.reserve_soc_pct`, etwa nachdem die Reserve in `config.yaml` stieg; so scheitert keine
+    Bedienung, auch nicht „Regelbetrieb aus“, an einer alten Schwelle). Ein Plan, der schon
+    abgelaufen ist, gilt als angenommen und wirkt nicht.
   - `rejected` mit Status 422, mit je einem Satz in `details`: ein unbekanntes Fahrzeug
     (`Unbekanntes Fahrzeug „x“.`), eine unbekannte Wallbox (`Unbekannte Wallbox „w“ für „v“.`), eine
     Wallbox bei mehreren Fahrzeugen (`Wallbox „w“ ist mehreren Fahrzeugen zugeordnet.`), eine
     Priorität, die nicht jedes Fahrzeug genau einmal nennt (`Die Priorität muss jedes Fahrzeug genau
-    einmal nennen.`), ein unbekannter Aktor, eine Unterstützungsschwelle unter der Reserve
-    (`Unterstützungsschwelle 15 % liegt unter der USV-Reserve (20 %).`) oder ein Plan, der nicht
-    passt: `Plan: Slots nicht im Viertelstundenraster oder nicht lückenlos.`, `Plan: zu viele Slots
+    einmal nennen.`), ein unbekannter Aktor oder ein Plan, der nicht passt: `Plan: Slots nicht im Viertelstundenraster oder nicht lückenlos.`, `Plan: zu viele Slots
     (höchstens 8).`, `Plan: Gültigkeit passt nicht zu den Slots.` (es muss `slots[0].start ≤
     created_at < valid_until ≤` Ende des letzten Slots gelten, und höchstens 45 min zwischen
     `created_at` und `valid_until` liegen) oder `Plan: Netzladen, obwohl ausgeschaltet.`
@@ -2931,9 +2932,12 @@ Admin ein. Die Karte nennt dazu die wirksame Schwelle und ihre Quelle („Wirksa
 Konfiguration“ oder „gesperrt“. Standard ist erlaubt mit `control.support_soc_pct` (70 %).
 
 Die Schwelle liegt zwischen der USV-Reserve (`battery.reserve_soc_pct`) und 100 %. Darunter lehnt die
-app die Änderung ab („Unterstützungsschwelle 15 % liegt unter der USV-Reserve (20 %).“), ebenso der
-core für eine Absicht, die per `curl` kommt. Die Planung rechnet mit der Schwelle der Absicht, sobald
-sie gilt.
+app die Änderung ab („Unterstützungsschwelle 15 % liegt unter der USV-Reserve (20 %).“). Der core hebt
+eine Schwelle unter der Reserve auf die Reserve und nennt das als Hinweis („Unterstützungsschwelle
+15 % auf die USV-Reserve (20 %) angehoben.“), statt die Absicht abzulehnen: etwa eine Absicht per
+`curl` oder eine gespeicherte Schwelle, nachdem die Reserve in `config.yaml` gestiegen ist. So geht
+jede andere Bedienung weiter durch. Die Planung rechnet mit der Schwelle der Absicht, sobald sie
+gilt.
 
 | Objekt-ID | Name | Plattform | Wert |
 |---|---|---|---|
