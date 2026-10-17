@@ -715,9 +715,9 @@ Demo-Zugänge: `admin`, `bedienen` (Bedienen), `gast` (Lesen) und `sicher` (Admi
   einer anderen Phasenzahl oder mit anderem Strom laden oder stützt das Fahrzeug über Strom und
   Phasen.
 - **Simulator (2c-1, 2c-2a, 2c-2b, 2d):** Er nutzt die echten Aktoren und die Parser der Adapter. Ändert man deren
-  Zeiten, Texte oder Signale, ändern sich die Szenarien mit. Alle dreiundzwanzig Szenarien laufen in
+  Zeiten, Texte oder Signale, ändern sich die Szenarien mit. Alle achtundzwanzig Szenarien laufen in
   `tests/integration/test_sim_scenarios.py`, dazu eine Abwandlung von `spitze-15min` für den
-  Boost-Anteil des Wächters; je etwa 3 bis 13 s, zusammen rund 3 min (gemessen auf
+  Boost-Anteil des Wächters; je etwa 3 bis 13 s, zusammen rund 3,5 min (gemessen auf
   der Entwicklungsmaschine); der Job `python` der CI braucht damit 7 bis 11 min, der ganze Ablauf
   mit UI, E2E und Docker 9 bis 12 min (Läufe vom 14. und 15.10.2026). Die Szenarien sind
   deterministisch (feste Saat).
@@ -736,7 +736,7 @@ Demo-Zugänge: `admin`, `bedienen` (Bedienen), `gast` (Lesen) und `sicher` (Admi
   `tesla_against_s` und `tesla_against_retry_s`, und ein Test verlangt, dass Abschnitt 12 des
   Handbuchs „Laden“, „Entscheidungen“, „Warum?“ und „Bedienen“ nennt und Abschnitt 7 die
   Bedienelemente (Lademodus, Regelbetrieb, Boost, Zuordnung, `notify_service`). Die Tabelle der
-  Szenarien prüft er gegen `SCENARIOS`; die Zahl im Text (dreiundzwanzig) prüft er mit.
+  Szenarien prüft er gegen `SCENARIOS`; die Zahl im Text (achtundzwanzig) prüft er mit.
 
 ## Stand der Installation beim Betreiber
 

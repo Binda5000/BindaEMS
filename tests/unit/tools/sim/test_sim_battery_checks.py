@@ -1,21 +1,23 @@
-"""Tests der Szenarien für Akku und Spitzen (Plan 2c-2a, Design 10.2): Aufbau, Ereignisse und
-Prüfungen an Hand gebauter Ergebnisse. Die ganzen Läufe prüft
-``tests/integration/test_sim_scenarios.py``.
+"""Tests der Szenarien für Akku und Spitzen (Plan 2c-2a, Design 10.2) und zur Planausführung
+(Plan 3c, Entscheidung 13): Aufbau, Ereignisse und Prüfungen an Hand gebauter Ergebnisse. Die
+ganzen Läufe prüft ``tests/integration/test_sim_scenarios.py``.
 """
 
 from __future__ import annotations
 
 import random
-from dataclasses import replace
-from datetime import datetime, timedelta
+from dataclasses import dataclass, field, replace
+from datetime import UTC, datetime, timedelta
 from typing import Any, Final
 
 import pytest
 
 from bindaems.core.api.app import HealthReport
+from bindaems.core.control.intent import IntentReply
 from bindaems.shared.config import Config
-from bindaems.shared.control import VICTRON, ChargeMode, CommandKind, VehicleIntent
+from bindaems.shared.control import VICTRON, ChargeMode, CommandKind, Intent, VehicleIntent
 from bindaems.shared.decisions import Decision, DecisionResult
+from bindaems.shared.plan import BatteryIntent, BatteryIntentKind, IntentPlan, IntentPlanSlot
 from bindaems.shared.timeutil import LOCAL_TZ
 from bindaems.tools.sim.metrics import CarSample, Sample, measure
 from bindaems.tools.sim.model import PlantModel
@@ -27,6 +29,7 @@ from bindaems.tools.sim.scenarios import (
     SCENARIOS,
     Checks,
     _Boost,
+    _Plan,
     sun_w,
 )
 
@@ -50,7 +53,7 @@ def weather(cfg: Config, name: str, second: int) -> tuple[float, tuple[float, fl
     """PV und Hauslast, die die Ereignisse der Sekunde ``second`` im Modell einstellen."""
     model = PlantModel(cfg, random.Random(1))  # noqa: S311 - Saat der Simulation
     for t, action in SCENARIOS[name].events:
-        if t == second and not isinstance(action, _Boost):
+        if t == second and not isinstance(action, _Boost | _Plan):
             action(model, None)  # type: ignore[arg-type]  # das Wetter braucht die Laufzeit nicht
     return model.pv_w, model.house_w
 
@@ -527,3 +530,328 @@ def test_the_checks_report_all_findings_in_order(cfg) -> None:
         "Der Lauf endet vor 60 s.",
         "„egolf“ lädt am Ende nicht.",
     ]
+
+
+# --- Szenarien zur Planausführung (Plan 3c, Entscheidung 13) -------------------------------------
+
+HOLD: Final = BatteryIntent(kind=BatteryIntentKind.HALTEN)
+
+
+def grid_charge(watts: float) -> BatteryIntent:
+    return BatteryIntent(kind=BatteryIntentKind.NETZLADEN, grid_charge_w=watts)
+
+
+def plans(name: str) -> list[tuple[int, _Plan]]:
+    return [(t, a) for t, a in SCENARIOS[name].events if isinstance(a, _Plan)]
+
+
+@dataclass
+class FakeRuntime:
+    """Was ``_Plan`` von der Laufzeit braucht: die gültige Absicht und ``submit_intent``."""
+
+    current: Intent | None
+    reply: IntentReply = field(default_factory=lambda: IntentReply("accepted", 2))
+    sent: list[Intent] = field(default_factory=list)
+
+    def intent(self) -> Intent | None:
+        return self.current
+
+    def submit_intent(self, intent: Intent) -> IntentReply:
+        self.sent.append(intent)
+        return self.reply
+
+
+def test_the_plan_scenarios_follow_the_table_of_the_plan(cfg) -> None:
+    evening, night = vienna(10, 12, 18), vienna(10, 13, 2)
+    table = {
+        "plan-halten": ("Halten am Abend", evening, 3600, 24),
+        "plan-netzladen": ("Netzladen in der Nacht", night, 1800, 25),
+        "plan-abgelaufen": ("Plan läuft ab", evening, 1800, 26),
+        "plan-budget": ("Netzladen unter dem Budget", vienna(10, 12, 17, 59), 2820, 27),
+        "plan-boost": ("Boost während Halten", evening, 3600, 28),
+    }
+    assert list(SCENARIOS)[-5:] == list(table)
+    for name, (title, start, duration_s, seed) in table.items():
+        scenario = SCENARIOS[name]
+        found = (scenario.title, scenario.start, scenario.duration_s, scenario.seed)
+        assert found == (title, start, duration_s, seed), name
+        assert scenario.live and scenario.victron_live and scenario.intent.control, name
+        assert scenario.intent.plan is None and dict(scenario.control) == {}, name
+        model = set_up(cfg, name)
+        found_cars = (model.cars["tesla"].wallbox, model.cars["egolf"].wallbox)
+        assert (model.soc_pct, *found_cars) == (
+            30.0 if name == "plan-netzladen" else 60.0,
+            None,
+            "evcs",
+        )
+        assert {key: entry.mode for key, entry in scenario.intent.vehicles.items()} == {
+            "egolf": ChargeMode.PV
+        }, name
+    # alle Szenarien rechnen mit 88 % Roundtrip
+    assert {scenario.roundtrip_pct for scenario in SCENARIOS.values()} == {88.0}
+    assert cfg.battery.usable_kwh == 30.0  # damit rechnet „plan-netzladen“
+
+
+def test_hold_plans_come_every_quarter_for_four_slots() -> None:
+    for name in ("plan-halten", "plan-boost"):
+        start = SCENARIOS[name].start
+        expected = [
+            (t, _Plan(start, t, tuple((t // 900 + k, HOLD, None) for k in range(4)), valid_s=2700))
+            for t in (0, 900, 1800, 2700)
+        ]
+        assert plans(name) == expected, name
+
+
+def test_the_other_plans_of_the_plan_scenarios() -> None:
+    charge, start = grid_charge(3000.0), SCENARIOS["plan-netzladen"].start
+    assert plans("plan-netzladen") == [
+        (0, _Plan(start, 0, ((0, charge, None), (1, charge, None)), valid_s=1800))
+    ]
+    start = SCENARIOS["plan-abgelaufen"].start
+    assert plans("plan-abgelaufen") == [
+        (0, _Plan(start, 0, ((0, HOLD, None), (1, HOLD, None)), valid_s=1200))
+    ]
+    # „plan-budget“ beginnt um 17:59: ein Plan sofort, dann je einer zur Viertelstunde
+    budget, start = grid_charge(6000.0), SCENARIOS["plan-budget"].start
+    assert plans("plan-budget") == [
+        (t, _Plan(start, t, tuple((q + k, budget, 4.0) for k in range(4)), valid_s=2700))
+        for t, q in ((0, 0), (60, 1), (960, 2), (1860, 3), (2760, 4))
+    ]
+
+
+def test_the_egolf_boosts_from_minute_1_between_the_plans() -> None:
+    scenario = SCENARIOS["plan-boost"]
+    end = scenario.start + timedelta(seconds=scenario.duration_s)
+    boosts = [(t, a) for t, a in scenario.events if isinstance(a, _Boost)]
+    assert boosts == [(60, _Boost(3, "egolf", end))]  # Version 2 ist der erste Plan
+
+
+def test_a_plan_is_the_next_version_of_the_valid_intent(cfg) -> None:
+    start = vienna(10, 12, 18).astimezone(UTC)
+    event = _Plan(start, 900, ((1, HOLD, None), (2, grid_charge(2000.0), 4.0)), valid_s=1200)
+    boost = VehicleIntent(boost_until=start + timedelta(hours=1))
+    current = Intent(version=3, control=True, vehicles={"egolf": boost})
+    rt = FakeRuntime(current)
+    event(set_up(cfg, "plan-halten"), rt)  # type: ignore[arg-type]
+    plan = IntentPlan(
+        id=900,
+        created_at=start + timedelta(minutes=15),
+        valid_until=start + timedelta(minutes=35),
+        grid_charge_allowed=True,
+        slots=[
+            IntentPlanSlot(start=start + timedelta(minutes=15), intent=HOLD),
+            IntentPlanSlot(
+                start=start + timedelta(minutes=30), intent=grid_charge(2000.0), budget_kw=4.0
+            ),
+        ],
+    )
+    # Boost und alles andere bleiben (Review Focus 1)
+    assert rt.sent == [current.model_copy(update={"version": 4, "plan": plan})]
+    off = _Plan(start, 0, ((0, HOLD, None),), valid_s=600, grid_charge_allowed=False)
+    off(None, rt)  # type: ignore[arg-type]
+    assert rt.sent[-1].plan is not None and rt.sent[-1].plan.grid_charge_allowed is False
+
+
+def test_plan_slots_count_from_the_quarter_of_the_start() -> None:
+    # Beginnt ein Szenario um 17:59, ist der Slot 0 die Viertelstunde ab 17:45.
+    event = _Plan(vienna(10, 12, 17, 59).astimezone(UTC), 60, ((1, HOLD, None),), valid_s=600)
+    rt = FakeRuntime(Intent(version=1, control=True))
+    event(None, rt)  # type: ignore[arg-type]
+    plan = rt.sent[0].plan
+    assert plan is not None
+    assert [slot.start for slot in plan.slots] == [vienna(10, 12, 18)]
+    assert (plan.created_at, plan.valid_until) == (vienna(10, 12, 18), vienna(10, 12, 18, 10))
+
+
+def test_a_rejected_plan_stops_the_run() -> None:
+    event = _Plan(vienna(10, 12, 18), 0, ((0, HOLD, None),), valid_s=600)
+    rt = FakeRuntime(Intent(version=1, control=True))
+    rt.reply = IntentReply("rejected", 1, ("Plan: Gültigkeit passt nicht zu den Slots.",))
+    with pytest.raises(ValueError, match="Plan abgelehnt: Plan: Gültigkeit passt nicht"):
+        event(None, rt)  # type: ignore[arg-type]
+    rt.reply = IntentReply("clamped", 2, ("Plan bis 18:45 begrenzt.",))
+    event(None, rt)  # type: ignore[arg-type]  # geklemmt ist angenommen
+    rt.current = None
+    with pytest.raises(ValueError, match="Plan ohne gültige Absicht"):
+        event(None, rt)  # type: ignore[arg-type]
+
+
+def test_weather_of_the_plan_scenarios(cfg) -> None:
+    for name in ("plan-halten", "plan-netzladen", "plan-abgelaufen", "plan-budget", "plan-boost"):
+        pv, house = weather(cfg, name, 600)
+        assert pv == 0.0 and all(abs(w - HOUSE_W) <= HOUSE_NOISE_W for w in house), name
+    # „plan-halten“: 2 kW mehr auf L1 von 20 bis 25 min
+    for t, jump in ((1199, False), (1200, True), (1499, True), (1500, False)):
+        pv, (l1, *others) = weather(cfg, "plan-halten", t)
+        assert l1 == pytest.approx(HOUSE_W + (2000.0 if jump else 0.0), abs=HOUSE_NOISE_W), t
+        assert all(abs(w - HOUSE_W) <= HOUSE_NOISE_W for w in others), t
+
+
+def test_while_holding_the_battery_gives_at_most_300_w_per_minute(cfg) -> None:
+    held = check("plan-halten", 0)
+    assert held.text == "Ab 2 min entlädt der Akku im Mittel jeder Minute höchstens 300 W."
+
+    def run(battery_w: dict[int, float], *, seconds: int = 300) -> list[str]:
+        samples = [sample(t, battery_w=battery_w.get(t, -100.0)) for t in range(seconds)]
+        return held.find(result_of(cfg, "plan-halten", samples=samples))
+
+    assert run({}) == []
+    assert run(dict.fromkeys(range(60, 120), -2000.0)) == []  # vor 2 min
+    # 30 s mit −500 W und 30 s mit −100 W: im Mittel −300 W, genau an der Grenze
+    assert run(dict.fromkeys(range(120, 150), -500.0)) == []
+    assert run(dict.fromkeys(range(180, 190), -2000.0)) == [
+        "Mittlere Akkuleistung der Minute ab 180 s −416,7 W, verlangt mindestens −300 W "
+        "(1 von 3 Minuten darunter)."
+    ]
+    # eine angebrochene Minute am Ende zählt nicht
+    assert run(dict.fromkeys(range(300, 310), -9000.0), seconds=310) == []
+    assert run({}, seconds=170) == ["Der Lauf hat ab 120 s keine ganze Minute."]
+    until = check("plan-abgelaufen", 0)
+    assert until.text == "Von 2 bis 20 min entlädt der Akku im Mittel jeder Minute höchstens 300 W."
+    samples = [sample(t, battery_w=-900.0 if t >= 1200 else 0.0) for t in range(1500)]
+    assert until.find(result_of(cfg, "plan-abgelaufen", samples=samples)) == []
+
+
+def test_while_holding_the_soc_drops_at_most_1_5_points(cfg) -> None:
+    dropped = check("plan-halten", 1)
+    assert dropped.text == "Der SOC fällt höchstens um 1,5 Prozentpunkte."
+
+    def run(socs: list[float]) -> list[str]:
+        samples = [sample(t, soc_pct=soc) for t, soc in enumerate(socs)]
+        return dropped.find(result_of(cfg, "plan-halten", samples=samples))
+
+    assert run([60.0, 59.5, 58.5, 59.0]) == []
+    assert run([60.0, 58.4, 59.0]) == [
+        "Der SOC fällt um 1,6 Prozentpunkte, verlangt höchstens 1,5."
+    ]
+    assert run([]) == ["Der Lauf hat keine Probe."]
+
+
+def test_while_holding_at_most_40_victron_decisions_per_hour(cfg) -> None:
+    few = check("plan-halten", 2)
+    assert few.text == "Höchstens 40 Entscheidungen an „victron“ je Stunde."
+
+    def run(count: int, *, seconds: int = 3600) -> list[str]:
+        decisions = [
+            decision("plan-halten", t, VICTRON, SETPOINT, 900.0, "plan_hold") for t in range(count)
+        ]
+        current = decision("plan-halten", 9, EVCS, CURRENT, 16.0, "mode_now")
+        samples = [sample(t) for t in range(seconds)]
+        result = result_of(cfg, "plan-halten", samples=samples, decisions=[*decisions, current])
+        return few.find(result)
+
+    assert run(40) == [] and run(20, seconds=1800) == []
+    assert run(41) == [
+        "41 Entscheidungen an „victron“ in 60 min: 41 je Stunde, verlangt höchstens 40."
+    ]
+    assert run(21, seconds=1800) == [
+        "21 Entscheidungen an „victron“ in 30 min: 42 je Stunde, verlangt höchstens 40."
+    ]
+    assert run(0, seconds=0) == ["Der Lauf hat keine Probe."]
+
+
+def test_grid_charging_follows_the_house_plus_3000_w(cfg) -> None:
+    charged = check("plan-netzladen", 0)
+    assert charged.text == (
+        "Ab 2 min liegt der Netzbezug in jeder Sekunde bei Haus + 3000 W, auf ± 300 W."
+    )
+
+    def run(grid_w: dict[int, float], *, house_w: float = 900.0) -> list[str]:
+        samples = [
+            sample(t, grid_w=grid_w.get(t, house_w + 3000.0), house_w=house_w)
+            for t in range(110, 130)
+        ]
+        return charged.find(result_of(cfg, "plan-netzladen", samples=samples))
+
+    assert run({}) == [] and run({119: 0.0}) == []  # vor 2 min
+    assert run({120: 3600.0, 121: 4200.0}) == []  # genau an den Grenzen
+    assert run({125: 3599.6, 126: 4300.0}) == [
+        "Netzbezug bei 125 s 3599,6 W bei 900 W Haus, verlangt 3600 bis 4200 W (2 s außerhalb)."
+    ]
+    assert charged.find(result_of(cfg, "plan-netzladen", samples=[sample(10)])) == [
+        "Der Lauf endet vor 120 s."
+    ]
+
+
+def test_grid_charging_raises_the_soc_by_90_pct_of_the_energy(cfg) -> None:
+    raised = check("plan-netzladen", 1)
+    # 0,9 · 3 kW · 0,5 h · √0,88 = 1,266 kWh, von 30 kWh 4,22 Prozentpunkte
+    assert raised.text == (
+        "Der SOC steigt um mindestens 4,22 Prozentpunkte: 90 % von 3 kW · 0,5 h · √0,88 in 30 kWh."
+    )
+
+    def run(last: float) -> list[str]:
+        samples = [sample(0, soc_pct=30.0), sample(1, soc_pct=31.0), sample(2, soc_pct=last)]
+        return raised.find(result_of(cfg, "plan-netzladen", samples=samples))
+
+    assert run(34.23) == []
+    assert run(34.2) == ["Der SOC steigt um 4,2 Prozentpunkte, verlangt mindestens 4,22."]
+    assert raised.find(result_of(cfg, "plan-netzladen")) == ["Der Lauf hat keine Probe."]
+
+
+def test_after_the_plan_expires_the_battery_carries_the_house(cfg) -> None:
+    free = check("plan-abgelaufen", 1)
+    assert free.text == (
+        "Ab 26 min gilt kein Override, und der Akku trägt das Haus: Akkuleistung höchstens "
+        "−Haus + 300 W."
+    )
+
+    def run(changes: dict[int, tuple[float, float | None]]) -> list[str]:
+        samples = []
+        for t in range(1550, 1600):
+            battery_w, override_w = changes.get(t, (-900.0, None))
+            samples.append(sample(t, battery_w=battery_w, house_w=900.0, override_w=override_w))
+        return free.find(result_of(cfg, "plan-abgelaufen", samples=samples))
+
+    assert run({}) == [] and run({1559: (0.0, 900.0)}) == []  # vor 26 min
+    assert run({1560: (-600.0, None)}) == []  # genau an der Grenze
+    assert run({1570: (-900.0, 900.0)}) == ["Bei 1570 s gilt ein Override (900 W)."]
+    assert run({1570: (-500.0, None), 1571: (0.0, None)}) == [
+        "Akkuleistung bei 1570 s −500 W bei 900 W Haus, verlangt höchstens −600 W (2 s darüber)."
+    ]
+    short = [sample(t) for t in range(100)]
+    assert free.find(result_of(cfg, "plan-abgelaufen", samples=short)) == [
+        "Der Lauf endet vor 1560 s."
+    ]
+
+
+def test_the_budget_holds_each_quarter_at_1_02_kwh(cfg) -> None:
+    quarters = check("plan-budget", 0)
+    assert quarters.text == (
+        "Netzbezug der Viertelstunden ab 18:00, 18:15 und 18:30 je höchstens 1,02 kWh."
+    )
+
+    def run(grid_w: dict[int, float]) -> list[str]:
+        samples = [sample(t, grid_w=grid_w.get(t, 4000.0)) for t in range(2820)]
+        return quarters.find(result_of(cfg, "plan-budget", samples=samples))
+
+    assert run({}) == []  # 1 kWh je Viertelstunde
+    assert run(dict.fromkeys(range(60), 9000.0)) == []  # vor 18:00 zählt nicht
+    assert run(dict.fromkeys(range(960, 1860), 4100.0)) == [
+        "Netzbezug der Viertelstunde ab 18:15: 1,025 kWh, verlangt höchstens 1,02 kWh."
+    ]
+
+
+def test_the_boost_runs_through_all_new_plans(cfg) -> None:
+    boosted = check("plan-boost", 0)
+    assert boosted.text == "Ab 1 min lädt „egolf“ in mindestens 90 % der Sekunden in Boost."
+
+    def run(idle: int, *, mode: str = "boost") -> list[str]:
+        samples = [
+            sample(t, egolf=car(0.0 if t < 60 + idle else 16.0, mode if t >= 60 else "pv"))
+            for t in range(160)
+        ]
+        return boosted.find(result_of(cfg, "plan-boost", samples=samples))
+
+    assert run(0) == [] and run(10) == []  # 90 von 100 s
+    assert run(11) == [
+        "„egolf“ lädt ab 60 s in 89 % der Sekunden in Boost, verlangt mindestens 90 %."
+    ]
+    assert run(0, mode="pv") == [
+        "„egolf“ lädt ab 60 s in 0 % der Sekunden in Boost, verlangt mindestens 90 %."
+    ]
+    short = [sample(t) for t in range(60)]
+    assert boosted.find(result_of(cfg, "plan-boost", samples=short)) == ["Der Lauf endet vor 60 s."]
+    assert check("plan-boost", 1).text == (
+        "Höchstens 5 % der Energie von „egolf“ kommen aus dem Akku (ohne Übergänge)."
+    )

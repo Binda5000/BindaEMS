@@ -21,6 +21,10 @@ AC-Eingang, gleich auf drei Phasen. Je Phase gilt ``P_acout = Haus + Wallboxen``
 - **„Nur Laden“** (``charger_only``, ``vebus.mode`` 1): Der Akku entlädt nie, kein Peak Shaving.
 - **Inselbetrieb** (Ausfall „grid“): Am Netz 0 W und 0 V, ``system.active_in_source`` 240. Die PV
   am AC-Eingang steht still; der Akku trägt die Lasten, auch unter der Reserve.
+- **Wirkungsgrad** (``roundtrip_pct``, Plan 3c, Präzisierung 15): ``η = √(roundtrip_pct / 100)``
+  je Richtung. Laden speichert ``η`` mal die Energie am Multi, Entladen zieht ``1/η`` mal
+  so viel aus dem Akku, auch in der Sekunde, in der er die Reserve erreicht. Ohne Angabe ist das
+  Modell verlustfrei.
 
 **Override des Netz-Sollwerts** (``hub4/0/Overrides/Setpoint``, Plan 2c-2a, Präzisierung 17): Eine
 Zahl, die der core dorthin schreibt, gilt als ``S`` und verfällt ``OVERRIDE_TIMEOUT_S`` nach dem
@@ -78,6 +82,7 @@ und Befehle an Tessie gelten zur Zeit des letzten ``step``.
 
 from __future__ import annotations
 
+import math
 import random
 from datetime import datetime, timedelta
 from typing import Final
@@ -258,7 +263,8 @@ class PlantModel:
 
     - ``pv_w``: PV-Leistung gesamt in W
     - ``house_w``: Hauslast je Phase L1, L2, L3 in W
-    - ``soc_pct``: SOC des Akkus; das Modell führt ihn mit der Akkuleistung fort
+    - ``soc_pct``: SOC des Akkus; das Modell führt ihn mit der Akkuleistung und dem Wirkungsgrad
+      (``roundtrip_pct``, ohne Angabe 100 %) fort
     - ``charger_only``: Multi auf „Nur Laden“ statt „Ein“
     - ``outages``: laufende Ausfälle aus ``OUTAGES``
     - ``foreign``: der fremde Regler ist an
@@ -283,9 +289,12 @@ class PlantModel:
     - ``car_a``, ``car_w``: Strom je Phase und Ladeleistung je Fahrzeug
     """
 
-    def __init__(self, cfg: Config, rng: random.Random) -> None:
+    def __init__(self, cfg: Config, rng: random.Random, *, roundtrip_pct: float = 100.0) -> None:
+        if not 0 < roundtrip_pct <= 100:
+            raise ValueError(f"Roundtrip {roundtrip_pct} % liegt nicht in (0, 100] %.")
         self._cfg = cfg
         self._rng = rng
+        self._eta = math.sqrt(roundtrip_pct / 100)
         self._volts = cfg.grid.voltage_nominal_v
         self.pv_w = 0.0
         self.house_w: tuple[float, float, float] = (0.0, 0.0, 0.0)
@@ -555,8 +564,18 @@ class PlantModel:
         self.grid_w = sum(grid.values())
         self.battery_feed_a = {phase: max(0.0, -battery[phase]) / volts for phase in PHASES}
         self.battery_w = sum(battery.values())
-        kwh = self.battery_w * STEP_S / 3_600_000
+        # Wirkungsgrad je Richtung: Laden speichert ``η`` mal, Entladen zieht ``1/η`` mal die
+        # Energie am Netz aus dem Akku
+        if self.battery_w > 0:
+            stored_w = self.battery_w * self._eta
+        else:
+            stored_w = self.battery_w / self._eta
+        kwh = stored_w * STEP_S / 3_600_000
         soc = self.soc_pct + kwh / self._cfg.battery.usable_kwh * 100
+        if self.battery_w < 0 and GRID not in self.outages:
+            # Am Netz endet die Entladung an der Reserve (``_above_reserve_w``); das hier fängt
+            # nur die Rundung von ``η`` ab.
+            soc = max(soc, min(self.soc_pct, self._cfg.battery.reserve_soc_pct))
         self.soc_pct = min(100.0, max(0.0, soc))
 
     def _ess(self, loads: dict[Phase, float]) -> dict[Phase, float]:
@@ -596,10 +615,11 @@ class PlantModel:
         return finite_number(self._settings[_AC_SETPOINT]) or 0.0
 
     def _above_reserve_w(self) -> float:
-        """Die Entladeleistung, mit der der Akku in einem Schritt genau die Reserve erreicht."""
+        """Die Entladeleistung am Netz, mit der der Akku in einem Schritt genau die Reserve
+        erreicht; von der Energie über der Reserve kommt ``η`` mal so viel am Netz an."""
         battery = self._cfg.battery
         above_kwh = (self.soc_pct - battery.reserve_soc_pct) / 100 * battery.usable_kwh
-        return above_kwh * 3_600_000 / STEP_S
+        return above_kwh * self._eta * 3_600_000 / STEP_S
 
     # --- Signale ----------------------------------------------------------------------------------
 

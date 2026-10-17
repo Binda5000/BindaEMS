@@ -175,7 +175,8 @@ async def run_scenario(
     cfg = sim_config(cfg, data_dir, victron=scenario.victron_live, control=scenario.control)
     seconds = scenario.duration_s if duration_s is None else duration_s
     clock = ManualClock(scenario.start)
-    model = PlantModel(cfg, random.Random(scenario.seed))  # noqa: S311 - Saat der Simulation
+    rng = random.Random(scenario.seed)  # noqa: S311 - Saat der Simulation
+    model = PlantModel(cfg, rng, roundtrip_pct=scenario.roundtrip_pct)
     scenario.setup(model)
     requests: list[tuple[datetime, str]] = []
 

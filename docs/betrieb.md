@@ -3580,9 +3580,11 @@ zu Hause und angesteckt, er steckt aber an keiner Wallbox. Jedes Auto lässt sic
 stecken. Gefälscht sind nur die Geräte: Parser der Adapter, Aktoren, Safety-Schicht und Regelung
 sind die echten, und das Modell zeigt sich so, wie die Geräte und Adapter es tun. Der Simulator
 verbindet sich mit nichts und schreibt nichts auf die Geräte; er braucht weder Tokens noch Netz. Die
-Szenarien sind deterministisch.
+Szenarien sind deterministisch. Der Akku rechnet in allen Szenarien mit 88 % Roundtrip wie die
+Planung: Laden speichert `√0,88` der Energie, Entladen zieht `1/√0,88` davon aus dem Akku, auch an
+der Grenze zur USV-Reserve.
 
-In der CI läuft jedes der dreiundzwanzig Szenarien bei jedem Push
+In der CI läuft jedes der achtundzwanzig Szenarien bei jedem Push
 (`tests/integration/test_sim_scenarios.py`), dazu eine Abwandlung von `spitze-15min` (Tesla in
 Boost, e-Golf in Sofort, Ziel 5 kW), die den Boost-Anteil des Wächters prüft (oben, „Messung“).
 Von Hand lässt du eines laufen, etwa um nach einer Änderung von `grid` oder `control` in `config.yaml`
@@ -3609,7 +3611,7 @@ docker compose run --rm -v "$PWD/verification:/out" --entrypoint python ems-core
   --out /out/<Datum>-simulation-wolkig.md
 ```
 
-- `--szenario NAME` (Pflicht): eines der dreiundzwanzig Szenarien unten.
+- `--szenario NAME` (Pflicht): eines der achtundzwanzig Szenarien unten.
 - `--out PFAD` (Pflicht): der Bericht als Markdown. Fehlende Ordner legt das Werkzeug an.
 - `--config PFAD`: die Konfiguration, aus der Grenzen, Fahrzeuge und Wallboxen kommen; ohne Angabe
   `deploy/config.example.yaml`, relativ zum aktuellen Verzeichnis. Die Szenarien brauchen die
@@ -3625,7 +3627,7 @@ docker compose run --rm -v "$PWD/verification:/out" --entrypoint python ems-core
 - Jeder Lauf bekommt ein **frisches temporäres Verzeichnis** für die Ablage des core (Absicht,
   Rate-Limits, Entscheidungen). Er berührt `/data` nie und sieht nichts von früheren Läufen.
 - Ein Szenario braucht für 30 min bis 2 h simulierte Zeit etwa 3 bis 13 s Rechenzeit; alle
-  dreiundzwanzig zusammen rund 3 min.
+  achtundzwanzig zusammen rund 3,5 min.
 
 Die Standardausgabe zeigt je Kennzahl eine Zeile, dann je Informationszahl eine (ohne Grenze), dann
 je Prüfung des Szenarios eine und am Ende den Pfad des Berichts. Ein Ausschnitt aus `tesla-5a`:
@@ -3706,7 +3708,10 @@ wachen Tesla, soweit die Tabelle nichts anderes sagt; der Gast steht abgesteckt,
 meldet den e-Golf zu Hause. Der Regelbetrieb ist an, EVCS und Tesla sind live (außer in `dry-run`).
 Victron (der Akku-Sollwert) entscheidet in den ersten zehn Szenarien im Dry-Run mit; in den acht für
 Akku und Spitzen, ab `akku-wolkig`, ist er live, in den drei für die Zuordnung, ab `tesla-evcs`,
-wieder im Dry-Run, ebenso in den zwei für „Aus“ und Selbststart des Tesla, ab `tesla-aus`.
+wieder im Dry-Run, ebenso in den zwei für „Aus“ und Selbststart des Tesla, ab `tesla-aus`. In den
+fünf zur Planausführung, ab `plan-halten`, ist er live. Ihre Pläne kommen wie von der app als neue
+Version der Absicht, jeweils mit der nächsten Versionsnummer; die `id` des Plans ist die Sekunde des
+Laufs, in der er kommt.
 
 | Name | Titel, Dauer | Anlage und Ereignisse | Prüfung des Szenarios |
 |---|---|---|---|
@@ -3733,6 +3738,11 @@ wieder im Dry-Run, ebenso in den zwei für „Aus“ und Selbststart des Tesla, 
 | `gast-evcs` | Gast an der EVCS, e-Golf weg, 30 min | 12.10.2026 ab 18:00, keine PV, Akku 60 %, Gast mit 3 Phasen an der EVCS, Modus des Gastes Sofort; e-Golf abgesteckt und laut Home Assistant weg; Tesla abgesteckt | Ab 3 min zeigt die Gesundheit an der EVCS den Gast (`guest`), erkannt; er lädt am Ende mit 16 A im Modus des Gastes. |
 | `tesla-aus` | Tesla wird unter Wolken auf Aus gestellt, 1 h | wie `wolkig` (21.06.2026 ab 10:00, Wolken, Akku 60 %, beide in PV), der Tesla mit 45 % SOC; bei 45 min wechselt der Tesla auf Aus (Version 2 der Absicht) | Der Tesla bekommt binnen 10 s nach 45 min „Laden aus“ („Aus“ wirkt sofort); kein zurückgestellter Befehl „charging“ an `vehicle.tesla`. Das Szenario belegt nicht, dass der dringende Stopp das Stundenlimit umgeht: Die Reserve (`control.tesla_reserve_commands`, Abschnitt „Laderegelung“, „Tesla“) hält das Stundenbudget unter den Wolken offen, es ist nie ausgeschöpft (Zurückstellungen wegen des Stundenlimits: 0). Das Umgehen prüft der Test `test_off_stops_urgently` der Regelung. |
 | `tesla-selbststart` | Tesla startet selbst im Modus Aus, 30 min | 12.10.2026 ab 18:00, keine PV, Akku 60 %, Tesla am Wall Connector mit 50 % SOC, in Aus, gestoppt; e-Golf abgesteckt; bei 5 min startet der Tesla selbst („Laden an“ im Auto, etwa aus der App) | Der Tesla bekommt binnen 210 s nach 5 min „Laden aus“ (120 s gegen den Modus, `control.tesla_against_s`, plus die Abfrage von Tessie alle 60 s, solange er angesteckt ist, plus der Verzug des Befehls); ab 9 min lädt er nicht mehr. |
+| `plan-halten` | Halten am Abend, 1 h | 12.10.2026 ab 18:00, keine PV, Akku 60 %, nur der e-Golf, in PV (er lädt ohne PV nicht); zu Beginn und alle 15 min ein Plan mit `HALTEN` über 4 Slots, gültig 45 min; L1 +2 kW von 20 bis 25 min | Ab 2 min entlädt der Akku im Mittel jeder Minute höchstens 300 W; der SOC fällt höchstens um 1,5 Prozentpunkte; höchstens 40 Entscheidungen an `victron` je Stunde (das Totband hält sie klein). |
+| `plan-netzladen` | Netzladen in der Nacht, 30 min | 13.10.2026 ab 02:00, keine PV, Akku 30 %, nur der e-Golf, in PV; ein Plan mit `NETZLADEN` 3000 W über 2 Slots, gültig 30 min | Ab 2 min liegt der Netzbezug in jeder Sekunde bei Haus + 3000 W, auf ± 300 W; der SOC steigt um mindestens 4,22 Prozentpunkte (90 % von 3 kW · 0,5 h · √0,88 in 30 kWh). |
+| `plan-abgelaufen` | Plan läuft ab, 30 min | 12.10.2026 ab 18:00, keine PV, Akku 60 %, nur der e-Golf, in PV; ein Plan mit `HALTEN` über 2 Slots, gültig 20 min, danach keiner | Von 2 bis 20 min entlädt der Akku im Mittel jeder Minute höchstens 300 W; ab 26 min (der Override verfällt 300 s nach dem letzten Schreiben, dazu 60 s) gilt kein Override, und der Akku trägt das Haus (Akkuleistung höchstens −Haus + 300 W). |
+| `plan-budget` | Netzladen unter dem Budget, 47 min | 12.10.2026 ab 17:59, keine PV, Akku 60 %, nur der e-Golf, in PV; zu Beginn und zu jeder Viertelstunde ein Plan mit `NETZLADEN` 6000 W und `budget_kw` 4,0 über 4 Slots, gültig 45 min | Netzbezug der Viertelstunden ab 18:00, 18:15 und 18:30 je höchstens 1,02 kWh: Das Budget des Slots ersetzt `control.peak_target_kw`, und der Wächter senkt das Netzladen. |
+| `plan-boost` | Boost während Halten, 1 h | 12.10.2026 ab 18:00, keine PV, Akku 60 %, nur der e-Golf, in PV, ab 1 min in Boost bis zum Ende (Version 3 der Absicht); Pläne mit `HALTEN` wie in `plan-halten` | Ab 1 min lädt der e-Golf in mindestens 90 % der Sekunden in Boost: Jeder neue Plan behält den Boost; höchstens 5 % seiner Energie kommen aus dem Akku (ohne Übergänge), denn unter `HALTEN` lädt Boost aus dem Netz. |
 
 Die Verteilung ist gierig nach Priorität (Abschnitt „Laderegelung“): Mit höchstens 10 kW PV laden die
 Autos in `sonnig` und `wolkig` nacheinander, darum steht der Tesla dort nahe an seinem Ladelimit.

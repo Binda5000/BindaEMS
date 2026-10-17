@@ -5,8 +5,10 @@ Die erwarteten Werte sind von Hand gerechnet, mit der Beispielkonfiguration: 230
 Phase). Dazu Home Assistant, der Gast und der Tesla woanders (Plan 2c-2b, Präzisierung 12).
 """
 
+import math
 import random
 from datetime import datetime
+from typing import Final
 
 import pytest
 from tests.integration.conftest import GOOD_STATE
@@ -132,6 +134,72 @@ def test_soc_follows_the_battery_power(model, store, clock) -> None:
     run(model, store, clock, 360)
     assert model.soc_pct == pytest.approx(59.0)
     assert store.snapshot().ok("battery.soc_pct") == pytest.approx(59.0, abs=0.01)
+
+
+ETA: Final = math.sqrt(0.88)  # je Richtung bei 88 % Roundtrip (Plan 3c, Präzisierung 15)
+
+
+def lossy(cfg, soc_pct: float = 60.0) -> PlantModel:
+    """Das Modell mit 88 % Roundtrip, SOC ``soc_pct``, ohne PV und Autos."""
+    plant = PlantModel(cfg, random.Random(1), roundtrip_pct=88.0)  # noqa: S311 - Saat
+    plant.soc_pct = soc_pct
+    return plant
+
+
+def test_charging_stores_eta_times_the_energy(cfg) -> None:
+    # 1 h mit 3000 W Laden (PV 3900 W, Haus 900 W): 3 kWh · √0,88 im Akku, von 30 kWh
+    model = lossy(cfg)
+    model.pv_w = 3900.0
+    model.house_w = (300.0, 300.0, 300.0)
+    for t in range(3600):
+        model.step(at(t))
+    assert model.battery_w == pytest.approx(3000.0)
+    assert model.soc_pct == pytest.approx(60.0 + 3.0 * ETA / 30.0 * 100)
+
+
+def test_discharging_draws_energy_divided_by_eta(cfg) -> None:
+    # 3000 W aus dem Akku 360 s lang sind 300 Wh am Netz, 300 Wh / √0,88 aus dem Akku
+    model = lossy(cfg)
+    model.house_w = (1000.0, 1000.0, 1000.0)
+    for t in range(360):
+        model.step(at(t))
+    assert model.battery_w == pytest.approx(-3000.0)
+    assert model.soc_pct == pytest.approx(60.0 - 1.0 / ETA)
+
+
+def test_reserve_limit_counts_eta(cfg) -> None:
+    # 0,005 % über der Reserve sind 1,5 Wh im Akku; am Netz kommen davon 1,5 Wh · √0,88 an: In
+    # dieser Sekunde liefert der Akku 5400 W · √0,88, dann nichts mehr, und er bleibt auf 20 %.
+    model = lossy(cfg, soc_pct=20.005)
+    model.house_w = (3000.0, 3000.0, 3000.0)
+    model.step(T0)
+    assert model.battery_w == pytest.approx(-5400.0 * ETA)
+    assert model.soc_pct == 20.0
+    model.step(at(1))
+    assert (model.battery_w, model.soc_pct) == (0.0, 20.0)
+
+
+def test_default_model_stays_lossless(cfg) -> None:
+    # ohne Angabe und mit 100 % wie bisher: 300 Wh aus dem Akku sind 1 %, 3 kWh hinein 10 %
+    for plant in (
+        PlantModel(cfg, random.Random(1)),  # noqa: S311 - Saat der Simulation
+        PlantModel(cfg, random.Random(1), roundtrip_pct=100.0),  # noqa: S311 - Saat
+    ):
+        plant.soc_pct = 60.0
+        plant.house_w = (1000.0, 1000.0, 1000.0)
+        for t in range(360):
+            plant.step(at(t))
+        assert plant.soc_pct == pytest.approx(59.0)
+        plant.pv_w, plant.house_w = 3900.0, (300.0, 300.0, 300.0)
+        for t in range(360, 3960):
+            plant.step(at(t))
+        assert plant.soc_pct == pytest.approx(69.0)
+
+
+@pytest.mark.parametrize("roundtrip_pct", [0.0, -5.0, 100.5, math.nan])
+def test_a_roundtrip_outside_0_to_100_pct_is_an_error(cfg, roundtrip_pct) -> None:
+    with pytest.raises(ValueError, match="Roundtrip"):
+        PlantModel(cfg, random.Random(1), roundtrip_pct=roundtrip_pct)  # noqa: S311 - Saat
 
 
 def test_island_runs_the_loads_from_the_battery_without_pv(model, store, clock) -> None:

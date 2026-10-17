@@ -603,6 +603,21 @@ async def test_a_boost_event_shows_in_the_samples(cfg, tmp_path) -> None:
     assert {s.cars["tesla"].mode for s in result.samples} == {"pv"}
 
 
+async def test_the_run_counts_the_roundtrip_of_the_scenario(cfg, tmp_path) -> None:
+    # 3000 W aus dem Akku 10 s lang: 8,33 Wh am Netz, also 0,0278 % von 30 kWh; mit 88 %
+    # Roundtrip zieht das 1/√0,88 mal so viel aus dem Akku (Präzisierung 15).
+    def setup(model: PlantModel) -> None:
+        model.soc_pct = 60.0
+        model.house_w = (1000.0, 1000.0, 1000.0)
+
+    drop = 3000.0 * 10 / 3600 / 30000.0 * 100
+    assert bare_scenario().roundtrip_pct == 88.0
+    for pct, expected in ((100.0, 60.0 - drop), (88.0, 60.0 - drop / (0.88**0.5))):
+        scenario = bare_scenario(setup=setup, duration_s=10, roundtrip_pct=pct)
+        result = await run_scenario(scenario, cfg, tmp_path / str(pct))
+        assert result.samples[-1].soc_pct == pytest.approx(expected)
+
+
 class FakeRegulation:
     """Was der Lauf an der Regelung (``rt.regulation``) einhüllt; merkt sich die Aufrufe."""
 

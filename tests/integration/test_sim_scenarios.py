@@ -51,10 +51,13 @@ NEW = [
 ASSIGNMENT = ["tesla-evcs", "egolf-twc", "gast-evcs"]
 # die Szenarien für „Aus“ und Selbststart des Tesla (Plan 2d, Task 6), mit Victron im Dry-Run
 TESLA_OFF = ["tesla-aus", "tesla-selbststart"]
+# die Szenarien zur Planausführung (Plan 3c, Entscheidung 13), mit Victron live
+PLAN = ["plan-halten", "plan-netzladen", "plan-abgelaufen", "plan-budget", "plan-boost"]
+ALL = [*NAMES, *NEW, *ASSIGNMENT, *TESLA_OFF, *PLAN]
 
 
 def test_all_scenarios_are_listed() -> None:
-    assert list(SCENARIOS) == [*NAMES, *NEW, *ASSIGNMENT, *TESLA_OFF]
+    assert list(SCENARIOS) == ALL
 
 
 def test_battery_and_peak_scenarios_are_registered() -> None:
@@ -65,15 +68,20 @@ def test_battery_and_peak_scenarios_are_registered() -> None:
 
 def test_assignment_scenarios_are_registered() -> None:
     assert list(SCENARIOS)[18:21] == ["tesla-evcs", "egolf-twc", "gast-evcs"]
-    assert len(SCENARIOS) == 23
+    assert len(SCENARIOS) == 28
 
 
 def test_tesla_off_scenarios_are_registered() -> None:
-    assert list(SCENARIOS)[-2:] == TESLA_OFF
+    assert list(SCENARIOS)[21:23] == TESLA_OFF
     assert not any(SCENARIOS[name].victron_live for name in TESLA_OFF)
 
 
-@pytest.mark.parametrize("name", [*NAMES, *NEW, *ASSIGNMENT, *TESLA_OFF])
+def test_plan_scenarios_are_registered() -> None:
+    assert list(SCENARIOS)[-5:] == PLAN
+    assert all(SCENARIOS[name].victron_live for name in PLAN)
+
+
+@pytest.mark.parametrize("name", ALL)
 async def test_scenario(name, cfg, tmp_path) -> None:
     result = await run_scenario(SCENARIOS[name], cfg, tmp_path)
     assert result.failures == []

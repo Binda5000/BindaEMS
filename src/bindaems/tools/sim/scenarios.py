@@ -20,8 +20,9 @@ Zu Beginn stecken die Autos an ihrer Standard-Wallbox, laden aber nicht, und der
 soweit ein Szenario nichts anderes sagt. Der Gast des Modells (``GUEST_CAR``) steht abgesteckt, und
 Home Assistant meldet den e-Golf zu Hause; ein Szenario ändert das mit ``_setup`` (``guest``,
 ``away``). Die Absicht verlangt den Regelbetrieb. Andere Ereignisse sind Ausfälle (``_Outage``),
-eine neue Version der Absicht mit Übersteuerung (``_Override``) oder mit Boost (``_Boost``) und das
-Abstecken (``_Unplug``).
+eine neue Version der Absicht mit Übersteuerung (``_Override``), mit Boost (``_Boost``) oder mit
+einem Plan (``_Plan``, Plan 3c) und das Abstecken (``_Unplug``). Der Akku rechnet in jedem Szenario
+mit ``ROUNDTRIP_PCT`` Roundtrip (``Scenario.roundtrip_pct``, Plan 3c, Präzisierung 15).
 
 Abweichungen von der Tabelle des Plans (Entscheidung des Koordinators zu Task 14): In ``sonnig``
 und ``wolkig`` steht der Tesla knapp unter seinem Ladelimit, und die Prüfungen verlangen, dass die
@@ -73,8 +74,9 @@ from __future__ import annotations
 
 import math
 import random
+from collections import defaultdict
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import KW_ONLY, dataclass
 from datetime import UTC, datetime, timedelta
 from functools import partial
 from types import MappingProxyType
@@ -93,7 +95,14 @@ from bindaems.shared.control import (
 )
 from bindaems.shared.decisions import DecisionResult
 from bindaems.shared.numbers import de, finite_number
-from bindaems.shared.timeutil import LOCAL_TZ
+from bindaems.shared.plan import (
+    PLAN_VALID,
+    BatteryIntent,
+    BatteryIntentKind,
+    IntentPlan,
+    IntentPlanSlot,
+)
+from bindaems.shared.timeutil import LOCAL_TZ, SLOT, slot_start
 from bindaems.tools.sim.cars import Evcs
 from bindaems.tools.sim.metrics import (
     MINIMUM_MARGIN_A,
@@ -117,6 +126,7 @@ MINUTE_S: Final = 60
 HOUR_S: Final = 3600
 HOUSE_W: Final = 300.0  # Hauslast je Phase in W
 HOUSE_NOISE_W: Final = 50.0  # Rauschen der Hauslast je Phase und Sekunde, ± in W
+ROUNDTRIP_PCT: Final = 88.0  # Wirkungsgrad des Akkus in allen Szenarien, wie in der Planung
 SUN_PEAK_W: Final = 9000.0  # PV eines sonnigen Tages am Mittag
 SOLAR_NOON_H: Final = 13.0  # Mittag in Wiener Zeit (Sommerzeit)
 DAYLIGHT_H: Final = 16.0  # Tageslänge Ende Juni: Sonne von 5 bis 21 Uhr
@@ -199,6 +209,35 @@ SELF_START_WITHIN_S: Final = 210
 IDLE_FROM_S: Final = 9 * MINUTE_S  # … und lädt ab hier nicht mehr
 SELF_START_TESLA_PCT: Final = 50.0
 PEAK_GUARD: Final = "peak_guard"  # Grund einer Drosselung durch den 15-min-Wächter
+# Szenarien zur Planausführung (Plan 3c, Entscheidung 13)
+NIGHT: Final = datetime(2026, 10, 13, 2, tzinfo=LOCAL_TZ).astimezone(UTC)
+PLAN_SLOTS: Final = 4  # so viele Slots hat ein Plan, der alle 15 min kommt, …
+PLAN_VALID_S: Final = int(PLAN_VALID.total_seconds())  # … und so lange gilt er
+HOLD_W: Final = 300.0  # bei HALTEN entlädt der Akku im Mittel jeder Minute höchstens so viel …
+HOLD_SOC_DROP_PCT: Final = 1.5  # … der SOC fällt höchstens so viele Prozentpunkte …
+HOLD_DECISIONS_PER_HOUR: Final = 40  # … mit höchstens so vielen Entscheidungen an Victron je h
+HOLD_JUMP_W: Final = 2000.0  # „plan-halten“: so viel mehr Last auf L1 von 20 bis 25 min (PEAK_S)
+GRID_CHARGE_W: Final = 3000.0  # „plan-netzladen“: Netzladen für 30 min …
+GRID_CHARGE_S: Final = 30 * MINUTE_S
+GRID_CHARGE_BAND_W: Final = 300.0  # … der Netzbezug bei Haus + 3000 W auf ± so viel …
+GRID_CHARGE_SHARE: Final = 0.9  # … und der SOC steigt um mindestens diesen Anteil der Energie
+BATTERY_KWH: Final = 30.0  # nutzbar im Akku der Beispielkonfiguration
+# der Anstieg des SOC in „plan-netzladen“ in Prozentpunkten: 90 % von 3 kW · 0,5 h · √0,88
+GRID_CHARGE_RISE_PCT: Final = (
+    (GRID_CHARGE_SHARE * GRID_CHARGE_W / 1000 * GRID_CHARGE_S / HOUR_S)
+    * math.sqrt(ROUNDTRIP_PCT / 100)
+    / BATTERY_KWH
+    * 100
+)
+NIGHT_SOC_PCT: Final = 30.0
+EXPIRES_S: Final = 20 * MINUTE_S  # „plan-abgelaufen“: Der Plan gilt so lange; ab …
+FREE_FROM_S: Final = 26 * MINUTE_S  # … hier (Override verfallen, 300 s plus 60 s) gilt keiner …
+CARRY_W: Final = 300.0  # … und die Akkuleistung liegt höchstens so viel über −Haus
+BUDGET_CHARGE_W: Final = 6000.0  # „plan-budget“: Netzladen mit dem Budget …
+BUDGET_KW: Final = 4.0
+BUDGET_QUARTER_KWH: Final = 1.02  # … je Viertelstunde höchstens 4 kW · 0,25 h + 0,02 kWh
+BOOST_FROM_S: Final = MINUTE_S  # „plan-boost“: Boost ab hier …
+BOOSTING_SHARE: Final = 0.9  # … und der e-Golf lädt in mindestens diesem Anteil der Sekunden
 
 TESLA: Final = "tesla"  # Schlüssel der Fahrzeuge und Wallboxen in der Konfiguration
 EGOLF: Final = "egolf"
@@ -254,6 +293,8 @@ class Scenario:
     - ``victron_live``: Victron (der Akku-Sollwert) ist zusätzlich live; ohne bleibt es im Dry-Run
     - ``control``: Werte für ``ControlConfig``, die die Konfiguration des Laufs überschreiben, etwa
       ``{"peak_target_kw": 8.0}``; ein ungültiger Wert ist ein ``ValidationError``
+    - ``roundtrip_pct``: der Wirkungsgrad des Akkus im Modell, Laden und Entladen zusammen
+      (Plan 3c, Präzisierung 15)
     """
 
     name: str
@@ -268,6 +309,7 @@ class Scenario:
     checks: Callable[[SimResult], list[str]]
     victron_live: bool = False
     control: Mapping[str, Any] = MappingProxyType({})
+    roundtrip_pct: float = ROUNDTRIP_PCT
 
 
 @dataclass(frozen=True, slots=True)
@@ -362,6 +404,87 @@ class _Mode:
 
     def __call__(self, model: PlantModel, rt: CoreRuntime) -> None:
         _new_version(rt, self.version, self.vehicle, {"mode": self.mode}, "Moduswechsel")
+
+
+PlanSlots = tuple[tuple[int, BatteryIntent, float | None], ...]
+
+
+@dataclass(frozen=True, slots=True)
+class _Plan:
+    """Eine neue Version der Absicht mit einem Plan, wie ihn die app schickt (Plan 3c,
+    Präzisierung 15).
+
+    ``slots`` nennt je Slot den Versatz in Viertelstunden ab der Viertelstunde, in der das
+    Szenario beginnt (``start``), die Absicht und ``budget_kw``. Der Plan entsteht in der Sekunde
+    ``at_s`` des Laufs: Das ist sein ``created_at`` und seine ``id``, und er gilt ``valid_s``
+    danach. Beginn und Sekunde kennt ein Ereignis nicht; das Szenario gibt sie mit (``_plan``).
+
+    Die Version ist die nächste nach der gültigen. Sonst bleibt die gültige Absicht, wie sie ist,
+    auch Boost und Übersteuerung. Ohne gültige Absicht und bei einer Ablehnung bricht der Lauf ab
+    (``ValueError``); einen geklemmten Plan nimmt der core an.
+    """
+
+    start: datetime
+    at_s: int
+    slots: PlanSlots
+    _: KW_ONLY
+    valid_s: int
+    grid_charge_allowed: bool = True
+
+    def plan(self) -> IntentPlan:
+        created = self.start + timedelta(seconds=self.at_s)
+        first = slot_start(self.start)
+        return IntentPlan(
+            id=self.at_s,
+            created_at=created,
+            valid_until=created + timedelta(seconds=self.valid_s),
+            grid_charge_allowed=self.grid_charge_allowed,
+            slots=[
+                IntentPlanSlot(start=first + offset * SLOT, intent=intent, budget_kw=budget_kw)
+                for offset, intent, budget_kw in self.slots
+            ],
+        )
+
+    def __call__(self, model: PlantModel, rt: CoreRuntime) -> None:
+        current = rt.intent()
+        if current is None:
+            raise ValueError("Plan ohne gültige Absicht.")
+        update = {"version": current.version + 1, "plan": self.plan()}
+        reply = rt.submit_intent(current.model_copy(update=update))
+        if reply.result == "rejected":
+            raise ValueError(f"Plan abgelehnt: {' '.join(reply.details)}")
+
+
+def _plan(
+    start: datetime,
+    at_s: int,
+    slots: PlanSlots,
+    *,
+    valid_s: int,
+    grid_charge_allowed: bool = True,
+) -> tuple[int, Action]:
+    """Das Ereignis ``_Plan`` in der Sekunde ``at_s`` eines Szenarios ab ``start``."""
+    plan = _Plan(start, at_s, slots, valid_s=valid_s, grid_charge_allowed=grid_charge_allowed)
+    return at_s, plan
+
+
+def _every_quarter(
+    start: datetime, duration_s: int, intent: BatteryIntent, *, budget_kw: float | None = None
+) -> tuple[tuple[int, Action], ...]:
+    """Pläne wie von der app: einer zu Beginn, dann zu jeder Viertelstunde des Laufs, je mit
+    ``PLAN_SLOTS`` Slots ``intent`` (und ``budget_kw``) ab seiner Viertelstunde, gültig für
+    ``PLAN_VALID_S``."""
+    into = int((start - slot_start(start)).total_seconds())
+    seconds = sorted({0, *range((QUARTER_S - into) % QUARTER_S, duration_s, QUARTER_S)})
+    return tuple(
+        _plan(
+            start,
+            t,
+            tuple(((into + t) // QUARTER_S + k, intent, budget_kw) for k in range(PLAN_SLOTS)),
+            valid_s=PLAN_VALID_S,
+        )
+        for t in seconds
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -1058,9 +1181,9 @@ def _battery_locked(result: SimResult) -> list[str]:
     return []
 
 
-def _quarters_within(start: datetime) -> Check:
+def _quarters_within(start: datetime, limit_kwh: float) -> Check:
     """Der Netzbezug der ``PEAK_QUARTERS`` Viertelstunden ab ``PEAK_LEAD_S`` liegt je höchstens
-    bei ``QUARTER_KWH``: ``Σ max(0, Netzbezug) · 1 s`` über die Proben der Viertelstunde.
+    bei ``limit_kwh``: ``Σ max(0, Netzbezug) · 1 s`` über die Proben der Viertelstunde.
     ``start`` ist der Beginn des Szenarios, für die Uhrzeiten im Text."""
     begins = [PEAK_LEAD_S + k * QUARTER_S for k in range(PEAK_QUARTERS)]  # Sekunden des Laufs
 
@@ -1073,17 +1196,17 @@ def _quarters_within(start: datetime) -> Check:
                 found.append(f"Die Viertelstunde ab {shown} liegt nicht ganz im Lauf.")
                 continue
             kwh = sum(max(0.0, s.grid_w) for s in inside) / 3_600_000
-            if kwh > QUARTER_KWH:
+            if kwh > limit_kwh:
                 found.append(
                     f"Netzbezug der Viertelstunde ab {shown}: {de(round(kwh, 3))} kWh, verlangt "
-                    f"höchstens {de(QUARTER_KWH)} kWh."
+                    f"höchstens {de(limit_kwh)} kWh."
                 )
         return found
 
     *first, last = (_hhmm(start, begin) for begin in begins)
     text = (
         f"Netzbezug der Viertelstunden ab {', '.join(first)} und {last} je höchstens "
-        f"{de(QUARTER_KWH)} kWh."
+        f"{de(limit_kwh)} kWh."
     )
     return Check(text, find)
 
@@ -1147,6 +1270,146 @@ def _now_throttled_last(key: str, actuator: str) -> Check:
         f"Min+PV über Mindeststrom + {de(MINIMUM_MARGIN_A)} A."
     )
     return Check(text, find)
+
+
+# --- Prüfungen zur Planausführung ----------------------------------------------------------------
+
+
+def _held(from_s: int, until_s: int | None = None) -> Check:
+    """In jeder ganzen Minute des Laufs ab ``from_s`` (bis ``until_s``, sonst bis zum Ende) liegt
+    die mittlere Akkuleistung bei mindestens −``HOLD_W``: Der Akku hält. Eine angebrochene Minute
+    am Ende zählt nicht; gibt es keine ganze, ist das ein Verstoß."""
+
+    def find(result: SimResult) -> list[str]:
+        minutes: defaultdict[int, list[float]] = defaultdict(list)
+        for s in result.samples:
+            if from_s <= s.t and (until_s is None or s.t < until_s):
+                minutes[s.t // MINUTE_S].append(s.battery_w)
+        means = [
+            (minute * MINUTE_S, sum(watts) / MINUTE_S)
+            for minute, watts in sorted(minutes.items())
+            if len(watts) == MINUTE_S
+        ]
+        if not means:
+            return [f"Der Lauf hat ab {from_s} s keine ganze Minute."]
+        below = [(t, mean) for t, mean in means if mean < -HOLD_W]
+        if not below:
+            return []
+        t, mean = below[0]
+        shown = shown_number(mean, 1, lambda number: number >= -HOLD_W)
+        return [
+            f"Mittlere Akkuleistung der Minute ab {t} s {shown} W, verlangt mindestens "
+            f"{de(-HOLD_W)} W ({len(below)} von {len(means)} Minuten darunter)."
+        ]
+
+    since = de(from_s / MINUTE_S)
+    span = f"Ab {since} min" if until_s is None else f"Von {since} bis {de(until_s / MINUTE_S)} min"
+    return Check(f"{span} entlädt der Akku im Mittel jeder Minute höchstens {de(HOLD_W)} W.", find)
+
+
+def _soc_dropped_at_most(result: SimResult) -> list[str]:
+    """Der SOC fällt höchstens um ``HOLD_SOC_DROP_PCT`` unter den der ersten Probe."""
+    if not result.samples:
+        return ["Der Lauf hat keine Probe."]
+    first = result.samples[0].soc_pct
+    drop = first - min(s.soc_pct for s in result.samples)
+    if drop <= HOLD_SOC_DROP_PCT:
+        return []
+    shown = shown_number(drop, 2, lambda number: number <= HOLD_SOC_DROP_PCT)
+    return [f"Der SOC fällt um {shown} Prozentpunkte, verlangt höchstens {de(HOLD_SOC_DROP_PCT)}."]
+
+
+def _victron_decisions_per_hour(result: SimResult) -> list[str]:
+    """Höchstens ``HOLD_DECISIONS_PER_HOUR`` Entscheidungen an Victron je Stunde des Laufs."""
+    if not result.samples:
+        return ["Der Lauf hat keine Probe."]
+    count = len(_at(result.decisions, VICTRON))
+    minutes = len(result.samples) / MINUTE_S
+    per_hour = count * MINUTE_S / minutes
+    if per_hour <= HOLD_DECISIONS_PER_HOUR:
+        return []
+    return [
+        f"{count} Entscheidungen an „{VICTRON}“ in {de(round(minutes, 1))} min: "
+        f"{de(round(per_hour, 1))} je Stunde, verlangt höchstens {HOLD_DECISIONS_PER_HOUR}."
+    ]
+
+
+def _grid_at_house_plus_charge(result: SimResult) -> list[str]:
+    """Ab ``SETTLED_S`` liegt der Netzbezug in jeder Sekunde bei Haus + ``GRID_CHARGE_W`` auf
+    ± ``GRID_CHARGE_BAND_W``; gemeldet wird die erste Sekunde außerhalb."""
+    after = [s for s in result.samples if s.t >= SETTLED_S]
+    if not after:
+        return [f"Der Lauf endet vor {SETTLED_S} s."]
+
+    def bounds(s: Sample) -> tuple[float, float]:
+        wanted = s.house_w + GRID_CHARGE_W
+        return wanted - GRID_CHARGE_BAND_W, wanted + GRID_CHARGE_BAND_W
+
+    outside = [s for s in after if not bounds(s)[0] <= s.grid_w <= bounds(s)[1]]
+    if not outside:
+        return []
+    first = outside[0]
+    low, high = bounds(first)
+    shown = shown_number(first.grid_w, 0, lambda number: low <= number <= high)
+    return [
+        f"Netzbezug bei {first.t} s {shown} W bei {de(round(first.house_w))} W Haus, verlangt "
+        f"{de(round(low))} bis {de(round(high))} W ({len(outside)} s außerhalb)."
+    ]
+
+
+def _soc_raised(result: SimResult) -> list[str]:
+    """Der SOC der letzten Probe liegt mindestens ``GRID_CHARGE_RISE_PCT`` über dem der ersten."""
+    if not result.samples:
+        return ["Der Lauf hat keine Probe."]
+    rise = result.samples[-1].soc_pct - result.samples[0].soc_pct
+    if rise >= GRID_CHARGE_RISE_PCT:
+        return []
+    shown = shown_number(rise, 2, lambda number: number >= GRID_CHARGE_RISE_PCT)
+    return [
+        f"Der SOC steigt um {shown} Prozentpunkte, verlangt mindestens "
+        f"{de(round(GRID_CHARGE_RISE_PCT, 2))}."
+    ]
+
+
+def _free_after_expiry(result: SimResult) -> list[str]:
+    """Ab ``FREE_FROM_S`` gilt kein Override, und die Akkuleistung liegt in jeder Sekunde
+    höchstens bei −Haus + ``CARRY_W``: Der Akku trägt das Haus wieder."""
+    after = [s for s in result.samples if s.t >= FREE_FROM_S]
+    if not after:
+        return [f"Der Lauf endet vor {FREE_FROM_S} s."]
+    found: list[str] = []
+    kept = next((s for s in after if s.override_w is not None), None)
+    if kept is not None and kept.override_w is not None:
+        found.append(f"Bei {kept.t} s gilt ein Override ({de(round(kept.override_w))} W).")
+
+    def limit(s: Sample) -> float:
+        return -s.house_w + CARRY_W
+
+    over = [s for s in after if s.battery_w > limit(s)]
+    if over:
+        first, most = over[0], limit(over[0])
+        shown = shown_number(first.battery_w, 0, lambda number: number <= most)
+        found.append(
+            f"Akkuleistung bei {first.t} s {shown} W bei {de(round(first.house_w))} W Haus, "
+            f"verlangt höchstens {de(round(most))} W ({len(over)} s darüber)."
+        )
+    return found
+
+
+def _boosting_from(result: SimResult) -> list[str]:
+    """Ab ``BOOST_FROM_S`` lädt der e-Golf in mindestens ``BOOSTING_SHARE`` der Sekunden, und die
+    Probe zeigt ihn in Boost: Jede neue Version mit Plan behält den Boost (Review Focus 1)."""
+    after = [s for s in result.samples if s.t >= BOOST_FROM_S]
+    if not after:
+        return [f"Der Lauf endet vor {BOOST_FROM_S} s."]
+    boosting = sum(1 for s in after if s.cars[EGOLF].charging and s.cars[EGOLF].mode == "boost")
+    share = boosting / len(after)
+    if share >= BOOSTING_SHARE:
+        return []
+    return [
+        f"„{EGOLF}“ lädt ab {BOOST_FROM_S} s in {de(round(share * 100, 1))} % der Sekunden in "
+        f"Boost, verlangt mindestens {de(BOOSTING_SHARE * 100)} %."
+    ]
 
 
 # --- Prüfungen für die Zuordnung -----------------------------------------------------------------
@@ -1649,7 +1912,7 @@ def _spitze_15min() -> Scenario:
         events=(*_weather(start, duration_s, seed), (PEAK_BOOST_S, boost)),
         checks=Checks(
             (
-                _quarters_within(start),
+                _quarters_within(start, QUARTER_KWH),
                 _named_before(PEAK_GUARD, PEAK_BOOST_S, start),
                 _not_named_from(PEAK_GUARD, wallbox_actuator(EVCS_BOX), PEAK_BOOST_S, start),
                 _now_throttled_last(EGOLF, wallbox_actuator(EVCS_BOX)),
@@ -1835,6 +2098,163 @@ def _tesla_selbststart() -> Scenario:
     )
 
 
+# --- Szenarien 24 bis 28: Planausführung, Victron live (Plan 3c, Entscheidung 13) ----------------
+
+
+HOLD: Final = BatteryIntent(kind=BatteryIntentKind.HALTEN)
+
+
+def _plan_halten() -> Scenario:
+    """Pläne mit ``HALTEN`` alle 15 min, wie von der app: Der core hält den Netzbezug bei
+    Haus − PV (Präzisierung 7), auch über einen Lastsprung auf L1 hinweg; das Totband hält die Zahl
+    der Entscheidungen klein (Review Focus 4)."""
+    start, duration_s, seed = EVENING, HOUR_S, 24
+    begin, end = PEAK_S
+
+    def jump(t: int) -> float:
+        return HOLD_JUMP_W if begin <= t < end else 0.0
+
+    dropped = Check(
+        f"Der SOC fällt höchstens um {de(HOLD_SOC_DROP_PCT)} Prozentpunkte.", _soc_dropped_at_most
+    )
+    few = Check(
+        f"Höchstens {HOLD_DECISIONS_PER_HOUR} Entscheidungen an „{VICTRON}“ je Stunde.",
+        _victron_decisions_per_hour,
+    )
+    return Scenario(
+        name="plan-halten",
+        title="Halten am Abend",
+        start=start,
+        duration_s=duration_s,
+        seed=seed,
+        setup=partial(_setup, soc_pct=60.0, tesla=None),
+        intent=_intent(egolf=ChargeMode.PV),
+        live=True,
+        events=(
+            *_weather(start, duration_s, seed, l1=jump),
+            *_every_quarter(start, duration_s, HOLD),
+        ),
+        checks=Checks((_held(SETTLED_S), dropped, few)),
+        victron_live=True,
+    )
+
+
+def _plan_netzladen() -> Scenario:
+    """Ein Plan mit ``NETZLADEN(3000)`` für 30 min in der Nacht: Der Netzbezug folgt Haus + 3000 W,
+    und der Akku speichert davon ``√0,88``."""
+    start, duration_s, seed = NIGHT, GRID_CHARGE_S, 25
+    charge = BatteryIntent(kind=BatteryIntentKind.NETZLADEN, grid_charge_w=GRID_CHARGE_W)
+    slots = tuple((k, charge, None) for k in range(GRID_CHARGE_S // QUARTER_S))
+    charged = Check(
+        f"Ab {de(SETTLED_S / MINUTE_S)} min liegt der Netzbezug in jeder Sekunde bei Haus + "
+        f"{de(GRID_CHARGE_W)} W, auf ± {de(GRID_CHARGE_BAND_W)} W.",
+        _grid_at_house_plus_charge,
+    )
+    raised = Check(
+        f"Der SOC steigt um mindestens {de(round(GRID_CHARGE_RISE_PCT, 2))} Prozentpunkte: "
+        f"{de(GRID_CHARGE_SHARE * 100)} % von {de(GRID_CHARGE_W / 1000)} kW · "
+        f"{de(GRID_CHARGE_S / HOUR_S)} h · √{de(ROUNDTRIP_PCT / 100)} in {de(BATTERY_KWH)} kWh.",
+        _soc_raised,
+    )
+    return Scenario(
+        name="plan-netzladen",
+        title="Netzladen in der Nacht",
+        start=start,
+        duration_s=duration_s,
+        seed=seed,
+        setup=partial(_setup, soc_pct=NIGHT_SOC_PCT, tesla=None),
+        intent=_intent(egolf=ChargeMode.PV),
+        live=True,
+        events=(
+            *_weather(start, duration_s, seed),
+            _plan(start, 0, slots, valid_s=GRID_CHARGE_S),
+        ),
+        checks=Checks((charged, raised)),
+        victron_live=True,
+    )
+
+
+def _plan_abgelaufen() -> Scenario:
+    """Ein Plan mit ``HALTEN``, gültig 20 min, und kein neuer: Bis dahin hält der Akku, danach gilt
+    ``EIGENVERBRAUCH`` (Spec 7.7). Der Override verfällt spätestens 300 s nach dem letzten
+    Schreiben; ab 26 min gilt keiner mehr, und der Akku trägt das Haus."""
+    start, duration_s, seed = EVENING, 30 * MINUTE_S, 26
+    slots = ((0, HOLD, None), (1, HOLD, None))
+    free = Check(
+        f"Ab {de(FREE_FROM_S / MINUTE_S)} min gilt kein Override, und der Akku trägt das Haus: "
+        f"Akkuleistung höchstens −Haus + {de(CARRY_W)} W.",
+        _free_after_expiry,
+    )
+    return Scenario(
+        name="plan-abgelaufen",
+        title="Plan läuft ab",
+        start=start,
+        duration_s=duration_s,
+        seed=seed,
+        setup=partial(_setup, soc_pct=60.0, tesla=None),
+        intent=_intent(egolf=ChargeMode.PV),
+        live=True,
+        events=(*_weather(start, duration_s, seed), _plan(start, 0, slots, valid_s=EXPIRES_S)),
+        checks=Checks((_held(SETTLED_S, EXPIRES_S), free)),
+        victron_live=True,
+    )
+
+
+def _plan_budget() -> Scenario:
+    """Pläne mit ``NETZLADEN(6000)`` und ``budget_kw`` 4,0: Das Budget ersetzt
+    ``control.peak_target_kw`` (Präzisierung 9), und der Wächter senkt das Netzladen, bis jede
+    Viertelstunde höchstens 1 kWh bezieht. Der Lauf beginnt wie ``spitze-15min`` eine Minute vor
+    18:00 und prüft die Viertelstunden ab 18:00."""
+    start, duration_s, seed = EVENING - timedelta(seconds=PEAK_LEAD_S), 47 * MINUTE_S, 27
+    charge = BatteryIntent(kind=BatteryIntentKind.NETZLADEN, grid_charge_w=BUDGET_CHARGE_W)
+    return Scenario(
+        name="plan-budget",
+        title="Netzladen unter dem Budget",
+        start=start,
+        duration_s=duration_s,
+        seed=seed,
+        setup=partial(_setup, soc_pct=60.0, tesla=None),
+        intent=_intent(egolf=ChargeMode.PV),
+        live=True,
+        events=(
+            *_weather(start, duration_s, seed),
+            *_every_quarter(start, duration_s, charge, budget_kw=BUDGET_KW),
+        ),
+        checks=Checks((_quarters_within(start, BUDGET_QUARTER_KWH),)),
+        victron_live=True,
+    )
+
+
+def _plan_boost() -> Scenario:
+    """Der e-Golf lädt ab 1 min in Boost, und alle 15 min kommt ein Plan mit ``HALTEN``: Jede neue
+    Version behält den Boost (Review Focus 1), und unter ``HALTEN`` lädt Boost aus dem Netz, nicht
+    aus dem Akku (Entscheidung 3). Der erste Plan ist Version 2, der Boost darum Version 3."""
+    start, duration_s, seed = EVENING, HOUR_S, 28
+    boost = _Boost(3, EGOLF, start + timedelta(seconds=duration_s))
+    boosting = Check(
+        f"Ab {de(BOOST_FROM_S / MINUTE_S)} min lädt „{EGOLF}“ in mindestens "
+        f"{de(BOOSTING_SHARE * 100)} % der Sekunden in Boost.",
+        _boosting_from,
+    )
+    return Scenario(
+        name="plan-boost",
+        title="Boost während Halten",
+        start=start,
+        duration_s=duration_s,
+        seed=seed,
+        setup=partial(_setup, soc_pct=60.0, tesla=None),
+        intent=_intent(egolf=ChargeMode.PV),
+        live=True,
+        events=(
+            *_weather(start, duration_s, seed),
+            *_every_quarter(start, duration_s, HOLD),
+            (BOOST_FROM_S, boost),
+        ),
+        checks=Checks((boosting, _from_battery_at_most(EGOLF, CAR_FROM_BATTERY_PCT))),
+        victron_live=True,
+    )
+
+
 SCENARIOS: Final[dict[str, Scenario]] = {
     scenario.name: scenario
     for scenario in (
@@ -1861,5 +2281,10 @@ SCENARIOS: Final[dict[str, Scenario]] = {
         _gast_evcs(),
         _tesla_aus(),
         _tesla_selbststart(),
+        _plan_halten(),
+        _plan_netzladen(),
+        _plan_abgelaufen(),
+        _plan_budget(),
+        _plan_boost(),
     )
 }
