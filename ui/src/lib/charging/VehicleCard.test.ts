@@ -50,3 +50,13 @@ it('zeigt die Mehrkosten nicht Lesenden', () => {
 	show({ boostCost: COST, operate: false });
 	expect(screen.queryByText(/Leistungspreis im Monat/)).not.toBeInTheDocument();
 });
+
+it('zeigt die Zeile zur Session unter den Fakten', () => {
+	show({ sessionLine: 'Letzte Session 08.10. 18:00–21:30 · 12,4 kWh' });
+	expect(screen.getByText('Letzte Session 08.10. 18:00–21:30 · 12,4 kWh')).toBeVisible();
+});
+
+it('zeigt ohne Session keine Zeile', () => {
+	show();
+	expect(screen.queryByText(/Session/)).not.toBeInTheDocument();
+});

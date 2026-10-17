@@ -1,10 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import type { Intent, VehicleHealth } from '$lib/api/schemas';
+import type { ChargingSession, Intent, VehicleHealth } from '$lib/api/schemas';
+import { chargingSession } from '$lib/testing/fixtures';
 import {
 	assignmentLabel,
 	boostInfo,
 	healthIsCurrent,
 	indicatorText,
+	latestSession,
 	modeLabel,
 	moveDown,
 	moveUp,
@@ -13,6 +15,7 @@ import {
 	parseSupportThreshold,
 	priorityOrder,
 	reasonLabel,
+	sessionLine,
 	supportHint,
 	surplusLabel
 } from './view';
@@ -298,5 +301,78 @@ describe('Akku-Unterstützung', () => {
 		expect(parseSupportThreshold('100.5', 20).ok).toBe(false);
 		expect(parseSupportThreshold('abc', 20).ok).toBe(false);
 		expect(parseSupportThreshold('', 20, true).ok).toBe(false);
+	});
+});
+
+describe('Session in der Fahrzeugkarte', () => {
+	const NB = '\u00a0';
+	// 18:00–21:30 Wiener Zeit (MESZ)
+	const done = (changes: Partial<ChargingSession> = {}) =>
+		chargingSession({
+			vehicle: 'tesla',
+			open: false,
+			start: '2026-10-08T16:00:00+00:00',
+			end: '2026-10-08T19:30:00+00:00',
+			kwh: 12.44,
+			pv_kwh: 8,
+			battery_kwh: 3,
+			grid_kwh: 1.44,
+			cost_eur: 0.52,
+			...changes
+		});
+	const running = (changes: Partial<ChargingSession> = {}) =>
+		done({
+			open: true,
+			end: null,
+			start: '2026-10-09T06:45:00+00:00',
+			kwh: 1.38,
+			pv_kwh: 0.5,
+			battery_kwh: 0.2,
+			grid_kwh: 0.68,
+			...changes
+		});
+
+	it('bevorzugt die offene Session', () => {
+		const open = running({ id: 1 });
+		const newer = done({ id: 2, start: '2026-10-09T05:00:00+00:00' });
+		expect(latestSession([newer, open], 'tesla')).toBe(open);
+		expect(latestSession([open, newer], 'tesla')).toBe(open);
+	});
+
+	it('nimmt sonst die jüngste beendete Session des Fahrzeugs', () => {
+		const old = done({ id: 1, start: '2026-10-01T16:00:00+00:00' });
+		const young = done({ id: 2 });
+		const other = done({ id: 3, vehicle: 'egolf', start: '2026-10-09T16:00:00+00:00' });
+		expect(latestSession([old, other, young], 'tesla')).toBe(young);
+		expect(latestSession([other], 'tesla')).toBeNull();
+		expect(latestSession([], 'tesla')).toBeNull();
+	});
+
+	it('beschreibt die laufende Session mit der Aufteilung', () => {
+		expect(sessionLine(running())).toBe(
+			`Session seit 08:45 · 1,4${NB}kWh (PV 0,5 · Akku 0,2 · Netz 0,7)`
+		);
+	});
+
+	it('beschreibt die letzte Session mit Kosten, wenn sie bekannt sind', () => {
+		expect(sessionLine(done())).toBe(
+			`Letzte Session 08.10. 18:00–21:30 · 12,4${NB}kWh · 0,52${NB}€`
+		);
+	});
+
+	it('lässt die Kosten weg, wenn sie unbekannt sind', () => {
+		expect(sessionLine(done({ cost_eur: null }))).toBe(
+			`Letzte Session 08.10. 18:00–21:30 · 12,4${NB}kWh`
+		);
+	});
+
+	it('nennt das Datum des Endes, wenn die Session über Mitternacht ging', () => {
+		expect(sessionLine(done({ end: '2026-10-08T23:15:00+00:00', cost_eur: null }))).toBe(
+			`Letzte Session 08.10. 18:00–09.10. 01:15 · 12,4${NB}kWh`
+		);
+	});
+
+	it('zeigt eine Session ohne Ende als laufend, auch wenn open fehlt', () => {
+		expect(sessionLine(done({ end: null, open: false }))).toMatch(/^Session seit 18:00/);
 	});
 });

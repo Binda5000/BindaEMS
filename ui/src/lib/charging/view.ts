@@ -1,6 +1,7 @@
 // Texte und Ableitungen der Seite „Laden“
 import type {
 	AssignmentKind,
+	ChargingSession,
 	ChargeMode,
 	Clue,
 	EffectiveMode,
@@ -10,8 +11,8 @@ import type {
 	VehicleHealth,
 	WallboxHealth
 } from '$lib/api/schemas';
-import { DASH, formatNumberMax, formatSoc } from '$lib/format';
-import { parseIso } from '$lib/time';
+import { DASH, formatNumber, formatNumberMax, formatSoc, formatTime, NBSP } from '$lib/format';
+import { parseIso, todayVienna } from '$lib/time';
 
 /** Schlüssel eines Fahrzeugs → Anzeigename */
 export type Names = Record<string, string>;
@@ -262,4 +263,71 @@ export function overrideVehicle(
 export interface CardNotice {
 	level: 'error' | 'warning';
 	text: string;
+}
+
+function isRunning(session: ChargingSession): boolean {
+	return session.open || session.end === null;
+}
+
+function startMs(session: ChargingSession): number {
+	return parseIso(session.start) ?? Number.NEGATIVE_INFINITY;
+}
+
+/**
+ * Die Session, die die Fahrzeugkarte zeigt: die offene (bei mehreren die jüngste), sonst die
+ * jüngste beendete des Fahrzeugs. Ohne Session `null`; die Reihenfolge der Liste gilt nicht.
+ */
+export function latestSession(
+	sessions: readonly ChargingSession[],
+	vehicle: string
+): ChargingSession | null {
+	let best: ChargingSession | null = null;
+	for (const session of sessions) {
+		if (session.vehicle !== vehicle) continue;
+		if (
+			best === null ||
+			(isRunning(session) && !isRunning(best)) ||
+			(isRunning(session) === isRunning(best) && startMs(session) > startMs(best))
+		) {
+			best = session;
+		}
+	}
+	return best;
+}
+
+/** „08.10.“ für einen Zeitstempel, nach Wiener Zeit */
+function dayMonth(iso: string): string {
+	const ms = parseIso(iso);
+	if (ms === null) return DASH;
+	const [, month, day] = todayVienna(new Date(ms)).split('-');
+	return `${day}.${month}.`;
+}
+
+function sameDay(first: string, second: string): boolean {
+	const a = parseIso(first);
+	const b = parseIso(second);
+	return a !== null && b !== null && todayVienna(new Date(a)) === todayVienna(new Date(b));
+}
+
+/**
+ * Die Zeile der Fahrzeugkarte. Läuft die Session: „Session seit 08:45 · 1,4 kWh (PV 0,5 · Akku 0,2
+ * · Netz 0,7)“. Danach: „Letzte Session 08.10. 18:00–21:30 · 12,4 kWh · 0,52 €“, die Kosten nur,
+ * wenn sie bekannt sind; endet die Session an einem anderen Tag, steht dort das Datum des Endes.
+ */
+export function sessionLine(session: ChargingSession): string {
+	const energy = `${formatNumber(session.kwh, 1)}${NBSP}kWh`;
+	if (isRunning(session) || session.end === null) {
+		const split = [
+			['PV', session.pv_kwh],
+			['Akku', session.battery_kwh],
+			['Netz', session.grid_kwh]
+		] as const;
+		const parts = split.map(([label, kwh]) => `${label} ${formatNumber(kwh, 1)}`).join(' · ');
+		return `Session seit ${formatTime(session.start)} · ${energy} (${parts})`;
+	}
+	const end = sameDay(session.start, session.end)
+		? formatTime(session.end)
+		: `${dayMonth(session.end)} ${formatTime(session.end)}`;
+	const cost = session.cost_eur === null ? '' : ` · ${formatNumber(session.cost_eur, 2)}${NBSP}€`;
+	return `Letzte Session ${dayMonth(session.start)} ${formatTime(session.start)}–${end} · ${energy}${cost}`;
 }

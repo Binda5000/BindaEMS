@@ -12,8 +12,10 @@
 	import {
 		boostInfo,
 		healthIsCurrent,
+		latestSession,
 		overrideVehicle,
 		priorityOrder,
+		sessionLine,
 		type CardNotice
 	} from '$lib/charging/view';
 	import Notice from '$lib/components/Notice.svelte';
@@ -21,10 +23,14 @@
 	import { live } from '$lib/live.svelte';
 	import { Resource } from '$lib/resource.svelte';
 	import { canOperate } from '$lib/roles';
+	import { todayIso } from '$lib/stats/period';
+	import { addDays } from '$lib/time';
 	import { wallboxName } from '$lib/wallboxes';
 
 	/** So lange nach einer Änderung dauert es, bis Health sie zeigt. */
 	const SYSTEM_REFRESH_MS = 2000;
+	/** So viele Tage zurück sucht die Fahrzeugkarte nach der letzten Session. */
+	const SESSION_DAYS = 30;
 	/** Ohne Absicht ist die Akku-Unterstützung erlaubt, mit der Schwelle der Konfiguration. */
 	const DEFAULT_SUPPORT: SupportIntent = { allowed: true, soc_pct: null };
 	/** Ohne Absicht regelt der core nichts; Gast und Vorrang haben dann diese Werte. */
@@ -36,6 +42,16 @@
 	// Die Mehrkosten sind eine Zugabe: schlägt ihre Abfrage fehl, fehlt nur der Satz an der Karte.
 	const boostCost = new Resource((o) => api.boostCost(o), { intervalMs: 60_000 });
 
+	// Die Session je Fahrzeug ist eine Zugabe: schlägt die Abfrage fehl, fehlt nur die Zeile.
+	// Die Tage werden bei jeder Abfrage neu bestimmt, damit eine lange offene Seite nicht veraltet.
+	const sessions = new Resource(
+		(o) => {
+			const today = todayIso();
+			return api.chargingSessions(addDays(today, -SESSION_DAYS), today, undefined, o);
+		},
+		{ intervalMs: 60_000 }
+	);
+
 	let nowMs = $state(Date.now()); // Boost „in der Zukunft“, alle 30 s neu bewertet
 	let busy = $state(false);
 	let notices = $state<Record<string, CardNotice | undefined>>({});
@@ -43,7 +59,9 @@
 	let refreshTimer: ReturnType<typeof setTimeout> | undefined;
 
 	onMount(() => {
-		const stops = [system, control, limits, boostCost].map((resource) => resource.start());
+		const stops = [system, control, limits, boostCost, sessions].map((resource) =>
+			resource.start()
+		);
 		const clock = setInterval(() => (nowMs = Date.now()), 30_000);
 		return () => {
 			stopped = true;
@@ -80,6 +98,11 @@
 			vehicles.map((vehicle) => vehicle.id)
 		)
 	);
+
+	function vehicleLine(id: string): string | null {
+		const session = latestSession(sessions.data ?? [], id);
+		return session === null ? null : sessionLine(session);
+	}
 
 	function wallboxLabel(key: string): string {
 		return wallboxName(key, limits.data?.wallboxes[key]);
@@ -155,6 +178,7 @@
 					boost={boostInfo(vehicle, intent, nowMs, current)}
 					soc={socs.find((entry) => entry.id === vehicle.id)}
 					boostCost={boostCost.data}
+					sessionLine={vehicleLine(vehicle.id)}
 					{operate}
 					{busy}
 					notice={notices[`vehicle:${vehicle.id}`] ?? null}

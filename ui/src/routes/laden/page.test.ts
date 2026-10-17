@@ -8,6 +8,7 @@ import {
 	ControlResponseSchema,
 	SystemResponseSchema,
 	type BoostCost,
+	type ChargingSession,
 	type ControlReply,
 	type CoreHealth,
 	type Intent,
@@ -15,7 +16,7 @@ import {
 	type VehicleHealth,
 	type WallboxHealth
 } from '$lib/api/schemas';
-import { limits, system } from '$lib/testing/fixtures';
+import { chargingSession, limits, system } from '$lib/testing/fixtures';
 import Page from './+page.svelte';
 
 const { api, user } = vi.hoisted(() => ({
@@ -24,6 +25,7 @@ const { api, user } = vi.hoisted(() => ({
 		control: vi.fn(),
 		limits: vi.fn(),
 		boostCost: vi.fn(),
+		chargingSessions: vi.fn(),
 		setRegulation: vi.fn(),
 		setMode: vi.fn(),
 		setBoost: vi.fn(),
@@ -87,12 +89,14 @@ function wallboxAt(
 async function show(
 	response = system(),
 	intent: Intent | null = baseIntent(),
-	boostCost: BoostCost = boostCostJson
+	boostCost: BoostCost = boostCostJson,
+	sessions: ChargingSession[] = []
 ) {
 	api.system.mockResolvedValue(response);
 	api.boostCost.mockResolvedValue(boostCost);
 	api.control.mockResolvedValue({ core_connected: true, intent });
 	api.limits.mockResolvedValue(limits());
+	api.chargingSessions.mockResolvedValue(sessions);
 	render(Page);
 	await screen.findByRole('heading', { level: 2, name: 'Tesla Model 3' });
 }
@@ -542,4 +546,53 @@ it('folgt der Absicht, solange Health älter ist: Boost zeigt „Boost beenden�
 	await fireEvent.click(tesla.getByRole('button', { name: 'Boost' }));
 	expect(await tesla.findByRole('button', { name: 'Boost beenden' })).toBeInTheDocument();
 	expect(tesla.getByText(/^bis \d\d:\d\d$/)).toBeInTheDocument();
+});
+
+it('zeigt die laufende Session in der Karte des Fahrzeugs', async () => {
+	const running = chargingSession({
+		vehicle: 'tesla',
+		open: true,
+		end: null,
+		start: '2026-10-09T06:45:00+00:00',
+		kwh: 1.38,
+		pv_kwh: 0,
+		battery_kwh: 0,
+		grid_kwh: 1.38
+	});
+	const other = chargingSession({ vehicle: 'egolf', open: false });
+	await show(system(), baseIntent(), boostCostJson, [other, running]);
+	await within(card('Tesla Model 3')).findByText(/^Session seit 08:45 · 1,4 kWh/);
+	expect(within(card('e-Golf')).getByText(/^Letzte Session /)).toBeVisible();
+});
+
+it('lädt die Sessions der letzten 30 Tage', async () => {
+	vi.useFakeTimers({ toFake: ['Date'] });
+	vi.setSystemTime(new Date('2026-10-17T10:00:00Z'));
+	await show();
+	await waitFor(() => expect(api.chargingSessions).toHaveBeenCalled());
+	expect(api.chargingSessions).toHaveBeenCalledWith(
+		'2026-09-17',
+		'2026-10-17',
+		undefined,
+		expect.anything()
+	);
+});
+
+it('zeigt ohne Session keine Zeile', async () => {
+	await show();
+	await waitFor(() => expect(api.chargingSessions).toHaveBeenCalled());
+	expect(screen.queryByText(/Session/)).not.toBeInTheDocument();
+});
+
+it('lässt die Karten heil, wenn die Abfrage der Sessions fehlschlägt', async () => {
+	api.chargingSessions.mockRejectedValue(new ApiError(500, 'kaputt'));
+	api.system.mockResolvedValue(system());
+	api.boostCost.mockResolvedValue(boostCostJson);
+	api.control.mockResolvedValue({ core_connected: true, intent: baseIntent() });
+	api.limits.mockResolvedValue(limits());
+	render(Page);
+	await screen.findByRole('heading', { level: 2, name: 'Tesla Model 3' });
+	await waitFor(() => expect(api.chargingSessions).toHaveBeenCalled());
+	expect(screen.queryByText(/Session/)).not.toBeInTheDocument();
+	expect(screen.queryByText('kaputt')).not.toBeInTheDocument();
 });

@@ -24,6 +24,8 @@
 		soc?: SocEntry;
 		/** Mehrkosten des Boosts; der Satz erscheint nur ab „Bedienen“ und mit `applies` */
 		boostCost?: BoostCost | null;
+		/** laufende oder letzte Ladesession in einer Zeile; ohne Session keine Zeile */
+		sessionLine?: string | null;
 		/** ab „Bedienen“ */
 		operate: boolean;
 		busy: boolean;
@@ -39,6 +41,7 @@
 		boost,
 		soc,
 		boostCost = null,
+		sessionLine = null,
 		operate,
 		busy,
 		notice,
@@ -96,6 +99,9 @@
 			<dd>{vehicle.commands_hour}</dd>
 		{/if}
 	</dl>
+	{#if sessionLine !== null}
+		<p class="session">{sessionLine}</p>
+	{/if}
 
 	{#if operate}
 		<div class="controls">
@@ -139,6 +145,11 @@
 
 	select {
 		max-width: 100%;
+	}
+
+	.session {
+		margin: 0.75rem 0 0;
+		overflow-wrap: anywhere;
 	}
 
 	.cost {
