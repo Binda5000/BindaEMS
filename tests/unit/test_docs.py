@@ -674,3 +674,24 @@ def test_stats_endpoint_in_the_guide() -> None:
         "`null`, wenn `net_eur` unbekannt ist",
     ):
         assert text in section, text
+
+
+def test_grafana_section_in_the_guide_matches_the_dashboard() -> None:
+    # „Grafana“ (Unterabschnitt von „InfluxDB einrichten“): Datei, Import, Datenquelle und die
+    # Zeilen des Dashboards stehen wie in `deploy/grafana/bindaems.json`.
+    section = " ".join(_guide_section("3. InfluxDB einrichten").split())
+    _, found, text = section.partition("### Grafana ")
+    assert found, "Der Unterabschnitt „Grafana“ fehlt in „InfluxDB einrichten“."
+    dashboard = json.loads(Path("deploy/grafana/bindaems.json").read_text(encoding="utf-8"))
+    assert "`deploy/grafana/bindaems.json`" in text
+    assert "Dashboards → New → Import" in text
+    assert "InfluxQL" in text and "`bindaems`" in text
+    (item,) = dashboard["__inputs"]
+    assert f"`{item['name']}`" in text
+    rows = [panel["title"] for panel in dashboard["panels"] if panel["type"] == "row"]
+    assert rows
+    for row in rows:
+        assert f"„{row}“" in text, row
+    for topic in ("`raw`", "`long`", "90 Tage", "Entscheidungen", "Europe/Vienna"):
+        assert topic in text, topic
+    assert "keine Zugangsdaten" in text

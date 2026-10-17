@@ -1,0 +1,484 @@
+{
+  "__inputs": [
+    {
+      "name": "DS_BINDAEMS",
+      "label": "BindaEMS (InfluxDB)",
+      "description": "InfluxDB-1.x-Datenquelle (Abfragesprache InfluxQL) mit der Datenbank bindaems",
+      "type": "datasource",
+      "pluginId": "influxdb",
+      "pluginName": "InfluxDB"
+    }
+  ],
+  "__elements": {},
+  "__requires": [
+    {
+      "type": "grafana",
+      "id": "grafana",
+      "name": "Grafana",
+      "version": "10.0.0"
+    },
+    {
+      "type": "datasource",
+      "id": "influxdb",
+      "name": "InfluxDB",
+      "version": "1.0.0"
+    },
+    {
+      "type": "panel",
+      "id": "timeseries",
+      "name": "Time series",
+      "version": ""
+    }
+  ],
+  "id": null,
+  "uid": "bindaems",
+  "title": "BindaEMS",
+  "description": "Startdashboard für die InfluxDB bindaems: Leistungen, Ladestand, Preise, Abrechnung je Tag und die Entscheidungen des Reglers als Markierungen.",
+  "tags": [
+    "bindaems"
+  ],
+  "timezone": "Europe/Vienna",
+  "editable": true,
+  "graphTooltip": 1,
+  "schemaVersion": 41,
+  "version": 1,
+  "refresh": "1m",
+  "time": {
+    "from": "now-24h",
+    "to": "now"
+  },
+  "timepicker": {},
+  "templating": {
+    "list": []
+  },
+  "links": [],
+  "annotations": {
+    "list": [
+      {
+        "name": "Entscheidungen",
+        "datasource": {
+          "type": "influxdb",
+          "uid": "${DS_BINDAEMS}"
+        },
+        "enable": true,
+        "hide": false,
+        "iconColor": "orange",
+        "query": "SELECT \"text\", \"actuator\", \"result\" FROM \"raw\".\"decision\" WHERE $timeFilter",
+        "rawQuery": true,
+        "textColumn": "text",
+        "tagsColumn": "actuator,result",
+        "titleColumn": ""
+      }
+    ]
+  },
+  "panels": [
+    {
+      "type": "row",
+      "id": 1,
+      "title": "Leistung",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
+      "panels": []
+    },
+    {
+      "type": "timeseries",
+      "id": 2,
+      "title": "Leistungen",
+      "description": "Mittlere Leistung aus den Rohdaten (Retention Policy raw, 90 Tage): Netz, PV, Akku, Lasten und Wallboxen, jeweils die Summe aller Phasen. Die Vorzeichen sind die der Messung.",
+      "datasource": {
+        "type": "influxdb",
+        "uid": "${DS_BINDAEMS}"
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 24,
+        "x": 0,
+        "y": 1
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "watt",
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": false,
+            "barAlignment": 0,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "influxdb",
+            "uid": "${DS_BINDAEMS}"
+          },
+          "refId": "A",
+          "query": "SELECT mean(\"p_w\") FROM \"raw\".\"power\" WHERE \"source\" = 'grid' AND \"phase\" = 'total' AND $timeFilter GROUP BY time($__interval) fill(null)",
+          "rawQuery": true,
+          "resultFormat": "time_series",
+          "alias": "Netz"
+        },
+        {
+          "datasource": {
+            "type": "influxdb",
+            "uid": "${DS_BINDAEMS}"
+          },
+          "refId": "B",
+          "query": "SELECT mean(\"p_w\") FROM \"raw\".\"power\" WHERE \"source\" = 'pv' AND \"phase\" = 'total' AND $timeFilter GROUP BY time($__interval), \"id\" fill(null)",
+          "rawQuery": true,
+          "resultFormat": "time_series",
+          "alias": "PV $tag_id"
+        },
+        {
+          "datasource": {
+            "type": "influxdb",
+            "uid": "${DS_BINDAEMS}"
+          },
+          "refId": "C",
+          "query": "SELECT mean(\"p_w\") FROM \"raw\".\"power\" WHERE \"source\" = 'battery' AND \"phase\" = 'total' AND $timeFilter GROUP BY time($__interval) fill(null)",
+          "rawQuery": true,
+          "resultFormat": "time_series",
+          "alias": "Akku"
+        },
+        {
+          "datasource": {
+            "type": "influxdb",
+            "uid": "${DS_BINDAEMS}"
+          },
+          "refId": "D",
+          "query": "SELECT mean(\"p_w\") FROM \"raw\".\"power\" WHERE \"source\" = 'load' AND \"phase\" = 'total' AND $timeFilter GROUP BY time($__interval), \"id\" fill(null)",
+          "rawQuery": true,
+          "resultFormat": "time_series",
+          "alias": "Last $tag_id"
+        },
+        {
+          "datasource": {
+            "type": "influxdb",
+            "uid": "${DS_BINDAEMS}"
+          },
+          "refId": "E",
+          "query": "SELECT mean(\"p_w\") FROM \"raw\".\"power\" WHERE \"source\" = 'wallbox' AND \"phase\" = 'total' AND $timeFilter GROUP BY time($__interval), \"id\" fill(null)",
+          "rawQuery": true,
+          "resultFormat": "time_series",
+          "alias": "Wallbox $tag_id"
+        }
+      ]
+    },
+    {
+      "type": "row",
+      "id": 3,
+      "title": "Ladestand",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 10
+      },
+      "panels": []
+    },
+    {
+      "type": "timeseries",
+      "id": 4,
+      "title": "Ladestand (SOC)",
+      "description": "Ladestand des Akkus und der Fahrzeuge aus den Rohdaten (Retention Policy raw, 90 Tage).",
+      "datasource": {
+        "type": "influxdb",
+        "uid": "${DS_BINDAEMS}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 11
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": false,
+            "barAlignment": 0,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          },
+          "min": 0,
+          "max": 100
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "influxdb",
+            "uid": "${DS_BINDAEMS}"
+          },
+          "refId": "A",
+          "query": "SELECT mean(\"pct\") FROM \"raw\".\"soc\" WHERE $timeFilter GROUP BY time($__interval), \"id\" fill(null)",
+          "rawQuery": true,
+          "resultFormat": "time_series",
+          "alias": "SOC $tag_id"
+        }
+      ]
+    },
+    {
+      "type": "row",
+      "id": 5,
+      "title": "Preise",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 19
+      },
+      "panels": []
+    },
+    {
+      "type": "timeseries",
+      "id": 6,
+      "title": "Bezugs- und Einspeisepreis",
+      "description": "Bezugspreis brutto (import_gross) und Einspeisevergütung (feed_in) je Viertelstunde in ct/kWh (Retention Policy long). Die Preise des nächsten Tages liegen vor, sobald sie geholt sind; dafür den Zeitraum oben bis morgen wählen.",
+      "datasource": {
+        "type": "influxdb",
+        "uid": "${DS_BINDAEMS}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 20
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "suffix: ct/kWh",
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "stepAfter",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": true,
+            "barAlignment": 0,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "influxdb",
+            "uid": "${DS_BINDAEMS}"
+          },
+          "refId": "A",
+          "query": "SELECT mean(\"ct_kwh\") FROM \"long\".\"price\" WHERE \"kind\" = 'import_gross' AND $timeFilter GROUP BY time($__interval) fill(none)",
+          "rawQuery": true,
+          "resultFormat": "time_series",
+          "alias": "Bezug"
+        },
+        {
+          "datasource": {
+            "type": "influxdb",
+            "uid": "${DS_BINDAEMS}"
+          },
+          "refId": "B",
+          "query": "SELECT mean(\"ct_kwh\") FROM \"long\".\"price\" WHERE \"kind\" = 'feed_in' AND $timeFilter GROUP BY time($__interval) fill(none)",
+          "rawQuery": true,
+          "resultFormat": "time_series",
+          "alias": "Einspeisung"
+        }
+      ]
+    },
+    {
+      "type": "row",
+      "id": 7,
+      "title": "Abrechnung je Tag",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 28
+      },
+      "panels": []
+    },
+    {
+      "type": "timeseries",
+      "id": 8,
+      "title": "Energie je Tag und Fluss",
+      "description": "Summe der Viertelstunden-Abrechnung je Fluss und Tag in kWh (Retention Policy long); die Tage laufen in Wiener Zeit von 00:00 bis 24:00 Uhr. Gezeigt werden immer die letzten 14 Tage.",
+      "datasource": {
+        "type": "influxdb",
+        "uid": "${DS_BINDAEMS}"
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 24,
+        "x": 0,
+        "y": 29
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "kwatth",
+          "custom": {
+            "drawStyle": "bars",
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "fillOpacity": 80,
+            "showPoints": "never",
+            "spanNulls": false,
+            "barAlignment": 1,
+            "stacking": {
+              "mode": "normal",
+              "group": "A"
+            }
+          },
+          "decimals": 1
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "influxdb",
+            "uid": "${DS_BINDAEMS}"
+          },
+          "refId": "A",
+          "query": "SELECT sum(\"kwh\") FROM \"long\".\"ledger\" WHERE $timeFilter GROUP BY time(1d), \"flow\" fill(none) tz('Europe/Vienna')",
+          "rawQuery": true,
+          "resultFormat": "time_series",
+          "alias": "$tag_flow"
+        }
+      ],
+      "timeFrom": "14d"
+    },
+    {
+      "type": "timeseries",
+      "id": 9,
+      "title": "Kosten und Erlös je Tag",
+      "description": "Summe der Kosten (Bezug, positiv) und des Erlöses (Einspeisung, negativ) je Fluss und Tag in Euro (Retention Policy long); die Tage laufen in Wiener Zeit. Gezeigt werden immer die letzten 14 Tage.",
+      "datasource": {
+        "type": "influxdb",
+        "uid": "${DS_BINDAEMS}"
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 24,
+        "x": 0,
+        "y": 38
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyEUR",
+          "custom": {
+            "drawStyle": "bars",
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "fillOpacity": 80,
+            "showPoints": "never",
+            "spanNulls": false,
+            "barAlignment": 1,
+            "stacking": {
+              "mode": "normal",
+              "group": "A"
+            }
+          },
+          "decimals": 2
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "influxdb",
+            "uid": "${DS_BINDAEMS}"
+          },
+          "refId": "A",
+          "query": "SELECT sum(\"eur\") FROM \"long\".\"ledger\" WHERE $timeFilter GROUP BY time(1d), \"flow\" fill(none) tz('Europe/Vienna')",
+          "rawQuery": true,
+          "resultFormat": "time_series",
+          "alias": "$tag_flow"
+        }
+      ],
+      "timeFrom": "14d"
+    }
+  ]
+}

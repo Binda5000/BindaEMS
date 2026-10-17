@@ -135,6 +135,36 @@ WHERE time >= '2026-10-08T08:00:00Z' AND time < '2026-10-08T12:00:00Z'
 GROUP BY time(1m), *
 ```
 
+### Grafana
+
+`deploy/grafana/bindaems.json` ist ein Startdashboard für die Datenbank `bindaems`. Es enthält keine
+Zugangsdaten und keine Daten der Anlage; die Datenquelle wählst du beim Import.
+
+1. In Grafana eine Datenquelle vom Typ InfluxDB anlegen (Connections → Data sources): Abfragesprache
+   InfluxQL, die URL der InfluxDB, Datenbank `bindaems`. Für Grafana genügt ein Benutzer mit
+   Lesezugriff, z. B. `CREATE USER "grafana" WITH PASSWORD '…'` und
+   `GRANT READ ON "bindaems" TO "grafana"`.
+2. Dashboards → New → Import, die Datei hochladen und bei der Eingabe `DS_BINDAEMS` die Datenquelle
+   aus Schritt 1 wählen. Ein erneuter Import mit derselben Datei ersetzt das Dashboard.
+
+Das Dashboard zeigt vier Zeilen. Der Zeitraum oben gilt für alle Panels außer der letzten Zeile;
+die Zeitzone ist `Europe/Vienna`.
+
+- „Leistung“: die mittlere Leistung (Summe der Phasen) von Netz, PV, Akku, Lasten und Wallboxen
+  aus der Retention Policy `raw`.
+- „Ladestand“: der Ladestand des Akkus und der Fahrzeuge aus `raw`.
+- „Preise“: Bezugspreis brutto und Einspeisevergütung in ct/kWh je Viertelstunde aus `long`. Die
+  Preise von morgen erscheinen, sobald sie geholt sind und der Zeitraum bis morgen reicht.
+- „Abrechnung je Tag“: kWh sowie Kosten und Erlös in Euro je Fluss und Tag aus `long`, immer die
+  letzten 14 Tage. Die Tage laufen in Wiener Zeit (`tz('Europe/Vienna')`), auch an den Tagen der
+  Zeitumstellung.
+
+Die Entscheidungen des Reglers erscheinen als Markierungen („Entscheidungen“) in allen Panels: mit
+dem Text, der Wallbox oder dem Akku und dem Ergebnis. Sie stehen nur in `raw`, also 90 Tage lang.
+Leistung und Ladestand zeigen ebenfalls höchstens 90 Tage; ältere Daten liegen als
+Minutenmittel in `long` und lassen sich in Grafana mit der Retention Policy `long` anstelle von
+`raw` abfragen (Panel bearbeiten).
+
 ## 4. Bedienung
 
 | Aufgabe | Befehl (in `/opt/bindaems`) |
