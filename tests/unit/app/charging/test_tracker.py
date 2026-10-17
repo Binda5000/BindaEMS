@@ -1,12 +1,18 @@
 import asyncio
-from datetime import timedelta
+from datetime import datetime, timedelta
 
-from sqlalchemy import select
+from sqlalchemy import insert, select
 from structlog.testing import capture_logs
 from tests.unit.app.charging.conftest import T0
 
-from bindaems.app.charging.tracker import ChargingTracker, WallboxSeen, observe
-from bindaems.app.db.schema import assignment_log
+from bindaems.app.charging.tracker import (
+    ChargingTracker,
+    StoredSession,
+    WallboxSeen,
+    observe,
+    session_vehicle,
+)
+from bindaems.app.db.schema import assignment_log, charging_session
 
 
 def seen(occupant: str | None = None, kind: str | None = None, connected: bool | None = True):
@@ -108,3 +114,205 @@ async def test_run_survives_a_failing_observation(tracker, live, engine, monkeyp
         task.cancel()
     assert any(entry["log_level"] == "error" for entry in logs)
     assert log_rows(engine)
+
+
+# --- Sessions (Task 4) ---------------------------------------------------------------------
+
+
+def at(minutes: float) -> datetime:
+    return T0 + timedelta(minutes=minutes)
+
+
+def plugged(occupant: str | None = None, kind: str | None = None):
+    return seen(occupant, kind, True)
+
+
+def unplugged():
+    return seen(None, None, False)
+
+
+def unknown():
+    return seen(None, None, None)
+
+
+def hold(tracker: ChargingTracker, first: float, last: float, obs) -> None:
+    """Beobachtet alle 10 min von ``first`` bis ``last`` (ohne Pause über ``SESSION_GAP``)."""
+    minute = first
+    while minute <= last:
+        tracker.record(at(minute), obs)
+        minute += 10
+
+
+def all_sessions(tracker: ChargingTracker) -> list[StoredSession]:
+    return tracker.sessions(T0 - timedelta(days=1), T0 + timedelta(days=1))
+
+
+def test_plug_in_opens_and_unplug_closes_a_session(tracker) -> None:
+    assert all_sessions(tracker) == []
+    tracker.record(at(0), unplugged())
+    assert all_sessions(tracker) == []
+    tracker.record(at(1), plugged("tesla", "default"))
+    (session,) = all_sessions(tracker)
+    assert (session.wallbox, session.start, session.end) == ("evcs", at(1), None)
+    assert session.last_seen == at(1)
+    hold(tracker, 11, 51, plugged("tesla", "default"))
+    tracker.record(at(61), unplugged())
+    (session,) = all_sessions(tracker)
+    assert (session.start, session.end, session.last_seen) == (at(1), at(61), at(61))
+
+
+def test_unknown_plug_state_keeps_the_session_open(tracker) -> None:
+    tracker.record(at(0), plugged("tesla", "default"))
+    tracker.record(at(5), unknown())
+    tracker.record(at(10), unknown())
+    (session,) = all_sessions(tracker)
+    assert session.end is None
+    assert session.last_seen == at(0)  # unbekannt zählt nicht als gesehen
+    tracker.record(at(12), plugged("tesla", "default"))
+    assert len(all_sessions(tracker)) == 1
+
+
+def test_unknown_plug_state_without_session_opens_nothing(tracker) -> None:
+    tracker.record(at(0), unknown())
+    assert all_sessions(tracker) == []
+
+
+def test_session_survives_short_gap(tracker) -> None:
+    tracker.record(at(0), plugged("tesla", "default"))
+    tracker.record(at(25), plugged("tesla", "default"))
+    (session,) = all_sessions(tracker)
+    assert (session.start, session.end) == (at(0), None)
+    assert session.last_seen == at(25)
+
+
+def test_gap_of_exactly_thirty_minutes_still_continues(tracker) -> None:
+    tracker.record(at(0), plugged("tesla", "default"))
+    tracker.record(at(30), plugged("tesla", "default"))
+    assert len(all_sessions(tracker)) == 1
+
+
+def test_long_gap_splits_the_session(tracker) -> None:
+    tracker.record(at(0), plugged("tesla", "default"))
+    tracker.record(at(45), plugged("tesla", "default"))
+    newest, oldest = all_sessions(tracker)  # neueste zuerst
+    assert (oldest.start, oldest.end) == (at(0), at(0))
+    assert (newest.start, newest.end) == (at(45), None)
+
+
+def test_unplugged_during_gap_ends_at_last_seen(tracker) -> None:
+    tracker.record(at(0), plugged("tesla", "default"))
+    tracker.record(at(45), unplugged())
+    (session,) = all_sessions(tracker)
+    assert (session.start, session.end, session.last_seen) == (at(0), at(0), at(0))
+
+
+def test_long_unknown_state_ends_the_session_at_last_seen(tracker) -> None:
+    tracker.record(at(0), plugged("tesla", "default"))
+    tracker.record(at(45), unknown())
+    (session,) = all_sessions(tracker)
+    assert session.end == at(0)
+
+
+def test_open_session_is_resumed_after_restart(engine, clock, cfg, live) -> None:
+    first = ChargingTracker(engine, clock, cfg, live)
+    first.record(at(0), plugged("tesla", "default"))
+    (before,) = all_sessions(first)
+    second = ChargingTracker(engine, clock, cfg, live)  # Neustart, das Auto steckt noch
+    second.record(at(20), plugged("tesla", "default"))
+    (after,) = all_sessions(second)
+    assert after.id == before.id and after.end is None and after.last_seen == at(20)
+
+
+def test_open_session_ends_after_a_long_restart(engine, clock, cfg, live) -> None:
+    first = ChargingTracker(engine, clock, cfg, live)
+    first.record(at(0), plugged("tesla", "default"))
+    second = ChargingTracker(engine, clock, cfg, live)
+    second.record(at(120), plugged("tesla", "default"))
+    newest, oldest = all_sessions(second)
+    assert oldest.end == at(0) and newest.start == at(120) and newest.end is None
+
+
+def test_open_session_of_a_removed_wallbox_ends_after_the_gap(tracker) -> None:
+    tracker.record(at(0), plugged("tesla", "default"))
+    tracker.record(at(45), [WallboxSeen("twc", None, None, None)])
+    (session,) = all_sessions(tracker)
+    assert session.wallbox == "evcs" and session.end == at(0)
+
+
+def test_two_open_sessions_of_one_wallbox_are_cleaned_up_at_start(engine, clock, cfg, live) -> None:
+    with engine.begin() as conn:
+        for start in (0, 10):
+            conn.execute(
+                insert(charging_session).values(
+                    wallbox="evcs", vehicle="", start=at(start), end=None, last_seen=at(start + 5)
+                )
+            )
+    tracker = ChargingTracker(engine, clock, cfg, live)
+    tracker.record(at(20), plugged())
+    newest, oldest = all_sessions(tracker)
+    assert (oldest.end, newest.end) == (at(5), None)
+
+
+def test_vehicle_is_the_longest_occupant(tracker) -> None:
+    tracker.record(at(0), plugged(None, "unclear"))
+    hold(tracker, 5, 115, plugged("tesla", "detected"))
+    tracker.record(at(125), unplugged())
+    (session,) = all_sessions(tracker)
+    assert session.vehicle == "tesla"
+
+
+def test_vehicle_is_guest_or_unknown(tracker) -> None:
+    tracker.record(at(0), plugged("guest", "default"))
+    tracker.record(at(30), unplugged())
+    tracker.record(at(40), plugged(None, "unclear"))
+    tracker.record(at(50), unplugged())
+    unknown_car, guest = all_sessions(tracker)
+    assert guest.vehicle == "guest" and unknown_car.vehicle is None
+
+
+def test_running_session_shows_the_current_occupant(tracker) -> None:
+    tracker.record(at(0), plugged(None, "unclear"))
+    tracker.record(at(5), plugged("tesla", "detected"))
+    (session,) = all_sessions(tracker)
+    assert session.vehicle == "tesla"  # vorläufig: noch hat nur „unklar“ Zeit gehabt
+
+
+def test_vehicle_is_redetermined_once_a_minute(tracker) -> None:
+    tracker.record(at(0), plugged("polestar", "default"))
+    tracker.record(at(5), plugged("tesla", "detected"))
+    assert all_sessions(tracker)[0].vehicle == "polestar"
+    tracker.record(at(11), plugged("tesla", "detected"))
+    assert all_sessions(tracker)[0].vehicle == "tesla"
+
+
+def test_last_seen_is_written_at_most_every_minute(tracker) -> None:
+    tracker.record(at(0), plugged("tesla", "default"))
+    for seconds in (10, 20, 50):
+        tracker.record(T0 + timedelta(seconds=seconds), plugged("tesla", "default"))
+    assert all_sessions(tracker)[0].last_seen == T0
+    tracker.record(T0 + timedelta(seconds=60), plugged("tesla", "default"))
+    assert all_sessions(tracker)[0].last_seen == T0 + timedelta(seconds=60)
+    tracker.record(T0 + timedelta(seconds=80), plugged("tesla", "default"))
+    assert all_sessions(tracker)[0].last_seen == T0 + timedelta(seconds=60)
+
+
+def test_sessions_cover_the_period_and_filter_by_vehicle(tracker) -> None:
+    tracker.record(at(0), plugged("tesla", "default"))
+    hold(tracker, 10, 50, plugged("tesla", "default"))
+    tracker.record(at(60), unplugged())
+    tracker.record(at(120), plugged("polestar", "default"))  # läuft
+    assert [s.start for s in tracker.sessions(at(-10), at(10))] == [at(0)]
+    assert [s.start for s in tracker.sessions(at(60), at(120))] == []  # [start, end) ohne Rand
+    assert [s.start for s in tracker.sessions(at(30), at(500))] == [at(120), at(0)]
+    assert [s.vehicle for s in tracker.sessions(at(0), at(500), "polestar")] == ["polestar"]
+    assert tracker.sessions(at(0), at(500), "guest") == []
+
+
+def test_session_vehicle_picks_the_longest_and_the_later_on_a_tie() -> None:
+    log = [(at(0), "a"), (at(10), "b"), (at(20), None)]
+    assert session_vehicle(log, at(0), at(30)) == "b"  # 10 min gegen 10 min: das spätere
+    assert session_vehicle(log, at(0), at(15)) == "a"
+    assert session_vehicle(log, at(12), at(30)) == "b"  # Eintrag vor dem Beginn gilt ab Beginn
+    assert session_vehicle([(at(0), None)], at(0), at(30)) is None
+    assert session_vehicle([], at(0), at(30)) is None
+    assert session_vehicle([(at(0), "a")], at(10), at(10)) is None
