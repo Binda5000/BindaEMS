@@ -81,7 +81,7 @@ def test_expensive_today_is_the_top_fifth_of_today_and_not_a_flat_day() -> None:
 
 
 def test_grid_charge_needs_a_spread_over_wear_and_margin() -> None:
-    # 40 · 0,88 − 35 − 2 = −1,8 ct: das Netzladen rechnet sich nicht.
+    # 0,88 · (40 − 2) − 35 = −1,56 ct < 2 ct Marge: das Netzladen rechnet sich nicht.
     inputs = scenario(
         prices=[35.0] * 8 + [40.0] * 4,
         pv=[0.0] * 12,
@@ -119,3 +119,19 @@ def test_no_grid_charge_without_headroom_below_the_setpoint_limit() -> None:
         grid_charge=True,
     )
     assert all(i.kind != BatteryIntentKind.NETZLADEN for i in fallback_intents(inputs))
+
+
+def test_grid_charge_spread_charges_wear_on_the_delivered_energy() -> None:
+    # Gleiche Spread-Regel wie die Plausibilität: 0,88 · (40 − 2) − 31,3 = 2,14 ≥ 2 ct Marge
+    # (mit w statt η_rt · w wären es 1,90 ct, und es gäbe kein Netzladen).
+    inputs = scenario(
+        prices=[31.3] * 8 + [40.0] * 4,
+        pv=[0.0] * 12,
+        load=[2000.0] * 12,
+        battery=small_battery(),
+        soc_pct=20.0,
+        grid_charge=True,
+    )
+    assert fallback_intents(inputs)[0] == BatteryIntent(
+        kind=BatteryIntentKind.NETZLADEN, grid_charge_w=5000
+    )

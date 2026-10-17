@@ -16,7 +16,7 @@ from typing import Final
 from bindaems.app.planning.battery_model import SimStep, params_of, sim_slots, simulate
 from bindaems.app.planning.inputs import PlanInputs
 from bindaems.app.planning.optimizer import grid_charge_cap_w
-from bindaems.app.planning.plausibility import R1_TOL_KWH, export_after_kwh
+from bindaems.app.planning.plausibility import R1_TOL_KWH, export_after_kwh, spread_pays
 from bindaems.shared.plan import BatteryIntent, BatteryIntentKind
 from bindaems.shared.timeutil import LOCAL_TZ, ensure_utc
 
@@ -98,7 +98,6 @@ def fallback_intents(inputs: PlanInputs) -> list[BatteryIntent]:
         return intents
 
     # Netzladen: noch immer knappe teure Slots, billige Slots davor laden aus dem Netz.
-    roundtrip = planning.roundtrip_pct / 100
     for _ in range(count):
         short = _first_short(steps, expensive)
         if short is None:
@@ -111,10 +110,7 @@ def fallback_intents(inputs: PlanInputs) -> list[BatteryIntent]:
             ),
             key=lambda i: (prices[i], i),
         ):
-            if (
-                prices[short] * roundtrip - prices[candidate] - planning.wear_ct
-                < planning.margin_ct
-            ):
+            if not spread_pays(planning, prices[candidate], prices[short]):
                 continue
             power_w = ROUND_W * floor(grid_charge_cap_w(inputs, candidate) / ROUND_W)
             if power_w <= 0:

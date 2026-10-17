@@ -10,10 +10,11 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import Final, Literal
 
-from bindaems.app.planning.battery_model import SLOT_H, SimStep, eta, params_of, sim_slots
+from bindaems.app.planning.battery_model import SLOT_H, SimStep, params_of, sim_slots
 from bindaems.app.planning.inputs import PlanInputs
 from bindaems.app.planning.optimizer import OptimizerResult
 from bindaems.shared.plan import BatteryIntent, BatteryIntentKind
+from bindaems.shared.settings import PlanningSettings
 from bindaems.shared.timeutil import LOCAL_TZ, ensure_utc
 
 BALANCE_TOL_W: Final = 1.0  # Bilanz und Leistungsgrenzen
@@ -29,6 +30,17 @@ def export_after_kwh(steps: Sequence[SimStep], index: int) -> float:
     return sum(item.export_w for item in steps[index:]) * SLOT_H / 1000
 
 
+def spread_pays(planning: PlanningSettings, now_ct: float, later_ct: float) -> bool:
+    """Spread-Regel: Netzladen zu ``now_ct`` rechnet sich für eine Entladung zu ``later_ct``.
+
+    Je kWh aus dem Netz liefert der Akku ``η_rt`` kWh zurück; der Verschleiß fällt wie im
+    Optimierer auf diese Entladung: ``η_rt · (π_später − w) − π_t ≥ m``. Plausibilität und
+    Ersatzplan rechnen beide hiermit.
+    """
+    roundtrip = planning.roundtrip_pct / 100
+    return roundtrip * (later_ct - planning.wear_ct) - now_ct >= planning.margin_ct
+
+
 def pays_off(
     inputs: PlanInputs,
     steps: Sequence[SimStep],
@@ -39,12 +51,9 @@ def pays_off(
     """Späterer Slot und sein Bezugspreis, mit dem die Spread-Regel für ``index`` gilt.
 
     Gesucht ist ein späterer Slot mit Entladung (``by="discharge"``) bzw. Netzbezug
-    (``by="import"``) ab ``USEFUL_W``, dessen Preis nach Wirkungsgrad, Verschleiß und Marge über
-    dem des Slots ``index`` liegt: ``π_später · η_rt − π_t − w ≥ m``. Der teuerste solche Slot
+    (``by="import"``) ab ``USEFUL_W``, für den ``spread_pays`` gilt. Der teuerste solche Slot
     zählt, bei Gleichstand der frühere; ``None``, wenn es keinen gibt.
     """
-    planning = inputs.planning
-    roundtrip = eta(planning.roundtrip_pct) ** 2
     now_ct = inputs.slots[index].import_ct
     best: tuple[int, float] | None = None
     for later in range(index + 1, len(steps)):
@@ -53,11 +62,27 @@ def pays_off(
         later_ct = inputs.slots[later].import_ct
         if used_w < USEFUL_W:
             continue
-        if later_ct * roundtrip - now_ct - planning.wear_ct < planning.margin_ct:
+        if not spread_pays(inputs.planning, now_ct, later_ct):
             continue
         if best is None or later_ct > best[1]:
             best = (later, later_ct)
     return best
+
+
+def pays_off_at_end(inputs: PlanInputs, steps: Sequence[SimStep], index: int) -> bool:
+    """Netzladen im Slot ``index`` rechnet sich mit dem Restwert am Horizontende.
+
+    Der Optimierer bewertet die Energie im Akku am Ende mit ``end_value_ct``; Netzladen für die
+    Zeit danach ist also eine spätere Nutzung, wenn die Ladung bis zum Ende im Akku bleibt (End-SOC
+    der Nachrechnung mindestens um die geladene Energie über der Reserve) und
+    ``η_ch · v_end − π_t ≥ m`` gilt. Der Verschleiß steckt schon im Restwert.
+    """
+    params = params_of(inputs)
+    charged_kwh = params.eta_ch * steps[index].charge_grid_w * SLOT_H / 1000
+    if steps[-1].soc_end_kwh - params.lo_kwh < charged_kwh - SOC_TOL_KWH:
+        return False
+    now_ct = inputs.slots[index].import_ct
+    return params.eta_ch * inputs.end_value_ct - now_ct >= inputs.planning.margin_ct
 
 
 def _local_time(inputs: PlanInputs, index: int) -> str:
@@ -130,7 +155,11 @@ def check_plan(
                 f"Regel R verletzt: Netzladen um {at}, danach {exported} kWh Einspeisung",
             )
         # Mit Leistungspreis darf Netzladen auch einer Spitze ausweichen.
-        if not inputs.peak_months and pays_off(inputs, steps, index) is None:
+        if (
+            not inputs.peak_months
+            and pays_off(inputs, steps, index) is None
+            and not pays_off_at_end(inputs, steps, index)
+        ):
             report("spread", index, f"Netzladen um {at} rechnet sich nicht")
 
     return [text for _, text in sorted(found.values(), key=lambda entry: entry[0])]

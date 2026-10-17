@@ -13,9 +13,16 @@ from tests.plan_helpers import (
     small_battery,
 )
 
+from bindaems.app.planning.inputs import PlanInputs
 from bindaems.app.planning.intents import derive_intents
 from bindaems.app.planning.optimizer import SlotFlows, solve
-from bindaems.app.planning.plausibility import check_plan, export_after_kwh, pays_off
+from bindaems.app.planning.plausibility import (
+    check_plan,
+    export_after_kwh,
+    pays_off,
+    spread_pays,
+)
+from bindaems.app.planning.service import plan_once
 from bindaems.shared.plan import BatteryIntent, BatteryIntentKind
 
 
@@ -161,3 +168,85 @@ def test_pays_off_by_import_looks_at_grid_draw() -> None:
     )  # leerer Akku: Bezug, keine Entladung
     assert pays_off(inputs, steps, 0) is None
     assert pays_off(inputs, steps, 0, by="import") == (1, 40.0)
+
+
+# --- Restwert am Horizontende und Verschleiß (Final-Welle A1) -------------------------------
+
+
+def _end_value_inputs() -> PlanInputs:
+    """56 Slots ab 18:00 lokal: Abend und Nacht 32 ct, die letzten 2 h 15 ct, Restwert 22 ct,
+    Netzladen an, kein PV. Der Akku entlädt am Abend und lädt am Ende für die Zeit danach."""
+    return scenario(
+        prices=[32.0] * 48 + [15.0] * 8,
+        pv=[0.0] * 56,
+        load=[1000.0] * 56,
+        soc_pct=50.0,
+        grid_charge=True,
+        start="2026-10-16T16:00:00+00:00",
+        end_value_ct=22.0,
+    )
+
+
+def test_grid_charge_for_the_end_value_is_plausible() -> None:
+    inputs = _end_value_inputs()
+    result = solve(inputs)
+    intents = derive_intents(inputs, result)
+    assert any(i.kind is BatteryIntentKind.NETZLADEN for i in intents[48:])
+    assert check_plan(inputs, result, intents, resimulate(inputs, intents)) == []
+    assert plan_once(inputs, result).source == "optimizer"
+
+
+def test_end_value_needs_the_charged_energy_to_stay_until_the_end() -> None:
+    # Slot 0 lädt 2 kW aus dem Netz (15 ct), danach entleeren 8 kW Last den Akku bis zur
+    # Reserve: Am Ende ist nichts von der Ladung übrig, der Restwert zählt nicht.
+    inputs = scenario(
+        prices=[15.0, 15.0, 15.0, 15.0],
+        pv=[0.0] * 4,
+        load=[0.0, 8000.0, 8000.0, 8000.0],
+        battery=small_battery(),
+        soc_pct=30.0,
+        grid_charge=True,
+        end_value_ct=22.0,
+    )
+    intents = [BatteryIntent(kind=BatteryIntentKind.NETZLADEN, grid_charge_w=2000)] + [
+        BatteryIntent()
+    ] * 3
+    steps = resimulate(inputs, intents)
+    assert steps[-1].soc_end_kwh < 2.0 + 0.01  # Reserve 2 kWh
+    assert "Netzladen um 02:00 rechnet sich nicht" in check_plan(
+        inputs, flows_of(steps, inputs), intents, steps
+    )
+
+
+def test_end_value_must_beat_price_and_margin() -> None:
+    # η_ch · v_end − π_t ≥ m: 0,938 · 19 − 15 = 2,82 ≥ 2, aber 0,938 · 18 − 15 = 1,89 < 2.
+    def issues(end_value_ct: float) -> list[str]:
+        inputs = scenario(
+            prices=[15.0] * 4,
+            pv=[0.0] * 4,
+            load=[500.0] * 4,
+            battery=small_battery(),
+            soc_pct=30.0,
+            grid_charge=True,
+            end_value_ct=end_value_ct,
+        )
+        intents = [BatteryIntent(kind=BatteryIntentKind.NETZLADEN, grid_charge_w=2000)] + [
+            BatteryIntent(kind=BatteryIntentKind.HALTEN)
+        ] * 3
+        steps = resimulate(inputs, intents)
+        return check_plan(inputs, flows_of(steps, inputs), intents, steps)
+
+    assert "Netzladen um 02:00 rechnet sich nicht" not in issues(19.0)
+    assert "Netzladen um 02:00 rechnet sich nicht" in issues(18.0)
+
+
+def test_spread_rule_charges_wear_on_the_delivered_energy() -> None:
+    # Verschleiß wie im Optimierer auf die Entladung: η_rt · (π_später − w) − π_t ≥ m.
+    # 0,88 · (40 − 2) − 31,3 = 2,14 ≥ 2; mit w statt η_rt · w wären es 1,90 < 2.
+    inputs = scenario(
+        prices=[31.3, 40.0], pv=[0.0, 0.0], load=[1000.0, 1000.0], soc_pct=50.0, grid_charge=True
+    )
+    steps = resimulate(inputs, [BatteryIntent(), BatteryIntent()])
+    assert pays_off(inputs, steps, 0) == (1, 40.0)
+    assert spread_pays(inputs.planning, 31.3, 40.0)
+    assert not spread_pays(inputs.planning, 31.5, 40.0)  # 1,94 < 2
