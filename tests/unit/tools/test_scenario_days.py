@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import logging
 from datetime import date
 from pathlib import Path
 
 import pytest
+import structlog
 
 from bindaems.tools import scenario_days
 from bindaems.tools.scenario.report import passed, render_report
@@ -178,3 +180,13 @@ def test_report_thirty_days_have_no_hint() -> None:
     text = render_report(result_of(days=[day] * 30), data)
     assert "Weniger als 30 Tage" not in text
     assert "Weniger als 30 Tage" in render_report(result_of(days=[day] * 29), data)
+
+
+def test_main_leaves_the_logging_configuration_alone(tmp_path: Path) -> None:
+    # Nur der Aufruf als Programm stellt die Logs ein; ``main`` aus einem Test darf structlog
+    # und die Handler der Wurzel nicht umbiegen (sonst schreiben spätere Tests ins Leere).
+    handlers = list(logging.getLogger().handlers)
+    configured = structlog.is_configured()
+    assert main(["--synthetisch", "winter-spread", "--anzahl", "0", "--out", str(tmp_path)]) == 2
+    assert logging.getLogger().handlers == handlers
+    assert structlog.is_configured() is configured

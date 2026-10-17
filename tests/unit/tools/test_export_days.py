@@ -4,12 +4,14 @@
 from __future__ import annotations
 
 import json
+import logging
 from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
 import pytest
+import structlog
 import yaml
 from sqlalchemy import Engine
 from tests.app_helpers import ingest, price_row
@@ -323,3 +325,14 @@ def test_main_fails_when_output_directory_is_missing(
         ]
     )
     assert code == 2 and "nicht geschrieben" in capsys.readouterr().err
+
+
+def test_main_leaves_the_logging_configuration_alone(config_file: Path, tmp_path: Path) -> None:
+    # Nur der Aufruf als Programm stellt die Logs ein (siehe ``scenario_days``).
+    handlers = list(logging.getLogger().handlers)
+    configured = structlog.is_configured()
+    out = str(tmp_path / "tage.json")
+    args = ["--config", str(config_file), "--von", "2026-10-15", "--bis", "2026-10-14"]
+    assert main([*args, "--out", out]) == 2
+    assert logging.getLogger().handlers == handlers
+    assert structlog.is_configured() is configured

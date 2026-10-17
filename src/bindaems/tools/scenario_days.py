@@ -79,7 +79,6 @@ def main(argv: list[str] | None = None) -> int:
         args = _parser().parse_args(argv)
     except SystemExit as exc:  # argparse beendet sich bei Fehlern mit 2 (und bei --help mit 0)
         return exc.code if isinstance(exc.code, int) else 2
-    configure_logging("WARNING")
     if args.anzahl < 1:
         print("--anzahl muss mindestens 1 sein", file=sys.stderr)
         return 2
@@ -102,4 +101,5 @@ def main(argv: list[str] | None = None) -> int:
 
 
 if __name__ == "__main__":
+    configure_logging("WARNING")  # nur als Programm: ``main`` lässt die Logs der Tests in Ruhe
     sys.exit(main())
