@@ -768,6 +768,139 @@ export const DaySummarySchema = v.object({
 });
 export type DaySummary = v.InferOutput<typeof DaySummarySchema>;
 
+// --- Statistik, Ladesessions, Abgleich (Plan 4a) -------------------------------------------
+
+export const StatsPeriodSchema = v.picklist(['day', 'week', 'month', 'year']);
+export type StatsPeriod = v.InferOutput<typeof StatsPeriodSchema>;
+
+/** Eine Zeile des Abgleichs über einen Zeitraum: Summe der Abrechnung gegen die der Zähler */
+export const CheckTotalSchema = v.object({
+	/** `import`, `export`, `pv` oder `wb:<id>` */
+	signal: v.string(),
+	ledger_kwh: v.number(),
+	counter_kwh: NullableNumber,
+	deviation_pct: NullableNumber
+});
+export type CheckTotal = v.InferOutput<typeof CheckTotalSchema>;
+
+export const StatsSchema = v.object({
+	period: StatsPeriodSchema,
+	first: DateText,
+	last: DateText,
+	/** alle Tage des Zeitraums sind vorbei */
+	complete: v.boolean(),
+	coverage: v.number(),
+	/** Viertelstunden, die aus Zählerständen nachgerechnet wurden */
+	estimated_slots: v.number(),
+	energy: v.object({
+		pv_kwh: v.number(),
+		import_kwh: v.number(),
+		export_kwh: v.number(),
+		house_kwh: v.number(),
+		wallbox_kwh: v.number(),
+		battery_charge_kwh: v.number(),
+		battery_discharge_kwh: v.number(),
+		consumption_kwh: v.number()
+	}),
+	money: v.object({
+		import_eur: NullableNumber,
+		revenue_eur: NullableNumber,
+		net_eur: NullableNumber,
+		fees_eur: v.number(),
+		/** nur Monat und Jahr und nur mit Leistungspreis */
+		power_eur: NullableNumber,
+		total_eur: NullableNumber,
+		savings_no_plant_eur: NullableNumber,
+		savings_same_import_eur: NullableNumber
+	}),
+	ratios: v.object({ autarky: NullableNumber, self_consumption: NullableNumber }),
+	/** Tag: Stunden (`start` mit Zone); Woche und Monat: Tage; Jahr: Monate (`JJJJ-MM`) */
+	buckets: v.array(
+		v.object({
+			start: v.string(),
+			pv_kwh: v.number(),
+			import_kwh: v.number(),
+			export_kwh: v.number(),
+			consumption_kwh: v.number(),
+			net_eur: NullableNumber
+		})
+	),
+	/** in der Reihenfolge der Konfiguration, dann `guest` und `unknown`; nur mit Energie */
+	vehicles: v.array(
+		v.object({
+			key: v.string(),
+			name: v.string(),
+			kwh: v.number(),
+			pv_kwh: v.number(),
+			battery_kwh: v.number(),
+			grid_kwh: v.number(),
+			cost_eur: NullableNumber,
+			sessions: v.number()
+		})
+	),
+	battery_to_vehicles_kwh: v.number(),
+	consumers: v.array(
+		v.object({
+			id: v.number(),
+			name: v.string(),
+			kwh: NullableNumber,
+			/** Grund, wenn `kwh` fehlt */
+			note: v.nullable(v.string())
+		})
+	),
+	month_peaks: v.array(
+		v.object({
+			month: v.string(),
+			kw: v.number(),
+			slot_start: Iso,
+			power_eur: NullableNumber
+		})
+	),
+	checks: v.object({
+		days: v.number(),
+		flagged_days: v.array(DateText),
+		totals: v.array(CheckTotalSchema)
+	})
+});
+export type Stats = v.InferOutput<typeof StatsSchema>;
+
+export const ChargingSessionSchema = v.object({
+	id: v.number(),
+	wallbox: v.string(),
+	wallbox_name: v.string(),
+	/** Schlüssel des Autos, `guest` oder `unknown` */
+	vehicle: v.string(),
+	vehicle_name: v.string(),
+	start: Iso,
+	/** `null`, solange die Session läuft */
+	end: v.nullable(Iso),
+	open: v.boolean(),
+	kwh: v.number(),
+	pv_kwh: v.number(),
+	battery_kwh: v.number(),
+	grid_kwh: v.number(),
+	cost_eur: NullableNumber
+});
+export type ChargingSession = v.InferOutput<typeof ChargingSessionSchema>;
+
+export const DayCheckSchema = v.object({
+	day: DateText,
+	signal: v.string(),
+	ledger_kwh: v.number(),
+	counter_kwh: NullableNumber,
+	deviation_pct: NullableNumber,
+	flagged: v.boolean(),
+	/** Grund, wenn der Tag nicht abgeglichen werden konnte */
+	note: v.nullable(v.string())
+});
+export type DayCheck = v.InferOutput<typeof DayCheckSchema>;
+
+export const LedgerChecksSchema = v.object({
+	days: v.array(DayCheckSchema),
+	totals: v.array(CheckTotalSchema)
+});
+export type LedgerChecks = v.InferOutput<typeof LedgerChecksSchema>;
+
 // --- Fehler ------------------------------------------------------------------------------
 
 export const ValidationErrorSchema = v.object({

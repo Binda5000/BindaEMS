@@ -1,13 +1,16 @@
 // Testdaten aus den Vertragsdateien (nur für Tests), jedes Mal frisch durch das Schema geprüft
 import * as v from 'valibot';
 import decisionsLatestJson from '$lib/api/contract/decisions-latest.json';
+import chargingSessionsJson from '$lib/api/contract/charging-sessions.json';
 import decisionsJson from '$lib/api/contract/decisions.json';
 import ledgerDaysJson from '$lib/api/contract/ledger-days.json';
 import limitsJson from '$lib/api/contract/limits.json';
 import settingsJson from '$lib/api/contract/settings.json';
+import statsMonthJson from '$lib/api/contract/stats-month.json';
 import stateJson from '$lib/api/contract/state.json';
 import systemJson from '$lib/api/contract/system.json';
 import {
+	ChargingSessionSchema,
 	DaySummarySchema,
 	DecisionsResponseSchema,
 	LatestDecisionsResponseSchema,
@@ -15,7 +18,9 @@ import {
 	ReadingSchema,
 	SettingsCurrentSchema,
 	StateResponseSchema,
+	StatsSchema,
 	SystemResponseSchema,
+	type ChargingSession,
 	type CoreState,
 	type DaySummary,
 	type Derived,
@@ -24,6 +29,7 @@ import {
 	type Limits,
 	type Reading,
 	type SettingsCurrent,
+	type Stats,
 	type SystemResponse
 } from '$lib/api/schemas';
 
@@ -55,7 +61,19 @@ export function system(): SystemResponse {
 /** Ein Tag der Abrechnung (09.10. der Demo-Welt), einzelne Felder überschreibbar */
 export function daySummary(overrides: Partial<DaySummary> = {}): DaySummary {
 	const days = v.parse(v.array(DaySummarySchema), ledgerDaysJson);
-	const base = days.find((day) => day.slots > 0) ?? days[0];
+	const base = days.find((day) => day.date === '2026-10-09') ?? days[0];
+	return { ...base, ...overrides };
+}
+
+/** Statistik des Oktobers 2026 aus der Demo-Welt, einzelne Felder überschreibbar */
+export function stats(overrides: Partial<Stats> = {}): Stats {
+	return { ...v.parse(StatsSchema, statsMonthJson), ...overrides };
+}
+
+/** Eine beendete Ladesession der Demo-Welt (die jüngste beendete), Felder überschreibbar */
+export function chargingSession(overrides: Partial<ChargingSession> = {}): ChargingSession {
+	const sessions = v.parse(v.array(ChargingSessionSchema), chargingSessionsJson);
+	const base = sessions.find((session) => !session.open) ?? sessions[0];
 	return { ...base, ...overrides };
 }
 

@@ -85,6 +85,11 @@
           "path": "feed_in.monthly_ct.2026-09",
           "old": null,
           "new": 7.3
+        },
+        {
+          "path": "feed_in.monthly_ct.2026-10",
+          "old": null,
+          "new": 7.1
         }
       ]
     }
@@ -113,6 +118,11 @@
           "path": "tariff.components[6].value_eur",
           "old": null,
           "new": 60.0
+        },
+        {
+          "path": "tariff.components[7].value_eur",
+          "old": null,
+          "new": 4.8
         }
       ]
     }

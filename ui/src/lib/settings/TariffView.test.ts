@@ -5,9 +5,14 @@ import TariffView from './TariffView.svelte';
 
 it('zeigt Leistungspreis und Gebühr ohne Wert als fehlend', () => {
 	const settings = settingsCurrent().settings;
-	// die Demo hat einen Leistungspreis mit Satz ab sofort; hier steht er noch ohne Satz ab 2027
+	// die Demo hat einen Leistungspreis und eine Grundgebühr mit Satz; hier fehlt der Satz: beim
+	// Leistungspreis gilt er erst ab 2027
 	settings.tariff.components = settings.tariff.components.map((c) =>
-		c.kind === 'power_per_kw_year' ? { ...c, value_eur: null, valid_from: '2027-01-01' } : c
+		c.kind === 'power_per_kw_year'
+			? { ...c, value_eur: null, valid_from: '2027-01-01' }
+			: c.kind === 'fixed_per_month'
+				? { ...c, value_eur: null }
+				: c
 	);
 	render(TariffView, { settings });
 	const power = screen.getByText('Leistungspreis (ElWG)').closest('tr');

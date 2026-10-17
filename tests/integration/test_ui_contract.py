@@ -7,13 +7,16 @@ import asyncio
 import copy
 import json
 import os
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
 from fastapi.testclient import TestClient
+from tests.ui_history import DAYS, FIRST_DAY
 from tests.ui_world import DEMO_PASSWORD, DEMO_TOTP_SECRET, T_DEMO, World, build_world
 
 from bindaems.shared.domain import Alarm, Severity
+from bindaems.shared.timeutil import SLOT, local_day_slots
 
 CONTRACT = Path("ui/src/lib/api/contract")
 GET_ENDPOINTS = {
@@ -33,7 +36,12 @@ GET_ENDPOINTS = {
     "forecast": "/api/forecast/pv",
     "forecast-load": "/api/forecast/load",
     "forecast-quality": "/api/forecast/quality?days=14",
-    "ledger-days": "/api/ledger/days?from=2026-10-08&to=2026-10-09",
+    "ledger-days": "/api/ledger/days?from=2026-09-24&to=2026-10-09",
+    "ledger-checks": "/api/ledger/checks?from=2026-10-02&to=2026-10-08",
+    "stats-day": "/api/stats?period=day&date=2026-10-08",
+    "stats-month": "/api/stats?period=month&date=2026-10-09",
+    "stats-year": "/api/stats?period=year&date=2026-10-09",
+    "charging-sessions": "/api/charging/sessions?from=2026-09-25&to=2026-10-09",
     "users": "/api/users",
     "audit": "/api/audit",
     "control": "/api/control",
@@ -56,6 +64,13 @@ OTHER = {
     "plan-grid-charge",
     "control-support",
 }
+
+
+WALLBOX_DAYS = {date(2026, 9, 27), date(2026, 9, 29), date(2026, 10, 5), date(2026, 10, 7)}
+
+
+def local_range(first: date, last: date) -> tuple[datetime, datetime]:
+    return local_day_slots(first)[0], local_day_slots(last)[-1] + SLOT
 
 
 def collect_responses(world: World) -> dict[str, object]:
@@ -165,6 +180,42 @@ async def test_demo_world_is_deterministic(cfg, tmp_path) -> None:
         finally:
             world.close()
     assert bodies[0] == bodies[1]
+
+
+async def test_demo_world_has_statistics_data(cfg, tmp_path) -> None:
+    # Grundlage der Statistik-Seite: 14 Tage Abrechnung, Sessions, Abgleich, Verbraucher je Tag
+    world = await build_world(cfg, tmp_path)
+    try:
+        app = world.app
+        last = FIRST_DAY + timedelta(days=DAYS - 1)
+        days = app.ledger.days(FIRST_DAY, last)
+        assert [day.slots for day in days] == [96] * DAYS
+        assert [day.estimated_slots for day in days if day.estimated_slots] == [2]
+        assert all(day.cost_eur is not None and day.revenue_eur is not None for day in days)
+        assert all(day.wallbox_kwh for day in days if day.date in WALLBOX_DAYS)
+
+        sessions = app.charging_sessions.sessions(FIRST_DAY, date(2026, 10, 9))
+        by_wallbox = {key: [s for s in sessions if s.wallbox == key] for key in ("evcs", "twc")}
+        assert [s.end is None for s in by_wallbox["evcs"]] == [False, False]
+        assert [s.end is None for s in by_wallbox["twc"]] == [True, False, False]
+        assert {s.vehicle for s in sessions} == {"egolf", "tesla", "guest"}
+        assert all(s.split.kwh > 0 for s in sessions)
+        flows = {
+            name
+            for slot in app.ledger.slots(*local_range(FIRST_DAY, last))
+            for name in slot.flows_wh
+        }
+        assert {"pv>wb:twc", "battery>wb:twc", "grid>wb:twc", "pv>wb:evcs"} <= flows
+
+        checks = app.ledger_checks.checks(last - timedelta(days=6), last)
+        assert {check.day for check in checks} == {last - timedelta(days=n) for n in range(7)}
+        assert {check.day.isoformat() for check in checks if check.flagged} == {"2026-10-04"}
+        costs = app.costing.costs(*local_range(FIRST_DAY, last))
+        assert len(costs) == 96 * DAYS and any(cost.avg_ct for cost in costs.values())
+        stored = app.consumer_days.energy(last - timedelta(days=6), last)
+        assert {kwh is not None for kwh, _ in stored.values()} == {True}
+    finally:
+        world.close()
 
 
 def test_no_stale_contract_files() -> None:

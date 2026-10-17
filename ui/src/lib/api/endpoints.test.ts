@@ -6,6 +6,9 @@ import decisions from './contract/decisions.json';
 import plan from './contract/plan.json';
 import review from './contract/plan-review.json';
 import gridCharge from './contract/plan-grid-charge.json';
+import sessions from './contract/charging-sessions.json';
+import checks from './contract/ledger-checks.json';
+import statsMonth from './contract/stats-month.json';
 
 const fetchMock = vi.fn();
 
@@ -144,4 +147,48 @@ it('schaltet das Netzladen mit PUT und prüft die Antwort', async () => {
 		csrf: 'tok-123'
 	});
 	expect(result.grid_charge_allowed).toBe(true);
+});
+
+it('liest die Statistik eines Zeitraums mit GET', async () => {
+	reply(statsMonth);
+	const result = await api.stats('month', '2026-10-09');
+	const url = new URL(sent().url, 'http://x');
+	expect(url.pathname).toBe('/api/stats');
+	expect(Object.fromEntries(url.searchParams)).toEqual({ period: 'month', date: '2026-10-09' });
+	expect(result.period).toBe('month');
+	expect(result.vehicles.map((vehicle) => vehicle.key)).toContain('tesla');
+});
+
+it('liest die Statistik ohne Datum für heute', async () => {
+	reply(statsMonth);
+	await api.stats('year');
+	const url = new URL(sent().url, 'http://x');
+	expect(Object.fromEntries(url.searchParams)).toEqual({ period: 'year' });
+});
+
+it('liest die Ladesessions, das Auto nur wenn gesetzt', async () => {
+	reply(sessions);
+	const result = await api.chargingSessions('2026-09-25', '2026-10-09');
+	let url = new URL(sent().url, 'http://x');
+	expect(url.pathname).toBe('/api/charging/sessions');
+	expect(Object.fromEntries(url.searchParams)).toEqual({ from: '2026-09-25', to: '2026-10-09' });
+	expect(result.some((session) => session.open)).toBe(true);
+	fetchMock.mockReset();
+	reply(sessions);
+	await api.chargingSessions('2026-09-25', '2026-10-09', 'guest');
+	url = new URL(sent().url, 'http://x');
+	expect(Object.fromEntries(url.searchParams)).toEqual({
+		from: '2026-09-25',
+		to: '2026-10-09',
+		vehicle: 'guest'
+	});
+});
+
+it('liest den Abgleich mit den Zählern mit GET', async () => {
+	reply(checks);
+	const result = await api.ledgerChecks('2026-10-02', '2026-10-08');
+	const url = new URL(sent().url, 'http://x');
+	expect(url.pathname).toBe('/api/ledger/checks');
+	expect(Object.fromEntries(url.searchParams)).toEqual({ from: '2026-10-02', to: '2026-10-08' });
+	expect(result.days.some((day) => day.flagged)).toBe(true);
 });

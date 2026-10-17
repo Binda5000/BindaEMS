@@ -1,0 +1,235 @@
+{
+  "period": "year",
+  "first": "2026-01-01",
+  "last": "2026-12-31",
+  "complete": false,
+  "coverage": 0.05,
+  "estimated_slots": 2,
+  "energy": {
+    "pv_kwh": 313.887,
+    "import_kwh": 114.541,
+    "export_kwh": 25.11,
+    "house_kwh": 339.142,
+    "wallbox_kwh": 54.97,
+    "battery_charge_kwh": 231.133,
+    "battery_discharge_kwh": 221.927,
+    "consumption_kwh": 394.112
+  },
+  "money": {
+    "import_eur": 17.751,
+    "revenue_eur": 1.803,
+    "net_eur": 15.948,
+    "fees_eur": 53.512,
+    "power_eur": 72.096,
+    "total_eur": 141.556,
+    "savings_no_plant_eur": 102.286,
+    "savings_same_import_eur": 16.611
+  },
+  "ratios": {
+    "autarky": 0.709,
+    "self_consumption": 0.92
+  },
+  "buckets": [
+    {
+      "start": "2026-01",
+      "pv_kwh": 0.0,
+      "import_kwh": 0.0,
+      "export_kwh": 0.0,
+      "consumption_kwh": 0.0,
+      "net_eur": 0.0
+    },
+    {
+      "start": "2026-02",
+      "pv_kwh": 0.0,
+      "import_kwh": 0.0,
+      "export_kwh": 0.0,
+      "consumption_kwh": 0.0,
+      "net_eur": 0.0
+    },
+    {
+      "start": "2026-03",
+      "pv_kwh": 0.0,
+      "import_kwh": 0.0,
+      "export_kwh": 0.0,
+      "consumption_kwh": 0.0,
+      "net_eur": 0.0
+    },
+    {
+      "start": "2026-04",
+      "pv_kwh": 0.0,
+      "import_kwh": 0.0,
+      "export_kwh": 0.0,
+      "consumption_kwh": 0.0,
+      "net_eur": 0.0
+    },
+    {
+      "start": "2026-05",
+      "pv_kwh": 0.0,
+      "import_kwh": 0.0,
+      "export_kwh": 0.0,
+      "consumption_kwh": 0.0,
+      "net_eur": 0.0
+    },
+    {
+      "start": "2026-06",
+      "pv_kwh": 0.0,
+      "import_kwh": 0.0,
+      "export_kwh": 0.0,
+      "consumption_kwh": 0.0,
+      "net_eur": 0.0
+    },
+    {
+      "start": "2026-07",
+      "pv_kwh": 0.0,
+      "import_kwh": 0.0,
+      "export_kwh": 0.0,
+      "consumption_kwh": 0.0,
+      "net_eur": 0.0
+    },
+    {
+      "start": "2026-08",
+      "pv_kwh": 0.0,
+      "import_kwh": 0.0,
+      "export_kwh": 0.0,
+      "consumption_kwh": 0.0,
+      "net_eur": 0.0
+    },
+    {
+      "start": "2026-09",
+      "pv_kwh": 128.375,
+      "import_kwh": 60.523,
+      "export_kwh": 10.112,
+      "consumption_kwh": 170.558,
+      "net_eur": 9.01
+    },
+    {
+      "start": "2026-10",
+      "pv_kwh": 185.513,
+      "import_kwh": 54.018,
+      "export_kwh": 14.998,
+      "consumption_kwh": 223.554,
+      "net_eur": 6.938
+    },
+    {
+      "start": "2026-11",
+      "pv_kwh": 0.0,
+      "import_kwh": 0.0,
+      "export_kwh": 0.0,
+      "consumption_kwh": 0.0,
+      "net_eur": 0.0
+    },
+    {
+      "start": "2026-12",
+      "pv_kwh": 0.0,
+      "import_kwh": 0.0,
+      "export_kwh": 0.0,
+      "consumption_kwh": 0.0,
+      "net_eur": 0.0
+    }
+  ],
+  "vehicles": [
+    {
+      "key": "tesla",
+      "name": "Tesla Model 3",
+      "kwh": 36.57,
+      "pv_kwh": 11.729,
+      "battery_kwh": 8.971,
+      "grid_kwh": 15.87,
+      "cost_eur": 4.325,
+      "sessions": 3
+    },
+    {
+      "key": "egolf",
+      "name": "e-Golf",
+      "kwh": 9.2,
+      "pv_kwh": 7.575,
+      "battery_kwh": 1.625,
+      "grid_kwh": 0.0,
+      "cost_eur": 0.14,
+      "sessions": 1
+    },
+    {
+      "key": "guest",
+      "name": "Gast",
+      "kwh": 9.2,
+      "pv_kwh": 0.0,
+      "battery_kwh": 6.0,
+      "grid_kwh": 3.2,
+      "cost_eur": 0.645,
+      "sessions": 1
+    }
+  ],
+  "battery_to_vehicles_kwh": 16.596,
+  "consumers": [
+    {
+      "id": 2,
+      "name": "Büro",
+      "kwh": null,
+      "note": "Tag nicht gespeichert"
+    },
+    {
+      "id": 3,
+      "name": "Küche",
+      "kwh": null,
+      "note": "Tag nicht gespeichert"
+    },
+    {
+      "id": 1,
+      "name": "Obergeschoss",
+      "kwh": null,
+      "note": "Tag nicht gespeichert"
+    }
+  ],
+  "month_peaks": [
+    {
+      "month": "2026-09",
+      "kw": 6.517,
+      "slot_start": "2026-09-29T16:45:00+00:00",
+      "power_eur": 39.101
+    },
+    {
+      "month": "2026-10",
+      "kw": 5.499,
+      "slot_start": "2026-10-04T02:45:00+00:00",
+      "power_eur": 32.995
+    }
+  ],
+  "checks": {
+    "days": 7,
+    "flagged_days": [
+      "2026-10-04"
+    ],
+    "totals": [
+      {
+        "signal": "import",
+        "ledger_kwh": 52.358,
+        "counter_kwh": 52.881,
+        "deviation_pct": -0.989
+      },
+      {
+        "signal": "export",
+        "ledger_kwh": 10.063,
+        "counter_kwh": 10.049,
+        "deviation_pct": 0.143
+      },
+      {
+        "signal": "pv",
+        "ledger_kwh": 154.355,
+        "counter_kwh": 163.617,
+        "deviation_pct": -5.661
+      },
+      {
+        "signal": "wb:evcs",
+        "ledger_kwh": 9.2,
+        "counter_kwh": 9.18,
+        "deviation_pct": 0.218
+      },
+      {
+        "signal": "wb:twc",
+        "ledger_kwh": 18.63,
+        "counter_kwh": 18.661,
+        "deviation_pct": -0.166
+      }
+    ]
+  }
+}

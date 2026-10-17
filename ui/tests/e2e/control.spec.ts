@@ -81,7 +81,7 @@ async function setSupportAllowed(page: Page, allowed: boolean): Promise<void> {
 test('Bedienen sieht die Mehrkosten des Boosts, Lesende nicht', async ({ page, browser }) => {
 	await login(page, 'bedienen');
 	await page.goto('/laden');
-	// Demo: Leistungspreis 60 €/kW/Jahr netto, Spitze 1,78 kW (Mindestleistung 2 kW), Tesla 11,04 kW
+	// Demo: Leistungspreis 60 €/kW/Jahr netto, Spitze 5,5 kW (Oktober, aus dem Verlauf), Tesla 11,04 kW
 	await expect(
 		teslaCard(page).getByText(
 			'Boost kann bis zu 66,24 € Leistungspreis im Monat kosten (11,0 kW mehr Spitze).'

@@ -122,14 +122,15 @@
           "valid_from": null,
           "valid_until": null,
           "kind": "fixed_per_month",
-          "value_eur": null
+          "value_eur": 4.8
         }
       ],
       "fixed_price_gross_ct": 30.0
     },
     "feed_in": {
       "monthly_ct": {
-        "2026-09": 7.3
+        "2026-09": 7.3,
+        "2026-10": 7.1
       }
     },
     "pv_model": {
@@ -152,7 +153,6 @@
   "warnings": [
     "Tarifbestandteil „Netzverlustentgelt“ hat noch keinen Wert.",
     "Tarifbestandteil „Elektrizitätsabgabe“ hat noch keinen Wert.",
-    "Tarifbestandteil „Erneuerbaren-Förderbeitrag“ hat noch keinen Wert.",
-    "Tarifbestandteil „Grundgebühr Netz“ hat noch keinen Wert."
+    "Tarifbestandteil „Erneuerbaren-Förderbeitrag“ hat noch keinen Wert."
   ]
 }

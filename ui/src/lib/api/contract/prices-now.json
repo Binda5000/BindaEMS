@@ -4,7 +4,7 @@
     "spot_net_ct": 16.508333333333333,
     "import_net_ct": 25.81833333333333,
     "import_gross_ct": 30.982,
-    "feed_in_ct": 7.3,
+    "feed_in_ct": 7.1,
     "origin": "primary",
     "missing": [
       "grid_loss",
@@ -18,7 +18,7 @@
       "spot_net_ct": 16.508333333333333,
       "import_net_ct": 25.81833333333333,
       "import_gross_ct": 30.982,
-      "feed_in_ct": 7.3,
+      "feed_in_ct": 7.1,
       "origin": "primary",
       "missing": [
         "grid_loss",
@@ -31,7 +31,7 @@
       "spot_net_ct": 16.508333333333333,
       "import_net_ct": 25.81833333333333,
       "import_gross_ct": 30.982,
-      "feed_in_ct": 7.3,
+      "feed_in_ct": 7.1,
       "origin": "primary",
       "missing": [
         "grid_loss",
@@ -44,7 +44,7 @@
       "spot_net_ct": 16.508333333333333,
       "import_net_ct": 25.81833333333333,
       "import_gross_ct": 30.982,
-      "feed_in_ct": 7.3,
+      "feed_in_ct": 7.1,
       "origin": "primary",
       "missing": [
         "grid_loss",
@@ -57,7 +57,7 @@
       "spot_net_ct": 22.09416666666667,
       "import_net_ct": 31.40416666666667,
       "import_gross_ct": 37.685,
-      "feed_in_ct": 7.3,
+      "feed_in_ct": 7.1,
       "origin": "primary",
       "missing": [
         "grid_loss",
@@ -70,7 +70,7 @@
       "spot_net_ct": 22.09416666666667,
       "import_net_ct": 31.40416666666667,
       "import_gross_ct": 37.685,
-      "feed_in_ct": 7.3,
+      "feed_in_ct": 7.1,
       "origin": "primary",
       "missing": [
         "grid_loss",
@@ -83,7 +83,7 @@
       "spot_net_ct": 22.09416666666667,
       "import_net_ct": 31.40416666666667,
       "import_gross_ct": 37.685,
-      "feed_in_ct": 7.3,
+      "feed_in_ct": 7.1,
       "origin": "primary",
       "missing": [
         "grid_loss",
@@ -96,7 +96,7 @@
       "spot_net_ct": 22.09416666666667,
       "import_net_ct": 31.40416666666667,
       "import_gross_ct": 37.685,
-      "feed_in_ct": 7.3,
+      "feed_in_ct": 7.1,
       "origin": "primary",
       "missing": [
         "grid_loss",
@@ -109,7 +109,7 @@
       "spot_net_ct": 20.054166666666667,
       "import_net_ct": 29.364166666666666,
       "import_gross_ct": 35.237,
-      "feed_in_ct": 7.3,
+      "feed_in_ct": 7.1,
       "origin": "primary",
       "missing": [
         "grid_loss",
@@ -122,7 +122,7 @@
       "spot_net_ct": 20.054166666666667,
       "import_net_ct": 29.364166666666666,
       "import_gross_ct": 35.237,
-      "feed_in_ct": 7.3,
+      "feed_in_ct": 7.1,
       "origin": "primary",
       "missing": [
         "grid_loss",
@@ -135,7 +135,7 @@
       "spot_net_ct": 20.054166666666667,
       "import_net_ct": 29.364166666666666,
       "import_gross_ct": 35.237,
-      "feed_in_ct": 7.3,
+      "feed_in_ct": 7.1,
       "origin": "primary",
       "missing": [
         "grid_loss",
@@ -148,7 +148,7 @@
       "spot_net_ct": 20.054166666666667,
       "import_net_ct": 29.364166666666666,
       "import_gross_ct": 35.237,
-      "feed_in_ct": 7.3,
+      "feed_in_ct": 7.1,
       "origin": "primary",
       "missing": [
         "grid_loss",
@@ -161,7 +161,7 @@
       "spot_net_ct": 20.05666666666667,
       "import_net_ct": 29.366666666666667,
       "import_gross_ct": 35.24,
-      "feed_in_ct": 7.3,
+      "feed_in_ct": 7.1,
       "origin": "primary",
       "missing": [
         "grid_loss",

@@ -121,6 +121,31 @@ export const api = {
 		get(withQuery('/api/forecast/quality', { days: String(days) }), s.QualitySchema, o),
 	ledgerDays: (first: string, last: string, o?: Load): Promise<s.DaySummary[]> =>
 		get(withQuery('/api/ledger/days', { from: first, to: last }), v.array(s.DaySummarySchema), o),
+	/** Statistik des Zeitraums, der `day` (YYYY-MM-DD) enthält; ohne `day` heute */
+	stats: (period: s.StatsPeriod, day?: string, o?: Load): Promise<s.Stats> =>
+		get(
+			withQuery('/api/stats', day === undefined ? { period } : { period, date: day }),
+			s.StatsSchema,
+			o
+		),
+	/** Ladesessions der Tage `first` bis `last`, neueste zuerst; `vehicle` ist ein Schlüssel */
+	chargingSessions: (
+		first: string,
+		last: string,
+		vehicle?: string,
+		o?: Load
+	): Promise<s.ChargingSession[]> =>
+		get(
+			withQuery(
+				'/api/charging/sessions',
+				vehicle === undefined ? { from: first, to: last } : { from: first, to: last, vehicle }
+			),
+			v.array(s.ChargingSessionSchema),
+			o
+		),
+	/** Abgleich der Abrechnung mit den Zählern je Tag und Signal, dazu die Summen */
+	ledgerChecks: (first: string, last: string, o?: Load): Promise<s.LedgerChecks> =>
+		get(withQuery('/api/ledger/checks', { from: first, to: last }), s.LedgerChecksSchema, o),
 	reprice: (first: string, last: string): Promise<{ repriced: number }> =>
 		request('POST', '/api/ledger/reprice', {
 			body: { from: first, to: last },

@@ -19,7 +19,7 @@ from typing import Any
 import httpx
 import respx
 from pydantic import SecretStr
-from sqlalchemy import update
+from sqlalchemy import bindparam, update
 from tests.app_helpers import (
     T_APP,
     mock_all_sources,
@@ -29,12 +29,23 @@ from tests.app_helpers import (
     with_grid_usage,
 )
 from tests.helpers import FakeSink
+from tests.ui_history import (
+    DAYS,
+    FIRST_DAY,
+    LAST_DAY,
+    HistorySlot,
+    counter_readings,
+    history_slots,
+    observations,
+)
 
+from bindaems.app.charging.tracker import WallboxSeen
 from bindaems.app.consumers.service import ConsumerInput
 from bindaems.app.consumers.values import ENTITY_UNITS_QUERY, HaRef
-from bindaems.app.db.schema import user_table
+from bindaems.app.db.schema import ledger_slot, user_table
 from bindaems.app.forecast.archive import RecordValue
 from bindaems.app.forecast.openmeteo import OPEN_METEO_URL
+from bindaems.app.ledger.checks import EXPORT_COUNTER, IMPORT_COUNTER
 from bindaems.app.planning.process import solve_inline
 from bindaems.app.planning.service import plan_once
 from bindaems.app.runtime import AppRuntime
@@ -46,11 +57,11 @@ from bindaems.core.watchdog_client.status import WATCHDOG_VERSION
 from bindaems.shared.config import Config, Secrets
 from bindaems.shared.control import ChargeMode, CommandKind, Intent, VehicleIntent
 from bindaems.shared.decisions import NO_VERDICT, Decision, DecisionResult, decision_text
-from bindaems.shared.domain import SignalKind
+from bindaems.shared.domain import SignalKind, SlotFlows
 from bindaems.shared.influx.lineprotocol import epoch_ms
 from bindaems.shared.plan import Plan
-from bindaems.shared.settings import PowerComponent, TariffSettings
-from bindaems.shared.timeutil import LOCAL_TZ, Clock, ManualClock
+from bindaems.shared.settings import MonthlyFeeComponent, PowerComponent, TariffSettings
+from bindaems.shared.timeutil import LOCAL_TZ, Clock, ManualClock, local_day_slots
 
 T_DEMO = T_APP  # 09.10.2026, 10:00 Ortszeit
 DEMO_PASSWORD = "demo-passwort-1"
@@ -610,16 +621,83 @@ async def _earlier_plan(app: AppRuntime, plan: Plan) -> None:
 
 
 def _demo_tariff(app: AppRuntime) -> TariffSettings:
-    """Standardtarif mit Netznutzungsentgelt und einem (erfundenen) Leistungspreis, der schon im
-    Oktober 2026 gilt (60 €/kW/Jahr netto, Stufe bei 10 kW): „Laden“ zeigt die Mehrkosten."""
+    """Standardtarif mit Netznutzungsentgelt, einem (erfundenen) Leistungspreis, der schon im
+    Oktober 2026 gilt (60 €/kW/Jahr netto, Stufe bei 10 kW): „Laden“ zeigt die Mehrkosten, und
+    einer Grundgebühr des Netzes (4,80 €/Monat netto) für die Kosten der Statistik."""
     tariff = with_grid_usage(app.settings.current().settings, 8.11).tariff
     components = [
         c.model_copy(update={"value_eur": 60.0, "valid_from": None})
         if isinstance(c, PowerComponent)
+        else c.model_copy(update={"value_eur": 4.8})
+        if isinstance(c, MonthlyFeeComponent) and c.id == "grid_base_fee"
         else c
         for c in tariff.components
     ]
     return tariff.model_copy(update={"components": components})
+
+
+def _ingest_history(app: AppRuntime, slots: list[HistorySlot]) -> None:
+    """Die 14 Tage Abrechnung vor ``T_DEMO``; Bezugspreise setzt die Demo selbst (die Aufnahmen
+    der Preisquellen reichen nur über den 09.10.). Die Punkte für InfluxDB entfallen: dort liegt in
+    der Demo nichts."""
+    sink, app.ledger._sink = app.ledger._sink, None
+    try:
+        for slot in slots:
+            covered = 0.0 if slot.estimated else 900.0
+            flows = SlotFlows(slot.start, covered, slot.flows_wh, slot.counters)
+            assert app.ledger.ingest(flows, "estimate" if slot.estimated else "stream")
+    finally:
+        app.ledger._sink = sink
+    price = ledger_slot.update().where(ledger_slot.c.slot_start == bindparam("b_start"))
+    with app.engine.begin() as conn:
+        conn.execute(
+            price.values(import_price_ct=bindparam("b_price")),
+            [{"b_start": slot.start, "b_price": slot.price_ct} for slot in slots],
+        )
+
+
+def _record_sessions(app: AppRuntime) -> None:
+    """Sessions und Belegung über den Tracker, mit Beobachtungen wie aus Health: je Wallbox zwei
+    beendete Sessions, dazu die offene an der Garage (``twc``), die bis ``T_DEMO`` läuft."""
+    for when, states in observations(T_DEMO):
+        app.charging.record(
+            when,
+            [
+                WallboxSeen(wallbox, connected, occupant, kind)
+                for wallbox, (connected, occupant, kind) in states.items()
+            ],
+        )
+
+
+def _record_checks(app: AppRuntime, slots: list[HistorySlot]) -> None:
+    """Abgleich der letzten 7 Tage vor heute; die Zählerstände sind erfunden: ein Tag weicht beim
+    Netzbezug um 3,5 % ab (markiert), einer hat einen fehlenden Zählerstand."""
+    checks = app.ledger_checks
+    names = {
+        "import": [IMPORT_COUNTER],
+        "export": [EXPORT_COUNTER],
+        "pv": list(checks._pv_signals),
+        **{f"wb:{key}": [f"wallbox.{key}.total_kwh"] for key in checks._wallboxes},
+    }
+    last = LAST_DAY
+    days = [last - timedelta(days=6 - n) for n in range(7)]
+    midnights = [local_day_slots(day)[0] for day in [*days, last + timedelta(days=1)]]
+    readings = counter_readings(slots, days[0], last, names)
+    assert checks._store(days, midnights, readings) == len(days)
+
+
+async def _statistics(app: AppRuntime) -> None:
+    """Daten der Statistik: Abrechnung, Einstandspreis, Sessions, Abgleich, Verbraucher je Tag."""
+    slots = history_slots()
+    assert len(slots) == sum(
+        len(local_day_slots(FIRST_DAY + timedelta(days=n))) for n in range(DAYS)
+    )
+    _ingest_history(app, slots)
+    app.costing.catch_up()  # füllt ledger_cost wie die Nachführung im Betrieb
+    _record_sessions(app)
+    _record_checks(app, slots)
+    today = T_DEMO.astimezone(LOCAL_TZ).date()
+    assert await app.consumer_days.fill_missing(today, days=7) == 7
 
 
 async def build_world(cfg: Config, data_dir: Path, *, ui_dir: Path | None = None) -> World:
@@ -645,7 +723,7 @@ async def build_world(cfg: Config, data_dir: Path, *, ui_dir: Path | None = None
         app.decisions.add(DEMO_DECISIONS)
         # drei Versionen; Netzverlust, Elektrizitätsabgabe und Förderbeitrag bleiben leer
         set_tariff(app.settings, _demo_tariff(app))
-        set_feed_in(app.settings, {"2026-09": 7.3})
+        set_feed_in(app.settings, {"2026-09": 7.3, "2026-10": 7.1})  # OeMAG-Werte
         set_wallbox_names(app.settings, {"twc": "Garage"})  # die EVCS behält ihren Typnamen
         refs = _create_consumers(app)
         assert app.ha_values is not None
@@ -663,6 +741,7 @@ async def build_world(cfg: Config, data_dir: Path, *, ui_dir: Path | None = None
         plan = await app.planning.replan("start")
         assert plan is not None, app.planning.component_status().message
         await _earlier_plan(app, plan)
+        await _statistics(app)
     except BaseException:
         router.stop(quiet=True)
         raise

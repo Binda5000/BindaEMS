@@ -57,7 +57,7 @@ it('listet die Tageswerte der Zähler für den Abgleich mit VRM', () => {
 });
 
 it('zeigt für einen Tag ohne Daten Striche statt 0', () => {
-	// so liefert die Abrechnung einen Tag ohne Aufzeichnung (08.10. der Demo-Welt)
+	// so liefert die Abrechnung einen Tag ohne Aufzeichnung (24.09. der Demo-Welt)
 	const empty = v.parse(v.array(DaySummarySchema), ledgerDaysJson).find((day) => day.slots === 0);
 	if (!empty) throw new Error('ledger-days.json enthält keinen Tag ohne Daten');
 	const [row] = balanceRows([empty]);

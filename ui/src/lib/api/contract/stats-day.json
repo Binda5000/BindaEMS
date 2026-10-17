@@ -1,0 +1,285 @@
+{
+  "period": "day",
+  "first": "2026-10-08",
+  "last": "2026-10-08",
+  "complete": true,
+  "coverage": 1.0,
+  "estimated_slots": 0,
+  "energy": {
+    "pv_kwh": 24.452,
+    "import_kwh": 17.409,
+    "export_kwh": 6.424,
+    "house_kwh": 24.133,
+    "wallbox_kwh": 0.0,
+    "battery_charge_kwh": 25.874,
+    "battery_discharge_kwh": 14.569,
+    "consumption_kwh": 24.133
+  },
+  "money": {
+    "import_eur": 2.054,
+    "revenue_eur": 0.456,
+    "net_eur": 1.598,
+    "fees_eur": 0.186,
+    "power_eur": null,
+    "total_eur": 1.784,
+    "savings_no_plant_eur": 5.642,
+    "savings_same_import_eur": 3.168
+  },
+  "ratios": {
+    "autarky": 0.279,
+    "self_consumption": 0.737
+  },
+  "buckets": [
+    {
+      "start": "2026-10-08T00:00:00+02:00",
+      "pv_kwh": 0.0,
+      "import_kwh": 0.48,
+      "export_kwh": 0.0,
+      "consumption_kwh": 0.48,
+      "net_eur": 0.057
+    },
+    {
+      "start": "2026-10-08T01:00:00+02:00",
+      "pv_kwh": 0.0,
+      "import_kwh": 0.48,
+      "export_kwh": 0.0,
+      "consumption_kwh": 0.48,
+      "net_eur": 0.057
+    },
+    {
+      "start": "2026-10-08T02:00:00+02:00",
+      "pv_kwh": 0.0,
+      "import_kwh": 5.48,
+      "export_kwh": 0.0,
+      "consumption_kwh": 0.48,
+      "net_eur": 0.647
+    },
+    {
+      "start": "2026-10-08T03:00:00+02:00",
+      "pv_kwh": 0.0,
+      "import_kwh": 5.48,
+      "export_kwh": 0.0,
+      "consumption_kwh": 0.48,
+      "net_eur": 0.647
+    },
+    {
+      "start": "2026-10-08T04:00:00+02:00",
+      "pv_kwh": 0.0,
+      "import_kwh": 5.489,
+      "export_kwh": 0.0,
+      "consumption_kwh": 0.489,
+      "net_eur": 0.648
+    },
+    {
+      "start": "2026-10-08T05:00:00+02:00",
+      "pv_kwh": 0.0,
+      "import_kwh": 0.0,
+      "export_kwh": 0.0,
+      "consumption_kwh": 0.571,
+      "net_eur": 0.0
+    },
+    {
+      "start": "2026-10-08T06:00:00+02:00",
+      "pv_kwh": 0.0,
+      "import_kwh": 0.0,
+      "export_kwh": 0.0,
+      "consumption_kwh": 0.844,
+      "net_eur": 0.0
+    },
+    {
+      "start": "2026-10-08T07:00:00+02:00",
+      "pv_kwh": 0.598,
+      "import_kwh": 0.0,
+      "export_kwh": 0.0,
+      "consumption_kwh": 1.057,
+      "net_eur": 0.0
+    },
+    {
+      "start": "2026-10-08T08:00:00+02:00",
+      "pv_kwh": 1.737,
+      "import_kwh": 0.0,
+      "export_kwh": 0.0,
+      "consumption_kwh": 0.844,
+      "net_eur": 0.0
+    },
+    {
+      "start": "2026-10-08T09:00:00+02:00",
+      "pv_kwh": 2.705,
+      "import_kwh": 0.0,
+      "export_kwh": 0.0,
+      "consumption_kwh": 0.575,
+      "net_eur": 0.0
+    },
+    {
+      "start": "2026-10-08T10:00:00+02:00",
+      "pv_kwh": 3.408,
+      "import_kwh": 0.0,
+      "export_kwh": 0.0,
+      "consumption_kwh": 0.535,
+      "net_eur": 0.0
+    },
+    {
+      "start": "2026-10-08T11:00:00+02:00",
+      "pv_kwh": 3.778,
+      "import_kwh": 0.0,
+      "export_kwh": 0.0,
+      "consumption_kwh": 0.668,
+      "net_eur": 0.0
+    },
+    {
+      "start": "2026-10-08T12:00:00+02:00",
+      "pv_kwh": 3.778,
+      "import_kwh": 0.0,
+      "export_kwh": 1.116,
+      "consumption_kwh": 0.794,
+      "net_eur": -0.079
+    },
+    {
+      "start": "2026-10-08T13:00:00+02:00",
+      "pv_kwh": 3.408,
+      "import_kwh": 0.0,
+      "export_kwh": 2.659,
+      "consumption_kwh": 0.749,
+      "net_eur": -0.189
+    },
+    {
+      "start": "2026-10-08T14:00:00+02:00",
+      "pv_kwh": 2.705,
+      "import_kwh": 0.0,
+      "export_kwh": 1.939,
+      "consumption_kwh": 0.766,
+      "net_eur": -0.138
+    },
+    {
+      "start": "2026-10-08T15:00:00+02:00",
+      "pv_kwh": 1.737,
+      "import_kwh": 0.0,
+      "export_kwh": 0.71,
+      "consumption_kwh": 1.027,
+      "net_eur": -0.05
+    },
+    {
+      "start": "2026-10-08T16:00:00+02:00",
+      "pv_kwh": 0.598,
+      "import_kwh": 0.0,
+      "export_kwh": 0.0,
+      "consumption_kwh": 1.479,
+      "net_eur": 0.0
+    },
+    {
+      "start": "2026-10-08T17:00:00+02:00",
+      "pv_kwh": 0.0,
+      "import_kwh": 0.0,
+      "export_kwh": 0.0,
+      "consumption_kwh": 1.979,
+      "net_eur": 0.0
+    },
+    {
+      "start": "2026-10-08T18:00:00+02:00",
+      "pv_kwh": 0.0,
+      "import_kwh": 0.0,
+      "export_kwh": 0.0,
+      "consumption_kwh": 2.317,
+      "net_eur": 0.0
+    },
+    {
+      "start": "2026-10-08T19:00:00+02:00",
+      "pv_kwh": 0.0,
+      "import_kwh": 0.0,
+      "export_kwh": 0.0,
+      "consumption_kwh": 2.317,
+      "net_eur": 0.0
+    },
+    {
+      "start": "2026-10-08T20:00:00+02:00",
+      "pv_kwh": 0.0,
+      "import_kwh": 0.0,
+      "export_kwh": 0.0,
+      "consumption_kwh": 1.979,
+      "net_eur": 0.0
+    },
+    {
+      "start": "2026-10-08T21:00:00+02:00",
+      "pv_kwh": 0.0,
+      "import_kwh": 0.0,
+      "export_kwh": 0.0,
+      "consumption_kwh": 1.478,
+      "net_eur": 0.0
+    },
+    {
+      "start": "2026-10-08T22:00:00+02:00",
+      "pv_kwh": 0.0,
+      "import_kwh": 0.0,
+      "export_kwh": 0.0,
+      "consumption_kwh": 1.022,
+      "net_eur": 0.0
+    },
+    {
+      "start": "2026-10-08T23:00:00+02:00",
+      "pv_kwh": 0.0,
+      "import_kwh": 0.0,
+      "export_kwh": 0.0,
+      "consumption_kwh": 0.721,
+      "net_eur": 0.0
+    }
+  ],
+  "vehicles": [],
+  "battery_to_vehicles_kwh": 0.0,
+  "consumers": [
+    {
+      "id": 2,
+      "name": "Büro",
+      "kwh": 3.338,
+      "note": null
+    },
+    {
+      "id": 3,
+      "name": "Küche",
+      "kwh": 5.605,
+      "note": null
+    },
+    {
+      "id": 1,
+      "name": "Obergeschoss",
+      "kwh": 13.092,
+      "note": null
+    }
+  ],
+  "month_peaks": [],
+  "checks": {
+    "days": 1,
+    "flagged_days": [],
+    "totals": [
+      {
+        "signal": "import",
+        "ledger_kwh": 17.409,
+        "counter_kwh": 17.372,
+        "deviation_pct": 0.214
+      },
+      {
+        "signal": "export",
+        "ledger_kwh": 6.424,
+        "counter_kwh": 6.41,
+        "deviation_pct": 0.218
+      },
+      {
+        "signal": "pv",
+        "ledger_kwh": 24.452,
+        "counter_kwh": 25.92,
+        "deviation_pct": -5.662
+      },
+      {
+        "signal": "wb:evcs",
+        "ledger_kwh": 0.0,
+        "counter_kwh": 0.0,
+        "deviation_pct": null
+      },
+      {
+        "signal": "wb:twc",
+        "ledger_kwh": 0.0,
+        "counter_kwh": 0.0,
+        "deviation_pct": null
+      }
+    ]
+  }
+}

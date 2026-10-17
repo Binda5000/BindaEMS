@@ -1,0 +1,351 @@
+{
+  "days": [
+    {
+      "day": "2026-10-02",
+      "signal": "import",
+      "ledger_kwh": 0.0,
+      "counter_kwh": 0.0,
+      "deviation_pct": null,
+      "flagged": false,
+      "note": "Zähler zeigt 0 kWh"
+    },
+    {
+      "day": "2026-10-02",
+      "signal": "export",
+      "ledger_kwh": 0.0,
+      "counter_kwh": 0.0,
+      "deviation_pct": null,
+      "flagged": false,
+      "note": "Zähler zeigt 0 kWh"
+    },
+    {
+      "day": "2026-10-02",
+      "signal": "pv",
+      "ledger_kwh": 18.339,
+      "counter_kwh": 19.439,
+      "deviation_pct": -5.658,
+      "flagged": false,
+      "note": null
+    },
+    {
+      "day": "2026-10-02",
+      "signal": "wb:evcs",
+      "ledger_kwh": 0.0,
+      "counter_kwh": 0.0,
+      "deviation_pct": null,
+      "flagged": false,
+      "note": "Zähler zeigt 0 kWh"
+    },
+    {
+      "day": "2026-10-02",
+      "signal": "wb:twc",
+      "ledger_kwh": 0.0,
+      "counter_kwh": 0.0,
+      "deviation_pct": null,
+      "flagged": false,
+      "note": "Zähler zeigt 0 kWh"
+    },
+    {
+      "day": "2026-10-03",
+      "signal": "import",
+      "ledger_kwh": 0.0,
+      "counter_kwh": 0.0,
+      "deviation_pct": null,
+      "flagged": false,
+      "note": "Zähler zeigt 0 kWh"
+    },
+    {
+      "day": "2026-10-03",
+      "signal": "export",
+      "ledger_kwh": 0.201,
+      "counter_kwh": 0.201,
+      "deviation_pct": -0.05,
+      "flagged": false,
+      "note": null
+    },
+    {
+      "day": "2026-10-03",
+      "signal": "pv",
+      "ledger_kwh": 25.981,
+      "counter_kwh": 27.54,
+      "deviation_pct": -5.662,
+      "flagged": false,
+      "note": null
+    },
+    {
+      "day": "2026-10-03",
+      "signal": "wb:evcs",
+      "ledger_kwh": 0.0,
+      "counter_kwh": 0.0,
+      "deviation_pct": null,
+      "flagged": false,
+      "note": "Zähler zeigt 0 kWh"
+    },
+    {
+      "day": "2026-10-03",
+      "signal": "wb:twc",
+      "ledger_kwh": 0.0,
+      "counter_kwh": 0.0,
+      "deviation_pct": null,
+      "flagged": false,
+      "note": "Zähler zeigt 0 kWh"
+    },
+    {
+      "day": "2026-10-04",
+      "signal": "import",
+      "ledger_kwh": 16.449,
+      "counter_kwh": 17.025,
+      "deviation_pct": -3.383,
+      "flagged": true,
+      "note": null
+    },
+    {
+      "day": "2026-10-04",
+      "signal": "export",
+      "ledger_kwh": 1.008,
+      "counter_kwh": 1.013,
+      "deviation_pct": -0.474,
+      "flagged": false,
+      "note": null
+    },
+    {
+      "day": "2026-10-04",
+      "signal": "pv",
+      "ledger_kwh": 12.226,
+      "counter_kwh": 12.96,
+      "deviation_pct": -5.664,
+      "flagged": false,
+      "note": null
+    },
+    {
+      "day": "2026-10-04",
+      "signal": "wb:evcs",
+      "ledger_kwh": 0.0,
+      "counter_kwh": 0.0,
+      "deviation_pct": null,
+      "flagged": false,
+      "note": "Zähler zeigt 0 kWh"
+    },
+    {
+      "day": "2026-10-04",
+      "signal": "wb:twc",
+      "ledger_kwh": 0.0,
+      "counter_kwh": 0.0,
+      "deviation_pct": null,
+      "flagged": false,
+      "note": "Zähler zeigt 0 kWh"
+    },
+    {
+      "day": "2026-10-05",
+      "signal": "import",
+      "ledger_kwh": 9.036,
+      "counter_kwh": 9.051,
+      "deviation_pct": -0.166,
+      "flagged": false,
+      "note": null
+    },
+    {
+      "day": "2026-10-05",
+      "signal": "export",
+      "ledger_kwh": 0.0,
+      "counter_kwh": 0.0,
+      "deviation_pct": null,
+      "flagged": false,
+      "note": "Zähler zeigt 0 kWh"
+    },
+    {
+      "day": "2026-10-05",
+      "signal": "pv",
+      "ledger_kwh": 22.924,
+      "counter_kwh": 24.299,
+      "deviation_pct": -5.659,
+      "flagged": false,
+      "note": null
+    },
+    {
+      "day": "2026-10-05",
+      "signal": "wb:evcs",
+      "ledger_kwh": 0.0,
+      "counter_kwh": null,
+      "deviation_pct": null,
+      "flagged": false,
+      "note": "Zählerstand fehlt"
+    },
+    {
+      "day": "2026-10-05",
+      "signal": "wb:twc",
+      "ledger_kwh": 18.63,
+      "counter_kwh": 18.661,
+      "deviation_pct": -0.166,
+      "flagged": false,
+      "note": null
+    },
+    {
+      "day": "2026-10-06",
+      "signal": "import",
+      "ledger_kwh": 4.199,
+      "counter_kwh": 4.189,
+      "deviation_pct": 0.229,
+      "flagged": false,
+      "note": null
+    },
+    {
+      "day": "2026-10-06",
+      "signal": "export",
+      "ledger_kwh": 2.43,
+      "counter_kwh": 2.425,
+      "deviation_pct": 0.219,
+      "flagged": false,
+      "note": null
+    },
+    {
+      "day": "2026-10-06",
+      "signal": "pv",
+      "ledger_kwh": 30.566,
+      "counter_kwh": 32.399,
+      "deviation_pct": -5.659,
+      "flagged": false,
+      "note": null
+    },
+    {
+      "day": "2026-10-06",
+      "signal": "wb:evcs",
+      "ledger_kwh": 0.0,
+      "counter_kwh": null,
+      "deviation_pct": null,
+      "flagged": false,
+      "note": "Zählerstand fehlt"
+    },
+    {
+      "day": "2026-10-06",
+      "signal": "wb:twc",
+      "ledger_kwh": 0.0,
+      "counter_kwh": 0.0,
+      "deviation_pct": null,
+      "flagged": false,
+      "note": "Zähler zeigt 0 kWh"
+    },
+    {
+      "day": "2026-10-07",
+      "signal": "import",
+      "ledger_kwh": 5.265,
+      "counter_kwh": 5.244,
+      "deviation_pct": 0.4,
+      "flagged": false,
+      "note": null
+    },
+    {
+      "day": "2026-10-07",
+      "signal": "export",
+      "ledger_kwh": 0.0,
+      "counter_kwh": 0.0,
+      "deviation_pct": null,
+      "flagged": false,
+      "note": "Zähler zeigt 0 kWh"
+    },
+    {
+      "day": "2026-10-07",
+      "signal": "pv",
+      "ledger_kwh": 19.868,
+      "counter_kwh": 21.06,
+      "deviation_pct": -5.662,
+      "flagged": false,
+      "note": null
+    },
+    {
+      "day": "2026-10-07",
+      "signal": "wb:evcs",
+      "ledger_kwh": 9.2,
+      "counter_kwh": 9.18,
+      "deviation_pct": 0.218,
+      "flagged": false,
+      "note": null
+    },
+    {
+      "day": "2026-10-07",
+      "signal": "wb:twc",
+      "ledger_kwh": 0.0,
+      "counter_kwh": 0.0,
+      "deviation_pct": null,
+      "flagged": false,
+      "note": "Zähler zeigt 0 kWh"
+    },
+    {
+      "day": "2026-10-08",
+      "signal": "import",
+      "ledger_kwh": 17.409,
+      "counter_kwh": 17.372,
+      "deviation_pct": 0.214,
+      "flagged": false,
+      "note": null
+    },
+    {
+      "day": "2026-10-08",
+      "signal": "export",
+      "ledger_kwh": 6.424,
+      "counter_kwh": 6.41,
+      "deviation_pct": 0.218,
+      "flagged": false,
+      "note": null
+    },
+    {
+      "day": "2026-10-08",
+      "signal": "pv",
+      "ledger_kwh": 24.452,
+      "counter_kwh": 25.92,
+      "deviation_pct": -5.662,
+      "flagged": false,
+      "note": null
+    },
+    {
+      "day": "2026-10-08",
+      "signal": "wb:evcs",
+      "ledger_kwh": 0.0,
+      "counter_kwh": 0.0,
+      "deviation_pct": null,
+      "flagged": false,
+      "note": "Zähler zeigt 0 kWh"
+    },
+    {
+      "day": "2026-10-08",
+      "signal": "wb:twc",
+      "ledger_kwh": 0.0,
+      "counter_kwh": 0.0,
+      "deviation_pct": null,
+      "flagged": false,
+      "note": "Zähler zeigt 0 kWh"
+    }
+  ],
+  "totals": [
+    {
+      "signal": "import",
+      "ledger_kwh": 52.358,
+      "counter_kwh": 52.881,
+      "deviation_pct": -0.989
+    },
+    {
+      "signal": "export",
+      "ledger_kwh": 10.063,
+      "counter_kwh": 10.049,
+      "deviation_pct": 0.143
+    },
+    {
+      "signal": "pv",
+      "ledger_kwh": 154.355,
+      "counter_kwh": 163.617,
+      "deviation_pct": -5.661
+    },
+    {
+      "signal": "wb:evcs",
+      "ledger_kwh": 9.2,
+      "counter_kwh": 9.18,
+      "deviation_pct": 0.218
+    },
+    {
+      "signal": "wb:twc",
+      "ledger_kwh": 18.63,
+      "counter_kwh": 18.661,
+      "deviation_pct": -0.166
+    }
+  ]
+}
