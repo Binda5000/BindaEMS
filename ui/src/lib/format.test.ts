@@ -38,6 +38,8 @@ it('formatiert Energie, Preise, Geld und Anteile deutsch', () => {
 	expect(formatSoc(55.4)).toBe(`55${NB}%`);
 	expect(formatRatio(0.873)).toBe(`87${NB}%`);
 	expect(formatEur(null)).toBe(DASH);
+	expect(formatEur(-0.002)).toBe(`€${NB}0,00`);
+	expect(formatEur(-0.5)).toBe(`-€${NB}0,50`);
 });
 
 it('zeigt Zeiten in Wien', () => {

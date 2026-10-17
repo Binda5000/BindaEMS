@@ -129,6 +129,17 @@ describe('reviewTotals', () => {
 		expect(rows[3]).toMatchObject({ plan: nb('€ 0,10'), actual: nb('€ 0,62'), diff: nb('€ 0,52') });
 	});
 
+	it('shows a difference that rounds to zero without a minus', () => {
+		const rows = reviewTotals(
+			review(BOTH.slots, {
+				planned: { import_kwh: 1.5, export_kwh: 0.5, grid_charge_kwh: 0, import_cost_eur: 0.622 },
+				actual: { import_kwh: 1.498, export_kwh: 0.5, grid_charge_kwh: 0, import_cost_eur: 0.62 }
+			})
+		);
+		expect(rows[0]?.diff).toBe(nb('0,00 kWh'));
+		expect(rows[3]?.diff).toBe(nb('€ 0,00'));
+	});
+
 	it('shows a dash for unknown costs and no difference', () => {
 		const rows = reviewTotals(
 			review(BOTH.slots, {

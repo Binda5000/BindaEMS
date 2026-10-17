@@ -71,8 +71,11 @@ export function formatCt(ct: MaybeNumber): string {
 	return isNumber(ct) ? withUnit(ct, 2, 'ct/kWh') : DASH;
 }
 
+/** Betrag in €, ohne „-0“: ein Betrag, der auf 0,00 rundet, hat kein Minus. */
 export function formatEur(eur: MaybeNumber): string {
-	return isNumber(eur) ? EUR.format(eur) : DASH;
+	if (!isNumber(eur)) return DASH;
+	const text = EUR.format(eur);
+	return /[1-9]/.test(text) ? text : text.replace('-', '');
 }
 
 /** Ladestand in % (0–100). */
