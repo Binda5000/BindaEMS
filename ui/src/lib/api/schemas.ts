@@ -316,12 +316,18 @@ export const CoreHealthSchema = v.object({
 	),
 	vehicles: v.array(VehicleHealthSchema),
 	wallboxes: v.array(WallboxHealthSchema),
-	/** Akku-Sollwert: die wirksame Schwelle der Unterstützung und woher sie kommt */
-	battery: v.object({
-		/** `null` vor dem ersten Zyklus */
-		support_soc_pct: NullableNumber,
-		support_source: v.nullable(SupportSourceSchema)
-	}),
+	/**
+	 * Akku-Sollwert: die wirksame Schwelle der Unterstützung und woher sie kommt. Fehlt der Block
+	 * oder ein Feld (älterer core), ist die Schwelle unbekannt; Health bleibt gültig.
+	 */
+	battery: v.optional(
+		v.object({
+			/** `null` vor dem ersten Zyklus */
+			support_soc_pct: v.optional(NullableNumber, null),
+			support_source: v.optional(v.nullable(SupportSourceSchema), null)
+		}),
+		{ support_soc_pct: null, support_source: null }
+	),
 	watchdog: v.object({
 		state: v.picklist(['waiting', 'armed', 'tripped', 'disabled', 'unknown']),
 		trip_count: NullableNumber,

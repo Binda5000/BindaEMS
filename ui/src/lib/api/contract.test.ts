@@ -123,6 +123,19 @@ describe('Gesundheitsbericht des core', () => {
 		expect(watchdog(unknown)).toEqual([]);
 	});
 
+	it('akzeptiert Health ohne Schwelle der Akku-Unterstützung und füllt sie mit null', () => {
+		const unknown = { support_soc_pct: null, support_source: null };
+		const parse = (changes: Record<string, unknown>) =>
+			v.parse(s.CoreHealthSchema, { ...demo.core.health, ...changes }).battery;
+		expect(parse({ battery: {} })).toEqual(unknown);
+		expect(parse({ battery: { state: 'idle' } })).toEqual(unknown);
+		const withoutBattery = { ...demo.core.health };
+		delete withoutBattery.battery;
+		expect(v.parse(s.CoreHealthSchema, withoutBattery).battery).toEqual(unknown);
+		expect(check({ battery: { support_soc_pct: 82, support_source: 'plan' } })).toEqual([]);
+		expect(check({ battery: { support_soc_pct: 82, support_source: 'amt' } })).not.toEqual([]);
+	});
+
 	it('akzeptiert Absicht, Betriebsarten der Aktoren und den Beginn der Betriebsart', () => {
 		const intent = {
 			version: 3,

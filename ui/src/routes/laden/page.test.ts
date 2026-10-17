@@ -5,6 +5,7 @@ import controlJson from '$lib/api/contract/control.json';
 import { ApiError } from '$lib/api/errors';
 import {
 	ControlResponseSchema,
+	SystemResponseSchema,
 	type ControlReply,
 	type CoreHealth,
 	type Intent,
@@ -359,6 +360,20 @@ it('kennt die wirksame Schwelle vor dem ersten Zyklus nicht', async () => {
 	expect(
 		within(card('Akku-Unterstützung')).getByText('Wirksame Schwelle unbekannt.')
 	).toBeVisible();
+});
+
+it('kennt die Schwelle nicht, wenn Health keinen Akku-Block hat', async () => {
+	const health: Partial<CoreHealth> = { ...system().core.health! };
+	delete health.battery;
+	const parsed = v.parse(SystemResponseSchema, {
+		...system(),
+		core: { connected: true, health }
+	});
+	await show(parsed);
+	expect(
+		within(card('Akku-Unterstützung')).getByText('Wirksame Schwelle unbekannt.')
+	).toBeVisible();
+	expect(screen.getByRole('heading', { level: 2, name: 'e-Golf' })).toBeVisible();
 });
 
 it('schaltet die Akku-Unterstützung aus', async () => {
