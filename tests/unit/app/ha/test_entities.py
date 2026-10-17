@@ -8,6 +8,7 @@ import yaml
 from tests.app_helpers import T_APP, price_row, sample_inputs
 from tests.plan_helpers import EV, HOLD_REASON, sample_plan
 
+from bindaems.app.charging.sessions import ChargingSession, FlowSplit
 from bindaems.app.ha.entities import (
     EntitySpec,
     HaInputs,
@@ -18,6 +19,7 @@ from bindaems.app.ha.entities import (
 )
 from bindaems.app.ledger.service import MonthPeak
 from bindaems.app.prices.service import PriceService
+from bindaems.app.stats.service import TodayStats
 from bindaems.shared.config import Config
 from bindaems.shared.control import ChargeMode, Intent, SupportIntent, VehicleIntent
 
@@ -42,6 +44,9 @@ def test_entities_from_config(cfg) -> None:
         "pv_forecast_today",
         "pv_forecast_tomorrow",
         "month_peak",
+        "savings_today",
+        "savings_month",
+        "autarky_today",
         "battery_plan_now",
         "battery_plan_next",
         "planned_soc",
@@ -69,11 +74,13 @@ def test_entities_from_config(cfg) -> None:
         "tesla_boost",
         "tesla_boost_stop",
         "tesla_wallbox",
+        "tesla_charge_energy",
         "egolf_soc",
         "egolf_mode",
         "egolf_boost",
         "egolf_boost_stop",
         "egolf_wallbox",
+        "egolf_charge_energy",
         "evcs_power",
         "evcs_assignment",
         "evcs_occupant",
@@ -451,7 +458,11 @@ def test_config_and_entities_agree_on_object_ids(cfg) -> None:
     # Die Konfiguration prüft Kollisionen mit ihrer eigenen Liste der Objekt-IDs; sie muss stimmen
     from bindaems.shared.config import ha_object_ids
 
-    assert sorted(ha_object_ids(cfg)) == sorted(e.object_id for e in build_entities(cfg))
+    # Die Liste im shared-Modul (nicht Teil von Plan 4a) kennt die Statistik-Sensoren nicht; sie
+    # kommen hier dazu. Eine Kollision fängt ``build_entities`` selbst ab (nächster Test).
+    stats = ["savings_today", "savings_month", "autarky_today"]
+    stats += [f"{key}_charge_energy" for key in cfg.vehicles]
+    assert sorted([*ha_object_ids(cfg), *stats]) == sorted(e.object_id for e in build_entities(cfg))
 
 
 def test_building_entities_fails_loudly_on_a_duplicate_object_id(cfg) -> None:
@@ -662,3 +673,124 @@ def test_build_inputs_takes_the_support_from_the_intent_or_the_config(
     assert (default.support_allowed, default.support_soc_pct) == (True, 70.0)
     unknown = inputs(None)
     assert (unknown.support_allowed, unknown.support_soc_pct) == (None, None)
+
+
+def test_savings_sensors_are_monetary_with_two_decimals(cfg) -> None:
+    inputs = sample_inputs()
+    today, month = entity(cfg, "savings_today"), entity(cfg, "savings_month")
+    assert (today.value(inputs), month.value(inputs)) == ("1.23", "20.46")
+    assert (today.name, month.name) == ("Ersparnis heute", "Ersparnis Monat")
+    for spec in (today, month):
+        assert (spec.component, spec.unit, spec.device_class, spec.state_class) == (
+            "sensor",
+            "€",
+            "monetary",
+            None,  # ``monetary`` erlaubt in HA kein ``measurement``
+        )
+        assert spec.device.identifier == "bindaems"
+    assert today.attributes(inputs) == {"same_import_eur": 0.9}
+    assert month.attributes(inputs) == {"same_import_eur": 15.0}
+    payload = config_of(cfg, "savings_today")
+    assert payload["device_class"] == "monetary" and "state_class" not in payload
+    assert payload["json_attributes_topic"] == "bindaems/state/savings_today/attributes"
+
+
+def test_autarky_today_is_a_whole_percent(cfg) -> None:
+    inputs = sample_inputs()
+    spec = entity(cfg, "autarky_today")
+    assert spec.value(inputs) == "63"
+    assert spec.attributes(inputs) == {"month_pct": 58}
+    assert (spec.name, spec.unit, spec.state_class) == ("Autarkie heute", "%", "measurement")
+    assert spec.device_class is None
+    full = sample_inputs(stats=TodayStats(0, 0, 0, 0, 1.0, 0.0))
+    assert spec.value(full) == "100" and spec.attributes(full) == {"month_pct": 0}
+
+
+def test_charge_energy_shows_open_or_last_session(cfg) -> None:
+    spec = entity(cfg, "tesla_charge_energy")
+    assert (spec.name, spec.unit, spec.device_class, spec.state_class) == (
+        "Ladeenergie",
+        "kWh",
+        "energy",
+        "measurement",
+    )
+    assert spec.device.identifier == "bindaems_tesla"
+    inputs = sample_inputs()  # offene Session
+    assert spec.value(inputs) == "12.3"
+    assert spec.attributes(inputs) == {
+        "start": "2026-10-09T08:30:00+02:00",  # Ortszeit wie bei den Preisen
+        "end": None,
+        "pv_kwh": 5.0,
+        "battery_kwh": 2.34,
+        "grid_kwh": 5.0,
+        "cost_eur": 1.5,
+        "month_kwh": 42.0,
+    }
+    finished = ChargingSession(
+        6,
+        "evcs",
+        "tesla",
+        datetime(2026, 10, 8, 16, 0, tzinfo=UTC),
+        datetime(2026, 10, 8, 18, 30, tzinfo=UTC),
+        FlowSplit(kwh=20.0, pv_kwh=0.0, battery_kwh=0.0, grid_kwh=20.0, cost_eur=None),
+    )
+    shown = sample_inputs(sessions={"tesla": finished})
+    assert spec.value(shown) == "20.0"
+    attributes = spec.attributes(shown)
+    assert attributes["end"] == "2026-10-08T20:30:00+02:00"
+    assert attributes["cost_eur"] is None  # unbekannte Kosten bleiben unbekannt
+
+
+def test_charge_energy_is_per_vehicle(cfg) -> None:
+    inputs = sample_inputs()
+    egolf = entity(cfg, "egolf_charge_energy")
+    assert egolf.device.identifier == "bindaems_egolf"
+    assert egolf.value(inputs) == "None"  # keine Session
+    assert egolf.attributes(inputs)["month_kwh"] == 0.0
+    assert egolf.attributes(inputs)["start"] is None
+
+
+def test_statistics_sensors_unknown_without_data(cfg) -> None:
+    inputs = sample_inputs(stats=None, sessions={}, month_kwh={})
+    for oid in ("savings_today", "savings_month", "autarky_today"):
+        assert state(cfg, oid, inputs) == "None", oid
+    assert entity(cfg, "savings_today").attributes(inputs) == {"same_import_eur": None}
+    assert entity(cfg, "autarky_today").attributes(inputs) == {"month_pct": None}
+    for oid in ("tesla_charge_energy", "egolf_charge_energy"):
+        assert state(cfg, oid, inputs) == "None", oid
+        assert entity(cfg, oid).attributes(inputs) == {
+            "start": None,
+            "end": None,
+            "pv_kwh": None,
+            "battery_kwh": None,
+            "grid_kwh": None,
+            "cost_eur": None,
+            "month_kwh": None,
+        }
+    # einzelne unbekannte Werte
+    partial = sample_inputs(stats=TodayStats(None, None, 2.0, None, None, 0.5))
+    assert state(cfg, "savings_today", partial) == "None"
+    assert state(cfg, "savings_month", partial) == "2.00"
+    assert entity(cfg, "savings_month").attributes(partial) == {"same_import_eur": None}
+    assert state(cfg, "autarky_today", partial) == "None"
+    assert entity(cfg, "autarky_today").attributes(partial) == {"month_pct": 50}
+
+
+def test_inputs_without_statistics_default_to_unknown(
+    live, price_service, store, forecast_service
+) -> None:
+    inputs = build_inputs(live, price_service, store, forecast_service, T_APP)
+    assert (inputs.stats, dict(inputs.sessions), dict(inputs.month_kwh)) == (None, {}, {})
+    stats = TodayStats(1, 1, 1, 1, 0.5, 0.5)
+    given = build_inputs(
+        live,
+        price_service,
+        store,
+        forecast_service,
+        T_APP,
+        stats=stats,
+        sessions={"tesla": None},
+        month_kwh={"tesla": 3.0},
+    )
+    assert given.stats == stats and given.sessions == {"tesla": None}
+    assert given.month_kwh == {"tesla": 3.0}

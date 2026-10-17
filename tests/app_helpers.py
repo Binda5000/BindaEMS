@@ -11,6 +11,7 @@ from argon2 import PasswordHasher
 from fastapi.testclient import TestClient
 
 from bindaems.app.auth.service import AuthService, Role
+from bindaems.app.charging.sessions import ChargingSession, FlowSplit
 from bindaems.app.consumers.service import Consumer, ConsumerInput
 from bindaems.app.fetch import RawResponse
 from bindaems.app.ha.entities import HaInputs
@@ -18,6 +19,7 @@ from bindaems.app.ledger.service import LedgerService
 from bindaems.app.prices.sources import AwattarSource, EnergyChartsSource, SmartEnergySource
 from bindaems.app.prices.store import SlotRow
 from bindaems.app.settings.service import SettingsService
+from bindaems.app.stats.service import TodayStats
 from bindaems.shared.domain import SlotFlows
 from bindaems.shared.settings import RuntimeSettings, TariffSettings
 
@@ -208,6 +210,27 @@ def sample_inputs(**changes: Any) -> HaInputs:
         "pv_today_kwh": 12.34,
         "pv_tomorrow_kwh": 8.1,
         "watchdog_state": None,
+        "stats": TodayStats(
+            savings_today_eur=1.234,
+            savings_same_import_today_eur=0.9,
+            savings_month_eur=20.456,
+            savings_same_import_month_eur=15.0,
+            autarky_today=0.634,
+            autarky_month=0.58,
+        ),
+        # laufende Session des Tesla an der EVCS; die des e-Golf fehlt (unbekannt)
+        "sessions": {
+            "tesla": ChargingSession(
+                7,
+                "evcs",
+                "tesla",
+                datetime(2026, 10, 9, 6, 30, tzinfo=UTC),
+                None,
+                FlowSplit(kwh=12.34, pv_kwh=5.0, battery_kwh=2.34, grid_kwh=5.0, cost_eur=1.5),
+            ),
+            "egolf": None,
+        },
+        "month_kwh": {"tesla": 42.0, "egolf": 0.0},
     }
     values.update(changes)
     return HaInputs(**values)

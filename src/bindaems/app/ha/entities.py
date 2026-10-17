@@ -12,7 +12,7 @@ import math
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
-from typing import Any, Final, Literal
+from typing import TYPE_CHECKING, Any, Final, Literal
 
 from bindaems import __version__
 from bindaems.app.control.intent import ASSIGNMENT_OVERRIDE
@@ -36,6 +36,10 @@ from bindaems.shared.control import ChargeMode, Intent, VehicleIntent
 from bindaems.shared.domain import Value
 from bindaems.shared.plan import BatteryIntentKind, Plan, PlanSlot
 from bindaems.shared.timeutil import LOCAL_TZ, SLOT, slot_start
+
+if TYPE_CHECKING:  # nur für Typen: ``charging.sessions`` importiert selbst aus diesem Modul
+    from bindaems.app.charging.sessions import ChargingSession
+    from bindaems.app.stats.service import TodayStats
 
 NODE_ID = "bindaems"
 MANUFACTURER = "BindaEMS"
@@ -101,6 +105,11 @@ class HaInputs:
         None  # „Akku-Unterstützung erlaubt“ der Absicht; None = unbekannt
     )
     support_soc_pct: float | None = None  # Unterstützungsschwelle (Absicht, sonst Konfiguration)
+    stats: TodayStats | None = None  # Ersparnis und Autarkie (Plan 4a); None = unbekannt
+    # je Fahrzeug (Schlüssel aus ``config.yaml``) die laufende oder letzte Ladesession; ein
+    # fehlender Schlüssel oder ``None`` heißt: keine bekannt
+    sessions: Mapping[str, ChargingSession | None] = field(default_factory=dict)
+    month_kwh: Mapping[str, float | None] = field(default_factory=dict)  # Ladeenergie im Monat
 
 
 @dataclass(frozen=True)
@@ -321,6 +330,92 @@ def _month_peak_attributes(inputs: HaInputs) -> Mapping[str, Any]:
     return {"slot": None if peak is None else peak.slot_start.astimezone(UTC).isoformat()}
 
 
+def _eur(value: float | None) -> float | None:
+    number = _number(value)
+    return None if number is None else round(number, 2)
+
+
+def _percent(fraction: float | None) -> float | None:
+    number = _number(fraction)
+    return None if number is None else number * 100
+
+
+def _savings(month: bool) -> Callable[[HaInputs], str]:
+    """Ersparnis „ohne Anlage“ von heute bzw. vom Monat bis heute (Plan 4a, Präzisierung 13)."""
+
+    def value(inputs: HaInputs) -> str:
+        stats = inputs.stats
+        if stats is None:
+            return UNKNOWN
+        return fmt(stats.savings_month_eur if month else stats.savings_today_eur, 2)
+
+    return value
+
+
+def _savings_attributes(month: bool) -> Callable[[HaInputs], Mapping[str, Any]]:
+    def attributes(inputs: HaInputs) -> Mapping[str, Any]:
+        stats = inputs.stats
+        if stats is None:
+            return {"same_import_eur": None}
+        same = stats.savings_same_import_month_eur if month else stats.savings_same_import_today_eur
+        return {"same_import_eur": _eur(same)}
+
+    return attributes
+
+
+def _autarky_today(inputs: HaInputs) -> str:
+    return UNKNOWN if inputs.stats is None else fmt(_percent(inputs.stats.autarky_today), 0)
+
+
+def _autarky_attributes(inputs: HaInputs) -> Mapping[str, Any]:
+    month = None if inputs.stats is None else _percent(inputs.stats.autarky_month)
+    return {"month_pct": None if month is None else round(month)}
+
+
+def _charge_energy(key: str) -> Callable[[HaInputs], str]:
+    def value(inputs: HaInputs) -> str:
+        session = inputs.sessions.get(key)
+        return UNKNOWN if session is None else fmt(session.split.kwh, 1)
+
+    return value
+
+
+def _kwh(value: float | None) -> float | None:
+    number = _number(value)
+    return None if number is None else round(number, 3)
+
+
+def _charge_energy_attributes(key: str) -> Callable[[HaInputs], Mapping[str, Any]]:
+    """Die laufende oder letzte Session mit Herkunft der Energie, Kosten und Energie im Monat;
+    Zeiten lokal wie bei ``prices``, ``end`` ``None`` solange die Session läuft."""
+
+    def attributes(inputs: HaInputs) -> Mapping[str, Any]:
+        month = _kwh(inputs.month_kwh.get(key))
+        session = inputs.sessions.get(key)
+        if session is None:
+            return {
+                "start": None,
+                "end": None,
+                "pv_kwh": None,
+                "battery_kwh": None,
+                "grid_kwh": None,
+                "cost_eur": None,
+                "month_kwh": month,
+            }
+        split = session.split
+        return {
+            "start": session.start.astimezone(LOCAL_TZ).isoformat(),
+            "end": None if session.end is None else session.end.astimezone(LOCAL_TZ).isoformat(),
+            "pv_kwh": _kwh(split.pv_kwh),
+            "battery_kwh": _kwh(split.battery_kwh),
+            "grid_kwh": _kwh(split.grid_kwh),
+            "cost_eur": _eur(split.cost_eur),
+            "month_kwh": month,
+        }
+
+    return attributes
+
+
 def _execution(inputs: HaInputs) -> Mapping[str, Any]:
     """Der Stand der Ausführung (Plan 3c) an jedem Plan-Sensor, mit und ohne Plan; ``None`` heißt
     unbekannt."""
@@ -452,6 +547,36 @@ def build_entities(cfg: Config) -> list[EntitySpec]:
             device_class="power",
             state_class="measurement",
             attributes=_month_peak_attributes,
+        ),
+        EntitySpec(
+            "savings_today",
+            "sensor",
+            "Ersparnis heute",
+            main,
+            _savings(month=False),
+            unit="€",
+            device_class="monetary",
+            attributes=_savings_attributes(month=False),
+        ),
+        EntitySpec(
+            "savings_month",
+            "sensor",
+            "Ersparnis Monat",
+            main,
+            _savings(month=True),
+            unit="€",
+            device_class="monetary",
+            attributes=_savings_attributes(month=True),
+        ),
+        EntitySpec(
+            "autarky_today",
+            "sensor",
+            "Autarkie heute",
+            main,
+            _autarky_today,
+            unit="%",
+            state_class="measurement",
+            attributes=_autarky_attributes,
         ),
         EntitySpec(
             "battery_plan_now",
@@ -626,6 +751,17 @@ def build_entities(cfg: Config) -> list[EntitySpec]:
             _control(f"{oid}_boost", "button", "Boost", device, lambda _: ""),
             _control(f"{oid}_boost_stop", "button", "Boost beenden", device, lambda _: ""),
             EntitySpec(f"{oid}_wallbox", "sensor", "Wallbox", device, _vehicle_wallbox(cfg, key)),
+            EntitySpec(
+                f"{oid}_charge_energy",
+                "sensor",
+                "Ladeenergie",
+                device,
+                _charge_energy(key),
+                unit="kWh",
+                device_class="energy",
+                state_class="measurement",
+                attributes=_charge_energy_attributes(key),
+            ),
         ]
     options = (AUTOMATIC, *(vehicle.name for vehicle in cfg.vehicles.values()))
     for key, wallbox in cfg.wallboxes.items():
@@ -714,6 +850,9 @@ def build_inputs(
     plan: Plan | None = None,
     grid_charge_allowed: bool | None = None,
     support_default_pct: float | None = None,
+    stats: TodayStats | None = None,
+    sessions: Mapping[str, ChargingSession | None] | None = None,
+    month_kwh: Mapping[str, float | None] | None = None,
 ) -> HaInputs:
     connected = live.connected
     signals: dict[str, Value] = {}
@@ -795,4 +934,7 @@ def build_inputs(
         execution=execution,
         support_allowed=support_allowed,
         support_soc_pct=support_soc_pct,
+        stats=stats,
+        sessions=dict(sessions or {}),
+        month_kwh=dict(month_kwh or {}),
     )

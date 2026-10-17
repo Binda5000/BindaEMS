@@ -36,6 +36,35 @@ def test_operations_guide_describes_the_operation() -> None:
         assert topic in ha
 
 
+def test_statistics_sensors_in_the_guide_match_the_entities() -> None:
+    # Die Tabelle in Abschnitt 7 nennt Namen, Einheiten und Attribute der Statistik-Sensoren
+    # wie die Entitäten der app (Plan 4a, Task 10).
+    from bindaems.app.ha.entities import build_entities
+    from bindaems.shared.config import load_config
+
+    cfg = load_config(Path("deploy/config.example.yaml"))
+    specs = {spec.object_id: spec for spec in build_entities(cfg)}
+    section = _guide_section("7. Home Assistant über MQTT")
+    expected = {
+        "savings_today": ("Ersparnis heute", "€", ("same_import_eur",)),
+        "savings_month": ("Ersparnis Monat", "€", ()),
+        "autarky_today": ("Autarkie heute", "%", ("month_pct",)),
+        "tesla_charge_energy": (
+            "Ladeenergie",
+            "kWh",
+            ("start", "end", "pv_kwh", "battery_kwh", "grid_kwh", "cost_eur", "month_kwh"),
+        ),
+    }
+    for oid, (name, unit, attributes) in expected.items():
+        assert (specs[oid].name, specs[oid].unit) == (name, unit), oid
+        row = next((line for line in section.splitlines() if line.startswith(f"| {name} ")), "")
+        assert f"| {unit} |" in row, oid
+        for attribute in attributes:
+            assert f"`{attribute}`" in row, (oid, attribute)
+    flat = " ".join(section.split())
+    assert "nicht im 5-s-Takt" in flat and "alle 15 Minuten" in flat
+
+
 def test_operations_guide_describes_charging() -> None:
     text = Path("docs/betrieb.md").read_text(encoding="utf-8")
     for topic in ("## Laderegelung", "## Simulator", '"vehicles"', "-m bindaems.tools.sim"):

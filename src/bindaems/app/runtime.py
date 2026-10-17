@@ -10,8 +10,8 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import threading
-from collections.abc import Awaitable, Callable, Generator
-from dataclasses import replace
+from collections.abc import Awaitable, Callable, Generator, Mapping, Sequence
+from dataclasses import dataclass, replace
 from datetime import date, timedelta
 from functools import partial
 from typing import Any
@@ -29,7 +29,7 @@ from bindaems.app.auth.service import AuthService
 from bindaems.app.auth.web import Guard
 from bindaems.app.backup import backup_database
 from bindaems.app.charging.routes import charging_router
-from bindaems.app.charging.sessions import SessionService
+from bindaems.app.charging.sessions import ChargingSession, SessionService
 from bindaems.app.charging.tracker import ChargingTracker
 from bindaems.app.consumers.days import FILL_DAYS, ConsumerDays
 from bindaems.app.consumers.energy import EnergyCache
@@ -73,7 +73,7 @@ from bindaems.app.schedule import next_local
 from bindaems.app.settings.routes import settings_router
 from bindaems.app.settings.service import SettingsService
 from bindaems.app.stats.routes import stats_router
-from bindaems.app.stats.service import StatsService
+from bindaems.app.stats.service import StatsService, TodayStats
 from bindaems.app.status import ComponentStatus, StatusSource
 from bindaems.shared.config import Config, Secrets
 from bindaems.shared.control import Intent
@@ -92,6 +92,9 @@ HOUR_S = 3600.0
 HA_VALUES_S = 15.0
 ENERGY_S = 60.0  # Energie der Verbraucher seit Mitternacht
 HA_INPUTS_S = 5.0
+STATS_S = 15 * 60.0  # Statistik für HA: bei jedem neuen Slot und spätestens alle 15 min
+STATS_SESSION_DAYS = 90  # so weit zurück sucht HA die letzte Ladesession eines Fahrzeugs
+STATS_SESSION_LIMIT = 5  # genug, damit eine offene Session neben beendeten gefunden wird
 RESTART_S = 10.0
 BACKUP_AT = (3, 15)  # Ortszeit
 FORECAST_NIGHTLY_AT = (2, 30)  # Ortszeit
@@ -113,6 +116,20 @@ FORECAST_QUALITY_NIGHTLY: tuple[int, ...] = (1, 2)  # nachts: gestern und vorges
 FORECAST_CALIBRATION_WAIT_S = (
     60.0  # so lange wartet der erste PV-Abruf höchstens auf die Kalibrierung
 )
+
+
+@dataclass(frozen=True)
+class StatsInputs:
+    """Zwischenspeicher der Statistik-Werte für Home Assistant (nicht im 5-s-Takt gerechnet)."""
+
+    stats: TodayStats | None
+    sessions: Mapping[str, ChargingSession | None]  # je Fahrzeug die laufende oder letzte
+    month_kwh: Mapping[str, float | None]  # je Fahrzeug die Ladeenergie im Monat
+
+
+def open_or_last(found: Sequence[ChargingSession]) -> ChargingSession | None:
+    """Aus den Sessions eines Fahrzeugs (neueste zuerst) die offene, sonst die neueste."""
+    return next((session for session in found if session.end is None), found[0] if found else None)
 
 
 class _AppServer(uvicorn.Server):
@@ -261,6 +278,9 @@ class AppRuntime:
         )
         self.ha_publisher: HaPublisher | None = None
         self._ha_inputs: HaInputs | None = None
+        self._stats_inputs = StatsInputs(None, {}, {})
+        self._stats_wake = asyncio.Event()  # ein neuer Slot (aus jedem Thread) weckt die Statistik
+        self._stats_loop_ref: asyncio.AbstractEventLoop | None = None
         self._ha_ready = asyncio.Event()  # erste Werte für HA bestimmt
         mqtt = cfg.homeassistant.mqtt if cfg.homeassistant is not None else None
         self.ha_notifier: HaNotifier | None = None
@@ -294,6 +314,7 @@ class AppRuntime:
                     self.planning,
                 ),
             )
+            self.ledger.on_slots_changed(self._on_stats_slots)
         self.settings.on_change(lambda _version: self.pipeline.republish())
 
         sources: list[StatusSource] = [
@@ -414,6 +435,9 @@ class AppRuntime:
         """Läuft im Worker-Thread (``_ha_inputs_loop``): die Datenbankabfrage blockiert nicht."""
         now = self._clock.now()
         settings = self.settings.current().settings
+        cached = (
+            self._stats_inputs
+        )  # Statistik: nur der Zwischenspeicher, keine Abfrage im 5-s-Takt
         return build_inputs(
             self.live,
             self.prices,
@@ -426,6 +450,9 @@ class AppRuntime:
             self.planning.current(),
             settings.planning.grid_charge_allowed,
             support_default_pct=self._cfg.control.support_soc_pct,
+            stats=cached.stats,
+            sessions=cached.sessions,
+            month_kwh=cached.month_kwh,
         )
 
     async def _ha_intent(self) -> Intent | None:
@@ -467,6 +494,7 @@ class AppRuntime:
             jobs.append(("ha-values", partial(self._ha_values_loop, self.ha_values)))
         if self.ha_publisher is not None:
             jobs += [
+                ("ha-stats", self._stats_loop),
                 ("ha-inputs", self._ha_inputs_loop),
                 ("ha", partial(self._ha_loop, self.ha_publisher)),
             ]
@@ -563,6 +591,58 @@ class AppRuntime:
             except Exception:
                 log.exception("Werte für Home Assistant nicht bestimmbar")
             await asyncio.sleep(HA_INPUTS_S)
+
+    def _on_stats_slots(self, _start: object) -> None:
+        """Nach neuen oder geänderten Slots (aus jedem Thread): die Statistik neu rechnen."""
+        loop = self._stats_loop_ref
+        if loop is None or loop.is_closed():
+            return  # die Schleife rechnet beim Start ohnehin
+        with contextlib.suppress(RuntimeError):  # Schleife gerade geschlossen
+            loop.call_soon_threadsafe(self._stats_wake.set)
+
+    async def _stats_loop(self) -> None:
+        """Ersparnis, Autarkie und Ladesessions für HA: beim Start, bei jedem neuen Slot und alle
+        15 min (``STATS_S``). Die Datenbank wird im Worker-Thread gelesen."""
+        self._stats_loop_ref = asyncio.get_running_loop()
+        while True:
+            self._stats_wake.clear()  # ein Slot während der Rechnung löst gleich die nächste aus
+            try:
+                await asyncio.to_thread(self._refresh_stats)
+            except Exception:
+                log.exception("Statistik für Home Assistant nicht berechenbar")
+            with contextlib.suppress(TimeoutError):
+                await asyncio.wait_for(self._stats_wake.wait(), timeout=STATS_S)
+
+    def _refresh_stats(self) -> None:
+        """Rechnet die Statistik neu (blockierend, im Worker-Thread). Jeder Teil, der scheitert,
+        behält seinen letzten Wert: die Sensoren zeigen weiter diesen oder „unbekannt“."""
+        previous = self._stats_inputs
+        now = self._clock.now()
+        today = now.astimezone(LOCAL_TZ).date()
+        stats = previous.stats
+        try:
+            stats = self.stats.today()
+        except Exception:
+            log.exception("Ersparnis und Autarkie für Home Assistant nicht berechenbar")
+        sessions = dict(previous.sessions)
+        for key in self._cfg.vehicles:
+            try:
+                found = self.charging_sessions.sessions(
+                    today - timedelta(days=STATS_SESSION_DAYS),
+                    today,
+                    vehicle=key,
+                    limit=STATS_SESSION_LIMIT,
+                )
+                sessions[key] = open_or_last(found)
+            except Exception:
+                log.exception("Ladesession für Home Assistant nicht bestimmbar", vehicle=key)
+        month_kwh = dict(previous.month_kwh)
+        try:
+            split = self.charging_sessions.by_vehicle(local_day_slots(today.replace(day=1))[0], now)
+            month_kwh = {key: split[key].kwh if key in split else 0.0 for key in self._cfg.vehicles}
+        except Exception:
+            log.exception("Ladeenergie im Monat für Home Assistant nicht berechenbar")
+        self._stats_inputs = StatsInputs(stats, sessions, month_kwh)
 
     async def _ha_loop(self, publisher: HaPublisher) -> None:
         """Verbindet erst, wenn die ersten Werte bestimmt sind."""

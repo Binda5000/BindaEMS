@@ -6,15 +6,18 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 from pydantic import SecretStr
+from sqlalchemy import insert
 from structlog.testing import capture_logs
-from tests.app_helpers import PASSWORD, T_APP, StopScheduler, record_then_stop
+from tests.app_helpers import PASSWORD, T_APP, StopScheduler, ingest, record_then_stop
 from tests.plan_helpers import sample_plan, set_planning, until
 from tests.unit.shared.test_decisions import decision
 
+from bindaems.app.charging.sessions import ChargingSession, FlowSplit
 from bindaems.app.control.decisions import DecisionQuery
 from bindaems.app.control.intent import CoreDown
+from bindaems.app.db.schema import charging_session
 from bindaems.app.ha.entities import build_inputs
-from bindaems.app.runtime import AppRuntime
+from bindaems.app.runtime import AppRuntime, StatsInputs, open_or_last
 from bindaems.shared.config import Config, Secrets
 from bindaems.shared.control import Intent, SupportIntent
 from bindaems.shared.decisions import decision_to_json
@@ -743,3 +746,172 @@ async def test_ledger_nightly_stores_consumer_days_even_if_estimate_and_check_fa
     calls = spy_consumer_days(runtime, monkeypatch)
     await runtime._ledger_nightly(7)
     assert calls["fill"] == [(date(2026, 10, 9), 3)]
+
+
+# --- Statistik-Sensoren für Home Assistant (Plan 4a, Task 10) -------------------------------
+
+
+def spy_stats(runtime, monkeypatch) -> list[int]:
+    """Zählt die Neuberechnungen der Statistik (Thread-Kennung je Aufruf)."""
+    calls: list[int] = []
+    original = runtime.stats.today
+
+    def today():
+        calls.append(threading.get_ident())
+        return original()
+
+    monkeypatch.setattr(runtime.stats, "today", today)
+    return calls
+
+
+async def until_calls(calls: list[int], count: int) -> None:
+    for _ in range(300):
+        if len(calls) >= count:
+            return
+        await asyncio.sleep(0.01)
+    raise AssertionError(f"{len(calls)} statt {count} Neuberechnungen")
+
+
+async def stop(task: asyncio.Task) -> None:
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+
+async def test_stats_inputs_refresh_on_new_slot_not_every_5_s(runtime, monkeypatch) -> None:
+    calls = spy_stats(runtime, monkeypatch)
+    task = asyncio.create_task(runtime._stats_loop())
+    try:
+        await until_calls(calls, 1)  # gleich beim Start
+        # der 5-s-Takt der übrigen Werte rechnet die Statistik nicht neu
+        for _ in range(5):
+            runtime._build_ha_inputs(Intent(version=1))
+            await asyncio.sleep(0.02)
+        assert len(calls) == 1
+        # ein neuer Slot aus einem Worker-Thread (der Strom speichert so) rechnet neu
+        await asyncio.to_thread(ingest, runtime.ledger, T_APP, {"pv>house": 400.0})
+        await until_calls(calls, 2)
+        ingest(runtime.ledger, T_APP + timedelta(minutes=15), {"pv>house": 100.0})
+        await until_calls(calls, 3)
+        await asyncio.sleep(0.05)
+        assert len(calls) == 3
+    finally:
+        await stop(task)
+    assert threading.get_ident() not in calls  # die Datenbank wird im Worker-Thread gelesen
+
+
+async def test_stats_inputs_refresh_every_15_minutes(runtime, monkeypatch) -> None:
+    from bindaems.app import runtime as module
+
+    assert module.STATS_S == 15 * 60.0
+    monkeypatch.setattr(module, "STATS_S", 0.05)
+    calls = spy_stats(runtime, monkeypatch)
+    task = asyncio.create_task(runtime._stats_loop())
+    try:
+        await until_calls(calls, 3)  # ohne neuen Slot
+    finally:
+        await stop(task)
+
+
+async def test_ha_inputs_carry_the_cached_statistics(runtime) -> None:
+    empty = runtime._build_ha_inputs(Intent(version=1))
+    assert (empty.stats, dict(empty.sessions), dict(empty.month_kwh)) == (None, {}, {})
+    await asyncio.to_thread(runtime._refresh_stats)
+    inputs = runtime._build_ha_inputs(Intent(version=1))
+    assert inputs.stats is runtime._stats_inputs.stats and inputs.stats is not None
+    assert inputs.sessions == {"tesla": None, "egolf": None}
+    assert inputs.month_kwh == {"tesla": 0.0, "egolf": 0.0}
+
+
+def add_session(runtime, start, end, vehicle, wallbox="evcs") -> None:
+    with runtime.engine.begin() as conn:
+        conn.execute(
+            insert(charging_session).values(
+                wallbox=wallbox, vehicle=vehicle, start=start, end=end, last_seen=end or start
+            )
+        )
+
+
+async def test_stats_inputs_pick_the_open_or_last_session_per_vehicle(runtime) -> None:
+    hour = timedelta(hours=1)
+    add_session(runtime, T_APP - 5 * hour, T_APP - 4 * hour, "tesla")
+    add_session(runtime, T_APP - hour, None, "tesla")  # offene Session vor der beendeten
+    add_session(runtime, T_APP - 3 * hour, T_APP - 2 * hour, "egolf", "twc")
+    ingest(runtime.ledger, T_APP - timedelta(minutes=45), {"grid>wb:evcs": 3000.0})
+    ingest(runtime.ledger, T_APP - timedelta(minutes=270), {"pv>wb:evcs": 1000.0})
+    ingest(runtime.ledger, T_APP - 3 * hour, {"grid>wb:twc": 2000.0})
+    await asyncio.to_thread(runtime._refresh_stats)
+    cached = runtime._stats_inputs
+    tesla, egolf = cached.sessions["tesla"], cached.sessions["egolf"]
+    assert tesla is not None and tesla.end is None and tesla.split.kwh == pytest.approx(3.0)
+    assert egolf is not None and egolf.end == T_APP - 2 * hour
+    assert egolf.split.kwh == pytest.approx(2.0)
+    assert cached.month_kwh == {"tesla": pytest.approx(4.0), "egolf": pytest.approx(2.0)}
+
+
+async def test_failed_stats_refresh_keeps_the_previous_values(runtime, monkeypatch) -> None:
+    await asyncio.to_thread(runtime._refresh_stats)
+    before = runtime._stats_inputs
+    assert before.stats is not None
+
+    def broken(*_args, **_kwargs):
+        raise ValueError("kaputt")
+
+    monkeypatch.setattr(runtime.stats, "today", broken)
+    monkeypatch.setattr(runtime.charging_sessions, "by_vehicle", broken)
+    with capture_logs() as logs:
+        await asyncio.to_thread(runtime._refresh_stats)
+    assert runtime._stats_inputs == before  # die Sensoren bleiben beim letzten Wert
+    events = [log["event"] for log in logs]
+    assert "Ersparnis und Autarkie für Home Assistant nicht berechenbar" in events
+    assert "Ladeenergie im Monat für Home Assistant nicht berechenbar" in events
+
+
+async def test_failed_session_lookup_keeps_the_previous_session(runtime, monkeypatch) -> None:
+    add_session(runtime, T_APP - timedelta(hours=1), None, "tesla")
+    await asyncio.to_thread(runtime._refresh_stats)
+    before = runtime._stats_inputs.sessions["tesla"]
+    assert before is not None
+
+    def broken(*_args, **_kwargs):
+        raise ValueError("kaputt")
+
+    monkeypatch.setattr(runtime.charging_sessions, "sessions", broken)
+    with capture_logs() as logs:
+        await asyncio.to_thread(runtime._refresh_stats)
+    assert runtime._stats_inputs.sessions["tesla"] is before
+    assert [log["event"] for log in logs].count(
+        "Ladesession für Home Assistant nicht bestimmbar"
+    ) == 2
+
+
+async def test_stats_loop_survives_a_failing_refresh(runtime, monkeypatch) -> None:
+    from bindaems.app import runtime as module
+
+    monkeypatch.setattr(module, "STATS_S", 0.02)
+    attempts: list[int] = []
+
+    def refresh() -> None:
+        attempts.append(1)
+        raise RuntimeError("kaputt")
+
+    monkeypatch.setattr(runtime, "_refresh_stats", refresh)
+    task = asyncio.create_task(runtime._stats_loop())
+    try:
+        await until_calls(attempts, 3)
+    finally:
+        await stop(task)
+
+
+async def test_stats_inputs_start_unknown(runtime) -> None:
+    assert isinstance(runtime._stats_inputs, StatsInputs)
+    assert runtime._stats_inputs == StatsInputs(None, {}, {})
+
+
+def test_an_open_session_wins_over_a_newer_finished_one() -> None:
+    split = FlowSplit(1.0, 1.0, 0.0, 0.0, 0.0)
+    finished = ChargingSession(2, "twc", "tesla", T_APP, T_APP + timedelta(minutes=5), split)
+    parked = ChargingSession(1, "evcs", "tesla", T_APP - timedelta(hours=3), None, split)
+    assert open_or_last([finished, parked]) is parked  # neueste zuerst, die offene gewinnt
+    assert open_or_last([finished]) is finished
+    assert open_or_last([]) is None
