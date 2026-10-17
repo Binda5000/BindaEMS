@@ -784,6 +784,66 @@ def grid_charge(watts: float) -> ActiveSlot:
     return ActiveSlot(1, T0, intent, None, None, None)
 
 
+def budget_plan(budget_kw: float | None) -> IntentPlan:
+    """Ein Plan ab ``T0`` mit dem Budget ``budget_kw`` im ersten Slot (10:00), im zweiten keins."""
+    return IntentPlan(
+        id=1002,
+        created_at=T0,
+        valid_until=T0 + timedelta(minutes=30),
+        grid_charge_allowed=True,
+        slots=[
+            IntentPlanSlot(
+                start=T0 + timedelta(minutes=15 * n),
+                intent=BatteryIntent(kind=BatteryIntentKind.EIGENVERBRAUCH),
+                budget_kw=budget_kw if n == 0 else None,
+            )
+            for n in range(2)
+        ],
+    )
+
+
+def budget_run(cfg: Config, plan: IntentPlan | None) -> Regulation:
+    """Eine Regelung nach dem Zyklus um 10:00:00 mit dem e-Golf in Sofort und dem Plan."""
+    regulation = Regulation(cfg, HardLimits.from_config(cfg), started=T0)
+    intent = Intent(version=1, control=True, vehicles=EGOLF_NOW.vehicles, plan=plan)
+    peak_cycle(regulation, cfg, 0, intent=intent)
+    return regulation
+
+
+def test_regulation_uses_the_plan_budget(cfg) -> None:  # Plan 3c, Präzisierung 9
+    # Ohne Ziel in der Konfiguration schaltet das Budget des Slots den Wächter ein:
+    # P_zul = 5,5 kW · 0,25 h in 900 s, abzüglich der Marge von 300 W.
+    regulation = budget_run(cfg, budget_plan(5.5))
+    health = regulation.health()["peak"]
+    assert (health["state"], health["target_kw"]) == ("active", 5.5)
+    assert regulation.grid_budget_w() == 5200.0
+    # Das Budget ersetzt das Ziel der Konfiguration.
+    with_config = with_target(cfg, 8.0)
+    regulation = budget_run(with_config, budget_plan(5.5))
+    assert regulation.health()["peak"]["target_kw"] == 5.5
+    # Ein Slot ohne Budget und ein Zyklus ohne Plan lassen das Ziel der Konfiguration gelten.
+    for plan in (budget_plan(None), None):
+        regulation = budget_run(with_config, plan)
+        assert regulation.health()["peak"]["target_kw"] == 8.0
+        assert regulation.health()["peak"]["state"] == "active"
+    # Ohne Budget und ohne Ziel ruht der Wächter.
+    for plan in (budget_plan(None), None):
+        regulation = budget_run(cfg, plan)
+        assert regulation.health()["peak"]["state"] == "off"
+        assert regulation.grid_budget_w() is None
+
+
+def test_the_plan_budget_ends_with_its_slot(cfg) -> None:
+    # Im zweiten Slot (ab 10:15) hat der Plan kein Budget mehr: Ohne Ziel ruht der Wächter.
+    regulation = budget_run(cfg, budget_plan(5.5))
+    assert regulation.health()["peak"]["target_kw"] == 5.5
+    intent = Intent(version=1, control=True, vehicles=EGOLF_NOW.vehicles, plan=budget_plan(5.5))
+    peak_cycle(regulation, cfg, 900, intent=intent)
+    assert regulation.health()["peak"]["state"] == "off"
+    assert regulation.health()["peak"]["target_kw"] is None
+    assert regulation.grid_budget_w() is None
+
+
 def test_guard_sees_the_plan_target(cfg, monkeypatch) -> None:
     # Bei NETZLADEN bekommt der Wächter P plus den Fehlbetrag von Haus und Autos über der Basis;
     # im Eigenverbrauch wie bisher W, ohne Basis bei HALTEN und NETZLADEN nichts.

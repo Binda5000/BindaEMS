@@ -419,8 +419,8 @@ Aus den Bestandteilen rechnet die app:
   dafür keine eigene Tabelle; die Abfrage über die Abrechnung läuft jedes Mal und kann nicht
   auseinanderlaufen. Seit Plan 3b fließt der Leistungspreis in die Planung ein: in das Ziel des
   Optimierers, in die erwarteten Kosten des Plans und in die Vorschau des Budgets (Abschnitt
-  „Planung“). Nur die Ausführung folgt mit Plan 3c: das Budget für den 15-min-Wächter und die
-  Entscheidungen des core danach.
+  „Planung“). Seit Plan 3c hält der 15-min-Wächter das Budget des Plans (Abschnitt „15-min-Wächter“);
+  die Entscheidungen des core danach folgen noch.
 
 Die **Warnungen** auf der Übersicht und der Seite „System“ nennen, was fehlt:
 
@@ -2674,7 +2674,12 @@ Preis: Er drosselt die Wallboxen und lässt den Akku überbrücken, und was beid
     peak_target_kw: 8   # Ziel des 15-min-Wächters in kW; ohne Wert ruht er
   ```
 
-  Das Ziel ist bis Phase 3 das Budget `B`; die Monatsspitze folgt mit dem Leistungspreis (Spec 7.4).
+  Das Ziel ist das Budget `B`. Gilt ein Plan, ersetzt das Budget seines Slots das Ziel aus der
+  Konfiguration: Der Wächter nimmt in jedem Zyklus das Budget des gültigen Slots, wenn der Plan eins
+  nennt, sonst `control.peak_target_kw`. Auch ohne dieses Ziel hält er das Budget eines Slots; ohne
+  beides ruht er. Health `peak.target_kw` und der Stand `off` folgen dem Ziel des letzten Zyklus,
+  und `P_zul` ändert sich mit dem Ziel auch mitten in einer Viertelstunde. Die Monatsspitze folgt
+  mit dem Leistungspreis (Spec 7.4).
   Zulässig im Rest der Viertelstunde ist die mittlere Leistung
   `P_zul = (B · 0,25 h − E_bisher) / t_rest − Marge` mit der Marge `control.peak_margin_kw`
   (0,3 kW); bei einem Ziel von 8 kW sind das zu Beginn 7,7 kW.

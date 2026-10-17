@@ -88,7 +88,7 @@ def run_to(
     for moment in moments:
         now = at(moment)
         quarter = QuarterObs(slot_start(now), energy_wh if moment == second else 0.0, grid_w, {})
-        limits = guard.step(now, quarter, (), wanted_w, base_w, soc)
+        limits = guard.step(now, quarter, (), wanted_w, base_w, soc, target_kw=target_kw)
     return guard, limits
 
 
@@ -112,6 +112,27 @@ def test_budget_is_finite_and_follows_the_formula(energy_wh, millis, target_kw, 
     assert math.isfinite(limits.budget_w)
     assert limits.budget_w == pytest.approx(expected_w, rel=1e-9, abs=1e-6)
     assert guard.health()["budget_kw"] * 1000 == pytest.approx(expected_w, rel=1e-9, abs=1e-6)
+
+
+@settings(max_examples=100, deadline=None)
+@given(
+    energy_wh=st.floats(0.0, 3000.0),
+    millis=st.integers(10_000, 899_999),
+    first_kw=st.floats(1.0, 50.0),
+    second_kw=st.floats(1.0, 50.0),
+)
+def test_the_budget_follows_the_target_of_the_step(energy_wh, millis, first_kw, second_kw) -> None:
+    # Das Ziel wechselt innerhalb der Viertelstunde (Budget des Plans): P_zul rechnet mit dem Ziel
+    # des Schritts, ohne Lücke.
+    second = millis / 1000
+    guard, _ = run_to(second - 10.0, 0.0, target_kw=first_kw)
+    now = at(second)
+    quarter = QuarterObs(slot_start(now), energy_wh, 0.0, {})
+    limits = guard.step(now, quarter, (), 0.0, 0.0, 60.0, target_kw=second_kw)
+    expected_w = (second_kw * 250 - energy_wh) * 3600 / max(1.0, 900 - second) - 300.0
+    assert guard.health()["state"] == "active"
+    assert guard.health()["target_kw"] == second_kw
+    assert limits.budget_w == pytest.approx(expected_w, rel=1e-9, abs=1e-6)
 
 
 @settings(max_examples=200, deadline=None)
@@ -199,7 +220,9 @@ def test_any_course_of_steps_keeps_the_guard_consistent(steps) -> None:
         now += timedelta(seconds=seconds)
         quarter = observation(kind, now, grid_w, wh, share)
         usable = kind == "right" and math.isfinite(wh)
-        limits = guard.step(now, quarter, [EGOLF_BOOST, TESLA_NOW], 0.0, 0.0, 60.0)  # wirft nie
+        limits = guard.step(
+            now, quarter, [EGOLF_BOOST, TESLA_NOW], 0.0, 0.0, 60.0, target_kw=8.0
+        )  # wirft nie
         health, alarms = guard.health(), guard.alarms()
         state = health["state"]
 
@@ -395,7 +418,7 @@ def test_caps_never_rise_and_change_only_after_settling(course) -> None:  # Prä
             for rank, (mode, power_w, grid_w) in enumerate(states)
         ]
         quarter = QuarterObs(slot_start(now), 0.0, 0.0, {})
-        caps = dict(guard.step(now, quarter, cars, wanted_w, 0.0, soc).caps_w)
+        caps = dict(guard.step(now, quarter, cars, wanted_w, 0.0, soc, target_kw=8.0).caps_w)
 
         modes = {car.vehicle: car.mode for car in cars}
         assert all(modes[vehicle] in LEVEL for vehicle in caps)  # nie Boost oder Aus

@@ -59,11 +59,10 @@ def at(seconds: float) -> datetime:
     return QUARTER + timedelta(seconds=seconds)
 
 
-def guard(ceiling_w: float = FUSE_CEILING_W, target_kw: float = 8.0) -> PeakGuard:
-    """Ein Wächter mit dem Ziel ``target_kw``, USV-Reserve 20 % (Budget über 25 % SOC) und der
-    festen Grenze ``ceiling_w`` von Regel 2."""
-    control = ControlConfig(peak_target_kw=target_kw)
-    return PeakGuard(control, reserve_soc_pct=20.0, ceiling_w=ceiling_w)
+def guard(ceiling_w: float = FUSE_CEILING_W) -> PeakGuard:
+    """Ein Wächter mit USV-Reserve 20 % (Budget über 25 % SOC) und der festen Grenze ``ceiling_w``
+    von Regel 2; das Ziel bekommt jeder Schritt (``step``)."""
+    return PeakGuard(ControlConfig(peak_target_kw=8.0), reserve_soc_pct=20.0, ceiling_w=ceiling_w)
 
 
 def step(
@@ -76,11 +75,12 @@ def step(
     grid_w: float = 0.0,
     soc: float | None = 60.0,
     observed: bool = True,
+    target_kw: float = 8.0,
 ) -> PeakLimits:
     """Ein Schritt ``seconds`` nach 18:00:00 mit Basis 0; ohne ``observed`` fehlt ``quarter``."""
     now = at(seconds)
     quarter = QuarterObs(slot_start(now), wh, grid_w, {}) if observed else None
-    return g.step(now, quarter, cars, wanted_w, 0.0, soc)
+    return g.step(now, quarter, cars, wanted_w, 0.0, soc, target_kw=target_kw)
 
 
 def at_18_05(
@@ -445,7 +445,9 @@ def at_the_ceiling(
     ``P_zul`` ist zu Beginn 9700 W und steigt: ``7700 W + 1800000 W·s / (900 s − s)``.
     """
     wh = CEILING_W * second / 3600.0
-    return step(g, second, cars=cars, wanted_w=18400.0, wh=wh, grid_w=CEILING_W, soc=soc)
+    return step(
+        g, second, cars=cars, wanted_w=18400.0, wh=wh, grid_w=CEILING_W, soc=soc, target_kw=10.0
+    )
 
 
 @pytest.mark.parametrize("soc", [22.0, None])
@@ -454,7 +456,7 @@ def test_without_a_budget_and_p_zul_above_the_ceiling_the_guard_cuts_nothing(soc
     # Netzbezug bleibt mit 8000 W unter P_zul, und was die Autos darüber wollen, liefert der Akku
     # wie ohne Ziel (Design 2c-2, Entscheidung 3). Der Bedarf ist max(Mittel, min(Basis + W, C)) =
     # 8000 W: Über zwei Wartezeiten senkt der Wächter nichts.
-    g = guard(CEILING_W, target_kw=10.0)
+    g = guard(CEILING_W)
     assert all(at_the_ceiling(g, second, soc).caps_w == {} for second in range(61))
     assert g.health()["reduction_kw"] == 0.0
 
@@ -463,7 +465,7 @@ def test_a_soc_at_the_threshold_with_p_zul_above_the_ceiling_cuts_nothing() -> N
     # Der SOC pendelt um die Schwelle von 25 %: Schritt für Schritt hat der Akku ein Budget und
     # keins. Liegt P_zul über C, ist der Bedarf in beiden Fällen 8000 W; es entsteht keine Grenze,
     # die im nächsten Schritt wieder fiele.
-    g = guard(CEILING_W, target_kw=10.0)
+    g = guard(CEILING_W)
     for second in range(121):
         limits = at_the_ceiling(g, second, 25.1 if second % 2 else 25.0)
         assert limits.caps_w == {}, second

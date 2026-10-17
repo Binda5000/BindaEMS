@@ -9,6 +9,8 @@ Plan 2c-2a, Design 6.1 bis 6.4 und 9, Präzisierungen 9 bis 14. Leistungen in W,
 - ``PeakLimits`` und ``NO_LIMITS``: was der Wächter den anderen Bausteinen vorgibt
 - ``Cap``, ``throttle``, ``lift``, ``pending_w`` und ``no_start``: Drosselung, Aufheben und
   Start-Sperre als reine Rechnungen (Präzisierungen 11 und 13)
+- ``guard_target_kw``: das Ziel eines Schritts: das Budget des Plan-Slots oder
+  ``control.peak_target_kw``
 - ``PeakGuard``: Messung, Lücken, ``P_zul``, Hochrechnung, verlangte Senkung, Budget für den Akku,
   die Grenzen je Fahrzeug über die Viertelstunde, die Start-Sperre und der Zustand ``off``, ``gap``,
   ``active`` oder ``exceeded``
@@ -26,6 +28,7 @@ from datetime import datetime
 from typing import Any, Final, Literal
 
 from bindaems.core.control.charge_modes import Effective
+from bindaems.core.control.plan_exec import ActiveSlot
 from bindaems.core.control.tesla_policy import MovingAverage
 from bindaems.core.control.timing import held_since, lasted
 from bindaems.shared.config import ControlConfig
@@ -224,14 +227,28 @@ class _Last:
     calc: _Calc | None
 
 
+def guard_target_kw(control: ControlConfig, active: ActiveSlot | None) -> float | None:
+    """Das Ziel des Wächters für einen Schritt (Plan 3c, Präzisierung 9).
+
+    Das Budget des gültigen Plan-Slots, wenn es eine Zahl ist; sonst ``control.peak_target_kw``.
+    Ohne beides ``None``: Der Wächter ruht.
+    """
+    if active is not None and active.budget_kw is not None:
+        return active.budget_kw
+    return control.peak_target_kw
+
+
 class PeakGuard:
     """Der 15-min-Wächter: misst die Viertelstunde, rechnet, drosselt und entscheidet den Zustand.
 
-    Ohne ``control.peak_target_kw`` ruht er ganz: ``NO_LIMITS`` und Zustand ``off``. Sonst ist die
-    laufende Viertelstunde ``slot_start(wall_now)`` bis ``slot_end(wall_now)``. Eine ``QuarterObs``
-    gilt, wenn sie da ist, ihr ``start`` der Beginn dieser Viertelstunde ist und ``grid_wh`` eine
-    endliche Zahl; sonst zählt sie wie keine. Die Leistung eines Schritts ist bekannt, wenn seine
-    ``QuarterObs`` gilt und ``grid_w`` eine endliche Zahl ist. Die Regeln (Präzisierungen 9 bis 14):
+    Das Ziel bekommt jeder Schritt (``guard_target_kw``); es kann sich innerhalb einer
+    Viertelstunde ändern, ``P_zul`` folgt dem Ziel des Schritts. Ohne Ziel ruht er ganz:
+    ``NO_LIMITS`` und Zustand ``off``; der Schritt vergisst dann die laufende Viertelstunde, ihre
+    Grenzen und einen Alarm ``peak.exceeded``. Sonst ist die laufende Viertelstunde
+    ``slot_start(wall_now)`` bis ``slot_end(wall_now)``. Eine ``QuarterObs`` gilt, wenn sie da ist,
+    ihr ``start`` der Beginn dieser Viertelstunde ist und ``grid_wh`` eine endliche Zahl; sonst
+    zählt sie wie keine. Die Leistung eines Schritts ist bekannt, wenn seine ``QuarterObs`` gilt
+    und ``grid_w`` eine endliche Zahl ist. Die Regeln (Präzisierungen 9 bis 14):
 
     - **Boost:** Der Netzanteil der Wallboxen der Autos in Boost zählt außerhalb des Budgets. Der
       Wächter integriert ihn nach dem Halteprinzip der Abrechnung: Der Anteil des vorigen Schritts
@@ -305,6 +322,7 @@ class PeakGuard:
     """
 
     def __init__(self, control: ControlConfig, reserve_soc_pct: float, ceiling_w: float) -> None:
+        # das Ziel des letzten Schritts; vor dem ersten das der Konfiguration (Health, ``idle``)
         self._target_kw = control.peak_target_kw
         self._margin_w = control.peak_margin_kw * 1000.0
         # Über diesem SOC geht das Budget an den Akku (Präzisierung 12).
@@ -324,6 +342,8 @@ class PeakGuard:
         wanted_w: float | None,
         base_w: float | None,
         soc_pct: float | None,
+        *,
+        target_kw: float | None,
     ) -> PeakLimits:
         """Ein Zyklus zum Zeitpunkt ``wall_now`` (Wanduhr): misst, rechnet und gibt Grenzen vor.
 
@@ -334,9 +354,12 @@ class PeakGuard:
           Mittel
         - ``soc_pct``: der SOC des Akkus in %; unbekannt gibt kein Budget für den Akku. Ob er eins
           hat, bestimmt ``budget_w`` und den Bedarf der Senkung.
+        - ``target_kw``: das Ziel dieses Schritts in kW (``guard_target_kw``); ``None`` heißt, der
+          Wächter ruht
         """
-        target_kw = self._target_kw
+        self._target_kw = target_kw
         if target_kw is None:
+            self._rest()
             return NO_LIMITS
         target_w = target_kw * 1000.0
         start, end = slot_start(wall_now), slot_end(wall_now)
@@ -373,6 +396,17 @@ class PeakGuard:
         self._adjust(running, wall_now, calc, cars)
         return self._limits(running, calc, cars, funded)
 
+    def target_kw(self) -> float | None:
+        """Das Ziel des letzten Schritts in kW, ``None`` ohne Ziel; vor dem ersten Schritt
+        ``control.peak_target_kw``."""
+        return self._target_kw
+
+    def _rest(self) -> None:
+        """Ein Schritt ohne Ziel: Die laufende Viertelstunde, ihre Grenzen und ihr Alarm fallen weg,
+        der Wächter beginnt später ohne Vorgeschichte (mit Lücke, wenn die Viertelstunde läuft)."""
+        self._mean.clear()
+        self._prev = self._running = self._last = None
+
     def idle(self) -> None:
         """Ein Zyklus ohne Regelung: Die laufende Viertelstunde ist lückenhaft bis zu ihrem Ende.
 
@@ -392,7 +426,7 @@ class PeakGuard:
 
         - ``state``: ``off`` ohne Ziel; sonst ``gap`` vor dem ersten Schritt und danach der Zustand
           des letzten Schritts (nach ``idle`` der neue)
-        - ``target_kw``: das Ziel
+        - ``target_kw``: das Ziel des letzten Schritts, vor dem ersten ``control.peak_target_kw``
         - ``energy_kwh``: ``E_bisher`` ohne Boost; ``projected_kw``: die Hochrechnung;
           ``budget_kw``: ``P_zul``, auch unter der Schwelle des SOC; ``reduction_kw``: die verlangte
           Senkung, mindestens 0. Alle vier gibt es nur nach einem Schritt, der rechnet;

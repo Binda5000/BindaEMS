@@ -18,9 +18,12 @@ from bindaems.core.control.peak_guard import (
     PeakGuard,
     PeakLimits,
     QuarterObs,
+    guard_target_kw,
 )
+from bindaems.core.control.plan_exec import ActiveSlot
 from bindaems.shared.config import ControlConfig
 from bindaems.shared.domain import Alarm, Severity
+from bindaems.shared.plan import BatteryIntent, BatteryIntentKind
 from bindaems.shared.timeutil import HOLD_MAX_S, LOCAL_TZ, slot_start
 
 QUARTER = datetime(2026, 10, 14, 16, 0, tzinfo=UTC)  # 18:00 Wiener Zeit
@@ -42,7 +45,11 @@ def at(seconds: float) -> datetime:
 def guard(
     target: float | None = 8.0, *, ceiling_w: float = FUSE_CEILING_W, **control: float
 ) -> PeakGuard:
-    """Ein Wächter mit dem Ziel ``target``, USV-Reserve 20 % und der festen Grenze ``ceiling_w``."""
+    """Ein Wächter mit USV-Reserve 20 % und der festen Grenze ``ceiling_w``.
+
+    ``target`` ist ``control.peak_target_kw``, das Ziel vor dem ersten Schritt; ab dem ersten gilt
+    das ``target_kw`` des Schritts (``step``).
+    """
     config = ControlConfig(peak_target_kw=target, **control)
     return PeakGuard(config, reserve_soc_pct=20.0, ceiling_w=ceiling_w)
 
@@ -59,11 +66,13 @@ def step(
     base_w: float | None = 0.0,
     soc: float | None = 60.0,
     observed: bool = True,
+    target_kw: float | None = 8.0,
 ) -> PeakLimits:
-    """Ein Schritt ``seconds`` nach 18:00:00; ohne ``observed`` fehlt ``quarter`` (``None``)."""
+    """Ein Schritt ``seconds`` nach 18:00:00 mit dem Ziel ``target_kw``; ohne ``observed`` fehlt
+    ``quarter`` (``None``)."""
     now = at(seconds)
     quarter = QuarterObs(slot_start(now), wh, grid_w, wallbox_grid_w or {}) if observed else None
-    return g.step(now, quarter, cars, wanted_w, base_w, soc)
+    return g.step(now, quarter, cars, wanted_w, base_w, soc, target_kw=target_kw)
 
 
 def run(
@@ -110,8 +119,10 @@ def test_constants() -> None:
 
 
 def test_without_a_target_the_guard_rests() -> None:
-    g = guard(None)
-    assert run(g, 0, 10, grid_w=50000.0, wh=lambda s: 5000.0) == NO_LIMITS  # auch bei großem Bezug
+    g = guard()
+    assert (
+        run(g, 0, 10, grid_w=50000.0, wh=lambda s: 5000.0, target_kw=None) == NO_LIMITS
+    )  # auch bei großem Bezug
     assert g.health() == {"state": "off", "target_kw": None, **NO_VALUES, "quarter_end": None}
     assert g.alarms() == []
     g.idle()  # es gibt nichts, was ruhen könnte
@@ -119,9 +130,64 @@ def test_without_a_target_the_guard_rests() -> None:
 
 
 def test_before_the_first_step_the_state_is_a_gap_without_values() -> None:
-    g = guard()
+    g = guard()  # vor dem ersten Schritt gilt das Ziel der Konfiguration
+    assert g.target_kw() == 8.0
     assert g.health() == {"state": "gap", "target_kw": 8.0, **NO_VALUES, "quarter_end": None}
     assert g.alarms() == []
+    assert guard(None).health()["state"] == "off"
+
+
+# --- Ziel je Schritt ------------------------------------------------------------------------------
+
+
+def slot_with(budget_kw: float | None) -> ActiveSlot:
+    """Der gültige Slot eines Plans mit dem Budget ``budget_kw``."""
+    intent = BatteryIntent(kind=BatteryIntentKind.EIGENVERBRAUCH)
+    return ActiveSlot(1, QUARTER, intent, budget_kw, None, None)
+
+
+def test_plan_budget_replaces_the_target() -> None:  # Plan 3c, Präzisierung 9
+    configured = ControlConfig(peak_target_kw=8.0)
+    assert guard_target_kw(configured, slot_with(budget_kw=5.5)) == 5.5
+    assert guard_target_kw(configured, slot_with(budget_kw=None)) == 8.0
+    assert guard_target_kw(configured, None) == 8.0
+    # ein Budget des Plans schaltet den Wächter auch ohne Ziel in der Konfiguration ein
+    assert guard_target_kw(ControlConfig(), slot_with(budget_kw=5.5)) == 5.5
+    assert guard_target_kw(ControlConfig(), slot_with(budget_kw=None)) is None
+    assert guard_target_kw(ControlConfig(), None) is None
+
+
+def test_target_change_mid_quarter_changes_the_allowance() -> None:
+    g = guard()
+    run(g, 0, 300, wh=lambda s: 1000.0 if s == 300 else 0.0)
+    assert g.health()["budget_kw"] == 5.7  # (2000 Wh − 1000 Wh) · 3600 / 600 s − 300 W
+    limits = step(g, 301, wh=1000.0, target_kw=5.0)
+    # 18:05:01 mit Ziel 5 kW: (1250 Wh − 1000 Wh) · 3600 / 599 s − 300 W
+    expected_w = 250.0 * 3600 / 599 - 300.0
+    assert limits.budget_w == pytest.approx(expected_w)
+    assert g.health()["state"] == "active"  # dieselbe Viertelstunde, keine Lücke
+    assert g.health()["target_kw"] == 5.0
+    assert g.health()["budget_kw"] == pytest.approx(expected_w / 1000.0)
+
+
+def test_health_target_follows_the_last_step() -> None:
+    g = guard()
+    step(g, 0, target_kw=8.0)
+    assert (g.target_kw(), g.health()["target_kw"], g.health()["state"]) == (8.0, 8.0, "active")
+    assert step(g, 1, target_kw=None) == NO_LIMITS
+    assert g.target_kw() is None
+    assert g.health() == {"state": "off", "target_kw": None, **NO_VALUES, "quarter_end": None}
+    step(g, NEXT_S, target_kw=5.0)  # die nächste Viertelstunde beginnt mit dem Ziel des Plans
+    assert (g.target_kw(), g.health()["target_kw"], g.health()["state"]) == (5.0, 5.0, "active")
+
+
+def test_without_a_target_a_step_drops_the_exceeded_alarm() -> None:
+    g = guard()
+    run(g, 0, 60, grid_w=12300.0, wh=draw(12300.0))
+    assert len(g.alarms()) == 1
+    step(g, 61, grid_w=12300.0, wh=draw(12300.0), target_kw=None)
+    assert g.alarms() == []
+    assert g.health()["state"] == "off"
 
 
 # --- Budget ---------------------------------------------------------------------------------------
@@ -581,13 +647,13 @@ def test_a_quarter_of_another_slot_counts_as_missing() -> None:
     g = guard()
     run(g, 0, 5)
     stale = QuarterObs(QUARTER - timedelta(minutes=15), 0.0, 0.0, {})  # die Viertelstunde 17:45
-    assert g.step(at(6), stale, (), 0.0, 0.0, 60.0) == NO_LIMITS
+    assert g.step(at(6), stale, (), 0.0, 0.0, 60.0, target_kw=8.0) == NO_LIMITS
     assert g.health()["state"] == "gap"
     assert values(g) == NO_VALUES
     assert step(g, 7).budget_w is not None
     # derselbe Zeitpunkt in Wiener Zeit ist dieselbe Viertelstunde
     local = QuarterObs(QUARTER.astimezone(LOCAL_TZ), 0.0, 0.0, {})
-    assert g.step(at(8), local, (), 0.0, 0.0, 60.0).budget_w is not None
+    assert g.step(at(8), local, (), 0.0, 0.0, 60.0, target_kw=8.0).budget_w is not None
     assert g.health()["state"] == "active"
 
 
@@ -711,7 +777,7 @@ def test_the_alarm_names_the_end_of_the_quarter_in_vienna_time(start, until) -> 
     for second in range(61):
         now = start + timedelta(seconds=second)
         quarter = QuarterObs(slot_start(now), draw(12300.0)(second), 12300.0, {})
-        g.step(now, quarter, (), 0.0, 0.0, 60.0)
+        g.step(now, quarter, (), 0.0, 0.0, 60.0, target_kw=8.0)
     (alarm,) = g.alarms()
     assert alarm.message.endswith(f"in der Viertelstunde bis {until}.")
     assert alarm.since == start + timedelta(seconds=60)
@@ -753,12 +819,12 @@ def test_a_step_that_does_not_compute_interrupts_the_count() -> None:
 def test_a_projection_at_the_target_is_not_above_it() -> None:
     # Mittel 3600 W und E = s Wh: Die Hochrechnung ist in jeder Sekunde genau 3,6 kW (ganze Zahlen)
     at_target = guard(3.6)
-    run(at_target, 0, 899, grid_w=3600.0, wh=float)
+    run(at_target, 0, 899, grid_w=3600.0, wh=float, target_kw=3.6)
     assert at_target.health()["projected_kw"] == 3.6
     assert at_target.health()["state"] == "active"
     assert at_target.alarms() == []
     below_target = guard(3.5)
-    run(below_target, 0, 60, grid_w=3600.0, wh=float)
+    run(below_target, 0, 60, grid_w=3600.0, wh=float, target_kw=3.5)
     assert below_target.health()["state"] == "exceeded"
 
 

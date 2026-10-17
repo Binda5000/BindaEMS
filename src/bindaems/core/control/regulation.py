@@ -18,8 +18,9 @@ Reihenfolge von Präzisierung 3:
    (``battery_cars``),
 3. Fehlbetrag und erlaubten Akku-Anteil (``BatteryController.assess``),
 4. den Wächter (``PeakGuard.step``) mit dem gewollten Netzbezug, solange Victron handeln kann
-   (``peak_wanted_w``); er kennt die feste Grenze von Regel 2: das Budget für diesen Zyklus, die
-   Grenzen für den nächsten,
+   (``peak_wanted_w``), und mit seinem Ziel: dem Budget des Plan-Slots, sonst
+   ``control.peak_target_kw`` (``guard_target_kw``); er kennt die feste Grenze von Regel 2: das
+   Budget für diesen Zyklus, die Grenzen für den nächsten,
 5. den Override (``BatteryController.decide``) mit diesem Budget.
 
 Die Grenzen des Wächters wirken so einen Zyklus später; dafür rechnen Akku-Sollwert und Wächter mit
@@ -52,7 +53,14 @@ from bindaems.core.control.charge_modes import Effective
 from bindaems.core.control.charging import CarView, ChargeController
 from bindaems.core.control.executor import WriteResult
 from bindaems.core.control.last_values import ControlCommand, Key
-from bindaems.core.control.peak_guard import NO_LIMITS, PeakCar, PeakGuard, PeakLimits, QuarterObs
+from bindaems.core.control.peak_guard import (
+    NO_LIMITS,
+    PeakCar,
+    PeakGuard,
+    PeakLimits,
+    QuarterObs,
+    guard_target_kw,
+)
 from bindaems.core.control.plan_exec import ActiveSlot, active_slot, plan_health
 from bindaems.core.safety.limits import HardLimits
 from bindaems.core.safety.types import Verdict
@@ -169,6 +177,7 @@ class Regulation:
             wanted_w=peak_wanted_w(need, acting=acting, base_w=base_w, active=self._active),
             base_w=base_w,
             soc_pct=charge.grid.soc_pct,
+            target_kw=guard_target_kw(self._cfg.control, self._active),
         )
         override = battery.decide(
             charge.now,
