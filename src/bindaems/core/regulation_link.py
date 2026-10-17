@@ -53,6 +53,7 @@ from bindaems.core.state.derived import Derived
 from bindaems.shared.config import Config
 from bindaems.shared.control import Command, CommandValue, Intent, vehicle_actuator
 from bindaems.shared.domain import Alarm, Severity, Snapshot
+from bindaems.shared.plan import IntentPlan
 
 log = structlog.get_logger(__name__)
 
@@ -200,6 +201,10 @@ class RegulationLink:
         except Exception as exc:  # die Regelung setzt aus, nicht der Zyklus
             self._fail("idle", exc)
             self.regulation = Regulation(self._cfg, self._limits, started=self._wall_now)
+
+    def rest_plan(self, plan: IntentPlan | None, wall_now: datetime) -> None:
+        """Nach ``idle``: der Plan der Absicht für Health, solange die Regelung ruht (Plan 3c)."""
+        self._call("rest_plan", lambda: self.regulation.rest_plan(plan, wall_now), None)
 
     def note_verdict(
         self, command: Command, verdict: Verdict | None, *, not_sent: bool = False

@@ -647,6 +647,7 @@ class CoreRuntime:
             battery=regulation["battery"],
             peak=regulation["peak"],
             wallboxes=regulation["wallboxes"],
+            plan=regulation["plan"],
         )
 
     def state(self) -> dict[str, Any]:
@@ -941,6 +942,7 @@ class CoreRuntime:
             )
         else:
             self.regulation.idle(snow)
+            self.regulation.rest_plan(None if intent is None else intent.plan, now)
             regulated = []
         keeper = self._keeper_commands(snap, snow, present)
         if keeper or regulated:

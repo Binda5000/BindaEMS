@@ -20,6 +20,7 @@ from bindaems.core.control.peak_guard import (
     PeakLimits,
     QuarterObs,
 )
+from bindaems.core.control.plan_exec import plan_health
 from bindaems.core.control.regulation import (
     Regulation,
     RegulationInputs,
@@ -41,6 +42,7 @@ from bindaems.shared.control import (
 )
 from bindaems.shared.decisions import DecisionResult
 from bindaems.shared.domain import Alarm, Severity
+from bindaems.shared.plan import BatteryIntent, BatteryIntentKind, IntentPlan, IntentPlanSlot
 
 EGOLF_NOW = Intent(version=1, control=True, vehicles={"egolf": VehicleIntent(mode=ChargeMode.NOW)})
 # Abends ohne PV ab 10:00 UTC (``T0``, der Beginn einer Viertelstunde): Der e-Golf lädt in Sofort
@@ -661,4 +663,77 @@ def test_health_shows_the_guard(cfg) -> None:  # Präzisierung 16
 
 def test_health_has_the_wallboxes(cfg) -> None:  # Plan 2c-2b, Präzisierung 11
     health = Regulation(cfg, HardLimits.from_config(cfg), started=T0).health()
-    assert list(health) == ["intent_version", "vehicles", "battery", "peak", "wallboxes"]
+    assert list(health) == ["intent_version", "vehicles", "battery", "peak", "wallboxes", "plan"]
+
+
+PLAN = IntentPlan(
+    id=1001,
+    created_at=T0 + timedelta(minutes=1),
+    valid_until=T0 + timedelta(minutes=46),
+    grid_charge_allowed=True,
+    slots=[
+        IntentPlanSlot(
+            start=T0 + timedelta(minutes=15 * n),
+            intent=BatteryIntent(
+                kind=BatteryIntentKind.HALTEN if n == 1 else BatteryIntentKind.EIGENVERBRAUCH
+            ),
+        )
+        for n in range(4)
+    ],
+)
+
+
+def plan_cycle(regulation: Regulation, cfg: Config, s: int, plan: IntentPlan | None) -> None:
+    intent = Intent(version=1, control=True, plan=plan)
+    regulation.step(RegulationInputs(inputs(cfg, s=s, intent=intent)))
+
+
+def test_regulation_health_has_the_plan(cfg) -> None:  # Plan 3c, Präzisierung 5
+    regulation = Regulation(cfg, HardLimits.from_config(cfg), started=T0)
+    assert regulation.health()["plan"]["state"] == "none"  # vor dem ersten Schritt
+    assert regulation.active() is None
+    plan_cycle(regulation, cfg, 20 * 60, PLAN)  # 10:20
+    active = regulation.active()
+    assert active is not None and active.start == T0 + timedelta(minutes=15)
+    assert regulation.health()["plan"] == plan_health(PLAN, active, T0 + timedelta(minutes=20))
+    assert regulation.health()["plan"]["state"] == "valid"
+    assert regulation.health()["plan"]["intent"] == "HALTEN"
+
+
+def test_regulation_takes_the_slot_from_the_wall_clock_of_each_cycle(cfg) -> None:
+    regulation = Regulation(cfg, HardLimits.from_config(cfg), started=T0)
+    plan_cycle(regulation, cfg, 30, PLAN)  # 10:00:30, vor created_at
+    assert regulation.active() is None
+    assert regulation.health()["plan"]["state"] == "expired"
+    plan_cycle(regulation, cfg, 20 * 60, PLAN)
+    assert regulation.active() is not None
+    plan_cycle(regulation, cfg, 46 * 60, PLAN)  # valid_until ist offen
+    assert regulation.active() is None
+    assert regulation.health()["plan"]["state"] == "expired"
+    plan_cycle(regulation, cfg, 47 * 60, None)  # Absicht ohne Plan
+    assert regulation.health()["plan"]["state"] == "none"
+
+
+def test_a_step_without_an_intent_has_no_plan(cfg) -> None:
+    regulation = Regulation(cfg, HardLimits.from_config(cfg), started=T0)
+    plan_cycle(regulation, cfg, 20 * 60, PLAN)
+    regulation.step(RegulationInputs(replace(inputs(cfg, s=21 * 60), intent=None)))
+    assert regulation.active() is None
+    assert regulation.health()["plan"]["state"] == "none"
+
+
+def test_a_resting_regulation_reports_the_plan_by_its_validity(cfg) -> None:
+    regulation = Regulation(cfg, HardLimits.from_config(cfg), started=T0)
+    plan_cycle(regulation, cfg, 20 * 60, PLAN)
+    regulation.idle(T0 + timedelta(minutes=21))
+    assert regulation.active() is None  # in Ruhe bindet kein Slot
+    assert regulation.health()["plan"]["state"] == "none"  # ohne Angabe des Plans
+    regulation.rest_plan(PLAN, T0 + timedelta(minutes=21))
+    assert regulation.active() is None
+    health = regulation.health()["plan"]
+    assert health == plan_health(PLAN, None, T0 + timedelta(minutes=21))
+    assert (health["state"], health["slot"]) == ("valid", None)  # gültig, aber nichts bindet
+    regulation.rest_plan(PLAN, T0 + timedelta(minutes=50))
+    assert regulation.health()["plan"]["state"] == "expired"
+    regulation.rest_plan(None, T0 + timedelta(minutes=22))
+    assert regulation.health()["plan"]["state"] == "none"

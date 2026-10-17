@@ -7,7 +7,8 @@
 - ``peak_cars``: die Autos für den 15-min-Wächter (Präzisierung 11)
 
 Die Bausteine sind die Laderegelung (``ChargeController``), der Akku-Sollwert
-(``BatteryController``) und der 15-min-Wächter (``PeakGuard``). Ein Zyklus (``step``) rechnet in der
+(``BatteryController``) und der 15-min-Wächter (``PeakGuard``). Ein Zyklus (``step``) bestimmt
+als Erstes den gültigen Slot des Plans zur Wanduhr (``plan_exec``, Plan 3c) und rechnet dann in der
 Reihenfolge von Präzisierung 3:
 
 1. die Laderegelung mit den Grenzen und der Start-Sperre, die der Wächter im vorigen Zyklus
@@ -52,11 +53,13 @@ from bindaems.core.control.charging import CarView, ChargeController
 from bindaems.core.control.executor import WriteResult
 from bindaems.core.control.last_values import ControlCommand, Key
 from bindaems.core.control.peak_guard import NO_LIMITS, PeakCar, PeakGuard, PeakLimits, QuarterObs
+from bindaems.core.control.plan_exec import ActiveSlot, active_slot, plan_health
 from bindaems.core.safety.limits import HardLimits
 from bindaems.core.safety.types import Verdict
 from bindaems.shared.config import Config
 from bindaems.shared.control import VICTRON, ChargeMode, Command, CommandKind, GuestIntent
 from bindaems.shared.domain import Alarm
+from bindaems.shared.plan import IntentPlan
 from bindaems.shared.timeutil import slot_end
 
 _SETPOINT: Final[Key] = (VICTRON, CommandKind.GRID_SETPOINT)  # der Override des Akku-Sollwerts
@@ -92,7 +95,8 @@ class Regulation:
     ``charger`` ist die Laderegelung, ``battery`` der Akku-Sollwert, ``peak_guard`` der
     15-min-Wächter. ``started`` ist die Wanduhr beim Start der Regelung (``ChargeController``).
     Der Kern hält die Vorgaben des Wächters aus dem letzten Zyklus (``PeakLimits``): ``NO_LIMITS``
-    nach dem Start und nach ``idle``. Der Zustand lebt nur im Speicher.
+    nach dem Start und nach ``idle``. Dazu hält er den gültigen Slot des Plans (``active``) und den
+    Eintrag ``plan`` für Health. Der Zustand lebt nur im Speicher.
     """
 
     def __init__(self, cfg: Config, limits: HardLimits, *, started: datetime) -> None:
@@ -103,6 +107,8 @@ class Regulation:
         ceiling_w = limits.grid_setpoint_max(None)[0]
         self.peak_guard = PeakGuard(cfg.control, cfg.battery.reserve_soc_pct, ceiling_w)
         self._peak: PeakLimits = NO_LIMITS  # die Vorgaben des Wächters aus dem letzten Zyklus
+        self._active: ActiveSlot | None = None  # der gültige Slot des Plans im letzten Zyklus
+        self._plan = plan_health(None, None, started)  # der Eintrag ``plan`` für Health
 
     def step(self, inputs: RegulationInputs) -> list[ControlCommand]:
         """Ein Regelzyklus (Präzisierung 3): die Befehle der Ladepunkte in der Reihenfolge der
@@ -118,8 +124,14 @@ class Regulation:
         Victron ist für den Override gesperrt, wenn ``inputs.locks`` für ``victron`` Gründe nennt,
         und steuerbar nach ``charge.controllable``. Ein offener Schreibvorgang für den Override oder
         eine Übergabe von Victron (``charge.blocked``) hält nur seinen Befehl dieses Zyklus zurück.
+
+        Als Erstes bestimmt der Zyklus den gültigen Slot des Plans der Absicht zur Wanduhr
+        (``active_slot``, Plan 3c, Präzisierung 5); ``active`` und ``health()["plan"]`` zeigen ihn.
         """
         charge = inputs.charge
+        plan = None if charge.intent is None else charge.intent.plan
+        self._active = active_slot(plan, charge.wall_now)
+        self._plan = plan_health(plan, self._active, charge.wall_now)
         commands = self.charger.step(charge, self._peak)
         guest = (GuestIntent() if charge.intent is None else charge.intent.guest).mode
         views = self.charger.cars()
@@ -184,6 +196,22 @@ class Regulation:
         self.battery.idle()
         self.peak_guard.idle()
         self._peak = NO_LIMITS
+        self._active = None
+        self._plan = plan_health(None, None, now)
+
+    def rest_plan(self, plan: IntentPlan | None, wall_now: datetime) -> None:
+        """Legt in einem Zyklus ohne Regelung den Plan der Absicht für Health ab (nach ``idle``).
+
+        In Ruhe bindet kein Slot (``active`` bleibt ``None``); ``health()["plan"]`` zeigt den Stand
+        aus der Gültigkeit zur Wanduhr ``wall_now``, ohne Plan ``none``.
+        """
+        self._active = None
+        self._plan = plan_health(plan, None, wall_now)
+
+    def active(self) -> ActiveSlot | None:
+        """Der gültige Slot des Plans im letzten ``step``; ``None`` ohne gültigen Plan, vor dem
+        ersten ``step`` und solange die Regelung ruht."""
+        return self._active
 
     def vehicle_wallbox(self) -> dict[str, str | None]:
         """Fahrzeug-Aktor → Wallbox aus der Zuordnung der Laderegelung, für die Safety-Schicht."""
@@ -200,13 +228,15 @@ class Regulation:
         """Der Stand des letzten Zyklus: ``intent_version`` (die Version der Absicht des letzten
         ``step``, sonst ``None``), ``vehicles`` je Fahrzeug (``ChargeController.health``),
         ``battery`` (``BatteryController.health``), ``peak`` (``PeakGuard.health``) und
-        ``wallboxes`` je Wallbox (``ChargeController.wallbox_health``, Plan 2c-2b)."""
+        ``wallboxes`` je Wallbox (``ChargeController.wallbox_health``, Plan 2c-2b) und ``plan``
+        (``plan_health``, Plan 3c)."""
         return {
             "intent_version": self.charger.intent_version,
             "vehicles": self.charger.health(),
             "battery": self.battery.health(),
             "peak": self.peak_guard.health(),
             "wallboxes": self.charger.wallbox_health(),
+            "plan": self._plan,
         }
 
     def alarms(self, wall_now: datetime) -> list[Alarm]:

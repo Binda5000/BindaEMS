@@ -29,6 +29,7 @@ from bindaems.shared.control import (
     VehicleIntent,
 )
 from bindaems.shared.decisions import Decision, DecisionResult
+from bindaems.shared.plan import BatteryIntent, BatteryIntentKind, IntentPlan, IntentPlanSlot
 
 OVERRIDE_PATH = "hub4/0/Overrides/Setpoint"
 # Abends ohne PV: Der e-Golf lädt an der EVCS mit 3680 W (8 A auf zwei Phasen), das Haus braucht
@@ -291,3 +292,75 @@ async def test_peak_exceeded_is_an_alarm_in_health(runtime_env) -> None:  # Prä
         "message": "15-min-Ziel überschritten: 9,1 kW in der Viertelstunde bis 12:30.",
         "since": "2026-10-08T10:16:00+00:00",
     }
+
+
+def hold_plan(created: datetime) -> IntentPlan:
+    """Ein Plan ab ``created`` für die Viertelstunden ab 10:00 bis 10:45; HALTEN ab 10:15."""
+    kinds = (BatteryIntentKind.EIGENVERBRAUCH, BatteryIntentKind.HALTEN)
+    return IntentPlan(
+        id=1001,
+        created_at=created,
+        valid_until=datetime(2026, 10, 8, 10, 45, tzinfo=UTC),
+        grid_charge_allowed=True,
+        slots=[
+            IntentPlanSlot(
+                start=QUARTER - timedelta(minutes=15) + timedelta(minutes=15 * n),
+                intent=BatteryIntent(kind=kinds[min(n, 1)]),
+                import_ct=20.0 + n,
+            )
+            for n in range(3)
+        ],
+    )
+
+
+async def test_health_shows_the_plan_slot(runtime_env) -> None:
+    rt, clock = dry_run(runtime_env, dict(EGOLF_CHARGING))
+    assert rt.health().plan["state"] == "none"
+    intent = Intent(version=2, control=True, vehicles=EGOLF_NOW, plan=hold_plan(T0))
+    assert rt.submit_intent(intent).result == "accepted"
+    run(rt, clock, 31 + 15 * 60)  # 10:15:31: der zweite Slot
+    plan = rt.health().plan
+    assert (plan["id"], plan["state"], plan["intent"], plan["price_ct"]) == (
+        1001,
+        "valid",
+        "HALTEN",
+        21.0,
+    )
+    assert plan["slot"] == "2026-10-08T10:15:00+00:00"
+    assert plan["valid_until"] == "2026-10-08T10:45:00+00:00"
+    run(rt, clock, 30 * 60)  # 10:45:31: abgelaufen
+    plan = rt.health().plan
+    assert (plan["state"], plan["slot"], plan["intent"]) == ("expired", None, None)
+
+
+async def test_plan_is_reported_while_the_regulation_rests(runtime_env) -> None:
+    rt, _, clock = runtime_env(state=dict(EGOLF_CHARGING), extra=EVENING)
+    intent = Intent(version=1, control=False, plan=hold_plan(T0))  # Regelbetrieb aus
+    assert rt.submit_intent(intent).result == "accepted"
+    run(rt, clock, 31)
+    plan = rt.health().plan
+    assert (plan["state"], plan["slot"], plan["intent"]) == ("valid", None, None)  # nichts bindet
+
+
+async def test_restart_uses_the_saved_plan_until_it_expires(runtime_env) -> None:  # Review Focus 2
+    first, _, clock = runtime_env(state=dict(EGOLF_CHARGING), extra=EVENING)
+    intent = Intent(version=1, control=True, vehicles=EGOLF_NOW, plan=hold_plan(T0))
+    assert first.submit_intent(intent).result == "accepted"
+    run(first, clock, 31)
+    assert first.health().plan["state"] == "valid"
+    # Neustart mit demselben data_dir: Der gespeicherte Plan gilt bis valid_until.
+    again, _, clock = runtime_env(
+        start="2026-10-08T10:20:00+00:00", state=dict(EGOLF_CHARGING), extra=EVENING
+    )
+    run(again, clock, 31)
+    plan = again.health().plan
+    assert (plan["state"], plan["intent"], plan["slot"]) == (
+        "valid",
+        "HALTEN",
+        "2026-10-08T10:15:00+00:00",
+    )
+    late, _, clock = runtime_env(
+        start="2026-10-08T10:50:00+00:00", state=dict(EGOLF_CHARGING), extra=EVENING
+    )
+    run(late, clock, 31)
+    assert late.health().plan["state"] == "expired"

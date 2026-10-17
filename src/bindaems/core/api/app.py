@@ -73,6 +73,13 @@ class HealthReport(BaseModel):
       angenommen, ``override``, ``unclear`` oder ``null``) und ``indicators`` (die Indizien des
       letzten Zyklus, je ``vehicle``, ``clue`` und ``supports``); vor dem ersten Zyklus und nach
       einer Pause der Regelung steht niemand dort
+    - ``plan``: der Plan der Absicht und sein gültiger Slot (``plan_health``, Plan 3c): ``id``,
+      ``state`` (``none`` ohne Plan, ``valid`` solange er gilt, sonst ``expired``; auch ein Plan,
+      der wegen einer Uhrabweichung noch nicht gilt, steht auf ``expired``), ``valid_until`` (ISO in
+      UTC), ``slot`` (Beginn des gültigen Slots, ISO in UTC), ``intent`` (die Art),
+      ``grid_charge_w``, ``budget_kw``, ``support_soc_pct`` und ``price_ct`` (``import_ct`` des
+      Slots); was fehlt, ist ``null``. Die Felder des Slots stehen nur, solange die Regelung regelt
+      und ein Slot gilt.
     """
 
     mode: Literal["START", "OBSERVE", "CONTROL", "DEGRADED", "SAFE"]
@@ -94,6 +101,7 @@ class HealthReport(BaseModel):
     battery: dict[str, Any] = Field(default_factory=dict)
     peak: dict[str, Any] = Field(default_factory=dict)
     wallboxes: list[dict[str, Any]] = Field(default_factory=list)
+    plan: dict[str, Any] = Field(default_factory=dict)
 
 
 class CurrentIntent(BaseModel):

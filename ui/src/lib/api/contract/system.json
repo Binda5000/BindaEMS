@@ -227,7 +227,18 @@
           "assignment": null,
           "indicators": []
         }
-      ]
+      ],
+      "plan": {
+        "id": null,
+        "state": "none",
+        "valid_until": null,
+        "slot": null,
+        "intent": null,
+        "grid_charge_w": null,
+        "budget_kw": null,
+        "support_soc_pct": null,
+        "price_ct": null
+      }
     }
   },
   "components": [
