@@ -3,6 +3,7 @@ Spread-Regel an der Nachrechnung."""
 
 from __future__ import annotations
 
+import pytest
 from tests.plan_helpers import (
     flow,
     flows_of,
@@ -77,11 +78,11 @@ def test_unprofitable_grid_charge_is_reported_without_power_price() -> None:
     intents = [BatteryIntent(kind=BatteryIntentKind.NETZLADEN, grid_charge_w=2000), BatteryIntent()]
     steps = resimulate(inputs, intents)
     assert "Netzladen um 02:00 rechnet sich nicht" in check_plan(
-        inputs, flows_of(steps), intents, steps
+        inputs, flows_of(steps, inputs), intents, steps
     )
     with_peak = inputs.model_copy(update={"peak_months": [month("2026-10", 2.0)]})
     assert "Netzladen um 02:00 rechnet sich nicht" not in check_plan(
-        with_peak, flows_of(steps), intents, steps
+        with_peak, flows_of(steps, with_peak), intents, steps
     )
 
 
@@ -250,3 +251,15 @@ def test_spread_rule_charges_wear_on_the_delivered_energy() -> None:
     assert pays_off(inputs, steps, 0) == (1, 40.0)
     assert spread_pays(inputs.planning, 31.3, 40.0)
     assert not spread_pays(inputs.planning, 31.5, 40.0)  # 1,94 < 2
+
+
+def test_flows_and_steps_must_match_the_slots() -> None:
+    # Fehlende Slots dürfen nicht stillschweigend ungeprüft bleiben.
+    inputs = scenario(prices=[20.0] * 2, pv=[0.0] * 2, load=[1000.0] * 2, soc_pct=50.0)
+    intents = [BatteryIntent(), BatteryIntent()]
+    steps = resimulate(inputs, intents)
+    full = flows_of(steps, inputs)
+    with pytest.raises(ValueError):
+        check_plan(inputs, flows_result(full.flows[:1]), intents, steps)
+    with pytest.raises(ValueError):
+        check_plan(inputs, full, intents, steps[:1])

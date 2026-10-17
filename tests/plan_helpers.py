@@ -349,10 +349,10 @@ def resimulate(inputs: PlanInputs, intents: Sequence[BatteryIntent]) -> list[Sim
     return simulate(soc0_kwh, sim_slots(inputs), intents, params)
 
 
-def flows_of(steps: Sequence[SimStep], inputs: PlanInputs | None = None) -> OptimizerResult:
+def flows_of(steps: Sequence[SimStep], inputs: PlanInputs) -> OptimizerResult:
     """Flüsse einer Nachrechnung als Ergebnis des Optimierers. ``pv_h`` (PV ins Haus) steht in
-    den Schritten nicht; es ist 0, mit ``inputs`` ``min(PV, Last)``."""
-    house_w = [min(s.pv_w, s.load_w) for s in inputs.slots] if inputs else [0.0] * len(steps)
+    den Schritten nicht; es ist ``min(PV, Last)`` der Slots von ``inputs``."""
+    house_w = [min(s.pv_w, s.load_w) for s in inputs.slots]
     return flows_result(
         [
             SlotFlows(

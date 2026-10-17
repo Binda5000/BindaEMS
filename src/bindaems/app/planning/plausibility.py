@@ -101,7 +101,8 @@ def check_plan(
 ) -> list[str]:
     """Befunde in der Reihenfolge der Slots (je Art der erste); leer, wenn der Plan plausibel ist.
 
-    ``steps`` ist die Nachrechnung der ``intents`` mit dem Akkumodell.
+    ``steps`` ist die Nachrechnung der ``intents`` mit dem Akkumodell. Flüsse, Schritte und Slots
+    müssen gleich viele sein, sonst ``ValueError``.
     """
     params = params_of(inputs)
     slots = sim_slots(inputs)
@@ -114,9 +115,7 @@ def check_plan(
     def soc_outside(soc_kwh: float) -> bool:
         return soc_kwh < params.lo_kwh - SOC_TOL_KWH or soc_kwh > params.hi_kwh + SOC_TOL_KWH
 
-    for index, (flows, slot, inp) in enumerate(
-        zip(result.flows, slots, inputs.slots, strict=False)
-    ):
+    for index, (flows, slot, inp) in enumerate(zip(result.flows, slots, inputs.slots, strict=True)):
         at = _local_time(inputs, index)
         pv_w = flows.pv_h + flows.pv_b + flows.pv_x
         load_w = flows.pv_h + flows.gr_h + flows.bt_h
@@ -132,7 +131,7 @@ def check_plan(
         if soc_outside(flows.soc_end_kwh):
             report("soc", index, f"SOC außerhalb der Grenzen um {at}")
 
-    for index, (item, slot) in enumerate(zip(steps, slots, strict=False)):
+    for index, (item, slot) in enumerate(zip(steps, slots, strict=True)):
         at = _local_time(inputs, index)
         if item.charge_pv_w + item.charge_grid_w > slot.max_charge_w + BALANCE_TOL_W:
             report("power", index, f"Leistung über der Grenze um {at}")
