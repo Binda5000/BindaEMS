@@ -583,6 +583,38 @@ Prüfungen, höchstens 400 Tage (sonst 422): `days` mit `day`, `signal`, `ledger
 curl -b jar "$APP/api/ledger/checks?from=2026-10-01&to=2026-10-07"
 ```
 
+### Statistik je Zeitraum
+
+`GET /api/stats?period=day|week|month|year[&date=JJJJ-MM-TT]` (ab „Lesen“) liefert die Statistik des
+Zeitraums, der `date` (Wiener Zeit, Standard: heute) enthält; ein anderes `period` gibt 422. Die Woche
+läuft von Montag bis Sonntag (ISO). Die Antwort enthält `period`, `first`, `last`, `complete`,
+`coverage`, `estimated_slots`, `energy`, `money`, `ratios`, `buckets`, `vehicles`,
+`battery_to_vehicles_kwh`, `consumers`, `month_peaks` und `checks`; Zahlen sind auf 3 Stellen gerundet.
+
+- **Kennzahlen:** Sie entstehen aus den Summen der Tage, nicht als Mittel der Tageskennzahlen:
+  `autarky` ist `1 − Bezug ÷ Verbrauch`, `self_consumption` ist `(PV − Einspeisung) ÷ PV`, die
+  Ersparnis (`savings_no_plant_eur`, `savings_same_import_eur`) folgt den Formeln der Tagesbilanz und
+  bleibt ohne Grundgebühren und Leistungspreis. Ein Verhältnis ist `null`, wenn sein Nenner 0 ist
+  (z. B. in der Zukunft); ein Geldbetrag ist `null`, sobald ein Tag ihn nicht kennt.
+- **Buckets:** `buckets` zeigt bei „Tag“ eine Stunde je Eintrag (23, 24 oder 25 Einträge an Tagen der
+  Zeitumstellung, `start` mit Zone), bei „Woche“ und „Monat“ einen Tag je Eintrag, bei „Jahr“ einen
+  Monat (`JJJJ-MM`).
+- **Kosten:** `net_eur` ist Bezug minus Einspeiseerlös. `fees_eur` verteilt die Grundgebühren anteilig
+  je Tag (Monatsgebühr ÷ Tage des Monats) bis einschließlich heute. `power_eur` (und
+  `month_peaks[].power_eur`) gibt es nur bei „Monat“ und „Jahr“ und nur für Monate mit Abrechnungsdaten,
+  in denen ein Leistungspreis mit Satz gilt, aus der Monatsspitze (`month_peaks`); sonst `null`.
+  `total_eur` ist `net_eur + fees_eur + power_eur` und `null`, wenn `net_eur` unbekannt ist.
+- **Autos:** `vehicles` nennt die Autos mit Energie über 0 in der Reihenfolge der `config.yaml`, dann
+  `guest` („Gast“) und `unknown` („Unbekannt“); `sessions` zählt die Ladesessions, die den Zeitraum
+  überdecken. `battery_to_vehicles_kwh` ist der Akku-Strom, der ins Auto ging.
+- **Verbraucher:** `consumers` summiert die gespeicherten Tage bis gestern und für heute den
+  laufenden Wert; fehlt ein Tag (älter als 31 Tage oder noch nicht gespeichert), ist `kwh` `null`
+  und `note` nennt den Grund.
+
+```bash
+curl -b jar "$APP/api/stats?period=month&date=2026-10-09"
+```
+
 ## 9. Sicherung und Wiederherstellung
 
 Die app sichert ihre Datenbank jede Nacht um 03:15 Uhr im laufenden Betrieb in das Volume

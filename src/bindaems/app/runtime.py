@@ -72,6 +72,8 @@ from bindaems.app.prices.store import PriceStore
 from bindaems.app.schedule import next_local
 from bindaems.app.settings.routes import settings_router
 from bindaems.app.settings.service import SettingsService
+from bindaems.app.stats.routes import stats_router
+from bindaems.app.stats.service import StatsService
 from bindaems.app.status import ComponentStatus, StatusSource
 from bindaems.shared.config import Config, Secrets
 from bindaems.shared.control import Intent
@@ -246,6 +248,17 @@ class AppRuntime:
         self.ha_values = HaValueCache(self.reader, ha_database) if ha_database is not None else None
         self.energy = EnergyCache(self.reader, self._clock, ha_database)
         self.consumer_days = ConsumerDays(self.engine, self.energy, self.consumers, self._clock)
+        self.stats = StatsService(
+            self.ledger,
+            self.charging_sessions,
+            self.consumers,
+            self.consumer_days,
+            self.energy,
+            self.ledger_checks,
+            self.settings,
+            cfg,
+            self._clock,
+        )
         self.ha_publisher: HaPublisher | None = None
         self._ha_inputs: HaInputs | None = None
         self._ha_ready = asyncio.Event()  # erste Werte für HA bestimmt
@@ -317,6 +330,7 @@ class AppRuntime:
                 ),
                 ledger_router(self.ledger, guard, self.ledger_checks),
                 charging_router(self.charging_sessions, cfg, self.settings, guard),
+                stats_router(self.stats, guard),
                 planning_router(
                     self.planning,
                     self.settings,

@@ -611,3 +611,37 @@ def test_ledger_checks_endpoint_in_the_guide() -> None:
         assert f"`{field}`" in section, field
     for note in ("Zählerstand fehlt", "Zähler zurückgesetzt", "Zähler zeigt 0 kWh"):
         assert note in section, note
+
+
+def test_stats_endpoint_in_the_guide() -> None:
+    # „Statistik je Zeitraum“: Endpunkt, Antwortfelder, Kennzahlen, Gebühren und Leistungspreis.
+    section = " ".join(_guide_section("8. Tarif und Abrechnung").split())  # ohne Zeilenumbrüche
+    assert "GET /api/stats?period=day|week|month|year" in section
+    assert "ein anderes `period` gibt 422" in section
+    for field in (
+        "complete",
+        "coverage",
+        "estimated_slots",
+        "energy",
+        "money",
+        "ratios",
+        "buckets",
+        "vehicles",
+        "battery_to_vehicles_kwh",
+        "consumers",
+        "month_peaks",
+        "checks",
+        "fees_eur",
+        "power_eur",
+        "total_eur",
+    ):
+        assert f"`{field}`" in section, field
+    for text in (
+        "Montag bis Sonntag",
+        "nicht als Mittel der Tageskennzahlen",
+        "23, 24 oder 25 Einträge",
+        "Monatsgebühr ÷ Tage des Monats",
+        "nur bei „Monat“ und „Jahr“",
+        "`null`, wenn `net_eur` unbekannt ist",
+    ):
+        assert text in section, text

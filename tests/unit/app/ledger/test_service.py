@@ -1,6 +1,7 @@
 from datetime import UTC, date, datetime, time, timedelta
 
 import pytest
+from sqlalchemy import event
 from tests.app_helpers import (
     SLOT_FLOWS_MSG,
     ingest,
@@ -327,3 +328,38 @@ def test_month_peak_month_edges_follow_local_time_in_winter(ledger) -> None:
     assert ledger.month_peak(date(2026, 12, 1)) == MonthPeak(
         20.0, datetime(2026, 11, 30, 23, 0, tzinfo=UTC)
     )
+
+
+def test_month_peaks_per_month(ledger) -> None:
+    ingest(ledger, "2026-09-30T21:45:00+00:00", {"grid>house": 3000})  # 30. 9. 23:45 lokal
+    ingest(ledger, "2026-10-01T06:00:00+00:00", {"grid>house": 1500})
+    ingest(ledger, "2026-10-05T17:15:00+00:00", {"grid>house": 1200, "grid>wb:evcs": 800})
+    ingest(ledger, "2026-10-07T17:15:00+00:00", {"grid>house": 2000})  # Gleichstand: früher gewinnt
+    ingest(ledger, "2026-10-31T23:00:00+00:00", {"grid>house": 100})  # 1. 11. 00:00 lokal
+    ingest(ledger, "2026-12-20T10:00:00+00:00", {"grid>house": 9000})  # außerhalb
+    peaks = ledger.month_peaks(date(2026, 9, 15), date(2026, 11, 2))
+    assert peaks == [
+        MonthPeak(12.0, datetime(2026, 9, 30, 21, 45, tzinfo=UTC)),
+        MonthPeak(8.0, datetime(2026, 10, 5, 17, 15, tzinfo=UTC)),
+        MonthPeak(0.4, datetime(2026, 10, 31, 23, 0, tzinfo=UTC)),
+    ]
+
+
+def test_month_peaks_skip_months_without_slots(ledger) -> None:
+    ingest(ledger, "2026-03-10T10:00:00+00:00", {"grid>house": 500})
+    ingest(ledger, "2026-05-10T10:00:00+00:00", {"grid>house": 750})
+    peaks = ledger.month_peaks(date(2026, 1, 1), date(2026, 12, 31))
+    assert [peak.slot_start.month for peak in peaks] == [3, 5]
+    assert ledger.month_peaks(date(2026, 8, 1), date(2026, 8, 31)) == []
+    assert ledger.month_peaks(date(2026, 10, 2), date(2026, 10, 1)) == []
+
+
+def test_month_peaks_agree_with_month_peak_and_use_one_query(ledger, engine) -> None:
+    for month in range(1, 13):
+        ingest(ledger, f"2026-{month:02d}-15T10:00:00+00:00", {"grid>house": 100 * month})
+        ingest(ledger, f"2026-{month:02d}-16T10:00:00+00:00", {"grid>house": 50 * month})
+    statements: list[str] = []
+    event.listen(engine, "before_cursor_execute", lambda *args: statements.append(args[2]))
+    peaks = ledger.month_peaks(date(2026, 1, 1), date(2026, 12, 31))
+    assert len(statements) == 1
+    assert peaks == [ledger.month_peak(date(2026, month, 1)) for month in range(1, 13)]

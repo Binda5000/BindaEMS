@@ -17,7 +17,7 @@ from datetime import UTC, date, datetime, time, timedelta
 from typing import Any, Literal
 
 import structlog
-from sqlalchemy import Engine, Row, func, insert, select, update
+from sqlalchemy import Engine, Row, case, func, insert, select, update
 
 from bindaems.app.audit import AuditLog, Source
 from bindaems.app.db.schema import ledger_slot
@@ -253,6 +253,11 @@ def _summary(
     )
 
 
+def _next_month(day: date) -> date:
+    """Erster Tag des Monats nach dem von ``day``."""
+    return (day.replace(day=1) + timedelta(days=32)).replace(day=1)
+
+
 class LedgerService:
     def __init__(
         self,
@@ -460,6 +465,50 @@ class LedgerService:
         if row is None:
             return None
         return MonthPeak(row.import_wh * 4 / 1000, ensure_utc(row.slot_start))
+
+    def month_peaks(self, first: date, last: date) -> list[MonthPeak]:
+        """Die Monatsspitzen aller lokalen Monate, die ``first … last`` berührt (ganze Monate,
+        nach Monat aufsteigend), mit einer Abfrage; Monate ohne Slot fehlen.
+
+        Je Monat gilt wie bei ``month_peak`` der höchste Netzbezug einer Viertelstunde, bei
+        Gleichstand der frühere Slot.
+        """
+        if first > last:
+            return []
+        bounds = [datetime.combine(first.replace(day=1), time(0), tzinfo=LOCAL_TZ)]
+        while bounds[-1].date() <= last.replace(day=1):
+            bounds.append(
+                datetime.combine(_next_month(bounds[-1].date()), time(0), tzinfo=LOCAL_TZ)
+            )
+        utc = [bound.astimezone(UTC) for bound in bounds]
+        # Monatsnummer des Slots; die Grenzen von hinten, damit der späteste passende Monat gilt
+        month = case(
+            *[(ledger_slot.c.slot_start >= utc[n], n) for n in range(len(utc) - 2, -1, -1)]
+        ).label("month")
+        ranked = (
+            select(
+                ledger_slot.c.slot_start,
+                ledger_slot.c.import_wh,
+                month,
+                func.row_number()
+                .over(
+                    partition_by=month,
+                    order_by=(ledger_slot.c.import_wh.desc(), ledger_slot.c.slot_start.asc()),
+                )
+                .label("rank"),
+            )
+            .where(ledger_slot.c.slot_start >= utc[0])
+            .where(ledger_slot.c.slot_start < utc[-1])
+            .subquery()
+        )
+        query = (
+            select(ranked.c.slot_start, ranked.c.import_wh)
+            .where(ranked.c.rank == 1)
+            .order_by(ranked.c.slot_start)
+        )
+        with self._engine.connect() as conn:
+            rows = conn.execute(query).all()
+        return [MonthPeak(row.import_wh * 4 / 1000, ensure_utc(row.slot_start)) for row in rows]
 
     def days(self, first: date, last: date) -> list[DaySummary]:
         if first > last:
