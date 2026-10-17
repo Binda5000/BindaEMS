@@ -194,8 +194,9 @@ def test_the_detected_reason_example_matches_the_decision_log() -> None:
     assert shown in _guide_section("Laderegelung")
 
 
-# die Gründe des Akku-Sollwerts und des 15-min-Wächters (Plan 2c-2a, „Texte“)
-BATTERY_REASONS = {"battery_comp", "battery_support", "peak_guard"}
+# die Gründe des Akku-Sollwerts und des 15-min-Wächters (Plan 2c-2a, „Texte“), dazu die der
+# Planausführung (Plan 3c, „Texte“)
+BATTERY_REASONS = {"battery_comp", "battery_support", "peak_guard", "plan_hold", "plan_grid_charge"}
 
 # die Einstellungen unter ``control`` für Akku-Sollwert, 15-min-Wächter (Plan 2c-2a, Design 3.2)
 # und die Tesla-Punkte vor der Live-Schaltung (Plan 2d)

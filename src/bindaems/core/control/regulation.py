@@ -46,7 +46,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Final
 
-from bindaems.core.control.battery import BatteryCar, BatteryController, BatteryNeed
+from bindaems.core.control.battery import BatteryCar, BatteryController, BatteryNeed, cycle_wanted_w
 from bindaems.core.control.charge_inputs import ChargeInputs, WallboxObs
 from bindaems.core.control.charge_modes import Effective
 from bindaems.core.control.charging import CarView, ChargeController
@@ -127,6 +127,8 @@ class Regulation:
 
         Als Erstes bestimmt der Zyklus den gültigen Slot des Plans der Absicht zur Wanduhr
         (``active_slot``, Plan 3c, Präzisierung 5); ``active`` und ``health()["plan"]`` zeigen ihn.
+        Wächter und Override bekommen ihn: Bei ``HALTEN`` und ``NETZLADEN`` ändert er den gewollten
+        Netzbezug (``plan_wanted_w``, Präzisierung 7).
         """
         charge = inputs.charge
         plan = None if charge.intent is None else charge.intent.plan
@@ -146,7 +148,7 @@ class Regulation:
             charge.wall_now,
             inputs.quarter,
             peak_cars(views, need),
-            wanted_w=peak_wanted_w(need, acting=acting),
+            wanted_w=peak_wanted_w(need, acting=acting, base_w=base_w, active=self._active),
             base_w=base_w,
             soc_pct=charge.grid.soc_pct,
         )
@@ -159,6 +161,7 @@ class Regulation:
             controllable=controllable,
             locked=locked,
             blocked=_SETPOINT in charge.blocked,
+            active=self._active,
         )
         return [*commands, *override]
 
@@ -282,22 +285,30 @@ def battery_cars(
     return found
 
 
-def peak_wanted_w(need: BatteryNeed | None, *, acting: bool) -> float | None:
+def peak_wanted_w(
+    need: BatteryNeed | None,
+    *,
+    acting: bool,
+    base_w: float | None,
+    active: ActiveSlot | None,
+) -> float | None:
     """Der gewollte Netzbezug ``W`` für den 15-min-Wächter in W (Präzisierung 10); ``None`` heißt
     unbekannt, dann zählt für die verlangte Senkung nur das Mittel.
 
     - **Victron kann nicht handeln** (``acting`` falsch: gesperrt oder nicht steuerbar): ``None``.
       Kein Override setzt dann ``Basis + W`` durch.
-    - **Ohne Bedarf** (``need`` ist ``None``): ``None``.
-    - **Sonst** ``W`` vor dem Wächter (``BatteryNeed.wanted_w``), ungekappt. Was davon über der
+    - **Ohne Bedarf** (``need`` ist ``None``): ``None``; ebenso bei ``HALTEN`` und ``NETZLADEN``
+      ohne Basis ``base_w``.
+    - **Sonst** ``W`` vor dem Wächter, ungekappt: dasselbe ``W`` wie beim Override, mit dem
+      gültigen Slot ``active`` (``cycle_wanted_w``, Plan 3c, Präzisierung 7). Was davon über der
       festen Grenze ``C`` von Regel 2 zählt, entscheidet der Wächter: mit Budget für den Akku
       nichts, denn darüber liefert der Akku (Design 2c-2, Entscheidung 3 und 5.4). Ohne Budget
       hält Regel 2 den Override bei ``C``: Liegt ``P_zul`` darunter, zählt alles, denn nur die
       ganze Senkung bringt den Netzbezug unter ``P_zul``; sonst ebenfalls nichts.
     """
-    if not acting or need is None:
+    if not acting:
         return None
-    return need.wanted_w
+    return cycle_wanted_w(need, base_w, active)
 
 
 def peak_cars(cars: Sequence[CarView], need: BatteryNeed | None) -> list[PeakCar]:

@@ -7,18 +7,23 @@ from tests.helpers import T0
 from bindaems.core.control.battery import (
     BATTERY_COMP,
     BATTERY_SUPPORT,
+    PLAN_GRID_CHARGE,
+    PLAN_HOLD,
     BatteryCar,
     BatteryController,
     BatteryNeed,
+    plan_wanted_w,
 )
 from bindaems.core.control.charge_modes import Effective
 from bindaems.core.control.executor import WriteResult
 from bindaems.core.control.last_values import ControlCommand
 from bindaems.core.control.phase_guard import GuardCause
+from bindaems.core.control.plan_exec import ActiveSlot
 from bindaems.core.safety.types import Outcome, Verdict
 from bindaems.shared.config import Config
 from bindaems.shared.control import VICTRON, Command, CommandKind
 from bindaems.shared.decisions import DecisionResult
+from bindaems.shared.plan import BatteryIntent, BatteryIntentKind
 
 SETPOINT = (VICTRON, CommandKind.GRID_SETPOINT)
 FREE = {
@@ -76,6 +81,7 @@ def with_control(cfg: Config, **update: float) -> Config:
 
 def test_reason_codes() -> None:
     assert (BATTERY_COMP, BATTERY_SUPPORT) == ("battery_comp", "battery_support")
+    assert (PLAN_HOLD, PLAN_GRID_CHARGE) == ("plan_hold", "plan_grid_charge")
     assert GuardCause.PEAK_GUARD.value == "peak_guard"
 
 
@@ -557,3 +563,152 @@ def test_health_of_the_battery(cfg) -> None:
     assert battery.decide(at(11), bridging, **FREE) == []
     found = battery.health()
     assert (found["target_w"], found["support"], found["bridging_s"]) == (2100.0, "time", 950.0)
+
+
+# --- Plan (Plan 3c, Präzisierung 7) ---------------------------------------------------------------
+
+
+def slot(kind: BatteryIntentKind, grid_charge_w: float = 0.0) -> ActiveSlot:
+    """Ein gültiger Slot ab ``T0`` mit dieser Absicht, ohne Budget und Plan-Schwelle."""
+    intent = BatteryIntent(kind=kind, grid_charge_w=grid_charge_w)
+    return ActiveSlot(1, T0, intent, None, 30.0, None)
+
+
+HOLD_SLOT = slot(BatteryIntentKind.HALTEN)
+EV_SLOT = slot(BatteryIntentKind.EIGENVERBRAUCH)
+
+
+def grid_charge_slot(watts: float) -> ActiveSlot:
+    return slot(BatteryIntentKind.NETZLADEN, watts)
+
+
+def assessed(
+    cfg: Config, *, pv_w: float, house_w: float, cars: tuple[BatteryCar, ...]
+) -> BatteryNeed:
+    """Der Bedarf aus ``assess`` bei SOC 80 %."""
+    found = BatteryController(cfg).assess(T0, 80.0, pv_w, house_w, cars)
+    assert found is not None
+    return found
+
+
+def test_hold_draws_the_house_and_cars_from_the_grid(cfg) -> None:
+    found_need = assessed(cfg, pv_w=500.0, house_w=1800.0, cars=())  # Fehlbetrag 1300 W, Basis 0
+    [found] = BatteryController(cfg).decide(T0, found_need, **FREE, active=HOLD_SLOT)
+    assert found.command == setpoint(1300.0, "plan_hold")
+    assert found.inputs["target_w"] == 1300.0
+    assert found.inputs["plan_grid_charge_w"] == 0.0
+
+
+def test_hold_counts_from_the_base(cfg) -> None:
+    found_need = assessed(cfg, pv_w=500.0, house_w=1800.0, cars=())
+    assert plan_wanted_w(found_need, 50.0, HOLD_SLOT) == 1250.0
+    [found] = BatteryController(cfg).decide(
+        T0, found_need, **{**FREE, "base_w": 50.0}, active=HOLD_SLOT
+    )
+    assert found.command == setpoint(1300.0, "plan_hold")  # 50 + 1250
+    assert found.inputs["target_w"] == 1250.0
+
+
+def test_hold_without_the_base_has_no_target(cfg) -> None:
+    found_need = assessed(cfg, pv_w=500.0, house_w=1800.0, cars=())
+    battery = BatteryController(cfg)
+    assert battery.decide(T0, found_need, **{**FREE, "base_w": None}, active=HOLD_SLOT) == []
+    assert (battery.health()["state"], battery.health()["target_w"]) == ("unknown", None)
+
+
+def test_hold_with_pv_surplus_sends_no_override(cfg) -> None:
+    found_need = assessed(cfg, pv_w=3000.0, house_w=1000.0, cars=())  # W = 0: die PV lädt weiter
+    assert plan_wanted_w(found_need, 0.0, HOLD_SLOT) == 0.0
+    battery = BatteryController(cfg)
+    assert battery.decide(T0, found_need, **FREE, active=HOLD_SLOT) == []
+    assert battery.health()["target_w"] == 0.0
+
+
+def test_hold_counts_a_boost_car(cfg) -> None:  # Entscheidung 3
+    # Im Eigenverbrauch lädt Boost aus dem Akku (kein Override); bei HALTEN aus dem Netz.
+    cars = (BatteryCar("evcs", Effective.BOOST, 7400.0, True),)
+    found_need = assessed(cfg, pv_w=0.0, house_w=600.0, cars=cars)
+    assert BatteryController(cfg).decide(T0, found_need, **FREE) == []
+    [found] = BatteryController(cfg).decide(T0, found_need, **FREE, active=HOLD_SLOT)
+    assert found.command == setpoint(8000.0, "plan_hold")
+
+
+def test_grid_charge_adds_p_to_the_hold_target(cfg) -> None:
+    found_need = assessed(cfg, pv_w=0.0, house_w=800.0, cars=())
+    active = grid_charge_slot(3000.0)
+    [found] = BatteryController(cfg).decide(T0, found_need, **FREE, active=active)
+    assert found.command == setpoint(3800.0, "plan_grid_charge")
+    assert found.inputs["plan_grid_charge_w"] == 3000.0
+    assert found.inputs["target_w"] == 3800.0
+
+
+def test_grid_charge_with_pv_surplus_imports_p(cfg) -> None:
+    found_need = assessed(cfg, pv_w=4000.0, house_w=1000.0, cars=())
+    [found] = BatteryController(cfg).decide(T0, found_need, **FREE, active=grid_charge_slot(2000.0))
+    assert found.command == setpoint(2000.0, "plan_grid_charge")
+
+
+def test_budget_caps_the_plan_target_with_the_peak_reason(cfg) -> None:
+    found_need = assessed(cfg, pv_w=0.0, house_w=0.0, cars=())
+    budget = {**FREE, "budget_w": 4000.0}
+    [found] = BatteryController(cfg).decide(
+        T0, found_need, **budget, active=grid_charge_slot(6000.0)
+    )
+    assert found.command == setpoint(4000.0, "plan_grid_charge", "peak_guard")
+    assert found.inputs["target_w"] == 4000.0
+    [found] = BatteryController(cfg).decide(
+        T0, found_need, **budget, active=grid_charge_slot(3000.0)
+    )
+    assert found.command == setpoint(3000.0, "plan_grid_charge")  # unter dem Budget: nur der Plan
+
+
+def test_hold_below_the_deadband_sends_no_override(cfg) -> None:  # Entscheidung 2
+    found_need = assessed(cfg, pv_w=0.0, house_w=150.0, cars=())  # Fehlbetrag 150 W
+    battery = BatteryController(cfg)
+    assert battery.decide(T0, found_need, **FREE, active=HOLD_SLOT) == []
+    # Ein laufender Override fällt erst unter 100 W weg, mit dem Grund des Plans.
+    battery = holding(cfg, 2000.0)
+    [found] = battery.decide(at(1), found_need, **FREE, active=HOLD_SLOT)
+    assert found.command == setpoint(150.0, "plan_hold")
+    accept(battery, [found])
+    low = assessed(cfg, pv_w=0.0, house_w=90.0, cars=())
+    [found] = battery.decide(at(2), low, **FREE, active=HOLD_SLOT)
+    assert found.command == setpoint(None, "plan_hold")
+
+
+def test_hold_refreshes_with_the_reason_of_the_plan(cfg) -> None:
+    battery = holding(cfg, 2000.0)
+    found_need = assessed(cfg, pv_w=0.0, house_w=2050.0, cars=())
+    assert battery.decide(at(239), found_need, **FREE, active=HOLD_SLOT) == []
+    [found] = battery.decide(at(240), found_need, **FREE, active=HOLD_SLOT)
+    assert found.command == setpoint(2000.0, "plan_hold", refresh=True)
+
+
+def test_self_consumption_slot_behaves_like_no_plan(cfg) -> None:
+    cars = (
+        BatteryCar("twc", Effective.PV, 4000.0, True),
+        BatteryCar("evcs", Effective.BOOST, 2000.0, True),
+    )
+    needs = [
+        assessed(cfg, pv_w=500.0, house_w=500.0, cars=cars),  # Unterstützung bei SOC 80 %
+        assessed(cfg, pv_w=0.0, house_w=1800.0, cars=()),
+        need(5000.0),
+    ]
+    for found_need in needs:
+        for budget in (None, 3000.0):
+            free = {**FREE, "budget_w": budget}
+            plain = BatteryController(cfg).decide(T0, found_need, **free)
+            planned = BatteryController(cfg).decide(T0, found_need, **free, active=EV_SLOT)
+            assert [x.command for x in planned] == [x.command for x in plain]
+            for without, with_slot in zip(plain, planned, strict=True):
+                assert "plan_grid_charge_w" not in without.inputs  # ohne Slot kein neuer Schlüssel
+                assert with_slot.inputs == {**without.inputs, "plan_grid_charge_w": 0.0}
+    assert plan_wanted_w(need(5000.0, allowed=1000.0), 0.0, EV_SLOT) == 4000.0
+    assert plan_wanted_w(need(5000.0, allowed=1000.0), 0.0, None) == 4000.0
+
+
+def test_locked_victron_gets_nothing_under_a_plan(cfg) -> None:
+    found_need = assessed(cfg, pv_w=0.0, house_w=1800.0, cars=())
+    battery = BatteryController(cfg)
+    assert battery.decide(T0, found_need, **{**FREE, "locked": True}, active=HOLD_SLOT) == []
+    assert (battery.health()["state"], battery.health()["target_w"]) == ("locked", 1800.0)

@@ -430,6 +430,8 @@ def test_battery_reasons_have_texts() -> None:  # Plan 2c-2a, „Texte“
         ("battery_comp", "Akku nicht ins Auto"),
         ("battery_support", "Akku-Unterstützung"),
         ("peak_guard", "15-min-Wächter"),
+        ("plan_hold", "Plan: Halten"),
+        ("plan_grid_charge", "Plan: Netzladen"),
     ],
 )
 def test_every_battery_reason_is_named_in_german(code: str, expected: str) -> None:

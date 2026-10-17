@@ -7,12 +7,16 @@ Plan 2c-2a, Design 5.2 bis 5.6, Präzisierungen 4 bis 8 und 12. Rechnungen mit L
 - ``Support``: der Stand der Unterstützung mit SOC-Hysterese und Dauer der Überbrückung
 - ``allowed``: der Anteil, den der Akku je Auto liefern darf
 - ``BatteryNeed``: der Bedarf eines Zyklus und daraus der gewollte Netzbezug ``W``
+- ``plan_wanted_w``: der gewollte Netzbezug ``W`` mit dem gültigen Slot des Plans (Plan 3c,
+  Präzisierung 7); ``cycle_wanted_w`` dasselbe mit unbekannter Basis, für Override und Wächter
 - ``BatteryController``: der Override an Victron (``grid_setpoint``) aus dem Bedarf, mit Totband,
   Auffrischen, Sperren und Health
 
 Der Fehlbetrag eines Autos ist die Leistung, die es aus Akku oder Netz bezieht. Der Akku liefert
 davon den erlaubten Anteil; was darüber hinausgeht, ``max(0, Fehlbetrag − erlaubt)``, kommt aus dem
-Netz. Die Hauslast deckt der Akku immer.
+Netz. Die Hauslast deckt der Akku immer, außer ein Slot des Plans will ``HALTEN`` oder
+``NETZLADEN``: Dann kommen Haus und Autos aus dem Netz, soweit die PV sie nicht deckt
+(``plan_wanted_w``).
 
 Ein fehlender Wert ist ``None`` (unbekannt), ebenso ein Wert, der keine endliche Zahl ist
 (``finite_number``). Die Schicht ist rein: Die Zeit kommt als Argument, auf der Uhr der
@@ -31,17 +35,21 @@ from bindaems.core.control.charge_modes import Effective
 from bindaems.core.control.executor import WriteResult
 from bindaems.core.control.last_values import ControlCommand, Key, LastValues
 from bindaems.core.control.phase_guard import GuardCause
+from bindaems.core.control.plan_exec import ActiveSlot
 from bindaems.core.control.timing import held_since, lasted
 from bindaems.core.safety.types import Verdict
 from bindaems.shared.config import Config, ControlConfig
 from bindaems.shared.control import VICTRON, Command, CommandKind, CommandValue
 from bindaems.shared.numbers import finite_number
+from bindaems.shared.plan import BatteryIntentKind
 
 BRIDGE_END_S: Final = 60.0  # so lange ohne Fehlbetrag, dann ist die Überbrückung beendet
 
 # Gründe des Overrides (Design 9); hinter ihnen ``peak_guard``, wenn das Budget des Wächters senkt
 BATTERY_COMP: Final = "battery_comp"  # der Fehlbetrag der Autos geht aufs Netz statt aus dem Akku
 BATTERY_SUPPORT: Final = "battery_support"  # nur der Teil über dem erlaubten Anteil geht aufs Netz
+PLAN_HOLD: Final = "plan_hold"  # der Plan will HALTEN: Der Akku gibt nichts ab
+PLAN_GRID_CHARGE: Final = "plan_grid_charge"  # der Plan will NETZLADEN: dazu P aus dem Netz
 
 SupportReason = Literal["on", "soc", "time", "mode"]  # der Stand der Unterstützung (Health)
 
@@ -262,6 +270,49 @@ class BatteryNeed:
         return sum(self.grid_w.values(), 0.0)
 
 
+def plan_wanted_w(need: BatteryNeed, base_w: float, active: ActiveSlot | None) -> float:
+    """Der gewollte Netzbezug ``W`` über der Basis ``base_w`` mit dem gültigen Slot ``active``
+    (Plan 3c, Präzisierung 7 und Entscheidung 2).
+
+    - **``HALTEN``:** ``max(0, Haus + Autos − PV − Basis)``. Der Akku gibt nichts ab, auch nicht
+      an ein Auto in Boost (Entscheidung 3), und ein PV-Überschuss lädt ihn weiter.
+    - **``NETZLADEN(P)``:** dasselbe plus ``P`` (``grid_charge_w``).
+    - **``EIGENVERBRAUCH`` oder kein Slot:** ``BatteryNeed.wanted_w``; die Basis zählt nicht.
+
+    PV und Hauslast unter 0 (Messrauschen) zählen als 0, wie im Fehlbetrag (``deficits``); die
+    Autos zählen mit ``cars_w``.
+    """
+    kind = _kind(active)
+    if active is None or kind is BatteryIntentKind.EIGENVERBRAUCH:
+        return need.wanted_w
+    drawn_w = max(need.house_w, 0.0) + need.cars_w - max(need.pv_w, 0.0)
+    hold_w = max(0.0, drawn_w - base_w)
+    if kind is BatteryIntentKind.NETZLADEN:
+        return hold_w + active.intent.grid_charge_w
+    return hold_w
+
+
+def cycle_wanted_w(
+    need: BatteryNeed | None, base_w: float | None, active: ActiveSlot | None
+) -> float | None:
+    """``W`` dieses Zyklus (``plan_wanted_w``); ``None`` heißt unbekannt.
+
+    Unbekannt ist ``W`` ohne Bedarf und, bei ``HALTEN`` und ``NETZLADEN``, ohne Basis (``None``
+    oder keine endliche Zahl): Dort zählt ``W`` von der Basis an.
+    """
+    if need is None:
+        return None
+    base = finite_number(base_w)
+    if base is None:
+        return need.wanted_w if _kind(active) is BatteryIntentKind.EIGENVERBRAUCH else None
+    return plan_wanted_w(need, base, active)
+
+
+def _kind(active: ActiveSlot | None) -> BatteryIntentKind:
+    """Die Absicht des Slots für den Akku; ohne Slot ``EIGENVERBRAUCH``."""
+    return BatteryIntentKind.EIGENVERBRAUCH if active is None else active.intent.kind
+
+
 @dataclass(frozen=True)
 class _Cycle:
     """Der Stand des letzten ``decide``.
@@ -288,7 +339,9 @@ class BatteryController:
     Befehl (Präzisierungen 6 bis 8 und 12):
 
     - **Ziel:** ``T = round10(Basis + W')`` mit ``round10(x) = 10 · floor(x / 10 + 0,5)`` und der
-      Basis ``ess.grid_setpoint_w``. ``W'`` ist ``W`` nach dem Budget des 15-min-Wächters:
+      Basis ``ess.grid_setpoint_w``. ``W`` folgt dem gültigen Slot des Plans (``plan_wanted_w``,
+      Plan 3c); ohne Slot und im Eigenverbrauch ist es ``BatteryNeed.wanted_w``. Alles Weitere gilt
+      für jede Absicht gleich. ``W'`` ist ``W`` nach dem Budget des 15-min-Wächters:
       ``max(0, min(W, floor10(Budget) − Basis))`` mit ``floor10(x) = 10 · floor(x / 10)``, ohne
       Budget ``W``. Mit ``W'`` über 0 liegt ``T`` so nie über dem Budget.
     - **An, aus und Änderung** gegenüber dem letzten eigenen Wert: Ist er eine Zahl, heißt ``W'``
@@ -304,13 +357,14 @@ class BatteryController:
       sofort fällig: Kam der Wert nur mit ``UNCHANGED`` zurück, etwa nach einem Neustart, nach
       ``forget`` oder nach einem gescheiterten Schreiben, ist unbekannt, wann der Cerbo ihn
       zuletzt bekam.
-    - **Unbekanntes Ziel** (Bedarf, Basis oder ``W'`` unbekannt): kein Befehl, auch kein
+    - **Unbekanntes Ziel** (Bedarf, Basis, ``W`` oder ``W'`` unbekannt): kein Befehl, auch kein
       Auffrischen. Ein Override verfällt so nach 300 s (Design 5.2).
     - **Gesperrt oder nicht steuerbar** (Victron): kein Befehl, und der Akku-Sollwert vergisst seine
       Werte; Bedarf, Unterstützung und Ziel rechnet er für Health weiter. Ein offener
       Schreibvorgang oder eine Übergabe (``blocked``) hält nur den Befehl dieses Zyklus zurück.
-    - **Gründe:** ``battery_support``, wenn der erlaubte Anteil zusammen über 0 liegt, sonst
-      ``battery_comp``; dahinter ``peak_guard``, wenn das Budget ``W`` gesenkt hat.
+    - **Gründe:** ``plan_hold`` bei ``HALTEN``, ``plan_grid_charge`` bei ``NETZLADEN``; sonst
+      ``battery_support``, wenn der erlaubte Anteil zusammen über 0 liegt, und ``battery_comp``;
+      dahinter ``peak_guard``, wenn das Budget ``W`` gesenkt hat.
 
     Kein Befehl ist dringend. Der Zustand lebt nur im Speicher: die letzten eigenen Werte, die
     Unterstützung, die Zeit des letzten Urteils mit Wert über einen eigenen Override und der Stand
@@ -367,6 +421,7 @@ class BatteryController:
         controllable: bool,
         locked: bool,
         blocked: bool,
+        active: ActiveSlot | None = None,
     ) -> list[ControlCommand]:
         """Der Befehl dieses Zyklus an den Override, höchstens einer (Regeln: Docstring der Klasse).
 
@@ -378,12 +433,13 @@ class BatteryController:
           Override“, ein fehlender Eintrag unbekannt
         - ``controllable``: Victron ist steuerbar; ``locked``: Victron ist gesperrt
         - ``blocked``: Für den Override ist ein Schreibvorgang offen, oder Victron ist in Übergabe.
+        - ``active``: der gültige Slot des Plans (``Regulation.active``); ``None`` heißt keiner
 
         ``now`` ist die Zeit auf der Uhr der Safety-Schicht. Die Eingaben jedes Befehls für das
         Entscheidungslog nennt ``_inputs``.
         """
         base = finite_number(base_w)
-        wanted_w = None if need is None else finite_number(need.wanted_w)
+        wanted_w = finite_number(cycle_wanted_w(need, base, active))
         guarded = None if wanted_w is None else _guarded(wanted_w, base, budget_w)
         shown_w = None if guarded is None else guarded[0]  # ``W'`` für Health
         if locked or not controllable:  # nichts senden und die Werte vergessen (Präzisierung 8)
@@ -398,11 +454,11 @@ class BatteryController:
         if blocked:
             return []
         target_w, lowered = guarded
-        reasons = _reasons(need, lowered)
+        reasons = _reasons(need, lowered, active)
         command = self._command(now, target_w, _round10(base + target_w), reasons, present)
-        return (
-            [] if command is None else [ControlCommand(command, _inputs(need, target_w, present))]
-        )
+        if command is None:
+            return []
+        return [ControlCommand(command, _inputs(need, target_w, present, active))]
 
     def note_verdict(
         self, command: Command, verdict: Verdict | None, *, not_sent: bool = False
@@ -576,25 +632,39 @@ def _guarded(
     return guarded_w, guarded_w < wanted_w
 
 
-def _reasons(need: BatteryNeed, lowered: bool) -> tuple[str, ...]:
+def _reasons(need: BatteryNeed, lowered: bool, active: ActiveSlot | None) -> tuple[str, ...]:
     """Die Gründe des Overrides; ``lowered`` heißt: Das Budget des Wächters hat ``W`` gesenkt.
 
-    ``battery_support``, wenn der Akku etwas liefern darf, sonst ``battery_comp``; dahinter
+    ``plan_hold`` bei ``HALTEN``, ``plan_grid_charge`` bei ``NETZLADEN``; sonst
+    ``battery_support``, wenn der Akku etwas liefern darf, und ``battery_comp``; dahinter
     ``peak_guard``, wenn ``lowered``.
     """
-    first = BATTERY_SUPPORT if sum(need.allowed_w.values()) > 0.0 else BATTERY_COMP
+    kind = _kind(active)
+    if kind is BatteryIntentKind.HALTEN:
+        first = PLAN_HOLD
+    elif kind is BatteryIntentKind.NETZLADEN:
+        first = PLAN_GRID_CHARGE
+    elif sum(need.allowed_w.values()) > 0.0:
+        first = BATTERY_SUPPORT
+    else:
+        first = BATTERY_COMP
     return (first, GuardCause.PEAK_GUARD.value) if lowered else (first,)
 
 
 def _inputs(
-    need: BatteryNeed, target_w: float, present: Mapping[Key, CommandValue]
+    need: BatteryNeed,
+    target_w: float,
+    present: Mapping[Key, CommandValue],
+    active: ActiveSlot | None,
 ) -> dict[str, float | None]:
     """Die Eingaben eines Befehls für das Entscheidungslog (Design 9).
 
     ``deficit_w`` und ``allowed_w`` zusammen über die Autos, ``target_w`` ist ``W'``,
     ``actual_setpoint_w`` der Override laut Cerbo; „kein Override“ und unbekannt sind ``None``.
+    Mit einem gültigen Slot kommt ``plan_grid_charge_w`` dazu (Plan 3c, Präzisierung 10): ``P``
+    bei ``NETZLADEN``, sonst 0; ohne Slot fehlt der Schlüssel.
     """
-    return {
+    found: dict[str, float | None] = {
         "pv_w": need.pv_w,
         "house_w": need.house_w,
         "cars_w": need.cars_w,
@@ -603,3 +673,6 @@ def _inputs(
         "target_w": target_w,
         "actual_setpoint_w": finite_number(present.get(_SETPOINT)),
     }
+    if active is not None:
+        found["plan_grid_charge_w"] = active.intent.grid_charge_w
+    return found

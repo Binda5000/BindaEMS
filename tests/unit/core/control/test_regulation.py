@@ -20,7 +20,7 @@ from bindaems.core.control.peak_guard import (
     PeakLimits,
     QuarterObs,
 )
-from bindaems.core.control.plan_exec import plan_health
+from bindaems.core.control.plan_exec import ActiveSlot, plan_health
 from bindaems.core.control.regulation import (
     Regulation,
     RegulationInputs,
@@ -29,6 +29,7 @@ from bindaems.core.control.regulation import (
     peak_wanted_w,
 )
 from bindaems.core.safety.limits import HardLimits
+from bindaems.core.safety.ranges import check_range
 from bindaems.core.safety.types import Outcome, Verdict
 from bindaems.shared.config import Config
 from bindaems.shared.control import (
@@ -595,9 +596,10 @@ def test_peak_wanted_w_is_w_while_victron_can_act() -> None:  # Präzisierung 10
     # festen Grenze von Regel 2 (die Regel mit und ohne Budget kennt er selbst); ohne Bedarf oder
     # solange Victron nicht handeln kann, nichts.
     need = BatteryNeed(0.0, 0.0, 18400.0, {"evcs": 7360.0, "twc": 11040.0}, {}, "soc", None)
-    assert peak_wanted_w(need, acting=True) == 18400.0
-    assert peak_wanted_w(None, acting=True) is None
-    assert peak_wanted_w(need, acting=False) is None
+    assert peak_wanted_w(need, acting=True, base_w=0.0, active=None) == 18400.0
+    assert peak_wanted_w(None, acting=True, base_w=0.0, active=None) is None
+    assert peak_wanted_w(need, acting=False, base_w=0.0, active=None) is None
+    assert peak_wanted_w(need, acting=True, base_w=None, active=None) == 18400.0
 
 
 def test_the_alarm_of_the_guard_ends_with_its_quarter(cfg) -> None:  # Präzisierung 14
@@ -737,3 +739,89 @@ def test_a_resting_regulation_reports_the_plan_by_its_validity(cfg) -> None:
     assert regulation.health()["plan"]["state"] == "expired"
     regulation.rest_plan(None, T0 + timedelta(minutes=22))
     assert regulation.health()["plan"]["state"] == "none"
+
+
+# --- Ausführung des Plans (Plan 3c, Präzisierung 7) ----------------------------------------------
+
+TESLA_NOW = Intent(
+    version=1,
+    control=True,
+    vehicles={"tesla": VehicleIntent(mode=ChargeMode.NOW)},
+    plan=PLAN,
+)
+
+
+def test_hold_above_rule_2_is_clamped_downstream(cfg) -> None:  # Review Focus 4
+    # Um 10:20 gilt HALTEN. Der Tesla lädt in Sofort mit 11040 W, das Haus braucht 960 W, keine PV:
+    # Der Akku-Sollwert verlangt 12000 W aus dem Netz. Regel 2 der Safety-Schicht klemmt den
+    # Override auf victron.max_grid_charge_setpoint_w (8000 W); den Rest liefert der Akku.
+    regulation = Regulation(cfg, HardLimits.from_config(cfg), started=T0)
+    charge = inputs(
+        cfg,
+        s=20 * 60,
+        intent=TESLA_NOW,
+        twc_obs=TESLA_16_A,
+        tesla_obs=tesla(plugged=True, charging=True),
+        controllable={**CONTROLLABLE, VICTRON: True},
+    )
+    found = regulation.step(RegulationInputs(charge, pv_w=0.0, house_w=960.0, base_setpoint_w=0.0))
+    override = found[-1]
+    assert override.command == Command(
+        VICTRON, CommandKind.GRID_SETPOINT, 12000.0, reasons=("plan_hold",)
+    )
+    assert override.inputs["plan_grid_charge_w"] == 0.0
+    step = check_range(override.command, HardLimits.from_config(cfg), regulation.grid_budget_w())
+    assert (step.value, [x.code for x in step.findings], step.reject) == (
+        8000.0,
+        ["range.ceiling"],
+        False,
+    )
+
+
+def grid_charge(watts: float) -> ActiveSlot:
+    intent = BatteryIntent(kind=BatteryIntentKind.NETZLADEN, grid_charge_w=watts)
+    return ActiveSlot(1, T0, intent, None, None, None)
+
+
+def test_guard_sees_the_plan_target(cfg, monkeypatch) -> None:
+    # Bei NETZLADEN bekommt der Wächter P plus den Fehlbetrag von Haus und Autos über der Basis;
+    # im Eigenverbrauch wie bisher W, ohne Basis bei HALTEN und NETZLADEN nichts.
+    need = BatteryNeed(0.0, 800.0, 0.0, {}, {}, "soc", None)
+    assert peak_wanted_w(need, acting=True, base_w=0.0, active=grid_charge(3000.0)) == 3800.0
+    assert peak_wanted_w(need, acting=True, base_w=300.0, active=grid_charge(3000.0)) == 3500.0
+    assert peak_wanted_w(need, acting=True, base_w=None, active=grid_charge(3000.0)) is None
+    assert peak_wanted_w(need, acting=False, base_w=0.0, active=grid_charge(3000.0)) is None
+    # Im Regelzyklus: Um 10:20 gilt NETZLADEN mit 3000 W, das Haus braucht 1720 W.
+    plan = PLAN.model_copy(
+        update={
+            "slots": [
+                slot.model_copy(
+                    update={
+                        "intent": BatteryIntent(
+                            kind=BatteryIntentKind.NETZLADEN, grid_charge_w=3000.0
+                        )
+                    }
+                )
+                if slot.intent.kind is BatteryIntentKind.HALTEN
+                else slot
+                for slot in PLAN.slots
+            ]
+        }
+    )
+    regulation = Regulation(cfg, HardLimits.from_config(cfg), started=T0)
+    seen: list[float | None] = []
+    guard_step = regulation.peak_guard.step
+
+    def spy(*args: Any, **kw: Any) -> PeakLimits:
+        seen.append(kw["wanted_w"])
+        return guard_step(*args, **kw)
+
+    monkeypatch.setattr(regulation.peak_guard, "step", spy)
+    intent = Intent(version=1, control=True, plan=plan)
+    charge = inputs(cfg, s=20 * 60, intent=intent, controllable={**CONTROLLABLE, VICTRON: True})
+    found = regulation.step(RegulationInputs(charge, pv_w=0.0, house_w=1720.0, base_setpoint_w=0.0))
+    assert seen == [4720.0]
+    assert found[-1].command == Command(
+        VICTRON, CommandKind.GRID_SETPOINT, 4720.0, reasons=("plan_grid_charge",)
+    )
+    assert found[-1].inputs["plan_grid_charge_w"] == 3000.0

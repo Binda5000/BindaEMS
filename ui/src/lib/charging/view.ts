@@ -71,6 +71,8 @@ const REASONS: Record<string, string> = {
 	battery_comp: 'Akku nicht ins Auto',
 	battery_support: 'Akku-Unterstützung',
 	peak_guard: '15-min-Wächter',
+	plan_hold: 'Plan: Halten',
+	plan_grid_charge: 'Plan: Netzladen',
 	assignment_detected: 'Zuordnung erkannt',
 	self_start: 'Selbststart',
 	foreign_change: 'Änderung von außen'

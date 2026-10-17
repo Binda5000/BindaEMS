@@ -2636,6 +2636,20 @@ Den **erlaubten Akku-Anteil** bestimmt der Modus des Autos:
   Übergabe danach): Der Akku-Sollwert sendet nichts. Sicherer Zustand und Übergabe bleiben beim Keeper,
   der den Override aufhebt (Abschnitt 13); ist der core ausgefallen, tut es der Watchdog am Cerbo
   (Abschnitt 14).
+- **Absicht des Plans** (seit Plan 3c): Gilt ein Slot des Plans (Abschnitt „Planung“), bestimmt seine
+  Absicht für den Akku den gewollten Netzbezug über dem Basis-Sollwert:
+  - **`EIGENVERBRAUCH`:** wie ohne Plan, die Regeln dieses Abschnitts.
+  - **`HALTEN`:** Hauslast plus Autos minus PV minus Basis-Sollwert, nie unter 0. Der Akku gibt
+    nichts ab, auch nicht an ein Auto in Boost: Boost lädt dann aus dem Netz. Ein PV-Überschuss lädt
+    den Akku weiter.
+  - **`NETZLADEN`:** dasselbe plus die Netzladeleistung des Slots.
+
+  Budget des Wächters, Raster von 10 W, Totband, Auffrischen, Sperren und Regel 2 gelten für alle
+  drei wie oben. Unter 200 W Fehlbetrag entsteht wegen des Totbands kein Override: Dann entlädt der
+  Akku auch bei `HALTEN` etwas, höchstens rund 0,05 kWh je Viertelstunde. Wollen Haus und Autos bei
+  `HALTEN` mehr als `victron.max_grid_charge_setpoint_w` (8000 W), etwa ein Auto in Sofort mit 11 kW,
+  kappt Regel 2 den Override, und den Rest liefert der Akku. Ohne Basis-Sollwert ist das Ziel bei
+  `HALTEN` und `NETZLADEN` unbekannt.
 
 ### 15-min-Wächter
 
@@ -2688,7 +2702,8 @@ Preis: Er drosselt die Wallboxen und lässt den Akku überbrücken, und was beid
   Hochrechnung ist `(E_bisher + Mittel · t_rest) / 0,25 h`, mit dem Rest der Viertelstunde `t_rest`
   (mindestens 1 s). Die **verlangte Senkung** ist `Bedarf − P_zul`, in Health mindestens 0. Der
   Bedarf ist das größere von Mittel und dem Netzbezug, den die Autos über den Override wollen, aus
-  dem Basis-Sollwert und `W`, dem gewollten Netzbezug der Autos vor dem Wächter. `W` ist nötig, weil
+  dem Basis-Sollwert und `W`, dem gewollten Netzbezug der Autos vor dem Wächter (bei `HALTEN` und
+  `NETZLADEN` der des Plans, oben unter „Absicht des Plans“). `W` ist nötig, weil
   Regel 2 mit Victron live den Override auf `P_zul` begrenzt: ESS hielte den Netzbezug dann immer
   unter `P_zul`, ganz aus dem Akku, und die Wallboxen würden nie gedrosselt. Mit `W` drosselt der
   Wächter, sobald die Autos mehr Netz wollen, als das Budget trägt; das Mittel fängt den Rest, etwa
@@ -2846,16 +2861,20 @@ Gründe in `codes`, vor den Befunden der Safety-Schicht:
 | `battery_comp` | Akku nicht ins Auto | Der Override verschiebt den Fehlbetrag der Autos aufs Netz. |
 | `battery_support` | Akku-Unterstützung | Nur der Teil über dem erlaubten Akku-Anteil geht aufs Netz. |
 | `peak_guard` | 15-min-Wächter | Der Befehl folgt aus dem 15-min-Wächter: Beim Override hat sein Budget den gewollten Netzbezug gesenkt, bei einer Wallbox gilt seine Leistungsgrenze an Stelle der des Phasenwächters. |
+| `plan_hold` | Plan: Halten | Der Slot des Plans will `HALTEN`: Haus und Autos kommen aus dem Netz, soweit die PV sie nicht deckt. |
+| `plan_grid_charge` | Plan: Netzladen | Der Slot des Plans will `NETZLADEN`: dazu die Netzladeleistung des Slots aus dem Netz. |
 
-- `battery_support` steht, wenn der Akku zusammen etwas liefern darf, sonst `battery_comp`; dahinter
-  folgt `peak_guard`, wenn das Budget des Wächters den gewollten Netzbezug gesenkt hat.
+- `plan_hold` steht bei `HALTEN`, `plan_grid_charge` bei `NETZLADEN`. Sonst steht
+  `battery_support`, wenn der Akku zusammen etwas liefern darf, und `battery_comp`. Dahinter folgt
+  `peak_guard`, wenn das Budget des Wächters den gewollten Netzbezug gesenkt hat.
 - Ein Beispiel: `Victron (ESS) (Akku nicht ins Auto): Netz-Sollwert 2340 W – Dry-Run, nicht
   gesendet.` Hebt der Akku-Sollwert den Override auf, steht dort „Netz-Sollwert-Override aufheben“.
 - Zu den Eingaben einer Entscheidung des Overrides gehören die der Laderegelung (`soc_pct`,
   `battery_w`, `grid_l1_a` bis `grid_l3_a`) und diese in W: `pv_w` und `house_w` (PV und Hauslast),
   `cars_w` (Ladeleistung der Autos), `deficit_w` (Fehlbetrag zusammen), `allowed_w` (erlaubter
   Akku-Anteil zusammen), `target_w` (der gewollte Netzbezug nach dem Wächter) und `actual_setpoint_w`
-  (der Override laut Cerbo; im Dry-Run unter ESS „kein Override“, also `null`).
+  (der Override laut Cerbo; im Dry-Run unter ESS „kein Override“, also `null`). Gilt ein Slot des
+  Plans, kommt `plan_grid_charge_w` dazu (die Netzladeleistung bei `NETZLADEN`, sonst 0).
 
 Ein Eintrag im Rohformat (hier aus dem Simulator, gerundet):
 

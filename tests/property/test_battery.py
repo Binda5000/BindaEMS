@@ -13,6 +13,9 @@ einmal, nicht schrittweise wie der Code:
 - der Bedarf aus ``BatteryController.assess`` über Verläufe von Zyklen (Design 10.4): ``wanted_w``
   nie negativ, nie über dem Fehlbetrag der Autos, nie mehr mit höherem ``support_max_w`` oder mit
   geltender Unterstützung.
+- der gewollte Netzbezug eines Slots mit ``HALTEN`` oder ``NETZLADEN`` (``plan_wanted_w``, Plan 3c,
+  Präzisierung 7): nie negativ, nie unter ``W_hold`` (Haus und Autos über PV und Basis), bei
+  ``NETZLADEN`` genau ``W_hold + P``.
 """
 
 from datetime import timedelta
@@ -32,9 +35,12 @@ from bindaems.core.control.battery import (
     Support,
     allowed,
     deficits,
+    plan_wanted_w,
 )
 from bindaems.core.control.charge_modes import Effective
+from bindaems.core.control.plan_exec import ActiveSlot
 from bindaems.shared.config import ControlConfig, load_config
+from bindaems.shared.plan import BatteryIntent, BatteryIntentKind
 
 # --- Fehlbetrag und erlaubter Anteil --------------------------------------------------------------
 
@@ -344,3 +350,41 @@ def test_support_never_means_more_grid_from_assess(cycles, limit, soc_on, soc_of
     for with_battery, without in zip(supported, alone, strict=True):
         assert without.support != "on"
         assert with_battery.wanted_w <= without.wanted_w + 1e-6
+
+
+# --- Gewollter Netzbezug eines Slots (Plan 3c, Präzisierung 7) ------------------------------------
+
+PLANNED = st.one_of(
+    st.just(BatteryIntent(kind=BatteryIntentKind.HALTEN)),
+    st.floats(1.0, 8000.0).map(
+        lambda watts: BatteryIntent(kind=BatteryIntentKind.NETZLADEN, grid_charge_w=watts)
+    ),
+)
+
+
+def hold_w(pv, house, cars, base) -> float:
+    """``W_hold``: was Haus und Autos über PV und Basis ziehen; Messrauschen unter 0 zählt als 0."""
+    drawn_w = max(house, 0.0) + sum(car.power_w for car in cars)
+    return max(0.0, drawn_w - max(pv, 0.0) - base)
+
+
+@settings(deadline=None)
+@given(
+    pv=WATTS,
+    house=WATTS,
+    cars=CARS,
+    base=st.floats(-500.0, 500.0),
+    soc=st.none() | st.floats(0.0, 100.0),
+    intent=PLANNED,
+)
+def test_the_plan_target_is_never_below_holding(pv, house, cars, base, soc, intent) -> None:
+    need = BatteryController(CFG).assess(T0, soc, pv, house, cars)
+    assert need is not None
+    wanted = plan_wanted_w(need, base, ActiveSlot(1, T0, intent, None, None, None))
+    held = hold_w(pv, house, cars, base)
+    assert wanted >= 0.0
+    assert wanted >= held - 1e-6
+    if intent.kind is BatteryIntentKind.NETZLADEN:
+        assert wanted == pytest.approx(held + intent.grid_charge_w, abs=1e-6)
+    else:
+        assert wanted == pytest.approx(held, abs=1e-6)
