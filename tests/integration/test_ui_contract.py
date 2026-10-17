@@ -37,6 +37,7 @@ GET_ENDPOINTS = {
     "users": "/api/users",
     "audit": "/api/audit",
     "control": "/api/control",
+    "boost-cost": "/api/control/boost-cost",
     "decisions": "/api/decisions",
     "decisions-latest": "/api/decisions/latest",
     "plan": "/api/plan",

@@ -4,7 +4,12 @@ import { settingsCurrent } from '$lib/testing/fixtures';
 import TariffView from './TariffView.svelte';
 
 it('zeigt Leistungspreis und Gebühr ohne Wert als fehlend', () => {
-	render(TariffView, { settings: settingsCurrent().settings });
+	const settings = settingsCurrent().settings;
+	// die Demo hat einen Leistungspreis mit Satz ab sofort; hier steht er noch ohne Satz ab 2027
+	settings.tariff.components = settings.tariff.components.map((c) =>
+		c.kind === 'power_per_kw_year' ? { ...c, value_eur: null, valid_from: '2027-01-01' } : c
+	);
+	render(TariffView, { settings });
 	const power = screen.getByText('Leistungspreis (ElWG)').closest('tr');
 	const fee = screen.getByText('Grundgebühr Netz').closest('tr');
 	expect(power).toHaveTextContent('Leistungspreis');

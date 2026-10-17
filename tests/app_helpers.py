@@ -19,7 +19,7 @@ from bindaems.app.prices.sources import AwattarSource, EnergyChartsSource, Smart
 from bindaems.app.prices.store import SlotRow
 from bindaems.app.settings.service import SettingsService
 from bindaems.shared.domain import SlotFlows
-from bindaems.shared.settings import RuntimeSettings
+from bindaems.shared.settings import RuntimeSettings, TariffSettings
 
 T_APP = datetime(2026, 10, 9, 8, 0, tzinfo=UTC)  # 10:00 Ortszeit
 
@@ -146,6 +146,11 @@ def set_feed_in(service: SettingsService, monthly_ct: dict[str, float]) -> None:
     settings = service.current().settings
     feed_in = settings.feed_in.model_copy(update={"monthly_ct": monthly_ct})
     _update_settings(service, settings.model_copy(update={"feed_in": feed_in}))
+
+
+def set_tariff(service: SettingsService, tariff: TariffSettings) -> None:
+    settings = service.current().settings
+    _update_settings(service, settings.model_copy(update={"tariff": tariff}))
 
 
 def set_wallbox_names(service: SettingsService, names: dict[str, str]) -> None:

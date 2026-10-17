@@ -103,6 +103,16 @@
           "path": "tariff.components[2].value_ct",
           "old": null,
           "new": 8.11
+        },
+        {
+          "path": "tariff.components[6].valid_from",
+          "old": "2027-01-01",
+          "new": null
+        },
+        {
+          "path": "tariff.components[6].value_eur",
+          "old": null,
+          "new": 60.0
         }
       ]
     }

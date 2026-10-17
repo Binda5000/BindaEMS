@@ -169,7 +169,7 @@ it('edits validity, VAT flag and tariff-wide values', async () => {
 		target: { value: '31,5' }
 	});
 	expect(draft().components[6]).toMatchObject({
-		validFrom: '2027-01-01',
+		validFrom: '', // unverändert: die Demo hat den Leistungspreis ohne Beginn
 		validUntil: '2027-12-31',
 		vat: false
 	});

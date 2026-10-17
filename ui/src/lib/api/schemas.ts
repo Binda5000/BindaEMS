@@ -158,6 +158,17 @@ export const ControlReplySchema = v.object({
 });
 export type ControlReply = v.InferOutput<typeof ControlReplySchema>;
 
+/**
+ * `GET /api/control/boost-cost`: Mehrkosten des Boosts je Fahrzeug (Leistungspreis im Monat).
+ * `vehicles` ist leer, solange `applies` falsch ist (kein Leistungspreis mit Satz im Monat).
+ */
+export const BoostCostSchema = v.object({
+	applies: v.boolean(),
+	month_peak_kw: NullableNumber,
+	vehicles: v.array(v.object({ id: v.string(), extra_kw: v.number(), cost_eur: v.number() }))
+});
+export type BoostCost = v.InferOutput<typeof BoostCostSchema>;
+
 /** Antwort der Quittierung: der Satz des core */
 export const AckResponseSchema = v.object({ detail: v.string() });
 export type AckResponse = v.InferOutput<typeof AckResponseSchema>;

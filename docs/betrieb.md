@@ -836,7 +836,9 @@ Regelbetrieb“). Bis Health eine Änderung zeigt, steht auf der Seite die gesen
   Min+PV, Sofort oder Aus. Die Taste „Boost“ setzt einen Boost bis zum Abstecken, höchstens 12 h;
   danach steht dort „Boost beenden“ und, solange er gilt, „bis HH:MM“. Gilt ein Boost schon, wartet
   aber auf einen Ansteckvorgang, der noch nicht begonnen hat, steht daneben „wartet auf Anstecken“. Die
-  Dauer wählst du nicht.
+  Dauer wählst du nicht. Ab „Bedienen“ steht unter den Bedienelementen, was ein Boost kosten kann:
+  „Boost kann bis zu {€} € Leistungspreis im Monat kosten ({kW} kW mehr Spitze).“ (Abschnitt
+  „Laderegelung“, „Lademodi“, Boost).
 - **Wallbox:** wer dort steht („kein Fahrzeug“, wenn kein Vorgang läuft, sonst das Fahrzeug oder
   „Gast“), die Art der Zuordnung (erkannt, angenommen, Übersteuerung, unklar) und die Indizien als
   Sätze („Tessie: zu Hause und angesteckt“, „Strom passt nicht zu Tessie“, …), je nachdem, ob sie das
@@ -1729,7 +1731,14 @@ wann der Akku liefert (Abschnitt „Akku und Spitzen“).
   sich auch Sofort und Boost am Importlimit aus (Grund „Schutz der USV-Reserve“): Peak Shaving soll
   den Akku nicht unter die Reserve ziehen.
 - **Boost** darf auch aus dem Akku laden und gehört nicht zum Ziel des 15-min-Wächters (Abschnitt
-  „Akku und Spitzen“).
+  „Akku und Spitzen“). Er kann den Leistungspreis des Monats erhöhen: Die Seite „Laden“ zeigt ab
+  „Bedienen“ „bis zu {€} € Leistungspreis im Monat“. Gerechnet wird der Leistungspreis (brutto) für
+  die Monatsspitze der Abrechnung, mindestens die Mindestleistung des Tarifs, plus die volle
+  Ladeleistung des Autos (`max_a` · Phasen · `grid.voltage_nominal_v`) abzüglich des Leistungspreises
+  für die Monatsspitze allein, mit dem Satz des aktuellen Monats (Wiener Zeit). Das ist eine Obergrenze:
+  Sie gilt, wenn der Boost die Spitze wirklich um die volle Ladeleistung hebt. Gilt im Monat kein
+  Leistungspreis mit Satz, fehlt der Hinweis. Die Zahlen liefert `GET /api/control/boost-cost`
+  (ab „Betrachten“).
 - Ein **Moduswechsel** wirkt sofort, ohne Startzeit, Stoppzeit und Mindestzeiten.
 - Nach einem Start lädt ein Auto mindestens `control.min_on_s` (600 s), nach einem Stopp startet es
   frühestens nach `control.min_off_s` (600 s) wieder. Das sind höchstens 3 Start/Stopp-Zyklen je Auto

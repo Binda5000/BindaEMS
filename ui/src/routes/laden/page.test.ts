@@ -1,11 +1,13 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/svelte';
 import * as v from 'valibot';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
+import boostCostJson from '$lib/api/contract/boost-cost.json';
 import controlJson from '$lib/api/contract/control.json';
 import { ApiError } from '$lib/api/errors';
 import {
 	ControlResponseSchema,
 	SystemResponseSchema,
+	type BoostCost,
 	type ControlReply,
 	type CoreHealth,
 	type Intent,
@@ -21,6 +23,7 @@ const { api, user } = vi.hoisted(() => ({
 		system: vi.fn(),
 		control: vi.fn(),
 		limits: vi.fn(),
+		boostCost: vi.fn(),
 		setRegulation: vi.fn(),
 		setMode: vi.fn(),
 		setBoost: vi.fn(),
@@ -81,8 +84,13 @@ function wallboxAt(
 }
 
 /** Rendert die Seite mit dieser Antwort von /api/system und der Absicht der Vertragsdatei */
-async function show(response = system(), intent: Intent | null = baseIntent()) {
+async function show(
+	response = system(),
+	intent: Intent | null = baseIntent(),
+	boostCost: BoostCost = boostCostJson
+) {
 	api.system.mockResolvedValue(response);
+	api.boostCost.mockResolvedValue(boostCost);
 	api.control.mockResolvedValue({ core_connected: true, intent });
 	api.limits.mockResolvedValue(limits());
 	render(Page);
@@ -159,6 +167,34 @@ it('zeigt die Fakten eines Fahrzeugs', async () => {
 	expect(fact('Befehle letzte Stunde')).toHaveTextContent('3');
 	// e-Golf hat kein Tessie: keine Zahl der Befehle
 	expect(within(card('e-Golf')).queryByText('Befehle letzte Stunde')).not.toBeInTheDocument();
+});
+
+it('Bedienende sehen die Mehrkosten des Boosts an der Fahrzeugkarte', async () => {
+	await show();
+	const tesla = within(card('Tesla Model 3'));
+	expect(
+		await tesla.findByText(
+			'Boost kann bis zu 66,24 € Leistungspreis im Monat kosten (11,0 kW mehr Spitze).'
+		)
+	).toBeVisible();
+	expect(
+		within(card('e-Golf')).getByText(
+			'Boost kann bis zu 44,16 € Leistungspreis im Monat kosten (7,4 kW mehr Spitze).'
+		)
+	).toBeVisible();
+});
+
+it('Betrachtende sehen die Mehrkosten nicht', async () => {
+	user.role = 'viewer';
+	await show();
+	await waitFor(() => expect(api.boostCost).toHaveBeenCalled());
+	expect(screen.queryByText(/Leistungspreis im Monat/)).not.toBeInTheDocument();
+});
+
+it('ohne Leistungspreis mit Satz fehlt der Satz zu den Mehrkosten', async () => {
+	await show(system(), baseIntent(), { applies: false, month_peak_kw: 5, vehicles: [] });
+	await waitFor(() => expect(api.boostCost).toHaveBeenCalled());
+	expect(screen.queryByText(/Leistungspreis im Monat/)).not.toBeInTheDocument();
 });
 
 it('Boost sendet die Taste „Boost“', async () => {

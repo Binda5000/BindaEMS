@@ -4,7 +4,8 @@ from urllib.parse import quote
 
 import pytest
 from fastapi.testclient import TestClient
-from tests.app_helpers import PASSWORD, T_APP, login_as
+from tests.app_helpers import PASSWORD, T_APP, ingest, login_as, set_tariff
+from tests.plan_helpers import with_power_price
 from tests.unit.app.control.conftest import FakeCoreClient
 from tests.unit.shared.test_decisions import decision
 
@@ -31,6 +32,9 @@ def client(
     guard,
     clock,
     live: LiveState,
+    settings_service,
+    ledger,
+    cfg,
 ) -> TestClient:
     router = control_router(
         service,
@@ -39,6 +43,9 @@ def client(
         auth,
         audit,
         guard,
+        settings=settings_service,
+        ledger=ledger,
+        cfg=cfg,
         clock=clock,
         live=live,
     )
@@ -505,3 +512,31 @@ def test_support_route_rejects_a_threshold_that_is_not_a_number(client, auth, fa
     )
     assert response.status_code == 422
     assert fake_client.sent == []
+
+
+def test_boost_cost_is_open_to_viewers_but_needs_login(client, auth) -> None:
+    assert client.get("/api/control/boost-cost").status_code == 401
+    login_as(client, auth, "viewer")
+    assert client.get("/api/control/boost-cost").status_code == 200
+
+
+def test_boost_cost_without_a_power_rate(client, auth) -> None:
+    login_as(client, auth, "viewer")
+    assert client.get("/api/control/boost-cost").json() == {
+        "applies": False,
+        "month_peak_kw": None,
+        "vehicles": [],
+    }
+
+
+def test_boost_cost_uses_the_month_peak_of_the_ledger(
+    client, auth, settings_service, ledger
+) -> None:
+    set_tariff(settings_service, with_power_price(value_eur=48.0, tier_kw=100.0))
+    ingest(ledger, "2026-10-09T08:00:00+00:00", {"grid>house": 2000.0})  # 8 kW in 15 min
+    login_as(client, auth, "viewer")
+    body = client.get("/api/control/boost-cost").json()
+    assert body["applies"] is True and body["month_peak_kw"] == pytest.approx(8.0)
+    tesla = next(item for item in body["vehicles"] if item["id"] == "tesla")
+    assert tesla["extra_kw"] == pytest.approx(11.04)
+    assert tesla["cost_eur"] == pytest.approx(52.99)

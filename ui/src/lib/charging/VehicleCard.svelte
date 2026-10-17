@@ -1,9 +1,10 @@
 <script lang="ts">
-	import type { ChargeMode, VehicleHealth } from '$lib/api/schemas';
+	import type { BoostCost, ChargeMode, VehicleHealth } from '$lib/api/schemas';
 	import Card from '$lib/components/Card.svelte';
 	import Notice from '$lib/components/Notice.svelte';
 	import { DASH, formatNumber, formatSoc, formatTime, NBSP } from '$lib/format';
 	import type { SocEntry } from '$lib/dashboard/socs';
+	import { boostCostText } from './boostCost';
 	import {
 		assignmentLabel,
 		CHARGE_MODES,
@@ -21,6 +22,8 @@
 		mode: ChargeMode;
 		boost: BoostInfo;
 		soc?: SocEntry;
+		/** Mehrkosten des Boosts; der Satz erscheint nur ab „Bedienen“ und mit `applies` */
+		boostCost?: BoostCost | null;
 		/** ab „Bedienen“ */
 		operate: boolean;
 		busy: boolean;
@@ -29,8 +32,21 @@
 		onBoost: (on: boolean) => Promise<void>;
 	}
 
-	let { vehicle, wallbox, mode, boost, soc, operate, busy, notice, onMode, onBoost }: Props =
-		$props();
+	let {
+		vehicle,
+		wallbox,
+		mode,
+		boost,
+		soc,
+		boostCost = null,
+		operate,
+		busy,
+		notice,
+		onMode,
+		onBoost
+	}: Props = $props();
+
+	const costText = $derived(boostCostText(boostCost, vehicle.id));
 
 	function yesNo(value: boolean | null): string {
 		return value === null ? DASH : value ? 'ja' : 'nein';
@@ -95,6 +111,9 @@
 				{boost.active ? 'Boost beenden' : 'Boost'}
 			</button>
 		</div>
+		{#if costText !== null}
+			<p class="muted cost">{costText}</p>
+		{/if}
 	{/if}
 
 	{#if notice}
@@ -120,6 +139,10 @@
 
 	select {
 		max-width: 100%;
+	}
+
+	.cost {
+		margin: 0.5rem 0 0;
 	}
 
 	.note {

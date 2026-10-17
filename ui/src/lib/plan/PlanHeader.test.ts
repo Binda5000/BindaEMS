@@ -17,7 +17,11 @@ it('shows source, validity and the fallback reason', () => {
 });
 
 it('shows start, validity, trigger and the costs against Victron alone', () => {
-	render(PlanHeader, { data: RESPONSE, canOperate: false });
+	// die Demo hat einen Leistungspreis (mit Budget); dieser Test will den Plan ohne
+	render(PlanHeader, {
+		data: { ...RESPONSE, plan: { ...PLAN, power_price: false } },
+		canOperate: false
+	});
 	expect(screen.getByText('Plan von 10:00 Uhr')).toBeTruthy();
 	expect(screen.getByText('Optimierer')).toBeTruthy();
 	expect(screen.getByText('gültig bis 10:45 Uhr')).toBeTruthy();

@@ -34,6 +34,7 @@ const SCHEMAS: Record<string, v.GenericSchema> = {
 	'totp-setup': s.TotpSetupSchema,
 	reprice: v.object({ repriced: v.number() }),
 	control: s.ControlResponseSchema,
+	'boost-cost': s.BoostCostSchema,
 	'control-reply': s.ControlReplySchema,
 	'control-support': s.ControlReplySchema,
 	decisions: s.DecisionsResponseSchema,

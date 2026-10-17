@@ -1,0 +1,16 @@
+{
+  "applies": true,
+  "month_peak_kw": 1.78,
+  "vehicles": [
+    {
+      "id": "tesla",
+      "extra_kw": 11.04,
+      "cost_eur": 66.24
+    },
+    {
+      "id": "egolf",
+      "extra_kw": 7.36,
+      "cost_eur": 44.16
+    }
+  ]
+}

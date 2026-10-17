@@ -107,10 +107,10 @@
           "id": "power_price",
           "name": "Leistungspreis (ElWG)",
           "vat": true,
-          "valid_from": "2027-01-01",
+          "valid_from": null,
           "valid_until": null,
           "kind": "power_per_kw_year",
-          "value_eur": null,
+          "value_eur": 60.0,
           "value_above_eur": null,
           "tier_kw": 10.0,
           "minimum_kw": 2.0
@@ -153,7 +153,6 @@
     "Tarifbestandteil „Netzverlustentgelt“ hat noch keinen Wert.",
     "Tarifbestandteil „Elektrizitätsabgabe“ hat noch keinen Wert.",
     "Tarifbestandteil „Erneuerbaren-Förderbeitrag“ hat noch keinen Wert.",
-    "Tarifbestandteil „Leistungspreis (ElWG)“ hat noch keinen Wert.",
     "Tarifbestandteil „Grundgebühr Netz“ hat noch keinen Wert."
   ]
 }

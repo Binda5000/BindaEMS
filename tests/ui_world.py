@@ -24,8 +24,9 @@ from tests.app_helpers import (
     T_APP,
     mock_all_sources,
     set_feed_in,
-    set_grid_usage,
+    set_tariff,
     set_wallbox_names,
+    with_grid_usage,
 )
 from tests.helpers import FakeSink
 
@@ -48,6 +49,7 @@ from bindaems.shared.decisions import NO_VERDICT, Decision, DecisionResult, deci
 from bindaems.shared.domain import SignalKind
 from bindaems.shared.influx.lineprotocol import epoch_ms
 from bindaems.shared.plan import Plan
+from bindaems.shared.settings import PowerComponent, TariffSettings
 from bindaems.shared.timeutil import LOCAL_TZ, Clock, ManualClock
 
 T_DEMO = T_APP  # 09.10.2026, 10:00 Ortszeit
@@ -607,6 +609,19 @@ async def _earlier_plan(app: AppRuntime, plan: Plan) -> None:
     app.planning._store.save(plan_once(earlier, await solve_inline(earlier)), earlier)
 
 
+def _demo_tariff(app: AppRuntime) -> TariffSettings:
+    """Standardtarif mit Netznutzungsentgelt und einem (erfundenen) Leistungspreis, der schon im
+    Oktober 2026 gilt (60 €/kW/Jahr netto, Stufe bei 10 kW): „Laden“ zeigt die Mehrkosten."""
+    tariff = with_grid_usage(app.settings.current().settings, 8.11).tariff
+    components = [
+        c.model_copy(update={"value_eur": 60.0, "valid_from": None})
+        if isinstance(c, PowerComponent)
+        else c
+        for c in tariff.components
+    ]
+    return tariff.model_copy(update={"components": components})
+
+
 async def build_world(cfg: Config, data_dir: Path, *, ui_dir: Path | None = None) -> World:
     clock = ManualClock(T_DEMO - WARMUP)  # der core läuft vor, danach steht die Uhr auf T_DEMO
     local = _demo_config(cfg, data_dir, ui_dir)
@@ -629,7 +644,7 @@ async def build_world(cfg: Config, data_dir: Path, *, ui_dir: Path | None = None
         _create_users(app)
         app.decisions.add(DEMO_DECISIONS)
         # drei Versionen; Netzverlust, Elektrizitätsabgabe und Förderbeitrag bleiben leer
-        set_grid_usage(app.settings, 8.11)
+        set_tariff(app.settings, _demo_tariff(app))
         set_feed_in(app.settings, {"2026-09": 7.3})
         set_wallbox_names(app.settings, {"twc": "Garage"})  # die EVCS behält ihren Typnamen
         refs = _create_consumers(app)

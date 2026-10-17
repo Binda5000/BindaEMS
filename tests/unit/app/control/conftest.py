@@ -10,6 +10,10 @@ from bindaems.app.audit import AuditLog
 from bindaems.app.control.decisions import DecisionCollector, DecisionStore
 from bindaems.app.control.intent import IntentService
 from bindaems.app.core_link import CoreReply, CoreUnavailableError, LiveState
+from bindaems.app.ledger.service import LedgerService
+from bindaems.app.prices.service import PriceService
+from bindaems.app.prices.store import PriceStore
+from bindaems.app.settings.service import SettingsService
 from bindaems.shared.config import Config
 from bindaems.shared.control import Intent
 from bindaems.shared.decisions import Decision
@@ -84,6 +88,18 @@ def fake_client() -> FakeCoreClient:
 @pytest.fixture
 def sink() -> FakeSink:
     return FakeSink()
+
+
+@pytest.fixture
+def ledger(
+    engine: Engine,
+    clock: ManualClock,
+    settings_service: SettingsService,
+    audit: AuditLog,
+    sink: FakeSink,
+) -> LedgerService:
+    prices = PriceService(PriceStore(engine, clock), settings_service)
+    return LedgerService(engine, clock, prices, settings_service, audit, sink)
 
 
 @pytest.fixture

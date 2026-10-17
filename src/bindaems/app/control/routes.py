@@ -19,6 +19,7 @@ from bindaems.app.auth.service import (
     SessionInfo,
 )
 from bindaems.app.auth.web import Guard
+from bindaems.app.control.boost_cost import boost_cost
 from bindaems.app.control.decisions import DecisionQuery, DecisionStore, StoredDecision
 from bindaems.app.control.intent import (
     Change,
@@ -39,9 +40,12 @@ from bindaems.app.control.intent import (
     UnknownTarget,
 )
 from bindaems.app.core_link import CoreClient, CoreUnavailableError, LiveState
+from bindaems.app.ledger.service import LedgerService
+from bindaems.app.settings.service import SettingsService
+from bindaems.shared.config import Config
 from bindaems.shared.control import ActuatorMode, ChargeMode, SurplusPriority
 from bindaems.shared.decisions import DecisionResult, decision_to_json
-from bindaems.shared.timeutil import Clock, SystemClock
+from bindaems.shared.timeutil import LOCAL_TZ, Clock, SystemClock
 
 LATEST_WINDOW = timedelta(hours=24)
 LIMIT_MAX = 500
@@ -118,11 +122,15 @@ def control_router(
     audit: AuditLog,
     guard: Guard,
     *,
+    settings: SettingsService,
+    ledger: LedgerService,
+    cfg: Config,
     clock: Clock | None = None,
     live: LiveState | None = None,
 ) -> APIRouter:
     """Routen der Bedienung. ``clock`` und ``live`` brauchen nur „Warum?“: das Fenster der
-    letzten 24 h und die Reihenfolge der Aktoren aus Health."""
+    letzten 24 h und die Reihenfolge der Aktoren aus Health. ``settings`` (Tarif), ``ledger``
+    (Monatsspitze) und ``cfg`` (Fahrzeuge, Netzspannung) brauchen die Mehrkosten des Boosts."""
     now = (clock or SystemClock()).now
     router = APIRouter()
     Viewer = Annotated[SessionInfo, Depends(guard.require("viewer"))]
@@ -161,6 +169,13 @@ def control_router(
             "core_connected": True,
             "intent": intent.model_dump(mode="json") if intent is not None else None,
         }
+
+    @router.get("/api/control/boost-cost")
+    async def boost_costs(session: Viewer) -> dict[str, Any]:
+        day = now().astimezone(LOCAL_TZ).date()
+        peak = await asyncio.to_thread(ledger.month_peak, day)
+        tariff = settings.current().settings.tariff
+        return boost_cost(cfg, tariff, None if peak is None else peak.kw, day)
 
     @router.put("/api/control/regulation")
     async def regulation(body: OnBody, session: Operator) -> dict[str, Any]:

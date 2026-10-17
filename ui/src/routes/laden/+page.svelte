@@ -33,6 +33,8 @@
 	const system = new Resource((o) => api.system(o), { intervalMs: 15_000 });
 	const control = new Resource((o) => api.control(o), { intervalMs: 15_000 });
 	const limits = new Resource((o) => api.limits(o), { retryMs: 30_000 });
+	// Die Mehrkosten sind eine Zugabe: schlägt ihre Abfrage fehl, fehlt nur der Satz an der Karte.
+	const boostCost = new Resource((o) => api.boostCost(o), { intervalMs: 60_000 });
 
 	let nowMs = $state(Date.now()); // Boost „in der Zukunft“, alle 30 s neu bewertet
 	let busy = $state(false);
@@ -41,7 +43,7 @@
 	let refreshTimer: ReturnType<typeof setTimeout> | undefined;
 
 	onMount(() => {
-		const stops = [system, control, limits].map((resource) => resource.start());
+		const stops = [system, control, limits, boostCost].map((resource) => resource.start());
 		const clock = setInterval(() => (nowMs = Date.now()), 30_000);
 		return () => {
 			stopped = true;
@@ -152,6 +154,7 @@
 					mode={intent?.vehicles[vehicle.id]?.mode ?? 'pv'}
 					boost={boostInfo(vehicle, intent, nowMs, current)}
 					soc={socs.find((entry) => entry.id === vehicle.id)}
+					boostCost={boostCost.data}
 					{operate}
 					{busy}
 					notice={notices[`vehicle:${vehicle.id}`] ?? null}

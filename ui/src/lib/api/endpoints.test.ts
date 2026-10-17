@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { api } from './endpoints';
+import boostCost from './contract/boost-cost.json';
 import control from './contract/control-reply.json';
 import decisions from './contract/decisions.json';
 import plan from './contract/plan.json';
@@ -101,6 +102,14 @@ it('hängt nur gesetzte Filter an die Abfrage der Entscheidungen', async () => {
 		before: '5',
 		limit: '100'
 	});
+});
+
+it('liest die Mehrkosten des Boosts mit GET', async () => {
+	reply(boostCost);
+	const result = await api.boostCost();
+	expect(sent()).toMatchObject({ url: '/api/control/boost-cost', method: 'GET' });
+	expect(result.applies).toBe(true);
+	expect(result.vehicles.map((vehicle) => vehicle.id)).toEqual(['tesla', 'egolf']);
 });
 
 it('liest den Plan mit GET', async () => {
