@@ -142,6 +142,28 @@ def test_winter_days_leave_peak_imports_to_victron_alone(kind: str) -> None:
     assert peak_kwh > 1.0
 
 
+@pytest.mark.parametrize("seed", [1, 2, 3, 4, 5])
+def test_wechselhaft_leaves_peak_imports_to_victron_alone(seed: int) -> None:
+    # Wie im Winter: Ohne Plan bezieht der Akku am zweiten Abend zum Spitzenpreis (38,4 ct) aus
+    # dem Netz, für jede Saat der Wolken; sonst zeigte der Tag nur, dass der Plan nicht schadet.
+    data = synthetic("wechselhaft", date(2027, 1, 11), 2, seed=seed)
+    params = BatteryParams(30.0, 6.0, 30.0, eta(88.0), eta(88.0))
+    slots = [
+        SimSlot(s.start, s.pv_w, s.load_w, s.import_ct, s.feed_in_ct, 10000.0, 12000.0)
+        for s in data.slots
+    ]
+    steps = simulate(
+        data.battery.start_soc_pct * 0.3, slots, [BatteryIntent()] * len(slots), params
+    )
+    peak_ct = max(s.import_ct for s in data.slots)
+    peak_kwh = (
+        sum(st.import_w for s, st in zip(data.slots, steps, strict=True) if s.import_ct == peak_ct)
+        / 4000
+    )
+    assert peak_ct == pytest.approx((22 + 10) * 1.2)
+    assert peak_kwh > 1.0
+
+
 def test_synthetic_pv_and_load_shapes() -> None:
     data = synthetic("sommer-sonnig", date(2027, 7, 5), 1)
     assert _slot_at(data, "2027-07-05 05:15").pv_w == 0.0
@@ -153,7 +175,7 @@ def test_synthetic_pv_and_load_shapes() -> None:
     assert 1850 * 0.85 <= _slot_at(data, "2027-07-05 19:00").load_w <= 1850 * 1.15
     clouds = synthetic("wechselhaft", date(2027, 1, 11), 1)
     ratio = [s.pv_w for s in clouds.slots if s.pv_w > 0]
-    assert ratio and max(ratio) <= 6000
+    assert ratio and max(ratio) <= 1500
 
 
 def test_forecast_errors_grow_with_lead() -> None:

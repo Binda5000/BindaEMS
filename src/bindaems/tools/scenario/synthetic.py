@@ -8,11 +8,16 @@ Vier Arten, je in lokaler Zeit (Europe/Vienna) und mit ``random.Random(seed)`` r
   sonst 12 ct. Der Plan nennt 2000 W; damit lädt der PV-Überschuss (rund 6 kWh am Tag) den Akku
   jeden Tag weiter, als der Abend von 17 bis 20 Uhr braucht (rund 5 kWh): „Victron allein“ bezieht
   dann nie zum Spitzenpreis, und Netzladen für die übrigen Slots verbietet die Spread-Regel
-  (26,4 · 0,88 − 20,4 − 2 < 2 ct). Ein solcher Tag ließe keinen Vorteil des Netzladens zu.
+  (0,88 · (26,4 − 2) − 20,4 = 1,07 < 2 ct). Unter Verschleiß und Marge ließe ein solcher Tag keinen
+  Vorteil des Netzladens zu.
 - ``winter-leistung``: wie ``winter-spread``, dazu ein Leistungspreis von 30/60 €/kW/Jahr ab
   1. 1. 2027.
-- ``wechselhaft``: PV 6000 W von 06:30 bis 19:30, je Slot mal einem Wolkenfaktor 0,2–1 als
-  Zufallsweg; Börsenpreis 0–5 Uhr 10 ct, 17–21 Uhr 22 ct, sonst 6 ct.
+- ``wechselhaft``: PV 1500 W von 06:30 bis 19:30, je Slot mal einem Wolkenfaktor 0,2–1 als
+  Zufallsweg; Börsenpreis 0–5 Uhr 10 ct, 17–21 Uhr 22 ct, sonst 6 ct. Der Plan nennt 6000 W; damit
+  (und bis 1600 W bei einer der Saaten 1–5) füllt die PV den Akku für beide Abende, „Victron allein“
+  bezieht nie zum Spitzenpreis, und der Tag zeigte nur, dass der Plan nicht schadet. 1500 W ist die
+  höchste Spitze, bei der „Victron allein“ für jede dieser Saaten mehr als 1 kWh zum Spitzenpreis
+  bezieht.
 
 PV hat die Form ``Spitze · sin(π · Anteil des Tagbogens)^1,5`` (in der Mitte des Slots); die
 Last ist 350 W, 06:30–08:00 800 W mehr und 17:30–21:30 1500 W mehr, je Slot ±15 %. Prognosen
@@ -113,7 +118,7 @@ KINDS: Mapping[str, _Kind] = MappingProxyType(
         "winter-spread": _WINTER,
         "winter-leistung": replace(_WINTER, power_price=True),
         "wechselhaft": _Kind(
-            peak_w=6000.0,
+            peak_w=1500.0,  # 1500 W statt 6000 W aus dem Plan (siehe oben)
             sunrise=time(6, 30),
             sunset=time(19, 30),
             spot_ct=((time(0), time(5), 10.0), (time(17), time(21), 22.0)),

@@ -3411,11 +3411,12 @@ Tage, stündlich neu geplant:
 | `sommer-sonnig` | PV-Spitze 9000 W, Börsenpreis mittags 2 ct | gleich „Victron allein“ |
 | `winter-spread` | PV-Spitze 800 W, Börsenpreis 7 ct von 0 bis 5 Uhr und 32 ct von 17 bis 20 Uhr | rund 1,07 € günstiger |
 | `winter-leistung` | wie `winter-spread`, dazu ein Leistungspreis (Beispielwerte) ab 1. 1. 2027 | rund 1,07 € günstiger |
-| `wechselhaft` | PV-Spitze 6000 W mit wechselnden Wolken | gleich „Victron allein“ |
+| `wechselhaft` | PV-Spitze 1500 W mit wechselnden Wolken, Börsenpreis 22 ct von 17 bis 21 Uhr | rund 0,25 € günstiger |
 
-Im Sommer und bei `wechselhaft` ist der Optimierer gleich „Victron allein“: Die PV füllt den Akku, und
-„Victron allein“ bezieht nie. Die Wintertage haben nur 800 W PV-Spitze; mit 2000 W bezöge „Victron
-allein“ zur Spitze nie, und es gäbe keinen Vorteil zu messen.
+Im Sommer ist der Optimierer gleich „Victron allein“: Die PV füllt den Akku, und „Victron allein“
+bezieht nie. Die Wintertage haben nur 800 W PV-Spitze, `wechselhaft` nur 1500 W; mit mehr PV (2000 W
+im Winter, bis 1600 W bei `wechselhaft`) bezöge „Victron allein“ zur Spitze nie oder kaum, und es gäbe
+keinen Vorteil zu messen.
 
 **Echte Tage der Anlage.** Zuerst exportiert `export_days` Tage aus der Datenbank der app in eine
 Datei, dann rechnet `scenario_days` sie. Beide laufen im Image der app; die Dateien liegen unter
