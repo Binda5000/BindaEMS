@@ -7,6 +7,7 @@ from sqlalchemy import Engine
 from tests.plan_helpers import at, sample_inputs, sample_plan
 
 from bindaems.app.planning.store import PlanStore
+from bindaems.shared.plan import Plan
 
 
 @pytest.fixture
@@ -78,3 +79,27 @@ def test_cleanup_keeps_recent_plans_untouched(store: PlanStore) -> None:
     assert store.cleanup(at("2026-10-16T10:00:00+00:00")) == (0, 0)
     assert store.latest() == recent
     assert store.inputs_of(recent.id) == sample_inputs()
+
+
+def test_plans_between_reads_the_window(store: PlanStore) -> None:
+    def save(created: str) -> Plan:
+        return store.save(sample_plan(created=created, slots=["10:00"]), sample_inputs())
+
+    before = save("2026-10-16T09:14:00+00:00")  # gültig bis 09:59: vor dem Fenster
+    inside = [save("2026-10-16T09:16:00+00:00"), save("2026-10-16T10:01:00+00:00")]
+    save("2026-10-16T11:00:00+00:00")  # nicht vor dem Ende des Fensters
+    found = store.plans_between(at("2026-10-16T10:00:00+00:00"), at("2026-10-16T11:00:00+00:00"))
+    assert found == inside and before not in found
+
+
+def test_plans_between_orders_by_creation_and_reads_trimmed_plans(store: PlanStore) -> None:
+    late = store.save(
+        sample_plan(created="2026-10-16T10:16:00+00:00", slots=["10:15"]), sample_inputs()
+    )
+    early = store.save(
+        sample_plan(created="2026-10-08T10:01:00+00:00", slots=["10:00", "11:00"]), sample_inputs()
+    )
+    store.cleanup(at("2026-10-16T10:30:00+00:00"))
+    found = store.plans_between(at("2026-10-08T10:00:00+00:00"), at("2026-10-17T00:00:00+00:00"))
+    assert [plan.id for plan in found] == [early.id, late.id]
+    assert found[0].trimmed and [s.start.strftime("%H:%M") for s in found[0].slots] == ["10:00"]

@@ -3,20 +3,24 @@
 Ohne ``from __future__ import annotations`` (siehe ``auth/routes.py``).
 """
 
+from datetime import date
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, ConfigDict
 
 from bindaems.app.auth.service import SessionInfo
 from bindaems.app.auth.web import Guard
 from bindaems.app.core_link import LiveState
+from bindaems.app.ledger.service import LedgerService
 from bindaems.app.planning.execution import execution_state, execution_text
 from bindaems.app.planning.explain import slot_text
+from bindaems.app.planning.review import review
 from bindaems.app.planning.service import PlanningService
+from bindaems.app.planning.store import KEEP_PLANS, PlanStore
 from bindaems.app.settings.service import SettingsService, VersionConflictError
 from bindaems.shared.plan import Plan, PlanSlot
-from bindaems.shared.timeutil import Clock
+from bindaems.shared.timeutil import LOCAL_TZ, SLOT, Clock, local_day_slots
 
 
 class GridChargeBody(BaseModel):
@@ -78,6 +82,9 @@ def planning_router(
     live: LiveState,
     clock: Clock,
     guard: Guard,
+    *,
+    ledger: LedgerService,
+    store: PlanStore,
 ) -> APIRouter:
     router = APIRouter(prefix="/api/plan")
     Viewer = Annotated[SessionInfo, Depends(guard.require("viewer"))]
@@ -107,6 +114,23 @@ def planning_router(
             "plan": plan_json(plan, valid=valid) if plan is not None else None,
             "execution": {"state": state, "text": text} if text is not None else None,
         }
+
+    @router.get("/review")
+    def get_review(session: Viewer, day: Annotated[date | None, Query()] = None) -> dict[str, Any]:
+        """Plan gegen Ist je vergangener Viertelstunde des lokalen Tages (Standard heute); Tage
+        vor den letzten 30 Tagen (so lange hält die Planablage) und künftige Tage gibt es nicht."""
+        now = clock.now()
+        today = now.astimezone(LOCAL_TZ).date()
+        wanted = day or today
+        if wanted > today or today - wanted > KEEP_PLANS:
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_CONTENT,
+                f"Nur die letzten {KEEP_PLANS.days} Tage bis heute",
+            )
+        start = local_day_slots(wanted)[0]
+        end = min(now, local_day_slots(wanted)[-1] + SLOT)
+        plans = store.plans_between(start, end)
+        return review(wanted, plans, ledger.slots(start, end), now)
 
     @router.post("/replan", status_code=status.HTTP_202_ACCEPTED)
     def replan(session: Operator) -> dict[str, bool]:

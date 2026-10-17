@@ -14,7 +14,7 @@ from sqlalchemy import Engine, delete, insert, select, update
 
 from bindaems.app.db.schema import plan_inputs_table, plan_table
 from bindaems.app.planning.inputs import PlanInputs
-from bindaems.shared.plan import Plan
+from bindaems.shared.plan import PLAN_VALID, Plan
 from bindaems.shared.timeutil import ensure_utc
 
 KEEP_PLANS: Final = timedelta(days=30)
@@ -71,6 +71,22 @@ class PlanStore:
         with self._engine.connect() as conn:
             row = conn.execute(query).first()
         return None if row is None else _plan_of(row.id, row.trimmed, row.data)
+
+    def plans_between(self, start: datetime, end: datetime) -> list[Plan]:
+        """Pläne mit ``created_at`` in ``[start − PLAN_VALID, end)``, älteste zuerst.
+
+        Das sind alle Pläne, die für einen Slot im Fenster ``[start, end)`` gegolten haben können
+        (Plan 3c, Präzisierung 13); gekürzte Pläne gehören dazu, sie behalten ihre bindenden Slots.
+        """
+        query = (
+            select(plan_table.c.id, plan_table.c.trimmed, plan_table.c.data)
+            .where(plan_table.c.created_at >= ensure_utc(start) - PLAN_VALID)
+            .where(plan_table.c.created_at < ensure_utc(end))
+            .order_by(plan_table.c.created_at, plan_table.c.id)
+        )
+        with self._engine.connect() as conn:
+            rows = conn.execute(query).all()
+        return [_plan_of(row.id, row.trimmed, row.data) for row in rows]
 
     def inputs_of(self, plan_id: int) -> PlanInputs | None:
         """Eingangsdaten des Plans; ``None``, wenn sie fehlen oder schon gelöscht sind."""

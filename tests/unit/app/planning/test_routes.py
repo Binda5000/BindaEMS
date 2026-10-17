@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from datetime import timedelta
 
 import pytest
 from fastapi.testclient import TestClient
-from tests.app_helpers import login_as
+from tests.app_helpers import ingest, login_as
+from tests.plan_helpers import sample_inputs, sample_plan
 
 from bindaems.app.planning.explain import slot_text
 from bindaems.app.planning.routes import planning_router
@@ -21,8 +23,12 @@ def planning(service):
 
 
 @pytest.fixture
-def client(make_client, planning, settings_service, live, clock, guard) -> TestClient:
-    return make_client(planning_router(planning, settings_service, live, clock, guard))
+def client(
+    make_client, planning, settings_service, live, clock, guard, ledger, store
+) -> TestClient:
+    return make_client(
+        planning_router(planning, settings_service, live, clock, guard, ledger=ledger, store=store)
+    )
 
 
 @pytest.fixture
@@ -267,3 +273,45 @@ async def test_plan_route_has_no_execution_for_an_expired_plan(client_as, planni
     clock.advance(timedelta(hours=2))
     body = client_as("viewer").get("/api/plan").json()
     assert body["plan"]["valid"] is False and body["execution"] is None
+
+
+# --- Plan gegen Ist (Plan 3c, Task 14); die Uhr steht auf 2026-10-16T10:01Z -------------------
+
+
+def test_review_requires_login(client):
+    assert client.get("/api/plan/review").status_code == 401
+
+
+def test_review_defaults_to_today_up_to_now(client_as):
+    body = client_as("viewer").get("/api/plan/review").json()
+    assert body["day"] == "2026-10-16"
+    # 00:00 Ortszeit (22:00Z) bis zum letzten vollen Slot 09:45Z
+    assert len(body["slots"]) == 48
+    assert body["slots"][-1]["start"] == "2026-10-16T09:45:00+00:00"
+    assert set(body["totals"]) == {"planned", "actual"}
+
+
+def test_review_joins_plan_and_ledger(client_as, store, ledger):
+    store.save(sample_plan("2026-10-16T09:30:00+00:00", ["09:30", "09:45"]), sample_inputs())
+    ingest(ledger, "2026-10-16T09:45:00+00:00", {"grid>house": 100.0, "grid>battery": 200.0})
+    body = client_as("viewer").get("/api/plan/review?day=2026-10-16").json()
+    last = body["slots"][-1]
+    assert last["start"] == "2026-10-16T09:45:00+00:00"
+    assert last["planned"]["plan_id"] == 1 and last["planned"]["intent"] == "EIGENVERBRAUCH"
+    assert last["actual"]["grid_charge_w"] == 800.0 and last["actual"]["battery_w"] == 800.0
+    assert body["slots"][-2]["planned"] is not None and body["slots"][-2]["actual"] is None
+
+
+def test_review_of_a_past_day_has_all_slots(client_as, clock):
+    clock.advance(timedelta(days=11))  # 2026-10-27
+    api = client_as("viewer")
+    assert len(api.get("/api/plan/review?day=2026-10-25").json()["slots"]) == 100
+    assert len(api.get("/api/plan/review?day=2026-10-26").json()["slots"]) == 96
+
+
+def test_review_rejects_days_outside_30_days(client_as):
+    api = client_as("viewer")
+    assert api.get("/api/plan/review?day=2026-10-17").status_code == 422  # Zukunft
+    assert api.get("/api/plan/review?day=2026-09-15").status_code == 422  # zu alt
+    assert api.get("/api/plan/review?day=2026-09-16").status_code == 200  # 30 Tage zurück
+    assert api.get("/api/plan/review?day=gestern").status_code == 422
