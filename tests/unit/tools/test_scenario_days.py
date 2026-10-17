@@ -201,3 +201,17 @@ def test_main_leaves_the_logging_configuration_alone(tmp_path: Path) -> None:
     assert main(["--synthetisch", "winter-spread", "--anzahl", "0", "--out", str(tmp_path)]) == 2
     assert logging.getLogger().handlers == handlers
     assert structlog.is_configured() is configured
+
+
+def test_report_lists_skipped_days_below_the_table() -> None:
+    data = synthetic("winter-spread", date(2027, 1, 11), 1).model_copy(
+        update={"skipped_days": ["2027-01-12: keine Preise", "2027-01-14: 6 Lücken"]}
+    )
+    lines = render_report(result_of(), data).splitlines()
+    table_end = max(i for i, line in enumerate(lines) if line.startswith("|"))
+    assert lines[table_end + 1 : table_end + 3] == [
+        "",
+        "Übersprungene Tage: 2027-01-12, 2027-01-14",
+    ]
+    plain = synthetic("winter-spread", date(2027, 1, 11), 1)
+    assert "Übersprungene Tage" not in render_report(result_of(), plain)

@@ -3469,6 +3469,9 @@ Der Bericht „Szenario-Vergleich mit Victron allein“ hat je Tag eine Zeile mi
   machen sie unvermeidbar,
 - „Takt: n min“.
 
+Hat `export_days` Tage übersprungen (`skipped_days`), steht direkt unter der Tabelle die Zeile
+„Übersprungene Tage: …“ mit ihren Daten; die Gründe nennt die Ausgabe von `export_days`.
+
 Die Differenz ist Optimierer minus „Victron allein“; negativ heißt günstiger. Bei weniger als 30 Tagen
 steht der Hinweis „Weniger als 30 Tage: Für die Abnahme der Phase 3 zählen mindestens 30.“ Das Ergebnis
 ist **„Bestanden“**, wenn die bereinigten Kosten höchstens die von „Victron allein“ sind und Regel R

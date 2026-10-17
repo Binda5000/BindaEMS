@@ -2,7 +2,8 @@
 
 Eine Zeile je Tag mit den Energiekosten (der Leistungspreis gilt je Monat), darunter „Gesamt“
 einschließlich Leistungspreis, die um den End-SOC bereinigten Kosten des Optimierers, der
-Leistungspreis, die Informationszahl „Netzladen vor tatsächlicher Einspeisung“ und der Takt.
+Leistungspreis, die Informationszahl „Netzladen vor tatsächlicher Einspeisung“, unter der Tabelle
+die beim Export übersprungenen Tage und der Takt.
 „Bestanden“ heißt: bereinigte Kosten höchstens so hoch wie „Victron allein“ und kein Verstoß
 gegen Regel R (Präzisierung 19).
 """
@@ -56,6 +57,14 @@ def _row(*cells: str) -> str:
 
 def _money_row(label: str, baseline_ct: float, optimizer_ct: float) -> list[str]:
     return [label, _eur(baseline_ct), _eur(optimizer_ct), _eur(optimizer_ct - baseline_ct)]
+
+
+def _skipped_lines(data: ScenarioFile) -> list[str]:
+    """Zeile „Übersprungene Tage: …“ mit den Daten aus ``skipped_days`` („Datum: Grund“)."""
+    if not data.skipped_days:
+        return []
+    days = ", ".join(entry.split(":", 1)[0].strip() for entry in data.skipped_days)
+    return ["", f"Übersprungene Tage: {days}"]
 
 
 def render_report(result: ScenarioResult, data: ScenarioFile) -> str:
@@ -114,6 +123,7 @@ def render_report(result: ScenarioResult, data: ScenarioFile) -> str:
         _row(*_COLUMNS),
         _row(*["---"] * len(_COLUMNS)),
         *rows,
+        *_skipped_lines(data),
         "",
         "Differenz = Optimierer − Victron allein, negativ heißt günstiger. Die Tageswerte enthalten"
         " nur Energiekosten, „Gesamt“ auch den Leistungspreis.",
