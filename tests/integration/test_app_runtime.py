@@ -318,6 +318,55 @@ async def test_forecast_nightly_survives_errors(runtime, monkeypatch) -> None:
     assert len(removed) == 2  # die Pflege läuft trotzdem, die Schleife auch nach dem Fehler
 
 
+def spy_ledger_checks(runtime, monkeypatch) -> list[tuple[date, date]]:
+    calls: list[tuple[date, date]] = []
+
+    async def run(first: date, last: date) -> int:
+        calls.append((first, last))
+        return (last - first).days + 1
+
+    monkeypatch.setattr(runtime.ledger_checks, "run", run)
+    return calls
+
+
+async def test_ledger_nightly_checks_35_days_at_start_then_7_days_at_0245(
+    runtime, monkeypatch
+) -> None:
+    calls = spy_ledger_checks(runtime, monkeypatch)
+    sleeps: list[float] = []
+    monkeypatch.setattr(asyncio, "sleep", record_then_stop(sleeps, after=1))
+    with pytest.raises(StopScheduler):
+        await runtime._ledger_nightly_loop()
+    # T_APP ist der 09.10.2026, 10:00 Ortszeit: die letzten 35 vollständigen Tage bis gestern
+    assert calls == [(date(2026, 9, 4), date(2026, 10, 8))]
+    assert sleeps == [16.75 * 3600]  # 10:00 Ortszeit → 02:45 am nächsten Tag
+    calls.clear()
+    await runtime._ledger_nightly(7)
+    assert calls == [(date(2026, 10, 2), date(2026, 10, 8))]
+
+
+async def test_ledger_nightly_survives_errors(runtime, monkeypatch) -> None:
+    from bindaems.app.history.influx import InfluxQueryError
+
+    errors: list[Exception] = [
+        InfluxQueryError("InfluxDB nicht erreichbar"),
+        RuntimeError("Datenbank gesperrt"),
+    ]
+
+    async def run(first: date, last: date) -> int:
+        raise errors.pop(0)
+
+    monkeypatch.setattr(runtime.ledger_checks, "run", run)
+    monkeypatch.setattr(asyncio, "sleep", record_then_stop([], after=2))
+    with capture_logs() as logs, pytest.raises(StopScheduler):
+        await runtime._ledger_nightly_loop()
+    events = [e["event"] for e in logs]
+    assert events == [
+        "Abgleich mit den Zählern nicht möglich",
+        "Abgleich mit den Zählern fehlgeschlagen",
+    ]  # die Schleife läuft nach jedem Fehler weiter
+
+
 async def test_first_pv_forecast_waits_for_the_calibration(runtime, monkeypatch) -> None:
     calls = spy_nightly(runtime, monkeypatch)
 

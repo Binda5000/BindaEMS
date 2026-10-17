@@ -530,6 +530,33 @@ höchstens 200 Einträge. `vehicle` ist der Schlüssel aus `config.yaml`, `guest
 curl -b jar "$APP/api/charging/sessions?from=2026-10-01&to=2026-10-31&vehicle=guest"
 ```
 
+### Abgleich mit den Zählern
+
+Jede Nacht um 02:45 Uhr (Wiener Zeit) vergleicht die app die Abrechnung der letzten 7 vollständigen
+Tage mit den Zählerständen aus InfluxDB, beim Start die der letzten 35. Je Tag und Größe steht die
+Summe der Abrechnung (Schätzungen eingeschlossen) neben der Differenz der Zählerstände um
+Mitternacht (`energy` in `long`, letzter Wert in der halben Stunde davor). Die Größen sind `import`
+(Netzbezug), `export` (Einspeisung), `pv` und `wb:<Schlüssel>` je Wallbox.
+
+`GET /api/ledger/checks?from=JJJJ-MM-TT&to=JJJJ-MM-TT` (ab „Lesen“) liefert die gespeicherten
+Prüfungen, höchstens 400 Tage (sonst 422): `days` mit `day`, `signal`, `ledger_kwh`, `counter_kwh`,
+`deviation_pct`, `flagged` und `note` je Tag und Größe, dazu `totals` mit den Summen je Größe
+über den Zeitraum.
+
+- **Markierung:** `flagged` ist wahr bei mehr als 1 % und mehr als 0,1 kWh Abweichung. `pv` wird
+  gezeigt, aber nie markiert, denn DC-gekoppelte PV hat keinen Zähler.
+- **Gründe (`note`):** „Zählerstand fehlt“ (kein Wert vor oder nach Mitternacht), „Zähler
+  zurückgesetzt“ (der Zähler sinkt, z. B. nach einem Tausch) und „Zähler zeigt 0 kWh“. Dann gibt es
+  keine Markierung; ohne Zählerwert sind `counter_kwh` und `deviation_pct` `null`, bei 0 kWh nur
+  `deviation_pct`.
+- **Summen:** `totals` zählt nur Tage mit Zählerwert; ohne einen solchen ist `counter_kwh` `null`.
+- **Fehler:** Ist InfluxDB nicht erreichbar, steht eine Warnung im Log und die alten Zeilen bleiben;
+  die nächste Nacht versucht es erneut.
+
+```bash
+curl -b jar "$APP/api/ledger/checks?from=2026-10-01&to=2026-10-07"
+```
+
 ## 9. Sicherung und Wiederherstellung
 
 Die app sichert ihre Datenbank jede Nacht um 03:15 Uhr im laufenden Betrieb in das Volume

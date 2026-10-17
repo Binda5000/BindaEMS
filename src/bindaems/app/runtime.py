@@ -53,6 +53,7 @@ from bindaems.app.ha.publisher import AiomqttHaTransport, HaPublisher
 from bindaems.app.history.influx import InfluxQueryError, InfluxReader
 from bindaems.app.history.routes import history_router
 from bindaems.app.history.series import build_catalog
+from bindaems.app.ledger.checks import LedgerChecks
 from bindaems.app.ledger.costing import LedgerCosting
 from bindaems.app.ledger.routes import ledger_router
 from bindaems.app.ledger.service import LedgerService
@@ -91,6 +92,9 @@ RESTART_S = 10.0
 BACKUP_AT = (3, 15)  # Ortszeit
 FORECAST_NIGHTLY_AT = (2, 30)  # Ortszeit
 FORECAST_KEEP = timedelta(days=60)
+LEDGER_NIGHTLY_AT = (2, 45)  # Ortszeit, nach der Prognose um 02:30
+LEDGER_CHECK_START_DAYS = 35  # Abgleich beim Start: die letzten 35 vollständigen Tage
+LEDGER_CHECK_NIGHTLY_DAYS = 7  # nachts: die letzten 7
 FORECAST_QUALITY_START: tuple[int, ...] = (
     0,
     1,
@@ -182,6 +186,7 @@ class AppRuntime:
             self.engine, self.ledger, self.settings, usable_kwh=cfg.battery.usable_kwh
         )
         self.ledger.on_slots_changed(self.costing.mark_dirty)
+        self.ledger_checks = LedgerChecks(self.engine, self.ledger, self.reader, self._clock, cfg)
         self.load_forecast = LoadForecastService(
             self.ledger, cfg, self.reader, self.forecast_archive, self._clock, self._sink
         )
@@ -300,7 +305,7 @@ class AppRuntime:
                 forecast_router(
                     self.forecast, self.load_forecast, self.forecast_quality, self._clock, guard
                 ),
-                ledger_router(self.ledger, guard),
+                ledger_router(self.ledger, guard, self.ledger_checks),
                 charging_router(self.charging_sessions, cfg, self.settings, guard),
                 planning_router(
                     self.planning,
@@ -431,6 +436,7 @@ class AppRuntime:
             ("maintenance", self._maintenance_loop),
             ("backup", self._backup_loop),
             ("forecast-nightly", self._forecast_nightly_loop),
+            ("ledger-nightly", self._ledger_nightly_loop),
             ("consumer-energy", self._energy_loop),
         ]
         if self.ha_values is not None:
@@ -619,6 +625,32 @@ class AppRuntime:
                 log.info("Alte Prognosen aus dem Archiv gelöscht", records=removed)
         except Exception:
             log.exception("Pflege des Prognosearchivs fehlgeschlagen")
+
+    async def _ledger_nightly_loop(self) -> None:
+        """Beim Start (35 Tage) und täglich um 02:45 Uhr (7 Tage): Abrechnung gegen Zähler."""
+        days = LEDGER_CHECK_START_DAYS
+        while True:
+            await self._ledger_nightly(days)
+            days = LEDGER_CHECK_NIGHTLY_DAYS
+            now = self._clock.now()
+            due = next_local(now, lambda t: (t.hour, t.minute) == LEDGER_NIGHTLY_AT)
+            await asyncio.sleep((due - now).total_seconds())
+
+    async def _ledger_nightly(self, days: int) -> None:
+        """Gleicht die letzten ``days`` vollständigen Tage (bis gestern) mit den Zählern ab.
+
+        Ein Fehler beim Lesen wird protokolliert; die nächste Nacht versucht es wieder.
+        """
+        today = self._clock.now().astimezone(LOCAL_TZ).date()
+        try:
+            checked = await self.ledger_checks.run(
+                today - timedelta(days=days), today - timedelta(days=1)
+            )
+            log.info("Abrechnung mit den Zählern abgeglichen", days=checked)
+        except InfluxQueryError as exc:
+            log.warning("Abgleich mit den Zählern nicht möglich", error=str(exc))
+        except Exception:
+            log.exception("Abgleich mit den Zählern fehlgeschlagen")
 
     async def shutdown(self) -> None:
         """Server und Hintergrundaufgaben beenden, Puffer schreiben, Verbindungen schließen."""

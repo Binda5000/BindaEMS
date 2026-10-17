@@ -13,6 +13,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from bindaems.app.auth.service import SessionInfo
 from bindaems.app.auth.web import Guard
+from bindaems.app.ledger.checks import DayCheck, LedgerChecks
 from bindaems.app.ledger.service import DaySummary, LedgerService, LedgerSlot
 
 MAX_DAYS = 400
@@ -54,6 +55,22 @@ def slot_json(slot: LedgerSlot) -> dict[str, Any]:
     }
 
 
+def check_json(check: DayCheck) -> dict[str, Any]:
+    return {
+        "day": check.day.isoformat(),
+        "signal": check.signal,
+        **_rounded(
+            {
+                "ledger_kwh": check.ledger_kwh,
+                "counter_kwh": check.counter_kwh,
+                "deviation_pct": check.deviation_pct,
+            }
+        ),
+        "flagged": check.flagged,
+        "note": check.note,
+    }
+
+
 def _bad_request(text: str) -> HTTPException:
     return HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, text)
 
@@ -65,7 +82,7 @@ def _check_days(first: date, last: date) -> None:
         raise _bad_request(f"Höchstens {MAX_DAYS} Tage auf einmal")
 
 
-def ledger_router(service: LedgerService, guard: Guard) -> APIRouter:
+def ledger_router(service: LedgerService, guard: Guard, checks: LedgerChecks) -> APIRouter:
     router = APIRouter(prefix="/api/ledger")
     Viewer = Annotated[SessionInfo, Depends(guard.require("viewer"))]
     Admin = Annotated[SessionInfo, Depends(guard.require("admin"))]
@@ -92,6 +109,19 @@ def ledger_router(service: LedgerService, guard: Guard) -> APIRouter:
         if end - start > MAX_SLOT_SPAN:
             raise _bad_request("Der Zeitraum darf höchstens 7 Tage umfassen")
         return [slot_json(slot) for slot in service.slots(start, end)]
+
+    @router.get("/checks")
+    def ledger_checks(
+        session: Viewer,
+        first: Annotated[date, Query(alias="from")],
+        last: Annotated[date, Query(alias="to")],
+    ) -> dict[str, Any]:
+        _check_days(first, last)
+        found = checks.checks(first, last)
+        return {
+            "days": [check_json(check) for check in found],
+            "totals": [_rounded(total) for total in checks.totals(found)],
+        }
 
     @router.post("/reprice")
     def reprice(body: RepriceBody, session: Admin) -> dict[str, int]:

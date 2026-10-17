@@ -48,3 +48,68 @@ def test_reprice_as_admin(client, auth, ledger) -> None:
     ledger.ingest(parse_slot_flows(MSG), "stream")
     body = {"from": "2026-10-09", "to": "2026-10-09"}
     assert client.post("/api/ledger/reprice", json=body, headers=csrf).json() == {"repriced": 1}
+
+
+def test_checks_route_returns_days_and_totals(client, auth, checks, engine, clock) -> None:
+    from datetime import date
+
+    from tests.unit.app.ledger.test_checks import make
+
+    from bindaems.app.db.schema import ledger_check
+
+    login_as(client, auth, "viewer")
+    rows = [
+        make(date(2026, 10, 8), "import", 10.2, 10.0, flagged=True),
+        make(date(2026, 10, 8), "wb:evcs", 3.0, None, note="Zählerstand fehlt"),
+        make(date(2026, 10, 9), "import", 5.0, 5.0),
+    ]
+    with engine.begin() as conn:
+        conn.execute(
+            ledger_check.insert(),
+            [
+                {
+                    "day": row.day.isoformat(),
+                    "signal": row.signal,
+                    "ledger_kwh": row.ledger_kwh,
+                    "counter_kwh": row.counter_kwh,
+                    "deviation_pct": row.deviation_pct,
+                    "flagged": row.flagged,
+                    "note": row.note,
+                    "checked_at": clock.now(),
+                }
+                for row in rows
+            ],
+        )
+    body = client.get(
+        "/api/ledger/checks", params={"from": "2026-10-08", "to": "2026-10-09"}
+    ).json()
+    assert body["days"][0] == {
+        "day": "2026-10-08",
+        "signal": "import",
+        "ledger_kwh": 10.2,
+        "counter_kwh": 10.0,
+        "deviation_pct": 2.0,
+        "flagged": True,
+        "note": None,
+    }
+    assert [(d["day"], d["signal"]) for d in body["days"]] == [
+        ("2026-10-08", "import"),
+        ("2026-10-08", "wb:evcs"),
+        ("2026-10-09", "import"),
+    ]
+    assert body["days"][1]["note"] == "Zählerstand fehlt" and body["days"][1]["counter_kwh"] is None
+    assert body["totals"] == [
+        {"signal": "import", "ledger_kwh": 15.2, "counter_kwh": 15.0, "deviation_pct": 1.333},
+        {"signal": "wb:evcs", "ledger_kwh": 0.0, "counter_kwh": None, "deviation_pct": None},
+    ]
+
+
+def test_checks_route_limits_span_and_needs_login(client, auth) -> None:
+    params = {"from": "2026-10-08", "to": "2026-10-09"}
+    assert client.get("/api/ledger/checks", params=params).status_code == 401
+    login_as(client, auth, "viewer")
+    long = {"from": "2025-01-01", "to": "2026-10-09"}
+    assert client.get("/api/ledger/checks", params=long).status_code == 422
+    backwards = {"from": "2026-10-09", "to": "2026-10-08"}
+    assert client.get("/api/ledger/checks", params=backwards).status_code == 422
+    assert client.get("/api/ledger/checks", params=params).json() == {"days": [], "totals": []}

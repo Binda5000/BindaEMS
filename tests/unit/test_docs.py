@@ -597,3 +597,17 @@ def test_charging_sessions_endpoint_in_the_guide() -> None:
     for field in ("pv_kwh", "battery_kwh", "grid_kwh", "cost_eur", "wallbox_name", "vehicle_name"):
         assert f"`{field}`" in section, field
     assert "PV-Strom ins Auto kostet 0 ct" in section
+
+
+def test_ledger_checks_endpoint_in_the_guide() -> None:
+    # „Abgleich mit den Zählern“: Zeitpunkt, Endpunkt, Markierungsregel und die Gründe.
+    section = " ".join(_guide_section("8. Tarif und Abrechnung").split())  # ohne Zeilenumbrüche
+    assert "GET /api/ledger/checks?from=JJJJ-MM-TT&to=JJJJ-MM-TT" in section
+    assert "02:45 Uhr" in section and "letzten 7 vollständigen Tage" in section
+    assert "beim Start die der letzten 35" in section
+    for text in ("höchstens 400 Tage", "mehr als 1 % und mehr als 0,1 kWh", "`pv` wird"):
+        assert text in section, text
+    for field in ("day", "signal", "ledger_kwh", "counter_kwh", "deviation_pct", "flagged", "note"):
+        assert f"`{field}`" in section, field
+    for note in ("Zählerstand fehlt", "Zähler zurückgesetzt", "Zähler zeigt 0 kWh"):
+        assert note in section, note
