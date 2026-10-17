@@ -8,7 +8,7 @@ from fastapi.testclient import TestClient
 from pydantic import SecretStr
 from structlog.testing import capture_logs
 from tests.app_helpers import PASSWORD, T_APP, StopScheduler, record_then_stop
-from tests.plan_helpers import until
+from tests.plan_helpers import sample_plan, set_planning, until
 from tests.unit.shared.test_decisions import decision
 
 from bindaems.app.control.decisions import DecisionQuery
@@ -18,6 +18,7 @@ from bindaems.app.runtime import AppRuntime
 from bindaems.shared.config import Config, Secrets
 from bindaems.shared.control import Intent
 from bindaems.shared.decisions import decision_to_json
+from bindaems.shared.settings import PlanningSettings
 from bindaems.shared.timeutil import ManualClock
 
 TOKEN = "x" * 32
@@ -402,6 +403,18 @@ async def test_ha_inputs_carry_the_intent(runtime, monkeypatch) -> None:
     # nach einem Befehl gilt gleich die neue Absicht des Dienstes
     runtime.intents._cached = Intent(version=6, control=False)
     assert runtime._current_ha_inputs().intent == Intent(version=6, control=False)
+
+
+async def test_ha_inputs_carry_the_plan_and_the_grid_charge_switch(runtime, monkeypatch) -> None:
+    # Sensoren und Schalter des Plans lesen aus ``inputs.plan`` und ``grid_charge_allowed``.
+    plan = sample_plan(T_APP.isoformat(), ["08:00", "08:15"])
+    monkeypatch.setattr(runtime.planning, "current", lambda: plan)
+    set_planning(runtime.settings, PlanningSettings(grid_charge_allowed=True))
+    inputs = runtime._build_ha_inputs(Intent(version=1))
+    assert inputs.plan == plan and inputs.plan_now == plan.slots[0]
+    assert inputs.grid_charge_allowed is True
+    set_planning(runtime.settings, PlanningSettings(grid_charge_allowed=False))
+    assert runtime._build_ha_inputs(Intent(version=1)).grid_charge_allowed is False
 
 
 async def test_ha_intent_falls_back_when_the_core_has_none_or_is_down(runtime, monkeypatch) -> None:
