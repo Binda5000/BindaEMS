@@ -260,8 +260,8 @@ Die app meldet ihre Sensoren per MQTT Discovery am Mosquitto von Home Assistant 
 Befehle der Bedienelemente unter `bindaems/cmd/`. Lege dafür einen eigenen Benutzer `bindaems` an;
 sein Passwort steht in `BINDAEMS_HA_MQTT_PASSWORD`. Die ACL beschränkt ihn auf das Nötige (beim
 Mosquitto-Add-on über `customize` und eine ACL-Datei unter `/share/mosquitto`). Die Bedienelemente
-brauchen dafür drei Zeilen mehr als die Sensoren: Schreibrechte für `select`, `switch` und `button`
-und das Leserecht auf `bindaems/cmd/#`:
+brauchen dafür fünf Zeilen mehr als die Sensoren: Schreibrechte für `select`, `switch`, `number` (seit
+Plan 3c, die Unterstützungsschwelle) und `button` und das Leserecht auf `bindaems/cmd/#`:
 
 ```text
 user bindaems
@@ -269,6 +269,7 @@ topic write homeassistant/sensor/bindaems/#
 topic write homeassistant/binary_sensor/bindaems/#
 topic write homeassistant/select/bindaems/#
 topic write homeassistant/switch/bindaems/#
+topic write homeassistant/number/bindaems/#
 topic write homeassistant/button/bindaems/#
 topic write bindaems/#
 topic read homeassistant/status
@@ -420,9 +421,9 @@ Aus den Bestandteilen rechnet die app:
   Zähler sieht ihn. Home Assistant bekommt sie als Sensor „Monatsspitze“ (Abschnitt 7). Es gibt
   dafür keine eigene Tabelle; die Abfrage über die Abrechnung läuft jedes Mal und kann nicht
   auseinanderlaufen. Seit Plan 3b fließt der Leistungspreis in die Planung ein: in das Ziel des
-  Optimierers, in die erwarteten Kosten des Plans und in die Vorschau des Budgets (Abschnitt
-  „Planung“). Seit Plan 3c hält der 15-min-Wächter das Budget des Plans (Abschnitt „15-min-Wächter“);
-  die Entscheidungen des core danach folgen noch.
+  Optimierers, in die erwarteten Kosten des Plans und in sein Budget (Abschnitt „Planung“). Seit
+  Plan 3c hält der 15-min-Wächter das Budget des Plans (Abschnitt „15-min-Wächter“), und die Seite
+  „Laden“ zeigt, was ein Boost höchstens an Leistungspreis kostet (Abschnitt „Laderegelung“).
 
 Die **Warnungen** auf der Übersicht und der Seite „System“ nennen, was fehlt:
 
@@ -857,10 +858,10 @@ nicht erreichbar, steht dort „core nicht erreichbar.“.
 
 Die Seite **Zeitplan** (Navigation nach „Laden“) zeigt den Plan, den die app für den Akku gerechnet hat,
 und, in der obersten Zeile, ob der core ihn ausführt (Abschnitt „Planung“, „Stand der Ausführung“).
-Ab „Bedienen“ schaltest du dort „Netzladen erlaubt“ und löst „Neu planen“ aus; „Lesen“ sieht
-dieselbe Seite ohne die Bedienelemente. Aufbau,
-Auslöser, Ersatzplan und die Sätze der Erklärung stehen im Abschnitt „Planung“ am Ende dieses
-Handbuchs.
+Darunter vergleicht die Karte „Plan gegen Ist (heute)“ den Plan mit der Abrechnung. Ab „Bedienen“
+schaltest du dort „Netzladen erlaubt“ und löst „Neu planen“ aus; „Lesen“ sieht dieselbe Seite ohne
+die Bedienelemente. Aufbau, Auslöser, Ersatzplan und die Sätze der Erklärung stehen im Abschnitt
+„Planung“ am Ende dieses Handbuchs.
 
 ### Entscheidungen und „Warum?“
 
@@ -880,7 +881,7 @@ Ohne Treffer steht dort „Keine Entscheidungen im Zeitraum.“. Die Seite sehen
 **Warum?** steht auf der **Übersicht**: je Aktor die jüngste Entscheidung der letzten 24 h mit ihrem
 Alter und ein Verweis „Alle Entscheidungen“; ein Klick auf den Aktor öffnet die Seite mit diesem
 Filter. Gab es nichts, steht dort „Keine Entscheidungen in den letzten 24 h.“. Die Begründung des
-Plan-Slots kommt mit Phase 3.
+Plan-Slots zeigt „Warum?“ noch nicht; sie steht auf der Seite „Zeitplan“ („Ablauf“).
 
 ### Namen der Ladestationen
 
@@ -1738,7 +1739,7 @@ wann der Akku liefert (Abschnitt „Akku und Spitzen“).
   für die Monatsspitze allein, mit dem Satz des aktuellen Monats (Wiener Zeit). Das ist eine Obergrenze:
   Sie gilt, wenn der Boost die Spitze wirklich um die volle Ladeleistung hebt. Gilt im Monat kein
   Leistungspreis mit Satz, fehlt der Hinweis. Die Zahlen liefert `GET /api/control/boost-cost`
-  (ab „Betrachten“).
+  (ab „Lesen“).
 - Ein **Moduswechsel** wirkt sofort, ohne Startzeit, Stoppzeit und Mindestzeiten.
 - Nach einem Start lädt ein Auto mindestens `control.min_on_s` (600 s), nach einem Stopp startet es
   frühestens nach `control.min_off_s` (600 s) wieder. Das sind höchstens 3 Start/Stopp-Zyklen je Auto
@@ -1848,6 +1849,8 @@ wieder im PV-Überschuss.
 | `priority` | alle Fahrzeug-Schlüssel genau einmal, in der Reihenfolge der Zuteilung | Reihenfolge unter `vehicles` in `config.yaml` |
 | `surplus_priority` | `kind`: `cars_first`, `battery_first` oder `battery_until_soc` (dann mit `soc_pct`) | `battery_until_soc`, 30 % |
 | `guest.mode` | `pv`, `min_pv`, `now`, `off`: der Modus eines Gastes, also eines Autos, das nicht in `config.yaml` steht (Abschnitt „Zuordnung Auto und Wallbox“); kein Boost, keine Übersteuerung | `pv` |
+| `support` | `allowed` (`true` oder `false`) und `soc_pct` (Unterstützungsschwelle in %, von der USV-Reserve bis 100, oder `null` für `control.support_soc_pct`; Abschnitt „Akku und Spitzen“, „Akku-Unterstützung bedienen“) | erlaubt, Schwelle aus der Konfiguration |
+| `plan` | der Plan der app (Abschnitt „Planung“, „Übergabe an den core“): `id`, `created_at`, `valid_until`, `grid_charge_allowed` und 1 bis 8 `slots` mit `start`, `intent` (`kind` und `grid_charge_w`), `budget_kw`, `import_ct` und `support_soc_pct`. Die app schickt ihn selbst; per `curl` übernimmst du ihn aus `GET /v1/intent`. | kein Plan |
 
 - Die Schlüssel der Fahrzeuge und Wallboxen sind die aus `config.yaml` (im Beispiel `tesla`, `egolf`
   und `evcs`, `twc`).
@@ -1867,12 +1870,20 @@ wieder im PV-Überschuss.
 - **Antwort** (`{"result": …, "version": …, "details": […]}`):
   - `accepted`: angenommen.
   - `clamped`: angenommen, aber geklemmt. `details` nennt es: „{Name}: Boost auf 12 h begrenzt, bis
-    {HH:MM}.“ (Wiener Zeit) oder, dass ein Aktor ohne `live_allowed` im Dry-Run bleibt.
+    {HH:MM}.“ (Wiener Zeit), dass ein Aktor ohne `live_allowed` im Dry-Run bleibt, „Plan bis {HH:MM}
+    begrenzt.“ (`valid_until` höchstens 45 min nach der Annahme, Wiener Zeit) oder „Netzladen auf {W} W
+    begrenzt (maximaler Netzladesetpoint).“ (`victron.max_grid_charge_setpoint_w`). Ein Plan, der
+    schon abgelaufen ist, gilt als angenommen und wirkt nicht.
   - `rejected` mit Status 422, mit je einem Satz in `details`: ein unbekanntes Fahrzeug
     (`Unbekanntes Fahrzeug „x“.`), eine unbekannte Wallbox (`Unbekannte Wallbox „w“ für „v“.`), eine
     Wallbox bei mehreren Fahrzeugen (`Wallbox „w“ ist mehreren Fahrzeugen zugeordnet.`), eine
     Priorität, die nicht jedes Fahrzeug genau einmal nennt (`Die Priorität muss jedes Fahrzeug genau
-    einmal nennen.`) oder ein unbekannter Aktor.
+    einmal nennen.`), ein unbekannter Aktor, eine Unterstützungsschwelle unter der Reserve
+    (`Unterstützungsschwelle 15 % liegt unter der USV-Reserve (20 %).`) oder ein Plan, der nicht
+    passt: `Plan: Slots nicht im Viertelstundenraster oder nicht lückenlos.`, `Plan: zu viele Slots
+    (höchstens 8).`, `Plan: Gültigkeit passt nicht zu den Slots.` (es muss `slots[0].start ≤
+    created_at < valid_until ≤` Ende des letzten Slots gelten, und höchstens 45 min zwischen
+    `created_at` und `valid_until` liegen) oder `Plan: Netzladen, obwohl ausgeschaltet.`
   - `rejected` mit Status 409: Die Version ist veraltet oder schon mit anderem Inhalt angenommen.
 - **Boost und Übersteuerung** gelten bis zum Ende des Ansteckvorgangs, an den der core sie bindet:
   - Eine **Übersteuerung** (auch mit Boost im selben Eintrag) bindet an die Wallbox, die du nennst:
@@ -2388,11 +2399,12 @@ Nach den Gründen der Regelung stehen in `codes` die Befunde der Safety-Schicht 
 | `price_ct` | nur mit gültigem Slot, dessen Plan den Bezugspreis nennt: der Preis in ct/kWh |
 | `budget_kw` | nur mit gültigem Slot und gesetztem Ziel des 15-min-Wächters: das Ziel in kW (Budget des Slots, sonst `control.peak_target_kw`) |
 
-`null` heißt unbekannt. Die drei Eingaben des Plans tragen alle Entscheidungen eines Regelzyklus,
-solange ein Slot gilt; ohne gültigen Slot fehlen sie. `GET /v1/health` zeigt je Fahrzeug
+`null` heißt unbekannt. Die drei Eingaben des Plans tragen alle Entscheidungen der Regelung
+(Ladepunkte und Override), solange ein Slot gilt; ohne gültigen Slot fehlen sie. Sicherer Zustand,
+Übergabe und erkannte fremde Änderungen tragen sie nicht. `GET /v1/health` zeigt je Fahrzeug
 (`vehicles`, in der Reihenfolge von `config.yaml`) Modus, Boost bis, Wallbox, Zuordnung, Grenze,
-angesteckt, lädt, Weckvorgänge heute und den letzten Grund. Je Wallbox (`wallboxes`) zeigt es, wer dort steht, die Art der Zuordnung und
-die Indizien (oben, „Zuordnung Auto und Wallbox“).
+angesteckt, lädt, Weckvorgänge heute und den letzten Grund. Je Wallbox (`wallboxes`) zeigt es, wer
+dort steht, die Art der Zuordnung und die Indizien (oben, „Zuordnung Auto und Wallbox“).
 
 ### Health für die Bedienung
 
@@ -2538,7 +2550,7 @@ Die Einstellungen stehen in `config.yaml` unter `control` und haben Standardwert
 | `control.support_max_s` | 900 | Längste Überbrückung am Stück in s. |
 | `control.setpoint_deadband_w` | 200 | Totband des Overrides in W: der Abstand, ab dem ein Override entsteht oder sich ändert (unten). |
 | `control.override_refresh_s` | 240 | So oft in s frischt der core einen aktiven Override auf; höchstens 280, denn der Cerbo verwirft ihn nach 300 s. |
-| `control.peak_target_kw` | keiner | Ziel des 15-min-Wächters in kW; ohne Wert ruht er. |
+| `control.peak_target_kw` | keiner | Ziel des 15-min-Wächters in kW; ein Budget des Plans ersetzt es, ohne beides ruht er. |
 | `control.peak_margin_kw` | 0,3 | Marge der Hochrechnung des Wächters in kW. |
 | `control.reserve_guard_pct` | 5 | Abstand über der USV-Reserve in Prozentpunkten SOC. Darunter richten sich auch Sofort und Boost am Importlimit aus (Abschnitt „Laderegelung“), und der Wächter gibt dem Akku kein Budget. |
 | `control.tesla_reserve_commands` | 4 | So viele Befehle je Stunde hält die Regelung für den Tesla frei; ist das Stundenbudget bis auf diese Reserve verbraucht, ändert sie seinen Strom nur noch, wenn der Phasenwächter es verlangt (Abschnitt „Laderegelung“, „Tesla“). Ganze Zahl, kleiner als `commands.per_hour` jedes Fahrzeugs mit Tessie. |
@@ -2669,11 +2681,13 @@ Den **erlaubten Akku-Anteil** bestimmt der Modus des Autos:
   - **`NETZLADEN`:** dasselbe plus die Netzladeleistung des Slots.
 
   Budget des Wächters, Raster von 10 W, Totband, Auffrischen, Sperren und Regel 2 gelten für alle
-  drei wie oben. Unter 200 W Fehlbetrag entsteht wegen des Totbands kein Override: Dann entlädt der
-  Akku auch bei `HALTEN` etwas, höchstens rund 0,05 kWh je Viertelstunde. Wollen Haus und Autos bei
-  `HALTEN` mehr als `victron.max_grid_charge_setpoint_w` (8000 W), etwa ein Auto in Sofort mit 11 kW,
-  kappt Regel 2 den Override, und den Rest liefert der Akku. Ohne Basis-Sollwert ist das Ziel bei
-  `HALTEN` und `NETZLADEN` unbekannt.
+  drei wie oben. Wegen des Totbands (`control.setpoint_deadband_w`, 200 W) folgt der Override dem
+  Bedarf nicht genau: Ohne laufenden Override entsteht unter 200 W gewolltem Netzbezug keiner, ein
+  laufender fällt erst unter 100 W weg und ändert sich erst ab 200 W Abstand. So entlädt der Akku
+  auch bei `HALTEN` etwas, höchstens rund 0,05 kWh je Viertelstunde (200 W für 15 min). Wollen Haus
+  und Autos bei `HALTEN` mehr als `victron.max_grid_charge_setpoint_w` (8000 W), etwa ein Auto in
+  Sofort mit 11 kW, kappt Regel 2 den Override, und den Rest liefert der Akku. Ohne Basis-Sollwert ist
+  das Ziel bei `HALTEN` und `NETZLADEN` unbekannt.
 
 ### 15-min-Wächter
 
@@ -2681,10 +2695,12 @@ Der Wächter misst den Netzbezug jeder Viertelstunde (:00, :15, :30, :45, Wiener
 hoch und hält ein Ziel, wenn eins eingestellt ist (Spec 7.4). Er verhindert keine Spitze um jeden
 Preis: Er drosselt die Wallboxen und lässt den Akku überbrücken, und was beides nicht hält, meldet er.
 
-- **Ziel einstellen und abschalten:** Das Ziel ist `control.peak_target_kw`. Ohne Wert (Standard)
-  ruht der Wächter ganz (Health `peak.state` `off`). Zum Einschalten trägst du das Ziel in
-  `config.yaml` ein und startest den core neu; zum Abschalten nimmst du die Zeile wieder heraus und
-  startest neu.
+- **Ziel einstellen und abschalten:** Das Ziel ist `control.peak_target_kw`, solange der gültige Slot
+  des Plans kein Budget nennt (unten). Ohne beides (Standard ohne Leistungspreis) ruht der Wächter
+  ganz (Health `peak.state` `off`). Zum Einschalten trägst du das Ziel in `config.yaml` ein und
+  startest den core neu; nimmst du die Zeile wieder heraus und startest neu, ruht er nur, solange
+  kein Plan ein Budget bringt. Gilt im Monat ein Leistungspreis mit Satz, bringt jeder Plan eines,
+  und der Wächter hält es, solange ein Plan gilt.
 
   ```yaml
   control:
@@ -2695,8 +2711,12 @@ Preis: Er drosselt die Wallboxen und lässt den Akku überbrücken, und was beid
   Konfiguration: Der Wächter nimmt in jedem Zyklus das Budget des gültigen Slots, wenn der Plan eins
   nennt, sonst `control.peak_target_kw`. Auch ohne dieses Ziel hält er das Budget eines Slots; ohne
   beides ruht er. Health `peak.target_kw` und der Stand `off` folgen dem Ziel des letzten Zyklus,
-  und `P_zul` ändert sich mit dem Ziel auch mitten in einer Viertelstunde. Die Monatsspitze folgt
-  mit dem Leistungspreis (Spec 7.4).
+  und `P_zul` ändert sich mit dem Ziel auch mitten in einer Viertelstunde. Das Budget des Plans ist
+  die Monatsspitze, die der Plan akzeptiert (Abschnitt „Planung“, „Budget“); eine Überschreitung
+  nimmt der Wächter hin und warnt, und der nächste Plan sieht die neue Monatsspitze (Auslöser
+  `month_peak`) und hebt das Budget. Läuft ein Plan, der allein das Ziel brachte (ohne
+  `control.peak_target_kw`), mitten in einer Viertelstunde ab, ruht der Wächter sofort: Seine Grenzen
+  und ein Alarm `peak.exceeded` fallen weg, und die Autos laden im Rest der Viertelstunde ohne Ziel.
   Zulässig im Rest der Viertelstunde ist die mittlere Leistung
   `P_zul = (B · 0,25 h − E_bisher) / t_rest − Marge` mit der Marge `control.peak_margin_kw`
   (0,3 kW); bei einem Ziel von 8 kW sind das zu Beginn 7,7 kW.
@@ -2819,8 +2839,8 @@ Die Reaktion folgt der Reihenfolge von Spec 7.4:
 - **Boost** hebt das Ziel für sein Auto auf (bis zum Abstecken, höchstens 12 h): Der Netzanteil seiner
   Wallbox (mit PV und Akku zuerst für Boost, oben, „Messung“) zählt weder in die Energie bisher noch
   ins Mittel, und der Wächter drosselt das Auto nie.
-  Der Zähler am Netz und die Viertelstunde der Abrechnung sehen den Boost trotzdem. Die geschätzten
-  Mehrkosten zeigt erst das UI mit dem Leistungspreis (Phase 3).
+  Der Zähler am Netz und die Viertelstunde der Abrechnung sehen den Boost trotzdem. Was er höchstens
+  an Leistungspreis kostet, zeigt die Seite „Laden“ (Abschnitt „Laderegelung“, „Lademodi“, Boost).
 - **Im Dry-Run neben evcc** misst der Wächter den Netzbezug, den evcc verursacht. Seine Drosselungen
   stehen als Dry-Run-Entscheidungen der Wallboxen im Log (Grund `peak_guard`), und `peak.exceeded`
   zeigt, wie oft das Ziel unter evcc überschritten würde. Die Autos folgen den Grenzen dabei nicht:
@@ -2883,6 +2903,21 @@ Zyklus, der rechnet; die Hochrechnung und die Senkung brauchen außerdem das Mit
 Ruht die Regelung (OBSERVE, Regelbetrieb aus), zeigt `peak` weiter den letzten Zustand ohne Werte
 (`gap`, bei einer überschrittenen Viertelstunde `exceeded`); `quarter_end` nennt die Viertelstunde, auf
 die er sich bezieht. `battery` steht dann auf `idle`.
+
+Seit Plan 3c zeigt `GET /v1/health` unter `plan` den Plan der Absicht (Abschnitt „Planung“, „Übergabe
+an den core“); was fehlt, ist `null`:
+
+| Feld | Bedeutung |
+|---|---|
+| `plan.id` | die Nummer des Plans; `null` ohne Plan |
+| `plan.state` | `none`: kein Plan in der Absicht. `valid`: Der Plan gilt auf der Uhr des core. `expired`: Er gilt nicht (abgelaufen oder, bei einer Abweichung der Uhren, noch nicht gültig) und wirkt nicht. |
+| `plan.valid_until` | bis wann der Plan gilt, ISO-Zeit in UTC |
+| `plan.slot` | Beginn des Slots, der jetzt bindet, ISO-Zeit in UTC; `null`, wenn keiner bindet, auch wenn die Regelung ruht |
+| `plan.intent` | seine Absicht: `EIGENVERBRAUCH`, `HALTEN` oder `NETZLADEN` |
+| `plan.grid_charge_w` | seine Netzladeleistung in W (0 außer bei `NETZLADEN`) |
+| `plan.budget_kw` | sein Budget in kW; `null`, wenn der Plan keins nennt |
+| `plan.support_soc_pct` | seine Plan-Schwelle in % (oben, „Wirksame Schwelle“) |
+| `plan.price_ct` | sein Bezugspreis in ct/kWh |
 
 ### Akku-Unterstützung bedienen
 
@@ -2969,37 +3004,80 @@ und `applied` unter `requested`.
 
 ### Victron in den Dry-Run und live
 
-1. **Images ausrollen** (`docker compose pull && docker compose up -d`, Abschnitt 4). Die neuen Felder
-   haben Standardwerte (`deploy/config.example.yaml`); der Watchdog bleibt unverändert (1.1.0), und
-   keines der neuen Felder verlangt eine neue `config.ini`. Sende eine Absicht mit `"control": true`
-   (Abschnitt „Laderegelung“): Victron bleibt im Dry-Run, solange sie ihn nicht live verlangt.
-2. **DESS aus für den Dry-Run.** Solange DESS an ist, ist Victron gesperrt: Der Akku-Sollwert sendet
-   auch im Dry-Run nichts, und Health zeigt `battery.state` `locked`. Der Dry-Run des Victron-Teils
-   braucht deshalb DESS aus; das Fenster dafür bestimmst du. Bis Phase 3 läuft der Akku dann ohne
-   Preisoptimierung (Eigenverbrauch und die Regeln dieses Abschnitts). Modus lesen, abschalten und
-   zurücksetzen wie in Abschnitt 11, „Victron und Dynamic ESS“.
-3. **Dry-Run auswerten.** Die Entscheidungen an `victron` (Art `grid_setpoint`) zeigen in `requested`,
-   was BindaEMS einstellen würde, und in `inputs.actual_setpoint_w` den Override am Cerbo (unter ESS
-   im Dry-Run `null`). `SINCE` ist wie in „Dry-Run-Vergleich mit evcc“ gesetzt:
+Seit Plan 3c führt der core im Regelbetrieb auch den Plan der app aus (oben, „Absicht des Plans“). Vor
+der Live-Schaltung läuft die Planausführung **2 Wochen im Dry-Run**: Der core rechnet den Plan mit
+und protokolliert, was er an Victron senden würde, ohne etwas zu senden. Die Schritte:
 
-   ```bash
-   curl -s -H "Authorization: Bearer $BINDAEMS_INTERNAL_TOKEN" \
-     "http://127.0.0.1:8081/v1/decisions?since=$SINCE&limit=5000" \
-     | jq -r '.decisions[] | select(.actuator == "victron" and .dry_run) | [.ts, .result, .requested,
-         .inputs.actual_setpoint_w, .inputs.deficit_w, .inputs.allowed_w, (.codes | join(","))] | @tsv'
-   ```
+1. **Images ausrollen** (`docker compose pull && docker compose up -d`, Abschnitt 4): core und app
+   starten neu, der core mit der gespeicherten Absicht (er durchläuft OBSERVE und das Gate). Die neuen
+   Felder haben Standardwerte (`deploy/config.example.yaml`); der Watchdog bleibt unverändert (1.1.0),
+   und keines der neuen Felder verlangt eine neue `config.ini`. Schalte den Regelbetrieb ein (Karte
+   „Bedienung“ unter **System** oder Seite „Laden“; ohne app eine Absicht mit `"control": true`,
+   Abschnitt „Laderegelung“): Victron bleibt im Dry-Run, solange die Absicht ihn nicht live verlangt.
+2. **DESS aus für den Dry-Run,** für die ganzen 2 Wochen. Solange DESS an ist, ist Victron gesperrt:
+   Der Akku-Sollwert sendet auch im Dry-Run nichts, Health zeigt `battery.state` `locked`, und der
+   Stand der Ausführung ist „Victron ist gesperrt“. Der Dry-Run des Victron-Teils braucht deshalb
+   DESS aus. Der Akku läuft in dieser Zeit ohne Preisoptimierung (Eigenverbrauch des ESS), denn im
+   Dry-Run stellt auch der Plan nichts. Modus lesen, abschalten und zurücksetzen wie in Abschnitt 11,
+   „Victron und Dynamic ESS“.
+3. **Prüfen, dass der Plan beim core liegt:** Unter **System** meldet die Komponente `planning` „Plan
+   von HH:MM Uhr“, der core steht in `CONTROL` (oder `DEGRADED`), und Victron ist im Dry-Run ohne
+   Sperre. Die oberste Zeile der Seite **Zeitplan** lautet „Dry-Run: Der core rechnet den Plan mit und
+   sendet nichts an Victron.“ (Abschnitt „Planung“, „Stand der Ausführung“); ein anderer Satz nennt,
+   was fehlt. Im core zeigt Health den Plan (`plan.state` `valid`, `plan.intent` und `plan.slot` des
+   laufenden Slots, oben unter „Health“).
+4. **2 Wochen beobachten** (Abfrage unten):
+   - die Entscheidungen an `victron` mit `plan_hold` („Plan: Halten“) und `plan_grid_charge` („Plan:
+     Netzladen“; nur mit eingeschaltetem „Netzladen erlaubt“): Stimmen Zeit und Absicht mit dem
+     „Ablauf“ des Plans überein, und liegt `requested` bei `HALTEN` nahe Hauslast plus Autos minus PV
+     und bei `NETZLADEN` die Netzladeleistung darüber?
+   - ihre Zahl je Stunde: Bei ruhiger Last sind es wenige, im Simulator (`plan-halten`) höchstens 40
+     je Stunde; deutlich mehr heißt, dass das Rauschen der Hauslast größer ist als das Totband
+     (unten, „Hinweise für die Anlage“).
+   - die Karte „Plan gegen Ist (heute)“ auf der Seite **Zeitplan** (Abschnitt „Planung“, „Plan gegen
+     Ist“): Im Dry-Run zeigt sie, wie gut Prognosen und Akkumodell passen.
+   - die Punkte unter „Hinweise für die Anlage“ (unten), auch ohne Plan.
+5. **Danach Victron live schalten,** mit den vier Bedingungen aus Spec 8.7: `victron.live_allowed`
+   (Schritt 7), Prüfprotokoll Teil 2 bestanden (Schritt 6), ein scharfer Watchdog (die Probe in
+   Schritt 8; scharf schaltet ihn der core selbst) und die Umschaltung durch einen Admin im UI mit
+   Bestätigung (Schritt 9). Ab dann stellt der Plan den Akku; der Stand der Ausführung lautet „Der
+   core führt den Plan aus.“
 
-   Prüfe die Punkte unter „Hinweise für die Anlage“ (unten).
-4. **Prüfprotokoll Teil 2, Victron 17.2-4 „Kein Akku ins Auto“** bestehen (Abschnitt 11). Es prüft
+Die Entscheidungen an `victron` (Art `grid_setpoint`) zeigen in `requested`, was BindaEMS einstellen
+würde, und in `inputs.actual_setpoint_w` den Override am Cerbo (unter ESS im Dry-Run `null`). Mit
+gültigem Slot tragen sie `plan_slot_ts`, `plan_grid_charge_w`, `price_ct` und `budget_kw` (oben,
+„Gründe“). `SINCE` ist wie in „Dry-Run-Vergleich mit evcc“ gesetzt:
+
+```bash
+curl -s -H "Authorization: Bearer $BINDAEMS_INTERNAL_TOKEN" \
+  "http://127.0.0.1:8081/v1/decisions?since=$SINCE&limit=5000" \
+  | jq -r '.decisions[] | select(.actuator == "victron" and .dry_run) | [.ts, .result, .requested,
+      .inputs.actual_setpoint_w, .inputs.deficit_w, .inputs.allowed_w, (.codes | join(","))] | @tsv'
+```
+
+Die Zahl der Entscheidungen des Plans je Stunde (UTC) zählt diese Abfrage; `more` in der Antwort
+sagt, ob weitere folgen (Abschnitt 13, „Entscheidungslog“):
+
+```bash
+curl -s -H "Authorization: Bearer $BINDAEMS_INTERNAL_TOKEN" \
+  "http://127.0.0.1:8081/v1/decisions?since=$SINCE&limit=5000" \
+  | jq -r '.decisions[] | select(.actuator == "victron"
+      and any(.codes[]; . == "plan_hold" or . == "plan_grid_charge")) | .ts[0:13]' \
+  | sort | uniq -c
+```
+
+Die Live-Schaltung danach:
+
+6. **Prüfprotokoll Teil 2, Victron 17.2-4 „Kein Akku ins Auto“** bestehen (Abschnitt 11). Es prüft
    genau den Mechanismus dieses Abschnitts und ist noch offen. Der Punkt `victron` verlangt DESS aus,
    den Multi auf „Ein“ und ein Auto, das an der EVCS lädt (über 1000 W).
-5. **`victron.live_allowed: true`** in `config.yaml` (Abschnitt 13, „Dry-Run und live“), den core neu
+7. **`victron.live_allowed: true`** in `config.yaml` (Abschnitt 13, „Dry-Run und live“), den core neu
    starten, dann die `config.ini` neu erzeugen und mit `install.sh` übertragen (Abschnitt 14,
    „config.ini erzeugen“ und „Installieren“). Die Freigabe allein schaltet Victron nicht live, das
-   tut erst die Absicht (Schritt 7). Mit ihr enthält die `config.ini` aber die Aktion, die bei einer
-   Auslösung den Override aufhebt, und die Probe in Schritt 6 prüft sie nur dann. Design 2c-2 (11.1)
+   tut erst die Absicht (Schritt 9). Mit ihr enthält die `config.ini` aber die Aktion, die bei einer
+   Auslösung den Override aufhebt, und die Probe in Schritt 8 prüft sie nur dann. Design 2c-2 (11.1)
    nennt die Freigabe nach der Probe; die Reihenfolge hier folgt dieser Abhängigkeit.
-6. **Watchdog-Probe mit vorher verstellten Victron-Werten** (Abschnitt 14, „Probe“). Die Probe
+8. **Watchdog-Probe mit vorher verstellten Victron-Werten** (Abschnitt 14, „Probe“). Die Probe
    verstellt nichts selbst, und der Watchdog schreibt nur, was vom Sicherwert abweicht. Stelle
    deshalb Min-SOC, Entladegrenze und Override vorher von Hand auf Werte neben dem Sicherwert (Min-SOC
    etwas über die USV-Reserve, die Entladegrenze auf einen endlichen Wert, den Override auf eine
@@ -3009,7 +3087,7 @@ und `applied` unter `requested`.
    und `/Settings/CGwacs/MaxDischargePower` sowie `com.victronenergy.hub4` mit
    `/Overrides/Setpoint` (`dbus -y … GetValue` und `SetValue`, wie in Abschnitt 11). Danach stellst
    du die Werte ein, wie du sie haben willst.
-7. **Victron live schalten:** im UI mit dem Dialog „Live schalten“ (**System** → „Bedienung“, als Admin;
+9. **Victron live schalten:** im UI mit dem Dialog „Live schalten“ (**System** → „Bedienung“, als Admin;
    wähle nur Victron, die Bestätigung „evcc ist ganz abgeschaltet.“ entfällt dafür). Ohne app verlangst
    du es in der Absicht per `PUT /v1/intent`. Sie ist vollständig (Abschnitt „Absicht per
    PUT /v1/intent“); dieses Beispiel lässt EVCS und Tesla im Dry-Run:
@@ -3020,8 +3098,9 @@ und `applied` unter `requested`.
 
    Live läuft Victron nur mit scharfem Watchdog und ohne Sperre, wie jeder Aktor; den Watchdog
    schärft der core selbst (Abschnitt 13, „Gate“).
-8. **Danach:** DESS bleibt aus. Schaltest du es wieder ein, sperrt sich Victron, und der Override
-   verfällt nach 300 s. Zurück in den Dry-Run geht es wie in Abschnitt 13, „Live-Freigabe
+10. **Danach:** DESS bleibt aus. Schaltest du es wieder ein, sperrt sich Victron, und der Override
+   verfällt nach 300 s. Der Plan wirkt dann nicht mehr; der Stand der Ausführung lautet „Victron ist
+   gesperrt“. Zurück in den Dry-Run geht es wie in Abschnitt 13, „Live-Freigabe
    zurücknehmen“: Der core übergibt Victron und hebt den Override auf.
 
 ### Alarme
@@ -3239,11 +3318,12 @@ Plan 3a ist ohne die echte Anlage getestet; zwei Dinge zeigen sich erst im Betri
 ## Planung
 
 Seit Plan 3b plant die app den Hausakku für bis zu 36 h. Seit Plan 3c übergibt sie den Plan in der
-Absicht an den core, und der core führt ihn aus, solange der Regelbetrieb an ist und Victron in
-seiner Betriebsart arbeitet (Abschnitt „Akku und Spitzen“). Ob das gerade so ist, sagt der **Stand
-der Ausführung** (unten). Pläne entstehen etwa alle
-15 min; jeder wird mit seinen Eingangsdaten in SQLite gespeichert (`plan` und `plan_inputs`, die
-Migration `0009` legt beide Tabellen beim Start der app an).
+Absicht an den core (unten, „Übergabe an den core“), und der core führt ihn aus, solange der
+Regelbetrieb an ist, in der Betriebsart, die Victron hat: im Dry-Run rechnet er ihn nur mit, live
+stellt er den Akku danach (Abschnitt „Akku und Spitzen“, „Absicht des Plans“). Ob das gerade so
+ist, sagt der **Stand der Ausführung** (unten). Pläne entstehen etwa alle 15 min; jeder wird mit
+seinen Eingangsdaten in SQLite gespeichert (`plan` und `plan_inputs`, die Migration `0009` legt
+beide Tabellen beim Start der app an).
 
 ### Die Seite „Zeitplan“
 
@@ -3267,8 +3347,8 @@ Die Seite **Zeitplan** steht in der Navigation nach „Laden“ und zeigt den le
 - **Ablauf:** Aufeinanderfolgende Slots mit gleicher Absicht, gleicher Netzladeleistung und gleichem
   Hauptcode bilden einen Block: „HH:MM–HH:MM“, die Absicht („Eigenverbrauch“, „Halten“,
   „Netzladen {kW} kW“), „SOC a → b %“ und der Satz der Erklärung (unten).
-
-„Plan vs. Ist“ gibt es erst mit Plan 3c.
+- **Plan gegen Ist (heute):** die vergangenen Viertelstunden des Tages, Plan neben Abrechnung
+  (unten, „Plan gegen Ist“).
 
 ### Wie ein Plan entsteht
 
@@ -3333,8 +3413,37 @@ Umschalten kannst du an drei Stellen, mit denselben Folgen:
 
 Jedes Umschalten ist eine neue Version der Einstellungen mit dem Kommentar „Netzladen ein“ bzw.
 „Netzladen aus“ im Änderungsprotokoll und löst eine Neuplanung aus. Hat der Schalter schon den Wert,
-entsteht keine neue Version. Der Plan geht danach neu an den core; bis er dort ist, steht der Stand „Der Plan ist noch nicht
-beim core.“ (oben, „Stand der Ausführung“).
+entsteht keine neue Version. Der Plan geht danach neu an den core; bis er dort ist, steht der Stand
+„Der Plan ist noch nicht beim core.“ (unten, „Stand der Ausführung“). Beim Ausschalten geht sofort
+derselbe Plan ohne `Netzladen` an den core, diese Slots werden `Eigenverbrauch`; der neue Plan
+folgt (unten, „Übergabe an den core“).
+
+### Übergabe an den core
+
+Die app schickt den Plan als Teil der Absicht (Abschnitt 13, „Absicht und Regelbetrieb“), mit einer
+neuen Version, aber ohne Eintrag im Änderungsprotokoll: Bei rund 100 Plänen am Tag ist das Archiv der
+Pläne der Nachweis (Akteur `planung`, Quelle `system`). Eine Bedienung behält den Plan der gültigen
+Absicht, und ein neuer Plan wird wie eine Bedienung aus der gültigen Absicht abgeleitet (Boost und
+Übersteuerung nach den Regeln aus Abschnitt 13).
+
+- **Was hinausgeht:** nur der bindende Teil des neuesten gültigen Plans, die Slots vor seinem
+  `valid_until` (höchstens 8), je Slot Absicht, Budget, Bezugspreis und Plan-Schwelle, dazu `id`,
+  `created_at`, `valid_until` und der Stand von „Netzladen erlaubt“. Ist der Schalter aus, werden
+  `Netzladen`-Slots zu `Eigenverbrauch`.
+- **Wann:** beim Start, nach jedem Planungslauf, nach jeder Verbindung zum core, nach jeder Änderung
+  der Einstellungen und sonst alle 30 s, solange der core diesen Plan nicht hat. Er hat ihn, wenn
+  `intent.plan` in seinem Health dieselbe `id` und denselben Stand von „Netzladen erlaubt“ trägt.
+  Ohne gültigen Plan und ohne Health des core schickt die app nichts.
+- **Prüfung im core** (Abschnitt „Laderegelung“, „Absicht per PUT /v1/intent“): Er lehnt einen Plan
+  mit Lücken, falschem Raster, mehr als 8 Slots, unpassender Gültigkeit oder `Netzladen` trotz
+  ausgeschaltetem Schalter ab (422) und klemmt `valid_until` auf 45 min nach der Annahme und die
+  Netzladeleistung auf `victron.max_grid_charge_setpoint_w`. Einen Plan, der schon abgelaufen ist,
+  nimmt er an; er wirkt nicht. Ob ein Plan gilt, prüft der core auf seiner eigenen Uhr; ohne
+  gültigen Slot regelt er den Eigenverbrauch.
+- **Log:** `docker compose logs --since 1h ems-app | grep "Plan an den core übergeben"` zeigt jede
+  Übergabe mit `plan`, `result` und `version`; „Plan vom core abgelehnt“ nennt die Gründe, „Plan
+  nicht übergeben: core nicht erreichbar“ einen Versuch ohne Verbindung. Der nächste Anstoß
+  versucht es neu.
 
 ### Stand der Ausführung
 
@@ -3481,17 +3590,39 @@ steht dort `UNTERSTUETZUNG_RESERVIERT`.
 
 Mit einem Leistungspreis im Tarif (Abschnitt 8) hat der Plan je Monat ein **Budget**: die Monatsspitze,
 die er akzeptiert, auf 0,1 kW aufgerundet und mindestens der höchste Netzbezug der Nachrechnung im
-Monat. Ohne Leistungspreis ist es leer. Der 15-min-Wächter im core hält es mit Plan 3c (Abschnitt
-„15-min-Wächter“).
+Monat. Ohne Leistungspreis ist es leer. Seit Plan 3c geht es mit dem Plan an den core, und der
+15-min-Wächter hält es als Ziel, solange der Slot gilt (Abschnitt „15-min-Wächter“).
+
+### Plan gegen Ist
+
+Die Karte **Plan gegen Ist (heute)** auf der Seite „Zeitplan“ vergleicht die vergangenen
+Viertelstunden des Tages (Wiener Zeit) mit der Abrechnung. Je Viertelstunde zählt der Slot des Plans,
+der damals galt: der neueste Plan, der vor ihrem Ende entstand, bei ihrem Beginn noch galt und sie
+enthält.
+
+- **Diagramm:** „Geplanter SOC“ (am Ende jeder Viertelstunde, aus dem Plan) und „Ist-SOC“ (aus dem
+  Verlauf, `soc.battery`).
+- **Tabelle:** „Netzbezug“, „Einspeisung“ und „Netzladen“ in kWh und „Bezugskosten“ in €, je mit
+  „Plan“, „Ist“ und „Differenz“ (Ist minus Plan). Summiert werden nur Viertelstunden mit Plan und
+  Abrechnung, die Bezugskosten nur über die mit bekanntem Bezugspreis (Bezug mal Bezugspreis, ohne
+  Einspeisung und Leistungspreis). „Netzladen“ ist auf der Ist-Seite der Fluss vom Netz in den Akku.
+- **Leer:** „Für heute gibt es noch keine Viertelstunde mit Plan und Ist.“, etwa kurz nach
+  Mitternacht oder bevor der erste Plan entstand. Ohne Antwort steht „Plan gegen Ist ist nicht
+  verfügbar.“
+
+Plan und Ist weichen auch ohne Fehler ab: Die Prognosen treffen nie genau, und solange Victron im
+Dry-Run ist, regelt der Akku nicht nach dem Plan. Im Dry-Run zeigt die Karte deshalb, wie gut die
+Prognosen und das Akkumodell passen, live dazu, wie gut der core den Plan umsetzt.
 
 ### Home Assistant
 
 Zum Plan meldet die app diese Entitäten am Gerät „BindaEMS“ (Abschnitt 7). Die Sensoren zeigen den
 Plan nur, solange er gilt; sonst sind sie „unbekannt“. Die vier Sensoren `battery_plan_now`,
 `battery_plan_next`, `planned_soc` und `budget` tragen immer das Attribut `execution`, den Stand der
-Ausführung (oben, „Stand der Ausführung“) als Schlüssel: `none`, `unreachable`, `pending`, `off`, `idle`, `locked`, `dry_run`
-oder `live`. Automationen sollen sich nur auf den Plan verlassen, wenn `execution` den Wert `live`
-hat. Ist der Stand der Einstellung „Netzladen erlaubt“ noch unbekannt, steht `execution` auf `null`.
+Ausführung (oben, „Stand der Ausführung“) als Schlüssel: `none`, `unreachable`, `pending`, `off`,
+`idle`, `locked`, `dry_run` oder `live`. Automationen sollen sich nur auf den Plan verlassen, wenn
+`execution` den Wert `live` hat. Ist der Stand der Einstellung „Netzladen erlaubt“ noch unbekannt,
+steht `execution` auf `null`.
 
 | Objekt-ID | Name | Plattform | Wert |
 |---|---|---|---|
@@ -3511,6 +3642,9 @@ Für Skripte, mit Sitzung und Rolle wie das UI:
 - `GET /api/plan` (ab „Lesen“): der Status der Komponente, `grid_charge_allowed` und der letzte Plan
   mit `valid`, Kosten in Euro, Auffälligkeiten und allen Slots samt Satz (`text`) und Codes. Ohne
   Plan ist `plan` leer.
+- `GET /api/plan/review?day=JJJJ-MM-TT` (ab „Lesen“, ohne `day` heute): Plan gegen Ist je
+  vergangener Viertelstunde des Tages (`slots` mit `planned` und `actual`, `null` ohne Plan bzw.
+  ohne Abrechnung) und die Summen (`totals`). Tage vor den letzten 30 und künftige Tage ergeben 422.
 - `POST /api/plan/replan` (ab „Bedienen“, Antwort 202): fordert einen Lauf an.
 - `PUT /api/plan/grid-charge` mit `{"on": true}` (ab „Bedienen“): schaltet „Netzladen erlaubt“.
 
@@ -3620,7 +3754,7 @@ Ausrollen von Plan 3a; für ältere Tage fehlt die Prognose, und der Lauf nimmt 
 
 ### An der Anlage prüfen
 
-Plan 3b ist ohne die echte Anlage getestet; das zeigt sich erst im Betrieb:
+Die Pläne 3b und 3c sind ohne die echte Anlage getestet; das zeigt sich erst im Betrieb:
 
 - **Der Solver im Image:** Öffne **System** und sieh nach, ob die Komponente `planning` „Plan von
   HH:MM Uhr“ meldet und nicht „Ersatzplan von … : Solver fehlgeschlagen: …“. Das Log nennt die
@@ -3638,7 +3772,12 @@ Plan 3b ist ohne die echte Anlage getestet; das zeigt sich erst im Betrieb:
   folgt ein Plan mit dem Anlass „SOC weicht ab“.
 - **Der Vergleich über 30 Tage:** Exportiere die Tage, sobald das Archiv der Prognosen gefüllt ist, und
   lass den Bericht mit `--takt 15` laufen (oben). „Bestanden“ über mindestens 30 Tage ist die
-  Voraussetzung für die Abnahme der Phase 3 (nach Plan 3c).
+  Voraussetzung für die Abnahme der Phase 3, zusammen mit den 2 Wochen Dry-Run der Planausführung
+  (Abschnitt „Akku und Spitzen“, „Victron in den Dry-Run und live“).
+- **Planausführung:** Im Dry-Run zeigen die oberste Zeile der Seite **Zeitplan** („Dry-Run: …“), die
+  Karte „Plan gegen Ist (heute)“ und die Entscheidungen mit `plan_hold` und `plan_grid_charge`, ob
+  der core den Plan so umsetzen würde, wie er gerechnet ist (Abschnitt „Akku und Spitzen“, „Victron
+  in den Dry-Run und live“, Schritte 3 und 4).
 
 ## Simulator
 
