@@ -37,11 +37,12 @@ die Pläne nur eine Vorschau; der core bekam sie nicht.
 **Plan 3c (Planausführung im core) ist umgesetzt, je Task und im Gesamtreview geprüft, und die
 Fix-Welle danach ist umgesetzt** (`docs/superpowers/plans/2026-10-17-phase-3c-planausfuehrung.md`, 17
 Tasks, freigegeben vom Betreiber am 17.10.2026 mit allen 14 Entscheidungen; Branch
-`claude/project-thread-syy5yu`, ab `20c338d`). Die Integration auf `main` steht aus. Die app übergibt den
+`claude/project-thread-syy5yu`, ab `20c338d`) und ist auf `main` (`9621dc7` und dieser Commit, am 17.10.2026
+mit Zustimmung des Betreibers per Fast-Forward übernommen, alle Prüfungen grün). Die app übergibt den
 Plan in der Absicht, und der core führt ihn im Regelbetrieb aus, in der Betriebsart, die Victron hat:
 **Solange Victron im Dry-Run ist, rechnet er ihn nur mit und sendet nichts.** Nichts geht von selbst
 live.
-Als Nächstes folgen die Integration von 3c auf `main` und an der Anlage das gemeinsame Ausrollen von
+Als Nächstes folgen an der Anlage das gemeinsame Ausrollen von
 2d, 3a, 3b und 3c, die Inbetriebnahme Punkt 3 (Design 2c-2, 11.1: die Erkennung läuft im Dry-Run mit, Health
 zeigt, wer wo steht), **2 Wochen Dry-Run der Planausführung** (DESS dafür aus) und die **30 echten
 Tage** durch `export_days` und `scenario_days`; danach geht Victron live (siehe „Offen an der
@@ -449,8 +450,6 @@ Anlage“).
   mit Abdeckungsgrenzen (≥ 75 % insgesamt, ≥ 90 % für `core/safety`, `core/control` und
   `core/actuators`), Vitest mit svelte-check, Prettier und ESLint; dazu E2E mit Playwright.
 - **Offen:**
-  - die Integration von Plan 3c auf `main` mit deiner Zustimmung (Gesamtreview und Fix-Welle sind
-    erledigt; was danach offen ist, steht unter „Bewusst offen gelassen“, „Entschieden in Plan 3c“)
   - an der Anlage: Images von 2d, 3a, 3b und 3c ausrollen (Punkte „Zu 3a gehört“, „Zu 3b gehört“ und
     „Zu 3c gehört“ unter „Offen an der Anlage“), die 30 echten Tage durch die Werkzeuge rechnen (Punkt
     5 dort), Dry-Run neben evcc beginnen und dabei die Inbetriebnahme Punkt 3 (die Erkennung läuft im
@@ -1213,14 +1212,14 @@ Demo-Zugänge: `admin`, `bedienen` (Bedienen), `gast` (Lesen) und `sicher` (Admi
      „Zeitplan“, HA-Sensoren und Taste „Neu planen“, Szenario-Werkzeuge mit dem Vergleich mit „Victron
      allein“. Pläne entstanden als Vorschau; der core bekam sie noch nicht. Nur app, `shared` und UI.
    - **3c Planausführung im core:** umgesetzt, je Task und im Gesamtreview geprüft, die Fix-Welle
-     danach ist umgesetzt, auf dem Branch `claude/project-thread-syy5yu`; die Integration auf `main`
-     steht aus (Kurzfassung). Plan in der Absicht, Prüfung im core, Akku-Absichten `EIGENVERBRAUCH`, `HALTEN` und
+     danach ist umgesetzt, und auf `main` (17.10.2026, Fast-Forward,
+     Kurzfassung). Plan in der Absicht, Prüfung im core, Akku-Absichten `EIGENVERBRAUCH`, `HALTEN` und
      `NETZLADEN(P)` über den Override, Budget des 15-min-Wächters aus dem Plan, Plan-Schwelle und
      Schalter der Akku-Unterstützung, Stand der Ausführung, „Plan gegen Ist“, Mehrkosten beim Boost,
      Simulator mit Wirkungsgrad und Plan-Szenarien. An der Anlage folgen 2 Wochen Dry-Run der
      Planausführung (DESS aus) und die 30 echten Tage, dann geht Victron live (Abnahme Phase 3).
 
-### Nächster Schritt: Integration von Plan 3c und die Anlage
+### Nächster Schritt: die Anlage
 
 1. Plan 2b ist auf `main`; Gesamtreview, Fix-Durchgang und Re-Review sind erledigt, die
    Entscheidungen stehen in `docs/superpowers/plans/2026-10-11-phase-2b-entscheidungen.md`. Plan
@@ -1255,10 +1254,9 @@ Demo-Zugänge: `admin`, `bedienen` (Bedienen), `gast` (Lesen) und `sicher` (Admi
    erledigt: am 17.10.2026 auf die Trail-Commits rebased und per Fast-Forward übernommen. Das
    Ausrollen an der Anlage geschieht jetzt gemeinsam mit 3c (Punkt 7).
 7. **Plan 3c** (Planausführung im core) ist umgesetzt, je Task und im Gesamtreview geprüft, und die
-   Fix-Welle danach ist umgesetzt (Kurzfassung; behoben sind das Fenster ohne vertrauten Stand nach
+   Fix-Welle danach ist umgesetzt; er ist auf `main` (17.10.2026, Fast-Forward, Kurzfassung; behoben sind das Fenster ohne vertrauten Stand nach
    einem Neustart des core für die Übergabe des Plans und das Budget unter dem eigenen Bezug). Es
    folgen:
-   - die **Integration auf `main`** mit deiner Zustimmung;
    - an der Anlage das **gemeinsame Ausrollen von 2d, 3a, 3b und 3c** (Punkt 1 unter „Offen an der
      Anlage“, mit der neuen ACL-Zeile für `number`), dann der **Dry-Run der Planausführung über 2
      Wochen** mit DESS aus (Punkt 4) und parallel die **30 echten Tage** durch `export_days` und
