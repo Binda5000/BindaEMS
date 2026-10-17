@@ -449,6 +449,20 @@ def test_plan_reasons_in_the_guide_match_the_code() -> None:
         if found and len(cells) >= 3:
             rows[found[1]] = cells[1]
     assert set(rows) == codes
+    # Hauptcodes in der Reihenfolge der Prüfung von ``explain._main_reason``, dann die Zusätze
+    assert list(rows) == [
+        "NETZLADEN_GUENSTIG",
+        "HALTEN_FUER_SPITZE",
+        "BUDGET_SPITZE",
+        "HALTEN_RESTWERT",
+        "PV_LADEN",
+        "REGEL_R_BLOCKIERT_NETZLADEN",
+        "NETZLADEN_AUS",
+        "PV_UEBERSCHUSS_ERWARTET",
+        "EIGENVERBRAUCH",
+        "GESCHAETZT",
+        "ERSATZPLAN",
+    ]
     for code, shown in rows.items():
         expected = sentence(Reason(code=code, params=examples[code]))  # type: ignore[arg-type]
         assert shown == expected, code
@@ -456,27 +470,29 @@ def test_plan_reasons_in_the_guide_match_the_code() -> None:
     assert named <= codes, sorted(named - codes)
 
 
-def test_plan_triggers_and_sources_in_the_guide_match_the_code() -> None:
-    # Die Auslöser stehen mit ihrem Wortlaut aus dem UI im Abschnitt, ebenso die Quellen.
+def _ts_labels(source: str, name: str) -> dict[str, str]:
+    """Einträge ``schlüssel: 'Text'`` der Konstante ``name`` aus einer TypeScript-Datei."""
+    found = re.search(rf"export const {name}\b[^=]*=\s*\{{(.*?)\}}", source, re.S)
+    assert found, name
+    return dict(re.findall(r"(\w+): '([^']*)'", found[1]))
+
+
+def test_plan_triggers_and_sources_in_the_guide_match_the_ui() -> None:
+    # Auslöser und Quellen stehen mit dem Wortlaut aus ``ui/src/lib/plan/model.ts`` im Abschnitt.
     from typing import get_args
 
-    from bindaems.shared.plan import PlanTrigger
+    from bindaems.shared.plan import PlanSource, PlanTrigger
 
-    labels = {
-        "start": "Start",
-        "slot": "Viertelstunde",
-        "prices": "neue Preise",
-        "pv_forecast": "neue PV-Prognose",
-        "load_forecast": "neue Lastprognose",
-        "soc": "SOC weicht ab",
-        "month_peak": "neue Monatsspitze",
-        "settings": "Einstellungen geändert",
-        "manual": "Neu planen",
-    }
-    assert set(labels) == set(get_args(PlanTrigger))
+    model = Path("ui/src/lib/plan/model.ts").read_text(encoding="utf-8")
+    triggers = _ts_labels(model, "TRIGGER_LABELS")
+    sources = _ts_labels(model, "SOURCE_LABELS")
+    assert set(triggers) == set(get_args(PlanTrigger))
+    assert set(sources) == set(get_args(PlanSource))
     section = _guide_section("Planung")
-    for trigger, label in labels.items():
+    for trigger, label in triggers.items():
         assert f"| `{trigger}` | {label} |" in section, trigger
+    for label in sources.values():
+        assert f"„{label}“" in section, label
 
 
 def test_planning_entities_in_the_guide_exist() -> None:

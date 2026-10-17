@@ -25,8 +25,9 @@ auf der Seite „Entscheidungen“ und in Grafana.
   Preise und die PV-Prognose, rechnet jede Viertelstunde ab und sendet seit Plan 2d die Absicht an
   den core: Regelbetrieb, Lademodi, Boost, Zuordnung und der Live-Schalter (Abschnitt 13). Seit
   Plan 3b plant sie außerdem den Akku für bis zu 36 h und zeigt den Plan als Vorschau (Seite
-  „Zeitplan“, Abschnitt „Planung“); der core bekommt ihn noch nicht. Sie speichert das Entscheidungslog, meldet Sensoren und Bedienelemente per MQTT Discovery an Home
-  Assistant und meldet Alarme dort als Benachrichtigung (Abschnitt 7).
+  „Zeitplan“, Abschnitt „Planung“); der core bekommt ihn noch nicht. Sie speichert das
+  Entscheidungslog, meldet Sensoren und Bedienelemente per MQTT Discovery an Home Assistant und
+  meldet Alarme dort als Benachrichtigung (Abschnitt 7).
 
 Dazu kommt der **Watchdog** auf dem Cerbo, den du einmal installierst (Abschnitt 14). Er ist der
 Totmann-Schalter der Anlage und greift nur ein, wenn ein live geschalteter core ausfällt.
@@ -416,9 +417,10 @@ Aus den Bestandteilen rechnet die app:
   (Netzbezug der Viertelstunde in Wh · 4 / 1000 = kW), mit ihrem Beginn. Boost zählt mit, denn der
   Zähler sieht ihn. Home Assistant bekommt sie als Sensor „Monatsspitze“ (Abschnitt 7). Es gibt
   dafür keine eigene Tabelle; die Abfrage über die Abrechnung läuft jedes Mal und kann nicht
-  auseinanderlaufen. Der Leistungspreis fließt in Plan 3a noch in keine Anzeige und keine
-  Entscheidung ein; die Rechnung steht bereit, die Kosten und das Budget des 15-min-Wächters
-  folgen mit den Plänen 3b und 3c.
+  auseinanderlaufen. Seit Plan 3b fließt der Leistungspreis in die Planung ein: in das Ziel des
+  Optimierers, in die erwarteten Kosten des Plans und in die Vorschau des Budgets (Abschnitt
+  „Planung“). Nur die Ausführung folgt mit Plan 3c: das Budget für den 15-min-Wächter und die
+  Entscheidungen des core danach.
 
 Die **Warnungen** auf der Übersicht und der Seite „System“ nennen, was fehlt:
 
@@ -3216,12 +3218,26 @@ Jeder Lauf friert zuerst die Eingangsdaten ein, löst dann das Modell und prüft
    `Eigenverbrauch`. Die Zahlen des Plans (SOC, Kosten, Budget) stammen aus der Nachrechnung.
 4. **Prüfung:** Ein unplausibler Plan wird verworfen, und es gilt der Ersatzplan.
 
-**Regel R** („nicht einspeisen und danach billig kaufen“) gilt für den Akku als harte Bedingung:
-Netzladen in einem Slot gibt es nur, wenn die PV laut Prognose danach bis zum Horizontende nicht
-mehr als 0,1 kWh einspeist, denn sonst füllte die PV den Akku ohnehin. Netzladen muss sich außerdem
-rechnen: Der spätere Preis mal Roundtrip-Wirkungsgrad, abzüglich Ladepreis und Verschleiß, muss die
-Marge erreichen (die Spread-Regel). Mit einem Leistungspreis im Horizont entfällt die
-Spread-Regel, denn dann darf Netzladen auch einer Spitze ausweichen.
+**Regel R** („nicht einspeisen und danach billig kaufen“) ist im Optimierer eine harte Bedingung:
+Lädt er in einem Slot aus dem Netz, geht ab diesem Slot (eingeschlossen) bis zum Horizontende laut
+Prognose keine PV mehr ins Netz, denn sonst füllte die PV den Akku ohnehin. Die Prüfung rechnet
+Regel R an der Nachrechnung nach; die 0,1 kWh Einspeisung, die sie danach zulässt, sind nur ihre
+Toleranz. Weil die Absichten gerundet sind, kann die Nachrechnung mehr im Akku haben als das
+Modell; würde sie deshalb nach einem `Netzladen`-Slot einspeisen, kürzt die app das Netzladen des
+letzten betroffenen Slots um diese Energie (auf 100 W aufgerundet, unter 100 W wird daraus
+`Halten`).
+
+Die **Spread-Regel** ist im Optimierer keine Bedingung: Marge, Verschleiß und Wirkungsgrad stehen
+als Kosten im Ziel. Die Prüfung kontrolliert sie danach je `Netzladen`-Slot. Er rechnet sich, wenn
+ein späterer Slot mit mindestens 100 W Entladung `η_rt · (π_später − w) − π_jetzt ≥ m` erfüllt
+(Roundtrip-Wirkungsgrad `η_rt`, Verschleiß `w`, Marge `m`; je kWh aus dem Netz kommen `η_rt` kWh
+zurück, und der Verschleiß fällt wie im Optimierer auf diese Entladung). Er rechnet sich auch, wenn
+er **für die Zeit nach dem Horizont** lädt: Die geladene Energie ist am Horizontende noch im Akku
+(der End-SOC der Nachrechnung liegt mindestens um sie über der Reserve), und
+`η_ch · Restwert − π_jetzt ≥ m` (Wirkungsgrad des Ladens `η_ch`; der Restwert enthält den
+Verschleiß schon). So lädt der Optimierer billige Stunden kurz vor dem Horizontende für den Abend
+danach. Mit einem Leistungspreis im Horizont entfällt die Spread-Regel, denn dann darf Netzladen
+auch einer Spitze ausweichen.
 
 ### Netzladen erlaubt
 
@@ -3328,7 +3344,9 @@ Jeder Slot trägt **Grundcodes**; das UI und die Sensoren in Home Assistant zeig
 Sätze, mehrere durch ein Leerzeichen getrennt. In einem Ersatzplan steht `ERSATZPLAN` an erster
 Stelle, bei einem Schätzpreis `GESCHAETZT` an letzter. Zahlen haben ein Dezimalkomma (`kW`, `ct`
 und `kWh` mit einer Nachkommastelle, `%` ganzzahlig), Uhrzeiten sind lokal. Der Hauptcode eines
-Slots folgt der ersten passenden Regel; die Beispiele zeigen den Satz mit erfundenen Zahlen:
+Slots folgt der ersten passenden Regel, in dieser Reihenfolge der Prüfung (`GESCHAETZT` und
+`ERSATZPLAN` am Ende sind Zusätze, keine Hauptcodes); die Beispiele zeigen den Satz mit erfundenen
+Zahlen:
 
 | Code | Beispiel | Wann |
 |---|---|---|
@@ -3337,9 +3355,9 @@ Slots folgt der ersten passenden Regel; die Beispiele zeigen den Satz mit erfund
 | `BUDGET_SPITZE` | Akku hält 55 %, damit die Monatsspitze unter 6,5 kW bleibt. | Absicht `Halten`; später würde ohne den Akku das Budget überschritten |
 | `HALTEN_RESTWERT` | Akku hält 40 % für die Zeit nach 10:00 Uhr. | Absicht `Halten` aus keinem der beiden Gründe; „nach“ ist das Horizontende |
 | `PV_LADEN` | Akku lädt 3,2 kW aus PV-Überschuss. | Absicht `Eigenverbrauch`, der Akku lädt mit mindestens 100 W aus der PV |
-| `PV_UEBERSCHUSS_ERWARTET` | Akku deckt den Verbrauch; ab 09:30 Uhr lädt ihn die PV wieder. | Absicht `Eigenverbrauch`, der Akku entlädt, und später lädt die PV ihn |
 | `REGEL_R_BLOCKIERT_NETZLADEN` | Kein Netzladen: Laut Prognose speist die PV bis 17:00 Uhr noch 8,4 kWh ein (Regel R). | Netzladen würde sich lohnen und ist erlaubt, aber die PV speist danach mehr als 0,1 kWh ein |
 | `NETZLADEN_AUS` | Netzladen würde sich lohnen (jetzt 10,0 ct, um 18:00 Uhr 30,0 ct), ist aber ausgeschaltet. | Netzladen würde sich lohnen, der Schalter ist aus |
+| `PV_UEBERSCHUSS_ERWARTET` | Akku deckt den Verbrauch; ab 09:30 Uhr lädt ihn die PV wieder. | Absicht `Eigenverbrauch`, der Akku entlädt, und später lädt die PV ihn |
 | `EIGENVERBRAUCH` | Akku deckt den Eigenverbrauch. | sonst |
 | `GESCHAETZT` | Preis geschätzt. | der Preis des Slots ist ein Schätzpreis |
 | `ERSATZPLAN` | Ersatzplan. | der Plan ist ein Ersatzplan |
@@ -3392,7 +3410,10 @@ curl -b jar -H "X-CSRF-Token: $CSRF" -X POST "$APP/api/plan/replan"
 
 Die stündliche Wartung der app räumt auf: Nach 7 Tagen löscht sie die Eingangsdaten eines Plans und
 kürzt seine Slots auf die vor seinem `valid_until` (das, was er tatsächlich bestimmt hat); nach 30
-Tagen löscht sie den Plan. Ein Plan hat rund 40 KB, bei 100 bis 150 Plänen am Tag.
+Tagen löscht sie den Plan. Ein Plan hat mit seinen Eingangsdaten rund 80 KB. Bei 100 bis 200 Läufen
+am Tag belegen die Pläne der 7 Tage mit Eingangsdaten damit rund 60 bis 115 MB; gekürzte Pläne danach
+nur noch wenige KB. SQLite gibt gelöschten Platz nicht von selbst an das Dateisystem zurück: Die Datei
+wächst bis zu diesem Stand und bleibt dann etwa so groß, den frei gewordenen Platz nutzt sie wieder.
 
 ### Szenarien: Vergleich mit „Victron allein“
 
