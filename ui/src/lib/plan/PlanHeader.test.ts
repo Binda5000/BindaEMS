@@ -93,3 +93,12 @@ it('trusts the server for validity, not the clock of the browser', () => {
 	expect(screen.getByText('gültig bis 02:00 Uhr')).toBeTruthy();
 	expect(screen.queryByText('Plan abgelaufen')).toBeNull();
 });
+
+it('says that the core does not run the plan yet, with and without a plan', () => {
+	const preview = 'Vorschau – der core führt den Plan noch nicht aus.';
+	const { unmount } = render(PlanHeader, { data: RESPONSE, canOperate: true });
+	expect(screen.getByText(preview)).toBeTruthy();
+	unmount();
+	render(PlanHeader, { data: { ...RESPONSE, plan: null }, canOperate: false });
+	expect(screen.getByText(preview)).toBeTruthy();
+});

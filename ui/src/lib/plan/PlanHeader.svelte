@@ -48,6 +48,8 @@
 </script>
 
 <Card title={plan ? `Plan von ${formatTime(plan.created_at)} Uhr` : 'Plan'}>
+	<!-- Der core führt den Plan erst mit Plan 3c aus; bis dahin ist die Seite eine Vorschau -->
+	<p class="preview">Vorschau – der core führt den Plan noch nicht aus.</p>
 	{#if plan}
 		<p class="line">
 			<span class="tag" class:fallback={plan.source === 'fallback'}
@@ -124,6 +126,11 @@
 		align-items: center;
 		gap: 0.25rem 0.75rem;
 		margin: 0 0 0.5rem;
+	}
+
+	.preview {
+		color: var(--warn);
+		font-weight: 600;
 	}
 
 	.tag {

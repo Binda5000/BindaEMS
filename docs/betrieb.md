@@ -3165,7 +3165,8 @@ Migration `0009` legt beide Tabellen beim Start der app an).
 
 Die Seite **Zeitplan** steht in der Navigation nach „Laden“ und zeigt den letzten Plan:
 
-- **Kopf:** „Plan von HH:MM Uhr“, die Quelle („Optimierer“ oder „Ersatzplan“, beim Ersatzplan mit
+- **Kopf:** zuerst die Zeile „Vorschau – der core führt den Plan noch nicht aus.“ (auch ohne
+  Plan), dann „Plan von HH:MM Uhr“, die Quelle („Optimierer“ oder „Ersatzplan“, beim Ersatzplan mit
   „Grund: …“), „gültig bis HH:MM Uhr“ oder „Plan abgelaufen“, „Anlass“ (der Auslöser, unten), die
   „Erwarteten Kosten“ des Plans und, daneben, was „Victron allein“ im selben Zeitraum kostet. Mit
   einem Leistungspreis kommt das „Budget“ dazu (unten). Unter „Auffälligkeiten“ stehen die Befunde
@@ -3356,7 +3357,9 @@ erst mit Plan 3c.
 ### Home Assistant
 
 Zum Plan meldet die app diese Entitäten am Gerät „BindaEMS“ (Abschnitt 7). Die Sensoren zeigen den
-Plan nur, solange er gilt; sonst sind sie „unbekannt“.
+Plan nur, solange er gilt; sonst sind sie „unbekannt“. Die vier Sensoren `battery_plan_now`,
+`battery_plan_next`, `planned_soc` und `budget` tragen immer das Attribut `preview: true`: Der core
+führt den Plan noch nicht aus (Plan 3c). Automationen sollen sich bis dahin nicht auf ihn verlassen.
 
 | Objekt-ID | Name | Plattform | Wert |
 |---|---|---|---|

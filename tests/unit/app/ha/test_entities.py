@@ -478,8 +478,8 @@ def test_plan_sensors_unknown_without_valid_plan(cfg) -> None:
     inputs = sample_inputs()
     names = ("battery_plan_now", "battery_plan_next", "planned_soc", "budget")
     assert {entity(cfg, oid).value(inputs) for oid in names} == {"None"}
-    assert entity(cfg, "battery_plan_now").attributes(inputs) == {}
-    assert entity(cfg, "planned_soc").attributes(inputs) == {"hourly": []}
+    assert entity(cfg, "battery_plan_now").attributes(inputs) == {"preview": True}
+    assert entity(cfg, "planned_soc").attributes(inputs) == {"preview": True, "hourly": []}
 
 
 def test_planned_soc_and_hourly_attribute(cfg) -> None:
@@ -552,3 +552,10 @@ def test_replan_button_discovery(cfg) -> None:
     assert (data["name"], data["payload_press"]) == ("Neu planen", "PRESS")
     assert data["command_topic"] == "bindaems/cmd/replan" and "state_topic" not in data
     assert entity(cfg, "replan").device.identifier == "bindaems"
+
+
+def test_plan_sensors_are_marked_as_preview(cfg) -> None:
+    # Der core führt den Plan noch nicht aus (3c): Jeder Plan-Sensor sagt das, mit und ohne Plan.
+    names = ("battery_plan_now", "battery_plan_next", "planned_soc", "budget")
+    for inputs in (_plan_inputs(), sample_inputs()):
+        assert all(entity(cfg, oid).attributes(inputs)["preview"] is True for oid in names)

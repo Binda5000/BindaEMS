@@ -290,6 +290,10 @@ def _month_peak_attributes(inputs: HaInputs) -> Mapping[str, Any]:
     return {"slot": None if peak is None else peak.slot_start.astimezone(UTC).isoformat()}
 
 
+# Der core führt den Plan noch nicht aus (Plan 3c); die Plan-Sensoren sagen das jedem Leser.
+PREVIEW: Final[Mapping[str, Any]] = {"preview": True}
+
+
 def _plan_slot_state(pick: Callable[[HaInputs], PlanSlot | None]) -> Callable[[HaInputs], str]:
     def value(inputs: HaInputs) -> str:
         slot = pick(inputs)
@@ -304,8 +308,9 @@ def _plan_slot_attributes(
     def attributes(inputs: HaInputs) -> Mapping[str, Any]:
         slot = pick(inputs)
         if slot is None or inputs.plan is None:
-            return {}
+            return dict(PREVIEW)
         return {
+            **PREVIEW,
             "reason": slot_text(slot),
             "codes": [reason.code for reason in slot.reasons],
             "planned_soc_pct": round(slot.soc_end_pct, 1),
@@ -332,8 +337,9 @@ def _planned_soc(inputs: HaInputs) -> str:
 def _planned_soc_attributes(inputs: HaInputs) -> Mapping[str, Any]:
     """SOC (zu Beginn des Slots) je volle Stunde des Plans, Zeiten lokal wie bei ``prices``."""
     if inputs.plan is None:
-        return {"hourly": []}
+        return {**PREVIEW, "hourly": []}
     return {
+        **PREVIEW,
         "hourly": [
             {
                 "start": slot.start.astimezone(LOCAL_TZ).isoformat(),
@@ -341,8 +347,12 @@ def _planned_soc_attributes(inputs: HaInputs) -> Mapping[str, Any]:
             }
             for slot in inputs.plan.slots
             if slot.start.astimezone(LOCAL_TZ).minute == 0
-        ]
+        ],
     }
+
+
+def _preview_attributes(inputs: HaInputs) -> Mapping[str, Any]:
+    return dict(PREVIEW)
 
 
 def _budget_kw(inputs: HaInputs) -> str:
@@ -449,6 +459,7 @@ def build_entities(cfg: Config) -> list[EntitySpec]:
             unit="kW",
             device_class="power",
             state_class="measurement",
+            attributes=_preview_attributes,
         ),
         _power("grid_power", "Netzleistung", main, _derived_w("grid_w")),
         _power("pv_power", "PV-Leistung", main, _derived_w("pv_total_w")),

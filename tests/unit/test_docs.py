@@ -522,3 +522,12 @@ def test_planning_settings_in_the_guide_match_the_configuration() -> None:
             assert shown == ("ein" if value else "aus"), key
         else:
             assert float(shown.replace(",", ".")) == value, key
+
+
+def test_plan_preview_marker_in_the_guide_and_the_ui() -> None:
+    # Bis Plan 3c führt der core den Plan nicht aus: Seite und Handbuch sagen das wörtlich gleich.
+    line = "Vorschau – der core führt den Plan noch nicht aus."
+    header = Path("ui/src/lib/plan/PlanHeader.svelte").read_text(encoding="utf-8")
+    section = _guide_section("Planung")
+    assert line in header and f"„{line}“" in section
+    assert "`preview: true`" in section
