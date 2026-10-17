@@ -162,7 +162,7 @@ control:
   support_max_s: 900        # längste Überbrückung am Stück in s
   setpoint_deadband_w: 200  # Abstand in W (über 0), ab dem ein Override entsteht oder sich ändert
   override_refresh_s: 240   # so oft in s frischt der core einen Override auf; höchstens 280, der Cerbo verwirft ihn nach 300 s
-  # peak_target_kw: 8   # Ziel des 15-min-Wächters in kW; ohne Wert ruht er
+  # peak_target_kw: 8   # Ziel des 15-min-Wächters in kW; ohne Wert gilt nur das Budget eines Plans
   peak_margin_kw: 0.3       # Marge der Hochrechnung des Wächters in kW
   tesla_reserve_commands: 4 # Tesla: so viele Befehle je Stunde bleiben frei (unter commands.per_hour); ist das Budget bis darauf verbraucht, ändert die Regelung den Strom nur noch auf Verlangen der Wächter. Die Reserve hält Start, Stopp und Aus nicht zurück; Senkungen der Wächter gehen hinaus (die Limits der Safety-Schicht gelten weiter, nur der Stopp in Aus umgeht sie)
   tesla_against_s: 120       # Tesla: lädt er so lange in s ohne Unterbrechung gegen seinen Modus (Tessie: mindestens 1 A), sendet die Regelung "Laden aus" erneut

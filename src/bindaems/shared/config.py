@@ -417,7 +417,8 @@ class ControlConfig(_Model):
     - ``setpoint_deadband_w``: Abstand in W, ab dem ein Override entsteht oder sich ändert; über 0,
       sonst entstünde auch ohne gewollten Netzbezug ein Override (auf der Basis)
     - ``override_refresh_s``: So oft in s frischt der core einen Override auf (Cerbo-Timeout 300 s)
-    - ``peak_target_kw``: Ziel des 15-min-Wächters in kW; ohne Wert ruht er
+    - ``peak_target_kw``: Ziel des 15-min-Wächters in kW; ohne Wert gilt nur das Budget eines Plans
+      (ohne beides ruht er)
     - ``peak_margin_kw``: Marge der Hochrechnung des Wächters in kW (Spec 7.4)
 
     Stundenbudget des Tesla (Plan 2d, Präzisierung 9):

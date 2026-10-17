@@ -149,6 +149,18 @@ GROUP BY time(1m), *
 - **Tags:**
   - `latest` ist der Stand von `main`.
   - Zusätzlich gibt es je Commit `sha-<kurz>` und je Release `vX.Y.Z`.
+- **Rollback auf einen Stand vor Plan 3c:**
+  - Ein core vor Plan 3c kann eine `intent.json` mit `plan` oder `support` nicht lesen (er kennt die
+    Felder nicht und lehnt unbekannte ab). Er startet dann ohne Absicht und meldet den Alarm
+    `intent.file` („Gespeicherte Absicht unlesbar; der core startet ohne Absicht (Regelbetrieb
+    aus).“): Er regelt nichts, und nichts geht live. Das ist die sichere Richtung, aber Lademodi,
+    Gast-Modus, Priorität, Boost und Übersteuerung fehlen.
+  - Rolle core und app immer gemeinsam zurück (dasselbe Tag). Schalte danach im UI den Regelbetrieb
+    wieder ein und stelle Lademodi, Gast-Modus und Priorität neu ein; die erste angenommene Absicht
+    beendet den Alarm und überschreibt die Datei. Notiere dir die Einstellungen vorher (Seite
+    „Laden“).
+  - Gehst du ohne neue Bedienung wieder auf den Stand mit Plan 3c, liest der core die alte Datei
+    wieder: Der ältere core liest sie nur und schreibt sie erst mit einer angenommenen Absicht neu.
 - **Geordnetes Herunterfahren:**
   - `docker compose stop` sendet SIGTERM. Der core schreibt dann die laufende Viertelstunde
     und die Warteschlange und beendet sich mit Code 0. Die app schreibt ihre Warteschlange für
@@ -1648,7 +1660,7 @@ Diese Alarme zeigt das UI unter **System** → „core“ → „Alarme“:
 | … von außen geändert (… statt …). | Ein anderes System hat Strom oder Netz-Sollwert-Override geändert, den der core bestätigt hatte (Abschnitt 13, „Sperren“). Der Aktor ist gesperrt. Suche das System (App, Automation, Zeitplan) und schalte es ab. |
 | Gespeicherte Schreibzeiten liegen bis zu … min in der Zukunft; persistente Schreibzugriffe bleiben bis dahin begrenzt. | Die Uhr lief zurück (NTP-Sprung, Failover). Das Schreibbudget für persistente Einstellungen zählt die Einträge in der Zukunft weiter mit; die Begrenzung endet, wenn die Uhr aufgeholt hat. Prüfe `timedatectl`. |
 | Regelung ausgesetzt: Ausnahme … im Regelzyklus. | Stufe Fehler. Ein Aufruf der Regelung hat eine Ausnahme geworfen, das ist ein Fehler im core. Die Regelung sendet in dem Zyklus nichts, der Heartbeat bleibt aus; Keeper, Stream, Alarme und Entscheidungslog laufen weiter. Sichere das Log und melde den Fehler (Abschnitt „Akku und Spitzen“, „Alarme“). |
-| 15-min-Ziel überschritten: … kW in der Viertelstunde bis HH:MM. | Stufe Warnung. Die Hochrechnung lag 60 s über `control.peak_target_kw`, und Drosselung und Akku haben es nicht gehalten. Der Alarm endet mit der Viertelstunde (Abschnitt „Akku und Spitzen“, „Alarme“). |
+| 15-min-Ziel überschritten: … kW in der Viertelstunde bis HH:MM. | Stufe Warnung. Die Hochrechnung lag 60 s über dem Ziel (dem Budget des gültigen Plan-Slots, sonst `control.peak_target_kw`), und Drosselung und Akku haben es nicht gehalten. Der Alarm endet mit der Viertelstunde (Abschnitt „Akku und Spitzen“, „Alarme“). |
 
 **„Ausgelöst“ von Hand aufräumen:** Seit 1.1.0 übersteht „ausgelöst“ einen Neustart des Cerbo
 (als „scharf“). Räumt kein zuständiger core den Watchdog auf, etwa nach einer abgebrochenen Probe
@@ -1905,6 +1917,13 @@ wieder im PV-Überschuss.
   nicht wieder gelten sollen; die app tut das beim Ableiten selbst (Abschnitt 13, „Absicht und
   Regelbetrieb“). Nach einem Neustart des core springt ein Boost vom Vortag nicht beim
   nächsten Anstecken an.
+
+  Seit Plan 3c ist auch **jeder neue Plan eine neue Version** (etwa alle 15 min) und bindet neu. Ein
+  Boost, der auf den nächsten Vorgang der Standard-Wallbox wartet, geht so mit dem nächsten Plan an
+  den Vorgang, an dem der core das Fahrzeug inzwischen erkennt oder annimmt; vorher geschah das erst
+  mit der nächsten Bedienung. Einen Plan sendet die app nur, wenn der core mit der gültigen Absicht
+  regelt (Abschnitt „Planung“, „Übergabe an den core“); so bindet ein Plan nach einem Neustart des
+  core keinen wiederhergestellten oder verbrauchten Boost an das nächste Anstecken.
 - Der core speichert die gültige Absicht (`intent.json`) und nutzt sie nach einem Neustart weiter.
   Eine gespeicherte Absicht aus Plan 2b lädt mit den Standardwerten.
 - **Regelbetrieb aus:** `{"version": …, "control": false}`. Der core übergibt die Aktoren und geht
@@ -2705,7 +2724,7 @@ Preis: Er drosselt die Wallboxen und lässt den Akku überbrücken, und was beid
 
   ```yaml
   control:
-    peak_target_kw: 8   # Ziel des 15-min-Wächters in kW; ohne Wert ruht er
+    peak_target_kw: 8   # Ziel des 15-min-Wächters in kW; ohne Wert gilt nur das Budget eines Plans
   ```
 
   Das Ziel ist das Budget `B`. Gilt ein Plan, ersetzt das Budget seines Slots das Ziel aus der
@@ -3114,7 +3133,7 @@ Beide Alarme zeigt das UI unter **System** → „core“ → „Alarme“ (Absc
 | Alarm | Stufe | Bedeutung und Abhilfe |
 |---|---|---|
 | `control.exception`: Regelung ausgesetzt: Ausnahme {Typ} im Regelzyklus. | Fehler | Ein Aufruf der Regelung hat eine Ausnahme geworfen; {Typ} ist ihre Art. Das ist ein Fehler im core, kein Bedienfehler. Das Log (`docker compose logs ems-core`) nennt die erste Ausnahme einer Folge mit Traceback: Sichere es und melde den Fehler. |
-| `peak.exceeded`: 15-min-Ziel überschritten: {x} kW in der Viertelstunde bis {HH:MM}. | Warnung | Die Hochrechnung lag 60 s lang über dem Ziel, und weder die Drosselung der Wallboxen noch der Akku halten es. Meist ist es kein Fehler: Prüfe, was den Netzbezug getrieben hat, und hebe das Ziel an oder schalte den Wächter ab. |
+| `peak.exceeded`: 15-min-Ziel überschritten: {x} kW in der Viertelstunde bis {HH:MM}. | Warnung | Die Hochrechnung lag 60 s lang über dem Ziel, und weder die Drosselung der Wallboxen noch der Akku halten es. Meist ist es kein Fehler: Prüfe, was den Netzbezug getrieben hat. Kam das Ziel aus `control.peak_target_kw`, hebe es an oder nimm es heraus; das Budget eines Plans hebt der nächste Plan von selbst (Auslöser `month_peak`). |
 
 - **`control.exception`:**
   - Die Regelung sendet in einem gescheiterten Zyklus nichts, und der Heartbeat bleibt aus. Keeper
@@ -3434,10 +3453,21 @@ Absicht, und ein neuer Plan wird wie eine Bedienung aus der gültigen Absicht ab
   `valid_until` (höchstens 8), je Slot Absicht, Budget, Bezugspreis und Plan-Schwelle, dazu `id`,
   `created_at`, `valid_until` und der Stand von „Netzladen erlaubt“. Ist der Schalter aus, werden
   `Netzladen`-Slots zu `Eigenverbrauch`.
-- **Wann:** beim Start, nach jedem Planungslauf, nach jeder Verbindung zum core, nach jeder Änderung
-  der Einstellungen und sonst alle 30 s, solange der core diesen Plan nicht hat. Er hat ihn, wenn
-  `intent.plan` in seinem Health dieselbe `id` und denselben Stand von „Netzladen erlaubt“ trägt.
-  Ohne gültigen Plan und ohne Health des core schickt die app nichts.
+- **Wann:** beim Start, nach jedem Planungslauf, nach jeder Verbindung zum core, nach jeder Abfrage
+  von Health (alle 10 s), nach jeder Änderung der Einstellungen und sonst alle 30 s, solange der core
+  diesen Plan nicht hat. Er hat ihn, wenn `intent.plan` in seinem Health dieselbe `id` und denselben
+  Stand von „Netzladen erlaubt“ trägt. Ohne gültigen Plan schickt die app nichts.
+- **Nur, wenn der core mit der Absicht regelt:** Die app sendet erst, wenn Health zeigt, dass der
+  letzte Regelzyklus mit der gültigen Absicht oder einer neueren regelte (`intent_version` nicht
+  kleiner als `intent.version`). Ohne Health, nach einem Neustart des core bis zu seinem ersten
+  regelnden Zyklus, in `OBSERVE` oder `SAFE` und bei Regelbetrieb aus wartet der Plan; das Log
+  nennt es einmal („Plan wartet auf Health des core“, „Plan wartet, bis der core mit der Absicht
+  regelt“). Grund: Jede neue Version bindet Boost und Übersteuerung im core neu (Abschnitt
+  „Laderegelung“, „Absicht per PUT /v1/intent“); auf einem Stand ohne Regelung bände sie nach einem
+  Neustart einen wiederhergestellten oder schon verbrauchten Boost an das nächste Anstecken. Ein
+  core, der so nicht regelt, führt ohnehin keinen Plan aus. Bricht die Verbindung ab, verwirft die
+  app das alte Health; der Plan folgt dem ersten passenden Health nach der Verbindung, binnen einer
+  Abfrage.
 - **Prüfung im core** (Abschnitt „Laderegelung“, „Absicht per PUT /v1/intent“): Er lehnt einen Plan
   mit Lücken, falschem Raster, mehr als 8 Slots, unpassender Gültigkeit oder `Netzladen` trotz
   ausgeschaltetem Schalter ab (422) und klemmt `valid_until` auf 45 min nach der Annahme und die
@@ -3458,9 +3488,10 @@ leitet den Stand aus dem Health des core ab; der erste zutreffende der Liste gil
 |---|---|---|
 | `none` | (keiner) | es gibt keinen gültigen Plan |
 | `unreachable` | Der core ist nicht erreichbar; er führt den Plan nicht aus. | die app ist nicht mit dem core verbunden |
-| `pending` | Der Plan ist noch nicht beim core. | der Plan der Absicht im core hat nicht dieselbe `id` und denselben Stand von „Netzladen erlaubt“ wie der Plan der app (zum Beispiel direkt nach einer Neuplanung oder dem Umschalten); die app sendet ihn innerhalb von 30 s |
-| `off` | Regelbetrieb ist aus: Der core führt den Plan nicht aus. | der Schalter „Regelbetrieb“ steht auf aus |
+| `pending` | Der Plan ist noch nicht beim core. | die app hat noch kein Health des core (etwa direkt nach der Verbindung) |
+| `off` | Regelbetrieb ist aus: Der core führt den Plan nicht aus. | der Schalter „Regelbetrieb“ steht auf aus, oder der core hat keine Absicht |
 | `idle` | Der core regelt gerade nicht ({Betriebszustand}). | der core steht weder in `CONTROL` noch in `DEGRADED`, sondern etwa in `START`, `OBSERVE` oder `SAFE` |
+| `pending` | Der Plan ist noch nicht beim core. | der Plan der Absicht im core hat nicht dieselbe `id` und denselben Stand von „Netzladen erlaubt“ wie der Plan der app (zum Beispiel direkt nach einer Neuplanung oder dem Umschalten; die app sendet ihn gleich, sobald der core mit der Absicht regelt), oder er gilt beim core nicht (Health `plan.state` nicht `valid`, etwa bei einer Abweichung der Uhren) |
 | `locked` | Victron ist gesperrt: Der core führt den Plan nicht aus. | Victron hat Sperrgründe (Abschnitt „Akku und Spitzen“) |
 | `dry_run` | Dry-Run: Der core rechnet den Plan mit und sendet nichts an Victron. | die wirksame Betriebsart von Victron ist nicht „live“ |
 | `live` | Der core führt den Plan aus. | alles trifft zu |
@@ -3551,8 +3582,7 @@ Der Ersatzplan rechnet nur den Akku:
   Halten knapp bleibt, und nur in einem billigen Slot davor, für den die Spread-Regel mit dem Preis
   des teuren Slots und Regel R gelten. Die Leistung ist die höchste volle 100 W unter der Grenze des
   Slots.
-- **Budget:** in Monaten mit Leistungspreis die bisherige Monatsspitze, mindestens die
-  Mindestverrechnung.
+- **Budget:** wie beim Optimierer (unten, „Budget“), ohne die Spitze des Optimierers.
 
 ### Erklärungen
 
@@ -3593,9 +3623,21 @@ steht dort `UNTERSTUETZUNG_RESERVIERT`.
 ### Budget
 
 Mit einem Leistungspreis im Tarif (Abschnitt 8) hat der Plan je Monat ein **Budget**: die Monatsspitze,
-die er akzeptiert, auf 0,1 kW aufgerundet und mindestens der höchste Netzbezug der Nachrechnung im
-Monat. Ohne Leistungspreis ist es leer. Seit Plan 3c geht es mit dem Plan an den core, und der
-15-min-Wächter hält es als Ziel, solange der Slot gilt (Abschnitt „15-min-Wächter“).
+die er akzeptiert. Es ist, auf 0,1 kW aufgerundet, das Größte aus
+
+- der bisherigen Monatsspitze, mindestens der Mindestverrechnung (`minimum_kw`),
+- der Spitze des Optimierers für den Monat (nur beim Optimierer, nicht im Ersatzplan),
+- dem höchsten Netzbezug der Nachrechnung im Monat (so liegt das Budget nie unter dem Bezug, den
+  der Plan selbst vorsieht, auch nicht bei `HALTEN` oder `Netzladen` im Ersatzplan) und
+- `control.peak_target_kw`, wenn gesetzt.
+
+Ist das 0 kW (am Monatsanfang mit `minimum_kw` 0 und ohne Bezug im Plan), gilt der kleinste
+Ladestrom des größten Autos: das Größte aus `min_a · phases · grid.voltage_nominal_v` über die
+Fahrzeuge in `config.yaml` (im Beispiel 3,5 kW für den Tesla). Darunter könnte der Wächter ein
+ladendes Auto nur bis zu seinem Mindeststrom drosseln und alarmieren. Willst du eine andere
+Untergrenze, setze `control.peak_target_kw` oder `minimum_kw` im Tarif. Ohne Leistungspreis ist das
+Budget leer. Seit Plan 3c geht es mit dem Plan an den core, und der 15-min-Wächter hält es als Ziel,
+solange der Slot gilt (Abschnitt „15-min-Wächter“).
 
 ### Plan gegen Ist
 
