@@ -42,9 +42,11 @@ mit Zustimmung des Betreibers per Fast-Forward übernommen, alle Prüfungen grü
 Plan in der Absicht, und der core führt ihn im Regelbetrieb aus, in der Betriebsart, die Victron hat:
 **Solange Victron im Dry-Run ist, rechnet er ihn nur mit und sendet nichts.** Nichts geht von selbst
 live.
-Als Nächstes folgen an der Anlage das gemeinsame Ausrollen von
-2d, 3a, 3b und 3c, die Inbetriebnahme Punkt 3 (Design 2c-2, 11.1: die Erkennung läuft im Dry-Run mit, Health
-zeigt, wer wo steht), **2 Wochen Dry-Run der Planausführung** (DESS dafür aus) und die **30 echten
+An der Anlage ist `fb23bd0` (bis 3c und 4a) seit dem 18.10.2026 ausgerollt, Tarif und Planung
+eingerichtet; der Betreiber hat Wallbox und Tesla am 17.10.2026 live geschaltet und evcc abgeschaltet,
+Victron ist im Dry-Run (DESS an). Die Zuordnung der Autos (Inbetriebnahme Punkt 3, Design 2c-2, 11.1)
+hat der Betreiber am 19.10.2026 im Live-Betrieb geprüft, ohne Befund. Als Nächstes folgen an der
+Anlage die **2 Wochen Dry-Run der Planausführung** (DESS dafür aus) und die **30 echten
 Tage** durch `export_days` und `scenario_days`; danach geht Victron live (siehe „Offen an der
 Anlage“).
 **Plan 4a (Statistik, der erste Teil der Phase 4) ist umgesetzt und je Task geprüft**
@@ -939,8 +941,16 @@ Demo-Zugänge: `admin`, `bedienen` (Bedienen), `gast` (Lesen) und `sicher` (Admi
 
 ## Stand der Installation beim Betreiber
 
-- Docker auf einer VM im LAN des Betreibers, Images `latest` vom Stand nach Plan 2b (ausgerollt am
-  12.10.2026). Die Pläne 2c-1, 2c-2a, 2c-2b, 2d, 3a, 3b, 3c, 4a und 4b sind noch nicht ausgerollt.
+- Docker auf einer VM im LAN des Betreibers, Images vom Stand nach Plan 4a (`fb23bd0`, laut Betreiber
+  ausgerollt am 18.10.2026; davor 2c-1 bis 3b am 17.10.2026 mit `6a6904a` und der Stand nach 2b vom
+  12.10.2026). Plan 4b ist nicht ausgerollt (erst nach der Abnahme der Phase 3); bis dahin kein
+  `docker compose pull`, denn `latest` enthält seit dem 19.10.2026 Plan 4b. Laut Betreiber
+  sind die Schritte zum Ausrollen erledigt (HA-Token, Mosquitto-ACL, `config.yaml`) und Leistungspreis
+  und Planung eingerichtet.
+- Wallbox (`wallbox.evcs`) und Tesla laut Betreiber seit dem 17.10.2026 **live**, evcc abgeschaltet;
+  der Dry-Run neben evcc ist dabei übersprungen worden. Die Zuordnung der Autos hat der Betreiber am
+  19.10.2026 in mehreren Konstellationen im Live-Betrieb geprüft, ohne Befund. Offen ist Teil 2
+  „Verbindung unterbrochen“ für die Wallbox. Victron im Dry-Run (DESS an).
 - Reverse Proxy mit HTTPS sowie Tarif und OeMAG-Wert im UI: laut Betreiber eingerichtet
   (11.10.2026). Zum Proxy gehören laut Betriebshandbuch 6: Port 8080 erreicht nur der Proxy,
   `app.trusted_proxies` ist gesetzt, `cookie_secure` steht wieder auf `true`.
@@ -991,9 +1001,10 @@ Demo-Zugänge: `admin`, `bedienen` (Bedienen), `gast` (Lesen) und `sicher` (Admi
     `friendly_name_str`
   - Wichtig auch für die Lastprognose aus der HA-Historie.
 - **Offen an der Anlage, als Nächstes (nach Plan 4a):**
-  1. Die Images ausrollen: `docker compose pull && docker compose up -d` (Betriebshandbuch 4),
-     nachdem Plan 3c auf `main` ist (die Pläne 2c-1, 2c-2a, 2c-2b, 2d, 3a, 3b und 3c rollen zusammen
-     aus; bis 3b ist alles auf `main`). core und app starten dabei neu. **Zu 2d gehört:**
+  1. Die Images ausrollen: `docker compose pull && docker compose up -d` (Betriebshandbuch 4).
+     **Erledigt:** 2c-1 bis 3b am 17.10.2026 (`6a6904a`), 3c und 4a am 18.10.2026 (`fb23bd0`). Weil
+     Wallbox und Tesla live sind, vor jedem Update des core den Regelbetrieb aus und danach wieder an.
+     **Zu 2d gehört:**
      - Die Migration der app (`0007`, Tabelle `decision`) läuft beim Start der app von selbst. Die
        Entscheidungen der letzten 7 Tage holt die app dann aus den Dateien des core nach.
      - `BINDAEMS_HA_TOKEN` braucht jetzt auch die app (für die Benachrichtigungen). Die `.env` gilt
@@ -1073,7 +1084,8 @@ Demo-Zugänge: `admin`, `bedienen` (Bedienen), `gast` (Lesen) und `sicher` (Admi
      (Betriebshandbuch, „Zuordnung Auto und Wallbox“). Der Watchdog bleibt unverändert (1.1.0), und
      keines der neuen Felder verlangt eine neue `config.ini`. Der 15-min-Wächter ruht ohne
      `control.peak_target_kw`, solange kein Plan ein Budget bringt.
-  2. Den Dry-Run neben evcc beginnen: den Regelbetrieb im UI einschalten (Karte „Bedienung“ unter
+  2. **Übersprungen:** Wallbox und Tesla sind seit dem 17.10.2026 live, die Zuordnung ist am
+     19.10.2026 im Live-Betrieb geprüft. Ursprünglich: Den Dry-Run neben evcc beginnen: den Regelbetrieb im UI einschalten (Karte „Bedienung“ unter
      **System** oder Seite „Laden“, als „Bedienen“ oder Admin); alle Aktoren bleiben im Dry-Run
      (Betriebshandbuch, „Laderegelung“; ohne app eine Absicht mit `"control": true` per
      `PUT /v1/intent`). Der core sendet dabei nichts auf die Geräte, und die Teil-2-Werkzeuge
@@ -1215,7 +1227,8 @@ Demo-Zugänge: `admin`, `bedienen` (Bedienen), `gast` (Lesen) und `sicher` (Admi
         - Der Test `test_app_runtime::test_runtime_starts_and_stops_cleanly` ist in der Entwicklung
           einmal gescheitert (`last_attempt` war `None`), einzeln und in allen späteren Läufen
           grün. Scheitert er in der CI, ist das ein bekannter Wackler und kein neuer Fehler.
-  6. **Statistik (Plan 4a) ausrollen und die Abnahme beginnen** (Betriebshandbuch, Abschnitt 8,
+  6. **Statistik (Plan 4a) ausrollen und die Abnahme beginnen** (ausgerollt laut Betreiber am
+     18.10.2026, Abnahme 18.10. bis 16.11.2026; Betriebshandbuch, Abschnitt 8,
      „Statistik ausrollen (Plan 4a)“). Plan 4a braucht nur `ems-app`: Der core bleibt, der Regelbetrieb
      bleibt an, und die Aktoren behalten ihre Betriebsart. Er hängt nicht an den Punkten 1 bis 5 und kann
      vor ihnen, mit ihnen (ein `docker compose pull && docker compose up -d` bringt alles zugleich) oder
