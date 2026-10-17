@@ -147,8 +147,9 @@ def _health_vehicles(health: Mapping[str, Any] | None) -> dict[str, Mapping[str,
     return {item["id"]: item for item in raw if isinstance(item, dict) and "id" in item}
 
 
-def _trusted(current: Intent, health: Mapping[str, Any] | None) -> bool:
-    """Ob Health den Stand der Regelung mit der gültigen Absicht oder einer neueren zeigt.
+def _trusted(current: int, health: Mapping[str, Any] | None) -> bool:
+    """Ob Health den Stand der Regelung mit der gültigen Absicht (Version ``current``) oder einer
+    neueren zeigt.
 
     Health kommt aus dem letzten Regelzyklus und trägt die Version der Absicht, mit der dieser
     regelte (``intent_version``). Ist sie älter als die gültige Absicht, kennt Health Boost und
@@ -156,7 +157,21 @@ def _trusted(current: Intent, health: Mapping[str, Any] | None) -> bool:
     ist der Stand unbekannt.
     """
     version = health.get("intent_version") if health is not None else None
-    return isinstance(version, int) and version >= current.version
+    return isinstance(version, int) and version >= current
+
+
+def health_trusted(health: Mapping[str, Any] | None) -> bool:
+    """``_trusted`` gegen die gültige Absicht, die Health selbst nennt (``intent.version``).
+
+    Falsch ohne Health, ohne Absicht des core und solange er nicht mit ihr regelt (Neustart,
+    OBSERVE, SAFE, Regelbetrieb aus). Der ``PlanSender`` sendet nur dann (Plan 3c, Gesamtreview
+    I1): Jede neue Version bindet Boost und Übersteuerung im core neu und gilt als nach seinem
+    Start angenommen; auf einer Basis ohne Stand behielte sie einen wiederhergestellten oder
+    verbrauchten Boost, der dann beim nächsten Anstecken anspränge.
+    """
+    intent = health.get("intent") if health is not None else None
+    version = intent.get("version") if isinstance(intent, dict) else None
+    return isinstance(version, int) and _trusted(version, health)
 
 
 def _clean(
@@ -193,7 +208,7 @@ def _base(current: Intent | None, health: Mapping[str, Any] | None, now: datetim
     """Die gültige Absicht ohne abgelaufenen Boost und beendete Übersteuerung."""
     if current is None:
         return Intent(version=1)
-    shown = _health_vehicles(health) if _trusted(current, health) else {}
+    shown = _health_vehicles(health) if _trusted(current.version, health) else {}
     vehicles = {
         key: _clean(key, item, shown.get(key), now) for key, item in current.vehicles.items()
     }

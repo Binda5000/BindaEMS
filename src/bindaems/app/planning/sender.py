@@ -9,11 +9,15 @@ Abgeglichen wird beim Start, nach jedem Planungslauf, nach jeder Verbindung zum 
 Änderung der Einstellungen und sonst alle ``interval_s`` s. Ein Fehler wird geloggt, der nächste
 Anstoß versucht es neu. Der Plan kommt nicht ins Änderungsprotokoll (Entscheidung 1).
 
-Ohne Health sendet der Sender nicht: Ob der core den Plan hat, ist dann unbekannt, und die neue
+Der Sender sendet nur auf einem Health, dem die app traut (``health_trusted``): Der core regelt
+mit der Absicht, die er als gültige nennt. Sonst ist unbekannt, ob er den Plan hat, und die neue
 Version entstünde auf einem Stand, dem ``IntentService`` nicht traut (Boost und Übersteuerung
-blieben). Nach einem Neustart des core gälte sie zudem als nach dem Start angenommen und bände
-einen wiederhergestellten Boost an den nächsten Ansteckvorgang (Review Focus 1). Nach einer
-Verbindung fragt die Laufzeit Health sofort ab; der Plan folgt spätestens nach ``interval_s`` s.
+blieben). Jede neue Version bindet im core Boost und Übersteuerung neu und gilt als nach seinem
+Start angenommen: Nach einem Neustart bände sie einen wiederhergestellten oder schon verbrauchten
+Boost an den nächsten Ansteckvorgang (Review Focus 1, Gesamtreview I1). Nicht zu senden schadet
+nicht: Ein core, der so nicht regelt, führt auch keinen Plan aus. Nach einer Trennung verwirft
+``LiveFeed`` das alte Health; jede neue Abfrage stößt den Sender an, so folgt der Plan dem ersten
+Health, dem die app traut, binnen einer Abfrage.
 """
 
 from __future__ import annotations
@@ -26,7 +30,14 @@ from typing import Final, Literal
 import structlog
 
 from bindaems.app.audit import Source
-from bindaems.app.control.intent import ConflictAgain, CoreDown, IntentService, Rejected, SetPlan
+from bindaems.app.control.intent import (
+    ConflictAgain,
+    CoreDown,
+    IntentService,
+    Rejected,
+    SetPlan,
+    health_trusted,
+)
 from bindaems.app.core_link import LiveState
 from bindaems.app.planning.execution import core_has_plan
 from bindaems.app.planning.service import PlanningService
@@ -67,7 +78,7 @@ class PlanSender:
         self._wake = asyncio.Event()
         self._loop: asyncio.AbstractEventLoop | None = None
         self._loop_thread: int | None = None
-        self._waiting_for_health = False  # einmal geloggt, bis Health wieder da ist
+        self._waiting: str | None = None  # der Grund, der zuletzt geloggt wurde, bis zum Senden
         planning.on_plan(lambda _plan: self.wake())
         settings.on_change(lambda _version: self.wake())
 
@@ -97,20 +108,21 @@ class PlanSender:
 
     async def sync(self) -> SyncResult:
         """Ein Abgleich: ``none`` ohne gültigen Plan, ``current``, wenn der core ihn hat,
-        ``sent`` nach dem Senden und ``failed`` ohne Verbindung, ohne Health oder bei einem
-        Fehler."""
+        ``sent`` nach dem Senden und ``failed`` ohne Verbindung, ohne Health, auf einem Health,
+        dem die app nicht traut, oder bei einem Fehler. Das Warten auf Health loggt der Sender
+        einmal je Grund."""
         wanted = self.wanted()
         if wanted is None:
             return "none"
         if not self._live.connected:
             return "failed"
-        if self._live.health is None:
-            if not self._waiting_for_health:
-                log.info("Plan wartet auf Health des core", plan=wanted.id)
-                self._waiting_for_health = True
-            return "failed"
-        self._waiting_for_health = False
-        if core_has_plan(self._live.health, wanted.id, wanted.grid_charge_allowed):
+        health = self._live.health
+        if health is None:
+            return self._wait("Plan wartet auf Health des core", wanted.id)
+        if not health_trusted(health):
+            return self._wait("Plan wartet, bis der core mit der Absicht regelt", wanted.id)
+        self._waiting = None
+        if core_has_plan(health, wanted.id, wanted.grid_charge_allowed):
             return "current"
         fields = {"plan": wanted.id, "grid_charge_allowed": wanted.grid_charge_allowed}
         try:
@@ -128,6 +140,12 @@ class PlanSender:
             "Plan an den core übergeben", result=result.result, version=result.version, **fields
         )
         return "sent"
+
+    def _wait(self, reason: str, plan_id: int) -> SyncResult:
+        if self._waiting != reason:
+            log.info(reason, plan=plan_id)
+            self._waiting = reason
+        return "failed"
 
     async def run(self) -> None:
         """Gleicht beim Start ab, dann auf jeden Anstoß, spätestens alle ``interval_s`` s."""

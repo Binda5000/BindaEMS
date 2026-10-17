@@ -45,6 +45,7 @@ class FakeView:
         self.ack_reply = AckReply("accepted", "Quittiert.")
         self.acked: list[str] = []
         self.hold_stream = False  # wahr: der Stream schickt weiter Zustände, bis die app geht
+        self.regulating = False  # wahr: der core regelt mit der gültigen Absicht (CONTROL)
 
     def intent(self) -> Intent | None:
         return self.current
@@ -64,8 +65,17 @@ class FakeView:
         return self.ack_reply
 
     def health(self) -> HealthReport:
+        current = self.current
+        regulating = self.regulating and current is not None
         return HealthReport(
-            mode="OBSERVE", version="0.1.0", adapters=[], selfcheck=[], alarms=[], cycle_ms_p95=None
+            mode="CONTROL" if regulating else "OBSERVE",
+            version="0.1.0",
+            adapters=[],
+            selfcheck=[],
+            alarms=[],
+            cycle_ms_p95=None,
+            intent=None if current is None else current.model_dump(mode="json"),
+            intent_version=current.version if regulating and current is not None else None,
         )
 
     def state(self) -> dict[str, Any]:
@@ -219,8 +229,11 @@ async def test_client_submits_and_reads_an_intent_with_plan(core_api) -> None:
 
 
 async def test_plan_reaches_the_core_after_connecting(core_api, cfg: Config, tmp_path) -> None:
-    # Erst mit Verbindung und Health des echten core geht der Plan hinaus, ohne Änderungsprotokoll.
+    # Erst mit Verbindung und einem Health des echten core, dem die app traut, geht der Plan
+    # hinaus, ohne Änderungsprotokoll: Solange der core nicht regelt, wartet er (Gesamtreview I1);
+    # die erste Abfrage danach stößt den Sender an, ohne seinen Takt abzuwarten.
     core_api.view.hold_stream = True
+    core_api.view.current = Intent(version=3, control=True)
     clock = ManualClock(datetime.fromisoformat("2026-10-16T10:05:00+00:00"))
     engine = open_database(tmp_path / "app.sqlite3")
     migrate(engine)
@@ -229,17 +242,22 @@ async def test_plan_reaches_the_core_after_connecting(core_api, cfg: Config, tmp
     async with httpx.AsyncClient(trust_env=False) as http:
         client = make_client(http, core_api)
         live = LiveState()
-        feed = LiveFeed(client, live, clock)
+        feed = LiveFeed(client, live, clock, health_interval_s=0.05)
         intents = IntentService(client, live, feed, audit, clock, cfg)
         plan = stored_plan()
-        # kurzer Takt: Health kommt erst mit der ersten Abfrage des Feeds
-        sender = PlanSender(intents, FakePlanning(plan), settings, live, clock, interval_s=0.05)  # type: ignore[arg-type]
+        # langer Takt: senden kann der Sender nur auf Verbindung und Health hin
+        sender = PlanSender(intents, FakePlanning(plan), settings, live, clock, interval_s=3600.0)  # type: ignore[arg-type]
         feed.connect_handlers.append(sender.connected)
+        feed.health_handlers.append(sender.wake)
         sending = asyncio.create_task(sender.run())
         await asyncio.sleep(0.05)  # erster Abgleich vor der Verbindung: nichts gesendet
         assert core_api.view.submitted == []
         linking = asyncio.create_task(feed.run())
         try:
+            await until(lambda: live.connected and live.health is not None)
+            await asyncio.sleep(0.2)  # mehrere Abfragen in OBSERVE: nichts gesendet
+            assert core_api.view.submitted == []
+            core_api.view.regulating = True
             await until(lambda: bool(core_api.view.submitted))
         finally:
             for task in (sending, linking):

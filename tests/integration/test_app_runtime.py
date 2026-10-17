@@ -231,6 +231,8 @@ async def test_runtime_wires_the_plan_sender(runtime, monkeypatch) -> None:
         runtime.collector.catch_up,
         runtime._core_connected,
     ]
+    # nach jeder Abfrage von Health gleicht der Sender ab (Gesamtreview I1)
+    assert runtime.live_feed.health_handlers == [runtime.plan_sender.wake]
     calls: list[str] = []
     monkeypatch.setattr(runtime.live_feed, "refresh_health", lambda: calls.append("health"))
     monkeypatch.setattr(runtime.plan_sender, "wake", lambda: calls.append("wake"))

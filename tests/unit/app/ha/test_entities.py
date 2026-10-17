@@ -218,7 +218,7 @@ def test_build_inputs_derives_the_execution(live, price_service, store, forecast
         ).execution
 
     assert execution(grid_charge_allowed=None) is None  # Schalter unbekannt
-    assert execution(grid_charge_allowed=False) == "pending"
+    assert execution(grid_charge_allowed=False) == "off"  # der core hat keine Absicht
     live.health = {
         **live.health,
         "mode": "CONTROL",

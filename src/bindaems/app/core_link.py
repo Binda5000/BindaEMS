@@ -41,6 +41,7 @@ SlotFlowsHandler = Callable[[dict[str, Any]], Awaitable[None]]
 DecisionHandler = Callable[[Decision], Awaitable[None]]
 ModeHandler = Callable[[dict[str, Any]], Awaitable[None]]
 ConnectHandler = Callable[[], Awaitable[None]]
+HealthHandler = Callable[[], None]  # nach jeder Abfrage von Health, die eine Antwort brachte
 
 
 class CoreUnavailableError(Exception):
@@ -239,6 +240,7 @@ class LiveFeed:
         decision_handlers: Sequence[DecisionHandler] = (),
         mode_handlers: Sequence[ModeHandler] = (),
         connect_handlers: Sequence[ConnectHandler] = (),
+        health_handlers: Sequence[HealthHandler] = (),
         health_interval_s: float = 10.0,
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
         backoff: Backoff | None = None,
@@ -251,12 +253,14 @@ class LiveFeed:
         self._mode_handlers = list(mode_handlers)
         # öffentlich: Dienste, die nach dem Feed entstehen, hängen sich an (Plan 3c, Task 10)
         self.connect_handlers = list(connect_handlers)
+        self.health_handlers = list(health_handlers)
         self._health_now = asyncio.Event()
         self._health_interval_s = health_interval_s
         self._sleep = sleep
         self._backoff = backoff or Backoff()
         self._status = StatusLog("core")
         self._since: datetime | None = None
+        self._disconnects = 0  # Health aus einer Abfrage vor der letzten Trennung gilt nicht
 
     async def run(self) -> None:
         async with asyncio.TaskGroup() as tasks:
@@ -301,11 +305,25 @@ class LiveFeed:
         while True:
             # vor der Abfrage zurücksetzen: ein Wunsch während der Abfrage löst die nächste aus
             self._health_now.clear()
+            disconnects = self._disconnects
             try:
-                self._live.health = await self._client.health()
+                health: dict[str, Any] | None = await self._client.health()
             except Exception:  # nicht erreichbar: ohne Health weiter
-                self._live.health = None
+                health = None
+            if disconnects != self._disconnects:  # die Antwort kam vom core vor der Trennung
+                health = None
+            self._live.health = health
+            if health is not None:
+                self._run_health_handlers()
             await self._wait_for_next_health()
+
+    def _run_health_handlers(self) -> None:
+        """Ruft jeden Handler nach einer Abfrage mit Antwort; ein Fehler kommt ins Log."""
+        for handler in self.health_handlers:
+            try:
+                handler()
+            except Exception:
+                log.exception("Verarbeitung fehlgeschlagen", message="health")
 
     async def _wait_for_next_health(self) -> None:
         """Wartet den Takt ab oder bis ``refresh_health`` gerufen wird, was zuerst eintritt."""
@@ -360,8 +378,12 @@ class LiveFeed:
         self._live.publish({"type": "core", "data": {"connected": True}})
 
     def _disconnected(self) -> None:
+        """Nach einer Trennung gilt das alte Health nicht mehr: Nach einem schnellen Neustart des
+        core sagte es noch, er regle mit der Absicht (Gesamtreview I1)."""
         if not self._live.connected:
             return
         self._live.connected = False
+        self._live.health = None
+        self._disconnects += 1
         self._since = self._clock.now()
         self._live.publish({"type": "core", "data": {"connected": False}})

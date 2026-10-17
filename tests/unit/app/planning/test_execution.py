@@ -128,6 +128,25 @@ def test_execution_state_first_matching_wins() -> None:
     )
 
 
+@pytest.mark.parametrize(
+    ("held", "expected"),
+    [
+        pytest.param(health(plan_id=None, control=False), "off", id="aus ohne Plan"),
+        pytest.param(health(plan_id=PLAN_ID + 1, control=False), "off", id="aus, anderer Plan"),
+        pytest.param(health(plan_id=None, mode="OBSERVE"), "idle", id="observe ohne Plan"),
+        pytest.param(health(grid_charge=True, mode="SAFE"), "idle", id="safe, anderer Schalter"),
+        pytest.param({"mode": "CONTROL", "intent": None}, "off", id="core ohne Absicht"),
+    ],
+)
+def test_off_and_idle_come_before_pending(held: dict[str, Any], expected: str) -> None:
+    # Gesamtreview I1: Der Sender sendet nur, wenn der core mit der Absicht regelt; ein core mit
+    # Regelbetrieb aus sagt das, statt „noch nicht beim core“
+    state = execution_state(
+        stored_plan(), valid=True, connected=True, health=held, grid_charge_allowed=False
+    )
+    assert state == expected
+
+
 def test_execution_state_compares_the_grid_charge_switch_of_the_app() -> None:
     held = health(grid_charge=True)
     arguments = {"valid": True, "connected": True, "health": held}

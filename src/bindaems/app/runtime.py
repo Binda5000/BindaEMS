@@ -213,6 +213,7 @@ class AppRuntime:
             self.intents, self.planning, self.settings, self.live, self._clock
         )
         self.live_feed.connect_handlers.append(self._core_connected)
+        self.live_feed.health_handlers.append(self.plan_sender.wake)
         self.ha_values = HaValueCache(self.reader, ha_database) if ha_database is not None else None
         self.energy = EnergyCache(self.reader, self._clock, ha_database)
         self.ha_publisher: HaPublisher | None = None
@@ -340,8 +341,8 @@ class AppRuntime:
     async def _core_connected(self) -> None:
         """Nach jeder Verbindung: Health sofort abfragen, dann den Plan abgleichen.
 
-        Ohne Health sendet der Sender nicht; er gleicht gleich ab, wenn Health noch gilt, sonst
-        nach seinem Takt.
+        Ohne Health, dem die app traut, sendet der Sender nicht; Health der alten Verbindung hat
+        ``LiveFeed`` bei der Trennung verworfen. Jede Abfrage von Health stößt ihn wieder an.
         """
         self.live_feed.refresh_health()
         await self.plan_sender.connected()

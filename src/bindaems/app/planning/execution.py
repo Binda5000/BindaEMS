@@ -5,7 +5,8 @@ Antwort liefert allein die app aus dem, was sie vom core weiß (``LiveState.heal
 nichts und stellt nichts um.
 
 ``core_has_plan`` ist der eine Vergleich, ob der core den Plan hat: ``PlanSender`` fragt damit, ob
-er senden muss, und der Stand ``pending`` heißt genau, dass er es muss.
+er senden muss. Der Sender sendet nur, wenn der core mit der Absicht regelt (Gesamtreview I1);
+darum stehen ``off`` und ``idle`` vor ``pending``.
 """
 
 from __future__ import annotations
@@ -70,21 +71,24 @@ def execution_state(
     grid_charge_allowed: bool,
 ) -> ExecutionState:
     """Der erste zutreffende Stand: ``none`` (kein gültiger Plan), ``unreachable`` (nicht
-    verbunden), ``pending`` (der core hat diesen Plan nicht), ``off`` (``intent.control`` falsch),
-    ``idle`` (``mode`` weder ``CONTROL`` noch ``DEGRADED``), ``locked`` (``victron`` mit
-    Sperrgründen), ``dry_run`` (wirksame Betriebsart von ``victron`` nicht ``live``), sonst
-    ``live``. ``plan`` ist der gespeicherte Plan, ``valid`` ob er jetzt gilt."""
+    verbunden), ``pending`` (ohne Health), ``off`` (keine Absicht oder ``intent.control``
+    falsch), ``idle`` (``mode`` weder ``CONTROL`` noch ``DEGRADED``), ``pending`` (der core hat
+    diesen Plan nicht), ``locked`` (``victron`` mit Sperrgründen), ``dry_run`` (wirksame
+    Betriebsart von ``victron`` nicht ``live``), sonst ``live``. ``plan`` ist der gespeicherte
+    Plan, ``valid`` ob er jetzt gilt."""
     if plan is None or not valid:
         return "none"
     if not connected:
         return "unreachable"
-    if plan.id is None or not core_has_plan(health, plan.id, grid_charge_allowed):
+    if health is None:
         return "pending"
     intent = _intent(health)
     if intent is None or intent.get("control") is not True:
         return "off"
-    if health is None or health.get("mode") not in REGULATING_MODES:
+    if health.get("mode") not in REGULATING_MODES:
         return "idle"
+    if plan.id is None or not core_has_plan(health, plan.id, grid_charge_allowed):
+        return "pending"
     victron = _victron(health)
     if victron is not None and victron.get("locked"):
         return "locked"

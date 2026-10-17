@@ -11,14 +11,16 @@ import pytest
 from structlog.testing import capture_logs
 from tests.plan_helpers import EV, sample_plan, set_planning, until
 from tests.unit.app.control.conftest import FakeCoreClient, FakeFeed
+from tests.unit.core.control.charge_helpers import NONE, evcs, tesla, twc
 
 from bindaems.app.audit import AuditLog
 from bindaems.app.control.intent import IntentService
 from bindaems.app.core_link import CoreReply, CoreUnavailableError, LiveState
 from bindaems.app.planning.sender import ACTOR, SOURCE, PlanSender
 from bindaems.app.settings.service import SettingsService
+from bindaems.core.control.assignment import Assignment, AssignmentState
 from bindaems.shared.config import Config
-from bindaems.shared.control import Intent
+from bindaems.shared.control import Intent, VehicleIntent
 from bindaems.shared.influx.lineprotocol import epoch_ms
 from bindaems.shared.plan import BatteryIntent, BatteryIntentKind, Plan, intent_plan
 from bindaems.shared.timeutil import ManualClock
@@ -63,24 +65,31 @@ def grid_charge(settings: SettingsService, on: bool) -> None:
     set_planning(settings, planning.model_copy(update={"grid_charge_allowed": on}))
 
 
-# Health des core ohne Absicht: bekannt, der core hat keinen Plan
-HEALTH_WITHOUT_INTENT: dict[str, object] = {
-    "mode": "CONTROL",
-    "intent": None,
-    "intent_version": None,
-}
+# Die gültige Absicht des core ohne Plan; er regelt mit ihr
+CORE_INTENT = Intent(version=1, control=True)
+
+
+def trusted_health() -> dict[str, object]:
+    """Health des core, der mit ``CORE_INTENT`` regelt: bekannt, der core hat keinen Plan."""
+    return {
+        "mode": "CONTROL",
+        "intent": CORE_INTENT.model_dump(mode="json"),
+        "intent_version": CORE_INTENT.version,
+    }
 
 
 @pytest.fixture
 def live(live: LiveState) -> LiveState:
-    """Verbunden (Fixture der Planung) und mit Health."""
-    live.health = dict(HEALTH_WITHOUT_INTENT)
+    """Verbunden (Fixture der Planung) und mit Health, dem die app traut."""
+    live.health = trusted_health()
     return live
 
 
 @pytest.fixture
 def fake_client() -> FakeCoreClient:
-    return FakeCoreClient()
+    client = FakeCoreClient()
+    client.valid = CORE_INTENT
+    return client
 
 
 @pytest.fixture
@@ -162,8 +171,42 @@ async def test_without_health_nothing_is_sent(
         assert await sender.sync() == "failed"
     assert fake_client.sent == []
     assert [entry["event"] for entry in logs] == ["Plan wartet auf Health des core"]  # einmal
-    live.health = dict(HEALTH_WITHOUT_INTENT)
+    live.health = trusted_health()
     assert await sender.sync() == "sent"
+
+
+@pytest.mark.parametrize(
+    "regulated",
+    [
+        pytest.param(None, id="core regelt nicht"),
+        pytest.param(CORE_INTENT.version - 1, id="mit einer älteren Absicht"),
+        pytest.param("1", id="Version keine Zahl"),
+    ],
+)
+async def test_untrusted_health_sends_nothing(
+    sender: PlanSender, live: LiveState, fake_client: FakeCoreClient, regulated: object
+) -> None:
+    # Gesamtreview I1: Auf einer Basis ohne Stand der Regelung bliebe jeder Boost, und die neue
+    # Version bände ihn im core neu
+    live.health = {**trusted_health(), "intent_version": regulated}
+    with capture_logs() as logs:
+        assert await sender.sync() == "failed"
+        assert await sender.sync() == "failed"
+    assert fake_client.sent == []
+    assert [entry["event"] for entry in logs] == [
+        "Plan wartet, bis der core mit der Absicht regelt"
+    ]
+    live.health = trusted_health()
+    assert await sender.sync() == "sent"
+
+
+async def test_health_without_a_core_intent_sends_nothing(
+    sender: PlanSender, live: LiveState, fake_client: FakeCoreClient
+) -> None:
+    # Ohne Absicht regelt der core nicht; der Plan wirkte dort ohnehin nicht
+    live.health = {"mode": "CONTROL", "intent": None, "intent_version": None}
+    assert await sender.sync() == "failed"
+    assert fake_client.sent == []
 
 
 async def test_core_down_is_retried_on_the_next_sync(
@@ -283,7 +326,7 @@ async def test_after_reconnect_the_plan_waits_for_health(
         await sender.connected()
         await asyncio.sleep(0.1)  # mehrere Abgleiche im Takt
         assert fake_client.sent == []
-        live.health = dict(HEALTH_WITHOUT_INTENT)
+        live.health = trusted_health()
         await until(lambda: len(fake_client.sent) == 1)
 
 
@@ -323,3 +366,104 @@ async def test_the_interval_retries_without_a_wake(
         await asyncio.sleep(0.05)
         fake_client.error = None
         await until(lambda: len(fake_client.sent) >= 1)
+
+
+async def test_a_health_refresh_wakes_the_sender(
+    intents: IntentService,
+    planning: FakePlanning,
+    settings_service: SettingsService,
+    live: LiveState,
+    clock: ManualClock,
+    fake_client: FakeCoreClient,
+) -> None:
+    # Gesamtreview I1: Das erste Health, dem die app traut, liefert den Plan ohne den Takt
+    sender = PlanSender(intents, planning, settings_service, live, clock, interval_s=3600.0)  # type: ignore[arg-type]
+    live.health = {**trusted_health(), "mode": "OBSERVE", "intent_version": None}
+    async with running(sender):
+        await asyncio.sleep(0.05)  # erster Abgleich: der core regelt nicht
+        assert fake_client.sent == []
+        live.health = trusted_health()
+        sender.wake()  # wie ``LiveFeed`` nach jeder Abfrage von Health
+        await until(lambda: len(fake_client.sent) == 1)
+        live_reports(live, fake_client.sent[-1])
+        sender.wake()  # der core hat den Plan: nichts mehr zu senden
+        await asyncio.sleep(0.05)
+    assert len(fake_client.sent) == 1
+
+
+class RestartedCore:
+    """Die Zuordnung eines core, der um ``started`` neu startete, mit seiner Absicht.
+
+    Gerechnet wird auf der Uhr ``clock`` der app; der e-Golf steht an der EVCS (Standard).
+    """
+
+    def __init__(self, cfg: Config, clock: ManualClock, client: FakeCoreClient) -> None:
+        self.clock, self.client = clock, client
+        self.assignment = Assignment(cfg, started=clock.now())
+        self.accepted_at = clock.now() - timedelta(hours=1)  # vor dem Neustart angenommen
+        self.version = client.valid.version if client.valid is not None else None
+
+    def cycle(self, *, plugged: bool) -> AssignmentState:
+        """Ein Zyklus eine Sekunde später, mit der jetzt gültigen Absicht des core."""
+        self.clock.advance(timedelta(seconds=1))
+        now, intent = self.clock.now(), self.client.valid
+        if intent is not None and intent.version != self.version:  # neu angenommen
+            self.version, self.accepted_at = intent.version, now
+        wallboxes = {"evcs": evcs(connected=plugged), "twc": twc()}
+        return self.assignment.update(
+            now, now, intent, self.accepted_at, wallboxes, {"tesla": tesla(), "egolf": NONE}
+        )
+
+    def health(self, state: AssignmentState | None) -> dict[str, object]:
+        """Health: ohne ``state`` ruht die Regelung (OBSERVE), sonst regelt sie mit der Absicht."""
+        intent = self.client.valid
+        assert intent is not None
+        if state is None:
+            return {
+                "mode": "OBSERVE",
+                "intent": intent.model_dump(mode="json"),
+                "intent_version": None,
+            }
+        egolf = state.vehicles["egolf"]
+        vehicle = {
+            "id": "egolf",
+            "mode": intent.vehicles["egolf"].mode.value,
+            "boost_until": None if egolf.boost_until is None else egolf.boost_until.isoformat(),
+            "boost_pending": egolf.boost_pending,
+            "wallbox": egolf.wallbox,
+            "assignment": egolf.kind.value,
+            "override_pending": egolf.override_pending,
+        }
+        return {
+            "mode": "CONTROL",
+            "intent": intent.model_dump(mode="json"),
+            "intent_version": intent.version,
+            "vehicles": [vehicle],
+        }
+
+
+async def test_a_restored_boost_is_not_revived_by_plan_sends_after_a_restart(
+    sender: PlanSender,
+    live: LiveState,
+    fake_client: FakeCoreClient,
+    clock: ManualClock,
+    cfg: Config,
+) -> None:
+    # Gesamtreview I1, durchgehend: Sender → Absicht → Zuordnung des core. Der e-Golf hatte vor
+    # dem Neustart einen Boost, der auf sein Anstecken wartete. Wiederhergestellt bindet er nur an
+    # einen laufenden Vorgang; ein Plan danach darf ihn nicht für das nächste Anstecken scharf
+    # machen.
+    boost = VehicleIntent(boost_until=clock.now() + timedelta(hours=2))
+    fake_client.valid = Intent(version=5, control=True, vehicles={"egolf": boost})
+    core = RestartedCore(cfg, clock, fake_client)
+    core.cycle(plugged=False)
+    live.health = core.health(None)  # START/OBSERVE nach dem Neustart
+    results = [await sender.sync()]
+    state = core.cycle(plugged=False)  # der core regelt mit der Absicht, die er jetzt hat
+    live.health = core.health(state)
+    results.append(await sender.sync())
+    core.cycle(plugged=False)
+    assert core.cycle(plugged=True).vehicles["egolf"].boost_until is None  # e-Golf steckt an
+    assert results == ["failed", "sent"]
+    assert fake_client.valid is not None
+    assert fake_client.valid.vehicles["egolf"].boost_until is None  # nicht zurückgeschickt

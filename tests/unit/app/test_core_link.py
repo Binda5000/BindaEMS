@@ -8,6 +8,7 @@ import pytest
 from pydantic import SecretStr
 from structlog.testing import capture_logs
 from tests.app_helpers import T_APP
+from tests.plan_helpers import until
 from tests.unit.shared.test_decisions import decision
 
 from bindaems.app import core_link
@@ -66,9 +67,14 @@ class FakeCoreClient:
         self._sessions = list(sessions)
         self._health = list(health)
         self.health_calls = 0
+        # gesetzt: der Stream endet erst, die Antwort auf Health kommt erst mit dem Ereignis
+        self.end_stream: asyncio.Event | None = None
+        self.answer_health: asyncio.Event | None = None
 
     async def health(self) -> dict[str, Any]:
         self.health_calls += 1
+        if self.answer_health is not None:
+            await self.answer_health.wait()
         if not self._health:
             return {"mode": "OBSERVE"}
         item = self._health.pop(0)
@@ -88,6 +94,8 @@ class FakeCoreClient:
         async def replay() -> AsyncIterator[dict[str, Any]]:
             for message in messages:
                 yield message
+            if self.end_stream is not None:
+                await self.end_stream.wait()
 
         yield replay()
 
@@ -99,6 +107,7 @@ def feed_env(
     decision_handlers: Sequence[DecisionHandler] = (),
     mode_handlers: Sequence[ModeHandler] = (),
     connect_handlers: Sequence[ConnectHandler] = (),
+    health_handlers: Sequence[Callable[[], None]] = (),
     health: list[Any] | None = None,
     health_interval_s: float = HEALTH_S,
 ) -> tuple[LiveFeed, LiveState, list[float], FakeCoreClient]:
@@ -121,6 +130,7 @@ def feed_env(
         decision_handlers=decision_handlers,
         mode_handlers=mode_handlers,
         connect_handlers=connect_handlers,
+        health_handlers=health_handlers,
         health_interval_s=health_interval_s,
         sleep=sleep,
     )
@@ -208,6 +218,59 @@ async def test_health_polled_and_cleared_on_failure() -> None:
     )
     await run_feed_until(feed, lambda: live.health == {"mode": "OBSERVE"})
     await run_feed_until(feed, lambda: live.health is None)
+
+
+@contextlib.asynccontextmanager
+async def feeding(feed: LiveFeed) -> AsyncIterator[None]:
+    task = asyncio.create_task(feed.run())
+    try:
+        yield
+    finally:
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+
+
+TRUSTED = {"mode": "CONTROL", "intent": {"version": 4}, "intent_version": 4}
+
+
+async def test_disconnect_drops_the_health_of_the_old_connection() -> None:
+    # Gesamtreview I1: Nach einem schnellen Neustart des core sagte das alte Health noch, er regle
+    # mit der Absicht; der Plan ginge auf einem Stand hinaus, den es nicht mehr gibt
+    feed, live, _, client = feed_env([[STATE_MSG]], health=[TRUSTED], health_interval_s=30.0)
+    client.end_stream = asyncio.Event()
+    async with feeding(feed):
+        await until(lambda: live.connected and live.health == TRUSTED)
+        client.end_stream.set()
+        await until(lambda: not live.connected)
+        assert live.health is None
+    assert client.health_calls == 1
+
+
+async def test_health_asked_before_a_disconnect_is_dropped() -> None:
+    # Die Antwort kam noch vom alten core, sie gilt nach der Trennung nicht mehr
+    feed, live, _, client = feed_env([[STATE_MSG]], health=[TRUSTED], health_interval_s=30.0)
+    client.end_stream, client.answer_health = asyncio.Event(), asyncio.Event()
+    async with feeding(feed):
+        await until(lambda: live.connected and client.health_calls == 1)
+        client.end_stream.set()
+        await until(lambda: not live.connected)
+        client.answer_health.set()
+        await asyncio.sleep(0.05)
+        assert live.health is None
+
+
+async def test_each_health_refresh_calls_the_health_handlers() -> None:
+    calls: list[object] = []
+    feed, live, _, client = feed_env(
+        [[STATE_MSG]],
+        health_handlers=[lambda: calls.append(live.health)],
+        health=[TRUSTED, CoreUnavailableError("weg"), {"mode": "OBSERVE"}],
+    )
+    client.end_stream = asyncio.Event()  # verbunden bleiben
+    async with feeding(feed):
+        await until(lambda: len(calls) >= 2)
+    assert calls[:2] == [TRUSTED, {"mode": "OBSERVE"}]  # nicht nach einem Fehler
 
 
 async def test_decision_messages_reach_the_handlers() -> None:
