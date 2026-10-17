@@ -23,9 +23,17 @@ from bindaems.shared.control import (
     ChargeMode,
     GuestIntent,
     Intent,
+    SupportIntent,
     SurplusOrder,
     SurplusPriority,
     VehicleIntent,
+)
+from bindaems.shared.plan import (
+    PLAN_VALID,
+    BatteryIntent,
+    BatteryIntentKind,
+    IntentPlan,
+    IntentPlanSlot,
 )
 
 LIVE, DRY = ActuatorMode.LIVE, ActuatorMode.DRY_RUN
@@ -704,3 +712,344 @@ def test_guest_mode_belongs_to_the_content_of_an_intent(tmp_path, limits) -> Non
     )
     assert store.submit(Intent(version=2), T0) == IntentReply("accepted", 2)
     assert store.current.guest.mode is ChargeMode.PV
+
+
+# --- Plan und Unterstützung in der Absicht (Plan 3c, Präzisierung 4) ---
+
+SLOTS_BROKEN = ("Plan: Slots nicht im Viertelstundenraster oder nicht lückenlos.",)
+SLOTS_TOO_MANY = ("Plan: zu viele Slots (höchstens 8).",)
+VALIDITY_BROKEN = ("Plan: Gültigkeit passt nicht zu den Slots.",)
+GRID_CHARGE_OFF = ("Plan: Netzladen, obwohl ausgeschaltet.",)
+CHARGE = BatteryIntentKind.NETZLADEN
+
+
+def at(hhmm: str) -> datetime:
+    """Der Zeitpunkt ``hhmm`` (UTC) am Tag von ``T0``."""
+    hour, minute = hhmm.split(":")
+    return T0.replace(hour=int(hour), minute=int(minute))
+
+
+def plan_at(
+    created: datetime,
+    starts: list[str],
+    *,
+    valid_until: datetime | None = None,
+    kinds: list[BatteryIntent] | None = None,
+    grid_charge_allowed: bool = True,
+) -> IntentPlan:
+    """Ein Plan mit je einem Slot ab ``starts``; ohne Angabe gilt er 45 min, höchstens bis zum Ende
+    des letzten Slots, und jeder Slot ist ``EIGENVERBRAUCH``."""
+    begins = [at(start) for start in starts]
+    if valid_until is None:
+        valid_until = min(created + PLAN_VALID, begins[-1] + timedelta(minutes=15))
+    intents = kinds or [BatteryIntent() for _ in begins]
+    return IntentPlan(
+        id=7,
+        created_at=created,
+        valid_until=valid_until,
+        grid_charge_allowed=grid_charge_allowed,
+        slots=[
+            IntentPlanSlot(start=begin, intent=intent)
+            for begin, intent in zip(begins, intents, strict=True)
+        ],
+    )
+
+
+def grid_charge(watts: float) -> BatteryIntent:
+    return BatteryIntent(kind=CHARGE, grid_charge_w=watts)
+
+
+FOUR = ["10:00", "10:15", "10:30", "10:45"]
+
+
+def test_plan_is_accepted_and_saved(tmp_path, limits) -> None:
+    store = make_store(tmp_path, limits)
+    plan = plan_at(at("10:01"), FOUR)
+    assert store.submit(Intent(version=1, plan=plan), at("10:01")).result == "accepted"
+    assert store.current.plan == plan
+    assert read_json(tmp_path / "intent.json")["intent"]["plan"]["id"] == plan.id
+
+
+def test_plan_with_eight_slots_and_the_longest_validity_is_accepted(tmp_path, limits) -> None:
+    starts = ["10:00", "10:15", "10:30", "10:45", "11:00", "11:15", "11:30", "11:45"]
+    plan = plan_at(at("10:01"), starts, valid_until=at("10:46"))
+    assert make_store(tmp_path, limits).submit(Intent(version=1, plan=plan), at("10:01")) == (
+        IntentReply("accepted", 1)
+    )
+
+
+def test_gap_in_plan_slots_is_invalid(tmp_path, limits) -> None:
+    plan = plan_at(at("10:01"), ["10:00", "10:30"])
+    reply = make_store(tmp_path, limits).submit(Intent(version=1, plan=plan), at("10:01"))
+    assert (reply.result, reply.rejection) == ("rejected", "invalid")
+    assert reply.details == SLOTS_BROKEN
+
+
+@pytest.mark.parametrize(
+    "starts",
+    [
+        pytest.param(["10:05", "10:20"], id="off-grid"),
+        pytest.param(["10:15", "10:00"], id="descending"),
+        pytest.param(["10:00", "10:00"], id="duplicate"),
+    ],
+)
+def test_slots_off_the_grid_or_out_of_order_are_invalid(tmp_path, limits, starts) -> None:
+    plan = plan_at(at("10:20"), starts, valid_until=at("10:30"))
+    reply = make_store(tmp_path, limits).submit(Intent(version=1, plan=plan), at("10:20"))
+    assert (reply.result, reply.rejection, reply.details) == ("rejected", "invalid", SLOTS_BROKEN)
+
+
+def test_more_than_eight_slots_is_invalid(tmp_path, limits) -> None:
+    starts = [f"{10 + n // 4}:{n % 4 * 15:02d}" for n in range(9)]
+    plan = plan_at(at("10:01"), starts, valid_until=at("10:46"))
+    reply = make_store(tmp_path, limits).submit(Intent(version=1, plan=plan), at("10:01"))
+    assert (reply.result, reply.rejection, reply.details) == ("rejected", "invalid", SLOTS_TOO_MANY)
+
+
+@pytest.mark.parametrize(
+    ("created", "valid_until"),
+    [
+        pytest.param("10:01", "11:01", id="beyond-the-last-slot"),
+        pytest.param("10:20", "10:20", id="empty"),
+        pytest.param("10:20", "10:10", id="ends-before-it-starts"),
+        pytest.param("09:50", "10:20", id="created-before-the-first-slot"),
+    ],
+)
+def test_validity_beyond_the_last_slot_or_out_of_order_is_invalid(
+    tmp_path, limits, created, valid_until
+) -> None:
+    plan = plan_at(at(created), FOUR, valid_until=at(valid_until))
+    reply = make_store(tmp_path, limits).submit(Intent(version=1, plan=plan), at("10:20"))
+    assert (reply.result, reply.rejection, reply.details) == (
+        "rejected",
+        "invalid",
+        VALIDITY_BROKEN,
+    )
+
+
+def test_validity_longer_than_45_min_is_invalid(tmp_path, limits) -> None:
+    plan = plan_at(at("10:01"), FOUR, valid_until=at("10:46") + timedelta(minutes=1))
+    reply = make_store(tmp_path, limits).submit(Intent(version=1, plan=plan), at("10:01"))
+    assert (reply.result, reply.rejection, reply.details) == (
+        "rejected",
+        "invalid",
+        VALIDITY_BROKEN,
+    )
+
+
+def test_grid_charge_slot_with_switch_off_is_invalid(tmp_path, limits) -> None:
+    kinds = [BatteryIntent(), grid_charge(3000.0), BatteryIntent(), BatteryIntent()]
+    plan = plan_at(at("10:01"), FOUR, kinds=kinds, grid_charge_allowed=False)
+    reply = make_store(tmp_path, limits).submit(Intent(version=1, plan=plan), at("10:01"))
+    assert (reply.result, reply.rejection, reply.details) == (
+        "rejected",
+        "invalid",
+        GRID_CHARGE_OFF,
+    )
+
+
+def test_plan_without_grid_charge_is_fine_with_switch_off(tmp_path, limits) -> None:
+    plan = plan_at(at("10:01"), FOUR, grid_charge_allowed=False)
+    reply = make_store(tmp_path, limits).submit(Intent(version=1, plan=plan), at("10:01"))
+    assert reply == IntentReply("accepted", 1)
+
+
+def test_plan_problems_come_in_a_fixed_order_after_the_vehicle_problems(tmp_path, limits) -> None:
+    kinds = [grid_charge(1000.0), BatteryIntent()]
+    plan = plan_at(at("10:01"), ["10:00", "10:30"], kinds=kinds, grid_charge_allowed=False)
+    intent = Intent(version=1, plan=plan, support=SupportIntent(soc_pct=10.0))
+    store = make_store(tmp_path, limits)
+    store.submit(Intent(version=1), at("10:00"))
+    reply = store.submit(intent.model_copy(update={"version": 2}), at("10:01"))
+    assert reply.details == (
+        *SLOTS_BROKEN,
+        *GRID_CHARGE_OFF,
+        "Unterstützungsschwelle 10 % liegt unter der USV-Reserve (20 %).",
+    )
+    assert store.current.version == 1  # die gültige Version bleibt
+
+
+def test_invalid_plan_changes_nothing(tmp_path, limits) -> None:
+    store = make_store(tmp_path, limits)
+    store.submit(Intent(version=1), at("10:00"))
+    before = (tmp_path / "intent.json").read_bytes()
+    bad = Intent(version=2, plan=plan_at(at("10:01"), ["10:00", "10:30"]))
+    assert store.submit(bad, at("10:01")).rejection == "invalid"
+    assert (store.current.version, (tmp_path / "intent.json").read_bytes()) == (1, before)
+
+
+def test_valid_until_is_clamped_to_45_min_after_acceptance(tmp_path, limits) -> None:
+    # die Uhr der app geht vor: Plan von 10:20 bis 11:05, angenommen um 10:01
+    skewed = plan_at(at("10:20"), ["10:15", "10:30", "10:45", "11:00"], valid_until=at("11:05"))
+    store = make_store(tmp_path, limits)
+    reply = store.submit(Intent(version=1, plan=skewed), at("10:01"))
+    assert reply.result == "clamped"
+    assert store.current.plan.valid_until == at("10:46")
+    assert reply.details == ("Plan bis 12:46 begrenzt.",)  # Wiener Zeit (UTC+2)
+    saved = read_json(tmp_path / "intent.json")["intent"]["plan"]["valid_until"]
+    assert datetime.fromisoformat(saved) == at("10:46")
+
+
+def test_valid_until_within_45_min_of_acceptance_is_kept(tmp_path, limits) -> None:
+    plan = plan_at(at("10:01"), FOUR)
+    store = make_store(tmp_path, limits)
+    assert store.submit(Intent(version=1, plan=plan), at("10:01") + PLAN_VALID).result == "accepted"
+    assert store.current.plan.valid_until == plan.valid_until
+
+
+def test_valid_until_hint_shows_winter_time_after_the_end_of_summer_time(tmp_path, limits) -> None:
+    day = T0.replace(month=11, day=2)  # nach dem 25.10.: Wiener Zeit ist UTC+1
+    created = day.replace(hour=10, minute=20)
+    plan = IntentPlan(
+        id=1,
+        created_at=created,
+        valid_until=created + PLAN_VALID,
+        grid_charge_allowed=True,
+        slots=[
+            IntentPlanSlot(start=day.replace(hour=10, minute=minute), intent=BatteryIntent())
+            for minute in (15, 30, 45)
+        ]
+        + [IntentPlanSlot(start=day.replace(hour=11, minute=0), intent=BatteryIntent())],
+    )
+    received = day.replace(hour=10, minute=1)
+    reply = make_store(tmp_path, limits).submit(Intent(version=1, plan=plan), received)
+    assert reply.details == ("Plan bis 11:46 begrenzt.",)
+
+
+def test_grid_charge_above_the_setpoint_cap_is_clamped(tmp_path, limits) -> None:
+    kinds = [grid_charge(9000.0), grid_charge(8000.0), grid_charge(500.0), BatteryIntent()]
+    plan = plan_at(at("10:01"), FOUR, kinds=kinds)
+    store = make_store(tmp_path, limits)
+    reply = store.submit(Intent(version=1, plan=plan), at("10:01"))
+    assert reply == IntentReply(
+        "clamped", 1, ("Netzladen auf 8000 W begrenzt (maximaler Netzladesetpoint).",)
+    )
+    assert [slot.intent.grid_charge_w for slot in store.current.plan.slots] == [8000, 8000, 500, 0]
+    assert [slot.intent.kind for slot in store.current.plan.slots][:3] == [CHARGE] * 3
+
+
+def test_grid_charge_cap_is_the_configured_setpoint_not_the_fuse(tmp_path, limits) -> None:
+    named = dict((name, watts) for watts, name in limits.setpoint_limits)
+    assert named["maximaler Netzladesetpoint"] == 8000.0
+    assert named["Absicherung"] > 8000.0
+
+
+def test_both_plan_clamps_come_after_the_boost_hints_in_a_fixed_order(tmp_path, limits) -> None:
+    kinds = [grid_charge(9000.0)] + [BatteryIntent()] * 3
+    plan = plan_at(at("10:20"), ["10:15", "10:30", "10:45", "11:00"], valid_until=at("11:05"))
+    plan = plan.model_copy(
+        update={"slots": [plan.slots[0].model_copy(update={"intent": kinds[0]}), *plan.slots[1:]]}
+    )
+    reply = make_store(tmp_path, limits).submit(Intent(version=1, plan=plan), at("10:01"))
+    assert reply.details == (
+        "Plan bis 12:46 begrenzt.",
+        "Netzladen auf 8000 W begrenzt (maximaler Netzladesetpoint).",
+    )
+
+
+def test_expired_plan_is_accepted_and_inert(tmp_path, limits) -> None:
+    old = plan_at(at("10:01"), FOUR)  # gilt bis 10:46
+    store = make_store(tmp_path, limits)
+    reply = store.submit(Intent(version=1, plan=old), at("11:30"))
+    assert reply == IntentReply("accepted", 1)
+    assert store.current.plan == old
+    assert not store.current.plan.valid_at(at("11:30"))
+
+
+def test_expired_plan_with_a_long_validity_is_not_an_error(tmp_path, limits) -> None:
+    # selbst ein Plan, dessen Slots längst vorbei sind und der zu hoch lädt, wird nur geklemmt
+    old = plan_at(at("10:01"), FOUR, kinds=[grid_charge(9000.0)] + [BatteryIntent()] * 3)
+    reply = make_store(tmp_path, limits).submit(Intent(version=1, plan=old), at("13:00"))
+    assert reply.result == "clamped"
+    assert reply.details == ("Netzladen auf 8000 W begrenzt (maximaler Netzladesetpoint).",)
+
+
+def test_repeated_version_with_clamped_plan_is_a_repetition(tmp_path, limits) -> None:
+    skewed = plan_at(at("10:20"), ["10:15", "10:30", "10:45", "11:00"], valid_until=at("11:05"))
+    intent = Intent(version=1, plan=skewed)
+    store = make_store(tmp_path, limits)
+    first = store.submit(intent, at("10:01"))
+    saved = (tmp_path / "intent.json").read_bytes()
+    # zehn Minuten später: der Empfang bleibt die Annahme, die Klemmung ändert sich nicht
+    again = store.submit(intent, at("10:11"))
+    assert again == first == IntentReply("clamped", 1, ("Plan bis 12:46 begrenzt.",))
+    assert (tmp_path / "intent.json").read_bytes() == saved
+    assert store.current.plan.valid_until == at("10:46")
+
+
+def test_repeated_version_after_a_restart_is_a_repetition(tmp_path, limits) -> None:
+    skewed = plan_at(at("10:20"), ["10:15", "10:30", "10:45", "11:00"], valid_until=at("11:05"))
+    intent = Intent(version=1, plan=skewed)
+    make_store(tmp_path, limits).submit(intent, at("10:01"))
+    restarted = make_store(tmp_path, limits)
+    assert restarted.submit(intent, at("10:30")).result == "clamped"
+
+
+def test_same_version_with_another_plan_is_a_conflict(tmp_path, limits) -> None:
+    store = make_store(tmp_path, limits)
+    store.submit(Intent(version=1, plan=plan_at(at("10:01"), FOUR)), at("10:01"))
+    other = Intent(version=1, plan=plan_at(at("10:02"), FOUR))
+    assert store.submit(other, at("10:02")).rejection == "stale"
+
+
+def test_support_threshold_below_reserve_is_invalid(tmp_path, limits) -> None:
+    reply = make_store(tmp_path, limits).submit(
+        Intent(version=1, support=SupportIntent(soc_pct=15.0)), T0
+    )
+    assert (reply.result, reply.rejection) == ("rejected", "invalid")
+    assert reply.details == ("Unterstützungsschwelle 15 % liegt unter der USV-Reserve (20 %).",)
+
+
+def test_support_threshold_with_decimals_is_shown_as_is(tmp_path, limits) -> None:
+    reply = make_store(tmp_path, limits).submit(
+        Intent(version=1, support=SupportIntent(soc_pct=19.5)), T0
+    )
+    assert reply.details == ("Unterstützungsschwelle 19.5 % liegt unter der USV-Reserve (20 %).",)
+
+
+@pytest.mark.parametrize(
+    "support",
+    [SupportIntent(), SupportIntent(soc_pct=20.0), SupportIntent(allowed=False, soc_pct=100.0)],
+)
+def test_support_at_or_above_reserve_or_unset_is_accepted(tmp_path, limits, support) -> None:
+    store = make_store(tmp_path, limits)
+    assert store.submit(Intent(version=1, support=support), T0) == IntentReply("accepted", 1)
+    assert store.current.support == support
+    assert read_json(tmp_path / "intent.json")["intent"]["support"] == support.model_dump()
+
+
+def test_blocked_support_below_reserve_is_still_invalid(tmp_path, limits) -> None:
+    reply = make_store(tmp_path, limits).submit(
+        Intent(version=1, support=SupportIntent(allowed=False, soc_pct=5.0)), T0
+    )
+    assert reply.rejection == "invalid"
+
+
+def test_saved_intent_without_plan_loads_with_defaults(tmp_path, limits) -> None:
+    # so schrieb der core in Plan 2d: Lademodi und Gast, aber weder „plan“ noch „support“
+    sent = {
+        "version": 6,
+        "control": True,
+        "actuators": {"wallbox.evcs": "dry_run"},
+        "vehicles": {"tesla": {"mode": "now", "boost_until": None, "wallbox": "evcs"}},
+        "priority": None,
+        "surplus_priority": {"kind": "cars_first", "soc_pct": 50.0},
+        "guest": {"mode": "pv"},
+    }
+    write_json_atomic(tmp_path / "intent.json", {"intent": sent, "accepted_at": T0.isoformat()})
+    store = charging_store(tmp_path, limits)
+    store.load()
+    assert store.load_problem is None
+    assert store.current.plan is None
+    assert store.current.support == SupportIntent()
+    # die app sendet dieselbe Absicht weiter: eine Wiederholung, kein Konflikt
+    assert store.submit(Intent.model_validate(sent), T0) == IntentReply("accepted", 6)
+
+
+def test_saved_intent_with_plan_is_reloaded(tmp_path, limits) -> None:
+    plan = plan_at(at("10:01"), FOUR, kinds=[grid_charge(2000.0)] + [BatteryIntent()] * 3)
+    make_store(tmp_path, limits).submit(Intent(version=1, plan=plan), at("10:01"))
+    store = make_store(tmp_path, limits)
+    assert store.load_problem is None
+    assert store.current.plan == plan
+    assert store.accepted_at == at("10:01")

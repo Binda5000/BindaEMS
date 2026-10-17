@@ -3,7 +3,8 @@
 Die app schickt die vollständige Absicht mit einer Versionsnummer. Der ``IntentStore`` prüft sie
 gegen den Aktorkatalog und gegen die Fahrzeuge und Wallboxen aus ``config.yaml`` (Plan 2c-1,
 Präzisierung 2), klemmt sie auf das, was erlaubt ist (live nur für Aktoren mit ``live_allowed``,
-Spec 8.7; ein Boost höchstens ``BOOST_MAX`` nach dem Empfang), vergleicht die Version mit der
+Spec 8.7; ein Boost höchstens ``BOOST_MAX`` nach dem Empfang; ein Plan höchstens ``PLAN_VALID``
+nach dem Empfang und mit höchstens dem maximalen Netzladesetpoint), vergleicht die Version mit der
 gültigen Absicht und speichert eine angenommene Absicht atomar. Nach einem Neustart gilt die
 gespeicherte Absicht weiter; der core durchläuft trotzdem immer OBSERVE und das Gate.
 
@@ -18,6 +19,7 @@ from collections import Counter
 from collections.abc import Collection, Mapping
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+from itertools import pairwise
 from pathlib import Path
 from typing import Any, Final, Literal
 
@@ -25,8 +27,14 @@ import structlog
 
 from bindaems.core.persistence.files import read_json, write_json_atomic
 from bindaems.core.safety.limits import HardLimits
-from bindaems.shared.control import ActuatorMode, Intent
-from bindaems.shared.timeutil import LOCAL_TZ, ensure_utc
+from bindaems.shared.control import ActuatorMode, Intent, SupportIntent
+from bindaems.shared.plan import (
+    MAX_INTENT_PLAN_SLOTS,
+    PLAN_VALID,
+    BatteryIntentKind,
+    IntentPlan,
+)
+from bindaems.shared.timeutil import LOCAL_TZ, SLOT, ensure_utc, slot_start
 
 log = structlog.get_logger(__name__)
 
@@ -36,6 +44,9 @@ INTENT_FILE_PROBLEM: Final = (
 
 # So weit nach dem Empfang der Absicht darf ein ``boost_until`` höchstens liegen (Präzisierung 2).
 BOOST_MAX: Final = timedelta(hours=12)
+
+# Name der Obergrenze in ``HardLimits.setpoint_limits``, die ein Netzladen im Plan klemmt
+GRID_CHARGE_CAP: Final = "maximaler Netzladesetpoint"
 
 
 @dataclass(frozen=True)
@@ -49,7 +60,9 @@ class IntentReply:
     - ``rejection``: der Grund einer Ablehnung, sonst ``None``: ``stale`` (Version veraltet oder
       schon mit anderem Inhalt angenommen), ``unknown_actuator`` oder ``invalid`` (unbekanntes
       Fahrzeug oder unbekannte Wallbox, eine Wallbox bei mehreren Fahrzeugen, eine Priorität, die
-      nicht jedes Fahrzeug genau einmal nennt)
+      nicht jedes Fahrzeug genau einmal nennt, ein Plan mit Lücken, falschem Raster, zu vielen
+      Slots, unpassender Gültigkeit oder Netzladen trotz ausgeschaltetem Schalter, eine
+      Unterstützungsschwelle unter der USV-Reserve)
     """
 
     result: Literal["accepted", "clamped", "rejected"]
@@ -141,18 +154,21 @@ class IntentStore:
         Die Regeln gelten der Reihe nach, die erste zutreffende entscheidet. Geklemmt wird vor dem
         Vergleich: „Inhalt“ ist die Absicht nach dem Klemmen, ein Aktor mit ``live``, aber ohne
         ``live_allowed`` also schon ``dry_run`` und ein Boost über ``BOOST_MAX`` hinaus schon auf
-        dessen Ende gesetzt. Den Boost klemmt der Empfang (Präzisierung 2): bei einer neuen Version
-        ist das ``now``, bei der gültigen Version ihre Annahmezeit (``accepted_at``, ohne sie
-        ``now``). So bleibt auch eine spätere Wiederholung, selbst nach einem Neustart, eine
-        Wiederholung. Ein ``boost_until`` in der Vergangenheit ist kein Fehler: Es gibt dann keinen
-        Boost.
+        dessen Ende gesetzt. Ebenso ein Plan: ``valid_until`` höchstens ``PLAN_VALID`` nach dem
+        Empfang, ``grid_charge_w`` höchstens der maximale Netzladesetpoint. Den Boost und den Plan
+        klemmt der Empfang (Präzisierung 2): bei einer neuen Version ist das ``now``, bei der
+        gültigen Version ihre Annahmezeit (``accepted_at``, ohne sie ``now``). So bleibt auch eine
+        spätere Wiederholung, selbst nach einem Neustart, eine Wiederholung. Ein ``boost_until`` in
+        der Vergangenheit ist kein Fehler: Es gibt dann keinen Boost. Ebenso ein Plan, der schon
+        abgelaufen ist: Er gilt als angenommen und wirkt nicht.
 
         1. Unbekannte Aktor-IDs: abgelehnt (``unknown_actuator``) mit einem Hinweis je ID, sortiert.
            Die gültige Version bleibt.
         2. Ungültiger Inhalt: abgelehnt (``invalid``), die gültige Version bleibt. Je Fund ein
            Hinweis, in dieser Reihenfolge: unbekannte Fahrzeuge (sortiert), unbekannte Wallboxen
            (nach Fahrzeug sortiert), Wallboxen mehrerer Fahrzeuge (sortiert) und eine Priorität, die
-           nicht jedes Fahrzeug genau einmal nennt.
+           nicht jedes Fahrzeug genau einmal nennt, die Funde des Plans (Raster und Lücken, Anzahl,
+           Gültigkeit, Netzladen trotz Schalter aus) und die Unterstützungsschwelle.
         3. Version kleiner als die gültige: abgelehnt (``stale``).
         4. Version gleich der gültigen, Inhalt gleich: eine Wiederholung. Die Antwort entsteht aus
            der gesendeten Absicht neu und ist deshalb dieselbe wie bei der Annahme, auch wenn die
@@ -201,11 +217,11 @@ class IntentStore:
         return IntentReply(result, clamped.version, clamp_details + self._save(clamped, now))
 
     def _invalid(self, intent: Intent) -> tuple[str, ...]:
-        """Hinweise zu Fahrzeugen, Wallboxen und Priorität, die nicht zur Konfiguration passen.
+        """Hinweise zu Fahrzeugen, Wallboxen, Priorität, Plan und Unterstützung, die nicht passen.
 
         Die Reihenfolge ist: unbekannte Fahrzeuge (sortiert), unbekannte Wallboxen (nach Fahrzeug
-        sortiert), Wallboxen mehrerer Fahrzeuge (sortiert), Priorität. Eine passende Absicht ergibt
-        ein leeres Tupel.
+        sortiert), Wallboxen mehrerer Fahrzeuge (sortiert), Priorität, Plan, Unterstützung. Eine
+        passende Absicht ergibt ein leeres Tupel.
         """
         details = [
             f"Unbekanntes Fahrzeug „{vehicle}“."
@@ -229,16 +245,34 @@ class IntentStore:
         ]
         if intent.priority is not None and sorted(intent.priority) != sorted(self._vehicles):
             details.append("Die Priorität muss jedes Fahrzeug genau einmal nennen.")
+        if intent.plan is not None:
+            details += _plan_problems(intent.plan)
+        details += self._support_problems(intent.support)
         return tuple(details)
+
+    def _support_problems(self, support: SupportIntent) -> list[str]:
+        """Hinweis, wenn die Unterstützungsschwelle unter der USV-Reserve liegt."""
+        reserve = self._limits.reserve_soc_pct
+        if support.soc_pct is None or support.soc_pct >= reserve:
+            return []
+        return [
+            f"Unterstützungsschwelle {support.soc_pct:g} % liegt unter der USV-Reserve "
+            f"({reserve:g} %)."
+        ]
 
     def _clamp(self, intent: Intent, received: datetime) -> tuple[Intent, tuple[str, ...]]:
         """Klemmt die Absicht auf das, was ``config.yaml`` und ``BOOST_MAX`` erlauben.
 
         - Jeder Aktor mit ``live``, aber ohne ``live_allowed``, wird ``dry_run``.
         - Ein ``boost_until`` später als ``received + BOOST_MAX`` wird auf diesen Zeitpunkt gesetzt.
+        - Das ``valid_until`` des Plans später als ``received + PLAN_VALID`` wird auf diesen
+          Zeitpunkt gesetzt. Ein Plan, der schon abgelaufen ist, bleibt, wie er ist.
+        - Jedes ``grid_charge_w`` des Plans über dem maximalen Netzladesetpoint wird darauf gesetzt;
+          dafür gibt es einen Hinweis, egal in wie vielen Slots.
 
         Die Hinweise nennen erst die Aktoren, in der Reihenfolge des Aktorkatalogs, dann die
-        Fahrzeuge, in der Reihenfolge von ``config.yaml``; nicht die der gesendeten Absicht.
+        Fahrzeuge, in der Reihenfolge von ``config.yaml``; nicht die der gesendeten Absicht. Danach
+        kommen die Gültigkeit und das Netzladen des Plans. Alles hängt nur von ``received`` ab.
         """
         actuators = dict(intent.actuators)
         details: list[str] = []
@@ -253,10 +287,41 @@ class IntentStore:
             if entry is not None and entry.boost_until is not None and entry.boost_until > latest:
                 vehicles[vehicle] = entry.model_copy(update={"boost_until": latest})
                 details.append(_boost_clamped(name, latest))
+        plan = intent.plan
+        if plan is not None:
+            plan, plan_details = self._clamp_plan(plan, received)
+            details += plan_details
         if not details:
             return intent, ()
-        update = {"actuators": actuators, "vehicles": vehicles}
+        update = {"actuators": actuators, "vehicles": vehicles, "plan": plan}
         return intent.model_copy(update=update), tuple(details)
+
+    def _clamp_plan(self, plan: IntentPlan, received: datetime) -> tuple[IntentPlan, list[str]]:
+        """Klemmt Gültigkeit und Netzladeleistung des Plans; die Hinweise in dieser Reihenfolge."""
+        details: list[str] = []
+        update: dict[str, Any] = {}
+        latest = received + PLAN_VALID
+        if plan.valid_until > latest:
+            update["valid_until"] = latest
+            details.append(f"Plan bis {latest.astimezone(LOCAL_TZ):%H:%M} begrenzt.")
+        cap = next(
+            (watts for watts, name in self._limits.setpoint_limits if name == GRID_CHARGE_CAP),
+            None,
+        )
+        if cap is not None and any(
+            slot.intent.grid_charge_w > cap and slot.intent.kind is BatteryIntentKind.NETZLADEN
+            for slot in plan.slots
+        ):
+            update["slots"] = [
+                slot.model_copy(
+                    update={"intent": slot.intent.model_copy(update={"grid_charge_w": cap})}
+                )
+                if slot.intent.grid_charge_w > cap
+                else slot
+                for slot in plan.slots
+            ]
+            details.append(f"Netzladen auf {cap:.0f} W begrenzt (maximaler Netzladesetpoint).")
+        return (plan.model_copy(update=update) if update else plan), details
 
     def _save(self, intent: Intent, now: datetime) -> tuple[str, ...]:
         """Speichert die Absicht atomar; ein Fehler wird geloggt und als Hinweis zurückgegeben."""
@@ -267,6 +332,34 @@ class IntentStore:
             log.error("Absicht nicht gespeichert", path=str(self._path), error=str(exc))
             return (f"Absicht nicht gespeichert: {exc}",)
         return ()
+
+
+def _plan_problems(plan: IntentPlan) -> list[str]:
+    """Die Funde zum Plan (Präzisierung 4), in dieser Reihenfolge: Raster und Lücken, Anzahl,
+    Gültigkeit, Netzladen trotz Schalter aus.
+
+    Die Gültigkeit wird nur geprüft, wenn die Slots ein lückenloses Raster bilden; sonst sagt
+    ``slots[-1]`` nichts über das Ende des Plans.
+    """
+    slots = plan.slots
+    on_grid = all(slot_start(slot.start) == slot.start for slot in slots) and all(
+        later.start - earlier.start == SLOT for earlier, later in pairwise(slots)
+    )
+    details: list[str] = []
+    if not on_grid:
+        details.append("Plan: Slots nicht im Viertelstundenraster oder nicht lückenlos.")
+    if len(slots) > MAX_INTENT_PLAN_SLOTS:
+        details.append(f"Plan: zu viele Slots (höchstens {MAX_INTENT_PLAN_SLOTS}).")
+    if on_grid and not (
+        slots[0].start <= plan.created_at < plan.valid_until <= slots[-1].start + SLOT
+        and plan.valid_until - plan.created_at <= PLAN_VALID
+    ):
+        details.append("Plan: Gültigkeit passt nicht zu den Slots.")
+    if not plan.grid_charge_allowed and any(
+        slot.intent.kind is BatteryIntentKind.NETZLADEN for slot in slots
+    ):
+        details.append("Plan: Netzladen, obwohl ausgeschaltet.")
+    return details
 
 
 def _parse(data: Any) -> tuple[Intent, datetime | None]:

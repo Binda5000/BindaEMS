@@ -253,6 +253,45 @@ def test_invalid_charging_intent_is_422(view_client) -> None:
     ]
 
 
+def test_put_intent_with_invalid_plan_is_422_with_details(view_client) -> None:
+    client, view = view_client
+    details = (
+        "Plan: Slots nicht im Viertelstundenraster oder nicht lückenlos.",
+        "Unterstützungsschwelle 15 % liegt unter der USV-Reserve (20 %).",
+    )
+    view.reply = IntentReply("rejected", None, details, "invalid")
+    plan = {
+        "id": 7,
+        "created_at": "2026-10-08T10:01:00Z",
+        "valid_until": "2026-10-08T10:45:00Z",
+        "grid_charge_allowed": True,
+        "slots": [
+            {"start": "2026-10-08T10:00:00Z", "intent": {"kind": "EIGENVERBRAUCH"}},
+            {
+                "start": "2026-10-08T10:30:00Z",
+                "intent": {"kind": "NETZLADEN", "grid_charge_w": 900},
+            },
+        ],
+    }
+    body = {"version": 1, "plan": plan, "support": {"allowed": True, "soc_pct": 15}}
+    r = client.put("/v1/intent", json=body, headers=H)
+    assert (r.status_code, r.json()) == (
+        422,
+        {"result": "rejected", "version": None, "details": list(details)},
+    )
+    # Plan und Unterstützung kommen unverändert beim core an
+    assert view.submitted[0].plan.id == 7
+    assert view.submitted[0].plan.slots[1].intent.grid_charge_w == 900
+    assert view.submitted[0].support.soc_pct == 15
+
+
+def test_put_intent_with_clamped_plan_is_200_with_details(view_client) -> None:
+    client, view = view_client
+    view.reply = IntentReply("clamped", 1, ("Plan bis 12:46 begrenzt.",))
+    r = client.put("/v1/intent", json={"version": 1}, headers=H)
+    assert (r.status_code, r.json()["details"]) == (200, ["Plan bis 12:46 begrenzt."])
+
+
 def test_get_intent(view_client) -> None:
     client, view = view_client
     view.current = Intent(version=3)
