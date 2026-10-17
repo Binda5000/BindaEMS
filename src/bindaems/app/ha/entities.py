@@ -554,7 +554,7 @@ def build_entities(cfg: Config) -> list[EntitySpec]:
             "Ersparnis heute",
             main,
             _savings(month=False),
-            unit="€",
+            unit="EUR",
             device_class="monetary",
             attributes=_savings_attributes(month=False),
         ),
@@ -564,7 +564,7 @@ def build_entities(cfg: Config) -> list[EntitySpec]:
             "Ersparnis Monat",
             main,
             _savings(month=True),
-            unit="€",
+            unit="EUR",
             device_class="monetary",
             attributes=_savings_attributes(month=True),
         ),
@@ -758,8 +758,7 @@ def build_entities(cfg: Config) -> list[EntitySpec]:
                 device,
                 _charge_energy(key),
                 unit="kWh",
-                device_class="energy",
-                state_class="measurement",
+                device_class="energy",  # ohne ``state_class``: HA warnt bei ``measurement``
                 attributes=_charge_energy_attributes(key),
             ),
         ]

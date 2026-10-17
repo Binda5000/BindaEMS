@@ -683,7 +683,7 @@ def test_savings_sensors_are_monetary_with_two_decimals(cfg) -> None:
     for spec in (today, month):
         assert (spec.component, spec.unit, spec.device_class, spec.state_class) == (
             "sensor",
-            "€",
+            "EUR",
             "monetary",
             None,  # ``monetary`` erlaubt in HA kein ``measurement``
         )
@@ -712,8 +712,9 @@ def test_charge_energy_shows_open_or_last_session(cfg) -> None:
         "Ladeenergie",
         "kWh",
         "energy",
-        "measurement",
+        None,  # HA warnt bei ``energy`` mit ``measurement``
     )
+    assert "state_class" not in config_of(cfg, "tesla_charge_energy")
     assert spec.device.identifier == "bindaems_tesla"
     inputs = sample_inputs()  # offene Session
     assert spec.value(inputs) == "12.3"

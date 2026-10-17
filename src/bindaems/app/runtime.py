@@ -279,6 +279,7 @@ class AppRuntime:
         self.ha_publisher: HaPublisher | None = None
         self._ha_inputs: HaInputs | None = None
         self._stats_inputs = StatsInputs(None, {}, {})
+        self._stats_day: date | None = None  # Ortstag der letzten gelungenen Rechnung von heute
         self._stats_wake = asyncio.Event()  # ein neuer Slot (aus jedem Thread) weckt die Statistik
         self._stats_loop_ref: asyncio.AbstractEventLoop | None = None
         self._ha_ready = asyncio.Event()  # erste Werte für HA bestimmt
@@ -435,9 +436,7 @@ class AppRuntime:
         """Läuft im Worker-Thread (``_ha_inputs_loop``): die Datenbankabfrage blockiert nicht."""
         now = self._clock.now()
         settings = self.settings.current().settings
-        cached = (
-            self._stats_inputs
-        )  # Statistik: nur der Zwischenspeicher, keine Abfrage im 5-s-Takt
+        cached = self._stats_inputs  # Statistik: nur der Cache, keine Abfrage im 5-s-Takt
         return build_inputs(
             self.live,
             self.prices,
@@ -622,8 +621,11 @@ class AppRuntime:
         stats = previous.stats
         try:
             stats = self.stats.today()
+            self._stats_day = today
         except Exception:
             log.exception("Ersparnis und Autarkie für Home Assistant nicht berechenbar")
+            if self._stats_day != today:  # Werte von gestern gelten nicht als „heute“
+                stats = None
         sessions = dict(previous.sessions)
         for key in self._cfg.vehicles:
             try:

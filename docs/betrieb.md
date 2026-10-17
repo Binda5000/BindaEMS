@@ -301,8 +301,8 @@ Entitäten (Gerät „BindaEMS“, sofern nicht anders angegeben):
 | Akku-Plan nächster Slot | – | wie oben für die nächste Viertelstunde |
 | Geplanter SOC | % | SOC am Ende der laufenden Viertelstunde laut Plan; Attribut `hourly` mit dem SOC je volle Stunde |
 | Budget | kW | die vom Plan akzeptierte Monatsspitze der laufenden Viertelstunde; nur mit Leistungspreis |
-| Ersparnis heute | € | Ersparnis von heute gegenüber einem Fixtarif ohne Anlage (zwei Nachkommastellen, Geräteklasse „Geldbetrag“); Attribut `same_import_eur` mit der Ersparnis bei gleichem Netzbezug. „Unbekannt“, solange ein Preis des Tages fehlt |
-| Ersparnis Monat | € | wie oben für den Monat bis heute |
+| Ersparnis heute | EUR | Ersparnis von heute gegenüber einem Fixtarif ohne Anlage (zwei Nachkommastellen, Geräteklasse „Geldbetrag“); Attribut `same_import_eur` mit der Ersparnis bei gleichem Netzbezug. „Unbekannt“, solange ein Preis des Tages fehlt |
+| Ersparnis Monat | EUR | wie oben für den Monat bis heute |
 | Autarkie heute | % | Anteil des Verbrauchs von heute, der nicht aus dem Netz kam (ganze Zahl); Attribut `month_pct` mit der Autarkie des Monats. „Unbekannt“, solange heute noch nichts verbraucht wurde |
 | Akku-SOC | % | |
 | Betriebsart | – | Betriebszustand des core: `START`, `OBSERVE`, `CONTROL`, `DEGRADED` oder `SAFE` (Abschnitt 13), Diagnose |
@@ -314,7 +314,7 @@ Entitäten (Gerät „BindaEMS“, sofern nicht anders angegeben):
 | Zuordnung unklar | Problem | eine Wallbox oder ein Fahrzeug zeigt `unclear` (Abschnitt „Laderegelung“, „Zuordnung Auto und Wallbox“) |
 | SOC (Gerät „BindaEMS <Fahrzeug>“) | % | je Fahrzeug |
 | Wallbox (Gerät „BindaEMS <Fahrzeug>“) | – | je Fahrzeug der Name der Wallbox, an der es steht (eigener Name oder „EVCS“ / „Wall Connector“), sonst „keine“ |
-| Ladeenergie (Gerät „BindaEMS <Fahrzeug>“) | kWh | je Fahrzeug die Energie der laufenden Ladesession, sonst der letzten (eine Nachkommastelle, Geräteklasse „Energie“); Attribute `start` und `end` (Ortszeit, `end` ist `null`, solange die Session läuft), `pv_kwh`, `battery_kwh`, `grid_kwh` (Herkunft der Energie), `cost_eur` (`null`, wenn ein Preis fehlt) und `month_kwh` (Ladeenergie des Fahrzeugs im Monat). „Unbekannt“ ohne Session der letzten 90 Tage |
+| Ladeenergie (Gerät „BindaEMS <Fahrzeug>“) | kWh | je Fahrzeug die Energie der laufenden Ladesession, sonst der letzten (eine Nachkommastelle, Geräteklasse „Energie“, ohne Zustandsklasse); Attribute `start` und `end` (Ortszeit, `end` ist `null`, solange die Session läuft), `pv_kwh`, `battery_kwh`, `grid_kwh` (Herkunft der Energie), `cost_eur` (`null`, wenn ein Preis fehlt) und `month_kwh` (Ladeenergie des Fahrzeugs im Monat). „Unbekannt“ ohne Session der letzten 90 Tage |
 | Ladeleistung (Gerät „BindaEMS EVCS“ / „BindaEMS Wall Connector“) | W | je Wallbox |
 | Fahrzeug (Gerät der Wallbox) | – | je Wallbox der Name des Fahrzeugs, „Gast“ oder „keins“ |
 

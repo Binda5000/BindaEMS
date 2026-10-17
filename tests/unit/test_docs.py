@@ -46,8 +46,8 @@ def test_statistics_sensors_in_the_guide_match_the_entities() -> None:
     specs = {spec.object_id: spec for spec in build_entities(cfg)}
     section = _guide_section("7. Home Assistant über MQTT")
     expected = {
-        "savings_today": ("Ersparnis heute", "€", ("same_import_eur",)),
-        "savings_month": ("Ersparnis Monat", "€", ()),
+        "savings_today": ("Ersparnis heute", "EUR", ("same_import_eur",)),
+        "savings_month": ("Ersparnis Monat", "EUR", ()),
         "autarky_today": ("Autarkie heute", "%", ("month_pct",)),
         "tesla_charge_energy": (
             "Ladeenergie",

@@ -867,6 +867,22 @@ async def test_failed_stats_refresh_keeps_the_previous_values(runtime, monkeypat
     assert "Ladeenergie im Monat für Home Assistant nicht berechenbar" in events
 
 
+async def test_failed_stats_refresh_on_a_new_day_shows_unknown(runtime, monkeypatch) -> None:
+    await asyncio.to_thread(runtime._refresh_stats)
+    assert runtime._stats_inputs.stats is not None
+
+    def broken(*_args, **_kwargs):
+        raise ValueError("kaputt")
+
+    monkeypatch.setattr(runtime.stats, "today", broken)
+    runtime._clock.advance(timedelta(hours=1))  # derselbe Tag in Wiener Zeit: letzter Wert bleibt
+    await asyncio.to_thread(runtime._refresh_stats)
+    assert runtime._stats_inputs.stats is not None
+    runtime._clock.advance(timedelta(days=1))  # neuer Tag: gestern darf nicht mehr erscheinen
+    await asyncio.to_thread(runtime._refresh_stats)
+    assert runtime._stats_inputs.stats is None
+
+
 async def test_failed_session_lookup_keeps_the_previous_session(runtime, monkeypatch) -> None:
     add_session(runtime, T_APP - timedelta(hours=1), None, "tesla")
     await asyncio.to_thread(runtime._refresh_stats)
