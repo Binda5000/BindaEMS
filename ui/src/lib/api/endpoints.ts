@@ -130,7 +130,7 @@ export const api = {
 	// Bedienung (ab „Bedienen“; Live-Schaltung und Quittierung nur Admin)
 	control: (o?: Load): Promise<s.ControlResponse> =>
 		get('/api/control', s.ControlResponseSchema, o),
-	/** Mehrkosten des Boosts (Leistungspreis im Monat) je Fahrzeug; ab „Betrachten“ */
+	/** Mehrkosten des Boosts (Leistungspreis im Monat) je Fahrzeug; ab „Lesen“ */
 	boostCost: (o?: Load): Promise<s.BoostCost> =>
 		get('/api/control/boost-cost', s.BoostCostSchema, o),
 	setRegulation: (on: boolean): Promise<s.ControlReply> =>

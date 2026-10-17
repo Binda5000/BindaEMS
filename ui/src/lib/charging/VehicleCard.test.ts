@@ -46,7 +46,7 @@ it('zeigt die Mehrkosten nicht ohne Antwort', () => {
 	expect(screen.queryByText(/Leistungspreis im Monat/)).not.toBeInTheDocument();
 });
 
-it('zeigt die Mehrkosten nicht Betrachtenden', () => {
+it('zeigt die Mehrkosten nicht Lesenden', () => {
 	show({ boostCost: COST, operate: false });
 	expect(screen.queryByText(/Leistungspreis im Monat/)).not.toBeInTheDocument();
 });

@@ -184,7 +184,7 @@ it('Bedienende sehen die Mehrkosten des Boosts an der Fahrzeugkarte', async () =
 	).toBeVisible();
 });
 
-it('Betrachtende sehen die Mehrkosten nicht', async () => {
+it('Lesende sehen die Mehrkosten nicht', async () => {
 	user.role = 'viewer';
 	await show();
 	await waitFor(() => expect(api.boostCost).toHaveBeenCalled());
