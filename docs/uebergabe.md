@@ -47,6 +47,15 @@ Als Nächstes folgen an der Anlage das gemeinsame Ausrollen von
 zeigt, wer wo steht), **2 Wochen Dry-Run der Planausführung** (DESS dafür aus) und die **30 echten
 Tage** durch `export_days` und `scenario_days`; danach geht Victron live (siehe „Offen an der
 Anlage“).
+**Plan 4a (Statistik, der erste Teil der Phase 4) ist umgesetzt und je Task geprüft**
+(`docs/superpowers/plans/2026-10-17-phase-4a-statistik.md`, 16 Tasks, freigegeben vom Betreiber am
+17.10.2026 mit allen 13 Entscheidungen und der Änderung, dass PV-Strom ins Auto 0 ct kostet): auf dem
+Arbeitszweig `claude/phase-4-plan-whnbh6`, noch nicht auf `main`. Der Gesamtreview, eine mögliche
+Fix-Welle und die Integration auf `main` stehen aus. Plan 4a ändert nur die app und das UI (der core
+bleibt gleich) und braucht an der Anlage nur den Neubau von `ems-app`: Sessions, Einstandspreis, Kosten
+je Auto, Abgleich mit den Zählern, Nachrechnung von Lücken, die Seite „Statistik“, Statistik-Sensoren
+in HA und ein Grafana-Dashboard. Er schaltet nichts an der Anlage. **Der nächste Entwicklungsschritt ist
+Plan 4b „Geplantes Laden“** (ändert den core), nach der Abnahme der Phase 3.
 `main` ist seit dem 12.10.2026 auch der Standard-Branch auf GitHub.
 
 ## Kurzfassung
@@ -434,22 +443,70 @@ Anlage“).
   - **Noch nicht:** Regel R2 und die Autos im Planer (Phase 4), die Begründung des Plan-Slots in
     „Warum?“, „Plan gegen Ist“ für andere Tage als heute im UI, ein Totband in der Drosselung des
     Wächters. Live ist weiterhin kein Aktor, und 3c schaltet nichts an der Anlage.
+- **Phase 4a (Statistik) ist umgesetzt und je Task geprüft** (Plan:
+  `docs/superpowers/plans/2026-10-17-phase-4a-statistik.md`, 16 Tasks; Ausführung subagent-driven;
+  Branch `claude/phase-4-plan-whnbh6`, ab `7dcb3d2`, noch nicht auf `main`; der Gesamtreview steht aus).
+  Nur app, UI und `deploy/`; die Dateien unter `src/bindaems/core/`, `src/bindaems/shared/` und
+  `cerbo-watchdog/` sind unverändert:
+  - **Migration `0010`** (`v0010_statistics.py`): `assignment_log`, `charging_session`, `ledger_cost`,
+    `ledger_check` und `consumer_day`; die Herkunft eines Slots kennt `estimate`, `DaySummary` hat
+    `estimated_slots`.
+  - **Ladesessions** (`app/charging/`): `plug.py` liest den Steckzustand aus dem State des core,
+    `tracker.py` führt Belegung und Sessions (eine Pause bis 30 min trennt nicht), `sessions.py` rechnet
+    Energie und Kosten je Session und je Auto; `GET /api/charging/sessions`.
+  - **Einstandspreis des Akkus** (`app/ledger/costing.py`): PV-Ladung 0 ct, Netzladung zum Bezugspreis,
+    Entladung mit dem Mittelwert plus Verschleiß; die Kosten je Auto folgen daraus.
+  - **Abgleich und Nachrechnung** (`app/ledger/counters.py`, `checks.py`, `estimate.py`): nachts um
+    02:45 Uhr zuerst die Nachrechnung der Lücken der letzten 7 Tage aus den Zählerständen, dann der
+    Abgleich der Abrechnung mit den Zählern (7 Tage, beim Start 35), danach die Energie je Verbraucher und
+    Tag; `GET /api/ledger/checks`.
+  - **Statistik und API** (`app/stats/`): `GET /api/stats?period=…` für Tag, Woche, Monat und Jahr mit
+    Kennzahlen, Kosten (Grundgebühren und Leistungspreis), Autos, Verbrauchern, Monatsspitzen und
+    Abgleich.
+  - **Home Assistant:** `savings_today`, `savings_month`, `autarky_today` und je Fahrzeug
+    `<v>_charge_energy`, alle 15 Minuten und bei jedem neuen Slot neu gerechnet.
+  - **UI:** die Seite „Statistik“ (Navigation nach „Verlauf“) mit Kacheln, Diagramm „Energie“ und den
+    Karten „Kosten“, „Autos“, „Ladesessions“, „Verbraucher“, „Monatsspitzen“ und „Abgleich mit den
+    Zählern“; auf „Laden“ die Zeile der laufenden oder letzten Session in der Fahrzeugkarte. Die
+    Demo-Welt hat 14 erfundene Tage dazu (`tests/ui_history.py`, `tests/ui_world.py`).
+  - **Grafana:** `deploy/grafana/bindaems.json` (Leistung, Ladestand, Preise, Abrechnung je Tag, die
+    Entscheidungen als Markierungen).
+  - **Doku:** Betriebshandbuch (Abschnitt 8: „Einstandspreis des Akkus“, „Ladesessions und Kosten je
+    Auto“, „Lücken nachrechnen“, „Abgleich mit den Zählern“, „Statistik je Zeitraum“, „Statistik
+    ausrollen (Plan 4a)“; Abschnitt 3 „Grafana“; Abschnitt 7 die Sensoren; Abschnitt 12 die Seite
+    „Statistik“), Spec („Stand Plan 4a“ in 11.1, 11.3, 11.4, 12, 13, 15 und 18) und die Checkliste
+    `docs/verification/abnahme-phase-4.md`.
+  - **Entschieden und aufgeschoben:** Die Entscheidungen, die Festlegungen der Umsetzung und die
+    aufgeschobenen Kleinigkeiten stehen unter „Bewusst offen gelassen“ („Entschieden in Plan 4a“).
+  - **Noch nicht (4b):** der Modus „Geplant“ mit Ziel-SOC und Abfahrt, die Autos im Planer, Regel R2, die
+    späteste Startzeit, das Tesla-Ladelimit, in HA Ziel-SOC, Abfahrtszeit, „Fertig um“ und „Ziel
+    erreichbar“, und die Abnahmepunkte „HA in beide Richtungen“ und „Ziel-SOC“. 4a schaltet nichts an
+    der Anlage.
 - **Images:** `ghcr.io/binda5000/bindaems-core:latest` und `ghcr.io/binda5000/bindaems-app:latest`.
   Sie sind öffentlich, und die CI setzt `latest` bei jedem Push auf `main`. core und app werden
   immer gemeinsam aus demselben Stand ausgerollt (gleiche Compose-Datei, gleiche Image-Tags): Die
   UI-Schemas sind streng, eine abweichende Version zeigt auf der System-Seite nur „Unerwartete
   Antwort vom Server“.
-- **Tests:** 6572 Python-Tests, davon 37 Property-Tests mit Hypothesis (6 für die Safety-Schicht,
-  6 für den Phasenwächter, 13 für den Akku-Sollwert, 7 für den 15-min-Wächter, 5 sonstige; Plan 3c
-  brachte zwei: Das Ziel des Plans liegt nie unter dem Halten, und `P_zul` folgt dem Ziel des
-  Schritts), und 515 UI-Tests (Vitest) sowie 24 E2E-Tests (Playwright); Abdeckung 97,80 % insgesamt
-  und 99 bis 100 % für `core/safety`, `core/control` und `core/actuators`. Stand nach Plan 3c auf dem
-  Branch mit der Fix-Welle nach dem Gesamtreview; auf `main` mit Plan 3b: 6274, 454 und 21,
-  97,74 %. Der volle Lauf von pytest dauert rund 23 Minuten.
+- **Tests:** 6785 Python-Tests im letzten vollen Lauf von Plan 4a (ohne die Szenarien des Simulators;
+  danach kamen zwei Doku-Tests dazu), davon 40 Property-Tests mit Hypothesis (6 für die Safety-Schicht,
+  6 für den Phasenwächter, 13 für den Akku-Sollwert, 7 für den 15-min-Wächter, 8 sonstige; Plan 4a
+  brachte drei: die Wasserfall-Regel der Nachrechnung gegen die des core (zwei Tests) und der
+  Steckzustand der app gegen den des core), und 619 UI-Tests (Vitest) sowie 27 E2E-Tests (Playwright).
+  Abdeckung und Simulator-Szenarien liefen je Task von Plan 4a nicht mit (der Lauf mit `--cov` samt
+  Szenarien brauchte in der Umgebung über 30 Minuten); die Gesamtmessung steht am Ende des Zweigs aus.
+  Stand davor, nach Plan 3c auf `main`: 6572, 515 und 24, Abdeckung 97,80 % insgesamt und 99 bis 100 %
+  für `core/safety`, `core/control` und `core/actuators`. Der volle Lauf von pytest dauert rund
+  23 Minuten.
   Geprüft wird mit ruff, mypy strict (auch für den Watchdog), import-linter (4 Verträge), pytest
   mit Abdeckungsgrenzen (≥ 75 % insgesamt, ≥ 90 % für `core/safety`, `core/control` und
   `core/actuators`), Vitest mit svelte-check, Prettier und ESLint; dazu E2E mit Playwright.
 - **Offen:**
+  - Gesamtreview von Plan 4a, eine mögliche Fix-Welle, die Messung von Abdeckung und Simulator-Szenarien
+    und die Integration auf `main`
+  - der nächste Entwicklungsschritt: Plan 4b „Geplantes Laden“ (ändert den core), nach der Abnahme der
+    Phase 3
+  - an der Anlage: Plan 4a ausrollen (nur `ems-app`, Punkt 6 unter „Offen an der Anlage“) und die 30 Tage
+    der Abnahme beginnen
   - an der Anlage: Images von 2d, 3a, 3b und 3c ausrollen (Punkte „Zu 3a gehört“, „Zu 3b gehört“ und
     „Zu 3c gehört“ unter „Offen an der Anlage“), die 30 echten Tage durch die Werkzeuge rechnen (Punkt
     5 dort), Dry-Run neben evcc beginnen und dabei die Inbetriebnahme Punkt 3 (die Erkennung läuft im
@@ -526,7 +583,7 @@ Anlage“).
 
 | Dokument | Inhalt |
 |---|---|
-| `docs/superpowers/specs/2026-10-08-bindaems-design.md` | Spec, verbindlich. Wichtig: 7 Regelung, 8 Sicherheit, 13 Web-UI, 14 Login, 17 Prüfprotokoll, 18 Phasenplan, 19 offene Punkte. Die Absätze „Stand Plan 2a/2b/2c-1/2c-2a/2c-2b/2d/3a/3b/3c“ gehen dem älteren Text davor vor |
+| `docs/superpowers/specs/2026-10-08-bindaems-design.md` | Spec, verbindlich. Wichtig: 7 Regelung, 8 Sicherheit, 13 Web-UI, 14 Login, 17 Prüfprotokoll, 18 Phasenplan, 19 offene Punkte. Die Absätze „Stand Plan 2a/2b/2c-1/2c-2a/2c-2b/2d/3a/3b/3c/4a“ gehen dem älteren Text davor vor |
 | `docs/superpowers/plans/2026-10-08-phase-1a-fundament-datenerfassung.md` | Plan 1a (core) |
 | `docs/superpowers/plans/2026-10-09-phase-1b-app-backend.md` | Plan 1b (app) |
 | `docs/superpowers/plans/2026-10-09-phase-1c-web-ui.md` | Plan 1c (UI), mit Anhang A zu den API-Formen |
@@ -539,14 +596,16 @@ Anlage“).
 | `docs/superpowers/specs/2026-10-14-phase-2c2-akku-spitzen-design.md` | Design 2c-2 (Akku-Sollwert, 15-min-Wächter, Zuordnungserkennung), Entscheidungen des Betreibers vom 14.10.2026; 2c-2a und 2c-2b umgesetzt; der Kopf nennt, was sich beim Bau geändert hat |
 | `docs/superpowers/plans/2026-10-14-phase-2c2a-akku-spitzen.md` | Plan 2c-2a, 14 Tasks, umgesetzt: Umbau, Akku-Sollwert, 15-min-Wächter, Simulator; Präzisierungen gegenüber dem Design, Texte, Szenarien |
 | `docs/superpowers/plans/2026-10-15-phase-2c2b-zuordnung.md` | Plan 2c-2b, 9 Tasks, umgesetzt: Zuordnungserkennung, Gast, Health je Wallbox, Simulator; Präzisierungen gegenüber dem Design, Texte, Szenarien |
-| `docs/betrieb.md` | Betriebshandbuch: Installation, Proxy (6), HA (7), Tarif (8, seit 3a mit Leistungspreis, Gebühren und Einspeisung), Sicherung (9), Prüfprotokolle einschließlich Teil 2 (11), Web-UI mit den Seiten „Laden“ und „Entscheidungen“ (12), Betriebszustände, Absicht, Live-Schalter, Übergabe und Entscheidungslog (13), Watchdog am Cerbo (14); am Ende „Laderegelung“ (Modi, Absicht, Zuordnung Auto und Wallbox, Dry-Run-Vergleich mit evcc, Umstieg), „Akku und Spitzen“ (Akku-Sollwert mit der Absicht des Plans, 15-min-Wächter, Health samt `plan`, Akku-Unterstützung bedienen, Victron in den Dry-Run und live mit den 2 Wochen Planausführung, Alarme), „Simulator“ „Prognosen“ (seit 3a: PV-Kalibrierung, Lastprognose, Prognosegüte, Nachtlauf, Schätzpreise, „An der Anlage prüfen“) und „Planung“ (seit 3b: Seite „Zeitplan“, Ablauf, Netzladen erlaubt, Einstellungen, Auslöser, Ersatzplan, Erklärungen, Budget, HA, API, Aufbewahrung, Szenarien mit `export_days` und `scenario_days`, „An der Anlage prüfen“; seit 3c: Übergabe an den core, Stand der Ausführung, Plan gegen Ist) |
+| `docs/betrieb.md` | Betriebshandbuch: Installation, Proxy (6), HA (7), Tarif (8, seit 3a mit Leistungspreis, Gebühren und Einspeisung), Sicherung (9), Prüfprotokolle einschließlich Teil 2 (11), Web-UI mit den Seiten „Laden“ und „Entscheidungen“ (12), Betriebszustände, Absicht, Live-Schalter, Übergabe und Entscheidungslog (13), Watchdog am Cerbo (14); seit 4a in Abschnitt 8 „Einstandspreis des Akkus“, „Ladesessions und Kosten je Auto“, „Lücken nachrechnen“, „Abgleich mit den Zählern“, „Statistik je Zeitraum“ und „Statistik ausrollen (Plan 4a)“, in 12 die Seite „Statistik“ und die Session auf „Laden“, in 3 „Grafana“; am Ende „Laderegelung“ (Modi, Absicht, Zuordnung Auto und Wallbox, Dry-Run-Vergleich mit evcc, Umstieg), „Akku und Spitzen“ (Akku-Sollwert mit der Absicht des Plans, 15-min-Wächter, Health samt `plan`, Akku-Unterstützung bedienen, Victron in den Dry-Run und live mit den 2 Wochen Planausführung, Alarme), „Simulator“ „Prognosen“ (seit 3a: PV-Kalibrierung, Lastprognose, Prognosegüte, Nachtlauf, Schätzpreise, „An der Anlage prüfen“) und „Planung“ (seit 3b: Seite „Zeitplan“, Ablauf, Netzladen erlaubt, Einstellungen, Auslöser, Ersatzplan, Erklärungen, Budget, HA, API, Aufbewahrung, Szenarien mit `export_days` und `scenario_days`, „An der Anlage prüfen“; seit 3c: Übergabe an den core, Stand der Ausführung, Plan gegen Ist) |
 | `docs/superpowers/plans/2026-10-15-phase-2d-bedienung.md` | Plan 2d, 18 Tasks, umgesetzt, auf `main`: Bedienung in UI und HA, Entscheidungslog in SQLite, Tesla vor der Live-Schaltung; Präzisierungen gegenüber der Spec, Texte |
 | `docs/superpowers/plans/2026-10-16-phase-3a-tarif-prognosen.md` | Plan 3a, 14 Tasks, umgesetzt, auf `main`: Tarifmodell mit Editor, Monatsspitze, Schätzpreise, Lastprognose, PV-Kalibrierung, Prognosegüte; die Einordnung teilt Phase 3 in 3a, 3b und 3c und nennt die Vorab-Entscheidungen für 3b und 3c |
 | `docs/superpowers/plans/2026-10-16-phase-3b-optimierer-zeitplan.md` | Plan 3b, 17 Tasks, umgesetzt und auf `main`: Optimierer, Ersatzplan, Plausibilität, Erklärungen, Planungsdienst mit Speicher, Seite „Zeitplan“, HA, Szenario-Werkzeuge; die 15 Entscheidungen des Betreibers vom 16.10.2026, Präzisierungen gegenüber der Spec, Texte |
 | `docs/superpowers/plans/2026-10-17-phase-3c-planausfuehrung.md` | Plan 3c, 17 Tasks, umgesetzt auf dem Branch (Gesamtreview und Fix-Welle erledigt): Plan in der Absicht, Prüfung im core, `HALTEN` und `NETZLADEN` über den Override, Budget des Wächters, Plan-Schwelle und Schalter der Akku-Unterstützung, Übergabe, Stand der Ausführung, „Plan gegen Ist“, Mehrkosten beim Boost, Simulator mit Wirkungsgrad; die 14 Entscheidungen des Betreibers vom 17.10.2026, Präzisierungen gegenüber der Spec, Texte |
+| `docs/superpowers/plans/2026-10-17-phase-4a-statistik.md` | Plan 4a, 16 Tasks, umgesetzt auf dem Arbeitszweig (Gesamtreview offen): Ladesessions, Einstandspreis, Kosten je Auto, Abgleich, Nachrechnung, Verbraucher je Tag, Seite „Statistik“, HA-Sensoren, Grafana; die 13 Entscheidungen des Betreibers vom 17.10.2026 (PV-Strom ins Auto kostet 0 ct), Präzisierungen gegenüber der Spec, Texte |
 | `cerbo-watchdog/README.md` | Watchdog: Zustände, Zeiten, D-Bus-Pfade, Installation und Probe |
 | `docs/verification/abnahme-phase-1.md` | Checkliste für die Abnahme der Phase 1 |
-| `docs/verification/README.md` | Prüfprotokoll Teil 1, Preise, Teil 2 (`verify_part2`) und Watchdog-Probe: Aufruf und Ergebnis |
+| `docs/verification/abnahme-phase-4.md` | Checkliste für die Abnahme der Phase 4, Teil Statistik (Plan 4a): 30 Tage ab dem Ausrollen, Abgleich innerhalb ±1 %; „HA in beide Richtungen“ und „Ziel-SOC“ folgen mit Plan 4b |
+| `docs/verification/README.md` | Prüfprotokoll Teil 1, Preise, Teil 2 (`verify_part2`) und Watchdog-Probe: Aufruf und Ergebnis; Verweise auf die Abnahmen der Phasen 1 und 4 |
 | `README.md` | Entwicklung, Web-UI, Demo-Backend |
 
 ## Aufbau
@@ -804,7 +863,7 @@ Demo-Zugänge: `admin`, `bedienen` (Bedienen), `gast` (Lesen) und `sicher` (Admi
 ## Stand der Installation beim Betreiber
 
 - Docker auf einer VM im LAN des Betreibers, Images `latest` vom Stand nach Plan 2b (ausgerollt am
-  12.10.2026). Die Pläne 2c-1, 2c-2a, 2c-2b, 2d, 3a, 3b und 3c sind noch nicht ausgerollt.
+  12.10.2026). Die Pläne 2c-1, 2c-2a, 2c-2b, 2d, 3a, 3b, 3c und 4a sind noch nicht ausgerollt.
 - Reverse Proxy mit HTTPS sowie Tarif und OeMAG-Wert im UI: laut Betreiber eingerichtet
   (11.10.2026). Zum Proxy gehören laut Betriebshandbuch 6: Port 8080 erreicht nur der Proxy,
   `app.trusted_proxies` ist gesetzt, `cookie_secure` steht wieder auf `true`.
@@ -854,7 +913,7 @@ Demo-Zugänge: `admin`, `bedienen` (Bedienen), `gast` (Lesen) und `sicher` (Admi
   - Felder `value`, `unit_of_measurement_str`, `device_class_str`, `state_class_str`,
     `friendly_name_str`
   - Wichtig auch für die Lastprognose aus der HA-Historie.
-- **Offen an der Anlage, als Nächstes (nach Plan 3c):**
+- **Offen an der Anlage, als Nächstes (nach Plan 4a):**
   1. Die Images ausrollen: `docker compose pull && docker compose up -d` (Betriebshandbuch 4),
      nachdem Plan 3c auf `main` ist (die Pläne 2c-1, 2c-2a, 2c-2b, 2d, 3a, 3b und 3c rollen zusammen
      aus; bis 3b ist alles auf `main`). core und app starten dabei neu. **Zu 2d gehört:**
@@ -1079,6 +1138,39 @@ Demo-Zugänge: `admin`, `bedienen` (Bedienen), `gast` (Lesen) und `sicher` (Admi
         - Der Test `test_app_runtime::test_runtime_starts_and_stops_cleanly` ist in der Entwicklung
           einmal gescheitert (`last_attempt` war `None`), einzeln und in allen späteren Läufen
           grün. Scheitert er in der CI, ist das ein bekannter Wackler und kein neuer Fehler.
+  6. **Statistik (Plan 4a) ausrollen und die Abnahme beginnen** (Betriebshandbuch, Abschnitt 8,
+     „Statistik ausrollen (Plan 4a)“). Plan 4a braucht nur `ems-app`: Der core bleibt, der Regelbetrieb
+     bleibt an, und die Aktoren behalten ihre Betriebsart. Er hängt nicht an den Punkten 1 bis 5 und kann
+     vor ihnen, mit ihnen (ein `docker compose pull && docker compose up -d` bringt alles zugleich) oder
+     danach kommen; mit Punkt 1 zusammen gibt es einen Neustart der app weniger. Die Images von GHCR
+     gibt es erst, wenn der Branch auf `main` ist (Gesamtreview, Integration); ein lokaler Build geht
+     auch vom Arbeitszweig.
+     1. `docker compose up -d --build ems-app` (oder `docker compose pull ems-app && docker compose up -d
+        ems-app`). Die Migration `0010` läuft beim Start der app. Keine neuen Felder in `config.yaml`,
+        der Watchdog bleibt unverändert, keine neue `config.ini`, keine neue ACL für Mosquitto (die neuen
+        HA-Entitäten sind Sensoren). Sicherung der Nacht als Rückfall: Eine ältere app startet mit der
+        migrierten Datenbank nicht.
+     2. Unter **Statistik** die ersten Werte prüfen: „Monat“ mit Kacheln und Abdeckung; der Abgleich der
+        letzten 35 Tage erscheint nach dem ersten Nachtrag der Abrechnung (höchstens 10 Minuten nach dem
+        Start); die Sessions beginnen mit dem Ausrollen, die Ladeenergie davor steht in „Autos“ als
+        „Unbekannt“. Der Einstandspreis wird beim ersten Start aus der gesamten Abrechnung gerechnet.
+     3. Im Tarif **OeMAG-Werte und monatliche Grundgebühren** nachtragen (soweit noch nicht geschehen), dann
+        die Abrechnung der betroffenen Tage neu bewerten. Ohne sie sind Einspeiseerlös, Kosten und
+        Ersparnis „–“.
+     4. Optional das **Grafana-Dashboard** `deploy/grafana/bindaems.json` importieren (Betriebshandbuch 3,
+        „Grafana“). Es ist nie gegen eine echte Grafana-Instanz importiert worden; ein Fehler dort ist ein
+        Befund. Die Abfragen sind nicht gegen die echte InfluxDB geprüft.
+     5. **Abnahme, Teil Statistik:** 30 Tage ab dem Ausrollen; im Abgleich (`/statistik`, „Monat“, oder
+        `GET /api/ledger/checks?from=…&to=…`) liegen Netzbezug und Einspeisung innerhalb ±1 %, markierte
+        Tage haben eine Ursache, einzelne Tage stimmen mit dem Zähler des Netzbetreibers, Unterschrift
+        (`docs/verification/abnahme-phase-4.md`). Der 25.10.2026 hat 100 Viertelstunden (Zeitumstellung).
+     6. **Risiken, die erst die Anlage zeigt:** Der Abgleich und die Nachrechnung sind nur gegen Fake-Reader
+        und Test-Antworten der InfluxDB gelaufen, nicht gegen die echte: die Abfrage
+        `GROUP BY time(30m),"source","id","direction"` auf `long.energy` und die 15-min-Fenster in `raw`.
+        Liefert der Abgleich an allen Tagen „Zählerstand fehlt“, stimmen Zeitfenster oder Tags nicht (Spec
+        11.2); ob der Netzzähler und die Wallbox-Zähler als `energy` ankommen, zeigt die erste Nacht. Die
+        Belegung der Wallboxen kommt aus Health (`wallboxes[].occupant`, 10-s-Takt): Ohne Regelbetrieb
+        steht dort niemand, und alle Sessions heißen „Unbekannt“ (der Steckzustand kommt aber auch dann).
   - Teil 2 schreibt auf die Geräte: nicht während der 7 Tage der Abnahme Phase 1 und ihres
     24-h-Mitschnitts (`docs/verification/abnahme-phase-1.md`, 4.2 und 4.3).
   - **Vor der Live-Schaltung von EVCS und Tesla** waren diese Punkte zu entscheiden oder umzusetzen
@@ -1219,6 +1311,21 @@ Demo-Zugänge: `admin`, `bedienen` (Bedienen), `gast` (Lesen) und `sicher` (Admi
      Simulator mit Wirkungsgrad und Plan-Szenarien. An der Anlage folgen 2 Wochen Dry-Run der
      Planausführung (DESS aus) und die 30 echten Tage, dann geht Victron live (Abnahme Phase 3).
 
+4. **Phase 4**, Geplantes Laden, Statistik, HA komplett (Spec 18), in zwei Plänen (Entscheidung des
+   Betreibers vom 17.10.2026; Einordnung im Plan 4a):
+   - **4a Statistik:** umgesetzt und je Task geprüft, auf dem Arbeitszweig `claude/phase-4-plan-whnbh6`,
+     noch nicht auf `main`; Gesamtreview, mögliche Fix-Welle und Integration stehen aus. Nur app, UI und
+     `deploy/`, der core bleibt unverändert (Kurzfassung). An der Anlage genügt der Neubau von `ems-app`
+     (Punkt 6 unter „Offen an der Anlage“), dann laufen die 30 Tage der Abnahme.
+   - **4b Geplantes Laden:** der **nächste Entwicklungsschritt**, nach der Abnahme der Phase 3. Er ändert
+     core und Optimierer (Modus „Geplant“ mit Ziel-SOC und Abfahrt, die Autos im Planer, Regel R2,
+     späteste Startzeit, Tesla-Ladelimit, in HA Ziel-SOC, Abfahrtszeit, „Fertig um“ und „Ziel
+     erreichbar“, Benachrichtigungen komplett) und braucht den Neustart des core. Weil `shared` dann
+     ohnehin ändert, gehören die vier neuen Objekt-IDs der Statistik-Sensoren in die Prüfung der
+     Konfiguration (`HA_SYSTEM_IDS` und `HA_VEHICLE_SUFFIXES` in `shared/config.py`; dazu der Test
+     `test_config_and_entities_agree_on_object_ids`, der sie bis dahin selbst ergänzt). Die
+     Abnahmepunkte „HA in beide Richtungen“ und „Ziel-SOC“ der Phase 4 folgen mit 4b.
+
 ### Nächster Schritt: die Anlage
 
 1. Plan 2b ist auf `main`; Gesamtreview, Fix-Durchgang und Re-Review sind erledigt, die
@@ -1262,7 +1369,8 @@ Demo-Zugänge: `admin`, `bedienen` (Bedienen), `gast` (Lesen) und `sicher` (Admi
      Wochen** mit DESS aus (Punkt 4) und parallel die **30 echten Tage** durch `export_days` und
      `scenario_days` (Punkt 5);
    - danach **Victron live** mit den vier Bedingungen aus Spec 8.7 und die **Abnahme der Phase 3**.
-     Dann folgt Phase 4 (Modus „Geplant“, Regel R2, die Autos im Planer).
+     Dann folgt Plan 4b (Modus „Geplant“, Regel R2, die Autos im Planer); die Statistik aus 4a ist
+     schon gebaut und kann vorher ausgerollt werden (Punkt 6 unter „Offen an der Anlage“).
 
 ## Hinweise für die Pläne 2c-2 und 2d
 
@@ -2383,3 +2491,142 @@ den Tasks 4, 6, 7, 11 und 16, die mit Task 17 eingearbeitet sind):
   Abfrage der Health landet vor dem nächsten Regelzyklus; etwa 100 Zeilen am Tag, `sender.py`). Kommt
   der core innerhalb einer Abfrage (10 s) nach einem Neustart zurück, kann die gespeicherte Health bis
   zum Wecken beim Verbinden überleben (`core_link.py`, `_connected` leert sie nicht).
+
+Entschieden in Plan 4a; die 13 Entscheidungen hat der Betreiber am 17.10.2026 mit dem Plan freigegeben
+(`docs/superpowers/plans/2026-10-17-phase-4a-statistik.md`, „Vorgeschlagene Entscheidungen“, und Spec 18,
+„Stand Plan 4a“), mit einer Änderung an den Entscheidungen 4 und 5: PV-Strom, der ins Auto geht (direkt
+oder über den Akku), kostet 0 ct statt den OeMAG-Wert. Die Rulings der Umsetzung stehen im Ledger (nur
+lokal, nicht im Repository), soweit sie das Verhalten betreffen in den Absätzen „Stand Plan 4a“ der Spec
+und im Betriebshandbuch. Hier beides mit Kosten, falls es falsch ist:
+
+- **Die Entscheidungen (mit der Alternative aus dem Plan):**
+  1. **Zuschnitt der Phase 4:** 4a „Statistik“ (nur app, UI und `deploy/`), 4b „Geplantes Laden“ (ändert
+     core und Optimierer, kommt nach der Abnahme der Phase 3). Alternative: ein Plan für die ganze Phase.
+     Falls falsch: Die Statistik käme erst mit dem Planer.
+  2. **Nur app, core unverändert:** kein neuer Typ in `shared`; `ChargingSession` lebt in
+     `app/charging/sessions.py`. Alternative: der Typ in `shared`. Falls falsch: Das core-Image ändert sich,
+     und das Ausrollen braucht einen Neustart des core.
+  3. **Ladesessions aus dem Steckzustand:** Eine Session ist die Zeit, in der an einer Wallbox ein Auto
+     steckt; das Fahrzeug kommt aus der Belegung in Health, eine Pause der Beobachtung bis 30 min trennt
+     sie nicht. Alternative: Sessions aus der Ladeenergie der Abrechnung (sie trennte jede PV-Pause und
+     kennte keine Steckzeiten). Falls falsch: Die Belegung kommt nur, wenn der core regelt (Regelbetrieb
+     an); sonst heißen alle Sessions „Unbekannt“.
+  4. **Einstandspreis des Akkus mit PV zu 0 ct** (Betreiber, abweichend von Spec 11.4): PV-Ladung 0 ct,
+     Netzladung zum Bezugspreis, Entladung mit dem Mittelwert plus `planning.wear_ct`, Inhalt begrenzt auf
+     `battery.usable_kwh`. Alternative: PV-Ladung mit dem OeMAG-Wert. Falls falsch: Die Kosten je Auto
+     lassen den entgangenen Einspeiseerlös aus; die Änderung wäre eine Zeile in `costing.py` und eine
+     Neurechnung.
+  5. **Kosten je Auto:** Netz × Bezugspreis + PV × 0 + Akku × Einstandspreis, je Slot der Session an der
+     Wallbox zugeordnet; fehlt ein Bezugspreis, ist die Summe unbekannt. Falls falsch: dieselbe Zeile wie
+     bei 4.
+  6. **Abgleich:** nachts um 02:45 Uhr für 7 Tage, beim Start für 35; Netzbezug, Einspeisung, PV (ohne
+     Markierung) und jede Wallbox gegen die Zählerstände um Mitternacht; Markierung bei mehr als 1 % und
+     mehr als 0,1 kWh; ein fehlender oder zurückgesetzter Zähler ergibt keine Markierung, sondern einen
+     Grund. Falls falsch: Schwellen und Fenster stehen als Konstanten in `checks.py` und `runtime.py`.
+  7. **Nachrechnung von Lücken:** höchstens 7 Tage, mit Zählerständen an beiden Rändern, gleichmäßig auf
+     die Viertelstunden verteilt, Herkunft `estimate` und `covered_s = 0`. Falls falsch: Geschätzte Tage
+     verbessern den Abgleich von selbst (die Schätzung rechnet aus denselben Zählern); die Abnahme nennt
+     deshalb die Zahl der geschätzten Viertelstunden.
+  8. **Verbraucher je Tag** in `consumer_day`: 31 Tage beim Start, nachts die letzten 3. Älter bleibt leer.
+     Falls falsch: Die Statistik eines Verbrauchers über mehr als 31 Tage rückwärts hat Lücken.
+  9. **Seite „Statistik“** mit Tag, Woche, Monat und Jahr; die Ersparnis bleibt ohne Grundgebühren und
+     Leistungspreis. Falls falsch: eine Rechnung in `app/stats/service.py` und ein Wortlaut.
+  10. **Grundgebühren und Leistungspreis** in der Statistik: Grundgebühren anteilig je Tag bis heute, der
+      Leistungspreis je Monat aus der Monatsspitze, nur in Monat und Jahr. Falls falsch: Die Kachel
+      „Kosten“ zeigt weniger oder mehr als die Rechnung des Versorgers.
+  11. **Statistik-Sensoren in HA** alle 15 Minuten und bei neuen Slots. Falls falsch: Werte bis zu
+      15 Minuten alt.
+  12. **Grafana:** ein Startdashboard als JSON, die Datenquelle beim Import. Falls falsch: ein Dashboard
+      in der Instanz des Betreibers anders aufbauen.
+  13. **Abnahme:** 30 Tage ab dem Ausrollen, ±1 % im Abgleich; „HA in beide Richtungen“ und „Ziel-SOC“
+      mit 4b. Falls falsch: Die Phase 4 wäre früher oder später ganz abgenommen.
+- **Festlegungen der Umsetzung (entschieden beim Bau; jede mit Kosten, falls falsch):**
+  - **Listener statt Konstruktorverweis:** `LedgerService.on_slots_changed(callback)` (eine Liste von
+    Listenern wie `SettingsService.on_change`); die Laufzeit meldet `costing.mark_dirty` an. Ein Verweis
+    des Einstandspreises auf den Dienst und zurück wäre zirkulär gewesen. Falls falsch: ein kleiner Umbau
+    der Verdrahtung in `runtime.py`.
+  - **Fahrzeug einer laufenden Session:** Der Tracker bestimmt es jede Minute neu, vorläufig mit dem
+    aktuellen Insassen, solange noch keiner Zeit hat (Präzisierung 6 nannte nur Wechsel und Ende). Das
+    hält „Ladeenergie“ in HA und die Zeile auf „Laden“ aktuell. Falls falsch: eine zusätzliche
+    Datenbanklesung je Minute.
+  - **Nachrechnung nur im Fenster der letzten 7 Tage:** Bei einem längeren Ausfall wird der Teil im
+    Fenster geschätzt (mit Zählerständen an beiden Rändern), der Teil davor bleibt leer. Falls falsch: Die
+    letzten 7 Tage eines langen Ausfalls tragen Schätzungen statt einer Lücke; sie sind als `estimate`
+    gekennzeichnet.
+  - **Start des Abgleichs wartet auf den ersten Nachtrag der Abrechnung** (höchstens 10 Minuten), sonst
+    liefen die 35 Tage gegen eine halbe Abrechnung, und Tage 8 bis 35 behielten falsche Markierungen bis
+    zum nächsten Start. Falls falsch: Der Start-Abgleich beginnt bis zu 10 Minuten später.
+  - **Verbraucher je Tag holt nachts 3 Tage nach,** nicht nur gestern; ein Ausfall von InfluxDB um 02:45
+    Uhr ließe sonst gestern bis zum nächsten Start leer. Gespeicherte Tage werden übersprungen. Falls
+    falsch: bis zu zwei Abfragen mehr in der Nacht.
+  - **Kennzahlen unvollständiger Zeiträume:** Verhältnisse sind nur bei Nenner 0 leer (noch nicht
+    begonnene Tage zählen als 0), Geldbeträge, sobald ein Tag sie nicht kennt. Falls falsch:
+    Teilverhältnisse eines laufenden Zeitraums stehen da, wo „unbekannt“ erwartet wird.
+  - **Home Assistant:** Einheit `EUR` statt „€“ (ISO 4217, wie `monetary` sie verlangt); „Ladeenergie“
+    ohne Zustandsklasse (HA lehnt `measurement` bei `energy` ab, der Wert gilt je Session); „heute“ zeigt
+    nach einer gescheiterten Rechnung über Mitternacht „unbekannt“ statt den Wert von gestern. Die Prüfung
+    der Objekt-IDs in `shared/config.py` kennt die vier neuen IDs nicht, denn `shared` blieb unverändert
+    (Entscheidung 2): Die app bricht bei einer Kollision beim Start ab, statt dass die Konfiguration sie
+    ablehnt. Falls falsch: ein Wortlaut, eine Einheit; bei der IDs-Prüfung eine Fehlermeldung später.
+  - **Wortlaut der Seite außerhalb der „Texte“ des Plans:** In „Autos“ stehen PV, Akku und Netz in kWh
+    (die API liefert kWh); der Hinweis „Angezeigt werden die 200 neuesten Sessions.“ bei genau 200
+    Einträgen; die Karte „Monatsspitzen“ fehlt ohne Einträge; die Wallbox-Namen im Abgleich kommen aus
+    `/api/limits`; eine Session über Mitternacht zeigt beim Ende das Datum („18:00–09.10. 01:15“).
+    Falls falsch: nur Wortlaut.
+  - **Grafana:** Die Entscheidungen stehen in `raw` mit den Feldern `text` und `codes` (nicht wie in der
+    Spec `text` und `value`), `price` und `ledger` schreibt die app direkt nach `long`; das Dashboard
+    folgt dem, was geschrieben wird. Der Abschnitt „Grafana“ ist ein `###` im Abschnitt 3 des
+    Betriebshandbuchs (ein neuer `##` verschöbe die Nummern). Falls falsch: keine, nur Lage im Handbuch.
+
+Aufgeschobene Kleinigkeiten aus Plan 4a (aus den Reviews; keine davon gefährdet die Anlage; das Ledger
+nennt sie nach Task). Zuerst, was der Betreiber an der Anlage bemerken kann:
+
+- **Grafana:** Ersetzt ein echter Slot eine Schätzung, bleiben die Punkte der Schätzung je Fluss in
+  `ledger` stehen, die der echte Slot nicht hat; „Abrechnung je Tag“ kann solche Reste zeigen.
+  `timeFrom` 14 d schneidet die Randtage an. Die Tests des Dashboards lesen den Wortlaut der Schreiber im
+  Quelltext (spröde) und holen einen Helfer aus einem anderen Testmodul.
+- **Einstandspreis:** Die Markierung „neu rechnen“ liegt nur im Speicher. Ändert sich ein Slot mitten im
+  Verlauf und stürzt die app ab, bevor die Nachführung läuft, bleibt `ledger_cost` bis zum nächsten
+  Start veraltet (Abhilfe: bei abweichender Anzahl alles neu markieren). Die Nachführung läuft im
+  Handler des Live-Stroms und kann ihn bei einer langen Neurechnung aufhalten. Ein Kommentar in
+  `costing.py:58` ist falsch umbrochen, `_wear_ct` wird ohne Sperre gelesen (harmlos).
+- **Sessions und Tracker:** Die „laufende oder letzte“ Session für HA sucht unter den 5 neuesten
+  (`STATS_SESSION_LIMIT`); eine ältere, noch offene würde übersehen. Die erste Erkennung kann bis zu
+  5 s „unbekannt“ zeigen. Eine Session unter einer Minute, deren Insasse nur in der schließenden
+  Beobachtung steht, hat kein Fahrzeug („Unbekannt“). Eine Session, die länger als 30 Tage offen ist,
+  zeigt auf „Laden“ keine Zeile. Der Zustand im Speicher des Trackers wird innerhalb der Transaktion
+  geändert, ein Rollback ließe ihn abweichen (Abhilfe: bei Ausnahme `_loaded`, `_open` und `_assigned`
+  zurücksetzen). Ein gefiltertes `sessions()` liest die ganze Spanne und rechnet Summen, die es
+  verwirft; `by_vehicle` weitet einen Slot, der mitten im Slot beginnt, und liefert Einträge mit 0 für
+  Fahrzeuge mit Session, aber ohne Energie.
+- **Abgleich und Nachrechnung:** Die Schwellen (1 % und 0,1 kWh) vergleichen rohe Gleitkommazahlen, am
+  Rand gibt es keine Tests. Die Hausbilanz der Nachrechnung kann ~1e-13 kWh Rest als winzigen Fluss
+  hinterlassen. Es fehlen Tests für den Abgleich eines Tages mit 100 Slots auf der Abrechnungsseite, für
+  Nachbartage, `first > last` und für Lücken auf einem Tag der Zeitumstellung; die Texte „Zählerstand
+  fehlt“ und „Zähler zurückgesetzt“ und die Listen der PV- und Wallbox-Signale stehen doppelt in
+  `estimate.py` und `checks.py`.
+- **Statistik:** Die Jahresansicht liest die Slots dreimal (`by_vehicle`, `sessions()` nur zum Zählen),
+  die Tagesansicht zweimal (Abhilfe: `SessionService.count_by_vehicle`). `stats` importiert das private
+  `_summary` aus `ledger.service` (öffentlich benennen), `_rounded_deep` dupliziert `_rounded`, und es
+  gibt keinen Test für Geld über mehrere Tage mit einem unbekannten.
+- **Verbraucher je Tag:** Je fehlendem Tag eine Abfrage an InfluxDB (höchstens 31, einmal beim Start); es
+  gibt keinen Test für einen 23-Stunden-Tag und keinen dafür, dass `store` Zeilen eines gelöschten
+  Verbrauchers verwirft; der Kopf von `days.py` sagt noch „nachts für gestern“ (es sind die letzten 3).
+- **UI:** Die Seite zeigt beim Blättern kurz „Lädt …“ statt der alten Werte. Der Test der Zeitumstellung
+  zählt die Stunden nahezu tautologisch; die Monatsnamen stehen in zwei Tabellen; für das Abmelden des
+  Taktes fehlt ein Test. Die Zahl 200 steht in der UI doppelt zur Grenze des Servers (Konstante
+  `SESSIONS_LIMIT`); „Abgleich“ zeigt einen leeren Körper, wenn Tage geprüft sind, aber weder Summen noch
+  Markierungen da sind; der Grund bei einem Verbraucher ohne Wert ist auf dem Handy und für Screenreader
+  nicht sichtbar (nur `title`); die Tabellenformatierung steht in vier Karten; die markierten Tage zeigt
+  das Jahr nicht. Auf „Laden“ steht der Preis einer Session als „0,52 €“ (Wortlaut des Plans), in den
+  Tabellen der Statistik als „€ 0,52“ (`formatEur`); `isRunning || end === null` ist doppelt; der
+  Takt von 60 s und die Neuberechnung des Datums sind nicht getestet.
+- **Demo-Welt und Tests:** Der Plan der Demo-Welt hat eine Monatsspitze von 1,78 kW, die Kosten des Boosts
+  und die Statistik rechnen mit 5,5 kW (die Statistik läuft nach der Planung); in der Demo stehen viele
+  Tage mit „Zähler zeigt 0 kWh“; die Demo-Tests prüfen `assignment_log` nicht, und „Unbekannt“ kommt in
+  keiner Vertragsdatei vor; `ui_world` greift auf private Mitglieder zu. Der Test des Trackers prüft
+  nicht, dass `record` außerhalb der Ereignisschleife läuft, die Tests warten `task.cancel()` nicht ab,
+  `log` als Parameter verdeckt das Modul-Log, und `T0` kommt aus `conftest`. Die Verdrahtung des
+  Einstandspreises in `runtime.py` ist nicht getestet (der Hilfsbau der Tests kopiert sie), für die neuen
+  Tabellen gibt es keinen Einfügetest in der Datenbank, `test_service.py:279` übergibt `SlotFlows`
+  positionsweise, und der Test des Limits der Sessions prüft nicht, dass die beiden neuesten kommen.

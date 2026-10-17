@@ -1,6 +1,6 @@
 # Betrieb von BindaEMS
 
-Stand: Plan 3b (Optimierer und Zeitplan) auf dem Stand von Plan 3a (Tarif und Prognosen) und Phase 2d (Bedienung in UI und HA). Auf der VM laufen zwei Dienste. Der core **regelt** seit Plan
+Stand: Plan 4a (Statistik) auf dem Stand von Plan 3c (Planausführung), 3b (Optimierer und Zeitplan), 3a (Tarif und Prognosen) und Phase 2d (Bedienung in UI und HA). Auf der VM laufen zwei Dienste. Der core **regelt** seit Plan
 2c-1 die beiden Ladepunkte (EVCS und Tesla), seit Plan 2c-2a den Akku (Override an Victron) und die
 Spitzen (15-min-Wächter) und **erkennt** seit Plan 2c-2b selbst, welches Auto an welcher Wallbox
 steht, auch ein Gast. Er **sendet aber nichts**, solange ihre Aktoren im Dry-Run sind: Er
@@ -27,7 +27,10 @@ auf der Seite „Entscheidungen“ und in Grafana.
   Plan 3b plant sie außerdem den Akku für bis zu 36 h und zeigt den Plan samt dem Stand seiner
   Ausführung im core (Seite „Zeitplan“, Abschnitt „Planung“). Sie speichert das
   Entscheidungslog, meldet Sensoren und Bedienelemente per MQTT Discovery an Home Assistant und
-  meldet Alarme dort als Benachrichtigung (Abschnitt 7).
+  meldet Alarme dort als Benachrichtigung (Abschnitt 7). Seit Plan 4a zeichnet sie außerdem die
+  Ladesessions auf, rechnet den Einstandspreis des Akkus und die Kosten je Auto, gleicht die
+  Abrechnung jede Nacht mit den Zählern ab, rechnet Lücken nach und zeigt das alles auf der Seite
+  „Statistik“ (Abschnitt 8 und 12). Das alles liest nur; Plan 4a ändert den core nicht.
 
 Dazu kommt der **Watchdog** auf dem Cerbo, den du einmal installierst (Abschnitt 14). Er ist der
 Totmann-Schalter der Anlage und greift nur ein, wenn ein live geschalteter core ausfällt.
@@ -181,6 +184,13 @@ Minutenmittel in `long` und lassen sich in Grafana mit der Retention Policy `lon
 - **Tags:**
   - `latest` ist der Stand von `main`.
   - Zusätzlich gibt es je Commit `sha-<kurz>` und je Release `vX.Y.Z`.
+- **Update mit Plan 4a (Statistik):** Plan 4a ändert nur die app. Du baust oder ziehst nur `ems-app`;
+  der core läuft weiter, und der Regelbetrieb bleibt an. Die Schritte stehen am Ende von Abschnitt 8,
+  „Statistik ausrollen (Plan 4a)“.
+- **Rollback auf einen Stand vor Plan 4a:** Die Migration `0010` der app ist beim Start gelaufen. Eine
+  ältere app kennt die Version `0010` nicht und startet mit dieser Datenbank nicht. Spiele vorher die
+  Sicherung von vor dem Ausrollen ein (Abschnitt 9); die Statistik seit dem Ausrollen geht dabei
+  verloren. Der core ist nicht betroffen.
 - **Rollback auf einen Stand vor Plan 3c:**
   - Ein core vor Plan 3c kann keine `intent.json` lesen, die ein core ab Plan 3c geschrieben hat (sie
     hat immer die Felder `plan` und `support`, und der ältere core lehnt unbekannte Felder ab). Er startet dann ohne Absicht und meldet den Alarm
@@ -352,8 +362,13 @@ Entitäten (Gerät „BindaEMS“, sofern nicht anders angegeben):
 
 Die Sensoren zu Ersparnis, Autarkie und Ladeenergie sind nur lesend. Die app rechnet sie nicht im
 5-s-Takt der übrigen Werte, sondern bei jeder neuen Viertelstunde der Abrechnung und spätestens alle
-15 Minuten neu; scheitert die Rechnung, behalten die Sensoren ihren letzten Wert. Die Zahlen sind
-dieselben wie in der Statistik je Zeitraum (Abschnitt „Statistik je Zeitraum“, `GET /api/stats`).
+15 Minuten neu; scheitert die Rechnung, behalten die Sensoren ihren letzten Wert. Nur über Mitternacht
+hinweg nicht: „Ersparnis heute“ und „Autarkie heute“ zeigen dann „unbekannt“ statt den Wert von gestern.
+Die Zahlen sind dieselben wie in der Statistik je Zeitraum (Abschnitt „Statistik je Zeitraum“,
+`GET /api/stats`). „Ladeenergie“ hat keine Zustandsklasse, denn sie gilt je Session und ist kein
+Zählerstand; Home Assistant führt dafür keine Langzeitstatistik. Welche Session „laufend oder letzte“
+ist, sucht die app unter den neuesten 5 des Fahrzeugs der letzten 90 Tage; eine ältere, noch offene
+Session fände sie nicht.
 
 Fährt die app geordnet herunter, meldet sie sich selbst ab; bei einem Absturz oder
 Verbindungsabbruch setzt der Broker alle Entitäten über den Last Will auf „nicht verfügbar“.
@@ -550,6 +565,29 @@ curl -b jar -H "X-CSRF-Token: $CSRF" -H 'Content-Type: application/json' \
   -d @import.json "$APP/api/settings/import"
 ```
 
+### Einstandspreis des Akkus
+
+Die app führt für den Akku einen gleitenden Mittelwert, den **Einstandspreis**: Was kostet eine kWh,
+die jetzt im Akku steckt? Er ist keine eigene Anzeige, sondern die Grundlage für „Akku → Auto“ und die
+Kosten je Auto (nächster Unterabschnitt). Er entsteht aus der Abrechnung, Viertelstunde für
+Viertelstunde in zeitlicher Reihenfolge, und kann nicht auseinanderlaufen: Ändert sich ein Slot oder
+ein Preis, rechnet die app ab dem frühesten geänderten Slot neu.
+
+- **PV-Ladung kostet 0 ct,** Netzladung den Bezugspreis der Viertelstunde (Entscheidung des Betreibers
+  vom 17.10.2026, anders als Spec 11.4: PV-Strom zählt nicht mit dem OeMAG-Wert). Der Mittelwert ist
+  damit der Netzanteil im Akku zum Bezugspreis. Der entgangene Einspeiseerlös erscheint nirgends in
+  den Kosten je Auto; die Tagesbilanz (Einspeiseerlös, Ersparnis) bleibt davon unberührt.
+- **Inhalt:** Der gerechnete Inhalt ist auf `battery.usable_kwh` begrenzt, damit Wandlungsverluste nicht
+  endlos Energie ansammeln.
+- **Entladung:** Sie kostet den Mittelwert zu Beginn der Viertelstunde plus den Verschleiß
+  (`planning.wear_ct`, Standard 2 ct/kWh, Einstellungen „Planung“). Bei leerem Inhalt gilt nur der
+  Verschleiß. Ändert sich `planning.wear_ct`, rechnet die app alles neu.
+- **Fehlt der Bezugspreis** einer Netzladung, zählt sie mit dem aktuellen Mittelwert, ohne Mittelwert
+  nur im Inhalt. Sobald der Preis nachgetragen ist (Abrechnung neu bewerten, siehe oben), rechnet die app ab
+  dort neu.
+- **Beim ersten Start mit Plan 4a** rechnet die app einmal über alle gespeicherten Viertelstunden;
+  das kann bei viel Abrechnung etwas dauern.
+
 ### Ladesessions und Kosten je Auto
 
 `GET /api/charging/sessions?from=JJJJ-MM-TT&to=JJJJ-MM-TT[&vehicle=<Schlüssel>]` (ab „Lesen“) liefert die
@@ -559,6 +597,14 @@ höchstens 200 Einträge. `vehicle` ist der Schlüssel aus `config.yaml`, `guest
 `vehicle_name`, `start`, `end` (`null` und `open: true`, solange die Session läuft), die Energie
 `kwh` mit den Anteilen `pv_kwh`, `battery_kwh`, `grid_kwh` und `cost_eur`.
 
+- **Wie eine Session entsteht:** Eine Session ist die Zeit, in der an einer Wallbox ein Auto steckt. Den
+  Steckzustand liest die app aus dem State des core (EVCS: `status` ungleich 0, Wall Connector:
+  `vehicle_connected`), auch bei Regelbetrieb aus. Welches Auto es ist, kennt sie aus der Belegung in
+  `GET /v1/health` (`wallboxes[].occupant`, alle 10 s): Es ist das Auto mit der längsten Zeit in der
+  Session, ein Gast ist „Gast“, ohne Beobachtung „Unbekannt“. Ohne Regelbetrieb ruht die Regelung, und
+  `wallboxes` zeigt niemanden: Dann heißen die Sessions „Unbekannt“. Eine Pause der Beobachtung (core
+  oder app aus) trennt eine Session nicht, wenn sie höchstens 30 Minuten dauert und das Auto noch
+  steckt; sonst endet die Session bei der letzten Beobachtung.
 - **Zuordnung:** Jede Viertelstunde gehört an einer Wallbox zu der Session, die sie am längsten überdeckt
   (bei Gleichstand der späteren). Energie ohne Session zählt als „Unbekannt“. Eine laufende Session
   endet für die Zuordnung bei „jetzt“.
@@ -594,8 +640,12 @@ Zählern, und beim Start erst nach dem ersten Nachtrag der Abrechnung (höchsten
   ändert nichts.
 - **Wann eine Lücke leer bleibt:** Fehlt der Zählerstand von Netzbezug oder Einspeisung an einem
   der beiden Ränder oder ist ein Zähler zurückgesetzt, bleibt die Lücke leer (der Grund steht im
-  Log, Ereignis „Lücke bleibt leer“). Das gilt auch für Lücken über 7 Tage. Ein Ausfall von
-  InfluxDB ergibt eine Warnung; die nächste Nacht versucht es erneut.
+  Log, Ereignis „Lücke bleibt leer“). Ein Ausfall von InfluxDB ergibt eine Warnung; die nächste
+  Nacht versucht es erneut.
+- **Nur die letzten 7 Tage:** Die Nachrechnung sieht immer nur das Fenster der letzten 7 Tage bis
+  gestern. Dauerte ein Ausfall länger, bleibt der Teil davor leer, und der Teil im Fenster wird
+  geschätzt, wenn an beiden Rändern Zählerstände da sind. Eine einzelne Lücke über 7 Tage rechnet die
+  app nicht (Warnung „Lücke zu lang für eine Nachrechnung“).
 
 ### Abgleich mit den Zählern
 
@@ -636,7 +686,9 @@ läuft von Montag bis Sonntag (ISO). Die Antwort enthält `period`, `first`, `la
   `autarky` ist `1 − Bezug ÷ Verbrauch`, `self_consumption` ist `(PV − Einspeisung) ÷ PV`, die
   Ersparnis (`savings_no_plant_eur`, `savings_same_import_eur`) folgt den Formeln der Tagesbilanz und
   bleibt ohne Grundgebühren und Leistungspreis. Ein Verhältnis ist `null`, wenn sein Nenner 0 ist
-  (z. B. in der Zukunft); ein Geldbetrag ist `null`, sobald ein Tag ihn nicht kennt.
+  (z. B. in der Zukunft); ein laufender Zeitraum zählt die Tage, die noch nicht begonnen haben,
+  als 0, die Verhältnisse gelten dann „bis jetzt“. Ein Geldbetrag ist `null`, sobald ein Tag ihn
+  nicht kennt.
 - **Buckets:** `buckets` zeigt bei „Tag“ eine Stunde je Eintrag (23, 24 oder 25 Einträge an Tagen der
   Zeitumstellung, `start` mit Zone), bei „Woche“ und „Monat“ einen Tag je Eintrag, bei „Jahr“ einen
   Monat (`JJJJ-MM`).
@@ -655,6 +707,51 @@ läuft von Montag bis Sonntag (ISO). Die Antwort enthält `period`, `first`, `la
 ```bash
 curl -b jar "$APP/api/stats?period=month&date=2026-10-09"
 ```
+
+### Statistik ausrollen (Plan 4a)
+
+Plan 4a ändert nur die app. Das Image des core bleibt gleich: Der core läuft weiter, der Regelbetrieb
+bleibt an, und die Aktoren behalten ihre Betriebsart. Es ist keine neue Konfiguration und keine neue
+`config.ini` nötig; die HA-Sensoren der Statistik sind `sensor`-Entitäten und brauchen keine neue
+ACL. Die Statistik liest nur und schreibt nichts auf Geräte. Rolle sie wie die übrigen Pläne
+(Abschnitt 4) mit den Images aus, oder, wenn du lokal baust, nur die app:
+
+```bash
+cd /opt/bindaems
+docker compose up -d --build ems-app          # lokaler Build (Checkout im Ordner deploy/)
+# oder mit den Images von GHCR:
+docker compose pull ems-app && docker compose up -d ems-app
+```
+
+1. **Ausrollen:** Der Befehl oben. Währenddessen fehlt das UI kurz; der core regelt weiter, und die
+   app holt die Abrechnung der letzten 7 Tage danach aus InfluxDB nach. Die Sicherung der Nacht
+   reicht als Rückfall (Abschnitt 4, „Rollback auf einen Stand vor Plan 4a“).
+2. **Migration:** Die Migration `0010` läuft beim Start der app von selbst. Sie legt die Tabellen
+   `assignment_log`, `charging_session`, `ledger_cost`, `ledger_check` und `consumer_day` an und
+   ändert keine vorhandene.
+3. **Erste Werte prüfen:** Öffne die Seite **Statistik** (Abschnitt 12) und stelle „Monat“ ein.
+   - **Abgleich:** Beim Start gleicht die app die letzten 35 Tage mit den Zählern ab und wartet dafür
+     auf den ersten Nachtrag der Abrechnung (höchstens 10 Minuten). Die Karte „Abgleich mit den
+     Zählern“ füllt sich danach; eine Weile steht dort „Noch kein Tag abgeglichen.“ Markierte Tage
+     suchst du nach ihrer Ursache (Lücke, Zählertausch, fehlender Zählerstand), siehe „Abgleich mit
+     den Zählern“ oben.
+   - **Ladesessions:** Sie beginnen erst mit dem Ausrollen; für die Zeit davor kennt die app nicht, wer
+     an welcher Wallbox stand. Die Ladeenergie davor erscheint in „Autos“ als „Unbekannt“. Steckt jetzt
+     ein Auto, zeigt die Karte „Ladesessions“ eine Session mit „läuft“ und die Seite **Laden** die Zeile
+     „Session seit …“.
+   - **Einstandspreis:** Er entsteht beim ersten Start aus der gesamten gespeicherten Abrechnung; die
+     Kosten je Auto sind erst danach da.
+   - **Verbraucher:** Die Energie je Verbraucher der letzten 31 Tage holt die app beim Start aus
+     InfluxDB (eine Abfrage je Tag); ältere Tage bleiben leer.
+4. **Tarif nachtragen:** OeMAG-Werte und monatliche Gebühren unter **Einstellungen** → „Bearbeiten“
+   eintragen, soweit sie fehlen (Abschnitt 8, Anfang). Ohne OeMAG-Wert sind Einspeiseerlös, Kosten und
+   Ersparnis „–“ (unbekannt), ohne Grundgebühr zählt die Kostenzeile „Grundgebühren“ 0 €. Danach die
+   Abrechnung der betroffenen Tage neu bewerten; Einstandspreis und Kosten je Auto ziehen von selbst
+   nach.
+5. **Grafana-Dashboard importieren (optional):** Abschnitt 3, „Grafana“.
+
+Die Abnahme dieses Teils der Phase 4 steht in `docs/verification/abnahme-phase-4.md`: 30 Tage ab dem
+Ausrollen.
 
 ## 9. Sicherung und Wiederherstellung
 
@@ -675,7 +772,10 @@ docker compose start ems-app
 
 Die WAL-Dateien müssen weg, sonst spielt SQLite alte Änderungen in die zurückgeholte Datei.
 Daten seit der Sicherung (z. B. Preise, Abrechnung) holt die app beim Start zum Teil wieder:
-Preise neu von den Quellen, Viertelstunden der letzten 7 Tage aus InfluxDB.
+Preise neu von den Quellen, Viertelstunden der letzten 7 Tage aus InfluxDB. Die Statistik holt
+die app ebenfalls nach, soweit sie sich rechnen lässt: Einstandspreis, Abgleich (35 Tage) und
+Energie je Verbraucher (31 Tage). Ladesessions und Belegung seit der Sicherung gehen verloren, denn
+sie kommen nur aus dem Betrieb der app.
 
 ## 10. Proxmox-HA
 
@@ -973,6 +1073,7 @@ gilt für diesen Browser.
 | Laden | je Fahrzeug und je Wallbox eine Karte, dazu „Gast“, „Akku-Unterstützung“ und „Vorrang“; ab „Bedienen“ mit den Bedienelementen (unten, „Laden“) |
 | Zeitplan | der Akkuplan für bis zu 36 h: Kopf mit dem Stand der Ausführung, Quelle, Gültigkeit und Kosten gegenüber „Victron allein“, Diagramme „Preise und Prognosen“ und „Akku“, „Ablauf“ in Blöcken mit Satz; ab „Bedienen“ mit „Netzladen erlaubt“ und „Neu planen“ (Abschnitt „Planung“) |
 | Verlauf | Diagramm mit bis zu 8 Reihen für frei wählbare Tage (höchstens 400), Tagesbilanz mit Abdeckung (Viertelstunden und Anteil der aufgezeichneten Zeit; am laufenden Tag „bis jetzt“, also nur die vergangenen Viertelstunden), Kosten, Erlös, Autarkie und den Tageswerten der Zähler (Differenz über den Tag) für den Abgleich mit VRM |
+| Statistik | Tag, Woche, Monat oder Jahr mit Blättern: Autarkie, Eigenverbrauch, Kosten, Ersparnis und Einspeiseerlös, Diagramm „Energie“ und die Karten „Kosten“, „Autos“, „Ladesessions“, „Verbraucher“, „Monatsspitzen“ und „Abgleich mit den Zählern“ (unten, „Statistik“) |
 | Verbraucher | Verbraucherbaum mit „Sonstiges“, Leistung und Energie seit Mitternacht („Heute“); Admins legen Verbraucher an, ändern und löschen sie |
 | System | Komponenten, Hinweise, core (Betriebsart mit Beginn und Gründen, Eingangsdaten, Adapter, Selbstprüfung, Alarme), Bedienung (Regelbetrieb; Admins: „Live schalten…“ und „Auf Dry-Run…“, Abschnitt 13), Aktoren (angefordert, wirksam, Freigabe, Hinweise und Sperren; Admins: „Quittieren“), Watchdog am Cerbo (Abschnitt 14), Preise (Admins: „Preise jetzt abrufen“), PV-Prognose, alle Signale mit Suche |
 | Entscheidungen | das Entscheidungslog mit Filtern (unten, „Entscheidungen und Warum?“) |
@@ -991,14 +1092,21 @@ Regelbetrieb“). Bis Health eine Änderung zeigt, steht auf der Seite die gesen
   Modi und Boost wirken erst mit Regelbetrieb.“ Ab „Bedienen“ hat der Hinweis die Taste „Regelbetrieb
   einschalten“.
 - **Fahrzeug:** Ladestand, Lademodus, Wallbox und Art der Zuordnung, angesteckt, lädt, die Grenze des
-  Phasenwächters, der letzte Grund und, bei einem Fahrzeug mit Tessie, die Befehle der letzten Stunde
-  (`commands_hour`, gegen das Stundenlimit von 20). Der Lademodus ist eine Auswahl: PV-Überschuss,
+  Phasenwächters, der letzte Grund, die Session (unten) und, bei einem Fahrzeug mit Tessie, die
+  Befehle der letzten Stunde (`commands_hour`, gegen das Stundenlimit von 20). Der Lademodus ist eine Auswahl: PV-Überschuss,
   Min+PV, Sofort oder Aus. Die Taste „Boost“ setzt einen Boost bis zum Abstecken, höchstens 12 h;
   danach steht dort „Boost beenden“ und, solange er gilt, „bis HH:MM“. Gilt ein Boost schon, wartet
   aber auf einen Ansteckvorgang, der noch nicht begonnen hat, steht daneben „wartet auf Anstecken“. Die
   Dauer wählst du nicht. Ab „Bedienen“ steht unter den Bedienelementen, was ein Boost kosten kann:
   „Boost kann bis zu {€} € Leistungspreis im Monat kosten ({kW} kW mehr Spitze).“ (Abschnitt
   „Laderegelung“, „Lademodi“, Boost).
+- **Session:** Eine Zeile unter den Fakten des Fahrzeugs, aus den Ladesessions der letzten 30 Tage
+  (Abschnitt 8, „Ladesessions und Kosten je Auto“; die Seite fragt sie jede Minute ab). Läuft eine,
+  steht dort „Session seit {HH:MM} · {kWh} kWh (PV {a} · Akku {b} · Netz {c})“. Sonst steht dort die
+  letzte, „Letzte Session {TT.MM.} {HH:MM}–{HH:MM} · {kWh} kWh · {€} €“, die Kosten nur, wenn sie
+  bekannt sind. Endet eine Session an einem anderen Tag als dem Beginn, steht beim Ende das Datum
+  („18:00–09.10. 01:15“). Ohne Session in den letzten 30 Tagen, auch bei einer, die länger läuft, und
+  bei einem Fehler der Abfrage steht keine Zeile da.
 - **Wallbox:** wer dort steht („kein Fahrzeug“, wenn kein Vorgang läuft, sonst das Fahrzeug oder
   „Gast“), die Art der Zuordnung (erkannt, angenommen, Übersteuerung, unklar) und die Indizien als
   Sätze („Tessie: zu Hause und angesteckt“, „Strom passt nicht zu Tessie“, …), je nachdem, ob sie das
@@ -1021,6 +1129,48 @@ Darunter vergleicht die Karte „Plan gegen Ist (heute)“ den Plan mit der Abre
 schaltest du dort „Netzladen erlaubt“ und löst „Neu planen“ aus; „Lesen“ sieht dieselbe Seite ohne
 die Bedienelemente. Aufbau, Auslöser, Ersatzplan und die Sätze der Erklärung stehen im Abschnitt
 „Planung“ am Ende dieses Handbuchs.
+
+### Statistik
+
+Die Seite **Statistik** (Navigation nach „Verlauf“) zeigt die Abrechnung für einen Zeitraum. Alle
+Rollen sehen sie, sie hat keine Bedienelemente. Die Daten kommen aus `GET /api/stats`, den Ladesessions
+und dem Abgleich (Abschnitt 8).
+
+- **Zeitraum:** „Tag“, „Woche“ (Montag bis Sonntag), „Monat“ und „Jahr“. Mit den Pfeilen „Zurück“ und
+  „Weiter“ blätterst du, „Heute“ springt zum laufenden Zeitraum. „Weiter“ und „Heute“ sind im laufenden
+  Zeitraum gesperrt, wo sie nichts bewirken. Die Überschrift nennt den Zeitraum: „Fr., 09.10.2026“, „KW 41 ·
+  05.10.–11.10.2026“, „Oktober 2026“ oder „2026“. Zeitraum und Datum stehen in der Adresse
+  (`/statistik?zeitraum=monat&datum=2026-10-09`), du kannst sie als Lesezeichen setzen.
+- **Hinweise im Kopf:** „Abdeckung {pct} %“ (Anteil der Zeit mit aufgezeichneter Abrechnung), bei
+  geschätzten Viertelstunden „{n} Viertelstunden geschätzt“ (Abschnitt 8, „Lücken nachrechnen“) und bei
+  einem laufenden Zeitraum „bis jetzt“.
+- **Kacheln:** „Autarkie“, „Eigenverbrauch“, „Kosten“ (mit Grundgebühren und, in Monat und Jahr, mit
+  Leistungspreis), „Ersparnis“ (Untertitel „gegenüber Fixtarif ohne Anlage“, ohne Grundgebühren und
+  Leistungspreis, denn die fielen auch ohne Anlage an) und „Einspeiseerlös“. Was nicht feststeht, weil
+  etwa ein Preis fehlt, steht als „–“.
+- **Diagramm „Energie“:** PV, Bezug und Einspeisung als Balken, Verbrauch als Linie; je Stunde (Tag, mit
+  23 oder 25 Stunden an der Zeitumstellung), je Tag (Woche, Monat) oder je Monat (Jahr).
+- **„Kosten“:** die Zeilen „Bezug“, „Einspeiseerlös“, „Netto“, „Grundgebühren“, „Leistungspreis“ (nur
+  Monat und Jahr, und nur mit Leistungspreis mit Satz) und „Summe“, darunter „Ersparnis ohne Anlage“ und
+  „Ersparnis bei gleichem Netzbezug“.
+- **„Autos“:** je Auto Energie, die Herkunft PV, Akku und Netz in kWh, Kosten, ct/kWh und die Zahl der
+  Sessions, dazu die Zeile „Akku → Autos“. Gast und ohne erkanntes Auto erscheinen als „Gast“ und
+  „Unbekannt“. Ohne Ladung: „Im Zeitraum wurde kein Auto geladen.“ PV-Strom ins Auto kostet 0 ct
+  (Abschnitt 8, „Einstandspreis des Akkus“).
+- **„Ladesessions“:** Beginn, Ende (eine laufende Session: „läuft“), Wallbox, Auto, Energie, „PV / Akku /
+  Netz“ und Kosten, neueste zuerst. Mehr als 200 zeigt die Karte nicht; sie sagt dann „Angezeigt werden
+  die 200 neuesten Sessions.“ Leer: „Keine Ladesessions im Zeitraum.“
+- **„Verbraucher“:** die Energie je Verbraucher im Zeitraum. Fehlt sie, steht „–“, und der Grund steht
+  als Titel am Wert (mit der Maus oder dem Screenreader; auf dem Handy nicht sichtbar). Zu den Tagen siehe
+  „Energie der Verbraucher“ unten.
+- **„Monatsspitzen“:** nur in Monat und Jahr: je Monat die höchste Viertelstunde des Netzbezugs mit
+  Zeitpunkt und, mit Leistungspreis, dessen Kosten. Gibt es keine, fehlt die Karte.
+- **„Abgleich mit den Zählern“:** je Größe (Netzbezug, Einspeisung, „PV (ohne Markierung)“, jede
+  Wallbox) die Summe der Abrechnung, die der Zähler und die Abweichung über die geprüften Tage, dazu
+  „Mehr als 1 % Abweichung am {Tage}.“ für die markierten Tage und „Noch kein Tag abgeglichen.“ ohne
+  einen geprüften Tag. Wie du eine Abweichung deutest, steht in Abschnitt 8, „Abgleich mit den Zählern“.
+
+Auf dem Handy scrollen die breiten Tabellen in ihrer Karte; die Seite selbst scrollt nicht seitlich.
 
 ### Entscheidungen und „Warum?“
 
@@ -1059,6 +1209,13 @@ aus dem Leistungsverlauf in InfluxDB:
 - **HA-Entitäten** aus der HA-Datenbank. Ein Wert gilt bis zur nächsten Änderung; der letzte
   Wert vor Mitternacht (höchstens 7 Tage zurück) gilt ab Mitternacht.
 - „Sonstiges“ ist die Energie des Elternelements minus die seiner Unterverbraucher.
+- **Je Tag gespeichert:** Seit Plan 4a speichert die app die Energie jedes Verbrauchers auch je Tag, für
+  die Statistik. Sie rechnet dafür wie für „Heute“. Beim Start holt sie die fehlenden Tage der letzten
+  31 nach, jede Nacht um 02:45 Uhr die der letzten 3; scheitert InfluxDB in einer Nacht, geht der Tag
+  also nicht verloren. Ältere Tage holt die app nicht nach; sie stehen als „Tag nicht gespeichert“
+  leer da. Ist der Verlauf eines Verbrauchers gerade nicht lesbar, behält er seine alte Zeile; ein neu
+  angelegter Verbraucher füllt die letzten 31 Tage beim nächsten Start, und löscht du ihn, verschwinden
+  auch seine Tage.
 
 Fehlt die Energie, steht der Grund unter dem Namen („Energie: …“):
 

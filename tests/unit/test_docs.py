@@ -20,6 +20,78 @@ def test_acceptance_checklist_covers_spec_18() -> None:
         assert criterion in text
 
 
+def test_acceptance_checklist_of_phase_4_covers_the_statistics_part() -> None:
+    # Spec 18, Phase 4: die Abrechnung über 30 Tage innerhalb ±1 % der Zählerstände; die beiden
+    # anderen Punkte sind als „folgt mit Plan 4b“ eingetragen, und das README nennt die Datei.
+    text = " ".join(Path("docs/verification/abnahme-phase-4.md").read_text("utf-8").split())
+    for criterion in (
+        "30 Tage",
+        "±1 %",
+        "GET /api/ledger/checks",
+        "`import`",
+        "`export`",
+        "Markierte Tage",
+        "Zähler des Netzbetreibers",
+        "Unterschrift",
+    ):
+        assert criterion in text, criterion
+    for open_point in (
+        "Alle HA-Bedienelemente wirken in beide Richtungen | folgt mit Plan 4b",
+        "Ziel-SOC in mindestens 95 % der machbaren geplanten Sessions erreicht | folgt mit Plan 4b",
+    ):
+        assert open_point in text, open_point
+    assert "abnahme-phase-4.md" in Path("docs/verification/README.md").read_text("utf-8")
+
+
+def test_rollout_of_plan_4a_in_the_guide() -> None:
+    # „Statistik ausrollen (Plan 4a)“: nur die app, der core bleibt, Migration beim Start, erste
+    # Werte prüfen, Tarif nachtragen, Grafana optional.
+    section = " ".join(_guide_section("8. Tarif und Abrechnung").split())
+    _, found, text = section.partition("### Statistik ausrollen (Plan 4a) ")
+    assert found, "Der Unterabschnitt „Statistik ausrollen (Plan 4a)“ fehlt."
+    for topic in (
+        "docker compose up -d --build ems-app",
+        "Der core läuft weiter",
+        "der Regelbetrieb bleibt an",
+        "`0010`",
+        "Seite **Statistik**",
+        "OeMAG-Werte und monatliche Gebühren",
+        "Grafana-Dashboard importieren (optional)",
+        "docs/verification/abnahme-phase-4.md",
+    ):
+        assert topic in text, topic
+    assert "Einstandspreis des Akkus" in section
+
+
+def test_statistics_page_in_the_guide_uses_the_texts_of_the_ui() -> None:
+    # „Statistik“ in Abschnitt 12 nennt die Texte der Seite wörtlich, wie `ui/src` sie ausgibt.
+    section = " ".join(_guide_section("12. Web-UI").split())
+    _, found, text = section.partition("### Statistik ")
+    assert found, "Der Unterabschnitt „Statistik“ fehlt in „Web-UI“."
+    text = text.split(" ### ", 1)[0]
+    source = " ".join(
+        " ".join(path.read_text(encoding="utf-8").split())
+        for path in Path("ui/src").rglob("*")
+        if path.suffix in {".svelte", ".ts"} and ".test." not in path.name
+    )
+    for phrase in (
+        "Im Zeitraum wurde kein Auto geladen.",
+        "Keine Ladesessions im Zeitraum.",
+        "Noch kein Tag abgeglichen.",
+        "Angezeigt werden die 200 neuesten Sessions.",
+        "gegenüber Fixtarif ohne Anlage",
+        "Akku → Autos",
+        "PV (ohne Markierung)",
+        "Abgleich mit den Zählern",
+        "Ersparnis bei gleichem Netzbezug",
+    ):
+        assert phrase in text, phrase
+        assert phrase in source, phrase
+    assert "\n| Statistik | " in _guide_section("12. Web-UI")  # die Zeile der Seitenliste
+    for topic in ("Session seit {HH:MM}", "Letzte Session {TT.MM.}"):
+        assert topic in section, topic
+
+
 def test_operations_guide_describes_the_web_ui() -> None:
     text = Path("docs/betrieb.md").read_text(encoding="utf-8")
     for topic in ("## 12. Web-UI", "App installieren", "Sitzung", "Bestätigungscode"):
