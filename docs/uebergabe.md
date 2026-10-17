@@ -31,12 +31,11 @@ ist auf `main` (bis `e16bff5`).
 Gesamtreview („mit Korrekturen“) und eine Fix-Welle, danach ein sauberes Re-Review
 (`docs/superpowers/plans/2026-10-16-phase-3b-optimierer-zeitplan.md`, Branch
 `claude/project-thread-syy5yu`; 6274 Python-Tests, 454 Vitest, 21 E2E, Abdeckung 97,74 %).
-**Er ist noch nicht auf `main`; die Integration entscheidest du.** `main` ist inzwischen
-weitergegangen: Dort liegen zwei Trail-Commits (`9f6a899` und `d484d95`) über `e16bff5`. Der Branch
-muss deshalb vor dem Fast-Forward auf `main` rebased werden. **Die Pläne sind nur eine Vorschau:
+**Er ist auf `main`** (am 17.10.2026 mit deiner Zustimmung auf die Trail-Commits `9f6a899` und
+`d484d95` rebased und per Fast-Forward übernommen, alle Prüfungen grün auf dem Ergebnis). **Die Pläne sind nur eine Vorschau:
 Nichts stellt den Akku nach ihnen.** Der core bekommt sie nicht (das kommt mit 3c); die Seite
 „Zeitplan“ und die HA-Sensoren sind als Vorschau gekennzeichnet.
-Als Nächstes folgen die Integration von 3b, an der Anlage das gemeinsame Ausrollen von 2d, 3a und 3b
+Als Nächstes folgen an der Anlage das gemeinsame Ausrollen von 2d, 3a und 3b
 (3b zuerst als Vorschau, dazu die 30 echten Tage durch `export_days` und `scenario_days`) sowie die
 Inbetriebnahme Punkt 3 (Design 2c-2, 11.1): Die Erkennung läuft im Dry-Run mit, und Health zeigt, wer
 wo steht (siehe „Offen an der Anlage“). Danach folgt der Plan 3c (Planausführung im core).
@@ -312,8 +311,8 @@ wo steht (siehe „Offen an der Anlage“). Danach folgt der Plan 3c (Planausfü
     Anlage.
 - **Phase 3b (Optimierer und Zeitplan) ist umgesetzt, je Task und im Gesamtreview geprüft** (Plan:
   `docs/superpowers/plans/2026-10-16-phase-3b-optimierer-zeitplan.md`, 17 Tasks; Ausführung
-  subagent-driven; Branch `claude/project-thread-syy5yu`; die Integration auf `main` steht aus, und
-  vorher ist ein Rebase auf `main` nötig, denn dort liegen die Trail-Commits `9f6a899` und `d484d95`):
+  subagent-driven; Branch `claude/project-thread-syy5yu`; seit 17.10.2026 auf `main`, rebased auf die
+  Trail-Commits `9f6a899` und `d484d95`):
   - **Plan-Typen** (`shared/plan.py`): Akku-Absichten `EIGENVERBRAUCH`, `HALTEN` und `NETZLADEN(P)`,
     Plan mit Kopf und Slots (Quelle `optimizer` oder `fallback`, Gültigkeit, Grundcodes). Der core liest
     sie erst mit 3c.
@@ -387,8 +386,7 @@ wo steht (siehe „Offen an der Anlage“). Danach folgt der Plan 3c (Planausfü
   mit Abdeckungsgrenzen (≥ 75 % insgesamt, ≥ 90 % für `core/safety`, `core/control` und
   `core/actuators`), Vitest mit svelte-check, Prettier und ESLint; dazu E2E mit Playwright.
 - **Offen:**
-  - die Integration von Plan 3b auf `main` (deine Entscheidung; vorher ein Rebase auf `main`, siehe
-    „Nächster Schritt“), danach der Plan 3c
+  - der Plan 3c (Planausführung im core)
   - an der Anlage: Images von 2d, 3a und 3b ausrollen (Punkte „Zu 3a gehört“ und „Zu 3b gehört“ unter
     „Offen an der Anlage“), 3b als Vorschau laufen lassen und die 30 echten Tage durch die Werkzeuge
     rechnen (Punkt 5 dort), Dry-Run neben evcc beginnen und dabei die Inbetriebnahme Punkt 3
@@ -482,7 +480,7 @@ wo steht (siehe „Offen an der Anlage“). Danach folgt der Plan 3c (Planausfü
 | `docs/betrieb.md` | Betriebshandbuch: Installation, Proxy (6), HA (7), Tarif (8, seit 3a mit Leistungspreis, Gebühren und Einspeisung), Sicherung (9), Prüfprotokolle einschließlich Teil 2 (11), Web-UI mit den Seiten „Laden“ und „Entscheidungen“ (12), Betriebszustände, Absicht, Live-Schalter, Übergabe und Entscheidungslog (13), Watchdog am Cerbo (14); am Ende „Laderegelung“ (Modi, Absicht, Zuordnung Auto und Wallbox, Dry-Run-Vergleich mit evcc, Umstieg), „Akku und Spitzen“ (Akku-Sollwert, 15-min-Wächter, Health, Victron in den Dry-Run und live, Alarme), „Simulator“ „Prognosen“ (seit 3a: PV-Kalibrierung, Lastprognose, Prognosegüte, Nachtlauf, Schätzpreise, „An der Anlage prüfen“) und „Planung“ (seit 3b: Seite „Zeitplan“, Ablauf, Netzladen erlaubt, Einstellungen, Auslöser, Ersatzplan, Erklärungen, Budget, HA, API, Aufbewahrung, Szenarien mit `export_days` und `scenario_days`, „An der Anlage prüfen“) |
 | `docs/superpowers/plans/2026-10-15-phase-2d-bedienung.md` | Plan 2d, 18 Tasks, umgesetzt, auf `main`: Bedienung in UI und HA, Entscheidungslog in SQLite, Tesla vor der Live-Schaltung; Präzisierungen gegenüber der Spec, Texte |
 | `docs/superpowers/plans/2026-10-16-phase-3a-tarif-prognosen.md` | Plan 3a, 14 Tasks, umgesetzt, auf `main`: Tarifmodell mit Editor, Monatsspitze, Schätzpreise, Lastprognose, PV-Kalibrierung, Prognosegüte; die Einordnung teilt Phase 3 in 3a, 3b und 3c und nennt die Vorab-Entscheidungen für 3b und 3c |
-| `docs/superpowers/plans/2026-10-16-phase-3b-optimierer-zeitplan.md` | Plan 3b, 17 Tasks, umgesetzt (Branch `claude/project-thread-syy5yu`, noch nicht auf `main`): Optimierer, Ersatzplan, Plausibilität, Erklärungen, Planungsdienst mit Speicher, Seite „Zeitplan“, HA, Szenario-Werkzeuge; die 15 Entscheidungen des Betreibers vom 16.10.2026, Präzisierungen gegenüber der Spec, Texte |
+| `docs/superpowers/plans/2026-10-16-phase-3b-optimierer-zeitplan.md` | Plan 3b, 17 Tasks, umgesetzt und auf `main`: Optimierer, Ersatzplan, Plausibilität, Erklärungen, Planungsdienst mit Speicher, Seite „Zeitplan“, HA, Szenario-Werkzeuge; die 15 Entscheidungen des Betreibers vom 16.10.2026, Präzisierungen gegenüber der Spec, Texte |
 | `cerbo-watchdog/README.md` | Watchdog: Zustände, Zeiten, D-Bus-Pfade, Installation und Probe |
 | `docs/verification/abnahme-phase-1.md` | Checkliste für die Abnahme der Phase 1 |
 | `docs/verification/README.md` | Prüfprotokoll Teil 1, Preise, Teil 2 (`verify_part2`) und Watchdog-Probe: Aufruf und Ergebnis |
@@ -1158,13 +1156,9 @@ Demo-Zugänge: `admin`, `bedienen` (Bedienen), `gast` (Lesen) und `sicher` (Admi
    (Entscheidung vom 16.10.2026).
 6. **Plan 3b** (Optimierer und Zeitplan) ist umgesetzt und im Gesamtreview geprüft (Kurzfassung), die
    Fix-Welle danach ist umgesetzt, das Re-Review war sauber. Es folgen:
-   - die **Integration auf `main`**, deine Entscheidung. `main` hat zwei Commits, die der Branch nicht
-     hat (die Trail-Commits `9f6a899` und `d484d95`, sie legen `.claude/settings.json` und `.trail/`
-     an und berühren nichts von 3b). Darum: den Branch auf `main` rebasen (`git fetch`, dann
-     `git rebase origin/main`), die Prüfungen aus „Befehle“ auf dem Ergebnis laufen lassen, dann
-     Fast-Forward auf `main` und Push. Die Commit-Trailer lassen sich beim Rebase umschreiben, falls
-     gewünscht (siehe „Arbeitsweise“).
-   - an der Anlage das **gemeinsame Ausrollen von 2d, 3a und 3b**, sobald 3b auf `main` ist (Punkte
+   - die **Integration auf `main`** ist erledigt: am 17.10.2026 auf die Trail-Commits rebased und per
+     Fast-Forward übernommen.
+   - an der Anlage das **gemeinsame Ausrollen von 2d, 3a und 3b** (Punkte
      „Zu 3a gehört“ und „Zu 3b gehört“ unter „Offen an der Anlage“), dann **3b als Vorschau
      laufen lassen** und die **30 echten Tage** durch `export_days` und `scenario_days` rechnen
      (Punkt 5 unter „Offen an der Anlage“)
