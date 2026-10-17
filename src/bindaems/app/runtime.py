@@ -31,6 +31,7 @@ from bindaems.app.backup import backup_database
 from bindaems.app.charging.routes import charging_router
 from bindaems.app.charging.sessions import SessionService
 from bindaems.app.charging.tracker import ChargingTracker
+from bindaems.app.consumers.days import ConsumerDays
 from bindaems.app.consumers.energy import EnergyCache
 from bindaems.app.consumers.routes import consumers_router
 from bindaems.app.consumers.service import ConsumerService
@@ -243,6 +244,7 @@ class AppRuntime:
         )
         self.ha_values = HaValueCache(self.reader, ha_database) if ha_database is not None else None
         self.energy = EnergyCache(self.reader, self._clock, ha_database)
+        self.consumer_days = ConsumerDays(self.engine, self.energy, self.consumers, self._clock)
         self.ha_publisher: HaPublisher | None = None
         self._ha_inputs: HaInputs | None = None
         self._ha_ready = asyncio.Event()  # erste Werte für HA bestimmt
@@ -637,7 +639,7 @@ class AppRuntime:
 
     async def _ledger_nightly_loop(self) -> None:
         """Beim Start (35 Tage) und täglich um 02:45 Uhr (7 Tage): Lücken nachrechnen, dann die
-        Abrechnung gegen die Zähler abgleichen.
+        Abrechnung gegen die Zähler abgleichen und die Energie der Verbraucher je Tag speichern.
 
         Der Lauf beim Start wartet auf den ersten Nachtrag der Abrechnung (``_ledger_loop``), sonst
         prüft er Tage, die der Nachtrag noch füllt, und ihre Zeilen blieben bis zum nächsten Start
@@ -648,19 +650,23 @@ class AppRuntime:
         except TimeoutError:
             log.warning("Nachtrag der Abrechnung dauert zu lange, der Abgleich beginnt ohne ihn")
         days = LEDGER_CHECK_START_DAYS
+        start = True
         while True:
-            await self._ledger_nightly(days)
+            await self._ledger_nightly(days, start=start)
+            start = False
             days = LEDGER_CHECK_NIGHTLY_DAYS
             now = self._clock.now()
             due = next_local(now, lambda t: (t.hour, t.minute) == LEDGER_NIGHTLY_AT)
             await asyncio.sleep((due - now).total_seconds())
 
-    async def _ledger_nightly(self, days: int) -> None:
+    async def _ledger_nightly(self, days: int, *, start: bool = False) -> None:
         """Rechnet die Lücken der letzten 7 Tage nach und gleicht dann die letzten ``days``
         vollständigen Tage (bis gestern) mit den Zählern ab, geschätzte Slots eingeschlossen.
+        Danach speichert er die Energie der Verbraucher: gestern, beim ``start`` die fehlenden
+        Tage der letzten 31.
 
-        Ein Fehler wird protokolliert; die nächste Nacht versucht es wieder, und der Abgleich läuft
-        auch, wenn die Nachrechnung scheitert.
+        Ein Fehler wird protokolliert; die nächste Nacht versucht es wieder, und jeder Schritt läuft
+        auch, wenn ein anderer scheitert.
         """
         today = self._clock.now().astimezone(LOCAL_TZ).date()
         try:
@@ -683,6 +689,15 @@ class AppRuntime:
             log.warning("Abgleich mit den Zählern nicht möglich", error=str(exc))
         except Exception:
             log.exception("Abgleich mit den Zählern fehlgeschlagen")
+        try:
+            if start:
+                stored = await self.consumer_days.fill_missing(today)
+            else:
+                stored = int(await self.consumer_days.store(today - timedelta(days=1)) > 0)
+            if stored:
+                log.info("Energie der Verbraucher je Tag gespeichert", days=stored)
+        except Exception:
+            log.exception("Energie der Verbraucher je Tag nicht gespeichert")
 
     async def shutdown(self) -> None:
         """Server und Hintergrundaufgaben beenden, Puffer schreiben, Verbindungen schließen."""

@@ -6,7 +6,8 @@
 - **HA-Entitäten** schreibt Home Assistant nur bei Änderung. Ein Wert gilt bis zum nächsten,
   der letzte vor Mitternacht ab Mitternacht.
 
-Alle Werte einer Art kommen mit einer Abfrage; ``refresh`` ersetzt das Ergebnis als Ganzes.
+Alle Werte einer Art kommen mit einer Abfrage; ``refresh`` ersetzt das Ergebnis als Ganzes,
+``window_energy`` rechnet beliebige Zeiträume (auch vergangene Tage) und ändert den Cache nicht.
 """
 
 from __future__ import annotations
@@ -141,38 +142,53 @@ class EnergyCache:
         return self._house
 
     async def refresh(self, consumers: Iterable[Consumer]) -> None:
+        """Rechnet ``day_start(now) … now`` und ersetzt das Ergebnis als Ganzes."""
+        consumers = list(consumers)
         now = self._clock.now()
         since = day_start(now)
-        window = _Window(epoch_ms(since), epoch_ms(now))
+        energy, house = await self.window_energy(consumers, since, now)
+        self._energy = {_key(consumer): energy[consumer.id] for consumer in consumers}
+        self._house, self._since = house, since
+
+    async def window_energy(
+        self, consumers: Iterable[Consumer], start: datetime, end: datetime
+    ) -> tuple[dict[int, tuple[float | None, str | None]], float | None]:
+        """Energie je Verbraucher (Schlüssel: ``Consumer.id``) und der Hauslast in ``[start, end)``.
+
+        Je Verbraucher kWh oder der Grund, warum es keine gibt. Der Cache bleibt unberührt; das
+        Ergebnis taugt auch für vergangene Tage (``refresh`` ruft mit ``day_start(now) … now``).
+        """
+        window = _Window(epoch_ms(start), epoch_ms(end))
         core: dict[Key, tuple[str, str]] = {}
         ha: dict[Key, HaRef] = {}
-        result: dict[Key, tuple[float | None, str | None]] = {}
+        by_key: dict[Key, tuple[float | None, str | None]] = {}
+        consumers = list(consumers)
         for consumer in consumers:
             key = _key(consumer)
             if consumer.source_kind == "core":
                 found = CORE_POWER_RE.fullmatch(consumer.power_ref)
                 if found is None:
-                    result[key] = (None, NO_SERIES)
+                    by_key[key] = (None, NO_SERIES)
                 else:
                     core[key] = (found["source"], found["id"])
             else:
                 try:
                     ha[key] = HaRef.from_consumer(consumer)
                 except ValueError:
-                    result[key] = (None, NO_SERIES)
+                    by_key[key] = (None, NO_SERIES)
         house: float | None = None
         try:
             series = await self._core_points([*core.values(), HOUSE], window)
         except InfluxQueryError as exc:
             log.warning("Energie der Verbraucher nicht lesbar", error=str(exc))
-            result |= dict.fromkeys(core, (None, UNREADABLE))
+            by_key |= dict.fromkeys(core, (None, UNREADABLE))
         else:
             for key, tags in core.items():
-                result[key] = self._kwh(series.get(tags), window, BUCKET_S * 1000)
+                by_key[key] = self._kwh(series.get(tags), window, BUCKET_S * 1000)
             house = self._kwh(series.get(HOUSE), window, BUCKET_S * 1000)[0]
         if ha:
-            result |= await self._ha_energy(ha, window)
-        self._energy, self._house, self._since = result, house, since
+            by_key |= await self._ha_energy(ha, window)
+        return {consumer.id: by_key[_key(consumer)] for consumer in consumers}, house
 
     @staticmethod
     def _kwh(

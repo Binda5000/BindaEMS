@@ -1,4 +1,4 @@
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import httpx
 from tests.app_helpers import T_APP, k
@@ -162,3 +162,43 @@ def test_ha_points_without_unit_column_is_unchanged() -> None:
         (2000, 5000.0),
     ]
     assert rejected == set()
+
+
+async def test_window_energy_matches_refresh_for_today(respx_mock, reader, clock) -> None:
+    og, _ = k(1, 0.0)
+    other = Consumer(2, "Sonder", None, None, "#000000", "core", "vebus.ac_out.power_w", None, 0)
+    respx_mock.get(URL).respond(
+        json=_results(
+            _series("power", {"source": "load", "id": "v1"}, [(M0, 600.0), (M0 + MIN, 600.0)]),
+            _series("power", {"source": "derived", "id": "house_load"}, [(M0, 1200.0)]),
+        )
+    )
+    cache = EnergyCache(reader, clock, None)
+    energy, house = await cache.window_energy([og, other], MIDNIGHT, clock.now())
+    # keine Zustandsänderung: der Cache ist noch leer
+    assert cache.since is None and cache.house_kwh() is None and cache.energy_kwh(og) is None
+    await cache.refresh([og, other])
+    assert energy == {
+        1: (cache.energy_kwh(og), cache.note(og)),
+        2: (None, "Signal wird nicht aufgezeichnet"),
+    }
+    assert house == cache.house_kwh() == 0.02
+
+
+async def test_window_energy_reads_the_given_window_and_leaves_the_cache_alone(
+    respx_mock, reader, clock
+) -> None:
+    og, _ = k(1, 0.0)
+    route = respx_mock.get(URL).respond(
+        json=_results(_series("power", {"source": "load", "id": "v1"}, [(M0, 600.0)]))
+    )
+    cache = EnergyCache(reader, clock, None)
+    await cache.refresh([og])
+    before = (cache.since, cache.energy_kwh(og), cache.house_kwh())
+    start, end = MIDNIGHT - timedelta(days=1), MIDNIGHT
+    energy, house = await cache.window_energy([og], start, end)
+    assert (cache.since, cache.energy_kwh(og), cache.house_kwh()) == before
+    assert energy == {1: (None, "kein Verlauf seit Mitternacht")} or energy[1][1] is None
+    assert house is None
+    query = route.calls.last.request.url.params["q"]
+    assert f"time >= {epoch_ms(start)}ms AND time < {epoch_ms(end)}ms" in query

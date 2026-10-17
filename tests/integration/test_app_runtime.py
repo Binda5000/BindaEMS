@@ -684,3 +684,62 @@ async def test_ha_intent_falls_back_when_the_core_has_none_or_is_down(runtime, m
 def test_runtime_wires_the_ha_commands(runtime) -> None:
     assert runtime.ha_publisher is not None
     assert runtime.ha_publisher._commands is not None
+
+
+def spy_consumer_days(runtime, monkeypatch) -> dict[str, list]:
+    calls: dict[str, list] = {"store": [], "fill": []}
+
+    async def store(day: date) -> int:
+        calls["store"].append(day)
+        return 2
+
+    async def fill_missing(today: date, days: int = 31) -> int:
+        calls["fill"].append((today, days))
+        return 5
+
+    monkeypatch.setattr(runtime.consumer_days, "store", store)
+    monkeypatch.setattr(runtime.consumer_days, "fill_missing", fill_missing)
+    return calls
+
+
+async def test_ledger_nightly_stores_yesterdays_consumer_energy_and_fills_at_start(
+    runtime, monkeypatch
+) -> None:
+    spy_ledger_checks(runtime, monkeypatch)
+    spy_gap_estimator(runtime, monkeypatch)
+    calls = spy_consumer_days(runtime, monkeypatch)
+    runtime._ledger_backfilled.set()
+    monkeypatch.setattr(asyncio, "sleep", record_then_stop([], after=1))
+    with pytest.raises(StopScheduler):
+        await runtime._ledger_nightly_loop()
+    # beim Start: die fehlenden Tage der letzten 31 (heute ist der 09.10.2026), nicht gestern allein
+    assert calls == {"store": [], "fill": [(date(2026, 10, 9), 31)]}
+    await runtime._ledger_nightly(7)
+    assert calls == {"store": [date(2026, 10, 8)], "fill": [(date(2026, 10, 9), 31)]}
+
+
+async def test_ledger_nightly_survives_a_failing_consumer_day_step(runtime, monkeypatch) -> None:
+    checks = spy_ledger_checks(runtime, monkeypatch)
+    estimates = spy_gap_estimator(runtime, monkeypatch)
+
+    async def store(day: date) -> int:
+        raise RuntimeError("Datenbank gesperrt")
+
+    monkeypatch.setattr(runtime.consumer_days, "store", store)
+    with capture_logs() as logs:
+        await runtime._ledger_nightly(7)
+    assert "Energie der Verbraucher je Tag nicht gespeichert" in [e["event"] for e in logs]
+    assert len(estimates) == len(checks) == 1
+
+
+async def test_ledger_nightly_stores_consumer_days_even_if_estimate_and_check_fail(
+    runtime, monkeypatch
+) -> None:
+    async def broken(*args) -> int:
+        raise RuntimeError("Datenbank gesperrt")
+
+    monkeypatch.setattr(runtime.gap_estimator, "run", broken)
+    monkeypatch.setattr(runtime.ledger_checks, "run", broken)
+    calls = spy_consumer_days(runtime, monkeypatch)
+    await runtime._ledger_nightly(7)
+    assert calls["store"] == [date(2026, 10, 8)]
