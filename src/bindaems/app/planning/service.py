@@ -39,6 +39,7 @@ from bindaems.app.planning.inputs import (
     PlanningUnavailable,
     PriceInput,
     assemble_inputs,
+    car_floor_kw,
 )
 from bindaems.app.planning.intents import derive_intents
 from bindaems.app.planning.optimizer import OptimizerResult
@@ -402,6 +403,8 @@ class PlanningService:
             previous=self._plan,
             settings_version=current.version,
             support_soc_pct=self._support_pct(),
+            peak_target_kw=self._cfg.control.peak_target_kw,
+            car_floor_kw=car_floor_kw(self._cfg),
         )
 
     async def replan(self, trigger: PlanTrigger) -> Plan | None:

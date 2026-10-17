@@ -17,7 +17,7 @@ from pydantic import AwareDatetime, Field
 from bindaems.app.planning.battery_model import LIMIT_NOW_SLOTS as LIMIT_NOW_SLOTS
 from bindaems.app.planning.battery_model import eta
 from bindaems.app.tariff.calc import power_rate
-from bindaems.shared.config import _Model
+from bindaems.shared.config import Config, _Model
 from bindaems.shared.plan import Plan, PlanTrigger
 from bindaems.shared.settings import PlanningSettings, TariffSettings
 from bindaems.shared.timeutil import LOCAL_TZ, SLOT, ensure_utc, slot_start
@@ -102,6 +102,10 @@ class PlanInputs(_Model):
     peak_months: list[PeakMonth]
     end_value_ct: Finite  # ct je kWh im Akku am Horizontende
     support_soc_pct: Finite = DEFAULT_SUPPORT_SOC_PCT  # Schwelle der Akku-Unterstützung in %
+    # Untergrenzen des Budgets (Gesamtreview I2): ``control.peak_target_kw`` und der kleinste
+    # Ladestrom des größten Autos (``car_floor_kw``), beide in kW
+    peak_target_kw: NonNegativeFinite | None = None
+    car_floor_kw: NonNegativeFinite = 0.0
     slots: list[SlotInput]
 
 
@@ -212,8 +216,13 @@ def assemble_inputs(
     previous: Plan | None,
     settings_version: int,
     support_soc_pct: float = DEFAULT_SUPPORT_SOC_PCT,
+    peak_target_kw: float | None = None,
+    car_floor_kw: float = 0.0,
 ) -> PlanInputs:
     """Eingangsdaten eines Laufs; wirft ``PlanningUnavailable``.
+
+    ``peak_target_kw`` und ``car_floor_kw`` sind die Untergrenzen des Budgets
+    (``control.peak_target_kw``, ``car_floor_kw``; Gesamtreview I2).
 
     Prüfreihenfolge: Akkuzustand, Preis des aktuellen Slots, PV, Last, Horizontlänge. Der
     Horizont endet vor dem ersten Slot ohne PV- oder Lastprognose.
@@ -260,5 +269,17 @@ def assemble_inputs(
         peak_months=peak_months([s.start for s in slots], tariff, month_peak_kw),
         end_value_ct=end_value_ct(_within(prices, horizon_end, END_WINDOW), planning),
         support_soc_pct=support_soc_pct,
+        peak_target_kw=peak_target_kw,
+        car_floor_kw=car_floor_kw,
         slots=slots,
+    )
+
+
+def car_floor_kw(cfg: Config) -> float:
+    """Der kleinste Ladestrom des größten Autos in kW: ``max(min_a · phases ·
+    grid.voltage_nominal_v)`` über die Fahrzeuge der Konfiguration, ohne Fahrzeuge 0."""
+    volts = cfg.grid.voltage_nominal_v
+    return max(
+        (vehicle.min_a * vehicle.phases * volts / 1000 for vehicle in cfg.vehicles.values()),
+        default=0.0,
     )

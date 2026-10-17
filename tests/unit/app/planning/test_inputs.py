@@ -202,6 +202,13 @@ def test_inputs_carry_the_support_threshold():
     assert assemble(support_soc_pct=85.0).support_soc_pct == 85.0
 
 
+def test_inputs_carry_the_budget_floors():
+    inputs = assemble()
+    assert (inputs.peak_target_kw, inputs.car_floor_kw) == (None, 0.0)
+    inputs = assemble(peak_target_kw=8.0, car_floor_kw=3.45)
+    assert (inputs.peak_target_kw, inputs.car_floor_kw) == (8.0, 3.45)
+
+
 def test_missing_feed_in_counts_as_zero():
     inputs = assemble(prices=known(NOW, slots=20, feed_in=None))
     assert sim_slots(inputs)[0].feed_in_ct is None  # das Akkumodell rechnet mit 0 ct

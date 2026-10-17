@@ -281,6 +281,8 @@ def scenario(
     prev_battery_w: list[float] | None = None,
     origins: list[PriceOrigin] | None = None,
     support_soc_pct: float = 70.0,
+    peak_target_kw: float | None = None,
+    car_floor_kw: float = 0.0,
 ) -> PlanInputs:
     """``PlanInputs`` direkt aus Reihen je Slot (Standardakku wie ``state``), ohne Restwert und
     ohne Leistungspreis, wenn nicht angegeben; ``prev_battery_w`` gilt für die ersten Slots,
@@ -307,6 +309,8 @@ def scenario(
         peak_months=peak_months or [],
         end_value_ct=end_value_ct,
         support_soc_pct=support_soc_pct,
+        peak_target_kw=peak_target_kw,
+        car_floor_kw=car_floor_kw,
         slots=[
             SlotInput(
                 start=first + i * SLOT,

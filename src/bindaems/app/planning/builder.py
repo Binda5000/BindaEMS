@@ -44,6 +44,11 @@ def _month_of(inputs: PlanInputs, index: int) -> str:
     return ensure_utc(inputs.slots[index].start).astimezone(LOCAL_TZ).strftime("%Y-%m")
 
 
+def _ceil_tenth(value_kw: float) -> float:
+    """Auf 0,1 kW aufgerundet; ein Gleitkommafehler knapp über einem Zehntel rundet nicht auf."""
+    return ceil(value_kw * 10 - _TENTH_EPS) / 10
+
+
 def _budgets(
     inputs: PlanInputs,
     steps: Sequence[SimStep],
@@ -53,18 +58,18 @@ def _budgets(
 ) -> list[float | None]:
     """Budget je Slot (akzeptierte Monatsspitze in kW) für Monate mit Leistungspreis.
 
-    Ersatzplan (Präzisierung 10): ``max(bisherige Monatsspitze, minimum_kw)``, das ist
-    ``peak0_kw``. Optimierer (Präzisierung 11): ``ceil(max(Spitze des Optimierers, höchster
-    Bezug der Nachrechnung im Monat) · 10) / 10``; fehlt die Spitze des Optimierers für einen
-    Monat, gilt ``peak0_kw``.
+    Eine Formel für Ersatzplan und Optimierer (Präzisierungen 10 und 11, Gesamtreview I2): auf
+    0,1 kW aufgerundet das Größte aus ``peak0_kw`` (bisherige Monatsspitze, mindestens
+    ``minimum_kw``), der Spitze des Optimierers für den Monat (nur Optimierer), dem höchsten Bezug
+    der Nachrechnung im Monat und ``peak_target_kw`` (ohne Wert 0). So liegt das Budget nie unter
+    dem Bezug, den der Plan selbst vorsieht. Ist es dann noch 0 (Monatsbeginn ohne Mindestwert und
+    ohne Bezug), gilt ``car_floor_kw``: Darunter könnte der Wächter des core ein ladendes Auto nur
+    bis zu seinem kleinsten Strom drosseln und alarmieren.
     """
-    by_month = {entry.month: entry for entry in inputs.peak_months}
+    peaks = optimizer_peaks_kw if source == "optimizer" and optimizer_peaks_kw else {}
     budget_of: dict[str, float] = {}
-    for month, entry in by_month.items():
-        if source == "fallback":
-            budget_of[month] = entry.peak0_kw
-            continue
-        peak_kw = (optimizer_peaks_kw or {}).get(month, entry.peak0_kw)
+    for entry in inputs.peak_months:
+        month = entry.month
         import_kw = max(
             (
                 item.import_w / 1000
@@ -73,7 +78,10 @@ def _budgets(
             ),
             default=0.0,
         )
-        budget_of[month] = ceil(max(peak_kw, import_kw) * 10 - _TENTH_EPS) / 10
+        budget = _ceil_tenth(
+            max(entry.peak0_kw, peaks.get(month, 0.0), import_kw, inputs.peak_target_kw or 0.0)
+        )
+        budget_of[month] = budget if budget > 0 else _ceil_tenth(inputs.car_floor_kw)
     return [budget_of.get(_month_of(inputs, index)) for index in range(len(inputs.slots))]
 
 

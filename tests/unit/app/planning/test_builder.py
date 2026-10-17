@@ -133,6 +133,85 @@ def test_fallback_budget_is_previous_peak() -> None:
     assert [s.budget_kw for s in plan.slots] == [3.2, 3.2]
 
 
+def test_fallback_budget_covers_its_own_import() -> None:
+    # Gesamtreview I2: Monatsbeginn, minimum_kw 0, noch kein Bezug. HALTEN holt die Hauslast aus
+    # dem Netz; ein Budget von 0 kW striche den Override des core auf 0 W.
+    inputs = scenario(
+        prices=[20.0] * 2, pv=[0.0] * 2, load=[1000.0] * 2, peak_months=[month("2026-10", 0.0)]
+    )
+    plan = build_plan(
+        inputs, [HOLD] * 2, source="fallback", solver_status="error", fallback_reason="x"
+    )
+    assert [s.import_w for s in plan.slots] == [1000.0, 1000.0]
+    assert [s.budget_kw for s in plan.slots] == [1.0, 1.0]
+
+
+def test_fallback_budget_rounds_its_import_up_to_a_tenth() -> None:
+    inputs = scenario(
+        prices=[20.0] * 2, pv=[0.0] * 2, load=[1234.0] * 2, peak_months=[month("2026-10", 1.0)]
+    )
+    plan = build_plan(
+        inputs, [HOLD] * 2, source="fallback", solver_status="error", fallback_reason="x"
+    )
+    assert {s.budget_kw for s in plan.slots} == {1.3}
+
+
+@pytest.mark.parametrize("source", ["optimizer", "fallback"])
+def test_budget_without_peak_and_import_is_the_car_floor(source: str) -> None:
+    # Monatsbeginn ohne Mindestwert und ohne Bezug im Plan: nicht 0 kW, sondern der kleinste
+    # Ladestrom des größten Autos (darunter kann der Wächter nur drosseln und alarmieren)
+    inputs = scenario(
+        prices=[20.0] * 2,
+        pv=[2000.0] * 2,
+        load=[500.0] * 2,
+        peak_months=[month("2026-10", 0.0)],
+        car_floor_kw=4.14,
+    )
+    plan = build_plan(
+        inputs,
+        [EV] * 2,
+        source=source,  # type: ignore[arg-type]
+        solver_status="optimal" if source == "optimizer" else "error",
+        fallback_reason=None if source == "optimizer" else "x",
+    )
+    assert [s.import_w for s in plan.slots] == [0.0, 0.0]
+    assert [s.budget_kw for s in plan.slots] == [4.2, 4.2]
+
+
+def test_the_car_floor_is_only_a_floor() -> None:
+    inputs = scenario(
+        prices=[20.0] * 2,
+        pv=[0.0] * 2,
+        load=[1000.0] * 2,
+        peak_months=[month("2026-10", 0.0)],
+        car_floor_kw=4.14,
+    )
+    plan = build_plan(
+        inputs, [HOLD] * 2, source="fallback", solver_status="error", fallback_reason="x"
+    )
+    assert {s.budget_kw for s in plan.slots} == {1.0}  # Bezug des Plans, kein Boden
+
+
+@pytest.mark.parametrize("source", ["optimizer", "fallback"])
+def test_peak_target_raises_the_budget(source: str) -> None:
+    inputs = scenario(
+        prices=[20.0] * 2,
+        pv=[0.0] * 2,
+        load=[1000.0] * 2,
+        peak_months=[month("2026-10", 2.0)],
+        peak_target_kw=5.04,
+    )
+    plan = build_plan(
+        inputs,
+        [HOLD] * 2,
+        source=source,  # type: ignore[arg-type]
+        solver_status="optimal" if source == "optimizer" else "error",
+        fallback_reason=None if source == "optimizer" else "x",
+        optimizer_peaks_kw={"2026-10": 3.0} if source == "optimizer" else None,
+    )
+    assert {s.budget_kw for s in plan.slots} == {5.1}
+
+
 def test_baseline_cost_is_eigenverbrauch_everywhere() -> None:
     inputs = scenario(prices=[10.0] * 4 + [40.0] * 4, pv=[0.0] * 8, load=[2000.0] * 8, soc_pct=20.0)
     plan = build_plan(inputs, [HOLD] * 8, source="optimizer", solver_status="optimal")
