@@ -191,3 +191,29 @@ def test_intent_count_must_match() -> None:
     inputs = scenario(prices=[20.0] * 4, pv=[0.0] * 4, load=[500.0] * 4)
     with pytest.raises(ValueError):
         build_plan(inputs, [EV] * 3, source="optimizer", solver_status="optimal")
+
+
+def test_baseline_differs_from_the_plan_when_the_battery_has_energy() -> None:
+    # SOC 60 % von 30 kWh: 12 kWh über der Reserve decken alle 8 Slots („Victron allein“ kostet
+    # nichts). Der Plan hält in den billigen Slots und bezieht dort 4 · 0,5 kWh zu 10 ct.
+    inputs = scenario(prices=[10.0] * 4 + [40.0] * 4, pv=[0.0] * 8, load=[2000.0] * 8, soc_pct=60.0)
+    plan = build_plan(inputs, [HOLD] * 4 + [EV] * 4, source="optimizer", solver_status="optimal")
+    assert plan.baseline_cost_ct == pytest.approx(0.0)
+    assert plan.expected_cost_ct == pytest.approx(4 * 0.5 * 10.0)
+
+
+def test_cost_counts_feed_in_revenue() -> None:
+    # Voller Akku: 3 kW PV-Überschuss gehen je 15 min ins Netz (0,75 kWh zu 5 ct = 3,75 ct
+    # Erlös); im dritten Slot hält der Plan und bezieht 0,5 kWh zu 20 ct = 10 ct.
+    inputs = scenario(
+        prices=[20.0] * 3,
+        pv=[4000.0, 4000.0, 0.0],
+        load=[1000.0, 1000.0, 2000.0],
+        soc_pct=100.0,
+        feed_in=5.0,
+    )
+    plan = build_plan(inputs, [EV, EV, HOLD], source="optimizer", solver_status="optimal")
+    assert [s.export_w for s in plan.slots] == [3000.0, 3000.0, 0.0]
+    assert [s.cost_ct for s in plan.slots] == pytest.approx([-3.75, -3.75, 10.0])
+    assert plan.expected_cost_ct == pytest.approx(2.5)
+    assert plan.baseline_cost_ct == pytest.approx(-7.5)
