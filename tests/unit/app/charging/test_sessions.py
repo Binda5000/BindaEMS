@@ -201,3 +201,31 @@ def test_service_prices_the_grid_share(service, engine, ledger, clock) -> None:
 
 def test_by_vehicle_of_an_empty_range(service) -> None:
     assert service.by_vehicle(T0, T0) == {}
+
+
+def test_filtered_out_neighbour_still_wins_the_shared_slot(service, engine, ledger, clock) -> None:
+    # tesla und polestar teilen sich den Slot T0; polestar überdeckt ihn länger (10 von 15 min).
+    clock.advance(timedelta(hours=2))
+    add_session(engine, T0 - SLOT, T0 + timedelta(minutes=5), "tesla")
+    add_session(engine, T0 + timedelta(minutes=5), T0 + SLOT * 2, "polestar")
+    ingest(ledger, T0 - SLOT, {"pv>wb:twc": 500.0})  # gehört tesla
+    ingest(ledger, T0, {"pv>wb:twc": 1000.0})  # gehört polestar
+    day = date(2026, 10, 9)
+    [only] = service.sessions(day, day, "tesla")
+    assert only.split.kwh == 0.5  # nicht die 1,0 kWh des gemeinsamen Slots
+    [other] = service.sessions(day, day, "polestar")
+    assert other.split.kwh == 1.0
+
+
+def test_session_beyond_the_limit_still_wins_the_shared_slot(
+    service, engine, ledger, clock
+) -> None:
+    # Die ältere tesla-Session überdeckt den gemeinsamen Slot länger; ``limit=1`` zeigt polestar.
+    clock.advance(timedelta(hours=2))
+    add_session(engine, T0 - SLOT, T0 + timedelta(minutes=10), "tesla")
+    add_session(engine, T0 + timedelta(minutes=10), T0 + SLOT * 2, "polestar")
+    ingest(ledger, T0, {"pv>wb:twc": 1000.0})  # gehört tesla
+    ingest(ledger, T0 + SLOT, {"pv>wb:twc": 250.0})  # gehört polestar
+    day = date(2026, 10, 9)
+    [newest] = service.sessions(day, day, None, limit=1)
+    assert newest.vehicle == "polestar" and newest.split.kwh == 0.25
