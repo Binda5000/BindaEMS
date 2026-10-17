@@ -38,6 +38,8 @@ Phase 4 hat laut Spec 18 vier Teile: Modus „Geplant“, Statistik, HA vollstä
 
 Der Plan ist auf diese Vorschläge geschrieben; eine andere Wahl ändert die genannten Tasks.
 
+**Freigabe:** Der Betreiber hat den Plan am 17.10.2026 freigegeben, mit einer Änderung an den Entscheidungen 4 und 5: PV-Strom, der ins Auto geht (direkt oder über den Akku), ist kostenlos statt mit dem OeMAG-Wert bewertet.
+
 1. **Zuschnitt der Phase 4** (Spec 18).
    - **4a „Statistik“ (dieser Plan):** Ladesessions, Einstandspreis, Kosten je Auto, Abgleich und Nachrechnung, Verbraucher je Tag, Seite „Statistik“, Monatsspitzen, Statistik-Sensoren in HA, Grafana.
    - **4b „Geplantes Laden“:** Modus „Geplant“ mit Ziel-SOC und Abfahrt, die Autos im Planer, Regel R2, späteste Startzeit, Tesla-Ladelimit, in HA Ziel-SOC, Abfahrtszeit, „Fertig um“ und „Ziel erreichbar“, Benachrichtigungen komplett. 4b ändert core und Optimierer und kommt nach der Abnahme der Phase 3 an die Anlage.
@@ -48,10 +50,10 @@ Der Plan ist auf diese Vorschläge geschrieben; eine andere Wahl ändert die gen
    - Nach einer Pause der Beobachtung (core oder app aus) läuft eine Session weiter, wenn das Auto noch steckt und die Pause höchstens 30 min dauerte; sonst endet sie bei der letzten Beobachtung.
    - Alternative: Sessions aus der Ladeenergie der Abrechnung (Folgen von Slots mit Energie). Sie trennte jede PV-Pause und kennte keine Steckzeiten.
 4. **Einstandspreis des Akkus** (Spec 11.4; Task 2).
-   - Gleitender Mittelwert über den Inhalt: PV-Ladung zählt mit dem Einspeisepreis des Slots (OeMAG), Netzladung mit dem Bezugspreis. Der Inhalt ist auf `battery.usable_kwh` begrenzt, damit Wandlungsverluste nicht endlos Energie ansammeln.
-   - Eine Entladung kostet den Mittelwert zu Beginn des Slots plus Verschleiß (`planning.wear_ct`, Standard 2 ct/kWh). Bei leerem Inhalt gilt der Einspeisepreis des Slots plus Verschleiß.
-   - Ein fehlender Preis zählt mit dem aktuellen Mittelwert; sobald er bekannt ist (Nachtrag, OeMAG-Eintrag), wird ab dort neu gerechnet.
-5. **Kosten je Auto** (Spec 11.4; Task 5): Netz → Auto × Bezugspreis + PV → Auto × Einspeisepreis + Akku → Auto × Einstandspreis, je Slot der Session zugeordnet, die an der Wallbox lief. Fehlt einer der Preise, ist die Summe „unbekannt“, wie bei den Tageskosten.
+   - **PV-Strom ist kostenlos** (Entscheidung des Betreibers vom 17.10.2026, abweichend von Spec 11.4): PV-Ladung zählt mit 0 ct, Netzladung mit dem Bezugspreis. Der Mittelwert über den Inhalt ist damit der Netzanteil zum Bezugspreis. Der Inhalt ist auf `battery.usable_kwh` begrenzt, damit Wandlungsverluste nicht endlos Energie ansammeln.
+   - Eine Entladung kostet den Mittelwert zu Beginn des Slots plus Verschleiß (`planning.wear_ct`, Standard 2 ct/kWh). Bei leerem Inhalt gilt nur der Verschleiß.
+   - Ein fehlender Bezugspreis zählt mit dem aktuellen Mittelwert; sobald er bekannt ist (Nachtrag), wird ab dort neu gerechnet.
+5. **Kosten je Auto** (Spec 11.4, mit Entscheidung 4): Netz → Auto × Bezugspreis + PV → Auto × 0 + Akku → Auto × Einstandspreis, je Slot der Session zugeordnet, die an der Wallbox lief (Task 5). Fehlt ein Bezugspreis, ist die Summe „unbekannt“, wie bei den Tageskosten. Der entgangene Einspeiseerlös erscheint nicht in den Kosten je Auto; die Tagesbilanz (Einspeiseerlös, Ersparnis) bleibt davon unberührt.
 6. **Abgleich** (Spec 11.4; Task 6).
    - Täglich um 02:45 Uhr für die letzten 7 vollständigen Tage, beim Start für die letzten 35.
    - Verglichen werden Netzbezug, Einspeisung und jede Wallbox: die Summe der Abrechnung gegen die Differenz der Zählerstände um Mitternacht (`energy` in InfluxDB, letzter Wert in der halben Stunde vor Mitternacht).
@@ -78,17 +80,17 @@ Der Plan ist auf diese Vorschläge geschrieben; eine andere Wahl ändert die gen
 2. **Migration `0010`** (`v0010_statistics.py`, `revision = "0010"`):
    - `assignment_log`: `id` (aufsteigend), `ts`, `wallbox` (String 32), `occupant` (String 32, Schlüssel des Fahrzeugs, `guest` oder leer), `kind` (String 10, Wert von `AssignmentKind` oder leer); Index auf `(wallbox, ts)`.
    - `charging_session`: `id` (aufsteigend), `wallbox`, `vehicle` (String 32, Schlüssel, `guest` oder leer), `start`, `end` (leer, solange offen), `last_seen`; Index auf `start`.
-   - `ledger_cost`: `slot_start` (Primärschlüssel), `stock_kwh`, `avg_ct` (leer ohne Inhalt), `discharge_ct` (leer, wenn unbekannt), `feed_in_ct` (leer, wenn unbekannt).
+   - `ledger_cost`: `slot_start` (Primärschlüssel), `stock_kwh`, `avg_ct` (leer ohne Inhalt), `discharge_ct`.
    - `ledger_check`: `day` (Datum als Text, `JJJJ-MM-TT`), `signal` (String 40), `ledger_kwh`, `counter_kwh` (leer), `deviation_pct` (leer), `flagged` (bool), `note` (String 80, leer), `checked_at`; Primärschlüssel `(day, signal)`.
    - `consumer_day`: `day`, `consumer_id`, `kwh` (leer), `note` (String 80, leer); Primärschlüssel `(day, consumer_id)`.
    - Zeiten in `UtcDateTime` wie `ledger_slot`.
 3. **Herkunft `estimate`:** `Origin = Literal["stream", "influx", "estimate"]`. `DaySummary` bekommt `estimated_slots: int`. Die Abdeckung zählt geschätzte Slots mit `covered_s = 0`.
 4. **Einstandspreis je Slot** (`costing.py`), chronologisch, mit Zustand `(stock_kwh, avg_ct)` vom Slot davor (Startzustand `(0, None)`):
-   - `discharge_ct = (avg_ct oder feed_in_ct) + wear_ct`; ohne beides `None`.
+   - `discharge_ct = (avg_ct oder 0) + wear_ct`.
    - Entladung zuerst: `stock = max(0, stock − Σ battery>*)`.
-   - Dann Ladung: `e_pv = pv>battery`, `e_grid = grid>battery`; Preis je Teil `feed_in_ct` bzw. `import_price_ct`, ein fehlender Preis zählt mit `avg_ct`; ohne `avg_ct` zählt der Teil nicht in den Mittelwert, nur in den Inhalt.
+   - Dann Ladung: `e_pv = pv>battery` zu 0 ct, `e_grid = grid>battery` zu `import_price_ct`; ein fehlender Bezugspreis zählt mit `avg_ct`; ohne `avg_ct` zählt der Teil nicht in den Mittelwert, nur in den Inhalt.
    - `avg = (avg · stock + Σ p · e) / (stock + Σ e)` über die Teile mit Preis; `stock = min(stock + e_pv + e_grid, usable_kwh)`.
-   - Ändert sich ein Slot oder ein Preis, wird ab dem frühesten geänderten Slot neu gerechnet (`mark_dirty`); eine Änderung von Tarif, Einspeisung oder `planning.wear_ct` rechnet alles neu.
+   - Ändert sich ein Slot oder ein Preis, wird ab dem frühesten geänderten Slot neu gerechnet (`mark_dirty`); eine Änderung von `planning.wear_ct` rechnet alles neu (der Tarif wirkt über `reprice`, das die Slots markiert).
 5. **Steckzustand** (`plug.py`): `wallbox_connected(cfg, key, value) -> bool | None` mit `value` wie `LiveState.value`. EVCS: `status` ist eine Zahl, verbunden ist `status != 0`. Wall Connector: `vehicle_connected` als bool. Unbekannt, wenn das Signal fehlt. Ein Test vergleicht das mit `core/control/charge_inputs.py` (die Tests dürfen beide importieren).
 6. **Sessions** (`tracker.py`), je Beobachtung `(ts, je Wallbox: connected, occupant, kind)` nach jeder Antwort von Health:
    - `connected` wahr ohne offene Session: neue Session ab `ts`.
@@ -172,7 +174,7 @@ Der Plan ist auf diese Vorschläge geschrieben; eine andere Wahl ändert die gen
    - Erwartet: eine Session, solange die Pause höchstens 30 min dauert; nach längerer Pause endet sie bei der letzten Beobachtung und eine neue beginnt; abgezogen während der Pause heißt Ende bei der letzten Beobachtung.
    - Tests: Task 4 `test_session_survives_short_gap`, `test_long_gap_splits_the_session`, `test_unplugged_during_gap_ends_at_last_seen`, `test_open_session_is_resumed_after_restart`.
 3. **Fehlende Preise und ihr Nachtrag.**
-   - Erwartet: Kosten „unbekannt“, Einstandspreis ohne Sprung; nach `fill_missing_prices` oder einem neuen OeMAG-Wert stimmen Einstandspreis und Kosten je Auto.
+   - Erwartet: Kosten „unbekannt“, Einstandspreis ohne Sprung; nach `fill_missing_prices` oder `reprice` stimmen Einstandspreis und Kosten je Auto.
    - Tests: Task 2 `test_missing_price_counts_at_average`, `test_settings_change_recomputes_all`; Task 5 `test_vehicle_cost_unknown_without_price`.
 4. **Zählertausch oder fehlender Zählerstand.**
    - Erwartet: keine Markierung, Grund „Zählerstand fehlt“ bzw. „Zähler zurückgesetzt“; die Summen über den Zeitraum lassen den Tag aus.
@@ -250,32 +252,32 @@ git commit -m "feat(app): Migration 0010 für Statistik und Herkunft „geschät
 
 **Files:**
 - Create: `src/bindaems/app/ledger/costing.py`
-- Modify: `src/bindaems/app/ledger/service.py` (`ingest`, `_apply_prices` rufen `costing.mark_dirty(slot_start)`), `src/bindaems/app/runtime.py` (`LedgerCosting` bauen, `settings.on_change` → `mark_dirty(None)` bei Änderung von `tariff`, `feed_in` oder `planning.wear_ct`; `catch_up` nach jedem Lauf von `_ledger_loop` und nach `handle_stream_message`)
+- Modify: `src/bindaems/app/ledger/service.py` (`ingest`, `_apply_prices` rufen `costing.mark_dirty(slot_start)`), `src/bindaems/app/runtime.py` (`LedgerCosting` bauen, `settings.on_change` → `mark_dirty(None)` bei Änderung von `planning.wear_ct`; `catch_up` nach jedem Lauf von `_ledger_loop` und nach `handle_stream_message`)
 - Test: `tests/unit/app/ledger/test_costing.py`
 
 **Interfaces:**
-- Consumes: `LedgerSlot` (`ledger/service.py`), `feed_in_price` (`tariff/calc.py`), `RuntimeSettings.planning.wear_ct`, `cfg.battery.usable_kwh`.
+- Consumes: `LedgerSlot` (`ledger/service.py`), `RuntimeSettings.planning.wear_ct`, `cfg.battery.usable_kwh`.
 - Produces:
-  - `@dataclass(frozen=True) class SlotCost: slot_start: datetime; stock_kwh: float; avg_ct: float | None; discharge_ct: float | None; feed_in_ct: float | None`
-  - `def cost_basis(slots: Sequence[LedgerSlot], start: tuple[float, float | None], *, feed_in_ct: Callable[[datetime], float | None], wear_ct: float, usable_kwh: float) -> list[SlotCost]` (rein, Präzisierung 4)
+  - `@dataclass(frozen=True) class SlotCost: slot_start: datetime; stock_kwh: float; avg_ct: float | None; discharge_ct: float`
+  - `def cost_basis(slots: Sequence[LedgerSlot], start: tuple[float, float | None], *, wear_ct: float, usable_kwh: float) -> list[SlotCost]` (rein, Präzisierung 4)
   - `class LedgerCosting` mit `__init__(engine, ledger: LedgerService, settings: SettingsService, usable_kwh: float)`, `mark_dirty(start: datetime | None) -> None` (`None` = alles), `catch_up() -> int` (rechnet ab dem frühesten markierten Slot, gibt die Zahl der geschriebenen Slots zurück; Lock wie `LedgerService`), `costs(start: datetime, end: datetime) -> dict[datetime, SlotCost]` (ruft zuerst `catch_up`)
 
 - [ ] **Step 1: Write the failing tests**
 
 ```python
-def test_pv_charge_is_valued_at_feed_in() -> None:
-    # pv>battery 2000 Wh bei 8 ct, dann battery>house 1000 Wh, wear 2
-    costs = cost_basis([charge, discharge], (0.0, None), feed_in_ct=lambda _: 8.0, wear_ct=2.0, usable_kwh=10)
-    assert costs[0].avg_ct == 8.0 and costs[0].stock_kwh == 2.0
-    assert costs[1].discharge_ct == 10.0 and costs[1].stock_kwh == 1.0
+def test_pv_charge_is_free() -> None:
+    # pv>battery 2000 Wh, dann battery>house 1000 Wh, wear 2
+    costs = cost_basis([charge, discharge], (0.0, None), wear_ct=2.0, usable_kwh=10)
+    assert costs[0].avg_ct == 0.0 and costs[0].stock_kwh == 2.0
+    assert costs[1].discharge_ct == 2.0 and costs[1].stock_kwh == 1.0
 
 def test_grid_and_pv_charge_mix_by_energy() -> None:
-    # 1 kWh PV zu 8 ct + 1 kWh Netz zu 30 ct → 19 ct
+    # 1 kWh PV zu 0 ct + 1 kWh Netz zu 30 ct → 15 ct
 
 def test_discharge_uses_average_at_slot_start() -> None:
     # im selben Slot entladen und laden: discharge_ct aus dem Mittelwert davor
 
-def test_empty_battery_discharge_uses_feed_in_plus_wear() -> None: ...
+def test_empty_battery_discharge_costs_wear_only() -> None: ...
 def test_stock_is_capped_at_usable_capacity() -> None:
     # 12 kWh geladen bei usable 10 → stock 10; avg gewichtet mit dem alten Inhalt vor dem Kappen
 
@@ -284,7 +286,7 @@ def test_missing_price_counts_at_average() -> None:
 
 def test_catch_up_recomputes_from_the_earliest_dirty_slot(costing, ledger) -> None: ...
 def test_settings_change_recomputes_all(costing, settings_service) -> None:
-    # neuer OeMAG-Wert für den Monat → avg_ct aller Slots danach neu
+    # neuer wear_ct → discharge_ct aller Slots neu; reprice markiert ab dem ersten Tag
 ```
 
 - [ ] **Step 2: Run tests to verify they fail**
@@ -417,7 +419,7 @@ git commit -m "feat(app): Ladesessions aus Steckzustand und Belegung"
 - Test: `tests/unit/app/charging/test_sessions.py`, `tests/unit/app/charging/test_routes.py`
 
 **Interfaces:**
-- Consumes: `LedgerService.slots`, `LedgerCosting.costs` (Task 2), `ChargingTracker.sessions` (Task 4), `feed_in_price`.
+- Consumes: `LedgerService.slots`, `LedgerCosting.costs` (Task 2), `ChargingTracker.sessions` (Task 4).
 - Produces:
   - `@dataclass(frozen=True) class FlowSplit: kwh: float; pv_kwh: float; battery_kwh: float; grid_kwh: float; cost_eur: float | None`
   - `@dataclass(frozen=True) class ChargingSession: id: int; wallbox: str; vehicle: str | None; start: datetime; end: datetime | None; split: FlowSplit`
@@ -430,8 +432,8 @@ git commit -m "feat(app): Ladesessions aus Steckzustand und Belegung"
 
 ```python
 def test_split_and_cost_of_a_session() -> None:
-    # pv>wb:twc 1000 Wh (feed-in 8 ct), battery>wb:twc 500 Wh (discharge_ct 12),
-    # grid>wb:twc 500 Wh (30 ct) → 2,0 kWh, Kosten 0,08 + 0,06 + 0,15 = 0,29 €
+    # pv>wb:twc 1000 Wh (0 ct), battery>wb:twc 500 Wh (discharge_ct 12),
+    # grid>wb:twc 500 Wh (30 ct) → 2,0 kWh, Kosten 0 + 0,06 + 0,15 = 0,21 €
 
 def test_slot_belongs_to_the_session_with_most_overlap() -> None: ...
 def test_energy_without_session_is_unknown() -> None: ...
