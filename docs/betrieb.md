@@ -3359,6 +3359,7 @@ Zahlen:
 | `NETZLADEN_AUS` | Netzladen würde sich lohnen (jetzt 10,0 ct, um 18:00 Uhr 30,0 ct), ist aber ausgeschaltet. | Netzladen würde sich lohnen, der Schalter ist aus |
 | `PV_UEBERSCHUSS_ERWARTET` | Akku deckt den Verbrauch; ab 09:30 Uhr lädt ihn die PV wieder. | Absicht `Eigenverbrauch`, der Akku entlädt, und später lädt die PV ihn |
 | `EIGENVERBRAUCH` | Akku deckt den Eigenverbrauch. | sonst |
+| `UNTERSTUETZUNG_RESERVIERT` | Akku-Unterstützung fürs Auto erst ab 70 %, weil der Plan den Akku bis 18:00 Uhr braucht. | Absicht `Eigenverbrauch`; die Schwelle, die der Plan für spätere Entladungen braucht, liegt über der Unterstützungsschwelle; „bis“ ist der Beginn des ersten späteren Slots ohne diesen Bedarf |
 | `GESCHAETZT` | Preis geschätzt. | der Preis des Slots ist ein Schätzpreis |
 | `ERSATZPLAN` | Ersatzplan. | der Plan ist ein Ersatzplan |
 

@@ -28,6 +28,7 @@ SAMPLE_PARAMS: dict[str, dict[str, float | str]] = {
     "REGEL_R_BLOCKIERT_NETZLADEN": {"um": "12:00", "kwh": 7.25},
     "NETZLADEN_AUS": {"ct": 10.0, "um": "18:00", "ct_spaeter": 40.0},
     "EIGENVERBRAUCH": {},
+    "UNTERSTUETZUNG_RESERVIERT": {"soc": 70.0, "um": "18:00"},
     "GESCHAETZT": {},
     "ERSATZPLAN": {},
 }
@@ -88,6 +89,10 @@ def test_all_sentences_match_the_texts_exactly() -> None:
             "ist aber ausgeschaltet."
         ),
         "EIGENVERBRAUCH": "Akku deckt den Eigenverbrauch.",
+        "UNTERSTUETZUNG_RESERVIERT": (
+            "Akku-Unterstützung fürs Auto erst ab 70 %, "
+            "weil der Plan den Akku bis 18:00 Uhr braucht."
+        ),
         "GESCHAETZT": "Preis geschätzt.",
         "ERSATZPLAN": "Ersatzplan.",
     }

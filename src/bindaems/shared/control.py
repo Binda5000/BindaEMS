@@ -14,6 +14,7 @@ from typing import Annotated, Final
 from pydantic import AwareDatetime, Field
 
 from bindaems.shared.config import _Model
+from bindaems.shared.plan import IntentPlan
 
 VICTRON: Final = "victron"
 
@@ -135,6 +136,17 @@ class GuestIntent(_Model):
     mode: ChargeMode = ChargeMode.PV
 
 
+class SupportIntent(_Model):
+    """Akku-Unterstützung fürs Auto (Plan 3c, Entscheidung 7).
+
+    ``allowed`` falsch sperrt sie. ``soc_pct`` ist die Unterstützungsschwelle; ohne Angabe gilt
+    ``control.support_soc_pct``.
+    """
+
+    allowed: bool = True
+    soc_pct: Annotated[float, Field(ge=0, le=100)] | None = None
+
+
 class Intent(_Model):
     """Absicht der Bedienung (Spec 5.3): Regelbetrieb, Betriebsart je Aktor und Lademodi.
 
@@ -143,6 +155,8 @@ class Intent(_Model):
     Fahrzeug-Schlüssel in der Reihenfolge, in der sie Überschuss und Strom zugeteilt bekommen;
     ohne Angabe gilt die Reihenfolge unter ``vehicles`` in ``config.yaml``. ``guest`` nennt den
     Modus für ein Auto ohne Fahrzeug der Konfiguration; ohne Angabe gilt ``GuestIntent()``.
+    ``plan`` ist der bindende Teil des Akkuplans (Plan 3c), ``None`` heißt kein Plan. ``support``
+    regelt die Akku-Unterstützung fürs Auto; ohne Angabe ist sie erlaubt.
     """
 
     version: Annotated[int, Field(ge=1)]
@@ -152,3 +166,5 @@ class Intent(_Model):
     priority: list[str] | None = None
     surplus_priority: SurplusPriority = Field(default_factory=SurplusPriority)
     guest: GuestIntent = Field(default_factory=GuestIntent)
+    plan: IntentPlan | None = None
+    support: SupportIntent = Field(default_factory=SupportIntent)

@@ -17,6 +17,7 @@ from bindaems.shared.config import _Model
 from bindaems.shared.timeutil import SLOT, ensure_utc, slot_start
 
 PLAN_VALID: Final = timedelta(minutes=45)
+MAX_INTENT_PLAN_SLOTS: Final = 8
 
 NonNegativeW = Annotated[float, Field(ge=0, allow_inf_nan=False)]
 Finite = Annotated[float, Field(allow_inf_nan=False)]
@@ -54,6 +55,7 @@ ReasonCode = Literal[
     "REGEL_R_BLOCKIERT_NETZLADEN",
     "NETZLADEN_AUS",
     "EIGENVERBRAUCH",
+    "UNTERSTUETZUNG_RESERVIERT",
     "GESCHAETZT",
     "ERSATZPLAN",
 ]
@@ -98,6 +100,7 @@ class PlanSlot(_Model):
     estimated: bool
     cost_ct: Finite
     budget_kw: Finite | None
+    support_soc_pct: Finite | None = None
     reasons: list[Reason]
 
 
@@ -135,3 +138,65 @@ class Plan(_Model):
         """Der Slot, in dem ``ts`` liegt; ``None``, wenn der Plan ihn nicht enthält."""
         wanted = slot_start(ts)
         return next((slot for slot in self.slots if slot.start == wanted), None)
+
+
+class IntentPlanSlot(_Model):
+    """Eine Viertelstunde des Plans in der Absicht: nur, was der core zum Ausführen braucht."""
+
+    start: AwareDatetime
+    intent: BatteryIntent
+    budget_kw: NonNegativeW | None = None
+    import_ct: Finite | None = None
+    support_soc_pct: Annotated[float, Field(ge=0, le=100)] | None = None
+
+
+class IntentPlan(_Model):
+    """Bindender Teil eines Plans, so wie die app ihn in der Absicht an den core schickt.
+
+    Der core prüft Raster, Lückenlosigkeit und Gültigkeit (Plan 3c); hier steht nur die Form.
+    """
+
+    id: int
+    created_at: AwareDatetime
+    valid_until: AwareDatetime
+    grid_charge_allowed: bool
+    slots: Annotated[list[IntentPlanSlot], Field(min_length=1)]
+
+    def valid_at(self, ts: datetime) -> bool:
+        """Gilt der Plan zum Zeitpunkt ``ts``? (``created_at ≤ ts < valid_until``)"""
+        moment = ensure_utc(ts)
+        return self.created_at <= moment < self.valid_until
+
+    def slot_at(self, ts: datetime) -> IntentPlanSlot | None:
+        """Der Slot, in dem ``ts`` liegt; ``None``, wenn der Plan ihn nicht enthält."""
+        wanted = slot_start(ts)
+        return next((slot for slot in self.slots if slot.start == wanted), None)
+
+
+def intent_plan(plan: Plan, *, grid_charge_allowed: bool) -> IntentPlan:
+    """Der bindende Teil von ``plan`` für die Absicht: die Slots vor ``valid_until``, höchstens
+    ``MAX_INTENT_PLAN_SLOTS``. Ist ``grid_charge_allowed`` falsch, wird ``NETZLADEN`` zu
+    ``EIGENVERBRAUCH``. ``plan.id`` muss gesetzt sein (der Plan ist gespeichert)."""
+    if plan.id is None:
+        raise ValueError("Nur ein gespeicherter Plan (mit id) geht in die Absicht")
+
+    def binding(slot: PlanSlot) -> IntentPlanSlot:
+        intent = slot.intent
+        if not grid_charge_allowed and intent.kind is BatteryIntentKind.NETZLADEN:
+            intent = BatteryIntent()
+        return IntentPlanSlot(
+            start=slot.start,
+            intent=intent,
+            budget_kw=slot.budget_kw,
+            import_ct=slot.import_ct,
+            support_soc_pct=slot.support_soc_pct,
+        )
+
+    kept = [slot for slot in plan.slots if slot.start < plan.valid_until]
+    return IntentPlan(
+        id=plan.id,
+        created_at=plan.created_at,
+        valid_until=plan.valid_until,
+        grid_charge_allowed=grid_charge_allowed,
+        slots=[binding(slot) for slot in kept[:MAX_INTENT_PLAN_SLOTS]],
+    )

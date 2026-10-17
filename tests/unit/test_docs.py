@@ -437,6 +437,7 @@ def test_plan_reasons_in_the_guide_match_the_code() -> None:
         "REGEL_R_BLOCKIERT_NETZLADEN": {"um": "17:00", "kwh": 8.4},
         "NETZLADEN_AUS": {"ct": 10.0, "um": "18:00", "ct_spaeter": 30.0},
         "EIGENVERBRAUCH": {},
+        "UNTERSTUETZUNG_RESERVIERT": {"soc": 70.0, "um": "18:00"},
         "GESCHAETZT": {},
         "ERSATZPLAN": {},
     }
@@ -460,6 +461,7 @@ def test_plan_reasons_in_the_guide_match_the_code() -> None:
         "NETZLADEN_AUS",
         "PV_UEBERSCHUSS_ERWARTET",
         "EIGENVERBRAUCH",
+        "UNTERSTUETZUNG_RESERVIERT",
         "GESCHAETZT",
         "ERSATZPLAN",
     ]

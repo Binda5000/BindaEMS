@@ -3,6 +3,7 @@ from datetime import UTC, datetime
 
 import pytest
 from pydantic import ValidationError
+from tests.plan_helpers import sample_plan
 
 from bindaems.core.safety.types import de
 from bindaems.shared.control import (
@@ -12,12 +13,14 @@ from bindaems.shared.control import (
     CommandKind,
     GuestIntent,
     Intent,
+    SupportIntent,
     SurplusOrder,
     SurplusPriority,
     VehicleIntent,
     vehicle_actuator,
     wallbox_actuator,
 )
+from bindaems.shared.plan import intent_plan
 
 
 def test_intent_defaults_and_validation() -> None:
@@ -145,8 +148,8 @@ def test_guest_charges_in_pv_by_default() -> None:
     )
 
 
-def test_guest_is_the_last_field_of_the_intent() -> None:
-    assert list(Intent.model_fields)[-1] == "guest"
+def test_support_is_the_last_field_of_the_intent() -> None:
+    assert list(Intent.model_fields)[-2:] == ["plan", "support"]
 
 
 def test_guest_shows_its_mode_as_in_the_api() -> None:
@@ -165,3 +168,41 @@ def test_guest_has_only_a_mode(bad: dict[str, object]) -> None:
     # kein Boost und keine Übersteuerung der Wallbox für einen Gast
     with pytest.raises(ValidationError):
         Intent.model_validate({"version": 1, "guest": bad})
+
+
+def test_intent_defaults_have_no_plan_and_allow_support() -> None:
+    intent = Intent(version=1)
+    assert intent.plan is None
+    assert intent.support == SupportIntent(allowed=True, soc_pct=None)
+    dumped = intent.model_dump(mode="json")
+    assert dumped["plan"] is None
+    assert dumped["support"] == {"allowed": True, "soc_pct": None}
+
+
+def test_stored_intent_without_plan_and_support_loads_with_defaults() -> None:
+    intent = Intent.model_validate({"version": 3, "control": True})
+    assert (intent.plan, intent.support) == (None, SupportIntent())
+
+
+def test_intent_round_trips_with_a_plan() -> None:
+    plan = sample_plan("2026-10-16T10:01:00+00:00", ["10:00", "10:15"]).model_copy(update={"id": 4})
+    intent = Intent(
+        version=2,
+        plan=intent_plan(plan, grid_charge_allowed=True),
+        support=SupportIntent(allowed=False, soc_pct=80.0),
+    )
+    assert Intent.model_validate(intent.model_dump(mode="json")) == intent
+    assert Intent.model_validate_json(intent.model_dump_json()) == intent
+
+
+@pytest.mark.parametrize("soc", [-1, 100.5, 101])
+def test_support_threshold_out_of_range_is_invalid(soc: float) -> None:
+    with pytest.raises(ValidationError):
+        SupportIntent(soc_pct=soc)
+    assert SupportIntent(soc_pct=0).soc_pct == 0
+    assert SupportIntent(soc_pct=100).soc_pct == 100
+
+
+def test_support_has_only_allowed_and_threshold() -> None:
+    with pytest.raises(ValidationError):
+        Intent.model_validate({"version": 1, "support": {"allowed": True, "x": 1}})

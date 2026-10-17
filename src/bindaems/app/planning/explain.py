@@ -75,6 +75,10 @@ _SENTENCES: dict[str, Callable[[Params], str]] = {
         f"{_de(_num(p, 'ct_spaeter'), 1)} ct), ist aber ausgeschaltet."
     ),
     "EIGENVERBRAUCH": lambda _: "Akku deckt den Eigenverbrauch.",
+    "UNTERSTUETZUNG_RESERVIERT": lambda p: (
+        f"Akku-Unterstützung fürs Auto erst ab {_de(_num(p, 'soc'), 0)} %, weil der Plan den "
+        f"Akku bis {_txt(p, 'um')} Uhr braucht."
+    ),
     "GESCHAETZT": lambda _: "Preis geschätzt.",
     "ERSATZPLAN": lambda _: "Ersatzplan.",
 }

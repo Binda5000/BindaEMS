@@ -20,6 +20,11 @@
     },
     "guest": {
       "mode": "pv"
+    },
+    "plan": null,
+    "support": {
+      "allowed": true,
+      "soc_pct": null
     }
   }
 }

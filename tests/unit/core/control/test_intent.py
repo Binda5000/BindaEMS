@@ -475,6 +475,8 @@ def test_charging_intent_is_accepted_saved_and_reloaded(tmp_path, limits) -> Non
             "priority": ["egolf", "tesla"],
             "surplus_priority": {"kind": "cars_first", "soc_pct": 50.0},
             "guest": {"mode": "min_pv"},
+            "plan": None,
+            "support": {"allowed": True, "soc_pct": None},
         },
         "accepted_at": T0.isoformat(),
     }
