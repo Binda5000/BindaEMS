@@ -1,10 +1,13 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/svelte';
 import { page } from '$app/state';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-import { stats } from '$lib/testing/fixtures';
+import { chargingSession, limits, stats } from '$lib/testing/fixtures';
 import Page from './+page.svelte';
 
-const { api, goto } = vi.hoisted(() => ({ api: { stats: vi.fn() }, goto: vi.fn() }));
+const { api, goto } = vi.hoisted(() => ({
+	api: { stats: vi.fn(), chargingSessions: vi.fn(), limits: vi.fn() },
+	goto: vi.fn()
+}));
 vi.mock('$lib/api/endpoints', async (original) => ({
 	...(await original<typeof import('$lib/api/endpoints')>()),
 	api
@@ -30,6 +33,8 @@ beforeEach(() => {
 	vi.resetAllMocks();
 	navigate('');
 	api.stats.mockResolvedValue(stats());
+	api.chargingSessions.mockResolvedValue([chargingSession()]);
+	api.limits.mockResolvedValue(limits());
 });
 
 afterEach(() => {
@@ -157,4 +162,68 @@ it('rückt um Mitternacht auf den neuen Tag weiter', async () => {
 	await vi.advanceTimersByTimeAsync(2 * 60_000);
 	expect(screen.getByRole('heading', { name: 'Sa., 10.10.2026' })).toBeInTheDocument();
 	expect(api.stats.mock.lastCall?.slice(0, 2)).toEqual(['day', '2026-10-10']);
+});
+
+it('zeigt unter den Kosten Autos, Ladesessions, Verbraucher, Monatsspitzen und Abgleich', async () => {
+	navigate('?zeitraum=monat&datum=2026-10-09');
+	render(Page);
+	await screen.findByRole('table', { name: 'Ladesessions' });
+	const headings = screen.getAllByRole('heading', { level: 2 }).map((h) => h.textContent);
+	expect(headings).toEqual([
+		'Oktober 2026',
+		'Energie',
+		'Kosten',
+		'Autos',
+		'Ladesessions',
+		'Verbraucher',
+		'Monatsspitzen',
+		'Abgleich mit den Zählern'
+	]);
+	expect(screen.getByRole('table', { name: 'Autos' })).toBeInTheDocument();
+	// Wallbox-Namen aus den Limits
+	expect(await screen.findByRole('cell', { name: 'Wallbox Garage' })).toBeInTheDocument();
+	expect(screen.getByRole('cell', { name: 'Wallbox EVCS' })).toBeInTheDocument();
+});
+
+it('lässt die Monatsspitzen in Tag und Woche weg', async () => {
+	api.stats.mockResolvedValue(stats({ period: 'week' }));
+	navigate('?zeitraum=woche&datum=2026-10-07');
+	render(Page);
+	await screen.findByRole('table', { name: 'Autos' });
+	expect(screen.queryByRole('heading', { name: 'Monatsspitzen' })).not.toBeInTheDocument();
+});
+
+it('lädt die Sessions des Zeitraums, den laufenden jede Minute, einen vergangenen einmal', async () => {
+	navigate('?zeitraum=monat&datum=2026-10-09');
+	render(Page);
+	await vi.advanceTimersByTimeAsync(0);
+	expect(api.chargingSessions.mock.lastCall?.slice(0, 3)).toEqual([
+		'2026-10-01',
+		'2026-10-31',
+		undefined
+	]);
+	expect(api.chargingSessions).toHaveBeenCalledTimes(1);
+	await vi.advanceTimersByTimeAsync(60_000);
+	expect(api.chargingSessions).toHaveBeenCalledTimes(2);
+
+	api.chargingSessions.mockClear();
+	navigate('?zeitraum=woche&datum=2026-09-30');
+	await vi.advanceTimersByTimeAsync(0);
+	expect(api.chargingSessions.mock.lastCall?.slice(0, 2)).toEqual(['2026-09-28', '2026-10-04']);
+	await vi.advanceTimersByTimeAsync(5 * 60_000);
+	expect(api.chargingSessions).toHaveBeenCalledTimes(1);
+});
+
+it('versucht die Sessions eines vergangenen Zeitraums nach einem Fehler nach 30 s erneut', async () => {
+	const { ApiError } = await import('$lib/api/errors');
+	navigate('?zeitraum=monat&datum=2026-09-15');
+	api.chargingSessions.mockRejectedValueOnce(new ApiError(503, 'Sessions nicht verfügbar'));
+	render(Page);
+	expect(await screen.findByText('Sessions nicht verfügbar')).toBeInTheDocument();
+	expect(api.chargingSessions).toHaveBeenCalledTimes(1);
+	await vi.advanceTimersByTimeAsync(30_000);
+	expect(api.chargingSessions).toHaveBeenCalledTimes(2);
+	await screen.findByRole('table', { name: 'Ladesessions' });
+	// die übrigen Karten blieben vom Fehler unberührt
+	expect(screen.getByRole('table', { name: 'Autos' })).toBeInTheDocument();
 });

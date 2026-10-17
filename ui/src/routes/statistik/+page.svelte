@@ -3,13 +3,15 @@
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
 	import { api } from '$lib/api/endpoints';
-	import type { Stats } from '$lib/api/schemas';
+	import type { ChargingSession, Limits, Stats } from '$lib/api/schemas';
 	import EChart from '$lib/charts/EChart.svelte';
 	import { statsEnergyOption } from '$lib/charts/options';
 	import { readPalette } from '$lib/charts/palette';
 	import Card from '$lib/components/Card.svelte';
 	import Notice from '$lib/components/Notice.svelte';
 	import { Resource } from '$lib/resource.svelte';
+	import ChecksCard from '$lib/stats/ChecksCard.svelte';
+	import ConsumersCard from '$lib/stats/ConsumersCard.svelte';
 	import CostCard from '$lib/stats/CostCard.svelte';
 	import {
 		PERIODS,
@@ -23,9 +25,13 @@
 		todayIso,
 		type Period
 	} from '$lib/stats/period';
+	import PeaksCard from '$lib/stats/PeaksCard.svelte';
+	import SessionsCard from '$lib/stats/SessionsCard.svelte';
 	import StatTiles from '$lib/stats/StatTiles.svelte';
+	import VehicleCard from '$lib/stats/VehicleCard.svelte';
 	import { hints, tiles } from '$lib/stats/view';
 	import { theme } from '$lib/theme.svelte';
+	import { wallboxName } from '$lib/wallboxes';
 
 	const POLL_MS = 60_000;
 	const RETRY_MS = 30_000;
@@ -51,20 +57,39 @@
 		});
 	}
 
-	// Der laufende Zeitraum lädt jede Minute nach, ein vergangener nur einmal
+	// Der laufende Zeitraum lädt jede Minute nach, ein vergangener nur einmal (nach einem Fehler
+	// alle 30 s erneut). Das gilt für die Statistik wie für die Ladesessions.
 	let resource = $state.raw<Resource<Stats> | null>(null);
+	let sessions = $state.raw<Resource<ChargingSession[]> | null>(null);
 	$effect(() => {
-		const query = { period, day };
-		const next = new Resource((o) => api.stats(query.period, query.day, o), {
-			intervalMs: running ? POLL_MS : undefined,
-			retryMs: RETRY_MS
-		});
-		resource = next;
-		return next.start();
+		const query = { period, day, first: range.first, last: range.last };
+		const options = { intervalMs: running ? POLL_MS : undefined, retryMs: RETRY_MS };
+		const nextStats = new Resource((o) => api.stats(query.period, query.day, o), options);
+		const nextSessions = new Resource(
+			(o) => api.chargingSessions(query.first, query.last, undefined, o),
+			options
+		);
+		resource = nextStats;
+		sessions = nextSessions;
+		const stopStats = nextStats.start();
+		const stopSessions = nextSessions.start();
+		return () => {
+			stopStats();
+			stopSessions();
+		};
 	});
 
 	// Jeder Zeitraum hat seine eigene Abfrage: beim Blättern steht bis zur Antwort „Lädt …“
 	const current = $derived(resource?.data);
+
+	// Anzeigenamen der Wallboxes für den Abgleich; ohne Antwort gilt der Schlüssel
+	const limits = new Resource<Limits>((o) => api.limits(o), { retryMs: RETRY_MS });
+	onMount(() => limits.start());
+	const wallboxNames = $derived(
+		Object.fromEntries(
+			Object.entries(limits.data?.wallboxes ?? {}).map(([key, box]) => [key, wallboxName(key, box)])
+		)
+	);
 
 	const palette = $derived.by(() => {
 		void theme.dark;
@@ -129,6 +154,11 @@
 		</Card>
 
 		<CostCard stats={current} />
+		<VehicleCard stats={current} />
+		<SessionsCard sessions={sessions?.data} error={sessions?.error?.detail} />
+		<ConsumersCard stats={current} />
+		<PeaksCard stats={current} />
+		<ChecksCard stats={current} {wallboxNames} />
 	{:else if !resource?.error}
 		<p class="muted">Lädt …</p>
 	{/if}
