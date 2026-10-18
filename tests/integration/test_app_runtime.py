@@ -842,10 +842,27 @@ async def test_permanently_failing_costing_does_not_spin(runtime, monkeypatch) -
         await stop(costing_task)
 
 
+class _GatedSleep:
+    """``asyncio`` für ``bindaems.app.runtime`` mit einem ``sleep``, der erst endet, wenn der Test
+    ``release`` setzt: Die Pause hängt so nicht an der Uhr des Testrechners."""
+
+    def __init__(self) -> None:
+        self.release = asyncio.Event()
+        self.delays: list[float] = []
+
+    def __getattr__(self, name: str) -> object:
+        return getattr(asyncio, name)
+
+    async def sleep(self, delay: float) -> None:
+        self.delays.append(delay)
+        await self.release.wait()
+
+
 async def test_costing_pause_after_a_failure_keeps_a_wake_and_can_be_cancelled(
     runtime, monkeypatch
 ) -> None:
-    monkeypatch.setattr("bindaems.app.runtime.COSTING_RETRY_S", 0.3)
+    gated = _GatedSleep()
+    monkeypatch.setattr("bindaems.app.runtime.asyncio", gated)
     calls: list[str] = []
     real = runtime.costing._recompute
 
@@ -860,23 +877,26 @@ async def test_costing_pause_after_a_failure_keeps_a_wake_and_can_be_cancelled(
     costing_task = asyncio.create_task(runtime._costing_loop())
     try:
         with capture_logs():
-            await until(lambda: len(calls) == 1)
+            await until(lambda: gated.delays == [60.0])  # gescheitert, jetzt in der Pause
             ingest(runtime.ledger, T_APP, {"pv>battery": 1000.0})  # Weckruf in der Pause
             await asyncio.sleep(0.1)
             assert calls == ["Versuch"]  # noch in der Pause
-            await until(lambda: len(calls) == 2, max_wait_s=1.0)  # danach nicht verloren
+            gated.release.set()
+            await until(lambda: len(calls) == 2)  # danach nicht verloren
         assert runtime.costing.costs(T_APP, T_APP + timedelta(minutes=15))[T_APP].stock_kwh == 1.0
     finally:
         await stop(costing_task)
-    monkeypatch.setattr("bindaems.app.runtime.COSTING_RETRY_S", 60.0)
+    monkeypatch.setattr("bindaems.app.runtime.asyncio", asyncio)  # die echte Pause von 60 s
     monkeypatch.setattr(
         runtime.costing, "_recompute", lambda start: (_ for _ in ()).throw(OSError())
     )
     runtime.costing.mark_dirty(None)
     paused = asyncio.create_task(runtime._costing_loop())
-    with capture_logs():
-        await asyncio.sleep(0.1)  # scheitert und pausiert 60 s
+    with capture_logs() as logs:
+        await until(lambda: any(e["log_level"] == "error" for e in logs))  # gescheitert
+        await asyncio.sleep(0.05)  # jetzt in der Pause
         await asyncio.wait_for(stop(paused), timeout=1)  # die Pause ist abbrechbar
+    assert paused.cancelled()
 
 
 async def test_first_pv_forecast_waits_for_the_calibration(runtime, monkeypatch) -> None:
