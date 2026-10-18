@@ -686,8 +686,9 @@ zwischen dem letzten Wert in der halben Stunde davor und dem ersten in der halbe
 (linear). Fehlt einer der beiden, gilt der andere, wenn er höchstens 2 Minuten von Mitternacht
 entfernt ist, sonst fehlt der Zählerstand. Alle Mitternächte eines Laufs gehen in einer Anfrage an
 InfluxDB; die app schickt Abfragen per POST, damit auch ein Proxy mit kurzer URL-Grenze sie
-durchlässt. Die Größen sind `import` (Netzbezug), `export` (Einspeisung), `pv` und `wb:<Schlüssel>`
-je Wallbox.
+durchlässt. Per POST sperrt InfluxDB schreibende Anweisungen nicht, darum schickt die app nur
+Anweisungen, die mit `SELECT` oder `SHOW` beginnen und kein `INTO` enthalten. Die Größen sind
+`import` (Netzbezug), `export` (Einspeisung), `pv` und `wb:<Schlüssel>` je Wallbox.
 
 `GET /api/ledger/checks?from=JJJJ-MM-TT&to=JJJJ-MM-TT` (ab „Lesen“) liefert die gespeicherten
 Prüfungen, höchstens 400 Tage (sonst 422): `days` mit `day`, `signal`, `ledger_kwh`, `counter_kwh`,

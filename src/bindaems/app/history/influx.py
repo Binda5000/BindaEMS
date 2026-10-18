@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
@@ -36,6 +37,57 @@ def quote_str(value: str) -> str:
     return "'" + value.replace("\\", "\\\\").replace("'", "\\'") + "'"
 
 
+_READING = re.compile(r"\s*(SELECT|SHOW)\b", re.IGNORECASE)
+_INTO = re.compile(r"\bINTO\b", re.IGNORECASE)
+# Nach diesen Wörtern beginnt mit ``/`` ein regulärer Ausdruck (wie im Scanner von InfluxQL)
+_REGEX_FOLLOWS = re.compile(r"(=~|!~|\bFROM)\s*$", re.IGNORECASE)
+
+
+def _statements(q: str) -> list[str]:
+    """Die Anweisungen in ``q``, geteilt an ``;``, je als Text außerhalb der Literale:
+    Zeichenketten, Bezeichner in Anführungszeichen und reguläre Ausdrücke stehen als ``_`` da, ein
+    ``;`` darin teilt nicht. Ein Literal ohne Ende und Kommentare lehnt sie ab (``ValueError``),
+    damit nichts an der Prüfung vorbei in eine weitere Anweisung gerät."""
+    statements: list[str] = []
+    bare: list[str] = []
+    i = 0
+    while i < len(q):
+        char = q[i]
+        if char in "'\"" or (char == "/" and _REGEX_FOLLOWS.search("".join(bare))):
+            end = i + 1
+            while end < len(q) and q[end] != char:
+                end += 2 if q[end] == "\\" else 1
+            if end >= len(q):
+                raise ValueError(f"InfluxQL: {char} ohne Ende")
+            bare.append(" _ ")
+            i = end + 1
+        elif q.startswith(("--", "/*"), i):
+            raise ValueError("InfluxQL: Kommentare sind nicht erlaubt")
+        elif char == ";":
+            statements.append("".join(bare))
+            bare = []
+            i += 1
+        else:
+            bare.append(char)
+            i += 1
+    statements.append("".join(bare))
+    return [statement for statement in statements if statement.strip()]
+
+
+def check_reading(q: str) -> None:
+    """Lässt nur lesende Anweisungen durch: jede beginnt mit ``SELECT`` oder ``SHOW`` und enthält
+    kein ``INTO``. Per POST führt InfluxDB 1.x auch ``DROP``, ``DELETE`` und ``SELECT … INTO`` aus,
+    per GET nicht; diese Prüfung ersetzt die Nur-Lesen-Sperre von GET (Festlegung N10)."""
+    statements = _statements(q)
+    if not statements:
+        raise ValueError("InfluxQL: leere Abfrage")
+    for statement in statements:
+        if _READING.match(statement) is None or _INTO.search(statement) is not None:
+            raise ValueError(
+                f"InfluxQL: nur SELECT und SHOW ohne INTO erlaubt, nicht {statement.strip()[:60]!r}"
+            )
+
+
 class InfluxReader:
     def __init__(
         self, cfg: InfluxConfig, password: SecretStr | None, http: httpx.AsyncClient
@@ -52,7 +104,9 @@ class InfluxReader:
     async def query(self, q: str, *, database: str | None = None) -> list[Series]:
         """Schickt ``q`` per POST im Formular-Body (InfluxDB 1.x nimmt so auch SELECT und SHOW an):
         eine lange Abfrage, etwa der Abgleich über 36 Mitternächte, passt so durch jeden Proxy,
-        der URLs auf wenige KB begrenzt."""
+        der URLs auf wenige KB begrenzt. Nimmt nur lesende Anweisungen an (``check_reading``,
+        sonst ``ValueError``)."""
+        check_reading(q)
         params = {"db": database or self._database, "epoch": "ms"}
         try:
             response = await self._http.post(
