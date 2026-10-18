@@ -193,8 +193,8 @@ Plan 4b „Geplantes Laden“** (ändert den core), nach der Abnahme der Phase 3
     15-min-Wächter (gewollter Netzbezug über der festen Grenze von Regel 2, Boost-Anteil aus der
     Verteilung der Abrechnung) und zwei Kleinigkeiten; die Fix-Welle hat sie behoben, eine
     Nachrunde danach zwei Restpunkte der Drosselung (alles unter „Bewusst offen gelassen“).
-  - **Entschieden und aufgeschoben:** Die Rulings und die aufgeschobenen Kleinigkeiten stehen unter
-    „Bewusst offen gelassen“.
+  - **Entschieden und aufgeschoben:** Die Festlegungen und die aufgeschobenen Kleinigkeiten stehen
+    unter „Bewusst offen gelassen“.
   - **Noch nicht (Stand nach 2c-2a):** die volle Zuordnungserkennung (kam mit 2c-2b), die Bedienung
     (2d) und die Planausführung (Phase 3). Live ist weiterhin kein Aktor.
 - **Phase 2c-2b (Zuordnungserkennung) ist umgesetzt, je Task und im Gesamtreview geprüft** (Plan:
@@ -222,13 +222,13 @@ Plan 4b „Geplantes Laden“** (ändert den core), nach der Abnahme der Phase 3
     alle 21 laufen grün in `tests/integration/test_sim_scenarios.py` (Betriebshandbuch,
     „Simulator“). Keines scheiterte an Erkennung oder Regelung.
   - **Beim Bau geändert:** Tessie-Werte zählen an einer Wallbox erst eine Minute nach dem Beginn des
-    Vorgangs, der Widerspruch ist enger gefasst als im Design (7.3), der Ausschluss verlangt „zu Hause
-    und angesteckt“, Stromvergleich und zeitliche Korrelation sagen über ein Auto, das Tessie nicht
-    zu Hause sieht, nichts, Tessie und Home Assistant stützen bei mehreren Vorgängen nur nach einer
-    Elimination (Strom oder Phasen schließen das Fahrzeug an jeder anderen Wallbox aus), und ein Boost
-    ohne Übersteuerung bindet an den Vorgang, an dem das Fahrzeug steht (Kopf des Designs 2c-2; Absatz
-    „Stand Plan 2c-2b“ der Spec, 7.8). Die Rulings und die offenen Punkte stehen unter „Bewusst offen
-    gelassen“.
+    Vorgangs, der Widerspruch ist enger gefasst als im Design (7.3), der Ausschluss verlangt „zu
+    Hause und angesteckt“, Stromvergleich und zeitliche Korrelation sagen über ein Auto, das Tessie
+    nicht zu Hause sieht, nichts, Tessie und Home Assistant stützen bei mehreren Vorgängen nur nach
+    einer Elimination (Strom oder Phasen schließen das Fahrzeug an jeder anderen Wallbox aus), und
+    ein Boost ohne Übersteuerung bindet an den Vorgang, an dem das Fahrzeug steht (Kopf des Designs
+    2c-2; Absatz „Stand Plan 2c-2b“ der Spec, 7.8). Die Festlegungen und die offenen Punkte stehen
+    unter „Bewusst offen gelassen“.
   - **Gesamtreview und Fix-Welle:** Der Gesamtreview („mit Korrekturen“, keine kritischen Befunde)
     fand zwei wichtige Lücken: Ein Tesla, der den Wall Connector verließ, galt mit Tessies
     veraltetem „angesteckt“ an der EVCS als erkannt und bekam `max_a`, und der Stromvergleich konnte
@@ -278,8 +278,8 @@ Plan 4b „Geplantes Laden“** (ändert den core), nach der Abnahme der Phase 3
     neu erkannten fremden Änderung, den verbrauchten Boost im core (er bindet mit keiner neuen Version
     wieder), Lademodus `null` in Health als unbekannter Stand, die HA-Auswahl „Zuordnung“ wie im UI,
     den Tag `kind` der Grafana-Markierungen und das Meldebudget mit eigenem Anteil für Ablehnungen.
-  - **Entschieden und aufgeschoben:** Die Rulings und die aufgeschobenen Kleinigkeiten stehen unter
-    „Bewusst offen gelassen“.
+  - **Entschieden und aufgeschoben:** Die Festlegungen und die aufgeschobenen Kleinigkeiten stehen
+    unter „Bewusst offen gelassen“.
   - **Noch nicht:** Ziel-SOC, Abfahrt und der Modus „Geplant“ (Phase 4), die Planausführung (Phase 3),
     die Mehrkostenanzeige beim Boost, die Schalter „Netzladen erlaubt“ und „Akku-Unterstützung erlaubt“,
     die Zahl „Unterstützungsschwelle“, die Taste „neu planen“ und die HA-Sensoren Ladeenergie,
@@ -321,8 +321,8 @@ Plan 4b „Geplantes Laden“** (ändert den core), nach der Abnahme der Phase 3
     ihn behoben, dazu drei kleine Punkte im UI („Heute (ab jetzt)“ in der Lastprognose, Stufe und
     Mindestverrechnung in der Tarifansicht, die ElWG-Vorlage mit Beginn 1.1.2027). Das Re-Review war
     sauber.
-  - **Entschieden und aufgeschoben:** Die Rulings und die aufgeschobenen Kleinigkeiten stehen unter
-    „Bewusst offen gelassen“ („Entschieden in Plan 3a“).
+  - **Entschieden und aufgeschoben:** Die Festlegungen und die aufgeschobenen Kleinigkeiten stehen
+    unter „Bewusst offen gelassen“ („Entschieden in Plan 3a“).
   - **Noch nicht (Stand nach 3a):** der Optimierer, der Zeitplan und die Szenario-Tests (kamen mit 3b),
     die Planausführung im core (3c), die Kostenanzeige zu Leistungspreis und Gebühren und eine eigene
     Seite zur Prognosegüte (Phase 5). Live ist weiterhin kein Aktor, und 3a schaltet nichts an der
@@ -382,8 +382,8 @@ Plan 4b „Geplantes Laden“** (ändert den core), nach der Abnahme der Phase 3
     „Übersprungene Tage“ im Bericht, ein gesperrtes „Neu planen“ während des Schaltvorgangs, der
     wechselhafte Tag mit 1500 W PV-Spitze und Nachzüge in Betriebshandbuch und Spec. Das Re-Review
     war sauber (bereit zur Integration).
-  - **Entschieden und aufgeschoben:** Die Rulings und die aufgeschobenen Kleinigkeiten stehen unter
-    „Bewusst offen gelassen“ („Entschieden in Plan 3b“).
+  - **Entschieden und aufgeschoben:** Die Festlegungen und die aufgeschobenen Kleinigkeiten stehen
+    unter „Bewusst offen gelassen“ („Entschieden in Plan 3b“).
   - **Noch nicht:** die Planausführung im core mit „Plan vs. Ist“ und dem Budget des 15-min-Wächters
     (3c), Regel R2 und die Autos in der Planung samt ihren Auslösern (Phase 4), die Kostenanzeige zu
     gewählten Plänen und die Prognosegüte als eigene Seite (Phase 5). Live ist weiterhin kein Aktor, und
@@ -438,8 +438,9 @@ Plan 4b „Geplantes Laden“** (ändert den core), nach der Abnahme der Phase 3
     `plan.state` `valid`; der core hebt eine Unterstützungsschwelle unter der USV-Reserve mit Hinweis,
     statt die Absicht abzulehnen; das Betriebshandbuch nennt den Rollback vor 3c und das neue Binden
     mit jedem Plan.
-  - **Entschieden und aufgeschoben:** Die Rulings und die aufgeschobenen Kleinigkeiten stehen unter
-    „Bewusst offen gelassen“ („Entschieden in Plan 3c“), dazu, was nach dem Gesamtreview offen ist.
+  - **Entschieden und aufgeschoben:** Die Festlegungen und die aufgeschobenen Kleinigkeiten stehen
+    unter „Bewusst offen gelassen“ („Entschieden in Plan 3c“), dazu, was nach dem Gesamtreview offen
+    ist.
   - **Noch nicht:** Regel R2 und die Autos im Planer (Phase 4), die Begründung des Plan-Slots in
     „Warum?“, „Plan gegen Ist“ für andere Tage als heute im UI, ein Totband in der Drosselung des
     Wächters. Live ist weiterhin kein Aktor, und 3c schaltet nichts an der Anlage.
@@ -525,45 +526,46 @@ Plan 4b „Geplantes Laden“** (ändert den core), nach der Abnahme der Phase 3
   Implementiert wird erst nach der Freigabe.
 - **Werkzeuge:**
   - Pläne entstehen mit `superpowers:writing-plans` unter `docs/superpowers/plans/`.
-  - Phase 1 lief inline („Native“, `superpowers:executing-plans`): Ledger mit `Ruling:`-Zeilen,
-    am Ende ein frischer Gesamtreviewer.
+  - Phase 1 lief inline („Native“, `superpowers:executing-plans`): Arbeitsliste der Umsetzung mit
+    Festlegungen, am Ende ein frischer Gesamtreviewer.
   - Plan 2a lief mit `superpowers:subagent-driven-development`: je Task ein Implementierer und ein
-    Reviewer, ein Ledger mit Rulings und aufgeschobenen Kleinigkeiten, am Ende der Gesamtreview.
+    Reviewer, eine Arbeitsliste der Umsetzung mit Festlegungen und aufgeschobenen Kleinigkeiten, am
+    Ende der Gesamtreview.
   - Plan 2b lief ebenso subagent-driven (Entscheidung des Betreibers vom 11.10.2026).
   - Plan 2c-1 lief ebenso (Entscheidung des Betreibers vom 12.10.2026). Für die Szenarien des
     Simulators galt: Scheitert eines, liegt der Fehler zuerst in der Regelung (eigener
     `fix(core)`-Commit mit Test); ein Szenario ändert man nur, wenn es physikalisch nicht zu
     schaffen ist.
-  - Plan 2c-2a lief ebenso (subagent-driven): je Task ein Implementierer und ein Reviewer, ein Ledger
-    mit Rulings und aufgeschobenen Kleinigkeiten (ihr Inhalt steht unten unter „Bewusst offen
-    gelassen“). Von den acht neuen Szenarien des Simulators scheiterten drei in der ersten Fassung; bei
-    keinem lag der Fehler in der Regelung, und die drei wurden im Aufbau angepasst (Betriebshandbuch,
-    „Simulator“). `spitze-15min` startet den Tesla seit der Nachrunde wieder wie geplant.
-  - Plan 2c-2b lief ebenso (subagent-driven): je Task ein Implementierer und ein Reviewer, ein Ledger
-    mit Rulings und aufgeschobenen Kleinigkeiten (ihr Inhalt steht unten unter „Bewusst offen
-    gelassen“). Der Review von Task 2 fand, dass der Ausschluss den Ort des Autos ignorierte; die
-    Fix-Runde (mit Test) hat das behoben, und die Rulings zu Stromvergleich und zeitlicher Korrelation
-    kamen danach dazu. In den drei neuen Szenarien und im umgebauten `zuordnung` lag kein Fehler in der
-    Erkennung oder Regelung.
-  - Plan 3a lief ebenso (subagent-driven, 14 Tasks): je Task ein Implementierer und ein Reviewer, ein
-    Ledger mit Rulings und aufgeschobenen Kleinigkeiten (ihr Inhalt steht unten unter „Bewusst offen
-    gelassen“). Jede Task ließ das ganze Repository grün (auch den UI-Vertragstest), darum weitete
-    Task 1 schon das UI-Schema der Tarifbestandteile; der Gesamtreview („mit Korrekturen“) fand einen
-    wichtigen Befund, den die Fix-Welle behob.
-  - Plan 3b lief ebenso (subagent-driven, 17 Tasks): je Task ein Implementierer und ein Reviewer, ein
-    Ledger mit Rulings und aufgeschobenen Kleinigkeiten (ihr Inhalt steht unten unter „Bewusst offen
-    gelassen“; das Ledger liegt nur lokal unter `.superpowers/sdd/` und ist nicht im Repository). Der
-    Review von Task 4 fand einen Defekt im Plan (freies `pv_h` im Modell); er wurde mit Test behoben
-    und im Plan nachgetragen. Der Gesamtreview („mit Korrekturen“) fand zwei wichtige Befunde, die
-    Fix-Welle behob sie, und das Re-Review war sauber. Die Trailer der Commits folgen ab Task 2 der
-    Attributionszeile des jeweiligen Autors (falls das nicht gewollt ist: Trailer vor dem Merge
-    umschreiben).
+  - Plan 2c-2a lief ebenso (subagent-driven): je Task ein Implementierer und ein Reviewer, eine
+    Arbeitsliste der Umsetzung mit Festlegungen und aufgeschobenen Kleinigkeiten (ihr Inhalt steht
+    unten unter „Bewusst offen gelassen“). Von den acht neuen Szenarien des Simulators scheiterten
+    drei in der ersten Fassung; bei keinem lag der Fehler in der Regelung, und die drei wurden im
+    Aufbau angepasst (Betriebshandbuch, „Simulator“). `spitze-15min` startet den Tesla seit der
+    Nachrunde wieder wie geplant.
+  - Plan 2c-2b lief ebenso (subagent-driven): je Task ein Implementierer und ein Reviewer, eine
+    Arbeitsliste der Umsetzung mit Festlegungen und aufgeschobenen Kleinigkeiten (ihr Inhalt steht
+    unten unter „Bewusst offen gelassen“). Der Review von Task 2 fand, dass der Ausschluss den Ort
+    des Autos ignorierte; die Fix-Runde (mit Test) hat das behoben, und die Festlegungen zu
+    Stromvergleich und zeitlicher Korrelation kamen danach dazu. In den drei neuen Szenarien und im
+    umgebauten `zuordnung` lag kein Fehler in der Erkennung oder Regelung.
+  - Plan 3a lief ebenso (subagent-driven, 14 Tasks): je Task ein Implementierer und ein Reviewer,
+    eine Arbeitsliste der Umsetzung mit Festlegungen und aufgeschobenen Kleinigkeiten (ihr Inhalt
+    steht unten unter „Bewusst offen gelassen“). Jede Task ließ das ganze Repository grün (auch den
+    UI-Vertragstest), darum weitete Task 1 schon das UI-Schema der Tarifbestandteile; der
+    Gesamtreview („mit Korrekturen“) fand einen wichtigen Befund, den die Fix-Welle behob.
+  - Plan 3b lief ebenso (subagent-driven, 17 Tasks): je Task ein Implementierer und ein Reviewer,
+    eine Arbeitsliste der Umsetzung mit Festlegungen und aufgeschobenen Kleinigkeiten (ihr Inhalt
+    steht unten unter „Bewusst offen gelassen“). Der Review von Task 4 fand einen Defekt im Plan
+    (freies `pv_h` im Modell); er wurde mit Test behoben und im Plan nachgetragen. Der Gesamtreview
+    („mit Korrekturen“) fand zwei wichtige Befunde, die Fix-Welle behob sie, und das Re-Review war
+    sauber. Die Trailer der Commits folgen ab Task 2 der Attributionszeile des jeweiligen Autors
+    (falls das nicht gewollt ist: Trailer vor dem Merge umschreiben).
   - Befunde werden nach ihrer Wirkung neu bewertet. Critical und Important kommen in einen
     Fix-Durchgang, jeder mit einem Test, der vorher scheitert. Minors werden gesammelt und auf
     Wunsch erledigt („bitte die kleinigkeiten erledigen“).
 - **Abschlussnachricht einer Phase:**
   - Ergebnis und Tests
-  - „Rulings“ (Entscheidungen mit Kosten, falls falsch)
+  - „Festlegungen“ (Entscheidungen mit Kosten, falls falsch)
   - „Deferred minors“
   - Frage nach der Integration (merge, PR oder so lassen)
 - **Git:**
@@ -1487,7 +1489,7 @@ Entschieden in Phase 1c; im Commit-Verlauf bzw. der Abschlussnachricht begründe
 - Ein E2E-Test für die Neuverbindung der Live-Anzeige fehlt. Die Logik ist mit Unit-Tests
   abgedeckt.
 
-Entschieden in Phase 2a; die Rulings stehen im Plan (Präzisierungen) bzw. im Commit-Verlauf:
+Entschieden in Phase 2a; die Festlegungen stehen im Plan (Präzisierungen) bzw. im Commit-Verlauf:
 
 - Ein Teilsystem wird gesperrt, der ganze core bleibt im Betrieb: Ein fehlgeschlagener Victron-Punkt
   sperrt nur Victron (Präzisierung 1).
@@ -1512,8 +1514,8 @@ Entschieden in Phase 2a; die Rulings stehen im Plan (Präzisierungen) bzw. im Co
   „Watchdog am Cerbo“ bis etwa 25 s ohne Hinweis stehen. Die Datei `ui/src/routes/system/+page.svelte`
   hat rund 500 Zeilen; bei weiterem Wachstum gehören die Karten in eigene Komponenten.
 
-Entschieden in Phase 2c-1; die Rulings stehen im Plan (Präzisierungen), im Kopf des Designs und in den
-Absätzen „Stand Plan 2c-1“ der Spec:
+Entschieden in Phase 2c-1; die Festlegungen stehen im Plan (Präzisierungen), im Kopf des Designs und
+in den Absätzen „Stand Plan 2c-1“ der Spec:
 
 - Die EVCS folgt dem Überschuss in ganzen Ampere mit Hysterese beim Erhöhen
   (`control.evcs_hysteresis_a`, 0,5 A; Design 6.5). Ganz ruhig bleibt ihr Strom nur, solange das
@@ -1536,8 +1538,9 @@ Absätzen „Stand Plan 2c-1“ der Spec:
   Stufe „Tessie nicht erreichbar: Tesla nicht steuerbar“ (Spec 8.4) greift an der Anlage darum erst
   über die Fehler-Sperre des Aktors oder das Veralten der Werte nach 900 s.
 
-Entschieden in Phase 2c-2a; die Rulings stehen im Plan (Präzisierungen), im Kopf des Designs und in
-den Absätzen „Stand Plan 2c-2a“ der Spec. Hier die Entscheidungen mit Kosten, falls sie falsch sind:
+Entschieden in Phase 2c-2a; die Festlegungen stehen im Plan (Präzisierungen), im Kopf des Designs
+und in den Absätzen „Stand Plan 2c-2a“ der Spec. Hier die Entscheidungen mit Kosten, falls sie
+falsch sind:
 
 - **Umbau:** `charging.py` und `runtime.py` sind nach dem Umbau größer geblieben als geplant
   (Zeilenzahlen: Liste „Vor der Live-Schaltung“, Punkt 7), denn die Tabellen der Tasks waren
@@ -1752,8 +1755,9 @@ etwas):
   gemeinsamen Modul, und `test_control.py` pinnt die letzten beiden Felder von `Command` sowie
   `test_config.py` den genauen Leerraum der Beispielzeile `peak_target_kw`.
 
-Entschieden in Phase 2c-2b; die Rulings stehen im Plan (Präzisierungen), im Kopf des Designs 2c-2 und
-im Absatz „Stand Plan 2c-2b“ der Spec (7.8). Hier die Entscheidungen mit Kosten, falls sie falsch sind:
+Entschieden in Phase 2c-2b; die Festlegungen stehen im Plan (Präzisierungen), im Kopf des Designs
+2c-2 und im Absatz „Stand Plan 2c-2b“ der Spec (7.8). Hier die Entscheidungen mit Kosten, falls sie
+falsch sind:
 
 - **Ausschluss (`elsewhere`):** Er stützt ein Fahrzeug nur, wenn Tessie es „zu Hause und angesteckt“
   meldet, nicht schon bei „angesteckt“ (der Plan sagt „angesteckt“). Ein Auto, das woanders angesteckt
@@ -1949,8 +1953,8 @@ gelten für `31721a6`):
   der übersteuerte e-Golf am Wall Connector nicht zweiphasig lädt; lädt er, stützt `tessie` den
   Tesla an der EVCS, allein reicht das nicht, und es bleibt „Gast, angenommen“.
 
-Entschieden in Plan 2d; die Rulings stehen im Plan (Präzisierungen) und in den Absätzen „Stand Plan 2d“
-der Spec:
+Entschieden in Plan 2d; die Festlegungen stehen im Plan (Präzisierungen) und in den Absätzen „Stand
+Plan 2d“ der Spec:
 
 - **Bereinigung der Absicht:** Die app schickt Boost und Übersteuerung nur zurück, wo Health sie zeigt
   (oder wo sie auf einen Ansteckvorgang warten), und vertraut Health nur, wenn seine `intent_version` die
@@ -2032,9 +2036,9 @@ Aufgeschobene Kleinigkeiten aus Plan 2d (aus den Reviews; keine davon gefährdet
 - **Tests:** Einige Prüfungen greifen auf interne Felder zu (`_acks`), die Zeitstempel-Ersetzung der
   fremden Entscheidung ist nur über den Ablauf getestet.
 
-Entschieden in Plan 3a; die Rulings stehen im Ledger der Umsetzung und, soweit sie das Verhalten
-betreffen, im Plan (Präzisierungen) und in den Absätzen „Stand Plan 3a“ der Spec. Hier die
-Entscheidungen mit Kosten, falls sie falsch sind:
+Entschieden in Plan 3a; die Festlegungen stehen, soweit sie das Verhalten betreffen, im Plan
+(Präzisierungen) und in den Absätzen „Stand Plan 3a“ der Spec. Hier die Entscheidungen mit Kosten,
+falls sie falsch sind:
 
 - **Jede Task lässt das ganze Repository grün:** Task 1 weitet schon das UI-Schema der
   Tarifbestandteile (`v.variant('kind', …)`) und schreibt die Vertragsdateien neu; der Plan hatte das
@@ -2067,8 +2071,7 @@ Entscheidungen mit Kosten, falls sie falsch sind:
   ElWG-Vorlage, und kein Aufrufer löst sie aus Versehen aus. Falls falsch: eine Signatur in einer
   Hilfsfunktion.
 
-Aufgeschobene Kleinigkeiten aus Plan 3a (aus den Reviews; keine davon gefährdet die Anlage; das
-Ledger nennt sie nach Task):
+Aufgeschobene Kleinigkeiten aus Plan 3a (aus den Reviews; keine davon gefährdet die Anlage):
 
 - **Zwei Fälle, die an der Anlage zählen** (Gesamtreview, M4 und M5):
   - Der Nachtlauf um 02:30 fällt in der Nacht der Zeitumstellung im März aus (die Stunde gibt es nicht;
@@ -2132,9 +2135,9 @@ Ledger nennt sie nach Task):
   - Im Betriebshandbuch fehlt beim Band die Schwellenangabe, „`fill(previous)` auf dem Einheitenfeld“
     ist ungenau formuliert, und die Zeile 3b der Tabelle in Spec 18 kürzt den freigegebenen Wortlaut.
 
-Entschieden in Plan 3b; die Rulings stehen im Ledger der Umsetzung (nur lokal, nicht im Repository),
-soweit sie das Verhalten betreffen im Plan (Präzisierungen) und in den Absätzen „Stand Plan 3b“ der
-Spec. Hier die Entscheidungen mit Kosten, falls sie falsch sind:
+Entschieden in Plan 3b; die Festlegungen stehen, soweit sie das Verhalten betreffen, im Plan
+(Präzisierungen) und in den Absätzen „Stand Plan 3b“ der Spec. Hier die Entscheidungen mit Kosten,
+falls sie falsch sind:
 
 - **Optimierer:**
   - `pv_h = min(PV, Last)` ist im Modell fest (Plan-Defekt aus dem Review von Task 4, im Plan
@@ -2225,9 +2228,9 @@ Spec. Hier die Entscheidungen mit Kosten, falls sie falsch sind:
   - `export_days` und `scenario_days` stellen die Logs nur im Programmpfad (`__main__`) ein, nicht in
     `main()`. Falls falsch: Tests, die `main` aufrufen, verschleppen die Logging-Konfiguration wieder.
 
-Aufgeschobene Kleinigkeiten aus Plan 3b (aus den Reviews; keine davon gefährdet die Anlage; das Ledger
-nennt sie nach Task). Was die Fix-Welle oder spätere Tasks erledigt haben, steht nicht mehr hier (etwa
-die Punkte aus Task 9 und die Punkte B der Fix-Welle):
+Aufgeschobene Kleinigkeiten aus Plan 3b (aus den Reviews; keine davon gefährdet die Anlage). Was die
+Fix-Welle oder spätere Tasks erledigt haben, steht nicht mehr hier (etwa die Punkte aus Task 9 und
+die Punkte B der Fix-Welle):
 
 - **Plan-Typen und Eingangsdaten (Tasks 1 bis 3):**
   - `Plan` hat keinen Validator für `valid_until > created_at` und aufsteigende, eindeutige Slots
@@ -2398,9 +2401,10 @@ betreffen, in den Absätzen „Stand Plan 3c“ der Spec. Hier beides mit Kosten
     wurde) und weckt den Sender nach jeder Abfrage, und der Stand der Ausführung nennt „Regelbetrieb
     aus“ und „regelt nicht“ vor „noch nicht beim core“.
   - **Budget unter dem eigenen Bezug (I2):** Der Ersatzplan nahm `peak0_kw` als Budget, auch unter
-    seinem eigenen Bezug bei `HALTEN` und `NETZLADEN`, und am Monatsanfang mit `minimum_kw` 0 lag das
-    Budget bei 0 kW. Jetzt gilt für beide Quellen eine Formel (`builder._budgets`, unten im Ruling).
-  - **Rulings des Gesamtreviews:**
+    seinem eigenen Bezug bei `HALTEN` und `NETZLADEN`, und am Monatsanfang mit `minimum_kw` 0 lag
+    das Budget bei 0 kW. Jetzt gilt für beide Quellen eine Formel (`builder._budgets`, unten in der
+    Festlegung).
+  - **Festlegungen des Gesamtreviews:**
     1. I1 wird in der app behoben (Senden nur auf vertrautem Health, Health bei der Trennung
        verworfen, Sender nach jeder Abfrage von Health geweckt, „aus“ und „regelt nicht“ vor „noch
        nicht beim core“); das Binden im core nur bei geänderten `vehicles` ist aufgeschoben: Die
