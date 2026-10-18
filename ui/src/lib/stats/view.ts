@@ -238,17 +238,17 @@ export interface ConsumerRow {
 	id: number;
 	name: string;
 	value: string;
-	/** der Grund, wenn die Energie fehlt */
-	title: string | undefined;
+	/** der Grund, wenn die Energie fehlt, sonst `null` */
+	note: string | null;
 }
 
-/** Karte „Verbraucher“: ohne Wert „–“ mit dem Grund als Titel */
+/** Karte „Verbraucher“: ohne Wert „–“ und darunter der Grund */
 export function consumerRows(stats: Stats): ConsumerRow[] {
 	return stats.consumers.map((consumer) => ({
 		id: consumer.id,
 		name: consumer.name,
 		value: formatEnergy(consumer.kwh),
-		title: consumer.kwh === null ? (consumer.note ?? undefined) : undefined
+		note: consumer.kwh === null ? consumer.note : null
 	}));
 }
 
@@ -305,11 +305,16 @@ export function checkRows(stats: Stats, wallboxNames: Record<string, string>): C
 	}));
 }
 
-/** „Mehr als 1 % Abweichung am 12.10. und 15.10.“; ohne geprüfte Tage der Hinweis darauf */
+/**
+ * „Mehr als 1 % Abweichung am 12.10. und 15.10.“; ohne geprüfte Tage der Hinweis darauf, mit
+ * geprüften Tagen ohne Summen und Markierungen, dass Zählerwerte fehlen.
+ */
 export function checkNotice(stats: Stats): string | null {
 	if (stats.checks.days === 0) return 'Noch kein Tag abgeglichen.';
 	const days = stats.checks.flagged_days.map((day) => `${day.slice(8, 10)}.${day.slice(5, 7)}.`);
-	if (days.length === 0) return null;
+	if (days.length === 0) {
+		return stats.checks.totals.length === 0 ? 'Keine Zählerwerte für diesen Zeitraum.' : null;
+	}
 	const list = days.length === 1 ? days[0] : `${days.slice(0, -1).join(', ')} und ${days.at(-1)}`;
 	return `Mehr als 1 % Abweichung am ${list}`;
 }

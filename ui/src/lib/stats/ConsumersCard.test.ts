@@ -3,7 +3,7 @@ import { expect, it } from 'vitest';
 import { stats } from '$lib/testing/fixtures';
 import ConsumersCard from './ConsumersCard.svelte';
 
-it('shows the consumer reason as title when kWh is missing', () => {
+it('zeigt den Grund eines fehlenden Werts als Text unter dem Strich', () => {
 	render(ConsumersCard, {
 		stats: stats({
 			consumers: [
@@ -20,8 +20,12 @@ it('shows the consumer reason as title when kWh is missing', () => {
 			.map((cell) => cell.textContent)
 	).toEqual(['Verbraucher', 'Energie']);
 	expect(screen.getByText('3,46 kWh')).toBeInTheDocument();
-	const missing = screen.getByTitle('Tag nicht gespeichert');
-	expect(missing).toHaveTextContent('–');
+	const [, kitchen, office] = within(table).getAllByRole('row');
+	const reason = within(office!).getByText('Tag nicht gespeichert');
+	expect(reason).toHaveClass('note');
+	expect(reason.closest('td')).toHaveTextContent(/^–\s*Tag nicht gespeichert$/);
+	expect(within(kitchen!).queryByText(/gespeichert/)).not.toBeInTheDocument();
+	expect(screen.queryByTitle('Tag nicht gespeichert')).not.toBeInTheDocument();
 });
 
 it('sagt, wenn keine Verbraucher angelegt sind', () => {

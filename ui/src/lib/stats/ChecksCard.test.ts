@@ -43,3 +43,9 @@ it('zeigt ohne markierte Tage keinen Hinweis', () => {
 	render(ChecksCard, { stats: stats({ checks: { ...stats().checks, flagged_days: [] } }) });
 	expect(screen.queryByText(/Mehr als 1 %/)).not.toBeInTheDocument();
 });
+
+it('sagt bei geprüften Tagen ohne Summen und Markierungen, dass Zählerwerte fehlen', () => {
+	render(ChecksCard, { stats: stats({ checks: { days: 3, flagged_days: [], totals: [] } }) });
+	expect(screen.getByText('Keine Zählerwerte für diesen Zeitraum.')).toHaveClass('muted');
+	expect(screen.queryByRole('table')).not.toBeInTheDocument();
+});

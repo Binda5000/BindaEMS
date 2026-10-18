@@ -14,6 +14,8 @@
 	const rows = $derived(checkRows(stats, wallboxNames));
 	const notice = $derived(checkNotice(stats));
 	const checked = $derived(stats.checks.days > 0);
+	// ohne Tabelle ist der Hinweis ein Ersatz (gedämpft), unter der Tabelle eine Meldung
+	const muted = $derived(!checked || rows.length === 0);
 </script>
 
 <Card title="Abgleich mit den Zählern">
@@ -42,7 +44,7 @@
 		</div>
 	{/if}
 	{#if notice}
-		<p class="notice" class:muted={!checked}>{notice}</p>
+		<p class="notice" class:muted>{notice}</p>
 	{/if}
 </Card>
 

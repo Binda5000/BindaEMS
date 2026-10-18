@@ -273,7 +273,7 @@ describe('Karte Ladesessions', () => {
 });
 
 describe('Karte Verbraucher', () => {
-	it('shows the consumer reason as title when kWh is missing', () => {
+	it('gibt den Grund mit, wenn die Energie eines Verbrauchers fehlt', () => {
 		const rows = consumerRows(
 			stats({
 				consumers: [
@@ -283,8 +283,8 @@ describe('Karte Verbraucher', () => {
 			})
 		);
 		expect(rows).toEqual([
-			{ id: 1, name: 'Küche', value: formatEnergy(3.456), title: undefined },
-			{ id: 2, name: 'Büro', value: '–', title: 'Tag nicht gespeichert' }
+			{ id: 1, name: 'Küche', value: formatEnergy(3.456), note: null },
+			{ id: 2, name: 'Büro', value: '–', note: 'Tag nicht gespeichert' }
 		]);
 	});
 });
@@ -349,7 +349,9 @@ describe('Karte Abgleich', () => {
 
 	it('names flagged days in the checks card', () => {
 		const notice = (days: number, flagged: string[]) =>
-			checkNotice(stats({ checks: { days, flagged_days: flagged, totals: [] } }));
+			checkNotice(
+				stats({ checks: { days, flagged_days: flagged, totals: stats().checks.totals } })
+			);
 		expect(notice(7, ['2026-10-12'])).toBe('Mehr als 1 % Abweichung am 12.10.');
 		expect(notice(7, ['2026-10-12', '2026-10-15'])).toBe(
 			'Mehr als 1 % Abweichung am 12.10. und 15.10.'
@@ -359,5 +361,12 @@ describe('Karte Abgleich', () => {
 		);
 		expect(notice(7, [])).toBeNull();
 		expect(notice(0, [])).toBe('Noch kein Tag abgeglichen.');
+	});
+
+	it('sagt, wenn geprüfte Tage weder Summen noch Markierungen haben', () => {
+		const empty = (flagged: string[]) =>
+			checkNotice(stats({ checks: { days: 3, flagged_days: flagged, totals: [] } }));
+		expect(empty([])).toBe('Keine Zählerwerte für diesen Zeitraum.');
+		expect(empty(['2026-10-12'])).toBe('Mehr als 1 % Abweichung am 12.10.');
 	});
 });

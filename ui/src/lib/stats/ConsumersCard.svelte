@@ -27,7 +27,12 @@
 				{#each rows as row (row.id)}
 					<tr>
 						<td>{row.name}</td>
-						<td class="num"><span title={row.title}>{row.value}</span></td>
+						<td class="num">
+							{row.value}
+							{#if row.note}
+								<span class="note">{row.note}</span>
+							{/if}
+						</td>
 					</tr>
 				{/each}
 			</tbody>
@@ -39,5 +44,13 @@
 	th {
 		font-size: 0.8125rem;
 		color: var(--muted);
+	}
+
+	/* der Grund eines fehlenden Werts, klein und gedämpft unter dem Strich */
+	.note {
+		display: block;
+		font-size: 0.8125rem;
+		color: var(--muted);
+		white-space: normal;
 	}
 </style>
