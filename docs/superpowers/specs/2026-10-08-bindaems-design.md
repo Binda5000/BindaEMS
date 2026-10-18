@@ -1478,14 +1478,18 @@ Greift, wenn der Solver scheitert, das Zeitlimit überschritten ist oder das Erg
   zusammen, beide Regeln angepasst): Der Optimierer kennt keine Mindestentladung; er lädt auch dann
   billig nach, wenn er die Energie später in mehreren teuren Slots je unter 100 W entlädt. Deshalb
   zählt in der Spread-Regel jede spätere Entladung über 1 W (`USED_ABOVE_W` in `plausibility.py`).
-  Die 100 W gelten nur noch für die Erklärungen (`MENTION_W`, 9.6). Dazu streichen die Absichten
-  ein `NETZLADEN`, das sich an der Nachrechnung nicht rechnet (dieselbe Rechnung wie die
+  Die 100 W der Spread-Regel gelten nur noch für die Erklärungen (`MENTION_W`, 9.6); in den
+  Absichten gelten `GRID_CHARGE_MIN_W` und `HOLD_MIN_W` (je 100 W) weiter. Dazu streichen die
+  Absichten ein `NETZLADEN`, das sich an der Nachrechnung nicht rechnet (dieselbe Rechnung wie die
   Plausibilität, `grid_charge_pays`), wie bei R1 nach der Kürzung: Der Slot bekommt die Absicht
   nach der Regel ohne Netzladen (`HALTEN` oder `EIGENVERBRAUCH`, 9.3), gestrichen wird je Runde der
   letzte betroffene Slot. Das deckt die Rundung ab: Fehlen in einem billigen Slot nach dem Netzladen
   weniger als 100 W, wird er `EIGENVERBRAUCH` und verbraucht die geladene Energie sofort. Für Pläne
   des Optimierers findet die Spread-Prüfung damit nichts mehr. Sie bleibt unverändert als Schutz:
   Gelangt doch ein solches `NETZLADEN` in die Absichten, gilt der Ersatzplan.
+  Die Regel ist nicht mengenbezogen: Schon eine lohnende spätere Entladung über 1 W rechtfertigt
+  jede Ladeleistung; ein Netzladen, das fast ganz sofort verbraucht wird und nur einen kleinen
+  Rest für später lässt, bleibt bestehen (wirtschaftlich etwa ±0).
 - **Fehlende Eingangsdaten** ergeben keinen neuen Plan, nur einen Status der Komponente `planning` („Kein Plan: kein SOC vom core“, „… kein Preis für den aktuellen Slot“, „… keine PV-Prognose“, „… keine Lastprognose“, „… zu wenig Daten für einen Plan“); der letzte Plan bleibt bis `valid_until` sichtbar.
 - **Gültigkeit:** 45 min. Ob ein Plan gilt, sagt die API (`valid`), nicht die Uhr des Browsers.
 - **Aufbewahrung:** Das Aufräumen läuft in der stündlichen Wartung der app. Nach 7 Tagen werden `plan_inputs` gelöscht und die Slots des Plans auf die vor `valid_until` gekürzt (`trimmed`); nach 30 Tagen wird der Plan gelöscht.

@@ -3793,6 +3793,10 @@ verbraucht. So verwirft die Prüfung keinen Plan des Optimierers mehr wegen der 
 prüft die Regel aber weiter: Gelangt doch ein `Netzladen`, das sich nicht rechnet, in die Absichten,
 gilt der Ersatzplan.
 
+Die Regel ist nicht mengenbezogen: Schon eine lohnende spätere Entladung über 1 W rechtfertigt jede
+Ladeleistung. Ein `Netzladen`, das fast ganz sofort verbraucht wird und nur einen kleinen Rest für
+später lässt, bleibt deshalb bestehen; wirtschaftlich ist das etwa ±0.
+
 ### Netzladen erlaubt
 
 Der Schalter **Netzladen erlaubt** ist standardmäßig aus. Aus heißt: Kein Plan enthält `Netzladen`;

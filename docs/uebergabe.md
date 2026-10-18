@@ -53,8 +53,9 @@ Anlage“).
 Arbeitszweig `claude/phase-4-plan-whnbh6`, noch nicht auf `main`. Gesamtreview, Fix-Welle und die
 Nacharbeit vom 18.10.2026 sind abgeschlossen. Der Property-Test des Planers aus Plan 3b, der
 selten scheiterte, besteht auf diesem Zweig seit der Festlegung des Betreibers vom 18.10.2026 (auf
-`main` scheitert er weiter; siehe „Bewusst offen gelassen“, „Planer: Plausibilität gegen
-Optimierer“); die Integration auf `main` steht aus. Plan 4a ändert nur die app und das UI (der core bleibt gleich) und braucht an der Anlage nur
+`main` kann er weiter scheitern, selten und mit passendem Beispiel; siehe „Bewusst offen
+gelassen“, „Planer: Plausibilität gegen Optimierer“); die Integration auf `main` steht aus.
+Plan 4a ändert nur die app und das UI (der core bleibt gleich) und braucht an der Anlage nur
 den Neubau von `ems-app`: Sessions, Einstandspreis, Kosten je Auto, Abgleich mit den Zählern,
 Nachrechnung von Lücken, die Seite „Statistik“, Statistik-Sensoren in HA und ein Grafana-Dashboard.
 Er schaltet nichts an der Anlage. **Der nächste Entwicklungsschritt ist Plan 4b „Geplantes Laden“**
@@ -2656,6 +2657,11 @@ Preis verbraucht wurde. Festgelegt ist jetzt (Spec 9.5, Nachtrag vom 18.10.2026;
 - Die Prüfung selbst bleibt streng: Gelangt doch ein solches `NETZLADEN` in die Absichten, gilt der
   Ersatzplan. Für Pläne des Optimierers findet sie damit nichts mehr; gegen einen Fehler in den
   Absichten schützt sie weiter.
+- Die Spread-Regel ist nicht mengenbezogen: Schon eine lohnende spätere Entladung über 1 W
+  rechtfertigt jede Ladeleistung. Ein Netzladen, das fast ganz sofort verbraucht wird und nur einen
+  kleinen Rest für später lässt, bleibt deshalb bestehen; wirtschaftlich ist das etwa ±0. Eine
+  mengenbezogene Prüfung (geladene Energie gegen die Summe lohnender späterer Entladung) wäre der
+  nächste Schritt; sie wird nur auf Wunsch gebaut.
 
 Regressionstests mit dem festen Beispiel und einem Fall aus der gezielten Suche stehen in
 `tests/unit/app/planning/test_plausibility.py` und `test_intents.py`. Befund und Optionen:
