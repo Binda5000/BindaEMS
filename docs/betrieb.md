@@ -3758,7 +3758,9 @@ Jeder Lauf friert zuerst die Eingangsdaten ein, löst dann das Modell und prüft
    Absichten später umsetzt. `Netzladen` wird es, wenn das Modell mindestens 100 W aus dem Netz in den
    Akku lädt (die Leistung auf 100 W gerundet). `Halten` wird es, wenn der Eigenverbrauch mindestens
    100 W entladen würde und das Modell weniger als die Hälfte davon entlädt. Sonst bleibt es
-   `Eigenverbrauch`. Die Zahlen des Plans (SOC, Kosten, Budget) stammen aus der Nachrechnung.
+   `Eigenverbrauch`. Ein `Netzladen`, das sich an der Nachrechnung nicht rechnet (Spread-Regel
+   unten), streicht die app wieder; der Slot wird dann `Halten` oder `Eigenverbrauch` nach derselben
+   Regel. Die Zahlen des Plans (SOC, Kosten, Budget) stammen aus der Nachrechnung.
 4. **Prüfung:** Ein unplausibler Plan wird verworfen, und es gilt der Ersatzplan.
 
 **Regel R** („nicht einspeisen und danach billig kaufen“) ist im Optimierer eine harte Bedingung:
@@ -3772,7 +3774,7 @@ letzten betroffenen Slots um diese Energie (auf 100 W aufgerundet, unter 100 W w
 
 Die **Spread-Regel** ist im Optimierer keine Bedingung: Marge, Verschleiß und Wirkungsgrad stehen
 als Kosten im Ziel. Die Prüfung kontrolliert sie danach je `Netzladen`-Slot. Er rechnet sich, wenn
-ein späterer Slot mit mindestens 100 W Entladung `η_rt · (π_später − w) − π_jetzt ≥ m` erfüllt
+ein späterer Slot mit Entladung (mehr als 1 W) `η_rt · (π_später − w) − π_jetzt ≥ m` erfüllt
 (Roundtrip-Wirkungsgrad `η_rt`, Verschleiß `w`, Marge `m`; je kWh aus dem Netz kommen `η_rt` kWh
 zurück, und der Verschleiß fällt wie im Optimierer auf diese Entladung). Er rechnet sich auch, wenn
 er **für die Zeit nach dem Horizont** lädt: Die geladene Energie ist am Horizontende noch im Akku
@@ -3781,6 +3783,15 @@ er **für die Zeit nach dem Horizont** lädt: Die geladene Energie ist am Horizo
 Verschleiß schon). So lädt der Optimierer billige Stunden kurz vor dem Horizontende für den Abend
 danach. Mit einem Leistungspreis im Horizont entfällt die Spread-Regel, denn dann darf Netzladen
 auch einer Spitze ausweichen.
+
+Seit dem 18.10.2026 rechnen Absichten und Prüfung die Spread-Regel gleich (entschieden vom
+Betreiber): Auch kleine spätere Entladungen zählen, denn der Optimierer verteilt die geladene
+Energie manchmal auf mehrere teure Slots mit je unter 100 W Fehlbetrag. Und ein `Netzladen`, das
+sich an der Nachrechnung nicht rechnet, streichen schon die Absichten. Das passiert, wenn ein
+billiger Slot nach dem Laden wegen der Rundung `Eigenverbrauch` wird und die Energie gleich wieder
+verbraucht. So verwirft die Prüfung keinen Plan des Optimierers mehr wegen der Spread-Regel. Sie
+prüft die Regel aber weiter: Gelangt doch ein `Netzladen`, das sich nicht rechnet, in die Absichten,
+gilt der Ersatzplan.
 
 ### Netzladen erlaubt
 
