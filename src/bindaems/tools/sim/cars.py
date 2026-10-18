@@ -9,12 +9,12 @@ GX-Dienstes, der Wall Connector seine Vitals, Tessie den Zustand des Fahrzeugs. 
   Höchststrom, auf seinen Phasen und bis zu seinem Ladelimit. Auch der Gast des Modells
   (``model.GUEST_CAR``) ist ein ``Car``: ein Auto ohne Tessie, von dem der core nur den Strom an
   der Wallbox sieht.
-- ``Tesla``: ein Auto mit Tessie: Laden an/aus und Ladestrom im Auto, Schlaf, die Befehle des
-  Tesla-Aktors über Tessie und die Abfragen des Tessie-Caches. Mit ``elsewhere`` steckt er an
+- ``Tesla``: ein Auto mit Tessie: Laden an/aus, Ladestrom und Ladelimit im Auto, Schlaf, die Befehle
+  des Tesla-Aktors über Tessie und die Abfragen des Tessie-Caches. Mit ``elsewhere`` steckt er an
   keiner Wallbox der Anlage, aber an einem Ladekabel woanders (einer Steckdose): Tessie meldet ihn
   „Stopped“, also angesteckt und zu Hause.
 - ``Evcs``: die Victron EVCS NS mit dem angesteckten Auto, geschrieben über den GX-Dienst
-  ``evcharger``.
+  ``evcharger``, mit ihrem Energiezähler.
 - ``WallConnector``: der Tesla Wall Connector Gen3 mit dem angesteckten Auto.
 
 Die Zeit kommt als Argument, der Zufall aus dem ``random.Random`` des Modells.
@@ -23,6 +23,7 @@ Die Zeit kommt als Argument, der Zufall aus dem ``random.Random`` des Modells.
 from __future__ import annotations
 
 import asyncio
+import math
 import random
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
@@ -60,13 +61,20 @@ LOST_AMPS: Final = 5
 # Backoff des Tessie-Adapters nach einer gescheiterten Abfrage: 60 s, dann doppelt, höchstens 900 s
 RETRY_FIRST_S: Final = 60.0
 RETRY_MAX_S: Final = 900.0
-# die Befehle des Tesla-Aktors (``core.actuators.tesla``), die Tessie hier kennt
-COMMANDS: Final = frozenset({"start_charging", "stop_charging", "set_charging_amps"})
+# die Befehle des Tesla-Aktors (``core.actuators.tesla``), die Tessie hier kennt, und der Parameter
+# der Befehle mit Wert (ganze Zahl): Strom in A, Ladelimit in %
+COMMANDS: Final = frozenset(
+    {"start_charging", "stop_charging", "set_charging_amps", "set_charge_limit"}
+)
+_PARAMS: Final = {"set_charging_amps": "amps", "set_charge_limit": "percent"}
 
 SET_CURRENT_DELAY: Final = timedelta(seconds=1)  # so spät übernimmt die EVCS den Sollstrom
 START_STOP_DELAY: Final = timedelta(seconds=2)  # so spät Laden an/aus
 PRODUCT_ID: Final = min(KNOWN_PRODUCT_IDS)  # eine Produkt-ID, die der EVCS-Adapter kennt
 FIRMWARE: Final = (0x0001, 0x00FF)  # Register 5007/5008: Firmware v1.00
+# Zählerstand der EVCS zu Beginn (``Ac/Energy/Forward``): ein Zähler über die Lebensdauer, kein
+# Zähler je Ansteckvorgang
+ENERGY_START_KWH: Final = 1250.0
 
 GxPath = Literal["SetCurrent", "StartStop"]
 
@@ -76,7 +84,11 @@ class Car:
 
     Es zieht den Strom, den die Wallbox anbietet, höchstens ``accepts_a()`` je Phase, auf seinen
     ``phases`` Phasen; am Ladelimit nichts mehr. ``wallbox`` ist der Schlüssel der Wallbox, an der
-    es steckt (``None``: abgesteckt), ``current_a`` der Strom je Phase im letzten Schritt.
+    es steckt (``None``: abgesteckt), ``current_a`` der Strom je Phase im letzten Schritt. Das Laden
+    ist verlustfrei: Was die Wallbox liefert, landet ganz im Akku.
+
+    ``reported_pct`` ist der Ladestand, wie das Auto ihn meldet: ganze Prozent, abgerundet. So
+    meldet es sein Ladelimit genau dann, wenn es es erreicht hat („Complete“).
     """
 
     def __init__(self, key: str, cfg: VehicleConfig) -> None:
@@ -93,6 +105,11 @@ class Car:
     def complete(self) -> bool:
         """Hat das Auto sein Ladelimit erreicht?"""
         return self.soc_pct >= self.limit_pct
+
+    @property
+    def reported_pct(self) -> int:
+        """Der Ladestand, wie das Auto ihn meldet: in ganzen Prozent, abgerundet."""
+        return math.floor(self.soc_pct)
 
     def accepts_a(self) -> float:
         """So viel Strom je Phase zieht das Auto höchstens; am Ladelimit keinen."""
@@ -112,7 +129,7 @@ class _Request:
 
     due: datetime
     name: str
-    amps: int | None
+    value: int | None
     answer: asyncio.Future[httpx.Response]
 
 
@@ -121,7 +138,8 @@ class Tesla(Car):
     ``elsewhere``.
 
     - **Laden:** nur wach und mit „Laden an“ im Auto (``charge_enabled``), höchstens mit
-      ``charge_amps``; Ladelimit ``TESLA_LIMIT_PCT``.
+      ``charge_amps``; Ladelimit ``limit_pct``, zu Beginn ``TESLA_LIMIT_PCT``. Tessie meldet den
+      Ladestand abgerundet (``reported_pct``).
     - **Woanders:** Mit ``elsewhere`` steckt er an keiner Wallbox der Anlage, aber an einem
       Ladekabel, etwa an einer Steckdose (Plan 2c-2b, Präzisierung 12). Tessie meldet ihn dann
       „Stopped“, also angesteckt, und zu Hause (``state`` liefert immer den Ort der Anlage). So
@@ -132,7 +150,9 @@ class Tesla(Car):
       ``resolve`` nach ``TESSIE_DELAY_S``, bei schlafendem Auto erst nach dem Wecken (``WAKE_S``
       dazu); erst dann wirkt der Befehl. Der erste Strombefehl auf oder von ``LOST_AMPS`` geht
       verloren: Tessie meldet ``result: true``, der Strom bleibt; derselbe Befehl noch einmal
-      wirkt.
+      wirkt. ``set_charge_limit`` setzt das Ladelimit (Plan 4b, Präzisierung 9); liegt es über dem
+      Ladestand, ist das Auto nicht mehr „Complete“, startet aber nicht von selbst, außer es hat
+      „Laden an“.
     - **Cache:** ``poll`` liefert die Werte, wie der Tessie-Adapter sie speichert, nur zu seinen
       Abfragezeiten, nach gescheiterten Abfragen mit seinem Backoff. ``next_poll`` ist die nächste;
       ``None`` heißt sofort.
@@ -193,7 +213,7 @@ class Tesla(Car):
         return {
             "state": "asleep" if self.asleep else "online",
             "charge_state": {
-                "battery_level": round(self.soc_pct),
+                "battery_level": self.reported_pct,
                 "charge_limit_soc": round(self.limit_pct),
                 "charging_state": self.charging_state(),
                 "charge_amps": self.charge_amps,
@@ -236,20 +256,20 @@ class Tesla(Car):
     async def handle(self, name: str, params: httpx.QueryParams, now: datetime) -> httpx.Response:
         """Ein Befehl an Tessie zur Zeit ``now``: die Antwort, sobald ``resolve`` sie freigibt.
 
-        Tessie kennt hier nur die Befehle des Tesla-Aktors; ein anderer ergibt 404, ein Strom, der
-        keine ganze Zahl ist, 400.
+        Tessie kennt hier nur die Befehle des Tesla-Aktors; ein anderer ergibt 404, ein Strom oder
+        ein Ladelimit, das keine ganze Zahl ist, 400.
         """
         if name not in COMMANDS:
             return httpx.Response(404)
-        amps: int | None = None
-        if name == "set_charging_amps":
-            text = params.get("amps", "")
+        value: int | None = None
+        if name in _PARAMS:
+            text = params.get(_PARAMS[name], "")
             if not text.isdigit():
                 return httpx.Response(400)
-            amps = int(text)
+            value = int(text)
         delay_s = self._rng.uniform(*TESSIE_DELAY_S) + (WAKE_S if self.asleep else 0.0)
         answer: asyncio.Future[httpx.Response] = asyncio.get_running_loop().create_future()
-        self._requests.append(_Request(now + timedelta(seconds=delay_s), name, amps, answer))
+        self._requests.append(_Request(now + timedelta(seconds=delay_s), name, value, answer))
         return await answer
 
     def resolve(self, now: datetime) -> None:
@@ -272,12 +292,16 @@ class Tesla(Car):
             self.charge_enabled = True
         elif request.name == "stop_charging":
             self.charge_enabled = False
-        elif request.amps is not None:
-            crossing = (request.amps == LOST_AMPS) != (self.charge_amps == LOST_AMPS)
-            lost = crossing and self._last_amps != request.amps
-            self._last_amps = request.amps
+        elif request.value is None:
+            return
+        elif request.name == "set_charge_limit":
+            self.limit_pct = float(request.value)
+        else:
+            crossing = (request.value == LOST_AMPS) != (self.charge_amps == LOST_AMPS)
+            lost = crossing and self._last_amps != request.value
+            self._last_amps = request.value
             if not lost:
-                self.charge_amps = request.amps
+                self.charge_amps = request.value
 
 
 class Wallbox(ABC):
@@ -321,6 +345,8 @@ class Evcs(Wallbox):
     - **Strom:** ``min(Sollstrom, was das Auto nimmt)``, nur bei „Laden an“.
     - **Status** wie der GX-Dienst (Präzisierung 4): 0 getrennt, 1 verbunden, 2 lädt, 3 geladen,
       also an, aber das Auto zieht nichts.
+    - **Zähler** (``energy_kwh``, im GX-Dienst ``Ac/Energy/Forward``): die Energie, die sie je
+      geliefert hat, ab ``ENERGY_START_KWH``; er zählt über alle Ansteckvorgänge weiter.
     - ``registers`` ist der Registerblock für den EVCS-Adapter, ``gx`` die Pfade des GX-Dienstes.
       ``instance`` ist die Instanz des GX-Dienstes; ohne sie sieht der Cerbo die EVCS nicht.
     """
@@ -332,6 +358,7 @@ class Evcs(Wallbox):
         self.mode = 0
         self.set_current_a: float = cfg.safe_a
         self.start_stop = 0
+        self.energy_kwh = ENERGY_START_KWH
         self._writes: list[tuple[datetime, GxPath, float]] = []
 
     @property
@@ -349,7 +376,8 @@ class Evcs(Wallbox):
         self._writes.append((now + delay, path, value))
 
     def step(self, now: datetime, seconds: float, voltage_v: float) -> None:
-        """Übernimmt die fälligen Aufträge der Reihe nach; dann zieht das Auto seinen Strom."""
+        """Übernimmt die fälligen Aufträge der Reihe nach; dann zieht das Auto seinen Strom, und
+        der Zähler zählt seine Energie."""
         for due, path, value in self._writes:
             if due > now:
                 continue
@@ -361,6 +389,7 @@ class Evcs(Wallbox):
         if self.car is not None:
             offered = self.set_current_a if self.start_stop == 1 else 0.0
             self.car.draw(offered, seconds, voltage_v)
+            self.energy_kwh += sum(self.terminals_a()) * voltage_v * seconds / 3_600_000
 
     def registers(self) -> list[int]:
         """Der Registerblock ab ``BLOCK_START``, wie der EVCS-Adapter ihn liest."""
@@ -384,6 +413,7 @@ class Evcs(Wallbox):
         terminals = self.terminals_a()
         return {
             "Ac/Power": sum(terminals) * voltage_v,
+            "Ac/Energy/Forward": self.energy_kwh,
             **{f"Ac/L{n}/Power": amps * voltage_v for n, amps in enumerate(terminals, 1)},
             "Current": self.car.current_a if self.car is not None else 0.0,
             "Status": self.status,

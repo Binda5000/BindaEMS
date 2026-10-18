@@ -7,8 +7,9 @@ Präzisierung 16): Der core schreibt über ``PlantModel.mqtt_write`` und erreich
 ``httpx.MockTransport`` mit ``PlantModel.tessie``; die Telemetrie verwirft ein ``_Discard``.
 
 Die Konfiguration des Laufs macht ``sim_config``: Ablage des core, EVCS und Fahrzeuge mit Tessie
-für den Live-Betrieb freigegeben, mit ``Scenario.victron_live`` auch Victron, und die Werte von
-``Scenario.control`` über ``ControlConfig``. Die Absicht schaltet dieselben Aktoren live
+für den Live-Betrieb freigegeben, mit ``Scenario.victron_live`` auch Victron, die Werte von
+``Scenario.control`` über ``ControlConfig`` und die von ``Scenario.vehicles`` über
+``VehicleConfig``. Die Absicht schaltet dieselben Aktoren live
 (``_intent``).
 
 Je simulierter Sekunde:
@@ -50,7 +51,7 @@ from pydantic import SecretStr
 from bindaems.core.api.app import HealthReport
 from bindaems.core.runtime import CoreRuntime
 from bindaems.core.safety.types import Outcome, Verdict
-from bindaems.shared.config import Config, ControlConfig, EvcsConfig, Secrets
+from bindaems.shared.config import Config, ControlConfig, EvcsConfig, Secrets, VehicleConfig
 from bindaems.shared.control import (
     VICTRON,
     ActuatorMode,
@@ -89,6 +90,8 @@ class SimResult:
     - ``health``: alle ``HEALTH_EVERY_S`` die Gesundheit, mit der Sekunde des Laufs
     - ``samples``: je Sekunde eine Probe
     - ``failures``: die Verstöße gegen Kennzahlen und eigene Prüfungen, je ein Satz
+    - ``sent``: je Kennung einer Entscheidung an ein Fahrzeug mit Tessie der Zeitpunkt, zu dem ihr
+      Befehl Tessie erreichte (``sent_times``); fehlt er, gilt der der Entscheidung
     """
 
     scenario: Scenario
@@ -97,6 +100,7 @@ class SimResult:
     health: list[tuple[int, HealthReport]]
     samples: list[Sample]
     failures: list[str]
+    sent: Mapping[str, datetime] = MappingProxyType({})
 
 
 class _Discard:
@@ -112,29 +116,35 @@ def sim_config(
     *,
     victron: bool = False,
     control: Mapping[str, Any] = MappingProxyType({}),
+    vehicles: Mapping[str, Mapping[str, Any]] = MappingProxyType({}),
 ) -> Config:
     """Die Konfiguration des Laufs: ``data_dir`` als Ablage des core, jede EVCS und jedes
     Fahrzeug mit Tessie für den Live-Betrieb freigegeben, mit ``victron`` auch Victron.
 
-    ``control`` überschreibt Werte von ``ControlConfig``; ein ungültiger Wert oder ein unbekannter
-    Name ist ein ``ValidationError``.
+    ``control`` überschreibt Werte von ``ControlConfig``, ``vehicles`` je Fahrzeug Werte von
+    ``VehicleConfig`` (etwa ``charge_limit_sync``); ein ungültiger Wert oder ein unbekannter Name
+    ist ein ``ValidationError``, ein unbekanntes Fahrzeug ein ``KeyError``.
     """
+    changed = {
+        key: VehicleConfig.model_validate(cfg.vehicles[key].model_dump() | dict(values))
+        for key, values in vehicles.items()
+    }
     wallboxes = {
         key: wallbox.model_copy(update={"live_allowed": True})
         if isinstance(wallbox, EvcsConfig)
         else wallbox
         for key, wallbox in cfg.wallboxes.items()
     }
-    vehicles = {
+    fleet = {
         key: vehicle.model_copy(update={"live_allowed": True})
         if vehicle.tessie is not None
         else vehicle
-        for key, vehicle in cfg.vehicles.items()
+        for key, vehicle in (cfg.vehicles | changed).items()
     }
     core = cfg.core.model_copy(update={"data_dir": data_dir})
     changes: dict[str, Any] = {
         "wallboxes": wallboxes,
-        "vehicles": vehicles,
+        "vehicles": fleet,
         "core": core,
         "control": ControlConfig.model_validate(cfg.control.model_dump() | dict(control)),
     }
@@ -172,7 +182,13 @@ async def run_scenario(
     ``data_dir`` nimmt die Ablage des core auf (Absicht, Limits, Entscheidungslog). Eine Ausnahme
     im Zyklus bricht den Lauf ab; die Laufzeit fährt trotzdem herunter.
     """
-    cfg = sim_config(cfg, data_dir, victron=scenario.victron_live, control=scenario.control)
+    cfg = sim_config(
+        cfg,
+        data_dir,
+        victron=scenario.victron_live,
+        control=scenario.control,
+        vehicles=scenario.vehicles,
+    )
     seconds = scenario.duration_s if duration_s is None else duration_s
     clock = ManualClock(scenario.start)
     rng = random.Random(scenario.seed)  # noqa: S311 - Saat der Simulation
@@ -226,7 +242,7 @@ async def run_scenario(
         await rt.shutdown()
     sent = sent_times(decisions, requests, cfg)
     metrics = measure(samples, decisions, cfg, sent=sent, own=own)
-    result = SimResult(scenario, metrics, decisions, health, samples, [])
+    result = SimResult(scenario, metrics, decisions, health, samples, [], MappingProxyType(sent))
     return replace(result, failures=[*metrics.failures(cfg), *scenario.checks(result)])
 
 
@@ -277,9 +293,9 @@ def _by_second(events: Sequence[tuple[int, Action]]) -> dict[int, list[Action]]:
 
 
 def _sample(t: int, model: PlantModel, cfg: Config, intent: Intent | None, now: datetime) -> Sample:
-    """Die Probe nach Sekunde ``t``; der Modus je Auto laut Absicht, mit Boost bis ``now``, und
-    ob die Regelung seinen Ladepunkt live steuert (``_steered``). Dazu Netz, PV, Haus und Override
-    des Modells im Schritt.
+    """Die Probe nach Sekunde ``t``; der Modus je Auto laut Absicht, mit Boost bis ``now``, ob die
+    Regelung seinen Ladepunkt live steuert (``_steered``) und sein Ladestand im Modell. Dazu Netz,
+    PV, Haus und Override des Modells im Schritt.
 
     Hinter den Fahrzeugen der Konfiguration steht der Gast (``GUEST_CAR``), auch abgesteckt, dann
     ohne Strom. Sein Modus ist ``intent.guest.mode``, ohne Absicht PV; Boost kennt er nicht. Sein
@@ -299,6 +315,7 @@ def _sample(t: int, model: PlantModel, cfg: Config, intent: Intent | None, now: 
             min_a=max(vehicle.min_a, _evcs_min_a(plugged, cfg)),
             complete=model.cars[key].complete,
             steered=_steered(key, plugged, cfg, intent),
+            soc_pct=model.cars[key].soc_pct,
         )
     guest_mode = (intent.guest if intent is not None else GuestIntent()).mode
     plugged = model.cars[GUEST_CAR].wallbox
@@ -310,6 +327,7 @@ def _sample(t: int, model: PlantModel, cfg: Config, intent: Intent | None, now: 
         min_a=max(GUEST_MIN_A, _evcs_min_a(plugged, cfg)),
         complete=model.cars[GUEST_CAR].complete,
         steered=_steered(GUEST_CAR, plugged, cfg, intent),
+        soc_pct=model.cars[GUEST_CAR].soc_pct,
     )
     return Sample(
         t=t,
@@ -390,4 +408,6 @@ def _command(kind: CommandKind, value: CommandValue) -> str:
     """Der Name des Tessie-Befehls wie im Tesla-Aktor."""
     if kind is CommandKind.CURRENT:
         return "set_charging_amps"
+    if kind is CommandKind.CHARGE_LIMIT:
+        return "set_charge_limit"
     return "start_charging" if value is True else "stop_charging"

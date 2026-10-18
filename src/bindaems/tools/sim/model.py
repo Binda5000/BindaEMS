@@ -34,8 +34,9 @@ Schreibauftrag liefert ``True`` und wirkt nicht. Der Cerbo meldet den Override u
 ohne ihn ``None``, und ``Settings/DynamicEss/Mode`` mit 1 bei Dynamic ESS, sonst mit 0.
 
 **Signale** entstehen wie an der Anlage: Der Cerbo liefert Topics (``<Dienst>/<Instanz>/<Pfad>``),
-die EVCS ihren Registerblock, der Wall Connector seine Vitals, Tessie den Zustand des Fahrzeugs
-(``cars``), Home Assistant den Zustand des ``device_tracker`` eines Fahrzeugs. Die Parser der
+auch den Zähler der EVCS (``Ac/Energy/Forward``), die EVCS ihren Registerblock, der Wall Connector
+seine Vitals, Tessie den Zustand des Fahrzeugs (``cars``), Home Assistant den Zustand des
+``device_tracker`` und den Ladestand eines Fahrzeugs. Die Parser der
 echten Adapter machen daraus die Signale mit Namen, Quelle, Art und Einheit; so unterscheidet der
 core das Modell nicht von der Anlage. Für die Selbstprüfung meldet der Cerbo, was eine richtig
 eingestellte Anlage meldet.
@@ -43,10 +44,15 @@ eingestellte Anlage meldet.
 **Home Assistant** (Quelle ``ha``, Plan 2c-2b, Präzisierung 12): Je Fahrzeug mit ``home_entity``
 meldet er ``vehicle.<Schlüssel>.home_state`` (``home_signal``) mit ``home``, für die Fahrzeuge in
 ``away`` mit ``not_home``. In der Beispielkonfiguration hat der e-Golf eine ``home_entity``; er ist
-also in jedem Szenario zu Hause, außer ein Szenario nennt ihn in ``away``. Die Quelle gilt wie
-beim Adapter ohne Frischegrenze und mit ``invalidate_on_reconnect``. Sie ist nach dem ersten
-``publish`` verbunden und fällt nie aus (``OUTAGES`` kennt keinen Ausfall für sie); ohne ein
-Fahrzeug mit ``home_entity`` gibt es sie nicht.
+also in jedem Szenario zu Hause, außer ein Szenario nennt ihn in ``away``. Je Fahrzeug mit
+``soc_entity`` meldet er dazu den Ladestand (``soc_signal``, Plan 4b, Entscheidung 16), wie ein
+Sensor in Home Assistant: in ganzen Prozent, abgerundet wie das Auto ihn meldet
+(``Car.reported_pct``), und nur, wenn sich der Wert ändert, dann mit dem Zeitstempel der Meldung.
+Mit ``egolf_soc_known`` falsch meldet er keinen Ladestand (in der Beispielkonfiguration hat nur
+der e-Golf eine ``soc_entity``). Die Quelle gilt wie beim Adapter ohne Frischegrenze und mit
+``invalidate_on_reconnect``. Sie ist nach dem ersten ``publish`` verbunden und fällt nie aus
+(``OUTAGES`` kennt keinen Ausfall für sie); ohne ein Fahrzeug mit ``home_entity`` oder
+``soc_entity`` gibt es sie nicht.
 
 **Gast** (``GUEST_CAR``, Präzisierung 12): ein Auto ohne Tessie und ohne Eintrag in der
 Konfiguration, mit 3 Phasen (ein Szenario setzt 1 bis 3), 6 bis 16 A und 50 kWh. Er steht
@@ -119,6 +125,7 @@ from bindaems.shared.config import (
     VehicleConfig,
     VictronInstances,
     home_signal,
+    soc_signal,
 )
 from bindaems.shared.domain import SignalKind, Value
 from bindaems.shared.numbers import finite_number
@@ -272,6 +279,8 @@ class PlantModel:
       Override und nimmt keinen an
     - ``away``: die Fahrzeuge, die Home Assistant nicht zu Hause meldet (Schlüssel aus der
       Konfiguration); ohne Eintrag ist ein Fahrzeug mit ``home_entity`` zu Hause
+    - ``egolf_soc_known``: Home Assistant meldet den Ladestand der Fahrzeuge mit ``soc_entity``
+      (in der Beispielkonfiguration des e-Golf); falsch: keinen
     - die Geräte: ``wallboxes`` (``Evcs`` und ``WallConnector``), ``cars`` (``teslas`` davon mit
       Tessie, dazu der Gast ``GUEST_CAR`` hinter den Fahrzeugen der Konfiguration); ``plug`` und
       ``unplug`` stecken an und ab
@@ -304,6 +313,7 @@ class PlantModel:
         self.foreign = False
         self.dess = False
         self.away: set[str] = set()
+        self.egolf_soc_known = True
         self.grid_a: dict[Phase, float] = dict.fromkeys(PHASES, 0.0)
         self.grid_w = 0.0
         self.battery_feed_a: dict[Phase, float] = dict.fromkeys(PHASES, 0.0)
@@ -325,6 +335,11 @@ class PlantModel:
         self._home_keys = tuple(
             key for key, vehicle in cfg.vehicles.items() if vehicle.home_entity is not None
         )
+        # die Fahrzeuge, deren ``soc_entity`` Home Assistant meldet, und der zuletzt gemeldete Wert
+        self._soc_keys = tuple(
+            key for key, vehicle in cfg.vehicles.items() if vehicle.soc_entity is not None
+        )
+        self._soc_sent: dict[str, int] = {}
         instances = cfg.victron.instances
         self.wallboxes: dict[str, Evcs | WallConnector] = {}
         self._evcs: dict[str, Evcs] = {}
@@ -410,8 +425,8 @@ class PlantModel:
     def attach(self, store: StateStore) -> None:
         """Registriert die Quellen wie die Adapter: ``victron`` ereignisgesteuert, dazu je EVCS,
         Wall Connector und Fahrzeug mit Tessie eine Quelle mit der Frischegrenze ihres Adapters.
-        Hat ein Fahrzeug ``home_entity``, kommt ``ha`` dazu, wie beim HA-Adapter ohne Frischegrenze
-        und mit ``invalidate_on_reconnect``."""
+        Hat ein Fahrzeug ``home_entity`` oder ``soc_entity``, kommt ``ha`` dazu, wie beim
+        HA-Adapter ohne Frischegrenze und mit ``invalidate_on_reconnect``."""
         store.register_source(
             VICTRON_SOURCE, VICTRON_FRESHNESS_S, activity_based=True, invalidate_on_reconnect=True
         )
@@ -421,7 +436,7 @@ class PlantModel:
             store.register_source(key, TWC_FRESHNESS_S)
         for key in self.teslas:
             store.register_source(f"tessie:{key}", TESSIE_FRESHNESS_S)
-        if self._home_keys:
+        if self._home_keys or self._soc_keys:
             store.register_source(HA_SOURCE, None, invalidate_on_reconnect=True)
 
     def mqtt_write(self, path: str, value: float | int | None) -> bool:
@@ -634,7 +649,9 @@ class PlantModel:
         getrennt, Tessie bleibt verbunden wie beim Adapter. Tessie liefert nur zu den Abfragezeiten
         seines Adapters, nach gescheiterten Abfragen mit dessen Backoff, und ist wie dieser erst
         nach der ersten gelungenen Abfrage verbunden. Home Assistant ist immer verbunden und meldet
-        je Fahrzeug mit ``home_entity`` ``home``, in ``away`` ``not_home``.
+        je Fahrzeug mit ``home_entity`` ``home``, in ``away`` ``not_home``, und mit
+        ``egolf_soc_known`` je Fahrzeug mit ``soc_entity`` den Ladestand, wenn er sich geändert hat
+        (``_publish_soc``).
         """
         cerbo_up = CERBO not in self.outages
         store.set_connected(VICTRON_SOURCE, cerbo_up)
@@ -668,7 +685,7 @@ class PlantModel:
                     ts=now,
                 )
             store.set_connected(source, True)
-        if self._home_keys:
+        if self._home_keys or self._soc_keys:
             store.set_connected(HA_SOURCE, True)
             for key in self._home_keys:
                 state = HA_AWAY if key in self.away else HA_HOME
@@ -679,6 +696,26 @@ class PlantModel:
                     kind=SignalKind.STATE,
                     ts=now,
                 )
+            self._publish_soc(store, now)
+
+    def _publish_soc(self, store: StateStore, now: datetime) -> None:
+        """Der Ladestand je Fahrzeug mit ``soc_entity``, wie Home Assistant ihn meldet: als Text in
+        ganzen Prozent (``convert_state`` macht die Zahl daraus), nur bei einem neuen Wert. Ohne
+        ``egolf_soc_known`` nichts."""
+        if not self.egolf_soc_known:
+            return
+        for key in self._soc_keys:
+            pct = self.cars[key].reported_pct
+            if self._soc_sent.get(key) == pct:
+                continue
+            self._soc_sent[key] = pct
+            store.update(
+                soc_signal(key),
+                convert_state(str(pct)),
+                source=HA_SOURCE,
+                kind=SignalKind.STATE,
+                ts=now,
+            )
 
     def _cerbo(self) -> dict[str, Value]:
         """Die Topics des Cerbo (``<Dienst>/<Instanz>/<Pfad>``) mit ihren Werten."""

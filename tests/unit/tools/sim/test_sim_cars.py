@@ -200,6 +200,22 @@ def test_evcs_ignores_an_empty_write(model, store, clock) -> None:
     assert store.snapshot().ok("wallbox.evcs.gx_set_current_a") == 10
 
 
+def test_evcs_counts_the_energy_like_the_gx_service(model, store, clock) -> None:
+    # Ac/Energy/Forward des GX-Dienstes: e-Golf mit 16 A auf zwei Phasen, in 360 s 0,736 kWh
+    evcs = model.wallboxes["evcs"]
+    evcs.start_stop, evcs.set_current_a = 1, 16
+    model.plug("egolf", "evcs")
+    run(model, store, clock, 1)
+    first = store.snapshot().get("wallbox.evcs.total_kwh")
+    assert first is not None and (first.source, first.kind) == ("victron", M)
+    run(model, store, clock, 360)
+    counted = store.snapshot().ok("wallbox.evcs.total_kwh")
+    assert counted - first.value == pytest.approx(0.736)
+    model.unplug("egolf")  # ohne Auto zählt der Zähler nicht weiter, er bleibt stehen
+    run(model, store, clock, 60)
+    assert store.snapshot().ok("wallbox.evcs.total_kwh") == pytest.approx(counted)
+
+
 def test_cars_charge_their_battery(model, store, clock) -> None:
     # e-Golf mit 16 A auf zwei Phasen: 7360 W, in 360 s 736 Wh von 38,6 kWh
     evcs = model.wallboxes["evcs"]
@@ -266,6 +282,15 @@ def test_tesla_completes_at_its_limit(model, store, clock, cfg) -> None:
     assert snap.ok("vehicle.tesla.charge_limit_pct") == 80
     _, _, vehicles = observe(snap, derive(snap, cfg), cfg, store.connected)
     assert vehicles["tesla"].complete is True and vehicles["tesla"].plugged is True
+
+
+def test_tessie_reports_the_soc_rounded_down(model, store, clock) -> None:
+    # Ganze Prozent, abgerundet: Sein Ladelimit meldet der Tesla erst, wenn er „Complete“ ist.
+    tesla = model.teslas["tesla"]
+    tesla.soc_pct = 79.9
+    assert tesla.state(230.0)["charge_state"]["battery_level"] == 79 and not tesla.complete
+    tesla.soc_pct = 80.0
+    assert tesla.state(230.0)["charge_state"]["battery_level"] == 80 and tesla.complete
 
 
 def test_tesla_sleeps_15_min_after_charging(model, store, clock) -> None:
@@ -433,6 +458,23 @@ async def test_an_abandoned_command_does_not_reach_the_car(model, store, clock) 
     assert answer.cancelled() and not tesla.charge_enabled
 
 
+async def test_tessie_sets_the_charge_limit(model, store, clock) -> None:
+    # set_charge_limit wie im Tesla-Aktor; über dem Ladestand ist das Auto nicht mehr „Complete“
+    tesla = model.teslas["tesla"]
+    tesla.soc_pct, tesla.limit_pct = 65.0, 60.0
+    model.plug("tesla", "twc")
+    async with tessie_client(model) as client:
+        await tick(model, store, clock, 1)
+        assert tesla.charging_state() == "Complete"
+        response = await command(model, store, clock, client, "set_charge_limit", percent="75")
+        no_percent = await at_once(
+            client.post(command_url("set_charge_limit"), params=WAIT | {"percent": "x"})
+        )
+    assert response.json() == {"result": True} and no_percent.status_code == 400
+    assert tesla.limit_pct == 75.0 and tesla.charging_state() == "Stopped"
+    assert tesla.state(230.0)["charge_state"]["charge_limit_soc"] == 75
+
+
 async def test_tessie_knows_only_the_commands_of_the_actuator(model, store, clock) -> None:
     async with tessie_client(model) as client:
         await tick(model, store, clock, 1)
@@ -472,3 +514,28 @@ async def test_the_tesla_actuator_commands_reach_the_car(model, store, clock, cf
         await actuator.aclose()
     assert results == dict.fromkeys(results, Confirmation.CONFIRMED)
     assert tesla.charge_enabled and tesla.charge_amps == 10 and model.car_a["tesla"] == 10.0
+
+
+async def test_the_tesla_actuator_sets_the_charge_limit(model, store, clock, cfg) -> None:
+    # Der Aktor prüft das Limit im Tessie-Cache (Plan 4b, Präzisierung 9): bestätigt
+    tesla = model.teslas["tesla"]
+    model.plug("tesla", "twc")
+    async with tessie_client(model) as client:
+        actuator = TeslaActuator(
+            "tesla",
+            cfg.vehicles["tesla"],
+            SecretStr("t" * 32),
+            client,
+            lambda: True,
+            clock=clock.now,
+        )
+        await tick(model, store, clock, 1)
+        assert actuator.send(CommandKind.CHARGE_LIMIT, 75) is None
+        result = Confirmation.PENDING
+        for _ in range(150):
+            await tick(model, store, clock, 1)
+            result = actuator.confirm(CommandKind.CHARGE_LIMIT, 75, store.snapshot())[0]
+            if result is not Confirmation.PENDING:
+                break
+        await actuator.aclose()
+    assert result is Confirmation.CONFIRMED and tesla.limit_pct == 75.0

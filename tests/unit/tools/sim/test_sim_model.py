@@ -626,14 +626,59 @@ def test_home_assistant_reports_every_vehicle_with_a_home_entity(cfg, store, clo
     assert snap.ok("vehicle.egolf.home_state") == "home"
 
 
-def test_without_a_home_entity_there_is_no_home_assistant(cfg, store, clock) -> None:
-    vehicles = {key: v.model_copy(update={"home_entity": None}) for key, v in cfg.vehicles.items()}
+def test_without_a_home_or_soc_entity_there_is_no_home_assistant(cfg, store, clock) -> None:
+    vehicles = {
+        key: v.model_copy(update={"home_entity": None, "soc_entity": None})
+        for key, v in cfg.vehicles.items()
+    }
     bare = cfg.model_copy(update={"vehicles": vehicles})
     plant = PlantModel(bare, random.Random(1))  # noqa: S311 - Saat der Simulation
     plant.attach(store)
     plant.away = {"egolf"}
     run(plant, store, clock, 1)
     assert store.connected("ha") is None  # die Quelle ist nie registriert worden
+    assert store.snapshot().matching("vehicle.egolf.home_state") == {}
+
+
+def test_home_assistant_reports_the_soc_of_the_egolf_when_it_changes(model, store, clock) -> None:
+    # Wie ein Sensor in Home Assistant: ganze Prozent, abgerundet wie das Auto sie meldet, ein neuer
+    # Wert nur bei einer Änderung (Plan 4b, Entscheidung 16); der Zeitstempel bleibt bis dahin der
+    # der letzten Meldung.
+    egolf = model.cars["egolf"]
+    egolf.soc_pct = 50.2
+    run(model, store, clock, 1)
+    reading = store.snapshot().get("vehicle.egolf.soc_pct")
+    assert reading is not None
+    assert (reading.value, reading.source, reading.kind, reading.ts) == (
+        50.0,
+        "ha",
+        SignalKind.STATE,
+        T0,
+    )
+    egolf.soc_pct = 50.9
+    run(model, store, clock, 1)
+    assert store.snapshot().get("vehicle.egolf.soc_pct").ts == T0
+    egolf.soc_pct = 51.1
+    run(model, store, clock, 1)
+    reading = store.snapshot().get("vehicle.egolf.soc_pct")
+    assert (reading.value, reading.ts) == (51.0, at(2))
+
+
+def test_the_soc_of_the_egolf_can_stay_unknown(model, store, clock) -> None:
+    assert model.egolf_soc_known  # ohne Angabe meldet Home Assistant ihn
+    model.egolf_soc_known = False
+    run(model, store, clock, 5)
+    assert store.snapshot().matching("vehicle.egolf.soc_pct") == {}
+    assert store.snapshot().ok("vehicle.egolf.home_state") == "home"  # das andere bleibt
+
+
+def test_a_soc_entity_alone_brings_home_assistant(cfg, store, clock) -> None:
+    vehicles = {key: v.model_copy(update={"home_entity": None}) for key, v in cfg.vehicles.items()}
+    plant = PlantModel(cfg.model_copy(update={"vehicles": vehicles}), random.Random(1))  # noqa: S311
+    plant.attach(store)
+    run(plant, store, clock, 1)
+    assert store.connected("ha") is True
+    assert store.snapshot().ok("vehicle.egolf.soc_pct") == 50.0
     assert store.snapshot().matching("vehicle.egolf.home_state") == {}
 
 

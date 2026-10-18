@@ -255,6 +255,20 @@ def test_sent_times_come_from_the_requests_at_tessie(cfg) -> None:
     }
 
 
+def test_sent_times_know_the_charge_limit(cfg) -> None:
+    sent = T0 + timedelta(seconds=5)
+    requests = [(T0, f"/{VIN}/command/stop_charging"), (sent, f"/{VIN}/command/set_charge_limit")]
+    limit = tessie_decision(30, CommandKind.CHARGE_LIMIT, 75, DecisionResult.OK)
+    assert sent_times([limit], requests, cfg) == {limit.id: sent}
+
+
+async def test_the_result_knows_when_tessie_got_each_command(cfg, tmp_path) -> None:
+    result = await run_scenario(SCENARIOS["tesla-ladelimit"], cfg, tmp_path, duration_s=180)
+    (limit,) = [d for d in result.decisions if d.kind is CommandKind.CHARGE_LIMIT]
+    assert set(result.sent) >= {limit.id}
+    assert result.sent[limit.id] < limit.ts
+
+
 def test_the_example_intent_names_both_cars() -> None:
     sunny = SCENARIOS["sonnig"].intent
     assert sunny.vehicles == {
@@ -349,11 +363,34 @@ def test_samples_carry_the_guest_in_the_guest_mode(cfg) -> None:
         min_a=6,
         complete=False,
         steered=True,
+        soc_pct=pytest.approx(50.0, abs=0.01),  # eine Sekunde mit 6 A
     )
     model.unplug(GUEST_CAR)
     model.step(T0 + timedelta(seconds=1))
     gone = runner._sample(1, model, cfg, intent, T0).cars[GUEST_CAR]
-    assert gone == CarSample(False, 0.0, 0.0, "now", 6, complete=False, steered=False)
+    assert gone == CarSample(
+        False,
+        0.0,
+        0.0,
+        "now",
+        6,
+        complete=False,
+        steered=False,
+        soc_pct=pytest.approx(50.0, abs=0.01),
+    )
+
+
+def test_samples_carry_the_soc_of_every_car(cfg) -> None:
+    # Plan 4b, Task 8: der Ladestand des Modells, für die Prüfungen von „Geplant“
+    model = PlantModel(cfg, random.Random(1))  # noqa: S311 - Saat der Simulation
+    model.cars["tesla"].soc_pct, model.cars["egolf"].soc_pct = 61.5, 48.25
+    model.step(T0)
+    cars = runner._sample(0, model, cfg, None, T0).cars
+    assert {key: car.soc_pct for key, car in cars.items()} == {
+        "tesla": 61.5,
+        "egolf": 48.25,
+        GUEST_CAR: 50.0,
+    }
 
 
 def test_the_guest_without_an_intent_is_in_pv(cfg) -> None:
@@ -508,6 +545,25 @@ def test_scenario_control_values_reach_the_config(cfg, tmp_path) -> None:
     for invalid in ({"peak_target_kw": -1.0}, {"peak_target_kw": float("nan")}, {"peak_target": 8}):
         with pytest.raises(ValidationError):
             runner.sim_config(cfg, tmp_path, control=invalid)
+
+
+def test_scenario_vehicle_values_reach_the_config(cfg, tmp_path) -> None:
+    # Plan 4b, Task 8: etwa ``charge_limit_sync`` für „tesla-ladelimit“
+    assert not cfg.vehicles["tesla"].charge_limit_sync
+    config = runner.sim_config(cfg, tmp_path, vehicles={"tesla": {"charge_limit_sync": True}})
+    tesla = config.vehicles["tesla"]
+    assert tesla.charge_limit_sync and tesla.live_allowed  # die Freigabe des Laufs bleibt
+    assert (
+        tesla.model_copy(update={"charge_limit_sync": False, "live_allowed": False})
+        == (cfg.vehicles["tesla"])
+    )
+    assert config.vehicles["egolf"] == cfg.vehicles["egolf"]
+    assert not cfg.vehicles["tesla"].charge_limit_sync  # die übergebene Konfiguration bleibt
+    for invalid in ({"egolf": {"charge_limit_sync": True}}, {"tesla": {"limit": 1}}):
+        with pytest.raises(ValidationError):  # ohne tessie, unbekannter Name
+            runner.sim_config(cfg, tmp_path, vehicles=invalid)
+    with pytest.raises(KeyError):
+        runner.sim_config(cfg, tmp_path, vehicles={"bus": {}})
 
 
 def test_a_scenario_keeps_victron_in_the_dry_run_unless_it_says_otherwise() -> None:

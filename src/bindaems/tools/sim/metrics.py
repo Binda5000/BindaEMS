@@ -106,10 +106,11 @@ class CarSample:
     """Ein Auto in einer Probe.
 
     ``charging`` heißt, es zieht Strom; ``current_a`` ist sein Strom je Phase, ``power_w`` seine
-    Ladeleistung. ``mode`` ist der Modus laut Absicht (``pv``, ``min_pv``, ``now``, ``off`` oder
-    ``boost``), ``min_a`` der Mindeststrom seines Ladepunkts. ``complete`` heißt, es hat sein
-    Ladelimit erreicht („Complete“). ``steered`` heißt, die Regelung steuert seinen Ladepunkt live;
-    sonst stellt ihn ein anderer, etwa im Dry-Run der fremde Regler.
+    Ladeleistung. ``mode`` ist der Modus laut Absicht (``pv``, ``min_pv``, ``now``, ``off``,
+    ``planned`` oder ``boost``), ``min_a`` der Mindeststrom seines Ladepunkts. ``complete`` heißt,
+    es hat sein Ladelimit erreicht („Complete“). ``steered`` heißt, die Regelung steuert seinen
+    Ladepunkt live; sonst stellt ihn ein anderer, etwa im Dry-Run der fremde Regler. ``soc_pct``
+    ist sein Ladestand im Modell, ungerundet (Plan 4b); ``None`` ohne Angabe.
     """
 
     charging: bool
@@ -119,6 +120,7 @@ class CarSample:
     min_a: int
     complete: bool = False
     steered: bool = True
+    soc_pct: float | None = None
 
 
 @dataclass(frozen=True)

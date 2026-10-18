@@ -68,6 +68,17 @@ Abweichung von der Tabelle des Plans 2c-2b (Entscheidung des Koordinators zu Tas
 ``tesla-evcs`` verlangt „erkannt“ vor 3 min statt binnen 2 min (Design 10.3). Die Erkennung beginnt
 erst mit der Regelung, rund 60 s nach dem Start, und braucht 60 s; die 2 min des Designs zählen ab
 dem Beginn der Regelung.
+
+Die Szenarien für „Geplant“ und das Ladelimit des Tesla (Plan 4b, Entscheidung 16) schalten Victron
+live und lassen nur ein Auto angesteckt. Ziel und Abfahrt kommen wie aus der app als Version 2 der
+Absicht (``_Target``), ein Plan danach mit der nächsten. Die Autos melden ihren Ladestand in ganzen
+Prozent, abgerundet (``Car.reported_pct``): Tessie und Home Assistant nennen das Ziel so erst, wenn
+das Auto es erreicht hat, und der Tesla meldet sein Ladelimit genau mit „Complete“. Die Prüfungen
+„bei mindestens 70 %“ gelten darum für den Ladestand im Modell. Abweichung von der Tabelle des
+Plans 4b: In ``geplant-plan`` gilt der Plan 30 min statt der 45 min eines Plans der app
+(``PLAN_VALID``), dann fällt die app aus. Mit den 6900 W des Plans allein bräuchte der Tesla für
+seine 10 Prozentpunkte (7,5 kWh) 65 min, länger als der Lauf; ab dem Ende des Plans ist die
+späteste Startzeit erreicht, und er lädt ohne Stopp mit voller Leistung weiter (Review Focus 4).
 """
 
 from __future__ import annotations
@@ -241,6 +252,25 @@ BUDGET_QUARTER_MIN_KWH: Final = 0.9
 BOOST_FROM_S: Final = MINUTE_S  # „plan-boost“: Boost ab hier …
 BOOSTING_SHARE: Final = 0.9  # … und der e-Golf lädt in mindestens diesem Anteil der Sekunden
 
+# Szenarien für „Geplant“ und das Ladelimit des Tesla (Plan 4b, Entscheidung 16)
+TARGET_REACHED: Final = "target_reached"  # Grund des Stopps am Ziel-SOC
+PLANNED_TARGET_PCT: Final = 70  # das Ziel in „geplant-plan“, „-spaet“, „-pv“ und „-unbekannt“
+PLANNED_TESLA_PCT: Final = 60.0  # SOC des Tesla zu Beginn von „geplant-plan“ und „geplant-pv“
+PLAN_TESLA_W: Final = 6900  # „geplant-plan“: der Plan lädt den Tesla mit 10 A auf 3 Phasen …
+PLAN_TESLA_MIN_A: Final = 9.0  # … und er lädt bis zum Ziel mit mindestens so viel Strom; …
+PLAN_RUNS_OUT_S: Final = 30 * MINUTE_S  # … der Plan gilt so lange, dann fällt die app aus, …
+PLAN_DEPARTURE: Final = "19:05"  # … und mit dieser Abfahrt ist die späteste Startzeit da vorbei
+LATE_DEPARTURE: Final = "20:00"  # „geplant-spaet“: Abfahrt 2 h nach dem Beginn
+PV_DEPARTURE: Final = "07:00"  # „geplant-pv“: Abfahrt am nächsten Morgen
+# „geplant-unbekannt“: mit 0 % ist die späteste Startzeit um 18:31 (30 kWh mit 7,36 kW, · 1,1,
+# 15 min Puffer), und das Laden beginnt binnen so vieler Sekunden danach
+UNKNOWN_DEPARTURE: Final = "23:15"
+LATEST_START_WITHIN_S: Final = 30
+LIMIT_TARGET_PCT: Final = 75  # „tesla-ladelimit“: das Ziel, …
+LIMIT_START_PCT: Final = 60.0  # … das Ladelimit im Auto zu Beginn …
+LIMIT_TESLA_PCT: Final = 65.0  # … und sein SOC, über dem Limit: Er ist zu Beginn „Complete“; …
+LIMIT_DEPARTURE: Final = "19:00"  # … mit dieser Abfahrt ist die späteste Startzeit schon vorbei
+
 TESLA: Final = "tesla"  # Schlüssel der Fahrzeuge und Wallboxen in der Konfiguration
 EGOLF: Final = "egolf"
 WALL_CONNECTOR: Final = "twc"
@@ -297,6 +327,8 @@ class Scenario:
       ``{"peak_target_kw": 8.0}``; ein ungültiger Wert ist ein ``ValidationError``
     - ``roundtrip_pct``: der Wirkungsgrad des Akkus im Modell, Laden und Entladen zusammen
       (Plan 3c, Präzisierung 15)
+    - ``vehicles``: je Fahrzeug Werte für ``VehicleConfig``, die die Konfiguration des Laufs
+      überschreiben, etwa ``{"tesla": {"charge_limit_sync": True}}`` (Plan 4b)
     """
 
     name: str
@@ -312,6 +344,7 @@ class Scenario:
     victron_live: bool = False
     control: Mapping[str, Any] = MappingProxyType({})
     roundtrip_pct: float = ROUNDTRIP_PCT
+    vehicles: Mapping[str, Mapping[str, Any]] = MappingProxyType({})
 
 
 @dataclass(frozen=True, slots=True)
@@ -408,6 +441,25 @@ class _Mode:
         _new_version(rt, self.version, self.vehicle, {"mode": self.mode}, "Moduswechsel")
 
 
+@dataclass(frozen=True, slots=True)
+class _Target:
+    """Eine neue Version der Absicht: Das Fahrzeug ``vehicle`` hat das Ziel ``target`` (Ziel-SOC
+    in %) und die Abfahrt ``departure`` (``HH:MM``, Wiener Zeit), wie aus der app (Plan 4b).
+
+    Sonst wie ``_Override``: Die gültige Absicht bleibt, wie sie ist; ohne gültige Absicht und bei
+    einer Ablehnung bricht der Lauf ab (``ValueError``).
+    """
+
+    version: int
+    vehicle: str
+    target: int
+    departure: str
+
+    def __call__(self, model: PlantModel, rt: CoreRuntime) -> None:
+        change = {"target_soc_pct": self.target, "departure": self.departure}
+        _new_version(rt, self.version, self.vehicle, change, "Ziel")
+
+
 PlanSlots = tuple[tuple[int, BatteryIntent, float | None], ...]
 
 
@@ -417,9 +469,11 @@ class _Plan:
     Präzisierung 15).
 
     ``slots`` nennt je Slot den Versatz in Viertelstunden ab der Viertelstunde, in der das
-    Szenario beginnt (``start``), die Absicht und ``budget_kw``. Der Plan entsteht in der Sekunde
-    ``at_s`` des Laufs: Das ist sein ``created_at`` und seine ``id``, und er gilt ``valid_s``
-    danach. Beginn und Sekunde kennt ein Ereignis nicht; das Szenario gibt sie mit (``_plan``).
+    Szenario beginnt (``start``), die Absicht und ``budget_kw``; ``vehicles`` die Ladeleistung je
+    Fahrzeug in W, gleich in jedem Slot (Plan 4b; ohne Angabe kein Auto). Der Plan entsteht in der
+    Sekunde ``at_s`` des Laufs: Das ist sein ``created_at`` und seine ``id``, und er gilt
+    ``valid_s`` danach. Beginn und Sekunde kennt ein Ereignis nicht; das Szenario gibt sie mit
+    (``_plan``).
 
     Die Version ist die nächste nach der gültigen. Sonst bleibt die gültige Absicht, wie sie ist,
     auch Boost und Übersteuerung. Ohne gültige Absicht und bei einer Ablehnung bricht der Lauf ab
@@ -432,6 +486,7 @@ class _Plan:
     _: KW_ONLY
     valid_s: int
     grid_charge_allowed: bool = True
+    vehicles: Mapping[str, int] = MappingProxyType({})
 
     def plan(self) -> IntentPlan:
         created = self.start + timedelta(seconds=self.at_s)
@@ -442,7 +497,12 @@ class _Plan:
             valid_until=created + timedelta(seconds=self.valid_s),
             grid_charge_allowed=self.grid_charge_allowed,
             slots=[
-                IntentPlanSlot(start=first + offset * SLOT, intent=intent, budget_kw=budget_kw)
+                IntentPlanSlot(
+                    start=first + offset * SLOT,
+                    intent=intent,
+                    budget_kw=budget_kw,
+                    vehicles=dict(self.vehicles),
+                )
                 for offset, intent, budget_kw in self.slots
             ],
         )
@@ -464,18 +524,31 @@ def _plan(
     *,
     valid_s: int,
     grid_charge_allowed: bool = True,
+    vehicles: Mapping[str, int] = MappingProxyType({}),
 ) -> tuple[int, Action]:
     """Das Ereignis ``_Plan`` in der Sekunde ``at_s`` eines Szenarios ab ``start``."""
-    plan = _Plan(start, at_s, slots, valid_s=valid_s, grid_charge_allowed=grid_charge_allowed)
+    plan = _Plan(
+        start,
+        at_s,
+        slots,
+        valid_s=valid_s,
+        grid_charge_allowed=grid_charge_allowed,
+        vehicles=vehicles,
+    )
     return at_s, plan
 
 
 def _every_quarter(
-    start: datetime, duration_s: int, intent: BatteryIntent, *, budget_kw: float | None = None
+    start: datetime,
+    duration_s: int,
+    intent: BatteryIntent,
+    *,
+    budget_kw: float | None = None,
+    vehicles: Mapping[str, int] = MappingProxyType({}),
 ) -> tuple[tuple[int, Action], ...]:
     """Pläne wie von der app: einer zu Beginn, dann zu jeder Viertelstunde des Laufs, je mit
-    ``PLAN_SLOTS`` Slots ``intent`` (und ``budget_kw``) ab seiner Viertelstunde, gültig für
-    ``PLAN_VALID_S``."""
+    ``PLAN_SLOTS`` Slots ``intent`` (und ``budget_kw``, Ladeleistung ``vehicles``) ab seiner
+    Viertelstunde, gültig für ``PLAN_VALID_S``."""
     into = int((start - slot_start(start)).total_seconds())
     seconds = sorted({0, *range((QUARTER_S - into) % QUARTER_S, duration_s, QUARTER_S)})
     return tuple(
@@ -484,6 +557,7 @@ def _every_quarter(
             t,
             tuple(((into + t) // QUARTER_S + k, intent, budget_kw) for k in range(PLAN_SLOTS)),
             valid_s=PLAN_VALID_S,
+            vehicles=vehicles,
         )
         for t in seconds
     )
@@ -593,11 +667,14 @@ def _setup(
     away: frozenset[str] = frozenset(),
     tesla_elsewhere: bool = False,
     evcs_on: bool = False,
+    tesla_limit_pct: float | None = None,
+    egolf_soc_known: bool = True,
 ) -> None:
     """Akku, Multi, fremder Regler und Dynamic ESS (``dess``); der Tesla an der Wallbox ``tesla``,
     der e-Golf an ``egolf`` (``None``: abgesteckt).
 
-    Für den Tesla, wenn angegeben: SOC ``tesla_soc_pct`` und Strom ``tesla_amps``. Mit
+    Für den Tesla, wenn angegeben: SOC ``tesla_soc_pct``, Strom ``tesla_amps`` und Ladelimit
+    ``tesla_limit_pct`` (sonst ``TESLA_LIMIT_PCT``). Mit
     ``tesla_starts`` hat er „Laden an“ im Auto und lädt, sobald die Wallbox Strom gibt; mit
     ``asleep`` schläft er. Mit ``tesla_elsewhere`` steckt er woanders (``Tesla.elsewhere``): Tessie
     meldet ihn „Stopped“, obwohl er an keiner Wallbox steckt.
@@ -606,7 +683,8 @@ def _setup(
     Phasen (1 bis 3). ``away`` nennt die Fahrzeuge, die Home Assistant nicht zu Hause meldet; ohne
     sind alle zu Hause. Mit ``evcs_on`` steht die EVCS ``EVCS_BOX`` schon vor dem Start des core auf
     „Laden an“ (ihr Sollstrom ist noch ihr sicherer Strom): Ein Auto an ihr lädt von der ersten
-    Sekunde an.
+    Sekunde an. Mit ``egolf_soc_known`` falsch meldet Home Assistant den Ladestand des e-Golf
+    nicht (``PlantModel.egolf_soc_known``).
     """
     model.soc_pct = soc_pct
     model.charger_only = charger_only
@@ -619,6 +697,8 @@ def _setup(
         car.soc_pct = tesla_soc_pct
     if tesla_amps is not None:
         car.charge_amps = tesla_amps
+    if tesla_limit_pct is not None:
+        car.limit_pct = tesla_limit_pct
     car.charge_enabled = tesla_starts
     car.asleep = asleep
     car.elsewhere = tesla_elsewhere
@@ -628,6 +708,7 @@ def _setup(
     if guest is not None:
         model.plug(GUEST_CAR, guest)
     model.away = set(away)
+    model.egolf_soc_known = egolf_soc_known
     if evcs_on:
         box = model.wallboxes[EVCS_BOX]
         if not isinstance(box, Evcs):
@@ -1484,6 +1565,285 @@ def _no_decision_at(actuator: str) -> Check:
     return Check(f"Keine Entscheidung an „{actuator}“.", find)
 
 
+# --- Prüfungen für „Geplant“ und das Ladelimit des Tesla ------------------------------------------
+
+
+def _vehicle_entries(result: SimResult, key: str) -> list[tuple[int, dict[str, Any]]]:
+    """Je Gesundheit, die das Fahrzeug ``key`` nennt, die Sekunde und sein Eintrag."""
+    return [
+        (t, vehicle)
+        for t, health in result.health
+        for vehicle in health.vehicles
+        if vehicle.get("id") == key
+    ]
+
+
+def _target_stop(result: SimResult, actuator: str) -> Decision | None:
+    """Das erste „Laden aus“ an ``actuator`` mit dem Grund ``target_reached``, das ein Befehl war
+    (nicht abgelehnt, zurückgestellt oder eine fremde Änderung)."""
+    return next(
+        (
+            d
+            for d in _at(result.decisions, actuator)
+            if d.kind is CommandKind.CHARGING
+            and d.requested is False
+            and TARGET_REACHED in d.codes
+            and d.result not in _HELD_BACK
+        ),
+        None,
+    )
+
+
+def _stop_second(result: SimResult, stop: Decision) -> int:
+    """Die Sekunde, in der der Stopp ``stop`` wirkt: zu der sein Befehl Tessie erreichte
+    (``SimResult.sent``), sonst die seiner Entscheidung. Tessie bestätigt erst später; das Auto
+    hört schon mit dem Befehl auf zu laden."""
+    return _second(result, result.sent.get(stop.id, stop.ts))
+
+
+def _charges_with_at_least(key: str, amps: float) -> Check:
+    """Vom ersten Laden des Autos ``key`` bis zu seinem Stopp am Ziel (``_target_stop`` an seinem
+    eigenen Aktor, ab der Sekunde ``_stop_second``) lädt es in jeder Sekunde mit mindestens
+    ``amps``, also auch ohne Pause; ohne Stopp bis zum Ende. Lädt es nie, ist das ein Verstoß."""
+
+    def find(result: SimResult) -> list[str]:
+        samples = result.samples
+        first = next((s.t for s in samples if s.cars[key].charging), None)
+        if first is None:
+            return [f"„{key}“ lädt nie."]
+        stop = _target_stop(result, vehicle_actuator(key))
+        end = _stop_second(result, stop) if stop is not None else samples[-1].t + 1
+        low = [s for s in samples if first <= s.t < end and s.cars[key].current_a < amps]
+        if not low:
+            return []
+        return [
+            f"„{key}“ lädt bei {low[0].t} s mit {de(low[0].cars[key].current_a)} A, verlangt "
+            f"mindestens {de(amps)} A ({len(low)} s darunter)."
+        ]
+
+    text = f"Vom ersten Laden bis zum Stopp am Ziel lädt „{key}“ mit mindestens {de(amps)} A."
+    return Check(text, find)
+
+
+def _stops_at_target(key: str, actuator: str, target_pct: float) -> Check:
+    """Der Ladepunkt ``actuator`` des Autos ``key`` bekommt „Laden aus“ mit ``target_reached``
+    (``_target_stop``); in der Sekunde, in der er wirkt (``_stop_second``), hat das Auto im
+    Modell mindestens ``target_pct``. Danach hört es auf zu laden (an der EVCS mit ihrem Verzug),
+    lädt nicht wieder, und kein „Laden an“ an ``actuator`` geht hinaus."""
+
+    def find(result: SimResult) -> list[str]:
+        stop = _target_stop(result, actuator)
+        if stop is None:
+            return [f"Kein „Laden aus“ mit „{TARGET_REACHED}“ an „{actuator}“."]
+        at = _stop_second(result, stop)
+        found: list[str] = []
+        soc = next((s.cars[key].soc_pct for s in result.samples if s.t == at), None)
+        if soc is None or soc < target_pct:
+            shown = "ohne Ladestand" if soc is None else f"{de(round(soc, 2))} %"
+            found.append(
+                f"„{key}“ hat beim Stopp am Ziel ({at} s) {shown}, verlangt mindestens "
+                f"{de(target_pct)} %."
+            )
+        after = [s for s in result.samples if s.t >= at]
+        stopped = next((s.t for s in after if not s.cars[key].charging), None)
+        if stopped is None:
+            found.append(f"„{key}“ lädt nach dem Stopp am Ziel weiter.")
+        else:
+            again = next((s.t for s in after if s.t > stopped and s.cars[key].charging), None)
+            if again is not None:
+                found.append(f"„{key}“ lädt nach dem Stopp am Ziel wieder, bei {again} s.")
+        starts = [
+            d
+            for d in _at(result.decisions, actuator)
+            if d.kind is CommandKind.CHARGING
+            and d.requested is True
+            and d.result not in _HELD_BACK
+            and d.ts > stop.ts
+        ]
+        if starts:
+            found.append(
+                f"{len(starts)} Befehle „Laden an“ an „{actuator}“ nach dem Stopp am Ziel, der "
+                f"erste bei {_second(result, starts[0].ts)} s."
+            )
+        return found
+
+    where = "" if actuator == vehicle_actuator(key) else f" an „{actuator}“"
+    text = (
+        f"„{key}“ bekommt „Laden aus“{where} mit „{TARGET_REACHED}“ bei mindestens "
+        f"{de(target_pct)} % und lädt danach nicht mehr."
+    )
+    return Check(text, find)
+
+
+def _waits_for_latest_start(key: str, *, within_s: int | None = None) -> Check:
+    """Das Auto ``key`` lädt erst ab der spätesten Startzeit, die die letzte Gesundheit vor seinem
+    ersten Laden nennt (``planned.latest_start``); mit ``within_s`` beginnt es binnen so vieler
+    Sekunden danach. Danach rückt die späteste Startzeit mit dem Laden weiter, darum zählt die
+    davor. Lädt es nie oder nennt die Gesundheit davor keine, ist das ein Verstoß."""
+
+    def find(result: SimResult) -> list[str]:
+        first = next((s.t for s in result.samples if s.cars[key].charging), None)
+        if first is None:
+            return [f"„{key}“ lädt nie."]
+        before = [(t, entry) for t, entry in _vehicle_entries(result, key) if t < first]
+        planned = before[-1][1].get("planned") if before else None
+        latest = planned.get("latest_start") if isinstance(planned, dict) else None
+        if not isinstance(latest, str):
+            return [
+                f"Die Gesundheit nennt vor dem ersten Laden von „{key}“ ({first} s) keine "
+                "späteste Startzeit."
+            ]
+        latest_s = (datetime.fromisoformat(latest) - result.scenario.start).total_seconds()
+        if first < latest_s:
+            return [
+                f"„{key}“ lädt bei {first} s, vor der spätesten Startzeit "
+                f"({de(round(latest_s))} s laut Gesundheit bei {before[-1][0]} s)."
+            ]
+        if within_s is not None and first - latest_s > within_s:
+            return [
+                f"„{key}“ beginnt bei {first} s, {de(round(first - latest_s))} s nach der "
+                f"spätesten Startzeit, verlangt binnen {within_s} s."
+            ]
+        return []
+
+    text = (
+        f"„{key}“ lädt erst ab der spätesten Startzeit, die die Gesundheit vor seinem ersten Laden "
+        "nennt"
+    )
+    text += "." if within_s is None else f", und beginnt binnen {within_s} s danach."
+    return Check(text, find)
+
+
+def _reaches_before(key: str, target_pct: float, before_s: int) -> Check:
+    """Der Ladestand des Autos ``key`` im Modell erreicht ``target_pct`` vor der Sekunde
+    ``before_s``, der Abfahrt."""
+
+    def find(result: SimResult) -> list[str]:
+        socs = [s.cars[key].soc_pct for s in result.samples if s.t < before_s]
+        best = max((soc for soc in socs if soc is not None), default=None)
+        if best is None:
+            return [f"„{key}“ hat vor der Abfahrt keinen Ladestand."]
+        if best >= target_pct:
+            return []
+        return [f"„{key}“ hat vor der Abfahrt höchstens {de(round(best, 2))} %."]
+
+    text = f"„{key}“ erreicht {de(target_pct)} % vor der Abfahrt ({de(before_s / MINUTE_S)} min)."
+    return Check(text, find)
+
+
+def _soc_assumed(key: str) -> Check:
+    """Jede Gesundheit, die einen Ladestand für ``key`` nennt (``soc_source``), nennt ihn
+    ``assumed`` mit 0 %, und es gibt mindestens eine; gemeldet wird die erste andere."""
+
+    def find(result: SimResult) -> list[str]:
+        shown = [
+            (t, entry.get("soc_pct"), entry["soc_source"])
+            for t, entry in _vehicle_entries(result, key)
+            if entry.get("soc_source") is not None
+        ]
+        if not shown:
+            return [f"Die Gesundheit nennt für „{key}“ nie einen Ladestand."]
+        for t, pct, source in shown:
+            if source != "assumed" or pct != 0:
+                value = "ohne Wert" if pct is None else f"{de(pct)} %"
+                return [
+                    f"Bei {t} s nennt die Gesundheit für „{key}“ {value} ({source}), verlangt "
+                    "0 % (assumed)."
+                ]
+        return []
+
+    text = (
+        f"Jede Gesundheit, die einen Ladestand für „{key}“ nennt, nennt ihn „angenommen“ mit 0 %."
+    )
+    return Check(text, find)
+
+
+def _never_named(code: str) -> Check:
+    """Keine Entscheidung nennt den Grund ``code``; der Befund nennt ihre Zahl und die erste."""
+
+    def find(result: SimResult) -> list[str]:
+        found = [d for d in result.decisions if code in d.codes]
+        if not found:
+            return []
+        first = _second(result, found[0].ts)
+        return [f"{len(found)} Entscheidungen nennen „{code}“, die erste bei {first} s."]
+
+    return Check(f"Keine Entscheidung nennt „{code}“.", find)
+
+
+def _one_charge_limit(key: str, pct: int) -> Check:
+    """Genau eine Entscheidung „Ladelimit ``pct`` %“ an das Fahrzeug ``key`` und keine andere über
+    das Ladelimit; eine zurückgestellte zählt nicht, denn ihr Befehl kommt noch einmal, und eine
+    fremde Änderung auch nicht."""
+    actuator = vehicle_actuator(key)
+
+    def find(result: SimResult) -> list[str]:
+        limits = [
+            d
+            for d in _at(result.decisions, actuator)
+            if d.kind is CommandKind.CHARGE_LIMIT and d.result not in _NOT_THE_COMMAND
+        ]
+        wanted = [d for d in limits if d.requested == pct]
+        found: list[str] = []
+        if len(wanted) != 1:
+            found.append(
+                f"{len(wanted)} Entscheidungen „Ladelimit {pct} %“ an „{key}“, verlangt genau eine."
+            )
+        others = [d for d in limits if d.requested != pct]
+        if others:
+            value = finite_number(others[0].requested)
+            shown = str(others[0].requested) if value is None else de(value)
+            found.append(
+                f"Eine andere Entscheidung über das Ladelimit: {shown} % bei "
+                f"{_second(result, others[0].ts)} s."
+            )
+        return found
+
+    text = (
+        f"Genau eine Entscheidung „Ladelimit {pct} %“ an „{key}“, keine andere über das Ladelimit."
+    )
+    return Check(text, find)
+
+
+def _limit_shown(key: str, pct: int) -> Check:
+    """Die letzte Gesundheit, die das Fahrzeug ``key`` nennt, zeigt das Ladelimit ``pct`` %: So
+    meldet Tessie das Limit im Modell."""
+
+    def find(result: SimResult) -> list[str]:
+        entries = _vehicle_entries(result, key)
+        if not entries:
+            return [f"Die Gesundheit nennt „{key}“ nie."]
+        last = entries[-1][1].get("charge_limit_pct")
+        if last is None:
+            return [f"Am Ende zeigt die Gesundheit für „{key}“ kein Ladelimit."]
+        if last != pct:
+            return [f"Am Ende zeigt die Gesundheit für „{key}“ das Ladelimit {de(last)} %."]
+        return []
+
+    return Check(f"Am Ende zeigt die Gesundheit für „{key}“ das Ladelimit {pct} %.", find)
+
+
+def _complete_at(key: str, pct: int) -> Check:
+    """Nach dem ersten Laden ist das Auto ``key`` im Modell „Complete“, und zwar mit genau
+    ``pct`` %: Es hat am Ladelimit ``pct`` aufgehört (``Car.draw`` lädt nie darüber)."""
+
+    def find(result: SimResult) -> list[str]:
+        samples = result.samples
+        first = next((s.t for s in samples if s.cars[key].charging), None)
+        if first is None:
+            return [f"„{key}“ lädt nie."]
+        done = next((s for s in samples if s.t > first and s.cars[key].complete), None)
+        if done is None:
+            return [f"„{key}“ meldet nach dem Laden nie „Complete“."]
+        soc = done.cars[key].soc_pct
+        if soc is None or not math.isclose(soc, pct):
+            shown = "ohne Ladestand" if soc is None else f"bei {de(round(soc, 2))} %"
+            return [f"„{key}“ meldet „Complete“ {shown}, verlangt {pct} %."]
+        return []
+
+    return Check(f"Nach dem Laden meldet „{key}“ „Complete“ bei {pct} %.", find)
+
+
 # --- Szenarien 1 bis 5 ----------------------------------------------------------------------------
 
 
@@ -2273,6 +2633,168 @@ def _plan_boost() -> Scenario:
     )
 
 
+# --- Szenarien 29 bis 33: „Geplant“ und Ladelimit, Victron live (Plan 4b, Entscheidung 16) ------
+
+
+def _departure_s(start: datetime, departure: str) -> int:
+    """Die Sekunde des Laufs ab ``start``, in der die Abfahrt ``departure`` (``HH:MM``, Wiener
+    Zeit) am selben Tag liegt."""
+    local = start.astimezone(LOCAL_TZ)
+    hour, minute = (int(part) for part in departure.split(":"))
+    at = local.replace(hour=hour, minute=minute, second=0, microsecond=0)
+    return int((at - local).total_seconds())
+
+
+def _geplant_plan() -> Scenario:
+    """Der Tesla lädt „Geplant“ mit der Leistung des Plans, 6900 W in vier Slots (Präzisierung 7).
+    Der Plan gilt 30 min, dann fällt die app aus (Abweichung, Docstring des Moduls); ab da ist die
+    späteste Startzeit erreicht, und er lädt ohne Stopp mit voller Leistung weiter (Review
+    Focus 4). Am Ziel stoppt er mit ``target_reached`` und startet nicht wieder."""
+    start, duration_s, seed = EVENING, HOUR_S, 29
+    target = _Target(2, TESLA, PLANNED_TARGET_PCT, PLAN_DEPARTURE)
+    slots = tuple((k, BatteryIntent(), None) for k in range(PLAN_SLOTS))
+    plan = _plan(start, 0, slots, valid_s=PLAN_RUNS_OUT_S, vehicles={TESLA: PLAN_TESLA_W})
+    checks = (
+        _charges_with_at_least(TESLA, PLAN_TESLA_MIN_A),
+        _stops_at_target(TESLA, vehicle_actuator(TESLA), PLANNED_TARGET_PCT),
+    )
+    return Scenario(
+        name="geplant-plan",
+        title="Geplant mit Plan, der Plan läuft ab",
+        start=start,
+        duration_s=duration_s,
+        seed=seed,
+        setup=partial(_setup, soc_pct=60.0, egolf=None, tesla_soc_pct=PLANNED_TESLA_PCT),
+        intent=_intent(tesla=ChargeMode.PLANNED),
+        live=True,
+        events=(*_weather(start, duration_s, seed), (0, target), plan),
+        checks=Checks(checks),
+        victron_live=True,
+    )
+
+
+def _geplant_spaet() -> Scenario:
+    """Der e-Golf steht mit gemessenen 50 % „Geplant“ ohne Plan, Ziel 70 %, Abfahrt in 2 h: Er lädt
+    erst ab der spätesten Startzeit (Präzisierung 6), dann mit voller Leistung, und erreicht das
+    Ziel vor der Abfahrt. Den Ladestand meldet Home Assistant; dazwischen schätzt der core ihn aus
+    dem Zähler der EVCS."""
+    start, duration_s, seed = EVENING, 2 * HOUR_S, 30
+    evcs = wallbox_actuator(EVCS_BOX)
+    checks = (
+        _waits_for_latest_start(EGOLF),
+        _stops_at_target(EGOLF, evcs, PLANNED_TARGET_PCT),
+        _reaches_before(EGOLF, PLANNED_TARGET_PCT, _departure_s(start, LATE_DEPARTURE)),
+    )
+    return Scenario(
+        name="geplant-spaet",
+        title="Geplant ohne Plan, Start zur spätesten Startzeit",
+        start=start,
+        duration_s=duration_s,
+        seed=seed,
+        setup=partial(_setup, soc_pct=60.0, tesla=None),
+        intent=_intent(egolf=ChargeMode.PLANNED),
+        live=True,
+        events=(
+            *_weather(start, duration_s, seed),
+            (0, _Target(2, EGOLF, PLANNED_TARGET_PCT, LATE_DEPARTURE)),
+        ),
+        checks=Checks(checks),
+        victron_live=True,
+    )
+
+
+def _geplant_pv() -> Scenario:
+    """An einem sonnigen Tag steht der Tesla „Geplant“, und die Pläne nennen ihn mit 0 W: Er lädt
+    nur aus dem PV-Überschuss, mit den Zeiten des PV-Modus (Entscheidung 4), höchstens 5 % aus dem
+    Akku wie ein PV-Auto, und stoppt am Ziel, obwohl die Sonne weiter scheint."""
+    start, duration_s, seed = SUMMER, 2 * HOUR_S, 31
+    plans = _every_quarter(start, duration_s, BatteryIntent(), vehicles={TESLA: 0})
+    checks = (
+        _from_battery_at_most(TESLA, CAR_FROM_BATTERY_PCT),
+        _stops_at_target(TESLA, vehicle_actuator(TESLA), PLANNED_TARGET_PCT),
+    )
+    return Scenario(
+        name="geplant-pv",
+        title="Geplant mit PV-Überschuss",
+        start=start,
+        duration_s=duration_s,
+        seed=seed,
+        setup=partial(_setup, soc_pct=60.0, egolf=None, tesla_soc_pct=PLANNED_TESLA_PCT),
+        intent=_intent(tesla=ChargeMode.PLANNED),
+        live=True,
+        events=(
+            *_weather(start, duration_s, seed, pv=_sun(start)),
+            (0, _Target(2, TESLA, PLANNED_TARGET_PCT, PV_DEPARTURE)),
+            *plans,
+        ),
+        checks=Checks(checks),
+        victron_live=True,
+    )
+
+
+def _geplant_unbekannt() -> Scenario:
+    """Home Assistant meldet keinen Ladestand des e-Golf: „Geplant“ rechnet mit angenommenen 0 %
+    (Entscheidung 3), beginnt zur spätesten Startzeit dafür und erkennt das Ziel nie."""
+    start, duration_s, seed = EVENING, 2 * HOUR_S, 32
+    checks = (
+        _soc_assumed(EGOLF),
+        _waits_for_latest_start(EGOLF, within_s=LATEST_START_WITHIN_S),
+        _never_named(TARGET_REACHED),
+    )
+    return Scenario(
+        name="geplant-unbekannt",
+        title="Geplant ohne Ladestand",
+        start=start,
+        duration_s=duration_s,
+        seed=seed,
+        setup=partial(_setup, soc_pct=60.0, tesla=None, egolf_soc_known=False),
+        intent=_intent(egolf=ChargeMode.PLANNED),
+        live=True,
+        events=(
+            *_weather(start, duration_s, seed),
+            (0, _Target(2, EGOLF, PLANNED_TARGET_PCT, UNKNOWN_DEPARTURE)),
+        ),
+        checks=Checks(checks),
+        victron_live=True,
+    )
+
+
+def _tesla_ladelimit() -> Scenario:
+    """Mit ``charge_limit_sync`` setzt der core das Ladelimit des Tesla von 60 % auf das Ziel von
+    75 %, einmal (Entscheidung 11). Der Tesla steht zu Beginn über dem alten Limit und ist
+    „Complete“; die späteste Startzeit ist schon vorbei, er lädt mit voller Leistung und meldet
+    „Complete“ bei 75 %."""
+    start, duration_s, seed = EVENING, HOUR_S, 33
+    checks = (
+        _one_charge_limit(TESLA, LIMIT_TARGET_PCT),
+        _limit_shown(TESLA, LIMIT_TARGET_PCT),
+        _complete_at(TESLA, LIMIT_TARGET_PCT),
+    )
+    return Scenario(
+        name="tesla-ladelimit",
+        title="Ladelimit des Tesla an das Ziel angleichen",
+        start=start,
+        duration_s=duration_s,
+        seed=seed,
+        setup=partial(
+            _setup,
+            soc_pct=60.0,
+            egolf=None,
+            tesla_soc_pct=LIMIT_TESLA_PCT,
+            tesla_limit_pct=LIMIT_START_PCT,
+        ),
+        intent=_intent(tesla=ChargeMode.PLANNED),
+        live=True,
+        events=(
+            *_weather(start, duration_s, seed),
+            (0, _Target(2, TESLA, LIMIT_TARGET_PCT, LIMIT_DEPARTURE)),
+        ),
+        checks=Checks(checks),
+        victron_live=True,
+        vehicles=MappingProxyType({TESLA: MappingProxyType({"charge_limit_sync": True})}),
+    )
+
+
 SCENARIOS: Final[dict[str, Scenario]] = {
     scenario.name: scenario
     for scenario in (
@@ -2304,5 +2826,10 @@ SCENARIOS: Final[dict[str, Scenario]] = {
         _plan_abgelaufen(),
         _plan_budget(),
         _plan_boost(),
+        _geplant_plan(),
+        _geplant_spaet(),
+        _geplant_pv(),
+        _geplant_unbekannt(),
+        _tesla_ladelimit(),
     )
 }

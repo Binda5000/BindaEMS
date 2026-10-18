@@ -570,7 +570,7 @@ def test_the_plan_scenarios_follow_the_table_of_the_plan(cfg) -> None:
         "plan-budget": ("Netzladen unter dem Budget", vienna(10, 12, 17, 59), 2820, 27),
         "plan-boost": ("Boost während Halten", evening, 3600, 28),
     }
-    assert list(SCENARIOS)[-5:] == list(table)
+    assert list(SCENARIOS)[23:28] == list(table)
     for name, (title, start, duration_s, seed) in table.items():
         scenario = SCENARIOS[name]
         found = (scenario.title, scenario.start, scenario.duration_s, scenario.seed)
