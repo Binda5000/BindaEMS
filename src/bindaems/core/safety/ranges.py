@@ -7,10 +7,14 @@ Eingriff als ``Finding``. Die Grenzen kommen aus den ``HardLimits``.
 from __future__ import annotations
 
 import math
+from typing import Final
 
 from bindaems.core.safety.limits import CurrentRange, HardLimits
 from bindaems.core.safety.types import Finding, Step, de, finite_number, invalid_value
 from bindaems.shared.control import Command, CommandKind
+
+CHARGE_LIMIT_MIN_PCT: Final = 50.0  # tiefstes Ladelimit des Tesla (Plan 4b, Präzisierung 9)
+CHARGE_LIMIT_MAX_PCT: Final = 100.0
 
 
 def check_range(command: Command, limits: HardLimits, budget_w: float | None) -> Step:
@@ -41,6 +45,8 @@ def check_range(command: Command, limits: HardLimits, budget_w: float | None) ->
         return _check_max_discharge(value, limits.max_discharge_w)
     if kind == CommandKind.MIN_SOC:
         return _check_min_soc(value, limits.reserve_soc_pct)
+    if kind == CommandKind.CHARGE_LIMIT:
+        return _check_charge_limit(value)
     return _invalid(command)  # unbekannte Art: im Zweifel ablehnen
 
 
@@ -105,6 +111,24 @@ def _check_max_discharge(value: float, limit: float) -> Step:
     if value > limit:
         return Step(limit, (_capped(limit, "W"),))
     return Step(value)
+
+
+def _check_charge_limit(value: float) -> Step:
+    """Ladelimit des Tesla in % (Plan 4b, Präzisierung 9): auf ganze Prozent abrunden, unter
+    ``CHARGE_LIMIT_MIN_PCT`` ablehnen, über ``CHARGE_LIMIT_MAX_PCT`` auf diesen Wert begrenzen."""
+    findings: list[Finding] = []
+    whole = math.floor(value)
+    if whole != value:
+        text = f"Auf ganze Prozent abgerundet: {de(value)} % → {de(whole)} %."
+        findings.append(Finding("range.integer", text))
+        value = float(whole)
+    if value < CHARGE_LIMIT_MIN_PCT:
+        text = f"Wert {de(value)} % liegt außerhalb des zulässigen Bereichs."
+        return _reject("range.invalid", text, *findings)
+    if value > CHARGE_LIMIT_MAX_PCT:
+        findings.append(_capped(CHARGE_LIMIT_MAX_PCT, "%"))
+        value = CHARGE_LIMIT_MAX_PCT
+    return Step(value, tuple(findings))
 
 
 def _check_min_soc(value: float, reserve: float) -> Step:

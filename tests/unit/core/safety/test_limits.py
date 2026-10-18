@@ -25,6 +25,8 @@ def test_catalog_from_example(limits) -> None:
         CommandKind.MAX_DISCHARGE,
         CommandKind.MIN_SOC,
     }
+    assert evcs.kinds == {CommandKind.CURRENT, CommandKind.CHARGING}
+    assert tesla.kinds == {CommandKind.CURRENT, CommandKind.CHARGING, CommandKind.CHARGE_LIMIT}
     assert limits.currents["wallbox.evcs"] == CurrentRange(6, 16, 6)
     assert limits.currents["vehicle.tesla"] == CurrentRange(5, 16, 5)
     assert limits.wallbox_phases["twc"] == ("L1", "L2", "L3")

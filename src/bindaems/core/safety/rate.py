@@ -22,6 +22,7 @@ from bindaems.shared.control import Command, CommandKind, CommandValue
 
 EVCS_INTERVAL_S: Final = 5.0  # EVCS: Strom und Laden an/aus
 VICTRON_OVERRIDE_INTERVAL_S: Final = 2.0  # Victron: Netz-Sollwert
+TESLA_LIMIT_INTERVAL_S: Final = 600.0  # Tesla: Ladelimit (Plan 4b, Präzisierung 9)
 EVCS_DEADBAND_A: Final = 1.0
 VICTRON_DEADBAND_W: Final = 50.0
 
@@ -41,11 +42,13 @@ class RateLimiter:
 
     - EVCS: ``current`` und ``charging`` alle 5 s
     - Victron: ``grid_setpoint`` alle 2 s; die persistenten Arten haben das Schreibbudget
-    - Tesla (Spec 6.5): ``current`` alle ``current_interval_s``; ``charging`` ohne Mindestabstand
+    - Tesla (Spec 6.5): ``current`` alle ``current_interval_s``; ``charging`` ohne Mindestabstand;
+      ``charge_limit`` alle 600 s (Plan 4b, Präzisierung 9)
 
     Beim Tesla gelten dazu Stundenlimits im gleitenden Fenster: höchstens ``per_hour`` Befehle
-    zusammen, davon höchstens ``start_stop_per_hour`` ``charging``-Befehle. Diese Einträge
-    überstehen einen Neustart: ``hourly_entries`` gibt sie her, ``restore`` spielt sie wieder ein.
+    zusammen (das Ladelimit eingeschlossen), davon höchstens ``start_stop_per_hour``
+    ``charging``-Befehle. Diese Einträge überstehen einen Neustart: ``hourly_entries`` gibt sie
+    her, ``restore`` spielt sie wieder ein.
     """
 
     def __init__(self, limits: HardLimits) -> None:
@@ -202,6 +205,8 @@ def _interval_s(limits: HardLimits, command: Command) -> float | None:
         return VICTRON_OVERRIDE_INTERVAL_S
     if family == "tesla" and kind == CommandKind.CURRENT:
         return limits.vehicle_commands[command.actuator].current_interval_s
+    if family == "tesla" and kind == CommandKind.CHARGE_LIMIT:
+        return TESLA_LIMIT_INTERVAL_S
     return None
 
 

@@ -88,11 +88,12 @@ def check_phases(
     - ``max_discharge``: ein Wert von mindestens 0 unter der aktuellen Entladeleistung
     - ``min_soc``: der Wert liegt über der Reserve und über dem SOC
 
-    Alles andere bleibt unverändert; nur ein Strom wird auch bei einer Verringerung auf den
-    erlaubten Strom gesenkt, nie unter den Mindeststrom. Die Texte nennen die bindende Phase, die
-    mit dem kleinsten Spielraum unter den betroffenen Phasen; bei Gleichstand gilt die Reihenfolge
-    L1, L2, L3. Ein Wert vom falschen Typ und eine unbekannte Art werden abgelehnt
-    (``value.invalid``). Bei ``reject`` ist ``value`` gleich ``None``.
+    Alles andere bleibt unverändert, auch das Ladelimit des Tesla (es zieht keinen Strom); nur ein
+    Strom wird auch bei einer Verringerung auf den erlaubten Strom gesenkt, nie unter den
+    Mindeststrom. Die Texte nennen die bindende Phase, die mit dem kleinsten Spielraum unter den
+    betroffenen Phasen; bei Gleichstand gilt die Reihenfolge L1, L2, L3. Ein Wert vom falschen Typ
+    und eine unbekannte Art werden abgelehnt (``value.invalid``). Bei ``reject`` ist ``value``
+    gleich ``None``.
     """
     kind = command.kind
     if kind == CommandKind.CHARGING:
@@ -113,6 +114,8 @@ def check_phases(
         return _check_max_discharge(command.actuator, number, ctx, limits)
     if kind == CommandKind.MIN_SOC:
         return _check_min_soc(number, ctx, limits)
+    if kind == CommandKind.CHARGE_LIMIT:
+        return Step(number)  # das Ladelimit zieht keinen Strom
     return _invalid(kind, value)  # unbekannte Art: im Zweifel ablehnen
 
 

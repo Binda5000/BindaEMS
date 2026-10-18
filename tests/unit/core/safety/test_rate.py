@@ -5,6 +5,8 @@ import pytest
 from tests.helpers import T0
 from tests.unit.core.safety.conftest import make_ctx
 
+from bindaems.core.safety.budget import PersistentWriteBudget
+from bindaems.core.safety.layer import SafetyLayer
 from bindaems.core.safety.limits import HardLimits
 from bindaems.core.safety.rate import (
     EVCS_DEADBAND_A,
@@ -14,7 +16,7 @@ from bindaems.core.safety.rate import (
     RateLimiter,
     deadband,
 )
-from bindaems.core.safety.types import Finding
+from bindaems.core.safety.types import Finding, Outcome
 from bindaems.shared.control import Command, CommandKind
 
 K = CommandKind
@@ -545,3 +547,33 @@ def test_count_covers_all_kinds_within_the_hour(limits) -> None:
     now = T0 + timedelta(minutes=61)  # der Eintrag zu T0 liegt 61 min zurück
     assert rl.count("vehicle.tesla", now) == 3
     assert rl.count("wallbox.evcs", now) == 0
+
+
+# Ladelimit des Tesla (Plan 4b, Präzisierung 9): 600 s Mindestabstand, zählt im Stundenbudget
+
+
+def test_charge_limit_interval_and_hour_budget(limits, tmp_path) -> None:
+    rl, limit = RateLimiter(limits), Command(TESLA, K.CHARGE_LIMIT, 80.0)
+    rl.record(limit, T0)
+    assert rl.check(limit, S(300)) == Finding(
+        "rate.interval", "Mindestabstand 600 s noch nicht erreicht."
+    )
+    assert rl.check(limit, S(600)) is None
+    assert rl.check(Command(TESLA, K.CURRENT, 10.0), S(1)) is None  # die Arten sind unabhängig
+    # Er zählt mit den anderen Arten in per_hour (20) und ist dort einer der Einträge
+    fill(rl, Command(TESLA, K.CURRENT, 10.0), [91 * i for i in range(1, 20)])
+    assert rl.count(TESLA, S(91 * 19)) == 20
+    assert rl.check(Command(TESLA, K.CHARGE_LIMIT, 90.0), S(91 * 19)).code == "rate.per_hour"
+    assert (TESLA, K.CHARGE_LIMIT, T0) in rl.hourly_entries()
+    # Durch die Schicht: Ein zweiter Befehl nach 300 s ist zurückgestellt
+    layer = SafetyLayer(limits, PersistentWriteBudget(12, 100, tmp_path / "budget.json", T0))
+    assert layer.authorize(limit, make_ctx(now=T0)).outcome is Outcome.ACCEPTED
+    second = layer.authorize(Command(TESLA, K.CHARGE_LIMIT, 90.0), make_ctx(now=S(300)))
+    assert (second.outcome, second.findings[-1].code) == (Outcome.DEFERRED, "rate.interval")
+    assert layer.hourly_count(TESLA, S(300)) == 1
+
+
+def test_charge_limit_has_no_deadband_only_the_same_value(limits) -> None:
+    ctx = make_ctx(present={(TESLA, K.CHARGE_LIMIT): 80.0})
+    assert deadband(Command(TESLA, K.CHARGE_LIMIT, 80.0), 80.0, ctx, limits) == UNCHANGED
+    assert deadband(Command(TESLA, K.CHARGE_LIMIT, 81.0), 81.0, ctx, limits) is None

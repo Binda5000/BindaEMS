@@ -1,18 +1,18 @@
 """Tesla-Aktor: Befehle über Tessie im Hintergrund; wecken darf nur ein Start mit Weckerlaubnis.
 
-Die drei Befehle (Plan 2b, Präzisierung 1) sind ``start_charging``, ``stop_charging`` und
-``set_charging_amps``, jeweils als ``POST {TESSIE_BASE_URL}/{vin}/command/<Name>`` mit
-``wait_for_completion=true``. Tessie antwortet erst, wenn das Fahrzeug den Befehl ausgeführt hat;
-das darf insgesamt höchstens ``COMMAND_TIMEOUT_S`` dauern (Spec 6.5). Der Zyklus wartet darauf
-nie: ``send`` startet den Befehl als Aufgabe des Event-Loops und kehrt sofort zurück, ``confirm``
-fragt, ob sie fertig ist.
+Die Befehle sind ``start_charging``, ``stop_charging`` und ``set_charging_amps`` (Plan 2b,
+Präzisierung 1), dazu ``set_charge_limit`` für das Ladelimit (Plan 4b, Präzisierung 9), jeweils als
+``POST {TESSIE_BASE_URL}/{vin}/command/<Name>`` mit ``wait_for_completion=true``. Tessie antwortet
+erst, wenn das Fahrzeug den Befehl ausgeführt hat; das darf insgesamt höchstens
+``COMMAND_TIMEOUT_S`` dauern (Spec 6.5). Der Zyklus wartet darauf nie: ``send`` startet den Befehl
+als Aufgabe des Event-Loops und kehrt sofort zurück, ``confirm`` fragt, ob sie fertig ist.
 Bestätigt ist ein Befehl, wenn Tessie ``{"result": true}`` liefert (Präzisierung 6). Beim Strom
 reicht das nicht: Tessie bestätigt einen Befehl auf oder von 5 A, ohne dass das Auto ihn übernimmt,
 und erst der zweite wirkt (Prüfprotokoll Teil 2 vom 12.10.2026). Nach der Bestätigung prüft
 ``confirm`` den Strom darum im Tessie-Cache (``_verify``). Zeigt Tessie einen anderen Wert, ist das
 Ergebnis ``NOT_TAKEN``. Der Aktor sendet dann nicht selbst nach: Denselben Befehl schickt wieder der
 Aufrufer, in der Laufzeit über die Safety-Schicht als nächsten Versuch für den sicheren Zustand.
-Laden an und aus prüft ``confirm`` nicht im Cache.
+Das Ladelimit prüft ``confirm`` ebenso im Cache (``charge_limit_pct``); Laden an und aus nicht.
 
 Tessie weckt das Fahrzeug bei Befehlen selbst. Der Tesla ist deshalb nur steuerbar, wenn der Cache
 ``online`` meldet und das Fahrzeug zu Hause und angesteckt ist (Spec 3.7, 6.5). Das sagt
@@ -21,8 +21,8 @@ Tessie weckt das Fahrzeug bei Befehlen selbst. Der Tesla ist deshalb nur steuerb
 Geweckt wird nur durch einen Start mit ausdrücklicher Weckerlaubnis (``Command.wake``, Plan 2c-1,
 Design 7.1): Dafür fragt der Ausführer ``wake_capabilities`` (``WakeStart``) statt ``capabilities``.
 Sie prüft dasselbe in derselben Reihenfolge, nur nicht den Schlaf. Der Start ist ``start_charging``;
-einen eigenen Befehl zum Wecken gibt es nicht, Tessie weckt das Fahrzeug dabei selbst. Strom und
-Stopp gehen weiter nur an ein waches Auto.
+einen eigenen Befehl zum Wecken gibt es nicht, Tessie weckt das Fahrzeug dabei selbst. Strom, Stopp
+und Ladelimit gehen weiter nur an ein waches Auto.
 
 ``FAILURES_ALLOWED`` Fehler binnen ``FAILURE_WINDOW`` machen den Tesla für ``FAILURE_WINDOW`` nicht
 steuerbar (Spec 6.5, 8.4), dazu kommt ein Alarm. Der Token erscheint in keinem Text.
@@ -77,24 +77,51 @@ REASON_UNPLUGGED: Final = "Fahrzeug nicht angesteckt."
 # Texte beim Senden und für gescheiterte Befehle
 REASON_RUNNING: Final = "Befehl an Tessie läuft noch."
 REASON_CHECKING: Final = "Prüfung des Stroms im Tessie-Cache läuft noch."
+REASON_CHECKING_LIMIT: Final = "Prüfung des Ladelimits im Tessie-Cache läuft noch."
 FAILURE_RESULT_FALSE: Final = "Tessie meldet result=false."
 FAILURE_CANCELLED: Final = "Befehl an Tessie abgebrochen."
 FAILURE_NOT_TAKEN: Final = "Fahrzeug übernahm {wanted} A nicht (Tessie meldet {reported} A)."
+FAILURE_LIMIT_NOT_TAKEN: Final = (
+    "Fahrzeug übernahm das Ladelimit {wanted} % nicht (Tessie meldet {reported} %)."
+)
 
 _MASK: Final = "***"
 
 
+@dataclass(frozen=True)
+class _Checked:
+    """Wie eine Art im Tessie-Cache geprüft wird: das Signal (nach ``vehicle.<key>.``), der
+    Parameter des Befehls mit dem ganzzahligen Wert und die Texte, solange die Prüfung läuft und
+    wenn das Fahrzeug den Wert nicht übernahm."""
+
+    signal: str
+    param: str
+    checking: str
+    not_taken: str
+
+
+# Die Arten, die ``confirm`` nach der Bestätigung im Tessie-Cache prüft
+_CHECKED: Final = {
+    CommandKind.CURRENT: _Checked("charge_amps", "amps", REASON_CHECKING, FAILURE_NOT_TAKEN),
+    CommandKind.CHARGE_LIMIT: _Checked(
+        "charge_limit_pct", "percent", REASON_CHECKING_LIMIT, FAILURE_LIMIT_NOT_TAKEN
+    ),
+}
+
+
 @dataclass
 class _Check:
-    """Prüfung eines Strombefehls im Tessie-Cache, vom Senden bis zum Ergebnis.
+    """Prüfung eines Befehls im Tessie-Cache (Strom oder Ladelimit), vom Senden bis zum Ergebnis.
 
-    ``amps`` ist der gesendete Strom in ganzen Ampere, ``sent`` der Zeitpunkt des Sendens auf der
-    Uhr des Aktors. ``since`` ist die Zeit des ersten Snapshots, in dem ``confirm`` die Bestätigung
-    von Tessie sah, ``started`` derselbe Moment auf der Uhr des Aktors. ``outcome`` ist das
-    Ergebnis, sobald es feststeht; es gilt bis zum nächsten ``send`` der Art.
+    ``kind`` ist die Art, ``value`` der gesendete Wert als ganze Zahl (A bzw. %), ``sent`` der
+    Zeitpunkt des Sendens auf der Uhr des Aktors. ``since`` ist die Zeit des ersten Snapshots, in
+    dem ``confirm`` die Bestätigung von Tessie sah, ``started`` derselbe Moment auf der Uhr des
+    Aktors. ``outcome`` ist das Ergebnis, sobald es feststeht; es gilt bis zum nächsten ``send``
+    der Art.
     """
 
-    amps: int
+    kind: CommandKind
+    value: int
     sent: datetime
     since: datetime | None = None
     started: datetime | None = None
@@ -114,14 +141,16 @@ def _unavailable_text(until: datetime) -> str:
 def _request(kind: CommandKind, value: CommandValue) -> tuple[str, dict[str, str]] | str:
     """Name und Parameter des Tessie-Befehls zu Art und Wert, sonst der Grund, warum es keinen gibt.
 
-    Das Ergebnis ist ein Text, wenn die Art unbekannt ist oder der Wert nicht passt: beim Strom
-    keine endliche Zahl, beim Laden kein Wahrheitswert. Den Strom nimmt Tessie in ganzen Ampere.
+    Das Ergebnis ist ein Text, wenn die Art unbekannt ist oder der Wert nicht passt: beim Strom und
+    beim Ladelimit keine endliche Zahl, beim Laden kein Wahrheitswert. Den Strom nimmt Tessie in
+    ganzen Ampere, das Ladelimit in ganzen Prozent.
     """
-    if kind == CommandKind.CURRENT:
-        amps = finite_number(value)
-        if amps is None:
+    if kind in (CommandKind.CURRENT, CommandKind.CHARGE_LIMIT):
+        number = finite_number(value)
+        if number is None:
             return f"Ungültiger Wert für „{kind}“."
-        return "set_charging_amps", {"amps": str(round(amps))}
+        name = "set_charging_amps" if kind == CommandKind.CURRENT else "set_charge_limit"
+        return name, {_CHECKED[kind].param: str(round(number))}
     if kind == CommandKind.CHARGING:
         if not isinstance(value, bool):
             return f"Ungültiger Wert für „{kind}“."
@@ -187,7 +216,7 @@ class TeslaActuator:
         self._connected = connected
         self._clock = clock
         self._tasks: dict[CommandKind, asyncio.Task[tuple[Confirmation, str]]] = {}
-        self._checks: dict[CommandKind, _Check] = {}  # nur für den Strom
+        self._checks: dict[CommandKind, _Check] = {}  # nur für Strom und Ladelimit
         # die Zeiten der letzten Fehler: Ist der älteste von drei jünger als das Fenster,
         # ist der Tesla nicht mehr steuerbar
         self._failures: deque[datetime] = deque(maxlen=FAILURES_ALLOWED)
@@ -234,17 +263,20 @@ class TeslaActuator:
         return Capabilities(not reasons, tuple(reasons))
 
     def present(self, snap: Snapshot) -> dict[CommandKind, CommandValue]:
-        """Eingestellter Ladestrom in A und Laden an/aus, wie der Tessie-Cache sie meldet.
+        """Eingestellter Ladestrom in A, Laden an/aus und Ladelimit in %, wie der Tessie-Cache sie
+        meldet.
 
-        Der Strom ist ``charge_amps`` als endliche Zahl mit Qualität ``OK``. Laden ist ``True`` bei
-        dem Ladezustand ``Charging`` und ``False`` bei jedem anderen Text, sofern der Ladezustand
-        ein Text mit Qualität ``OK`` ist. Was fehlt, ist unbekannt.
+        Strom und Ladelimit sind ``charge_amps`` bzw. ``charge_limit_pct`` als endliche Zahl mit
+        Qualität ``OK``. Laden ist ``True`` bei dem Ladezustand ``Charging`` und ``False`` bei
+        jedem anderen Text, sofern der Ladezustand ein Text mit Qualität ``OK`` ist. Was fehlt, ist
+        unbekannt.
         """
         prefix = f"vehicle.{self._key}."
         present: dict[CommandKind, CommandValue] = {}
-        amps = finite_number(snap.ok(prefix + "charge_amps"))
-        if amps is not None:
-            present[CommandKind.CURRENT] = amps
+        for kind, checked in _CHECKED.items():
+            number = finite_number(snap.ok(prefix + checked.signal))
+            if number is not None:
+                present[kind] = number
         state = snap.ok(prefix + "charging_state")
         if isinstance(state, str):
             present[CommandKind.CHARGING] = state == "Charging"
@@ -255,9 +287,10 @@ class TeslaActuator:
 
         ``None``, wenn die Aufgabe läuft; sonst der Grund, warum nicht gesendet wurde: Läuft für
         die Art noch ein Befehl, ist es ``REASON_RUNNING``. Prüft ``confirm`` denselben Strom noch
-        im Cache, ist es ``REASON_CHECKING``, höchstens bis ``CHECK_MARGIN_S`` vor der Frist des
-        Ausführers; ein anderer Strom ersetzt die Prüfung. Eine andere Art, einen Strom, der keine
-        endliche Zahl ist, und ein Laden, das kein Wahrheitswert ist, schickt der Aktor nie. Ob das
+        im Cache, ist es ``REASON_CHECKING``, beim Ladelimit ``REASON_CHECKING_LIMIT``, höchstens
+        bis ``CHECK_MARGIN_S`` vor der Frist des Ausführers; ein anderer Wert ersetzt die Prüfung.
+        Eine andere Art, einen Strom oder ein Ladelimit, das keine endliche Zahl ist, und ein
+        Laden, das kein Wahrheitswert ist, schickt der Aktor nie. Ob das
         Fahrzeug erreichbar ist, prüft der Ausführer mit ``capabilities``, bei einem Start mit
         Weckerlaubnis mit ``wake_capabilities``.
         """
@@ -268,13 +301,15 @@ class TeslaActuator:
         if running is not None and not running.done():
             return REASON_RUNNING
         name, params = request
-        amps = int(params["amps"]) if kind == CommandKind.CURRENT else None
+        checked = _CHECKED.get(kind)
+        wanted = None if checked is None else int(params[checked.param])
         check = self._checks.get(kind)
-        if check is not None and check.amps == amps and self._checking(check):
-            return REASON_CHECKING
+        if checked is not None and check is not None and check.value == wanted:
+            if self._checking(check):  # dieselbe Zahl wartet, ein anderer Wert ersetzt die Prüfung
+                return checked.checking
         self._tasks[kind] = asyncio.get_running_loop().create_task(self._command(name, params))
-        if amps is not None:
-            self._checks[kind] = _Check(amps, self._clock())
+        if wanted is not None:
+            self._checks[kind] = _Check(kind, wanted, self._clock())
         return None
 
     async def _command(self, name: str, params: dict[str, str]) -> tuple[Confirmation, str]:
@@ -339,7 +374,8 @@ class TeslaActuator:
 
         Das Ergebnis bleibt, bis das nächste ``send`` der Art es ersetzt. Ein abgebrochener Befehl
         ist gescheitert. Wurde für die Art nichts gesendet, bleibt es offen. Bestätigt ist, was
-        Tessie bestätigt; beim Strom prüft ``_verify`` das zusätzlich im Tessie-Cache.
+        Tessie bestätigt; beim Strom und beim Ladelimit prüft ``_verify`` das zusätzlich im
+        Tessie-Cache.
         """
         task = self._tasks.get(kind)
         if task is None or not task.done():
@@ -354,17 +390,19 @@ class TeslaActuator:
         return (Confirmation.PENDING, "") if check.outcome is None else check.outcome
 
     def _verify(self, check: _Check, snap: Snapshot) -> tuple[Confirmation, str] | None:
-        """Zeigt Tessie den bestätigten Strom? ``None``, solange die Prüfung wartet.
+        """Zeigt Tessie den bestätigten Wert (Strom oder Ladelimit)? ``None``, solange die Prüfung
+        wartet.
 
-        Es zählt die erste Meldung des Stroms mit Qualität ``OK`` und einer Zahl, die mindestens
-        ``settle_s`` nach dem ersten Snapshot mit der Bestätigung kam: Zeigt sie den Strom, ist er
-        bestätigt, sonst hat das Fahrzeug ihn nicht übernommen (``NOT_TAKEN``; kein Fehler von
-        Tessie, er zählt nicht). Ohne Signal im Snapshot gilt die Bestätigung von Tessie, ebenso
-        ohne solche Meldung bis ``verify_s`` nach der Bestätigung oder bis ``CHECK_MARGIN_S`` vor
-        der Frist des Ausführers. Die Wartezeiten laufen auf der Uhr des Aktors, die Meldungen
-        vergleicht die Prüfung nach den Zeitstempeln des Speichers.
+        Es zählt die erste Meldung des Werts mit Qualität ``OK`` und einer Zahl, die mindestens
+        ``settle_s`` nach dem ersten Snapshot mit der Bestätigung kam: Zeigt sie den Wert
+        (``matches`` der Art), ist er bestätigt, sonst hat das Fahrzeug ihn nicht übernommen
+        (``NOT_TAKEN``; kein Fehler von Tessie, er zählt nicht). Ohne Signal im Snapshot gilt die
+        Bestätigung von Tessie, ebenso ohne solche Meldung bis ``verify_s`` nach der Bestätigung
+        oder bis ``CHECK_MARGIN_S`` vor der Frist des Ausführers. Die Wartezeiten laufen auf der
+        Uhr des Aktors, die Meldungen vergleicht die Prüfung nach den Zeitstempeln des Speichers.
         """
-        reading = snap.get(f"vehicle.{self._key}.charge_amps")
+        checked = _CHECKED[check.kind]
+        reading = snap.get(f"vehicle.{self._key}.{checked.signal}")
         if reading is None:
             return Confirmation.CONFIRMED, ""
         now = self._clock()
@@ -372,9 +410,9 @@ class TeslaActuator:
             check.since, check.started = snap.ts, now
         reported = finite_number(reading.value) if reading.quality is Quality.OK else None
         if reported is not None and reading.ts >= check.since + timedelta(seconds=self.settle_s):
-            if matches(CommandKind.CURRENT, float(check.amps), reported):
+            if matches(check.kind, float(check.value), reported):
                 return Confirmation.CONFIRMED, ""
-            text = FAILURE_NOT_TAKEN.format(wanted=de(check.amps), reported=de(reported))
+            text = checked.not_taken.format(wanted=de(check.value), reported=de(reported))
             return Confirmation.NOT_TAKEN, text
         waited = now - check.started
         if waited >= timedelta(seconds=self.verify_s) or now >= self._check_end(check):

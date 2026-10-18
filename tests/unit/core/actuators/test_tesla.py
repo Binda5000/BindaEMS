@@ -1327,7 +1327,11 @@ async def test_the_cache_of_the_tessie_adapter_makes_the_car_controllable(
     cache = await tessie_cache(cfg, respx_mock, STATE)
     stray = stray_requests(respx_mock)  # nach der Abfrage des Adapters wäre jede Anfrage ungewollt
     assert car.capabilities(cache, T0) == Capabilities(True)
-    assert car.present(cache) == {CommandKind.CURRENT: 16, CommandKind.CHARGING: True}
+    assert car.present(cache) == {
+        CommandKind.CURRENT: 16,
+        CommandKind.CHARGING: True,
+        CommandKind.CHARGE_LIMIT: 80,
+    }
     await asyncio.sleep(0.01)
     assert not stray.called
     assert [call.request.method for call in respx_mock.calls] == ["GET"]  # nur die Abfrage
@@ -1356,7 +1360,8 @@ async def test_a_stopped_car_is_not_charging_in_the_tessie_cache(cfg, respx_mock
 
 async def test_a_missing_value_in_the_tessie_cache_is_unknown(cfg, respx_mock, car) -> None:
     state = changed()
-    del state["charge_state"]["charge_amps"], state["charge_state"]["charging_state"]
+    charge = state["charge_state"]
+    del charge["charge_amps"], charge["charging_state"], charge["charge_limit_soc"]
     cache = await tessie_cache(cfg, respx_mock, state)
     assert car.present(cache) == {}
 
@@ -1610,3 +1615,106 @@ async def test_without_a_check_time_only_tessie_counts(cfg, respx_mock) -> None:
         await asyncio.sleep(0.01)
         assert car.confirm(CommandKind.CURRENT, 5.0, cached(T0, 10)) == CONFIRMED
     assert route.call_count == 1
+
+
+# Ladelimit (Plan 4b, Präzisierung 9)
+
+LIMIT = "vehicle.tesla.charge_limit_pct"
+LIMIT_URL = command_url("set_charge_limit")
+
+
+def limit_cached(at: datetime, pct: Value, *, read_at: datetime | None = None) -> Snapshot:
+    """Snapshot zur Zeit ``at``: das Auto steht bereit, Tessie meldet das Ladelimit ``pct``."""
+    readings = {
+        LIMIT: Reading(pct, read_at or at, Quality.OK, "tessie:tesla", SignalKind.MEASUREMENT)
+    }
+    for name, value in HOME.items():
+        readings[name] = Reading(value, at, Quality.OK, "tessie:tesla", SignalKind.MEASUREMENT)
+    return Snapshot(at, readings)
+
+
+async def test_tesla_sends_set_charge_limit(cfg, respx_mock) -> None:
+    route = respx_mock.post(LIMIT_URL).respond(json={"result": True})
+    stray = stray_requests(respx_mock)
+    kind = CommandKind.CHARGE_LIMIT
+    async with httpx.AsyncClient() as client:
+        car = tesla(cfg, client, [T0])
+        assert car.send(kind, 80.0) is None
+        await asyncio.sleep(0.01)
+        # Tessie bestätigt; geprüft wird im Cache wie beim Strom, erst SETTLE_S danach
+        assert car.confirm(kind, 80.0, limit_cached(T0, 70, read_at=STALE)) == PENDING
+        early = SETTLED - timedelta(seconds=1)
+        assert car.confirm(kind, 80.0, limit_cached(early, 70)) == PENDING
+        assert car.confirm(kind, 80.0, limit_cached(SETTLED, 80)) == CONFIRMED
+        # ein zweites Mal: Der Cache zeigt weiter 70 %, das Auto hat das Limit nicht übernommen
+        assert car.send(kind, 80.0) is None
+        await asyncio.sleep(0.01)
+        assert car.confirm(kind, 80.0, limit_cached(T0, 70, read_at=STALE)) == PENDING
+        assert car.confirm(kind, 80.0, limit_cached(SETTLED, 70)) == (
+            Confirmation.NOT_TAKEN,
+            "Fahrzeug übernahm das Ladelimit 80 % nicht (Tessie meldet 70 %).",
+        )
+    assert not stray.called
+    assert route.call_count == 2
+    request = route.calls.last.request
+    assert request.url.path == f"/{VIN}/command/set_charge_limit"
+    assert sorted(request.url.params.multi_items()) == [
+        ("percent", "80"),
+        ("wait_for_completion", "true"),
+    ]
+
+
+async def test_the_limit_within_half_a_percent_counts_as_taken(cfg, respx_mock) -> None:
+    respx_mock.post(LIMIT_URL).respond(json={"result": True})
+    async with httpx.AsyncClient() as client:
+        car = tesla(cfg, client, [T0])
+        car.send(CommandKind.CHARGE_LIMIT, 80.0)
+        await asyncio.sleep(0.01)
+        assert car.confirm(CommandKind.CHARGE_LIMIT, 80.0, limit_cached(T0, 70, read_at=STALE)) == (
+            PENDING
+        )
+        assert car.confirm(CommandKind.CHARGE_LIMIT, 80.0, limit_cached(SETTLED, 80.5)) == CONFIRMED
+
+
+async def test_the_same_limit_waits_while_its_check_runs(cfg, respx_mock) -> None:
+    route = respx_mock.post(LIMIT_URL).respond(json={"result": True})
+    async with httpx.AsyncClient() as client:
+        car = tesla(cfg, client, [T0])
+        car.send(CommandKind.CHARGE_LIMIT, 80.0)
+        await asyncio.sleep(0.01)
+        assert car.confirm(CommandKind.CHARGE_LIMIT, 80.0, limit_cached(T0, 70, read_at=STALE)) == (
+            PENDING
+        )
+        assert car.send(CommandKind.CHARGE_LIMIT, 80.0) == (
+            "Prüfung des Ladelimits im Tessie-Cache läuft noch."
+        )
+        # die Prüfung des Ladelimits hält den Strom nicht auf
+        assert car.send(CommandKind.CURRENT, 10.0) is None
+        assert car.send(CommandKind.CHARGE_LIMIT, 90.0) is None
+        await asyncio.sleep(0.01)
+    assert [call.request.url.params["percent"] for call in route.calls] == ["80", "90"]
+
+
+@pytest.mark.parametrize(("pct", "sent"), [(80.0, "80"), (50, "50"), (79.6, "80")])
+async def test_the_limit_is_sent_in_whole_percent(cfg, respx_mock, pct, sent) -> None:
+    route = respx_mock.post(LIMIT_URL).respond(json={"result": True})
+    async with httpx.AsyncClient() as client:
+        assert tesla(cfg, client, [T0]).send(CommandKind.CHARGE_LIMIT, pct) is None
+        await asyncio.sleep(0.01)
+    assert route.calls.last.request.url.params["percent"] == sent
+
+
+@pytest.mark.parametrize("value", [None, True, float("nan"), "80"])
+async def test_an_unusable_limit_is_not_sent(car, stray, value) -> None:
+    assert car.send(CommandKind.CHARGE_LIMIT, value) == "Ungültiger Wert für „charge_limit“."
+    await asyncio.sleep(0.01)
+    assert not stray.called
+
+
+def test_present_reads_the_charge_limit(car) -> None:
+    state = readings(
+        {LIMIT: (80, Quality.OK), "vehicle.tesla.charging_state": ("Stopped", Quality.OK)}
+    )
+    assert car.present(state) == {CommandKind.CHARGE_LIMIT: 80, CommandKind.CHARGING: False}
+    for reading in ((80, Quality.STALE), (None, Quality.INVALID), (True, Quality.OK)):
+        assert car.present(readings({LIMIT: reading})) == {}

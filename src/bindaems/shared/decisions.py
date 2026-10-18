@@ -303,6 +303,8 @@ def _command_text(kind: CommandKind, value: CommandValue) -> str:
         return "Entladegrenze unbegrenzt" if number == -1 else f"Entladegrenze {shown} W"
     if kind == CommandKind.MIN_SOC:
         return f"Min-SOC {shown} %"
+    if kind == CommandKind.CHARGE_LIMIT:
+        return f"Ladelimit {shown} %"
     return f"{kind} {shown}"
 
 

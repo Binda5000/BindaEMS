@@ -132,3 +132,46 @@ def test_more_texts(limits) -> None:
     assert text(Command("victron", K.GRID_SETPOINT, 9000.0)) == (
         "Netz-Sollwert auf 8000 W begrenzt (maximaler Netzladesetpoint)."
     )
+
+
+# Ladelimit des Tesla (Plan 4b, Präzisierung 9): ganze Prozent von 50 bis 100
+CHARGE_LIMIT_CASES = [
+    (Command("vehicle.tesla", K.CHARGE_LIMIT, 49.0), None, ["range.invalid"], True),
+    (Command("vehicle.tesla", K.CHARGE_LIMIT, 101.0), 100.0, ["range.max"], False),
+    (Command("vehicle.tesla", K.CHARGE_LIMIT, 80.0), 80.0, [], False),
+    (Command("vehicle.tesla", K.CHARGE_LIMIT, 50), 50.0, [], False),
+    (Command("vehicle.tesla", K.CHARGE_LIMIT, 100.0), 100.0, [], False),
+    (Command("vehicle.tesla", K.CHARGE_LIMIT, 80.6), 80.0, ["range.integer"], False),
+    (Command("vehicle.tesla", K.CHARGE_LIMIT, 50.5), 50.0, ["range.integer"], False),
+    (
+        Command("vehicle.tesla", K.CHARGE_LIMIT, 49.9),
+        None,
+        ["range.integer", "range.invalid"],
+        True,
+    ),
+    (Command("vehicle.tesla", K.CHARGE_LIMIT, 120.5), 100.0, ["range.integer", "range.max"], False),
+    (Command("vehicle.tesla", K.CHARGE_LIMIT, True), None, ["value.invalid"], True),
+    (Command("vehicle.tesla", K.CHARGE_LIMIT, None), None, ["value.invalid"], True),
+    (Command("vehicle.tesla", K.CHARGE_LIMIT, float("nan")), None, ["value.invalid"], True),
+]
+
+
+@pytest.mark.parametrize(("command", "value", "codes", "reject"), CHARGE_LIMIT_CASES)
+def test_charge_limit_range(limits, command, value, codes, reject) -> None:
+    step = check_range(command, limits, None)
+    assert (step.value, [f.code for f in step.findings], step.reject) == (value, codes, reject)
+    assert type(step.value) is type(value)
+
+
+def test_charge_limit_texts(limits) -> None:
+    def texts(value):
+        return [
+            f.text
+            for f in check_range(
+                Command("vehicle.tesla", K.CHARGE_LIMIT, value), limits, None
+            ).findings
+        ]
+
+    assert texts(49.0) == ["Wert 49 % liegt außerhalb des zulässigen Bereichs."]
+    assert texts(101.0) == ["Auf den Höchstwert 100 % begrenzt."]
+    assert texts(80.6) == ["Auf ganze Prozent abgerundet: 80,6 % → 80 %."]

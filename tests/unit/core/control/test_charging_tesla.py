@@ -20,6 +20,7 @@ from bindaems.core.control.charge_modes import ModeDecision
 from bindaems.core.control.charging import ChargeController
 from bindaems.core.control.charging_tesla import AgainstMode
 from bindaems.core.control.executor import WriteResult
+from bindaems.core.control.foreign import WATCHED_KINDS
 from bindaems.core.control.peak_guard import NO_LIMITS, PeakLimits
 from bindaems.core.safety.limits import HardLimits
 from bindaems.core.safety.types import Outcome, Verdict
@@ -1397,4 +1398,167 @@ def test_a_self_starting_tesla_at_the_evcs_gets_the_stop_at_the_evcs(cfg) -> Non
                 "wallbox.evcs", CHARGING, False, urgent=True, reasons=("mode_off", "self_start")
             ),
         )
+    ]
+
+
+# --- Ladelimit (Plan 4b, Entscheidung 11, Präzisierung 9) -----------------------------------------
+
+LIMIT = CommandKind.CHARGE_LIMIT
+
+
+def tesla_planned(target: int = 80) -> Intent:
+    """Der Tesla in „Geplant“ mit dem Ziel ``target``; Abfahrt 18:00 (T0 ist 12:00)."""
+    entry = VehicleIntent(mode=ChargeMode.PLANNED, target_soc_pct=target, departure="18:00")
+    return Intent(version=1, control=True, vehicles={"tesla": entry})
+
+
+def synced(cfg):
+    return with_vehicle(cfg, "tesla", charge_limit_sync=True)
+
+
+def limit_at(pct: float | None, **kw):
+    """Der Tesla angesteckt, wach und zu Hause, mit dem Ladelimit ``pct`` im Auto."""
+    return tesla(plugged=True, charge_limit_pct=pct, **kw)
+
+
+def limits_of(found) -> list:
+    """Die Ladelimit-Befehle unter ``found`` (Befehle der Regelung)."""
+    return [x.command for x in found if x.command.kind == LIMIT]
+
+
+def set_limit(value: float) -> Command:
+    return Command("vehicle.tesla", LIMIT, value, reasons=("mode_planned", "charge_limit"))
+
+
+def limit_step(c, cfg, s: int, *, target: int = 80, pct: float | None = 70.0, judge=True, **kw):
+    """Ein Schritt mit dem Tesla in „Geplant“; die Befehle bekommen ein Dry-Run-Urteil."""
+    kw.setdefault("tesla_obs", limit_at(pct))
+    found = c.step(tesla_inputs(cfg, s, intent=tesla_planned(target), **kw))
+    if judge:
+        accept(c, found)
+    return limits_of(found)
+
+
+def test_charge_limit_once_per_session_and_target(cfg) -> None:  # Review Focus 3
+    sync = synced(cfg)
+    c = controller(sync)
+    assert limit_step(c, sync, 0) == [set_limit(80.0)]
+    # gleicher Ansteckvorgang und gleiches Ziel: kein zweiter, auch wenn der Cache noch 70 zeigt
+    assert limit_step(c, sync, 10) == []
+    assert limit_step(c, sync, 20, pct=60.0) == []  # in der Tesla-App geändert: bleibt
+    assert limit_step(c, sync, 30, target=90) == [set_limit(90.0)]
+    assert limit_step(c, sync, 40, target=40) == [set_limit(50.0)]  # nie unter 50 %
+    assert limit_step(c, sync, 50, target=40) == []
+    # Abstecken und wieder anstecken: ein neuer Vorgang, das Limit geht noch einmal hinaus
+    unplugged = tesla(charge_limit_pct=70.0)
+    assert (
+        limit_step(c, sync, 60, target=40, twc_obs=twc(connected=False), tesla_obs=unplugged) == []
+    )
+    assert limit_step(c, sync, 70, target=40) == [set_limit(50.0)]
+    # Sync aus: nie
+    plain = controller(cfg)
+    assert [limit_step(plain, cfg, s, target=t) for s, t in ((0, 80), (10, 90), (20, 40))] == [
+        [],
+        [],
+        [],
+    ]
+
+
+def test_limit_change_in_the_app_is_not_foreign() -> None:
+    assert CommandKind.CHARGE_LIMIT not in WATCHED_KINDS
+
+
+def test_charge_limit_goes_first_with_the_facts_of_the_car(cfg) -> None:
+    sync = synced(cfg)
+    found = controller(sync).step(
+        tesla_inputs(sync, 0, intent=tesla_planned(), tesla_obs=limit_at(70.0))
+    )
+    assert found[0].command == set_limit(80.0)
+    assert set(found[0].inputs) == {"surplus_w", "limit_a", "actual_current_a", "actual_charging"}
+
+
+def test_charge_limit_needs_an_awake_planned_plugged_car_with_a_known_limit(cfg) -> None:
+    sync = synced(cfg)
+    # schläft (nur weckbar): kein Limit, und es wird dafür nicht geweckt
+    assert limit_step(controller(sync), sync, 0, **ONLY_WAKEABLE) == []
+    # das Limit im Auto ist unbekannt
+    assert limit_step(controller(sync), sync, 0, pct=None) == []
+    # Tessie sieht das Auto nicht angesteckt
+    assert limit_step(controller(sync), sync, 0, tesla_obs=tesla(charge_limit_pct=70.0)) == []
+    # nicht in „Geplant“: Sofort, und Boost geht vor
+    now = Intent(version=1, control=True, vehicles={"tesla": VehicleIntent(mode=ChargeMode.NOW)})
+    found = controller(sync).step(tesla_inputs(sync, 0, intent=now, tesla_obs=limit_at(70.0)))
+    assert limits_of(found) == []
+    boost = VehicleIntent(
+        mode=ChargeMode.PLANNED, boost_until=T0 + timedelta(hours=1), target_soc_pct=80
+    )
+    boosted = Intent(version=1, control=True, vehicles={"tesla": boost})
+    c = controller(sync)
+    assert limits_of(c.step(tesla_inputs(sync, 0, intent=boosted, tesla_obs=limit_at(70.0)))) == []
+    assert c.health()[0]["mode"] == "boost"
+    # blockiert (offener Schreibvorgang): wartet, danach geht es hinaus
+    c = controller(sync)
+    assert limit_step(c, sync, 0, blocked=frozenset({("vehicle.tesla", LIMIT)})) == []
+    assert limit_step(c, sync, 10) == [set_limit(80.0)]
+
+
+def test_a_limit_the_car_already_has_is_done(cfg) -> None:
+    sync = synced(cfg)
+    c = controller(sync)
+    assert limit_step(c, sync, 0, pct=80.0) == []
+    assert limit_step(c, sync, 10, pct=60.0) == []  # danach in der App geändert: bleibt so
+    assert limit_step(c, sync, 20, target=90, pct=60.0) == [set_limit(90.0)]
+
+
+def test_a_limit_without_a_value_is_offered_again(cfg) -> None:
+    sync = synced(cfg)
+    c = controller(sync)
+    for outcome in (Outcome.DEFERRED, Outcome.REJECTED):
+        found = c.step(tesla_inputs(sync, 0, intent=tesla_planned(), tesla_obs=limit_at(70.0)))
+        (command,) = limits_of(found)
+        accept(c, found, outcome)
+        assert command == set_limit(80.0)
+    assert limit_step(c, sync, 10) == [set_limit(80.0)]
+    assert limit_step(c, sync, 20) == []
+
+
+def test_a_failed_or_not_taken_limit_is_requested_again(cfg) -> None:
+    sync = synced(cfg)
+    c = controller(sync)
+    assert limit_step(c, sync, 0) == [set_limit(80.0)]
+    c.note_result(WriteResult("vehicle.tesla", LIMIT, 80.0, DecisionResult.TIMEOUT, "x"))
+    assert limit_step(c, sync, 10) == [set_limit(80.0)]
+    text = "Fahrzeug übernahm das Ladelimit 80 % nicht (Tessie meldet 70 %)."
+    c.note_result(
+        WriteResult("vehicle.tesla", LIMIT, 80.0, DecisionResult.ERROR, text, not_taken=True)
+    )
+    retry = Command(
+        "vehicle.tesla", LIMIT, 80.0, reasons=("mode_planned", "charge_limit", "not_taken_retry")
+    )
+    assert limit_step(c, sync, 20) == [retry]
+    # Ein bestätigtes Ergebnis und eines mit anderem Wert ändern nichts
+    c.note_result(WriteResult("vehicle.tesla", LIMIT, 80.0, DecisionResult.OK, ""))
+    c.note_result(WriteResult("vehicle.tesla", LIMIT, 90.0, DecisionResult.ERROR, "x"))
+    assert limit_step(c, sync, 30) == []
+
+
+def test_a_pause_keeps_the_limit_but_a_change_of_mode_sends_it_again(cfg) -> None:
+    sync = synced(cfg)
+    c = controller(sync)
+    assert limit_step(c, sync, 0) == [set_limit(80.0)]
+    c.idle(T0 + timedelta(seconds=5))  # eine Pause der Regelung: Das Limit gilt weiter
+    assert limit_step(c, sync, 10) == []
+    c.forget({"wallbox.evcs"})  # andere Aktoren ändern nichts
+    assert limit_step(c, sync, 20) == []
+    c.forget({"vehicle.tesla"})  # etwa Dry-Run → live: Das Dry-Run-Urteil zählte nicht als gesendet
+    assert limit_step(c, sync, 30) == [set_limit(80.0)]
+
+
+def test_the_limit_respects_the_reserve_of_the_hourly_budget(cfg) -> None:
+    sync = synced(cfg)
+    reserve = 20 - sync.control.tesla_reserve_commands
+    c = controller(sync)
+    assert limit_step(c, sync, 0, commands_hour={"vehicle.tesla": reserve}) == []
+    assert limit_step(c, sync, 10, commands_hour={"vehicle.tesla": reserve - 1}) == [
+        set_limit(80.0)
     ]

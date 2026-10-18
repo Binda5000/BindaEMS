@@ -954,3 +954,36 @@ def test_refresh_does_not_touch_urgent_commands_of_other_kinds(layer, refresh) -
         (),
         True,
     )
+
+
+# Ladelimit des Tesla (Plan 4b, Präzisierung 9)
+
+
+def test_charge_limit_only_for_the_tesla(layer) -> None:
+    assert layer.authorize(Command("vehicle.tesla", K.CHARGE_LIMIT, 80.0), make_ctx()).sendable
+    for actuator, label in (("wallbox.evcs", "EVCS „evcs“"), ("victron", "Victron (ESS)")):
+        verdict = layer.authorize(Command(actuator, K.CHARGE_LIMIT, 80.0), make_ctx())
+        assert (verdict.outcome, verdict.findings[-1].text) == (
+            Outcome.REJECTED,
+            f"„{label}“ kennt den Befehl „charge_limit“ nicht.",
+        )
+
+
+def test_charge_limit_is_never_urgent(layer) -> None:
+    command = Command("vehicle.tesla", K.CHARGE_LIMIT, 50.0, urgent=True)
+    present = {("vehicle.tesla", K.CHARGE_LIMIT): 90.0}
+    verdict = layer.authorize(command, make_ctx(operating=OperatingState.SAFE, present=present))
+    assert verdict.outcome is Outcome.REJECTED
+    assert [f.code for f in verdict.findings] == ["urgent.ignored", "state.inactive"]
+
+
+def test_charge_limit_passes_full_phases_unchanged(layer) -> None:
+    full = make_ctx(phase_import_a=dict.fromkeys(PHASES, 40.0))
+    verdict = layer.authorize(Command("vehicle.tesla", K.CHARGE_LIMIT, 100.0), full)
+    assert (verdict.outcome, verdict.value, verdict.findings) == (Outcome.ACCEPTED, 100.0, ())
+
+
+def test_charge_limit_does_not_use_the_write_budget(layer, tmp_path: Path) -> None:
+    for i in range(13):  # mehr als das Schreibbudget von 12 je Stunde
+        command = Command("vehicle.tesla", K.CHARGE_LIMIT, 50.0 + i)
+        assert layer.authorize(command, make_ctx(now=S(600 * i))).sendable

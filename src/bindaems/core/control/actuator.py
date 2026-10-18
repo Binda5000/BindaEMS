@@ -32,6 +32,7 @@ _TOLERANCE: Final = {
     CommandKind.GRID_SETPOINT: 1.0,  # W
     CommandKind.MAX_DISCHARGE: 1.0,  # W
     CommandKind.MIN_SOC: 0.5,  # %
+    CommandKind.CHARGE_LIMIT: 0.5,  # % (Plan 4b, Präzisierung 9)
 }
 # Rundungsfehler bei Zahlen wie 6.4 − 6.0 sollen den Rand des Bands nicht ausschließen.
 _ROUNDING: Final = 1e-9
@@ -144,6 +145,7 @@ def matches(kind: CommandKind, wanted: CommandValue, actual: CommandValue) -> bo
     - ``max_discharge``: ±1 W; −1 (unbegrenzt) passt nur zu −1, denn es ist kein Leistungswert und
       läge sonst im Band um 0 W (Entladen gesperrt)
     - ``min_soc``: ±0,5 %
+    - ``charge_limit``: ±0,5 %
 
     Werte vom falschen Typ passen nie, auch nicht zu sich selbst: ein ``bool`` ist keine Zahl,
     NaN und ±∞ sind keine Zahlen, und eine Zahl ist kein Wahrheitswert. ``None`` passt nur zu

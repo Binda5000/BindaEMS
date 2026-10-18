@@ -327,6 +327,8 @@ def test_text_variants(
         (CommandKind.MAX_DISCHARGE, -1, "Entladegrenze unbegrenzt"),
         (CommandKind.MIN_SOC, 20.5, "Min-SOC 20,5 %"),
         (CommandKind.MIN_SOC, 30, "Min-SOC 30 %"),
+        (CommandKind.CHARGE_LIMIT, 80.0, "Ladelimit 80 %"),
+        (CommandKind.CHARGE_LIMIT, 50, "Ladelimit 50 %"),
     ],
 )
 def test_command_text_per_kind(kind: CommandKind, value: Any, expected: str) -> None:

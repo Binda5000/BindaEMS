@@ -96,6 +96,11 @@ Dazu legt die Regelung fest:
   einem gültigen Slot, der für das Auto 0 W nennt oder es nicht nennt. Am Ziel
   (``reached``) stoppt es wie „geladen“ und lädt auch keinen Überschuss (``target_reached``).
   Boost geht vor.
+- Ladelimit (Plan 4b, Präzisierung 9; ``ChargeLimits``): Mit ``charge_limit_sync`` bekommt ein
+  Tesla in „Geplant“ an einem geregelten Ladepunkt einmal je (Ansteckvorgang, Ziel) das Ladelimit
+  ``max(Ziel, 50)``, vor seinen anderen Befehlen, mit dem Grund ``charge_limit``. Er geht nur an
+  ein steuerbares (waches) Auto, nie mit Weckerlaubnis, wartet bei blockierter Art und hält wie
+  ein Strombefehl die Reserve des Stundenbudgets frei.
 - An einer EVCS hält die Verteilung den zuletzt angeforderten Strom (Hysterese
   ``control.evcs_hysteresis_a``, Design 6.5): Er sinkt sofort mit dem Anteil, steigt aber erst,
   wenn der Anteil ihn um 1 A plus die Hysterese übersteigt. Ohne eigenen Wert (nach dem Start, nach
@@ -147,6 +152,7 @@ from bindaems.core.control.charging_tesla import (
     SELF_START,
     WAKE,
     AgainstMode,
+    ChargeLimits,
     EvcsOverrides,
     TeslaPolicy,
     maximum_command,
@@ -194,6 +200,7 @@ ChargeCommand = ControlCommand  # der Name der Laderegelung für ihren Befehl
 
 _CURRENT: Final = CommandKind.CURRENT
 _CHARGING: Final = CommandKind.CHARGING
+_LIMIT: Final = CommandKind.CHARGE_LIMIT
 # Wunsch aus dem Anteil; „Geplant“ ohne festen Bedarf
 _SURPLUS_MODES: Final = frozenset({Effective.PV, Effective.MIN_PV, Effective.PLANNED})
 _PV_LIKE: Final = frozenset({Effective.PV, Effective.PLANNED})  # ladend halten sie ``min_a``
@@ -412,6 +419,7 @@ class ChargeController:
         self._plug_numbers = itertools.count(1)
         self._soc = SocTracker()
         self._planned = PlannedTracker()
+        self._charge_limits = ChargeLimits()  # das Ladelimit des Tesla je Vorgang und Ziel
 
     @property
     def intent_version(self) -> int | None:
@@ -550,6 +558,9 @@ class ChargeController:
                 else []
             )
             found += self._regulate(now, point, actuator, situation, inputs)
+            charge_limit = self._limit(key, vehicle, plan, obs, inputs) if key in socs else None
+            if charge_limit is not None:  # das Ladelimit vor den anderen Befehlen des Autos
+                found.insert(0, charge_limit)
             if found and key in self._fresh:  # der erste Zyklus mit Befehlen seit der Erkennung
                 found = [replace(c, reasons=(*c.reasons, ASSIGNMENT_DETECTED)) for c in found]
                 self._fresh.discard(key)
@@ -590,11 +601,15 @@ class ChargeController:
 
         Ein Weckstart (``Command.wake``) mit einem Urteil mit Wert zählt im Weckkontingent, live wie
         im Dry-Run und auch mit ``not_sent`` (Präzisierung 12); die Zeit ist die des letzten
-        ``step``.
+        ``step``. Ein Ladelimit, das den letzten eigenen Wert setzt, ist für seinen Ansteckvorgang
+        und sein Ziel erledigt (``ChargeLimits``).
         """
         started = command.kind is _CHARGING and command.value is True
-        if self._last.judged(command, verdict, not_sent=not_sent) and started:
+        judged = self._last.judged(command, verdict, not_sent=not_sent)
+        if judged and started:
             self._resume -= {key for key, actor in self._regulated if actor == command.actuator}
+        if judged and command.kind is _LIMIT:
+            self._charge_limits.judged(command.actuator, command.value)
         if command.wake and verdict is not None and verdict.sendable:
             self._tesla[self._vehicles[command.actuator]].note_wake(self._now, self._wall_now)
 
@@ -604,9 +619,11 @@ class ChargeController:
         ``ERROR``, ``TIMEOUT`` und ``NOT_SENT`` löschen den letzten eigenen Wert dieser Art, aber
         nur, wenn er dem Ergebnis entspricht: Befehle des Keepers mit anderem Wert bleiben ohne
         Wirkung. Trägt das Ergebnis ``not_taken``, nennt der nächste Befehl dieser Art zusätzlich
-        ``not_taken_retry`` und ist normal, nie dringend (Design 7.2).
+        ``not_taken_retry`` und ist normal, nie dringend (Design 7.2). Ein gescheitertes Ladelimit
+        ist danach wieder offen (``ChargeLimits``).
         """
         self._last.finished(result)
+        self._charge_limits.finished(result)
 
     def idle(self, now: datetime) -> None:
         """Ein Zyklus ohne Regelung (Präzisierung 9): Die Regelung vergisst ihre letzten Befehle.
@@ -650,9 +667,11 @@ class ChargeController:
         antwortet die Safety-Schicht ``UNCHANGED``. Die Laufzeit ruft das, wo der letzte eigene Wert
         nicht mehr gilt: beim Wechsel der wirksamen Betriebsart (Dry-Run ↔ live), denn ein
         Dry-Run-Urteil zählte sonst als gesendet, und wenn sich das Gerät ohne die Regelung ändert
-        (ein Wert des Keepers, ein anderes System übernimmt den Aktor).
+        (ein Wert des Keepers, ein anderes System übernimmt den Aktor). Auch das Ladelimit dieser
+        Aktoren gilt dann als offen (``ChargeLimits``); ``idle`` lässt es erledigt.
         """
         self._last.forget(actuators)
+        self._charge_limits.forget(actuators)
 
     def cars(self) -> tuple[CarView, ...]:
         """Je Ladepunkt des letzten ``step`` sein Auto, in der Reihenfolge der Priorität.
@@ -854,6 +873,44 @@ class ChargeController:
         elif state.state == "due":
             reserved_w = full_w
         return _Planned(state, reserved_w)
+
+    def _limit(
+        self,
+        key: str,
+        vehicle: VehicleState,
+        plan: _Planned | None,
+        obs: VehicleObs,
+        inputs: ChargeInputs,
+    ) -> Command | None:
+        """Das Ladelimit des Fahrzeugs ``key`` (``ChargeLimits``, Plan 4b, Präzisierung 9).
+
+        Der Ansteckvorgang ist der der Wallbox, an der das Fahrzeug steht. Zurückgehalten wird es,
+        solange der Aktor nicht steuerbar ist (es weckt nicht), die Art blockiert ist oder der
+        Tesla die Reserve seines Stundenbudgets erreicht hat (wie ``_reserved``).
+        """
+        actuator = vehicle_actuator(key)
+        plug = None if vehicle.wallbox is None else self._plugs.get(vehicle.wallbox)
+        commands = self._limits.vehicle_commands.get(actuator)
+        used = inputs.commands_hour.get(actuator)
+        reserve = (
+            commands is not None
+            and used is not None
+            and used >= commands.per_hour - self._cfg.control.tesla_reserve_commands
+        )
+        blocked = (
+            inputs.controllable.get(actuator) is not True
+            or (actuator, _LIMIT) in inputs.blocked
+            or reserve
+        )
+        return self._charge_limits.limit_command(
+            self._cfg,
+            self._last,
+            key,
+            None if plan is None else plan.state,
+            obs,
+            None if plug is None else plug.number,
+            blocked,
+        )
 
     def _allocate(
         self,

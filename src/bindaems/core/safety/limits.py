@@ -27,6 +27,8 @@ _VICTRON_KINDS = frozenset(
     {CommandKind.GRID_SETPOINT, CommandKind.MAX_DISCHARGE, CommandKind.MIN_SOC}
 )
 _CHARGING_KINDS = frozenset({CommandKind.CURRENT, CommandKind.CHARGING})
+# Der Tesla kennt dazu das Ladelimit (Plan 4b, Präzisierung 9)
+_TESLA_KINDS = _CHARGING_KINDS | {CommandKind.CHARGE_LIMIT}
 
 
 @dataclass(frozen=True)
@@ -121,7 +123,7 @@ class HardLimits:
                 continue
             actuator = vehicle_actuator(key)
             actuators[actuator] = ActuatorSpec(
-                actuator, "tesla", vehicle.name, _CHARGING_KINDS, vehicle.live_allowed, False
+                actuator, "tesla", vehicle.name, _TESLA_KINDS, vehicle.live_allowed, False
             )
             currents[actuator] = CurrentRange(vehicle.min_a, vehicle.max_a, vehicle.min_a)
             vehicle_commands[actuator] = vehicle.commands
@@ -199,6 +201,7 @@ def toward_safe(command: Command, ctx: SafetyContext, limits: HardLimits) -> boo
       unbekanntem Basis-Sollwert (``None``, NaN, ±∞) gilt nur ``None``
     - ``max_discharge``: Wert ist −1, oder der bekannte Ist-Wert ist ≥ 0 und Wert ≥ Ist-Wert
     - ``min_soc``: Wert ist die Reserve, oder der Ist-Wert ist bekannt und Reserve ≤ Wert ≤ Ist-Wert
+    - ``charge_limit``: nie; das Ladelimit ist nie dringend (Plan 4b, Präzisierung 9)
 
     Befehlsarten werden mit ``==`` verglichen: Eine Art als gleicher Text gilt als diese Art.
     """

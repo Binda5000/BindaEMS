@@ -196,7 +196,14 @@ export const DecisionSchema = v.object({
 	id: v.string(),
 	ts: Iso,
 	actuator: v.string(),
-	kind: v.picklist(['current', 'charging', 'grid_setpoint', 'max_discharge', 'min_soc']),
+	kind: v.picklist([
+		'current',
+		'charging',
+		'grid_setpoint',
+		'max_discharge',
+		'min_soc',
+		'charge_limit'
+	]),
 	requested: v.nullable(v.union([v.number(), v.boolean()])),
 	applied: v.nullable(v.union([v.number(), v.boolean()])),
 	dry_run: v.boolean(),

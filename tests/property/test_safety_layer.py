@@ -59,7 +59,7 @@ TARGETS = (VICTRON, EVCS, TESLA, TWC)
 KINDS = {  # Aktorkatalog: Der Wall Connector ist kein Aktor
     VICTRON: (K.GRID_SETPOINT, K.MAX_DISCHARGE, K.MIN_SOC),
     EVCS: (K.CURRENT, K.CHARGING),
-    TESLA: (K.CURRENT, K.CHARGING),
+    TESLA: (K.CURRENT, K.CHARGING, K.CHARGE_LIMIT),
 }
 PHASE_LIMIT_A = CFG.grid.fuse_a - CFG.grid.fuse_margin_a
 VOLTAGE_V = CFG.grid.voltage_nominal_v
@@ -79,7 +79,9 @@ INTERVAL_S = {  # Mindestabstände je Aktor und Art; Tesla-Start/Stopp und persi
     (EVCS, K.CHARGING): 5.0,
     (VICTRON, K.GRID_SETPOINT): 2.0,
     (TESLA, K.CURRENT): TESLA_LIMITS.current_interval_s,
+    (TESLA, K.CHARGE_LIMIT): 600.0,  # Ladelimit (Plan 4b, Präzisierung 9)
 }
+CHARGE_LIMIT_PCT = (50, 100)  # ganze Prozent; darunter abgelehnt, darüber geklemmt
 HOUR_S, DAY_S = 3600.0, 86400.0
 
 
@@ -136,6 +138,9 @@ def in_range(command: Command, value: object, budget_w: float | None) -> bool:
         return number_ == -1 or 0 <= number_ <= MAX_DISCHARGE_W
     if kind == K.MIN_SOC:
         return RESERVE <= number_ <= 100
+    if kind == K.CHARGE_LIMIT:
+        low, high = CHARGE_LIMIT_PCT
+        return number_.is_integer() and low <= number_ <= high
     return False
 
 
@@ -163,7 +168,7 @@ def safer(command: Command, ctx: SafetyContext) -> bool:
         return value == -1 or (known and actual >= 0 and value >= actual)
     if kind == K.MIN_SOC:
         return value == RESERVE or (known and RESERVE <= value <= actual)
-    return False
+    return False  # das Ladelimit ist nie Richtung sicher: nie dringend
 
 
 def setpoint_before(ctx: SafetyContext) -> float | None:
@@ -199,7 +204,7 @@ def is_increase(command: Command, value: object, ctx: SafetyContext) -> bool:
         return not known or actual == -1 or actual > value  # Verschärfung bei unbekanntem D
     if kind == K.MIN_SOC:
         return value > RESERVE and (ctx.soc_pct is None or value > ctx.soc_pct)
-    return False
+    return False  # das Ladelimit zieht keinen Strom
 
 
 def wallbox(actuator: str, ctx: SafetyContext) -> tuple[list[str], dict[str, float]]:
@@ -319,6 +324,7 @@ VALUES = {  # meist ein Wert in der Nähe der Grenzen der Art, sonst irgendeiner
         (1, ANY_VALUE),
     ),
     K.MIN_SOC: mixed((3, st.integers(20, 100)), (2, st.floats(15, 105)), (1, ANY_VALUE)),
+    K.CHARGE_LIMIT: mixed((3, st.integers(40, 110)), (2, st.floats(45, 105)), (1, ANY_VALUE)),
 }
 PAIRS = [(actuator, kind) for actuator, kinds in KINDS.items() for kind in kinds]
 STRAYS = [  # an den Wall Connector (kein Aktor) oder in einer Art, die der Aktor nicht kennt
@@ -391,6 +397,7 @@ PRESENT = {  # typgerecht wie die Rücklesewerte der Aktoren ab 2b; None nur bei
     (EVCS, K.CHARGING): st.booleans(),
     (TESLA, K.CURRENT): st.integers(0, 32) | st.floats(-5, 40),
     (TESLA, K.CHARGING): st.booleans(),
+    (TESLA, K.CHARGE_LIMIT): st.integers(50, 100) | st.floats(0, 100),
 }
 KNOWN = st.booleans()
 DISCHARGE_W = mixed((4, st.floats(1, 15_000)), (1, st.floats(0, 15_000)), (1, st.none()))
@@ -556,6 +563,7 @@ NEAR_OFFSETS = {
     K.CURRENT: (0.0, 0.5, -0.5, 1.0, -1.0, 2.0, -2.0, 3.0),  # A, Totband EVCS 1 A, Tesla 2 A
     K.MAX_DISCHARGE: (0.0, 10.0, -10.0, 300.0),  # W, ohne Totband, aber „gleicher Wert“
     K.MIN_SOC: (0.0, 0.5, -0.5, 5.0),  # %, ohne Totband, aber „gleicher Wert“
+    K.CHARGE_LIMIT: (0.0, 1.0, -1.0, 10.0),  # %, ohne Totband, aber „gleicher Wert“
 }
 SETPOINT = (VICTRON, K.GRID_SETPOINT)
 
@@ -623,6 +631,7 @@ PREVIOUS = {  # ein harmloser Befehl derselben Art, der im großzügigen Kontext
     (EVCS, K.CHARGING): Command(EVCS, K.CHARGING, False),
     (TESLA, K.CURRENT): Command(TESLA, K.CURRENT, 5.0),
     (TESLA, K.CHARGING): Command(TESLA, K.CHARGING, False),
+    (TESLA, K.CHARGE_LIMIT): Command(TESLA, K.CHARGE_LIMIT, 80.0),
     (VICTRON, K.GRID_SETPOINT): Command(VICTRON, K.GRID_SETPOINT, None),
 }
 
@@ -777,6 +786,7 @@ RATE_COMMAND = mixed(
     (1, st.booleans().map(lambda on: Command(EVCS, K.CHARGING, on))),
     (3, st.floats(5, 16).map(lambda a: Command(TESLA, K.CURRENT, a))),
     (2, st.booleans().map(lambda on: Command(TESLA, K.CHARGING, on))),
+    (1, st.integers(50, 100).map(lambda pct: Command(TESLA, K.CHARGE_LIMIT, pct))),
     (2, st.floats(0, 8_000).map(lambda w: Command(VICTRON, K.GRID_SETPOINT, w))),
     (1, st.floats(0, 8_000).map(lambda w: Command(VICTRON, K.GRID_SETPOINT, w, refresh=True))),
 )

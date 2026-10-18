@@ -44,7 +44,9 @@ NOT_TAKEN_RETRY: Final = "not_taken_retry"  # erneut nach „nicht übernommen�
 Key = tuple[str, CommandKind]  # Aktor und Art
 
 # Diese Ergebnisse löschen den letzten eigenen Wert: Das Gerät hat ihn vielleicht nicht.
-_FAILED: Final = frozenset({DecisionResult.ERROR, DecisionResult.TIMEOUT, DecisionResult.NOT_SENT})
+FAILED_RESULTS: Final = frozenset(
+    {DecisionResult.ERROR, DecisionResult.TIMEOUT, DecisionResult.NOT_SENT}
+)
 
 
 @dataclass(frozen=True)
@@ -148,7 +150,7 @@ class LastValues:
         """Das Ergebnis eines gesendeten Befehls (``note_result`` der Regelung)."""
         key = (result.actuator, result.kind)
         last = self._sent.get(key)
-        if result.result not in _FAILED or last is None or last.applied != result.value:
+        if result.result not in FAILED_RESULTS or last is None or last.applied != result.value:
             return
         del self._sent[key]
         if result.not_taken:

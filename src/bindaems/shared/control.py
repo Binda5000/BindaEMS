@@ -39,9 +39,11 @@ class CommandKind(StrEnum):
     GRID_SETPOINT = "grid_setpoint"  # Netz-Sollwert in W; None hebt den Override auf
     MAX_DISCHARGE = "max_discharge"  # Entladegrenze in W; −1 = unbegrenzt
     MIN_SOC = "min_soc"  # Victron-Min-SOC in %
+    CHARGE_LIMIT = "charge_limit"  # Ladelimit des Tesla in %, ganzzahlig (Plan 4b)
 
 
-# Persistente Arten bleiben im Gerät gespeichert; für sie gilt das Schreibbudget (Regel 6).
+# Persistente Arten bleiben im Gerät gespeichert; für sie gilt das Schreibbudget (Regel 6). Das
+# Ladelimit bleibt zwar im Auto, für es gelten aber Mindestabstand und Stundenlimit des Tesla.
 PERSISTENT_KINDS: frozenset[CommandKind] = frozenset(
     {CommandKind.MAX_DISCHARGE, CommandKind.MIN_SOC}
 )

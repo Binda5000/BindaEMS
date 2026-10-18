@@ -10,7 +10,9 @@ Die Bausteine, die ``ChargeController`` für Fahrzeuge mit Tessie braucht (Präz
   Weckerlaubnis, jeweils als Befehl
 - ``tessie_current``: der Strom, den Tessie meldet, auf den Phasen der Wallbox
 - ``AgainstMode``: wie lange ein Fahrzeug gegen seinen Modus lädt (Selbststart)
-- die Gründe ``wake``, ``assignment_unclear``, ``assignment_detected`` und ``self_start``
+- ``ChargeLimits``: das Ladelimit des Tesla in „Geplant“, einmal je Ansteckvorgang und Ziel
+- die Gründe ``wake``, ``assignment_unclear``, ``assignment_detected``, ``self_start`` und
+  ``charge_limit``
 
 Tesla, Zuordnung und Wiederaufnahme (Design 7 bis 9; ``ChargeController`` verbindet die Bausteine):
 
@@ -35,6 +37,10 @@ Tesla, Zuordnung und Wiederaufnahme (Design 7 bis 9; ``ChargeController`` verbin
   ohne Unterbrechung gegen seinen Modus, vergisst die Regelung ihren letzten Wert für ``charging``;
   so geht „Laden aus“ erneut hinaus, mit dem Grund ``self_start``, höchstens alle
   ``control.tesla_against_retry_s``. Ein neuer Vorgang und ``idle`` beginnen neu.
+- Ladelimit (Plan 4b, Entscheidung 11, Präzisierung 9): Mit ``charge_limit_sync`` setzt die
+  Regelung in „Geplant“ das Ladelimit eines angesteckten, wachen Tesla auf ``max(Ziel, 50)``,
+  höchstens einmal je (Ansteckvorgang, Ziel), nie mit Weckerlaubnis und nie dringend. Eine Änderung
+  in der Tesla-App danach ist keine fremde Änderung; das alte Limit wird nicht zurückgestellt.
 - Solange die Zuordnung unklar ist (Präzisierung 5), gibt es kein „Laden an/aus“ nach dem Modus;
   der Strom sinkt nur, wenn der Wächter weniger als den Ist-Strom erlaubt, nie unter den
   Mindeststrom. Die Gründe sind ``(Modus, "assignment_unclear", Ursache)``. Die Überlast setzt
@@ -51,18 +57,22 @@ Kalendertag des Weckkontingents gilt nach der Wanduhr.
 from __future__ import annotations
 
 import math
-from collections.abc import Mapping
+from collections.abc import Collection, Mapping
 from datetime import datetime
 from typing import Final
 
+from bindaems.core.control.actuator import matches
 from bindaems.core.control.assignment import AssignmentKind, VehicleState
 from bindaems.core.control.charge_inputs import ChargeInputs, VehicleObs
 from bindaems.core.control.charge_modes import MODE_CODES, Effective
-from bindaems.core.control.last_values import Key, LastValues
+from bindaems.core.control.executor import WriteResult
+from bindaems.core.control.last_values import FAILED_RESULTS, Key, LastValues
 from bindaems.core.control.phase_guard import SlidingMin
+from bindaems.core.control.planned import PlannedState
 from bindaems.core.control.tesla_policy import MovingAverage, WakeQuota
 from bindaems.shared.config import Config, ControlConfig, EvcsConfig, Phase, PhaseMap, WakeConfig
-from bindaems.shared.control import Command, CommandKind, vehicle_actuator
+from bindaems.shared.control import Command, CommandKind, CommandValue, vehicle_actuator
+from bindaems.shared.numbers import finite_number
 
 WAKE: Final = "wake"  # ein Start mit Weckerlaubnis
 ASSIGNMENT_UNCLEAR: Final = "assignment_unclear"  # die Zuordnung ist unklar (Präzisierung 5)
@@ -70,6 +80,8 @@ ASSIGNMENT_UNCLEAR: Final = "assignment_unclear"  # die Zuordnung ist unklar (Pr
 ASSIGNMENT_DETECTED: Final = "assignment_detected"
 # der Befehl folgt aus einem Auto, das gegen seinen Modus lädt (Plan 2d, Präzisierung 10)
 SELF_START: Final = "self_start"
+CHARGE_LIMIT: Final = "charge_limit"  # das Ladelimit des Tesla (Plan 4b, Präzisierung 9)
+LIMIT_MIN_PCT: Final = 50  # tiefstes Ladelimit, das die Regelung setzt (Entscheidung 11)
 
 # So steht ein Fahrzeug „an der EVCS“ (Plan 2c-2b, Präzisierung 7)
 _AT_THE_EVCS: Final = frozenset({AssignmentKind.OVERRIDE, AssignmentKind.DETECTED})
@@ -205,6 +217,84 @@ class AgainstMode:
         """Ein neuer Vorgang oder eine Pause: ``key`` beginnt neu, ohne Neuversuch davor."""
         self._since.pop(key, None)
         self._retried.pop(key, None)
+
+
+class ChargeLimits:
+    """Das Ladelimit des Tesla in „Geplant“ (Plan 4b, Entscheidung 11, Präzisierung 9).
+
+    Je Fahrzeug-Aktor merkt sich die Klasse, für welchen Ansteckvorgang und welchen Wert das
+    Ladelimit erledigt ist: Es ging mit einem Urteil mit Wert oder ``UNCHANGED`` hinaus (auch im
+    Dry-Run), oder das Auto hatte es schon. Danach kommt für denselben (Vorgang, Wert) kein Befehl
+    mehr, auch wenn das Limit im Auto sich ändert (die Tesla-App ist kein fremder Eingriff) und
+    auch nach einer Pause der Regelung. Ein neuer Vorgang oder ein anderes Ziel gibt einen neuen.
+
+    Wieder offen ist es nach einem gescheiterten Ergebnis mit diesem Wert (``ERROR``, ``TIMEOUT``,
+    ``NOT_SENT``, auch „nicht übernommen“) und für die Aktoren von ``forget``: Die Laufzeit ruft das
+    etwa beim Wechsel der Betriebsart (Dry-Run ↔ live), denn ein Dry-Run-Urteil sendet nichts.
+    """
+
+    def __init__(self) -> None:
+        self._asked: dict[
+            str, tuple[int, float]
+        ] = {}  # Aktor → (Vorgang, Wert) des letzten Befehls
+        self._done: dict[str, tuple[int, float]] = {}  # Aktor → (Vorgang, Wert), erledigt
+
+    def limit_command(
+        self,
+        cfg: Config,
+        last: LastValues,
+        key: str,
+        planned: PlannedState | None,
+        obs: VehicleObs,
+        session: int | None,
+        blocked: bool,
+    ) -> Command | None:
+        """Der Befehl für das Ladelimit des Fahrzeugs ``key``, sonst ``None``.
+
+        Er kommt mit ``charge_limit_sync``, in „Geplant“ an einer Wallbox (``planned``), in einem
+        Ansteckvorgang ``session``, wenn Tessie das Auto angesteckt und sein Ladelimit meldet und
+        dieses nicht ``max(Ziel, 50)`` ist (``matches``, ±0,5 %), höchstens einmal je (Vorgang,
+        Wert). ``blocked`` hält ihn diesen Zyklus zurück (Aktor nicht steuerbar, Art blockiert,
+        Reserve des Stundenbudgets); er kommt dann im nächsten. Gründe: der Modus, dann
+        ``charge_limit``; nach „nicht übernommen“ dazu ``not_taken_retry`` (``LastValues``).
+        """
+        if not cfg.vehicles[key].charge_limit_sync or planned is None or session is None:
+            return None
+        limit = finite_number(obs.charge_limit_pct)
+        if obs.plugged is not True or limit is None:
+            return None
+        actuator = vehicle_actuator(key)
+        value = float(max(round(planned.target_soc_pct), LIMIT_MIN_PCT))
+        if self._done.get(actuator) == (session, value):
+            return None
+        if matches(CommandKind.CHARGE_LIMIT, value, limit):  # das Auto hat es schon
+            self._done[actuator] = (session, value)
+            return None
+        if blocked:
+            return None
+        self._asked[actuator] = (session, value)
+        reasons = (MODE_CODES[Effective.PLANNED], CHARGE_LIMIT)
+        return last.command(actuator, CommandKind.CHARGE_LIMIT, value, reasons)
+
+    def judged(self, actuator: str, value: CommandValue) -> None:
+        """Ein Urteil mit Wert oder ``UNCHANGED`` über den Befehl mit ``value``: erledigt."""
+        asked = self._asked.get(actuator)
+        if asked is not None and asked[1] == value:
+            self._done[actuator] = asked
+
+    def finished(self, result: WriteResult) -> None:
+        """Ein gescheitertes Ergebnis mit dem erledigten Wert macht das Ladelimit wieder offen."""
+        done = self._done.get(result.actuator)
+        if result.kind != CommandKind.CHARGE_LIMIT or done is None:
+            return
+        if result.result in FAILED_RESULTS and finite_number(result.value) == done[1]:
+            del self._done[result.actuator]
+
+    def forget(self, actuators: Collection[str]) -> None:
+        """Diese Aktoren bekommen das Ladelimit wieder, wenn es nicht stimmt."""
+        for actuator in actuators:
+            self._done.pop(actuator, None)
+            self._asked.pop(actuator, None)
 
 
 def maximum_command(
