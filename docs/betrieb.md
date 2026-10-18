@@ -661,9 +661,11 @@ Zählern, und beim Start erst nach dem ersten Nachtrag der Abrechnung (höchsten
   app nicht (Warnung „Lücke zu lang für eine Nachrechnung“).
 - **Nur, was der Nachtrag schon gelesen hat:** Die app schätzt nur in dem Zeitraum, den der Nachtrag
   der Abrechnung lückenlos aus InfluxDB gelesen hat, damit keine Schätzung entsteht, wo echte Daten
-  liegen. Der erste Nachtrag nach dem Start liest deshalb ab Mitternacht vor 7 Tagen. Gelang noch kein
-  Nachtrag (InfluxDB nicht erreichbar), schätzt die app in dieser Nacht nichts (Log „Nachrechnung der
-  Lücken wartet auf den ersten Nachtrag der Abrechnung“).
+  liegen. Der erste Nachtrag nach dem Start liest deshalb ab Mitternacht vor 7 Tagen, danach stündlich
+  die letzten 6 Stunden. Sind stündliche Nachträge gescheitert, beginnt der nächste dort, wo der
+  gelesene Zeitraum endet (höchstens Mitternacht vor 7 Tagen), so bleibt keine Stunde dazwischen
+  ungelesen. Gelang noch kein Nachtrag (InfluxDB nicht erreichbar), schätzt die app in dieser Nacht
+  nichts (Log „Nachrechnung der Lücken wartet auf den ersten Nachtrag der Abrechnung“).
 
 ### Abgleich mit den Zählern
 

@@ -555,16 +555,18 @@ class AppRuntime:
 
     async def _ledger_loop(self) -> None:
         """Beim Start ab Mitternacht vor 7 Tagen nachtragen (mindestens das Fenster der
-        Nachrechnung, ``LEDGER_ESTIMATE_DAYS``), danach stündlich die letzten 6 h."""
+        Nachrechnung, ``LEDGER_ESTIMATE_DAYS``), danach stündlich die letzten 6 h. Sind
+        Nachträge gescheitert, beginnt der nächste am Ende des lückenlos gelesenen Zeitraums
+        (höchstens am Anfang des Fensters), damit keine Stunde ungelesen und ungeschätzt bleibt."""
         first = True
         while True:
             now = self._clock.now()
             today = now.astimezone(LOCAL_TZ).date()
-            start = (
-                local_day_slots(today - timedelta(days=LEDGER_ESTIMATE_DAYS))[0]
-                if first
-                else now - BACKFILL_HOURLY
-            )
+            window = local_day_slots(today - timedelta(days=LEDGER_ESTIMATE_DAYS))[0]
+            start = window if first else now - BACKFILL_HOURLY
+            covered = self._backfill_covered
+            if not first and covered is not None:
+                start = max(min(start, covered[1]), window)
             try:
                 taken = await self.ledger.backfill(self.reader, start, now)
                 self._note_backfill(start, now)

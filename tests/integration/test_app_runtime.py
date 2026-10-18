@@ -471,6 +471,63 @@ def test_backfilled_range_grows_and_restarts_after_a_hole(runtime) -> None:
     assert runtime._backfill_covered == (T_APP + 4 * hour, T_APP + 10 * hour)
 
 
+async def test_backfill_after_failed_hours_starts_where_the_coverage_ended(
+    runtime, monkeypatch
+) -> None:
+    # N3: nach 7 gescheiterten Stunden begann der nächste Nachtrag bei „jetzt − 6 h“; die Stunden
+    # dazwischen las kein Nachtrag mehr, und die Nachrechnung schätzte sie nicht (B6)
+    from bindaems.app.history.influx import InfluxQueryError
+
+    starts: list[datetime] = []
+
+    async def backfill(reader, start, end) -> int:
+        starts.append(start)
+        if 1 <= len(starts) - 1 <= 7:
+            raise InfluxQueryError("InfluxDB nicht erreichbar")
+        return 0
+
+    async def sleep(seconds: float) -> None:
+        runtime._clock.advance(seconds)
+        if len(starts) >= 10:
+            raise StopScheduler
+
+    monkeypatch.setattr(runtime.ledger, "backfill", backfill)
+    monkeypatch.setattr(asyncio, "sleep", sleep)
+    with pytest.raises(StopScheduler):
+        await runtime._ledger_loop()
+    hour = timedelta(hours=1)
+    assert starts[8] == T_APP  # Ende der Abdeckung, nicht T_APP + 8 h − 6 h
+    assert starts[9] == T_APP + 3 * hour  # wieder lückenlos: die letzten 6 h
+    assert runtime._backfill_covered == (datetime(2026, 10, 1, 22, 0, tzinfo=UTC), T_APP + 9 * hour)
+
+
+async def test_backfill_after_a_long_outage_starts_at_the_estimate_window(
+    runtime, monkeypatch
+) -> None:
+    from bindaems.app.history.influx import InfluxQueryError
+
+    starts: list[datetime] = []
+    failed_hours = 10 * 24
+
+    async def backfill(reader, start, end) -> int:
+        starts.append(start)
+        if 1 <= len(starts) - 1 <= failed_hours:
+            raise InfluxQueryError("InfluxDB nicht erreichbar")
+        return 0
+
+    async def sleep(seconds: float) -> None:
+        runtime._clock.advance(seconds)
+        if len(starts) >= failed_hours + 2:
+            raise StopScheduler
+
+    monkeypatch.setattr(runtime.ledger, "backfill", backfill)
+    monkeypatch.setattr(asyncio, "sleep", sleep)
+    with pytest.raises(StopScheduler):
+        await runtime._ledger_loop()
+    # 10 Tage später (19.10. 10:00 Ortszeit): Mitternacht des 12.10. Ortszeit, nicht T_APP
+    assert starts[-1] == datetime(2026, 10, 11, 22, 0, tzinfo=UTC)
+
+
 async def test_failed_backfill_covers_nothing(runtime, monkeypatch) -> None:
     from bindaems.app.history.influx import InfluxQueryError
 
