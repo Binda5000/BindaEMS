@@ -579,7 +579,8 @@ Kosten je Auto (nächster Unterabschnitt). Er entsteht aus der Abrechnung, Viert
 Viertelstunde in zeitlicher Reihenfolge, und kann nicht auseinanderlaufen: Ändert sich ein Slot oder
 ein Preis, rechnet die app ab dem frühesten geänderten Slot neu. Das gilt auch über einen Neustart
 oder Absturz hinweg: Beim Start sucht die app den frühesten Slot, dessen Rechnung nicht mehr zu ihm,
-zum Verschleiß oder zu `battery.usable_kwh` passt, und rechnet ab dort neu.
+zum Verschleiß oder zu `battery.usable_kwh` passt, und rechnet ab dort neu. Scheitert die Rechnung
+(Log „Einstandspreis des Akkus nicht berechenbar“), versucht die app es nach einer Minute wieder.
 
 - **PV-Ladung kostet 0 ct,** Netzladung den Bezugspreis der Viertelstunde (Entscheidung des Betreibers
   vom 17.10.2026, anders als Spec 11.4: PV-Strom zählt nicht mit dem OeMAG-Wert). Der Mittelwert ist

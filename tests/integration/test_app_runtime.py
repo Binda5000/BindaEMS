@@ -780,6 +780,7 @@ async def test_costing_job_survives_a_failing_catch_up(runtime, monkeypatch) -> 
         raise RuntimeError("Datenbank gesperrt")
 
     monkeypatch.setattr(runtime.costing, "catch_up", broken)
+    monkeypatch.setattr("bindaems.app.runtime.COSTING_RETRY_S", 0.05)
     costing_task = asyncio.create_task(runtime._costing_loop())
     try:
         with capture_logs() as logs:
@@ -790,6 +791,64 @@ async def test_costing_job_survives_a_failing_catch_up(runtime, monkeypatch) -> 
     finally:
         costing_task.cancel()
         await asyncio.wait([costing_task])
+
+
+async def test_permanently_failing_costing_does_not_spin(runtime, monkeypatch) -> None:
+    # Fix-Runde 2: das erneute Markieren nach einem Fehler weckte über ``on_dirty`` sofort den
+    # nächsten Versuch; ein bleibender Fehler drehte so Tausende Male je Sekunde
+    calls: list[int] = []
+
+    def broken(start) -> int:
+        calls.append(1)
+        raise RuntimeError("Datenbank schreibgeschützt")
+
+    monkeypatch.setattr(runtime.costing, "_recompute", broken)
+    runtime.costing.mark_dirty(None)
+    costing_task = asyncio.create_task(runtime._costing_loop())
+    try:
+        with capture_logs():
+            await until(lambda: len(calls) >= 1)
+            await asyncio.sleep(0.5)
+        assert len(calls) == 1  # dann 60 s Pause
+    finally:
+        await stop(costing_task)
+
+
+async def test_costing_pause_after_a_failure_keeps_a_wake_and_can_be_cancelled(
+    runtime, monkeypatch
+) -> None:
+    monkeypatch.setattr("bindaems.app.runtime.COSTING_RETRY_S", 0.3)
+    calls: list[str] = []
+    real = runtime.costing._recompute
+
+    def fails_once(start) -> int:
+        calls.append("Versuch")
+        if len(calls) == 1:
+            raise RuntimeError("Datenbank gesperrt")
+        return real(start)
+
+    monkeypatch.setattr(runtime.costing, "_recompute", fails_once)
+    runtime.costing.mark_dirty(None)
+    costing_task = asyncio.create_task(runtime._costing_loop())
+    try:
+        with capture_logs():
+            await until(lambda: len(calls) == 1)
+            ingest(runtime.ledger, T_APP, {"pv>battery": 1000.0})  # Weckruf in der Pause
+            await asyncio.sleep(0.1)
+            assert calls == ["Versuch"]  # noch in der Pause
+            await until(lambda: len(calls) == 2, max_wait_s=1.0)  # danach nicht verloren
+        assert runtime.costing.costs(T_APP, T_APP + timedelta(minutes=15))[T_APP].stock_kwh == 1.0
+    finally:
+        await stop(costing_task)
+    monkeypatch.setattr("bindaems.app.runtime.COSTING_RETRY_S", 60.0)
+    monkeypatch.setattr(
+        runtime.costing, "_recompute", lambda start: (_ for _ in ()).throw(OSError())
+    )
+    runtime.costing.mark_dirty(None)
+    paused = asyncio.create_task(runtime._costing_loop())
+    with capture_logs():
+        await asyncio.sleep(0.1)  # scheitert und pausiert 60 s
+        await asyncio.wait_for(stop(paused), timeout=1)  # die Pause ist abbrechbar
 
 
 async def test_first_pv_forecast_waits_for_the_calibration(runtime, monkeypatch) -> None:

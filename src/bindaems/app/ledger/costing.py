@@ -136,7 +136,15 @@ class LedgerCosting:
         self._dirty_listeners.append(listener)
 
     def mark_dirty(self, start: datetime | None) -> None:
-        """Rechnet ab ``start`` neu; ``None`` heißt alles."""
+        """Rechnet ab ``start`` neu; ``None`` heißt alles. Weckt die Listener (``on_dirty``)."""
+        self._set_dirty(start)
+        for listener in self._dirty_listeners:
+            try:
+                listener()
+            except Exception:
+                log.exception("Nachführung des Einstandspreises nicht geweckt")
+
+    def _set_dirty(self, start: datetime | None) -> None:
         with self._dirty_lock:
             if start is None:
                 self._dirty_all = True
@@ -144,11 +152,6 @@ class LedgerCosting:
                 start = ensure_utc(start)
                 if self._dirty_from is None or start < self._dirty_from:
                     self._dirty_from = start
-        for listener in self._dirty_listeners:
-            try:
-                listener()
-            except Exception:
-                log.exception("Nachführung des Einstandspreises nicht geweckt")
 
     def close(self, timeout_s: float) -> bool:
         """Beim Herunterfahren: Eine laufende Nachführung hört nach ihrem Block auf (sieben Tage,
@@ -175,7 +178,9 @@ class LedgerCosting:
             try:
                 return self._recompute(start)
             except BaseException:
-                self.mark_dirty(start)  # beim nächsten Mal noch einmal
+                # beim nächsten Mal noch einmal, aber ohne die Listener: sonst weckte ein bleibender
+                # Fehler den Job sofort wieder (den nächsten Versuch plant ``_costing_loop``)
+                self._set_dirty(start)
                 raise
 
     def costs(self, start: datetime, end: datetime) -> dict[datetime, SlotCost]:

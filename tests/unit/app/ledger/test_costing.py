@@ -538,3 +538,18 @@ def test_close_gives_up_after_the_timeout(costing, ledger, monkeypatch) -> None:
     finally:
         release.set()
         worker.join(5)
+
+
+def test_failed_catch_up_stays_dirty_without_waking_the_listeners(
+    costing, ledger, monkeypatch
+) -> None:
+    # Fix-Runde 2: das erneute Markieren nach einem Fehler weckte den Job sofort wieder
+    ingest(ledger, S, {"pv>battery": 1000.0})
+    woken: list[int] = []
+    costing.on_dirty(lambda: woken.append(1))
+    monkeypatch.setattr(ledger, "slots", lambda *_: (_ for _ in ()).throw(OSError("weg")))
+    with pytest.raises(OSError):
+        costing.catch_up()
+    assert woken == []
+    monkeypatch.undo()
+    assert costing.catch_up() == 1  # die Markierung blieb

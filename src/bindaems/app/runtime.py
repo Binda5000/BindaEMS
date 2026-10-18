@@ -94,6 +94,7 @@ HA_INPUTS_S = 5.0
 STATS_S = 15 * 60.0  # Statistik für HA: bei jedem neuen Slot und spätestens alle 15 min
 STATS_SESSION_DAYS = 90  # so weit zurück sucht HA die letzte Ladesession eines Fahrzeugs
 RESTART_S = 10.0
+COSTING_RETRY_S = 60.0  # Pause der Nachführung des Einstandspreises nach einem Fehler
 COSTING_STOP_S = 5.0  # so lange wartet das Beenden auf den Block einer laufenden Nachführung
 BACKUP_AT = (3, 15)  # Ortszeit
 FORECAST_NIGHTLY_AT = (2, 30)  # Ortszeit
@@ -559,7 +560,11 @@ class AppRuntime:
     async def _costing_loop(self) -> None:
         """Führt den Einstandspreis im Worker-Thread nach, sobald etwas ihn weckt. Ein Wecken
         während der Rechnung löst gleich die nächste aus; ``LedgerCosting`` hält mit seinem Lock
-        ohnehin nur eine Nachführung zur Zeit."""
+        ohnehin nur eine Nachführung zur Zeit.
+
+        Nach einem Fehler wartet der Job ``COSTING_RETRY_S`` (abbrechbar) und versucht es dann
+        noch einmal: Ein bleibender Fehler dreht so nicht in einer Schleife. Ein Weckruf in der
+        Pause bleibt im Event stehen und löst danach denselben einen Versuch aus."""
         self._costing_waiter = asyncio.get_running_loop()
         while True:
             await self._costing_wake.wait()
@@ -568,6 +573,8 @@ class AppRuntime:
                 await asyncio.to_thread(self.costing.catch_up)
             except Exception:
                 log.exception("Einstandspreis des Akkus nicht berechenbar")
+                await asyncio.sleep(COSTING_RETRY_S)
+                self._costing_wake.set()  # die Markierung blieb: noch einmal versuchen
 
     async def _ledger_loop(self) -> None:
         """Beim Start ab Mitternacht vor 7 Tagen nachtragen (mindestens das Fenster der
