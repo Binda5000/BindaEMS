@@ -373,7 +373,7 @@
       "type": "timeseries",
       "id": 8,
       "title": "Energie je Tag und Fluss",
-      "description": "Summe der Viertelstunden-Abrechnung je Fluss und Tag in kWh (Retention Policy long); die Tage laufen in Wiener Zeit von 00:00 bis 24:00 Uhr. Gezeigt werden immer die letzten 14 Tage.",
+      "description": "Summe der Viertelstunden-Abrechnung je Fluss und Tag in kWh (Retention Policy long); die Tage laufen in Wiener Zeit von 00:00 bis 24:00 Uhr. Gezeigt werden immer die letzten 13 ganzen Tage und heute bis jetzt (der letzte Balken wächst noch).",
       "datasource": {
         "type": "influxdb",
         "uid": "${DS_BINDAEMS}"
@@ -428,13 +428,13 @@
           "alias": "$tag_flow"
         }
       ],
-      "timeFrom": "14d"
+      "timeFrom": "now-13d/d"
     },
     {
       "type": "timeseries",
       "id": 9,
       "title": "Kosten und Erlös je Tag",
-      "description": "Summe der Kosten (Bezug, positiv) und des Erlöses (Einspeisung, negativ) je Fluss und Tag in Euro (Retention Policy long); die Tage laufen in Wiener Zeit. Gezeigt werden immer die letzten 14 Tage.",
+      "description": "Summe der Kosten (Bezug, positiv) und des Erlöses (Einspeisung, negativ) je Fluss und Tag in Euro (Retention Policy long); die Tage laufen in Wiener Zeit. Gezeigt werden immer die letzten 13 ganzen Tage und heute bis jetzt (der letzte Balken wächst noch).",
       "datasource": {
         "type": "influxdb",
         "uid": "${DS_BINDAEMS}"
@@ -489,7 +489,7 @@
           "alias": "$tag_flow"
         }
       ],
-      "timeFrom": "14d"
+      "timeFrom": "now-13d/d"
     }
   ]
 }

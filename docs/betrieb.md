@@ -161,8 +161,9 @@ die Zeitzone ist `Europe/Vienna`.
 - „Preise“: Bezugspreis brutto und Einspeisevergütung in ct/kWh je Viertelstunde aus `long`. Die
   Preise von morgen erscheinen, sobald sie geholt sind und der Zeitraum bis morgen reicht.
 - „Abrechnung je Tag“: kWh sowie Kosten und Erlös in Euro je Fluss und Tag aus `long`, immer die
-  letzten 14 Tage. Die Tage laufen in Wiener Zeit (`tz('Europe/Vienna')`), auch an den Tagen der
-  Zeitumstellung. Eine Viertelstunde ohne Preis zählt dort 0 €; verliert sie ihren Preis beim neu
+  letzten 13 ganzen Tage und heute bis jetzt (Zeitbereich des Panels `now-13d/d`, der letzte
+  Balken wächst über den Tag). Die Tage laufen in Wiener Zeit (`tz('Europe/Vienna')`), auch an den
+  Tagen der Zeitumstellung. Eine Viertelstunde ohne Preis zählt dort 0 €; verliert sie ihren Preis beim neu
   Bewerten, überschreibt die app den alten Euro-Wert mit 0.
 
 Die Entscheidungen des Reglers erscheinen als Markierungen („Entscheidungen“) in allen Panels: mit

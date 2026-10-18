@@ -303,3 +303,21 @@ def test_no_plant_data_in_dashboard() -> None:
     # keine Datenquelle ist fest verdrahtet
     for ref in _datasource_refs(json.loads(text)):
         assert isinstance(ref, dict) and ref["uid"] == f"${{{INPUT}}}"
+
+
+def test_ledger_panels_show_whole_days() -> None:
+    # „now-13d/d“: ab 00:00 vor 13 Tagen bis jetzt, also 13 ganze Tage und heute bis jetzt; mit
+    # „14d“ schnitte der erste Tag an der Uhrzeit von jetzt an (Grafana 10 kennt beide Formen)
+    dashboard = _dashboard()
+    ledger = []
+    current = ""
+    for panel in dashboard["panels"]:
+        if panel["type"] == "row":
+            current = panel["title"]
+        elif current == "Abrechnung je Tag":
+            ledger.append(panel)
+    assert len(ledger) == 2
+    for panel in ledger:
+        assert panel["timeFrom"] == "now-13d/d", panel["title"]
+        assert "timeShift" not in panel and not panel.get("hideTimeOverride", False)
+        assert "13 ganzen Tage und heute bis jetzt" in panel["description"], panel["title"]
