@@ -793,6 +793,34 @@ async def test_costing_job_survives_a_failing_catch_up(runtime, monkeypatch) -> 
         await asyncio.wait([costing_task])
 
 
+async def test_costing_wakes_from_a_thread_before_and_after_the_job_started(
+    runtime, monkeypatch
+) -> None:
+    # Fix-Runde 2: vor dem Start setzt ein Weckruf nur das Flag; danach geht jeder aus einem
+    # fremden Thread über ``call_soon_threadsafe`` an den Loop des Jobs
+    calls: list[int] = []
+    monkeypatch.setattr(runtime.costing, "catch_up", lambda: calls.append(1) or 0)
+    runtime._costing_wake.clear()
+    await asyncio.to_thread(runtime._wake_costing)  # Job läuft noch nicht
+    loop = asyncio.get_running_loop()
+    threadsafe: list[object] = []
+    real = loop.call_soon_threadsafe
+
+    def spy(callback, *args, **kwargs):
+        threadsafe.append(callback)
+        return real(callback, *args, **kwargs)
+
+    monkeypatch.setattr(loop, "call_soon_threadsafe", spy)
+    costing_task = asyncio.create_task(runtime._costing_loop())
+    try:
+        await until(lambda: calls == [1])  # der Weckruf vor dem Start ging nicht verloren
+        await asyncio.to_thread(runtime._wake_costing)
+        await until(lambda: calls == [1, 1], max_wait_s=1.0)
+        assert runtime._costing_wake.set in threadsafe
+    finally:
+        await stop(costing_task)
+
+
 async def test_permanently_failing_costing_does_not_spin(runtime, monkeypatch) -> None:
     # Fix-Runde 2: das erneute Markieren nach einem Fehler weckte über ``on_dirty`` sofort den
     # nächsten Versuch; ein bleibender Fehler drehte so Tausende Male je Sekunde

@@ -212,6 +212,7 @@ class AppRuntime:
         self._costing_wake = asyncio.Event()
         self._costing_wake.set()
         self._costing_waiter: asyncio.AbstractEventLoop | None = None  # Loop von ``_costing_loop``
+        self._costing_waiter_lock = threading.Lock()  # Lesen des Loops und Setzen ohne Wartende
         self.costing.on_dirty(self._wake_costing)  # auch Neubewerten und Verschleiß wecken sie
         self.ledger_checks = LedgerChecks(self.engine, self.ledger, self.reader, self._clock, cfg)
         self.gap_estimator = GapEstimator(self.ledger, self.reader, self._clock, cfg)
@@ -543,13 +544,21 @@ class AppRuntime:
 
     def _wake_costing(self) -> None:
         """Weckt die Nachführung; was neu zu rechnen ist, hat ``LedgerCosting.mark_dirty``. Aus
-        einem Worker-Thread (Route, Einstellungen, ``to_thread``) über den Loop des Jobs."""
-        loop = self._costing_waiter
+        einem Worker-Thread (Route, Einstellungen, ``to_thread``) über den Loop des Jobs.
+
+        Läuft der Job noch nicht, setzt der Weckruf unter ``_costing_waiter_lock`` nur das Flag des
+        Events: Der Job merkt sich seinen Loop unter demselben Lock, bevor er wartet; ohne Wartende
+        ist ``set`` auch aus einem fremden Thread nur ein Flag, und der Job sieht es beim Start."""
+        with self._costing_waiter_lock:
+            loop = self._costing_waiter
+            if loop is None:
+                self._costing_wake.set()
+                return
         try:
             running = asyncio.get_running_loop()
         except RuntimeError:
             running = None
-        if loop is None or running is loop:
+        if running is loop:
             self._costing_wake.set()
             return
         try:
@@ -565,7 +574,8 @@ class AppRuntime:
         Nach einem Fehler wartet der Job ``COSTING_RETRY_S`` (abbrechbar) und versucht es dann
         noch einmal: Ein bleibender Fehler dreht so nicht in einer Schleife. Ein Weckruf in der
         Pause bleibt im Event stehen und löst danach denselben einen Versuch aus."""
-        self._costing_waiter = asyncio.get_running_loop()
+        with self._costing_waiter_lock:
+            self._costing_waiter = asyncio.get_running_loop()
         while True:
             await self._costing_wake.wait()
             self._costing_wake.clear()
