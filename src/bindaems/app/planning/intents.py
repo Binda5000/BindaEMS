@@ -105,6 +105,9 @@ def _drop_unprofitable(
     weniger als ``HOLD_MIN_W``, wird er ``EIGENVERBRAUCH`` und verbraucht die geladene Energie
     sofort, obwohl der Optimierer sie für später geladen hat. Gestrichen wird je Runde der letzte
     betroffene Slot, danach wird neu gerechnet; das Streichen speist nie mehr ein (Regel R1).
+
+    Aufwand: im schlimmsten Fall eine Nachrechnung je Slot (so viele Runden, wie es Slots gibt);
+    praktisch ist es meist eine Runde, weil selten ein ``NETZLADEN`` wegfällt.
     """
     params = params_of(inputs)
     slots = sim_slots(inputs)
