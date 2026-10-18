@@ -74,9 +74,14 @@ def test_replacing_a_slot_zeroes_the_flows_it_no_longer_has(
     ledger, prices_with_10ct, feed_in_7ct, sink
 ) -> None:
     estimate = {"pv>battery": 500.0, "grid>house": 200.0, "pv>grid": 100.0, "pv>house": 100.0}
-    assert ledger.ingest(SlotFlows(S, 0.0, estimate, {}), "estimate")
+    assert ledger.ingest(
+        SlotFlows(slot_start=S, covered_s=0.0, flows_wh=estimate, counters={}), "estimate"
+    )
     sink.points.clear()
-    assert ledger.ingest(SlotFlows(S, 900.0, {"pv>house": 300.0}, {}), "influx")
+    assert ledger.ingest(
+        SlotFlows(slot_start=S, covered_s=900.0, flows_wh={"pv>house": 300.0}, counters={}),
+        "influx",
+    )
     points = {p.tags["flow"]: p for p in sink.points}
     assert {flow: p.fields for flow, p in points.items()} == {
         "pv>house": {"kwh": 0.3},
@@ -86,7 +91,10 @@ def test_replacing_a_slot_zeroes_the_flows_it_no_longer_has(
     }
     assert all(p.ts == S and p.rp == "long" for p in points.values())
     sink.points.clear()
-    assert not ledger.ingest(SlotFlows(S, 600.0, {"pv>battery": 1.0}, {}), "stream")
+    assert not ledger.ingest(
+        SlotFlows(slot_start=S, covered_s=600.0, flows_wh={"pv>battery": 1.0}, counters={}),
+        "stream",
+    )
     assert sink.points == []  # nicht ersetzt: nichts zu schreiben
 
 
@@ -331,7 +339,9 @@ def test_coverage_of_today_counts_only_past_slots(ledger, clock) -> None:
 
 def test_estimated_slots_are_counted_and_do_not_add_coverage(ledger, clock) -> None:
     ledger.ingest(parse_slot_flows(MSG), "stream")  # 900 s
-    estimate = SlotFlows(S - SLOT, 0.0, {"pv>house": 50.0}, {})
+    estimate = SlotFlows(
+        slot_start=S - SLOT, covered_s=0.0, flows_wh={"pv>house": 50.0}, counters={}
+    )
     assert ledger.ingest(estimate, "estimate")
     clock.advance(SLOT)  # 10:15 Ortszeit
     [day] = ledger.days(date(2026, 10, 9), date(2026, 10, 9))

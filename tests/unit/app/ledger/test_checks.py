@@ -6,7 +6,7 @@ from tests.unit.app.ledger.conftest import FakeInflux
 from bindaems.app.history.influx import InfluxQueryError
 from bindaems.app.ledger.checks import DayCheck, check_day
 from bindaems.app.ledger.service import LedgerSlot
-from bindaems.shared.timeutil import local_day_slots
+from bindaems.shared.timeutil import SLOT, local_day_slots
 
 DAY = date(2026, 10, 9)
 PV = ["pv.huawei.energy_kwh"]
@@ -263,6 +263,57 @@ async def test_run_interpolates_the_midnight_reading(checks, ledger, influx: Fak
     assert result.ledger_kwh == pytest.approx(5.0)
     assert result.counter_kwh == pytest.approx(5.0, abs=1e-3)
     assert not result.flagged  # vorher: 5,13 kWh am Zähler, 2,7 % und 0,13 kWh, markiert
+
+
+async def test_run_on_the_100_slot_day_counts_every_slot(
+    checks, ledger, influx: FakeInflux
+) -> None:
+    # 25.10.2026 hat 25 Stunden: 100 Viertelstunden zählen zum Tag, keine zum Nachbartag
+    from bindaems.shared.domain import SlotFlows
+
+    day = date(2026, 10, 25)
+    day_slots = local_day_slots(day)
+    assert len(day_slots) == 100
+    for at in [day_slots[0] - SLOT, *day_slots, day_slots[-1] + SLOT]:
+        ledger.ingest(
+            SlotFlows(slot_start=at, covered_s=900.0, flows_wh={"grid>house": 100.0}, counters={}),
+            "stream",
+        )
+    influx.set_counters({IMP: {midnight(day): 500.0, midnight(day + timedelta(days=1)): 510.0}})
+    assert await checks.run(day, day) == 1
+    result = by_signal(checks.checks(day, day))["import"]
+    assert result.ledger_kwh == pytest.approx(10.0) and result.counter_kwh == pytest.approx(10.0)
+    assert result.deviation_pct == pytest.approx(0.0) and not result.flagged
+
+
+async def test_run_leaves_the_neighbouring_days_alone(checks, influx: FakeInflux) -> None:
+    before, after = DAY - timedelta(days=1), DAY + timedelta(days=1)
+    influx.set_counters(
+        counters(
+            {
+                before: {IMP: 1.0},
+                DAY: {IMP: 2.0},
+                after: {IMP: 3.0},
+                after + timedelta(days=1): {IMP: 4.0},
+            }
+        )
+    )
+    assert await checks.run(before, after) == 3
+    stored = {(c.day, c.signal): c for c in checks.checks(before, after)}
+    influx.set_counters(counters({DAY: {IMP: 2.0}, after: {IMP: 9.0}}))
+    assert await checks.run(DAY, DAY) == 1
+    again = {(c.day, c.signal): c for c in checks.checks(before, after)}
+    assert again[(DAY, "import")].counter_kwh == pytest.approx(7.0)
+    for day in (before, after):
+        for signal in ("import", "export", "pv", "wb:evcs", "wb:twc"):
+            assert again[(day, signal)] == stored[(day, signal)]
+    assert stored[(after, "import")].counter_kwh == pytest.approx(1.0)
+
+
+async def test_run_with_first_after_last_does_nothing(checks, influx: FakeInflux) -> None:
+    assert await checks.run(DAY, DAY - timedelta(days=1)) == 0
+    assert influx.queries == []
+    assert checks.checks(DAY - timedelta(days=1), DAY) == []
 
 
 async def test_run_failure_keeps_old_rows(checks, influx: FakeInflux) -> None:

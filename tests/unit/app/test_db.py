@@ -1,14 +1,24 @@
+from datetime import UTC, datetime
 from pathlib import Path
 
+import pytest
 from alembic import command
 from alembic.autogenerate import compare_metadata
 from alembic.config import Config as AlembicConfig
 from alembic.migration import MigrationContext
-from sqlalchemy import Engine, inspect, text
+from sqlalchemy import Engine, insert, inspect, select, text
 from sqlalchemy.engine import Inspector
+from sqlalchemy.exc import IntegrityError
 
 from bindaems.app.db.engine import MIGRATIONS_DIR, migrate, open_database
-from bindaems.app.db.schema import metadata
+from bindaems.app.db.schema import (
+    assignment_log,
+    charging_session,
+    consumer_day,
+    ledger_check,
+    ledger_cost,
+    metadata,
+)
 
 HEAD = "0011"  # neueste Migration
 
@@ -268,3 +278,48 @@ def test_migration_0011_adapts_the_cost_table_and_downgrades(engine: Engine) -> 
         # abgeleitete Zeilen: die Migration leert die Tabelle, die app rechnet sie neu
         assert conn.execute(text("SELECT count(*) FROM ledger_cost")).scalar_one() == 0
         assert conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one() == "0010"
+
+
+def test_rows_of_the_statistics_tables_round_trip(engine: Engine) -> None:
+    # Einfügen über das Schema: Zeiten als UTC, Leerwerte und Primärschlüssel wie in 0010/0011
+    t = datetime(2026, 10, 25, 1, 30, tzinfo=UTC)
+    rows = {
+        assignment_log: {"ts": t, "wallbox": "twc", "occupant": "", "kind": ""},  # leer: Text ""
+        charging_session: {
+            "wallbox": "twc",
+            "vehicle": "",
+            "start": t,
+            "end": None,
+            "last_seen": t,
+        },
+        ledger_cost: {
+            "slot_start": t,
+            "stock_kwh": 1.5,
+            "avg_ct": None,
+            "discharge_ct": None,
+            "slot_updated_at": t,
+            "wear_ct": 2.0,
+            "usable_kwh": 30.0,
+        },
+        ledger_check: {
+            "day": "2026-10-25",
+            "signal": "import",
+            "ledger_kwh": 10.0,
+            "counter_kwh": None,
+            "deviation_pct": None,
+            "flagged": False,
+            "note": "Zählerstand fehlt",
+            "checked_at": t,
+        },
+        consumer_day: {"day": "2026-10-25", "consumer_id": 7, "kwh": None, "note": "fehlt"},
+    }
+    with engine.begin() as conn:
+        for table, values in rows.items():
+            conn.execute(insert(table).values(**values))
+    with engine.connect() as conn:
+        for table, values in rows.items():
+            stored = conn.execute(select(table)).mappings().one()
+            assert {key: stored[key] for key in values} == values, table.name
+    for table in (ledger_cost, ledger_check, consumer_day):  # gleicher Primärschlüssel
+        with pytest.raises(IntegrityError), engine.begin() as conn:
+            conn.execute(insert(table).values(**rows[table]))

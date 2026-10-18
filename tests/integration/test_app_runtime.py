@@ -126,6 +126,27 @@ def test_runtime_wires_routes_and_components(runtime) -> None:
         assert client.get(path).status_code == 200, path
 
 
+def test_runtime_wires_the_cost_basis(runtime, cfg: Config, tmp_path) -> None:
+    # die echte Verdrahtung statt des nachgebauten Hilfsbaus der Unit-Tests: die Abrechnung
+    # markiert den Einstandspreis, Sessions und Statistik lesen denselben
+    slot = timedelta(minutes=15)
+    assert runtime.charging_sessions._costing is runtime.costing
+    assert runtime.stats._sessions is runtime.charging_sessions
+    ingest(runtime.ledger, T_APP - 2 * slot, {"pv>battery": 2000.0})
+    ingest(runtime.ledger, T_APP - slot, {"battery>wb:twc": 1000.0})
+    assert runtime.costing.catch_up() == 2
+    wear = runtime.settings.current().settings.planning.wear_ct
+    costs = runtime.costing.costs(T_APP - 2 * slot, T_APP)
+    assert costs[T_APP - slot].discharge_ct == wear and costs[T_APP - slot].stock_kwh == 1.0
+    ingest(runtime.ledger, T_APP, {"pv>battery": 500.0})  # bis zur Nachführung nur markiert
+    restarted = make_runtime(cfg, tmp_path)  # Neustart vor der Nachführung
+    try:
+        assert restarted.costing.catch_up() == 1
+        assert restarted.costing.costs(T_APP, T_APP + slot)[T_APP].stock_kwh == 1.5
+    finally:
+        restarted.engine.dispose()
+
+
 def test_without_token_the_rejections_are_only_logged(runtime) -> None:
     assert runtime.ha_notifier is None and runtime.alarm_notifications is None
     assert type(runtime.ha_publisher._commands).__name__ == "HaCommandHandler"
