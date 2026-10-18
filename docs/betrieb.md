@@ -617,10 +617,12 @@ höchstens 200 Einträge. `vehicle` ist der Schlüssel aus `config.yaml`, `guest
   Steckzustand liest die app aus dem State des core (EVCS: `status` ungleich 0, Wall Connector:
   `vehicle_connected`), auch bei Regelbetrieb aus. Welches Auto es ist, kennt sie aus der Belegung in
   `GET /v1/health` (`wallboxes[].occupant`, alle 10 s): Es ist das Auto mit der längsten Zeit in der
-  Session, ein Gast ist „Gast“, ohne Beobachtung „Unbekannt“. Ohne Regelbetrieb ruht die Regelung, und
-  `wallboxes` zeigt niemanden: Dann heißen die Sessions „Unbekannt“. Eine Pause der Beobachtung (core
-  oder app aus) trennt eine Session nicht, wenn sie höchstens 30 Minuten dauert und das Auto noch
-  steckt; sonst endet die Session bei der letzten Beobachtung.
+  Session, ein Gast ist „Gast“, ohne Beobachtung „Unbekannt“. Hat kein Auto Zeit in der Session (etwa
+  unter einer Minute, der Insasse steht erst in der schließenden Beobachtung), gilt die letzte nicht
+  leere Belegung zwischen Beginn und Ende. Ohne Regelbetrieb ruht die Regelung, und `wallboxes` zeigt
+  niemanden: Dann heißen die Sessions „Unbekannt“. Eine Pause der Beobachtung (core oder app aus) trennt
+  eine Session nicht, wenn sie höchstens 30 Minuten dauert und das Auto noch steckt; sonst endet die
+  Session bei der letzten Beobachtung.
 - **Zuordnung:** Jede Viertelstunde gehört an einer Wallbox zu der Session, die sie am längsten überdeckt
   (bei Gleichstand der späteren). Energie ohne Session zählt als „Unbekannt“. Eine laufende Session
   endet für die Zuordnung bei „jetzt“.
