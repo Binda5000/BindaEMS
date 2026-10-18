@@ -1,11 +1,11 @@
 import asyncio
-import contextlib
 import threading
 from datetime import datetime, timedelta
 
 import pytest
 from sqlalchemy import insert, select
 from structlog.testing import capture_logs
+from tests.helpers import stop
 from tests.unit.app.charging.charging_helpers import T0
 
 from bindaems.app.charging.tracker import (
@@ -16,12 +16,6 @@ from bindaems.app.charging.tracker import (
     session_vehicle,
 )
 from bindaems.app.db.schema import assignment_log, charging_session
-
-
-async def stop(task: asyncio.Task) -> None:
-    task.cancel()
-    with contextlib.suppress(asyncio.CancelledError):
-        await task
 
 
 def seen(occupant: str | None = None, kind: str | None = None, connected: bool | None = True):

@@ -16,6 +16,7 @@ from tests.app_helpers import (
     ingest,
     record_then_stop,
 )
+from tests.helpers import stop
 from tests.plan_helpers import sample_plan, set_planning, until
 from tests.unit.shared.test_decisions import decision
 
@@ -1039,12 +1040,6 @@ async def until_calls(calls: list[int], count: int) -> None:
             return
         await asyncio.sleep(0.01)
     raise AssertionError(f"{len(calls)} statt {count} Neuberechnungen")
-
-
-async def stop(task: asyncio.Task) -> None:
-    task.cancel()
-    with pytest.raises(asyncio.CancelledError):
-        await task
 
 
 async def test_stats_inputs_refresh_on_new_slot_not_every_5_s(runtime, monkeypatch) -> None:

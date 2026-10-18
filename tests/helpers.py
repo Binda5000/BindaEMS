@@ -52,6 +52,13 @@ async def run_until(adapter: Any, predicate: Callable[[], bool], max_wait_s: flo
             await task
 
 
+async def stop(task: asyncio.Task) -> None:
+    """Bricht ``task`` ab und wartet darauf; ein ``CancelledError`` des Tasks wird geschluckt."""
+    task.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await task
+
+
 class FakeSink:
     """Sammelt geschriebene Punkte (erfüllt ``PointSink``)."""
 
