@@ -50,6 +50,7 @@ from bindaems.shared.config import (
     EvcsConfig,
     Secrets,
     TwcConfig,
+    ha_entities,
     load_config,
     load_secrets,
 )
@@ -367,7 +368,7 @@ async def run_verification(
             entities: dict[str, Mapping[str, Any] | None] = {}
             try:
                 headers = {"Authorization": f"Bearer {secrets.ha_token.get_secret_value()}"}
-                for entity_id in sorted(set(ha.entities.values())):
+                for entity_id in sorted(set(ha_entities(cfg).values())):
                     response = await http.get(
                         f"{ha.url.rstrip('/')}/api/states/{entity_id}", headers=headers
                     )

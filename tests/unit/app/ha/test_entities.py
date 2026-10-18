@@ -467,11 +467,14 @@ def test_config_and_entities_agree_on_object_ids(cfg) -> None:
     # Die Konfiguration prüft Kollisionen mit ihrer eigenen Liste der Objekt-IDs; sie muss stimmen
     from bindaems.shared.config import ha_object_ids
 
-    # Die Liste im shared-Modul (nicht Teil von Plan 4a) kennt die Statistik-Sensoren nicht; sie
-    # kommen hier dazu. Eine Kollision fängt ``build_entities`` selbst ab (nächster Test).
-    stats = ["savings_today", "savings_month", "autarky_today"]
-    stats += [f"{key}_charge_energy" for key in cfg.vehicles]
-    assert sorted([*ha_object_ids(cfg), *stats]) == sorted(e.object_id for e in build_entities(cfg))
+    # Plan 4b kündigt in der Konfiguration schon die Objekte an, die erst Task 15 baut; sie fehlen
+    # bis dahin in ``build_entities``. Eine Kollision fängt dieses selbst ab (nächster Test).
+    not_built_yet = {"problem_target_unreachable"}
+    for key in cfg.vehicles:
+        not_built_yet |= {f"{key}_{s}" for s in ("target_soc", "departure", "done_by")}
+        not_built_yet.add(f"{key}_target_reachable")
+    expected = sorted(i for i in ha_object_ids(cfg) if i not in not_built_yet)
+    assert expected == sorted(e.object_id for e in build_entities(cfg))
 
 
 def test_building_entities_fails_loudly_on_a_duplicate_object_id(cfg) -> None:

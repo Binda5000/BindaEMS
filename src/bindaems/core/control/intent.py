@@ -14,6 +14,7 @@ Die Schicht ist rein: Die Zeit kommt als Argument, und die Datei wird nur über
 
 from __future__ import annotations
 
+import math
 import threading
 from collections import Counter
 from collections.abc import Collection, Mapping
@@ -27,7 +28,7 @@ import structlog
 
 from bindaems.core.persistence.files import read_json, write_json_atomic
 from bindaems.core.safety.limits import HardLimits
-from bindaems.shared.control import ActuatorMode, Intent, SupportIntent
+from bindaems.shared.control import ActuatorMode, ChargeMode, Intent, SupportIntent
 from bindaems.shared.plan import (
     MAX_INTENT_PLAN_SLOTS,
     PLAN_VALID,
@@ -60,8 +61,9 @@ class IntentReply:
     - ``rejection``: der Grund einer Ablehnung, sonst ``None``: ``stale`` (Version veraltet oder
       schon mit anderem Inhalt angenommen), ``unknown_actuator`` oder ``invalid`` (unbekanntes
       Fahrzeug oder unbekannte Wallbox, eine Wallbox bei mehreren Fahrzeugen, eine Priorität, die
-      nicht jedes Fahrzeug genau einmal nennt, ein Plan mit Lücken, falschem Raster, zu vielen
-      Slots, unpassender Gültigkeit oder Netzladen trotz ausgeschaltetem Schalter)
+      nicht jedes Fahrzeug genau einmal nennt, ein Gast im Modus „Geplant“, ein Plan mit Lücken,
+      falschem Raster, zu vielen Slots, unpassender Gültigkeit, Netzladen trotz ausgeschaltetem
+      Schalter, einem unbekannten Fahrzeug oder negativer Ladeleistung)
     """
 
     result: Literal["accepted", "clamped", "rejected"]
@@ -78,7 +80,9 @@ class IntentStore:
 
     ``vehicles`` bildet die Schlüssel der Fahrzeuge in ``config.yaml`` auf ihren Namen ab, in der
     Reihenfolge der Datei; ``wallboxes`` nennt die Schlüssel der Wallboxen. Was dort fehlt, ist für
-    die Absicht unbekannt.
+    die Absicht unbekannt. ``vehicle_max_w`` nennt die Höchstleistung je Fahrzeug in W (``max_a ·
+    grid.voltage_nominal_v · phases``); darauf klemmt der Store die Ladeleistung im Plan. Ein
+    Fahrzeug ohne Eintrag wird nicht geklemmt.
 
     Die interne API ruft ``submit`` aus Threads auf, und ``write_json_atomic`` verträgt je Datei nur
     einen Schreiber. ``submit`` und ``load`` laufen deshalb unter einer Sperre. ``current``,
@@ -94,11 +98,13 @@ class IntentStore:
         *,
         vehicles: Mapping[str, str] | None = None,
         wallboxes: Collection[str] = (),
+        vehicle_max_w: Mapping[str, float] | None = None,
     ) -> None:
         self._path = path
         self._limits = limits
         self._vehicles = dict(vehicles or {})
         self._wallboxes = frozenset(wallboxes)
+        self._vehicle_max_w = dict(vehicle_max_w or {})
         self._current: Intent | None = None
         self._accepted_at: datetime | None = None
         self._problem: str | None = None
@@ -167,8 +173,9 @@ class IntentStore:
         2. Ungültiger Inhalt: abgelehnt (``invalid``), die gültige Version bleibt. Je Fund ein
            Hinweis, in dieser Reihenfolge: unbekannte Fahrzeuge (sortiert), unbekannte Wallboxen
            (nach Fahrzeug sortiert), Wallboxen mehrerer Fahrzeuge (sortiert) und eine Priorität, die
-           nicht jedes Fahrzeug genau einmal nennt und die Funde des Plans (Raster und Lücken,
-           Anzahl, Gültigkeit, Netzladen trotz Schalter aus).
+           nicht jedes Fahrzeug genau einmal nennt, ein Gast im Modus „Geplant“ und die Funde des
+           Plans (Raster und Lücken, Anzahl, Gültigkeit, Netzladen trotz Schalter aus, unbekannte
+           Fahrzeuge, negative Ladeleistung).
         3. Version kleiner als die gültige: abgelehnt (``stale``).
         4. Version gleich der gültigen, Inhalt gleich: eine Wiederholung. Die Antwort entsteht aus
            der gesendeten Absicht neu und ist deshalb dieselbe wie bei der Annahme, auch wenn die
@@ -177,7 +184,8 @@ class IntentStore:
         5. Version gleich der gültigen, Inhalt anders: abgelehnt (``stale``).
         6. Sonst ist die Absicht angenommen: ``clamped`` mit einem Hinweis je geklemmtem Aktor, in
            der Reihenfolge des Aktorkatalogs, danach je geklemmtem Boost, in der Reihenfolge der
-           Fahrzeuge in ``config.yaml``, dann zum Plan und zur Unterstützungsschwelle, oder
+           Fahrzeuge in ``config.yaml``, dann zum Plan (Gültigkeit, Netzladen, Ladeleistung der
+           Fahrzeuge) und zur Unterstützungsschwelle, oder
            ``accepted``. Sie gilt sofort, wird gespeichert
            (``{"intent": …, "accepted_at": ISO-Zeit}``) und beendet ``load_problem``.
 
@@ -221,8 +229,8 @@ class IntentStore:
         """Hinweise zu Fahrzeugen, Wallboxen, Priorität und Plan, die nicht passen.
 
         Die Reihenfolge ist: unbekannte Fahrzeuge (sortiert), unbekannte Wallboxen (nach Fahrzeug
-        sortiert), Wallboxen mehrerer Fahrzeuge (sortiert), Priorität, Plan. Eine passende Absicht
-        ergibt ein leeres Tupel.
+        sortiert), Wallboxen mehrerer Fahrzeuge (sortiert), Priorität, Gast, Plan. Eine passende
+        Absicht ergibt ein leeres Tupel.
         """
         details = [
             f"Unbekanntes Fahrzeug „{vehicle}“."
@@ -246,8 +254,10 @@ class IntentStore:
         ]
         if intent.priority is not None and sorted(intent.priority) != sorted(self._vehicles):
             details.append("Die Priorität muss jedes Fahrzeug genau einmal nennen.")
+        if intent.guest.mode is ChargeMode.PLANNED:
+            details.append("Ein Gast kann nicht „Geplant“ laden.")  # kein Ladestand, keine Abfahrt
         if intent.plan is not None:
-            details += _plan_problems(intent.plan)
+            details += _plan_problems(intent.plan, self._vehicles.keys())
         return tuple(details)
 
     def _clamp_support(self, support: SupportIntent) -> tuple[SupportIntent, list[str]]:
@@ -274,11 +284,14 @@ class IntentStore:
           Zeitpunkt gesetzt. Ein Plan, der schon abgelaufen ist, bleibt, wie er ist.
         - Jedes ``grid_charge_w`` des Plans über dem maximalen Netzladesetpoint wird darauf gesetzt;
           dafür gibt es einen Hinweis, egal in wie vielen Slots.
+        - Jede Ladeleistung eines Fahrzeugs im Plan über dessen Höchstleistung wird darauf gesetzt;
+          dafür gibt es je Fahrzeug einen Hinweis, egal in wie vielen Slots.
         - Eine Unterstützungsschwelle unter der USV-Reserve wird auf die Reserve gehoben.
 
         Die Hinweise nennen erst die Aktoren, in der Reihenfolge des Aktorkatalogs, dann die
         Fahrzeuge, in der Reihenfolge von ``config.yaml``; nicht die der gesendeten Absicht. Danach
-        kommen die Gültigkeit und das Netzladen des Plans, zuletzt die Unterstützungsschwelle.
+        kommen die Gültigkeit, das Netzladen und die Ladeleistung der Fahrzeuge im Plan (Fahrzeuge
+        in der Reihenfolge von ``config.yaml``), zuletzt die Unterstützungsschwelle.
         Alles hängt nur von ``received`` ab.
         """
         actuators = dict(intent.actuators)
@@ -306,7 +319,8 @@ class IntentStore:
         return intent.model_copy(update=update), tuple(details)
 
     def _clamp_plan(self, plan: IntentPlan, received: datetime) -> tuple[IntentPlan, list[str]]:
-        """Klemmt Gültigkeit und Netzladeleistung des Plans; die Hinweise in dieser Reihenfolge."""
+        """Klemmt Gültigkeit, Netzladeleistung und Ladeleistung der Fahrzeuge im Plan; die Hinweise
+        in dieser Reihenfolge."""
         details: list[str] = []
         update: dict[str, Any] = {}
         latest = received + PLAN_VALID
@@ -317,19 +331,35 @@ class IntentStore:
             (watts for watts, name in self._limits.setpoint_limits if name == GRID_CHARGE_CAP),
             None,
         )
+        slots = plan.slots
         if cap is not None and any(
             slot.intent.grid_charge_w > cap and slot.intent.kind is BatteryIntentKind.NETZLADEN
-            for slot in plan.slots
+            for slot in slots
         ):
-            update["slots"] = [
+            slots = [
                 slot.model_copy(
                     update={"intent": slot.intent.model_copy(update={"grid_charge_w": cap})}
                 )
                 if slot.intent.grid_charge_w > cap
                 else slot
-                for slot in plan.slots
+                for slot in slots
             ]
             details.append(f"Netzladen auf {cap:.0f} W begrenzt (maximaler Netzladesetpoint).")
+        for vehicle, name in self._vehicles.items():
+            limit = self._vehicle_max_w.get(vehicle)
+            if limit is None:
+                continue
+            watts = math.floor(limit)  # ganze Watt wie im Plan, nie über der Höchstleistung
+            if any(slot.vehicles.get(vehicle, 0) > watts for slot in slots):
+                slots = [
+                    slot.model_copy(update={"vehicles": slot.vehicles | {vehicle: watts}})
+                    if slot.vehicles.get(vehicle, 0) > watts
+                    else slot
+                    for slot in slots
+                ]
+                details.append(f"Plan für {name} auf {watts} W begrenzt.")
+        if slots is not plan.slots:
+            update["slots"] = slots
         return (plan.model_copy(update=update) if update else plan), details
 
     def _save(self, intent: Intent, now: datetime) -> tuple[str, ...]:
@@ -343,9 +373,10 @@ class IntentStore:
         return ()
 
 
-def _plan_problems(plan: IntentPlan) -> list[str]:
+def _plan_problems(plan: IntentPlan, known_vehicles: Collection[str]) -> list[str]:
     """Die Funde zum Plan (Präzisierung 4), in dieser Reihenfolge: Raster und Lücken, Anzahl,
-    Gültigkeit, Netzladen trotz Schalter aus.
+    Gültigkeit, Netzladen trotz Schalter aus, unbekannte Fahrzeuge (sortiert), negative
+    Ladeleistung (sortiert); je Fahrzeug ein Fund, egal in wie vielen Slots.
 
     Die Gültigkeit wird nur geprüft, wenn die Slots ein lückenloses Raster bilden; sonst sagt
     ``slots[-1]`` nichts über das Ende des Plans.
@@ -368,6 +399,12 @@ def _plan_problems(plan: IntentPlan) -> list[str]:
         slot.intent.kind is BatteryIntentKind.NETZLADEN for slot in slots
     ):
         details.append("Plan: Netzladen, obwohl ausgeschaltet.")
+    named = {key for slot in slots for key in slot.vehicles}
+    details += [
+        f"Plan nennt unbekanntes Fahrzeug „{key}“." for key in sorted(named - set(known_vehicles))
+    ]
+    negative = {key for slot in slots for key, watts in slot.vehicles.items() if watts < 0}
+    details += [f"Plan hat negative Ladeleistung für „{key}“." for key in sorted(negative)]
     return details
 
 

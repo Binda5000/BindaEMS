@@ -64,8 +64,23 @@ HA_SYSTEM_IDS = (
     "support_soc",
     "replan",
     "problem_assignment_unclear",
+    "savings_today",
+    "savings_month",
+    "autarky_today",
+    "problem_target_unreachable",
 )
-HA_VEHICLE_SUFFIXES = ("soc", "mode", "boost", "boost_stop", "wallbox")
+HA_VEHICLE_SUFFIXES = (
+    "soc",
+    "mode",
+    "boost",
+    "boost_stop",
+    "wallbox",
+    "charge_energy",
+    "target_soc",
+    "departure",
+    "done_by",
+    "target_reachable",
+)
 HA_WALLBOX_SUFFIXES = ("power", "assignment", "occupant")
 
 
@@ -268,6 +283,11 @@ class VehicleConfig(_Model):
     # ``home_signal`` (Plan 2c-2b, Design 3.2)
     home_entity: str | None = None
     home_radius_m: Annotated[float, Field(gt=0)] = 150.0
+    # Wirkungsgrad des Ladens in % (Netz bis Akku): Bedarf und späteste Startzeit von „Geplant“
+    # rechnen damit, Planer und core gleich (Plan 4b, Entscheidung 5)
+    charge_efficiency_pct: Annotated[float, Field(ge=50, le=100)] = 90.0
+    # Ladelimit des Tesla in „Geplant“ an das Ziel angleichen (Plan 4b, Entscheidung 11)
+    charge_limit_sync: bool = False
 
     @field_validator("name")
     @classmethod
@@ -290,6 +310,12 @@ class VehicleConfig(_Model):
     def _live_needs_tessie(self) -> Self:
         if self.live_allowed and self.tessie is None:
             raise ValueError("live_allowed verlangt einen tessie-Abschnitt")
+        return self
+
+    @model_validator(mode="after")
+    def _limit_sync_needs_tessie(self) -> Self:
+        if self.charge_limit_sync and self.tessie is None:
+            raise ValueError("charge_limit_sync verlangt einen tessie-Abschnitt")
         return self
 
 
@@ -508,6 +534,15 @@ class Config(_Model):
                 raise ValueError(
                     f"vehicles.{key}.home_entity verlangt einen homeassistant-Abschnitt"
                 )
+            if (
+                vehicle.soc_entity is not None
+                and self.homeassistant is not None
+                and self.homeassistant.entities.get(soc_signal(key), vehicle.soc_entity)
+                != vehicle.soc_entity
+            ):
+                raise ValueError(
+                    f"{soc_signal(key)} ist in homeassistant.entities anders belegt als soc_entity"
+                )
         if (
             self.homeassistant is not None
             and self.homeassistant.load_history is not None
@@ -619,17 +654,25 @@ def home_signal(vehicle: str) -> str:
     return f"vehicle.{vehicle}.home_state"
 
 
+def soc_signal(vehicle: str) -> str:
+    """Das Signal, unter dem der core ``soc_entity`` des Fahrzeugs ``vehicle`` abonniert."""
+    return f"vehicle.{vehicle}.soc_pct"
+
+
 def ha_entities(cfg: Config) -> dict[str, str]:
     """Signal → Entität, die der core in Home Assistant abonniert (Plan 2c-2b, Präzisierung 9).
 
-    Das sind ``homeassistant.entities`` und dazu je Fahrzeug mit ``home_entity`` ``home_signal`` →
-    ``home_entity``; ohne Abschnitt ``homeassistant`` ist es leer. Die Laufzeit gibt diese
-    Zuordnung dem HA-Adapter.
+    Das sind ``homeassistant.entities`` und dazu je Fahrzeug mit ``soc_entity`` ``soc_signal`` →
+    ``soc_entity`` und mit ``home_entity`` ``home_signal`` → ``home_entity`` (Plan 4b, Präzisierung
+    4); ohne Abschnitt ``homeassistant`` ist es leer. Die Laufzeit gibt diese Zuordnung dem
+    HA-Adapter.
     """
     if cfg.homeassistant is None:
         return {}
     entities = dict(cfg.homeassistant.entities)
     for key, vehicle in cfg.vehicles.items():
+        if vehicle.soc_entity is not None:
+            entities[soc_signal(key)] = vehicle.soc_entity
         if vehicle.home_entity is not None:
             entities[home_signal(key)] = vehicle.home_entity
     return entities

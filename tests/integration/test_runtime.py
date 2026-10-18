@@ -141,6 +141,33 @@ def test_build_adapters_subscribes_the_home_entity(cfg) -> None:
     assert ha._signals["sensor.egolf_soc"] == ["vehicle.egolf.soc_pct"]
 
 
+def test_the_intent_store_clamps_plan_power_to_the_vehicle_maximum(cfg, tmp_path) -> None:
+    # Plan 4b, Präzisierung 2: max_a · grid.voltage_nominal_v · phases aus config.yaml
+    from datetime import UTC, datetime
+
+    from bindaems.shared.plan import BatteryIntent, IntentPlan, IntentPlanSlot
+
+    now = datetime(2026, 10, 18, 10, 1, tzinfo=UTC)
+    slot = IntentPlanSlot(
+        start=datetime(2026, 10, 18, 10, 0, tzinfo=UTC),
+        intent=BatteryIntent(),
+        vehicles={"tesla": 20000, "egolf": 7000},
+    )
+    plan = IntentPlan(
+        id=1,
+        created_at=now,
+        valid_until=datetime(2026, 10, 18, 10, 15, tzinfo=UTC),
+        grid_charge_allowed=False,
+        slots=[slot],
+    )
+    rt = CoreRuntime(
+        cfg, Secrets(internal_token=SecretStr(TOKEN)), sink=FakeSink(), serve_api=False
+    )
+    reply = rt.intents.submit(Intent(version=1, plan=plan), now)
+    assert reply.details == ("Plan für Tesla Model 3 auf 11040 W begrenzt.",)  # 16 A · 230 V · 3
+    assert rt.intents.current.plan.slots[0].vehicles == {"tesla": 11040, "egolf": 7000}
+
+
 def test_missing_tessie_token_skips_vehicle_with_warning(cfg) -> None:
     with capture_logs() as logs:
         rt = CoreRuntime(

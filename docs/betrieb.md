@@ -2510,6 +2510,32 @@ vehicles:
   PV-Überschuss), nicht im Modus des e-Golf. Dasselbe gilt, solange ein Tracker zu Hause kurz
   `not_home` meldet.
 
+**Ladestand, Wirkungsgrad und Ladelimit für „Geplant“.** Drei Schlüssel je Fahrzeug in `config.yaml`
+gehören zum Modus „Geplant“ (der Modus selbst kommt mit den folgenden Tasks des Plans 4b):
+
+```yaml
+vehicles:
+  egolf:
+    # ...
+    soc_entity: sensor.egolf_soc
+    charge_efficiency_pct: 90      # optional, 50 bis 100, Standard 90
+  tesla:
+    # ...
+    charge_limit_sync: false       # optional, Standard aus, verlangt den Abschnitt tessie
+```
+
+- `soc_entity` (Ladestand in Home Assistant) abonniert der core selbst und nur lesend (Signal
+  `vehicle.<Schlüssel>.soc_pct`), wie `home_entity`. Du trägst ihn nicht zusätzlich unter
+  `homeassistant.entities` ein. Steht dort doch ein Eintrag mit demselben Signal und einer anderen
+  Entität, lehnt der core die Konfiguration ab: `vehicle.egolf.soc_pct ist in
+  homeassistant.entities anders belegt als soc_entity`. Der Ladestand des Tesla kommt aus Tessie.
+- `charge_efficiency_pct` ist der Wirkungsgrad des Ladens (Netz bis Akku des Autos): Der Bedarf eines
+  Autos ist `(Ziel − Ladestand) / 100 · usable_kwh / Wirkungsgrad`. Planer und core rechnen
+  gleich.
+- `charge_limit_sync` erlaubt dem core, das Ladelimit des Tesla in „Geplant“ an das Ziel
+  anzugleichen. Ohne `tessie` lehnt der core die Konfiguration ab: `charge_limit_sync verlangt
+  einen tessie-Abschnitt`.
+
 **Gast.** Je Wallbox gibt es einen Gast, im Health `guest` mit dem Namen „Gast“; so steht ein Gast
 nie an zwei Wallboxen. Der Gast hat keinen Eintrag in `config.yaml` und keine Tessie-Werte. Ein
 Fahrzeug in `config.yaml` darf darum nicht `guest` heißen und nicht mit `guest@` beginnen; sonst

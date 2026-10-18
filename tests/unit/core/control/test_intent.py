@@ -344,9 +344,14 @@ BOOST_CLAMPED = "Tesla Model 3: Boost auf 12 h begrenzt, bis 00:00."  # für T0 
 PRIORITY_INVALID = "Die Priorität muss jedes Fahrzeug genau einmal nennen."
 
 
+VEHICLE_MAX_W = {"tesla": 11040.0, "egolf": 7360.0}  # 16 A · 230 V · 3 bzw. 2 Phasen
+
+
 def charging_store(tmp_path, limits) -> IntentStore:
     path = tmp_path / "intent.json"
-    return IntentStore(path, limits, vehicles=VEHICLES, wallboxes=("evcs", "twc"))
+    return IntentStore(
+        path, limits, vehicles=VEHICLES, wallboxes=("evcs", "twc"), vehicle_max_w=VEHICLE_MAX_W
+    )
 
 
 def test_invalid_vehicles_wallboxes_and_priority_are_rejected(tmp_path, limits) -> None:
@@ -1090,3 +1095,176 @@ def test_saved_intent_with_plan_is_reloaded(tmp_path, limits) -> None:
     assert store.load_problem is None
     assert store.current.plan == plan
     assert store.accepted_at == at("10:01")
+
+
+# --- Geplantes Laden in der Absicht (Plan 4b, Präzisierung 2) ---
+
+
+def with_vehicles(plan: IntentPlan, powers: list[dict[str, int]]) -> IntentPlan:
+    """Der Plan mit der Ladeleistung je Fahrzeug in den ersten Slots (wie von der app gesendet)."""
+    slots = [
+        slot.model_copy(update={"vehicles": power})
+        for slot, power in zip(plan.slots, powers, strict=False)
+    ]
+    return plan.model_copy(update={"slots": [*slots, *plan.slots[len(slots) :]]})
+
+
+def test_guest_cannot_be_planned(tmp_path, limits) -> None:
+    store = charging_store(tmp_path, limits)
+    reply = store.submit(Intent(version=1, guest=GuestIntent(mode=ChargeMode.PLANNED)), T0)
+    assert reply.result == "rejected" and reply.rejection == "invalid"
+    assert reply.details == ("Ein Gast kann nicht „Geplant“ laden.",)
+    assert store.current is None
+
+
+def test_a_guest_in_every_other_mode_is_fine(tmp_path, limits) -> None:
+    store = charging_store(tmp_path, limits)
+    for version, mode in enumerate(
+        (ChargeMode.PV, ChargeMode.MIN_PV, ChargeMode.NOW, ChargeMode.OFF), start=1
+    ):
+        assert store.submit(Intent(version=version, guest=GuestIntent(mode=mode)), T0) == (
+            IntentReply("accepted", version)
+        )
+
+
+def test_a_vehicle_can_be_planned_with_target_and_departure(tmp_path, limits) -> None:
+    store = charging_store(tmp_path, limits)
+    planned = VehicleIntent(mode=ChargeMode.PLANNED, target_soc_pct=90, departure="06:30")
+    assert store.submit(Intent(version=1, vehicles={"tesla": planned}), T0) == (
+        IntentReply("accepted", 1)
+    )
+    assert store.current.vehicles["tesla"] == planned
+
+
+def test_plan_vehicle_power_within_the_limit_is_kept(tmp_path, limits) -> None:
+    plan = with_vehicles(plan_at(at("10:01"), FOUR), [{"tesla": 11040, "egolf": 0}, {"egolf": 1}])
+    store = charging_store(tmp_path, limits)
+    assert store.submit(Intent(version=1, plan=plan), at("10:01")) == IntentReply("accepted", 1)
+    assert [slot.vehicles for slot in store.current.plan.slots] == [
+        {"tesla": 11040, "egolf": 0},
+        {"egolf": 1},
+        {},
+        {},
+    ]
+
+
+def test_plan_naming_an_unknown_vehicle_is_rejected(tmp_path, limits) -> None:
+    plan = with_vehicles(
+        plan_at(at("10:01"), FOUR), [{"golf": 3000}, {"tesla": 3000, "golf": 0}, {"audi": 100}]
+    )
+    store = charging_store(tmp_path, limits)
+    reply = store.submit(Intent(version=1, plan=plan), at("10:01"))
+    assert (reply.result, reply.rejection, reply.version) == ("rejected", "invalid", None)
+    # je Schlüssel ein Hinweis, sortiert, egal in wie vielen Slots er steht
+    assert reply.details == (
+        "Plan nennt unbekanntes Fahrzeug „audi“.",
+        "Plan nennt unbekanntes Fahrzeug „golf“.",
+    )
+    assert store.current is None
+
+
+def test_plan_without_any_vehicles_in_the_store_names_them_all_unknown(tmp_path, limits) -> None:
+    plan = with_vehicles(plan_at(at("10:01"), FOUR), [{"tesla": 3000}])
+    reply = make_store(tmp_path, limits).submit(Intent(version=1, plan=plan), at("10:01"))
+    assert reply.details == ("Plan nennt unbekanntes Fahrzeug „tesla“.",)
+
+
+def test_plan_with_negative_vehicle_power_is_rejected(tmp_path, limits) -> None:
+    # das Modell verbietet negative Werte; model_copy prüft nicht, wie eine Absicht aus einer
+    # beschädigten Datei oder einem anderen Sender
+    plan = with_vehicles(plan_at(at("10:01"), FOUR), [{"tesla": -1}, {"egolf": 0}, {"tesla": -50}])
+    reply = charging_store(tmp_path, limits).submit(Intent(version=1, plan=plan), at("10:01"))
+    assert (reply.result, reply.rejection) == ("rejected", "invalid")
+    assert reply.details == ("Plan hat negative Ladeleistung für „tesla“.",)
+
+
+def test_plan_problems_come_after_the_plan_findings(tmp_path, limits) -> None:
+    plan = with_vehicles(
+        plan_at(at("10:01"), ["10:00", "10:30"]), [{"golf": 1}, {"tesla": -1}]
+    )  # Lücke im Raster
+    reply = charging_store(tmp_path, limits).submit(Intent(version=1, plan=plan), at("10:01"))
+    assert reply.details == (
+        *SLOTS_BROKEN,
+        "Plan nennt unbekanntes Fahrzeug „golf“.",
+        "Plan hat negative Ladeleistung für „tesla“.",
+    )
+
+
+def test_plan_vehicle_power_is_checked_and_clamped(tmp_path, limits) -> None:
+    plan = with_vehicles(
+        plan_at(at("10:01"), FOUR),
+        [{"tesla": 20000, "egolf": 5000}, {"tesla": 11040}, {"tesla": 12000, "egolf": 9000}],
+    )
+    store = charging_store(tmp_path, limits)
+    reply = store.submit(Intent(version=1, plan=plan), at("10:01"))
+    # ein Hinweis je Fahrzeug in der Reihenfolge der Konfiguration, egal in wie vielen Slots
+    assert reply == IntentReply(
+        "clamped",
+        1,
+        ("Plan für Tesla Model 3 auf 11040 W begrenzt.", "Plan für e-Golf auf 7360 W begrenzt."),
+    )
+    assert [slot.vehicles for slot in store.current.plan.slots] == [
+        {"tesla": 11040, "egolf": 5000},
+        {"tesla": 11040},
+        {"tesla": 11040, "egolf": 7360},
+        {},
+    ]
+
+
+def test_vehicle_clamp_comes_after_the_grid_charge_clamp(tmp_path, limits) -> None:
+    plan = plan_at(at("10:01"), FOUR, kinds=[grid_charge(9000.0)] + [BatteryIntent()] * 3)
+    plan = with_vehicles(plan, [{"tesla": 20000}])
+    reply = charging_store(tmp_path, limits).submit(Intent(version=1, plan=plan), at("10:01"))
+    assert reply.details == (
+        "Netzladen auf 8000 W begrenzt (maximaler Netzladesetpoint).",
+        "Plan für Tesla Model 3 auf 11040 W begrenzt.",
+    )
+
+
+def test_repeated_version_with_clamped_vehicle_power_is_a_repetition(tmp_path, limits) -> None:
+    plan = with_vehicles(plan_at(at("10:01"), FOUR), [{"tesla": 20000}])
+    store = charging_store(tmp_path, limits)
+    first = store.submit(Intent(version=1, plan=plan), at("10:01"))
+    assert store.submit(Intent(version=1, plan=plan), at("10:02")) == first
+
+
+def test_clamped_vehicle_power_is_saved_and_reloaded(tmp_path, limits) -> None:
+    plan = with_vehicles(plan_at(at("10:01"), FOUR), [{"tesla": 20000}])
+    charging_store(tmp_path, limits).submit(Intent(version=1, plan=plan), at("10:01"))
+    reloaded = charging_store(tmp_path, limits)
+    reloaded.load()
+    assert reloaded.current.plan.slots[0].vehicles == {"tesla": 11040}
+
+
+def test_intent_file_from_4a_loads_with_target_and_departure_defaults(tmp_path, limits) -> None:
+    # so schrieb der core in Plan 4a: Fahrzeuge ohne Ziel und Abfahrt, Plan-Slots ohne Fahrzeuge
+    plan = plan_at(at("10:01"), FOUR).model_dump(mode="json")
+    for slot in plan["slots"]:
+        del slot["vehicles"]
+    sent = {
+        "version": 6,
+        "control": True,
+        "actuators": {"wallbox.evcs": "dry_run"},
+        "vehicles": {
+            "tesla": {"mode": "now", "boost_until": None, "wallbox": "evcs"},
+            "egolf": {"mode": "pv", "boost_until": None, "wallbox": None},
+        },
+        "priority": ["egolf", "tesla"],
+        "surplus_priority": {"kind": "cars_first", "soc_pct": 50.0},
+        "guest": {"mode": "pv"},
+        "plan": plan,
+        "support": {"allowed": True, "soc_pct": None},
+    }
+    write_json_atomic(
+        tmp_path / "intent.json", {"intent": sent, "accepted_at": at("10:01").isoformat()}
+    )
+    store = charging_store(tmp_path, limits)
+    store.load()
+    assert store.load_problem is None
+    for entry in store.current.vehicles.values():
+        assert (entry.target_soc_pct, entry.departure) == (80, "07:00")
+    assert store.current.vehicles["tesla"].mode is ChargeMode.NOW
+    assert [slot.vehicles for slot in store.current.plan.slots] == [{}, {}, {}, {}]
+    # die app sendet dieselbe Absicht weiter: eine Wiederholung, kein Konflikt
+    resent = Intent.model_validate(sent)
+    assert store.submit(resent, at("10:02")) == IntentReply("accepted", 6)

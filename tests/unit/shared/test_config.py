@@ -16,9 +16,11 @@ from bindaems.shared.config import (
     VehicleCommandLimits,
     WakeConfig,
     ha_entities,
+    ha_object_ids,
     home_signal,
     load_config,
     load_secrets,
+    soc_signal,
 )
 
 EXAMPLE = Path("deploy/config.example.yaml")
@@ -469,6 +471,7 @@ def test_home_entities_are_subscribed_under_their_signal(cfg) -> None:
         "vehicle.egolf.soc_pct": "sensor.egolf_soc",
         "vehicle.egolf.home_state": "device_tracker.egolf",
     }
+    assert cfg.homeassistant.entities == {}  # beide kommen aus den Fahrzeugen
     assert ha_entities(cfg.model_copy(update={"homeassistant": None})) == {}
 
 
@@ -480,7 +483,87 @@ def test_a_vehicle_without_home_entity_adds_no_subscription(tmp_path: Path) -> N
 
 def test_ha_entities_leave_the_configured_ones_untouched(cfg) -> None:
     ha_entities(cfg)
-    assert cfg.homeassistant.entities == {"vehicle.egolf.soc_pct": "sensor.egolf_soc"}
+    assert cfg.homeassistant.entities == {}
+
+
+# Plan 4b, Präzisierung 4: soc_entity wird unter soc_signal abonniert
+
+
+def test_soc_entity_is_subscribed_under_the_soc_signal(cfg) -> None:
+    assert soc_signal("egolf") == "vehicle.egolf.soc_pct"
+    assert ha_entities(cfg)[soc_signal("egolf")] == "sensor.egolf_soc"
+    # der Tesla hat keine soc_entity: sein Ladestand kommt aus Tessie
+    assert soc_signal("tesla") not in ha_entities(cfg)
+
+
+def test_soc_entity_conflicting_with_entities_is_rejected(tmp_path) -> None:
+    def mutate(d: dict[str, Any]) -> None:
+        d["homeassistant"]["entities"] = {"vehicle.egolf.soc_pct": "sensor.other"}
+
+    with pytest.raises(
+        ConfigError,
+        match=r"vehicle\.egolf\.soc_pct ist in homeassistant\.entities anders belegt als "
+        r"soc_entity",
+    ):
+        load_config(write_cfg(tmp_path, mutate))
+
+
+def test_soc_entity_equal_to_the_entities_entry_is_fine(tmp_path) -> None:
+    def mutate(d: dict[str, Any]) -> None:
+        d["homeassistant"]["entities"] = {"vehicle.egolf.soc_pct": "sensor.egolf_soc"}
+
+    loaded = load_config(write_cfg(tmp_path, mutate))
+    assert ha_entities(loaded)["vehicle.egolf.soc_pct"] == "sensor.egolf_soc"
+
+
+def test_charge_efficiency_defaults_to_90_and_is_limited(cfg, tmp_path) -> None:
+    assert cfg.vehicles["egolf"].charge_efficiency_pct == 90.0
+    assert cfg.vehicles["tesla"].charge_efficiency_pct == 90.0
+    for value in (49.9, 100.1):
+        with pytest.raises(ConfigError, match=r"vehicles\.egolf\.charge_efficiency_pct"):
+            load_config(
+                write_cfg(
+                    tmp_path,
+                    lambda d, v=value: d["vehicles"]["egolf"].update({"charge_efficiency_pct": v}),
+                )
+            )
+    ok = load_config(
+        write_cfg(
+            tmp_path,
+            lambda d: d["vehicles"]["egolf"].update({"charge_efficiency_pct": 50}),
+        )
+    )
+    assert ok.vehicles["egolf"].charge_efficiency_pct == 50.0
+
+
+def test_charge_limit_sync_is_off_by_default_and_needs_tessie(cfg, tmp_path) -> None:
+    assert not cfg.vehicles["tesla"].charge_limit_sync
+    synced = load_config(
+        write_cfg(tmp_path, lambda d: d["vehicles"]["tesla"].update({"charge_limit_sync": True}))
+    )
+    assert synced.vehicles["tesla"].charge_limit_sync
+    with pytest.raises(ConfigError, match=r"charge_limit_sync verlangt einen tessie-Abschnitt"):
+        load_config(
+            write_cfg(
+                tmp_path, lambda d: d["vehicles"]["egolf"].update({"charge_limit_sync": True})
+            )
+        )
+
+
+def test_object_ids_include_planned_and_statistics_entities(cfg) -> None:
+    ids = ha_object_ids(cfg)
+    assert {
+        "savings_today",
+        "savings_month",
+        "autarky_today",
+        "problem_target_unreachable",
+        "tesla_target_soc",
+        "tesla_departure",
+        "tesla_done_by",
+        "tesla_target_reachable",
+        "egolf_charge_energy",
+    } <= set(ids)
+    assert len(ids) == len(set(ids))
 
 
 @pytest.mark.parametrize("key", [GUEST, guest_key("evcs"), "guest@nowhere"])

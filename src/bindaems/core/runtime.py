@@ -387,6 +387,10 @@ class CoreRuntime:
             self.limits,
             vehicles={key: vehicle.name for key, vehicle in cfg.vehicles.items()},
             wallboxes=list(cfg.wallboxes),
+            vehicle_max_w={
+                key: vehicle.max_a * cfg.grid.voltage_nominal_v * vehicle.phases
+                for key, vehicle in cfg.vehicles.items()
+            },
         )
         self.intents.load()
         self.locks = LockManager(cfg.safety.lock_release_s)

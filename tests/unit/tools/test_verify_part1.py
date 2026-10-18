@@ -126,6 +126,10 @@ def test_http_sources_are_checked(tmp_path, monkeypatch, respx_mock) -> None:
     respx_mock.get("http://homeassistant.lan:8123/api/states/sensor.egolf_soc").respond(
         json={"entity_id": "sensor.egolf_soc", "state": "55"}, headers={"Date": date}
     )
+    # soc_entity und home_entity abonniert der core selbst (Plan 4b); beide stehen im Protokoll
+    respx_mock.get("http://homeassistant.lan:8123/api/states/device_tracker.egolf").respond(
+        json={"entity_id": "device_tracker.egolf", "state": "home"}, headers={"Date": date}
+    )
 
     def influx(request: httpx.Request) -> httpx.Response:
         q = request.url.params["q"]
@@ -153,6 +157,7 @@ def test_http_sources_are_checked(tmp_path, monkeypatch, respx_mock) -> None:
         "| 17.1-9 | Wall-Connector-Vitals | OK |",
         "| 17.1-10 | Tessie-Felder | OK |",
         "| 17.1-11 | HA sensor.egolf_soc | OK | sensor.egolf_soc = 55 |",
+        "| 17.1-11 | HA device_tracker.egolf | OK | device_tracker.egolf = home |",
         "| 17.1-11 | InfluxDB-Datenbank | OK |",
         "| 17.1-11 | InfluxDB-Retention-Policies | OK |",
         "| 17.1-12 | Uhrzeit gegenüber der VM | OK |",

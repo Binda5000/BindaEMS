@@ -88,6 +88,11 @@ vehicles:
     # Wecken, nur zum Starten: Mindestabstand zweier Weckvorgänge in s und Weckvorgänge je
     # Kalendertag (Wiener Zeit)
     wake: {interval_s: 1800, per_day: 6}
+    # Für „Geplant“ (beide Schlüssel sind optional): Wirkungsgrad des Ladens in % (50 bis 100,
+    # Standard 90) und ob der core das Ladelimit des Tesla an das Ziel angleicht (Standard aus,
+    # verlangt tessie)
+    # charge_efficiency_pct: 90
+    # charge_limit_sync: false
   egolf:
     name: e-Golf
     usable_kwh: 38.6
@@ -95,6 +100,7 @@ vehicles:
     min_a: 6
     max_a: 16
     default_wallbox: evcs
+    # Ladestand in Home Assistant; der core abonniert ihn selbst (Signal vehicle.egolf.soc_pct)
     soc_entity: sensor.egolf_soc
     # device_tracker des Autos in Home Assistant: `home` heißt zu Hause. Der core abonniert ihn selbst
     # (Signal vehicle.egolf.home_state); er sollte das Ankommen binnen einer Minute melden.
@@ -107,8 +113,9 @@ pv:
 
 homeassistant:
   url: http://homeassistant.lan:8123
-  entities:             # Signalname → entity_id
-    vehicle.egolf.soc_pct: sensor.egolf_soc
+  # Signalname → entity_id für weitere Messwerte, z. B. `load.serverschrank.power_w: sensor.x`.
+  # soc_entity und home_entity der Fahrzeuge abonniert der core selbst, sie gehören nicht hierher.
+  entities: {}
   mqtt:                 # MQTT Discovery am bestehenden Mosquitto (eigener Benutzer bindaems)
     host: homeassistant.lan
     port: 1883
