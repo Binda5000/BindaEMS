@@ -2341,6 +2341,26 @@ def test_planned_stops_once_at_target_and_restarts_only_three_points_below(cfg) 
     assert c.health()[1]["planned"]["state"] == "reached"
     assert step(30, 76.9) == []  # wieder unter dem Ziel, aber die späteste Startzeit ist weit
     assert c.health()[1]["planned"]["state"] == "surplus"
+    # 13:50, Abfahrt 14:00: Die späteste Startzeit für 76,9 % ist vorbei, das Auto startet wieder
+    assert step(6600, 76.9) == [
+        Command("wallbox.evcs", CHARGING, True, reasons=("mode_planned", "latest_start"))
+    ]
+    assert c.health()[1]["planned"]["state"] == "due"
+
+
+def test_planned_due_names_the_surplus_when_it_carries_the_wish(cfg) -> None:
+    c = controller(cfg)
+    sunny = grid(grid_w=-10000.0)  # Anteil 9900 / 460 = 21 A ≥ 16 A
+    found = c.step(
+        inputs(
+            cfg, intent=planned_for(departure="14:00"), egolf_obs=egolf_soc(30.0), grid_obs=sunny
+        )
+    )
+    reasons = ("mode_planned", "latest_start", "pv_surplus")
+    assert [x.command for x in found] == [
+        Command("wallbox.evcs", CURRENT, 16.0, reasons=reasons),
+        Command("wallbox.evcs", CHARGING, True, reasons=reasons),
+    ]
 
 
 def test_assumed_soc_never_reports_reached(cfg) -> None:  # Review Focus 2

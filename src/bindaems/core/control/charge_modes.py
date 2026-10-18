@@ -152,6 +152,9 @@ class ModeMachine:
         # Mindestlaufzeit bzw. Mindestpause als erfüllt.
         self._started_at: datetime | None = None
         self._stopped_at: datetime | None = None
+        # Der letzte Stopp kam von ``force_stop``: Nur dann hält seine Pause auch Sofort, Boost,
+        # Min+PV und „Geplant“ mit festem Bedarf zurück.
+        self._forced = False
 
     @property
     def charging(self) -> bool:
@@ -195,8 +198,9 @@ class ModeMachine:
 
         „Geplant“ gilt in den Regeln 4 bis 7 ohne festen Bedarf (``firm``) wie PV, mit festem
         Bedarf wie Sofort (Plan 4b, Präzisierung 7). Ein Wechsel von ``firm`` ist kein
-        Moduswechsel: Kommt der feste Bedarf, startet das Auto sofort, und der Start zählt für die
-        Mindestlaufzeit; fällt er weg, stoppt es nach den Zeiten von PV.
+        Moduswechsel: Kommt der feste Bedarf, startet das Auto sofort, auch in der Pause nach
+        einem Stopp nach den Zeiten von PV, nur nicht in der nach ``force_stop`` (Ruling R6); der
+        Start zählt für die Mindestlaufzeit. Fällt er weg, stoppt es nach den Zeiten von PV.
         """
         if inp.resumed:
             self._take_over = True
@@ -233,6 +237,7 @@ class ModeMachine:
         self._charging = False
         self._started_at = None
         self._stopped_at = now
+        self._forced = True
 
     def _begin(
         self, now: datetime, inp: ModeInput, charge: bool, *, taken_over: bool = False
@@ -250,16 +255,18 @@ class ModeMachine:
         self._mode = mode
         self._enough_since = self._short_since = since
         self._started_at = self._stopped_at = None
+        self._forced = False
         self._charging = charging
 
     def _continue(self, now: datetime, mode: Effective) -> ModeDecision:
         """Regel 7: Der Modus ist derselbe wie im letzten Schritt; ``mode`` nach ``_rule_mode``."""
         if mode is Effective.PV:
             return self._pv(now)
-        # Aus ist aus; die übrigen laden, außer innerhalb der Pause nach ``force_stop``. Nur PV
-        # stoppt durch die Zeiten, und jeder Moduswechsel vergisst den Stopp: Hier stammt er
-        # immer von ``force_stop``.
-        paused = not _passed(self._stopped_at, now, self._timers.min_off_s)
+        # Aus ist aus; die übrigen laden, außer innerhalb der Pause nach ``force_stop``. Jeder
+        # Moduswechsel vergisst den Stopp. Ein Stopp nach den Zeiten von PV kann hier nur aus
+        # „Geplant“ ohne festen Bedarf stammen: Setzt der feste Bedarf ein, gilt das wie ein
+        # Wechsel auf Sofort, und seine Pause verfällt (Ruling R6).
+        paused = self._forced and not _passed(self._stopped_at, now, self._timers.min_off_s)
         charging = mode is not Effective.OFF and not paused
         if charging and not self._charging:
             self._started_at = now  # für die Mindestlaufzeit, wenn „Geplant“ wieder wie PV gilt
@@ -275,6 +282,7 @@ class ModeMachine:
         if self._charging and self._may_stop(now):
             self._charging = False
             self._stopped_at = now
+            self._forced = False
             return ModeDecision(False, PV_SURPLUS)
         return ModeDecision(self._charging, None)
 

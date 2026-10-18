@@ -250,6 +250,9 @@ class _Plug:
     - ``number``: seine Nummer; eindeutig über alle Wallboxen und nie wiederverwendet
     - ``start``: sein Beginn auf der Wanduhr; begann er, ohne dass die Regelung „kein Fahrzeug“
       davor sah (etwa beim Start des core), der Zyklus, in dem sie ihn zuerst sah
+
+    Abstecken und neu Anstecken während ``idle`` bleibt unbemerkt (die Regelung sieht die Wallbox
+    dann nicht): Es zählt als derselbe Vorgang, wie bei ``assignment._Port``.
     """
 
     number: int

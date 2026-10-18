@@ -546,3 +546,21 @@ def test_planned_mode_change_with_firm_demand_is_on() -> None:
     assert machine.step(at(1), inp(PLANNED, enough=False, firm=True)) == ModeDecision(True, None)
     machine.step(at(2), inp(Effective.OFF))
     assert machine.step(at(3), inp(PLANNED, enough=False)) == ModeDecision(False, None)
+
+
+def test_a_firm_demand_after_a_pv_stop_starts_at_once() -> None:  # Ruling R6
+    machine = ModeMachine(TIMERS)
+    run(machine, 0, 121, mode=PLANNED)  # Start bei 120
+    decisions = run(machine, 121, 721, mode=PLANNED, enough=False)
+    assert decisions[720] == ModeDecision(False, "pv_surplus")
+    # fester Bedarf innerhalb von min_off_s: wie ein Wechsel auf Sofort, die Pause verfällt
+    assert machine.step(at(730), inp(PLANNED, enough=False, firm=True)) == ModeDecision(True, None)
+
+
+def test_a_firm_demand_after_force_stop_waits_for_the_pause() -> None:  # Ruling R6
+    machine = ModeMachine(TIMERS)
+    machine.step(at(0), inp(PLANNED, enough=False, firm=True))
+    machine.force_stop(at(10))
+    decisions = run(machine, 11, 611, mode=PLANNED, enough=False, firm=True)
+    assert not any(d.charge for s, d in decisions.items() if s < 610)
+    assert decisions[610] == ModeDecision(True, None)
