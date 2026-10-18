@@ -496,16 +496,15 @@ Er schaltet nichts an der Anlage. **Der nächste Entwicklungsschritt ist Plan 4b
   immer gemeinsam aus demselben Stand ausgerollt (gleiche Compose-Datei, gleiche Image-Tags): Die
   UI-Schemas sind streng, eine abweichende Version zeigt auf der System-Seite nur „Unerwartete
   Antwort vom Server“.
-- **Tests:** 6929 Python-Tests im vollen Lauf nach der Nacharbeit zu Plan 4a (mit den Szenarien des
-  Simulators und `--cov`), davon 41 Property-Tests mit Hypothesis (6 für die Safety-Schicht,
-  6 für den Phasenwächter, 13 für den Akku-Sollwert, 7 für den 15-min-Wächter, 8 sonstige; Plan 4a
-  brachte vier: die Wasserfall-Regel der Nachrechnung gegen die des core (zwei Tests), der
-  Steckzustand der app gegen den des core und die Zuordnung der Slots zu Sessions gegen die einfache
-  Rechnung), und 638 UI-Tests (Vitest) sowie 27 E2E-Tests (Playwright). 6928 waren grün; rot war
-  `tests/property/test_plan_plausible.py` mit einem Beispiel, das Hypothesis lokal gefunden hat.
-  Seit der Festlegung vom 18.10.2026 besteht er (siehe „Planer: Plausibilität gegen Optimierer“).
+- **Tests:** 6939 Python-Tests im vollen Lauf nach der Nacharbeit zu Plan 4a und der Festlegung zum
+  Planer vom 18.10.2026 (mit den Szenarien des Simulators und `--cov`), alle grün, davon
+  41 Property-Tests mit Hypothesis (6 für die Safety-Schicht, 6 für den Phasenwächter, 13 für den
+  Akku-Sollwert, 7 für den 15-min-Wächter, 8 sonstige; Plan 4a brachte vier: die Wasserfall-Regel
+  der Nachrechnung gegen die des core (zwei Tests), der Steckzustand der app gegen den des core und
+  die Zuordnung der Slots zu Sessions gegen die einfache Rechnung), und 638 UI-Tests (Vitest) sowie
+  27 E2E-Tests (Playwright).
   Abdeckung 98 % insgesamt und 98 bis 100 % für `core/safety`, `core/control` und `core/actuators`;
-  der volle Lauf von pytest mit `--cov` dauerte 23 Minuten.
+  der volle Lauf von pytest mit `--cov` dauerte 22 Minuten.
   Stand am Ende von Plan 4a, vor der Nacharbeit: 6827, 619 und 27.
   Stand davor, nach Plan 3c auf `main`: 6572, 515 und 24, Abdeckung 97,80 % insgesamt und 99 bis 100 %
   für `core/safety`, `core/control` und `core/actuators`. Der volle Lauf von pytest dauert rund
