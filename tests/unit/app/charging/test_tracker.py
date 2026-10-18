@@ -1,6 +1,7 @@
 import asyncio
 from datetime import datetime, timedelta
 
+import pytest
 from sqlalchemy import insert, select
 from structlog.testing import capture_logs
 from tests.unit.app.charging.conftest import T0
@@ -292,6 +293,26 @@ def test_occupant_before_the_session_does_not_count_for_a_short_one(tracker) -> 
     tracker.record(T0 + timedelta(seconds=20), unplugged())
     (session,) = all_sessions(tracker)
     assert session.vehicle is None
+
+
+def test_failed_transaction_resets_the_memory_state(tracker, engine, monkeypatch) -> None:
+    original = tracker._begin
+
+    def begin_then_fail(*args, **kwargs) -> None:
+        original(*args, **kwargs)
+        raise RuntimeError("Datenbank gesperrt")
+
+    monkeypatch.setattr(tracker, "_begin", begin_then_fail)
+    with pytest.raises(RuntimeError):
+        tracker.record(at(0), plugged("tesla", "detected"))
+    assert all_sessions(tracker) == [] and log_rows(engine) == []  # zurückgerollt
+    monkeypatch.undo()
+    tracker.record(at(1), plugged("tesla", "detected"))
+    (session,) = all_sessions(tracker)  # sonst fehlte die Session: im Speicher schon „offen“
+    assert session.start == at(1) and session.end is None
+    assert [row[2] for row in log_rows(engine)] == ["tesla"]  # die Belegung wird neu geschrieben
+    tracker.record(at(2), unplugged())
+    assert all_sessions(tracker)[0].end == at(2)
 
 
 def test_running_session_shows_the_current_occupant(tracker) -> None:

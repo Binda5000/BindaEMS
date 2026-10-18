@@ -155,15 +155,23 @@ class ChargingTracker:
 
     def record(self, now: datetime, seen: Sequence[WallboxSeen]) -> None:
         """Verarbeitet eine Beobachtung (synchron; ``run`` ruft es in einem Thread)."""
-        with self._engine.begin() as conn:
-            if not self._loaded:
-                self._load(conn)
-            for wallbox, current in list(self._open.items()):
-                if now - current.last_seen > SESSION_GAP:  # Pause: Ende bei der letzten Sicht
-                    self._close(conn, wallbox, current.last_seen)
-            for item in seen:
-                changed = self._log_assignment(conn, now, item)
-                self._track(conn, now, item, changed)
+        try:
+            with self._engine.begin() as conn:
+                if not self._loaded:
+                    self._load(conn)
+                for wallbox, current in list(self._open.items()):
+                    if now - current.last_seen > SESSION_GAP:  # Pause: Ende bei der letzten Sicht
+                        self._close(conn, wallbox, current.last_seen)
+                for item in seen:
+                    changed = self._log_assignment(conn, now, item)
+                    self._track(conn, now, item, changed)
+        except Exception:
+            # Die Transaktion ist zurückgerollt, der Speicher darf nicht davon abweichen: der
+            # nächste Lauf liest die offenen Sessions neu und schreibt jede Belegung wieder.
+            self._loaded = False
+            self._open.clear()
+            self._assigned.clear()
+            raise
 
     def sessions(
         self, start: datetime, end: datetime, vehicle: str | None = None
