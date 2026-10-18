@@ -229,9 +229,21 @@ it('versucht die Sessions eines vergangenen Zeitraums nach einem Fehler nach 30 
 });
 
 it('zeigt nur beim ersten Laden „Lädt …“', async () => {
-	api.stats.mockReturnValue(new Promise(() => {}));
+	let answer: (value: ReturnType<typeof stats>) => void = () => {};
+	api.stats.mockReturnValue(new Promise((resolve) => (answer = resolve)));
+	navigate('?zeitraum=monat&datum=2026-10-09');
 	render(Page);
 	expect(await screen.findByText('Lädt …')).toBeInTheDocument();
+	answer(stats());
+	await screen.findByRole('table', { name: 'Ladesessions' });
+	expect(screen.queryByText('Lädt …')).not.toBeInTheDocument();
+
+	api.stats.mockReturnValue(new Promise(() => {}));
+	api.chargingSessions.mockReturnValue(new Promise(() => {}));
+	navigate('?zeitraum=monat&datum=2026-09-15');
+	await vi.advanceTimersByTimeAsync(0);
+	expect(screen.getByRole('heading', { name: 'September 2026' })).toBeInTheDocument();
+	expect(screen.queryByText('Lädt …')).not.toBeInTheDocument(); // beim Blättern nicht
 });
 
 it('lässt beim Blättern die alten Werte gedimmt stehen, bis die neuen da sind', async () => {
@@ -245,20 +257,75 @@ it('lässt beim Blättern die alten Werte gedimmt stehen, bis die neuen da sind'
 	let answerSessions: (value: ReturnType<typeof chargingSession>[]) => void = () => {};
 	api.stats.mockReturnValue(new Promise((resolve) => (answerStats = resolve)));
 	api.chargingSessions.mockReturnValue(new Promise((resolve) => (answerSessions = resolve)));
+	const hintList = () => screen.getByText(/^Abdeckung/).closest('ul');
+	expect(results()).not.toHaveClass('stale');
+	expect(hintList()).not.toHaveClass('stale');
 	navigate('?zeitraum=monat&datum=2026-09-15');
 	await vi.advanceTimersByTimeAsync(0);
 	expect(screen.getByRole('heading', { name: 'September 2026' })).toBeInTheDocument();
 	expect(screen.queryByText('Lädt …')).not.toBeInTheDocument();
 	expect(results()).toHaveAttribute('aria-busy', 'true');
+	expect(results()).toHaveClass('stale');
+	expect(hintList()).toHaveClass('stale');
 	expect(screen.getByRole('table', { name: 'Ladesessions' })).toBeInTheDocument();
 
 	answerStats(stats());
 	await vi.advanceTimersByTimeAsync(0);
-	// die Statistik ist da, die Sessions noch nicht: weiter beschäftigt
+	// die Statistik ist da, die Sessions noch nicht: weiter beschäftigt, aber nicht mehr alt
 	expect(results()).toHaveAttribute('aria-busy', 'true');
+	expect(results()).not.toHaveClass('stale');
+	expect(hintList()).not.toHaveClass('stale');
 	answerSessions([chargingSession()]);
 	await vi.advanceTimersByTimeAsync(0);
 	expect(results()).toHaveAttribute('aria-busy', 'false');
+});
+
+it('lässt Hinweise und Diagramm-Label beim Blättern bei den gezeigten Werten', async () => {
+	navigate('?zeitraum=monat&datum=2026-10-09');
+	render(Page);
+	await screen.findByText('bis jetzt');
+	expect(screen.getByRole('img', { name: 'Energie Oktober 2026' })).toBeInTheDocument();
+
+	api.stats.mockReturnValue(new Promise(() => {}));
+	navigate('?zeitraum=monat&datum=2026-09-15');
+	await vi.advanceTimersByTimeAsync(0);
+	expect(screen.getByRole('heading', { name: 'September 2026' })).toBeInTheDocument();
+	// gedimmt steht noch der Oktober: laufend, mit seinem Titel im Diagramm
+	expect(screen.getByText('bis jetzt')).toBeInTheDocument();
+	expect(screen.getByRole('img', { name: 'Energie Oktober 2026' })).toBeInTheDocument();
+});
+
+it('mischt beim Blättern keine Sessions eines anderen Zeitraums unter die Werte', async () => {
+	api.chargingSessions.mockResolvedValue([
+		chargingSession({ vehicle: 'erst', vehicle_name: 'Erstwagen' })
+	]);
+	navigate('?zeitraum=monat&datum=2026-10-09');
+	render(Page);
+	await vi.advanceTimersByTimeAsync(0);
+	expect(screen.getByRole('cell', { name: 'Erstwagen' })).toBeInTheDocument();
+
+	// September: die Sessions kommen vor der Statistik, gezeigt bleiben die des Oktobers
+	let answerStats: (value: ReturnType<typeof stats>) => void = () => {};
+	api.stats.mockReturnValue(new Promise((resolve) => (answerStats = resolve)));
+	api.chargingSessions.mockResolvedValue([
+		chargingSession({ vehicle: 'zweit', vehicle_name: 'Zweitwagen' })
+	]);
+	navigate('?zeitraum=monat&datum=2026-09-15');
+	await vi.advanceTimersByTimeAsync(0);
+	expect(screen.getByRole('cell', { name: 'Erstwagen' })).toBeInTheDocument();
+	expect(screen.queryByRole('cell', { name: 'Zweitwagen' })).not.toBeInTheDocument();
+	answerStats(stats());
+	await vi.advanceTimersByTimeAsync(0);
+	expect(screen.getByRole('cell', { name: 'Zweitwagen' })).toBeInTheDocument();
+	expect(screen.queryByRole('cell', { name: 'Erstwagen' })).not.toBeInTheDocument();
+
+	// August: die Statistik kommt vor den Sessions, die des Septembers stehen nicht darunter
+	api.stats.mockResolvedValue(stats());
+	api.chargingSessions.mockReturnValue(new Promise(() => {}));
+	navigate('?zeitraum=monat&datum=2026-08-15');
+	await vi.advanceTimersByTimeAsync(0);
+	expect(screen.getByText('Autarkie').closest('[aria-busy]')).not.toHaveClass('stale');
+	expect(screen.queryByRole('cell', { name: 'Zweitwagen' })).not.toBeInTheDocument();
 });
 
 it('zeigt beim Blättern einen Fehler statt der alten Werte', async () => {
@@ -271,6 +338,25 @@ it('zeigt beim Blättern einen Fehler statt der alten Werte', async () => {
 	expect(await screen.findByText('Statistik nicht verfügbar')).toBeInTheDocument();
 	expect(screen.queryByText('Autarkie')).not.toBeInTheDocument();
 	expect(screen.queryByText('Lädt …')).not.toBeInTheDocument();
+});
+
+it('zeigt nach einem Fehler beim Weiterblättern nicht die Werte von davor', async () => {
+	const { ApiError } = await import('$lib/api/errors');
+	navigate('?zeitraum=monat&datum=2026-10-09');
+	render(Page);
+	await screen.findByText('Autarkie');
+	api.stats.mockRejectedValue(new ApiError(503, 'Statistik nicht verfügbar'));
+	navigate('?zeitraum=monat&datum=2026-09-15');
+	await screen.findByText('Statistik nicht verfügbar');
+
+	api.stats.mockReturnValue(new Promise(() => {}));
+	api.chargingSessions.mockReturnValue(new Promise(() => {}));
+	navigate('?zeitraum=monat&datum=2026-08-15');
+	await vi.advanceTimersByTimeAsync(0);
+	expect(screen.getByRole('heading', { name: 'August 2026' })).toBeInTheDocument();
+	expect(screen.queryByText('Autarkie')).not.toBeInTheDocument(); // nicht der Oktober
+	expect(screen.queryByText(/^Abdeckung/)).not.toBeInTheDocument();
+	expect(screen.getByText('Lädt …')).toBeInTheDocument();
 });
 
 it('fragt nach dem Verlassen der Seite nicht mehr nach', async () => {

@@ -1187,8 +1187,9 @@ und dem Abgleich (Abschnitt 8).
   Zeitraum gesperrt, wo sie nichts bewirken. Die Überschrift nennt den Zeitraum: „Fr., 09.10.2026“, „KW 41 ·
   05.10.–11.10.2026“, „Oktober 2026“ oder „2026“. Zeitraum und Datum stehen in der Adresse
   (`/statistik?zeitraum=monat&datum=2026-10-09`), du kannst sie als Lesezeichen setzen. Beim Blättern
-  bleiben die Werte des vorigen Zeitraums gedimmt stehen, bis die neuen da sind; „Lädt …“ steht nur
-  beim ersten Öffnen. Scheitert die Abfrage, steht die Meldung statt der Werte.
+  bleiben die Werte des vorigen Zeitraums mit ihren Hinweisen und Ladesessions gedimmt stehen, bis
+  die neuen da sind. Scheitert die Abfrage, steht die Meldung statt der Werte. „Lädt …“ steht nur,
+  solange keine Werte zu zeigen sind: beim ersten Öffnen und beim Blättern nach einem Fehler.
 - **Hinweise im Kopf:** „Abdeckung {pct} %“ (Anteil der Zeit mit aufgezeichneter Abrechnung), bei
   geschätzten Viertelstunden „{n} Viertelstunden geschätzt“ (Abschnitt 8, „Lücken nachrechnen“) und bei
   einem laufenden Zeitraum „bis jetzt“.

@@ -58,43 +58,53 @@
 	}
 
 	// Der laufende Zeitraum lädt jede Minute nach, ein vergangener nur einmal (nach einem Fehler
-	// alle 30 s erneut). Das gilt für die Statistik wie für die Ladesessions.
-	let resource = $state.raw<Resource<Stats> | null>(null);
-	let sessions = $state.raw<Resource<ChargingSession[]> | null>(null);
+	// alle 30 s erneut). Das gilt für die Statistik wie für die Ladesessions. Eine Abfrage merkt
+	// sich Titel und „läuft“ ihres Zeitraums, damit Hinweise und Diagramm zu ihren Werten passen.
+	interface Query {
+		title: string;
+		running: boolean;
+		stats: Resource<Stats>;
+		sessions: Resource<ChargingSession[]>;
+	}
+	let query = $state.raw<Query | null>(null);
 	$effect(() => {
-		const query = { period, day, first: range.first, last: range.last };
+		const key = { period, day, first: range.first, last: range.last };
 		const options = { intervalMs: running ? POLL_MS : undefined, retryMs: RETRY_MS };
-		const nextStats = new Resource((o) => api.stats(query.period, query.day, o), options);
-		const nextSessions = new Resource(
-			(o) => api.chargingSessions(query.first, query.last, undefined, o),
-			options
-		);
-		resource = nextStats;
-		sessions = nextSessions;
-		const stopStats = nextStats.start();
-		const stopSessions = nextSessions.start();
+		const next: Query = {
+			title,
+			running,
+			stats: new Resource((o) => api.stats(key.period, key.day, o), options),
+			sessions: new Resource(
+				(o) => api.chargingSessions(key.first, key.last, undefined, o),
+				options
+			)
+		};
+		query = next;
+		const stopStats = next.stats.start();
+		const stopSessions = next.sessions.start();
 		return () => {
 			stopStats();
 			stopSessions();
 		};
 	});
 
-	// Jeder Zeitraum hat seine eigene Abfrage. Beim Blättern bleiben bis zur Antwort die Werte des
-	// vorigen Zeitraums gedimmt stehen (`aria-busy`); nur vor der allerersten Antwort steht
-	// „Lädt …“. Scheitert die Abfrage, steht der Fehler, nicht der vorige Zeitraum.
-	let shownStats = $state.raw<Stats | undefined>(undefined);
-	let shownSessions = $state.raw<ChargingSession[] | undefined>(undefined);
+	// Jeder Zeitraum hat seine eigene Abfrage. Beim Blättern bleibt bis zur Antwort der Statistik
+	// die vorige Abfrage mit ihren Werten gedimmt stehen, Statistik und Sessions zusammen
+	// (`aria-busy`); nur vor der allerersten Antwort steht „Lädt …“. Scheitert die Abfrage, steht
+	// der Fehler, und beim Weiterblättern steht danach nichts Altes mehr da.
+	let shown = $state.raw<Query | undefined>(undefined);
 	$effect(() => {
-		if (resource?.data !== undefined) shownStats = resource.data;
+		if (query?.stats.data !== undefined) shown = query;
+		else if (query?.stats.error) shown = undefined;
 	});
-	$effect(() => {
-		if (sessions?.data !== undefined) shownSessions = sessions.data;
-	});
-	const current = $derived(resource?.data ?? (resource?.error ? undefined : shownStats));
-	const sessionList = $derived(sessions?.data ?? (sessions?.error ? undefined : shownSessions));
+	const view = $derived(
+		query?.stats.data !== undefined ? query : query?.stats.error ? undefined : shown
+	);
+	const current = $derived(view?.stats.data);
+	// gedimmt: die Werte gehören noch zum vorigen Zeitraum
+	const stale = $derived(view !== undefined && view !== query);
 	const busy = $derived(
-		(resource?.data === undefined && current !== undefined) ||
-			(sessions?.data === undefined && sessionList !== undefined)
+		stale || (view !== undefined && view.sessions.data === undefined && !view.sessions.error)
 	);
 
 	// Anzeigenamen der Wallboxes für den Abgleich; ohne Antwort gilt der Schlüssel
@@ -147,36 +157,36 @@
 			<button type="button" disabled={running} onclick={() => open(period, today)}>Heute</button>
 		</div>
 		{#if current}
-			<ul class="hints muted" class:stale={busy}>
-				{#each hints(current, running) as hint (hint)}
+			<ul class="hints muted" class:stale>
+				{#each hints(current, view?.running ?? false) as hint (hint)}
 					<li>{hint}</li>
 				{/each}
 			</ul>
 		{/if}
 	</Card>
 
-	{#if resource?.error}
-		<Notice level="error">{resource.error.detail}</Notice>
+	{#if query?.stats.error}
+		<Notice level="error">{query.stats.error.detail}</Notice>
 	{/if}
 
 	{#if current}
-		<div class="results" class:stale={busy} aria-busy={busy}>
+		<div class="results" class:stale aria-busy={busy}>
 			<StatTiles tiles={tiles(current)} />
 
 			<Card title="Energie">
 				{#if chartOption}
-					<EChart option={chartOption} label="Energie {title}" height="20rem" />
+					<EChart option={chartOption} label="Energie {view?.title}" height="20rem" />
 				{/if}
 			</Card>
 
 			<CostCard stats={current} />
 			<VehicleCard stats={current} />
-			<SessionsCard sessions={sessionList} error={sessions?.error?.detail} />
+			<SessionsCard sessions={view?.sessions.data} error={view?.sessions.error?.detail} />
 			<ConsumersCard stats={current} />
 			<PeaksCard stats={current} />
 			<ChecksCard stats={current} {wallboxNames} />
 		</div>
-	{:else if !resource?.error}
+	{:else if !query?.stats.error}
 		<p class="muted">Lädt …</p>
 	{/if}
 </div>
