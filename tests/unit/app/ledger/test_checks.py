@@ -218,6 +218,33 @@ async def test_run_on_dst_change_uses_the_right_midnights(checks, influx: FakeIn
     assert by_signal(checks.checks(day, day))["import"].counter_kwh == pytest.approx(30.0)
 
 
+async def test_run_interpolates_the_midnight_reading(checks, ledger, influx: FakeInflux) -> None:
+    # B1: der core schreibt die Zähler nur jede Minute. Hohe Last über Mitternacht (12 kW, 0,2 kWh
+    # je Minute), letzter Wert 40 s vor Mitternacht: der Stand um Mitternacht liegt dazwischen.
+    from bindaems.shared.domain import SlotFlows
+
+    start, end = midnight(DAY), midnight(DAY + timedelta(days=1))
+    for slot_start in local_day_slots(DAY)[:5]:
+        ledger.ingest(SlotFlows(slot_start, 900.0, {"grid>house": 1000.0}, {}), "stream")
+    second = timedelta(seconds=1)
+    influx.set_counters(
+        {
+            IMP: {
+                start - 100 * second: 99.8,
+                start - 40 * second: 100.0,
+                start + 20 * second: 100.2,  # 100,1333 um Mitternacht
+                end - 40 * second: 105.1333,
+                end + 20 * second: 105.1333,
+            }
+        }
+    )
+    await checks.run(DAY, DAY)
+    result = by_signal(checks.checks(DAY, DAY))["import"]
+    assert result.ledger_kwh == pytest.approx(5.0)
+    assert result.counter_kwh == pytest.approx(5.0, abs=1e-3)
+    assert not result.flagged  # vorher: 5,13 kWh am Zähler, 2,7 % und 0,13 kWh, markiert
+
+
 async def test_run_failure_keeps_old_rows(checks, influx: FakeInflux) -> None:
     influx.set_counters(counters({DAY: {IMP: 1.0}, DAY + timedelta(days=1): {IMP: 2.0}}))
     await checks.run(DAY, DAY)

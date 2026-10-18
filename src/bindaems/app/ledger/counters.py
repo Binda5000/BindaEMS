@@ -32,7 +32,8 @@ from bindaems.app.history.influx import (
 from bindaems.shared.influx.lineprotocol import epoch_ms
 from bindaems.shared.timeutil import ensure_utc
 
-BUCKET = timedelta(minutes=30)  # ``GROUP BY time(30m)`` der Mitternachtsstände
+WINDOW = timedelta(minutes=30)  # so weit sucht ``readings_at`` vor und nach dem Zeitpunkt
+ALONE = timedelta(minutes=2)  # ein Wert ohne Gegenstück gilt nur so nah am Zeitpunkt
 NEAR = timedelta(minutes=15)  # Abstand zu den Rändern einer Lücke
 SOC_ID = "battery"
 
@@ -40,6 +41,7 @@ _ID = r"(?P<id>[^.]+)"
 _GRID = re.compile(r"grid\.energy_(?P<direction>import|export)_kwh")
 _PV = re.compile(rf"pv\.{_ID}\.energy_kwh")
 _WALLBOX = re.compile(rf"wallbox\.{_ID}\.total_kwh")
+_COLUMN = re.compile(r"[ab]\d+")  # Spalten von ``readings_at``: davor bzw. danach, Zeitpunkt n
 
 
 def counter_tags(signal: str) -> tuple[str, str, str] | None:
@@ -86,14 +88,34 @@ def _first_value(series: Sequence[Series]) -> float | None:
     return None
 
 
+def _instant_reading(
+    instant_ms: int, before: tuple[int, float] | None, after: tuple[int, float] | None
+) -> float | None:
+    """Zählerstand zum Zeitpunkt aus dem letzten Wert davor und dem ersten ab dann (je ``(ms,
+    kWh)``): linear dazwischen; ist der Zähler dazwischen zurückgesetzt, gilt der Wert davor. Fehlt
+    einer, gilt der andere, wenn er höchstens ``ALONE`` entfernt ist."""
+    if before is not None and after is not None:
+        (time_before, value_before), (time_after, value_after) = before, after
+        if value_after < value_before or time_after <= time_before:
+            return value_before
+        share = (instant_ms - time_before) / (time_after - time_before)
+        return value_before + (value_after - value_before) * share
+    alone = before or after
+    if alone is not None and abs(alone[0] - instant_ms) <= ALONE.total_seconds() * 1000:
+        return alone[1]
+    return None
+
+
 async def readings_at(
     reader: InfluxReader, signals: Sequence[str], instants: Sequence[datetime]
 ) -> dict[tuple[str, datetime], float | None]:
-    """Zählerstand je Signal und Zeitpunkt: der letzte Wert in ``[Zeitpunkt − 30 min, Zeitpunkt)``.
+    """Zählerstand je Signal und Zeitpunkt, linear interpoliert aus dem letzten Wert in
+    ``[Zeitpunkt − 30 min, Zeitpunkt)`` und dem ersten in ``[Zeitpunkt, Zeitpunkt + 30 min)``
+    (der core schreibt die Zähler nur jede Minute; Regeln in ``_instant_reading``).
 
-    Eine einzige Abfrage über den ganzen Zeitraum (``GROUP BY time(30m)``); die Zeitpunkte müssen
-    auf einer halben Stunde liegen (Mitternacht in Wien tut das, auch beim Wechsel der Sommerzeit,
-    denn der Unterschied zu UTC beträgt ganze Stunden). Fehlt ein Wert, steht ``None`` da.
+    Eine Anfrage für alle Signale und Zeitpunkte: je Zeitpunkt zwei Anweisungen, deren Spalte
+    (``b<n>`` davor, ``a<n>`` danach) den Zeitpunkt ``n`` nennt. Ohne ``GROUP BY time`` liefern
+    ``last`` und ``first`` die Zeit des Werts selbst. Fehlt ein Wert, steht ``None`` da.
     """
     result: dict[tuple[str, datetime], float | None] = {
         (signal, instant): None for signal in signals for instant in instants
@@ -102,37 +124,44 @@ async def readings_at(
     known = {signal: t for signal, t in tags.items() if t is not None}
     if not known or not instants:
         return result
-    for instant in instants:
-        if epoch_ms(instant) % int(BUCKET.total_seconds() * 1000):
-            raise ValueError(f"Zeitpunkt nicht auf einer halben Stunde: {instant.isoformat()}")
-    start = min(instants) - BUCKET
-    end = max(instants)
-    # feste Bezeichner, Tags und Zeiten gequotet bzw. als Zahlen
-    query = (
-        f'SELECT last("kwh") AS "kwh" FROM {quote_ident(RP_LONG)}.{quote_ident("energy")} '  # noqa: S608
-        f"WHERE time >= {epoch_ms(start)}ms AND time < {epoch_ms(end)}ms AND ("
-        + " OR ".join(_tag_filter(t) for t in sorted(set(known.values())))
-        + ') GROUP BY time(30m),"source","id","direction" fill(none)'
+    # nur nach ``source`` gefiltert, damit die Anfrage kurz bleibt; die Reihen wählt der Abgleich
+    sources = " OR ".join(
+        f'"source" = {quote_str(s)}' for s in sorted({t[0] for t in known.values()})
     )
-    buckets: dict[tuple[str, str, str], dict[int, float]] = {}
-    for series in await reader.query(query):
+    statements: list[str] = []
+    for n, instant in enumerate(instants):
+        for column, select, low, high in (
+            (f"b{n}", "last", instant - WINDOW, instant),
+            (f"a{n}", "first", instant, instant + WINDOW),
+        ):
+            # feste Bezeichner, Tags gequotet, Zeiten als Zahlen
+            statements.append(
+                f'SELECT {select}("kwh") AS "{column}" '  # noqa: S608
+                f"FROM {quote_ident(RP_LONG)}.{quote_ident('energy')} "
+                f"WHERE time >= {epoch_ms(low)}ms AND time < {epoch_ms(high)}ms AND ({sources}) "
+                'GROUP BY "source","id","direction"'
+            )
+    found: dict[tuple[tuple[str, str, str], str], tuple[int, float]] = {}
+    for series in await reader.query(";".join(statements)):
         key = (
             series.tags.get("source", ""),
             series.tags.get("id", ""),
             series.tags.get("direction", ""),
         )
         indexes = _value_column(series.columns)
-        if indexes is None:
+        if indexes is None or not _COLUMN.fullmatch(series.columns[indexes[1]]):
             continue
         time_index, value_index = indexes
         for row in series.values:
             stamp = _number(row[time_index]) if time_index < len(row) else None
             value = _number(row[value_index]) if value_index < len(row) else None
             if stamp is not None and value is not None:
-                buckets.setdefault(key, {})[int(stamp)] = value
+                found[(key, series.columns[value_index])] = (int(stamp), value)
     for signal, key in known.items():
-        for instant in instants:
-            result[(signal, instant)] = buckets.get(key, {}).get(epoch_ms(instant - BUCKET))
+        for n, instant in enumerate(instants):
+            result[(signal, instant)] = _instant_reading(
+                epoch_ms(instant), found.get((key, f"b{n}")), found.get((key, f"a{n}"))
+            )
     return result
 
 

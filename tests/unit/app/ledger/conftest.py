@@ -1,4 +1,5 @@
-from datetime import UTC, datetime, timedelta
+import re
+from datetime import UTC, datetime
 
 import pytest
 from tests.app_helpers import price_row, set_feed_in
@@ -48,37 +49,58 @@ def client(make_client, ledger, checks, guard):
     return make_client(ledger_router(ledger, guard, checks))
 
 
+_STATEMENT = re.compile(
+    r'SELECT (?P<select>last|first)\("kwh"\) AS "(?P<column>\w+)" FROM "long"\."energy" '
+    r"WHERE time >= (?P<low>\d+)ms AND time < (?P<high>\d+)ms"
+)
+
+
 class FakeInflux:
-    """Ersatz für den ``InfluxReader``: merkt sich die Abfragen und liefert vorbereitete Reihen."""
+    """Ersatz für den ``InfluxReader``: merkt sich die Abfragen und liefert vorbereitete Reihen.
+
+    Mit ``set_counters`` liegen Rohwerte der Zähler bereit; Anweisungen der Form
+    ``SELECT last|first("kwh") AS "<Spalte>" FROM "long"."energy" WHERE time >= …ms AND time <
+    …ms`` (mehrere durch ``;`` getrennt) beantwortet die Attrappe dann wie InfluxDB: je Zähler der
+    letzte bzw. erste Wert im Fenster mit seiner eigenen Zeit."""
 
     def __init__(self) -> None:
         self.series: list[Series] = []
         self.queries: list[str] = []
         self.error: Exception | None = None
+        self.points: dict[str, dict[datetime, float]] | None = None
 
     async def query(self, q: str, *, database: str | None = None) -> list[Series]:
         self.queries.append(q)
         if self.error is not None:
             raise self.error
-        return self.series
+        if self.points is None:
+            return self.series
+        result: list[Series] = []
+        for statement in q.split(";"):
+            match = _STATEMENT.search(statement)
+            if match is None:
+                continue
+            low, high = int(match["low"]), int(match["high"])
+            for signal, values in self.points.items():
+                inside = sorted(
+                    (epoch_ms(t), v) for t, v in values.items() if low <= epoch_ms(t) < high
+                )
+                if not inside:
+                    continue
+                stamp, value = inside[-1] if match["select"] == "last" else inside[0]
+                result.append(
+                    Series("energy", _tags(signal), ["time", match["column"]], [[stamp, value]])
+                )
+        return result
 
     def set_counters(self, readings: dict[str, dict[datetime, float]]) -> None:
-        """Zählerstände je Signal und Zeitpunkt, so wie ``GROUP BY time(30m)`` sie liefert: der
-        Wert steht im Eimer, der eine halbe Stunde vor dem Zeitpunkt beginnt."""
-        self.series = []
-        for signal, values in readings.items():
-            source, ident, direction = counter_tags(signal) or ("", "", "")
-            self.series.append(
-                Series(
-                    "energy",
-                    {"source": source, "id": ident, "direction": direction},
-                    ["time", "kwh"],
-                    [
-                        [epoch_ms(instant - timedelta(minutes=30)), value]
-                        for instant, value in sorted(values.items())
-                    ],
-                )
-            )
+        """Rohwerte der Zähler je Signal und Zeitpunkt (``energy`` in ``long``)."""
+        self.points = readings
+
+
+def _tags(signal: str) -> dict[str, str]:
+    source, ident, direction = counter_tags(signal) or ("", "", "")
+    return {"source": source, "id": ident, "direction": direction}
 
 
 @pytest.fixture

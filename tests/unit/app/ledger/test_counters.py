@@ -5,6 +5,7 @@ from tests.unit.app.ledger.conftest import FakeInflux
 
 from bindaems.app.history.influx import Series
 from bindaems.app.ledger.counters import counter_tags, reading_near, readings_at, soc_near
+from bindaems.shared.influx.lineprotocol import epoch_ms
 from bindaems.shared.timeutil import LOCAL_TZ, local_day_slots
 
 SIGNALS = [
@@ -34,31 +35,129 @@ def test_counter_tags_unknown_signal(signal: str) -> None:
     assert counter_tags(signal) is None
 
 
-async def test_readings_at_uses_one_query(influx: FakeInflux) -> None:
+SECOND = timedelta(seconds=1)
+IMP = "grid.energy_import_kwh"
+
+
+async def test_readings_at_uses_one_request(influx: FakeInflux) -> None:
     instants = midnights(date(2026, 10, 1), 8)
     influx.set_counters(
         {signal: {i: 100.0 + n for n, i in enumerate(instants)} for signal in SIGNALS}
     )
     result = await readings_at(influx, SIGNALS, instants)  # type: ignore[arg-type]
     assert len(influx.queries) == 1
-    query = influx.queries[0]
-    assert 'FROM "long"."energy"' in query and "GROUP BY time(30m)" in query
-    assert 'last("kwh")' in query and "fill(none)" in query
-    for tags in ("'grid'", "'huawei'", "'evcs'", "'forward'", "'total'"):
-        assert tags in query
+    statements = influx.queries[0].split(";")
+    assert len(statements) == 2 * 8  # je Zeitpunkt davor und danach, nicht je Signal
+    assert all('FROM "long"."energy"' in st and "GROUP BY time" not in st for st in statements)
+    assert 'last("kwh") AS "b3"' in statements[6] and 'first("kwh") AS "a3"' in statements[7]
+    for source in ("'grid'", "'pv'", "'wallbox'"):
+        assert source in statements[0]
     assert len(result) == 4 * 8
-    assert result[("grid.energy_import_kwh", instants[3])] == 103.0
+    assert result[(IMP, instants[3])] == 103.0
     assert result[("wallbox.evcs.total_kwh", instants[7])] == 107.0
+
+
+async def test_readings_at_interpolates_between_the_values_around_the_instant(
+    influx: FakeInflux,
+) -> None:
+    [instant] = midnights(date(2026, 10, 9), 1)
+    influx.set_counters(
+        {
+            IMP: {
+                instant - 100 * SECOND: 99.0,
+                instant - 40 * SECOND: 100.0,  # letzter Wert davor
+                instant + 20 * SECOND: 100.3,  # erster Wert ab dem Zeitpunkt
+                instant + 80 * SECOND: 101.0,
+            }
+        }
+    )
+    result = await readings_at(influx, [IMP], [instant])  # type: ignore[arg-type]
+    assert result[(IMP, instant)] == pytest.approx(100.2)
+    windows = influx.queries[0].split(";")
+    assert (
+        f"time >= {epoch_ms(instant) - 1_800_000}ms AND time < {epoch_ms(instant)}ms" in windows[0]
+    )
+    assert (
+        f"time >= {epoch_ms(instant)}ms AND time < {epoch_ms(instant) + 1_800_000}ms" in windows[1]
+    )
+
+
+async def test_readings_at_without_the_other_side_takes_a_close_value(influx: FakeInflux) -> None:
+    first, second, third, fourth = midnights(date(2026, 10, 1), 4)
+    influx.set_counters(
+        {
+            IMP: {
+                first - 2 * 60 * SECOND: 5.0,  # 2 min davor, danach nichts: gilt
+                second + 2 * 60 * SECOND: 6.0,  # 2 min danach, davor nichts: gilt
+                third - 3 * 60 * SECOND: 7.0,  # 3 min davor: zu weit weg
+                fourth + 29 * 60 * SECOND: 8.0,  # 29 min danach: zu weit weg
+            }
+        }
+    )
+    result = await readings_at(influx, [IMP], [first, second, third, fourth])  # type: ignore[arg-type]
+    assert [result[(IMP, i)] for i in (first, second, third, fourth)] == [5.0, 6.0, None, None]
+
+
+async def test_readings_at_takes_the_value_before_a_counter_reset(influx: FakeInflux) -> None:
+    [instant] = midnights(date(2026, 10, 9), 1)
+    influx.set_counters({IMP: {instant - 40 * SECOND: 900.0, instant + 20 * SECOND: 0.5}})
+    result = await readings_at(influx, [IMP], [instant])  # type: ignore[arg-type]
+    assert result[(IMP, instant)] == 900.0
+
+
+async def test_readings_at_values_beyond_30_minutes_do_not_count(influx: FakeInflux) -> None:
+    [instant] = midnights(date(2026, 10, 9), 1)
+    influx.set_counters({IMP: {instant - 31 * 60 * SECOND: 1.0, instant + 30 * 60 * SECOND: 2.0}})
+    result = await readings_at(influx, [IMP], [instant])  # type: ignore[arg-type]
+    assert result[(IMP, instant)] is None
 
 
 async def test_readings_at_missing_values_are_none(influx: FakeInflux) -> None:
     instants = midnights(date(2026, 10, 1), 2)
-    influx.set_counters({"grid.energy_import_kwh": {instants[0]: 5.0}})
-    influx.series[0].values.append([0, None])  # ein Eimer ohne Wert
-    result = await readings_at(influx, ["grid.energy_import_kwh", "pv.huawei.energy_kwh"], instants)  # type: ignore[arg-type]
-    assert result[("grid.energy_import_kwh", instants[0])] == 5.0
-    assert result[("grid.energy_import_kwh", instants[1])] is None
+    influx.set_counters({IMP: {instants[0]: 5.0}})
+    result = await readings_at(influx, [IMP, "pv.huawei.energy_kwh"], instants)  # type: ignore[arg-type]
+    assert result[(IMP, instants[0])] == 5.0
+    assert result[(IMP, instants[1])] is None
     assert result[("pv.huawei.energy_kwh", instants[0])] is None
+
+
+async def test_readings_at_ignores_other_series_and_columns(influx: FakeInflux) -> None:
+    [instant] = midnights(date(2026, 10, 9), 1)
+    stamp = epoch_ms(instant)
+    influx.series = [
+        Series(
+            "energy",
+            {"source": "grid", "id": "grid", "direction": "import"},
+            ["time", "a0"],
+            [[stamp, 4.0]],
+        ),
+        Series(
+            "energy",
+            {"source": "pv", "id": "andere", "direction": "forward"},
+            ["time", "a0"],
+            [[stamp, 9.0]],
+        ),
+        Series(
+            "energy",
+            {"source": "grid", "id": "grid", "direction": "export"},
+            ["time", "kwh"],
+            [[stamp, 9.0]],
+        ),
+        Series(
+            "energy",
+            {"source": "grid", "id": "grid", "direction": "export"},
+            ["time", "b0"],
+            [[stamp, None]],
+        ),
+    ]
+    result = await readings_at(  # type: ignore[arg-type]
+        influx, [IMP, "grid.energy_export_kwh", "pv.huawei.energy_kwh"], [instant]
+    )
+    assert result == {
+        (IMP, instant): 4.0,
+        ("grid.energy_export_kwh", instant): None,
+        ("pv.huawei.energy_kwh", instant): None,
+    }
 
 
 async def test_readings_at_unknown_signals_need_no_query(influx: FakeInflux) -> None:
@@ -68,25 +167,29 @@ async def test_readings_at_unknown_signals_need_no_query(influx: FakeInflux) -> 
     assert result == {("load.haus.energy_kwh", i): None for i in instants}
 
 
-async def test_readings_at_rejects_instants_off_the_half_hour(influx: FakeInflux) -> None:
-    with pytest.raises(ValueError, match="halben Stunde"):
-        await readings_at(influx, SIGNALS, [datetime(2026, 10, 1, 10, 7, tzinfo=UTC)])  # type: ignore[arg-type]
-
-
 async def test_midnight_readings_on_dst_change(influx: FakeInflux) -> None:
     # 25.10.2026: Mitternacht in Wien ist 22:00 UTC davor (MESZ), 23:00 UTC danach (MEZ)
     before, after = midnights(date(2026, 10, 25), 2)
     assert before == datetime(2026, 10, 24, 22, 0, tzinfo=UTC)
     assert after == datetime(2026, 10, 25, 23, 0, tzinfo=UTC)
     assert before.astimezone(LOCAL_TZ).hour == 0 and after.astimezone(LOCAL_TZ).hour == 0
-    influx.set_counters({"grid.energy_import_kwh": {before: 500.0, after: 530.0}})
-    result = await readings_at(influx, ["grid.energy_import_kwh"], [before, after])  # type: ignore[arg-type]
-    assert result == {
-        ("grid.energy_import_kwh", before): 500.0,
-        ("grid.energy_import_kwh", after): 530.0,
-    }
-    # die Eimer sind die halben Stunden davor: 21:30 UTC und 22:30 UTC
-    assert "time >= 1792877400000ms AND time < 1792969200000ms" in influx.queries[0]
+    influx.set_counters(
+        {
+            IMP: {
+                before - 30 * SECOND: 499.9,
+                before + 30 * SECOND: 500.1,
+                after - 30 * SECOND: 529.9,
+                after + 30 * SECOND: 530.1,
+            }
+        }
+    )
+    result = await readings_at(influx, [IMP], [before, after])  # type: ignore[arg-type]
+    assert result[(IMP, before)] == pytest.approx(500.0)
+    assert result[(IMP, after)] == pytest.approx(530.0)
+    # die Fenster liegen um 22:00 und 23:00 UTC
+    statements = influx.queries[0].split(";")
+    assert "time >= 1792879200000ms AND time < 1792881000000ms" in statements[1]
+    assert "time >= 1792969200000ms AND time < 1792971000000ms" in statements[3]
 
 
 async def test_reading_near_takes_the_last_value_before_and_the_first_after(

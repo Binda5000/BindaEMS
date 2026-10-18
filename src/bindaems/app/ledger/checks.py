@@ -136,7 +136,7 @@ class LedgerChecks:
     async def run(self, first: date, last: date) -> int:
         """Gleicht die Tage ``first … last`` ab, ersetzt ihre Zeilen und liefert die Zahl der Tage.
 
-        Die Zählerstände aller Mitternächte von ``first`` bis ``last + 1`` kommen mit einer Abfrage;
+        Die Zählerstände aller Mitternächte von ``first`` bis ``last + 1`` kommen mit einer Anfrage;
         scheitert sie, bleiben die alten Zeilen stehen (die Ausnahme geht an den Aufrufer).
         """
         if first > last:
