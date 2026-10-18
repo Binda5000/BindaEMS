@@ -12,7 +12,7 @@ import contextlib
 import threading
 from collections.abc import Awaitable, Callable, Generator, Mapping, Sequence
 from dataclasses import dataclass, replace
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from functools import partial
 from typing import Any
 
@@ -86,7 +86,6 @@ log = structlog.get_logger(__name__)
 
 SPOOL_MAX_BYTES = 50 * 1024 * 1024
 SPOOL_MAX_AGE = timedelta(days=30)
-BACKFILL_FIRST = timedelta(days=7)
 BACKFILL_HOURLY = timedelta(hours=6)
 HOUR_S = 3600.0
 HA_VALUES_S = 15.0
@@ -227,6 +226,8 @@ class AppRuntime:
         )
         self._forecast_calibrated = asyncio.Event()  # gesetzt nach der ersten Kalibrierung
         self._ledger_backfilled = asyncio.Event()  # gesetzt nach dem ersten Nachtrag (auch Fehler)
+        # Zeitraum, den der Nachtrag lückenlos gelesen hat; nur dort schätzt die Nachrechnung
+        self._backfill_covered: tuple[datetime, datetime] | None = None
         core_client = CoreClient(cfg.app.core_url, secrets.internal_token, self._core_http)
         self.decisions = DecisionStore(self.engine, self._clock)
         self.collector = DecisionCollector(self.decisions, core_client, self._sink, self._clock)
@@ -559,16 +560,24 @@ class AppRuntime:
                 log.exception("Einstandspreis des Akkus nicht berechenbar")
 
     async def _ledger_loop(self) -> None:
-        """Beim Start die letzten 7 Tage nachtragen, danach stündlich die letzten 6 h."""
-        window = BACKFILL_FIRST
+        """Beim Start ab Mitternacht vor 7 Tagen nachtragen (mindestens das Fenster der
+        Nachrechnung, ``LEDGER_ESTIMATE_DAYS``), danach stündlich die letzten 6 h."""
+        first = True
         while True:
             now = self._clock.now()
+            today = now.astimezone(LOCAL_TZ).date()
+            start = (
+                local_day_slots(today - timedelta(days=LEDGER_ESTIMATE_DAYS))[0]
+                if first
+                else now - BACKFILL_HOURLY
+            )
             try:
-                taken = await self.ledger.backfill(self.reader, now - window, now)
+                taken = await self.ledger.backfill(self.reader, start, now)
+                self._note_backfill(start, now)
                 priced = await asyncio.to_thread(self.ledger.fill_missing_prices)
                 if taken or priced:
                     log.info("Abrechnung nachgetragen", slots=taken, prices=priced)
-                window = BACKFILL_HOURLY  # erst nach Erfolg kürzer
+                first = False  # erst nach Erfolg kürzer
             except InfluxQueryError as exc:
                 log.warning("Nachtrag der Abrechnung nicht möglich", error=str(exc))
             except Exception:
@@ -577,6 +586,14 @@ class AppRuntime:
                 self._ledger_backfilled.set()  # auch nach einem Fehler: der Abgleich läuft trotzdem
             self._wake_costing()
             await asyncio.sleep(HOUR_S)
+
+    def _note_backfill(self, start: datetime, end: datetime) -> None:
+        """Merkt sich den lückenlos nachgetragenen Zeitraum; nach einer Lücke beginnt er neu."""
+        covered = self._backfill_covered
+        if covered is not None and start <= covered[1]:
+            self._backfill_covered = (min(covered[0], start), max(covered[1], end))
+        else:
+            self._backfill_covered = (start, end)
 
     async def _ha_values_loop(self, cache: HaValueCache) -> None:
         while True:
@@ -784,10 +801,7 @@ class AppRuntime:
         """
         today = self._clock.now().astimezone(LOCAL_TZ).date()
         try:
-            estimated = await self.gap_estimator.run(
-                local_day_slots(today - timedelta(days=LEDGER_ESTIMATE_DAYS))[0],
-                local_day_slots(today)[0],
-            )
+            estimated = await self._estimate_gaps(today)
             if estimated:
                 self._wake_costing()  # der Einstandspreis des Akkus folgt den Schätzungen
         except InfluxQueryError as exc:
@@ -811,6 +825,21 @@ class AppRuntime:
                 log.info("Energie der Verbraucher je Tag gespeichert", days=stored)
         except Exception:
             log.exception("Energie der Verbraucher je Tag nicht gespeichert")
+
+    async def _estimate_gaps(self, today: date) -> int:
+        """Rechnet die Lücken der letzten 7 Tage bis gestern nach, aber nur in dem Teil, den der
+        Nachtrag schon aus InfluxDB gelesen hat: sonst entstünden Schätzungen, wo echte Daten
+        liegen (die echten ersetzen sie zwar später, aber nur, wenn ein Nachtrag sie noch sieht)."""
+        start = local_day_slots(today - timedelta(days=LEDGER_ESTIMATE_DAYS))[0]
+        end = local_day_slots(today)[0]
+        covered = self._backfill_covered
+        if covered is None:
+            log.info("Nachrechnung der Lücken wartet auf den ersten Nachtrag der Abrechnung")
+            return 0
+        start, end = max(start, covered[0]), min(end, covered[1])
+        if end <= start:
+            return 0
+        return await self.gap_estimator.run(start, end)
 
     async def shutdown(self) -> None:
         """Server und Hintergrundaufgaben beenden, Puffer schreiben, Verbindungen schließen."""

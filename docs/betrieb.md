@@ -654,6 +654,11 @@ Zählern, und beim Start erst nach dem ersten Nachtrag der Abrechnung (höchsten
   gestern. Dauerte ein Ausfall länger, bleibt der Teil davor leer, und der Teil im Fenster wird
   geschätzt, wenn an beiden Rändern Zählerstände da sind. Eine einzelne Lücke über 7 Tage rechnet die
   app nicht (Warnung „Lücke zu lang für eine Nachrechnung“).
+- **Nur, was der Nachtrag schon gelesen hat:** Die app schätzt nur in dem Zeitraum, den der Nachtrag
+  der Abrechnung lückenlos aus InfluxDB gelesen hat, damit keine Schätzung entsteht, wo echte Daten
+  liegen. Der erste Nachtrag nach dem Start liest deshalb ab Mitternacht vor 7 Tagen. Gelang noch kein
+  Nachtrag (InfluxDB nicht erreichbar), schätzt die app in dieser Nacht nichts (Log „Nachrechnung der
+  Lücken wartet auf den ersten Nachtrag der Abrechnung“).
 
 ### Abgleich mit den Zählern
 

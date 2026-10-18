@@ -339,8 +339,13 @@ def spy_ledger_checks(runtime, monkeypatch) -> list[tuple[date, date]]:
     return calls
 
 
-def spy_gap_estimator(runtime, monkeypatch, order: list[str] | None = None) -> list[tuple]:
+def spy_gap_estimator(
+    runtime, monkeypatch, order: list[str] | None = None, *, backfilled: bool = True
+) -> list[tuple]:
+    """Ersetzt die Nachrechnung; ``backfilled``: der Nachtrag hat die letzten 60 Tage gelesen."""
     calls: list[tuple] = []
+    if backfilled:
+        runtime._backfill_covered = (T_APP - timedelta(days=60), T_APP)
 
     async def run(start, end) -> int:
         calls.append((start, end))
@@ -392,6 +397,73 @@ async def test_ledger_nightly_estimates_the_last_7_days_before_the_check(
     assert checks == [(date(2026, 9, 4), date(2026, 10, 8))]
 
 
+async def test_first_backfill_covers_the_whole_estimate_window(runtime, monkeypatch) -> None:
+    # B6: war die app länger aus, begann die Schätzung um Mitternacht vor 7 Tagen, der Nachtrag
+    # erst 7 × 24 h vor „jetzt“; dazwischen entstanden Schätzungen, obwohl echte Daten da waren
+    backfills: list[tuple[datetime, datetime]] = []
+
+    async def backfill(reader, start, end) -> int:
+        backfills.append((start, end))
+        return 0
+
+    monkeypatch.setattr(runtime.ledger, "backfill", backfill)
+    monkeypatch.setattr(asyncio, "sleep", record_then_stop([], after=1))
+    with pytest.raises(StopScheduler):
+        await runtime._ledger_loop()
+    monkeypatch.undo()
+    estimates = spy_gap_estimator(runtime, monkeypatch, backfilled=False)
+    spy_ledger_checks(runtime, monkeypatch)
+    await runtime._ledger_nightly(7)
+    [(estimate_start, estimate_end)] = estimates
+    [(backfill_start, backfill_end)] = backfills
+    assert backfill_start <= estimate_start and estimate_end <= backfill_end
+    # Mitternacht des 02.10. Ortszeit (Sommerzeit: UTC+2)
+    assert backfill_start == datetime(2026, 10, 1, 22, 0, tzinfo=UTC)
+
+
+async def test_estimate_stays_inside_the_backfilled_range(runtime, monkeypatch) -> None:
+    estimates = spy_gap_estimator(runtime, monkeypatch, backfilled=False)
+    spy_ledger_checks(runtime, monkeypatch)
+    runtime._backfill_covered = (datetime(2026, 10, 5, 12, 0, tzinfo=UTC), T_APP)
+    await runtime._ledger_nightly(7)
+    assert estimates == [
+        (datetime(2026, 10, 5, 12, 0, tzinfo=UTC), datetime(2026, 10, 8, 22, 0, tzinfo=UTC))
+    ]
+
+
+async def test_estimate_waits_for_the_first_successful_backfill(runtime, monkeypatch) -> None:
+    estimates = spy_gap_estimator(runtime, monkeypatch, backfilled=False)
+    checks = spy_ledger_checks(runtime, monkeypatch)
+    with capture_logs() as logs:
+        await runtime._ledger_nightly(7)
+    assert estimates == [] and len(checks) == 1  # der Abgleich läuft trotzdem
+    assert "Nachrechnung der Lücken wartet auf den ersten Nachtrag der Abrechnung" in [
+        e["event"] for e in logs
+    ]
+
+
+def test_backfilled_range_grows_and_restarts_after_a_hole(runtime) -> None:
+    hour = timedelta(hours=1)
+    runtime._note_backfill(T_APP - 7 * 24 * hour, T_APP)
+    runtime._note_backfill(T_APP - 5 * hour, T_APP + hour)  # stündlich, überlappt
+    assert runtime._backfill_covered == (T_APP - 7 * 24 * hour, T_APP + hour)
+    runtime._note_backfill(T_APP + 4 * hour, T_APP + 10 * hour)  # Lücke: Nachtrag scheiterte
+    assert runtime._backfill_covered == (T_APP + 4 * hour, T_APP + 10 * hour)
+
+
+async def test_failed_backfill_covers_nothing(runtime, monkeypatch) -> None:
+    from bindaems.app.history.influx import InfluxQueryError
+
+    async def backfill(reader, start, end) -> int:
+        raise InfluxQueryError("InfluxDB nicht erreichbar")
+
+    monkeypatch.setattr(runtime.ledger, "backfill", backfill)
+    monkeypatch.setattr(asyncio, "sleep", record_then_stop([], after=1))
+    with pytest.raises(StopScheduler):
+        await runtime._ledger_loop()
+    assert runtime._backfill_covered is None
+
+
 async def test_ledger_nightly_catches_up_the_costing_after_new_estimates(
     runtime, monkeypatch
 ) -> None:
@@ -414,6 +486,7 @@ async def test_ledger_nightly_checks_even_if_the_estimate_fails(runtime, monkeyp
         raise errors.pop(0)
 
     monkeypatch.setattr(runtime.gap_estimator, "run", run)
+    runtime._backfill_covered = (T_APP - timedelta(days=60), T_APP)
     checks = spy_ledger_checks(runtime, monkeypatch)
     with capture_logs() as logs:
         await runtime._ledger_nightly(7)
