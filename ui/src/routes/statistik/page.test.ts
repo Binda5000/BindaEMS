@@ -272,3 +272,20 @@ it('zeigt beim Blättern einen Fehler statt der alten Werte', async () => {
 	expect(screen.queryByText('Autarkie')).not.toBeInTheDocument();
 	expect(screen.queryByText('Lädt …')).not.toBeInTheDocument();
 });
+
+it('fragt nach dem Verlassen der Seite nicht mehr nach', async () => {
+	navigate('?zeitraum=monat&datum=2026-10-09'); // laufender Zeitraum: Takt von 60 s
+	const { unmount } = render(Page);
+	await vi.advanceTimersByTimeAsync(60_000);
+	expect(api.stats).toHaveBeenCalledTimes(2);
+	expect(api.chargingSessions).toHaveBeenCalledTimes(2);
+	unmount();
+	api.stats.mockClear();
+	api.chargingSessions.mockClear();
+	api.limits.mockClear();
+	await vi.advanceTimersByTimeAsync(10 * 60_000);
+	expect(api.stats).not.toHaveBeenCalled();
+	expect(api.chargingSessions).not.toHaveBeenCalled();
+	expect(api.limits).not.toHaveBeenCalled();
+	expect(vi.getTimerCount()).toBe(0);
+});

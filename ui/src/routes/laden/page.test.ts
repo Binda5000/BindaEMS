@@ -578,6 +578,24 @@ it('lädt die Sessions der letzten 30 Tage', async () => {
 	);
 });
 
+it('lädt die Sessions jede Minute und rückt das 30-Tage-Fenster über Mitternacht nach', async () => {
+	vi.useFakeTimers({
+		toFake: ['Date', 'setInterval', 'clearInterval', 'setTimeout', 'clearTimeout']
+	});
+	vi.setSystemTime(new Date('2026-10-17T21:59:30Z')); // 23:59:30 in Wien
+	await show();
+	await vi.advanceTimersByTimeAsync(0);
+	expect(api.chargingSessions).toHaveBeenCalledTimes(1);
+	expect(api.chargingSessions.mock.lastCall?.slice(0, 2)).toEqual(['2026-09-17', '2026-10-17']);
+	await vi.advanceTimersByTimeAsync(59_000);
+	expect(api.chargingSessions).toHaveBeenCalledTimes(1);
+	await vi.advanceTimersByTimeAsync(1_000); // 00:00:30 am 18.10.
+	expect(api.chargingSessions).toHaveBeenCalledTimes(2);
+	expect(api.chargingSessions.mock.lastCall?.slice(0, 2)).toEqual(['2026-09-18', '2026-10-18']);
+	await vi.advanceTimersByTimeAsync(60_000);
+	expect(api.chargingSessions).toHaveBeenCalledTimes(3);
+});
+
 it('zeigt ohne Session keine Zeile', async () => {
 	await show();
 	await waitFor(() => expect(api.chargingSessions).toHaveBeenCalled());
