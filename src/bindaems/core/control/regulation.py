@@ -12,7 +12,7 @@ als Erstes den gültigen Slot des Plans zur Wanduhr (``plan_exec``, Plan 3c) und
 Reihenfolge von Präzisierung 3:
 
 1. die Laderegelung mit den Grenzen und der Start-Sperre, die der Wächter im vorigen Zyklus
-   bestimmt hat,
+   bestimmt hat, und dem gültigen Slot (Ladeleistung je Auto in „Geplant“, Plan 4b),
 2. die Autos je Wallbox aus der Zuordnung und den Modi dieses Zyklus
    (``ChargeController.cars``, auch ein Gast), dazu die Wallboxen ohne Ladepunkt
    (``battery_cars``),
@@ -142,16 +142,17 @@ class Regulation:
 
         Als Erstes bestimmt der Zyklus den gültigen Slot des Plans der Absicht zur Wanduhr
         (``active_slot``, Plan 3c, Präzisierung 5); ``active`` und ``health()["plan"]`` zeigen ihn.
-        Wächter und Override bekommen ihn: Bei ``HALTEN`` und ``NETZLADEN`` ändert er den gewollten
-        Netzbezug (``plan_wanted_w``, Präzisierung 7). Der Bedarf (``assess``) bekommt ihn mit der
-        Akku-Unterstützung der Absicht (Präzisierung 8): Plan-Schwelle, Schalter und die Sperre bei
-        ``HALTEN`` und ``NETZLADEN``.
+        Die Laderegelung bekommt ihn für die Ladeleistung je Auto in „Geplant“ (Plan 4b,
+        Präzisierung 7). Wächter und Override bekommen ihn: Bei ``HALTEN`` und ``NETZLADEN`` ändert
+        er den gewollten Netzbezug (``plan_wanted_w``, Präzisierung 7). Der Bedarf (``assess``)
+        bekommt ihn mit der Akku-Unterstützung der Absicht (Präzisierung 8): Plan-Schwelle, Schalter
+        und die Sperre bei ``HALTEN`` und ``NETZLADEN``.
         """
         charge = inputs.charge
         plan = None if charge.intent is None else charge.intent.plan
         self._active = active_slot(plan, charge.wall_now)
         self._plan = plan_health(plan, self._active, charge.wall_now)
-        commands = self.charger.step(charge, self._peak)
+        commands = self.charger.step(charge, self._peak, self._active)
         guest = (GuestIntent() if charge.intent is None else charge.intent.guest).mode
         support = SupportIntent() if charge.intent is None else charge.intent.support
         views = self.charger.cars()

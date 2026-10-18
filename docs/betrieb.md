@@ -3003,7 +3003,7 @@ Den **erlaubten Akku-Anteil** bestimmt der Modus des Autos:
 | Modus | Aus dem Akku erlaubt |
 |---|---|
 | PV-Überschuss, Min+PV | Wenn die Unterstützung gilt (unten): für diese Autos zusammen höchstens `support_max_w`, verteilt in der Reihenfolge `priority`. Sonst nichts. |
-| Sofort, Aus | Nichts. Sofort lädt aus Netz und PV mit vollem Strom. |
+| Sofort, Geplant, Aus | Nichts. Sofort lädt aus Netz und PV mit vollem Strom; was einem Auto in Geplant fehlt, kommt aus dem Netz, denn über das Netzladen des Autos entscheidet der Plan. |
 | Boost | Alles, ohne SOC-Schwelle und ohne die Grenzen von Leistung und Dauer. Boost begrenzt nur der Schutz der USV-Reserve (Abschnitt „Lademodi“). |
 
 - **Sofort** bleibt beim vollen Strom. Regel 2 der Safety-Schicht begrenzt den Override auf
@@ -3193,9 +3193,9 @@ Die Reaktion folgt der Reihenfolge von Spec 7.4:
 1. **Wallboxen drosseln.**
    - Der Wächter senkt den Netzanteil der Autos, ihren Beitrag zu `W`, in umgekehrter Priorität der
      Modi: erst Autos in PV-Überschuss bis 0 W (sie stoppen dann nach den Regeln ihres Modus), dann
-     Min+PV und zuletzt Sofort, beide höchstens bis zur Mindestleistung des Ladepunkts
-     (`min_a × U × Phasen`); innerhalb einer Stufe zuerst das Auto mit der niedrigsten Priorität.
-     Ein Auto ohne Netzanteil, dessen Leistung die PV deckt, wird nicht gedrosselt.
+     Min+PV, dann Geplant und zuletzt Sofort, diese drei höchstens bis zur Mindestleistung des
+     Ladepunkts (`min_a × U × Phasen`); innerhalb einer Stufe zuerst das Auto mit der niedrigsten
+     Priorität. Ein Auto ohne Netzanteil, dessen Leistung die PV deckt, wird nicht gedrosselt.
    - Das ergibt je Auto eine **Leistungsgrenze** in W. Die Laderegelung rechnet sie in Ampere um
      (`W / (U · Phasen des Ladepunkts)`) und behandelt sie wie die Grenze des Phasenwächters: Liegt
      sie unter dem freien Strom, gilt sie, und der Grund der Entscheidung ist `peak_guard`. Sie wirkt
@@ -3212,13 +3212,13 @@ Die Reaktion folgt der Reihenfolge von Spec 7.4:
      Grenze des Tesla zu senken, die ohnehin nicht bindet.
    - **Aufgehoben** wird eine Grenze, wenn `P_zul` den Bedarf (oben, „Hochrechnung und Senkung“)
      um mindestens 1 kW plus die Senkung dieses Autos übersteigt, frühestens 30 s nach der letzten
-     Änderung und je Zyklus höchstens eine, in umgekehrter Reihenfolge (Sofort vor Min+PV vor
-     PV-Überschuss, innerhalb einer Stufe die höchste Priorität zuerst). Wollen die Autos mit Budget
-     mehr als die feste Grenze von Regel 2, hält der Override den Netzbezug bei ihr, sobald `P_zul`
-     über ihr liegt, und das Mittel zählt mit ihr: Eine Grenze fällt dann, wenn `P_zul` die feste
-     Grenze um 1 kW plus die Senkung dieses Autos übersteigt (im Simulator, `spitze-15min`, bei
-     rund 9,3 kW). So flattert der Tesla nicht und spart Tessie-Befehle. Mit dem Ende der
-     Viertelstunde fallen alle Grenzen weg.
+     Änderung und je Zyklus höchstens eine, in umgekehrter Reihenfolge (Sofort vor Geplant vor
+     Min+PV vor PV-Überschuss, innerhalb einer Stufe die höchste Priorität zuerst). Wollen die Autos
+     mit Budget mehr als die feste Grenze von Regel 2, hält der Override den Netzbezug bei ihr,
+     sobald `P_zul` über ihr liegt, und das Mittel zählt mit ihr: Eine Grenze fällt dann, wenn
+     `P_zul` die feste Grenze um 1 kW plus die Senkung dieses Autos übersteigt (im Simulator,
+     `spitze-15min`, bei rund 9,3 kW). So flattert der Tesla nicht und spart Tessie-Befehle. Mit
+     dem Ende der Viertelstunde fallen alle Grenzen weg.
    - Gedrosselt wird nur ein Auto an einem Ladepunkt, den die Laderegelung regelt; ein ungeregeltes
      Auto in Boost zählt nur für den Boost-Anteil. Verlässt ein gedrosseltes Auto die Liste, wechselt
      es den Modus oder geht es in Boost oder Aus, fällt seine Grenze still weg, ohne neue Wartezeit.
@@ -3241,8 +3241,8 @@ Die Reaktion folgt der Reihenfolge von Spec 7.4:
    rechnen; ein Zyklus ohne Rechnung unterbricht die 60 s.
 
 - **Die letzten 120 s:** Ab 120 s vor dem Ende einer Viertelstunde startet kein Auto in PV-Überschuss,
-  Min+PV oder Sofort, dessen Mindestleistung über `P_zul − Mittel` liegt. Die Laderegelung behandelt
-  das wie eine Grenze, die den Mindeststrom nicht trägt; der Start wartet auf die nächste
+  Min+PV, Geplant oder Sofort, dessen Mindestleistung über `P_zul − Mittel` liegt. Die Laderegelung
+  behandelt das wie eine Grenze, die den Mindeststrom nicht trägt; der Start wartet auf die nächste
   Viertelstunde. Ein Auto, das lädt, betrifft das nicht.
 - **Boost** hebt das Ziel für sein Auto auf (bis zum Abstecken, höchstens 12 h): Der Netzanteil seiner
   Wallbox (mit PV und Akku zuerst für Boost, oben, „Messung“) zählt weder in die Energie bisher noch

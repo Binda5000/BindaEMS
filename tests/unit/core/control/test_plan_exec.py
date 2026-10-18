@@ -131,3 +131,13 @@ def test_plan_health_of_a_valid_plan_without_a_slot() -> None:
     health = plan_health(PLAN_1001, None, at("10:20"))
     assert (health["state"], health["valid_until"]) == ("valid", "2026-10-08T10:46:00+00:00")
     assert (health["slot"], health["intent"], health["price_ct"]) == (None, None, None)
+
+
+def test_active_slot_carries_the_power_of_each_vehicle() -> None:  # Plan 4b, Präzisierung 7
+    slots = [slot.model_copy(update={"vehicles": {"tesla": 6900}}) for slot in PLAN_1001.slots]
+    plan = PLAN_1001.model_copy(update={"slots": slots})
+    found = active_slot(plan, at("10:20"))
+    assert found is not None and found.vehicles == {"tesla": 6900}
+    # Ein Slot ohne Autos nennt keins; ohne Angabe ist die Liste leer.
+    assert active_slot(PLAN_1001, at("10:20")).vehicles == {}  # type: ignore[union-attr]
+    assert ActiveSlot(1, at("10:00"), BatteryIntent(), None, None, None).vehicles == {}

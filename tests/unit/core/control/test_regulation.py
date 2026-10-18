@@ -131,9 +131,11 @@ def charger_limits(regulation: Regulation, monkeypatch) -> list[PeakLimits]:
     seen: list[PeakLimits] = []
     step = regulation.charger.step
 
-    def spy(charge: ChargeInputs, peak: PeakLimits = NO_LIMITS) -> list[ControlCommand]:
+    def spy(
+        charge: ChargeInputs, peak: PeakLimits = NO_LIMITS, active: ActiveSlot | None = None
+    ) -> list[ControlCommand]:
         seen.append(peak)
-        return step(charge, peak)
+        return step(charge, peak, active)
 
     monkeypatch.setattr(regulation.charger, "step", spy)
     return seen
@@ -815,6 +817,34 @@ def budget_run(cfg: Config, plan: IntentPlan | None) -> Regulation:
     intent = Intent(version=1, control=True, vehicles=EGOLF_NOW.vehicles, plan=plan)
     peak_cycle(regulation, cfg, 0, intent=intent)
     return regulation
+
+
+def test_the_slot_power_reaches_the_charge_controller(cfg) -> None:  # Plan 4b, Task 6
+    # Der gültige Slot nennt 4600 W für den e-Golf in „Geplant“: 10 A auf zwei Phasen.
+    plan = IntentPlan(
+        id=1003,
+        created_at=T0,
+        valid_until=T0 + timedelta(minutes=15),
+        grid_charge_allowed=True,
+        slots=[IntentPlanSlot(start=T0, intent=BatteryIntent(), vehicles={"egolf": 4600})],
+    )
+    planned = {"egolf": VehicleIntent(mode=ChargeMode.PLANNED)}
+    intent = Intent(version=1, control=True, vehicles=planned, plan=plan)
+    regulation = Regulation(cfg, HardLimits.from_config(cfg), started=T0)
+    calm = {"intent": intent, "evcs_obs": evcs(), "grid_obs": grid(grid_w=0.0)}  # ohne Überschuss
+    found = peak_cycle(regulation, cfg, 0, **calm)
+    reasons = ("mode_planned", "plan_power")
+    assert [x.command for x in found if x.command.actuator == "wallbox.evcs"] == [
+        Command("wallbox.evcs", CommandKind.CURRENT, 10.0, reasons=reasons),
+        Command("wallbox.evcs", CommandKind.CHARGING, True, reasons=reasons),
+    ]
+    assert regulation.active().vehicles == {"egolf": 4600}  # type: ignore[union-attr]
+    health = regulation.health()["vehicles"][1]["planned"]
+    assert (health["state"], health["plan_w"]) == ("plan", 4600.0)
+    # Nach dem Plan gibt es keinen Slot mehr: kein fester Bedarf aus dem Plan
+    peak_cycle(regulation, cfg, 900, **calm)
+    assert regulation.active() is None
+    assert regulation.health()["vehicles"][1]["planned"]["plan_w"] is None
 
 
 def test_regulation_uses_the_plan_budget(cfg) -> None:  # Plan 3c, Präzisierung 9

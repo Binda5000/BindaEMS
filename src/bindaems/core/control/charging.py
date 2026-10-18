@@ -89,9 +89,11 @@ Dazu legt die Regelung fest:
 - „Geplant“ (Plan 4b, Präzisierung 7): Je Wallbox zählt die Regelung die Ansteckvorgänge
   (``_Plug``), je Fahrzeug führt sie den Ladestand (``SocTracker``) und den Stand des geplanten
   Ladens (``PlannedTracker``) an der Wallbox, an der es steht. Mit festem Bedarf (``plan``: die
-  Leistung des Plan-Slots, ``due``: die volle Leistung ab der spätesten Startzeit) gilt das Auto
+  Leistung des gültigen Plan-Slots für das Auto, ``ActiveSlot.vehicles``; ``due``: die volle
+  Leistung ab der spätesten Startzeit, wenn kein gültiger Slot gilt) gilt das Auto
   wie Sofort mit dem Ziel des Phasenwächters an der Sicherung, sein Bedarf geht vor den PV-Autos
-  vom Überschuss ab, und Überschuss darüber kommt obendrauf; ohne festen Bedarf wie PV. Am Ziel
+  vom Überschuss ab, und Überschuss darüber kommt obendrauf; ohne festen Bedarf wie PV, auch mit
+  einem gültigen Slot, der für das Auto 0 W nennt oder es nicht nennt. Am Ziel
   (``reached``) stoppt es wie „geladen“ und lädt auch keinen Überschuss (``target_reached``).
   Boost geht vor.
 - An einer EVCS hält die Verteilung den zuletzt angeforderten Strom (Hysterese
@@ -165,6 +167,7 @@ from bindaems.core.control.phase_guard import (
     phase_loads,
     phase_target,
 )
+from bindaems.core.control.plan_exec import ActiveSlot
 from bindaems.core.control.planned import PlannedState, PlannedTracker, full_power_w
 from bindaems.core.control.surplus import SurplusCar, share_surplus, surplus_w
 from bindaems.core.control.vehicle_soc import SocReading, SocTracker
@@ -419,15 +422,22 @@ class ChargeController:
         """
         return self._intent_version
 
-    def step(self, inputs: ChargeInputs, peak: PeakLimits = NO_LIMITS) -> list[ChargeCommand]:
+    def step(
+        self,
+        inputs: ChargeInputs,
+        peak: PeakLimits = NO_LIMITS,
+        active: ActiveSlot | None = None,
+    ) -> list[ChargeCommand]:
         """Ein Regelzyklus; die Befehle kommen in der Reihenfolge der Priorität.
 
         Befehle bekommt nur ein geregelter Ladepunkt, und nur für Arten, die nicht in
         ``inputs.blocked`` stehen; je Ladepunkt kommt der Strom vor „Laden an“. Ein Aktor, der
         nicht steuerbar ist, bekommt höchstens den Weckstart; ein Fahrzeug an der EVCS bekommt
         seinen Höchststrom vor den Befehlen an die EVCS. ``peak`` sind Grenzen und Start-Sperre des
-        15-min-Wächters (Plan 2c-2a, Präzisierungen 3, 11 und 13); ohne sie gilt keine. Ablauf und
-        Regeln stehen im Docstring des Moduls.
+        15-min-Wächters (Plan 2c-2a, Präzisierungen 3, 11 und 13); ohne sie gilt keine. ``active``
+        ist der gültige Slot des Plans zur Wanduhr (``plan_exec.active_slot``): Seine Ladeleistung
+        je Fahrzeug führt „Geplant“ (Plan 4b, Präzisierung 7); ``None`` heißt kein gültiger Slot.
+        Ablauf und Regeln stehen im Docstring des Moduls.
         """
         now, intent = inputs.now, inputs.intent
         self._now, self._wall_now = now, inputs.wall_now
@@ -450,7 +460,7 @@ class ChargeController:
         for key, soc in socs.items():
             plan = None
             if modes[key] is Effective.PLANNED:
-                plan = self._planned_of(key, state.vehicles[key], soc, inputs)
+                plan = self._planned_of(key, state.vehicles[key], soc, inputs, active)
             if plan is not None:
                 planned[key] = plan
         points = charge_points(self._cfg, self._limits, order, state.vehicles, inputs)
@@ -801,13 +811,19 @@ class ChargeController:
         )
 
     def _planned_of(
-        self, key: str, vehicle: VehicleState, soc: SocReading, inputs: ChargeInputs
+        self,
+        key: str,
+        vehicle: VehicleState,
+        soc: SocReading,
+        inputs: ChargeInputs,
+        active: ActiveSlot | None,
     ) -> _Planned | None:
         """Der Stand von „Geplant“ für das Fahrzeug ``key`` (``PlannedTracker``, Präzisierung 6).
 
         Nur an einer Wallbox: Die volle Leistung ist die des Fahrzeugs dort (``full_power_w``).
         Ziel und Abfahrt kommen aus der Absicht, das Ladelimit aus Tessie, der Ansteckvorgang von
-        der Wallbox. Einen Plan-Slot gibt es noch nicht (``slot_w`` ``None``).
+        der Wallbox. Die Leistung des Plans (``slot_w``) ist die des gültigen Slots ``active`` für
+        das Fahrzeug, 0 W, wenn er es nicht nennt; ohne gültigen Slot ``None``.
         """
         if vehicle.wallbox is None:
             return None
@@ -830,7 +846,7 @@ class ChargeController:
             full_w=full_w,
             efficiency=car.charge_efficiency_pct / 100.0,
             usable_kwh=car.usable_kwh,
-            slot_w=None,
+            slot_w=None if active is None else float(active.vehicles.get(key, 0)),
         )
         reserved_w = 0.0
         if state.state == "plan":
@@ -1349,15 +1365,20 @@ def _urgent(
     Kappt die Grenze des 15-min-Wächters (``fuse_a``), nur dann, wenn schon die Sicherung allein mit
     dem Wunsch ``wanted`` unter den Ist-Strom senkte: Eine Senkung wegen dieser Grenze ist nie
     dringend (Plan 2c-2a, Präzisierung 11), sie nimmt aber auch der Sicherung nichts.
+
+    Mit festem Bedarf in „Geplant“ zählt nur, was die Sicherung allein verlangt, ohne den Wunsch:
+    Die Leistung des Plans liegt oft unter dem Ist-Strom, und eine Senkung auf sie ist nie dringend
+    (Plan 4b, Präzisierung 7).
     """
     if present_a is None or value >= present_a:
         return False
+    wish = point.max_a if situation.firm is not None else wanted
     if situation.cause is GuardCause.PHASE_LIMIT:
-        return True
+        return _current_a(point, wish, situation.limit) < present_a
     fuse_a = situation.fuse_a
     if fuse_a is None:
         return False
-    return _current_a(point, wanted, fuse_a) < present_a
+    return _current_a(point, wish, fuse_a) < present_a
 
 
 def _facts(

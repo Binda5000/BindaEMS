@@ -262,13 +262,14 @@ def test_any_course_of_steps_keeps_the_guard_consistent(steps) -> None:
 
 # --- Drosselung -----------------------------------------------------------------------------------
 
-LEVEL = {Effective.PV: 0, Effective.MIN_PV: 1, Effective.NOW: 2}  # die Stufen in ihrer Reihenfolge
+# die Stufen in ihrer Reihenfolge, „Geplant“ nach Min+PV und vor Sofort (Plan 4b, Präzisierung 8)
+LEVEL = {Effective.PV: 0, Effective.MIN_PV: 1, Effective.PLANNED: 2, Effective.NOW: 3}
 POWER = st.floats(0.0, 11000.0)
 TOLERANCE_W = 1e-6  # Rundung der Gleitkommazahlen
 
 
 def floor_w(car: PeakCar) -> float:
-    """Der Boden eines Autos: in PV-Überschuss 0 W, in Min+PV und Sofort seine Mindestleistung."""
+    """Der Boden eines Autos: in PV-Überschuss 0 W, in Min+PV, Geplant und Sofort ``min_w``."""
     return 0.0 if car.mode is Effective.PV else car.min_w
 
 

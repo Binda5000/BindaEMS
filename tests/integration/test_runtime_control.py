@@ -55,9 +55,11 @@ def without_charging_commands(monkeypatch) -> None:
     Daten (Sollstrom der EVCS 16 A, kein Status, kein Messstrom) lassen die Regelung die EVCS zu
     Recht senken (Design 5.5), und den Tesla mit Tessie regelte sie ebenso. Das Zusammenspiel mit
     der Regelung prüft ``test_runtime_charging.py``. Der Kern gibt der Laderegelung die Grenzen des
-    15-min-Wächters mit (``peak``).
+    15-min-Wächters (``peak``) und den gültigen Slot des Plans (``active``) mit.
     """
-    monkeypatch.setattr(ChargeController, "step", lambda self, inputs, peak=NO_LIMITS: [])
+    monkeypatch.setattr(
+        ChargeController, "step", lambda self, inputs, peak=NO_LIMITS, active=None: []
+    )
 
 
 def record_broadcast(rt) -> list[dict[str, Any]]:

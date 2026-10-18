@@ -22,6 +22,7 @@ from bindaems.core.control.charge_modes import Effective
 from bindaems.core.control.charging import CarView, ChargeController
 from bindaems.core.control.executor import WriteResult
 from bindaems.core.control.peak_guard import NO_LIMITS, PeakLimits
+from bindaems.core.control.plan_exec import ActiveSlot
 from bindaems.core.safety.budget import PersistentWriteBudget
 from bindaems.core.safety.layer import SafetyLayer
 from bindaems.core.safety.limits import HardLimits
@@ -37,6 +38,7 @@ from bindaems.shared.control import (
     VehicleIntent,
 )
 from bindaems.shared.decisions import DecisionResult
+from bindaems.shared.plan import BatteryIntent
 
 CURRENT, CHARGING = CommandKind.CURRENT, CommandKind.CHARGING
 NOW = VehicleIntent(mode=ChargeMode.NOW)
@@ -2472,4 +2474,149 @@ def test_a_planned_guest_cannot_happen_but_charges_like_pv(cfg) -> None:  # Prä
     pv_run = run(controller(cfg), cfg, 121, intent=pv, **obs)
     assert [(t, c.kind, c.value) for t, c in as_commands(planned_run)] == [
         (t, c.kind, c.value) for t, c in as_commands(pv_run)
+    ]
+
+
+# --- Geplant mit Plan-Slot (Plan 4b, Präzisierung 7, Task 6) --------------------------------------
+
+
+def slot(**vehicles: int) -> ActiveSlot:
+    """Ein gültiger Slot ab ``T0`` im Eigenverbrauch mit der Ladeleistung je Fahrzeug in W."""
+    return ActiveSlot(1, T0, BatteryIntent(), None, None, None, vehicles=vehicles)
+
+
+def tesla_planned(s: int):
+    """Der Tesla am Wall Connector mit 50 %, frisch von Tessie."""
+    return tesla(plugged=True, soc_pct=50.0, soc_at=T0 + timedelta(seconds=s))
+
+
+def tesla_step(c: ChargeController, cfg, s: int, active: ActiveSlot | None, **more) -> list:
+    kw = {**TESLA_PLUGGED, "intent": planned_for("tesla", departure="18:00"), "grid_obs": NO_SHARE}
+    kw |= {"tesla_obs": tesla_planned(s)} | more
+    found = c.step(inputs(cfg, s=s, **kw), NO_LIMITS, active)
+    accept(c, found)
+    return [x.command for x in found if x.command.actuator == "vehicle.tesla"]
+
+
+def test_slot_power_is_a_firm_demand(cfg) -> None:
+    c = controller(cfg)
+    # 6900 W auf drei Phasen: ceil(6900 / 690) = 10 A, ohne Überschuss
+    reasons = ("mode_planned", "plan_power")
+    assert tesla_step(c, cfg, 0, slot(tesla=6900)) == [
+        Command("vehicle.tesla", CURRENT, 10.0, reasons=reasons),
+        Command("vehicle.tesla", CHARGING, True, reasons=reasons),
+    ]
+    health = c.health()[0]["planned"]
+    assert (health["state"], health["plan_w"]) == ("plan", 6900.0)
+
+
+def test_surplus_on_top_of_slot_power(cfg) -> None:
+    c = controller(cfg)
+    sunny = grid(grid_w=-7100.0)  # Überschuss 7000 W: Anteil floor(7000 / 690) = 10 A
+    # Der Slot will 4140 W (6 A); der Anteil am Überschuss trägt mehr und kommt obendrauf.
+    reasons = ("mode_planned", "plan_power", "pv_surplus")
+    assert tesla_step(c, cfg, 0, slot(tesla=4140), grid_obs=sunny) == [
+        Command("vehicle.tesla", CURRENT, 10.0, reasons=reasons),
+        Command("vehicle.tesla", CHARGING, True, reasons=reasons),
+    ]
+
+
+@pytest.mark.parametrize("active", [slot(egolf=0), slot(tesla=6900)])
+def test_zero_slot_power_behaves_like_pv(cfg, active) -> None:
+    # 30 % und Abfahrt 14:00: Ohne Slot wäre die späteste Startzeit schon vorbei. Ein gültiger Slot
+    # mit 0 W (oder einer, der das Auto nicht nennt) lädt nur PV-Überschuss, mit den Zeiten von PV.
+    kw = {"intent": planned_for(departure="14:00"), "egolf_obs": egolf_soc(30.0)}
+    c = controller(cfg)
+    assert evcs_commands(run(c, cfg, 200, active=active, grid_obs=NO_SHARE, **kw)) == [
+        cmd(0, CHARGING, False, ("mode_planned",))
+    ]
+    health = c.health()[1]["planned"]
+    assert (health["state"], health["plan_w"]) == ("surplus", 0.0)
+    pv = run(controller(cfg), cfg, 121, active=active, **kw)
+    assert evcs_commands(pv) == [
+        cmd(0, CHARGING, False, ("mode_planned",)),
+        cmd(120, CURRENT, 8.0, ("mode_planned", "pv_surplus")),
+        cmd(120, CHARGING, True, ("mode_planned", "pv_surplus")),
+    ]
+
+
+AT_10_A = evcs(charging=True, phase_a={"L1": 10.0, "L2": 10.0, "L3": 0.0}, power_w=4600.0)
+
+
+def test_plan_expiry_falls_back_to_latest_start_without_stop(cfg) -> None:  # Review Focus 4
+    # 30 % und Abfahrt 14:00: Die späteste Startzeit ist vorbei. Der Plan lädt mit 4600 W (10 A)
+    # bis 10:15; danach gibt es keinen gültigen Slot (app aus, core weiter).
+    c = controller(cfg)
+    kw = {"intent": planned_for(departure="14:00"), "grid_obs": NO_SHARE}
+
+    def active(s: int) -> ActiveSlot | None:
+        return slot(egolf=4600) if s < 900 else None
+
+    def soc(s: int):
+        return egolf_soc(30.0, T0 + timedelta(seconds=s))
+
+    found = run(c, cfg, 1000, active=active, egolf_obs=soc, evcs_obs=AT_10_A, **kw)
+    plan, due = ("mode_planned", "plan_power"), ("mode_planned", "latest_start")
+    assert evcs_commands(found) == [
+        cmd(0, CURRENT, 10.0, plan),
+        cmd(0, CHARGING, True, plan),
+        cmd(900, CURRENT, 16.0, due),  # kein „Laden aus“ dazwischen
+    ]
+    health = c.health()[1]["planned"]
+    assert (health["state"], health["plan_w"]) == ("due", None)
+
+
+def test_plan_expiry_before_latest_start_stops_with_the_times_of_pv(cfg) -> None:
+    # 60 % und Abfahrt 18:00: Die späteste Startzeit ist weit. Der Plan startet das Auto um 10:00:10
+    # und läuft um 10:01 ab; danach gilt PV-Überschuss mit seinen Zeiten: Es hält den Mindeststrom
+    # und stoppt erst nach der Mindestlaufzeit seit dem Start des Plans (Review Focus 4).
+    c = controller(cfg)
+    importing = grid(grid_w=4600.0)  # die Ladeleistung kommt ganz aus dem Netz: kein Überschuss
+    kw = {"intent": planned_for(departure="18:00"), "grid_obs": importing}
+
+    def active(s: int) -> ActiveSlot | None:
+        return slot(egolf=4600) if 10 <= s < 60 else None
+
+    def soc(s: int):
+        return egolf_soc(60.0, T0 + timedelta(seconds=s))
+
+    def wallbox(s: int):
+        return AT_10_A if s > 10 else evcs()
+
+    found = run(c, cfg, 700, active=active, egolf_obs=soc, evcs_obs=wallbox, **kw)
+    plan, pv = ("mode_planned", "plan_power"), ("mode_planned", "pv_surplus")
+    stop_s = 10 + int(cfg.control.min_on_s)
+    assert stop_s > int(cfg.control.stop_after_s)  # die Mindestlaufzeit bindet
+    assert evcs_commands(found) == [
+        cmd(0, CHARGING, False, ("mode_planned",)),
+        cmd(10, CURRENT, 10.0, plan),
+        cmd(10, CHARGING, True, plan),
+        cmd(60, CURRENT, 6.0, pv),  # wie PV: der Mindeststrom bis zum Stopp
+        cmd(stop_s, CHARGING, False, pv),
+    ]
+    assert c.health()[1]["planned"]["state"] == "surplus"
+
+
+@pytest.mark.parametrize(
+    ("l1", "urgent"),
+    [(2.0, False), (36.0, True)],
+    ids=["plan_only", "fuse"],
+)
+def test_lowering_to_the_slot_power_is_urgent_only_for_the_fuse(cfg, l1, urgent) -> None:
+    # Die EVCS lädt mit 16 A ohne Überschuss; der Plan will 4600 W (10 A). Die Senkung auf den Plan
+    # ist nicht dringend; dringend ist sie nur, wenn schon die Sicherung allein senkt (33 − 20 A).
+    kw = {"intent": planned_for(departure="18:00"), "egolf_obs": egolf_soc(60.0)}
+    found = run(
+        controller(cfg),
+        cfg,
+        1,
+        active=slot(egolf=4600),
+        evcs_obs=AT_16_A,
+        present=at_evcs(16.0, True),
+        grid_obs=grid(l1=l1, l2=20.0 if urgent else 2.0, grid_w=7360.0),
+        **kw,
+    )
+    assert evcs_commands(found) == [
+        cmd(0, CURRENT, 10.0, ("mode_planned", "plan_power"), urgent=urgent),
+        cmd(0, CHARGING, True, ("mode_planned", "plan_power")),
     ]

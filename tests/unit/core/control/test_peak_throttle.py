@@ -154,6 +154,26 @@ def test_throttles_pv_then_min_pv_then_now() -> None:  # Design 6.3
     assert limits.no_start == frozenset()
 
 
+def test_planned_is_throttled_after_min_pv_before_now() -> None:  # Plan 4b, Präzisierung 8
+    planned = PeakCar("d", "w1", Effective.PLANNED, 3, 4600.0, 4600.0, 2760.0)
+    cars = [A, B, C, planned]
+    # 5000 W: „c“ bis 0 (3000 W), „b“ bis zu seinem Boden (1240 W), dann „d“ (760 W); Sofort nicht
+    assert throttle(cars, {}, 5000.0) == {
+        "c": Cap(0.0, 3000.0, Effective.PV),
+        "b": Cap(2760.0, 1240.0, Effective.MIN_PV),
+        "d": Cap(3840.0, 760.0, Effective.PLANNED),
+    }
+    # 7000 W: „d“ bis zu seinem Boden ``min_w`` (1840 W), Sofort den Rest
+    deep = throttle(cars, {}, 7000.0)
+    assert list(deep) == ["c", "b", "d", "a"]
+    assert (deep["d"].cap_w, deep["a"].cap_w) == (2760.0, 6080.0)
+    # Aufgehoben wird in umgekehrter Reihenfolge: Sofort vor „Geplant“ vor Min+PV
+    assert list(lift(cars, deep, ALLOWED_W)) == ["c", "b", "d"]
+    assert list(lift(cars, lift(cars, deep, ALLOWED_W), ALLOWED_W)) == ["c", "b"]
+    # Die Start-Sperre kennt „Geplant“ wie die anderen Stufen
+    assert no_start([planned], 120.0, 5100.0, 2500.0) == {"d"}
+
+
 @pytest.mark.parametrize(("wanted_w", "caps"), [(6200.0, {"c": 2500.0}), (5700.5, {"c": 2999.5})])
 def test_any_reduction_above_zero_throttles_only_what_it_needs(wanted_w, caps) -> None:
     # 500 W und 0,5 W Senkung nimmt „c“ allein, das Auto mit der niedrigsten Priorität in PV.

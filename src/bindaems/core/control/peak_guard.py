@@ -48,8 +48,9 @@ PeakState = Literal["off", "gap", "active", "exceeded"]  # der Zustand des Wäch
 
 _QUARTER_H: Final = 0.25  # die Länge einer Viertelstunde in h
 _MIN_REST_S: Final = 1.0  # kürzeste Restzeit der Rechnung: Am Ende wird nicht durch 0 geteilt
-# Die Stufen der Drosselung in ihrer Reihenfolge (Design 6.3); Boost und Aus gehören zu keiner.
-_LEVELS: Final = (Effective.PV, Effective.MIN_PV, Effective.NOW)
+# Die Stufen der Drosselung in ihrer Reihenfolge (Design 6.3, „Geplant“ nach Plan 4b,
+# Präzisierung 8); Boost und Aus gehören zu keiner.
+_LEVELS: Final = (Effective.PV, Effective.MIN_PV, Effective.PLANNED, Effective.NOW)
 
 
 @dataclass(frozen=True)
@@ -294,13 +295,13 @@ class PeakGuard:
       durchsetzen kann.
     - **Drosselung:** Die Grenzen je Fahrzeug gelten bis zum Ende der Viertelstunde. Zuerst, vor
       dem Bedarf, verliert ein Auto still seine Grenze, wenn es nicht mehr unter ``cars`` steht
-      oder seinen Modus gewechselt hat, auch zwischen PV-Überschuss, Min+PV und Sofort: Eine Grenze
-      gilt nur im Modus, in dem sie entstand; sonst bliebe etwa ein Auto, das in PV-Überschuss auf
-      0 W gedrosselt wurde, in Sofort unter seinem Boden. Dann, mit Mittel und frühestens
-      ``SETTLE_S`` nach der letzten Änderung: Ist die Senkung über 0, drosselt der Wächter um
-      ``Senkung − ausstehend`` (``throttle``, ``pending_w``); sonst hebt er mit dem Spielraum
-      ``−Senkung`` höchstens eine Grenze auf (``lift``). Eine Grenze, die dabei entsteht, sinkt
-      oder wegfällt, ist eine Änderung; die erste einer Viertelstunde darf sofort kommen.
+      oder seinen Modus gewechselt hat, auch zwischen PV-Überschuss, Min+PV, Geplant und Sofort:
+      Eine Grenze gilt nur im Modus, in dem sie entstand; sonst bliebe etwa ein Auto, das in
+      PV-Überschuss auf 0 W gedrosselt wurde, in Sofort unter seinem Boden. Dann, mit Mittel und
+      frühestens ``SETTLE_S`` nach der letzten Änderung: Ist die Senkung über 0, drosselt der
+      Wächter um ``Senkung − ausstehend`` (``throttle``, ``pending_w``); sonst hebt er mit dem
+      Spielraum ``−Senkung`` höchstens eine Grenze auf (``lift``). Eine Grenze, die dabei entsteht,
+      sinkt oder wegfällt, ist eine Änderung; die erste einer Viertelstunde darf sofort kommen.
     - **Start-Sperre:** ``no_start`` mit ``t_rest``, ``P_zul`` und dem Mittel.
     - **Überschritten:** Liegt die Hochrechnung ``EXCEEDED_AFTER_S`` lang ohne Unterbrechung über
       dem Ziel, ist die Viertelstunde überschritten, bis zu ihrem Ende, auch wenn danach eine Lücke
@@ -581,11 +582,11 @@ class PeakGuard:
 def throttle(cars: Sequence[PeakCar], caps: Mapping[str, Cap], amount_w: float) -> dict[str, Cap]:
     """Drosselt die Autos zusammen um höchstens ``amount_w`` (Präzisierung 11).
 
-    Die Reihenfolge ist PV-Überschuss, Min+PV, Sofort, innerhalb einer Stufe zuerst das Auto mit der
-    niedrigsten Priorität (dem höchsten ``rank``). Je Auto ist ``Ausgang`` das kleinere von Grenze
-    und Leistung, ohne bekannte Leistung die Grenze und ohne Grenze die Leistung: Eine Grenze weit
-    über der Leistung, etwa nach einem Wechsel auf den Mindeststrom, schluckt so keine Senkung. Der
-    Boden ist in PV-Überschuss 0 W, sonst ``min_w``. Das Auto sinkt um
+    Die Reihenfolge ist PV-Überschuss, Min+PV, Geplant, Sofort, innerhalb einer Stufe zuerst das
+    Auto mit der niedrigsten Priorität (dem höchsten ``rank``). Je Auto ist ``Ausgang`` das kleinere
+    von Grenze und Leistung, ohne bekannte Leistung die Grenze und ohne Grenze die Leistung: Eine
+    Grenze weit über der Leistung, etwa nach einem Wechsel auf den Mindeststrom, schluckt so keine
+    Senkung. Der Boden ist in PV-Überschuss 0 W, sonst ``min_w``. Das Auto sinkt um
     ``min(Rest, Netzanteil, Ausgang − Boden)``, wenn das über 0 liegt; die neue Grenze ist
     ``Ausgang`` minus diese Senkung, nie unter dem Boden, im Modus des Autos, und ``cut_w`` wächst
     um sie. Ein Auto ohne Netzanteil (ein Anteil, der keine endliche Zahl ist, zählt 0 W) oder ohne
@@ -617,10 +618,10 @@ def lift(cars: Sequence[PeakCar], caps: Mapping[str, Cap], headroom_w: float) ->
     """Hebt höchstens eine Grenze ganz auf (Präzisierung 11).
 
     ``headroom_w`` ist der Spielraum ``P_zul − Bedarf`` mit dem Bedarf der verlangten Senkung
-    (``PeakGuard``, „Hochrechnung und Senkung“). In umgekehrter Reihenfolge der Drosselung
-    (Sofort, Min+PV, PV-Überschuss, innerhalb einer Stufe die höchste Priorität zuerst) fällt die
-    erste Grenze weg, deren Senkung ``cut_w`` plus ``RELEASE_W`` höchstens der Spielraum ist.
-    Zurück kommen die übrigen Grenzen.
+    (``PeakGuard``, „Hochrechnung und Senkung“). In umgekehrter Reihenfolge der Drosselung (Sofort,
+    Geplant, Min+PV, PV-Überschuss, innerhalb einer Stufe die höchste Priorität zuerst) fällt die
+    erste Grenze weg, deren Senkung ``cut_w`` plus ``RELEASE_W`` höchstens der Spielraum ist. Zurück
+    kommen die übrigen Grenzen.
     """
     for car in reversed(_in_order(cars)):
         cap = caps.get(car.vehicle)
@@ -650,8 +651,9 @@ def no_start(
     """Die Fahrzeuge, die nicht starten sollen (Präzisierung 13).
 
     In den letzten ``LAST_S`` Sekunden der Viertelstunde (``rest_s`` ist ``t_rest``) jedes Auto in
-    PV-Überschuss, Min+PV oder Sofort, dessen Mindestleistung über ``P_zul − Mittel`` liegt, ob es
-    lädt oder nicht; die Laderegelung hält nur ein Auto an, das nicht lädt. Ohne Mittel keins.
+    PV-Überschuss, Min+PV, Geplant oder Sofort, dessen Mindestleistung über ``P_zul − Mittel``
+    liegt, ob es lädt oder nicht; die Laderegelung hält nur ein Auto an, das nicht lädt. Ohne Mittel
+    keins.
     """
     if rest_s > LAST_S or mean_w is None:
         return frozenset()
@@ -676,7 +678,7 @@ def _in_order(cars: Sequence[PeakCar]) -> list[PeakCar]:
 
 
 def _floor_w(car: PeakCar) -> float:
-    """Der Boden der Drosselung: in PV-Überschuss 0 W, in Min+PV und Sofort ``min_w``."""
+    """Der Boden der Drosselung: in PV-Überschuss 0 W, in Min+PV, Geplant und Sofort ``min_w``."""
     return 0.0 if car.mode is Effective.PV else car.min_w
 
 

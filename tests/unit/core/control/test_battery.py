@@ -8,6 +8,7 @@ from bindaems.core.control.battery import (
     BRIDGE_END_S,
     SUPPORT_MODES,
     BatteryCar,
+    BatteryNeed,
     Support,
     allowed,
     deficits,
@@ -359,6 +360,20 @@ def test_allowed_share_follows_the_mode_and_the_limit() -> None:
     off = allowed(cars, deficit, support_on=False, support_max_w=3000.0)
     assert on == {"a": 2000.0, "b": 1000.0, "c": 0.0, "d": 5000.0}
     assert off == {"a": 0.0, "b": 0.0, "c": 0.0, "d": 5000.0}
+
+
+def test_planned_gets_no_battery_support() -> None:  # Plan 4b, Entscheidung 4, Präzisierung 8
+    assert SUPPORT_MODES == frozenset({Effective.PV, Effective.MIN_PV})
+    cars = [car("a", Effective.PLANNED), car("b", Effective.PV)]
+    deficit = {"a": 2000.0, "b": 1000.0}
+    found = allowed(cars, deficit, support_on=True, support_max_w=3000.0)
+    assert found == {"a": 0.0, "b": 1000.0}
+    # Sein Fehlbetrag geht ganz in den gewollten Netzbezug W, wie bei Sofort
+    need = BatteryNeed(0.0, 0.0, 8000.0, deficit, found, "on", 0.0)
+    assert (need.grid_w, need.wanted_w) == ({"a": 2000.0, "b": 0.0}, 2000.0)
+    # Ein Auto in „Geplant“ allein macht die Unterstützung nicht möglich
+    support = Support(ControlConfig())
+    assert support.update(at(0), 80.0, [car(mode=Effective.PLANNED)], DEFICIT, **AT_70)[0] == "mode"
 
 
 def test_off_gets_nothing_from_the_battery() -> None:

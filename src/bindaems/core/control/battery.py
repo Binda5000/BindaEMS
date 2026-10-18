@@ -259,7 +259,7 @@ def allowed(
       Rest ``support_max_w`` ist, vermindert um das, was die Autos davor in diesen Modi bekamen;
       ohne ``support_on`` nichts,
     - ein Auto in Boost seinen ganzen Fehlbetrag; er geht nicht vom Rest ab,
-    - ein Auto in Sofort oder Aus nichts.
+    - ein Auto in Sofort, Geplant (Plan 4b, Entscheidung 4) oder Aus nichts.
 
     Das Ergebnis nennt jede Wallbox von ``cars``; ein Auto ohne Eintrag in ``deficit`` hat keinen
     Fehlbetrag. Fehlbeträge und ``support_max_w`` sind nicht negativ.

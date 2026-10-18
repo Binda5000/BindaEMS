@@ -11,7 +11,8 @@ Schicht ist rein: Die Zeit kommt mit dem Aufruf.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from collections.abc import Mapping
+from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 
@@ -24,7 +25,8 @@ class ActiveSlot:
     """Der Slot des Plans ``plan_id``, der zur Wanduhr gilt (``start`` ist sein Beginn).
 
     ``budget_kw``, ``import_ct`` und ``support_soc_pct`` sind die Werte des Slots; ``None`` heißt,
-    der Plan nennt sie nicht.
+    der Plan nennt sie nicht. ``vehicles`` ist die Ladeleistung je Fahrzeug-Schlüssel in W (Plan 4b,
+    Entscheidung 9); ein Fahrzeug, das der Slot nicht nennt, lädt darin 0 W.
     """
 
     plan_id: int
@@ -33,6 +35,7 @@ class ActiveSlot:
     budget_kw: float | None
     import_ct: float | None
     support_soc_pct: float | None
+    vehicles: Mapping[str, int] = field(default_factory=dict)
 
 
 def active_slot(plan: IntentPlan | None, wall_now: datetime) -> ActiveSlot | None:
@@ -54,6 +57,7 @@ def active_slot(plan: IntentPlan | None, wall_now: datetime) -> ActiveSlot | Non
         budget_kw=slot.budget_kw,
         import_ct=slot.import_ct,
         support_soc_pct=slot.support_soc_pct,
+        vehicles=dict(slot.vehicles),
     )
 
 
