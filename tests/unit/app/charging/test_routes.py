@@ -1,9 +1,11 @@
 from datetime import timedelta
+from pathlib import Path
 
 from sqlalchemy import insert
 from tests.app_helpers import ingest, login_as, set_wallbox_names
 from tests.unit.app.charging.charging_helpers import T0
 
+from bindaems.app.charging.routes import MAX_SESSIONS
 from bindaems.app.db.schema import charging_session
 from bindaems.shared.timeutil import SLOT
 
@@ -87,3 +89,9 @@ def test_sessions_route_rounds_to_three_digits(client, auth, engine, ledger) -> 
     assert response.status_code == 200, response.text
     [entry] = response.json()
     assert entry["kwh"] == 1.235
+
+
+def test_ui_knows_the_session_limit() -> None:
+    # Die Karte „Ladesessions“ weist ab dieser Zahl auf die Grenze hin
+    endpoints = Path("ui/src/lib/api/endpoints.ts").read_text(encoding="utf-8")
+    assert f"export const SESSIONS_LIMIT = {MAX_SESSIONS};" in endpoints

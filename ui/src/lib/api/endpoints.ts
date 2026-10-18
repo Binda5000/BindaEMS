@@ -12,6 +12,12 @@ type Range = { from: string; to: string };
 
 export const EXPORT_SETTINGS_URL = '/api/settings/export';
 
+/**
+ * So viele Sessions liefert `GET /api/charging/sessions` höchstens, die neuesten zuerst; die
+ * Grenze setzt der Server (`MAX_SESSIONS` in src/bindaems/app/charging/routes.py).
+ */
+export const SESSIONS_LIMIT = 200;
+
 const RepriceSchema = v.object({ repriced: v.number() });
 
 const DECISION_FILTERS = ['since', 'until', 'actuator', 'result', 'text'] as const;

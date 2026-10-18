@@ -13,7 +13,7 @@ import {
 	formatTime
 } from '$lib/format';
 import { offsetMinutes, parseIso, todayVienna } from '$lib/time';
-import { periodTitle, type Period } from './period';
+import { MONTHS, periodTitle, type Period } from './period';
 
 export interface Tile {
 	id: 'autarky' | 'self_consumption' | 'cost' | 'savings' | 'revenue';
@@ -98,21 +98,6 @@ export function hints(stats: Stats, running: boolean): string[] {
 	return result;
 }
 
-const MONTH_SHORT = [
-	'Jän.',
-	'Feb.',
-	'März',
-	'Apr.',
-	'Mai',
-	'Juni',
-	'Juli',
-	'Aug.',
-	'Sep.',
-	'Okt.',
-	'Nov.',
-	'Dez.'
-];
-
 /** Beschriftung eines Balkens: Stunde (Tag), Tag (Woche, Monat), Monat (Jahr) */
 export function bucketLabel(period: Period, start: string): string {
 	switch (period) {
@@ -125,7 +110,7 @@ export function bucketLabel(period: Period, start: string): string {
 			return `${day}.${month}.`;
 		}
 		case 'year':
-			return MONTH_SHORT[Number(start.slice(5, 7)) - 1] ?? start;
+			return MONTHS[Number(start.slice(5, 7)) - 1]?.short ?? start;
 	}
 }
 

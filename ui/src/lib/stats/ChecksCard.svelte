@@ -20,7 +20,7 @@
 
 <Card title="Abgleich mit den Zählern">
 	{#if checked && rows.length > 0}
-		<div class="scroll">
+		<div class="scroll wide">
 			<table aria-label="Abgleich mit den Zählern">
 				<thead>
 					<tr>
@@ -49,20 +49,6 @@
 </Card>
 
 <style>
-	table {
-		min-width: max-content;
-	}
-
-	th {
-		font-size: 0.8125rem;
-		color: var(--muted);
-		white-space: nowrap;
-	}
-
-	td {
-		white-space: nowrap;
-	}
-
 	.notice {
 		margin: 0.75rem 0 0;
 	}

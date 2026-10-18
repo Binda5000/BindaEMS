@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { SESSIONS_LIMIT } from '$lib/api/endpoints';
 	import type { ChargingSession } from '$lib/api/schemas';
 	import Card from '$lib/components/Card.svelte';
 	import Notice from '$lib/components/Notice.svelte';
@@ -26,7 +27,7 @@
 	{:else if rows.length === 0}
 		<p class="muted">Keine Ladesessions im Zeitraum.</p>
 	{:else}
-		<div class="scroll">
+		<div class="scroll wide">
 			<table aria-label="Ladesessions">
 				<thead>
 					<tr>
@@ -54,27 +55,13 @@
 				</tbody>
 			</table>
 		</div>
-		{#if rows.length >= 200}
-			<p class="muted limit">Angezeigt werden die 200 neuesten Sessions.</p>
+		{#if rows.length >= SESSIONS_LIMIT}
+			<p class="muted limit">Angezeigt werden die {SESSIONS_LIMIT} neuesten Sessions.</p>
 		{/if}
 	{/if}
 </Card>
 
 <style>
-	table {
-		min-width: max-content;
-	}
-
-	th {
-		font-size: 0.8125rem;
-		color: var(--muted);
-		white-space: nowrap;
-	}
-
-	td {
-		white-space: nowrap;
-	}
-
 	.limit {
 		margin: 0.5rem 0 0;
 		font-size: 0.875rem;

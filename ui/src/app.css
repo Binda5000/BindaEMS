@@ -186,6 +186,22 @@ th.num {
 	max-width: 100%;
 }
 
+/* breite Tabellen der Statistik (Autos, Ladesessions, Monatsspitzen, Abgleich): eine Zeile je
+   Eintrag, so breit wie nötig; die Karte scrollt */
+.scroll.wide table {
+	min-width: max-content;
+}
+
+.scroll.wide th {
+	font-size: 0.8125rem;
+	color: var(--muted);
+	white-space: nowrap;
+}
+
+.scroll.wide td {
+	white-space: nowrap;
+}
+
 /* Kennzahlen als Liste „Beschriftung – Wert“; die Beschriftung nimmt höchstens die halbe Breite */
 .facts {
 	display: grid;

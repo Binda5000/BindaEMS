@@ -1,5 +1,6 @@
 import { render, screen, within } from '@testing-library/svelte';
 import { expect, it } from 'vitest';
+import { SESSIONS_LIMIT } from '$lib/api/endpoints';
 import { chargingSession } from '$lib/testing/fixtures';
 import SessionsCard from './SessionsCard.svelte';
 
@@ -43,7 +44,7 @@ it('zeigt den Fehler der Abfrage statt „Lädt …“', () => {
 });
 
 it('weist auf die Grenze von 200 Sessions hin', () => {
-	const sessions = Array.from({ length: 200 }, (_, id) => chargingSession({ id }));
+	const sessions = Array.from({ length: SESSIONS_LIMIT }, (_, id) => chargingSession({ id }));
 	render(SessionsCard, { sessions });
 	expect(screen.getByText('Angezeigt werden die 200 neuesten Sessions.')).toBeInTheDocument();
 });

@@ -12,19 +12,20 @@ export const PERIODS: readonly { id: Period; label: string; param: string }[] = 
 ];
 
 const WEEKDAYS = ['So.', 'Mo.', 'Di.', 'Mi.', 'Do.', 'Fr.', 'Sa.'];
-const MONTHS = [
-	'Jänner',
-	'Februar',
-	'März',
-	'April',
-	'Mai',
-	'Juni',
-	'Juli',
-	'August',
-	'September',
-	'Oktober',
-	'November',
-	'Dezember'
+/** Monatsnamen, österreichisch: lang für Überschriften („Jänner 2026“), kurz für Balken („Jän.“) */
+export const MONTHS: readonly { long: string; short: string }[] = [
+	{ long: 'Jänner', short: 'Jän.' },
+	{ long: 'Februar', short: 'Feb.' },
+	{ long: 'März', short: 'März' },
+	{ long: 'April', short: 'Apr.' },
+	{ long: 'Mai', short: 'Mai' },
+	{ long: 'Juni', short: 'Juni' },
+	{ long: 'Juli', short: 'Juli' },
+	{ long: 'August', short: 'Aug.' },
+	{ long: 'September', short: 'Sep.' },
+	{ long: 'Oktober', short: 'Okt.' },
+	{ long: 'November', short: 'Nov.' },
+	{ long: 'Dezember', short: 'Dez.' }
 ];
 
 /** Heute in Wiener Zeit als `JJJJ-MM-TT`. */
@@ -105,7 +106,7 @@ export function periodTitle(period: Period, day: string): string {
 			return `KW ${isoWeek(day)} · ${from}–${dayMonth(last)}${lastYear}`;
 		}
 		case 'month':
-			return `${MONTHS[month - 1]} ${year}`;
+			return `${MONTHS[month - 1]?.long} ${year}`;
 		case 'year':
 			return String(year);
 	}

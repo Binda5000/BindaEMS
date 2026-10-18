@@ -273,8 +273,13 @@ export interface CardNotice {
 	text: string;
 }
 
+/** Beendet ist eine Session mit Ende, die nicht mehr offen ist; sonst läuft sie. */
+function isFinished(session: ChargingSession): session is ChargingSession & { end: string } {
+	return !session.open && session.end !== null;
+}
+
 function isRunning(session: ChargingSession): boolean {
-	return session.open || session.end === null;
+	return !isFinished(session);
 }
 
 function startMs(session: ChargingSession): number {
@@ -324,7 +329,7 @@ function sameDay(first: string, second: string): boolean {
  */
 export function sessionLine(session: ChargingSession): string {
 	const energy = `${formatNumber(session.kwh, 1)}${NBSP}kWh`;
-	if (isRunning(session) || session.end === null) {
+	if (!isFinished(session)) {
 		const split = [
 			['PV', session.pv_kwh],
 			['Akku', session.battery_kwh],

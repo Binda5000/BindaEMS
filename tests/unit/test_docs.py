@@ -80,7 +80,6 @@ def test_statistics_page_in_the_guide_uses_the_texts_of_the_ui() -> None:
         "Im Zeitraum wurde kein Auto geladen.",
         "Keine Ladesessions im Zeitraum.",
         "Noch kein Tag abgeglichen.",
-        "Angezeigt werden die 200 neuesten Sessions.",
         "gegenüber Fixtarif ohne Anlage",
         "Akku → Autos",
         "PV (ohne Markierung)",
@@ -89,6 +88,10 @@ def test_statistics_page_in_the_guide_uses_the_texts_of_the_ui() -> None:
     ):
         assert phrase in text, phrase
         assert phrase in source, phrase
+    # die Grenze steht im UI als SESSIONS_LIMIT (gleich MAX_SESSIONS des Servers, test_routes.py)
+    assert "Angezeigt werden die 200 neuesten Sessions." in text
+    assert "Angezeigt werden die {SESSIONS_LIMIT} neuesten Sessions." in source
+    assert "export const SESSIONS_LIMIT = 200;" in source
     assert "\n| Statistik | " in _guide_section("12. Web-UI")  # die Zeile der Seitenliste
     for topic in ("Session seit {HH:MM}", "Letzte Session {TT.MM.}"):
         assert topic in section, topic

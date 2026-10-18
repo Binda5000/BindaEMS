@@ -16,7 +16,7 @@
 	{#if view.rows.length === 0}
 		<p class="muted">Im Zeitraum wurde kein Auto geladen.</p>
 	{:else}
-		<div class="scroll">
+		<div class="scroll wide">
 			<table aria-label="Autos">
 				<thead>
 					<tr>
@@ -57,20 +57,6 @@
 </Card>
 
 <style>
-	table {
-		min-width: max-content;
-	}
-
-	th {
-		font-size: 0.8125rem;
-		color: var(--muted);
-		white-space: nowrap;
-	}
-
-	td {
-		white-space: nowrap;
-	}
-
 	.flow td {
 		color: var(--muted);
 	}
