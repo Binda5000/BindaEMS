@@ -4,7 +4,7 @@ import pytest
 from tests.unit.app.ledger.conftest import FakeInflux
 
 from bindaems.app.history.influx import InfluxQueryError
-from bindaems.app.ledger.checks import DayCheck, check_day
+from bindaems.app.ledger.checks import NOTE_MISSING, DayCheck, check_day
 from bindaems.app.ledger.service import LedgerSlot
 from bindaems.shared.timeutil import SLOT, local_day_slots
 
@@ -383,6 +383,21 @@ def test_totals_skip_unchecked_days(checks) -> None:
     assert imp["deviation_pct"] == pytest.approx(0.2 / 15.0 * 100)
     exp = totals[1]
     assert exp["ledger_kwh"] == 0.0 and exp["counter_kwh"] is None and exp["deviation_pct"] is None
+
+
+def test_totals_without_any_counter_day_keep_one_entry_per_signal(checks) -> None:
+    # Diese Form wertet das UI aus (Karte „Abgleich“): Ein Signal ohne Tag mit Zählerwert steht
+    # mit ``ledger_kwh 0.0`` und ``counter_kwh None`` da, ``totals`` ist also nie leer.
+    signals = ["import", "export", "pv", "wb:evcs"]
+    rows = [
+        make(DAY + timedelta(days=n), signal, 3.0, None, note=NOTE_MISSING)
+        for n in range(3)
+        for signal in signals
+    ]
+    assert checks.totals(rows) == [
+        {"signal": signal, "ledger_kwh": 0.0, "counter_kwh": None, "deviation_pct": None}
+        for signal in signals
+    ]
 
 
 def test_totals_with_zero_counter_have_no_deviation(checks) -> None:

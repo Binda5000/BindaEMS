@@ -333,18 +333,36 @@ describe('Karte Abgleich', () => {
 		});
 	});
 
-	it('zeigt einen fehlenden Zähler als Strich', () => {
+	it('zeigt eine Abweichung ohne Zählerbetrag als Strich', () => {
 		const base = stats();
 		const [row] = checkRows(
 			stats({
 				checks: {
 					...base.checks,
-					totals: [{ signal: 'import', ledger_kwh: 1, counter_kwh: null, deviation_pct: null }]
+					totals: [{ signal: 'wb:evcs', ledger_kwh: 0, counter_kwh: 0, deviation_pct: null }]
 				}
 			}),
 			{}
 		);
-		expect([row.counter, row.deviation]).toEqual(['–', '–']);
+		expect([row.counter, row.deviation]).toEqual([formatEnergy(0), '–']);
+	});
+
+	it('lässt Größen ohne Tag mit Zählerwert weg', () => {
+		const base = stats();
+		const rows = checkRows(
+			stats({
+				checks: {
+					...base.checks,
+					// so liefert der Server eine Größe, die an keinem Tag einen Zählerwert hat
+					totals: [
+						{ signal: 'import', ledger_kwh: 10.2, counter_kwh: 10, deviation_pct: 2 },
+						{ signal: 'wb:evcs', ledger_kwh: 0, counter_kwh: null, deviation_pct: null }
+					]
+				}
+			}),
+			{}
+		);
+		expect(rows.map((row) => row.signal)).toEqual(['import']);
 	});
 
 	it('names flagged days in the checks card', () => {
@@ -368,5 +386,18 @@ describe('Karte Abgleich', () => {
 			checkNotice(stats({ checks: { days: 3, flagged_days: flagged, totals: [] } }));
 		expect(empty([])).toBe('Keine Zählerwerte für diesen Zeitraum.');
 		expect(empty(['2026-10-12'])).toBe('Mehr als 1 % Abweichung am 12.10.');
+	});
+
+	it('sagt, dass Zählerwerte fehlen, wenn an keinem Tag ein Zählerstand da ist', () => {
+		// die Form des Servers bei lauter „Zählerstand fehlt“: je Größe eine Summe ohne Zähler
+		const totals = ['import', 'export', 'pv', 'wb:evcs'].map((signal) => ({
+			signal,
+			ledger_kwh: 0,
+			counter_kwh: null,
+			deviation_pct: null
+		}));
+		const missing = stats({ checks: { days: 3, flagged_days: [], totals } });
+		expect(checkRows(missing, {})).toEqual([]);
+		expect(checkNotice(missing)).toBe('Keine Zählerwerte für diesen Zeitraum.');
 	});
 });

@@ -278,9 +278,21 @@ function checkLabel(signal: string, wallboxNames: Record<string, string>): strin
 	return signal;
 }
 
-/** Karte „Abgleich mit den Zählern“: eine Zeile je Größe, `wallboxNames` nach Schlüssel */
+/**
+ * Die Summen mit mindestens einem Tag mit Zählerwert. Eine Größe ohne Zählertag liefert der Server
+ * mit `counter_kwh: null` und `ledger_kwh: 0` (die Abrechnung zählt nur an Tagen mit Zählerwert);
+ * sie hat keine Summe und fehlt hier.
+ */
+function countedTotals(stats: Stats): Stats['checks']['totals'] {
+	return stats.checks.totals.filter((total) => total.counter_kwh !== null);
+}
+
+/**
+ * Karte „Abgleich mit den Zählern“: eine Zeile je Größe mit Zählerwert, `wallboxNames` nach
+ * Schlüssel
+ */
 export function checkRows(stats: Stats, wallboxNames: Record<string, string>): CheckRow[] {
-	return stats.checks.totals.map((total) => ({
+	return countedTotals(stats).map((total) => ({
 		signal: total.signal,
 		label: checkLabel(total.signal, wallboxNames),
 		ledger: formatEnergy(total.ledger_kwh),
@@ -298,7 +310,7 @@ export function checkNotice(stats: Stats): string | null {
 	if (stats.checks.days === 0) return 'Noch kein Tag abgeglichen.';
 	const days = stats.checks.flagged_days.map((day) => `${day.slice(8, 10)}.${day.slice(5, 7)}.`);
 	if (days.length === 0) {
-		return stats.checks.totals.length === 0 ? 'Keine Zählerwerte für diesen Zeitraum.' : null;
+		return countedTotals(stats).length === 0 ? 'Keine Zählerwerte für diesen Zeitraum.' : null;
 	}
 	const list = days.length === 1 ? days[0] : `${days.slice(0, -1).join(', ')} und ${days.at(-1)}`;
 	return `Mehr als 1 % Abweichung am ${list}`;

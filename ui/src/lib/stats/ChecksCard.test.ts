@@ -49,3 +49,16 @@ it('sagt bei geprüften Tagen ohne Summen und Markierungen, dass Zählerwerte fe
 	expect(screen.getByText('Keine Zählerwerte für diesen Zeitraum.')).toHaveClass('muted');
 	expect(screen.queryByRole('table')).not.toBeInTheDocument();
 });
+
+it('zeigt keine Tabelle mit 0,00 kWh, wenn an keinem Tag ein Zählerstand da ist', () => {
+	// die Form des Servers bei lauter „Zählerstand fehlt“: je Größe eine Summe ohne Zähler
+	const totals = ['import', 'export', 'pv', 'wb:evcs'].map((signal) => ({
+		signal,
+		ledger_kwh: 0,
+		counter_kwh: null,
+		deviation_pct: null
+	}));
+	render(ChecksCard, { stats: stats({ checks: { days: 3, flagged_days: [], totals } }) });
+	expect(screen.getByText('Keine Zählerwerte für diesen Zeitraum.')).toHaveClass('muted');
+	expect(screen.queryByRole('table')).not.toBeInTheDocument();
+});
