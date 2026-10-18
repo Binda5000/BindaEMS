@@ -14,7 +14,9 @@ wer dort steht (``wallboxes[].occupant`` und ``assignment``).
 - ``last_seen`` wird höchstens jede Minute gespeichert, Anfang und Ende sofort.
 - Das Fahrzeug der Session ist das nicht leere ``occupant`` mit der längsten Dauer in ihrem
   Zeitraum (``session_vehicle``); es wird bei jeder Änderung der Belegung, beim Speichern von
-  ``last_seen`` und beim Ende neu bestimmt.
+  ``last_seen`` und beim Ende neu bestimmt. Hat kein Fahrzeug Zeit (etwa eine Session unter einer
+  Minute, deren Insasse erst in der schließenden Beobachtung steht), zählt die letzte nicht leere
+  Belegung der Wallbox zwischen Beginn und Ende.
 
 Das Schreiben läuft in einem Thread, ``wake`` setzt nur ein Ereignis.
 """
@@ -296,7 +298,23 @@ class ChargingTracker:
             .order_by(table.c.ts, table.c.id)
         ).all()
         entries = [(ensure_utc(row.ts), row.occupant or None) for row in [*prior, *inside]]
-        return session_vehicle(entries, start, end)
+        vehicle = session_vehicle(entries, start, end)
+        if vehicle is not None:
+            return vehicle
+        # Keine Zeit mit Fahrzeug (Session unter einer Minute, der Insasse steht erst in der
+        # schließenden Beobachtung bei ``end``): die letzte bekannte Belegung in ``[start, end]``
+        last = conn.execute(
+            select(table.c.occupant)
+            .where(
+                table.c.wallbox == wallbox,
+                table.c.ts >= start,
+                table.c.ts <= end,
+                table.c.occupant != "",
+            )
+            .order_by(desc(table.c.ts), desc(table.c.id))
+            .limit(1)
+        ).scalar()
+        return last or None
 
 
 def _stored(row: Any) -> StoredSession:

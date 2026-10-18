@@ -270,6 +270,30 @@ def test_vehicle_is_guest_or_unknown(tracker) -> None:
     assert guest.vehicle == "guest" and unknown_car.vehicle is None
 
 
+def test_short_session_takes_the_occupant_of_the_closing_observation(tracker) -> None:
+    tracker.record(T0, plugged(None, "unclear"))
+    # 20 s später abgezogen; der Insasse steht nur in dieser Beobachtung
+    tracker.record(T0 + timedelta(seconds=20), seen("tesla", "detected", connected=False))
+    (session,) = all_sessions(tracker)
+    assert session.end == T0 + timedelta(seconds=20) and session.vehicle == "tesla"
+
+
+def test_session_without_time_for_any_vehicle_keeps_the_last_known_one(tracker) -> None:
+    tracker.record(T0, plugged("tesla", "detected"))
+    tracker.record(T0, plugged("polestar", "detected"))  # gleiche Sekunde: tesla hat keine Zeit
+    tracker.record(T0, unplugged())
+    (session,) = all_sessions(tracker)
+    assert session.vehicle == "polestar"
+
+
+def test_occupant_before_the_session_does_not_count_for_a_short_one(tracker) -> None:
+    tracker.record(at(-60), seen("tesla", "default", connected=False))  # nur davor, ohne Session
+    tracker.record(T0, plugged(None, "unclear"))
+    tracker.record(T0 + timedelta(seconds=20), unplugged())
+    (session,) = all_sessions(tracker)
+    assert session.vehicle is None
+
+
 def test_running_session_shows_the_current_occupant(tracker) -> None:
     tracker.record(at(0), plugged(None, "unclear"))
     tracker.record(at(5), plugged("tesla", "detected"))
