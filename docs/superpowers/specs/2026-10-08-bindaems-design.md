@@ -4,7 +4,7 @@
 |---|---|
 | Stand | 2026-10-08 |
 | Status | Entwurf zur Freigabe |
-| Umfang | Gesamtsystem, Phasen 1–5 |
+| Umfang | Gesamtsystem, Phasen 1–6 |
 | Branch | `main` |
 
 ## 0. Kurzfassung
@@ -25,6 +25,7 @@ Architektur in zwei Sätzen: Der kleine, kritische Prozess `ems-core` liest alle
 - **Lastspitzen:** Den Hausanschluss je Phase schützen. Ab 2027 ist die monatliche 15-Minuten-Spitze kostenrelevant (ElWG) und wird deshalb gezielt begrenzt.
 - **Nachvollziehbarkeit:** Jede Aktion ist im UI begründet, etwa „Warum lädt der Akku gerade?“.
 - **Bedienung:** Eigenes Web-UI und vollständige, bidirektionale Steuerung aus Home Assistant.
+- **Wärme und Kälte (Phase 6):** Klimaanlage und später die Wärmepumpe nehmen PV-Überschuss auf, den Akku und Autos nicht brauchen, und halten sich bei teurem Strom und drohenden Spitzen zurück.
 - **Lernen:** Last- und Ladebedarf aus Historie und HA-Sensoren lernen. Fallen die Modelle schlechter aus als einfache Profile, nutzt das System automatisch die Profile.
 
 ### 1.2 Harte Randbedingungen
@@ -80,6 +81,8 @@ Architektur in zwei Sätzen: Der kleine, kritische Prozess `ems-core` liest alle
 | Home Assistant | HAOS (aktuell) in einer Proxmox-VM, mehrjährige Recorder-Historie, Mosquitto-Add-on, schreibt nach InfluxDB | WebSocket-API, MQTT | lesen; Discovery-Entitäten |
 | Datenhaltung | InfluxDB 1.x (separat), Grafana | HTTP | lesen/schreiben |
 | Infrastruktur | Proxmox-Cluster mit 3 Knoten und ZFS-Replikation, Reverse Proxy, Fernzugriff über VPN | – | – |
+| Klimaanlage (Nachtrag 18.10.2026) | kühlt und heizt; geregelt von einer UVR610 (Technische Alternative) über ein KNX-Gateway, C.M.I. am LAN; Verbrauch in HA | CoE V2 (UDP) über das C.M.I.; HA | lesen; schreiben (Sollwertversatz) ab Phase 6a |
+| Wärmepumpe (geplant, frühestens Herbst 2027) | Solarfocus vampair mit Regler ecomanager-touch | Modbus TCP direkt | lesen; schreiben ab Phase 6b |
 
 ---
 
@@ -2411,6 +2414,43 @@ Bei der Umsetzung haben diese Punkte die Entscheidungen ergänzt oder enger gefa
 - **Fahrverhalten:** Lernen, Vorschläge und optionale Automatik für „Geplant“.
 - **UI:** Ansicht der Prognosegüte.
 - **Abnahme:** Das Modell ist über 4 Wochen um mindestens 10 % besser (mittlerer absoluter Fehler) als das Profil, oder das Profil bleibt automatisch aktiv. Vorschläge erscheinen mit Konfidenz.
+
+### Phase 6 – Wärme und Kälte (Klimaanlage, später Wärmepumpe)
+
+**Stand 18.10.2026** (Entscheidung des Betreibers vom 18.10.2026; Grundlage: `/mnt/project-files/waermepumpe/klimaanlage.md` und `auswertung.md` im Projektordner, die Vorgabe des Betreibers für die UVR-Seite und die Solarfocus-Anleitung DR-0180-DE v14): Die Phase hat zwei Teile. Die Nummer ist nicht die Reihenfolge:
+- **6a „Klimaanlage“** kommt direkt nach 4b und vor Phase 5. Plan erst nach 4b, weil beide den core ändern.
+- **6b „Wärmepumpe“** (Solarfocus vampair, Anschaffung frühestens Herbst 2027) kommt nach Phase 5, deren Temperaturmerkmale die Lastprognose dafür braucht. 6a legt die Schnittstellen so an, dass 6b nur einen weiteren Gerätetyp und dessen Adapter ergänzt.
+
+**Gemeinsames Modell: flexible Wärmeerzeuger.** Jedes Gerät unter `thermal.devices` in `config.yaml` (Liste, Reihenfolge = Rang untereinander) hat eine Art (`kind`: in 6a `coe_offset`, in 6b `solarfocus_modbus`), eine Betriebsart (`heizen`, `kuehlen`, `lueften`, `aus`, `unbekannt`), optional die elektrische Leistung und eine Stufe des **Leistungswunschs** von `−n` (weniger) über `0` bis `+n` (mehr). Die Strategie rechnet nur mit dem Leistungswunsch; erst der Aktor des Geräts übersetzt ihn (6a: Sollwertversatz mit dem Vorzeichen je Betriebsart; 6b: SG-Ready 1 bis 4 oder die Sollleistung HEMS). Unbekannte Betriebsart, veraltete Werte, `lueften` und `aus` heißen immer Stufe 0.
+
+**Rangfolge des PV-Überschusses:** Hausakku (bis zum Plan-SOC) → Autos (nach ihrem Modus) → Wärmeerzeuger → Einspeisung (Entscheidung des Betreibers vom 18.10.2026). Die Wärmeerzeuger bekommen nur den Überschuss, den die Regelung nach Akku und Autos noch einspeisen würde; damit regeln nicht zwei Teile um dieselben Watt (7.9).
+
+**Strategie (6a, regelbasiert, im core):**
+- **Mehr:** Rest-Überschuss über einer Schwelle, mindestens 10 min stabil (Totband gegen Wolken).
+- **Weniger:** drohende Überschreitung des 15-min-Budgets (7.4) oder der Phasengrenze (7.3), oder ein Slot mit dem Hinweis „teuer“ ohne Überschuss. Den Hinweis je Slot (`mehr`, `neutral`, `weniger`) rechnet die app aus Preis und Plan und gibt ihn mit der Absicht an den core; der core entscheidet mit den Echtzeitwerten.
+- **Sonst 0.** Vorheizen und Vorkühlen über Stunden nach Preis braucht ein Wärmemodell des Hauses und kommt mit Phase 5 in den Planer.
+- **Tests:** alle vier Fälle Kühlen/Heizen × mehr/weniger, Wechsel der Betriebsart, ausbleibende Pakete, Rate-Limit, Rangfolge mit Akku und Autos.
+
+**6a: Klimaanlage über die UVR610 (CoE V2):**
+- **Anlage:** Regler Technische Alternative UVR610 (CAN-Knoten 32) regelt 8 Räume und gibt der Klimaanlage über ein KNX-Gateway (Knoten 48) Ist, Soll und Betriebsart vor; die Klimaanlage regelt selbst. Ein C.M.I. (Knoten 56, feste IP) verbindet CAN und LAN. Komfort und Raumregelung bleiben in der UVR.
+- **Protokoll:** CoE V2 über UDP 5442, ohne Handshake und Quittung; Kopf `0x02 0x00 <4+8n> <n>`, je Wert `<Knoten> <Ausgang−1> <1 analog|0 digital> <Einheit> <int32 LE>` (Einheit 1 = °C in Zehnteln, 43 = Ein/Aus). Eigenes Modul mit reiner Standardbibliothek und Selbsttest gegen den Prüfvektor `01 01 01 01 9A FF FF FF` (Knoten 1, Ausgang 2, −10,2 °C).
+- **Senden:** BindaEMS ist CAN-Knoten 60, Ausgang 1, analog °C ×10, an die IP des C.M.I.; in der UVR ist das CAN-Eingang 15 „EMS Sollwertversatz“. Der Versatz wird in beiden Betriebsarten auf den Sollwert addiert: Kühlen mehr = negativ, Heizen mehr = positiv. Zyklisch alle 30 s, auch ohne Änderung.
+- **Grenzen (8.2, harte Grenzen je Gerät):** Versatz −3 … +3 K (die UVR begrenzt nicht), Stufe 0,5 K, ein Schritt weg von 0 höchstens alle 10 min (8.3, Rate-Limit). Zurück auf 0 geht immer sofort: beim Wechsel Kühlen/Heizen, bei unbekannter Betriebsart, bei veralteten Paketen, in DEGRADED und SAFE und ohne Freigabe.
+- **Sicherer Zustand:** Die UVR setzt den Versatz nach ihrem Timeout (laut Betreiber 5 min, an der Anlage zu bestätigen) selbst auf 0. Ein Watchdog wie am Cerbo (8.6) ist nicht nötig.
+- **Empfangen:** Das C.M.I. sendet an die IP von BindaEMS, UDP 5442, bei Änderung und zyklisch: Istwert (UVR A9), Sollwert inkl. Versatz (A11), Befehl Ein (D1), Kühlen (D2), Lüften (D3), Heizen (D4), Rückmeldung „läuft“ (KNX-Gateway D1), dazu neu der **empfangene Versatz** als Echo und die **elektrische Leistung** (F51, kW). Welche (Knoten, Ausgang) im Paket stehen, ist eine konfigurierbare Tabelle. Pakete nur von der IP des C.M.I.; ohne Paket länger als 3 min gelten die Werte als veraltet (Verbindungsfehler).
+- **Status:** `aus`, wenn die Rückmeldung aus ist; sonst `heizen` (D4), `lueften` (D3), `kuehlen` (D2). „Läuft“ kommt aus der Rückmeldung, nicht aus dem Befehl D1. Sollwert ohne Versatz = Soll − eigener gesendeter Versatz.
+- **Bestätigung (6.1):** Ein Versatz ist bestätigt, wenn das Echo der UVR ihn zeigt (Entscheidung des Betreibers vom 18.10.2026); bleibt das Echo aus oder weicht ab, folgt nach den üblichen Versuchen der Alarm `actuator.failed.thermal.<name>`.
+- **Aktor:** `thermal.<name>` mit Dry-Run und Freigabe wie jeder Aktor (8.7). Im Dry-Run sendet BindaEMS zyklisch 0 und protokolliert den gewünschten Versatz; so lassen sich Verbindung, Visu der UVR und Timeout vor dem Live-Betrieb prüfen.
+- **Betrieb:** `ems-core` veröffentlicht `5442/udp` (heute hat er keine Ports). Entscheidungslog, InfluxDB, System-Seite und HA zeigen Versatz, Leistungswunsch, Betriebsart, Status und Fehler, mit „Warum?“-Text (etwa „Vorkühlen mit PV-Überschuss (−1,0 K)“).
+- **Statistik:** Die Klimaanlage kann schon jetzt als Verbraucher aus ihrer HA-Entität angelegt werden (13, Verbraucher); mit 6a kommt ihre Leistung auch aus der UVR.
+- **Offen beim Betreiber:** die Empfangstabelle laut C.M.I., die IP-Adressen von C.M.I. und BindaEMS, die Timeout-Zeit, das Echo des Versatzes und F51 als CAN-Ausgänge im Funktionsplan der UVR.
+
+**6b: Wärmepumpe Solarfocus (vorbereitet, nicht geplant):**
+- Modbus TCP direkt zur ecomanager-touch (Port 502, Unit-ID 1, ohne Anmeldung, eigenes Netz wie Cerbo und EVCS). Lesen: elektrische Leistung (Input 2322), Status (2330), EVU-Lock (2304), Abtauung, Boilerladung, Puffer- und Boilertemperaturen. Schreiben: SG-Ready per Modbus (Holding 33405, Rückfall 0 = Eingänge i5/i9 oder 2 = Normal), EVU-Lock (33404), ab Regler-Software V26.020 die Sollleistung HEMS (33415), Boiler-Einmalladung (32001).
+- Anders als die UVR haben die Register keinen Timeout: 6b braucht einen definierten Rückfall bei Ausfall von BindaEMS und ein Schreibbudget, bis Solarfocus sagt, ob die Register in den Flash gehen. Die PV-Überschuss-Logik der Wärmepumpe selbst (Register 33407 bis 33409) bleibt aus, sonst regelt sie gegen BindaEMS (7.9).
+- Voraussetzungen beim Kauf: netzseitig hinter dem Victron-Netzzähler (nicht am AC-Out der MultiPlus, wegen der USV-Reserve 1.2), kein eigener Wärmepumpenzähler, Regler ab V26.020, SG-Ready-Eingänge verdrahtet, Puffer mit Fühlern oben und unten.
+
+**Abnahme 6a:** alle Werte der Empfangstabelle kommen an; der Timeout der UVR ist an der Anlage gemessen; 7 Tage Dry-Run ohne Fehler; im Live-Betrieb liegt der Versatz nie außerhalb ±3 K, ändert sich weg von 0 höchstens um eine Stufe je 10 min und steht spätestens einen Zyklus nach einem Wechsel der Betriebsart oder nach veralteten Paketen auf 0; jeder gesendete Versatz ist durch das Echo bestätigt.
 
 ---
 
