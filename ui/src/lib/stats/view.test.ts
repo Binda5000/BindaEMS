@@ -34,11 +34,11 @@ describe('Kacheln', () => {
 			'Einspeiseerlös'
 		]);
 		expect(result.map((tile) => tile.value)).toEqual([
-			formatRatio(0.758),
-			formatRatio(0.919),
-			formatEur(41.605),
-			formatEur(60.129),
-			formatEur(1.065)
+			formatRatio(0.655),
+			formatRatio(0.814),
+			formatEur(44.333),
+			formatEur(59.126),
+			formatEur(2.444)
 		]);
 		expect(result.find((tile) => tile.label === 'Ersparnis')?.subtitle).toBe(
 			'gegenüber Fixtarif ohne Anlage'
@@ -74,12 +74,12 @@ describe('Karte Kosten', () => {
 			'Summe'
 		]);
 		expect(rows.map((row) => row.value)).toEqual([
-			formatEur(8.003),
-			formatEur(1.065),
-			formatEur(6.938),
+			formatEur(12.109),
+			formatEur(2.444),
+			formatEur(9.665),
 			formatEur(1.672),
 			formatEur(32.995),
-			formatEur(41.605)
+			formatEur(44.333)
 		]);
 		expect(rows.at(-1)?.strong).toBe(true);
 	});
@@ -111,8 +111,8 @@ describe('Karte Kosten', () => {
 	it('nennt die beiden Ersparnisse', () => {
 		const rows = savingsRows(stats());
 		expect(rows.map((row) => [row.label, row.value])).toEqual([
-			['Ersparnis ohne Anlage', formatEur(60.129)],
-			['Ersparnis bei gleichem Netzbezug', formatEur(8.203)]
+			['Ersparnis ohne Anlage', formatEur(59.126)],
+			['Ersparnis bei gleichem Netzbezug', formatEur(11.647)]
 		]);
 		expect(
 			savingsRows(withMoney({ savings_no_plant_eur: null, savings_same_import_eur: null })).map(
@@ -187,16 +187,16 @@ const vehicle = (overrides: Partial<Stats['vehicles'][number]> = {}) => ({
 describe('Karte Autos', () => {
 	it('lists vehicles with PV, battery and grid share and the battery-to-cars row', () => {
 		const { rows, batteryToVehicles } = vehicleRows(stats());
-		expect(rows.map((row) => row.name)).toEqual(['Tesla Model 3', 'Gast']);
+		expect(rows.map((row) => row.name)).toEqual(['Tesla Model 3', 'Gast', 'Unbekannt']);
 		expect(rows[0]).toMatchObject({
 			energy: formatEnergy(20.01),
 			pv: formatEnergy(11.729),
-			battery: formatEnergy(6.901),
-			grid: formatEnergy(1.38),
-			cost: formatEur(0.974),
+			battery: formatEnergy(2.745),
+			grid: formatEnergy(5.536),
+			cost: formatEur(1.161),
 			sessions: '2'
 		});
-		expect(batteryToVehicles).toBe(formatEnergy(12.901));
+		expect(batteryToVehicles).toBe(formatEnergy(6.877));
 	});
 
 	it('rechnet ct/kWh als Kosten durch Energie mal 100 und zeigt ohne Kosten einen Strich', () => {
@@ -327,9 +327,9 @@ describe('Karte Abgleich', () => {
 			'Wallbox twc'
 		]);
 		expect(rows[0]).toMatchObject({
-			ledger: formatEnergy(52.358),
-			counter: formatEnergy(52.881),
-			deviation: '-1,0\u00a0%'
+			ledger: formatEnergy(75.534),
+			counter: formatEnergy(76.075),
+			deviation: '-0,7\u00a0%'
 		});
 	});
 

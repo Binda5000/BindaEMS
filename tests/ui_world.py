@@ -659,7 +659,8 @@ def _ingest_history(app: AppRuntime, slots: list[HistorySlot]) -> None:
 
 def _record_sessions(app: AppRuntime) -> None:
     """Sessions und Belegung über den Tracker, mit Beobachtungen wie aus Health: je Wallbox zwei
-    beendete Sessions, dazu die offene an der Garage (``twc``), die bis ``T_DEMO`` läuft."""
+    beendete Sessions, an der EVCS eine ohne Fahrzeug, dazu die offene an der Garage (``twc``),
+    die bis ``T_DEMO`` läuft."""
     for when, states in observations(T_DEMO):
         app.charging.record(
             when,
@@ -737,12 +738,14 @@ async def build_world(cfg: Config, data_dir: Path, *, ui_dir: Path | None = None
             await app.ledger.handle_stream_message(message)
         await app.load_forecast.refresh()  # aus den vier Slots der Abrechnung
         _rate_forecasts(app)
+        # Der Verlauf vor dem Plan: so plant er mit der Monatsspitze, die auch Boost-Mehrkosten
+        # und Statistik zeigen (aus dem Verlauf, nicht nur aus den vier Slots von heute)
+        await _statistics(app)
         # Plan aus den Prognosen und Preisen; der Solver läuft im selben Prozess (wie in Tests)
         app.planning._solver = solve_inline
         plan = await app.planning.replan("start")
         assert plan is not None, app.planning.component_status().message
         await _earlier_plan(app, plan)
-        await _statistics(app)
     except BaseException:
         router.stop(quiet=True)
         raise

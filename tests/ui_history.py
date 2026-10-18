@@ -3,7 +3,8 @@ Zählerstände für den Abgleich (Plan 4a, Task 11). Reine Rechnung ohne app und
 die Welt bei jedem Lauf dieselben Werte liefert.
 
 Tagesprofil: PV als Glocke zwischen 07:00 und 17:00 (je Tag ein Bewölkungsfaktor), Hauslast mit
-Spitzen am Morgen, Mittag und Abend, ein Akku von 30 kWh mit Reserve. Die Flüsse folgen der
+Spitzen am Morgen, Mittag und Abend, ein Akku von 30 kWh, der die Hälfte als Reserve hält: so
+fällt an jedem Tag Netzbezug an, und der Abgleich vergleicht echte Werte. Die Flüsse folgen der
 Wasserfall-Regel des core: PV deckt Haus und Wallboxen, lädt den Akku, der Rest geht ins Netz; was
 fehlt, kommt aus dem Akku (außer in der Nachtladung), dann aus dem Netz. An jedem vierten Tag lädt
 das Netz den Akku nachts. Die Wallboxen laden nur in den Sessions von ``SESSIONS``.
@@ -30,8 +31,8 @@ EXPORT_COUNTER_END = 1180.0
 CLOUD = (0.9, 0.5, 0.8, 1.0, 0.3, 0.7, 0.95, 0.6, 0.85, 0.4, 0.75, 1.0, 0.65, 0.8)
 PV_PEAK_W = 4800.0
 USABLE_KWH = 30.0
-RESERVE_KWH = 6.0
-START_STOCK_KWH = 9.0
+RESERVE_KWH = 15.0
+START_STOCK_KWH = 16.0
 MAX_CHARGE_WH = 800.0  # je Viertelstunde
 MAX_DISCHARGE_WH = 3000.0
 GRID_CHARGE_WH = 1250.0
@@ -48,7 +49,7 @@ class DemoSession:
     Viertelstunden; ``kind_later`` ist die Art der Belegung nach den ersten 30 Minuten."""
 
     wallbox: str
-    vehicle: str  # Schlüssel des Fahrzeugs oder ``guest``
+    vehicle: str | None  # Schlüssel des Fahrzeugs, ``guest`` oder ``None`` (unbekannt)
     start: datetime
     end: datetime | None
     kind: str
@@ -59,7 +60,8 @@ def _local(day: date, hour: int, minute: int) -> datetime:
     return datetime.combine(day, time(hour, minute), tzinfo=LOCAL_TZ)
 
 
-# je Wallbox zwei beendete Sessions; die Garage (``twc``) hat dazu die offene von heute
+# je Wallbox zwei beendete Sessions, an der EVCS dazu eine ohne erkanntes Fahrzeug („Unbekannt“);
+# die Garage (``twc``) hat dazu die offene von heute
 SESSIONS = (
     DemoSession(
         "evcs", "egolf", _local(date(2026, 9, 27), 8, 0), _local(date(2026, 9, 27), 12, 0),
@@ -68,6 +70,10 @@ SESSIONS = (
     DemoSession(
         "twc", "tesla", _local(date(2026, 9, 29), 17, 45), _local(date(2026, 9, 29), 21, 45),
         "detected", "detected",
+    ),
+    DemoSession(
+        "evcs", None, _local(date(2026, 10, 3), 8, 30), _local(date(2026, 10, 3), 11, 0),
+        "unclear", "unclear",
     ),
     DemoSession(
         "twc", "tesla", _local(date(2026, 10, 5), 10, 0), _local(date(2026, 10, 5), 14, 30),

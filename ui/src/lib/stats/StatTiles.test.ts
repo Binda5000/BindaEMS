@@ -9,7 +9,7 @@ it('zeigt fünf Kacheln mit Wert, Ersparnis mit Untertitel', () => {
 	const items = screen.getAllByTestId('tile');
 	expect(items).toHaveLength(5);
 	expect(items[0]).toHaveTextContent('Autarkie');
-	expect(items[0]).toHaveTextContent('76 %');
+	expect(items[0]).toHaveTextContent('66 %');
 	expect(items[3]).toHaveTextContent('Ersparnis');
 	expect(items[3]).toHaveTextContent('gegenüber Fixtarif ohne Anlage');
 	expect(items[1]).not.toHaveTextContent('gegenüber');

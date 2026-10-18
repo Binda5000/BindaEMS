@@ -7,92 +7,92 @@
   "estimated_slots": 2,
   "energy": {
     "pv_kwh": 185.513,
-    "import_kwh": 54.018,
-    "export_kwh": 14.998,
+    "import_kwh": 79.187,
+    "export_kwh": 34.416,
     "house_kwh": 194.344,
-    "wallbox_kwh": 29.21,
-    "battery_charge_kwh": 131.647,
-    "battery_discharge_kwh": 130.668,
-    "consumption_kwh": 223.554
+    "wallbox_kwh": 34.96,
+    "battery_charge_kwh": 107.075,
+    "battery_discharge_kwh": 106.095,
+    "consumption_kwh": 229.304
   },
   "money": {
-    "import_eur": 8.003,
-    "revenue_eur": 1.065,
-    "net_eur": 6.938,
+    "import_eur": 12.109,
+    "revenue_eur": 2.444,
+    "net_eur": 9.665,
     "fees_eur": 1.672,
     "power_eur": 32.995,
-    "total_eur": 41.605,
-    "savings_no_plant_eur": 60.129,
-    "savings_same_import_eur": 8.203
+    "total_eur": 44.333,
+    "savings_no_plant_eur": 59.126,
+    "savings_same_import_eur": 11.647
   },
   "ratios": {
-    "autarky": 0.758,
-    "self_consumption": 0.919
+    "autarky": 0.655,
+    "self_consumption": 0.814
   },
   "buckets": [
     {
       "start": "2026-10-01",
       "pv_kwh": 29.037,
-      "import_kwh": 0.0,
-      "export_kwh": 4.714,
+      "import_kwh": 1.993,
+      "export_kwh": 6.707,
       "consumption_kwh": 24.133,
-      "net_eur": -0.335
+      "net_eur": -0.17
     },
     {
       "start": "2026-10-02",
       "pv_kwh": 18.339,
-      "import_kwh": 0.0,
+      "import_kwh": 3.378,
       "export_kwh": 0.0,
       "consumption_kwh": 24.133,
-      "net_eur": 0.0
+      "net_eur": 0.544
     },
     {
       "start": "2026-10-03",
       "pv_kwh": 25.981,
-      "import_kwh": 0.0,
-      "export_kwh": 0.201,
-      "consumption_kwh": 24.133,
-      "net_eur": -0.014
+      "import_kwh": 4.527,
+      "export_kwh": 0.185,
+      "consumption_kwh": 29.883,
+      "net_eur": 0.609
     },
     {
       "start": "2026-10-04",
       "pv_kwh": 12.226,
-      "import_kwh": 16.449,
-      "export_kwh": 1.008,
+      "import_kwh": 16.97,
+      "export_kwh": 3.699,
       "consumption_kwh": 24.133,
-      "net_eur": 1.869
+      "net_eur": 1.74
     },
     {
       "start": "2026-10-05",
       "pv_kwh": 22.924,
-      "import_kwh": 9.036,
+      "import_kwh": 18.036,
       "export_kwh": 0.0,
       "consumption_kwh": 42.763,
-      "net_eur": 1.959
+      "net_eur": 3.495
     },
     {
       "start": "2026-10-06",
       "pv_kwh": 30.566,
       "import_kwh": 4.199,
-      "export_kwh": 2.43,
+      "export_kwh": 8.181,
       "consumption_kwh": 24.133,
-      "net_eur": 0.392
+      "net_eur": -0.016
     },
     {
       "start": "2026-10-07",
       "pv_kwh": 19.868,
-      "import_kwh": 5.265,
+      "import_kwh": 11.015,
       "export_kwh": 0.0,
       "consumption_kwh": 33.333,
-      "net_eur": 0.863
+      "net_eur": 1.9
     },
     {
       "start": "2026-10-08",
       "pv_kwh": 24.452,
       "import_kwh": 17.409,
-      "export_kwh": 6.424,
+      "export_kwh": 15.424,
       "consumption_kwh": 24.133,
-      "net_eur": 1.598
+      "net_eur": 0.959
     },
     {
       "start": "2026-10-09",
@@ -285,9 +285,9 @@
       "name": "Tesla Model 3",
       "kwh": 20.01,
       "pv_kwh": 11.729,
-      "battery_kwh": 6.901,
-      "grid_kwh": 1.38,
-      "cost_eur": 0.974,
+      "battery_kwh": 2.745,
+      "grid_kwh": 5.536,
+      "cost_eur": 1.161,
       "sessions": 2
     },
     {
@@ -295,13 +295,23 @@
       "name": "Gast",
       "kwh": 9.2,
       "pv_kwh": 0.0,
-      "battery_kwh": 6.0,
-      "grid_kwh": 3.2,
-      "cost_eur": 0.645,
+      "battery_kwh": 3.801,
+      "grid_kwh": 5.399,
+      "cost_eur": 1.027,
+      "sessions": 1
+    },
+    {
+      "key": "unknown",
+      "name": "Unbekannt",
+      "kwh": 5.75,
+      "pv_kwh": 5.154,
+      "battery_kwh": 0.331,
+      "grid_kwh": 0.265,
+      "cost_eur": 0.053,
       "sessions": 1
     }
   ],
-  "battery_to_vehicles_kwh": 12.901,
+  "battery_to_vehicles_kwh": 6.877,
   "consumers": [
     {
       "id": 2,
@@ -338,15 +348,15 @@
     "totals": [
       {
         "signal": "import",
-        "ledger_kwh": 52.358,
-        "counter_kwh": 52.881,
-        "deviation_pct": -0.989
+        "ledger_kwh": 75.534,
+        "counter_kwh": 76.075,
+        "deviation_pct": -0.712
       },
       {
         "signal": "export",
-        "ledger_kwh": 10.063,
-        "counter_kwh": 10.049,
-        "deviation_pct": 0.143
+        "ledger_kwh": 27.488,
+        "counter_kwh": 27.453,
+        "deviation_pct": 0.129
       },
       {
         "signal": "pv",
@@ -356,9 +366,9 @@
       },
       {
         "signal": "wb:evcs",
-        "ledger_kwh": 9.2,
-        "counter_kwh": 9.18,
-        "deviation_pct": 0.218
+        "ledger_kwh": 14.95,
+        "counter_kwh": 14.953,
+        "deviation_pct": -0.02
       },
       {
         "signal": "wb:twc",

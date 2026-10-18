@@ -18,9 +18,9 @@ it('zeigt die Zeilen als Tabelle mit der Summe und darunter die Ersparnisse', ()
 		'Ersparnis bei gleichem Netzbezug'
 	]);
 	expect(screen.getByRole('cell', { name: 'Grundgebühren' })).toBeInTheDocument();
-	expect(rows[5][1]).toHaveTextContent('41,61');
-	expect(rows[6][1]).toHaveTextContent('60,13');
-	expect(rows[7][1]).toHaveTextContent('8,20');
+	expect(rows[5][1]).toHaveTextContent('44,33');
+	expect(rows[6][1]).toHaveTextContent('59,13');
+	expect(rows[7][1]).toHaveTextContent('11,65');
 });
 
 it('lässt den Leistungspreis in der Woche weg und zeigt unbekannte Beträge als Strich', () => {

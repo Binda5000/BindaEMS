@@ -3,11 +3,11 @@
     {
       "day": "2026-10-02",
       "signal": "import",
-      "ledger_kwh": 0.0,
-      "counter_kwh": 0.0,
-      "deviation_pct": null,
+      "ledger_kwh": 3.378,
+      "counter_kwh": 3.374,
+      "deviation_pct": 0.11,
       "flagged": false,
-      "note": "Zähler zeigt 0 kWh"
+      "note": null
     },
     {
       "day": "2026-10-02",
@@ -48,18 +48,18 @@
     {
       "day": "2026-10-03",
       "signal": "import",
-      "ledger_kwh": 0.0,
-      "counter_kwh": 0.0,
-      "deviation_pct": null,
+      "ledger_kwh": 4.527,
+      "counter_kwh": 4.538,
+      "deviation_pct": -0.253,
       "flagged": false,
-      "note": "Zähler zeigt 0 kWh"
+      "note": null
     },
     {
       "day": "2026-10-03",
       "signal": "export",
-      "ledger_kwh": 0.201,
-      "counter_kwh": 0.201,
-      "deviation_pct": -0.05,
+      "ledger_kwh": 0.185,
+      "counter_kwh": 0.185,
+      "deviation_pct": 0.0,
       "flagged": false,
       "note": null
     },
@@ -75,11 +75,11 @@
     {
       "day": "2026-10-03",
       "signal": "wb:evcs",
-      "ledger_kwh": 0.0,
-      "counter_kwh": 0.0,
-      "deviation_pct": null,
+      "ledger_kwh": 5.75,
+      "counter_kwh": 5.773,
+      "deviation_pct": -0.398,
       "flagged": false,
-      "note": "Zähler zeigt 0 kWh"
+      "note": null
     },
     {
       "day": "2026-10-03",
@@ -93,18 +93,18 @@
     {
       "day": "2026-10-04",
       "signal": "import",
-      "ledger_kwh": 16.449,
-      "counter_kwh": 17.025,
-      "deviation_pct": -3.383,
+      "ledger_kwh": 16.97,
+      "counter_kwh": 17.565,
+      "deviation_pct": -3.386,
       "flagged": true,
       "note": null
     },
     {
       "day": "2026-10-04",
       "signal": "export",
-      "ledger_kwh": 1.008,
-      "counter_kwh": 1.013,
-      "deviation_pct": -0.474,
+      "ledger_kwh": 3.699,
+      "counter_kwh": 3.714,
+      "deviation_pct": -0.401,
       "flagged": false,
       "note": null
     },
@@ -112,8 +112,8 @@
       "day": "2026-10-04",
       "signal": "pv",
       "ledger_kwh": 12.226,
-      "counter_kwh": 12.96,
-      "deviation_pct": -5.664,
+      "counter_kwh": 12.959,
+      "deviation_pct": -5.658,
       "flagged": false,
       "note": null
     },
@@ -138,9 +138,9 @@
     {
       "day": "2026-10-05",
       "signal": "import",
-      "ledger_kwh": 9.036,
-      "counter_kwh": 9.051,
-      "deviation_pct": -0.166,
+      "ledger_kwh": 18.036,
+      "counter_kwh": 18.066,
+      "deviation_pct": -0.165,
       "flagged": false,
       "note": null
     },
@@ -157,8 +157,8 @@
       "day": "2026-10-05",
       "signal": "pv",
       "ledger_kwh": 22.924,
-      "counter_kwh": 24.299,
-      "deviation_pct": -5.659,
+      "counter_kwh": 24.3,
+      "deviation_pct": -5.663,
       "flagged": false,
       "note": null
     },
@@ -192,9 +192,9 @@
     {
       "day": "2026-10-06",
       "signal": "export",
-      "ledger_kwh": 2.43,
-      "counter_kwh": 2.425,
-      "deviation_pct": 0.219,
+      "ledger_kwh": 8.181,
+      "counter_kwh": 8.163,
+      "deviation_pct": 0.214,
       "flagged": false,
       "note": null
     },
@@ -228,9 +228,9 @@
     {
       "day": "2026-10-07",
       "signal": "import",
-      "ledger_kwh": 5.265,
-      "counter_kwh": 5.244,
-      "deviation_pct": 0.4,
+      "ledger_kwh": 11.015,
+      "counter_kwh": 10.971,
+      "deviation_pct": 0.404,
       "flagged": false,
       "note": null
     },
@@ -282,9 +282,9 @@
     {
       "day": "2026-10-08",
       "signal": "export",
-      "ledger_kwh": 6.424,
-      "counter_kwh": 6.41,
-      "deviation_pct": 0.218,
+      "ledger_kwh": 15.424,
+      "counter_kwh": 15.391,
+      "deviation_pct": 0.214,
       "flagged": false,
       "note": null
     },
@@ -319,15 +319,15 @@
   "totals": [
     {
       "signal": "import",
-      "ledger_kwh": 52.358,
-      "counter_kwh": 52.881,
-      "deviation_pct": -0.989
+      "ledger_kwh": 75.534,
+      "counter_kwh": 76.075,
+      "deviation_pct": -0.712
     },
     {
       "signal": "export",
-      "ledger_kwh": 10.063,
-      "counter_kwh": 10.049,
-      "deviation_pct": 0.143
+      "ledger_kwh": 27.488,
+      "counter_kwh": 27.453,
+      "deviation_pct": 0.129
     },
     {
       "signal": "pv",
@@ -337,9 +337,9 @@
     },
     {
       "signal": "wb:evcs",
-      "ledger_kwh": 9.2,
-      "counter_kwh": 9.18,
-      "deviation_pct": 0.218
+      "ledger_kwh": 14.95,
+      "counter_kwh": 14.953,
+      "deviation_pct": -0.02
     },
     {
       "signal": "wb:twc",

@@ -8,26 +8,26 @@
   "energy": {
     "pv_kwh": 24.452,
     "import_kwh": 17.409,
-    "export_kwh": 6.424,
+    "export_kwh": 15.424,
     "house_kwh": 24.133,
     "wallbox_kwh": 0.0,
-    "battery_charge_kwh": 25.874,
+    "battery_charge_kwh": 16.874,
     "battery_discharge_kwh": 14.569,
     "consumption_kwh": 24.133
   },
   "money": {
     "import_eur": 2.054,
-    "revenue_eur": 0.456,
-    "net_eur": 1.598,
+    "revenue_eur": 1.095,
+    "net_eur": 0.959,
     "fees_eur": 0.186,
     "power_eur": null,
-    "total_eur": 1.784,
-    "savings_no_plant_eur": 5.642,
+    "total_eur": 1.145,
+    "savings_no_plant_eur": 6.281,
     "savings_same_import_eur": 3.168
   },
   "ratios": {
     "autarky": 0.279,
-    "self_consumption": 0.737
+    "self_consumption": 0.369
   },
   "buckets": [
     {
@@ -106,33 +106,33 @@
       "start": "2026-10-08T09:00:00+02:00",
       "pv_kwh": 2.705,
       "import_kwh": 0.0,
-      "export_kwh": 0.0,
+      "export_kwh": 1.149,
       "consumption_kwh": 0.575,
-      "net_eur": 0.0
+      "net_eur": -0.082
     },
     {
       "start": "2026-10-08T10:00:00+02:00",
       "pv_kwh": 3.408,
       "import_kwh": 0.0,
-      "export_kwh": 0.0,
+      "export_kwh": 2.873,
       "consumption_kwh": 0.535,
-      "net_eur": 0.0
+      "net_eur": -0.204
     },
     {
       "start": "2026-10-08T11:00:00+02:00",
       "pv_kwh": 3.778,
       "import_kwh": 0.0,
-      "export_kwh": 0.0,
+      "export_kwh": 3.11,
       "consumption_kwh": 0.668,
-      "net_eur": 0.0
+      "net_eur": -0.221
     },
     {
       "start": "2026-10-08T12:00:00+02:00",
       "pv_kwh": 3.778,
       "import_kwh": 0.0,
-      "export_kwh": 1.116,
+      "export_kwh": 2.984,
       "consumption_kwh": 0.794,
-      "net_eur": -0.079
+      "net_eur": -0.212
     },
     {
       "start": "2026-10-08T13:00:00+02:00",
@@ -258,9 +258,9 @@
       },
       {
         "signal": "export",
-        "ledger_kwh": 6.424,
-        "counter_kwh": 6.41,
-        "deviation_pct": 0.218
+        "ledger_kwh": 15.424,
+        "counter_kwh": 15.391,
+        "deviation_pct": 0.214
       },
       {
         "signal": "pv",

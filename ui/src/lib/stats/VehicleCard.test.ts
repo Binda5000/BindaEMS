@@ -13,15 +13,16 @@ it('listet die Autos mit PV, Akku, Netz, Kosten und Sessions und die Zeile Akku 
 			.map((cell) => cell.textContent)
 	).toEqual(['Auto', 'Energie', 'PV', 'Akku', 'Netz', 'Kosten', 'ct/kWh', 'Sessions']);
 	const rows = within(table).getAllByRole('row').slice(1);
-	expect(rows).toHaveLength(3);
+	expect(rows).toHaveLength(4);
 	const tesla = within(rows[0]).getAllByRole('cell');
 	expect(tesla[0]).toHaveTextContent('Tesla Model 3');
-	expect(tesla[6]).toHaveTextContent('4,87'); // 0,974 € / 20,01 kWh
+	expect(tesla[6]).toHaveTextContent('5,80'); // 1,161 € / 20,01 kWh
 	expect(tesla[7]).toHaveTextContent('2');
 	expect(within(rows[1]).getAllByRole('cell')[0]).toHaveTextContent('Gast');
-	const battery = within(rows[2]).getAllByRole('cell');
+	expect(within(rows[2]).getAllByRole('cell')[0]).toHaveTextContent('Unbekannt');
+	const battery = within(rows[3]).getAllByRole('cell');
 	expect(battery[0]).toHaveTextContent('Akku → Autos');
-	expect(battery[1]).toHaveTextContent('12,9');
+	expect(battery[1]).toHaveTextContent('6,88');
 });
 
 it('scrollt die breite Tabelle in der Karte', () => {

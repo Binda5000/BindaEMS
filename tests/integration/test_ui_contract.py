@@ -12,11 +12,14 @@ from pathlib import Path
 from typing import Any
 
 from fastapi.testclient import TestClient
+from sqlalchemy import select
 from tests.ui_history import DAYS, FIRST_DAY
 from tests.ui_world import DEMO_PASSWORD, DEMO_TOTP_SECRET, T_DEMO, World, build_world
 
+from bindaems.app.db.schema import assignment_log
+from bindaems.app.ledger.checks import NOTE_ZERO
 from bindaems.shared.domain import Alarm, Severity
-from bindaems.shared.timeutil import SLOT, local_day_slots
+from bindaems.shared.timeutil import LOCAL_TZ, SLOT, local_day_slots
 
 CONTRACT = Path("ui/src/lib/api/contract")
 GET_ENDPOINTS = {
@@ -66,7 +69,13 @@ OTHER = {
 }
 
 
-WALLBOX_DAYS = {date(2026, 9, 27), date(2026, 9, 29), date(2026, 10, 5), date(2026, 10, 7)}
+WALLBOX_DAYS = {
+    date(2026, 9, 27),
+    date(2026, 9, 29),
+    date(2026, 10, 3),
+    date(2026, 10, 5),
+    date(2026, 10, 7),
+}
 
 
 def local_range(first: date, last: date) -> tuple[datetime, datetime]:
@@ -196,9 +205,9 @@ async def test_demo_world_has_statistics_data(cfg, tmp_path) -> None:
 
         sessions = app.charging_sessions.sessions(FIRST_DAY, date(2026, 10, 9))
         by_wallbox = {key: [s for s in sessions if s.wallbox == key] for key in ("evcs", "twc")}
-        assert [s.end is None for s in by_wallbox["evcs"]] == [False, False]
+        assert [s.end is None for s in by_wallbox["evcs"]] == [False, False, False]
         assert [s.end is None for s in by_wallbox["twc"]] == [True, False, False]
-        assert {s.vehicle for s in sessions} == {"egolf", "tesla", "guest"}
+        assert {s.vehicle for s in sessions} == {"egolf", "tesla", "guest", None}  # None: Unbekannt
         assert all(s.split.kwh > 0 for s in sessions)
         flows = {
             name
@@ -207,9 +216,34 @@ async def test_demo_world_has_statistics_data(cfg, tmp_path) -> None:
         }
         assert {"pv>wb:twc", "battery>wb:twc", "grid>wb:twc", "pv>wb:evcs"} <= flows
 
+        # Belegung je Wallbox: erste Sicht, jede Änderung, auch der Wechsel der Art
+        with app.engine.connect() as conn:
+            log = conn.execute(
+                select(assignment_log.c.wallbox, assignment_log.c.occupant, assignment_log.c.kind)
+                .where(assignment_log.c.ts < T_DEMO - timedelta(hours=1))  # nur der Verlauf
+                .order_by(assignment_log.c.ts, assignment_log.c.id)
+            ).all()
+        entries = {
+            key: [(row.occupant, row.kind) for row in log if row.wallbox == key]
+            for key in ("evcs", "twc")
+        }
+        assert entries["evcs"][:3] == [("egolf", "default"), ("egolf", "detected"), ("", "")]
+        assert ("guest", "default") in entries["evcs"]
+        assert ("", "unclear") in entries["evcs"]  # die Session ohne Fahrzeug
+        assert entries["twc"][:3] == [("", ""), ("tesla", "detected"), ("", "")]
+
         checks = app.ledger_checks.checks(last - timedelta(days=6), last)
         assert {check.day for check in checks} == {last - timedelta(days=n) for n in range(7)}
         assert {check.day.isoformat() for check in checks if check.flagged} == {"2026-10-04"}
+        # an jedem Tag Netzbezug: der Abgleich vergleicht echte Werte statt „Zähler zeigt 0 kWh“
+        assert [c.day for c in checks if c.signal == "import" and not c.ledger_kwh] == []
+        assert sum(c.note == NOTE_ZERO for c in checks) < len(checks) / 2
+
+        # eine Monatsspitze für Plan, Boost-Mehrkosten und Statistik
+        peak = app.ledger.month_peak(T_DEMO.astimezone(LOCAL_TZ).date())
+        plan = app.planning.current()
+        assert peak is not None and plan is not None and plan.month_peak_kw is not None
+        assert round(plan.month_peak_kw, 2) == round(peak.kw, 2)
         costs = app.costing.costs(*local_range(FIRST_DAY, last))
         assert len(costs) == 96 * DAYS and any(cost.avg_ct for cost in costs.values())
         stored = app.consumer_days.energy(last - timedelta(days=6), last)
