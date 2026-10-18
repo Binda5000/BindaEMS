@@ -722,6 +722,27 @@ async def test_costing_job_catches_up_when_a_slot_arrives(runtime, monkeypatch) 
         await asyncio.wait([costing_task])
 
 
+async def test_costing_job_catches_up_after_reprice_and_wear_change(runtime, monkeypatch) -> None:
+    # N3: beide kommen aus einem Worker-Thread (Route, Einstellungen) und markierten nur „dirty“;
+    # nachgeführt wurde erst beim nächsten Slot oder Lesen
+    ingest(runtime.ledger, T_APP, {"grid>battery": 1000.0})
+    calls: list[int] = []
+    monkeypatch.setattr(runtime.costing, "catch_up", lambda: calls.append(1) or 0)
+    costing_task = asyncio.create_task(runtime._costing_loop())
+    try:
+        await until(lambda: calls == [1])  # beim Start
+        day = T_APP.date()
+        assert await asyncio.to_thread(runtime.ledger.reprice, day, day, actor="t", source="ui")
+        await until(lambda: calls == [1, 1], max_wait_s=1.0)
+        planning = runtime.settings.current().settings.planning
+        wear = planning.model_copy(update={"wear_ct": planning.wear_ct + 1.0})
+        await asyncio.to_thread(set_planning, runtime.settings, wear)
+        await until(lambda: calls == [1, 1, 1], max_wait_s=1.0)
+    finally:
+        costing_task.cancel()
+        await asyncio.wait([costing_task])
+
+
 async def test_costing_job_survives_a_failing_catch_up(runtime, monkeypatch) -> None:
     calls: list[int] = []
 

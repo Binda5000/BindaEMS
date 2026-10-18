@@ -466,3 +466,19 @@ def test_failed_catch_up_stays_dirty(costing, ledger, monkeypatch) -> None:
         costing.catch_up()
     monkeypatch.undo()
     assert costing.catch_up() == 1
+
+
+def test_dirty_listeners_run_on_every_mark_and_a_failing_one_is_logged(
+    costing, ledger, settings_service
+) -> None:
+    calls: list[str] = []
+
+    def boom() -> None:
+        raise RuntimeError("kaputt")
+
+    costing.on_dirty(boom)
+    costing.on_dirty(lambda: calls.append("geweckt"))
+    ingest(ledger, S, {"pv>battery": 1000.0})  # neuer Slot
+    set_wear(settings_service, 7.0)  # Verschleiß geändert
+    costing.mark_dirty(None)
+    assert calls == ["geweckt"] * 3

@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import math
 import threading
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
@@ -125,18 +125,29 @@ class LedgerCosting:
         self._dirty_all = False
         self._dirty_from: datetime | None = None
         self._wear_ct = settings.current().settings.planning.wear_ct
+        self._dirty_listeners: list[Callable[[], None]] = []
         settings.on_change(self._settings_changed)
         self._mark_stale()
+
+    def on_dirty(self, listener: Callable[[], None]) -> None:
+        """``listener`` läuft nach jedem ``mark_dirty``, auch aus einem Worker-Thread (etwa beim
+        Neubewerten oder einer Änderung des Verschleißes); er weckt die Nachführung."""
+        self._dirty_listeners.append(listener)
 
     def mark_dirty(self, start: datetime | None) -> None:
         """Rechnet ab ``start`` neu; ``None`` heißt alles."""
         with self._dirty_lock:
             if start is None:
                 self._dirty_all = True
-                return
-            start = ensure_utc(start)
-            if self._dirty_from is None or start < self._dirty_from:
-                self._dirty_from = start
+            else:
+                start = ensure_utc(start)
+                if self._dirty_from is None or start < self._dirty_from:
+                    self._dirty_from = start
+        for listener in self._dirty_listeners:
+            try:
+                listener()
+            except Exception:
+                log.exception("Nachführung des Einstandspreises nicht geweckt")
 
     def catch_up(self) -> int:
         """Rechnet ab dem frühesten markierten Slot; liefert die Zahl der geschriebenen Slots."""

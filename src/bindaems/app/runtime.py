@@ -209,6 +209,8 @@ class AppRuntime:
         # Start rechnet, was ``LedgerCosting`` als veraltet erkannt hat
         self._costing_wake = asyncio.Event()
         self._costing_wake.set()
+        self._costing_waiter: asyncio.AbstractEventLoop | None = None  # Loop von ``_costing_loop``
+        self.costing.on_dirty(self._wake_costing)  # auch Neubewerten und Verschleiß wecken sie
         self.ledger_checks = LedgerChecks(self.engine, self.ledger, self.reader, self._clock, cfg)
         self.gap_estimator = GapEstimator(self.ledger, self.reader, self._clock, cfg)
         self.load_forecast = LoadForecastService(
@@ -533,18 +535,31 @@ class AppRuntime:
 
     async def _on_slot_flows(self, data: dict[str, Any]) -> None:
         """Speichert den Slot; der Einstandspreis folgt im eigenen Job (``_costing_loop``), damit
-        eine lange Neuberechnung den Live-Strom des core nicht aufhält."""
+        eine lange Neuberechnung den Live-Strom des core nicht aufhält. Geweckt wird er über
+        ``LedgerCosting.on_dirty``, sobald der Slot gespeichert ist."""
         await self.ledger.handle_stream_message(data)
-        self._wake_costing()
 
     def _wake_costing(self) -> None:
-        """Weckt die Nachführung; was neu zu rechnen ist, hat ``LedgerCosting.mark_dirty``."""
-        self._costing_wake.set()
+        """Weckt die Nachführung; was neu zu rechnen ist, hat ``LedgerCosting.mark_dirty``. Aus
+        einem Worker-Thread (Route, Einstellungen, ``to_thread``) über den Loop des Jobs."""
+        loop = self._costing_waiter
+        try:
+            running = asyncio.get_running_loop()
+        except RuntimeError:
+            running = None
+        if loop is None or running is loop:
+            self._costing_wake.set()
+            return
+        try:
+            loop.call_soon_threadsafe(self._costing_wake.set)
+        except RuntimeError:
+            pass  # Loop schon geschlossen (Herunterfahren): nichts mehr nachzuführen
 
     async def _costing_loop(self) -> None:
         """Führt den Einstandspreis im Worker-Thread nach, sobald etwas ihn weckt. Ein Wecken
         während der Rechnung löst gleich die nächste aus; ``LedgerCosting`` hält mit seinem Lock
         ohnehin nur eine Nachführung zur Zeit."""
+        self._costing_waiter = asyncio.get_running_loop()
         while True:
             await self._costing_wake.wait()
             self._costing_wake.clear()
