@@ -150,8 +150,10 @@ class LedgerCosting:
 
     def _settings_changed(self, version: SettingsVersion) -> None:
         wear_ct = version.settings.planning.wear_ct
-        if wear_ct != self._wear_ct:
+        with self._dirty_lock:  # Vergleich und Merken ohne fremden Aufruf dazwischen
+            changed = wear_ct != self._wear_ct
             self._wear_ct = wear_ct
+        if changed:
             self.mark_dirty(None)
 
     def _mark_stale(self) -> None:

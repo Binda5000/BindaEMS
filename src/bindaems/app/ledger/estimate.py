@@ -29,9 +29,11 @@ from bindaems.app.ledger.checks import (
     EXPORT_COUNTER,
     IMPORT,
     IMPORT_COUNTER,
+    NOTE_MISSING,
+    NOTE_RESET,
     PV,
 )
-from bindaems.app.ledger.counters import reading_near, soc_near
+from bindaems.app.ledger.counters import pv_signals, reading_near, soc_near, wallbox_signal
 from bindaems.app.ledger.service import WALLBOX_PREFIX, LedgerService
 from bindaems.shared.config import Config
 from bindaems.shared.domain import SlotFlows
@@ -41,8 +43,8 @@ log = structlog.get_logger(__name__)
 
 MAX_GAP = timedelta(days=7)  # längere Lücken bleiben leer
 MAX_GAP_SLOTS = int(MAX_GAP / SLOT)
-NOTE_MISSING = "Zählerstand fehlt"
-NOTE_RESET = "Zähler zurückgesetzt"
+HOUSE_ZERO_KWH = 1e-9  # Rundungsrest der Hausbilanz, darunter gilt 0
+FLOW_MIN_WH = 1e-6  # kleinere Flüsse je Slot sind Rundungsreste und entfallen
 
 
 def allocate_wh(
@@ -143,16 +145,19 @@ def estimate_gap(
         - math.fsum(wallbox_kwh.values())
         - battery_net_kwh
     )
+    if abs(house) < HOUSE_ZERO_KWH:
+        house = 0.0  # Rundungsrest der Bilanz
     if house < 0:
         pv -= house
         house = 0.0
     per_slot = 1000.0 / n  # kWh der Lücke → Wh je Slot
-    flows = allocate_wh(
+    allocated = allocate_wh(
         pv * per_slot,
         battery_net_kwh * per_slot,
         house * per_slot,
         {key: kwh * per_slot for key, kwh in wallbox_kwh.items()},
     )
+    flows = {key: wh for key, wh in allocated.items() if wh >= FLOW_MIN_WH}
     first = ensure_utc(start)
     return [SlotFlows(first + SLOT * i, 0.0, dict(flows), {}) for i in range(n)]
 
@@ -166,8 +171,8 @@ class GapEstimator:
         self._clock = clock
         self._usable_kwh = cfg.battery.usable_kwh
         self._wallboxes = cfg.wallbox_order
-        self._pv_signals = [f"pv.{name}.energy_kwh" for name in cfg.victron.instances.pv.values()]
-        self._wallbox_signals = {key: f"wallbox.{key}.total_kwh" for key in self._wallboxes}
+        self._pv_signals = pv_signals(cfg)
+        self._wallbox_signals = {key: wallbox_signal(key) for key in self._wallboxes}
 
     async def run(self, start: datetime, end: datetime) -> int:
         """Rechnet die Lücken in ``[start, end)`` nach und liefert die Zahl der geschätzten Slots.

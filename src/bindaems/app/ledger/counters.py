@@ -29,6 +29,7 @@ from bindaems.app.history.influx import (
     quote_ident,
     quote_str,
 )
+from bindaems.shared.config import Config
 from bindaems.shared.influx.lineprotocol import epoch_ms
 from bindaems.shared.timeutil import ensure_utc
 
@@ -42,6 +43,16 @@ _GRID = re.compile(r"grid\.energy_(?P<direction>import|export)_kwh")
 _PV = re.compile(rf"pv\.{_ID}\.energy_kwh")
 _WALLBOX = re.compile(rf"wallbox\.{_ID}\.total_kwh")
 _COLUMN = re.compile(r"[ab]\d+")  # Spalten von ``readings_at``: davor bzw. danach, Zeitpunkt n
+
+
+def pv_signals(cfg: Config) -> list[str]:
+    """Die PV-Zähler der Anlage (je Wechselrichter aus ``victron.instances.pv``)."""
+    return [f"pv.{name}.energy_kwh" for name in cfg.victron.instances.pv.values()]
+
+
+def wallbox_signal(key: str) -> str:
+    """Der Zähler der Wallbox ``key``."""
+    return f"wallbox.{key}.total_kwh"
 
 
 def counter_tags(signal: str) -> tuple[str, str, str] | None:

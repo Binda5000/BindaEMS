@@ -180,6 +180,15 @@ def test_negative_house_becomes_dc_pv() -> None:
     assert slot.flows_wh == {"pv>wb:evcs": pytest.approx(3000.0)}
 
 
+def test_rounding_residue_of_the_house_balance_adds_no_flows() -> None:
+    # Haus = 0,3 − 0,1 − 0,2 = −2,8e-17 kWh: ein Rundungsrest, kein DC-PV und kein Hausfluss
+    [slot] = estimate_gap(T0, 1, {"import": 0.3, "wb:evcs": 0.1}, 0.2, ORDER)
+    assert slot.flows_wh == {
+        "grid>wb:evcs": pytest.approx(100.0),
+        "grid>battery": pytest.approx(200.0),
+    }
+
+
 def test_battery_charge_comes_from_the_grid_or_the_pv() -> None:
     # 1 kWh Ladung über 4 Slots: 250 Wh je Slot
     [grid, *_] = estimate_gap(T0, 4, {"import": 1.0}, 1.0, ORDER)

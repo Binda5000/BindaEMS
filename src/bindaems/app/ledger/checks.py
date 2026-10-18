@@ -21,7 +21,7 @@ from sqlalchemy import Engine, delete, insert, select
 
 from bindaems.app.db.schema import ledger_check
 from bindaems.app.history.influx import InfluxReader
-from bindaems.app.ledger.counters import readings_at
+from bindaems.app.ledger.counters import pv_signals, readings_at, wallbox_signal
 from bindaems.app.ledger.service import WALLBOX_PREFIX, LedgerService, LedgerSlot
 from bindaems.shared.config import Config
 from bindaems.shared.timeutil import LOCAL_TZ, Clock, local_day_slots
@@ -92,7 +92,7 @@ def check_day(
         wh = math.fsum(
             wh for slot in slots for name, wh in slot.flows_wh.items() if name.endswith(target)
         )
-        rows.append((f"{WALLBOX_PREFIX}{key}", wh / 1000, [f"wallbox.{key}.total_kwh"], True))
+        rows.append((f"{WALLBOX_PREFIX}{key}", wh / 1000, [wallbox_signal(key)], True))
     checks: list[DayCheck] = []
     for signal, ledger_kwh, counters, may_flag in rows:
         counter_kwh, note = _counter_kwh(counters, start_readings, end_readings)
@@ -126,12 +126,12 @@ class LedgerChecks:
         self._reader = reader
         self._clock = clock
         self._wallboxes = list(cfg.wallboxes)
-        self._pv_signals = [f"pv.{name}.energy_kwh" for name in cfg.victron.instances.pv.values()]
+        self._pv_signals = pv_signals(cfg)
         self._counters = [
             IMPORT_COUNTER,
             EXPORT_COUNTER,
             *self._pv_signals,
-            *(f"wallbox.{key}.total_kwh" for key in self._wallboxes),
+            *(wallbox_signal(key) for key in self._wallboxes),
         ]
 
     async def run(self, first: date, last: date) -> int:
