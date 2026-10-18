@@ -1177,13 +1177,16 @@ Demo-Zugänge: `admin`, `bedienen` (Bedienen), `gast` (Lesen) und `sicher` (Admi
         `GET /api/ledger/checks?from=…&to=…`) liegen Netzbezug und Einspeisung innerhalb ±1 %, markierte
         Tage haben eine Ursache, einzelne Tage stimmen mit dem Zähler des Netzbetreibers, Unterschrift
         (`docs/verification/abnahme-phase-4.md`). Der 25.10.2026 hat 100 Viertelstunden (Zeitumstellung).
-     7. **Risiken, die erst die Anlage zeigt:** Der Abgleich und die Nachrechnung sind nur gegen Fake-Reader
-        und Test-Antworten der InfluxDB gelaufen, nicht gegen die echte: die Abfrage
-        `GROUP BY time(30m),"source","id","direction"` auf `long.energy` und die 15-min-Fenster in `raw`.
-        Liefert der Abgleich an allen Tagen „Zählerstand fehlt“, stimmen Zeitfenster oder Tags nicht (Spec
-        11.2); ob der Netzzähler und die Wallbox-Zähler als `energy` ankommen, zeigt die erste Nacht. Die
-        Belegung der Wallboxen kommt aus Health (`wallboxes[].occupant`, 10-s-Takt): Ohne Regelbetrieb
-        steht dort niemand, und alle Sessions heißen „Unbekannt“ (der Steckzustand kommt aber auch dann).
+     7. **Risiken, die erst die Anlage zeigt:** Der Abgleich und die Nachrechnung sind nur gegen
+        Fake-Reader und Test-Antworten der InfluxDB gelaufen, nicht gegen die echte: die Abfrage des
+        Abgleichs (`last("kwh")` in der halben Stunde vor und `first("kwh")` in der halben Stunde
+        nach jeder Mitternacht, ohne `GROUP BY time`, mit `GROUP BY "source","id","direction"` auf
+        `"raw"."energy"`; zwei Anweisungen je Mitternacht, bis zu 72 in einer POST-Anfrage) und die
+        15-min-Fenster in `raw`. Liefert der Abgleich an allen Tagen „Zählerstand fehlt“, stimmen
+        Zeitfenster, die Zeit des Selektors oder die Tags nicht (Spec 11.2); ob der Netzzähler und
+        die Wallbox-Zähler als `energy` ankommen, zeigt die erste Nacht. Die Belegung der Wallboxen
+        kommt aus Health (`wallboxes[].occupant`, 10-s-Takt): Ohne Regelbetrieb steht dort niemand,
+        und alle Sessions heißen „Unbekannt“ (der Steckzustand kommt aber auch dann).
   - Teil 2 schreibt auf die Geräte: nicht während der 7 Tage der Abnahme Phase 1 und ihres
     24-h-Mitschnitts (`docs/verification/abnahme-phase-1.md`, 4.2 und 4.3).
   - **Vor der Live-Schaltung von EVCS und Tesla** waren diese Punkte zu entscheiden oder umzusetzen
