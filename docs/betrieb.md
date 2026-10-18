@@ -1145,8 +1145,9 @@ Regelbetrieb“). Bis Health eine Änderung zeigt, steht auf der Seite die gesen
   steht dort „Session seit {HH:MM} · {kWh} kWh (PV {a} · Akku {b} · Netz {c})“. Sonst steht dort die
   letzte, „Letzte Session {TT.MM.} {HH:MM}–{HH:MM} · {kWh} kWh · {€} €“, die Kosten nur, wenn sie
   bekannt sind. Endet eine Session an einem anderen Tag als dem Beginn, steht beim Ende das Datum
-  („18:00–09.10. 01:15“). Ohne Session in den letzten 30 Tagen, auch bei einer, die länger läuft, und
-  bei einem Fehler der Abfrage steht keine Zeile da.
+  („18:00–09.10. 01:15“). Eine laufende Session steht auch dann da, wenn sie vor mehr als 30 Tagen
+  begann. Ohne laufende Session und ohne Session in den letzten 30 Tagen sowie bei einem Fehler der
+  Abfrage steht keine Zeile da.
 - **Wallbox:** wer dort steht („kein Fahrzeug“, wenn kein Vorgang läuft, sonst das Fahrzeug oder
   „Gast“), die Art der Zuordnung (erkannt, angenommen, Übersteuerung, unklar) und die Indizien als
   Sätze („Tessie: zu Hause und angesteckt“, „Strom passt nicht zu Tessie“, …), je nachdem, ob sie das
