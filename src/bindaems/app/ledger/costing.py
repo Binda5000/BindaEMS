@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 
 import structlog
-from sqlalchemy import Engine, delete, desc, func, insert, select
+from sqlalchemy import Engine, delete, desc, func, insert, or_, select
 
 from bindaems.app.db.schema import ledger_cost, ledger_slot
 from bindaems.app.ledger.service import LedgerService, LedgerSlot
@@ -105,7 +105,7 @@ class LedgerCosting:
         self._dirty_from: datetime | None = None
         self._wear_ct = settings.current().settings.planning.wear_ct
         settings.on_change(self._settings_changed)
-        self._mark_unfinished()
+        self._mark_stale()
 
     def mark_dirty(self, start: datetime | None) -> None:
         """Rechnet ab ``start`` neu; ``None`` heißt alles."""
@@ -154,17 +154,33 @@ class LedgerCosting:
             self._wear_ct = wear_ct
             self.mark_dirty(None)
 
-    def _mark_unfinished(self) -> None:
-        """Nach dem Start ist Ungerechnetes (noch nichts, oder neuer als die letzte Zeile) offen."""
+    def _mark_stale(self) -> None:
+        """Nach dem Start: ab dem frühesten Slot neu rechnen, zu dem keine passende Zeile da ist.
+
+        Eine Zeile passt, wenn sie zum Stand des Slots (``updated_at``), zum Verschleiß und zur
+        Kapazität gerechnet ist. So überlebt eine Änderung, die vor einem Absturz oder Neustart
+        nicht mehr nachgeführt wurde (die Markierung liegt nur im Speicher)."""
+        wear_ct = self._settings.current().settings.planning.wear_ct
+        query = (
+            select(func.min(ledger_slot.c.slot_start))
+            .select_from(
+                ledger_slot.outerjoin(
+                    ledger_cost, ledger_cost.c.slot_start == ledger_slot.c.slot_start
+                )
+            )
+            .where(
+                or_(
+                    ledger_cost.c.slot_start.is_(None),
+                    ledger_cost.c.slot_updated_at != ledger_slot.c.updated_at,
+                    ledger_cost.c.wear_ct != wear_ct,
+                    ledger_cost.c.usable_kwh != self._usable_kwh,
+                )
+            )
+        )
         with self._engine.connect() as conn:
-            last_slot = conn.execute(select(func.max(ledger_slot.c.slot_start))).scalar()
-            last_cost = conn.execute(select(func.max(ledger_cost.c.slot_start))).scalar()
-        if last_slot is None:
-            return
-        if last_cost is None:
-            self.mark_dirty(None)
-        elif last_cost < last_slot:
-            self.mark_dirty(last_cost + SLOT)
+            stale = conn.execute(query).scalar()
+        if stale is not None:
+            self.mark_dirty(stale)
 
     def _recompute(self, start: datetime | None) -> int:
         with self._engine.connect() as conn:
@@ -191,12 +207,8 @@ class LedgerCosting:
         end, written, replaced = last + SLOT, 0, False
         while cursor < end:
             block_end = min(cursor + BLOCK, end)
-            costs = cost_basis(
-                self._ledger.slots(cursor, block_end),
-                state,
-                wear_ct=wear_ct,
-                usable_kwh=self._usable_kwh,
-            )
+            slots = self._ledger.slots(cursor, block_end)
+            costs = cost_basis(slots, state, wear_ct=wear_ct, usable_kwh=self._usable_kwh)
             with self._engine.begin() as conn:
                 if not replaced:
                     stale = delete(ledger_cost)
@@ -213,8 +225,11 @@ class LedgerCosting:
                                 "stock_kwh": cost.stock_kwh,
                                 "avg_ct": cost.avg_ct,
                                 "discharge_ct": cost.discharge_ct,
+                                "slot_updated_at": slot.updated_at,
+                                "wear_ct": wear_ct,
+                                "usable_kwh": self._usable_kwh,
                             }
-                            for cost in costs
+                            for slot, cost in zip(slots, costs, strict=True)
                         ],
                     )
             if costs:

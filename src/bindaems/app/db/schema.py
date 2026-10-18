@@ -277,6 +277,11 @@ ledger_cost = Table(
     Column("stock_kwh", Float, nullable=False),
     Column("avg_ct", Float, nullable=True),  # leer ohne Inhalt oder unbekannt (Präzisierung 4, A1)
     Column("discharge_ct", Float, nullable=True),  # leer, solange der Einstandspreis unbekannt ist
+    # Eingaben der Zeile: Stand des Slots, Verschleiß und Kapazität; passt eine nicht mehr, rechnet
+    # die app beim Start ab dort neu (B2)
+    Column("slot_updated_at", UtcDateTime(), nullable=False),
+    Column("wear_ct", Float, nullable=False),
+    Column("usable_kwh", Float, nullable=False),
 )
 
 # Abgleich der Abrechnung mit den Zählern je lokalem Tag und Signal (Präzisierung 9)

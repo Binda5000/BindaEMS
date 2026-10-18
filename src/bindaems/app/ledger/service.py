@@ -110,6 +110,7 @@ class LedgerSlot:
     export_wh: float
     import_price_ct: float | None
     origin: str
+    updated_at: datetime | None = None  # letzte Änderung (Einstandspreis: veraltete Zeilen finden)
 
 
 @dataclass(frozen=True)
@@ -157,6 +158,7 @@ def _ledger_slot(row: _Row) -> LedgerSlot:
         export_wh=row.export_wh,
         import_price_ct=row.import_price_ct,
         origin=row.origin,
+        updated_at=row.updated_at,
     )
 
 

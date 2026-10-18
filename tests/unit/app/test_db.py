@@ -239,22 +239,31 @@ def _downgrade(engine: Engine, revision: str) -> None:
         command.downgrade(config, revision)
 
 
-def test_migration_0011_lets_the_discharge_cost_be_unknown_and_downgrades(engine: Engine) -> None:
+def test_migration_0011_adapts_the_cost_table_and_downgrades(engine: Engine) -> None:
     assert _columns(inspect(engine), "ledger_cost") == {
         "slot_start": False,
         "stock_kwh": False,
         "avg_ct": True,
-        "discharge_ct": True,
+        "discharge_ct": True,  # leer: Einstandspreis unbekannt
+        "slot_updated_at": False,
+        "wear_ct": False,
+        "usable_kwh": False,
     }
     with engine.begin() as conn:
         conn.execute(
             text(
-                "INSERT INTO ledger_cost (slot_start, stock_kwh, avg_ct, discharge_ct) "
-                "VALUES ('2026-10-09T08:00:00+00:00', 1.0, NULL, NULL)"
+                "INSERT INTO ledger_cost (slot_start, stock_kwh, avg_ct, discharge_ct, "
+                "slot_updated_at, wear_ct, usable_kwh) VALUES ('2026-10-09T08:00:00+00:00', "
+                "1.0, NULL, NULL, '2026-10-09T08:15:00.000000+00:00', 2.0, 10.0)"
             )
         )
     _downgrade(engine, "0010")
-    assert _columns(inspect(engine), "ledger_cost")["discharge_ct"] is False
+    assert _columns(inspect(engine), "ledger_cost") == {
+        "slot_start": False,
+        "stock_kwh": False,
+        "avg_ct": True,
+        "discharge_ct": False,
+    }
     with engine.connect() as conn:
         # abgeleitete Zeilen: die Migration leert die Tabelle, die app rechnet sie neu
         assert conn.execute(text("SELECT count(*) FROM ledger_cost")).scalar_one() == 0

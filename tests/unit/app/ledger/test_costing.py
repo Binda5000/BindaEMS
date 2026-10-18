@@ -268,6 +268,100 @@ def test_restart_continues_after_the_last_cost_row(engine, ledger, settings_serv
     assert restarted.costs(S, S + 2 * SLOT)[S + SLOT].stock_kwh == 1.0
 
 
+def set_wear(settings_service, wear_ct: float) -> None:
+    current = settings_service.current()
+    planning = current.settings.planning.model_copy(update={"wear_ct": wear_ct})
+    settings_service.update(
+        current.settings.model_copy(update={"planning": planning}),
+        base_version=current.version,
+        actor="t",
+        source="ui",
+    )
+
+
+def test_restart_recomputes_from_a_slot_changed_in_the_middle(
+    engine, ledger, settings_service, clock
+) -> None:
+    # B2: die Markierung lag nur im Speicher; ein Neustart vor der Nachführung ließ sie verfallen
+    first = build(engine, ledger, settings_service)
+    ingest(ledger, S, {"pv>battery": 1000.0}, covered_s=300.0)
+    for index in range(1, 4):
+        ingest(ledger, S + index * SLOT, {"battery>house": 200.0})
+    first.catch_up()
+    clock.advance(timedelta(seconds=1))
+    ingest(ledger, S, {"pv>battery": 3000.0}, covered_s=900.0)  # ersetzt, dann Absturz
+    restarted = build(engine, ledger, settings_service)
+    assert restarted.catch_up() == 4
+    assert restarted.costs(S, S + 4 * SLOT)[S + 3 * SLOT].stock_kwh == pytest.approx(2.4)
+
+
+def test_restart_recomputes_after_a_price_was_filled_in(
+    engine, ledger, store, settings_service, clock
+) -> None:
+    first = build(engine, ledger, settings_service)
+    ingest(ledger, S, {"pv>battery": 1000.0})
+    ingest(ledger, S + SLOT, {"grid>battery": 1000.0})  # ohne Preis
+    ingest(ledger, S + 2 * SLOT, {"battery>house": 500.0})
+    first.catch_up()
+    clock.advance(timedelta(seconds=1))
+    store.save([price_row(S + SLOT, 10.0, "primary")])
+    assert ledger.fill_missing_prices() == 1  # dann Neustart vor der Nachführung
+    restarted = build(engine, ledger, settings_service)
+    assert restarted.catch_up() == 2  # ab dem neu bewerteten Slot
+    assert restarted.costs(S, S + 3 * SLOT)[S + 2 * SLOT].discharge_ct == pytest.approx(
+        13.44 / 2 + 2.0
+    )
+
+
+def test_restart_recomputes_after_the_wear_changed(engine, ledger, settings_service) -> None:
+    first = build(engine, ledger, settings_service)
+    ingest(ledger, S, {"pv>battery": 2000.0})
+    ingest(ledger, S + SLOT, {"battery>house": 500.0})
+    first.catch_up()
+    set_wear(settings_service, 5.0)  # dann Neustart vor der Nachführung
+    restarted = build(engine, ledger, settings_service)
+    assert restarted.catch_up() == 2
+    assert restarted.costs(S, S + 2 * SLOT)[S + SLOT].discharge_ct == 5.0
+
+
+def test_restart_recomputes_after_the_usable_capacity_changed(
+    engine, ledger, settings_service
+) -> None:
+    first = build(engine, ledger, settings_service)
+    ingest(ledger, S, {"pv>battery": 8000.0})
+    ingest(ledger, S + SLOT, {"pv>battery": 4000.0})
+    first.catch_up()
+    smaller = LedgerCosting(engine, ledger, settings_service, usable_kwh=6.0)
+    assert smaller.catch_up() == 2
+    assert smaller.costs(S, S + 2 * SLOT)[S + SLOT].stock_kwh == 6.0
+
+
+def test_restart_recomputes_rows_lost_in_an_interrupted_catch_up(
+    engine, ledger, settings_service
+) -> None:
+    from sqlalchemy import delete
+
+    from bindaems.app.db.schema import ledger_cost
+
+    first = build(engine, ledger, settings_service)
+    for index in range(4):
+        ingest(ledger, S + index * SLOT, {"pv>battery": 1000.0})
+    first.catch_up()
+    with engine.begin() as conn:  # wie ein Abbruch zwischen zwei Blöcken
+        conn.execute(delete(ledger_cost).where(ledger_cost.c.slot_start == S + SLOT))
+    restarted = build(engine, ledger, settings_service)
+    assert restarted.catch_up() == 3
+    assert restarted.costs(S, S + 4 * SLOT)[S + 3 * SLOT].stock_kwh == 4.0
+
+
+def test_restart_without_changes_recomputes_nothing(engine, ledger, settings_service) -> None:
+    first = build(engine, ledger, settings_service)
+    ingest(ledger, S, {"pv>battery": 1000.0})
+    ingest(ledger, S + SLOT, {"battery>house": 500.0})
+    first.catch_up()
+    assert build(engine, ledger, settings_service).catch_up() == 0
+
+
 def test_empty_ledger_has_nothing_to_do(costing) -> None:
     assert costing.catch_up() == 0
     assert costing.costs(S, S + SLOT) == {}
