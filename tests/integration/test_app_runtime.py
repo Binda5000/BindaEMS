@@ -1178,6 +1178,27 @@ async def test_failed_session_lookup_keeps_the_previous_session(runtime, monkeyp
     ) == 2
 
 
+async def test_failed_lookup_of_the_latest_session_keeps_the_previous_one(
+    runtime, monkeypatch
+) -> None:
+    hour = timedelta(hours=1)
+    add_session(runtime, T_APP - 3 * hour, T_APP - 2 * hour, "tesla")  # keine offene Session
+    await asyncio.to_thread(runtime._refresh_stats)
+    before = runtime._stats_inputs.sessions["tesla"]
+    assert before is not None and before.end == T_APP - 2 * hour
+
+    def broken(*_args, **_kwargs):
+        raise ValueError("kaputt")
+
+    monkeypatch.setattr(runtime.charging_sessions, "sessions", broken)  # Rückfall der Suche
+    with capture_logs() as logs:
+        await asyncio.to_thread(runtime._refresh_stats)
+    assert runtime._stats_inputs.sessions["tesla"] is before
+    assert [log["event"] for log in logs].count(
+        "Ladesession für Home Assistant nicht bestimmbar"
+    ) == 2  # tesla und egolf
+
+
 async def test_stats_loop_survives_a_failing_refresh(runtime, monkeypatch) -> None:
     from bindaems.app import runtime as module
 
