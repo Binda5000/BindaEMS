@@ -28,16 +28,20 @@ class RepriceBody(BaseModel):
     last: Annotated[date, Field(alias="to")]
 
 
-def _rounded(value: Any) -> Any:
+def rounded(value: Any) -> Any:
+    """Auf ``DIGITS`` Stellen gerundet, auch in Abbildungen und Listen (geteilt mit den Routen
+    von Ladesessions und Statistik)."""
     if isinstance(value, float):
         return round(value, DIGITS)
     if isinstance(value, Mapping):
-        return {key: _rounded(item) for key, item in value.items()}
+        return {key: rounded(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [rounded(item) for item in value]
     return value
 
 
 def day_json(day: DaySummary) -> dict[str, Any]:
-    data = {key: _rounded(value) for key, value in asdict(day).items()}
+    data = {key: rounded(value) for key, value in asdict(day).items()}
     data["date"] = day.date.isoformat()
     return data
 
@@ -59,7 +63,7 @@ def check_json(check: DayCheck) -> dict[str, Any]:
     return {
         "day": check.day.isoformat(),
         "signal": check.signal,
-        **_rounded(
+        **rounded(
             {
                 "ledger_kwh": check.ledger_kwh,
                 "counter_kwh": check.counter_kwh,
@@ -120,7 +124,7 @@ def ledger_router(service: LedgerService, guard: Guard, checks: LedgerChecks) ->
         found = checks.checks(first, last)
         return {
             "days": [check_json(check) for check in found],
-            "totals": [_rounded(total) for total in checks.totals(found)],
+            "totals": [rounded(total) for total in checks.totals(found)],
         }
 
     @router.post("/reprice")

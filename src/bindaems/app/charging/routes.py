@@ -17,7 +17,7 @@ from bindaems.app.charging.sessions import (
     vehicle_name,
     wallbox_name,
 )
-from bindaems.app.ledger.routes import _check_days, _rounded
+from bindaems.app.ledger.routes import _check_days, rounded
 from bindaems.app.settings.service import SettingsService
 from bindaems.shared.config import Config
 
@@ -38,7 +38,7 @@ def session_json(
         "start": session.start.isoformat(),
         "end": session.end.isoformat() if session.end is not None else None,
         "open": session.end is None,
-        **_rounded(
+        **rounded(
             {
                 "kwh": split.kwh,
                 "pv_kwh": split.pv_kwh,

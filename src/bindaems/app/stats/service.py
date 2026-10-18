@@ -2,8 +2,8 @@
 
 Die Kennzahlen eines Zeitraums entstehen aus den Summen der Tage, nie als Mittel der
 Tageskennzahlen: Autarkie ``1 − Bezug ÷ Verbrauch``, Eigenverbrauch ``(PV − Einspeisung) ÷ PV``,
-Ersparnis wie in ``ledger.service._summary``. Ein Geldbetrag ist ``None``, sobald ein Tag ihn nicht
-kennt; ein Verhältnis ist ``None``, wenn der Nenner 0 ist (z. B. in der Zukunft).
+Ersparnis wie in ``ledger.service.summarize_slots``. Ein Geldbetrag ist ``None``, sobald ein Tag ihn
+nicht kennt; ein Verhältnis ist ``None``, wenn der Nenner 0 ist (z. B. in der Zukunft).
 
 Grundgebühren zählen anteilig je Tag bis einschließlich heute; der Leistungspreis zählt je Monat mit
 Abrechnungsdaten aus der Monatsspitze, nur in Monat und Jahr und nur, wo ein Leistungspreis mit Satz
@@ -26,7 +26,7 @@ from bindaems.app.consumers.days import NO_DAY, ConsumerDays
 from bindaems.app.consumers.energy import EnergyCache
 from bindaems.app.consumers.service import ConsumerService
 from bindaems.app.ledger.checks import LedgerChecks
-from bindaems.app.ledger.service import DaySummary, LedgerService, LedgerSlot, _summary
+from bindaems.app.ledger.service import DaySummary, LedgerService, LedgerSlot, summarize_slots
 from bindaems.app.settings.service import SettingsService
 from bindaems.app.tariff.calc import monthly_fees_eur, power_cost_eur, power_rate
 from bindaems.shared.config import Config
@@ -276,7 +276,7 @@ class StatsService:
                 "net_eur": summary.net_cost_eur,
             }
             for hour, group in enumerate(groups)
-            for summary in [_summary(day, group, settings, now)]
+            for summary in [summarize_slots(day, group, settings, now)]
         ]
 
     # Monatsspitzen und Leistungspreis
@@ -290,14 +290,13 @@ class StatsService:
         for peak in self._ledger.month_peaks(first, last):
             local = peak.slot_start.astimezone(LOCAL_TZ)
             rate = power_rate(local.date(), tariff)
-            applies = rate is not None and not rate.missing
             peaks.append(
                 {
                     "month": _month_key(local.date()),
                     "kw": peak.kw,
                     "slot_start": peak.slot_start.isoformat(),
                     "power_eur": power_cost_eur(peak.kw, rate)
-                    if rate is not None and applies
+                    if rate is not None and not rate.missing
                     else None,
                 }
             )

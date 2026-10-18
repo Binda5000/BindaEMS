@@ -105,15 +105,15 @@ def observe(cfg: Config, live: LiveState) -> list[WallboxSeen]:
 
 
 def session_vehicle(
-    log: Sequence[tuple[datetime, str | None]], start: datetime, end: datetime
+    changes: Sequence[tuple[datetime, str | None]], start: datetime, end: datetime
 ) -> str | None:
     """Das Fahrzeug mit der längsten Dauer in ``[start, end)``; bei Gleichstand das spätere.
 
-    ``log`` sind die Änderungen der Belegung ``(Zeitpunkt, occupant)``; ein Eintrag gilt bis zum
+    ``changes`` sind die Änderungen der Belegung ``(Zeitpunkt, occupant)``; ein Eintrag gilt bis zum
     nächsten, der letzte bis ``end``, und ein Eintrag vor ``start`` gilt ab ``start``. Ohne
     Fahrzeug (``None``) zählt die Zeit nicht; ohne Zeit mit Fahrzeug ist das Ergebnis ``None``.
     """
-    entries = sorted(log, key=lambda entry: entry[0])
+    entries = sorted(changes, key=lambda entry: entry[0])
     held: dict[str, tuple[timedelta, datetime]] = {}  # Dauer, Ende des letzten Abschnitts
     for index, (ts, occupant) in enumerate(entries):
         until = entries[index + 1][0] if index + 1 < len(entries) else end

@@ -1,10 +1,11 @@
 """Energie je Verbraucher und lokalem Tag (Plan 4a, Entscheidung 8).
 
-Die app speichert die Energie je Verbraucher in ``consumer_day``: nachts für gestern, beim Start
-für die fehlenden Tage der letzten 31. Es gilt dieselbe Rechnung wie für „heute“
-(``EnergyCache.window_energy``); der Tag ist ``[lokale Mitternacht, nächste Mitternacht)``, an
-Tagen der Zeitumstellung also 23 oder 25 Stunden. Ältere Tage bleiben leer, denn die Rohdaten in
-InfluxDB halten 90 Tage. Heute und die Zukunft werden nie gespeichert.
+Die app speichert die Energie je Verbraucher in ``consumer_day``: nachts die fehlenden Tage der
+letzten 3 (gestern, Fehler nachholen), beim Start die der letzten 31. Es gilt dieselbe Rechnung
+wie für „heute“ (``EnergyCache.window_energy``); der Tag ist
+``[lokale Mitternacht, nächste Mitternacht)``, an Tagen der Zeitumstellung also 23 oder 25
+Stunden. Ältere Tage bleiben leer, denn die Rohdaten in InfluxDB halten 90 Tage. Heute und die
+Zukunft werden nie gespeichert.
 """
 
 from __future__ import annotations

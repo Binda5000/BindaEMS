@@ -162,7 +162,7 @@ def _ledger_slot(row: _Row) -> LedgerSlot:
     )
 
 
-def _summary(
+def summarize_slots(
     day: date, slots: Sequence[LedgerSlot], settings: RuntimeSettings, now: datetime
 ) -> DaySummary:
     """Tageswerte; Energien werden in Wh summiert und erst am Ende in kWh umgerechnet.
@@ -548,7 +548,7 @@ class LedgerService:
         summaries: list[DaySummary] = []
         day = first
         while day <= last:
-            summaries.append(_summary(day, by_day.get(day, []), settings, now))
+            summaries.append(summarize_slots(day, by_day.get(day, []), settings, now))
             day += timedelta(days=1)
         return summaries
 
