@@ -7,6 +7,7 @@ import {
 	bucketLabels,
 	checkNotice,
 	checkRows,
+	missingCounters,
 	consumerRows,
 	costRows,
 	hints,
@@ -386,6 +387,23 @@ describe('Karte Abgleich', () => {
 			checkNotice(stats({ checks: { days: 3, flagged_days: flagged, totals: [] } }));
 		expect(empty([])).toBe('Keine Zählerwerte für diesen Zeitraum.');
 		expect(empty(['2026-10-12'])).toBe('Mehr als 1 % Abweichung am 12.10.');
+	});
+
+	it('nennt die weggelassenen Größen, wenn andere Zeilen bleiben', () => {
+		const base = stats();
+		// so liefert der Server Größen, die an keinem Tag einen Zählerwert haben
+		const totals = [
+			{ signal: 'import', ledger_kwh: 10.2, counter_kwh: 10, deviation_pct: 2 },
+			{ signal: 'export', ledger_kwh: 0, counter_kwh: null, deviation_pct: null },
+			{ signal: 'wb:evcs', ledger_kwh: 0, counter_kwh: null, deviation_pct: null }
+		];
+		const names = { evcs: 'EVCS' };
+		const missing = (list: typeof totals) =>
+			missingCounters(stats({ checks: { ...base.checks, totals: list } }), names);
+		expect(missing(totals)).toBe('Ohne Zählerwerte: Einspeisung und Wallbox EVCS.');
+		expect(missing(totals.slice(0, 2))).toBe('Ohne Zählerwerte: Einspeisung.');
+		expect(missing(totals.slice(0, 1))).toBeNull();
+		expect(missing(totals.slice(1))).toBeNull(); // keine Zeile: der Hinweis der Karte gilt
 	});
 
 	it('sagt, dass Zählerwerte fehlen, wenn an keinem Tag ein Zählerstand da ist', () => {

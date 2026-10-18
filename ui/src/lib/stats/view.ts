@@ -302,6 +302,24 @@ export function checkRows(stats: Stats, wallboxNames: Record<string, string>): C
 	}));
 }
 
+/** „a“, „a und b“, „a, b und c“ */
+function joinList(items: string[]): string {
+	return items.length === 1 ? items[0] : `${items.slice(0, -1).join(', ')} und ${items.at(-1)}`;
+}
+
+/**
+ * „Ohne Zählerwerte: Wallbox EVCS.“: die Größen, die `checkRows` mangels Zählertag weglässt, mit
+ * ihren Namen aus der Tabelle; `null`, wenn keine fehlt oder keine Zeile bleibt (dann sagt
+ * `checkNotice`, dass Zählerwerte fehlen).
+ */
+export function missingCounters(stats: Stats, wallboxNames: Record<string, string>): string | null {
+	if (countedTotals(stats).length === 0) return null;
+	const missing = stats.checks.totals
+		.filter((total) => total.counter_kwh === null)
+		.map((total) => checkLabel(total.signal, wallboxNames));
+	return missing.length === 0 ? null : `Ohne Zählerwerte: ${joinList(missing)}.`;
+}
+
 /**
  * „Mehr als 1 % Abweichung am 12.10. und 15.10.“; ohne geprüfte Tage der Hinweis darauf, mit
  * geprüften Tagen ohne Summen und Markierungen, dass Zählerwerte fehlen.
@@ -312,6 +330,5 @@ export function checkNotice(stats: Stats): string | null {
 	if (days.length === 0) {
 		return countedTotals(stats).length === 0 ? 'Keine Zählerwerte für diesen Zeitraum.' : null;
 	}
-	const list = days.length === 1 ? days[0] : `${days.slice(0, -1).join(', ')} und ${days.at(-1)}`;
-	return `Mehr als 1 % Abweichung am ${list}`;
+	return `Mehr als 1 % Abweichung am ${joinList(days)}`;
 }

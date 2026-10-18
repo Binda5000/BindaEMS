@@ -62,3 +62,19 @@ it('zeigt keine Tabelle mit 0,00 kWh, wenn an keinem Tag ein Zählerstand da ist
 	expect(screen.getByText('Keine Zählerwerte für diesen Zeitraum.')).toHaveClass('muted');
 	expect(screen.queryByRole('table')).not.toBeInTheDocument();
 });
+
+it('nennt unter der Tabelle die Größen ohne Zählerwert', () => {
+	// die Form des Servers: eine Größe ohne Tag mit Zählerwert neben einer mit Wert
+	const totals = [
+		{ signal: 'import', ledger_kwh: 10.2, counter_kwh: 10, deviation_pct: 2 },
+		{ signal: 'wb:evcs', ledger_kwh: 0, counter_kwh: null, deviation_pct: null }
+	];
+	render(ChecksCard, {
+		stats: stats({ checks: { days: 3, flagged_days: [], totals } }),
+		wallboxNames: { evcs: 'EVCS' }
+	});
+	const table = screen.getByRole('table', { name: 'Abgleich mit den Zählern' });
+	expect(within(table).getAllByRole('row')).toHaveLength(2);
+	expect(screen.getByText('Ohne Zählerwerte: Wallbox EVCS.')).toHaveClass('muted');
+	expect(screen.queryByText('Keine Zählerwerte für diesen Zeitraum.')).not.toBeInTheDocument();
+});

@@ -1218,10 +1218,11 @@ und dem Abgleich (Abschnitt 8).
   Wallbox) die Summe der Abrechnung, die der Zähler und die Abweichung über die geprüften Tage mit
   Zählerwert, dazu „Mehr als 1 % Abweichung am {Tage}.“ für die markierten Tage und „Noch kein Tag
   abgeglichen.“ ohne einen geprüften Tag. Eine Größe, die an keinem geprüften Tag einen Zählerwert
-  hat, fehlt in der Tabelle; warum, sagt `GET /api/ledger/checks` je Tag (z. B. „Zählerstand
-  fehlt“). Bleibt so keine Größe übrig und ist kein Tag markiert, steht dort „Keine Zählerwerte für
-  diesen Zeitraum.“ Wie du eine Abweichung deutest, steht in Abschnitt 8, „Abgleich mit den
-  Zählern“.
+  hat, fehlt in der Tabelle; darunter steht dann gedämpft „Ohne Zählerwerte: {Größen}.“, z. B.
+  „Ohne Zählerwerte: Wallbox EVCS.“ Den Grund je Tag nennt `GET /api/ledger/checks` (z. B.
+  „Zählerstand fehlt“). Bleibt so keine Größe übrig und ist kein Tag markiert, steht dort nur „Keine
+  Zählerwerte für diesen Zeitraum.“ Wie du eine Abweichung deutest, steht in Abschnitt 8, „Abgleich
+  mit den Zählern“.
 
 Auf dem Handy scrollen die breiten Tabellen in ihrer Karte; die Seite selbst scrollt nicht seitlich.
 

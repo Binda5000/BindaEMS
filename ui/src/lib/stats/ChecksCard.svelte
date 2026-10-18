@@ -1,7 +1,7 @@
 <script lang="ts">
 	import type { Stats } from '$lib/api/schemas';
 	import Card from '$lib/components/Card.svelte';
-	import { checkNotice, checkRows } from './view';
+	import { checkNotice, checkRows, missingCounters } from './view';
 
 	interface Props {
 		stats: Stats;
@@ -13,6 +13,8 @@
 
 	const rows = $derived(checkRows(stats, wallboxNames));
 	const notice = $derived(checkNotice(stats));
+	// Größen ohne Zählertag fehlen in der Tabelle; darunter steht gedämpft, welche
+	const missing = $derived(missingCounters(stats, wallboxNames));
 	const checked = $derived(stats.checks.days > 0);
 	// ohne Tabelle ist der Hinweis ein Ersatz (gedämpft), unter der Tabelle eine Meldung
 	const muted = $derived(!checked || rows.length === 0);
@@ -45,6 +47,9 @@
 	{/if}
 	{#if notice}
 		<p class="notice" class:muted>{notice}</p>
+	{/if}
+	{#if missing}
+		<p class="notice muted">{missing}</p>
 	{/if}
 </Card>
 
