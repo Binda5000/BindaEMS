@@ -190,7 +190,6 @@ from bindaems.shared.control import (
     VehicleIntent,
     vehicle_actuator,
 )
-from bindaems.shared.decisions import DecisionResult
 from bindaems.shared.numbers import finite_number
 from bindaems.shared.timeutil import ensure_utc
 
@@ -621,14 +620,10 @@ class ChargeController:
         nur, wenn er dem Ergebnis entspricht: Befehle des Keepers mit anderem Wert bleiben ohne
         Wirkung. Trägt das Ergebnis ``not_taken``, nennt der nächste Befehl dieser Art zusätzlich
         ``not_taken_retry`` und ist normal, nie dringend (Design 7.2). Ein gescheitertes Ladelimit
-        ist danach wieder offen (``ChargeLimits``). Ein bestätigtes Ladelimit hebt „geladen“ des
-        Ansteckvorgangs auf (``Assignment.recharge``): Das Auto war nur bis zum alten Limit voll.
+        ist danach wieder offen (``ChargeLimits``).
         """
         self._last.finished(result)
         self._charge_limits.finished(result)
-        vehicle = self._vehicles.get(result.actuator)
-        if result.kind is _LIMIT and result.result is DecisionResult.OK and vehicle is not None:
-            self._assignment.recharge(vehicle)
 
     def idle(self, now: datetime) -> None:
         """Ein Zyklus ohne Regelung (Präzisierung 9): Die Regelung vergisst ihre letzten Befehle.

@@ -235,7 +235,8 @@ class Assignment:
         self._boosts: dict[str, datetime] = {}  # Fahrzeug → ``boost_until`` seiner Bindung
         # Fahrzeug → ``boost_until`` des Boosts, dessen Vorgang endete; höchstens einer je Fahrzeug
         self._spent: dict[str, datetime] = {}
-        self._charged: dict[str, tuple[str, int]] = {}  # Auto → (Wallbox, Vorgang), „geladen“
+        # Auto → (Wallbox, Vorgang) und das Ladelimit laut Tessie, als es „geladen“ meldete
+        self._charged: dict[str, tuple[tuple[str, int], float | None]] = {}
         self._occupants: dict[str, str | None] = {}  # Wallbox → wer im vorigen Aufruf dort stand
         # Fahrzeug → der laufende Vorgang, an dem es im vorigen Aufruf stand; fehlt ohne einen
         self._standing: dict[str, _Binding] = {}
@@ -586,14 +587,6 @@ class Assignment:
             return None
         return boost if wall_now < boost else None
 
-    def recharge(self, key: str) -> None:
-        """Das Auto bekam ein neues Ladelimit bestätigt: „geladen“ seines Vorgangs gilt nicht mehr.
-
-        „Geladen“ hieß nur: voll bis zum alten Limit. Ist das Auto auch am neuen Limit voll, meldet
-        Tessie es wieder, und die Zuordnung hält es erneut bis zum Ende des Vorgangs.
-        """
-        self._charged.pop(key, None)
-
     def _is_complete(
         self, key: str, wallbox_key: str, wallbox: WallboxObs, tessie: VehicleObs
     ) -> bool:
@@ -607,15 +600,25 @@ class Assignment:
         melden. Tessie zählt dabei nur, wenn es das Fahrzeug „zu Hause und angesteckt“ sieht, wie
         bei ``plugged``. Für den Wall Connector, der nie „geladen“ meldet, ist Tessie die einzige
         Quelle.
+
+        „Geladen“ heißt: voll bis zum Ladelimit, das Tessie dabei meldete. Meldet Tessie später ein
+        anderes Limit, gilt es nicht mehr, etwa nach einem höheren Limit für „Geplant“; ist das
+        Auto auch daran voll, meldet Tessie es wieder. Ein unbekanntes Limit, beim Melden oder
+        jetzt, ändert nichts. So hängt es nicht davon ab, wann Tessie das neue Limit bestätigt und
+        ob danach noch ein alter Bericht kommt.
         """
         port = self._ports[wallbox_key]
         if not port.running:
             tessie_complete = home_and_plugged(tessie) is True and tessie.complete is True
             return wallbox.complete is True or tessie_complete
         session = (wallbox_key, port.count)
+        limit = tessie.charge_limit_pct
         if wallbox.complete is True or tessie.complete is True:
-            self._charged[key] = session
-        return self._charged.get(key) == session
+            self._charged[key] = (session, limit)
+        held = self._charged.get(key)
+        if held is None or held[0] != session:
+            return False
+        return held[1] is None or limit is None or held[1] == limit
 
 
 def _plugged(wallbox: WallboxObs, tessie: VehicleObs) -> bool | None:

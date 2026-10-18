@@ -2118,7 +2118,9 @@ wann der Akku liefert (Abschnitt „Akku und Spitzen“).
   trägt (in Min+PV die Grenze an der Sicherung). Ist sie kleiner oder unbekannt, bleibt es aus; ein
   Auto, das schon lädt, geht auf den Mindeststrom.
 - Es gibt **kein Ziel-SOC**: Die Autos stoppen an ihrem eigenen Ladelimit, der e-Golf lädt bis voll.
-  Meldet ein Auto „geladen“, startet die Regelung es erst nach dem Abstecken wieder.
+  Meldet ein Auto „geladen“, startet die Regelung es erst nach dem Abstecken wieder, oder wenn Tessie
+  danach ein anderes Ladelimit meldet (etwa in der Tesla-App angehoben): „Geladen“ gilt für das
+  Limit, bei dem es gemeldet wurde.
 - **Abgesteckt:** Die Regelung will „Laden aus“; die EVCS bekommt das einmal. Bei einem **neuen
   Ansteckvorgang** beginnen PV-Überschuss und Aus mit „Laden aus“, auch wenn das Auto selbst
   gestartet hat. Sofort, Boost und Min+PV starten sofort.
@@ -2706,9 +2708,9 @@ den ersten Tagen:
   Ladelimit des Tesla auf `max(Ziel, 50)` % (Tessie `set_charge_limit`, im Log „Ladelimit 80 %“,
   Grund `charge_limit`), einmal je Ansteckvorgang und nach jeder Änderung des Ziels, nur an ein
   waches Auto (er weckt dafür nicht). Danach stoppt der Tesla selbst am Ziel; das alte Limit stellt
-  der core nicht zurück. Ein bestätigtes Limit hebt „geladen“ des Ansteckvorgangs auf: Meldete der
-  Tesla „Complete“ am alten, niedrigeren Limit, lädt er danach bis zum neuen; ist er auch daran voll,
-  meldet Tessie wieder „Complete“. Die Safety-Schicht lässt ganze Prozent von 50 bis 100 zu (darunter
+  der core nicht zurück. Meldete der Tesla „Complete“ am alten, niedrigeren Limit, lädt er bis zum
+  neuen, sobald Tessie es meldet: „Geladen“ gehört zum Limit, bei dem es entstand, auch wenn danach
+  noch ein alter Bericht kommt. Ist er auch am neuen voll, meldet Tessie wieder „Complete“. Die Safety-Schicht lässt ganze Prozent von 50 bis 100 zu (darunter
   abgelehnt, darüber auf 100 begrenzt), höchstens alle 600 s; der Befehl zählt im Stundenbudget
   und ist nie dringend. Wie beim Strom prüft der Aktor das Limit im Tessie-Cache und meldet sonst
   „nicht übernommen“. Ändert jemand das Limit danach in der Tesla-App, ist das keine fremde

@@ -1604,6 +1604,96 @@ def test_a_confirmed_higher_limit_lets_a_complete_car_charge_again(cfg) -> None:
     ]
 
 
+def soon_planned(target: int) -> Intent:
+    """Der Tesla in „Geplant“, Abfahrt 13:00 (T0 ist 12:00): Das Laden ist sofort fällig."""
+    entry = VehicleIntent(mode=ChargeMode.PLANNED, target_soc_pct=target, departure="13:00")
+    return Intent(version=1, control=True, vehicles={"tesla": entry})
+
+
+def full_at(s: int, *, complete: bool, pct: float | None, soc: float = 65.0):
+    """Der angesteckte Tesla mit frischem Ladestand ``soc`` und dem Ladelimit ``pct``."""
+    return tesla(
+        plugged=True,
+        complete=complete,
+        charge_limit_pct=pct,
+        soc_pct=soc,
+        soc_at=T0 + timedelta(seconds=s),
+    )
+
+
+def starts_of(found) -> list[str]:
+    return [
+        x.command.actuator
+        for x in found
+        if x.command.kind == CommandKind.CHARGING and x.command.value is True
+    ]
+
+
+def test_a_stale_complete_after_the_confirmation_does_not_hold_the_car(cfg) -> None:
+    """Der Aktor bestätigt das Limit auch ohne frischen Bericht von Tessie (nach ``verify_s``).
+
+    Kommt danach noch einmal das alte „Complete“ am alten Limit, darf „geladen“ nicht für den ganzen
+    Ansteckvorgang gelten: Es gehört zum Limit, bei dem es entstand.
+    """
+    sync = synced(cfg)
+    c = controller(sync)
+    intent = soon_planned(75)
+    found = c.step(
+        tesla_inputs(sync, 0, intent=intent, tesla_obs=full_at(0, complete=True, pct=60.0))
+    )
+    accept(c, found)
+    assert limits_of(found) == [set_limit(75.0)]
+    c.note_result(WriteResult("vehicle.tesla", LIMIT, 75.0, DecisionResult.OK, ""))
+    stale = c.step(
+        tesla_inputs(sync, 10, intent=intent, tesla_obs=full_at(10, complete=True, pct=60.0))
+    )
+    accept(c, stale)
+    assert starts_of(stale) == []
+    fresh = c.step(
+        tesla_inputs(sync, 20, intent=intent, tesla_obs=full_at(20, complete=False, pct=75.0))
+    )
+    assert starts_of(fresh) == ["vehicle.tesla"]
+
+
+def test_complete_holds_while_the_limit_stays_or_is_unknown(cfg) -> None:
+    sync = synced(cfg)
+    c = controller(sync)
+    intent = soon_planned(75)
+    accept(
+        c,
+        c.step(tesla_inputs(sync, 0, intent=intent, tesla_obs=full_at(0, complete=True, pct=60.0))),
+    )
+    # dasselbe Limit, oder Tessie kennt es gerade nicht: „geladen“ gilt weiter
+    for s, pct in ((10, 60.0), (20, None), (30, 60.0)):
+        found = c.step(
+            tesla_inputs(sync, s, intent=intent, tesla_obs=full_at(s, complete=False, pct=pct))
+        )
+        accept(c, found)
+        assert starts_of(found) == [], s
+
+
+def test_a_confirmed_lower_limit_starts_nothing_in_planned(cfg) -> None:
+    """Complete bei 80 %, Ziel 70 %: Das Limit geht auf 70 %, das Ziel ist schon erreicht."""
+    sync = synced(cfg)
+    c = controller(sync)
+    intent = soon_planned(70)
+    first = c.step(
+        tesla_inputs(
+            sync, 0, intent=intent, tesla_obs=full_at(0, complete=True, pct=80.0, soc=80.0)
+        )
+    )
+    accept(c, first)
+    assert limits_of(first) == [set_limit(70.0)]
+    assert starts_of(first) == []
+    c.note_result(WriteResult("vehicle.tesla", LIMIT, 70.0, DecisionResult.OK, ""))
+    for s, complete in ((10, True), (20, False), (30, False)):
+        obs = full_at(s, complete=complete, pct=70.0, soc=80.0)
+        found = c.step(tesla_inputs(sync, s, intent=intent, tesla_obs=obs))
+        accept(c, found)
+        assert starts_of(found) == [], s
+    assert c.health()[0]["planned"]["state"] == "reached"
+
+
 def test_the_limit_respects_the_reserve_of_the_hourly_budget(cfg) -> None:
     sync = synced(cfg)
     reserve = 20 - sync.control.tesla_reserve_commands

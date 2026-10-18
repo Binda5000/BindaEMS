@@ -17,6 +17,7 @@ from bindaems.core.control.assignment import (
     VehicleState,
     WallboxState,
 )
+from bindaems.core.control.charge_inputs import VehicleObs
 from bindaems.core.control.clues import Clue, Evidence
 from bindaems.shared.control import ChargeMode, Intent, VehicleIntent
 
@@ -267,6 +268,28 @@ def test_tessie_complete_sticks_until_unplugged(cfg) -> None:
     update(a, 2)  # abgesteckt
     state = update(a, 3, twc_obs=twc(connected=True), tesla_obs=tesla(plugged=True))
     assert not state.vehicles["tesla"].complete
+
+
+def test_tessie_complete_belongs_to_the_limit_it_was_reported_at(cfg) -> None:
+    a = Assignment(cfg, started=T0)
+    on = twc(connected=True)
+
+    def at(pct: float | None, *, complete: bool = False) -> VehicleObs:
+        return tesla(plugged=True, complete=complete, charge_limit_pct=pct)
+
+    update(a, 0, twc_obs=on, tesla_obs=at(80.0, complete=True))
+    assert update(a, 1, twc_obs=on, tesla_obs=at(80.0)).vehicles["tesla"].complete
+    assert update(a, 2, twc_obs=on, tesla_obs=at(None)).vehicles["tesla"].complete  # unbekannt
+    # ein anderes Limit, etwa in der App angehoben: nicht „geladen“; zurück auf 80 gilt es wieder
+    assert not update(a, 3, twc_obs=on, tesla_obs=at(90.0)).vehicles["tesla"].complete
+    assert update(a, 4, twc_obs=on, tesla_obs=at(80.0)).vehicles["tesla"].complete
+    # ein alter Bericht am alten Limit setzt es neu, der nächste am neuen hebt es wieder auf
+    update(a, 5, twc_obs=on, tesla_obs=at(80.0, complete=True))
+    assert not update(a, 6, twc_obs=on, tesla_obs=at(90.0)).vehicles["tesla"].complete
+    # ohne Limit gemeldet (die Wallbox, oder Tessie kannte es nicht): Ein Limit ändert nichts
+    b = Assignment(cfg, started=T0)
+    update(b, 0, twc_obs=on, tesla_obs=at(None, complete=True))
+    assert update(b, 1, twc_obs=on, tesla_obs=at(90.0)).vehicles["tesla"].complete
 
 
 @pytest.mark.parametrize("twc_before", [None, False], ids=["never_known", "no_vehicle"])
