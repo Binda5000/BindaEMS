@@ -298,6 +298,27 @@ def test_optimizer_plan_using_the_charge_below_100_w_per_slot_passes() -> None:
     assert plan.source == "optimizer", plan.issues
 
 
+def test_plan_with_fixed_flows_discharging_below_100_w_passes() -> None:
+    # Fest vorgegebene Flüsse: 1 kW Netzladen zu 10 ct, danach 50 W Entladung zu 40 ct. Jede
+    # Entladung über 1 W zählt (0,88 · (40 − 2) − 10 ≥ 2); mit der alten Schwelle von 100 W
+    # fiele der Plan durch.
+    inputs = scenario(
+        prices=[10.0, 40.0],
+        pv=[0.0, 0.0],
+        load=[0.0, 50.0],
+        battery=small_battery(),
+        soc_pct=50.0,
+        grid_charge=True,
+    )
+    result = flows_result(
+        [flow(gr_b=1000.0, soc_end_kwh=5.25), flow(bt_h=50.0, soc_end_kwh=5.2375)]
+    )
+    intents = derive_intents(inputs, result)
+    assert intents[0] == BatteryIntent(kind=BatteryIntentKind.NETZLADEN, grid_charge_w=1000)
+    plan = plan_once(inputs, result)
+    assert plan.source == "optimizer", plan.issues
+
+
 def test_unprofitable_grid_charge_of_another_plan_is_still_reported() -> None:
     # Die Spread-Prüfung bleibt für Pläne wirksam, die nicht aus den Absichten des Optimierers
     # kommen: 2 kW Netzladen zu 20 ct, danach Eigenverbrauch zu 20 ct (0,88 · 18 − 20 < 2).

@@ -15,11 +15,12 @@ from tests.plan_helpers import (
 )
 
 from bindaems.app.planning.battery_model import SLOT_H, eta
-from bindaems.app.planning.intents import GRID_CHARGE_MIN_W, derive_intents
+from bindaems.app.planning.intents import GRID_CHARGE_MIN_W, _drop_unprofitable, derive_intents
 from bindaems.app.planning.optimizer import OptimizerResult, solve
 from bindaems.app.planning.plausibility import R1_TOL_KWH, export_after_kwh
 from bindaems.app.planning.service import plan_once
 from bindaems.shared.plan import BatteryIntent, BatteryIntentKind, IntentPlan, intent_plan
+from bindaems.shared.timeutil import SLOT
 
 
 def test_grid_charge_becomes_netzladen_rounded() -> None:
@@ -199,12 +200,64 @@ def test_grid_charge_spent_at_once_by_the_rounding_is_dropped() -> None:
     assert dropped
     plan = plan_once(inputs, result)
     assert plan.source == "optimizer", plan.issues
+    # Der Plan gilt nur 45 min; der gestrichene Slot liegt dahinter. Damit der Teil prüft, was an
+    # den core ginge, gilt der Plan hier für den ganzen Horizont (der core nimmt höchstens
+    # ``MAX_INTENT_PLAN_SLOTS`` Slots).
+    sendable = plan.model_copy(update={"id": 1, "valid_until": inputs.slots[-1].start + SLOT})
     sent = IntentPlan.model_validate_json(
-        intent_plan(plan.model_copy(update={"id": 1}), grid_charge_allowed=True).model_dump_json()
+        intent_plan(sendable, grid_charge_allowed=True).model_dump_json()
     )
     by_start = {slot.start: slot.intent for slot in sent.slots}
-    for index in dropped:
-        intent = by_start.get(inputs.slots[index].start)
-        if intent is not None:
-            assert intent.kind in (BatteryIntentKind.HALTEN, BatteryIntentKind.EIGENVERBRAUCH)
-            assert intent.grid_charge_w == 0
+    in_sent = [index for index in dropped if inputs.slots[index].start in by_start]
+    assert in_sent, "ein gestrichener Slot muss im gesendeten Plan liegen"
+    for index in in_sent:
+        intent = by_start[inputs.slots[index].start]
+        assert intent.kind in (BatteryIntentKind.HALTEN, BatteryIntentKind.EIGENVERBRAUCH)
+        assert intent.grid_charge_w == 0
+
+
+def test_grid_charge_spent_at_once_is_dropped_with_fixed_flows() -> None:
+    # Wie oben, mit fest vorgegebenen Flüssen: 100 W Netzladen zu 10 ct in Slot 0. Die Slots 1 bis 3
+    # brauchen je 90 W; die Absicht ist jeweils Eigenverbrauch (unter 100 W kein Halten), und die
+    # Nachrechnung entlädt die 0,02 kWh schon in Slot 1 zu 10 ct. Der teure Slot 3 (40 ct) bekommt
+    # nichts mehr, obwohl der Optimierer die Energie dafür vorsah. Das Netzladen fällt weg.
+    inputs = scenario(
+        prices=[10.0, 10.0, 10.0, 40.0],
+        pv=[0.0] * 4,
+        load=[0.0, 90.0, 90.0, 90.0],
+        soc_pct=20.0,
+        grid_charge=True,
+    )
+    flows = [
+        flow(gr_b=100.0, soc_end_kwh=6.025),
+        flow(gr_h=90.0, soc_end_kwh=6.025),
+        flow(gr_h=90.0, soc_end_kwh=6.025),
+        flow(bt_h=90.0, soc_end_kwh=6.0025),
+    ]
+    intents = derive_intents(inputs, flows_result(flows))
+    assert intents == [BatteryIntent()] * 4
+
+
+def test_grid_charge_that_pays_through_the_end_value_is_kept() -> None:
+    # 20 ct jetzt, 20 ct später: Der Spread rechnet sich nicht. Mit Restwert 30 ct schon
+    # (0,94 · 30 − 20 ≥ 2), und die Ladung bleibt bis zum Horizontende im Akku. Ohne Restwert fällt
+    # das Netzladen weg. Direkter Test von ``_drop_unprofitable``.
+    plain = [BatteryIntent(), BatteryIntent()]
+    charging = [
+        BatteryIntent(kind=BatteryIntentKind.NETZLADEN, grid_charge_w=2000),
+        BatteryIntent(),
+    ]
+
+    def drop(end_value_ct: float) -> list[BatteryIntent]:
+        inputs = scenario(
+            prices=[20.0] * 2,
+            pv=[0.0] * 2,
+            load=[1000.0, 1000.0],
+            soc_pct=50.0,
+            grid_charge=True,
+            end_value_ct=end_value_ct,
+        )
+        return _drop_unprofitable(inputs, charging, plain)
+
+    assert drop(30.0) == charging
+    assert drop(0.0) == plain
