@@ -8,7 +8,14 @@ from fastapi.testclient import TestClient
 from pydantic import SecretStr
 from sqlalchemy import insert
 from structlog.testing import capture_logs
-from tests.app_helpers import PASSWORD, T_APP, StopScheduler, ingest, record_then_stop
+from tests.app_helpers import (
+    PASSWORD,
+    SLOT_FLOWS_MSG,
+    T_APP,
+    StopScheduler,
+    ingest,
+    record_then_stop,
+)
 from tests.plan_helpers import sample_plan, set_planning, until
 from tests.unit.shared.test_decisions import decision
 
@@ -390,10 +397,9 @@ async def test_ledger_nightly_catches_up_the_costing_after_new_estimates(
 ) -> None:
     spy_gap_estimator(runtime, monkeypatch)
     spy_ledger_checks(runtime, monkeypatch)
-    caught_up: list[bool] = []
-    monkeypatch.setattr(runtime.costing, "catch_up", lambda: caught_up.append(True) or 0)
+    runtime._costing_wake.clear()
     await runtime._ledger_nightly(7)
-    assert caught_up == [True]
+    assert runtime._costing_wake.is_set()  # weckt die Nachführung (``_costing_loop``)
 
 
 async def test_ledger_nightly_checks_even_if_the_estimate_fails(runtime, monkeypatch) -> None:
@@ -520,6 +526,70 @@ async def test_ledger_nightly_start_run_does_not_wait_forever(runtime, monkeypat
     assert "Nachtrag der Abrechnung dauert zu lange, der Abgleich beginnt ohne ihn" in [
         e["event"] for e in logs
     ]
+
+
+async def test_a_long_costing_catch_up_does_not_hold_up_the_live_stream(
+    runtime, monkeypatch
+) -> None:
+    # B3: die Nachführung des Einstandspreises läuft im eigenen Job, nicht in der Handler-Kette
+    release, started = threading.Event(), threading.Event()
+
+    def slow_catch_up() -> int:
+        started.set()
+        release.wait(5)
+        return 0
+
+    monkeypatch.setattr(runtime.costing, "catch_up", slow_catch_up)
+    seen: list[dict] = []
+
+    async def next_handler(data: dict) -> None:
+        seen.append(data)
+
+    runtime.live_feed._handlers.append(next_handler)
+    costing_task = asyncio.create_task(runtime._costing_loop())
+    try:
+        await until(started.is_set)  # die Nachführung beim Start läuft und hängt
+        message = {"type": "slot_flows", "data": SLOT_FLOWS_MSG}
+        await asyncio.wait_for(runtime.live_feed._dispatch(message), timeout=1)
+        assert seen == [SLOT_FLOWS_MSG]
+        assert len(runtime.ledger.slots(T_APP, T_APP + timedelta(minutes=15))) == 1
+    finally:
+        release.set()
+        costing_task.cancel()
+        await asyncio.wait([costing_task])
+
+
+async def test_costing_job_catches_up_when_a_slot_arrives(runtime, monkeypatch) -> None:
+    calls: list[int] = []
+    monkeypatch.setattr(runtime.costing, "catch_up", lambda: calls.append(1) or 0)
+    costing_task = asyncio.create_task(runtime._costing_loop())
+    try:
+        await until(lambda: calls == [1])  # beim Start
+        await runtime._on_slot_flows(SLOT_FLOWS_MSG)
+        await until(lambda: calls == [1, 1])
+    finally:
+        costing_task.cancel()
+        await asyncio.wait([costing_task])
+
+
+async def test_costing_job_survives_a_failing_catch_up(runtime, monkeypatch) -> None:
+    calls: list[int] = []
+
+    def broken() -> int:
+        calls.append(1)
+        raise RuntimeError("Datenbank gesperrt")
+
+    monkeypatch.setattr(runtime.costing, "catch_up", broken)
+    costing_task = asyncio.create_task(runtime._costing_loop())
+    try:
+        with capture_logs() as logs:
+            await until(lambda: len(calls) == 1)
+            runtime._wake_costing()
+            await until(lambda: len(calls) == 2)
+        assert "Einstandspreis des Akkus nicht berechenbar" in [e["event"] for e in logs]
+    finally:
+        costing_task.cancel()
+        await asyncio.wait([costing_task])
 
 
 async def test_first_pv_forecast_waits_for_the_calibration(runtime, monkeypatch) -> None:

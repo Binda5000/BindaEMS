@@ -212,6 +212,10 @@ class AppRuntime:
             self.engine, self.ledger, self.settings, usable_kwh=cfg.battery.usable_kwh
         )
         self.ledger.on_slots_changed(self.costing.mark_dirty)
+        # weckt die Nachführung des Einstandspreises (``_costing_loop``); gesetzt, damit sie beim
+        # Start rechnet, was ``LedgerCosting`` als veraltet erkannt hat
+        self._costing_wake = asyncio.Event()
+        self._costing_wake.set()
         self.ledger_checks = LedgerChecks(self.engine, self.ledger, self.reader, self._clock, cfg)
         self.gap_estimator = GapEstimator(self.ledger, self.reader, self._clock, cfg)
         self.load_forecast = LoadForecastService(
@@ -483,6 +487,7 @@ class AppRuntime:
             ("charging", self.charging.run),
             ("influx-writer", self.influx_writer.run),
             ("ledger", self._ledger_loop),
+            ("costing", self._costing_loop),
             ("maintenance", self._maintenance_loop),
             ("backup", self._backup_loop),
             ("forecast-nightly", self._forecast_nightly_loop),
@@ -532,14 +537,26 @@ class AppRuntime:
         await self._server.serve()
 
     async def _on_slot_flows(self, data: dict[str, Any]) -> None:
+        """Speichert den Slot; der Einstandspreis folgt im eigenen Job (``_costing_loop``), damit
+        eine lange Neuberechnung den Live-Strom des core nicht aufhält."""
         await self.ledger.handle_stream_message(data)
-        await self._catch_up_costing()
+        self._wake_costing()
 
-    async def _catch_up_costing(self) -> None:
-        try:
-            await asyncio.to_thread(self.costing.catch_up)
-        except Exception:
-            log.exception("Einstandspreis des Akkus nicht berechenbar")
+    def _wake_costing(self) -> None:
+        """Weckt die Nachführung; was neu zu rechnen ist, hat ``LedgerCosting.mark_dirty``."""
+        self._costing_wake.set()
+
+    async def _costing_loop(self) -> None:
+        """Führt den Einstandspreis im Worker-Thread nach, sobald etwas ihn weckt. Ein Wecken
+        während der Rechnung löst gleich die nächste aus; ``LedgerCosting`` hält mit seinem Lock
+        ohnehin nur eine Nachführung zur Zeit."""
+        while True:
+            await self._costing_wake.wait()
+            self._costing_wake.clear()
+            try:
+                await asyncio.to_thread(self.costing.catch_up)
+            except Exception:
+                log.exception("Einstandspreis des Akkus nicht berechenbar")
 
     async def _ledger_loop(self) -> None:
         """Beim Start die letzten 7 Tage nachtragen, danach stündlich die letzten 6 h."""
@@ -558,7 +575,7 @@ class AppRuntime:
                 log.exception("Nachtrag der Abrechnung fehlgeschlagen")
             finally:
                 self._ledger_backfilled.set()  # auch nach einem Fehler: der Abgleich läuft trotzdem
-            await self._catch_up_costing()
+            self._wake_costing()
             await asyncio.sleep(HOUR_S)
 
     async def _ha_values_loop(self, cache: HaValueCache) -> None:
@@ -772,7 +789,7 @@ class AppRuntime:
                 local_day_slots(today)[0],
             )
             if estimated:
-                await self._catch_up_costing()  # der Einstandspreis des Akkus folgt den Schätzungen
+                self._wake_costing()  # der Einstandspreis des Akkus folgt den Schätzungen
         except InfluxQueryError as exc:
             log.warning("Nachrechnung der Lücken nicht möglich", error=str(exc))
         except Exception:
