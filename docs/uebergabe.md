@@ -51,8 +51,9 @@ Anlage“).
 (`docs/superpowers/plans/2026-10-17-phase-4a-statistik.md`, 16 Tasks, freigegeben vom Betreiber am
 17.10.2026 mit allen 13 Entscheidungen und der Änderung, dass PV-Strom ins Auto 0 ct kostet): auf dem
 Arbeitszweig `claude/phase-4-plan-whnbh6`, noch nicht auf `main`. Gesamtreview, Fix-Welle und die
-Nacharbeit vom 18.10.2026 sind abgeschlossen, alle Prüfungen grün; die Integration auf `main` steht
-aus. Plan 4a ändert nur die app und das UI (der core bleibt gleich) und braucht an der Anlage nur
+Nacharbeit vom 18.10.2026 sind abgeschlossen. Alle Prüfungen sind grün bis auf einen Property-Test
+des Planers aus Plan 3b, der auch auf `main` scheitert (siehe „Bewusst offen gelassen“, „Planer:
+Plausibilität gegen Optimierer“); die Integration auf `main` steht aus. Plan 4a ändert nur die app und das UI (der core bleibt gleich) und braucht an der Anlage nur
 den Neubau von `ems-app`: Sessions, Einstandspreis, Kosten je Auto, Abgleich mit den Zählern,
 Nachrechnung von Lücken, die Seite „Statistik“, Statistik-Sensoren in HA und ein Grafana-Dashboard.
 Er schaltet nichts an der Anlage. **Der nächste Entwicklungsschritt ist Plan 4b „Geplantes Laden“**
@@ -493,14 +494,17 @@ Er schaltet nichts an der Anlage. **Der nächste Entwicklungsschritt ist Plan 4b
   immer gemeinsam aus demselben Stand ausgerollt (gleiche Compose-Datei, gleiche Image-Tags): Die
   UI-Schemas sind streng, eine abweichende Version zeigt auf der System-Seite nur „Unerwartete
   Antwort vom Server“.
-- **Tests:** 6827 Python-Tests im vollen Lauf am Ende von Plan 4a (mit den Szenarien des Simulators
-  und `--cov`), davon 41 Property-Tests mit Hypothesis (6 für die Safety-Schicht,
+- **Tests:** 6929 Python-Tests im vollen Lauf nach der Nacharbeit zu Plan 4a (mit den Szenarien des
+  Simulators und `--cov`), davon 41 Property-Tests mit Hypothesis (6 für die Safety-Schicht,
   6 für den Phasenwächter, 13 für den Akku-Sollwert, 7 für den 15-min-Wächter, 8 sonstige; Plan 4a
   brachte vier: die Wasserfall-Regel der Nachrechnung gegen die des core (zwei Tests), der
   Steckzustand der app gegen den des core und die Zuordnung der Slots zu Sessions gegen die einfache
-  Rechnung), und 619 UI-Tests (Vitest) sowie 27 E2E-Tests (Playwright).
+  Rechnung), und 638 UI-Tests (Vitest) sowie 27 E2E-Tests (Playwright). 6928 sind grün; rot ist
+  `tests/property/test_plan_plausible.py` mit einem Beispiel, das Hypothesis lokal gefunden hat (siehe
+  „Planer: Plausibilität gegen Optimierer“).
   Abdeckung 98 % insgesamt und 98 bis 100 % für `core/safety`, `core/control` und `core/actuators`;
-  der volle Lauf von pytest mit `--cov` dauerte 27 Minuten.
+  der volle Lauf von pytest mit `--cov` dauerte 23 Minuten.
+  Stand am Ende von Plan 4a, vor der Nacharbeit: 6827, 619 und 27.
   Stand davor, nach Plan 3c auf `main`: 6572, 515 und 24, Abdeckung 97,80 % insgesamt und 99 bis 100 %
   für `core/safety`, `core/control` und `core/actuators`. Der volle Lauf von pytest dauert rund
   23 Minuten.
@@ -2631,6 +2635,18 @@ alles mit Kosten, falls es falsch ist:
     folgt dem, was geschrieben wird. Der Abschnitt „Grafana“ ist ein `###` im Abschnitt 3 des
     Betriebshandbuchs (ein neuer `##` verschöbe die Nummern). Falls falsch: keine, nur Lage im Handbuch.
 
+Planer: Plausibilität gegen Optimierer (gefunden am 18.10.2026, besteht seit Plan 3b, wartet auf
+eine Entscheidung des Betreibers). Der Property-Test `test_plan_plausible.py` fand einen Horizont, in
+dem die Prüfung den Plan des Optimierers verwirft („Netzladen um 07:15 rechnet sich nicht“) und der
+Ersatzplan gilt. Beide Seiten rechnen so, wie Spec 9.5 es sagt: Der Optimierer lädt billig nach und
+entlädt in teuren Slots je knapp unter 100 W, die Prüfung zählt nur spätere Entladung ab 100 W je Slot
+(`USEFUL_W`, `planning/plausibility.py`). Daneben gibt es seltene Fälle, in denen die Prüfung recht hat,
+weil die Absichten unter 100 W kein HALTEN kennen (`HOLD_MIN_W`). Folge an der Anlage: selten ein
+Ersatzplan statt des Optimierers, nichts Unsicheres. In der CI ist der Fehler selten (mit frischer
+Datenbank von Hypothesis fiel keines von 6200 Beispielen durch). Vorschlag: lohnende spätere Entladung
+über 1 W zählen und Netzladen, das sich in der Nachrechnung nicht rechnet, schon in den Absichten
+streichen. Befund und Optionen: `/mnt/project-files/plaene/planer-plausibilitaet.md`.
+
 Aufgeschobene Kleinigkeiten aus Plan 4a (aus den Reviews; keine davon gefährdet die Anlage). Was die
 Nacharbeit vom 18.10.2026 erledigt hat, steht nicht mehr hier. Offen sind:
 
@@ -2668,3 +2684,7 @@ Nacharbeit vom 18.10.2026 erledigt hat, steht nicht mehr hier. Offen sind:
   ab; und `pytest tests/unit/app/ledger tests/unit/test_docs.py tests/unit/app/stats` in dieser
   Reihenfolge findet in den Routentests der Statistik die Fixture `make_client` nicht (einzeln und im
   vollen Lauf tritt das nicht auf).
+- **InfluxDB-Leser:** Die Schutzschicht, die nur lesende Anweisungen durchlässt, kennt reguläre
+  Ausdrücke nur nach `FROM`, `=~` und `!~`; heute erzeugt kein Aufrufer etwas anderes.
+- **Abnahme:** Hat eine Größe nie einen Zählerwert (etwa PV bei DC-Kopplung), steht auf der Karte
+  „Abgleich“ dauerhaft „Ohne Zählerwerte: PV.“. Das ist richtig, aber bei der Abnahme zu wissen.
