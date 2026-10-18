@@ -1,7 +1,7 @@
 from datetime import UTC, datetime, timedelta
 
 import httpx
-from tests.app_helpers import T_APP, k
+from tests.app_helpers import T_APP, influx_q, k
 
 from bindaems.app.consumers.energy import EnergyCache, day_start, ha_points, integrate_wh
 from bindaems.app.consumers.service import Consumer
@@ -49,7 +49,7 @@ def test_integration_holds_each_value_until_the_next_but_not_across_gaps() -> No
 
 async def test_core_energy_with_house_in_one_query(respx_mock, reader, clock) -> None:
     og, _ = k(1, 0.0)  # load.v1.power_w
-    route = respx_mock.get(URL).respond(
+    route = respx_mock.post(URL).respond(
         json=_results(
             _series("power", {"source": "load", "id": "v1"}, [(M0, 600.0), (M0 + MIN, 600.0)]),
             _series("power", {"source": "derived", "id": "house_load"}, [(M0, 1200.0)]),
@@ -60,7 +60,7 @@ async def test_core_energy_with_house_in_one_query(respx_mock, reader, clock) ->
     assert cache.energy_kwh(og) == 0.02 and cache.note(og) is None  # 2 min × 600 W
     assert cache.house_kwh() == 0.02  # 1 min × 1200 W
     assert cache.since == MIDNIGHT
-    query = route.calls.last.request.url.params["q"]
+    query = influx_q(route.calls.last.request)
     assert query == (
         'SELECT mean("p_w") AS "w" FROM "raw"."power" WHERE "phase"=\'total\' AND '  # noqa: S608
         "((\"source\"='load' AND \"id\"='v1') OR (\"source\"='derived' AND \"id\"='house_load')) "
@@ -72,14 +72,14 @@ async def test_core_energy_with_house_in_one_query(respx_mock, reader, clock) ->
 async def test_core_energy_says_why_it_is_missing(respx_mock, reader, clock) -> None:
     quiet, _ = k(1, 0.0)
     other = Consumer(2, "Sonder", None, None, "#000000", "core", "vebus.ac_out.power_w", None, 0)
-    respx_mock.get(URL).respond(json=_results())
+    respx_mock.post(URL).respond(json=_results())
     cache = EnergyCache(reader, clock, None)
     await cache.refresh([quiet, other])
     assert (cache.energy_kwh(quiet), cache.note(quiet)) == (None, "kein Verlauf seit Mitternacht")
     assert (cache.energy_kwh(other), cache.note(other)) == (None, "Signal wird nicht aufgezeichnet")
     assert cache.house_kwh() is None
 
-    respx_mock.get(URL).respond(500, text="kaputt")
+    respx_mock.post(URL).respond(500, text="kaputt")
     await cache.refresh([quiet])
     assert (cache.energy_kwh(quiet), cache.note(quiet)) == (None, "Verlauf nicht lesbar")
 
@@ -90,7 +90,7 @@ async def test_ha_energy_starts_with_the_value_before_midnight(respx_mock, reade
     stove_tags = {"domain": "sensor", "entity_id": "herd"}
 
     def influx(request: httpx.Request) -> httpx.Response:
-        query = request.url.params["q"]
+        query = influx_q(request)
         if query.startswith('SELECT mean("p_w")'):
             return httpx.Response(200, json=_results())
         if query.startswith('SELECT last("value")'):
@@ -105,14 +105,14 @@ async def test_ha_energy_starts_with_the_value_before_midnight(respx_mock, reade
             ),
         )
 
-    route = respx_mock.get(URL).mock(side_effect=influx)
+    route = respx_mock.post(URL).mock(side_effect=influx)
     cache = EnergyCache(reader, clock, "homeassistant")
     await cache.refresh([kitchen, stove])
     # 0–5 Uhr 100 W, 5–10 Uhr 300 W
     assert cache.energy_kwh(kitchen) == 2.0 and cache.note(kitchen) is None
     assert cache.energy_kwh(stove) == 2.0
     ha_queries = [
-        call.request.url.params["q"]
+        influx_q(call.request)
         for call in route.calls
         if call.request.url.params["db"] == "homeassistant"
     ]
@@ -124,7 +124,7 @@ async def test_ha_energy_starts_with_the_value_before_midnight(respx_mock, reade
 
 
 async def test_ha_energy_without_database(respx_mock, reader, clock) -> None:
-    respx_mock.get(URL).respond(json=_results())
+    respx_mock.post(URL).respond(json=_results())
     kitchen = _ha("sensor.kueche")
     cache = EnergyCache(reader, clock, None)
     await cache.refresh([kitchen])
@@ -167,7 +167,7 @@ def test_ha_points_without_unit_column_is_unchanged() -> None:
 async def test_window_energy_matches_refresh_for_today(respx_mock, reader, clock) -> None:
     og, _ = k(1, 0.0)
     other = Consumer(2, "Sonder", None, None, "#000000", "core", "vebus.ac_out.power_w", None, 0)
-    respx_mock.get(URL).respond(
+    respx_mock.post(URL).respond(
         json=_results(
             _series("power", {"source": "load", "id": "v1"}, [(M0, 600.0), (M0 + MIN, 600.0)]),
             _series("power", {"source": "derived", "id": "house_load"}, [(M0, 1200.0)]),
@@ -189,7 +189,7 @@ async def test_window_energy_reads_the_given_window_and_leaves_the_cache_alone(
     respx_mock, reader, clock
 ) -> None:
     og, _ = k(1, 0.0)
-    route = respx_mock.get(URL).respond(
+    route = respx_mock.post(URL).respond(
         json=_results(_series("power", {"source": "load", "id": "v1"}, [(M0, 600.0)]))
     )
     cache = EnergyCache(reader, clock, None)
@@ -201,5 +201,5 @@ async def test_window_energy_reads_the_given_window_and_leaves_the_cache_alone(
     # der Punkt liegt bei end (Mock ignoriert das Fenster): er zählt nicht
     assert energy == {1: (0.0, None)}
     assert house is None
-    query = route.calls.last.request.url.params["q"]
+    query = influx_q(route.calls.last.request)
     assert f"time >= {epoch_ms(start)}ms AND time < {epoch_ms(end)}ms" in query

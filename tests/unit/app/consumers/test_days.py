@@ -3,6 +3,7 @@ from datetime import UTC, date, datetime, timedelta
 import httpx
 import pytest
 from sqlalchemy import insert, select
+from tests.app_helpers import influx_q
 
 from bindaems.app.consumers.days import NO_DAY, ConsumerDays
 from bindaems.app.consumers.energy import EnergyCache
@@ -36,7 +37,7 @@ def _consumers(service, *names: str) -> list[int]:
 
 def _answer(request: httpx.Request, minutes: dict[str, int]) -> httpx.Response:
     """Antwort mit ``minutes`` Minuten à 600 W je Verbraucher (``load.<id>``), ab Fensterbeginn."""
-    query = request.url.params["q"]
+    query = influx_q(request)
     start = int(query.split("time >= ")[1].split("ms")[0])
     series = [
         {
@@ -57,7 +58,7 @@ def _rows(engine) -> dict[tuple[str, int], tuple[float | None, str | None]]:
 
 async def test_store_writes_one_row_per_consumer(days, engine, service, respx_mock) -> None:
     first, second = _consumers(service, "a", "b")
-    route = respx_mock.get(URL).mock(side_effect=lambda r: _answer(r, {"a": 120}))
+    route = respx_mock.post(URL).mock(side_effect=lambda r: _answer(r, {"a": 120}))
     assert await days.store(YESTERDAY) == 2
     # a: 120 min × 600 W; b: kein Verlauf – die Zeile trägt den Grund
     assert _rows(engine) == {
@@ -65,12 +66,12 @@ async def test_store_writes_one_row_per_consumer(days, engine, service, respx_mo
         ("2026-10-08", second): (None, "kein Verlauf seit Mitternacht"),
     }
     # der Tag ist [lokale Mitternacht, nächste Mitternacht)
-    query = route.calls.last.request.url.params["q"]
+    query = influx_q(route.calls.last.request)
     assert f"time >= {epoch_ms(MIDNIGHT)}ms AND time < {epoch_ms(MIDNIGHT) + 24 * 60 * MIN}ms" in (
         query
     )
     # erneutes Speichern ersetzt die Zeilen des Tages
-    respx_mock.get(URL).mock(side_effect=lambda r: _answer(r, {"a": 60, "b": 30}))
+    respx_mock.post(URL).mock(side_effect=lambda r: _answer(r, {"a": 60, "b": 30}))
     assert await days.store(YESTERDAY) == 2
     assert _rows(engine) == {
         ("2026-10-08", first): (0.6, None),
@@ -80,10 +81,10 @@ async def test_store_writes_one_row_per_consumer(days, engine, service, respx_mo
 
 async def test_store_uses_the_real_length_of_a_dst_day(days, clock, service, respx_mock) -> None:
     _consumers(service, "a")
-    route = respx_mock.get(URL).mock(side_effect=lambda r: _answer(r, {"a": 1}))
+    route = respx_mock.post(URL).mock(side_effect=lambda r: _answer(r, {"a": 1}))
     clock.advance(timedelta(days=30))  # 08.11.2026
     await days.store(date(2026, 10, 25))  # Ende der Sommerzeit: 25 Stunden
-    query = route.calls.last.request.url.params["q"]
+    query = influx_q(route.calls.last.request)
     start = epoch_ms(datetime(2026, 10, 24, 22, 0, tzinfo=UTC))
     assert f"time >= {start}ms AND time < {start + 25 * 60 * MIN}ms" in query
 
@@ -92,10 +93,10 @@ async def test_store_uses_the_23_hour_day_of_the_spring_change(
     days, clock, service, respx_mock
 ) -> None:
     _consumers(service, "a")
-    route = respx_mock.get(URL).mock(side_effect=lambda r: _answer(r, {"a": 1}))
+    route = respx_mock.post(URL).mock(side_effect=lambda r: _answer(r, {"a": 1}))
     clock.advance(timedelta(days=-100))  # 01.07.2026
     await days.store(date(2026, 3, 29))  # Beginn der Sommerzeit: 23 Stunden
-    query = route.calls.last.request.url.params["q"]
+    query = influx_q(route.calls.last.request)
     start = epoch_ms(datetime(2026, 3, 28, 23, 0, tzinfo=UTC))  # Mitternacht, noch UTC+1
     assert f"time >= {start}ms AND time < {start + 23 * 60 * MIN}ms" in query
 
@@ -106,14 +107,14 @@ async def test_store_drops_the_rows_of_a_deleted_consumer(
     (first,) = _consumers(service, "a")
     gone = first + 5  # Verbraucher, den es nicht mehr gibt
     _put(engine, "2026-10-08", gone, 4.0)
-    respx_mock.get(URL).mock(side_effect=lambda r: _answer(r, {"a": 60}))
+    respx_mock.post(URL).mock(side_effect=lambda r: _answer(r, {"a": 60}))
     assert await days.store(YESTERDAY) == 1
     assert _rows(engine) == {("2026-10-08", first): (0.6, None)}
 
 
 async def test_store_never_stores_today_or_the_future(days, engine, service, respx_mock) -> None:
     _consumers(service, "a")
-    route = respx_mock.get(URL).mock(side_effect=lambda r: _answer(r, {"a": 5}))
+    route = respx_mock.post(URL).mock(side_effect=lambda r: _answer(r, {"a": 5}))
     assert await days.store(date(2026, 10, 9)) == 0  # heute (Ortszeit)
     assert await days.store(date(2026, 10, 10)) == 0
     assert route.call_count == 0 and _rows(engine) == {}
@@ -123,9 +124,9 @@ async def test_store_keeps_old_rows_when_influx_cannot_be_read(
     days, engine, service, respx_mock
 ) -> None:
     (first,) = _consumers(service, "a")
-    respx_mock.get(URL).mock(side_effect=lambda r: _answer(r, {"a": 60}))
+    respx_mock.post(URL).mock(side_effect=lambda r: _answer(r, {"a": 60}))
     await days.store(YESTERDAY)
-    respx_mock.get(URL).respond(500, text="kaputt")
+    respx_mock.post(URL).respond(500, text="kaputt")
     assert (
         await days.store(YESTERDAY) == 0
     )  # nichts Neues, der Grund "nicht lesbar" wird nicht gespeichert
@@ -134,7 +135,7 @@ async def test_store_keeps_old_rows_when_influx_cannot_be_read(
 
 async def test_fill_missing_skips_stored_days(days, engine, service, respx_mock) -> None:
     _consumers(service, "a", "b")
-    route = respx_mock.get(URL).mock(side_effect=lambda r: _answer(r, {"a": 60, "b": 60}))
+    route = respx_mock.post(URL).mock(side_effect=lambda r: _answer(r, {"a": 60, "b": 60}))
     await days.store(YESTERDAY)
     seen = route.call_count
     # die letzten 3 Tage bis gestern: 06., 07., 08.10.; der 08. ist gespeichert
@@ -150,7 +151,7 @@ async def test_fill_missing_fills_days_a_new_consumer_lacks(
     days, engine, service, respx_mock
 ) -> None:
     (first,) = _consumers(service, "a")
-    respx_mock.get(URL).mock(side_effect=lambda r: _answer(r, {"a": 60, "c": 30}))
+    respx_mock.post(URL).mock(side_effect=lambda r: _answer(r, {"a": 60, "c": 30}))
     await days.fill_missing(date(2026, 10, 9), days=2)
     (third,) = _consumers(service, "c")
     assert await days.fill_missing(date(2026, 10, 9), days=2) == 2
@@ -159,7 +160,7 @@ async def test_fill_missing_fills_days_a_new_consumer_lacks(
 
 
 async def test_fill_missing_without_consumers_does_nothing(days, respx_mock) -> None:
-    route = respx_mock.get(URL).mock(side_effect=lambda r: _answer(r, {}))
+    route = respx_mock.post(URL).mock(side_effect=lambda r: _answer(r, {}))
     assert await days.fill_missing(date(2026, 10, 9)) == 0
     assert route.call_count == 0
 
@@ -196,7 +197,7 @@ async def test_a_recreated_consumer_does_not_inherit_the_days_of_a_deleted_one(
 ) -> None:
     _consumers(service, "a")
     (old,) = _consumers(service, "b")
-    respx_mock.get(URL).mock(side_effect=lambda r: _answer(r, {"a": 60, "b": 60, "c": 30}))
+    respx_mock.post(URL).mock(side_effect=lambda r: _answer(r, {"a": 60, "b": 60, "c": 30}))
     await days.fill_missing(date(2026, 10, 9), days=2)
     service.delete(old, actor="chris", source="ui")
     assert not [key for key in _rows(engine) if key[1] == old]

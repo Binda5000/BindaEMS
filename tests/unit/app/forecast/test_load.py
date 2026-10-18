@@ -3,7 +3,7 @@ from datetime import UTC, date, datetime, time, timedelta
 import httpx
 import pytest
 from structlog.testing import capture_logs
-from tests.app_helpers import StopScheduler, ingest, record_then_stop
+from tests.app_helpers import StopScheduler, influx_q, ingest, record_then_stop
 from tests.unit.app.forecast.conftest import NOW
 
 from bindaems.app.daytype import day_type
@@ -357,7 +357,7 @@ async def test_ha_failure_leaves_the_ledger_samples(
     load_service_with_ha, ledger, respx_mock
 ) -> None:
     ingest(ledger, "2026-10-12T06:00:00+00:00", {"grid>house": 100})
-    respx_mock.get(URL).respond(500)
+    respx_mock.post(URL).respond(500)
     samples = await load_service_with_ha.history(
         at("2026-10-12T06:00:00+00:00"), at("2026-10-12T06:30:00+00:00")
     )
@@ -499,14 +499,14 @@ def _mock_influx(respx_mock, means: dict | None = None, seed: dict | None = None
     """Beantwortet die Minutenmittel (``GROUP BY time``) und die Abfrage des Startwerts getrennt."""
 
     def answer(request: httpx.Request) -> httpx.Response:
-        is_means = "GROUP BY time" in request.url.params["q"]
+        is_means = "GROUP BY time" in influx_q(request)
         return httpx.Response(200, json=(means if is_means else seed) or EMPTY)
 
-    return respx_mock.get(URL).mock(side_effect=answer)
+    return respx_mock.post(URL).mock(side_effect=answer)
 
 
 def _queries(route, *, seed: bool) -> list[str]:
-    queries = [call.request.url.params["q"] for call in route.calls]
+    queries = [influx_q(call.request) for call in route.calls]
     return [q for q in queries if ("GROUP BY time" not in q) == seed]
 
 

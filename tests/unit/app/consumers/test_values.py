@@ -1,5 +1,5 @@
 import httpx
-from tests.app_helpers import k, tree_input
+from tests.app_helpers import influx_q, k, tree_input
 
 from bindaems.app.consumers.service import Consumer
 from bindaems.app.consumers.values import (
@@ -33,7 +33,7 @@ def _ha_consumer(power_ref: str, unit: str = "W") -> Consumer:
 
 
 async def test_ha_values_single_query_and_kw_scaling(respx_mock, reader) -> None:
-    route = respx_mock.get(URL).respond(
+    route = respx_mock.post(URL).respond(
         json=_results(_last("W", "kueche", 120.0, None), _last("kW", "wp", 1.5, None))
     )
     cache = HaValueCache(reader, "homeassistant")
@@ -44,7 +44,7 @@ async def test_ha_values_single_query_and_kw_scaling(respx_mock, reader) -> None
     request = route.calls.last.request
     assert request.url.params["db"] == "homeassistant"
     # HA schreibt je nach measurement_attr unter der Einheit oder unter der entity_id
-    assert request.url.params["q"] == (
+    assert influx_q(request) == (
         'SELECT last("value") AS "v", last("unit_of_measurement_str") AS "u" '
         'FROM "W","kW","sensor.kueche","sensor.wp" WHERE time > now() - 24h AND '
         "((\"domain\"='sensor' AND \"entity_id\"='kueche') OR "
@@ -55,7 +55,7 @@ async def test_ha_values_single_query_and_kw_scaling(respx_mock, reader) -> None
 
 async def test_ha_values_from_measurement_per_entity(respx_mock, reader) -> None:
     # measurement_attr: entity_id – die Einheit steht im Feld unit_of_measurement_str
-    respx_mock.get(URL).respond(
+    respx_mock.post(URL).respond(
         json=_results(
             _last("sensor.serverschrank_power", "serverschrank_power", 351.0, "W"),
             _last("sensor.wp_power", "wp_power", 1.5, "kW"),
@@ -72,7 +72,7 @@ async def test_ha_values_from_measurement_per_entity(respx_mock, reader) -> None
 
 
 async def test_ha_values_explain_why_a_value_is_missing(respx_mock, reader) -> None:
-    respx_mock.get(URL).respond(
+    respx_mock.post(URL).respond(
         json=_results(
             _last("sensor.zaehler", "zaehler", 12345.6, "kWh"),  # Energie, keine Leistung
             _last("kW", "herd", 2.2, None),
@@ -94,7 +94,7 @@ async def test_ha_values_explain_why_a_value_is_missing(respx_mock, reader) -> N
 
 
 async def test_ha_values_unreadable_database(respx_mock, reader) -> None:
-    respx_mock.get(URL).respond(403, text='{"error":"error authorizing query"}')
+    respx_mock.post(URL).respond(403, text='{"error":"error authorizing query"}')
     cache = HaValueCache(reader, "homeassistant")
     ref = HaRef("sensor", "kueche", "W")
     await cache.refresh([ref])
@@ -129,7 +129,7 @@ def test_tree_unknown_value_makes_other_unknown() -> None:
 
 async def test_candidates_from_core_signals_and_ha_series(cfg, live, respx_mock, reader) -> None:
     def influx(request: httpx.Request) -> httpx.Response:
-        if request.url.params["q"].startswith("SHOW SERIES"):
+        if influx_q(request).startswith("SHOW SERIES"):
             keys = [["kW,domain=sensor,entity_id=wp"], ["W,domain=sensor,entity_id=kueche"]]
             return httpx.Response(200, json=_results({"columns": ["key"], "values": keys}))
         # Messung je Entität: letzte Einheit je Reihe
@@ -150,7 +150,7 @@ async def test_candidates_from_core_signals_and_ha_series(cfg, live, respx_mock,
         ]
         return httpx.Response(200, json=_results(*series))
 
-    route = respx_mock.get(URL).mock(side_effect=influx)
+    route = respx_mock.post(URL).mock(side_effect=influx)
     result = await candidates(cfg, live, reader)
     assert result["core"] == [{"ref": "load.obergeschoss.power_w"}]
     assert result["ha"] == [
@@ -159,7 +159,7 @@ async def test_candidates_from_core_signals_and_ha_series(cfg, live, respx_mock,
         {"entity_id": "sensor.wp", "unit": "kW"},
     ]
     assert result["ha_error"] is None
-    queries = [(c.request.url.params["db"], c.request.url.params["q"]) for c in route.calls]
+    queries = [(c.request.url.params["db"], influx_q(c.request)) for c in route.calls]
     assert queries == [
         ("homeassistant", 'SHOW SERIES FROM "W","kW"'),
         (
@@ -171,7 +171,7 @@ async def test_candidates_from_core_signals_and_ha_series(cfg, live, respx_mock,
 
 
 async def test_candidates_say_why_ha_sources_are_missing(cfg, live, respx_mock, reader) -> None:
-    respx_mock.get(URL).respond(403, text='{"error":"error authorizing query"}')
+    respx_mock.post(URL).respond(403, text='{"error":"error authorizing query"}')
     result = await candidates(cfg, live, reader)
     assert result["ha"] == []
     assert result["ha_error"] == (

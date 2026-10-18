@@ -22,6 +22,7 @@ from pydantic import SecretStr
 from sqlalchemy import bindparam, update
 from tests.app_helpers import (
     T_APP,
+    influx_q,
     mock_all_sources,
     set_feed_in,
     set_tariff,
@@ -377,7 +378,7 @@ def _energy_influx(query: str) -> httpx.Response | None:
 
 def _influx(request: httpx.Request) -> httpx.Response:
     """Ersatz für InfluxDB ``/query``: Verlauf, Energie, letzte HA-Werte und HA-Reihen."""
-    query = request.url.params.get("q", "")
+    query = influx_q(request)
     if (energy := _energy_influx(query)) is not None:
         return energy
     if mean := _MEAN.search(query):
@@ -432,7 +433,7 @@ def _router(cfg: Config) -> respx.MockRouter:
     router = respx.mock(assert_all_mocked=True, assert_all_called=False)
     mock_all_sources(router)
     router.get(OPEN_METEO_URL).respond(200, text=OPEN_METEO_FIXTURE.read_text())
-    router.get(cfg.influxdb.url.rstrip("/") + "/query").mock(side_effect=_influx)
+    router.post(cfg.influxdb.url.rstrip("/") + "/query").mock(side_effect=_influx)
     return router
 
 

@@ -50,11 +50,15 @@ class InfluxReader:
         self._http = http
 
     async def query(self, q: str, *, database: str | None = None) -> list[Series]:
-        params = {"db": database or self._database, "q": q, "epoch": "ms"}
+        """Schickt ``q`` per POST im Formular-Body (InfluxDB 1.x nimmt so auch SELECT und SHOW an):
+        eine lange Abfrage, etwa der Abgleich über 36 Mitternächte, passt so durch jeden Proxy,
+        der URLs auf wenige KB begrenzt."""
+        params = {"db": database or self._database, "epoch": "ms"}
         try:
-            response = await self._http.get(
+            response = await self._http.post(
                 self._url,
                 params=params,
+                data={"q": q},
                 auth=self._auth if self._auth is not None else httpx.USE_CLIENT_DEFAULT,
                 timeout=TIMEOUT_S,
             )

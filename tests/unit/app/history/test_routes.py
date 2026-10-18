@@ -1,6 +1,6 @@
 import httpx
 import pytest
-from tests.app_helpers import login_as
+from tests.app_helpers import influx_q, login_as
 
 from bindaems.app.history.routes import history_router
 from bindaems.app.history.series import build_catalog
@@ -11,7 +11,7 @@ HOUR = {"from": "2026-10-09T00:00:00Z", "to": "2026-10-09T01:00:00Z"}
 
 def test_history_returns_scaled_points(client, auth, respx_mock) -> None:
     login_as(client, auth, "viewer")
-    route = respx_mock.get(URL).respond(
+    route = respx_mock.post(URL).respond(
         json={
             "results": [
                 {
@@ -33,7 +33,7 @@ def test_history_returns_scaled_points(client, auth, respx_mock) -> None:
         "unit": "W",
         "points": [[1791504000000, 1500.0]],
     }
-    assert '"long"."forecast"' in route.calls.last.request.url.params["q"]
+    assert '"long"."forecast"' in influx_q(route.calls.last.request)
 
 
 @pytest.mark.parametrize(
@@ -52,7 +52,7 @@ def test_bad_requests_are_422(client, auth, params) -> None:
 
 def test_influx_down_is_502(client, auth, respx_mock) -> None:
     login_as(client, auth, "viewer")
-    respx_mock.get(URL).mock(side_effect=httpx.ConnectError("weg"))
+    respx_mock.post(URL).mock(side_effect=httpx.ConnectError("weg"))
     response = client.get("/api/history", params={"series": "grid", **HOUR})
     assert response.status_code == 502 and response.json() == {
         "detail": "InfluxDB nicht erreichbar"

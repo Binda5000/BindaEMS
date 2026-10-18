@@ -66,7 +66,7 @@ def test_admin_changes_map_errors_to_statuses(client, auth) -> None:
 def test_tree_endpoint_with_energy_since_midnight(
     make_client, service, live, reader, cfg, guard, auth, clock, respx_mock
 ) -> None:
-    respx_mock.get("http://influx.lan:8086/query").respond(
+    respx_mock.post("http://influx.lan:8086/query").respond(
         json={
             "results": [
                 {

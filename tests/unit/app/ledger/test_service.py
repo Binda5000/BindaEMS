@@ -4,6 +4,7 @@ import pytest
 from sqlalchemy import event
 from tests.app_helpers import (
     SLOT_FLOWS_MSG,
+    influx_q,
     ingest,
     price_row,
     set_feed_in,
@@ -100,7 +101,7 @@ def test_replacing_a_slot_zeroes_the_flows_it_no_longer_has(
 
 async def test_backfill_fills_slots_missed_while_app_was_down(ledger, respx_mock, reader) -> None:
     ledger.ingest(parse_slot_flows(MSG), "stream")
-    route = respx_mock.get("http://influx.lan:8086/query").respond(
+    route = respx_mock.post("http://influx.lan:8086/query").respond(
         json={
             "results": [
                 {
@@ -124,14 +125,14 @@ async def test_backfill_fills_slots_missed_while_app_was_down(ledger, respx_mock
     )
     assert await ledger.backfill(reader, S, S + 2 * SLOT) == 1
     assert ledger.slots(S + SLOT, S + 2 * SLOT)[0].flows_wh == {"grid>house": 210.0}
-    assert route.calls.last.request.url.params["q"] == (
+    assert influx_q(route.calls.last.request) == (
         'SELECT "wh", "covered_s" FROM "raw"."flows" WHERE time >= 1791532800000ms '
         'AND time < 1791534600000ms GROUP BY "flow"'
     )
 
 
 async def test_backfill_skips_slots_without_coverage(ledger, respx_mock, reader) -> None:
-    respx_mock.get("http://influx.lan:8086/query").respond(
+    respx_mock.post("http://influx.lan:8086/query").respond(
         json={
             "results": [
                 {

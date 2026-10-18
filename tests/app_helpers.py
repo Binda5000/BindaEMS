@@ -6,7 +6,9 @@ from collections.abc import Awaitable, Callable, Mapping, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal
+from urllib.parse import parse_qs
 
+import httpx
 from argon2 import PasswordHasher
 from fastapi.testclient import TestClient
 
@@ -28,6 +30,12 @@ T_APP = datetime(2026, 10, 9, 8, 0, tzinfo=UTC)  # 10:00 Ortszeit
 PASSWORD = "richtig-geheim-1"
 # billige Parameter, damit die Tests schnell bleiben; der Dienst nutzt sonst die Standardwerte
 FAST_HASHER = PasswordHasher(time_cost=1, memory_cost=8, parallelism=1)
+
+
+def influx_q(request: httpx.Request) -> str:
+    """Die InfluxQL-Abfrage einer Anfrage an ``/query`` (der Reader schickt sie per POST im
+    Formular-Body)."""
+    return parse_qs(request.content.decode())["q"][0]
 
 
 def login_as(
