@@ -76,9 +76,11 @@ Prozent, abgerundet (``Car.reported_pct``): Tessie und Home Assistant nennen das
 das Auto es erreicht hat, und der Tesla meldet sein Ladelimit genau mit „Complete“. Die Prüfungen
 „bei mindestens 70 %“ gelten darum für den Ladestand im Modell. Abweichung von der Tabelle des
 Plans 4b: In ``geplant-plan`` gilt der Plan 30 min statt der 45 min eines Plans der app
-(``PLAN_VALID``), dann fällt die app aus. Mit den 6900 W des Plans allein bräuchte der Tesla für
-seine 10 Prozentpunkte (7,5 kWh) 65 min, länger als der Lauf; ab dem Ende des Plans ist die
-späteste Startzeit erreicht, und er lädt ohne Stopp mit voller Leistung weiter (Review Focus 4).
+(``PLAN_VALID``), dann fällt die app aus; ab da ist die späteste Startzeit erreicht, und er lädt
+ohne Stopp mit voller Leistung weiter (Review Focus 4). Grund ist der Abstand zum Ende des
+60-min-Laufs: Mit 45 min Plan erreicht der Tesla das Ziel erst bei rund 3530 s und stoppt bei
+rund 3545 s, knapp eine Minute vor dem Ende; „lädt danach nicht mehr“ sähe kaum etwas. Mit 30 min
+stoppt er bei rund 3215 s, gut sechs Minuten vor dem Ende.
 """
 
 from __future__ import annotations
@@ -114,7 +116,7 @@ from bindaems.shared.plan import (
     IntentPlanSlot,
 )
 from bindaems.shared.timeutil import LOCAL_TZ, SLOT, slot_start
-from bindaems.tools.sim.cars import Evcs
+from bindaems.tools.sim.cars import TESSIE_DELAY_S, Evcs
 from bindaems.tools.sim.metrics import (
     MINIMUM_MARGIN_A,
     PV_MODES,
@@ -257,6 +259,9 @@ TARGET_REACHED: Final = "target_reached"  # Grund des Stopps am Ziel-SOC
 PLANNED_TARGET_PCT: Final = 70  # das Ziel in „geplant-plan“, „-spaet“, „-pv“ und „-unbekannt“
 PLANNED_TESLA_PCT: Final = 60.0  # SOC des Tesla zu Beginn von „geplant-plan“ und „geplant-pv“
 PLAN_TESLA_W: Final = 6900  # „geplant-plan“: der Plan lädt den Tesla mit 10 A auf 3 Phasen …
+PLAN_TESLA_A: Final = 10.0  # … solange der Plan gilt, mit diesem Strom …
+PLAN_A_TOLERANCE: Final = 0.5  # … auf so viel genau, …
+TESSIE_ANSWER_S: Final = math.ceil(TESSIE_DELAY_S[1])  # … nach der längsten Antwortzeit von Tessie
 PLAN_TESLA_MIN_A: Final = 9.0  # … und er lädt bis zum Ziel mit mindestens so viel Strom; …
 PLAN_RUNS_OUT_S: Final = 30 * MINUTE_S  # … der Plan gilt so lange, dann fällt die app aus, …
 PLAN_DEPARTURE: Final = "19:05"  # … und mit dieser Abfahrt ist die späteste Startzeit da vorbei
@@ -1594,16 +1599,16 @@ def _target_stop(result: SimResult, actuator: str) -> Decision | None:
     )
 
 
-def _stop_second(result: SimResult, stop: Decision) -> int:
-    """Die Sekunde, in der der Stopp ``stop`` wirkt: zu der sein Befehl Tessie erreichte
+def _command_second(result: SimResult, stop: Decision) -> int:
+    """Die Sekunde, in der der Befehl ``stop`` wirkt: zu der er Tessie erreichte
     (``SimResult.sent``), sonst die seiner Entscheidung. Tessie bestätigt erst später; das Auto
-    hört schon mit dem Befehl auf zu laden."""
+    folgt schon dem Befehl."""
     return _second(result, result.sent.get(stop.id, stop.ts))
 
 
 def _charges_with_at_least(key: str, amps: float) -> Check:
     """Vom ersten Laden des Autos ``key`` bis zu seinem Stopp am Ziel (``_target_stop`` an seinem
-    eigenen Aktor, ab der Sekunde ``_stop_second``) lädt es in jeder Sekunde mit mindestens
+    eigenen Aktor, ab der Sekunde ``_command_second``) lädt es in jeder Sekunde mit mindestens
     ``amps``, also auch ohne Pause; ohne Stopp bis zum Ende. Lädt es nie, ist das ein Verstoß."""
 
     def find(result: SimResult) -> list[str]:
@@ -1612,7 +1617,7 @@ def _charges_with_at_least(key: str, amps: float) -> Check:
         if first is None:
             return [f"„{key}“ lädt nie."]
         stop = _target_stop(result, vehicle_actuator(key))
-        end = _stop_second(result, stop) if stop is not None else samples[-1].t + 1
+        end = _command_second(result, stop) if stop is not None else samples[-1].t + 1
         low = [s for s in samples if first <= s.t < end and s.cars[key].current_a < amps]
         if not low:
             return []
@@ -1625,9 +1630,55 @@ def _charges_with_at_least(key: str, amps: float) -> Check:
     return Check(text, find)
 
 
+def _charges_with_plan_power(key: str, amps: float, until_s: int) -> Check:
+    """Vom ersten Strombefehl an das Auto ``key`` bis ``until_s`` lädt es in jeder Sekunde mit
+    ``amps`` auf ``PLAN_A_TOLERANCE`` genau: mit der Leistung des Plans, nicht mit voller.
+
+    Für den Befehl zählt die Sekunde, in der er Tessie erreichte (``SimResult.sent``), sonst die
+    seiner Entscheidung; zurückgestellte und abgelehnte Befehle zählen nicht. Die Prüfung beginnt
+    ``TESSIE_ANSWER_S`` nach diesem Befehl und dem ersten Laden, je nachdem, was später kommt: Der
+    Strombefehl geht vor „Laden an“ hinaus, doch Tessie führt Befehle erst mit ihrer Antwortzeit
+    aus, und so startet der Tesla kurz mit dem Strom, der noch im Auto steht."""
+    actuator = vehicle_actuator(key)
+
+    def find(result: SimResult) -> list[str]:
+        first = next(
+            (
+                d
+                for d in _at(result.decisions, actuator)
+                if d.kind is CommandKind.CURRENT and d.result not in _HELD_BACK
+            ),
+            None,
+        )
+        if first is None:
+            return [f"Kein Strombefehl an „{actuator}“."]
+        charging = next((s.t for s in result.samples if s.cars[key].charging), None)
+        if charging is None:
+            return [f"„{key}“ lädt nie."]
+        begin = max(_command_second(result, first), charging) + TESSIE_ANSWER_S
+        off = [
+            s
+            for s in result.samples
+            if begin <= s.t < until_s and abs(s.cars[key].current_a - amps) > PLAN_A_TOLERANCE
+        ]
+        if not off:
+            return []
+        return [
+            f"„{key}“ lädt bei {off[0].t} s mit {de(off[0].cars[key].current_a)} A, verlangt "
+            f"{de(amps)} A ± {de(PLAN_A_TOLERANCE)} A ({len(off)} s daneben)."
+        ]
+
+    text = (
+        f"Vom ersten Strombefehl an „{key}“ bis {until_s} s lädt es mit der Leistung des Plans, "
+        f"{de(amps)} A ± {de(PLAN_A_TOLERANCE)} A, ab {TESSIE_ANSWER_S} s nach Strombefehl und "
+        "erstem Laden (Antwortzeit von Tessie)."
+    )
+    return Check(text, find)
+
+
 def _stops_at_target(key: str, actuator: str, target_pct: float) -> Check:
     """Der Ladepunkt ``actuator`` des Autos ``key`` bekommt „Laden aus“ mit ``target_reached``
-    (``_target_stop``); in der Sekunde, in der er wirkt (``_stop_second``), hat das Auto im
+    (``_target_stop``); in der Sekunde, in der er wirkt (``_command_second``), hat das Auto im
     Modell mindestens ``target_pct``. Danach hört es auf zu laden (an der EVCS mit ihrem Verzug),
     lädt nicht wieder, und kein „Laden an“ an ``actuator`` geht hinaus."""
 
@@ -1635,7 +1686,7 @@ def _stops_at_target(key: str, actuator: str, target_pct: float) -> Check:
         stop = _target_stop(result, actuator)
         if stop is None:
             return [f"Kein „Laden aus“ mit „{TARGET_REACHED}“ an „{actuator}“."]
-        at = _stop_second(result, stop)
+        at = _command_second(result, stop)
         found: list[str] = []
         soc = next((s.cars[key].soc_pct for s in result.samples if s.t == at), None)
         if soc is None or soc < target_pct:
@@ -2657,6 +2708,7 @@ def _geplant_plan() -> Scenario:
     checks = (
         _charges_with_at_least(TESLA, PLAN_TESLA_MIN_A),
         _stops_at_target(TESLA, vehicle_actuator(TESLA), PLANNED_TARGET_PCT),
+        _charges_with_plan_power(TESLA, PLAN_TESLA_A, PLAN_RUNS_OUT_S),
     )
     return Scenario(
         name="geplant-plan",

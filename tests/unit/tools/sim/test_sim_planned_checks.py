@@ -294,6 +294,44 @@ def test_the_tesla_must_charge_with_at_least_9_a_until_the_target(cfg) -> None:
     ]
 
 
+def test_the_tesla_charges_with_the_power_of_the_plan_while_it_holds(cfg) -> None:
+    keep = check("geplant-plan", 2)
+    assert keep.text == (
+        "Vom ersten Strombefehl an „tesla“ bis 1800 s lädt es mit der Leistung des Plans, "
+        "10 A ± 0,5 A, ab 3 s nach Strombefehl und erstem Laden (Antwortzeit von Tessie)."
+    )
+    current = decision("geplant-plan", 3, TESLA, CommandKind.CURRENT, 10.0, "mode_planned")
+    held = decision(
+        "geplant-plan", 1, TESLA, CommandKind.CURRENT, 16.0, "mode_planned", result=DEFERRED
+    )
+
+    def found(
+        amps: dict[int, float],
+        decisions: list[Decision],
+        sent: dict[str, float] | None = None,
+    ) -> list[str]:
+        # bis 1800 s lädt der Tesla mit 10 A, außer in den Sekunden von ``amps``
+        samples = [sample(t, tesla=car(amps.get(t, 10.0))) for t in range(1900)]
+        result = result_of(cfg, "geplant-plan", samples=samples, decisions=decisions, sent=sent)
+        return keep.find(result)
+
+    assert found({0: 16.0, 1: 16.0, 1800: 16.0}, [current], {current.id: 2.0}) == []
+    assert found({2: 16.0}, [current]) == []  # ohne Sendezeit ab dem Ergebnis, 3 s
+    assert found({}, [held]) == ["Kein Strombefehl an „vehicle.tesla“."]
+    assert found(dict.fromkeys(range(1900), 0.0), [current]) == ["„tesla“ lädt nie."]
+    assert found({900: 16.0, 901: 16.0, 1500: 0.0}, [held, current]) == [
+        "„tesla“ lädt bei 900 s mit 16 A, verlangt 10 A ± 0,5 A (3 s daneben)."
+    ]
+    assert found({10: 10.4, 11: 9.6}, [current]) == []
+    # Der Strombefehl geht vor dem Start hinaus (2 s); der Tesla startet bei 4 s mit dem alten
+    # Strom, Tessie übernimmt den neuen binnen ihrer Antwortzeit: ab 7 s zählt jede Sekunde
+    starting = {0: 0.0, 1: 0.0, 2: 0.0, 3: 0.0, 4: 16.0, 5: 16.0, 6: 16.0}
+    assert found(starting, [current], {current.id: 2.0}) == []
+    assert found({**starting, 7: 16.0}, [current], {current.id: 2.0}) == [
+        "„tesla“ lädt bei 7 s mit 16 A, verlangt 10 A ± 0,5 A (1 s daneben)."
+    ]
+
+
 def test_the_car_must_stop_at_its_target_and_stay_off(cfg) -> None:
     stops = check("geplant-plan", 1)
     assert stops.text == (
