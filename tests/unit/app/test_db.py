@@ -10,6 +10,8 @@ from sqlalchemy.engine import Inspector
 from bindaems.app.db.engine import MIGRATIONS_DIR, migrate, open_database
 from bindaems.app.db.schema import metadata
 
+HEAD = "0011"  # neueste Migration
+
 
 def test_migrations_match_schema(engine: Engine) -> None:
     with engine.connect() as conn:
@@ -61,7 +63,7 @@ def test_migration_0007_creates_the_decision_table(engine: Engine) -> None:
     assert [c["column_names"] for c in inspector.get_unique_constraints("decision")] == [["id"]]
     assert [i["column_names"] for i in inspector.get_indexes("decision")] == [["ts"]]
     with engine.connect() as conn:
-        assert conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one() == "0010"
+        assert conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one() == HEAD
 
 
 def test_migration_0008_creates_the_forecast_tables_and_downgrades(engine: Engine) -> None:
@@ -138,7 +140,7 @@ def test_migration_0009_creates_the_plan_tables_and_downgrades(engine: Engine) -
     assert not any(column["nullable"] for column in inputs.values())
     assert inspector.get_pk_constraint("plan_inputs")["constrained_columns"] == ["plan_id"]
     with engine.connect() as conn:
-        assert conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one() == "0010"
+        assert conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one() == HEAD
 
     config = AlembicConfig()
     config.set_main_option("script_location", str(MIGRATIONS_DIR))
@@ -180,12 +182,12 @@ def test_migration_0010_creates_the_statistics_tables_and_downgrades(engine: Eng
     }
     assert inspector.get_pk_constraint("charging_session")["constrained_columns"] == ["id"]
     assert [i["column_names"] for i in inspector.get_indexes("charging_session")] == [["start"]]
-    assert _columns(inspector, "ledger_cost") == {
-        "slot_start": False,
-        "stock_kwh": False,
-        "avg_ct": True,
-        "discharge_ct": False,
-    }
+    assert set(_columns(inspector, "ledger_cost")) >= {
+        "slot_start",
+        "stock_kwh",
+        "avg_ct",
+        "discharge_ct",
+    }  # Spalten und Leerwerte nach 0011: test_migration_0011_…
     assert inspector.get_pk_constraint("ledger_cost")["constrained_columns"] == ["slot_start"]
     assert _columns(inspector, "ledger_check") == {
         "day": False,
@@ -209,7 +211,7 @@ def test_migration_0010_creates_the_statistics_tables_and_downgrades(engine: Eng
         "consumer_id",
     ]
     with engine.connect() as conn:
-        assert conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one() == "0010"
+        assert conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one() == HEAD
 
     config = AlembicConfig()
     config.set_main_option("script_location", str(MIGRATIONS_DIR))
@@ -227,3 +229,33 @@ def test_migration_0010_creates_the_statistics_tables_and_downgrades(engine: Eng
         assert name not in tables
     with engine.connect() as conn:
         assert conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one() == "0009"
+
+
+def _downgrade(engine: Engine, revision: str) -> None:
+    config = AlembicConfig()
+    config.set_main_option("script_location", str(MIGRATIONS_DIR))
+    with engine.begin() as connection:
+        config.attributes["connection"] = connection
+        command.downgrade(config, revision)
+
+
+def test_migration_0011_lets_the_discharge_cost_be_unknown_and_downgrades(engine: Engine) -> None:
+    assert _columns(inspect(engine), "ledger_cost") == {
+        "slot_start": False,
+        "stock_kwh": False,
+        "avg_ct": True,
+        "discharge_ct": True,
+    }
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                "INSERT INTO ledger_cost (slot_start, stock_kwh, avg_ct, discharge_ct) "
+                "VALUES ('2026-10-09T08:00:00+00:00', 1.0, NULL, NULL)"
+            )
+        )
+    _downgrade(engine, "0010")
+    assert _columns(inspect(engine), "ledger_cost")["discharge_ct"] is False
+    with engine.connect() as conn:
+        # abgeleitete Zeilen: die Migration leert die Tabelle, die app rechnet sie neu
+        assert conn.execute(text("SELECT count(*) FROM ledger_cost")).scalar_one() == 0
+        assert conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one() == "0010"

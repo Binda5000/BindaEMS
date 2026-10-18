@@ -80,21 +80,53 @@ def test_stock_is_capped_at_usable_capacity() -> None:
     assert costs[1].avg_ct == pytest.approx(10.0 * 4.0 / 12.0)  # gewichtet vor dem Kappen
 
 
-def test_missing_price_counts_at_average() -> None:
+def test_grid_charge_without_price_makes_the_stock_unknown() -> None:
+    # A1: solange Energie aus einer Netzladung ohne Bezugspreis im Akku ist, ist der Einstandspreis
+    # unbekannt, auch nach weiterer PV- oder bepreister Netzladung
     costs = basis(
-        [slot(0, {"grid>battery": 1000.0}, 20.0), slot(1, {"grid>battery": 3000.0}, None)]
+        [
+            slot(0, {"grid>battery": 1000.0}, 20.0),
+            slot(1, {"grid>battery": 3000.0}, None),
+            slot(2, {"battery>house": 1000.0}),
+            slot(3, {"pv>battery": 1000.0, "grid>battery": 500.0}, 30.0),
+            slot(4, {"battery>house": 1000.0}),
+        ]
     )
-    assert costs[1].avg_ct == pytest.approx(20.0) and costs[1].stock_kwh == 4.0
+    assert costs[1].avg_ct is None and costs[1].stock_kwh == 4.0
+    assert costs[2].discharge_ct is None and costs[2].stock_kwh == 3.0
+    assert costs[3].avg_ct is None and costs[3].stock_kwh == 4.5
+    assert costs[4].discharge_ct is None
 
 
-def test_missing_price_without_average_only_fills_stock() -> None:
-    costs = basis([slot(0, {"grid>battery": 1000.0}, None)])
+def test_grid_charge_without_price_into_an_empty_battery() -> None:
+    costs = basis([slot(0, {"grid>battery": 1000.0}, None), slot(1, {"battery>house": 500.0})])
     assert costs[0].avg_ct is None and costs[0].stock_kwh == 1.0
-    assert costs[0].discharge_ct == 2.0
-    later = basis(
-        [slot(0, {"grid>battery": 1000.0}, None), slot(1, {"grid>battery": 1000.0}, 40.0)]
+    assert costs[0].discharge_ct == 2.0  # zu Beginn des Slots war der Akku leer
+    assert costs[1].discharge_ct is None and costs[1].stock_kwh == 0.5
+
+
+def test_unknown_stock_is_known_again_once_emptied() -> None:
+    costs = basis(
+        [
+            slot(0, {"grid>battery": 1000.0}, None),
+            slot(1, {"battery>house": 1000.0}),
+            slot(2, {"battery>house": 500.0}),
+            slot(3, {"pv>battery": 1000.0}),
+            slot(4, {"battery>house": 500.0}),
+        ]
     )
-    assert later[1].avg_ct == pytest.approx(40.0) and later[1].stock_kwh == 2.0
+    assert costs[1].discharge_ct is None and costs[1].stock_kwh == 0.0
+    assert costs[1].avg_ct is None
+    assert costs[2].discharge_ct == 2.0  # leer und bekannt: nur Verschleiß
+    assert costs[3].avg_ct == 0.0
+    assert costs[4].discharge_ct == 2.0
+
+
+def test_unknown_start_state_is_taken_over() -> None:
+    [cost] = cost_basis(
+        [slot(0, {"battery>house": 1000.0})], (5.0, None), wear_ct=2.0, usable_kwh=10.0
+    )
+    assert cost.discharge_ct is None and cost.stock_kwh == 4.0 and cost.avg_ct is None
 
 
 def test_start_state_is_taken_over() -> None:
@@ -208,6 +240,15 @@ def test_reprice_recomputes_from_the_first_changed_slot(
     costs = costing.costs(S, S + 2 * SLOT)
     assert costs[S].avg_ct == pytest.approx(13.44)
     assert costs[S + SLOT].avg_ct == pytest.approx(13.44 / 2)
+
+
+def test_discharge_is_unknown_until_the_price_is_filled_in(costing, ledger, store) -> None:
+    ingest(ledger, S, {"grid>battery": 1000.0})  # ohne Preis
+    ingest(ledger, S + SLOT, {"battery>wb:evcs": 500.0})
+    assert costing.costs(S, S + 2 * SLOT)[S + SLOT].discharge_ct is None
+    store.save([price_row(S, 10.0, "primary")])
+    assert ledger.fill_missing_prices() == 1
+    assert costing.costs(S, S + 2 * SLOT)[S + SLOT].discharge_ct == pytest.approx(13.44 + 2.0)
 
 
 def test_fresh_database_computes_from_the_first_slot(engine, ledger, settings_service) -> None:

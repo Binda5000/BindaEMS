@@ -188,8 +188,8 @@ Minutenmittel in `long` und lassen sich in Grafana mit der Retention Policy `lon
   (`docker compose pull ems-app && docker compose up -d --no-deps ems-app`); der core läuft weiter, und
   der Regelbetrieb bleibt an. Die Schritte stehen am Ende von Abschnitt 8, „Statistik ausrollen
   (Plan 4a)“.
-- **Rollback auf einen Stand vor Plan 4a:** Die Migration `0010` der app ist beim Start gelaufen. Eine
-  ältere app kennt die Version `0010` nicht und startet mit dieser Datenbank nicht. Spiele die Kopie ein,
+- **Rollback auf einen Stand vor Plan 4a:** Die Migrationen `0010` und `0011` der app sind beim Start
+  gelaufen. Eine ältere app kennt diese Versionen nicht und startet mit dieser Datenbank nicht. Spiele die Kopie ein,
   die du vor dem Ausrollen gemacht hast (`/backup/vor-plan-4a.sqlite3`, Schritt 1 in Abschnitt 8,
   „Statistik ausrollen (Plan 4a)“; Wiederherstellen wie in Abschnitt 9). Die nächtlichen Sicherungen
   helfen nur am Tag des Ausrollens, vor 03:15 Uhr: Schon die erste Sicherung danach enthält `0010`. Die
@@ -586,9 +586,10 @@ ein Preis, rechnet die app ab dem frühesten geänderten Slot neu.
 - **Entladung:** Sie kostet den Mittelwert zu Beginn der Viertelstunde plus den Verschleiß
   (`planning.wear_ct`, Standard 2 ct/kWh, Einstellungen „Planung“). Bei leerem Inhalt gilt nur der
   Verschleiß. Ändert sich `planning.wear_ct`, rechnet die app alles neu.
-- **Fehlt der Bezugspreis** einer Netzladung, zählt sie mit dem aktuellen Mittelwert, ohne Mittelwert
-  nur im Inhalt. Sobald der Preis nachgetragen ist (Abrechnung neu bewerten, siehe oben), rechnet die app ab
-  dort neu.
+- **Fehlt der Bezugspreis** einer Netzladung, ist der Einstandspreis unbekannt, solange diese Energie
+  im Akku ist. Akku → Auto, die Kosten der Session und die Kosten je Auto zeigen dann „–“ (unbekannt),
+  wie die Tageskosten bei fehlendem Preis. Bekannt wird er wieder, sobald der Preis nachgetragen ist
+  (Abrechnung neu bewerten, siehe oben; die app rechnet ab dort neu) oder sobald der Akku leer war.
 - **Beim ersten Start mit Plan 4a** rechnet die app einmal über alle gespeicherten Viertelstunden;
   das kann bei viel Abrechnung etwas dauern.
 
@@ -613,8 +614,9 @@ höchstens 200 Einträge. `vehicle` ist der Schlüssel aus `config.yaml`, `guest
   (bei Gleichstand der späteren). Energie ohne Session zählt als „Unbekannt“. Eine laufende Session
   endet für die Zuordnung bei „jetzt“.
 - **Kosten:** PV-Strom ins Auto kostet 0 ct, Akku-Strom den Einstandspreis des Akkus plus Verschleiß,
-  Netzstrom den Bezugspreis der Viertelstunde. Fehlt der Bezugspreis bei einem Netzanteil, ist
-  `cost_eur` `null` (unbekannt), nie 0; nach dem Nachtragen des Preises stimmt der Wert wieder.
+  Netzstrom den Bezugspreis der Viertelstunde. Fehlt der Bezugspreis bei einem Netzanteil oder ist der
+  Einstandspreis bei einem Akkuanteil unbekannt (siehe oben), ist `cost_eur` `null` (unbekannt), nie 0;
+  nach dem Nachtragen des Preises stimmt der Wert wieder.
   Der entgangene Einspeiseerlös gehört nicht dazu.
 
 ```bash
@@ -739,9 +741,9 @@ Repository, nicht `/opt/bindaems`) mit `docker compose up -d --build --no-deps e
    auf einen Stand vor Plan 4a“.
 2. **Ausrollen:** Der Befehl oben. Währenddessen fehlt das UI kurz; der core regelt weiter, und die
    app holt die Abrechnung der letzten 7 Tage danach aus InfluxDB nach.
-3. **Migration:** Die Migration `0010` läuft beim Start der app von selbst. Sie legt die Tabellen
-   `assignment_log`, `charging_session`, `ledger_cost`, `ledger_check` und `consumer_day` an und
-   ändert keine vorhandene.
+3. **Migration:** Die Migrationen `0010` und `0011` laufen beim Start der app von selbst. `0010` legt
+   die Tabellen `assignment_log`, `charging_session`, `ledger_cost`, `ledger_check` und
+   `consumer_day` an und ändert keine vorhandene; `0011` passt `ledger_cost` an.
 4. **Erste Werte prüfen:** Öffne die Seite **Statistik** (Abschnitt 12) und stelle „Monat“ ein.
    - **Abgleich:** Beim Start gleicht die app die letzten 35 Tage mit den Zählern ab und wartet dafür
      auf den ersten Nachtrag der Abrechnung (höchstens 10 Minuten). Die Karte „Abgleich mit den

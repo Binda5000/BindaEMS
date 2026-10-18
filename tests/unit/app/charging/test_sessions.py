@@ -117,6 +117,34 @@ def test_battery_without_cost_row_makes_the_cost_unknown() -> None:
     assert attribute([slot], {}, [stored(1, T0, T0 + SLOT)], NOW)[0][1].cost_eur is None
 
 
+def test_battery_share_of_unknown_cost_makes_the_session_cost_unknown() -> None:
+    # A1: Akku-Inhalt aus einer Netzladung ohne Bezugspreis hat keinen Einstandspreis
+    slot = led(T0, {"battery>wb:twc": 500.0, "pv>wb:twc": 500.0})
+    unknown = {T0: SlotCost(T0, 3.0, None, None)}
+    by_session, by_vehicle = attribute([slot], unknown, [stored(1, T0, T0 + SLOT)], NOW)
+    assert by_session[1].kwh == 1.0 and by_session[1].cost_eur is None
+    assert by_vehicle["tesla"].cost_eur is None
+
+
+def test_service_session_cost_unknown_until_the_battery_price_is_known(
+    service, engine, ledger, clock
+) -> None:
+    from bindaems.app.prices.store import PriceStore
+
+    clock.advance(timedelta(hours=1))
+    add_session(engine, T0 + SLOT, T0 + SLOT * 2)
+    ingest(ledger, T0, {"grid>battery": 1000.0})  # Netzladung ohne Bezugspreis
+    ingest(ledger, T0 + SLOT, {"battery>wb:twc": 500.0})
+    day = date(2026, 10, 9)
+    [session] = service.sessions(day, day, None)
+    assert session.split.battery_kwh == 0.5 and session.split.cost_eur is None
+    assert service.by_vehicle(T0, T0 + SLOT * 2)["tesla"].cost_eur is None
+    PriceStore(engine, clock).save([price_row(T0, 10.0, "primary")])
+    assert ledger.fill_missing_prices() == 1
+    [session] = service.sessions(day, day, None)
+    assert session.split.cost_eur == pytest.approx(0.5 * (13.44 + 2.0) / 100)
+
+
 def test_session_without_energy_has_an_empty_split() -> None:
     session = stored(1, T0, T0 + SLOT)
     by_session, by_vehicle = attribute([], {}, [session], NOW)

@@ -2,8 +2,10 @@
 
 PV-Strom ist kostenlos (0 ct), Netzladung zählt mit dem Bezugspreis des Slots; der Mittelwert über
 den Inhalt ist damit der Netzanteil zum Bezugspreis. Eine Entladung kostet den Mittelwert zu
-Beginn des Slots plus Verschleiß. Die Werte stehen in ``ledger_cost`` und werden ab dem frühesten
-geänderten Slot neu gerechnet (``mark_dirty``); ``catch_up`` läuft in einem Thread.
+Beginn des Slots plus Verschleiß. Solange Energie aus einer Netzladung ohne Bezugspreis im Akku
+ist, ist der Einstandspreis unbekannt (``None``), bis der Preis nachgetragen oder der Akku leer
+ist. Die Werte stehen in ``ledger_cost`` und werden ab dem frühesten geänderten Slot neu
+gerechnet (``mark_dirty``); ``catch_up`` läuft in einem Thread.
 """
 
 from __future__ import annotations
@@ -35,10 +37,11 @@ DISCHARGE_PREFIX = "battery>"
 class SlotCost:
     slot_start: datetime
     stock_kwh: float  # Inhalt am Ende des Slots
-    avg_ct: float | None  # Einstandspreis des Inhalts; leer ohne Inhalt oder ohne bekannten Preis
-    discharge_ct: (
-        float  # Kosten einer kWh, die in diesem Slot entladen wird (Mittelwert + Verschleiß)
-    )
+    # Einstandspreis des Inhalts; leer ohne Inhalt, und solange Netzladung ohne Preis darin ist
+    avg_ct: float | None
+    # Kosten einer kWh, die in diesem Slot entladen wird (Mittelwert + Verschleiß); leer, solange
+    # der Einstandspreis unbekannt ist
+    discharge_ct: float | None
 
 
 def cost_basis(
@@ -48,11 +51,19 @@ def cost_basis(
     wear_ct: float,
     usable_kwh: float,
 ) -> list[SlotCost]:
-    """Rechnet die Slots chronologisch; ``start`` ist ``(Inhalt kWh, Mittelwert ct)`` davor."""
+    """Rechnet die Slots chronologisch; ``start`` ist ``(Inhalt kWh, Mittelwert ct)`` davor.
+
+    Ein Inhalt über ``EMPTY_KWH`` ohne Mittelwert ist unbekannt: Er stammt (auch) aus einer
+    Netzladung ohne Bezugspreis. Er bleibt unbekannt, bis der Akku leer ist.
+    """
     stock, avg = start
     result: list[SlotCost] = []
     for slot in slots:
-        discharge_ct = (avg if avg is not None else 0.0) + wear_ct
+        discharge_ct: float | None
+        if stock <= EMPTY_KWH:
+            discharge_ct = wear_ct  # leer und bekannt: nur Verschleiß
+        else:
+            discharge_ct = avg + wear_ct if avg is not None else None
         discharged = math.fsum(
             wh for name, wh in slot.flows_wh.items() if name.startswith(DISCHARGE_PREFIX)
         )
@@ -61,19 +72,16 @@ def cost_basis(
             stock, avg = 0.0, None
         pv_kwh = slot.flows_wh.get(PV_CHARGE, 0.0) / 1000
         grid_kwh = slot.flows_wh.get(GRID_CHARGE, 0.0) / 1000
-        parts: list[tuple[float, float]] = []  # (ct, kWh) der Teile mit bekanntem Preis
-        if avg is not None and stock > 0:
-            parts.append((avg, stock))
-        if pv_kwh > 0:
-            parts.append((0.0, pv_kwh))
-        if grid_kwh > 0:
-            price = slot.import_price_ct if slot.import_price_ct is not None else avg
-            if price is not None:
-                parts.append((price, grid_kwh))
         added = pv_kwh + grid_kwh
-        if added > 0 and parts:
-            total = math.fsum(kwh for _, kwh in parts)
-            avg = math.fsum(ct * kwh for ct, kwh in parts) / total
+        if added > 0:
+            unknown = (stock > 0 and avg is None) or (grid_kwh > 0 and slot.import_price_ct is None)
+            if unknown:
+                avg = None
+            else:
+                price = slot.import_price_ct if slot.import_price_ct is not None else 0.0
+                parts = [(avg, stock)] if avg is not None and stock > 0 else []
+                parts += [(0.0, pv_kwh), (price, grid_kwh)]  # ohne Netzladung zählt price nicht
+                avg = math.fsum(ct * kwh for ct, kwh in parts) / math.fsum(kwh for _, kwh in parts)
         stock = min(stock + added, usable_kwh)
         result.append(SlotCost(slot.slot_start, stock, avg, discharge_ct))
     return result

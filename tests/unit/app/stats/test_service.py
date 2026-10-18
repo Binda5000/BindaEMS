@@ -301,6 +301,16 @@ def test_vehicle_cost_is_unknown_without_a_grid_price(stats, engine) -> None:
     assert tesla["kwh"] == 1.0 and tesla["cost_eur"] is None
 
 
+def test_vehicle_cost_is_unknown_while_the_battery_holds_unpriced_grid_energy(
+    stats, engine
+) -> None:
+    add_session(engine, T0 + SLOT, T0 + SLOT * 2, "tesla", "twc")
+    ingest(stats._ledger, T0, {"grid>battery": 1000.0})  # ohne Bezugspreis
+    ingest(stats._ledger, T0 + SLOT, {"battery>wb:twc": 500.0})
+    [tesla] = stats.period("day", TODAY)["vehicles"]
+    assert tesla["battery_kwh"] == 0.5 and tesla["cost_eur"] is None
+
+
 def add_days(engine, rows: dict[tuple[str, int], float | None]) -> None:
     with engine.begin() as conn:
         for (day, consumer), kwh in rows.items():

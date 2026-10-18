@@ -6,8 +6,8 @@ Gleichstand der späteren); Energie ohne Session zählt als „Unbekannt“. Ein
 für die Zuordnung bei „jetzt“.
 
 Kosten: PV zählt 0 ct, Akku mit dem Einstandspreis der Entladung (``SlotCost.discharge_ct``), Netz
-mit dem Bezugspreis des Slots. Fehlt der Bezugspreis bei einem Netzanteil über 0, sind die Kosten
-unbekannt (``None``), nie 0.
+mit dem Bezugspreis des Slots. Fehlt der Bezugspreis bei einem Netzanteil über 0 oder ist der
+Einstandspreis bei einem Akkuanteil über 0 unbekannt, sind die Kosten unbekannt (``None``), nie 0.
 
 ``SessionService`` liest und rechnet blockierend (``LedgerCosting.costs`` holt zuerst nach):
 aus einem Thread bzw. einem synchronen Route-Handler aufrufen.
@@ -210,8 +210,8 @@ def _cost_ct(
     """Kosten der Energie in ct (PV 0 ct); ``None``, wenn ein Preis für einen Anteil fehlt."""
     total = 0.0
     if battery_wh > 0:
-        if cost is None:
-            return None
+        if cost is None or cost.discharge_ct is None:
+            return None  # ohne Zeile oder mit unbekanntem Einstandspreis
         total += battery_wh / 1000 * cost.discharge_ct
     if grid_wh > 0:
         if slot.import_price_ct is None:

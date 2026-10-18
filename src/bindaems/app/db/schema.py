@@ -275,8 +275,8 @@ ledger_cost = Table(
     metadata,
     Column("slot_start", UtcDateTime(), primary_key=True),
     Column("stock_kwh", Float, nullable=False),
-    Column("avg_ct", Float, nullable=True),  # leer ohne Inhalt
-    Column("discharge_ct", Float, nullable=False),
+    Column("avg_ct", Float, nullable=True),  # leer ohne Inhalt oder unbekannt (Präzisierung 4, A1)
+    Column("discharge_ct", Float, nullable=True),  # leer, solange der Einstandspreis unbekannt ist
 )
 
 # Abgleich der Abrechnung mit den Zählern je lokalem Tag und Signal (Präzisierung 9)
