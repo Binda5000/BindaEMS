@@ -195,8 +195,8 @@ Minutenmittel in `long` und lassen sich in Grafana mit der Retention Policy `lon
   nicht. Spiele die Kopie ein, die du vor dem Ausrollen gemacht hast (`/backup/vor-plan-4a.sqlite3`,
   Schritt 1 in Abschnitt 8, „Statistik ausrollen (Plan 4a)“; Wiederherstellen wie in Abschnitt 9).
   Die nächtlichen Sicherungen helfen nur am Tag des Ausrollens, vor 03:15 Uhr: Schon die erste
-  Sicherung danach enthält `0010`. Die Statistik seit dem Ausrollen geht dabei verloren. Der core
-  ist nicht betroffen.
+  Sicherung danach enthält `0010` und `0011`. Die Statistik seit dem Ausrollen geht dabei
+  verloren. Der core ist nicht betroffen.
 - **Rollback auf einen Stand vor Plan 3c:**
   - Ein core vor Plan 3c kann keine `intent.json` lesen, die ein core ab Plan 3c geschrieben hat (sie
     hat immer die Felder `plan` und `support`, und der ältere core lehnt unbekannte Felder ab). Er startet dann ohne Absicht und meldet den Alarm
@@ -362,7 +362,7 @@ Entitäten (Gerät „BindaEMS“, sofern nicht anders angegeben):
 | Zuordnung unklar | Problem | eine Wallbox oder ein Fahrzeug zeigt `unclear` (Abschnitt „Laderegelung“, „Zuordnung Auto und Wallbox“) |
 | SOC (Gerät „BindaEMS <Fahrzeug>“) | % | je Fahrzeug |
 | Wallbox (Gerät „BindaEMS <Fahrzeug>“) | – | je Fahrzeug der Name der Wallbox, an der es steht (eigener Name oder „EVCS“ / „Wall Connector“), sonst „keine“ |
-| Ladeenergie (Gerät „BindaEMS <Fahrzeug>“) | kWh | je Fahrzeug die Energie der laufenden Ladesession, sonst der letzten (eine Nachkommastelle, Geräteklasse „Energie“, ohne Zustandsklasse); Attribute `start` und `end` (Ortszeit, `end` ist `null`, solange die Session läuft), `pv_kwh`, `battery_kwh`, `grid_kwh` (Herkunft der Energie), `cost_eur` (`null`, wenn ein Preis fehlt) und `month_kwh` (Ladeenergie des Fahrzeugs im Monat). „Unbekannt“ ohne laufende Session und ohne beendete der letzten 90 Tage (eine laufende zählt, egal wie lange sie schon läuft) |
+| Ladeenergie (Gerät „BindaEMS <Fahrzeug>“) | kWh | je Fahrzeug die Energie der laufenden Ladesession, sonst der letzten (eine Nachkommastelle, Geräteklasse „Energie“, ohne Zustandsklasse); Attribute `start` und `end` (Ortszeit, `end` ist `null`, solange die Session läuft), `pv_kwh`, `battery_kwh`, `grid_kwh` (Herkunft der Energie), `cost_eur` (`null`, wenn ein Preis fehlt oder der Einstandspreis des Akkus unbekannt ist) und `month_kwh` (Ladeenergie des Fahrzeugs im Monat). „Unbekannt“ ohne laufende Session und ohne beendete der letzten 90 Tage (eine laufende zählt, egal wie lange sie schon läuft) |
 | Ladeleistung (Gerät „BindaEMS EVCS“ / „BindaEMS Wall Connector“) | W | je Wallbox |
 | Fahrzeug (Gerät der Wallbox) | – | je Wallbox der Name des Fahrzeugs, „Gast“ oder „keins“ |
 

@@ -2075,7 +2075,7 @@ falls sie falsch sind:
   verhindert, dass ein Leistungspreis still für 2026 gilt, wenn 3b damit rechnet. Falls falsch: drei
   kleine UI-Änderungen zurücknehmen.
 - **Tageserlös ohne Export:** Ein Tag ohne Einspeisung und ohne OeMAG-Wert meldet Erlös 0,0 statt
-  `None`, wie `cost_eur` an Tagen ohne Bezug. Falls falsch: eine Bedingung in `_summary`.
+  `None`, wie `cost_eur` an Tagen ohne Bezug. Falls falsch: eine Bedingung in `summarize_slots`.
 - **`newComponent` mit `existingKinds`:** Der Parameter ist Pflicht; der erste Leistungspreis wird zur
   ElWG-Vorlage, und kein Aufrufer löst sie aus Versehen aus. Falls falsch: eine Signatur in einer
   Hilfsfunktion.
