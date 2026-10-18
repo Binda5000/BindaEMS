@@ -9,19 +9,20 @@
 - ``ok_number``: der Wert eines Signals als endliche Zahl mit Qualität ``OK``, sonst ``None``
 
 Ein Wert zählt nur mit Qualität ``OK`` und als endliche Zahl (``finite_number``); sonst ist er
-unbekannt (``None``). Geschätzt wird nicht. Was die Beobachtungen für Zuordnung, Last und Modi
-bedeuten, entscheiden die folgenden Bausteine. Die Schicht ist rein: Sie liest nur ihre Argumente.
+unbekannt (``None``). Geschätzt wird hier nicht; den Ladestand schätzt ``vehicle_soc``. Was die
+Beobachtungen für Zuordnung, Last und Modi bedeuten, entscheiden die folgenden Bausteine. Die
+Schicht ist rein: Sie liest nur ihre Argumente.
 """
 
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 from typing import Final
 
 from bindaems.core.state.derived import MIN_VOLTAGE_FOR_CURRENT_V, PHASES, Derived
-from bindaems.shared.config import Config, EvcsConfig, Phase, TwcConfig, home_signal
+from bindaems.shared.config import Config, EvcsConfig, Phase, TwcConfig, home_signal, soc_signal
 from bindaems.shared.control import CommandKind, CommandValue, Intent
 from bindaems.shared.domain import Snapshot
 from bindaems.shared.numbers import finite_number
@@ -51,6 +52,7 @@ class WallboxObs:
     - ``complete``: die Wallbox meldet „geladen“; das kann nur die EVCS
     - ``phase_a``: der gemessene Strom je Netzphase, alle drei oder gar nicht
     - ``power_w``: die gemessene Leistung
+    - ``total_kwh``: der Zähler der Wallbox (``wallbox.<Schlüssel>.total_kwh``)
     """
 
     reachable: bool
@@ -59,11 +61,15 @@ class WallboxObs:
     complete: bool | None
     phase_a: Mapping[Phase, float] | None
     power_w: float | None
+    total_kwh: float | None = None
 
 
 @dataclass(frozen=True)
 class VehicleObs:
     """Was die Regelung über Tessie von einem Fahrzeug sieht; ``None`` heißt unbekannt.
+
+    Von einem Fahrzeug ohne Tessie sieht sie nur den Ladestand aus Home Assistant
+    (``soc_pct``, ``soc_at``); alles andere ist wie in ``NO_VEHICLE_DATA``.
 
     - ``reachable``: die Verbindung zu Tessie steht
     - ``plugged``: das Fahrzeug ist angesteckt
@@ -74,6 +80,10 @@ class VehicleObs:
     - ``phases``: die Zahl der Phasen, auf denen es lädt: 1, 2 oder 3
     - ``plugged_at``: die Wanduhr der Abfrage, aus der ``plugged`` stammt (der Zeitstempel des
       Werts), nicht die des Ansteckens; ``None``, solange ``plugged`` unbekannt ist
+    - ``soc_pct``: der gemessene Ladestand (``vehicle.<Schlüssel>.soc_pct``); bei Tessie ist ein
+      Wert nach dessen Frische veraltet und damit unbekannt
+    - ``soc_at``: der Zeitstempel dieses Werts (wie bei ``plugged_at``); ``None`` ohne Ladestand
+    - ``charge_limit_pct``: das Ladelimit im Fahrzeug; nur mit Tessie
     """
 
     reachable: bool
@@ -85,9 +95,13 @@ class VehicleObs:
     actual_current_a: float | None
     phases: int | None
     plugged_at: datetime | None = None
+    soc_pct: float | None = None
+    soc_at: datetime | None = None
+    charge_limit_pct: float | None = None
 
 
-# Ein Fahrzeug ohne Tessie: Die Regelung sieht nichts von ihm, nur die Wallbox sieht es.
+# Ein Fahrzeug ohne Tessie: Die Regelung sieht nichts von ihm, nur die Wallbox sieht es
+# (``observe`` ergänzt nur den Ladestand aus Home Assistant).
 NO_VEHICLE_DATA: Final = VehicleObs(False, None, None, None, None, None, None, None)
 
 
@@ -158,7 +172,8 @@ def observe(
     nie gemeldet. Die Quelle einer Wallbox heißt wie ihr Schlüssel, die eines Fahrzeugs mit Tessie
     ``tessie:<Schlüssel>``. Eine Wallbox ist erreichbar, solange ihre Quelle nicht getrennt ist; ein
     Fahrzeug nur, solange Tessie verbunden ist. Ein Fahrzeug ohne ``tessie`` ist
-    ``NO_VEHICLE_DATA``, ohne dass ``connected`` gefragt wird.
+    ``NO_VEHICLE_DATA`` mit seinem Ladestand aus Home Assistant, ohne dass ``connected`` gefragt
+    wird.
     """
     wallboxes = {
         key: _wallbox_obs(snap, derived, key, wallbox, reachable=connected(key) is not False)
@@ -166,7 +181,7 @@ def observe(
     }
     vehicles = {
         key: (
-            NO_VEHICLE_DATA
+            _vehicle_without_tessie(snap, key)
             if vehicle.tessie is None
             else _vehicle_obs(snap, key, reachable=connected(f"tessie:{key}") is True)
         )
@@ -248,6 +263,7 @@ def _wallbox_obs(
         complete=complete,
         phase_a=_phase_a(derived.wallbox_phase_a.get(key)),
         power_w=finite_number(derived.wallbox_w.get(key)),
+        total_kwh=ok_number(snap, f"wallbox.{key}.total_kwh"),
     )
 
 
@@ -313,6 +329,18 @@ def _vehicle_obs(snap: Snapshot, key: str, *, reachable: bool) -> VehicleObs:
         actual_current_a=ok_number(snap, prefix + "actual_current_a"),
         phases=_phase_count(ok_number(snap, prefix + "phases")),
         plugged_at=_flag_at(snap, prefix + "plugged"),
+        soc_pct=ok_number(snap, soc_signal(key)),
+        soc_at=_number_at(snap, soc_signal(key)),
+        charge_limit_pct=ok_number(snap, prefix + "charge_limit_pct"),
+    )
+
+
+def _vehicle_without_tessie(snap: Snapshot, key: str) -> VehicleObs:
+    """``NO_VEHICLE_DATA`` mit dem Ladestand, den Home Assistant unter ``soc_signal`` meldet."""
+    return replace(
+        NO_VEHICLE_DATA,
+        soc_pct=ok_number(snap, soc_signal(key)),
+        soc_at=_number_at(snap, soc_signal(key)),
     )
 
 
@@ -341,6 +369,12 @@ def _flag_at(snap: Snapshot, signal: str) -> datetime | None:
     """
     reading = snap.get(signal)
     return reading.ts if reading is not None and _flag(snap, signal) is not None else None
+
+
+def _number_at(snap: Snapshot, signal: str) -> datetime | None:
+    """Der Zeitstempel des Signals, wenn sein Wert eine endliche Zahl mit Qualität ``OK`` ist."""
+    reading = snap.get(signal)
+    return reading.ts if reading is not None and ok_number(snap, signal) is not None else None
 
 
 def _text(snap: Snapshot, signal: str) -> str | None:

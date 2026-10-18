@@ -466,7 +466,7 @@ def test_tessie_current_that_is_no_finite_number_is_unknown(cfg, bad) -> None:
 
 
 def test_vehicle_without_tessie_has_no_data_whatever_its_signals_say(cfg) -> None:
-    values = {"vehicle.egolf.plugged": True, "vehicle.egolf.soc_pct": 50.0}
+    values = {"vehicle.egolf.plugged": True, "vehicle.egolf.charge_limit_pct": 80.0}
     _, _, vehicles = obs(cfg, values)
     assert vehicles["egolf"] == NO_VEHICLE_DATA
     assert (NO_VEHICLE_DATA.reachable, NO_VEHICLE_DATA.plugged) == (False, None)
@@ -484,7 +484,10 @@ def test_observations_keep_the_order_of_the_configuration(cfg) -> None:
 @pytest.mark.parametrize(
     ("cls", "names"),
     [
-        (WallboxObs, ["reachable", "connected", "charging", "complete", "phase_a", "power_w"]),
+        (
+            WallboxObs,
+            ["reachable", "connected", "charging", "complete", "phase_a", "power_w", "total_kwh"],
+        ),
         (
             VehicleObs,
             [
@@ -497,6 +500,9 @@ def test_observations_keep_the_order_of_the_configuration(cfg) -> None:
                 "actual_current_a",
                 "phases",
                 "plugged_at",
+                "soc_pct",
+                "soc_at",
+                "charge_limit_pct",
             ],
         ),
         (
@@ -609,3 +615,54 @@ def test_wallbox_connected_is_unknown_without_a_reading(cfg) -> None:
     assert wallbox_connected(snap({}), cfg) == {"evcs": None, "twc": None}
     stale = {"wallbox.evcs.status": 0}
     assert wallbox_connected(snap(stale, quality=Quality.STALE), cfg)["evcs"] is None
+
+
+# Ladestand der Fahrzeuge und Zähler der Wallboxen (Plan 4b)
+
+
+def test_stale_tessie_value_is_not_measured(cfg) -> None:
+    values = {"vehicle.tesla.soc_pct": 60.0, "vehicle.tesla.charge_limit_pct": 80.0}
+    stale = snap(values, quality=Quality.STALE)
+    _, _, vehicles = observe(stale, derive(stale, cfg), cfg, lambda source: True)
+    tesla = vehicles["tesla"]
+    assert (tesla.soc_pct, tesla.soc_at, tesla.charge_limit_pct) == (None, None, None)
+
+
+def test_tessie_soc_and_charge_limit(cfg) -> None:
+    at = T0 + timedelta(seconds=7)
+    values = {"vehicle.tesla.soc_pct": 61.0, "vehicle.tesla.charge_limit_pct": 80}
+    later = replace(snap(values, ts=at), ts=at + timedelta(seconds=60))
+    _, _, vehicles = observe(later, derive(later, cfg), cfg, lambda source: True)
+    tesla = vehicles["tesla"]
+    # soc_at ist der Zeitstempel des Werts, nicht der des Snapshots
+    assert (tesla.soc_pct, tesla.soc_at, tesla.charge_limit_pct) == (61.0, at, 80.0)
+
+
+@pytest.mark.parametrize("bad", [math.nan, math.inf, "61", True])
+def test_soc_that_is_no_finite_number_is_unknown(cfg, bad) -> None:
+    _, _, vehicles = obs(cfg, {"vehicle.tesla.soc_pct": bad, "vehicle.egolf.soc_pct": bad})
+    assert (vehicles["tesla"].soc_pct, vehicles["tesla"].soc_at) == (None, None)
+    assert vehicles["egolf"] == NO_VEHICLE_DATA
+
+
+def test_vehicle_without_tessie_has_its_soc_from_home_assistant(cfg) -> None:
+    at = T0 + timedelta(seconds=7)
+    _, _, vehicles = obs(cfg, {})
+    assert vehicles["egolf"].soc_pct is None
+    later = replace(snap({"vehicle.egolf.soc_pct": 48.0}, ts=at), ts=at + timedelta(hours=2))
+    _, _, vehicles = observe(later, derive(later, cfg), cfg, lambda source: True)
+    # sonst sieht die Regelung von ihm nichts
+    assert vehicles["egolf"] == replace(NO_VEHICLE_DATA, soc_pct=48.0, soc_at=at)
+    stale = snap({"vehicle.egolf.soc_pct": 48.0}, quality=Quality.STALE)
+    assert observe(stale, derive(stale, cfg), cfg, lambda source: True)[2]["egolf"] == (
+        NO_VEHICLE_DATA
+    )
+
+
+def test_wallbox_total_kwh(cfg) -> None:
+    values = {"wallbox.evcs.total_kwh": 1234.5, "wallbox.twc.total_kwh": 12}
+    _, wallboxes, _ = obs(cfg, values)
+    assert (wallboxes["evcs"].total_kwh, wallboxes["twc"].total_kwh) == (1234.5, 12.0)
+    stale = snap(values, quality=Quality.STALE)
+    _, wallboxes, _ = observe(stale, derive(stale, cfg), cfg, lambda source: True)
+    assert (wallboxes["evcs"].total_kwh, wallboxes["twc"].total_kwh) == (None, None)
