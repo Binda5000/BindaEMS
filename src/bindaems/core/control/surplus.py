@@ -83,6 +83,8 @@ class SurplusCar:
     - ``held_a``, ``hysteresis_a``: die Hysterese an einer EVCS (Design 6.5). ``held_a`` ist der
       Strom, den die Regelung zuletzt angefordert hat, ``None`` ohne; dann wird nur abgerundet. Der
       Anteil sinkt sofort unter ihn, steigt aber erst ab ``held_a + 1 + hysteresis_a`` A.
+    - ``reserved_w``: der feste Bedarf in W, ein Auto in „Geplant“ mit Leistung des Plan-Slots
+      oder nach der spätesten Startzeit (Plan 4b, Präzisierung 7); 0 ohne
     """
 
     key: str
@@ -94,6 +96,7 @@ class SurplusCar:
     holding_min: bool = False
     held_a: int | None = None
     hysteresis_a: float = 0.0
+    reserved_w: float = 0.0
 
 
 def share_surplus(
@@ -107,18 +110,23 @@ def share_surplus(
 
     1. Autos mit ``full_power`` bekommen ``max_a``. Ihre Leistung ``max_a × U × n`` geht vorab vom
        Rest ab, wo sie auch stehen. Der Phasenwächter bleibt außen vor (Präzisierung 7).
+       Ebenso geht der feste Bedarf ``reserved_w`` der Autos in „Geplant“ vorab ab (Plan 4b,
+       Präzisierung 7).
     2. Die übrigen kommen der Reihe nach. Ihr Strom ist ``clamp(floor(Rest / (U × n)), 0, max_a)``,
        mit ``held_a`` nach der Hysterese (``SurplusCar``). Bei ``minimum`` ist er mindestens
-       ``min_a``. Liegt er unter ``min_a``, bleibt er so stehen.
+       ``min_a``. Liegt er unter ``min_a``, bleibt er so stehen. Ein Auto mit festem Bedarf rechnet
+       mit dem Rest plus seinem eigenen festen Bedarf: Überschuss darüber kommt obendrauf.
     3. Vom Rest geht danach der Strom ab, den das Auto verbraucht: sein Anteil, wenn er mindestens
        ``min_a`` ist. Liegt er darunter, ``min_a`` mit ``holding_min``, sonst nichts: Ein Auto unter
-       dem Mindeststrom lädt nicht und lässt den Rest den folgenden Autos.
+       dem Mindeststrom lädt nicht und lässt den Rest den folgenden Autos. Ein Auto mit festem
+       Bedarf verbraucht mindestens diesen; er ging schon in Schritt 1 ab.
 
     Der Rest kann dabei negativ werden, etwa durch den Mindeststrom ohne Überschuss. Die folgenden
     PV-Autos bekommen dann 0 (mit ``minimum`` ``min_a``).
 
-    Ist ``available_w`` ``None``, ist der Überschuss unbekannt: Dann bekommt ein PV-Auto ``None``,
-    eines mit ``minimum`` ``min_a`` und eines mit ``full_power`` ``max_a``.
+    Ist ``available_w`` ``None``, ist der Überschuss unbekannt: Dann bekommt ein PV-Auto ``None``
+    (auch eines mit festem Bedarf), eines mit ``minimum`` ``min_a`` und eines mit ``full_power``
+    ``max_a``.
 
     ``voltage_v`` muss größer als 0 sein, die Phasen mindestens 1, und die Schlüssel der Autos
     müssen eindeutig sein.
@@ -128,15 +136,23 @@ def share_surplus(
         return {car.key: _unknown_share(car) for car in cars}
 
     rest_w = available - sum(_power_w(car, car.max_a, voltage_v) for car in cars if car.full_power)
+    rest_w -= sum(_reserved_w(car) for car in cars)
     shares: dict[str, int | None] = {}
     for car in cars:
         if car.full_power:
             shares[car.key] = car.max_a
             continue
-        current_a = _share_a(car, rest_w, voltage_v)
+        reserved_w = _reserved_w(car)
+        current_a = _share_a(car, rest_w + reserved_w, voltage_v)
         shares[car.key] = current_a
-        rest_w -= _power_w(car, _used_a(car, current_a), voltage_v)
+        used_w = _power_w(car, _used_a(car, current_a), voltage_v)
+        rest_w -= max(used_w, reserved_w) - reserved_w
     return shares
+
+
+def _reserved_w(car: SurplusCar) -> float:
+    """Der feste Bedarf des Autos, der vorab vom Überschuss abgeht; mit ``full_power`` keiner."""
+    return 0.0 if car.full_power else max(car.reserved_w, 0.0)
 
 
 def _unknown_share(car: SurplusCar) -> int | None:

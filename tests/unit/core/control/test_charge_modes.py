@@ -11,8 +11,10 @@ from bindaems.core.control.charge_modes import (
     ModeInput,
     ModeMachine,
     ModeTimers,
+    effective_of,
 )
 from bindaems.shared.config import Config
+from bindaems.shared.control import ChargeMode
 
 TIMERS = ModeTimers(start_after_s=120.0, stop_after_s=300.0, min_on_s=600.0, min_off_s=600.0)
 ODD = ModeTimers(start_after_s=10.0, stop_after_s=20.0, min_on_s=100.0, min_off_s=50.0)
@@ -104,14 +106,21 @@ def test_force_stop_keeps_now_off_for_the_minimum_pause() -> None:
 
 
 def test_modes_have_their_values_and_reason_codes() -> None:
-    assert [mode.value for mode in Effective] == ["pv", "min_pv", "now", "off", "boost"]
+    values = [mode.value for mode in Effective]
+    assert values == ["pv", "min_pv", "now", "off", "planned", "boost"]
     assert dict(MODE_CODES) == {
         Effective.PV: "mode_pv",
         Effective.MIN_PV: "mode_min_pv",
         Effective.NOW: "mode_now",
         Effective.OFF: "mode_off",
+        Effective.PLANNED: "mode_planned",
         Effective.BOOST: "boost",
     }
+
+
+def test_planned_is_its_own_effective_mode() -> None:  # Plan 4b, Präzisierung 7
+    assert effective_of(ChargeMode.PLANNED) is Effective.PLANNED
+    assert effective_of(ChargeMode.PV) is Effective.PV
 
 
 def test_full_power_modes_are_now_and_boost() -> None:
@@ -486,3 +495,54 @@ def test_timers_are_inclusive_and_may_be_zero() -> None:
     assert machine.step(at(1), inp()) == ModeDecision(True, "pv_surplus")
     assert machine.step(at(2), inp(enough=False)) == ModeDecision(False, "pv_surplus")
     assert machine.step(at(3), inp()) == ModeDecision(True, "pv_surplus")
+
+
+# --- Geplant: ohne festen Bedarf wie PV, mit festem Bedarf wie Sofort (Plan 4b, Präzisierung 7) ---
+
+PLANNED = Effective.PLANNED
+
+
+def test_planned_without_firm_demand_follows_the_pv_timers() -> None:
+    machine = ModeMachine(TIMERS)
+    assert machine.step(at(0), inp(PLANNED, observed=False)) == ModeDecision(False, None)
+    decisions = run(machine, 1, 121, mode=PLANNED)
+    assert not any(d.charge for s, d in decisions.items() if s < 120)
+    assert decisions[120] == ModeDecision(True, "pv_surplus")
+    decisions = run(machine, 121, 721, mode=PLANNED, enough=False)
+    assert decisions[720] == ModeDecision(False, "pv_surplus")
+
+
+def test_planned_with_firm_demand_charges_like_now_without_surplus() -> None:
+    machine = ModeMachine(TIMERS)
+    decisions = run(machine, 0, 900, mode=PLANNED, enough=False, firm=True)
+    assert set(decisions.values()) == {ModeDecision(True, None)}
+
+
+@pytest.mark.parametrize(("firm", "expected"), [(False, False), (True, True)])
+def test_planned_in_a_new_session_and_on_takeover(firm, expected) -> None:
+    machine = ModeMachine(TIMERS)
+    machine.step(at(0), inp(plugged=False))
+    found = machine.step(at(1), inp(PLANNED, observed=True, new_session=True, firm=firm))
+    assert found == ModeDecision(expected, None)
+    fresh = ModeMachine(TIMERS)  # erster Schritt: ohne festen Bedarf übernimmt es wie PV
+    assert fresh.step(at(0), inp(PLANNED, enough=False, observed=True, firm=firm)).charge
+    assert fresh.step(at(1), inp(PLANNED, enough=False, firm=firm)).charge
+
+
+def test_a_firm_demand_starts_at_once_and_its_end_stops_by_the_pv_timers() -> None:
+    machine = ModeMachine(TIMERS)
+    run(machine, 0, 10, mode=PLANNED, enough=False)  # ohne Überschuss: aus
+    # Die späteste Startzeit ist erreicht: an, ohne Wartezeit und ohne Moduswechsel
+    assert machine.step(at(10), inp(PLANNED, enough=False, firm=True)) == ModeDecision(True, None)
+    # Fällt der feste Bedarf weg, gelten die Zeiten von PV, mit der Mindestlaufzeit ab dem Start
+    decisions = run(machine, 11, 611, mode=PLANNED, enough=False)
+    assert all(d.charge for s, d in decisions.items() if s < 610)
+    assert decisions[610] == ModeDecision(False, "pv_surplus")
+
+
+def test_planned_mode_change_with_firm_demand_is_on() -> None:
+    machine = ModeMachine(TIMERS)
+    machine.step(at(0), inp(Effective.OFF))
+    assert machine.step(at(1), inp(PLANNED, enough=False, firm=True)) == ModeDecision(True, None)
+    machine.step(at(2), inp(Effective.OFF))
+    assert machine.step(at(3), inp(PLANNED, enough=False)) == ModeDecision(False, None)

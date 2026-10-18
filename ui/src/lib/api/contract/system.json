@@ -178,7 +178,11 @@
           "commands_hour": 0,
           "boost_pending": false,
           "override_pending": false,
-          "reason": null
+          "reason": null,
+          "soc_pct": 0.0,
+          "soc_source": "assumed",
+          "charge_limit_pct": null,
+          "planned": null
         },
         {
           "id": "egolf",
@@ -194,7 +198,11 @@
           "commands_hour": null,
           "boost_pending": false,
           "override_pending": false,
-          "reason": null
+          "reason": null,
+          "soc_pct": 0.0,
+          "soc_source": "assumed",
+          "charge_limit_pct": null,
+          "planned": null
         }
       ],
       "battery": {

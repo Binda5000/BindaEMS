@@ -385,6 +385,10 @@ async def test_health_lists_vehicles(runtime_env) -> None:
         "boost_pending": False,
         "override_pending": False,
         "reason": None,
+        "soc_pct": None,
+        "soc_source": None,
+        "charge_limit_pct": None,
+        "planned": None,
     }
     run(rt, clock, 31)
     vehicles = rt.health().vehicles
@@ -405,6 +409,10 @@ async def test_health_lists_vehicles(runtime_env) -> None:
         "boost_pending": False,
         "override_pending": False,
         "reason": "mode_pv",  # „Laden aus“ beim Übernehmen, die EVCS hat es schon: UNCHANGED
+        "soc_pct": 0.0,  # Home Assistant meldet keinen Ladestand: angenommen
+        "soc_source": "assumed",
+        "charge_limit_pct": None,
+        "planned": None,
     }
     assert (vehicles[0]["wallbox"], vehicles[0]["limit_a"]) == ("twc", None)  # nicht geregelt
 

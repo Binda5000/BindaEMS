@@ -250,3 +250,32 @@ def test_the_next_car_gets_the_rest_after_the_held_current() -> None:
 
 def test_without_a_held_current_the_share_is_rounded_down() -> None:
     assert share_surplus(4324.0, [replace(HELD, held_a=None)], U) == {"egolf": 9}
+
+
+# --- Fester Bedarf (Geplant, Plan 4b, Präzisierung 7) ---------------------------------------------
+
+
+def test_reserved_power_is_taken_before_pv_cars() -> None:
+    planned = replace(EGOLF, reserved_w=4600.0)
+    # Der Tesla in PV steht vorn, bekommt aber nur den Überschuss ohne die 4600 W des e-Golf:
+    # (10000 − 4600) / 690 = 7,8 → 7 A. Der e-Golf rechnet mit dem Rest und seinen 4600 W:
+    # (5400 − 4830 + 4600) / 460 = 11,2 → 11 A.
+    assert share_surplus(10000.0, [TESLA, planned], U) == {"tesla": 7, "egolf": 11}
+    # Ohne genug Überschuss bekommt das PV-Auto nichts; der e-Golf behält seinen Anteil daran
+    assert share_surplus(3000.0, [TESLA, planned], U) == {"tesla": 0, "egolf": 6}
+
+
+def test_a_reserved_car_first_takes_its_share_and_leaves_the_rest() -> None:
+    planned = replace(EGOLF, reserved_w=4600.0)
+    # Der e-Golf vorn: 10000 / 460 = 21,7 → 16 A (7360 W); dem Tesla bleiben 2640 W → 3 A
+    assert share_surplus(10000.0, [planned, TESLA], U) == {"egolf": 16, "tesla": 3}
+    # 6000 / 460 = 13,04 → 13 A (5980 W): dem Tesla bleiben 20 W → 0 A
+    assert share_surplus(6000.0, [planned, TESLA], U) == {"egolf": 13, "tesla": 0}
+    # Unter seinem festen Bedarf verbraucht er den festen Bedarf: Bei 4000 W bekommt er
+    # 4000 / 460 = 8 A, und dem Tesla bleibt 4000 − 4600 < 0 → 0 A, wie mit ihm vorn
+    assert share_surplus(4000.0, [planned, TESLA], U) == {"egolf": 8, "tesla": 0}
+
+
+def test_unknown_surplus_gives_a_reserved_car_no_share() -> None:
+    planned = replace(EGOLF, reserved_w=4600.0)
+    assert share_surplus(None, [planned, TESLA], U) == {"egolf": None, "tesla": None}

@@ -150,6 +150,11 @@ def test_a_car_takes_part_in_the_surplus_unless_it_cannot_charge(
     assert can_charge(state("evcs", plugged=plugged, complete=complete), mode) is expected
 
 
+def test_a_planned_car_at_its_target_takes_no_part_in_the_surplus() -> None:
+    assert can_charge(state("evcs"), Effective.PLANNED)
+    assert not can_charge(state("evcs"), Effective.PLANNED, reached=True)
+
+
 def test_the_power_of_the_cars_is_unknown_when_one_wallbox_has_none(cfg) -> None:
     case = inputs(
         cfg,
@@ -172,6 +177,21 @@ def test_the_wish_of_a_car_follows_its_mode(cfg) -> None:
     assert wanted_a(egolf, Effective.PV, None) == 0
     assert wanted_a(egolf, Effective.MIN_PV, 4) == 6  # Min+PV: der Anteil, mindestens min_a
     assert wanted_a(egolf, Effective.MIN_PV, 12) == 12
+
+
+def test_the_wish_of_a_planned_car_is_its_firm_demand_or_its_share(cfg) -> None:
+    egolf = build(cfg, {"tesla": state(None), "egolf": state("evcs")})["egolf"]
+    planned = Effective.PLANNED
+    assert wanted_a(egolf, planned, 10) == 10  # ohne festen Bedarf wie PV
+    assert wanted_a(egolf, planned, None) == 0
+    # fester Bedarf 4600 W auf 2 Phasen: 10 A, ein größerer Anteil geht vor
+    assert wanted_a(egolf, planned, 3, reserved_w=4600.0, voltage_v=230.0) == 10
+    assert wanted_a(egolf, planned, 12, reserved_w=4600.0, voltage_v=230.0) == 12
+    assert wanted_a(egolf, planned, None, reserved_w=4601.0, voltage_v=230.0) == 11  # aufgerundet
+    # begrenzt auf min_a und max_a; die volle Leistung ergibt genau max_a
+    assert wanted_a(egolf, planned, None, reserved_w=500.0, voltage_v=230.0) == 6
+    assert wanted_a(egolf, planned, None, reserved_w=20000.0, voltage_v=230.0) == 16
+    assert wanted_a(egolf, planned, None, reserved_w=16 * 230.0 * 2, voltage_v=230.0) == 16
 
 
 def test_a_point_holds_its_largest_measured_current(cfg) -> None:

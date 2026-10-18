@@ -110,6 +110,7 @@ def inputs(
     evcs_obs: WallboxObs | None = None,
     twc_obs: WallboxObs | None = None,
     tesla_obs: VehicleObs | None = None,
+    egolf_obs: VehicleObs | None = None,
     present: Mapping[tuple[str, CommandKind], CommandValue] | None = None,
     controllable: Mapping[str, bool] | None = None,
     wakeable: Mapping[str, bool] | None = None,
@@ -121,7 +122,8 @@ def inputs(
 ) -> ChargeInputs:
     """Die Eingaben eines Zyklus ``s`` Sekunden nach ``T0``, auf beiden Uhren.
 
-    Ohne Angabe gelten ``grid()``, ``evcs()``, ``twc()``, ``tesla()`` und für den e-Golf ``NONE``,
+    Ohne Angabe gelten ``grid()``, ``evcs()``, ``twc()``, ``tesla()`` und für den e-Golf ``NONE``
+    (``egolf_obs``),
     dazu ``PRESENT``, ``CONTROLLABLE``, keine Weckerlaubnis und ``Intent(version=1, control=True)``.
     ``homes`` fehlt ohne Angabe: Home Assistant sagt dann über kein Fahrzeug etwas;
     ``commands_hour`` ebenso: Dann hat kein Fahrzeug Befehle der letzten Stunde. ``cfg`` bleibt
@@ -136,7 +138,10 @@ def inputs(
             "evcs": evcs() if evcs_obs is None else evcs_obs,
             "twc": twc() if twc_obs is None else twc_obs,
         },
-        vehicles={"tesla": tesla() if tesla_obs is None else tesla_obs, "egolf": NONE},
+        vehicles={
+            "tesla": tesla() if tesla_obs is None else tesla_obs,
+            "egolf": NONE if egolf_obs is None else egolf_obs,
+        },
         present=dict(PRESENT if present is None else present),
         controllable=dict(CONTROLLABLE if controllable is None else controllable),
         wakeable={} if wakeable is None else dict(wakeable),

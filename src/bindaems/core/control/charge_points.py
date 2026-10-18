@@ -4,7 +4,7 @@
 - ``charge_points``: die Ladepunkte je Auto mit Wallbox, in der Reihenfolge der Priorität
 - ``reserved_a``: die Zuschläge bei Ausfällen je Phase
 - ``can_charge``, ``cars_w``, ``wanted_a``, ``holding_a``, ``enough``: was ein Auto am Überschuss
-  und an der Zuteilung des Wächters wünscht, hält und trägt
+  und an der Zuteilung des Wächters wünscht, hält und trägt, in „Geplant“ mit festem Bedarf
 
 Ein Auto ist ein Fahrzeug der Konfiguration oder der Gast einer Wallbox (``fleet``, Plan 2c-2b,
 Präzisierung 6). Präzisierungen ohne Angabe des Plans sind die von Plan 2c-1. Die Schicht ist rein:
@@ -13,6 +13,7 @@ Sie liest nur ihre Argumente.
 
 from __future__ import annotations
 
+import math
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
@@ -150,9 +151,18 @@ def reserved_a(
     return reserved
 
 
-def can_charge(vehicle: VehicleState, mode: Effective) -> bool:
-    """Ob das Auto am Überschuss teilnimmt: nicht abgesteckt, nicht „geladen“, nicht Aus."""
-    return vehicle.plugged is not False and not vehicle.complete and mode is not Effective.OFF
+def can_charge(vehicle: VehicleState, mode: Effective, *, reached: bool = False) -> bool:
+    """Ob das Auto am Überschuss teilnimmt: nicht abgesteckt, nicht „geladen“, nicht Aus.
+
+    ``reached``: In „Geplant“ hat das Auto den Ziel-SOC erreicht; es lädt dann auch keinen
+    Überschuss (Plan 4b, Entscheidung 4).
+    """
+    return (
+        vehicle.plugged is not False
+        and not vehicle.complete
+        and not reached
+        and mode is not Effective.OFF
+    )
 
 
 def cars_w(points: Sequence[ChargePoint], wallboxes: Mapping[str, WallboxObs]) -> float | None:
@@ -166,15 +176,31 @@ def cars_w(points: Sequence[ChargePoint], wallboxes: Mapping[str, WallboxObs]) -
     return total
 
 
-def wanted_a(point: ChargePoint, mode: Effective, share: int | None) -> int:
+def wanted_a(
+    point: ChargePoint,
+    mode: Effective,
+    share: int | None,
+    *,
+    reserved_w: float = 0.0,
+    voltage_v: float | None = None,
+) -> int:
     """Der Wunsch eines Autos, das laden kann: Sofort und Boost ``max_a``, sonst der Anteil.
 
-    PV wünscht den Anteil, ohne Wert 0; Min+PV den Anteil, mindestens ``min_a``.
+    PV wünscht den Anteil, ohne Wert 0; Min+PV den Anteil, mindestens ``min_a``. „Geplant“ mit
+    festem Bedarf ``reserved_w`` (in W) wünscht ``max(ceil(reserved_w / (U · n)), Anteil)`` im
+    Bereich ``[min_a, max_a]``, mit ``U = voltage_v`` und ``n`` den Phasen des Ladepunkts; ohne
+    festen Bedarf wie PV (Plan 4b, Präzisierung 7).
     """
     if mode in FULL_POWER:
         return point.max_a
     if mode is Effective.MIN_PV:
         return max(share or 0, point.min_a)
+    if mode is Effective.PLANNED and reserved_w > 0:
+        if voltage_v is None:
+            raise ValueError("ein fester Bedarf braucht die Spannung")
+        # auf 1e-9 A gerundet: Die volle Leistung ergibt so genau ``max_a``
+        firm_a = math.ceil(round(reserved_w / (voltage_v * len(point.phases)), 9))
+        return min(max(firm_a, share or 0, point.min_a), point.max_a)
     return share or 0
 
 

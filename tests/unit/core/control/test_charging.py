@@ -6,6 +6,7 @@ import pytest
 from tests.helpers import T0
 from tests.unit.core.control.charge_helpers import (
     CONTRADICTION,
+    NONE,
     UNCLEAR_FROM_S,
     accept,
     evcs,
@@ -411,18 +412,6 @@ def test_vehicle_without_entry_charges_in_pv(cfg) -> None:  # Review Focus 4
     ]
 
 
-def test_planned_mode_is_provisionally_pv(cfg) -> None:  # Plan 4b Task 1, Ruling R1
-    pv = run(ChargeController(cfg, HardLimits.from_config(cfg), started=T0), cfg, 121)
-    planned_car = ChargeController(cfg, HardLimits.from_config(cfg), started=T0)
-    planned = run(planned_car, cfg, 121, intent=egolf_in(ChargeMode.PLANNED))
-    assert as_commands(planned) == as_commands(pv)
-    guest = Intent(version=1, control=True, guest=GuestIntent(mode=ChargeMode.PLANNED))
-    found = run(
-        ChargeController(cfg, HardLimits.from_config(cfg), started=T0), cfg, 61, intent=guest
-    )
-    assert all(x.command.reasons[0] == "mode_pv" for _, x in found)
-
-
 def test_unplugged_car_gets_charging_off_once(cfg) -> None:
     found = run(
         ChargeController(cfg, HardLimits.from_config(cfg), started=T0),
@@ -452,6 +441,10 @@ def test_health_per_vehicle(cfg) -> None:
         "boost_pending": False,
         "override_pending": False,
         "reason": "mode_pv",
+        "soc_pct": 0.0,  # ohne Ladestand angenommen
+        "soc_source": "assumed",
+        "charge_limit_pct": None,
+        "planned": None,
     }
 
 
@@ -1014,6 +1007,10 @@ def test_health_before_the_first_step_and_after_a_pause(cfg) -> None:
         "commands_hour": None,
         "boost_pending": False,
         "override_pending": False,
+        "soc_pct": None,
+        "soc_source": None,
+        "charge_limit_pct": None,
+        "planned": None,
     }
     assert c.health() == [
         {"id": "tesla", "name": "Tesla Model 3", **unknown, "reason": None},
@@ -2213,3 +2210,246 @@ def test_health_names_commands_of_the_last_hour(cfg) -> None:
     assert health == {"tesla": 7, "egolf": None}
     c.idle(T0 + timedelta(seconds=1))
     assert [entry["commands_hour"] for entry in c.health()] == [None, None]
+
+
+# --- Geplant (Plan 4b, Präzisierung 7) ------------------------------------------------------------
+
+NO_SHARE = grid(grid_w=0.0)  # Überschuss −100 W: kein Anteil
+EGOLF_FULL_KW = 16 * 230.0 * 2 / 1000.0  # volle Leistung des e-Golf an der EVCS
+
+
+def planned_for(key: str = "egolf", *, target: int = 80, departure: str = "18:00") -> Intent:
+    """Die Absicht mit ``key`` in „Geplant“; T0 ist 12:00 Wiener Zeit."""
+    entry = VehicleIntent(mode=ChargeMode.PLANNED, target_soc_pct=target, departure=departure)
+    return Intent(version=1, control=True, vehicles={key: entry})
+
+
+def egolf_soc(pct: float, at=T0):
+    """Der e-Golf mit einem Ladestand aus Home Assistant."""
+    return replace(NONE, soc_pct=pct, soc_at=at)
+
+
+def egolf_need(soc: float, target: float = 80.0) -> float:
+    return (target - soc) / 100.0 * 38.6 / 0.9
+
+
+def egolf_latest(departure, soc: float):
+    hours = egolf_need(soc) / EGOLF_FULL_KW * 1.1
+    return departure - timedelta(hours=hours) - timedelta(minutes=15)
+
+
+def evcs_commands(found) -> list:
+    return [(t, c.command) for t, c in found if c.command.actuator == "wallbox.evcs"]
+
+
+def test_planned_without_plan_charges_surplus_before_latest_start(cfg) -> None:
+    c = controller(cfg)
+    intent = planned_for(departure="18:00")
+    found = run(c, cfg, 200, intent=intent, egolf_obs=egolf_soc(60.0), grid_obs=NO_SHARE)
+    assert evcs_commands(found) == [cmd(0, CHARGING, False, ("mode_planned",))]
+    departure = T0 + timedelta(hours=6)
+    health = c.health()[1]
+    assert (health["mode"], health["soc_pct"], health["soc_source"]) == (
+        "planned",
+        60.0,
+        "measured",
+    )
+    assert health["charge_limit_pct"] is None
+    assert health["planned"] == {
+        "state": "surplus",
+        "target_soc_pct": 80.0,
+        "departure_at": departure.isoformat(),
+        "need_kwh": pytest.approx(egolf_need(60.0)),
+        "latest_start": egolf_latest(departure, 60.0).isoformat(),
+        "plan_w": None,
+    }
+    # Mit Überschuss lädt es davor wie PV, mit den Zeiten von PV
+    pv = run(controller(cfg), cfg, 121, intent=intent, egolf_obs=egolf_soc(60.0))
+    assert evcs_commands(pv) == [
+        cmd(0, CHARGING, False, ("mode_planned",)),
+        cmd(120, CURRENT, 8.0, ("mode_planned", "pv_surplus")),
+        cmd(120, CHARGING, True, ("mode_planned", "pv_surplus")),
+    ]
+
+
+def test_planned_starts_full_at_latest_start(cfg) -> None:
+    c = controller(cfg)
+    kw = {"intent": planned_for(departure="18:00"), "grid_obs": NO_SHARE}
+    latest_s = (egolf_latest(T0 + timedelta(hours=6), 60.0) - T0).total_seconds()
+    before = math.floor(latest_s)
+    assert before < latest_s  # die Sekunde davor liegt echt vor der spätesten Startzeit
+    accept(c, c.step(inputs(cfg, egolf_obs=egolf_soc(60.0), **kw)))
+    early = egolf_soc(60.0, T0 + timedelta(seconds=before))
+    assert c.step(inputs(cfg, s=before, egolf_obs=early, **kw)) == []
+    at = before + 1
+    found = c.step(inputs(cfg, s=at, egolf_obs=egolf_soc(60.0, T0 + timedelta(seconds=at)), **kw))
+    assert [x.command for x in found] == [
+        Command("wallbox.evcs", CURRENT, 16.0, reasons=("mode_planned", "latest_start")),
+        Command("wallbox.evcs", CHARGING, True, reasons=("mode_planned", "latest_start")),
+    ]
+    assert c.health()[1]["planned"]["state"] == "due"
+
+
+def test_planned_due_at_once_charges_with_max_a_and_the_fuse_target(cfg) -> None:
+    c = controller(cfg)
+    loaded = replace(NO_SHARE, phase_import_a={"L1": 20.0, "L2": 20.0, "L3": 2.0})
+    found = c.step(
+        inputs(
+            cfg, intent=planned_for(departure="14:00"), egolf_obs=egolf_soc(30.0), grid_obs=loaded
+        )
+    )
+    # Ziel des Phasenwächters wie bei voller Leistung: die Sicherung, 33 − 20 = 13 A
+    assert [x.command for x in found] == [
+        Command(
+            "wallbox.evcs", CURRENT, 13.0, reasons=("mode_planned", "latest_start", "phase_limit")
+        ),
+        Command(
+            "wallbox.evcs", CHARGING, True, reasons=("mode_planned", "latest_start", "phase_limit")
+        ),
+    ]
+
+
+def test_planned_stops_at_target(cfg) -> None:
+    c = controller(cfg)
+    fixed = {**TESLA_PLUGGED, "intent": planned_for("tesla", target=80)}
+    del fixed["tesla_obs"]
+
+    def at_80(s: int):  # Tessie meldet den Ladestand frisch
+        return tesla(plugged=True, soc_pct=80.0, soc_at=T0 + timedelta(seconds=s))
+
+    found = run(c, cfg, 300, tesla_obs=at_80, **fixed)  # mit Überschuss
+    assert [(t, x.command) for t, x in found if x.command.actuator == "vehicle.tesla"] == [
+        (0, Command("vehicle.tesla", CHARGING, False, reasons=("mode_planned", "target_reached")))
+    ]
+    assert c.health()[0]["planned"]["state"] == "reached"
+
+
+def test_planned_stops_once_at_target_and_restarts_only_three_points_below(cfg) -> None:
+    c = controller(cfg)
+    kw = {"intent": planned_for(departure="14:00"), "grid_obs": NO_SHARE}
+
+    def step(s: int, soc: float) -> list:
+        found = c.step(inputs(cfg, s=s, egolf_obs=egolf_soc(soc, T0 + timedelta(seconds=s)), **kw))
+        accept(c, found)
+        return [x.command for x in found]
+
+    assert [x.kind for x in step(0, 30.0)] == [CURRENT, CHARGING]
+    assert step(10, 80.0) == [
+        Command("wallbox.evcs", CHARGING, False, reasons=("mode_planned", "target_reached"))
+    ]
+    assert step(20, 78.0) == []  # noch erreicht
+    assert c.health()[1]["planned"]["state"] == "reached"
+    assert step(30, 76.9) == []  # wieder unter dem Ziel, aber die späteste Startzeit ist weit
+    assert c.health()[1]["planned"]["state"] == "surplus"
+
+
+def test_assumed_soc_never_reports_reached(cfg) -> None:  # Review Focus 2
+    c = controller(cfg)
+    kw = {"intent": planned_for(departure="14:00"), "grid_obs": NO_SHARE}
+    first = c.step(inputs(cfg, evcs_obs=evcs(total_kwh=100.0), **kw))
+    assert first[-1].command.reasons == ("mode_planned", "latest_start")
+    accept(c, first)
+    for s, counted in ((3600, 30.0), (7000, 60.0)):
+        charging = evcs(charging=True, power_w=7360.0, total_kwh=100.0 + counted)
+        found = c.step(inputs(cfg, s=s, evcs_obs=charging, **kw))
+        accept(c, found)
+        assert all("target_reached" not in x.command.reasons for x in found)
+        health = c.health()[1]
+        assert (health["soc_pct"], health["soc_source"]) == (0.0, "assumed")
+        assert health["planned"]["state"] == "due"
+
+
+def test_due_latch_resets_with_new_session(cfg) -> None:  # Review Focus 3
+    c = controller(cfg)
+    kw = {"intent": planned_for(departure="18:00"), "grid_obs": NO_SHARE}
+    due_s = math.ceil((egolf_latest(T0 + timedelta(hours=6), 60.0) - T0).total_seconds())
+
+    def step(s: int, soc: float, **more) -> list:
+        at = T0 + timedelta(seconds=s)
+        found = c.step(inputs(cfg, s=s, egolf_obs=egolf_soc(soc, at), **kw, **more))
+        accept(c, found)
+        return found
+
+    step(0, 60.0)
+    assert [x.command.kind for x in step(due_s, 60.0)] == [CURRENT, CHARGING]
+    # Der Ladestand steigt, die späteste Startzeit rückt hinter jetzt: Es bleibt bei voller Leistung
+    assert step(due_s + 10, 75.0) == []
+    assert c.health()[1]["planned"]["state"] == "due"
+    # Abstecken und wieder anstecken: ein neuer Ansteckvorgang, der Merker gilt nicht mehr
+    step(due_s + 20, 75.0, evcs_obs=evcs(connected=False))
+    replugged = step(due_s + 30, 75.0)
+    assert [x.command for x in replugged] == [
+        Command("wallbox.evcs", CHARGING, False, reasons=("mode_planned",))
+    ]
+    assert c.health()[1]["planned"]["state"] == "surplus"
+
+
+def test_departure_passed_while_plugged_uses_next_day(cfg) -> None:  # Review Focus 3
+    c = controller(cfg)
+    kw = {**TESLA_PLUGGED, "intent": planned_for("tesla", departure="12:01")}
+
+    def health_at(s: int) -> dict:
+        obs = tesla(plugged=True, soc_pct=80.0, soc_at=T0 + timedelta(seconds=s))
+        accept(c, c.step(inputs(cfg, s=s, **{**kw, "tesla_obs": obs})))
+        return c.health()[0]["planned"]
+
+    assert health_at(0)["departure_at"] == "2026-10-08T10:01:00+00:00"
+    after = health_at(120)
+    assert after["departure_at"] == "2026-10-09T10:01:00+00:00"
+    assert after["state"] == "reached"  # ein erreichtes Ziel bleibt erreicht
+
+
+def test_soc_session_starts_with_each_plug_in(cfg) -> None:  # Plan 4b, Präzisierung 5
+    c = controller(cfg)
+    measured = egolf_soc(50.0, T0 - timedelta(minutes=30))  # vor dem Start des core gemessen
+
+    def health_at(s: int, counter: float | None, **more) -> dict:
+        wallbox = more.pop("evcs_obs", evcs(total_kwh=counter))
+        accept(c, c.step(inputs(cfg, s=s, evcs_obs=wallbox, egolf_obs=measured, **more)))
+        return c.health()[1]
+
+    # Der Vorgang beim Start des core: Er beginnt für die Schätzung jetzt
+    assert health_at(0, 100.0)["soc_source"] == "measured"
+    estimated = health_at(60, 104.3)
+    assert estimated["soc_source"] == "estimated"
+    assert estimated["soc_pct"] == pytest.approx(50.0 + 4.3 * 0.9 / 38.6 * 100.0)
+    # Abstecken, nach 3 h wieder anstecken: Die Messung liegt mehr als 60 min davor
+    health_at(120, None, evcs_obs=evcs(connected=False))
+    later = health_at(120 + 3 * 3600, 104.3)
+    assert (later["soc_pct"], later["soc_source"]) == (0.0, "assumed")
+
+
+def test_boost_overrides_planned(cfg) -> None:
+    until = T0 + timedelta(hours=2)
+    entry = VehicleIntent(mode=ChargeMode.PLANNED, boost_until=until)
+    intent = Intent(version=1, control=True, vehicles={"egolf": entry})
+    c = controller(cfg)
+    found = c.step(inputs(cfg, intent=intent, egolf_obs=egolf_soc(90.0)))
+    assert [x.command for x in found] == [
+        Command("wallbox.evcs", CURRENT, 16.0, reasons=("boost",)),
+        Command("wallbox.evcs", CHARGING, True, reasons=("boost",)),
+    ]
+    assert (c.health()[1]["mode"], c.health()[1]["planned"]) == ("boost", None)
+
+
+def test_other_modes_unchanged(cfg) -> None:
+    c = controller(cfg)
+    obs = tesla(plugged=True, soc_pct=55.0, soc_at=T0, charge_limit_pct=90.0)
+    accept(c, c.step(inputs(cfg, **{**TESLA_PLUGGED, "tesla_obs": obs})))
+    tesla_health, egolf_health = c.health()
+    assert (tesla_health["soc_pct"], tesla_health["soc_source"]) == (55.0, "measured")
+    assert tesla_health["charge_limit_pct"] == 90.0
+    assert tesla_health["planned"] is None
+    assert (egolf_health["mode"], egolf_health["planned"]) == ("pv", None)
+
+
+def test_a_planned_guest_cannot_happen_but_charges_like_pv(cfg) -> None:  # Präzisierung 2
+    # Der core lehnt „Geplant“ für den Gast ab; käme es doch an, lädt er wie PV-Überschuss.
+    guest = Intent(version=1, control=True, guest=GuestIntent(mode=ChargeMode.PLANNED))
+    pv = Intent(version=1, control=True, guest=GuestIntent(mode=ChargeMode.PV))
+    obs = {"evcs_obs": evcs(), "homes": {"egolf": False}}
+    planned_run = run(controller(cfg), cfg, 121, intent=guest, **obs)
+    pv_run = run(controller(cfg), cfg, 121, intent=pv, **obs)
+    assert [(t, c.kind, c.value) for t, c in as_commands(planned_run)] == [
+        (t, c.kind, c.value) for t, c in as_commands(pv_run)
+    ]

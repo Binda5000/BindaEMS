@@ -86,6 +86,14 @@ Dazu legt die Regelung fest:
 - Ab einer neuen Erkennung (``VehicleState.fresh``) tragen die Befehle eines Autos zuletzt den
   Grund ``assignment_detected``, bis zum ersten Zyklus mit Befehlen für das Auto, den Höchststrom
   eingeschlossen. Ist es vorher nicht mehr erkannt, entfällt er (Plan 2c-2b, Präzisierung 8).
+- „Geplant“ (Plan 4b, Präzisierung 7): Je Wallbox zählt die Regelung die Ansteckvorgänge
+  (``_Plug``), je Fahrzeug führt sie den Ladestand (``SocTracker``) und den Stand des geplanten
+  Ladens (``PlannedTracker``) an der Wallbox, an der es steht. Mit festem Bedarf (``plan``: die
+  Leistung des Plan-Slots, ``due``: die volle Leistung ab der spätesten Startzeit) gilt das Auto
+  wie Sofort mit dem Ziel des Phasenwächters an der Sicherung, sein Bedarf geht vor den PV-Autos
+  vom Überschuss ab, und Überschuss darüber kommt obendrauf; ohne festen Bedarf wie PV. Am Ziel
+  (``reached``) stoppt es wie „geladen“ und lädt auch keinen Überschuss (``target_reached``).
+  Boost geht vor.
 - An einer EVCS hält die Verteilung den zuletzt angeforderten Strom (Hysterese
   ``control.evcs_hysteresis_a``, Design 6.5): Er sinkt sofort mit dem Anteil, steigt aber erst,
   wenn der Anteil ihn um 1 A plus die Hysterese übersteigt. Ohne eigenen Wert (nach dem Start, nach
@@ -98,6 +106,7 @@ der Wanduhr. Nicht für mehrere Threads gedacht.
 
 from __future__ import annotations
 
+import itertools
 import math
 from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass, replace
@@ -108,8 +117,11 @@ from bindaems.core.control.assignment import Assignment, AssignmentKind, Vehicle
 from bindaems.core.control.charge_inputs import NO_VEHICLE_DATA, ChargeInputs, VehicleObs
 from bindaems.core.control.charge_modes import (
     FULL_POWER,
+    LATEST_START,
     MODE_CODES,
+    PLAN_POWER,
     PV_SURPLUS,
+    TARGET_REACHED,
     Effective,
     ModeDecision,
     ModeInput,
@@ -153,7 +165,9 @@ from bindaems.core.control.phase_guard import (
     phase_loads,
     phase_target,
 )
+from bindaems.core.control.planned import PlannedState, PlannedTracker, full_power_w
 from bindaems.core.control.surplus import SurplusCar, share_surplus, surplus_w
+from bindaems.core.control.vehicle_soc import SocReading, SocTracker
 from bindaems.core.safety.limits import HardLimits
 from bindaems.core.safety.types import Verdict
 from bindaems.shared.config import Config
@@ -177,7 +191,9 @@ ChargeCommand = ControlCommand  # der Name der Laderegelung für ihren Befehl
 
 _CURRENT: Final = CommandKind.CURRENT
 _CHARGING: Final = CommandKind.CHARGING
-_SURPLUS_MODES: Final = frozenset({Effective.PV, Effective.MIN_PV})  # Wunsch aus dem Anteil
+# Wunsch aus dem Anteil; „Geplant“ ohne festen Bedarf
+_SURPLUS_MODES: Final = frozenset({Effective.PV, Effective.MIN_PV, Effective.PLANNED})
+_PV_LIKE: Final = frozenset({Effective.PV, Effective.PLANNED})  # ladend halten sie ``min_a``
 _NOBODY: Final = WallboxState(None, None, ())  # an der Wallbox läuft kein Vorgang
 _SELF_START_MIN_A: Final = 1.0  # ab diesem Strom in A lädt ein Fahrzeug laut Tessie
 
@@ -212,11 +228,56 @@ class CarView:
 
 @dataclass(frozen=True)
 class _View:
-    """Was ``health`` zu einem Fahrzeug aus dem letzten Zyklus zeigt."""
+    """Was ``health`` zu einem Fahrzeug aus dem letzten Zyklus zeigt.
+
+    ``soc``, ``limit_pct`` und ``planned`` (Plan 4b, Präzisierung 7) nur für ein Fahrzeug der
+    Konfiguration: der Ladestand, das Ladelimit im Auto und der Stand von „Geplant“ (nur in
+    diesem Modus und an einer Wallbox).
+    """
 
     mode: Effective
     state: VehicleState
     limit_a: float | None
+    soc: SocReading | None = None
+    limit_pct: float | None = None
+    planned: PlannedState | None = None
+
+
+@dataclass(frozen=True)
+class _Plug:
+    """Ein laufender Ansteckvorgang an einer Wallbox (Plan 4b, Präzisierungen 5 und 6).
+
+    - ``number``: seine Nummer; eindeutig über alle Wallboxen und nie wiederverwendet
+    - ``start``: sein Beginn auf der Wanduhr; begann er, ohne dass die Regelung „kein Fahrzeug“
+      davor sah (etwa beim Start des core), der Zyklus, in dem sie ihn zuerst sah
+    """
+
+    number: int
+    start: datetime
+
+
+@dataclass(frozen=True)
+class _Planned:
+    """„Geplant“ eines Fahrzeugs in einem Zyklus: sein Stand und sein fester Bedarf in W.
+
+    Der feste Bedarf ist die Leistung des Plan-Slots (``plan``) oder die volle Leistung (``due``),
+    sonst 0 (Plan 4b, Präzisierung 7).
+    """
+
+    state: PlannedState
+    reserved_w: float
+
+    @property
+    def code(self) -> str | None:
+        """Der Grund des festen Bedarfs: ``plan_power`` oder ``latest_start``; ohne ``None``."""
+        if self.state.state == "plan":
+            return PLAN_POWER
+        return LATEST_START if self.state.state == "due" else None
+
+    @property
+    def reached(self) -> bool:
+        """Ob das Ziel erreicht ist; das Auto lädt dann nicht, auch keinen Überschuss."""
+        return self.state.state == "reached"
 
 
 @dataclass(frozen=True)
@@ -255,6 +316,9 @@ class _Situation:
     - ``resume``: die erste Startfolge nach einer Pause steht noch aus
     - ``self_start``: Das Fahrzeug lädt seit ``control.tesla_against_s`` gegen seinen Modus, und
       ein Neuversuch ist fällig; der Stopp trägt dann den Grund ``self_start``
+    - ``firm``: in „Geplant“ der Grund des festen Bedarfs (``plan_power``, ``latest_start``),
+      sonst ``None``; ``reached``: in „Geplant“ ist das Ziel erreicht, ein Stopp trägt dann
+      ``target_reached`` (Plan 4b, Präzisierung 7)
     - ``carries``: Die Grenze ist bekannt und trägt den Mindeststrom, in Min+PV an der Sicherung,
       und das Fahrzeug steht nicht in der Start-Sperre des 15-min-Wächters; nur dann darf ein Auto,
       das nicht lädt, starten (Design 5.3, 6.4).
@@ -274,6 +338,8 @@ class _Situation:
     resume: bool
     carries: bool
     self_start: bool
+    firm: str | None = None
+    reached: bool = False
 
     @property
     def head(self) -> tuple[str, ...]:
@@ -334,6 +400,12 @@ class ChargeController:
         self._commands_hour: Mapping[str, int] = {}
         # die Version der Absicht im letzten ``step``; ``None`` ohne Absicht und nach ``idle``
         self._intent_version: int | None = None
+        # „Geplant“ (Plan 4b): je Wallbox ihr laufender Ansteckvorgang, der Ladestand je Fahrzeug
+        # und die Merker „späteste Startzeit erreicht“ und „Ziel erreicht“ je Fahrzeug
+        self._plugs: dict[str, _Plug] = {}
+        self._plug_numbers = itertools.count(1)
+        self._soc = SocTracker()
+        self._planned = PlannedTracker()
 
     @property
     def intent_version(self) -> int | None:
@@ -369,8 +441,17 @@ class ChargeController:
         )
         order = self._order(intent)
         modes = {key: _mode(key, state.vehicles[key], intent) for key in order}
+        self._follow_plugs(inputs)
+        socs = {key: self._soc_of(key, state.vehicles[key], inputs) for key in self._cfg.vehicles}
+        planned: dict[str, _Planned] = {}
+        for key, soc in socs.items():
+            plan = None
+            if modes[key] is Effective.PLANNED:
+                plan = self._planned_of(key, state.vehicles[key], soc, inputs)
+            if plan is not None:
+                planned[key] = plan
         points = charge_points(self._cfg, self._limits, order, state.vehicles, inputs)
-        cycle = self._allocate(order, modes, points, state.vehicles, inputs)
+        cycle = self._allocate(order, modes, points, state.vehicles, inputs, planned)
         regulated = {
             key: point.actuator
             for key, point in points.items()
@@ -396,7 +477,16 @@ class ChargeController:
             vehicle, point = state.vehicles[key], points.get(key)
             grant, share = cycle.grants.get(key), cycle.shares.get(key)
             free = None if grant is None else grant.free_a
-            views[key] = _View(modes[key], vehicle, free)
+            plan = planned.get(key)
+            obs = inputs.vehicles.get(key, NO_VEHICLE_DATA) if key in socs else NO_VEHICLE_DATA
+            views[key] = _View(
+                modes[key],
+                vehicle,
+                free,
+                soc=socs.get(key),
+                limit_pct=finite_number(obs.charge_limit_pct),
+                planned=None if plan is None else plan.state,
+            )
             actuator = regulated.get(key)
             if point is None or actuator is None:  # ungeregelt: Die Maschine wartet
                 if vehicle.new_session:
@@ -412,7 +502,9 @@ class ChargeController:
                 cause, free_a = GuardCause.PEAK_GUARD, cap_a
                 if target is GuardCause.PHASE_LIMIT:
                     fuse_a = math.floor(free)
-            decision = self._decide(now, key, actuator, vehicle, mode, enough(point, share, free_a))
+            decision = self._decide(
+                now, key, actuator, vehicle, mode, enough(point, share, free_a), plan
+            )
             if point.evcs:
                 wanted = cycle.wanted.get(key, 0)
                 limit = point.min_a if free_a is None else math.floor(free_a)
@@ -436,6 +528,8 @@ class ChargeController:
                 and free_a is not None
                 and limit + self._extra_a(mode) >= point.min_a,
                 self_start=self._self_start(now, key, actuator, vehicle, decision, inputs),
+                firm=None if plan is None else plan.code,
+                reached=plan is not None and plan.reached,
             )
             found = (
                 maximum_command(self._cfg, self._last, key, mode, inputs)
@@ -580,15 +674,22 @@ class ChargeController:
         ``None``), ``boost_pending`` und ``override_pending`` (Boost bzw. Übersteuerung der Absicht
         gelten noch, warten aber auf einen Ansteckvorgang, der noch nicht begonnen hat; die Felder
         ``boost_until`` und ``assignment`` zeigen nur, was aktiv ist) und ``reason``, der
-        letzte Grund des letzten Befehls für das Fahrzeug. Ohne ``step`` seit dem Start oder seit
-        ``idle`` ist alles außer ``id``, ``name``, ``wakes_today`` und ``reason`` unbekannt
-        (``None``); ``boost_pending`` und ``override_pending`` sind dann falsch.
+        letzte Grund des letzten Befehls für das Fahrzeug. Dazu (Plan 4b, Präzisierung 7)
+        ``soc_pct`` und ``soc_source`` (``measured``, ``estimated``, ``assumed``; angenommen heißt
+        0 %), ``charge_limit_pct`` (das Ladelimit im Auto, nur mit Tessie) und ``planned``: in
+        „Geplant“ an einer Wallbox ``state`` (``plan``, ``surplus``, ``due``, ``reached``),
+        ``target_soc_pct`` (das wirksame Ziel), ``departure_at`` (ISO in UTC), ``need_kwh``,
+        ``latest_start`` (ISO in UTC, ``None`` ohne Bedarf) und ``plan_w``; sonst ``None``. Ohne
+        ``step`` seit dem Start oder seit ``idle`` ist alles außer ``id``, ``name``,
+        ``wakes_today`` und ``reason`` unbekannt (``None``); ``boost_pending`` und
+        ``override_pending`` sind dann falsch.
         """
         entries: list[dict[str, Any]] = []
         for key, vehicle in self._cfg.vehicles.items():
             view = self._views.get(key)
             state = None if view is None else view.state
             boost = None if state is None or state.boost_until is None else state.boost_until
+            soc = None if view is None else view.soc
             entries.append(
                 {
                     "id": key,
@@ -605,6 +706,10 @@ class ChargeController:
                     "boost_pending": state is not None and state.boost_pending,
                     "override_pending": state is not None and state.override_pending,
                     "reason": self._reasons.get(key),
+                    "soc_pct": None if soc is None else soc.pct,
+                    "soc_source": None if soc is None else soc.source,
+                    "charge_limit_pct": None if view is None else view.limit_pct,
+                    "planned": None if view is None else _planned_health(view.planned),
                 }
             )
         return entries
@@ -654,6 +759,83 @@ class ChargeController:
             priority = configured
         return [*priority, *self._guests]
 
+    def _follow_plugs(self, inputs: ChargeInputs) -> None:
+        """Die Ansteckvorgänge je Wallbox, wie die Zuordnung sie zählt (Plan 4b, Präzisierung 5).
+
+        „Fahrzeug“ ohne laufenden Vorgang beginnt einen mit neuer Nummer und dem Beginn jetzt,
+        „kein Fahrzeug“ beendet ihn, ein unbekannter Wert ändert nichts. Auch ein Vorgang, dessen
+        wahrer Beginn unbekannt ist (die Wallbox meldete vorher nie „kein Fahrzeug“), beginnt jetzt:
+        So hat jeder Vorgang einen Beginn, und ein Messwert von vor dem Start des core zählt nur,
+        wenn er höchstens ``SOC_ANCHOR_BEFORE`` vor dem ersten Zyklus liegt.
+        """
+        for key, seen in inputs.wallboxes.items():
+            if seen.connected is True and key not in self._plugs:
+                self._plugs[key] = _Plug(next(self._plug_numbers), inputs.wall_now)
+            elif seen.connected is False:
+                self._plugs.pop(key, None)
+
+    def _soc_of(self, key: str, vehicle: VehicleState, inputs: ChargeInputs) -> SocReading:
+        """Der Ladestand des Fahrzeugs ``key`` (``SocTracker``, Plan 4b, Präzisierung 5).
+
+        Zähler und Ansteckvorgang sind die der Wallbox, an der das Fahrzeug laut Zuordnung steht;
+        steht es nirgends, gibt es beide nicht. Ein Wert von Tessie kommt aus der Abfrage
+        (``polled``).
+        """
+        car = self._cfg.vehicles[key]
+        obs = inputs.vehicles.get(key, NO_VEHICLE_DATA)
+        plug = None if vehicle.wallbox is None else self._plugs.get(vehicle.wallbox)
+        counter = None if vehicle.wallbox is None else inputs.wallboxes[vehicle.wallbox].total_kwh
+        return self._soc.update(
+            key,
+            wall_now=inputs.wall_now,
+            measured=finite_number(obs.soc_pct),
+            measured_at=obs.soc_at,
+            counter_kwh=finite_number(counter),
+            session_start=None if plug is None else plug.start,
+            efficiency=car.charge_efficiency_pct / 100.0,
+            usable_kwh=car.usable_kwh,
+            polled=car.tessie is not None,
+        )
+
+    def _planned_of(
+        self, key: str, vehicle: VehicleState, soc: SocReading, inputs: ChargeInputs
+    ) -> _Planned | None:
+        """Der Stand von „Geplant“ für das Fahrzeug ``key`` (``PlannedTracker``, Präzisierung 6).
+
+        Nur an einer Wallbox: Die volle Leistung ist die des Fahrzeugs dort (``full_power_w``).
+        Ziel und Abfahrt kommen aus der Absicht, das Ladelimit aus Tessie, der Ansteckvorgang von
+        der Wallbox. Einen Plan-Slot gibt es noch nicht (``slot_w`` ``None``).
+        """
+        if vehicle.wallbox is None:
+            return None
+        car = self._cfg.vehicles[key]
+        intent = inputs.intent
+        entry = None if intent is None else intent.vehicles.get(key)
+        plug = self._plugs.get(vehicle.wallbox)
+        full_w = full_power_w(
+            car, self._cfg.wallboxes[vehicle.wallbox], self._cfg.grid.voltage_nominal_v
+        )
+        obs = inputs.vehicles.get(key, NO_VEHICLE_DATA)
+        state = self._planned.step(
+            key,
+            wall_now=inputs.wall_now,
+            session=None if plug is None else plug.number,
+            intent=VehicleIntent() if entry is None else entry,
+            soc=soc,
+            limit_pct=finite_number(obs.charge_limit_pct),
+            sync=car.charge_limit_sync,
+            full_w=full_w,
+            efficiency=car.charge_efficiency_pct / 100.0,
+            usable_kwh=car.usable_kwh,
+            slot_w=None,
+        )
+        reserved_w = 0.0
+        if state.state == "plan":
+            reserved_w = state.plan_w or 0.0
+        elif state.state == "due":
+            reserved_w = full_w
+        return _Planned(state, reserved_w)
+
     def _allocate(
         self,
         order: Sequence[str],
@@ -661,12 +843,17 @@ class ChargeController:
         points: Mapping[str, ChargePoint],
         vehicles: Mapping[str, VehicleState],
         inputs: ChargeInputs,
+        planned: Mapping[str, _Planned],
     ) -> _Cycle:
         """Last je Phase, Überlast, Überschuss und Zuteilung des Wächters (Präzisierungen 6 und 7).
 
         Abgezogen wird nur der Strom geregelter Ladepunkte; dazu kommen die Zuschläge bei
         Ausfällen. Den Überschuss teilen sich die geregelten Ladepunkte, deren Auto laden kann, in
         der Reihenfolge ``order``; in derselben Reihenfolge teilt der Wächter zu.
+
+        „Geplant“ (``planned``, Plan 4b, Präzisierung 7): Ein Auto am Ziel nimmt nicht teil. Der
+        feste Bedarf geht vor den PV-Autos vom Überschuss ab und bestimmt den Wunsch mit; mit ihm
+        gilt das Ziel des Phasenwächters wie bei voller Leistung.
         """
         grid = inputs.grid
         regulated = [points[key] for key in order if key in points and points[key].regulated]
@@ -677,7 +864,13 @@ class ChargeController:
             reserved_a(self._cfg, list(points.values()), inputs.wallboxes),
         )
         level = self._overload.update(inputs.now, grid.phase_import_a)
-        able = [p for p in regulated if can_charge(vehicles[p.vehicle], modes[p.vehicle])]
+        reserved = {key: plan.reserved_w for key, plan in planned.items()}
+        reached = {key for key, plan in planned.items() if plan.reached}
+        able = [
+            p
+            for p in regulated
+            if can_charge(vehicles[p.vehicle], modes[p.vehicle], reached=p.vehicle in reached)
+        ]
         intent = inputs.intent
         surplus = surplus_w(
             cars_w=cars_w(able, inputs.wallboxes),
@@ -687,12 +880,27 @@ class ChargeController:
             priority=SurplusPriority() if intent is None else intent.surplus_priority,
             margin_w=self._cfg.control.surplus_margin_w,
         )
-        cars = [self._surplus_car(point, modes[point.vehicle]) for point in able]
-        shares = share_surplus(surplus, cars, self._limits.voltage_v)
-        wanted = {p.vehicle: wanted_a(p, modes[p.vehicle], shares.get(p.vehicle)) for p in able}
+        volts = self._limits.voltage_v
+        cars = [
+            self._surplus_car(point, modes[point.vehicle], reserved.get(point.vehicle, 0.0))
+            for point in able
+        ]
+        shares = share_surplus(surplus, cars, volts)
+        wanted = {
+            p.vehicle: wanted_a(
+                p,
+                modes[p.vehicle],
+                shares.get(p.vehicle),
+                reserved_w=reserved.get(p.vehicle, 0.0),
+                voltage_v=volts,
+            )
+            for p in able
+        }
         targets = {
             key: phase_target(
-                self._guard, full_power=modes[key] in FULL_POWER, soc_pct=grid.soc_pct
+                self._guard,
+                full_power=modes[key] in FULL_POWER or reserved.get(key, 0.0) > 0,
+                soc_pct=grid.soc_pct,
             )
             for key in order
         }
@@ -704,11 +912,13 @@ class ChargeController:
         ]
         return _Cycle(surplus, shares, wanted, targets, allocate(loads, claims), level)
 
-    def _surplus_car(self, point: ChargePoint, mode: Effective) -> SurplusCar:
+    def _surplus_car(self, point: ChargePoint, mode: Effective, reserved_w: float) -> SurplusCar:
         """Das Auto des Ladepunkts in der Verteilung; ein ladendes PV-Auto hält ``min_a``.
 
         An einer EVCS hält die Verteilung den zuletzt angeforderten Strom mit der Hysterese
         ``control.evcs_hysteresis_a`` (Design 6.5); ohne eigenen Wert rundet sie nur ab.
+        ``reserved_w`` ist der feste Bedarf eines Autos in „Geplant“, sonst 0; ohne ihn hält es
+        ladend ``min_a`` wie PV.
         """
         return SurplusCar(
             key=point.vehicle,
@@ -717,9 +927,10 @@ class ChargeController:
             phases=len(point.phases),
             min_a=point.min_a,
             max_a=point.max_a,
-            holding_min=mode is Effective.PV and self._machines[point.vehicle].charging,
+            holding_min=mode in _PV_LIKE and self._machines[point.vehicle].charging,
             held_a=self._held_a(point),
             hysteresis_a=self._cfg.control.evcs_hysteresis_a,
+            reserved_w=reserved_w,
         )
 
     def _held_a(self, point: ChargePoint) -> int | None:
@@ -737,6 +948,7 @@ class ChargeController:
         vehicle: VehicleState,
         mode: Effective,
         enough: bool | None,
+        plan: _Planned | None,
     ) -> ModeDecision:
         """Die Maschine eines geregelten Ladepunkts; beginnt er, vergisst die Regelung ihre Werte.
 
@@ -745,6 +957,9 @@ class ChargeController:
         bekannten Ansteckzustand. Jedes davon geschieht einmal: Dann vergisst die Regelung die
         letzten Werte des Aktors. Mit einem Ansteckvorgang beginnen auch die Fenster eines
         Fahrzeugs neu (``TeslaPolicy``); ein Gast hat keine.
+
+        In „Geplant“ (``plan``) gilt ein erreichtes Ziel wie „geladen“, und der feste Bedarf geht
+        als ``firm`` an die Maschine (Plan 4b, Präzisierung 7).
         """
         back = (key, actuator) not in self._regulated  # wieder geregelt: Übernahme
         remembered = key in self._unseen_sessions
@@ -762,11 +977,12 @@ class ChargeController:
             ModeInput(
                 mode=mode,
                 plugged=vehicle.plugged,
-                complete=vehicle.complete,
+                complete=vehicle.complete or (plan is not None and plan.reached),
                 enough=enough,
                 observed_charging=vehicle.charging,
                 new_session=session,
                 resumed=back and not session,  # ein neuer Ansteckvorgang geht vor
+                firm=plan is not None and plan.code is not None,
             ),
         )
 
@@ -814,6 +1030,8 @@ class ChargeController:
             return self._hold(point, actuator, situation, present_a, blocked)
         if not charge:
             off = (*head, PV_SURPLUS) if situation.decision.reason == PV_SURPLUS else head
+            if situation.reached:
+                off = (*off, TARGET_REACHED)
             if situation.self_start:
                 off = (*off, SELF_START)
             return self._switch_off(actuator, off, blocked, urgent=situation.mode is Effective.OFF)
@@ -1024,6 +1242,21 @@ class ChargeController:
         return self._last.changed(key, value)
 
 
+def _planned_health(planned: PlannedState | None) -> dict[str, Any] | None:
+    """Der Stand von „Geplant“ im Health (``ChargeController.health``); ``None`` ohne."""
+    if planned is None:
+        return None
+    start = planned.latest_start
+    return {
+        "state": planned.state,
+        "target_soc_pct": planned.target_soc_pct,
+        "departure_at": ensure_utc(planned.departure_at).isoformat(),
+        "need_kwh": planned.need_kwh,
+        "latest_start": None if start is None else ensure_utc(start).isoformat(),
+        "plan_w": planned.plan_w,
+    }
+
+
 def _occupant(car: str) -> str:
     """Der Insasse im Health: der Schlüssel des Fahrzeugs, für einen Gast ``guest`` ohne Wallbox."""
     return car if guest_wallbox(car) is None else GUEST
@@ -1068,10 +1301,21 @@ def _tessie_w(tessie: VehicleObs, volts: float) -> float | None:
 def _why(situation: _Situation) -> tuple[str, ...]:
     """Der Grund nach dem Modus-Code, wenn das Auto lädt und keine Überlast herrscht.
 
-    ``pv_surplus``, wenn der Wert aus dem Anteil kommt (in PV oder Min+PV liegt der Wunsch nicht
-    über der Grenze) oder die Zeiten von PV-Überschuss gerade gestartet haben; sonst der Grund der
-    Grenze (``GuardCause``, auch ``peak_guard``), wenn sie kappt; sonst keiner.
+    ``pv_surplus``, wenn der Wert aus dem Anteil kommt (in PV, Min+PV oder „Geplant“ ohne festen
+    Bedarf liegt der Wunsch nicht über der Grenze) oder die Zeiten von PV-Überschuss gerade
+    gestartet haben; sonst der Grund der Grenze (``GuardCause``, auch ``peak_guard``), wenn sie
+    kappt; sonst keiner.
+
+    Mit festem Bedarf in „Geplant“ steht zuerst sein Grund (``plan_power``, ``latest_start``),
+    danach der Grund der Grenze, wenn sie kappt, sonst ``pv_surplus``, wenn der Anteil den Wunsch
+    trägt (Plan 4b, Präzisierung 7).
     """
+    if situation.firm is not None:
+        if situation.limit < situation.wanted:
+            return (situation.firm, situation.cause.value)
+        if situation.share is not None and situation.share >= situation.wanted:
+            return (situation.firm, PV_SURPLUS)
+        return (situation.firm,)
     from_share = (
         situation.share is not None
         and situation.mode in _SURPLUS_MODES

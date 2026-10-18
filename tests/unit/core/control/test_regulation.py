@@ -7,7 +7,7 @@ import pytest
 from tests.helpers import T0
 from tests.unit.core.control.charge_helpers import CONTROLLABLE, evcs, grid, inputs, tesla, twc
 
-from bindaems.core.control.battery import BatteryCar, BatteryController, BatteryNeed
+from bindaems.core.control.battery import SUPPORT_MODES, BatteryCar, BatteryController, BatteryNeed
 from bindaems.core.control.charge_inputs import ChargeInputs
 from bindaems.core.control.charge_modes import Effective
 from bindaems.core.control.charging import CarView, ChargeController
@@ -270,10 +270,11 @@ def test_wallbox_without_vehicle_counts_with_the_guest_mode(cfg) -> None:  # Pr�
     ]
 
 
-def test_battery_cars_treat_a_planned_guest_like_pv(cfg) -> None:  # Plan 4b Task 1, Ruling R1
+def test_battery_cars_give_planned_no_support(cfg) -> None:  # Plan 4b, Präzisierung 8
     found = battery_cars(cfg, (), {}, ChargeMode.PLANNED)
     assert found
-    assert {car.mode for car in found} == {Effective.PV}
+    assert {car.mode for car in found} == {Effective.PLANNED}
+    assert Effective.PLANNED not in SUPPORT_MODES
 
 
 def test_battery_commands_follow_the_charging_commands(cfg) -> None:  # Präzisierung 3

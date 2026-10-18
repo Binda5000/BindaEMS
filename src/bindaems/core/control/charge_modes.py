@@ -2,6 +2,7 @@
 
 - ``Effective``, ``MODE_CODES``, ``FULL_POWER`` und ``PV_SURPLUS``: der geltende Modus, sein
   Grund-Code im Entscheidungslog, die Modi mit vollem Strom und der Grund-Code ``pv_surplus``
+- ``PLAN_POWER``, ``LATEST_START`` und ``TARGET_REACHED``: die Grund-Codes von „Geplant“
 - ``ModeTimers``: die Zeiten aus ``control`` der Konfiguration
 - ``ModeInput`` und ``ModeDecision``: Eingaben und Urteil eines Schritts
 - ``ModeMachine``: der Zustand eines Fahrzeugs; sie entscheidet nur, ob geladen werden soll,
@@ -27,6 +28,11 @@ from bindaems.shared.control import ChargeMode
 # Grund-Code: Der Wert kommt aus dem Anteil am Überschuss, oder die Zeiten von PV-Überschuss
 # haben gerade einen Start oder Stopp ergeben.
 PV_SURPLUS: Final = "pv_surplus"
+# Grund-Codes von „Geplant“ (Plan 4b, Präzisierung 7): Der Strom folgt der Leistung des Plan-Slots,
+# die späteste Startzeit ist erreicht, der Ziel-SOC ist erreicht.
+PLAN_POWER: Final = "plan_power"
+LATEST_START: Final = "latest_start"
+TARGET_REACHED: Final = "target_reached"
 
 
 class Effective(StrEnum):
@@ -36,14 +42,12 @@ class Effective(StrEnum):
     MIN_PV = "min_pv"
     NOW = "now"
     OFF = "off"
+    PLANNED = "planned"
     BOOST = "boost"
 
 
 def effective_of(mode: ChargeMode) -> Effective:
     """Der geltende Modus zu einem eingestellten Lademodus (ohne Boost)."""
-    if mode is ChargeMode.PLANNED:
-        # Plan 4b Task 5: PLANNED vorläufig wie PV
-        return Effective.PV
     return Effective(mode.value)
 
 
@@ -53,6 +57,7 @@ MODE_CODES: Final[Mapping[Effective, str]] = MappingProxyType(
         Effective.MIN_PV: "mode_min_pv",
         Effective.NOW: "mode_now",
         Effective.OFF: "mode_off",
+        Effective.PLANNED: "mode_planned",
         Effective.BOOST: "boost",
     }
 )
@@ -99,6 +104,9 @@ class ModeInput:
     - ``new_session``: der Schritt beginnt einen neuen Ansteckvorgang
     - ``resumed``: der erste Regelzyklus nach dem Start des core oder nach einer Pause, ob des
       ganzen core oder nur dieses Ladepunkts; ``new_session`` geht ihm vor
+    - ``firm``: In „Geplant“ hat das Auto einen festen Bedarf (Leistung des Plan-Slots oder
+      späteste Startzeit erreicht); dann gilt es wie Sofort, sonst wie PV (Plan 4b,
+      Präzisierung 7). Andere Modi lesen es nicht.
     """
 
     mode: Effective
@@ -108,6 +116,7 @@ class ModeInput:
     observed_charging: bool | None
     new_session: bool = False
     resumed: bool = False
+    firm: bool = False
 
 
 @dataclass(frozen=True)
@@ -183,6 +192,11 @@ class ModeMachine:
 
         Die Regeln 4 bis 6 beginnen frisch: Beide Zeitpunkte stehen auf ``now``, und Start und
         letzter Stopp sind vergessen, damit auch die Pause nach ``force_stop``.
+
+        „Geplant“ gilt in den Regeln 4 bis 7 ohne festen Bedarf (``firm``) wie PV, mit festem
+        Bedarf wie Sofort (Plan 4b, Präzisierung 7). Ein Wechsel von ``firm`` ist kein
+        Moduswechsel: Kommt der feste Bedarf, startet das Auto sofort, und der Start zählt für die
+        Mindestlaufzeit; fällt er weg, stoppt es nach den Zeiten von PV.
         """
         if inp.resumed:
             self._take_over = True
@@ -200,13 +214,14 @@ class ModeMachine:
             self._charging = False
             return ModeDecision(False, None)
 
+        rule = _rule_mode(inp)
         if inp.new_session:
-            return self._begin(now, inp.mode, inp.mode not in (Effective.PV, Effective.OFF))
+            return self._begin(now, inp, rule not in (Effective.PV, Effective.OFF))
         if take_over:
-            return self._begin(now, inp.mode, _takes_over(inp))
+            return self._begin(now, inp, _takes_over(inp), taken_over=True)
         if inp.mode is not self._mode:
-            return self._begin(now, inp.mode, _follows_mode(inp))
-        return self._continue(now, inp.mode)
+            return self._begin(now, inp, _follows_mode(inp))
+        return self._continue(now, rule)
 
     def force_stop(self, now: datetime) -> None:
         """Stoppt von außen, etwa bei Überlast: aus, und der letzte Stopp ist ``now``.
@@ -219,9 +234,15 @@ class ModeMachine:
         self._started_at = None
         self._stopped_at = now
 
-    def _begin(self, now: datetime, mode: Effective, charge: bool) -> ModeDecision:
-        """Beginnt frisch (Regeln 4 bis 6): ``mode`` ist der letzte Modus, ``charge`` das Urteil."""
-        self._reset(mode, now, charging=charge)
+    def _begin(
+        self, now: datetime, inp: ModeInput, charge: bool, *, taken_over: bool = False
+    ) -> ModeDecision:
+        """Beginnt frisch (Regeln 4 bis 6): ``inp.mode`` wird der letzte Modus, ``charge`` ist das
+        Urteil. Startet „Geplant“ hier mit festem Bedarf, zählt der Start für die Mindestlaufzeit,
+        außer bei der Übernahme (Regel 5)."""
+        self._reset(inp.mode, now, charging=charge)
+        if charge and inp.mode is Effective.PLANNED and inp.firm and not taken_over:
+            self._started_at = now
         return ModeDecision(charge, None)
 
     def _reset(self, mode: Effective | None, since: datetime | None, *, charging: bool) -> None:
@@ -232,14 +253,17 @@ class ModeMachine:
         self._charging = charging
 
     def _continue(self, now: datetime, mode: Effective) -> ModeDecision:
-        """Regel 7: Der Modus ist derselbe wie im letzten Schritt."""
+        """Regel 7: Der Modus ist derselbe wie im letzten Schritt; ``mode`` nach ``_rule_mode``."""
         if mode is Effective.PV:
             return self._pv(now)
         # Aus ist aus; die übrigen laden, außer innerhalb der Pause nach ``force_stop``. Nur PV
         # stoppt durch die Zeiten, und jeder Moduswechsel vergisst den Stopp: Hier stammt er
         # immer von ``force_stop``.
         paused = not _passed(self._stopped_at, now, self._timers.min_off_s)
-        self._charging = mode is not Effective.OFF and not paused
+        charging = mode is not Effective.OFF and not paused
+        if charging and not self._charging:
+            self._started_at = now  # für die Mindestlaufzeit, wenn „Geplant“ wieder wie PV gilt
+        self._charging = charging
         return ModeDecision(self._charging, None)
 
     def _pv(self, now: datetime) -> ModeDecision:
@@ -267,18 +291,28 @@ class ModeMachine:
         return reached and _passed(self._started_at, now, timers.min_on_s)
 
 
+def _rule_mode(inp: ModeInput) -> Effective:
+    """Der Modus, nach dem die Regeln 4 bis 7 entscheiden: „Geplant“ ohne festen Bedarf wie PV,
+    mit festem Bedarf wie Sofort; jeder andere Modus nach sich selbst."""
+    if inp.mode is Effective.PLANNED:
+        return Effective.NOW if inp.firm else Effective.PV
+    return inp.mode
+
+
 def _takes_over(inp: ModeInput) -> bool:
     """Regel 5: PV übernimmt den beobachteten Zustand, Aus ist aus, alles andere an."""
-    if inp.mode is Effective.PV:
+    mode = _rule_mode(inp)
+    if mode is Effective.PV:
         return inp.observed_charging is True
-    return inp.mode is not Effective.OFF
+    return mode is not Effective.OFF
 
 
 def _follows_mode(inp: ModeInput) -> bool:
     """Regel 6: Aus ist aus, PV lädt bei genug Überschuss, alles andere an."""
-    if inp.mode is Effective.PV:
+    mode = _rule_mode(inp)
+    if mode is Effective.PV:
         return inp.enough is True
-    return inp.mode is not Effective.OFF
+    return mode is not Effective.OFF
 
 
 def _passed(since: datetime | None, now: datetime, limit_s: float) -> bool:
