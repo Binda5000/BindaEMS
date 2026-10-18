@@ -159,6 +159,26 @@ def test_day_check_is_frozen() -> None:
 # --- LedgerChecks ---------------------------------------------------------------------------
 
 
+@pytest.mark.parametrize(
+    ("import_wh", "start", "end", "flagged"),
+    [
+        (30300.0, 100.0, 130.0, False),  # genau 1 % (roh 1,0000000000000024 %), 0,3 kWh
+        (30310.0, 100.0, 130.0, True),  # knapp über 1 %
+        (2100.0, 100.3, 102.3, False),  # genau 0,1 kWh (roh 0,10000000000000009), 5 %
+        (2101.0, 100.3, 102.3, True),  # knapp über 0,1 kWh
+        (29700.0, 100.0, 130.0, False),  # genau −1 %
+        (1900.0, 100.3, 102.3, False),  # genau −0,1 kWh
+        (1899.0, 100.3, 102.3, True),  # knapp darunter
+    ],
+)
+def test_thresholds_are_compared_after_rounding(
+    import_wh: float, start: float, end: float, flagged: bool
+) -> None:
+    # B9: Rundungsreste dürfen einen Tag genau an der Grenze nicht markieren
+    result = run([slot(import_wh=import_wh)], {IMP: start}, {IMP: end})["import"]
+    assert result.flagged is flagged
+
+
 def midnight(day: date) -> datetime:
     return local_day_slots(day)[0]
 

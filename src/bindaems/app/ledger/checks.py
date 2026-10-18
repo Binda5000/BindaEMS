@@ -33,6 +33,7 @@ IMPORT_COUNTER: Final = "grid.energy_import_kwh"
 EXPORT_COUNTER: Final = "grid.energy_export_kwh"
 DEVIATION_PCT: Final = 1.0  # darüber, und zugleich über MIN_DIFF_KWH, wird markiert
 MIN_DIFF_KWH: Final = 0.1
+DIGITS: Final = 6  # Differenz und Abweichung werden vor dem Vergleich so gerundet (Gleitkommareste)
 NOTE_MISSING: Final = "Zählerstand fehlt"
 NOTE_RESET: Final = "Zähler zurückgesetzt"
 NOTE_ZERO: Final = "Zähler zeigt 0 kWh"
@@ -104,8 +105,8 @@ def check_day(
             may_flag
             and counter_kwh is not None
             and deviation is not None
-            and abs(deviation) > DEVIATION_PCT
-            and abs(ledger_kwh - counter_kwh) > MIN_DIFF_KWH
+            and abs(round(deviation, DIGITS)) > DEVIATION_PCT
+            and abs(round(ledger_kwh - counter_kwh, DIGITS)) > MIN_DIFF_KWH
         )
         checks.append(DayCheck(day, signal, ledger_kwh, counter_kwh, deviation, flagged, note))
     return checks

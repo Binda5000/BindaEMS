@@ -677,8 +677,9 @@ Prüfungen, höchstens 400 Tage (sonst 422): `days` mit `day`, `signal`, `ledger
 `deviation_pct`, `flagged` und `note` je Tag und Größe, dazu `totals` mit den Summen je Größe
 über den Zeitraum.
 
-- **Markierung:** `flagged` ist wahr bei mehr als 1 % und mehr als 0,1 kWh Abweichung. `pv` wird
-  gezeigt, aber nie markiert, denn DC-gekoppelte PV hat keinen Zähler.
+- **Markierung:** `flagged` ist wahr bei mehr als 1 % und mehr als 0,1 kWh Abweichung. Genau 1 % oder
+  genau 0,1 kWh markiert die app nicht (sie rundet vor dem Vergleich auf 6 Nachkommastellen). `pv`
+  wird gezeigt, aber nie markiert, denn DC-gekoppelte PV hat keinen Zähler.
 - **Gründe (`note`):** „Zählerstand fehlt“ (kein Wert vor oder nach Mitternacht), „Zähler
   zurückgesetzt“ (der Zähler sinkt, z. B. nach einem Tausch) und „Zähler zeigt 0 kWh“. Dann gibt es
   keine Markierung; ohne Zählerwert sind `counter_kwh` und `deviation_pct` `null`, bei 0 kWh nur
