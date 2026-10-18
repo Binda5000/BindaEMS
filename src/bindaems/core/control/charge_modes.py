@@ -22,6 +22,7 @@ from typing import Final
 
 from bindaems.core.control.timing import held_since, lasted
 from bindaems.shared.config import ControlConfig
+from bindaems.shared.control import ChargeMode
 
 # Grund-Code: Der Wert kommt aus dem Anteil am Überschuss, oder die Zeiten von PV-Überschuss
 # haben gerade einen Start oder Stopp ergeben.
@@ -36,6 +37,14 @@ class Effective(StrEnum):
     NOW = "now"
     OFF = "off"
     BOOST = "boost"
+
+
+def effective_of(mode: ChargeMode) -> Effective:
+    """Der geltende Modus zu einem eingestellten Lademodus (ohne Boost)."""
+    if mode is ChargeMode.PLANNED:
+        # Plan 4b Task 5: PLANNED vorläufig wie PV
+        return Effective.PV
+    return Effective(mode.value)
 
 
 MODE_CODES: Final[Mapping[Effective, str]] = MappingProxyType(

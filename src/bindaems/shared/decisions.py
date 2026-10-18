@@ -52,6 +52,7 @@ _REASON_TEXT: Final = {
     "mode_min_pv": "Min+PV",
     "mode_now": "Sofort",
     "mode_off": "Aus",
+    "mode_planned": "Geplant",
     "boost": "Boost",
     "pv_surplus": "Überschuss",
     "phase_limit": "Phasengrenze",
@@ -70,6 +71,10 @@ _REASON_TEXT: Final = {
     "assignment_detected": "Zuordnung erkannt",
     "self_start": "Selbststart",
     "foreign_change": "Änderung von außen",
+    "plan_power": "Plan: Laden",
+    "latest_start": "Späteste Startzeit",
+    "target_reached": "Ziel-SOC erreicht",
+    "charge_limit": "Ladelimit",
 }
 
 

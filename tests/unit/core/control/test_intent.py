@@ -477,8 +477,20 @@ def test_charging_intent_is_accepted_saved_and_reloaded(tmp_path, limits) -> Non
             "control": True,
             "actuators": {},
             "vehicles": {
-                "tesla": {"mode": "now", "boost_until": "2026-10-08T13:00:00Z", "wallbox": "evcs"},
-                "egolf": {"mode": "min_pv", "boost_until": None, "wallbox": None},
+                "tesla": {
+                    "mode": "now",
+                    "boost_until": "2026-10-08T13:00:00Z",
+                    "wallbox": "evcs",
+                    "target_soc_pct": 80,
+                    "departure": "07:00",
+                },
+                "egolf": {
+                    "mode": "min_pv",
+                    "boost_until": None,
+                    "wallbox": None,
+                    "target_soc_pct": 80,
+                    "departure": "07:00",
+                },
             },
             "priority": ["egolf", "tesla"],
             "surplus_priority": {"kind": "cars_first", "soc_pct": 50.0},

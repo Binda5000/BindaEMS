@@ -31,6 +31,9 @@ SAMPLE_PARAMS: dict[str, dict[str, float | str]] = {
     "UNTERSTUETZUNG_RESERVIERT": {"soc": 70.0, "um": "2026-10-16T16:00:00+00:00"},
     "GESCHAETZT": {},
     "ERSATZPLAN": {},
+    "ZIEL_SOC_ABFAHRT": {"name": "Tesla Model 3", "kw": 7.0, "soc": 80.0, "um": "07:00"},
+    "AUTO_WARTET_AUF_PV": {"name": "e-Golf"},
+    "ZIEL_SOC_UNERREICHBAR": {"name": "e-Golf", "soc": 62.4, "um": "06:30"},
 }
 
 
@@ -95,6 +98,9 @@ def test_all_sentences_match_the_texts_exactly() -> None:
         ),
         "GESCHAETZT": "Preis geschätzt.",
         "ERSATZPLAN": "Ersatzplan.",
+        "ZIEL_SOC_ABFAHRT": "Tesla Model 3 lädt 7,0 kW, damit es um 07:00 Uhr 80 % hat.",
+        "AUTO_WARTET_AUF_PV": "e-Golf wartet auf PV-Überschuss (Regel R).",
+        "ZIEL_SOC_UNERREICHBAR": "e-Golf erreicht bis 06:30 Uhr voraussichtlich nur 62 %.",
     }
     assert set(expected) == set(get_args(ReasonCode))
     for code, text in expected.items():

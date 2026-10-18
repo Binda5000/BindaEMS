@@ -81,6 +81,15 @@ _SENTENCES: dict[str, Callable[[Params], str]] = {
     ),
     "GESCHAETZT": lambda _: "Preis geschätzt.",
     "ERSATZPLAN": lambda _: "Ersatzplan.",
+    "ZIEL_SOC_ABFAHRT": lambda p: (
+        f"{_txt(p, 'name')} lädt {_de(_num(p, 'kw'), 1)} kW, damit es um {_txt(p, 'um')} Uhr "
+        f"{_de(_num(p, 'soc'), 0)} % hat."
+    ),
+    "AUTO_WARTET_AUF_PV": lambda p: f"{_txt(p, 'name')} wartet auf PV-Überschuss (Regel R).",
+    "ZIEL_SOC_UNERREICHBAR": lambda p: (
+        f"{_txt(p, 'name')} erreicht bis {_txt(p, 'um')} Uhr voraussichtlich nur "
+        f"{_de(_num(p, 'soc'), 0)} %."
+    ),
 }
 
 

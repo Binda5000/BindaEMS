@@ -125,7 +125,7 @@ it('Bedienen wählt einen Lademodus', async () => {
 		within(select)
 			.getAllByRole('option')
 			.map((o) => o.textContent)
-	).toEqual(['PV-Überschuss', 'Min+PV', 'Sofort', 'Aus']);
+	).toEqual(['PV-Überschuss', 'Min+PV', 'Sofort', 'Aus', 'Geplant']);
 	const loaded = api.control.mock.calls.length;
 	await fireEvent.change(select, { target: { value: 'now' } });
 	await waitFor(() => expect(api.setMode).toHaveBeenCalledWith('tesla', 'now'));
@@ -230,7 +230,15 @@ it('Boost wartet auf das Anstecken, solange die Absicht ihn hält', async () => 
 	const health = system().core.health!;
 	const future = new Date(Date.now() + 6 * 3_600_000).toISOString();
 	const intent = baseIntent({
-		vehicles: { tesla: { mode: 'min_pv', boost_until: future, wallbox: null } }
+		vehicles: {
+			tesla: {
+				mode: 'min_pv',
+				boost_until: future,
+				wallbox: null,
+				target_soc_pct: 80,
+				departure: '07:00'
+			}
+		}
 	});
 	await show(
 		healthWith({
@@ -354,7 +362,15 @@ it('zeigt eine Wallbox ohne Vorgang', async () => {
 it('zeigt die Übersteuerung einer Wallbox in der Auswahl', async () => {
 	const health = system().core.health!;
 	const intent = baseIntent({
-		vehicles: { egolf: { mode: 'pv', boost_until: null, wallbox: 'twc' } }
+		vehicles: {
+			egolf: {
+				mode: 'pv',
+				boost_until: null,
+				wallbox: 'twc',
+				target_soc_pct: 80,
+				departure: '07:00'
+			}
+		}
 	});
 	await show(
 		healthWith({
@@ -375,6 +391,12 @@ it('wählt den Gast-Modus', async () => {
 	api.setGuestMode.mockResolvedValue(reply());
 	const select = within(card('Gast')).getByRole('combobox', { name: 'Lademodus' });
 	expect(select).toHaveValue('pv');
+	// Ein Gast kann nicht „Geplant“ laden
+	expect(
+		within(select)
+			.getAllByRole('option')
+			.map((o) => o.textContent)
+	).toEqual(['PV-Überschuss', 'Min+PV', 'Sofort', 'Aus']);
 	await fireEvent.change(select, { target: { value: 'now' } });
 	await waitFor(() => expect(api.setGuestMode).toHaveBeenCalledWith('now'));
 });
@@ -523,7 +545,15 @@ it('folgt der Absicht, solange Health älter ist: Zuordnung bleibt auf dem gewä
 	await show();
 	const pinned = baseIntent({
 		version: 2,
-		vehicles: { egolf: { mode: 'pv', boost_until: null, wallbox: 'twc' } }
+		vehicles: {
+			egolf: {
+				mode: 'pv',
+				boost_until: null,
+				wallbox: 'twc',
+				target_soc_pct: 80,
+				departure: '07:00'
+			}
+		}
 	});
 	api.setWallboxVehicle.mockResolvedValue(reply(pinned));
 	api.control.mockResolvedValue({ core_connected: true, intent: pinned }); // Health hat Version 1
@@ -538,7 +568,15 @@ it('folgt der Absicht, solange Health älter ist: Boost zeigt „Boost beenden�
 	const future = new Date(Date.now() + 6 * 3_600_000).toISOString();
 	const boosted = baseIntent({
 		version: 2,
-		vehicles: { tesla: { mode: 'min_pv', boost_until: future, wallbox: null } }
+		vehicles: {
+			tesla: {
+				mode: 'min_pv',
+				boost_until: future,
+				wallbox: null,
+				target_soc_pct: 80,
+				departure: '07:00'
+			}
+		}
 	});
 	api.setBoost.mockResolvedValue(reply(boosted));
 	api.control.mockResolvedValue({ core_connected: true, intent: boosted }); // Health hat Version 1

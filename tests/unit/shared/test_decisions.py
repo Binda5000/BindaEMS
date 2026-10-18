@@ -550,3 +550,18 @@ def test_foreign_decision_round_trips() -> None:
     d = decision(result=DecisionResult.FOREIGN, outcome=NO_VERDICT)
     assert NO_VERDICT == "none"
     assert decision_from_json(decision_to_json(d)) == d
+
+
+@pytest.mark.parametrize(
+    ("code", "expected"),
+    [
+        ("mode_planned", "Geplant"),
+        ("plan_power", "Plan: Laden"),
+        ("latest_start", "Späteste Startzeit"),
+        ("target_reached", "Ziel-SOC erreicht"),
+        ("charge_limit", "Ladelimit"),
+    ],
+)
+def test_planned_charging_reasons_have_texts(code: str, expected: str) -> None:  # Plan 4b, „Texte“
+    text = decision_text("V", CommandKind.CURRENT, 8.0, DecisionResult.OK, reasons=(code,))
+    assert text == f"V ({expected}): Strom 8 A – gesendet und bestätigt."

@@ -411,6 +411,18 @@ def test_vehicle_without_entry_charges_in_pv(cfg) -> None:  # Review Focus 4
     ]
 
 
+def test_planned_mode_is_provisionally_pv(cfg) -> None:  # Plan 4b Task 1, Ruling R1
+    pv = run(ChargeController(cfg, HardLimits.from_config(cfg), started=T0), cfg, 121)
+    planned_car = ChargeController(cfg, HardLimits.from_config(cfg), started=T0)
+    planned = run(planned_car, cfg, 121, intent=egolf_in(ChargeMode.PLANNED))
+    assert as_commands(planned) == as_commands(pv)
+    guest = Intent(version=1, control=True, guest=GuestIntent(mode=ChargeMode.PLANNED))
+    found = run(
+        ChargeController(cfg, HardLimits.from_config(cfg), started=T0), cfg, 61, intent=guest
+    )
+    assert all(x.command.reasons[0] == "mode_pv" for _, x in found)
+
+
 def test_unplugged_car_gets_charging_off_once(cfg) -> None:
     found = run(
         ChargeController(cfg, HardLimits.from_config(cfg), started=T0),

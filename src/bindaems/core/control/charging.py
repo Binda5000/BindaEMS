@@ -115,6 +115,7 @@ from bindaems.core.control.charge_modes import (
     ModeInput,
     ModeMachine,
     ModeTimers,
+    effective_of,
 )
 from bindaems.core.control.charge_points import (
     ChargePoint,
@@ -1035,11 +1036,11 @@ def _mode(key: str, vehicle: VehicleState, intent: Intent | None) -> Effective:
     (Plan 2c-2b, Präzisierung 6).
     """
     if guest_wallbox(key) is not None:
-        return Effective((GuestIntent() if intent is None else intent.guest).mode.value)
+        return effective_of((GuestIntent() if intent is None else intent.guest).mode)
     if vehicle.boost_until is not None:
         return Effective.BOOST
     entry = None if intent is None else intent.vehicles.get(key)
-    return Effective((VehicleIntent() if entry is None else entry).mode.value)
+    return effective_of((VehicleIntent() if entry is None else entry).mode)
 
 
 def _car_view(

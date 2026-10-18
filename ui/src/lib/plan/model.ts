@@ -18,7 +18,8 @@ export const TRIGGER_LABELS: Record<PlanTrigger, string> = {
 	soc: 'SOC weicht ab',
 	month_peak: 'neue Monatsspitze',
 	settings: 'Einstellungen geändert',
-	manual: 'Neu planen'
+	manual: 'Neu planen',
+	vehicles: 'Fahrzeug geändert'
 };
 
 export const SOURCE_LABELS = { optimizer: 'Optimierer', fallback: 'Ersatzplan' } as const;

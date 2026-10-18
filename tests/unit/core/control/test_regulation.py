@@ -270,6 +270,12 @@ def test_wallbox_without_vehicle_counts_with_the_guest_mode(cfg) -> None:  # Pr√
     ]
 
 
+def test_battery_cars_treat_a_planned_guest_like_pv(cfg) -> None:  # Plan 4b Task 1, Ruling R1
+    found = battery_cars(cfg, (), {}, ChargeMode.PLANNED)
+    assert found
+    assert {car.mode for car in found} == {Effective.PV}
+
+
 def test_battery_commands_follow_the_charging_commands(cfg) -> None:  # Pr√§zisierung 3
     regulation = Regulation(cfg, HardLimits.from_config(cfg), started=T0)
     charge = inputs(

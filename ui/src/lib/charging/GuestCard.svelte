@@ -2,7 +2,7 @@
 	import type { ChargeMode } from '$lib/api/schemas';
 	import Card from '$lib/components/Card.svelte';
 	import Notice from '$lib/components/Notice.svelte';
-	import { CHARGE_MODES, modeLabel, type CardNotice } from './view';
+	import { GUEST_MODES, modeLabel, type CardNotice } from './view';
 
 	interface Props {
 		mode: ChargeMode;
@@ -26,7 +26,7 @@
 		<label>
 			Lademodus
 			<select value={mode} disabled={busy} onchange={choose}>
-				{#each CHARGE_MODES as option (option)}
+				{#each GUEST_MODES as option (option)}
 					<option value={option}>{modeLabel(option)}</option>
 				{/each}
 			</select>

@@ -101,11 +101,11 @@ const Mode = ActuatorModeSchema;
 // --- Absicht der Bedienung ---------------------------------------------------------------
 
 /** Lademodus, den die Bedienung einstellt (der geltende Modus „boost“ steht nur in Health) */
-export const ChargeModeSchema = v.picklist(['pv', 'min_pv', 'now', 'off']);
+export const ChargeModeSchema = v.picklist(['pv', 'min_pv', 'now', 'off', 'planned']);
 export type ChargeMode = v.InferOutput<typeof ChargeModeSchema>;
 
 /** Geltender Modus eines Fahrzeugs in Health: der eingestellte, bei aktivem Boost `boost` */
-export const EffectiveModeSchema = v.picklist(['pv', 'min_pv', 'now', 'off', 'boost']);
+export const EffectiveModeSchema = v.picklist(['pv', 'min_pv', 'now', 'off', 'planned', 'boost']);
 export type EffectiveMode = v.InferOutput<typeof EffectiveModeSchema>;
 
 export const SurplusPrioritySchema = v.object({
@@ -117,7 +117,11 @@ export type SurplusPriority = v.InferOutput<typeof SurplusPrioritySchema>;
 export const VehicleIntentSchema = v.object({
 	mode: ChargeModeSchema,
 	boost_until: v.nullable(Iso),
-	wallbox: v.nullable(v.string())
+	wallbox: v.nullable(v.string()),
+	/** Ziel-SOC für „Geplant“ in %, ganze Zahl 20 bis 100 */
+	target_soc_pct: v.number(),
+	/** Tägliche Abfahrt für „Geplant“, lokale Uhrzeit `HH:MM` */
+	departure: v.string()
 });
 export type VehicleIntent = v.InferOutput<typeof VehicleIntentSchema>;
 
@@ -964,7 +968,10 @@ export const PlanReasonCodeSchema = v.picklist([
 	'EIGENVERBRAUCH',
 	'UNTERSTUETZUNG_RESERVIERT',
 	'GESCHAETZT',
-	'ERSATZPLAN'
+	'ERSATZPLAN',
+	'ZIEL_SOC_ABFAHRT',
+	'AUTO_WARTET_AUF_PV',
+	'ZIEL_SOC_UNERREICHBAR'
 ]);
 export type PlanReasonCode = v.InferOutput<typeof PlanReasonCodeSchema>;
 
@@ -977,7 +984,8 @@ export const PlanTriggerSchema = v.picklist([
 	'soc',
 	'month_peak',
 	'settings',
-	'manual'
+	'manual',
+	'vehicles'
 ]);
 export type PlanTrigger = v.InferOutput<typeof PlanTriggerSchema>;
 

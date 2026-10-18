@@ -215,6 +215,7 @@ CHARGING_REASONS = {
     "mode_min_pv",
     "mode_now",
     "mode_off",
+    "mode_planned",
     "boost",
     "pv_surplus",
     "phase_limit",
@@ -227,6 +228,10 @@ CHARGING_REASONS = {
     "assignment_detected",
     "resume_after_outage",
     "self_start",
+    "plan_power",
+    "latest_start",
+    "target_reached",
+    "charge_limit",
 }
 
 
@@ -551,6 +556,9 @@ def test_plan_reasons_in_the_guide_match_the_code() -> None:
         "UNTERSTUETZUNG_RESERVIERT": {"soc": 70.0, "um": "2026-10-16T16:00:00+00:00"},
         "GESCHAETZT": {},
         "ERSATZPLAN": {},
+        "ZIEL_SOC_ABFAHRT": {"name": "Tesla Model 3", "kw": 7.0, "soc": 80.0, "um": "07:00"},
+        "AUTO_WARTET_AUF_PV": {"name": "e-Golf"},
+        "ZIEL_SOC_UNERREICHBAR": {"name": "e-Golf", "soc": 62.0, "um": "06:30"},
     }
     assert set(examples) == codes
     section = _guide_section("Planung")
@@ -572,6 +580,9 @@ def test_plan_reasons_in_the_guide_match_the_code() -> None:
         "NETZLADEN_AUS",
         "PV_UEBERSCHUSS_ERWARTET",
         "EIGENVERBRAUCH",
+        "ZIEL_SOC_ABFAHRT",
+        "AUTO_WARTET_AUF_PV",
+        "ZIEL_SOC_UNERREICHBAR",
         "UNTERSTUETZUNG_RESERVIERT",
         "GESCHAETZT",
         "ERSATZPLAN",

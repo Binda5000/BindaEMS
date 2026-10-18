@@ -26,7 +26,10 @@ import { parseIso, todayVienna } from '$lib/time';
 export type Names = Record<string, string>;
 
 /** Die Modi, die die Bedienung einstellt, in der Reihenfolge der Auswahl */
-export const CHARGE_MODES: readonly ChargeMode[] = ['pv', 'min_pv', 'now', 'off'];
+export const CHARGE_MODES: readonly ChargeMode[] = ['pv', 'min_pv', 'now', 'off', 'planned'];
+
+/** Die Modi eines Gastes: ohne „Geplant“, denn für ihn gibt es weder Ladestand noch Abfahrt */
+export const GUEST_MODES: readonly ChargeMode[] = ['pv', 'min_pv', 'now', 'off'];
 
 export const SURPLUS_KINDS: readonly SurplusPriority['kind'][] = [
 	'cars_first',
@@ -39,6 +42,7 @@ const MODES: Record<EffectiveMode, string> = {
 	min_pv: 'Min+PV',
 	now: 'Sofort',
 	off: 'Aus',
+	planned: 'Geplant',
 	boost: 'Boost'
 };
 
@@ -68,6 +72,7 @@ const REASONS: Record<string, string> = {
 	mode_min_pv: 'Min+PV',
 	mode_now: 'Sofort',
 	mode_off: 'Aus',
+	mode_planned: 'Geplant',
 	boost: 'Boost',
 	pv_surplus: 'Überschuss',
 	phase_limit: 'Phasengrenze',
@@ -85,7 +90,11 @@ const REASONS: Record<string, string> = {
 	plan_grid_charge: 'Plan: Netzladen',
 	assignment_detected: 'Zuordnung erkannt',
 	self_start: 'Selbststart',
-	foreign_change: 'Änderung von außen'
+	foreign_change: 'Änderung von außen',
+	plan_power: 'Plan: Laden',
+	latest_start: 'Späteste Startzeit',
+	target_reached: 'Ziel-SOC erreicht',
+	charge_limit: 'Ladelimit'
 };
 
 const SURPLUS: Record<'cars_first' | 'battery_first', string> = {

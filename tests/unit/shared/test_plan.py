@@ -10,6 +10,8 @@ from bindaems.shared.plan import (
     BatteryIntentKind,
     IntentPlanSlot,
     Plan,
+    PlanVehicle,
+    Reason,
     intent_plan,
 )
 
@@ -134,3 +136,85 @@ def test_stored_plan_without_threshold_loads() -> None:
 def test_plan_slot_threshold_roundtrips() -> None:
     plan = sample_plan(DAY + "10:01:00+00:00", ["10:00"], intents=[{"support_soc_pct": 55.0}])
     assert Plan.model_validate_json(plan.model_dump_json()).slots[0].support_soc_pct == 55.0
+
+
+def test_intent_plan_carries_vehicle_power() -> None:
+    plan = _stored(
+        DAY + "10:01:00+00:00",
+        ["10:00", "10:15"],
+        intents=[{"ev_w": {"tesla": 7012.6, "egolf": 0.4}}, {}],
+    )
+    first, second = intent_plan(plan, grid_charge_allowed=False).slots
+    assert first.vehicles == {"tesla": 7013, "egolf": 0}
+    assert second.vehicles == {}
+
+
+def test_intent_plan_slot_vehicles_must_not_be_negative() -> None:
+    with pytest.raises(ValidationError):
+        IntentPlanSlot(
+            start=at(DAY + "10:00:00+00:00"), intent=BatteryIntent(), vehicles={"tesla": -1}
+        )
+
+
+def test_old_plan_json_loads_without_vehicles() -> None:
+    raw = sample_plan(DAY + "10:01:00+00:00", ["10:00"]).model_dump(mode="json")
+    del raw["vehicles"]
+    del raw["slots"][0]["ev_w"]
+    plan = Plan.model_validate(raw)
+    assert plan.vehicles == []
+    assert plan.slots[0].ev_w == {}
+
+
+def test_old_intent_plan_json_loads_without_vehicles() -> None:
+    sent = intent_plan(_stored(DAY + "10:01:00+00:00", ["10:00"]), grid_charge_allowed=True)
+    raw = sent.model_dump(mode="json")
+    del raw["slots"][0]["vehicles"]
+    assert type(sent).model_validate(raw).slots[0].vehicles == {}
+
+
+def _vehicle(**changes: object) -> PlanVehicle:
+    fields: dict[str, object] = {
+        "key": "tesla",
+        "name": "Tesla Model 3",
+        "wallbox": "evcs",
+        "target_soc_pct": 80,
+        "departure_at": at(DAY + "05:00:00+00:00"),
+        "soc_start_pct": 40.0,
+        "soc_assumed": False,
+        "limit_pct": None,
+        "need_kwh": 25.0,
+        "planned_kwh": 25.0,
+        "shortfall_kwh": 0.0,
+        "expected_soc_pct": 80.0,
+        "finish_at": at(DAY + "03:30:00+00:00"),
+        "reachable": True,
+    }
+    return PlanVehicle(**(fields | changes))  # type: ignore[arg-type]
+
+
+def test_plan_vehicle_roundtrips_in_a_plan() -> None:
+    plan = sample_plan(DAY + "10:01:00+00:00", ["10:00"], intents=[{"ev_w": {"tesla": 7000.0}}])
+    plan = plan.model_copy(
+        update={"vehicles": [_vehicle(), _vehicle(key="egolf", finish_at=None, limit_pct=70.0)]}
+    )
+    again = Plan.model_validate_json(plan.model_dump_json())
+    assert again == plan
+    assert again.vehicles[1].finish_at is None
+    assert again.vehicles[1].limit_pct == 70.0
+    assert again.slots[0].ev_w == {"tesla": 7000.0}
+
+
+def test_plan_vehicle_rejects_unknown_fields_and_naive_times() -> None:
+    with pytest.raises(ValidationError):
+        _vehicle(extra=1)
+    with pytest.raises(ValidationError):
+        _vehicle(departure_at=at("2026-10-16T05:00:00"))
+
+
+def test_new_reason_codes_and_trigger_are_accepted() -> None:
+    for code in ("ZIEL_SOC_ABFAHRT", "AUTO_WARTET_AUF_PV", "ZIEL_SOC_UNERREICHBAR"):
+        assert Reason(code=code, params={}).code == code  # type: ignore[arg-type]
+    plan = sample_plan(DAY + "10:01:00+00:00", ["10:00"]).model_copy(update={"trigger": "vehicles"})
+    assert Plan.model_validate_json(plan.model_dump_json()).trigger == "vehicles"
+    with pytest.raises(ValidationError):
+        Reason(code="GIBT_ES_NICHT", params={})  # type: ignore[arg-type]

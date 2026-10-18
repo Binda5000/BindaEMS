@@ -218,6 +218,23 @@ describe('Bedienung und Entscheidungen', () => {
 		expect(issues(s.ChargeModeSchema, 'min_pv')).toEqual([]);
 	});
 
+	it('kennt den Modus „Geplant“ und die neuen Grundcodes des Plans', () => {
+		expect(issues(s.ChargeModeSchema, 'planned')).toEqual([]);
+		expect(issues(s.EffectiveModeSchema, 'planned')).toEqual([]);
+		for (const code of ['ZIEL_SOC_ABFAHRT', 'AUTO_WARTET_AUF_PV', 'ZIEL_SOC_UNERREICHBAR']) {
+			expect(issues(s.PlanReasonCodeSchema, code)).toEqual([]);
+		}
+		expect(issues(s.PlanTriggerSchema, 'vehicles')).toEqual([]);
+	});
+
+	it('verlangt Ziel und Abfahrt in der Absicht eines Fahrzeugs', () => {
+		const intent = { mode: 'planned', boost_until: null, wallbox: null };
+		expect(issues(s.VehicleIntentSchema, intent)).not.toEqual([]);
+		expect(
+			issues(s.VehicleIntentSchema, { ...intent, target_soc_pct: 80, departure: '07:00' })
+		).toEqual([]);
+	});
+
 	it('kennt die Antwort der Quittierung', () => {
 		expect(issues(s.AckResponseSchema, { detail: 'Quittiert.' })).toEqual([]);
 	});

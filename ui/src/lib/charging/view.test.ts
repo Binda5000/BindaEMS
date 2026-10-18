@@ -4,6 +4,8 @@ import { chargingSession } from '$lib/testing/fixtures';
 import {
 	assignmentLabel,
 	boostInfo,
+	CHARGE_MODES,
+	GUEST_MODES,
 	healthIsCurrent,
 	indicatorText,
 	latestSession,
@@ -58,9 +60,14 @@ function intent(vehicles: Intent['vehicles'] = {}): Intent {
 describe('Texte', () => {
 	it('benennt die Lademodi', () => {
 		expect(
-			(['pv', 'min_pv', 'now', 'off', 'boost'] as const).map((mode) => modeLabel(mode))
-		).toEqual(['PV-Überschuss', 'Min+PV', 'Sofort', 'Aus', 'Boost']);
+			(['pv', 'min_pv', 'now', 'off', 'planned', 'boost'] as const).map((mode) => modeLabel(mode))
+		).toEqual(['PV-Überschuss', 'Min+PV', 'Sofort', 'Aus', 'Geplant', 'Boost']);
 		expect(modeLabel(null)).toBe('–');
+	});
+
+	it('bietet „Geplant“ den Fahrzeugen an, einem Gast nicht', () => {
+		expect(CHARGE_MODES).toEqual(['pv', 'min_pv', 'now', 'off', 'planned']);
+		expect(GUEST_MODES).toEqual(['pv', 'min_pv', 'now', 'off']);
 	});
 
 	it('benennt die Art der Zuordnung', () => {
@@ -125,6 +132,11 @@ describe('Texte', () => {
 	it('übersetzt den letzten Grund, Unbekanntes bleibt', () => {
 		expect(reasonLabel('mode_min_pv')).toBe('Min+PV');
 		expect(reasonLabel('self_start')).toBe('Selbststart');
+		expect(
+			['mode_planned', 'plan_power', 'latest_start', 'target_reached', 'charge_limit'].map(
+				reasonLabel
+			)
+		).toEqual(['Geplant', 'Plan: Laden', 'Späteste Startzeit', 'Ziel-SOC erreicht', 'Ladelimit']);
 		expect(reasonLabel('neu')).toBe('neu');
 		expect(reasonLabel(null)).toBe('–');
 	});
@@ -176,7 +188,15 @@ describe('Boost', () => {
 
 	it('zeigt einen wartenden Boost aus der Absicht', () => {
 		const future = '2026-10-09T21:00:00+00:00';
-		const vehicles = { tesla: { mode: 'pv' as const, boost_until: future, wallbox: null } };
+		const vehicles = {
+			tesla: {
+				mode: 'pv' as const,
+				boost_until: future,
+				wallbox: null,
+				target_soc_pct: 80,
+				departure: '07:00'
+			}
+		};
 		expect(boostInfo(vehicle({ boost_pending: true }), intent(vehicles), now)).toEqual({
 			active: true,
 			until: future,
@@ -186,10 +206,24 @@ describe('Boost', () => {
 
 	it('übergeht einen alten Boost der Absicht', () => {
 		const past = '2026-10-09T08:00:00+00:00';
-		const vehicles = { tesla: { mode: 'pv' as const, boost_until: past, wallbox: null } };
+		const vehicles = {
+			tesla: {
+				mode: 'pv' as const,
+				boost_until: past,
+				wallbox: null,
+				target_soc_pct: 80,
+				departure: '07:00'
+			}
+		};
 		expect(boostInfo(vehicle({ boost_pending: true }), intent(vehicles), now).active).toBe(false);
 		const future = {
-			tesla: { mode: 'pv' as const, boost_until: '2026-10-09T21:00:00Z', wallbox: null }
+			tesla: {
+				mode: 'pv' as const,
+				boost_until: '2026-10-09T21:00:00Z',
+				wallbox: null,
+				target_soc_pct: 80,
+				departure: '07:00'
+			}
 		};
 		// ohne Wartezustand gilt der Boost der Absicht nicht (Health ist maßgeblich)
 		expect(boostInfo(vehicle(), intent(future), now).active).toBe(false);
@@ -197,7 +231,15 @@ describe('Boost', () => {
 });
 
 describe('Übersteuerung', () => {
-	const pinned = { egolf: { mode: 'pv' as const, boost_until: null, wallbox: 'twc' } };
+	const pinned = {
+		egolf: {
+			mode: 'pv' as const,
+			boost_until: null,
+			wallbox: 'twc',
+			target_soc_pct: 80,
+			departure: '07:00'
+		}
+	};
 
 	it('findet das Fahrzeug, das Health als Übersteuerung zeigt', () => {
 		const vehicles = [
@@ -230,8 +272,18 @@ describe('Übersteuerung', () => {
 describe('Health älter als die Absicht', () => {
 	const now = Date.parse('2026-10-09T09:00:00Z');
 	const future = '2026-10-09T21:00:00+00:00';
-	const boosted = intent({ tesla: { mode: 'pv', boost_until: future, wallbox: null } });
-	const pinned = intent({ egolf: { mode: 'pv', boost_until: null, wallbox: 'twc' } });
+	const boosted = intent({
+		tesla: {
+			mode: 'pv',
+			boost_until: future,
+			wallbox: null,
+			target_soc_pct: 80,
+			departure: '07:00'
+		}
+	});
+	const pinned = intent({
+		egolf: { mode: 'pv', boost_until: null, wallbox: 'twc', target_soc_pct: 80, departure: '07:00' }
+	});
 
 	it('erkennt, ob Health die Absicht schon übernommen hat', () => {
 		expect(healthIsCurrent(null, null)).toBe(true);
@@ -259,7 +311,13 @@ describe('Health älter als die Absicht', () => {
 
 	it('übergeht in der Absicht einen Boost in der Vergangenheit', () => {
 		const past = intent({
-			tesla: { mode: 'pv', boost_until: '2026-10-09T08:00:00Z', wallbox: null }
+			tesla: {
+				mode: 'pv',
+				boost_until: '2026-10-09T08:00:00Z',
+				wallbox: null,
+				target_soc_pct: 80,
+				departure: '07:00'
+			}
 		});
 		expect(boostInfo(vehicle(), past, now, false).active).toBe(false);
 	});

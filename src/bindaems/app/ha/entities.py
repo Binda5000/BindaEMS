@@ -187,17 +187,23 @@ def _entry(entries: Sequence[Mapping[str, Any]], key: str) -> Mapping[str, Any] 
     return next((item for item in entries if item.get("id") == key), None)
 
 
+def _mode_label(mode: ChargeMode) -> str:
+    """Der Text des Lademodus; „Geplant“ hat noch keinen eigenen Eintrag."""
+    # Plan 4b Task 5: PLANNED vorläufig wie PV
+    return MODE_LABELS[ChargeMode.PV if mode is ChargeMode.PLANNED else mode]
+
+
 def _mode_state(key: str) -> Callable[[HaInputs], str]:
     def value(inputs: HaInputs) -> str:
         if inputs.intent is None:
             return UNKNOWN
-        return MODE_LABELS[inputs.intent.vehicles.get(key, VehicleIntent()).mode]
+        return _mode_label(inputs.intent.vehicles.get(key, VehicleIntent()).mode)
 
     return value
 
 
 def _guest_mode_state(inputs: HaInputs) -> str:
-    return UNKNOWN if inputs.intent is None else MODE_LABELS[inputs.intent.guest.mode]
+    return UNKNOWN if inputs.intent is None else _mode_label(inputs.intent.guest.mode)
 
 
 def _regulation_state(inputs: HaInputs) -> str:

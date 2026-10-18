@@ -49,7 +49,7 @@ from typing import Any, Final
 
 from bindaems.core.control.battery import BatteryCar, BatteryController, BatteryNeed, cycle_wanted_w
 from bindaems.core.control.charge_inputs import ChargeInputs, WallboxObs
-from bindaems.core.control.charge_modes import Effective
+from bindaems.core.control.charge_modes import Effective, effective_of
 from bindaems.core.control.charging import CarView, ChargeController
 from bindaems.core.control.executor import WriteResult
 from bindaems.core.control.last_values import ControlCommand, Key
@@ -320,7 +320,7 @@ def battery_cars(
     """
     found = [BatteryCar(car.wallbox, car.mode, car.power_w, car.charging) for car in cars]
     taken = {car.wallbox for car in cars}
-    mode = Effective(guest.value)
+    mode = effective_of(guest)
     for key in cfg.wallboxes:
         if key in taken:
             continue

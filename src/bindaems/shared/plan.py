@@ -58,6 +58,9 @@ ReasonCode = Literal[
     "UNTERSTUETZUNG_RESERVIERT",
     "GESCHAETZT",
     "ERSATZPLAN",
+    "ZIEL_SOC_ABFAHRT",
+    "AUTO_WARTET_AUF_PV",
+    "ZIEL_SOC_UNERREICHBAR",
 ]
 PlanSource = Literal["optimizer", "fallback"]
 PlanTrigger = Literal[
@@ -70,6 +73,7 @@ PlanTrigger = Literal[
     "month_peak",
     "settings",
     "manual",
+    "vehicles",
 ]
 SolverStatus = Literal["optimal", "time_limit", "infeasible", "timeout", "error"]
 
@@ -82,7 +86,10 @@ class Reason(_Model):
 
 
 class PlanSlot(_Model):
-    """Eine Viertelstunde des Plans; Leistungen sind Mittelwerte in W."""
+    """Eine Viertelstunde des Plans; Leistungen sind Mittelwerte in W.
+
+    ``ev_w`` ist die geplante Ladeleistung je Fahrzeug-Schlüssel (nur Autos mit Leistung über 0).
+    """
 
     start: AwareDatetime
     intent: BatteryIntent
@@ -101,7 +108,38 @@ class PlanSlot(_Model):
     cost_ct: Finite
     budget_kw: Finite | None
     support_soc_pct: Finite | None = None
+    ev_w: dict[str, Finite] = Field(default_factory=dict)
     reasons: list[Reason]
+
+
+class PlanVehicle(_Model):
+    """Zusammenfassung des Plans für ein geplantes Auto (Plan 4b, Präzisierung 3 und 14).
+
+    - ``target_soc_pct``: das wirksame Ziel (unter dem Ladelimit des Autos, wenn das Limit nicht
+      angeglichen wird); ``limit_pct``: das Ladelimit im Auto, ``None`` wenn unbekannt
+    - ``soc_start_pct`` und ``soc_assumed``: Ladestand zu Beginn; angenommen heißt, er ist nicht
+      gemessen und nicht geschätzt
+    - ``need_kwh``, ``planned_kwh`` und ``shortfall_kwh``: Bedarf, im Plan geladene Energie (am
+      Fahrzeug) und Fehlmenge
+    - ``expected_soc_pct``: Ladestand an der Abfahrt, wenn der Plan so läuft
+    - ``finish_at``: Ende des letzten Slots mit Laden, ``None`` ohne Laden
+    - ``reachable``: erreicht der Plan das Ziel (Fehlmenge höchstens 0,1 kWh)?
+    """
+
+    key: str
+    name: str
+    wallbox: str
+    target_soc_pct: Finite
+    departure_at: AwareDatetime
+    soc_start_pct: Finite
+    soc_assumed: bool
+    limit_pct: Finite | None
+    need_kwh: Finite
+    planned_kwh: Finite
+    shortfall_kwh: Finite
+    expected_soc_pct: Finite
+    finish_at: AwareDatetime | None
+    reachable: bool
 
 
 class Plan(_Model):
@@ -122,6 +160,7 @@ class Plan(_Model):
     baseline_cost_ct: Finite
     issues: list[str]
     trimmed: bool = False
+    vehicles: list[PlanVehicle] = Field(default_factory=list)
     slots: Annotated[list[PlanSlot], Field(min_length=1)]
 
     @property
@@ -148,6 +187,7 @@ class IntentPlanSlot(_Model):
     budget_kw: NonNegativeW | None = None
     import_ct: Finite | None = None
     support_soc_pct: Annotated[float, Field(ge=0, le=100)] | None = None
+    vehicles: dict[str, Annotated[int, Field(ge=0)]] = Field(default_factory=dict)
 
 
 class IntentPlan(_Model):
@@ -176,7 +216,8 @@ class IntentPlan(_Model):
 def intent_plan(plan: Plan, *, grid_charge_allowed: bool) -> IntentPlan:
     """Der bindende Teil von ``plan`` für die Absicht: die Slots vor ``valid_until``, höchstens
     ``MAX_INTENT_PLAN_SLOTS``. Ist ``grid_charge_allowed`` falsch, wird ``NETZLADEN`` zu
-    ``EIGENVERBRAUCH``. ``plan.id`` muss gesetzt sein (der Plan ist gespeichert)."""
+    ``EIGENVERBRAUCH``. Die Ladeleistung je Auto geht auf ganze W gerundet mit. ``plan.id`` muss
+    gesetzt sein (der Plan ist gespeichert)."""
     if plan.id is None:
         raise ValueError("Nur ein gespeicherter Plan (mit id) geht in die Absicht")
 
@@ -190,6 +231,7 @@ def intent_plan(plan: Plan, *, grid_charge_allowed: bool) -> IntentPlan:
             budget_kw=slot.budget_kw,
             import_ct=slot.import_ct,
             support_soc_pct=slot.support_soc_pct,
+            vehicles={key: round(watts) for key, watts in slot.ev_w.items()},
         )
 
     kept = [slot for slot in plan.slots if slot.start < plan.valid_until]

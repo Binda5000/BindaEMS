@@ -373,6 +373,15 @@ def test_guest_mode_state(cfg) -> None:
     assert state(cfg, "guest_mode", sample_inputs(intent=intent)) == "Aus"
 
 
+def test_planned_mode_state_is_provisionally_pv(cfg) -> None:  # Plan 4b Task 1, Ruling R1
+    intent = Intent.model_validate(
+        {"version": 1, "vehicles": {"tesla": {"mode": "planned"}}, "guest": {"mode": "planned"}}
+    )
+    inputs = sample_inputs(intent=intent)
+    assert state(cfg, "tesla_mode", inputs) == "PV-Überschuss"
+    assert state(cfg, "guest_mode", inputs) == "PV-Überschuss"
+
+
 def test_control_states_are_unknown_without_an_intent(cfg) -> None:
     inputs = sample_inputs(intent=None)
     for oid in ("tesla_mode", "regulation", "guest_mode", "evcs_assignment"):

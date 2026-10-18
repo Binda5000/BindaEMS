@@ -8,7 +8,9 @@
       "tesla": {
         "mode": "min_pv",
         "boost_until": null,
-        "wallbox": null
+        "wallbox": null,
+        "target_soc_pct": 80,
+        "departure": "07:00"
       }
     },
     "priority": null,

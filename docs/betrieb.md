@@ -2746,7 +2746,7 @@ Ein Eintrag im Rohformat (hier aus dem Simulator):
 
 | Grund (`codes`) | Text im Log | Bedeutung |
 |---|---|---|
-| `mode_pv`, `mode_min_pv`, `mode_now`, `mode_off` | PV-Überschuss, Min+PV, Sofort, Aus | der Lademodus des Fahrzeugs |
+| `mode_pv`, `mode_min_pv`, `mode_now`, `mode_off`, `mode_planned` | PV-Überschuss, Min+PV, Sofort, Aus, Geplant | der Lademodus des Fahrzeugs |
 | `boost` | Boost | Ein Boost gilt (er steht an Stelle des Modus). |
 | `pv_surplus` | Überschuss | Der Wert kommt aus dem Anteil am Überschuss, oder die Zeiten des PV-Überschusses haben einen Start oder Stopp ergeben. |
 | `phase_limit` | Phasengrenze | Der Wächter kappt am Ziel der Sicherung (Sofort, Boost). |
@@ -2759,6 +2759,10 @@ Ein Eintrag im Rohformat (hier aus dem Simulator):
 | `assignment_detected` | Zuordnung erkannt | Der Befehl folgt aus einer neuen Erkennung: Der core hat ein Auto an seiner Wallbox erkannt, etwa den Höchststrom an den Tesla an der EVCS (oben). |
 | `resume_after_outage` | Wiederaufnahme nach Ausfall | Der erste Start nach einer Pause der Regelung (SAFE, Inselbetrieb, Regelbetrieb aus). |
 | `self_start` | Selbststart | Ein Fahrzeug mit Tessie lädt `control.tesla_against_s` lang gegen seinen Modus; die Regelung sendet „Laden aus“ erneut (Tesla, oben). |
+| `plan_power` | Plan: Laden | Im Modus „Geplant“ folgt der Strom der Ladeleistung, die der Plan für das Auto im laufenden Slot nennt. |
+| `latest_start` | Späteste Startzeit | Im Modus „Geplant“ gibt es keinen gültigen Plan-Slot und die späteste Startzeit ist erreicht: Das Auto lädt mit voller Leistung bis zum Ziel. |
+| `target_reached` | Ziel-SOC erreicht | Im Modus „Geplant“ hat das Auto den Ziel-SOC erreicht; die Regelung stoppt das Laden. |
+| `charge_limit` | Ladelimit | Der Befehl setzt das Ladelimit des Tesla auf das Ziel (nur mit `charge_limit_sync`). |
 | `foreign_change` | Änderung von außen | Nur bei einer Entscheidung mit dem Ergebnis „von außen geändert“ (Abschnitt 13, „Sperren“): Ein anderes System hat den Wert am Gerät geändert. |
 
 Nach den Gründen der Regelung stehen in `codes` die Befunde der Safety-Schicht (etwa
@@ -3909,6 +3913,7 @@ Die app plant beim Start und danach auf diese Auslöser; die Seite zeigt sie als
 | `month_peak` | neue Monatsspitze | die Monatsspitze liegt mehr als 0,05 kW über der, die der Plan kennt |
 | `settings` | Einstellungen geändert | Planung, Tarif oder Einspeisung wurden geändert |
 | `manual` | Neu planen | die Taste im UI oder in Home Assistant, oder `POST /api/plan/replan` |
+| `vehicles` | Fahrzeug geändert | bei einem Auto im Modus „Geplant“ ändern sich Ein- oder Ausstecken, Wallbox, Ziel, Abfahrt, „Ladestand angenommen“ oder das Ladelimit des Tesla, oder ein Auto kommt in „Geplant“ oder verlässt den Modus |
 
 Preise, Prognosen, SOC und Monatsspitze prüft die app alle 30 s. Es läuft immer nur ein Lauf; was
 währenddessen eintrifft, ergibt genau einen weiteren. Ein Plan **gilt 45 min**. Fehlen Eingangsdaten,
@@ -3980,6 +3985,9 @@ Zahlen:
 | `NETZLADEN_AUS` | Netzladen würde sich lohnen (jetzt 10,0 ct, um 18:00 Uhr 30,0 ct), ist aber ausgeschaltet. | Netzladen würde sich lohnen, der Schalter ist aus |
 | `PV_UEBERSCHUSS_ERWARTET` | Akku deckt den Verbrauch; ab 09:30 Uhr lädt ihn die PV wieder. | Absicht `Eigenverbrauch`, der Akku entlädt, und später lädt die PV ihn |
 | `EIGENVERBRAUCH` | Akku deckt den Eigenverbrauch. | sonst |
+| `ZIEL_SOC_ABFAHRT` | Tesla Model 3 lädt 7,0 kW, damit es um 07:00 Uhr 80 % hat. | Zusatz zum Hauptcode, je Auto in der Reihenfolge `priority`: ein Auto im Modus „Geplant“ lädt in diesem Slot mindestens 100 W aus dem Netz; „kW“ ist die Netzleistung, „um“ die Abfahrt |
+| `AUTO_WARTET_AUF_PV` | e-Golf wartet auf PV-Überschuss (Regel R). | Zusatz: ein Auto im Modus „Geplant“ lädt in diesem Slot vor der Abfahrt nicht, weil Regel R2 das Netzladen begrenzt und ein späterer Slot es aus PV lädt |
+| `ZIEL_SOC_UNERREICHBAR` | e-Golf erreicht bis 06:30 Uhr voraussichtlich nur 62 %. | Zusatz im ersten Slot: der Plan erreicht das Ziel eines Autos im Modus „Geplant“ nicht (Fehlmenge über 0,1 kWh); „nur“ ist der erwartete Ladestand an der Abfahrt |
 | `UNTERSTUETZUNG_RESERVIERT` | Akku-Unterstützung fürs Auto erst ab 70 %, weil der Plan den Akku bis 18:00 Uhr braucht. | Absicht `Eigenverbrauch`; die Schwelle, die der Plan für spätere Entladungen braucht, liegt über der Unterstützungsschwelle; „bis“ ist der Beginn des ersten späteren Slots ohne diesen Bedarf |
 | `GESCHAETZT` | Preis geschätzt. | der Preis des Slots ist ein Schätzpreis |
 | `ERSATZPLAN` | Ersatzplan. | der Plan ist ein Ersatzplan |

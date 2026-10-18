@@ -8,6 +8,7 @@ gegen die harten Grenzen (Spec 8.3).
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import UTC, date, datetime, time, timedelta
 from enum import StrEnum
 from typing import Annotated, Final
 
@@ -15,6 +16,7 @@ from pydantic import AwareDatetime, Field
 
 from bindaems.shared.config import _Model
 from bindaems.shared.plan import IntentPlan
+from bindaems.shared.timeutil import LOCAL_TZ, ensure_utc
 
 VICTRON: Final = "victron"
 
@@ -87,12 +89,14 @@ class OperatingState(StrEnum):
 
 
 class ChargeMode(StrEnum):
-    """Lademodus eines Fahrzeugs: PV-Überschuss, Min+PV, Sofort oder Aus (Plan 2c-1, Design 3.1)."""
+    """Lademodus eines Fahrzeugs: PV-Überschuss, Min+PV, Sofort, Aus oder Geplant (Plan 2c-1,
+    Design 3.1; „Geplant“ ab Plan 4b)."""
 
     PV = "pv"
     MIN_PV = "min_pv"
     NOW = "now"
     OFF = "off"
+    PLANNED = "planned"
 
 
 class SurplusOrder(StrEnum):
@@ -119,11 +123,53 @@ class VehicleIntent(_Model):
       heißt kein Boost.
     - ``wallbox``: Schlüssel der Wallbox, an der das Fahrzeug hängt; übersteuert die Zuordnung
       und gilt wie der Boost bis zum Abstecken
+    - ``target_soc_pct`` und ``departure``: Ziel-SOC (ganze Zahl 20 bis 100) und tägliche
+      Abfahrtszeit (lokale Uhrzeit ``HH:MM``) für „Geplant“ (Plan 4b). Beide bleiben auch in den
+      anderen Modi stehen; gespeicherte Absichten ohne sie laden mit den Standardwerten.
     """
 
     mode: ChargeMode = ChargeMode.PV
     boost_until: AwareDatetime | None = None
     wallbox: str | None = None
+    target_soc_pct: Annotated[int, Field(ge=20, le=100)] = 80
+    departure: Annotated[str, Field(pattern=r"^([01]\d|2[0-3]):[0-5]\d$")] = "07:00"
+
+
+def _local_instant(day: date, at: time) -> datetime:
+    """Der Zeitpunkt (UTC) der lokalen Uhrzeit ``at`` am Tag ``day``.
+
+    Gibt es die Uhrzeit an dem Tag nicht (Beginn der Sommerzeit), ist es der Übergang selbst,
+    also die erste gültige Zeit danach; gibt es sie zweimal (Ende der Sommerzeit), das erste
+    Vorkommen.
+    """
+    naive = datetime.combine(day, at)
+    first = naive.replace(tzinfo=LOCAL_TZ, fold=0).astimezone(UTC)
+    if first.astimezone(LOCAL_TZ).replace(tzinfo=None) == naive:
+        return first
+    # Lücke: ``fold=0`` rechnet mit dem alten, ``fold=1`` mit dem neuen Versatz. Der Übergang
+    # liegt dazwischen; die Minuten dort zu durchlaufen ist billiger als Übergangstabellen.
+    instant = naive.replace(tzinfo=LOCAL_TZ, fold=1).astimezone(UTC)
+    new_offset = first.astimezone(LOCAL_TZ).utcoffset()
+    while instant.astimezone(LOCAL_TZ).utcoffset() != new_offset:
+        instant += timedelta(minutes=1)
+    return instant
+
+
+def next_departure(departure: str, now: datetime) -> datetime:
+    """Das erste lokale ``departure`` (``HH:MM``, Wiener Zeit) echt nach ``now``, in UTC.
+
+    Ist die Uhrzeit am lokalen Tag von ``now`` schon erreicht oder vorbei, gilt die des nächsten
+    Tages (Plan 4b, Präzisierung 1).
+    """
+    hour, minute = departure.split(":")
+    at = time(int(hour), int(minute))
+    moment = ensure_utc(now)
+    day = moment.astimezone(LOCAL_TZ).date()
+    result = _local_instant(day, at)
+    while result <= moment:
+        day += timedelta(days=1)
+        result = _local_instant(day, at)
+    return result
 
 
 class GuestIntent(_Model):
