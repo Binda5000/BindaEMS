@@ -126,6 +126,7 @@ class LedgerCosting:
         self._dirty_from: datetime | None = None
         self._wear_ct = settings.current().settings.planning.wear_ct
         self._dirty_listeners: list[Callable[[], None]] = []
+        self._closing = threading.Event()  # gesetzt von ``close``: keine neue Nachführung
         settings.on_change(self._settings_changed)
         self._mark_stale()
 
@@ -149,8 +150,21 @@ class LedgerCosting:
             except Exception:
                 log.exception("Nachführung des Einstandspreises nicht geweckt")
 
+    def close(self, timeout_s: float) -> bool:
+        """Beim Herunterfahren: Eine laufende Nachführung hört nach ihrem Block auf (sieben Tage,
+        Millisekunden), eine neue beginnt nicht mehr. Wartet höchstens ``timeout_s``; ``True``,
+        wenn keine mehr läuft. Was dabei ungerechnet bleibt, findet der nächste Start
+        (``_mark_stale``)."""
+        self._closing.set()
+        if not self._lock.acquire(timeout=timeout_s):
+            return False
+        self._lock.release()
+        return True
+
     def catch_up(self) -> int:
         """Rechnet ab dem frühesten markierten Slot; liefert die Zahl der geschriebenen Slots."""
+        if self._closing.is_set():
+            return 0
         with self._lock:
             with self._dirty_lock:
                 dirty_all, dirty_from = self._dirty_all, self._dirty_from
@@ -240,7 +254,7 @@ class LedgerCosting:
             cursor, clear_from = start, start
         wear_ct = self._settings.current().settings.planning.wear_ct
         end, written, replaced = last + SLOT, 0, False
-        while cursor < end:
+        while cursor < end and not self._closing.is_set():
             block_end = min(cursor + BLOCK, end)
             slots = self._ledger.slots(cursor, block_end)
             costs = cost_basis(slots, state, wear_ct=wear_ct, usable_kwh=self._usable_kwh)

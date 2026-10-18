@@ -598,7 +598,9 @@ zum Verschleiß oder zu `battery.usable_kwh` passt, und rechnet ab dort neu.
   Tageskosten bei fehlendem Preis. Ein nachgetragener Preis (Abrechnung neu bewerten, siehe oben)
   macht ihn ab dort neu gerechnet wieder bekannt.
 - **Beim ersten Start mit Plan 4a** rechnet die app einmal über alle gespeicherten Viertelstunden;
-  das kann bei viel Abrechnung etwas dauern.
+  das kann bei viel Abrechnung etwas dauern. Beendest du die app währenddessen, hört die Rechnung
+  nach dem laufenden Abschnitt von 7 Tagen auf (das Beenden wartet darauf höchstens 5 s), und der
+  nächste Start rechnet ab dort weiter.
 
 ### Ladesessions und Kosten je Auto
 

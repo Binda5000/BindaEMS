@@ -482,3 +482,59 @@ def test_dirty_listeners_run_on_every_mark_and_a_failing_one_is_logged(
     set_wear(settings_service, 7.0)  # Verschleiß geändert
     costing.mark_dirty(None)
     assert calls == ["geweckt"] * 3
+
+
+def test_close_waits_for_a_running_catch_up_and_stops_it_after_the_block(
+    costing, ledger, monkeypatch
+) -> None:
+    # N3: beim Herunterfahren lief ``catch_up`` im Thread weiter, während die Engine schloss
+    import threading
+
+    for index in range(3):  # drei Blöcke zu 7 Tagen
+        ingest(ledger, S + timedelta(days=7 * index), {"pv>battery": 1000.0})
+    entered, release = threading.Event(), threading.Event()
+    real_slots = ledger.slots
+
+    def slow_slots(start, end):
+        entered.set()
+        assert release.wait(5)
+        return real_slots(start, end)
+
+    monkeypatch.setattr(ledger, "slots", slow_slots)
+    written: list[int] = []
+    worker = threading.Thread(target=lambda: written.append(costing.catch_up()))
+    worker.start()
+    assert entered.wait(5)
+    closed: list[bool] = []
+    closer = threading.Thread(target=lambda: closed.append(costing.close(timeout_s=5.0)))
+    closer.start()
+    closer.join(0.2)
+    assert closed == []  # wartet auf den laufenden Block
+    release.set()
+    closer.join(5)
+    worker.join(5)
+    assert closed == [True] and written == [1]  # nach dem ersten Block beendet
+    assert costing.catch_up() == 0  # geschlossen: rechnet nicht mehr
+
+
+def test_close_gives_up_after_the_timeout(costing, ledger, monkeypatch) -> None:
+    import threading
+
+    ingest(ledger, S, {"pv>battery": 1000.0})
+    entered, release = threading.Event(), threading.Event()
+    real_slots = ledger.slots
+
+    def slow_slots(start, end):
+        entered.set()
+        assert release.wait(5)
+        return real_slots(start, end)
+
+    monkeypatch.setattr(ledger, "slots", slow_slots)
+    worker = threading.Thread(target=costing.catch_up)
+    worker.start()
+    try:
+        assert entered.wait(5)
+        assert costing.close(timeout_s=0.05) is False
+    finally:
+        release.set()
+        worker.join(5)

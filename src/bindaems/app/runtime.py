@@ -94,6 +94,7 @@ HA_INPUTS_S = 5.0
 STATS_S = 15 * 60.0  # Statistik für HA: bei jedem neuen Slot und spätestens alle 15 min
 STATS_SESSION_DAYS = 90  # so weit zurück sucht HA die letzte Ladesession eines Fahrzeugs
 RESTART_S = 10.0
+COSTING_STOP_S = 5.0  # so lange wartet das Beenden auf den Block einer laufenden Nachführung
 BACKUP_AT = (3, 15)  # Ortszeit
 FORECAST_NIGHTLY_AT = (2, 30)  # Ortszeit
 FORECAST_KEEP = timedelta(days=60)
@@ -862,6 +863,9 @@ class AppRuntime:
             task.cancel()
         if tasks:
             await asyncio.wait(tasks)
+        # ``to_thread`` des abgebrochenen Jobs ``costing`` rechnet weiter: vor ``dispose`` abwarten
+        if not await asyncio.to_thread(self.costing.close, COSTING_STOP_S):
+            log.warning("Nachführung des Einstandspreises läuft beim Beenden noch")
         try:
             await self.influx_writer.flush_now()
         except Exception:

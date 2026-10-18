@@ -743,6 +743,34 @@ async def test_costing_job_catches_up_after_reprice_and_wear_change(runtime, mon
         await asyncio.wait([costing_task])
 
 
+async def test_shutdown_waits_for_the_running_costing_thread(runtime, monkeypatch) -> None:
+    # N3: der abgebrochene Job ließ ``catch_up`` im Thread weiterlaufen, während ``dispose`` lief
+    ingest(runtime.ledger, T_APP, {"pv>battery": 1000.0})
+    entered, release = threading.Event(), threading.Event()
+    order: list[str] = []
+    real_slots = runtime.ledger.slots
+
+    def slow_slots(start, end):
+        entered.set()
+        assert release.wait(5)
+        order.append("Block gerechnet")
+        return real_slots(start, end)
+
+    real_dispose = runtime.engine.dispose
+
+    def dispose() -> None:
+        order.append("dispose")
+        real_dispose()
+
+    monkeypatch.setattr(runtime.ledger, "slots", slow_slots)
+    monkeypatch.setattr(runtime.engine, "dispose", dispose)
+    runtime._tasks = [asyncio.create_task(runtime._costing_loop())]
+    await until(entered.is_set)
+    threading.Timer(0.2, release.set).start()
+    await runtime.shutdown()
+    assert order == ["Block gerechnet", "dispose"]
+
+
 async def test_costing_job_survives_a_failing_catch_up(runtime, monkeypatch) -> None:
     calls: list[int] = []
 
