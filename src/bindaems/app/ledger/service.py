@@ -324,7 +324,7 @@ class LedgerService:
                 conn.execute(
                     update(ledger_slot).where(ledger_slot.c.slot_start == start).values(**values)
                 )
-        self._publish(start, flows.flows_wh, price, gone)
+        self._publish(start, flows.flows_wh, price, gone, replaced=existing is not None)
         self._notify(start)
         return True
 
@@ -334,12 +334,15 @@ class LedgerService:
         flows_wh: Mapping[str, float],
         price: float | None,
         gone: Sequence[str] = (),
+        *,
+        replaced: bool = False,
     ) -> None:
         """Punkte ``ledger`` je Fluss: kWh und, wo bekannt, Kosten (+) bzw. Erlös (−) in €.
 
         ``gone``: Flüsse eines ersetzten Slots, die der neue nicht hat. Sie bekommen 0 kWh (und
         0 €, wenn der Fluss Kosten oder Erlös tragen kann), sonst blieben ihre alten Punkte in
-        Influx stehen."""
+        Influx stehen. ``replaced``: der Slot stand schon in Influx (ersetzt oder neu bewertet);
+        ein Fluss mit Kosten oder Erlös, dessen Preis jetzt fehlt, bekommt dann ebenso 0 €."""
         if self._sink is None:
             return
         for name in gone:
@@ -356,6 +359,8 @@ class LedgerService:
                 fields["eur"] = kwh * price / 100
             elif name.endswith(">grid") and feed_in is not None:
                 fields["eur"] = -kwh * feed_in / 100
+            elif replaced and (name.startswith("grid>") or name.endswith(">grid")):
+                fields["eur"] = 0.0  # Preis weggefallen: den alten Euro-Wert überschreiben
             self._sink.write(Point("ledger", {"flow": name}, fields, start, rp=RP_LONG))
 
     async def handle_stream_message(self, data: dict[str, Any]) -> None:
@@ -454,7 +459,7 @@ class LedgerService:
                 )
                 changed.append((slot, price))
         for slot, price in changed:
-            self._publish(slot.slot_start, slot.flows_wh, price)
+            self._publish(slot.slot_start, slot.flows_wh, price, replaced=True)
         if changed:
             self._notify(min(slot.slot_start for slot, _ in changed))
         return len(changed)

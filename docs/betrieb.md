@@ -162,7 +162,8 @@ die Zeitzone ist `Europe/Vienna`.
   Preise von morgen erscheinen, sobald sie geholt sind und der Zeitraum bis morgen reicht.
 - „Abrechnung je Tag“: kWh sowie Kosten und Erlös in Euro je Fluss und Tag aus `long`, immer die
   letzten 14 Tage. Die Tage laufen in Wiener Zeit (`tz('Europe/Vienna')`), auch an den Tagen der
-  Zeitumstellung.
+  Zeitumstellung. Eine Viertelstunde ohne Preis zählt dort 0 €; verliert sie ihren Preis beim neu
+  Bewerten, überschreibt die app den alten Euro-Wert mit 0.
 
 Die Entscheidungen des Reglers erscheinen als Markierungen („Entscheidungen“) in allen Panels: mit
 dem Text, der Wallbox oder dem Akku und dem Ergebnis. Sie stehen nur in `raw`, also 90 Tage lang.

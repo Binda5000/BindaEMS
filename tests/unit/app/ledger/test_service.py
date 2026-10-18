@@ -272,6 +272,28 @@ def test_fill_missing_prices_and_reprice(ledger, store, settings_service, audit,
     assert entry.details == {"from": "2026-10-09", "to": "2026-10-09", "slots": 1}
 
 
+def test_reprice_zeroes_the_euros_of_a_slot_that_lost_its_price(
+    ledger, prices_with_10ct, feed_in_7ct, settings_service, sink, monkeypatch
+) -> None:
+    # B7a: ohne Preis bliebe in Influx der alte Euro-Wert stehen; wie bei weggefallenen Flüssen 0
+    ledger.ingest(parse_slot_flows(MSG), "stream")
+    sink.points.clear()
+    monkeypatch.setattr(ledger._prices, "slots", lambda start, end: [])  # Preis weg
+    set_feed_in(settings_service, {})  # Einspeisevergütung weg
+    assert ledger.reprice(date(2026, 10, 9), date(2026, 10, 9), actor="chris", source="ui") == 1
+    assert ledger.slots(S, S + SLOT)[0].import_price_ct is None
+    points = {p.tags["flow"]: p.fields for p in sink.points}
+    assert points["grid>house"] == {"kwh": 0.15, "eur": 0.0}
+    assert points["grid>wb:twc"] == {"kwh": 0.25, "eur": 0.0}
+    assert points["pv>grid"] == {"kwh": 0.3, "eur": 0.0}
+    assert points["pv>house"] == {"kwh": 0.4}  # ohne Kosten und Erlös auch ohne eur
+
+
+def test_first_ingest_without_price_writes_no_euros(ledger, sink) -> None:
+    ledger.ingest(parse_slot_flows(MSG), "stream")
+    assert all("eur" not in p.fields for p in sink.points)
+
+
 async def test_stream_handler_ignores_invalid_messages(ledger) -> None:
     await ledger.handle_stream_message({"slot_start": "kaputt"})
     assert ledger.slots(S, S + SLOT) == []
