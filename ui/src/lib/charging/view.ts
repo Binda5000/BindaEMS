@@ -11,7 +11,15 @@ import type {
 	VehicleHealth,
 	WallboxHealth
 } from '$lib/api/schemas';
-import { DASH, formatNumber, formatNumberMax, formatSoc, formatTime, NBSP } from '$lib/format';
+import {
+	DASH,
+	formatEur,
+	formatNumber,
+	formatNumberMax,
+	formatSoc,
+	formatTime,
+	NBSP
+} from '$lib/format';
 import { parseIso, todayVienna } from '$lib/time';
 
 /** Schlüssel eines Fahrzeugs → Anzeigename */
@@ -328,6 +336,6 @@ export function sessionLine(session: ChargingSession): string {
 	const end = sameDay(session.start, session.end)
 		? formatTime(session.end)
 		: `${dayMonth(session.end)} ${formatTime(session.end)}`;
-	const cost = session.cost_eur === null ? '' : ` · ${formatNumber(session.cost_eur, 2)}${NBSP}€`;
+	const cost = session.cost_eur === null ? '' : ` · ${formatEur(session.cost_eur)}`;
 	return `Letzte Session ${dayMonth(session.start)} ${formatTime(session.start)}–${end} · ${energy}${cost}`;
 }

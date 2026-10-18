@@ -126,7 +126,7 @@ describe('reviewTotals', () => {
 			diff: nb('1,20 kWh')
 		});
 		// 0,62 − 0,10 = 0,52 €
-		expect(rows[3]).toMatchObject({ plan: nb('€ 0,10'), actual: nb('€ 0,62'), diff: nb('€ 0,52') });
+		expect(rows[3]).toMatchObject({ plan: nb('0,10 €'), actual: nb('0,62 €'), diff: nb('0,52 €') });
 	});
 
 	it('shows a difference that rounds to zero without a minus', () => {
@@ -137,7 +137,7 @@ describe('reviewTotals', () => {
 			})
 		);
 		expect(rows[0]?.diff).toBe(nb('0,00 kWh'));
-		expect(rows[3]?.diff).toBe(nb('€ 0,00'));
+		expect(rows[3]?.diff).toBe(nb('0,00 €'));
 	});
 
 	it('shows a dash for unknown costs and no difference', () => {
@@ -146,7 +146,7 @@ describe('reviewTotals', () => {
 				actual: { import_kwh: 2.5, export_kwh: 0.25, grid_charge_kwh: 1.2, import_cost_eur: null }
 			})
 		);
-		expect(rows[3]).toMatchObject({ plan: nb('€ 0,10'), actual: '–', diff: '–' });
+		expect(rows[3]).toMatchObject({ plan: nb('0,10 €'), actual: '–', diff: '–' });
 	});
 });
 
@@ -216,7 +216,7 @@ describe('Karte Plan gegen Ist (heute)', () => {
 		expect(rows).toHaveLength(5);
 		expect(within(rows[1]!).getByText('Netzbezug')).toBeTruthy();
 		expect(within(rows[1]!).getByText('1,27 kWh')).toBeTruthy();
-		expect(within(rows[4]!).getByText('€ 0,52')).toBeTruthy();
+		expect(within(rows[4]!).getByText('0,52 €')).toBeTruthy();
 	});
 
 	it('says so when no quarter-hour has plan and actual', () => {

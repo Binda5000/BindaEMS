@@ -38,6 +38,22 @@ it('zeigt Werte mit Einheit', () => {
 	expect(screen.getByText('Grundgebühr Netz').closest('tr')).toHaveTextContent('€/Monat');
 });
 
+it('schreibt Euro wie formatEur, mit Tausenderpunkt', () => {
+	const settings = settingsCurrent().settings;
+	settings.tariff.components = settings.tariff.components.map((c) =>
+		c.kind === 'power_per_kw_year'
+			? { ...c, value_eur: 1234.5, value_above_eur: null, tier_kw: 10, minimum_kw: 2 }
+			: c.kind === 'fixed_per_month'
+				? { ...c, value_eur: 1000 }
+				: c
+	);
+	render(TariffView, { settings });
+	const cell = (name: string) =>
+		screen.getByText(name).closest('tr')?.querySelector('td.num')?.textContent?.trim();
+	expect(cell('Leistungspreis (ElWG)')).toBe('1.234,50\u00a0€/kW/Jahr, mind. 2\u00a0kW');
+	expect(cell('Grundgebühr Netz')).toBe('1.000,00\u00a0€/Monat');
+});
+
 it('zeigt Stufe, Satz über der Stufe und Mindestverrechnung des Leistungspreises', () => {
 	const settings = settingsCurrent().settings;
 	settings.tariff.components = settings.tariff.components.map((c) =>

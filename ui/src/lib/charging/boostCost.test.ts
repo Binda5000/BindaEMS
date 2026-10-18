@@ -20,6 +20,16 @@ it('nennt Euro mit zwei und kW mit einer Nachkommastelle', () => {
 	);
 });
 
+it('schreibt den Betrag wie formatEur, mit Tausenderpunkt', () => {
+	const big: BoostCost = {
+		...cost,
+		vehicles: [{ id: 'tesla', extra_kw: 11.04, cost_eur: 1234.5 }]
+	};
+	expect(boostCostText(big, 'tesla')).toBe(
+		'Boost kann bis zu 1.234,50\u00a0€ Leistungspreis im Monat kosten (11,0\u00a0kW mehr Spitze).'
+	);
+});
+
 it('schweigt ohne Satz, ohne Antwort und für unbekannte Fahrzeuge', () => {
 	expect(boostCostText({ applies: false, month_peak_kw: null, vehicles: [] }, 'tesla')).toBeNull();
 	expect(boostCostText({ ...cost, applies: false }, 'tesla')).toBeNull();

@@ -71,11 +71,19 @@ export function formatCt(ct: MaybeNumber): string {
 	return isNumber(ct) ? withUnit(ct, 2, 'ct/kWh') : DASH;
 }
 
-/** Betrag in €, ohne „-0“: ein Betrag, der auf 0,00 rundet, hat kein Minus. */
+/**
+ * Betrag in € wie „1.234,50 €“: Zahl mit Tausenderpunkten, geschütztes Leerzeichen, „€“ (de-AT
+ * stellt das Zeichen voran, die Anzeige überall dahinter). Ohne „-0“: ein Betrag, der auf 0,00
+ * rundet, hat kein Minus.
+ */
 export function formatEur(eur: MaybeNumber): string {
 	if (!isNumber(eur)) return DASH;
-	const text = EUR.format(eur);
-	return /[1-9]/.test(text) ? text : text.replace('-', '');
+	const number = EUR.formatToParts(eur)
+		.filter((part) => part.type !== 'currency' && part.type !== 'literal')
+		.map((part) => part.value)
+		.join('');
+	const text = `${number}${NBSP}€`;
+	return /[1-9]/.test(number) ? text : text.replace('-', '');
 }
 
 /** Ladestand in % (0–100). */

@@ -1,6 +1,6 @@
 <script lang="ts">
 	import type { PriceComponent, RuntimeSettings } from '$lib/api/schemas';
-	import { DASH, formatCt, formatNumber, NBSP } from '$lib/format';
+	import { DASH, formatCt, formatEur, formatNumber, NBSP } from '$lib/format';
 	import { describeWindow, isEnergy, KIND_LABEL, validityText, windowsOf } from './model';
 
 	interface Props {
@@ -20,7 +20,7 @@
 				return component.value_ct === null ? null : formatCt(component.value_ct);
 			case 'power_per_kw_year': {
 				if (component.value_eur === null) return null;
-				const rate = (eur: number) => `${formatNumber(eur, 2)}${NBSP}€/kW/Jahr`;
+				const rate = (eur: number) => `${formatEur(eur)}/kW/Jahr`;
 				const kw = (value: number) =>
 					`${formatNumber(value, Number.isInteger(value) ? 0 : 2)}${NBSP}kW`;
 				const parts = [rate(component.value_eur)];
@@ -31,9 +31,7 @@
 				return parts.join(', ');
 			}
 			case 'fixed_per_month':
-				return component.value_eur === null
-					? null
-					: `${formatNumber(component.value_eur, 2)}${NBSP}€/Monat`;
+				return component.value_eur === null ? null : `${formatEur(component.value_eur)}/Monat`;
 		}
 	}
 </script>

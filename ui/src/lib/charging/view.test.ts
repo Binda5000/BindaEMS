@@ -360,6 +360,12 @@ describe('Session in der Fahrzeugkarte', () => {
 		);
 	});
 
+	it('schreibt die Kosten wie formatEur, mit Tausenderpunkt', () => {
+		expect(sessionLine(done({ cost_eur: 1234.5 }))).toBe(
+			`Letzte Session 08.10. 18:00–21:30 · 12,4${NB}kWh · 1.234,50${NB}€`
+		);
+	});
+
 	it('lässt die Kosten weg, wenn sie unbekannt sind', () => {
 		expect(sessionLine(done({ cost_eur: null }))).toBe(
 			`Letzte Session 08.10. 18:00–21:30 · 12,4${NB}kWh`

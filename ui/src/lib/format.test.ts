@@ -34,12 +34,21 @@ it('formatiert Energie, Preise, Geld und Anteile deutsch', () => {
 	expect(formatEnergy(12.345)).toBe(`12,3${NB}kWh`);
 	expect(formatEnergy(1.234)).toBe(`1,23${NB}kWh`);
 	expect(formatCt(13.444)).toBe(`13,44${NB}ct/kWh`);
-	expect(formatEur(1.5)).toBe(`€${NB}1,50`);
+	expect(formatEur(1.5)).toBe(`1,50${NB}€`);
 	expect(formatSoc(55.4)).toBe(`55${NB}%`);
 	expect(formatRatio(0.873)).toBe(`87${NB}%`);
 	expect(formatEur(null)).toBe(DASH);
-	expect(formatEur(-0.002)).toBe(`€${NB}0,00`);
-	expect(formatEur(-0.5)).toBe(`-€${NB}0,50`);
+	expect(formatEur(-0.002)).toBe(`0,00${NB}€`);
+	expect(formatEur(-0.5)).toBe(`-0,50${NB}€`);
+});
+
+it('schreibt Euro als Zahl, geschütztes Leerzeichen, € mit österreichischen Tausenderpunkten', () => {
+	expect(formatEur(0.52)).toBe(`0,52${NB}€`);
+	expect(formatEur(-1.07)).toBe(`-1,07${NB}€`);
+	expect(formatEur(1234.5)).toBe(`1.234,50${NB}€`);
+	expect(formatEur(-1234567.891)).toBe(`-1.234.567,89${NB}€`);
+	expect(formatEur(0)).toBe(`0,00${NB}€`);
+	expect(formatEur(-0.004)).toBe(`0,00${NB}€`);
 });
 
 it('zeigt Zeiten in Wien', () => {

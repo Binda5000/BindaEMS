@@ -11,6 +11,11 @@ test('Statistik wechselt den Zeitraum und zeigt Diagramm und Kosten', async ({ p
 	await expect(page.getByRole('heading', { name: 'Oktober 2026' })).toBeVisible();
 	await expect(page).toHaveURL(/zeitraum=monat&datum=2026-10-09/);
 	await expect(page.getByTestId('tile')).toHaveCount(5);
+	// Euro überall „0,52 €“: Zahl, geschütztes Leerzeichen, Zeichen
+	await expect(page.getByTestId('tile').filter({ hasText: 'Kosten' })).toContainText(
+		new RegExp('\\d,\\d\\d\\u00a0€')
+	);
+	await expect(page.getByRole('table', { name: 'Kosten' })).not.toContainText(/€\s?\d/);
 	await expect(page.locator('canvas').first()).toBeVisible();
 	await expect(page.getByRole('cell', { name: 'Grundgebühren' })).toBeVisible();
 	await expect(page.getByRole('cell', { name: 'Leistungspreis' })).toBeVisible();
