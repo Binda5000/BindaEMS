@@ -254,6 +254,25 @@ async def test_gap_over_the_repeated_hour_of_the_dst_change(estimator, ledger, e
     assert day.estimated_slots == 12 and day.expected_slots == 100
 
 
+async def test_gap_over_the_missing_hour_of_the_dst_change(estimator, ledger, edge) -> None:
+    # 29.03.2026: 01:30 MEZ bis 03:30 MESZ ist 1 Stunde (02:00–03:00 fehlt), also 4 Slots
+    from datetime import date
+
+    from bindaems.shared.timeutil import LOCAL_TZ
+
+    begin = datetime(2026, 3, 29, 1, 30, tzinfo=LOCAL_TZ).astimezone(UTC)
+    assert begin == datetime(2026, 3, 29, 0, 30, tzinfo=UTC)
+    real_slots(ledger, begin - SLOT * 2, begin + SLOT * 6, skip=gap_slots(4, begin))
+    counters(edge, n=4, start=begin, **{IMP: (100.0, 104.0), EXP: (50.0, 50.0)})
+    assert await estimator.run(begin - SLOT * 2, begin + SLOT * 6) == 4
+    stored = [s for s in ledger.slots(begin, begin + SLOT * 4) if s.origin == "estimate"]
+    assert [s.slot_start for s in stored] == sorted(gap_slots(4, begin))
+    assert stored[-1].slot_start == datetime(2026, 3, 29, 1, 15, tzinfo=UTC)  # 03:15 MESZ
+    assert all(s.flows_wh == {"grid>house": pytest.approx(1000.0)} for s in stored)
+    [day] = ledger.days(date(2026, 3, 29), date(2026, 3, 29))
+    assert day.estimated_slots == 4 and day.expected_slots == 92
+
+
 async def test_battery_from_soc_difference(estimator, ledger, edge, clock, cfg) -> None:
     real_slots(ledger, T0 - SLOT, NOW, skip=gap_slots())
     set_counters(edge, imp=(100.0, 103.0), exp=(50.0, 50.0))

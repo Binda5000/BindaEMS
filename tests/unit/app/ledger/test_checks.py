@@ -238,6 +238,19 @@ async def test_run_on_dst_change_uses_the_right_midnights(checks, influx: FakeIn
     assert by_signal(checks.checks(day, day))["import"].counter_kwh == pytest.approx(30.0)
 
 
+async def test_run_on_spring_dst_change_uses_the_right_midnights(
+    checks, influx: FakeInflux
+) -> None:
+    day = date(2026, 3, 29)  # 23 Stunden
+    start, end = (
+        datetime(2026, 3, 28, 23, 0, tzinfo=UTC),
+        datetime(2026, 3, 29, 22, 0, tzinfo=UTC),
+    )
+    influx.set_counters({IMP: {start: 500.0, end: 523.0}})
+    await checks.run(day, day)
+    assert by_signal(checks.checks(day, day))["import"].counter_kwh == pytest.approx(23.0)
+
+
 async def test_run_interpolates_the_midnight_reading(checks, ledger, influx: FakeInflux) -> None:
     # B1: der core schreibt die Zähler nur jede Minute. Hohe Last über Mitternacht (12 kW, 0,2 kWh
     # je Minute), letzter Wert 40 s vor Mitternacht: der Stand um Mitternacht liegt dazwischen.
@@ -303,6 +316,25 @@ async def test_run_on_the_100_slot_day_counts_every_slot(
     assert await checks.run(day, day) == 1
     result = by_signal(checks.checks(day, day))["import"]
     assert result.ledger_kwh == pytest.approx(10.0) and result.counter_kwh == pytest.approx(10.0)
+    assert result.deviation_pct == pytest.approx(0.0) and not result.flagged
+
+
+async def test_run_on_the_92_slot_day_counts_every_slot(checks, ledger, influx: FakeInflux) -> None:
+    # 29.03.2026 hat 23 Stunden: 92 Viertelstunden zählen zum Tag, keine zum Nachbartag
+    from bindaems.shared.domain import SlotFlows
+
+    day = date(2026, 3, 29)
+    day_slots = local_day_slots(day)
+    assert len(day_slots) == 92
+    for at in [day_slots[0] - SLOT, *day_slots, day_slots[-1] + SLOT]:
+        ledger.ingest(
+            SlotFlows(slot_start=at, covered_s=900.0, flows_wh={"grid>house": 100.0}, counters={}),
+            "stream",
+        )
+    influx.set_counters({IMP: {midnight(day): 500.0, midnight(day + timedelta(days=1)): 509.2}})
+    assert await checks.run(day, day) == 1
+    result = by_signal(checks.checks(day, day))["import"]
+    assert result.ledger_kwh == pytest.approx(9.2) and result.counter_kwh == pytest.approx(9.2)
     assert result.deviation_pct == pytest.approx(0.0) and not result.flagged
 
 

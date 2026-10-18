@@ -192,6 +192,31 @@ async def test_midnight_readings_on_dst_change(influx: FakeInflux) -> None:
     assert "time >= 1792969200000ms AND time < 1792971000000ms" in statements[3]
 
 
+async def test_midnight_readings_on_spring_dst_change(influx: FakeInflux) -> None:
+    # 29.03.2026: Mitternacht in Wien ist 23:00 UTC davor (MEZ), 22:00 UTC danach (MESZ)
+    before, after = midnights(date(2026, 3, 29), 2)
+    assert before == datetime(2026, 3, 28, 23, 0, tzinfo=UTC)
+    assert after == datetime(2026, 3, 29, 22, 0, tzinfo=UTC)
+    assert before.astimezone(LOCAL_TZ).hour == 0 and after.astimezone(LOCAL_TZ).hour == 0
+    influx.set_counters(
+        {
+            IMP: {
+                before - 30 * SECOND: 499.9,
+                before + 30 * SECOND: 500.1,
+                after - 30 * SECOND: 522.9,
+                after + 30 * SECOND: 523.1,
+            }
+        }
+    )
+    result = await readings_at(influx, [IMP], [before, after])  # type: ignore[arg-type]
+    assert result[(IMP, before)] == pytest.approx(500.0)
+    assert result[(IMP, after)] == pytest.approx(523.0)
+    # die Fenster liegen um 23:00 und 22:00 UTC
+    statements = influx.queries[0].split(";")
+    assert "time >= 1774737000000ms AND time < 1774738800000ms" in statements[0]
+    assert "time >= 1774821600000ms AND time < 1774823400000ms" in statements[3]
+
+
 async def test_reading_near_takes_the_last_value_before_and_the_first_after(
     influx: FakeInflux,
 ) -> None:
