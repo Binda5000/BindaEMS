@@ -50,11 +50,11 @@ Anlage“).
 **Plan 4a (Statistik, der erste Teil der Phase 4) ist umgesetzt und je Task geprüft**
 (`docs/superpowers/plans/2026-10-17-phase-4a-statistik.md`, 16 Tasks, freigegeben vom Betreiber am
 17.10.2026 mit allen 13 Entscheidungen und der Änderung, dass PV-Strom ins Auto 0 ct kostet): auf dem
-Arbeitszweig `claude/phase-4-plan-whnbh6`, noch nicht auf `main`. Gesamtreview, Fix-Welle und die
-Nacharbeit vom 18.10.2026 sind abgeschlossen. Der Property-Test des Planers aus Plan 3b, der
-selten scheiterte, besteht auf diesem Zweig seit der Festlegung des Betreibers vom 18.10.2026 (auf
-`main` kann er weiter scheitern, selten und mit passendem Beispiel; siehe „Bewusst offen
-gelassen“, „Planer: Plausibilität gegen Optimierer“); die Integration auf `main` steht aus.
+Arbeitszweig `claude/phase-4-plan-whnbh6` und **ist auf `main`** (am 18.10.2026 mit Zustimmung des
+Betreibers per Fast-Forward übernommen, alle Prüfungen grün). Gesamtreview, Fix-Welle und die
+Nacharbeit vom 18.10.2026 sind abgeschlossen. Der Property-Test des Planers aus Plan 3b, der selten
+scheiterte, besteht seit der Festlegung des Betreibers vom 18.10.2026 (siehe „Bewusst offen
+gelassen“, „Planer: Plausibilität gegen Optimierer“).
 Plan 4a ändert nur die app und das UI (der core bleibt gleich) und braucht an der Anlage nur
 den Neubau von `ems-app`: Sessions, Einstandspreis, Kosten je Auto, Abgleich mit den Zählern,
 Nachrechnung von Lücken, die Seite „Statistik“, Statistik-Sensoren in HA und ein Grafana-Dashboard.
@@ -450,8 +450,8 @@ Er schaltet nichts an der Anlage. **Der nächste Entwicklungsschritt ist Plan 4b
     Wächters. Live ist weiterhin kein Aktor, und 3c schaltet nichts an der Anlage.
 - **Phase 4a (Statistik) ist umgesetzt und je Task geprüft** (Plan:
   `docs/superpowers/plans/2026-10-17-phase-4a-statistik.md`, 16 Tasks; Ausführung subagent-driven;
-  Branch `claude/phase-4-plan-whnbh6`, ab `7dcb3d2`, noch nicht auf `main`; Gesamtreview, Fix-Welle und
-  Nacharbeit vom 18.10.2026 sind abgeschlossen).
+  Branch `claude/phase-4-plan-whnbh6`, ab `7dcb3d2`, seit dem 18.10.2026 auf `main`; Gesamtreview,
+  Fix-Welle und Nacharbeit vom 18.10.2026 sind abgeschlossen).
   Nur app, UI und `deploy/`; die Dateien unter `src/bindaems/core/`, `src/bindaems/shared/` und
   `cerbo-watchdog/` sind unverändert:
   - **Migration `0010`** (`v0010_statistics.py`): `assignment_log`, `charging_session`, `ledger_cost`,
@@ -1334,9 +1334,8 @@ Demo-Zugänge: `admin`, `bedienen` (Bedienen), `gast` (Lesen) und `sicher` (Admi
 
 4. **Phase 4**, Geplantes Laden, Statistik, HA komplett (Spec 18), in zwei Plänen (Entscheidung des
    Betreibers vom 17.10.2026; Einordnung im Plan 4a):
-   - **4a Statistik:** umgesetzt und je Task geprüft, auf dem Arbeitszweig `claude/phase-4-plan-whnbh6`,
-     noch nicht auf `main`; Gesamtreview, Fix-Welle und Nacharbeit sind abgeschlossen, die Integration
-     steht aus. Nur app, UI und `deploy/`, der core bleibt unverändert (Kurzfassung). An der Anlage
+   - **4a Statistik:** umgesetzt und je Task geprüft, seit dem 18.10.2026 auf `main`; Gesamtreview,
+     Fix-Welle und Nacharbeit sind abgeschlossen. Nur app, UI und `deploy/`, der core bleibt unverändert (Kurzfassung). An der Anlage
      genügt der Neubau von `ems-app` (Punkt 6 unter „Offen an der Anlage“), dann laufen die 30 Tage
      der Abnahme.
    - **4b Geplantes Laden:** der **nächste Entwicklungsschritt**, nach der Abnahme der Phase 3. Er ändert
