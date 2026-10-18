@@ -251,6 +251,15 @@ class SessionService:
             found = [session for session in found if vehicle_key(session) == vehicle]
         if limit is not None:
             found = found[:limit]
+        return self._with_splits(found)
+
+    def open_session(self, vehicle: str) -> ChargingSession | None:
+        """Die offene Session des Autos ``vehicle`` (Schlüssel wie ``vehicle_key``), egal wie
+        lange sie schon läuft; die neueste, falls mehrere offen sind; sonst ``None``."""
+        found = [s for s in self._tracker.open_sessions() if vehicle_key(s) == vehicle]
+        return self._with_splits(found[:1])[0] if found else None
+
+    def _with_splits(self, found: Sequence[StoredSession]) -> list[ChargingSession]:
         if not found:
             return []
         now = self._clock.now()

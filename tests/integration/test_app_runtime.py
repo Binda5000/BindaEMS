@@ -19,12 +19,11 @@ from tests.app_helpers import (
 from tests.plan_helpers import sample_plan, set_planning, until
 from tests.unit.shared.test_decisions import decision
 
-from bindaems.app.charging.sessions import ChargingSession, FlowSplit
 from bindaems.app.control.decisions import DecisionQuery
 from bindaems.app.control.intent import CoreDown
 from bindaems.app.db.schema import charging_session
 from bindaems.app.ha.entities import build_inputs
-from bindaems.app.runtime import AppRuntime, StatsInputs, open_or_last
+from bindaems.app.runtime import AppRuntime, StatsInputs
 from bindaems.shared.config import Config, Secrets
 from bindaems.shared.control import Intent, SupportIntent
 from bindaems.shared.decisions import decision_to_json
@@ -1013,6 +1012,19 @@ async def test_stats_inputs_pick_the_open_or_last_session_per_vehicle(runtime) -
     assert cached.month_kwh == {"tesla": pytest.approx(4.0), "egolf": pytest.approx(2.0)}
 
 
+async def test_stats_inputs_find_an_open_session_older_than_the_newest_ones(runtime) -> None:
+    hour = timedelta(hours=1)
+    add_session(runtime, T_APP - 20 * hour, None, "tesla")  # offen, älter als die sechs beendeten
+    for index in range(6):
+        start = T_APP - (10 - index) * hour
+        add_session(runtime, start, start + timedelta(minutes=20), "tesla", "twc")
+    add_session(runtime, T_APP - 30 * hour, T_APP - 29 * hour, "egolf")  # nur beendete
+    await asyncio.to_thread(runtime._refresh_stats)
+    tesla, egolf = runtime._stats_inputs.sessions["tesla"], runtime._stats_inputs.sessions["egolf"]
+    assert tesla is not None and tesla.end is None and tesla.start == T_APP - 20 * hour
+    assert egolf is not None and egolf.end == T_APP - 29 * hour
+
+
 async def test_failed_stats_refresh_keeps_the_previous_values(runtime, monkeypatch) -> None:
     await asyncio.to_thread(runtime._refresh_stats)
     before = runtime._stats_inputs
@@ -1056,7 +1068,7 @@ async def test_failed_session_lookup_keeps_the_previous_session(runtime, monkeyp
     def broken(*_args, **_kwargs):
         raise ValueError("kaputt")
 
-    monkeypatch.setattr(runtime.charging_sessions, "sessions", broken)
+    monkeypatch.setattr(runtime.charging_sessions, "open_session", broken)
     with capture_logs() as logs:
         await asyncio.to_thread(runtime._refresh_stats)
     assert runtime._stats_inputs.sessions["tesla"] is before
@@ -1086,12 +1098,3 @@ async def test_stats_loop_survives_a_failing_refresh(runtime, monkeypatch) -> No
 async def test_stats_inputs_start_unknown(runtime) -> None:
     assert isinstance(runtime._stats_inputs, StatsInputs)
     assert runtime._stats_inputs == StatsInputs(None, {}, {})
-
-
-def test_an_open_session_wins_over_a_newer_finished_one() -> None:
-    split = FlowSplit(1.0, 1.0, 0.0, 0.0, 0.0)
-    finished = ChargingSession(2, "twc", "tesla", T_APP, T_APP + timedelta(minutes=5), split)
-    parked = ChargingSession(1, "evcs", "tesla", T_APP - timedelta(hours=3), None, split)
-    assert open_or_last([finished, parked]) is parked  # neueste zuerst, die offene gewinnt
-    assert open_or_last([finished]) is finished
-    assert open_or_last([]) is None

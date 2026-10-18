@@ -10,7 +10,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import threading
-from collections.abc import Awaitable, Callable, Generator, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Generator, Mapping
 from dataclasses import dataclass, replace
 from datetime import date, datetime, timedelta
 from functools import partial
@@ -93,7 +93,6 @@ ENERGY_S = 60.0  # Energie der Verbraucher seit Mitternacht
 HA_INPUTS_S = 5.0
 STATS_S = 15 * 60.0  # Statistik für HA: bei jedem neuen Slot und spätestens alle 15 min
 STATS_SESSION_DAYS = 90  # so weit zurück sucht HA die letzte Ladesession eines Fahrzeugs
-STATS_SESSION_LIMIT = 5  # genug, damit eine offene Session neben beendeten gefunden wird
 RESTART_S = 10.0
 BACKUP_AT = (3, 15)  # Ortszeit
 FORECAST_NIGHTLY_AT = (2, 30)  # Ortszeit
@@ -124,11 +123,6 @@ class StatsInputs:
     stats: TodayStats | None
     sessions: Mapping[str, ChargingSession | None]  # je Fahrzeug die laufende oder letzte
     month_kwh: Mapping[str, float | None]  # je Fahrzeug die Ladeenergie im Monat
-
-
-def open_or_last(found: Sequence[ChargingSession]) -> ChargingSession | None:
-    """Aus den Sessions eines Fahrzeugs (neueste zuerst) die offene, sonst die neueste."""
-    return next((session for session in found if session.end is None), found[0] if found else None)
 
 
 class _AppServer(uvicorn.Server):
@@ -663,13 +657,14 @@ class AppRuntime:
         sessions = dict(previous.sessions)
         for key in self._cfg.vehicles:
             try:
-                found = self.charging_sessions.sessions(
-                    today - timedelta(days=STATS_SESSION_DAYS),
-                    today,
-                    vehicle=key,
-                    limit=STATS_SESSION_LIMIT,
-                )
-                sessions[key] = open_or_last(found)
+                # die offene Session gezielt (egal wie alt), sonst die neueste beendete
+                found = self.charging_sessions.open_session(key)
+                if found is None:
+                    latest = self.charging_sessions.sessions(
+                        today - timedelta(days=STATS_SESSION_DAYS), today, vehicle=key, limit=1
+                    )
+                    found = latest[0] if latest else None
+                sessions[key] = found
             except Exception:
                 log.exception("Ladesession für Home Assistant nicht bestimmbar", vehicle=key)
         month_kwh = dict(previous.month_kwh)

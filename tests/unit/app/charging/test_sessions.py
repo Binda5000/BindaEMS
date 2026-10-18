@@ -214,6 +214,29 @@ def test_service_open_session_and_by_vehicle(service, engine, ledger, clock) -> 
     assert totals["tesla"].cost_eur is None  # Netzbezug ohne Bezugspreis
 
 
+def test_open_session_is_found_per_vehicle_however_old(service, engine, ledger, clock) -> None:
+    clock.advance(timedelta(days=100))
+    old = T0 - timedelta(days=10)
+    add_session(engine, old, None)  # tesla, seit 10 Tagen offen
+    for index in range(8):  # acht neuere, beendete Sessions
+        start = T0 + timedelta(hours=index)
+        add_session(engine, start, start + timedelta(minutes=30), "tesla", "evcs")
+    add_session(engine, T0, T0 + SLOT, "polestar", "evcs")
+    ingest(ledger, old, {"pv>wb:twc": 2000.0})
+    found = service.open_session("tesla")
+    assert found is not None and found.end is None and found.start == old
+    assert found.split.kwh == 2.0
+    assert service.open_session("polestar") is None  # beendet: keine offene
+    assert service.open_session("guest") is None
+
+
+def test_open_session_of_an_unknown_vehicle(service, engine, clock) -> None:
+    clock.advance(timedelta(hours=1))
+    add_session(engine, T0, None, vehicle="")
+    found = service.open_session(UNKNOWN)
+    assert found is not None and found.vehicle is None
+
+
 def test_service_prices_the_grid_share(service, engine, ledger, clock) -> None:
     from bindaems.app.prices.store import PriceStore
 

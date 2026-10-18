@@ -181,6 +181,17 @@ class ChargingTracker:
         with self._engine.connect() as conn:
             return [_stored(row) for row in conn.execute(query)]
 
+    def open_sessions(self) -> list[StoredSession]:
+        """Die offenen Sessions (``end`` leer), neueste zuerst; unabhängig davon, wie lange sie
+        schon laufen."""
+        query = (
+            select(charging_session)
+            .where(charging_session.c.end.is_(None))
+            .order_by(desc(charging_session.c.start), desc(charging_session.c.id))
+        )
+        with self._engine.connect() as conn:
+            return [_stored(row) for row in conn.execute(query)]
+
     # --- Belegung ---------------------------------------------------------------------------
 
     def _log_assignment(self, conn: Connection, now: datetime, item: WallboxSeen) -> bool:

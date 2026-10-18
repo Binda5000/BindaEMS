@@ -52,6 +52,18 @@ def test_sessions_route_is_newest_first_and_limited(
     assert len(client.get("/api/charging/sessions", params=PARAMS).json()) == 2
 
 
+def test_sessions_route_lists_an_open_session_that_began_before_the_range(
+    client, auth, engine, clock
+) -> None:
+    clock.advance(timedelta(days=60))
+    login_as(client, auth, "viewer")
+    add_session(engine, T0 - timedelta(days=45), None)  # seit 45 Tagen offen
+    add_session(engine, T0 - timedelta(days=45), T0 - timedelta(days=44), "guest")  # beendet
+    params = {"from": "2026-10-01", "to": "2026-10-09"}
+    entries = client.get("/api/charging/sessions", params=params).json()
+    assert [(e["open"], e["start"]) for e in entries] == [(True, "2026-08-25T08:00:00+00:00")]
+
+
 def test_sessions_route_rejects_more_than_400_days(client, auth) -> None:
     login_as(client, auth, "viewer")
     params = {"from": "2025-01-01", "to": "2026-10-09"}
