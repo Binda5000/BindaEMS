@@ -3,7 +3,7 @@ from datetime import date, datetime, timedelta
 import pytest
 from sqlalchemy import insert
 from tests.app_helpers import ingest, price_row
-from tests.unit.app.charging.conftest import T0
+from tests.unit.app.charging.charging_helpers import T0
 
 from bindaems.app.charging.sessions import (
     GUEST,

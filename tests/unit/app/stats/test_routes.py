@@ -3,7 +3,7 @@ from collections.abc import Callable
 import pytest
 from fastapi.testclient import TestClient
 from tests.app_helpers import ingest, login_as
-from tests.unit.app.stats.conftest import T0
+from tests.unit.app.stats.stats_helpers import T0
 
 from bindaems.shared.timeutil import SLOT
 

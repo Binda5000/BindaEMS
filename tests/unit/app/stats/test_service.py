@@ -3,7 +3,7 @@ from datetime import UTC, date, datetime, timedelta
 import pytest
 from sqlalchemy import insert
 from tests.app_helpers import ingest, set_tariff
-from tests.unit.app.stats.conftest import T0, TODAY, add_consumer, add_session
+from tests.unit.app.stats.stats_helpers import T0, TODAY, add_consumer, add_session
 
 from bindaems.app.consumers.days import NO_DAY
 from bindaems.app.db.schema import consumer_day, ledger_check
@@ -194,6 +194,25 @@ def test_total_is_null_when_net_is_unknown(stats, settings_service) -> None:
     assert money["savings_same_import_eur"] is None
     assert money["fees_eur"] == pytest.approx(9 / 31)
     assert stats.period("day", TODAY)["buckets"][8]["net_eur"] is None
+
+
+def test_one_unknown_day_makes_the_money_of_the_week_unknown(
+    stats, settings_service, price_all, feed_in_7ct
+) -> None:
+    set_tariff(settings_service, with_fee(TariffSettings(), 9.0))
+    monday = T0 - timedelta(days=4)  # 05.10., 08:00 Ortszeit
+    price_all(monday, monday + SLOT)
+    ingest(stats._ledger, monday, {"grid>house": 1000.0})  # bepreist
+    ingest(stats._ledger, T0 - timedelta(days=3), {"grid>house": 2000.0})  # 06.10.: ohne Preis
+    week = stats.period("week", TODAY)
+    money = week["money"]
+    assert week["energy"]["import_kwh"] == 3.0  # die Energie ist bekannt
+    assert money["import_eur"] is None and money["net_eur"] is None
+    assert money["total_eur"] is None
+    assert money["savings_no_plant_eur"] is None and money["savings_same_import_eur"] is None
+    assert money["fees_eur"] == pytest.approx(9 * 5 / 31)  # 05. bis 09.10.
+    nets = {bucket["start"]: bucket["net_eur"] for bucket in week["buckets"]}
+    assert nets["2026-10-05"] == pytest.approx(PRICE_CT / 100) and nets["2026-10-06"] is None
 
 
 def test_unknown_feed_in_price_makes_revenue_and_savings_unknown(stats, price_all) -> None:

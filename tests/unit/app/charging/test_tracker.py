@@ -1,10 +1,12 @@
 import asyncio
+import contextlib
+import threading
 from datetime import datetime, timedelta
 
 import pytest
 from sqlalchemy import insert, select
 from structlog.testing import capture_logs
-from tests.unit.app.charging.conftest import T0
+from tests.unit.app.charging.charging_helpers import T0
 
 from bindaems.app.charging.tracker import (
     ChargingTracker,
@@ -14,6 +16,12 @@ from bindaems.app.charging.tracker import (
     session_vehicle,
 )
 from bindaems.app.db.schema import assignment_log, charging_session
+
+
+async def stop(task: asyncio.Task) -> None:
+    task.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await task
 
 
 def seen(occupant: str | None = None, kind: str | None = None, connected: bool | None = True):
@@ -81,8 +89,29 @@ async def test_run_records_on_wake(tracker, live, engine) -> None:
                 break
             await asyncio.sleep(0.01)
     finally:
-        task.cancel()
+        await stop(task)
     assert {(row[1], row[2]) for row in log_rows(engine)} == {("evcs", "tesla"), ("twc", "")}
+
+
+async def test_run_records_outside_the_event_loop(tracker, live, monkeypatch) -> None:
+    threads: list[int] = []
+    original = tracker.record
+
+    def record(now, seen_now) -> None:
+        threads.append(threading.get_ident())
+        original(now, seen_now)
+
+    monkeypatch.setattr(tracker, "record", record)
+    task = asyncio.create_task(tracker.run())
+    try:
+        tracker.wake()
+        for _ in range(200):
+            if threads:
+                break
+            await asyncio.sleep(0.01)
+    finally:
+        await stop(task)
+    assert threads and threads[0] != threading.get_ident()  # Worker-Thread, nicht die Schleife
 
 
 async def test_run_survives_a_failing_observation(tracker, live, engine, monkeypatch) -> None:
@@ -112,7 +141,7 @@ async def test_run_survives_a_failing_observation(tracker, live, engine, monkeyp
                     break
                 await asyncio.sleep(0.01)
     finally:
-        task.cancel()
+        await stop(task)
     assert any(entry["log_level"] == "error" for entry in logs)
     assert log_rows(engine)
 

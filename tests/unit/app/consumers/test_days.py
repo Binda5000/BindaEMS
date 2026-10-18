@@ -88,6 +88,29 @@ async def test_store_uses_the_real_length_of_a_dst_day(days, clock, service, res
     assert f"time >= {start}ms AND time < {start + 25 * 60 * MIN}ms" in query
 
 
+async def test_store_uses_the_23_hour_day_of_the_spring_change(
+    days, clock, service, respx_mock
+) -> None:
+    _consumers(service, "a")
+    route = respx_mock.get(URL).mock(side_effect=lambda r: _answer(r, {"a": 1}))
+    clock.advance(timedelta(days=-100))  # 01.07.2026
+    await days.store(date(2026, 3, 29))  # Beginn der Sommerzeit: 23 Stunden
+    query = route.calls.last.request.url.params["q"]
+    start = epoch_ms(datetime(2026, 3, 28, 23, 0, tzinfo=UTC))  # Mitternacht, noch UTC+1
+    assert f"time >= {start}ms AND time < {start + 23 * 60 * MIN}ms" in query
+
+
+async def test_store_drops_the_rows_of_a_deleted_consumer(
+    days, engine, service, respx_mock
+) -> None:
+    (first,) = _consumers(service, "a")
+    gone = first + 5  # Verbraucher, den es nicht mehr gibt
+    _put(engine, "2026-10-08", gone, 4.0)
+    respx_mock.get(URL).mock(side_effect=lambda r: _answer(r, {"a": 60}))
+    assert await days.store(YESTERDAY) == 1
+    assert _rows(engine) == {("2026-10-08", first): (0.6, None)}
+
+
 async def test_store_never_stores_today_or_the_future(days, engine, service, respx_mock) -> None:
     _consumers(service, "a")
     route = respx_mock.get(URL).mock(side_effect=lambda r: _answer(r, {"a": 5}))

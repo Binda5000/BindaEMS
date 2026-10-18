@@ -2,7 +2,7 @@ from datetime import timedelta
 
 from sqlalchemy import insert
 from tests.app_helpers import ingest, login_as, set_wallbox_names
-from tests.unit.app.charging.conftest import T0
+from tests.unit.app.charging.charging_helpers import T0
 
 from bindaems.app.db.schema import charging_session
 from bindaems.shared.timeutil import SLOT
@@ -49,7 +49,8 @@ def test_sessions_route_is_newest_first_and_limited(
     filtered = client.get("/api/charging/sessions", params={**PARAMS, "vehicle": "guest"}).json()
     assert [e["vehicle"] for e in filtered] == ["guest"]
     monkeypatch.setattr("bindaems.app.charging.routes.MAX_SESSIONS", 2)
-    assert len(client.get("/api/charging/sessions", params=PARAMS).json()) == 2
+    limited = client.get("/api/charging/sessions", params=PARAMS).json()
+    assert [e["vehicle"] for e in limited] == ["unknown", "guest"]  # die beiden neuesten
 
 
 def test_sessions_route_lists_an_open_session_that_began_before_the_range(

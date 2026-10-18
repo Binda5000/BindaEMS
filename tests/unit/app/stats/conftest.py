@@ -1,7 +1,6 @@
-from datetime import UTC, date, datetime
+from datetime import datetime
 
 import pytest
-from sqlalchemy import insert
 from tests.app_helpers import price_row, set_feed_in
 from tests.helpers import FakeSink
 from tests.unit.app.ledger.conftest import FakeInflux
@@ -10,9 +9,8 @@ from bindaems.app.charging.sessions import SessionService
 from bindaems.app.charging.tracker import ChargingTracker
 from bindaems.app.consumers.days import ConsumerDays
 from bindaems.app.consumers.energy import EnergyCache
-from bindaems.app.consumers.service import ConsumerInput, ConsumerService
+from bindaems.app.consumers.service import ConsumerService
 from bindaems.app.core_link import LiveState
-from bindaems.app.db.schema import charging_session
 from bindaems.app.ledger.checks import LedgerChecks
 from bindaems.app.ledger.costing import LedgerCosting
 from bindaems.app.ledger.service import LedgerService
@@ -21,9 +19,6 @@ from bindaems.app.prices.store import PriceStore
 from bindaems.app.stats.routes import stats_router
 from bindaems.app.stats.service import StatsService
 from bindaems.shared.timeutil import slots_between
-
-T0 = datetime(2026, 10, 9, 6, 0, tzinfo=UTC)  # 08:00 Ortszeit, vor "jetzt" (10:00 Ortszeit)
-TODAY = date(2026, 10, 9)
 
 
 @pytest.fixture
@@ -97,22 +92,3 @@ def stats(
 @pytest.fixture
 def client(make_client, stats, guard):
     return make_client(stats_router(stats, guard))
-
-
-def add_session(engine, start, end, vehicle="tesla", wallbox="twc") -> None:
-    with engine.begin() as conn:
-        conn.execute(
-            insert(charging_session).values(
-                wallbox=wallbox, vehicle=vehicle, start=start, end=end, last_seen=end or start
-            )
-        )
-
-
-def add_consumer(consumers: ConsumerService, name: str) -> int:
-    return consumers.create(
-        ConsumerInput(
-            name=name, color="#336699", source_kind="core", power_ref=f"load.{name}.power_w"
-        ),
-        actor="chris",
-        source="ui",
-    ).id
