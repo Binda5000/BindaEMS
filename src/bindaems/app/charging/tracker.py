@@ -14,9 +14,9 @@ wer dort steht (``wallboxes[].occupant`` und ``assignment``).
 - ``last_seen`` wird höchstens jede Minute gespeichert, Anfang und Ende sofort.
 - Das Fahrzeug der Session ist das nicht leere ``occupant`` mit der längsten Dauer in ihrem
   Zeitraum (``session_vehicle``); es wird bei jeder Änderung der Belegung, beim Speichern von
-  ``last_seen`` und beim Ende neu bestimmt. Hat kein Fahrzeug Zeit (etwa eine Session unter einer
-  Minute, deren Insasse erst in der schließenden Beobachtung steht), zählt die letzte nicht leere
-  Belegung der Wallbox zwischen Beginn und Ende.
+  ``last_seen`` und beim Ende neu bestimmt. Hat während der Session kein Fahrzeug Zeit (z. B. bei
+  einer sehr kurzen Session, deren Insasse erst in der schließenden Beobachtung steht), zählt die
+  letzte nicht leere Belegung der Wallbox zwischen Beginn und Ende.
 
 Das Schreiben läuft in einem Thread, ``wake`` setzt nur ein Ereignis.
 """
@@ -307,8 +307,9 @@ class ChargingTracker:
         vehicle = session_vehicle(entries, start, end)
         if vehicle is not None:
             return vehicle
-        # Keine Zeit mit Fahrzeug (Session unter einer Minute, der Insasse steht erst in der
-        # schließenden Beobachtung bei ``end``): die letzte bekannte Belegung in ``[start, end]``
+        # Während der Session hat kein Fahrzeug Zeit (z. B. bei einer sehr kurzen Session, deren
+        # Insasse erst in der schließenden Beobachtung bei ``end`` steht): die letzte bekannte
+        # Belegung in ``[start, end]``
         last = conn.execute(
             select(table.c.occupant)
             .where(
