@@ -163,8 +163,8 @@ die Zeitzone ist `Europe/Vienna`.
 - „Abrechnung je Tag“: kWh sowie Kosten und Erlös in Euro je Fluss und Tag aus `long`, immer die
   letzten 13 ganzen Tage und heute bis jetzt (Zeitbereich des Panels `now-13d/d`, der letzte
   Balken wächst über den Tag). Die Tage laufen in Wiener Zeit (`tz('Europe/Vienna')`), auch an den
-  Tagen der Zeitumstellung. Eine Viertelstunde ohne Preis zählt dort 0 €; verliert sie ihren Preis beim neu
-  Bewerten, überschreibt die app den alten Euro-Wert mit 0.
+  Tagen der Zeitumstellung. Eine Viertelstunde ohne Preis zählt dort 0 €; verliert sie ihren Preis
+  beim neu Bewerten, überschreibt die app den alten Euro-Wert mit 0.
 
 Die Entscheidungen des Reglers erscheinen als Markierungen („Entscheidungen“) in allen Panels: mit
 dem Text, der Wallbox oder dem Akku und dem Ergebnis. Sie stehen nur in `raw`, also 90 Tage lang.
@@ -374,8 +374,8 @@ hinweg nicht: Dann zeigen alle Statistik-Sensoren (auch „Ersparnis Monat“ un
 Die Zahlen sind dieselben wie in der Statistik je Zeitraum (Abschnitt „Statistik je Zeitraum“,
 `GET /api/stats`). „Ladeenergie“ hat keine Zustandsklasse, denn sie gilt je Session und ist kein
 Zählerstand; Home Assistant führt dafür keine Langzeitstatistik. Welche Session „laufend oder letzte“
-ist, sucht die app unter den neuesten 5 des Fahrzeugs der letzten 90 Tage; eine ältere, noch offene
-Session fände sie nicht.
+ist, fragt die app je Fahrzeug zuerst nach der neuesten offenen Session (egal wie lange sie schon
+läuft) und nur ohne sie nach der neuesten beendeten der letzten 90 Tage.
 
 Fährt die app geordnet herunter, meldet sie sich selbst ab; bei einem Absturz oder
 Verbindungsabbruch setzt der Broker alle Entitäten über den Last Will auf „nicht verfügbar“.
@@ -619,12 +619,12 @@ höchstens 200 Einträge. `vehicle` ist der Schlüssel aus `config.yaml`, `guest
   Steckzustand liest die app aus dem State des core (EVCS: `status` ungleich 0, Wall Connector:
   `vehicle_connected`), auch bei Regelbetrieb aus. Welches Auto es ist, kennt sie aus der Belegung in
   `GET /v1/health` (`wallboxes[].occupant`, alle 10 s): Es ist das Auto mit der längsten Zeit in der
-  Session, ein Gast ist „Gast“, ohne Beobachtung „Unbekannt“. Hat kein Auto Zeit in der Session (etwa
-  unter einer Minute, der Insasse steht erst in der schließenden Beobachtung), gilt die letzte nicht
-  leere Belegung zwischen Beginn und Ende. Ohne Regelbetrieb ruht die Regelung, und `wallboxes` zeigt
-  niemanden: Dann heißen die Sessions „Unbekannt“. Eine Pause der Beobachtung (core oder app aus) trennt
-  eine Session nicht, wenn sie höchstens 30 Minuten dauert und das Auto noch steckt; sonst endet die
-  Session bei der letzten Beobachtung.
+  Session, ein Gast ist „Gast“, ohne Beobachtung „Unbekannt“. Hat während der Session kein Auto Zeit
+  (z. B. bei einer sehr kurzen Session, deren Insasse erst in der schließenden Beobachtung steht),
+  gilt die letzte nicht leere Belegung zwischen Beginn und Ende. Ohne Regelbetrieb ruht die Regelung,
+  und `wallboxes` zeigt niemanden: Dann heißen die Sessions „Unbekannt“. Eine Pause der Beobachtung
+  (core oder app aus) trennt eine Session nicht, wenn sie höchstens 30 Minuten dauert und das Auto
+  noch steckt; sonst endet die Session bei der letzten Beobachtung.
 - **Zuordnung:** Jede Viertelstunde gehört an einer Wallbox zu der Session, die sie am längsten überdeckt
   (bei Gleichstand der späteren). Energie ohne Session zählt als „Unbekannt“. Eine laufende Session
   endet für die Zuordnung bei „jetzt“.
@@ -686,8 +686,8 @@ zwischen dem letzten Wert in der halben Stunde davor und dem ersten in der halbe
 (linear). Fehlt einer der beiden, gilt der andere, wenn er höchstens 2 Minuten von Mitternacht
 entfernt ist, sonst fehlt der Zählerstand. Alle Mitternächte eines Laufs gehen in einer Anfrage an
 InfluxDB; die app schickt Abfragen per POST, damit auch ein Proxy mit kurzer URL-Grenze sie
-durchlässt. Die Größen sind `import`
-(Netzbezug), `export` (Einspeisung), `pv` und `wb:<Schlüssel>` je Wallbox.
+durchlässt. Die Größen sind `import` (Netzbezug), `export` (Einspeisung), `pv` und `wb:<Schlüssel>`
+je Wallbox.
 
 `GET /api/ledger/checks?from=JJJJ-MM-TT&to=JJJJ-MM-TT` (ab „Lesen“) liefert die gespeicherten
 Prüfungen, höchstens 400 Tage (sonst 422): `days` mit `day`, `signal`, `ledger_kwh`, `counter_kwh`,
