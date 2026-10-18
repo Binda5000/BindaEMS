@@ -9,6 +9,7 @@ from tests.plan_helpers import (
     flows_of,
     flows_result,
     month,
+    pv_arc,
     resimulate,
     scenario,
     small_battery,
@@ -251,6 +252,66 @@ def test_spread_rule_charges_wear_on_the_delivered_energy() -> None:
     assert pays_off(inputs, steps, 0) == (1, 40.0)
     assert spread_pays(inputs.planning, 31.3, 40.0)
     assert not spread_pays(inputs.planning, 31.5, 40.0)  # 1,94 < 2
+
+
+# --- Kleine spätere Entladungen zählen (Nachtrag 18.10.2026) --------------------------------
+
+
+def test_pays_off_counts_later_discharge_below_100_w() -> None:
+    # Jede spätere Entladung über 1 W zählt als Nutzen, wenn sich der Spread rechnet.
+    def hit(load_w: float) -> tuple[int, float] | None:
+        inputs = scenario(
+            prices=[10.0, 40.0], pv=[0.0, 0.0], load=[0.0, load_w], soc_pct=50.0, grid_charge=True
+        )
+        intents = [
+            BatteryIntent(kind=BatteryIntentKind.NETZLADEN, grid_charge_w=1000),
+            BatteryIntent(),
+        ]
+        return pays_off(inputs, resimulate(inputs, intents), 0)
+
+    assert hit(50.0) == (1, 40.0)
+    assert hit(0.5) is None
+
+
+def test_optimizer_plan_using_the_charge_below_100_w_per_slot_passes() -> None:
+    # Festes Beispiel aus dem Befund (Property-Test, Hypothesis): SOC an der Reserve, 300 W Last,
+    # steigende PV. Der Optimierer lädt um 07:15 335 W aus dem Netz (10 ct) und entlädt um
+    # 08:15–09:15 (19 ct) je Slot knapp unter 100 W. 0,88 · (19 − 2) − 10 = 4,96 ≥ 2: Das rechnet
+    # sich, auch wenn kein Slot 100 W erreicht; früher meldete die Plausibilität „rechnet sich
+    # nicht“.
+    start = "2026-10-16T05:15:00+00:00"
+    inputs = scenario(
+        prices=[10.0] * 4 + [19.0] * 4 + [10.0] * 13,
+        pv=pv_arc(start, 21, 344.0),
+        load=[300.0] * 21,
+        soc_pct=20.0,
+        grid_charge=True,
+        start=start,
+        end_value_ct=6.642748367682174,
+    )
+    result = solve(inputs)
+    intents = derive_intents(inputs, result)
+    assert intents[0] == BatteryIntent(kind=BatteryIntentKind.NETZLADEN, grid_charge_w=300)
+    steps = resimulate(inputs, intents)
+    assert 0 < max(item.discharge_w for item in steps[4:8]) < 100
+    plan = plan_once(inputs, result)
+    assert plan.source == "optimizer", plan.issues
+
+
+def test_unprofitable_grid_charge_of_another_plan_is_still_reported() -> None:
+    # Die Spread-Prüfung bleibt für Pläne wirksam, die nicht aus den Absichten des Optimierers
+    # kommen: 2 kW Netzladen zu 20 ct, danach Eigenverbrauch zu 20 ct (0,88 · 18 − 20 < 2).
+    inputs = scenario(
+        prices=[20.0] * 4, pv=[0.0] * 4, load=[1000.0] * 4, soc_pct=50.0, grid_charge=True
+    )
+    intents = [BatteryIntent(kind=BatteryIntentKind.NETZLADEN, grid_charge_w=2000)] + [
+        BatteryIntent()
+    ] * 3
+    steps = resimulate(inputs, intents)
+    assert all(item.discharge_w > 100 for item in steps[1:])
+    assert "Netzladen um 02:00 rechnet sich nicht" in check_plan(
+        inputs, flows_of(steps, inputs), intents, steps
+    )
 
 
 def test_flows_and_steps_must_match_the_slots() -> None:

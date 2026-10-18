@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import math
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from datetime import date, datetime
 from typing import Any, Final
@@ -35,7 +36,7 @@ from bindaems.shared.plan import (
     Reason,
 )
 from bindaems.shared.settings import PlanningSettings, PowerComponent, TariffSettings
-from bindaems.shared.timeutil import SLOT, slot_start
+from bindaems.shared.timeutil import LOCAL_TZ, SLOT, slot_start
 
 DAY = "2026-10-16"
 NOW = datetime.fromisoformat("2026-10-16T10:05:00+00:00")
@@ -324,6 +325,18 @@ def scenario(
             for i, (ct, pv_w, load_w) in enumerate(zip(prices, pv, load, strict=True))
         ],
     )
+
+
+def pv_arc(start: str, slots: int, peak_w: float) -> list[float]:
+    """PV je Slot ab ``start`` wie im Property-Test: Sinusbogen über den lokalen Tag von 06:00
+    bis 18:00 mit der Spitze ``peak_w``, gerechnet zur Mitte des Slots."""
+    values: list[float] = []
+    for index in range(slots):
+        local = (at(start) + index * SLOT).astimezone(LOCAL_TZ)
+        hour = local.hour + local.minute / 60 + 7.5 / 60
+        inside = 6.0 <= hour <= 18.0
+        values.append(peak_w * math.sin(math.pi * (hour - 6.0) / 12.0) if inside else 0.0)
+    return values
 
 
 def flow(**flows: float) -> SlotFlows:

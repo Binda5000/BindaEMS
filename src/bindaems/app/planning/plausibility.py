@@ -20,7 +20,10 @@ from bindaems.shared.timeutil import LOCAL_TZ, ensure_utc
 BALANCE_TOL_W: Final = 1.0  # Bilanz und Leistungsgrenzen
 SOC_TOL_KWH: Final = 0.01
 R1_TOL_KWH: Final = 0.1  # Einspeisung nach einem ``NETZLADEN``-Slot (Regel R1)
-USEFUL_W: Final = 100.0  # ab dieser Leistung zählt ein späterer Slot als Nutzen des Netzladens
+# Über dieser Entladung zählt ein späterer Slot als Nutzen des Netzladens (Nachtrag 18.10.2026:
+# jede Entladung über der Toleranz der Bilanz; der Optimierer kennt keine Mindestentladung).
+USED_ABOVE_W: Final = BALANCE_TOL_W
+MENTION_W: Final = 100.0  # ab dieser Leistung nennt eine Erklärung einen Fluss oder Netzbezug
 
 PaysOffBy = Literal["discharge", "import"]
 
@@ -50,17 +53,18 @@ def pays_off(
 ) -> tuple[int, float] | None:
     """Späterer Slot und sein Bezugspreis, mit dem die Spread-Regel für ``index`` gilt.
 
-    Gesucht ist ein späterer Slot mit Entladung (``by="discharge"``) bzw. Netzbezug
-    (``by="import"``) ab ``USEFUL_W``, für den ``spread_pays`` gilt. Der teuerste solche Slot
-    zählt, bei Gleichstand der frühere; ``None``, wenn es keinen gibt.
+    Gesucht ist ein späterer Slot mit Entladung über ``USED_ABOVE_W`` (``by="discharge"``) bzw.
+    Netzbezug ab ``MENTION_W`` (``by="import"``, nur für die Erklärung „lohnt sich“), für den
+    ``spread_pays`` gilt. Der teuerste solche Slot zählt, bei Gleichstand der frühere; ``None``,
+    wenn es keinen gibt.
     """
     now_ct = inputs.slots[index].import_ct
     best: tuple[int, float] | None = None
     for later in range(index + 1, len(steps)):
         item = steps[later]
-        used_w = item.discharge_w if by == "discharge" else item.import_w
+        used = item.discharge_w > USED_ABOVE_W if by == "discharge" else item.import_w >= MENTION_W
         later_ct = inputs.slots[later].import_ct
-        if used_w < USEFUL_W:
+        if not used:
             continue
         if not spread_pays(inputs.planning, now_ct, later_ct):
             continue
@@ -83,6 +87,20 @@ def pays_off_at_end(inputs: PlanInputs, steps: Sequence[SimStep], index: int) ->
         return False
     now_ct = inputs.slots[index].import_ct
     return params.eta_ch * inputs.end_value_ct - now_ct >= inputs.planning.margin_ct
+
+
+def grid_charge_pays(inputs: PlanInputs, steps: Sequence[SimStep], index: int) -> bool:
+    """Netzladen im Slot ``index`` rechnet sich an der Nachrechnung ``steps``.
+
+    Das gilt mit einer späteren Entladung (``pays_off``) oder mit dem Restwert am Horizontende
+    (``pays_off_at_end``); mit Leistungspreis immer, weil Netzladen dann auch einer Spitze
+    ausweichen darf. Plausibilität und Absichten rechnen beide hiermit.
+    """
+    return (
+        bool(inputs.peak_months)
+        or pays_off(inputs, steps, index) is not None
+        or pays_off_at_end(inputs, steps, index)
+    )
 
 
 def _local_time(inputs: PlanInputs, index: int) -> str:
@@ -153,12 +171,7 @@ def check_plan(
                 index,
                 f"Regel R verletzt: Netzladen um {at}, danach {exported} kWh Einspeisung",
             )
-        # Mit Leistungspreis darf Netzladen auch einer Spitze ausweichen.
-        if (
-            not inputs.peak_months
-            and pays_off(inputs, steps, index) is None
-            and not pays_off_at_end(inputs, steps, index)
-        ):
+        if not grid_charge_pays(inputs, steps, index):
             report("spread", index, f"Netzladen um {at} rechnet sich nicht")
 
     return [text for _, text in sorted(found.values(), key=lambda entry: entry[0])]

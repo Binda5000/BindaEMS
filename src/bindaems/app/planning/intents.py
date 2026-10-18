@@ -13,7 +13,7 @@ from typing import Final
 from bindaems.app.planning.battery_model import SLOT_H, params_of, sim_slots, simulate
 from bindaems.app.planning.inputs import PlanInputs
 from bindaems.app.planning.optimizer import OptimizerResult, grid_charge_cap_w
-from bindaems.app.planning.plausibility import R1_TOL_KWH, export_after_kwh
+from bindaems.app.planning.plausibility import R1_TOL_KWH, export_after_kwh, grid_charge_pays
 from bindaems.shared.plan import BatteryIntent, BatteryIntentKind
 
 GRID_CHARGE_MIN_W: Final = 100.0  # darunter ist es kein Netzladen
@@ -30,7 +30,8 @@ def derive_intents(inputs: PlanInputs, result: OptimizerResult) -> list[BatteryI
     ``HOLD_SHARE`` dessen entlädt, was der Eigenverbrauch lieferte (mindestens ``HOLD_MIN_W``);
     die Hälfte ist die Rundung auf die nächste ausführbare Absicht. Sonst ``EIGENVERBRAUCH``.
 
-    Zuletzt hält ``_keep_rule_r1`` Regel R1 an der Nachrechnung ein.
+    Zuletzt hält ``_keep_rule_r1`` Regel R1 an der Nachrechnung ein, und
+    ``_drop_unprofitable`` streicht Netzladen, das sich dort nicht rechnet.
     """
     if not result.flows:
         return []
@@ -38,27 +39,25 @@ def derive_intents(inputs: PlanInputs, result: OptimizerResult) -> list[BatteryI
     slots = sim_slots(inputs)
     soc_kwh = inputs.battery.soc_pct / 100 * params.capacity_kwh
     intents: list[BatteryIntent] = []
+    plain: list[BatteryIntent] = []  # Absicht je Slot nach der Regel ohne Netzladen
     for index, flows in enumerate(result.flows):
+        slot = slots[index]
+        deliverable_w = max(0.0, soc_kwh - params.lo_kwh) * params.eta_dis / SLOT_H * 1000
+        own_w = min(max(0.0, slot.load_w - slot.pv_w), slot.max_discharge_w, deliverable_w)
+        if own_w >= HOLD_MIN_W and flows.bt_h < HOLD_SHARE * own_w:
+            plain.append(BatteryIntent(kind=BatteryIntentKind.HALTEN))
+        else:
+            plain.append(BatteryIntent())
+        intents.append(plain[-1])
+        soc_kwh = flows.soc_end_kwh
         if flows.gr_b >= GRID_CHARGE_MIN_W:
             cap_w = grid_charge_cap_w(inputs, index)
             power_w = min(
                 ROUND_W * floor(flows.gr_b / ROUND_W + 0.5), ROUND_W * floor(cap_w / ROUND_W)
             )
             if power_w > 0:
-                intents.append(
-                    BatteryIntent(kind=BatteryIntentKind.NETZLADEN, grid_charge_w=power_w)
-                )
-                soc_kwh = flows.soc_end_kwh
-                continue
-        slot = slots[index]
-        deliverable_w = max(0.0, soc_kwh - params.lo_kwh) * params.eta_dis / SLOT_H * 1000
-        own_w = min(max(0.0, slot.load_w - slot.pv_w), slot.max_discharge_w, deliverable_w)
-        if own_w >= HOLD_MIN_W and flows.bt_h < HOLD_SHARE * own_w:
-            intents.append(BatteryIntent(kind=BatteryIntentKind.HALTEN))
-        else:
-            intents.append(BatteryIntent())
-        soc_kwh = flows.soc_end_kwh
-    return _keep_rule_r1(inputs, intents)
+                intents[-1] = BatteryIntent(kind=BatteryIntentKind.NETZLADEN, grid_charge_w=power_w)
+    return _drop_unprofitable(inputs, _keep_rule_r1(inputs, intents), plain)
 
 
 def _keep_rule_r1(inputs: PlanInputs, intents: list[BatteryIntent]) -> list[BatteryIntent]:
@@ -93,4 +92,33 @@ def _keep_rule_r1(inputs: PlanInputs, intents: list[BatteryIntent]) -> list[Batt
             if power_w >= GRID_CHARGE_MIN_W
             else BatteryIntent(kind=BatteryIntentKind.HALTEN)
         )
+    return result
+
+
+def _drop_unprofitable(
+    inputs: PlanInputs, intents: list[BatteryIntent], plain: list[BatteryIntent]
+) -> list[BatteryIntent]:
+    """Streicht ``NETZLADEN``, das sich an der Nachrechnung nicht rechnet (``grid_charge_pays``,
+    dieselbe Rechnung wie die Plausibilität); der Slot bekommt seine Absicht aus ``plain``.
+
+    Die Rundung kann die Nutzung verschieben: Fehlen in einem billigen Slot nach dem Netzladen
+    weniger als ``HOLD_MIN_W``, wird er ``EIGENVERBRAUCH`` und verbraucht die geladene Energie
+    sofort, obwohl der Optimierer sie für später geladen hat. Gestrichen wird je Runde der letzte
+    betroffene Slot, danach wird neu gerechnet; das Streichen speist nie mehr ein (Regel R1).
+    """
+    params = params_of(inputs)
+    slots = sim_slots(inputs)
+    soc0_kwh = inputs.battery.soc_pct / 100 * params.capacity_kwh
+    result = list(intents)
+    for _ in range(len(result)):  # jede Runde streicht ein ``NETZLADEN``
+        steps = simulate(soc0_kwh, slots, result, params)
+        idle = [
+            index
+            for index, intent in enumerate(result)
+            if intent.kind is BatteryIntentKind.NETZLADEN
+            and not grid_charge_pays(inputs, steps, index)
+        ]
+        if not idle:
+            break
+        result[idle[-1]] = plain[idle[-1]]
     return result

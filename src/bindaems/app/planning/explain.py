@@ -14,8 +14,8 @@ from decimal import ROUND_HALF_UP, Decimal
 from bindaems.app.planning.battery_model import SimStep, params_of
 from bindaems.app.planning.inputs import PlanInputs
 from bindaems.app.planning.plausibility import (
+    MENTION_W,
     R1_TOL_KWH,
-    USEFUL_W,
     export_after_kwh,
     pays_off,
 )
@@ -101,12 +101,12 @@ def _soc_end_pct(inputs: PlanInputs, steps: Sequence[SimStep], index: int) -> fl
 def _spike_block(
     inputs: PlanInputs, steps: Sequence[SimStep], index: int
 ) -> tuple[int, int] | None:
-    """Erster Block zusammenhängender Slots nach ``index`` mit Entladung ab ``USEFUL_W`` und
+    """Erster Block zusammenhängender Slots nach ``index`` mit Entladung ab ``MENTION_W`` und
     höherem Preis als im Slot ``index``."""
     now_ct = inputs.slots[index].import_ct
 
     def member(later: int) -> bool:
-        return steps[later].discharge_w >= USEFUL_W and inputs.slots[later].import_ct > now_ct
+        return steps[later].discharge_w >= MENTION_W and inputs.slots[later].import_ct > now_ct
 
     count = len(steps)
     first = next((later for later in range(index + 1, count) if member(later)), None)
@@ -125,7 +125,7 @@ def _budget_peak(
     if budget_kw is None:
         return False
     return any(
-        steps[later].discharge_w >= USEFUL_W
+        steps[later].discharge_w >= MENTION_W
         and inputs.slots[later].load_w - inputs.slots[later].pv_w > budget_kw * 1000
         for later in range(index + 1, len(steps))
     )
@@ -183,7 +183,7 @@ def _main_reason(
             return Reason(code="BUDGET_SPITZE", params={"soc": soc, "kw": budget})
         return Reason(code="HALTEN_RESTWERT", params={"soc": soc, "um": horizon_end})
 
-    if item.charge_pv_w >= USEFUL_W:
+    if item.charge_pv_w >= MENTION_W:
         return Reason(code="PV_LADEN", params={"kw": item.charge_pv_w / 1000})
 
     # „Lohnt sich“: ein späterer Slot bezieht in der Nachrechnung Netzstrom (Präzisierung 12).
@@ -201,9 +201,9 @@ def _main_reason(
             code="NETZLADEN_AUS",
             params={"ct": now_ct, "um": _hhmm(slots[later].start), "ct_spaeter": later_ct},
         )
-    if item.discharge_w >= USEFUL_W:
+    if item.discharge_w >= MENTION_W:
         refill = next(
-            (later for later in range(index + 1, count) if steps[later].charge_pv_w >= USEFUL_W),
+            (later for later in range(index + 1, count) if steps[later].charge_pv_w >= MENTION_W),
             None,
         )
         if refill is not None:
