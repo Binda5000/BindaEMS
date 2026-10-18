@@ -189,12 +189,13 @@ Minutenmittel in `long` und lassen sich in Grafana mit der Retention Policy `lon
   (`docker compose pull ems-app && docker compose up -d --no-deps ems-app`); der core läuft weiter, und
   der Regelbetrieb bleibt an. Die Schritte stehen am Ende von Abschnitt 8, „Statistik ausrollen
   (Plan 4a)“.
-- **Rollback auf einen Stand vor Plan 4a:** Die Migrationen `0010` und `0011` der app sind beim Start
-  gelaufen. Eine ältere app kennt diese Versionen nicht und startet mit dieser Datenbank nicht. Spiele die Kopie ein,
-  die du vor dem Ausrollen gemacht hast (`/backup/vor-plan-4a.sqlite3`, Schritt 1 in Abschnitt 8,
-  „Statistik ausrollen (Plan 4a)“; Wiederherstellen wie in Abschnitt 9). Die nächtlichen Sicherungen
-  helfen nur am Tag des Ausrollens, vor 03:15 Uhr: Schon die erste Sicherung danach enthält `0010`. Die
-  Statistik seit dem Ausrollen geht dabei verloren. Der core ist nicht betroffen.
+- **Rollback auf einen Stand vor Plan 4a:** Die Migrationen `0010` und `0011` der app sind beim
+  Start gelaufen. Eine ältere app kennt diese Versionen nicht und startet mit dieser Datenbank
+  nicht. Spiele die Kopie ein, die du vor dem Ausrollen gemacht hast (`/backup/vor-plan-4a.sqlite3`,
+  Schritt 1 in Abschnitt 8, „Statistik ausrollen (Plan 4a)“; Wiederherstellen wie in Abschnitt 9).
+  Die nächtlichen Sicherungen helfen nur am Tag des Ausrollens, vor 03:15 Uhr: Schon die erste
+  Sicherung danach enthält `0010`. Die Statistik seit dem Ausrollen geht dabei verloren. Der core
+  ist nicht betroffen.
 - **Rollback auf einen Stand vor Plan 3c:**
   - Ein core vor Plan 3c kann keine `intent.json` lesen, die ein core ab Plan 3c geschrieben hat (sie
     hat immer die Felder `plan` und `support`, und der ältere core lehnt unbekannte Felder ab). Er startet dann ohne Absicht und meldet den Alarm
@@ -594,9 +595,10 @@ zum Verschleiß oder zu `battery.usable_kwh` passt, und rechnet ab dort neu.
   neue PV- oder bepreiste Ladung verdünnt ihn. Der Einstandspreis ist unbekannt, bis der Preis da ist
   oder der Anteil ohne Preis unter 1 % des Akkubestands fällt (Akkubestand: der gerechnete Inhalt am
   Ende der Viertelstunde davor, nicht der SOC); darunter gilt der Mittelwert der bepreisten Energie.
-  Akku → Auto, die Kosten der Session und die Kosten je Auto zeigen dann „–“ (unbekannt), wie die
-  Tageskosten bei fehlendem Preis. Ein nachgetragener Preis (Abrechnung neu bewerten, siehe oben)
-  macht ihn ab dort neu gerechnet wieder bekannt.
+  Akku → Auto, die Kosten der Session und die Kosten je Auto sind dann unbekannt, wie die
+  Tageskosten bei fehlendem Preis: „Statistik“ zeigt dort „–“, „Laden“ lässt die Kosten der letzten
+  Session weg, und API und Home Assistant liefern `cost_eur` als `null`. Ein nachgetragener Preis
+  (Abrechnung neu bewerten, siehe oben) macht ihn ab dort neu gerechnet wieder bekannt.
 - **Beim ersten Start mit Plan 4a** rechnet die app einmal über alle gespeicherten Viertelstunden;
   das kann bei viel Abrechnung etwas dauern. Beendest du die app währenddessen, hört die Rechnung
   nach dem laufenden Abschnitt von 7 Tagen auf (das Beenden wartet darauf höchstens 5 s), und der
