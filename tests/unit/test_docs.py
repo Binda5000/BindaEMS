@@ -80,6 +80,7 @@ def test_statistics_page_in_the_guide_uses_the_texts_of_the_ui() -> None:
         "Im Zeitraum wurde kein Auto geladen.",
         "Keine Ladesessions im Zeitraum.",
         "Noch kein Tag abgeglichen.",
+        "Keine Zählerwerte für diesen Zeitraum.",
         "gegenüber Fixtarif ohne Anlage",
         "Akku → Autos",
         "PV (ohne Markierung)",

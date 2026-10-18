@@ -1185,7 +1185,9 @@ und dem Abgleich (Abschnitt 8).
   „Weiter“ blätterst du, „Heute“ springt zum laufenden Zeitraum. „Weiter“ und „Heute“ sind im laufenden
   Zeitraum gesperrt, wo sie nichts bewirken. Die Überschrift nennt den Zeitraum: „Fr., 09.10.2026“, „KW 41 ·
   05.10.–11.10.2026“, „Oktober 2026“ oder „2026“. Zeitraum und Datum stehen in der Adresse
-  (`/statistik?zeitraum=monat&datum=2026-10-09`), du kannst sie als Lesezeichen setzen.
+  (`/statistik?zeitraum=monat&datum=2026-10-09`), du kannst sie als Lesezeichen setzen. Beim Blättern
+  bleiben die Werte des vorigen Zeitraums gedimmt stehen, bis die neuen da sind; „Lädt …“ steht nur
+  beim ersten Öffnen. Scheitert die Abfrage, steht die Meldung statt der Werte.
 - **Hinweise im Kopf:** „Abdeckung {pct} %“ (Anteil der Zeit mit aufgezeichneter Abrechnung), bei
   geschätzten Viertelstunden „{n} Viertelstunden geschätzt“ (Abschnitt 8, „Lücken nachrechnen“) und bei
   einem laufenden Zeitraum „bis jetzt“.
@@ -1205,15 +1207,15 @@ und dem Abgleich (Abschnitt 8).
 - **„Ladesessions“:** Beginn, Ende (eine laufende Session: „läuft“), Wallbox, Auto, Energie, „PV / Akku /
   Netz“ und Kosten, neueste zuerst. Mehr als 200 zeigt die Karte nicht; sie sagt dann „Angezeigt werden
   die 200 neuesten Sessions.“ Leer: „Keine Ladesessions im Zeitraum.“
-- **„Verbraucher“:** die Energie je Verbraucher im Zeitraum. Fehlt sie, steht „–“, und der Grund steht
-  als Titel am Wert (mit der Maus oder dem Screenreader; auf dem Handy nicht sichtbar). Zu den Tagen siehe
-  „Energie der Verbraucher“ unten.
+- **„Verbraucher“:** die Energie je Verbraucher im Zeitraum. Fehlt sie, steht „–“ und darunter klein
+  der Grund. Zu den Tagen siehe „Energie der Verbraucher“ unten.
 - **„Monatsspitzen“:** nur in Monat und Jahr: je Monat die höchste Viertelstunde des Netzbezugs mit
   Zeitpunkt und, mit Leistungspreis, dessen Kosten. Gibt es keine, fehlt die Karte.
 - **„Abgleich mit den Zählern“:** je Größe (Netzbezug, Einspeisung, „PV (ohne Markierung)“, jede
   Wallbox) die Summe der Abrechnung, die der Zähler und die Abweichung über die geprüften Tage, dazu
   „Mehr als 1 % Abweichung am {Tage}.“ für die markierten Tage und „Noch kein Tag abgeglichen.“ ohne
-  einen geprüften Tag. Wie du eine Abweichung deutest, steht in Abschnitt 8, „Abgleich mit den Zählern“.
+  einen geprüften Tag. Gibt es geprüfte Tage, aber weder Summen noch markierte Tage, steht dort „Keine
+  Zählerwerte für diesen Zeitraum.“ Wie du eine Abweichung deutest, steht in Abschnitt 8, „Abgleich mit den Zählern“.
 
 Auf dem Handy scrollen die breiten Tabellen in ihrer Karte; die Seite selbst scrollt nicht seitlich.
 
