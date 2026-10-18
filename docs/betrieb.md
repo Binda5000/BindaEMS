@@ -589,10 +589,14 @@ zum Verschleiß oder zu `battery.usable_kwh` passt, und rechnet ab dort neu.
 - **Entladung:** Sie kostet den Mittelwert zu Beginn der Viertelstunde plus den Verschleiß
   (`planning.wear_ct`, Standard 2 ct/kWh, Einstellungen „Planung“). Bei leerem Inhalt gilt nur der
   Verschleiß. Ändert sich `planning.wear_ct`, rechnet die app alles neu.
-- **Fehlt der Bezugspreis** einer Netzladung, ist der Einstandspreis unbekannt, solange diese Energie
-  im Akku ist. Akku → Auto, die Kosten der Session und die Kosten je Auto zeigen dann „–“ (unbekannt),
-  wie die Tageskosten bei fehlendem Preis. Bekannt wird er wieder, sobald der Preis nachgetragen ist
-  (Abrechnung neu bewerten, siehe oben; die app rechnet ab dort neu) oder sobald der Akku leer war.
+- **Fehlt der Bezugspreis** einer Netzladung, führt die app diese Energie als Anteil ohne Preis im
+  Inhalt mit: Eine Entladung und das Begrenzen auf `battery.usable_kwh` nehmen ihn anteilig heraus,
+  neue PV- oder bepreiste Ladung verdünnt ihn. Der Einstandspreis ist unbekannt, bis der Preis da ist
+  oder der Anteil ohne Preis unter 1 % des Akkubestands fällt (Akkubestand: der gerechnete Inhalt am
+  Ende der Viertelstunde davor, nicht der SOC); darunter gilt der Mittelwert der bepreisten Energie.
+  Akku → Auto, die Kosten der Session und die Kosten je Auto zeigen dann „–“ (unbekannt), wie die
+  Tageskosten bei fehlendem Preis. Ein nachgetragener Preis (Abrechnung neu bewerten, siehe oben)
+  macht ihn ab dort neu gerechnet wieder bekannt.
 - **Beim ersten Start mit Plan 4a** rechnet die app einmal über alle gespeicherten Viertelstunden;
   das kann bei viel Abrechnung etwas dauern.
 

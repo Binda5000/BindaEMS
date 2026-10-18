@@ -1,11 +1,12 @@
 """Einstandspreis des Akkus je Viertelstunde (Spec 11.4, Plan 4a, Entscheidung 4).
 
 PV-Strom ist kostenlos (0 ct), Netzladung zählt mit dem Bezugspreis des Slots; der Mittelwert über
-den Inhalt ist damit der Netzanteil zum Bezugspreis. Eine Entladung kostet den Mittelwert zu
-Beginn des Slots plus Verschleiß. Solange Energie aus einer Netzladung ohne Bezugspreis im Akku
-ist, ist der Einstandspreis unbekannt (``None``), bis der Preis nachgetragen oder der Akku leer
-ist. Die Werte stehen in ``ledger_cost`` und werden ab dem frühesten geänderten Slot neu
-gerechnet (``mark_dirty``); ``catch_up`` läuft in einem Thread.
+die bepreiste Energie im Inhalt ist damit der Netzanteil zum Bezugspreis. Eine Entladung kostet den
+Mittelwert zu Beginn des Slots plus Verschleiß. Energie aus einer Netzladung ohne Bezugspreis führt
+die app als Anteil ohne Preis im Inhalt mit; solange er mindestens 1 % des Inhalts ausmacht, ist der
+Einstandspreis unbekannt (``None``), bis der Preis nachgetragen ist oder der Anteil darunter fällt.
+Die Werte stehen in ``ledger_cost`` und werden ab dem frühesten geänderten Slot neu gerechnet
+(``mark_dirty``); ``catch_up`` läuft in einem Thread.
 """
 
 from __future__ import annotations
@@ -28,6 +29,7 @@ log = structlog.get_logger(__name__)
 
 BLOCK = timedelta(days=7)
 EMPTY_KWH = 1e-9  # darunter gilt der Akku als leer (Rundung der Summen)
+UNPRICED_SHARE = 0.01  # ab diesem Anteil ohne Bezugspreis ist der Einstandspreis unbekannt
 PV_CHARGE = "pv>battery"
 GRID_CHARGE = "grid>battery"
 DISCHARGE_PREFIX = "battery>"
@@ -37,53 +39,72 @@ DISCHARGE_PREFIX = "battery>"
 class SlotCost:
     slot_start: datetime
     stock_kwh: float  # Inhalt am Ende des Slots
-    # Einstandspreis des Inhalts; leer ohne Inhalt, und solange Netzladung ohne Preis darin ist
+    # Einstandspreis der bepreisten Energie im Inhalt; leer ohne bepreiste Energie
     avg_ct: float | None
     # Kosten einer kWh, die in diesem Slot entladen wird (Mittelwert + Verschleiß); leer, solange
-    # der Einstandspreis unbekannt ist
+    # der Einstandspreis unbekannt ist (``UNPRICED_SHARE``)
     discharge_ct: float | None
+    # Anteil des Inhalts aus Netzladung ohne Bezugspreis (kWh, am Ende des Slots)
+    unpriced_kwh: float = 0.0
+
+
+StartState = tuple[float, float | None, float]  # (Inhalt kWh, Mittelwert ct, davon ohne Preis kWh)
+
+
+def _discharge_ct(stock: float, avg: float | None, unpriced: float, wear_ct: float) -> float | None:
+    if stock <= EMPTY_KWH:
+        return wear_ct  # leer und bekannt: nur Verschleiß
+    if unpriced >= UNPRICED_SHARE * stock or avg is None:
+        return None
+    return avg + wear_ct
 
 
 def cost_basis(
     slots: Sequence[LedgerSlot],
-    start: tuple[float, float | None],
+    start: StartState,
     *,
     wear_ct: float,
     usable_kwh: float,
 ) -> list[SlotCost]:
-    """Rechnet die Slots chronologisch; ``start`` ist ``(Inhalt kWh, Mittelwert ct)`` davor.
+    """Rechnet die Slots chronologisch; ``start`` ist der Zustand davor (``StartState``).
 
-    Ein Inhalt über ``EMPTY_KWH`` ohne Mittelwert ist unbekannt: Er stammt (auch) aus einer
-    Netzladung ohne Bezugspreis. Er bleibt unbekannt, bis der Akku leer ist.
+    Netzladung ohne Bezugspreis geht in ``unpriced_kwh`` ein, nicht in den Mittelwert. Entladung
+    und Kappung auf ``usable_kwh`` nehmen sie anteilig mit heraus, neue bepreiste oder PV-Ladung
+    verdünnt sie. Solange sie mindestens ``UNPRICED_SHARE`` des Inhalts ausmacht, ist der
+    Einstandspreis unbekannt; darunter gilt der Mittelwert der bepreisten Energie.
     """
-    stock, avg = start
+    stock, avg, unpriced = start
     result: list[SlotCost] = []
     for slot in slots:
-        discharge_ct: float | None
-        if stock <= EMPTY_KWH:
-            discharge_ct = wear_ct  # leer und bekannt: nur Verschleiß
-        else:
-            discharge_ct = avg + wear_ct if avg is not None else None
+        discharge_ct = _discharge_ct(stock, avg, unpriced, wear_ct)
         discharged = math.fsum(
             wh for name, wh in slot.flows_wh.items() if name.startswith(DISCHARGE_PREFIX)
         )
-        stock = max(0.0, stock - discharged / 1000)
+        if discharged > 0 and stock > 0:
+            remaining = max(0.0, stock - discharged / 1000)
+            unpriced *= remaining / stock
+            stock = remaining
         if stock <= EMPTY_KWH:
-            stock, avg = 0.0, None
+            stock, avg, unpriced = 0.0, None, 0.0
         pv_kwh = slot.flows_wh.get(PV_CHARGE, 0.0) / 1000
         grid_kwh = slot.flows_wh.get(GRID_CHARGE, 0.0) / 1000
         added = pv_kwh + grid_kwh
         if added > 0:
-            unknown = (stock > 0 and avg is None) or (grid_kwh > 0 and slot.import_price_ct is None)
-            if unknown:
-                avg = None
+            priced = max(0.0, stock - unpriced)
+            parts = [(avg, priced)] if avg is not None and priced > 0 else []
+            parts.append((0.0, pv_kwh))
+            if slot.import_price_ct is None:
+                unpriced += grid_kwh
             else:
-                price = slot.import_price_ct if slot.import_price_ct is not None else 0.0
-                parts = [(avg, stock)] if avg is not None and stock > 0 else []
-                parts += [(0.0, pv_kwh), (price, grid_kwh)]  # ohne Netzladung zählt price nicht
-                avg = math.fsum(ct * kwh for ct, kwh in parts) / math.fsum(kwh for _, kwh in parts)
-        stock = min(stock + added, usable_kwh)
-        result.append(SlotCost(slot.slot_start, stock, avg, discharge_ct))
+                parts.append((slot.import_price_ct, grid_kwh))
+            weight = math.fsum(kwh for _, kwh in parts)
+            if weight > 0:
+                avg = math.fsum(ct * kwh for ct, kwh in parts) / weight
+            total = stock + added
+            if total > usable_kwh:
+                unpriced *= usable_kwh / total  # gekappt: anteilig, der Mittelwert bleibt
+            stock = min(total, usable_kwh)
+        result.append(SlotCost(slot.slot_start, stock, avg, discharge_ct, unpriced))
     return result
 
 
@@ -143,7 +164,7 @@ class LedgerCosting:
         with self._engine.connect() as conn:
             return {
                 row.slot_start: SlotCost(
-                    row.slot_start, row.stock_kwh, row.avg_ct, row.discharge_ct
+                    row.slot_start, row.stock_kwh, row.avg_ct, row.discharge_ct, row.unpriced_kwh
                 )
                 for row in conn.execute(query).all()
             }
@@ -200,11 +221,12 @@ class LedgerCosting:
             )
         if last is None or first is None:
             return 0
-        state: tuple[float, float | None] = (0.0, None)
+        state: StartState = (0.0, None, 0.0)
         cursor = first
         clear_from: datetime | None = None  # ohne vorherige Zeile wird alles ersetzt
         if before is not None and start is not None:
-            state, cursor, clear_from = (before.stock_kwh, before.avg_ct), start, start
+            state = (before.stock_kwh, before.avg_ct, before.unpriced_kwh)
+            cursor, clear_from = start, start
         wear_ct = self._settings.current().settings.planning.wear_ct
         end, written, replaced = last + SLOT, 0, False
         while cursor < end:
@@ -227,6 +249,7 @@ class LedgerCosting:
                                 "stock_kwh": cost.stock_kwh,
                                 "avg_ct": cost.avg_ct,
                                 "discharge_ct": cost.discharge_ct,
+                                "unpriced_kwh": cost.unpriced_kwh,
                                 "slot_updated_at": slot.updated_at,
                                 "wear_ct": wear_ct,
                                 "usable_kwh": self._usable_kwh,
@@ -235,7 +258,8 @@ class LedgerCosting:
                         ],
                     )
             if costs:
-                state = (costs[-1].stock_kwh, costs[-1].avg_ct)
+                last_cost = costs[-1]
+                state = (last_cost.stock_kwh, last_cost.avg_ct, last_cost.unpriced_kwh)
                 written += len(costs)
             cursor = block_end
         return written

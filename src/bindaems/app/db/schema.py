@@ -275,8 +275,9 @@ ledger_cost = Table(
     metadata,
     Column("slot_start", UtcDateTime(), primary_key=True),
     Column("stock_kwh", Float, nullable=False),
-    Column("avg_ct", Float, nullable=True),  # leer ohne Inhalt oder unbekannt (Präzisierung 4, A1)
+    Column("avg_ct", Float, nullable=True),  # der bepreisten Energie; leer ohne (Präzisierung 4)
     Column("discharge_ct", Float, nullable=True),  # leer, solange der Einstandspreis unbekannt ist
+    Column("unpriced_kwh", Float, nullable=False),  # Inhalt aus Netzladung ohne Preis (A1, N2)
     # Eingaben der Zeile: Stand des Slots, Verschleiß und Kapazität; passt eine nicht mehr, rechnet
     # die app beim Start ab dort neu (B2)
     Column("slot_updated_at", UtcDateTime(), nullable=False),

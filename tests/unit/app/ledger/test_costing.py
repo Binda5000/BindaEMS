@@ -24,7 +24,7 @@ def slot(index: int, flows: dict[str, float], price: float | None = None) -> Led
 
 
 def basis(slots: list[LedgerSlot], *, wear: float = 2.0, usable: float = 10.0) -> list[SlotCost]:
-    return cost_basis(slots, (0.0, None), wear_ct=wear, usable_kwh=usable)
+    return cost_basis(slots, (0.0, None, 0.0), wear_ct=wear, usable_kwh=usable)
 
 
 def test_pv_charge_is_free() -> None:
@@ -81,8 +81,8 @@ def test_stock_is_capped_at_usable_capacity() -> None:
 
 
 def test_grid_charge_without_price_makes_the_stock_unknown() -> None:
-    # A1: solange Energie aus einer Netzladung ohne Bezugspreis im Akku ist, ist der Einstandspreis
-    # unbekannt, auch nach weiterer PV- oder bepreister Netzladung
+    # A1: solange Energie aus einer Netzladung ohne Bezugspreis mindestens 1 % des Inhalts ist, ist
+    # der Einstandspreis unbekannt, auch nach weiterer PV- oder bepreister Netzladung
     costs = basis(
         [
             slot(0, {"grid>battery": 1000.0}, 20.0),
@@ -92,9 +92,12 @@ def test_grid_charge_without_price_makes_the_stock_unknown() -> None:
             slot(4, {"battery>house": 1000.0}),
         ]
     )
-    assert costs[1].avg_ct is None and costs[1].stock_kwh == 4.0
+    assert costs[1].stock_kwh == 4.0 and costs[1].unpriced_kwh == 3.0
+    assert costs[1].avg_ct == pytest.approx(20.0)  # nur die bepreiste kWh
     assert costs[2].discharge_ct is None and costs[2].stock_kwh == 3.0
-    assert costs[3].avg_ct is None and costs[3].stock_kwh == 4.5
+    assert costs[2].unpriced_kwh == pytest.approx(2.25)  # anteilig mit entladen
+    assert costs[3].stock_kwh == 4.5 and costs[3].unpriced_kwh == pytest.approx(2.25)
+    assert costs[3].avg_ct == pytest.approx((0.75 * 20.0 + 0.5 * 30.0) / 2.25)
     assert costs[4].discharge_ct is None
 
 
@@ -122,16 +125,89 @@ def test_unknown_stock_is_known_again_once_emptied() -> None:
     assert costs[4].discharge_ct == 2.0
 
 
+DAY_SLOTS = 96
+
+
+def daily_cycle(days: int, extra: dict[int, LedgerSlot]) -> list[LedgerSlot]:
+    """Je Tag 8 kWh PV in den Akku (Slot 0) und 7,2 kWh heraus (Slot 40); ``extra`` je Index."""
+    slots: dict[int, LedgerSlot] = {}
+    for day in range(days):
+        slots[day * DAY_SLOTS] = slot(day * DAY_SLOTS, {"pv>battery": 8000.0})
+        slots[day * DAY_SLOTS + 40] = slot(day * DAY_SLOTS + 40, {"battery>house": 7200.0})
+    slots.update(extra)
+    return [slots[index] for index in sorted(slots)]
+
+
+def discharges(costs: list[SlotCost], day: int) -> list[float | None]:
+    """``discharge_ct`` der Entladung am Tag ``day`` (Slot 40) und aller späteren."""
+    return [c.discharge_ct for c in costs if (c.slot_start - S) // SLOT % DAY_SLOTS == 40][day:]
+
+
+def test_a_few_wh_without_price_do_not_make_the_stock_unknown() -> None:
+    # N2 (Fall aus dem Review): 10-kWh-Akku, 8 kWh rein und 7,2 kWh raus je Tag; der Bestand der
+    # Buchhaltung fällt nie unter 2,8 kWh. 10 Wh Netzladung ohne Preis an Tag 5 sind 0,4 % davon.
+    night = 5 * DAY_SLOTS + 60
+    costs = basis(daily_cycle(30, {night: slot(night, {"grid>battery": 10.0}, None)}))
+    assert min(c.stock_kwh for c in costs[10:]) == pytest.approx(2.8)
+    assert all(ct == pytest.approx(2.0) for ct in discharges(costs, 6))  # nur PV: 0 ct + Verschleiß
+
+
+def test_unpriced_share_is_known_again_after_a_few_days() -> None:
+    # 1 kWh ohne Preis bei 2,8 kWh Bestand: 26 %; jede PV-Ladung verdünnt den Anteil
+    night = 5 * DAY_SLOTS + 60
+    costs = basis(daily_cycle(30, {night: slot(night, {"grid>battery": 1000.0}, None)}))
+    assert costs[-1].unpriced_kwh < 1e-6
+    by_day = discharges(costs, 0)
+    assert by_day[6] is None  # 8,5 % ohne Preis
+    assert by_day[7] is None  # 2,2 %
+    assert all(ct == pytest.approx(2.0) for ct in by_day[8:])  # 0,6 %: wieder bekannt
+
+
+def test_large_unpriced_share_stays_unknown() -> None:
+    slots = [slot(0, {"grid>battery": 6000.0}, None), slot(1, {"pv>battery": 1000.0})]
+    for day in range(1, 11):
+        slots.append(slot(day * DAY_SLOTS, {"pv>battery": 200.0}))
+        slots.append(slot(day * DAY_SLOTS + 40, {"battery>house": 500.0}))
+    costs = basis(slots)
+    assert all(c.discharge_ct is None for c in costs[2:])
+    assert costs[-1].unpriced_kwh / costs[-1].stock_kwh > 0.5
+
+
+def test_unpriced_share_of_one_percent_is_unknown() -> None:
+    [at_limit] = cost_basis(
+        [slot(0, {"battery>house": 1000.0})], (10.0, 10.0, 0.1), wear_ct=2.0, usable_kwh=10.0
+    )
+    [below] = cost_basis(
+        [slot(0, {"battery>house": 1000.0})], (10.0, 10.0, 0.0999), wear_ct=2.0, usable_kwh=10.0
+    )
+    assert at_limit.discharge_ct is None
+    assert below.discharge_ct == pytest.approx(12.0)  # Durchschnitt der bepreisten Energie
+
+
+def test_discharge_and_cap_take_the_unpriced_share_proportionally() -> None:
+    [discharged] = cost_basis(
+        [slot(0, {"battery>house": 5000.0})], (10.0, 20.0, 2.0), wear_ct=2.0, usable_kwh=10.0
+    )
+    assert discharged.stock_kwh == 5.0 and discharged.unpriced_kwh == pytest.approx(1.0)
+    assert discharged.avg_ct == pytest.approx(20.0)
+    [capped] = cost_basis(
+        [slot(0, {"pv>battery": 4000.0})], (8.0, 20.0, 4.0), wear_ct=2.0, usable_kwh=10.0
+    )
+    assert capped.stock_kwh == 10.0 and capped.unpriced_kwh == pytest.approx(4.0 * 10.0 / 12.0)
+    assert capped.avg_ct == pytest.approx(10.0)  # 4 kWh zu 20 ct, 4 kWh PV zu 0 ct
+
+
 def test_unknown_start_state_is_taken_over() -> None:
     [cost] = cost_basis(
-        [slot(0, {"battery>house": 1000.0})], (5.0, None), wear_ct=2.0, usable_kwh=10.0
+        [slot(0, {"battery>house": 1000.0})], (5.0, None, 5.0), wear_ct=2.0, usable_kwh=10.0
     )
     assert cost.discharge_ct is None and cost.stock_kwh == 4.0 and cost.avg_ct is None
+    assert cost.unpriced_kwh == pytest.approx(4.0)
 
 
 def test_start_state_is_taken_over() -> None:
     [cost] = cost_basis(
-        [slot(0, {"battery>house": 1000.0})], (5.0, 12.0), wear_ct=2.0, usable_kwh=10.0
+        [slot(0, {"battery>house": 1000.0})], (5.0, 12.0, 0.0), wear_ct=2.0, usable_kwh=10.0
     )
     assert cost.discharge_ct == 14.0 and cost.stock_kwh == 4.0 and cost.avg_ct == 12.0
 

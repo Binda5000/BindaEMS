@@ -255,6 +255,7 @@ def test_migration_0011_adapts_the_cost_table_and_downgrades(engine: Engine) -> 
         "stock_kwh": False,
         "avg_ct": True,
         "discharge_ct": True,  # leer: Einstandspreis unbekannt
+        "unpriced_kwh": False,
         "slot_updated_at": False,
         "wear_ct": False,
         "usable_kwh": False,
@@ -263,8 +264,9 @@ def test_migration_0011_adapts_the_cost_table_and_downgrades(engine: Engine) -> 
         conn.execute(
             text(
                 "INSERT INTO ledger_cost (slot_start, stock_kwh, avg_ct, discharge_ct, "
-                "slot_updated_at, wear_ct, usable_kwh) VALUES ('2026-10-09T08:00:00+00:00', "
-                "1.0, NULL, NULL, '2026-10-09T08:15:00.000000+00:00', 2.0, 10.0)"
+                "unpriced_kwh, slot_updated_at, wear_ct, usable_kwh) VALUES "
+                "('2026-10-09T08:00:00+00:00', 1.0, NULL, NULL, 1.0, "
+                "'2026-10-09T08:15:00.000000+00:00', 2.0, 10.0)"
             )
         )
     _downgrade(engine, "0010")
@@ -297,6 +299,7 @@ def test_rows_of_the_statistics_tables_round_trip(engine: Engine) -> None:
             "stock_kwh": 1.5,
             "avg_ct": None,
             "discharge_ct": None,
+            "unpriced_kwh": 1.5,
             "slot_updated_at": t,
             "wear_ct": 2.0,
             "usable_kwh": 30.0,
