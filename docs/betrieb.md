@@ -2706,7 +2706,9 @@ den ersten Tagen:
   Ladelimit des Tesla auf `max(Ziel, 50)` % (Tessie `set_charge_limit`, im Log „Ladelimit 80 %“,
   Grund `charge_limit`), einmal je Ansteckvorgang und nach jeder Änderung des Ziels, nur an ein
   waches Auto (er weckt dafür nicht). Danach stoppt der Tesla selbst am Ziel; das alte Limit stellt
-  der core nicht zurück. Die Safety-Schicht lässt ganze Prozent von 50 bis 100 zu (darunter
+  der core nicht zurück. Ein bestätigtes Limit hebt „geladen“ des Ansteckvorgangs auf: Meldete der
+  Tesla „Complete“ am alten, niedrigeren Limit, lädt er danach bis zum neuen; ist er auch daran voll,
+  meldet Tessie wieder „Complete“. Die Safety-Schicht lässt ganze Prozent von 50 bis 100 zu (darunter
   abgelehnt, darüber auf 100 begrenzt), höchstens alle 600 s; der Befehl zählt im Stundenbudget
   und ist nie dringend. Wie beim Strom prüft der Aktor das Limit im Tessie-Cache und meldet sonst
   „nicht übernommen“. Ändert jemand das Limit danach in der Tesla-App, ist das keine fremde

@@ -1554,6 +1554,56 @@ def test_a_pause_keeps_the_limit_but_a_change_of_mode_sends_it_again(cfg) -> Non
     assert limit_step(c, sync, 30) == [set_limit(80.0)]
 
 
+def test_a_confirmed_higher_limit_lets_a_complete_car_charge_again(cfg) -> None:
+    """Tessie meldete „geladen“ am alten Limit; das bestätigte höhere Limit hebt das auf.
+
+    Sonst hielte die Zuordnung „geladen“ bis zum Abstecken, und das Ziel über dem alten Limit
+    würde nie erreicht (Szenario ``tesla-ladelimit``).
+    """
+    sync = synced(cfg)
+    c = controller(sync)
+    # Abfahrt 13:00: Die späteste Startzeit ist schon vorbei, das Laden ist fällig
+    entry = VehicleIntent(mode=ChargeMode.PLANNED, target_soc_pct=75, departure="13:00")
+    soon = Intent(version=1, control=True, vehicles={"tesla": entry})
+
+    def full(s: int, *, complete: bool, pct: float):
+        return tesla(
+            plugged=True,
+            complete=complete,
+            charge_limit_pct=pct,
+            soc_pct=65.0,
+            soc_at=T0 + timedelta(seconds=s),
+        )
+
+    found = c.step(tesla_inputs(sync, 0, intent=soon, tesla_obs=full(0, complete=True, pct=60.0)))
+    accept(c, found)
+    assert limits_of(found) == [set_limit(75.0)]
+    assert not [x for x in found if x.command.kind == CommandKind.CHARGING and x.command.value]
+    c.note_result(WriteResult("vehicle.tesla", LIMIT, 75.0, DecisionResult.OK, ""))
+    found = c.step(
+        tesla_inputs(sync, 10, intent=soon, tesla_obs=full(10, complete=False, pct=75.0))
+    )
+    started = [
+        x.command
+        for x in found
+        if x.command.kind == CommandKind.CHARGING and x.command.value is True
+    ]
+    assert [x.actuator for x in started] == ["vehicle.tesla"]
+    # Ein abgelehntes Ergebnis hebt „geladen“ nicht auf
+    other = controller(sync)
+    accept(
+        other,
+        other.step(tesla_inputs(sync, 0, intent=soon, tesla_obs=full(0, complete=True, pct=60.0))),
+    )
+    other.note_result(WriteResult("vehicle.tesla", LIMIT, 75.0, DecisionResult.ERROR, "x"))
+    later = other.step(
+        tesla_inputs(sync, 10, intent=soon, tesla_obs=full(10, complete=False, pct=60.0))
+    )
+    assert not [
+        x for x in later if x.command.kind == CommandKind.CHARGING and x.command.value is True
+    ]
+
+
 def test_the_limit_respects_the_reserve_of_the_hourly_budget(cfg) -> None:
     sync = synced(cfg)
     reserve = 20 - sync.control.tesla_reserve_commands

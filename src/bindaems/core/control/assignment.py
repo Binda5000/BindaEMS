@@ -586,6 +586,14 @@ class Assignment:
             return None
         return boost if wall_now < boost else None
 
+    def recharge(self, key: str) -> None:
+        """Das Auto bekam ein neues Ladelimit bestätigt: „geladen“ seines Vorgangs gilt nicht mehr.
+
+        „Geladen“ hieß nur: voll bis zum alten Limit. Ist das Auto auch am neuen Limit voll, meldet
+        Tessie es wieder, und die Zuordnung hält es erneut bis zum Ende des Vorgangs.
+        """
+        self._charged.pop(key, None)
+
     def _is_complete(
         self, key: str, wallbox_key: str, wallbox: WallboxObs, tessie: VehicleObs
     ) -> bool:
