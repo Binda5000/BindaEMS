@@ -227,3 +227,48 @@ it('versucht die Sessions eines vergangenen Zeitraums nach einem Fehler nach 30 
 	// die übrigen Karten blieben vom Fehler unberührt
 	expect(screen.getByRole('table', { name: 'Autos' })).toBeInTheDocument();
 });
+
+it('zeigt nur beim ersten Laden „Lädt …“', async () => {
+	api.stats.mockReturnValue(new Promise(() => {}));
+	render(Page);
+	expect(await screen.findByText('Lädt …')).toBeInTheDocument();
+});
+
+it('lässt beim Blättern die alten Werte gedimmt stehen, bis die neuen da sind', async () => {
+	navigate('?zeitraum=monat&datum=2026-10-09');
+	render(Page);
+	await screen.findByRole('table', { name: 'Ladesessions' });
+	const results = () => screen.getByText('Autarkie').closest('[aria-busy]');
+	expect(results()).toHaveAttribute('aria-busy', 'false');
+
+	let answerStats: (value: ReturnType<typeof stats>) => void = () => {};
+	let answerSessions: (value: ReturnType<typeof chargingSession>[]) => void = () => {};
+	api.stats.mockReturnValue(new Promise((resolve) => (answerStats = resolve)));
+	api.chargingSessions.mockReturnValue(new Promise((resolve) => (answerSessions = resolve)));
+	navigate('?zeitraum=monat&datum=2026-09-15');
+	await vi.advanceTimersByTimeAsync(0);
+	expect(screen.getByRole('heading', { name: 'September 2026' })).toBeInTheDocument();
+	expect(screen.queryByText('Lädt …')).not.toBeInTheDocument();
+	expect(results()).toHaveAttribute('aria-busy', 'true');
+	expect(screen.getByRole('table', { name: 'Ladesessions' })).toBeInTheDocument();
+
+	answerStats(stats());
+	await vi.advanceTimersByTimeAsync(0);
+	// die Statistik ist da, die Sessions noch nicht: weiter beschäftigt
+	expect(results()).toHaveAttribute('aria-busy', 'true');
+	answerSessions([chargingSession()]);
+	await vi.advanceTimersByTimeAsync(0);
+	expect(results()).toHaveAttribute('aria-busy', 'false');
+});
+
+it('zeigt beim Blättern einen Fehler statt der alten Werte', async () => {
+	const { ApiError } = await import('$lib/api/errors');
+	navigate('?zeitraum=monat&datum=2026-10-09');
+	render(Page);
+	await screen.findByText('Autarkie');
+	api.stats.mockRejectedValue(new ApiError(503, 'Statistik nicht verfügbar'));
+	navigate('?zeitraum=monat&datum=2026-09-15');
+	expect(await screen.findByText('Statistik nicht verfügbar')).toBeInTheDocument();
+	expect(screen.queryByText('Autarkie')).not.toBeInTheDocument();
+	expect(screen.queryByText('Lädt …')).not.toBeInTheDocument();
+});

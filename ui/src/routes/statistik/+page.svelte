@@ -79,8 +79,23 @@
 		};
 	});
 
-	// Jeder Zeitraum hat seine eigene Abfrage: beim Blättern steht bis zur Antwort „Lädt …“
-	const current = $derived(resource?.data);
+	// Jeder Zeitraum hat seine eigene Abfrage. Beim Blättern bleiben bis zur Antwort die Werte des
+	// vorigen Zeitraums gedimmt stehen (`aria-busy`); nur vor der allerersten Antwort steht
+	// „Lädt …“. Scheitert die Abfrage, steht der Fehler, nicht der vorige Zeitraum.
+	let shownStats = $state.raw<Stats | undefined>(undefined);
+	let shownSessions = $state.raw<ChargingSession[] | undefined>(undefined);
+	$effect(() => {
+		if (resource?.data !== undefined) shownStats = resource.data;
+	});
+	$effect(() => {
+		if (sessions?.data !== undefined) shownSessions = sessions.data;
+	});
+	const current = $derived(resource?.data ?? (resource?.error ? undefined : shownStats));
+	const sessionList = $derived(sessions?.data ?? (sessions?.error ? undefined : shownSessions));
+	const busy = $derived(
+		(resource?.data === undefined && current !== undefined) ||
+			(sessions?.data === undefined && sessionList !== undefined)
+	);
 
 	// Anzeigenamen der Wallboxes für den Abgleich; ohne Antwort gilt der Schlüssel
 	const limits = new Resource<Limits>((o) => api.limits(o), { retryMs: RETRY_MS });
@@ -132,7 +147,7 @@
 			<button type="button" disabled={running} onclick={() => open(period, today)}>Heute</button>
 		</div>
 		{#if current}
-			<ul class="hints muted">
+			<ul class="hints muted" class:stale={busy}>
 				{#each hints(current, running) as hint (hint)}
 					<li>{hint}</li>
 				{/each}
@@ -145,20 +160,22 @@
 	{/if}
 
 	{#if current}
-		<StatTiles tiles={tiles(current)} />
+		<div class="results" class:stale={busy} aria-busy={busy}>
+			<StatTiles tiles={tiles(current)} />
 
-		<Card title="Energie">
-			{#if chartOption}
-				<EChart option={chartOption} label="Energie {title}" height="20rem" />
-			{/if}
-		</Card>
+			<Card title="Energie">
+				{#if chartOption}
+					<EChart option={chartOption} label="Energie {title}" height="20rem" />
+				{/if}
+			</Card>
 
-		<CostCard stats={current} />
-		<VehicleCard stats={current} />
-		<SessionsCard sessions={sessions?.data} error={sessions?.error?.detail} />
-		<ConsumersCard stats={current} />
-		<PeaksCard stats={current} />
-		<ChecksCard stats={current} {wallboxNames} />
+			<CostCard stats={current} />
+			<VehicleCard stats={current} />
+			<SessionsCard sessions={sessionList} error={sessions?.error?.detail} />
+			<ConsumersCard stats={current} />
+			<PeaksCard stats={current} />
+			<ChecksCard stats={current} {wallboxNames} />
+		</div>
 	{:else if !resource?.error}
 		<p class="muted">Lädt …</p>
 	{/if}
@@ -169,6 +186,17 @@
 		display: grid;
 		gap: var(--gap);
 		min-width: 0;
+	}
+
+	.results {
+		display: grid;
+		gap: var(--gap);
+		min-width: 0;
+		transition: opacity 0.2s;
+	}
+
+	.stale {
+		opacity: 0.5;
 	}
 
 	.switch {
