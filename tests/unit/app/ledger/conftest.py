@@ -50,18 +50,34 @@ def client(make_client, ledger, checks, guard):
 
 
 _STATEMENT = re.compile(
-    r'SELECT (?P<select>last|first)\("kwh"\) AS "(?P<column>\w+)" FROM "long"\."energy" '
+    r'SELECT (?P<select>last|first)\("kwh"\) AS "(?P<column>\w+)" '
+    r'FROM "(?P<rp>raw|long)"\."energy" '
     r"WHERE time >= (?P<low>\d+)ms AND time < (?P<high>\d+)ms"
 )
+MINUTE_MS = 60_000
+
+
+def _stamped(values: dict[datetime, float], rp: str) -> list[tuple[int, float]]:
+    """Die Punkte, wie sie in der Aufbewahrung ``rp`` stehen: in ``raw`` mit dem Lesezeitpunkt, in
+    ``long`` wie von der CQ ``cq_energy_1m`` (``last(kwh) … GROUP BY time(1m)``) je Minute der
+    letzte Wert, gestempelt mit dem Anfang der Minute."""
+    readings = sorted((epoch_ms(t), v) for t, v in values.items())
+    if rp == "raw":
+        return readings
+    buckets: dict[int, float] = {}
+    for stamp, value in readings:
+        buckets[stamp // MINUTE_MS * MINUTE_MS] = value  # sortiert: der letzte bleibt
+    return sorted(buckets.items())
 
 
 class FakeInflux:
     """Ersatz für den ``InfluxReader``: merkt sich die Abfragen und liefert vorbereitete Reihen.
 
     Mit ``set_counters`` liegen Rohwerte der Zähler bereit; Anweisungen der Form
-    ``SELECT last|first("kwh") AS "<Spalte>" FROM "long"."energy" WHERE time >= …ms AND time <
-    …ms`` (mehrere durch ``;`` getrennt) beantwortet die Attrappe dann wie InfluxDB: je Zähler der
-    letzte bzw. erste Wert im Fenster mit seiner eigenen Zeit."""
+    ``SELECT last|first("kwh") AS "<Spalte>" FROM "raw"|"long"."energy" WHERE time >= …ms AND
+    time < …ms`` (mehrere durch ``;`` getrennt) beantwortet die Attrappe dann wie InfluxDB: je
+    Zähler der letzte bzw. erste Punkt im Fenster mit seiner Zeit. In ``raw`` ist das der
+    Lesezeitpunkt, in ``long`` der Anfang der Minute wie bei der CQ (``_stamped``)."""
 
     def __init__(self) -> None:
         self.series: list[Series] = []
@@ -82,9 +98,7 @@ class FakeInflux:
                 continue
             low, high = int(match["low"]), int(match["high"])
             for signal, values in self.points.items():
-                inside = sorted(
-                    (epoch_ms(t), v) for t, v in values.items() if low <= epoch_ms(t) < high
-                )
+                inside = [(t, v) for t, v in _stamped(values, match["rp"]) if low <= t < high]
                 if not inside:
                     continue
                 stamp, value = inside[-1] if match["select"] == "last" else inside[0]
@@ -94,7 +108,7 @@ class FakeInflux:
         return result
 
     def set_counters(self, readings: dict[str, dict[datetime, float]]) -> None:
-        """Rohwerte der Zähler je Signal und Zeitpunkt (``energy`` in ``long``)."""
+        """Rohwerte der Zähler je Signal und Lesezeitpunkt (``long`` entsteht daraus wie per CQ)."""
         self.points = readings
 
 

@@ -265,6 +265,26 @@ async def test_run_interpolates_the_midnight_reading(checks, ledger, influx: Fak
     assert not result.flagged  # vorher: 5,13 kWh am Zähler, 2,7 % und 0,13 kWh, markiert
 
 
+@pytest.mark.parametrize("phase_s", [5, 40, 55])
+async def test_midnight_reading_is_exact_with_minute_readings_at_a_phase(
+    checks, influx: FakeInflux, phase_s: int
+) -> None:
+    # N1: der core liest die Zähler jede Minute zu einer beliebigen Sekunde φ. In ``long`` stempelt
+    # die CQ jeden Wert mit dem Anfang seiner Minute, dort trifft die Interpolation den Stand um
+    # Mitternacht nicht; aus ``raw`` (Lesezeitpunkte) ist sie bei linearer Last exakt. Um die erste
+    # Mitternacht laufen 12 kW (100,0 kWh genau um Mitternacht), um die zweite steht der Zähler.
+    start, end = midnight(DAY), midnight(DAY + timedelta(days=1))
+    kwh_per_s = 12.0 / 3600
+    readings: dict[datetime, float] = {}
+    for minute in range(-5, 5):
+        read = start + timedelta(minutes=minute, seconds=phase_s)
+        readings[read] = 100.0 + (read - start).total_seconds() * kwh_per_s
+        readings[end + timedelta(minutes=minute, seconds=phase_s)] = 150.0
+    influx.set_counters({IMP: readings})
+    await checks.run(DAY, DAY)
+    assert by_signal(checks.checks(DAY, DAY))["import"].counter_kwh == pytest.approx(50.0, abs=1e-9)
+
+
 async def test_run_on_the_100_slot_day_counts_every_slot(
     checks, ledger, influx: FakeInflux
 ) -> None:

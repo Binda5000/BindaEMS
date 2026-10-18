@@ -21,14 +21,7 @@ from collections.abc import Sequence
 from datetime import datetime, timedelta
 from typing import Any
 
-from bindaems.app.history.influx import (
-    RP_LONG,
-    RP_RAW,
-    InfluxReader,
-    Series,
-    quote_ident,
-    quote_str,
-)
+from bindaems.app.history.influx import RP_RAW, InfluxReader, Series, quote_ident, quote_str
 from bindaems.shared.config import Config
 from bindaems.shared.influx.lineprotocol import epoch_ms
 from bindaems.shared.timeutil import ensure_utc
@@ -124,6 +117,11 @@ async def readings_at(
     ``[Zeitpunkt − 30 min, Zeitpunkt)`` und dem ersten in ``[Zeitpunkt, Zeitpunkt + 30 min)``
     (der core schreibt die Zähler nur jede Minute; Regeln in ``_instant_reading``).
 
+    Gelesen wird aus ``raw`` (90 Tage, genug für den Abgleich der letzten 35 beim Start): dort
+    trägt jeder Wert seinen Lesezeitpunkt. In ``long`` stempelt die CQ ``cq_energy_1m`` ihn mit dem
+    Anfang seiner Minute; der erste Punkt ab Mitternacht stünde dann genau auf Mitternacht und
+    hielte doch den Stand bis zu 60 s danach.
+
     Eine Anfrage für alle Signale und Zeitpunkte: je Zeitpunkt zwei Anweisungen, deren Spalte
     (``b<n>`` davor, ``a<n>`` danach) den Zeitpunkt ``n`` nennt. Ohne ``GROUP BY time`` liefern
     ``last`` und ``first`` die Zeit des Werts selbst. Fehlt ein Wert, steht ``None`` da.
@@ -148,7 +146,7 @@ async def readings_at(
             # feste Bezeichner, Tags gequotet, Zeiten als Zahlen
             statements.append(
                 f'SELECT {select}("kwh") AS "{column}" '  # noqa: S608
-                f"FROM {quote_ident(RP_LONG)}.{quote_ident('energy')} "
+                f"FROM {quote_ident(RP_RAW)}.{quote_ident('energy')} "
                 f"WHERE time >= {epoch_ms(low)}ms AND time < {epoch_ms(high)}ms AND ({sources}) "
                 'GROUP BY "source","id","direction"'
             )

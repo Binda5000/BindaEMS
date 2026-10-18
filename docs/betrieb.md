@@ -666,10 +666,13 @@ Zählern, und beim Start erst nach dem ersten Nachtrag der Abrechnung (höchsten
 Jede Nacht um 02:45 Uhr (Wiener Zeit) vergleicht die app die Abrechnung der letzten 7 vollständigen
 Tage mit den Zählerständen aus InfluxDB, beim Start die der letzten 35. Je Tag und Größe steht die
 Summe der Abrechnung (Schätzungen eingeschlossen) neben der Differenz der Zählerstände um
-Mitternacht (`energy` in `long`). Der core schreibt die Zähler nur jede Minute; den Stand um
-Mitternacht rechnet die app deshalb zwischen dem letzten Wert in der halben Stunde davor und dem ersten
-in der halben Stunde danach (linear). Fehlt einer der beiden, gilt der andere, wenn er höchstens
-2 Minuten von Mitternacht entfernt ist, sonst fehlt der Zählerstand. Die Größen sind `import`
+Mitternacht (`energy` in `raw`, dort trägt jeder Wert seinen Lesezeitpunkt; `raw` hält 90 Tage).
+Der core schreibt die Zähler nur jede Minute; den Stand um Mitternacht rechnet die app deshalb
+zwischen dem letzten Wert in der halben Stunde davor und dem ersten in der halben Stunde danach
+(linear). Fehlt einer der beiden, gilt der andere, wenn er höchstens 2 Minuten von Mitternacht
+entfernt ist, sonst fehlt der Zählerstand. Alle Mitternächte eines Laufs gehen in einer Anfrage an
+InfluxDB; die app schickt Abfragen per POST, damit auch ein Proxy mit kurzer URL-Grenze sie
+durchlässt. Die Größen sind `import`
 (Netzbezug), `export` (Einspeisung), `pv` und `wb:<Schlüssel>` je Wallbox.
 
 `GET /api/ledger/checks?from=JJJJ-MM-TT&to=JJJJ-MM-TT` (ab „Lesen“) liefert die gespeicherten

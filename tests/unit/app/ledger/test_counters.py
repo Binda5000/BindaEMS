@@ -48,7 +48,7 @@ async def test_readings_at_uses_one_request(influx: FakeInflux) -> None:
     assert len(influx.queries) == 1
     statements = influx.queries[0].split(";")
     assert len(statements) == 2 * 8  # je Zeitpunkt davor und danach, nicht je Signal
-    assert all('FROM "long"."energy"' in st and "GROUP BY time" not in st for st in statements)
+    assert all('FROM "raw"."energy"' in st and "GROUP BY time" not in st for st in statements)
     assert 'last("kwh") AS "b3"' in statements[6] and 'first("kwh") AS "a3"' in statements[7]
     for source in ("'grid'", "'pv'", "'wallbox'"):
         assert source in statements[0]
