@@ -265,11 +265,8 @@ class ChargingTracker:
         self._open[item.wallbox] = _Open(session_id, now, now, now)
 
     def _save(self, conn: Connection, wallbox: str, current: _Open, now: datetime) -> None:
-        """Speichert ``last_seen`` und das Fahrzeug; solange kein Fahrzeug Zeit hat, gilt
-        vorläufig das, das jetzt dort steht."""
+        """Speichert ``last_seen`` und das Fahrzeug."""
         vehicle = self._vehicle(conn, wallbox, current.start, now)
-        if vehicle is None:
-            vehicle = self._assigned.get(wallbox, ("", ""))[0] or None
         conn.execute(
             update(charging_session)
             .where(charging_session.c.id == current.id)
@@ -292,7 +289,8 @@ class ChargingTracker:
     def _vehicle(
         self, conn: Connection, wallbox: str, start: datetime, end: datetime
     ) -> str | None:
-        """Das Fahrzeug der Session nach ``assignment_log`` in ``[start, end)``."""
+        """Das Fahrzeug der Session nach ``assignment_log``: das mit der längsten Dauer in
+        ``[start, end)``, sonst die letzte nicht leere Belegung in ``[start, end]``."""
         table = assignment_log
         prior = conn.execute(
             select(table.c.ts, table.c.occupant)

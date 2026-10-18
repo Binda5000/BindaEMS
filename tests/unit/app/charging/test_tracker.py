@@ -318,6 +318,13 @@ def test_occupant_before_the_session_does_not_count_for_a_short_one(tracker) -> 
     assert session.vehicle is None
 
 
+def test_occupant_arriving_in_an_open_short_session_is_saved_at_once(tracker) -> None:
+    tracker.record(T0, plugged(None, "unclear"))
+    tracker.record(T0 + timedelta(seconds=20), plugged("tesla", "detected"))
+    (session,) = all_sessions(tracker)  # noch offen, der Insasse hat noch keine Zeit
+    assert session.end is None and session.vehicle == "tesla"
+
+
 def test_failed_transaction_resets_the_memory_state(tracker, engine, monkeypatch) -> None:
     original = tracker._begin
 
