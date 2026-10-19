@@ -16,12 +16,19 @@ from bindaems.core.control.actuator import Capabilities
 from bindaems.core.control.executor import WriteResult
 from bindaems.core.control.last_values import ControlCommand
 from bindaems.core.control.peak_guard import PEAK_EXCEEDED, QuarterObs
-from bindaems.core.control.regulation import Regulation, RegulationInputs
+from bindaems.core.control.regulation import Regulation, RegulationInputs, ThermalInputs
 from bindaems.core.regulation_link import CONTROL_EXCEPTION, RegulationLink
 from bindaems.core.safety.limits import HardLimits
 from bindaems.core.safety.types import Outcome, Verdict
 from bindaems.core.state.derived import PHASES, derive
-from bindaems.shared.control import ChargeMode, Command, CommandKind, Intent, VehicleIntent
+from bindaems.shared.control import (
+    ChargeMode,
+    Command,
+    CommandKind,
+    Intent,
+    OperatingState,
+    VehicleIntent,
+)
 from bindaems.shared.decisions import DecisionResult
 from bindaems.shared.domain import Alarm, Quality, Severity, Snapshot
 
@@ -60,6 +67,7 @@ def step(link: RegulationLink, cfg, when: datetime = NOW, **kw: Any) -> list[Con
         "flows": None,
         "slot": None,
         "hourly_count": lambda actuator: 0,
+        "operating": OperatingState.CONTROL,
     }
     return link.step(**(args | kw))
 
@@ -444,3 +452,23 @@ def test_the_log_shows_the_first_exception_of_a_streak_with_traceback(cfg, monke
     assert [(e["log_level"], e.get("exc_info")) for e in logs] == [("error", True), ("error", None)]
     assert "kaputt" in logs[1]["error"]
     assert [e.get("exc_info") for e in later] == [True]
+
+
+def test_step_builds_the_thermal_inputs(cfg, monkeypatch) -> None:  # Plan 6a, Task 8
+    link = link_for(cfg)
+    seen: list[RegulationInputs] = []
+    monkeypatch.setattr(link.regulation, "step", lambda inputs: seen.append(inputs) or [])
+    bits = {"running": True, "heating": False, "venting": False, "cooling": True}
+    values = snap({f"thermal.klima.{name}": value for name, value in bits.items()})
+    sources = {"thermal.klima": True}  # die Quelle des CoE-Adapters (``coe_source``)
+    able = {"thermal.klima": Capabilities(True)}
+    link.start_cycle()
+    step(link, cfg, snap=values, connected=sources.get, capabilities=able)
+    step(link, cfg, connected=sources.get, capabilities=able, locks={"thermal.klima": ("x",)})
+    step(link, cfg, operating=OperatingState.DEGRADED)
+    when = NOW.timestamp()
+    assert [(inputs.thermal, inputs.degraded) for inputs in seen] == [
+        ({"klima": ThermalInputs(True, "kuehlen", True, False, when)}, False),
+        ({"klima": ThermalInputs(True, "unbekannt", True, True, when)}, False),
+        ({"klima": ThermalInputs(False, "unbekannt", False, False, when)}, True),
+    ]

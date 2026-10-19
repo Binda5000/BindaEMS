@@ -891,3 +891,36 @@ def test_health_names_the_end_of_the_current_quarter() -> None:
     assert g.health()["quarter_end"] == "2026-10-14T16:15:00+00:00"
     step(g, NEXT_S + 60)
     assert g.health()["quarter_end"] == "2026-10-14T16:30:00+00:00"
+
+
+# --- Druck für die Klimaanlage (Plan 6a, Entscheidung 5.2) ---------------------------------------
+
+
+def test_peak_pressure_flag() -> None:
+    g = guard()
+    assert not g.pressure()  # vor dem ersten Schritt
+    run(g, 0, 60, grid_w=2000.0, wh=draw(2000.0))
+    assert g.health()["state"] == "active"
+    assert g.health()["reduction_kw"] == 0.0
+    assert not g.pressure()
+    # 18:05 mit 9000 W: verlangte Senkung 3,3 kW
+    pressed = guard()
+    run(pressed, 0, 300, grid_w=9000.0, wh=lambda s: 1000.0 if s == 300 else 0.0)
+    assert pressed.health()["reduction_kw"] == pytest.approx(3.3)
+    assert pressed.pressure()
+    # Überschritten zählt auch ohne Senkung: Nach 60 s mit 12,3 kW fällt der Bezug auf 0, das
+    # Mittel ist nach ``MEAN_S`` leer, die Viertelstunde bleibt überschritten.
+    over = guard()
+    run(over, 0, 60, grid_w=12300.0, wh=draw(12300.0))
+    run(over, 61, 120, grid_w=0.0, wh=lambda s: 12300.0 * 60 / 3600)
+    assert over.health()["state"] == "exceeded"
+    assert over.health()["reduction_kw"] == 0.0
+    assert over.pressure()
+    # Ohne Ziel ruht der Wächter: kein Druck.
+    step(over, 121, target_kw=None)
+    assert not over.pressure()
+    # Ein Schritt, der nicht rechnet (``gap``), macht keinen Druck.
+    gap = guard()
+    step(gap, 0, observed=False)
+    assert gap.health()["state"] == "gap"
+    assert not gap.pressure()

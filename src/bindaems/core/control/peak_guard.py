@@ -402,6 +402,18 @@ class PeakGuard:
         ``control.peak_target_kw``."""
         return self._target_kw
 
+    def pressure(self) -> bool:
+        """Ob der Wächter im letzten Schritt Druck machte (Plan 6a, Entscheidung 5.2): Zustand
+        ``exceeded`` oder eine verlangte Senkung über 0. Vor dem ersten Schritt, ohne Ziel und ohne
+        Rechnung (Lücke, ``idle``) zählt nur ``exceeded``."""
+        last = self._last
+        if last is None:
+            return False
+        if last.state == "exceeded":
+            return True
+        reduction_w = None if last.calc is None else last.calc.reduction_w
+        return reduction_w is not None and reduction_w > 0
+
     def _rest(self) -> None:
         """Ein Schritt ohne Ziel: Die laufende Viertelstunde, ihre Grenzen und ihr Alarm fallen weg,
         der Wächter beginnt später ohne Vorgeschichte (mit Lücke, wenn die Viertelstunde läuft)."""

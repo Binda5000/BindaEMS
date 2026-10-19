@@ -8,6 +8,7 @@
   ``ess.grid_setpoint_w`` und die Sperren des Zyklus) und die Viertelstunde des 15-min-Wächters
   aus den Flüssen des Zyklus und dem laufenden Slot der Abrechnung (Präzisierung 9); den
   Netzanteil der Wallboxen rechnet er dafür mit PV und Akku zuerst für die Wallboxen in Boost.
+  Dazu kommen je Klimaanlage ihre Eingaben und ob der Betriebszustand DEGRADED ist (Plan 6a).
 - Er legt am Ende des Regelteils Health und Alarme des Kerns ab (``finish``). ``health`` und
   ``alarms`` lesen nur diesen Stand und dürfen deshalb aus einem anderen Thread kommen.
 - Er fängt jede Ausnahme des Kerns (Präzisierung 15).
@@ -41,17 +42,26 @@ from typing import Any, Final, TypeVar
 import structlog
 
 from bindaems.core.accounting.flows import SlotProgress, derived_flows, wb_key
+from bindaems.core.adapters.coe import coe_source
 from bindaems.core.control.actuator import Actuator, Capabilities, WakeStart
 from bindaems.core.control.charge_inputs import ChargeInputs, homes, observe, ok_number
 from bindaems.core.control.executor import WriteResult
 from bindaems.core.control.last_values import ControlCommand, Key
 from bindaems.core.control.peak_guard import QuarterObs
-from bindaems.core.control.regulation import Regulation, RegulationInputs
+from bindaems.core.control.regulation import Regulation, RegulationInputs, ThermalInputs
+from bindaems.core.control.thermal import thermal_mode
 from bindaems.core.safety.limits import HardLimits
 from bindaems.core.safety.types import Verdict
 from bindaems.core.state.derived import Derived
-from bindaems.shared.config import Config
-from bindaems.shared.control import Command, CommandValue, Intent, vehicle_actuator
+from bindaems.shared.config import CoeOffsetConfig, Config
+from bindaems.shared.control import (
+    Command,
+    CommandValue,
+    Intent,
+    OperatingState,
+    thermal_actuator,
+    vehicle_actuator,
+)
 from bindaems.shared.domain import Alarm, Severity, Snapshot
 from bindaems.shared.plan import IntentPlan
 
@@ -115,6 +125,7 @@ class RegulationLink:
         flows: Mapping[str, float] | None,
         slot: SlotProgress | None,
         hourly_count: Callable[[str], int],
+        operating: OperatingState,
     ) -> list[ControlCommand]:
         """Ein Zyklus mit Regelung: die Befehle des Kerns, nach einer Ausnahme keine.
 
@@ -142,6 +153,9 @@ class RegulationLink:
         laufenden Slot der Abrechnung bis zu diesem Zyklus (``SlotAccumulator.current``), und den
         Wallboxen in Boost aus dem letzten Schritt des Kerns (``Regulation.boost_wallboxes``, einen
         Zyklus alt).
+
+        Dazu je Klimaanlage (Plan 6a, ``thermal_inputs``) und ob der Betriebszustand ``operating``
+        DEGRADED ist: Dann gehen die Klimaanlagen auf 0.
 
         Auch eine Ausnahme beim Bauen der Eingaben setzt nur die Regelung aus.
         """
@@ -182,6 +196,8 @@ class RegulationLink:
                     base_setpoint_w=ok_number(snap, "ess.grid_setpoint_w"),
                     locks=locks,
                     quarter=self._quarter(flows, slot, derived, boost),
+                    thermal=self._thermal(snap, snow, capabilities, connected, locks),
+                    degraded=operating is OperatingState.DEGRADED,
                 )
             )
             self._regulated = True
@@ -272,6 +288,38 @@ class RegulationLink:
         Zyklus mit Regelung ohne Ausnahme."""
         exception = [] if self._exception is None else [self._exception]
         return [*self._alarms, *exception]
+
+    def _thermal(
+        self,
+        snap: Snapshot,
+        snow: datetime,
+        capabilities: Mapping[str, Capabilities],
+        connected: Callable[[str], bool | None],
+        locks: Mapping[str, tuple[str, ...]],
+    ) -> dict[str, ThermalInputs]:
+        """Je Klimaanlage ihre Eingaben (Plan 6a, Entscheidung 5.1).
+
+        Frisch sind ihre Werte, solange ihre Quelle ``thermal.<name>`` (``coe_source``) verbunden
+        ist: Der Adapter trennt sie nach ``stale_after_s`` ohne gültiges Paket. Die Betriebsart
+        liest ``thermal_mode``; steuerbar ist der Aktor nach seinen Fähigkeiten (ohne Eintrag
+        nicht), gesperrt, wenn ``locks`` für ihn Gründe nennt. Die Zeit ist die der Safety-Schicht
+        in Sekunden; sie läuft monoton.
+        """
+        mono_now = snow.timestamp()
+        found: dict[str, ThermalInputs] = {}
+        for name, device in self._cfg.thermal.devices.items():
+            if not isinstance(device, CoeOffsetConfig):
+                continue
+            actuator = thermal_actuator(name)
+            able = capabilities.get(actuator)
+            found[name] = ThermalInputs(
+                fresh=connected(coe_source(name)) is True,
+                mode=thermal_mode(snap, name),
+                controllable=able is not None and able.controllable,
+                locked=bool(locks.get(actuator)),
+                mono_now=mono_now,
+            )
+        return found
 
     def _quarter(
         self,

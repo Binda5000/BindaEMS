@@ -567,3 +567,54 @@ def test_foreign_decision_round_trips() -> None:
 def test_planned_charging_reasons_have_texts(code: str, expected: str) -> None:  # Plan 4b, „Texte“
     text = decision_text("V", CommandKind.CURRENT, 8.0, DecisionResult.OK, reasons=(code,))
     assert text == f"V ({expected}): Strom 8 A – gesendet und bestätigt."
+
+
+def test_decision_text_offset() -> None:  # Plan 6a, Präzisierung 5
+    text = decision_text(
+        "Klimaanlage",
+        CommandKind.SETPOINT_OFFSET,
+        -1.0,
+        DecisionResult.DRY_RUN,
+        reasons=("thermal_more",),
+    )
+    assert "Sollwertversatz \N{MINUS SIGN}1,0 K" in text
+    assert text == (
+        "Klimaanlage (PV-Überschuss in die Klimaanlage): Sollwertversatz −1,0 K – Dry-Run, "
+        "nicht gesendet."
+    )
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        (0.5, "Sollwertversatz +0,5 K"),
+        (3.0, "Sollwertversatz +3,0 K"),
+        (-2.5, "Sollwertversatz −2,5 K"),
+        (0.0, "Sollwertversatz 0,0 K"),
+        (-0.0, "Sollwertversatz 0,0 K"),
+        (1, "Sollwertversatz +1,0 K"),
+        (float("nan"), "Sollwertversatz nan K"),
+    ],
+)
+def test_offset_text_has_sign_comma_and_one_decimal(value: float, expected: str) -> None:
+    text = decision_text("V", CommandKind.SETPOINT_OFFSET, value, DecisionResult.OK)
+    assert text == f"V: {expected} – gesendet und bestätigt."
+
+
+@pytest.mark.parametrize(
+    ("code", "expected"),
+    [
+        ("thermal_more", "PV-Überschuss in die Klimaanlage"),
+        ("thermal_back", "Netzbezug, Klimaanlage eine Stufe zurück"),
+        ("thermal_cars", "Autos haben Vorrang"),
+        ("thermal_battery", "Akku hat Vorrang"),
+        ("thermal_less", "Teurer Strom, Klimaanlage zurückhaltend"),
+        ("thermal_peak", "Spitze droht, Klimaanlage nicht mehr"),
+        ("thermal_mode", "Betriebsart gewechselt, Versatz 0"),
+        ("thermal_stale", "Keine Werte der Klimaanlage, Versatz 0"),
+        ("thermal_off", "Klimaanlage aus oder lüftet, Versatz 0"),
+    ],
+)
+def test_thermal_reasons_have_texts(code: str, expected: str) -> None:  # Präzisierung 5
+    text = decision_text("K", CommandKind.SETPOINT_OFFSET, 0.0, DecisionResult.OK, reasons=(code,))
+    assert text == f"K ({expected}): Sollwertversatz 0,0 K – gesendet und bestätigt."

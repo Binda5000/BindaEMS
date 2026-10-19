@@ -5,7 +5,15 @@ from typing import Any
 
 import pytest
 from tests.helpers import T0
-from tests.unit.core.control.charge_helpers import CONTROLLABLE, evcs, grid, inputs, tesla, twc
+from tests.unit.core.control.charge_helpers import (
+    CONTROLLABLE,
+    PRESENT,
+    evcs,
+    grid,
+    inputs,
+    tesla,
+    twc,
+)
 
 from bindaems.core.control.battery import SUPPORT_MODES, BatteryCar, BatteryController, BatteryNeed
 from bindaems.core.control.charge_inputs import ChargeInputs
@@ -22,12 +30,15 @@ from bindaems.core.control.peak_guard import (
 )
 from bindaems.core.control.plan_exec import ActiveSlot, plan_health
 from bindaems.core.control.regulation import (
+    THERMAL_RESYNC_S,
     Regulation,
     RegulationInputs,
+    ThermalInputs,
     battery_cars,
     peak_cars,
     peak_wanted_w,
 )
+from bindaems.core.control.thermal import ThermalMode
 from bindaems.core.safety.limits import HardLimits
 from bindaems.core.safety.ranges import check_range
 from bindaems.core.safety.types import Outcome, Verdict
@@ -675,7 +686,16 @@ def test_health_shows_the_guard(cfg) -> None:  # Präzisierung 16
 
 def test_health_has_the_wallboxes(cfg) -> None:  # Plan 2c-2b, Präzisierung 11
     health = Regulation(cfg, HardLimits.from_config(cfg), started=T0).health()
-    assert list(health) == ["intent_version", "vehicles", "battery", "peak", "wallboxes", "plan"]
+    assert list(health) == [
+        "intent_version",
+        "vehicles",
+        "battery",
+        "peak",
+        "wallboxes",
+        "plan",
+        "thermal",  # Plan 6a, vor dem ersten ``step`` leer
+    ]
+    assert health["thermal"] == {}
 
 
 PLAN = IntentPlan(
@@ -1037,3 +1057,361 @@ def test_regulation_hands_the_support_and_the_slot_to_the_battery(cfg) -> None:
     assert cycle(20 * 60, intent)["support"] == "plan"
     off = intent.model_copy(update={"support": SupportIntent(allowed=False)})
     assert cycle(21 * 60, off)["support"] == "off"
+
+
+# --- Klimaanlage (Plan 6a, Task 8) ----------------------------------------------------------------
+
+KLIMA = "thermal.klima"
+OFFSET = CommandKind.SETPOINT_OFFSET
+OFFSET_KEY = (KLIMA, OFFSET)
+INTENT = Intent(version=1, control=True)
+
+
+@pytest.fixture
+def reg_with_klima(cfg) -> Regulation:
+    """Der Kern mit der Klimaanlage ``klima`` aus ``config.example`` (Stufe 0,5 K, 600 s)."""
+    return Regulation(cfg, HardLimits.from_config(cfg), started=T0)
+
+
+def accepted(command: Command) -> Verdict:
+    return Verdict(command, Outcome.ACCEPTED, command.value, (), True)
+
+
+def rejected(command: Command) -> Verdict:
+    return Verdict(command, Outcome.REJECTED, None, (), False)
+
+
+def klima(
+    regulation: Regulation,
+    cfg: Config,
+    s: int,
+    *,
+    grid_w: float | None = -900.0,
+    soc: float | None = 95.0,
+    mode: ThermalMode = "kuehlen",
+    fresh: bool = True,
+    controllable: bool = True,
+    locked: bool = False,
+    degraded: bool = False,
+    echo: float | None = None,
+    blocked: frozenset[tuple[str, CommandKind]] = frozenset(),
+    intent: Intent = INTENT,
+    accept: bool = True,
+    **kw: Any,
+) -> list[ControlCommand]:
+    """Ein Zyklus ``s`` Sekunden nach ``T0`` mit der Klimaanlage; zurück kommen nur ihre Befehle.
+
+    Ohne Angabe: 900 W Einspeisung, SOC 95 %, Kühlen, frisch, steuerbar, kein Auto an der EVCS
+    und kein Echo. ``accept`` nimmt jeden ihrer Befehle an; ``kw`` geht an ``inputs``.
+    """
+    present = dict(PRESENT) if echo is None else {**PRESENT, OFFSET_KEY: echo}
+    given = {"evcs_obs": evcs(connected=False), "grid_obs": grid(grid_w=grid_w, soc=soc)} | kw
+    charge = inputs(
+        cfg,
+        s=s,
+        present=present,
+        blocked=blocked,
+        intent=intent,
+        **given,
+    )
+    seen = ThermalInputs(fresh, mode, controllable, locked, charge.now.timestamp())
+    found = regulation.step(RegulationInputs(charge, thermal={"klima": seen}, degraded=degraded))
+    ours = [x for x in found if x.command.actuator == KLIMA]
+    if accept:
+        for x in ours:
+            regulation.note_verdict(x.command, accepted(x.command))
+    return ours
+
+
+def klima_run(regulation: Regulation, cfg: Config, first: int, last: int, **kw: Any) -> list:
+    """Zyklen alle 10 s von ``first`` bis ``last``; zurück kommen die Befehle mit ihrer Sekunde."""
+    found = []
+    for s in range(first, last + 1, 10):
+        found += [(s, x) for x in klima(regulation, cfg, s, **kw)]
+    return found
+
+
+def offsets(found: list) -> list[tuple[int, float, tuple[str, ...]]]:
+    return [(s, x.command.value, x.command.reasons) for s, x in found]
+
+
+def wish(regulation: Regulation) -> dict[str, Any]:
+    entry: dict[str, Any] = regulation.health()["thermal"]["klima"]
+    return entry
+
+
+def test_regulation_emits_offset_after_override(reg_with_klima, cfg) -> None:
+    # Der erste Zyklus bietet den Versatz 0 an (noch kein eigener Wert), danach nach 600 s mit
+    # 900 W Einspeisung eine Stufe mehr: Kühlen mehr heißt −0,5 K.
+    found = klima_run(reg_with_klima, cfg, 0, 600)
+    assert offsets(found) == [(0, 0.0, ("thermal_off",)), (600, -0.5, ("thermal_more",))]
+    assert found[-1][1] == ControlCommand(
+        Command(KLIMA, OFFSET, -0.5, reasons=("thermal_more",)),
+        {"thermal_steps": 1.0, "export_w": 900.0, "soc_pct": 95.0},
+    )
+    assert wish(reg_with_klima) == {"wish": 1, "reason": "thermal_more", "hint": "neutral"}
+    # Heizen mehr heißt +0,5 K, nach dem Wechsel der Betriebsart erst 0.
+    assert offsets(klima_run(reg_with_klima, cfg, 610, 1220, mode="heizen")) == [
+        (610, 0.0, ("thermal_mode",)),
+        (1220, 0.5, ("thermal_more",)),
+    ]
+
+
+def test_regulation_thermal_commands_come_after_the_override(reg_with_klima, cfg) -> None:
+    # Der e-Golf in Sofort ohne PV: Ströme, „Laden an“ und der Override gehen vor; die Klimaanlage
+    # kommt zuletzt und hält keinen davon auf.
+    charge = inputs(
+        cfg,
+        evcs_obs=evcs(charging=True, power_w=2760.0),
+        controllable={**CONTROLLABLE, VICTRON: True},
+        intent=EGOLF_NOW,
+    )
+    seen = {"klima": ThermalInputs(True, "kuehlen", True, False, T0.timestamp())}
+    found = reg_with_klima.step(
+        RegulationInputs(charge, pv_w=0.0, house_w=500.0, base_setpoint_w=0.0, thermal=seen)
+    )
+    assert [(x.command.actuator, x.command.kind) for x in found] == [
+        ("wallbox.evcs", CommandKind.CURRENT),
+        ("wallbox.evcs", CommandKind.CHARGING),
+        (VICTRON, CommandKind.GRID_SETPOINT),
+        (KLIMA, OFFSET),
+    ]
+
+
+def test_regulation_no_repeat_same_offset(reg_with_klima, cfg) -> None:
+    klima_run(reg_with_klima, cfg, 0, 600)
+    # Der Wunsch bleibt bei einer Stufe (Totband, 500 W Einspeisung): kein weiterer Befehl.
+    assert klima_run(reg_with_klima, cfg, 610, 1300, grid_w=-500.0) == []
+    # Ohne Urteil mit Wert (``None``, etwa zurückgestellt) kommt derselbe Wert im nächsten Zyklus
+    # wieder.
+    found = klima(reg_with_klima, cfg, 1310, grid_w=-500.0, mode="heizen", accept=False)
+    assert [x.command.value for x in found] == [0.0]
+    reg_with_klima.note_verdict(found[0].command, None)
+    again = klima(reg_with_klima, cfg, 1311, grid_w=-500.0, mode="heizen")
+    assert [x.command.value for x in again] == [0.0]
+    assert klima(reg_with_klima, cfg, 1312, grid_w=-500.0, mode="heizen") == []
+
+
+def test_regulation_idle_resets(reg_with_klima, cfg) -> None:
+    klima_run(reg_with_klima, cfg, 0, 600)
+    assert wish(reg_with_klima)["wish"] == 1
+    reg_with_klima.idle(T0 + timedelta(seconds=601))
+    assert reg_with_klima.health()["thermal"] == {}
+    # Die Strategie beginnt neu bei 0 und vergisst den letzten Versatz: 0 kommt wieder, −0,5 K erst
+    # nach weiteren 600 s Einspeisung.
+    found = klima_run(reg_with_klima, cfg, 610, 1210)
+    assert offsets(found) == [(610, 0.0, ("thermal_off",)), (1210, -0.5, ("thermal_more",))]
+
+
+def test_regulation_forget_resets_the_strategy(reg_with_klima, cfg) -> None:
+    klima_run(reg_with_klima, cfg, 0, 600)
+    reg_with_klima.forget({"wallbox.evcs"})  # eine andere Aktor: Die Klimaanlage bleibt
+    assert klima(reg_with_klima, cfg, 610) == []
+    reg_with_klima.forget({KLIMA})  # etwa Dry-Run → live: Der Adapter hält jetzt 0
+    assert offsets([(620, x) for x in klima(reg_with_klima, cfg, 620)]) == [
+        (620, 0.0, ("thermal_off",))
+    ]
+    assert wish(reg_with_klima)["wish"] == 0
+
+
+def test_regulation_resyncs_with_the_echo_after_a_gap(reg_with_klima, cfg) -> None:
+    # Live: −0,5 K bestätigt (Echo −0,5). Nach einer Lücke der Freigabe hält der Adapter 0, das
+    # Echo zeigt 0, die Regelung hielte −0,5 als letzten Wert und bliebe still.
+    klima_run(reg_with_klima, cfg, 0, 600)
+    reg_with_klima.note_result(WriteResult(KLIMA, OFFSET, -0.5, DecisionResult.OK, ""))
+    assert klima(reg_with_klima, cfg, 610, echo=-0.5) == []
+    # Während ein Schreibvorgang offen ist, zählt die Abweichung nicht.
+    assert klima(reg_with_klima, cfg, 620, echo=0.0, blocked=frozenset({OFFSET_KEY})) == []
+    start = 630
+    assert klima(reg_with_klima, cfg, start, echo=0.0) == []
+    assert klima(reg_with_klima, cfg, start + int(THERMAL_RESYNC_S) - 1, echo=0.0) == []
+    assert wish(reg_with_klima)["wish"] == 1
+    # Nach ``THERMAL_RESYNC_S`` beginnt die Strategie neu: Versatz 0 wie am Adapter, und die
+    # nächste Stufe kommt wieder über die Schrittregel.
+    found = klima(reg_with_klima, cfg, start + int(THERMAL_RESYNC_S), echo=0.0)
+    assert [x.command.value for x in found] == [0.0]
+    assert wish(reg_with_klima)["wish"] == 0
+    later = klima_run(reg_with_klima, cfg, 700, 1300, echo=0.0)
+    assert offsets(later) == [(1290, -0.5, ("thermal_more",))]  # 600 s nach dem Neubeginn
+
+
+def test_regulation_resync_needs_a_lasting_mismatch(reg_with_klima, cfg) -> None:
+    klima_run(reg_with_klima, cfg, 0, 600)
+    reg_with_klima.note_result(WriteResult(KLIMA, OFFSET, -0.5, DecisionResult.OK, ""))
+    klima(reg_with_klima, cfg, 610, echo=0.0)
+    klima(reg_with_klima, cfg, 650, echo=-0.5)  # wieder gleich: Die Zeit beginnt neu
+    assert klima(reg_with_klima, cfg, 680, echo=0.0) == []
+    assert klima(reg_with_klima, cfg, 700, echo=None) == []  # ohne Echo kein Abgleich
+    assert klima(reg_with_klima, cfg, 739, echo=0.0) == []
+    assert wish(reg_with_klima)["wish"] == 1
+
+
+def test_regulation_dry_run_has_no_resync(reg_with_klima, cfg) -> None:
+    # Im Dry-Run bleibt das Echo 0, und es gibt kein Ergebnis ``OK``: kein Abgleich.
+    klima_run(reg_with_klima, cfg, 0, 600)
+    assert klima_run(reg_with_klima, cfg, 610, 1000, grid_w=-500.0, echo=0.0) == []
+    assert wish(reg_with_klima)["wish"] == 1
+    # Ein gescheitertes Ergebnis löscht die Bestätigung und den letzten Wert: −0,5 kommt wieder.
+    reg_with_klima.note_result(WriteResult(KLIMA, OFFSET, -0.5, DecisionResult.OK, ""))
+    reg_with_klima.note_result(WriteResult(KLIMA, OFFSET, -0.5, DecisionResult.TIMEOUT, ""))
+    found = klima(reg_with_klima, cfg, 1010, grid_w=-500.0, echo=0.0)
+    assert [x.command.value for x in found] == [-0.5]
+    assert klima_run(reg_with_klima, cfg, 1020, 1200, grid_w=-500.0, echo=0.0) == []
+
+
+def test_regulation_rejected_offset_restarts_the_strategy(reg_with_klima, cfg) -> None:
+    klima_run(reg_with_klima, cfg, 0, 590)
+    found = klima(reg_with_klima, cfg, 600, accept=False)
+    assert [x.command.value for x in found] == [-0.5]
+    reg_with_klima.note_verdict(found[0].command, rejected(found[0].command))
+    # Die Schrittregel ließ −0,5 nicht zu: Der Wunsch geht auf 0, und 0 kommt als Nächstes.
+    again = klima(reg_with_klima, cfg, 601)
+    assert [x.command.value for x in again] == [0.0]
+    assert wish(reg_with_klima)["wish"] == 0
+
+
+def test_regulation_rejected_zero_keeps_the_strategy(reg_with_klima, cfg) -> None:
+    klima_run(reg_with_klima, cfg, 0, 600)
+    zero = Command(KLIMA, OFFSET, 0.0, reasons=("thermal_off",))
+    reg_with_klima.note_verdict(zero, rejected(zero))
+    assert klima(reg_with_klima, cfg, 610) == []  # −0,5 bleibt der letzte eigene Wert
+    assert wish(reg_with_klima)["wish"] == 1
+
+
+def test_regulation_holds_the_offset_while_not_controllable(reg_with_klima, cfg) -> None:
+    klima(reg_with_klima, cfg, 0)
+    for kw in ({"controllable": False}, {"locked": True}, {"blocked": frozenset({OFFSET_KEY})}):
+        assert klima_run(reg_with_klima, cfg, 10, 700, **kw) == [], kw
+        reg_with_klima.forget({KLIMA})
+    # Gesperrt oder nicht steuerbar geht der Wunsch auf 0 (Entscheidung 5.1); offen geschrieben
+    # rechnet die Strategie weiter, gesendet wird erst danach.
+    assert wish(reg_with_klima) == {"wish": 1, "reason": "thermal_more", "hint": "neutral"}
+    klima(reg_with_klima, cfg, 710, controllable=False)
+    assert wish(reg_with_klima)["reason"] == "thermal_stale"
+
+
+@pytest.mark.parametrize(
+    ("kw", "reason"),
+    [
+        ({"degraded": True}, "thermal_off"),
+        ({"fresh": False}, "thermal_stale"),
+        ({"mode": "lueften"}, "thermal_off"),
+        ({"mode": "unbekannt"}, "thermal_off"),
+    ],
+)
+def test_regulation_resets_to_zero(reg_with_klima, cfg, kw, reason) -> None:
+    klima_run(reg_with_klima, cfg, 0, 600)
+    found = klima(reg_with_klima, cfg, 610, **kw)
+    assert [(x.command.value, x.command.reasons) for x in found] == [(0.0, (reason,))]
+
+
+def test_regulation_peak_and_overload_press_the_wish(reg_with_klima, cfg, monkeypatch) -> None:
+    klima_run(reg_with_klima, cfg, 0, 600)
+    assert wish(reg_with_klima)["wish"] == 1
+    # Der 15-min-Wächter macht Druck (``pressure``): Der positive Wunsch fällt auf 0.
+    monkeypatch.setattr(reg_with_klima.peak_guard, "pressure", lambda: True)
+    found = klima(reg_with_klima, cfg, 610)
+    assert [(x.command.value, x.command.reasons) for x in found] == [(0.0, ("thermal_peak",))]
+
+    # Überlast (eine Phase über der Sicherung seit 3 s) drückt ebenso.
+    other = Regulation(cfg, HardLimits.from_config(cfg), started=T0)
+    klima_run(other, cfg, 0, 600)
+    over = grid(40.0, 2.0, 2.0, grid_w=-900.0, soc=95.0)
+    found = []
+    for s in range(610, 614):
+        found += klima(other, cfg, s, grid_obs=over)
+    assert other.charger.overload_level() > 0
+    assert [(x.command.value, x.command.reasons) for x in found] == [(0.0, ("thermal_peak",))]
+
+
+def klima_plan(thermal: str = "neutral", soc_end_pct: float | None = None) -> Intent:
+    """Die Absicht mit einem Plan von ``T0`` an für zwei Stunden, jeder Slot Eigenverbrauch mit
+    ``thermal`` und ``soc_end_pct``."""
+    plan = IntentPlan(
+        id=7,
+        created_at=T0,
+        valid_until=T0 + timedelta(hours=2),
+        grid_charge_allowed=False,
+        slots=[
+            IntentPlanSlot(
+                start=T0 + timedelta(minutes=15 * n),
+                intent=BatteryIntent(kind=BatteryIntentKind.EIGENVERBRAUCH),
+                thermal=thermal,
+                soc_end_pct=soc_end_pct,
+            )
+            for n in range(8)
+        ],
+    )
+    return Intent(version=1, control=True, plan=plan)
+
+
+@pytest.mark.parametrize(
+    ("intent", "soc", "more"),
+    [
+        (INTENT, 89.0, False),  # ohne Plan gilt die feste Schwelle 90 %
+        (INTENT, 90.0, True),
+        (klima_plan(soc_end_pct=60.0), 70.0, True),  # die Schwelle des Slots
+        (klima_plan(soc_end_pct=80.0), 70.0, False),
+        (klima_plan(), 89.0, False),  # der Slot nennt keine: 90 %
+        (klima_plan("mehr"), 50.0, True),  # „mehr“: keine Akku-Schwelle
+    ],
+)
+def test_regulation_takes_gate_and_hint_from_the_slot(
+    reg_with_klima, cfg, intent: Intent, soc: float, more: bool
+) -> None:
+    found = klima_run(reg_with_klima, cfg, 0, 600, soc=soc, intent=intent)
+    assert (found[-1][1].command.value == -0.5) is more
+    hint = "neutral" if intent.plan is None else intent.plan.slots[0].thermal
+    assert wish(reg_with_klima)["hint"] == hint
+
+
+def test_regulation_less_with_the_hint_of_the_slot(reg_with_klima, cfg) -> None:
+    # „weniger“ ohne Einspeisung: nach 600 s eine Stufe weniger, beim Kühlen +0,5 K
+    found = klima_run(reg_with_klima, cfg, 0, 600, grid_w=200.0, intent=klima_plan("weniger"))
+    assert offsets(found)[-1] == (600, 0.5, ("thermal_less",))
+    assert found[-1][1].inputs == {"thermal_steps": -1.0, "export_w": 0.0, "soc_pct": 95.0}
+
+
+def test_regulation_cars_go_first(reg_with_klima, cfg) -> None:
+    klima_run(reg_with_klima, cfg, 0, 600)
+    # Der e-Golf in PV lädt mit 1380 W unter seinem Wunsch: eine Stufe zurück, wieder 0.
+    egolf = evcs(charging=True, power_w=1380.0)
+    found = klima(reg_with_klima, cfg, 610, evcs_obs=egolf)
+    assert reg_with_klima.charger.unmet_surplus_w() >= 230.0
+    assert [(x.command.value, x.command.reasons) for x in found] == [(0.0, ("thermal_cars",))]
+
+
+def test_regulation_without_grid_power_knows_no_export(reg_with_klima, cfg) -> None:
+    found = klima_run(reg_with_klima, cfg, 0, 700, grid_w=None)
+    assert [x.inputs for _, x in found] == [
+        {"thermal_steps": 0.0, "export_w": None, "soc_pct": 95.0}
+    ]
+    assert wish(reg_with_klima)["wish"] == 0
+
+
+def test_regulation_skips_a_device_without_inputs(reg_with_klima, cfg) -> None:
+    found = reg_with_klima.step(RegulationInputs(inputs(cfg)))
+    assert all(x.command.actuator != KLIMA for x in found)
+    assert reg_with_klima.health()["thermal"] == {}
+
+
+def test_regulation_routes_thermal_verdicts_and_results(reg_with_klima, cfg, monkeypatch) -> None:
+    seen: list[str] = []
+    monkeypatch.setattr(reg_with_klima.charger, "note_verdict", lambda *a, **k: seen.append("v"))
+    monkeypatch.setattr(reg_with_klima.charger, "note_result", lambda *a, **k: seen.append("r"))
+    command = Command(KLIMA, OFFSET, -0.5)
+    reg_with_klima.note_verdict(command, accepted(command))
+    reg_with_klima.note_result(WriteResult(KLIMA, OFFSET, -0.5, DecisionResult.OK, ""))
+    assert seen == []
+    # Ein unbekanntes Gerät mit dem Präfix ``thermal.`` geht an die Laderegelung wie bisher.
+    other = Command("thermal.wp", OFFSET, 1.0)
+    reg_with_klima.note_verdict(other, accepted(other))
+    reg_with_klima.note_result(WriteResult("thermal.wp", OFFSET, 1.0, DecisionResult.OK, ""))
+    assert seen == ["v", "r"]
+    # ``not_sent`` löscht den letzten Wert: −0,5 kommt wieder.
+    klima_run(reg_with_klima, cfg, 0, 600)
+    found = klima(reg_with_klima, cfg, 610, accept=False)
+    assert found == []
+    last = Command(KLIMA, OFFSET, -0.5, reasons=("thermal_more",))
+    reg_with_klima.note_verdict(last, accepted(last), not_sent=True)
+    assert [x.command.value for x in klima(reg_with_klima, cfg, 620)] == [-0.5]

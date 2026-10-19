@@ -22,6 +22,7 @@ from bindaems.core.control.charge_modes import Effective
 from bindaems.core.control.charging import CarView, ChargeController
 from bindaems.core.control.executor import WriteResult
 from bindaems.core.control.peak_guard import NO_LIMITS, PeakLimits
+from bindaems.core.control.phase_guard import OverloadLevel
 from bindaems.core.control.plan_exec import ActiveSlot
 from bindaems.core.safety.budget import PersistentWriteBudget
 from bindaems.core.safety.layer import SafetyLayer
@@ -2655,3 +2656,58 @@ def test_lowering_to_the_slot_power_is_urgent_only_for_the_fuse(cfg, l1, urgent)
         cmd(0, CURRENT, 10.0, ("mode_planned", "plan_power"), urgent=urgent),
         cmd(0, CHARGING, True, ("mode_planned", "plan_power")),
     ]
+
+
+# --- Lesende Zugriffe für die Klimaanlage (Plan 6a, Task 8) ---------------------------------------
+
+
+def test_unmet_surplus_counts_pv_cars_only(cfg) -> None:  # Entscheidung 5.3
+    c = controller(cfg)
+    assert c.unmet_surplus_w() == 0.0  # vor dem ersten ``step``
+    # PV mit 4000 W Einspeisung und 1380 W an der EVCS: Der Überschuss (5280 W nach der Marge von
+    # 100 W) gibt dem e-Golf 11 A auf zwei Phasen, 5060 W; offen sind 3680 W.
+    c.step(
+        inputs(cfg, intent=egolf_in(ChargeMode.PV), evcs_obs=evcs(charging=True, power_w=1380.0))
+    )
+    assert c.unmet_surplus_w() == 3680.0
+    # Bei 5000 W ist der Wunsch der Höchststrom 16 A (7360 W): offen 2360 W.
+    c.step(
+        inputs(
+            cfg, s=1, intent=egolf_in(ChargeMode.PV), evcs_obs=evcs(charging=True, power_w=5000.0)
+        )
+    )
+    assert c.unmet_surplus_w() == 2360.0
+    # Min+PV zählt ebenso; ohne Leistung der Wallbox zählt 0 W (hier der Mindeststrom 6 A).
+    c.step(inputs(cfg, s=2, intent=egolf_in(ChargeMode.MIN_PV), evcs_obs=evcs(power_w=None)))
+    assert c.unmet_surplus_w() == 2760.0
+    # Sofort und ein abgestecktes Auto zählen nicht.
+    c.step(inputs(cfg, s=3, intent=egolf_in(ChargeMode.NOW), evcs_obs=evcs(charging=True)))
+    assert c.unmet_surplus_w() == 0.0
+    c.step(inputs(cfg, s=4, intent=egolf_in(ChargeMode.PV), evcs_obs=evcs(connected=False)))
+    assert c.unmet_surplus_w() == 0.0
+    # Ein Ladepunkt, den die Laderegelung nicht regelt, zählt nicht.
+    c.step(
+        inputs(
+            cfg,
+            s=5,
+            intent=egolf_in(ChargeMode.PV),
+            controllable={"wallbox.evcs": False, "vehicle.tesla": False},
+        )
+    )
+    assert c.unmet_surplus_w() == 0.0
+    c.step(inputs(cfg, s=6, intent=egolf_in(ChargeMode.PV)))
+    assert c.unmet_surplus_w() > 0.0
+    c.idle(T0 + timedelta(seconds=7))
+    assert c.unmet_surplus_w() == 0.0
+
+
+def test_overload_level_follows_the_last_step(cfg) -> None:
+    c = controller(cfg)
+    assert c.overload_level() is OverloadLevel.NONE
+    # Eine Phase über der Sicherung: nach ``MIN_AFTER_S`` (3 s) mindestens ``MINIMUM``
+    over = grid(40.0, 2.0, 2.0)
+    for s in range(4):
+        c.step(inputs(cfg, s=s, grid_obs=over))
+    assert c.overload_level() >= OverloadLevel.MINIMUM
+    c.idle(T0 + timedelta(seconds=4))
+    assert c.overload_level() is OverloadLevel.NONE

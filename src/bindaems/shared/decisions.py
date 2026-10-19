@@ -43,7 +43,8 @@ _FIELDS: Final = frozenset(
 # Gründe, die der Text deutsch nennt; andere Codes erscheinen unverändert. Zuerst die des sicheren
 # Zustands und der Übergabe, dann die der Laderegelung (Plan 2c-1, „Texte“), dann die des
 # Akku-Sollwerts und des 15-min-Wächters (Plan 2c-2a, „Texte“), zuletzt der der Zuordnungserkennung
-# (Plan 2c-2b, „Texte“), dazu die der Bedienung (Plan 2d, „Texte“).
+# (Plan 2c-2b, „Texte“), dazu die der Bedienung (Plan 2d, „Texte“) und die der Klimaanlage
+# (Plan 6a, Präzisierung 5).
 _REASON_TEXT: Final = {
     "safe_state": "sicherer Zustand",
     "handback": "Übergabe",
@@ -75,6 +76,15 @@ _REASON_TEXT: Final = {
     "latest_start": "Späteste Startzeit",
     "target_reached": "Ziel-SOC erreicht",
     "charge_limit": "Ladelimit",
+    "thermal_more": "PV-Überschuss in die Klimaanlage",
+    "thermal_back": "Netzbezug, Klimaanlage eine Stufe zurück",
+    "thermal_cars": "Autos haben Vorrang",
+    "thermal_battery": "Akku hat Vorrang",
+    "thermal_less": "Teurer Strom, Klimaanlage zurückhaltend",
+    "thermal_peak": "Spitze droht, Klimaanlage nicht mehr",
+    "thermal_mode": "Betriebsart gewechselt, Versatz 0",
+    "thermal_stale": "Keine Werte der Klimaanlage, Versatz 0",
+    "thermal_off": "Klimaanlage aus oder lüftet, Versatz 0",
 }
 
 
@@ -305,7 +315,16 @@ def _command_text(kind: CommandKind, value: CommandValue) -> str:
         return f"Min-SOC {shown} %"
     if kind == CommandKind.CHARGE_LIMIT:
         return f"Ladelimit {shown} %"
+    if kind == CommandKind.SETPOINT_OFFSET:
+        return f"Sollwertversatz {_offset(number) if number is not None else shown} K"
     return f"{kind} {shown}"
+
+
+def _offset(value: float) -> str:
+    """Ein Versatz mit Vorzeichen und einer Nachkommastelle: „+0,5“, „−1,0“, „0,0“."""
+    if round(value, 1) == 0:
+        return "0,0"
+    return f"{value:+.1f}".replace(".", ",").replace("-", "\N{MINUS SIGN}")
 
 
 def _result_text(result: DecisionResult, detail: str) -> str:
@@ -331,8 +350,8 @@ def decision_text(
     Danach folgen, mit Leerzeichen verbunden, die Befundtexte der Safety-Schicht. ``value`` ist der
     angewendete Wert, sonst der angeforderte. ``reasons`` sind Codes: die des sicheren Zustands,
     der Übergabe, der Laderegelung, des Akku-Sollwerts, des 15-min-Wächters, der
-    Zuordnungserkennung und der Bedienung (``_REASON_TEXT``) erscheinen deutsch, andere
-    unverändert; mehrere stehen mit „, “ getrennt. ``detail`` gehört zu „Fehler“, „nicht
+    Zuordnungserkennung, der Bedienung und der Klimaanlage (``_REASON_TEXT``) erscheinen deutsch,
+    andere unverändert; mehrere stehen mit „, “ getrennt. ``detail`` gehört zu „Fehler“, „nicht
     gesendet“ und „von außen geändert“. Der Satz endet auf einen Punkt; hat das Detail schon
     einen, kommt kein zweiter dazu. Ein Wert, der nicht zur Art passt (etwa NaN), erscheint, wie
     er ist: Auch eine abgelehnte, ungültige Anfrage lässt sich protokollieren.

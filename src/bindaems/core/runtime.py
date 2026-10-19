@@ -344,12 +344,14 @@ def _thermal_json(
     snap: Snapshot,
     connected: bool,
     stats: Mapping[str, int | str | None],
+    regulated: Mapping[str, Any],
 ) -> dict[str, Any]:
     """Eine Klimaanlage für ``health`` (Plan 6a, Präzisierung 4).
 
     Die Werte kommen aus dem Snapshot (``thermal.<name>.*``, nur mit Qualität ``OK``), die Zähler
-    der Pakete aus dem Adapter (``stats``, ohne Adapter leer). Wunsch, Grund und Hinweis setzt
-    erst die Regelung der Klimaanlage; bis dahin sind sie ``None``.
+    der Pakete aus dem Adapter (``stats``, ohne Adapter leer). Wunsch (Stufen), Grund (Code) und
+    Hinweis setzt die Regelung (``regulated``, ihr Eintrag in ``health()["thermal"]``); ohne ihn,
+    etwa solange sie ruht, sind sie ``None``.
 
     Der Sollwert ohne Versatz ist ``setpoint_c`` minus den Versatz, den die UVR gerade anwendet:
     das Echo ``offset_active_k`` (die UVR rechnet ihn in ``setpoint_c`` ein), ohne Echo der
@@ -376,9 +378,9 @@ def _thermal_json(
         "offset_sent_k": sent,
         "offset_active_k": echo,
         "power_w": finite_number(snap.ok(prefix + "power_w")),
-        "wish": None,
-        "reason": None,
-        "hint": None,
+        "wish": regulated.get("wish"),
+        "reason": regulated.get("reason"),
+        "hint": regulated.get("hint"),
     }
 
 
@@ -996,8 +998,9 @@ class CoreRuntime:
            vergisst die Regelung ihre Werte für diesen Aktor: Das Gerät ändert sich ohne sie. Die
            Befehle der Regelung schreiben zu den Eingaben jeder Entscheidung ihre eigenen ins Log:
            die der Ladepunkte Überschuss, Grenze des Wächters und Ist-Werte, der Override PV,
-           Hauslast, Autos, Fehlbetrag, erlaubten Anteil, Ziel und Ist-Override. Gilt ein Slot des
-           Plans, kommen für alle (``plan_inputs``) Beginn des Slots, Preis und Budget dazu.
+           Hauslast, Autos, Fehlbetrag, erlaubten Anteil, Ziel und Ist-Override, die Versätze der
+           Klimaanlagen (zuletzt) Wunsch in Stufen, Einspeisung und SOC. Gilt ein Slot des Plans,
+           kommen für alle (``plan_inputs``) Beginn des Slots, Preis und Budget dazu.
         6. Jedes Urteil über einen Befehl der Regelung geht an sie zurück (``note_verdict``), auch
            ``None``. ``not_sent`` heißt: Das Urteil ließ senden, aber danach ist kein
            Schreibvorgang offen.
@@ -1040,6 +1043,7 @@ class CoreRuntime:
                 flows=flows,
                 slot=self._accumulator.current(),
                 hourly_count=lambda actuator: self.layer.hourly_count(actuator, snow),
+                operating=self.operating.state,
             )
         else:
             self.regulation.idle(snow)
@@ -1109,14 +1113,18 @@ class CoreRuntime:
             adapter.permit_for(THERMAL_PERMIT_S if live else 0.0)
 
     def _thermal_health(self, snap: Snapshot) -> dict[str, Any]:
-        """Der Stand der Klimaanlagen für ``health``, aus dem Snapshot und den Adaptern."""
+        """Der Stand der Klimaanlagen für ``health``, aus dem Snapshot, den Adaptern und dem Stand
+        der Regelung, den ``RegulationLink.finish`` in diesem Zyklus abgelegt hat."""
+        regulated: Mapping[str, Mapping[str, Any]] = self.regulation.health().get("thermal", {})
         thermal: dict[str, Any] = {}
         for name, device in self._cfg.thermal.devices.items():
             if not isinstance(device, CoeOffsetConfig):
                 continue
             adapter = self._coe_adapter(name)
             stats = adapter.stats() if adapter is not None else {}
-            thermal[name] = _thermal_json(name, device, snap, self._thermal_connected(name), stats)
+            connected = self._thermal_connected(name)
+            entry = regulated.get(name, {})
+            thermal[name] = _thermal_json(name, device, snap, connected, stats, entry)
         return thermal
 
     def _switched_modes(self) -> set[str]:

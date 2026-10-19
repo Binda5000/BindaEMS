@@ -207,6 +207,8 @@ _SURPLUS_MODES: Final = frozenset({Effective.PV, Effective.MIN_PV, Effective.PLA
 _PV_LIKE: Final = frozenset({Effective.PV, Effective.PLANNED})  # ladend halten sie ``min_a``
 _NOBODY: Final = WallboxState(None, None, ())  # an der Wallbox läuft kein Vorgang
 _SELF_START_MIN_A: Final = 1.0  # ab diesem Strom in A lädt ein Fahrzeug laut Tessie
+# Die Modi, deren offener Wunsch der Klimaanlage vorgeht (Plan 6a, Entscheidung 5.3)
+_UNMET_MODES: Final = frozenset({Effective.PV, Effective.MIN_PV})
 
 
 @dataclass(frozen=True)
@@ -404,6 +406,7 @@ class ChargeController:
         self._last = LastValues()
         self._views: dict[str, _View] = {}
         self._cars: tuple[CarView, ...] = ()  # je Ladepunkt des letzten ``step`` (``cars``)
+        self._unmet_w = 0.0  # der offene Wunsch der Autos in PV und Min+PV (``unmet_surplus_w``)
         # wer an welcher Wallbox stand, im letzten ``step`` (``wallbox_health``)
         self._wallboxes: Mapping[str, WallboxState] = {}
         self._reasons: dict[str, str] = {}  # der letzte Grund des letzten Befehls je Fahrzeug
@@ -581,6 +584,7 @@ class ChargeController:
             _car_view(self._cfg, point, modes[key], state.vehicles[key], inputs)
             for key, point in points.items()
         )
+        self._unmet_w = self._unmet(points, modes, state.vehicles, cycle.wanted)
         self._vehicle_wallbox = {
             vehicle_actuator(key): None if v.kind is AssignmentKind.UNCLEAR else v.wallbox
             for key, v in state.vehicles.items()
@@ -658,6 +662,7 @@ class ChargeController:
         self._views = {}
         self._wallboxes = {}
         self._cars = ()
+        self._unmet_w = 0.0
         self._vehicle_wallbox = {}
         self._commands_hour = {}
 
@@ -685,6 +690,21 @@ class ChargeController:
         nach ``idle`` leer.
         """
         return self._cars
+
+    def unmet_surplus_w(self) -> float:
+        """Der offene Wunsch der Autos im letzten ``step`` in W (Plan 6a, Entscheidung 5.3).
+
+        Die Summe von ``max(0, Wunsch − Leistung)`` über die Ladepunkte, die die Laderegelung
+        regelt, deren Auto angesteckt ist (laut Zuordnung) und im Modus PV oder Min+PV lädt. Der
+        Wunsch ist der Strom aus dem Überschuss (``wanted_a``) × ``U`` × Zahl der Phasen; eine
+        unbekannte Leistung zählt als 0 W: Der Vorrang der Autos geht dann vor. Vor dem ersten
+        ``step`` und nach ``idle`` ist er 0.
+        """
+        return self._unmet_w
+
+    def overload_level(self) -> OverloadLevel:
+        """Die Stufe der Überlast im letzten ``step``; vor dem ersten und nach ``idle`` ``NONE``."""
+        return self._level
 
     def vehicle_wallbox(self) -> dict[str, str | None]:
         """Fahrzeug-Aktor → Wallbox für die Phasenvorhersage der Safety-Schicht.
@@ -778,6 +798,26 @@ class ChargeController:
                 }
             )
         return entries
+
+    def _unmet(
+        self,
+        points: Mapping[str, ChargePoint],
+        modes: Mapping[str, Effective],
+        vehicles: Mapping[str, VehicleState],
+        wanted: Mapping[str, int],
+    ) -> float:
+        """Der offene Wunsch dieses Zyklus für ``unmet_surplus_w``."""
+        volts = self._limits.voltage_v
+        total = 0.0
+        for car in self._cars:
+            point = points[car.vehicle]
+            if not point.regulated or vehicles[car.vehicle].plugged is not True:
+                continue
+            if modes[car.vehicle] not in _UNMET_MODES:
+                continue
+            wanted_w = wanted.get(car.vehicle, 0) * volts * len(point.phases)
+            total += max(0.0, wanted_w - (car.power_w or 0.0))
+        return total
 
     def _order(self, intent: Intent | None) -> list[str]:
         """Die Autos in der Reihenfolge ihrer Priorität: die Fahrzeuge, dahinter die Gäste.

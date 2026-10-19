@@ -289,9 +289,9 @@
           "offset_sent_k": null,
           "offset_active_k": null,
           "power_w": null,
-          "wish": null,
-          "reason": null,
-          "hint": null
+          "wish": 0,
+          "reason": "thermal_stale",
+          "hint": "neutral"
         }
       }
     }

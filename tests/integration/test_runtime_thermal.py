@@ -312,13 +312,13 @@ def test_base_setpoint_falls_back_to_the_sent_offset() -> None:
     )
     p = "thermal.klima."
     without_echo = make_snap({p + "setpoint_c": 23.5, p + "offset_sent_k": 0.5})
-    assert _thermal_json("klima", device, without_echo, True, {})["base_setpoint_c"] == 23.0
+    assert _thermal_json("klima", device, without_echo, True, {}, {})["base_setpoint_c"] == 23.0
     with_echo = make_snap(
         {p + "setpoint_c": 23.5, p + "offset_sent_k": 0.5, p + "offset_active_k": 1.0}
     )
-    assert _thermal_json("klima", device, with_echo, True, {})["base_setpoint_c"] == 22.5
+    assert _thermal_json("klima", device, with_echo, True, {}, {})["base_setpoint_c"] == 22.5
     no_setpoint = make_snap({p + "offset_sent_k": 0.5, p + "offset_active_k": 1.0})
-    assert _thermal_json("klima", device, no_setpoint, True, {})["base_setpoint_c"] is None
+    assert _thermal_json("klima", device, no_setpoint, True, {}, {})["base_setpoint_c"] is None
 
 
 async def test_failing_regulation_withdraws_the_permit(runtime_with_coe, monkeypatch) -> None:
@@ -374,3 +374,31 @@ async def test_source_does_not_clash_with_a_wallbox_of_the_same_key(runtime_with
     assert env.rt.health().thermal["klima"]["connected"] is True
     [actuator] = [a for a in env.rt.health().actuators if a["id"] == THERMAL]
     assert actuator["controllable"] is True
+
+
+async def test_health_takes_wish_reason_and_hint_from_the_regulation(runtime_env) -> None:
+    # Mit der echten Regelung (Task 8): Wunsch, Grund und Hinweis kommen aus
+    # ``Regulation.health()["thermal"]``; vor CONTROL ruht die Regelung, sie sind ``None``.
+    rt, _, clock = runtime_env(state=GOOD_STATE, configure=allow_thermal_live)
+    device = rt._cfg.thermal.devices["klima"]
+    assert isinstance(device, CoeOffsetConfig)
+    env = CoeRuntime(rt, clock, device)
+    await env.start()
+    try:
+        rt.submit_intent(intent(1, ActuatorMode.LIVE))
+        env.echo(0.0)
+        run(rt, clock, 1)
+        block = rt.health().thermal["klima"]
+        assert (block["wish"], block["reason"], block["hint"]) == (None, None, None)
+        regulate_until_control(env)
+        run(rt, clock, 1)
+        block = rt.health().thermal["klima"]
+        # SOC 50 % unter der Schwelle von 90 %: kein Schritt, der Wunsch bleibt 0
+        assert (block["wish"], block["hint"]) == (0, "neutral")
+        assert block["reason"] == "thermal_off"
+        assert set(env.sent()) == {0}
+    finally:
+        assert env.task is not None
+        env.task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await env.task
