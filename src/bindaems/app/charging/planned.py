@@ -336,24 +336,24 @@ class PlannedCharges:
     ) -> None:
         """Die Session der Zeile ist nicht mehr offen: Umzug nach einer Lücke oder Ende.
 
-        Ein vorher erreichtes Ziel bleibt erreicht. Hat der Tracker nach einer Lücke für dasselbe
-        Auto eine neue Session begonnen, zieht die Zeile um (Abfahrt in der Lücke: ``unknown``).
-        Hat er die Session wegen einer Lücke geschlossen (Ende mehr als ``SESSION_GAP`` vor jetzt:
-        Health fehlte oder der Steckzustand war unbekannt) und keine neue begonnen, bleibt die
-        Zeile offen, bis eine neue beginnt (Umzug) oder die Abfahrt vorbei ist (``unknown``).
+        Hat der Tracker nach einer Lücke für dasselbe Auto eine neue Session begonnen, zieht die
+        Zeile um, auch eine schon erreichte (Abfahrt in der Lücke: ``unknown``). Hat er die Session
+        wegen einer Lücke geschlossen (Ende mehr als ``SESSION_GAP`` vor jetzt: Health fehlte oder
+        der Steckzustand war unbekannt) und keine neue begonnen, bleibt die Zeile offen, bis eine
+        neue beginnt (Umzug) oder die Abfahrt vorbei ist (``unknown``). Ein vorher erreichtes Ziel
+        bleibt in beiden Fällen ``reached``; so bleibt es eine Zeile je Abfahrt, auch wenn der
+        Bedarf nach der Lücke zurückkommt.
         """
         end = conn.execute(
             select(charging_session.c.end).where(charging_session.c.id == row.session_id)
         ).scalar()
         ended = now if end is None else ensure_utc(end)
-        if row.reached_at is not None:
-            self._finish(conn, row, REACHED)
-            return
+        gap_outcome = REACHED if row.reached_at is not None else UNKNOWN
         newer = sessions.get(row.wallbox)
         if newer is not None and newer.vehicle == row.vehicle and newer.start >= ended:
             # der Tracker hat nach einer Lücke ohne Health neu begonnen: dasselbe Auto steckt noch
             if ended <= row.departure_at < newer.start:
-                self._finish(conn, row, UNKNOWN)  # die Abfahrt lag in der Lücke
+                self._finish(conn, row, gap_outcome)  # die Abfahrt lag in der Lücke
                 return
             row.session_id = newer.id
             conn.execute(
@@ -365,7 +365,7 @@ class PlannedCharges:
         if ended < row.departure_at and now - ended > SESSION_GAP:
             # Ende wegen einer Lücke: ob das Auto vor der Abfahrt abgesteckt wurde, ist unbekannt
             if now >= row.departure_at:
-                self._finish(conn, row, UNKNOWN)
+                self._finish(conn, row, gap_outcome)
             return
         self._close(conn, row, before_departure=ended < row.departure_at)
 

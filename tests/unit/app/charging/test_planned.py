@@ -320,6 +320,28 @@ def test_reached_before_the_gap_stays_reached(charges, tracker, engine, clock) -
     assert rows(engine)[0].outcome == "reached"
 
 
+def test_reached_row_moves_over_a_gap_and_keeps_one_row_when_the_need_returns(
+    charges, tracker, engine, clock
+) -> None:
+    # Ziel um T0 + 10 min erreicht, danach fehlt Health 40 min; das Auto steckt weiter, der Tracker
+    # beginnt eine neue Session. Der Ladestand sinkt um 3 Prozentpunkte, der Bedarf kommt zurück:
+    # die erreichte Zeile zieht um und bleibt die einzige für diese Abfahrt.
+    charges.record(health(soc=75.0), tracked(tracker, T0))
+    [row] = rows(engine)
+    at(clock, T0 + timedelta(minutes=10))
+    charges.record(health(soc=80.0, need=0.0), tracked(tracker, clock.now()))
+    at(clock, T0 + timedelta(minutes=50))
+    sessions = tracked(tracker, clock.now())
+    assert sessions["twc"].id != row.session_id
+    charges.record(health(soc=77.0), sessions)
+    [moved] = rows(engine)
+    assert (moved.id, moved.session_id, moved.outcome) == (row.id, sessions["twc"].id, "open")
+    assert moved.reached_at == T0 + timedelta(minutes=10)
+    at(clock, DEPARTURE)
+    charges.record(health(soc=77.0), sessions)
+    assert [r.outcome for r in rows(engine)] == ["reached"]
+
+
 def test_duplicate_open_rows_close_the_older_as_unknown(
     charges, session, engine, clock, cfg
 ) -> None:

@@ -858,7 +858,8 @@ gerundet.
     sie `unknown`. Beginnt keine neue Session, bleibt die Ladung offen, bis eine beginnt (dann läuft
     sie darin weiter) oder die Abfahrt vorbei ist (dann `unknown`): Ob das Auto in der Lücke
     abgesteckt wurde, weiß die app nicht, darum gilt das nie als `early`. War das Ziel vor der Lücke
-    erreicht, bleibt die Ladung `reached`.
+    erreicht, bleibt die Ladung `reached`; läuft sie in einer neuen Session weiter, bleibt es eine
+    Ladung, auch wenn danach wieder Bedarf da ist.
 - **Verbraucher:** `consumers` summiert die gespeicherten Tage bis gestern und für heute den
   laufenden Wert; fehlt ein Tag (älter als 31 Tage oder noch nicht gespeichert), ist `kwh` `null`
   und `note` nennt den Grund.

@@ -1064,7 +1064,8 @@ def test_stats_endpoint_in_the_guide() -> None:
         "läuft die geplante Ladung darin weiter",
         "Ein unbekannter Modus",
         "darum gilt das nie als `early`",
-        "War das Ziel vor der Lücke erreicht, bleibt die Ladung `reached`.",
+        "War das Ziel vor der Lücke erreicht, bleibt die Ladung `reached`; läuft sie in einer "
+        "neuen Session weiter, bleibt es eine Ladung, auch wenn danach wieder Bedarf da ist.",
     ):
         assert text in section, text
 
