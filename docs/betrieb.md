@@ -157,7 +157,7 @@ Zugangsdaten und keine Daten der Anlage; die Datenquelle wählst du beim Import.
 2. Dashboards → New → Import, die Datei hochladen und bei der Eingabe `DS_BINDAEMS` die Datenquelle
    aus Schritt 1 wählen. Ein erneuter Import mit derselben Datei ersetzt das Dashboard.
 
-Das Dashboard zeigt vier Zeilen. Der Zeitraum oben gilt für alle Panels außer der letzten Zeile;
+Das Dashboard zeigt fünf Zeilen. Der Zeitraum oben gilt für alle Panels außer der letzten Zeile;
 die Zeitzone ist `Europe/Vienna`.
 
 - „Leistung“: die mittlere Leistung (Summe der Phasen) von Netz, PV gesamt, Haus (Verbrauch), Akku
@@ -165,6 +165,10 @@ die Zeitzone ist `Europe/Vienna`.
   core (`pv_total`, `house_load`), einzeln gemessene Lasten kommen als „Einzellast“ dazu. Die PV
   je Wechselrichter fehlt absichtlich, sie würde doppelt zählen.
 - „Ladestand“: der Ladestand des Akkus und der Fahrzeuge aus `raw`.
+- „Klimaanlage“: Ist- und Solltemperatur des Raums in °C, der gesendete Versatz und das Echo der
+  Regelung in K sowie die Leistung der Klimaanlage in Watt aus `raw`. Der gesendete Versatz wird
+  nur bei Änderung geschrieben; das Panel führt ihn bis zur nächsten Änderung fort. Der Wunsch
+  steht nicht in InfluxDB, sondern im Entscheidungslog.
 - „Preise“: Bezugspreis brutto und Einspeisevergütung in ct/kWh je Viertelstunde aus `long`. Die
   Preise von morgen erscheinen, sobald sie geholt sind und der Zeitraum bis morgen reicht.
 - „Abrechnung je Tag“: kWh sowie Kosten und Erlös in Euro je Fluss und Tag aus `long`, immer die

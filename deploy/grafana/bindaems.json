@@ -275,6 +275,159 @@
     },
     {
       "type": "row",
+      "id": 10,
+      "title": "Klimaanlage",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 19
+      },
+      "panels": []
+    },
+    {
+      "type": "timeseries",
+      "id": 11,
+      "title": "Klimaanlage",
+      "description": "Ist- und Solltemperatur des Raums (links, °C), der gesendete Versatz und das Echo der Regelung (rechts, K) und die elektrische Leistung (Watt, ohne eigene Achse) aus den Rohdaten (Retention Policy raw, 90 Tage). Der gesendete Versatz wird nur bei Änderung geschrieben und bis zur nächsten Änderung fortgeführt.",
+      "datasource": {
+        "type": "influxdb",
+        "uid": "${DS_BINDAEMS}"
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 24,
+        "x": 0,
+        "y": 20
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "celsius",
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "fillOpacity": 0,
+            "showPoints": "never",
+            "spanNulls": false,
+            "barAlignment": 0,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": "/^(Versatz|Echo) /"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "suffix: K"
+              },
+              {
+                "id": "custom.axisPlacement",
+                "value": "right"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": "/^Leistung /"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "watt"
+              },
+              {
+                "id": "custom.axisPlacement",
+                "value": "hidden"
+              },
+              {
+                "id": "custom.fillOpacity",
+                "value": 10
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "influxdb",
+            "uid": "${DS_BINDAEMS}"
+          },
+          "refId": "A",
+          "query": "SELECT mean(\"actual_c\") FROM \"raw\".\"thermal\" WHERE $timeFilter GROUP BY time($__interval), \"id\" fill(null)",
+          "rawQuery": true,
+          "resultFormat": "time_series",
+          "alias": "Ist $tag_id"
+        },
+        {
+          "datasource": {
+            "type": "influxdb",
+            "uid": "${DS_BINDAEMS}"
+          },
+          "refId": "B",
+          "query": "SELECT mean(\"setpoint_c\") FROM \"raw\".\"thermal\" WHERE $timeFilter GROUP BY time($__interval), \"id\" fill(null)",
+          "rawQuery": true,
+          "resultFormat": "time_series",
+          "alias": "Soll $tag_id"
+        },
+        {
+          "datasource": {
+            "type": "influxdb",
+            "uid": "${DS_BINDAEMS}"
+          },
+          "refId": "C",
+          "query": "SELECT mean(\"offset_k\") FROM \"raw\".\"thermal\" WHERE $timeFilter GROUP BY time($__interval), \"id\" fill(null)",
+          "rawQuery": true,
+          "resultFormat": "time_series",
+          "alias": "Echo $tag_id"
+        },
+        {
+          "datasource": {
+            "type": "influxdb",
+            "uid": "${DS_BINDAEMS}"
+          },
+          "refId": "D",
+          "query": "SELECT last(\"offset_sent_k\") FROM \"raw\".\"thermal\" WHERE $timeFilter GROUP BY time($__interval), \"id\" fill(previous)",
+          "rawQuery": true,
+          "resultFormat": "time_series",
+          "alias": "Versatz $tag_id"
+        },
+        {
+          "datasource": {
+            "type": "influxdb",
+            "uid": "${DS_BINDAEMS}"
+          },
+          "refId": "E",
+          "query": "SELECT mean(\"p_w\") FROM \"raw\".\"power\" WHERE \"source\" = 'thermal' AND $timeFilter GROUP BY time($__interval), \"id\" fill(null)",
+          "rawQuery": true,
+          "resultFormat": "time_series",
+          "alias": "Leistung $tag_id"
+        }
+      ]
+    },
+    {
+      "type": "row",
       "id": 5,
       "title": "Preise",
       "collapsed": false,
@@ -282,7 +435,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 19
+        "y": 29
       },
       "panels": []
     },
@@ -299,7 +452,7 @@
         "h": 8,
         "w": 24,
         "x": 0,
-        "y": 20
+        "y": 30
       },
       "fieldConfig": {
         "defaults": {
@@ -365,7 +518,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 28
+        "y": 38
       },
       "panels": []
     },
@@ -382,7 +535,7 @@
         "h": 9,
         "w": 24,
         "x": 0,
-        "y": 29
+        "y": 39
       },
       "fieldConfig": {
         "defaults": {
@@ -443,7 +596,7 @@
         "h": 9,
         "w": 24,
         "x": 0,
-        "y": 38
+        "y": 48
       },
       "fieldConfig": {
         "defaults": {

@@ -22,7 +22,7 @@ from bindaems.core.telemetry.sampler import DERIVED_FIELDS, RULES
 DASHBOARD = Path("deploy/grafana/bindaems.json")
 SOURCES = Path("src/bindaems")
 INPUT = "DS_BINDAEMS"
-ROWS = ("Leistung", "Ladestand", "Preise", "Abrechnung je Tag")
+ROWS = ("Leistung", "Ladestand", "Klimaanlage", "Preise", "Abrechnung je Tag")
 
 
 @dataclass(frozen=True)
@@ -42,6 +42,12 @@ KNOWN = {
         frozenset({"source", "id", "phase"}),
     ),
     "soc": Known(frozenset({"raw", "long"}), frozenset({"pct"}), frozenset({"id"})),
+    # Klimaanlage: nur in `raw`; die Leistung steht als `power` mit source=thermal
+    "thermal": Known(
+        frozenset({"raw"}),
+        frozenset({"actual_c", "setpoint_c", "offset_k", "offset_sent_k"}),
+        frozenset({"id"}),
+    ),
     "price": Known(frozenset({"long"}), frozenset({"ct_kwh"}), frozenset({"kind"})),
     "ledger": Known(frozenset({"long"}), frozenset({"kwh", "eur"}), frozenset({"flow"})),
     "decision": Known(
@@ -52,7 +58,7 @@ KNOWN = {
 }
 # Werte von Tags, die das Dashboard festlegt
 TAG_VALUES = {
-    ("power", "source"): {"grid", "pv", "battery", "load", "wallbox", "derived"},
+    ("power", "source"): {"grid", "pv", "battery", "load", "wallbox", "thermal", "derived"},
     ("power", "id"): {"house_load", "pv_total"},  # Festlegungen; die übrigen ids sind Geräte
     ("power", "phase"): {"total"},
     ("price", "kind"): {"import_gross", "feed_in"},
@@ -162,9 +168,20 @@ def test_the_rows_hold_the_expected_data() -> None:
     for derived in ("house_load", "pv_total"):
         assert f"\"id\" = '{derived}'" in joined["Leistung"], derived
     assert "\"source\" = 'pv'" not in joined["Leistung"]
+    assert "thermal" not in joined["Leistung"]  # die Klimaanlage hat eine eigene Zeile
     assert "\"phase\" = 'total'" in joined["Leistung"]
     assert 'FROM "raw"."power"' in joined["Leistung"]
     assert 'FROM "raw"."soc"' in joined["Ladestand"]
+    climate = joined["Klimaanlage"]  # Felder: Ist, Soll, Echo, Versatz
+    for field in (
+        "actual_c",
+        "setpoint_c",
+        "offset_k",
+        "offset_sent_k",
+    ):
+        assert f'("{field}")' in climate, field
+    assert 'FROM "raw"."thermal"' in climate
+    assert "\"source\" = 'thermal'" in climate and '"p_w"' in climate  # Leistung
     for kind in ("import_gross", "feed_in"):
         assert f"\"kind\" = '{kind}'" in joined["Preise"], kind
     assert 'FROM "long"."price"' in joined["Preise"]
@@ -252,6 +269,10 @@ def test_known_list_matches_the_writers() -> None:
         assert rules
         assert {rule.field for rule in rules} == KNOWN[measurement].fields
         assert {tag for rule in rules for tag in rule.tags} == KNOWN[measurement].tags
+    # thermal: nur die Felder der eigenen Regeln, Tag `id`; die Leistung läuft über `power`
+    thermal = [rule for rule in RULES if rule.measurement == "thermal"]
+    assert {rule.field for rule in thermal} == KNOWN["thermal"].fields
+    assert {tag for rule in thermal for tag in rule.tags} == KNOWN["thermal"].tags
     sources = {rule.tags["source"] for rule in RULES if rule.measurement == "power"}
     # `derived` steht nicht in RULES: der Sampler schreibt es aus DERIVED_FIELDS (ohne „_w“)
     derived = {name.removesuffix("_w") for name in DERIVED_FIELDS}

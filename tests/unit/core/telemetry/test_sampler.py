@@ -80,6 +80,36 @@ def test_other_power_mappings() -> None:
     assert point("vehicle.tesla.charger_power_kw", 11.0)[2] == {"p_w": 11000.0}
 
 
+def test_thermal_points() -> None:
+    def point(signal: str, kind: SignalKind = M) -> Point:
+        found = signal_to_point(signal, r(21.5, kind))
+        assert found is not None
+        return found
+
+    assert point("thermal.buero.actual_c") == Point(
+        "thermal", {"id": "buero"}, {"actual_c": 21.5}, T0
+    )
+    assert point("thermal.buero.setpoint_c").fields == {"setpoint_c": 21.5}
+    # das Echo der Regelung heißt in InfluxDB offset_k
+    assert point("thermal.buero.offset_active_k") == Point(
+        "thermal", {"id": "buero"}, {"offset_k": 21.5}, T0
+    )
+    assert point("thermal.buero.offset_sent_k", S) == Point(
+        "thermal", {"id": "buero"}, {"offset_sent_k": 21.5}, T0
+    )
+    assert point("thermal.buero.power_w") == Point(
+        "power", {"source": "thermal", "id": "buero", "phase": "total"}, {"p_w": 21.5}, T0
+    )
+
+
+def test_thermal_states_and_wish_go_to_status() -> None:
+    # Zustände der Klimaanlage nur als status; der Wunsch steht im Entscheidungslog, nicht hier
+    for name in ("cmd_on", "cooling", "venting", "heating", "running"):
+        found = signal_to_point(f"thermal.buero.{name}", r(True, S))
+        assert found is not None and found.measurement == "status", name
+    assert signal_to_point("thermal.buero.wish", r(1.0)) is None
+
+
 def test_numbers_are_always_floats() -> None:
     power = signal_to_point("grid.l1.power_w", r(500))
     status = signal_to_point("ess.hub4_mode", r(1, S))
@@ -109,6 +139,9 @@ def test_cadence_for() -> None:
     assert cadence_for("grid.l1.voltage_v", M) == 10.0
     assert cadence_for("grid.energy_import_kwh", M) == 60.0
     assert cadence_for("battery.soc_pct", M) == 30.0
+    for name in ("actual_c", "setpoint_c", "offset_active_k", "power_w"):
+        assert cadence_for(f"thermal.buero.{name}", M) == 10.0, name
+    assert cadence_for("thermal.buero.offset_sent_k", S) is None  # Zustand: bei Änderung
     assert cadence_for("vehicle.egolf.soc_pct", S) is None  # HA-Zustand: bei Änderung
     assert cadence_for("ess.hub4_mode", S) is None
 

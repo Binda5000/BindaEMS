@@ -51,6 +51,10 @@ def _power(
     return _Rule(re.compile(pattern), "power", tags, field, cadence_s, scale)
 
 
+def _thermal(signal: str, field: str) -> _Rule:
+    return _Rule(re.compile(rf"thermal\.{_ID}\.{signal}"), "thermal", {"id": "{id}"}, field, 10.0)
+
+
 _ENERGY_TAGS = {"source": "{source}", "id": "{id}", "direction": "{direction}"}
 _ENERGY_PREFIX = r"(?P<source>[^.]+)(?:\.(?P<id>[^.]+))?"
 
@@ -81,6 +85,7 @@ RULES: tuple[_Rule, ...] = (
     _power(rf"load\.{_ID}\.power_w", "load", "{id}", _TOTAL, "p_w", 10.0),
     _power(rf"load\.{_ID}\.{_P}\.power_w", "load", "{id}", _PHASE, "p_w", 10.0),
     _power(rf"vebus\.{_P}\.(?P<id>ac_in|ac_out)_power_w", "vebus", "{id}", _PHASE, "p_w", 10.0),
+    _power(rf"thermal\.{_ID}\.power_w", "thermal", "{id}", _TOTAL, "p_w", 10.0),
     _power(rf"vehicle\.{_ID}\.charger_power_kw", "vehicle", "{id}", _TOTAL, "p_w", 10.0, 1000.0),
     _Rule(
         re.compile(rf"{_ENERGY_PREFIX}\.energy_(?P<direction>import|export)_kwh"),
@@ -96,6 +101,12 @@ RULES: tuple[_Rule, ...] = (
         "kwh",
         60.0,
     ),
+    # Klimaanlage: ``offset_active_k`` ist das Echo der Regelung und heißt in InfluxDB ``offset_k``;
+    # ``offset_sent_k`` ist ein Zustand und geht deshalb nur bei Änderung hinaus
+    _thermal("actual_c", "actual_c"),
+    _thermal("setpoint_c", "setpoint_c"),
+    _thermal("offset_active_k", "offset_k"),
+    _thermal("offset_sent_k", "offset_sent_k"),
     _Rule(re.compile(r"(?P<id>battery)\.soc_pct"), "soc", {"id": "{id}"}, "pct", 30.0),
     _Rule(re.compile(rf"vehicle\.{_ID}\.soc_pct"), "soc", {"id": "{id}"}, "pct", 30.0),
 )
