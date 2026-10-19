@@ -216,9 +216,10 @@ Jeder Schritt ist eine Zeile im Bericht. Vor jedem Schritt, der schreibt, fragt 
   keine Pakete an. **Watchdog:** Der gestoppte core sendet keinen Heartbeat. Ist EVCS oder Victron
   live, löst der Watchdog am Cerbo nach 90 s aus; führe den Punkt darum nur aus, solange kein Aktor
   live ist (Betriebshandbuch, „Klimaanlage (Phase 6a)“, „Reihenfolge an der Anlage“, und Abschnitt
-  4, „Geordnetes Herunterfahren“). Danach startest du den core wieder, wenn er vorher lief. Es braucht keine Secrets und fragt den Cerbo nicht. Es sendet nur auf
-  ausdrücklichen Aufruf und nach der Bestätigung vor dem Start; mit `coe_probe listen` (hört nur
-  mit, sendet nie) prüfst du vorher den Empfang (Betriebshandbuch, „Klimaanlage (Phase 6a)“).
+  4, „Geordnetes Herunterfahren“). Danach startest du den core wieder, wenn er vorher lief. Das
+  Werkzeug braucht keine Secrets und fragt den Cerbo nicht. Es sendet nur auf ausdrücklichen Aufruf
+  und nach der Bestätigung vor dem Start; mit `coe_probe listen` (hört nur mit, sendet nie)
+  prüfst du vorher den Empfang (Betriebshandbuch, „Klimaanlage (Phase 6a)“).
   - „Werte der Empfangstabelle“: Alle Werte kommen binnen `stale_after_s` des Geräts an; sonst endet
     der Punkt, ohne zu senden, und der Befund nennt die fehlenden Werte.
   - „Versatz +0,5 K“: gesendet, das Echo der UVR zeigt ihn binnen 60 s; danach die Rückfrage „Zeigt

@@ -4704,7 +4704,7 @@ beim Kühlen „mehr“ = negativer Versatz, beim Heizen „mehr“ = positiver 
 
 **Der Aktor** heißt `thermal.<name>` (im Beispiel `thermal.klima`) und startet wie jeder Aktor im
 Dry-Run (Abschnitt 13, „Dry-Run und live“): Er sendet dann zyklisch **0** und protokolliert im
-Entscheidungslog, welchen Versatz er sendete. Live geht er erst nach dem Prüfprotokoll Teil 2,
+Entscheidungslog, welchen Versatz er senden würde. Live geht er erst nach dem Prüfprotokoll Teil 2,
 Punkt `thermal`, mit `live_allowed: true` und dem Live-Schalter eines Admins (Spec 8.7). Nichts
 davon geschieht von selbst.
 
@@ -4724,8 +4724,9 @@ was die Regelung nach Akku und Autos noch einspeisen würde. Die Strategie im co
 und rechnet einen Leistungswunsch in ganzen Stufen (positiv: mehr Leistung, negativ: weniger); erst
 der Aktor macht daraus das Vorzeichen je Betriebsart. Je Zyklus gewinnt die erste Regel, die greift:
 
-1. **Sofort 0** bei veralteten Werten, nicht steuerbarem Aktor, Zustand DEGRADED, Betriebsart
-   `aus`, `lueften` oder `unbekannt` und bei einem Wechsel der Betriebsart.
+1. **Sofort 0** bei veralteten Werten, nicht steuerbarem Aktor (auch ohne Echo der UVR, unten bei
+   „Live schalten“), Zustand DEGRADED, Betriebsart `aus`, `lueften` oder `unbekannt` und bei einem
+   Wechsel der Betriebsart.
 2. **Spitze oder Phasenlast:** Droht dem 15-min-Wächter eine Überschreitung oder der Phasenwächter
    greift, fällt ein positiver Wunsch sofort auf 0.
 3. **Autos haben Vorrang:** Ein Auto in „PV-Überschuss“ oder „Min+PV“, das mehr aufnehmen könnte
@@ -4737,8 +4738,13 @@ der Aktor macht daraus das Vorzeichen je Betriebsart. Je Zyklus gewinnt die erst
    - **Hysterese:** Das Urteil „folgt“ oder „begrenzt sich selbst“ wechselt erst nach 120 s. Ein
      Auto, das sich selbst begrenzt, zählt erst wieder, wenn es bis auf eine Stufe den Strom zieht,
      bei dem es sich begrenzte.
-   - **Auto bei „Laden aus“:** Es hat nur Vorrang, wenn Einspeisung plus Leistung der Klimaanlage
-     seine Startleistung erreichen; sonst nimmt die Klimaanlage den Überschuss.
+   - **Auto bei „Laden aus“:** Es hat nur Vorrang, wenn Einspeisung plus die Leistung, die die
+     Klimaanlage freigeben kann, seine Startleistung erreichen; sonst nimmt die Klimaanlage den
+     Überschuss. Freigeben kann sie nur, was sie über ihrer Leistung bei Versatz 0 aufnimmt, und
+     nur bei positivem Wunsch: Die Grundlast beim Heizen oder Kühlen bekäme ein Auto nie. Die
+     Leistung bei Versatz 0 lernt der core, wenn der Versatz 5 min lang 0 war; bis dahin zählt die
+     ganze Leistung. Hat ein Auto einmal gezählt, zählt es weiter, solange der Überschuss um
+     höchstens eine Stufe (1 A) unter seiner Startleistung liegt (Hysterese).
 4. **Der Akku hat Vorrang:** Liegt der SOC mehr als 5 Prozentpunkte unter der Schwelle (der geplante
    SOC am Ende des Slots, ohne Plan `strategy.battery_soc_pct`, Standard 90 %), geht ein positiver
    Wunsch je 10 min eine Stufe zurück. Mit dem Hinweis „mehr“ des Plans entfällt die Schwelle.
@@ -4891,6 +4897,12 @@ Einheit 10, Rohwert 120`; ein Paket, das kein gültiges CoE-V2-Paket ist, ergibt
 
 - **Alle Werte der Empfangstabelle kommen an** und der Absender ist `192.168.81.92`. Das C.M.I.
   sendet bei Änderung und zyklisch.
+- **Jeder Wert kommt spätestens alle `stale_after_s` (180 s) neu**, auch wenn er sich nicht ändert:
+  Der core lässt jeden Wert für sich veralten, nicht nur die ganze Quelle. Stelle an den
+  CAN-Ausgängen des C.M.I. eine Intervallzeit deutlich kürzer als `stale_after_s` ein (etwa 1 min).
+  Sonst veraltet ein ruhiger Wert wie das Echo, obwohl Pakete ankommen: Der Aktor ist dann nicht
+  steuerbar, und der Alarm `thermal.echo_mismatch.<name>` kommt. Hör mit `--sekunden` über
+  `stale_after_s` mit und prüfe, dass jeder Wert in diesem Fenster mehrmals erscheint.
 - **Die Knotennummer** ist 56. Steht eine andere im Paket, ändere `node` in `receive`.
 - **Die Einheit der Leistung** (Analog 4, F51): Der Plan nimmt Einheit 10 (kW) mit zwei
   Nachkommastellen an, also `scale: 100`. Zeigt die Zeile eine andere Einheit oder einen anderen
@@ -4922,7 +4934,9 @@ Danach startest du den core wieder, wenn er vorher lief (`docker compose up -d e
 
 1. **Werte der Empfangstabelle:** Alle Werte kommen binnen `stale_after_s` an. Sonst endet der
    Punkt, ohne etwas zu senden, und der Befund nennt, was fehlt (auch Pakete mit falscher Einheit
-   oder von fremder Adresse).
+   oder von fremder Adresse). Das C.M.I. muss jeden Wert zyklisch binnen `stale_after_s` neu
+   senden (oben, „Empfang prüfen“); fehlt ein Wert, der sich selten ändert, prüfe zuerst die
+   Intervallzeit seines CAN-Ausgangs.
 2. **Versatz +0,5 K:** Das Werkzeug sendet ihn, das Echo der UVR zeigt ihn binnen 60 s. Dann fragt
    es: „Zeigt die Visu der UVR „EMS“ +0,5 K?“ Sieh dazu auf die Visu der UVR.
 3. **Versatz 0:** gesendet, das Echo zeigt 0.
@@ -4945,12 +4959,13 @@ Mit laufendem core, Regelbetrieb an und dem Aktor im Dry-Run ändert sich an der
 Der Adapter sendet alle 30 s **0**, und das Echo bleibt 0. Beobachte mindestens **7 Tage**:
 
 - **System** → „Klimaanlage“ zeigt „Werte kommen an“, Betriebsart, Ist, Soll ohne Versatz, Versatz,
-  Wunsch, Leistung, den letzten Empfang und den Grund. Dort steht auch „Fremde Pakete“ und
-  „Fehlerhafte Pakete“, wenn welche ankamen.
+  Wunsch, Leistung, den letzten Empfang und den Grund. Dort steht auch „Fremde Pakete“,
+  „Fehlerhafte Pakete“ und „Werte mit falscher Einheit“, wenn welche ankamen.
 - **Entscheidungen** (und Grafana, Panel „Klimaanlage“) zeigen, welchen Versatz der core im
   Live-Betrieb senden würde („Dry-Run, nicht gesendet“), mit den Gründen. Kühlen und Heizen, Wechsel
   der Betriebsart, Wolken, Autos und ein teurer Abend sollten sich darin wiederfinden.
 - **Kein Alarm** `thermal.echo_mismatch.<name>` und kein `control.thermal_exception` (unten).
+  Fehlt das Echo, kommt der Alarm auch im Dry-Run, ohne dass je ein Versatz gesendet wurde.
 - Das Echo bleibt im Dry-Run 0; das Log zeigt den gewünschten Versatz. Beides gehört zusammen: Würde
   das Echo etwas anderes als 0 zeigen, wäre das ein Befund (Alarm `thermal.echo_mismatch.<name>`).
 
@@ -4979,9 +4994,21 @@ Punkt `thermal`, ist bestanden. Dann:
    Bestätigung „evcc ist ganz abgeschaltet.“ entfällt, denn die Klimaanlage hängt nicht an evcc. Der
    Aktor braucht auch keinen Watchdog: Die UVR setzt den Versatz nach 5 min selbst auf 0.
 3. Der core sendet jetzt den Versatz, aber **nur im Regelbetrieb** und solange er ihn in den letzten
-   10 s freigegeben hat. Steht der Zyklus (Ausnahme, Hänger), sendet der Adapter ab sofort 0, ohne
-   die 5 min der UVR abzuwarten. Das Echo bestätigt jeden Versatz (Frist 60 s).
-4. Zurück: im UI „Auf Dry-Run…“. Der core übergibt den Aktor und sendet 0.
+   10 s freigegeben hat. Freigegeben wird nur ein Versatz ungleich 0, den die Regelung in diesem
+   Zyklus entschieden hat; 0 geht immer hinaus und wird nie als „unverändert“ verworfen. Die
+   Freigabe läuft nach 10 s ab, dann sendet der Adapter 0. Wirft der Zyklus eine Ausnahme, steht
+   der Versatz darum nach höchstens 10 s auf 0. Hängt der ganze Prozess, steht auch der Adapter
+   (er läuft im selben Prozess) und sendet nichts mehr; dann setzt die UVR den Versatz nach 5 min
+   selbst auf 0. Das Echo bestätigt jeden Versatz (Frist 60 s).
+   **Ohne Echo** (Analog 3 veraltet oder nie angekommen) ist der Aktor nicht steuerbar, auch wenn
+   die übrigen Werte ankommen: Die Strategie wünscht 0 (`thermal_stale`), die Karte „Aktoren“ nennt
+   „Kein Echo des Versatzes von der UVR.“, und nach 120 s kommt der Alarm
+   `thermal.echo_mismatch.<name>`.
+4. Zurück: im UI „Auf Dry-Run…“. Der core übergibt den Aktor und sendet 0. Die Übergabe endet erst,
+   wenn das Echo die 0 bestätigt. Fehlt das Echo (das C.M.I. ist weg), bleibt der Aktor in
+   „Übergabe“ und, mit Regelbetrieb aus, der Zustand DEGRADED statt OBSERVE, bis das Echo
+   zurückkehrt. Das ist sicher: Der Adapter sendet 0, und die UVR fällt ohne Paket nach 5 min
+   ohnehin auf 0.
 
 Die Safety-Schicht klemmt jeden Versatz auf ±`max_offset_k`, rundet auf 0,5 K und lässt höchstens
 eine Stufe je 10 min weg von 0 zu (Befund `offset.step`); 0 geht immer sofort. Das Echo der UVR ist
@@ -5002,7 +5029,7 @@ im UI, „Warum?“). Der Grund beschreibt den Wunsch der Strategie, nicht jeden
 | `thermal_peak` | Spitze droht, Klimaanlage nicht mehr | Der 15-min-Wächter oder der Phasenwächter macht Druck: Versatz sofort auf 0. |
 | `thermal_mode` | Betriebsart gewechselt, Versatz 0 | Die Klimaanlage wechselte zwischen Kühlen und Heizen: sofort 0. |
 | `thermal_stale` | Keine Werte der Klimaanlage, Versatz 0 | Die Werte sind veraltet (länger als `stale_after_s` kein Paket) oder der Aktor ist nicht steuerbar: sofort 0. Solange die Quelle fehlt, erzeugt die Regelung keinen Befehl; die 0 geht vom Adapter hinaus. Im Log steht der Eintrag erst, wenn die Werte zurückkehren und der Versatz vorher nicht 0 war. |
-| `thermal_off` | Klimaanlage aus oder lüftet, Versatz 0 | Betriebsart `aus`, `lueften` oder `unbekannt`, oder der Zustand DEGRADED: Versatz 0. Auch der Anfangsgrund nach einem Start. |
+| `thermal_off` | Klimaanlage aus oder lüftet, Versatz 0 | Betriebsart `aus`, `lueften` oder `unbekannt`, oder der Zustand DEGRADED: Versatz 0. Auch der Anfangsgrund nach einem Start: Der erste Eintrag nach dem Start ist meist eine 0 mit diesem Grund. |
 
 Ein Eintrag lautet etwa
 `Klimaanlage (PV-Überschuss in die Klimaanlage): Sollwertversatz −0,5 K – gesendet und bestätigt.`
@@ -5020,10 +5047,11 @@ Diese Alarme zeigt das UI unter **System** → „core“ → „Alarme“ (Absc
 | `actuator.failed.thermal.<name>`: {Name}: Sicherwert für „setpoint_offset“ nicht bestätigt. | Fehler | Wie bei jedem Aktor: Das Echo bestätigte die 0 des sicheren Zustands oder der Übergabe nach 3 Versuchen nicht. Meist besteht keine Verbindung (siehe unten); die UVR fällt ohnehin nach 5 min ohne Paket auf 0. |
 
 Dazu meldet die Karte **System** → „Aktoren“ als Hinweis „Keine Werte der Klimaanlage.“, solange die
-Klimaanlage nicht steuerbar ist (die Quelle liefert nichts). Nimmt der Adapter einen Versatz nicht
-an, weil sein Port nicht offen ist, steht im Entscheidungslog „nicht gesendet“ mit „CoE-Verbindung:
-Versatz nicht angenommen.“ Die Home-Assistant-Warnung „Gerät offline“ nennt die Klimaanlage, wenn
-der Adapter getrennt ist.
+Quelle nichts liefert, und „Kein Echo des Versatzes von der UVR.“, solange Werte ankommen, aber das
+Echo fehlt; in beiden Fällen ist die Klimaanlage nicht steuerbar. Nimmt der Adapter einen Versatz
+nicht an, weil sein Port nicht offen ist, steht im Entscheidungslog „nicht gesendet“ mit
+„CoE-Verbindung: Versatz nicht angenommen.“ Die Home-Assistant-Warnung „Gerät offline“ nennt die
+Klimaanlage, wenn der Adapter getrennt ist.
 
 ### Was bei „Keine Werte der Klimaanlage“ zu tun ist
 
@@ -5035,8 +5063,9 @@ bekommt keinen PV-Überschuss mehr. Prüfe der Reihe nach:
 
 1. **Zahlen der Karte:** „Letzter Empfang“ nennt, wann das letzte gültige Paket ankam. „Fremde
    Pakete“ (Absender nicht `cmi_host`, oder kein Wert der Empfangstabelle) und „Fehlerhafte Pakete“
-   zeigen, ob Pakete ankommen, aber nicht gelten. Health: `GET /v1/health`, `thermal.<name>`
-   (`connected`, `last_packet_at`, `foreign_packets`, `bad_packets`).
+   zeigen, ob Pakete ankommen, aber nicht gelten; „Werte mit falscher Einheit“ zählt Werte, deren
+   Einheit oder Art nicht zur Empfangstabelle passt. Health: `GET /v1/health`, `thermal.<name>`
+   (`connected`, `last_packet_at`, `foreign_packets`, `bad_packets`, `unit_mismatch`).
 2. **Absender und Port:** Sendet das C.M.I. an `192.168.82.20`, Port 5442? Ein anderer Absender als
    `cmi_host` (etwa eine NAT-Adresse hinter einer Firewall) wird verworfen; setze `cmi_host` auf die
    Adresse, die tatsächlich ankommt (`coe_probe listen`).

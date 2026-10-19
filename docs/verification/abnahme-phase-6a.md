@@ -225,8 +225,10 @@ mit den gesendeten und bestätigten Entscheidungen (`result` `ok`, nicht Dry-Run
 sortiert): Sie listet jede Entscheidung, die den Betrag erhöht oder das Vorzeichen ohne den Weg über
 0 wechselt, mit Zeit, altem und neuem Wert, der Stufe (neuer Betrag minus alter) und dem Abstand in
 Sekunden zur letzten Erhöhung. Als alter Wert gilt der Wert der vorherigen Entscheidung; er stimmt
-mit dem Echo überein, solange es bestätigt ist. Jede Zeile hat die Stufe 0,5 und einen Abstand von
-mindestens 600 s; die letzte Spalte ist leer (nur „erste“ steht beim ersten Eintrag). Die Zeit einer
+mit dem Echo überein, solange es bestätigt ist. Die Spalten sind Zeit, alter Wert, neuer Wert,
+Stufe, Abstand und Hinweis. Jede Zeile hat die Stufe 0,5 und einen Abstand von mindestens 600 s;
+beim ersten Eintrag steht statt des Abstands „erste“. Die letzte Spalte ist leer; steht dort
+„Vorzeichenwechsel ohne 0“, ist das ein Befund. Die Zeit einer
 Entscheidung ist die ihres Abschlusses, also der Bestätigung durch das Echo, und weicht von der Zeit
 des Sendens um die Dauer bis zum Echo ab (erwartet wenige Sekunden); Abstände von 598 s bis 600 s
 sind darum noch in Ordnung, und der Stand an der Anlage entscheidet:

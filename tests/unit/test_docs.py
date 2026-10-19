@@ -1124,7 +1124,7 @@ def test_climate_chapter_matches_the_code(capsys: pytest.CaptureFixture[str]) ->
     # Konfigurationsschlüssel, die Sensoren in Home Assistant und die Werkzeuge stehen wie im Code
     # (Plan 6a, Task 13).
     from bindaems.app.ha.entities import build_entities
-    from bindaems.core.actuators.thermal import ECHO_MISMATCH_S
+    from bindaems.core.actuators.thermal import ECHO_MISMATCH_S, REASON_NO_ECHO
     from bindaems.core.control.charging import FOLLOW_HOLD_S, RAMP_UP_S
     from bindaems.core.regulation_link import THERMAL_EXCEPTION
     from bindaems.core.runtime import THERMAL_PERMIT_S
@@ -1148,9 +1148,15 @@ def test_climate_chapter_matches_the_code(capsys: pytest.CaptureFixture[str]) ->
     assert f"`{THERMAL_EXCEPTION}`" in section
     assert "`thermal.echo_mismatch.<name>`" in section
     assert f"mehr als {ECHO_MISMATCH_S:.0f} s" in section
-    # die Zeiten der Autos und der Freigabe
-    assert f"{RAMP_UP_S:.0f} s" in section and f"{FOLLOW_HOLD_S:.0f} s" in section
+    # die Zeiten der Autos und der Freigabe, je an ihrer Stelle (nicht irgendwo im Kapitel)
+    assert f"**Anlauf:** {RAMP_UP_S:.0f} s nach einem eigenen Start" in section
+    assert f"Anlauf eines Autos ({RAMP_UP_S:.0f} s)" in section
+    assert f"„begrenzt sich selbst“ wechselt erst nach {FOLLOW_HOLD_S:.0f} s" in section
     assert f"nach {THERMAL_PERMIT_S:.0f} s ab" in section
+    assert f"in den letzten {THERMAL_PERMIT_S:.0f} s freigegeben" in section
+    # die Freigabe nur für einen Versatz ungleich 0, ohne Echo nicht steuerbar (Rulings R26, R27)
+    assert "Freigegeben wird nur ein Versatz ungleich 0" in section
+    assert f"„{REASON_NO_ECHO}“" in section
     # jeder Schlüssel der Konfiguration steht im Kapitel
     keys = {*CoeOffsetConfig.model_fields, *CoeReceive.model_fields}
     keys |= set(ThermalStrategyConfig.model_fields)
@@ -1184,5 +1190,6 @@ def test_climate_chapter_matches_the_code(capsys: pytest.CaptureFixture[str]) ->
     assert "abnahme-phase-6a.md" in Path("docs/verification/README.md").read_text("utf-8")
     assert "7 Tage" in abnahme and "±3 K" in abnahme
     # der Watchdog beim Stoppen des core steht im Kapitel, in der Abnahme und im README
-    for text in (section, " ".join(abnahme.split())):
-        assert "Watchdog" in text and "90 s" in text
+    readme = Path("docs/verification/README.md").read_text("utf-8")
+    for text in (section, " ".join(abnahme.split()), " ".join(readme.split())):
+        assert re.search(r"löst der Watchdog (am Cerbo )?nach 90 s", text), text[:80]
