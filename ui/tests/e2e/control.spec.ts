@@ -115,12 +115,26 @@ test('Bedienen stellt den Tesla auf Geplant mit Ziel 80 % und Abfahrt 07:00', as
 			await context.close();
 		}
 	} finally {
-		await page.goto('/laden');
-		await setTarget(page, '60', '17:30');
-		await page.reload();
-		await expect(card.getByRole('spinbutton', { name: 'Ziel-SOC' })).toHaveValue('60');
+		await restoreTarget(page);
 	}
+	await page.reload();
+	await expect(card.getByRole('spinbutton', { name: 'Ziel-SOC' })).toHaveValue('60');
 });
+
+/**
+ * Stellt den Demo-Stand des Tesla (60 %, 17:30) über die API zurück, mit Zeitlimit. Über die Karte
+ * hinge das, wenn sie schon 60 %/17:30 zeigt („Übernehmen“ schickt dann nichts), und der Fehler
+ * des Tests ginge in einer Zeitüberschreitung unter.
+ */
+async function restoreTarget(page: Page): Promise<void> {
+	const csrf = (await page.context().cookies()).find((cookie) => cookie.name === 'bindaems_csrf');
+	const response = await page.request.put('/api/control/vehicles/tesla/target', {
+		data: { target_soc_pct: 60, departure: '17:30' },
+		headers: { 'X-CSRF-Token': csrf?.value ?? '' },
+		timeout: 10_000
+	});
+	expect(response.status()).toBe(200);
+}
 
 /** Karte „Akku-Unterstützung“ auf der Seite „Laden“ */
 function supportCard(page: Page) {
