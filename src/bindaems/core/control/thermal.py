@@ -154,6 +154,11 @@ class ThermalStrategy:
         self._cars_back_at: float | None = None
         self._battery_back_at: float | None = None
 
+    @property
+    def wish(self) -> ThermalWish:
+        """Der Wunsch des letzten ``step``; vor dem ersten und nach ``reset`` 0."""
+        return self._wish
+
     def reset(self) -> None:
         """Zurück in den Anfangszustand: Wunsch 0 und keine laufende Zeit."""
         self._wish = _INITIAL

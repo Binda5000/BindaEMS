@@ -452,8 +452,11 @@ class ChargeController:
         self._views: dict[str, _View] = {}
         self._cars: tuple[CarView, ...] = ()  # je Ladepunkt des letzten ``step`` (``cars``)
         self._unmet_w = 0.0  # der offene Wunsch der Autos in PV und Min+PV (``unmet_surplus_w``)
-        # je Auto bei „Laden aus“ (eigener Wert): Startleistung und offener Wunsch, in W
-        self._held: tuple[tuple[float, float], ...] = ()
+        # je Auto bei „Laden aus“ (eigener Wert): das Auto, Startleistung, offener Wunsch und eine
+        # Stufe von 1 A auf seinen Phasen (die Hysterese), in W
+        self._held: tuple[tuple[str, float, float, float], ...] = ()
+        # die Autos bei „Laden aus“, die beim letzten ``unmet_surplus_w`` zählten (Ruling R28)
+        self._spare_met: frozenset[str] = frozenset()
         self._ramp: dict[str, datetime] = {}  # je Aktor der letzte eigene Start oder Anstieg
         self._follow: dict[str, _Follow] = {}  # je Auto das Urteil „folgt seinem Befehl“
         # wer an welcher Wallbox stand, im letzten ``step`` (``wallbox_health``)
@@ -716,7 +719,7 @@ class ChargeController:
         self._views = {}
         self._wallboxes = {}
         self._cars = ()
-        self._unmet_w, self._held = 0.0, ()
+        self._unmet_w, self._held, self._spare_met = 0.0, (), frozenset()
         self._ramp, self._follow = {}, {}
         self._vehicle_wallbox = {}
         self._commands_hour = {}
@@ -772,12 +775,22 @@ class ChargeController:
         - „Laden aus“ (R23 c): Die eigene „Laden aus“ befiehlt 0 A. Ein Auto, das die Regelung so
           aushält, zählt nur, wenn ``spare_w`` seine Startleistung erreicht (``min_a × U ×
           Phasen``); sonst könnte es mit dem Überschuss nie starten. ``spare_w`` ist, was ein
-          Start nutzen könnte: die Einspeisung und die Leistung der Klimaanlagen.
+          Start nutzen könnte: die Einspeisung und die Leistung, die die Klimaanlagen freigeben
+          könnten (Ruling R28, ``Regulation.thermal_step``). Mit Hysterese (Ruling R28): Ein Auto,
+          das beim letzten Aufruf zählte, zählt weiter, bis ``spare_w`` eine Stufe von 1 A auf
+          seinen Phasen unter seine Startleistung fällt; danach wieder erst ab ihr. Die Regelung
+          ruft das deshalb einmal je Zyklus.
 
         Anders als ein Wunsch aus dem Überschuss hängt das nicht davon ab, was die Klimaanlage
         gerade aufnimmt. Vor dem ersten ``step`` und nach ``idle`` ist es 0.
         """
-        held = sum(unmet_w for start_w, unmet_w in self._held if spare_w >= start_w)
+        met = frozenset(
+            vehicle
+            for vehicle, start_w, _, band_w in self._held
+            if spare_w >= (start_w - band_w if vehicle in self._spare_met else start_w)
+        )
+        self._spare_met = met
+        held = sum(unmet_w for vehicle, _, unmet_w, _ in self._held if vehicle in met)
         return self._unmet_w + held
 
     def overload_level(self) -> OverloadLevel:
@@ -921,7 +934,7 @@ class ChargeController:
                 continue  # das Auto begrenzt sich selbst
             unmet_w = max(0.0, point.max_a * step_w - car.power_w)
             if commanded_a == 0.0:
-                held.append((point.min_a * step_w, unmet_w))
+                held.append((car.vehicle, point.min_a * step_w, unmet_w, step_w))
             else:
                 total += unmet_w
         self._unmet_w, self._held, self._follow = total, tuple(held), follow

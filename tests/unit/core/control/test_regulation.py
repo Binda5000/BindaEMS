@@ -30,10 +30,13 @@ from bindaems.core.control.peak_guard import (
 )
 from bindaems.core.control.plan_exec import ActiveSlot, plan_health
 from bindaems.core.control.regulation import (
+    THERMAL_BASE_SETTLE_S,
+    THERMAL_BASE_TAU_S,
     THERMAL_RESYNC_S,
     Regulation,
     RegulationInputs,
     ThermalInputs,
+    _Thermal,
     battery_cars,
     peak_cars,
     peak_wanted_w,
@@ -42,7 +45,7 @@ from bindaems.core.control.thermal import ThermalMode
 from bindaems.core.safety.limits import HardLimits
 from bindaems.core.safety.ranges import check_range
 from bindaems.core.safety.types import Outcome, Verdict
-from bindaems.shared.config import Config
+from bindaems.shared.config import CoeOffsetConfig, Config
 from bindaems.shared.control import (
     VICTRON,
     ChargeMode,
@@ -1097,12 +1100,14 @@ def klima(
     blocked: frozenset[tuple[str, CommandKind]] = frozenset(),
     intent: Intent = INTENT,
     accept: bool = True,
+    power_w: float | None = None,
     **kw: Any,
 ) -> list[ControlCommand]:
     """Ein Zyklus ``s`` Sekunden nach ``T0`` mit der Klimaanlage; zurück kommen nur ihre Befehle.
 
-    Ohne Angabe: 900 W Einspeisung, SOC 95 %, Kühlen, frisch, steuerbar, kein Auto an der EVCS
-    und kein Echo. ``accept`` nimmt jeden ihrer Befehle an; ``kw`` geht an ``inputs``.
+    Ohne Angabe: 900 W Einspeisung, SOC 95 %, Kühlen, frisch, steuerbar, kein Auto an der EVCS,
+    kein Echo und unbekannte Leistung der Klimaanlage (``power_w``). ``accept`` nimmt jeden ihrer
+    Befehle an; ``kw`` geht an ``inputs``.
     """
     base = kw.pop("present", PRESENT)
     present = dict(base) if echo is None else {**base, OFFSET_KEY: echo}
@@ -1115,7 +1120,7 @@ def klima(
         intent=intent,
         **given,
     )
-    seen = ThermalInputs(fresh, mode, controllable, locked, charge.now.timestamp())
+    seen = ThermalInputs(fresh, mode, controllable, locked, charge.now.timestamp(), power_w)
     given_inputs = RegulationInputs(charge, thermal={"klima": seen}, degraded=degraded)
     found = regulation.step(given_inputs)
     assert all(x.command.actuator != KLIMA for x in found)  # die Klimaanlage nur in thermal_step
@@ -1422,12 +1427,13 @@ def test_regulation_cars_go_first(reg_with_klima, cfg) -> None:
     assert [(x.command.value, x.command.reasons) for x in found] == [(0.0, ("thermal_cars",))]
 
 
-def held_car_offsets(cfg: Config, power_w: float | None) -> list:
-    """Die Klimaanlage steht bei einer Stufe mehr (−0,5 K); dann steckt der e-Golf in PV an, bei
-    1500 W Einspeisung. Die Regelung hält ihn bei „Laden aus“ (jedes Urteil nimmt an); die
-    Klimaanlage meldet ``power_w``. Zurück kommen ihre Befehle ab dann mit ihrer Sekunde."""
+def held_car_offsets(cfg: Config, power_w: float | None, base_w: float | None = None) -> list:
+    """Die Klimaanlage steht bei einer Stufe mehr (−0,5 K), davor meldete sie ``base_w`` (ohne:
+    unbekannt); dann steckt der e-Golf in PV an, bei 1500 W Einspeisung. Die Regelung hält ihn bei
+    „Laden aus“ (jedes Urteil nimmt an); die Klimaanlage meldet ``power_w``. Zurück kommen ihre
+    Befehle ab dann mit ihrer Sekunde."""
     regulation = Regulation(cfg, HardLimits.from_config(cfg), started=T0)
-    klima_run(regulation, cfg, 0, 600)
+    klima_run(regulation, cfg, 0, 600, power_w=base_w)
     found = []
     for s in range(610, 1300, 10):
         charge = inputs(
@@ -1456,6 +1462,47 @@ def test_regulation_a_held_car_goes_first_only_with_its_start_power(cfg) -> None
     # Überschuss und geht nach 600 s eine Stufe weiter.
     assert held_car_offsets(cfg, 1200.0) == [(1200, -1.0, ("thermal_more",))]
     assert held_car_offsets(cfg, None) == [(1200, -1.0, ("thermal_more",))]
+
+
+def test_regulation_counts_only_the_power_the_klima_can_free(cfg) -> None:  # Ruling R28
+    # Ohne Versatz nahm die Klimaanlage 600 W (gelernt, solange der Versatz 0 war); bei −0,5 K
+    # nimmt sie 1300 W. Freigeben kann die Strategie nur die 700 W darüber: mit 1500 W
+    # Einspeisung 2200 W, unter der Startleistung des e-Golf (2760 W). Er zählt nicht, und sie
+    # geht nach 600 s eine Stufe weiter.
+    assert held_car_offsets(cfg, 1300.0, base_w=600.0) == [(1200, -1.0, ("thermal_more",))]
+    # Kann sie 1300 W freigeben (1900 W bei −0,5 K), reicht es für den Start: Sie weicht.
+    assert held_car_offsets(cfg, 1900.0, base_w=600.0)[0] == (620, 0.0, ("thermal_cars",))
+
+
+def test_klima_power_without_offset_is_learned_after_it_settled(cfg) -> None:  # Ruling R28
+    # Gelernt wird die Leistung bei Versatz 0 erst, wenn er THERMAL_BASE_SETTLE_S lang 0 war
+    # (die Leistung folgt dem Versatz träge), dann gleitend mit THERMAL_BASE_TAU_S. Bis dahin
+    # zählt die ganze Leistung (R23 c). Beim Wechsel der Betriebsart beginnt es neu; bei einem
+    # Wunsch von höchstens 0 gibt die Strategie nichts frei, in Lüften und Aus ebenso.
+    device = cfg.thermal.devices["klima"]
+    assert isinstance(device, CoeOffsetConfig)
+    unit = _Thermal(device)
+
+    def seen(s: float, power_w: float | None, mode: ThermalMode = "kuehlen") -> ThermalInputs:
+        return ThermalInputs(True, mode, True, False, s, power_w)
+
+    assert (THERMAL_BASE_SETTLE_S, THERMAL_BASE_TAU_S) == (300.0, 300.0)
+    unit.learn(seen(0, 1300.0), 0.0)  # eben zurück auf 0: Die Leistung ist noch hoch
+    unit.learn(seen(299, 1300.0), 0.0)
+    assert unit.freeable_w(seen(299, 1300.0), wish_steps=1) == 1300.0  # nichts gelernt
+    unit.learn(seen(300, 600.0), 0.0)
+    assert unit.freeable_w(seen(300, 1300.0), wish_steps=1) == 700.0
+    unit.learn(seen(450, 900.0), 0.0)  # halbe Zeitkonstante: halber Weg
+    assert unit.freeable_w(seen(450, 1300.0), wish_steps=1) == 550.0
+    unit.learn(seen(460, 2000.0), -0.5)  # mit Versatz lernt sie nicht
+    assert unit.freeable_w(seen(460, 1300.0), wish_steps=1) == 550.0
+    assert unit.freeable_w(seen(460, 600.0), wish_steps=1) == 0.0
+    assert unit.freeable_w(seen(460, 1300.0), wish_steps=0) == 0.0
+    assert unit.freeable_w(seen(460, 1300.0), wish_steps=-1) == 0.0
+    assert unit.freeable_w(seen(460, None), wish_steps=1) == 0.0
+    assert unit.freeable_w(seen(460, 1300.0, "lueften"), wish_steps=1) == 0.0
+    unit.learn(seen(470, 1500.0, "heizen"), 0.0)  # neue Betriebsart: neu lernen
+    assert unit.freeable_w(seen(470, 1500.0, "heizen"), wish_steps=1) == 1500.0
 
 
 def test_regulation_without_grid_power_knows_no_export(reg_with_klima, cfg) -> None:

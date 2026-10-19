@@ -2728,6 +2728,22 @@ def test_unmet_surplus_leaves_out_a_held_car_that_could_never_start(cfg) -> None
     assert unmet_after(cfg, ChargeMode.PV, current=8.0, on=True, evcs_obs=at_8_a) == 3680.0
 
 
+def test_unmet_surplus_start_power_has_a_hysteresis(cfg) -> None:  # Ruling R28 (T12b #6)
+    # Der e-Golf bei „Laden aus“ zählt ab seiner Startleistung (2760 W) und bleibt dabei, bis
+    # ``spare_w`` eine Stufe von 1 A auf seinen Phasen (460 W) darunter fällt; erst dann zählt er
+    # nicht mehr, und wieder erst ab der Startleistung. Rauschen um die Startleistung lässt die
+    # Klimaanlage so nicht zwischen „darf“ und „weicht“ springen.
+    off = evcs(charging=False, power_w=0.0)
+    c = controller(cfg)
+    found: list[float] = []
+    spares = [2760.0, 2760.0, 2400.0, 2300.0, 2299.0, 2700.0, 2759.0, 2760.0, 2301.0]
+    for s, spare_w in enumerate(spares):
+        given = {"intent": egolf_in(ChargeMode.PV), "evcs_obs": off, "grid_obs": grid(grid_w=0.0)}
+        accept(c, c.step(inputs(cfg, s=s, **given)))
+        found.append(c.unmet_surplus_w(spare_w))
+    assert found == [0.0, 7360.0, 7360.0, 7360.0, 0.0, 0.0, 0.0, 7360.0, 7360.0]
+
+
 def test_unmet_surplus_leaves_out_a_tesla_that_stopped_by_itself(cfg) -> None:  # Ruling R18
     # Beim Tesla ist „Laden an“ des Aktors der Ladezustand des Autos, kein Befehl: Hört er von
     # selbst auf (in der App, ohne „Complete“), begrenzt er sich, auch wenn die Regelung ihn

@@ -29,6 +29,7 @@ from bindaems.tools.sim.scenarios import (
     KLIMA_ACTUATOR,
     KLIMA_BASE_W,
     KLIMA_EXPORT_W,
+    KLIMA_HEAT_W,
     KLIMA_MORE_W,
     KLIMA_NOISE_W,
     KLIMA_SETTLED_S,
@@ -37,9 +38,11 @@ from bindaems.tools.sim.scenarios import (
     QUARTER_S,
     SCENARIOS,
     TESLA,
+    WINTER_NOON,
     Checks,
     _changes,
     _klima_pv_w,
+    _klima_setup,
     _Plug,
     _receipts,
     _setup,
@@ -334,3 +337,36 @@ async def test_klima_without_echo_stays_at_zero_and_quiet(cfg, tmp_path) -> None
     assert last is not None and (last.wish, last.reason) == (0, "thermal_stale")
     _, health = result.health[-1]
     assert "thermal.echo_mismatch.klima" in {alarm["id"] for alarm in health.alarms}
+
+
+HEAT_SPARE_W = 1300.0  # Einspeisung ohne Versatz beim Heizen: unter der Startleistung des e-Golf
+
+
+async def test_klima_base_load_does_not_count_for_a_car_that_can_never_start(cfg, tmp_path) -> None:
+    # Abschlussreview I4, Ruling R28: Heizen mit 1,5 kW ohne Versatz, 1,3 kW Einspeisung. Nach
+    # 40 min steckt der e-Golf in PV an; für den Start braucht er 2760 W. Einspeisung und die
+    # ganze Leistung der Klimaanlage erreichen das, aber ihre Leistung ohne Versatz kann die
+    # Strategie nicht freigeben: Zählte sie mit, wiche die Klimaanlage bis 0 zurück, und der
+    # e-Golf startete trotzdem nie. Es zählt nur, was sie über ihrer Leistung bei 0 aufnimmt; sie
+    # behält den Überschuss.
+    base = SCENARIOS["klima-auto-vorrang"]
+    pv = _klima_pv_w(HEAT_SPARE_W, KLIMA_HEAT_W)
+    scenario = replace(
+        base,
+        start=WINTER_NOON,
+        setup=partial(_klima_setup, mode="heizen", base_w=KLIMA_HEAT_W),
+        events=(
+            *_weather(
+                WINTER_NOON, base.duration_s, base.seed, pv=lambda t: pv, noise_w=KLIMA_NOISE_W
+            ),
+            (CAR_PLUG_S, _Plug(EGOLF, EVCS_BOX)),
+        ),
+        checks=Checks(()),
+    )
+    result = await run_scenario(scenario, cfg, tmp_path)
+    assert result.failures == []
+    codes = _klima_codes(result)
+    assert "thermal_cars" not in {code for _, code in codes}, codes
+    assert [k for k, code in codes if code == "thermal_more"][:3] == [0.5, 1.0, 1.5]
+    assert not any(s.cars[EGOLF].charging for s in result.samples)
+    assert _export_w(result) < KLIMA_MORE_W

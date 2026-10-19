@@ -100,6 +100,11 @@ _OFFSET: Final = CommandKind.SETPOINT_OFFSET  # der Sollwertversatz einer Klimaa
 # So lange darf das Echo nach einer Bestätigung vom bestätigten Versatz abweichen, bevor die
 # Strategie neu beginnt: so lang wie die Bestätigung einer Klimaanlage (``confirm_timeout_s``).
 THERMAL_RESYNC_S: Final = 60.0
+# Die Leistung einer Klimaanlage ohne Versatz (Ruling R28): gelernt erst, wenn der Versatz so lange
+# 0 war (die Leistung folgt ihm träge), dann gleitend mit dieser Zeitkonstante
+THERMAL_BASE_SETTLE_S: Final = 300.0
+THERMAL_BASE_TAU_S: Final = 300.0
+_OFFSET_MODES: Final = frozenset({"heizen", "kuehlen"})  # nur dort wirkt ein Versatz
 
 
 @dataclass(frozen=True)
@@ -154,10 +159,13 @@ class RegulationInputs:
 
 
 class _Thermal:
-    """Eine Klimaanlage im Kern: ihre Strategie und der Abgleich mit dem Echo.
+    """Eine Klimaanlage im Kern: ihre Strategie, der Abgleich mit dem Echo und ihre Leistung ohne
+    Versatz.
 
     ``confirmed`` ist der Versatz, den das letzte Ergebnis ``OK`` bestätigt hat (das Echo zeigte
     ihn), ``apart_since`` die Zeit, seit der das Echo davon abweicht; beide ``None`` ohne.
+    ``base_w`` ist die Leistung bei Versatz 0 in der Betriebsart ``base_mode`` (``learn``), ohne
+    Messung ``None``.
     """
 
     def __init__(self, cfg: CoeOffsetConfig) -> None:
@@ -166,12 +174,59 @@ class _Thermal:
         self.strategy = ThermalStrategy(cfg)
         self.confirmed: float | None = None
         self.apart_since: float | None = None
+        self.base_w: float | None = None
+        self.base_mode: ThermalMode | None = None
+        self._base_at: float | None = None  # Zeit der letzten Messung in ``base_w``
+        self._zero_since: float | None = None  # seit wann der Versatz 0 ist
 
     def reset(self) -> None:
-        """Die Strategie beginnt neu bei 0; der Abgleich mit dem Echo ebenso."""
+        """Die Strategie beginnt neu bei 0; der Abgleich mit dem Echo ebenso. Die Leistung ohne
+        Versatz bleibt: Sie ist eine Messung, kein Stand der Strategie."""
         self.strategy.reset()
         self.confirmed = None
         self.apart_since = None
+
+    def freeable_w(self, seen: ThermalInputs, *, wish_steps: int) -> float:
+        """Die Leistung in W, die die Strategie freigeben könnte, ginge sie auf Versatz 0 zurück
+        (Ruling R28): beim Wunsch ``wish_steps`` über 0 die Leistung über ``base_w``, ohne
+        gelernte Leistung die ganze (wie Ruling R23 c). Bei einem Wunsch von höchstens 0, außer
+        beim Heizen und Kühlen und ohne bekannte Leistung ist es 0: Weiter zurück als 0 geht sie
+        für die Autos nicht.
+
+        Ihre Grundlast bei Versatz 0 könnte ein Auto nie bekommen; zählte sie mit, wiche die
+        Klimaanlage einem Auto, das mit dem Überschuss trotzdem nie startete.
+        """
+        power = seen.power_w
+        if wish_steps <= 0 or power is None or seen.mode not in _OFFSET_MODES:
+            return 0.0
+        if self.base_w is None or seen.mode != self.base_mode:
+            return power
+        return max(0.0, power - self.base_w)
+
+    def learn(self, seen: ThermalInputs, offset_k: float) -> None:
+        """Lernt die Leistung bei Versatz 0 aus diesem Zyklus mit dem entschiedenen ``offset_k``.
+
+        Gelernt wird nur beim Heizen und Kühlen und erst, wenn der Versatz ``THERMAL_BASE_SETTLE_S``
+        lang 0 war: Die Leistung folgt ihm träge. Die erste Messung gilt sofort, danach gleitend
+        mit ``THERMAL_BASE_TAU_S``. Eine neue Betriebsart beginnt ohne gelernte Leistung.
+        """
+        if seen.mode != self.base_mode:
+            self.base_mode, self.base_w, self._base_at = seen.mode, None, None
+            self._zero_since = None
+        if offset_k != 0.0 or seen.mode not in _OFFSET_MODES:
+            self._zero_since = None
+            return
+        now, power = seen.mono_now, seen.power_w
+        if self._zero_since is None:
+            self._zero_since = now
+        if power is None or now - self._zero_since < THERMAL_BASE_SETTLE_S:
+            return
+        if self.base_w is None or self._base_at is None:
+            self.base_w = power
+        else:
+            weight = min(1.0, max(0.0, now - self._base_at) / THERMAL_BASE_TAU_S)
+            self.base_w += weight * (power - self.base_w)
+        self._base_at = now
 
 
 class Regulation:
@@ -284,9 +339,11 @@ class Regulation:
         Wert ``strategy.battery_soc_pct``) und dessen Hinweis (ohne Slot ``neutral``), den Druck des
         15-min-Wächters (``PeakGuard.pressure``) und der Überlast (über ``NONE``) und den offenen
         Wunsch der Autos (``unmet_surplus_w``), alles aus diesem Zyklus. Ein Auto bei „Laden aus“
-        zählt darin nur, wenn die Einspeisung und die Leistung aller Klimaanlagen mit Eingaben
-        (unbekannt: 0) seine Startleistung erreichen (Ruling R23 c). Steuerbar ist sie nur,
-        wenn der Aktor steuerbar und nicht gesperrt ist; DEGRADED kommt aus ``inputs.degraded``.
+        zählt darin nur, wenn die Einspeisung und die Leistung, die die Klimaanlagen mit Eingaben
+        freigeben könnten, seine Startleistung erreichen (Ruling R23 c): je Klimaanlage nur ihre
+        Leistung über der bei Versatz 0 (``_Thermal.freeable_w``, Ruling R28; unbekannt: 0).
+        Steuerbar ist sie nur, wenn der Aktor steuerbar und nicht gesperrt ist; DEGRADED kommt
+        aus ``inputs.degraded``.
 
         Ein Befehl ``setpoint_offset`` mit dem Grund des Wunschs kommt nur, wenn der Versatz vom
         letzten eigenen abweicht, der Aktor steuerbar und nicht gesperrt ist und die Art nicht in
@@ -303,7 +360,11 @@ class Regulation:
         import_w = None if grid_w is None else max(0.0, grid_w)
         peak = self.peak_guard.pressure()
         phase = self.charger.overload_level() > OverloadLevel.NONE
-        thermal_w = sum(seen.power_w or 0.0 for seen in inputs.thermal.values())
+        thermal_w = sum(
+            device.freeable_w(seen, wish_steps=device.strategy.wish.steps)
+            for name, device in self._thermal.items()
+            if (seen := inputs.thermal.get(name)) is not None
+        )
         unmet_w = self.charger.unmet_surplus_w((export_w or 0.0) + thermal_w)
         found: list[ControlCommand] = []
         health: dict[str, dict[str, Any]] = {}
@@ -340,6 +401,7 @@ class Regulation:
             health[name] = _thermal_json(wish, hint)
             offset = offset_for(wish, seen.mode, device.step_k)
             targets[name] = offset + 0.0  # aus -0.0 wird 0.0
+            device.learn(seen, offset)
             if not acting or blocked or not self._thermal_last.changed(key, offset):
                 continue
             command = self._thermal_last.command(actuator, _OFFSET, offset, (wish.reason,))
