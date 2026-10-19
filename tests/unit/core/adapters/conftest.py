@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterable, Sequence
 from typing import Any
 
@@ -10,13 +11,14 @@ import pytest
 from pydantic import SecretStr
 from tests.helpers import T0
 
+from bindaems.core.adapters.coe import CoeAdapter
 from bindaems.core.adapters.evcs import EvcsAdapter
 from bindaems.core.adapters.homeassistant import HaAdapter
 from bindaems.core.adapters.tessie import TessieAdapter
 from bindaems.core.adapters.twc import TwcAdapter
 from bindaems.core.adapters.victron_mqtt import MqttMessage, VictronMqttAdapter
 from bindaems.core.state.store import StateStore
-from bindaems.shared.config import Config, EvcsConfig, TwcConfig
+from bindaems.shared.config import CoeOffsetConfig, Config, EvcsConfig, TwcConfig
 from bindaems.shared.timeutil import ManualClock
 
 P = "c0619ab1234"
@@ -280,3 +282,116 @@ def ha_env(cfg: Config) -> Callable[..., tuple[Any, FakeConnection, StateStore]]
         return adapter, conn, store
 
     return build
+
+
+class FakeDatagram:
+    """Ersatz für den UDP-Port: sammelt Gesendetes und reicht Empfangenes an den Adapter."""
+
+    def __init__(self, on_datagram: Callable[[bytes, tuple[str, int]], None]) -> None:
+        self.on_datagram = on_datagram
+        self.sent: list[tuple[bytes, tuple[str, int]]] = []
+        self.closed = False
+
+    def sendto(self, data: bytes, addr: tuple[str, int]) -> None:
+        self.sent.append((data, addr))
+
+    def close(self) -> None:
+        self.closed = True
+
+
+class GatedSleep:
+    """Ersatz für ``asyncio.sleep``: jeder Aufruf wartet, bis ``release`` ihn freigibt."""
+
+    def __init__(self) -> None:
+        self.calls: list[float] = []
+        self._waiting: list[asyncio.Future[None]] = []
+
+    async def __call__(self, delay: float) -> None:
+        self.calls.append(delay)
+        future: asyncio.Future[None] = asyncio.get_running_loop().create_future()
+        self._waiting.append(future)
+        await future
+
+    def release(self) -> None:
+        waiting, self._waiting = self._waiting, []
+        for future in waiting:
+            if not future.done():
+                future.set_result(None)
+
+
+class CoeEnv:
+    """Der CoE-Adapter mit Ersatzport, von Hand gestellten Uhren und Takt (``tick``)."""
+
+    def __init__(self, cfg: CoeOffsetConfig, ports: list[Any] | None = None) -> None:
+        self.cfg = cfg
+        self.clock = ManualClock(T0)
+        self.now = 1000.0  # Monotonic-Uhr des Adapters
+        self.store = StateStore(self.clock)
+        self.sleep = GatedSleep()
+        self.ports: list[FakeDatagram] = []
+        self.open_errors: list[Exception] = []
+        self.adapter = CoeAdapter(
+            "klima", cfg, self.store, self._open, clock=self.mono, sleep=self.sleep
+        )
+        self.task: asyncio.Task[None] | None = None
+
+    async def _open(
+        self, on_datagram: Callable[[bytes, tuple[str, int]], None], listen_port: int
+    ) -> FakeDatagram:
+        if self.open_errors:
+            raise self.open_errors.pop(0)
+        port = FakeDatagram(on_datagram)
+        self.ports.append(port)
+        return port
+
+    @property
+    def port(self) -> FakeDatagram:
+        return self.ports[-1]
+
+    def mono(self) -> float:
+        return self.now
+
+    def advance(self, seconds: float) -> None:
+        self.now += seconds
+        self.clock.advance(seconds)
+
+    async def settle(self) -> None:
+        for _ in range(10):
+            await asyncio.sleep(0)
+
+    async def start(self) -> None:
+        if self.task is None:
+            self.task = asyncio.create_task(self.adapter.run())
+        await self.settle()
+
+    async def tick(self) -> None:
+        """Lässt jede wartende Pause des Adapters einmal ablaufen."""
+        self.sleep.release()
+        await self.settle()
+
+    async def receive(self, data: bytes, addr: tuple[str, int]) -> None:
+        await self.start()
+        self.port.on_datagram(data, addr)
+        await self.settle()
+
+    async def stop(self) -> None:
+        if self.task is not None:
+            self.task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self.task
+
+
+@pytest.fixture
+async def coe_env(cfg: Config) -> AsyncIterator[Callable[[], CoeEnv]]:
+    envs: list[CoeEnv] = []
+
+    def build() -> CoeEnv:
+        klima = cfg.thermal.devices["klima"]
+        assert isinstance(klima, CoeOffsetConfig)
+        env = CoeEnv(klima)
+        envs.append(env)
+        return env
+
+    yield build
+    for env in envs:
+        await env.stop()
