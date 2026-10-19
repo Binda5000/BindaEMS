@@ -463,7 +463,7 @@ vorn. Die Warnung „Ziel-SOC unerreichbar“ gilt für alle Fahrzeuge.
 
 ### Benachrichtigungen
 
-Die app meldet Alarme und abgelehnte Befehle in Home Assistant. Dafür braucht sie dort einen Token
+Die app meldet Alarme, Warnungen und abgelehnte Befehle in Home Assistant. Dafür braucht sie dort einen Token
 (`BINDAEMS_HA_TOKEN` in der `.env`, derselbe wie für den core) und den Abschnitt `homeassistant` mit
 `url`. Die Meldung läuft über die WebSocket-API von Home Assistant. Der core ruft weiter nie Dienste in
 Home Assistant auf.
@@ -479,16 +479,42 @@ homeassistant:
   `bindaems_competitor_foreign_wallbox_evcs`) und dem Titel „BindaEMS“, und, wenn `notify_service`
   (`notify.*`) eingestellt ist, zusätzlich über diesen Dienst, etwa als Push auf das Handy. Verschwindet
   der Alarm, entfernt die app die persistente Meldung wieder.
+- Jede **Warnung** (die `binary_sensor` mit der Geräteklasse `problem`, oben), die 30 s ohne
+  Unterbrechung besteht, meldet sich ebenso einmal, als persistente Meldung mit der Kennung
+  `bindaems_warning_<Objekt-ID>` und dem Titel „BindaEMS“ und über `notify_service`; verschwindet die
+  Warnung, entfernt die app die Meldung:
+
+  | Warnung | Kennung | Text |
+  |---|---|---|
+  | Mitregelndes System | `bindaems_warning_problem_competitor` | „Mitregelndes System erkannt.“ |
+  | Preise fehlen | `bindaems_warning_problem_prices` | „Preise fehlen.“ |
+  | Gerät offline | `bindaems_warning_problem_device_offline` | „Gerät offline: {Namen}.“ (die Adapter) |
+  | Zuordnung unklar | `bindaems_warning_problem_assignment_unclear` | „Zuordnung Auto und Wallbox unklar.“ |
+  | Ziel-SOC unerreichbar (je Fahrzeug) | `bindaems_warning_<Fahrzeug>_target` | „Ziel-SOC unerreichbar: {Name} erreicht bis {HH:MM} voraussichtlich nur {soc} %.“ |
+
+  - „Watchdog ausgelöst“ meldet sich nicht zusätzlich: Das tut schon sein Alarm.
+  - „Mitregelndes System“ schweigt, solange ein Alarm `competitor.*` der Schwere „Fehler“ gemeldet
+    ist; steht ihre Meldung schon, entfernt die app sie, sobald der Alarm gemeldet ist. Danach zählt
+    sie neu.
+  - „Ziel-SOC unerreichbar“ meldet sich je Fahrzeug in „Geplant“ nach derselben Rechnung wie „Ziel
+    erreichbar“ (oben): {HH:MM} ist die Abfahrt, {soc} der erwartete Ladestand an der Abfahrt. Bleibt
+    das Ziel über viele neue Pläne unerreichbar, bleibt es bei der einen Meldung (mit dem Text vom
+    Zeitpunkt der Meldung); wird es erreichbar oder verlässt das Auto „Geplant“, verschwindet sie,
+    und wird es danach wieder unerreichbar, kommt eine neue. Ohne erwarteten Ladestand meldet sie
+    sich nicht.
+  - Ist eine Warnung „unbekannt“ (etwa ohne core), zählt sie nicht weiter, eine stehende Meldung
+    bleibt aber stehen.
 - **Abgelehnte Befehle** aus Home Assistant erscheinen als persistente Meldung `bindaems_ha_command`
   (oben).
-- Höchstens **10 Meldungen je Minute** über alle Alarme und Ablehnungen zusammen, davon höchstens
-  **4 für Ablehnungen**: Den Alarmen bleiben so immer mindestens 6, auch wenn eine Automation eine Flut
-  ungültiger Befehle sendet. Eine Ablehnung über dem Budget steht nur im Log der app.
+- Höchstens **10 Meldungen je Minute** über alle Alarme, Warnungen und Ablehnungen zusammen, davon
+  höchstens **4 für Ablehnungen**: Den Alarmen und Warnungen bleiben so immer mindestens 6, auch wenn
+  eine Automation eine Flut ungültiger Befehle sendet. Eine Ablehnung über dem Budget steht nur im Log
+  der app; eine Warnung über dem Budget folgt wie ein Alarm, sobald es frei ist.
 - Ein fehlgeschlagener Aufruf stört nichts; er steht im Log (`Dienstaufruf an Home Assistant
   fehlgeschlagen`). Ein Alarm gilt erst als gemeldet, wenn die persistente Meldung angelegt ist: Über
   dem Budget oder während Home Assistant neu startet versucht es die app erneut, solange der Alarm
-  besteht, je Alarm höchstens einmal je Minute. Der `notify`-Dienst folgt erst auf die angelegte
-  Meldung, einmal. Auch das Entfernen wiederholt die app so, bis es gelingt.
+  (oder die Warnung) besteht, je Alarm höchstens einmal je Minute. Der `notify`-Dienst folgt erst auf
+  die angelegte Meldung, einmal. Auch das Entfernen wiederholt die app so, bis es gelingt.
 - **Ohne `BINDAEMS_HA_TOKEN`** (oder ohne den Abschnitt `homeassistant`) sendet die app nichts. Die
   Komponente `ha-notify` unter **System** zeigt dann „Benachrichtigungen aus: BINDAEMS_HA_TOKEN
   fehlt.“.

@@ -143,6 +143,24 @@ def test_statistics_sensors_in_the_guide_match_the_entities() -> None:
     assert "nicht im 5-s-Takt" in flat and "alle 15 Minuten" in flat
 
 
+def test_warning_notifications_in_the_guide_match_the_app() -> None:
+    # Die Tabelle „Benachrichtigungen“ in Abschnitt 7 nennt je Warnung Kennung und Text wie die
+    # app (Plan 4b, Task 16).
+    from bindaems.app.ha.notify import TARGET_SUFFIX, TARGET_TEXT, WARNING_PREFIX, WARNING_TEXTS
+
+    section = _guide_section("7. Home Assistant über MQTT")
+    rows = [line.strip() for line in section.splitlines() if line.strip().startswith("| ")]
+    for oid, text in WARNING_TEXTS.items():
+        row = next((line for line in rows if f"`{WARNING_PREFIX}{oid}`" in line), "")
+        assert f"„{text.format(names='{Namen}')}“" in row, oid
+    target = next(
+        (line for line in rows if f"`{WARNING_PREFIX}<Fahrzeug>{TARGET_SUFFIX}`" in line), ""
+    )
+    sentence = TARGET_TEXT.format(name="{Name}", hhmm="{HH:MM}", soc="{soc}")
+    assert f"„{sentence}“" in target
+    assert "watchdog_tripped" not in WARNING_TEXTS
+
+
 def test_operations_guide_describes_charging() -> None:
     text = Path("docs/betrieb.md").read_text(encoding="utf-8")
     for topic in ("## Laderegelung", "## Simulator", '"vehicles"', "-m bindaems.tools.sim"):

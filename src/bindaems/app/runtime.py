@@ -49,7 +49,12 @@ from bindaems.app.forecast.routes import forecast_router
 from bindaems.app.forecast.service import ForecastService
 from bindaems.app.ha.commands import HaCommandHandler, LogRejections
 from bindaems.app.ha.entities import HaInputs, build_entities, build_inputs, support_of
-from bindaems.app.ha.notify import AlarmNotifications, HaNotifier, websocket_service_call
+from bindaems.app.ha.notify import (
+    AlarmNotifications,
+    HaNotifier,
+    WarningNotifications,
+    websocket_service_call,
+)
 from bindaems.app.ha.publisher import AiomqttHaTransport, HaPublisher
 from bindaems.app.history.influx import InfluxQueryError, InfluxReader
 from bindaems.app.history.routes import history_router
@@ -291,6 +296,7 @@ class AppRuntime:
         mqtt = cfg.homeassistant.mqtt if cfg.homeassistant is not None else None
         self.ha_notifier: HaNotifier | None = None
         self.alarm_notifications: AlarmNotifications | None = None
+        self.warning_notifications: WarningNotifications | None = None
         self._notify_status: ComponentStatus | None = None
         if cfg.homeassistant is not None:
             if secrets.ha_token is not None:
@@ -301,6 +307,9 @@ class AppRuntime:
                 )
                 self.alarm_notifications = AlarmNotifications(
                     self.live, self.ha_notifier, self._clock
+                )
+                self.warning_notifications = WarningNotifications(
+                    cfg, self._current_ha_inputs, self.ha_notifier, self._clock
                 )
             else:
                 self._notify_status = ComponentStatus(
@@ -503,8 +512,12 @@ class AppRuntime:
                 ("ha-inputs", self._ha_inputs_loop),
                 ("ha", partial(self._ha_loop, self.ha_publisher)),
             ]
+        elif self.warning_notifications is not None:  # die Warnungen brauchen die Werte auch
+            jobs.append(("ha-inputs", self._ha_inputs_loop))
         if self.alarm_notifications is not None:
             jobs.append(("ha-notify", self.alarm_notifications.run))
+        if (warnings := self.warning_notifications) is not None:
+            jobs.append(("ha-warnings", partial(self._ha_warnings_loop, warnings)))
         async with asyncio.TaskGroup() as group:
             self._tasks = [
                 group.create_task(self._supervise(name, job), name=name) for name, job in jobs
@@ -715,6 +728,11 @@ class AppRuntime:
         """Verbindet erst, wenn die ersten Werte bestimmt sind."""
         await self._ha_ready.wait()
         await publisher.run()
+
+    async def _ha_warnings_loop(self, warnings: WarningNotifications) -> None:
+        """Prüft die Warnungen erst, wenn die ersten Werte bestimmt sind."""
+        await self._ha_ready.wait()
+        await warnings.run()
 
     async def _maintenance_loop(self) -> None:
         while True:

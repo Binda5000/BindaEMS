@@ -149,6 +149,7 @@ def test_runtime_wires_the_cost_basis(runtime, cfg: Config, tmp_path) -> None:
 
 def test_without_token_the_rejections_are_only_logged(runtime) -> None:
     assert runtime.ha_notifier is None and runtime.alarm_notifications is None
+    assert runtime.warning_notifications is None
     assert type(runtime.ha_publisher._commands).__name__ == "HaCommandHandler"
     assert type(runtime.ha_publisher._commands._rejections).__name__ == "LogRejections"
 
@@ -157,6 +158,7 @@ def test_with_token_the_notifier_takes_over_the_rejections(cfg: Config, tmp_path
     rt = make_runtime(cfg, tmp_path, ha_token="h" * 20)
     try:
         assert rt.ha_notifier is not None and rt.alarm_notifications is not None
+        assert rt.warning_notifications is not None
         assert rt.ha_publisher._commands._rejections is rt.ha_notifier
         client = TestClient(rt.app, base_url="https://testserver")
         rt.auth.create_user("chris", PASSWORD, "admin", actor="cli", source="cli")
