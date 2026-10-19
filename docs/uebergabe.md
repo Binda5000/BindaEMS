@@ -58,8 +58,16 @@ gelassen“, „Planer: Plausibilität gegen Optimierer“).
 Plan 4a ändert nur die app und das UI (der core bleibt gleich) und braucht an der Anlage nur
 den Neubau von `ems-app`: Sessions, Einstandspreis, Kosten je Auto, Abgleich mit den Zählern,
 Nachrechnung von Lücken, die Seite „Statistik“, Statistik-Sensoren in HA und ein Grafana-Dashboard.
-Er schaltet nichts an der Anlage. **Der nächste Entwicklungsschritt ist Plan 4b „Geplantes Laden“**
-(ändert den core), nach der Abnahme der Phase 3.
+Er schaltet nichts an der Anlage.
+**Plan 4b (Geplantes Laden, der zweite Teil der Phase 4) ist umgesetzt und je Task geprüft**
+(`docs/superpowers/plans/2026-10-18-phase-4b-geplantes-laden.md`, 19 Tasks, freigegeben vom Betreiber am 18.10.2026 mit allen 17 Entscheidungen: „passt so, du
+kannst beginnen, deployment führe ich erst nach der abnahme von phase 3 durch“): auf dem Arbeitszweig
+`claude/phase-4b-plan-agf1qj` (ab `fb23bd0`), **nicht auf `main` und nicht ausgerollt**. Gesamtreview
+und Fix-Welle stehen noch aus; die Fix-Welle bringt mindestens „Fertig um“ bei einer Abfahrt hinter
+dem Horizont (siehe „Phase 4b“ unten). Plan 4b ändert core, `shared`, app und UI. **Ausgerollt wird
+erst nach der Abnahme der Phase 3, und das ist ein Schritt des Betreibers;** nichts geht dabei von
+selbst live: „Geplant“ wirkt nur mit Regelbetrieb, in der Betriebsart der Aktoren und erst, wenn
+du ein Fahrzeug darauf stellst.
 `main` ist seit dem 12.10.2026 auch der Standard-Branch auf GitHub.
 
 ## Kurzfassung
@@ -487,16 +495,50 @@ Er schaltet nichts an der Anlage. **Der nächste Entwicklungsschritt ist Plan 4b
     `docs/verification/abnahme-phase-4.md`.
   - **Entschieden und aufgeschoben:** Die Entscheidungen, die Festlegungen der Umsetzung und die
     aufgeschobenen Kleinigkeiten stehen unter „Bewusst offen gelassen“ („Entschieden in Plan 4a“).
-  - **Noch nicht (4b):** der Modus „Geplant“ mit Ziel-SOC und Abfahrt, die Autos im Planer, Regel R2, die
-    späteste Startzeit, das Tesla-Ladelimit, in HA Ziel-SOC, Abfahrtszeit, „Fertig um“ und „Ziel
-    erreichbar“, und die Abnahmepunkte „HA in beide Richtungen“ und „Ziel-SOC“. 4a schaltet nichts an
+  - **4b** (der Modus „Geplant“ mit Ziel-SOC und Abfahrt, die Autos im Planer, Regel R2, die späteste
+    Startzeit, das Tesla-Ladelimit, HA vollständig und die Abnahmepunkte „HA in beide Richtungen“ und
+    „Ziel-SOC“) ist inzwischen auf dem Arbeitszweig umgesetzt (nächster Punkt). 4a schaltet nichts an
     der Anlage.
+- **Phase 4b (Geplantes Laden) ist umgesetzt und je Task geprüft** (Plan:
+  `docs/superpowers/plans/2026-10-18-phase-4b-geplantes-laden.md`, 19 Tasks; Ausführung
+  subagent-driven; Branch `claude/phase-4b-plan-agf1qj`, ab `fb23bd0`; **nicht auf `main`, nicht
+  ausgerollt**; Gesamtreview und Fix-Welle stehen aus). core, `shared`, app, UI und Simulator:
+  - **Absicht** (`shared/control.py`, `shared/plan.py`): `ChargeMode.PLANNED`, je Fahrzeug
+    `target_soc_pct` (Standard 80) und `departure` (`HH:MM`, Standard `07:00`), je Plan-Slot
+    `vehicles` (W je Auto); der core lehnt „Geplant“ für einen Gast ab und klemmt die Plan-Leistung auf
+    die Höchstleistung des Fahrzeugs.
+  - **core** (`core/control/vehicle_soc.py`, `planned.py`, `charging.py`, `charging_tesla.py`):
+    Ladestand gemessen, geschätzt oder angenommen; Bedarf, späteste Startzeit und die Stände `plan`,
+    `surplus`, `due`, `reached`; „Geplant“ mit festem Bedarf wie Sofort, Stopp am Ziel, keine
+    Akku-Unterstützung; Tesla-Ladelimit (`charge_limit_sync`); „geladen“ je Ladelimit; Health mit
+    `soc_pct`, `soc_source`, `charge_limit_pct` und `planned`.
+  - **Planer** (`app/planning/vehicles.py`, `optimizer.py`, `fallback.py`, `explain.py`): die Autos in
+    „Geplant“ im MILP mit Fehlmenge (2000 ct/kWh) und Regel R2 (P25, 200 ct/kWh), Ersatzplan für
+    Autos, Auslöser „Fahrzeug geändert“, drei neue Grundcodes, Plausibilität mit Autos.
+  - **app:** `PUT /api/control/vehicles/{key}/target`, Zählung der geplanten Ladungen (Migration
+    `0012`, Tabelle `planned_charge`) und `planned` in `GET /api/stats`; HA vollständig (Ziel-SOC,
+    Abfahrtszeit als `text`, „Fertig um“, „Ziel erreichbar“, „Ziel-SOC unerreichbar“) und
+    Benachrichtigungen für alle Warnungen.
+  - **UI:** Ziel-SOC, Abfahrt und „Fertig um“ auf „Laden“, Diagramm „Autos“ im Zeitplan, Karte
+    „Geplantes Laden“ in der Statistik.
+  - **Simulator und Szenarien:** fünf Szenarien dazu (jetzt 33), Planungsszenarien mit einem Auto.
+  - **Doku:** Betriebshandbuch („Laderegelung“, „Geplant“; „Geplantes Laden ausrollen (Plan 4b)“;
+    „Planung“, „Autos im Plan“; Abschnitte 7, 8 und 12), Spec („Stand Plan 4b“ in 5.3, 6.5, 7.5, 7.6,
+    7.10, 9.3 bis 9.6, 11.1, 11.3, 12, 13, 16 und 18) und die Checkliste
+    `docs/verification/abnahme-phase-4.md` (Abschnitte 4 „Ziel-SOC“ und 5 „HA in beide Richtungen“).
+  - **Offen:** die Fix-Welle (mindestens: „Fertig um“ leer bei einer Abfahrt hinter dem Horizont,
+    „lädt“ als `e ≥ 1 W`) und die kleinen Punkte aus Spec 18, „Stand Plan 4b“, „Offen“.
 - **Images:** `ghcr.io/binda5000/bindaems-core:latest` und `ghcr.io/binda5000/bindaems-app:latest`.
   Sie sind öffentlich, und die CI setzt `latest` bei jedem Push auf `main`. core und app werden
   immer gemeinsam aus demselben Stand ausgerollt (gleiche Compose-Datei, gleiche Image-Tags): Die
   UI-Schemas sind streng, eine abweichende Version zeigt auf der System-Seite nur „Unerwartete
   Antwort vom Server“.
-- **Tests:** 6939 Python-Tests im vollen Lauf nach der Nacharbeit zu Plan 4a und der Festlegung zum
+- **Tests auf dem Branch von Plan 4b** (am Ende von Task 19, 19.10.2026): 7371 Python-Tests im vollen
+  Lauf (mit den Szenarien des Simulators und `--cov`), 675 UI-Tests (Vitest) und 28 E2E-Tests
+  (Playwright), alle grün; Abdeckung 97,96 % insgesamt und 99 % für `core/safety`, `core/control` und
+  `core/actuators` zusammen; der volle Lauf von pytest mit `--cov` dauerte 31 Minuten (die
+  Planungsszenarien mit Auto sind langsamer, Spec 16, „Stand Plan 4b“).
+  Stand auf `main` nach Plan 4a: 6939 Python-Tests im vollen Lauf nach der Nacharbeit zu Plan 4a und der Festlegung zum
   Planer vom 18.10.2026 (mit den Szenarien des Simulators und `--cov`), alle grün, davon
   41 Property-Tests mit Hypothesis (6 für die Safety-Schicht, 6 für den Phasenwächter, 13 für den
   Akku-Sollwert, 7 für den 15-min-Wächter, 8 sonstige; Plan 4a brachte vier: die Wasserfall-Regel
@@ -513,9 +555,10 @@ Er schaltet nichts an der Anlage. **Der nächste Entwicklungsschritt ist Plan 4b
   mit Abdeckungsgrenzen (≥ 75 % insgesamt, ≥ 90 % für `core/safety`, `core/control` und
   `core/actuators`), Vitest mit svelte-check, Prettier und ESLint; dazu E2E mit Playwright.
 - **Offen:**
-  - die Integration von Plan 4a auf `main` (nur mit Zustimmung des Betreibers, Fast-Forward)
-  - der nächste Entwicklungsschritt: Plan 4b „Geplantes Laden“ (ändert den core), nach der Abnahme der
-    Phase 3
+  - Plan 4b: Gesamtreview und Fix-Welle, dann die Integration auf `main` (nur mit Zustimmung des
+    Betreibers, Fast-Forward)
+  - an der Anlage: Plan 4b ausrollen, erst nach der Abnahme der Phase 3 und als Schritt des Betreibers
+    (Punkt 7 unter „Offen an der Anlage“)
   - an der Anlage: Plan 4a ausrollen (nur `ems-app`, Punkt 6 unter „Offen an der Anlage“) und die 30 Tage
     der Abnahme beginnen
   - an der Anlage: Images von 2d, 3a, 3b und 3c ausrollen (Punkte „Zu 3a gehört“, „Zu 3b gehört“ und
@@ -595,7 +638,7 @@ Er schaltet nichts an der Anlage. **Der nächste Entwicklungsschritt ist Plan 4b
 
 | Dokument | Inhalt |
 |---|---|
-| `docs/superpowers/specs/2026-10-08-bindaems-design.md` | Spec, verbindlich. Wichtig: 7 Regelung, 8 Sicherheit, 13 Web-UI, 14 Login, 17 Prüfprotokoll, 18 Phasenplan, 19 offene Punkte. Die Absätze „Stand Plan 2a/2b/2c-1/2c-2a/2c-2b/2d/3a/3b/3c/4a“ gehen dem älteren Text davor vor |
+| `docs/superpowers/specs/2026-10-08-bindaems-design.md` | Spec, verbindlich. Wichtig: 7 Regelung, 8 Sicherheit, 13 Web-UI, 14 Login, 17 Prüfprotokoll, 18 Phasenplan, 19 offene Punkte. Die Absätze „Stand Plan 2a/2b/2c-1/2c-2a/2c-2b/2d/3a/3b/3c/4a/4b“ gehen dem älteren Text davor vor |
 | `docs/superpowers/plans/2026-10-08-phase-1a-fundament-datenerfassung.md` | Plan 1a (core) |
 | `docs/superpowers/plans/2026-10-09-phase-1b-app-backend.md` | Plan 1b (app) |
 | `docs/superpowers/plans/2026-10-09-phase-1c-web-ui.md` | Plan 1c (UI), mit Anhang A zu den API-Formen |
@@ -608,15 +651,16 @@ Er schaltet nichts an der Anlage. **Der nächste Entwicklungsschritt ist Plan 4b
 | `docs/superpowers/specs/2026-10-14-phase-2c2-akku-spitzen-design.md` | Design 2c-2 (Akku-Sollwert, 15-min-Wächter, Zuordnungserkennung), Entscheidungen des Betreibers vom 14.10.2026; 2c-2a und 2c-2b umgesetzt; der Kopf nennt, was sich beim Bau geändert hat |
 | `docs/superpowers/plans/2026-10-14-phase-2c2a-akku-spitzen.md` | Plan 2c-2a, 14 Tasks, umgesetzt: Umbau, Akku-Sollwert, 15-min-Wächter, Simulator; Präzisierungen gegenüber dem Design, Texte, Szenarien |
 | `docs/superpowers/plans/2026-10-15-phase-2c2b-zuordnung.md` | Plan 2c-2b, 9 Tasks, umgesetzt: Zuordnungserkennung, Gast, Health je Wallbox, Simulator; Präzisierungen gegenüber dem Design, Texte, Szenarien |
-| `docs/betrieb.md` | Betriebshandbuch: Installation, Proxy (6), HA (7), Tarif (8, seit 3a mit Leistungspreis, Gebühren und Einspeisung), Sicherung (9), Prüfprotokolle einschließlich Teil 2 (11), Web-UI mit den Seiten „Laden“ und „Entscheidungen“ (12), Betriebszustände, Absicht, Live-Schalter, Übergabe und Entscheidungslog (13), Watchdog am Cerbo (14); seit 4a in Abschnitt 8 „Einstandspreis des Akkus“, „Ladesessions und Kosten je Auto“, „Lücken nachrechnen“, „Abgleich mit den Zählern“, „Statistik je Zeitraum“ und „Statistik ausrollen (Plan 4a)“, in 12 die Seite „Statistik“ und die Session auf „Laden“, in 3 „Grafana“; am Ende „Laderegelung“ (Modi, Absicht, Zuordnung Auto und Wallbox, Dry-Run-Vergleich mit evcc, Umstieg), „Akku und Spitzen“ (Akku-Sollwert mit der Absicht des Plans, 15-min-Wächter, Health samt `plan`, Akku-Unterstützung bedienen, Victron in den Dry-Run und live mit den 2 Wochen Planausführung, Alarme), „Simulator“ „Prognosen“ (seit 3a: PV-Kalibrierung, Lastprognose, Prognosegüte, Nachtlauf, Schätzpreise, „An der Anlage prüfen“) und „Planung“ (seit 3b: Seite „Zeitplan“, Ablauf, Netzladen erlaubt, Einstellungen, Auslöser, Ersatzplan, Erklärungen, Budget, HA, API, Aufbewahrung, Szenarien mit `export_days` und `scenario_days`, „An der Anlage prüfen“; seit 3c: Übergabe an den core, Stand der Ausführung, Plan gegen Ist) |
+| `docs/betrieb.md` | Betriebshandbuch: Installation, Proxy (6), HA (7), Tarif (8, seit 3a mit Leistungspreis, Gebühren und Einspeisung), Sicherung (9), Prüfprotokolle einschließlich Teil 2 (11), Web-UI mit den Seiten „Laden“ und „Entscheidungen“ (12), Betriebszustände, Absicht, Live-Schalter, Übergabe und Entscheidungslog (13), Watchdog am Cerbo (14); seit 4a in Abschnitt 8 „Einstandspreis des Akkus“, „Ladesessions und Kosten je Auto“, „Lücken nachrechnen“, „Abgleich mit den Zählern“, „Statistik je Zeitraum“ und „Statistik ausrollen (Plan 4a)“, in 12 die Seite „Statistik“ und die Session auf „Laden“, in 3 „Grafana“; am Ende „Laderegelung“ (Modi, Absicht, Zuordnung Auto und Wallbox, Dry-Run-Vergleich mit evcc, Umstieg), „Akku und Spitzen“ (Akku-Sollwert mit der Absicht des Plans, 15-min-Wächter, Health samt `plan`, Akku-Unterstützung bedienen, Victron in den Dry-Run und live mit den 2 Wochen Planausführung, Alarme), „Simulator“ „Prognosen“ (seit 3a: PV-Kalibrierung, Lastprognose, Prognosegüte, Nachtlauf, Schätzpreise, „An der Anlage prüfen“) und „Planung“ (seit 3b: Seite „Zeitplan“, Ablauf, Netzladen erlaubt, Einstellungen, Auslöser, Ersatzplan, Erklärungen, Budget, HA, API, Aufbewahrung, Szenarien mit `export_days` und `scenario_days`, „An der Anlage prüfen“; seit 3c: Übergabe an den core, Stand der Ausführung, Plan gegen Ist; seit 4b: Autos im Plan); seit 4b in „Laderegelung“ der Modus „Geplant“ und „Geplantes Laden ausrollen (Plan 4b)“, in 7 „Geplantes Laden“ und alle Warnungen als Benachrichtigung, in 8 die Zählung der geplanten Ladungen |
 | `docs/superpowers/plans/2026-10-15-phase-2d-bedienung.md` | Plan 2d, 18 Tasks, umgesetzt, auf `main`: Bedienung in UI und HA, Entscheidungslog in SQLite, Tesla vor der Live-Schaltung; Präzisierungen gegenüber der Spec, Texte |
 | `docs/superpowers/plans/2026-10-16-phase-3a-tarif-prognosen.md` | Plan 3a, 14 Tasks, umgesetzt, auf `main`: Tarifmodell mit Editor, Monatsspitze, Schätzpreise, Lastprognose, PV-Kalibrierung, Prognosegüte; die Einordnung teilt Phase 3 in 3a, 3b und 3c und nennt die Vorab-Entscheidungen für 3b und 3c |
 | `docs/superpowers/plans/2026-10-16-phase-3b-optimierer-zeitplan.md` | Plan 3b, 17 Tasks, umgesetzt und auf `main`: Optimierer, Ersatzplan, Plausibilität, Erklärungen, Planungsdienst mit Speicher, Seite „Zeitplan“, HA, Szenario-Werkzeuge; die 15 Entscheidungen des Betreibers vom 16.10.2026, Präzisierungen gegenüber der Spec, Texte |
 | `docs/superpowers/plans/2026-10-17-phase-3c-planausfuehrung.md` | Plan 3c, 17 Tasks, umgesetzt auf dem Branch (Gesamtreview und Fix-Welle erledigt): Plan in der Absicht, Prüfung im core, `HALTEN` und `NETZLADEN` über den Override, Budget des Wächters, Plan-Schwelle und Schalter der Akku-Unterstützung, Übergabe, Stand der Ausführung, „Plan gegen Ist“, Mehrkosten beim Boost, Simulator mit Wirkungsgrad; die 14 Entscheidungen des Betreibers vom 17.10.2026, Präzisierungen gegenüber der Spec, Texte |
 | `docs/superpowers/plans/2026-10-17-phase-4a-statistik.md` | Plan 4a, 16 Tasks, umgesetzt auf dem Arbeitszweig (Gesamtreview und Fix-Welle abgeschlossen): Ladesessions, Einstandspreis, Kosten je Auto, Abgleich, Nachrechnung, Verbraucher je Tag, Seite „Statistik“, HA-Sensoren, Grafana; die 13 Entscheidungen des Betreibers vom 17.10.2026 (PV-Strom ins Auto kostet 0 ct), Präzisierungen gegenüber der Spec, Texte |
+| `docs/superpowers/plans/2026-10-18-phase-4b-geplantes-laden.md` | Plan 4b, 19 Tasks, umgesetzt auf dem Branch `claude/phase-4b-plan-agf1qj` (Gesamtreview und Fix-Welle stehen aus, nicht ausgerollt): Modus „Geplant“ mit Ziel-SOC und Abfahrt, Ladestand der Autos, späteste Startzeit, Tesla-Ladelimit, die Autos im Optimierer mit Regel R2, Ersatzplan für Autos, HA vollständig, Benachrichtigungen komplett, Zählung für die Abnahme „Ziel-SOC“, Simulator- und Planungsszenarien; die 17 Entscheidungen des Betreibers vom 18.10.2026, Präzisierungen gegenüber der Spec, Texte |
 | `cerbo-watchdog/README.md` | Watchdog: Zustände, Zeiten, D-Bus-Pfade, Installation und Probe |
 | `docs/verification/abnahme-phase-1.md` | Checkliste für die Abnahme der Phase 1 |
-| `docs/verification/abnahme-phase-4.md` | Checkliste für die Abnahme der Phase 4, Teil Statistik (Plan 4a): 30 Tage ab dem Ausrollen, Abgleich innerhalb ±1 %; „HA in beide Richtungen“ und „Ziel-SOC“ folgen mit Plan 4b |
+| `docs/verification/abnahme-phase-4.md` | Checkliste für die Abnahme der Phase 4: Teil Statistik (Plan 4a, 30 Tage ab dem Ausrollen, Abgleich innerhalb ±1 %), „Ziel-SOC“ (mindestens 95 % der machbaren geplanten Ladungen, `GET /api/stats`) und „HA in beide Richtungen“ (Tabelle aller Bedienelemente) aus Plan 4b |
 | `docs/verification/README.md` | Prüfprotokoll Teil 1, Preise, Teil 2 (`verify_part2`) und Watchdog-Probe: Aufruf und Ergebnis; Verweise auf die Abnahmen der Phasen 1 und 4 |
 | `README.md` | Entwicklung, Web-UI, Demo-Backend |
 
@@ -875,7 +919,7 @@ Demo-Zugänge: `admin`, `bedienen` (Bedienen), `gast` (Lesen) und `sicher` (Admi
 ## Stand der Installation beim Betreiber
 
 - Docker auf einer VM im LAN des Betreibers, Images `latest` vom Stand nach Plan 2b (ausgerollt am
-  12.10.2026). Die Pläne 2c-1, 2c-2a, 2c-2b, 2d, 3a, 3b, 3c und 4a sind noch nicht ausgerollt.
+  12.10.2026). Die Pläne 2c-1, 2c-2a, 2c-2b, 2d, 3a, 3b, 3c, 4a und 4b sind noch nicht ausgerollt.
 - Reverse Proxy mit HTTPS sowie Tarif und OeMAG-Wert im UI: laut Betreiber eingerichtet
   (11.10.2026). Zum Proxy gehören laut Betriebshandbuch 6: Port 8080 erreicht nur der Proxy,
   `app.trusted_proxies` ist gesetzt, `cookie_secure` steht wieder auf `true`.
@@ -1192,6 +1236,29 @@ Demo-Zugänge: `admin`, `bedienen` (Bedienen), `gast` (Lesen) und `sicher` (Admi
         die Wallbox-Zähler als `energy` ankommen, zeigt die erste Nacht. Die Belegung der Wallboxen
         kommt aus Health (`wallboxes[].occupant`, 10-s-Takt): Ohne Regelbetrieb steht dort niemand,
         und alle Sessions heißen „Unbekannt“ (der Steckzustand kommt aber auch dann).
+  7. **Geplantes Laden (Plan 4b) ausrollen**, erst **nach der Abnahme der Phase 3**; das ist ein
+     Schritt des Betreibers (Entscheidung 17 des Plans), und nichts geht dabei von selbst live. Die
+     Images gibt es erst, wenn 4b nach Gesamtreview und Fix-Welle auf `main` ist. Die Schritte stehen
+     im Betriebshandbuch, „Laderegelung“, „Geplantes Laden ausrollen (Plan 4b)“:
+     1. **ACL:** Der Benutzer `bindaems` braucht für die Abfahrtszeit die Zeile
+        `topic write homeassistant/text/bindaems/#` in der ACL von Mosquitto (Betriebshandbuch 7),
+        danach das Add-on neu starten. Ohne sie fehlt in Home Assistant nur die Abfahrtszeit.
+     2. **Regelbetrieb aus** (Seite „System“ oder HA), dann die **Datenbank kopieren**
+        (`/backup/vor-plan-4b.sqlite3`; eine ältere app startet mit der Migration `0012` nicht).
+     3. **Ausrollen:** `cd /opt/bindaems && docker compose pull && docker compose up -d`; core und app
+        starten neu, die Migration `0012` (`planned_charge`) läuft beim Start der app.
+     4. **`soc_entity`** des e-Golf prüfen; der core liest sie jetzt selbst. Ein gleichlautender
+        Eintrag `vehicle.<Schlüssel>.soc_pct` unter `homeassistant.entities` kann entfallen (ein
+        abweichender macht die Konfiguration ungültig). Optional `charge_limit_sync: true` beim Tesla.
+     5. **Regelbetrieb an** und einen Abend „Geplant“ im Dry-Run beobachten (Health `planned`, der
+        Plan mit „Fahrzeug geändert“ und dem Diagramm „Autos“, die Entscheidungen, am nächsten Tag
+        die Karte „Geplantes Laden“).
+     6. **Abnahme, Teile „Ziel-SOC“ und „HA in beide Richtungen“** (`docs/verification/abnahme-phase-4.md`,
+        Abschnitte 4 und 5): Die Quote „Ziel-SOC“ verlangt EVCS und Tesla live, denn im Dry-Run lädt
+        evcc.
+     7. **Rückweg:** Ein core vor 4b liest die gespeicherte Absicht nicht, sobald sie Ziel, Abfahrt
+        oder Autos im Plan trägt, und startet ohne Absicht mit dem Alarm `intent.file`
+        (Betriebshandbuch 4, „Rollback auf einen Stand vor Plan 4b“).
   - Teil 2 schreibt auf die Geräte: nicht während der 7 Tage der Abnahme Phase 1 und ihres
     24-h-Mitschnitts (`docs/verification/abnahme-phase-1.md`, 4.2 und 4.3).
   - **Vor der Live-Schaltung von EVCS und Tesla** waren diese Punkte zu entscheiden oder umzusetzen
@@ -1338,14 +1405,15 @@ Demo-Zugänge: `admin`, `bedienen` (Bedienen), `gast` (Lesen) und `sicher` (Admi
      Fix-Welle und Nacharbeit sind abgeschlossen. Nur app, UI und `deploy/`, der core bleibt unverändert (Kurzfassung). An der Anlage
      genügt der Neubau von `ems-app` (Punkt 6 unter „Offen an der Anlage“), dann laufen die 30 Tage
      der Abnahme.
-   - **4b Geplantes Laden:** der **nächste Entwicklungsschritt**, nach der Abnahme der Phase 3. Er ändert
-     core und Optimierer (Modus „Geplant“ mit Ziel-SOC und Abfahrt, die Autos im Planer, Regel R2,
-     späteste Startzeit, Tesla-Ladelimit, in HA Ziel-SOC, Abfahrtszeit, „Fertig um“ und „Ziel
-     erreichbar“, Benachrichtigungen komplett) und braucht den Neustart des core. Weil `shared` dann
-     ohnehin ändert, gehören die vier neuen Objekt-IDs der Statistik-Sensoren in die Prüfung der
-     Konfiguration (`HA_SYSTEM_IDS` und `HA_VEHICLE_SUFFIXES` in `shared/config.py`; dazu der Test
-     `test_config_and_entities_agree_on_object_ids`, der sie bis dahin selbst ergänzt). Die
-     Abnahmepunkte „HA in beide Richtungen“ und „Ziel-SOC“ der Phase 4 folgen mit 4b.
+   - **4b Geplantes Laden:** umgesetzt und je Task geprüft auf dem Branch `claude/phase-4b-plan-agf1qj`,
+     nicht auf `main`, nicht ausgerollt (Kurzfassung). Er ändert core und Optimierer (Modus „Geplant“
+     mit Ziel-SOC und Abfahrt, die Autos im Planer, Regel R2, späteste Startzeit, Tesla-Ladelimit, HA
+     vollständig, Benachrichtigungen komplett) und braucht den Neustart des core. Die vier Objekt-IDs
+     der Statistik-Sensoren stehen jetzt in der Prüfung der Konfiguration (`HA_SYSTEM_IDS` und
+     `HA_VEHICLE_SUFFIXES` in `shared/config.py`). Es folgen Gesamtreview und Fix-Welle, die
+     Integration auf `main` mit Zustimmung des Betreibers und, nach der Abnahme der Phase 3, das
+     Ausrollen durch den Betreiber (Punkt 7 unter „Offen an der Anlage“); danach die Abnahmepunkte
+     „Ziel-SOC“ und „HA in beide Richtungen“.
 
 ### Nächster Schritt: die Anlage
 
@@ -1390,8 +1458,9 @@ Demo-Zugänge: `admin`, `bedienen` (Bedienen), `gast` (Lesen) und `sicher` (Admi
      Wochen** mit DESS aus (Punkt 4) und parallel die **30 echten Tage** durch `export_days` und
      `scenario_days` (Punkt 5);
    - danach **Victron live** mit den vier Bedingungen aus Spec 8.7 und die **Abnahme der Phase 3**.
-     Dann folgt Plan 4b (Modus „Geplant“, Regel R2, die Autos im Planer); die Statistik aus 4a ist
-     schon gebaut und kann vorher ausgerollt werden (Punkt 6 unter „Offen an der Anlage“).
+     Dann wird Plan 4b ausgerollt (Modus „Geplant“, Regel R2, die Autos im Planer; umgesetzt auf dem
+     Branch, Punkt 7 unter „Offen an der Anlage“); die Statistik aus 4a ist schon gebaut und kann
+     vorher ausgerollt werden (Punkt 6 dort).
 
 ## Hinweise für die Pläne 2c-2 und 2d
 
@@ -2694,7 +2763,8 @@ Nacharbeit vom 18.10.2026 erledigt hat, steht nicht mehr hier. Offen sind:
   sie übernehmen.
 - **Verbraucher je Tag:** Beim ersten Start gibt es höchstens 31 Einzelabfragen an InfluxDB, einmal.
 - **Home Assistant:** Die Prüfung der Objekt-IDs auf Kollision (`shared/config.py`) kennt die vier neuen
-  IDs nicht; sie zu ergänzen ändert das core-Image und passt zu Plan 4b.
+  IDs nicht; sie zu ergänzen ändert das core-Image und passt zu Plan 4b. **Erledigt in Plan 4b**
+  (Präzisierung 4).
 - **Tests und Demo-Welt:** Die Tests des Dashboards lesen den Quelltext der Schreiber (spröde, aber
   wirksam) und holen einen Helfer aus einem anderen Testmodul; `ui_world` greift auf private Mitglieder
   zu; der Akku der Demo hat 15 kWh Reserve (nur im erfundenen Verlauf, die Beispielkonfiguration hat

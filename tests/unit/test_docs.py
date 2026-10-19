@@ -21,8 +21,8 @@ def test_acceptance_checklist_covers_spec_18() -> None:
 
 
 def test_acceptance_checklist_of_phase_4_covers_the_statistics_part() -> None:
-    # Spec 18, Phase 4: die Abrechnung über 30 Tage innerhalb ±1 % der Zählerstände; die beiden
-    # anderen Punkte sind als „folgt mit Plan 4b“ eingetragen, und das README nennt die Datei.
+    # Spec 18, Phase 4: die Abrechnung über 30 Tage innerhalb ±1 % der Zählerstände; das README
+    # nennt die Datei.
     text = " ".join(Path("docs/verification/abnahme-phase-4.md").read_text("utf-8").split())
     for criterion in (
         "30 Tage",
@@ -35,12 +35,53 @@ def test_acceptance_checklist_of_phase_4_covers_the_statistics_part() -> None:
         "Unterschrift",
     ):
         assert criterion in text, criterion
-    for open_point in (
-        "Alle HA-Bedienelemente wirken in beide Richtungen | folgt mit Plan 4b",
-        "Ziel-SOC in mindestens 95 % der machbaren geplanten Sessions erreicht | folgt mit Plan 4b",
-    ):
-        assert open_point in text, open_point
+    assert "folgt mit Plan 4b" not in text  # Plan 4b hat beide Punkte nachgetragen
     assert "abnahme-phase-4.md" in Path("docs/verification/README.md").read_text("utf-8")
+
+
+def _checklist_section(heading: str) -> str:
+    """Der Abschnitt ``## heading`` der Checkliste der Phase 4 bis zum nächsten ``## ``."""
+    text = Path("docs/verification/abnahme-phase-4.md").read_text(encoding="utf-8")
+    _, found, rest = text.partition(f"\n## {heading}\n")
+    assert found, f"Der Abschnitt „{heading}“ fehlt in der Checkliste der Phase 4."
+    return rest.split("\n## ", 1)[0]
+
+
+def test_acceptance_checklist_of_phase_4_covers_the_planned_part() -> None:
+    # Plan 4b, Entscheidung 15: „Ziel-SOC“ mit Zeitraum, Abruf, Quote und Begründung jeder
+    # verfehlten Ladung; „HA in beide Richtungen“ mit einer Zeile je Bedienelement der app.
+    from bindaems.app.ha.entities import build_entities
+    from bindaems.shared.config import load_config
+
+    target = " ".join(_checklist_section("4. Ziel-SOC").split())
+    for topic in (
+        "Prüfzeitraum",
+        "GET /api/stats?period=month",
+        "`planned`",
+        "`reached`",
+        "`feasible`",
+        "`missed`",
+        "`infeasible`",
+        "`early`",
+        "`unknown`",
+        "`changed`",
+        "mindestens 95 %",
+        "Begründung",
+        "planned_charge",
+    ):
+        assert topic in target, topic
+    section = _checklist_section("5. HA in beide Richtungen")
+    rows = {
+        re.sub(r" \(.*\)$", "", cells[0])
+        for line in section.splitlines()
+        if line.startswith("| ")
+        and (cells := [cell.strip() for cell in line.strip().strip("|").split("|")])
+        and cells[0] not in {"Bedienelement", "---"}
+    }
+    cfg = load_config(Path("deploy/config.example.yaml"))
+    assert rows == {spec.name for spec in build_entities(cfg) if spec.command}
+    for topic in ("in Home Assistant ändern", "im UI ändern", "Taste ohne Zustand"):
+        assert topic in " ".join(section.split()), topic
 
 
 def test_rollout_of_plan_4a_in_the_guide() -> None:
@@ -63,6 +104,130 @@ def test_rollout_of_plan_4a_in_the_guide() -> None:
     ):
         assert topic in text, topic
     assert "Einstandspreis des Akkus" in section
+
+
+def test_rollout_of_plan_4b_in_the_guide() -> None:
+    # „Geplantes Laden ausrollen (Plan 4b)“: Regelbetrieb aus, Datenbank sichern, core und app
+    # gemeinsam, Migration beim Start, soc_entity, optional charge_limit_sync, ACL-Zeile für
+    # `text`, Regelbetrieb an, ein Abend „Geplant“ im Dry-Run.
+    section = " ".join(_guide_section("Laderegelung").split())
+    _, found, text = section.partition("### Geplantes Laden ausrollen (Plan 4b) ")
+    assert found, "Der Unterabschnitt „Geplantes Laden ausrollen (Plan 4b)“ fehlt."
+    for topic in (
+        "nach der Abnahme der Phase 3",
+        "Nichts geht dabei von selbst live",
+        "topic write homeassistant/text/bindaems/#",
+        "Regelbetrieb aus",
+        "/backup/vor-plan-4b.sqlite3",
+        "docker compose pull && docker compose up -d",
+        "Migration `0012`",
+        "`soc_entity`",
+        "`homeassistant.entities`",
+        "`charge_limit_sync: true`",
+        "Regelbetrieb an",
+        "im Dry-Run beobachten",
+        "docs/verification/abnahme-phase-4.md",
+    ):
+        assert topic in text, topic
+    bedienung = " ".join(_guide_section("4. Bedienung").split())
+    assert "Rollback auf einen Stand vor Plan 4b" in bedienung
+    assert "kommt mit den folgenden Tasks" not in Path("docs/betrieb.md").read_text("utf-8")
+
+
+def test_planned_health_fields_in_the_guide_match_the_core() -> None:
+    # „Health für die Bedienung“ nennt die Felder von „Geplant“ je Fahrzeug (Plan 4b,
+    # Präzisierung 7) wie ``ChargeController.health``.
+    from datetime import UTC, datetime
+
+    from bindaems.core.control.charging import ChargeController, _planned_health
+    from bindaems.core.control.planned import PlannedState
+    from bindaems.core.safety.limits import HardLimits
+    from bindaems.shared.config import load_config
+
+    cfg = load_config(Path("deploy/config.example.yaml"))
+    started = datetime(2026, 10, 12, tzinfo=UTC)
+    health = ChargeController(cfg, HardLimits.from_config(cfg), started=started).health()[0]
+    section = _guide_section("Laderegelung").partition("### Health für die Bedienung\n")[2]
+    section = section.split("\n### ", 1)[0]
+    for field in ("soc_pct", "soc_source", "charge_limit_pct", "planned"):
+        assert field in health, field
+        assert f"| `vehicles[].{field}` |" in section, field
+    state = PlannedState("plan", 80.0, started, 10.0, started, 3000.0, 50.0, "measured")
+    planned = _planned_health(state)
+    assert planned is not None
+    row = next(line for line in section.splitlines() if "`vehicles[].planned`" in line)
+    for key in planned:
+        assert f"`{key}`" in row, key
+    for kind in ("plan", "surplus", "due", "reached"):
+        assert f"`{kind}`" in row, kind
+    for source in ("measured", "estimated", "assumed"):
+        assert f"`{source}`" in section, source
+
+
+def test_planned_mode_in_the_charging_section() -> None:
+    # „Geplant“ in der Laderegelung: Zeile der Lademodi, Ladestand, späteste Startzeit mit dem
+    # Zuschlag ohne zweiten Wirkungsgrad, Stopp am Ziel und die Dringlichkeit mit festem Bedarf.
+    section = " ".join(_guide_section("Laderegelung").split())
+    assert "| Geplant | `planned` |" in section
+    assert "Es gibt **kein Ziel-SOC**" not in section
+    _, found, text = section.partition("### Geplant ")
+    assert found, "Der Unterabschnitt „Geplant“ fehlt in „Laderegelung“."
+    text = text.split(" ### ", 1)[0]
+    for topic in (
+        "`target_soc_pct`",
+        "`departure`",
+        "höchstens 900 s alt",
+        "60 min vor dem Anstecken",
+        "ersten Zählerstand dieses Ansteckvorgangs",
+        "rechnet dann mit 0 %",
+        "`Abfahrt − Bedarf / volle Leistung · 1,1 − 15 min`",
+        "nicht ein zweites Mal",
+        "3 Prozentpunkte",
+        "keine Akku-Unterstützung",
+    ):
+        assert topic in text, topic
+    assert (
+        "In „Geplant“ mit festem Bedarf (oben, „Geplant“) ist nur eine Senkung dringend" in section
+    )
+
+
+def test_planning_section_describes_the_cars() -> None:
+    # „Autos im Plan“ und der Ersatzplan mit Autos (Plan 4b, Entscheidungen 6 bis 8); die
+    # Befunde der Prüfung stehen mit dem Wortlaut der app im Abschnitt.
+    section = " ".join(_guide_section("Planung").split())
+    _, found, text = section.partition("### Autos im Plan ")
+    assert found, "Der Unterabschnitt „Autos im Plan“ fehlt in „Planung“."
+    for topic in ("Regel R2", "P25", "2000 ct", "200 ct", "Fehlmenge", "nie aus dem Akku"):
+        assert topic in text, topic
+    for finding in ("Auto {Name} lädt außerhalb seiner Grenzen um HH:MM", "Auto {Name} lädt nach"):
+        assert finding in section, finding
+    assert "Der Ersatzplan rechnet nur den Akku" not in section
+    assert "Dann die günstigsten Slots" in section
+    source = Path("src/bindaems/app/planning/plausibility.py").read_text(encoding="utf-8")
+    assert "Auto {car.name} lädt außerhalb seiner Grenzen um {at}" in source
+    assert "Auto {car.name} lädt nach der Abfahrt" in source
+
+
+def test_scenario_report_with_cars_in_the_guide_matches_the_tool() -> None:
+    # Der Bericht „Szenario-Vergleich mit Victron allein“ (Plan 3b, mit Autos Plan 4b, Task 13):
+    # Spalten und Gründe für „Nicht bestanden“ stehen mit dem Wortlaut des Werkzeugs im Abschnitt.
+    from bindaems.tools.scenario import report
+
+    section = " ".join(_guide_section("Planung").split())
+    for column in (*report._COLUMNS, *report._CAR_COLUMNS):
+        assert f"„{column}“" in section, column
+    source = Path(report.__file__).read_text(encoding="utf-8")
+    for reason, shown in (
+        ("- Bereinigte Kosten über Victron allein", "„Bereinigte Kosten über Victron allein“"),
+        ("- Regel R verletzt ({result.r1_violations})", "„Regel R verletzt ({n})“"),
+        (
+            "- Ziel-SOC verfehlt ({result.targets_missed} von {result.targets})",
+            "„Ziel-SOC verfehlt ({a} von {b})“",
+        ),
+        ("- Regel R2 verletzt ({result.r2_violations})", "„Regel R2 verletzt ({n})“"),
+    ):
+        assert reason in source, reason
+        assert shown in section, shown
 
 
 def test_statistics_page_in_the_guide_uses_the_texts_of_the_ui() -> None:

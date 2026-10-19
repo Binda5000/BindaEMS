@@ -353,6 +353,13 @@ flowchart LR
   - **Health:** `GET /v1/health` hat zusätzlich `plan` (`id`, `state` mit `none`, `valid` oder `expired`, `valid_until` und für den Slot, der bindet, `slot`, `intent`, `grid_charge_w`, `budget_kw`, `support_soc_pct` und `price_ct`) und unter `battery` die wirksame Schwelle der Unterstützung (`support_soc_pct`) mit ihrer Quelle (`support_source`: `config`, `intent` oder `plan`).
   - **Bedienung:** „Akku-Unterstützung erlaubt“ und die Unterstützungsschwelle ändert die app wie den Gast-Modus (`PUT /api/control/support`, ab „Bedienen“, Aktion `control.support` im Änderungsprotokoll).
 
+- **Stand Plan 4b** (`docs/superpowers/plans/2026-10-18-phase-4b-geplantes-laden.md`, Präzisierungen 1 bis 3 und 7, Entscheidungen 2, 9 und 13; Betrieb: `docs/betrieb.md`, „Laderegelung“, „Geplant“ und „Absicht per PUT /v1/intent“):
+  - **Neue Felder der Absicht:** `vehicles.<Schlüssel>.mode` kennt `planned` („Geplant“, 7.5); dazu je Fahrzeug `target_soc_pct` (ganze Zahl 20 bis 100, Standard 80) und `departure` (die tägliche Abfahrt als Uhrzeit `HH:MM` in Wiener Zeit, Standard `07:00`). Beide bleiben auch in den anderen Modi stehen. Es gilt das nächste Vorkommen der Abfahrt nach jetzt (`next_departure`); gibt es die Uhrzeit an einem Tag nicht (Sommerzeit, 02:30), gilt die erste gültige Zeit danach (03:00), gibt es sie zweimal (Winterzeit), das erste Vorkommen. Jeder Plan-Slot trägt zusätzlich `vehicles`, die Ladeleistung je Fahrzeug-Schlüssel in ganzen W (nur Autos in „Geplant“ mit Leistung über 0). Gespeicherte Absichten ohne die Felder laden mit den Standardwerten.
+  - **Prüfung im core:** Abgelehnt (`invalid`, 422) werden `guest.mode = planned` („Ein Gast kann nicht „Geplant“ laden.“), im Plan ein unbekanntes Fahrzeug („Plan nennt unbekanntes Fahrzeug „{key}“.“) und eine negative Leistung („Plan hat negative Ladeleistung für „{key}“.“). Geklemmt (`clamped`) wird die Leistung eines Fahrzeugs im Plan auf `max_a · U · Phasen` des Fahrzeugs, abgerundet („Plan für {Name} auf {W} W begrenzt.“).
+  - **Rückweg:** Ein core vor Plan 4b kann eine Absicht mit Ziel, Abfahrt oder Autos im Plan nicht lesen (die Modelle verbieten unbekannte Felder); er startet dann ohne Absicht mit dem Alarm `intent.file`, und die Migration `0012` hindert eine ältere app am Start (Betriebshandbuch, Abschnitt 4, „Rollback auf einen Stand vor Plan 4b“).
+  - **Health:** je Fahrzeug zusätzlich `soc_pct` und `soc_source` (`measured`, `estimated` oder `assumed`, 7.5), `charge_limit_pct` (das Ladelimit im Auto, nur mit Tessie) und `planned`: in „Geplant“ an einer Wallbox `state` (`plan`, `surplus`, `due`, `reached`), `target_soc_pct` (das wirksame Ziel), `departure_at` (UTC), `need_kwh`, `latest_start` (UTC, `null` ohne Bedarf) und `plan_w` (die Leistung des gültigen Slots für das Auto, `null` ohne gültigen Slot), sonst `null`. Daraus nimmt die app die Autos für den Planer (9.3) und „Fertig um“ ohne Plan (12).
+  - **Bedienung:** `PUT /api/control/vehicles/{key}/target` mit `target_soc_pct` und `departure` (ein Feld `null` lässt den Wert, wie er ist), ab „Bedienen“, wie jede Bedienung als neue Version der Absicht (Stand Plan 2d); im Änderungsprotokoll mit der Aktion `intent.target` („Ziel geändert“, Kommentar „Ziel {soc} %, Abfahrt {HH:MM}“). Die app lehnt „Ziel-SOC „{Wert}“ liegt außerhalb von 20–100 %.“ und „Abfahrt „{Wert}“ ist keine Uhrzeit (HH:MM).“ ab.
+
 ### 5.4 Datenflüsse
 
 1. **Telemetrie:** Die Geräte liefern an die Adapter im core. Der core schreibt den Zustand
@@ -532,6 +539,13 @@ bindaems/
 - **Strom des Tesla:** `floor(min(Mittel des Wunschstroms über control.tesla_average_s, niedrigster freier Wert über control.tesla_caution_s))`, begrenzt auf `min_a` und `max_a`. Ein unbekannter freier Wert zählt im Fenster als 0. Beide Fenster beginnen mit jedem neuen Ansteckvorgang und nach einer Pause neu. Die Safety-Schicht lässt eine Änderung ab 2 A Unterschied und höchstens alle 90 s zu.
 - **Erneut anfordern nach „nicht übernommen“:** Meldet der Aktor `NOT_TAKEN`, fordert die Regelung denselben Wert erneut an, mit dem Grund `not_taken_retry`. Jeder solche Neuversuch ist ein normaler Befehl und nie dringend, auch der einer Senkung wegen Überlast oder an der Sicherung: Er wartet auf die 90-s-Regel und die Stundenlimits (7.3). Ein Wechsel auf oder von 5 A dauert dadurch etwa 2 min länger. Ein Befehl wegen Überlast, der neu entsteht, weil die Stufe stieg, ist kein Neuversuch und bleibt dringend, höchstens einmal je Stufe.
 - **Tesla an der EVCS:** Hängt der Tesla laut Übersteuerung an einer EVCS, setzt der core seinen Strom einmal je Ansteckvorgang auf `max_a`, sobald er wach und die EVCS geregelt ist; danach regelt nur die EVCS (7.8).
+
+**Stand Plan 4b** (`docs/superpowers/plans/2026-10-18-phase-4b-geplantes-laden.md`, Entscheidung 11, Präzisierung 9; Betrieb: `docs/betrieb.md`, „Laderegelung“, „Tesla“, „Ladelimit“): `set_charge_limit` ist umgesetzt, als Befehlsart `CommandKind.CHARGE_LIMIT` (`charge_limit`, Wert in %).
+- **Aktor:** `POST https://api.tessie.com/{vin}/command/set_charge_limit?percent=N`, wie die übrigen Befehle mit `wait_for_completion=true`. Bestätigt wie der Strom: Der Aktor prüft im Tessie-Cache, ob `charge_limit_pct` den Wert zeigt, mit derselben Regel für 10 bis 75 s nach der Bestätigung.
+- **Safety-Schicht:** nur an `vehicle.<Schlüssel>`, ganze Zahl; unter 50 % abgelehnt (`range.invalid`), über 100 % geklemmt; Mindestabstand 600 s; zählt im Stundenbudget des Fahrzeugs (`per_hour`), ist nie dringend und wird nicht auf fremde Änderungen überwacht (7.9): Eine Änderung des Limits in der Tesla-App ist kein fremder Eingriff.
+- **Regelung:** Nur mit `vehicles.<Schlüssel>.charge_limit_sync` (Standard aus, verlangt `tessie`) und nur in „Geplant“ an einer Wallbox, angesteckt und mit bekanntem Limit: Liegt es nicht bei `max(Ziel, 50)` %, sendet der core diesen Wert, höchstens einmal je Ansteckvorgang und Wert. Erledigt ist er mit einem Urteil mit Wert, auch im Dry-Run, oder wenn das Auto den Wert schon zeigt; nach einem gescheiterten Ergebnis und nach einem Wechsel der Betriebsart ist er wieder offen. Ist die Reserve des Stundenbudgets erreicht (Stand Plan 2d), wartet er. Das alte Limit stellt der core nicht zurück. Grund `charge_limit` („Ladelimit“, 7.10).
+- **Wecken:** Das Ladelimit geht nur an ein waches Auto, nie mit Weckerlaubnis. Damit ist die Weckregel für „Geplant“ (oben, „folgen mit Phase 4“) dieselbe wie für die anderen Modi: Der core weckt den Tesla nur für einen Start, den der Modus will, aus PV-Überschuss oder aus festem Bedarf (7.5, Stand Plan 4b), im Kontingent des Stands Plan 2c-1.
+- **„Geladen“ je Ladelimit:** Ändert sich das Ladelimit im Auto während eines Ansteckvorgangs, gilt „geladen“ (7.5, Stand Plan 2c-1) nicht mehr, in jedem Modus. Ein höheres Limit heißt, der Fahrer will mehr; bei einem niedrigeren meldet der Tesla gleich wieder „Complete“. Das gilt auch, wenn der core das Limit selbst gesetzt hat.
 
 ### 6.6 Home Assistant (lesend)
 
@@ -827,6 +841,20 @@ Kurzfristig puffern das ESS und das Victron-Importlimit (Ebene 0).
 - **Ansteckerkennung (6.5):** Tessie fragt alle 30 s ab, solange das Auto lädt, alle 60 s, solange es angesteckt oder zu Hause ist, sonst alle 600 s. Erscheint an einer Wallbox ein Fahrzeug, fragt der Adapter sofort nach, frühestens 10 s nach der letzten Abfrage.
 - `vehicles.tesla.min_a` bleibt im Code bei 5 A (7.2); für die `config.yaml` der Anlage empfiehlt sich 6 A, das entscheidet der Betreiber dort. Der sichere Zustand bei Netzausfall (8.5) bleibt unverändert.
 
+**Stand Plan 4b** (`docs/superpowers/plans/2026-10-18-phase-4b-geplantes-laden.md`, Entscheidungen 3 bis 5 und 11, Präzisierungen 5 bis 8; Betrieb: `docs/betrieb.md`, „Laderegelung“, „Geplant“): Der Modus „Geplant“ ist umgesetzt (`core/control/vehicle_soc.py`, `planned.py`, `charging.py`, `charge_modes.py`). Gegenüber dem Text oben gilt:
+- **Ladestand** je Fahrzeug (`SocTracker`): `measured`, wenn ein Wert mit Qualität OK vorliegt, beim Tesla aus Tessie, höchstens 900 s alt, beim e-Golf aus `soc_entity` in Home Assistant (der core liest sie jetzt selbst als `vehicle.<Schlüssel>.soc_pct`). Jede Messung ist ein Anker; Tessie liefert bei jeder Abfrage einen neuen. Ohne frische Messung `estimated`: Anker plus die Energie, die der Zähler der Wallbox seither zählt, mal Wirkungsgrad, geteilt durch `usable_kwh`, höchstens 100 %. Ein Anker gilt nur, wenn er höchstens 60 min vor dem Anstecken oder danach gemessen wurde. **Festlegung bei der Umsetzung:** Liegt die Messung vor dem Anstecken oder fehlt zur Messzeit ein Zählerstand, nimmt der Anker den ersten Zählerstand des Ansteckvorgangs (vor dem Anstecken lädt das Auto nicht, und ein älterer Stand kann Energie eines anderen Autos enthalten). Ein Zähler, der sinkt (Tausch), macht den Anker ungültig. Ohne jeden Wert `assumed` mit 0 %: „Geplant“ lädt dann früh genug, erkennt das Ziel aber nicht und lädt, bis das Auto selbst aufhört.
+- **Wirksames Ziel:** das Ziel der Absicht; ohne `charge_limit_sync` und mit einem bekannten Ladelimit darunter das Limit.
+- **Bedarf** an der Wallbox: `max(0, Ziel − SOC) / 100 · usable_kwh / η` mit `vehicles.<Schlüssel>.charge_efficiency_pct` (Standard 90, 50 bis 100). Volle Leistung `P_voll = min(max_a des Fahrzeugs, max_a der Wallbox) · U · Phasen`.
+- **Späteste Startzeit:** `Abfahrt − Bedarf / P_voll · 1,1 − 15 min`. **Festlegung bei der Umsetzung:** ohne zweites η, denn der Bedarf steht schon auf der Seite der Wallbox (Entscheidung 4 meint dasselbe η einmal). Beispiel: 22,08 kWh bei 11,04 kW für 07:00 ergibt 04:33. Ohne Bedarf gibt es keine.
+- **Stand** je Zyklus, der erste zutreffende: `reached` (bekannter Ladestand am wirksamen Ziel; zurück erst, wenn er 3 Prozentpunkte darunter fällt oder das Ziel steigt), `plan` (ein gültiger Slot nennt das Auto mit Leistung über 0), `due` (die späteste Startzeit ist erreicht; das hält bis zum Ziel oder zum Ende des Ansteckvorgangs, außer ein gültiger Slot nennt das Auto wieder mit Leistung), sonst `surplus`.
+- **Regelung:** `plan` und `due` sind ein fester Bedarf (die Leistung des Slots bzw. `P_voll`), den die Verteilung vor den PV-Autos vom Überschuss abzieht; zusätzlicher PV-Überschuss kommt obendrauf. Mit festem Bedarf gilt „Geplant“ wie Sofort (Ziel des Phasenwächters wie bei voller Leistung, Zeiten wie Sofort), sonst wie PV-Überschuss, auch ein Slot mit 0 W. **Festlegung bei der Umsetzung:** Setzt der feste Bedarf ein, verfällt eine Pause aus einem PV-Stopp wie beim Wechsel auf Sofort, nur eine Pause aus einem erzwungenen Stopp bleibt; sonst fräßen 10 min Pause den Puffer der spätesten Startzeit. `reached` stoppt wie „geladen“ („Laden aus“ einmal, kein Start); über dem Ziel lädt „Geplant“ auch keinen PV-Überschuss.
+- **Dringend** (Festlegung bei der Umsetzung): Mit festem Bedarf ist nur eine Senkung dringend, die schon die Sicherung allein verlangt (7.3); die Leistung des Plans liegt oft unter dem Ist-Strom, und eine Senkung auf sie wartet auf Mindestabstand, Stundenlimit und Reserve des Tesla. Befehle wegen Überlast bleiben dringend, die anderen Modi sind unverändert.
+- **„Geladen“** gilt je Ansteckvorgang und Ladelimit, in jedem Modus (6.5, Stand Plan 4b).
+- **15-min-Wächter:** Er drosselt „Geplant“ nach PV-Überschuss und Min+PV und vor Sofort, bis zum Mindeststrom.
+- **Weckstart:** wie in den anderen Modi nur für einen Start, den der Modus will (6.5, Stand Plan 4b).
+- **Akku:** „Geplant“ bekommt keine Akku-Unterstützung (unten, 7.6); sein Fehlbetrag geht über den Override ans Netz, wie bei Sofort.
+- **Nicht in 4b:** eine Anwesenheitsprognose für nicht angesteckte Autos und Vorschläge für Ziel und Abfahrt (Phase 5, 10.4).
+
 ### 7.6 Akku-Unterstützung beim Autoladen
 
 - **Parameter (Defaults):**
@@ -863,6 +891,8 @@ Kurzfristig puffern das ESS und das Victron-Importlimit (Ebene 0).
 - **Erlaubt** (die Bedingungen oben): „Der Plan-Slot erlaubt sie“ heißt kein `HALTEN` und kein `NETZLADEN`; dann gibt der Akku keinem Auto etwas, auch nicht in Boost (Grund `plan`). Dazu kommt der Schalter „Akku-Unterstützung erlaubt“ der Absicht (Grund `off`). Health nennt den ersten zutreffenden Grund in der Reihenfolge `mode`, `off`, `plan`, `soc`, `time`.
 - **Bedienung:** Schalter und Schwelle gehören zur Absicht (5.3, Stand Plan 3c), wie der Gast-Modus; Standard erlaubt mit `control.support_soc_pct` (70 %), Bereich USV-Reserve bis 100 %. „Bedienen“ und Admin ändern sie auf der Seite „Laden“ und in Home Assistant (12, 13).
 - **Nicht in 3c:** eine Optimierung der Unterstützung im MILP; sie braucht die Autos im Planer (Phase 4).
+
+**Stand Plan 4b** (`docs/superpowers/plans/2026-10-18-phase-4b-geplantes-laden.md`, Entscheidungen 4 und 6, Präzisierung 8): „Geplant“ bekommt keine Akku-Unterstützung (`SUPPORT_MODES` bleibt PV-Überschuss und Min+PV), auch nicht über die Planung: Im Optimierer gibt es keinen Fluss Akku → Auto (9.3, Stand Plan 4b). Was einem Auto in „Geplant“ fehlt, verschiebt der Override wie bei Sofort ans Netz. Die Optimierung der Unterstützung für PV-Autos im MILP bleibt offen; sie braucht die Anwesenheitsprognose (Phase 5).
 
 ### 7.7 Akku-Steuerung (Planausführung)
 
@@ -1042,6 +1072,10 @@ Kurzfristig puffern das ESS und das Victron-Importlimit (Ebene 0).
 - **Gründe:** `plan_hold` („Plan: Halten“) und `plan_grid_charge` („Plan: Netzladen“) stehen an den Entscheidungen des Overrides bei `HALTEN` bzw. `NETZLADEN`, an Stelle von `battery_comp` oder `battery_support`; dahinter folgt `peak_guard`, wenn das Budget gesenkt hat. Beispiel: `Victron (ESS) (Plan: Halten): Netz-Sollwert 840 W – Dry-Run, nicht gesendet.`
 - **Eingaben:** Solange ein Plan-Slot gilt, tragen alle Entscheidungen der Regelung (Ladepunkte und Override) `plan_slot_ts` (Beginn des Slots in Sekunden seit 1970), `price_ct` (Bezugspreis des Slots, nur wenn bekannt) und `budget_kw` (das Ziel des Wächters, nur wenn gesetzt); die an Victron zusätzlich `plan_grid_charge_w` (`P`, sonst 0). Sicherer Zustand, Übergabe und erkannte fremde Änderungen tragen sie nicht. Ohne gültigen Slot bleiben die Entscheidungen wie vorher. Damit stehen Preis, Budget und Planabsicht in den Eingaben, wie die Felder oben es verlangen.
 - **Noch nicht:** „Warum?“ zeigt die Begründung des Plan-Slots nicht; der Satz steht auf der Seite „Zeitplan“.
+
+**Stand Plan 4b** (`docs/superpowers/plans/2026-10-18-phase-4b-geplantes-laden.md`, Präzisierungen 7 und 9; Betrieb: `docs/betrieb.md`, „Laderegelung“, „Gründe“):
+- **Gründe:** `mode_planned` („Geplant“) als Modus des Fahrzeugs, `plan_power` („Plan: Laden“) solange der Strom der Leistung des Plan-Slots folgt, `latest_start` („Späteste Startzeit“) ab der spätesten Startzeit ohne gültigen Slot, `target_reached` („Ziel-SOC erreicht“) am Stopp am Ziel und `charge_limit` („Ladelimit“) am Befehl für das Ladelimit; ohne festen Bedarf trägt „Geplant“ `pv_surplus` wie PV-Überschuss.
+- **Befehl:** Das Ladelimit erscheint als „Ladelimit {N} %“, etwa `Tesla Model 3 (Geplant, Ladelimit): Ladelimit 80 % – Dry-Run, nicht gesendet.`
 
 ---
 
@@ -1422,6 +1456,17 @@ Weitere Variablen:
 - **Budget** (akzeptierte Monatsspitze) je Monat mit Leistungspreis: `ceil(max(Spitze des Optimierers, höchster Bezug der Nachrechnung im Monat) · 10) / 10` kW; ohne Leistungspreis leer.
 - **Schalter Netzladen:** Standard aus (`RuntimeSettings.planning.grid_charge_allowed`); dazu `margin_ct`, `roundtrip_pct`, `wear_ct`, `end_value_factor` und `inertia_ct`.
 
+**Stand Plan 4b** (`docs/superpowers/plans/2026-10-18-phase-4b-geplantes-laden.md`, Entscheidungen 5 bis 7, Präzisierungen 10, 11 und 14; Betrieb: `docs/betrieb.md`, „Planung“, „Autos im Plan“): Die Autos in „Geplant“ stehen im Optimierer (`app/planning/vehicles.py`, `optimizer.py`, `battery_model.py`, `builder.py`). Gegenüber Stand Plan 3b gilt:
+- **Welche Autos:** nur Autos, die laut Health in „Geplant“ an einer Wallbox stecken, wenn die app Health traut (`intent_version ≥ intent.version`) und die Abfahrt nach dem aktuellen Slot liegt; Ladestand, Quelle, Limit, wirksames Ziel und Abfahrt kommen aus Health. Andere Autos bleiben wie bisher außerhalb des Modells (keine Anwesenheitsprognose).
+- **Variablen** je Auto `c` und Slot `t` vor dem ersten Slot ab der Abfahrt (höchstens bis zum Horizontende): Ladeleistung `e_ct = pv_ev_ct + gr_ev_ct` mit Ein/Aus `u_ct` (`min_w · u ≤ e ≤ max_w · u`); PV und Netzbezug zählen die Autos mit, auch gegen `grid_max_import_w` und das Budget. Kein Fluss Akku → Auto.
+- **Vorrang:** PV deckt zuerst das Haus, dann die Autos, dann den Akku: Eine Binärvariable `w_t` je Slot schließt Netz ins Auto zusammen mit PV in den Akku oder Einspeisung aus (sonst schöbe das Modell Netz über das Auto in den Akku, an Regel R und „Netzladen erlaubt“ vorbei).
+- **Bedarf auf der Seite der Wallbox** (Festlegung bei der Umsetzung, abweichend von Präzisierungen 11 und 14, die η doppelt gezählt hätten): `Σ_t e_ct · Δ + short_c ≥ horizon_need_c` mit `horizon_need = max(0, Bedarf − max_w · (Abfahrt − Horizontende))` ohne η; die Fehlmenge `short_c` kostet 2000 ct/kWh. Die Energie eines Autos im Horizont ist auf `max(Bedarf, min_w · Δ)` begrenzt.
+- **Regel R2:** `Σ_t gr_ev_ct · Δ ≤ grid_allowed_c + ρ_c`, `ρ_c` kostet 200 ct/kWh. `grid_allowed` ist der Bedarf minus dem PV-Überschuss nach **P25** (`max(0, P25 − Last)`) bis zur Abfahrt, in der Reihenfolge `priority` auf die Autos verteilt; je Slot zählt für ein Auto höchstens `max_w · Δ` (Festlegung bei der Umsetzung), ein Überschuss unter `min_w` zählt weiter mit. Rangfolge: Ziel vor Regel R vor Kosten. Sofort, Boost und Min+PV stehen nicht im Modell und sind ausgenommen.
+- **Trägheit** gilt in den ersten 4 Slots auch für die Ladeleistung jedes Autos, gegen die des vorigen Plans.
+- **Nachrechnung:** PV deckt das Haus, dann die Autos, dann den Akku; der Akku entlädt nur für das Haus, der Rest der Autos kommt aus dem Netz.
+- **Zusammenfassung je Auto** (`Plan.vehicles`, `PlanVehicle`): `planned_kwh = Σ e · Δ` an der Wallbox, `expected_soc_pct = SOC + Σ e · Δ · η / usable_kwh · 100` (höchstens das Ziel), `shortfall_kwh`, `reachable` (Fehlmenge höchstens 0,1 kWh; bei Abfahrt hinter dem Horizont gegen `horizon_need`) und `finish_at`, das Ende des letzten Slots, in dem der Plan das Auto lädt. **Offen:** Bei einer Abfahrt hinter dem Horizont ist `finish_at` derzeit das Ende des Horizontteils; es soll dann leer sein, und „lädt“ soll `e ≥ 1 W` heißen (Präzisierung 14). Das kommt mit einer späteren Korrektur.
+- **Solver:** Mit Auto und Leistungspreis erreicht HiGHS in den Szenarien der CI einige Male das Zeitlimit von 20 s, mit einer Lösung, die dann gilt (16, Stand Plan 4b).
+
 ### 9.4 Regelbasierter Ersatzplan
 
 Greift, wenn der Solver scheitert, das Zeitlimit überschritten ist oder das Ergebnis unplausibel ist:
@@ -1444,6 +1489,8 @@ Greift, wenn der Solver scheitert, das Zeitlimit überschritten ist oder das Erg
 - **Netzladen** nur bei eingeschaltetem Schalter und nur gegen den ersten teuren Slot, der trotz Halten knapp bleibt: in einem Kandidaten davor (nicht teuer, nach Preis aufsteigend), für den die Spread-Regel mit dem Preis des teuren Slots und R1 an der Nachrechnung gelten. Die Leistung ist die höchste volle 100 W unter der Grenze des Slots.
 - **Budget:** `max(bisherige Monatsspitze, minimum_kw)` in jedem Slot eines Monats mit Leistungspreis.
 - **Geplant (Autos)** folgt mit Phase 4.
+
+**Stand Plan 4b** (`docs/superpowers/plans/2026-10-18-phase-4b-geplantes-laden.md`, Entscheidung 8; Betrieb: `docs/betrieb.md`, „Planung“, „Ersatzplan“): Der Ersatzplan lädt die Autos in „Geplant“ (`fallback_vehicles`), je Auto in der Reihenfolge `priority` und nur vor der Abfahrt: zuerst der erwartete PV-Überschuss (P50 minus Last), den die Autos davor übrig lassen, in Slots, in denen er `min_w` erreicht, bis der Bedarf gedeckt ist; dann die günstigsten Slots (beim Gleichstand der frühere) mit voller Leistung, bis der Bedarf im Horizont gedeckt ist, der letzte nur mit dem Rest, mindestens `min_w`. Der Akku folgt danach wie im Stand Plan 3b. **Festlegung bei der Umsetzung:** Je Slot laden alle Autos zusammen höchstens `grid_max_import_w` plus PV minus Haus, wie im Optimierer; ohne Autos ist der Ersatzplan unverändert. Regel R2 hält er meist von selbst ein, denn P50 ≥ P25. **Offen:** Einen Überschuss unter `min_w` zählt R2 als PV für das Auto, der Ersatzplan lädt dort aber nicht; bei vielen solchen Slots kann er mehr aus dem Netz laden als erlaubt.
 
 ### 9.5 Planungsablauf
 
@@ -1494,6 +1541,12 @@ Greift, wenn der Solver scheitert, das Zeitlimit überschritten ist oder das Erg
 - **Gültigkeit:** 45 min. Ob ein Plan gilt, sagt die API (`valid`), nicht die Uhr des Browsers.
 - **Aufbewahrung:** Das Aufräumen läuft in der stündlichen Wartung der app. Nach 7 Tagen werden `plan_inputs` gelöscht und die Slots des Plans auf die vor `valid_until` gekürzt (`trimmed`); nach 30 Tagen wird der Plan gelöscht.
 
+**Stand Plan 4b** (`docs/superpowers/plans/2026-10-18-phase-4b-geplantes-laden.md`, Entscheidungen 9 und 10, Präzisierungen 3 und 15; Betrieb: `docs/betrieb.md`, „Planung“): Gegenüber Stand Plan 3b gilt:
+- **Auslöser `vehicles`** („Fahrzeug geändert“): bei einem Auto in „Geplant“ ändern sich Ein- oder Ausstecken, Wallbox, wirksames Ziel, Abfahrt, „Ladestand angenommen“ oder das Ladelimit des Tesla, oder ein Auto kommt in „Geplant“ oder verlässt den Modus. Ladestand, „lädt“ und späteste Startzeit lösen nicht aus; jede Viertelstunde plant die app ohnehin mit dem aktuellen Ladestand neu. Grundlage ist nur ein Health, dem die app traut.
+- **Plausibilität:** Die Bilanz zählt die Autos mit; je Auto ist die Leistung 0 oder zwischen `min_w` und `max_w` (1 W Toleranz), und ab der Abfahrt lädt es nicht. Neue Befunde: „Auto {Name} lädt außerhalb seiner Grenzen um HH:MM“ und „Auto {Name} lädt nach der Abfahrt“; wie die übrigen führen sie zum Ersatzplan.
+- **Übergabe:** Jeder Slot der Absicht trägt `vehicles` mit `round(ev_w)` je Auto (5.3, Stand Plan 4b). Der core folgt damit nur Autos in „Geplant“; nach dem Ablauf des Plans gilt die späteste Startzeit.
+- **Eingangsdaten:** `PlanInputs.vehicles` und je Slot `pv_p25_w` (für R2); alte gespeicherte Eingangsdaten und Pläne laden ohne Autos.
+
 ### 9.6 Erklärungen
 
 - **Grundcodes je Slot,** zum Beispiel:
@@ -1510,6 +1563,11 @@ Greift, wenn der Solver scheitert, das Zeitlimit überschritten ist oder das Erg
 - **Elf Grundcodes:** `NETZLADEN_GUENSTIG`, `HALTEN_FUER_SPITZE`, `BUDGET_SPITZE`, `HALTEN_RESTWERT`, `PV_LADEN`, `PV_UEBERSCHUSS_ERWARTET`, `REGEL_R_BLOCKIERT_NETZLADEN`, `NETZLADEN_AUS`, `EIGENVERBRAUCH`, `GESCHAETZT` und `ERSATZPLAN`. `ZIEL_SOC_ABFAHRT` kommt mit Phase 4, `UNTERSTUETZUNG_RESERVIERT` mit 3c.
 - **Je Slot ein Hauptcode,** dazu `ERSATZPLAN` an erster Stelle im Ersatzplan und `GESCHAETZT` an letzter bei einem Schätzpreis. Der Hauptcode folgt der ersten passenden Regel: `NETZLADEN` → `NETZLADEN_GUENSTIG`; `HALTEN` → `HALTEN_FUER_SPITZE` (später ein Block teurerer Slots mit Entladung), sonst `BUDGET_SPITZE` (später würde ohne Akku das Budget überschritten), sonst `HALTEN_RESTWERT`; sonst `PV_LADEN` bei Laden aus PV ab 100 W; sonst `REGEL_R_BLOCKIERT_NETZLADEN` (Schalter an, Netzladen würde sich lohnen, danach speist die PV mehr als 0,1 kWh ein) oder `NETZLADEN_AUS` (Schalter aus, es würde sich lohnen); sonst `PV_UEBERSCHUSS_ERWARTET` (der Akku entlädt, später lädt ihn die PV); sonst `EIGENVERBRAUCH`. „Lohnt sich“ heißt: ein späterer Slot im Horizont bezieht in der Nachrechnung ≥ 100 W aus dem Netz und erfüllt die Spread-Regel mit dem Preis dieses Slots.
 - **Gespeichert werden nur Codes und Parameter;** der Satz entsteht beim Lesen (`explain.sentence`), so ändern sich Wortlaute ohne Migration. Zahlen haben ein Dezimalkomma, Uhrzeiten sind lokal. Der Text eines Slots sind die Sätze seiner Codes, durch ein Leerzeichen getrennt.
+
+**Stand Plan 4b** (`docs/superpowers/plans/2026-10-18-phase-4b-geplantes-laden.md`, Präzisierung 13; Betrieb: `docs/betrieb.md`, „Planung“, „Erklärungen“): Drei Grundcodes kommen dazu, nach dem Hauptcode je Auto in der Reihenfolge `priority`, vor `UNTERSTUETZUNG_RESERVIERT` und `GESCHAETZT`:
+- `ZIEL_SOC_ABFAHRT` „{name} lädt {kw} kW, damit es um {um} Uhr {soc} % hat.“ in Slots, in denen das Auto mindestens 100 W aus dem Netz lädt;
+- `AUTO_WARTET_AUF_PV` „{name} wartet auf PV-Überschuss (Regel R).“ in Slots vor der Abfahrt ohne Laden, wenn Regel R2 bindet (`grid_allowed_kwh < horizon_need_kwh`) und ein späterer Slot das Auto aus PV lädt;
+- `ZIEL_SOC_UNERREICHBAR` „{name} erreicht bis {um} Uhr voraussichtlich nur {soc} %.“ im ersten Slot, wenn die Fehlmenge über 0,1 kWh liegt.
 
 ---
 
@@ -1608,6 +1666,8 @@ Greift, wenn der Solver scheitert, das Zeitlimit überschritten ist oder das Erg
 
 **Stand Plan 4a** (`docs/superpowers/plans/2026-10-17-phase-4a-statistik.md`, Entscheidungen 2 und 3, Präzisierung 3; Betrieb: `docs/betrieb.md`, Abschnitt 8): `ChargingSession` liegt nicht in `shared`, sondern in `app/charging/sessions.py` (`ChargingSession`, `FlowSplit`, `SessionService`), denn nur die app braucht sie; der core und sein Image bleiben unverändert. Sie trägt Wallbox, Fahrzeug (Schlüssel aus `config.yaml`, `guest` oder `unknown`), Beginn, Ende (leer, solange sie läuft) und die Energie mit ihrer Herkunft (PV, Akku, Netz) und den Kosten (leer, wenn ein Preis fehlt). Die Herkunft eines `LedgerSlot` kennt neben `stream` und `influx` auch `estimate` (11.4), und `DaySummary` zählt die geschätzten Slots (`estimated_slots`).
 
+**Stand Plan 4b** (`docs/superpowers/plans/2026-10-18-phase-4b-geplantes-laden.md`, Präzisierungen 1 bis 4 und 9): In `shared` kommen dazu: `ChargeMode.PLANNED`, `VehicleIntent.target_soc_pct` und `departure`, `next_departure`; `PlanSlot.ev_w` (Ladeleistung je Fahrzeug, W), `PlanVehicle` und `Plan.vehicles` (9.3, Stand Plan 4b), `IntentPlanSlot.vehicles`; drei `ReasonCode` (9.6) und der Auslöser `vehicles`; `CommandKind.CHARGE_LIMIT` (6.5). `VehicleConfig` bekommt `charge_efficiency_pct` (Standard 90, 50 bis 100) und `charge_limit_sync` (Standard aus, verlangt `tessie`), und `soc_entity` wird zum Signal `vehicle.<Schlüssel>.soc_pct` des core (ein anderer Eintrag für dasselbe Signal in `homeassistant.entities` macht die Konfiguration ungültig; der bisherige gleichlautende Eintrag dort kann entfallen). Die Prüfung der Konfiguration auf zusammenfallende Objekt-IDs kennt jetzt auch die Statistik-Sensoren aus 4a und die neuen Entitäten (12).
+
 ### 11.2 InfluxDB 1.x
 
 - **Datenbank `bindaems`** mit zwei Retention Policies:
@@ -1662,6 +1722,13 @@ Greift, wenn der Solver scheitert, das Zeitlimit überschritten ist oder das Erg
 - **`ledger_check`:** `day` (Text `JJJJ-MM-TT`), `signal`, `ledger_kwh`, `counter_kwh`, `deviation_pct` (beide leer ohne Zählerwert), `flagged`, `note`, `checked_at`; Primärschlüssel `(day, signal)`.
 - **`consumer_day`:** `day`, `consumer_id`, `kwh` (leer, wenn unbekannt), `note` (der Grund); Primärschlüssel `(day, consumer_id)`. Die Zeilen eines gelöschten Verbrauchers entfallen mit ihm.
 - **Aufbewahrung:** Es gibt kein Aufräumen für diese Tabellen; sie wachsen langsam (eine Zeile je Wechsel der Belegung, je Session, je Tag und Größe). Die Sicherung der app enthält sie (11.3). Was nach einer Wiederherstellung fehlt, holt die app nach, soweit es sich rechnen lässt (Einstandspreis, Abgleich der letzten 35 Tage, Verbraucher der letzten 31 Tage); Sessions und Belegung seit der Sicherung gehen verloren.
+
+**Stand Plan 4b** (`docs/superpowers/plans/2026-10-18-phase-4b-geplantes-laden.md`, Entscheidung 15, Präzisierung 16; Betrieb: `docs/betrieb.md`, Abschnitt 8, „Statistik je Zeitraum“): Migration `0012` (`v0012_planned_charge.py`) legt die Tabelle `planned_charge` für die Abnahme „Ziel-SOC“ an und ändert keine vorhandene: `id`, `session_id` (FK `charging_session.id`), `vehicle`, `target_soc_pct`, `departure_at`, `started_at`, `start_soc_pct`, `start_soc_source`, `feasible`, `reached_at`, `end_soc_pct`, `end_soc_source`, `end_soc_at` und `outcome` (`open`, `reached`, `missed`, `early`, `unknown`, `changed`), Index auf `departure_at`. Gegenüber Präzisierung 16 legt die Umsetzung fest:
+- **Beginn:** Eine Zeile entsteht je Session in „Geplant“ und Abfahrt erst, wenn das Auto für diese Abfahrt einen Bedarf hat (`planned.state` nicht `reached`, `need_kwh` über 0); angesteckt stehen ohne Bedarf zählt nirgends. Ist der Ladestand zu Beginn angenommen, ersetzt ihn der erste bekannte, und `started_at` rückt auf diesen Zeitpunkt.
+- **Machbar:** zu Beginn reichte volle Leistung bis zur Abfahrt, und das Ladelimit liegt nicht unter dem Ziel; sinkt es später darunter, bevor das Ziel erreicht ist, wird die Ladung nicht machbar.
+- **Erreicht:** der Ladestand des letzten Health vor der Abfahrt mindestens Ziel − 1 Prozentpunkt, oder ein bekannter Ladestand war vorher am Ziel; vor der Abfahrt abgesteckt `early`. Ist der letzte Ladestand angenommen oder älter als 15 min (`end_soc_at`, damit die Regel einen Neustart übersteht), `unknown`.
+- **Zeilen werden nie gelöscht.** Ändern sich Ziel oder Abfahrt vor der Abfahrt oder wechselt das Auto auf PV, Min+PV oder Aus, ist das Ergebnis `changed` (eigener Zähler, nicht in der Quote); Sofort, Boost und ein unbekannter Modus lassen die Zeile offen.
+- **Lücke ohne Health:** Beginnt nach einer Lücke von mehr als 30 min für dasselbe Auto an derselben Wallbox eine neue Session, wandert die Zeile mit; lag die Abfahrt in der Lücke, `unknown`.
 
 ### 11.4 Viertelstunden-Abrechnung
 
@@ -1801,6 +1868,13 @@ pv:
 - **Je Fahrzeug** (Gerät „BindaEMS <Fahrzeug>“): `<Fahrzeug>_charge_energy` „Ladeenergie“ (kWh, eine Nachkommastelle, Geräteklasse `energy`, **ohne Zustandsklasse**, denn der Wert gilt je Session und ist kein Zählerstand). Er zeigt die laufende, sonst die letzte Session; Attribute `start`, `end` (leer, solange sie läuft), `pv_kwh`, `battery_kwh`, `grid_kwh`, `cost_eur` (leer, wenn ein Preis fehlt) und `month_kwh`. Ohne Daten „unbekannt“.
 - **Weiterhin nicht da (4b):** Ziel-SOC, Abfahrtszeit und die Sensoren Fertig-um und Ziel erreichbar, dazu „Ziel-SOC unerreichbar“; die Tabelle oben führt sie weiter auf.
 
+**Stand Plan 4b** (`docs/superpowers/plans/2026-10-18-phase-4b-geplantes-laden.md`, Entscheidungen 12 bis 14, Präzisierung 4; Betrieb: `docs/betrieb.md`, Abschnitt 7, „Geplantes Laden“ und „Benachrichtigungen“): Home Assistant ist vollständig (`app/ha/entities.py`, `notifications.py`).
+- **Je Fahrzeug:** `<Fahrzeug>_target_soc` Zahl „Ziel-SOC“ (20 bis 100 %, Schritt 1), `<Fahrzeug>_departure` Text „Abfahrtszeit“ (`HH:MM`; neue Plattform `text`, der Benutzer `bindaems` braucht dafür in der ACL `topic write homeassistant/text/bindaems/#`), `<Fahrzeug>_done_by` Sensor „Fertig um“ (Zeitstempel) und `<Fahrzeug>_target_reachable` Sensor „Ziel erreichbar“ („ja“, „nein“; Attribute `expected_soc_pct`, `departure_at`, `soc_source`); der Auswahl „Lademodus“ kommt „Geplant“ dazu, dem „Gast-Lademodus“ nicht. Ziel und Abfahrt zeigen die Absicht, auch in den anderen Modi.
+- **„Fertig um“ und „Ziel erreichbar“:** Nennt der gültige Plan das Auto, aus dessen Zusammenfassung (9.3, Stand Plan 4b); sonst rechnet die app aus der spätesten Startzeit in Health mit voller Leistung. Außerhalb von „Geplant“ oder abgesteckt „unbekannt“; am Ziel „Fertig um“ „unbekannt“ und „Ziel erreichbar“ „ja“.
+- **System:** `problem_target_unreachable` „Ziel-SOC unerreichbar“ (Attribut `vehicles`).
+- **Benachrichtigungen komplett:** Jede Warnung, die 30 s ohne Unterbrechung besteht, meldet sich einmal als `persistent_notification` (`bindaems_warning_<Objekt-ID>`, Titel „BindaEMS“) und über `notify_service` und verschwindet mit ihr: „Mitregelndes System erkannt.“, „Preise fehlen.“, „Gerät offline: {Namen}.“, „Zuordnung Auto und Wallbox unklar.“ und je Fahrzeug „Ziel-SOC unerreichbar: {Name} erreicht bis {HH:MM} voraussichtlich nur {soc} %.“. „Watchdog ausgelöst“ meldet schon der Alarm; „Mitregelndes System“ schweigt, solange ein Alarm `competitor.*` der Schwere „Fehler“ gemeldet ist. Die Warnungen teilen das Budget der Alarme (10 je Minute, davon höchstens 4 für Ablehnungen). **Festlegung bei der Umsetzung:** Eine Warnung im Zustand „unbekannt“ (etwa ohne core) zählt nicht weiter, hält eine stehende Meldung aber, wie die Alarme beim Verlust des core; „Ziel-SOC unerreichbar“ meldet sich ohne erwarteten Ladestand nicht.
+- **In beide Richtungen** prüft `tests/integration/test_ha_round_trip.py` jedes Bedienelement (Befehl aus HA ändert die Absicht, eine Änderung der Absicht erscheint in HA); an der Anlage die Checkliste `docs/verification/abnahme-phase-4.md`, Abschnitt 5.
+
 ---
 
 ## 13. Web-UI
@@ -1850,6 +1924,13 @@ pv:
 - **Laden:** Die Fahrzeugkarte zeigt die laufende Session („Session seit {HH:MM} · {kWh} kWh (PV {a} · Akku {b} · Netz {c})“) oder die letzte („Letzte Session {TT.MM.} {HH:MM}–{HH:MM} · {kWh} kWh · {Betrag} €“, die Kosten nur, wenn sie bekannt sind). Ziel-SOC und Abfahrt kommen mit 4b.
 - **API** (alle ab „Lesen“): `GET /api/stats?period=day|week|month|year[&date=JJJJ-MM-TT]`, `GET /api/charging/sessions?from=…&to=…[&vehicle=<Schlüssel>]` (neueste zuerst, höchstens 400 Tage und 200 Einträge) und `GET /api/ledger/checks?from=…&to=…` (höchstens 400 Tage, je Tag und Größe, dazu die Summen).
 - **Verbraucher:** Die Seite „Statistik“ zeigt ihre Energie je Zeitraum aus den gespeicherten Tagen; fehlt ein Tag, steht „–“ und darunter sichtbar der Grund.
+
+**Stand Plan 4b** (`docs/superpowers/plans/2026-10-18-phase-4b-geplantes-laden.md`, Entscheidungen 2 und 12, Präzisierung 7; Bedienung: `docs/betrieb.md`, Abschnitt 12, „Laden“, „Zeitplan“ und „Statistik“): Ziel-SOC und Abfahrt sind im UI.
+- **Laden:** Die Auswahl des Lademodus kennt „Geplant“ (nicht für den Gast). In „Geplant“ hat die Fahrzeugkarte ab „Bedienen“ die Felder „Ziel-SOC“ (%) und „Abfahrt“ mit der Taste „Übernehmen“ (`PUT /api/control/vehicles/{key}/target`, ganze Zahlen) und darunter die erste zutreffende Zeile: „Ziel erreicht ({soc} %).“, „Fertig um {HH:MM} · Ziel {soc} % bis {HH:MM}“, „Ziel {soc} % bis {HH:MM} nicht erreichbar, voraussichtlich {x} %.“ oder „Kein Plan · lädt spätestens ab {HH:MM}“; dazu „Ladestand geschätzt“, „Ladestand unbekannt, gerechnet ab 0 %.“ und „Ladelimit im Auto {x} % liegt unter dem Ziel.“.
+- **Zeitplan:** das Diagramm „Autos“ mit je einer Reihe „{Name}“ (kW) und unter dem Kopf je geplantem Auto die Zeile wie auf „Laden“.
+- **Statistik:** die Karte „Geplantes Laden“: „{a} von {b} machbaren Ladungen erreicht ({pct} %)“, darunter „Nicht machbar: {n} · Vor der Abfahrt abgesteckt: {n} · Ohne Ladestand: {n}“ und, als Festlegung bei der Umsetzung, „Vor der Abfahrt geändert oder verlassen: {n}“; ohne geplante Ladung „Im Zeitraum gab es keine geplante Ladung.“. Die Quote ist abgerundet (`Math.floor`), denn 94,6 % sind keine 95 %.
+- **API:** `GET /api/stats` hat `planned` mit `reached`, `feasible`, `missed`, `infeasible`, `early`, `unknown` und `changed` (11.3, Stand Plan 4b); der Plan (`/api/plan`) trägt `vehicles` und je Slot `ev_w`.
+- **Demo-Welt:** Der Tesla steht dort schon in „Geplant“ mit 60 % bis 17:30.
 
 ---
 
@@ -1999,6 +2080,11 @@ pv:
 - **Plan-Ereignis:** Ein Szenario reicht zur Laufzeit eine neue Version der Absicht mit Plan ein, so wie die app (`id` ist die Sekunde des Ereignisses); Boost und Übersteuerung bleiben dabei erhalten.
 - **Fünf Szenarien dazu** (jetzt 28), Victron live: `plan-halten` (Halten am Abend: der Akku entlädt im Minutenmittel höchstens 300 W, höchstens 40 Entscheidungen an `victron` je Stunde), `plan-netzladen` (Netzbezug Haus + 3000 W, der SOC steigt mindestens um 90 % der geladenen Energie nach Wirkungsgrad), `plan-abgelaufen` (nach dem Ablauf verfällt der Override, der Akku trägt wieder das Haus), `plan-budget` (das Budget des Slots ersetzt `control.peak_target_kw` und senkt das Netzladen; geprüft mit Unter- und Obergrenze je Viertelstunde und den Gründen `plan_grid_charge` und `peak_guard`) und `plan-boost` (Boost unter `HALTEN` lädt aus dem Netz, jeder neue Plan behält den Boost).
 - **Bekannte Grenze:** `plan-netzladen` rechnet mit 30 kWh Akku (die Beispielkonfiguration); mit `--config` einer Anlage mit deutlich mehr nutzbarer Kapazität scheitert seine Prüfung des SOC zu Unrecht.
+
+**Stand Plan 4b** (`docs/superpowers/plans/2026-10-18-phase-4b-geplantes-laden.md`, Entscheidung 16; Szenarien und Abweichungen: `docs/betrieb.md`, „Simulator“ und „Planung“, „Szenario-Test-Umgebung“):
+- **Anlagensimulator:** Er kennt den Ladestand des e-Golf über Home Assistant (abschaltbar), den Zähler der EVCS und `set_charge_limit` im Modell von Tessie. Fünf Szenarien dazu (jetzt 33): `geplant-plan` (Plan-Leistung, danach die späteste Startzeit ohne Pause), `geplant-spaet` (Start zur spätesten Startzeit, Stopp am Ziel), `geplant-pv` (nur PV-Überschuss mit einem Slot von 0 W, Stopp am Ziel trotz Sonne), `geplant-unbekannt` (ohne Ladestand: angenommen 0 %, kein „Ziel-SOC erreicht“) und `tesla-ladelimit` (genau ein Befehl „Ladelimit 75 %“). Abweichung: In `geplant-plan` gilt der Plan 30 statt 45 min, damit der Stopp am Ziel deutlich vor dem Ende des einstündigen Laufs liegt.
+- **Planungsszenarien mit einem Auto:** Jede Tagesart der CI läuft einmal ohne und einmal mit einem Auto (erfundene Werte: am ersten Abend ab 18:00 mit 40 % angesteckt, Abfahrt 07:00 mit Ziel 80 %, 60 kWh, 11 kW). „Victron allein“ lädt es ab dem Anstecken mit voller Leistung. Bestanden heißt zusätzlich: jedes Ziel erreicht (mindestens Ziel − 1 Prozentpunkt) und Regel R2 nie verletzt. Ergebnis mit Auto, günstiger als „Victron allein“: `sommer-sonnig` rund 2,64 €, `winter-spread` rund 7,95 €, `winter-leistung` rund 38,83 €, `wechselhaft` rund 5,37 €. In `winter-leistung` erreichen einige Pläne das Zeitlimit von 20 s mit einer gültigen Lösung. Die Datei der Tage hat dafür Version 2 (Auto und P25); `export_days` schreibt weiter Version 1 ohne Auto.
+- **Kreuztests:** `tests/unit/test_planned_formula.py` vergleicht Bedarf und späteste Startzeit von core und app; `tests/integration/test_ha_round_trip.py` prüft jedes Bedienelement in Home Assistant in beide Richtungen; `tests/unit/test_docs.py` hält Betriebshandbuch und Abnahme an den Code (Health-Felder, Gründe, Bericht der Szenarien, Bedienelemente).
 
 ---
 
@@ -2288,6 +2374,34 @@ Bei der Umsetzung haben diese Punkte die Entscheidungen ergänzt oder enger gefa
 - **Grafana:** Die Entscheidungen stehen in `raw` (Markierungen höchstens 90 Tage); „PV gesamt“ und „Haus“ kommen aus den abgeleiteten Reihen des core (`pv_total`, `house_load`), nicht aus der Summe der Wechselrichter.
 - **Texte außerhalb der Vorgabe:** In „Autos“ stehen PV, Akku und Netz in kWh; die Karte „Ladesessions“ sagt bei 200 Einträgen „Angezeigt werden die 200 neuesten Sessions.“; „Monatsspitzen“ fehlt, wenn es keine gibt; eine Session über Mitternacht zeigt beim Ende das Datum („18:00–09.10. 01:15“).
 - **Offen für 4b und danach:** „Ziel-SOC“, Abfahrt, Regel R2 und die Autos im Planer; die Abnahme der Phase 4 besteht erst mit 4b ganz.
+
+**Stand Plan 4b** (`docs/superpowers/plans/2026-10-18-phase-4b-geplantes-laden.md`, Entscheidungen 1 bis 17, so wie der Betreiber sie am 18.10.2026 freigegeben hat: „passt so, du kannst beginnen, deployment führe ich erst nach der abnahme von phase 3 durch“; Betrieb: `docs/betrieb.md`, „Laderegelung“, „Geplant“, „Geplantes Laden ausrollen (Plan 4b)“, „Planung“, „Autos im Plan“, Abschnitte 7, 8 und 12; Abnahme: `docs/verification/abnahme-phase-4.md`, Abschnitte 4 und 5): **4b „Geplantes Laden“** ist umgesetzt. Es ändert core, `shared`, app und UI und rollt mit Regelbetrieb aus gemeinsam aus, nach der Abnahme der Phase 3; das Ausrollen ist ein Schritt des Betreibers, nichts geht von selbst live. Die Entscheidungen:
+1. **Zuschnitt:** „Geplant“ mit Ziel-SOC und Abfahrt, die Autos im Optimierer mit Regel R2, Ersatzplan für Autos, späteste Startzeit, Ladestand des e-Golf, Tesla-Ladelimit, HA vollständig, Benachrichtigungen komplett, Zählung für die Abnahme, Simulator- und Planungsszenarien. Nicht in 4b: Anwesenheitsprognose und Vorschläge (Phase 5), Akku-Unterstützung im MILP, die Influx-Messung `plan`, Autos in `export_days`.
+2. **Ziel und Abfahrt in der Absicht** (5.3, Stand Plan 4b): tägliche Abfahrt, kein „Geplant“ für einen Gast.
+3. **Ladestand:** Tessie, `soc_entity` im core, Schätzung über den Zähler der Wallbox, sonst angenommen 0 % (7.5, Stand Plan 4b).
+4. **„Geplant“ im core:** Plan-Leistung als fester Bedarf, ohne Plan die späteste Startzeit, Stopp am Ziel, keine Akku-Unterstützung, Wächter nach Min+PV (7.5, Stand Plan 4b).
+5. **Wirkungsgrad** `charge_efficiency_pct`, Standard 90.
+6. **Autos im Optimierer** und 7. **Regel R2** (9.3, Stand Plan 4b).
+8. **Ersatzplan für Autos** (9.4, Stand Plan 4b).
+9. **Plan an den core** mit `vehicles` je Slot (5.3, 9.5).
+10. **Auslöser** `vehicles` (9.5, Stand Plan 4b).
+11. **Tesla-Ladelimit** mit `charge_limit_sync` (6.5, Stand Plan 4b).
+12. **Anzeige** „Fertig um“ und „Ziel erreichbar“, Diagramm „Autos“ (12, 13).
+13. **Home Assistant vollständig** (12, Stand Plan 4b).
+14. **Benachrichtigungen komplett** (12, Stand Plan 4b).
+15. **Abnahme „Ziel-SOC“** über `planned_charge` (11.3, Stand Plan 4b) und „HA in beide Richtungen“.
+16. **Simulator und Szenarien** (16, Stand Plan 4b).
+17. **Nichts geht von selbst live.**
+
+Bei der Umsetzung haben diese Punkte die Entscheidungen ergänzt oder enger gefasst:
+- **Ladestand:** Der Anker einer Messung vor dem Anstecken oder ohne Zählerstand nimmt den ersten Zählerstand des Ansteckvorgangs; Tessie liefert bei jeder Abfrage einen neuen Anker (7.5, Stand Plan 4b).
+- **η einmal:** Bedarf und späteste Startzeit rechnen η nur einmal (Bedarf an der Wallbox); der Planer rechnet die Autos ebenso auf der Seite der Wallbox, auch `horizon_need` und `planned_kwh` (7.5, 9.3, Stand Plan 4b).
+- **Fester Bedarf wie Sofort:** Eine Pause aus einem PV-Stopp verfällt; dringend ist mit festem Bedarf nur, was die Sicherung allein verlangt (7.5, Stand Plan 4b).
+- **„Geladen“ je Ladelimit**, in jedem Modus (6.5, Stand Plan 4b).
+- **Regel R2 und Optimierer:** PV-Anteil je Slot höchstens `max_w · Δ`; Energiekappe je Auto `max(Bedarf, min_w · Δ)` (9.3, Stand Plan 4b); der Ersatzplan beachtet `grid_max_import_w` mit den Autos (9.4).
+- **Warnungen:** Ein unbekannter Zustand hält eine stehende Meldung (12, Stand Plan 4b).
+- **Zählung:** Zeile erst mit Bedarf, nie gelöscht, Ergebnis `changed`, Mitwandern über eine Lücke, 15-min-Regel mit `end_soc_at` (11.3, Stand Plan 4b); die Statistik zeigt `changed` als eigene Zeile.
+- **Offen:** Bei einer Abfahrt hinter dem Horizont soll „Fertig um“ leer sein und „lädt“ `e ≥ 1 W` heißen (9.3, Stand Plan 4b); das kommt mit einer späteren Korrektur. Dazu kleinere Punkte: der Ersatzplan kann Regel R2 bei vielen kleinen Überschüssen überschreiten (9.4); „Fertig um“ ohne Plan ändert sich bei fälliger Startzeit mit jedem Takt (auf die Minute runden); einige seltene Fälle der Zählung an einer Lücke ohne Health (Abfahrt in der Lücke ohne neue Session gilt als `early` statt `unknown`; ein vor der Lücke erreichtes Ziel gilt als `unknown`). Die Quote der Abnahme berühren sie nicht im Regelfall.
 
 ### Phase 5 – Lernen
 

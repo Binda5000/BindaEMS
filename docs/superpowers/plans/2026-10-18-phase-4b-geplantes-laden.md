@@ -214,7 +214,7 @@ Der Plan ist auf diese Vorschläge geschrieben; eine andere Wahl ändert die gen
 - **Zeitplan:** Diagramm „Autos“ mit je einer Reihe „{Name}“ (kW); unter dem Kopf je geplantem Auto eine Zeile wie in der Fahrzeugkarte.
 - **HA:** „Ziel-SOC“, „Abfahrtszeit“, „Fertig um“, „Ziel erreichbar“ (Zustände „ja“, „nein“), „Ziel-SOC unerreichbar“.
 - **Benachrichtigungen** (Titel „BindaEMS“): „Ziel-SOC unerreichbar: {Name} erreicht bis {HH:MM} voraussichtlich nur {soc} %.“, „Preise fehlen.“, „Gerät offline: {Namen}.“, „Zuordnung Auto und Wallbox unklar.“, „Mitregelndes System erkannt.“
-- **Statistik:** Karte „Geplantes Laden“: „{a} von {b} machbaren Ladungen erreicht ({pct} %)“, darunter „Nicht machbar: {n} · Vor der Abfahrt abgesteckt: {n} · Ohne Ladestand: {n}“. Leer: „Im Zeitraum gab es keine geplante Ladung.“
+- **Statistik:** Karte „Geplantes Laden“: „{a} von {b} machbaren Ladungen erreicht ({pct} %)“, darunter „Nicht machbar: {n} · Vor der Abfahrt abgesteckt: {n} · Ohne Ladestand: {n}“ und „Vor der Abfahrt geändert oder verlassen: {n}“ (nachgetragen bei der Umsetzung, Task 17/18; die Quote ist abgerundet). Leer: „Im Zeitraum gab es keine geplante Ladung.“
 - **Änderungsprotokoll:** Aktion `intent.target` „Ziel geändert“, Kommentar „Ziel {soc} %, Abfahrt {HH:MM}“.
 
 ---

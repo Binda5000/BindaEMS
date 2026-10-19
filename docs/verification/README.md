@@ -293,11 +293,13 @@ innerhalb ±2 % von VRM, Preise und Prognose sichtbar und nachweislich keine Sch
 Geräten. Für die Abnahme kopierst du sie mit Datum, füllst sie an der Anlage aus und checkst sie
 hier ein.
 
-## Abnahme Phase 4 (Teil Statistik)
+## Abnahme Phase 4
 
-Die Checkliste für die Abnahme der Phase 4 steht in [`abnahme-phase-4.md`](abnahme-phase-4.md). Sie
-gilt für Plan 4a und prüft die Abrechnung: 30 Tage ab dem Ausrollen, Netzbezug und Einspeisung im
+Die Checkliste für die Abnahme der Phase 4 steht in [`abnahme-phase-4.md`](abnahme-phase-4.md). Der
+Teil Statistik (Plan 4a) prüft die Abrechnung: 30 Tage ab dem Ausrollen, Netzbezug und Einspeisung im
 Abgleich mit den Zählern (`GET /api/ledger/checks` oder die Karte „Abgleich mit den Zählern“ auf der
 Seite „Statistik“) innerhalb ±1 %, jeder markierte Tag mit Ursache, einzelne Tage gegen den Zähler des
-Netzbetreibers. „HA in beide Richtungen“ und „Ziel-SOC“ folgen mit Plan 4b. Für die Abnahme kopierst
+Netzbetreibers. Der Teil Geplantes Laden (Plan 4b) prüft den Ziel-SOC (mindestens 95 % der machbaren
+geplanten Ladungen erreicht, `GET /api/stats?period=month`, Teil `planned`, mit EVCS und Tesla live)
+und jedes Bedienelement in Home Assistant in beide Richtungen. Für die Abnahme kopierst
 du die Checkliste mit Datum, füllst sie an der Anlage aus und checkst sie hier ein.
