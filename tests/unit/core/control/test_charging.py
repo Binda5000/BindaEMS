@@ -2686,9 +2686,53 @@ def test_unmet_surplus_counts_cars_that_follow_their_command(cfg) -> None:  # Ru
     # Eine Stufe von 1 A darunter folgt er noch (3220 W bei 8 A).
     at_7_a = evcs(charging=True, power_w=3220.0)
     assert unmet_after(cfg, ChargeMode.PV, current=8.0, on=True, evcs_obs=at_7_a) == 4140.0
-    # Hält die Regelung ihn aus („Laden aus“), folgt er mit 0 W: Er wartet auf Überschuss.
+
+
+def held_off_unmet(cfg, steps: int, **kw) -> list[float]:
+    """``unmet_surplus_w`` je Schritt, ohne Überschuss; jedes Urteil der Safety-Schicht nimmt an."""
+    c = controller(cfg)
+    found: list[float] = []
+    for s in range(steps):
+        accept(c, c.step(inputs(cfg, s=s, grid_obs=grid(grid_w=0.0), **kw)))
+        found.append(c.unmet_surplus_w())
+    return found
+
+
+def test_unmet_surplus_counts_a_car_the_regulation_holds_off(cfg) -> None:  # Ruling R18
+    # Ohne Überschuss hält die Regelung den e-Golf aus („Laden aus“): Ab ihrem Urteil folgt er
+    # mit 0 W, er wartet auf Überschuss, und offen ist sein Höchststrom. Vorher ist der Befehl
+    # unbekannt.
     off = evcs(charging=False, power_w=0.0)
-    assert unmet_after(cfg, ChargeMode.PV, current=6.0, on=False, evcs_obs=off) == 7360.0
+    kw = {"intent": egolf_in(ChargeMode.PV), "evcs_obs": off}
+    assert held_off_unmet(cfg, 2, **kw) == [0.0, 7360.0]
+    # Ebenso der Tesla am Wall Connector (drei Phasen, 16 A, 11040 W).
+    present = {("vehicle.tesla", CURRENT): 16.0, ("vehicle.tesla", CHARGING): False}
+    alone = TESLA_PLUGGED | {"evcs_obs": evcs(connected=False)}
+    assert held_off_unmet(cfg, 2, present=present, **alone) == [0.0, 11040.0]
+
+
+def test_unmet_surplus_leaves_out_a_tesla_that_stopped_by_itself(cfg) -> None:  # Ruling R18
+    # Beim Tesla ist „Laden an“ des Aktors der Ladezustand des Autos, kein Befehl: Hört er von
+    # selbst auf (in der App, ohne „Complete“), begrenzt er sich, auch wenn die Regelung ihn
+    # startete.
+    c = controller(cfg)
+    surplus = grid(grid_w=-12000.0)
+    started = c.step(inputs(cfg, present=AT_TESLA, grid_obs=surplus, **TESLA_CHARGING))
+    accept(c, started)
+    sent = [((x.command.actuator, x.command.kind), x.command.value) for x in started]
+    assert (("vehicle.tesla", CHARGING), True) in sent
+    assert c.unmet_surplus_w() == 0.0  # 16 A: nichts offen
+    stopped = {**AT_TESLA, ("vehicle.tesla", CHARGING): False}
+    by_itself = TESLA_CHARGING | {
+        "twc_obs": twc(connected=True, power_w=0.0),
+        "tesla_obs": tesla(plugged=True),
+    }
+    c.step(inputs(cfg, s=1, present=stopped, grid_obs=surplus, **by_itself))
+    assert c.unmet_surplus_w() == 0.0
+    # Ohne eigenen Befehl ebenso: Der Ladezustand allein ist kein „Laden aus“.
+    fresh = controller(cfg)
+    fresh.step(inputs(cfg, present=stopped, grid_obs=surplus, **by_itself))
+    assert fresh.unmet_surplus_w() == 0.0
 
 
 @pytest.mark.parametrize(
@@ -2697,6 +2741,8 @@ def test_unmet_surplus_counts_cars_that_follow_their_command(cfg) -> None:  # Ru
         # zieht deutlich weniger als befohlen (Abregeln, Ladelimit im Auto, Timer): er begrenzt sich
         (ChargeMode.PV, 16.0, True, evcs(charging=True, power_w=1380.0)),
         (ChargeMode.PV, 8.0, True, evcs(charging=False, power_w=0.0)),
+        # „Laden aus“ am Aktor ohne eigenen Befehl: Das Auto hört von selbst auf
+        (ChargeMode.PV, 6.0, False, evcs(charging=False, power_w=0.0)),
         # am Höchststrom ist nichts offen
         (ChargeMode.PV, 16.0, True, evcs(charging=True, power_w=7360.0)),
         # Leistung unbekannt

@@ -285,8 +285,12 @@ class RegulationLink:
         call("note_result", lambda: self.regulation.note_result(result), None)
 
     def forget(self, actuators: Collection[str]) -> None:
-        """Die Regelung vergisst ihre letzten Werte dieser Aktoren."""
-        self._call("forget", lambda: self.regulation.forget(actuators), None)
+        """Die Regelung vergisst ihre letzten Werte dieser Aktoren; die Klimaanlagen im eigenen
+        Aufruf (``_thermal_call``)."""
+        self._call("forget", lambda: self.regulation.core_forget(actuators), None)
+        self._thermal_call(
+            "thermal_forget", lambda: self.regulation.thermal_forget(actuators), None
+        )
 
     def vehicle_wallbox(self) -> dict[str, str | None]:
         """Fahrzeug-Aktor → Wallbox für den ``SafetyContext``; ohne Ergebnis ``{}`` (unbekannt)."""
@@ -311,11 +315,14 @@ class RegulationLink:
         - **Ohne Regelung und ohne Ausnahme,** etwa in SAFE: Die Folge bleibt, wie sie ist
           (Präzisierung 15: „solange der letzte Zyklus mit Regelung scheiterte“).
 
-        ``failed`` gilt dagegen nur für diesen Zyklus.
+        ``failed`` gilt dagegen nur für diesen Zyklus. Health der Klimaanlagen (``thermal``) kommt
+        im eigenen Aufruf (``_thermal_call``): Wirft er, ist es leer, und nur sie ruhen.
         """
         self._wall_now = wall_now
+        empty: dict[str, dict[str, Any]] = {}
+        thermal = self._thermal_call("thermal_health", self.regulation.thermal_health, empty)
         self._finish_thermal(wall_now)
-        health = self._call("health", self.regulation.health, self._health)
+        health = self._call("health", self.regulation.core_health, self._health)
         alarms = self._call("alarms", lambda: self.regulation.alarms(wall_now), self._alarms)
         if self._failed:
             if self._failed_since is None:
@@ -323,7 +330,7 @@ class RegulationLink:
             message = f"Regelung ausgesetzt: Ausnahme {self._error} im Regelzyklus."
             self._exception = Alarm(CONTROL_EXCEPTION, Severity.ERROR, message, self._failed_since)
             return
-        self._health, self._alarms = health, alarms
+        self._health, self._alarms = {**health, "thermal": thermal}, alarms
         if self._regulated:
             self._failed_since, self._exception, self._traced = None, None, False
 

@@ -407,8 +407,16 @@ class Regulation:
         """Vergisst die letzten eigenen Werte dieser Aktoren, in allen Bausteinen; die Strategie
         einer Klimaanlage unter ihnen beginnt neu bei 0 (das Gerät ändert sich ohne die Regelung,
         etwa beim Wechsel Dry-Run ↔ live, nach dem der Adapter 0 hält)."""
+        self.core_forget(actuators)
+        self.thermal_forget(actuators)
+
+    def core_forget(self, actuators: Collection[str]) -> None:
+        """``forget`` ohne die Klimaanlagen: für die Laderegelung und den Akku."""
         self.charger.forget(actuators)
         self.battery.forget(actuators)
+
+    def thermal_forget(self, actuators: Collection[str]) -> None:
+        """``forget`` nur für die Klimaanlagen unter ``actuators``."""
         thermal = {a: device for a in actuators if (device := self._device(a)) is not None}
         for device in thermal.values():
             device.reset()
@@ -490,6 +498,10 @@ class Regulation:
         (``plan_health``, Plan 3c) und ``thermal`` je Klimaanlage, die der letzte ``step`` regelte:
         ``wish`` (Stufen), ``reason`` (Code) und ``hint`` (Plan 6a, Präzisierung 4). Vor dem ersten
         ``step`` und solange die Regelung ruht, ist ``thermal`` leer."""
+        return {**self.core_health(), "thermal": self.thermal_health()}
+
+    def core_health(self) -> dict[str, Any]:
+        """``health`` ohne ``thermal``."""
         return {
             "intent_version": self.charger.intent_version,
             "vehicles": self.charger.health(),
@@ -497,8 +509,11 @@ class Regulation:
             "peak": self.peak_guard.health(),
             "wallboxes": self.charger.wallbox_health(),
             "plan": self._plan,
-            "thermal": {name: dict(entry) for name, entry in self._thermal_health.items()},
         }
+
+    def thermal_health(self) -> dict[str, dict[str, Any]]:
+        """``health()["thermal"]``: je Klimaanlage ``wish``, ``reason`` und ``hint``."""
+        return {name: dict(entry) for name, entry in self._thermal_health.items()}
 
     def _device(self, actuator: str) -> _Thermal | None:
         """Die Klimaanlage des Aktors ``thermal.<name>``; ``None`` für jeden anderen."""

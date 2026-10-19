@@ -151,7 +151,7 @@ def test_the_alarm_outlasts_cycles_without_regulation(cfg, monkeypatch) -> None:
 def test_an_exception_without_regulation_starts_or_continues_the_streak(cfg, monkeypatch) -> None:
     link = link_for(cfg)
     with monkeypatch.context() as patch:
-        patch.setattr(link.regulation, "forget", broken)
+        patch.setattr(link.regulation, "core_forget", broken)
         idle_cycle(link, NOW, lambda: link.forget({"wallbox.evcs"}))  # beginnt die Folge
     assert link.failed
     assert link.alarms() == [Alarm(CONTROL_EXCEPTION, Severity.ERROR, MESSAGE, NOW)]
@@ -366,7 +366,7 @@ def test_health_shows_the_last_cycle_without_exception(cfg, monkeypatch) -> None
     ("name", "call", "fallback"),
     [
         ("note_result", lambda link: link.note_result(RESULT), None),
-        ("forget", lambda link: link.forget({"wallbox.evcs"}), None),
+        ("core_forget", lambda link: link.forget({"wallbox.evcs"}), None),
         ("vehicle_wallbox", lambda link: link.vehicle_wallbox(), {}),
         ("grid_budget_w", lambda link: link.grid_budget_w(), None),
         ("plan_inputs", lambda link: link.plan_inputs(), {}),
@@ -396,7 +396,7 @@ def test_a_throwing_boost_wallboxes_fails_the_cycle_before_the_step(cfg, monkeyp
     assert (idled, steps) == ([NOW], [])
 
 
-@pytest.mark.parametrize("name", ["health", "alarms"])
+@pytest.mark.parametrize("name", ["core_health", "alarms"])
 def test_a_throwing_health_or_alarms_fails_the_cycle(cfg, monkeypatch, name) -> None:
     link = link_for(cfg)
     before = link.health()
@@ -410,7 +410,7 @@ def test_a_throwing_health_or_alarms_fails_the_cycle(cfg, monkeypatch, name) -> 
 def test_after_an_exception_the_kernel_rests_until_the_next_cycle(cfg, monkeypatch) -> None:
     link = link_for(cfg)
     steps: list[RegulationInputs] = []
-    monkeypatch.setattr(link.regulation, "forget", broken)
+    monkeypatch.setattr(link.regulation, "core_forget", broken)
     monkeypatch.setattr(link.regulation, "step", lambda inputs: steps.append(inputs) or [])
     link.start_cycle()
     link.forget({"wallbox.evcs"})
@@ -572,3 +572,30 @@ def test_a_failing_thermal_rest_rebuilds_nothing_else(cfg, monkeypatch) -> None:
     step(link, cfg)
     assert link.thermal_failed and not link.failed
     assert link.regulation is kernel
+
+
+def test_a_thermal_exception_in_forget_leaves_the_kernel(cfg, monkeypatch) -> None:
+    # Die Klimaanlagen vergessen im eigenen Aufruf: Wirft er, vergisst der Kern trotzdem.
+    link = link_for(cfg)
+    forgotten: list[set[str]] = []
+    monkeypatch.setattr(
+        link.regulation, "core_forget", lambda actuators: forgotten.append(set(actuators))
+    )
+    monkeypatch.setattr(link.regulation, "thermal_forget", broken)
+    link.start_cycle()
+    link.forget({"wallbox.evcs", "thermal.klima"})
+    assert forgotten == [{"wallbox.evcs", "thermal.klima"}]
+    assert link.thermal_failed and not link.failed
+
+
+def test_a_thermal_exception_in_health_leaves_the_kernel(cfg, monkeypatch) -> None:
+    # Health der Klimaanlagen kommt im eigenen Aufruf: Wirft er, gilt der Stand des Kerns, und
+    # ``thermal`` ist leer.
+    link = link_for(cfg)
+    monkeypatch.setattr(link.regulation, "thermal_health", broken)
+    cycle(link, cfg, NOW)
+    assert link.thermal_failed and not link.failed
+    health = link.health()
+    assert health["thermal"] == {}
+    assert health == {**link.regulation.core_health(), "thermal": {}}
+    assert link.alarms() == [Alarm(THERMAL_EXCEPTION, Severity.WARNING, THERMAL_MESSAGE, NOW)]

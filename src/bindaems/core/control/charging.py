@@ -838,17 +838,21 @@ class ChargeController:
     def _commanded_a(self, actuator: str, present: Mapping[Key, CommandValue]) -> float | None:
         """Der befohlene Strom eines Aktors in A: 0 bei „Laden aus“; ``None``, wenn unbekannt.
 
-        Zuerst der Ist-Wert des Aktors, ohne ihn der letzte eigene Wert.
+        „Laden aus“ ist nur der eigene letzte Wert der Regelung: Beim Tesla meldet der Aktor als
+        „Laden an“ den Ladezustand des Autos, keinen Befehl. Meldet der Aktor „aus“, ohne dass die
+        Regelung es wollte, hat das Auto von selbst aufgehört: unbekannt. Sonst gilt der Strom des
+        Aktors, ohne ihn der letzte eigene.
         """
-
-        def commanded(kind: CommandKind) -> CommandValue:
-            value = present.get((actuator, kind))
-            return self._last.requested((actuator, kind)) if value is None else value
-
-        on = commanded(_CHARGING)
-        if on is False:
+        wanted = self._last.requested((actuator, _CHARGING))
+        if wanted is False:
             return 0.0
-        return finite_number(commanded(_CURRENT)) if on is True else None
+        on = present.get((actuator, _CHARGING), wanted)
+        if on is not True:
+            return None
+        current = present.get((actuator, _CURRENT))
+        return finite_number(
+            self._last.requested((actuator, _CURRENT)) if current is None else current
+        )
 
     def _order(self, intent: Intent | None) -> list[str]:
         """Die Autos in der Reihenfolge ihrer Priorität: die Fahrzeuge, dahinter die Gäste.
