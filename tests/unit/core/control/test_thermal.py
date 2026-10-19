@@ -168,6 +168,11 @@ def test_more_after_600s_export(strategy: ThermalStrategy) -> None:
     assert strategy.step(obs(now=600, export_w=900)) == ThermalWish(1, "thermal_more")
 
 
+def test_export_exactly_at_threshold_counts(strategy: ThermalStrategy) -> None:
+    strategy.step(obs(now=0, export_w=800))
+    assert strategy.step(obs(now=600, export_w=800)) == ThermalWish(1, "thermal_more")
+
+
 def test_export_below_threshold_does_not_count(strategy: ThermalStrategy) -> None:
     for now in (0, 300, 600, 900):
         assert strategy.step(obs(now=now, export_w=799)).steps == 0
@@ -546,6 +551,38 @@ def test_more_after_a_recent_negative_step_keeps_the_interval(strategy: ThermalS
     assert wish == ThermalWish(1, "thermal_more")
 
 
+def test_end_of_hint_wins_over_a_due_more_step_from_minus_two(
+    strategy: ThermalStrategy,
+) -> None:
+    less = dict(hint="weniger", export_w=0.0)
+    for now in (0, 600, 1200):
+        strategy.step(obs(now=now, **less))  # -1, -2
+    strategy.step(obs(now=1300, hint="weniger", export_w=900))  # der Export-Timer läuft
+    # der Hinweis endet im Zyklus, in dem „mehr“ fällig wäre: 0, nicht -1
+    assert strategy.step(obs(now=1900, export_w=900)) == ThermalWish(0, "thermal_less")
+
+
+def import_backoff(strategy: ThermalStrategy, **changes: Any) -> dict[int, float]:
+    """Wann (Sekunden nach dem Start) der Wunsch 3 mit Netzbezug 400 W auf 2, 1, 0 fällt."""
+    start = climb(strategy, 3)
+    reached: dict[int, float] = {}
+    for tick in range(1, 2000):
+        wish = strategy.step(obs(now=start + 10 * tick, import_w=400, **changes))
+        reached.setdefault(wish.steps, 10.0 * tick)
+    return reached
+
+
+@pytest.mark.parametrize("changes", [{"unmet_cars_w": 230}, {"soc_pct": 50}])
+def test_holding_priority_rule_does_not_slow_the_import_backoff(
+    klima: CoeOffsetConfig, changes: dict[str, Any]
+) -> None:
+    alone = import_backoff(ThermalStrategy(klima))
+    assert alone == {3: 10.0, 2: 310.0, 1: 610.0, 0: 910.0}
+    with_priority = import_backoff(ThermalStrategy(klima), **changes)
+    assert with_priority[0] <= alone[0]
+    assert all(with_priority[steps] <= alone[steps] for steps in (2, 1, 0))
+
+
 # --- Rest -------------------------------------------------------------------------------------
 
 
@@ -561,7 +598,7 @@ def test_reset_returns_to_the_initial_state(strategy: ThermalStrategy) -> None:
     assert strategy.step(obs(now=now + 1, mode="heizen", export_w=900)) == ThermalWish(
         0, "thermal_off"
     )
-    assert strategy.step(obs(now=now + 601, mode="heizen", export_w=900)).steps == 0 + 1
+    assert strategy.step(obs(now=now + 601, mode="heizen", export_w=900)).steps == 1
     strategy.reset()
     strategy.step(obs(now=0, export_w=900))
     strategy.reset()
@@ -569,23 +606,24 @@ def test_reset_returns_to_the_initial_state(strategy: ThermalStrategy) -> None:
 
 
 @pytest.mark.parametrize(
-    ("changes", "reason"),
+    ("changes", "reason", "gap"),
     [
-        ({}, "thermal_more"),
-        ({"unmet_cars_w": 230}, "thermal_cars"),
-        ({"soc_pct": 10}, "thermal_battery"),
-        ({"import_w": 300}, "thermal_back"),
-        ({"peak_pressure": True}, "thermal_peak"),
-        ({"mode": "heizen"}, "thermal_mode"),
-        ({"fresh": False}, "thermal_stale"),
-        ({"mode": "aus"}, "thermal_off"),
+        ({}, "thermal_more", 300),
+        ({"unmet_cars_w": 230}, "thermal_cars", 300),
+        ({"soc_pct": 10}, "thermal_battery", 300),
+        ({"import_w": 300}, "thermal_back", 300),
+        ({"hint": "weniger"}, "thermal_less", 600),
+        ({"peak_pressure": True}, "thermal_peak", 300),
+        ({"mode": "heizen"}, "thermal_mode", 300),
+        ({"fresh": False}, "thermal_stale", 300),
+        ({"mode": "aus"}, "thermal_off", 300),
     ],
 )
 def test_reasons_are_codes_of_the_plan(
-    strategy: ThermalStrategy, changes: dict[str, Any], reason: str
+    strategy: ThermalStrategy, changes: dict[str, Any], reason: str, gap: int
 ) -> None:
     now = climb(strategy, 3)
     strategy.step(obs(now=now + 1, **changes))
-    wish = strategy.step(obs(now=now + 301, **changes))
+    wish = strategy.step(obs(now=now + 1 + gap, **changes))
     assert wish.reason == reason
     assert reason in CODES

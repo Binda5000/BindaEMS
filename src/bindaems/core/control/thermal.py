@@ -61,7 +61,7 @@ def _flag(snap: Snapshot, signal: str) -> bool | None:
 
 # Eine Stufe von 1 A: weniger offener Bedarf der Autos zählt nicht (Entscheidung 5.3)
 _CARS_UNMET_W: Final = 230.0
-# Der Akku weicht der Klimaanlage erst, wenn er so weit unter der Schwelle liegt (Entscheidung 5.4)
+# Die Klimaanlage weicht dem Akku erst, wenn er so weit unter der Schwelle liegt.
 _BATTERY_MARGIN_PCT: Final = 5.0
 # Netzbezug muss so lange ohne Unterbrechung anliegen, bevor eine Stufe zurückgeht (5.6)
 _IMPORT_HOLD_S: Final = 300.0
@@ -129,6 +129,11 @@ class ThermalStrategy:
     7. weniger: Hinweis ``weniger`` ohne Einspeisung; endet der Hinweis, sofort 0
     8. sonst bleibt der Wunsch stehen (Totband)
 
+    Eine höhere Regel geht nur vor, wenn sie handelt. Wartet sie nur (Autos, Akku, Netzbezug),
+    darf eine tiefere Regel, die den Betrag senkt, trotzdem handeln; neue positive Stufen sperren
+    Autos, Akku-Schwelle und Druck unabhängig davon. Endet der Hinweis ``weniger``, geht ein
+    negativer Wunsch noch vor Regel 5 auf 0.
+
     Eine Erhöhung des Betrags (in beide Richtungen) braucht ``step_interval_s`` seit der letzten
     Erhöhung; Verringerungen gehen sofort. Die Zeiten sind die monotone Sekunde des ersten
     Zyklus, in dem die Bedingung galt, und ``None``, sobald sie unterbrochen wurde.
@@ -171,10 +176,10 @@ class ThermalStrategy:
         for rule in (
             self._rule_cars,
             self._rule_battery,
+            self._rule_less_end,
             self._rule_more,
             self._rule_import,
             self._rule_less,
-            self._rule_less_end,
         ):
             if rule(obs, allow_up):
                 break
@@ -233,17 +238,19 @@ class ThermalStrategy:
     def _rule_cars(self, obs: ThermalObs, allow_up: bool) -> bool:
         if self._wish.steps <= 0 or not _cars_unmet(obs):
             return False
-        if _elapsed(self._cars_back_at, obs.now, self._interval):
-            self._cars_back_at = obs.now
-            self._move(self._wish.steps - 1, "thermal_cars", obs.now)
+        if not _elapsed(self._cars_back_at, obs.now, self._interval):
+            return False
+        self._cars_back_at = obs.now
+        self._move(self._wish.steps - 1, "thermal_cars", obs.now)
         return True
 
     def _rule_battery(self, obs: ThermalObs, allow_up: bool) -> bool:
         if self._wish.steps <= 0 or not _battery_low(obs):
             return False
-        if _elapsed(self._battery_back_at, obs.now, self._interval):
-            self._battery_back_at = obs.now
-            self._move(self._wish.steps - 1, "thermal_battery", obs.now)
+        if not _elapsed(self._battery_back_at, obs.now, self._interval):
+            return False
+        self._battery_back_at = obs.now
+        self._move(self._wish.steps - 1, "thermal_battery", obs.now)
         return True
 
     def _rule_more(self, obs: ThermalObs, allow_up: bool) -> bool:
@@ -261,11 +268,10 @@ class ThermalStrategy:
 
     def _rule_import(self, obs: ThermalObs, allow_up: bool) -> bool:
         # ``_import_since`` gilt nur bei positivem Wunsch (siehe ``_track``)
-        if self._import_since is None:
+        if not _elapsed_since(self._import_since, obs.now, _IMPORT_HOLD_S):
             return False
-        if obs.now - self._import_since >= _IMPORT_HOLD_S:
-            self._import_since = obs.now
-            self._move(self._wish.steps - 1, "thermal_back", obs.now)
+        self._import_since = obs.now
+        self._move(self._wish.steps - 1, "thermal_back", obs.now)
         return True
 
     def _rule_less(self, obs: ThermalObs, allow_up: bool) -> bool:
