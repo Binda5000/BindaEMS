@@ -82,6 +82,10 @@ HA_VEHICLE_SUFFIXES = (
     "target_reachable",
 )
 HA_WALLBOX_SUFFIXES = ("power", "assignment", "occupant")
+# Sensoren je Klimaanlage: ``thermal_<Schlüssel>_<Endung>`` (Plan 6a, Entscheidung 12). Das Präfix
+# hält sie getrennt von Fahrzeugen und Wallboxes mit ähnlichem Schlüssel.
+HA_THERMAL_PREFIX = "thermal_"
+HA_THERMAL_SUFFIXES = ("offset", "mode", "power", "wish")
 # CoE-Einheiten, die in Zehnteln kommen: 1 = °C, 7 = K (Plan 6a, Entscheidung 10)
 _TENTHS_UNITS = (1, 7)
 # Stufe des Sollwertversatzes in K (Plan 6a, Präzisierung 2: nur 0,5 K)
@@ -705,20 +709,22 @@ class Config(_Model):
         """Schlüssel dürfen in Home Assistant keine Entität und kein Gerät doppeln."""
         owners = {object_id: "den Entitäten des Systems" for object_id in HA_SYSTEM_IDS}
         keys: dict[str, str] = {}
-        for kind, entries, suffixes in (
-            ("vehicles", self.vehicles, HA_VEHICLE_SUFFIXES),
-            ("wallboxes", self.wallboxes, HA_WALLBOX_SUFFIXES),
+        for kind, entries, suffixes, prefix in (
+            ("vehicles", self.vehicles, HA_VEHICLE_SUFFIXES, ""),
+            ("wallboxes", self.wallboxes, HA_WALLBOX_SUFFIXES, ""),
+            ("thermal", self.thermal.devices, HA_THERMAL_SUFFIXES, HA_THERMAL_PREFIX),
         ):
             for key in entries:
                 oid = ha_object_id(key)
-                if oid in keys:
-                    raise ValueError(
-                        f"{kind}.{key}: Objekt-ID „{oid}“ in Home Assistant gehört schon zu "
-                        f"{keys[oid]}"
-                    )
-                keys[oid] = f"{kind}.{key}"
+                if not prefix:  # nur Fahrzeuge und Wallboxes teilen sich ein Gerät je Schlüssel
+                    if oid in keys:
+                        raise ValueError(
+                            f"{kind}.{key}: Objekt-ID „{oid}“ in Home Assistant gehört schon zu "
+                            f"{keys[oid]}"
+                        )
+                    keys[oid] = f"{kind}.{key}"
                 for suffix in suffixes:
-                    entity = f"{oid}_{suffix}"
+                    entity = f"{prefix}{oid}_{suffix}"
                     if entity in owners:
                         raise ValueError(
                             f"{kind}.{key}: Die Entität „{entity}“ in Home Assistant gehört "
@@ -777,6 +783,9 @@ def ha_object_ids(cfg: Config) -> list[str]:
         ids += [f"{ha_object_id(key)}_{suffix}" for suffix in HA_VEHICLE_SUFFIXES]
     for key in cfg.wallboxes:
         ids += [f"{ha_object_id(key)}_{suffix}" for suffix in HA_WALLBOX_SUFFIXES]
+    for key in cfg.thermal.devices:
+        oid = f"{HA_THERMAL_PREFIX}{ha_object_id(key)}"
+        ids += [f"{oid}_{suffix}" for suffix in HA_THERMAL_SUFFIXES]
     return ids
 
 

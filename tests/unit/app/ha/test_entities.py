@@ -107,6 +107,10 @@ def test_entities_from_config(cfg) -> None:
         "twc_power",
         "twc_assignment",
         "twc_occupant",
+        "thermal_klima_offset",
+        "thermal_klima_mode",
+        "thermal_klima_power",
+        "thermal_klima_wish",
     ]
     names = {e.object_id: e.device.name for e in build_entities(cfg)}
     assert (names["egolf_soc"], names["twc_power"]) == (
@@ -1074,3 +1078,106 @@ def test_build_inputs_takes_the_plan_vehicles_and_the_time(
     later = T_APP + timedelta(hours=2)  # der Plan ist abgelaufen
     expired = build_inputs(live, price_service, store, forecast_service, later, plan=plan)
     assert list(expired.plan_vehicles) == []
+
+
+# Klimaanlage (Plan 6a, Entscheidung 12): vier Sensoren je konfiguriertem Gerät
+THERMAL_HEALTH: dict[str, Any] = {
+    "klima": {
+        "label": "Klimaanlage",
+        "connected": True,
+        "mode": "kuehlen",
+        "running": True,
+        "offset_sent_k": -1.0,
+        "offset_active_k": -1.5,
+        "wish": 3,
+        "power_w": 1234.4,
+    }
+}
+
+
+def test_thermal_entities_exist_only_for_configured_devices(cfg) -> None:
+    ids = {e.object_id for e in build_entities(cfg)}
+    assert {f"thermal_klima_{s}" for s in ("offset", "mode", "power", "wish")} <= ids
+    bare = cfg.model_copy(update={"thermal": cfg.thermal.model_copy(update={"devices": {}})})
+    assert not any(e.object_id.startswith("thermal_") for e in build_entities(bare))
+
+
+def test_thermal_sensors_follow_health(cfg) -> None:
+    inputs = sample_inputs(thermal=THERMAL_HEALTH)
+    # der Versatz ist das Echo der UVR, nicht der gesendete Wert
+    assert state(cfg, "thermal_klima_offset", inputs) == "-1.5"
+    assert state(cfg, "thermal_klima_mode", inputs) == "kuehlen"
+    assert state(cfg, "thermal_klima_power", inputs) == "1234"
+    assert state(cfg, "thermal_klima_wish", inputs) == "3"
+
+
+def test_thermal_offset_falls_back_to_the_sent_value_without_echo(cfg) -> None:
+    item = {**THERMAL_HEALTH["klima"], "offset_active_k": None}
+    assert state(cfg, "thermal_klima_offset", sample_inputs(thermal={"klima": item})) == "-1.0"
+
+
+def test_thermal_sensors_are_unknown_without_values(cfg) -> None:
+    for inputs in (
+        sample_inputs(),  # kein Eintrag im Health (core getrennt oder Gerät unbekannt)
+        sample_inputs(thermal={"klima": {"label": "Klimaanlage", "connected": False}}),
+        sample_inputs(
+            thermal={
+                "klima": {
+                    "mode": None,
+                    "offset_sent_k": None,
+                    "offset_active_k": None,
+                    "wish": None,
+                    "power_w": None,
+                }
+            }
+        ),
+    ):
+        for suffix in ("offset", "mode", "power", "wish"):
+            assert state(cfg, f"thermal_klima_{suffix}", inputs) == "None"
+
+
+def test_thermal_mode_only_publishes_known_options(cfg) -> None:
+    for mode in ("heizen", "kuehlen", "lueften", "aus", "unbekannt"):
+        item = {**THERMAL_HEALTH["klima"], "mode": mode}
+        assert state(cfg, "thermal_klima_mode", sample_inputs(thermal={"klima": item})) == mode
+    odd = {**THERMAL_HEALTH["klima"], "mode": "kaffee"}
+    assert state(cfg, "thermal_klima_mode", sample_inputs(thermal={"klima": odd})) == "None"
+
+
+def test_thermal_discovery_payloads(cfg) -> None:
+    offset = config_of(cfg, "thermal_klima_offset")
+    assert offset["name"] == "Klima Versatz"
+    assert (offset["unit_of_measurement"], offset["state_class"]) == ("K", "measurement")
+    assert offset["unique_id"] == "bindaems_thermal_klima_offset"
+    assert offset["state_topic"] == "bindaems/state/thermal_klima_offset"
+    assert "command_topic" not in offset
+    mode = config_of(cfg, "thermal_klima_mode")
+    assert (mode["name"], mode["device_class"]) == ("Klima Betriebsart", "enum")
+    assert mode["options"] == ["heizen", "kuehlen", "lueften", "aus", "unbekannt"]
+    power = config_of(cfg, "thermal_klima_power")
+    assert power["name"] == "Klima Leistung"
+    assert (power["unit_of_measurement"], power["device_class"]) == ("W", "power")
+    assert power["state_class"] == "measurement"
+    wish = config_of(cfg, "thermal_klima_wish")
+    assert wish["name"] == "Klima Wunsch" and "device_class" not in wish
+
+
+def test_thermal_names_follow_a_custom_label(cfg) -> None:
+    device = cfg.thermal.devices["klima"].model_copy(update={"label": "Büro"})
+    custom = cfg.model_copy(
+        update={"thermal": cfg.thermal.model_copy(update={"devices": {"klima": device}})}
+    )
+    assert config_of(custom, "thermal_klima_offset")["name"] == "Büro Versatz"
+    assert config_of(custom, "thermal_klima_wish")["name"] == "Büro Wunsch"
+
+
+def test_build_inputs_takes_the_thermal_health(
+    live, price_service, store, forecast_service
+) -> None:
+    live.health = {**live.health, "thermal": {**THERMAL_HEALTH, "bogus": "x"}}
+    inputs = build_inputs(live, price_service, store, forecast_service, T_APP)
+    assert inputs.thermal == THERMAL_HEALTH  # nur Einträge, die Verzeichnisse sind
+    live.health = {k: v for k, v in live.health.items() if k != "thermal"}
+    assert build_inputs(live, price_service, store, forecast_service, T_APP).thermal == {}
+    live.connected = False
+    assert build_inputs(live, price_service, store, forecast_service, T_APP).thermal == {}

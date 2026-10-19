@@ -32,6 +32,7 @@ from bindaems.app.prices.service import PriceService
 from bindaems.app.prices.store import PriceStore
 from bindaems.shared.config import (
     ASSIGNMENT_AUTOMATIC,
+    HA_THERMAL_PREFIX,
     Config,
     EvcsConfig,
     HaMqttConfig,
@@ -78,6 +79,10 @@ AUTOMATIC: Final = ASSIGNMENT_AUTOMATIC  # Zuordnung ohne Übersteuerung
 NO_WALLBOX: Final = "keine"
 NO_VEHICLE: Final = "keins"
 UNCLEAR: Final = "unclear"  # ``assignment`` in Health
+# Betriebsarten der Klimaanlage wie ``core.control.thermal.ThermalMode`` (Health ``thermal``)
+THERMAL_MODES: Final = ("heizen", "kuehlen", "lueften", "aus", "unbekannt")
+THERMAL_DEFAULT_LABEL: Final = "Klimaanlage"  # ``CoeOffsetConfig.label`` ohne eigenen Namen
+THERMAL_SHORT_NAME: Final = "Klima"  # so beginnen die Sensoren des Standardnamens
 
 
 @dataclass(frozen=True)
@@ -126,6 +131,8 @@ class HaInputs:
     sessions: Mapping[str, ChargingSession | None] = field(default_factory=dict)
     month_kwh: Mapping[str, float | None] = field(default_factory=dict)  # Ladeenergie im Monat
     plan_vehicles: Sequence[PlanVehicle] = ()  # die geplanten Autos des gültigen Plans (Plan 4b)
+    # Health ``thermal``: je Gerät (Schlüssel aus ``config.yaml``) die Werte der Klimaanlage
+    thermal: Mapping[str, Mapping[str, Any]] = field(default_factory=dict)
     now: datetime | None = None  # Zeitpunkt der Werte; None = unbekannt
 
 
@@ -185,6 +192,38 @@ def _wallbox_w(name: str) -> Callable[[HaInputs], str]:
         return fmt(_number(wallboxes.get(name)) if isinstance(wallboxes, Mapping) else None, 0)
 
     return value
+
+
+def _thermal_item(name: str, inputs: HaInputs) -> Mapping[str, Any]:
+    item = inputs.thermal.get(name)
+    return item if isinstance(item, Mapping) else {}
+
+
+def _thermal_offset(name: str) -> Callable[[HaInputs], str]:
+    """Der Versatz, den die UVR anwendet (Echo ``offset_active_k``), sonst der gesendete.
+
+    Das Echo ist, was die Anlage wirklich tut; fehlt es (UVR-Ausgang nicht konfiguriert,
+    Paketverlust), zeigt der Sensor ersatzweise den zuletzt gesendeten Wert ``offset_sent_k``.
+    """
+
+    def value(inputs: HaInputs) -> str:
+        item = _thermal_item(name, inputs)
+        echo = _number(item.get("offset_active_k"))
+        return fmt(echo if echo is not None else _number(item.get("offset_sent_k")), 1)
+
+    return value
+
+
+def _thermal_mode(name: str) -> Callable[[HaInputs], str]:
+    def value(inputs: HaInputs) -> str:
+        mode = _thermal_item(name, inputs).get("mode")
+        return mode if isinstance(mode, str) and mode in THERMAL_MODES else UNKNOWN
+
+    return value
+
+
+def _thermal_number(name: str, key: str, decimals: int) -> Callable[[HaInputs], str]:
+    return lambda inputs: fmt(_number(_thermal_item(name, inputs).get(key)), decimals)
 
 
 def _competitor(inputs: HaInputs) -> str:
@@ -1035,6 +1074,40 @@ def build_entities(cfg: Config) -> list[EntitySpec]:
             ),
             EntitySpec(f"{oid}_occupant", "sensor", "Fahrzeug", device, _occupant(key)),
         ]
+    for key, thermal in cfg.thermal.devices.items():
+        # Sensoren des Systems (Hauptgerät). Der Standardname „Klimaanlage“ heißt kurz „Klima“
+        # (Plan 6a, Entscheidung 12); ein eigener Name steht ganz davor („Büro Versatz“).
+        oid = f"{HA_THERMAL_PREFIX}{object_id(key)}"
+        title = THERMAL_SHORT_NAME if thermal.label == THERMAL_DEFAULT_LABEL else thermal.label
+        entities += [
+            EntitySpec(
+                f"{oid}_offset",
+                "sensor",
+                f"{title} Versatz",
+                main,
+                _thermal_offset(key),
+                unit="K",
+                state_class="measurement",
+            ),
+            EntitySpec(
+                f"{oid}_mode",
+                "sensor",
+                f"{title} Betriebsart",
+                main,
+                _thermal_mode(key),
+                device_class="enum",
+                options=THERMAL_MODES,
+            ),
+            _power(f"{oid}_power", f"{title} Leistung", main, _thermal_number(key, "power_w", 0)),
+            EntitySpec(
+                f"{oid}_wish",
+                "sensor",
+                f"{title} Wunsch",
+                main,
+                _thermal_number(key, "wish", 0),
+                state_class="measurement",  # ganze Stufen, ohne Einheit
+            ),
+        ]
     ids = [spec.object_id for spec in entities]
     for oid in ids:
         if ids.count(oid) > 1:  # die Konfiguration schließt das aus; hier nie still doppeln
@@ -1127,6 +1200,7 @@ def build_inputs(
     adapters = health.get("adapters") if health is not None else None
     vehicles = health.get("vehicles") if health is not None else None
     wallboxes = health.get("wallboxes") if health is not None else None
+    thermal = health.get("thermal") if health is not None else None
     intent_version = health.get("intent_version") if health is not None else None
     adapters_offline = (
         [
@@ -1196,5 +1270,10 @@ def build_inputs(
         sessions=dict(sessions or {}),
         month_kwh=dict(month_kwh or {}),
         plan_vehicles=list(valid.vehicles) if valid is not None else [],
+        thermal=(
+            {name: item for name, item in thermal.items() if isinstance(item, dict)}
+            if isinstance(thermal, dict)
+            else {}
+        ),
         now=now,
     )

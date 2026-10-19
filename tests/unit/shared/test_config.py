@@ -886,3 +886,20 @@ def test_receive_needs_the_mandatory_channels() -> None:
         del data["thermal"]["devices"]["klima"]["receive"][optional]
     receive = Config.model_validate(data).thermal.devices["klima"].receive
     assert receive.power_kw is None and receive.cmd_on is None
+
+
+def test_object_ids_include_thermal_entities(cfg) -> None:
+    ids = ha_object_ids(cfg)
+    assert {f"thermal_klima_{s}" for s in ("offset", "mode", "power", "wish")} <= set(ids)
+    assert len(ids) == len(set(ids))
+
+
+def test_a_vehicle_key_must_not_collide_with_a_thermal_entity(tmp_path) -> None:
+    # das Fahrzeug „thermal_klima“ ergäbe die Entität thermal_klima_mode der Klimaanlage
+    def mutate(d: dict[str, Any]) -> None:
+        d["vehicles"]["thermal_klima"] = d["vehicles"].pop("egolf")
+
+    with pytest.raises(
+        ConfigError, match=r"thermal\.klima: .*thermal_klima_mode.*vehicles\.thermal_klima"
+    ):
+        load_config(write_cfg(tmp_path, mutate))
