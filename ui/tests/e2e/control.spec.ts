@@ -88,6 +88,7 @@ test('Bedienen stellt den Tesla auf Geplant mit Ziel 80 % und Abfahrt 07:00', as
 	const card = teslaCard(page);
 	await expect(card.getByText(/^Fertig um \d\d:\d\d · Ziel 60\s%\sbis 17:30$/)).toBeVisible();
 	await expect(card.getByText(/^Ladestand unbekannt, gerechnet ab 0\s%\.$/)).toBeVisible();
+	let passed = false;
 	try {
 		await setTarget(page, '80', '07:00');
 
@@ -114,8 +115,9 @@ test('Bedienen stellt den Tesla auf Geplant mit Ziel 80 % und Abfahrt 07:00', as
 		} finally {
 			await context.close();
 		}
+		passed = true;
 	} finally {
-		await restoreTarget(page);
+		await restoreTarget(page, passed);
 	}
 	await page.reload();
 	await expect(card.getByRole('spinbutton', { name: 'Ziel-SOC' })).toHaveValue('60');
@@ -124,16 +126,23 @@ test('Bedienen stellt den Tesla auf Geplant mit Ziel 80 % und Abfahrt 07:00', as
 /**
  * Stellt den Demo-Stand des Tesla (60 %, 17:30) über die API zurück, mit Zeitlimit. Über die Karte
  * hinge das, wenn sie schon 60 %/17:30 zeigt („Übernehmen“ schickt dann nichts), und der Fehler
- * des Tests ginge in einer Zeitüberschreitung unter.
+ * des Tests ginge in einer Zeitüberschreitung unter. `strict`: Der Test ist bis hier gelungen,
+ * ein Fehler beim Zurückstellen lässt ihn scheitern; sonst steht er nur im Log, damit der Fehler
+ * des Tests nicht von ihm ersetzt wird.
  */
-async function restoreTarget(page: Page): Promise<void> {
-	const csrf = (await page.context().cookies()).find((cookie) => cookie.name === 'bindaems_csrf');
-	const response = await page.request.put('/api/control/vehicles/tesla/target', {
-		data: { target_soc_pct: 60, departure: '17:30' },
-		headers: { 'X-CSRF-Token': csrf?.value ?? '' },
-		timeout: 10_000
-	});
-	expect(response.status()).toBe(200);
+async function restoreTarget(page: Page, strict: boolean): Promise<void> {
+	try {
+		const csrf = (await page.context().cookies()).find((cookie) => cookie.name === 'bindaems_csrf');
+		const response = await page.request.put('/api/control/vehicles/tesla/target', {
+			data: { target_soc_pct: 60, departure: '17:30' },
+			headers: { 'X-CSRF-Token': csrf?.value ?? '' },
+			timeout: 10_000
+		});
+		expect(response.status()).toBe(200);
+	} catch (error) {
+		if (strict) throw error;
+		console.warn('Demo-Stand des Tesla nicht zurückgestellt:', String(error));
+	}
 }
 
 /** Karte „Akku-Unterstützung“ auf der Seite „Laden“ */
