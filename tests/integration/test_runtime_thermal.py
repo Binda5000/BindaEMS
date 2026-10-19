@@ -277,6 +277,7 @@ async def test_health_has_thermal_block(runtime_with_coe) -> None:
         "connected": True,
         "foreign_packets": 0,
         "bad_packets": 0,
+        "unit_mismatch": 0,
         "mode": "kuehlen",
         "running": True,
         "actual_c": 24.0,
@@ -291,6 +292,18 @@ async def test_health_has_thermal_block(runtime_with_coe) -> None:
     }
 
 
+async def test_health_counts_values_with_the_wrong_unit(runtime_with_coe) -> None:
+    # Abschlussreview M2, Entscheidung 10: Ein Wert mit anderer Einheit als in ``receive`` gilt
+    # als ungültig und zählt in Health (``unit_mismatch``).
+    env = await runtime_with_coe()
+    env.echo(0.0)
+    wrong = encode([CoeValue(56, 1, True, 7, 240)])  # Ist in K statt °C
+    env.ports[-1].on_datagram(wrong, CMI)
+    env.ports[-1].on_datagram(wrong, CMI)
+    run(env.rt, env.clock, 1)
+    assert env.rt.health().thermal["klima"]["unit_mismatch"] == 2
+
+
 async def test_health_thermal_block_without_values(runtime_with_coe) -> None:
     env = await runtime_with_coe()
     run(env.rt, env.clock, 1)
@@ -298,7 +311,7 @@ async def test_health_thermal_block_without_values(runtime_with_coe) -> None:
     assert block["mode"] == "unbekannt"
     assert block["connected"] is False
     assert block["actual_c"] is None and block["base_setpoint_c"] is None
-    assert (block["foreign_packets"], block["bad_packets"]) == (0, 0)
+    assert (block["foreign_packets"], block["bad_packets"], block["unit_mismatch"]) == (0, 0, 0)
 
 
 def test_health_thermal_block_without_adapter(runtime_env) -> None:

@@ -206,6 +206,7 @@ it('Gesundheitsbericht akzeptiert eine Klimaanlage, deren Regelung ruht, mit Nul
 		last_packet_at: null,
 		foreign_packets: null,
 		bad_packets: null,
+		unit_mismatch: null,
 		mode: null,
 		running: null,
 		actual_c: null,
@@ -222,7 +223,15 @@ it('Gesundheitsbericht akzeptiert eine Klimaanlage, deren Regelung ruht, mit Nul
 	expect(issues(s.CoreHealthSchema, health)).toEqual([]);
 	// fehlende Felder (Regelung ruht, älterer core) sind ebenfalls gültig
 	const bare: Record<string, unknown> = { ...resting };
-	for (const key of ['wish', 'reason', 'hint', 'foreign_packets', 'bad_packets', 'mode'])
+	for (const key of [
+		'wish',
+		'reason',
+		'hint',
+		'foreign_packets',
+		'bad_packets',
+		'unit_mismatch',
+		'mode'
+	])
 		delete bare[key];
 	expect(issues(s.CoreHealthSchema, { ...health, thermal: { klima: bare } })).toEqual([]);
 });

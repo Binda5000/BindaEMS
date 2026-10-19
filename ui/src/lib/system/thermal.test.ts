@@ -12,6 +12,7 @@ const base: ThermalHealth = {
 	last_packet_at: '2026-10-09T08:00:00+00:00',
 	foreign_packets: 0,
 	bad_packets: 0,
+	unit_mismatch: 0,
 	mode: 'kuehlen',
 	running: true,
 	actual_c: 24.5,
@@ -111,6 +112,7 @@ describe('thermalRows', () => {
 			hint: null,
 			foreign_packets: null,
 			bad_packets: null,
+			unit_mismatch: null,
 			mode: null
 		});
 		expect(resting.Wunsch).toBe('–');
@@ -124,9 +126,11 @@ describe('thermalRows', () => {
 
 	it('nennt verworfene Pakete nur, wenn es welche gab', () => {
 		expect(Object.keys(rows())).not.toContain('Fremde Pakete');
-		const dropped = rows({ foreign_packets: 3, bad_packets: 1 });
+		const dropped = rows({ foreign_packets: 3, bad_packets: 1, unit_mismatch: 2 });
 		expect(dropped['Fremde Pakete']).toBe('3');
 		expect(dropped['Fehlerhafte Pakete']).toBe('1');
+		expect(dropped['Werte mit falscher Einheit']).toBe('2');
+		expect(Object.keys(rows({ unit_mismatch: null }))).not.toContain('Werte mit falscher Einheit');
 	});
 
 	it('zeigt „Versatz 0“ statt „aus oder lüftet“, solange die Anlage läuft', () => {

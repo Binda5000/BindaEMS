@@ -349,7 +349,8 @@ def _thermal_json(
     """Eine Klimaanlage für ``health`` (Plan 6a, Präzisierung 4).
 
     Die Werte kommen aus dem Snapshot (``thermal.<name>.*``, nur mit Qualität ``OK``), die Zähler
-    der Pakete aus dem Adapter (``stats``, ohne Adapter leer). Wunsch (Stufen), Grund (Code) und
+    der Pakete und der Werte mit falscher Einheit (``unit_mismatch``, Entscheidung 10) aus dem
+    Adapter (``stats``, ohne Adapter leer). Wunsch (Stufen), Grund (Code) und
     Hinweis setzt die Regelung (``regulated``, ihr Eintrag in ``health()["thermal"]``); ohne ihn,
     etwa solange sie ruht, sind sie ``None``.
 
@@ -370,6 +371,7 @@ def _thermal_json(
         "last_packet_at": stats.get("last_packet_at"),
         "foreign_packets": stats.get("foreign_packets", 0),
         "bad_packets": stats.get("bad_packets", 0),
+        "unit_mismatch": stats.get("unit_mismatch", 0),
         "mode": thermal_mode(snap, name),
         "running": running if isinstance(running, bool) else None,
         "actual_c": finite_number(snap.ok(prefix + "actual_c")),

@@ -326,6 +326,8 @@ export const ThermalHealthSchema = v.object({
 	foreign_packets: v.optional(NullableNumber, null),
 	/** verworfene Pakete, die sich nicht lesen ließen */
 	bad_packets: v.optional(NullableNumber, null),
+	/** Werte mit anderer Einheit als in der Empfangstabelle; sie gelten als ungültig */
+	unit_mismatch: v.optional(NullableNumber, null),
 	/** `aus`, `heizen`, `lueften`, `kuehlen` oder `unbekannt` */
 	mode: v.optional(v.nullable(v.string()), null),
 	running: v.optional(v.nullable(v.boolean()), null),

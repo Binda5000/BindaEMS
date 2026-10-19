@@ -9,6 +9,7 @@ const silent: CoreHealth['thermal'][string] = {
 	last_packet_at: null,
 	foreign_packets: 0,
 	bad_packets: 0,
+	unit_mismatch: 0,
 	mode: 'unbekannt',
 	running: null,
 	actual_c: null,

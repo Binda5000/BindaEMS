@@ -83,7 +83,8 @@ class HealthReport(BaseModel):
       und ein Slot gilt.
     - ``thermal``: je Klimaanlage unter ihrem Schlüssel in ``thermal.devices`` (Plan 6a,
       Präzisierung 4): ``label``, ``connected`` (die Quelle liefert Werte), ``last_packet_at``
-      (ISO in UTC), ``foreign_packets`` und ``bad_packets`` (verworfene Pakete), ``mode``
+      (ISO in UTC), ``foreign_packets`` und ``bad_packets`` (verworfene Pakete),
+      ``unit_mismatch`` (Werte mit anderer Einheit als in ``receive``, ungültig), ``mode``
       (``heizen``, ``kuehlen``, ``lueften``, ``aus``, ``unbekannt``), ``running``, ``actual_c``,
       ``setpoint_c`` (mit Versatz), ``base_setpoint_c`` (``setpoint_c`` minus das Echo, ohne
       Echo minus ``offset_sent_k``), ``offset_sent_k`` (was der Adapter sendet),

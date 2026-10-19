@@ -89,6 +89,9 @@ export function thermalRows(block: ThermalHealth): ThermalRow[] {
 			: []),
 		...((block.bad_packets ?? 0) > 0
 			? [{ label: 'Fehlerhafte Pakete', value: String(block.bad_packets) }]
+			: []),
+		...((block.unit_mismatch ?? 0) > 0
+			? [{ label: 'Werte mit falscher Einheit', value: String(block.unit_mismatch) }]
 			: [])
 	];
 	if (!block.connected) return [received, ...dropped, reason];
