@@ -469,7 +469,9 @@ vorn. Die Warnung „Ziel-SOC unerreichbar“ gilt für alle Fahrzeuge.
   auf „Geplant“ umschaltest. Ohne bekannte Absicht sind sie „unbekannt“.
 - **Mit Plan:** Nennt der gültige Plan das Auto, ist „Fertig um“ das Ende der letzten Viertelstunde, in
   der der Plan es lädt, und „Ziel erreichbar“ ist „ja“, wenn die Fehlmenge des Plans höchstens 0,1 kWh
-  ist; `expected_soc_pct` ist der Ladestand an der Abfahrt laut Plan.
+  ist; `expected_soc_pct` ist der Ladestand an der Abfahrt laut Plan. Liegt die Abfahrt hinter dem
+  Horizont (etwa am Nachmittag, bevor die Preise für morgen da sind) und lädt der Plan den Bedarf
+  nicht schon im Horizont, ist „Fertig um“ „unbekannt“: Den Rest lädt der core erst danach.
 - **Ohne Plan** für das Auto (kein gültiger Plan, oder es wurde nach dem Plan angesteckt) rechnet die
   app aus der spätesten Startzeit, die der core in Health meldet: Ab ihr lädt das Auto mit voller
   Leistung an seiner Wallbox, bis der Bedarf geladen ist; ist sie schon erreicht, ab jetzt. Reicht die
@@ -4176,8 +4178,12 @@ nennt.
   Beginn und ob er angenommen ist, Ladelimit, Bedarf, geplante Energie (an der Wallbox), Fehlmenge,
   den erwarteten Ladestand an der Abfahrt (`Ladestand + geplante Energie · Wirkungsgrad /
   usable_kwh · 100`, höchstens 100 %), „Fertig um“ (Ende der letzten Viertelstunde, in der der Plan das
-  Auto lädt; ohne Laden leer) und „erreichbar“ (Fehlmenge höchstens 0,1 kWh). UI und Home Assistant
-  zeigen daraus „Fertig um“ und „Ziel erreichbar“ (Abschnitte 7 und 12).
+  Auto mit mindestens 1 W lädt; ohne Laden leer) und „erreichbar“ (Fehlmenge höchstens 0,1 kWh). UI
+  und Home Assistant zeigen daraus „Fertig um“ und „Ziel erreichbar“ (Abschnitte 7 und 12).
+- **Abfahrt hinter dem Horizont:** Der erwartete Ladestand zählt dazu, was der core nach dem Horizont
+  mit voller Leistung bis zur Abfahrt noch lädt (höchstens den Rest des Bedarfs), denn er gilt an der
+  Abfahrt; deckt das den Bedarf, ist er das Ziel. „Fertig um“ ist leer, solange der Plan den Bedarf
+  nicht schon im Horizont lädt.
 - **An den core** geht je Slot die Ladeleistung je Auto in ganzen Watt (`vehicles` im Slot, nur Autos
   mit Leistung über 0). Der core lehnt negative Werte und unbekannte Fahrzeuge ab und begrenzt auf die
   Höchstleistung des Fahrzeugs (Abschnitt „Laderegelung“, „Absicht per PUT /v1/intent“).

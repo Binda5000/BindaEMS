@@ -76,16 +76,22 @@ def vehicle_summary(
     """Zusammenfassung je geplantem Auto in der Reihenfolge der Priorität (Präzisierung 14).
 
     Alle Energien auf der Wallbox-Seite (Ruling R10): ``planned_kwh = Σ e · Δ``. Der erwartete
-    Ladestand ist ``soc_start + planned_kwh · η / usable · 100``, höchstens 100; deckt der Plan
-    den Bedarf (``planned_kwh ≥ need_kwh``), höchstens das Ziel (oder der Ladestand, wenn er schon
-    darüber liegt), denn am Ziel stoppt der core, auch wenn der letzte Slot mit ``min_w`` mehr
-    vorsieht. ``finish_at`` ist das Ende des letzten Slots mit Laden. Die Fehlmenge kommt aus
-    ``shortfall_kwh`` (Optimierer); fehlt das Auto dort, ist sie ``horizon_need_kwh`` minus
-    ``planned_kwh``. ``reachable`` heißt Fehlmenge höchstens ``REACHABLE_TOL_KWH``; bei einer
-    Abfahrt hinter dem Horizont gilt sie gegen den Bedarf im Horizont.
+    Ladestand ist der an der Abfahrt: ``soc_start + geladen · η / usable · 100``, höchstens 100.
+    ``geladen`` ist ``planned_kwh``, bei einer Abfahrt hinter dem Horizont zusätzlich, was der core
+    danach mit voller Leistung noch lädt (``min(need_kwh − planned_kwh, max_w · Stunden nach dem
+    Horizont)``, Ruling R24). Deckt das den Bedarf (``geladen ≥ need_kwh``), ist der erwartete
+    Ladestand höchstens das Ziel (oder der Ladestand, wenn er schon darüber liegt), denn am Ziel
+    stoppt der core, auch wenn der letzte Slot mit ``min_w`` mehr vorsieht. ``finish_at`` ist das
+    Ende des letzten Slots mit Laden (``e ≥ EV_ON_W``); bleibt bei einer Abfahrt hinter dem
+    Horizont nach dem Plan ein Bedarf, lädt das Auto erst danach fertig, und ``finish_at`` ist
+    ``None`` (Ruling R20). Die Fehlmenge kommt aus ``shortfall_kwh`` (Optimierer); fehlt das Auto
+    dort, ist sie ``horizon_need_kwh`` minus ``planned_kwh``. ``reachable`` heißt Fehlmenge
+    höchstens ``REACHABLE_TOL_KWH``; bei einer Abfahrt hinter dem Horizont gilt sie gegen den
+    Bedarf im Horizont.
     """
     powers = _car_powers(inputs, ev_w)
     known = shortfall_kwh or {}
+    horizon_end = inputs.slots[-1].start + SLOT if inputs.slots else None
     result: list[PlanVehicle] = []
     for car in inputs.vehicles:
         watts = [slot.get(car.key, 0.0) for slot in powers]
@@ -93,10 +99,16 @@ def vehicle_summary(
         shortfall = known.get(car.key)
         if shortfall is None:
             shortfall = max(0.0, car.horizon_need_kwh - planned)
-        expected = car.soc_pct + planned * car.efficiency / car.usable_kwh * 100
-        if planned >= car.need_kwh - _KWH_EPS:
+        after_h = 0.0
+        if horizon_end is not None and car.departure_at > horizon_end:
+            after_h = (car.departure_at - horizon_end).total_seconds() / 3600
+        charged = planned + min(max(0.0, car.need_kwh - planned), car.max_w / 1000 * after_h)
+        expected = car.soc_pct + charged * car.efficiency / car.usable_kwh * 100
+        if charged >= car.need_kwh - _KWH_EPS:
             expected = min(expected, max(car.target_soc_pct, car.soc_pct))
-        charging = [index for index, w in enumerate(watts) if w > 0]
+        charging = [index for index, w in enumerate(watts) if w >= EV_ON_W]
+        remains = after_h > 0 and planned < car.need_kwh - _KWH_EPS
+        finish_at = inputs.slots[charging[-1]].start + SLOT if charging and not remains else None
         result.append(
             PlanVehicle(
                 key=car.key,
@@ -111,7 +123,7 @@ def vehicle_summary(
                 planned_kwh=planned,
                 shortfall_kwh=shortfall,
                 expected_soc_pct=min(100.0, expected),
-                finish_at=inputs.slots[charging[-1]].start + SLOT if charging else None,
+                finish_at=finish_at,
                 reachable=shortfall <= REACHABLE_TOL_KWH + _KWH_EPS,
             )
         )

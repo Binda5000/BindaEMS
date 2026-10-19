@@ -6,7 +6,15 @@ from typing import Any
 import pytest
 import yaml
 from tests.app_helpers import T_APP, price_row, sample_inputs
-from tests.plan_helpers import EV, HOLD_REASON, sample_plan
+from tests.plan_helpers import (
+    EV,
+    HOLD_REASON,
+    SCENARIO_START,
+    at,
+    planned_car,
+    sample_plan,
+    scenario,
+)
 
 from bindaems.app.charging.sessions import ChargingSession, FlowSplit
 from bindaems.app.ha.entities import (
@@ -18,12 +26,13 @@ from bindaems.app.ha.entities import (
     on_off,
 )
 from bindaems.app.ledger.service import MonthPeak
+from bindaems.app.planning.builder import build_plan
 from bindaems.app.prices.service import PriceService
 from bindaems.app.stats.service import TodayStats
 from bindaems.shared.config import Config
 from bindaems.shared.control import ChargeMode, Intent, SupportIntent, VehicleIntent
-from bindaems.shared.plan import PlanVehicle
-from bindaems.shared.timeutil import LOCAL_TZ
+from bindaems.shared.plan import BatteryIntent, PlanVehicle
+from bindaems.shared.timeutil import LOCAL_TZ, SLOT
 
 
 def entity(cfg: Config, object_id: str) -> EntitySpec:
@@ -941,6 +950,27 @@ def test_done_by_from_plan_and_from_latest_start_without_plan(cfg) -> None:
     # ein Auto, das der Plan nicht nennt (etwa nach dem Plan angesteckt), rechnet wie ohne Plan
     other = _planned(plan_vehicles=[_plan_car(key="egolf")], vehicles=[_health_car()])
     assert state(cfg, "tesla_done_by", other) == local(T_APP + timedelta(hours=3))
+
+
+def test_done_by_unknown_when_the_plan_ends_before_a_departure_beyond_the_horizon(cfg) -> None:
+    # Vor den Preisen für morgen endet der Horizont vor der Abfahrt: Der Plan lädt im Horizont nur
+    # einen Slot, den Rest lädt der core danach. „Fertig um“ ist dann unbekannt (Ruling R20), das
+    # Ziel bleibt erreichbar
+    car = planned_car(departure_at=at(SCENARIO_START) + 20 * SLOT, horizon_need_kwh=0.0)
+    inputs = scenario(prices=[20.0] * 8, pv=[0.0] * 8, load=[500.0] * 8, vehicles=[car])
+    ev_w: list[dict[str, float]] = [{}, {}, {"tesla": 3450.0}, {}, {}, {}, {}, {}]
+    plan = build_plan(
+        inputs,
+        [BatteryIntent()] * 8,
+        source="optimizer",
+        solver_status="optimal",
+        ev_w=ev_w,
+        shortfall_kwh={},
+    )
+    planned = _planned(plan_vehicles=plan.vehicles, vehicles=[_health_car()])
+    assert state(cfg, "tesla_done_by", planned) == "None"
+    assert state(cfg, "tesla_target_reachable", planned) == "ja"
+    assert entity(cfg, "tesla_target_reachable").attributes(planned)["expected_soc_pct"] == 80.0
 
 
 def test_target_reachable_from_plan_with_attributes(cfg) -> None:

@@ -498,12 +498,38 @@ def test_expected_soc_never_exceeds_100_and_without_charging_has_no_finish() -> 
 
 
 def test_departure_after_the_horizon_compares_with_the_horizon_need() -> None:
-    # Bedarf 30 kWh, im Horizont nötig 2,76 kWh: ein voller Slot reicht
+    # Bedarf 30 kWh, im Horizont nötig 2,76 kWh: ein voller Slot reicht; den Rest lädt der core
+    # nach dem Horizont mit voller Leistung (8 h · 11,04 kW), das Ziel ist erreichbar
     ev_w = [{"tesla": 11040.0}, {}, {}, {}, {}, {}, {}, {}]
     plan = _car_plan(ev_w, departure=40, need_kwh=30.0, horizon_need_kwh=2.76)
     car = plan.vehicles[0]
     assert car.shortfall_kwh == pytest.approx(0.0, abs=1e-9) and car.reachable
-    assert car.expected_soc_pct == pytest.approx(40.0 + 2.76 * 0.9 / 75 * 100)
+    assert car.expected_soc_pct == pytest.approx(40.0 + 30.0 * 0.9 / 75 * 100)
+
+
+def test_finish_at_is_none_when_the_departure_is_beyond_the_horizon_and_need_remains() -> None:
+    # Abfahrt 3 h nach dem Horizontende, der Plan lädt nur einen Slot PV (Mindestleistung):
+    # Der Rest des Bedarfs kommt erst nach dem Horizont, „Fertig um“ ist unbekannt (Ruling R20)
+    ev_w = [{}, {}, {"tesla": 3450.0}, {}, {}, {}, {}, {}]
+    plan = _car_plan(ev_w, departure=20, need_kwh=30.0, horizon_need_kwh=0.0)
+    car = plan.vehicles[0]
+    assert car.finish_at is None
+    assert car.reachable and car.shortfall_kwh == pytest.approx(0.0, abs=1e-9)
+    # deckt der Plan den Bedarf schon im Horizont, ist „Fertig um“ das Ende seines letzten Slots
+    full = [{"tesla": 11040.0}] * 3 + [{}] * 5
+    done = _car_plan(full, departure=20, need_kwh=8.0, horizon_need_kwh=0.0).vehicles[0]
+    assert done.finish_at == at(SCENARIO_START) + 3 * SLOT
+
+
+def test_expected_soc_beyond_the_horizon_counts_full_power_after_it() -> None:
+    # Abfahrt 1 h nach dem Horizontende: nach dem Horizont lädt der core höchstens 11,04 kWh,
+    # mit dem Slot im Plan (0,8625 kWh) also 11,9025 kWh bis zur Abfahrt (Ruling R24)
+    ev_w = [{}, {}, {"tesla": 3450.0}, {}, {}, {}, {}, {}]
+    short = _car_plan(ev_w, departure=12, need_kwh=30.0, horizon_need_kwh=0.0).vehicles[0]
+    assert short.expected_soc_pct == pytest.approx(40.0 + 11.9025 * 0.9 / 75 * 100)
+    # 3 h nach dem Horizont reichen für den ganzen Bedarf: erwartet ist das Ziel, nicht mehr
+    ample = _car_plan(ev_w, departure=20, horizon_need_kwh=0.0).vehicles[0]
+    assert ample.expected_soc_pct == pytest.approx(80.0)
 
 
 def test_baseline_carries_the_same_cars() -> None:

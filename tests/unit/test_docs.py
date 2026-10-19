@@ -197,7 +197,16 @@ def test_planning_section_describes_the_cars() -> None:
     section = " ".join(_guide_section("Planung").split())
     _, found, text = section.partition("### Autos im Plan ")
     assert found, "Der Unterabschnitt „Autos im Plan“ fehlt in „Planung“."
-    for topic in ("Regel R2", "P25", "2000 ct", "200 ct", "Fehlmenge", "nie aus dem Akku"):
+    for topic in (
+        "Regel R2",
+        "P25",
+        "2000 ct",
+        "200 ct",
+        "Fehlmenge",
+        "nie aus dem Akku",
+        "Abfahrt hinter dem Horizont",
+        "mit voller Leistung bis zur Abfahrt noch lädt",
+    ):
         assert topic in text, topic
     for finding in ("Auto {Name} lädt außerhalb seiner Grenzen um HH:MM", "Auto {Name} lädt nach"):
         assert finding in section, finding
