@@ -476,7 +476,8 @@ vorn. Die Warnung „Ziel-SOC unerreichbar“ gilt für alle Fahrzeuge.
   app aus der spätesten Startzeit, die der core in Health meldet: Ab ihr lädt das Auto mit voller
   Leistung an seiner Wallbox, bis der Bedarf geladen ist; ist sie schon erreicht, ab jetzt. Reicht die
   Zeit bis zur Abfahrt nicht, ist das Ziel nicht erreichbar, und `expected_soc_pct` ist der Ladestand,
-  den die volle Leistung bis zur Abfahrt bringt.
+  den die volle Leistung bis zur Abfahrt bringt. „Fertig um“ ist dabei auf die volle Minute
+  aufgerundet, so ändert es sich nicht mit jeder Sekunde.
 - **Am Ziel** (oder ohne Bedarf) ist „Fertig um“ „unbekannt“ und „Ziel erreichbar“ „ja“.
 - „Fertig um“ und „Ziel erreichbar“ sind „unbekannt“, solange das Fahrzeug nicht in „Geplant“ steht
   oder abgesteckt ist. „Ziel-SOC unerreichbar“ ist dann aus; ohne core und ohne Plan ist sie

@@ -973,6 +973,18 @@ def test_done_by_unknown_when_the_plan_ends_before_a_departure_beyond_the_horizo
     assert entity(cfg, "tesla_target_reachable").attributes(planned)["expected_soc_pct"] == 80.0
 
 
+def test_done_by_without_plan_is_stable_within_a_minute(cfg) -> None:
+    # Ist die späteste Startzeit vorbei, rechnet „Fertig um“ ohne Plan ab jetzt. Auf die volle
+    # Minute aufgerundet ändert es sich nicht mit jedem Publish innerhalb derselben Minute.
+    started = (T_APP - timedelta(minutes=30)).isoformat()
+    for car in (_health_car("due", latest_start=started), _health_car(latest_start=started)):
+        early = _planned(vehicles=[car], now=T_APP + timedelta(seconds=10.5))
+        late = _planned(vehicles=[car], now=T_APP + timedelta(seconds=40.2))
+        expected = local(T_APP + timedelta(hours=1, minutes=1))
+        assert state(cfg, "tesla_done_by", early) == expected
+        assert state(cfg, "tesla_done_by", late) == expected
+
+
 def test_target_reachable_from_plan_with_attributes(cfg) -> None:
     car = _plan_car(
         reachable=False,

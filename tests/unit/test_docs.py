@@ -912,6 +912,7 @@ def test_planned_charging_entities_in_the_guide_exist() -> None:
         },
     )
     section = _guide_section("7. Home Assistant über MQTT")
+    assert "auf die volle Minute aufgerundet" in " ".join(section.split())
     assert "| Ziel-SOC (je Fahrzeug) | Zahl |" in section
     assert "| Abfahrtszeit (je Fahrzeug) | Text |" in section
     assert "topic write homeassistant/text/bindaems/#" in section

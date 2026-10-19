@@ -308,7 +308,8 @@ def planned_from_health(
     Leistung ``full_power_w`` an seiner Wallbox, bis der Bedarf ``need_kwh`` geladen ist. Reicht
     die Zeit bis zur Abfahrt nicht, ist das Ziel nicht erreichbar, und der erwartete Ladestand ist
     der, den die volle Leistung bis zur Abfahrt bringt. Ohne Bedarf oder am Ziel (``reached``) gibt
-    es kein „Fertig um“, das Ziel ist erreichbar.
+    es kein „Fertig um“, das Ziel ist erreichbar. „Fertig um“ ist auf die volle Minute aufgerundet:
+    Ab jetzt gerechnet änderte es sich sonst mit jedem Publish.
     """
     planned = entry.get("planned")
     if not isinstance(planned, Mapping):
@@ -329,7 +330,7 @@ def planned_from_health(
     full_kw = full_power_w(vehicle, wallbox, cfg.grid.voltage_nominal_v) / 1000
     if now is not None:
         start = ensure_utc(now) if planned.get("state") == "due" else max(start, ensure_utc(now))
-    done_by = start + timedelta(hours=need / full_kw)
+    done_by = _ceil_minute(start + timedelta(hours=need / full_kw))
     if done_by <= departure_at:
         return PlannedView(
             done_by, True, finite_number(planned.get("target_soc_pct")), departure_at, soc_source
@@ -338,6 +339,12 @@ def planned_from_health(
     gained = hours * full_kw * vehicle.charge_efficiency_pct / 100 / vehicle.usable_kwh * 100
     expected = None if soc is None else min(100.0, soc + gained)
     return PlannedView(done_by, False, expected, departure_at, soc_source)
+
+
+def _ceil_minute(moment: datetime) -> datetime:
+    """``moment`` auf die volle Minute aufgerundet; eine volle Minute bleibt."""
+    floor = moment.replace(second=0, microsecond=0)
+    return floor if floor == moment else floor + timedelta(minutes=1)
 
 
 def _done_by(cfg: Config, key: str) -> Callable[[HaInputs], str]:
