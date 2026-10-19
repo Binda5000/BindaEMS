@@ -5,6 +5,7 @@ from tests.app_helpers import price_row, set_feed_in
 from tests.helpers import FakeSink
 from tests.unit.app.ledger.conftest import FakeInflux
 
+from bindaems.app.charging.planned import PlannedCharges
 from bindaems.app.charging.sessions import SessionService
 from bindaems.app.charging.tracker import ChargingTracker
 from bindaems.app.consumers.days import ConsumerDays
@@ -84,8 +85,9 @@ def stats(
     sessions = SessionService(tracker, ledger, costing, clock)
     days = ConsumerDays(engine, energy, consumers, clock)
     checks = LedgerChecks(engine, ledger, influx, clock, cfg)  # type: ignore[arg-type]
+    planned = PlannedCharges(engine, clock, cfg)
     return StatsService(
-        ledger, sessions, consumers, days, energy, checks, settings_service, cfg, clock
+        ledger, sessions, consumers, days, energy, checks, settings_service, cfg, clock, planned
     )
 
 

@@ -782,7 +782,8 @@ curl -b jar "$APP/api/ledger/checks?from=2026-10-01&to=2026-10-07"
 Zeitraums, der `date` (Wiener Zeit, Standard: heute) enthält; ein anderes `period` gibt 422. Die Woche
 läuft von Montag bis Sonntag (ISO). Die Antwort enthält `period`, `first`, `last`, `complete`,
 `coverage`, `estimated_slots`, `energy`, `money`, `ratios`, `buckets`, `vehicles`,
-`battery_to_vehicles_kwh`, `consumers`, `month_peaks` und `checks`; Zahlen sind auf 3 Stellen gerundet.
+`battery_to_vehicles_kwh`, `planned`, `consumers`, `month_peaks` und `checks`; Zahlen sind auf 3 Stellen
+gerundet.
 
 - **Kennzahlen:** Sie entstehen aus den Summen der Tage, nicht als Mittel der Tageskennzahlen:
   `autarky` ist `1 − Bezug ÷ Verbrauch`, `self_consumption` ist `(PV − Einspeisung) ÷ PV`, die
@@ -802,6 +803,15 @@ läuft von Montag bis Sonntag (ISO). Die Antwort enthält `period`, `first`, `la
 - **Autos:** `vehicles` nennt die Autos mit Energie über 0 in der Reihenfolge der `config.yaml`, dann
   `guest` („Gast“) und `unknown` („Unbekannt“); `sessions` zählt die Ladesessions, die den Zeitraum
   überdecken. `battery_to_vehicles_kwh` ist der Akku-Strom, der ins Auto ging.
+- **Geplantes Laden (Abnahme „Ziel-SOC“):** `planned` zählt die geplanten Ladungen mit Abfahrt im
+  Zeitraum: `reached` von `feasible` machbaren erreicht, `missed` machbar und verfehlt, `infeasible`
+  nicht machbar, `early` vor der Abfahrt abgesteckt, `unknown` ohne Ladestand; offene zählen nicht.
+  Die app legt je Session in „Geplant“ und Abfahrt eine Zeile in der Tabelle `planned_charge` an
+  (Migration `0012`, sie läuft beim Start). Machbar heißt: Zu Beginn reichte volle Leistung bis zur
+  Abfahrt, und das Ladelimit im Auto liegt nicht unter dem Ziel. Erreicht heißt: Der Ladestand des
+  letzten Health vor der Abfahrt war mindestens Ziel − 1 Prozentpunkt, oder ein bekannter Ladestand
+  war schon vorher am Ziel. Ein angenommener Ladestand zählt nie als erreicht. Die Abnahme verlangt
+  mindestens 95 % der machbaren Ladungen erreicht.
 - **Verbraucher:** `consumers` summiert die gespeicherten Tage bis gestern und für heute den
   laufenden Wert; fehlt ein Tag (älter als 31 Tage oder noch nicht gespeichert), ist `kwh` `null`
   und `note` nennt den Grund.

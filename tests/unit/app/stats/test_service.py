@@ -6,7 +6,7 @@ from tests.app_helpers import ingest, set_tariff
 from tests.unit.app.stats.stats_helpers import T0, TODAY, add_consumer, add_session
 
 from bindaems.app.consumers.days import NO_DAY
-from bindaems.app.db.schema import consumer_day, ledger_check
+from bindaems.app.db.schema import charging_session, consumer_day, ledger_check, planned_charge
 from bindaems.app.stats.service import (
     NOT_YET,
     TodayStats,
@@ -453,3 +453,52 @@ def test_year_view_attributes_the_sessions_only_once(stats, engine, monkeypatch)
     [tesla] = stats.period("year", TODAY)["vehicles"]
     assert (tesla["kwh"], tesla["sessions"]) == (1.5, 2)
     assert len(calls) == 1  # nur die Summen je Auto; die Anzahl ohne Zuordnung
+
+
+def test_planned_charges_of_the_period(stats, engine) -> None:
+    # Abfahrten am 9. Oktober (Ortszeit) und eine am 1. Oktober; offene Zeilen zählen nicht
+    with engine.begin() as conn:
+        session_id = conn.execute(
+            insert(charging_session)
+            .returning(charging_session.c.id)
+            .values(wallbox="twc", vehicle="tesla", start=T0, end=None, last_seen=T0)
+        ).scalar_one()
+        for departure, feasible, outcome in [
+            (T0 + timedelta(hours=1), True, "reached"),
+            (T0 + timedelta(hours=2), True, "missed"),
+            (T0 + timedelta(hours=3), False, "missed"),
+            (T0 + timedelta(hours=4), True, "early"),
+            (T0 + timedelta(hours=5), True, "unknown"),
+            (T0 + timedelta(hours=6), True, "open"),
+            (datetime(2026, 10, 1, 5, 0, tzinfo=UTC), True, "reached"),
+        ]:
+            conn.execute(
+                insert(planned_charge).values(
+                    session_id=session_id,
+                    vehicle="tesla",
+                    target_soc_pct=80,
+                    departure_at=departure,
+                    started_at=T0,
+                    start_soc_pct=40.0,
+                    start_soc_source="measured",
+                    feasible=feasible,
+                    outcome=outcome,
+                )
+            )
+    assert stats.period("day", TODAY)["planned"] == {
+        "reached": 1,
+        "feasible": 2,
+        "missed": 1,
+        "infeasible": 1,
+        "early": 1,
+        "unknown": 1,
+    }
+    assert stats.period("month", TODAY)["planned"]["reached"] == 2
+    assert stats.period("day", date(2026, 10, 12))["planned"] == {
+        "reached": 0,
+        "feasible": 0,
+        "missed": 0,
+        "infeasible": 0,
+        "early": 0,
+        "unknown": 0,
+    }

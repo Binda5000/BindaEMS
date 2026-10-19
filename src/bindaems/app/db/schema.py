@@ -308,3 +308,25 @@ consumer_day = Table(
     Column("kwh", Float, nullable=True),
     Column("note", String(80), nullable=True),
 )
+
+# Geplante Ladung für die Abnahme „Ziel-SOC“ (Plan 4b, Präzisierung 16): eine Zeile je Session in
+# „Geplant“ und Abfahrt. ``outcome`` ist ``open``, ``reached``, ``missed``, ``early`` oder
+# ``unknown``; solange sie offen ist, halten ``end_soc_*`` den letzten Ladestand vor der Abfahrt
+planned_charge = Table(
+    "planned_charge",
+    metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("session_id", Integer, ForeignKey("charging_session.id"), nullable=False),
+    Column("vehicle", String(32), nullable=False),
+    Column("target_soc_pct", Float, nullable=False),
+    Column("departure_at", UtcDateTime(), nullable=False),
+    Column("started_at", UtcDateTime(), nullable=False),
+    Column("start_soc_pct", Float, nullable=False),
+    Column("start_soc_source", String(10), nullable=False),
+    Column("feasible", Boolean, nullable=False),
+    Column("reached_at", UtcDateTime(), nullable=True),
+    Column("end_soc_pct", Float, nullable=True),
+    Column("end_soc_source", String(10), nullable=True),
+    Column("outcome", String(10), nullable=False),
+    Index("ix_planned_charge_departure_at", "departure_at"),
+)

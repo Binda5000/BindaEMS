@@ -12,14 +12,14 @@ from __future__ import annotations
 import asyncio
 import math
 import re
-from datetime import timedelta
+from datetime import UTC, timedelta
 from pathlib import Path
 from typing import Any
 
 import httpx
 import respx
 from pydantic import SecretStr
-from sqlalchemy import bindparam, update
+from sqlalchemy import bindparam, insert, select, update
 from tests.app_helpers import (
     T_APP,
     influx_q,
@@ -34,6 +34,7 @@ from tests.ui_history import (
     DAYS,
     FIRST_DAY,
     LAST_DAY,
+    SESSIONS,
     HistorySlot,
     counter_readings,
     history_slots,
@@ -43,7 +44,7 @@ from tests.ui_history import (
 from bindaems.app.charging.tracker import WallboxSeen
 from bindaems.app.consumers.service import ConsumerInput
 from bindaems.app.consumers.values import ENTITY_UNITS_QUERY, HaRef
-from bindaems.app.db.schema import ledger_slot, user_table
+from bindaems.app.db.schema import charging_session, ledger_slot, planned_charge, user_table
 from bindaems.app.forecast.archive import RecordValue
 from bindaems.app.forecast.openmeteo import OPEN_METEO_URL
 from bindaems.app.ledger.checks import EXPORT_COUNTER, IMPORT_COUNTER
@@ -671,6 +672,47 @@ def _record_sessions(app: AppRuntime) -> None:
         )
 
 
+# Geplante Ladungen der Demo je Session (Index in ``SESSIONS``): Abfahrt nach dem Beginn, machbar,
+# Ladestand zu Beginn und an der Abfahrt, Ergebnis; die offene von heute zählt nicht
+DEMO_PLANNED = (
+    (0, timedelta(hours=4, minutes=30), True, 35.0, 52.0, "early"),  # e-Golf vorher abgesteckt
+    (1, timedelta(hours=3, minutes=45), False, 30.0, 62.0, "missed"),  # zu spät angesteckt
+    (3, timedelta(hours=4), True, 55.0, 80.0, "reached"),
+    (5, timedelta(hours=9, minutes=15), True, 48.0, 51.0, "open"),
+)
+
+
+def _record_planned(app: AppRuntime) -> None:
+    """Geplante Ladungen zu den Sessions der Demo, Ziel 80 %."""
+    with app.engine.begin() as conn:
+        for index, after, feasible, start_soc, end_soc, outcome in DEMO_PLANNED:
+            session = SESSIONS[index]
+            start = session.start.astimezone(UTC)
+            reached_at = start + after - timedelta(minutes=40) if outcome == "reached" else None
+            session_id = conn.execute(
+                select(charging_session.c.id).where(
+                    charging_session.c.wallbox == session.wallbox,
+                    charging_session.c.start == start,
+                )
+            ).scalar_one()
+            conn.execute(
+                insert(planned_charge).values(
+                    session_id=session_id,
+                    vehicle=session.vehicle,
+                    target_soc_pct=80,
+                    departure_at=start + after,
+                    started_at=start,
+                    start_soc_pct=start_soc,
+                    start_soc_source="measured",
+                    feasible=feasible,
+                    reached_at=reached_at,
+                    end_soc_pct=end_soc,
+                    end_soc_source="estimated",
+                    outcome=outcome,
+                )
+            )
+
+
 def _record_checks(app: AppRuntime, slots: list[HistorySlot]) -> None:
     """Abgleich der letzten 7 Tage vor heute; die Zählerstände sind erfunden: ein Tag weicht beim
     Netzbezug um 3,5 % ab (markiert), einer hat einen fehlenden Zählerstand."""
@@ -689,7 +731,8 @@ def _record_checks(app: AppRuntime, slots: list[HistorySlot]) -> None:
 
 
 async def _statistics(app: AppRuntime) -> None:
-    """Daten der Statistik: Abrechnung, Einstandspreis, Sessions, Abgleich, Verbraucher je Tag."""
+    """Daten der Statistik: Abrechnung, Einstandspreis, Sessions, geplante Ladungen, Abgleich,
+    Verbraucher je Tag."""
     slots = history_slots()
     assert len(slots) == sum(
         len(local_day_slots(FIRST_DAY + timedelta(days=n))) for n in range(DAYS)
@@ -697,6 +740,7 @@ async def _statistics(app: AppRuntime) -> None:
     _ingest_history(app, slots)
     app.costing.catch_up()  # füllt ledger_cost wie die Nachführung im Betrieb
     _record_sessions(app)
+    _record_planned(app)
     _record_checks(app, slots)
     today = T_DEMO.astimezone(LOCAL_TZ).date()
     assert await app.consumer_days.fill_missing(today, days=7) == 7

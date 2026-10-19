@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 from pydantic import SecretStr
-from sqlalchemy import insert
+from sqlalchemy import insert, select
 from structlog.testing import capture_logs
 from tests.app_helpers import (
     PASSWORD,
@@ -22,7 +22,7 @@ from tests.unit.shared.test_decisions import decision
 
 from bindaems.app.control.decisions import DecisionQuery
 from bindaems.app.control.intent import CoreDown
-from bindaems.app.db.schema import charging_session
+from bindaems.app.db.schema import charging_session, planned_charge
 from bindaems.app.ha.entities import build_inputs
 from bindaems.app.runtime import AppRuntime, StatsInputs
 from bindaems.shared.config import Config, Secrets
@@ -265,12 +265,51 @@ async def test_runtime_wires_the_plan_sender(runtime, monkeypatch) -> None:
         runtime._core_connected,
     ]
     # nach jeder Abfrage von Health gleicht der Sender ab (Gesamtreview I1)
-    assert runtime.live_feed.health_handlers == [runtime.plan_sender.wake, runtime.charging.wake]
+    assert runtime.live_feed.health_handlers == [
+        runtime.plan_sender.wake,
+        runtime.charging.wake,
+        runtime._planned_wake.set,
+    ]
     calls: list[str] = []
     monkeypatch.setattr(runtime.live_feed, "refresh_health", lambda: calls.append("health"))
     monkeypatch.setattr(runtime.plan_sender, "wake", lambda: calls.append("wake"))
     await runtime._core_connected()
     assert calls == ["health", "wake"]
+
+
+def test_runtime_records_planned_charges_with_the_open_sessions(runtime) -> None:
+    # nach Health: die geplante Ladung gehört zur offenen Session an der Wallbox des Fahrzeugs;
+    # die Statistik zählt sie über denselben Dienst
+    assert runtime.stats._planned is runtime.planned_charges
+    add_session(runtime, T_APP - timedelta(hours=1), None, "tesla", "twc")
+    departure = T_APP + timedelta(hours=8)
+    runtime.live.connected = True
+    runtime.live.health = {
+        "intent": {"version": 1, "vehicles": {"tesla": {"mode": "planned", "target_soc_pct": 80}}},
+        "intent_version": 1,
+        "vehicles": [
+            {
+                "id": "tesla",
+                "mode": "planned",
+                "wallbox": "twc",
+                "plugged": True,
+                "soc_pct": 40.0,
+                "soc_source": "measured",
+                "charge_limit_pct": None,
+                "planned": {"target_soc_pct": 80, "departure_at": departure.isoformat()},
+            }
+        ],
+    }
+    runtime.record_planned()
+    with runtime.engine.connect() as conn:
+        [row] = conn.execute(select(planned_charge)).all()
+        session_id = conn.execute(select(charging_session.c.id)).scalar_one()
+    assert (row.session_id, row.departure_at, row.outcome) == (session_id, departure, "open")
+    runtime.live.connected = False  # ohne Verbindung keine Beobachtung
+    runtime.live.health = {"vehicles": []}
+    runtime.record_planned()
+    with runtime.engine.connect() as conn:
+        assert conn.execute(select(planned_charge.c.outcome)).scalars().all() == ["open"]
 
 
 def test_planning_takes_the_support_threshold_of_the_intent(runtime, cfg: Config) -> None:
@@ -959,7 +998,9 @@ async def test_runtime_starts_and_stops_cleanly(runtime, respx_mock) -> None:
             and runtime.planning.status().unavailable is not None
         )
     )
-    assert {"plan-sender", "charging"} <= {job.get_name() for job in runtime._tasks}
+    assert {"plan-sender", "charging", "planned-charges"} <= {
+        job.get_name() for job in runtime._tasks
+    }
     await runtime.shutdown()
     await asyncio.wait_for(task, timeout=2)
     assert runtime.pipeline.status().last_attempt is not None  # Preise wurden versucht

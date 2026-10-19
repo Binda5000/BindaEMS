@@ -58,6 +58,7 @@ def test_stats_route_shape(client_as, ledger, price_all) -> None:
         "buckets",
         "vehicles",
         "battery_to_vehicles_kwh",
+        "planned",
         "consumers",
         "month_peaks",
         "checks",

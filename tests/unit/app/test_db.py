@@ -18,9 +18,10 @@ from bindaems.app.db.schema import (
     ledger_check,
     ledger_cost,
     metadata,
+    planned_charge,
 )
 
-HEAD = "0011"  # neueste Migration
+HEAD = "0012"  # neueste Migration
 
 
 def test_migrations_match_schema(engine: Engine) -> None:
@@ -280,6 +281,59 @@ def test_migration_0011_adapts_the_cost_table_and_downgrades(engine: Engine) -> 
         # abgeleitete Zeilen: die Migration leert die Tabelle, die app rechnet sie neu
         assert conn.execute(text("SELECT count(*) FROM ledger_cost")).scalar_one() == 0
         assert conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one() == "0010"
+
+
+def test_migration_0012_creates_and_drops_planned_charge(engine: Engine) -> None:
+    inspector = inspect(engine)
+    assert _columns(inspector, "planned_charge") == {
+        "id": False,
+        "session_id": False,
+        "vehicle": False,
+        "target_soc_pct": False,
+        "departure_at": False,
+        "started_at": False,
+        "start_soc_pct": False,
+        "start_soc_source": False,
+        "feasible": False,
+        "reached_at": True,
+        "end_soc_pct": True,
+        "end_soc_source": True,
+        "outcome": False,
+    }
+    assert inspector.get_pk_constraint("planned_charge")["constrained_columns"] == ["id"]
+    assert [i["column_names"] for i in inspector.get_indexes("planned_charge")] == [
+        ["departure_at"]
+    ]
+    [key] = inspector.get_foreign_keys("planned_charge")
+    assert (key["constrained_columns"], key["referred_table"], key["referred_columns"]) == (
+        ["session_id"],
+        "charging_session",
+        ["id"],
+    )
+    with engine.connect() as conn:
+        assert conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one() == HEAD
+    _downgrade(engine, "0011")
+    tables = inspect(engine).get_table_names()
+    assert "planned_charge" not in tables and "charging_session" in tables
+    with engine.connect() as conn:
+        assert conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one() == "0011"
+
+
+def test_planned_charge_needs_an_existing_session(engine: Engine) -> None:
+    t = datetime(2026, 10, 9, 8, 0, tzinfo=UTC)
+    row = {
+        "session_id": 99,
+        "vehicle": "tesla",
+        "target_soc_pct": 80,
+        "departure_at": t,
+        "started_at": t,
+        "start_soc_pct": 40.0,
+        "start_soc_source": "measured",
+        "feasible": True,
+        "outcome": "open",
+    }
+    with pytest.raises(IntegrityError), engine.begin() as conn:
+        conn.execute(insert(planned_charge).values(**row))
 
 
 def test_rows_of_the_statistics_tables_round_trip(engine: Engine) -> None:

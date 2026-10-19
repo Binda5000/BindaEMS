@@ -850,6 +850,19 @@ export const StatsSchema = v.object({
 		})
 	),
 	battery_to_vehicles_kwh: v.number(),
+	/**
+	 * Geplante Ladungen mit Abfahrt im Zeitraum (Abnahme „Ziel-SOC“): `reached` von `feasible`
+	 * machbaren erreicht, `missed` verfehlt; `infeasible` nicht machbar, `early` vor der Abfahrt
+	 * abgesteckt, `unknown` ohne Ladestand; offene zählen nicht
+	 */
+	planned: v.object({
+		reached: v.number(),
+		feasible: v.number(),
+		missed: v.number(),
+		infeasible: v.number(),
+		early: v.number(),
+		unknown: v.number()
+	}),
 	consumers: v.array(
 		v.object({
 			id: v.number(),

@@ -170,6 +170,14 @@
     }
   ],
   "battery_to_vehicles_kwh": 6.878,
+  "planned": {
+    "reached": 1,
+    "feasible": 1,
+    "missed": 0,
+    "infeasible": 1,
+    "early": 1,
+    "unknown": 0
+  },
   "consumers": [
     {
       "id": 2,

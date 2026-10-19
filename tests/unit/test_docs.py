@@ -785,6 +785,7 @@ def test_stats_endpoint_in_the_guide() -> None:
         "buckets",
         "vehicles",
         "battery_to_vehicles_kwh",
+        "planned",
         "consumers",
         "month_peaks",
         "checks",
@@ -800,6 +801,20 @@ def test_stats_endpoint_in_the_guide() -> None:
         "Monatsgebühr ÷ Tage des Monats",
         "nur bei „Monat“ und „Jahr“",
         "`null`, wenn `net_eur` unbekannt ist",
+    ):
+        assert text in section, text
+    # Geplantes Laden (Plan 4b, Entscheidung 15): Zähler, Tabelle, Migration und Abnahme
+    for text in (
+        "`reached`",
+        "`feasible`",
+        "`missed`",
+        "`infeasible`",
+        "`early`",
+        "`unknown`",
+        "`planned_charge`",
+        "Migration `0012`",
+        "Ziel − 1 Prozentpunkt",
+        "mindestens 95 %",
     ):
         assert text in section, text
 

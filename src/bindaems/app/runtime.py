@@ -28,6 +28,7 @@ from bindaems.app.auth.routes import audit_router, auth_router, users_router
 from bindaems.app.auth.service import AuthService
 from bindaems.app.auth.web import Guard
 from bindaems.app.backup import backup_database
+from bindaems.app.charging.planned import PlannedCharges
 from bindaems.app.charging.routes import charging_router
 from bindaems.app.charging.sessions import ChargingSession, SessionService
 from bindaems.app.charging.tracker import ChargingTracker
@@ -272,6 +273,10 @@ class AppRuntime:
         self.charging_sessions = SessionService(
             self.charging, self.ledger, self.costing, self._clock
         )
+        # geplante Ladungen für die Abnahme „Ziel-SOC“ nach jeder Abfrage von Health (Plan 4b)
+        self.planned_charges = PlannedCharges(self.engine, self._clock, cfg)
+        self._planned_wake = asyncio.Event()
+        self.live_feed.health_handlers.append(self._planned_wake.set)
         self.ha_values = HaValueCache(self.reader, ha_database) if ha_database is not None else None
         self.energy = EnergyCache(self.reader, self._clock, ha_database)
         self.consumer_days = ConsumerDays(self.engine, self.energy, self.consumers, self._clock)
@@ -285,6 +290,7 @@ class AppRuntime:
             self.settings,
             cfg,
             self._clock,
+            self.planned_charges,
         )
         self.ha_publisher: HaPublisher | None = None
         self._ha_inputs: HaInputs | None = None
@@ -495,6 +501,7 @@ class AppRuntime:
             ("planning", self.planning.run),
             ("plan-sender", self.plan_sender.run),
             ("charging", self.charging.run),
+            ("planned-charges", self._planned_loop),
             ("influx-writer", self.influx_writer.run),
             ("ledger", self._ledger_loop),
             ("costing", self._costing_loop),
@@ -599,6 +606,25 @@ class AppRuntime:
                 log.exception("Einstandspreis des Akkus nicht berechenbar")
                 await asyncio.sleep(COSTING_RETRY_S)
                 self._costing_wake.set()  # die Markierung blieb: noch einmal versuchen
+
+    def record_planned(self) -> None:
+        """Ein Health für die geplanten Ladungen, mit den offenen Sessions je Wallbox (blockiert:
+        aus einem Thread aufrufen)."""
+        health = self.live.health if self.live.connected else None
+        if health is None:
+            return
+        sessions = {session.wallbox: session for session in self.charging.open_sessions()[::-1]}
+        self.planned_charges.record(health, sessions)  # je Wallbox die neueste offene Session
+
+    async def _planned_loop(self) -> None:
+        """Nach jeder Antwort von Health; ein Fehler kommt ins Log."""
+        while True:
+            await self._planned_wake.wait()
+            self._planned_wake.clear()
+            try:
+                await asyncio.to_thread(self.record_planned)
+            except Exception:
+                log.exception("Geplante Ladungen nicht aufgezeichnet")
 
     async def _ledger_loop(self) -> None:
         """Beim Start ab Mitternacht vor 7 Tagen nachtragen (mindestens das Fenster der

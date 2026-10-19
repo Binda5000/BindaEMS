@@ -9,6 +9,9 @@ Grundgebühren zählen anteilig je Tag bis einschließlich heute; der Leistungsp
 Abrechnungsdaten aus der Monatsspitze, nur in Monat und Jahr und nur, wo ein Leistungspreis mit Satz
 gilt (wie im Planer). Die Ersparnis bleibt ohne beides (Entscheidung 9).
 
+``planned`` zählt die geplanten Ladungen mit Abfahrt im Zeitraum für die Abnahme „Ziel-SOC“
+(Plan 4b, Entscheidung 15; ``PlannedCharges.summary``).
+
 ``StatsService`` liest blockierend: aus einem Thread bzw. einem synchronen Route-Handler aufrufen.
 """
 
@@ -17,10 +20,11 @@ from __future__ import annotations
 import calendar
 import math
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from datetime import date, timedelta
 from typing import Any, Final, Literal, get_args
 
+from bindaems.app.charging.planned import PlannedCharges
 from bindaems.app.charging.sessions import GUEST, UNKNOWN, SessionService, vehicle_name
 from bindaems.app.consumers.days import NO_DAY, ConsumerDays
 from bindaems.app.consumers.energy import EnergyCache
@@ -164,6 +168,7 @@ class StatsService:
         settings: SettingsService,
         cfg: Config,
         clock: Clock,
+        planned: PlannedCharges,
     ) -> None:
         self._ledger = ledger
         self._sessions = sessions
@@ -174,6 +179,7 @@ class StatsService:
         self._settings = settings
         self._cfg = cfg
         self._clock = clock
+        self._planned = planned
 
     def local_today(self) -> date:
         return self._clock.now().astimezone(LOCAL_TZ).date()
@@ -239,6 +245,7 @@ class StatsService:
             "buckets": self._buckets(period, first, days, settings),
             "vehicles": vehicles,
             "battery_to_vehicles_kwh": battery_to_vehicles,
+            "planned": asdict(self._planned.summary(first, last)),
             "consumers": self._consumer_energy(first, last, today),
             "month_peaks": peaks,
             "checks": self._check_summary(first, last),

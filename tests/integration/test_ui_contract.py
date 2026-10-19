@@ -16,6 +16,7 @@ from sqlalchemy import select
 from tests.ui_history import DAYS, FIRST_DAY
 from tests.ui_world import DEMO_PASSWORD, DEMO_TOTP_SECRET, T_DEMO, World, build_world
 
+from bindaems.app.charging.planned import PlannedSummary
 from bindaems.app.db.schema import assignment_log
 from bindaems.app.ledger.checks import NOTE_ZERO
 from bindaems.shared.domain import Alarm, Severity
@@ -231,6 +232,11 @@ async def test_demo_world_has_statistics_data(cfg, tmp_path) -> None:
         assert ("guest", "default") in entries["evcs"]
         assert ("", "unclear") in entries["evcs"]  # die Session ohne Fahrzeug
         assert entries["twc"][:3] == [("", ""), ("tesla", "detected"), ("", "")]
+
+        # geplante Ladungen: je eine erreicht, nicht machbar und vorher abgesteckt, eine offen
+        assert app.planned_charges.summary(FIRST_DAY, date(2026, 10, 9)) == PlannedSummary(
+            reached=1, feasible=1, missed=0, infeasible=1, early=1, unknown=0
+        )
 
         checks = app.ledger_checks.checks(last - timedelta(days=6), last)
         assert {check.day for check in checks} == {last - timedelta(days=n) for n in range(7)}
