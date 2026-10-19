@@ -1,6 +1,6 @@
 # Übergabe an die nächste Session
 
-Stand: 17.10.2026. Plan 2c-1 (Laderegelung) ist umgesetzt, je Task und im Gesamtreview geprüft
+Stand: 19.10.2026. Plan 2c-1 (Laderegelung) ist umgesetzt, je Task und im Gesamtreview geprüft
 („mit Korrekturen“, keine kritischen Befunde), und die Fix-Welle danach ist umgesetzt. Er ist auf
 `main` (Stand `18c575a`, wie die Branches `ccr-e451cb4c-qeg1tm` und `ccr-9778345e-t3x44k` zu Beginn
 der folgenden Sitzung). Danach sind die EVCS-Hysterese (Freigabe des Betreibers vom 14.10.2026) und
@@ -64,13 +64,22 @@ Er schaltet nichts an der Anlage.
 **Plan 4b (Geplantes Laden, der zweite Teil der Phase 4) ist umgesetzt, je Task und im Gesamtreview geprüft, und die Fix-Welle danach ist umgesetzt**
 (`docs/superpowers/plans/2026-10-18-phase-4b-geplantes-laden.md`, 19 Tasks, freigegeben vom Betreiber am 18.10.2026 mit allen 17 Entscheidungen: „passt so, du
 kannst beginnen, deployment führe ich erst nach der abnahme von phase 3 durch“): auf dem Arbeitszweig
-`claude/phase-4b-plan-agf1qj` (ab `fb23bd0`), **nicht auf `main` und nicht ausgerollt**. Der Gesamtreview
+`claude/phase-4b-plan-agf1qj` (ab `fb23bd0`), **seit dem 19.10.2026 auf `main` (`7dabc56`), nicht ausgerollt**. Der Gesamtreview
 (19.10.2026) hat eine Fix-Welle mit 12 Punkten und einen kurzen Nachlauf ausgelöst; das Re-Review ist
-sauber, es ist kein kritischer und kein wichtiger Befund offen (siehe „Phase 4b“ unten). Die Integration
-auf `main` folgt nur mit Zustimmung des Betreibers, per Fast-Forward. Plan 4b ändert core, `shared`, app und UI. **Ausgerollt wird
+sauber, es ist kein kritischer und kein wichtiger Befund offen (siehe „Phase 4b“ unten). Plan 4b ändert core, `shared`, app und UI. **Ausgerollt wird
 erst nach der Abnahme der Phase 3, und das ist ein Schritt des Betreibers;** nichts geht dabei von
 selbst live: „Geplant“ wirkt nur mit Regelbetrieb, in der Betriebsart der Aktoren und erst, wenn
 du ein Fahrzeug darauf stellst.
+**Plan 6a (Klimaanlage, der erste Teil der Phase 6 „Wärme und Kälte“) ist umgesetzt, je Task und im
+Gesamtreview geprüft, und die Fix-Welle danach ist umgesetzt** (`docs/superpowers/plans/2026-10-19-phase-6a-klimaanlage.md`,
+13 Tasks und Task 12b, freigegeben vom Betreiber am 19.10.2026: „Passt so bitte umsetzen“): auf dem Branch
+`claude/project-thread-79ieqs`, **nicht auf `main` und nicht ausgerollt**. Das Re-Review nach der Fix-Welle
+sagt „bereit für `main`“, kein kritischer und kein wichtiger Befund ist offen (siehe „Phase 6a“ unten;
+Festlegungen und offene Kleinigkeiten in `docs/superpowers/plans/2026-10-19-phase-6a-entscheidungen.md`).
+Die Integration auf `main` folgt nur mit Zustimmung des Betreibers, per Fast-Forward. **Ausgerollt wird
+mit 4b nach der Abnahme der Phase 3,** und vorher muss der Betreiber Routing und Firewall für UDP 5442
+zwischen 192.168.81.0/24 und 192.168.82.0/24 öffnen. Nichts geht dabei von selbst live: Die
+Klimaanlage folgt der Betriebsart ihres Aktors (`thermal.klima`), im Dry-Run sendet der core 0.
 `main` ist seit dem 12.10.2026 auch der Standard-Branch auf GitHub.
 
 ## Kurzfassung
@@ -504,8 +513,8 @@ du ein Fahrzeug darauf stellst.
     der Anlage.
 - **Phase 4b (Geplantes Laden) ist umgesetzt, je Task und im Gesamtreview geprüft, die Fix-Welle ist umgesetzt** (Plan:
   `docs/superpowers/plans/2026-10-18-phase-4b-geplantes-laden.md`, 19 Tasks; Ausführung
-  subagent-driven; Branch `claude/phase-4b-plan-agf1qj`, ab `fb23bd0`; **nicht auf `main`, nicht
-  ausgerollt**; Gesamtreview am 19.10.2026, Fix-Welle und Re-Review abgeschlossen). core, `shared`, app, UI und Simulator:
+  subagent-driven; Branch `claude/phase-4b-plan-agf1qj`, ab `fb23bd0`; **seit dem 19.10.2026 auf
+  `main`, nicht ausgerollt**; Gesamtreview am 19.10.2026, Fix-Welle und Re-Review abgeschlossen). core, `shared`, app, UI und Simulator:
   - **Absicht** (`shared/control.py`, `shared/plan.py`): `ChargeMode.PLANNED`, je Fahrzeug
     `target_soc_pct` (Standard 80) und `departure` (`HH:MM`, Standard `07:00`), je Plan-Slot
     `vehicles` (W je Auto); der core lehnt „Geplant“ für einen Gast ab und klemmt die Plan-Leistung auf
@@ -549,11 +558,44 @@ du ein Fahrzeug darauf stellst.
       keinen Spielraum.
     - Die gesammelten Kleinigkeiten stehen in der Abschlusszusammenfassung
       `/mnt/project-files/plaene/phase-4b-abschluss.md` (außerhalb des Repos).
+- **Phase 6a (Klimaanlage) ist umgesetzt, je Task und im Gesamtreview geprüft, die Fix-Welle ist umgesetzt**
+  (Plan: `docs/superpowers/plans/2026-10-19-phase-6a-klimaanlage.md`, 13 Tasks und Task 12b; Ausführung
+  subagent-driven; Branch `claude/project-thread-79ieqs`, auf `main` rebased; **nicht auf `main`, nicht
+  ausgerollt**). Der core verschiebt den Sollwert der Klimaanlage (TA UVR610) um ±3 K in Stufen von
+  0,5 K über CoE V2 (UDP 5442, als CAN-Knoten 60, Ausgang 1, an das C.M.I. 192.168.81.92):
+  - **CoE** (`shared/coe.py`, `core/adapters/coe.py`): Codec mit Prüfvektor, Empfang der Tabelle aus
+    `config.yaml` (Ist, Soll, Echo, Leistung, Betriebsart), Senden alle 30 s nur mit gültiger Freigabe
+    (10 s), sonst 0; 0 beim Start und am Ende jeder Sitzung. Die UVR fällt nach 5 min ohne Paket selbst
+    auf 0 zurück.
+  - **Safety** (`core/safety/offset.py`, `limits.py`): Familie `thermal`, Bereich ±3 K, Raster 0,5 K,
+    höchstens eine Stufe je 10 min weg von 0, zurück auf 0 immer sofort.
+  - **Aktor und Regelung** (`core/actuators/thermal.py`, `core/control/thermal.py`, `regulation.py`,
+    `regulation_link.py`): Bestätigung über das Echo, Alarm `thermal.echo_mismatch.<name>`; Strategie mit
+    Rangfolge Akku → Autos → Klima → Einspeisung, Hinweis „teurer Strom“ aus dem Plan, Wächter der
+    Spitze; eigener geschützter Aufruf mit Alarm `control.thermal_exception`. Die Freigabe gilt nur in
+    einem Zyklus mit entschiedenem Versatz ≠ 0; ohne Echo ist die Klimaanlage nicht steuerbar.
+  - **Vorrang der Autos** (`charging.py`): „will mehr“ nur, wenn das Auto seinem Befehl folgt, mit
+    Anlaufzeit 90 s, Hysterese und nur mit der Leistung, die die Klimaanlage freigeben kann.
+  - **Anzeige:** Karte „Klimaanlage“ auf „System“, HA-Sensoren `thermal_<key>_offset/mode/power/wish`,
+    Influx-Messung `thermal`, Grafana-Zeile „Klimaanlage“, neun Gründe im Entscheidungslog.
+  - **Werkzeuge:** `coe_probe listen`, `verify_part2 --punkt thermal --geraet klima` (Spec 17.2, Punkt
+    9); sechs Szenarien `klima-*` im Simulator.
+  - **Deploy und Doku:** `ems-core` veröffentlicht `5442:5442/udp`; Betriebshandbuch „Klimaanlage
+    (Phase 6a)“, Checkliste `docs/verification/abnahme-phase-6a.md`, Spec „Stand Plan 6a“ in 8.2,
+    8.7, 11.2, 12, 17.2 und 18.
+  - **Offen (klein):** Übergabe ohne Echo bleibt in „Übergabe“ (Festlegung R32, sicher); die
+    Schätzung der Grundlast der Klimaanlage ist im Dry-Run nicht sichtbar; an der Anlage zu bestätigen:
+    Absender der Pakete, Knotennummer und Einheit der Leistung, die Zeiten. Alles weitere steht in
+    `docs/superpowers/plans/2026-10-19-phase-6a-entscheidungen.md`.
 - **Images:** `ghcr.io/binda5000/bindaems-core:latest` und `ghcr.io/binda5000/bindaems-app:latest`.
   Sie sind öffentlich, und die CI setzt `latest` bei jedem Push auf `main`. core und app werden
   immer gemeinsam aus demselben Stand ausgerollt (gleiche Compose-Datei, gleiche Image-Tags): Die
   UI-Schemas sind streng, eine abweichende Version zeigt auf der System-Seite nur „Unerwartete
   Antwort vom Server“.
+- **Tests auf dem Branch von Plan 6a** (19.10.2026): nach der Fix-Welle 7934 Python-Tests im vollen
+  Lauf, Vitest 696, ruff, mypy und import-linter (4 Verträge) sauber, Abdeckung des core 99 %
+  (`core/safety` und `core/control` 99,9 %, `core/actuators` 100 %); der volle Lauf mit `--cov` vor der
+  Fix-Welle: 7907 Tests, 98,04 % insgesamt, 99 % für die Grenze, 32 Minuten.
 - **Tests auf dem Branch von Plan 4b** (am Ende der Fix-Welle, 19.10.2026): 7387 Python-Tests im
   vollen Lauf (mit den 33 Szenarien des Simulators und `--cov`), 678 UI-Tests (Vitest) und 28 E2E-Tests
   (Playwright), alle grün; ruff, mypy und import-linter sauber; Abdeckung 97,98 % insgesamt und 99 %
@@ -577,8 +619,10 @@ du ein Fahrzeug darauf stellst.
   mit Abdeckungsgrenzen (≥ 75 % insgesamt, ≥ 90 % für `core/safety`, `core/control` und
   `core/actuators`), Vitest mit svelte-check, Prettier und ESLint; dazu E2E mit Playwright.
 - **Offen:**
-  - Plan 4b: Gesamtreview und Fix-Welle sind erledigt; die Integration auf `main` entscheidet der
-    Betreiber (Fast-Forward, nur mit seiner Zustimmung)
+  - Plan 6a: Gesamtreview, Fix-Welle und Re-Review sind erledigt; die Integration auf `main` entscheidet
+    der Betreiber (Fast-Forward, nur mit seiner Zustimmung)
+  - an der Anlage: Plan 6a mit 4b nach der Abnahme der Phase 3 ausrollen (Punkt 8 unter „Offen an der
+    Anlage“), vorher Routing und Firewall für UDP 5442; danach die Abnahme 6a (7 Tage Dry-Run, dann live)
   - an der Anlage: Plan 4b ausrollen, erst nach der Abnahme der Phase 3 und als Schritt des Betreibers
     (Punkt 7 unter „Offen an der Anlage“); danach die Abnahme der Phase 4 (30 Tage Statistik, „Ziel-SOC“
     ≥ 95 %, „HA in beide Richtungen“)
@@ -661,7 +705,7 @@ du ein Fahrzeug darauf stellst.
 
 | Dokument | Inhalt |
 |---|---|
-| `docs/superpowers/specs/2026-10-08-bindaems-design.md` | Spec, verbindlich. Wichtig: 7 Regelung, 8 Sicherheit, 13 Web-UI, 14 Login, 17 Prüfprotokoll, 18 Phasenplan, 19 offene Punkte. Die Absätze „Stand Plan 2a/2b/2c-1/2c-2a/2c-2b/2d/3a/3b/3c/4a/4b“ gehen dem älteren Text davor vor |
+| `docs/superpowers/specs/2026-10-08-bindaems-design.md` | Spec, verbindlich. Wichtig: 7 Regelung, 8 Sicherheit, 13 Web-UI, 14 Login, 17 Prüfprotokoll, 18 Phasenplan, 19 offene Punkte. Die Absätze „Stand Plan 2a/2b/2c-1/2c-2a/2c-2b/2d/3a/3b/3c/4a/4b/6a“ gehen dem älteren Text davor vor |
 | `docs/superpowers/plans/2026-10-08-phase-1a-fundament-datenerfassung.md` | Plan 1a (core) |
 | `docs/superpowers/plans/2026-10-09-phase-1b-app-backend.md` | Plan 1b (app) |
 | `docs/superpowers/plans/2026-10-09-phase-1c-web-ui.md` | Plan 1c (UI), mit Anhang A zu den API-Formen |
@@ -680,11 +724,14 @@ du ein Fahrzeug darauf stellst.
 | `docs/superpowers/plans/2026-10-16-phase-3b-optimierer-zeitplan.md` | Plan 3b, 17 Tasks, umgesetzt und auf `main`: Optimierer, Ersatzplan, Plausibilität, Erklärungen, Planungsdienst mit Speicher, Seite „Zeitplan“, HA, Szenario-Werkzeuge; die 15 Entscheidungen des Betreibers vom 16.10.2026, Präzisierungen gegenüber der Spec, Texte |
 | `docs/superpowers/plans/2026-10-17-phase-3c-planausfuehrung.md` | Plan 3c, 17 Tasks, umgesetzt auf dem Branch (Gesamtreview und Fix-Welle erledigt): Plan in der Absicht, Prüfung im core, `HALTEN` und `NETZLADEN` über den Override, Budget des Wächters, Plan-Schwelle und Schalter der Akku-Unterstützung, Übergabe, Stand der Ausführung, „Plan gegen Ist“, Mehrkosten beim Boost, Simulator mit Wirkungsgrad; die 14 Entscheidungen des Betreibers vom 17.10.2026, Präzisierungen gegenüber der Spec, Texte |
 | `docs/superpowers/plans/2026-10-17-phase-4a-statistik.md` | Plan 4a, 16 Tasks, umgesetzt auf dem Arbeitszweig (Gesamtreview und Fix-Welle abgeschlossen): Ladesessions, Einstandspreis, Kosten je Auto, Abgleich, Nachrechnung, Verbraucher je Tag, Seite „Statistik“, HA-Sensoren, Grafana; die 13 Entscheidungen des Betreibers vom 17.10.2026 (PV-Strom ins Auto kostet 0 ct), Präzisierungen gegenüber der Spec, Texte |
-| `docs/superpowers/plans/2026-10-18-phase-4b-geplantes-laden.md` | Plan 4b, 19 Tasks, umgesetzt auf dem Branch `claude/phase-4b-plan-agf1qj` (Gesamtreview und Fix-Welle erledigt, nicht auf `main`, nicht ausgerollt): Modus „Geplant“ mit Ziel-SOC und Abfahrt, Ladestand der Autos, späteste Startzeit, Tesla-Ladelimit, die Autos im Optimierer mit Regel R2, Ersatzplan für Autos, HA vollständig, Benachrichtigungen komplett, Zählung für die Abnahme „Ziel-SOC“, Simulator- und Planungsszenarien; die 17 Entscheidungen des Betreibers vom 18.10.2026, Präzisierungen gegenüber der Spec, Texte |
+| `docs/superpowers/plans/2026-10-18-phase-4b-geplantes-laden.md` | Plan 4b, 19 Tasks, umgesetzt, seit dem 19.10.2026 auf `main` (nicht ausgerollt): Modus „Geplant“ mit Ziel-SOC und Abfahrt, Ladestand der Autos, späteste Startzeit, Tesla-Ladelimit, die Autos im Optimierer mit Regel R2, Ersatzplan für Autos, HA vollständig, Benachrichtigungen komplett, Zählung für die Abnahme „Ziel-SOC“, Simulator- und Planungsszenarien; die 17 Entscheidungen des Betreibers vom 18.10.2026, Präzisierungen gegenüber der Spec, Texte |
+| `docs/superpowers/plans/2026-10-19-phase-6a-klimaanlage.md` | Plan 6a, 13 Tasks, umgesetzt auf dem Branch `claude/project-thread-79ieqs` (Gesamtreview, Fix-Welle und Re-Review erledigt, nicht auf `main`, nicht ausgerollt): CoE-Codec und Adapter, Safety-Familie `thermal`, Aktor mit Echo, Strategie mit Rangfolge Akku → Autos → Klima, Hinweis aus dem Plan, UI, HA, Telemetrie, Werkzeuge, Simulator; die 16 Entscheidungen vom 19.10.2026 |
+| `docs/superpowers/plans/2026-10-19-phase-6a-entscheidungen.md` | Festlegungen R1 bis R32 der Umsetzung von Plan 6a (je mit Kosten, falls falsch) und die offenen Kleinigkeiten |
 | `cerbo-watchdog/README.md` | Watchdog: Zustände, Zeiten, D-Bus-Pfade, Installation und Probe |
 | `docs/verification/abnahme-phase-1.md` | Checkliste für die Abnahme der Phase 1 |
 | `docs/verification/abnahme-phase-4.md` | Checkliste für die Abnahme der Phase 4: Teil Statistik (Plan 4a, 30 Tage ab dem Ausrollen, Abgleich innerhalb ±1 %), „Ziel-SOC“ (mindestens 95 % der machbaren geplanten Ladungen, `GET /api/stats`) und „HA in beide Richtungen“ (Tabelle aller Bedienelemente) aus Plan 4b |
-| `docs/verification/README.md` | Prüfprotokoll Teil 1, Preise, Teil 2 (`verify_part2`) und Watchdog-Probe: Aufruf und Ergebnis; Verweise auf die Abnahmen der Phasen 1 und 4 |
+| `docs/verification/abnahme-phase-6a.md` | Checkliste für die Abnahme 6a: Empfangstabelle, Timeout, 7 Tage Dry-Run, im Live-Betrieb Bereich, Schrittregel, Rückkehr auf 0 und Echo; Abfragen auf Entscheidungslog und Influx |
+| `docs/verification/README.md` | Prüfprotokoll Teil 1, Preise, Teil 2 (`verify_part2`) und Watchdog-Probe: Aufruf und Ergebnis; Verweise auf die Abnahmen der Phasen 1, 4 und 6a; seit 6a der Punkt `thermal` und `coe_probe` |
 | `README.md` | Entwicklung, Web-UI, Demo-Backend |
 
 ## Aufbau
@@ -1272,7 +1319,7 @@ Demo-Zugänge: `admin`, `bedienen` (Bedienen), `gast` (Lesen) und `sicher` (Admi
         und alle Sessions heißen „Unbekannt“ (der Steckzustand kommt aber auch dann).
   7. **Geplantes Laden (Plan 4b) ausrollen**, erst **nach der Abnahme der Phase 3**; das ist ein
      Schritt des Betreibers (Entscheidung 17 des Plans), und nichts geht dabei von selbst live. Die
-     Images gibt es erst, wenn 4b (Gesamtreview und Fix-Welle sind erledigt) auf `main` ist. Die Schritte stehen
+     Images enthalten 4b seit dem 19.10.2026 (`latest`). Die Schritte stehen
      im Betriebshandbuch, „Laderegelung“, „Geplantes Laden ausrollen (Plan 4b)“:
      1. **ACL:** Der Benutzer `bindaems` braucht für die Abfahrtszeit die Zeile
         `topic write homeassistant/text/bindaems/#` in der ACL von Mosquitto (Betriebshandbuch 7),
@@ -1293,6 +1340,17 @@ Demo-Zugänge: `admin`, `bedienen` (Bedienen), `gast` (Lesen) und `sicher` (Admi
      7. **Rückweg:** Ein core vor 4b liest die gespeicherte Absicht nicht, sobald sie Ziel, Abfahrt
         oder Autos im Plan trägt, und startet ohne Absicht mit dem Alarm `intent.file`
         (Betriebshandbuch 4, „Rollback auf einen Stand vor Plan 4b“).
+  8. **Klimaanlage (Plan 6a) ausrollen**, wenn 6a auf `main` ist, mit 4b nach der Abnahme der Phase 3;
+     das ist ein Schritt des Betreibers, und nichts geht dabei von selbst live. Die Schritte stehen im
+     Betriebshandbuch, „Klimaanlage (Phase 6a)“, und in `docs/verification/abnahme-phase-6a.md`:
+     1. **Netz:** Routing und Firewall für UDP 5442 zwischen 192.168.81.0/24 (C.M.I.) und
+        192.168.82.0/24 (BindaEMS) öffnen; am C.M.I. Pakete von 192.168.82.20 (Knoten 60) annehmen.
+     2. **Empfang prüfen:** `coe_probe listen` bei gestopptem core (Warnung zum Watchdog beachten,
+        wenn EVCS oder Victron live sind); Knotennummer, Einheit der Leistung und Absender notieren,
+        `config.yaml` (`thermal.devices.klima`) anpassen.
+     3. **Punkt `thermal`:** `verify_part2 --punkt thermal --geraet klima` (sendet nur auf Aufruf).
+     4. **core starten, Dry-Run** (der core sendet 0) und 7 Tage beobachten, dann `thermal.klima` live
+        und die Abnahme 6a.
   - Teil 2 schreibt auf die Geräte: nicht während der 7 Tage der Abnahme Phase 1 und ihres
     24-h-Mitschnitts (`docs/verification/abnahme-phase-1.md`, 4.2 und 4.3). Seit dem
     19.10.2026 sind 4.2 und 4.3 überholt (`docs/verification/2026-10-19-abnahme-phase-1.md`).
@@ -1443,15 +1501,18 @@ Demo-Zugänge: `admin`, `bedienen` (Bedienen), `gast` (Lesen) und `sicher` (Admi
      genügt der Neubau von `ems-app` (Punkt 6 unter „Offen an der Anlage“), dann laufen die 30 Tage
      der Abnahme.
    - **4b Geplantes Laden:** umgesetzt, je Task und im Gesamtreview geprüft, die Fix-Welle ist umgesetzt
-     und das Re-Review sauber, auf dem Branch `claude/phase-4b-plan-agf1qj`,
-     nicht auf `main`, nicht ausgerollt (Kurzfassung). Er ändert core und Optimierer (Modus „Geplant“
+     und das Re-Review sauber, seit dem 19.10.2026 auf `main`, nicht ausgerollt (Kurzfassung). Er ändert core und Optimierer (Modus „Geplant“
      mit Ziel-SOC und Abfahrt, die Autos im Planer, Regel R2, späteste Startzeit, Tesla-Ladelimit, HA
      vollständig, Benachrichtigungen komplett) und braucht den Neustart des core. Die vier Objekt-IDs
      der Statistik-Sensoren stehen jetzt in der Prüfung der Konfiguration (`HA_SYSTEM_IDS` und
-     `HA_VEHICLE_SUFFIXES` in `shared/config.py`). Es folgen die Integration auf `main` mit Zustimmung
-     des Betreibers (Fast-Forward) und, nach der Abnahme der Phase 3, das
+     `HA_VEHICLE_SUFFIXES` in `shared/config.py`). Es folgt, nach der Abnahme der Phase 3, das
      Ausrollen durch den Betreiber (Punkt 7 unter „Offen an der Anlage“); danach die Abnahmepunkte
      „Ziel-SOC“ und „HA in beide Richtungen“.
+5. **Phase 6a**, Klimaanlage (Spec 18, „Phase 6 – Wärme und Kälte“): umgesetzt, je Task und im
+   Gesamtreview geprüft, Fix-Welle und Re-Review erledigt, auf dem Branch `claude/project-thread-79ieqs`,
+   nicht auf `main`, nicht ausgerollt (Kurzfassung). Es folgen die Integration auf `main` mit Zustimmung
+   des Betreibers (Fast-Forward) und das Ausrollen mit 4b nach der Abnahme der Phase 3 (Punkt 8 unter
+   „Offen an der Anlage“). Danach Phase 5; 6b (Wärmepumpe) frühestens Herbst 2027 nach Phase 5.
 
 ### Nächster Schritt: die Anlage
 
