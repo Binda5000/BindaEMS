@@ -1294,7 +1294,8 @@ Demo-Zugänge: `admin`, `bedienen` (Bedienen), `gast` (Lesen) und `sicher` (Admi
         oder Autos im Plan trägt, und startet ohne Absicht mit dem Alarm `intent.file`
         (Betriebshandbuch 4, „Rollback auf einen Stand vor Plan 4b“).
   - Teil 2 schreibt auf die Geräte: nicht während der 7 Tage der Abnahme Phase 1 und ihres
-    24-h-Mitschnitts (`docs/verification/abnahme-phase-1.md`, 4.2 und 4.3).
+    24-h-Mitschnitts (`docs/verification/abnahme-phase-1.md`, 4.2 und 4.3). Seit dem
+    19.10.2026 sind 4.2 und 4.3 überholt (`docs/verification/2026-10-19-abnahme-phase-1.md`).
   - **Vor der Live-Schaltung von EVCS und Tesla** waren diese Punkte zu entscheiden oder umzusetzen
     (Gesamtreview von 2c-1; je Befund und Abhilfe, knapp auch im Betriebshandbuch, „Laderegelung“,
     „Hinweise für die Anlage“). **Stand nach Plan 2d:** Die Punkte 1 bis 3 sind umgesetzt, 4, 6 und 7
@@ -1367,7 +1368,9 @@ Demo-Zugänge: `admin`, `bedienen` (Bedienen), `gast` (Lesen) und `sicher` (Admi
    - 7 Tage lückenlose Aufzeichnung (Tagesbilanz „96 von 96 · 100 %“)
    - Tagesbilanz innerhalb ±2 % von VRM
    - Preise und Prognose sichtbar
-   - nachweislich keine Schreibpfade zu Geräten
+   - nachweislich keine Schreibpfade zu Geräten; die Punkte 4.2 (24 h ohne `W/#`) und 4.3 (Einstellungen
+     unverändert) sind seit der Live-Schaltung von Wallbox und Tesla überholt (Festlegung des
+     Betreibers vom 19.10.2026, `docs/verification/2026-10-19-abnahme-phase-1.md`)
 2. **Phase 2**, Wallbox-Lastmanagement und PV-Überschussladen (Spec 18), in vier Plänen
    (Zuschnitt in `docs/superpowers/plans/2026-10-10-phase-2a-sicherheitsbasis.md`):
    - **2a Sicherheitsbasis:** umgesetzt, im Gesamtreview geprüft und an der Anlage installiert;
