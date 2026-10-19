@@ -118,7 +118,6 @@ class CoeAdapter:
         self._unit_mismatch = 0
         self._warned_foreign = False
         self._warned_bad = False
-        self._warned_unexpected = False
         self._warned_mismatch = False
         self._last_sent_k: float | None = None
         self._permit_changed = asyncio.Event()
@@ -149,19 +148,23 @@ class CoeAdapter:
         vergisst den gehaltenen Wert; danach braucht es ein neues ``set_offset``.
         """
         self._permit_until = until_monotonic
+        if self._clock() >= until_monotonic and self._held_k != 0.0:
+            self._held_k = 0.0  # Rücknahme: nicht erst auf den Lapse-Loop warten
+            self._send()
         self._permit_changed.set()
 
     def set_offset(self, value_k: float) -> bool:
         """Hält den Versatz und sendet sofort; ``False`` ohne Sitzung oder außerhalb der Grenze.
 
         Zweite Sicherung neben der Safety-Schicht: Ein Betrag über ``max_offset_k`` wird nie
-        gehalten und nie gesendet.
+        gehalten und nie gesendet. Ohne gültige Freigabe hält der Adapter 0 statt des Werts, damit
+        ein alter Wert nie ohne neue Entscheidung hinausgeht.
         """
         if self._port is None:
             return False
         if not math.isfinite(value_k) or abs(value_k) > self._cfg.max_offset_k:
             return False
-        self._held_k = value_k
+        self._held_k = value_k if self._clock() < self._permit_until else 0.0
         self._send()
         return True
 
@@ -215,10 +218,25 @@ class CoeAdapter:
             await self._permit_changed.wait()
             self._permit_changed.clear()
             while (remaining := self._permit_until - self._clock()) > 0:
-                await self._sleep(remaining)
+                await self._sleep_unless_permit_changes(remaining)
             if self._held_k != 0.0:
                 self._held_k = 0.0
                 self._send()
+
+    async def _wait_permit_change(self) -> None:
+        await self._permit_changed.wait()
+
+    async def _sleep_unless_permit_changes(self, seconds: float) -> None:
+        """Schläft, endet aber früher, wenn ``permit`` die Freigabe ändert (Rücknahme, Kürzung)."""
+        sleeper: asyncio.Future[None] = asyncio.ensure_future(self._sleep(seconds))
+        changed: asyncio.Future[None] = asyncio.ensure_future(self._wait_permit_change())
+        try:
+            await asyncio.wait({sleeper, changed}, return_when=asyncio.FIRST_COMPLETED)
+        finally:
+            sleeper.cancel()
+            changed.cancel()
+            await asyncio.gather(sleeper, changed, return_exceptions=True)
+        self._permit_changed.clear()
 
     async def _watch_loop(self) -> None:
         while True:

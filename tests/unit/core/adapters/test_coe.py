@@ -171,17 +171,20 @@ async def test_sends_zero_without_permit(coe_env: CmiEnv) -> None:
     assert env.adapter.held_k == 0.0  # mit der Freigabe endet auch das Halten
 
 
-async def test_never_sends_held_value_without_permit(coe_env: CmiEnv) -> None:
+async def test_set_offset_without_permit_holds_zero(coe_env: CmiEnv) -> None:
     env = coe_env()
     await env.start()
     assert env.adapter.set_offset(1.5) is True
+    assert env.adapter.held_k == 0.0
     assert sent_raw(env) == 0
     env.advance(30)
     await env.tick()
     assert sent_raw(env) == 0
-    env.adapter.permit(env.mono() + 10)
+    env.adapter.permit(env.mono() + 10)  # eine Freigabe allein bringt den alten Wert nicht zurück
     env.advance(5)
     await env.tick()
+    assert sent_raw(env) == 0 and env.adapter.held_k == 0.0
+    assert env.adapter.set_offset(1.5) is True
     assert sent_raw(env) == 15
 
 
@@ -366,11 +369,29 @@ async def test_withdrawing_the_permit_sends_zero_at_once(coe_env: CmiEnv) -> Non
     env = coe_env()
     await env.start()
     env.adapter.permit(env.mono() + 100)
+    await env.settle()  # der Lapse-Loop schläft jetzt bis zum Ablauf
     env.adapter.set_offset(2.0)
     assert sent_raw(env) == 20
     env.adapter.permit(float("-inf"))
+    assert sent_raw(env) == 0 and env.adapter.held_k == 0.0  # ohne auf irgendetwas zu warten
+    sent = len(env.port.sent)
+    await env.run_for(2)
+    assert len(env.port.sent) == sent  # kein zweites Mal
+
+
+async def test_shortening_the_permit_while_the_lapse_loop_sleeps(coe_env: CmiEnv) -> None:
+    env = coe_env()
+    await env.start()
+    env.adapter.permit(env.mono() + 100)
     await env.settle()
+    env.adapter.set_offset(2.0)
+    env.adapter.permit(env.mono() + 5)  # gekürzt, aber noch in der Zukunft
+    await env.settle()
+    await env.run_for(4.5)
+    assert sent_raw(env) == 20
+    await env.run_for(1)
     assert sent_raw(env) == 0 and env.adapter.held_k == 0.0
+    assert env.sleep.calls.count(100.0) == 1  # die lange Pause wurde abgebrochen
 
 
 async def test_extending_the_permit_defers_the_lapse(coe_env: CmiEnv) -> None:
