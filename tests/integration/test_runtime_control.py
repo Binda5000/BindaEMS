@@ -170,7 +170,12 @@ async def test_health_lists_actuators_and_watchdog(runtime_env) -> None:
     rt, _, _ = runtime_env(state=GOOD_STATE)
     rt.cycle_once()
     health = rt.health()
-    assert [a["id"] for a in health.actuators] == ["victron", "wallbox.evcs", "vehicle.tesla"]
+    assert [a["id"] for a in health.actuators] == [
+        "victron",
+        "wallbox.evcs",
+        "vehicle.tesla",
+        "thermal.klima",
+    ]
     assert health.actuators[1] == {
         "id": "wallbox.evcs",
         "label": "EVCS „evcs“",
@@ -326,7 +331,12 @@ async def test_locks_follow_the_catalog_order(runtime_env) -> None:
         f"Victron (ESS) gesperrt: {DESS}",
         f"EVCS „evcs“ gesperrt: {evcs}",
     ]
-    assert locked(rt) == {"victron": [DESS], "wallbox.evcs": [evcs], "vehicle.tesla": []}
+    assert locked(rt) == {
+        "victron": [DESS],
+        "wallbox.evcs": [evcs],
+        "vehicle.tesla": [],
+        "thermal.klima": [],
+    }
 
 
 async def test_lock_released_60s_after_the_cause_is_gone(runtime_env) -> None:
@@ -427,7 +437,12 @@ async def test_health_names_armed_watchdog_and_watchdog_need(runtime_env) -> Non
     report = rt.health()
     assert report.watchdog["armed"] is False
     needs = {a["id"]: a["watchdog_needed"] for a in report.actuators}
-    assert needs == {"victron": True, "wallbox.evcs": True, "vehicle.tesla": False}
+    assert needs == {
+        "victron": True,
+        "wallbox.evcs": True,
+        "vehicle.tesla": False,
+        "thermal.klima": False,
+    }
 
 
 async def test_unarmed_watchdog_keeps_live_request_in_dry_run(runtime_env) -> None:
@@ -603,10 +618,10 @@ async def test_decisions_over_the_api_are_those_of_the_stream(runtime_env) -> No
     island = clock.now()
     run(rt, clock, 1)
     streamed = [m["data"] for m in messages if m["type"] == "decision"]
-    assert len(streamed) == 6
+    assert len(streamed) == 7  # dazu der Versatz 0 an die Klimaanlage (Plan 6a)
     client = TestClient(create_api(rt, SecretStr(TOKEN)))
     auth = {"Authorization": f"Bearer {TOKEN}"}
-    # Die sechs Entscheidungen eines Zyklus haben dieselbe Zeit und bleiben bei limit=1 beisammen.
+    # Die sieben Entscheidungen eines Zyklus haben dieselbe Zeit und bleiben bei limit=1 beisammen.
     page = client.get("/v1/decisions", params={"since": T0.isoformat(), "limit": 1}, headers=auth)
     assert (page.status_code, page.json()) == (200, {"decisions": streamed, "more": False})
     # Wer ab der Zeit der letzten Entscheidung weiterliest, bekommt keine doppelt.
@@ -630,7 +645,9 @@ def actuator_health(rt, actuator: str) -> dict[str, Any]:
 
 async def test_actuators_follow_the_catalog(runtime_env) -> None:
     rt, _, _ = runtime_env()
-    assert list(rt.actuators) == list(rt.limits.actuators)
+    # Den Aktor der Klimaanlage baut die Laufzeit erst mit dem CoE-Aktor (Plan 6a, Task 5)
+    catalog = [actuator for actuator in rt.limits.actuators if not actuator.startswith("thermal.")]
+    assert list(rt.actuators) == catalog
     victron, evcs, tesla = rt.actuators.values()
     assert isinstance(victron, VictronActuator)
     assert isinstance(evcs, EvcsActuator) and isinstance(tesla, TeslaActuator)
@@ -746,6 +763,7 @@ async def test_all_decisions_of_a_cycle_share_its_time(runtime_env) -> None:
         ("wallbox.evcs", CommandKind.CHARGING),
         ("vehicle.tesla", CommandKind.CURRENT),
         ("vehicle.tesla", CommandKind.CHARGING),
+        ("thermal.klima", CommandKind.SETPOINT_OFFSET),
     ]
     assert {d.ts for d in decisions} == {island}
     assert (
@@ -770,7 +788,11 @@ async def test_locked_actuators_get_no_safe_values(runtime_env) -> None:
     state |= {"system.active_in_source": 240}
     run(rt, clock, 1)
     assert rt.health().mode == "SAFE"
-    assert {d.actuator for d in rt.decisions(T0, 100)[0]} == {"wallbox.evcs", "vehicle.tesla"}
+    assert {d.actuator for d in rt.decisions(T0, 100)[0]} == {
+        "wallbox.evcs",
+        "vehicle.tesla",
+        "thermal.klima",
+    }
 
 
 async def test_decisions_reach_the_spool_even_when_the_cycle_fails(
@@ -790,7 +812,12 @@ async def test_decisions_reach_the_spool_even_when_the_cycle_fails(
         with pytest.raises(RuntimeError, match="nach den Befehlen"):
             rt.cycle_once()
     decisions = rt.decisions(T0, 100)[0]
-    assert {d.actuator for d in decisions} == {"victron", "wallbox.evcs", "vehicle.tesla"}
+    assert {d.actuator for d in decisions} == {
+        "victron",
+        "wallbox.evcs",
+        "vehicle.tesla",
+        "thermal.klima",
+    }
     assert {d.result for d in decisions} == {DecisionResult.DRY_RUN}
 
 

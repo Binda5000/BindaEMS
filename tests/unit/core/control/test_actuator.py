@@ -84,6 +84,10 @@ def test_wake_capabilities_of_the_fake_are_independent_of_its_capabilities() -> 
         (K.MIN_SOC, 20.0, 20.0),
         (K.MIN_SOC, 20.0, 20.5),
         (K.MIN_SOC, 20.0, 19.5),
+        (K.SETPOINT_OFFSET, 1.5, 1.5),
+        (K.SETPOINT_OFFSET, 1.5, 1.55),
+        (K.SETPOINT_OFFSET, -0.5, -0.45),
+        (K.SETPOINT_OFFSET, 0.0, 0),
     ],
 )
 def test_values_within_the_tolerance_match(kind, wanted, actual) -> None:
@@ -109,6 +113,9 @@ def test_values_within_the_tolerance_match(kind, wanted, actual) -> None:
         (K.MAX_DISCHARGE, -1.0, -2.0),
         (K.MIN_SOC, 20.0, 20.6),
         (K.MIN_SOC, 20.0, 19.4),
+        (K.SETPOINT_OFFSET, 1.5, 1.6),
+        (K.SETPOINT_OFFSET, 0.5, -0.5),
+        (K.SETPOINT_OFFSET, 0.0, 0.1),
     ],
 )
 def test_values_outside_the_tolerance_do_not_match(kind, wanted, actual) -> None:

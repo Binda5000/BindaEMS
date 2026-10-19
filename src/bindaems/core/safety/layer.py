@@ -2,15 +2,16 @@
 
 ``authorize`` führt die Regeln in fester Reihenfolge aus: Aktorkatalog, Betriebszustand (Regel 8),
 Sperren (7.9), Betriebsart, Eingangsdaten (Regel 7), Wertebereiche (Regeln 1–3), Phasenvorhersage
-(Regel 4), Totband und Rate-Limits (Regel 5) und das Schreibbudget (Regel 6). Das Ergebnis ist ein
+(Regel 4), die Schrittregel des Sollwertversatzes (Plan 6a, Entscheidung 8), Totband und
+Rate-Limits (Regel 5) und das Schreibbudget (Regel 6). Das Ergebnis ist ein
 ``Verdict``; im Dry-Run wird genauso geprüft und erfasst wie live, nur nicht gesendet.
 
 Ein dringender Befehl, der nachweislich Richtung sicherer Zustand geht (``toward_safe``), darf auch
 in SAFE schreiben und trotz unplausibler Eingangsdaten. Nachweislich heißt: mit dem angeforderten
 Wert und mit dem Wert nach den Regeln 1–3; Regel 4 verringert nur noch oder lockert die
 Entladegrenze. Er umgeht Mindestabstände, Stundenlimits und Totbänder, außer bei gleichem Wert, und
-das Schreibbudget nur mit dem exakten Sicherwert seiner Art. Sperren und die Regeln 1–4 gelten auch
-für ihn.
+das Schreibbudget nur mit dem exakten Sicherwert seiner Art. Sperren, die Regeln 1–4 und die
+Schrittregel gelten auch für ihn.
 
 Ein Befehl mit ``refresh`` frischt einen Override mit gleichem Wert auf (Plan 2c-2a, Design 8): Der
 Cerbo verwirft den Override nach 300 s ohne Schreiben. Das gibt es nur beim Netz-Sollwert; bei jeder
@@ -21,7 +22,8 @@ hält, ergäbe sonst ``UNCHANGED``, und der Override verfiele. Sperren, Zustand,
 Regeln 1–4 und der Mindestabstand gelten für es wie für jeden Befehl.
 
 Zeit, Messwerte, Freigaben und Sperren kommen über den ``SafetyContext``. Gedächtnis haben nur der
-Rate-Limiter und das Schreibbudget: Sie erfassen jeden Befehl, der einen Wert zum Senden ergibt.
+Rate-Limiter, die Schrittregel und das Schreibbudget: Sie erfassen jeden Befehl, der einen Wert zum
+Senden ergibt; die Schrittregel dazu einen Versatz mit ``UNCHANGED``, denn auch er ist entschieden.
 Das Schreibbudget liegt in einer Datei; die Stundeneinträge des Rate-Limiters (Tesla) legt die
 Schicht in ``rate_file``, damit auch sie einen Neustart überstehen.
 """
@@ -38,10 +40,11 @@ import structlog
 from bindaems.core.persistence.files import read_json, write_json_atomic
 from bindaems.core.safety.budget import PersistentWriteBudget
 from bindaems.core.safety.limits import HardLimits, toward_safe
+from bindaems.core.safety.offset import OffsetSteps
 from bindaems.core.safety.phases import check_phases
 from bindaems.core.safety.ranges import check_range
 from bindaems.core.safety.rate import RateLimiter, deadband
-from bindaems.core.safety.types import Finding, Outcome, SafetyContext, Verdict
+from bindaems.core.safety.types import Finding, Outcome, SafetyContext, Verdict, finite_number
 from bindaems.shared.control import (
     PERSISTENT_KINDS,
     ActuatorMode,
@@ -95,6 +98,7 @@ class SafetyLayer:
         self._limits = limits
         self._budget = budget
         self._rate = RateLimiter(limits)
+        self._offsets = OffsetSteps(limits.offsets)
         self._rate_file = rate_file
         if rate_file is not None and now is not None:
             self._load_rates(rate_file, now)
@@ -116,6 +120,9 @@ class SafetyLayer:
         6. Unplausible Eingangsdaten ohne ``urgent_ok``: ``REJECTED``.
         7. Regeln 1–3 (``check_range``) und 8. Regel 4 (``check_phases``): Ablehnung ergibt
            ``REJECTED``, sonst gilt der Wert danach.
+        8a. Schrittregel beim Sollwertversatz (``OffsetSteps``): ``offset.step`` ergibt
+           ``REJECTED``. Vorhanden ist live das Echo aus ``ctx.present`` (ohne Echo 0), im
+           Dry-Run der zuletzt erfasste Wert; die Zeit ist ``ctx.now`` in Sekunden.
         9. Totband: ``UNCHANGED``; bei ``urgent_ok`` nur ein gleicher Wert (``rate.unchanged``).
            Ein Totband, das dabei nicht zählt, erscheint nicht unter den Befunden. Für ein
            Auffrischen (``refresh``) des Netz-Sollwerts entfällt der Schritt ganz, auch
@@ -125,7 +132,8 @@ class SafetyLayer:
             ``urgent_ok``, wenn der Wert nach den Regeln 1–4 genau der Sicherwert der Art ist.
         12. Erfassen im Rate-Limiter und, bei persistenten Arten, im Schreibbudget; auch im
             Dry-Run, aber nie bei ``UNCHANGED``, ``DEFERRED`` oder ``REJECTED``. Bei einem Aktor
-            mit Stundenlimits schreibt die Schicht danach ``rate_file`` neu.
+            mit Stundenlimits schreibt die Schicht danach ``rate_file`` neu. Ein Sollwertversatz
+            kommt in die Schrittregel, auch bei ``UNCHANGED`` (Schritt 9).
         13. ``REDUCED``, wenn Regel 4 den Wert geändert hat; sonst ``CLAMPED``, wenn die Regeln 1–3
             ihn geändert haben; sonst ``ACCEPTED``.
 
@@ -202,10 +210,23 @@ class SafetyLayer:
             return rejected()
         value = phased.value
 
+        # 8a. Schrittregel des Sollwertversatzes, mit dem Wert nach den Regeln 1–4. Im Dry-Run
+        #     bleibt das Echo 0; dort gilt der zuletzt entschiedene Wert (Entscheidung 8).
+        offset = command.kind == CommandKind.SETPOINT_OFFSET
+        decided = replace(command, value=value)
+        present_k = finite_number(ctx.present.get((actuator, CommandKind.SETPOINT_OFFSET)))
+        seconds = now.timestamp()  # ctx.now ist monoton (AnchoredClock)
+        if offset:
+            step = self._offsets.check(decided, present_k, seconds, dry_run=dry_run)
+            if step is not None:
+                return rejected(step)
+
         # 9. Totband (Regel 5); dringend zählt nur ein gleicher Wert. Ein Auffrischen des Overrides
         #    hat keins: Der Wert soll hinausgehen, auch wenn der Cerbo ihn schon (fast) hält.
         band = None if refreshing else deadband(command, value, ctx, limits)
         if band is not None and (not urgent_ok or band.code == "rate.unchanged"):
+            if offset:  # entschieden ist der Wert trotzdem: Bezug der Schrittregel im Dry-Run
+                self._offsets.record(decided, present_k, seconds, dry_run=dry_run)
             return verdict(Outcome.UNCHANGED, value, band)
 
         # 10. Mindestabstände und Stundenlimits (Regel 5)
@@ -229,6 +250,8 @@ class SafetyLayer:
             self._save_rates(self._rate_file)
         if persistent:
             self._budget.record(now)
+        if offset:
+            self._offsets.record(decided, present_k, seconds, dry_run=dry_run)
 
         # 13. Ergebnis
         if phased.value != ranged.value:

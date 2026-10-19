@@ -901,3 +901,12 @@ def test_numbers_come_out_as_float(limits) -> None:
     ]
     assert [step.value for step in steps] == [8.0, 9.0, 1000.0, 2070.0, 6930.0, 6930.0, 40.0]
     assert all(type(step.value) is float for step in steps)
+
+
+@pytest.mark.parametrize("value", [3.0, -3.0, 0.0])
+def test_setpoint_offset_is_left_to_the_strategy(limits, value) -> None:
+    # Der Versatz der Klimaanlage hat keine Phasenvorhersage; Druck auf die Phasen nimmt die
+    # Strategie zurück (Plan 6a, Entscheidung 5). Auch ohne bekannte Phasenströme bleibt der Wert.
+    ctx = make_ctx(phase_import_a=dict.fromkeys(PHASES, None))
+    step = check_phases(Command("thermal.klima", K.SETPOINT_OFFSET, value), value, ctx, limits)
+    assert (step.value, step.findings, step.reject) == (value, (), False)

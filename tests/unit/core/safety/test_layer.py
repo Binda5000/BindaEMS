@@ -987,3 +987,147 @@ def test_charge_limit_does_not_use_the_write_budget(layer, tmp_path: Path) -> No
     for i in range(13):  # mehr als das Schreibbudget von 12 je Stunde
         command = Command("vehicle.tesla", K.CHARGE_LIMIT, 50.0 + i)
         assert layer.authorize(command, make_ctx(now=S(600 * i))).sendable
+
+
+# --- Sollwertversatz der Klimaanlage (Plan 6a, Entscheidung 8) -----------------------------------
+
+KLIMA = "thermal.klima"
+OFFSET_STEP = Finding("offset.step", "Versatz nur eine Stufe je 10 min weg von 0.")
+OFFSET_SIGN = Finding("offset.step", "Vorzeichenwechsel nur über 0.")
+
+
+def offset(value, **changes) -> Command:
+    return Command(KLIMA, K.SETPOINT_OFFSET, value, **changes)
+
+
+def klima_at(at: float, echo: float | None = None, **changes):
+    """Kontext zum Zeitpunkt ``at`` s; ``echo`` ist der zurückgelesene Versatz, ``None``: keiner."""
+    present = {} if echo is None else {(KLIMA, K.SETPOINT_OFFSET): echo}
+    return make_ctx(now=S(at), present=present, **changes)
+
+
+def outcome(verdict):
+    return (verdict.outcome, verdict.value, verdict.findings)
+
+
+def test_offset_steps_one_stage_per_interval_live(layer) -> None:
+    assert outcome(layer.authorize(offset(0.5), klima_at(0, echo=0.0))) == (
+        Outcome.ACCEPTED,
+        0.5,
+        (),
+    )
+    assert outcome(layer.authorize(offset(1.0), klima_at(300, echo=0.5))) == (
+        Outcome.REJECTED,
+        None,
+        (OFFSET_STEP,),
+    )
+    v = layer.authorize(offset(1.0), klima_at(600, echo=0.5))
+    assert (v.outcome, v.value, v.send) == (Outcome.ACCEPTED, 1.0, True)
+
+
+def test_offset_two_stages_at_once_rejected(layer) -> None:
+    v = layer.authorize(offset(1.0), klima_at(0, echo=0.0))
+    assert outcome(v) == (Outcome.REJECTED, None, (OFFSET_STEP,))
+
+
+def test_offset_without_echo_counts_zero_as_present(layer) -> None:
+    assert layer.authorize(offset(-0.5), klima_at(0)).outcome is Outcome.ACCEPTED
+    assert layer.authorize(offset(-1.5), klima_at(0)).findings == (OFFSET_STEP,)
+
+
+def test_offset_sign_change_rejected(layer) -> None:
+    v = layer.authorize(offset(-0.5), klima_at(10_000, echo=1.0))
+    assert outcome(v) == (Outcome.REJECTED, None, (OFFSET_SIGN,))
+
+
+def test_offset_back_to_zero_and_decreases_go_at_once(layer) -> None:
+    assert layer.authorize(offset(0.5), klima_at(0, echo=0.0)).sendable
+    assert layer.authorize(offset(0.0), klima_at(1, echo=3.0)).outcome is Outcome.ACCEPTED
+    assert layer.authorize(offset(-1.0), klima_at(2, echo=-3.0)).outcome is Outcome.ACCEPTED
+
+
+def test_offset_rounded_and_clamped_before_the_step_rule(layer) -> None:
+    v = layer.authorize(offset(3.7), klima_at(0, echo=2.5))
+    assert (v.outcome, v.value, [f.code for f in v.findings]) == (
+        Outcome.CLAMPED,
+        3.0,
+        ["range.clamped"],
+    )
+    # der Wert nach den Regeln 1–3 entspricht dem Echo: nichts zu senden
+    v = layer.authorize(offset(3.7), klima_at(1, echo=3.0))
+    assert (v.outcome, v.findings[-1].code) == (Outcome.UNCHANGED, "rate.unchanged")
+    v = layer.authorize(offset(-0.3), klima_at(600, echo=0.0))
+    assert (v.outcome, v.value, [f.code for f in v.findings]) == (
+        Outcome.CLAMPED,
+        -0.5,
+        ["range.step"],
+    )
+
+
+def test_offset_rejected_by_the_step_rule_is_not_recorded(layer) -> None:
+    assert layer.authorize(offset(0.5), klima_at(0, echo=0.0)).sendable
+    assert layer.authorize(offset(1.0), klima_at(100, echo=0.5)).outcome is Outcome.REJECTED
+    # die Ablehnung zählt nicht als Erhöhung: 600 s nach der ersten geht die nächste Stufe
+    assert layer.authorize(offset(1.0), klima_at(600, echo=0.5)).sendable
+
+
+def test_dry_run_checks_against_last_decided(layer) -> None:
+    dry = {"modes": {KLIMA: ActuatorMode.DRY_RUN}}
+    v = layer.authorize(offset(0.5), klima_at(0, echo=0.0, **dry))
+    assert (v.outcome, v.dry_run, v.send) == (Outcome.ACCEPTED, True, False)
+    # das Echo bleibt im Dry-Run 0; 1,0 K ist eine Stufe über dem zuletzt entschiedenen Wert
+    assert layer.authorize(offset(1.0), klima_at(600, echo=0.0, **dry)).outcome is Outcome.ACCEPTED
+    v = layer.authorize(offset(2.0), klima_at(1200, echo=0.0, **dry))
+    assert outcome(v) == (Outcome.REJECTED, None, (OFFSET_STEP,))
+    assert layer.authorize(offset(1.5), klima_at(1200, echo=0.0, **dry)).outcome is Outcome.ACCEPTED
+
+
+def test_dry_run_without_a_mode_entry_uses_the_last_decided_value(layer) -> None:
+    ctx = {"modes": {}}
+    assert layer.authorize(offset(0.5), klima_at(0, echo=0.0, **ctx)).dry_run
+    assert layer.authorize(offset(1.0), klima_at(600, echo=0.0, **ctx)).sendable
+
+
+def test_dry_run_zero_decided_as_unchanged_counts_as_decided(layer) -> None:
+    dry = {"modes": {KLIMA: ActuatorMode.DRY_RUN}}
+    assert layer.authorize(offset(0.5), klima_at(0, echo=0.0, **dry)).sendable
+    assert layer.authorize(offset(1.0), klima_at(600, echo=0.0, **dry)).sendable
+    # zurück auf 0: gleich dem Echo, also nichts zu senden; entschieden ist trotzdem 0
+    assert layer.authorize(offset(0.0), klima_at(700, echo=0.0, **dry)).outcome is (
+        Outcome.UNCHANGED
+    )
+    v = layer.authorize(offset(1.0), klima_at(1300, echo=0.0, **dry))
+    assert outcome(v) == (Outcome.REJECTED, None, (OFFSET_STEP,))
+    assert layer.authorize(offset(0.5), klima_at(1300, echo=0.0, **dry)).sendable
+
+
+def test_layer_accepts_zero_in_safe_state(layer, limits) -> None:
+    (safe,) = limits.safe_commands(KLIMA)
+    for echo in (2.0, -3.0, None):
+        v = layer.authorize(safe, klima_at(0, echo=echo, operating=OperatingState.SAFE))
+        assert (v.outcome, v.value, v.send) == (Outcome.ACCEPTED, 0.0, True), echo
+    # dringend und dem Betrag nach kleiner mit gleichem Vorzeichen: auch Richtung sicher
+    ctx = klima_at(1, echo=2.0, operating=OperatingState.SAFE)
+    assert layer.authorize(offset(1.0, urgent=True), ctx).outcome is Outcome.ACCEPTED
+
+
+def test_urgent_offset_away_from_zero_is_not_urgent(layer) -> None:
+    ctx = klima_at(0, echo=0.0, operating=OperatingState.SAFE)
+    v = layer.authorize(offset(0.5, urgent=True), ctx)
+    assert (v.outcome, v.findings[0], v.findings[-1].code) == (
+        Outcome.REJECTED,
+        URGENT_IGNORED,
+        "state.inactive",
+    )
+
+
+def test_urgent_offset_that_rounds_away_from_safe_is_not_urgent(layer) -> None:
+    # 1,8 K liegt unter dem Echo 2,0 K, gerundet aber 2,0 K: kein Schritt Richtung sicher mehr
+    ctx = klima_at(0, echo=1.9, operating=OperatingState.SAFE)
+    v = layer.authorize(offset(1.8, urgent=True), ctx)
+    assert (v.outcome, v.findings[0]) == (Outcome.REJECTED, URGENT_IGNORED)
+
+
+def test_offset_has_no_interval_or_budget(layer) -> None:
+    for at in range(5):
+        assert layer.authorize(offset(0.0), klima_at(at, echo=0.5)).outcome is Outcome.ACCEPTED

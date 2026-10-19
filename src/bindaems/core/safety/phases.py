@@ -88,7 +88,9 @@ def check_phases(
     - ``max_discharge``: ein Wert von mindestens 0 unter der aktuellen Entladeleistung
     - ``min_soc``: der Wert liegt über der Reserve und über dem SOC
 
-    Alles andere bleibt unverändert, auch das Ladelimit des Tesla (es zieht keinen Strom); nur ein
+    Alles andere bleibt unverändert, auch das Ladelimit des Tesla (es zieht keinen Strom) und der
+    Sollwertversatz der Klimaanlage (bei Druck auf Phasen oder Spitze nimmt ihn die Strategie
+    zurück, Plan 6a, Entscheidung 5; die Schrittregel begrenzt jede Erhöhung); nur ein
     Strom wird auch bei einer Verringerung auf den erlaubten Strom gesenkt, nie unter den
     Mindeststrom. Die Texte nennen die bindende Phase, die mit dem kleinsten Spielraum unter den
     betroffenen Phasen; bei Gleichstand gilt die Reihenfolge L1, L2, L3. Ein Wert vom falschen Typ
@@ -114,8 +116,8 @@ def check_phases(
         return _check_max_discharge(command.actuator, number, ctx, limits)
     if kind == CommandKind.MIN_SOC:
         return _check_min_soc(number, ctx, limits)
-    if kind == CommandKind.CHARGE_LIMIT:
-        return Step(number)  # das Ladelimit zieht keinen Strom
+    if kind in (CommandKind.CHARGE_LIMIT, CommandKind.SETPOINT_OFFSET):
+        return Step(number)  # das Ladelimit zieht keinen Strom; den Versatz hält die Strategie
     return _invalid(kind, value)  # unbekannte Art: im Zweifel ablehnen
 
 

@@ -14,7 +14,8 @@ def limits(cfg: Config) -> HardLimits:
 
 @pytest.fixture
 def limits_live(cfg: Config) -> HardLimits:
-    """Wie ``limits``, aber ``live_allowed`` ist für Victron, die EVCS und den Tesla gesetzt."""
+    """Wie ``limits``, aber ``live_allowed`` ist für Victron, die EVCS, den Tesla und die
+    Klimaanlage gesetzt."""
     live = cfg.model_copy(
         update={
             "victron": cfg.victron.model_copy(update={"live_allowed": True}),
@@ -26,6 +27,16 @@ def limits_live(cfg: Config) -> HardLimits:
                 **cfg.vehicles,
                 "tesla": cfg.vehicles["tesla"].model_copy(update={"live_allowed": True}),
             },
+            "thermal": cfg.thermal.model_copy(
+                update={
+                    "devices": {
+                        **cfg.thermal.devices,
+                        "klima": cfg.thermal.devices["klima"].model_copy(
+                            update={"live_allowed": True}
+                        ),
+                    }
+                }
+            ),
         }
     )
     return HardLimits.from_config(live)

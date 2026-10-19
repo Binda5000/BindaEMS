@@ -577,9 +577,9 @@ def alarm_ids(rt) -> set[str]:
 
 async def test_safe_state_skips_a_sleeping_tesla(runtime_env) -> None:
     rt, decisions = safe_tesla(runtime_env, {"online": False, "at_home": True, "plugged": True})
-    # Victron und EVCS bekommen ihre Sicherwerte (im Dry-Run); der Tesla lädt nicht: keine Versuche,
-    # die nicht gesendet werden, und kein Alarm
-    assert {d.actuator for d in decisions} == {"victron", "wallbox.evcs"}
+    # Victron, EVCS und Klimaanlage bekommen ihre Sicherwerte (im Dry-Run); der Tesla lädt nicht:
+    # keine Versuche, die nicht gesendet werden, und kein Alarm
+    assert {d.actuator for d in decisions} == {"victron", "wallbox.evcs", "thermal.klima"}
     assert "actuator.failed.vehicle.tesla" not in alarm_ids(rt)
 
 
@@ -587,7 +587,7 @@ async def test_safe_state_skips_a_sleeping_tesla(runtime_env) -> None:
 async def test_safe_state_skips_an_absent_or_unplugged_tesla(runtime_env, signal) -> None:
     car = {"online": True, "at_home": True, "plugged": True} | {signal: False}
     rt, decisions = safe_tesla(runtime_env, car)
-    assert {d.actuator for d in decisions} == {"victron", "wallbox.evcs"}
+    assert {d.actuator for d in decisions} == {"victron", "wallbox.evcs", "thermal.klima"}
     assert "actuator.failed.vehicle.tesla" not in alarm_ids(rt)
 
 

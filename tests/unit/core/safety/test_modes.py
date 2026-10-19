@@ -45,6 +45,15 @@ def test_tesla_live_without_watchdog(limits_live) -> None:
     )
 
 
+def test_thermal_live_without_watchdog(limits, limits_live) -> None:
+    intent = Intent(version=1, control=True, actuators={"thermal.klima": LIVE})
+    assert effective_modes(intent, limits_live, False)["thermal.klima"] == ModeInfo(LIVE, LIVE, ())
+    assert not watchdog_required(intent, limits_live)
+    assert effective_modes(intent, limits, True)["thermal.klima"] == ModeInfo(
+        LIVE, DRY, (REASON_NOT_ALLOWED,)
+    )
+
+
 def test_watchdog_required_only_for_victron_and_evcs(limits, limits_live) -> None:
     tesla = Intent(version=1, control=True, actuators={"vehicle.tesla": LIVE})
     evcs = Intent(version=1, control=True, actuators={"wallbox.evcs": LIVE})
@@ -61,7 +70,12 @@ def test_live_when_requested_allowed_and_watchdog_armed(limits_live) -> None:
     intent = Intent(
         version=1,
         control=True,
-        actuators={"victron": LIVE, "wallbox.evcs": LIVE, "vehicle.tesla": LIVE},
+        actuators={
+            "victron": LIVE,
+            "wallbox.evcs": LIVE,
+            "vehicle.tesla": LIVE,
+            "thermal.klima": LIVE,
+        },
     )
     modes = effective_modes(intent, limits_live, watchdog_armed=True)
     assert set(modes.values()) == {ModeInfo(LIVE, LIVE, ())}
@@ -125,7 +139,7 @@ def test_handback_actor_is_live_with_reason(limits_live) -> None:
 
 # Weitere Fälle zur Übergabe.
 
-ALL_LIVE = {"victron": LIVE, EVCS: LIVE, "vehicle.tesla": LIVE}
+ALL_LIVE = {"victron": LIVE, EVCS: LIVE, "vehicle.tesla": LIVE, "thermal.klima": LIVE}
 
 
 def test_handback_reason_text() -> None:
@@ -140,6 +154,7 @@ def test_live_wanted_needs_control_request_and_permission(limits, limits_live) -
         "victron",
         EVCS,
         "vehicle.tesla",
+        "thermal.klima",
     }
     assert live_wanted(None, limits_live) == frozenset()
 

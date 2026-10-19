@@ -21,7 +21,9 @@ def make_ctx(**changes: Any) -> SafetyContext:
     fields: dict[str, Any] = {
         "now": T0,
         "operating": OperatingState.CONTROL,
-        "modes": dict.fromkeys(("victron", "wallbox.evcs", "vehicle.tesla"), ActuatorMode.LIVE),
+        "modes": dict.fromkeys(
+            ("victron", "wallbox.evcs", "vehicle.tesla", "thermal.klima"), ActuatorMode.LIVE
+        ),
         "locks": {},
         "inputs": InputStatus(True),
         "phase_import_a": dict.fromkeys(PHASES, 10.0),

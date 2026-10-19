@@ -10,6 +10,7 @@ von der Implementierung noch einmal um und lesen die Grenzen direkt aus der Konf
   erwarten sind (Regel 4)
 - ``rate_allows`` und ``count``: Mindestabstände und Stundenlimits (Regel 5), Schreibbudget
   (Regel 6)
+- ``offset_step_ok``: Schrittregel des Sollwertversatzes der Klimaanlage (Plan 6a, Entscheidung 8)
 
 Jeder geprüfte Befehl bekommt eine frische SafetyLayer mit eigenem Schreibbudget. Die Budgets eines
 Falls liegen in dessen eigenem temporären Verzeichnis, denn hypothesis verträgt keine
@@ -41,6 +42,7 @@ from tests.unit.core.safety.conftest import PHASES, make_ctx
 from bindaems.core.safety.budget import PersistentWriteBudget
 from bindaems.core.safety.layer import SafetyLayer
 from bindaems.core.safety.limits import HardLimits
+from bindaems.core.safety.ranges import check_range
 from bindaems.core.safety.types import SENDABLE, InputStatus, Outcome, SafetyContext, Verdict
 from bindaems.shared.config import load_config
 from bindaems.shared.control import ActuatorMode, Command, CommandKind, OperatingState
@@ -52,7 +54,8 @@ CFG = load_config(Path("deploy/config.example.yaml"))
 LIMITS = HardLimits.from_config(CFG)
 
 VICTRON, EVCS, TESLA, TWC = "victron", "wallbox.evcs", "vehicle.tesla", "wallbox.twc"
-TARGETS = (VICTRON, EVCS, TESLA, TWC)
+THERMAL = "thermal.klima"
+TARGETS = (VICTRON, EVCS, TESLA, TWC, THERMAL)
 
 # --- Grenzen und Tabellen fürs Orakel, direkt aus der Konfiguration und den Regeltabellen ---------
 
@@ -60,6 +63,7 @@ KINDS = {  # Aktorkatalog: Der Wall Connector ist kein Aktor
     VICTRON: (K.GRID_SETPOINT, K.MAX_DISCHARGE, K.MIN_SOC),
     EVCS: (K.CURRENT, K.CHARGING),
     TESLA: (K.CURRENT, K.CHARGING, K.CHARGE_LIMIT),
+    THERMAL: (K.SETPOINT_OFFSET,),
 }
 PHASE_LIMIT_A = CFG.grid.fuse_a - CFG.grid.fuse_margin_a
 VOLTAGE_V = CFG.grid.voltage_nominal_v
@@ -82,6 +86,9 @@ INTERVAL_S = {  # Mindestabstände je Aktor und Art; Tesla-Start/Stopp und persi
     (TESLA, K.CHARGE_LIMIT): 600.0,  # Ladelimit (Plan 4b, Präzisierung 9)
 }
 CHARGE_LIMIT_PCT = (50, 100)  # ganze Prozent; darunter abgelehnt, darüber geklemmt
+KLIMA = CFG.thermal.devices["klima"]
+MAX_OFFSET_K, STEP_K, STEP_INTERVAL_S = KLIMA.max_offset_k, KLIMA.step_k, KLIMA.step_interval_s
+SAME_K = 0.05  # so weit darf das Echo abweichen und gilt als derselbe Versatz
 HOUR_S, DAY_S = 3600.0, 86400.0
 
 
@@ -141,6 +148,8 @@ def in_range(command: Command, value: object, budget_w: float | None) -> bool:
     if kind == K.CHARGE_LIMIT:
         low, high = CHARGE_LIMIT_PCT
         return number_.is_integer() and low <= number_ <= high
+    if kind == K.SETPOINT_OFFSET:  # ganze Stufen, höchstens ±max_offset_k
+        return (number_ / STEP_K).is_integer() and abs(number_) <= MAX_OFFSET_K
     return False
 
 
@@ -168,7 +177,32 @@ def safer(command: Command, ctx: SafetyContext) -> bool:
         return value == -1 or (known and actual >= 0 and value >= actual)
     if kind == K.MIN_SOC:
         return value == RESERVE or (known and RESERVE <= value <= actual)
+    if kind == K.SETPOINT_OFFSET:  # 0, oder kleiner dem Betrag nach mit gleichem Vorzeichen
+        echo = number(actual)
+        return value == 0 or (echo is not None and value * echo > 0 and abs(value) <= abs(echo))
     return False  # das Ladelimit ist nie Richtung sicher: nie dringend
+
+
+def offset_step_ok(value: float, before: float, raised_at: float | None, at: float) -> bool:
+    """Lässt die Schrittregel den Versatz ``value`` zu, wenn ``before`` vorhanden ist?
+
+    Erlaubt sind 0, Verringerungen des Betrags und gleiche Werte; eine Erhöhung höchstens um eine
+    Stufe und frühestens ``step_interval_s`` nach der letzten (``raised_at``); ein Vorzeichenwechsel
+    nie. Ein ``before`` bis ``SAME_K`` um 0 gilt als 0, ein Wert bis ``SAME_K`` daneben als gleich.
+    """
+    before = 0.0 if abs(before) <= SAME_K else before
+    if value == 0 or (value * before > 0 and abs(value) <= abs(before) + SAME_K):
+        return True
+    if value * before < 0:
+        return False
+    waited = raised_at is None or at - raised_at >= STEP_INTERVAL_S
+    return abs(value) - abs(before) <= STEP_K + SAME_K and waited
+
+
+def offset_raises(value: float, before: float) -> bool:
+    """Erhöht ``value`` den Betrag gegenüber ``before`` (oder wechselt das Vorzeichen)?"""
+    before = 0.0 if abs(before) <= SAME_K else before
+    return value != 0 and (value * before < 0 or abs(value) > abs(before) + SAME_K)
 
 
 def setpoint_before(ctx: SafetyContext) -> float | None:
@@ -399,6 +433,8 @@ PRESENT = {  # typgerecht wie die Rücklesewerte der Aktoren ab 2b; None nur bei
     (TESLA, K.CURRENT): st.integers(0, 32) | st.floats(-5, 40),
     (TESLA, K.CHARGING): st.booleans(),
     (TESLA, K.CHARGE_LIMIT): st.integers(50, 100) | st.floats(0, 100),
+    (THERMAL, K.SETPOINT_OFFSET): st.sampled_from([x / 2 for x in range(-6, 7)])
+    | st.floats(-3.5, 3.5),
 }
 KNOWN = st.booleans()
 DISCHARGE_W = mixed((4, st.floats(1, 15_000)), (1, st.floats(0, 15_000)), (1, st.none()))
@@ -483,6 +519,8 @@ def safe_side(command: Command, distance: float) -> float | None:
         return None
     if command.kind == K.MAX_DISCHARGE:
         return max(value - distance, 0.0)
+    if command.kind == K.SETPOINT_OFFSET:  # dem Betrag nach größer, mit gleichem Vorzeichen
+        return math.copysign(abs(value) + distance, value)
     return value + distance
 
 
@@ -565,6 +603,7 @@ NEAR_OFFSETS = {
     K.MAX_DISCHARGE: (0.0, 10.0, -10.0, 300.0),  # W, ohne Totband, aber „gleicher Wert“
     K.MIN_SOC: (0.0, 0.5, -0.5, 5.0),  # %, ohne Totband, aber „gleicher Wert“
     K.CHARGE_LIMIT: (0.0, 1.0, -1.0, 10.0),  # %, ohne Totband, aber „gleicher Wert“
+    K.SETPOINT_OFFSET: (0.0, 0.5, -0.5, 0.04),  # K, ohne Totband, aber „gleicher Wert“
 }
 SETPOINT = (VICTRON, K.GRID_SETPOINT)
 
@@ -719,6 +758,33 @@ def test_gate_lock_inputs_and_dry_run(case: GateCase) -> None:
         assert verdict.send == (verdict.sendable and live), (verdict, ctx)
 
 
+def offset_before(ctx: SafetyContext) -> float:
+    """Vorhandener Versatz einer frischen SafetyLayer: live das Echo (ohne eines 0), im Dry-Run 0.
+
+    Im Dry-Run gilt der zuletzt entschiedene Wert; eine frische SafetyLayer hat keinen.
+    """
+    if ctx.modes.get(THERMAL) is not ActuatorMode.LIVE:
+        return 0.0
+    echo = number(ctx.present.get((THERMAL, K.SETPOINT_OFFSET)))
+    return 0.0 if echo is None else echo
+
+
+@settings(max_examples=500, deadline=None)
+@given(batches())
+def test_offsets_keep_the_step_rule(batch: Batch) -> None:
+    for command, ctx, verdict in authorize_each(batch):
+        if command.actuator != THERMAL or command.kind != K.SETPOINT_OFFSET:
+            continue
+        codes = [finding.code for finding in verdict.findings]
+        decided = verdict.sendable or verdict.outcome is Outcome.UNCHANGED
+        if decided:
+            assert offset_step_ok(verdict.value, offset_before(ctx), None, 0.0), (verdict, ctx)
+        if "offset.step" in codes:
+            assert verdict.outcome is Outcome.REJECTED, verdict
+            ranged = check_range(command, LIMITS, None).value
+            assert not offset_step_ok(ranged, offset_before(ctx), None, 0.0), (verdict, ctx)
+
+
 BAND_CODES = frozenset({"rate.unchanged", "rate.deadband"})  # die Befunde des Totbands
 
 
@@ -835,3 +901,50 @@ def test_budget_holds_over_sequences(steps) -> None:
                 sent.append(at)
     assert fullest_window(sent, HOUR_S) <= PER_HOUR
     assert fullest_window(sent, DAY_S) <= PER_DAY
+
+
+GRID_OFFSETS = [
+    x * STEP_K for x in range(-int(MAX_OFFSET_K / STEP_K), int(MAX_OFFSET_K / STEP_K) + 1)
+]
+OFFSET_STEP_S = mixed((2, st.integers(0, 700)), (1, st.integers(0, 30)))  # oft kurz hintereinander
+OFFSET_LIVE = weighted((3, True), (1, False))
+
+
+@settings(max_examples=200, deadline=None)
+@given(
+    st.lists(
+        st.tuples(OFFSET_STEP_S, st.sampled_from(GRID_OFFSETS), OFFSET_LIVE),
+        min_size=20,
+        max_size=80,
+    )
+)
+def test_offset_step_rule_holds_over_sequences(steps) -> None:
+    """Folge von Versätzen, live und im Dry-Run gemischt, gegen das Orakel der Schrittregel.
+
+    Live übernimmt die UVR einen gesendeten Wert sofort (Echo). Im Dry-Run sendet der Adapter 0, das
+    Echo ist 0; vorhanden ist dort der zuletzt entschiedene Wert (angenommen oder unverändert).
+    """
+    echo, decided, raised_at, at = 0.0, 0.0, None, 0.0
+    with fresh_layer(T0) as layer:
+        for step, value, live in steps:
+            at += step
+            if not live:
+                echo = 0.0
+            mode = ActuatorMode.LIVE if live else ActuatorMode.DRY_RUN
+            ctx = replace(
+                generous(S(at)),
+                modes={THERMAL: mode},
+                present={(THERMAL, K.SETPOINT_OFFSET): echo},
+            )
+            before = echo if live else decided
+            allowed = offset_step_ok(value, before, raised_at, at)
+            verdict = layer.authorize(Command(THERMAL, K.SETPOINT_OFFSET, value), ctx)
+            assert (verdict.outcome is not Outcome.REJECTED) == allowed, (verdict, before, at)
+            if not allowed:
+                assert verdict.findings[-1].code == "offset.step", verdict
+                continue
+            if offset_raises(value, before):
+                raised_at = at
+            decided = value
+            if live:
+                echo = value

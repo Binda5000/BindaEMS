@@ -1,5 +1,6 @@
 import pytest
 
+from bindaems.core.safety.limits import HardLimits
 from bindaems.core.safety.ranges import check_range
 from bindaems.shared.control import Command, CommandKind
 
@@ -175,3 +176,67 @@ def test_charge_limit_texts(limits) -> None:
     assert texts(49.0) == ["Wert 49 % liegt außerhalb des zulässigen Bereichs."]
     assert texts(101.0) == ["Auf den Höchstwert 100 % begrenzt."]
     assert texts(80.6) == ["Auf ganze Prozent abgerundet: 80,6 % → 80 %."]
+
+
+# Sollwertversatz der Klimaanlage (Plan 6a, Entscheidung 8): Stufen von 0,5 K, höchstens ±3 K
+KLIMA = "thermal.klima"
+
+
+def offset(value) -> Command:
+    return Command(KLIMA, K.SETPOINT_OFFSET, value)
+
+
+OFFSET_CASES = [
+    (offset(3.7), 3.0, ["range.clamped"], False),
+    (offset(3.2), 3.0, ["range.clamped"], False),
+    (offset(2.8), 3.0, ["range.step"], False),
+    (offset(-1.26), -1.5, ["range.step"], False),
+    (offset(1.5), 1.5, [], False),
+    (offset(-3), -3.0, [], False),
+    (offset(0), 0.0, [], False),
+    (offset(0.25), 0.0, ["range.step"], False),  # genau dazwischen: Richtung 0
+    (offset(-0.75), -0.5, ["range.step"], False),
+    (offset(1.25), 1.0, ["range.step"], False),
+    (offset(0.26), 0.5, ["range.step"], False),
+    (offset(-3.5), -3.0, ["range.clamped"], False),
+    (offset(1e6), 3.0, ["range.clamped"], False),
+    (offset(-1.7e308), -3.0, ["range.clamped"], False),  # riesig: keine Überläufe beim Runden
+    (offset(True), None, ["value.invalid"], True),
+    (offset(None), None, ["value.invalid"], True),
+    (offset(float("nan")), None, ["value.invalid"], True),
+    (offset(float("-inf")), None, ["value.invalid"], True),
+]
+
+
+@pytest.mark.parametrize(("command", "value", "codes", "reject"), OFFSET_CASES)
+def test_offset_range(limits, command, value, codes, reject) -> None:
+    step = check_range(command, limits, None)
+    assert (step.value, [f.code for f in step.findings], step.reject) == (value, codes, reject)
+    assert type(step.value) is type(value)
+
+
+def test_range_clamps_and_rounds(limits) -> None:
+    assert check_range(offset(3.7), limits, None).value == 3.0
+    assert check_range(offset(-1.26), limits, None).value == -1.5
+
+
+def test_offset_rounded_to_zero_is_not_negative(limits) -> None:
+    value = check_range(offset(-0.2), limits, None).value
+    assert value == 0.0 and str(value) == "0.0"
+
+
+def test_offset_texts(limits) -> None:
+    def texts(value):
+        return [f.text for f in check_range(offset(value), limits, None).findings]
+
+    assert texts(3.7) == ["Versatz auf ±3 K begrenzt: 3,7 K → 3 K."]
+    assert texts(-4.0) == ["Versatz auf ±3 K begrenzt: −4 K → −3 K."]
+    assert texts(-1.26) == ["Auf Stufen von 0,5 K gerundet: −1,26 K → −1,5 K."]
+
+
+def test_offset_range_follows_the_configuration(cfg) -> None:
+    klima = cfg.thermal.devices["klima"].model_copy(update={"max_offset_k": 1.5})
+    thermal = cfg.thermal.model_copy(update={"devices": {"klima": klima}})
+    limits = HardLimits.from_config(cfg.model_copy(update={"thermal": thermal}))
+    assert check_range(offset(2.0), limits, None).value == 1.5
+    assert check_range(offset(-2.0), limits, None).value == -1.5

@@ -17,11 +17,12 @@ from bindaems.shared.control import (
     Command,
     CommandKind,
     CommandValue,
+    thermal_actuator,
     vehicle_actuator,
     wallbox_actuator,
 )
 
-Family = Literal["evcs", "victron", "tesla"]
+Family = Literal["evcs", "victron", "tesla", "thermal"]
 
 _VICTRON_KINDS = frozenset(
     {CommandKind.GRID_SETPOINT, CommandKind.MAX_DISCHARGE, CommandKind.MIN_SOC}
@@ -29,6 +30,7 @@ _VICTRON_KINDS = frozenset(
 _CHARGING_KINDS = frozenset({CommandKind.CURRENT, CommandKind.CHARGING})
 # Der Tesla kennt dazu das Ladelimit (Plan 4b, Präzisierung 9)
 _TESLA_KINDS = _CHARGING_KINDS | {CommandKind.CHARGE_LIMIT}
+_THERMAL_KINDS = frozenset({CommandKind.SETPOINT_OFFSET})  # Klimaanlage (Plan 6a)
 
 
 @dataclass(frozen=True)
@@ -57,6 +59,19 @@ class CurrentRange:
 
 
 @dataclass(frozen=True)
+class OffsetRange:
+    """Sollwertversatz einer Klimaanlage in K (Plan 6a, Entscheidung 8).
+
+    Zulässig ist ``−max_k … +max_k`` in Stufen von ``step_k``; der Betrag steigt höchstens um eine
+    Stufe je ``interval_s`` (Schrittregel in ``safety.offset``). Der sichere Wert ist 0.
+    """
+
+    max_k: float
+    step_k: float
+    interval_s: float
+
+
+@dataclass(frozen=True)
 class HardLimits:
     """Alle harten Grenzen der Safety-Schicht und der Aktorkatalog.
 
@@ -69,9 +84,10 @@ class HardLimits:
     - ``currents``: Stromgrenzen je Aktor-ID (EVCS und Tesla)
     - ``wallbox_phases``: Phasenzuordnung je Wallbox-Schlüssel (EVCS und Wall Connector)
     - ``vehicle_commands``: Befehlslimits je Fahrzeug-Aktor
+    - ``offsets``: Bereich, Stufe und Abstand des Sollwertversatzes je Klima-Aktor
     - ``persistent_per_hour``, ``persistent_per_day``: Schreibbudget für persistente Settings
-    - ``actuators``: der Katalog in der Reihenfolge Victron, EVCS, Fahrzeuge (je in der
-      Reihenfolge der Konfiguration)
+    - ``actuators``: der Katalog in der Reihenfolge Victron, EVCS, Fahrzeuge, Klimaanlagen (je
+      in der Reihenfolge der Konfiguration)
     """
 
     phase_limit_a: float
@@ -85,13 +101,15 @@ class HardLimits:
     persistent_per_hour: int
     persistent_per_day: int
     actuators: Mapping[str, ActuatorSpec]
+    offsets: Mapping[str, OffsetRange]
 
     @classmethod
     def from_config(cls, cfg: Config) -> HardLimits:
         """Liest Grenzen und Aktorkatalog aus der Konfiguration.
 
-        Aktoren sind Victron, jede EVCS und jedes Fahrzeug mit ``tessie``. Der Wall Connector und
-        Fahrzeuge ohne ``tessie`` sind keine Aktoren.
+        Aktoren sind Victron, jede EVCS, jedes Fahrzeug mit ``tessie`` und jedes Gerät unter
+        ``thermal`` (Familie ``thermal``, ohne Watchdog: Die UVR fällt ohne Paket selbst auf 0). Der
+        Wall Connector und Fahrzeuge ohne ``tessie`` sind keine Aktoren.
         """
         phase_limit_a = cfg.grid.fuse_a - cfg.grid.fuse_margin_a
         voltage_v = cfg.grid.voltage_nominal_v
@@ -127,6 +145,20 @@ class HardLimits:
             )
             currents[actuator] = CurrentRange(vehicle.min_a, vehicle.max_a, vehicle.min_a)
             vehicle_commands[actuator] = vehicle.commands
+        offsets: dict[str, OffsetRange] = {}
+        for name, device in cfg.thermal.devices.items():
+            actuator = thermal_actuator(name)
+            actuators[actuator] = ActuatorSpec(
+                id=actuator,
+                family="thermal",
+                label=device.label,
+                kinds=_THERMAL_KINDS,
+                live_allowed=device.live_allowed,
+                needs_watchdog=False,
+            )
+            offsets[actuator] = OffsetRange(
+                device.max_offset_k, device.step_k, device.step_interval_s
+            )
 
         return cls(
             phase_limit_a=phase_limit_a,
@@ -140,6 +172,7 @@ class HardLimits:
             persistent_per_hour=cfg.victron.persistent_writes.per_hour,
             persistent_per_day=cfg.victron.persistent_writes.per_day,
             actuators=actuators,
+            offsets=offsets,
         )
 
     def grid_setpoint_max(self, budget_w: float | None) -> tuple[float, str]:
@@ -156,8 +189,8 @@ class HardLimits:
     def safe_commands(self, actuator: str) -> tuple[Command, ...]:
         """Die Befehle, die den Aktor in den sicheren Zustand bringen (Spec 8.5).
 
-        Alle sind dringend und tragen den Grund ``safe_state``. Für etwas, das kein Aktor ist,
-        gibt es keine.
+        Alle sind dringend und tragen den Grund ``safe_state``. Bei einer Klimaanlage ist es der
+        Versatz 0. Für etwas, das kein Aktor ist, gibt es keine.
         """
 
         def safe(kind: CommandKind, value: CommandValue) -> Command:
@@ -169,6 +202,8 @@ class HardLimits:
                 safe(CommandKind.MAX_DISCHARGE, -1.0),
                 safe(CommandKind.MIN_SOC, self.reserve_soc_pct),
             )
+        if actuator in self.offsets:
+            return (safe(CommandKind.SETPOINT_OFFSET, 0.0),)
         current = self.currents.get(actuator)
         if current is None:
             return ()
@@ -202,6 +237,8 @@ def toward_safe(command: Command, ctx: SafetyContext, limits: HardLimits) -> boo
     - ``max_discharge``: Wert ist −1, oder der bekannte Ist-Wert ist ≥ 0 und Wert ≥ Ist-Wert
     - ``min_soc``: Wert ist die Reserve, oder der Ist-Wert ist bekannt und Reserve ≤ Wert ≤ Ist-Wert
     - ``charge_limit``: nie; das Ladelimit ist nie dringend (Plan 4b, Präzisierung 9)
+    - ``setpoint_offset``: Wert ist 0, oder der Ist-Wert (das Echo) ist eine endliche Zahl und der
+      Wert hat dessen Vorzeichen und höchstens dessen Betrag (Plan 6a, Entscheidung 8)
 
     Befehlsarten werden mit ``==`` verglichen: Eine Art als gleicher Text gilt als diese Art.
     """
@@ -235,4 +272,7 @@ def toward_safe(command: Command, ctx: SafetyContext, limits: HardLimits) -> boo
     if kind == CommandKind.MIN_SOC:
         reserve = limits.reserve_soc_pct
         return value == reserve or (actual is not None and reserve <= value <= actual)
+    if kind == CommandKind.SETPOINT_OFFSET:  # ein Echo, das keine endliche Zahl ist, gilt nicht
+        echo = finite_number(ctx.present.get(key))
+        return value == 0 or (echo is not None and value * echo > 0 and abs(value) <= abs(echo))
     return False

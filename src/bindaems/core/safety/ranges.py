@@ -9,7 +9,7 @@ from __future__ import annotations
 import math
 from typing import Final
 
-from bindaems.core.safety.limits import CurrentRange, HardLimits
+from bindaems.core.safety.limits import CurrentRange, HardLimits, OffsetRange
 from bindaems.core.safety.types import Finding, Step, de, finite_number, invalid_value
 from bindaems.shared.control import Command, CommandKind
 
@@ -20,7 +20,8 @@ CHARGE_LIMIT_MAX_PCT: Final = 100.0
 def check_range(command: Command, limits: HardLimits, budget_w: float | None) -> Step:
     """Bringt den Wert des Befehls in seine Grenzen oder lehnt den Befehl ab.
 
-    Aktor und Art sind schon geprüft; für ``current`` muss der Aktor in ``limits.currents`` stehen.
+    Aktor und Art sind schon geprüft; für ``current`` muss der Aktor in ``limits.currents`` stehen,
+    für ``setpoint_offset`` in ``limits.offsets``.
     Zuerst muss der Wert vom richtigen Typ und endlich sein (``value.invalid``). Danach gelten je
     Art die Regeln von oben nach unten, jede auf das Ergebnis der vorigen; jeder Eingriff ergibt ein
     ``Finding``. Zahlen kommen als ``float`` heraus. Bei ``reject`` ist ``value`` gleich ``None``.
@@ -47,6 +48,8 @@ def check_range(command: Command, limits: HardLimits, budget_w: float | None) ->
         return _check_min_soc(value, limits.reserve_soc_pct)
     if kind == CommandKind.CHARGE_LIMIT:
         return _check_charge_limit(value)
+    if kind == CommandKind.SETPOINT_OFFSET:
+        return _check_offset(value, limits.offsets[command.actuator])
     return _invalid(command)  # unbekannte Art: im Zweifel ablehnen
 
 
@@ -139,3 +142,24 @@ def _check_min_soc(value: float, reserve: float) -> Step:
     if value > 100:
         return _outside(value, "%")
     return Step(value)
+
+
+def _check_offset(value: float, offset: OffsetRange) -> Step:
+    """Sollwertversatz in K (Plan 6a, Entscheidung 8): auf ``±max_k`` begrenzen, dann auf die
+    nächste Stufe ``step_k`` runden, genau dazwischen Richtung 0. Abgelehnt wird nichts.
+
+    ``max_k`` ist ein Vielfaches von ``step_k`` (Konfiguration); erst begrenzen, dann runden ergibt
+    deshalb dieselben Werte wie umgekehrt und bleibt auch bei riesigen Zahlen in der Rechnung.
+    """
+    findings: list[Finding] = []
+    if abs(value) > offset.max_k:
+        limit = math.copysign(offset.max_k, value)
+        text = f"Versatz auf ±{de(offset.max_k)} K begrenzt: {de(value)} K → {de(limit)} K."
+        findings.append(Finding("range.clamped", text))
+        value = limit
+    steps = math.ceil(abs(value) / offset.step_k - 0.5)  # x,5 Stufen gehen Richtung 0
+    rounded = math.copysign(steps * offset.step_k, value) + 0.0  # + 0.0 macht aus −0,0 eine 0,0
+    if rounded != value:
+        text = f"Auf Stufen von {de(offset.step_k)} K gerundet: {de(value)} K → {de(rounded)} K."
+        findings.append(Finding("range.step", text))
+    return Step(rounded, tuple(findings))

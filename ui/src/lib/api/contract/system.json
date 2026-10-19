@@ -146,6 +146,20 @@
           "pending": [],
           "owned": false,
           "watchdog_needed": false
+        },
+        {
+          "id": "thermal.klima",
+          "label": "Klimaanlage",
+          "requested": "dry_run",
+          "effective": "dry_run",
+          "live_allowed": false,
+          "reasons": [],
+          "locked": [],
+          "controllable": false,
+          "capability_reasons": [],
+          "pending": [],
+          "owned": false,
+          "watchdog_needed": false
         }
       ],
       "watchdog": {

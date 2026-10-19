@@ -5,12 +5,17 @@ from typing import cast
 import pytest
 from tests.unit.core.safety.conftest import make_ctx
 
-from bindaems.core.safety.limits import CurrentRange, HardLimits, toward_safe
+from bindaems.core.safety.limits import CurrentRange, HardLimits, OffsetRange, toward_safe
 from bindaems.shared.control import VICTRON, Command, CommandKind
 
 
 def test_catalog_from_example(limits) -> None:
-    assert list(limits.actuators) == ["victron", "wallbox.evcs", "vehicle.tesla"]
+    assert list(limits.actuators) == [
+        "victron",
+        "wallbox.evcs",
+        "vehicle.tesla",
+        "thermal.klima",
+    ]
     evcs = limits.actuators["wallbox.evcs"]
     assert (evcs.family, evcs.label, evcs.needs_watchdog, evcs.live_allowed) == (
         "evcs",
@@ -30,6 +35,44 @@ def test_catalog_from_example(limits) -> None:
     assert limits.currents["wallbox.evcs"] == CurrentRange(6, 16, 6)
     assert limits.currents["vehicle.tesla"] == CurrentRange(5, 16, 5)
     assert limits.wallbox_phases["twc"] == ("L1", "L2", "L3")
+
+
+def test_catalog_has_thermal(limits) -> None:
+    spec = limits.actuators["thermal.klima"]
+    assert (spec.family, spec.label, spec.needs_watchdog, spec.live_allowed) == (
+        "thermal",
+        "Klimaanlage",
+        False,
+        False,
+    )
+    assert spec.kinds == {CommandKind.SETPOINT_OFFSET}
+    assert limits.offsets == {"thermal.klima": OffsetRange(max_k=3.0, step_k=0.5, interval_s=600.0)}
+
+
+def test_thermal_limits_follow_the_configuration(cfg) -> None:
+    klima = cfg.thermal.devices["klima"].model_copy(
+        update={"max_offset_k": 1.5, "step_interval_s": 900.0, "live_allowed": True, "label": "AC"}
+    )
+    changed = cfg.model_copy(
+        update={"thermal": cfg.thermal.model_copy(update={"devices": {"klima": klima}})}
+    )
+    limits = HardLimits.from_config(changed)
+    assert limits.offsets["thermal.klima"] == OffsetRange(1.5, 0.5, 900.0)
+    assert (
+        limits.actuators["thermal.klima"].label,
+        limits.actuators["thermal.klima"].live_allowed,
+    ) == (
+        "AC",
+        True,
+    )
+
+
+def test_without_thermal_devices_there_is_no_thermal_actuator(cfg) -> None:
+    empty = cfg.model_copy(update={"thermal": cfg.thermal.model_copy(update={"devices": {}})})
+    limits = HardLimits.from_config(empty)
+    assert "thermal.klima" not in limits.actuators
+    assert limits.offsets == {}
+    assert limits.safe_commands("thermal.klima") == ()
 
 
 def test_phase_limit_and_setpoint_ceiling(limits) -> None:
@@ -64,6 +107,18 @@ def test_safe_commands(limits) -> None:
     )
 
 
+def test_safe_command_is_zero(limits) -> None:
+    assert limits.safe_commands("thermal.klima") == (
+        Command(
+            "thermal.klima",
+            CommandKind.SETPOINT_OFFSET,
+            0.0,
+            urgent=True,
+            reasons=("safe_state",),
+        ),
+    )
+
+
 K = CommandKind
 TOWARD_SAFE = [
     (Command("wallbox.evcs", K.CURRENT, 6.0), {("wallbox.evcs", K.CURRENT): 16.0}, True),
@@ -83,6 +138,60 @@ TOWARD_SAFE = [
     (Command("victron", K.MIN_SOC, 30.0), {("victron", K.MIN_SOC): 40.0}, True),
     (Command("victron", K.MIN_SOC, 30.0), {("victron", K.MIN_SOC): 25.0}, False),
     (Command("wallbox.evcs", K.CURRENT, True), {}, False),
+    # Sollwertversatz: 0, oder dem Betrag nach höchstens der Ist-Wert mit gleichem Vorzeichen
+    (Command("thermal.klima", K.SETPOINT_OFFSET, 0.0), {}, True),
+    (
+        Command("thermal.klima", K.SETPOINT_OFFSET, 0),
+        {("thermal.klima", K.SETPOINT_OFFSET): 2.0},
+        True,
+    ),
+    (Command("thermal.klima", K.SETPOINT_OFFSET, 0.5), {}, False),
+    (
+        Command("thermal.klima", K.SETPOINT_OFFSET, 1.0),
+        {("thermal.klima", K.SETPOINT_OFFSET): 1.5},
+        True,
+    ),
+    (
+        Command("thermal.klima", K.SETPOINT_OFFSET, 1.5),
+        {("thermal.klima", K.SETPOINT_OFFSET): 1.5},
+        True,
+    ),
+    (
+        Command("thermal.klima", K.SETPOINT_OFFSET, 2.0),
+        {("thermal.klima", K.SETPOINT_OFFSET): 1.5},
+        False,
+    ),
+    (
+        Command("thermal.klima", K.SETPOINT_OFFSET, -1.0),
+        {("thermal.klima", K.SETPOINT_OFFSET): -2.0},
+        True,
+    ),
+    (
+        Command("thermal.klima", K.SETPOINT_OFFSET, -1.0),
+        {("thermal.klima", K.SETPOINT_OFFSET): 2.0},
+        False,
+    ),
+    (
+        Command("thermal.klima", K.SETPOINT_OFFSET, 0.5),
+        {("thermal.klima", K.SETPOINT_OFFSET): -1.0},
+        False,
+    ),
+    (
+        Command("thermal.klima", K.SETPOINT_OFFSET, 0.5),
+        {("thermal.klima", K.SETPOINT_OFFSET): None},
+        False,
+    ),
+    (Command("thermal.klima", K.SETPOINT_OFFSET, False), {}, False),
+    (
+        Command("thermal.klima", K.SETPOINT_OFFSET, 1.0),
+        {("thermal.klima", K.SETPOINT_OFFSET): math.inf},
+        False,
+    ),
+    (
+        Command("thermal.klima", K.SETPOINT_OFFSET, 1.0),
+        {("thermal.klima", K.SETPOINT_OFFSET): True},
+        False,
+    ),
 ]
 
 
