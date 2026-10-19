@@ -4856,7 +4856,7 @@ Beginn kein Auto an, und die Klimaanlage ist live.
 | `geplant-unbekannt` | Geplant ohne Ladestand, 2 h | wie `geplant-spaet`, aber Home Assistant meldet keinen Ladestand des e-Golf; Abfahrt 23:15 | Jede Gesundheit, die einen Ladestand des e-Golf nennt, nennt ihn „angenommen“ mit 0 %; er lädt erst ab der spätesten Startzeit für 0 % (gegen 18:31) und beginnt binnen 30 s danach; keine Entscheidung nennt „target_reached“. |
 | `tesla-ladelimit` | Ladelimit des Tesla an das Ziel angleichen, 1 h | 12.10.2026 ab 18:00, keine PV, Akku 60 %, nur der Tesla mit 65 % und dem Ladelimit 60 % im Auto, also „Complete“, `charge_limit_sync` an, in Geplant, Ziel 75 %, Abfahrt 19:00 (die späteste Startzeit ist schon vorbei) | Genau eine Entscheidung „Ladelimit 75 %“ an den Tesla, keine andere über das Ladelimit; am Ende zeigt die Gesundheit das Ladelimit 75 %; nach dem Laden meldet der Tesla „Complete“ bei 75 %. |
 | `klima-pv-kuehlen` | Klimaanlage nimmt PV-Überschuss beim Kühlen, 1 h | 15.07.2026 ab 12:00, PV konstant, Akku 100 %, die Klimaanlage kühlt mit 600 W, ohne Versatz 1,5 kW Einspeisung | Der Versatz an der UVR wechselt nur in Schritten von −0,5 K im Abstand von mindestens 600 s, mindestens dreimal; er liegt zwischen −3 K und 0 K und geht nur in Richtung „mehr“; jede Entscheidung an die Klimaanlage nennt `thermal_more`; die Einspeisung liegt in den letzten 10 min im Mittel unter 800 W. |
-| `klima-auto-vorrang` | Klimaanlage weicht einem Auto im Modus PV, 80 min | wie `klima-pv-kuehlen`, aber ohne Versatz 4 kW Einspeisung; ab 40 min steckt der e-Golf in PV an der EVCS | Bis 40 min mindestens drei Schritte von −0,5 K; danach geht der Versatz nur in Schritten von 0,5 K zurück, jede Entscheidung dazu nennt `thermal_cars`, und er wird nie größer; am Ende wendet die UVR 0 K an, der e-Golf lädt, und die Einspeisung liegt in den letzten 10 min im Mittel unter 800 W. Ein bekannter Befund steht unter der Tabelle. |
+| `klima-auto-vorrang` | Klimaanlage weicht einem Auto im Modus PV, 80 min | wie `klima-pv-kuehlen`, aber ohne Versatz 4 kW Einspeisung; ab 40 min steckt der e-Golf in PV an der EVCS | Bis 40 min mindestens drei Schritte von −0,5 K; danach geht der Versatz nur in Schritten von 0,5 K zurück, jede Entscheidung dazu nennt `thermal_cars`, und er wird nie größer; am Ende wendet die UVR 0 K an, der e-Golf lädt, und die Einspeisung liegt in den letzten 10 min im Mittel unter 800 W. |
 | `klima-moduswechsel` | Betriebsart der Klimaanlage wechselt, 50 min | wie `klima-pv-kuehlen`; bei 2115 s, nach drei Stufen, wechselt die Klimaanlage auf Heizen | Vor dem Wechsel drei Schritte bis −1,5 K; in der Sekunde des Wechsels bekommt die UVR 0 K, und die Regelung wünscht 0 Stufen mit `thermal_mode`; kein Versatz an der UVR gegen „mehr“ der Betriebsart, keine Entscheidung vor dem Wechsel über 0 K und danach unter 0 K. |
 | `klima-paketverlust` | Pakete der Klimaanlage bleiben aus, 35 min | wie `klima-pv-kuehlen`; ab 25 min sendet das C.M.I. nichts mehr | Vor 25 min −1 K; die erste 0 K an der UVR kommt 180 s nach dem letzten Paket (höchstens 10 s später, im Takt der Überwachung des Adapters), die Regelung wünscht dort 0 Stufen mit `thermal_stale`, danach bekommt die UVR nur 0 K. |
 | `klima-spitze` | Spitze droht beim Heizen, 40 min | 15.12.2026 ab 11:00, PV konstant, Multi auf „Nur Laden“, die Klimaanlage heizt mit 1500 W, ohne Versatz 1,6 kW Einspeisung, Ziel des 15-min-Wächters 5 kW; ab 30 min zieht das Haus 8 kW mehr | Vor 30 min +1 K; in der ersten Sekunde, in der der Wächter Druck macht, bekommt die UVR 0 K, und die Regelung wünscht 0 Stufen mit `thermal_peak`; danach bekommt die UVR nur 0 K. |
@@ -4918,21 +4918,17 @@ ihrer Bestätigung durch das Echo, meist eine Sekunde nach dem Paket an die UVR;
 darum, was die UVR bekam. Abweichungen von der Tabelle des Plans:
 
 - `klima-auto-vorrang` speist ohne Versatz 4 kW statt 1,5 kW ein. Mit 1,5 kW startet der e-Golf
-  nie (6 A auf zwei Phasen sind 2760 W). Die Regelung hält ihn dann bei „Laden aus“, und so zählt
-  er mit seiner ganzen Höchstleistung als offener Wunsch (Ruling R21): Die Klimaanlage geht
-  trotzdem stufenweise auf 0 K zurück, und die 1,5 kW gehen ins Netz. Eine Abwandlung in der CI
-  hält das fest.
+  nie (6 A auf zwei Phasen sind 2760 W): Einspeisung und Klimaanlage erreichen seine
+  Startleistung nicht, er zählt nicht als offener Wunsch, und die Klimaanlage nimmt den
+  Überschuss. Eine Abwandlung in der CI hält das fest.
 - `klima-spitze` steht auf „Nur Laden“, damit der Akku die Last nicht deckt, und die Last kommt
   zu Beginn einer Viertelstunde, denn der 15-min-Wächter rechnet je Viertelstunde.
 
-Zwei bekannte Befunde hält die CI fest (`KNOWN_FAULTS` und die zweite Abwandlung in
-`tests/integration/test_sim_scenarios.py`); ist einer behoben, schlägt ihr Test fehl. In
-`klima-auto-vorrang` startet die Regelung den e-Golf bei 2521 s. Im ersten Zyklus zieht er noch
-nichts und gilt als selbst begrenzt; die Klimaanlage geht darum für eine Sekunde eine Stufe hoch auf
-−1,5 K und im nächsten Zyklus wieder zurück. Nimmt der e-Golf nur noch 6 A (er regelt ab), wechselt
-die Laderegelung zwischen 8 A, wo er als selbst begrenzt gilt, und 7 A, wo er seinem Befehl folgt;
-die Klimaanlage flackert so zwischen 0 K und −1 K, rund alle 10 min ein Schritt, und rund 1,1 kW
-gehen ins Netz.
+Die zweite Abwandlung lässt den e-Golf nach 65 min nur noch 6 A nehmen (er regelt ab). Bei 8 A
+begrenzt er sich nach der Haltezeit selbst, und die Klimaanlage nimmt den Überschuss; senkt die
+Laderegelung darauf auf 7 A, bleibt er selbst begrenzt, und die Klimaanlage flackert nicht. Ein
+Auto, das die Regelung gerade startet, gilt im Anlauf als seinem Befehl folgend: Die Klimaanlage
+geht beim Start des e-Golf keine Stufe hoch (Ruling R23).
 
 ### Was das Modell nicht leistet
 

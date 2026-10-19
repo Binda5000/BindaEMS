@@ -209,6 +209,15 @@ _NOBODY: Final = WallboxState(None, None, ())  # an der Wallbox läuft kein Vorg
 _SELF_START_MIN_A: Final = 1.0  # ab diesem Strom in A lädt ein Fahrzeug laut Tessie
 # Die Modi, deren offener Wunsch der Klimaanlage vorgeht (Plan 6a, Entscheidung 5.3)
 _UNMET_MODES: Final = frozenset({Effective.PV, Effective.MIN_PV})
+# Anlauf (Ruling R23 a): So lange nach einem eigenen Start oder einer Erhöhung des Stroms gilt ein
+# Auto als seinem Befehl folgend, auch wenn es noch nicht zieht oder sein Aktor noch „aus“ meldet.
+# Das ist mindestens die Frist der Bestätigung des langsamsten Ladepunkts: beim Tesla 85 s
+# (``confirm_timeout_s`` in ``core.actuators.tesla``), an der EVCS 10 s. Tessie meldet die Leistung
+# beim Laden ohnehin nur alle 30 s.
+RAMP_UP_S: Final = 90.0
+# Hysterese (Ruling R23 b): Das Urteil je Auto „folgt seinem Befehl“ oder „begrenzt sich selbst“
+# wechselt erst, wenn das Gegenteil so lange ohne Unterbrechung gilt.
+FOLLOW_HOLD_S: Final = 120.0
 
 
 @dataclass(frozen=True)
@@ -270,6 +279,42 @@ class _Plug:
 
     number: int
     start: datetime
+
+
+@dataclass
+class _Follow:
+    """Das Urteil über ein Auto für ``unmet_surplus_w`` mit Hysterese (Ruling R23 b).
+
+    - ``follows``: Das Auto folgt seinem Befehl; sonst begrenzt es sich selbst.
+    - ``limit_a``: der befohlene Strom, bei dem es sich selbst begrenzte; ``None``, solange es folgt
+    - ``since``: seit wann das Gegenteil ohne Unterbrechung gilt; ``None``, solange es nicht gilt
+
+    ``judge`` nimmt die Beobachtung eines Zyklus und gibt das geltende Urteil: Es wechselt erst,
+    wenn das Gegenteil ``FOLLOW_HOLD_S`` lang gilt.
+    """
+
+    follows: bool
+    limit_a: float | None = None
+    since: datetime | None = None
+
+    def reference_a(self, commanded_a: float) -> float:
+        """Der Strom, dem das Auto folgen muss: Begrenzt es sich selbst, folgt es erst wieder,
+        wenn es (bis auf eine Stufe) den Strom zieht, bei dem es sich begrenzte. Senkt die Regelung
+        den Strom, weil die Klimaanlage den Überschuss nimmt, folgt es sonst scheinbar wieder, und
+        beide schwingen gegeneinander. „Laden aus“ (0 A) gilt für sich."""
+        if commanded_a <= 0.0 or self.limit_a is None:
+            return commanded_a
+        return max(commanded_a, self.limit_a)
+
+    def judge(self, follows: bool, now: datetime, commanded_a: float | None) -> bool:
+        if follows == self.follows:
+            self.since = None
+        elif self.since is None:
+            self.since = now
+        elif (now - self.since).total_seconds() >= FOLLOW_HOLD_S:
+            self.follows, self.since = follows, None
+            self.limit_a = None if follows else commanded_a
+        return self.follows
 
 
 @dataclass(frozen=True)
@@ -407,6 +452,10 @@ class ChargeController:
         self._views: dict[str, _View] = {}
         self._cars: tuple[CarView, ...] = ()  # je Ladepunkt des letzten ``step`` (``cars``)
         self._unmet_w = 0.0  # der offene Wunsch der Autos in PV und Min+PV (``unmet_surplus_w``)
+        # je Auto bei „Laden aus“ (eigener Wert): Startleistung und offener Wunsch, in W
+        self._held: tuple[tuple[float, float], ...] = ()
+        self._ramp: dict[str, datetime] = {}  # je Aktor der letzte eigene Start oder Anstieg
+        self._follow: dict[str, _Follow] = {}  # je Auto das Urteil „folgt seinem Befehl“
         # wer an welcher Wallbox stand, im letzten ``step`` (``wallbox_health``)
         self._wallboxes: Mapping[str, WallboxState] = {}
         self._reasons: dict[str, str] = {}  # der letzte Grund des letzten Befehls je Fahrzeug
@@ -584,7 +633,7 @@ class ChargeController:
             _car_view(self._cfg, point, modes[key], state.vehicles[key], inputs)
             for key, point in points.items()
         )
-        self._unmet_w = self._unmet(points, modes, state.vehicles, inputs.present)
+        self._unmet(now, points, modes, state.vehicles, inputs.present)
         self._vehicle_wallbox = {
             vehicle_actuator(key): None if v.kind is AssignmentKind.UNCLEAR else v.wallbox
             for key, v in state.vehicles.items()
@@ -607,10 +656,15 @@ class ChargeController:
         Ein Weckstart (``Command.wake``) mit einem Urteil mit Wert zählt im Weckkontingent, live wie
         im Dry-Run und auch mit ``not_sent`` (Präzisierung 12); die Zeit ist die des letzten
         ``step``. Ein Ladelimit, das den letzten eigenen Wert setzt, ist für seinen Ansteckvorgang
-        und sein Ziel erledigt (``ChargeLimits``).
+        und sein Ziel erledigt (``ChargeLimits``). Setzt das Urteil einen Start oder einen höheren
+        Strom als den letzten eigenen, beginnt mit der Zeit des letzten ``step`` der Anlauf des
+        Aktors (``RAMP_UP_S``, ``unmet_surplus_w``).
         """
         started = command.kind is _CHARGING and command.value is True
+        before = self._last.requested((command.actuator, command.kind))
         judged = self._last.judged(command, verdict, not_sent=not_sent)
+        if judged and _raises(command, before):  # der Anlauf beginnt (Ruling R23 a)
+            self._ramp[command.actuator] = self._now
         if judged and started:
             self._resume -= {key for key, actor in self._regulated if actor == command.actuator}
         if judged and command.kind is _LIMIT:
@@ -662,7 +716,8 @@ class ChargeController:
         self._views = {}
         self._wallboxes = {}
         self._cars = ()
-        self._unmet_w = 0.0
+        self._unmet_w, self._held = 0.0, ()
+        self._ramp, self._follow = {}, {}
         self._vehicle_wallbox = {}
         self._commands_hour = {}
 
@@ -691,24 +746,39 @@ class ChargeController:
         """
         return self._cars
 
-    def unmet_surplus_w(self) -> float:
+    def unmet_surplus_w(self, spare_w: float = 0.0) -> float:
         """Was die Autos im letzten ``step`` noch aufnehmen könnten, in W (Plan 6a, Entscheidung
-        5.3, Ruling R18): der Vorrang der Autos vor der Klimaanlage.
+        5.3, Rulings R18 und R23): der Vorrang der Autos vor der Klimaanlage.
 
         Es zählt jeder Ladepunkt, den die Laderegelung regelt, dessen Auto laut Zuordnung angesteckt
         ist, laden kann (``can_charge``) und im Modus PV oder Min+PV steht, mit
         ``max(0, Höchstleistung − Leistung)``; die Höchstleistung ist ``max_a × U × Phasen``. Das
         nur, solange das Auto seinem Befehl folgt: Seine Leistung ist bekannt und liegt höchstens
-        eine Stufe von 1 A (auf seinen Phasen) unter dem befohlenen Strom. „Laden aus“ befiehlt
-        0 A: Ein Auto, das die Regelung mangels Überschuss aushält, zählt. Zieht ein Auto deutlich
+        eine Stufe von 1 A (auf seinen Phasen) unter dem befohlenen Strom. Zieht ein Auto deutlich
         weniger als befohlen, begrenzt es sich selbst (Abregeln, Ladelimit im Auto, Timer) und
         zählt nicht, ebenso bei unbekannter Leistung oder unbekanntem Befehl. Befohlen ist der
         Ist-Wert des Aktors (``present``), ohne ihn der letzte eigene Wert.
 
+        - Anlauf (R23 a): Bis ``RAMP_UP_S`` nach einem eigenen Start oder einem höheren eigenen
+          Strom folgt ein Auto seinem Befehl, auch wenn es noch nicht zieht oder sein Aktor noch
+          „aus“ meldet.
+        - Hysterese (R23 b): Das Urteil „folgt“ oder „begrenzt sich selbst“ wechselt erst, wenn das
+          Gegenteil ``FOLLOW_HOLD_S`` lang ohne Unterbrechung gilt; das erste Urteil gilt sofort.
+          Ein Auto, das sich selbst begrenzt, folgt erst wieder, wenn es bis auf eine Stufe den
+          Strom zieht, bei dem es sich begrenzte, auch wenn die Regelung den Strom inzwischen
+          senkte (``_Follow.reference_a``); „Laden aus“ gilt für sich. Bei unbekannter Leistung
+          oder unbekanntem Befehl bleibt das Urteil stehen, und es fällt weg, sobald das Auto
+          nicht mehr zählen kann (abgesteckt, anderer Modus, nicht geregelt).
+        - „Laden aus“ (R23 c): Die eigene „Laden aus“ befiehlt 0 A. Ein Auto, das die Regelung so
+          aushält, zählt nur, wenn ``spare_w`` seine Startleistung erreicht (``min_a × U ×
+          Phasen``); sonst könnte es mit dem Überschuss nie starten. ``spare_w`` ist, was ein
+          Start nutzen könnte: die Einspeisung und die Leistung der Klimaanlagen.
+
         Anders als ein Wunsch aus dem Überschuss hängt das nicht davon ab, was die Klimaanlage
         gerade aufnimmt. Vor dem ersten ``step`` und nach ``idle`` ist es 0.
         """
-        return self._unmet_w
+        held = sum(unmet_w for start_w, unmet_w in self._held if spare_w >= start_w)
+        return self._unmet_w + held
 
     def overload_level(self) -> OverloadLevel:
         """Die Stufe der Überlast im letzten ``step``; vor dem ersten und nach ``idle`` ``NONE``."""
@@ -809,14 +879,17 @@ class ChargeController:
 
     def _unmet(
         self,
+        now: datetime,
         points: Mapping[str, ChargePoint],
         modes: Mapping[str, Effective],
         vehicles: Mapping[str, VehicleState],
         present: Mapping[Key, CommandValue],
-    ) -> float:
-        """Was die Autos dieses Zyklus noch aufnehmen könnten (``unmet_surplus_w``)."""
+    ) -> None:
+        """Was die Autos dieses Zyklus noch aufnehmen könnten (``unmet_surplus_w``): der Wunsch
+        der Autos, die laden, und je Auto bei „Laden aus“ Startleistung und Wunsch."""
         volts = self._limits.voltage_v
-        total = 0.0
+        total, held = 0.0, []
+        follow: dict[str, _Follow] = {}
         for car in self._cars:
             point, vehicle, mode = points[car.vehicle], vehicles[car.vehicle], modes[car.vehicle]
             if (
@@ -825,15 +898,33 @@ class ChargeController:
                 or vehicle.plugged is not True
                 or mode not in _UNMET_MODES
                 or not can_charge(vehicle, mode)
-                or car.power_w is None
             ):
-                continue
+                continue  # das Auto zählt nicht; sein Urteil fällt weg
+            judgment = self._follow.get(car.vehicle)
+            if judgment is not None:
+                follow[car.vehicle] = judgment
             commanded_a = self._commanded_a(point.actuator, present)
+            ramp = self._ramp.get(point.actuator)
+            ramping = (
+                commanded_a != 0.0 and ramp is not None and (now - ramp).total_seconds() < RAMP_UP_S
+            )
+            if car.power_w is None or (commanded_a is None and not ramping):
+                continue  # Leistung oder Befehl unbekannt: Das Urteil bleibt stehen.
             step_w = volts * len(point.phases)  # eine Stufe von 1 A auf den Phasen des Autos
-            if commanded_a is None or car.power_w < (commanded_a - 1.0) * step_w:
-                continue  # Befehl unbekannt, oder das Auto begrenzt sich selbst
-            total += max(0.0, point.max_a * step_w - car.power_w)
-        return total
+            seen = ramping
+            if commanded_a is not None and not ramping:
+                reference_a = commanded_a if judgment is None else judgment.reference_a(commanded_a)
+                seen = car.power_w >= (reference_a - 1.0) * step_w
+            if judgment is None:
+                judgment = follow[car.vehicle] = _Follow(seen, None if seen else commanded_a)
+            if not judgment.judge(seen, now, commanded_a):
+                continue  # das Auto begrenzt sich selbst
+            unmet_w = max(0.0, point.max_a * step_w - car.power_w)
+            if commanded_a == 0.0:
+                held.append((point.min_a * step_w, unmet_w))
+            else:
+                total += unmet_w
+        self._unmet_w, self._held, self._follow = total, tuple(held), follow
 
     def _commanded_a(self, actuator: str, present: Mapping[Key, CommandValue]) -> float | None:
         """Der befohlene Strom eines Aktors in A: 0 bei „Laden aus“; ``None``, wenn unbekannt.
@@ -1417,6 +1508,16 @@ def _planned_health(planned: PlannedState | None) -> dict[str, Any] | None:
         "latest_start": None if start is None else ensure_utc(start).isoformat(),
         "plan_w": planned.plan_w,
     }
+
+
+def _raises(command: Command, before: CommandValue | None) -> bool:
+    """Ob der Befehl gegenüber dem letzten eigenen Wert ``before`` startet oder den Strom erhöht."""
+    if command.kind is _CHARGING:
+        return command.value is True and before is not True
+    if command.kind is not _CURRENT:
+        return False
+    new, old = finite_number(command.value), finite_number(before)
+    return new is not None and old is not None and new > old
 
 
 def _occupant(car: str) -> str:

@@ -462,7 +462,10 @@ def test_step_builds_the_thermal_inputs(cfg, monkeypatch) -> None:  # Plan 6a, T
     monkeypatch.setattr(link.regulation, "step", lambda inputs: stepped.append(inputs) or [])
     monkeypatch.setattr(link.regulation, "thermal_step", lambda inputs: seen.append(inputs) or [])
     bits = {"running": True, "heating": False, "venting": False, "cooling": True}
-    values = snap({f"thermal.klima.{name}": value for name, value in bits.items()})
+    values = snap(
+        {f"thermal.klima.{name}": value for name, value in bits.items()}
+        | {"thermal.klima.power_w": 1300.0}  # die Leistung der Klimaanlage (Ruling R23 c)
+    )
     sources = {"thermal.klima": True}  # die Quelle des CoE-Adapters (``coe_source``)
     able = {"thermal.klima": Capabilities(True)}
     link.start_cycle()
@@ -471,7 +474,7 @@ def test_step_builds_the_thermal_inputs(cfg, monkeypatch) -> None:  # Plan 6a, T
     step(link, cfg, operating=OperatingState.DEGRADED)
     when = NOW.timestamp()
     assert [(inputs.thermal, inputs.degraded) for inputs in seen] == [
-        ({"klima": ThermalInputs(True, "kuehlen", True, False, when)}, False),
+        ({"klima": ThermalInputs(True, "kuehlen", True, False, when, 1300.0)}, False),
         ({"klima": ThermalInputs(True, "unbekannt", True, True, when)}, False),
         ({"klima": ThermalInputs(False, "unbekannt", False, False, when)}, True),
     ]

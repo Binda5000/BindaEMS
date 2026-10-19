@@ -6,8 +6,8 @@ nichts finden; ``failures`` nennt sonst jede Verletzung als Satz. Dazu kommt ein
 
 Bekannte Befunde der Regelung stehen in ``KNOWN_FAULTS``, mit ihren genauen Sätzen: Ist ein Befund
 behoben, schlägt der Test fehl, und der Eintrag fällt weg. Zwei Abwandlungen von
-„klima-auto-vorrang“ halten fest, wie sich die Klimaanlage neben einem Auto verhält, das nicht
-starten kann (Ruling R21) oder sich selbst begrenzt (Plan 6a, Task 12).
+„klima-auto-vorrang“ halten fest, wie sich die Klimaanlage neben einem Auto verhält, das nie
+starten kann oder sich selbst begrenzt (Ruling R23).
 """
 
 from dataclasses import dataclass, replace
@@ -27,6 +27,7 @@ from bindaems.tools.sim.scenarios import (
     KLIMA_ACTUATOR,
     KLIMA_BASE_W,
     KLIMA_EXPORT_W,
+    KLIMA_MORE_W,
     KLIMA_NOISE_W,
     KLIMA_SETTLED_S,
     PEAK_LEAD_S,
@@ -82,17 +83,10 @@ KLIMA = [
     "klima-teuer-heizen",
 ]
 ALL = [*NAMES, *NEW, *ASSIGNMENT, *TESLA_OFF, *PLAN, *PLANNED, *KLIMA]
-# Befunde der Regelung, die ein Szenario aufdeckt und die noch offen sind, mit ihren Sätzen
-KNOWN_FAULTS = {
-    # Startet die Regelung den e-Golf (2521 s 7 A, 2522 s „Laden an“), zieht er im ersten Zyklus
-    # noch nichts: Er gilt als selbst begrenzt (Ruling R18), der offene Wunsch der Autos ist einen
-    # Zyklus lang 0, und die Klimaanlage geht eine Stufe hoch (thermal_more), im nächsten Zyklus
-    # wieder zurück (thermal_cars). Bericht zu Task 12.
-    "klima-auto-vorrang": [
-        "Die UVR bekam bei 2521 s −1,5 K nach −1 K: Der Versatz wurde größer, obwohl ein Auto "
-        "Vorrang hat."
-    ],
-}
+# Befunde der Regelung, die ein Szenario aufdeckt und die noch offen sind, mit ihren Sätzen. Der
+# Befund aus „klima-auto-vorrang“ (Schritt der Klimaanlage beim Start des e-Golf) ist mit dem
+# Anlauf behoben (Ruling R23 a).
+KNOWN_FAULTS: dict[str, list[str]] = {}
 
 
 def test_all_scenarios_are_listed() -> None:
@@ -186,11 +180,12 @@ def _export_w(result: SimResult) -> float:
     return -sum(s.grid_w for s in last) / len(last)
 
 
-async def test_klima_car_held_at_zero_amps_takes_the_surplus(cfg, tmp_path) -> None:
-    # Ruling R21: wie „klima-auto-vorrang“, aber mit 1,5 kW Einspeisung ohne Versatz. Der e-Golf
-    # braucht für den Start 6 A auf zwei Phasen (2760 W) und startet nie; die Regelung hält ihn
-    # bei „Laden aus“, und so zählt er mit seiner ganzen Höchstleistung als offener Wunsch. Die
-    # Klimaanlage geht darum stufenweise auf 0 zurück, und die 1,5 kW gehen ins Netz.
+async def test_klima_takes_the_surplus_of_a_car_that_can_never_start(cfg, tmp_path) -> None:
+    # Ruling R23 c: wie „klima-auto-vorrang“, aber mit 1,5 kW Einspeisung ohne Versatz. Der e-Golf
+    # braucht für den Start 6 A auf zwei Phasen (2760 W); die Regelung hält ihn bei „Laden aus“.
+    # Einspeisung und Klimaanlage (600 W ohne Versatz) erreichen das nie: Er zählt nicht, und die
+    # Klimaanlage nimmt den Überschuss weiter, ohne zurückzugehen. In „klima-auto-vorrang“ (4 kW)
+    # reicht es, und sie weicht dem Auto (dessen Prüfungen).
     base = SCENARIOS["klima-auto-vorrang"]
     pv = _klima_pv_w(KLIMA_EXPORT_W, KLIMA_BASE_W)
     scenario = replace(
@@ -209,20 +204,18 @@ async def test_klima_car_held_at_zero_amps_takes_the_surplus(cfg, tmp_path) -> N
         (-0.5, "thermal_more"),
         (-1.0, "thermal_more"),
         (-1.5, "thermal_more"),
-        (-1.0, "thermal_cars"),
-        (-0.5, "thermal_cars"),
-        (0.0, "thermal_cars"),
+        (-2.0, "thermal_more"),
     ]
     assert not any(s.cars[EGOLF].charging for s in result.samples)
-    assert _export_w(result) > KLIMA_EXPORT_W - 100
+    assert _export_w(result) < KLIMA_MORE_W
 
 
-async def test_klima_self_limiting_car_lets_the_offset_flicker(cfg, tmp_path) -> None:
-    # Wie „klima-auto-vorrang“; nach 65 min nimmt der e-Golf nur noch 6 A (er regelt ab), 60 min
-    # lang. Die Laderegelung wechselt zwischen 8 A (er zieht weniger als 7 A: selbst begrenzt,
-    # kein Vorrang, die Klimaanlage geht hoch) und 7 A (er folgt: Vorrang, sie geht zurück). Die
-    # Klimaanlage flackert so zwischen 0 und −1 K, rund alle 10 min ein Schritt; die Einspeisung
-    # bleibt bei rund 1,1 kW. Bericht zu Task 12, offener Befund.
+async def test_klima_self_limiting_car_does_not_let_the_offset_flicker(cfg, tmp_path) -> None:
+    # Ruling R23 b: wie „klima-auto-vorrang“; nach 65 min nimmt der e-Golf nur noch 6 A (er regelt
+    # ab), 60 min lang. Bei 8 A zieht er weniger als 7 A: Nach der Haltezeit begrenzt er sich
+    # selbst, und die Klimaanlage nimmt den Überschuss. Senkt die Laderegelung darauf auf 7 A,
+    # bleibt er selbst begrenzt, denn er zieht nicht mehr als zuvor. Die Klimaanlage geht nur
+    # weiter in Richtung mehr, bis die Einspeisung unter der Schwelle liegt; sie flackert nicht.
     base = SCENARIOS["klima-auto-vorrang"]
     taper_s, duration_s = 65 * 60, 125 * 60
     pv = _klima_pv_w(CAR_EXPORT_W, KLIMA_BASE_W)
@@ -237,17 +230,19 @@ async def test_klima_self_limiting_car_lets_the_offset_flicker(cfg, tmp_path) ->
         checks=Checks(()),
     )
     result = await run_scenario(scenario, cfg, tmp_path)
-    after = [(t, new) for t, _, new in _changes(result) if t >= taper_s]
-    assert len(after) >= 4  # hoch und zurück, mehr als einmal
-    assert {new for _, new in after} <= {0.0, -0.5, -1.0}
-    assert sum(1 for _, new in after if new == 0.0) >= 2
+    assert result.failures == []
+    after = [(t, old, new) for t, old, new in _changes(result) if t >= taper_s]
+    assert len(after) >= 2  # die Klimaanlage nimmt den Überschuss
+    assert all(new < old for _, old, new in after)  # nur Richtung mehr, nie zurück
+    taper = base.start + timedelta(seconds=taper_s)
+    codes = {d.codes[0] for d in result.decisions if d.actuator == KLIMA_ACTUATOR and d.ts >= taper}
+    assert codes == {"thermal_more"}
     evcs = wallbox_actuator(EVCS_BOX)
     currents = [
         d.requested
         for d in result.decisions
-        if d.actuator == evcs
-        and d.kind is CommandKind.CURRENT
-        and d.ts >= base.start + timedelta(seconds=taper_s)
+        if d.actuator == evcs and d.kind is CommandKind.CURRENT and d.ts >= taper
     ]
-    assert {7.0, 8.0} <= set(currents)
+    assert len(currents) <= 2  # kein Wechsel im Gleichtakt mit der Klimaanlage
+    assert _export_w(result) < KLIMA_MORE_W
     assert result.samples[-1].cars[EGOLF].current_a == 6.0

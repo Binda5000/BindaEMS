@@ -92,8 +92,8 @@ trägt den Zeitpunkt ihrer Bestätigung durch das Echo, meist eine Sekunde nach 
 von der Tabelle des Plans:
 
 - ``klima-auto-vorrang`` speist ohne Versatz 4 kW statt 1,5 kW ein (``CAR_EXPORT_W``): Mit 1,5 kW
-  startet der e-Golf an der EVCS nie (6 A auf zwei Phasen sind 2760 W). Wie die Klimaanlage dann
-  neben dem bei „Laden aus“ gehaltenen Auto zurückgeht (Ruling R21), hält eine Abwandlung in
+  startet der e-Golf an der EVCS nie (6 A auf zwei Phasen sind 2760 W). Dass die Klimaanlage
+  dann den Überschuss nimmt (Ruling R23 c), hält eine Abwandlung in
   ``tests/integration/test_sim_scenarios.py`` fest.
 - ``klima-spitze`` steht auf „Nur Laden“, damit der Akku die schwere Last nicht deckt, und die
   Last kommt zu Beginn einer Viertelstunde (``PEAK_LOAD_S``): Der 15-min-Wächter rechnet je

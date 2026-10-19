@@ -402,7 +402,8 @@ class RegulationLink:
         ist: Der Adapter trennt sie nach ``stale_after_s`` ohne gültiges Paket. Die Betriebsart
         liest ``thermal_mode``; steuerbar ist der Aktor nach seinen Fähigkeiten (ohne Eintrag
         nicht), gesperrt, wenn ``locks`` für ihn Gründe nennt. Die Zeit ist die der Safety-Schicht
-        in Sekunden; sie läuft monoton.
+        in Sekunden; sie läuft monoton. Die Leistung ist ``thermal.<name>.power_w`` (``ok_number``,
+        sonst unbekannt).
         """
         mono_now = snow.timestamp()
         found: dict[str, ThermalInputs] = {}
@@ -417,6 +418,7 @@ class RegulationLink:
                 controllable=able is not None and able.controllable,
                 locked=bool(locks.get(actuator)),
                 mono_now=mono_now,
+                power_w=ok_number(snap, f"thermal.{name}.power_w"),
             )
         return found
 

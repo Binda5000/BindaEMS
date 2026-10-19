@@ -112,6 +112,8 @@ class ThermalInputs:
     - ``controllable``: Der Aktor ``thermal.<name>`` ist steuerbar (seine Fähigkeiten).
     - ``locked``: Der Aktor ist gesperrt (Gründe in den Sperren).
     - ``mono_now``: die Zeit der Safety-Schicht in Sekunden; sie läuft monoton (``AnchoredClock``)
+    - ``power_w``: ihre elektrische Leistung jetzt in W (``thermal.<name>.power_w``); ``None``
+      heißt unbekannt
     """
 
     fresh: bool
@@ -119,6 +121,7 @@ class ThermalInputs:
     controllable: bool
     locked: bool
     mono_now: float
+    power_w: float | None = None
 
 
 @dataclass(frozen=True)
@@ -278,7 +281,9 @@ class Regulation:
         unbekannt ist), den SOC, als Schwelle ``soc_end_pct`` des gültigen Slots (ohne Slot oder
         Wert ``strategy.battery_soc_pct``) und dessen Hinweis (ohne Slot ``neutral``), den Druck des
         15-min-Wächters (``PeakGuard.pressure``) und der Überlast (über ``NONE``) und den offenen
-        Wunsch der Autos (``unmet_surplus_w``), alles aus diesem Zyklus. Steuerbar ist sie nur,
+        Wunsch der Autos (``unmet_surplus_w``), alles aus diesem Zyklus. Ein Auto bei „Laden aus“
+        zählt darin nur, wenn die Einspeisung und die Leistung aller Klimaanlagen mit Eingaben
+        (unbekannt: 0) seine Startleistung erreichen (Ruling R23 c). Steuerbar ist sie nur,
         wenn der Aktor steuerbar und nicht gesperrt ist; DEGRADED kommt aus ``inputs.degraded``.
 
         Ein Befehl ``setpoint_offset`` mit dem Grund des Wunschs kommt nur, wenn der Versatz vom
@@ -293,7 +298,8 @@ class Regulation:
         import_w = None if grid_w is None else max(0.0, grid_w)
         peak = self.peak_guard.pressure()
         phase = self.charger.overload_level() > OverloadLevel.NONE
-        unmet_w = self.charger.unmet_surplus_w()
+        thermal_w = sum(seen.power_w or 0.0 for seen in inputs.thermal.values())
+        unmet_w = self.charger.unmet_surplus_w((export_w or 0.0) + thermal_w)
         found: list[ControlCommand] = []
         health: dict[str, dict[str, Any]] = {}
         for name, device in self._thermal.items():

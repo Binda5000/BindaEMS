@@ -1397,6 +1397,42 @@ def test_regulation_cars_go_first(reg_with_klima, cfg) -> None:
     assert [(x.command.value, x.command.reasons) for x in found] == [(0.0, ("thermal_cars",))]
 
 
+def held_car_offsets(cfg: Config, power_w: float | None) -> list:
+    """Die Klimaanlage steht bei einer Stufe mehr (−0,5 K); dann steckt der e-Golf in PV an, bei
+    1500 W Einspeisung. Die Regelung hält ihn bei „Laden aus“ (jedes Urteil nimmt an); die
+    Klimaanlage meldet ``power_w``. Zurück kommen ihre Befehle ab dann mit ihrer Sekunde."""
+    regulation = Regulation(cfg, HardLimits.from_config(cfg), started=T0)
+    klima_run(regulation, cfg, 0, 600)
+    found = []
+    for s in range(610, 1300, 10):
+        charge = inputs(
+            cfg,
+            s=s,
+            evcs_obs=evcs(charging=False, power_w=0.0),
+            grid_obs=grid(grid_w=-1500.0, soc=95.0),
+            intent=INTENT,
+        )
+        seen = ThermalInputs(True, "kuehlen", True, False, charge.now.timestamp(), power_w)
+        given = RegulationInputs(charge, thermal={"klima": seen})
+        for x in regulation.step(given):
+            regulation.note_verdict(x.command, accepted(x.command))
+        for x in regulation.thermal_step(given):
+            regulation.note_verdict(x.command, accepted(x.command))
+            found.append((s, x.command.value, x.command.reasons))
+    return found
+
+
+def test_regulation_a_held_car_goes_first_only_with_its_start_power(cfg) -> None:  # R23 c
+    # Der e-Golf braucht für den Start 6 A auf zwei Phasen, 2760 W. Erreichen Einspeisung (1500 W)
+    # und die Leistung der Klimaanlage (1300 W) das, könnte er starten, sobald sie weicht: eine
+    # Stufe zurück (thermal_cars).
+    assert held_car_offsets(cfg, 1300.0)[0] == (620, 0.0, ("thermal_cars",))
+    # Mit 1200 W oder unbekannter Leistung (0) startet er nie: Die Klimaanlage nimmt den
+    # Überschuss und geht nach 600 s eine Stufe weiter.
+    assert held_car_offsets(cfg, 1200.0) == [(1200, -1.0, ("thermal_more",))]
+    assert held_car_offsets(cfg, None) == [(1200, -1.0, ("thermal_more",))]
+
+
 def test_regulation_without_grid_power_knows_no_export(reg_with_klima, cfg) -> None:
     found = klima_run(reg_with_klima, cfg, 0, 700, grid_w=None)
     assert [x.inputs for _, x in found] == [

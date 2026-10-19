@@ -19,7 +19,7 @@ from tests.unit.core.control.charge_helpers import (
 from tests.unit.core.safety.conftest import make_ctx
 
 from bindaems.core.control.charge_modes import Effective
-from bindaems.core.control.charging import CarView, ChargeController
+from bindaems.core.control.charging import FOLLOW_HOLD_S, RAMP_UP_S, CarView, ChargeController
 from bindaems.core.control.executor import WriteResult
 from bindaems.core.control.peak_guard import NO_LIMITS, PeakLimits
 from bindaems.core.control.phase_guard import OverloadLevel
@@ -2688,33 +2688,51 @@ def test_unmet_surplus_counts_cars_that_follow_their_command(cfg) -> None:  # Ru
     assert unmet_after(cfg, ChargeMode.PV, current=8.0, on=True, evcs_obs=at_7_a) == 4140.0
 
 
-def held_off_unmet(cfg, steps: int, **kw) -> list[float]:
-    """``unmet_surplus_w`` je Schritt, ohne Überschuss; jedes Urteil der Safety-Schicht nimmt an."""
+def held_off_unmet(cfg, steps: int, spare_w: float, **kw) -> list[float]:
+    """``unmet_surplus_w(spare_w)`` je Schritt, ohne Überschuss; jedes Urteil der Safety-Schicht
+    nimmt an."""
     c = controller(cfg)
     found: list[float] = []
     for s in range(steps):
         accept(c, c.step(inputs(cfg, s=s, grid_obs=grid(grid_w=0.0), **kw)))
-        found.append(c.unmet_surplus_w())
+        found.append(c.unmet_surplus_w(spare_w))
     return found
 
 
-def test_unmet_surplus_counts_a_car_the_regulation_holds_off(cfg) -> None:  # Ruling R18
+def test_unmet_surplus_counts_a_car_the_regulation_holds_off(cfg) -> None:  # Rulings R18, R23 c
     # Ohne Überschuss hält die Regelung den e-Golf aus („Laden aus“): Ab ihrem Urteil folgt er
-    # mit 0 W, er wartet auf Überschuss, und offen ist sein Höchststrom. Vorher ist der Befehl
-    # unbekannt.
+    # mit 0 W, er wartet auf Überschuss, und offen ist sein Höchststrom, sobald Einspeisung und
+    # Klimaanlage (``spare_w``) seine Startleistung erreichen: 6 A auf zwei Phasen, 2760 W. Vorher
+    # ist der Befehl unbekannt.
     off = evcs(charging=False, power_w=0.0)
     kw = {"intent": egolf_in(ChargeMode.PV), "evcs_obs": off}
-    assert held_off_unmet(cfg, 2, **kw) == [0.0, 7360.0]
-    # Ebenso der Tesla am Wall Connector (drei Phasen, 16 A, 11040 W).
+    assert held_off_unmet(cfg, 2, 2760.0, **kw) == [0.0, 7360.0]
+    # Ebenso der Tesla am Wall Connector (drei Phasen, 5 … 16 A, 3450 … 11040 W).
     present = {("vehicle.tesla", CURRENT): 16.0, ("vehicle.tesla", CHARGING): False}
     alone = TESLA_PLUGGED | {"evcs_obs": evcs(connected=False)}
-    assert held_off_unmet(cfg, 2, present=present, **alone) == [0.0, 11040.0]
+    assert held_off_unmet(cfg, 2, 3450.0, present=present, **alone) == [0.0, 11040.0]
+
+
+def test_unmet_surplus_leaves_out_a_held_car_that_could_never_start(cfg) -> None:  # Ruling R23 c
+    # Reichen Einspeisung und Klimaanlage nicht für die Startleistung, könnte das Auto mit dem
+    # Überschuss nie starten: Es zählt nicht, und die Klimaanlage darf den Überschuss nehmen.
+    off = evcs(charging=False, power_w=0.0)
+    kw = {"intent": egolf_in(ChargeMode.PV), "evcs_obs": off}
+    assert held_off_unmet(cfg, 2, 2759.0, **kw) == [0.0, 0.0]
+    assert held_off_unmet(cfg, 2, 0.0, **kw) == [0.0, 0.0]
+    present = {("vehicle.tesla", CURRENT): 16.0, ("vehicle.tesla", CHARGING): False}
+    alone = TESLA_PLUGGED | {"evcs_obs": evcs(connected=False)}
+    assert held_off_unmet(cfg, 2, 3449.0, present=present, **alone) == [0.0, 0.0]
+    # Ein Auto, das lädt, zählt ohne Rücksicht darauf.
+    at_8_a = evcs(charging=True, power_w=3680.0)
+    assert unmet_after(cfg, ChargeMode.PV, current=8.0, on=True, evcs_obs=at_8_a) == 3680.0
 
 
 def test_unmet_surplus_leaves_out_a_tesla_that_stopped_by_itself(cfg) -> None:  # Ruling R18
     # Beim Tesla ist „Laden an“ des Aktors der Ladezustand des Autos, kein Befehl: Hört er von
     # selbst auf (in der App, ohne „Complete“), begrenzt er sich, auch wenn die Regelung ihn
-    # startete.
+    # startete. Bis RAMP_UP_S nach dem Start ist das vom Anlauf nicht zu unterscheiden: Dann folgt
+    # er (Ruling R23 a).
     c = controller(cfg)
     surplus = grid(grid_w=-12000.0)
     started = c.step(inputs(cfg, present=AT_TESLA, grid_obs=surplus, **TESLA_CHARGING))
@@ -2728,6 +2746,8 @@ def test_unmet_surplus_leaves_out_a_tesla_that_stopped_by_itself(cfg) -> None:  
         "tesla_obs": tesla(plugged=True),
     }
     c.step(inputs(cfg, s=1, present=stopped, grid_obs=surplus, **by_itself))
+    assert c.unmet_surplus_w() == 11040.0
+    c.step(inputs(cfg, s=int(RAMP_UP_S), present=stopped, grid_obs=surplus, **by_itself))
     assert c.unmet_surplus_w() == 0.0
     # Ohne eigenen Befehl ebenso: Der Ladezustand allein ist kein „Laden aus“.
     fresh = controller(cfg)
@@ -2758,6 +2778,109 @@ def test_unmet_surplus_leaves_out_a_tesla_that_stopped_by_itself(cfg) -> None:  
 )
 def test_unmet_surplus_leaves_out_cars_that_limit_themselves(cfg, mode, current, on, obs) -> None:
     assert unmet_after(cfg, mode, current=current, on=on, evcs_obs=obs) == 0.0
+
+
+def starting_unmet(cfg, seconds: int) -> list[float]:
+    """``unmet_surplus_w`` je Sekunde: Der e-Golf in PV wartet 5 s ohne Überschuss bei „Laden
+    aus“, dann kommen 4 kW Einspeisung. Die Regelung startet ihn nach ihrer Wartezeit; die EVCS
+    meldet weiter „aus“, und er zieht nichts. Jedes Urteil der Safety-Schicht nimmt an."""
+    c = controller(cfg)
+    found: list[float] = []
+    for s in range(seconds):
+        surplus = grid(grid_w=0.0 if s < 5 else -4000.0)
+        given = {"intent": egolf_in(ChargeMode.PV), "evcs_obs": evcs(charging=False, power_w=0.0)}
+        accept(c, c.step(inputs(cfg, s=s, grid_obs=surplus, present=at_evcs(6.0, False), **given)))
+        found.append(c.unmet_surplus_w(4000.0))
+    return found
+
+
+def test_unmet_surplus_counts_a_starting_car_during_its_ramp_up(cfg) -> None:  # Ruling R23 a
+    # Die Regelung startet den e-Golf bei 125 s (8 A, „Laden an“). Bis RAMP_UP_S danach folgt er
+    # seinem Befehl, obwohl die EVCS noch „aus“ meldet und er nichts zieht: Der offene Wunsch
+    # bleibt bei seinem Höchststrom, die Klimaanlage bekommt keine Lücke für einen Schritt.
+    found = starting_unmet(cfg, 260)
+    start = 125
+    assert set(found[1:start]) == {7360.0}  # „Laden aus“, und 4 kW reichen für den Start
+    assert set(found[start : start + int(RAMP_UP_S)]) == {7360.0}
+    # Danach ist „Laden an“ des Aktors weiter unbekannt: Der Befehl gilt als unbekannt.
+    assert set(found[start + int(RAMP_UP_S) + 1 :]) == {0.0}
+
+
+def following_unmet(cfg, power_w, current_a, seconds: int, *, raise_at: int | None = None):
+    """``unmet_surplus_w`` je Sekunde für den e-Golf in PV bei „Laden an“ an der EVCS.
+
+    ``power_w`` und ``current_a`` (Ist-Strom des Aktors) sind Funktionen der Sekunde. Die Regelung
+    hat keinen eigenen Wert, außer ``raise_at``: Dann nimmt die Safety-Schicht nach dem Schritt
+    dieser Sekunde ihre Erhöhung von 8 auf 12 A an.
+    """
+    c = controller(cfg)
+    found: list[float] = []
+    for s in range(seconds):
+        obs = evcs(charging=True, power_w=power_w(s))
+        c.step(
+            inputs(
+                cfg,
+                s=s,
+                intent=egolf_in(ChargeMode.PV),
+                evcs_obs=obs,
+                present=at_evcs(current_a(s), True),
+            )
+        )
+        found.append(c.unmet_surplus_w())
+        if s == raise_at:
+            for amps in (8.0, 12.0):
+                command = Command("wallbox.evcs", CURRENT, amps)
+                c.note_verdict(command, Verdict(command, Outcome.ACCEPTED, amps, (), True))
+    return found
+
+
+def test_unmet_surplus_judges_a_car_with_a_hold_time(cfg) -> None:  # Ruling R23 b
+    # Der e-Golf folgt 8 A mit 3680 W; ab 10 s zieht er nur 6 A (2760 W, er regelt ab). Das Urteil
+    # „begrenzt sich selbst“ gilt erst nach FOLLOW_HOLD_S; bis dahin zählt er mit seiner Leistung.
+    hold = int(FOLLOW_HOLD_S)
+    back = 10 + hold + 50  # ab hier zieht er wieder 8 A
+    found = following_unmet(
+        cfg, lambda s: 2760.0 if 10 <= s < back else 3680.0, lambda s: 8.0, back + hold + 10
+    )
+    assert set(found[:10]) == {3680.0}
+    assert set(found[10 : 10 + hold]) == {4600.0}
+    assert set(found[10 + hold : back + hold]) == {0.0}
+    assert set(found[back + hold :]) == {3680.0}  # und zurück, wieder nach der Haltezeit
+    # Ein einzelner Ausreißer ändert das Urteil nicht: Er zählt mit seiner Leistung weiter.
+    blip = following_unmet(cfg, lambda s: 2760.0 if s == 10 else 3680.0, lambda s: 8.0, hold + 20)
+    assert blip[10] == 4600.0
+    assert set(blip[:10] + blip[11:]) == {3680.0}
+
+
+def test_unmet_surplus_keeps_a_self_limited_car_at_its_limit(cfg) -> None:  # Ruling R23 b
+    # Der e-Golf begrenzt sich bei 8 A auf 6 A (2760 W). Senkt die Regelung danach auf 7 A, weil
+    # die Klimaanlage den Überschuss nimmt, folgt er scheinbar wieder (eine Stufe darunter); er
+    # zieht aber nicht mehr als zuvor und bleibt selbst begrenzt. Erst wenn er wieder bis auf eine
+    # Stufe zieht, wo er sich begrenzte (7 A bei 8 A), folgt er, nach der Haltezeit.
+    hold = int(FOLLOW_HOLD_S)
+    lowered, more = 10 + hold + 10, 4 * hold
+    found = following_unmet(
+        cfg,
+        lambda s: 3680.0 if s < 10 else 3220.0 if s >= more else 2760.0,
+        lambda s: 8.0 if s < lowered else 7.0,
+        5 * hold + 10,
+    )
+    assert set(found[:10]) == {3680.0}
+    assert set(found[10 : 10 + hold]) == {4600.0}
+    assert set(found[10 + hold : more + hold]) == {0.0}  # auch bei 7 A mit 2760 W
+    assert set(found[more + hold :]) == {4140.0}
+
+
+def test_unmet_surplus_starts_the_hold_after_the_ramp_up_of_a_raise(cfg) -> None:  # R23 a, b
+    # Der e-Golf folgt 8 A mit 3680 W; nach dem Schritt bei 10 s nimmt die Safety-Schicht die
+    # Erhöhung auf 12 A an, er bleibt bei 3680 W. Während des Anlaufs folgt er, danach läuft die
+    # Haltezeit: selbst begrenzt erst RAMP_UP_S + FOLLOW_HOLD_S nach der Erhöhung.
+    ramp, hold = int(RAMP_UP_S), int(FOLLOW_HOLD_S)
+    found = following_unmet(
+        cfg, lambda s: 3680.0, lambda s: 8.0 if s < 10 else 12.0, ramp + hold + 30, raise_at=10
+    )
+    assert set(found[: 10 + ramp + hold]) == {3680.0}
+    assert set(found[10 + ramp + hold + 1 :]) == {0.0}
 
 
 def test_unmet_surplus_needs_a_regulated_point_and_a_step(cfg) -> None:
