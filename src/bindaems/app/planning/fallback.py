@@ -86,8 +86,10 @@ def fallback_vehicles(inputs: PlanInputs) -> dict[str, list[float]]:
        Rest, mindestens ``min_w``. Je Slot laden alle Autos zusammen höchstens
        ``grid_max_import_w`` plus PV minus Haus.
 
-    Regel R2 hält das von selbst ein, denn der Überschuss nach P50 ist mindestens der nach P25.
-    Was nicht in den Horizont passt, bleibt Fehlmenge.
+    Regel R2 hält das meist von selbst ein, denn der Überschuss nach P50 ist mindestens der nach
+    P25. Nicht immer: Einen Überschuss unter ``min_w`` rechnet R2 (``grid_allowed_kwh``) dem Auto
+    als PV an, der Ersatzplan lädt dort aber nicht; bei vielen solchen Slots lädt er mehr aus dem
+    Netz als ``grid_allowed_kwh`` erlaubt. Was nicht in den Horizont passt, bleibt Fehlmenge.
     """
     count = len(inputs.slots)
     pv_left = [max(0.0, slot.pv_w - slot.load_w) for slot in inputs.slots]
