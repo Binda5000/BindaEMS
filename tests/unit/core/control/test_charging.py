@@ -2610,6 +2610,28 @@ def test_plan_expiry_before_latest_start_stops_with_the_times_of_pv(cfg) -> None
     assert c.health()[1]["planned"]["state"] == "surplus"
 
 
+@pytest.mark.parametrize(("l1", "urgent"), [(18.0, False), (40.0, True)], ids=["cap", "fuse"])
+def test_peak_cap_lowering_with_firm_demand_is_urgent_only_when_the_fuse_demands_it(
+    cfg, l1, urgent
+) -> None:
+    # Der e-Golf lädt „Geplant“ mit 16 A, der Plan will 4600 W (10 A), der 15-min-Wächter kappt
+    # auf 3680 W (8 A). Dringend ist die Senkung nur, wenn schon die Sicherung allein mit dem
+    # Höchststrom unter den Ist-Strom senkte (bei 40 A auf L1 sind 9 A frei); die Plan-Leistung
+    # zählt dafür nicht.
+    situation = inputs(
+        cfg,
+        intent=planned_for(departure="18:00"),
+        egolf_obs=egolf_soc(60.0),
+        evcs_obs=AT_16_A,
+        present=at_evcs(16.0, True),
+        grid_obs=grid(l1=l1, l2=18.0, grid_w=7360.0),
+    )
+    found = controller(cfg).step(situation, PeakLimits(caps_w={"egolf": 3680.0}), slot(egolf=4600))
+    current = next(x.command for x in found if x.command.kind is CURRENT)
+    assert (current.actuator, current.value, current.urgent) == ("wallbox.evcs", 8.0, urgent)
+    assert "peak_guard" in current.reasons
+
+
 @pytest.mark.parametrize(
     ("l1", "urgent"),
     [(2.0, False), (36.0, True)],
