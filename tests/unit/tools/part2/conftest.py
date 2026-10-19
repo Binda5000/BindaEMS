@@ -4,6 +4,7 @@ mit Victron-Anlage, Sitzungen damit und ein Ersatz für main."""
 from __future__ import annotations
 
 import asyncio
+import time
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from functools import partial
@@ -12,6 +13,7 @@ from typing import Any, Final
 import httpx
 import pytest
 from pydantic import SecretStr
+from tests.unit.core.adapters.conftest import FakeDatagram
 
 from bindaems.core.actuators.evcs import EvcsActuator
 from bindaems.core.actuators.tesla import TeslaActuator
@@ -23,7 +25,8 @@ from bindaems.core.adapters.victron_mqtt import (
 )
 from bindaems.core.control.actuator import Confirmation
 from bindaems.core.state.store import StateStore
-from bindaems.shared.config import Config, Secrets
+from bindaems.shared.coe import CoeValue, decode, encode
+from bindaems.shared.config import CoeChannel, Config, Secrets
 from bindaems.shared.control import CommandKind, CommandValue
 from bindaems.shared.domain import SignalKind, Snapshot, Value
 from bindaems.shared.numbers import finite_number
@@ -33,6 +36,7 @@ from bindaems.tools.part2.evcs import DEFAULT_TIMINGS, EvcsTimings
 from bindaems.tools.part2.session import Part2Session
 from bindaems.tools.part2.tesla import DEFAULT_TIMINGS as TESLA_TIMINGS
 from bindaems.tools.part2.tesla import TeslaTimings
+from bindaems.tools.part2.thermal import ThermalSession, ThermalTimings, build_thermal_session
 from bindaems.tools.part2.victron import DEFAULT_TIMINGS as VICTRON_TIMINGS
 from bindaems.tools.part2.victron import VictronTimings
 from bindaems.tools.verify_checks import Finding
@@ -719,3 +723,144 @@ def fake_part(monkeypatch: pytest.MonkeyPatch, evcs_session) -> FakePart:
     monkeypatch.setattr(verify_part2, "run_tesla", run_tesla)
     monkeypatch.setattr(verify_part2, "run_victron", run_victron)
     return fake
+
+
+CMI_HOST: Final = "192.168.81.92"  # das C.M.I. der Beispielkonfiguration
+
+
+class FakeCmi:
+    """C.M.I. und UVR hinter dem Ersatzport aus Task 3 (``FakeDatagram``) für den Teil Klimaanlage.
+
+    ``open`` ist die ``PortFactory`` des Adapters. Ab dem Öffnen schickt das C.M.I. alle
+    ``every_s`` ein Paket mit den Werten der Empfangstabelle (``values``, als Zahlen in ihrer
+    Einheit bzw. Wahrheitswerte; das Echo kommt aus ``echo_k``). Ein Versatz an Knoten 60,
+    Ausgang 1 wird zum Echo, solange ``echoes`` gilt, und sofort mit einem Paket gemeldet. Mit
+    ``uvr_timeout_s`` fällt das Echo so lange nach dem letzten empfangenen Versatz auf 0.
+    ``omit`` nennt Werte, die das C.M.I. nicht sendet. ``offsets`` sind alle empfangenen Versätze
+    in K mit ihrer Zeit (``time.monotonic``).
+    """
+
+    def __init__(
+        self,
+        cfg: Config,
+        *,
+        every_s: float = 0.05,
+        echoes: bool = True,
+        uvr_timeout_s: float | None = None,
+        omit: Sequence[str] = (),
+    ) -> None:
+        device = cfg.thermal.devices["klima"]
+        self.receive = device.receive.channels()
+        self.own = (device.own_node, device.own_output)
+        self.every_s, self.echoes, self.uvr_timeout_s = every_s, echoes, uvr_timeout_s
+        self.omit = set(omit)
+        self.values: dict[str, float | bool] = {
+            "actual_c": 22.5,
+            "setpoint_c": 23.0,
+            "power_kw": 1.2,
+            "cmd_on": True,
+            "cooling": True,
+            "venting": False,
+            "heating": False,
+            "running": True,
+        }
+        self.echo_k = 0.0
+        self.offsets: list[tuple[float, float]] = []
+        self.ports: list[FakeDatagram] = []
+        self._task: asyncio.Task[None] | None = None
+
+    async def open(
+        self, on_datagram: Callable[[bytes, tuple[str, int]], None], port: int
+    ) -> FakeDatagram:
+        cmi = self
+
+        class _Port(FakeDatagram):
+            def sendto(self, data: bytes, addr: tuple[str, int]) -> None:
+                super().sendto(data, addr)
+                cmi.received(data)
+
+            def close(self) -> None:
+                super().close()
+                if cmi._task is not None:
+                    cmi._task.cancel()
+
+        opened = _Port(on_datagram)
+        self.ports.append(opened)
+        self._task = asyncio.create_task(self._report())
+        return opened
+
+    def received(self, data: bytes) -> None:
+        for value in decode(data):
+            if (value.node, value.output) == self.own and value.analog:
+                self.offsets.append((time.monotonic(), value.raw / 10))
+                if self.echoes:
+                    self.echo_k = value.raw / 10
+                    asyncio.get_running_loop().call_soon(self.send)
+
+    def sent_k(self) -> list[float]:
+        """Die empfangenen Versätze in K, ohne Zeit."""
+        return [value for _, value in self.offsets]
+
+    def send(self) -> None:
+        port = self.ports[-1]
+        if port.closed:
+            return
+        values = [self._value(key, channel) for key, channel in self.receive.items()]
+        packet = [value for value in values if value is not None]
+        if packet:
+            port.on_datagram(encode(packet), (CMI_HOST, 5442))
+
+    def _value(self, key: str, channel: CoeChannel) -> CoeValue | None:
+        if key in self.omit:
+            return None
+        if channel.digital is not None:
+            return CoeValue(channel.node, channel.digital, False, 43, int(bool(self.values[key])))
+        assert channel.analog is not None
+        number = self.echo_k if key == "offset_active_k" else float(self.values[key])
+        unit = channel.unit if channel.unit is not None else 1
+        factor = 10.0 if unit in (1, 7) else float(channel.scale or 1.0)
+        return CoeValue(channel.node, channel.analog, True, unit, round(number * factor))
+
+    async def _report(self) -> None:
+        while True:
+            last = self.offsets[-1][0] if self.offsets else None
+            if (
+                self.uvr_timeout_s is not None
+                and last is not None
+                and time.monotonic() - last >= self.uvr_timeout_s
+            ):
+                self.echo_k = 0.0
+            self.send()
+            await asyncio.sleep(self.every_s)
+
+
+@pytest.fixture
+def thermal_session(cfg: Config) -> Callable[..., tuple[ThermalSession, FakeCmi]]:
+    """Baut eine Sitzung des Teils Klimaanlage mit einem ``FakeCmi`` und einem Betreiber, der
+    antwortet (``answers`` in ihrer Reihenfolge; ``asked`` sammelt die Fragen). Die übrigen
+    Schlüsselwörter gehen an das ``FakeCmi``; ``unattended`` wie ``--yes``."""
+
+    def build(
+        *,
+        answers: Sequence[bool] = (),
+        asked: list[str] | None = None,
+        unattended: bool = False,
+        **cmi_options: Any,
+    ) -> tuple[ThermalSession, FakeCmi]:
+        cmi = FakeCmi(cfg, **cmi_options)
+        replies = iter(answers)
+
+        def ask(question: str) -> bool:
+            if asked is not None:
+                asked.append(question)
+            return next(replies)
+
+        session = build_thermal_session(
+            cfg, "klima", ask=ask, unattended=unattended, port_factory=cmi.open, poll_s=0.01
+        )
+        return session, cmi
+
+    return build
+
+
+FAST_THERMAL: Final = ThermalTimings(values_s=1.0, echo_s=0.5, timeout_s=0.6)

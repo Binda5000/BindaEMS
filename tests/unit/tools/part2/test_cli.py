@@ -3,23 +3,26 @@
 import asyncio
 import json
 import signal
-from collections.abc import AsyncIterator
+import socket
+from collections.abc import AsyncIterator, Awaitable, Callable
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 from unittest.mock import Mock
 
 import pytest
 import yaml
 from pydantic import SecretStr
-from tests.unit.tools.part2.conftest import FakeEvcs, FakePart
+from tests.unit.tools.part2.conftest import FAST_THERMAL, FakeCmi, FakeEvcs, FakePart
 
 from bindaems.core.adapters.victron_mqtt import MqttMessage
-from bindaems.shared.config import Secrets, load_config
+from bindaems.shared.config import Config, Secrets, load_config
 from bindaems.shared.control import CommandKind
 from bindaems.shared.domain import SignalKind
 from bindaems.shared.timeutil import LOCAL_TZ
 from bindaems.tools import verify_part2
 from bindaems.tools.part2.session import Part2Session
+from bindaems.tools.part2.thermal import ThermalSession, build_thermal_session, run_thermal
 from bindaems.tools.part2.victron import DEFAULT_TIMINGS as VICTRON_TIMINGS
 from bindaems.tools.part2.victron import VictronTimings, run_victron
 from bindaems.tools.verify_checks import Finding
@@ -864,4 +867,174 @@ def test_venus_os_stays_unknown_without_an_answer(
     config = config_with_portal(tmp_path)
     out = tmp_path / "bericht.md"
     assert main(["--config", str(config), "--punkt", "evcs", "--yes", "--out", str(out)]) == 0
+    assert "Venus OS" not in out.read_text(encoding="utf-8")
+
+
+# Punkt thermal (Plan 6a, Entscheidung 14)
+
+THERMAL = ["--config", "deploy/config.example.yaml", "--punkt", "thermal"]
+
+
+@pytest.fixture
+def thermal_cli(monkeypatch: pytest.MonkeyPatch, cfg: Config) -> Callable[..., list[FakeCmi]]:
+    """Ersetzt in ``verify_part2`` den Port der Klimaanlage durch ein ``FakeCmi`` und die Fristen
+    des Teils durch kurze; der Port gilt als frei. Ohne Secrets in der Umgebung: Der Punkt braucht
+    keine. ``setup(before=…)`` lässt vor dem Teil eine Handlung an der Sitzung laufen, etwa um
+    einen Versatz zu senden und dann abzubrechen. Die Liste füllt sich mit den ``FakeCmi``."""
+    monkeypatch.delenv("BINDAEMS_INTERNAL_TOKEN", raising=False)
+    monkeypatch.setattr(verify_part2, "port_busy", lambda port: False)
+    cmis: list[FakeCmi] = []
+
+    def setup(
+        *,
+        before: Callable[[ThermalSession], Awaitable[object]] | None = None,
+        **cmi_options: Any,
+    ) -> list[FakeCmi]:
+        def build(
+            config: Config, name: str, *, ask: Callable[[str], bool], unattended: bool = False
+        ) -> ThermalSession:
+            cmi = FakeCmi(config, **cmi_options)
+            cmis.append(cmi)
+            return build_thermal_session(
+                config, name, ask=ask, unattended=unattended, port_factory=cmi.open, poll_s=0.01
+            )
+
+        async def run_part(
+            session: ThermalSession, config: Config, name: str, **kwargs: object
+        ) -> list[Finding]:
+            if before is not None:
+                await before(session)
+            return await run_thermal(session, config, name, timings=FAST_THERMAL)
+
+        monkeypatch.setattr(verify_part2, "build_thermal_session", build)
+        monkeypatch.setattr(verify_part2, "run_thermal", run_part)
+        monkeypatch.setitem(verify_part2.PART_RESTORE_S, "thermal", FAST_THERMAL.echo_s)
+        return cmis
+
+    return setup
+
+
+def test_thermal_runs_without_secrets_and_ends_with_zero(tmp_path: Path, thermal_cli) -> None:
+    cmis = thermal_cli()
+    out = tmp_path / "bericht.md"
+    assert main([*THERMAL, "--yes", "--out", str(out)]) == 0
+    report = out.read_text(encoding="utf-8")
+    assert "Prüfprotokoll Teil 2 – Klimaanlage" in report
+    assert "| Punkt | thermal |" in report
+    assert "| Gerät | Klimaanlage |" in report
+    assert "| 17.2-9 | Versatz +0,5 K | OK |" in report
+    assert "| 17.2-9 | Timeout der UVR | INFO | übersprungen (--yes) |" in report
+    assert "| 17.2-9 | Am Ende: Versatz 0 | OK |" in report
+    assert cmis[0].sent_k()[-1] == 0.0
+    assert cmis[0].ports[0].closed
+
+
+def test_thermal_has_its_own_default_report(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, thermal_cli
+) -> None:
+    thermal_cli()
+    config = Path("deploy/config.example.yaml").resolve()
+    monkeypatch.chdir(tmp_path)
+    assert main(["--config", str(config), "--punkt", "thermal", "--yes"]) == 0
+    (report,) = tmp_path.glob("docs/verification/*-pruefprotokoll-teil2-thermal.md")
+    assert report.exists()
+
+
+def test_thermal_device_option_picks_the_device(
+    tmp_path: Path, thermal_cli, capsys: pytest.CaptureFixture[str]
+) -> None:
+    thermal_cli()
+    out = tmp_path / "bericht.md"
+    assert main([*THERMAL, "--geraet", "wp", "--yes", "--out", str(out)]) == 2
+    assert "Keine Klimaanlage „wp“ in thermal.devices." in capsys.readouterr().err
+    assert main([*THERMAL, "--geraet", "klima", "--yes", "--out", str(out)]) == 0
+
+
+def test_thermal_without_a_device_returns_2(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    raw = yaml.safe_load(Path("deploy/config.example.yaml").read_text(encoding="utf-8"))
+    del raw["thermal"]
+    config = tmp_path / "config.yaml"
+    config.write_text(yaml.safe_dump(raw), encoding="utf-8")
+    assert main(["--config", str(config), "--punkt", "thermal", "--yes"]) == 2
+    assert "Keine Klimaanlage in thermal.devices." in capsys.readouterr().err
+
+
+def test_thermal_on_a_busy_port_names_the_core(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    built: list[object] = []
+    monkeypatch.setattr(verify_part2, "build_thermal_session", lambda *a, **k: built.append(a))
+    raw = yaml.safe_load(Path("deploy/config.example.yaml").read_text(encoding="utf-8"))
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as core:
+        core.bind(("0.0.0.0", 0))  # noqa: S104 - wie der core: alle Schnittstellen
+        port = core.getsockname()[1]
+        raw["thermal"]["devices"]["klima"]["listen_port"] = port
+        config = tmp_path / "config.yaml"
+        config.write_text(yaml.safe_dump(raw), encoding="utf-8")
+        assert main(["--config", str(config), "--punkt", "thermal", "--yes"]) == 2
+    assert capsys.readouterr().err.strip() == f"Port {port} ist belegt. Läuft der core noch?"
+    assert built == []  # ohne Port keine Sitzung und nichts gesendet
+
+
+def test_declined_thermal_start_sends_nothing(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    thermal_cli,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    cmis = thermal_cli()
+    monkeypatch.setattr("builtins.input", lambda prompt: "n")
+    assert main([*THERMAL, "--out", str(tmp_path / "bericht.md")]) == 1
+    assert "über CoE einen Sollwertversatz von +0,5 K" in capsys.readouterr().out
+    assert cmis == []
+
+
+def test_ctrl_c_in_the_thermal_part_sends_zero(tmp_path: Path, thermal_cli) -> None:
+    async def offset_then_abort(session: ThermalSession) -> None:
+        await session.wait_for(lambda snap: session.echo(snap) is not None, 1.0)
+        assert await session.send_and_confirm(0.5, FAST_THERMAL.echo_s) is not None
+        raise KeyboardInterrupt
+
+    cmis = thermal_cli(before=offset_then_abort)
+    out = tmp_path / "bericht.md"
+    assert main([*THERMAL, "--yes", "--out", str(out)]) == 130
+    report = out.read_text(encoding="utf-8")
+    assert "| 17.2-9 | Abbruch | WARNUNG |" in report
+    assert "| 17.2-9 | Am Ende: Versatz 0 | OK |" in report
+    assert 0.5 in cmis[0].sent_k()
+    assert cmis[0].sent_k()[-1] == 0.0
+    assert cmis[0].echo_k == 0.0
+
+
+def test_an_error_in_the_thermal_part_sends_zero(tmp_path: Path, thermal_cli) -> None:
+    async def offset_then_fail(session: ThermalSession) -> None:
+        await session.wait_for(lambda snap: session.echo(snap) is not None, 1.0)
+        assert await session.send_and_confirm(0.5, FAST_THERMAL.echo_s) is not None
+        raise RuntimeError("kaputt")
+
+    cmis = thermal_cli(before=offset_then_fail)
+    out = tmp_path / "bericht.md"
+    assert main([*THERMAL, "--yes", "--out", str(out)]) == 1
+    report = out.read_text(encoding="utf-8")
+    assert "| 17.2-9 | Interner Fehler des Werkzeugs | FEHLER | RuntimeError: kaputt |" in report
+    assert cmis[0].sent_k()[-1] == 0.0
+
+
+def test_thermal_never_asks_the_cerbo(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, thermal_cli
+) -> None:
+    thermal_cli()
+    asked: list[object] = []
+
+    async def venus_os(*args: object) -> str:
+        asked.append(args)
+        return "v3.80"
+
+    monkeypatch.setattr(verify_part2, "_venus_os", venus_os)
+    config = config_with_portal(tmp_path)
+    out = tmp_path / "bericht.md"
+    assert main(["--config", str(config), "--punkt", "thermal", "--yes", "--out", str(out)]) == 0
+    assert asked == []
     assert "Venus OS" not in out.read_text(encoding="utf-8")

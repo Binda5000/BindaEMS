@@ -692,8 +692,8 @@ def test_simulator_section_matches_the_tool(capsys: pytest.CaptureFixture[str]) 
     assert documented == known - {"--help"}
     scenarios = re.findall(r"^\| `([a-z0-9-]+)` \|", section, re.MULTILINE)
     assert scenarios == list(SCENARIOS)
-    assert len(SCENARIOS) == 33 and "achtundzwanzig" not in section  # die Zahl im Text zieht mit
-    assert section.count("dreiunddreißig") == 3
+    assert len(SCENARIOS) == 39 and "dreiunddreißig" not in section  # die Zahl im Text zieht mit
+    assert section.count("neununddreißig") == 3
 
 
 def test_operations_guide_describes_operating_states_and_the_watchdog() -> None:

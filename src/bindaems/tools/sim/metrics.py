@@ -155,6 +155,27 @@ class Forgotten:
 
 
 @dataclass(frozen=True)
+class ThermalSample:
+    """Die Klimaanlage nach einer Sekunde (Plan 6a): Betriebsart, Leistung in W, der Versatz, den
+    die UVR anwendet (``active_k``, ihr Echo), die Versätze, die sie in dieser Sekunde vom core
+    bekam (``received_k``), und ob das C.M.I. schweigt (``silent``).
+
+    Aus der Regelung dieser Sekunde: Wunsch in Stufen und Grund (``wish``, ``reason``; ohne Stand
+    ``None``) und ob der 15-min-Wächter Druck macht (``peak_pressure``: Zustand ``exceeded`` oder
+    eine verlangte Senkung über 0, wie ``PeakGuard.pressure``).
+    """
+
+    mode: str
+    power_w: float
+    active_k: float
+    received_k: tuple[float, ...] = ()
+    silent: bool = False
+    wish: int | None = None
+    reason: str | None = None
+    peak_pressure: bool = False
+
+
+@dataclass(frozen=True)
 class Sample:
     """Die Anlage nach Sekunde ``t`` des Laufs.
 
@@ -164,9 +185,10 @@ class Sample:
 
     Dazu, alle in W: ``grid_w`` die Netzleistung (Summe der Phasen, positiv beim Bezug), ``pv_w``
     die PV-Leistung des Schritts (im Inselbetrieb 0) und ``house_w`` die Hauslast ohne die
-    Wallboxen. ``override_w`` ist der Override des Netz-Sollwerts, der im Schritt galt, und
-    ``override_age_s`` die Sekunden seit seinem letzten Schreiben; ohne Override sind beide
-    ``None``.
+    Wallboxen, mit der Klimaanlage. ``override_w`` ist der Override des Netz-Sollwerts, der im
+    Schritt galt, und ``override_age_s`` die Sekunden seit seinem letzten Schreiben; ohne Override
+    sind beide ``None``. ``thermal`` ist die Klimaanlage, wenn das Szenario sie am CoE-Adapter hat
+    (``Scenario.thermal``), sonst ``None``.
     """
 
     t: int
@@ -180,6 +202,7 @@ class Sample:
     house_w: float = 0.0
     override_w: float | None = None
     override_age_s: float | None = None
+    thermal: ThermalSample | None = None
 
 
 @dataclass(frozen=True)

@@ -81,6 +81,25 @@ ohne Stopp mit voller Leistung weiter (Review Focus 4). Grund ist der Abstand zu
 60-min-Laufs: Mit 45 min Plan erreicht der Tesla das Ziel erst bei rund 3530 s und stoppt bei
 rund 3545 s, knapp eine Minute vor dem Ende; „lädt danach nicht mehr“ sähe kaum etwas. Mit 30 min
 stoppt er bei rund 3215 s, gut sechs Minuten vor dem Ende.
+
+Die Szenarien für die Klimaanlage (Plan 6a, Entscheidung 15) hängen die Klimaanlage des Modells an
+den echten CoE-Adapter (``Scenario.thermal``) und lassen sonst nur EVCS und Fahrzeuge live; kein
+Auto steckt zu Beginn an. Das Haus rauscht dort nur mit ± ``KLIMA_NOISE_W``, die PV ist konstant:
+So hängt jede Stufe an der Regel und nicht am Zufall. Die Prüfungen lesen, was die UVR im Modell
+bekam (``ThermalSample.received_k``), und den Stand der Regelung je Sekunde; eine Entscheidung
+trägt den Zeitpunkt ihrer Bestätigung durch das Echo, meist eine Sekunde nach dem Paket an die UVR.
+„Richtung mehr“ heißt beim Kühlen ein negativer, beim Heizen ein positiver Versatz. Abweichungen
+von der Tabelle des Plans:
+
+- ``klima-auto-vorrang`` speist ohne Versatz 4 kW statt 1,5 kW ein (``CAR_EXPORT_W``): Mit 1,5 kW
+  startet der e-Golf an der EVCS nie (6 A auf zwei Phasen sind 2760 W). Wie die Klimaanlage dann
+  neben dem bei „Laden aus“ gehaltenen Auto zurückgeht (Ruling R21), hält eine Abwandlung in
+  ``tests/integration/test_sim_scenarios.py`` fest.
+- ``klima-spitze`` steht auf „Nur Laden“, damit der Akku die schwere Last nicht deckt, und die
+  Last kommt zu Beginn einer Viertelstunde (``PEAK_LOAD_S``): Der 15-min-Wächter rechnet je
+  Viertelstunde.
+- ``klima-teuer-heizen`` sagt „weniger“ mit dem Plan je Viertelstunde (``_every_quarter``), ohne
+  PV am Winterabend.
 """
 
 from __future__ import annotations
@@ -92,9 +111,11 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import KW_ONLY, dataclass
 from datetime import UTC, datetime, timedelta
 from functools import partial
+from itertools import pairwise
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final
 
+from bindaems.core.adapters.coe import WATCH_S
 from bindaems.core.control.fleet import GUEST
 from bindaems.shared.control import (
     VICTRON,
@@ -103,6 +124,7 @@ from bindaems.shared.control import (
     GuestIntent,
     Intent,
     VehicleIntent,
+    thermal_actuator,
     vehicle_actuator,
     wallbox_actuator,
 )
@@ -114,6 +136,7 @@ from bindaems.shared.plan import (
     BatteryIntentKind,
     IntentPlan,
     IntentPlanSlot,
+    ThermalHint,
 )
 from bindaems.shared.timeutil import LOCAL_TZ, SLOT, slot_start
 from bindaems.tools.sim.cars import TESSIE_DELAY_S, Evcs
@@ -125,12 +148,23 @@ from bindaems.tools.sim.metrics import (
     cars_w,
     shown_number,
 )
-from bindaems.tools.sim.model import CERBO, EVCS, GRID, GUEST_CAR, TESSIE, TWC, PlantModel
+from bindaems.tools.sim.model import (
+    CERBO,
+    CMI_EVERY_S,
+    EVCS,
+    GRID,
+    GUEST_CAR,
+    TESSIE,
+    TWC,
+    AcMode,
+    AirConditioner,
+    PlantModel,
+)
 
 if TYPE_CHECKING:
     from bindaems.core.runtime import CoreRuntime
     from bindaems.shared.decisions import Decision
-    from bindaems.tools.sim.metrics import Sample
+    from bindaems.tools.sim.metrics import Sample, ThermalSample
     from bindaems.tools.sim.runner import SimResult
 
 Action = Callable[[PlantModel, "CoreRuntime"], None]  # ein Ereignis
@@ -334,6 +368,8 @@ class Scenario:
       (Plan 3c, Präzisierung 15)
     - ``vehicles``: je Fahrzeug Werte für ``VehicleConfig``, die die Konfiguration des Laufs
       überschreiben, etwa ``{"tesla": {"charge_limit_sync": True}}`` (Plan 4b)
+    - ``thermal``: Die Klimaanlage des Modells hängt am echten CoE-Adapter und ist live (Plan 6a);
+      ohne bleibt sie ohne Verbindung, aus und ohne Leistung
     """
 
     name: str
@@ -350,6 +386,7 @@ class Scenario:
     control: Mapping[str, Any] = MappingProxyType({})
     roundtrip_pct: float = ROUNDTRIP_PCT
     vehicles: Mapping[str, Mapping[str, Any]] = MappingProxyType({})
+    thermal: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -475,7 +512,8 @@ class _Plan:
 
     ``slots`` nennt je Slot den Versatz in Viertelstunden ab der Viertelstunde, in der das
     Szenario beginnt (``start``), die Absicht und ``budget_kw``; ``vehicles`` die Ladeleistung je
-    Fahrzeug in W, gleich in jedem Slot (Plan 4b; ohne Angabe kein Auto). Der Plan entsteht in der
+    Fahrzeug in W, gleich in jedem Slot (Plan 4b; ohne Angabe kein Auto), ``thermal`` den Hinweis
+    für die Klimaanlage, gleich in jedem Slot (Plan 6a). Der Plan entsteht in der
     Sekunde ``at_s`` des Laufs: Das ist sein ``created_at`` und seine ``id``, und er gilt
     ``valid_s`` danach. Beginn und Sekunde kennt ein Ereignis nicht; das Szenario gibt sie mit
     (``_plan``).
@@ -492,6 +530,7 @@ class _Plan:
     valid_s: int
     grid_charge_allowed: bool = True
     vehicles: Mapping[str, int] = MappingProxyType({})
+    thermal: ThermalHint = "neutral"
 
     def plan(self) -> IntentPlan:
         created = self.start + timedelta(seconds=self.at_s)
@@ -507,6 +546,7 @@ class _Plan:
                     intent=intent,
                     budget_kw=budget_kw,
                     vehicles=dict(self.vehicles),
+                    thermal=self.thermal,
                 )
                 for offset, intent, budget_kw in self.slots
             ],
@@ -530,6 +570,7 @@ def _plan(
     valid_s: int,
     grid_charge_allowed: bool = True,
     vehicles: Mapping[str, int] = MappingProxyType({}),
+    thermal: ThermalHint = "neutral",
 ) -> tuple[int, Action]:
     """Das Ereignis ``_Plan`` in der Sekunde ``at_s`` eines Szenarios ab ``start``."""
     plan = _Plan(
@@ -539,6 +580,7 @@ def _plan(
         valid_s=valid_s,
         grid_charge_allowed=grid_charge_allowed,
         vehicles=vehicles,
+        thermal=thermal,
     )
     return at_s, plan
 
@@ -550,10 +592,11 @@ def _every_quarter(
     *,
     budget_kw: float | None = None,
     vehicles: Mapping[str, int] = MappingProxyType({}),
+    thermal: ThermalHint = "neutral",
 ) -> tuple[tuple[int, Action], ...]:
     """Pläne wie von der app: einer zu Beginn, dann zu jeder Viertelstunde des Laufs, je mit
-    ``PLAN_SLOTS`` Slots ``intent`` (und ``budget_kw``, Ladeleistung ``vehicles``) ab seiner
-    Viertelstunde, gültig für ``PLAN_VALID_S``."""
+    ``PLAN_SLOTS`` Slots ``intent`` (und ``budget_kw``, Ladeleistung ``vehicles``, Hinweis
+    ``thermal``) ab seiner Viertelstunde, gültig für ``PLAN_VALID_S``."""
     into = int((start - slot_start(start)).total_seconds())
     seconds = sorted({0, *range((QUARTER_S - into) % QUARTER_S, duration_s, QUARTER_S)})
     return tuple(
@@ -563,6 +606,7 @@ def _every_quarter(
             tuple(((into + t) // QUARTER_S + k, intent, budget_kw) for k in range(PLAN_SLOTS)),
             valid_s=PLAN_VALID_S,
             vehicles=vehicles,
+            thermal=thermal,
         )
         for t in seconds
     )
@@ -623,15 +667,18 @@ def _weather(
     *,
     pv: Callable[[int], float] = _dark,
     l1: Callable[[int], float] = _dark,
+    each: Callable[[int], float] = _dark,
+    noise_w: float = HOUSE_NOISE_W,
 ) -> tuple[tuple[int, Action], ...]:
-    """Je Sekunde ``t`` ein ``_Weather``: PV ``pv(t)`` und die Hauslast, auf L1 mit ``l1(t)``."""
+    """Je Sekunde ``t`` ein ``_Weather``: PV ``pv(t)`` und die Hauslast mit dem Rauschen
+    ± ``noise_w`` je Phase, auf jeder Phase mit ``each(t)``, auf L1 dazu mit ``l1(t)``."""
     rng = random.Random(f"haus-{seed}")  # noqa: S311 - Saat der Simulation, kein Geheimnis
 
-    def house() -> float:
-        return HOUSE_W + rng.uniform(-HOUSE_NOISE_W, HOUSE_NOISE_W)
+    def house(t: int) -> float:
+        return HOUSE_W + each(t) + rng.uniform(-noise_w, noise_w)
 
     return tuple(
-        (t, _Weather(pv(t), (house() + l1(t), house(), house()))) for t in range(duration_s)
+        (t, _Weather(pv(t), (house(t) + l1(t), house(t), house(t)))) for t in range(duration_s)
     )
 
 
@@ -2847,6 +2894,588 @@ def _tesla_ladelimit() -> Scenario:
     )
 
 
+# --- Szenarien 34 bis 39: Klimaanlage (Plan 6a, Entscheidung 15) -------------------------------
+
+KLIMA: Final = "klima"  # Schlüssel der Klimaanlage in der Beispielkonfiguration
+KLIMA_ACTUATOR: Final = thermal_actuator(KLIMA)
+KLIMA_EXPORT_W: Final = 1500.0  # Einspeisung ohne Versatz in „klima-pv-kuehlen“
+KLIMA_BASE_W: Final = 600.0  # Leistung der Klimaanlage ohne Versatz beim Kühlen
+KLIMA_HEAT_W: Final = 1500.0  # … und beim Heizen
+KLIMA_NOISE_W: Final = 20.0  # ein ruhiges Haus: Rauschen der Hauslast je Phase, ± in W
+KLIMA_STEP_K: Final = 0.5
+KLIMA_STEP_S: Final = 600  # step_interval_s der Beispielkonfiguration
+KLIMA_MORE_W: Final = 800.0  # more_above_w der Beispielkonfiguration
+KLIMA_MAX_K: Final = 3.0  # max_offset_k der Beispielkonfiguration
+CAR_EXPORT_W: Final = 4000.0  # „klima-auto-vorrang“: Einspeisung ohne Versatz, …
+CAR_PLUG_S: Final = 40 * MINUTE_S  # … ab hier steckt der e-Golf an
+MODE_SWITCH_S: Final = 2115  # „klima-moduswechsel“: Wechsel auf Heizen, nach drei Stufen
+SILENT_S: Final = 1500  # „klima-paketverlust“: ab hier schweigt das C.M.I.
+HEAT_EXPORT_W: Final = 1600.0  # „klima-spitze“: Einspeisung ohne Versatz beim Heizen, …
+# … ab hier (11:30, Beginn einer Viertelstunde) zieht das Haus PEAK_LOAD_W mehr …
+PEAK_LOAD_S: Final = 30 * MINUTE_S
+PEAK_LOAD_W: Final = 8000.0
+KLIMA_PEAK_KW: Final = 5.0  # … bei diesem Ziel des 15-min-Wächters
+OWN_USE: Final = BatteryIntent(kind=BatteryIntentKind.EIGENVERBRAUCH)
+KLIMA_STALE_S: Final = 180.0  # stale_after_s der Beispielkonfiguration
+SILENCE: Final = "erste 0 nach dem Schweigen"
+PRESSURE: Final = "Druck des 15-min-Wächters"
+KLIMA_SETTLED_S: Final = 10 * MINUTE_S  # über die letzten so vielen Sekunden mitteln die Prüfungen
+SUMMER_NOON: Final = datetime(2026, 7, 15, 12, tzinfo=LOCAL_TZ).astimezone(UTC)
+WINTER_NOON: Final = datetime(2026, 12, 15, 11, tzinfo=LOCAL_TZ).astimezone(UTC)
+WINTER_EVENING: Final = datetime(2026, 12, 15, 18, tzinfo=LOCAL_TZ).astimezone(UTC)
+
+
+@dataclass(frozen=True, slots=True)
+class _AcMode:
+    """Die Klimaanlage wechselt die Betriebsart, als Ereignis."""
+
+    mode: AcMode
+
+    def __call__(self, model: PlantModel, rt: CoreRuntime) -> None:
+        _unit(model).mode = self.mode
+
+
+@dataclass(frozen=True, slots=True)
+class _Silent:
+    """Das C.M.I. sendet keine Pakete mehr (``silent``) oder wieder, als Ereignis."""
+
+    silent: bool
+
+    def __call__(self, model: PlantModel, rt: CoreRuntime) -> None:
+        _unit(model).silent = self.silent
+
+
+@dataclass(frozen=True, slots=True)
+class _Plug:
+    """Das Fahrzeug ``vehicle`` wird an die Wallbox ``wallbox`` gesteckt, als Ereignis."""
+
+    vehicle: str
+    wallbox: str
+
+    def __call__(self, model: PlantModel, rt: CoreRuntime) -> None:
+        model.plug(self.vehicle, self.wallbox)
+
+
+def _unit(model: PlantModel) -> AirConditioner:
+    if model.thermal is None:
+        raise ValueError("Das Modell hat keine Klimaanlage der Art coe_offset.")
+    return model.thermal
+
+
+def _klima_setup(
+    model: PlantModel,
+    *,
+    mode: AcMode,
+    base_w: float,
+    soc_pct: float = 100.0,
+    charger_only: bool = False,
+) -> None:
+    """Akku und Multi, kein Auto angesteckt (``_setup``), die Klimaanlage in ``mode`` mit
+    ``base_w`` ohne Versatz, die Leistung schon eingeschwungen."""
+    _setup(model, soc_pct=soc_pct, tesla=None, egolf=None, charger_only=charger_only)
+    unit = _unit(model)
+    unit.mode, unit.base_w, unit.power_w = mode, base_w, base_w
+
+
+def _constant(watts: float) -> Callable[[int], float]:
+    def value(t: int) -> float:
+        return watts
+
+    return value
+
+
+def _kelvin(value: float) -> str:
+    """Ein Versatz für die Sätze der Prüfungen: „−0,5 K“, „0 K“, „+1 K“."""
+    value = round(value, 1) + 0.0  # aus -0.0 wird 0.0
+    return f"{'+' if value > 0 else ''}{de(value)} K"
+
+
+def _thermal_samples(result: SimResult) -> list[tuple[int, ThermalSample]]:
+    return [(s.t, s.thermal) for s in result.samples if s.thermal is not None]
+
+
+def _receipts(result: SimResult) -> list[tuple[int, float]]:
+    """Die Versätze, die die UVR vom core bekam, mit ihrer Sekunde und in ihrer Reihenfolge."""
+    return [(t, k) for t, unit in _thermal_samples(result) for k in unit.received_k]
+
+
+def _changes(result: SimResult) -> list[tuple[int, float, float]]:
+    """Je Wechsel des Versatzes an der UVR Sekunde, alter und neuer Wert; vor dem ersten Paket
+    gilt 0."""
+    changes, last = [], 0.0
+    for t, k in _receipts(result):
+        if k != last:
+            changes.append((t, last, k))
+            last = k
+    return changes
+
+
+def _sample_at(result: SimResult, t: int) -> ThermalSample | None:
+    return next((unit for at, unit in _thermal_samples(result) if at == t), None)
+
+
+def _steps(
+    sign: int, *, at_least: int, at_most: int | None = None, until_s: int | None = None
+) -> Check:
+    """Bis zur Sekunde ``until_s`` (ohne: bis zum Ende) wechselt der Versatz an der UVR nur in
+    Stufen von 0,5 K in Richtung ``sign`` (−1 oder +1), im Abstand von mindestens
+    ``KLIMA_STEP_S``, und das mindestens ``at_least``-mal, mit ``at_most`` höchstens so oft."""
+    step = sign * KLIMA_STEP_K
+
+    def find(result: SimResult) -> list[str]:
+        changes = [c for c in _changes(result) if until_s is None or c[0] < until_s]
+        found = [
+            f"Die UVR bekam bei {t} s {_kelvin(new)} nach {_kelvin(old)}, "
+            f"verlangt ist ein Schritt von {_kelvin(step)}."
+            for t, old, new in changes
+            if not math.isclose(new - old, step)
+        ]
+        found += [
+            f"Die UVR bekam bei {t} s einen Schritt nur {t - before} s nach dem vorigen, "
+            f"verlangt sind mindestens {KLIMA_STEP_S} s."
+            for (before, _, _), (t, _, _) in pairwise(changes)
+            if t - before < KLIMA_STEP_S
+        ]
+        if len(changes) < at_least or (at_most is not None and len(changes) > at_most):
+            found.append(f"Die UVR bekam {len(changes)} Schritte, verlangt sind {wanted}.")
+        return found
+
+    wanted = (
+        str(at_least)
+        if at_most == at_least
+        else f"mindestens {at_least}" + ("" if at_most is None else f", höchstens {at_most}")
+    )
+    until = "" if until_s is None else f" bis {de(until_s / MINUTE_S)} min"
+    text = (
+        f"Der Versatz an der UVR wechselt{until} nur in Schritten von {_kelvin(step)} im Abstand "
+        f"von mindestens {KLIMA_STEP_S} s, {wanted} Schritte."
+    )
+    return Check(text, find)
+
+
+def _offset_within(low_k: float, high_k: float) -> Check:
+    """Jeder Versatz, den die UVR bekommt, liegt zwischen ``low_k`` und ``high_k``."""
+
+    def find(result: SimResult) -> list[str]:
+        outside = [(t, k) for t, k in _receipts(result) if not low_k <= k <= high_k]
+        if not outside:
+            return []
+        (t, k), worst = outside[0], max(outside, key=lambda found: abs(found[1]))
+        return [
+            f"Die UVR bekam bei {t} s {_kelvin(k)} ({len(outside)} Pakete außerhalb, "
+            f"bis {_kelvin(worst[1])})."
+        ]
+
+    return Check(
+        f"Jeder Versatz an der UVR liegt zwischen {_kelvin(low_k)} und {_kelvin(high_k)}.", find
+    )
+
+
+MODE_NAMES: Final = {"kuehlen": "Kühlen", "heizen": "Heizen", "lueften": "Lüften", "aus": "Aus"}
+
+
+def _towards_more(result: SimResult) -> list[str]:
+    """Kein Versatz an der UVR gegen „mehr“ der Betriebsart dieser Sekunde: beim Kühlen höchstens
+    0, beim Heizen mindestens 0, beim Lüften und Aus genau 0. Für Szenarien ohne „weniger“."""
+    wrong = [
+        (t, unit.mode, k)
+        for t, unit in _thermal_samples(result)
+        for k in unit.received_k
+        if (unit.mode == "kuehlen" and k > 0)
+        or (unit.mode == "heizen" and k < 0)
+        or (unit.mode in {"lueften", "aus"} and k != 0)
+    ]
+    return [
+        f"Die UVR bekam bei {t} s {_kelvin(k)} beim {MODE_NAMES.get(mode, mode)} "
+        f"({len(wrong)} solche Pakete)."
+        for t, mode, k in wrong[:1]
+    ]
+
+
+TOWARDS_MORE: Final = Check(
+    "Jeder Versatz an der UVR geht in Richtung „mehr“ ihrer Betriebsart: beim Kühlen höchstens 0, "
+    "beim Heizen mindestens 0.",
+    _towards_more,
+)
+
+
+def _signed_decisions(switch_s: int) -> Check:
+    """Die Entscheidungen an die Klimaanlage verlangen vor der Sekunde ``switch_s`` höchstens 0
+    (Kühlen), ab ihr mindestens 0 (Heizen)."""
+
+    def find(result: SimResult) -> list[str]:
+        found = []
+        for d in _at(result.decisions, KLIMA_ACTUATOR):
+            t, k = _second(result, d.ts), finite_number(d.requested)
+            if k is not None and (k > 0 if t < switch_s else k < 0):
+                found.append(
+                    f"Die Regelung verlangte bei {t} s {_kelvin(k)} ({', '.join(d.codes)})."
+                )
+        return found
+
+    return Check(
+        f"Die Regelung verlangt vor {switch_s} s keinen Versatz über 0 und ab dann keinen unter 0.",
+        find,
+    )
+
+
+def _export_below(limit_w: float) -> Check:
+    """Die Einspeisung liegt über die letzten ``KLIMA_SETTLED_S`` im Mittel unter ``limit_w``."""
+
+    def find(result: SimResult) -> list[str]:
+        last = result.samples[-KLIMA_SETTLED_S:]
+        export_w = -sum(s.grid_w for s in last) / max(len(last), 1)
+        if export_w < limit_w:
+            return []
+        return [
+            f"Die Einspeisung lag in den letzten {de(KLIMA_SETTLED_S / MINUTE_S)} min im Mittel "
+            f"bei {export_w:.0f} W, verlangt unter {de(limit_w)} W."
+        ]
+
+    text = (
+        f"Die Einspeisung liegt in den letzten {de(KLIMA_SETTLED_S / MINUTE_S)} min im Mittel "
+        f"unter {de(limit_w)} W."
+    )
+    return Check(text, find)
+
+
+def _offset_at_the_end(expected_k: float) -> Check:
+    """Der Versatz, den die UVR am Ende anwendet, ist ``expected_k``."""
+
+    def find(result: SimResult) -> list[str]:
+        units = _thermal_samples(result)
+        if units and math.isclose(units[-1][1].active_k, expected_k):
+            return []
+        shown = "keinen Versatz" if not units else _kelvin(units[-1][1].active_k)
+        return [f"Die UVR wendet am Ende {shown} an, verlangt {_kelvin(expected_k)}."]
+
+    return Check(f"Die UVR wendet am Ende {_kelvin(expected_k)} an.", find)
+
+
+def _zero_in_the_second(at: Callable[[SimResult], int | None], what: str, reason: str) -> Check:
+    """In der Sekunde ``at`` (``what`` sagt, welche das ist) bekommt die UVR 0, als letztes Paket
+    dieser Sekunde; die Regelung wünscht dort 0 Stufen mit dem Grund ``reason``."""
+
+    def find(result: SimResult) -> list[str]:
+        t = at(result)
+        if t is None:
+            return [f"Den Zeitpunkt „{what}“ gab es nicht."]
+        unit = _sample_at(result, t)
+        found = []
+        if unit is None or not unit.received_k or unit.received_k[-1] != 0.0:
+            got = "nichts" if unit is None or not unit.received_k else _kelvin(unit.received_k[-1])
+            found.append(f"Die UVR bekam bei {t} s ({what}) {got}, verlangt 0 K.")
+        if unit is not None and (unit.wish, unit.reason) != (0, reason):
+            wished = (
+                "keinen Wunsch"
+                if unit.wish is None
+                else f"{unit.wish} Stufen mit {unit.reason or 'keinem Grund'}"
+            )
+            found.append(f"Die Regelung hatte bei {t} s {wished}, verlangt 0 mit {reason}.")
+        return found
+
+    return Check(f"Bei „{what}“ bekommt die UVR im selben Zyklus 0 ({reason}).", find)
+
+
+def _only_zero_from(at: Callable[[SimResult], int | None], what: str) -> Check:
+    """Ab der Sekunde ``at`` bekommt die UVR bis zum Ende nur 0."""
+
+    def find(result: SimResult) -> list[str]:
+        t = at(result)
+        if t is None:
+            return [f"Den Zeitpunkt „{what}“ gab es nicht."]
+        later = [(s, k) for s, k in _receipts(result) if s > t and k != 0.0]
+        return [f"Die UVR bekam nach {what} bei {s} s {_kelvin(k)}." for s, k in later[:1]]
+
+    return Check(f"Nach „{what}“ bekommt die UVR bis zum Ende nur 0.", find)
+
+
+def _second_of(seconds: int) -> Callable[[SimResult], int]:
+    def at(result: SimResult) -> int:
+        return seconds
+
+    return at
+
+
+def _first_zero_after(begin_s: int) -> Callable[[SimResult], int | None]:
+    """Die erste Sekunde ab ``begin_s``, in der die UVR 0 bekommt."""
+
+    def at(result: SimResult) -> int | None:
+        return next((t for t, k in _receipts(result) if t >= begin_s and k == 0.0), None)
+
+    return at
+
+
+def _first_pressure(result: SimResult) -> int | None:
+    """Die erste Sekunde, in der der 15-min-Wächter Druck macht."""
+    return next((t for t, unit in _thermal_samples(result) if unit.peak_pressure), None)
+
+
+def _zero_after_silence(result: SimResult) -> list[str]:
+    """Die erste 0 nach dem Schweigen des C.M.I. kommt ``stale_after_s`` nach dem letzten Paket,
+    höchstens ``WATCH_S`` später; das letzte Paket ging im Takt ``CMI_EVERY_S`` vor
+    ``SILENT_S``."""
+    t = _first_zero_after(SILENT_S)(result)
+    earliest = SILENT_S - CMI_EVERY_S + KLIMA_STALE_S
+    latest = SILENT_S + KLIMA_STALE_S + WATCH_S
+    wanted = f"verlangt zwischen {earliest:.0f} und {latest:.0f} s"
+    if t is None:
+        return [f"Die UVR bekam nach dem Schweigen keine 0, {wanted}."]
+    if earliest <= t <= latest:
+        return []
+    return [f"Die UVR bekam die erste 0 nach dem Schweigen bei {t} s, {wanted}."]
+
+
+def _reached_before(k: float, until_s: int) -> Check:
+    """Vor der Sekunde ``until_s`` erreicht der Versatz an der UVR ``k``."""
+
+    def find(result: SimResult) -> list[str]:
+        if any(t < until_s and math.isclose(got, k) for t, got in _receipts(result)):
+            return []
+        return [f"Die UVR bekam vor {until_s} s nie {_kelvin(k)}."]
+
+    return Check(f"Vor {de(until_s / MINUTE_S)} min bekommt die UVR {_kelvin(k)}.", find)
+
+
+def _backs_off_for_cars(from_s: int) -> Check:
+    """Ab der Sekunde ``from_s`` wird der Versatz an der UVR nur kleiner, in Schritten von 0,5 K,
+    bis 0, und jede Entscheidung, die ihn kleiner macht, nennt ``thermal_cars``."""
+
+    def find(result: SimResult) -> list[str]:
+        changes = [c for c in _changes(result) if c[0] >= from_s]
+        found = [
+            f"Die UVR bekam bei {t} s {_kelvin(new)} nach {_kelvin(old)}: Der Versatz wurde "
+            f"größer, obwohl ein Auto Vorrang hat."
+            for t, old, new in changes
+            if abs(new) > abs(old)
+        ]
+        found += [
+            f"Die UVR bekam bei {t} s {_kelvin(new)} nach {_kelvin(old)}, "
+            f"verlangt ein Schritt von {_kelvin(KLIMA_STEP_K)} zurück."
+            for t, old, new in changes
+            if abs(new) < abs(old) and not math.isclose(abs(old) - abs(new), KLIMA_STEP_K)
+        ]
+        last = 0.0
+        for d in _at(result.decisions, KLIMA_ACTUATOR):
+            k = finite_number(d.requested)
+            if k is None:
+                continue
+            t = _second(result, d.ts)
+            if t >= from_s and abs(k) < abs(last) and "thermal_cars" not in d.codes:
+                found.append(
+                    f"Die Entscheidung bei {t} s auf {_kelvin(k)} nennt {', '.join(d.codes)}, "
+                    "verlangt thermal_cars."
+                )
+            last = k
+        return found
+
+    return Check(
+        f"Ab {de(from_s / MINUTE_S)} min geht der Versatz in Schritten von 0,5 K zurück, nur "
+        "wegen der Autos (thermal_cars), und wird nie größer.",
+        find,
+    )
+
+
+def _thermal_reason(code: str) -> Check:
+    """Jede Entscheidung an die Klimaanlage nennt ``code``."""
+
+    def find(result: SimResult) -> list[str]:
+        return [
+            f"Die Entscheidung bei {_second(result, d.ts)} s nennt {', '.join(d.codes)}, "
+            f"verlangt {code}."
+            for d in _at(result.decisions, KLIMA_ACTUATOR)
+            if code not in d.codes
+        ]
+
+    return Check(f"Jede Entscheidung an die Klimaanlage nennt {code}.", find)
+
+
+def _klima_pv_w(export_w: float, base_w: float) -> float:
+    """Die PV, mit der ohne Versatz ``export_w`` eingespeist wird: Haus, Klimaanlage und das."""
+    return 3 * HOUSE_W + base_w + export_w
+
+
+def _klima_pv_kuehlen() -> Scenario:
+    """Sommer, Akku voll, Einspeisung 1,5 kW: Die Klimaanlage kühlt stufenweise stärker."""
+    start, duration_s, seed = SUMMER_NOON, HOUR_S, 34
+    pv = _constant(_klima_pv_w(KLIMA_EXPORT_W, KLIMA_BASE_W))
+    return Scenario(
+        name="klima-pv-kuehlen",
+        title="Klimaanlage nimmt PV-Überschuss beim Kühlen",
+        start=start,
+        duration_s=duration_s,
+        seed=seed,
+        setup=partial(_klima_setup, mode="kuehlen", base_w=KLIMA_BASE_W),
+        intent=_intent(),
+        live=True,
+        events=_weather(start, duration_s, seed, pv=pv, noise_w=KLIMA_NOISE_W),
+        checks=Checks(
+            (
+                _steps(-1, at_least=3),
+                _offset_within(-KLIMA_MAX_K, 0.0),
+                TOWARDS_MORE,
+                _thermal_reason("thermal_more"),
+                _export_below(KLIMA_MORE_W),
+            )
+        ),
+        thermal=True,
+    )
+
+
+def _klima_auto_vorrang() -> Scenario:
+    """Wie „klima-pv-kuehlen“, mit mehr Überschuss; nach 40 min steckt der e-Golf im Modus PV an
+    der EVCS an und bekommt den Überschuss, die Klimaanlage geht stufenweise zurück."""
+    start, duration_s, seed = SUMMER_NOON, CAR_PLUG_S + 40 * MINUTE_S, 35
+    pv = _constant(_klima_pv_w(CAR_EXPORT_W, KLIMA_BASE_W))
+    return Scenario(
+        name="klima-auto-vorrang",
+        title="Klimaanlage weicht einem Auto im Modus PV",
+        start=start,
+        duration_s=duration_s,
+        seed=seed,
+        setup=partial(_klima_setup, mode="kuehlen", base_w=KLIMA_BASE_W),
+        intent=_intent(egolf=ChargeMode.PV),
+        live=True,
+        events=(
+            *_weather(start, duration_s, seed, pv=pv, noise_w=KLIMA_NOISE_W),
+            (CAR_PLUG_S, _Plug(EGOLF, EVCS_BOX)),
+        ),
+        checks=Checks(
+            (
+                _steps(-1, at_least=3, until_s=CAR_PLUG_S),
+                _backs_off_for_cars(CAR_PLUG_S),
+                TOWARDS_MORE,
+                _charges_at_the_end(EGOLF),
+                _offset_at_the_end(0.0),
+                _export_below(KLIMA_MORE_W),
+            )
+        ),
+        thermal=True,
+    )
+
+
+def _klima_moduswechsel() -> Scenario:
+    """Kühlen bis −1,5 K, dann Heizen: Im selben Zyklus geht 0 hinaus."""
+    start, duration_s, seed = SUMMER_NOON, MODE_SWITCH_S + 15 * MINUTE_S, 36
+    pv = _constant(_klima_pv_w(KLIMA_EXPORT_W, KLIMA_BASE_W))
+    return Scenario(
+        name="klima-moduswechsel",
+        title="Betriebsart der Klimaanlage wechselt",
+        start=start,
+        duration_s=duration_s,
+        seed=seed,
+        setup=partial(_klima_setup, mode="kuehlen", base_w=KLIMA_BASE_W),
+        intent=_intent(),
+        live=True,
+        events=(
+            *_weather(start, duration_s, seed, pv=pv, noise_w=KLIMA_NOISE_W),
+            (MODE_SWITCH_S, _AcMode("heizen")),
+        ),
+        checks=Checks(
+            (
+                _steps(-1, at_least=3, until_s=MODE_SWITCH_S),
+                _zero_in_the_second(
+                    _second_of(MODE_SWITCH_S), "Wechsel auf Heizen", "thermal_mode"
+                ),
+                TOWARDS_MORE,
+                _signed_decisions(MODE_SWITCH_S),
+            )
+        ),
+        thermal=True,
+    )
+
+
+def _klima_paketverlust() -> Scenario:
+    """Kühlen mit Versatz, dann schweigt das C.M.I.: nach 180 s Versatz 0."""
+    start, duration_s, seed = SUMMER_NOON, SILENT_S + 10 * MINUTE_S, 37
+    pv = _constant(_klima_pv_w(KLIMA_EXPORT_W, KLIMA_BASE_W))
+    return Scenario(
+        name="klima-paketverlust",
+        title="Pakete der Klimaanlage bleiben aus",
+        start=start,
+        duration_s=duration_s,
+        seed=seed,
+        setup=partial(_klima_setup, mode="kuehlen", base_w=KLIMA_BASE_W),
+        intent=_intent(),
+        live=True,
+        events=(
+            *_weather(start, duration_s, seed, pv=pv, noise_w=KLIMA_NOISE_W),
+            (SILENT_S, _Silent(True)),
+        ),
+        checks=Checks(
+            (
+                _reached_before(-1.0, SILENT_S),
+                Check(
+                    f"Die erste 0 kommt {de(KLIMA_STALE_S)} s nach dem letzten Paket des C.M.I.",
+                    _zero_after_silence,
+                ),
+                _zero_in_the_second(_first_zero_after(SILENT_S), SILENCE, "thermal_stale"),
+                _only_zero_from(_first_zero_after(SILENT_S), SILENCE),
+                TOWARDS_MORE,
+            )
+        ),
+        thermal=True,
+    )
+
+
+def _klima_spitze() -> Scenario:
+    """Heizen mit +1,0 K, dann eine schwere Last: Der 15-min-Wächter reduziert, sofort 0."""
+    start, duration_s, seed = WINTER_NOON, PEAK_LOAD_S + 10 * MINUTE_S, 38
+    pv = _constant(_klima_pv_w(HEAT_EXPORT_W, KLIMA_HEAT_W))
+
+    def load(t: int) -> float:
+        return PEAK_LOAD_W / 3 if t >= PEAK_LOAD_S else 0.0
+
+    return Scenario(
+        name="klima-spitze",
+        title="Spitze droht beim Heizen",
+        start=start,
+        duration_s=duration_s,
+        seed=seed,
+        setup=partial(_klima_setup, mode="heizen", base_w=KLIMA_HEAT_W, charger_only=True),
+        intent=_intent(),
+        live=True,
+        events=_weather(start, duration_s, seed, pv=pv, each=load, noise_w=KLIMA_NOISE_W),
+        checks=Checks(
+            (
+                _reached_before(1.0, PEAK_LOAD_S),
+                _zero_in_the_second(_first_pressure, PRESSURE, "thermal_peak"),
+                _only_zero_from(_first_pressure, PRESSURE),
+                TOWARDS_MORE,
+            )
+        ),
+        control={"peak_target_kw": KLIMA_PEAK_KW},
+        thermal=True,
+    )
+
+
+def _klima_teuer_heizen() -> Scenario:
+    """Winterabend, der Plan sagt „weniger“: −0,5 K, nach 600 s −1,0 K, nicht weiter."""
+    start, duration_s, seed = WINTER_EVENING, HOUR_S, 39
+    return Scenario(
+        name="klima-teuer-heizen",
+        title="Teurer Strom beim Heizen",
+        start=start,
+        duration_s=duration_s,
+        seed=seed,
+        setup=partial(_klima_setup, mode="heizen", base_w=KLIMA_HEAT_W, soc_pct=60.0),
+        intent=_intent(),
+        live=True,
+        events=(
+            *_weather(start, duration_s, seed, noise_w=KLIMA_NOISE_W),
+            *_every_quarter(start, duration_s, OWN_USE, thermal="weniger"),
+        ),
+        checks=Checks(
+            (
+                _steps(-1, at_least=2, at_most=2),
+                _offset_within(-2 * KLIMA_STEP_K, 0.0),
+                _thermal_reason("thermal_less"),
+            )
+        ),
+        thermal=True,
+    )
+
+
 SCENARIOS: Final[dict[str, Scenario]] = {
     scenario.name: scenario
     for scenario in (
@@ -2883,5 +3512,11 @@ SCENARIOS: Final[dict[str, Scenario]] = {
         _geplant_pv(),
         _geplant_unbekannt(),
         _tesla_ladelimit(),
+        _klima_pv_kuehlen(),
+        _klima_auto_vorrang(),
+        _klima_moduswechsel(),
+        _klima_paketverlust(),
+        _klima_spitze(),
+        _klima_teuer_heizen(),
     )
 }

@@ -82,6 +82,16 @@ laufen weiter, auch ein Override am Cerbo bis zu seinem Verfall.
 einen Sollstrom aus ``FOREIGN_EVCS_A`` mit Laden an und jeden Tesla auf einen Strom aus
 ``FOREIGN_TESLA_A``.
 
+**Klimaanlage** (``thermal``, Plan 6a, Entscheidung 15): die UVR610 hinter dem C.M.I., für das
+erste Gerät der Art ``coe_offset`` in ``thermal.devices`` (``AirConditioner``). Ihre Leistung
+zählt zur Hauslast, gleich auf L1–L3. Der core erreicht sie über den CoE-Adapter mit dem
+Fake-Port des Laufs (``runner``): Ein Versatz, den der Adapter sendet, wirkt sofort und kommt
+als Echo im nächsten Paket zurück; ohne Versatz fällt die UVR nach ``UVR_TIMEOUT_S`` auf 0. Das
+C.M.I. sendet alle ``CMI_EVERY_S`` ein Paket mit den Werten der Empfangstabelle, nach einem
+empfangenen Versatz und einer neuen Betriebsart sofort; mit ``silent`` sendet es nichts. Ohne
+angeschlossenen Port (alle Szenarien ohne Klimaanlage) sendet es nie, und mit der Betriebsart
+``aus`` zieht die Anlage nichts.
+
 Den Zufall liefert das übergebene ``random.Random``; eine Uhr liest das Modell nie. Schreibaufträge
 und Befehle an Tessie gelten zur Zeit des letzten ``step``.
 """
@@ -90,8 +100,9 @@ from __future__ import annotations
 
 import math
 import random
+from collections.abc import Callable
 from datetime import datetime, timedelta
-from typing import Final
+from typing import Final, Literal
 
 import httpx
 
@@ -118,7 +129,10 @@ from bindaems.core.adapters.victron_topics import InstanceResolver, parse_messag
 from bindaems.core.state.derived import PHASES
 from bindaems.core.state.store import StateStore
 from bindaems.core.watchdog_client.status import WATCHDOG_VERSION
+from bindaems.shared.coe import CoeValue, decode, encode
 from bindaems.shared.config import (
+    CoeChannel,
+    CoeOffsetConfig,
     Config,
     EvcsConfig,
     Phase,
@@ -167,6 +181,17 @@ _PORTAL: Final = "sim"  # Portal-ID der Topics; die Abbildung des Adapters vergl
 
 # Zustände des Watchdogs (``/State``)
 WAITING, ARMED, TRIPPED = 0, 1, 2
+
+# Klimaanlage an der UVR610 (Plan 6a, Entscheidung 15)
+AcMode = Literal["kuehlen", "heizen", "lueften", "aus"]
+CMI_EVERY_S: Final = 10.0  # so oft schickt das C.M.I. ein Paket
+UVR_TIMEOUT_S: Final = 300.0  # so lange nach dem letzten Versatz fällt die UVR selbst auf 0
+AC_GAIN_W_PER_K: Final = 400.0
+AC_TAU_S: Final = 300.0
+AC_MAX_W: Final = 3000.0
+AC_ROOM_C: Final = 24.0  # Ist und Soll ohne Versatz
+DIGITAL_UNIT: Final = 43  # Einheit „Aus/Ein“ der digitalen CoE-Werte
+_COE_VALUES_MAX: Final = 16  # Werte je CoE-Paket
 
 
 def _instance(configured: int | None) -> int:
@@ -263,6 +288,147 @@ class _Watchdog:
         }
 
 
+class AirConditioner:
+    """Die Klimaanlage an der UVR610 hinter dem C.M.I. (Plan 6a, Entscheidung 15).
+
+    Stellgrößen der Szenarien:
+
+    - ``mode``: Betriebsart (``kuehlen``, ``heizen``, ``lueften``, ``aus``); eine neue schickt das
+      C.M.I. sofort
+    - ``base_w``: die Leistung ohne Versatz (beim Lüften die des Lüfters)
+    - ``gain_w_per_k``, ``tau_s``, ``max_w``: Die Leistung folgt erster Ordnung mit ``tau_s`` dem
+      Ziel ``base_w + gain_w_per_k · |Versatz in Richtung mehr|``, höchstens ``max_w``; „mehr“
+      ist beim Kühlen ein negativer, beim Heizen ein positiver Versatz. In Richtung „weniger“
+      ändert der Versatz die Leistung nicht. Aus: 0 W.
+    - ``power_w``: die Leistung jetzt; ein Szenario setzt sie zu Beginn auf ``base_w``
+    - ``actual_c``, ``base_setpoint_c``: Ist und Soll ohne Versatz
+    - ``silent``: Das C.M.I. sendet nichts mehr (Paketverlust); Versätze erreichen die UVR weiter
+
+    Messgrößen: ``active_k`` ist der Versatz, den die UVR anwendet (ihr Echo), ``received`` jeder
+    Versatz, den sie vom core bekam, mit der Zeit des letzten ``step``.
+    """
+
+    def __init__(self, name: str, cfg: CoeOffsetConfig) -> None:
+        self.name = name
+        self._cfg = cfg
+        self._channels = cfg.receive.channels()
+        self._address = (str(cfg.cmi_host), cfg.port)
+        self.mode: AcMode = "aus"
+        self.base_w = 0.0
+        self.gain_w_per_k = AC_GAIN_W_PER_K
+        self.tau_s = AC_TAU_S
+        self.max_w = AC_MAX_W
+        self.power_w = 0.0
+        self.actual_c = AC_ROOM_C
+        self.base_setpoint_c = AC_ROOM_C
+        self.silent = False
+        self.active_k = 0.0
+        self.received: list[tuple[datetime, float]] = []
+        self._deliver: Callable[[bytes, tuple[str, int]], None] | None = None
+        self._now: datetime | None = None
+        self._sent_at: datetime | None = None
+        self._sent_mode: AcMode | None = None
+        self._due = False  # ein Paket sofort: nach einem Versatz
+
+    def connect(self, deliver: Callable[[bytes, tuple[str, int]], None]) -> None:
+        """Verbindet das C.M.I. mit dem Empfang des Adapters (``deliver`` bekommt die Pakete)."""
+        self._deliver = deliver
+        self._sent_at = None
+
+    def disconnect(self) -> None:
+        self._deliver = None
+
+    def receive(self, data: bytes, addr: tuple[str, int]) -> None:
+        """Ein Paket des core an das C.M.I.: Der Versatz an ``own_node``/``own_output`` wirkt
+        sofort.
+
+        Pakete an eine andere Adresse oder ohne den Versatz ändern nichts.
+        """
+        if addr[0] != self._address[0]:
+            return
+        now = self._time()
+        for value in decode(data):
+            own = (value.node, value.output) == (self._cfg.own_node, self._cfg.own_output)
+            if own and value.analog:
+                self.active_k = value.raw / 10
+                self.received.append((now, self.active_k))
+                self._due = True
+
+    def step(self, now: datetime, seconds: float) -> None:
+        """Timeout der UVR, dann die Leistung erster Ordnung."""
+        self._now = now
+        last = self.received[-1][0] if self.received else None
+        if (
+            last is not None
+            and self.active_k != 0.0
+            and (now - last).total_seconds() >= UVR_TIMEOUT_S
+        ):
+            self.active_k = 0.0
+            self._due = True
+        target = self._target_w()
+        self.power_w += (target - self.power_w) * (1 - math.exp(-seconds / self.tau_s))
+
+    def _target_w(self) -> float:
+        if self.mode == "aus":
+            return 0.0
+        sign = {"heizen": 1.0, "kuehlen": -1.0}.get(self.mode, 0.0)
+        more_k = max(0.0, sign * self.active_k)
+        return min(self.max_w, self.base_w + self.gain_w_per_k * more_k)
+
+    def publish(self, now: datetime) -> None:
+        """Ein Paket an den Adapter, wenn fällig: alle ``CMI_EVERY_S``, nach einem Versatz und bei
+        einer neuen Betriebsart sofort; ohne Verbindung und mit ``silent`` keins."""
+        deliver = self._deliver
+        if deliver is None or self.silent:
+            return
+        due = self._due or self.mode != self._sent_mode
+        if not due and self._sent_at is not None:
+            due = (now - self._sent_at).total_seconds() >= CMI_EVERY_S
+        if not due and self._sent_at is not None:
+            return
+        self._sent_at, self._sent_mode, self._due = now, self.mode, False
+        for packet in self.packets():
+            deliver(packet, self._address)
+
+    def packets(self) -> list[bytes]:
+        """Die Werte der Empfangstabelle als CoE-Pakete, je Knoten höchstens 16 Werte."""
+        by_node: dict[int, list[CoeValue]] = {}
+        for key, channel in self._channels.items():
+            by_node.setdefault(channel.node, []).append(self._value(key, channel))
+        return [
+            encode(values[i : i + _COE_VALUES_MAX])
+            for values in by_node.values()
+            for i in range(0, len(values), _COE_VALUES_MAX)
+        ]
+
+    def _value(self, key: str, channel: CoeChannel) -> CoeValue:
+        running = self.mode != "aus"
+        flags = {
+            "cmd_on": running,
+            "running": running,
+            "cooling": self.mode == "kuehlen",
+            "venting": self.mode == "lueften",
+            "heating": self.mode == "heizen",
+        }
+        if channel.digital is not None:
+            return CoeValue(channel.node, channel.digital, False, DIGITAL_UNIT, int(flags[key]))
+        numbers = {
+            "actual_c": self.actual_c,
+            "setpoint_c": self.base_setpoint_c + self.active_k,
+            "offset_active_k": self.active_k,
+            "power_kw": self.power_w / 1000,
+        }
+        unit = channel.unit if channel.unit is not None else 1
+        factor = 10.0 if unit in (1, 7) else (channel.scale or 1.0)
+        analog = channel.analog if channel.analog is not None else 0
+        return CoeValue(channel.node, analog, True, unit, round(numbers[key] * factor))
+
+    def _time(self) -> datetime:
+        if self._now is None:
+            raise RuntimeError("PlantModel.step fehlt: Die Klimaanlage hat noch keine Zeit.")
+        return self._now
+
+
 class PlantModel:
     """Die simulierte Anlage hinter dem core.
 
@@ -296,6 +462,8 @@ class PlantModel:
     - ``override_w``, ``override_age_s``: der Override, der im Schritt gilt, und die Sekunden seit
       seinem letzten Schreiben; ohne Override beide ``None``
     - ``car_a``, ``car_w``: Strom je Phase und Ladeleistung je Fahrzeug
+    - ``thermal``: die Klimaanlage (``AirConditioner``) für das erste Gerät der Art ``coe_offset``,
+      sonst ``None``; ``thermal_w`` ihre Leistung, ohne sie 0
     """
 
     def __init__(self, cfg: Config, rng: random.Random, *, roundtrip_pct: float = 100.0) -> None:
@@ -383,6 +551,14 @@ class PlantModel:
         self._grid_w: dict[Phase, float] = dict.fromkeys(PHASES, 0.0)
         self._ac_in_w: dict[Phase, float] = dict.fromkeys(PHASES, 0.0)
         self._ac_out_w: dict[Phase, float] = dict.fromkeys(PHASES, 0.0)
+        self.thermal: AirConditioner | None = next(
+            (
+                AirConditioner(name, device)
+                for name, device in cfg.thermal.devices.items()
+                if isinstance(device, CoeOffsetConfig)
+            ),
+            None,
+        )
 
     # --- Geräte und Messgrößen ------------------------------------------------------------------
 
@@ -414,6 +590,11 @@ class PlantModel:
     def car_a(self) -> dict[str, float]:
         """Der Strom je Phase jedes Fahrzeugs im letzten Schritt."""
         return {key: car.current_a for key, car in self.cars.items()}
+
+    @property
+    def thermal_w(self) -> float:
+        """Die Leistung der Klimaanlage im letzten Schritt; ohne Klimaanlage 0."""
+        return 0.0 if self.thermal is None else self.thermal.power_w
 
     @property
     def car_w(self) -> dict[str, float]:
@@ -511,8 +692,8 @@ class PlantModel:
         """Eine Sekunde Physik bis ``now``.
 
         In dieser Reihenfolge: fremder Regler, Watchdog, Wallboxen (fällige Aufträge, dann der Strom
-        der Autos), Schlaf der Teslas, Verfall des Overrides, Lasten, ESS und Akku. Ein unbekannter
-        Ausfall ist ein ``ValueError``.
+        der Autos), Schlaf der Teslas, Verfall des Overrides, Klimaanlage, Lasten, ESS und Akku. Ein
+        unbekannter Ausfall ist ein ``ValueError``.
         """
         unknown = self.outages - OUTAGES
         if unknown:
@@ -528,6 +709,8 @@ class PlantModel:
         for tesla in self.teslas.values():
             tesla.tick(now)
         self._expire_override(now)
+        if self.thermal is not None:
+            self.thermal.step(now, STEP_S)
         self._balance()
 
     def _expire_override(self, now: datetime) -> None:
@@ -560,7 +743,9 @@ class PlantModel:
     def _balance(self) -> None:
         """Lasten, Akku und Netz je Phase, dann der SOC des Akkus."""
         volts = self._volts
-        loads = dict(zip(PHASES, self.house_w, strict=True))
+        thermal_w = self.thermal_w / 3  # die Klimaanlage gleich auf L1–L3
+        houses = zip(PHASES, self.house_w, strict=True)
+        loads = {phase: house + thermal_w for phase, house in houses}
         for wallbox in self.wallboxes.values():
             for phase, amps in wallbox.phase_a().items():
                 loads[phase] += amps * volts
@@ -651,7 +836,8 @@ class PlantModel:
         nach der ersten gelungenen Abfrage verbunden. Home Assistant ist immer verbunden und meldet
         je Fahrzeug mit ``home_entity`` ``home``, in ``away`` ``not_home``, und mit
         ``egolf_soc_known`` je Fahrzeug mit ``soc_entity`` den Ladestand, wenn er sich geändert hat
-        (``_publish_soc``).
+        (``_publish_soc``). Die Klimaanlage schickt ihre Pakete an den Adapter, wenn sie fällig sind
+        (``AirConditioner.publish``).
         """
         cerbo_up = CERBO not in self.outages
         store.set_connected(VICTRON_SOURCE, cerbo_up)
@@ -697,6 +883,8 @@ class PlantModel:
                     ts=now,
                 )
             self._publish_soc(store, now)
+        if self.thermal is not None:
+            self.thermal.publish(now)
 
     def _publish_soc(self, store: StateStore, now: datetime) -> None:
         """Der Ladestand je Fahrzeug mit ``soc_entity``, wie Home Assistant ihn meldet: als Text in

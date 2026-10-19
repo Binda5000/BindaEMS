@@ -109,7 +109,7 @@ def minutes(value_s: float) -> str:
     return de(round(value_s / 60, 1))
 
 
-def _show(finding: Finding) -> None:
+def show_finding(finding: Finding) -> None:
     """Zeigt einen Befund auf der Konsole, wie er im Bericht steht."""
     label = _LABELS[finding.status]
     print(f"{finding.item} {finding.title}: {label} – {finding.detail}")
@@ -312,7 +312,7 @@ class Part2Session:
     def record(self, finding: Finding) -> None:
         """Hält einen Befund fest (``findings``) und zeigt ihn auf der Konsole."""
         self.findings.append(finding)
-        _show(finding)
+        show_finding(finding)
 
     async def wait_for(
         self, predicate: Callable[[Snapshot], bool], timeout_s: float
@@ -452,7 +452,7 @@ class Part2Session:
                 continue
             finding = await self._restore(key, original, timeout_s)
             if finding is not None:
-                _show(finding)
+                show_finding(finding)
                 findings.append(finding)
         return findings
 

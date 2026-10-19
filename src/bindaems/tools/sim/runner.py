@@ -12,10 +12,17 @@ für den Live-Betrieb freigegeben, mit ``Scenario.victron_live`` auch Victron, d
 ``VehicleConfig``. Die Absicht schaltet dieselben Aktoren live
 (``_intent``).
 
+Mit ``Scenario.thermal`` hat der Lauf dazu den echten CoE-Adapter der Klimaanlage (Plan 6a,
+Ruling R1): Er läuft als Task mit einem Port im Prozess (``SimCoePort``), der seine Pakete der
+UVR im Modell gibt (``AirConditioner.receive``) und deren Pakete an seinen Empfang. Seine Uhr und
+seine Pausen laufen in simulierter Zeit (``SimTimer``). Die Klimaanlage ist dann live freigegeben
+und in der Absicht live.
+
 Je simulierter Sekunde:
 
 1. die Ereignisse der Sekunde
-2. ``model.step`` und ``model.publish``
+2. ``model.step``, mit Klimaanlage dann die fälligen Pausen des CoE-Adapters (``SimTimer.wake``,
+   danach ``SETTLE_ROUNDS`` Runden des Event-Loops), dann ``model.publish``
 3. ``rt.cycle_once()``
 4. zehnmal ``await asyncio.sleep(0)``: Die Befehle an Tessie laufen bis zu ihrer Antwort
 5. ``model.resolve``: Tessie beantwortet, was fällig ist
@@ -36,11 +43,14 @@ Regelung, denn der Link ruft dafür sein eigenes ``idle`` (Plan 2c-2a, Präzisie
 from __future__ import annotations
 
 import asyncio
+import heapq
+import itertools
 import random
 from collections import defaultdict
-from collections.abc import Collection, Mapping, Sequence
+from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
+from functools import partial
 from pathlib import Path
 from types import MappingProxyType
 from typing import Any, Final
@@ -48,10 +58,18 @@ from typing import Any, Final
 import httpx
 from pydantic import SecretStr
 
+from bindaems.core.adapters.coe import CoeAdapter, DatagramPort
 from bindaems.core.api.app import HealthReport
 from bindaems.core.runtime import CoreRuntime
 from bindaems.core.safety.types import Outcome, Verdict
-from bindaems.shared.config import Config, ControlConfig, EvcsConfig, Secrets, VehicleConfig
+from bindaems.shared.config import (
+    CoeOffsetConfig,
+    Config,
+    ControlConfig,
+    EvcsConfig,
+    Secrets,
+    VehicleConfig,
+)
 from bindaems.shared.control import (
     VICTRON,
     ActuatorMode,
@@ -61,14 +79,23 @@ from bindaems.shared.control import (
     GuestIntent,
     Intent,
     VehicleIntent,
+    thermal_actuator,
     vehicle_actuator,
     wallbox_actuator,
 )
 from bindaems.shared.decisions import Decision, DecisionResult
 from bindaems.shared.influx.lineprotocol import Point
 from bindaems.shared.timeutil import ManualClock
-from bindaems.tools.sim.metrics import CarSample, Forgotten, Metrics, OwnValue, Sample, measure
-from bindaems.tools.sim.model import GUEST_CAR, GUEST_MIN_A, PlantModel
+from bindaems.tools.sim.metrics import (
+    CarSample,
+    Forgotten,
+    Metrics,
+    OwnValue,
+    Sample,
+    ThermalSample,
+    measure,
+)
+from bindaems.tools.sim.model import GUEST_CAR, GUEST_MIN_A, AirConditioner, PlantModel
 from bindaems.tools.sim.scenarios import Action, Scenario
 
 HEALTH_EVERY_S: Final = 10  # so oft hält der Lauf die Gesundheit des core fest
@@ -103,6 +130,59 @@ class SimResult:
     sent: Mapping[str, datetime] = MappingProxyType({})
 
 
+class SimTimer:
+    """Uhr und Pausen des CoE-Adapters in simulierter Zeit.
+
+    ``monotonic`` sind die Sekunden seit ``start`` nach der Uhr des Laufs. ``sleep`` wartet, bis
+    ``wake`` nach dem Vorstellen der Uhr seine Zeit erreicht sieht; eine abgebrochene Pause
+    vergisst ``wake``.
+    """
+
+    def __init__(self, clock: ManualClock, start: datetime) -> None:
+        self._clock = clock
+        self._start = start
+        self._waiting: list[tuple[float, int, asyncio.Future[None]]] = []
+        self._order = itertools.count()
+
+    def monotonic(self) -> float:
+        return (self._clock.now() - self._start).total_seconds()
+
+    async def sleep(self, seconds: float) -> None:
+        future: asyncio.Future[None] = asyncio.get_running_loop().create_future()
+        heapq.heappush(self._waiting, (self.monotonic() + seconds, next(self._order), future))
+        await future
+
+    def wake(self) -> None:
+        """Beendet jede Pause, deren Zeit erreicht ist."""
+        now = self.monotonic()
+        while self._waiting and self._waiting[0][0] <= now:
+            _, _, future = heapq.heappop(self._waiting)
+            if not future.done():
+                future.set_result(None)
+
+
+class SimCoePort:
+    """Der UDP-Port des CoE-Adapters im Prozess (Ruling R1): Gesendetes geht an die UVR im Modell
+    (``AirConditioner.receive``); ``close`` trennt das C.M.I. vom Empfang des Adapters."""
+
+    def __init__(self, unit: AirConditioner) -> None:
+        self._unit = unit
+
+    def sendto(self, data: bytes, addr: tuple[str, int]) -> None:
+        self._unit.receive(data, addr)
+
+    def close(self) -> None:
+        self._unit.disconnect()
+
+
+async def _open_coe(
+    unit: AirConditioner, on_datagram: Callable[[bytes, tuple[str, int]], None], port: int
+) -> DatagramPort:
+    """Die ``PortFactory`` des Laufs: verbindet das C.M.I. des Modells mit dem Empfang."""
+    unit.connect(on_datagram)
+    return SimCoePort(unit)
+
+
 class _Discard:
     """Die Telemetrie des Laufs: Der Simulator schreibt keine Messpunkte."""
 
@@ -117,9 +197,11 @@ def sim_config(
     victron: bool = False,
     control: Mapping[str, Any] = MappingProxyType({}),
     vehicles: Mapping[str, Mapping[str, Any]] = MappingProxyType({}),
+    thermal: bool = False,
 ) -> Config:
     """Die Konfiguration des Laufs: ``data_dir`` als Ablage des core, jede EVCS und jedes
-    Fahrzeug mit Tessie für den Live-Betrieb freigegeben, mit ``victron`` auch Victron.
+    Fahrzeug mit Tessie für den Live-Betrieb freigegeben, mit ``victron`` auch Victron, mit
+    ``thermal`` auch jede Klimaanlage der Art ``coe_offset``.
 
     ``control`` überschreibt Werte von ``ControlConfig``, ``vehicles`` je Fahrzeug Werte von
     ``VehicleConfig`` (etwa ``charge_limit_sync``); ein ungültiger Wert oder ein unbekannter Name
@@ -150,12 +232,20 @@ def sim_config(
     }
     if victron:
         changes["victron"] = cfg.victron.model_copy(update={"live_allowed": True})
+    if thermal:
+        devices = {
+            name: device.model_copy(update={"live_allowed": True})
+            if isinstance(device, CoeOffsetConfig)
+            else device
+            for name, device in cfg.thermal.devices.items()
+        }
+        changes["thermal"] = cfg.thermal.model_copy(update={"devices": devices})
     return cfg.model_copy(update=changes)
 
 
 def _intent(scenario: Scenario, cfg: Config) -> Intent:
     """Die Absicht des Szenarios; mit ``live`` sind EVCS und Fahrzeuge mit Tessie live, mit
-    ``victron_live`` dazu Victron."""
+    ``victron_live`` dazu Victron, mit ``thermal`` jede Klimaanlage der Art ``coe_offset``."""
     live: dict[str, ActuatorMode] = {}
     if scenario.live:
         live = {
@@ -169,6 +259,10 @@ def _intent(scenario: Scenario, cfg: Config) -> Intent:
         }
     if scenario.victron_live:
         live[VICTRON] = ActuatorMode.LIVE
+    if scenario.thermal:
+        for name, device in cfg.thermal.devices.items():
+            if isinstance(device, CoeOffsetConfig):
+                live[thermal_actuator(name)] = ActuatorMode.LIVE
     if not live:
         return scenario.intent
     return scenario.intent.model_copy(update={"actuators": scenario.intent.actuators | live})
@@ -188,6 +282,7 @@ async def run_scenario(
         victron=scenario.victron_live,
         control=scenario.control,
         vehicles=scenario.vehicles,
+        thermal=scenario.thermal,
     )
     seconds = scenario.duration_s if duration_s is None else duration_s
     clock = ManualClock(scenario.start)
@@ -215,8 +310,12 @@ async def run_scenario(
         http_client=httpx.AsyncClient(transport=httpx.MockTransport(tessie)),
     )
     own = _own_values(rt)
+    timer = SimTimer(clock, scenario.start) if scenario.thermal else None
+    coe_tasks: list[asyncio.Task[None]] = []
     try:
         model.attach(rt.store)
+        if timer is not None:
+            coe_tasks.append(_start_coe(model, cfg, rt, timer))
         reply = rt.submit_intent(_intent(scenario, cfg))
         if reply.result == "rejected":
             raise ValueError(f"Absicht des Szenarios abgelehnt: {' '.join(reply.details)}")
@@ -228,22 +327,59 @@ async def run_scenario(
                 action(model, rt)
             now = clock.now()
             model.step(now)
+            if timer is not None:
+                timer.wake()
+                for _ in range(SETTLE_ROUNDS):
+                    await asyncio.sleep(0)
             model.publish(rt.store, now)
             rt.cycle_once()
             for _ in range(SETTLE_ROUNDS):
                 await asyncio.sleep(0)
             model.resolve(now)
-            samples.append(_sample(t, model, cfg, rt.intent(), now))
+            sample = _sample(t, model, cfg, rt.intent(), now)
+            if timer is not None:
+                thermal = _thermal_sample(model.thermal, now, rt.regulation.health())
+                sample = replace(sample, thermal=thermal)
+            samples.append(sample)
             if t % HEALTH_EVERY_S == 0:
                 health.append((t, rt.health()))
             clock.advance(1)
         decisions = _decisions(rt, scenario.start)
     finally:
+        for task in coe_tasks:
+            task.cancel()
+        await asyncio.gather(*coe_tasks, return_exceptions=True)
         await rt.shutdown()
     sent = sent_times(decisions, requests, cfg)
     metrics = measure(samples, decisions, cfg, sent=sent, own=own)
     result = SimResult(scenario, metrics, decisions, health, samples, [], MappingProxyType(sent))
     return replace(result, failures=[*metrics.failures(cfg), *scenario.checks(result)])
+
+
+def _start_coe(
+    model: PlantModel, cfg: Config, rt: CoreRuntime, timer: SimTimer
+) -> asyncio.Task[None]:
+    """Startet den CoE-Adapter der Klimaanlage des Modells als Task, mit dem Port im Prozess.
+
+    Er schreibt in den Zustandsspeicher des core und gehört zu dessen Adaptern, wie im Betrieb
+    (``CoreRuntime.build_adapters``). Ohne Klimaanlage im Modell ist das ein ``ValueError``.
+    """
+    unit = model.thermal
+    if unit is None:
+        raise ValueError("Das Szenario braucht eine Klimaanlage der Art coe_offset.")
+    device = cfg.thermal.devices[unit.name]
+    if not isinstance(device, CoeOffsetConfig):
+        raise ValueError(f"Die Klimaanlage „{unit.name}“ ist nicht der Art coe_offset.")
+    adapter = CoeAdapter(
+        unit.name,
+        device,
+        rt.store,
+        partial(_open_coe, unit),
+        clock=timer.monotonic,
+        sleep=timer.sleep,
+    )
+    rt.adapters.append(adapter)
+    return asyncio.create_task(adapter.run(), name=f"adapter:{adapter.name}")
 
 
 def _own_values(rt: CoreRuntime) -> list[OwnValue | Forgotten]:
@@ -338,9 +474,38 @@ def _sample(t: int, model: PlantModel, cfg: Config, intent: Intent | None, now: 
         cars=cars,
         grid_w=model.grid_w,
         pv_w=model.pv_now_w,
-        house_w=sum(model.house_w),
+        house_w=sum(model.house_w) + model.thermal_w,
         override_w=model.override_w,
         override_age_s=model.override_age_s,
+    )
+
+
+def _thermal_sample(
+    unit: AirConditioner | None, now: datetime, regulation: Mapping[str, Any]
+) -> ThermalSample | None:
+    """Die Klimaanlage nach der Sekunde ``now``, mit dem Stand der Regelung (``regulation``,
+    ``RegulationLink.health``) dieser Sekunde; ohne Klimaanlage ``None``."""
+    if unit is None:
+        return None
+    received: list[float] = []
+    for at, value in reversed(unit.received):
+        if at != now:
+            break
+        received.append(value)
+    received.reverse()
+    entry = regulation.get("thermal", {}).get(unit.name, {})
+    peak = regulation.get("peak", {})
+    reduction = peak.get("reduction_kw")
+    pressure = peak.get("state") == "exceeded" or (reduction is not None and reduction > 0)
+    return ThermalSample(
+        mode=unit.mode,
+        power_w=unit.power_w,
+        active_k=unit.active_k,
+        received_k=tuple(received),
+        silent=unit.silent,
+        wish=entry.get("wish"),
+        reason=entry.get("reason"),
+        peak_pressure=pressure,
     )
 
 

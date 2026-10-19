@@ -155,7 +155,7 @@ def test_the_planned_scenarios_follow_the_table_of_the_plan(cfg) -> None:
         "geplant-unbekannt": ("Geplant ohne Ladestand", evening, 7200, 32),
         "tesla-ladelimit": ("Ladelimit des Tesla an das Ziel angleichen", evening, 3600, 33),
     }
-    assert list(SCENARIOS)[-5:] == NAMES == list(table)
+    assert list(SCENARIOS)[28:33] == NAMES == list(table)
     for name, (title, start, duration_s, seed) in table.items():
         scenario = SCENARIOS[name]
         found = (scenario.title, scenario.start, scenario.duration_s, scenario.seed)

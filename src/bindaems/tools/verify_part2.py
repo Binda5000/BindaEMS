@@ -2,8 +2,9 @@
 
 Aufruf::
 
-    python -m bindaems.tools.verify_part2 --config PATH --punkt evcs|tesla|victron
-        [--wallbox NAME] [--fahrzeug NAME] [--out BERICHT.md] [--yes] [--schlafend]
+    python -m bindaems.tools.verify_part2 --config PATH --punkt evcs|tesla|victron|thermal
+        [--wallbox NAME] [--fahrzeug NAME] [--geraet NAME] [--out BERICHT.md] [--yes]
+        [--schlafend]
 
 Das Werkzeug läuft gemeinsam mit dem Betreiber an der Anlage, der core bleibt dabei im Dry-Run.
 Es nutzt dieselben Adapter und Aktoren wie der core (``part2.session``) und prüft jeden Wert mit
@@ -29,6 +30,11 @@ Live-Schaltung von Victron; geht es mitten im Lauf an, schreibt es nichts mehr. 
 solange ein Netz-Sollwert-Override steht, denn dann regelt ein anderes System, und bei einer
 Entladegrenze von 0 W, die ein abgebrochener Lauf hinterlassen haben kann. Die Entladegrenze ist
 eine gespeicherte Einstellung; das Werkzeug schreibt sie je Lauf höchstens viermal.
+``thermal`` (Plan 6a, Entscheidung 14) mit ``--geraet`` (Standard: das erste Gerät in
+``thermal.devices``): Werte der Empfangstabelle, Versatz +0,5 K mit Echo und Rückfrage zur Visu,
+Versatz 0 und der Timeout der UVR. Es bindet den CoE-Port des core und braucht darum den gestoppten
+core; ist der Port belegt, endet es mit Exitcode 2. Statt Werte wiederherzustellen sendet es am
+Ende und bei Abbruch 0. Secrets braucht es nicht, und den Cerbo fragt es nicht.
 
 Exitcode 0: kein Befund ist FEHLER. 1: ein Befund ist FEHLER, der Betreiber hat die Rückfrage vor
 dem Start verneint (dann ohne Secrets und ohne Verbindung) oder der Bericht ließ sich nicht
@@ -64,22 +70,32 @@ from bindaems.shared.config import (
     load_config,
     load_secrets,
 )
-from bindaems.shared.control import VICTRON, vehicle_actuator, wallbox_actuator
+from bindaems.shared.control import VICTRON, thermal_actuator, vehicle_actuator, wallbox_actuator
 from bindaems.shared.timeutil import LOCAL_TZ
+from bindaems.tools.coe_probe import PORT_BUSY, port_busy
 from bindaems.tools.part2.evcs import DEFAULT_TIMINGS as EVCS_TIMINGS
 from bindaems.tools.part2.evcs import run_evcs
 from bindaems.tools.part2.session import MAX_PERSISTENT_WRITES, Part2Session, build_session, minutes
 from bindaems.tools.part2.session import RESTORE_S as SESSION_RESTORE_S
 from bindaems.tools.part2.tesla import DEFAULT_TIMINGS as TESLA_TIMINGS
 from bindaems.tools.part2.tesla import NO_VEHICLE, run_tesla
+from bindaems.tools.part2.thermal import DEFAULT_TIMINGS as THERMAL_TIMINGS
+from bindaems.tools.part2.thermal import ITEM as THERMAL_ITEM
+from bindaems.tools.part2.thermal import (
+    NOT_FOUND,
+    ThermalSession,
+    build_thermal_session,
+    run_thermal,
+)
 from bindaems.tools.part2.victron import DEFAULT_TIMINGS as VICTRON_TIMINGS
 from bindaems.tools.part2.victron import run_victron
 from bindaems.tools.verify_checks import Finding, render_report
 from bindaems.tools.watchdog_probe import run_probe, timings_from_config
 
-PARTS: Final = ("evcs", "tesla", "victron")
-TITLES: Final = {"evcs": "EVCS", "tesla": "Tesla", "victron": "Victron"}
-ITEMS: Final = {"evcs": "17.2-6", "tesla": "17.2-7", "victron": "17.2-1"}  # Zeilen des Werkzeugs
+PARTS: Final = ("evcs", "tesla", "victron", "thermal")
+TITLES: Final = {"evcs": "EVCS", "tesla": "Tesla", "victron": "Victron", "thermal": "Klimaanlage"}
+# Zeilen des Werkzeugs
+ITEMS: Final = {"evcs": "17.2-6", "tesla": "17.2-7", "victron": "17.2-1", "thermal": THERMAL_ITEM}
 PROBE_ITEM: Final = "17.2-5"
 WARNINGS: Final = {
     "evcs": (
@@ -108,6 +124,12 @@ WARNINGS: Final = {
         "Es sendet nichts und liest nur den Zustand aus dem Tessie-Cache, "
         f"{minutes(TESLA_TIMINGS.sleep_total_s)} min lang. Das Fahrzeug muss dafür schon schlafen."
     ),
+    "thermal": (
+        "Das Werkzeug sendet der Klimaanlage „{device}“ über CoE einen Sollwertversatz von +0,5 K "
+        "und danach 0; die UVR verstellt dabei ihren Sollwert. Mit Rückfrage prüft es danach den "
+        "Timeout der UVR: +0,5 K, dann bis zu 5 min 30 s kein Paket. Es bindet den CoE-Port des "
+        "core; der core muss gestoppt sein. Am Ende, auch nach Strg+C, sendet es 0."
+    ),
 }
 # Frist je Wert beim letzten Wiederherstellen: ``confirm_s`` des Teils. Ein Befehl an Tessie kann
 # bis zu 60 s dauern, die 15 s der Sitzung wären dafür zu kurz.
@@ -115,6 +137,7 @@ PART_RESTORE_S: Final = {
     "evcs": EVCS_TIMINGS.confirm_s,
     "tesla": TESLA_TIMINGS.confirm_s,
     "victron": VICTRON_TIMINGS.confirm_s,
+    "thermal": THERMAL_TIMINGS.echo_s,
 }
 ABORTED: Final = "mit Strg+C abgebrochen; die übrigen Schritte fehlen"
 RESTORE_ABORTED: Final = "mit Strg+C abgebrochen; die Werte bitte von Hand prüfen"
@@ -188,19 +211,37 @@ def _vehicle(cfg: Config, name: str | None) -> str:
     return name
 
 
+def _thermal_device(cfg: Config, name: str | None) -> str:
+    """Die Klimaanlage für den Punkt ``thermal``: ``name`` oder das erste Gerät in
+    ``thermal.devices``."""
+    devices = list(cfg.thermal.devices)
+    if name is None:
+        if not devices:
+            raise ValueError("Keine Klimaanlage in thermal.devices.")
+        return devices[0]
+    if name not in devices:
+        raise ValueError(NOT_FOUND.format(name))
+    return name
+
+
 def _device(cfg: Config, args: argparse.Namespace) -> str:
-    """Das Gerät des Punkts: das Fahrzeug für ``tesla``, die Anlage für ``victron``, sonst die EVCS.
+    """Das Gerät des Punkts: das Fahrzeug für ``tesla``, die Anlage für ``victron``, die
+    Klimaanlage für ``thermal``, sonst die EVCS.
 
     Die Anlage ist der Aktor ``victron``; ``--wallbox`` und ``--fahrzeug`` gelten für sie nicht.
     """
     if args.punkt == "victron":
         return VICTRON
+    if args.punkt == "thermal":
+        return _thermal_device(cfg, args.geraet)
     return _vehicle(cfg, args.fahrzeug) if args.punkt == "tesla" else _wallbox(cfg, args.wallbox)
 
 
 def _actuator_id(punkt: str, device: str) -> str:
     if punkt == "victron":
         return device
+    if punkt == "thermal":
+        return thermal_actuator(device)
     return vehicle_actuator(device) if punkt == "tesla" else wallbox_actuator(device)
 
 
@@ -274,13 +315,17 @@ async def _venus_os(cfg: Config, secrets: Secrets, portal: str) -> str | None:
 async def _part(
     session: Part2Session,
     cfg: Config,
-    secrets: Secrets,
+    secrets: Secrets | None,
     punkt: str,
     device: str,
     asleep_check: bool,
 ) -> list[Finding]:
-    """Startet die Sitzung und führt den Teil aus."""
+    """Startet die Sitzung und führt den Teil aus; ``secrets`` fehlt nur beim Punkt ``thermal``."""
     await session.start()
+    if punkt == "thermal" and isinstance(session, ThermalSession):
+        return await run_thermal(session, cfg, device)
+    if secrets is None:
+        raise ValueError(f"Der Punkt „{punkt}“ braucht die Secrets.")
     if punkt == "evcs":
         return await run_evcs(session, cfg, device, probe=_watchdog_probe(cfg, secrets, session))
     if punkt == "tesla":
@@ -293,7 +338,7 @@ async def _part(
 def _execute(
     session: Part2Session,
     cfg: Config,
-    secrets: Secrets,
+    secrets: Secrets | None,
     punkt: str,
     device: str,
     asleep_check: bool,
@@ -331,7 +376,7 @@ def _finish(
     runner: asyncio.Runner,
     session: Part2Session,
     cfg: Config,
-    secrets: Secrets,
+    secrets: Secrets | None,
     punkt: str,
     device: str,
     outcome: _Outcome,
@@ -339,7 +384,8 @@ def _finish(
     """Nach dem Teil: wiederherstellen, Angaben für den Bericht lesen, dann die Sitzung stoppen.
 
     Das Wiederherstellen wartet je Wert so lange, wie der Teil auf eine Bestätigung wartet
-    (``PART_RESTORE_S``).
+    (``PART_RESTORE_S``). Beim Punkt ``thermal`` sendet das Wiederherstellen 0
+    (``ThermalSession.restore``), und die Version von Venus OS fragt es nicht ab.
     """
     item = ITEMS[punkt]
     try:
@@ -351,8 +397,8 @@ def _finish(
         outcome.interrupted = True
         outcome.findings.append(Finding(item, "Wiederherstellen", "fail", RESTORE_ABORTED))
     outcome.meta = _firmware(session, punkt, device)
-    portal = _portal(cfg, session)
-    if not outcome.interrupted and portal is not None:
+    portal = _portal(cfg, session) if secrets is not None else None
+    if not outcome.interrupted and portal is not None and secrets is not None:
         try:
             version = runner.run(_venus_os(cfg, secrets, portal))
         except KeyboardInterrupt:
@@ -374,6 +420,15 @@ def _firmware(session: Part2Session, punkt: str, device: str) -> dict[str, str]:
         return {}
     firmware = session.snapshot().ok(f"wallbox.{device}.firmware")
     return {"EVCS-Firmware": firmware} if isinstance(firmware, str) and firmware else {}
+
+
+def _port_taken(cfg: Config, device: str) -> bool:
+    """Ist der CoE-Port der Klimaanlage belegt (läuft der core noch)? Dann steht es auf stderr."""
+    port = cfg.thermal.devices[device].listen_port
+    if not port_busy(port):
+        return False
+    print(PORT_BUSY.format(port=port), file=sys.stderr)
+    return True
 
 
 def _write(out: Path, report: str) -> bool:
@@ -399,6 +454,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--wallbox", help="EVCS für --punkt evcs (Standard: die erste EVCS)")
     parser.add_argument(
         "--fahrzeug", help="Fahrzeug für --punkt tesla (Standard: das erste mit Tessie)"
+    )
+    parser.add_argument(
+        "--geraet", help="Klimaanlage für --punkt thermal (Standard: das erste Gerät)"
     )
     parser.add_argument(
         "--out",
@@ -437,23 +495,31 @@ def _run(args: argparse.Namespace) -> int:
     except ValueError as exc:
         print(exc, file=sys.stderr)
         return 2
+    if punkt == "thermal" and _port_taken(cfg, device):
+        return 2
     warning = WARNINGS["tesla-schlafend" if args.schlafend else punkt]
     if not args.yes and not _confirmed(warning.format(device=device)):
         print("Abgebrochen.")
         return 1
-    try:
-        secrets = load_secrets()  # erst nach der Bestätigung: ein Abbruch braucht keine Secrets
-    except ValidationError as exc:
-        print(_secrets_error(exc), file=sys.stderr)
-        return 2
-    if punkt == "tesla" and secrets.tessie_token is None:
-        print(NO_TESSIE, file=sys.stderr)  # ohne Token wäre Tessie nie erreichbar
-        return 2
+    secrets: Secrets | None = None
+    if punkt != "thermal":  # CoE braucht keine Secrets
+        try:
+            secrets = load_secrets()  # erst nach der Bestätigung: ein Abbruch braucht keine
+        except ValidationError as exc:
+            print(_secrets_error(exc), file=sys.stderr)
+            return 2
+        if punkt == "tesla" and secrets.tessie_token is None:
+            print(NO_TESSIE, file=sys.stderr)  # ohne Token wäre Tessie nie erreichbar
+            return 2
     day = datetime.now(LOCAL_TZ).date().isoformat()
     stem = f"{day}-pruefprotokoll-teil2-{punkt}" + ("-schlafend" if args.schlafend else "")
     out = args.out or Path("docs/verification") / f"{stem}.md"
     ask = _auto_yes if args.yes else _ask_operator
-    session = build_session(cfg, secrets, ask=ask, unattended=args.yes)
+    session: Part2Session
+    if secrets is None:
+        session = build_thermal_session(cfg, device, ask=ask, unattended=args.yes)
+    else:
+        session = build_session(cfg, secrets, ask=ask, unattended=args.yes)
     outcome = _execute(session, cfg, secrets, punkt, device, args.schlafend)
     label = session.limits.actuators[_actuator_id(punkt, device)].label
     meta = {"Werkzeug": "verify_part2", "Datum": day, "Punkt": punkt, "Gerät": label}
