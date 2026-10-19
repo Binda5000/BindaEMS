@@ -171,6 +171,16 @@ export const api = {
 			body: { mode },
 			schema: s.ControlReplySchema
 		}),
+	/** Ziel-SOC (ganze Zahl) und Abfahrt (`HH:MM`) für „Geplant“; `null` lässt das Feld, nie beide */
+	setTarget: (
+		vehicle: string,
+		targetSocPct: number | null,
+		departure: string | null
+	): Promise<s.ControlReply> =>
+		request('PUT', `/api/control/vehicles/${encode(vehicle)}/target`, {
+			body: { target_soc_pct: targetSocPct, departure },
+			schema: s.ControlReplySchema
+		}),
 	setBoost: (vehicle: string, on: boolean): Promise<s.ControlReply> =>
 		request('PUT', `/api/control/vehicles/${encode(vehicle)}/boost`, {
 			body: { on },

@@ -9,9 +9,11 @@
 		assignmentLabel,
 		CHARGE_MODES,
 		modeLabel,
+		parseTarget,
 		reasonLabel,
 		type BoostInfo,
-		type CardNotice
+		type CardNotice,
+		type PlannedLine
 	} from './view';
 
 	interface Props {
@@ -32,6 +34,12 @@
 		notice: CardNotice | null;
 		onMode: (mode: ChargeMode) => Promise<void>;
 		onBoost: (on: boolean) => Promise<void>;
+		/** Ziel-SOC und Abfahrt der Absicht (für „Geplant“) */
+		goal: { target_soc_pct: number; departure: string };
+		/** Zeile und Zusätze von „Geplant“ (`plannedLine`); `null` ohne */
+		planned: PlannedLine | null;
+		/** schickt Ziel-SOC und Abfahrt; `null` lässt das Feld unverändert, nie beide */
+		onTarget: (targetSocPct: number | null, departure: string | null) => Promise<void>;
 	}
 
 	let {
@@ -46,13 +54,56 @@
 		busy,
 		notice,
 		onMode,
-		onBoost
+		onBoost,
+		goal,
+		planned,
+		onTarget
 	}: Props = $props();
+
+	const uid = $props.id();
+
+	/** Eingaben, solange sie nicht übernommen sind; `null`: der Stand der Absicht */
+	let socDraft = $state<string | null>(null);
+	let departureDraft = $state<string | null>(null);
+	let badInput = $state(false);
+	let problem = $state<string | null>(null);
+
+	const socText = $derived(socDraft ?? String(goal.target_soc_pct));
+	const departureText = $derived(departureDraft ?? goal.departure);
+	// Ein geschätzter Ladestand (Health) sagt mehr als der zuletzt gemessene Wert des Signals
+	const estimated = $derived(vehicle.soc_source === 'estimated' && vehicle.soc_pct !== null);
 
 	const costText = $derived(boostCostText(boostCost, vehicle.id));
 
 	function yesNo(value: boolean | null): string {
 		return value === null ? DASH : value ? 'ja' : 'nein';
+	}
+
+	function typeSoc(event: Event) {
+		const input = event.currentTarget as HTMLInputElement;
+		socDraft = input.value;
+		badInput = input.validity.badInput;
+		problem = null;
+	}
+
+	function typeDeparture(event: Event) {
+		departureDraft = (event.currentTarget as HTMLInputElement).value;
+		problem = null;
+	}
+
+	async function applyTarget() {
+		const parsed = parseTarget(socText, departureText, goal, badInput);
+		if (!parsed.ok) {
+			problem = parsed.text;
+			return;
+		}
+		problem = null;
+		if (parsed.target_soc_pct !== null || parsed.departure !== null) {
+			await onTarget(parsed.target_soc_pct, parsed.departure);
+		}
+		socDraft = null; // danach zeigen die Felder wieder den Stand der Absicht
+		departureDraft = null;
+		badInput = false;
 	}
 
 	async function chooseMode(event: Event) {
@@ -66,8 +117,12 @@
 	<dl class="facts">
 		<dt>Ladestand</dt>
 		<dd>
-			{formatSoc(soc?.pct)}
-			{#if soc?.quality === 'stale'}<span class="muted">veraltet</span>{/if}
+			{#if estimated}
+				{formatSoc(vehicle.soc_pct)} <span class="muted">geschätzt</span>
+			{:else}
+				{formatSoc(soc?.pct)}
+				{#if soc?.quality === 'stale'}<span class="muted">veraltet</span>{/if}
+			{/if}
 		</dd>
 		<dt>Modus</dt>
 		<dd>{modeLabel(vehicle.mode)}</dd>
@@ -99,6 +154,12 @@
 			<dd>{vehicle.commands_hour}</dd>
 		{/if}
 	</dl>
+	{#if planned}
+		<div class="planned">
+			{#if planned.text !== null}<p>{planned.text}</p>{/if}
+			{#each planned.notes as note (note)}<p class="muted">{note}</p>{/each}
+		</div>
+	{/if}
 	{#if sessionLine !== null}
 		<p class="session">{sessionLine}</p>
 	{/if}
@@ -117,6 +178,40 @@
 				{boost.active ? 'Boost beenden' : 'Boost'}
 			</button>
 		</div>
+		{#if mode === 'planned'}
+			<div class="target">
+				<div class="field">
+					<label for="{uid}-soc">Ziel-SOC</label>
+					<div class="unit">
+						<input
+							id="{uid}-soc"
+							type="number"
+							min="20"
+							max="100"
+							step="1"
+							value={socText}
+							disabled={busy}
+							oninput={typeSoc}
+						/>
+						<span>%</span>
+					</div>
+				</div>
+				<div class="field">
+					<label for="{uid}-departure">Abfahrt</label>
+					<input
+						id="{uid}-departure"
+						type="time"
+						value={departureText}
+						disabled={busy}
+						oninput={typeDeparture}
+					/>
+				</div>
+				<button type="button" disabled={busy} onclick={applyTarget}>Übernehmen</button>
+			</div>
+			{#if problem}
+				<div class="note"><Notice level="error">{problem}</Notice></div>
+			{/if}
+		{/if}
 		{#if costText !== null}
 			<p class="muted cost">{costText}</p>
 		{/if}
@@ -145,6 +240,48 @@
 
 	select {
 		max-width: 100%;
+	}
+
+	.target {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: end;
+		gap: 0.75rem;
+		margin-top: 0.75rem;
+	}
+
+	.field {
+		display: grid;
+		gap: 0.25rem;
+		min-width: 0;
+	}
+
+	.field label {
+		display: block;
+	}
+
+	.unit {
+		display: flex;
+		align-items: center;
+		gap: 0.5rem;
+	}
+
+	input[type='number'] {
+		width: 6rem;
+		max-width: 100%;
+	}
+
+	input[type='time'] {
+		max-width: 100%;
+	}
+
+	.planned {
+		margin: 0.75rem 0 0;
+		overflow-wrap: anywhere;
+	}
+
+	.planned p {
+		margin: 0;
 	}
 
 	.session {

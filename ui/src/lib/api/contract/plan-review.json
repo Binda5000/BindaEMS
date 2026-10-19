@@ -186,11 +186,11 @@
       "planned": {
         "intent": "EIGENVERBRAUCH",
         "grid_charge_w": 0.0,
-        "soc_end_pct": 57.443,
-        "import_w": 0.0,
+        "soc_end_pct": 55.0,
+        "import_w": 5499.2,
         "export_w": 0.0,
-        "battery_w": 3124.737,
-        "import_cost_ct": 0.0,
+        "battery_w": 0.0,
+        "import_cost_ct": 42.594,
         "plan_id": 2,
         "source": "optimizer"
       },
@@ -207,11 +207,11 @@
       "planned": {
         "intent": "EIGENVERBRAUCH",
         "grid_charge_w": 0.0,
-        "soc_end_pct": 60.03,
-        "import_w": 0.0,
+        "soc_end_pct": 55.0,
+        "import_w": 5499.2,
         "export_w": 0.0,
-        "battery_w": 3309.993,
-        "import_cost_ct": 0.0,
+        "battery_w": 0.0,
+        "import_cost_ct": 42.594,
         "plan_id": 2,
         "source": "optimizer"
       },
@@ -228,11 +228,11 @@
       "planned": {
         "intent": "EIGENVERBRAUCH",
         "grid_charge_w": 0.0,
-        "soc_end_pct": 63.01,
-        "import_w": 0.0,
+        "soc_end_pct": 55.0,
+        "import_w": 5499.2,
         "export_w": 0.0,
-        "battery_w": 3811.291,
-        "import_cost_ct": 0.0,
+        "battery_w": 0.0,
+        "import_cost_ct": 42.594,
         "plan_id": 2,
         "source": "optimizer"
       },
@@ -249,11 +249,11 @@
       "planned": {
         "intent": "EIGENVERBRAUCH",
         "grid_charge_w": 0.0,
-        "soc_end_pct": 66.433,
-        "import_w": 0.0,
+        "soc_end_pct": 55.0,
+        "import_w": 5499.2,
         "export_w": 0.0,
-        "battery_w": 4378.632,
-        "import_cost_ct": 0.0,
+        "battery_w": 0.0,
+        "import_cost_ct": 42.594,
         "plan_id": 2,
         "source": "optimizer"
       },
@@ -268,10 +268,10 @@
   ],
   "totals": {
     "planned": {
-      "import_kwh": 0.0,
+      "import_kwh": 5.499,
       "export_kwh": 0.0,
       "grid_charge_kwh": 0.0,
-      "import_cost_eur": 0.0
+      "import_cost_eur": 1.704
     },
     "actual": {
       "import_kwh": 1.66,

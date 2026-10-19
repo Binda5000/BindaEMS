@@ -19,562 +19,653 @@
     "soc_max_pct": 100.0,
     "month_peak_kw": 5.4992,
     "power_price": true,
-    "expected_cost_eur": -0.53,
-    "baseline_cost_eur": -0.53,
+    "expected_cost_eur": 9.46,
+    "baseline_cost_eur": 9.46,
     "issues": [],
-    "vehicles": [],
+    "vehicles": [
+      {
+        "key": "tesla",
+        "name": "Tesla Model 3",
+        "wallbox": "twc",
+        "target_soc_pct": 60.0,
+        "departure_at": "2026-10-09T15:30:00+00:00",
+        "soc_start_pct": 0.0,
+        "soc_assumed": true,
+        "limit_pct": null,
+        "need_kwh": 50.0,
+        "planned_kwh": 49.999999999999986,
+        "shortfall_kwh": 0.0,
+        "expected_soc_pct": 59.99999999999998,
+        "finish_at": "2026-10-09T14:30:00+00:00",
+        "reachable": true
+      }
+    ],
     "slots": [
       {
         "start": "2026-10-09T08:00:00+00:00",
         "intent": "EIGENVERBRAUCH",
         "grid_charge_w": 0.0,
-        "soc_pct": 57.442719391763355,
+        "soc_pct": 55.00000000000001,
         "pv_w": 4364.737145078125,
         "load_w": 1240.0,
-        "import_w": 0.0,
+        "import_w": 5499.200000000001,
         "export_w": 0.0,
-        "battery_w": 3124.7371450781247,
+        "battery_w": 0.0,
         "import_ct": 30.982,
         "feed_in_ct": 7.1,
         "estimated": false,
         "budget_kw": 5.5,
-        "support_soc_pct": 20.0,
-        "ev_w": {},
+        "support_soc_pct": 51.0,
+        "ev_w": {
+          "tesla": 8623.937145078125
+        },
         "codes": [
-          "PV_LADEN"
+          "EIGENVERBRAUCH",
+          "ZIEL_SOC_ABFAHRT"
         ],
-        "text": "Akku lädt 3,1 kW aus PV-Überschuss."
+        "text": "Akku deckt den Eigenverbrauch. Tesla Model 3 lädt 8,6 kW, damit es um 17:30 Uhr 60 % hat."
       },
       {
         "start": "2026-10-09T08:15:00+00:00",
         "intent": "EIGENVERBRAUCH",
         "grid_charge_w": 0.0,
-        "soc_pct": 60.030259653963235,
+        "soc_pct": 55.00000000000001,
         "pv_w": 4549.992625,
         "load_w": 1240.0,
-        "import_w": 0.0,
+        "import_w": 5499.2,
         "export_w": 0.0,
-        "battery_w": 3309.992625,
+        "battery_w": 0.0,
         "import_ct": 30.982,
         "feed_in_ct": 7.1,
         "estimated": false,
         "budget_kw": 5.5,
-        "support_soc_pct": 20.0,
-        "ev_w": {},
+        "support_soc_pct": 51.0,
+        "ev_w": {
+          "tesla": 8809.192625
+        },
         "codes": [
-          "PV_LADEN"
+          "EIGENVERBRAUCH",
+          "ZIEL_SOC_ABFAHRT"
         ],
-        "text": "Akku lädt 3,3 kW aus PV-Überschuss."
+        "text": "Akku deckt den Eigenverbrauch. Tesla Model 3 lädt 8,8 kW, damit es um 17:30 Uhr 60 % hat."
       },
       {
         "start": "2026-10-09T08:30:00+00:00",
         "intent": "EIGENVERBRAUCH",
         "grid_charge_w": 0.0,
-        "soc_pct": 63.00968263834401,
+        "soc_pct": 55.00000000000001,
         "pv_w": 5051.2906875781255,
         "load_w": 1240.0,
-        "import_w": 0.0,
+        "import_w": 5499.2,
         "export_w": 0.0,
-        "battery_w": 3811.2906875781255,
+        "battery_w": 0.0,
         "import_ct": 30.982,
         "feed_in_ct": 7.1,
         "estimated": false,
         "budget_kw": 5.5,
-        "support_soc_pct": 20.0,
-        "ev_w": {},
+        "support_soc_pct": 51.0,
+        "ev_w": {
+          "tesla": 9310.490687578125
+        },
         "codes": [
-          "PV_LADEN"
+          "EIGENVERBRAUCH",
+          "ZIEL_SOC_ABFAHRT"
         ],
-        "text": "Akku lädt 3,8 kW aus PV-Überschuss."
+        "text": "Akku deckt den Eigenverbrauch. Tesla Model 3 lädt 9,3 kW, damit es um 17:30 Uhr 60 % hat."
       },
       {
         "start": "2026-10-09T08:45:00+00:00",
         "intent": "EIGENVERBRAUCH",
         "grid_charge_w": 0.0,
-        "soc_pct": 66.43261673213055,
+        "soc_pct": 55.00000000000001,
         "pv_w": 5618.632005,
         "load_w": 1240.0,
-        "import_w": 0.0,
+        "import_w": 5499.2,
         "export_w": 0.0,
-        "battery_w": 4378.632005,
+        "battery_w": 0.0,
         "import_ct": 30.982,
         "feed_in_ct": 7.1,
         "estimated": false,
         "budget_kw": 5.5,
-        "support_soc_pct": 20.0,
-        "ev_w": {},
+        "support_soc_pct": 51.0,
+        "ev_w": {
+          "tesla": 9877.832005
+        },
         "codes": [
-          "PV_LADEN"
+          "EIGENVERBRAUCH",
+          "ZIEL_SOC_ABFAHRT"
         ],
-        "text": "Akku lädt 4,4 kW aus PV-Überschuss."
+        "text": "Akku deckt den Eigenverbrauch. Tesla Model 3 lädt 9,9 kW, damit es um 17:30 Uhr 60 % hat."
       },
       {
         "start": "2026-10-09T09:00:00+00:00",
         "intent": "EIGENVERBRAUCH",
         "grid_charge_w": 0.0,
-        "soc_pct": 70.06283743503417,
+        "soc_pct": 55.00000000000001,
         "pv_w": 5883.793926328124,
         "load_w": 1240.0,
         "import_w": 0.0,
         "export_w": 0.0,
-        "battery_w": 4643.793926328124,
+        "battery_w": 0.0,
         "import_ct": 37.685,
         "feed_in_ct": 7.1,
         "estimated": false,
         "budget_kw": 5.5,
-        "support_soc_pct": 20.0,
-        "ev_w": {},
+        "support_soc_pct": 51.0,
+        "ev_w": {
+          "tesla": 4643.793926328124
+        },
         "codes": [
-          "PV_LADEN"
+          "EIGENVERBRAUCH"
         ],
-        "text": "Akku lädt 4,6 kW aus PV-Überschuss."
+        "text": "Akku deckt den Eigenverbrauch."
       },
       {
         "start": "2026-10-09T09:15:00+00:00",
         "intent": "EIGENVERBRAUCH",
         "grid_charge_w": 0.0,
-        "soc_pct": 73.85068992389975,
+        "soc_pct": 55.00000000000001,
         "pv_w": 6085.437184453125,
         "load_w": 1240.0,
         "import_w": 0.0,
         "export_w": 0.0,
-        "battery_w": 4845.437184453125,
+        "battery_w": 0.0,
         "import_ct": 37.685,
         "feed_in_ct": 7.1,
         "estimated": false,
         "budget_kw": 5.5,
-        "support_soc_pct": 21.0,
-        "ev_w": {},
+        "support_soc_pct": 51.0,
+        "ev_w": {
+          "tesla": 4845.437184453125
+        },
         "codes": [
-          "PV_LADEN"
+          "EIGENVERBRAUCH"
         ],
-        "text": "Akku lädt 4,8 kW aus PV-Überschuss."
+        "text": "Akku deckt den Eigenverbrauch."
       },
       {
         "start": "2026-10-09T09:30:00+00:00",
         "intent": "EIGENVERBRAUCH",
         "grid_charge_w": 0.0,
-        "soc_pct": 77.56516895259016,
+        "soc_pct": 55.00000000000001,
         "pv_w": 5991.5775388281245,
         "load_w": 1240.0,
         "import_w": 0.0,
         "export_w": 0.0,
-        "battery_w": 4751.5775388281245,
+        "battery_w": 0.0,
         "import_ct": 37.685,
         "feed_in_ct": 7.1,
         "estimated": false,
         "budget_kw": 5.5,
-        "support_soc_pct": 25.0,
-        "ev_w": {},
+        "support_soc_pct": 51.0,
+        "ev_w": {
+          "tesla": 4751.5775388281245
+        },
         "codes": [
-          "PV_LADEN"
+          "EIGENVERBRAUCH"
         ],
-        "text": "Akku lädt 4,8 kW aus PV-Überschuss."
+        "text": "Akku deckt den Eigenverbrauch."
       },
       {
         "start": "2026-10-09T09:45:00+00:00",
         "intent": "EIGENVERBRAUCH",
         "grid_charge_w": 0.0,
-        "soc_pct": 80.99840705340463,
+        "soc_pct": 55.00000000000001,
         "pv_w": 5631.8129350781255,
         "load_w": 1240.0,
         "import_w": 0.0,
         "export_w": 0.0,
-        "battery_w": 4391.8129350781255,
+        "battery_w": 0.0,
         "import_ct": 37.685,
         "feed_in_ct": 7.1,
         "estimated": false,
         "budget_kw": 5.5,
-        "support_soc_pct": 29.0,
-        "ev_w": {},
+        "support_soc_pct": 51.0,
+        "ev_w": {
+          "tesla": 4391.8129350781255
+        },
         "codes": [
-          "PV_LADEN"
+          "EIGENVERBRAUCH"
         ],
-        "text": "Akku lädt 4,4 kW aus PV-Überschuss."
+        "text": "Akku deckt den Eigenverbrauch."
       },
       {
         "start": "2026-10-09T10:00:00+00:00",
         "intent": "EIGENVERBRAUCH",
         "grid_charge_w": 0.0,
-        "soc_pct": 84.12801306407346,
+        "soc_pct": 55.00000000000001,
         "pv_w": 5243.4054603125,
         "load_w": 1240.0,
-        "import_w": 0.0,
+        "import_w": 5499.2,
         "export_w": 0.0,
-        "battery_w": 4003.4054603124996,
+        "battery_w": 0.0,
         "import_ct": 35.237,
         "feed_in_ct": 7.1,
         "estimated": false,
         "budget_kw": 5.5,
-        "support_soc_pct": 32.0,
-        "ev_w": {},
+        "support_soc_pct": 51.0,
+        "ev_w": {
+          "tesla": 9502.6054603125
+        },
         "codes": [
-          "PV_LADEN"
+          "EIGENVERBRAUCH",
+          "ZIEL_SOC_ABFAHRT"
         ],
-        "text": "Akku lädt 4,0 kW aus PV-Überschuss."
+        "text": "Akku deckt den Eigenverbrauch. Tesla Model 3 lädt 9,5 kW, damit es um 17:30 Uhr 60 % hat."
       },
       {
         "start": "2026-10-09T10:15:00+00:00",
         "intent": "EIGENVERBRAUCH",
         "grid_charge_w": 0.0,
-        "soc_pct": 86.23165379722626,
+        "soc_pct": 55.00000000000001,
         "pv_w": 3930.986267578125,
         "load_w": 1240.0,
-        "import_w": 0.0,
+        "import_w": 5499.2,
         "export_w": 0.0,
-        "battery_w": 2690.986267578125,
+        "battery_w": 0.0,
         "import_ct": 35.237,
         "feed_in_ct": 7.1,
         "estimated": false,
         "budget_kw": 5.5,
-        "support_soc_pct": 35.0,
-        "ev_w": {},
+        "support_soc_pct": 51.0,
+        "ev_w": {
+          "tesla": 8190.186267578125
+        },
         "codes": [
-          "PV_LADEN"
+          "EIGENVERBRAUCH",
+          "ZIEL_SOC_ABFAHRT"
         ],
-        "text": "Akku lädt 2,7 kW aus PV-Überschuss."
+        "text": "Akku deckt den Eigenverbrauch. Tesla Model 3 lädt 8,2 kW, damit es um 17:30 Uhr 60 % hat."
       },
       {
         "start": "2026-10-09T10:30:00+00:00",
         "intent": "EIGENVERBRAUCH",
         "grid_charge_w": 0.0,
-        "soc_pct": 89.35973348779342,
+        "soc_pct": 55.00000000000001,
         "pv_w": 5241.452985078125,
         "load_w": 1240.0,
-        "import_w": 0.0,
+        "import_w": 5499.2,
         "export_w": 0.0,
-        "battery_w": 4001.4529850781246,
+        "battery_w": 0.0,
         "import_ct": 35.237,
         "feed_in_ct": 7.1,
         "estimated": false,
         "budget_kw": 5.5,
-        "support_soc_pct": 38.0,
-        "ev_w": {},
+        "support_soc_pct": 51.0,
+        "ev_w": {
+          "tesla": 9500.652985078124
+        },
         "codes": [
-          "PV_LADEN"
+          "EIGENVERBRAUCH",
+          "ZIEL_SOC_ABFAHRT"
         ],
-        "text": "Akku lädt 4,0 kW aus PV-Überschuss."
+        "text": "Akku deckt den Eigenverbrauch. Tesla Model 3 lädt 9,5 kW, damit es um 17:30 Uhr 60 % hat."
       },
       {
         "start": "2026-10-09T10:45:00+00:00",
         "intent": "EIGENVERBRAUCH",
         "grid_charge_w": 0.0,
-        "soc_pct": 92.08315661527612,
+        "soc_pct": 55.00000000000001,
         "pv_w": 4723.8145703125,
         "load_w": 1240.0,
-        "import_w": 0.0,
+        "import_w": 5499.2,
         "export_w": 0.0,
-        "battery_w": 3483.8145703125,
+        "battery_w": 0.0,
         "import_ct": 35.237,
         "feed_in_ct": 7.1,
         "estimated": false,
         "budget_kw": 5.5,
-        "support_soc_pct": 41.0,
-        "ev_w": {},
+        "support_soc_pct": 51.0,
+        "ev_w": {
+          "tesla": 8983.0145703125
+        },
         "codes": [
-          "PV_LADEN"
+          "EIGENVERBRAUCH",
+          "ZIEL_SOC_ABFAHRT"
         ],
-        "text": "Akku lädt 3,5 kW aus PV-Überschuss."
+        "text": "Akku deckt den Eigenverbrauch. Tesla Model 3 lädt 9,0 kW, damit es um 17:30 Uhr 60 % hat."
       },
       {
         "start": "2026-10-09T11:00:00+00:00",
         "intent": "EIGENVERBRAUCH",
         "grid_charge_w": 0.0,
-        "soc_pct": 94.54821247258768,
+        "soc_pct": 55.00000000000001,
         "pv_w": 4393.3100478125,
         "load_w": 1240.0,
-        "import_w": 0.0,
+        "import_w": 5499.199999999999,
         "export_w": 0.0,
-        "battery_w": 3153.3100478124998,
+        "battery_w": 0.0,
         "import_ct": 35.24,
         "feed_in_ct": 7.1,
         "estimated": false,
         "budget_kw": 5.5,
-        "support_soc_pct": 43.0,
-        "ev_w": {},
+        "support_soc_pct": 51.0,
+        "ev_w": {
+          "tesla": 8652.510047812499
+        },
         "codes": [
-          "PV_LADEN"
+          "EIGENVERBRAUCH",
+          "ZIEL_SOC_ABFAHRT"
         ],
-        "text": "Akku lädt 3,2 kW aus PV-Überschuss."
+        "text": "Akku deckt den Eigenverbrauch. Tesla Model 3 lädt 8,7 kW, damit es um 17:30 Uhr 60 % hat."
       },
       {
         "start": "2026-10-09T11:15:00+00:00",
         "intent": "EIGENVERBRAUCH",
         "grid_charge_w": 0.0,
-        "soc_pct": 97.34051311058887,
+        "soc_pct": 55.00000000000001,
         "pv_w": 4811.9229778125,
         "load_w": 1240.0,
-        "import_w": 0.0,
+        "import_w": 5499.2,
         "export_w": 0.0,
-        "battery_w": 3571.9229778125,
+        "battery_w": 0.0,
         "import_ct": 35.24,
         "feed_in_ct": 7.1,
         "estimated": false,
         "budget_kw": 5.5,
-        "support_soc_pct": 46.0,
-        "ev_w": {},
+        "support_soc_pct": 51.0,
+        "ev_w": {
+          "tesla": 9071.1229778125
+        },
         "codes": [
-          "PV_LADEN"
+          "EIGENVERBRAUCH",
+          "ZIEL_SOC_ABFAHRT"
         ],
-        "text": "Akku lädt 3,6 kW aus PV-Überschuss."
+        "text": "Akku deckt den Eigenverbrauch. Tesla Model 3 lädt 9,1 kW, damit es um 17:30 Uhr 60 % hat."
       },
       {
         "start": "2026-10-09T11:30:00+00:00",
         "intent": "EIGENVERBRAUCH",
         "grid_charge_w": 0.0,
-        "soc_pct": 100.0,
+        "soc_pct": 55.00000000000001,
         "pv_w": 4754.90342125,
         "load_w": 1240.0,
-        "import_w": 0.0,
-        "export_w": 112.87636148517049,
-        "battery_w": 3402.0270597648296,
+        "import_w": 2169.867979062451,
+        "export_w": 0.0,
+        "battery_w": 0.0,
         "import_ct": 35.24,
         "feed_in_ct": 7.1,
         "estimated": false,
         "budget_kw": 5.5,
-        "support_soc_pct": 49.0,
-        "ev_w": {},
+        "support_soc_pct": 51.0,
+        "ev_w": {
+          "tesla": 5684.771400312451
+        },
         "codes": [
-          "PV_LADEN"
+          "EIGENVERBRAUCH",
+          "ZIEL_SOC_ABFAHRT"
         ],
-        "text": "Akku lädt 3,4 kW aus PV-Überschuss."
+        "text": "Akku deckt den Eigenverbrauch. Tesla Model 3 lädt 5,7 kW, damit es um 17:30 Uhr 60 % hat."
       },
       {
         "start": "2026-10-09T11:45:00+00:00",
         "intent": "EIGENVERBRAUCH",
         "grid_charge_w": 0.0,
-        "soc_pct": 100.0,
+        "soc_pct": 55.00000000000001,
         "pv_w": 4852.989608203125,
         "load_w": 1240.0,
-        "import_w": 0.0,
-        "export_w": 3612.9896082031246,
+        "import_w": 5499.199999999999,
+        "export_w": 0.0,
         "battery_w": 0.0,
         "import_ct": 35.24,
         "feed_in_ct": 7.1,
         "estimated": false,
         "budget_kw": 5.5,
         "support_soc_pct": 51.0,
-        "ev_w": {},
+        "ev_w": {
+          "tesla": 9112.189608203123
+        },
         "codes": [
-          "EIGENVERBRAUCH"
+          "EIGENVERBRAUCH",
+          "ZIEL_SOC_ABFAHRT"
         ],
-        "text": "Akku deckt den Eigenverbrauch."
+        "text": "Akku deckt den Eigenverbrauch. Tesla Model 3 lädt 9,1 kW, damit es um 17:30 Uhr 60 % hat."
       },
       {
         "start": "2026-10-09T12:00:00+00:00",
         "intent": "EIGENVERBRAUCH",
         "grid_charge_w": 0.0,
-        "soc_pct": 100.0,
+        "soc_pct": 55.00000000000001,
         "pv_w": 5278.309004999999,
         "load_w": 1240.0,
-        "import_w": 0.0,
-        "export_w": 4038.309004999999,
+        "import_w": 5499.200000000001,
+        "export_w": 0.0,
         "battery_w": 0.0,
         "import_ct": 34.805,
         "feed_in_ct": 7.1,
         "estimated": false,
         "budget_kw": 5.5,
         "support_soc_pct": 51.0,
-        "ev_w": {},
+        "ev_w": {
+          "tesla": 9537.509005
+        },
         "codes": [
-          "EIGENVERBRAUCH"
+          "EIGENVERBRAUCH",
+          "ZIEL_SOC_ABFAHRT"
         ],
-        "text": "Akku deckt den Eigenverbrauch."
+        "text": "Akku deckt den Eigenverbrauch. Tesla Model 3 lädt 9,5 kW, damit es um 17:30 Uhr 60 % hat."
       },
       {
         "start": "2026-10-09T12:15:00+00:00",
         "intent": "EIGENVERBRAUCH",
         "grid_charge_w": 0.0,
-        "soc_pct": 100.0,
+        "soc_pct": 55.00000000000001,
         "pv_w": 5539.1366913281245,
         "load_w": 1240.0,
-        "import_w": 0.0,
-        "export_w": 4299.1366913281245,
+        "import_w": 5499.2,
+        "export_w": 0.0,
         "battery_w": 0.0,
         "import_ct": 34.805,
         "feed_in_ct": 7.1,
         "estimated": false,
         "budget_kw": 5.5,
         "support_soc_pct": 51.0,
-        "ev_w": {},
+        "ev_w": {
+          "tesla": 9798.336691328124
+        },
         "codes": [
-          "EIGENVERBRAUCH"
+          "EIGENVERBRAUCH",
+          "ZIEL_SOC_ABFAHRT"
         ],
-        "text": "Akku deckt den Eigenverbrauch."
+        "text": "Akku deckt den Eigenverbrauch. Tesla Model 3 lädt 9,8 kW, damit es um 17:30 Uhr 60 % hat."
       },
       {
         "start": "2026-10-09T12:30:00+00:00",
         "intent": "EIGENVERBRAUCH",
         "grid_charge_w": 0.0,
-        "soc_pct": 100.0,
+        "soc_pct": 55.00000000000001,
         "pv_w": 5461.410655312499,
         "load_w": 1240.0,
-        "import_w": 0.0,
-        "export_w": 4221.410655312499,
+        "import_w": 5499.2,
+        "export_w": 0.0,
         "battery_w": 0.0,
         "import_ct": 34.805,
         "feed_in_ct": 7.1,
         "estimated": false,
         "budget_kw": 5.5,
         "support_soc_pct": 51.0,
-        "ev_w": {},
+        "ev_w": {
+          "tesla": 9720.6106553125
+        },
         "codes": [
-          "EIGENVERBRAUCH"
+          "EIGENVERBRAUCH",
+          "ZIEL_SOC_ABFAHRT"
         ],
-        "text": "Akku deckt den Eigenverbrauch."
+        "text": "Akku deckt den Eigenverbrauch. Tesla Model 3 lädt 9,7 kW, damit es um 17:30 Uhr 60 % hat."
       },
       {
         "start": "2026-10-09T12:45:00+00:00",
         "intent": "EIGENVERBRAUCH",
         "grid_charge_w": 0.0,
-        "soc_pct": 100.0,
+        "soc_pct": 55.00000000000001,
         "pv_w": 4951.869145312499,
         "load_w": 1240.0,
-        "import_w": 0.0,
-        "export_w": 3711.8691453124993,
+        "import_w": 5499.200000000001,
+        "export_w": 0.0,
         "battery_w": 0.0,
         "import_ct": 34.805,
         "feed_in_ct": 7.1,
         "estimated": false,
         "budget_kw": 5.5,
         "support_soc_pct": 51.0,
-        "ev_w": {},
+        "ev_w": {
+          "tesla": 9211.0691453125
+        },
         "codes": [
-          "EIGENVERBRAUCH"
+          "EIGENVERBRAUCH",
+          "ZIEL_SOC_ABFAHRT"
         ],
-        "text": "Akku deckt den Eigenverbrauch."
+        "text": "Akku deckt den Eigenverbrauch. Tesla Model 3 lädt 9,2 kW, damit es um 17:30 Uhr 60 % hat."
       },
       {
         "start": "2026-10-09T13:00:00+00:00",
         "intent": "EIGENVERBRAUCH",
         "grid_charge_w": 0.0,
-        "soc_pct": 100.0,
+        "soc_pct": 55.00000000000001,
         "pv_w": 4812.0183,
         "load_w": 1240.0,
-        "import_w": 0.0,
-        "export_w": 3572.0182999999997,
+        "import_w": 5499.200000000001,
+        "export_w": 0.0,
         "battery_w": 0.0,
         "import_ct": 31.338,
         "feed_in_ct": 7.1,
         "estimated": false,
         "budget_kw": 5.5,
         "support_soc_pct": 51.0,
-        "ev_w": {},
+        "ev_w": {
+          "tesla": 9071.2183
+        },
         "codes": [
-          "EIGENVERBRAUCH"
+          "EIGENVERBRAUCH",
+          "ZIEL_SOC_ABFAHRT"
         ],
-        "text": "Akku deckt den Eigenverbrauch."
+        "text": "Akku deckt den Eigenverbrauch. Tesla Model 3 lädt 9,1 kW, damit es um 17:30 Uhr 60 % hat."
       },
       {
         "start": "2026-10-09T13:15:00+00:00",
         "intent": "EIGENVERBRAUCH",
         "grid_charge_w": 0.0,
-        "soc_pct": 100.0,
+        "soc_pct": 55.00000000000001,
         "pv_w": 3524.070655078125,
         "load_w": 1240.0,
-        "import_w": 0.0,
-        "export_w": 2284.070655078125,
+        "import_w": 5499.2,
+        "export_w": 0.0,
         "battery_w": 0.0,
         "import_ct": 31.338,
         "feed_in_ct": 7.1,
         "estimated": false,
         "budget_kw": 5.5,
         "support_soc_pct": 51.0,
-        "ev_w": {},
+        "ev_w": {
+          "tesla": 7783.270655078125
+        },
         "codes": [
-          "EIGENVERBRAUCH"
+          "EIGENVERBRAUCH",
+          "ZIEL_SOC_ABFAHRT"
         ],
-        "text": "Akku deckt den Eigenverbrauch."
+        "text": "Akku deckt den Eigenverbrauch. Tesla Model 3 lädt 7,8 kW, damit es um 17:30 Uhr 60 % hat."
       },
       {
         "start": "2026-10-09T13:30:00+00:00",
         "intent": "EIGENVERBRAUCH",
         "grid_charge_w": 0.0,
-        "soc_pct": 100.0,
+        "soc_pct": 55.00000000000001,
         "pv_w": 2865.4117312500002,
         "load_w": 1240.0,
-        "import_w": 0.0,
-        "export_w": 1625.4117312500002,
+        "import_w": 5499.2,
+        "export_w": 0.0,
         "battery_w": 0.0,
         "import_ct": 31.338,
         "feed_in_ct": 7.1,
         "estimated": false,
         "budget_kw": 5.5,
         "support_soc_pct": 51.0,
-        "ev_w": {},
+        "ev_w": {
+          "tesla": 7124.61173125
+        },
         "codes": [
-          "EIGENVERBRAUCH"
+          "EIGENVERBRAUCH",
+          "ZIEL_SOC_ABFAHRT"
         ],
-        "text": "Akku deckt den Eigenverbrauch."
+        "text": "Akku deckt den Eigenverbrauch. Tesla Model 3 lädt 7,1 kW, damit es um 17:30 Uhr 60 % hat."
       },
       {
         "start": "2026-10-09T13:45:00+00:00",
         "intent": "EIGENVERBRAUCH",
         "grid_charge_w": 0.0,
-        "soc_pct": 100.0,
+        "soc_pct": 55.00000000000001,
         "pv_w": 2643.0464519531247,
         "load_w": 1240.0,
-        "import_w": 0.0,
-        "export_w": 1403.0464519531247,
+        "import_w": 5499.199999999999,
+        "export_w": 0.0,
         "battery_w": 0.0,
         "import_ct": 31.338,
         "feed_in_ct": 7.1,
         "estimated": false,
         "budget_kw": 5.5,
         "support_soc_pct": 51.0,
-        "ev_w": {},
+        "ev_w": {
+          "tesla": 6902.246451953124
+        },
         "codes": [
-          "EIGENVERBRAUCH"
+          "EIGENVERBRAUCH",
+          "ZIEL_SOC_ABFAHRT"
         ],
-        "text": "Akku deckt den Eigenverbrauch."
+        "text": "Akku deckt den Eigenverbrauch. Tesla Model 3 lädt 6,9 kW, damit es um 17:30 Uhr 60 % hat."
       },
       {
         "start": "2026-10-09T14:00:00+00:00",
         "intent": "EIGENVERBRAUCH",
         "grid_charge_w": 0.0,
-        "soc_pct": 100.0,
+        "soc_pct": 55.00000000000001,
         "pv_w": 2138.200320703125,
         "load_w": 1240.0,
-        "import_w": 0.0,
-        "export_w": 898.2003207031248,
+        "import_w": 2551.799679296875,
+        "export_w": 0.0,
         "battery_w": 0.0,
         "import_ct": 37.681000000000004,
         "feed_in_ct": 7.1,
         "estimated": false,
         "budget_kw": 5.5,
         "support_soc_pct": 51.0,
-        "ev_w": {},
+        "ev_w": {
+          "tesla": 3450.0
+        },
         "codes": [
-          "EIGENVERBRAUCH"
+          "EIGENVERBRAUCH",
+          "ZIEL_SOC_ABFAHRT"
         ],
-        "text": "Akku deckt den Eigenverbrauch."
+        "text": "Akku deckt den Eigenverbrauch. Tesla Model 3 lädt 3,5 kW, damit es um 17:30 Uhr 60 % hat."
       },
       {
         "start": "2026-10-09T14:15:00+00:00",
         "intent": "EIGENVERBRAUCH",
         "grid_charge_w": 0.0,
-        "soc_pct": 100.0,
+        "soc_pct": 55.00000000000001,
         "pv_w": 1566.693056328125,
         "load_w": 1240.0,
-        "import_w": 0.0,
-        "export_w": 326.69305632812507,
+        "import_w": 3123.306943671875,
+        "export_w": 0.0,
         "battery_w": 0.0,
         "import_ct": 37.681000000000004,
         "feed_in_ct": 7.1,
         "estimated": false,
         "budget_kw": 5.5,
         "support_soc_pct": 51.0,
-        "ev_w": {},
+        "ev_w": {
+          "tesla": 3450.0
+        },
         "codes": [
-          "EIGENVERBRAUCH"
+          "EIGENVERBRAUCH",
+          "ZIEL_SOC_ABFAHRT"
         ],
-        "text": "Akku deckt den Eigenverbrauch."
+        "text": "Akku deckt den Eigenverbrauch. Tesla Model 3 lädt 3,5 kW, damit es um 17:30 Uhr 60 % hat."
       },
       {
         "start": "2026-10-09T14:30:00+00:00",
         "intent": "EIGENVERBRAUCH",
         "grid_charge_w": 0.0,
-        "soc_pct": 99.62339161354018,
+        "soc_pct": 54.62339161354017,
         "pv_w": 816.052021328125,
         "load_w": 1240.0,
         "import_w": 0.0,
@@ -595,7 +686,7 @@
         "start": "2026-10-09T14:45:00+00:00",
         "intent": "EIGENVERBRAUCH",
         "grid_charge_w": 0.0,
-        "soc_pct": 98.93641780885288,
+        "soc_pct": 53.93641780885289,
         "pv_w": 466.67373757812504,
         "load_w": 1240.0,
         "import_w": 0.0,
@@ -616,7 +707,7 @@
         "start": "2026-10-09T15:00:00+00:00",
         "intent": "EIGENVERBRAUCH",
         "grid_charge_w": 0.0,
-        "soc_pct": 98.12698353587689,
+        "soc_pct": 53.126983535876896,
         "pv_w": 328.820015078125,
         "load_w": 1240.0,
         "import_w": 0.0,
@@ -637,7 +728,7 @@
         "start": "2026-10-09T15:15:00+00:00",
         "intent": "EIGENVERBRAUCH",
         "grid_charge_w": 0.0,
-        "soc_pct": 97.36522462023517,
+        "soc_pct": 52.36522462023516,
         "pv_w": 382.488154453125,
         "load_w": 1240.0,
         "import_w": 0.0,
@@ -658,7 +749,7 @@
         "start": "2026-10-09T15:30:00+00:00",
         "intent": "EIGENVERBRAUCH",
         "grid_charge_w": 0.0,
-        "soc_pct": 96.50679728013387,
+        "soc_pct": 51.50679728013385,
         "pv_w": 273.668530078125,
         "load_w": 1240.0,
         "import_w": 0.0,
@@ -679,7 +770,7 @@
         "start": "2026-10-09T15:45:00+00:00",
         "intent": "EIGENVERBRAUCH",
         "grid_charge_w": 0.0,
-        "soc_pct": 95.57456875316015,
+        "soc_pct": 50.57456875316014,
         "pv_w": 190.59055007812503,
         "load_w": 1240.0,
         "import_w": 0.0,
@@ -700,7 +791,7 @@
         "start": "2026-10-09T16:00:00+00:00",
         "intent": "EIGENVERBRAUCH",
         "grid_charge_w": 0.0,
-        "soc_pct": 94.50947136166401,
+        "soc_pct": 49.509471361664005,
         "pv_w": 41.020098203124995,
         "load_w": 1240.0,
         "import_w": 0.0,
@@ -721,7 +812,7 @@
         "start": "2026-10-09T16:15:00+00:00",
         "intent": "EIGENVERBRAUCH",
         "grid_charge_w": 0.0,
-        "soc_pct": 93.40793432716002,
+        "soc_pct": 48.407934327160014,
         "pv_w": 0.0,
         "load_w": 1240.0,
         "import_w": 0.0,
@@ -742,7 +833,7 @@
         "start": "2026-10-09T16:30:00+00:00",
         "intent": "EIGENVERBRAUCH",
         "grid_charge_w": 0.0,
-        "soc_pct": 92.30639729265604,
+        "soc_pct": 47.30639729265603,
         "pv_w": 0.0,
         "load_w": 1240.0,
         "import_w": 0.0,
@@ -763,7 +854,7 @@
         "start": "2026-10-09T16:45:00+00:00",
         "intent": "EIGENVERBRAUCH",
         "grid_charge_w": 0.0,
-        "soc_pct": 91.20486025815207,
+        "soc_pct": 46.20486025815204,
         "pv_w": 0.0,
         "load_w": 1240.0,
         "import_w": 0.0,
@@ -784,7 +875,7 @@
         "start": "2026-10-09T17:00:00+00:00",
         "intent": "EIGENVERBRAUCH",
         "grid_charge_w": 0.0,
-        "soc_pct": 90.10332322364808,
+        "soc_pct": 45.10332322364805,
         "pv_w": 0.0,
         "load_w": 1240.0,
         "import_w": 0.0,
@@ -805,7 +896,7 @@
         "start": "2026-10-09T17:15:00+00:00",
         "intent": "EIGENVERBRAUCH",
         "grid_charge_w": 0.0,
-        "soc_pct": 89.0017861891441,
+        "soc_pct": 44.00178618914406,
         "pv_w": 0.0,
         "load_w": 1240.0,
         "import_w": 0.0,
@@ -826,7 +917,7 @@
         "start": "2026-10-09T17:30:00+00:00",
         "intent": "EIGENVERBRAUCH",
         "grid_charge_w": 0.0,
-        "soc_pct": 87.90024915464012,
+        "soc_pct": 42.90024915464007,
         "pv_w": 0.0,
         "load_w": 1240.0,
         "import_w": 0.0,
@@ -847,7 +938,7 @@
         "start": "2026-10-09T17:45:00+00:00",
         "intent": "EIGENVERBRAUCH",
         "grid_charge_w": 0.0,
-        "soc_pct": 86.79871212013613,
+        "soc_pct": 41.79871212013609,
         "pv_w": 0.0,
         "load_w": 1240.0,
         "import_w": 0.0,
@@ -868,7 +959,7 @@
         "start": "2026-10-09T18:00:00+00:00",
         "intent": "EIGENVERBRAUCH",
         "grid_charge_w": 0.0,
-        "soc_pct": 85.69717508563215,
+        "soc_pct": 40.6971750856321,
         "pv_w": 0.0,
         "load_w": 1240.0,
         "import_w": 0.0,
@@ -889,7 +980,7 @@
         "start": "2026-10-09T18:15:00+00:00",
         "intent": "EIGENVERBRAUCH",
         "grid_charge_w": 0.0,
-        "soc_pct": 84.59563805112818,
+        "soc_pct": 39.59563805112811,
         "pv_w": 0.0,
         "load_w": 1240.0,
         "import_w": 0.0,
@@ -910,7 +1001,7 @@
         "start": "2026-10-09T18:30:00+00:00",
         "intent": "EIGENVERBRAUCH",
         "grid_charge_w": 0.0,
-        "soc_pct": 83.49410101662419,
+        "soc_pct": 38.49410101662413,
         "pv_w": 0.0,
         "load_w": 1240.0,
         "import_w": 0.0,
@@ -931,7 +1022,7 @@
         "start": "2026-10-09T18:45:00+00:00",
         "intent": "EIGENVERBRAUCH",
         "grid_charge_w": 0.0,
-        "soc_pct": 82.39256398212021,
+        "soc_pct": 37.39256398212014,
         "pv_w": 0.0,
         "load_w": 1240.0,
         "import_w": 0.0,
@@ -952,7 +1043,7 @@
         "start": "2026-10-09T19:00:00+00:00",
         "intent": "EIGENVERBRAUCH",
         "grid_charge_w": 0.0,
-        "soc_pct": 81.29102694761623,
+        "soc_pct": 36.29102694761615,
         "pv_w": 0.0,
         "load_w": 1240.0,
         "import_w": 0.0,
@@ -973,7 +1064,7 @@
         "start": "2026-10-09T19:15:00+00:00",
         "intent": "EIGENVERBRAUCH",
         "grid_charge_w": 0.0,
-        "soc_pct": 80.18948991311224,
+        "soc_pct": 35.18948991311216,
         "pv_w": 0.0,
         "load_w": 1240.0,
         "import_w": 0.0,
@@ -994,7 +1085,7 @@
         "start": "2026-10-09T19:30:00+00:00",
         "intent": "EIGENVERBRAUCH",
         "grid_charge_w": 0.0,
-        "soc_pct": 79.08795287860826,
+        "soc_pct": 34.08795287860818,
         "pv_w": 0.0,
         "load_w": 1240.0,
         "import_w": 0.0,
@@ -1015,7 +1106,7 @@
         "start": "2026-10-09T19:45:00+00:00",
         "intent": "EIGENVERBRAUCH",
         "grid_charge_w": 0.0,
-        "soc_pct": 77.98641584410429,
+        "soc_pct": 32.98641584410419,
         "pv_w": 0.0,
         "load_w": 1240.0,
         "import_w": 0.0,
@@ -1036,7 +1127,7 @@
         "start": "2026-10-09T20:00:00+00:00",
         "intent": "EIGENVERBRAUCH",
         "grid_charge_w": 0.0,
-        "soc_pct": 76.8848788096003,
+        "soc_pct": 31.8848788096002,
         "pv_w": 0.0,
         "load_w": 1240.0,
         "import_w": 0.0,
@@ -1057,7 +1148,7 @@
         "start": "2026-10-09T20:15:00+00:00",
         "intent": "EIGENVERBRAUCH",
         "grid_charge_w": 0.0,
-        "soc_pct": 75.78334177509632,
+        "soc_pct": 30.78334177509621,
         "pv_w": 0.0,
         "load_w": 1240.0,
         "import_w": 0.0,
@@ -1078,7 +1169,7 @@
         "start": "2026-10-09T20:30:00+00:00",
         "intent": "EIGENVERBRAUCH",
         "grid_charge_w": 0.0,
-        "soc_pct": 74.68180474059234,
+        "soc_pct": 29.68180474059222,
         "pv_w": 0.0,
         "load_w": 1240.0,
         "import_w": 0.0,
@@ -1099,7 +1190,7 @@
         "start": "2026-10-09T20:45:00+00:00",
         "intent": "EIGENVERBRAUCH",
         "grid_charge_w": 0.0,
-        "soc_pct": 73.58026770608835,
+        "soc_pct": 28.580267706088236,
         "pv_w": 0.0,
         "load_w": 1240.0,
         "import_w": 0.0,
@@ -1120,7 +1211,7 @@
         "start": "2026-10-09T21:00:00+00:00",
         "intent": "EIGENVERBRAUCH",
         "grid_charge_w": 0.0,
-        "soc_pct": 72.47873067158437,
+        "soc_pct": 27.478730671584252,
         "pv_w": 0.0,
         "load_w": 1240.0,
         "import_w": 0.0,
@@ -1141,7 +1232,7 @@
         "start": "2026-10-09T21:15:00+00:00",
         "intent": "EIGENVERBRAUCH",
         "grid_charge_w": 0.0,
-        "soc_pct": 71.3771936370804,
+        "soc_pct": 26.37719363708026,
         "pv_w": 0.0,
         "load_w": 1240.0,
         "import_w": 0.0,
@@ -1162,7 +1253,7 @@
         "start": "2026-10-09T21:30:00+00:00",
         "intent": "EIGENVERBRAUCH",
         "grid_charge_w": 0.0,
-        "soc_pct": 70.2756566025764,
+        "soc_pct": 25.275656602576273,
         "pv_w": 0.0,
         "load_w": 1240.0,
         "import_w": 0.0,
@@ -1183,7 +1274,7 @@
         "start": "2026-10-09T21:45:00+00:00",
         "intent": "EIGENVERBRAUCH",
         "grid_charge_w": 0.0,
-        "soc_pct": 69.17411956807243,
+        "soc_pct": 24.174119568072285,
         "pv_w": 0.0,
         "load_w": 1240.0,
         "import_w": 0.0,

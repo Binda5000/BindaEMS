@@ -1,7 +1,7 @@
 import type { LineSeriesOption } from 'echarts/charts';
 import { expect, it, vi } from 'vitest';
 import type { Palette } from '$lib/charts/palette';
-import { planPriceOption, planSocOption } from './chart';
+import { planPriceOption, planSocOption, planVehiclesOption } from './chart';
 import { NOW, PLAN, planWithWindows } from '$lib/testing/plan';
 
 const palette: Palette = {
@@ -101,4 +101,29 @@ it('draws the windows with real ECharts (labels in the SVG)', async () => {
 		chart.dispose();
 		vi.restoreAllMocks();
 	}
+});
+
+it('zeichnet je geplantem Auto eine Reihe mit seinem Namen in kW', () => {
+	const option = planVehiclesOption(PLAN, NOW, palette) as {
+		series: LineSeriesOption[];
+		yAxis: { name: string }[];
+	};
+	expect(PLAN.vehicles.map((car) => car.name)).toEqual(['Tesla Model 3']);
+	expect(option.series.map((s) => s.name)).toEqual(['Tesla Model 3']);
+	expect(option.yAxis[0].name).toBe('kW');
+	const data = option.series[0].data as Data;
+	expect(data).toHaveLength(PLAN.slots.length + 1); // Stufen mit Schlusspunkt
+	const charging = PLAN.slots.findIndex((slot) => (slot.ev_w.tesla ?? 0) > 0);
+	expect(charging).toBeGreaterThanOrEqual(0);
+	expect(data[charging][1]).toBeCloseTo(PLAN.slots[charging].ev_w.tesla! / 1000);
+	// ohne Ladeleistung im Slot steht 0 kW, nicht „keine Angabe“
+	const idle = PLAN.slots.findIndex((slot) => slot.ev_w.tesla === undefined);
+	expect(data[idle][1]).toBe(0);
+});
+
+it('kennt ohne geplante Autos keine Reihe', () => {
+	const option = planVehiclesOption({ ...PLAN, vehicles: [] }, NOW, palette) as {
+		series: LineSeriesOption[];
+	};
+	expect(option.series).toEqual([]);
 });

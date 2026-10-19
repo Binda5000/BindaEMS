@@ -1208,9 +1208,9 @@ gilt für diesen Browser.
 |---|---|
 | Übersicht | Energiefluss live mit den Verbrauchern unter dem Haus, Strompreis jetzt und die nächsten 3 h (Balken überfahren, antippen oder mit den Pfeiltasten wählen zeigt den Preis der Viertelstunde), Ladestände, Preise und PV-Prognose für heute und morgen, Hinweise, Verbraucher mit Leistung und Energie seit Mitternacht, „Warum?“ (unten) |
 | Laden | je Fahrzeug und je Wallbox eine Karte, dazu „Gast“, „Akku-Unterstützung“ und „Vorrang“; ab „Bedienen“ mit den Bedienelementen (unten, „Laden“) |
-| Zeitplan | der Akkuplan für bis zu 36 h: Kopf mit dem Stand der Ausführung, Quelle, Gültigkeit und Kosten gegenüber „Victron allein“, Diagramme „Preise und Prognosen“ und „Akku“, „Ablauf“ in Blöcken mit Satz; ab „Bedienen“ mit „Netzladen erlaubt“ und „Neu planen“ (Abschnitt „Planung“) |
+| Zeitplan | der Akkuplan für bis zu 36 h: Kopf mit dem Stand der Ausführung, Quelle, Gültigkeit, Kosten gegenüber „Victron allein“ und je geplantem Auto einer Zeile wie auf „Laden“, Diagramme „Preise und Prognosen“, „Akku“ und, mit geplanten Autos, „Autos“, „Ablauf“ in Blöcken mit Satz; ab „Bedienen“ mit „Netzladen erlaubt“ und „Neu planen“ (Abschnitt „Planung“) |
 | Verlauf | Diagramm mit bis zu 8 Reihen für frei wählbare Tage (höchstens 400), Tagesbilanz mit Abdeckung (Viertelstunden und Anteil der aufgezeichneten Zeit; am laufenden Tag „bis jetzt“, also nur die vergangenen Viertelstunden), Kosten, Erlös, Autarkie und den Tageswerten der Zähler (Differenz über den Tag) für den Abgleich mit VRM |
-| Statistik | Tag, Woche, Monat oder Jahr mit Blättern: Autarkie, Eigenverbrauch, Kosten, Ersparnis und Einspeiseerlös, Diagramm „Energie“ und die Karten „Kosten“, „Autos“, „Ladesessions“, „Verbraucher“, „Monatsspitzen“ und „Abgleich mit den Zählern“ (unten, „Statistik“) |
+| Statistik | Tag, Woche, Monat oder Jahr mit Blättern: Autarkie, Eigenverbrauch, Kosten, Ersparnis und Einspeiseerlös, Diagramm „Energie“ und die Karten „Kosten“, „Autos“, „Geplantes Laden“, „Ladesessions“, „Verbraucher“, „Monatsspitzen“ und „Abgleich mit den Zählern“ (unten, „Statistik“) |
 | Verbraucher | Verbraucherbaum mit „Sonstiges“, Leistung und Energie seit Mitternacht („Heute“); Admins legen Verbraucher an, ändern und löschen sie |
 | System | Komponenten, Hinweise, core (Betriebsart mit Beginn und Gründen, Eingangsdaten, Adapter, Selbstprüfung, Alarme), Bedienung (Regelbetrieb; Admins: „Live schalten…“ und „Auf Dry-Run…“, Abschnitt 13), Aktoren (angefordert, wirksam, Freigabe, Hinweise und Sperren; Admins: „Quittieren“), Watchdog am Cerbo (Abschnitt 14), Preise (Admins: „Preise jetzt abrufen“), PV-Prognose, alle Signale mit Suche |
 | Entscheidungen | das Entscheidungslog mit Filtern (unten, „Entscheidungen und Warum?“) |
@@ -1230,13 +1230,32 @@ Regelbetrieb“). Bis Health eine Änderung zeigt, steht auf der Seite die gesen
   einschalten“.
 - **Fahrzeug:** Ladestand, Lademodus, Wallbox und Art der Zuordnung, angesteckt, lädt, die Grenze des
   Phasenwächters, der letzte Grund, die Session (unten) und, bei einem Fahrzeug mit Tessie, die
-  Befehle der letzten Stunde (`commands_hour`, gegen das Stundenlimit von 20). Der Lademodus ist eine Auswahl: PV-Überschuss,
-  Min+PV, Sofort oder Aus. Die Taste „Boost“ setzt einen Boost bis zum Abstecken, höchstens 12 h;
+  Befehle der letzten Stunde (`commands_hour`, gegen das Stundenlimit von 20). Schätzt der core den
+  Ladestand aus dem Zähler der Wallbox (Abschnitt „Laderegelung“), steht dieser Wert mit „geschätzt“
+  da. Der Lademodus ist eine Auswahl: PV-Überschuss, Min+PV, Sofort, Aus oder Geplant. Die Taste „Boost“ setzt einen Boost bis zum Abstecken, höchstens 12 h;
   danach steht dort „Boost beenden“ und, solange er gilt, „bis HH:MM“. Gilt ein Boost schon, wartet
   aber auf einen Ansteckvorgang, der noch nicht begonnen hat, steht daneben „wartet auf Anstecken“. Die
   Dauer wählst du nicht. Ab „Bedienen“ steht unter den Bedienelementen, was ein Boost kosten kann:
   „Boost kann bis zu {€} € Leistungspreis im Monat kosten ({kW} kW mehr Spitze).“ (Abschnitt
   „Laderegelung“, „Lademodi“, Boost).
+- **Geplant:** Steht das Fahrzeug auf „Geplant“, hat die Karte ab „Bedienen“ die Felder „Ziel-SOC“ (%,
+  ganze Zahl von 20 bis 100) und „Abfahrt“ (tägliche Uhrzeit) mit der Taste „Übernehmen“; sie schickt
+  nur, was sich geändert hat (`PUT /api/control/vehicles/{key}/target`). Ein ungültiger Wert steht mit
+  dem Satz der app an der Karte („Ziel-SOC „{Wert}“ liegt außerhalb von 20–100 %.“, „Abfahrt „{Wert}“
+  ist keine Uhrzeit (HH:MM).“). Darunter steht, auch für „Lesen“, die erste zutreffende Zeile, mit
+  denselben Werten wie „Fertig um“ und „Ziel erreichbar“ in Home Assistant (Abschnitt „Geplantes
+  Laden“):
+  - „Ziel erreicht ({soc} %).“, wenn Health das Ziel mit bekanntem Ladestand erreicht meldet;
+  - „Fertig um {HH:MM} · Ziel {soc} % bis {HH:MM}“, wenn der gültige Plan das Auto lädt und das Ziel
+    erreicht;
+  - „Ziel {soc} % bis {HH:MM} nicht erreichbar, voraussichtlich {x} %.“, wenn der Plan es verfehlt;
+  - „Kein Plan · lädt spätestens ab {HH:MM}“ ohne gültigen Plan für das Auto, mit der spätesten
+    Startzeit aus Health.
+
+  Dazu, wenn es zutrifft: „Ladestand geschätzt“, „Ladestand unbekannt, gerechnet ab 0 %.“ (angenommen,
+  nie „gemessen“) und „Ladelimit im Auto {x} % liegt unter dem Ziel.“ (ohne `charge_limit_sync`). Das
+  Ziel ist das wirksame, bei einem Ladelimit darunter also das Limit. Abgesteckt oder in einem anderen
+  Modus steht keine Zeile da; scheitert die Abfrage des Plans, fehlen die Zeilen mit Plan und ohne Plan.
 - **Session:** Eine Zeile unter den Fakten des Fahrzeugs, aus den Ladesessions der letzten 30 Tage
   (Abschnitt 8, „Ladesessions und Kosten je Auto“; die Seite fragt sie jede Minute ab). Läuft eine,
   steht dort „Session seit {HH:MM} · {kWh} kWh (PV {a} · Akku {b} · Netz {c})“. Sonst steht dort die
@@ -1268,6 +1287,11 @@ schaltest du dort „Netzladen erlaubt“ und löst „Neu planen“ aus; „Les
 die Bedienelemente. Aufbau, Auslöser, Ersatzplan und die Sätze der Erklärung stehen im Abschnitt
 „Planung“ am Ende dieses Handbuchs.
 
+Lädt der Plan Autos im Modus „Geplant“, nennt der Kopf je Auto die Zeile wie auf „Laden“ („Fertig um
+{HH:MM} · Ziel {soc} % bis {HH:MM}“ oder „… nicht erreichbar, voraussichtlich {x} %.“, dazu die Quelle
+des Ladestands), und das Diagramm „Autos“ zeigt je Auto eine Reihe mit seinem Namen: die geplante
+Ladeleistung in kW (ohne Laden 0 kW).
+
 ### Statistik
 
 Die Seite **Statistik** (Navigation nach „Verlauf“) zeigt die Abrechnung für einen Zeitraum. Alle
@@ -1298,6 +1322,11 @@ und dem Abgleich (Abschnitt 8).
   Sessions, dazu die Zeile „Akku → Autos“. Gast und ohne erkanntes Auto erscheinen als „Gast“ und
   „Unbekannt“. Ohne Ladung: „Im Zeitraum wurde kein Auto geladen.“ PV-Strom ins Auto kostet 0 ct
   (Abschnitt 8, „Einstandspreis des Akkus“).
+- **„Geplantes Laden“:** die Abnahme „Ziel-SOC“ (Abschnitt 8, „Statistik je Zeitraum“): „{a} von {b}
+  machbaren Ladungen erreicht ({pct} %)“, abgerundet (94,6 % stehen als 94 %), darunter „Nicht machbar:
+  {n} · Vor der Abfahrt abgesteckt: {n} · Ohne Ladestand: {n}“ und „Vor der Abfahrt geändert oder
+  verlassen: {n}“; diese zählen nicht in die Quote. Ohne machbare Ladung steht „(– %)“. Leer: „Im
+  Zeitraum gab es keine geplante Ladung.“
 - **„Ladesessions“:** Beginn, Ende (eine laufende Session: „läuft“), Wallbox, Auto, Energie, „PV / Akku /
   Netz“ und Kosten, neueste zuerst. Mehr als 200 zeigt die Karte nicht; sie sagt dann „Angezeigt werden
   die 200 neuesten Sessions.“ Leer: „Keine Ladesessions im Zeitraum.“
@@ -1436,7 +1465,9 @@ Fehlende Werte erscheinen als „–“, nie als 0.
 Das Demo-Backend aus dem README (feste Messwerte, eingefrorene Uhr, bekannte Passwörter) dient
 nur der Entwicklung des UI. Es läuft nie auf der Anlage und nie im Netz. Sein core meldet
 „Eingeschränkt“ (DEGRADED): Das gehört zur Demo-Welt und sagt nichts über die Anlage. Der Benutzer
-`bedienen` hat dort die Rolle „Bedienen“.
+`bedienen` hat dort die Rolle „Bedienen“. Der Tesla steckt dort am Wall Connector und lädt „Geplant“
+(Ziel 60 %, Abfahrt 17:30, Ladestand angenommen); der e-Golf steckt an der EVCS mit einem geschätzten
+Ladestand.
 
 ## 13. Betriebszustände und Freigaben
 

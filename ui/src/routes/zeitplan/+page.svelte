@@ -8,7 +8,7 @@
 	import { readPalette } from '$lib/charts/palette';
 	import Card from '$lib/components/Card.svelte';
 	import Notice from '$lib/components/Notice.svelte';
-	import { planPriceOption, planSocOption } from '$lib/plan/chart';
+	import { planPriceOption, planSocOption, planVehiclesOption } from '$lib/plan/chart';
 	import { planBlocks } from '$lib/plan/model';
 	import PlanBlocks from '$lib/plan/PlanBlocks.svelte';
 	import PlanHeader from '$lib/plan/PlanHeader.svelte';
@@ -66,6 +66,10 @@
 	});
 	const priceOption = $derived(current ? planPriceOption(current, nowIso, palette) : null);
 	const socOption = $derived(current ? planSocOption(current, nowIso, palette) : null);
+	// das Diagramm „Autos“ nur mit geplanten Autos
+	const vehiclesOption = $derived(
+		current && current.vehicles.length > 0 ? planVehiclesOption(current, nowIso, palette) : null
+	);
 
 	// kommt die Antwort mit einem anderen Tag als dem schon geladenen, den SOC dieses Tages holen
 	$effect(() => {
@@ -159,6 +163,11 @@
 				<Card title="Akku">
 					<EChart option={socOption} label="Akku" height="16rem" />
 				</Card>
+				{#if vehiclesOption}
+					<Card title="Autos">
+						<EChart option={vehiclesOption} label="Autos" height="16rem" />
+					</Card>
+				{/if}
 			</div>
 			<PlanBlocks {blocks} />
 		{/if}

@@ -3,7 +3,13 @@
 	import { page } from '$app/state';
 	import { api } from '$lib/api/endpoints';
 	import { ApiError } from '$lib/api/errors';
-	import type { ChargeMode, ControlReply, SupportIntent, SurplusPriority } from '$lib/api/schemas';
+	import type {
+		ChargeMode,
+		ControlReply,
+		SupportIntent,
+		SurplusPriority,
+		VehicleHealth
+	} from '$lib/api/schemas';
 	import GuestCard from '$lib/charging/GuestCard.svelte';
 	import PriorityCard from '$lib/charging/PriorityCard.svelte';
 	import SupportCard from '$lib/charging/SupportCard.svelte';
@@ -14,6 +20,7 @@
 		healthIsCurrent,
 		latestSession,
 		overrideVehicle,
+		plannedLine,
 		priorityOrder,
 		sessionLine,
 		type CardNotice
@@ -35,10 +42,15 @@
 	const DEFAULT_SUPPORT: SupportIntent = { allowed: true, soc_pct: null };
 	/** Ohne Absicht regelt der core nichts; Gast und Vorrang haben dann diese Werte. */
 	const DEFAULT_SURPLUS: SurplusPriority = { kind: 'battery_until_soc', soc_pct: 30 };
+	/** Ziel-SOC und Abfahrt eines Fahrzeugs ohne Eintrag in der Absicht (Standard des core) */
+	const DEFAULT_TARGET_PCT = 80;
+	const DEFAULT_DEPARTURE = '07:00';
 
 	const system = new Resource((o) => api.system(o), { intervalMs: 15_000 });
 	const control = new Resource((o) => api.control(o), { intervalMs: 15_000 });
 	const limits = new Resource((o) => api.limits(o), { retryMs: 30_000 });
+	// Der Plan ist eine Zugabe für „Geplant“: Ohne ihn zeigt die Karte nur, was Health weiß.
+	const plan = new Resource((o) => api.plan(o), { intervalMs: 60_000 });
 	// Die Mehrkosten sind eine Zugabe: schlägt ihre Abfrage fehl, fehlt nur der Satz an der Karte.
 	const boostCost = new Resource((o) => api.boostCost(o), { intervalMs: 60_000 });
 
@@ -59,7 +71,7 @@
 	let refreshTimer: ReturnType<typeof setTimeout> | undefined;
 
 	onMount(() => {
-		const stops = [system, control, limits, boostCost, sessions].map((resource) =>
+		const stops = [system, control, limits, boostCost, sessions, plan].map((resource) =>
 			resource.start()
 		);
 		const clock = setInterval(() => (nowMs = Date.now()), 30_000);
@@ -98,6 +110,33 @@
 			vehicles.map((vehicle) => vehicle.id)
 		)
 	);
+
+	/** Die Ziele der Absicht; ohne Eintrag die Standardwerte des core */
+	function goalOf(id: string): { target_soc_pct: number; departure: string } {
+		const wanted = intent?.vehicles[id];
+		return {
+			target_soc_pct: wanted?.target_soc_pct ?? DEFAULT_TARGET_PCT,
+			departure: wanted?.departure ?? DEFAULT_DEPARTURE
+		};
+	}
+
+	/**
+	 * „Geplant“ wie in Home Assistant: das Auto im gültigen Plan, sonst Health. Ohne Antwort zum Plan
+	 * (`undefined`) sagt die Karte weder „Fertig um“ noch „Kein Plan“.
+	 */
+	function plannedOf(vehicle: VehicleHealth) {
+		const valid = plan.data?.plan?.valid ? plan.data.plan : null;
+		const car =
+			plan.data === undefined
+				? undefined
+				: (valid?.vehicles.find((item) => item.key === vehicle.id) ?? null);
+		return plannedLine({
+			mode: intent === null ? null : (intent.vehicles[vehicle.id]?.mode ?? 'pv'),
+			vehicle,
+			car,
+			target: goalOf(vehicle.id).target_soc_pct
+		});
+	}
 
 	function vehicleLine(id: string): string | null {
 		const session = latestSession(sessions.data ?? [], id);
@@ -184,6 +223,10 @@
 					notice={notices[`vehicle:${vehicle.id}`] ?? null}
 					onMode={(mode) => act(`vehicle:${vehicle.id}`, () => api.setMode(vehicle.id, mode))}
 					onBoost={(on) => act(`vehicle:${vehicle.id}`, () => api.setBoost(vehicle.id, on))}
+					goal={goalOf(vehicle.id)}
+					planned={plannedOf(vehicle)}
+					onTarget={(pct, departure) =>
+						act(`vehicle:${vehicle.id}`, () => api.setTarget(vehicle.id, pct, departure))}
 				/>
 			{/each}
 			{#each health.wallboxes as wallbox (wallbox.id)}

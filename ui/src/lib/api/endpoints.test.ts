@@ -82,6 +82,17 @@ it('sendet die Akku-Unterstützung als PUT, auch ohne eigene Schwelle', async ()
 	});
 });
 
+it('sendet Ziel-SOC und Abfahrt, ein unverändertes Feld als null', async () => {
+	reply(control);
+	await api.setTarget('tesla', 80, null);
+	expect(sent()).toEqual({
+		url: '/api/control/vehicles/tesla/target',
+		method: 'PUT',
+		body: { target_soc_pct: 80, departure: null },
+		csrf: 'tok-123'
+	});
+});
+
 it('quittiert mit POST und liest den Satz des core', async () => {
 	reply({ detail: 'Quittiert.' });
 	await expect(api.acknowledge('wallbox.evcs')).resolves.toEqual({ detail: 'Quittiert.' });

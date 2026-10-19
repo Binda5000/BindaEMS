@@ -6,6 +6,8 @@ import type {
 	Clue,
 	EffectiveMode,
 	Intent,
+	PlanVehicle,
+	SocSource,
 	SupportSource,
 	SurplusPriority,
 	VehicleHealth,
@@ -352,4 +354,119 @@ export function sessionLine(session: ChargingSession): string {
 		: `${dayMonth(session.end)} ${formatTime(session.end)}`;
 	const cost = session.cost_eur === null ? '' : ` · ${formatEur(session.cost_eur)}`;
 	return `Letzte Session ${dayMonth(session.start)} ${formatTime(session.start)}–${end} · ${energy}${cost}`;
+}
+
+/** Muster einer Abfahrt wie in der Absicht des core: `HH:MM`, 00:00 bis 23:59 */
+const DEPARTURE = /^([01]\d|2[0-3]):[0-5]\d$/;
+
+/** Ergebnis der Prüfung von Ziel-SOC und Abfahrt: `null` heißt unverändert (nicht mitschicken) */
+export type TargetInput =
+	| { ok: true; target_soc_pct: number | null; departure: string | null }
+	| { ok: false; text: string };
+
+/**
+ * Prüft die Felder „Ziel-SOC“ und „Abfahrt“ der Fahrzeugkarte mit den Sätzen der app: Ziel-SOC ist
+ * eine ganze Zahl von 20 bis 100, die Abfahrt `HH:MM`. Ein Feld, das dem Stand der Absicht `now`
+ * gleicht, kommt als `null` zurück. `badInput`: der Browser hat im Zahlfeld Unsinn gesehen.
+ */
+export function parseTarget(
+	socText: string,
+	departure: string,
+	now: { target_soc_pct: number; departure: string },
+	badInput = false
+): TargetInput {
+	const pct = Number(socText);
+	if (badInput || socText.trim() === '' || !Number.isInteger(pct) || pct < 20 || pct > 100) {
+		const shown = Number.isFinite(pct) && socText.trim() !== '' ? formatNumberMax(pct, 1) : socText;
+		return { ok: false, text: `Ziel-SOC „${shown}“ liegt außerhalb von 20–100 %.` };
+	}
+	if (!DEPARTURE.test(departure)) {
+		return { ok: false, text: `Abfahrt „${departure}“ ist keine Uhrzeit (HH:MM).` };
+	}
+	return {
+		ok: true,
+		target_soc_pct: pct === now.target_soc_pct ? null : pct,
+		departure: departure === now.departure ? null : departure
+	};
+}
+
+/** Was die Fahrzeugkarte und der Zeitplan zu „Geplant“ sagen: die Zeile und die Zusätze */
+export interface PlannedLine {
+	/** die erste zutreffende Zeile; `null`, wenn keine zutrifft */
+	text: string | null;
+	notes: string[];
+}
+
+export interface PlannedInput {
+	/** Lademodus der Absicht; `null`: unbekannt (der Zeitplan kennt nur den Plan) */
+	mode: ChargeMode | null;
+	/** Health des Fahrzeugs; `null` ohne */
+	vehicle: VehicleHealth | null;
+	/** das Auto im gültigen Plan; `null`: der Plan nennt es nicht; `undefined`: Plan unbekannt */
+	car: PlanVehicle | null | undefined;
+	/** Ziel-SOC der Absicht in %; `null` unbekannt */
+	target: number | null;
+}
+
+function known(source: SocSource | null): boolean {
+	return source === 'measured' || source === 'estimated';
+}
+
+/** Die Zeile, die zuerst zutrifft (Texte von Plan 4b); `null`, wenn keine zutrifft */
+function plannedText(
+	vehicle: VehicleHealth | null,
+	car: PlanVehicle | null | undefined,
+	source: SocSource | null
+): string | null {
+	const planned = vehicle?.planned ?? null;
+	const soc = vehicle?.soc_pct ?? null;
+	if (planned?.state === 'reached' && known(source) && soc !== null) {
+		return `Ziel erreicht (${formatSoc(soc)}).`;
+	}
+	if (car === undefined) return null; // ohne Plan weder „Fertig um“ noch „Kein Plan“
+	if (car !== null) {
+		const goal = `Ziel ${formatSoc(car.target_soc_pct)} bis ${formatTime(car.departure_at)}`;
+		if (!car.reachable) {
+			return `${goal} nicht erreichbar, voraussichtlich ${formatSoc(car.expected_soc_pct)}.`;
+		}
+		if (car.finish_at !== null) return `Fertig um ${formatTime(car.finish_at)} · ${goal}`;
+		if (!car.soc_assumed && car.soc_start_pct >= car.target_soc_pct) {
+			return `Ziel erreicht (${formatSoc(car.soc_start_pct)}).`;
+		}
+		return null; // der Plan lädt das Auto in seinem Horizont nicht
+	}
+	if (planned?.latest_start != null) {
+		return `Kein Plan · lädt spätestens ab ${formatTime(planned.latest_start)}`;
+	}
+	return null;
+}
+
+/**
+ * Der Stand von „Geplant“ wie „Fertig um“ und „Ziel erreichbar“ in Home Assistant: Meldet Health
+ * das Ziel erreicht (mit bekanntem Ladestand), gilt das; sonst gilt das Auto im gültigen Plan, ohne
+ * Plan die späteste Startzeit aus Health. Dazu die Quelle des Ladestands (aus Health, ohne Health
+ * aus dem Plan; angenommen heißt nie gemessen) und ein Ladelimit unter dem Ziel. `null` außerhalb
+ * von „Geplant“, für ein abgestecktes Auto und ohne Stand von „Geplant“ in Health und Plan.
+ */
+export function plannedLine({ mode, vehicle, car, target }: PlannedInput): PlannedLine | null {
+	if (mode !== null && mode !== 'planned') return null;
+	if (vehicle?.plugged === false) return null;
+	if (!vehicle?.planned && !car) return null;
+	const source = vehicle?.soc_source ?? (car?.soc_assumed ? 'assumed' : null);
+	const notes: string[] = [];
+	if (source === 'estimated') notes.push('Ladestand geschätzt');
+	if (source === 'assumed') notes.push(`Ladestand unbekannt, gerechnet ab ${formatSoc(0)}.`);
+	// ohne Angleichen rechnen Plan und core mit dem Limit als Ziel: das wirksame Ziel liegt darunter
+	const limit = vehicle?.charge_limit_pct ?? car?.limit_pct ?? null;
+	const effective = vehicle?.planned?.target_soc_pct ?? car?.target_soc_pct ?? null;
+	if (
+		limit !== null &&
+		target !== null &&
+		effective !== null &&
+		effective < target &&
+		limit < target
+	) {
+		notes.push(`Ladelimit im Auto ${formatSoc(limit)} liegt unter dem Ziel.`);
+	}
+	return { text: plannedText(vehicle, car, source), notes };
 }

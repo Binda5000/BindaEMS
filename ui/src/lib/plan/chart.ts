@@ -1,4 +1,5 @@
-// Diagramme des Zeitplans: Preise und Prognosen, geplanter SOC mit Netzladen- und Halten-Fenstern
+// Diagramme des Zeitplans: Preise und Prognosen, geplanter SOC mit Netzladen- und Halten-Fenstern,
+// Ladeleistung der geplanten Autos
 import type { LineSeriesOption } from 'echarts/charts';
 import type { EChartsCoreOption } from 'echarts/core';
 import type { Plan, PlanSlot } from '$lib/api/schemas';
@@ -211,6 +212,41 @@ export function planSocOption(plan: Plan, nowIso: string, palette: Palette): ECh
 				splitLine: { show: true, lineStyle: { color: palette.grid } }
 			}
 		],
+		series
+	};
+}
+
+/** Diagramm „Autos“: je geplantem Auto die Ladeleistung des Plans in kW (ohne Laden 0 kW) */
+export function planVehiclesOption(
+	plan: Plan,
+	nowIso: string,
+	palette: Palette
+): EChartsCoreOption {
+	const { xAxis, now } = timeAxis(plan, nowIso, palette);
+	const series: LineSeriesOption[] = plan.vehicles.map((car, index) => {
+		const color = palette.series[index % palette.series.length] ?? palette.load;
+		return {
+			id: `ev:${car.key}`,
+			name: car.name,
+			type: 'line',
+			step: 'end',
+			yAxisIndex: 0,
+			showSymbol: false,
+			data: steps(plan.slots, (slot) => (slot.ev_w[car.key] ?? 0) / 1000),
+			lineStyle: { color, width: 2 },
+			itemStyle: { color },
+			areaStyle: { color, opacity: 0.15 },
+			markLine: index === 0 ? nowLine(now, palette) : undefined
+		};
+	});
+	return {
+		...baseOption(palette),
+		xAxis,
+		tooltip: {
+			trigger: 'axis',
+			formatter: axisTooltip(Object.fromEntries(plan.vehicles.map((car) => [car.name, kw])))
+		},
+		yAxis: [{ ...valueAxis('kW', palette), min: 0 }],
 		series
 	};
 }

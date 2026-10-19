@@ -52,11 +52,12 @@ from bindaems.app.planning.process import solve_inline
 from bindaems.app.planning.service import plan_once
 from bindaems.app.runtime import AppRuntime
 from bindaems.core.adapters.base import AdapterHealth
+from bindaems.core.adapters.homeassistant import SOURCE as HA_SOURCE
 from bindaems.core.api.app import create_api
 from bindaems.core.runtime import CoreRuntime
 from bindaems.core.safety.types import Outcome
 from bindaems.core.watchdog_client.status import WATCHDOG_VERSION
-from bindaems.shared.config import Config, Secrets
+from bindaems.shared.config import Config, Secrets, soc_signal
 from bindaems.shared.control import ChargeMode, CommandKind, Intent, VehicleIntent
 from bindaems.shared.decisions import NO_VERDICT, Decision, DecisionResult, decision_text
 from bindaems.shared.domain import SignalKind, SlotFlows
@@ -106,6 +107,17 @@ VICTRON_STATE: dict[str, float | str] = {
     "watchdog.timeout_s": 90.0,
 }
 TESLA_SOURCE = "tessie:tesla"  # nicht verbunden: der Ladestand gilt als veraltet
+# Geplantes Laden (Plan 4b): Der Tesla steckt am Wall Connector und lädt „Geplant“ (Ziel 60 %,
+# Abfahrt 17:30, im Horizont des Plans); sein Ladestand ist angenommen, denn Tessie ist nicht
+# verbunden. Der e-Golf steckt an der EVCS (verbunden, lädt nicht); Home Assistant hat seinen
+# Ladestand beim Anstecken gemeldet, seither hat die EVCS 0,4 kWh gezählt: Der core schätzt ihn.
+PLUGGED = {"wallbox.twc.vehicle_connected": True, "wallbox.evcs.status": 1.0}
+TWC_PHASE_A = 2.0  # 3 × 2 A ≈ die 1,38 kW des Wall Connectors
+EGOLF_SOC_PCT = 48.0
+EVCS_TOTAL_KWH = 1520.0  # Zähler der EVCS beim Anstecken
+EVCS_COUNTED_KWH = 0.4  # seither gezählt, bis T_DEMO
+DEMO_TARGET_PCT = 60
+DEMO_DEPARTURE = "17:30"
 # Vorlauf vor T_DEMO: die Selbstprüfung verlangt seit 30 s aktuelle Messwerte
 WARMUP = timedelta(seconds=60)
 
@@ -273,6 +285,7 @@ def measurements(tick: int) -> dict[str, float]:
         values[f"pv.huawei.l{n}.power_w"] = pv / 3
         values[f"vebus.l{n}.ac_in_power_w"] = ac_in
         values[f"vebus.l{n}.ac_out_power_w"] = ac_out
+        values[f"wallbox.twc.l{n}.current_a"] = TWC_PHASE_A
     return {signal: round(value, 1) for signal, value in values.items()}
 
 
@@ -529,10 +542,16 @@ def _build_core(cfg: Config, secrets: Secrets, clock: ManualClock) -> CoreRuntim
     store = core.store
     store.register_source("victron", 5.0, activity_based=True)
     store.set_connected("victron", True)
-    for signal, value in VICTRON_STATE.items():
+    for signal, value in {**VICTRON_STATE, **PLUGGED}.items():
         store.update(signal, value, source="victron", kind=SignalKind.STATE)
     store.register_source(TESLA_SOURCE, 900.0)
     store.update("vehicle.tesla.soc_pct", 70.0, source=TESLA_SOURCE, kind=SignalKind.MEASUREMENT)
+    store.register_source(HA_SOURCE, None, invalidate_on_reconnect=True)
+    store.set_connected(HA_SOURCE, True)
+    store.update(soc_signal("egolf"), EGOLF_SOC_PCT, source=HA_SOURCE, kind=SignalKind.MEASUREMENT)
+    store.update(
+        "wallbox.evcs.total_kwh", EVCS_TOTAL_KWH, source="victron", kind=SignalKind.MEASUREMENT
+    )
     _cycle(core, 0)
     clock.advance(WARMUP)
     return core
@@ -759,11 +778,19 @@ async def build_world(cfg: Config, data_dir: Path, *, ui_dir: Path | None = None
     try:
         core = _build_core(local, secrets, clock)
         _mount_core_api(router, local, core, secrets)
-        # Absicht der Demo: Regelbetrieb an, der Tesla im Modus Min+PV; alles andere im Dry-Run
-        intent = Intent(
-            version=1, control=True, vehicles={"tesla": VehicleIntent(mode=ChargeMode.MIN_PV)}
+        # Absicht der Demo: Regelbetrieb an, der Tesla „Geplant“; alles andere im Dry-Run
+        tesla = VehicleIntent(
+            mode=ChargeMode.PLANNED, target_soc_pct=DEMO_TARGET_PCT, departure=DEMO_DEPARTURE
         )
+        intent = Intent(version=1, control=True, vehicles={"tesla": tesla})
         assert core.submit_intent(intent).result == "accepted"
+        # Der erste geregelte Zyklus sieht den Zähler der EVCS beim Anstecken, danach hat sie
+        # gezählt: Ab ``step_live`` ist der Ladestand des e-Golf geschätzt
+        _cycle(core, 0)
+        counted = EVCS_TOTAL_KWH + EVCS_COUNTED_KWH
+        core.store.update(
+            "wallbox.evcs.total_kwh", counted, source="victron", kind=SignalKind.MEASUREMENT
+        )
         app = AppRuntime(local, secrets, clock=clock, serve=False)
         app._sink.bind(asyncio.get_running_loop())  # wie AppRuntime.run
         world = World(app, core, clock, router)

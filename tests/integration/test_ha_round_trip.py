@@ -101,10 +101,15 @@ def _cases(cfg: Config) -> dict[str, Case]:
             return lambda w: _vehicle(w, key)
 
         get = vehicle()
+        # Der Tesla lädt in der Demo schon „Geplant“: HA stellt ihn auf Min+PV, den e-Golf auf
+        # „Geplant“
+        label, wanted = (
+            ("Min+PV", ChargeMode.MIN_PV) if key == "tesla" else ("Geplant", ChargeMode.PLANNED)
+        )
         cases |= {
             f"{oid}_mode": Case(
-                "Geplant",
-                lambda w, get=get: get(w).mode is ChargeMode.PLANNED,
+                label,
+                lambda w, get=get, wanted=wanted: get(w).mode is wanted,
                 api=(f"{path}/mode", {"mode": "now"}),
                 shown="Sofort",
             ),

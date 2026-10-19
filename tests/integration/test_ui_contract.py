@@ -246,6 +246,18 @@ async def test_demo_world_has_statistics_data(cfg, tmp_path) -> None:
         assert [c.day for c in checks if c.signal == "import" and not c.ledger_kwh] == []
         assert sum(c.note == NOTE_ZERO for c in checks) < len(checks) / 2
 
+        # geplantes Laden (Plan 4b): der Tesla „Geplant“ im Plan mit angenommenem Ladestand, der
+        # e-Golf mit geschätztem
+        health = {entry["id"]: entry for entry in app.live.health["vehicles"]}
+        assert health["tesla"]["mode"] == "planned" and health["tesla"]["plugged"] is True
+        assert health["tesla"]["soc_source"] == "assumed"
+        assert health["egolf"]["soc_source"] == "estimated"
+        current = app.planning.current()
+        assert current is not None
+        assert [
+            (car.key, car.reachable, car.finish_at is not None) for car in current.vehicles
+        ] == [("tesla", True, True)]
+
         # eine Monatsspitze für Plan, Boost-Mehrkosten und Statistik
         peak = app.ledger.month_peak(T_DEMO.astimezone(LOCAL_TZ).date())
         plan = app.planning.current()

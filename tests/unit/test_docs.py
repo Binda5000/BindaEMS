@@ -86,6 +86,11 @@ def test_statistics_page_in_the_guide_uses_the_texts_of_the_ui() -> None:
         "PV (ohne Markierung)",
         "Abgleich mit den Zählern",
         "Ersparnis bei gleichem Netzbezug",
+        "Geplantes Laden",
+        "Im Zeitraum gab es keine geplante Ladung.",
+        "machbaren Ladungen erreicht",
+        "Vor der Abfahrt abgesteckt:",
+        "Vor der Abfahrt geändert oder verlassen:",
     ):
         assert phrase in text, phrase
         assert phrase in source, phrase
@@ -96,6 +101,41 @@ def test_statistics_page_in_the_guide_uses_the_texts_of_the_ui() -> None:
     assert "\n| Statistik | " in _guide_section("12. Web-UI")  # die Zeile der Seitenliste
     for topic in ("Session seit {HH:MM}", "Letzte Session {TT.MM.}"):
         assert topic in section, topic
+
+
+def test_charging_page_in_the_guide_uses_the_planned_texts_of_the_ui() -> None:
+    # „Laden“ in Abschnitt 12 nennt die Felder und Zeilen von „Geplant“ wie `ui/src` (Plan 4b).
+    section = " ".join(_guide_section("12. Web-UI").split())
+    _, found, text = section.partition("### Laden ")
+    assert found, "Der Unterabschnitt „Laden“ fehlt in „Web-UI“."
+    text = text.split(" ### ", 1)[0]
+    source = " ".join(
+        " ".join(path.read_text(encoding="utf-8").split())
+        for path in Path("ui/src").rglob("*")
+        if path.suffix in {".svelte", ".ts"} and ".test." not in path.name
+    )
+    assert "Min+PV, Sofort, Aus oder Geplant" in text
+    for phrase in (
+        "Ziel-SOC",
+        "Abfahrt",
+        "Übernehmen",
+        "Kein Plan · lädt spätestens ab",
+        "Ladestand geschätzt",
+        "liegt unter dem Ziel.",
+        "/api/control/vehicles/",
+    ):
+        assert phrase in text, phrase
+        assert phrase in source, phrase
+    for line in (
+        "„Ziel erreicht ({soc} %).“",
+        "„Fertig um {HH:MM} · Ziel {soc} % bis {HH:MM}“",
+        "„Ziel {soc} % bis {HH:MM} nicht erreichbar, voraussichtlich {x} %.“",
+        "„Kein Plan · lädt spätestens ab {HH:MM}“",
+        "„Ladestand unbekannt, gerechnet ab 0 %.“",
+    ):
+        assert line in text, line
+    zeitplan = section.partition("### Zeitplan ")[2].split(" ### ", 1)[0]
+    assert "Diagramm „Autos“" in zeitplan
 
 
 def test_operations_guide_describes_the_web_ui() -> None:

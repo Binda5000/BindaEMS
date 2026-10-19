@@ -138,3 +138,18 @@ it('shows no execution line without a valid plan', () => {
 	expect(container.querySelector('.execution')).toBeNull();
 	expect(screen.getByText('Noch kein Plan.')).toBeTruthy();
 });
+
+it('nennt je geplantem Auto die Zeile wie in der Fahrzeugkarte', () => {
+	// Demo: der Tesla lädt „Geplant“ bis 17:30 auf 60 %, sein Ladestand ist angenommen
+	render(PlanHeader, { data: RESPONSE, canOperate: false });
+	const car = PLAN.vehicles[0]!;
+	expect(car.finish_at).not.toBeNull();
+	const line = screen.getByText(/^Fertig um \d\d:\d\d · Ziel 60 % bis 17:30$/);
+	expect(line.closest('li')).toHaveTextContent('Tesla Model 3');
+	expect(screen.getByText('Ladestand unbekannt, gerechnet ab 0 %.')).toBeVisible();
+});
+
+it('zeigt ohne geplante Autos keine Zeile dazu', () => {
+	render(PlanHeader, { data: { ...RESPONSE, plan: { ...PLAN, vehicles: [] } }, canOperate: false });
+	expect(screen.queryByText(/^Fertig um/)).toBeNull();
+});

@@ -289,9 +289,13 @@ describe('Zeitplan', () => {
 	});
 
 	it('kennt die geplanten Autos und die Ladeleistung je Slot', () => {
+		// Demo: der Tesla lädt „Geplant“ mit angenommenem Ladestand, der Plan lädt ihn ab jetzt
 		const slots = demo.plan.slots as Record<string, unknown>[];
-		expect(slots[0]?.ev_w).toEqual({});
-		expect(demo.plan.vehicles).toEqual([]);
+		expect(Object.keys(slots[0]?.ev_w as object)).toEqual(['tesla']);
+		const planned = demo.plan.vehicles as Record<string, unknown>[];
+		expect(planned.map((car) => [car.key, car.soc_assumed, car.reachable])).toEqual([
+			['tesla', true, true]
+		]);
 		expect(issues(s.PlanSlotSchema, { ...slots[0], ev_w: { tesla: 6900 } })).toEqual([]);
 		expect(issues(s.PlanSlotSchema, { ...slots[0], ev_w: { tesla: '6900' } })).not.toEqual([]);
 		const car = {

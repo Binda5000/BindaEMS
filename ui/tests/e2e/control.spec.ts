@@ -1,6 +1,6 @@
-// Bedienung: Lademodus (Laden), Live-Dialog (System) und Entscheidungen. Das Demo-Backend ist ein
-// gemeinsamer Zustand: Der „Sofort“-Test stellt den Tesla am Ende auf „Min+PV“ zurück (auch bei
-// einem Fehlschlag), damit keine andere Datei von seiner Änderung abhängt.
+// Bedienung: Lademodus und Ziel (Laden), Live-Dialog (System) und Entscheidungen. Das Demo-Backend ist
+// ein gemeinsamer Zustand: Die Tests stellen den Tesla am Ende auf „Geplant“ mit Ziel 60 % und
+// Abfahrt 17:30 zurück (auch bei einem Fehlschlag), damit keine andere Datei von ihrer Änderung abhängt.
 import { expect, test, type Page } from '@playwright/test';
 import { login } from './helpers';
 
@@ -29,7 +29,7 @@ test('Bedienen stellt den Tesla auf Sofort', async ({ page, browser }) => {
 	await login(page, 'bedienen');
 	await page.goto('/laden');
 	await expect(page.getByRole('heading', { level: 1, name: 'Laden' })).toBeVisible();
-	await expect(modeSelect(page)).toHaveValue('min_pv');
+	await expect(modeSelect(page)).toHaveValue('planned');
 	try {
 		await setMode(page, 'Sofort');
 
@@ -50,16 +50,75 @@ test('Bedienen stellt den Tesla auf Sofort', async ({ page, browser }) => {
 				.filter({ hasText: 'bedienen (UI)' });
 			await expect(row.first()).toBeVisible();
 			await expect(row.first()).toContainText('tesla');
-			await expect(row.first()).toContainText('from: min_pv');
+			await expect(row.first()).toContainText('from: planned');
 			await expect(row.first()).toContainText('to: now');
 			await expect(row.first()).toContainText('result: accepted');
 		} finally {
 			await context.close();
 		}
 	} finally {
-		await setMode(page, 'Min+PV');
+		await setMode(page, 'Geplant');
 		await page.reload();
-		await expect(modeSelect(page)).toHaveValue('min_pv');
+		await expect(modeSelect(page)).toHaveValue('planned');
+	}
+});
+
+/** Setzt Ziel-SOC und Abfahrt des Tesla über „Übernehmen“ und wartet auf die Antwort */
+async function setTarget(page: Page, soc: string, departure: string): Promise<void> {
+	const card = teslaCard(page);
+	await expect(card.getByRole('button', { name: 'Übernehmen' })).toBeEnabled();
+	await card.getByRole('spinbutton', { name: 'Ziel-SOC' }).fill(soc);
+	await card.getByLabel('Abfahrt').fill(departure);
+	const reply = page.waitForResponse((response) =>
+		response.url().endsWith('/api/control/vehicles/tesla/target')
+	);
+	await card.getByRole('button', { name: 'Übernehmen' }).click();
+	expect((await reply).status()).toBe(200);
+}
+
+test('Bedienen stellt den Tesla auf Geplant mit Ziel 80 % und Abfahrt 07:00', async ({
+	page,
+	browser
+}) => {
+	await login(page, 'bedienen');
+	await page.goto('/laden');
+	// Demo: der Tesla lädt schon „Geplant“ (Ziel 60 %, Abfahrt 17:30); der Plan nennt, wann er fertig
+	// ist, und sein Ladestand ist angenommen
+	await expect(modeSelect(page)).toHaveValue('planned');
+	const card = teslaCard(page);
+	await expect(card.getByText(/^Fertig um \d\d:\d\d · Ziel 60\s%\sbis 17:30$/)).toBeVisible();
+	await expect(card.getByText(/^Ladestand unbekannt, gerechnet ab 0\s%\.$/)).toBeVisible();
+	try {
+		await setTarget(page, '80', '07:00');
+
+		// nach dem Neuladen zeigen die Felder die neue Absicht
+		await page.reload();
+		await expect(card.getByRole('spinbutton', { name: 'Ziel-SOC' })).toHaveValue('80');
+		await expect(card.getByLabel('Abfahrt')).toHaveValue('07:00');
+
+		// das Änderungsprotokoll nennt die Änderung (als admin)
+		const context = await browser.newContext();
+		try {
+			const adminPage = await context.newPage();
+			await login(adminPage, 'admin');
+			await adminPage.goto('/protokoll');
+			const row = adminPage
+				.getByRole('row')
+				.filter({ hasText: 'Ziel geändert' })
+				.filter({ hasText: 'bedienen (UI)' });
+			await expect(row.first()).toBeVisible();
+			await expect(row.first()).toContainText('tesla');
+			await expect(row.first()).toContainText('from: Ziel 60 %, Abfahrt 17:30');
+			await expect(row.first()).toContainText('to: Ziel 80 %, Abfahrt 07:00');
+			await expect(row.first()).toContainText('result: accepted');
+		} finally {
+			await context.close();
+		}
+	} finally {
+		await page.goto('/laden');
+		await setTarget(page, '60', '17:30');
+		await page.reload();
+		await expect(card.getByRole('spinbutton', { name: 'Ziel-SOC' })).toHaveValue('60');
 	}
 });
 

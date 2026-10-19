@@ -6,11 +6,11 @@
     "actuators": {},
     "vehicles": {
       "tesla": {
-        "mode": "min_pv",
+        "mode": "planned",
         "boost_until": null,
         "wallbox": null,
-        "target_soc_pct": 80,
-        "departure": "07:00"
+        "target_soc_pct": 60,
+        "departure": "17:30"
       }
     },
     "priority": null,

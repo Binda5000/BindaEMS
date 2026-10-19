@@ -174,6 +174,7 @@ it('zeigt unter den Kosten Autos, Ladesessions, Verbraucher, Monatsspitzen und A
 		'Energie',
 		'Kosten',
 		'Autos',
+		'Geplantes Laden',
 		'Ladesessions',
 		'Verbraucher',
 		'Monatsspitzen',

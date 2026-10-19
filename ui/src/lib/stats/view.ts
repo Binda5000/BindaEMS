@@ -332,3 +332,25 @@ export function checkNotice(stats: Stats): string | null {
 	}
 	return `Mehr als 1 % Abweichung am ${joinList(days)}`;
 }
+
+/** Die Sätze der Karte „Geplantes Laden“; `null`, wenn es im Zeitraum keine geplante Ladung gab */
+export interface PlannedLines {
+	/** „{a} von {b} machbaren Ladungen erreicht ({pct} %)“ (Abnahme „Ziel-SOC“) */
+	rate: string;
+	/** was nicht in die Quote zählt */
+	outside: string;
+	changed: string;
+}
+
+export function plannedLines(planned: Stats['planned']): PlannedLines | null {
+	const { reached, feasible, infeasible, early, unknown, changed } = planned;
+	if (feasible + infeasible + early + unknown + changed === 0) return null;
+	// abgerundet: 94,6 % sind keine 95 %, die die Abnahme verlangt
+	const pct = feasible > 0 ? formatNumber(Math.floor((reached * 100) / feasible), 0) : DASH;
+	const n = (value: number) => formatNumber(value, 0);
+	return {
+		rate: `${n(reached)} von ${n(feasible)} machbaren Ladungen erreicht (${pct}${NBSP}%)`,
+		outside: `Nicht machbar: ${n(infeasible)} · Vor der Abfahrt abgesteckt: ${n(early)} · Ohne Ladestand: ${n(unknown)}`,
+		changed: `Vor der Abfahrt geändert oder verlassen: ${n(changed)}`
+	};
+}

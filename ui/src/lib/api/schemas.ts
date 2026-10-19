@@ -258,6 +258,25 @@ export type Clue = v.InferOutput<typeof ClueSchema>;
 export const SupportSourceSchema = v.picklist(['config', 'intent', 'plan']);
 export type SupportSource = v.InferOutput<typeof SupportSourceSchema>;
 
+/** Quelle des Ladestands eines Fahrzeugs: gemessen, aus dem Zähler geschätzt oder angenommen */
+export const SocSourceSchema = v.picklist(['measured', 'estimated', 'assumed']);
+export type SocSource = v.InferOutput<typeof SocSourceSchema>;
+
+/**
+ * „Geplant“ im Health (Plan 4b): `state` `plan` (ein gültiger Slot nennt das Auto), `surplus`
+ * (PV-Überschuss), `due` (ab der spätesten Startzeit volle Leistung) oder `reached` (am Ziel);
+ * `target_soc_pct` ist das wirksame Ziel, `latest_start` `null` ohne Bedarf
+ */
+export const PlannedHealthSchema = v.object({
+	state: v.picklist(['plan', 'surplus', 'due', 'reached']),
+	target_soc_pct: v.number(),
+	departure_at: Iso,
+	need_kwh: v.number(),
+	latest_start: v.nullable(Iso),
+	plan_w: NullableNumber
+});
+export type PlannedHealth = v.InferOutput<typeof PlannedHealthSchema>;
+
 export const VehicleHealthSchema = v.object({
 	id: v.string(),
 	name: v.string(),
@@ -276,7 +295,14 @@ export const VehicleHealthSchema = v.object({
 	boost_pending: v.boolean(),
 	override_pending: v.boolean(),
 	/** letzter Grund des letzten Befehls (Code) */
-	reason: v.nullable(v.string())
+	reason: v.nullable(v.string()),
+	/** Ladestand in % und woher er kommt (Plan 4b); `assumed` heißt angenommen mit 0 % */
+	soc_pct: v.optional(NullableNumber, null),
+	soc_source: v.optional(v.nullable(SocSourceSchema), null),
+	/** Ladelimit im Auto in %; nur mit Tessie */
+	charge_limit_pct: v.optional(NullableNumber, null),
+	/** Stand von „Geplant“ an einer Wallbox; sonst `null` */
+	planned: v.optional(v.nullable(PlannedHealthSchema), null)
 });
 export type VehicleHealth = v.InferOutput<typeof VehicleHealthSchema>;
 

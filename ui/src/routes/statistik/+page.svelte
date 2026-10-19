@@ -26,6 +26,7 @@
 		type Period
 	} from '$lib/stats/period';
 	import PeaksCard from '$lib/stats/PeaksCard.svelte';
+	import PlannedCard from '$lib/stats/PlannedCard.svelte';
 	import SessionsCard from '$lib/stats/SessionsCard.svelte';
 	import StatTiles from '$lib/stats/StatTiles.svelte';
 	import VehicleCard from '$lib/stats/VehicleCard.svelte';
@@ -181,6 +182,7 @@
 
 			<CostCard stats={current} />
 			<VehicleCard stats={current} />
+			<PlannedCard stats={current} />
 			<SessionsCard sessions={view?.sessions.data} error={view?.sessions.error?.detail} />
 			<ConsumersCard stats={current} />
 			<PeaksCard stats={current} />

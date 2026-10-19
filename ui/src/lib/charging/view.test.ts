@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { ChargingSession, Intent, VehicleHealth } from '$lib/api/schemas';
+import type { ChargingSession, Intent, PlanVehicle, VehicleHealth } from '$lib/api/schemas';
 import { chargingSession } from '$lib/testing/fixtures';
 import {
 	assignmentLabel,
@@ -15,6 +15,8 @@ import {
 	occupantText,
 	overrideVehicle,
 	parseSupportThreshold,
+	parseTarget,
+	plannedLine,
 	priorityOrder,
 	reasonLabel,
 	sessionLine,
@@ -40,6 +42,10 @@ function vehicle(changes: Partial<VehicleHealth> = {}): VehicleHealth {
 		boost_pending: false,
 		override_pending: false,
 		reason: null,
+		soc_pct: null,
+		soc_source: null,
+		charge_limit_pct: null,
+		planned: null,
 		...changes
 	};
 }
@@ -438,5 +444,179 @@ describe('Session in der Fahrzeugkarte', () => {
 
 	it('zeigt eine Session ohne Ende als laufend, auch wenn open fehlt', () => {
 		expect(sessionLine(done({ end: null, open: false }))).toMatch(/^Session seit 18:00/);
+	});
+});
+
+describe('Geplant', () => {
+	const NB = '\u00a0';
+	// Abfahrt 07:00, späteste Startzeit 01:30, fertig um 05:45 (Wiener Zeit, MESZ)
+	const DEPARTURE = '2026-10-10T05:00:00+00:00';
+	const planned = (changes: Partial<NonNullable<VehicleHealth['planned']>> = {}) => ({
+		state: 'surplus' as const,
+		target_soc_pct: 80,
+		departure_at: DEPARTURE,
+		need_kwh: 25,
+		latest_start: '2026-10-09T23:30:00+00:00',
+		plan_w: null,
+		...changes
+	});
+	const car = (changes: Partial<PlanVehicle> = {}): PlanVehicle => ({
+		key: 'tesla',
+		name: 'Tesla Model 3',
+		wallbox: 'twc',
+		target_soc_pct: 80,
+		departure_at: DEPARTURE,
+		soc_start_pct: 50,
+		soc_assumed: false,
+		limit_pct: null,
+		need_kwh: 25,
+		planned_kwh: 22.5,
+		shortfall_kwh: 0,
+		expected_soc_pct: 80,
+		finish_at: '2026-10-10T03:45:00+00:00',
+		reachable: true,
+		...changes
+	});
+	const health = (changes: Partial<VehicleHealth> = {}) =>
+		vehicle({
+			mode: 'planned',
+			plugged: true,
+			soc_pct: 50,
+			soc_source: 'measured',
+			planned: planned(),
+			...changes
+		});
+
+	it('nennt mit Plan, wann das Auto fertig ist', () => {
+		expect(plannedLine({ mode: 'planned', vehicle: health(), car: car(), target: 80 })).toEqual({
+			text: `Fertig um 05:45 · Ziel 80${NB}% bis 07:00`,
+			notes: []
+		});
+	});
+
+	it('sagt, wenn der Plan das Ziel nicht erreicht', () => {
+		const late = car({ reachable: false, expected_soc_pct: 61.6, shortfall_kwh: 8 });
+		expect(plannedLine({ mode: 'planned', vehicle: health(), car: late, target: 80 })?.text).toBe(
+			`Ziel 80${NB}% bis 07:00 nicht erreichbar, voraussichtlich 62${NB}%.`
+		);
+	});
+
+	it('nennt ohne Plan die späteste Startzeit aus Health', () => {
+		expect(plannedLine({ mode: 'planned', vehicle: health(), car: null, target: 80 })?.text).toBe(
+			'Kein Plan · lädt spätestens ab 01:30'
+		);
+	});
+
+	it('meldet das erreichte Ziel aus Health vor dem Plan', () => {
+		const done = health({ soc_pct: 80.4, planned: planned({ state: 'reached', need_kwh: 0 }) });
+		expect(plannedLine({ mode: 'planned', vehicle: done, car: car(), target: 80 })?.text).toBe(
+			`Ziel erreicht (80${NB}%).`
+		);
+	});
+
+	it('meldet ein Ziel nie als erreicht, wenn der Ladestand angenommen ist', () => {
+		const assumed = health({
+			soc_pct: 0,
+			soc_source: 'assumed',
+			planned: planned({ state: 'reached' })
+		});
+		expect(plannedLine({ mode: 'planned', vehicle: assumed, car: null, target: 80 })?.text).toBe(
+			'Kein Plan · lädt spätestens ab 01:30'
+		);
+	});
+
+	it('meldet ein Ziel ohne Bedarf im Plan als erreicht, wenn der Ladestand bekannt ist', () => {
+		const full = car({ soc_start_pct: 85, need_kwh: 0, planned_kwh: 0, finish_at: null });
+		expect(plannedLine({ mode: 'planned', vehicle: null, car: full, target: 80 })?.text).toBe(
+			`Ziel erreicht (85${NB}%).`
+		);
+		// ohne Laden im Horizont und ohne bekanntes Ziel sagt der Plan nichts über „Fertig um“
+		const later = car({ planned_kwh: 0, finish_at: null });
+		expect(plannedLine({ mode: 'planned', vehicle: health(), car: later, target: 80 })?.text).toBe(
+			null
+		);
+	});
+
+	it('nennt die Quelle des Ladestands, angenommen nie als gemessen', () => {
+		const estimated = health({ soc_source: 'estimated' });
+		expect(
+			plannedLine({ mode: 'planned', vehicle: estimated, car: car(), target: 80 })?.notes
+		).toEqual(['Ladestand geschätzt']);
+		const assumed = health({ soc_pct: 0, soc_source: 'assumed' });
+		expect(
+			plannedLine({ mode: 'planned', vehicle: assumed, car: car(), target: 80 })?.notes
+		).toEqual([`Ladestand unbekannt, gerechnet ab 0${NB}%.`]);
+		// ohne Health gilt der Plan: ein angenommener Ladestand bleibt angenommen
+		const planOnly = car({ soc_start_pct: 0, soc_assumed: true });
+		expect(plannedLine({ mode: null, vehicle: null, car: planOnly, target: null })?.notes).toEqual([
+			`Ladestand unbekannt, gerechnet ab 0${NB}%.`
+		]);
+		expect(
+			plannedLine({ mode: 'planned', vehicle: health(), car: car(), target: 80 })?.notes
+		).toEqual([]);
+	});
+
+	it('sagt, wenn das Ladelimit im Auto unter dem Ziel liegt', () => {
+		const limited = health({ charge_limit_pct: 70, planned: planned({ target_soc_pct: 70 }) });
+		const line = plannedLine({
+			mode: 'planned',
+			vehicle: limited,
+			car: car({ target_soc_pct: 70, limit_pct: 70 }),
+			target: 80
+		});
+		expect(line?.text).toBe(`Fertig um 05:45 · Ziel 70${NB}% bis 07:00`);
+		expect(line?.notes).toEqual([`Ladelimit im Auto 70${NB}% liegt unter dem Ziel.`]);
+		// gleicht der core das Limit an (das wirksame Ziel bleibt), gibt es den Satz nicht
+		const synced = health({ charge_limit_pct: 70 });
+		expect(
+			plannedLine({ mode: 'planned', vehicle: synced, car: car(), target: 80 })?.notes
+		).toEqual([]);
+	});
+
+	it('zeigt nichts außerhalb von „Geplant“ und für ein abgestecktes Auto', () => {
+		expect(plannedLine({ mode: 'pv', vehicle: health(), car: car(), target: 80 })).toBeNull();
+		expect(
+			plannedLine({ mode: 'planned', vehicle: health({ plugged: false }), car: car(), target: 80 })
+		).toBeNull();
+		expect(
+			plannedLine({ mode: 'planned', vehicle: health({ planned: null }), car: null, target: 80 })
+		).toBeNull();
+	});
+
+	it('nennt bei unbekanntem Plan weder Plan noch „Kein Plan“', () => {
+		expect(plannedLine({ mode: 'planned', vehicle: health(), car: undefined, target: 80 })).toEqual(
+			{ text: null, notes: [] }
+		);
+	});
+
+	it('prüft Ziel-SOC und Abfahrt und schickt nur, was sich ändert', () => {
+		const now = { target_soc_pct: 60, departure: '17:30' };
+		expect(parseTarget('80', '07:00', now)).toEqual({
+			ok: true,
+			target_soc_pct: 80,
+			departure: '07:00'
+		});
+		expect(parseTarget('60', '07:00', now)).toEqual({
+			ok: true,
+			target_soc_pct: null,
+			departure: '07:00'
+		});
+		expect(parseTarget('60', '17:30', now)).toEqual({
+			ok: true,
+			target_soc_pct: null,
+			departure: null
+		});
+		expect(parseTarget('19', '07:00', now)).toEqual({
+			ok: false,
+			text: 'Ziel-SOC „19“ liegt außerhalb von 20–100 %.'
+		});
+		expect(parseTarget('80.5', '07:00', now).ok).toBe(false);
+		expect(parseTarget('', '07:00', now).ok).toBe(false);
+		expect(parseTarget('80', '07:00', now, true).ok).toBe(false);
+		expect(parseTarget('80', '24:00', now)).toEqual({
+			ok: false,
+			text: 'Abfahrt „24:00“ ist keine Uhrzeit (HH:MM).'
+		});
+		expect(parseTarget('80', '', now).ok).toBe(false);
 	});
 });

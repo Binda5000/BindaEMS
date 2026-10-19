@@ -12,11 +12,13 @@ import {
 	type ControlReply,
 	type CoreHealth,
 	type Intent,
+	type PlanResponse,
 	type Role,
 	type VehicleHealth,
 	type WallboxHealth
 } from '$lib/api/schemas';
 import { chargingSession, limits, system } from '$lib/testing/fixtures';
+import { RESPONSE as PLAN_RESPONSE } from '$lib/testing/plan';
 import Page from './+page.svelte';
 
 const { api, user } = vi.hoisted(() => ({
@@ -26,7 +28,9 @@ const { api, user } = vi.hoisted(() => ({
 		limits: vi.fn(),
 		boostCost: vi.fn(),
 		chargingSessions: vi.fn(),
+		plan: vi.fn(),
 		setRegulation: vi.fn(),
+		setTarget: vi.fn(),
 		setMode: vi.fn(),
 		setBoost: vi.fn(),
 		setWallboxVehicle: vi.fn(),
@@ -90,9 +94,11 @@ async function show(
 	response = system(),
 	intent: Intent | null = baseIntent(),
 	boostCost: BoostCost = boostCostJson,
-	sessions: ChargingSession[] = []
+	sessions: ChargingSession[] = [],
+	plan: PlanResponse = PLAN_RESPONSE
 ) {
 	api.system.mockResolvedValue(response);
+	api.plan.mockResolvedValue(plan);
 	api.boostCost.mockResolvedValue(boostCost);
 	api.control.mockResolvedValue({ core_connected: true, intent });
 	api.limits.mockResolvedValue(limits());
@@ -120,7 +126,7 @@ it('Bedienen wählt einen Lademodus', async () => {
 	await show();
 	api.setMode.mockResolvedValue(reply());
 	const select = within(card('Tesla Model 3')).getByRole('combobox', { name: 'Lademodus' });
-	expect(select).toHaveValue('min_pv');
+	expect(select).toHaveValue('planned');
 	expect(
 		within(select)
 			.getAllByRole('option')
@@ -355,8 +361,62 @@ it('Zuordnung je Wallbox mit Indizien', async () => {
 });
 
 it('zeigt eine Wallbox ohne Vorgang', async () => {
-	await show();
+	const health = system().core.health!;
+	await show(healthWith({ wallboxes: wallboxAt(health, 'evcs', { occupant: null }) }));
 	expect(within(card('EVCS')).getByText('kein Fahrzeug')).toBeInTheDocument();
+});
+
+// Demo: Der Tesla lädt „Geplant“ (Ziel 60 %, Abfahrt 17:30), der Plan lädt ihn bis 16:30; sein
+// Ladestand ist angenommen. Der e-Golf hat einen geschätzten Ladestand.
+it('zeigt „Geplant“ mit dem Plan, der Quelle des Ladestands und den Feldern', async () => {
+	await show();
+	const tesla = card('Tesla Model 3');
+	// testing-library vergleicht mit Leerzeichen statt geschützter Leerzeichen
+	expect(
+		await within(tesla).findByText('Fertig um 16:30 · Ziel 60 % bis 17:30')
+	).toBeInTheDocument();
+	expect(within(tesla).getByText('Ladestand unbekannt, gerechnet ab 0 %.')).toBeInTheDocument();
+	expect(within(tesla).getByRole('spinbutton', { name: 'Ziel-SOC' })).toHaveValue(60);
+	expect(within(tesla).getByLabelText('Abfahrt')).toHaveValue('17:30');
+	expect(within(card('e-Golf')).getByText('geschätzt').parentElement).toHaveTextContent(
+		'49 % geschätzt'
+	);
+	expect(within(card('e-Golf')).queryByRole('spinbutton', { name: 'Ziel-SOC' })).toBeNull();
+});
+
+it('nennt ohne gültigen Plan die späteste Startzeit aus Health', async () => {
+	await show(system(), baseIntent(), boostCostJson, [], {
+		...PLAN_RESPONSE,
+		plan: { ...PLAN_RESPONSE.plan!, valid: false }
+	});
+	expect(
+		await within(card('Tesla Model 3')).findByText('Kein Plan · lädt spätestens ab 12:16')
+	).toBeInTheDocument();
+});
+
+it('Bedienen übernimmt Ziel-SOC und Abfahrt', async () => {
+	await show();
+	api.setTarget.mockResolvedValue(reply());
+	const tesla = card('Tesla Model 3');
+	await fireEvent.input(within(tesla).getByRole('spinbutton', { name: 'Ziel-SOC' }), {
+		target: { value: '80' }
+	});
+	await fireEvent.input(within(tesla).getByLabelText('Abfahrt'), { target: { value: '07:00' } });
+	await fireEvent.click(within(tesla).getByRole('button', { name: 'Übernehmen' }));
+	await waitFor(() => expect(api.setTarget).toHaveBeenCalledWith('tesla', 80, '07:00'));
+});
+
+it('zeigt die Ablehnung des Ziels an der Karte', async () => {
+	await show();
+	api.setTarget.mockRejectedValue(
+		new ApiError(422, 'Ziel-SOC „101“ liegt außerhalb von 20–100 %.')
+	);
+	const tesla = card('Tesla Model 3');
+	await fireEvent.input(within(tesla).getByLabelText('Abfahrt'), { target: { value: '07:00' } });
+	await fireEvent.click(within(tesla).getByRole('button', { name: 'Übernehmen' }));
+	expect(
+		await within(tesla).findByText('Ziel-SOC „101“ liegt außerhalb von 20–100 %.')
+	).toBeInTheDocument();
 });
 
 it('zeigt die Übersteuerung einer Wallbox in der Auswahl', async () => {

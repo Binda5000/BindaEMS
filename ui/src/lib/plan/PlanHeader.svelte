@@ -2,6 +2,7 @@
 	import type { PlanResponse } from '$lib/api/schemas';
 	import Card from '$lib/components/Card.svelte';
 	import { DASH, formatEur, formatNumber, formatTime, NBSP } from '$lib/format';
+	import { plannedLine } from '$lib/charging/view';
 	import { SOURCE_LABELS, TRIGGER_LABELS } from './model';
 
 	interface Props {
@@ -38,6 +39,15 @@
 		plan === null || (!data.status.ok && !(plan.source === 'fallback' && valid))
 			? data.status.message
 			: null
+	);
+
+	// je geplantem Auto die Zeile wie in der Fahrzeugkarte; der Zeitplan kennt nur den Plan
+	const cars = $derived(
+		(plan?.vehicles ?? []).map((car) => ({
+			key: car.key,
+			name: car.name,
+			line: plannedLine({ mode: null, vehicle: null, car, target: null })
+		}))
 	);
 
 	async function toggle(event: Event) {
@@ -77,6 +87,17 @@
 				<dd>{budget === null ? DASH : `${formatNumber(budget, 1)}${NBSP}kW`}</dd>
 			{/if}
 		</dl>
+		{#if cars.length > 0}
+			<ul class="cars" aria-label="Geplante Autos">
+				{#each cars as car (car.key)}
+					<li>
+						<strong>{car.name}</strong>
+						{#if car.line?.text}<span>{car.line.text}</span>{/if}
+						{#each car.line?.notes ?? [] as note (note)}<span class="muted">{note}</span>{/each}
+					</li>
+				{/each}
+			</ul>
+		{/if}
 	{:else}
 		<p>Noch kein Plan.</p>
 	{/if}
@@ -165,6 +186,19 @@
 
 	.costs {
 		margin-bottom: 0.75rem;
+	}
+
+	.cars {
+		margin: 0 0 0.75rem;
+		padding: 0;
+		list-style: none;
+		overflow-wrap: anywhere;
+	}
+
+	.cars li {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 0 0.5rem;
 	}
 
 	.status {

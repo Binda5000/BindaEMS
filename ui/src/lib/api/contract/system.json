@@ -77,11 +77,11 @@
         "actuators": {},
         "vehicles": {
           "tesla": {
-            "mode": "min_pv",
+            "mode": "planned",
             "boost_until": null,
             "wallbox": null,
-            "target_soc_pct": 80,
-            "departure": "07:00"
+            "target_soc_pct": 60,
+            "departure": "17:30"
           }
         },
         "priority": null,
@@ -167,13 +167,13 @@
         {
           "id": "tesla",
           "name": "Tesla Model 3",
-          "mode": "min_pv",
+          "mode": "planned",
           "boost_until": null,
           "wallbox": "twc",
           "assignment": "default",
           "limit_a": null,
-          "plugged": null,
-          "charging": null,
+          "plugged": true,
+          "charging": true,
           "wakes_today": 0,
           "commands_hour": 0,
           "boost_pending": false,
@@ -182,7 +182,14 @@
           "soc_pct": 0.0,
           "soc_source": "assumed",
           "charge_limit_pct": null,
-          "planned": null
+          "planned": {
+            "state": "surplus",
+            "target_soc_pct": 60.0,
+            "departure_at": "2026-10-09T15:30:00+00:00",
+            "need_kwh": 50.0,
+            "latest_start": "2026-10-09T10:16:05.217391+00:00",
+            "plan_w": null
+          }
         },
         {
           "id": "egolf",
@@ -192,15 +199,15 @@
           "wallbox": "evcs",
           "assignment": "default",
           "limit_a": null,
-          "plugged": null,
-          "charging": null,
+          "plugged": true,
+          "charging": false,
           "wakes_today": 0,
           "commands_hour": null,
           "boost_pending": false,
           "override_pending": false,
-          "reason": null,
-          "soc_pct": 0.0,
-          "soc_source": "assumed",
+          "reason": "mode_pv",
+          "soc_pct": 48.93264248704684,
+          "soc_source": "estimated",
           "charge_limit_pct": null,
           "planned": null
         }
@@ -227,16 +234,16 @@
       "wallboxes": [
         {
           "id": "evcs",
-          "occupant": null,
-          "name": null,
-          "assignment": null,
+          "occupant": "egolf",
+          "name": "e-Golf",
+          "assignment": "default",
           "indicators": []
         },
         {
           "id": "twc",
-          "occupant": null,
-          "name": null,
-          "assignment": null,
+          "occupant": "tesla",
+          "name": "Tesla Model 3",
+          "assignment": "default",
           "indicators": []
         }
       ],
