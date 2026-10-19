@@ -292,6 +292,28 @@ class CoeReceive(_Model):
         found = {name: getattr(self, name) for name in type(self).model_fields}
         return {name: channel for name, channel in found.items() if channel is not None}
 
+    @model_validator(mode="after")
+    def _each_value_once(self) -> Self:
+        # Lesen zwei Größen denselben Wert, wäre etwa beim Kühlen die Betriebsart immer Heizen,
+        # und das Vorzeichen des Versatzes kippte.
+        seen: dict[tuple[int, str, int], str] = {}
+        for name, channel in self.channels().items():
+            kind, output = (
+                ("analog", channel.analog)
+                if channel.analog is not None
+                else ("digital", channel.digital)
+            )
+            if output is None:
+                continue  # das prüft ``CoeChannel``
+            key = (channel.node, kind, output)
+            if key in seen:
+                raise ValueError(
+                    f"{seen[key]} und {name} lesen denselben Wert "
+                    f"(Knoten {channel.node}, {kind} {output})."
+                )
+            seen[key] = name
+        return self
+
 
 class ThermalStrategyConfig(_Model):
     """Schwellen der Strategie der Klimaanlage (Plan 6a, Entscheidung 5); keine harten Grenzen."""

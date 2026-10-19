@@ -1,3 +1,4 @@
+import re
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -779,6 +780,37 @@ def test_example_has_klima(cfg: Config) -> None:
 def test_coe_offset_rejects(bad: dict[str, Any]) -> None:
     with pytest.raises(ValidationError):
         Config.model_validate(_thermal_dict(**bad))
+
+
+@pytest.mark.parametrize(
+    ("field", "channel", "message"),
+    [
+        (
+            "heating",
+            {"node": 56, "digital": 2},
+            "cooling und heating lesen denselben Wert (Knoten 56, digital 2)",
+        ),
+        (
+            "setpoint_c",
+            {"node": 56, "analog": 1, "unit": 1},
+            "actual_c und setpoint_c lesen denselben Wert (Knoten 56, analog 1)",
+        ),
+    ],
+)
+def test_receive_channels_must_differ(field: str, channel: dict[str, Any], message: str) -> None:
+    # Abschlussreview M9 (T1): Lesen zwei Größen denselben Wert, wäre etwa die Betriebsart beim
+    # Kühlen immer Heizen, und das Vorzeichen des Versatzes kippte.
+    data = _example_dict()
+    data["thermal"]["devices"]["klima"]["receive"][field] = channel
+    with pytest.raises(ValidationError, match=re.escape(message)):
+        Config.model_validate(data)
+
+
+def test_receive_channels_may_share_a_number_across_kinds() -> None:
+    # Analog 2 und digital 2 desselben Knotens sind verschiedene Werte (so im Beispiel).
+    receive = Config.model_validate(_example_dict()).thermal.devices["klima"].receive
+    assert (receive.setpoint_c.node, receive.setpoint_c.analog) == (56, 2)
+    assert (receive.cooling.node, receive.cooling.digital) == (56, 2)
 
 
 def test_own_node_as_receive_node_has_a_german_message() -> None:
