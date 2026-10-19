@@ -34,8 +34,11 @@ from bindaems.shared.timeutil import ManualClock
 TOKEN = "x" * 32
 
 
-def make_runtime(cfg: Config, tmp_path: Path, ha_token: str | None = None) -> AppRuntime:
-    """Laufzeit ohne HTTP-Server; core und MQTT zeigen auf Port 1 (scheitern sofort)."""
+def make_runtime(
+    cfg: Config, tmp_path: Path, ha_token: str | None = None, *, with_mqtt: bool = True
+) -> AppRuntime:
+    """Laufzeit ohne HTTP-Server; core und MQTT zeigen auf Port 1 (scheitern sofort).
+    ``with_mqtt`` falsch: Home Assistant ohne MQTT (nur Benachrichtigungen mit Token)."""
     assert cfg.homeassistant is not None and cfg.homeassistant.mqtt is not None
     app = cfg.app.model_copy(
         update={
@@ -45,7 +48,7 @@ def make_runtime(cfg: Config, tmp_path: Path, ha_token: str | None = None) -> Ap
         }
     )
     mqtt = cfg.homeassistant.mqtt.model_copy(update={"host": "127.0.0.1", "port": 1})
-    homeassistant = cfg.homeassistant.model_copy(update={"mqtt": mqtt})
+    homeassistant = cfg.homeassistant.model_copy(update={"mqtt": mqtt if with_mqtt else None})
     local = cfg.model_copy(update={"app": app, "homeassistant": homeassistant})
     return AppRuntime(
         local,
@@ -1041,6 +1044,31 @@ async def test_ha_values_are_built_off_the_event_loop(cfg, tmp_path, respx_mock,
         runtime.engine.dispose()
     assert threads
     assert threading.get_ident() not in threads
+
+
+@pytest.mark.respx(assert_all_called=False)
+async def test_warnings_without_mqtt_get_their_ha_inputs(cfg, tmp_path, respx_mock, monkeypatch):
+    # Token für Home Assistant, aber kein MQTT: Die Warnungen brauchen die Werte für HA trotzdem.
+    # Ohne den Job „ha-inputs“ warteten sie ewig auf die ersten Werte, ohne sichtbaren Fehler.
+    respx_mock.route().respond(503)
+    runtime = make_runtime(cfg, tmp_path, ha_token="h" * 20, with_mqtt=False)
+    assert runtime.ha_publisher is None and runtime.warning_notifications is not None
+    checks: list[bool] = []
+
+    async def check() -> None:
+        checks.append(True)
+
+    monkeypatch.setattr(runtime.warning_notifications, "check", check)
+    task = asyncio.create_task(runtime.run())
+    try:
+        await until(lambda: bool(checks))
+        names = {job.get_name() for job in runtime._tasks}
+        assert {"ha-inputs", "ha-warnings"} <= names and "ha" not in names
+        assert runtime._ha_ready.is_set()
+    finally:
+        await runtime.shutdown()
+        await asyncio.wait_for(task, timeout=2)
+        runtime.engine.dispose()
 
 
 async def test_ha_inputs_carry_the_intent(runtime, monkeypatch) -> None:
