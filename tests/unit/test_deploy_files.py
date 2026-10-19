@@ -19,10 +19,15 @@ def test_compose_references_existing_files() -> None:
     svc = compose["services"]["ems-core"]
     assert Path(svc["build"]["dockerfile"]).exists()
     assert svc["env_file"] == [".env"] or svc["env_file"] == ".env"
-    assert "ports" not in svc
     assert svc["networks"] == ["internal"]
     # „internal“ ist nur der Name: der core braucht LAN (Cerbo, Wallboxen) und Internet (Tessie)
     assert compose["networks"]["internal"].get("internal") is not True
+
+
+def test_core_publishes_only_coe_port() -> None:
+    # Der core veröffentlicht genau den CoE-Port der Klimaanlage (Plan 6a): UDP 5442, kein TCP-Port
+    compose = yaml.safe_load(Path("deploy/docker-compose.yml").read_text())
+    assert compose["services"]["ems-core"]["ports"] == ["5442:5442/udp"]
 
 
 class _FakeInflux(ThreadingHTTPServer):

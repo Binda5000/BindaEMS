@@ -18,9 +18,13 @@ services:
       options:
         max-size: 10m
         max-file: "5"
-    # Keine veröffentlichten Ports. Nur zur Diagnose kurzzeitig einkommentieren:
-    # ports:
+    # Veröffentlicht ist nur der CoE-Port der Klimaanlage (UDP 5442): Das C.M.I. sendet hierhin, der
+    # core antwortet vom selben Port (docs/betrieb.md, „Klimaanlage (Phase 6a)“). Routing und
+    # Firewall zwischen 192.168.81.0/24 und 192.168.82.0/24 sind Sache des Betreibers. Sonst keine
+    # Ports; zur Diagnose kurzzeitig einkommentieren:
     #   - "127.0.0.1:8081:8081"
+    ports:
+      - "5442:5442/udp"
     networks:
       - internal
 
