@@ -168,8 +168,13 @@ it('needsEvccConfirmation hängt nicht an den Schlüsseln der Demo', () => {
 	// die Schlüssel aus wallboxes und vehicles wählt die Konfiguration
 	expect(needsEvccConfirmation(['wallbox.garage'])).toBe(true);
 	expect(needsEvccConfirmation(['vehicle.egolf'])).toBe(true);
-	// nur Wallboxen und Fahrzeuge hängen an evcc; ein Aktor ohne dieses Präfix (Klimaanlage) nicht
-	expect(needsEvccConfirmation(['neu'])).toBe(false);
+	// Ruling R29: ein unbekannter Aktor verlangt im Zweifel die Bestätigung (eine künftige
+	// Familie muss sich ausdrücklich ausnehmen)
+	expect(needsEvccConfirmation(['neu'])).toBe(true);
+	expect(needsEvccConfirmation(['heatpump.keller'])).toBe(true);
+	// nur die Klimaanlage ist als ganze Familie ausgenommen, nicht ein ähnlicher Name
+	expect(needsEvccConfirmation(['thermal'])).toBe(true);
+	expect(needsEvccConfirmation(['thermalx.klima'])).toBe(true);
 });
 
 it('needsEvccConfirmation gilt nicht für die Klimaanlage', () => {
