@@ -149,7 +149,9 @@
 
 	/**
 	 * Führt eine Bedienung aus: Die Ablehnung des core steht an der Karte `card`, eine Begrenzung
-	 * als Hinweis. Danach lädt `control` sofort und `system` nach 2 s neu.
+	 * als Hinweis. Danach lädt `control` sofort und `system` nach 2 s neu, mit ihm der Plan: Ein
+	 * neues Ziel oder ein neuer Modus ändert den Plan, die Zeile „Fertig um …“ soll nicht bis zur
+	 * nächsten Minute den alten zeigen.
 	 */
 	async function act(card: string, call: () => Promise<ControlReply>): Promise<void> {
 		busy = true;
@@ -168,7 +170,10 @@
 		await control.refresh();
 		if (!stopped) {
 			clearTimeout(refreshTimer);
-			refreshTimer = setTimeout(() => void system.refresh(), SYSTEM_REFRESH_MS);
+			refreshTimer = setTimeout(() => {
+				void system.refresh();
+				void plan.refresh();
+			}, SYSTEM_REFRESH_MS);
 		}
 		busy = false;
 	}

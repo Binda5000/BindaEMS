@@ -406,6 +406,24 @@ it('Bedienen übernimmt Ziel-SOC und Abfahrt', async () => {
 	await waitFor(() => expect(api.setTarget).toHaveBeenCalledWith('tesla', 80, '07:00'));
 });
 
+it('nach Übernehmen holt die Seite den Plan neu', async () => {
+	// Der neue Plan kommt erst nach dem nächsten Health; die Zeile „Fertig um …“ soll nicht bis
+	// zur nächsten Minute das alte Ziel zeigen.
+	await show();
+	api.setTarget.mockResolvedValue(reply());
+	vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+	const loaded = api.plan.mock.calls.length;
+	const tesla = card('Tesla Model 3');
+	await fireEvent.input(within(tesla).getByRole('spinbutton', { name: 'Ziel-SOC' }), {
+		target: { value: '80' }
+	});
+	await fireEvent.click(within(tesla).getByRole('button', { name: 'Übernehmen' }));
+	await vi.advanceTimersByTimeAsync(1900);
+	expect(api.plan).toHaveBeenCalledTimes(loaded);
+	await vi.advanceTimersByTimeAsync(200);
+	expect(api.plan).toHaveBeenCalledTimes(loaded + 1);
+});
+
 it('zeigt die Ablehnung des Ziels an der Karte', async () => {
 	await show();
 	api.setTarget.mockRejectedValue(

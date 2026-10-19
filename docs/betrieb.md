@@ -1286,6 +1286,8 @@ Regelbetrieb“). Bis Health eine Änderung zeigt, steht auf der Seite die gesen
   nie „gemessen“) und „Ladelimit im Auto {x} % liegt unter dem Ziel.“ (ohne `charge_limit_sync`). Das
   Ziel ist das wirksame, bei einem Ladelimit darunter also das Limit. Abgesteckt oder in einem anderen
   Modus steht keine Zeile da; scheitert die Abfrage des Plans, fehlen die Zeilen mit Plan und ohne Plan.
+  Die Seite fragt den Plan jede Minute ab und nach jeder Bedienung (auch „Übernehmen“) nach 2 s
+  zusammen mit Health; die Zeile zeigt das neue Ziel, sobald die app neu geplant hat.
 - **Session:** Eine Zeile unter den Fakten des Fahrzeugs, aus den Ladesessions der letzten 30 Tage
   (Abschnitt 8, „Ladesessions und Kosten je Auto“; die Seite fragt sie jede Minute ab). Läuft eine,
   steht dort „Session seit {HH:MM} · {kWh} kWh (PV {a} · Akku {b} · Netz {c})“. Sonst steht dort die
