@@ -736,7 +736,12 @@ def test_documented_tool_commands_start_python_directly() -> None:
         "bindaems.tools.scenario_days",
         "bindaems.tools.coe_probe",
     } <= set(TOOL_COMMAND.findall(handbook))
-    for doc in ("docs/betrieb.md", "docs/verification/README.md", "cerbo-watchdog/README.md"):
+    for doc in (
+        "docs/betrieb.md",
+        "docs/verification/README.md",
+        "docs/verification/abnahme-phase-6a.md",
+        "cerbo-watchdog/README.md",
+    ):
         for command in TOOL_COMMAND.finditer(Path(doc).read_text(encoding="utf-8")):
             assert importlib.util.find_spec(command[1]) is not None, doc
             assert "--entrypoint python" in command[0], doc
@@ -753,15 +758,24 @@ def test_part2_options_in_the_docs_exist(capsys: pytest.CaptureFixture[str]) -> 
         "--entrypoint",
         "--service-ports",  # Docker: der Punkt `thermal` braucht den veröffentlichten UDP-Port
     }
-    sections = {
-        "docs/betrieb.md": r"### Prüfprotokoll Teil 2\n(.*?)\n### ",
-        "docs/verification/README.md": r"## Teil 2 – schreibend \(17\.2\)\n(.*?)\n## ",
-    }
-    for doc, pattern in sections.items():
+    sections = [
+        ("docs/betrieb.md", r"### Prüfprotokoll Teil 2\n(.*?)\n### ", ("--schlafend",)),
+        (
+            "docs/betrieb.md",
+            r"### Prüfprotokoll Teil 2, Punkt thermal\n(.*?)\n### ",
+            ("--geraet",),
+        ),
+        (
+            "docs/verification/README.md",
+            r"## Teil 2 – schreibend \(17\.2\)\n(.*?)\n## ",
+            ("--schlafend", "--geraet"),
+        ),
+    ]
+    for doc, pattern, extra in sections:
         found = re.search(pattern, Path(doc).read_text(encoding="utf-8"), re.DOTALL)
         assert found, doc
         documented = set(re.findall(r"--[a-z][a-z-]*", found[1]))
-        assert {"--punkt", "--out", "--yes", "--schlafend"} <= documented, doc
+        assert {"--punkt", "--out", "--yes", *extra} <= documented, doc
         assert documented <= known, f"{doc}: {sorted(documented - known)}"
 
 
@@ -1105,15 +1119,26 @@ def test_grafana_section_in_the_guide_matches_the_dashboard() -> None:
         assert topic in text, topic
 
 
-def test_climate_chapter_matches_the_code() -> None:
-    # „Klimaanlage (Phase 6a)“: Gründe mit dem Text des Logs, die Alarme, die Sensoren in
-    # Home Assistant, die Werkzeuge und der Port stehen wie im Code (Plan 6a, Task 13).
+def test_climate_chapter_matches_the_code(capsys: pytest.CaptureFixture[str]) -> None:
+    # „Klimaanlage (Phase 6a)“: Gründe mit dem Text des Logs, die Alarme, die Zeiten, die
+    # Konfigurationsschlüssel, die Sensoren in Home Assistant und die Werkzeuge stehen wie im Code
+    # (Plan 6a, Task 13).
     from bindaems.app.ha.entities import build_entities
     from bindaems.core.actuators.thermal import ECHO_MISMATCH_S
+    from bindaems.core.control.charging import FOLLOW_HOLD_S, RAMP_UP_S
     from bindaems.core.regulation_link import THERMAL_EXCEPTION
-    from bindaems.shared.config import load_config
+    from bindaems.core.runtime import THERMAL_PERMIT_S
+    from bindaems.shared.config import (
+        HA_THERMAL_PREFIX,
+        CoeOffsetConfig,
+        CoeReceive,
+        ThermalStrategyConfig,
+        load_config,
+    )
     from bindaems.shared.decisions import _REASON_TEXT
+    from bindaems.tools import coe_probe
     from bindaems.tools.part2.thermal import ITEM
+    from bindaems.tools.verify_part2 import main as verify_main
 
     section = " ".join(_guide_section("Klimaanlage (Phase 6a)").split())
     codes = {code: text for code, text in _REASON_TEXT.items() if code.startswith("thermal_")}
@@ -1123,18 +1148,41 @@ def test_climate_chapter_matches_the_code() -> None:
     assert f"`{THERMAL_EXCEPTION}`" in section
     assert "`thermal.echo_mismatch.<name>`" in section
     assert f"mehr als {ECHO_MISMATCH_S:.0f} s" in section
+    # die Zeiten der Autos und der Freigabe
+    assert f"{RAMP_UP_S:.0f} s" in section and f"{FOLLOW_HOLD_S:.0f} s" in section
+    assert f"nach {THERMAL_PERMIT_S:.0f} s ab" in section
+    # jeder Schlüssel der Konfiguration steht im Kapitel
+    keys = {*CoeOffsetConfig.model_fields, *CoeReceive.model_fields}
+    keys |= set(ThermalStrategyConfig.model_fields)
+    for key in sorted(keys):
+        assert f"`{key}`" in section or f"{key}:" in section, key
+    # die Sensoren in Home Assistant: Name und Kennung je Sensor des Beispiels
     cfg = load_config(Path("deploy/config.example.yaml"))
     handbook = Path("docs/betrieb.md").read_text(encoding="utf-8")
-    for spec in build_entities(cfg):
-        if spec.object_id.startswith("thermal_"):
-            suffix = spec.object_id.rsplit("_", 1)[1]
-            assert f"(`thermal_<Schlüssel>_{suffix}`)" in handbook or f"(`…_{suffix}`)" in handbook
+    sensors = [s for s in build_entities(cfg) if s.object_id.startswith(HA_THERMAL_PREFIX)]
+    assert len(sensors) == 4
+    for spec in sensors:
+        suffix = spec.object_id.rsplit("_", 1)[1]
+        row = f"| {spec.name} (`{HA_THERMAL_PREFIX}<Schlüssel>_{suffix}`) |"
+        assert row in handbook, spec.name
+    # die Flags der Werkzeuge im Kapitel gibt es
+    with pytest.raises(SystemExit):
+        verify_main(["--help"])
+    assert "--geraet" in capsys.readouterr().out
+    with pytest.raises(SystemExit):
+        coe_probe.main(["listen", "--help"])
+    listen_help = capsys.readouterr().out
+    for flag in ("--sekunden", "--port"):
+        assert flag in listen_help and f"`{flag}`" in section, flag
     assert "coe_probe listen" in section and "--punkt thermal" in section
+    assert "`--geraet <Name>`" in section
     assert ITEM == "17.2-9"
+    assert "5442/udp" in section
     spec_text = Path("docs/superpowers/specs/2026-10-08-bindaems-design.md").read_text("utf-8")
     assert "9. **`thermal` (Klimaanlage, Stand Plan 6a):**" in spec_text
     abnahme = Path("docs/verification/abnahme-phase-6a.md").read_text(encoding="utf-8")
     assert "abnahme-phase-6a.md" in Path("docs/verification/README.md").read_text("utf-8")
     assert "7 Tage" in abnahme and "±3 K" in abnahme
-    compose = Path("deploy/docker-compose.yml").read_text(encoding="utf-8")
-    assert '"5442:5442/udp"' in compose and "5442/udp" in section
+    # der Watchdog beim Stoppen des core steht im Kapitel, in der Abnahme und im README
+    for text in (section, " ".join(abnahme.split())):
+        assert "Watchdog" in text and "90 s" in text

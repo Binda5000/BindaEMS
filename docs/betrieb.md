@@ -49,13 +49,12 @@ Totmann-Schalter der Anlage und greift nur ein, wenn ein live geschalteter core 
 
 Am Ende des Handbuchs stehen die Abschnitte „Laderegelung“ (Lademodi, „Geplant“, Absicht, Zuordnung
 Auto und Wallbox, Dry-Run-Vergleich mit evcc, Umstieg, Hinweise für die Anlage, Ausrollen von Plan
-4b), „Akku und Spitzen“
-(Akku-Sollwert, 15-min-Wächter, Health, Victron in den Dry-Run und live, Alarme), „Prognosen“
-(PV-Prognose mit Kalibrierung und Band, Lastprognose, Prognosegüte, Schätzpreise, nächtlicher Lauf),
-„Planung“ (Zeitplan, Schalter „Netzladen erlaubt“, Autos im Plan, Auslöser, Ersatzplan, Erklärungen,
-Vergleich mit „Victron allein“), „Klimaanlage (Phase 6a)“ (Netz und Firewall, Konfiguration, Empfang
-prüfen, Prüfprotokoll, Dry-Run, live, Gründe, Alarme, Fehlersuche) und „Simulator“ (die Szenarien der
-CI von Hand laufen lassen).
+4b), „Akku und Spitzen“ (Akku-Sollwert, 15-min-Wächter, Health, Victron in den Dry-Run und live,
+Alarme), „Prognosen“ (PV-Prognose mit Kalibrierung und Band, Lastprognose, Prognosegüte,
+Schätzpreise, nächtlicher Lauf), „Planung“ (Zeitplan, Schalter „Netzladen erlaubt“, Autos im Plan,
+Auslöser, Ersatzplan, Erklärungen, Vergleich mit „Victron allein“), „Klimaanlage (Phase 6a)“ (Netz
+und Firewall, Konfiguration, Empfang prüfen, Prüfprotokoll, Dry-Run, live, Gründe, Alarme,
+Fehlersuche) und „Simulator“ (die Szenarien der CI von Hand laufen lassen).
 
 ## 1. Voraussetzungen der VM
 
@@ -248,7 +247,9 @@ Minutenmittel in `long` und lassen sich in Grafana mit der Retention Policy `lon
     und die Warteschlange und beendet sich mit Code 0. Die app schreibt ihre Warteschlange für
     InfluxDB, schließt alle Verbindungen und beendet sich ebenfalls mit Code 0.
   - Der core gibt den Watchdog dabei **nicht** frei. Ist ein Aktor live und dauert ein Neustart
-    samt 30 s frischer Messwerte länger als 90 s, löst der Watchdog aus (Abschnitt 14).
+    samt 30 s frischer Messwerte länger als 90 s, löst der Watchdog aus (Abschnitt 14). Das gilt
+    auch für die Werkzeuge `coe_probe listen` und `verify_part2 --punkt thermal`, die den core
+    für Minuten stoppen (Abschnitt „Klimaanlage (Phase 6a)“, „Reihenfolge an der Anlage“).
 - **Logs:**
   - JSON auf stdout. Docker rotiert sie (5 × 10 MB).
 - **Healthcheck:**
@@ -256,9 +257,9 @@ Minutenmittel in `long` und lassen sich in Grafana mit der Retention Policy `lon
   - Wurde `core_api.port` bzw. `app.port` in `config.yaml` geändert, muss
     `BINDAEMS_CORE_PORT` bzw. `BINDAEMS_APP_PORT` in `.env` denselben Wert haben.
 - **Diagnose:**
-  - Die interne API ist absichtlich nicht nach außen veröffentlicht. Der einzige Port, den `ems-core`
-    veröffentlicht, ist `5442/udp` für CoE (Abschnitt „Klimaanlage (Phase 6a)“); `ems-app` hat
-    Port 8080.
+  - Die interne API ist absichtlich nicht nach außen veröffentlicht. Der einzige Port, den
+    `ems-core` veröffentlicht, ist `5442/udp` für CoE (Abschnitt „Klimaanlage (Phase 6a)“);
+    `ems-app` hat Port 8080.
   - Zur Fehlersuche kannst du in `docker-compose.yml` die Zeile `127.0.0.1:8081:8081`
     kurzzeitig einkommentieren. Danach fragst du so ab:
     `curl -H "Authorization: Bearer $BINDAEMS_INTERNAL_TOKEN" http://127.0.0.1:8081/v1/health`.
@@ -405,9 +406,9 @@ Entitäten (Gerät „BindaEMS“, sofern nicht anders angegeben):
 | Fertig um, Ziel erreichbar (Gerät „BindaEMS <Fahrzeug>“) | – | je Fahrzeug im Modus „Geplant“ (Unterabschnitt „Geplantes Laden“) |
 | Ladeenergie (Gerät „BindaEMS <Fahrzeug>“) | kWh | je Fahrzeug die Energie der laufenden Ladesession, sonst der letzten (eine Nachkommastelle, Geräteklasse „Energie“, ohne Zustandsklasse); Attribute `start` und `end` (Ortszeit, `end` ist `null`, solange die Session läuft), `pv_kwh`, `battery_kwh`, `grid_kwh` (Herkunft der Energie), `cost_eur` (`null`, wenn ein Preis fehlt oder der Einstandspreis des Akkus unbekannt ist) und `month_kwh` (Ladeenergie des Fahrzeugs im Monat). „Unbekannt“ ohne laufende Session und ohne beendete der letzten 90 Tage (eine laufende zählt, egal wie lange sie schon läuft) |
 | Klima Versatz (`thermal_<Schlüssel>_offset`) | K | je Klimaanlage (Abschnitt „Klimaanlage (Phase 6a)“) der Versatz, den die UVR anwendet (das Echo), ersatzweise der zuletzt gesendete; eine Nachkommastelle. „Klima“ steht für den Namen der Klimaanlage (`label`): bei einem eigenen Namen steht er ganz davor, etwa „Büro Versatz“ |
-| Klima Betriebsart (`…_mode`) | – | `heizen`, `kuehlen`, `lueften`, `aus` oder `unbekannt` |
-| Klima Leistung (`…_power`) | W | elektrische Leistung der Klimaanlage laut UVR; „unbekannt“ ohne Wert |
-| Klima Wunsch (`…_wish`) | – | der Leistungswunsch der Strategie in ganzen Stufen (positiv: mehr Leistung, negativ: weniger); „unbekannt“, solange die Regelung ruht |
+| Klima Betriebsart (`thermal_<Schlüssel>_mode`) | – | `heizen`, `kuehlen`, `lueften`, `aus` oder `unbekannt` |
+| Klima Leistung (`thermal_<Schlüssel>_power`) | W | elektrische Leistung der Klimaanlage laut UVR; „unbekannt“ ohne Wert |
+| Klima Wunsch (`thermal_<Schlüssel>_wish`) | – | der Leistungswunsch der Strategie in ganzen Stufen (positiv: mehr Leistung, negativ: weniger); „unbekannt“, solange die Regelung ruht |
 | Ladeleistung (Gerät „BindaEMS EVCS“ / „BindaEMS Wall Connector“) | W | je Wallbox |
 | Fahrzeug (Gerät der Wallbox) | – | je Wallbox der Name des Fahrzeugs, „Gast“ oder „keins“ |
 
@@ -1033,9 +1034,9 @@ docker compose run --rm -v "$PWD/verification:/out" --entrypoint python ems-core
   --out /out/<Datum>-pruefprotokoll-teil2-evcs.md
 ```
 
-- Für die anderen Punkte setzt du `--punkt tesla` bzw. `--punkt victron` und den Namen im
-  Dateinamen ein (`thermal` siehe oben). `--wallbox <Name>` wählt bei `evcs` die EVCS und `--fahrzeug <Name>` bei `tesla`
-  das Fahrzeug, wenn es mehrere gibt (Standard: das erste).
+- Für die anderen Punkte setzt du `--punkt tesla` bzw. `--punkt victron` und den Namen im Dateinamen
+  ein (`thermal` siehe oben). `--wallbox <Name>` wählt bei `evcs` die EVCS und `--fahrzeug <Name>`
+  bei `tesla` das Fahrzeug, wenn es mehrere gibt (Standard: das erste).
 - Den **Schlaf-Test des Tesla** rufst du mit `--punkt tesla --schlafend` auf und gibst ihm mit
   `--out` einen eigenen Namen. Heißt die Datei wie der Bericht des Tesla-Punkts, überschreibt er
   ihn:
@@ -1715,10 +1716,11 @@ senden würde, und sendet nichts) oder **live**.
 Ein Aktor läuft nur live, wenn alle vier Bedingungen gelten (Spec 8.7):
 
 1. `live_allowed: true` für den Aktor in `config.yaml`. Der Standard ist `false`. Es steht unter
-   `victron`, bei jeder EVCS unter `wallboxes.<name>`, bei jedem Fahrzeug unter
-   `vehicles.<name>` und bei der Klimaanlage unter `thermal.devices.<name>`; bei einem Fahrzeug verlangt es den Abschnitt `tessie`, bei einer EVCS ihren
-   Eintrag unter `victron.instances.evcharger` (sonst setzt der Watchdog für sie keinen sicheren
-   Strom). Fehlt das, lehnen core und app die `config.yaml` beim Start mit diesem Grund ab.
+   `victron`, bei jeder EVCS unter `wallboxes.<name>`, bei jedem Fahrzeug unter `vehicles.<name>`
+   und bei der Klimaanlage unter `thermal.devices.<name>`; bei einem Fahrzeug verlangt es den
+   Abschnitt `tessie`, bei einer EVCS ihren Eintrag unter `victron.instances.evcharger` (sonst setzt
+   der Watchdog für sie keinen sicheren Strom). Fehlt das, lehnen core und app die `config.yaml`
+   beim Start mit diesem Grund ab.
 2. Das Prüfprotokoll Teil 2 ist für diesen Aktor bestanden.
 3. Ein Admin schaltet ihn im UI live, mit Passwort und Bestätigung (Live-Schalter, unten).
 4. Bei Victron und EVCS ist der Watchdog scharf.
@@ -4728,7 +4730,8 @@ der Aktor macht daraus das Vorzeichen je Betriebsart. Je Zyklus gewinnt die erst
    greift, fällt ein positiver Wunsch sofort auf 0.
 3. **Autos haben Vorrang:** Ein Auto in „PV-Überschuss“ oder „Min+PV“, das mehr aufnehmen könnte
    (offener Wunsch ab 230 W, eine Stufe von 1 A), drängt die Klimaanlage je 10 min um eine Stufe
-   zurück. Damit sich Klimaanlage und Laderegelung nicht gegenseitig aufschaukeln, gilt für die Autos:
+   zurück. Damit sich Klimaanlage und Laderegelung nicht gegenseitig aufschaukeln, gilt für die
+   Autos:
    - **Anlauf:** 90 s nach einem eigenen Start oder höheren Strom folgt das Auto seinem Befehl; die
      Klimaanlage geht dann keine Stufe hoch.
    - **Hysterese:** Das Urteil „folgt“ oder „begrenzt sich selbst“ wechselt erst nach 120 s. Ein
@@ -4739,20 +4742,22 @@ der Aktor macht daraus das Vorzeichen je Betriebsart. Je Zyklus gewinnt die erst
 4. **Der Akku hat Vorrang:** Liegt der SOC mehr als 5 Prozentpunkte unter der Schwelle (der geplante
    SOC am Ende des Slots, ohne Plan `strategy.battery_soc_pct`, Standard 90 %), geht ein positiver
    Wunsch je 10 min eine Stufe zurück. Mit dem Hinweis „mehr“ des Plans entfällt die Schwelle.
-5. **Mehr:** Einspeisung ab `strategy.more_above_w` (800 W) 10 min ohne Unterbrechung, dann eine Stufe
-   mehr, höchstens bis `max_offset_k`.
+5. **Mehr:** Einspeisung ab `strategy.more_above_w` (800 W) 10 min ohne Unterbrechung, dann eine
+   Stufe mehr, höchstens bis `max_offset_k`.
 6. **Zurück:** Netzbezug ab `strategy.import_above_w` (300 W) 5 min ohne Unterbrechung bei positivem
    Wunsch, dann eine Stufe zurück.
 7. **Weniger:** Der Plan gibt dem Slot den Hinweis „weniger“ (die teuersten 20 % der Bezugspreise,
-   keine geplante Einspeisung) und es wird nichts eingespeist: je 10 min eine Stufe weniger, bis
-   `strategy.less_max_steps` (2, also höchstens 1 K). Endet der Hinweis, geht der Wunsch sofort auf 0.
+   keine geplante Einspeisung) und die Einspeisung liegt unter 100 W: je 10 min eine Stufe weniger,
+   bis `strategy.less_max_steps` (2, also höchstens 1 K). Endet der Hinweis, geht der Wunsch sofort
+   auf 0.
 8. **Sonst** bleibt der Wunsch stehen (Totband gegen Wolken).
 
 Neue positive Stufen gibt es nur, wenn kein Druck besteht, kein Auto mehr aufnehmen könnte und der
-SOC die Schwelle erreicht. Jede Erhöhung des Betrags braucht 10 min seit der letzten (`step_interval_s`); Verringerungen gehen
-sofort. Den Hinweis je Slot (`mehr`, `neutral`, `weniger`) rechnet die app aus Preis und Plan; der
-core entscheidet mit den Echtzeitwerten. Vorheizen und Vorkühlen über Stunden plant 6a nicht.
-Die Szenarien `klima-*` des Simulators (Abschnitt „Simulator“) spielen jede dieser Regeln durch.
+SOC die Schwelle erreicht. Jede Erhöhung des Betrags braucht 10 min seit der letzten
+(`step_interval_s`); Verringerungen gehen sofort. Den Hinweis je Slot (`mehr`, `neutral`, `weniger`)
+rechnet die app aus Preis und Plan; der core entscheidet mit den Echtzeitwerten. Vorheizen und
+Vorkühlen über Stunden plant 6a nicht. Die Szenarien `klima-*` des Simulators (Abschnitt
+„Simulator“) spielen jede dieser Regeln durch.
 
 ### Netz und Firewall
 
@@ -4761,8 +4766,12 @@ und Firewall für UDP 5442 in beide Richtungen sind ein Schritt des Betreibers**
 daran nichts:
 
 - 192.168.81.92 → 192.168.82.20, UDP 5442: die Werte des C.M.I.
-- 192.168.82.20 → 192.168.81.92, UDP 5442: der Versatz. Der Absender ist die Adresse der VM, denn
-  Docker setzt die Adresse des Containers um.
+- 192.168.82.20 → 192.168.81.92, UDP 5442: der Versatz. Der core sendet aus dem Container; Docker
+  setzt dabei die Adresse des Containers auf die der VM um (Masquerade). Das ist das **erwartete**
+  Verhalten, aber an der Anlage nicht geprüft: Bestätige, dass der Versatz beim C.M.I. mit dem
+  Absender `192.168.82.20` ankommt (Sicht des C.M.I. auf den CAN-Knoten 60, oder das Echo im Punkt
+  `thermal`, unten). Kommt er von einer anderen Adresse, ist das ein Befund für Docker oder die
+  Firewall.
 
 `docker-compose.yml` veröffentlicht dafür am Dienst `ems-core` genau diesen Port (`5442:5442/udp`);
 sonst hat der core keinen Port. Prüfe auf der VM, dass `docker compose ps` ihn zeigt (`5442/udp`)
@@ -4770,6 +4779,12 @@ und die Firewall der VM (Proxmox-Firewall oder `DOCKER-USER`, wie bei Port 8080 
 nur das C.M.I. zulässt. Der core verwirft ohnehin jedes Paket, das nicht von `cmi_host` kommt.
 Das C.M.I. sendet CoE an `192.168.82.20` (Betreiber, erledigt); in der UVR sind die CAN-Ausgänge
 für Echo (A12) und Leistung (A13, aus F51) eingerichtet.
+
+**Voraussetzung am C.M.I. (Betreiber):** Das C.M.I. muss Pakete von `192.168.82.20` annehmen und
+sie als Werte des CAN-Knotens 60 (Ausgang 1) an die UVR weitergeben (dort der CAN-Eingang 15 „EMS
+Sollwertversatz“). Trage die Adresse der VM im C.M.I. ein, wenn es eine Liste erlaubter Absender
+führt. BindaEMS ändert daran nichts. Ob es klappt, zeigt der Punkt `thermal` des Prüfprotokolls
+Teil 2 (das Echo folgt dem Versatz).
 
 ### config.yaml
 
@@ -4839,25 +4854,40 @@ anderen Einheit oder Art als in der Tabelle macht den Wert ungültig und zählt 
 
 Plan 6a rollt erst nach der Abnahme der Phase 3 aus.
 
+**Achtung, Watchdog:** `coe_probe listen` und der Punkt `thermal` verlangen einen **gestoppten
+core**. Das dauert Minuten: bei `coe_probe` so lange wie `--sekunden`, beim Timeout-Schritt des
+Punkts `thermal` über 6 min. Ist währenddessen EVCS oder Victron live (der Watchdog am Cerbo
+scharf), löst der Watchdog nach 90 s ohne Heartbeat aus und setzt die Sicherwerte (Abschnitt 4,
+„Geordnetes Herunterfahren“, und Abschnitt 14). Mach diese Schritte darum nur, solange **kein Aktor
+live** ist: vor der Live-Schaltung von EVCS, Tesla und Victron oder nachdem du sie im UI auf Dry-Run
+gestellt hast (Abschnitt 13, „Dry-Run und live“). Sonst plane die Auslösung ein und gib den Watchdog
+danach von Hand frei (Abschnitt 14, „Meldungen des core“, „‚Ausgelöst‘ von Hand aufräumen“). Der
+Aktor der Klimaanlage selbst braucht keinen Watchdog.
+
 ### Empfang prüfen
 
 `coe_probe listen` hört am CoE-Port mit und zeigt je Wert eines Pakets eine Zeile. Es **sendet
-nie**. Der core muss dafür gestoppt sein, denn beide binden denselben Port; ist er belegt, sagt das
-Werkzeug es und endet mit Exitcode 2.
+nie**. Der core muss dafür gestoppt sein, denn beide binden denselben Port (Warnung zum Watchdog
+oben, „Reihenfolge an der Anlage“). Außerhalb des Containers (`python -m bindaems.tools.coe_probe`
+auf dem Host) sagt das Werkzeug, wenn der Port belegt ist, und endet mit Exitcode 2. Im Container
+sieht es den core nicht: Läuft er noch, scheitert schon `docker compose run` am belegten Port.
 
 ```bash
 cd /opt/bindaems
 docker compose stop ems-core
 docker compose run --rm --service-ports --entrypoint python ems-core \
   -m bindaems.tools.coe_probe listen --sekunden 120
-docker compose up -d ems-core
 ```
 
+Danach startest du den core wieder, wenn er vorher lief (`docker compose up -d ems-core`). Vor
+dem Ausrollen von Plan 6a startet ihn erst Schritt 4 der Reihenfolge.
+
 `--service-ports` ist nötig, denn `docker compose run` veröffentlicht sonst keine Ports und die
-Pakete des C.M.I. kämen nicht an. Ohne `--sekunden` hört das Werkzeug bis Strg+C, mit `--port`
-einen anderen Port als 5442. Eine Zeile lautet etwa
-`14:05:09 von 192.168.81.92: Knoten 56, analog 4, Einheit 10, Rohwert 120`; ein Paket, das kein
-gültiges CoE-V2-Paket ist, ergibt eine Zeile „ungültiges Paket“ mit dem Grund. Prüfe:
+Pakete des C.M.I. kämen nicht an. Ohne `--sekunden` hört das Werkzeug bis Strg+C; `--port` wählt
+einen anderen Port als 5442, den `docker-compose.yml` aber nicht veröffentlicht (im Container kämen
+dort keine Pakete an). Eine Zeile lautet etwa `14:05:09 von 192.168.81.92: Knoten 56, analog 4,
+Einheit 10, Rohwert 120`; ein Paket, das kein gültiges CoE-V2-Paket ist, ergibt eine Zeile
+„ungültiges Paket“ mit dem Grund. Prüfe:
 
 - **Alle Werte der Empfangstabelle kommen an** und der Absender ist `192.168.81.92`. Das C.M.I.
   sendet bei Änderung und zyklisch.
@@ -4873,7 +4903,8 @@ gültiges CoE-V2-Paket ist, ergibt eine Zeile „ungültiges Paket“ mit dem Gr
 Der Punkt `thermal` (Spec 17.2-9) **sendet** der Klimaanlage einen Versatz und läuft darum nur
 gemeinsam mit dem Betreiber. Das Werkzeug sendet nur auf ausdrücklichen Aufruf und nach einer
 Bestätigung. Es nutzt denselben Adapter und Aktor wie der core, prüft den Versatz mit den Regeln
-der Safety-Schicht und braucht keine Secrets. Der core bleibt dabei gestoppt (derselbe Port). Dann:
+der Safety-Schicht und braucht keine Secrets. Der core bleibt dabei gestoppt (derselbe Port, mit
+der Warnung zum Watchdog oben: nur, solange kein Aktor live ist). Dann:
 
 ```bash
 cd /opt/bindaems
@@ -4882,8 +4913,9 @@ docker compose stop ems-core
 docker compose run --rm --service-ports -v "$PWD/verification:/out" --entrypoint python ems-core \
   -m bindaems.tools.verify_part2 --config /config/config.yaml --punkt thermal \
   --out /out/<Datum>-pruefprotokoll-teil2-thermal.md
-docker compose up -d ems-core
 ```
+
+Danach startest du den core wieder, wenn er vorher lief (`docker compose up -d ems-core`).
 
 `--geraet <Name>` wählt die Klimaanlage, wenn es mehrere gibt (Standard: die erste unter
 `thermal.devices`). Die Schritte, je eine Zeile unter Punkt 17.2-9 im Bericht:
@@ -4915,12 +4947,12 @@ Der Adapter sendet alle 30 s **0**, und das Echo bleibt 0. Beobachte mindestens 
 - **System** → „Klimaanlage“ zeigt „Werte kommen an“, Betriebsart, Ist, Soll ohne Versatz, Versatz,
   Wunsch, Leistung, den letzten Empfang und den Grund. Dort steht auch „Fremde Pakete“ und
   „Fehlerhafte Pakete“, wenn welche ankamen.
-- **Entscheidungen** (und Grafana, Panel „Klimaanlage“) zeigen, welchen Versatz der core im Live-Betrieb
-  senden würde („Dry-Run, nicht gesendet“), mit den Gründen. Kühlen und Heizen, Wechsel der
-  Betriebsart, Wolken, Autos und ein teurer Abend sollten sich darin wiederfinden.
+- **Entscheidungen** (und Grafana, Panel „Klimaanlage“) zeigen, welchen Versatz der core im
+  Live-Betrieb senden würde („Dry-Run, nicht gesendet“), mit den Gründen. Kühlen und Heizen, Wechsel
+  der Betriebsart, Wolken, Autos und ein teurer Abend sollten sich darin wiederfinden.
 - **Kein Alarm** `thermal.echo_mismatch.<name>` und kein `control.thermal_exception` (unten).
-- Das Echo bleibt im Dry-Run 0; das Log zeigt den gewünschten Versatz. Beides gehört zusammen:
-  Würde das Echo etwas anderes als 0 zeigen, wäre das ein Befund (Alarm `thermal.echo_mismatch.<name>`).
+- Das Echo bleibt im Dry-Run 0; das Log zeigt den gewünschten Versatz. Beides gehört zusammen: Würde
+  das Echo etwas anderes als 0 zeigen, wäre das ein Befund (Alarm `thermal.echo_mismatch.<name>`).
 
 Auswertung der Entscheidungen im Dry-Run (`SINCE` wie in „Dry-Run-Vergleich mit evcc“):
 
@@ -4969,7 +5001,7 @@ im UI, „Warum?“). Der Grund beschreibt den Wunsch der Strategie, nicht jeden
 | `thermal_less` | Teurer Strom, Klimaanlage zurückhaltend | Der Plan gibt den Hinweis „weniger“: eine Stufe weniger, höchstens `less_max_steps`; auch beim Ende des Hinweises (Wunsch zurück auf 0). |
 | `thermal_peak` | Spitze droht, Klimaanlage nicht mehr | Der 15-min-Wächter oder der Phasenwächter macht Druck: Versatz sofort auf 0. |
 | `thermal_mode` | Betriebsart gewechselt, Versatz 0 | Die Klimaanlage wechselte zwischen Kühlen und Heizen: sofort 0. |
-| `thermal_stale` | Keine Werte der Klimaanlage, Versatz 0 | Die Werte sind veraltet (länger als `stale_after_s` kein Paket) oder der Aktor ist nicht steuerbar: sofort 0. |
+| `thermal_stale` | Keine Werte der Klimaanlage, Versatz 0 | Die Werte sind veraltet (länger als `stale_after_s` kein Paket) oder der Aktor ist nicht steuerbar: sofort 0. Solange die Quelle fehlt, erzeugt die Regelung keinen Befehl; die 0 geht vom Adapter hinaus. Im Log steht der Eintrag erst, wenn die Werte zurückkehren und der Versatz vorher nicht 0 war. |
 | `thermal_off` | Klimaanlage aus oder lüftet, Versatz 0 | Betriebsart `aus`, `lueften` oder `unbekannt`, oder der Zustand DEGRADED: Versatz 0. Auch der Anfangsgrund nach einem Start. |
 
 Ein Eintrag lautet etwa
@@ -5020,6 +5052,15 @@ bekommt keinen PV-Überschuss mehr. Prüfe der Reihe nach:
 
 Hat das C.M.I. nach dem Ausfall wieder Verbindung, regelt der core von selbst weiter: Die
 Strategie beginnt bei Wunsch 0 und steigert in Stufen von 10 min.
+
+Was du während des Ausfalls siehst: Die Karte zeigt „Keine Werte“ und den Grund. Das
+Entscheidungslog bleibt still, denn solange die Quelle fehlt, erzeugt die Regelung keinen Befehl;
+der Adapter sendet die 0 von selbst, sobald er die Quelle als nicht verbunden führt (erwartet rund
+180 s plus Überwachungstakt von 10 s nach dem letzten Paket, die Freigabe läuft nach 10 s ab). Ein
+Eintrag `thermal_stale` mit Versatz 0 folgt erst nach der Rückkehr der Werte, und nur, wenn der
+Versatz vor dem Ausfall nicht 0 war. InfluxDB hat in dieser Zeit eine Lücke bei `offset_k` und
+`offset_sent_k` (der Sampler schreibt nur Werte mit Qualität OK). Die Zeiten sind Erwartungen aus
+dem Code, an der Anlage zu bestätigen.
 
 ### Anzeige
 

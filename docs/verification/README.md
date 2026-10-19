@@ -213,7 +213,10 @@ Jeder Schritt ist eine Zeile im Bericht. Vor jedem Schritt, der schreibt, fragt 
 - **`thermal`** (17.2-9, Plan 6a): Die Klimaanlage an der UVR610, Versatz per CoE. Das Werkzeug nutzt
   denselben CoE-Adapter und Aktor wie der core und bindet denselben UDP-Port (5442, Standard): Der
   core ist gestoppt, und im Container steht `--service-ports` am `docker compose run`, sonst kämen
-  keine Pakete an. Es braucht keine Secrets und fragt den Cerbo nicht. Es sendet nur auf
+  keine Pakete an. **Watchdog:** Der gestoppte core sendet keinen Heartbeat. Ist EVCS oder Victron
+  live, löst der Watchdog am Cerbo nach 90 s aus; führe den Punkt darum nur aus, solange kein Aktor
+  live ist (Betriebshandbuch, „Klimaanlage (Phase 6a)“, „Reihenfolge an der Anlage“, und Abschnitt
+  4, „Geordnetes Herunterfahren“). Danach startest du den core wieder, wenn er vorher lief. Es braucht keine Secrets und fragt den Cerbo nicht. Es sendet nur auf
   ausdrücklichen Aufruf und nach der Bestätigung vor dem Start; mit `coe_probe listen` (hört nur
   mit, sendet nie) prüfst du vorher den Empfang (Betriebshandbuch, „Klimaanlage (Phase 6a)“).
   - „Werte der Empfangstabelle“: Alle Werte kommen binnen `stale_after_s` des Geräts an; sonst endet

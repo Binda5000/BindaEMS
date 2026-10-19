@@ -14,6 +14,14 @@ freigegeben und das Prüfprotokoll Teil 2, Punkt `thermal` (Spec 17.2-9), liegt 
 Abschnitte 1 und 2 prüfst du vor dem Dry-Run, Abschnitt 3 im Dry-Run und Abschnitt 4 nach der
 Live-Schaltung.
 
+**Watchdog:** Die Abschnitte 1 und 2 stoppen den core für Minuten (`coe_probe`: so lange wie
+`--sekunden`; Timeout-Schritt: über 6 min). Ist währenddessen EVCS oder Victron live, löst der
+Watchdog am Cerbo nach 90 s ohne Heartbeat aus (Betriebshandbuch, Abschnitt 4, „Geordnetes
+Herunterfahren“, und Abschnitt 14). Führe sie darum nur aus, solange kein Aktor live ist (vor der
+Live-Schaltung von EVCS, Tesla und Victron oder nach „Auf Dry-Run…“), oder plane die Auslösung ein
+und gib den Watchdog danach von Hand frei (Betriebshandbuch, Abschnitt 14, „‚Ausgelöst‘ von Hand
+aufräumen“). Die Klimaanlage selbst braucht keinen Watchdog.
+
 Nichts davon schaltet von selbst: Der Aktor `thermal.<name>` startet im Dry-Run und sendet dort nur 0.
 `coe_probe listen` sendet nie; `verify_part2 --punkt thermal` sendet nur auf ausdrücklichen Aufruf und
 nach Bestätigung.
@@ -40,15 +48,17 @@ nach Bestätigung.
 
 Prüfschritte:
 
-1. Den core stoppen und mithören (Betriebshandbuch, „Empfang prüfen“); die Probe sendet nichts:
+1. Den core stoppen (Hinweis zum Watchdog oben) und mithören (Betriebshandbuch, „Empfang prüfen“);
+   die Probe sendet nichts:
 
    ```bash
    cd /opt/bindaems
    docker compose stop ems-core
    docker compose run --rm --service-ports --entrypoint python ems-core \
      -m bindaems.tools.coe_probe listen --sekunden 120
-   docker compose up -d ems-core
    ```
+
+   Danach startest du den core wieder, wenn er vorher lief (`docker compose up -d ems-core`).
 
 2. Jeder Wert der Tabelle erscheint mindestens einmal, der Absender ist `192.168.81.92`, und die
    Knotennummer ist die in `receive` (56). Trage Einheit und Rohwert der Zeile ein.
@@ -87,8 +97,9 @@ Datum: ________ Ergebnis: ☐ bestanden ☐ nicht bestanden Unterschrift: ______
 Prüfschritte:
 
 1. Den Punkt ohne `--yes` ausführen (Betriebshandbuch, „Prüfprotokoll Teil 2, Punkt thermal“); der
-   core ist dabei gestoppt. Die Zeile „Timeout der UVR“ im Bericht ist OK: Das Werkzeug sendet +0,5 K,
-   wartet auf das Echo, sendet dann bis zu 5 min 30 s nichts, und das Echo fällt von selbst auf 0.
+   core ist dabei gestoppt (Hinweis zum Watchdog oben). Die Zeile „Timeout der UVR“ im Bericht ist
+   OK: Das Werkzeug sendet +0,5 K, wartet auf das Echo, sendet dann bis zu 5 min 30 s nichts, und das
+   Echo fällt von selbst auf 0.
 2. Zusätzlich die Visu der UVR beobachten: Der Versatz „EMS“ steht ab dem letzten Paket 5 min später
    wieder auf 0. Notiere die Uhrzeiten.
 3. Die Zeilen „Versatz +0,5 K“ (Echo binnen 60 s, Visu zeigt „EMS“ +0,5 K) und „Versatz 0“ sind OK;
@@ -164,11 +175,13 @@ Prüfschritte:
 | 6 | ☐ | ☐ | ☐ | | ☐ | |
 | 7 | ☐ | ☐ | ☐ | | ☐ | |
 
-Ausfälle des C.M.I. im Zeitraum (Beginn – Ende, Ursache, erwartet `thermal_stale` und Versatz 0):
+Ausfälle des C.M.I. im Zeitraum (Beginn – Ende, Ursache). Erwartet: die Karte zeigt „Keine Werte“, die
+0 geht hinaus (Visu oder `tcpdump`, siehe 4.3), und nach der Rückkehr steht `thermal_stale` im
+Entscheidungslog, falls der Versatz vorher nicht 0 war:
 
-| Beginn | Ende | Ursache | Entscheidung `thermal_stale` | Versatz 0 |
-|---|---|---|---|---|
-| | | | ☐ | ☐ |
+| Beginn | Ende | Ursache | Karte „Keine Werte“ | 0 gesendet | `thermal_stale` nach Rückkehr |
+|---|---|---|---|---|---|
+| | | | ☐ | ☐ | ☐ |
 
 Datum: ________ Ergebnis: ☐ bestanden ☐ nicht bestanden Unterschrift: ________
 
@@ -193,52 +206,82 @@ curl -s -H "Authorization: Bearer $BINDAEMS_INTERNAL_TOKEN" \
 **4.1 Der Versatz liegt nie außerhalb ±3 K.**
 
 ```bash
-jq '[.decisions[] | select(.actuator == "thermal.klima" and (.dry_run | not)) | .applied]
+jq '[.decisions[] | select(.actuator == "thermal.klima" and (.dry_run | not)) | .applied | numbers]
     | [min, max]' klima.json
 ```
 
-Beide Werte liegen in −3 … +3. Dazu in InfluxDB (alle vier Werte liegen in −3 … +3; `offset_k` ist
-das Echo der UVR, also das, was die Anlage wirklich anwendet):
+Beide Werte liegen in −3 … +3 (abgelehnte Entscheidungen haben kein `applied` und zählen nicht).
+Dazu in InfluxDB: Alle vier Werte liegen in −3 … +3; `offset_k` ist das Echo der UVR, also das, was
+die Anlage wirklich anwendet.
 
 ```sql
 SELECT MAX("offset_sent_k"), MIN("offset_sent_k"), MAX("offset_k"), MIN("offset_k")
 FROM "raw"."thermal" WHERE time >= '2026-10-20T00:00:00Z' AND time < '2026-10-27T00:00:00Z'
 ```
 
-**4.2 Weg von 0 höchstens eine Stufe je 10 min.** Diese Abfrage listet jede Entscheidung, die den
-Betrag des Versatzes gegenüber der vorherigen erhöht, mit Zeit, altem und neuem Wert und dem Abstand
-in Sekunden. Jede Zeile hat Stufe 0,5 K (neuer Betrag minus alter) und einen Abstand von mindestens
-600 s (die Zeit einer Entscheidung ist die der Bestätigung durch das Echo und schwankt um 1 bis 2 s;
-Abstände ab 598 s sind in Ordnung). Ein Vorzeichenwechsel geht nur über 0:
+**4.2 Weg von 0 höchstens eine Stufe je 10 min.** Die Schrittregel der Safety-Schicht zählt ab der
+letzten **Erhöhung** des Betrags (nicht ab der vorherigen Entscheidung). Diese Abfrage tut dasselbe
+mit den gesendeten und bestätigten Entscheidungen (`result` `ok`, nicht Dry-Run, nach Zeit
+sortiert): Sie listet jede Entscheidung, die den Betrag erhöht oder das Vorzeichen ohne den Weg über
+0 wechselt, mit Zeit, altem und neuem Wert, der Stufe (neuer Betrag minus alter) und dem Abstand in
+Sekunden zur letzten Erhöhung. Als alter Wert gilt der Wert der vorherigen Entscheidung; er stimmt
+mit dem Echo überein, solange es bestätigt ist. Jede Zeile hat die Stufe 0,5 und einen Abstand von
+mindestens 600 s; die letzte Spalte ist leer (nur „erste“ steht beim ersten Eintrag). Die Zeit einer
+Entscheidung ist die ihres Abschlusses, also der Bestätigung durch das Echo, und weicht von der Zeit
+des Sendens um die Dauer bis zum Echo ab (erwartet wenige Sekunden); Abstände von 598 s bis 600 s
+sind darum noch in Ordnung, und der Stand an der Anlage entscheidet:
 
 ```bash
 jq -r 'def secs: sub("\\.[0-9]+"; "") | sub("\\+00:00$"; "Z") | fromdateiso8601;
-  [.decisions[] | select(.actuator == "thermal.klima" and (.dry_run | not))]
-  | sort_by(.ts) as $d | range(1; $d | length) as $i
-  | select(($d[$i].requested | fabs) > ($d[$i - 1].requested | fabs))
-  | [$d[$i].ts, $d[$i - 1].requested, $d[$i].requested,
-     (($d[$i].ts | secs) - ($d[$i - 1].ts | secs))] | @tsv' klima.json
+  [.decisions[]
+   | select(.actuator == "thermal.klima" and (.dry_run | not) and .result == "ok")]
+  | sort_by(.ts)
+  | reduce .[] as $e ({prev: 0, raised: null, rows: []};
+      ($e.requested) as $v | ($e.ts | secs) as $t
+      | if $v != 0 and ($v * .prev < 0 or ($v | fabs) > (.prev | fabs) + 0.05) then
+          .rows += [[$e.ts, .prev, $v, (($v | fabs) - (.prev | fabs)),
+                     (if .raised == null then "erste" else ($t - .raised) end),
+                     (if $v * .prev < 0 then "Vorzeichenwechsel ohne 0" else "" end)]]
+          | .raised = $t | .prev = $v
+        else .prev = $v end)
+  | .rows[] | @tsv' klima.json
 ```
 
-**4.3 Spätestens einen Zyklus nach einem Wechsel der Betriebsart oder nach veralteten Paketen steht der
-Versatz auf 0.** Suche die Entscheidungen mit den Gründen `thermal_mode` und `thermal_stale`:
+Beispiel: Auf −0,5 (10:00:00), −1,0 (10:10:01), −0,5 (10:15:00) und −1,0 (10:20:02) steht für die
+letzte Zeile der Abstand 601 s zur Erhöhung um 10:10:01, nicht 302 s zur Entscheidung davor.
+
+**4.3 Spätestens einen Zyklus nach einem Wechsel der Betriebsart oder nach veralteten Paketen steht
+der Versatz auf 0.** Die Zeiten unten sind Erwartungen aus dem Code, an der Anlage zu bestätigen.
+Suche die Entscheidungen mit den Gründen `thermal_mode`, `thermal_off` und `thermal_stale`:
 
 ```bash
 jq -r '.decisions[] | select(.actuator == "thermal.klima" and (.dry_run | not)
-    and any(.codes[]; . == "thermal_mode" or . == "thermal_stale"))
+    and any(.codes[]; . == "thermal_mode" or . == "thermal_off" or . == "thermal_stale"))
     | [.ts, .requested, .applied, .result, (.codes | join(","))] | @tsv' klima.json
 ```
 
 - **Wechsel der Betriebsart:** Der Verlauf von „Klima Betriebsart“ in Home Assistant (oder das Panel
   „Klimaanlage“) nennt die Zeitpunkte, zu denen die Anlage zwischen Kühlen, Heizen, Lüften und Aus
   wechselte. Zu jedem Wechsel, bei dem der Versatz nicht schon 0 war, gibt es eine Entscheidung
-  `thermal_mode` (bei Lüften und Aus `thermal_off`) mit dem Versatz 0, innerhalb von 2 s nach dem Paket
-  mit der neuen Betriebsart (ein Zyklus des core ist 1 s; das C.M.I. sendet bei Änderung sofort).
-  Das Echo steht danach auf 0.
-- **Veraltete Pakete:** Nach `stale_after_s` (180 s) ohne Paket, bei einem Versatz ungleich 0, gibt es
-  eine Entscheidung `thermal_stale` mit dem Versatz 0, binnen 190 s nach dem letzten Paket (die
-  Überwachung des Adapters läuft im 10-s-Takt). Danach sendet der Adapter nur 0. Trage Ausfälle des
-  C.M.I. mit Beginn und Ende ein.
+  `thermal_mode` (bei Lüften und Aus `thermal_off`) mit dem Versatz 0. Erwartet: im selben Zyklus,
+  in dem der core das Paket mit der neuen Betriebsart verarbeitet. Das C.M.I. sendet bei Änderung,
+  ist aber nicht an den 1-s-Zyklus des core gebunden. Belege den Zeitpunkt der 0 mit InfluxDB:
+  `offset_sent_k` fällt auf 0 (der gesendete Versatz wird bei Änderung geschrieben), und das Echo
+  `offset_k` folgt. Der Zeitstempel der Entscheidung ist der ihres Abschlusses (Bestätigung).
+- **Veraltete Pakete:** Solange keine Werte kommen, erzeugt die Regelung **keinen Befehl**; es gibt
+  im Entscheidungslog dafür keinen Eintrag. Der Adapter sendet die 0 von selbst, sobald er die Quelle
+  als nicht verbunden führt (erwartet rund 180 s plus Überwachungstakt von 10 s nach dem letzten Paket,
+  die Freigabe läuft nach 10 s ab). InfluxDB hat in dieser Zeit eine Lücke, denn der Sampler schreibt
+  nur Werte mit Qualität OK. Nachweis, in dieser Reihenfolge:
+  1. Die Karte „Klimaanlage“ zeigt „Keine Werte“ mit dem Grund „Keine Werte der Klimaanlage, Versatz
+     0“.
+  2. Die 0 geht hinaus: Auf der VM zeigt `tcpdump -n -X -i any udp and dst host 192.168.81.92 and
+     dst port 5442` (wo verfügbar) Pakete mit dem Rohwert 0 (die letzten vier Datenbytes
+     `00 00 00 00`); oder die Visu der UVR zeigt den Versatz „EMS“ früher als nach 5 min auf 0, falls
+     das C.M.I. die Pakete der VM noch erhält (der Timeout der UVR allein käme erst nach 5 min).
+  3. Nach der Rückkehr der Werte steht im Entscheidungslog ein Eintrag `thermal_stale` mit dem Versatz
+     0, wenn der Versatz vor dem Ausfall nicht 0 war, und das Echo (`offset_k`) zeigt 0.
+  Trage Ausfälle des C.M.I. mit Beginn und Ende ein.
 
 **4.4 Jeder gesendete Versatz ist durch das Echo bestätigt.**
 
@@ -265,8 +308,8 @@ Nachweis: Ausgaben der Abfragen (Auszug) und Bildschirmfotos des Panels.
 |---|---|
 | 4.1 Versatz kleinster / größter Wert (K) | von ____ bis ____ ☐ innerhalb ±3 K |
 | 4.2 Erhöhungen des Betrags geprüft (Zahl) | ____ ☐ alle 0,5 K ☐ alle mit Abstand ≥ 600 s |
-| 4.3 Wechsel der Betriebsart (Zahl) / davon mit Versatz 0 im selben Zyklus | ____ / ____ ☐ |
-| 4.3 Ausfälle des C.M.I. (Zahl) / davon mit Versatz 0 nach `thermal_stale` | ____ / ____ ☐ |
+| 4.3 Wechsel der Betriebsart (Zahl) / davon mit Versatz 0 (Entscheidung, `offset_sent_k`) | ____ / ____ ☐ |
+| 4.3 Ausfälle des C.M.I. (Zahl) / davon mit 0 gesendet (Visu, `tcpdump`) | ____ / ____ ☐ |
 | 4.4 Entscheidungen live (Zahl) / davon `ok` | ____ / ____ ☐ alle bestätigt |
 | 4.5 Alarme im Zeitraum | ☐ keine |
 
