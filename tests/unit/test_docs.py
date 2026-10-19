@@ -874,9 +874,12 @@ def test_plan_triggers_and_sources_in_the_guide_match_the_ui() -> None:
     for label in sources.values():
         assert f"„{label}“" in section, label
     # Ruling R23: ein Lauf vor der Bestätigung der Absicht wird für die Autos wiederholt
-    assert "Bestätigt Health die Absicht, plant die app mit `vehicles` neu" in " ".join(
-        section.split()
-    )
+    flat = " ".join(section.split())
+    assert "Bestätigt Health die Absicht, plant die app mit `vehicles` neu" in flat
+    # der core regelt ab seinem nächsten Zyklus mit der neuen Absicht; nachlaufen tut Health der app
+    assert "regelt der core bis zum nächsten Health noch mit der alten" not in flat
+    assert "regelt der core ab seinem nächsten Zyklus mit ihr" in flat
+    assert "bis zu 10 s" in flat
 
 
 # Plattformen der Tabellen im Handbuch
