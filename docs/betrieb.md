@@ -4304,7 +4304,11 @@ Die app plant beim Start und danach auf diese Auslöser; die Seite zeigt sie als
 | `month_peak` | neue Monatsspitze | die Monatsspitze liegt mehr als 0,05 kW über der, die der Plan kennt |
 | `settings` | Einstellungen geändert | Planung, Tarif oder Einspeisung wurden geändert |
 | `manual` | Neu planen | die Taste im UI oder in Home Assistant, oder `POST /api/plan/replan` |
-| `vehicles` | Fahrzeug geändert | bei einem Auto im Modus „Geplant“ ändern sich Ein- oder Ausstecken, Wallbox, Ziel, Abfahrt, „Ladestand angenommen“ oder das Ladelimit des Tesla, oder ein Auto kommt in „Geplant“ oder verlässt den Modus |
+| `vehicles` | Fahrzeug geändert | bei einem Auto im Modus „Geplant“ ändern sich Ein- oder Ausstecken, Wallbox, Ziel, Abfahrt, „Ladestand angenommen“ oder das Ladelimit des Tesla, oder ein Auto kommt in „Geplant“ oder verlässt den Modus; außerdem, sobald Health eine neue Absicht bestätigt, wenn der letzte Lauf davor ein Auto in „Geplant“ nicht sehen konnte |
+
+Nach jeder neuen Absicht (ein gesendeter Plan, eine Bedienung) regelt der core bis zum nächsten Health
+noch mit der alten; ein Lauf in diesem Fenster plant ohne die Autos in „Geplant“. Bestätigt Health die
+Absicht, plant die app mit `vehicles` neu, auch wenn sich bei den Autos nichts geändert hat.
 
 Preise, Prognosen, SOC und Monatsspitze prüft die app alle 30 s. Es läuft immer nur ein Lauf; was
 währenddessen eintrifft, ergibt genau einen weiteren. Ein Plan **gilt 45 min**. Fehlen Eingangsdaten,

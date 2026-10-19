@@ -851,6 +851,10 @@ def test_plan_triggers_and_sources_in_the_guide_match_the_ui() -> None:
         assert f"| `{trigger}` | {label} |" in section, trigger
     for label in sources.values():
         assert f"„{label}“" in section, label
+    # Ruling R23: ein Lauf vor der Bestätigung der Absicht wird für die Autos wiederholt
+    assert "Bestätigt Health die Absicht, plant die app mit `vehicles` neu" in " ".join(
+        section.split()
+    )
 
 
 # Plattformen der Tabellen im Handbuch

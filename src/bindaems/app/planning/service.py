@@ -67,7 +67,7 @@ from bindaems.app.settings.service import (
 )
 from bindaems.app.status import ComponentStatus
 from bindaems.shared.config import Config
-from bindaems.shared.control import Intent
+from bindaems.shared.control import ChargeMode, Intent
 from bindaems.shared.plan import Plan, PlanTrigger
 from bindaems.shared.timeutil import LOCAL_TZ, Clock, slot_start
 
@@ -203,6 +203,9 @@ class PlanningService:
         settings.on_change(self._on_settings)
         self._plan = store.latest()
         self._plan_listeners: list[Callable[[Plan], None]] = []
+        # Der letzte Lauf sah ein Auto in „Geplant“ nicht, weil Health die Absicht noch nicht
+        # bestätigt hatte (Ruling R23); ``_watch`` fordert dann „vehicles“ an
+        self._cars_unseen = False
 
     def current(self) -> Plan | None:
         """Der zuletzt erzeugte Plan, auch wenn er abgelaufen ist."""
@@ -325,6 +328,11 @@ class PlanningService:
         )
         for trigger in changed(old, new):
             self.request(trigger)
+        if self._cars_unseen and intent is not None and _trusted(intent.version, health):
+            # Der letzte Plan entstand ohne die Autos in „Geplant“; Health bestätigt die Absicht
+            # jetzt, auch wenn sich der Stand der Autos nicht geändert hat (Ruling R23)
+            self._cars_unseen = False
+            self.request("vehicles")
         plan = self._plan
         if plan is not None:
             # Ein Plan wegen des SOC löst im selben Slot nicht erneut aus: Die lineare Erwartung
@@ -424,7 +432,9 @@ class PlanningService:
         """Eingangsdaten eines Laufs; wirft ``PlanningUnavailable``.
 
         Die geplanten Autos kommen aus dem Health des core und der Absicht (``planned_vehicles``),
-        die PV-Prognose P25 für Regel R2 aus der PV-Prognose.
+        die PV-Prognose P25 für Regel R2 aus der PV-Prognose. Hat Health die Absicht noch nicht
+        bestätigt und steht darin ein Auto in „Geplant“, plant der Lauf ohne die Autos; der Dienst
+        merkt sich das und plant neu, sobald Health sie bestätigt (``_watch``, Ruling R23).
         """
         now = self._clock.now()
         prices, month_peak_kw = await asyncio.to_thread(self._read, now)
@@ -433,6 +443,11 @@ class PlanningService:
         current = self._settings.current()
         health = self._live.health
         intent = self._intent_for(health)
+        self._cars_unseen = (
+            intent is not None
+            and any(entry.mode is ChargeMode.PLANNED for entry in intent.vehicles.values())
+            and not _trusted(intent.version, health)
+        )
         return assemble_inputs(
             now=now,
             trigger=trigger,

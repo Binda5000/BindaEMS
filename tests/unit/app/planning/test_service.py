@@ -708,3 +708,33 @@ async def test_untrusted_health_does_not_flap_the_vehicles_trigger(service_with,
         live.health = planned_health(vehicle_health("tesla"), version=3)
         await asyncio.sleep(0.1)
     assert triggers(calls) == ["start"]
+
+
+async def test_a_plan_made_before_health_trusts_the_intent_is_redone_for_the_cars(
+    service_with, live
+):
+    """Ruling R23: Ein Lauf im Fenster nach einer neuen Absicht, bevor Health sie bestätigt,
+    plant ohne Autos. Bestätigt Health sie dann mit unverändertem Stand der Autos, fordert der
+    Dienst einen Lauf „vehicles“ an."""
+    live.health = planned_health(vehicle_health("tesla"), version=4)
+    seen = {"intent": Intent(version=4, vehicles={"tesla": VehicleIntent(mode=ChargeMode.PLANNED)})}
+    calls: list[PlanInputs] = []
+    service = service_with(
+        solver=recording(calls), sleep=fast_sleep(), intent=lambda: seen["intent"]
+    )
+    async with running(service):
+        await until(lambda: len(calls) == 1)
+        await asyncio.sleep(0.05)  # die Schleife kennt den Fingerabdruck
+        # neue Absicht (etwa nach dem Senden eines Plans), Health regelt noch mit Version 4
+        seen["intent"] = seen["intent"].model_copy(update={"version": 5})
+        service.request("manual")
+        await until(lambda: len(calls) == 2)
+        await asyncio.sleep(0.1)
+        live.health = planned_health(vehicle_health("tesla"), version=5)
+        await until(lambda: len(calls) == 3)
+    assert triggers(calls) == ["start", "manual", "vehicles"]
+    assert [[car.key for car in inputs.vehicles] for inputs in calls] == [
+        ["tesla"],
+        [],
+        ["tesla"],
+    ]
