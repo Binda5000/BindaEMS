@@ -3,10 +3,14 @@ nur mit Schalter, Spread-Regel und Regel R1."""
 
 from __future__ import annotations
 
-from tests.plan_helpers import scenario, small_battery
+from datetime import datetime
 
-from bindaems.app.planning.fallback import expensive_today, fallback_intents
+import pytest
+from tests.plan_helpers import SCENARIO_START, at, planned_car, scenario, small_battery, state
+
+from bindaems.app.planning.fallback import expensive_today, fallback_intents, fallback_vehicles
 from bindaems.shared.plan import BatteryIntent, BatteryIntentKind
+from bindaems.shared.timeutil import SLOT
 
 EVENING = [12.0] * 8 + [40.0] * 4  # 02:00–04:00 billig, 04:00–05:00 teuer (lokal)
 
@@ -131,6 +135,107 @@ def test_grid_charge_spread_charges_wear_on_the_delivered_energy() -> None:
         battery=small_battery(),
         soc_pct=20.0,
         grid_charge=True,
+    )
+    assert fallback_intents(inputs)[0] == BatteryIntent(
+        kind=BatteryIntentKind.NETZLADEN, grid_charge_w=5000
+    )
+
+
+# Geplante Autos (Plan 4b, Entscheidung 8)
+
+
+def _slot(n: int) -> datetime:
+    return at(SCENARIO_START) + n * SLOT
+
+
+def test_fallback_charges_pv_first_then_cheapest_slots() -> None:
+    # 5,5 kW Überschuss um 03:00 und 03:15 decken 2,75 kWh; der Rest (2,76 kWh) kommt aus dem
+    # billigsten Slot davor (02:15, beim Gleichstand der frühere) mit voller Leistung. Nach der
+    # Abfahrt (04:00) lädt es nicht.
+    car = planned_car(departure_at=_slot(8), need_kwh=5.51)
+    inputs = scenario(
+        prices=[30.0, 10.0, 20.0, 10.0, 30.0, 30.0, 30.0, 30.0, 5.0, 5.0],
+        pv=[0.0] * 4 + [6000.0] * 2 + [0.0] * 4,
+        load=[500.0] * 10,
+        vehicles=[car],
+    )
+    assert fallback_vehicles(inputs) == {
+        "tesla": pytest.approx([0.0, 11040.0, 0.0, 0.0, 5500.0, 5500.0, 0.0, 0.0, 0.0, 0.0])
+    }
+
+
+def test_fallback_grid_only_covers_what_is_left_and_respects_min_power() -> None:
+    # 1 kWh Rest: ein Slot mit 4000 W statt voller Leistung; Überschuss unter der
+    # Mindestleistung (3450 W) zählt nicht
+    car = planned_car(departure_at=_slot(4), need_kwh=1.0)
+    inputs = scenario(
+        prices=[20.0, 20.0, 10.0, 20.0],
+        pv=[0.0, 2000.0, 0.0, 0.0],
+        load=[500.0] * 4,
+        vehicles=[car],
+    )
+    assert fallback_vehicles(inputs) == {"tesla": [0.0, 0.0, 4000.0, 0.0]}
+    small = car.model_copy(update={"need_kwh": 0.1, "horizon_need_kwh": 0.1})
+    inputs = inputs.model_copy(update={"vehicles": [small]})
+    assert fallback_vehicles(inputs) == {"tesla": [0.0, 0.0, 3450.0, 0.0]}
+
+
+def test_fallback_pv_beyond_the_horizon_need_and_grid_only_for_it() -> None:
+    # Abfahrt nach dem Horizont: PV lädt bis zum ganzen Bedarf, das Netz nur, was im Horizont
+    # nötig ist
+    car = planned_car(departure_at=_slot(40), need_kwh=20.0, horizon_need_kwh=2.0)
+    inputs = scenario(
+        prices=[20.0, 10.0, 20.0, 20.0],
+        pv=[0.0, 0.0, 6000.0, 6000.0],
+        load=[500.0] * 4,
+        vehicles=[car],
+    )
+    assert fallback_vehicles(inputs) == {"tesla": [0.0, 0.0, 5500.0, 5500.0]}
+    more = car.model_copy(update={"horizon_need_kwh": 3.75})
+    inputs = inputs.model_copy(update={"vehicles": [more]})
+    assert fallback_vehicles(inputs) == {"tesla": pytest.approx([0.0, 4000.0, 5500.0, 5500.0])}
+
+
+def test_fallback_shares_pv_and_grid_limit_between_cars_in_priority_order() -> None:
+    golf = planned_car(
+        key="egolf", name="e-Golf", wallbox="evcs", departure_at=_slot(2), need_kwh=0.9
+    )
+    tesla = planned_car(departure_at=_slot(2), need_kwh=2.76)
+    inputs = scenario(
+        prices=[10.0, 20.0],
+        pv=[4100.0, 0.0],
+        load=[500.0] * 2,
+        vehicles=[golf, tesla],
+        battery=state(grid_max_import_w=8000.0),
+    )
+    # Der e-Golf nimmt die PV (3600 W); der Tesla lädt im billigen Slot, aber nur bis zur
+    # Grenze des Netzes (8000 W + 3600 W Überschuss − 3600 W e-Golf), den Rest danach
+    assert fallback_vehicles(inputs) == {
+        "egolf": pytest.approx([3600.0, 0.0]),
+        "tesla": pytest.approx([8000.0, 3450.0]),
+    }
+
+
+def test_fallback_battery_ignores_the_car_import() -> None:
+    # Das Auto bezieht im teuren Slot; das ist kein knapper Akku
+    inputs = scenario(prices=EVENING, pv=[0.0] * 12, load=[1000.0] * 12, soc_pct=90.0)
+    ev_w: list[dict[str, float]] = [{}] * 8 + [{"tesla": 11040.0}] * 4
+    assert all(i.kind == BatteryIntentKind.EIGENVERBRAUCH for i in fallback_intents(inputs, ev_w))
+
+
+def test_fallback_grid_charge_leaves_room_for_the_cars_below_the_import_limit() -> None:
+    # 9 kW Netzbezug höchstens: 2 kW Haus und 4 kW Auto lassen 3 kW fürs Netzladen (sonst 5 kW)
+    inputs = scenario(
+        prices=[8.0] * 8 + [40.0] * 4,
+        pv=[0.0] * 12,
+        load=[2000.0] * 12,
+        battery=small_battery(grid_max_import_w=9000.0),
+        soc_pct=20.0,
+        grid_charge=True,
+    )
+    ev_w: list[dict[str, float]] = [{"tesla": 4000.0}] * 8 + [{}] * 4
+    assert fallback_intents(inputs, ev_w)[0] == BatteryIntent(
+        kind=BatteryIntentKind.NETZLADEN, grid_charge_w=3000
     )
     assert fallback_intents(inputs)[0] == BatteryIntent(
         kind=BatteryIntentKind.NETZLADEN, grid_charge_w=5000

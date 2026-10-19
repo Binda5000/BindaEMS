@@ -378,25 +378,30 @@ def pv_arc(start: str, slots: int, peak_w: float) -> list[float]:
     return values
 
 
-def flow(**flows: float) -> SlotFlows:
+def flow(ev: Mapping[str, tuple[float, float]] | None = None, **flows: float) -> SlotFlows:
     """Flüsse eines Slots in W; fehlende sind 0. ``soc_end_kwh`` (kWh) ist, wenn nicht
-    angegeben, die Energie, die der Akku in diesem Slot netto aufnimmt (ohne Verluste)."""
+    angegeben, die Energie, die der Akku in diesem Slot netto aufnimmt (ohne Verluste). ``ev``
+    ist ``(pv_ev, gr_ev)`` je geplantem Auto."""
     values = {"pv_h": 0.0, "pv_b": 0.0, "pv_x": 0.0, "gr_h": 0.0, "gr_b": 0.0, "bt_h": 0.0}
     soc_end_kwh = flows.pop("soc_end_kwh", None)
     values.update(flows)
     if soc_end_kwh is None:
         soc_end_kwh = SLOT_H / 1000 * (values["pv_b"] + values["gr_b"] - values["bt_h"])
-    return SlotFlows(soc_end_kwh=soc_end_kwh, **values)
+    return SlotFlows(soc_end_kwh=soc_end_kwh, ev=dict(ev or {}), **values)
 
 
-def flows_result(flows: Sequence[SlotFlows]) -> OptimizerResult:
-    """Ergebnis des Optimierers mit diesen Flüssen (Status ``optimal``, ohne Spitzen)."""
+def flows_result(
+    flows: Sequence[SlotFlows], shortfall_kwh: Mapping[str, float] | None = None
+) -> OptimizerResult:
+    """Ergebnis des Optimierers mit diesen Flüssen (Status ``optimal``, ohne Spitzen);
+    ``shortfall_kwh`` ist die Fehlmenge je geplantem Auto."""
     return OptimizerResult(
         status="optimal",
         flows=tuple(flows),
         peaks_kw={},
         objective_ct=0.0,
         solve_ms=0,
+        shortfall_kwh=dict(shortfall_kwh or {}),
     )
 
 

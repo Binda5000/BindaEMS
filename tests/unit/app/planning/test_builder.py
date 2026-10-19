@@ -2,12 +2,24 @@
 
 from __future__ import annotations
 
-import pytest
-from tests.plan_helpers import month, resimulate, sample_slot, scenario, small_battery
+from typing import Any
 
+import pytest
+from tests.plan_helpers import (
+    SCENARIO_START,
+    at,
+    month,
+    planned_car,
+    resimulate,
+    sample_slot,
+    scenario,
+    small_battery,
+)
+
+from bindaems.app.planning.battery_model import SLOT_H
 from bindaems.app.planning.builder import baseline_cost_ct, build_plan, support_thresholds
 from bindaems.app.planning.explain import slot_text
-from bindaems.shared.plan import PLAN_VALID, BatteryIntent, BatteryIntentKind, PlanSlot
+from bindaems.shared.plan import PLAN_VALID, BatteryIntent, BatteryIntentKind, Plan, PlanSlot
 from bindaems.shared.timeutil import SLOT
 
 EV = BatteryIntent()
@@ -405,3 +417,103 @@ def test_no_reserved_code_in_hold_slots() -> None:
     held = [[r.code for r in s.reasons] for s in plan.slots[:2]]
     assert all("UNTERSTUETZUNG_RESERVIERT" not in codes for codes in held)
     assert plan.slots[0].support_soc_pct is not None and plan.slots[0].support_soc_pct > 70.0
+
+
+# Geplante Autos (Plan 4b, Präzisierung 14)
+
+
+def _car_plan(
+    ev_w: list[dict[str, float]],
+    *,
+    shortfall: dict[str, float] | None = None,
+    departure: int = 6,
+    **car: Any,
+) -> Plan:
+    """Plan des Optimierers über acht Slots ohne PV (500 W Haus) mit einem Auto, das nach
+    ``departure`` Slots abfährt, und der Ladeleistung ``ev_w`` je Slot."""
+    vehicle = planned_car(departure_at=at(SCENARIO_START) + departure * SLOT, **car)
+    inputs = scenario(prices=[20.0] * 8, pv=[0.0] * 8, load=[500.0] * 8, vehicles=[vehicle])
+    return build_plan(
+        inputs,
+        [EV] * 8,
+        source="optimizer",
+        solver_status="optimal",
+        ev_w=ev_w,
+        shortfall_kwh=shortfall,
+    )
+
+
+def test_plan_summary_per_car() -> None:
+    # 76 % → 80 % mit 75 kWh und η 0,9: 3,33 kWh aus der Wallbox; der Plan lädt 3,0 kWh
+    ev_w = [{}, {}, {"tesla": 6000.0}, {"tesla": 6000.0}, {}, {}, {}, {}]
+    plan = _car_plan(ev_w, shortfall={"tesla": 1 / 3}, soc_pct=76.0, target_soc_pct=80.0)
+    (car,) = plan.vehicles
+    assert (car.key, car.name, car.wallbox) == ("tesla", "Tesla Model 3", "twc")
+    assert car.departure_at == at(SCENARIO_START) + 6 * SLOT
+    assert (car.soc_start_pct, car.soc_assumed, car.limit_pct) == (76.0, False, None)
+    assert car.target_soc_pct == 80.0
+    assert car.need_kwh == pytest.approx(10 / 3)
+    assert car.planned_kwh == pytest.approx(3.0)  # Wallbox-Seite: Σ e · Δ
+    assert car.shortfall_kwh == pytest.approx(1 / 3)
+    assert car.expected_soc_pct == pytest.approx(76.0 + 3.0 * 0.9 / 75 * 100)  # 79,6 %
+    assert car.finish_at == at(SCENARIO_START) + 4 * SLOT  # Ende des letzten Slots mit Laden
+    assert not car.reachable
+    assert [s.ev_w for s in plan.slots[1:4]] == [{}, {"tesla": 6000.0}, {"tesla": 6000.0}]
+    # Das Auto lädt aus dem Netz, der Akku deckt nur das Haus
+    assert (plan.slots[2].import_w, plan.slots[2].discharge_w) == (6000.0, 500.0)
+
+
+def test_reachable_allows_a_tenth_of_a_kwh_and_computes_a_missing_shortfall() -> None:
+    ev_w = [{}, {}, {"tesla": 6000.0}, {"tesla": 6000.0}, {}, {}, {}, {}]
+    close = _car_plan(ev_w, soc_pct=76.0, target_soc_pct=80.0, need_kwh=3.1)
+    assert close.vehicles[0].shortfall_kwh == pytest.approx(0.1)  # aus dem Bedarf gerechnet
+    assert close.vehicles[0].reachable
+    far = _car_plan(ev_w, soc_pct=76.0, target_soc_pct=80.0, need_kwh=3.11)
+    assert not far.vehicles[0].reachable
+
+
+def test_expected_soc_stops_at_the_target_once_the_need_is_covered() -> None:
+    # 79,9 % → 80 % sind 0,083 kWh; ein Slot mit Mindestleistung lädt 0,86 kWh
+    ev_w = [{"tesla": 3450.0}, {}, {}, {}, {}, {}, {}, {}]
+    plan = _car_plan(ev_w, shortfall={"tesla": 0.0}, soc_pct=79.9, target_soc_pct=80.0)
+    car = plan.vehicles[0]
+    assert car.planned_kwh == pytest.approx(3450 * SLOT_H / 1000)
+    assert car.expected_soc_pct == 80.0
+    assert car.reachable and car.finish_at == at(SCENARIO_START) + SLOT
+
+
+def test_expected_soc_never_exceeds_100_and_without_charging_has_no_finish() -> None:
+    idle = _car_plan([{}] * 8, shortfall={"tesla": 0.0}, soc_pct=85.0, target_soc_pct=80.0)
+    car = idle.vehicles[0]
+    assert (car.planned_kwh, car.expected_soc_pct, car.finish_at) == (0.0, 85.0, None)
+    assert car.reachable
+    full = _car_plan(
+        [{"tesla": 11040.0}] * 6 + [{}, {}],
+        shortfall={"tesla": 0.0},
+        soc_pct=99.0,
+        target_soc_pct=100.0,
+        need_kwh=20.0,
+    )
+    assert full.vehicles[0].expected_soc_pct == 100.0
+
+
+def test_departure_after_the_horizon_compares_with_the_horizon_need() -> None:
+    # Bedarf 30 kWh, im Horizont nötig 2,76 kWh: ein voller Slot reicht
+    ev_w = [{"tesla": 11040.0}, {}, {}, {}, {}, {}, {}, {}]
+    plan = _car_plan(ev_w, departure=40, need_kwh=30.0, horizon_need_kwh=2.76)
+    car = plan.vehicles[0]
+    assert car.shortfall_kwh == pytest.approx(0.0, abs=1e-9) and car.reachable
+    assert car.expected_soc_pct == pytest.approx(40.0 + 2.76 * 0.9 / 75 * 100)
+
+
+def test_baseline_carries_the_same_cars() -> None:
+    ev_w = [{"tesla": 6000.0}] + [{}] * 7
+    plan = _car_plan(ev_w, shortfall={"tesla": 0.0})
+    # Der Akku deckt das Haus in beiden; nur das Auto bezieht: 1,5 kWh zu 20 ct
+    assert plan.expected_cost_ct == pytest.approx(30.0)
+    assert plan.baseline_cost_ct == pytest.approx(30.0)
+
+
+def test_power_below_one_watt_is_not_in_the_plan() -> None:
+    plan = _car_plan([{"tesla": 0.4}] + [{}] * 7, shortfall={"tesla": 0.0})
+    assert plan.slots[0].ev_w == {} and plan.vehicles[0].finish_at is None

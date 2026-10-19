@@ -5,9 +5,12 @@ from __future__ import annotations
 
 import pytest
 from tests.plan_helpers import (
+    SCENARIO_START,
+    at,
     flow,
     flows_result,
     month,
+    planned_car,
     pv_arc,
     resimulate,
     scenario,
@@ -261,3 +264,42 @@ def test_grid_charge_that_pays_through_the_end_value_is_kept() -> None:
 
     assert drop(30.0) == charging
     assert drop(0.0) == plain
+
+
+# Geplante Autos (Plan 4b, Präzisierung 12)
+
+
+def test_resimulation_counts_the_car_taking_pv() -> None:
+    # Netzladen um 02:00 für den teuren Abend; um 02:45 nimmt das Auto 4,5 kW der PV, der Akku
+    # den Rest. Ohne das Auto speiste die Nachrechnung 4,5 kW ein, und Regel R1 striche das
+    # Netzladen.
+    car = planned_car(departure_at=at(SCENARIO_START) + 4 * SLOT, need_kwh=1.2)
+    inputs = scenario(
+        prices=[10.0, 40.0, 40.0, 20.0],
+        pv=[0.0, 0.0, 0.0, 10000.0],
+        load=[500.0, 2000.0, 2000.0, 500.0],
+        battery=small_battery(),
+        soc_pct=40.0,
+        grid_charge=True,
+        vehicles=[car],
+    )
+    result = flows_result(
+        [
+            flow(gr_h=500, gr_b=4000),
+            flow(bt_h=2000),
+            flow(bt_h=2000),
+            flow(pv_h=500, pv_b=5000, ev={"tesla": (4500.0, 0.0)}),
+        ]
+    )
+    intents = derive_intents(inputs, result)
+    assert intents[0] == BatteryIntent(kind=BatteryIntentKind.NETZLADEN, grid_charge_w=4000)
+
+
+def test_hold_compares_with_the_house_load_without_the_car() -> None:
+    # Der Akku deckt das Haus (500 W) voll, das Auto lädt 7 kW aus dem Netz: Eigenverbrauch
+    car = planned_car(departure_at=at(SCENARIO_START) + 2 * SLOT)
+    inputs = scenario(prices=[20.0] * 2, pv=[0.0] * 2, load=[500.0] * 2, vehicles=[car])
+    result = flows_result([flow(bt_h=500, ev={"tesla": (0.0, 7000.0)})] * 2)
+    assert [i.kind for i in derive_intents(inputs, result)] == [
+        BatteryIntentKind.EIGENVERBRAUCH
+    ] * 2

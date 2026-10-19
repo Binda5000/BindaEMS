@@ -2,6 +2,9 @@
 
 Rechnet die Absichten mit dem Akkumodell nach und füllt daraus Slots, Budget (Präzisierungen 10
 und 11), Kosten, Vergleichskosten „Victron allein“ und die Gründe der Erklärung. Reine Rechnung.
+
+Mit geplanten Autos (Plan 4b, Präzisierung 14) bekommt jeder Slot die Ladeleistung je Auto
+(``PlanSlot.ev_w``) und der Plan eine Zusammenfassung je Auto (``Plan.vehicles``).
 """
 
 from __future__ import annotations
@@ -9,8 +12,16 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from datetime import datetime
 from math import ceil
+from typing import Final
 
-from bindaems.app.planning.battery_model import SimStep, params_of, sim_slots, simulate
+from bindaems.app.planning.battery_model import (
+    EV_ON_W,
+    SLOT_H,
+    SimStep,
+    params_of,
+    sim_slots,
+    simulate,
+)
 from bindaems.app.planning.explain import reasons_for
 from bindaems.app.planning.inputs import PlanInputs
 from bindaems.shared.plan import (
@@ -19,25 +30,92 @@ from bindaems.shared.plan import (
     Plan,
     PlanSlot,
     PlanSource,
+    PlanVehicle,
     SolverStatus,
 )
 from bindaems.shared.timeutil import LOCAL_TZ, SLOT, ensure_utc
 
+REACHABLE_TOL_KWH: Final = 0.1  # bis zu dieser Fehlmenge gilt das Ziel als erreichbar
 _TENTH_EPS = 1e-9  # Gleitkommafehler vor dem Aufrunden auf 0,1 kW
 _SOC_EPS = 1e-9  # Gleitkommafehler vor dem Aufrunden auf ganze Prozent und beim Bedarf null
+_KWH_EPS = 1e-9  # Gleitkommafehler beim Vergleich von Energien der Autos
 
 
-def _resimulate(inputs: PlanInputs, intents: Sequence[BatteryIntent]) -> list[SimStep]:
+def _resimulate(
+    inputs: PlanInputs,
+    intents: Sequence[BatteryIntent],
+    ev_w: Sequence[Mapping[str, float]] = (),
+) -> list[SimStep]:
     params = params_of(inputs)
     soc0_kwh = inputs.battery.soc_pct / 100 * params.capacity_kwh
-    return simulate(soc0_kwh, sim_slots(inputs), intents, params)
+    return simulate(soc0_kwh, sim_slots(inputs, ev_w), intents, params)
 
 
-def baseline_cost_ct(inputs: PlanInputs) -> float:
+def baseline_cost_ct(inputs: PlanInputs, ev_w: Sequence[Mapping[str, float]] = ()) -> float:
     """Energiekosten in ct, wenn der Akku in allen Slots ``EIGENVERBRAUCH`` fährt („Victron
-    allein“), ab demselben SOC."""
-    steps = _resimulate(inputs, [BatteryIntent() for _ in inputs.slots])
+    allein“), ab demselben SOC. Die Autos laden darin wie im Plan (``ev_w``): Der Vergleich
+    zeigt, was der Plan des Akkus spart."""
+    steps = _resimulate(inputs, [BatteryIntent() for _ in inputs.slots], ev_w)
     return sum(item.cost_ct for item in steps)
+
+
+def _car_powers(inputs: PlanInputs, ev_w: Sequence[Mapping[str, float]]) -> list[dict[str, float]]:
+    """Ladeleistung je Auto und Slot ab ``EV_ON_W``; ohne Angabe lädt kein Auto."""
+    if not ev_w:
+        return [{} for _ in inputs.slots]
+    if len(ev_w) != len(inputs.slots):
+        raise ValueError("Ladeleistung der Autos muss zu den Slots passen")
+    return [{key: w for key, w in powers.items() if w >= EV_ON_W} for powers in ev_w]
+
+
+def vehicle_summary(
+    inputs: PlanInputs,
+    ev_w: Sequence[Mapping[str, float]],
+    shortfall_kwh: Mapping[str, float] | None = None,
+) -> list[PlanVehicle]:
+    """Zusammenfassung je geplantem Auto in der Reihenfolge der Priorität (Präzisierung 14).
+
+    Alle Energien auf der Wallbox-Seite (Ruling R10): ``planned_kwh = Σ e · Δ``. Der erwartete
+    Ladestand ist ``soc_start + planned_kwh · η / usable · 100``, höchstens 100; deckt der Plan
+    den Bedarf (``planned_kwh ≥ need_kwh``), höchstens das Ziel (oder der Ladestand, wenn er schon
+    darüber liegt), denn am Ziel stoppt der core, auch wenn der letzte Slot mit ``min_w`` mehr
+    vorsieht. ``finish_at`` ist das Ende des letzten Slots mit Laden. Die Fehlmenge kommt aus
+    ``shortfall_kwh`` (Optimierer); fehlt das Auto dort, ist sie ``horizon_need_kwh`` minus
+    ``planned_kwh``. ``reachable`` heißt Fehlmenge höchstens ``REACHABLE_TOL_KWH``; bei einer
+    Abfahrt hinter dem Horizont gilt sie gegen den Bedarf im Horizont.
+    """
+    powers = _car_powers(inputs, ev_w)
+    known = shortfall_kwh or {}
+    result: list[PlanVehicle] = []
+    for car in inputs.vehicles:
+        watts = [slot.get(car.key, 0.0) for slot in powers]
+        planned = sum(watts) * SLOT_H / 1000
+        shortfall = known.get(car.key)
+        if shortfall is None:
+            shortfall = max(0.0, car.horizon_need_kwh - planned)
+        expected = car.soc_pct + planned * car.efficiency / car.usable_kwh * 100
+        if planned >= car.need_kwh - _KWH_EPS:
+            expected = min(expected, max(car.target_soc_pct, car.soc_pct))
+        charging = [index for index, w in enumerate(watts) if w > 0]
+        result.append(
+            PlanVehicle(
+                key=car.key,
+                name=car.name,
+                wallbox=car.wallbox,
+                target_soc_pct=car.target_soc_pct,
+                departure_at=car.departure_at,
+                soc_start_pct=car.soc_pct,
+                soc_assumed=car.soc_assumed,
+                limit_pct=car.limit_pct,
+                need_kwh=car.need_kwh,
+                planned_kwh=planned,
+                shortfall_kwh=shortfall,
+                expected_soc_pct=min(100.0, expected),
+                finish_at=inputs.slots[charging[-1]].start + SLOT if charging else None,
+                reachable=shortfall <= REACHABLE_TOL_KWH + _KWH_EPS,
+            )
+        )
+    return result
 
 
 def _month_of(inputs: PlanInputs, index: int) -> str:
@@ -121,16 +199,27 @@ def build_plan(
     fallback_reason: str | None = None,
     issues: Sequence[str] = (),
     optimizer_peaks_kw: Mapping[str, float] | None = None,
+    ev_w: Sequence[Mapping[str, float]] = (),
+    shortfall_kwh: Mapping[str, float] | None = None,
 ) -> Plan:
-    """Plan aus den Absichten: Nachrechnung, Budget, Gründe, Kosten und Vergleichskosten."""
+    """Plan aus den Absichten: Nachrechnung, Budget, Gründe, Kosten und Vergleichskosten.
+
+    ``ev_w`` ist die Ladeleistung je geplantem Auto und Slot (W), ``shortfall_kwh`` die
+    Fehlmenge je Auto aus dem Optimierer (``vehicle_summary``); die Nachrechnung, das Budget und
+    die Vergleichskosten rechnen die Autos mit.
+    """
     if len(intents) != len(inputs.slots):
         raise ValueError("Absichten und Slots müssen gleich viele sein")
     params = params_of(inputs)
-    steps = _resimulate(inputs, intents)
+    powers = _car_powers(inputs, ev_w)
+    steps = _resimulate(inputs, intents, powers)
     budgets = _budgets(inputs, steps, source=source, optimizer_peaks_kw=optimizer_peaks_kw)
+    vehicles = vehicle_summary(inputs, powers, shortfall_kwh)
 
     drafts: list[PlanSlot] = []
-    for slot, intent, item, budget in zip(inputs.slots, intents, steps, budgets, strict=True):
+    for slot, intent, item, budget, cars in zip(
+        inputs.slots, intents, steps, budgets, powers, strict=True
+    ):
         drafts.append(
             PlanSlot(
                 start=slot.start,
@@ -149,6 +238,7 @@ def build_plan(
                 estimated=slot.origin == "estimated",
                 cost_ct=item.cost_ct,
                 budget_kw=budget,
+                ev_w=cars,
                 reasons=[],
             )
         )
@@ -160,6 +250,8 @@ def build_plan(
         budgets,
         fallback=source == "fallback",
         thresholds=thresholds,
+        ev_w=powers,
+        vehicles=vehicles,
     )
     slots = [
         draft.model_copy(update={"support_soc_pct": threshold, "reasons": slot_reasons})
@@ -179,7 +271,8 @@ def build_plan(
         month_peak_kw=inputs.month_peak_kw,
         power_price=bool(inputs.peak_months),
         expected_cost_ct=sum(item.cost_ct for item in steps),
-        baseline_cost_ct=baseline_cost_ct(inputs),
+        baseline_cost_ct=baseline_cost_ct(inputs, powers),
         issues=list(issues),
+        vehicles=vehicles,
         slots=slots,
     )

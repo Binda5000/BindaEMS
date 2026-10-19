@@ -3,6 +3,10 @@
 Prüft die Flüsse des Optimierers und die Nachrechnung der Absichten mit dem Akkumodell. Ein
 Befund heißt, dass der Plan nicht ausgeführt werden darf; der Planungsdienst nimmt dann den
 Ersatzplan mit dem ersten Befund als Grund. Je Art wird nur der erste Slot gemeldet.
+
+Geplante Autos (Plan 4b, Präzisierung 15): Die PV-Bilanz zählt die PV ins Auto mit; je Auto ist
+die Ladeleistung 0 oder zwischen ``min_w`` und ``max_w`` (``BALANCE_TOL_W`` Toleranz), und ab dem
+ersten Slot ab der Abfahrt lädt es nicht. Die Befunde gelten je Auto.
 """
 
 from __future__ import annotations
@@ -13,6 +17,7 @@ from typing import Final, Literal
 from bindaems.app.planning.battery_model import SLOT_H, SimStep, params_of, sim_slots
 from bindaems.app.planning.inputs import PlanInputs
 from bindaems.app.planning.optimizer import OptimizerResult
+from bindaems.app.planning.vehicles import _slots_before
 from bindaems.shared.plan import BatteryIntent, BatteryIntentKind
 from bindaems.shared.settings import PlanningSettings
 from bindaems.shared.timeutil import LOCAL_TZ, ensure_utc
@@ -54,7 +59,8 @@ def pays_off(
     """Späterer Slot und sein Bezugspreis, mit dem die Spread-Regel für ``index`` gilt.
 
     Gesucht ist ein späterer Slot mit Entladung über ``USED_ABOVE_W`` (``by="discharge"``) bzw.
-    Netzbezug ab ``MENTION_W`` (``by="import"``, nur für die Erklärung „lohnt sich“), für den
+    Netzbezug des Hauses ab ``MENTION_W`` (``by="import"``, nur für die Erklärung „lohnt sich“;
+    der Bezug der Autos zählt nicht, denn der Akku gibt nichts ins Auto), für den
     ``spread_pays`` gilt. Der teuerste solche Slot zählt, bei Gleichstand der frühere; ``None``,
     wenn es keinen gibt.
     """
@@ -62,7 +68,11 @@ def pays_off(
     best: tuple[int, float] | None = None
     for later in range(index + 1, len(steps)):
         item = steps[later]
-        used = item.discharge_w > USED_ABOVE_W if by == "discharge" else item.import_w >= MENTION_W
+        used = (
+            item.discharge_w > USED_ABOVE_W
+            if by == "discharge"
+            else item.import_w - item.ev_grid_w >= MENTION_W
+        )
         later_ct = inputs.slots[later].import_ct
         if not used:
             continue
@@ -135,7 +145,7 @@ def check_plan(
 
     for index, (flows, slot, inp) in enumerate(zip(result.flows, slots, inputs.slots, strict=True)):
         at = _local_time(inputs, index)
-        pv_w = flows.pv_h + flows.pv_b + flows.pv_x
+        pv_w = flows.pv_h + flows.pv_b + flows.pv_x + sum(pv for pv, _ in flows.ev.values())
         load_w = flows.pv_h + flows.gr_h + flows.bt_h
         if abs(pv_w - inp.pv_w) > BALANCE_TOL_W or abs(load_w - inp.load_w) > BALANCE_TOL_W:
             report("balance", index, f"Bilanz verletzt um {at}")
@@ -148,6 +158,23 @@ def check_plan(
             report("power", index, f"Leistung über der Grenze um {at}")
         if soc_outside(flows.soc_end_kwh):
             report("soc", index, f"SOC außerhalb der Grenzen um {at}")
+
+    for car in inputs.vehicles:
+        departure = _slots_before(car.departure_at, inputs.slots)
+        for index, flows in enumerate(result.flows):
+            pv, grid = flows.ev.get(car.key, (0.0, 0.0))
+            power_w = pv + grid
+            if power_w <= BALANCE_TOL_W:
+                continue
+            if index >= departure:
+                report(f"after:{car.key}", index, f"Auto {car.name} lädt nach der Abfahrt")
+            if power_w < car.min_w - BALANCE_TOL_W or power_w > car.max_w + BALANCE_TOL_W:
+                at = _local_time(inputs, index)
+                report(
+                    f"limits:{car.key}",
+                    index,
+                    f"Auto {car.name} lädt außerhalb seiner Grenzen um {at}",
+                )
 
     for index, (item, slot) in enumerate(zip(steps, slots, strict=True)):
         at = _local_time(inputs, index)

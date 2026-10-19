@@ -32,7 +32,7 @@ from bindaems.app.forecast.service import ForecastService
 from bindaems.app.ledger.service import LedgerService
 from bindaems.app.planning.battery_model import params_of, sim_slots, simulate
 from bindaems.app.planning.builder import build_plan
-from bindaems.app.planning.fallback import fallback_intents
+from bindaems.app.planning.fallback import fallback_intents, fallback_vehicles, per_slot
 from bindaems.app.planning.inputs import (
     PRICE_WINDOW,
     BatteryState,
@@ -43,7 +43,7 @@ from bindaems.app.planning.inputs import (
     car_floor_kw,
 )
 from bindaems.app.planning.intents import derive_intents
-from bindaems.app.planning.optimizer import OptimizerResult
+from bindaems.app.planning.optimizer import OptimizerResult, ev_power_w
 from bindaems.app.planning.plausibility import check_plan
 from bindaems.app.planning.process import OUTER_TIMEOUT_S, Solver, solve_in_subprocess
 from bindaems.app.planning.store import PlanStore
@@ -107,15 +107,17 @@ def plan_once(inputs: PlanInputs, result: OptimizerResult) -> Plan:
 
     Mit einer Lösung: Absichten, Nachrechnung und Plausibilität; ist der Plan plausibel, gilt
     er. Sonst der Ersatzplan mit dem Grund aus „Texte“, bei einem unplausiblen Plan dem ersten
-    Befund und allen Befunden als Auffälligkeiten.
+    Befund und allen Befunden als Auffälligkeiten. Die geplanten Autos laden im Plan des
+    Optimierers mit seiner Ladeleistung und Fehlmenge, im Ersatzplan nach ``fallback_vehicles``.
     """
     reason = _failure_reason(inputs, result)
     findings: list[str] = []
     if reason is None:
+        ev_w = ev_power_w(result)
         intents = derive_intents(inputs, result)
         params = params_of(inputs)
         soc0_kwh = inputs.battery.soc_pct / 100 * params.capacity_kwh
-        steps = simulate(soc0_kwh, sim_slots(inputs), intents, params)
+        steps = simulate(soc0_kwh, sim_slots(inputs, ev_w), intents, params)
         findings = check_plan(inputs, result, intents, steps)
         if not findings:
             return build_plan(
@@ -124,15 +126,19 @@ def plan_once(inputs: PlanInputs, result: OptimizerResult) -> Plan:
                 source="optimizer",
                 solver_status=result.status,
                 optimizer_peaks_kw=result.peaks_kw,
+                ev_w=ev_w,
+                shortfall_kwh=result.shortfall_kwh,
             )
         reason = f"Plan unplausibel: {findings[0]}"
+    ev_w = per_slot(fallback_vehicles(inputs), len(inputs.slots))
     return build_plan(
         inputs,
-        fallback_intents(inputs),
+        fallback_intents(inputs, ev_w),
         source="fallback",
         solver_status=result.status,
         fallback_reason=reason,
         issues=findings,
+        ev_w=ev_w,
     )
 
 

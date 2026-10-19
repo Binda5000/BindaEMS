@@ -2,13 +2,33 @@
 
 from __future__ import annotations
 
-from typing import get_args
+from datetime import datetime
+from typing import Any, get_args
 
-from tests.plan_helpers import month, resimulate, scenario, small_battery
+from tests.plan_helpers import (
+    SCENARIO_START,
+    at,
+    month,
+    planned_car,
+    resimulate,
+    scenario,
+    small_battery,
+)
 
+from bindaems.app.planning.builder import build_plan
 from bindaems.app.planning.explain import reasons_for, sentence, slot_text
 from bindaems.app.planning.inputs import PlanInputs
-from bindaems.shared.plan import BatteryIntent, BatteryIntentKind, PlanSlot, Reason, ReasonCode
+from bindaems.app.planning.vehicles import PlanVehicleInput
+from bindaems.shared.plan import (
+    BatteryIntent,
+    BatteryIntentKind,
+    Plan,
+    PlanSlot,
+    PlanSource,
+    Reason,
+    ReasonCode,
+)
+from bindaems.shared.timeutil import SLOT
 
 EV = BatteryIntent()
 HOLD = BatteryIntent(kind=BatteryIntentKind.HALTEN)
@@ -286,3 +306,116 @@ def test_budgets_do_not_change_plain_eigenverbrauch() -> None:
         prices=[20.0] * 4, pv=[0.0] * 4, load=[500.0] * 4, peak_months=[month("2026-10", 2.0)]
     )
     assert codes(inputs, [EV] * 4) == [["EIGENVERBRAUCH"]] * 4
+
+
+# Geplante Autos (Plan 4b, Präzisierung 13)
+
+
+def _car_plan(
+    ev_w: list[dict[str, float]],
+    vehicles: list[PlanVehicleInput],
+    *,
+    pv: list[float] | None = None,
+    load: float = 500.0,
+    prices: list[float] | None = None,
+    source: PlanSource = "optimizer",
+    **kwargs: Any,
+) -> Plan:
+    count = len(ev_w)
+    inputs = scenario(
+        prices=prices or [20.0] * count,
+        pv=pv or [0.0] * count,
+        load=[load] * count,
+        vehicles=vehicles,
+        **kwargs,
+    )
+    return build_plan(
+        inputs,
+        [EV] * count,
+        source=source,
+        solver_status="optimal" if source == "optimizer" else "timeout",
+        ev_w=ev_w,
+    )
+
+
+def _slot(n: int) -> datetime:
+    return at(SCENARIO_START) + n * SLOT
+
+
+def test_car_codes_follow_the_main_code() -> None:
+    # Der Akku deckt 2 kW Haus über acht Slots, die Schwelle steigt über 20 %; 1,75 kWh decken
+    # den Bedarf. Abfahrt nach acht Slots: 04:00 Ortszeit.
+    car = planned_car(departure_at=_slot(8), need_kwh=1.75)
+    plan = _car_plan(
+        [{"tesla": 7000.0}] + [{}] * 7,
+        [car],
+        load=2000.0,
+        source="fallback",
+        support_soc_pct=20.0,
+        origins=["estimated"] + ["primary"] * 7,
+    )
+    assert [r.code for r in plan.slots[0].reasons] == [
+        "ERSATZPLAN",
+        "EIGENVERBRAUCH",
+        "ZIEL_SOC_ABFAHRT",
+        "UNTERSTUETZUNG_RESERVIERT",
+        "GESCHAETZT",
+    ]
+    assert slot_text(plan.slots[0]).startswith(
+        "Ersatzplan. Akku deckt den Eigenverbrauch. "
+        "Tesla Model 3 lädt 7,0 kW, damit es um 04:00 Uhr 80 % hat."
+    )
+    assert "ZIEL_SOC_ABFAHRT" not in [r.code for r in plan.slots[1].reasons]
+
+
+def test_unreachable_target_is_named_in_the_first_slot() -> None:
+    # 40 kWh in vier vollen Slots: 11,04 kWh, also 40 % + 13,2 Prozentpunkte
+    car = planned_car(departure_at=_slot(4), need_kwh=40.0)
+    plan = _car_plan([{"tesla": 11040.0}] * 4, [car])
+    assert [r.code for r in plan.slots[0].reasons] == [
+        "EIGENVERBRAUCH",
+        "ZIEL_SOC_ABFAHRT",
+        "ZIEL_SOC_UNERREICHBAR",
+    ]
+    assert slot_text(plan.slots[0]) == (
+        "Akku deckt den Eigenverbrauch. "
+        "Tesla Model 3 lädt 11,0 kW, damit es um 03:00 Uhr 53 % hat. "
+        "Tesla Model 3 erreicht bis 03:00 Uhr voraussichtlich nur 53 %."
+    )
+    assert [r.code for r in plan.slots[1].reasons] == ["EIGENVERBRAUCH", "ZIEL_SOC_ABFAHRT"]
+
+
+def test_car_waits_for_pv_when_rule_r2_binds() -> None:
+    car = planned_car(departure_at=_slot(4), need_kwh=2.75, grid_allowed_kwh=0.0)
+    ev_w: list[dict[str, float]] = [{}, {}, {"tesla": 5500.0}, {"tesla": 5500.0}]
+    plan = _car_plan(ev_w, [car], pv=[0.0, 0.0, 6000.0, 6000.0])
+    texts = [slot_text(s) for s in plan.slots]
+    assert texts[0].endswith("Tesla Model 3 wartet auf PV-Überschuss (Regel R).")
+    assert "AUTO_WARTET_AUF_PV" in [r.code for r in plan.slots[1].reasons]
+    # Aus PV geladen: kein Grund zum Netzladen des Autos
+    assert [r.code for r in plan.slots[2].reasons] == ["EIGENVERBRAUCH"]
+    # Ohne bindende Regel R2 wartet es nicht
+    free = car.model_copy(update={"grid_allowed_kwh": car.horizon_need_kwh})
+    plan = _car_plan(ev_w, [free], pv=[0.0, 0.0, 6000.0, 6000.0])
+    assert all("AUTO_WARTET_AUF_PV" not in [r.code for r in s.reasons] for s in plan.slots)
+
+
+def test_cars_follow_their_priority() -> None:
+    golf = planned_car(
+        key="egolf", name="e-Golf", wallbox="evcs", departure_at=_slot(4), need_kwh=0.9
+    )
+    tesla = planned_car(departure_at=_slot(4), need_kwh=0.9)
+    plan = _car_plan([{"tesla": 3600.0, "egolf": 3600.0}] + [{}] * 3, [golf, tesla])
+    assert [r.params.get("name") for r in plan.slots[0].reasons[1:]] == ["e-Golf", "Tesla Model 3"]
+
+
+def test_car_import_does_not_make_grid_charge_worthwhile() -> None:
+    # Später teuer, aber dort bezieht nur das Auto: Der Akku könnte es nicht versorgen
+    car = planned_car(departure_at=_slot(8), need_kwh=1.75)
+    plan = _car_plan(
+        [{}] * 6 + [{"tesla": 7000.0}, {}],
+        [car],
+        prices=[10.0] * 4 + [40.0] * 4,
+        soc_pct=90.0,
+    )
+    assert plan.slots[0].reasons[0].code == "EIGENVERBRAUCH"

@@ -3,21 +3,28 @@ Spread-Regel an der Nachrechnung."""
 
 from __future__ import annotations
 
+from dataclasses import replace
+from typing import Any
+
 import pytest
 from tests.plan_helpers import (
+    SCENARIO_START,
+    at,
     flow,
     flows_of,
     flows_result,
     month,
+    planned_car,
     pv_arc,
     resimulate,
     scenario,
     small_battery,
 )
 
+from bindaems.app.planning.battery_model import SLOT_H, params_of, sim_slots, simulate
 from bindaems.app.planning.inputs import PlanInputs
 from bindaems.app.planning.intents import derive_intents
-from bindaems.app.planning.optimizer import SlotFlows, solve
+from bindaems.app.planning.optimizer import OptimizerResult, SlotFlows, solve
 from bindaems.app.planning.plausibility import (
     check_plan,
     export_after_kwh,
@@ -26,6 +33,7 @@ from bindaems.app.planning.plausibility import (
 )
 from bindaems.app.planning.service import plan_once
 from bindaems.shared.plan import BatteryIntent, BatteryIntentKind
+from bindaems.shared.timeutil import SLOT
 
 
 def test_clean_plan_has_no_issues() -> None:
@@ -345,3 +353,98 @@ def test_flows_and_steps_must_match_the_slots() -> None:
         check_plan(inputs, flows_result(full.flows[:1]), intents, steps)
     with pytest.raises(ValueError):
         check_plan(inputs, full, intents, steps[:1])
+
+
+# Geplante Autos (Plan 4b, Präzisierung 15)
+
+
+def _car_inputs(count: int = 4, departure: int = 2, **car: Any) -> PlanInputs:
+    """``count`` Slots ohne PV mit 500 W Haus und einem Auto, das nach ``departure`` Slots
+    abfährt (Tesla wie ``planned_car``: 3450 bis 11040 W)."""
+    vehicle = planned_car(departure_at=at(SCENARIO_START) + departure * SLOT, **car)
+    return scenario(
+        prices=[20.0] * count, pv=[0.0] * count, load=[500.0] * count, vehicles=[vehicle]
+    )
+
+
+def _check(inputs: PlanInputs, flows: list[SlotFlows]) -> list[str]:
+    """Befunde für ``flows`` mit der Nachrechnung von ``EIGENVERBRAUCH``; ``soc_end_kwh`` der
+    Flüsse (bei ``flow`` die Änderung im Slot) zählt ab dem SOC des Laufs weiter."""
+    soc_kwh = inputs.battery.soc_pct / 100 * inputs.battery.usable_kwh
+    absolute: list[SlotFlows] = []
+    for item in flows:
+        soc_kwh += item.soc_end_kwh
+        absolute.append(replace(item, soc_end_kwh=soc_kwh))
+    flows = absolute
+    result = flows_result(flows)
+    intents = [BatteryIntent() for _ in flows]
+    ev_w = [{k: pv + gr for k, (pv, gr) in f.ev.items()} for f in flows]
+    steps = simulate(
+        inputs.battery.soc_pct / 100 * inputs.battery.usable_kwh,
+        sim_slots(inputs, ev_w),
+        intents,
+        params_of(inputs),
+    )
+    return check_plan(inputs, result, intents, steps)
+
+
+def test_car_after_departure_is_implausible() -> None:
+    inputs = _car_inputs(departure=2)
+    flows = [
+        flow(gr_h=500, ev={"tesla": (0.0, 11040.0)}),
+        flow(gr_h=500),
+        flow(gr_h=500, ev={"tesla": (0.0, 3450.0)}),
+        flow(gr_h=500),
+    ]
+    assert _check(inputs, flows) == ["Auto Tesla Model 3 lädt nach der Abfahrt"]
+
+
+def test_car_outside_its_limits_is_implausible() -> None:
+    inputs = _car_inputs(departure=4)
+    flows = [
+        flow(gr_h=500, ev={"tesla": (0.0, 3449.5)}),  # 1 W Toleranz
+        flow(gr_h=500, ev={"tesla": (0.0, 1000.0)}),
+        flow(gr_h=500, ev={"tesla": (0.0, 11041.5)}),
+        flow(gr_h=500, ev={"tesla": (0.0, 0.5)}),  # praktisch aus
+    ]
+    assert _check(inputs, flows) == ["Auto Tesla Model 3 lädt außerhalb seiner Grenzen um 02:15"]
+
+
+def test_balance_counts_the_pv_into_the_car() -> None:
+    vehicle = planned_car(departure_at=at(SCENARIO_START) + 2 * SLOT)
+    inputs = scenario(prices=[20.0] * 2, pv=[6000.0] * 2, load=[500.0] * 2, vehicles=[vehicle])
+    good = [flow(pv_h=500, pv_b=1500, ev={"tesla": (4000.0, 0.0)})] * 2
+    assert _check(inputs, good) == []
+    missing = [flow(pv_h=500, pv_b=1500)] * 2
+    assert _check(inputs, missing)[0] == "Bilanz verletzt um 02:00"
+
+
+def test_optimizer_plan_with_a_charging_car_is_plausible() -> None:
+    # Ohne PV lädt das Auto in den billigen Slots aus dem Netz, der Akku deckt das Haus
+    vehicle = planned_car(departure_at=at(SCENARIO_START) + 8 * SLOT, need_kwh=5.0)
+    inputs = scenario(
+        prices=[30.0, 30.0, 10.0, 10.0, 30.0, 30.0, 30.0, 30.0],
+        pv=[0.0] * 8,
+        load=[500.0] * 8,
+        vehicles=[vehicle],
+    )
+    result = solve(inputs)
+    plan = plan_once(inputs, result)
+    assert plan.source == "optimizer", plan.issues
+    assert sum(w for s in plan.slots for w in s.ev_w.values()) * SLOT_H / 1000 == pytest.approx(5.0)
+    assert plan.slots[2].ev_w["tesla"] > 3000 and plan.slots[0].ev_w == {}
+    assert plan.slots[2].import_w >= plan.slots[2].ev_w["tesla"] - 1e-6
+    assert [v.key for v in plan.vehicles] == ["tesla"] and plan.vehicles[0].reachable
+
+
+def test_fallback_plan_carries_the_cars() -> None:
+    vehicle = planned_car(departure_at=at(SCENARIO_START) + 4 * SLOT, need_kwh=2.76)
+    inputs = scenario(prices=[20.0] * 4, pv=[0.0] * 4, load=[500.0] * 4, vehicles=[vehicle])
+    failed = OptimizerResult(
+        status="error", flows=(), peaks_kw={}, objective_ct=None, solve_ms=0, message="kaputt"
+    )
+    plan = plan_once(inputs, failed)
+    assert plan.source == "fallback"
+    assert [s.ev_w for s in plan.slots] == [{"tesla": pytest.approx(11040.0)}, {}, {}, {}]
+    assert plan.vehicles[0].planned_kwh == pytest.approx(2.76)
+    assert plan.vehicles[0].reachable

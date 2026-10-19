@@ -2,7 +2,8 @@
 ihre Sätze.
 
 Der Hauptcode eines Slots folgt der ersten passenden Regel; dazu kommen ``ERSATZPLAN`` an erster
-und ``GESCHAETZT`` an letzter Stelle. Reine Rechnung ohne Zugriff auf Zeit oder Konfiguration.
+und ``GESCHAETZT`` an letzter Stelle. Nach dem Hauptcode stehen die Codes der geplanten Autos
+(Plan 4b, Präzisierung 13). Reine Rechnung ohne Zugriff auf Zeit oder Konfiguration.
 """
 
 from __future__ import annotations
@@ -11,7 +12,7 @@ from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime
 from decimal import ROUND_HALF_UP, Decimal
 
-from bindaems.app.planning.battery_model import SimStep, params_of
+from bindaems.app.planning.battery_model import EV_ON_W, SimStep, params_of
 from bindaems.app.planning.inputs import PlanInputs
 from bindaems.app.planning.plausibility import (
     MENTION_W,
@@ -19,10 +20,12 @@ from bindaems.app.planning.plausibility import (
     export_after_kwh,
     pays_off,
 )
-from bindaems.shared.plan import BatteryIntent, BatteryIntentKind, PlanSlot, Reason
+from bindaems.app.planning.vehicles import _slots_before
+from bindaems.shared.plan import BatteryIntent, BatteryIntentKind, PlanSlot, PlanVehicle, Reason
 from bindaems.shared.timeutil import LOCAL_TZ, SLOT, ensure_utc
 
 Params = Mapping[str, float | str]
+_KWH_EPS = 1e-9  # Gleitkommafehler beim Vergleich von Energien der Autos
 
 
 def _de(value: float, digits: int) -> str:
@@ -220,6 +223,71 @@ def _main_reason(
     return Reason(code="EIGENVERBRAUCH")
 
 
+def _car_reasons(
+    inputs: PlanInputs,
+    ev_w: Sequence[Mapping[str, float]],
+    vehicles: Sequence[PlanVehicle],
+) -> list[list[Reason]]:
+    """Codes der geplanten Autos je Slot, je Auto in der Reihenfolge der Priorität
+    (``inputs.vehicles``; Präzisierung 13).
+
+    Die PV eines Slots (Überschuss über das Haus) geht in dieser Reihenfolge an die Autos, der
+    Rest ihrer Ladeleistung kommt aus dem Netz, wie in der Nachrechnung.
+
+    - ``ZIEL_SOC_ABFAHRT`` in Slots, in denen das Auto mindestens ``MENTION_W`` aus dem Netz lädt;
+      ``soc`` ist das Ziel, wenn es erreichbar ist, sonst der erwartete Ladestand.
+    - ``AUTO_WARTET_AUF_PV`` in Slots vor der Abfahrt ohne Laden, wenn Regel R2 bindet
+      (``grid_allowed_kwh < horizon_need_kwh``) und ein späterer Slot davor das Auto mit
+      mindestens ``MENTION_W`` aus PV lädt.
+    - ``ZIEL_SOC_UNERREICHBAR`` im ersten Slot, wenn der Plan das Ziel nicht erreicht.
+    """
+    count = len(inputs.slots)
+    result: list[list[Reason]] = [[] for _ in range(count)]
+    summary = {vehicle.key: vehicle for vehicle in vehicles}
+    pv_left = [max(0.0, slot.pv_w - slot.load_w) for slot in inputs.slots]
+    for car in inputs.vehicles:
+        plan = summary.get(car.key)
+        watts = [ev_w[index].get(car.key, 0.0) if ev_w else 0.0 for index in range(count)]
+        from_pv: list[float] = []
+        for index, power_w in enumerate(watts):
+            take = min(pv_left[index], power_w)
+            pv_left[index] -= take
+            from_pv.append(take)
+        reachable = plan is None or plan.reachable
+        expected = plan.expected_soc_pct if plan is not None else car.target_soc_pct
+        um = _hhmm(car.departure_at)
+        departure = _slots_before(car.departure_at, inputs.slots)
+        binds = car.grid_allowed_kwh < car.horizon_need_kwh - _KWH_EPS
+        for index in range(count):
+            if watts[index] - from_pv[index] >= MENTION_W:
+                result[index].append(
+                    Reason(
+                        code="ZIEL_SOC_ABFAHRT",
+                        params={
+                            "name": car.name,
+                            "kw": watts[index] / 1000,
+                            "soc": car.target_soc_pct if reachable else expected,
+                            "um": um,
+                        },
+                    )
+                )
+            elif (
+                binds
+                and index < departure
+                and watts[index] < EV_ON_W
+                and any(from_pv[later] >= MENTION_W for later in range(index + 1, departure))
+            ):
+                result[index].append(Reason(code="AUTO_WARTET_AUF_PV", params={"name": car.name}))
+        if not reachable and count:
+            result[0].append(
+                Reason(
+                    code="ZIEL_SOC_UNERREICHBAR",
+                    params={"name": car.name, "soc": expected, "um": um},
+                )
+            )
+    return result
+
+
 def reasons_for(
     inputs: PlanInputs,
     intents: Sequence[BatteryIntent],
@@ -228,24 +296,32 @@ def reasons_for(
     *,
     fallback: bool,
     thresholds: Sequence[tuple[float, datetime]] | None = None,
+    ev_w: Sequence[Mapping[str, float]] = (),
+    vehicles: Sequence[PlanVehicle] = (),
 ) -> list[list[Reason]]:
-    """Grundcodes je Slot: ``ERSATZPLAN`` (im Ersatzplan), Hauptcode, ``UNTERSTUETZUNG_RESERVIERT``
-    (Präzisierung 6), ``GESCHAETZT`` (bei Schätzpreis).
+    """Grundcodes je Slot: ``ERSATZPLAN`` (im Ersatzplan), Hauptcode, die Codes der geplanten Autos
+    (``_car_reasons``), ``UNTERSTUETZUNG_RESERVIERT`` (Präzisierung 6), ``GESCHAETZT`` (bei
+    Schätzpreis).
 
     ``thresholds`` sind Plan-Schwelle und „bis“ je Slot (``support_thresholds``); ohne sie gibt es
-    den Grundcode nie.
+    den Grundcode nie. ``ev_w`` ist die Ladeleistung je Auto und Slot, ``vehicles`` die
+    Zusammenfassung je Auto (``builder.vehicle_summary``).
     """
     count = len(inputs.slots)
     if not len(intents) == len(steps) == len(budgets) == count:
         raise ValueError("Absichten, Schritte und Budgets müssen zu den Slots passen")
     if thresholds is not None and len(thresholds) != count:
         raise ValueError("Schwellen müssen zu den Slots passen")
+    if ev_w and len(ev_w) != count:
+        raise ValueError("Ladeleistung der Autos muss zu den Slots passen")
+    cars = _car_reasons(inputs, ev_w, vehicles)
     result: list[list[Reason]] = []
     for index, slot in enumerate(inputs.slots):
         reasons: list[Reason] = []
         if fallback:
             reasons.append(Reason(code="ERSATZPLAN"))
         reasons.append(_main_reason(inputs, intents, steps, budgets, index))
+        reasons.extend(cars[index])
         if thresholds is not None and intents[index].kind is BatteryIntentKind.EIGENVERBRAUCH:
             soc_pct, until = thresholds[index]
             if soc_pct > inputs.support_soc_pct:

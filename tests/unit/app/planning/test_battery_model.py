@@ -5,13 +5,14 @@ from __future__ import annotations
 import math
 
 import pytest
-from tests.plan_helpers import at
+from tests.plan_helpers import at, scenario
 
 from bindaems.app.planning.battery_model import (
     SLOT_H,
     BatteryParams,
     SimSlot,
     eta,
+    sim_slots,
     simulate,
     step,
 )
@@ -142,3 +143,59 @@ def test_energy_balance_holds() -> None:
 def test_simulate_rejects_mismatched_lengths() -> None:
     with pytest.raises(ValueError, match="gleich viele"):
         simulate(5.0, [slot(0, 1000)] * 2, [EV], P)
+
+
+# Geplante Autos (Plan 4b, Präzisierung 12)
+
+
+def car_slot(pv: float, load: float, ev: float) -> SimSlot:
+    return SimSlot(T0, pv, load, 20.0, 5.0, 5000.0, 5000.0, ev_w=ev)
+
+
+def test_battery_does_not_feed_the_car() -> None:
+    s = step(5.0, car_slot(0, 500, 7000), EV, P)
+    assert (s.discharge_w, s.import_w) == (500, 7000)
+    assert (s.ev_pv_w, s.ev_grid_w) == (0, 7000)
+    assert s.cost_ct == pytest.approx(0.25 * 7 * 20.0)
+
+
+def test_pv_covers_house_then_car_then_battery() -> None:
+    s = step(5.0, car_slot(6000, 1000, 3000), EV, P)
+    assert (s.ev_pv_w, s.ev_grid_w, s.charge_pv_w, s.export_w, s.import_w) == (
+        3000,
+        0,
+        2000,
+        0,
+        0,
+    )
+    short = step(5.0, car_slot(3000, 1000, 7000), EV, P)
+    assert (short.ev_pv_w, short.ev_grid_w, short.charge_pv_w, short.import_w) == (
+        2000,
+        5000,
+        0,
+        5000,
+    )
+
+
+def test_grid_charge_adds_to_the_car_import() -> None:
+    s = step(5.0, car_slot(0, 1000, 4000), grid(2000), P)
+    assert (s.charge_grid_w, s.discharge_w, s.ev_grid_w, s.import_w) == (2000, 0, 4000, 7000)
+
+
+def test_energy_balance_holds_with_a_car() -> None:
+    for intent in (EV, HOLD, grid(2000)):
+        for pv, load, ev in ((0, 1000, 3450), (3000, 1000, 7000), (7000, 200, 3450)):
+            s = step(6.0, car_slot(pv, load, ev), intent, P)
+            assert s.ev_pv_w + s.ev_grid_w == pytest.approx(ev)
+            lhs = pv + s.import_w + s.discharge_w
+            rhs = load + ev + s.export_w + s.charge_pv_w + s.charge_grid_w
+            assert math.isclose(lhs, rhs, abs_tol=1e-9)
+
+
+def test_sim_slots_sum_the_cars_per_slot() -> None:
+    inputs = scenario(prices=[20.0] * 3, pv=[0.0] * 3, load=[500.0] * 3)
+    slots = sim_slots(inputs, [{"tesla": 3000.0, "egolf": 2000.0}, {}, {"egolf": 1500.0}])
+    assert [s.ev_w for s in slots] == [5000.0, 0.0, 1500.0]
+    assert [s.ev_w for s in sim_slots(inputs)] == [0.0] * 3
+    with pytest.raises(ValueError, match="Slots"):
+        sim_slots(inputs, [{}])

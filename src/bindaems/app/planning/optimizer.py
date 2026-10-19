@@ -30,7 +30,7 @@ from typing import Any, Final
 import highspy
 import pulp
 
-from bindaems.app.planning.battery_model import SLOT_H, SimSlot, params_of, sim_slots
+from bindaems.app.planning.battery_model import EV_ON_W, SLOT_H, SimSlot, params_of, sim_slots
 from bindaems.app.planning.inputs import INERTIA_SLOTS, PlanInputs
 from bindaems.app.planning.vehicles import PlanVehicleInput, _slots_before
 from bindaems.shared.plan import SolverStatus
@@ -82,6 +82,15 @@ class OptimizerResult:
     message: str | None = None
     shortfall_kwh: Mapping[str, float] = field(default_factory=dict)
     r2_excess_kwh: Mapping[str, float] = field(default_factory=dict)
+
+
+def ev_power_w(result: OptimizerResult) -> list[dict[str, float]]:
+    """Ladeleistung ``e = pv_ev + gr_ev`` je Auto und Slot in W; ein Auto unter ``EV_ON_W``
+    (Rundung des Solvers) fehlt im Slot."""
+    return [
+        {key: pv + grid for key, (pv, grid) in flows.ev.items() if pv + grid >= EV_ON_W}
+        for flows in result.flows
+    ]
 
 
 def grid_charge_cap_w(inputs: PlanInputs, index: int) -> float:
