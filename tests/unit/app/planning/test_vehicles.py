@@ -146,6 +146,27 @@ def test_r2_allowance_uses_p25_surplus_in_priority_order() -> None:
     assert allowed == pytest.approx({"tesla": 8.0, "egolf": 0.0})
 
 
+def test_r2_counts_only_what_the_car_can_take_and_leaves_the_rest() -> None:
+    # Ruling R11: 9 kW Überschuss je Slot (2,25 kWh) über 2 h. Der e-Golf nimmt höchstens
+    # 7,36 kW (1,84 kWh je Slot, 14,72 kWh); der Rest (0,41 kWh je Slot, 3,28 kWh) geht an den
+    # Tesla.
+    slots = _slots(8, pv_p25=[9500.0] * 8)
+    departure = at(START) + 2 * HOUR
+    egolf = planned_car(
+        key="egolf", max_w=7360.0, min_w=2760.0, horizon_need_kwh=20.0, departure_at=departure
+    )
+    tesla = planned_car(key="tesla", horizon_need_kwh=10.0, departure_at=departure)
+    allowed = grid_allowed([egolf, tesla], slots, ["egolf", "tesla"])
+    assert allowed == pytest.approx({"egolf": 20.0 - 14.72, "tesla": 10.0 - 3.28})
+
+
+def test_r2_counts_surplus_below_the_minimum_power() -> None:
+    # 1 kW Überschuss liegt unter min_w (3,45 kW) und zählt trotzdem: 0,25 kWh je Slot
+    slots = _slots(8, pv_p25=[1500.0] * 8)
+    car = planned_car(horizon_need_kwh=5.0, departure_at=at(START) + 2 * HOUR)
+    assert grid_allowed([car], slots, ["tesla"]) == pytest.approx({"tesla": 3.0})
+
+
 def test_r2_counts_only_slots_before_the_departure() -> None:
     slots = _slots(8, pv_p25=[3500.0] * 8)
     # Abfahrt nach vier Slots: 3 kWh Überschuss davor

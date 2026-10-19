@@ -281,6 +281,21 @@ async def test_collect_takes_p25_and_the_planned_cars(service_with, live, foreca
     assert (await service_with().collect("start")).vehicles == []
 
 
+async def test_collect_checks_health_against_the_newer_intent(service_with, live):
+    # Der core hat schon Version 4, regelte aber noch mit 3; gesehen ist erst Version 3
+    health = planned_health(vehicle_health("tesla"), version=3)
+    live.health = {**health, "intent": {"version": 4}}
+    seen = Intent(version=3, vehicles={"tesla": VehicleIntent(mode=ChargeMode.PLANNED)})
+    assert (await service_with(intent=lambda: seen).collect("start")).vehicles == []
+    # umgekehrt: die gesehene Absicht ist neuer als die in Health
+    live.health = health
+    newer = seen.model_copy(update={"version": 4})
+    assert (await service_with(intent=lambda: newer).collect("start")).vehicles == []
+    # beide gleich alt: das Auto steht im Plan
+    inputs = await service_with(intent=lambda: seen).collect("start")
+    assert [car.key for car in inputs.vehicles] == ["tesla"]
+
+
 async def test_collect_grid_limit_from_max_import(service_with, cfg):
     limited = cfg.model_copy(update={"grid": cfg.grid.model_copy(update={"max_import_kw": 11.0})})
     inputs = await service_with(cfg=limited).collect("start")

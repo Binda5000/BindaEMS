@@ -390,18 +390,18 @@ class PlanningService:
         return prices, peak.kw if peak is not None else None
 
     def _intent_for(self, health: Mapping[str, Any] | None) -> Intent | None:
-        """Die Absicht, gegen die Health geprüft wird: die zuletzt gesehene, sonst die, die Health
-        selbst als gültige nennt (wie ``health_trusted``); ``None`` ohne beide."""
+        """Die Absicht, gegen die Health geprüft wird: von der zuletzt gesehenen und der, die
+        Health selbst als gültige nennt (wie ``health_trusted``), die mit der höheren Version;
+        ``None`` ohne beide."""
         seen = self._intent()
-        if seen is not None:
-            return seen
         raw = health.get("intent") if health is not None else None
-        if not isinstance(raw, dict):
-            return None
-        try:
-            return Intent.model_validate(raw)
-        except ValidationError:
-            return None
+        shown: Intent | None = None
+        if isinstance(raw, dict):
+            with contextlib.suppress(ValidationError):
+                shown = Intent.model_validate(raw)
+        if seen is None or (shown is not None and shown.version > seen.version):
+            return shown
+        return seen
 
     async def collect(self, trigger: PlanTrigger) -> PlanInputs:
         """Eingangsdaten eines Laufs; wirft ``PlanningUnavailable``.

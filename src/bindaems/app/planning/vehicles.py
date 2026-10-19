@@ -8,11 +8,11 @@ kommen aus Health, Wirkungsgrad, Kapazität und Ladeleistung aus der Konfigurati
   (``core.control.planned``, Präzisierung 6). Die app importiert nichts aus dem core, darum steht
   sie zweimal; ``tests/unit/test_planned_formula.py`` vergleicht beide.
 - ``horizon_need``: der Teil des Bedarfs, der im Horizont geladen werden muss
+- ``grid_allowed``: Regel R2, die Netzenergie, die ein Auto bis zur Abfahrt laden darf
+- ``planned_vehicles``: die geplanten Autos eines Laufs
 
 Alle Energien der Autos stehen auf der Wallbox-Seite (Ruling R10): Bedarf, Bedarf im Horizont
 und die nach Regel R2 erlaubte Netzenergie; der Wirkungsgrad steckt nur in ``need_kwh``.
-- ``grid_allowed``: Regel R2, die Netzenergie, die ein Auto bis zur Abfahrt laden darf
-- ``planned_vehicles``: die geplanten Autos eines Laufs
 
 Reine Rechnung: Health, Absicht und Zeit kommen als Parameter.
 """
@@ -25,6 +25,7 @@ from typing import TYPE_CHECKING, Annotated, Any, Final
 
 from pydantic import AwareDatetime, Field
 
+from bindaems.app.control.intent import _health_vehicles, _trusted
 from bindaems.shared.config import Config, EvcsConfig, TwcConfig, VehicleConfig, _Model
 from bindaems.shared.control import ChargeMode, Intent, VehicleIntent, next_departure
 from bindaems.shared.numbers import finite_number
@@ -143,11 +144,12 @@ def grid_allowed(
     (Entscheidung 7).
 
     Erlaubt ist ``horizon_need_kwh`` minus der Anteil des Autos am PV-Überschuss nach P25
-    (``max(0, P25 − Last)``, ohne P25 gilt ``pv_w``) in den Slots vor seiner Abfahrt. Der
-    Überschuss geht in der Reihenfolge ``priority`` an die Autos; Autos, die ``priority`` nicht
-    nennt, folgen in der Reihenfolge von ``vehicles``. Jedes Auto nimmt seinen Anteil von den
-    letzten Slots vor seiner Abfahrt rückwärts: So bleibt der frühe Überschuss für ein späteres
-    Auto, das früher abfährt.
+    (``max(0, P25 − Last)``, ohne P25 gilt ``pv_w``) in den Slots vor seiner Abfahrt. Je Slot
+    nimmt ein Auto höchstens, was es mit ``max_w`` laden kann (Ruling R11); der Rest bleibt für
+    die nächsten Autos. Überschuss unter ``min_w`` zählt mit. Der Überschuss geht in der
+    Reihenfolge ``priority`` an die Autos; Autos, die ``priority`` nicht nennt, folgen in der
+    Reihenfolge von ``vehicles``. Jedes Auto nimmt seinen Anteil von den letzten Slots vor seiner
+    Abfahrt rückwärts: So bleibt der frühe Überschuss für ein späteres Auto, das früher abfährt.
     """
     left = [
         max(0.0, (slot.pv_w if slot.pv_p25_w is None else slot.pv_p25_w) - slot.load_w)
@@ -160,10 +162,11 @@ def grid_allowed(
     allowed: dict[str, float] = {}
     for car in order:
         wanted = car.horizon_need_kwh
+        per_slot = car.max_w / 1000 * _SLOT_H
         for index in reversed(range(_slots_before(car.departure_at, slots))):
             if wanted <= 0:
                 break
-            take = min(wanted, left[index])
+            take = min(wanted, left[index], per_slot)
             left[index] -= take
             wanted -= take
         allowed[car.key] = max(0.0, wanted)
@@ -191,19 +194,6 @@ def _moment(value: Any) -> datetime | None:
     return ensure_utc(moment) if moment.tzinfo is not None else None
 
 
-def _entries(health: Mapping[str, Any] | None) -> dict[str, Mapping[str, Any]]:
-    raw = health.get("vehicles") if health is not None else None
-    if not isinstance(raw, list):
-        return {}
-    return {item["id"]: item for item in raw if isinstance(item, dict) and "id" in item}
-
-
-def _trusted(health: Mapping[str, Any] | None, intent: Intent) -> bool:
-    """Health zeigt die Regelung mit der Absicht ``intent`` oder einer neueren."""
-    version = health.get("intent_version") if health is not None else None
-    return isinstance(version, int) and not isinstance(version, bool) and version >= intent.version
-
-
 def planned_vehicles(
     cfg: Config,
     health: Mapping[str, Any] | None,
@@ -222,9 +212,9 @@ def planned_vehicles(
     alt), gilt die nächste nach ``now`` (``next_departure``), wie im nächsten Zyklus des core.
     ``grid_allowed_kwh`` verteilt den Überschuss in der Reihenfolge der Priorität.
     """
-    if intent is None or not slots or not _trusted(health, intent):
+    if intent is None or not slots or not _trusted(intent.version, health):
         return []
-    entries = _entries(health)
+    entries = _health_vehicles(health)
     volts = cfg.grid.voltage_nominal_v
     current_end = ensure_utc(slots[0].start) + SLOT
     horizon_end = ensure_utc(slots[-1].start) + SLOT
