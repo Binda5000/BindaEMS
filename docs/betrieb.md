@@ -4200,8 +4200,9 @@ nennt.
   nicht schon im Horizont lädt.
 - **An den core** geht je Slot die Ladeleistung je Auto in ganzen Watt (`vehicles` im Slot): jedes
   Auto des Plans in jedem Slot vor seiner Abfahrt, auch mit 0 W. Ein Auto, das ein gültiger Slot
-  nicht nennt, kennt der Plan nicht; der core lädt es nach der spätesten Startzeit. Der core lehnt negative Werte und unbekannte Fahrzeuge ab und begrenzt auf die
-  Höchstleistung des Fahrzeugs (Abschnitt „Laderegelung“, „Absicht per PUT /v1/intent“).
+  nicht nennt, kennt der Plan nicht; der core lädt es nach der spätesten Startzeit. Der core lehnt
+  negative Werte und unbekannte Fahrzeuge ab und begrenzt auf die Höchstleistung des Fahrzeugs
+  (Abschnitt „Laderegelung“, „Absicht per PUT /v1/intent“).
 - **Prüfung:** Die Bilanz zählt die Autos mit; je Auto ist die Leistung 0 oder zwischen kleinster und
   voller Leistung (1 W Toleranz), und nach der Abfahrt lädt kein Auto (Befunde unten, „Ersatzplan“).
 

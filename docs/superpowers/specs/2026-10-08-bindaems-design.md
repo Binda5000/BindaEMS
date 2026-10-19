@@ -2402,7 +2402,7 @@ Bei der Umsetzung haben diese Punkte die Entscheidungen ergänzt oder enger gefa
 - **Warnungen:** Ein unbekannter Zustand hält eine stehende Meldung (12, Stand Plan 4b).
 - **Zählung:** Zeile erst mit Bedarf, nie gelöscht, Ergebnis `changed`, Mitwandern über eine Lücke, 15-min-Regel mit `end_soc_at` (11.3, Stand Plan 4b); die Statistik zeigt `changed` als eigene Zeile.
 - **Abfahrt hinter dem Horizont:** „Fertig um“ ist leer, solange der Plan den Bedarf nicht im Horizont lädt, und der erwartete Ladestand gilt an der Abfahrt (9.3, Stand Plan 4b).
-- **Offen:** kleinere Punkte: der Ersatzplan kann Regel R2 bei vielen kleinen Überschüssen überschreiten (9.4); Die Quote der Abnahme berührt das nicht im Regelfall.
+- **Offen:** kleinere Punkte: der Ersatzplan kann Regel R2 bei vielen kleinen Überschüssen überschreiten (9.4); die Quote der Abnahme berührt das nicht im Regelfall.
 
 ### Phase 5 – Lernen
 
