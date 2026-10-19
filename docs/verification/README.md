@@ -110,7 +110,7 @@ Das Protokoll übernimmst du mit Datum nach `docs/verification/`.
 ## Teil 2 – schreibend (17.2)
 
 Teil 2 (Spec 17.2) schreibt auf Geräte und läuft gemeinsam mit dem Betreiber. Das Werkzeug
-`bindaems.tools.verify_part2` führt die Punkte `evcs`, `tesla` und `victron` aus. Es nutzt
+`bindaems.tools.verify_part2` führt die Punkte `evcs`, `tesla`, `victron` und `thermal` aus. Es nutzt
 dieselben Adapter und Aktoren wie der core, prüft jeden Wert mit den Regeln 1–3 der Safety-Schicht
 und fragt vor jedem schreibenden Schritt nach. Nach jedem Schritt und bei Abbruch stellt es die
 vorgefundenen Werte wieder her. Bedienung, Rückfragen, Abbruch und Voraussetzungen stehen im
@@ -119,7 +119,8 @@ Punkt `evcs` führt sie mit aus.
 
 **Reihenfolge:** EVCS und Tesla jetzt, gemeinsam mit dem Betreiber. Victron nur mit
 abgeschaltetem Dynamic ESS; für den Test genügt es, DESS vorübergehend abzuschalten
-(Betriebshandbuch 11). Solange DESS an ist, verweigert der Punkt, ohne zu schreiben.
+(Betriebshandbuch 11). Solange DESS an ist, verweigert der Punkt, ohne zu schreiben. Der Punkt
+`thermal` (17.2-9, Klimaanlage) kommt mit Plan 6a und läuft nur mit gestopptem core.
 
 ### Aufruf
 
@@ -148,10 +149,11 @@ docker compose run --rm -v "$PWD/verification:/out" --entrypoint python ems-core
 
 | Option | Bedeutung |
 |---|---|
-| `--punkt evcs`, `tesla` oder `victron` | Pflicht: welcher Punkt läuft |
+| `--punkt evcs`, `tesla`, `victron` oder `thermal` | Pflicht: welcher Punkt läuft |
 | `--config` | Pfad der `config.yaml` (Pflicht) |
 | `--wallbox <Name>` | nur bei `evcs`: die EVCS (Standard: die erste unter `wallboxes`) |
 | `--fahrzeug <Name>` | nur bei `tesla`: das Fahrzeug (Standard: das erste mit `tessie`) |
+| `--geraet <Name>` | nur bei `thermal`: die Klimaanlage (Standard: das erste Gerät unter `thermal.devices`) |
 | `--schlafend` | nur bei `tesla`: prüft, ohne etwas zu senden, dass ein schlafendes Auto nicht geweckt wird |
 | `--out <Datei>` | der Bericht (Standard siehe oben) |
 | `--yes` | beantwortet alle Rückfragen mit Ja und überspringt Schritte mit Handgriff; nicht empfohlen |
@@ -207,6 +209,22 @@ Jeder Schritt ist eine Zeile im Bericht. Vor jedem Schritt, der schreibt, fragt 
     ihrer Leistung, genau dem Wert, den die Rückfrage nennt. Der Akku soll nicht entladen.
   - „Importlimit“ (17.2-8): Du schaltest eine Last ein, die eine Phase über 20 A bringen würde; das
     Werkzeug beobachtet nur den höchsten Netzstrom. Entfällt mit `--yes`.
+
+- **`thermal`** (17.2-9, Plan 6a): Die Klimaanlage an der UVR610, Versatz per CoE. Das Werkzeug nutzt
+  denselben CoE-Adapter und Aktor wie der core und bindet denselben UDP-Port (5442, Standard): Der
+  core ist gestoppt, und im Container steht `--service-ports` am `docker compose run`, sonst kämen
+  keine Pakete an. Es braucht keine Secrets und fragt den Cerbo nicht. Es sendet nur auf
+  ausdrücklichen Aufruf und nach der Bestätigung vor dem Start; mit `coe_probe listen` (hört nur
+  mit, sendet nie) prüfst du vorher den Empfang (Betriebshandbuch, „Klimaanlage (Phase 6a)“).
+  - „Werte der Empfangstabelle“: Alle Werte kommen binnen `stale_after_s` des Geräts an; sonst endet
+    der Punkt, ohne zu senden, und der Befund nennt die fehlenden Werte.
+  - „Versatz +0,5 K“: gesendet, das Echo der UVR zeigt ihn binnen 60 s; danach die Rückfrage „Zeigt
+    die Visu der UVR „EMS“ +0,5 K?“. Entfällt mit `--yes`.
+  - „Versatz 0“: gesendet, das Echo zeigt 0.
+  - „Timeout der UVR“: Das Werkzeug sendet +0,5 K und danach bis zu 5 min 30 s nichts mehr; das
+    Echo muss von selbst auf 0 fallen. Mit Rückfrage; entfällt mit `--yes`.
+  - „Am Ende: Versatz 0“: Am Ende, nach einem Fehler und nach Strg+C sendet es 0 und wartet auf das
+    Echo 0, statt Werte wiederherzustellen.
 
 ### Ergebnis
 
@@ -292,6 +310,15 @@ Die Checkliste für die Abnahme der Phase 1 (Spec 18) steht in
 innerhalb ±2 % von VRM, Preise und Prognose sichtbar und nachweislich keine Schreibpfade zu
 Geräten. Für die Abnahme kopierst du sie mit Datum, füllst sie an der Anlage aus und checkst sie
 hier ein.
+
+## Abnahme Phase 6a
+
+Die Checkliste für die Abnahme der Phase 6a (Klimaanlage, Spec 18) steht in
+[`abnahme-phase-6a.md`](abnahme-phase-6a.md): alle Werte der Empfangstabelle kommen an, der Versatz
+fällt 5 min nach dem letzten Paket auf 0, 7 Tage Dry-Run ohne Fehler und im Live-Betrieb der Versatz
+nie außerhalb ±3 K, höchstens eine Stufe je 10 min weg von 0, spätestens einen Zyklus nach einem
+Wechsel der Betriebsart oder bei veralteten Werten auf 0 und jeder Versatz durch das Echo bestätigt.
+Für die Abnahme kopierst du sie mit Datum, füllst sie an der Anlage aus und checkst sie hier ein.
 
 ## Abnahme Phase 4
 

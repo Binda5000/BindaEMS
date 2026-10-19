@@ -734,6 +734,7 @@ def test_documented_tool_commands_start_python_directly() -> None:
         "bindaems.tools.watchdog_probe",
         "bindaems.tools.export_days",
         "bindaems.tools.scenario_days",
+        "bindaems.tools.coe_probe",
     } <= set(TOOL_COMMAND.findall(handbook))
     for doc in ("docs/betrieb.md", "docs/verification/README.md", "cerbo-watchdog/README.md"):
         for command in TOOL_COMMAND.finditer(Path(doc).read_text(encoding="utf-8")):
@@ -747,7 +748,11 @@ def test_part2_options_in_the_docs_exist(capsys: pytest.CaptureFixture[str]) -> 
 
     with pytest.raises(SystemExit):
         main(["--help"])
-    known = set(re.findall(r"--[a-z][a-z-]*", capsys.readouterr().out)) | {"--rm", "--entrypoint"}
+    known = set(re.findall(r"--[a-z][a-z-]*", capsys.readouterr().out)) | {
+        "--rm",
+        "--entrypoint",
+        "--service-ports",  # Docker: der Punkt `thermal` braucht den veröffentlichten UDP-Port
+    }
     sections = {
         "docs/betrieb.md": r"### Prüfprotokoll Teil 2\n(.*?)\n### ",
         "docs/verification/README.md": r"## Teil 2 – schreibend \(17\.2\)\n(.*?)\n## ",
@@ -1098,3 +1103,38 @@ def test_grafana_section_in_the_guide_matches_the_dashboard() -> None:
     assert "keine Zugangsdaten" in text
     for topic in ("PV gesamt", "Haus (Verbrauch)", "`pv_total`", "`house_load`", "„Einzellast“"):
         assert topic in text, topic
+
+
+def test_climate_chapter_matches_the_code() -> None:
+    # „Klimaanlage (Phase 6a)“: Gründe mit dem Text des Logs, die Alarme, die Sensoren in
+    # Home Assistant, die Werkzeuge und der Port stehen wie im Code (Plan 6a, Task 13).
+    from bindaems.app.ha.entities import build_entities
+    from bindaems.core.actuators.thermal import ECHO_MISMATCH_S
+    from bindaems.core.regulation_link import THERMAL_EXCEPTION
+    from bindaems.shared.config import load_config
+    from bindaems.shared.decisions import _REASON_TEXT
+    from bindaems.tools.part2.thermal import ITEM
+
+    section = " ".join(_guide_section("Klimaanlage (Phase 6a)").split())
+    codes = {code: text for code, text in _REASON_TEXT.items() if code.startswith("thermal_")}
+    assert len(codes) == 9
+    for code, text in codes.items():
+        assert f"| `{code}` | {text} |" in section, code
+    assert f"`{THERMAL_EXCEPTION}`" in section
+    assert "`thermal.echo_mismatch.<name>`" in section
+    assert f"mehr als {ECHO_MISMATCH_S:.0f} s" in section
+    cfg = load_config(Path("deploy/config.example.yaml"))
+    handbook = Path("docs/betrieb.md").read_text(encoding="utf-8")
+    for spec in build_entities(cfg):
+        if spec.object_id.startswith("thermal_"):
+            suffix = spec.object_id.rsplit("_", 1)[1]
+            assert f"(`thermal_<Schlüssel>_{suffix}`)" in handbook or f"(`…_{suffix}`)" in handbook
+    assert "coe_probe listen" in section and "--punkt thermal" in section
+    assert ITEM == "17.2-9"
+    spec_text = Path("docs/superpowers/specs/2026-10-08-bindaems-design.md").read_text("utf-8")
+    assert "9. **`thermal` (Klimaanlage, Stand Plan 6a):**" in spec_text
+    abnahme = Path("docs/verification/abnahme-phase-6a.md").read_text(encoding="utf-8")
+    assert "abnahme-phase-6a.md" in Path("docs/verification/README.md").read_text("utf-8")
+    assert "7 Tage" in abnahme and "±3 K" in abnahme
+    compose = Path("deploy/docker-compose.yml").read_text(encoding="utf-8")
+    assert '"5442:5442/udp"' in compose and "5442/udp" in section

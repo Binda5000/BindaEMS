@@ -1128,6 +1128,10 @@ Kurzfristig puffern das ESS und das Victron-Importlimit (Ebene 0).
   - Phasen, Minimal- und Maximalstrom
   - Befehlslimits (Tesla)
   - `live_allowed`
+- **Wärmeerzeuger (je Gerät, Stand Plan 6a):**
+  - größter Sollwertversatz `max_offset_k` (höchstens 3 K, ein Vielfaches der Stufe) und Stufe `step_k` (0,5 K)
+  - kleinster Abstand `step_interval_s` zwischen zwei Erhöhungen des Betrags (mindestens 60 s, Standard 600 s)
+  - `live_allowed`
 
 UI, HA, Planer und Lernmodelle können diese Werte nur lesen.
 
@@ -1303,6 +1307,8 @@ Ein Aktor geht nur live, wenn alle vier Bedingungen erfüllt sind:
 4. Watchdog scharf (gilt für Victron und EVCS)
 
 Reihenfolge der Inbetriebnahme: EVCS, dann Victron-Setpoint, dann Tesla.
+
+**Stand Plan 6a** (`docs/superpowers/plans/2026-10-19-phase-6a-klimaanlage.md`; Betrieb: `docs/betrieb.md`, Abschnitt „Klimaanlage (Phase 6a)“): Die Klimaanlage folgt als Aktor `thermal.<name>` nach EVCS, Victron-Setpoint und Tesla und ist von ihnen unabhängig. Er startet im Dry-Run (sendet zyklisch 0) und geht erst nach dem Prüfprotokoll Teil 2, Punkt `thermal` (17.2-9), mit `live_allowed` und dem Live-Schalter eines Admins live. Bedingung 4 entfällt: Er braucht keinen Watchdog, denn die UVR setzt den Versatz nach 5 min ohne Paket selbst auf 0. Der Live-Dialog verlangt für ihn die Bestätigung „evcc ist ganz abgeschaltet.“ nicht.
 
 **Stand Plan 2c-1** (Design 14): Abweichend davon gehen EVCS und Tesla gemeinsam live, erst nach 2d und mit ganz abgeschaltetem evcc; Victron folgt nach 2c-2 (Abschnitt 18, Stand Plan 2c-1).
 
@@ -1689,6 +1695,9 @@ Greift, wenn der Solver scheitert, das Zeitlimit überschritten ist oder das Erg
   | `plan` | `kind` (soc/battery_kw/budget_kw/ev_kw), `id` | `value` | je Slot, aktueller Stand |
   | `ledger` | `flow` | `kwh`, `eur` | 15 min |
   | `decision` | `actuator`, `reason` | `text`, `value` | bei Ereignis |
+  | `thermal` (Stand Plan 6a) | `id` (Gerät) | `actual_c`, `setpoint_c`, `offset_k` (Echo der UVR), `offset_sent_k` (nur bei Änderung) | 10 s |
+
+  Die elektrische Leistung der Klimaanlage steht in `power` mit `source=thermal`. Der Leistungswunsch bleibt im Entscheidungslog, nicht in InfluxDB.
 
 - **Schreiben:** gebündelt im Line Protocol (`/write`, gzip, Millisekunden), über einen eigenen schlanken httpx-Client. Bei Ausfall puffert ein Spool.
 - **Lesen:** per InfluxQL (`/query`). Die HA-Datenbank wird nur gelesen. Je nach `measurement_attr` der HA-Integration ist die Messung die Einheit (`W`, `kW`; HA-Standard) oder die Entität (`sensor.kueche`; so in dieser Anlage, die Einheit steht dann im Feld `unit_of_measurement_str`). In beiden Fällen sind `domain` und `entity_id` (ohne Domain) Tags, und das Feld heißt `value`.
@@ -1832,6 +1841,7 @@ pv:
   | PV-Prognose heute/morgen, Ersparnis heute/Monat, Autarkie | sensor | lesen |
   | Monatsspitze, Budget | sensor | lesen |
   | Je Auto: Wallbox, Modus, Ladeenergie, Fertig-um, Ziel erreichbar | sensor | lesen |
+  | Je Klimaanlage (Stand Plan 6a): Versatz (K), Betriebsart, Leistung (W), Wunsch (Stufen) | sensor | lesen |
   | Lademodus je Auto | select | schreiben |
   | Zuordnung je Wallbox (Auto/Tesla/e-Golf/keins) | select | schreiben |
   | Ziel-SOC je Auto, Unterstützungsschwelle | number | schreiben |
@@ -2168,6 +2178,12 @@ Die Ergebnisse kommen nach `docs/verification/` mit Datum, Firmwareständen, erw
    - Latenz von Start/Stopp
    - schlafendes Auto wird nicht geweckt
 8. **Victron-Importlimit:** Wirkung bei Wallbox-Last, als kontrollierter Kurztest.
+9. **`thermal` (Klimaanlage, Stand Plan 6a):** Versatz an der UVR per CoE.
+   - alle Werte der Empfangstabelle kommen an (`coe_probe listen` zeigt sie vorher, ohne zu senden)
+   - +0,5 K senden: das Echo der UVR zeigt ihn binnen 60 s, die Visu der UVR zeigt „EMS“ +0,5 K
+   - 0 senden: das Echo zeigt 0
+   - Timeout: +0,5 K senden, dann nichts mehr; das Echo fällt binnen 5 min 30 s von selbst auf 0
+   - **Werkzeug:** `python -m bindaems.tools.verify_part2 --punkt thermal [--geraet NAME]` (Bericht `JJJJ-MM-TT-pruefprotokoll-teil2-thermal.md`, Punkt 17.2-9). Es nutzt denselben CoE-Adapter und Aktor wie der core und bindet denselben UDP-Port, der core bleibt also gestoppt; Secrets braucht es nicht. Es sendet nur auf ausdrücklichen Aufruf und nach Rückfrage, am Ende und bei Abbruch sendet es 0.
 
 **Stand Plan 2b** (`docs/superpowers/plans/2026-10-11-phase-2b-aktoren.md`, Präzisierung 11): Das Werkzeug `python -m bindaems.tools.verify_part2 --punkt evcs|tesla|victron` führt die schreibenden Punkte aus (Betriebshandbuch 11). Es fragt wie die Probe vor jedem schreibenden Schritt nach und schreibt den Bericht `JJJJ-MM-TT-pruefprotokoll-teil2-<punkt>.md`; die Punkte heißen 17.2-x. Mit `--yes` beantwortet es alle Rückfragen mit Ja und überspringt Schritte, die einen Handgriff des Betreibers brauchen; der Bericht vermerkt das.
 - **Reihenfolge:** `evcs` (17.2-6 und über die Watchdog-Probe 17.2-5) und `tesla` (17.2-7) jetzt, gemeinsam mit dem Betreiber. `victron` (17.2-1 bis 17.2-4 und 17.2-8) nur mit abgeschaltetem Dynamic ESS; für den Test schaltet der Betreiber DESS vorübergehend ab (Entscheidung vom 12.10.2026). Es verweigert, solange DESS aktiv ist, denn DESS nullt fremde Overrides (3.2), und ebenso, wenn beim Start ein Netz-Sollwert-Override steht (auch 0 W), denn dann regelt ein anderes System. Ebenso verweigert es bei einer vorgefundenen Entladegrenze von 0 W (Entladen gesperrt), die ein abgebrochener Lauf hinterlassen haben kann: Als Ausgangswert stellte das Werkzeug sie am Ende wieder her. Vor jedem schreibenden Schritt prüft es DESS erneut.
@@ -2449,6 +2465,17 @@ Bei der Umsetzung haben diese Punkte die Entscheidungen ergänzt oder enger gefa
 - Modbus TCP direkt zur ecomanager-touch (Port 502, Unit-ID 1, ohne Anmeldung, eigenes Netz wie Cerbo und EVCS). Lesen: elektrische Leistung (Input 2322), Status (2330), EVU-Lock (2304), Abtauung, Boilerladung, Puffer- und Boilertemperaturen. Schreiben: SG-Ready per Modbus (Holding 33405, Rückfall 0 = Eingänge i5/i9 oder 2 = Normal), EVU-Lock (33404), ab Regler-Software V26.020 die Sollleistung HEMS (33415), Boiler-Einmalladung (32001).
 - Anders als die UVR haben die Register keinen Timeout: 6b braucht einen definierten Rückfall bei Ausfall von BindaEMS und ein Schreibbudget, bis Solarfocus sagt, ob die Register in den Flash gehen. Die PV-Überschuss-Logik der Wärmepumpe selbst (Register 33407 bis 33409) bleibt aus, sonst regelt sie gegen BindaEMS (7.9).
 - Voraussetzungen beim Kauf: netzseitig hinter dem Victron-Netzzähler (nicht am AC-Out der MultiPlus, wegen der USV-Reserve 1.2), kein eigener Wärmepumpenzähler, Regler ab V26.020, SG-Ready-Eingänge verdrahtet, Puffer mit Fühlern oben und unten.
+
+**Stand Plan 6a** (`docs/superpowers/plans/2026-10-19-phase-6a-klimaanlage.md`; Betrieb: `docs/betrieb.md`, Abschnitt „Klimaanlage (Phase 6a)“; Abnahme: `docs/verification/abnahme-phase-6a.md`): 6a ist umgesetzt. Abweichungen und Festlegungen der Umsetzung:
+- **Gerät und Aktor:** `thermal.devices` ist ein Verzeichnis nach Namen (nicht eine Liste); der Aktor heißt `thermal.<name>`. 6a erlaubt höchstens ein Gerät der Art `coe_offset`. Der Adapter hält den Versatz und sendet ihn sofort und alle 30 s; er sendet ihn nur, solange der core ihn in den letzten 10 s freigegeben hat (nur im Regelbetrieb und bei wirksam live), sonst 0. Im Dry-Run ist die Freigabe zu, der Adapter sendet 0.
+- **Harte Grenzen** (8.2) je Gerät in der Safety-Schicht: Bereich ±`max_offset_k`, Stufe 0,5 K, Schrittregel `offset.step` (eine Stufe, frühestens `step_interval_s` nach der letzten Erhöhung, Vorzeichenwechsel nur über 0); 0 geht immer sofort.
+- **Strategie** (im core, rein): Sofort 0 bei veralteten Werten, nicht steuerbarem Aktor, DEGRADED, Betriebsart `aus`, `lueften` oder `unbekannt` und Wechsel der Betriebsart; Druck des 15-min-Wächters oder Phasenwächters setzt einen positiven Wunsch auf 0; Autos und Akku haben Vorrang (eine Stufe zurück je 10 min); mehr bei 800 W Einspeisung seit 10 min; zurück bei 300 W Netzbezug seit 5 min; weniger bei Hinweis „weniger“ des Plans, höchstens 2 Stufen. Autos: Anlauf 90 s, Hysterese 120 s für „folgt/begrenzt sich selbst“, ein Auto bei „Laden aus“ gilt nur, wenn Einspeisung und Leistung der Klimaanlage seine Startleistung erreichen. Die Schwellen stehen unter `strategy`.
+- **Hinweis je Slot:** Die app gibt in `IntentPlanSlot.thermal` (`mehr`, `neutral`, `weniger`) und `soc_end_pct` den Hinweis des Plans an den core (`mehr`: geplante Einspeisung ab 500 W; `weniger`: teuerste 20 % der Bezugspreise ohne geplante Einspeisung).
+- **Gründe** (Entscheidungslog): `thermal_more`, `thermal_back`, `thermal_cars`, `thermal_battery`, `thermal_less`, `thermal_peak`, `thermal_mode`, `thermal_stale`, `thermal_off`. **Alarme:** `thermal.echo_mismatch.<name>` (das Echo weicht länger als 120 s vom gesendeten Versatz ab), `control.thermal_exception` (die Strategie der Klimaanlage warf; der core regelt weiter, die Klimaanlage bleibt bei 0) und `actuator.failed.thermal.<name>` wie bei jedem Aktor.
+- **Anzeige:** Karte „Klimaanlage“ auf der System-Seite, Gründe in „Warum?“, vier Sensoren je Gerät in Home Assistant (12), Messung `thermal` in InfluxDB (11.2) und ein Panel in Grafana.
+- **Deploy:** `ems-core` veröffentlicht `5442:5442/udp` und sonst nichts. Routing und Firewall für UDP 5442 zwischen 192.168.81.0/24 und 192.168.82.0/24 sind ein Schritt des Betreibers.
+- **Werkzeuge:** `python -m bindaems.tools.coe_probe listen` (hört mit, sendet nie, nur bei gestopptem core) und der Punkt `thermal` im Prüfprotokoll Teil 2 (17.2-9). Der Simulator hat sechs Szenarien `klima-*`.
+- **Offen:** Vorheizen und Vorkühlen im Planer (Phase 5), 6b (Wärmepumpe).
 
 **Abnahme 6a:** alle Werte der Empfangstabelle kommen an; der Versatz fällt 5 min nach dem letzten Paket auf 0 (an der Anlage beobachtet); 7 Tage Dry-Run ohne Fehler; im Live-Betrieb liegt der Versatz nie außerhalb ±3 K, ändert sich weg von 0 höchstens um eine Stufe je 10 min und steht spätestens einen Zyklus nach einem Wechsel der Betriebsart oder nach veralteten Paketen auf 0; jeder gesendete Versatz ist durch das Echo bestätigt.
 
