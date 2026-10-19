@@ -80,6 +80,7 @@ asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
 testpaths = ["tests"]
 addopts = "--import-mode=importlib"
+markers = ["slow: langer Lauf, z. B. der Optimierer über 144 Slots mit zwei Autos"]
 pythonpath = [".", "cerbo-watchdog"]
 filterwarnings = [
     # Starlette 1.7 empfiehlt für den TestClient das Paket httpx2; die Tests bleiben bei httpx.

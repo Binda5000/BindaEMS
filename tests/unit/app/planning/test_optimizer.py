@@ -1,17 +1,39 @@
 """Tests des Optimierers für den Akku (Präzisierungen 5 und 6): Netzladen mit Marge und Schalter,
-Regel R1, Reserve, Leistungspreis je Monat, Planträgheit und Fehler des Solvers."""
+Regel R1, Reserve, Leistungspreis je Monat, Planträgheit und Fehler des Solvers; dazu die geplanten
+Autos (Plan 4b, Präzisierung 11): günstigste Slots, Vorrang vor dem Akku, Fehlmenge, Regel R2 und
+Trägheit."""
 
 from __future__ import annotations
 
 import random
+from datetime import datetime
 from typing import Any, NoReturn
 
 import pulp
 import pytest
-from tests.plan_helpers import month, scenario, small_battery
+from tests.plan_helpers import (
+    SCENARIO_START,
+    at,
+    month,
+    planned_car,
+    pv_arc,
+    scenario,
+    small_battery,
+)
 
+from bindaems.app.planning.battery_model import SLOT_H
 from bindaems.app.planning.inputs import PeakMonth, PlanInputs
-from bindaems.app.planning.optimizer import grid_charge_cap_w, solve
+from bindaems.app.planning.optimizer import (
+    TIME_LIMIT_S,
+    OptimizerResult,
+    SlotFlows,
+    grid_charge_cap_w,
+    solve,
+)
+from bindaems.app.planning.vehicles import grid_allowed, horizon_need, need_kwh
+from bindaems.shared.timeutil import SLOT
+
+SLOT_KWH = SLOT_H / 1000  # W über einen Slot → kWh
 
 
 def boom(*_args: Any, **_kwargs: Any) -> NoReturn:
@@ -248,3 +270,234 @@ def test_unsolved_status_is_an_error(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(pulp.LpProblem, "solve", unsolved)
     result = solve(scenario(prices=[20.0] * 4, pv=[0.0] * 4, load=[500.0] * 4))
     assert (result.status, result.flows, result.message) == ("error", (), "Not Solved")
+
+
+# Geplante Autos (Plan 4b, Präzisierung 11)
+
+
+def slot(n: int) -> datetime:
+    """Beginn des Slots ``n`` der Szenarien (ab ``SCENARIO_START``): Abfahrt nach ``n`` Slots."""
+    return at(SCENARIO_START) + n * SLOT
+
+
+def car_w(flow: SlotFlows, key: str = "tesla") -> float:
+    """Ladeleistung des Autos im Slot (PV plus Netz), 0 ohne Variablen."""
+    pv, grid = flow.ev.get(key, (0.0, 0.0))
+    return pv + grid
+
+
+def car_kwh(result: OptimizerResult, key: str = "tesla") -> float:
+    return sum(car_w(f, key) for f in result.flows) * SLOT_KWH
+
+
+def test_car_charges_in_the_cheapest_slots_before_departure() -> None:
+    car = planned_car(departure_at=slot(8), need_kwh=3.1)
+    inputs = scenario(
+        prices=[30.0, 30.0, 10.0, 10.0, 30.0, 30.0, 30.0, 30.0],
+        pv=[0.0] * 8,
+        load=[500.0] * 8,
+        vehicles=[car],
+    )
+    result = solve(inputs)
+    assert result.status == "optimal"
+    assert result.shortfall_kwh == {"tesla": pytest.approx(0.0, abs=1e-6)}
+    # Wallbox-Seite (Ruling R10): 3,1 kWh aus der Wallbox, ohne η
+    assert (car_w(result.flows[2]) + car_w(result.flows[3])) * SLOT_KWH == pytest.approx(3.1)
+    assert all(car_w(result.flows[t]) < 1e-6 for t in (0, 1, 4, 5, 6, 7))
+
+
+def test_pv_goes_to_the_car_before_the_battery() -> None:
+    # 5 kW Überschuss, das Auto muss 7 kW laden; der Restwert macht PV im Akku wertvoller als
+    # im Auto, trotzdem kein Netz ins Auto, während PV in den Akku geht
+    car = planned_car(departure_at=slot(4), max_w=7000.0, need_kwh=7.0)
+    inputs = scenario(
+        prices=[10.0] * 4,
+        pv=[5500.0] * 4,
+        load=[500.0] * 4,
+        soc_pct=30.0,
+        end_value_ct=40.0,
+        vehicles=[car],
+    )
+    result = solve(inputs)
+    assert result.status == "optimal"
+    for f in result.flows:
+        assert f.ev["tesla"] == (pytest.approx(5000.0), pytest.approx(2000.0))
+        assert (f.pv_b, f.pv_x) == (pytest.approx(0.0, abs=1e-6), pytest.approx(0.0, abs=1e-6))
+
+
+def _r2_day(*, allowed: float | None) -> PlanInputs:
+    """02:00 bis 16:00 Ortszeit: Nacht bis 07:00 für 10 ct, dann 30 ct, Einspeisung 15 ct, PV mit
+    8 kW Spitze; Abfahrt um 16:00 mit 10 kWh Bedarf. ``allowed`` ``None``: Regel R2 aus P25."""
+    count = 56
+    car = planned_car(departure_at=slot(count), need_kwh=10.0)
+    inputs = scenario(
+        prices=[10.0] * 20 + [30.0] * (count - 20),
+        pv=pv_arc(SCENARIO_START, count, 8000.0),
+        load=[500.0] * count,
+        feed_in=15.0,
+        vehicles=[car],
+    )
+    if allowed is None:
+        allowed = grid_allowed([car], inputs.slots, ["tesla"])["tesla"]
+    vehicles = [car.model_copy(update={"grid_allowed_kwh": allowed})]
+    return inputs.model_copy(update={"vehicles": vehicles})
+
+
+def test_rule_r2_waits_for_pv() -> None:
+    inputs = _r2_day(allowed=None)
+    assert inputs.vehicles[0].grid_allowed_kwh == 0.0  # P25 deckt den Bedarf
+    result = solve(inputs)
+    assert result.status == "optimal"
+    assert result.shortfall_kwh["tesla"] == pytest.approx(0.0, abs=1e-6)
+    assert car_kwh(result) == pytest.approx(10.0)
+    assert sum(f.ev["tesla"][1] for f in result.flows) * SLOT_KWH == pytest.approx(0.0, abs=1e-6)
+    assert result.r2_excess_kwh == {"tesla": pytest.approx(0.0, abs=1e-6)}
+    # ohne Regel R2 lädt es billig in der Nacht und speist die PV ein
+    free = solve(_r2_day(allowed=10.0))
+    assert sum(car_w(f) for f in free.flows[:20]) * SLOT_KWH == pytest.approx(10.0)
+
+
+def test_rule_r2_gives_way_to_the_target() -> None:
+    # Kein PV, laut R2 nur 1 kWh aus dem Netz: Das Ziel geht vor, 4 kWh überschreiten R2 (rho)
+    car = planned_car(departure_at=slot(4), need_kwh=5.0, grid_allowed_kwh=1.0)
+    result = solve(scenario(prices=[20.0] * 4, pv=[0.0] * 4, load=[500.0] * 4, vehicles=[car]))
+    assert result.status == "optimal"
+    assert car_kwh(result) == pytest.approx(5.0)
+    assert result.shortfall_kwh["tesla"] == pytest.approx(0.0, abs=1e-6)
+    assert result.r2_excess_kwh["tesla"] == pytest.approx(4.0)
+
+
+def test_infeasible_target_yields_shortfall_not_infeasible() -> None:
+    car = planned_car(departure_at=slot(2), need_kwh=40.0)
+    result = solve(scenario(prices=[20.0] * 4, pv=[0.0] * 4, load=[500.0] * 4, vehicles=[car]))
+    assert result.status == "optimal" and result.flows
+    full = 2 * 11040.0 * SLOT_KWH
+    assert result.shortfall_kwh["tesla"] == pytest.approx(40.0 - full)
+    assert [car_w(f) for f in result.flows[:2]] == [pytest.approx(11040.0)] * 2
+    assert "tesla" not in result.flows[2].ev and "tesla" not in result.flows[3].ev
+
+
+def test_no_battery_to_car_and_no_grid_through_car_into_battery() -> None:
+    # Teurer Bezug, voller Akku: Der Akku deckt nur das Haus, das Auto lädt aus dem Netz.
+    car = planned_car(departure_at=slot(4), need_kwh=5.0)
+    expensive = scenario(
+        prices=[40.0] * 4, pv=[0.0] * 4, load=[500.0] * 4, soc_pct=90.0, vehicles=[car]
+    )
+    result = solve(expensive)
+    assert car_kwh(result) == pytest.approx(5.0)
+    for f in result.flows:
+        assert f.bt_h <= 500.0 + 1e-6
+        assert f.ev["tesla"][0] == pytest.approx(0.0, abs=1e-6)
+    # Billiges Netz, wertvoller Akku, Netzladen aus: Netz ins Auto und PV in den Akku wäre
+    # Netzladen am Schalter vorbei. 11 kWh in 4 Slots heißt: jeder Slot lädt aus dem Netz.
+    car = planned_car(departure_at=slot(4), need_kwh=11.0)
+    cheap = scenario(
+        prices=[5.0] * 4,
+        pv=[6000.0] * 4,
+        load=[500.0] * 4,
+        soc_pct=30.0,
+        end_value_ct=40.0,
+        vehicles=[car],
+    )
+    result = solve(cheap)
+    assert car_kwh(result) == pytest.approx(11.0)
+    for f in result.flows:
+        assert f.ev["tesla"][1] > 1
+        assert f.pv_b + f.pv_x == pytest.approx(0.0, abs=1e-6)
+        assert f.ev["tesla"][0] == pytest.approx(5500.0)
+
+
+def test_car_charges_no_more_than_its_need() -> None:
+    # Viel PV ohne Einspeisepreis, Akku voll: PV ins Auto wäre gleich viel wert wie Abregeln
+    def charged(need: float) -> OptimizerResult:
+        car = planned_car(departure_at=slot(4), need_kwh=need)
+        inputs = scenario(
+            prices=[20.0] * 4, pv=[12000.0] * 4, load=[500.0] * 4, soc_pct=100.0, vehicles=[car]
+        )
+        return solve(inputs)
+
+    assert car_kwh(charged(2.0)) == pytest.approx(2.0)
+    # Unter einem Slot mit Mindestleistung (3450 W): ein Slot mit Mindestleistung, keine Fehlmenge
+    small = charged(0.5)
+    assert sorted(car_w(f) for f in small.flows) == pytest.approx([0.0, 0.0, 0.0, 3450.0])
+    assert small.shortfall_kwh["tesla"] == pytest.approx(0.0, abs=1e-6)
+    # Ohne Bedarf lädt es nicht
+    done = charged(0.0)
+    assert car_kwh(done) == pytest.approx(0.0, abs=1e-6)
+    assert done.shortfall_kwh == {"tesla": pytest.approx(0.0, abs=1e-6)}
+
+
+def _with_previous_car_power(inputs: PlanInputs, power_w: float) -> PlanInputs:
+    slots = [
+        s.model_copy(update={"prev_ev_w": {"tesla": power_w}}) if i < 4 else s
+        for i, s in enumerate(inputs.slots)
+    ]
+    return inputs.model_copy(update={"slots": slots})
+
+
+def test_inertia_holds_the_car_power_of_the_previous_plan() -> None:
+    # Später 1 ct billiger: ohne Trägheit verschiebt sich das Laden, mit Trägheit bleibt es
+    car = planned_car(departure_at=slot(8), need_kwh=4 * 11040.0 * SLOT_KWH)
+    base: dict[str, Any] = {
+        "prices": [20.0] * 4 + [19.0] * 4,
+        "pv": [0.0] * 8,
+        "load": [500.0] * 8,
+        "vehicles": [car],
+    }
+    held = solve(_with_previous_car_power(scenario(**base, inertia_ct=100.0), 11040.0))
+    assert [car_w(f) for f in held.flows[:4]] == [pytest.approx(11040.0)] * 4
+    moved = solve(_with_previous_car_power(scenario(**base, inertia_ct=0.0), 11040.0))
+    assert [car_w(f) for f in moved.flows[4:]] == [pytest.approx(11040.0)] * 4
+
+
+def test_without_cars_results_have_no_car_entries() -> None:
+    result = solve(scenario(prices=[20.0] * 4, pv=[3000.0] * 4, load=[500.0] * 4))
+    assert result.shortfall_kwh == {} and result.r2_excess_kwh == {}
+    assert all(f.ev == {} for f in result.flows)
+
+
+@pytest.mark.slow
+def test_two_cars_over_36_hours_solve_in_time() -> None:
+    # 36 h ab 16:00 Ortszeit, zwei Tage PV, Netzladen an; Tesla fährt morgen um 07:00, der e-Golf
+    # übermorgen um 07:00 (hinter dem Horizont)
+    count = 144
+    start = "2026-10-16T14:00:00+00:00"
+    rng = random.Random(4)  # noqa: S311 - feste Testdaten
+    prices = [rng.uniform(5.0, 40.0) for _ in range(count)]
+    pv = pv_arc(start, count, 9000.0)
+    inputs = scenario(
+        prices=prices,
+        pv=pv,
+        pv_p25=[0.7 * w for w in pv],
+        load=[rng.uniform(300.0, 2500.0) for _ in range(count)],
+        soc_pct=40.0,
+        grid_charge=True,
+        start=start,
+        feed_in=5.0,
+    )
+    horizon_end = at(start) + count * SLOT
+    egolf_need = need_kwh(20.0, 90.0, 32.0, 0.9)
+    egolf_departure = at("2026-10-18T05:00:00+00:00")
+    cars = [
+        planned_car(soc_pct=20.0, target_soc_pct=90.0),
+        planned_car(
+            key="egolf",
+            name="e-Golf",
+            wallbox="evcs",
+            soc_pct=20.0,
+            target_soc_pct=90.0,
+            departure_at=egolf_departure,
+            usable_kwh=32.0,
+            min_w=6 * 230.0 * 2,
+            max_w=16 * 230.0 * 2,
+            need_kwh=egolf_need,
+            horizon_need_kwh=horizon_need(egolf_need, 7360.0, egolf_departure, horizon_end),
+        ),
+    ]
+    allowed = grid_allowed(cars, inputs.slots, ["tesla", "egolf"])
+    cars = [car.model_copy(update={"grid_allowed_kwh": allowed[car.key]}) for car in cars]
+    result = solve(inputs.model_copy(update={"vehicles": cars}))
+    print(f"144 Slots, zwei Autos: {result.solve_ms} ms, Status {result.status}")
+    assert result.status == "optimal"
+    assert result.solve_ms < TIME_LIMIT_S * 1000
+    assert all(value == pytest.approx(0.0, abs=1e-6) for value in result.shortfall_kwh.values())
