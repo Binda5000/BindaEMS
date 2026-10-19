@@ -16,7 +16,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 
-from bindaems.shared.plan import BatteryIntent, IntentPlan
+from bindaems.shared.plan import BatteryIntent, IntentPlan, ThermalHint
 from bindaems.shared.timeutil import ensure_utc
 
 
@@ -27,7 +27,8 @@ class ActiveSlot:
     ``budget_kw``, ``import_ct`` und ``support_soc_pct`` sind die Werte des Slots; ``None`` heißt,
     der Plan nennt sie nicht. ``vehicles`` ist die Ladeleistung je Fahrzeug-Schlüssel in W (Plan 4b,
     Entscheidung 9); ein Fahrzeug, das der Slot nicht nennt, kennt der Plan nicht, und für es gilt
-    kein Slot (Ruling R22).
+    kein Slot (Ruling R22). ``thermal`` ist der Hinweis des Plans für die Klimaanlage (Plan 6a,
+    Entscheidung 7), ``soc_end_pct`` der geplante SOC am Ende des Slots (``None``: nicht genannt).
     """
 
     plan_id: int
@@ -37,6 +38,8 @@ class ActiveSlot:
     import_ct: float | None
     support_soc_pct: float | None
     vehicles: Mapping[str, int] = field(default_factory=dict)
+    thermal: ThermalHint = "neutral"
+    soc_end_pct: float | None = None
 
 
 def active_slot(plan: IntentPlan | None, wall_now: datetime) -> ActiveSlot | None:
@@ -59,6 +62,8 @@ def active_slot(plan: IntentPlan | None, wall_now: datetime) -> ActiveSlot | Non
         import_ct=slot.import_ct,
         support_soc_pct=slot.support_soc_pct,
         vehicles=dict(slot.vehicles),
+        thermal=slot.thermal,
+        soc_end_pct=slot.soc_end_pct,
     )
 
 

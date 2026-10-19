@@ -7,8 +7,10 @@ Kosten, Budget und Grundcodes für die Erklärung.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from datetime import datetime, timedelta
 from enum import StrEnum
+from statistics import quantiles
 from typing import Annotated, Final, Literal, Self
 
 from pydantic import AwareDatetime, Field, model_validator
@@ -18,6 +20,11 @@ from bindaems.shared.timeutil import SLOT, ensure_utc, slot_start
 
 PLAN_VALID: Final = timedelta(minutes=45)
 MAX_INTENT_PLAN_SLOTS: Final = 8
+# Hinweis für die Klimaanlage (Plan 6a, Entscheidung 7): Schwellen und Perzentil der teuren Slots
+THERMAL_MORE_EXPORT_W: Final = 500.0  # ab dieser geplanten Einspeisung „mehr“
+THERMAL_LESS_EXPORT_W: Final = 100.0  # „weniger“ nur unter dieser geplanten Einspeisung
+THERMAL_MIN_SLOTS: Final = 4  # kürzere Pläne sagen über „teuer“ nichts aus
+HIGH_PERCENTILE_INDEX: Final = 7  # 80. Perzentil aus ``quantiles(n=10)``
 
 NonNegativeW = Annotated[float, Field(ge=0, allow_inf_nan=False)]
 Finite = Annotated[float, Field(allow_inf_nan=False)]
@@ -221,15 +228,50 @@ class IntentPlan(_Model):
         return next((slot for slot in self.slots if slot.start == wanted), None)
 
 
+def expensive_import_ct(slots: Sequence[PlanSlot]) -> float | None:
+    """Der Bezugspreis, ab dem ein Slot zu den teuersten 20 % des Plans gehört: das 80. Perzentil
+    von ``import_ct`` über alle ``slots`` (wie ``expensive_today`` im Ersatzplan, inklusiv).
+
+    ``None`` bei weniger als ``THERMAL_MIN_SLOTS`` Slots und bei einheitlichem Preis: Dann gibt es
+    keine teuren Slots, und es wäre nichts zu verschieben."""
+    prices = [slot.import_ct for slot in slots]
+    if len(prices) < THERMAL_MIN_SLOTS or min(prices) == max(prices):
+        return None
+    return quantiles(prices, n=10, method="inclusive")[HIGH_PERCENTILE_INDEX]
+
+
+def thermal_hint(slot: PlanSlot, expensive_ct: float | None) -> ThermalHint:
+    """Hinweis des Plans für die Klimaanlage in ``slot`` (Plan 6a, Entscheidung 7).
+
+    - ``mehr``: der Slot plant Einspeisung von mindestens 500 W (``export_w``)
+    - ``weniger``: der Bezugspreis erreicht ``expensive_ct`` (genau am Perzentil zählt mit, wie
+      im Ersatzplan) und die geplante Einspeisung liegt unter 100 W
+    - sonst ``neutral``, auch ohne ``expensive_ct`` (``None``)
+    """
+    if slot.export_w >= THERMAL_MORE_EXPORT_W:
+        return "mehr"
+    if (
+        expensive_ct is not None
+        and slot.import_ct >= expensive_ct
+        and slot.export_w < THERMAL_LESS_EXPORT_W
+    ):
+        return "weniger"
+    return "neutral"
+
+
 def intent_plan(plan: Plan, *, grid_charge_allowed: bool) -> IntentPlan:
     """Der bindende Teil von ``plan`` für die Absicht: die Slots vor ``valid_until``, höchstens
     ``MAX_INTENT_PLAN_SLOTS``. Ist ``grid_charge_allowed`` falsch, wird ``NETZLADEN`` zu
     ``EIGENVERBRAUCH``. Die Ladeleistung je Auto geht auf ganze W gerundet mit. Jedes Auto aus
     ``plan.vehicles`` steht in jedem Slot vor seiner Abfahrt, auch mit 0 W (Ruling R22): Ein Auto,
     das ein gültiger Slot nicht nennt, kennt der Plan nicht, und der core lädt es nach der
-    spätesten Startzeit. ``plan.id`` muss gesetzt sein (der Plan ist gespeichert)."""
+    spätesten Startzeit. Je Slot gehen der Hinweis für die Klimaanlage (Perzentil über alle Slots
+    des Plans, nicht nur über die gesendeten) und der geplante SOC am Ende (auf 0,1 % gerundet,
+    in 0 bis 100 geklemmt) mit. ``plan.id`` muss gesetzt sein (der Plan ist gespeichert)."""
     if plan.id is None:
         raise ValueError("Nur ein gespeicherter Plan (mit id) geht in die Absicht")
+
+    expensive_ct = expensive_import_ct(plan.slots)
 
     def binding(slot: PlanSlot) -> IntentPlanSlot:
         intent = slot.intent
@@ -243,6 +285,8 @@ def intent_plan(plan: Plan, *, grid_charge_allowed: bool) -> IntentPlan:
             import_ct=slot.import_ct,
             support_soc_pct=slot.support_soc_pct,
             vehicles=planned | {key: round(watts) for key, watts in slot.ev_w.items()},
+            thermal=thermal_hint(slot, expensive_ct),
+            soc_end_pct=min(100.0, max(0.0, round(slot.soc_end_pct, 1))),
         )
 
     kept = [slot for slot in plan.slots if slot.start < plan.valid_until]

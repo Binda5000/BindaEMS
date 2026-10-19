@@ -2,7 +2,7 @@
 
 import pytest
 from pydantic import ValidationError
-from tests.plan_helpers import at, sample_plan
+from tests.plan_helpers import at, sample_plan, sample_slot
 
 from bindaems.shared.plan import (
     MAX_INTENT_PLAN_SLOTS,
@@ -10,9 +10,12 @@ from bindaems.shared.plan import (
     BatteryIntentKind,
     IntentPlanSlot,
     Plan,
+    PlanSlot,
     PlanVehicle,
     Reason,
+    expensive_import_ct,
     intent_plan,
+    thermal_hint,
 )
 
 EIGENVERBRAUCH = BatteryIntentKind.EIGENVERBRAUCH
@@ -265,3 +268,109 @@ def test_old_stored_intent_slots_load_with_defaults() -> None:
     slot = IntentPlanSlot.model_validate_json(old)
     assert slot.thermal == "neutral" and slot.soc_end_pct is None
     assert IntentPlanSlot.model_validate_json(slot.model_dump_json()) == slot
+
+
+def _hint_slot(*, export_w: float = 0.0, import_ct: float = 20.0) -> PlanSlot:
+    return sample_slot("10:00", price_ct=import_ct).model_copy(update={"export_w": export_w})
+
+
+def test_hint_mehr_on_planned_export() -> None:
+    assert thermal_hint(_hint_slot(export_w=600, import_ct=20), 30) == "mehr"
+    assert thermal_hint(_hint_slot(export_w=600, import_ct=20), None) == "mehr"
+
+
+def test_hint_mehr_border_is_500_w_inclusive() -> None:
+    assert thermal_hint(_hint_slot(export_w=500), 30) == "mehr"
+    assert thermal_hint(_hint_slot(export_w=499.9), 30) == "neutral"
+
+
+def test_hint_mehr_wins_over_expensive() -> None:
+    assert thermal_hint(_hint_slot(export_w=800, import_ct=40), 30) == "mehr"
+
+
+def test_hint_weniger_on_expensive_without_export() -> None:
+    assert thermal_hint(_hint_slot(export_w=0, import_ct=31), 30) == "weniger"
+
+
+def test_hint_weniger_border_is_the_percentile_inclusive() -> None:
+    assert thermal_hint(_hint_slot(import_ct=30), 30) == "weniger"  # genau am Perzentil zählt mit
+    assert thermal_hint(_hint_slot(import_ct=29.99), 30) == "neutral"
+
+
+def test_hint_weniger_needs_export_below_100_w() -> None:
+    assert thermal_hint(_hint_slot(export_w=99.9, import_ct=31), 30) == "weniger"
+    assert thermal_hint(_hint_slot(export_w=100, import_ct=31), 30) == "neutral"
+    assert thermal_hint(_hint_slot(export_w=400, import_ct=31), 30) == "neutral"
+
+
+def test_hint_neutral() -> None:
+    assert thermal_hint(_hint_slot(export_w=0, import_ct=20), 30) == "neutral"
+
+
+def test_hint_without_percentile_is_never_weniger() -> None:
+    assert thermal_hint(_hint_slot(import_ct=99), None) == "neutral"
+
+
+def test_expensive_import_ct_is_the_80th_percentile_of_all_slots() -> None:
+    plan = sample_plan(DAY + "10:01:00+00:00", [f"10:{m:02d}" for m in (0, 15, 30, 45)])
+    prices = [10.0, 20.0, 30.0, 40.0]
+    slots = [s.model_copy(update={"import_ct": p}) for s, p in zip(plan.slots, prices, strict=True)]
+    # quantiles(n=10, inclusive)[7] bei vier Preisen: 10 + 3 * 0.8 * 10 = 34
+    assert expensive_import_ct(slots) == pytest.approx(34.0)
+
+
+def test_expensive_import_ct_needs_four_slots_and_different_prices() -> None:
+    def slots(prices: list[float]) -> list[PlanSlot]:
+        base = sample_slot("10:00")
+        return [base.model_copy(update={"import_ct": price}) for price in prices]
+
+    assert expensive_import_ct(slots([10.0, 20.0, 30.0])) is None
+    assert expensive_import_ct(slots([])) is None
+    assert expensive_import_ct(slots([20.0, 20.0, 20.0, 20.0])) is None  # nichts zu verschieben
+    assert expensive_import_ct(slots([20.0, 20.0, 20.0, 21.0])) is not None
+
+
+def test_intent_plan_carries_hint_and_soc() -> None:
+    times = ["10:00", "10:15", "10:30", "10:45"]
+    changes = [
+        {"export_w": 700.0, "import_ct": 10.0, "soc_end_pct": 91.26},
+        {"export_w": 0.0, "import_ct": 20.0, "soc_end_pct": 100.0000001},
+        {"export_w": 0.0, "import_ct": 50.0, "soc_end_pct": -0.00001},
+        {"export_w": 0.0, "import_ct": 30.0, "soc_end_pct": 55.0},
+    ]
+    plan = _stored(DAY + "10:01:00+00:00", times, intents=changes)
+    slots = intent_plan(plan, grid_charge_allowed=True).slots
+    # 80. Perzentil (inklusiv) der Preise 10, 20, 30, 50: 30 + 0,4 * 20 = 38
+    assert [s.thermal for s in slots] == ["mehr", "neutral", "weniger", "neutral"]
+    assert [s.soc_end_pct for s in slots] == [91.3, 100.0, 0.0, 55.0]
+
+
+def test_intent_plan_percentile_covers_slots_beyond_the_binding_ones() -> None:
+    times = [f"{10 + i // 4:02d}:{i % 4 * 15:02d}" for i in range(8)]
+    prices = [20.0, 20.0, 20.0, 50.0, 60.0, 60.0, 60.0, 60.0]
+    plan = _stored(DAY + "10:01:00+00:00", times, intents=[{"import_ct": p} for p in prices])
+    # gültig sind nur die ersten vier Slots; über sie allein wäre 50 ct „weniger“ (Perzentil 32),
+    # über alle acht Slots des Plans liegt das Perzentil bei 60 ct
+    sent = intent_plan(plan, grid_charge_allowed=True).slots
+    assert len(sent) == 4
+    assert [s.thermal for s in sent] == ["neutral"] * 4
+    wide = plan.model_copy(update={"valid_until": at(DAY + "12:00:00+00:00")})
+    assert [s.thermal for s in intent_plan(wide, grid_charge_allowed=True).slots] == [
+        "neutral",
+        "neutral",
+        "neutral",
+        "neutral",
+        "weniger",
+        "weniger",
+        "weniger",
+        "weniger",
+    ]
+
+
+def test_intent_plan_with_few_slots_never_says_weniger() -> None:
+    plan = _stored(
+        DAY + "10:01:00+00:00",
+        ["10:00", "10:15", "10:30"],
+        intents=[{"import_ct": 10.0}, {"import_ct": 20.0}, {"import_ct": 90.0}],
+    )
+    assert {s.thermal for s in intent_plan(plan, grid_charge_allowed=True).slots} == {"neutral"}

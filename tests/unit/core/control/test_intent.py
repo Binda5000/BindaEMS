@@ -865,6 +865,32 @@ def test_grid_charge_slot_with_switch_off_is_invalid(tmp_path, limits) -> None:
     )
 
 
+def test_plan_with_soc_end_outside_0_to_100_is_rejected(tmp_path, limits) -> None:
+    # das Modell verbietet es; model_copy prüft nicht, wie eine Absicht aus einer beschädigten
+    # Datei oder einem anderen Sender
+    plan = plan_at(at("10:01"), FOUR)
+    values = [100.5, 50.0, -1.0, 100.0]
+    slots = [
+        slot.model_copy(update={"soc_end_pct": value})
+        for slot, value in zip(plan.slots, values, strict=True)
+    ]
+    plan = plan.model_copy(update={"slots": slots})
+    reply = make_store(tmp_path, limits).submit(Intent(version=1, plan=plan), at("10:01"))
+    assert (reply.result, reply.rejection) == ("rejected", "invalid")
+    assert reply.details == ("Plan: Ziel-SOC eines Slots außerhalb von 0 bis 100 %.",)
+
+
+def test_plan_with_soc_end_inside_0_to_100_is_accepted(tmp_path, limits) -> None:
+    plan = plan_at(at("10:01"), FOUR)
+    slots = [
+        slot.model_copy(update={"soc_end_pct": value})
+        for slot, value in zip(plan.slots, [0.0, 100.0, 55.5, None], strict=True)
+    ]
+    plan = plan.model_copy(update={"slots": slots})
+    reply = make_store(tmp_path, limits).submit(Intent(version=1, plan=plan), at("10:01"))
+    assert reply == IntentReply("accepted", 1)
+
+
 def test_plan_without_grid_charge_is_fine_with_switch_off(tmp_path, limits) -> None:
     plan = plan_at(at("10:01"), FOUR, grid_charge_allowed=False)
     reply = make_store(tmp_path, limits).submit(Intent(version=1, plan=plan), at("10:01"))

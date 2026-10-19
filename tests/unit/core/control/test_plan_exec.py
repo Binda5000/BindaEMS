@@ -141,3 +141,21 @@ def test_active_slot_carries_the_power_of_each_vehicle() -> None:  # Plan 4b, Pr
     # Ein Slot ohne Autos nennt keins; ohne Angabe ist die Liste leer.
     assert active_slot(PLAN_1001, at("10:20")).vehicles == {}  # type: ignore[union-attr]
     assert ActiveSlot(1, at("10:00"), BatteryIntent(), None, None, None).vehicles == {}
+
+
+def test_active_slot_copies_hint_and_soc_end() -> None:
+    slots = [
+        slot.model_copy(update={"thermal": "weniger", "soc_end_pct": 88.5})
+        for slot in PLAN_1001.slots
+    ]
+    plan = PLAN_1001.model_copy(update={"slots": slots})
+    found = active_slot(plan, at("10:20"))
+    assert found is not None
+    assert (found.thermal, found.soc_end_pct) == ("weniger", 88.5)
+
+
+def test_active_slot_defaults_to_neutral_without_threshold() -> None:
+    found = active_slot(PLAN_1001, at("10:20"))  # alte Absicht ohne die Felder
+    assert found is not None and (found.thermal, found.soc_end_pct) == ("neutral", None)
+    bare = ActiveSlot(1, at("10:00"), BatteryIntent(), None, None, None)
+    assert (bare.thermal, bare.soc_end_pct) == ("neutral", None)

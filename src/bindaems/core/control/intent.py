@@ -376,7 +376,8 @@ class IntentStore:
 def _plan_problems(plan: IntentPlan, known_vehicles: Collection[str]) -> list[str]:
     """Die Funde zum Plan (Präzisierung 4), in dieser Reihenfolge: Raster und Lücken, Anzahl,
     Gültigkeit, Netzladen trotz Schalter aus, unbekannte Fahrzeuge (sortiert), negative
-    Ladeleistung (sortiert); je Fahrzeug ein Fund, egal in wie vielen Slots.
+    Ladeleistung (sortiert), SOC am Slotende außerhalb von 0 bis 100 %; je Fahrzeug ein Fund,
+    egal in wie vielen Slots.
 
     Die Gültigkeit wird nur geprüft, wenn die Slots ein lückenloses Raster bilden; sonst sagt
     ``slots[-1]`` nichts über das Ende des Plans.
@@ -405,6 +406,8 @@ def _plan_problems(plan: IntentPlan, known_vehicles: Collection[str]) -> list[st
     ]
     negative = {key for slot in slots for key, watts in slot.vehicles.items() if watts < 0}
     details += [f"Plan hat negative Ladeleistung für „{key}“." for key in sorted(negative)]
+    if any(slot.soc_end_pct is not None and not 0 <= slot.soc_end_pct <= 100 for slot in slots):
+        details.append("Plan: Ziel-SOC eines Slots außerhalb von 0 bis 100 %.")
     return details
 
 
