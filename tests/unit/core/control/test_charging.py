@@ -2810,6 +2810,13 @@ def starting_unmet(cfg, seconds: int) -> list[float]:
     return found
 
 
+def test_ramp_up_covers_the_confirmation_of_the_slowest_charger() -> None:  # Ruling R25
+    # Der Anlauf muss mindestens so lang sein wie die Frist der Bestätigung beim Tesla.
+    from bindaems.core.actuators.tesla import TeslaActuator
+
+    assert RAMP_UP_S >= TeslaActuator.confirm_timeout_s
+
+
 def test_unmet_surplus_counts_a_starting_car_during_its_ramp_up(cfg) -> None:  # Ruling R23 a
     # Die Regelung startet den e-Golf bei 125 s (8 A, „Laden an“). Bis RAMP_UP_S danach folgt er
     # seinem Befehl, obwohl die EVCS noch „aus“ meldet und er nichts zieht: Der offene Wunsch

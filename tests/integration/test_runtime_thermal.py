@@ -16,7 +16,7 @@ from bindaems.core.adapters.coe import CoeAdapter
 from bindaems.core.control.last_values import ControlCommand
 from bindaems.core.control.regulation import Regulation
 from bindaems.core.control.thermal import ThermalObs, ThermalStrategy, ThermalWish
-from bindaems.core.runtime import CoreRuntime
+from bindaems.core.runtime import THERMAL_PERMIT_S, CoreRuntime
 from bindaems.core.safety.locks import LockInfo
 from bindaems.shared.coe import CoeValue, decode, encode
 from bindaems.shared.config import CoeOffsetConfig, Config
@@ -558,4 +558,49 @@ async def test_permit_only_for_a_decided_offset(runtime_with_strategy) -> None:
     env.echo(-0.5)
     run(env.rt, env.clock, 1)
     assert env.sent()[-1] == 0 and env.adapter.held_k == 0.0
+    assert not permitted(env)
+
+
+def test_the_permit_lasts_ten_seconds() -> None:
+    # Plan 6a, Entscheidung 3: Steht der Zyklus, sendet der Adapter nach 10 s 0.
+    assert THERMAL_PERMIT_S == 10.0
+
+
+async def test_a_failing_thermal_verdict_withdraws_the_permit(
+    runtime_with_coe, monkeypatch
+) -> None:
+    # Abschlussreview T5: Wirft ``note_verdict`` für die Klimaanlage, nachdem die Laufzeit vor den
+    # Befehlen freigegeben hat, nimmt sie die Freigabe am Ende des Zyklus zurück: Der Adapter
+    # sendet 0.
+    env = await runtime_with_coe()
+    env.wanted = [0.5]
+    regulate_until_control(env)
+    assert permitted(env)
+
+    def broken(self: Regulation, *args: Any, **kwargs: Any) -> None:
+        raise RuntimeError("kaputt")
+
+    monkeypatch.setattr(Regulation, "note_verdict", broken)
+    env.echo(0.5)
+    run(env.rt, env.clock, 1)
+    assert env.rt.regulation.thermal_failed
+    assert env.adapter.held_k == 0.0 and env.sent()[-1] == 0
+    assert not permitted(env)
+
+
+async def test_a_failing_thermal_health_withdraws_the_permit(runtime_with_coe, monkeypatch) -> None:
+    # Abschlussreview T5: Wirft Health der Klimaanlagen in ``finish``, gilt dasselbe.
+    env = await runtime_with_coe()
+    env.wanted = [0.5]
+    regulate_until_control(env)
+    assert permitted(env)
+
+    def broken(self: Regulation) -> dict[str, Any]:
+        raise RuntimeError("kaputt")
+
+    monkeypatch.setattr(Regulation, "thermal_health", broken)
+    env.echo(0.5)
+    run(env.rt, env.clock, 1)
+    assert env.rt.regulation.thermal_failed
+    assert env.adapter.held_k == 0.0 and env.sent()[-1] == 0
     assert not permitted(env)
