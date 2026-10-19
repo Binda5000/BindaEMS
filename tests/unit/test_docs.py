@@ -68,6 +68,7 @@ def test_acceptance_checklist_of_phase_4_covers_the_planned_part() -> None:
         "mindestens 95 %",
         "Begründung",
         "planned_charge",
+        "where outcome = 'missed' and feasible = 1",  # dieselben Zeilen wie `missed`
     ):
         assert topic in target, topic
     section = _checklist_section("5. HA in beide Richtungen")
@@ -380,6 +381,18 @@ def test_warning_notifications_in_the_guide_match_the_app() -> None:
     assert "watchdog_tripped" not in WARNING_TEXTS
     # „Mitregelndes System“ schweigt schon, solange der Fehler besteht (kein Doppel-Push)
     assert "auch in den 30 s, bevor der Alarm selbst gemeldet wird" in " ".join(section.split())
+
+
+def test_spec_names_the_notification_module_and_the_target_id() -> None:
+    # Spec 12, Stand Plan 4b: das Modul der Benachrichtigungen und die Kennung je Fahrzeug wie in
+    # der app (``WARNING_PREFIX`` + Objekt-ID + ``TARGET_SUFFIX``)
+    from bindaems.app.ha.notify import TARGET_SUFFIX, WARNING_PREFIX
+
+    spec = Path("docs/superpowers/specs/2026-10-08-bindaems-design.md").read_text("utf-8")
+    assert "(`app/ha/entities.py`, `notify.py`)" in spec
+    assert Path("src/bindaems/app/ha/notify.py").exists()
+    assert "notifications.py" not in spec
+    assert f"`{WARNING_PREFIX}<Fahrzeug>{TARGET_SUFFIX}`" in spec
 
 
 def test_operations_guide_describes_charging() -> None:

@@ -525,8 +525,9 @@ homeassistant:
     erreichbar“ (oben): {HH:MM} ist die Abfahrt, {soc} der erwartete Ladestand an der Abfahrt. Bleibt
     das Ziel über viele neue Pläne unerreichbar, bleibt es bei der einen Meldung (mit dem Text vom
     Zeitpunkt der Meldung); wird es erreichbar oder verlässt das Auto „Geplant“, verschwindet sie,
-    und wird es danach wieder unerreichbar, kommt eine neue. Ohne erwarteten Ladestand meldet sie
-    sich nicht.
+    und wird es danach wieder unerreichbar, kommt eine neue. (Ohne erwarteten Ladestand meldet sie
+    sich nicht. Das ist nur ein Schutz gegen ein unvollständiges Health: Der core nennt in „Geplant“
+    immer einen Ladestand, notfalls angenommen 0 %.)
   - Ist eine Warnung „unbekannt“ (etwa ohne core), zählt sie nicht weiter, eine stehende Meldung
     bleibt aber stehen.
 - **Abgelehnte Befehle** aus Home Assistant erscheinen als persistente Meldung `bindaems_ha_command`

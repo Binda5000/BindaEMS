@@ -188,11 +188,12 @@ Prüfschritte:
 2. Quote = `reached` ÷ `feasible` × 100, über alle Monate summiert. Bestanden bei mindestens 95 %.
 3. **Jede verfehlte Ladung** (`missed`) bekommt eine Begründung. Die Monate oder Tage mit `missed` über
    0 findest du mit `GET /api/stats?period=day&date=JJJJ-MM-TT`; die einzelnen Zeilen liest du aus der
-   Tabelle `planned_charge` der app, nur lesend:
+   Tabelle `planned_charge` der app, nur lesend (nur die machbaren, `feasible = 1`, wie `missed`; eine
+   nicht machbare verfehlte zählt unter `infeasible`):
 
    ```bash
    cd /opt/bindaems
-   docker compose exec ems-app python -c "import sqlite3; db = sqlite3.connect('file:/data/bindaems.sqlite3?mode=ro', uri=True); [print(r) for r in db.execute(\"select vehicle, departure_at, target_soc_pct, started_at, start_soc_pct, start_soc_source, end_soc_pct, end_soc_source, outcome from planned_charge where outcome = 'missed' order by departure_at\")]"
+   docker compose exec ems-app python -c "import sqlite3; db = sqlite3.connect('file:/data/bindaems.sqlite3?mode=ro', uri=True); [print(r) for r in db.execute(\"select vehicle, departure_at, target_soc_pct, started_at, start_soc_pct, start_soc_source, end_soc_pct, end_soc_source, outcome from planned_charge where outcome = 'missed' and feasible = 1 order by departure_at\")]"
    ```
 
    Zu jeder Zeile siehst du in den **Entscheidungen** (Fahrzeug, Zeitraum vom Beginn bis zur
