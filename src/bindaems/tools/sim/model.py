@@ -305,6 +305,8 @@ class AirConditioner:
     - ``silent``: Das C.M.I. sendet nichts mehr (Paketverlust); Versätze erreichen die UVR weiter
     - ``deaf``: Pakete des core erreichen die UVR nicht mehr (Paketverlust in der Gegenrichtung);
       das C.M.I. sendet weiter
+    - ``echo``: Die UVR meldet das Echo des Versatzes; ohne fehlt es in den Paketen (Ausgang nicht
+      eingerichtet), die übrigen Werte kommen
 
     Messgrößen: ``active_k`` ist der Versatz, den die UVR anwendet (ihr Echo), ``received`` jeder
     Versatz, den sie vom core bekam, mit der Zeit des letzten ``step``.
@@ -325,6 +327,7 @@ class AirConditioner:
         self.base_setpoint_c = AC_ROOM_C
         self.silent = False
         self.deaf = False
+        self.echo = True
         self.active_k = 0.0
         self.received: list[tuple[datetime, float]] = []
         self._deliver: Callable[[bytes, tuple[str, int]], None] | None = None
@@ -398,6 +401,8 @@ class AirConditioner:
         """Die Werte der Empfangstabelle als CoE-Pakete, je Knoten höchstens 16 Werte."""
         by_node: dict[int, list[CoeValue]] = {}
         for key, channel in self._channels.items():
+            if key == "offset_active_k" and not self.echo:
+                continue
             by_node.setdefault(channel.node, []).append(self._value(key, channel))
         return [
             encode(values[i : i + _COE_VALUES_MAX])

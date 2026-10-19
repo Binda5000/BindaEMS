@@ -213,8 +213,9 @@ class ThermalSession(Part2Session):
         """
         title = "Am Ende: Versatz 0"
         self.mute.muted = False
-        snap = self.snapshot()
-        connected = self.actuator.capabilities(snap, snap.ts).controllable
+        # die Quelle, nicht die Fähigkeiten: Ohne Echo ist der Aktor nicht steuerbar (Ruling R27),
+        # die Werte kommen aber, und das fehlende Echo ist der Befund
+        connected = self._store.connected(coe_source(self.name)) is True
         try:
             waited = await self.send_and_confirm(0.0, timeout_s if connected else 0.0)
         except Exception as exc:  # ein Befund statt eines Abbruchs
@@ -245,9 +246,9 @@ def build_thermal_session(
 ) -> ThermalSession:
     """Die Sitzung mit dem echten CoE-Adapter und dem Aktor wie im core (``CoreRuntime``).
 
-    Der Aktor ist steuerbar, solange die Quelle ``thermal.<name>`` Werte liefert. ``port_factory``
-    öffnet den Port (an der Anlage der echte UDP-Port). ``ValueError``, wenn ``name`` kein Gerät
-    der Art ``coe_offset`` ist.
+    Der Aktor ist steuerbar, solange die Quelle ``thermal.<name>`` Werte liefert und das Echo
+    kommt. ``port_factory`` öffnet den Port (an der Anlage der echte UDP-Port). ``ValueError``,
+    wenn ``name`` kein Gerät der Art ``coe_offset`` ist.
     """
     device = cfg.thermal.devices.get(name)
     if not isinstance(device, CoeOffsetConfig):

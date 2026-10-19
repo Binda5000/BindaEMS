@@ -5,10 +5,12 @@ hält den Wert und sendet ihn sofort und danach zyklisch, aber nur mit Freigabe 
 (``permit``), sonst 0. Der Aktor wartet nie.
 
 Zurückgelesen wird das Echo der UVR (``thermal.<name>.offset_active_k``); bestätigt ist ein Wert,
-wenn das Echo ihn auf 0,05 K zeigt (``matches``). Zeigt das Echo im Live-Betrieb länger als
-``ECHO_MISMATCH_S`` etwas anderes als den Wert, den der Adapter sendet
+wenn das Echo ihn auf 0,05 K zeigt (``matches``). Ohne brauchbares Echo ist der Aktor nicht
+steuerbar (Ruling R27): Kein Versatz ließe sich bestätigen. Zeigt das Echo im Live-Betrieb länger
+als ``ECHO_MISMATCH_S`` etwas anderes als den Wert, den der Adapter sendet
 (``thermal.<name>.offset_sent_k``), meldet der Aktor ``thermal.echo_mismatch.<name>``. Nach dem
-ersten Senden gilt das auch im Dry-Run, etwa nach einer Übergabe (gewollt, Ruling R10).
+ersten Senden gilt das auch im Dry-Run, etwa nach einer Übergabe (gewollt, Ruling R10). Ein
+fehlendes Echo bei verbundener Quelle meldet er immer, auch ohne Senden.
 """
 
 from __future__ import annotations
@@ -25,6 +27,7 @@ from bindaems.shared.numbers import finite_number
 
 REASON_NO_VALUES: Final = "Keine Werte der Klimaanlage."
 REASON_NOT_ACCEPTED: Final = "CoE-Verbindung: Versatz nicht angenommen."
+REASON_NO_ECHO: Final = "Kein Echo des Versatzes von der UVR."
 # So lange darf das Echo im Live-Betrieb vom gesendeten Wert abweichen, bevor der Alarm kommt
 ECHO_MISMATCH_S: Final = 120.0
 
@@ -59,16 +62,22 @@ class ThermalActuator:
         self._mismatch_since: datetime | None = None
 
     def capabilities(self, snap: Snapshot, now: datetime) -> Capabilities:
-        """Steuerbar, solange die Quelle Werte liefert.
+        """Steuerbar, solange die Quelle Werte liefert und das Echo brauchbar ist (Ruling R27).
+
+        Ohne Echo ließe sich kein Versatz bestätigen: Jeder Schreibvorgang liefe in die Frist, und
+        die Regelung schriebe danach neu. Nicht steuerbar geht die Strategie auf 0, die Laufzeit
+        gibt nicht frei, und der Adapter sendet 0; den Befund meldet ``alarms``.
 
         Nebenbei beobachtet der Aktor hier das Echo für ``alarms``: Die Laufzeit fragt die
         Fähigkeiten in jedem Zyklus, mit dem Snapshot und der Zeit der Safety-Schicht.
         """
         connected = self._connected()
         self._observe(snap, now, connected=connected)
-        if connected:
-            return Capabilities(True)
-        return Capabilities(False, (REASON_NO_VALUES,))
+        if not connected:
+            return Capabilities(False, (REASON_NO_VALUES,))
+        if self._echo_of(snap) is None:
+            return Capabilities(False, (REASON_NO_ECHO,))
+        return Capabilities(True)
 
     def present(self, snap: Snapshot) -> dict[CommandKind, CommandValue]:
         """Der Versatz, wie das Echo der UVR ihn zeigt; ohne brauchbares Echo ist er unbekannt."""
@@ -119,18 +128,26 @@ class ThermalActuator:
     def _observe(self, snap: Snapshot, now: datetime, *, connected: bool) -> None:
         """Merkt, seit wann das Echo nicht zeigt, was der Adapter sendet.
 
-        Beurteilt wird ab dem ersten angenommenen ``send`` dieses Laufs (Live-Betrieb) und nur
-        mit Werten der Quelle. Danach auch im Dry-Run, etwa nach einer Übergabe: Ein Echo, das
-        dann nicht 0 zeigt, ist weiter ein Befund (gewollt, Ruling R10). Erwartet wird
-        ``offset_sent_k``, der Wert, den der Adapter wirklich sendet (ohne Freigabe 0); ohne ihn
-        der zuletzt angenommene Wert. Ein fehlendes Echo weicht ab.
+        Beurteilt wird nur mit Werten der Quelle. Ein fehlendes Echo weicht immer ab (Ruling R27):
+        Ohne Echo ist der Aktor nicht steuerbar und sendet nie, der Befund käme sonst nie. Ein
+        Echo mit Wert wird ab dem ersten angenommenen ``send`` dieses Laufs (Live-Betrieb)
+        beurteilt, danach auch im Dry-Run, etwa nach einer Übergabe: Ein Echo, das dann nicht 0
+        zeigt, ist weiter ein Befund (gewollt, Ruling R10). Erwartet wird ``offset_sent_k``, der
+        Wert, den der Adapter wirklich sendet (ohne Freigabe 0); ohne ihn der zuletzt angenommene
+        Wert, ohne beides 0.
         """
-        if self._sent is None or not connected:
+        if not connected:
+            self._mismatch_since = None
+            return
+        self._echo = self._echo_of(snap)
+        if self._sent is None and self._echo is not None:
             self._mismatch_since = None
             return
         sent = finite_number(snap.ok(self._prefix + "offset_sent_k"))
-        self._expected = self._sent if sent is None else sent
-        self._echo = self._echo_of(snap)
+        if sent is not None:
+            self._expected = sent
+        else:
+            self._expected = 0.0 if self._sent is None else self._sent
         if self._echo is not None and matches(
             CommandKind.SETPOINT_OFFSET, self._expected, self._echo
         ):

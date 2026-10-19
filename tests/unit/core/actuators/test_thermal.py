@@ -8,6 +8,7 @@ from tests.helpers import T0, snap
 
 from bindaems.core.actuators.thermal import (
     ECHO_MISMATCH_S,
+    REASON_NO_ECHO,
     REASON_NO_VALUES,
     REASON_NOT_ACCEPTED,
     ThermalActuator,
@@ -81,10 +82,23 @@ def test_present_ignores_stale_echo(klima: CoeOffsetConfig) -> None:
 def test_capabilities_follow_the_source(klima: CoeOffsetConfig) -> None:
     device = Device()
     thermal = actuator(klima, device)
-    assert thermal.capabilities(values(), T0) == Capabilities(True)
+    assert thermal.capabilities(values(echo=0.0), T0) == Capabilities(True)
     device.connected = False
-    assert thermal.capabilities(values(), T0) == Capabilities(False, (REASON_NO_VALUES,))
+    assert thermal.capabilities(values(echo=0.0), T0) == Capabilities(False, (REASON_NO_VALUES,))
     assert REASON_NO_VALUES == "Keine Werte der Klimaanlage."
+
+
+@pytest.mark.parametrize("echo", [None, True, float("nan")])
+def test_capabilities_need_the_echo(klima: CoeOffsetConfig, echo: Value) -> None:
+    # Abschlussreview I3, Ruling R27: Pakete kommen, aber ohne brauchbares Echo ist kein Versatz
+    # zu bestätigen. Der Aktor ist nicht steuerbar; die Strategie bleibt bei 0, und es gibt keine
+    # Schreibvorgänge, die nur in die Frist laufen.
+    thermal = actuator(klima, Device())
+    signals: Mapping[str, Value] = {} if echo is None else {ECHO: echo}
+    assert thermal.capabilities(snap(signals), T0) == Capabilities(False, (REASON_NO_ECHO,))
+    assert REASON_NO_ECHO == "Kein Echo des Versatzes von der UVR."
+    stale = snap({ECHO: 0.0}, quality=Quality.STALE)
+    assert thermal.capabilities(stale, T0) == Capabilities(False, (REASON_NO_ECHO,))
 
 
 def test_send_sets_the_offset(klima: CoeOffsetConfig) -> None:
@@ -169,13 +183,25 @@ def test_echo_compares_with_what_the_adapter_sends(klima: CoeOffsetConfig) -> No
 
 
 def test_no_echo_alarm_without_live_send(klima: CoeOffsetConfig) -> None:
-    # Im Dry-Run ruft der Ausführer ``send`` nie: kein Live-Betrieb, kein Alarm
+    # Im Dry-Run ruft der Ausführer ``send`` nie: Ein Echo, das abweicht, ist kein Alarm (R10)
     thermal = actuator(klima, Device())
-    assert mismatch_after(thermal, values(sent=0.0), 300) == []
+    assert mismatch_after(thermal, values(echo=0.5, sent=0.0), 300) == []
     # ein abgelehnter Auftrag zählt nicht als gesendet
     refused = actuator(klima, Device(accept=False))
     assert refused.send(OFFSET, 0.5) == REASON_NOT_ACCEPTED
     assert mismatch_after(refused, values(echo=0.0, sent=0.0), 300) == []
+
+
+def test_missing_echo_alarm_also_without_a_send(klima: CoeOffsetConfig) -> None:
+    # Ruling R27: Ohne Echo ist der Aktor nicht steuerbar, es gibt also nie ein ``send``. Fehlt
+    # das Echo bei verbundener Quelle, meldet er den Befund trotzdem, auch im Dry-Run.
+    thermal = actuator(klima, Device())
+    assert mismatch_after(thermal, values(sent=0.0), 119) == []
+    [alarm] = mismatch_after(thermal, values(sent=0.0), 120)
+    assert alarm.message.endswith("(gesendet +0,0 K, kein Echo).")
+    # ohne Wert des Adapters gilt 0
+    [alarm] = mismatch_after(actuator(klima, Device()), values(), 120)
+    assert alarm.message.endswith("(gesendet +0,0 K, kein Echo).")
 
 
 def test_no_echo_alarm_without_source(klima: CoeOffsetConfig) -> None:

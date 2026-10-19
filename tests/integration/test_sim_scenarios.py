@@ -311,3 +311,26 @@ async def test_klima_one_way_loss_does_not_keep_an_old_offset(cfg, tmp_path) -> 
     assert active[0] == 0.0
     jumps = [(old, new) for old, new in pairwise(active) if new != old]
     assert all(abs(new) - abs(old) <= KLIMA_STEP_K + 1e-9 for old, new in jumps), jumps
+
+
+async def test_klima_without_echo_stays_at_zero_and_quiet(cfg, tmp_path) -> None:
+    # Abschlussreview I3, Ruling R27: wie „klima-pv-kuehlen“, aber die UVR meldet kein Echo des
+    # Versatzes; die übrigen Werte kommen, die Quelle ist verbunden. Ohne Echo ist der Aktor nicht
+    # steuerbar: Die Strategie bleibt bei 0 (thermal_stale), die UVR bekommt 30 min lang nur 0,
+    # das Entscheidungslog bleibt ruhig (kein Schreiben je Minute), und die Warnung
+    # thermal.echo_mismatch.klima nennt den Befund.
+    base = SCENARIOS["klima-pv-kuehlen"]
+
+    def setup(model: PlantModel) -> None:
+        base.setup(model)
+        _unit(model).echo = False
+
+    scenario = replace(base, setup=setup, checks=Checks(()))
+    result = await run_scenario(scenario, cfg, tmp_path, duration_s=30 * 60)
+    assert result.failures == []
+    assert {k for _, k in _receipts(result)} == {0.0}
+    assert len(_klima_codes(result)) <= 1
+    last = result.samples[-1].thermal
+    assert last is not None and (last.wish, last.reason) == (0, "thermal_stale")
+    _, health = result.health[-1]
+    assert "thermal.echo_mismatch.klima" in {alarm["id"] for alarm in health.alarms}

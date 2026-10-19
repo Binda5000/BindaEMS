@@ -168,6 +168,20 @@ async def test_the_end_without_values_still_sends_zero(thermal_session, cfg: Con
     assert cmi.sent_k()[-1] == 0.0
 
 
+async def test_the_end_without_echo_is_a_failure(thermal_session, cfg: Config) -> None:
+    # Ruling R27: Ohne Echo ist der Aktor nicht steuerbar, die Werte der Klimaanlage kommen aber.
+    # Das Ende wartet dann auf das Echo und meldet, dass es fehlt, statt „ohne Werte“.
+    session, cmi = thermal_session(omit=["offset_active_k"])
+    await _started(session)
+    try:
+        [finding] = await session.restore(FAST_THERMAL.echo_s)
+    finally:
+        await session.stop()
+    assert finding.status == "fail"
+    assert finding.detail.startswith("0 gesendet, aber Echo nach")
+    assert cmi.sent_k()[-1] == 0.0
+
+
 async def test_the_end_without_a_port_is_a_failure(cfg: Config) -> None:
     session = build_thermal_session(cfg, "klima", ask=lambda question: True)
     [finding] = await session.restore(1.0)  # nie gestartet: kein Port

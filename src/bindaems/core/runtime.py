@@ -616,7 +616,8 @@ class CoreRuntime:
         Schlüssel in ``victron.instances.evcharger``; ohne Eintrag ist sie nicht steuerbar. Der
         Tesla nutzt den gemeinsamen HTTP-Client und die Uhr der Safety-Schicht; ohne Tessie-Token
         ist Tessie für ihn nie erreichbar. Die Klimaanlage sendet über den CoE-Adapter mit ihrem
-        Namen (``_thermal_set_offset``) und ist steuerbar, solange dessen Quelle Werte liefert.
+        Namen (``_thermal_set_offset``) und ist steuerbar, solange dessen Quelle Werte liefert
+        und das Echo kommt.
         """
         cfg = self._cfg
         actuators: dict[str, Actuator] = {
@@ -1095,7 +1096,7 @@ class CoreRuntime:
         Freigegeben wird nur im Regelbetrieb (CONTROL, DEGRADED), nur wenn die Regelung in diesem
         Zyklus nicht warf, weder der Kern (``RegulationLink.failed``; wie beim Heartbeat) noch die
         Klimaanlagen (``thermal_failed``, Ruling R19), nur, wenn der Aktor wirksam live ist, nicht
-        übergeben wird, steuerbar ist (``capabilities``: seine Quelle liefert Werte)
+        übergeben wird, steuerbar ist (``capabilities``: seine Quelle liefert Werte und das Echo)
         und nicht gesperrt (``locks``), und nur, solange die Regelung in diesem Zyklus einen
         Versatz außer 0 entschied (``thermal_targets``, Ruling R26); sonst sendet der Adapter ab
         sofort 0. So hält er nie einen alten Versatz, den die Regelung nicht mehr steuern kann oder
