@@ -196,6 +196,37 @@ it('Gesundheitsbericht nennt die Klimaanlage, ein älterer core ohne sie bleibt 
 	expect(v.parse(s.CoreHealthSchema, older).thermal).toEqual({});
 });
 
+it('Gesundheitsbericht akzeptiert eine Klimaanlage, deren Regelung ruht, mit Nullwerten', () => {
+	const demo = files['./contract/system.json'] as {
+		core: { health: { thermal: Record<string, object> } };
+	};
+	const resting = {
+		label: 'Klimaanlage',
+		connected: false,
+		last_packet_at: null,
+		foreign_packets: null,
+		bad_packets: null,
+		mode: null,
+		running: null,
+		actual_c: null,
+		setpoint_c: null,
+		base_setpoint_c: null,
+		offset_sent_k: null,
+		offset_active_k: null,
+		power_w: null,
+		wish: null,
+		reason: null,
+		hint: null
+	};
+	const health = { ...demo.core.health, thermal: { klima: resting } };
+	expect(issues(s.CoreHealthSchema, health)).toEqual([]);
+	// fehlende Felder (Regelung ruht, älterer core) sind ebenfalls gültig
+	const bare: Record<string, unknown> = { ...resting };
+	for (const key of ['wish', 'reason', 'hint', 'foreign_packets', 'bad_packets', 'mode'])
+		delete bare[key];
+	expect(issues(s.CoreHealthSchema, { ...health, thermal: { klima: bare } })).toEqual([]);
+});
+
 describe('Bedienung und Entscheidungen', () => {
 	const decisions = files['./contract/decisions.json'] as {
 		decisions: Record<string, unknown>[];

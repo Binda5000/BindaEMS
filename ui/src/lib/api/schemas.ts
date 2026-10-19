@@ -321,28 +321,32 @@ export const ThermalHealthSchema = v.object({
 	label: v.string(),
 	/** frische Werte der Anlage liegen vor */
 	connected: v.boolean(),
-	last_packet_at: v.nullable(Iso),
-	/** verworfene Pakete von einer fremden Absender-IP */
-	foreign_packets: v.number(),
+	last_packet_at: v.optional(v.nullable(Iso), null),
+	/** verworfene Pakete von einer fremden Absender-IP; ohne Adapter fehlt die Zahl */
+	foreign_packets: v.optional(NullableNumber, null),
 	/** verworfene Pakete, die sich nicht lesen ließen */
-	bad_packets: v.number(),
+	bad_packets: v.optional(NullableNumber, null),
 	/** `aus`, `heizen`, `lueften`, `kuehlen` oder `unbekannt` */
-	mode: v.string(),
-	running: v.nullable(v.boolean()),
-	actual_c: NullableNumber,
-	setpoint_c: NullableNumber,
+	mode: v.optional(v.nullable(v.string()), null),
+	running: v.optional(v.nullable(v.boolean()), null),
+	actual_c: v.optional(NullableNumber, null),
+	setpoint_c: v.optional(NullableNumber, null),
 	/** Sollwert ohne den gesendeten Versatz */
-	base_setpoint_c: NullableNumber,
-	offset_sent_k: NullableNumber,
+	base_setpoint_c: v.optional(NullableNumber, null),
+	offset_sent_k: v.optional(NullableNumber, null),
 	/** Echo: der Versatz, den die UVR anzeigt */
-	offset_active_k: NullableNumber,
-	/** Stufen des Wunsches, positiv heißt mehr Leistung (nicht der Versatz) */
-	wish: v.number(),
-	power_w: NullableNumber,
+	offset_active_k: v.optional(NullableNumber, null),
+	power_w: v.optional(NullableNumber, null),
+	/**
+	 * Stufen des Wunsches, positiv heißt mehr Leistung (nicht der Versatz). Wunsch, Grund und
+	 * Hinweis setzt die Regelung; solange sie ruht (Beobachten, Regelbetrieb aus, erster Zyklus),
+	 * sendet der core `null`.
+	 */
+	wish: v.optional(NullableNumber, null),
 	/** Code des Grundes der Strategie */
-	reason: v.nullable(v.string()),
+	reason: v.optional(v.nullable(v.string()), null),
 	/** Hinweis des Plans im aktuellen Slot: `mehr`, `neutral` oder `weniger` */
-	hint: v.string()
+	hint: v.optional(v.nullable(v.string()), null)
 });
 export type ThermalHealth = v.InferOutput<typeof ThermalHealthSchema>;
 

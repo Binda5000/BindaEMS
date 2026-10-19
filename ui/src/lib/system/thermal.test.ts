@@ -104,6 +104,24 @@ describe('thermalRows', () => {
 		]);
 	});
 
+	it('zeigt Wunsch, Grund und Zähler ohne Angabe (Regelung ruht) als Strich', () => {
+		const resting = rows({
+			wish: null,
+			reason: null,
+			hint: null,
+			foreign_packets: null,
+			bad_packets: null,
+			mode: null
+		});
+		expect(resting.Wunsch).toBe('–');
+		expect(resting.Grund).toBe('–');
+		expect(resting.Betriebsart).toBe('–');
+		expect(Object.keys(resting)).not.toContain('Fremde Pakete');
+		expect(rows({ wish: null, reason: 'thermal_off', running: true }).Grund).toBe(
+			'Klimaanlage aus oder lüftet, Versatz 0'
+		);
+	});
+
 	it('nennt verworfene Pakete nur, wenn es welche gab', () => {
 		expect(Object.keys(rows())).not.toContain('Fremde Pakete');
 		const dropped = rows({ foreign_packets: 3, bad_packets: 1 });

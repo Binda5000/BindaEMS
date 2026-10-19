@@ -42,7 +42,8 @@ function offsetText(block: ThermalHealth): string {
 	return `${thermalOffset(sent)} (${confirmed ? 'bestätigt' : `Echo ${thermalOffset(echo)}`})`;
 }
 
-function wishText(wish: number): string {
+function wishText(wish: number | null): string {
+	if (wish === null) return DASH;
 	if (wish === 0) return 'Stufe 0';
 	return `Stufe ${wish > 0 ? '+' : MINUS}${Math.abs(wish)}`;
 }
@@ -64,6 +65,10 @@ function reasonText(block: ThermalHealth): string {
 	return reasonLabel(block.reason);
 }
 
+function modeText(mode: string | null): string {
+	return mode === null ? DASH : (MODES[mode] ?? mode);
+}
+
 function running(value: boolean | null): string {
 	return value === null ? DASH : value ? 'ja' : 'nein';
 }
@@ -79,16 +84,16 @@ export function thermalRows(block: ThermalHealth): ThermalRow[] {
 	};
 	const reason = { label: 'Grund', value: reasonText(block) };
 	const dropped: ThermalRow[] = [
-		...(block.foreign_packets > 0
+		...((block.foreign_packets ?? 0) > 0
 			? [{ label: 'Fremde Pakete', value: String(block.foreign_packets) }]
 			: []),
-		...(block.bad_packets > 0
+		...((block.bad_packets ?? 0) > 0
 			? [{ label: 'Fehlerhafte Pakete', value: String(block.bad_packets) }]
 			: [])
 	];
 	if (!block.connected) return [received, ...dropped, reason];
 	return [
-		{ label: 'Betriebsart', value: MODES[block.mode] ?? block.mode },
+		{ label: 'Betriebsart', value: modeText(block.mode) },
 		{ label: 'Läuft', value: running(block.running) },
 		{ label: 'Ist', value: degrees(block.actual_c) },
 		{ label: 'Soll ohne Versatz', value: degrees(block.base_setpoint_c) },
