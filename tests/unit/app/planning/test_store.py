@@ -21,6 +21,8 @@ def test_sample_inputs_are_not_trivial() -> None:
     assert any(slot.feed_in_ct is None for slot in inputs.slots)
     assert inputs.peak_months and inputs.month_peak_kw is not None
     assert any(slot.prev_battery_w is not None for slot in inputs.slots)
+    assert any(slot.prev_ev_w is not None for slot in inputs.slots)
+    assert all(slot.pv_p25_w is not None for slot in inputs.slots) and inputs.vehicles
     assert inputs.created_at.utcoffset() is not None
 
 

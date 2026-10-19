@@ -17,12 +17,13 @@ import asyncio
 import contextlib
 import math
 import threading
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import Final
+from typing import Any, Final
 
 import structlog
+from pydantic import ValidationError
 
 from bindaems.app.audit import Source
 from bindaems.app.core_link import LiveState
@@ -55,6 +56,7 @@ from bindaems.app.planning.triggers import (
     settings_relevant,
     soc_deviates,
 )
+from bindaems.app.planning.vehicles import planned_vehicles
 from bindaems.app.prices.service import PriceService
 from bindaems.app.settings.service import (
     SettingsService,
@@ -63,6 +65,7 @@ from bindaems.app.settings.service import (
 )
 from bindaems.app.status import ComponentStatus
 from bindaems.shared.config import Config
+from bindaems.shared.control import Intent
 from bindaems.shared.plan import Plan, PlanTrigger
 from bindaems.shared.timeutil import LOCAL_TZ, Clock, slot_start
 
@@ -161,6 +164,7 @@ class PlanningService:
         solver: Solver = solve_in_subprocess,
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
         support_pct: Callable[[], float] | None = None,
+        intent: Callable[[], Intent | None] | None = None,
     ) -> None:
         self._cfg = cfg
         self._settings = settings
@@ -175,6 +179,8 @@ class PlanningService:
         self._sleep = sleep
         # Unterstützungsschwelle der Absicht (Task 10); ohne Quelle gilt die Konfiguration
         self._support_pct = support_pct or (lambda: cfg.control.support_soc_pct)
+        # zuletzt gesehene Absicht (``IntentService.cached``) für die geplanten Autos (Plan 4b)
+        self._intent = intent or (lambda: None)
         self._lock = asyncio.Lock()  # ein Lauf nach dem anderen
         self._running = False
         self._unavailable: str | None = None
@@ -383,13 +389,33 @@ class PlanningService:
         peak = self._ledger.month_peak(now.astimezone(LOCAL_TZ).date())
         return prices, peak.kw if peak is not None else None
 
+    def _intent_for(self, health: Mapping[str, Any] | None) -> Intent | None:
+        """Die Absicht, gegen die Health geprüft wird: die zuletzt gesehene, sonst die, die Health
+        selbst als gültige nennt (wie ``health_trusted``); ``None`` ohne beide."""
+        seen = self._intent()
+        if seen is not None:
+            return seen
+        raw = health.get("intent") if health is not None else None
+        if not isinstance(raw, dict):
+            return None
+        try:
+            return Intent.model_validate(raw)
+        except ValidationError:
+            return None
+
     async def collect(self, trigger: PlanTrigger) -> PlanInputs:
-        """Eingangsdaten eines Laufs; wirft ``PlanningUnavailable``."""
+        """Eingangsdaten eines Laufs; wirft ``PlanningUnavailable``.
+
+        Die geplanten Autos kommen aus dem Health des core und der Absicht (``planned_vehicles``),
+        die PV-Prognose P25 für Regel R2 aus der PV-Prognose.
+        """
         now = self._clock.now()
         prices, month_peak_kw = await asyncio.to_thread(self._read, now)
         pv = self._forecast.latest()
         load = self._load_forecast.latest()
         current = self._settings.current()
+        health = self._live.health
+        intent = self._intent_for(health)
         return assemble_inputs(
             now=now,
             trigger=trigger,
@@ -405,6 +431,10 @@ class PlanningService:
             support_soc_pct=self._support_pct(),
             peak_target_kw=self._cfg.control.peak_target_kw,
             car_floor_kw=car_floor_kw(self._cfg),
+            pv_p25_w=pv.p25_w if pv is not None else None,
+            vehicles=lambda slots: planned_vehicles(
+                self._cfg, health, intent, now=now, slots=slots
+            ),
         )
 
     async def replan(self, trigger: PlanTrigger) -> Plan | None:

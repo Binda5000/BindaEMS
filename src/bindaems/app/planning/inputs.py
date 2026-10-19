@@ -1,13 +1,13 @@
-"""Eingangsdaten der Planung (Plan 3b, Präzisierungen 4 und 5).
+"""Eingangsdaten der Planung (Plan 3b, Präzisierungen 4 und 5; Plan 4b, Präzisierung 10).
 
-Friert Horizont, Restwert, Leistungspreis je Monat und Akkuzustand zu einem ``PlanInputs`` ein,
-den Optimierer, Ersatzplan und Szenarien gemeinsam verwenden. Reine Rechnung: Die Zeit kommt als
-Parameter, nichts wird gelesen oder geschrieben.
+Friert Horizont, Restwert, Leistungspreis je Monat, Akkuzustand und die geplanten Autos zu einem
+``PlanInputs`` ein, den Optimierer, Ersatzplan und Szenarien gemeinsam verwenden. Reine
+Rechnung: Die Zeit kommt als Parameter, nichts wird gelesen oder geschrieben.
 """
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime, timedelta
 from statistics import median
 from typing import Annotated, Final, Literal
@@ -16,6 +16,7 @@ from pydantic import AwareDatetime, Field
 
 from bindaems.app.planning.battery_model import LIMIT_NOW_SLOTS as LIMIT_NOW_SLOTS
 from bindaems.app.planning.battery_model import eta
+from bindaems.app.planning.vehicles import PlanVehicleInput
 from bindaems.app.tariff.calc import power_rate
 from bindaems.shared.config import Config, _Model
 from bindaems.shared.plan import Plan, PlanTrigger
@@ -81,7 +82,13 @@ class PeakMonth(_Model):
 
 
 class SlotInput(_Model):
-    """Ein Slot des Horizonts; ``prev_battery_w`` ist die Netto-Akkuleistung des vorigen Plans."""
+    """Ein Slot des Horizonts; ``prev_battery_w`` ist die Netto-Akkuleistung des vorigen Plans.
+
+    ``pv_p25_w`` ist die PV-Prognose P25 (Regel R2), ohne Wert gilt ``pv_w``. ``prev_ev_w`` ist
+    die Ladeleistung je Auto im vorigen Plan (W, ein fehlendes Auto 0), ``None`` ohne Slot des
+    vorigen Plans oder nach den ersten Slots (Planträgheit). Gespeicherte Eingangsdaten ohne die
+    beiden Felder laden mit ``None`` (Plan 4b).
+    """
 
     start: AwareDatetime
     import_ct: Finite
@@ -90,6 +97,8 @@ class SlotInput(_Model):
     pv_w: Finite
     load_w: Finite
     prev_battery_w: Finite | None
+    pv_p25_w: Finite | None = None
+    prev_ev_w: dict[str, Finite] | None = None
 
 
 class PlanInputs(_Model):
@@ -107,6 +116,8 @@ class PlanInputs(_Model):
     peak_target_kw: NonNegativeFinite | None = None
     car_floor_kw: NonNegativeFinite = 0.0
     slots: list[SlotInput]
+    # die geplanten Autos in der Reihenfolge ihrer Priorität (Plan 4b); alte Eingangsdaten: keine
+    vehicles: list[PlanVehicleInput] = Field(default_factory=list)
 
 
 def _by_start(prices: Sequence[PriceInput]) -> dict[datetime, PriceInput]:
@@ -202,6 +213,11 @@ def _previous_battery_w(previous: Plan | None, start: datetime) -> float | None:
     return slot.charge_pv_w + slot.charge_grid_w - slot.discharge_w
 
 
+def _previous_ev_w(previous: Plan | None, start: datetime) -> dict[str, float] | None:
+    slot = previous.slot_at(start) if previous is not None else None
+    return None if slot is None else dict(slot.ev_w)
+
+
 def assemble_inputs(
     *,
     now: datetime,
@@ -218,11 +234,16 @@ def assemble_inputs(
     support_soc_pct: float = DEFAULT_SUPPORT_SOC_PCT,
     peak_target_kw: float | None = None,
     car_floor_kw: float = 0.0,
+    pv_p25_w: Mapping[datetime, float] | None = None,
+    vehicles: Callable[[list[SlotInput]], list[PlanVehicleInput]] | None = None,
 ) -> PlanInputs:
     """Eingangsdaten eines Laufs; wirft ``PlanningUnavailable``.
 
     ``peak_target_kw`` und ``car_floor_kw`` sind die Untergrenzen des Budgets
-    (``control.peak_target_kw``, ``car_floor_kw``; Gesamtreview I2).
+    (``control.peak_target_kw``, ``car_floor_kw``; Gesamtreview I2). ``pv_p25_w`` ist die
+    PV-Prognose P25; ein Slot ohne sie bekommt ``None`` und beendet den Horizont nicht.
+    ``vehicles`` ergibt die geplanten Autos zu den Slots des Horizonts (``planned_vehicles``);
+    ohne gibt es keine.
 
     Prüfreihenfolge: Akkuzustand, Preis des aktuellen Slots, PV, Last, Horizontlänge. Der
     Horizont endet vor dem ersten Slot ohne PV- oder Lastprognose.
@@ -253,6 +274,8 @@ def assemble_inputs(
                 prev_battery_w=(
                     _previous_battery_w(previous, start) if index < INERTIA_SLOTS else None
                 ),
+                pv_p25_w=pv_p25_w.get(start) if pv_p25_w is not None else None,
+                prev_ev_w=_previous_ev_w(previous, start) if index < INERTIA_SLOTS else None,
             )
         )
     if len(slots) < MIN_SLOTS:
@@ -272,6 +295,7 @@ def assemble_inputs(
         peak_target_kw=peak_target_kw,
         car_floor_kw=car_floor_kw,
         slots=slots,
+        vehicles=vehicles(slots) if vehicles is not None else [],
     )
 
 

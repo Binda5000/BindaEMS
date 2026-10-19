@@ -1,10 +1,12 @@
-"""Tests der Eingangsdaten: Horizont, Restwert und Leistungspreis je Monat (Plan 3b, Task 3)."""
+"""Tests der Eingangsdaten: Horizont, Restwert und Leistungspreis je Monat (Plan 3b, Task 3);
+P25, voriger Plan der Autos und geplante Autos (Plan 4b, Task 9)."""
 
 from __future__ import annotations
 
 import math
 
 import pytest
+from sqlalchemy import Engine, update
 from tests.plan_helpers import (
     NOW,
     assemble,
@@ -12,12 +14,16 @@ from tests.plan_helpers import (
     estimated,
     flat,
     known,
+    planned_car,
     previous_plan,
     price,
+    sample_inputs,
+    sample_plan,
     state,
     with_power_price,
 )
 
+from bindaems.app.db.schema import plan_inputs_table
 from bindaems.app.planning.battery_model import params_of, sim_slots
 from bindaems.app.planning.inputs import (
     END_WINDOW,
@@ -27,6 +33,7 @@ from bindaems.app.planning.inputs import (
     horizon_prices,
     peak_months,
 )
+from bindaems.app.planning.store import PlanStore
 from bindaems.shared.settings import PlanningSettings, TariffSettings
 from bindaems.shared.timeutil import SLOT
 
@@ -259,3 +266,64 @@ def test_previous_plan_charging_is_positive_and_gaps_are_none():
     inputs = assemble(previous=previous_plan(battery_w=800.0, slots=2))
     assert [s.prev_battery_w for s in inputs.slots[:4]] == [800.0, 800.0, None, None]
     assert all(s.prev_battery_w is None for s in assemble().slots)
+
+
+def test_previous_plan_car_power_for_first_four_slots():
+    previous = previous_plan(battery_w=0.0, slots=8)
+    slots = [
+        slot.model_copy(update={"ev_w": {"tesla": 6900.0}} if i < 2 else {})
+        for i, slot in enumerate(previous.slots)
+    ]
+    inputs = assemble(previous=previous.model_copy(update={"slots": slots}))
+    assert [s.prev_ev_w for s in inputs.slots[:5]] == [
+        {"tesla": 6900.0},
+        {"tesla": 6900.0},
+        {},
+        {},
+        None,
+    ]
+    assert all(s.prev_ev_w is None for s in assemble().slots)
+
+
+def test_slots_carry_p25_and_fall_back_without_it():
+    p25 = flat(NOW, 3, 400.0)
+    inputs = assemble(pv=flat(NOW, 200, 700.0), pv_p25_w=p25)
+    assert [s.pv_p25_w for s in inputs.slots[:4]] == [400.0, 400.0, 400.0, None]
+    assert len(inputs.slots) == MAX_SLOTS  # fehlt P25, endet der Horizont nicht
+    assert all(s.pv_p25_w is None for s in assemble().slots)
+
+
+def test_inputs_carry_the_planned_vehicles():
+    seen: list[int] = []
+
+    def cars(slots):
+        seen.append(len(slots))
+        return [planned_car()]
+
+    inputs = assemble(load=flat(NOW, 10, 500.0), vehicles=cars)
+    assert seen == [10] and inputs.vehicles == [planned_car()]
+    assert assemble().vehicles == []
+
+
+def test_old_inputs_load_without_vehicles(store: PlanStore, engine: Engine) -> None:
+    saved = store.save(
+        sample_plan(created="2026-10-16T10:01:00+00:00", slots=["10:00"]), sample_inputs()
+    )
+    assert saved.id is not None
+    data = sample_inputs().model_dump(mode="json")
+    del data["vehicles"]
+    for slot in data["slots"]:
+        del slot["pv_p25_w"]
+        del slot["prev_ev_w"]
+    with engine.begin() as conn:
+        conn.execute(
+            update(plan_inputs_table)
+            .where(plan_inputs_table.c.plan_id == saved.id)
+            .values(data=data)
+        )
+    inputs = store.inputs_of(saved.id)
+    assert inputs is not None and inputs.vehicles == []
+    assert all(s.pv_p25_w is None and s.prev_ev_w is None for s in inputs.slots)
+    expected = sample_inputs()
+    old_slots = [s.model_copy(update={"pv_p25_w": None, "prev_ev_w": None}) for s in expected.slots]
+    assert inputs == expected.model_copy(update={"vehicles": [], "slots": old_slots})

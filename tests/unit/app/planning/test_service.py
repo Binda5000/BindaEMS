@@ -17,17 +17,20 @@ from tests.plan_helpers import (
     flows_of,
     live_signals,
     month,
+    planned_health,
     resimulate,
     returns,
     scenario,
     set_planning,
     small_battery,
     until,
+    vehicle_health,
 )
 
 from bindaems.app.planning.inputs import PlanInputs
 from bindaems.app.planning.optimizer import OptimizerResult, solve
 from bindaems.app.planning.service import PlanningService, PlanningStatus, plan_once
+from bindaems.shared.control import ChargeMode, Intent, VehicleIntent
 from bindaems.shared.plan import BatteryIntent, PlanTrigger
 from bindaems.shared.settings import PlanningSettings
 from bindaems.shared.timeutil import SLOT, ManualClock, slot_start
@@ -257,6 +260,25 @@ async def test_collect_budget_floors_from_the_config(service_with, cfg):
     control = cfg.control.model_copy(update={"peak_target_kw": 8.0})
     inputs = await service_with(cfg=cfg.model_copy(update={"control": control})).collect("start")
     assert inputs.peak_target_kw == 8.0
+
+
+async def test_collect_takes_p25_and_the_planned_cars(service_with, live, forecast):
+    forecast.forecast = replace(
+        forecast.forecast, p25_w={k: v / 2 for k, v in forecast.forecast.p25_w.items()}
+    )
+    live.health = planned_health(vehicle_health("tesla"), version=3)
+    intent = Intent(version=3, vehicles={"tesla": VehicleIntent(mode=ChargeMode.PLANNED)})
+    inputs = await service_with(intent=lambda: intent).collect("start")
+    assert [(s.pv_w, s.pv_p25_w) for s in inputs.slots[:2]] == [(2000.0, 1000.0)] * 2
+    assert [car.key for car in inputs.vehicles] == ["tesla"]
+    # die gesehene Absicht ist neuer als die, mit der Health regelte: kein Auto
+    inputs = await service_with(intent=lambda: Intent(version=4)).collect("start")
+    assert inputs.vehicles == []
+    # ohne gesehene Absicht gilt die, die Health nennt
+    inputs = await service_with().collect("start")
+    assert [car.key for car in inputs.vehicles] == ["tesla"]
+    live.health = None
+    assert (await service_with().collect("start")).vehicles == []
 
 
 async def test_collect_grid_limit_from_max_import(service_with, cfg):

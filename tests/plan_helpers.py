@@ -26,6 +26,7 @@ from bindaems.app.planning.inputs import (
     assemble_inputs,
 )
 from bindaems.app.planning.optimizer import OptimizerResult, SlotFlows, solve
+from bindaems.app.planning.vehicles import PlanVehicleInput, need_kwh
 from bindaems.app.settings.service import SettingsService
 from bindaems.shared.plan import (
     PLAN_VALID,
@@ -284,14 +285,19 @@ def scenario(
     support_soc_pct: float = 70.0,
     peak_target_kw: float | None = None,
     car_floor_kw: float = 0.0,
+    vehicles: list[PlanVehicleInput] | None = None,
+    pv_p25: list[float] | None = None,
 ) -> PlanInputs:
     """``PlanInputs`` direkt aus Reihen je Slot (Standardakku wie ``state``), ohne Restwert und
     ohne Leistungspreis, wenn nicht angegeben; ``prev_battery_w`` gilt für die ersten Slots,
-    ``origins`` ist die Herkunft der Preise je Slot (Standard ``primary``)."""
+    ``origins`` ist die Herkunft der Preise je Slot (Standard ``primary``). ``vehicles`` sind die
+    geplanten Autos (``planned_car``), ``pv_p25`` die PV-Prognose P25 je Slot (ohne gilt ``pv``)."""
     if not len(prices) == len(pv) == len(load):
         raise ValueError("Preise, PV und Last müssen gleich lang sein")
     if origins is not None and len(origins) != len(prices):
         raise ValueError("Herkunft je Preis nötig")
+    if pv_p25 is not None and len(pv_p25) != len(prices):
+        raise ValueError("P25 je Slot nötig")
     first = at(start)
     planning_values: dict[str, Any] = {"grid_charge_allowed": grid_charge}
     if inertia_ct is not None:
@@ -312,6 +318,7 @@ def scenario(
         support_soc_pct=support_soc_pct,
         peak_target_kw=peak_target_kw,
         car_floor_kw=car_floor_kw,
+        vehicles=vehicles or [],
         slots=[
             SlotInput(
                 start=first + i * SLOT,
@@ -319,12 +326,44 @@ def scenario(
                 feed_in_ct=feed_in,
                 origin=origins[i] if origins is not None else "primary",
                 pv_w=pv_w,
+                pv_p25_w=pv_p25[i] if pv_p25 is not None else None,
                 load_w=load_w,
                 prev_battery_w=prev[i] if i < len(prev) else None,
             )
             for i, (ct, pv_w, load_w) in enumerate(zip(prices, pv, load, strict=True))
         ],
     )
+
+
+def planned_car(**overrides: Any) -> PlanVehicleInput:
+    """Ein geplantes Auto wie der Tesla in ``deploy/config.example.yaml`` (75 kWh, 3 × 5 bis 16 A
+    an 230 V, η 0,9): 40 % → 80 %, Abfahrt 07:00 Ortszeit am 17. 10. 2026. Ohne Angabe sind
+    ``need_kwh`` der Bedarf aus Ladestand und Ziel und ``horizon_need_kwh`` und
+    ``grid_allowed_kwh`` derselbe Wert (Abfahrt im Horizont, keine PV)."""
+    values: dict[str, Any] = {
+        "key": "tesla",
+        "name": "Tesla Model 3",
+        "wallbox": "twc",
+        "soc_pct": 40.0,
+        "soc_assumed": False,
+        "target_soc_pct": 80.0,
+        "limit_pct": None,
+        "departure_at": at("2026-10-17T05:00:00+00:00"),
+        "efficiency": 0.9,
+        "usable_kwh": 75.0,
+        "min_w": 5 * 230.0 * 3,
+        "max_w": 16 * 230.0 * 3,
+    }
+    values.update(overrides)
+    values.setdefault(
+        "need_kwh",
+        need_kwh(
+            values["soc_pct"], values["target_soc_pct"], values["usable_kwh"], values["efficiency"]
+        ),
+    )
+    values.setdefault("horizon_need_kwh", values["need_kwh"])
+    values.setdefault("grid_allowed_kwh", values["horizon_need_kwh"])
+    return PlanVehicleInput(**values)
 
 
 def pv_arc(start: str, slots: int, peak_w: float) -> list[float]:
@@ -390,7 +429,8 @@ def flows_of(steps: Sequence[SimStep], inputs: PlanInputs) -> OptimizerResult:
 
 def sample_inputs() -> PlanInputs:
     """Nicht triviale Eingangsdaten für den Roundtrip: Schätzpreise, Slots ohne Einspeisepreis,
-    ein Monat mit Leistungspreis, eine Monatsspitze und ein voriger Plan (zeitzonenbehaftet)."""
+    ein Monat mit Leistungspreis, eine Monatsspitze, ein voriger Plan (zeitzonenbehaftet), P25 und
+    ein geplantes Auto."""
     prices = [
         *known(NOW, 12, ct=21.5, feed_in=None),
         *estimated(NOW + 12 * SLOT, 8, ct=18.25, feed_in=4.5),
@@ -406,6 +446,8 @@ def sample_inputs() -> PlanInputs:
         month_peak_kw=4.2,
         previous=previous_plan(battery_w=-800.0, slots=4),
         settings_version=7,
+        pv_p25_w=flat(NOW, 20, 900.0),
+        vehicles=lambda slots: [planned_car(soc_assumed=True, soc_pct=0.0, limit_pct=70.0)],
     )
 
 
@@ -462,3 +504,40 @@ def set_planning(settings: SettingsService, planning: PlanningSettings) -> None:
         actor="test",
         source="ui",
     )
+
+
+PLANNED_DEPARTURE = "2026-10-17T05:00:00+00:00"  # 07:00 Ortszeit
+
+
+def vehicle_health(key: str = "tesla", **changes: Any) -> dict[str, Any]:
+    """Eintrag eines Fahrzeugs in Health wie ``ChargeController.health`` (Werte erfunden): in
+    „Geplant“, angesteckt, Tesla am Wall Connector, e-Golf an der EVCS, 40 % gemessen, Ziel 80 %
+    bis ``PLANNED_DEPARTURE``. ``target`` und ``departure_at`` ändern den Teil ``planned``, die
+    übrigen Schlüssel den Eintrag."""
+    planned = {
+        "state": "surplus",
+        "target_soc_pct": changes.pop("target", 80.0),
+        "departure_at": changes.pop("departure_at", PLANNED_DEPARTURE),
+        "need_kwh": 0.0,
+        "latest_start": None,
+        "plan_w": None,
+    }
+    entry: dict[str, Any] = {
+        "id": key,
+        "name": "Tesla Model 3" if key == "tesla" else "e-Golf",
+        "mode": "planned",
+        "wallbox": "twc" if key == "tesla" else "evcs",
+        "plugged": True,
+        "charging": False,
+        "soc_pct": 40.0,
+        "soc_source": "measured",
+        "charge_limit_pct": None,
+        "planned": planned,
+    }
+    entry.update(changes)
+    return entry
+
+
+def planned_health(*entries: dict[str, Any], version: int = 3) -> dict[str, Any]:
+    """Health mit diesen Fahrzeugen (``vehicle_health``), geregelt mit der Absicht ``version``."""
+    return {"intent_version": version, "intent": {"version": version}, "vehicles": list(entries)}

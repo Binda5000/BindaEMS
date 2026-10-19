@@ -253,6 +253,7 @@ class AppRuntime:
             self.plan_store,
             self._clock,
             support_pct=self._support_soc_pct,
+            intent=self.intents.cached,
         )
         # nach Planung und Absicht; hört selbst auf neue Pläne und geänderte Einstellungen
         self.plan_sender = PlanSender(
