@@ -160,12 +160,17 @@ def test_the_intent_store_clamps_plan_power_to_the_vehicle_maximum(cfg, tmp_path
         grid_charge_allowed=False,
         slots=[slot],
     )
+    core = cfg.core.model_copy(update={"data_dir": tmp_path / "core"})
     rt = CoreRuntime(
-        cfg, Secrets(internal_token=SecretStr(TOKEN)), sink=FakeSink(), serve_api=False
+        cfg.model_copy(update={"core": core}),
+        Secrets(internal_token=SecretStr(TOKEN)),
+        sink=FakeSink(),
+        serve_api=False,
     )
     reply = rt.intents.submit(Intent(version=1, plan=plan), now)
     assert reply.details == ("Plan für Tesla Model 3 auf 11040 W begrenzt.",)  # 16 A · 230 V · 3
     assert rt.intents.current.plan.slots[0].vehicles == {"tesla": 11040, "egolf": 7000}
+    assert (tmp_path / "core" / "intent.json").exists()  # nie unter dem /data der Anlage
 
 
 def test_missing_tessie_token_skips_vehicle_with_warning(cfg) -> None:
