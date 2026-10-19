@@ -47,7 +47,7 @@ WARNING_TEXTS: Final = {
     "problem_assignment_unclear": "Zuordnung Auto und Wallbox unklar.",
 }
 COMPETITOR_WARNING: Final = "problem_competitor"
-COMPETITOR_ALARMS: Final = "competitor."  # solange ein solcher Fehler gemeldet ist, schweigt sie
+COMPETITOR_ALARMS: Final = "competitor."  # solange ein solcher Fehler besteht, schweigt sie
 TARGET_SUFFIX: Final = "_target"  # je Fahrzeug: ``bindaems_warning_<Objekt-ID>_target``
 TARGET_TEXT: Final = (
     "Ziel-SOC unerreichbar: {name} erreicht bis {hhmm} voraussichtlich nur {soc} %."
@@ -301,13 +301,18 @@ class AlarmNotifications:
             await self._sleep(CHECK_INTERVAL_S)
 
     async def check(self) -> None:
-        errors: dict[str, str] = {}
-        for alarm in list(self._live.alarms):
-            alarm_id = alarm.get("id") if isinstance(alarm, dict) else None
-            if isinstance(alarm_id, str) and alarm.get("severity") == "error":
-                message = alarm.get("message")
-                errors[alarm_id] = message if isinstance(message, str) and message else alarm_id
-        await self._pending.update(errors)
+        await self._pending.update(error_alarms(self._live))
+
+
+def error_alarms(live: LiveState) -> dict[str, str]:
+    """Die Alarme des core mit der Schwere ``error``: ID → Text (ohne Text die ID)."""
+    errors: dict[str, str] = {}
+    for alarm in list(live.alarms):
+        alarm_id = alarm.get("id") if isinstance(alarm, dict) else None
+        if isinstance(alarm_id, str) and alarm.get("severity") == "error":
+            message = alarm.get("message")
+            errors[alarm_id] = message if isinstance(message, str) and message else alarm_id
+    return errors
 
 
 def _whole(value: float) -> str:
@@ -325,8 +330,10 @@ class WarningNotifications:
     - Je Fahrzeug in „Geplant“, dessen Ziel nicht erreichbar ist (``planned_view``, wie
       ``problem_target_unreachable``): ``bindaems_warning_<Objekt-ID>_target``. Ein neuer Plan, der
       das Ziel weiter verfehlt, meldet nichts Neues.
-    - „Mitregelndes System“ schweigt, solange ein Fehler ``competitor.*`` gemeldet ist; steht ihre
-      Meldung schon, entfernt die app sie, sobald der Fehler gemeldet ist.
+    - „Mitregelndes System“ schweigt, solange ein Fehler ``competitor.*`` besteht (in den Alarmen
+      des core, ``live``) oder gemeldet ist, auch bevor der Alarm selbst gemeldet ist: Sonst kämen
+      beide Meldungen, wenn sie im selben Takt fällig werden. Steht ihre Meldung schon, entfernt
+      die app sie, sobald der Fehler besteht.
     - Ein unbekannter Zustand (``unknown``, etwa ohne core) unterbricht das Zählen, entfernt aber
       keine stehende Meldung; ebenso ein unerreichbares Ziel ohne erwarteten Ladestand.
 
@@ -340,11 +347,13 @@ class WarningNotifications:
         notifier: HaNotifier,
         clock: Clock,
         *,
+        live: LiveState,
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
     ) -> None:
         self._cfg = cfg
         self._inputs = inputs
         self._notifier = notifier
+        self._live = live
         self._sleep = sleep
         specs = {spec.object_id: spec for spec in build_entities(cfg)}
         self._specs = {oid: specs[oid] for oid in WARNING_TEXTS}
@@ -370,7 +379,7 @@ class WarningNotifications:
             elif state == "ON":
                 names = ", ".join(inputs.adapters_offline or [])
                 present[oid] = WARNING_TEXTS[oid].format(names=names)
-        if COMPETITOR_WARNING in present and self._notifier.alarm_notified(COMPETITOR_ALARMS):
+        if COMPETITOR_WARNING in present and self._competitor_error():
             del present[COMPETITOR_WARNING]
         unknown = self._target.value(inputs) == UNKNOWN
         for key, vehicle in self._cfg.vehicles.items():
@@ -386,3 +395,8 @@ class WarningNotifications:
                     soc=_whole(expected),
                 )
         await self._pending.update(present, held)
+
+    def _competitor_error(self) -> bool:
+        """Besteht ein Fehler ``competitor.*`` oder steht seine Meldung noch?"""
+        present = any(alarm.startswith(COMPETITOR_ALARMS) for alarm in error_alarms(self._live))
+        return present or self._notifier.alarm_notified(COMPETITOR_ALARMS)

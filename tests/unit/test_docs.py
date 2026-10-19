@@ -375,6 +375,8 @@ def test_warning_notifications_in_the_guide_match_the_app() -> None:
     sentence = TARGET_TEXT.format(name="{Name}", hhmm="{HH:MM}", soc="{soc}")
     assert f"„{sentence}“" in target
     assert "watchdog_tripped" not in WARNING_TEXTS
+    # „Mitregelndes System“ schweigt schon, solange der Fehler besteht (kein Doppel-Push)
+    assert "auch in den 30 s, bevor der Alarm selbst gemeldet wird" in " ".join(section.split())
 
 
 def test_operations_guide_describes_charging() -> None:

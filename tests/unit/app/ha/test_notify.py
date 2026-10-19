@@ -439,7 +439,9 @@ class WarnEnv(Env):
     def __init__(self, cfg: Config, clock: ManualClock, notify_service: str | None) -> None:
         super().__init__(clock, notify_service)
         self.inputs = sample_inputs()
-        self.warnings = WarningNotifications(cfg, lambda: self.inputs, self.notifier, clock)
+        self.warnings = WarningNotifications(
+            cfg, lambda: self.inputs, self.notifier, clock, live=self.live
+        )
 
     def set(self, **changes: Any) -> None:
         self.inputs = sample_inputs(**changes)
@@ -632,6 +634,25 @@ async def test_competitor_warning_silent_while_error_alarm_is_notified(warn: War
     assert "bindaems_warning_problem_competitor" in _dismissed(warn)
 
 
+async def test_competitor_warning_silent_when_the_error_alarm_comes_due_in_the_same_tick(
+    warn: WarnEnv,
+) -> None:
+    # Fehler competitor.* und Warnung „Mitregelndes System“ bestehen gleich lange; die Warnungen
+    # prüft dieser Takt zuerst. Es gibt nur die Meldung des Alarms, keine zweite auf dem Handy.
+    warn.live.alarms = [_alarm()]
+    warn.set(alarm_ids=[ALARM_ID])
+    await warn.warnings.check()
+    await warn.alarms.check()
+    for _ in range(int(NOTIFY_AFTER_S) + 5):
+        warn.clock.advance(1)
+        await warn.warnings.check()
+        await warn.alarms.check()
+    assert [c["notification_id"] for c in _creates(warn)] == [NOTIFICATION_ID]
+    assert [c for c in warn.calls if c[0] == "notify"] == [
+        ("notify", "mobile_app_handy", {"title": "BindaEMS", "message": TEXT})
+    ]
+
+
 async def test_warnings_share_the_alarm_budget(warn: WarnEnv) -> None:
     warn.live.alarms = [_alarm(f"competitor.a{n}") for n in range(MAX_PER_MINUTE)]
     warn.set(prices_missing=True)
@@ -657,7 +678,9 @@ async def test_warning_check_survives_broken_inputs(cfg: Config, warn: WarnEnv) 
         sleeps.append(seconds)
         await asyncio.sleep(0)
 
-    warnings = WarningNotifications(cfg, broken, warn.notifier, warn.clock, sleep=sleep)
+    warnings = WarningNotifications(
+        cfg, broken, warn.notifier, warn.clock, live=warn.live, sleep=sleep
+    )
     task = asyncio.create_task(warnings.run())
     try:
         for _ in range(5):

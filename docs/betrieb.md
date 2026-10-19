@@ -517,9 +517,10 @@ homeassistant:
   | Ziel-SOC unerreichbar (je Fahrzeug) | `bindaems_warning_<Fahrzeug>_target` | „Ziel-SOC unerreichbar: {Name} erreicht bis {HH:MM} voraussichtlich nur {soc} %.“ |
 
   - „Watchdog ausgelöst“ meldet sich nicht zusätzlich: Das tut schon sein Alarm.
-  - „Mitregelndes System“ schweigt, solange ein Alarm `competitor.*` der Schwere „Fehler“ gemeldet
-    ist; steht ihre Meldung schon, entfernt die app sie, sobald der Alarm gemeldet ist. Danach zählt
-    sie neu.
+  - „Mitregelndes System“ schweigt, solange ein Alarm `competitor.*` der Schwere „Fehler“ besteht
+    oder gemeldet ist, auch in den 30 s, bevor der Alarm selbst gemeldet wird; so kommt auf dem Handy
+    nur die Meldung des Alarms. Steht ihre Meldung schon, entfernt die app sie, sobald der Alarm
+    besteht. Danach zählt sie neu.
   - „Ziel-SOC unerreichbar“ meldet sich je Fahrzeug in „Geplant“ nach derselben Rechnung wie „Ziel
     erreichbar“ (oben): {HH:MM} ist die Abfahrt, {soc} der erwartete Ladestand an der Abfahrt. Bleibt
     das Ziel über viele neue Pläne unerreichbar, bleibt es bei der einen Meldung (mit dem Text vom

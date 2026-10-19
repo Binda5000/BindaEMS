@@ -315,7 +315,7 @@ class AppRuntime:
                     self.live, self.ha_notifier, self._clock
                 )
                 self.warning_notifications = WarningNotifications(
-                    cfg, self._current_ha_inputs, self.ha_notifier, self._clock
+                    cfg, self._current_ha_inputs, self.ha_notifier, self._clock, live=self.live
                 )
             else:
                 self._notify_status = ComponentStatus(
