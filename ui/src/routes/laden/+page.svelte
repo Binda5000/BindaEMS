@@ -20,6 +20,7 @@
 		healthIsCurrent,
 		latestSession,
 		overrideVehicle,
+		planFits,
 		plannedLine,
 		priorityOrder,
 		sessionLine,
@@ -36,6 +37,8 @@
 
 	/** So lange nach einer Änderung dauert es, bis Health sie zeigt. */
 	const SYSTEM_REFRESH_MS = 2000;
+	/** So oft fragt die Seite den Plan höchstens neu, solange er nicht zu Health passt. */
+	const PLAN_RECHECK_MS = 10_000;
 	/** So viele Tage zurück sucht die Fahrzeugkarte nach der letzten Session. */
 	const SESSION_DAYS = 30;
 	/** Ohne Absicht ist die Akku-Unterstützung erlaubt, mit der Schwelle der Konfiguration. */
@@ -111,6 +114,35 @@
 		)
 	);
 
+	const validPlan = $derived(plan.data?.plan?.valid ? plan.data.plan : null);
+	/** das Auto im gültigen Plan; `null`: der Plan nennt es nicht; `undefined`: Plan unbekannt */
+	function planCar(id: string) {
+		if (plan.data === undefined) return undefined;
+		return validPlan?.vehicles.find((item) => item.key === id) ?? null;
+	}
+	// Nach einer Änderung meldet Health das neue Ziel oder die neue Abfahrt vor dem neuen Plan
+	const planStale = $derived(
+		vehicles.some((vehicle) => {
+			const car = planCar(vehicle.id);
+			return car != null && !planFits(vehicle, car);
+		})
+	);
+	// Passt der Plan nicht zu Health, fragt die Seite ihn alle 10 s neu, bis er passt; eine neue
+	// Antwort zum Plan beginnt die 10 s von vorn
+	$effect(() => {
+		void plan.data;
+		if (!planStale) return;
+		let timer: ReturnType<typeof setTimeout>;
+		const recheck = () => {
+			timer = setTimeout(() => {
+				void plan.refresh();
+				recheck();
+			}, PLAN_RECHECK_MS);
+		};
+		recheck();
+		return () => clearTimeout(timer);
+	});
+
 	/** Die Ziele der Absicht; ohne Eintrag die Standardwerte des core */
 	function goalOf(id: string): { target_soc_pct: number; departure: string } {
 		const wanted = intent?.vehicles[id];
@@ -122,14 +154,12 @@
 
 	/**
 	 * „Geplant“ wie in Home Assistant: das Auto im gültigen Plan, sonst Health. Ohne Antwort zum Plan
-	 * (`undefined`) sagt die Karte weder „Fertig um“ noch „Kein Plan“.
+	 * (`undefined`) sagt die Karte weder „Fertig um“ noch „Kein Plan“, ebenso, solange der Plan noch
+	 * mit einem anderen Ziel oder einer anderen Abfahrt rechnet als Health.
 	 */
 	function plannedOf(vehicle: VehicleHealth) {
-		const valid = plan.data?.plan?.valid ? plan.data.plan : null;
-		const car =
-			plan.data === undefined
-				? undefined
-				: (valid?.vehicles.find((item) => item.key === vehicle.id) ?? null);
+		const found = planCar(vehicle.id);
+		const car = found && !planFits(vehicle, found) ? undefined : found;
 		return plannedLine({
 			mode: intent === null ? null : (intent.vehicles[vehicle.id]?.mode ?? 'pv'),
 			vehicle,
@@ -150,8 +180,9 @@
 	/**
 	 * Führt eine Bedienung aus: Die Ablehnung des core steht an der Karte `card`, eine Begrenzung
 	 * als Hinweis. Danach lädt `control` sofort und `system` nach 2 s neu, mit ihm der Plan: Ein
-	 * neues Ziel oder ein neuer Modus ändert den Plan, die Zeile „Fertig um …“ soll nicht bis zur
-	 * nächsten Minute den alten zeigen.
+	 * neuer Modus ändert den Plan, die Zeile „Fertig um …“ soll nicht bis zur nächsten Minute den
+	 * alten zeigen. Ein neues Ziel oder eine neue Abfahrt plant die app erst nach dem nächsten
+	 * Health neu; bis dahin fehlt die Zeile (`planStale`).
 	 */
 	async function act(card: string, call: () => Promise<ControlReply>): Promise<void> {
 		busy = true;

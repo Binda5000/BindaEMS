@@ -1289,7 +1289,10 @@ Regelbetrieb“). Bis Health eine Änderung zeigt, steht auf der Seite die gesen
   Ziel ist das wirksame, bei einem Ladelimit darunter also das Limit. Abgesteckt oder in einem anderen
   Modus steht keine Zeile da; scheitert die Abfrage des Plans, fehlen die Zeilen mit Plan und ohne Plan.
   Die Seite fragt den Plan jede Minute ab und nach jeder Bedienung (auch „Übernehmen“) nach 2 s
-  zusammen mit Health; die Zeile zeigt das neue Ziel, sobald die app neu geplant hat.
+  zusammen mit Health. Ein neues Ziel oder eine neue Abfahrt plant die app erst, wenn Health die
+  Absicht bestätigt (Abschnitt „Planung“, Anlass `vehicles`). Meldet Health für ein Auto ein anderes
+  Ziel oder eine andere Abfahrt als der Plan, fehlen die Zeilen mit Plan und ohne Plan (die Zusätze
+  bleiben); dann fragt die Seite den Plan alle 10 s neu, bis er passt.
 - **Session:** Eine Zeile unter den Fakten des Fahrzeugs, aus den Ladesessions der letzten 30 Tage
   (Abschnitt 8, „Ladesessions und Kosten je Auto“; die Seite fragt sie jede Minute ab). Läuft eine,
   steht dort „Session seit {HH:MM} · {kWh} kWh (PV {a} · Akku {b} · Netz {c})“. Sonst steht dort die

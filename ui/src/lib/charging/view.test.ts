@@ -16,6 +16,7 @@ import {
 	overrideVehicle,
 	parseSupportThreshold,
 	parseTarget,
+	planFits,
 	plannedLine,
 	priorityOrder,
 	reasonLabel,
@@ -581,6 +582,16 @@ describe('Geplant', () => {
 		expect(
 			plannedLine({ mode: 'planned', vehicle: health({ planned: null }), car: null, target: 80 })
 		).toBeNull();
+	});
+
+	it('vergleicht das Auto im Plan mit Ziel und Abfahrt in Health', () => {
+		expect(planFits(health(), car())).toBe(true);
+		expect(planFits(health(), car({ target_soc_pct: 80.04 }))).toBe(true);
+		expect(planFits(health(), car({ departure_at: '2026-10-10T07:00:00+02:00' }))).toBe(true);
+		expect(planFits(health(), car({ target_soc_pct: 60 }))).toBe(false);
+		expect(planFits(health(), car({ departure_at: '2026-10-10T05:30:00+00:00' }))).toBe(false);
+		expect(planFits(health({ planned: null }), car({ target_soc_pct: 60 }))).toBe(true);
+		expect(planFits(null, car())).toBe(true);
 	});
 
 	it('nennt bei unbekanntem Plan weder Plan noch „Kein Plan“', () => {

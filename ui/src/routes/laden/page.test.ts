@@ -424,6 +424,44 @@ it('nach Übernehmen holt die Seite den Plan neu', async () => {
 	expect(api.plan).toHaveBeenCalledTimes(loaded + 1);
 });
 
+it('zeigt „Fertig um“ erst wieder, wenn der Plan zu Ziel und Abfahrt in Health passt', async () => {
+	// Health meldet nach „Übernehmen“ das neue Ziel 80 %, der Plan rechnet noch mit 60 %: Die
+	// Zeile „Fertig um …“ fehlt, bis die app neu geplant hat; die Seite fragt höchstens alle 10 s.
+	await show();
+	api.setTarget.mockResolvedValue(reply());
+	vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+	const health = system().core.health!;
+	const before = health.vehicles.find((vehicle) => vehicle.id === 'tesla')!.planned!;
+	api.system.mockResolvedValue(
+		healthWith({
+			vehicles: vehicleAt(health, 'tesla', { planned: { ...before, target_soc_pct: 80 } })
+		})
+	);
+	const tesla = card('Tesla Model 3');
+	await fireEvent.input(within(tesla).getByRole('spinbutton', { name: 'Ziel-SOC' }), {
+		target: { value: '80' }
+	});
+	await fireEvent.click(within(tesla).getByRole('button', { name: 'Übernehmen' }));
+	await vi.advanceTimersByTimeAsync(2100);
+	expect(within(tesla).queryByText(/Fertig um/)).toBeNull();
+	expect(within(tesla).getByText('Ladestand unbekannt, gerechnet ab 0 %.')).toBeInTheDocument();
+	const loaded = api.plan.mock.calls.length;
+	await vi.advanceTimersByTimeAsync(9800);
+	expect(api.plan).toHaveBeenCalledTimes(loaded);
+	await vi.advanceTimersByTimeAsync(300);
+	expect(api.plan).toHaveBeenCalledTimes(loaded + 1);
+	const [car] = PLAN_RESPONSE.plan!.vehicles;
+	api.plan.mockResolvedValue({
+		...PLAN_RESPONSE,
+		plan: { ...PLAN_RESPONSE.plan!, vehicles: [{ ...car, target_soc_pct: 80 }] }
+	});
+	await vi.advanceTimersByTimeAsync(10_100);
+	expect(api.plan).toHaveBeenCalledTimes(loaded + 2);
+	expect(within(tesla).getByText('Fertig um 16:30 · Ziel 80 % bis 17:30')).toBeInTheDocument();
+	await vi.advanceTimersByTimeAsync(30_000);
+	expect(api.plan).toHaveBeenCalledTimes(loaded + 2);
+});
+
 it('zeigt die Ablehnung des Ziels an der Karte', async () => {
 	await show();
 	api.setTarget.mockRejectedValue(

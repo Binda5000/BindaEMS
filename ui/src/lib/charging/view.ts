@@ -441,6 +441,22 @@ function plannedText(
 	return null;
 }
 
+/** So weit dürfen das wirksame Ziel in Health und im Plan auseinanderliegen (Rundung) in % */
+const TARGET_TOLERANCE_PCT = 0.05;
+
+/**
+ * Passt das Auto im Plan zu „Geplant“ in Health (wirksames Ziel und Abfahrt)? Nach einer Änderung
+ * meldet Health das neue Ziel, bevor die app neu geplant hat. Ohne Stand in Health gilt der Plan.
+ */
+export function planFits(vehicle: VehicleHealth | null, car: PlanVehicle): boolean {
+	const planned = vehicle?.planned ?? null;
+	if (planned === null) return true;
+	return (
+		Math.abs(planned.target_soc_pct - car.target_soc_pct) <= TARGET_TOLERANCE_PCT &&
+		parseIso(planned.departure_at) === parseIso(car.departure_at)
+	);
+}
+
 /**
  * Der Stand von „Geplant“ wie „Fertig um“ und „Ziel erreichbar“ in Home Assistant: Meldet Health
  * das Ziel erreicht (mit bekanntem Ladestand), gilt das; sonst gilt das Auto im gültigen Plan, ohne

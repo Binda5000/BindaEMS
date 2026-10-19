@@ -314,6 +314,10 @@ def test_charging_page_in_the_guide_uses_the_planned_texts_of_the_ui() -> None:
     # nach einer Bedienung holt die Seite Health und Plan nach 2 s (SYSTEM_REFRESH_MS) neu
     assert "nach jeder Bedienung (auch „Übernehmen“) nach 2 s zusammen mit Health" in text
     assert "const SYSTEM_REFRESH_MS = 2000;" in source and "void plan.refresh();" in source
+    # passt der Plan nicht zu Ziel und Abfahrt in Health, fragt die Seite ihn alle 10 s neu
+    assert "sobald die app neu geplant hat" not in text
+    assert "fragt die Seite den Plan alle 10 s neu, bis er passt" in text
+    assert "const PLAN_RECHECK_MS = 10_000;" in source
     zeitplan = section.partition("### Zeitplan ")[2].split(" ### ", 1)[0]
     assert "Diagramm „Autos“" in zeitplan
 
