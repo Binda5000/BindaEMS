@@ -142,8 +142,8 @@ class PlannedTracker:
         - ``limit_pct``, ``sync``: das Ladelimit im Auto und ob der core es angleicht
         - ``full_w``: die volle Ladeleistung (``full_power_w``)
         - ``efficiency``: der Wirkungsgrad als Anteil, ``usable_kwh`` die nutzbare Kapazität
-        - ``slot_w``: die Leistung des gültigen Plan-Slots für das Auto (0, wenn der Slot es
-          nicht nennt); ``None`` ohne gültigen Slot
+        - ``slot_w``: die Leistung des gültigen Plan-Slots für das Auto; ``None`` ohne gültigen
+          Slot oder wenn der Slot das Auto nicht nennt (Ruling R22)
 
         Reihenfolge: ``reached`` vor ``plan`` vor ``due`` vor ``surplus``. Erreicht ist das Ziel
         nur mit bekanntem Ladestand (``measured`` oder ``estimated``) ab dem Ziel; es bleibt

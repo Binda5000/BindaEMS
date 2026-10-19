@@ -216,8 +216,10 @@ class IntentPlan(_Model):
 def intent_plan(plan: Plan, *, grid_charge_allowed: bool) -> IntentPlan:
     """Der bindende Teil von ``plan`` für die Absicht: die Slots vor ``valid_until``, höchstens
     ``MAX_INTENT_PLAN_SLOTS``. Ist ``grid_charge_allowed`` falsch, wird ``NETZLADEN`` zu
-    ``EIGENVERBRAUCH``. Die Ladeleistung je Auto geht auf ganze W gerundet mit. ``plan.id`` muss
-    gesetzt sein (der Plan ist gespeichert)."""
+    ``EIGENVERBRAUCH``. Die Ladeleistung je Auto geht auf ganze W gerundet mit. Jedes Auto aus
+    ``plan.vehicles`` steht in jedem Slot vor seiner Abfahrt, auch mit 0 W (Ruling R22): Ein Auto,
+    das ein gültiger Slot nicht nennt, kennt der Plan nicht, und der core lädt es nach der
+    spätesten Startzeit. ``plan.id`` muss gesetzt sein (der Plan ist gespeichert)."""
     if plan.id is None:
         raise ValueError("Nur ein gespeicherter Plan (mit id) geht in die Absicht")
 
@@ -225,13 +227,14 @@ def intent_plan(plan: Plan, *, grid_charge_allowed: bool) -> IntentPlan:
         intent = slot.intent
         if not grid_charge_allowed and intent.kind is BatteryIntentKind.NETZLADEN:
             intent = BatteryIntent()
+        planned = {car.key: 0 for car in plan.vehicles if slot.start < car.departure_at}
         return IntentPlanSlot(
             start=slot.start,
             intent=intent,
             budget_kw=slot.budget_kw,
             import_ct=slot.import_ct,
             support_soc_pct=slot.support_soc_pct,
-            vehicles={key: round(watts) for key, watts in slot.ev_w.items()},
+            vehicles=planned | {key: round(watts) for key, watts in slot.ev_w.items()},
         )
 
     kept = [slot for slot in plan.slots if slot.start < plan.valid_until]

@@ -26,7 +26,8 @@ class ActiveSlot:
 
     ``budget_kw``, ``import_ct`` und ``support_soc_pct`` sind die Werte des Slots; ``None`` heißt,
     der Plan nennt sie nicht. ``vehicles`` ist die Ladeleistung je Fahrzeug-Schlüssel in W (Plan 4b,
-    Entscheidung 9); ein Fahrzeug, das der Slot nicht nennt, lädt darin 0 W.
+    Entscheidung 9); ein Fahrzeug, das der Slot nicht nennt, kennt der Plan nicht, und für es gilt
+    kein Slot (Ruling R22).
     """
 
     plan_id: int

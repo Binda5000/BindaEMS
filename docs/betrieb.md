@@ -2346,8 +2346,9 @@ laden: Für ihn gibt es weder Ladestand noch Abfahrt.
   - `plan`: Der gültige Slot des Plans nennt das Auto mit einer Ladeleistung über 0. Diese Leistung ist
     ein **fester Bedarf** (wie Sofort, aber mit der Leistung des Plans); zusätzlicher PV-Überschuss
     kommt obendrauf. Grund `plan_power`.
-  - `due`: Es gibt keinen gültigen Slot (kein Plan, abgelaufen, oder das Auto wurde nach dem Plan
-    angesteckt) und die **späteste Startzeit** ist erreicht: volle Leistung bis zum Ziel, Grund
+  - `due`: Es gibt keinen gültigen Slot für das Auto (kein Plan, abgelaufen, oder der gültige Slot
+    nennt das Auto nicht, etwa weil es nach dem Plan angesteckt wurde) und die **späteste Startzeit**
+    ist erreicht: volle Leistung bis zum Ziel, Grund
     `latest_start`. Einmal erreicht, bleibt das bis zum Ziel oder bis zum Abstecken, auch wenn danach
     wieder ein Plan gilt, der das Auto mit 0 W nennt; nur ein Slot mit Leistung über 0 geht vor.
   - `surplus`: sonst, auch bei einem gültigen Slot mit 0 W: nur PV-Überschuss, mit den Zeiten des
@@ -2454,7 +2455,7 @@ wieder im PV-Überschuss. Für „Geplant“ hieße der Eintrag des Tesla etwa
 | `surplus_priority` | `kind`: `cars_first`, `battery_first` oder `battery_until_soc` (dann mit `soc_pct`) | `battery_until_soc`, 30 % |
 | `guest.mode` | `pv`, `min_pv`, `now`, `off`: der Modus eines Gastes, also eines Autos, das nicht in `config.yaml` steht (Abschnitt „Zuordnung Auto und Wallbox“); kein Boost, keine Übersteuerung, kein `planned` | `pv` |
 | `support` | `allowed` (`true` oder `false`) und `soc_pct` (Unterstützungsschwelle in %, von der USV-Reserve bis 100, oder `null` für `control.support_soc_pct`; Abschnitt „Akku und Spitzen“, „Akku-Unterstützung bedienen“) | erlaubt, Schwelle aus der Konfiguration |
-| `plan` | der Plan der app (Abschnitt „Planung“, „Übergabe an den core“): `id`, `created_at`, `valid_until`, `grid_charge_allowed` und 1 bis 8 `slots` mit `start`, `intent` (`kind` und `grid_charge_w`), `budget_kw`, `import_ct`, `support_soc_pct` und seit Plan 4b `vehicles` (Ladeleistung je Fahrzeug-Schlüssel in ganzen W, nur Autos in „Geplant“ mit Leistung über 0). Die app schickt ihn selbst; per `curl` übernimmst du ihn aus `GET /v1/intent`. | kein Plan |
+| `plan` | der Plan der app (Abschnitt „Planung“, „Übergabe an den core“): `id`, `created_at`, `valid_until`, `grid_charge_allowed` und 1 bis 8 `slots` mit `start`, `intent` (`kind` und `grid_charge_w`), `budget_kw`, `import_ct`, `support_soc_pct` und seit Plan 4b `vehicles` (Ladeleistung je Fahrzeug-Schlüssel in ganzen W; jedes Auto des Plans vor seiner Abfahrt, auch mit 0 W; ein Auto, das der Slot nicht nennt, lädt nach der spätesten Startzeit). Die app schickt ihn selbst; per `curl` übernimmst du ihn aus `GET /v1/intent`. | kein Plan |
 
 - Die Schlüssel der Fahrzeuge und Wallboxen sind die aus `config.yaml` (im Beispiel `tesla`, `egolf`
   und `evcs`, `twc`).
@@ -3080,7 +3081,7 @@ Neben den Feldern oben stehen in `GET /v1/health` diese, die die Bedienung brauc
 | `vehicles[].soc_pct` | der Ladestand des Fahrzeugs in %, mit dem die Regelung rechnet (seit Plan 4b, oben „Geplant“); `null` ohne Regelzyklus |
 | `vehicles[].soc_source` | `measured` (gemessen), `estimated` (aus dem Zähler der Wallbox geschätzt) oder `assumed` (angenommen, dann ist `soc_pct` 0); `null` ohne Regelzyklus |
 | `vehicles[].charge_limit_pct` | das Ladelimit im Auto in %, nur mit Tessie, sonst `null` |
-| `vehicles[].planned` | nur in „Geplant“ an einer Wallbox, sonst `null`: `state` (`plan`, `surplus`, `due`, `reached`), `target_soc_pct` (das wirksame Ziel), `departure_at` (die nächste Abfahrt, UTC), `need_kwh` (Bedarf aus der Wallbox), `latest_start` (späteste Startzeit, UTC; `null` ohne Bedarf) und `plan_w` (die Leistung des gültigen Slots für das Auto, 0, wenn der Slot es nicht nennt; `null` ohne gültigen Slot). Die app nimmt daraus die geplanten Autos (Abschnitt „Planung“, „Autos im Plan“) und „Fertig um“ ohne Plan. |
+| `vehicles[].planned` | nur in „Geplant“ an einer Wallbox, sonst `null`: `state` (`plan`, `surplus`, `due`, `reached`), `target_soc_pct` (das wirksame Ziel), `departure_at` (die nächste Abfahrt, UTC), `need_kwh` (Bedarf aus der Wallbox), `latest_start` (späteste Startzeit, UTC; `null` ohne Bedarf) und `plan_w` (die Leistung des gültigen Slots für das Auto; `null` ohne gültigen Slot und wenn der Slot das Auto nicht nennt). Die app nimmt daraus die geplanten Autos (Abschnitt „Planung“, „Autos im Plan“) und „Fertig um“ ohne Plan. |
 | `watchdog.armed` | der Watchdog am Cerbo ist für diesen core scharf (Abschnitt 13, „Gate“) |
 | `actuators[].watchdog_needed` | `true` bei Victron und EVCS: Diese Aktoren brauchen den scharfen Watchdog, um live zu gehen |
 
@@ -4184,8 +4185,9 @@ nennt.
   mit voller Leistung bis zur Abfahrt noch lädt (höchstens den Rest des Bedarfs), denn er gilt an der
   Abfahrt; deckt das den Bedarf, ist er das Ziel. „Fertig um“ ist leer, solange der Plan den Bedarf
   nicht schon im Horizont lädt.
-- **An den core** geht je Slot die Ladeleistung je Auto in ganzen Watt (`vehicles` im Slot, nur Autos
-  mit Leistung über 0). Der core lehnt negative Werte und unbekannte Fahrzeuge ab und begrenzt auf die
+- **An den core** geht je Slot die Ladeleistung je Auto in ganzen Watt (`vehicles` im Slot): jedes
+  Auto des Plans in jedem Slot vor seiner Abfahrt, auch mit 0 W. Ein Auto, das ein gültiger Slot
+  nicht nennt, kennt der Plan nicht; der core lädt es nach der spätesten Startzeit. Der core lehnt negative Werte und unbekannte Fahrzeuge ab und begrenzt auf die
   Höchstleistung des Fahrzeugs (Abschnitt „Laderegelung“, „Absicht per PUT /v1/intent“).
 - **Prüfung:** Die Bilanz zählt die Autos mit; je Auto ist die Leistung 0 oder zwischen kleinster und
   voller Leistung (1 W Toleranz), und nach der Abfahrt lädt kein Auto (Befunde unten, „Ersatzplan“).

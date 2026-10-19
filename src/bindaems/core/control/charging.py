@@ -93,7 +93,8 @@ Dazu legt die Regelung fest:
   Leistung ab der spätesten Startzeit, wenn kein gültiger Slot gilt) gilt das Auto
   wie Sofort mit dem Ziel des Phasenwächters an der Sicherung, sein Bedarf geht vor den PV-Autos
   vom Überschuss ab, und Überschuss darüber kommt obendrauf; ohne festen Bedarf wie PV, auch mit
-  einem gültigen Slot, der für das Auto 0 W nennt oder es nicht nennt. Am Ziel
+  einem gültigen Slot, der für das Auto 0 W nennt. Nennt der gültige Slot das Auto nicht (etwa
+  nach dem Plan angesteckt), gilt für das Auto kein Slot (Ruling R22). Am Ziel
   (``reached``) stoppt es wie „geladen“ und lädt auch keinen Überschuss (``target_reached``).
   Boost geht vor.
 - Ladelimit (Plan 4b, Präzisierung 9; ``ChargeLimits``): Mit ``charge_limit_sync`` bekommt ein
@@ -842,7 +843,8 @@ class ChargeController:
         Nur an einer Wallbox: Die volle Leistung ist die des Fahrzeugs dort (``full_power_w``).
         Ziel und Abfahrt kommen aus der Absicht, das Ladelimit aus Tessie, der Ansteckvorgang von
         der Wallbox. Die Leistung des Plans (``slot_w``) ist die des gültigen Slots ``active`` für
-        das Fahrzeug, 0 W, wenn er es nicht nennt; ohne gültigen Slot ``None``.
+        das Fahrzeug; ohne gültigen Slot oder wenn der Slot das Fahrzeug nicht nennt ``None``
+        (Ruling R22).
         """
         if vehicle.wallbox is None:
             return None
@@ -865,7 +867,7 @@ class ChargeController:
             full_w=full_w,
             efficiency=car.charge_efficiency_pct / 100.0,
             usable_kwh=car.usable_kwh,
-            slot_w=None if active is None else float(active.vehicles.get(key, 0)),
+            slot_w=_slot_w(active, key),
         )
         reserved_w = 0.0
         if state.state == "plan":
@@ -1316,6 +1318,15 @@ class ChargeController:
     def _changed(self, key: Key, value: CommandValue) -> bool:
         """Ob ``value`` vom letzten eigenen Wert dieser Art abweicht; ohne einen immer."""
         return self._last.changed(key, value)
+
+
+def _slot_w(active: ActiveSlot | None, key: str) -> float | None:
+    """Die Leistung des gültigen Slots ``active`` für das Fahrzeug ``key`` in W; ``None`` ohne
+    gültigen Slot und wenn der Slot das Fahrzeug nicht nennt (Ruling R22: dann gilt die späteste
+    Startzeit, etwa für ein Auto, das nach dem Plan angesteckt wurde, oder einen Plan aus 4a)."""
+    if active is None or key not in active.vehicles:
+        return None
+    return float(active.vehicles[key])
 
 
 def _planned_health(planned: PlannedState | None) -> dict[str, Any] | None:

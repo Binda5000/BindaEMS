@@ -2521,10 +2521,10 @@ def test_surplus_on_top_of_slot_power(cfg) -> None:
     ]
 
 
-@pytest.mark.parametrize("active", [slot(egolf=0), slot(tesla=6900)])
+@pytest.mark.parametrize("active", [slot(egolf=0), slot(egolf=0, tesla=6900)])
 def test_zero_slot_power_behaves_like_pv(cfg, active) -> None:
-    # 30 % und Abfahrt 14:00: Ohne Slot wäre die späteste Startzeit schon vorbei. Ein gültiger Slot
-    # mit 0 W (oder einer, der das Auto nicht nennt) lädt nur PV-Überschuss, mit den Zeiten von PV.
+    # 30 % und Abfahrt 14:00: Ohne Slot wäre die späteste Startzeit schon vorbei. Ein gültiger Slot,
+    # der das Auto mit 0 W nennt, lädt nur PV-Überschuss, mit den Zeiten von PV.
     kw = {"intent": planned_for(departure="14:00"), "egolf_obs": egolf_soc(30.0)}
     c = controller(cfg)
     assert evcs_commands(run(c, cfg, 200, active=active, grid_obs=NO_SHARE, **kw)) == [
@@ -2538,6 +2538,19 @@ def test_zero_slot_power_behaves_like_pv(cfg, active) -> None:
         cmd(120, CURRENT, 8.0, ("mode_planned", "pv_surplus")),
         cmd(120, CHARGING, True, ("mode_planned", "pv_surplus")),
     ]
+
+
+def test_valid_slot_without_the_car_uses_the_latest_start(cfg) -> None:
+    # 30 % und Abfahrt 14:00, die späteste Startzeit ist vorbei. Der gültige Slot nennt nur den
+    # Tesla (etwa ein Plan von vor dem Anstecken des e-Golf): Für den e-Golf gilt kein Slot, er lädt
+    # ab der spätesten Startzeit mit voller Leistung (Entscheidung 4, Ruling R22).
+    kw = {"intent": planned_for(departure="14:00"), "egolf_obs": egolf_soc(30.0)}
+    c = controller(cfg)
+    due = ("mode_planned", "latest_start")
+    found = run(c, cfg, 1, active=slot(tesla=6900), grid_obs=NO_SHARE, **kw)
+    assert evcs_commands(found) == [cmd(0, CURRENT, 16.0, due), cmd(0, CHARGING, True, due)]
+    health = c.health()[1]["planned"]
+    assert (health["state"], health["plan_w"]) == ("due", None)
 
 
 AT_10_A = evcs(charging=True, phase_a={"L1": 10.0, "L2": 10.0, "L3": 0.0}, power_w=4600.0)

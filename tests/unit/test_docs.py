@@ -184,6 +184,7 @@ def test_planned_mode_in_the_charging_section() -> None:
         "nicht ein zweites Mal",
         "3 Prozentpunkte",
         "keine Akku-Unterstützung",
+        "der gültige Slot nennt das Auto nicht",
     ):
         assert topic in text, topic
     assert (
@@ -206,6 +207,7 @@ def test_planning_section_describes_the_cars() -> None:
         "nie aus dem Akku",
         "Abfahrt hinter dem Horizont",
         "mit voller Leistung bis zur Abfahrt noch lädt",
+        "jedes Auto des Plans in jedem Slot vor seiner Abfahrt, auch mit 0 W",
     ):
         assert topic in text, topic
     for finding in ("Auto {Name} lädt außerhalb seiner Grenzen um HH:MM", "Auto {Name} lädt nach"):

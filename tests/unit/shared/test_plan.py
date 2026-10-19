@@ -149,6 +149,25 @@ def test_intent_plan_carries_vehicle_power() -> None:
     assert second.vehicles == {}
 
 
+def test_intent_plan_names_each_planned_car_until_its_departure() -> None:
+    # Ruling R22: Jedes Auto des Plans steht in jedem Slot vor seiner Abfahrt, auch mit 0 W; so
+    # unterscheidet der core „der Plan lädt das Auto nicht“ von „der Plan kennt das Auto nicht“.
+    plan = _stored(
+        DAY + "10:01:00+00:00",
+        ["10:00", "10:15", "10:30"],
+        intents=[{"ev_w": {"tesla": 7000.0}}, {}, {}],
+    )
+    cars = [
+        _vehicle(departure_at=at(DAY + "10:20:00+00:00")),
+        _vehicle(key="egolf", departure_at=at(DAY + "11:00:00+00:00")),
+    ]
+    plan = plan.model_copy(update={"vehicles": cars})
+    first, second, third = intent_plan(plan, grid_charge_allowed=True).slots
+    assert first.vehicles == {"tesla": 7000, "egolf": 0}
+    assert second.vehicles == {"tesla": 0, "egolf": 0}
+    assert third.vehicles == {"egolf": 0}  # der Tesla ist um 10:20 abgefahren
+
+
 def test_intent_plan_slot_vehicles_must_not_be_negative() -> None:
     with pytest.raises(ValidationError):
         IntentPlanSlot(
