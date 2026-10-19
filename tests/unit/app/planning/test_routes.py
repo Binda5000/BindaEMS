@@ -8,7 +8,7 @@ from datetime import timedelta
 import pytest
 from fastapi.testclient import TestClient
 from tests.app_helpers import ingest, login_as
-from tests.plan_helpers import sample_inputs, sample_plan
+from tests.plan_helpers import planned_health, sample_inputs, sample_plan, vehicle_health
 
 from bindaems.app.planning.explain import slot_text
 from bindaems.app.planning.routes import planning_router
@@ -99,6 +99,7 @@ async def test_get_plan_shape(client_as, planning):
         "estimated",
         "budget_kw",
         "support_soc_pct",
+        "ev_w",
         "codes",
         "text",
     }
@@ -119,8 +120,10 @@ async def test_get_plan_shape(client_as, planning):
         "expected_cost_eur",
         "baseline_cost_eur",
         "issues",
+        "vehicles",
         "slots",
     }
+    assert plan["vehicles"] == [] and plan["slots"][0]["ev_w"] == {}
 
 
 async def test_get_plan_values_follow_the_plan(client_as, planning):
@@ -139,6 +142,35 @@ async def test_get_plan_values_follow_the_plan(client_as, planning):
         assert item["battery_w"] == slot.charge_pv_w + slot.charge_grid_w - slot.discharge_w
         assert item["codes"] == [reason.code for reason in slot.reasons]
         assert item["text"] == slot_text(slot)
+
+
+async def test_get_plan_shows_the_planned_cars(client_as, planning, live):
+    live.health = planned_health(vehicle_health("tesla"), version=3)
+    stored = await planning.replan("manual")
+    assert stored is not None and [car.key for car in stored.vehicles] == ["tesla"]
+    plan = client_as("viewer").get("/api/plan").json()["plan"]
+    (car,) = plan["vehicles"]
+    source = stored.vehicles[0]
+    assert car == {
+        "key": "tesla",
+        "name": source.name,
+        "wallbox": "twc",
+        "target_soc_pct": 80.0,
+        "departure_at": source.departure_at.isoformat(),
+        "soc_start_pct": 40.0,
+        "soc_assumed": False,
+        "limit_pct": None,
+        "need_kwh": source.need_kwh,
+        "planned_kwh": source.planned_kwh,
+        "shortfall_kwh": source.shortfall_kwh,
+        "expected_soc_pct": source.expected_soc_pct,
+        "finish_at": source.finish_at.isoformat() if source.finish_at else None,
+        "reachable": source.reachable,
+    }
+    assert car["departure_at"].endswith("+00:00") and car["planned_kwh"] > 0
+    for item, slot in zip(plan["slots"], stored.slots, strict=True):
+        assert item["ev_w"] == slot.ev_w
+    assert any(item["ev_w"].get("tesla", 0) > 0 for item in plan["slots"])
 
 
 async def test_get_plan_marks_expired_plan(client_as, planning, clock):

@@ -6,7 +6,7 @@ from __future__ import annotations
 from dataclasses import replace
 
 import pytest
-from tests.plan_helpers import at, sample_plan
+from tests.plan_helpers import at, planned_health, sample_plan, vehicle_health
 
 from bindaems.app.planning.triggers import (
     Fingerprint,
@@ -16,7 +16,9 @@ from bindaems.app.planning.triggers import (
     peak_rose,
     settings_relevant,
     soc_deviates,
+    vehicles_fingerprint,
 )
+from bindaems.shared.control import ChargeMode, Intent, VehicleIntent
 from bindaems.shared.settings import FeedInSettings, PlanningSettings, RuntimeSettings
 
 
@@ -113,3 +115,76 @@ def test_exact_thresholds_are_no_change_despite_float_noise():
     assert 8.3 - 3.3 > 5.0  # Rundungsrauschen
     moment = at("2026-10-16T10:07:30+00:00")
     assert not soc_deviates(soc, moment, 8.3) and soc_deviates(soc, moment, 8.4)
+
+
+# --- Geplante Autos (Plan 4b, Entscheidung 10) ---------------------------------------------
+
+PLANNED_INTENT = Intent(version=3, vehicles={"tesla": VehicleIntent(mode=ChargeMode.PLANNED)})
+
+
+def fingerprint_of(*entries: dict) -> tuple:
+    """Fingerabdruck der geplanten Autos aus Health mit diesen Einträgen (Absicht Version 3)."""
+    return vehicles_fingerprint(planned_health(*entries, version=3), PLANNED_INTENT)
+
+
+def test_plug_in_of_a_planned_car_triggers():
+    old = Fingerprint(None, 0, None, None, fingerprint_of(vehicle_health("tesla", plugged=False)))
+    new = replace(old, vehicles=fingerprint_of(vehicle_health("tesla", plugged=True)))
+    assert changed(old, new) == ["vehicles"]
+    assert changed(new, old) == ["vehicles"]  # Ausstecken
+    assert changed(new, new) == []
+
+
+def test_target_change_triggers_but_soc_drift_does_not():
+    base = fingerprint_of(vehicle_health("tesla"))
+    old = Fingerprint(None, 0, None, None, base)
+    # Ladestand, Quelle gemessen/geschätzt und Laden an/aus ändern sich laufend: kein Auslöser
+    drift = fingerprint_of(
+        vehicle_health("tesla", soc_pct=47.5, soc_source="estimated", charging=True)
+    )
+    assert changed(old, replace(old, vehicles=drift)) == []
+    for change in (
+        {"target": 90.0},
+        {"departure_at": "2026-10-18T05:00:00+00:00"},
+        {"wallbox": "evcs"},
+        {"charge_limit_pct": 70.0},
+        {"soc_pct": None, "soc_source": "assumed"},  # Ladestand angenommen
+    ):
+        moved = replace(old, vehicles=fingerprint_of(vehicle_health("tesla", **change)))
+        assert changed(old, moved) == ["vehicles"], change
+
+
+def test_car_entering_or_leaving_planned_mode_triggers():
+    planned = fingerprint_of(vehicle_health("tesla"))
+    other = fingerprint_of(vehicle_health("tesla", mode="pv"))
+    old = Fingerprint(None, 0, None, None, other)
+    assert other == () and planned != ()
+    assert changed(old, replace(old, vehicles=planned)) == ["vehicles"]
+    assert changed(replace(old, vehicles=planned), old) == ["vehicles"]
+
+
+def test_vehicles_trigger_comes_after_the_forecasts():
+    old = Fingerprint(None, 0, None, None)
+    new = Fingerprint(
+        at("2026-10-16T21:45:00+00:00"),
+        4,
+        at("2026-10-16T10:07:00+00:00"),
+        at("2026-10-16T10:09:00+00:00"),
+        fingerprint_of(vehicle_health("tesla")),
+    )
+    assert changed(old, new) == ["prices", "pv_forecast", "load_forecast", "vehicles"]
+
+
+def test_vehicles_fingerprint_is_empty_without_trusted_health():
+    health = planned_health(vehicle_health("tesla"), version=3)
+    assert vehicles_fingerprint(health, PLANNED_INTENT) != ()
+    assert vehicles_fingerprint(None, PLANNED_INTENT) == ()
+    assert vehicles_fingerprint(health, None) == ()
+    assert vehicles_fingerprint(health, PLANNED_INTENT.model_copy(update={"version": 4})) == ()
+
+
+def test_vehicles_fingerprint_ignores_unusable_entries():
+    health = planned_health(vehicle_health("tesla"), version=3)
+    health["vehicles"].append({"mode": "planned", "plugged": True})  # ohne Schlüssel
+    health["vehicles"].append("kaputt")
+    assert vehicles_fingerprint(health, PLANNED_INTENT) == fingerprint_of(vehicle_health("tesla"))

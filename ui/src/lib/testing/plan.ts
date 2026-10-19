@@ -43,6 +43,7 @@ export function slot(
 		estimated: false,
 		budget_kw: null,
 		support_soc_pct: null,
+		ev_w: {},
 		codes: [code],
 		text: `Satz ${code}`,
 		...changes

@@ -4110,7 +4110,10 @@ Für Skripte, mit Sitzung und Rolle wie das UI:
 
 - `GET /api/plan` (ab „Lesen“): der Status der Komponente, `grid_charge_allowed` und der letzte Plan
   mit `valid`, Kosten in Euro, Auffälligkeiten und allen Slots samt Satz (`text`) und Codes. Ohne
-  Plan ist `plan` leer.
+  Plan ist `plan` leer. Je Slot nennt `ev_w` die geplante Ladeleistung je Auto (Schlüssel aus
+  `config.yaml`, in W, nur Autos mit Leistung über 0); `plan.vehicles` fasst jedes geplante Auto
+  zusammen (Ziel, Abfahrt, Ladestand zu Beginn und „angenommen“, geplante Energie, erwarteter
+  Ladestand, `finish_at` und `reachable`), leer ohne Auto im Modus „Geplant“.
 - `GET /api/plan/review?day=JJJJ-MM-TT` (ab „Lesen“, ohne `day` heute): Plan gegen Ist je
   vergangener Viertelstunde des Tages (`slots` mit `planned` und `actual`, `null` ohne Plan bzw.
   ohne Abrechnung) und die Summen (`totals`). Tage vor den letzten 30 und künftige Tage ergeben 422.

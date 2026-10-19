@@ -26,6 +26,7 @@ import structlog
 from pydantic import ValidationError
 
 from bindaems.app.audit import Source
+from bindaems.app.control.intent import _trusted
 from bindaems.app.core_link import LiveState
 from bindaems.app.forecast.load import LoadForecastService
 from bindaems.app.forecast.service import ForecastService
@@ -55,6 +56,7 @@ from bindaems.app.planning.triggers import (
     peak_rose,
     settings_relevant,
     soc_deviates,
+    vehicles_fingerprint,
 )
 from bindaems.app.planning.vehicles import planned_vehicles
 from bindaems.app.prices.service import PriceService
@@ -302,15 +304,24 @@ class PlanningService:
             await self._wait(tick)
 
     async def _watch(self, old: Fingerprint | None, now: datetime) -> Fingerprint:
-        """Prüft Fingerabdrücke, SOC und Monatsspitze und fordert die Auslöser an."""
+        """Prüft Fingerabdrücke (auch der geplanten Autos), SOC und Monatsspitze und fordert die
+        Auslöser an."""
         last_price, primary, peak_kw = await asyncio.to_thread(self._observe, now)
         pv = self._forecast.latest()
         load = self._load_forecast.latest()
+        health = self._live.health
+        intent = self._intent_for(health)
+        vehicles = vehicles_fingerprint(health, intent)
+        if old is not None and (intent is None or not _trusted(intent.version, health)):
+            # Health fehlt oder regelt noch nicht mit der Absicht (Neustart des core): das ist
+            # keine Änderung der Autos; der Planer sähe sie dann nur nicht
+            vehicles = old.vehicles
         new = Fingerprint(
             last_price=last_price,
             primary=primary,
             pv_issued=pv.issued_at if pv is not None else None,
             load_issued=load.issued_at if load is not None else None,
+            vehicles=vehicles,
         )
         for trigger in changed(old, new):
             self.request(trigger)

@@ -19,7 +19,7 @@ from bindaems.app.planning.review import review
 from bindaems.app.planning.service import PlanningService
 from bindaems.app.planning.store import KEEP_PLANS, PlanStore
 from bindaems.app.settings.service import SettingsService, VersionConflictError
-from bindaems.shared.plan import Plan, PlanSlot
+from bindaems.shared.plan import Plan, PlanSlot, PlanVehicle
 from bindaems.shared.timeutil import LOCAL_TZ, SLOT, Clock, local_day_slots
 
 
@@ -49,8 +49,28 @@ def slot_json(slot: PlanSlot) -> dict[str, Any]:
         "estimated": slot.estimated,
         "budget_kw": slot.budget_kw,
         "support_soc_pct": slot.support_soc_pct,
+        "ev_w": dict(slot.ev_w),
         "codes": [reason.code for reason in slot.reasons],
         "text": slot_text(slot),
+    }
+
+
+def vehicle_json(car: PlanVehicle) -> dict[str, Any]:
+    return {
+        "key": car.key,
+        "name": car.name,
+        "wallbox": car.wallbox,
+        "target_soc_pct": car.target_soc_pct,
+        "departure_at": car.departure_at.isoformat(),
+        "soc_start_pct": car.soc_start_pct,
+        "soc_assumed": car.soc_assumed,
+        "limit_pct": car.limit_pct,
+        "need_kwh": car.need_kwh,
+        "planned_kwh": car.planned_kwh,
+        "shortfall_kwh": car.shortfall_kwh,
+        "expected_soc_pct": car.expected_soc_pct,
+        "finish_at": car.finish_at.isoformat() if car.finish_at is not None else None,
+        "reachable": car.reachable,
     }
 
 
@@ -72,6 +92,7 @@ def plan_json(plan: Plan, *, valid: bool) -> dict[str, Any]:
         "expected_cost_eur": _euro(plan.expected_cost_ct),
         "baseline_cost_eur": _euro(plan.baseline_cost_ct),
         "issues": list(plan.issues),
+        "vehicles": [vehicle_json(car) for car in plan.vehicles],
         "slots": [slot_json(slot) for slot in plan.slots],
     }
 

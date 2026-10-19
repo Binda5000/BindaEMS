@@ -1014,10 +1014,36 @@ export const PlanSlotSchema = v.object({
 	budget_kw: NullableNumber,
 	/** Plan-Schwelle der Akku-Unterstützung in % */
 	support_soc_pct: NullableNumber,
+	/** geplante Ladeleistung je Fahrzeug in W (Schlüssel aus `vehicles`; nur Autos mit Leistung) */
+	ev_w: v.record(v.string(), v.number()),
 	codes: v.array(PlanReasonCodeSchema),
 	text: v.string()
 });
 export type PlanSlot = v.InferOutput<typeof PlanSlotSchema>;
+
+/** Zusammenfassung des Plans für ein geplantes Auto (Plan 4b) */
+export const PlanVehicleSchema = v.object({
+	key: v.string(),
+	name: v.string(),
+	wallbox: v.string(),
+	/** wirksames Ziel in % (unter dem Ladelimit des Autos, wenn es nicht angeglichen wird) */
+	target_soc_pct: v.number(),
+	departure_at: Iso,
+	/** Ladestand zu Beginn in %; `soc_assumed`: nicht gemessen, nicht geschätzt */
+	soc_start_pct: v.number(),
+	soc_assumed: v.boolean(),
+	/** Ladelimit im Auto in %, `null` unbekannt */
+	limit_pct: NullableNumber,
+	need_kwh: v.number(),
+	planned_kwh: v.number(),
+	shortfall_kwh: v.number(),
+	/** Ladestand an der Abfahrt, wenn der Plan so läuft */
+	expected_soc_pct: v.number(),
+	/** Ende des letzten Slots mit Laden, `null` ohne Laden */
+	finish_at: v.nullable(Iso),
+	reachable: v.boolean()
+});
+export type PlanVehicle = v.InferOutput<typeof PlanVehicleSchema>;
 
 export const PlanSchema = v.object({
 	id: v.nullable(v.number()),
@@ -1040,6 +1066,7 @@ export const PlanSchema = v.object({
 	expected_cost_eur: v.number(),
 	baseline_cost_eur: v.number(),
 	issues: v.array(v.string()),
+	vehicles: v.array(PlanVehicleSchema),
 	slots: v.array(PlanSlotSchema)
 });
 export type Plan = v.InferOutput<typeof PlanSchema>;

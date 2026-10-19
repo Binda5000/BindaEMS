@@ -3,14 +3,18 @@
 Der Dienst prüft alle ``WATCH_S`` Sekunden Fingerabdrücke von Preisen und Prognosen, den SOC
 gegen den Plan und die Monatsspitze gegen den Plan; die Viertelstunde kommt zur Minute 1 nach
 Slotbeginn. Einstellungen lösen nur aus, wenn sich Planung, Tarif oder Einspeisung ändern.
+Neu in Plan 4b: ein Fingerabdruck der geplanten Autos (Entscheidung 10).
 """
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import Final
+from typing import Any, Final
 
+from bindaems.app.control.intent import _health_vehicles, _trusted
+from bindaems.shared.control import ChargeMode, Intent
 from bindaems.shared.plan import Plan, PlanTrigger
 from bindaems.shared.settings import RuntimeSettings
 from bindaems.shared.timeutil import SLOT, ensure_utc, slot_start
@@ -24,16 +28,18 @@ PEAK_RISE_KW: Final = 0.05
 @dataclass(frozen=True)
 class Fingerprint:
     """Stand der Eingangsdaten: letzter bekannter Preis-Slot und Zahl der ``primary``-Slots im
-    Fenster, Ausgabezeit von PV- und Lastprognose."""
+    Fenster, Ausgabezeit von PV- und Lastprognose, Stand der geplanten Autos
+    (``vehicles_fingerprint``)."""
 
     last_price: datetime | None
     primary: int
     pv_issued: datetime | None
     load_issued: datetime | None
+    vehicles: tuple[Any, ...] = ()
 
 
 def changed(old: Fingerprint | None, new: Fingerprint) -> list[PlanTrigger]:
-    """Auslöser aus zwei Fingerabdrücken, in der Reihenfolge Preise, PV-, Lastprognose.
+    """Auslöser aus zwei Fingerabdrücken, in der Reihenfolge Preise, PV-, Lastprognose, Autos.
 
     Neue Preise heißt: ein anderer letzter Slot oder mehr ``primary``-Slots (Ersatzpreise
     ersetzt). Weniger ``primary``-Slots löst nicht aus, denn das Fenster wandert mit dem
@@ -49,7 +55,44 @@ def changed(old: Fingerprint | None, new: Fingerprint) -> list[PlanTrigger]:
         result.append("pv_forecast")
     if new.load_issued != old.load_issued:
         result.append("load_forecast")
+    if new.vehicles != old.vehicles:
+        result.append("vehicles")
     return result
+
+
+def vehicles_fingerprint(
+    health: Mapping[str, Any] | None, intent: Intent | None
+) -> tuple[Any, ...]:
+    """Stand der geplanten Autos aus Health (Plan 4b, Entscheidung 10), sortiert nach Schlüssel.
+
+    Je Fahrzeug im Modus „Geplant“ ein Eintrag aus Wallbox, angesteckt, wirksamem Ziel,
+    Abfahrt, „Ladestand angenommen“ und Ladelimit des Tesla. Ein Auto, das in „Geplant“ kommt
+    oder es verlässt, ändert die Menge der Einträge. Ladestand (gemessen oder geschätzt),
+    „lädt gerade“ und die späteste Startzeit gehören nicht dazu: Sie ändern sich laufend und
+    der Planer rechnet jede Viertelstunde ohnehin mit dem aktuellen Ladestand neu.
+
+    Leer ohne Absicht und solange Health der Absicht nicht traut (wie ``planned_vehicles``).
+    """
+    if intent is None or not _trusted(intent.version, health):
+        return ()
+    entries: list[tuple[Any, ...]] = []
+    for key, entry in _health_vehicles(health).items():
+        if entry.get("mode") != ChargeMode.PLANNED.value:
+            continue
+        planned = entry.get("planned")
+        planned = planned if isinstance(planned, dict) else {}
+        entries.append(
+            (
+                key,
+                entry.get("wallbox"),
+                entry.get("plugged") is True,
+                planned.get("target_soc_pct"),
+                planned.get("departure_at"),
+                entry.get("soc_source") not in ("measured", "estimated"),
+                entry.get("charge_limit_pct"),
+            )
+        )
+    return tuple(sorted(entries, key=lambda item: str(item[0])))
 
 
 def next_tick(now: datetime) -> datetime:

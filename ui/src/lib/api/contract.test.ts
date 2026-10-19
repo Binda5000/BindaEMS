@@ -287,4 +287,35 @@ describe('Zeitplan', () => {
 		const slots = demo.plan.slots as Record<string, unknown>[];
 		expect(issues(s.PlanSlotSchema, { ...slots[0], intent: 'LADEN' })).not.toEqual([]);
 	});
+
+	it('kennt die geplanten Autos und die Ladeleistung je Slot', () => {
+		const slots = demo.plan.slots as Record<string, unknown>[];
+		expect(slots[0]?.ev_w).toEqual({});
+		expect(demo.plan.vehicles).toEqual([]);
+		expect(issues(s.PlanSlotSchema, { ...slots[0], ev_w: { tesla: 6900 } })).toEqual([]);
+		expect(issues(s.PlanSlotSchema, { ...slots[0], ev_w: { tesla: '6900' } })).not.toEqual([]);
+		const car = {
+			key: 'tesla',
+			name: 'Tesla Model 3',
+			wallbox: 'twc',
+			target_soc_pct: 80,
+			departure_at: '2026-10-10T05:00:00+00:00',
+			soc_start_pct: 40,
+			soc_assumed: false,
+			limit_pct: null,
+			need_kwh: 24,
+			planned_kwh: 24,
+			shortfall_kwh: 0,
+			expected_soc_pct: 80,
+			finish_at: '2026-10-10T03:15:00+00:00',
+			reachable: true
+		};
+		expect(issues(s.PlanSchema, { ...demo.plan, vehicles: [car] })).toEqual([]);
+		expect(
+			issues(s.PlanSchema, { ...demo.plan, vehicles: [{ ...car, finish_at: null, limit_pct: 70 }] })
+		).toEqual([]);
+		const incomplete: Partial<typeof car> = { ...car };
+		delete incomplete.reachable;
+		expect(issues(s.PlanSchema, { ...demo.plan, vehicles: [incomplete] })).not.toEqual([]);
+	});
 });

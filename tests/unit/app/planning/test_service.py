@@ -673,3 +673,38 @@ async def test_persistent_trigger_waits_between_runs(service_with, live, forecas
     assert service.status().unavailable == "keine PV-Prognose"
     assert collects.count("soc") >= 5
     assert len(collects) <= len(sleeps) + 2  # höchstens ein Lauf je Wartezeit
+
+
+async def test_vehicle_change_requests_replan(service_with, live):
+    live.health = planned_health(vehicle_health("tesla", plugged=False), version=3)
+    intent = Intent(version=3, vehicles={"tesla": VehicleIntent(mode=ChargeMode.PLANNED)})
+    calls: list[PlanInputs] = []
+    service = service_with(solver=recording(calls), sleep=fast_sleep(), intent=lambda: intent)
+    async with running(service):
+        await until(lambda: len(calls) == 1)
+        await asyncio.sleep(0.05)  # die Schleife kennt den Fingerabdruck
+        live.health = planned_health(vehicle_health("tesla"), version=3)  # angesteckt
+        await until(lambda: len(calls) == 2)
+        live.health = planned_health(vehicle_health("tesla", soc_pct=45.0), version=3)
+        await asyncio.sleep(0.1)  # Ladestand allein löst nichts aus
+        live.health = planned_health(vehicle_health("tesla", target=90.0), version=3)
+        await until(lambda: len(calls) == 3)
+    assert triggers(calls) == ["start", "vehicles", "vehicles"]
+    assert [[car.key for car in inputs.vehicles] for inputs in calls] == [[], ["tesla"], ["tesla"]]
+    assert calls[2].vehicles[0].target_soc_pct == 90.0
+
+
+async def test_untrusted_health_does_not_flap_the_vehicles_trigger(service_with, live):
+    """Fällt Health kurz weg (Neustart des core), ist das keine Änderung der Autos."""
+    live.health = planned_health(vehicle_health("tesla"), version=3)
+    intent = Intent(version=3, vehicles={"tesla": VehicleIntent(mode=ChargeMode.PLANNED)})
+    calls: list[PlanInputs] = []
+    service = service_with(solver=recording(calls), sleep=fast_sleep(), intent=lambda: intent)
+    async with running(service):
+        await until(lambda: len(calls) == 1)
+        await asyncio.sleep(0.05)
+        live.health = None
+        await asyncio.sleep(0.1)
+        live.health = planned_health(vehicle_health("tesla"), version=3)
+        await asyncio.sleep(0.1)
+    assert triggers(calls) == ["start"]

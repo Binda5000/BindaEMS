@@ -467,3 +467,17 @@ async def test_a_restored_boost_is_not_revived_by_plan_sends_after_a_restart(
     assert results == ["failed", "sent"]
     assert fake_client.valid is not None
     assert fake_client.valid.vehicles["egolf"].boost_until is None  # nicht zurückgeschickt
+
+
+async def test_sender_sends_vehicle_power(
+    sender: PlanSender, fake_client: FakeCoreClient, planning: FakePlanning
+) -> None:
+    slots = [
+        slot.model_copy(update={"ev_w": {"tesla": 6899.6} if index == 0 else {}})
+        for index, slot in enumerate(planning.current().slots)
+    ]
+    planning.plan = planning.current().model_copy(update={"slots": slots})
+    assert await sender.sync() == "sent"
+    sent = fake_client.sent[-1].plan
+    assert sent is not None
+    assert [slot.vehicles for slot in sent.slots] == [{"tesla": 6900}, {}, {}, {}]
