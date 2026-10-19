@@ -8,6 +8,9 @@ kommen aus Health, Wirkungsgrad, Kapazität und Ladeleistung aus der Konfigurati
   (``core.control.planned``, Präzisierung 6). Die app importiert nichts aus dem core, darum steht
   sie zweimal; ``tests/unit/test_planned_formula.py`` vergleicht beide.
 - ``horizon_need``: der Teil des Bedarfs, der im Horizont geladen werden muss
+
+Alle Energien der Autos stehen auf der Wallbox-Seite (Ruling R10): Bedarf, Bedarf im Horizont
+und die nach Regel R2 erlaubte Netzenergie; der Wirkungsgrad steckt nur in ``need_kwh``.
 - ``grid_allowed``: Regel R2, die Netzenergie, die ein Auto bis zur Abfahrt laden darf
 - ``planned_vehicles``: die geplanten Autos eines Laufs
 
@@ -53,6 +56,8 @@ class PlanVehicleInput(_Model):
     - ``need_kwh``: der Bedarf bis zum Ziel aus der Wallbox (``need_kwh``)
     - ``horizon_need_kwh``: der Teil davon, der im Horizont geladen werden muss (``horizon_need``)
     - ``grid_allowed_kwh``: so viel davon darf bis zur Abfahrt aus dem Netz kommen (Regel R2)
+
+    Die drei Energien stehen auf der Wallbox-Seite (Ruling R10).
     """
 
     key: str
@@ -111,19 +116,18 @@ def _min_power_w(
     return min_a * voltage_v * vehicle.phases
 
 
-def horizon_need(
-    need: float, max_w: float, efficiency: float, departure_at: datetime, horizon_end: datetime
-) -> float:
+def horizon_need(need: float, max_w: float, departure_at: datetime, horizon_end: datetime) -> float:
     """Der Teil des Bedarfs in kWh, der im Horizont geladen werden muss (Entscheidung 6).
 
     Liegt die Abfahrt hinter dem Horizontende, muss nur das geladen werden, was danach mit voller
-    Leistung nicht mehr ginge: ``max(0, need − max_w / 1000 · efficiency · Stunden zwischen
-    Horizontende und Abfahrt)``; sonst der ganze Bedarf.
+    Leistung nicht mehr ginge: ``max(0, need − max_w / 1000 · Stunden zwischen Horizontende und
+    Abfahrt)``; sonst der ganze Bedarf. Gerechnet wird auf der Wallbox-Seite wie ``need_kwh``
+    (Ruling R10): Der Wirkungsgrad steckt schon im Bedarf und kommt hier nicht noch einmal dazu.
     """
     after_h = (ensure_utc(departure_at) - ensure_utc(horizon_end)).total_seconds() / 3600
     if after_h <= 0:
         return need
-    return max(0.0, need - max_w / 1000 * efficiency * after_h)
+    return max(0.0, need - max_w / 1000 * after_h)
 
 
 def _slots_before(departure_at: datetime, slots: Sequence[SlotInput]) -> int:
@@ -252,7 +256,7 @@ def planned_vehicles(
         efficiency = vehicle.charge_efficiency_pct / 100
         max_w = full_power_w(vehicle, wallbox, volts)
         need = need_kwh(soc_pct, target, vehicle.usable_kwh, efficiency)
-        within = horizon_need(need, max_w, efficiency, departure_at, horizon_end)
+        within = horizon_need(need, max_w, departure_at, horizon_end)
         cars.append(
             PlanVehicleInput(
                 key=key,

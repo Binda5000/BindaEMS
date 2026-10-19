@@ -173,14 +173,13 @@ def test_r2_leaves_the_early_surplus_for_a_car_that_leaves_earlier() -> None:
 def test_departure_beyond_horizon_reduces_the_need() -> None:
     horizon_end = at("2026-10-17T12:00:00+00:00")
     departure = horizon_end + 2 * HOUR
-    assert horizon_need(30.0, 11040.0, 0.9, departure, horizon_end) == pytest.approx(
-        30 - 11.04 * 0.9 * 2
-    )
-    assert horizon_need(30.0, 11040.0, 0.9, departure, horizon_end) == pytest.approx(10.128)
+    # Wallbox-Seite (Ruling R10): need enthält η schon, die Zeit danach zählt ohne η
+    assert horizon_need(30.0, 11040.0, departure, horizon_end) == pytest.approx(30 - 11.04 * 2)
+    assert horizon_need(30.0, 11040.0, departure, horizon_end) == pytest.approx(7.92)
     # Abfahrt im Horizont: der ganze Bedarf; weit dahinter: nichts
-    assert horizon_need(30.0, 11040.0, 0.9, horizon_end, horizon_end) == 30.0
-    assert horizon_need(30.0, 11040.0, 0.9, horizon_end - HOUR, horizon_end) == 30.0
-    assert horizon_need(30.0, 11040.0, 0.9, horizon_end + 10 * HOUR, horizon_end) == 0.0
+    assert horizon_need(30.0, 11040.0, horizon_end, horizon_end) == 30.0
+    assert horizon_need(30.0, 11040.0, horizon_end - HOUR, horizon_end) == 30.0
+    assert horizon_need(30.0, 11040.0, horizon_end + 10 * HOUR, horizon_end) == 0.0
 
 
 def test_planned_vehicles_carry_horizon_need_and_allowance(cfg: Config) -> None:
@@ -190,7 +189,7 @@ def test_planned_vehicles_carry_horizon_need_and_allowance(cfg: Config) -> None:
     departure = (horizon_end + 2 * HOUR).isoformat()
     health = planned_health(vehicle_health("tesla", soc_pct=40.0, departure_at=departure))
     [tesla] = planned_vehicles(cfg, health, _intent(), now=NOW, slots=slots)
-    expected = horizon_need(tesla.need_kwh, tesla.max_w, 0.9, tesla.departure_at, horizon_end)
+    expected = horizon_need(tesla.need_kwh, tesla.max_w, tesla.departure_at, horizon_end)
     assert tesla.horizon_need_kwh == pytest.approx(expected) and expected < tesla.need_kwh
     assert tesla.grid_allowed_kwh == pytest.approx(expected)
 
