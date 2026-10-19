@@ -26,6 +26,15 @@ from bindaems.shared.timeutil import ManualClock
 THERMAL = "thermal.klima"
 OFFSET = CommandKind.SETPOINT_OFFSET
 CMI = ("192.168.81.92", 5442)
+RECEIVE = {
+    "actual_c": {"node": 56, "analog": 1, "unit": 1},
+    "setpoint_c": {"node": 56, "analog": 2, "unit": 1},
+    "offset_active_k": {"node": 56, "analog": 3, "unit": 1},
+    "cooling": {"node": 56, "digital": 2},
+    "venting": {"node": 56, "digital": 3},
+    "heating": {"node": 56, "digital": 4},
+    "running": {"node": 56, "digital": 5},
+}
 
 
 def packet(offset_k: float, *, running: bool = True, cooling: bool = True) -> bytes:
@@ -259,7 +268,7 @@ async def test_health_has_thermal_block(runtime_with_coe) -> None:
         "running": True,
         "actual_c": 24.0,
         "setpoint_c": 22.0,
-        "base_setpoint_c": 22.0,  # der Adapter sendet 0 (kein Wunsch): Soll ohne Versatz
+        "base_setpoint_c": 23.0,  # die UVR rechnet das Echo −1,0 K in setpoint_c ein
         "offset_sent_k": 0.0,
         "offset_active_k": -1.0,
         "power_w": pytest.approx(1230.0),
@@ -291,3 +300,77 @@ def test_health_thermal_block_without_adapter(runtime_env) -> None:
     )
     snap: Snapshot = rt.store.snapshot()
     assert snap.get("thermal.klima.offset_sent_k") is None
+
+
+def test_base_setpoint_falls_back_to_the_sent_offset() -> None:
+    from tests.helpers import snap as make_snap
+
+    from bindaems.core.runtime import _thermal_json
+
+    device = CoeOffsetConfig.model_validate(
+        {"kind": "coe_offset", "cmi_host": "192.168.81.92", "receive": RECEIVE}
+    )
+    p = "thermal.klima."
+    without_echo = make_snap({p + "setpoint_c": 23.5, p + "offset_sent_k": 0.5})
+    assert _thermal_json("klima", device, without_echo, True, {})["base_setpoint_c"] == 23.0
+    with_echo = make_snap(
+        {p + "setpoint_c": 23.5, p + "offset_sent_k": 0.5, p + "offset_active_k": 1.0}
+    )
+    assert _thermal_json("klima", device, with_echo, True, {})["base_setpoint_c"] == 22.5
+    no_setpoint = make_snap({p + "offset_sent_k": 0.5, p + "offset_active_k": 1.0})
+    assert _thermal_json("klima", device, no_setpoint, True, {})["base_setpoint_c"] is None
+
+
+async def test_failing_regulation_withdraws_the_permit(runtime_with_coe, monkeypatch) -> None:
+    env = await runtime_with_coe()
+    env.wanted = [0.5]
+    regulate_until_control(env)
+    env.echo(0.5)
+    run(env.rt, env.clock, 1)
+    assert env.sent()[-1] == 5 and permitted(env)
+
+    def broken(self: Regulation, inputs: Any) -> list[ControlCommand]:
+        raise RuntimeError("Testfehler in der Regelung")
+
+    monkeypatch.setattr(Regulation, "step", broken)
+    env.echo(0.5)
+    run(env.rt, env.clock, 1)
+    assert env.rt.regulation.failed
+    assert env.sent()[-1] == 0 and env.adapter.held_k == 0.0
+    # solange sie wirft, gibt es keine neue Freigabe
+    for _ in range(15):
+        env.echo(0.0)
+        run(env.rt, env.clock, 1)
+        assert not permitted(env)
+    assert set(env.sent()[-15:]) <= {0}
+    assert "control.exception" in {alarm["id"] for alarm in env.rt.health().alarms}
+
+
+async def test_permit_in_degraded(runtime_with_coe) -> None:
+    env = await runtime_with_coe()
+    env.wanted = [0.5]
+    # Die EVCS ist nicht erreichbar: eingeschränkter Betrieb, die Regelung läuft weiter
+    env.rt.store.register_source("evcs", 5.0)
+    for _ in range(40):
+        env.echo(0.0)
+        run(env.rt, env.clock, 1)
+        if env.rt.health().mode == "DEGRADED":
+            break
+    health = env.rt.health()
+    assert (health.mode, health.mode_reasons) == ("DEGRADED", ["EVCS „evcs“ nicht erreichbar."])
+    assert env.sent()[-1] == 5
+    assert permitted(env)
+
+
+async def test_source_does_not_clash_with_a_wallbox_of_the_same_key(runtime_with_coe) -> None:
+    # Ruling R12: die Quelle heißt thermal.<name>; eine Wallbox „klima“ teilt nichts mit ihr
+    env = await runtime_with_coe()
+    env.rt.store.register_source("klima", 5.0)  # so registriert sich ein Wallbox-Adapter
+    env.echo(0.0)
+    run(env.rt, env.clock, 1)
+    assert env.adapter.source == "thermal.klima"
+    assert env.rt.store.connected("klima") is False
+    assert env.rt.store.connected("thermal.klima") is True
+    assert env.rt.health().thermal["klima"]["connected"] is True
+    [actuator] = [a for a in env.rt.health().actuators if a["id"] == THERMAL]
+    assert actuator["controllable"] is True

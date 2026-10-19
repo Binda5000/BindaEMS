@@ -7,7 +7,8 @@ hält den Wert und sendet ihn sofort und danach zyklisch, aber nur mit Freigabe 
 Zurückgelesen wird das Echo der UVR (``thermal.<name>.offset_active_k``); bestätigt ist ein Wert,
 wenn das Echo ihn auf 0,05 K zeigt (``matches``). Zeigt das Echo im Live-Betrieb länger als
 ``ECHO_MISMATCH_S`` etwas anderes als den Wert, den der Adapter sendet
-(``thermal.<name>.offset_sent_k``), meldet der Aktor ``thermal.echo_mismatch.<name>``.
+(``thermal.<name>.offset_sent_k``), meldet der Aktor ``thermal.echo_mismatch.<name>``. Nach dem
+ersten Senden gilt das auch im Dry-Run, etwa nach einer Übergabe (gewollt, Ruling R10).
 """
 
 from __future__ import annotations
@@ -118,10 +119,11 @@ class ThermalActuator:
     def _observe(self, snap: Snapshot, now: datetime, *, connected: bool) -> None:
         """Merkt, seit wann das Echo nicht zeigt, was der Adapter sendet.
 
-        Beurteilt wird nur im Live-Betrieb (der Aktor hat schon einmal gesendet) und nur mit
-        Werten der Quelle. Erwartet wird ``offset_sent_k``, der Wert, den der Adapter wirklich
-        sendet (ohne Freigabe 0); ohne ihn der zuletzt angenommene Wert. Ein fehlendes Echo weicht
-        ab.
+        Beurteilt wird ab dem ersten angenommenen ``send`` dieses Laufs (Live-Betrieb) und nur
+        mit Werten der Quelle. Danach auch im Dry-Run, etwa nach einer Übergabe: Ein Echo, das
+        dann nicht 0 zeigt, ist weiter ein Befund (gewollt, Ruling R10). Erwartet wird
+        ``offset_sent_k``, der Wert, den der Adapter wirklich sendet (ohne Freigabe 0); ohne ihn
+        der zuletzt angenommene Wert. Ein fehlendes Echo weicht ab.
         """
         if self._sent is None or not connected:
             self._mismatch_since = None

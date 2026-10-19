@@ -57,7 +57,10 @@ async def test_signal_kinds(coe_env: CmiEnv) -> None:
         "running": "state",
         "offset_sent_k": "state",
     }
-    assert {r.source for r in readings.values()} == {"klima"}
+    assert {r.source for r in readings.values()} == {"thermal.klima"}
+    assert env.store.connected("thermal.klima") is True
+    assert env.store.connected("klima") is None  # der Schlüssel allein ist keine Quelle
+    assert env.adapter.health().name == "thermal.klima"
 
 
 async def test_ignores_foreign_ip(coe_env: CmiEnv) -> None:
@@ -513,3 +516,24 @@ async def test_permit_for_counts_on_the_adapter_clock(coe_env: CmiEnv) -> None:
     env.adapter.set_offset(1.0)
     env.adapter.permit_for(0)  # zurückgenommen: sofort 0
     assert sent_raw(env) == 0 and env.adapter.held_k == 0.0
+
+
+async def test_renewing_an_expired_permit_does_not_revive_the_held_value(
+    coe_env: CmiEnv,
+) -> None:
+    # Der Event-Loop hing länger als die Freigabe: Der Lapse-Loop lief nicht, der alte Wert steht
+    # noch. Die nächste Freigabe darf ihn nicht wieder hinausschicken (Ruling R14).
+    env = coe_env()
+    await env.start()
+    env.adapter.permit(env.mono() + 10)
+    env.adapter.set_offset(1.5)
+    assert sent_raw(env) == 15
+    env.advance(12)  # ohne die Pausen ablaufen zu lassen: der Lapse-Loop schläft weiter
+    env.adapter.permit(env.mono() + 10)
+    assert env.adapter.held_k == 0.0 and sent_raw(env) == 0
+    await env.run_for(5)
+    assert sent_raw(env) == 0
+    # eine noch gültige Freigabe zu verlängern behält den Wert
+    env.adapter.set_offset(1.0)
+    env.adapter.permit(env.mono() + 10)
+    assert env.adapter.held_k == 1.0 and sent_raw(env) == 10

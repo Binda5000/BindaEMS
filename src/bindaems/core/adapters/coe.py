@@ -37,6 +37,15 @@ WATCH_S = 10.0
 _MEASUREMENTS = frozenset({"actual_c", "setpoint_c", "offset_active_k", "power_w"})
 
 
+def coe_source(name: str) -> str:
+    """Name der Quelle im Zustandsspeicher: ``thermal.<name>``.
+
+    Mit Präfix, damit eine Klimaanlage nie die Quelle einer Wallbox oder eines anderen Adapters
+    mit demselben Schlüssel überschreibt (``register_source`` ersetzt still).
+    """
+    return f"thermal.{name}"
+
+
 class DatagramPort(Protocol):
     """Ein gebundener UDP-Port: sendet Datagramme, Empfangenes geht an den Rückruf."""
 
@@ -99,14 +108,15 @@ class CoeAdapter:
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
     ) -> None:
         self.name = name
+        self.source = coe_source(name)
         self._cfg = cfg
         self._store = store
         self._port_factory = port_factory
         self._clock = clock
         self._sleep = sleep
         self._channels = cfg.receive.channels()
-        self._health = AdapterHealth(name=name)
-        self._status = StatusLog(name)
+        self._health = AdapterHealth(name=self.source)
+        self._status = StatusLog(self.source)
         self._backoff = Backoff()
         self._port: DatagramPort | None = None
         self._held_k = 0.0
@@ -123,7 +133,7 @@ class CoeAdapter:
         self._permit_changed = asyncio.Event()
         # nach einem Ausfall gelten alte Zustände (läuft, kühlt, heizt) als veraltet, bis das
         # C.M.I. sie erneut meldet
-        store.register_source(name, cfg.stale_after_s, invalidate_on_reconnect=True)
+        store.register_source(self.source, cfg.stale_after_s, invalidate_on_reconnect=True)
 
     @property
     def held_k(self) -> float:
@@ -145,10 +155,14 @@ class CoeAdapter:
         """Gibt den gehaltenen Versatz bis zu diesem Zeitpunkt (Uhr des Adapters) frei.
 
         Läuft die Freigabe ab (oder wird sie zurückgenommen), sendet der Adapter sofort 0 und
-        vergisst den gehaltenen Wert; danach braucht es ein neues ``set_offset``.
+        vergisst den gehaltenen Wert; danach braucht es ein neues ``set_offset``. Das gilt auch,
+        wenn die alte Freigabe schon abgelaufen war, als die neue kommt (etwa nach einem
+        blockierten Event-Loop, bevor der Lapse-Loop lief): Ein gehaltener Wert lebt nie über eine
+        Lücke der Freigabe hinweg.
         """
+        expired = self._clock() >= self._permit_until  # der alte Wert braucht neue Entscheidung
         self._permit_until = until_monotonic
-        if self._clock() >= until_monotonic and self._held_k != 0.0:
+        if (expired or self._clock() >= until_monotonic) and self._held_k != 0.0:
             self._held_k = 0.0  # Rücknahme: nicht erst auf den Lapse-Loop warten
             self._send()
         self._permit_changed.set()
@@ -284,7 +298,7 @@ class CoeAdapter:
             self._store.update(
                 f"thermal.{self.name}.offset_sent_k",
                 self._last_sent_k,
-                source=self.name,
+                source=self.source,
                 kind=SignalKind.STATE,
             )
 
@@ -339,7 +353,7 @@ class CoeAdapter:
         self._health.last_ok = datetime.now(UTC)
         for key, channel, value in matches:
             self._write(key, channel, value)
-        self._store.touch(self.name)
+        self._store.touch(self.source)
 
     def _write(self, key: str, channel: CoeChannel, value: CoeValue) -> None:
         converted = scaled(value, channel)
@@ -357,12 +371,12 @@ class CoeAdapter:
         self._store.update(
             f"thermal.{self.name}.{signal}",
             _to_signal(signal, converted),
-            source=self.name,
+            source=self.source,
             kind=SignalKind.MEASUREMENT if signal in _MEASUREMENTS else SignalKind.STATE,
         )
 
     def _set_connected(self, connected: bool) -> None:
-        self._store.set_connected(self.name, connected)
+        self._store.set_connected(self.source, connected)
         self._health.connected = connected
         if connected:
             self._status.connected()

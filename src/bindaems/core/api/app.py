@@ -85,10 +85,10 @@ class HealthReport(BaseModel):
       Präzisierung 4): ``label``, ``connected`` (die Quelle liefert Werte), ``last_packet_at``
       (ISO in UTC), ``foreign_packets`` und ``bad_packets`` (verworfene Pakete), ``mode``
       (``heizen``, ``kuehlen``, ``lueften``, ``aus``, ``unbekannt``), ``running``, ``actual_c``,
-      ``setpoint_c`` (mit Versatz), ``base_setpoint_c`` (``setpoint_c − offset_sent_k``),
-      ``offset_sent_k`` (was der Adapter sendet), ``offset_active_k`` (das Echo der UVR),
-      ``power_w``, dazu ``wish``, ``reason`` und ``hint`` aus der Regelung; was fehlt, ist
-      ``null``. Vor dem ersten Zyklus leer.
+      ``setpoint_c`` (mit Versatz), ``base_setpoint_c`` (``setpoint_c`` minus das Echo, ohne
+      Echo minus ``offset_sent_k``), ``offset_sent_k`` (was der Adapter sendet),
+      ``offset_active_k`` (das Echo der UVR), ``power_w``, dazu ``wish``, ``reason`` und
+      ``hint`` aus der Regelung; was fehlt, ist ``null``. Vor dem ersten Zyklus leer.
     """
 
     mode: Literal["START", "OBSERVE", "CONTROL", "DEGRADED", "SAFE"]

@@ -70,7 +70,7 @@ from bindaems.core.actuators.tesla import TeslaActuator
 from bindaems.core.actuators.thermal import ThermalActuator
 from bindaems.core.actuators.victron import OVERRIDE_TIMEOUT_S, VictronActuator
 from bindaems.core.adapters.base import Adapter
-from bindaems.core.adapters.coe import CoeAdapter
+from bindaems.core.adapters.coe import CoeAdapter, coe_source
 from bindaems.core.adapters.evcs import EvcsAdapter, PymodbusReader
 from bindaems.core.adapters.homeassistant import HaAdapter
 from bindaems.core.adapters.tessie import TessieAdapter
@@ -350,12 +350,18 @@ def _thermal_json(
     Die Werte kommen aus dem Snapshot (``thermal.<name>.*``, nur mit Qualität ``OK``), die Zähler
     der Pakete aus dem Adapter (``stats``, ohne Adapter leer). Wunsch, Grund und Hinweis setzt
     erst die Regelung der Klimaanlage; bis dahin sind sie ``None``.
+
+    Der Sollwert ohne Versatz ist ``setpoint_c`` minus den Versatz, den die UVR gerade anwendet:
+    das Echo ``offset_active_k`` (die UVR rechnet ihn in ``setpoint_c`` ein), ohne Echo der
+    gesendete ``offset_sent_k``, ohne beides oder ohne Sollwert ``None``.
     """
     prefix = f"thermal.{name}."
     running = snap.ok(prefix + "running")
     setpoint = finite_number(snap.ok(prefix + "setpoint_c"))
     sent = finite_number(snap.ok(prefix + "offset_sent_k"))
-    base = round(setpoint - sent, 2) if setpoint is not None and sent is not None else None
+    echo = finite_number(snap.ok(prefix + "offset_active_k"))
+    active = echo if echo is not None else sent
+    base = round(setpoint - active, 2) if setpoint is not None and active is not None else None
     return {
         "label": device.label,
         "connected": connected,
@@ -368,7 +374,7 @@ def _thermal_json(
         "setpoint_c": setpoint,
         "base_setpoint_c": base,
         "offset_sent_k": sent,
-        "offset_active_k": finite_number(snap.ok(prefix + "offset_active_k")),
+        "offset_active_k": echo,
         "power_w": finite_number(snap.ok(prefix + "power_w")),
         "wish": None,
         "reason": None,
@@ -681,8 +687,8 @@ class CoreRuntime:
 
     def _thermal_connected(self, name: str) -> bool:
         """Liefert die Quelle der Klimaanlage ``name`` Werte? Der CoE-Adapter hält das im
-        Zustandsspeicher."""
-        return self.store.connected(name) is True
+        Zustandsspeicher, unter ``thermal.<name>`` (``coe_source``)."""
+        return self.store.connected(coe_source(name)) is True
 
     def _send_heartbeat(self, value: int) -> bool:
         """Schreibt den Heartbeat über ``mqtt_write``."""
@@ -997,8 +1003,11 @@ class CoreRuntime:
            Schreibvorgang offen.
         7. Am Ende legt ``RegulationLink.finish`` Health und Alarme der Regelung ab.
 
-        Vor allem anderen gibt die Laufzeit den Versatz der Klimaanlagen frei oder nimmt die
-        Freigabe zurück (``_permit_thermal``): So sendet der Adapter einen Befehl dieses Zyklus.
+        Nach der Regelung und vor dem ersten Befehl gibt die Laufzeit den Versatz der
+        Klimaanlagen frei oder nimmt die Freigabe zurück (``_permit_thermal``): So sendet der
+        Adapter einen Befehl dieses Zyklus, aber nie nach einer Ausnahme der Regelung. Warf die
+        Regelung erst danach (``note_verdict``, ``finish``), nimmt die Laufzeit die Freigabe am
+        Ende zurück.
 
         Warf die Regelung in diesem Zyklus (``RegulationLink.failed``, Plan 2c-2a,
         Präzisierung 15), führt die Laufzeit keinen ihrer Befehle mehr aus; die des Keepers laufen
@@ -1006,7 +1015,6 @@ class CoreRuntime:
         Entscheidungen tragen die Wanduhr ``now``. Fähigkeiten, offene Schreibvorgänge und die
         owned Aktoren bleiben für ``health`` stehen.
         """
-        self._permit_thermal()
         capabilities = {
             actuator_id: actuator.capabilities(snap, snow)
             for actuator_id, actuator in self.actuators.items()
@@ -1038,6 +1046,7 @@ class CoreRuntime:
             self.regulation.rest_plan(None if intent is None else intent.plan, now)
             regulated = []
         keeper = self._keeper_commands(snap, snow, present)
+        self._permit_thermal()
         if keeper or regulated:
             ctx = safety_context(
                 now=snow,
@@ -1070,17 +1079,21 @@ class CoreRuntime:
         self._pending = self.executor.pending()
         self._owned = self.ownership.owned
         self.regulation.finish(now)
+        if self.regulation.failed:
+            self._permit_thermal()
 
     def _permit_thermal(self) -> None:
         """Gibt den Versatz jeder Klimaanlage für ``THERMAL_PERMIT_S`` frei, oder nimmt die Freigabe
         sofort zurück (Plan 6a, Entscheidung 3).
 
-        Freigegeben wird nur im Regelbetrieb (CONTROL, DEGRADED) und nur, wenn der Aktor wirksam
-        live ist und nicht übergeben wird; sonst sendet der Adapter ab sofort 0. Die Übergabe
-        sendet ohnehin nur 0, das braucht keine Freigabe. Bleibt der Zyklus stehen, endet die
-        Freigabe nach ``THERMAL_PERMIT_S``.
+        Freigegeben wird nur im Regelbetrieb (CONTROL, DEGRADED), nur wenn die Regelung in diesem
+        Zyklus nicht warf (``RegulationLink.failed``; wie beim Heartbeat) und nur, wenn der Aktor
+        wirksam live ist und nicht übergeben wird; sonst sendet der Adapter ab sofort 0. Wirft die
+        Regelung in jedem Zyklus, bleibt die Freigabe so aus, bis sie wieder fehlerfrei regelt.
+        Die Übergabe sendet ohnehin nur 0, das braucht keine Freigabe. Bleibt der Zyklus stehen,
+        endet die Freigabe nach ``THERMAL_PERMIT_S``.
         """
-        regulating = self.operating.state in _REGULATION_STATES
+        regulating = self.operating.state in _REGULATION_STATES and not self.regulation.failed
         for name in self._cfg.thermal.devices:
             adapter = self._coe_adapter(name)
             if adapter is None:
