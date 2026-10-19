@@ -24,6 +24,7 @@ from bindaems.app.control.intent import (
     SetPlan,
     SetPriority,
     SetSupport,
+    SetTarget,
     UnknownTarget,
     boost_until,
     derive,
@@ -583,3 +584,88 @@ async def test_support_threshold_at_the_bounds_is_accepted(service: IntentServic
     for soc in (20.0, 100.0, None):
         result = await service.apply(SetSupport(True, soc), actor="admin", source="ui")
         assert result.intent.support.soc_pct == soc
+
+
+async def test_set_target_changes_only_the_given_fields(
+    service: IntentService, fake_client: FakeCoreClient
+) -> None:
+    fake_client.valid = Intent(
+        version=1,
+        vehicles={
+            "tesla": VehicleIntent(mode=ChargeMode.PLANNED, target_soc_pct=70, departure="06:30"),
+            "egolf": VehicleIntent(target_soc_pct=90, departure="08:00"),
+        },
+    )
+    result = await service.apply(SetTarget("tesla", 85, None), actor="anna", source="ui")
+    tesla = result.intent.vehicles["tesla"]
+    assert (tesla.mode, tesla.target_soc_pct, tesla.departure) == (ChargeMode.PLANNED, 85, "06:30")
+    result = await service.apply(SetTarget("tesla", None, "07:15"), actor="anna", source="ui")
+    tesla = result.intent.vehicles["tesla"]
+    assert (tesla.target_soc_pct, tesla.departure) == (85, "07:15")
+    egolf = fake_client.sent[-1].vehicles["egolf"]
+    assert (egolf.target_soc_pct, egolf.departure) == (90, "08:00")
+
+
+async def test_set_target_for_a_vehicle_without_entry_starts_from_the_defaults(
+    service: IntentService,
+) -> None:
+    result = await service.apply(SetTarget("egolf", 100, "05:45"), actor="ha", source="ha")
+    assert result.intent.vehicles["egolf"] == VehicleIntent(target_soc_pct=100, departure="05:45")
+
+
+async def test_target_change_is_audited(service: IntentService, audit: AuditLog) -> None:
+    result = await service.apply(SetTarget("tesla", 80, "07:00"), actor="anna", source="ui")
+    entry = audit.recent()[0]
+    assert (entry.actor, entry.source) == ("anna", "ui")
+    assert (entry.action, entry.target) == ("intent.target", "tesla")
+    assert entry.details == {
+        "from": "Ziel 80 %, Abfahrt 07:00",
+        "to": "Ziel 80 %, Abfahrt 07:00",
+        "version": result.version,
+        "result": "accepted",
+    }
+    await service.apply(SetTarget("tesla", 60, None), actor="anna", source="ui")
+    assert last_audit(audit) == ("intent.target", "tesla", "Ziel 60 %, Abfahrt 07:00")
+    await service.apply(SetTarget("tesla", None, "06:05"), actor="anna", source="ui")
+    assert last_audit(audit) == ("intent.target", "tesla", "Ziel 60 %, Abfahrt 06:05")
+
+
+@pytest.mark.parametrize(
+    ("change", "text"),
+    [
+        (SetTarget("tesla", 15, None), "Ziel-SOC „15“ liegt außerhalb von 20–100 %."),
+        (SetTarget("tesla", 101, "07:00"), "Ziel-SOC „101“ liegt außerhalb von 20–100 %."),
+        (SetTarget("tesla", None, "7:00"), "Abfahrt „7:00“ ist keine Uhrzeit (HH:MM)."),
+        (SetTarget("tesla", 80, "24:00"), "Abfahrt „24:00“ ist keine Uhrzeit (HH:MM)."),
+        (SetTarget("tesla", None, "07:60"), "Abfahrt „07:60“ ist keine Uhrzeit (HH:MM)."),
+        (SetTarget("tesla", None, ""), "Abfahrt „“ ist keine Uhrzeit (HH:MM)."),
+    ],
+)
+async def test_invalid_target_is_rejected_before_sending(
+    service: IntentService,
+    fake_client: FakeCoreClient,
+    audit: AuditLog,
+    change: SetTarget,
+    text: str,
+) -> None:
+    with pytest.raises(Rejected) as rejected:
+        await service.apply(change, actor="admin", source="ui")
+    assert rejected.value.details == [text]
+    assert fake_client.sent == [] and audit.recent() == []
+
+
+async def test_target_bounds_are_accepted(service: IntentService) -> None:
+    for soc in (20, 100):
+        result = await service.apply(SetTarget("tesla", soc, "00:00"), actor="a", source="ui")
+        assert result.intent.vehicles["tesla"].target_soc_pct == soc
+    result = await service.apply(SetTarget("tesla", None, "23:59"), actor="a", source="ui")
+    assert result.intent.vehicles["tesla"].departure == "23:59"
+
+
+async def test_target_of_an_unknown_vehicle_is_unknown(
+    service: IntentService, fake_client: FakeCoreClient
+) -> None:
+    with pytest.raises(UnknownTarget) as unknown:
+        await service.apply(SetTarget("zoe", 80, None), actor="admin", source="ui")
+    assert unknown.value.text == "Unbekanntes Fahrzeug „zoe“."
+    assert fake_client.sent == []

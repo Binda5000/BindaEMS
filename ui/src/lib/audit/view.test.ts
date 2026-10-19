@@ -49,6 +49,7 @@ it('beschriftet die Bedienung und die Quittierung', () => {
 	const labels = [
 		'intent.control',
 		'intent.mode',
+		'intent.target',
 		'intent.boost',
 		'intent.assignment',
 		'intent.guest_mode',
@@ -60,6 +61,7 @@ it('beschriftet die Bedienung und die Quittierung', () => {
 	expect(labels).toEqual([
 		'Regelbetrieb geändert',
 		'Lademodus geändert',
+		'Ziel geändert',
 		'Boost geändert',
 		'Zuordnung geändert',
 		'Gast-Lademodus geändert',

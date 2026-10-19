@@ -37,6 +37,7 @@ from bindaems.app.control.intent import (
     SetMode,
     SetPriority,
     SetSupport,
+    SetTarget,
     UnknownTarget,
 )
 from bindaems.app.core_link import CoreClient, CoreUnavailableError, LiveState
@@ -66,6 +67,16 @@ class OnBody(_Body):
 
 class ModeBody(_Body):
     mode: ChargeMode
+
+
+class TargetBody(_Body):
+    """Ziel-SOC und Abfahrt (``HH:MM``); ``null`` lässt das Feld unverändert. Den Bereich prüft
+    der ``IntentService`` mit den Sätzen der Ablehnung."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    target_soc_pct: int | None
+    departure: str | None
 
 
 class AssignmentBody(_Body):
@@ -184,6 +195,10 @@ def control_router(
     @router.put("/api/control/vehicles/{key}/mode")
     async def vehicle_mode(key: str, body: ModeBody, session: Operator) -> dict[str, Any]:
         return await change(SetMode(key, body.mode), session)
+
+    @router.put("/api/control/vehicles/{key}/target")
+    async def vehicle_target(key: str, body: TargetBody, session: Operator) -> dict[str, Any]:
+        return await change(SetTarget(key, body.target_soc_pct, body.departure), session)
 
     @router.put("/api/control/vehicles/{key}/boost")
     async def vehicle_boost(key: str, body: OnBody, session: Operator) -> dict[str, Any]:

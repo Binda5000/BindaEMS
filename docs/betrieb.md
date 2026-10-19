@@ -1409,8 +1409,8 @@ Dry-Run, und ein installierter Watchdog wartet.
   **Version** ist das Größere aus den Millisekunden seit 1970 (Uhr der app) und der gültigen Version + 1,
   damit auch eine aus der Sicherung wiederhergestellte app neuere Versionen erzeugt. Jede Änderung steht
   im Änderungsprotokoll (Quelle `ui` oder `ha`; Aktionen `intent.control`, `intent.mode`,
-  `intent.boost`, `intent.assignment`, `intent.guest_mode`, `intent.priority`, `intent.actuators`,
-  `control.support`).
+  `intent.target`, `intent.boost`, `intent.assignment`, `intent.guest_mode`, `intent.priority`,
+  `intent.actuators`, `control.support`).
 - **`PUT /v1/intent` per `curl` mischt sich über die Version korrekt ein.** Die app führt Änderungen
   nacheinander aus. Antwortet der core mit 409, weil die Version veraltet ist (jemand hat dazwischen eine
   Absicht per `curl` gesendet), holt sie die gültige Absicht neu und wendet die Änderung genau einmal

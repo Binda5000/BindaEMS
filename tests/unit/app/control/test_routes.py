@@ -72,6 +72,7 @@ def test_every_change_route_needs_operator_and_a_csrf_token(client, auth) -> Non
     calls = [
         ("/api/control/regulation", {"on": True}),
         ("/api/control/vehicles/tesla/boost", {"on": True}),
+        ("/api/control/vehicles/tesla/target", {"target_soc_pct": 80, "departure": "07:00"}),
         ("/api/control/wallboxes/evcs/vehicle", {"vehicle": "tesla"}),
         ("/api/control/guest", {"mode": "now"}),
         ("/api/control/support", {"allowed": True, "soc_pct": 60.0}),
@@ -540,3 +541,77 @@ def test_boost_cost_uses_the_month_peak_of_the_ledger(
     tesla = next(item for item in body["vehicles"] if item["id"] == "tesla")
     assert tesla["extra_kw"] == pytest.approx(11.04)
     assert tesla["cost_eur"] == pytest.approx(52.99)
+
+
+def test_reader_cannot_set_target(client, auth, fake_client) -> None:
+    viewer = login_as(client, auth, "viewer")
+    body = {"target_soc_pct": 80, "departure": "07:00"}
+    denied = client.put("/api/control/vehicles/tesla/target", json=body, headers=viewer)
+    assert denied.status_code == 403
+    assert fake_client.sent == []
+
+
+def test_operator_sets_target_and_departure(client, auth, fake_client, audit) -> None:
+    operator = login_as(client, auth, "operator")
+    response = client.put(
+        "/api/control/vehicles/tesla/target",
+        json={"target_soc_pct": 85, "departure": "06:30"},
+        headers=operator,
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert set(body) == {"result", "version", "details", "intent"}
+    assert (body["result"], body["details"]) == ("accepted", [])
+    tesla = body["intent"]["vehicles"]["tesla"]
+    assert (tesla["target_soc_pct"], tesla["departure"]) == (85, "06:30")
+    assert fake_client.sent[-1].vehicles["tesla"].target_soc_pct == 85
+    entry = audit.recent()[0]
+    assert (entry.action, entry.target) == ("intent.target", "tesla")
+    assert entry.details is not None and entry.details["to"] == "Ziel 85 %, Abfahrt 06:30"
+
+
+def test_target_accepts_one_field_and_null(client, auth) -> None:
+    operator = login_as(client, auth, "operator")
+    url = "/api/control/vehicles/tesla/target"
+    first = client.put(url, json={"target_soc_pct": 90, "departure": "05:00"}, headers=operator)
+    assert first.status_code == 200
+    only_departure = client.put(
+        url, json={"target_soc_pct": None, "departure": "08:00"}, headers=operator
+    )
+    tesla = only_departure.json()["intent"]["vehicles"]["tesla"]
+    assert (tesla["target_soc_pct"], tesla["departure"]) == (90, "08:00")
+
+
+def test_target_out_of_range_is_rejected(client, auth, fake_client) -> None:
+    operator = login_as(client, auth, "operator")
+    response = client.put(
+        "/api/control/vehicles/tesla/target",
+        json={"target_soc_pct": 15, "departure": None},
+        headers=operator,
+    )
+    assert response.status_code == 422
+    assert response.json()["detail"] == "Ziel-SOC „15“ liegt außerhalb von 20–100 %."
+    assert fake_client.sent == []
+
+
+def test_bad_departure_is_rejected(client, auth, fake_client) -> None:
+    operator = login_as(client, auth, "operator")
+    response = client.put(
+        "/api/control/vehicles/tesla/target",
+        json={"target_soc_pct": None, "departure": "7 Uhr"},
+        headers=operator,
+    )
+    assert response.status_code == 422
+    assert response.json()["detail"] == "Abfahrt „7 Uhr“ ist keine Uhrzeit (HH:MM)."
+    assert fake_client.sent == []
+
+
+def test_target_of_an_unknown_vehicle_is_404(client, auth) -> None:
+    operator = login_as(client, auth, "operator")
+    response = client.put(
+        "/api/control/vehicles/zoe/target",
+        json={"target_soc_pct": 80, "departure": "07:00"},
+        headers=operator,
+    )
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Unbekanntes Fahrzeug „zoe“."

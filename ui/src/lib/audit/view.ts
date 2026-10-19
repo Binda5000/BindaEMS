@@ -34,6 +34,7 @@ const ACTIONS: Record<string, string> = {
 	'ledger.reprice': 'Abrechnung neu bewertet',
 	'intent.control': 'Regelbetrieb geändert',
 	'intent.mode': 'Lademodus geändert',
+	'intent.target': 'Ziel geändert',
 	'intent.boost': 'Boost geändert',
 	'intent.assignment': 'Zuordnung geändert',
 	'intent.guest_mode': 'Gast-Lademodus geändert',

@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import math
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -39,6 +40,9 @@ log = structlog.get_logger(__name__)
 BOOST_DURATION: Final = timedelta(hours=12)  # der core klemmt ohnehin auf 12 h
 ASSIGNMENT_OVERRIDE: Final = "override"  # ``vehicles[].assignment`` in Health
 SUPPORT_TARGET: Final = "Akku-Unterstützung"  # Ziel im Änderungsprotokoll
+TARGET_SOC_MIN: Final = 20  # Grenzen wie ``VehicleIntent.target_soc_pct``
+TARGET_SOC_MAX: Final = 100
+DEPARTURE_PATTERN: Final = re.compile(r"([01]\d|2[0-3]):[0-5]\d")  # wie ``VehicleIntent.departure``
 
 
 @dataclass(frozen=True)
@@ -54,6 +58,19 @@ class SetMode:
 
     vehicle: str
     mode: ChargeMode
+
+
+@dataclass(frozen=True)
+class SetTarget:
+    """Ziel-SOC und tägliche Abfahrtszeit (``HH:MM``) eines Fahrzeugs für „Geplant“.
+
+    Ein Feld mit ``None`` bleibt unverändert. Gültig sind 20 bis 100 % und eine Uhrzeit von 00:00
+    bis 23:59 (``IntentService._check``).
+    """
+
+    vehicle: str
+    target_soc_pct: int | None
+    departure: str | None
 
 
 @dataclass(frozen=True)
@@ -125,6 +142,7 @@ class SetPlan:
 Change = (
     SetControl
     | SetMode
+    | SetTarget
     | SetBoost
     | SetAssignment
     | SetGuestMode
@@ -226,6 +244,11 @@ def _apply(change: Change, base: Intent, now: datetime) -> Intent:
             return base.model_copy(update={"control": on})
         case SetMode(vehicle=key, mode=mode):
             edit(key, mode=mode)
+        case SetTarget(vehicle=key, target_soc_pct=soc, departure=departure):
+            if soc is not None:
+                edit(key, target_soc_pct=soc)
+            if departure is not None:
+                edit(key, departure=departure)
         case SetBoost(vehicle=key, on=on):
             edit(key, boost_until=boost_until(now) if on else None)
         case SetAssignment(wallbox=wallbox, vehicle=key):
@@ -330,6 +353,13 @@ def _audit(change: Change, base: Intent, new: Intent) -> tuple[str, str, Any, An
             return "intent.control", "regelbetrieb", base.control, new.control
         case SetMode(vehicle=key):
             return "intent.mode", key, _vehicle(base, key).mode.value, _vehicle(new, key).mode.value
+        case SetTarget(vehicle=key):
+            return (
+                "intent.target",
+                key,
+                _target_comment(_vehicle(base, key)),
+                _target_comment(_vehicle(new, key)),
+            )
         case SetBoost(vehicle=key):
             return (
                 "intent.boost",
@@ -378,6 +408,11 @@ def _support_comment(support: SupportIntent) -> str:
     if support.soc_pct is None:
         return "erlaubt, Schwelle aus der Konfiguration"
     return f"erlaubt, ab {support.soc_pct:g} %"
+
+
+def _target_comment(vehicle: VehicleIntent) -> str:
+    """Kommentar im Änderungsprotokoll: „Ziel {soc} %, Abfahrt {HH:MM}“."""
+    return f"Ziel {vehicle.target_soc_pct} %, Abfahrt {vehicle.departure}"
 
 
 def _mode(intent: Intent, actuator: str) -> str:
@@ -439,7 +474,7 @@ class IntentService:
         return intent
 
     def _check(self, change: Change) -> None:
-        """Prüft Fahrzeuge, Wallbox und Unterstützungsschwelle der Änderung gegen ``config.yaml``.
+        """Prüft Fahrzeuge, Wallbox, Unterstützungsschwelle, Ziel-SOC und Abfahrt der Änderung.
 
         Eine eingegebene Schwelle unter der USV-Reserve scheitert hier vor dem Senden und ohne
         Eintrag im Änderungsprotokoll. Eine gespeicherte, die nach einer höheren Reserve in
@@ -458,6 +493,12 @@ class IntentService:
                 if soc > 100:
                     raise Rejected([f"Unterstützungsschwelle {soc:g} % liegt über 100 %."])
             case SetMode(vehicle=key) | SetBoost(vehicle=key):
+                keys = [key]
+            case SetTarget(vehicle=key, target_soc_pct=soc, departure=departure):
+                if soc is not None and not TARGET_SOC_MIN <= soc <= TARGET_SOC_MAX:
+                    raise Rejected([f"Ziel-SOC „{soc}“ liegt außerhalb von 20–100 %."])
+                if departure is not None and DEPARTURE_PATTERN.fullmatch(departure) is None:
+                    raise Rejected([f"Abfahrt „{departure}“ ist keine Uhrzeit (HH:MM)."])
                 keys = [key]
             case SetAssignment(wallbox=wallbox, vehicle=key):
                 if wallbox not in self._cfg.wallboxes:
