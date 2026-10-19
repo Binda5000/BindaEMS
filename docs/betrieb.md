@@ -321,8 +321,10 @@ Die app meldet ihre Sensoren per MQTT Discovery am Mosquitto von Home Assistant 
 Befehle der Bedienelemente unter `bindaems/cmd/`. Lege dafür einen eigenen Benutzer `bindaems` an;
 sein Passwort steht in `BINDAEMS_HA_MQTT_PASSWORD`. Die ACL beschränkt ihn auf das Nötige (beim
 Mosquitto-Add-on über `customize` und eine ACL-Datei unter `/share/mosquitto`). Die Bedienelemente
-brauchen dafür fünf Zeilen mehr als die Sensoren: Schreibrechte für `select`, `switch`, `number` (seit
-Plan 3c, die Unterstützungsschwelle) und `button` und das Leserecht auf `bindaems/cmd/#`:
+brauchen dafür sechs Zeilen mehr als die Sensoren: Schreibrechte für `select`, `switch`, `number` (seit
+Plan 3c, die Unterstützungsschwelle), `text` (seit Plan 4b, die Abfahrtszeit) und `button` und das
+Leserecht auf `bindaems/cmd/#`. Nach dem Ausrollen von Plan 4b ergänzt du die Zeile für `text`; ohne
+sie fehlt die Entität „Abfahrtszeit“ in Home Assistant.
 
 ```text
 user bindaems
@@ -331,6 +333,7 @@ topic write homeassistant/binary_sensor/bindaems/#
 topic write homeassistant/select/bindaems/#
 topic write homeassistant/switch/bindaems/#
 topic write homeassistant/number/bindaems/#
+topic write homeassistant/text/bindaems/#
 topic write homeassistant/button/bindaems/#
 topic write bindaems/#
 topic read homeassistant/status
@@ -361,8 +364,10 @@ Entitäten (Gerät „BindaEMS“, sofern nicht anders angegeben):
 | Preise fehlen | Problem | kein Preis für jetzt oder nach 16 Uhr keiner für morgen |
 | Gerät offline | Problem | ein Adapter des core ist getrennt; Attribut `adapters` |
 | Zuordnung unklar | Problem | eine Wallbox oder ein Fahrzeug zeigt `unclear` (Abschnitt „Laderegelung“, „Zuordnung Auto und Wallbox“) |
+| Ziel-SOC unerreichbar | Problem | ein Auto im Modus „Geplant“ erreicht sein Ziel bis zur Abfahrt nicht (Unterabschnitt „Geplantes Laden“); Attribut `vehicles` mit den Namen |
 | SOC (Gerät „BindaEMS <Fahrzeug>“) | % | je Fahrzeug |
 | Wallbox (Gerät „BindaEMS <Fahrzeug>“) | – | je Fahrzeug der Name der Wallbox, an der es steht (eigener Name oder „EVCS“ / „Wall Connector“), sonst „keine“ |
+| Fertig um, Ziel erreichbar (Gerät „BindaEMS <Fahrzeug>“) | – | je Fahrzeug im Modus „Geplant“ (Unterabschnitt „Geplantes Laden“) |
 | Ladeenergie (Gerät „BindaEMS <Fahrzeug>“) | kWh | je Fahrzeug die Energie der laufenden Ladesession, sonst der letzten (eine Nachkommastelle, Geräteklasse „Energie“, ohne Zustandsklasse); Attribute `start` und `end` (Ortszeit, `end` ist `null`, solange die Session läuft), `pv_kwh`, `battery_kwh`, `grid_kwh` (Herkunft der Energie), `cost_eur` (`null`, wenn ein Preis fehlt oder der Einstandspreis des Akkus unbekannt ist) und `month_kwh` (Ladeenergie des Fahrzeugs im Monat). „Unbekannt“ ohne laufende Session und ohne beendete der letzten 90 Tage (eine laufende zählt, egal wie lange sie schon läuft) |
 | Ladeleistung (Gerät „BindaEMS EVCS“ / „BindaEMS Wall Connector“) | W | je Wallbox |
 | Fahrzeug (Gerät der Wallbox) | – | je Wallbox der Name des Fahrzeugs, „Gast“ oder „keins“ |
@@ -389,12 +394,14 @@ steht die Quelle „ha“.
 
 | Entität | Plattform | Wirkung |
 |---|---|---|
-| Lademodus (je Fahrzeug) | Auswahl | PV-Überschuss, Min+PV, Sofort oder Aus; „Boost“ gibt es hier nicht |
+| Lademodus (je Fahrzeug) | Auswahl | PV-Überschuss, Min+PV, Sofort, Aus oder Geplant; „Boost“ gibt es hier nicht |
+| Ziel-SOC (je Fahrzeug) | Zahl | das Ziel für „Geplant“ in %, eine ganze Zahl von 20 bis 100; die Abfahrt bleibt |
+| Abfahrtszeit (je Fahrzeug) | Text | die tägliche Abfahrt für „Geplant“ als `HH:MM` (00:00 bis 23:59); das Ziel bleibt |
 | Boost (je Fahrzeug) | Taste | Boost bis zum Abstecken, höchstens 12 h |
 | Boost beenden (je Fahrzeug) | Taste | beendet den Boost |
 | Zuordnung (je Wallbox) | Auswahl | „Automatisch“ oder der Name eines Fahrzeugs; „Automatisch“ hebt jede Übersteuerung dieser Wallbox auf (Abschnitt „Laderegelung“, „Zuordnung Auto und Wallbox“) |
 | Regelbetrieb | Schalter | schaltet den Regelbetrieb ein oder aus |
-| Gast-Lademodus | Auswahl | der Modus für einen Gast an jeder Wallbox |
+| Gast-Lademodus | Auswahl | der Modus für einen Gast an jeder Wallbox; ohne „Geplant“, denn für einen Gast gibt es weder Ladestand noch Abfahrt |
 | Netzladen erlaubt | Schalter | die Einstellung „Netzladen erlaubt“ (Abschnitt „Planung“); jede Änderung ist eine neue Version der Einstellungen und löst eine Neuplanung aus |
 | Akku-Unterstützung erlaubt | Schalter | erlaubt oder sperrt die Unterstützung der Autos aus dem Akku (Abschnitt „Akku und Spitzen“, „Akku-Unterstützung bedienen“) |
 | Unterstützungsschwelle | Zahl | die Schwelle in %, von der USV-Reserve bis 100 (Abschnitt „Akku und Spitzen“, „Akku-Unterstützung bedienen“) |
@@ -409,8 +416,9 @@ Netzladen erlaubt, Akku-Unterstützung erlaubt, Unterstützungsschwelle und Neu 
   richtet eine Automation mit Dauerfeuer nichts an.
 - **Nach jedem Befehl veröffentlicht die app den Zustand der Entität neu**, auch nach einem
   verworfenen oder abgelehnten Befehl. Home Assistant zeigt so immer, was gilt.
-- **Ablehnungen:** Ein ungültiger Wert (eine Option, die es nicht gibt) oder ein Befehl, den der core
-  ablehnt oder der nicht ankommt, ändert nichts. Home Assistant zeigt dann die persistente Meldung
+- **Ablehnungen:** Ein ungültiger Wert (eine Option, die es nicht gibt, ein Ziel-SOC außerhalb von
+  20–100 % oder eine Abfahrt, die keine Uhrzeit `HH:MM` ist) oder ein Befehl, den der core ablehnt oder
+  der nicht ankommt, ändert nichts. Home Assistant zeigt dann die persistente Meldung
   `bindaems_ha_command` mit „Befehl aus Home Assistant abgelehnt: …“; eine neue Ablehnung ersetzt die
   alte. Ist der core nicht erreichbar, lautet der Grund „core nicht erreichbar.“.
 - Die Auswahl „Zuordnung“ zeigt dieselbe Übersteuerung wie das UI: Eine beendete (etwa nach dem
@@ -421,6 +429,37 @@ Netzladen erlaubt, Akku-Unterstützung erlaubt, Unterstützungsschwelle und Neu 
   Fahrzeugen und Wallboxen ab, deren Objekt-ID in Home Assistant mit einer anderen Entität
   zusammenfiele. Nach dem Ausrollen von Plan 2d prüfst du deine `config.yaml` darauf: Der core und die
   app melden den Grund beim Start.
+
+### Geplantes Laden
+
+Seit Plan 4b hat jedes Fahrzeug vier Entitäten für den Modus „Geplant“. Die Objekt-IDs stehen hier
+für den Schlüssel `tesla` der Beispielkonfiguration; bei einem anderen Fahrzeug steht dessen Schlüssel
+vorn. Die Warnung „Ziel-SOC unerreichbar“ gilt für alle Fahrzeuge.
+
+| Objekt-ID | Name | Plattform | Wert |
+|---|---|---|---|
+| `tesla_target_soc` | Ziel-SOC | number | das Ziel der Absicht in % (20 bis 100, Schritt 1); schreibend |
+| `tesla_departure` | Abfahrtszeit | text | die tägliche Abfahrt der Absicht, `HH:MM` (Muster `^([01]\d\|2[0-3]):[0-5]\d$`); schreibend |
+| `tesla_done_by` | Fertig um | sensor | wann das Auto voraussichtlich am Ziel ist (Zeitstempel) |
+| `tesla_target_reachable` | Ziel erreichbar | sensor | „ja“ oder „nein“ (Geräteklasse „enum“); Attribute `expected_soc_pct` (Ladestand an der Abfahrt, eine Nachkommastelle), `departure_at` (die nächste Abfahrt, Ortszeit) und `soc_source` (`measured`, `estimated` oder `assumed`) |
+| `problem_target_unreachable` | Ziel-SOC unerreichbar | binary_sensor | an, wenn ein Auto im Modus „Geplant“ sein Ziel nicht erreicht; Attribut `vehicles` mit den Namen dieser Autos |
+
+- Ziel-SOC und Abfahrtszeit zeigen die Absicht, auch in den anderen Modi: Sie bleiben stehen, wenn du
+  auf „Geplant“ umschaltest. Ohne bekannte Absicht sind sie „unbekannt“.
+- **Mit Plan:** Nennt der gültige Plan das Auto, ist „Fertig um“ das Ende der letzten Viertelstunde, in
+  der der Plan es lädt, und „Ziel erreichbar“ ist „ja“, wenn die Fehlmenge des Plans höchstens 0,1 kWh
+  ist; `expected_soc_pct` ist der Ladestand an der Abfahrt laut Plan.
+- **Ohne Plan** für das Auto (kein gültiger Plan, oder es wurde nach dem Plan angesteckt) rechnet die
+  app aus der spätesten Startzeit, die der core in Health meldet: Ab ihr lädt das Auto mit voller
+  Leistung an seiner Wallbox, bis der Bedarf geladen ist; ist sie schon erreicht, ab jetzt. Reicht die
+  Zeit bis zur Abfahrt nicht, ist das Ziel nicht erreichbar, und `expected_soc_pct` ist der Ladestand,
+  den die volle Leistung bis zur Abfahrt bringt.
+- **Am Ziel** (oder ohne Bedarf) ist „Fertig um“ „unbekannt“ und „Ziel erreichbar“ „ja“.
+- „Fertig um“ und „Ziel erreichbar“ sind „unbekannt“, solange das Fahrzeug nicht in „Geplant“ steht
+  oder abgesteckt ist. „Ziel-SOC unerreichbar“ ist dann aus; ohne core und ohne Plan ist sie
+  „unbekannt“.
+- Ein **angenommener Ladestand** (`soc_source` `assumed`, Abschnitt „Laderegelung“) rechnet mit 0 %:
+  „Ziel erreichbar“ gilt dann für ein leeres Auto.
 
 ### Benachrichtigungen
 

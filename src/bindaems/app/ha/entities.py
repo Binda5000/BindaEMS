@@ -1,8 +1,8 @@
 """Home-Assistant-Entitäten der app (Spec 12): Sensoren und Bedienelemente (Plan 2d, Präz. 15).
 
 Unbekannte Werte werden als ``None`` veröffentlicht; Home Assistant zeigt dann „unbekannt“.
-Bedienelemente (``select``, ``switch``, ``number``, ``button``) tragen ``command=True``; ihre
-Befehle kommen über ``{base_topic}/cmd/<object_id>`` und führt ``ha.commands`` aus.
+Bedienelemente (``select``, ``switch``, ``number``, ``text``, ``button``) tragen ``command=True``;
+ihre Befehle kommen über ``{base_topic}/cmd/<object_id>`` und führt ``ha.commands`` aus.
 """
 
 from __future__ import annotations
@@ -15,12 +15,18 @@ from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any, Final, Literal
 
 from bindaems import __version__
-from bindaems.app.control.intent import ASSIGNMENT_OVERRIDE
+from bindaems.app.control.intent import (
+    ASSIGNMENT_OVERRIDE,
+    DEPARTURE_PATTERN,
+    TARGET_SOC_MAX,
+    TARGET_SOC_MIN,
+)
 from bindaems.app.core_link import LiveState
 from bindaems.app.forecast.service import ForecastService
 from bindaems.app.ledger.service import MonthPeak
 from bindaems.app.planning.execution import ExecutionState, execution_state
 from bindaems.app.planning.explain import slot_text
+from bindaems.app.planning.vehicles import full_power_w
 from bindaems.app.prices.pipeline import TOMORROW_EXPECTED_FROM
 from bindaems.app.prices.service import PriceService
 from bindaems.app.prices.store import PriceStore
@@ -34,8 +40,9 @@ from bindaems.shared.config import (
 )
 from bindaems.shared.control import ChargeMode, Intent, VehicleIntent
 from bindaems.shared.domain import Value
-from bindaems.shared.plan import BatteryIntentKind, Plan, PlanSlot
-from bindaems.shared.timeutil import LOCAL_TZ, SLOT, slot_start
+from bindaems.shared.numbers import finite_number
+from bindaems.shared.plan import BatteryIntentKind, Plan, PlanSlot, PlanVehicle
+from bindaems.shared.timeutil import LOCAL_TZ, SLOT, ensure_utc, slot_start
 
 if TYPE_CHECKING:  # nur für Typen: ``charging.sessions`` importiert selbst aus diesem Modul
     from bindaems.app.charging.sessions import ChargingSession
@@ -52,7 +59,15 @@ MODE_LABELS: Final[dict[ChargeMode, str]] = {
     ChargeMode.MIN_PV: "Min+PV",
     ChargeMode.NOW: "Sofort",
     ChargeMode.OFF: "Aus",
+    ChargeMode.PLANNED: "Geplant",
 }
+# Ein Gast kann nicht „Geplant“ laden: kein Ladestand, keine Abfahrt (Plan 4b, Entscheidung 2)
+GUEST_MODE_LABELS: Final[dict[ChargeMode, str]] = {
+    mode: label for mode, label in MODE_LABELS.items() if mode is not ChargeMode.PLANNED
+}
+YES: Final = "ja"  # Zustände von „Ziel erreichbar“ (Texte, „HA“)
+NO: Final = "nein"
+SOC_SOURCES: Final = ("measured", "estimated", "assumed")  # ``soc_source`` in Health
 # Zustand der Sensoren „Akku-Plan“: die Absicht des Slots (Texte, „Absichten“)
 INTENT_LABELS: Final[dict[BatteryIntentKind, str]] = {
     BatteryIntentKind.EIGENVERBRAUCH: "Eigenverbrauch",
@@ -110,12 +125,14 @@ class HaInputs:
     # fehlender Schlüssel oder ``None`` heißt: keine bekannt
     sessions: Mapping[str, ChargingSession | None] = field(default_factory=dict)
     month_kwh: Mapping[str, float | None] = field(default_factory=dict)  # Ladeenergie im Monat
+    plan_vehicles: Sequence[PlanVehicle] = ()  # die geplanten Autos des gültigen Plans (Plan 4b)
+    now: datetime | None = None  # Zeitpunkt der Werte; None = unbekannt
 
 
 @dataclass(frozen=True)
 class EntitySpec:
     object_id: str
-    component: Literal["sensor", "binary_sensor", "select", "switch", "number", "button"]
+    component: Literal["sensor", "binary_sensor", "select", "switch", "number", "text", "button"]
     name: str
     device: DeviceSpec
     value: Callable[[HaInputs], str]
@@ -124,11 +141,12 @@ class EntitySpec:
     state_class: str | None = None
     entity_category: str | None = None
     attributes: Callable[[HaInputs], Mapping[str, Any]] | None = None
-    options: tuple[str, ...] = ()  # Auswahl eines ``select``
+    options: tuple[str, ...] = ()  # Auswahl eines ``select``, Zustände eines ``enum``-Sensors
     command: bool = False  # nimmt Befehle über ``{base}/cmd/<object_id>`` an
     min: float | None = None  # Bereich und Schritt einer ``number``
     max: float | None = None
     step: float | None = None
+    pattern: str | None = None  # erlaubte Eingabe eines ``text`` (regulärer Ausdruck)
 
 
 def _number(value: Any) -> float | None:
@@ -187,23 +205,200 @@ def _entry(entries: Sequence[Mapping[str, Any]], key: str) -> Mapping[str, Any] 
     return next((item for item in entries if item.get("id") == key), None)
 
 
-def _mode_label(mode: ChargeMode) -> str:
-    """Der Text des Lademodus; „Geplant“ hat noch keinen eigenen Eintrag."""
-    # Plan 4b Task 5: PLANNED vorläufig wie PV
-    return MODE_LABELS[ChargeMode.PV if mode is ChargeMode.PLANNED else mode]
-
-
 def _mode_state(key: str) -> Callable[[HaInputs], str]:
     def value(inputs: HaInputs) -> str:
         if inputs.intent is None:
             return UNKNOWN
-        return _mode_label(inputs.intent.vehicles.get(key, VehicleIntent()).mode)
+        return MODE_LABELS[inputs.intent.vehicles.get(key, VehicleIntent()).mode]
 
     return value
 
 
 def _guest_mode_state(inputs: HaInputs) -> str:
-    return UNKNOWN if inputs.intent is None else _mode_label(inputs.intent.guest.mode)
+    return UNKNOWN if inputs.intent is None else MODE_LABELS[inputs.intent.guest.mode]
+
+
+def _target_soc_state(key: str) -> Callable[[HaInputs], str]:
+    def value(inputs: HaInputs) -> str:
+        if inputs.intent is None:
+            return UNKNOWN
+        return str(inputs.intent.vehicles.get(key, VehicleIntent()).target_soc_pct)
+
+    return value
+
+
+def _departure_state(key: str) -> Callable[[HaInputs], str]:
+    def value(inputs: HaInputs) -> str:
+        if inputs.intent is None:
+            return UNKNOWN
+        return inputs.intent.vehicles.get(key, VehicleIntent()).departure
+
+    return value
+
+
+@dataclass(frozen=True)
+class PlannedView:
+    """„Fertig um“ und „Ziel erreichbar“ eines Autos in „Geplant“ (Plan 4b, Entscheidung 12).
+
+    - ``done_by``: wann das Auto voraussichtlich am Ziel ist; ``None`` ohne Laden (etwa am Ziel)
+    - ``reachable``: erreicht es das Ziel bis zur Abfahrt?
+    - ``expected_soc_pct``: der Ladestand an der Abfahrt; ``None`` unbekannt
+    - ``departure_at``: die nächste Abfahrt; ``soc_source`` die Quelle des Ladestands
+    """
+
+    done_by: datetime | None
+    reachable: bool
+    expected_soc_pct: float | None
+    departure_at: datetime
+    soc_source: str | None
+
+
+def _moment(value: Any) -> datetime | None:
+    """Zeitpunkt aus ISO-Text mit Zeitzone (Health); sonst ``None``."""
+    if not isinstance(value, str):
+        return None
+    try:
+        moment = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    return ensure_utc(moment) if moment.tzinfo is not None else None
+
+
+def planned_view(cfg: Config, key: str, inputs: HaInputs) -> PlannedView | None:
+    """Der Stand von „Geplant“ für das Fahrzeug ``key``; ``None``, wenn es nicht geplant lädt.
+
+    Meldet Health das Ziel erreicht (``reached``), gilt das. Sonst gelten, wenn der gültige Plan
+    das Auto nennt, sein Ende des Ladens (``finish_at``) und ``reachable``; ohne Plan für das Auto
+    rechnet die app aus der spätesten Startzeit in Health (``planned_from_health``). Nicht geplant
+    ist ein Auto, dessen Absicht einen anderen Modus nennt oder das laut Health abgesteckt ist.
+    """
+    intent = inputs.intent
+    mode = None if intent is None else intent.vehicles.get(key, VehicleIntent()).mode
+    if mode is not None and mode is not ChargeMode.PLANNED:
+        return None
+    entry = _entry(inputs.vehicles, key)
+    if entry is not None and entry.get("plugged") is False:
+        return None
+    source = entry.get("soc_source") if entry is not None else None
+    soc_source = source if source in SOC_SOURCES else None
+    planned = entry.get("planned") if entry is not None else None
+    reached = isinstance(planned, Mapping) and planned.get("state") == "reached"
+    car = next((car for car in inputs.plan_vehicles if car.key == key), None)
+    if car is not None and not reached:
+        if soc_source is None and car.soc_assumed:
+            soc_source = "assumed"
+        return PlannedView(
+            car.finish_at, car.reachable, car.expected_soc_pct, car.departure_at, soc_source
+        )
+    if entry is None:
+        return None
+    return planned_from_health(cfg, key, entry, inputs.now, soc_source)
+
+
+def planned_from_health(
+    cfg: Config,
+    key: str,
+    entry: Mapping[str, Any],
+    now: datetime | None,
+    soc_source: str | None,
+) -> PlannedView | None:
+    """„Fertig um“ und „Ziel erreichbar“ ohne Plan, aus dem Teil ``planned`` in Health.
+
+    Das Auto lädt ab der spätesten Startzeit (ist sie erreicht, ``due``: ab jetzt) mit voller
+    Leistung ``full_power_w`` an seiner Wallbox, bis der Bedarf ``need_kwh`` geladen ist. Reicht
+    die Zeit bis zur Abfahrt nicht, ist das Ziel nicht erreichbar, und der erwartete Ladestand ist
+    der, den die volle Leistung bis zur Abfahrt bringt. Ohne Bedarf oder am Ziel (``reached``) gibt
+    es kein „Fertig um“, das Ziel ist erreichbar.
+    """
+    planned = entry.get("planned")
+    if not isinstance(planned, Mapping):
+        return None
+    departure_at = _moment(planned.get("departure_at"))
+    need = finite_number(planned.get("need_kwh"))
+    if departure_at is None or need is None:
+        return None
+    soc = finite_number(entry.get("soc_pct"))
+    if planned.get("state") == "reached" or need <= 0:
+        return PlannedView(None, True, soc, departure_at, soc_source)
+    start = _moment(planned.get("latest_start"))
+    at = entry.get("wallbox")
+    wallbox = cfg.wallboxes.get(at) if isinstance(at, str) else None
+    if start is None or wallbox is None:
+        return None
+    vehicle = cfg.vehicles[key]
+    full_kw = full_power_w(vehicle, wallbox, cfg.grid.voltage_nominal_v) / 1000
+    if now is not None:
+        start = ensure_utc(now) if planned.get("state") == "due" else max(start, ensure_utc(now))
+    done_by = start + timedelta(hours=need / full_kw)
+    if done_by <= departure_at:
+        return PlannedView(
+            done_by, True, finite_number(planned.get("target_soc_pct")), departure_at, soc_source
+        )
+    hours = max(0.0, (departure_at - start).total_seconds() / 3600)
+    gained = hours * full_kw * vehicle.charge_efficiency_pct / 100 / vehicle.usable_kwh * 100
+    expected = None if soc is None else min(100.0, soc + gained)
+    return PlannedView(done_by, False, expected, departure_at, soc_source)
+
+
+def _done_by(cfg: Config, key: str) -> Callable[[HaInputs], str]:
+    def value(inputs: HaInputs) -> str:
+        view = planned_view(cfg, key, inputs)
+        if view is None or view.done_by is None:
+            return UNKNOWN
+        return view.done_by.astimezone(LOCAL_TZ).isoformat()
+
+    return value
+
+
+def _target_reachable(cfg: Config, key: str) -> Callable[[HaInputs], str]:
+    def value(inputs: HaInputs) -> str:
+        view = planned_view(cfg, key, inputs)
+        if view is None:
+            return UNKNOWN
+        return YES if view.reachable else NO
+
+    return value
+
+
+def _target_reachable_attributes(cfg: Config, key: str) -> Callable[[HaInputs], Mapping[str, Any]]:
+    """Erwarteter Ladestand an der Abfahrt, die Abfahrt (Ortszeit) und die Quelle des
+    Ladestands; ``None`` ohne geplantes Laden."""
+
+    def attributes(inputs: HaInputs) -> Mapping[str, Any]:
+        view = planned_view(cfg, key, inputs)
+        if view is None:
+            return {"expected_soc_pct": None, "departure_at": None, "soc_source": None}
+        expected = view.expected_soc_pct
+        return {
+            "expected_soc_pct": None if expected is None else round(expected, 1),
+            "departure_at": view.departure_at.astimezone(LOCAL_TZ).isoformat(),
+            "soc_source": view.soc_source,
+        }
+
+    return attributes
+
+
+def _unreachable(cfg: Config, inputs: HaInputs) -> list[str]:
+    """Die Namen der Fahrzeuge, deren Ziel-SOC nicht erreichbar ist, in der Reihenfolge der
+    Konfiguration."""
+    names = []
+    for key, vehicle in cfg.vehicles.items():
+        view = planned_view(cfg, key, inputs)
+        if view is not None and not view.reachable:
+            names.append(vehicle.name)
+    return names
+
+
+def _target_unreachable(cfg: Config) -> Callable[[HaInputs], str]:
+    """AN, wenn ein Auto in „Geplant“ sein Ziel nicht erreicht; ohne core und ohne Plan für ein
+    Auto unbekannt."""
+
+    def value(inputs: HaInputs) -> str:
+        if not inputs.core_connected and not inputs.plan_vehicles:
+            return UNKNOWN
+        return on_off(bool(_unreachable(cfg, inputs)))
+
+    return value
 
 
 def _regulation_state(inputs: HaInputs) -> str:
@@ -692,7 +887,7 @@ def build_entities(cfg: Config) -> list[EntitySpec]:
             "Gast-Lademodus",
             main,
             _guest_mode_state,
-            tuple(MODE_LABELS.values()),
+            tuple(GUEST_MODE_LABELS.values()),
         ),
         _control(
             "grid_charge",
@@ -728,6 +923,15 @@ def build_entities(cfg: Config) -> list[EntitySpec]:
             main,
             _assignment_unclear,
             device_class="problem",
+        ),
+        EntitySpec(
+            "problem_target_unreachable",
+            "binary_sensor",
+            "Ziel-SOC unerreichbar",
+            main,
+            _target_unreachable(cfg),
+            device_class="problem",
+            attributes=lambda i: {"vehicles": _unreachable(cfg, i)},
         ),
     ]
     for key, vehicle in cfg.vehicles.items():
@@ -767,6 +971,45 @@ def build_entities(cfg: Config) -> list[EntitySpec]:
                 device_class="energy",  # ohne ``state_class``: HA warnt bei ``measurement``
                 attributes=_charge_energy_attributes(key),
             ),
+            EntitySpec(
+                f"{oid}_target_soc",
+                "number",
+                "Ziel-SOC",
+                device,
+                _target_soc_state(key),
+                unit="%",
+                command=True,
+                min=float(TARGET_SOC_MIN),
+                max=float(TARGET_SOC_MAX),
+                step=1.0,
+            ),
+            EntitySpec(
+                f"{oid}_departure",
+                "text",
+                "Abfahrtszeit",
+                device,
+                _departure_state(key),
+                command=True,
+                pattern=f"^{DEPARTURE_PATTERN.pattern}$",
+            ),
+            EntitySpec(
+                f"{oid}_done_by",
+                "sensor",
+                "Fertig um",
+                device,
+                _done_by(cfg, key),
+                device_class="timestamp",
+            ),
+            EntitySpec(
+                f"{oid}_target_reachable",
+                "sensor",
+                "Ziel erreichbar",
+                device,
+                _target_reachable(cfg, key),
+                device_class="enum",
+                attributes=_target_reachable_attributes(cfg, key),
+                options=(YES, NO),
+            ),
         ]
     options = (AUTOMATIC, *(vehicle.name for vehicle in cfg.vehicles.values()))
     for key, wallbox in cfg.wallboxes.items():
@@ -797,7 +1040,8 @@ def discovery(spec: EntitySpec, mqtt: HaMqttConfig) -> tuple[str, str]:
 
     Ein Bedienelement trägt zusätzlich ``command_topic`` (``{base}/cmd/<object_id>``); ein
     ``button`` hat keinen Zustand und darum kein ``state_topic``. Eine ``number`` trägt ``min``,
-    ``max`` und ``step`` und die Eingabe als Feld (``mode`` ``box``).
+    ``max`` und ``step`` und die Eingabe als Feld (``mode`` ``box``), ein ``text`` sein
+    ``pattern``, ein ``select`` und ein ``enum``-Sensor ihre ``options``.
     """
     base = mqtt.base_topic
     payload: dict[str, Any] = {
@@ -829,10 +1073,12 @@ def discovery(spec: EntitySpec, mqtt: HaMqttConfig) -> tuple[str, str]:
         payload["json_attributes_topic"] = f"{base}/state/{spec.object_id}/attributes"
     if spec.component in ("binary_sensor", "switch"):
         payload["payload_on"], payload["payload_off"] = "ON", "OFF"
-    elif spec.component == "select":
+    elif spec.component == "select" or spec.options:
         payload["options"] = list(spec.options)
     elif spec.component == "number":
         payload.update({"min": spec.min, "max": spec.max, "step": spec.step, "mode": "box"})
+    elif spec.component == "text" and spec.pattern is not None:
+        payload["pattern"] = spec.pattern
     elif spec.component == "button":
         payload["payload_press"] = "PRESS"
     topic = f"{mqtt.discovery_prefix}/{spec.component}/{NODE_ID}/{spec.object_id}/config"
@@ -942,4 +1188,6 @@ def build_inputs(
         stats=stats,
         sessions=dict(sessions or {}),
         month_kwh=dict(month_kwh or {}),
+        plan_vehicles=list(valid.vehicles) if valid is not None else [],
+        now=now,
     )

@@ -124,7 +124,7 @@ def test_only_allowed_topics_are_published(cfg) -> None:
     assert pattern.fullmatch("bindaems/state/price_now/attributes")
     assert pattern.fullmatch("bindaems/status")
     assert pattern.fullmatch("bindaems/cmd/tesla_mode")
-    for platform in ("select", "switch", "button", "number"):
+    for platform in ("select", "switch", "button", "number", "text"):
         assert pattern.fullmatch(f"homeassistant/{platform}/bindaems/tesla_mode/config")
     for topic in (
         "bindaems/cmd/Mode",
@@ -265,3 +265,11 @@ def test_number_topics_are_allowed(cfg) -> None:
     assert pattern.fullmatch("bindaems/cmd/support_soc")
     assert not pattern.fullmatch("homeassistant/number/other/support_soc/config")
     assert not pattern.fullmatch("homeassistant/numbers/bindaems/support_soc/config")
+
+
+def test_text_topics_are_allowed(cfg) -> None:
+    pattern = allowed_topic(cfg.homeassistant.mqtt)
+    assert pattern.fullmatch("homeassistant/text/bindaems/tesla_departure/config")
+    assert pattern.fullmatch("bindaems/state/tesla_departure")
+    assert pattern.fullmatch("bindaems/cmd/tesla_departure")
+    assert not pattern.fullmatch("homeassistant/texts/bindaems/tesla_departure/config")

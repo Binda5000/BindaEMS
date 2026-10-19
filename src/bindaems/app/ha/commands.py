@@ -1,7 +1,7 @@
 """Befehle aus Home Assistant (Plan 2d, Präzisierung 15).
 
-Home Assistant hat die Rechte von „Bedienen“: Regelbetrieb, Lademodus, Boost, Zuordnung,
-Gast-Modus und Akku-Unterstützung. Live-Schaltung (``SetActuators``) und Vorrang
+Home Assistant hat die Rechte von „Bedienen“: Regelbetrieb, Lademodus, Ziel-SOC und Abfahrt,
+Boost, Zuordnung, Gast-Modus und Akku-Unterstützung. Live-Schaltung (``SetActuators``) und Vorrang
 (``SetPriority``) gibt es hier nicht.
 Jeder Befehl wird eine ``Change`` an den ``IntentService``; was Home Assistant sendet, kann nichts
 außer diesen Änderungen auslösen. Ein ungültiger oder abgelehnter Befehl ändert nichts und wird
@@ -22,6 +22,9 @@ import structlog
 
 from bindaems.app.audit import Source
 from bindaems.app.control.intent import (
+    DEPARTURE_PATTERN,
+    TARGET_SOC_MAX,
+    TARGET_SOC_MIN,
     Change,
     ConflictAgain,
     CoreDown,
@@ -33,11 +36,12 @@ from bindaems.app.control.intent import (
     SetGuestMode,
     SetMode,
     SetSupport,
+    SetTarget,
     UnknownTarget,
 )
 from bindaems.app.control.routes import CONFLICT, CORE_DOWN
 from bindaems.app.core_link import CoreUnavailableError
-from bindaems.app.ha.entities import AUTOMATIC, MODE_LABELS, object_id
+from bindaems.app.ha.entities import AUTOMATIC, GUEST_MODE_LABELS, MODE_LABELS, object_id
 from bindaems.app.settings.service import SettingsVersion, VersionConflictError
 from bindaems.shared.config import Config
 from bindaems.shared.control import SupportIntent
@@ -131,9 +135,36 @@ class _Command:
 
 def _table(cfg: Config, planning: bool) -> dict[str, _Command]:
     by_label = {label: mode for mode, label in MODE_LABELS.items()}
+    guest_by_label = {label: mode for mode, label in GUEST_MODE_LABELS.items()}
 
     def mode(key: str) -> Callable[[str], Change | None]:
         return lambda payload: SetMode(key, by_label[payload]) if payload in by_label else None
+
+    def target_soc(key: str) -> Callable[[str], Change | None]:
+        """Nur das Ziel; die Abfahrt bleibt (``None``). Eine ganze Zahl von 20 bis 100."""
+
+        def parse(payload: str) -> Change | None:
+            try:
+                soc = float(payload)
+            except ValueError:
+                return None
+            if not math.isfinite(soc) or not soc.is_integer():
+                return None
+            if not TARGET_SOC_MIN <= soc <= TARGET_SOC_MAX:
+                raise Refused(f"Ziel-SOC „{_shown(payload)}“ liegt außerhalb von 20–100 %.")
+            return SetTarget(key, int(soc), None)
+
+        return parse
+
+    def departure(key: str) -> Callable[[str], Change | None]:
+        """Nur die Abfahrt (``HH:MM``); das Ziel bleibt (``None``)."""
+
+        def parse(payload: str) -> Change | None:
+            if DEPARTURE_PATTERN.fullmatch(payload) is None:
+                raise Refused(f"Abfahrt „{_shown(payload)}“ ist keine Uhrzeit (HH:MM).")
+            return SetTarget(key, None, payload)
+
+        return parse
 
     def assignment(wallbox: str) -> Callable[[str], Change | None]:
         vehicles = {vehicle.name: key for key, vehicle in cfg.vehicles.items()}
@@ -149,7 +180,7 @@ def _table(cfg: Config, planning: bool) -> dict[str, _Command]:
         return lambda payload: change if payload == PRESS else None
 
     def guest(payload: str) -> Change | None:
-        return SetGuestMode(by_label[payload]) if payload in by_label else None
+        return SetGuestMode(guest_by_label[payload]) if payload in guest_by_label else None
 
     def regulation(payload: str) -> Change | None:
         return SetControl(payload == ON) if payload in (ON, OFF) else None
@@ -189,6 +220,8 @@ def _table(cfg: Config, planning: bool) -> dict[str, _Command]:
     for key in cfg.vehicles:
         oid = object_id(key)
         table[f"{oid}_mode"] = _Command("Lademodus", mode(key), option=True)
+        table[f"{oid}_target_soc"] = _Command("Ziel-SOC", target_soc(key), option=False)
+        table[f"{oid}_departure"] = _Command("Abfahrtszeit", departure(key), option=False)
         table[f"{oid}_boost"] = _Command("Boost", press(SetBoost(key, True)), option=False)
         table[f"{oid}_boost_stop"] = _Command(
             "Boost beenden", press(SetBoost(key, False)), option=False

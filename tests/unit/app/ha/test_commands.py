@@ -15,6 +15,7 @@ from bindaems.app.control.intent import (
     SetGuestMode,
     SetMode,
     SetSupport,
+    SetTarget,
     UnknownTarget,
 )
 from bindaems.app.core_link import CoreUnavailableError, LiveState
@@ -284,7 +285,7 @@ async def test_home_assistant_only_gets_operator_changes(handler, intents, clock
             clock.advance(1.0)
             await handler(object_id, payload)
     assert intents.applied
-    allowed = (SetControl, SetMode, SetBoost, SetAssignment, SetGuestMode, SetSupport)
+    allowed = (SetControl, SetMode, SetTarget, SetBoost, SetAssignment, SetGuestMode, SetSupport)
     assert all(isinstance(change, allowed) for change, _, _ in intents.applied)
 
 
@@ -486,4 +487,84 @@ async def test_support_commands_through_the_real_service_are_audited(
         "Akku-Unterstützung",
     )
     assert entry.details is not None and entry.details["to"] == "gesperrt"
+    assert rejections.texts == []
+
+
+async def test_planned_is_an_option_for_vehicles_but_not_for_guests(
+    handler, intents, rejections
+) -> None:
+    await handler("tesla_mode", "Geplant")
+    await handler("guest_mode", "Geplant")
+    assert [change for change, _, _ in intents.applied] == [SetMode("tesla", ChargeMode.PLANNED)]
+    assert rejections.texts == [PREFIX + "Unbekannte Option „Geplant“ für „Gast-Lademodus“."]
+
+
+async def test_target_number_sets_only_the_target(handler, intents, clock) -> None:
+    for payload in ("90", "85.0", "20", "100"):
+        await handler("tesla_target_soc", payload)
+        clock.advance(1.0)
+    await handler("egolf_target_soc", "70")
+    assert [change for change, _, _ in intents.applied] == [
+        SetTarget("tesla", 90, None),
+        SetTarget("tesla", 85, None),
+        SetTarget("tesla", 20, None),
+        SetTarget("tesla", 100, None),
+        SetTarget("egolf", 70, None),
+    ]
+
+
+async def test_target_number_out_of_range_or_no_whole_number_is_rejected(
+    handler, intents, rejections, clock
+) -> None:
+    for payload in ("15", "101", "80.5", "viel", "nan", ""):
+        await handler("tesla_target_soc", payload)
+        clock.advance(1.0)
+    assert intents.applied == []
+    assert rejections.texts == [
+        PREFIX + "Ziel-SOC „15“ liegt außerhalb von 20–100 %.",
+        PREFIX + "Ziel-SOC „101“ liegt außerhalb von 20–100 %.",
+        *(
+            PREFIX + f"Unbekannter Befehl „{shown}“ für „Ziel-SOC“."
+            for shown in ("80.5", "viel", "nan", "")
+        ),
+    ]
+
+
+async def test_departure_text_sets_only_the_departure(handler, intents, clock) -> None:
+    for payload in ("06:30", "00:00", "23:59"):
+        await handler("tesla_departure", payload)
+        clock.advance(1.0)
+    assert [change for change, _, _ in intents.applied] == [
+        SetTarget("tesla", None, "06:30"),
+        SetTarget("tesla", None, "00:00"),
+        SetTarget("tesla", None, "23:59"),
+    ]
+
+
+async def test_departure_text_rejects_bad_time(handler, intents, rejections, clock) -> None:
+    for payload in ("7.00", "7:00", "24:00", "06:60", ""):
+        await handler("tesla_departure", payload)
+        clock.advance(1.0)
+    assert intents.applied == []
+    assert rejections.texts == [
+        PREFIX + f"Abfahrt „{shown}“ ist keine Uhrzeit (HH:MM)."
+        for shown in ("7.00", "7:00", "24:00", "06:60", "")
+    ]
+
+
+async def test_target_and_departure_through_the_real_service(
+    cfg, audit: AuditLog, clock: ManualClock, rejections
+) -> None:
+    client = FakeCoreClient()
+    service = IntentService(client, LiveState(), FakeFeed(), audit, clock, cfg)  # type: ignore[arg-type]
+    handler = HaCommandHandler(cfg, service, rejections, clock)
+    await handler("tesla_target_soc", "90")
+    await handler("tesla_departure", "06:30")
+    assert client.valid is not None
+    tesla = client.valid.vehicles["tesla"]
+    assert (tesla.target_soc_pct, tesla.departure) == (90, "06:30")
+    entries = audit.recent()
+    assert [(e.source, e.action, e.target) for e in entries] == [
+        ("ha", "intent.target", "tesla")
+    ] * 2
     assert rejections.texts == []

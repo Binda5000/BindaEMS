@@ -22,6 +22,8 @@ from bindaems.app.prices.service import PriceService
 from bindaems.app.stats.service import TodayStats
 from bindaems.shared.config import Config
 from bindaems.shared.control import ChargeMode, Intent, SupportIntent, VehicleIntent
+from bindaems.shared.plan import PlanVehicle
+from bindaems.shared.timeutil import LOCAL_TZ
 
 
 def entity(cfg: Config, object_id: str) -> EntitySpec:
@@ -69,18 +71,27 @@ def test_entities_from_config(cfg) -> None:
         "support_soc",
         "replan",
         "problem_assignment_unclear",
+        "problem_target_unreachable",
         "tesla_soc",
         "tesla_mode",
         "tesla_boost",
         "tesla_boost_stop",
         "tesla_wallbox",
         "tesla_charge_energy",
+        "tesla_target_soc",
+        "tesla_departure",
+        "tesla_done_by",
+        "tesla_target_reachable",
         "egolf_soc",
         "egolf_mode",
         "egolf_boost",
         "egolf_boost_stop",
         "egolf_wallbox",
         "egolf_charge_energy",
+        "egolf_target_soc",
+        "egolf_departure",
+        "egolf_done_by",
+        "egolf_target_reachable",
         "evcs_power",
         "evcs_assignment",
         "evcs_occupant",
@@ -280,7 +291,8 @@ def test_build_inputs_ignores_the_watchdog_of_an_old_report_without_core(
     assert inputs.watchdog_state is None
 
 
-MODES = ["PV-Überschuss", "Min+PV", "Sofort", "Aus"]
+MODES = ["PV-Überschuss", "Min+PV", "Sofort", "Aus", "Geplant"]
+GUEST_MODES = ["PV-Überschuss", "Min+PV", "Sofort", "Aus"]  # ein Gast kann nicht „Geplant“ laden
 
 
 def test_discovery_of_the_mode_select(cfg) -> None:
@@ -308,7 +320,7 @@ def test_discovery_of_the_switch_and_the_guest_select(cfg) -> None:
     )
     assert switch["command_topic"] == "bindaems/cmd/regulation"
     guest = config_of(cfg, "guest_mode")
-    assert (guest["name"], guest["options"]) == ("Gast-Lademodus", MODES)
+    assert (guest["name"], guest["options"]) == ("Gast-Lademodus", GUEST_MODES)
 
 
 def test_discovery_of_the_buttons_has_no_state(cfg) -> None:
@@ -373,13 +385,17 @@ def test_guest_mode_state(cfg) -> None:
     assert state(cfg, "guest_mode", sample_inputs(intent=intent)) == "Aus"
 
 
-def test_planned_mode_state_is_provisionally_pv(cfg) -> None:  # Plan 4b Task 1, Ruling R1
-    intent = Intent.model_validate(
-        {"version": 1, "vehicles": {"tesla": {"mode": "planned"}}, "guest": {"mode": "planned"}}
-    )
+def test_planned_mode_state(cfg) -> None:
+    intent = Intent.model_validate({"version": 1, "vehicles": {"tesla": {"mode": "planned"}}})
     inputs = sample_inputs(intent=intent)
-    assert state(cfg, "tesla_mode", inputs) == "PV-Überschuss"
-    assert state(cfg, "guest_mode", inputs) == "PV-Überschuss"
+    assert state(cfg, "tesla_mode", inputs) == "Geplant"
+    assert state(cfg, "egolf_mode", inputs) == "PV-Überschuss"
+
+
+def test_guest_select_has_no_planned_option(cfg) -> None:
+    assert "Geplant" not in config_of(cfg, "guest_mode")["options"]
+    assert "Geplant" in config_of(cfg, "tesla_mode")["options"]
+    assert "Geplant" in config_of(cfg, "egolf_mode")["options"]
 
 
 def test_control_states_are_unknown_without_an_intent(cfg) -> None:
@@ -467,14 +483,7 @@ def test_config_and_entities_agree_on_object_ids(cfg) -> None:
     # Die Konfiguration prüft Kollisionen mit ihrer eigenen Liste der Objekt-IDs; sie muss stimmen
     from bindaems.shared.config import ha_object_ids
 
-    # Plan 4b kündigt in der Konfiguration schon die Objekte an, die erst Task 15 baut; sie fehlen
-    # bis dahin in ``build_entities``. Eine Kollision fängt dieses selbst ab (nächster Test).
-    not_built_yet = {"problem_target_unreachable"}
-    for key in cfg.vehicles:
-        not_built_yet |= {f"{key}_{s}" for s in ("target_soc", "departure", "done_by")}
-        not_built_yet.add(f"{key}_target_reachable")
-    expected = sorted(i for i in ha_object_ids(cfg) if i not in not_built_yet)
-    assert expected == sorted(e.object_id for e in build_entities(cfg))
+    assert sorted(ha_object_ids(cfg)) == sorted(e.object_id for e in build_entities(cfg))
 
 
 def test_building_entities_fails_loudly_on_a_duplicate_object_id(cfg) -> None:
@@ -807,3 +816,219 @@ def test_inputs_without_statistics_default_to_unknown(
     )
     assert given.stats == stats and given.sessions == {"tesla": None}
     assert given.month_kwh == {"tesla": 3.0}
+
+
+# Geplantes Laden (Plan 4b, Entscheidungen 12 und 13). Der Tesla lädt an der EVCS mit voller
+# Leistung 16 A · 230 V · 3 = 11,04 kW; 11,04 kWh Bedarf dauern also genau eine Stunde.
+PLANNED = Intent(version=3, vehicles={"tesla": VehicleIntent(mode=ChargeMode.PLANNED)})
+DEPARTURE = T_APP + timedelta(hours=10)
+
+
+def _health_car(state: str = "surplus", **planned: Any) -> dict[str, Any]:
+    return {
+        "id": "tesla",
+        "mode": "planned",
+        "plugged": True,
+        "wallbox": "evcs",
+        "soc_pct": 40.0,
+        "soc_source": "measured",
+        "planned": {
+            "state": state,
+            "target_soc_pct": 80.0,
+            "departure_at": DEPARTURE.isoformat(),
+            "need_kwh": 11.04,
+            "latest_start": (T_APP + timedelta(hours=2)).isoformat(),
+            "plan_w": None,
+        }
+        | planned,
+    }
+
+
+def _plan_car(**changes: Any) -> PlanVehicle:
+    fields: dict[str, Any] = {
+        "key": "tesla",
+        "name": "Tesla Model 3",
+        "wallbox": "evcs",
+        "target_soc_pct": 80.0,
+        "departure_at": DEPARTURE,
+        "soc_start_pct": 40.0,
+        "soc_assumed": False,
+        "limit_pct": None,
+        "need_kwh": 33.3,
+        "planned_kwh": 33.3,
+        "shortfall_kwh": 0.0,
+        "expected_soc_pct": 80.0,
+        "finish_at": T_APP + timedelta(hours=6, minutes=15),
+        "reachable": True,
+    }
+    return PlanVehicle(**(fields | changes))
+
+
+def _planned(**changes: Any) -> HaInputs:
+    values: dict[str, Any] = {"intent": PLANNED, "intent_version": 3, "now": T_APP}
+    return sample_inputs(**(values | changes))
+
+
+def local(moment: datetime) -> str:
+    return moment.astimezone(LOCAL_TZ).isoformat()
+
+
+def test_target_soc_number_and_departure_text(cfg) -> None:
+    number, text = config_of(cfg, "tesla_target_soc"), config_of(cfg, "tesla_departure")
+    assert (number["name"], number["min"], number["max"], number["step"]) == (
+        "Ziel-SOC",
+        20.0,
+        100.0,
+        1.0,
+    )
+    assert (number["unit_of_measurement"], number["command_topic"]) == (
+        "%",
+        "bindaems/cmd/tesla_target_soc",
+    )
+    assert (text["name"], text["pattern"]) == ("Abfahrtszeit", r"^([01]\d|2[0-3]):[0-5]\d$")
+    assert (text["command_topic"], text["state_topic"]) == (
+        "bindaems/cmd/tesla_departure",
+        "bindaems/state/tesla_departure",
+    )
+    topic, _ = discovery(entity(cfg, "tesla_departure"), cfg.homeassistant.mqtt)
+    assert topic == "homeassistant/text/bindaems/tesla_departure/config"
+    intent = Intent(
+        version=2, vehicles={"tesla": VehicleIntent(target_soc_pct=90, departure="06:30")}
+    )
+    inputs = sample_inputs(intent=intent)
+    assert (state(cfg, "tesla_target_soc", inputs), state(cfg, "tesla_departure", inputs)) == (
+        "90",
+        "06:30",
+    )
+    # ohne Eintrag gelten die Standardwerte, ohne Absicht ist beides unbekannt
+    assert (state(cfg, "egolf_target_soc", inputs), state(cfg, "egolf_departure", inputs)) == (
+        "80",
+        "07:00",
+    )
+    unknown = sample_inputs(intent=None)
+    assert {state(cfg, f"tesla_{s}", unknown) for s in ("target_soc", "departure")} == {"None"}
+
+
+def test_done_by_and_target_reachable_discovery(cfg) -> None:
+    done_by, reachable = config_of(cfg, "tesla_done_by"), config_of(cfg, "tesla_target_reachable")
+    assert (done_by["name"], done_by["device_class"]) == ("Fertig um", "timestamp")
+    assert "command_topic" not in done_by
+    assert (reachable["name"], reachable["device_class"], reachable["options"]) == (
+        "Ziel erreichbar",
+        "enum",
+        ["ja", "nein"],
+    )
+    assert reachable["json_attributes_topic"] == "bindaems/state/tesla_target_reachable/attributes"
+    problem = config_of(cfg, "problem_target_unreachable")
+    assert (problem["name"], problem["device_class"]) == ("Ziel-SOC unerreichbar", "problem")
+    topic, _ = discovery(entity(cfg, "problem_target_unreachable"), cfg.homeassistant.mqtt)
+    assert topic == "homeassistant/binary_sensor/bindaems/problem_target_unreachable/config"
+
+
+def test_done_by_from_plan_and_from_latest_start_without_plan(cfg) -> None:
+    # mit Plan: das Ende des letzten Slots, in dem der Plan das Auto lädt
+    planned = _planned(plan_vehicles=[_plan_car()], vehicles=[_health_car()])
+    assert state(cfg, "tesla_done_by", planned) == local(T_APP + timedelta(hours=6, minutes=15))
+    assert state(cfg, "tesla_target_reachable", planned) == "ja"
+    # ohne Plan: ab der spätesten Startzeit mit voller Leistung, bis der Bedarf geladen ist
+    surplus = _planned(vehicles=[_health_car()])
+    assert state(cfg, "tesla_done_by", surplus) == local(T_APP + timedelta(hours=3))
+    assert state(cfg, "tesla_target_reachable", surplus) == "ja"
+    # ist die späteste Startzeit erreicht, lädt das Auto ab jetzt mit voller Leistung
+    started = (T_APP - timedelta(minutes=30)).isoformat()
+    due = _planned(vehicles=[_health_car("due", latest_start=started)])
+    assert state(cfg, "tesla_done_by", due) == local(T_APP + timedelta(hours=1))
+    # ein Auto, das der Plan nicht nennt (etwa nach dem Plan angesteckt), rechnet wie ohne Plan
+    other = _planned(plan_vehicles=[_plan_car(key="egolf")], vehicles=[_health_car()])
+    assert state(cfg, "tesla_done_by", other) == local(T_APP + timedelta(hours=3))
+
+
+def test_target_reachable_from_plan_with_attributes(cfg) -> None:
+    car = _plan_car(
+        reachable=False,
+        shortfall_kwh=4.0,
+        expected_soc_pct=71.234,
+        soc_assumed=True,
+        soc_start_pct=0.0,
+    )
+    inputs = _planned(
+        plan_vehicles=[car], vehicles=[_health_car() | {"soc_source": "assumed", "soc_pct": 0.0}]
+    )
+    spec = entity(cfg, "tesla_target_reachable")
+    assert spec.value(inputs) == "nein"
+    assert spec.attributes(inputs) == {
+        "expected_soc_pct": 71.2,
+        "departure_at": local(DEPARTURE),
+        "soc_source": "assumed",
+    }
+    assert state(cfg, "problem_target_unreachable", inputs) == "ON"
+    assert entity(cfg, "problem_target_unreachable").attributes(inputs) == {
+        "vehicles": ["Tesla Model 3"]
+    }
+
+
+def test_target_reachable_without_plan_from_the_latest_start(cfg) -> None:
+    # 30 min vor der Abfahrt, die späteste Startzeit vorbei: In 0,5 h gibt die Wallbox 5,52 kWh ab,
+    # davon kommen 4,968 kWh ins Auto (η 90 %), das sind 6,624 % von 75 kWh
+    soon = (T_APP + timedelta(minutes=30)).isoformat()
+    late = (T_APP - timedelta(hours=1)).isoformat()
+    inputs = _planned(vehicles=[_health_car("due", departure_at=soon, latest_start=late)])
+    spec = entity(cfg, "tesla_target_reachable")
+    assert spec.value(inputs) == "nein"
+    assert spec.attributes(inputs) == {
+        "expected_soc_pct": 46.6,
+        "departure_at": local(T_APP + timedelta(minutes=30)),
+        "soc_source": "measured",
+    }
+    assert state(cfg, "tesla_done_by", inputs) == local(T_APP + timedelta(hours=1))
+    assert state(cfg, "problem_target_unreachable", inputs) == "ON"
+    reachable = _planned(vehicles=[_health_car()])
+    assert entity(cfg, "tesla_target_reachable").attributes(reachable)["expected_soc_pct"] == 80.0
+
+
+def test_target_reached_has_no_done_by_and_is_reachable(cfg) -> None:
+    inputs = _planned(
+        vehicles=[_health_car("reached", need_kwh=0.0, latest_start=None) | {"soc_pct": 81.0}]
+    )
+    assert state(cfg, "tesla_done_by", inputs) == "None"
+    assert state(cfg, "tesla_target_reachable", inputs) == "ja"
+    assert entity(cfg, "tesla_target_reachable").attributes(inputs)["expected_soc_pct"] == 81.0
+    assert state(cfg, "problem_target_unreachable", inputs) == "OFF"
+    # das Ziel ist erreicht, auch wenn der Plan das Auto noch laden lässt
+    late = _plan_car(reachable=False, finish_at=T_APP + timedelta(hours=9))
+    planned = _planned(plan_vehicles=[late], vehicles=inputs.vehicles)
+    assert state(cfg, "tesla_done_by", planned) == "None"
+    assert state(cfg, "tesla_target_reachable", planned) == "ja"
+
+
+def test_planned_sensors_are_unknown_outside_of_planned(cfg) -> None:
+    names = ("tesla_done_by", "tesla_target_reachable")
+    pv = Intent(version=3, vehicles={"tesla": VehicleIntent(mode=ChargeMode.PV)})
+    cases = [
+        _planned(intent=pv, plan_vehicles=[_plan_car()], vehicles=[_health_car()]),
+        _planned(vehicles=[_health_car() | {"plugged": False}]),
+        _planned(vehicles=[_health_car() | {"planned": None}]),
+        _planned(vehicles=[]),
+    ]
+    for inputs in cases:
+        assert {state(cfg, oid, inputs) for oid in names} == {"None"}
+        assert entity(cfg, "tesla_target_reachable").attributes(inputs) == {
+            "expected_soc_pct": None,
+            "departure_at": None,
+            "soc_source": None,
+        }
+        assert state(cfg, "problem_target_unreachable", inputs) == "OFF"
+    assert state(cfg, "problem_target_unreachable", sample_inputs(core_connected=False)) == "None"
+
+
+def test_build_inputs_takes_the_plan_vehicles_and_the_time(
+    live, price_service, store, forecast_service
+) -> None:
+    car = _plan_car()
+    plan = sample_plan(created="2026-10-09T07:58:00+00:00", slots=["08:00", "08:15"])
+    plan = plan.model_copy(update={"vehicles": [car]})
+    inputs = build_inputs(live, price_service, store, forecast_service, T_APP, plan=plan)
+    assert (list(inputs.plan_vehicles), inputs.now) == ([car], T_APP)
+    later = T_APP + timedelta(hours=2)  # der Plan ist abgelaufen
+    expired = build_inputs(live, price_service, store, forecast_service, later, plan=plan)
+    assert list(expired.plan_vehicles) == []

@@ -619,7 +619,8 @@ def test_plan_triggers_and_sources_in_the_guide_match_the_ui() -> None:
         assert f"„{label}“" in section, label
 
 
-HA_PLATFORMS = {"sensor", "switch", "number", "button"}  # Plattformen der Tabellen im Handbuch
+# Plattformen der Tabellen im Handbuch
+HA_PLATFORMS = {"sensor", "binary_sensor", "switch", "number", "text", "button"}
 
 
 def _documented_entities(section: str) -> dict[str, tuple[str, str]]:
@@ -657,6 +658,26 @@ def test_planning_entities_in_the_guide_exist() -> None:
             "replan",
         },
     )
+
+
+def test_planned_charging_entities_in_the_guide_exist() -> None:
+    # „Geplantes Laden“ in Abschnitt 7: Objekt-ID, Name und Plattform wie die Entitäten der app;
+    # die Bedienelemente stehen auch in der Tabelle „Bedienelemente und Befehle“.
+    _check_entities_exist(
+        _documented_entities("7. Home Assistant über MQTT"),
+        {
+            "tesla_target_soc",
+            "tesla_departure",
+            "tesla_done_by",
+            "tesla_target_reachable",
+            "problem_target_unreachable",
+        },
+    )
+    section = _guide_section("7. Home Assistant über MQTT")
+    assert "| Ziel-SOC (je Fahrzeug) | Zahl |" in section
+    assert "| Abfahrtszeit (je Fahrzeug) | Text |" in section
+    assert "topic write homeassistant/text/bindaems/#" in section
+    assert "Sofort, Aus oder Geplant" in section
 
 
 def test_support_entities_in_the_guide_exist() -> None:
