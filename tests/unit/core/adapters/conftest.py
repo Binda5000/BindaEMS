@@ -300,21 +300,34 @@ class FakeDatagram:
 
 
 class GatedSleep:
-    """Ersatz für ``asyncio.sleep``: jeder Aufruf wartet, bis ``release`` ihn freigibt."""
+    """Ersatz für ``asyncio.sleep``: jeder Aufruf wartet, bis er freigegeben wird.
 
-    def __init__(self) -> None:
+    ``release`` beendet alle wartenden Pausen; ``release_due`` nur die, deren Dauer nach der
+    Uhr ``now`` abgelaufen ist.
+    """
+
+    def __init__(self, now: Callable[[], float] = lambda: 0.0) -> None:
         self.calls: list[float] = []
-        self._waiting: list[asyncio.Future[None]] = []
+        self._now = now
+        self._waiting: list[tuple[float, asyncio.Future[None]]] = []
 
     async def __call__(self, delay: float) -> None:
         self.calls.append(delay)
         future: asyncio.Future[None] = asyncio.get_running_loop().create_future()
-        self._waiting.append(future)
+        self._waiting.append((self._now() + delay, future))
         await future
 
     def release(self) -> None:
         waiting, self._waiting = self._waiting, []
-        for future in waiting:
+        for _, future in waiting:
+            if not future.done():
+                future.set_result(None)
+
+    def release_due(self) -> None:
+        now = self._now()
+        due = [item for item in self._waiting if item[0] <= now]
+        self._waiting = [item for item in self._waiting if item[0] > now]
+        for _, future in due:
             if not future.done():
                 future.set_result(None)
 
@@ -327,7 +340,7 @@ class CoeEnv:
         self.clock = ManualClock(T0)
         self.now = 1000.0  # Monotonic-Uhr des Adapters
         self.store = StateStore(self.clock)
-        self.sleep = GatedSleep()
+        self.sleep = GatedSleep(self.mono)
         self.ports: list[FakeDatagram] = []
         self.open_errors: list[Exception] = []
         self.adapter = CoeAdapter(
@@ -368,6 +381,13 @@ class CoeEnv:
         """Lässt jede wartende Pause des Adapters einmal ablaufen."""
         self.sleep.release()
         await self.settle()
+
+    async def run_for(self, seconds: float, step: float = 0.5) -> None:
+        """Lässt die Zeit in kleinen Schritten vergehen; jede Pause endet nach ihrer Dauer."""
+        for _ in range(round(seconds / step)):
+            self.advance(step)
+            self.sleep.release_due()
+            await self.settle()
 
     async def receive(self, data: bytes, addr: tuple[str, int]) -> None:
         await self.start()

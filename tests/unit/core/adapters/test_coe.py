@@ -168,7 +168,7 @@ async def test_sends_zero_without_permit(coe_env: CmiEnv) -> None:
     env.advance(11)
     await env.tick()
     assert sent_raw(env) == 0
-    assert env.adapter.held_k == -1.0  # gehalten bleibt er, gesendet wird 0
+    assert env.adapter.held_k == 0.0  # mit der Freigabe endet auch das Halten
 
 
 async def test_never_sends_held_value_without_permit(coe_env: CmiEnv) -> None:
@@ -242,7 +242,6 @@ async def test_offset_sent_signal(coe_env: CmiEnv) -> None:
     env.advance(11)
     await env.tick()
     assert env.store.snapshot().ok("thermal.klima.offset_sent_k") == 0.0  # was gesendet wurde
-    assert env.adapter.held_k == -1.5
 
 
 async def test_offset_sent_is_zero_not_negative_zero(coe_env: CmiEnv) -> None:
@@ -280,7 +279,7 @@ async def test_send_error_restarts_session_with_zero_held(coe_env: CmiEnv) -> No
     first.sendto = broken  # type: ignore[method-assign]
     env.advance(30)
     await env.tick()
-    assert first.closed is True
+    assert first.closed is True  # auch wenn das letzte Senden von 0 scheitert
     assert env.adapter.health().error_count == 1
     assert env.adapter.set_offset(0.5) is False  # zwischen den Sitzungen
     await env.tick()
@@ -319,3 +318,160 @@ async def test_udp_port_receives_and_sends_on_loopback() -> None:
             assert peer.recvfrom(100)[0] == b"antwort"
     finally:
         port.close()
+
+
+async def test_zero_goes_out_when_the_permit_lapses_not_at_the_next_cycle(
+    coe_env: CmiEnv,
+) -> None:
+    env = coe_env()
+    await env.start()
+    env.adapter.permit(env.mono() + 10)
+    env.adapter.set_offset(-1.0)
+    await env.settle()
+    sent = len(env.port.sent)
+    await env.run_for(9.5)
+    assert len(env.port.sent) == sent and sent_raw(env) == -10
+    await env.run_for(1.5)  # nach 11 s, weit vor dem Takt von 30 s
+    assert len(env.port.sent) == sent + 1
+    assert sent_raw(env) == 0
+    assert env.adapter.held_k == 0.0
+
+
+async def test_periodic_resend_continues_with_real_durations(coe_env: CmiEnv) -> None:
+    env = coe_env()
+    await env.start()
+    env.adapter.permit(env.mono() + 10)
+    env.adapter.set_offset(-1.0)
+    await env.settle()
+    await env.run_for(61)
+    # Start 0, set_offset -10, Ablauf 0, dann der Takt bei 30 s und 60 s
+    assert [decode(data)[0].raw for data, _ in env.port.sent] == [0, -10, 0, 0, 0]
+
+
+async def test_a_new_permit_does_not_revive_the_old_value(coe_env: CmiEnv) -> None:
+    env = coe_env()
+    await env.start()
+    env.adapter.permit(env.mono() + 10)
+    env.adapter.set_offset(-1.0)
+    await env.settle()
+    await env.run_for(11)
+    env.adapter.permit(env.mono() + 40)
+    await env.run_for(30)  # ein Takt unter Freigabe
+    assert sent_raw(env) == 0
+    assert env.adapter.set_offset(-1.0) is True
+    assert sent_raw(env) == -10
+
+
+async def test_withdrawing_the_permit_sends_zero_at_once(coe_env: CmiEnv) -> None:
+    env = coe_env()
+    await env.start()
+    env.adapter.permit(env.mono() + 100)
+    env.adapter.set_offset(2.0)
+    assert sent_raw(env) == 20
+    env.adapter.permit(float("-inf"))
+    await env.settle()
+    assert sent_raw(env) == 0 and env.adapter.held_k == 0.0
+
+
+async def test_extending_the_permit_defers_the_lapse(coe_env: CmiEnv) -> None:
+    env = coe_env()
+    await env.start()
+    env.adapter.permit(env.mono() + 10)
+    env.adapter.set_offset(1.0)
+    await env.settle()
+    await env.run_for(8)
+    env.adapter.permit(env.mono() + 10)  # der Zyklus gibt weiter frei
+    await env.run_for(8)
+    assert sent_raw(env) == 10 and env.adapter.held_k == 1.0
+    await env.run_for(4)
+    assert sent_raw(env) == 0
+
+
+async def test_old_states_are_stale_after_an_outage_until_reported_again(
+    coe_env: CmiEnv,
+) -> None:
+    env = coe_env()
+    await env.receive(FIXTURE, CMI)
+    env.advance(181)
+    await env.tick()
+    assert env.adapter.health().connected is False
+    await env.receive(encode([CoeValue(56, 1, True, 1, 261)]), CMI)  # nur der Istwert
+    snap = env.store.snapshot()
+    assert snap.ok("thermal.klima.actual_c") == 26.1
+    for old in ("running", "cooling", "heating", "setpoint_c"):
+        reading = snap.get(f"thermal.klima.{old}")
+        assert reading is not None and reading.quality is Quality.STALE, old
+    assert snap.ok("thermal.klima.offset_sent_k") == 0.0  # eigener Wert, gilt weiter
+    env.advance(1)
+    await env.receive(FIXTURE, CMI)
+    snap = env.store.snapshot()
+    assert snap.ok("thermal.klima.running") is True
+    assert snap.ok("thermal.klima.power_w") == pytest.approx(1230.0)
+
+
+async def test_stale_disconnect_and_recovery_are_logged(coe_env: CmiEnv) -> None:
+    from bindaems.shared import retry
+
+    env = coe_env()
+    warnings: list[str] = []
+    infos: list[str] = []
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(retry.log, "warning", lambda event, **kw: warnings.append(kw["error"]))
+        mp.setattr(retry.log, "info", lambda event, **kw: infos.append(event))
+        await env.receive(FIXTURE, CMI)
+        env.advance(181)
+        await env.tick()
+        env.advance(30)
+        await env.tick()  # kein zweites Mal melden
+        await env.receive(FIXTURE, CMI)
+    assert warnings == ["Seit 181 Sekunden ist kein gültiges CoE-Paket vom C.M.I. eingegangen."]
+    assert infos == ["Adapter verbunden", "Adapter verbunden"]
+    assert env.adapter.health().last_error == warnings[0]
+
+
+async def test_unit_mismatch_is_logged_once(coe_env: CmiEnv) -> None:
+    env = coe_env()
+    values = decode(FIXTURE)
+    values[3] = CoeValue(56, 4, True, 11, 123)
+    events: list[str] = []
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(coe.log, "warning", lambda event, **_: events.append(event))
+        for _ in range(3):
+            await env.receive(encode(values), CMI)
+    assert len(events) == 1
+    assert env.adapter.stats()["unit_mismatch"] == 3
+
+
+async def test_cancel_sends_a_last_zero_before_closing(coe_env: CmiEnv) -> None:
+    env = coe_env()
+    await env.start()
+    env.adapter.permit(env.mono() + 100)
+    env.adapter.set_offset(2.0)
+    assert sent_raw(env) == 20
+    await env.stop()
+    assert sent_raw(env) == 0
+    assert env.port.closed is True
+
+
+async def test_unexpected_error_in_a_packet_is_counted_and_survived(coe_env: CmiEnv) -> None:
+    env = coe_env()
+    await env.start()
+    events: list[str] = []
+    real_update = env.store.update
+    failing = [True]
+
+    def update(*args: object, **kwargs: object) -> None:
+        if failing[0]:
+            raise RuntimeError("Speicher kaputt")
+        real_update(*args, **kwargs)  # type: ignore[arg-type]
+
+    env.store.update = update  # type: ignore[method-assign]
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(coe.log, "warning", lambda event, **_: events.append(event))
+        await env.receive(FIXTURE, CMI)
+        await env.receive(FIXTURE, CMI)
+    assert env.adapter.stats()["bad_packets"] == 2
+    assert len(events) == 1
+    failing[0] = False
+    await env.receive(FIXTURE, CMI)
+    assert env.store.snapshot().ok("thermal.klima.actual_c") == 24.0

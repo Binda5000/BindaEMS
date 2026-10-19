@@ -118,7 +118,13 @@ class CoeAdapter:
         self._unit_mismatch = 0
         self._warned_foreign = False
         self._warned_bad = False
-        store.register_source(name, cfg.stale_after_s)
+        self._warned_unexpected = False
+        self._warned_mismatch = False
+        self._last_sent_k: float | None = None
+        self._permit_changed = asyncio.Event()
+        # nach einem Ausfall gelten alte Zustände (läuft, kühlt, heizt) als veraltet, bis das
+        # C.M.I. sie erneut meldet
+        store.register_source(name, cfg.stale_after_s, invalidate_on_reconnect=True)
 
     @property
     def held_k(self) -> float:
@@ -137,8 +143,13 @@ class CoeAdapter:
         }
 
     def permit(self, until_monotonic: float) -> None:
-        """Gibt den gehaltenen Versatz bis zu diesem Zeitpunkt (Uhr des Adapters) frei."""
+        """Gibt den gehaltenen Versatz bis zu diesem Zeitpunkt (Uhr des Adapters) frei.
+
+        Läuft die Freigabe ab (oder wird sie zurückgenommen), sendet der Adapter sofort 0 und
+        vergisst den gehaltenen Wert; danach braucht es ein neues ``set_offset``.
+        """
         self._permit_until = until_monotonic
+        self._permit_changed.set()
 
     def set_offset(self, value_k: float) -> bool:
         """Hält den Versatz und sendet sofort; ``False`` ohne Sitzung oder außerhalb der Grenze.
@@ -176,7 +187,11 @@ class CoeAdapter:
         self._backoff.reset()
         self._held_k = 0.0  # ein neuer Port beginnt mit 0, ein alter Versatz lebt nicht weiter
         self._port = port
-        tasks = [asyncio.create_task(self._send_loop()), asyncio.create_task(self._watch_loop())]
+        tasks = [
+            asyncio.create_task(self._send_loop()),
+            asyncio.create_task(self._lapse_loop()),
+            asyncio.create_task(self._watch_loop()),
+        ]
         try:
             await asyncio.gather(*tasks)
         finally:
@@ -184,6 +199,8 @@ class CoeAdapter:
             for task in tasks:
                 task.cancel()
             await asyncio.gather(*tasks, return_exceptions=True)
+            with contextlib.suppress(Exception):  # beim Ende noch 0 senden, soweit es geht
+                port.sendto(self._packet(0.0), self._destination)
             with contextlib.suppress(Exception):
                 port.close()
 
@@ -192,28 +209,58 @@ class CoeAdapter:
             self._send()
             await self._sleep(self._cfg.send_interval_s)
 
+    async def _lapse_loop(self) -> None:
+        """Sendet 0, sobald die Freigabe abläuft – ohne den nächsten Takt abzuwarten."""
+        while True:
+            await self._permit_changed.wait()
+            self._permit_changed.clear()
+            while (remaining := self._permit_until - self._clock()) > 0:
+                await self._sleep(remaining)
+            if self._held_k != 0.0:
+                self._held_k = 0.0
+                self._send()
+
     async def _watch_loop(self) -> None:
         while True:
             await self._sleep(WATCH_S)
             last = self._last_packet
-            if last is not None and self._clock() - last >= self._cfg.stale_after_s:
+            if (
+                last is not None
+                and self._health.connected
+                and self._clock() - last >= self._cfg.stale_after_s
+            ):
                 self._set_connected(False)
+                error = (
+                    f"Seit {self._clock() - last:.0f} Sekunden ist kein gültiges CoE-Paket "
+                    "vom C.M.I. eingegangen."
+                )
+                self._health.last_error = error
+                self._status.failed(error, 0.0)
+
+    @property
+    def _destination(self) -> tuple[str, int]:
+        return (str(self._cfg.cmi_host), self._cfg.port)
+
+    def _packet(self, value: float) -> bytes:
+        return offset_packet(value, node=self._cfg.own_node, output=self._cfg.own_output)
 
     def _send(self) -> None:
         port = self._port
         if port is None:
             return
         value = self._held_k if self._clock() < self._permit_until else 0.0
-        port.sendto(
-            offset_packet(value, node=self._cfg.own_node, output=self._cfg.own_output),
-            (str(self._cfg.cmi_host), self._cfg.port),
-        )
-        self._store.update(
-            f"thermal.{self.name}.offset_sent_k",
-            value + 0.0,  # aus -0.0 wird 0.0
-            source=self.name,
-            kind=SignalKind.STATE,
-        )
+        port.sendto(self._packet(value), self._destination)
+        self._last_sent_k = value + 0.0  # aus -0.0 wird 0.0
+        self._publish_sent()
+
+    def _publish_sent(self) -> None:
+        if self._last_sent_k is not None:
+            self._store.update(
+                f"thermal.{self.name}.offset_sent_k",
+                self._last_sent_k,
+                source=self.name,
+                kind=SignalKind.STATE,
+            )
 
     def _on_datagram(self, data: bytes, addr: tuple[str, int]) -> None:
         if addr[0] != str(self._cfg.cmi_host):
@@ -228,45 +275,65 @@ class CoeAdapter:
                 )
             return
         try:
-            values = decode(data)
+            self._handle(data)
         except CoeError as exc:
-            self._bad += 1
-            if not self._warned_bad:
-                self._warned_bad = True
-                log.warning(
-                    "Ein ungültiges CoE-Paket wurde verworfen; weitere werden nur gezählt.",
-                    adapter=self.name,
-                    grund=str(exc),
-                )
-            return
-        if not self._apply(values):
+            self._count_bad(
+                "Ein ungültiges CoE-Paket wurde verworfen; weitere werden nur gezählt.", exc
+            )
+        except Exception as exc:  # ein Paket darf den Empfang nie beenden
+            self._count_bad(
+                "Beim Verarbeiten eines CoE-Pakets trat ein unerwarteter Fehler auf; "
+                "weitere werden nur gezählt.",
+                exc,
+            )
+
+    def _count_bad(self, message: str, exc: Exception) -> None:
+        self._bad += 1
+        if not self._warned_bad:
+            self._warned_bad = True
+            log.warning(message, adapter=self.name, grund=f"{type(exc).__name__}: {exc}")
+
+    def _handle(self, data: bytes) -> None:
+        values = decode(data)
+        matches = [
+            (key, channel, value)
+            for key, channel in self._channels.items()
+            if (value := _find(values, channel)) is not None
+        ]
+        if not matches:
             self._foreign += 1  # kein Wert der Empfangstabelle: nicht von der Klimaanlage
             return
+        was_connected = self._health.connected
+        # erst verbinden, dann schreiben: Werte vor Beginn der Verbindung gälten als veraltet
+        self._set_connected(True)
+        if not was_connected:
+            self._publish_sent()  # der zuletzt gesendete Wert gilt in der neuen Verbindung weiter
         self._last_packet = self._clock()
         self._last_packet_at = datetime.now(UTC).isoformat()
         self._health.last_ok = datetime.now(UTC)
-        self._set_connected(True)
+        for key, channel, value in matches:
+            self._write(key, channel, value)
         self._store.touch(self.name)
 
-    def _apply(self, values: list[CoeValue]) -> bool:
-        """Schreibt die Werte der Empfangstabelle; ``False``, wenn das Paket keinen enthält."""
-        found = False
-        for key, channel in self._channels.items():
-            value = _find(values, channel)
-            if value is None:
-                continue
-            found = True
-            converted = scaled(value, channel)
-            if converted is None:
-                self._unit_mismatch += 1
-            signal = "power_w" if key == "power_kw" else key
-            self._store.update(
-                f"thermal.{self.name}.{signal}",
-                _to_signal(signal, converted),
-                source=self.name,
-                kind=SignalKind.MEASUREMENT if signal in _MEASUREMENTS else SignalKind.STATE,
-            )
-        return found
+    def _write(self, key: str, channel: CoeChannel, value: CoeValue) -> None:
+        converted = scaled(value, channel)
+        if converted is None:
+            self._unit_mismatch += 1
+            if not self._warned_mismatch:
+                self._warned_mismatch = True
+                log.warning(
+                    "Ein CoE-Wert passt nicht zur Empfangstabelle (Einheit oder Art) und gilt als "
+                    "ungültig; weitere werden nur gezählt.",
+                    adapter=self.name,
+                    wert=key,
+                )
+        signal = "power_w" if key == "power_kw" else key
+        self._store.update(
+            f"thermal.{self.name}.{signal}",
+            _to_signal(signal, converted),
+            source=self.name,
+            kind=SignalKind.MEASUREMENT if signal in _MEASUREMENTS else SignalKind.STATE,
+        )
 
     def _set_connected(self, connected: bool) -> None:
         self._store.set_connected(self.name, connected)
