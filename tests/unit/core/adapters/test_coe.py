@@ -496,3 +496,20 @@ async def test_unexpected_error_in_a_packet_is_counted_and_survived(coe_env: Cmi
     failing[0] = False
     await env.receive(FIXTURE, CMI)
     assert env.store.snapshot().ok("thermal.klima.actual_c") == 24.0
+
+
+async def test_permit_for_counts_on_the_adapter_clock(coe_env: CmiEnv) -> None:
+    # Die Laufzeit gibt je Zyklus frei, ohne die Uhr des Adapters zu kennen (Plan 6a, Task 5)
+    env = coe_env()
+    await env.start()
+    env.adapter.permit_for(10)
+    env.adapter.set_offset(1.0)
+    assert sent_raw(env) == 10
+    await env.run_for(9.5)
+    assert sent_raw(env) == 10
+    await env.run_for(1)
+    assert sent_raw(env) == 0
+    env.adapter.permit_for(10)
+    env.adapter.set_offset(1.0)
+    env.adapter.permit_for(0)  # zurückgenommen: sofort 0
+    assert sent_raw(env) == 0 and env.adapter.held_k == 0.0

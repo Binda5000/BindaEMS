@@ -1,4 +1,5 @@
-"""Konkrete Aktoren: EVCS und Victron schreiben per MQTT über den Cerbo, der Tesla über Tessie."""
+"""Konkrete Aktoren: EVCS und Victron schreiben per MQTT über den Cerbo, der Tesla über Tessie,
+die Klimaanlage über den CoE-Adapter."""
 
 from typing import Final
 

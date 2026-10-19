@@ -156,7 +156,9 @@
           "reasons": [],
           "locked": [],
           "controllable": false,
-          "capability_reasons": [],
+          "capability_reasons": [
+            "Keine Werte der Klimaanlage."
+          ],
           "pending": [],
           "owned": false,
           "watchdog_needed": false
@@ -271,6 +273,26 @@
         "budget_kw": null,
         "support_soc_pct": null,
         "price_ct": null
+      },
+      "thermal": {
+        "klima": {
+          "label": "Klimaanlage",
+          "connected": false,
+          "last_packet_at": null,
+          "foreign_packets": 0,
+          "bad_packets": 0,
+          "mode": "unbekannt",
+          "running": null,
+          "actual_c": null,
+          "setpoint_c": null,
+          "base_setpoint_c": null,
+          "offset_sent_k": null,
+          "offset_active_k": null,
+          "power_w": null,
+          "wish": null,
+          "reason": null,
+          "hint": null
+        }
       }
     }
   },

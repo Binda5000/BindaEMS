@@ -19,8 +19,10 @@ im selben Zyklus auch für die Safety-Schicht (``grid_budget_w``, Regel 2).
 
 Auf Geräte schreibt der core den Heartbeat an den eigenen Watchdog am Cerbo, die Sicherwerte des
 sicheren Zustands und die der Übergabe am Ende des Live-Betriebs (Plan 2b, Präzisierungen 3 und 4),
-die Befehle der Laderegelung an EVCS und Tesla (Plan 2c-1, Design 4.2) und den Override des
-Akku-Sollwerts an Victron (Plan 2c-2a, Design 5). Jeder Befehl geht durch die Safety-Schicht; im
+die Befehle der Laderegelung an EVCS und Tesla (Plan 2c-1, Design 4.2), den Override des
+Akku-Sollwerts an Victron (Plan 2c-2a, Design 5) und den Sollwertversatz an die Klimaanlage über
+den CoE-Adapter; diesen sendet der Adapter nur, solange der Zyklus ihn freigibt (Plan 6a,
+Entscheidung 3), sonst 0. Jeder Befehl geht durch die Safety-Schicht; im
 Dry-Run wird er nur protokolliert. Ein Aktor hält Werte des EMS (owned), sobald der core ihm einen
 Wert gesendet hat; ist er nicht mehr live gewünscht, bekommt er seine Sicherwerte und ist erst
 übergeben, wenn sie zurückgelesen sind. Ändert ein anderer einen bestätigten Strom oder
@@ -65,8 +67,10 @@ from bindaems import __version__
 from bindaems.core.accounting.flows import SlotAccumulator, derived_flows
 from bindaems.core.actuators.evcs import EvcsActuator
 from bindaems.core.actuators.tesla import TeslaActuator
+from bindaems.core.actuators.thermal import ThermalActuator
 from bindaems.core.actuators.victron import OVERRIDE_TIMEOUT_S, VictronActuator
 from bindaems.core.adapters.base import Adapter
+from bindaems.core.adapters.coe import CoeAdapter
 from bindaems.core.adapters.evcs import EvcsAdapter, PymodbusReader
 from bindaems.core.adapters.homeassistant import HaAdapter
 from bindaems.core.adapters.tessie import TessieAdapter
@@ -110,6 +114,7 @@ from bindaems.core.control.safe_state import (
     SafeTarget,
     safe_values_reached,
 )
+from bindaems.core.control.thermal import thermal_mode
 from bindaems.core.persistence.decision_spool import DecisionSpool
 from bindaems.core.regulation_link import RegulationLink
 from bindaems.core.safety.budget import PersistentWriteBudget
@@ -144,7 +149,7 @@ from bindaems.core.watchdog_client.status import (
     watchdog_alarms,
 )
 from bindaems.shared.broadcast import Broadcast
-from bindaems.shared.config import Config, EvcsConfig, Secrets, ha_entities
+from bindaems.shared.config import CoeOffsetConfig, Config, EvcsConfig, Secrets, ha_entities
 from bindaems.shared.control import (
     VICTRON,
     ActuatorMode,
@@ -153,6 +158,7 @@ from bindaems.shared.control import (
     CommandValue,
     Intent,
     OperatingState,
+    thermal_actuator,
 )
 from bindaems.shared.decisions import (
     NO_VERDICT,
@@ -194,6 +200,9 @@ _UNCLEAR_RESULTS: Final = frozenset({DecisionResult.ERROR, DecisionResult.TIMEOU
 _CONFIRMED_BY_COMMAND: Final = frozenset({"tesla"})
 # Tessie-Signale des Fahrzeugs: Ist eines ``False``, lädt es nicht (schläft, weg, abgesteckt)
 _NOT_CHARGING_SIGNALS: Final = ("online", "at_home", "plugged")
+# So lange gibt ein Zyklus den Versatz der Klimaanlage frei; steht der Zyklus, sendet der Adapter
+# danach 0 (Plan 6a, Entscheidung 3)
+THERMAL_PERMIT_S: Final = 10.0
 
 _Key = tuple[str, CommandKind]  # Aktor und Art
 
@@ -327,6 +336,44 @@ def _safe_reasons(snap: Snapshot) -> tuple[str, ...]:
     if number(snap, "system.active_in_source") == ISLAND_SOURCE:
         reasons.append("Netzausfall (Inselbetrieb).")
     return tuple(reasons)
+
+
+def _thermal_json(
+    name: str,
+    device: CoeOffsetConfig,
+    snap: Snapshot,
+    connected: bool,
+    stats: Mapping[str, int | str | None],
+) -> dict[str, Any]:
+    """Eine Klimaanlage für ``health`` (Plan 6a, Präzisierung 4).
+
+    Die Werte kommen aus dem Snapshot (``thermal.<name>.*``, nur mit Qualität ``OK``), die Zähler
+    der Pakete aus dem Adapter (``stats``, ohne Adapter leer). Wunsch, Grund und Hinweis setzt
+    erst die Regelung der Klimaanlage; bis dahin sind sie ``None``.
+    """
+    prefix = f"thermal.{name}."
+    running = snap.ok(prefix + "running")
+    setpoint = finite_number(snap.ok(prefix + "setpoint_c"))
+    sent = finite_number(snap.ok(prefix + "offset_sent_k"))
+    base = round(setpoint - sent, 2) if setpoint is not None and sent is not None else None
+    return {
+        "label": device.label,
+        "connected": connected,
+        "last_packet_at": stats.get("last_packet_at"),
+        "foreign_packets": stats.get("foreign_packets", 0),
+        "bad_packets": stats.get("bad_packets", 0),
+        "mode": thermal_mode(snap, name),
+        "running": running if isinstance(running, bool) else None,
+        "actual_c": finite_number(snap.ok(prefix + "actual_c")),
+        "setpoint_c": setpoint,
+        "base_setpoint_c": base,
+        "offset_sent_k": sent,
+        "offset_active_k": finite_number(snap.ok(prefix + "offset_active_k")),
+        "power_w": finite_number(snap.ok(prefix + "power_w")),
+        "wish": None,
+        "reason": None,
+        "hint": None,
+    }
 
 
 class CoreRuntime:
@@ -483,6 +530,7 @@ class CoreRuntime:
         # Stand des letzten Zyklus für health()
         self._capabilities: dict[str, Capabilities] = {}
         self._pending: frozenset[tuple[str, CommandKind]] = frozenset()
+        self._thermal: dict[str, Any] = {}
         self.selfcheck_runs = 0
         self._selfcheck: list[CheckResult] = []
         self._competitor_alarms: list[Alarm] = []
@@ -542,6 +590,9 @@ class CoreRuntime:
                     self._http_client(),
                 )
             )
+        for name, device in cfg.thermal.devices.items():
+            if isinstance(device, CoeOffsetConfig):
+                adapters.append(CoeAdapter(name, device, self.store))
         if cfg.homeassistant is not None and secrets.ha_token is not None:
             # neben homeassistant.entities abonniert der core die home_entity der Fahrzeuge selbst
             ha = cfg.homeassistant.model_copy(update={"entities": ha_entities(cfg)})
@@ -549,13 +600,15 @@ class CoreRuntime:
         return adapters
 
     def build_actuators(self) -> dict[str, Actuator]:
-        """Die Aktoren in Katalogreihenfolge: Victron, jede EVCS, jedes Fahrzeug mit Tessie.
+        """Die Aktoren in Katalogreihenfolge: Victron, jede EVCS, jedes Fahrzeug mit Tessie, jede
+        Klimaanlage.
 
         Victron und EVCS schreiben über ``mqtt_write`` und sind steuerbar, solange der Cerbo
         verbunden ist. Die EVCS findet ihre Instanz des GX-Dienstes ``evcharger`` über ihren
         Schlüssel in ``victron.instances.evcharger``; ohne Eintrag ist sie nicht steuerbar. Der
         Tesla nutzt den gemeinsamen HTTP-Client und die Uhr der Safety-Schicht; ohne Tessie-Token
-        ist Tessie für ihn nie erreichbar.
+        ist Tessie für ihn nie erreichbar. Die Klimaanlage sendet über den CoE-Adapter mit ihrem
+        Namen (``_thermal_set_offset``) und ist steuerbar, solange dessen Quelle Werte liefert.
         """
         cfg = self._cfg
         actuators: dict[str, Actuator] = {
@@ -580,6 +633,15 @@ class CoreRuntime:
                 clock=self._safety_clock.now,
             )
             actuators[car.id] = car
+        for name, device in cfg.thermal.devices.items():
+            if isinstance(device, CoeOffsetConfig):
+                thermal = ThermalActuator(
+                    name,
+                    device,
+                    partial(self._thermal_set_offset, name),
+                    partial(self._thermal_connected, name),
+                )
+                actuators[thermal.id] = thermal
         return actuators
 
     def _cerbo_connected(self) -> bool:
@@ -601,6 +663,26 @@ class CoreRuntime:
             if isinstance(adapter, VictronMqttAdapter):
                 return adapter.write(path, value)
         return False
+
+    def _coe_adapter(self, name: str) -> CoeAdapter | None:
+        """Der CoE-Adapter der Klimaanlage ``name``; ``None``, wenn es keinen gibt."""
+        for adapter in self.adapters:
+            if isinstance(adapter, CoeAdapter) and adapter.name == name:
+                return adapter
+        return None
+
+    def _thermal_set_offset(self, name: str, value_k: float) -> bool:
+        """Übergibt den Versatz dem CoE-Adapter; ohne ihn ist das Ergebnis ``False``.
+
+        Wie ``_victron_write`` im Event-Loop des Zyklus, ohne zu warten.
+        """
+        adapter = self._coe_adapter(name)
+        return adapter is not None and adapter.set_offset(value_k)
+
+    def _thermal_connected(self, name: str) -> bool:
+        """Liefert die Quelle der Klimaanlage ``name`` Werte? Der CoE-Adapter hält das im
+        Zustandsspeicher."""
+        return self.store.connected(name) is True
 
     def _send_heartbeat(self, value: int) -> bool:
         """Schreibt den Heartbeat über ``mqtt_write``."""
@@ -652,6 +734,7 @@ class CoreRuntime:
             peak=regulation["peak"],
             wallboxes=regulation["wallboxes"],
             plan=regulation["plan"],
+            thermal=self._thermal,
         )
 
     def state(self) -> dict[str, Any]:
@@ -755,6 +838,7 @@ class CoreRuntime:
         self._apply_acks(acks, now)
         self._update_operation(snap, plausibility, now, present, checked=checked)
         self._control(snap, derived, flows, now, snow, present)
+        self._thermal = self._thermal_health(snap)
         state = snapshot_to_json(snap, derived)
         self._last_state = state
         self.broadcast.publish({"type": "state", "data": state})
@@ -913,12 +997,16 @@ class CoreRuntime:
            Schreibvorgang offen.
         7. Am Ende legt ``RegulationLink.finish`` Health und Alarme der Regelung ab.
 
+        Vor allem anderen gibt die Laufzeit den Versatz der Klimaanlagen frei oder nimmt die
+        Freigabe zurück (``_permit_thermal``): So sendet der Adapter einen Befehl dieses Zyklus.
+
         Warf die Regelung in diesem Zyklus (``RegulationLink.failed``, Plan 2c-2a,
         Präzisierung 15), führt die Laufzeit keinen ihrer Befehle mehr aus; die des Keepers laufen
         trotzdem. Übergeben ist ein Aktor schon vorher, in ``_update_operation``. Die
         Entscheidungen tragen die Wanduhr ``now``. Fähigkeiten, offene Schreibvorgänge und die
         owned Aktoren bleiben für ``health`` stehen.
         """
+        self._permit_thermal()
         capabilities = {
             actuator_id: actuator.capabilities(snap, snow)
             for actuator_id, actuator in self.actuators.items()
@@ -982,6 +1070,41 @@ class CoreRuntime:
         self._pending = self.executor.pending()
         self._owned = self.ownership.owned
         self.regulation.finish(now)
+
+    def _permit_thermal(self) -> None:
+        """Gibt den Versatz jeder Klimaanlage für ``THERMAL_PERMIT_S`` frei, oder nimmt die Freigabe
+        sofort zurück (Plan 6a, Entscheidung 3).
+
+        Freigegeben wird nur im Regelbetrieb (CONTROL, DEGRADED) und nur, wenn der Aktor wirksam
+        live ist und nicht übergeben wird; sonst sendet der Adapter ab sofort 0. Die Übergabe
+        sendet ohnehin nur 0, das braucht keine Freigabe. Bleibt der Zyklus stehen, endet die
+        Freigabe nach ``THERMAL_PERMIT_S``.
+        """
+        regulating = self.operating.state in _REGULATION_STATES
+        for name in self._cfg.thermal.devices:
+            adapter = self._coe_adapter(name)
+            if adapter is None:
+                continue
+            actuator = thermal_actuator(name)
+            mode = self._modes.get(actuator)
+            live = (
+                regulating
+                and mode is not None
+                and mode.effective == ActuatorMode.LIVE
+                and actuator not in self._handing_back
+            )
+            adapter.permit_for(THERMAL_PERMIT_S if live else 0.0)
+
+    def _thermal_health(self, snap: Snapshot) -> dict[str, Any]:
+        """Der Stand der Klimaanlagen für ``health``, aus dem Snapshot und den Adaptern."""
+        thermal: dict[str, Any] = {}
+        for name, device in self._cfg.thermal.devices.items():
+            if not isinstance(device, CoeOffsetConfig):
+                continue
+            adapter = self._coe_adapter(name)
+            stats = adapter.stats() if adapter is not None else {}
+            thermal[name] = _thermal_json(name, device, snap, self._thermal_connected(name), stats)
+        return thermal
 
     def _switched_modes(self) -> set[str]:
         """Die Aktoren, deren wirksame Betriebsart seit dem letzten Zyklus gewechselt hat.
@@ -1299,6 +1422,9 @@ class CoreRuntime:
         1. jede Wallbox, deren Quelle registriert, aber nicht verbunden ist
         2. jedes Fahrzeug mit Tessie, dessen Tessie-Quelle registriert, aber nicht verbunden ist
         3. jede aktive Sperre, in der Reihenfolge des Aktorkatalogs
+
+        Eine Klimaanlage ohne Werte ist kein Grund (Plan 6a): Die Regelung setzt ihren Versatz dann
+        selbst auf 0, und DEGRADED hielte sonst den Akku wegen der Klimaanlage an.
         """
         reasons: list[str] = []
         for key, wallbox in self._cfg.wallboxes.items():

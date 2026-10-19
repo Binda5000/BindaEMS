@@ -153,6 +153,14 @@ class CoeAdapter:
             self._send()
         self._permit_changed.set()
 
+    def permit_for(self, seconds: float) -> None:
+        """Gibt den gehaltenen Versatz ``seconds`` ab jetzt frei (Uhr des Adapters).
+
+        Die Laufzeit ruft das je Zyklus, ohne die Uhr des Adapters zu kennen; ``0`` nimmt die
+        Freigabe sofort zurück (``permit``).
+        """
+        self.permit(self._clock() + seconds)
+
     def set_offset(self, value_k: float) -> bool:
         """Hält den Versatz und sendet sofort; ``False`` ohne Sitzung oder außerhalb der Grenze.
 

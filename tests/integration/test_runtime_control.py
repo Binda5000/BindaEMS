@@ -26,6 +26,7 @@ from tests.unit.core.adapters.conftest import FakeTransport, P
 
 from bindaems.core.actuators.evcs import EvcsActuator
 from bindaems.core.actuators.tesla import TeslaActuator
+from bindaems.core.actuators.thermal import ThermalActuator
 from bindaems.core.actuators.victron import VictronActuator
 from bindaems.core.adapters.victron_mqtt import VictronMqttAdapter
 from bindaems.core.api.app import AckReply, create_api
@@ -645,12 +646,11 @@ def actuator_health(rt, actuator: str) -> dict[str, Any]:
 
 async def test_actuators_follow_the_catalog(runtime_env) -> None:
     rt, _, _ = runtime_env()
-    # Den Aktor der Klimaanlage baut die Laufzeit erst mit dem CoE-Aktor (Plan 6a, Task 5)
-    catalog = [actuator for actuator in rt.limits.actuators if not actuator.startswith("thermal.")]
-    assert list(rt.actuators) == catalog
-    victron, evcs, tesla = rt.actuators.values()
+    assert list(rt.actuators) == list(rt.limits.actuators)
+    victron, evcs, tesla, thermal = rt.actuators.values()
     assert isinstance(victron, VictronActuator)
     assert isinstance(evcs, EvcsActuator) and isinstance(tesla, TeslaActuator)
+    assert isinstance(thermal, ThermalActuator)
 
 
 async def test_evcs_without_its_evcharger_instance_is_not_controllable(runtime_env) -> None:

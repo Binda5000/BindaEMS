@@ -81,6 +81,14 @@ class HealthReport(BaseModel):
       ``grid_charge_w``, ``budget_kw``, ``support_soc_pct`` und ``price_ct`` (``import_ct`` des
       Slots); was fehlt, ist ``null``. Die Felder des Slots stehen nur, solange die Regelung regelt
       und ein Slot gilt.
+    - ``thermal``: je Klimaanlage unter ihrem Schlüssel in ``thermal.devices`` (Plan 6a,
+      Präzisierung 4): ``label``, ``connected`` (die Quelle liefert Werte), ``last_packet_at``
+      (ISO in UTC), ``foreign_packets`` und ``bad_packets`` (verworfene Pakete), ``mode``
+      (``heizen``, ``kuehlen``, ``lueften``, ``aus``, ``unbekannt``), ``running``, ``actual_c``,
+      ``setpoint_c`` (mit Versatz), ``base_setpoint_c`` (``setpoint_c − offset_sent_k``),
+      ``offset_sent_k`` (was der Adapter sendet), ``offset_active_k`` (das Echo der UVR),
+      ``power_w``, dazu ``wish``, ``reason`` und ``hint`` aus der Regelung; was fehlt, ist
+      ``null``. Vor dem ersten Zyklus leer.
     """
 
     mode: Literal["START", "OBSERVE", "CONTROL", "DEGRADED", "SAFE"]
@@ -103,6 +111,7 @@ class HealthReport(BaseModel):
     peak: dict[str, Any] = Field(default_factory=dict)
     wallboxes: list[dict[str, Any]] = Field(default_factory=list)
     plan: dict[str, Any] = Field(default_factory=dict)
+    thermal: dict[str, Any] = Field(default_factory=dict)
 
 
 class CurrentIntent(BaseModel):

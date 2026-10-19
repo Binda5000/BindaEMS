@@ -129,7 +129,7 @@ def test_build_adapters_from_config(cfg) -> None:
         ha_token=SecretStr("h"),
     )
     rt = CoreRuntime(cfg, secrets, sink=FakeSink(), serve_api=False)
-    assert [a.name for a in rt.adapters] == ["victron", "evcs", "twc", "tesla", "ha"]
+    assert [a.name for a in rt.adapters] == ["victron", "evcs", "twc", "tesla", "klima", "ha"]
 
 
 def test_build_adapters_subscribes_the_home_entity(cfg) -> None:
@@ -178,7 +178,7 @@ def test_missing_tessie_token_skips_vehicle_with_warning(cfg) -> None:
         rt = CoreRuntime(
             cfg, Secrets(internal_token=SecretStr(TOKEN)), sink=FakeSink(), serve_api=False
         )
-    assert [a.name for a in rt.adapters] == ["victron", "evcs", "twc"]
+    assert [a.name for a in rt.adapters] == ["victron", "evcs", "twc", "klima"]
     assert any(
         e["event"] == "Tessie-Token fehlt – Fahrzeug Tesla Model 3 wird nicht gelesen" for e in logs
     )
