@@ -316,6 +316,36 @@ export const WallboxHealthSchema = v.object({
 });
 export type WallboxHealth = v.InferOutput<typeof WallboxHealthSchema>;
 
+/** Eine Klimaanlage im Gesundheitsbericht (CoE, Plan 6a); Zahlen sind `null`, solange sie fehlen */
+export const ThermalHealthSchema = v.object({
+	label: v.string(),
+	/** frische Werte der Anlage liegen vor */
+	connected: v.boolean(),
+	last_packet_at: v.nullable(Iso),
+	/** verworfene Pakete von einer fremden Absender-IP */
+	foreign_packets: v.number(),
+	/** verworfene Pakete, die sich nicht lesen ließen */
+	bad_packets: v.number(),
+	/** `aus`, `heizen`, `lueften`, `kuehlen` oder `unbekannt` */
+	mode: v.string(),
+	running: v.nullable(v.boolean()),
+	actual_c: NullableNumber,
+	setpoint_c: NullableNumber,
+	/** Sollwert ohne den gesendeten Versatz */
+	base_setpoint_c: NullableNumber,
+	offset_sent_k: NullableNumber,
+	/** Echo: der Versatz, den die UVR anzeigt */
+	offset_active_k: NullableNumber,
+	/** Stufen des Wunsches, positiv heißt mehr Leistung (nicht der Versatz) */
+	wish: v.number(),
+	power_w: NullableNumber,
+	/** Code des Grundes der Strategie */
+	reason: v.nullable(v.string()),
+	/** Hinweis des Plans im aktuellen Slot: `mehr`, `neutral` oder `weniger` */
+	hint: v.string()
+});
+export type ThermalHealth = v.InferOutput<typeof ThermalHealthSchema>;
+
 export const CoreHealthSchema = v.object({
 	mode: v.picklist(['START', 'OBSERVE', 'CONTROL', 'DEGRADED', 'SAFE']),
 	version: v.string(),
@@ -364,6 +394,8 @@ export const CoreHealthSchema = v.object({
 	),
 	vehicles: v.array(VehicleHealthSchema),
 	wallboxes: v.array(WallboxHealthSchema),
+	/** Klimaanlagen nach Name; fehlt der Block (älterer core), gibt es keine */
+	thermal: v.optional(v.record(v.string(), ThermalHealthSchema), {}),
 	/**
 	 * Akku-Sollwert: die wirksame Schwelle der Unterstützung und woher sie kommt. Fehlt der Block
 	 * oder ein Feld (älterer core), ist die Schwelle unbekannt; Health bleibt gültig.

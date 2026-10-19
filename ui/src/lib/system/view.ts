@@ -3,8 +3,8 @@ import type { CoreHealth, CoreState, Intent, PriceStatus, Reading } from '$lib/a
 import { DASH, formatNumber } from '$lib/format';
 import { parseIso } from '$lib/time';
 
-/** Aktor-ID von Victron (`VICTRON` in `shared/control.py`) */
-const VICTRON = 'victron';
+/** Präfixe der Aktor-IDs, die der core von evcc übernimmt (`wallbox_actuator`, `vehicle_actuator` in `shared/control.py`) */
+const EVCC_PREFIXES = ['wallbox.', 'vehicle.'];
 
 type Watchdog = CoreHealth['watchdog'];
 type Actuator = CoreHealth['actuators'][number];
@@ -120,12 +120,13 @@ export function liveConditions(
 }
 
 /**
- * Alle Aktoren außer Victron (EVCS, Tesla) übernimmt der core von evcc. Ihre IDs setzen sich
- * aus den Schlüsseln der Konfiguration zusammen (`wallbox.<key>`, `vehicle.<key>`); fest ist nur
- * `victron`. Ein unbekannter Aktor verlangt darum im Zweifel die Bestätigung.
+ * Nur die Aktoren, die der core von evcc übernimmt, verlangen die Bestätigung „evcc ist ganz
+ * abgeschaltet“: Wallboxen (`wallbox.<key>`) und Fahrzeuge (`vehicle.<key>`). Victron und die
+ * Klimaanlage (`thermal.<key>`) hängen nicht an evcc. Die Schlüssel wählt die Konfiguration, fest
+ * sind nur die Präfixe.
  */
 export function needsEvccConfirmation(actuatorIds: string[]): boolean {
-	return actuatorIds.some((id) => id !== VICTRON);
+	return actuatorIds.some((id) => EVCC_PREFIXES.some((prefix) => id.startsWith(prefix)));
 }
 
 export function signalValue(value: Reading['v']): string {

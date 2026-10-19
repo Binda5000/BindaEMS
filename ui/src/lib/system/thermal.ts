@@ -1,0 +1,102 @@
+// Zeilen der Karte „Klimaanlage“ auf der System-Seite (Health des core, Plan 6a)
+import type { ThermalHealth } from '$lib/api/schemas';
+import { reasonLabel } from '$lib/charging/view';
+import { DASH, formatDateTime, formatNumber, formatPower, NBSP } from '$lib/format';
+
+export interface ThermalRow {
+	label: string;
+	value: string;
+}
+
+const MINUS = '−';
+
+/** So nah muss das Echo der UVR am gesendeten Versatz liegen, damit es als bestätigt gilt (K) */
+const ECHO_TOLERANCE_K = 0.05;
+
+const MODES: Record<string, string> = {
+	aus: 'Aus',
+	heizen: 'Heizen',
+	lueften: 'Lüften',
+	kuehlen: 'Kühlen',
+	unbekannt: 'unbekannt'
+};
+
+/** Versatz in K mit Vorzeichen, Komma und einer Nachkommastelle: „+0,5 K“, „−1,0 K“, „+0,0 K“ */
+export function thermalOffset(k: number | null): string {
+	if (k === null) return DASH;
+	const rounded = Math.round(k * 10) / 10;
+	const sign = rounded < 0 ? MINUS : '+';
+	return `${sign}${formatNumber(Math.abs(rounded), 1)}${NBSP}K`;
+}
+
+function degrees(c: number | null): string {
+	return c === null ? DASH : `${formatNumber(c, 1)}${NBSP}°C`;
+}
+
+/** „−1,0 K (bestätigt)“, wenn das Echo den gesendeten Versatz zeigt, sonst „−1,0 K (Echo +0,0 K)“ */
+function offsetText(block: ThermalHealth): string {
+	const sent = block.offset_sent_k;
+	if (sent === null) return DASH;
+	const echo = block.offset_active_k;
+	const confirmed = echo !== null && Math.abs(echo - sent) <= ECHO_TOLERANCE_K + 1e-9;
+	return `${thermalOffset(sent)} (${confirmed ? 'bestätigt' : `Echo ${thermalOffset(echo)}`})`;
+}
+
+function wishText(wish: number): string {
+	if (wish === 0) return 'Stufe 0';
+	return `Stufe ${wish > 0 ? '+' : MINUS}${Math.abs(wish)}`;
+}
+
+/**
+ * Nach einem Rücksetzen der Strategie bleibt der Grund `thermal_off`, auch wenn die Anlage
+ * läuft. Läuft sie (und lüftet nicht) und ist der Wunsch 0, ist „aus oder lüftet“ falsch: dann
+ * steht nur, dass der Versatz 0 ist.
+ */
+function reasonText(block: ThermalHealth): string {
+	if (
+		block.reason === 'thermal_off' &&
+		block.wish === 0 &&
+		block.running === true &&
+		block.mode !== 'lueften'
+	) {
+		return 'Versatz 0';
+	}
+	return reasonLabel(block.reason);
+}
+
+function running(value: boolean | null): string {
+	return value === null ? DASH : value ? 'ja' : 'nein';
+}
+
+/**
+ * Die Zeilen der Karte. Ohne frische Werte („nicht verbunden“) gibt es nur den letzten Empfang
+ * und den Grund; die übrigen Zahlen wären alt oder leer.
+ */
+export function thermalRows(block: ThermalHealth): ThermalRow[] {
+	const received = {
+		label: 'Letzter Empfang',
+		value: block.last_packet_at === null ? DASH : formatDateTime(block.last_packet_at)
+	};
+	const reason = { label: 'Grund', value: reasonText(block) };
+	const dropped: ThermalRow[] = [
+		...(block.foreign_packets > 0
+			? [{ label: 'Fremde Pakete', value: String(block.foreign_packets) }]
+			: []),
+		...(block.bad_packets > 0
+			? [{ label: 'Fehlerhafte Pakete', value: String(block.bad_packets) }]
+			: [])
+	];
+	if (!block.connected) return [received, ...dropped, reason];
+	return [
+		{ label: 'Betriebsart', value: MODES[block.mode] ?? block.mode },
+		{ label: 'Läuft', value: running(block.running) },
+		{ label: 'Ist', value: degrees(block.actual_c) },
+		{ label: 'Soll ohne Versatz', value: degrees(block.base_setpoint_c) },
+		{ label: 'Versatz', value: offsetText(block) },
+		{ label: 'Wunsch', value: wishText(block.wish) },
+		{ label: 'Leistung', value: formatPower(block.power_w) },
+		received,
+		...dropped,
+		reason
+	];
+}

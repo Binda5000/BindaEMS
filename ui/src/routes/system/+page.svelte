@@ -16,6 +16,7 @@
 	import LoadForecastCard from '$lib/system/LoadForecastCard.svelte';
 	import QualityCard from '$lib/system/QualityCard.svelte';
 	import SignalTable from '$lib/system/SignalTable.svelte';
+	import ThermalCard from '$lib/system/ThermalCard.svelte';
 	import {
 		actuatorModeLabel,
 		actuatorNotes,
@@ -333,6 +334,10 @@
 			<p class="muted">Keine Daten vom core</p>
 		{/if}
 	</Card>
+
+	{#if health}
+		<ThermalCard thermal={health.thermal} />
+	{/if}
 
 	<Card title="Watchdog am Cerbo">
 		{#if health}

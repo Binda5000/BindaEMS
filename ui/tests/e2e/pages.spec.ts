@@ -84,6 +84,18 @@ test('Übersicht zeichnet das Diagramm mit Prognosen, System zeigt Lastprognose 
 	await expect(quality.getByRole('cell', { name: 'bis 6 h' }).first()).toBeVisible();
 });
 
+test('System zeigt die Karte Klimaanlage ohne Werte', async ({ page }) => {
+	await login(page, 'gast');
+	await page.goto('/system');
+	// die Demo-Welt kennt eine Klimaanlage, aber kein C.M.I., das Werte sendet
+	const card = page.locator('section', {
+		has: page.getByRole('heading', { name: 'Klimaanlage' })
+	});
+	await expect(card.getByText('Keine Werte', { exact: true })).toBeVisible();
+	await expect(card.getByText('Letzter Empfang')).toBeVisible();
+	await expect(card.getByText('Keine Werte der Klimaanlage, Versatz 0')).toBeVisible();
+});
+
 /** Bedienelemente unter 44 × 44 px (Global Constraints: Mobil zuerst); Links im Text zählen nicht */
 function smallTargets(path: string): string[] {
 	const selector = [

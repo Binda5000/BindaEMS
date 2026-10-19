@@ -96,7 +96,16 @@ const REASONS: Record<string, string> = {
 	plan_power: 'Plan: Laden',
 	latest_start: 'Späteste Startzeit',
 	target_reached: 'Ziel-SOC erreicht',
-	charge_limit: 'Ladelimit'
+	charge_limit: 'Ladelimit',
+	thermal_more: 'PV-Überschuss in die Klimaanlage',
+	thermal_back: 'Netzbezug, Klimaanlage eine Stufe zurück',
+	thermal_cars: 'Autos haben Vorrang',
+	thermal_battery: 'Akku hat Vorrang',
+	thermal_less: 'Teurer Strom, Klimaanlage zurückhaltend',
+	thermal_peak: 'Spitze droht, Klimaanlage nicht mehr',
+	thermal_mode: 'Betriebsart gewechselt, Versatz 0',
+	thermal_stale: 'Keine Werte der Klimaanlage, Versatz 0',
+	thermal_off: 'Klimaanlage aus oder lüftet, Versatz 0'
 };
 
 const SURPLUS: Record<'cars_first' | 'battery_first', string> = {

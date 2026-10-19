@@ -180,6 +180,22 @@ it('Gesundheitsbericht nennt Fahrzeuge, Wallboxen und den scharfen Watchdog', ()
 	expect(health.intent_version).toBe(1);
 });
 
+it('Gesundheitsbericht nennt die Klimaanlage, ein älterer core ohne sie bleibt gültig', () => {
+	const demo = files['./contract/system.json'] as { core: { health: Record<string, unknown> } };
+	const health = v.parse(s.SystemResponseSchema, files['./contract/system.json']).core.health!;
+	expect(Object.keys(health.thermal)).toEqual(['klima']);
+	expect(health.thermal.klima).toMatchObject({
+		connected: false,
+		mode: 'unbekannt',
+		wish: 0,
+		reason: 'thermal_stale',
+		hint: 'neutral'
+	});
+	const older = { ...demo.core.health };
+	delete older.thermal;
+	expect(v.parse(s.CoreHealthSchema, older).thermal).toEqual({});
+});
+
 describe('Bedienung und Entscheidungen', () => {
 	const decisions = files['./contract/decisions.json'] as {
 		decisions: Record<string, unknown>[];
