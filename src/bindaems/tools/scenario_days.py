@@ -14,8 +14,9 @@ lässt ihn.
 
 Auf der Standardausgabe steht je Tag eine Zeile, der Bericht geht als Markdown nach ``--out``
 (das Verzeichnis muss existieren und beschreibbar sein; geprüft wird vor dem Lauf). Exitcode 0
-bei „Bestanden“ (bereinigte Kosten höchstens „Victron allein“, keine Verletzung von Regel R), 1 bei
-„Nicht bestanden“, 2 bei ungültiger Eingabe.
+bei „Bestanden“ (bereinigte Kosten höchstens „Victron allein“, keine Verletzung von Regel R, mit
+Autos jedes Ziel erreicht und keine Verletzung von Regel R2), 1 bei „Nicht bestanden“, 2 bei
+ungültiger Eingabe.
 """
 
 from __future__ import annotations

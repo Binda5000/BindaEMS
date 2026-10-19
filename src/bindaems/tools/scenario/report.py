@@ -5,7 +5,9 @@ einschließlich Leistungspreis, die um den End-SOC bereinigten Kosten des Optimi
 Leistungspreis, die Informationszahl „Netzladen vor tatsächlicher Einspeisung“, unter der Tabelle
 die beim Export übersprungenen Tage und der Takt.
 „Bestanden“ heißt: bereinigte Kosten höchstens so hoch wie „Victron allein“ und kein Verstoß
-gegen Regel R (Präzisierung 19).
+gegen Regel R (Präzisierung 19); mit Autos (Plan 4b, Task 13) zusätzlich jedes Ziel erreicht und
+kein Plan über der Netzenergie nach Regel R2. Mit Autos hat die Tabelle die Spalten „Ziele
+erreicht“ („a von b“ je Tag der Abfahrt) und „Regel R2“; eine Datei ohne Autos zeigt sie nicht.
 """
 
 from __future__ import annotations
@@ -29,13 +31,17 @@ _COLUMNS: Final = (
     "Regel R",
     "Ersatzpläne",
 )
+_CAR_COLUMNS: Final = ("Ziele erreicht", "Regel R2")
 
 
 def passed(result: ScenarioResult) -> bool:
     """Bereinigte Kosten des Optimierers höchstens die von „Victron allein“, kein Verstoß gegen
-    Regel R."""
+    Regel R, jedes Ziel erreicht und kein Verstoß gegen Regel R2."""
     return (
-        result.adjusted_optimizer_ct <= result.baseline_ct + _EPS_CT and result.r1_violations == 0
+        result.adjusted_optimizer_ct <= result.baseline_ct + _EPS_CT
+        and result.r1_violations == 0
+        and result.targets_missed == 0
+        and result.r2_violations == 0
     )
 
 
@@ -59,6 +65,10 @@ def _money_row(label: str, baseline_ct: float, optimizer_ct: float) -> list[str]
     return [label, _eur(baseline_ct), _eur(optimizer_ct), _eur(optimizer_ct - baseline_ct)]
 
 
+def _targets(reached: int, total: int) -> str:
+    return f"{reached} von {total}" if total else _NONE
+
+
 def _skipped_lines(data: ScenarioFile) -> list[str]:
     """Zeile „Übersprungene Tage: …“ mit den Daten aus ``skipped_days`` („Datum: Grund“)."""
     if not data.skipped_days:
@@ -68,8 +78,15 @@ def _skipped_lines(data: ScenarioFile) -> list[str]:
 
 
 def render_report(result: ScenarioResult, data: ScenarioFile) -> str:
-    """Der Bericht; ``data`` liefert Herkunft und Zeitraum."""
+    """Der Bericht; ``data`` liefert Herkunft, Zeitraum und ob es Autos gibt."""
     days = result.days
+    cars = bool(data.cars)
+    columns = (*_COLUMNS, *_CAR_COLUMNS) if cars else _COLUMNS
+    pad = len(columns) - len(_COLUMNS)
+
+    def car_cells(reached: int, total: int, r2: int) -> list[str]:
+        return [_targets(reached, total), str(r2)] if cars else []
+
     rows = [
         _row(
             *_money_row(day.day.isoformat(), day.baseline_ct, day.optimizer_ct),
@@ -77,6 +94,7 @@ def render_report(result: ScenarioResult, data: ScenarioFile) -> str:
             str(day.hold_slots),
             str(day.r1_violations),
             str(day.fallbacks),
+            *car_cells(day.targets_reached, day.targets, day.r2_violations),
         )
         for day in days
     ]
@@ -87,6 +105,9 @@ def render_report(result: ScenarioResult, data: ScenarioFile) -> str:
             str(sum(day.hold_slots for day in days)),
             str(result.r1_violations),
             str(result.fallbacks),
+            *car_cells(
+                result.targets - result.targets_missed, result.targets, result.r2_violations
+            ),
         )
     )
     rows.append(
@@ -95,13 +116,13 @@ def render_report(result: ScenarioResult, data: ScenarioFile) -> str:
             _NONE,
             _eur(result.adjusted_optimizer_ct),
             _eur(result.adjusted_optimizer_ct - result.baseline_ct),
-            *[_NONE] * 4,
+            *[_NONE] * (4 + pad),
         )
     )
     rows.append(
         _row(
             *_money_row("Leistungspreis", result.baseline_power_ct, result.optimizer_power_ct),
-            *[_NONE] * 4,
+            *[_NONE] * (4 + pad),
         )
     )
     rows.append(
@@ -111,7 +132,7 @@ def render_report(result: ScenarioResult, data: ScenarioFile) -> str:
             _NONE,
             _NONE,
             _number(result.charge_before_export_kwh, 1),
-            *[_NONE] * 3,
+            *[_NONE] * (3 + pad),
         )
     )
     source = "Anlage" if data.source == "plant" else "erzeugte Tage"
@@ -120,8 +141,8 @@ def render_report(result: ScenarioResult, data: ScenarioFile) -> str:
         "",
         f"{result.name} ({source})",
         "",
-        _row(*_COLUMNS),
-        _row(*["---"] * len(_COLUMNS)),
+        _row(*columns),
+        _row(*["---"] * len(columns)),
         *rows,
         *_skipped_lines(data),
         "",
@@ -143,4 +164,8 @@ def render_report(result: ScenarioResult, data: ScenarioFile) -> str:
             lines.append("- Bereinigte Kosten über Victron allein")
         if result.r1_violations:
             lines.append(f"- Regel R verletzt ({result.r1_violations})")
+        if result.targets_missed:
+            lines.append(f"- Ziel-SOC verfehlt ({result.targets_missed} von {result.targets})")
+        if result.r2_violations:
+            lines.append(f"- Regel R2 verletzt ({result.r2_violations})")
     return "\n".join(lines) + "\n"

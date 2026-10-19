@@ -4145,14 +4145,30 @@ Viertelstundenraster. Sie schalten nichts an der Anlage.
 
 **Erzeugte Tage in der CI.** Das Repository ist öffentlich, die CI rechnet deshalb nur mit erzeugten
 Tagen (`tests/integration/test_planning_scenarios.py`, Beispieltarif mit erfundenen Werten), je zwei
-Tage, stündlich neu geplant:
+Tage, stündlich neu geplant, einmal mit und einmal ohne geplantes Auto:
 
-| Art | Inhalt | Ergebnis |
-|---|---|---|
-| `sommer-sonnig` | PV-Spitze 9000 W, Börsenpreis mittags 2 ct | gleich „Victron allein“ |
-| `winter-spread` | PV-Spitze 800 W, Börsenpreis 7 ct von 0 bis 5 Uhr und 32 ct von 17 bis 20 Uhr | rund 1,07 € günstiger |
-| `winter-leistung` | wie `winter-spread`, dazu ein Leistungspreis (Beispielwerte) ab 1. 1. 2027 | rund 1,07 € günstiger |
-| `wechselhaft` | PV-Spitze 1500 W mit wechselnden Wolken, Börsenpreis 22 ct von 17 bis 21 Uhr | rund 0,25 € günstiger |
+| Art | Inhalt | ohne Auto | mit Auto |
+|---|---|---|---|
+| `sommer-sonnig` | PV-Spitze 9000 W, Börsenpreis mittags 2 ct | gleich „Victron allein“ | rund 2,64 € günstiger |
+| `winter-spread` | PV-Spitze 800 W, Börsenpreis 7 ct von 0 bis 5 Uhr und 32 ct von 17 bis 20 Uhr | rund 1,07 € günstiger | rund 7,95 € günstiger |
+| `winter-leistung` | wie `winter-spread`, dazu ein Leistungspreis (Beispielwerte) ab 1. 1. 2027 | rund 1,07 € günstiger | rund 38,83 € günstiger |
+| `wechselhaft` | PV-Spitze 1500 W mit wechselnden Wolken, Börsenpreis 22 ct von 17 bis 21 Uhr | rund 0,25 € günstiger | rund 5,37 € günstiger |
+
+**Das Auto** (erfundene Werte) steckt am ersten Abend ab 18:00 mit 40 % und fährt am Morgen danach
+um 07:00 mit Ziel 80 % ab: 60 kWh nutzbar, 11 kW voll, 4140 W mindestens, Wirkungsgrad 90 %. Die
+Datei hat dafür Version 2 mit dem Auto und je Slot der PV-Prognose P25 (für Regel R2); eine Datei
+der Version 1 (so schreibt sie `export_days`) läuft ohne Auto. Gerechnet wird nur ein Ansteckvorgang,
+dessen Abfahrt in den Daten liegt, bei zwei Tagen also der erste Abend.
+
+- **Im Plan** steht das Auto, solange es steckt, wie ein Auto in „Geplant“ im Planungsdienst; beim
+  Anstecken wird sofort neu geplant. Es lädt mit der Ladeleistung des Plans, höchstens bis zum Ziel.
+- **„Victron allein“** lädt es ab dem Anstecken mit voller Leistung, bis das Ziel erreicht ist.
+- **Ziel erreicht** heißt: Ladestand an der Abfahrt mindestens Ziel − 1 Prozentpunkt.
+- **Regel R2 verletzt** ist ein Plan, in dem die Netzenergie ins Auto die nach Regel R2 erlaubte um
+  mehr als 0,1 kWh übersteigt.
+
+Der größte Teil des Vorteils mit Auto ist das Verschieben des Ladens vom teuren Abend in die Nacht,
+bei `winter-leistung` dazu die niedrigere Spitze im Leistungspreis eines ganzen Monats.
 
 Im Sommer ist der Optimierer gleich „Victron allein“: Die PV füllt den Akku, und „Victron allein“
 bezieht nie. Die Wintertage haben nur 800 W PV-Spitze, `wechselhaft` nur 1500 W; mit mehr PV (2000 W
@@ -4200,7 +4216,8 @@ docker compose run --rm -T --entrypoint cat ems-app /data/bericht.md
 
 Der Bericht „Szenario-Vergleich mit Victron allein“ hat je Tag eine Zeile mit den Spalten „Tag“,
 „Victron allein (€)“, „Optimierer (€)“, „Differenz (€)“, „Netzladen (kWh)“, „Halten (Slots)“,
-„Regel R“ und „Ersatzpläne“, dann diese Zeilen:
+„Regel R“ und „Ersatzpläne“, mit Autos dazu „Ziele erreicht“ („a von b“ am Tag der Abfahrt) und
+„Regel R2“, dann diese Zeilen:
 
 - „Gesamt“, einschließlich Leistungspreis (die Tageszeilen enthalten nur Energiekosten),
 - „Optimierer bereinigt um den End-SOC“: die Kosten des Optimierers, abzüglich des Werts, den er am
@@ -4217,7 +4234,8 @@ Hat `export_days` Tage übersprungen (`skipped_days`), steht direkt unter der Ta
 Die Differenz ist Optimierer minus „Victron allein“; negativ heißt günstiger. Bei weniger als 30 Tagen
 steht der Hinweis „Weniger als 30 Tage: Für die Abnahme der Phase 3 zählen mindestens 30.“ Das Ergebnis
 ist **„Bestanden“**, wenn die bereinigten Kosten höchstens die von „Victron allein“ sind und Regel R
-nie verletzt wurde, sonst „Nicht bestanden“ mit den Gründen. Ein Verstoß gegen Regel R ist ein
+nie verletzt wurde, mit Autos zudem jedes Ziel erreicht und Regel R2 nie verletzt, sonst „Nicht
+bestanden“ mit den Gründen. Ein Verstoß gegen Regel R ist ein
 ausgeführter `Netzladen`-Slot, nach dem der Plan dieses Zeitpunkts mehr als 0,1 kWh Einspeisung
 erwartet.
 

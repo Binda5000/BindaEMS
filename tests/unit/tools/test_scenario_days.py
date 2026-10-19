@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from dataclasses import replace
 from datetime import date
 from pathlib import Path
 
@@ -10,6 +11,7 @@ import pytest
 import structlog
 
 from bindaems.tools import scenario_days
+from bindaems.tools.scenario.data import ScenarioFile
 from bindaems.tools.scenario.report import passed, render_report
 from bindaems.tools.scenario.runner import DayResult, ScenarioResult
 from bindaems.tools.scenario.synthetic import synthetic
@@ -143,8 +145,13 @@ def test_scenario_days_default_is_every_quarter_hour(
 # --- Bericht ---------------------------------------------------------------------------------
 
 
+def _without_cars(data: ScenarioFile) -> ScenarioFile:
+    """Die Datei wie in Version 1, ohne Autos (so liefert sie ``export_days``)."""
+    return data.model_copy(update={"version": 1, "cars": []})
+
+
 def test_report_table_and_rows() -> None:
-    data = synthetic("winter-spread", date(2027, 1, 11), 1)
+    data = _without_cars(synthetic("winter-spread", date(2027, 1, 11), 1))
     text = render_report(result_of(), data)
     assert text.startswith("# Szenario-Vergleich mit Victron allein\n")
     assert (
@@ -172,6 +179,8 @@ def test_report_takt_follows_step() -> None:
         ({"adjusted_optimizer_ct": 250.0}, True),
         ({"adjusted_optimizer_ct": 250.5}, False),
         ({"r1_violations": 1}, False),
+        ({"targets": 1, "targets_missed": 1}, False),
+        ({"r2_violations": 1}, False),
     ],
 )
 def test_passed_rule(changes: dict[str, object], expected: bool) -> None:
@@ -183,6 +192,30 @@ def test_report_not_passed_names_reasons() -> None:
     text = render_report(result_of(adjusted_optimizer_ct=300.0, r1_violations=2), data)
     assert "Nicht bestanden" in text and text.count("Bestanden") == 0
     assert "Bereinigte Kosten über Victron allein" in text and "Regel R verletzt (2)" in text
+
+
+def test_report_with_cars_shows_targets_and_rule_r2() -> None:
+    # Mit Autos (Version 2) kommen die Spalten „Ziele erreicht“ und „Regel R2“ dazu.
+    data = synthetic("winter-spread", date(2027, 1, 11), 2)
+    day = result_of().days[0]
+    days = [day, replace(day, day=date(2027, 1, 12), targets=1, targets_reached=1)]
+    text = render_report(result_of(days=days, targets=1), data)
+    assert (
+        "| Tag | Victron allein (€) | Optimierer (€) | Differenz (€) | Netzladen (kWh) "
+        "| Halten (Slots) | Regel R | Ersatzpläne | Ziele erreicht | Regel R2 |"
+    ) in text
+    assert "| 2027-01-11 | 2,50 | 2,10 | -0,40 | 4,3 | 3 | 0 | 1 | – | 0 |" in text
+    assert "| 2027-01-12 | 2,50 | 2,10 | -0,40 | 4,3 | 3 | 0 | 1 | 1 von 1 | 0 |" in text
+    assert "| Gesamt | 2,50 | 2,10 | -0,40 | 8,5 | 6 | 0 | 1 | 1 von 1 | 0 |" in text
+    assert "| Leistungspreis | 0,00 | 0,00 | 0,00 | – | – | – | – | – | – |" in text
+    assert text.rstrip().endswith("Ergebnis: Bestanden")
+
+
+def test_report_not_passed_names_missed_targets_and_rule_r2() -> None:
+    data = synthetic("winter-spread", date(2027, 1, 11), 2)
+    text = render_report(result_of(targets=2, targets_missed=1, r2_violations=3), data)
+    assert "Nicht bestanden" in text
+    assert "- Ziel-SOC verfehlt (1 von 2)" in text and "- Regel R2 verletzt (3)" in text
 
 
 def test_report_thirty_days_have_no_hint() -> None:

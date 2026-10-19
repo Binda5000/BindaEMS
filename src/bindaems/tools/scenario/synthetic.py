@@ -24,8 +24,16 @@ Last ist 350 W, 06:30–08:00 800 W mehr und 17:30–21:30 1500 W mehr, je Slot 
 sind Ist mal ``1 + e · k`` mit ``e`` je Stunde gleichverteilt in ±0,2 (PV) bzw. ±0,1 (Last) und
 ``k`` = 0,5, 1 und 1,5 für ``h0_6``, ``h6_24`` und ``h24``.
 
+Die PV-Prognose P25 (Regel R2) ist ``P50 · (1 − 0,1 · k)``: das untere Quartil des
+gleichverteilten Prognosefehlers.
+
 Preise mit einem erfundenen Beispieltarif: Börsenpreis + 10 ct netto, USt. 20 %, OeMAG 6 ct.
 Netzladen ist erlaubt; der Akku ist der aus ``deploy/config.example.yaml`` mit Start-SOC 50 %.
+
+Jede Art hat ein geplantes Auto (Plan 4b, Task 13; Version 2 der Datei): angesteckt um 18:00 mit
+40 %, Abfahrt um 07:00 mit Ziel 80 %, 60 kWh nutzbar, 11 kW voll, 6 A dreiphasig (4140 W)
+mindestens, Wirkungsgrad 90 %. Der Lauf rechnet nur Ansteckvorgänge, deren Abfahrt in den Daten
+liegt: bei zwei Tagen der erste Abend.
 """
 
 from __future__ import annotations
@@ -49,7 +57,7 @@ from bindaems.shared.settings import (
     TariffSettings,
 )
 from bindaems.shared.timeutil import LOCAL_TZ, SLOT, local_day_slots
-from bindaems.tools.scenario.data import ScenarioBattery, ScenarioFile, ScenarioSlot
+from bindaems.tools.scenario.data import ScenarioBattery, ScenarioCar, ScenarioFile, ScenarioSlot
 
 DAY_TYPES: Final = ("sommer-sonnig", "winter-spread", "winter-leistung", "wechselhaft")
 
@@ -82,9 +90,24 @@ LOAD_ERROR: Final = 0.1
 LEAD_FACTOR: Mapping[HorizonClass, float] = MappingProxyType(
     {"h0_6": 0.5, "h6_24": 1.0, "h24": 1.5}
 )
+PV_P25_SPREAD: Final = 0.1  # P25 = P50 · (1 − 0,1 · k), unteres Quartil von ±0,2 · k
 CLOUD_RANGE: Final = (0.2, 1.0)
 CLOUD_START: Final = 0.6
 CLOUD_STEP: Final = 0.15  # größter Schritt des Wolkenfaktors je Slot
+
+
+# Das Auto jeder Art (erfundene Werte): abends angesteckt, morgens Abfahrt
+CAR: Final = ScenarioCar(
+    key="auto",
+    arrive="18:00",
+    depart="07:00",
+    soc_arrive_pct=40.0,
+    target_pct=80.0,
+    usable_kwh=60.0,
+    max_w=11000.0,
+    min_w=6 * 230.0 * 3,
+    efficiency=0.9,
+)
 
 
 @dataclass(frozen=True)
@@ -221,13 +244,17 @@ def synthetic(kind: str, first: date, days: int, *, seed: int = 1) -> ScenarioFi
                     pv_forecast_w={
                         cls: pv_w * (1 + pv_error * k) for cls, k in LEAD_FACTOR.items()
                     },
+                    pv_p25_w={
+                        cls: pv_w * (1 + pv_error * k) * (1 - PV_P25_SPREAD * k)
+                        for cls, k in LEAD_FACTOR.items()
+                    },
                     load_forecast_w={
                         cls: load_w * (1 + load_error * k) for cls, k in LEAD_FACTOR.items()
                     },
                 )
             )
     return ScenarioFile(
-        version=1,
+        version=2,
         created_at=datetime.combine(first, time(0), tzinfo=LOCAL_TZ),
         source="synthetic",
         name=f"{kind} ab {first.isoformat()}, {days} Tag{'e' if days > 1 else ''}",
@@ -236,4 +263,5 @@ def synthetic(kind: str, first: date, days: int, *, seed: int = 1) -> ScenarioFi
         tariff=tariff,
         month_peak_kw=None,
         slots=slots,
+        cars=[CAR],
     )

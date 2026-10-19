@@ -5,11 +5,14 @@ Die ganzen Vergleiche mit „Victron allein“ rechnet ``tests/integration/test_
 
 from __future__ import annotations
 
+import json
+from collections.abc import Mapping, Sequence
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from statistics import median
 
 import pytest
+from pydantic import ValidationError
 
 from bindaems.app.planning.battery_model import BatteryParams, SimSlot, SimStep, eta, simulate
 from bindaems.app.planning.inputs import PlanInputs
@@ -18,8 +21,9 @@ from bindaems.shared.config import load_config
 from bindaems.shared.plan import BatteryIntent, BatteryIntentKind, Plan
 from bindaems.shared.timeutil import LOCAL_TZ, SLOT
 from bindaems.tools.scenario import runner
-from bindaems.tools.scenario.data import ScenarioFile, ScenarioSlot
+from bindaems.tools.scenario.data import ScenarioCar, ScenarioFile, ScenarioSlot
 from bindaems.tools.scenario.runner import (
+    car_sessions,
     end_soc_value_ct,
     forecast_at,
     known_until,
@@ -381,3 +385,245 @@ def test_scenario_rejects_bad_step() -> None:
         run_scenario(synthetic("winter-spread", date(2027, 1, 11), 1), step_slots=0)
     with pytest.raises(ValueError, match="Mindestens ein Tag"):
         synthetic("winter-spread", date(2027, 1, 11), 0)
+
+
+# --- Ein geplantes Auto (Plan 4b, Task 13) ---------------------------------------------------
+
+CAR_NEED_KWH = (80 - 40) / 100 * 60 / 0.9  # Bedarf aus der Wallbox (Ruling R10)
+
+
+def _without_car(data: ScenarioFile) -> dict[str, object]:
+    """Die Datei als JSON wie in Version 1: ohne Autos und ohne P25."""
+    raw = json.loads(data.model_dump_json())
+    raw["version"] = 1
+    del raw["cars"]
+    for item in raw["slots"]:
+        del item["pv_p25_w"]
+    return raw
+
+
+@pytest.mark.parametrize("kind", DAY_TYPES)
+def test_synthetic_days_have_one_planned_car(kind: str) -> None:
+    data = synthetic(kind, date(2027, 1, 11), 1)
+    assert data.version == 2
+    assert data.cars == [
+        ScenarioCar(
+            key="auto",
+            arrive="18:00",
+            depart="07:00",
+            soc_arrive_pct=40.0,
+            target_pct=80.0,
+            usable_kwh=60.0,
+            max_w=11000.0,
+            min_w=4140.0,
+            efficiency=0.9,
+        )
+    ]
+
+
+def test_synthetic_p25_lies_below_the_forecast() -> None:
+    # P25 ist das untere Quartil des Prognosefehlers (gleichverteilt, ±0,2 · k): P50 · (1 − 0,1 · k)
+    data = synthetic("sommer-sonnig", date(2027, 7, 5), 1)
+    for s in data.slots:
+        assert set(s.pv_p25_w) == {"h0_6", "h6_24", "h24"}
+        for cls, k in (("h0_6", 0.5), ("h6_24", 1.0), ("h24", 1.5)):
+            assert s.pv_p25_w[cls] == pytest.approx(s.pv_forecast_w[cls] * (1 - 0.1 * k))
+
+
+def test_forecast_carries_p25_of_the_same_class() -> None:
+    s = synthetic("sommer-sonnig", date(2027, 7, 5), 1).slots[50]
+    assert forecast_at(s, lead=timedelta(hours=30)).pv_p25 == s.pv_p25_w["h24"]
+    assert forecast_at(s.model_copy(update={"pv_p25_w": {}}), lead=timedelta(0)).pv_p25 is None
+
+
+def test_car_sessions_need_their_departure_within_the_data() -> None:
+    # Angesteckt jeden Abend um 18:00, Abfahrt am Morgen danach um 07:00; die Abfahrt des
+    # zweiten Abends liegt hinter den Daten, der Ansteckvorgang fehlt.
+    data = synthetic("winter-spread", date(2027, 1, 11), 2)
+    sessions = car_sessions(data)
+    assert [(s.car.key, s.arrive, s.depart) for s in sessions] == [
+        ("auto", local_dt("2027-01-11 18:00"), local_dt("2027-01-12 07:00"))
+    ]
+    assert car_sessions(synthetic("winter-spread", date(2027, 1, 11), 1)) == []
+
+
+def test_version_1_file_loads_and_runs_without_car(monkeypatch: pytest.MonkeyPatch) -> None:
+    old = ScenarioFile.model_validate(
+        _without_car(synthetic("winter-spread", date(2027, 1, 11), 2))
+    )
+    assert old.version == 1 and old.cars == []
+    assert all(s.pv_p25_w == {} for s in old.slots)
+    seen = _record_steps(monkeypatch)
+    inputs = _record_inputs(monkeypatch)
+    result = run_scenario(old, step_slots=8)
+    assert all(item.vehicles == [] for item in inputs)
+    assert all(slot.pv_p25_w is None for item in inputs for slot in item.slots)
+    assert all(slot.ev_w == 0 for slot, _, _ in seen)
+    assert result.plans == 24  # keine Neuplanung beim Anstecken
+    assert (result.targets, result.targets_missed, result.r2_violations) == (0, 0, 0)
+    assert all(d.targets == d.targets_reached == d.r2_violations == 0 for d in result.days)
+
+
+def test_cars_need_version_2() -> None:
+    raw = _without_car(synthetic("winter-spread", date(2027, 1, 11), 1))
+    raw["cars"] = [synthetic("winter-spread", date(2027, 1, 11), 1).cars[0].model_dump()]
+    with pytest.raises(ValidationError, match="Version 2"):
+        ScenarioFile.model_validate(raw)
+
+
+def test_car_rejects_bad_times_and_power() -> None:
+    car = synthetic("winter-spread", date(2027, 1, 11), 1).cars[0].model_dump()
+    for change in ({"arrive": "18:10"}, {"depart": "24:00"}, {"min_w": 12000.0}):
+        with pytest.raises(ValidationError):
+            ScenarioCar.model_validate({**car, **change})
+    with pytest.raises(ValidationError, match="Ankunft und Abfahrt"):
+        ScenarioCar.model_validate({**car, "depart": "18:00"})
+
+
+def _record_plans(monkeypatch: pytest.MonkeyPatch) -> list[Plan]:
+    seen: list[Plan] = []
+    original = runner.plan_once
+
+    def recording(inputs: PlanInputs, result: OptimizerResult) -> Plan:
+        plan = original(inputs, result)
+        seen.append(plan)
+        return plan
+
+    monkeypatch.setattr(runner, "plan_once", recording)
+    return seen
+
+
+def test_car_follows_plan_power_up_to_its_need(monkeypatch: pytest.MonkeyPatch) -> None:
+    seen = _record_steps(monkeypatch)
+    inputs = _record_inputs(monkeypatch)
+    plans = _record_plans(monkeypatch)
+    data = synthetic("winter-spread", date(2027, 1, 11), 2)
+    result = run_scenario(data, step_slots=4)
+    arrive, depart = local_dt("2027-01-11 18:00"), local_dt("2027-01-12 07:00")
+    # Plan und Ausführung kennen das Auto nur, solange es steckt
+    with_car = [item for item in inputs if item.vehicles]
+    assert [item.created_at for item in with_car] == [
+        arrive + timedelta(hours=h, minutes=1) for h in range(13)
+    ]
+    first = with_car[0].vehicles[0]
+    assert (first.key, first.soc_pct, first.target_soc_pct) == ("auto", 40.0, 80.0)
+    assert first.departure_at == depart and first.need_kwh == pytest.approx(CAR_NEED_KWH)
+    assert all(slot.pv_p25_w is not None for slot in with_car[0].slots)
+    charged = 0.0
+    for slot, _, step in seen:
+        if not arrive <= slot.start < depart:
+            assert slot.ev_w == 0
+            continue
+        plan = next(p for p in reversed(plans) if p.created_at <= slot.start + SLOT)
+        planned_w = plan.slots[(slot.start - plan.slots[0].start) // SLOT].ev_w.get("auto", 0.0)
+        # Ladeleistung des Plans, begrenzt auf den Bedarf; SOC des nächsten Plans danach
+        remaining = max(0.0, CAR_NEED_KWH - charged)
+        assert slot.ev_w == pytest.approx(min(planned_w, remaining / 0.25 * 1000), abs=1e-6)
+        assert step.ev_pv_w + step.ev_grid_w == pytest.approx(slot.ev_w)
+        charged += slot.ev_w * 0.25 / 1000
+    assert charged == pytest.approx(CAR_NEED_KWH)
+    later = with_car[-1].vehicles[0]
+    assert later.soc_pct <= 80.0 + 1e-6
+    assert (result.targets, result.targets_missed) == (1, 0)
+    assert [(d.targets, d.targets_reached) for d in result.days] == [(0, 0), (1, 1)]
+    assert result.r2_violations == 0
+
+
+def test_replanning_on_plug_in(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Wie der Auslöser „vehicles“ im Dienst: Beim Anstecken wird sofort neu geplant.
+    inputs = _record_inputs(monkeypatch)
+    data = synthetic("winter-spread", date(2027, 1, 11), 2)
+    result = run_scenario(data, step_slots=7)
+    arrive = local_dt("2027-01-11 18:00")
+    assert [
+        item.trigger for item in inputs if item.created_at == arrive + timedelta(minutes=1)
+    ] == ["vehicles"]
+    assert result.plans == 28  # 0, 7, …, 182 und 72 (Anstecken); ab 189 reicht der Horizont nicht
+
+
+def test_plan_check_resimulates_with_the_car(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Die Nachrechnung je Plan (für Regel R) rechnet die Ladeleistung der Autos mit.
+    calls: list[tuple[PlanInputs, list[Mapping[str, float]]]] = []
+    original = runner.sim_slots
+
+    def recording(inputs: PlanInputs, ev_w: Sequence[Mapping[str, float]] = ()) -> list[SimSlot]:
+        calls.append((inputs, list(ev_w)))
+        return original(inputs, ev_w)
+
+    monkeypatch.setattr(runner, "sim_slots", recording)
+    run_scenario(synthetic("winter-spread", date(2027, 1, 11), 2), step_slots=8)
+    with_car = [(item, ev_w) for item, ev_w in calls if item.vehicles]
+    assert with_car
+    assert any(powers.get("auto", 0.0) > 0 for _, ev_w in with_car for powers in ev_w)
+
+
+def test_victron_alone_charges_the_car_fully_from_arrival() -> None:
+    data = synthetic("winter-spread", date(2027, 1, 11), 2)
+    result = run_scenario(data, step_slots=8)
+    params = BatteryParams(30.0, 6.0, 30.0, eta(88.0), eta(88.0))
+    ev_w = [0.0] * len(data.slots)
+    left = CAR_NEED_KWH
+    index = 72  # 18:00 am ersten Tag
+    while left > 1e-9:
+        ev_w[index] = min(11000.0, left / 0.25 * 1000)
+        left -= ev_w[index] * 0.25 / 1000
+        index += 1
+    assert index == 82  # 9 Slots voll, im zehnten der Rest
+    slots = [
+        SimSlot(s.start, s.pv_w, s.load_w, s.import_ct, s.feed_in_ct, 10000.0, 12000.0, ev_w[i])
+        for i, s in enumerate(data.slots)
+    ]
+    steps = simulate(15.0, slots, [BatteryIntent()] * len(slots), params)
+    assert result.baseline_ct == pytest.approx(sum(s.cost_ct for s in steps))
+    assert result.days[0].baseline_ct == pytest.approx(sum(s.cost_ct for s in steps[:96]))
+
+
+def test_missed_target_is_counted(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Ein Plan, der das Auto nie lädt: Es fährt mit 40 % statt 80 % ab.
+    original = runner.plan_once
+
+    def idle(inputs: PlanInputs, result: OptimizerResult) -> Plan:
+        plan = original(inputs, result)
+        slots = [s.model_copy(update={"ev_w": {}}) for s in plan.slots]
+        return plan.model_copy(update={"slots": slots})
+
+    monkeypatch.setattr(runner, "plan_once", idle)
+    result = run_scenario(synthetic("winter-spread", date(2027, 1, 11), 2), step_slots=4)
+    assert (result.targets, result.targets_missed) == (1, 1)
+    assert [(d.targets, d.targets_reached) for d in result.days] == [(0, 0), (1, 0)]
+
+
+def test_plan_over_grid_allowed_counts_as_r2_violation(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Ein Plan, der das Auto bis zur Abfahrt mit voller Leistung aus dem Netz lädt, übersteigt
+    # die nach Regel R2 erlaubte Netzenergie: Jeder Plan mit dem Auto zählt.
+    original = runner.plan_once
+
+    def greedy(inputs: PlanInputs, result: OptimizerResult) -> Plan:
+        plan = original(inputs, result)
+        if not inputs.vehicles:
+            return plan
+        depart = inputs.vehicles[0].departure_at
+        slots = [
+            s.model_copy(update={"ev_w": {"auto": 11000.0}}) if s.start < depart else s
+            for s in plan.slots
+        ]
+        return plan.model_copy(update={"slots": slots})
+
+    monkeypatch.setattr(runner, "plan_once", greedy)
+    result = run_scenario(synthetic("winter-spread", date(2027, 1, 11), 2), step_slots=4)
+    assert result.r2_violations == 13  # 18:01 bis 06:01
+    assert [d.r2_violations for d in result.days] == [6, 7]
+    assert result.targets_missed == 0  # die Ausführung lädt nur den Bedarf
+
+
+def test_without_plan_the_car_starts_at_latest_start(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Ohne Plan wie der core: ab der spätesten Startzeit 07:00 − 26,67 kWh / 11 kW · 1,1 − 15 min
+    # = 04:05 mit voller Leistung (ab dem Slot 04:00), bis das Ziel erreicht ist.
+    seen = _record_steps(monkeypatch)
+    monkeypatch.setattr(runner, "_plan_at", lambda *args, **kwargs: None)
+    result = run_scenario(synthetic("winter-spread", date(2027, 1, 11), 2), step_slots=4)
+    charging = [slot for slot, _, _ in seen if slot.ev_w > 0]
+    assert charging[0].start == local_dt("2027-01-12 04:00")
+    assert [slot.ev_w for slot in charging[:9]] == [11000.0] * 9
+    assert sum(slot.ev_w for slot in charging) * 0.25 / 1000 == pytest.approx(CAR_NEED_KWH)
+    assert (result.plans, result.targets, result.targets_missed) == (0, 1, 0)

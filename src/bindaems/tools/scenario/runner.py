@@ -20,12 +20,28 @@ des Optimierers ziehen den Wert des Mehr-SOC am Ende ab (``end_soc_value_ct``).
 
 Regel R (Präzisierung 19): Ein Verstoß ist ein ausgeführter ``NETZLADEN``-Slot, nach dem der
 Plan dieses Zeitpunkts bis zu seinem Horizontende mehr als ``R1_TOL_KWH`` Einspeisung erwartet.
+
+**Geplante Autos** (Plan 4b, Task 13; Datei der Version 2, ``car_sessions``):
+
+- **Im Plan** steht ein Auto, solange es steckt, mit Ladestand, Ziel, Abfahrt und Regel R2 wie im
+  Planer (``need_kwh``, ``horizon_need``, ``grid_allowed`` mit der Prognose P25). Beim Anstecken
+  wird sofort neu geplant (Auslöser ``vehicles``). Die Nachrechnung je Plan rechnet die
+  Ladeleistung der Autos mit.
+- **Ausführung:** Das Auto lädt mit der Ladeleistung des gültigen Plans, begrenzt auf seinen
+  Bedarf; ohne gültigen Plan, der es nennt, ab der spätesten Startzeit mit voller Leistung (wie
+  der core). Der Ladestand steigt um ``e · Δ · η / usable · 100`` (Ruling R10).
+- **„Victron allein“** lädt das Auto ab dem Anstecken mit voller Leistung, bis der Bedarf
+  gedeckt ist.
+- **Ziel:** erreicht, wenn der Ladestand an der Abfahrt mindestens ``Ziel − TARGET_TOL_PP`` ist
+  (wie die Abnahme, Entscheidung 15).
+- **Regel R2:** Ein Verstoß ist ein Plan, in dem die Netzenergie eines Autos ``grid_allowed_kwh``
+  um mehr als ``R2_TOL_KWH`` übersteigt (``car_grid_kwh``).
 """
 
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date, datetime, time, timedelta
 from statistics import median
 from types import MappingProxyType
@@ -47,23 +63,35 @@ from bindaems.app.planning.inputs import (
     MAX_SLOTS,
     PRICE_WINDOW,
     BatteryState,
+    PlanInputs,
     PlanningUnavailable,
     PriceInput,
+    SlotInput,
     assemble_inputs,
 )
 from bindaems.app.planning.optimizer import solve
 from bindaems.app.planning.plausibility import R1_TOL_KWH, export_after_kwh
 from bindaems.app.planning.service import plan_once
+from bindaems.app.planning.vehicles import (
+    PlanVehicleInput,
+    grid_allowed,
+    horizon_need,
+    latest_start,
+    need_kwh,
+)
 from bindaems.app.tariff.calc import power_cost_eur, power_rate
-from bindaems.shared.plan import BatteryIntent, BatteryIntentKind, Plan
+from bindaems.shared.control import next_departure
+from bindaems.shared.plan import BatteryIntent, BatteryIntentKind, Plan, PlanSlot, PlanTrigger
 from bindaems.shared.settings import PlanningSettings
 from bindaems.shared.timeutil import LOCAL_TZ, SLOT, ensure_utc, slot_start, slots_between
-from bindaems.tools.scenario.data import ScenarioFile, ScenarioSlot
+from bindaems.tools.scenario.data import ScenarioCar, ScenarioFile, ScenarioSlot
 
 DAY_AHEAD_AT: Final = time(14)  # ab dann sind die Preise von morgen bekannt
 ESTIMATE_DAYS: Final = 7  # Vortage für den Schätzpreis
 ESTIMATE_MIN_VALUES: Final = 2
 PLAN_DELAY: Final = timedelta(minutes=1)  # Neuplanung zur Minute 1 nach Slotbeginn (Dienst)
+TARGET_TOL_PP: Final = 1.0  # Ziel erreicht ab Ziel − 1 Prozentpunkt (Entscheidung 15)
+R2_TOL_KWH: Final = 0.1  # so viel Netzenergie über ``grid_allowed_kwh`` ist noch kein Verstoß
 
 # Fehlt die Klasse eines Vorlaufs, gilt zuerst eine früher ausgegebene (längerer Vorlauf, sie
 # gäbe es zu diesem Zeitpunkt schon), dann eine spätere.
@@ -79,10 +107,22 @@ _OWN = BatteryIntent()
 
 @dataclass(frozen=True)
 class Forecast:
-    """Prognose eines Slots in W, wie sie zu einem Vorlauf im Archiv stünde."""
+    """Prognose eines Slots in W, wie sie zu einem Vorlauf im Archiv stünde; ``pv_p25`` ist
+    ``None`` ohne P25 in der Datei."""
 
     pv: float
     load: float
+    pv_p25: float | None = None
+
+
+@dataclass(frozen=True)
+class CarSession:
+    """Ein Ansteckvorgang eines Autos: angesteckt ab dem Slot ``arrive``, Abfahrt ``depart``
+    (beide UTC)."""
+
+    car: ScenarioCar
+    arrive: datetime
+    depart: datetime
 
 
 @dataclass(frozen=True)
@@ -96,11 +136,18 @@ class DayResult:
     hold_slots: int
     r1_violations: int
     fallbacks: int
+    targets: int = 0  # Abfahrten an diesem Tag
+    targets_reached: int = 0  # davon mit erreichtem Ziel
+    r2_violations: int = 0  # Pläne dieses Tages über der Netzenergie nach Regel R2
 
 
 @dataclass(frozen=True)
 class ScenarioResult:
-    """Ergebnis eines Laufs; ``*_ct`` gesamt einschließlich Leistungspreis."""
+    """Ergebnis eines Laufs; ``*_ct`` gesamt einschließlich Leistungspreis.
+
+    ``targets`` ist die Zahl der Abfahrten, ``targets_missed`` die ohne erreichtes Ziel,
+    ``r2_violations`` die Zahl der Pläne über der Netzenergie nach Regel R2.
+    """
 
     name: str
     step_slots: int
@@ -116,13 +163,21 @@ class ScenarioResult:
     reserve_kwh: float
     plans: int
     fallbacks: int
+    targets: int = 0
+    targets_missed: int = 0
+    r2_violations: int = 0
 
 
-def _pick(values: Mapping[HorizonClass, float], wanted: HorizonClass, actual: float) -> float:
+def _class_value(values: Mapping[HorizonClass, float], wanted: HorizonClass) -> float | None:
     for cls in _CLASS_ORDER[wanted]:
         if cls in values:
             return values[cls]
-    return actual
+    return None
+
+
+def _pick(values: Mapping[HorizonClass, float], wanted: HorizonClass, actual: float) -> float:
+    found = _class_value(values, wanted)
+    return actual if found is None else found
 
 
 def forecast_at(slot: ScenarioSlot, *, lead: timedelta) -> Forecast:
@@ -130,12 +185,13 @@ def forecast_at(slot: ScenarioSlot, *, lead: timedelta) -> Forecast:
 
     Es gilt der Archivwert der Horizontklasse des Vorlaufs; ein Slot, der schon begonnen hat,
     zählt zu ``h0_6``. Fehlt die Klasse, die nächste vorhandene (``_CLASS_ORDER``), sonst der
-    Ist-Wert.
+    Ist-Wert; P25 ebenso, ohne jeden Wert ``None``.
     """
     cls = horizon_class(max(lead, timedelta(0))) or "h0_6"
     return Forecast(
         pv=_pick(slot.pv_forecast_w, cls, slot.pv_w),
         load=_pick(slot.load_forecast_w, cls, slot.load_w),
+        pv_p25=_class_value(slot.pv_p25_w, cls),
     )
 
 
@@ -145,6 +201,24 @@ def _local(moment: datetime) -> datetime:
 
 def _data_end(data: ScenarioFile) -> datetime:
     return ensure_utc(data.slots[-1].start) + SLOT
+
+
+def car_sessions(data: ScenarioFile) -> list[CarSession]:
+    """Die Ansteckvorgänge der Autos der Datei: je Auto jedes lokale ``arrive`` in den Daten bis
+    zum nächsten lokalen ``depart``; nur Vorgänge, deren Abfahrt in den Daten liegt (sonst ließe
+    sich das Ziel nicht prüfen und „Victron allein“ lüde mehr als der Plan)."""
+    start = ensure_utc(data.slots[0].start)
+    end = _data_end(data)
+    sessions: list[CarSession] = []
+    for car in data.cars:
+        # ``next_departure`` gilt für jede tägliche Uhrzeit: das erste Vorkommen echt nach ``now``
+        arrive = next_departure(car.arrive, start - timedelta(microseconds=1))
+        while arrive < end:
+            depart = next_departure(car.depart, arrive)
+            if depart <= end:
+                sessions.append(CarSession(car=car, arrive=arrive, depart=depart))
+            arrive = next_departure(car.arrive, arrive)
+    return sorted(sessions, key=lambda item: item.arrive)
 
 
 def known_until(data: ScenarioFile, now: datetime) -> datetime:
@@ -236,11 +310,68 @@ def _battery_state(data: ScenarioFile, soc_kwh: float) -> BatteryState:
 
 @dataclass(frozen=True)
 class _Planned:
-    """Ein Plan des Laufs mit seiner Nachrechnung (für die Prüfung von Regel R)."""
+    """Ein Plan des Laufs mit seiner Nachrechnung (für die Prüfung von Regel R) und ob er Regel
+    R2 verletzt."""
 
     plan: Plan
     steps: list[SimStep]
     index: dict[datetime, int]
+    r2_broken: bool = False
+
+
+def _vehicle_inputs(
+    cars: Sequence[tuple[CarSession, float]], slots: Sequence[SlotInput]
+) -> list[PlanVehicleInput]:
+    """Die steckenden Autos (mit ihrem Ladestand) als geplante Autos des Planers, wie
+    ``planned_vehicles``: Bedarf aus der Wallbox, Bedarf im Horizont und Regel R2 nach P25.
+    Ein Auto, das vor dem Ende des aktuellen Slots abfährt, fehlt."""
+    current_end = ensure_utc(slots[0].start) + SLOT
+    horizon_end = ensure_utc(slots[-1].start) + SLOT
+    result: list[PlanVehicleInput] = []
+    for session, soc_pct in cars:
+        if session.depart < current_end:
+            continue
+        car = session.car
+        need = need_kwh(soc_pct, car.target_pct, car.usable_kwh, car.efficiency)
+        within = horizon_need(need, car.max_w, session.depart, horizon_end)
+        result.append(
+            PlanVehicleInput(
+                key=car.key,
+                name=car.key,
+                wallbox=car.key,
+                soc_pct=soc_pct,
+                soc_assumed=False,
+                target_soc_pct=car.target_pct,
+                limit_pct=None,
+                departure_at=session.depart,
+                efficiency=car.efficiency,
+                usable_kwh=car.usable_kwh,
+                min_w=car.min_w,
+                max_w=car.max_w,
+                need_kwh=need,
+                horizon_need_kwh=within,
+                grid_allowed_kwh=within,
+            )
+        )
+    allowed = grid_allowed(result, slots, [car.key for car in result])
+    return [car.model_copy(update={"grid_allowed_kwh": allowed[car.key]}) for car in result]
+
+
+def car_grid_kwh(inputs: PlanInputs, ev_w: Sequence[Mapping[str, float]]) -> dict[str, float]:
+    """Netzenergie je geplantem Auto in kWh, die ein Plan mit der Ladeleistung ``ev_w`` vorsieht.
+
+    Der erwartete PV-Überschuss (``pv_w − load_w``) deckt je Slot zuerst die Autos in der
+    Reihenfolge der Priorität (wie die Nachrechnung), der Rest kommt aus dem Netz.
+    """
+    grid = {car.key: 0.0 for car in inputs.vehicles}
+    for slot, powers in zip(inputs.slots, ev_w, strict=True):
+        surplus_w = max(0.0, slot.pv_w - slot.load_w)
+        for car in inputs.vehicles:
+            power_w = powers.get(car.key, 0.0)
+            from_pv_w = min(surplus_w, power_w)
+            surplus_w -= from_pv_w
+            grid[car.key] += (power_w - from_pv_w) * SLOT_H / 1000
+    return grid
 
 
 def _plan_at(
@@ -250,21 +381,28 @@ def _plan_at(
     soc_kwh: float,
     month_peak_kw: float | None,
     previous: Plan | None,
+    *,
+    trigger: PlanTrigger,
+    cars: Sequence[tuple[CarSession, float]] = (),
 ) -> _Planned | None:
-    """Plan zum Slot ``index`` (Minute 1 nach Slotbeginn); ``None`` ohne Eingangsdaten."""
+    """Plan zum Slot ``index`` (Minute 1 nach Slotbeginn) mit den steckenden Autos ``cars`` und
+    ihrem Ladestand; ``None`` ohne Eingangsdaten."""
     now = ensure_utc(data.slots[index].start) + PLAN_DELAY
     horizon = data.slots[index : index + MAX_SLOTS]
     pv_w: dict[datetime, float] = {}
+    pv_p25_w: dict[datetime, float] = {}
     load_w: dict[datetime, float] = {}
     for item in horizon:
         moment = ensure_utc(item.start)
         forecast = forecast_at(item, lead=moment - now)
         pv_w[moment] = forecast.pv
         load_w[moment] = forecast.load
+        if forecast.pv_p25 is not None:
+            pv_p25_w[moment] = forecast.pv_p25
     try:
         inputs = assemble_inputs(
             now=now,
-            trigger="start" if previous is None else "slot",
+            trigger=trigger,
             prices=price_inputs(data, now),
             pv_w=pv_w,
             load_w=load_w,
@@ -274,14 +412,70 @@ def _plan_at(
             month_peak_kw=month_peak_kw,
             previous=previous,
             settings_version=1,
+            pv_p25_w=pv_p25_w,
+            vehicles=lambda slots: _vehicle_inputs(cars, slots),
         )
     except PlanningUnavailable:
         return None
     plan = plan_once(inputs, solve(inputs))
     params = params_of(inputs)
     soc0_kwh = inputs.battery.soc_pct / 100 * params.capacity_kwh
-    steps = simulate(soc0_kwh, sim_slots(inputs), [s.intent for s in plan.slots], params)
-    return _Planned(plan, steps, {s.start: i for i, s in enumerate(plan.slots)})
+    ev_w = [dict(s.ev_w) for s in plan.slots] if inputs.vehicles else []
+    steps = simulate(soc0_kwh, sim_slots(inputs, ev_w), [s.intent for s in plan.slots], params)
+    grid = car_grid_kwh(inputs, ev_w) if ev_w else {}
+    r2_broken = any(grid[car.key] > car.grid_allowed_kwh + R2_TOL_KWH for car in inputs.vehicles)
+    return _Planned(plan, steps, {s.start: i for i, s in enumerate(plan.slots)}, r2_broken)
+
+
+def _charge(car: ScenarioCar, soc_pct: float, wanted_w: float) -> tuple[float, float]:
+    """Ladeleistung im Slot (``wanted_w``, begrenzt auf den Bedarf bis zum Ziel) und der
+    Ladestand danach: ``+ e · Δ · η / usable · 100`` (Ruling R10)."""
+    need = need_kwh(soc_pct, car.target_pct, car.usable_kwh, car.efficiency)
+    power_w = max(0.0, min(wanted_w, need / SLOT_H * 1000))
+    return power_w, soc_pct + power_w * SLOT_H / 1000 * car.efficiency / car.usable_kwh * 100
+
+
+def _wanted_w(
+    session: CarSession,
+    soc_pct: float,
+    start: datetime,
+    active: tuple[Plan, PlanSlot] | None,
+    *,
+    due: bool,
+) -> tuple[float, bool]:
+    """Ladeleistung, die das Auto im Slot ab ``start`` will, und ob es ab der spätesten
+    Startzeit lädt (``due``, hält bis zum Ende des Ansteckvorgangs).
+
+    Nennt der gültige Plan (``active``: Plan und Slot) diesen Ansteckvorgang, gilt seine
+    Ladeleistung; sonst ab der spätesten Startzeit die volle, davor keine (wie der core ohne
+    gültigen Slot, ohne PV-Überschuss)."""
+    car = session.car
+    if active is not None:
+        plan, slot = active
+        if any(v.key == car.key and v.departure_at == session.depart for v in plan.vehicles):
+            return slot.ev_w.get(car.key, 0.0), due
+    need = need_kwh(soc_pct, car.target_pct, car.usable_kwh, car.efficiency)
+    start_at = latest_start(session.depart, need, car.max_w)
+    due = due or (start_at is not None and start_at < start + SLOT)
+    return (car.max_w if due else 0.0), due
+
+
+def _plugged(sessions: Sequence[CarSession], start: datetime) -> list[int]:
+    return [i for i, item in enumerate(sessions) if item.arrive <= start < item.depart]
+
+
+def _baseline_ev_w(slots: Sequence[SimSlot], sessions: Sequence[CarSession]) -> list[float]:
+    """Ladeleistung der Autos bei „Victron allein“: ab dem Anstecken voll, bis der Bedarf gedeckt
+    ist."""
+    soc = [item.car.soc_arrive_pct for item in sessions]
+    result: list[float] = []
+    for slot in slots:
+        total_w = 0.0
+        for i in _plugged(sessions, slot.start):
+            power_w, soc[i] = _charge(sessions[i].car, soc[i], sessions[i].car.max_w)
+            total_w += power_w
+        result.append(total_w)
+    return result
 
 
 def _month(moment: datetime) -> str:
@@ -358,18 +552,30 @@ def run_scenario(
         )
         for item in data.slots
     ]
-    baseline = simulate(soc0, actual, [_OWN] * len(actual), params)
+    sessions = car_sessions(data)
+    baseline_slots = [
+        replace(slot, ev_w=ev_w)
+        for slot, ev_w in zip(actual, _baseline_ev_w(actual, sessions), strict=True)
+    ]
+    baseline = simulate(soc0, baseline_slots, [_OWN] * len(actual), params)
 
     soc = soc0
+    car_soc = [item.car.soc_arrive_pct for item in sessions]
+    due = [False] * len(sessions)  # ab der spätesten Startzeit voll bis zum Ziel
     current: _Planned | None = None
     peaks: dict[str, float] = {}
     steps: list[SimStep] = []
     applied: list[BatteryIntent] = []
     violation: list[bool] = []
-    plans: list[Plan] = []
+    plans: list[_Planned] = []
     for index, slot in enumerate(actual):
-        if index % step_slots == 0:
+        plugged = _plugged(sessions, slot.start)
+        arrived = any(sessions[i].arrive == slot.start for i in plugged)
+        if index % step_slots == 0 or arrived:
             now = slot.start + PLAN_DELAY
+            trigger: PlanTrigger = "slot" if index % step_slots == 0 else "vehicles"
+            if current is None:
+                trigger = "start"
             planned = _plan_at(
                 data,
                 planning,
@@ -377,20 +583,29 @@ def run_scenario(
                 soc,
                 _month_peak_kw(data, now, peaks),
                 current.plan if current is not None else None,
+                trigger=trigger,
+                cars=[(sessions[i], car_soc[i]) for i in plugged],
             )
             if planned is not None:
                 current = planned
-                plans.append(planned.plan)
+                plans.append(planned)
         intent, broken = _OWN, False
+        active: tuple[Plan, PlanSlot] | None = None
         if current is not None and current.plan.valid_until > slot.start:
             position = current.index.get(slot.start)
             if position is not None:
-                intent = current.plan.slots[position].intent
+                active = (current.plan, current.plan.slots[position])
+                intent = active[1].intent
                 broken = (
                     intent.kind is BatteryIntentKind.NETZLADEN
                     and export_after_kwh(current.steps, position) > R1_TOL_KWH
                 )
-        result = step(soc, slot, intent, params)
+        ev_w = 0.0
+        for i in plugged:
+            wanted_w, due[i] = _wanted_w(sessions[i], car_soc[i], slot.start, active, due=due[i])
+            power_w, car_soc[i] = _charge(sessions[i].car, car_soc[i], wanted_w)
+            ev_w += power_w
+        result = step(soc, replace(slot, ev_w=ev_w), intent, params)
         steps.append(result)
         applied.append(intent)
         violation.append(broken)
@@ -398,7 +613,11 @@ def run_scenario(
         month = _month(slot.start)
         peaks[month] = max(peaks.get(month, 0.0), result.import_w / 1000)
 
-    days = _days(data, baseline, steps, applied, violation, plans)
+    reached = [
+        soc_pct >= item.car.target_pct - TARGET_TOL_PP
+        for item, soc_pct in zip(sessions, car_soc, strict=True)
+    ]
+    days = _days(data, baseline, steps, applied, violation, plans, sessions, reached)
     baseline_power = _power_ct(data, _peaks_kw(data, baseline))
     optimizer_power = _power_ct(data, peaks)
     baseline_ct = sum(item.cost_ct for item in baseline) + baseline_power
@@ -418,7 +637,10 @@ def run_scenario(
         min_soc_kwh=min(soc0, *(item.soc_end_kwh for item in steps)),
         reserve_kwh=battery.reserve_soc_pct / 100 * capacity,
         plans=len(plans),
-        fallbacks=sum(1 for plan in plans if plan.source == "fallback"),
+        fallbacks=sum(1 for item in plans if item.plan.source == "fallback"),
+        targets=len(sessions),
+        targets_missed=reached.count(False),
+        r2_violations=sum(1 for item in plans if item.r2_broken),
     )
 
 
@@ -435,10 +657,18 @@ def _days(
     steps: Sequence[SimStep],
     applied: Sequence[BatteryIntent],
     violation: Sequence[bool],
-    plans: Sequence[Plan],
+    plans: Sequence[_Planned],
+    sessions: Sequence[CarSession],
+    reached: Sequence[bool],
 ) -> list[DayResult]:
     result: list[DayResult] = []
     for day, indices in _day_groups(data).items():
+        departing = [
+            ok
+            for item, ok in zip(sessions, reached, strict=True)
+            if _local(item.depart).date() == day
+        ]
+        made = [item for item in plans if _local(item.plan.created_at).date() == day]
         result.append(
             DayResult(
                 day=day,
@@ -447,11 +677,10 @@ def _days(
                 grid_charge_kwh=sum(steps[i].charge_grid_w for i in indices) * SLOT_H / 1000,
                 hold_slots=sum(1 for i in indices if applied[i].kind is BatteryIntentKind.HALTEN),
                 r1_violations=sum(1 for i in indices if violation[i]),
-                fallbacks=sum(
-                    1
-                    for plan in plans
-                    if plan.source == "fallback" and _local(plan.created_at).date() == day
-                ),
+                fallbacks=sum(1 for item in made if item.plan.source == "fallback"),
+                targets=len(departing),
+                targets_reached=sum(departing),
+                r2_violations=sum(1 for item in made if item.r2_broken),
             )
         )
     return result
