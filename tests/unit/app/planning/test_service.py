@@ -732,6 +732,7 @@ async def test_a_plan_made_before_health_trusts_the_intent_is_redone_for_the_car
         await asyncio.sleep(0.1)
         live.health = planned_health(vehicle_health("tesla"), version=5)
         await until(lambda: len(calls) == 3)
+        await asyncio.sleep(0.2)  # kein vierter Lauf: die Anforderung gilt einmal
     assert triggers(calls) == ["start", "manual", "vehicles"]
     assert [[car.key for car in inputs.vehicles] for inputs in calls] == [
         ["tesla"],
