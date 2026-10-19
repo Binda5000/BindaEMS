@@ -16,6 +16,7 @@ from bindaems.core.adapters.coe import CoeAdapter
 from bindaems.core.control.last_values import ControlCommand
 from bindaems.core.control.regulation import Regulation
 from bindaems.core.runtime import CoreRuntime
+from bindaems.core.safety.locks import LockInfo
 from bindaems.shared.coe import CoeValue, decode, encode
 from bindaems.shared.config import CoeOffsetConfig, Config
 from bindaems.shared.control import ActuatorMode, Command, CommandKind, Intent
@@ -65,19 +66,21 @@ def intent(version: int, mode: ActuatorMode) -> Intent:
 
 
 class CoeRuntime:
-    """Laufzeit mit echtem CoE-Adapter am Ersatzport; die Regelung fordert ``wanted`` an."""
+    """Laufzeit mit echtem CoE-Adapter am Ersatzport; die Regelung der Klimaanlage
+    (``thermal_step``) fordert je Zyklus ``wanted`` an, der Kern (``step``) nichts."""
 
     def __init__(self, rt: CoreRuntime, clock: ManualClock, device: CoeOffsetConfig) -> None:
         self.rt, self.clock = rt, clock
         self.ports: list[FakeDatagram] = []
         # Die Uhr des Adapters folgt der Uhr der Laufzeit: Die Freigabe läuft mit ihr ab.
+        self.sleep = GatedSleep(self.mono)
         self.adapter = CoeAdapter(
             "klima",
             device,
             rt.store,
             self._open,
             clock=self.mono,
-            sleep=GatedSleep(self.mono),
+            sleep=self.sleep,
         )
         rt.adapters.append(self.adapter)
         self.wanted: list[float] = []  # was die Regelung je Zyklus anfordert
@@ -115,10 +118,14 @@ async def runtime_with_coe(runtime_env, monkeypatch) -> AsyncIterator[Callable[.
     envs: list[CoeRuntime] = []
 
     def regulate(self: Regulation, inputs: Any) -> list[ControlCommand]:
+        return []
+
+    def regulate_thermal(self: Regulation, inputs: Any) -> list[ControlCommand]:
         env = envs[-1]
         return [ControlCommand(Command(THERMAL, OFFSET, value), {}) for value in env.wanted]
 
     monkeypatch.setattr(Regulation, "step", regulate)
+    monkeypatch.setattr(Regulation, "thermal_step", regulate_thermal)
 
     async def build(*, live: bool = True, **kw: Any) -> CoeRuntime:
         rt, _, clock = runtime_env(state=GOOD_STATE, configure=allow_thermal_live, **kw)
@@ -402,3 +409,69 @@ async def test_health_takes_wish_reason_and_hint_from_the_regulation(runtime_env
         env.task.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await env.task
+
+
+async def tick(env: CoeRuntime, seconds: int) -> None:
+    """``seconds`` Zyklen; nach jedem laufen die fälligen Pausen des Adapters (Senden, Wache)."""
+    for _ in range(seconds):
+        run(env.rt, env.clock, 1)
+        env.sleep.release_due()
+        for _ in range(5):
+            await asyncio.sleep(0)
+
+
+async def test_stale_values_withdraw_the_permit(runtime_with_coe) -> None:  # Fix-Runde 1
+    # Live −1,5 K bestätigt; danach kommen keine Pakete mehr. Nach ``stale_after_s`` trennt der
+    # Adapter die Quelle, der Aktor ist nicht steuerbar, und die Laufzeit nimmt die Freigabe
+    # zurück: Der Adapter sendet 0, statt −1,5 K weiter alle 30 s zu wiederholen.
+    env = await runtime_with_coe()
+    env.wanted = [-0.5]
+    regulate_until_control(env)
+    for value in (-0.5, -1.0, -1.5):
+        env.wanted = [value]
+        env.clock.advance(600)  # Schrittregel: eine Stufe je step_interval_s
+        env.echo(value + 0.5)
+        run(env.rt, env.clock, 1)
+        env.echo(value)
+        run(env.rt, env.clock, 1)
+    assert env.thermal_decisions()[-1].result is DecisionResult.OK
+    assert env.adapter.held_k == -1.5 and env.sent()[-1] == -15
+    await tick(env, 200)  # länger als stale_after_s (180 s) ohne Paket
+    assert env.rt.store.connected("thermal.klima") is False
+    assert env.adapter.held_k == 0.0
+    assert env.sent()[-1] == 0
+    assert not permitted(env)
+
+
+async def test_locked_thermal_actuator_gets_no_permit(runtime_with_coe, monkeypatch) -> None:
+    env = await runtime_with_coe()
+    env.wanted = [0.5]
+    regulate_until_control(env)
+    assert permitted(env)
+    lock = LockInfo(("Fremde Änderung.",), env.clock.now(), None)
+    monkeypatch.setattr(env.rt.locks, "active", lambda now: {THERMAL: lock})
+    env.echo(0.0)
+    run(env.rt, env.clock, 1)
+    assert not permitted(env)
+
+
+async def test_thermal_exception_withdraws_only_its_permit(runtime_with_coe, monkeypatch) -> None:
+    # Ruling R19: Wirft die Strategie der Klimaanlage, ruht nur sie; der Adapter sendet 0, die
+    # Regelung der Autos und des Akkus läuft weiter (kein ``control.exception``).
+    env = await runtime_with_coe()
+    env.wanted = [0.5]
+    regulate_until_control(env)
+    assert permitted(env)
+
+    def broken(self: Regulation, inputs: Any) -> list[ControlCommand]:
+        raise RuntimeError("kaputt")
+
+    monkeypatch.setattr(Regulation, "thermal_step", broken)
+    env.echo(0.5)
+    run(env.rt, env.clock, 1)
+    assert not permitted(env)
+    assert env.adapter.held_k == 0.0 and env.sent()[-1] == 0
+    alarms = {alarm["id"] for alarm in env.rt.health().alarms}
+    assert "control.thermal_exception" in alarms
+    assert "control.exception" not in alarms
+    assert env.rt.health().mode == "CONTROL"

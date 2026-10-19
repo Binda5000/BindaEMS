@@ -30,12 +30,22 @@ Wirft ein Aufruf des Kerns, gilt der Zyklus als gescheitert (``failed``, ab ``st
   Ausnahme des letzten.
 - Das Log nennt die erste Ausnahme einer Folge mit Traceback, jede weitere als eine Zeile.
 
+Die Klimaanlagen (Plan 6a, Ruling R19) laufen in eigenen Aufrufen: ihre Eingaben und
+``Regulation.thermal_step`` nach ``step``, ihre Urteile und Ergebnisse (``thermal.*``). Wirft einer
+davon, gilt nur die Klimaanlage für diesen Zyklus als gescheitert (``thermal_failed``): Sie ruht
+(``Regulation.thermal_idle``), ihre Befehle entfallen, die Laufzeit nimmt ihre Freigabe zurück und
+der Adapter sendet 0; die Befehle der Autos und des Akkus bleiben, ``failed`` bleibt falsch. Der
+Alarm ``control.thermal_exception`` (Warnung) folgt denselben Regeln wie ``control.exception``,
+beendet von einem Zyklus, in dem ``thermal_step`` ohne Ausnahme lief; das Log ebenso.
+
 Nicht für mehrere Threads gedacht, außer ``health`` und ``alarms``.
 """
 
 from __future__ import annotations
 
+import contextlib
 from collections.abc import Callable, Collection, Mapping
+from dataclasses import replace
 from datetime import datetime
 from typing import Any, Final, TypeVar
 
@@ -55,6 +65,7 @@ from bindaems.core.safety.types import Verdict
 from bindaems.core.state.derived import Derived
 from bindaems.shared.config import CoeOffsetConfig, Config
 from bindaems.shared.control import (
+    THERMAL_PREFIX,
     Command,
     CommandValue,
     Intent,
@@ -68,6 +79,7 @@ from bindaems.shared.plan import IntentPlan
 log = structlog.get_logger(__name__)
 
 CONTROL_EXCEPTION: Final = "control.exception"
+THERMAL_EXCEPTION: Final = "control.thermal_exception"
 _FROM_GRID: Final = "grid>"  # der Anfang der Schlüssel aller Flüsse aus dem Netz (``allocate``)
 
 _T = TypeVar("_T")
@@ -95,17 +107,32 @@ class RegulationLink:
         self._health = self.regulation.health()
         self._alarms: list[Alarm] = []  # die des Kerns
         self._exception: Alarm | None = None  # ``control.exception``
+        # Dasselbe für die Klimaanlagen (``control.thermal_exception``, Ruling R19)
+        self._thermal_failed = False
+        self._thermal_regulated = False
+        self._thermal_error: str | None = None
+        self._thermal_failed_since: datetime | None = None
+        self._thermal_traced = False
+        self._thermal_exception: Alarm | None = None
 
     @property
     def failed(self) -> bool:
         """Ob in diesem Zyklus ein Aufruf des Kerns warf."""
         return self._failed
 
+    @property
+    def thermal_failed(self) -> bool:
+        """Ob in diesem Zyklus ein Aufruf für die Klimaanlagen warf (Ruling R19)."""
+        return self._thermal_failed
+
     def start_cycle(self) -> None:
         """Am Anfang jedes Zyklus, vor dem Rücklesen: Der Zyklus ist noch nicht gescheitert."""
         self._failed = False
         self._regulated = False
         self._error = None
+        self._thermal_failed = False
+        self._thermal_regulated = False
+        self._thermal_error = None
 
     def step(
         self,
@@ -154,8 +181,10 @@ class RegulationLink:
         Wallboxen in Boost aus dem letzten Schritt des Kerns (``Regulation.boost_wallboxes``, einen
         Zyklus alt).
 
-        Dazu je Klimaanlage (Plan 6a, ``thermal_inputs``) und ob der Betriebszustand ``operating``
-        DEGRADED ist: Dann gehen die Klimaanlagen auf 0.
+        Danach, in einem eigenen Aufruf, die Klimaanlagen (``Regulation.thermal_step``) mit
+        denselben Eingaben, dazu je Klimaanlage ihre (``_thermal``) und ob der Betriebszustand
+        ``operating`` DEGRADED ist: Dann gehen sie auf 0. Ihre Befehle kommen hinter die des
+        Kerns; wirft dieser Aufruf, entfallen nur sie (``thermal_failed``).
 
         Auch eine Ausnahme beim Bauen der Eingaben setzt nur die Regelung aus.
         """
@@ -188,7 +217,7 @@ class RegulationLink:
                     if vehicle.tessie is not None
                 },
             )
-            commands = self.regulation.step(
+            built.append(
                 RegulationInputs(
                     charge,
                     pv_w=derived.pv_total_w,
@@ -196,14 +225,29 @@ class RegulationLink:
                     base_setpoint_w=ok_number(snap, "ess.grid_setpoint_w"),
                     locks=locks,
                     quarter=self._quarter(flows, slot, derived, boost),
+                )
+            )
+            commands = self.regulation.step(built[0])
+            self._regulated = True
+            return commands
+
+        def regulate_thermal() -> list[ControlCommand]:
+            found = self.regulation.thermal_step(
+                replace(
+                    built[0],
                     thermal=self._thermal(snap, snow, capabilities, connected, locks),
                     degraded=operating is OperatingState.DEGRADED,
                 )
             )
-            self._regulated = True
-            return commands
+            self._thermal_regulated = True
+            return found
 
-        return self._call("step", regulate, [])
+        built: list[RegulationInputs] = []
+        none: list[ControlCommand] = []
+        commands = self._call("step", regulate, none)
+        if not self._regulated:
+            return commands
+        return [*commands, *self._thermal_call("thermal_step", regulate_thermal, none)]
 
     def idle(self, snow: datetime) -> None:
         """Ein Zyklus ohne Regelung; ``snow`` ist die Zeit der Safety-Schicht.
@@ -225,16 +269,20 @@ class RegulationLink:
     def note_verdict(
         self, command: Command, verdict: Verdict | None, *, not_sent: bool = False
     ) -> None:
-        """Das Urteil der Safety-Schicht über einen Befehl der Regelung, auch ``None``."""
-        self._call(
+        """Das Urteil der Safety-Schicht über einen Befehl der Regelung, auch ``None``; das über
+        einen Versatz einer Klimaanlage (``thermal.*``) im Aufruf der Klimaanlagen."""
+        call = self._thermal_call if command.actuator.startswith(THERMAL_PREFIX) else self._call
+        call(
             "note_verdict",
             lambda: self.regulation.note_verdict(command, verdict, not_sent=not_sent),
             None,
         )
 
     def note_result(self, result: WriteResult) -> None:
-        """Das Ergebnis eines abgeschlossenen Schreibvorgangs, auch eines des Keepers."""
-        self._call("note_result", lambda: self.regulation.note_result(result), None)
+        """Das Ergebnis eines abgeschlossenen Schreibvorgangs, auch eines des Keepers; das einer
+        Klimaanlage (``thermal.*``) im Aufruf der Klimaanlagen."""
+        call = self._thermal_call if result.actuator.startswith(THERMAL_PREFIX) else self._call
+        call("note_result", lambda: self.regulation.note_result(result), None)
 
     def forget(self, actuators: Collection[str]) -> None:
         """Die Regelung vergisst ihre letzten Werte dieser Aktoren."""
@@ -266,6 +314,7 @@ class RegulationLink:
         ``failed`` gilt dagegen nur für diesen Zyklus.
         """
         self._wall_now = wall_now
+        self._finish_thermal(wall_now)
         health = self._call("health", self.regulation.health, self._health)
         alarms = self._call("alarms", lambda: self.regulation.alarms(wall_now), self._alarms)
         if self._failed:
@@ -287,7 +336,50 @@ class RegulationLink:
         gescheiterter Zyklen läuft: ab dem ``finish`` ihres ersten Zyklus bis zu dem eines
         Zyklus mit Regelung ohne Ausnahme."""
         exception = [] if self._exception is None else [self._exception]
-        return [*self._alarms, *exception]
+        thermal = [] if self._thermal_exception is None else [self._thermal_exception]
+        return [*self._alarms, *exception, *thermal]
+
+    def _finish_thermal(self, wall_now: datetime) -> None:
+        """Führt die Folge gescheiterter Zyklen der Klimaanlagen wie ``finish`` die des Kerns."""
+        if self._thermal_failed:
+            if self._thermal_failed_since is None:
+                self._thermal_failed_since = wall_now
+            error = self._thermal_error
+            message = f"Regelung der Klimaanlage ausgesetzt: Ausnahme {error} im Regelzyklus."
+            self._thermal_exception = Alarm(
+                THERMAL_EXCEPTION, Severity.WARNING, message, self._thermal_failed_since
+            )
+        elif self._thermal_regulated:
+            self._thermal_failed_since, self._thermal_exception = None, None
+            self._thermal_traced = False
+
+    def _thermal_call(self, name: str, call: Callable[[], _T], fallback: _T) -> _T:
+        """Ruft den Kern für die Klimaanlagen; nach einer Ausnahme in diesem Zyklus ruhen nur sie.
+
+        Wirft der Aufruf, ruhen die Klimaanlagen (``Regulation.thermal_idle``), und zurück kommt
+        ``fallback``; wirft auch das, bleibt es dabei: Ohne Freigabe sendet der Adapter 0, und der
+        nächste Zyklus versucht es neu. Nach einer Ausnahme des Kerns gilt ``fallback`` ohne Aufruf.
+        """
+        if self._failed or self._thermal_failed:
+            return fallback
+        try:
+            return call()
+        except Exception as exc:  # nur die Klimaanlagen setzen aus
+            self._thermal_failed = True
+            if self._thermal_error is None:
+                self._thermal_error = type(exc).__name__
+            if self._thermal_traced:
+                log.error(
+                    "Weitere Ausnahme in der Regelung der Klimaanlage", call=name, error=repr(exc)
+                )
+            else:
+                self._thermal_traced = True
+                log.exception(
+                    "Ausnahme in der Regelung der Klimaanlage, Klimaanlage ausgesetzt", call=name
+                )
+            with contextlib.suppress(Exception):
+                self.regulation.thermal_idle()
+            return fallback
 
     def _thermal(
         self,

@@ -584,7 +584,7 @@ class ChargeController:
             _car_view(self._cfg, point, modes[key], state.vehicles[key], inputs)
             for key, point in points.items()
         )
-        self._unmet_w = self._unmet(points, modes, state.vehicles, cycle.wanted)
+        self._unmet_w = self._unmet(points, modes, state.vehicles, inputs.present)
         self._vehicle_wallbox = {
             vehicle_actuator(key): None if v.kind is AssignmentKind.UNCLEAR else v.wallbox
             for key, v in state.vehicles.items()
@@ -692,13 +692,21 @@ class ChargeController:
         return self._cars
 
     def unmet_surplus_w(self) -> float:
-        """Der offene Wunsch der Autos im letzten ``step`` in W (Plan 6a, Entscheidung 5.3).
+        """Was die Autos im letzten ``step`` noch aufnehmen könnten, in W (Plan 6a, Entscheidung
+        5.3, Ruling R18): der Vorrang der Autos vor der Klimaanlage.
 
-        Die Summe von ``max(0, Wunsch − Leistung)`` über die Ladepunkte, die die Laderegelung
-        regelt, deren Auto angesteckt ist (laut Zuordnung) und im Modus PV oder Min+PV lädt. Der
-        Wunsch ist der Strom aus dem Überschuss (``wanted_a``) × ``U`` × Zahl der Phasen; eine
-        unbekannte Leistung zählt als 0 W: Der Vorrang der Autos geht dann vor. Vor dem ersten
-        ``step`` und nach ``idle`` ist er 0.
+        Es zählt jeder Ladepunkt, den die Laderegelung regelt, dessen Auto laut Zuordnung angesteckt
+        ist, laden kann (``can_charge``) und im Modus PV oder Min+PV steht, mit
+        ``max(0, Höchstleistung − Leistung)``; die Höchstleistung ist ``max_a × U × Phasen``. Das
+        nur, solange das Auto seinem Befehl folgt: Seine Leistung ist bekannt und liegt höchstens
+        eine Stufe von 1 A (auf seinen Phasen) unter dem befohlenen Strom. „Laden aus“ befiehlt
+        0 A: Ein Auto, das die Regelung mangels Überschuss aushält, zählt. Zieht ein Auto deutlich
+        weniger als befohlen, begrenzt es sich selbst (Abregeln, Ladelimit im Auto, Timer) und
+        zählt nicht, ebenso bei unbekannter Leistung oder unbekanntem Befehl. Befohlen ist der
+        Ist-Wert des Aktors (``present``), ohne ihn der letzte eigene Wert.
+
+        Anders als ein Wunsch aus dem Überschuss hängt das nicht davon ab, was die Klimaanlage
+        gerade aufnimmt. Vor dem ersten ``step`` und nach ``idle`` ist es 0.
         """
         return self._unmet_w
 
@@ -804,20 +812,43 @@ class ChargeController:
         points: Mapping[str, ChargePoint],
         modes: Mapping[str, Effective],
         vehicles: Mapping[str, VehicleState],
-        wanted: Mapping[str, int],
+        present: Mapping[Key, CommandValue],
     ) -> float:
-        """Der offene Wunsch dieses Zyklus für ``unmet_surplus_w``."""
+        """Was die Autos dieses Zyklus noch aufnehmen könnten (``unmet_surplus_w``)."""
         volts = self._limits.voltage_v
         total = 0.0
         for car in self._cars:
-            point = points[car.vehicle]
-            if not point.regulated or vehicles[car.vehicle].plugged is not True:
+            point, vehicle, mode = points[car.vehicle], vehicles[car.vehicle], modes[car.vehicle]
+            if (
+                not point.regulated
+                or point.actuator is None
+                or vehicle.plugged is not True
+                or mode not in _UNMET_MODES
+                or not can_charge(vehicle, mode)
+                or car.power_w is None
+            ):
                 continue
-            if modes[car.vehicle] not in _UNMET_MODES:
-                continue
-            wanted_w = wanted.get(car.vehicle, 0) * volts * len(point.phases)
-            total += max(0.0, wanted_w - (car.power_w or 0.0))
+            commanded_a = self._commanded_a(point.actuator, present)
+            step_w = volts * len(point.phases)  # eine Stufe von 1 A auf den Phasen des Autos
+            if commanded_a is None or car.power_w < (commanded_a - 1.0) * step_w:
+                continue  # Befehl unbekannt, oder das Auto begrenzt sich selbst
+            total += max(0.0, point.max_a * step_w - car.power_w)
         return total
+
+    def _commanded_a(self, actuator: str, present: Mapping[Key, CommandValue]) -> float | None:
+        """Der befohlene Strom eines Aktors in A: 0 bei „Laden aus“; ``None``, wenn unbekannt.
+
+        Zuerst der Ist-Wert des Aktors, ohne ihn der letzte eigene Wert.
+        """
+
+        def commanded(kind: CommandKind) -> CommandValue:
+            value = present.get((actuator, kind))
+            return self._last.requested((actuator, kind)) if value is None else value
+
+        on = commanded(_CHARGING)
+        if on is False:
+            return 0.0
+        return finite_number(commanded(_CURRENT)) if on is True else None
 
     def _order(self, intent: Intent | None) -> list[str]:
         """Die Autos in der Reihenfolge ihrer Priorität: die Fahrzeuge, dahinter die Gäste.

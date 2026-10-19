@@ -1104,7 +1104,8 @@ def klima(
     Ohne Angabe: 900 W Einspeisung, SOC 95 %, Kühlen, frisch, steuerbar, kein Auto an der EVCS
     und kein Echo. ``accept`` nimmt jeden ihrer Befehle an; ``kw`` geht an ``inputs``.
     """
-    present = dict(PRESENT) if echo is None else {**PRESENT, OFFSET_KEY: echo}
+    base = kw.pop("present", PRESENT)
+    present = dict(base) if echo is None else {**base, OFFSET_KEY: echo}
     given = {"evcs_obs": evcs(connected=False), "grid_obs": grid(grid_w=grid_w, soc=soc)} | kw
     charge = inputs(
         cfg,
@@ -1115,8 +1116,10 @@ def klima(
         **given,
     )
     seen = ThermalInputs(fresh, mode, controllable, locked, charge.now.timestamp())
-    found = regulation.step(RegulationInputs(charge, thermal={"klima": seen}, degraded=degraded))
-    ours = [x for x in found if x.command.actuator == KLIMA]
+    given_inputs = RegulationInputs(charge, thermal={"klima": seen}, degraded=degraded)
+    found = regulation.step(given_inputs)
+    assert all(x.command.actuator != KLIMA for x in found)  # die Klimaanlage nur in thermal_step
+    ours = regulation.thermal_step(given_inputs)
     if accept:
         for x in ours:
             regulation.note_verdict(x.command, accepted(x.command))
@@ -1157,9 +1160,9 @@ def test_regulation_emits_offset_after_override(reg_with_klima, cfg) -> None:
     ]
 
 
-def test_regulation_thermal_commands_come_after_the_override(reg_with_klima, cfg) -> None:
-    # Der e-Golf in Sofort ohne PV: Ströme, „Laden an“ und der Override gehen vor; die Klimaanlage
-    # kommt zuletzt und hält keinen davon auf.
+def test_regulation_thermal_step_follows_the_step(reg_with_klima, cfg) -> None:
+    # Der e-Golf in Sofort ohne PV: Ströme, „Laden an“ und der Override kommen aus ``step``; die
+    # Klimaanlage rechnet danach in ``thermal_step`` (``RegulationLink`` hängt sie hinten an).
     charge = inputs(
         cfg,
         evcs_obs=evcs(charging=True, power_w=2760.0),
@@ -1167,14 +1170,15 @@ def test_regulation_thermal_commands_come_after_the_override(reg_with_klima, cfg
         intent=EGOLF_NOW,
     )
     seen = {"klima": ThermalInputs(True, "kuehlen", True, False, T0.timestamp())}
-    found = reg_with_klima.step(
-        RegulationInputs(charge, pv_w=0.0, house_w=500.0, base_setpoint_w=0.0, thermal=seen)
-    )
+    given = RegulationInputs(charge, pv_w=0.0, house_w=500.0, base_setpoint_w=0.0, thermal=seen)
+    found = reg_with_klima.step(given)
     assert [(x.command.actuator, x.command.kind) for x in found] == [
         ("wallbox.evcs", CommandKind.CURRENT),
         ("wallbox.evcs", CommandKind.CHARGING),
         (VICTRON, CommandKind.GRID_SETPOINT),
-        (KLIMA, OFFSET),
+    ]
+    assert [(x.command.actuator, x.command.kind) for x in reg_with_klima.thermal_step(given)] == [
+        (KLIMA, OFFSET)
     ]
 
 
@@ -1278,16 +1282,27 @@ def test_regulation_rejected_zero_keeps_the_strategy(reg_with_klima, cfg) -> Non
     assert wish(reg_with_klima)["wish"] == 1
 
 
-def test_regulation_holds_the_offset_while_not_controllable(reg_with_klima, cfg) -> None:
+@pytest.mark.parametrize("kw", [{"controllable": False}, {"locked": True}])
+def test_regulation_drops_the_wish_while_not_controllable(cfg, kw) -> None:
+    # Nicht steuerbar (Quelle getrennt) oder gesperrt: kein Befehl, der Wunsch geht auf 0
+    # (Entscheidung 5.1). Den gesendeten Versatz nimmt die Laufzeit mit der Freigabe zurück.
+    regulation = Regulation(cfg, HardLimits.from_config(cfg), started=T0)
+    klima_run(regulation, cfg, 0, 600)
+    assert klima_run(regulation, cfg, 610, 700, **kw) == []
+    assert wish(regulation) == {"wish": 0, "reason": "thermal_stale", "hint": "neutral"}
+    # Wieder steuerbar: 0 geht hinaus (wie am Adapter), die nächste Stufe erst nach 600 s.
+    assert offsets(klima_run(regulation, cfg, 710, 1310)) == [
+        (710, 0.0, ("thermal_stale",)),  # der Grund des letzten Rücksetzens bleibt stehen
+        (1310, -0.5, ("thermal_more",)),
+    ]
+
+
+def test_regulation_keeps_stepping_while_the_offset_is_written(reg_with_klima, cfg) -> None:
+    # Ein offener Schreibvorgang hält nur den Befehl zurück; die Strategie rechnet weiter.
     klima(reg_with_klima, cfg, 0)
-    for kw in ({"controllable": False}, {"locked": True}, {"blocked": frozenset({OFFSET_KEY})}):
-        assert klima_run(reg_with_klima, cfg, 10, 700, **kw) == [], kw
-        reg_with_klima.forget({KLIMA})
-    # Gesperrt oder nicht steuerbar geht der Wunsch auf 0 (Entscheidung 5.1); offen geschrieben
-    # rechnet die Strategie weiter, gesendet wird erst danach.
+    assert klima_run(reg_with_klima, cfg, 10, 700, blocked=frozenset({OFFSET_KEY})) == []
     assert wish(reg_with_klima) == {"wish": 1, "reason": "thermal_more", "hint": "neutral"}
-    klima(reg_with_klima, cfg, 710, controllable=False)
-    assert wish(reg_with_klima)["reason"] == "thermal_stale"
+    assert [x.command.value for x in klima(reg_with_klima, cfg, 710)] == [-0.5]
 
 
 @pytest.mark.parametrize(
@@ -1374,9 +1389,10 @@ def test_regulation_less_with_the_hint_of_the_slot(reg_with_klima, cfg) -> None:
 
 def test_regulation_cars_go_first(reg_with_klima, cfg) -> None:
     klima_run(reg_with_klima, cfg, 0, 600)
-    # Der e-Golf in PV lädt mit 1380 W unter seinem Wunsch: eine Stufe zurück, wieder 0.
-    egolf = evcs(charging=True, power_w=1380.0)
-    found = klima(reg_with_klima, cfg, 610, evcs_obs=egolf)
+    # Der e-Golf in PV folgt 6 A (2760 W) unter seinem Höchststrom: eine Stufe zurück, wieder 0.
+    egolf = evcs(charging=True, power_w=2760.0)
+    present = {**PRESENT, ("wallbox.evcs", CommandKind.CHARGING): True}
+    found = klima(reg_with_klima, cfg, 610, evcs_obs=egolf, present=present)
     assert reg_with_klima.charger.unmet_surplus_w() >= 230.0
     assert [(x.command.value, x.command.reasons) for x in found] == [(0.0, ("thermal_cars",))]
 
@@ -1390,8 +1406,9 @@ def test_regulation_without_grid_power_knows_no_export(reg_with_klima, cfg) -> N
 
 
 def test_regulation_skips_a_device_without_inputs(reg_with_klima, cfg) -> None:
-    found = reg_with_klima.step(RegulationInputs(inputs(cfg)))
-    assert all(x.command.actuator != KLIMA for x in found)
+    given = RegulationInputs(inputs(cfg))
+    reg_with_klima.step(given)
+    assert reg_with_klima.thermal_step(given) == []
     assert reg_with_klima.health()["thermal"] == {}
 
 
@@ -1415,3 +1432,31 @@ def test_regulation_routes_thermal_verdicts_and_results(reg_with_klima, cfg, mon
     last = Command(KLIMA, OFFSET, -0.5, reasons=("thermal_more",))
     reg_with_klima.note_verdict(last, accepted(last), not_sent=True)
     assert [x.command.value for x in klima(reg_with_klima, cfg, 620)] == [-0.5]
+
+
+def without_thermal(cfg: Config) -> Config:
+    return cfg.model_copy(update={"thermal": cfg.thermal.model_copy(update={"devices": {}})})
+
+
+def test_regulation_without_thermal_devices(cfg) -> None:  # Ruling R20
+    # Ohne ``thermal.devices`` regeln Autos und Akku wie mit, und es gibt keinen Versatz.
+    bare = without_thermal(cfg)
+    charge = inputs(
+        bare,
+        evcs_obs=evcs(charging=True, power_w=2760.0),
+        controllable={**CONTROLLABLE, VICTRON: True},
+        intent=EGOLF_NOW,
+    )
+    given = RegulationInputs(charge, pv_w=0.0, house_w=500.0, base_setpoint_w=0.0)
+    regulation = Regulation(bare, HardLimits.from_config(bare), started=T0)
+    with_klima = Regulation(cfg, HardLimits.from_config(cfg), started=T0)
+    found = regulation.step(given)
+    assert found == with_klima.step(given)
+    assert [x.command.actuator for x in found] == ["wallbox.evcs", "wallbox.evcs", VICTRON]
+    # Auch Eingaben für ein unbekanntes Gerät ergeben nichts.
+    seen = {"klima": ThermalInputs(True, "kuehlen", True, False, T0.timestamp())}
+    assert regulation.thermal_step(replace(given, thermal=seen)) == []
+    assert regulation.health()["thermal"] == {}
+    command = Command(KLIMA, OFFSET, -0.5)
+    regulation.note_verdict(command, accepted(command))  # geht an die Laderegelung, ohne Wirkung
+    regulation.forget({KLIMA})

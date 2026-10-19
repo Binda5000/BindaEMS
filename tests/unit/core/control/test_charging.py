@@ -2661,43 +2661,71 @@ def test_lowering_to_the_slot_power_is_urgent_only_for_the_fuse(cfg, l1, urgent)
 # --- Lesende Zugriffe für die Klimaanlage (Plan 6a, Task 8) ---------------------------------------
 
 
-def test_unmet_surplus_counts_pv_cars_only(cfg) -> None:  # Entscheidung 5.3
+def unmet_after(cfg, mode: ChargeMode, *, current: float | None, on: bool | None, **kw) -> float:
+    """``unmet_surplus_w`` nach einem Schritt mit dem e-Golf in ``mode`` an der EVCS; ``current``
+    und ``on`` sind Ist-Strom und Ist-„Laden an“ der EVCS (``None``: unbekannt)."""
+    c = controller(cfg)
+    present = {
+        key: value
+        for key, value in (
+            (("wallbox.evcs", CURRENT), current),
+            (("wallbox.evcs", CHARGING), on),
+        )
+        if value is not None
+    }
+    c.step(inputs(cfg, intent=egolf_in(mode), present=present, **kw))
+    return c.unmet_surplus_w()
+
+
+def test_unmet_surplus_counts_cars_that_follow_their_command(cfg) -> None:  # Ruling R18
+    # Der e-Golf (zwei Phasen, 6 … 16 A, 7360 W) folgt 8 A mit 3680 W: offen bis zum Höchststrom
+    # sind 3680 W, egal wie viel Überschuss gerade da ist.
+    at_8_a = evcs(charging=True, power_w=3680.0)
+    assert unmet_after(cfg, ChargeMode.PV, current=8.0, on=True, evcs_obs=at_8_a) == 3680.0
+    assert unmet_after(cfg, ChargeMode.MIN_PV, current=8.0, on=True, evcs_obs=at_8_a) == 3680.0
+    # Eine Stufe von 1 A darunter folgt er noch (3220 W bei 8 A).
+    at_7_a = evcs(charging=True, power_w=3220.0)
+    assert unmet_after(cfg, ChargeMode.PV, current=8.0, on=True, evcs_obs=at_7_a) == 4140.0
+    # Hält die Regelung ihn aus („Laden aus“), folgt er mit 0 W: Er wartet auf Überschuss.
+    off = evcs(charging=False, power_w=0.0)
+    assert unmet_after(cfg, ChargeMode.PV, current=6.0, on=False, evcs_obs=off) == 7360.0
+
+
+@pytest.mark.parametrize(
+    ("mode", "current", "on", "obs"),
+    [
+        # zieht deutlich weniger als befohlen (Abregeln, Ladelimit im Auto, Timer): er begrenzt sich
+        (ChargeMode.PV, 16.0, True, evcs(charging=True, power_w=1380.0)),
+        (ChargeMode.PV, 8.0, True, evcs(charging=False, power_w=0.0)),
+        # am Höchststrom ist nichts offen
+        (ChargeMode.PV, 16.0, True, evcs(charging=True, power_w=7360.0)),
+        # Leistung unbekannt
+        (ChargeMode.PV, 8.0, True, evcs(charging=True, power_w=None)),
+        # Befehl unbekannt
+        (ChargeMode.PV, None, True, evcs(charging=True, power_w=3680.0)),
+        (ChargeMode.PV, 8.0, None, evcs(charging=True, power_w=3680.0)),
+        # Sofort, abgesteckt, geladen
+        (ChargeMode.NOW, 8.0, True, evcs(charging=True, power_w=3680.0)),
+        (ChargeMode.PV, 8.0, True, evcs(connected=False)),
+        (ChargeMode.PV, 8.0, True, evcs(charging=False, complete=True, power_w=0.0)),
+    ],
+)
+def test_unmet_surplus_leaves_out_cars_that_limit_themselves(cfg, mode, current, on, obs) -> None:
+    assert unmet_after(cfg, mode, current=current, on=on, evcs_obs=obs) == 0.0
+
+
+def test_unmet_surplus_needs_a_regulated_point_and_a_step(cfg) -> None:
     c = controller(cfg)
     assert c.unmet_surplus_w() == 0.0  # vor dem ersten ``step``
-    # PV mit 4000 W Einspeisung und 1380 W an der EVCS: Der Überschuss (5280 W nach der Marge von
-    # 100 W) gibt dem e-Golf 11 A auf zwei Phasen, 5060 W; offen sind 3680 W.
-    c.step(
-        inputs(cfg, intent=egolf_in(ChargeMode.PV), evcs_obs=evcs(charging=True, power_w=1380.0))
-    )
+    present = {("wallbox.evcs", CURRENT): 8.0, ("wallbox.evcs", CHARGING): True}
+    at_8_a = evcs(charging=True, power_w=3680.0)
+    unregulated = {"wallbox.evcs": False, "vehicle.tesla": False}
+    given = {"intent": egolf_in(ChargeMode.PV), "present": present, "evcs_obs": at_8_a}
+    c.step(inputs(cfg, controllable=unregulated, **given))
+    assert c.unmet_surplus_w() == 0.0
+    c.step(inputs(cfg, s=1, **given))
     assert c.unmet_surplus_w() == 3680.0
-    # Bei 5000 W ist der Wunsch der Höchststrom 16 A (7360 W): offen 2360 W.
-    c.step(
-        inputs(
-            cfg, s=1, intent=egolf_in(ChargeMode.PV), evcs_obs=evcs(charging=True, power_w=5000.0)
-        )
-    )
-    assert c.unmet_surplus_w() == 2360.0
-    # Min+PV zählt ebenso; ohne Leistung der Wallbox zählt 0 W (hier der Mindeststrom 6 A).
-    c.step(inputs(cfg, s=2, intent=egolf_in(ChargeMode.MIN_PV), evcs_obs=evcs(power_w=None)))
-    assert c.unmet_surplus_w() == 2760.0
-    # Sofort und ein abgestecktes Auto zählen nicht.
-    c.step(inputs(cfg, s=3, intent=egolf_in(ChargeMode.NOW), evcs_obs=evcs(charging=True)))
-    assert c.unmet_surplus_w() == 0.0
-    c.step(inputs(cfg, s=4, intent=egolf_in(ChargeMode.PV), evcs_obs=evcs(connected=False)))
-    assert c.unmet_surplus_w() == 0.0
-    # Ein Ladepunkt, den die Laderegelung nicht regelt, zählt nicht.
-    c.step(
-        inputs(
-            cfg,
-            s=5,
-            intent=egolf_in(ChargeMode.PV),
-            controllable={"wallbox.evcs": False, "vehicle.tesla": False},
-        )
-    )
-    assert c.unmet_surplus_w() == 0.0
-    c.step(inputs(cfg, s=6, intent=egolf_in(ChargeMode.PV)))
-    assert c.unmet_surplus_w() > 0.0
-    c.idle(T0 + timedelta(seconds=7))
+    c.idle(T0 + timedelta(seconds=2))
     assert c.unmet_surplus_w() == 0.0
 
 

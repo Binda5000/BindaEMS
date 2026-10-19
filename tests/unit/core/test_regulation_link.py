@@ -17,7 +17,7 @@ from bindaems.core.control.executor import WriteResult
 from bindaems.core.control.last_values import ControlCommand
 from bindaems.core.control.peak_guard import PEAK_EXCEEDED, QuarterObs
 from bindaems.core.control.regulation import Regulation, RegulationInputs, ThermalInputs
-from bindaems.core.regulation_link import CONTROL_EXCEPTION, RegulationLink
+from bindaems.core.regulation_link import CONTROL_EXCEPTION, THERMAL_EXCEPTION, RegulationLink
 from bindaems.core.safety.limits import HardLimits
 from bindaems.core.safety.types import Outcome, Verdict
 from bindaems.core.state.derived import PHASES, derive
@@ -37,6 +37,7 @@ INTENT = Intent(version=1, control=True)
 MESSAGE = "Regelung ausgesetzt: Ausnahme RuntimeError im Regelzyklus."
 TEN = Command("wallbox.evcs", CommandKind.CURRENT, 10.0)
 RESULT = WriteResult("wallbox.evcs", CommandKind.CURRENT, 10.0, DecisionResult.OK, "")
+OK = DecisionResult.OK
 
 
 def broken(*args: object, **kwargs: object) -> Any:
@@ -457,7 +458,9 @@ def test_the_log_shows_the_first_exception_of_a_streak_with_traceback(cfg, monke
 def test_step_builds_the_thermal_inputs(cfg, monkeypatch) -> None:  # Plan 6a, Task 8
     link = link_for(cfg)
     seen: list[RegulationInputs] = []
-    monkeypatch.setattr(link.regulation, "step", lambda inputs: seen.append(inputs) or [])
+    stepped: list[RegulationInputs] = []
+    monkeypatch.setattr(link.regulation, "step", lambda inputs: stepped.append(inputs) or [])
+    monkeypatch.setattr(link.regulation, "thermal_step", lambda inputs: seen.append(inputs) or [])
     bits = {"running": True, "heating": False, "venting": False, "cooling": True}
     values = snap({f"thermal.klima.{name}": value for name, value in bits.items()})
     sources = {"thermal.klima": True}  # die Quelle des CoE-Adapters (``coe_source``)
@@ -472,3 +475,100 @@ def test_step_builds_the_thermal_inputs(cfg, monkeypatch) -> None:  # Plan 6a, T
         ({"klima": ThermalInputs(True, "unbekannt", True, True, when)}, False),
         ({"klima": ThermalInputs(False, "unbekannt", False, False, when)}, True),
     ]
+    # Der Kern bekommt dieselben Eingaben ohne die der Klimaanlagen.
+    assert [(inputs.thermal, inputs.degraded) for inputs in stepped] == [({}, False)] * 3
+    assert [inputs.charge for inputs in stepped] == [inputs.charge for inputs in seen]
+
+
+# Klimaanlage für sich (Plan 6a, Ruling R19)
+
+OFFSET = Command("thermal.klima", CommandKind.SETPOINT_OFFSET, -0.5, reasons=("thermal_more",))
+THERMAL_MESSAGE = "Regelung der Klimaanlage ausgesetzt: Ausnahme RuntimeError im Regelzyklus."
+
+
+def test_thermal_commands_come_after_the_kernel(cfg, monkeypatch) -> None:
+    link = link_for(cfg)
+    monkeypatch.setattr(link.regulation, "step", lambda inputs: [ControlCommand(TEN, {})])
+    monkeypatch.setattr(
+        link.regulation, "thermal_step", lambda inputs: [ControlCommand(OFFSET, {})]
+    )
+    link.start_cycle()
+    assert [x.command for x in step(link, cfg)] == [TEN, OFFSET]
+
+
+def test_a_thermal_exception_leaves_cars_and_battery(cfg, monkeypatch) -> None:
+    link = link_for(cfg)
+    rested: list[bool] = []
+    original = link.regulation.thermal_idle
+    monkeypatch.setattr(link.regulation, "step", lambda inputs: [ControlCommand(TEN, {})])
+    monkeypatch.setattr(link.regulation, "thermal_step", broken)
+    monkeypatch.setattr(link.regulation, "thermal_idle", lambda: rested.append(True) or original())
+    link.start_cycle()
+    with capture_logs() as logs:
+        found = step(link, cfg)
+    # Die Befehle der Ladepunkte und des Akkus bleiben; nur die Klimaanlage ruht.
+    assert [x.command for x in found] == [TEN]
+    assert not link.failed and link.thermal_failed
+    assert rested == [True]
+    assert [entry["event"] for entry in logs] == [
+        "Ausnahme in der Regelung der Klimaanlage, Klimaanlage ausgesetzt"
+    ]
+    link.finish(NOW)
+    alarm = Alarm(THERMAL_EXCEPTION, Severity.WARNING, THERMAL_MESSAGE, NOW)
+    assert link.alarms() == [alarm]
+    # Die Folge geht weiter, mit einer Zeile im Log je weiterer Ausnahme ...
+    link.start_cycle()
+    with capture_logs() as logs:
+        step(link, cfg, when=NOW + timedelta(seconds=1))
+    link.finish(NOW + timedelta(seconds=1))
+    events = [entry["event"] for entry in logs]
+    assert events == ["Weitere Ausnahme in der Regelung der Klimaanlage"]
+    assert link.alarms() == [alarm]
+    # ... ein Zyklus ohne Regelung lässt den Alarm stehen, einer mit fehlerfreier Klimaanlage
+    # beendet ihn.
+    link.start_cycle()
+    link.idle(NOW + timedelta(seconds=2))
+    link.finish(NOW + timedelta(seconds=2))
+    assert link.alarms() == [alarm]
+    monkeypatch.setattr(link.regulation, "thermal_step", lambda inputs: [])
+    link.start_cycle()
+    step(link, cfg, when=NOW + timedelta(seconds=3))
+    assert not link.thermal_failed
+    link.finish(NOW + timedelta(seconds=3))
+    assert link.alarms() == []
+
+
+def test_a_thermal_exception_in_the_routing_leaves_the_kernel(cfg, monkeypatch) -> None:
+    link = link_for(cfg)
+    original = link.regulation.note_verdict
+
+    def note_verdict(command: Command, verdict: Any, *, not_sent: bool = False) -> None:
+        if command.actuator.startswith("thermal."):
+            raise RuntimeError("kaputt")
+        original(command, verdict, not_sent=not_sent)
+
+    monkeypatch.setattr(link.regulation, "note_verdict", note_verdict)
+    monkeypatch.setattr(link.regulation, "note_result", broken)
+    link.start_cycle()
+    step(link, cfg)
+    link.note_verdict(OFFSET, None)
+    assert link.thermal_failed and not link.failed
+    link.note_verdict(TEN, None)  # die Laderegelung bekommt ihr Urteil weiter
+    assert not link.failed
+    link.start_cycle()
+    link.note_result(WriteResult("thermal.klima", CommandKind.SETPOINT_OFFSET, -0.5, OK, ""))
+    assert link.thermal_failed and not link.failed
+    link.note_result(RESULT)
+    assert link.failed
+
+
+def test_a_failing_thermal_rest_rebuilds_nothing_else(cfg, monkeypatch) -> None:
+    # Wirft auch ``thermal_idle``, bleibt der Kern, wie er ist; die Klimaanlage ruht für den Zyklus.
+    link = link_for(cfg)
+    kernel = link.regulation
+    monkeypatch.setattr(kernel, "thermal_step", broken)
+    monkeypatch.setattr(kernel, "thermal_idle", broken)
+    link.start_cycle()
+    step(link, cfg)
+    assert link.thermal_failed and not link.failed
+    assert link.regulation is kernel

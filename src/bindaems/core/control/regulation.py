@@ -22,9 +22,11 @@ Reihenfolge von Präzisierung 3:
    ``control.peak_target_kw`` (``guard_target_kw``); er kennt die feste Grenze von Regel 2: das
    Budget für diesen Zyklus, die Grenzen für den nächsten,
 5. den Override (``BatteryController.decide``) mit diesem Budget,
-6. je Klimaanlage die Strategie (``ThermalStrategy``, Plan 6a) mit dem Rest-Überschuss nach Akku
-   und Autos: Einspeisung und Netzbezug, SOC und Schwelle des Slots, Druck von Wächter und
-   Überlast, offener Wunsch der Autos (``ChargeController.unmet_surplus_w``).
+6. danach, in einem eigenen Aufruf (``thermal_step``), je Klimaanlage die Strategie
+   (``ThermalStrategy``, Plan 6a) mit dem Rest-Überschuss nach Akku und Autos: Einspeisung und
+   Netzbezug, SOC und Schwelle des Slots, Druck von Wächter und Überlast, was die Autos noch
+   aufnehmen könnten (``ChargeController.unmet_surplus_w``). ``RegulationLink`` ruft ihn getrennt
+   ab: Eine Ausnahme dort setzt nur die Klimaanlagen aus (Ruling R19).
 
 Die Grenzen des Wächters wirken so einen Zyklus später; dafür rechnen Akku-Sollwert und Wächter mit
 Zuordnung und Modi desselben Zyklus wie die Laderegelung. Die Befehle kommen in dieser Reihenfolge:
@@ -200,7 +202,8 @@ class Regulation:
 
     def step(self, inputs: RegulationInputs) -> list[ControlCommand]:
         """Ein Regelzyklus (Präzisierung 3): die Befehle der Ladepunkte in der Reihenfolge der
-        Priorität, dahinter der Override, zuletzt die Versätze der Klimaanlagen (``_thermal_step``).
+        Priorität, dahinter der Override. Die Versätze der Klimaanlagen kommen danach aus
+        ``thermal_step`` mit denselben Eingaben.
 
         Die Laderegelung bekommt Grenzen und Start-Sperre des 15-min-Wächters aus dem vorigen
         Zyklus; sein Budget aus diesem Zyklus gilt schon für den Override. Der Wächter misst
@@ -264,11 +267,11 @@ class Regulation:
             blocked=_SETPOINT in charge.blocked,
             active=self._active,
         )
-        return [*commands, *override, *self._thermal_step(inputs)]
+        return [*commands, *override]
 
-    def _thermal_step(self, inputs: RegulationInputs) -> list[ControlCommand]:
-        """Je Klimaanlage mit Eingaben (``inputs.thermal``) ihr Wunsch und, wenn er sich ändert,
-        ihr Versatz (Plan 6a, Entscheidungen 4 bis 7).
+    def thermal_step(self, inputs: RegulationInputs) -> list[ControlCommand]:
+        """Nach ``step`` mit denselben Eingaben: je Klimaanlage mit Eingaben (``inputs.thermal``)
+        ihr Wunsch und, wenn er sich ändert, ihr Versatz (Plan 6a, Entscheidungen 4 bis 7).
 
         Die Strategie sieht den Rest nach Akku und Autos (Entscheidung 6): Einspeisung
         ``max(0, −grid_w)`` und Netzbezug ``max(0, grid_w)`` (``None``, wenn die Netzleistung
@@ -424,7 +427,12 @@ class Regulation:
         self._peak = NO_LIMITS
         self._active = None
         self._plan = plan_health(None, None, now)
-        for device in self._thermal.values():  # ohne Freigabe sendet der Adapter ohnehin 0
+        self.thermal_idle()
+
+    def thermal_idle(self) -> None:
+        """Die Klimaanlagen ruhen: Ihre Strategien beginnen neu bei 0, die letzten Versätze sind
+        vergessen, Health nennt keine. Ohne Freigabe sendet der Adapter ohnehin 0."""
+        for device in self._thermal.values():
             device.reset()
         self._thermal_last.forget()
         self._thermal_health = {}

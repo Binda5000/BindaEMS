@@ -1008,9 +1008,9 @@ class CoreRuntime:
 
         Nach der Regelung und vor dem ersten Befehl gibt die Laufzeit den Versatz der
         Klimaanlagen frei oder nimmt die Freigabe zurück (``_permit_thermal``): So sendet der
-        Adapter einen Befehl dieses Zyklus, aber nie nach einer Ausnahme der Regelung. Warf die
-        Regelung erst danach (``note_verdict``, ``finish``), nimmt die Laufzeit die Freigabe am
-        Ende zurück.
+        Adapter einen Befehl dieses Zyklus, aber nie nach einer Ausnahme der Regelung (auch nur
+        der Klimaanlagen, Ruling R19). Warf die Regelung erst danach (``note_verdict``,
+        ``finish``), nimmt die Laufzeit die Freigabe am Ende zurück.
 
         Warf die Regelung in diesem Zyklus (``RegulationLink.failed``, Plan 2c-2a,
         Präzisierung 15), führt die Laufzeit keinen ihrer Befehle mehr aus; die des Keepers laufen
@@ -1050,7 +1050,7 @@ class CoreRuntime:
             self.regulation.rest_plan(None if intent is None else intent.plan, now)
             regulated = []
         keeper = self._keeper_commands(snap, snow, present)
-        self._permit_thermal()
+        self._permit_thermal(capabilities, locks)
         if keeper or regulated:
             ctx = safety_context(
                 now=snow,
@@ -1083,32 +1083,45 @@ class CoreRuntime:
         self._pending = self.executor.pending()
         self._owned = self.ownership.owned
         self.regulation.finish(now)
-        if self.regulation.failed:
-            self._permit_thermal()
+        if self.regulation.failed or self.regulation.thermal_failed:
+            self._permit_thermal(capabilities, locks)
 
-    def _permit_thermal(self) -> None:
+    def _permit_thermal(
+        self, capabilities: Mapping[str, Capabilities], locks: Mapping[str, tuple[str, ...]]
+    ) -> None:
         """Gibt den Versatz jeder Klimaanlage für ``THERMAL_PERMIT_S`` frei, oder nimmt die Freigabe
         sofort zurück (Plan 6a, Entscheidung 3).
 
         Freigegeben wird nur im Regelbetrieb (CONTROL, DEGRADED), nur wenn die Regelung in diesem
-        Zyklus nicht warf (``RegulationLink.failed``; wie beim Heartbeat) und nur, wenn der Aktor
-        wirksam live ist und nicht übergeben wird; sonst sendet der Adapter ab sofort 0. Wirft die
-        Regelung in jedem Zyklus, bleibt die Freigabe so aus, bis sie wieder fehlerfrei regelt.
-        Die Übergabe sendet ohnehin nur 0, das braucht keine Freigabe. Bleibt der Zyklus stehen,
-        endet die Freigabe nach ``THERMAL_PERMIT_S``.
+        Zyklus nicht warf, weder der Kern (``RegulationLink.failed``; wie beim Heartbeat) noch die
+        Klimaanlagen (``thermal_failed``, Ruling R19), und nur, wenn der Aktor wirksam live ist,
+        nicht übergeben wird, steuerbar ist (``capabilities``: seine Quelle liefert Werte) und
+        nicht gesperrt (``locks``); sonst sendet der Adapter ab sofort 0. So hält er nie einen
+        alten Versatz, den die Regelung nicht mehr steuern kann, etwa nach ``stale_after_s`` ohne
+        Paket. Wirft die Regelung in jedem Zyklus, bleibt die Freigabe so aus, bis sie wieder
+        fehlerfrei regelt. Die Übergabe sendet ohnehin nur 0, das braucht keine Freigabe. Bleibt der
+        Zyklus stehen, endet die Freigabe nach ``THERMAL_PERMIT_S``.
         """
-        regulating = self.operating.state in _REGULATION_STATES and not self.regulation.failed
+        regulating = (
+            self.operating.state in _REGULATION_STATES
+            and not self.regulation.failed
+            and not self.regulation.thermal_failed
+        )
         for name in self._cfg.thermal.devices:
             adapter = self._coe_adapter(name)
             if adapter is None:
                 continue
             actuator = thermal_actuator(name)
             mode = self._modes.get(actuator)
+            able = capabilities.get(actuator)
             live = (
                 regulating
                 and mode is not None
                 and mode.effective == ActuatorMode.LIVE
                 and actuator not in self._handing_back
+                and able is not None
+                and able.controllable
+                and not locks.get(actuator)
             )
             adapter.permit_for(THERMAL_PERMIT_S if live else 0.0)
 
