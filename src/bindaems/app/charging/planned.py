@@ -1,34 +1,42 @@
 """Geplante Ladungen für die Abnahme „Ziel-SOC“ (Plan 4b, Entscheidung 15, Präzisierung 16).
 
 Je Session in „Geplant“ und Abfahrt eine Zeile in ``planned_charge``. ``record`` läuft nach jeder
-Antwort von Health mit den offenen Sessions je Wallbox.
+Antwort von Health mit den offenen Sessions je Wallbox. Gelöscht wird keine Zeile: Was nicht bis zur
+Abfahrt geplant lief, bleibt mit eigenem Ergebnis sichtbar.
 
-- **Beginn:** beim ersten Health, das ein Fahrzeug angesteckt in „Geplant“ mit dem Teil
-  ``planned`` an einer Wallbox mit offener Session nennt, und je neuer Abfahrt
-  (``planned.departure_at`` nach jetzt). Ziel ist das der Absicht in Health (``intent``), ohne sie
-  das wirksame aus ``planned``. Ladestand und Quelle zu Beginn kommen aus Health; ohne Wert gilt
-  0 % „angenommen“. Ist der Ladestand zu Beginn angenommen, ersetzt ihn der erste bekannte
-  (``measured``, ``estimated``), und die Machbarkeit gilt ab dann.
+- **Beginn:** beim ersten Health, das ein Fahrzeug angesteckt in „Geplant“ an einer Wallbox mit
+  offener Session nennt und für die Abfahrt (``planned.departure_at`` nach jetzt) einen Bedarf hat
+  (``planned.state`` nicht ``reached`` und ``planned.need_kwh`` über 0). Ohne Bedarf (über dem
+  Ziel angesteckt, über die Abfahrt hinaus am Ziel) zählt nichts. Ziel ist das der Absicht in
+  Health (``intent``), ohne sie das wirksame aus ``planned``. Ladestand und Quelle zu Beginn kommen
+  aus Health; ohne bekannten Wert gilt 0 % „angenommen“. Den ersetzt der erste bekannte Ladestand
+  (``measured``, ``estimated``); Beginn (``started_at``) und Machbarkeit gelten dann ab da.
 - **Machbar** (``feasible``): Volle Leistung bis zur Abfahrt reichte für den Bedarf, und das
   Ladelimit im Auto liegt nicht unter dem Ziel (nur ohne ``charge_limit_sync``; mit gleicht der
-  core es an). Sinkt das Limit später unter das Ziel, ist die Ladung nicht mehr machbar.
+  core es an). Sinkt das Limit später unter das Ziel, bevor es erreicht ist, ist die Ladung nicht
+  mehr machbar; eine erreichte bleibt machbar.
 - **Erreicht** (``reached_at``): der erste bekannte Ladestand mindestens am Ziel. Ein angenommener
   Ladestand erreicht nie etwas.
 - **Ende:**
   - an der Abfahrt: ``reached`` mit ``reached_at`` oder einem bekannten Ladestand des letzten
     Health vor der Abfahrt von mindestens Ziel − 1 Prozentpunkt; ``unknown``, wenn dieser
-    Ladestand oder der zu Beginn angenommen ist; sonst ``missed``;
+    Ladestand oder der zu Beginn angenommen ist oder er mehr als ``SOC_STALE`` vor der Abfahrt
+    gelesen wurde; sonst ``missed``;
   - endet die Session vorher (Ende in ``charging_session``): ``reached`` mit ``reached_at``, sonst
-    ``early``; endet sie danach (die app war aus), wie an der Abfahrt.
-- **Verworfen** wird eine offene Zeile, deren Abfahrt oder Ziel sich vor der Abfahrt ändert (dann
-  beginnt eine neue) oder deren Fahrzeug laut Health einen anderen Modus hat: Für diese Abfahrt gab
-  es keine geplante Ladung bis zum Ende. Ein unbekannter Modus (core startet neu) ändert nichts.
+    ``early``; endet sie danach (die app war aus), wie an der Abfahrt;
+  - hat der Tracker die Session nach einer Lücke ohne Health geschlossen (``SESSION_GAP``) und für
+    dasselbe Fahrzeug an derselben Wallbox eine neue begonnen, zieht die Zeile in die neue um und
+    behält Beginn und Machbarkeit; lag die Abfahrt in der Lücke, ist sie ``unknown``;
+  - ``changed``: Abfahrt oder Ziel ändern sich vor der Abfahrt (dann kann eine neue beginnen), oder
+    die Absicht wechselt auf PV, Min+PV oder Aus. Sofort und Boost lassen die Zeile offen, sie wird
+    an der Abfahrt beurteilt; ein unbekannter Modus (core startet neu) ändert nichts.
 
-Solange eine Zeile offen ist, halten ``end_soc_pct`` und ``end_soc_source`` den letzten Ladestand
-vor der Abfahrt; gespeichert wird er höchstens jede Minute, so übersteht er einen Neustart.
+``end_soc_pct``, ``end_soc_source`` und ``end_soc_at`` halten den letzten Ladestand vor der Abfahrt
+mit seiner Zeit; gespeichert wird er höchstens jede Minute, so übersteht er einen Neustart.
 
 Die Abnahme zählt die geschlossenen Zeilen nach dem Tag der Abfahrt (``summary``): erreicht von
-den machbaren; nicht machbare, vor der Abfahrt abgesteckte und solche ohne Ladestand je für sich.
+den machbaren; nicht machbare, vor der Abfahrt abgesteckte, solche ohne Ladestand und geänderte je
+für sich.
 
 ``PlannedCharges`` liest und schreibt blockierend: aus einem Thread aufrufen.
 """
@@ -40,7 +48,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from typing import Any, Final
 
-from sqlalchemy import Connection, Engine, delete, func, insert, select, update
+from sqlalchemy import Connection, Engine, func, insert, select, update
 
 from bindaems.app.charging.tracker import StoredSession
 from bindaems.app.control.intent import _health_vehicles
@@ -56,12 +64,20 @@ REACHED: Final = "reached"
 MISSED: Final = "missed"
 EARLY: Final = "early"
 UNKNOWN: Final = "unknown"
+CHANGED: Final = "changed"
 
 PLANNED: Final = ChargeMode.PLANNED.value
+# ein Wechsel auf diese Modi beendet die geplante Ladung; Sofort und Boost laden zur Abfahrt weiter
+LEAVING_MODES: Final = frozenset(
+    {ChargeMode.PV.value, ChargeMode.MIN_PV.value, ChargeMode.OFF.value}
+)
+REACHED_STATE: Final = "reached"  # ``planned.state`` am Ziel
 ASSUMED: Final = "assumed"
 KNOWN_SOURCES: Final = frozenset({"measured", "estimated"})
 REACHED_TOLERANCE_PP: Final = 1.0  # an der Abfahrt zählt Ziel − 1 Prozentpunkt als erreicht
 SAVE_EVERY: Final = timedelta(minutes=1)  # höchstens so oft den letzten Ladestand speichern
+# ein Ladestand, der so lange vor der Abfahrt gelesen wurde, gilt an der Abfahrt als unbekannt
+SOC_STALE: Final = timedelta(minutes=15)
 
 
 @dataclass(frozen=True)
@@ -70,7 +86,8 @@ class PlannedSummary:
 
     ``feasible`` sind die machbaren mit bekanntem Ergebnis, davon ``reached`` erreicht und
     ``missed`` verfehlt; ``infeasible`` die nicht machbaren mit bekanntem Ergebnis; ``early`` vor
-    der Abfahrt abgesteckt, ``unknown`` ohne Ladestand. Offene zählen nicht.
+    der Abfahrt abgesteckt, ``unknown`` ohne Ladestand, ``changed`` vor der Abfahrt geändert oder
+    verlassen. Offene zählen nicht.
     """
 
     reached: int
@@ -79,6 +96,7 @@ class PlannedSummary:
     infeasible: int
     early: int
     unknown: int
+    changed: int
 
 
 def feasible(
@@ -115,6 +133,7 @@ class _Seen:
     limit_pct: float | None
     departure_at: datetime | None  # nur mit dem Teil ``planned``
     target_pct: float | None
+    need: bool  # ``planned`` nennt einen Bedarf: Zustand nicht ``reached``, ``need_kwh`` über 0
 
 
 @dataclass
@@ -132,6 +151,7 @@ class _Row:
     reached_at: datetime | None
     end_soc_pct: float | None
     end_soc_source: str | None
+    end_soc_at: datetime | None  # wann ``end_soc_*`` gelesen wurde; ``None`` unbekannt
     saved: datetime  # wann ``end_soc_*`` zuletzt gespeichert wurde
     dirty: bool = False
 
@@ -153,9 +173,12 @@ def _seen(health: Mapping[str, Any], key: str) -> _Seen | None:
         return None
     planned = entry.get("planned")
     departure_at = target = None
+    need = False
     if isinstance(planned, Mapping):
         departure_at = _moment(planned.get("departure_at"))
         target = finite_number(planned.get("target_soc_pct"))
+        need_kwh = finite_number(planned.get("need_kwh"))
+        need = planned.get("state") != REACHED_STATE and need_kwh is not None and need_kwh > 0
     # Modus und Ziel der Absicht: Boost über „Geplant“ beendet die Ladung nicht, und ein Ladelimit
     # unter dem Ziel ändert das Ziel nicht (das wirksame Ziel in ``planned`` sinkt dann)
     intent = health.get("intent")
@@ -177,6 +200,7 @@ def _seen(health: Mapping[str, Any], key: str) -> _Seen | None:
         limit_pct=finite_number(entry.get("charge_limit_pct")),
         departure_at=departure_at,
         target_pct=target,
+        need=need,
     )
 
 
@@ -233,6 +257,7 @@ class PlannedCharges:
             infeasible=count(REACHED, False) + count(MISSED, False),
             early=count(EARLY),
             unknown=count(UNKNOWN),
+            changed=count(CHANGED),
         )
 
     # --- Zeilen -----------------------------------------------------------------------------
@@ -247,8 +272,8 @@ class PlannedCharges:
         now = self._clock.now()
         for row in rows:
             earlier = self._open.get(row.vehicle)
-            if earlier is not None:  # Rest eines Fehlers: die ältere verwerfen
-                conn.execute(delete(planned_charge).where(planned_charge.c.id == earlier.id))
+            if earlier is not None:  # Rest eines Fehlers: die ältere ist nicht mehr beurteilbar
+                self._finish(conn, earlier, UNKNOWN)
             self._open[row.vehicle] = _Row(
                 id=row.id,
                 session_id=row.session_id,
@@ -261,6 +286,7 @@ class PlannedCharges:
                 reached_at=None if row.reached_at is None else ensure_utc(row.reached_at),
                 end_soc_pct=row.end_soc_pct,
                 end_soc_source=row.end_soc_source,
+                end_soc_at=None if row.end_soc_at is None else ensure_utc(row.end_soc_at),
                 saved=now,
             )
         self._loaded = True
@@ -275,28 +301,25 @@ class PlannedCharges:
         open_ids: set[int],
     ) -> None:
         row = self._open.get(key)
+        if row is not None and row.session_id not in open_ids:
+            self._session_ended(conn, now, row, sessions)
+        row = self._open.get(key)
         if row is not None:
-            if row.session_id not in open_ids:  # Session vorbei
-                end = conn.execute(
-                    select(charging_session.c.end).where(charging_session.c.id == row.session_id)
-                ).scalar()
-                ended = now if end is None else ensure_utc(end)
-                self._close(conn, row, before_departure=ended < row.departure_at)
-            elif now >= row.departure_at:
+            if now >= row.departure_at:
                 self._close(conn, row, before_departure=False)
-            elif seen is not None and seen.mode is not None and seen.mode != PLANNED:
-                self._drop(conn, row)
+            elif seen is not None and seen.mode in LEAVING_MODES:
+                self._finish(conn, row, CHANGED)
             elif (
                 seen is not None
                 and seen.departure_at is not None
                 and (seen.departure_at != row.departure_at or seen.target_pct != row.target_pct)
             ):
-                self._drop(conn, row)
+                self._finish(conn, row, CHANGED)
             else:
                 if seen is not None:
                     self._update(conn, now, row, seen)
                 return
-        if seen is None or seen.mode != PLANNED or seen.plugged is not True:
+        if seen is None or seen.mode != PLANNED or seen.plugged is not True or not seen.need:
             return
         wallbox, departure_at, target = seen.wallbox, seen.departure_at, seen.target_pct
         if wallbox is None or wallbox not in self._cfg.wallboxes or wallbox not in sessions:
@@ -304,6 +327,29 @@ class PlannedCharges:
         if departure_at is None or target is None or departure_at <= now:
             return
         self._begin(conn, now, key, sessions[wallbox], departure_at, target, seen)
+
+    def _session_ended(
+        self, conn: Connection, now: datetime, row: _Row, sessions: Mapping[str, StoredSession]
+    ) -> None:
+        """Die Session der Zeile ist nicht mehr offen: Umzug nach einer Lücke oder Ende."""
+        end = conn.execute(
+            select(charging_session.c.end).where(charging_session.c.id == row.session_id)
+        ).scalar()
+        ended = now if end is None else ensure_utc(end)
+        newer = sessions.get(row.wallbox)
+        if newer is not None and newer.vehicle == row.vehicle and newer.start >= ended:
+            # der Tracker hat nach einer Lücke ohne Health neu begonnen: dasselbe Auto steckt noch
+            if ended <= row.departure_at < newer.start:
+                self._finish(conn, row, UNKNOWN)  # die Abfahrt lag in der Lücke
+                return
+            row.session_id = newer.id
+            conn.execute(
+                update(planned_charge)
+                .where(planned_charge.c.id == row.id)
+                .values(session_id=newer.id)
+            )
+            return
+        self._close(conn, row, before_departure=ended < row.departure_at)
 
     def _begin(
         self,
@@ -320,6 +366,7 @@ class PlannedCharges:
         start_soc = 0.0 if soc is None else soc
         ok = self._feasible(key, session.wallbox, start_soc, target, departure_at, seen, now)
         reached_at = now if soc is not None and soc >= target else None
+        read_at = now if seen.soc_pct is not None and seen.soc_source is not None else None
         row_id = conn.execute(
             insert(planned_charge)
             .returning(planned_charge.c.id)
@@ -335,6 +382,7 @@ class PlannedCharges:
                 reached_at=reached_at,
                 end_soc_pct=start_soc,
                 end_soc_source=source,
+                end_soc_at=read_at,
                 outcome=OPEN,
             )
         ).scalar_one()
@@ -350,6 +398,7 @@ class PlannedCharges:
             reached_at=reached_at,
             end_soc_pct=start_soc,
             end_soc_source=source,
+            end_soc_at=read_at,
             saved=now,
         )
 
@@ -375,13 +424,12 @@ class PlannedCharges:
         )
 
     def _update(self, conn: Connection, now: datetime, row: _Row, seen: _Seen) -> None:
-        """Merkt den Ladestand vor der Abfahrt, ``reached_at``, einen bekannten Start und ein
-        Ladelimit unter dem Ziel."""
+        """Merkt den Ladestand vor der Abfahrt mit seiner Zeit, ``reached_at``, einen bekannten
+        Start und ein Ladelimit unter dem Ziel."""
         values: dict[str, Any] = {}
         if seen.soc_source is not None and seen.soc_pct is not None:
-            if (seen.soc_pct, seen.soc_source) != (row.end_soc_pct, row.end_soc_source):
-                row.end_soc_pct, row.end_soc_source = seen.soc_pct, seen.soc_source
-                row.dirty = True
+            row.end_soc_pct, row.end_soc_source = seen.soc_pct, seen.soc_source
+            row.end_soc_at, row.dirty = now, True
         soc = _known_soc(seen)
         if soc is not None:
             if row.start_soc_source == ASSUMED:
@@ -390,6 +438,7 @@ class PlannedCharges:
                     row.vehicle, row.wallbox, soc, row.target_pct, row.departure_at, seen, now
                 )
                 values |= {
+                    "started_at": now,
                     "start_soc_pct": soc,
                     "start_soc_source": row.start_soc_source,
                     "feasible": row.feasible,
@@ -400,6 +449,7 @@ class PlannedCharges:
         synced = self._cfg.vehicles[row.vehicle].charge_limit_sync
         if (
             row.feasible
+            and row.reached_at is None
             and not synced
             and seen.limit_pct is not None
             and seen.limit_pct < row.target_pct
@@ -407,27 +457,32 @@ class PlannedCharges:
             row.feasible = False
             values["feasible"] = False
         if row.dirty and (values or now - row.saved >= SAVE_EVERY):
-            values |= {"end_soc_pct": row.end_soc_pct, "end_soc_source": row.end_soc_source}
+            values |= _end_values(row)
         if values:
             conn.execute(update(planned_charge).where(planned_charge.c.id == row.id).values(values))
             if "end_soc_pct" in values:
                 row.saved, row.dirty = now, False
 
     def _close(self, conn: Connection, row: _Row, *, before_departure: bool) -> None:
-        del self._open[row.vehicle]
+        self._finish(conn, row, _outcome(row, before_departure=before_departure))
+
+    def _finish(self, conn: Connection, row: _Row, outcome: str) -> None:
+        """Schließt die Zeile mit ``outcome`` und dem letzten Ladestand."""
+        if self._open.get(row.vehicle) is row:
+            del self._open[row.vehicle]
         conn.execute(
             update(planned_charge)
             .where(planned_charge.c.id == row.id)
-            .values(
-                outcome=_outcome(row, before_departure=before_departure),
-                end_soc_pct=row.end_soc_pct,
-                end_soc_source=row.end_soc_source,
-            )
+            .values(outcome=outcome, **_end_values(row))
         )
 
-    def _drop(self, conn: Connection, row: _Row) -> None:
-        del self._open[row.vehicle]
-        conn.execute(delete(planned_charge).where(planned_charge.c.id == row.id))
+
+def _end_values(row: _Row) -> dict[str, Any]:
+    return {
+        "end_soc_pct": row.end_soc_pct,
+        "end_soc_source": row.end_soc_source,
+        "end_soc_at": row.end_soc_at,
+    }
 
 
 def _known_soc(seen: _Seen) -> float | None:
@@ -442,6 +497,8 @@ def _outcome(row: _Row, *, before_departure: bool) -> str:
     if before_departure:
         return EARLY
     if row.start_soc_source not in KNOWN_SOURCES or row.end_soc_source not in KNOWN_SOURCES:
+        return UNKNOWN
+    if row.end_soc_at is None or row.departure_at - row.end_soc_at > SOC_STALE:
         return UNKNOWN
     if row.end_soc_pct is not None and row.end_soc_pct >= row.target_pct - REACHED_TOLERANCE_PP:
         return REACHED

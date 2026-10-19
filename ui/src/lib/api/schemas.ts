@@ -853,7 +853,8 @@ export const StatsSchema = v.object({
 	/**
 	 * Geplante Ladungen mit Abfahrt im Zeitraum (Abnahme „Ziel-SOC“): `reached` von `feasible`
 	 * machbaren erreicht, `missed` verfehlt; `infeasible` nicht machbar, `early` vor der Abfahrt
-	 * abgesteckt, `unknown` ohne Ladestand; offene zählen nicht
+	 * abgesteckt, `unknown` ohne Ladestand, `changed` vor der Abfahrt geändert oder verlassen;
+	 * offene zählen nicht
 	 */
 	planned: v.object({
 		reached: v.number(),
@@ -861,7 +862,8 @@ export const StatsSchema = v.object({
 		missed: v.number(),
 		infeasible: v.number(),
 		early: v.number(),
-		unknown: v.number()
+		unknown: v.number(),
+		changed: v.number()
 	}),
 	consumers: v.array(
 		v.object({

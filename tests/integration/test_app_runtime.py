@@ -296,7 +296,12 @@ def test_runtime_records_planned_charges_with_the_open_sessions(runtime) -> None
                 "soc_pct": 40.0,
                 "soc_source": "measured",
                 "charge_limit_pct": None,
-                "planned": {"target_soc_pct": 80, "departure_at": departure.isoformat()},
+                "planned": {
+                    "state": "surplus",
+                    "target_soc_pct": 80,
+                    "departure_at": departure.isoformat(),
+                    "need_kwh": 30.0,
+                },
             }
         ],
     }

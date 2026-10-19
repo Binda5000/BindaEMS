@@ -30,6 +30,7 @@ def upgrade() -> None:
         sa.Column("reached_at", sa.String(32), nullable=True),
         sa.Column("end_soc_pct", sa.Float(), nullable=True),
         sa.Column("end_soc_source", sa.String(10), nullable=True),
+        sa.Column("end_soc_at", sa.String(32), nullable=True),
         sa.Column("outcome", sa.String(10), nullable=False),
     )
     op.create_index("ix_planned_charge_departure_at", "planned_charge", ["departure_at"])

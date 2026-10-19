@@ -805,13 +805,29 @@ gerundet.
   überdecken. `battery_to_vehicles_kwh` ist der Akku-Strom, der ins Auto ging.
 - **Geplantes Laden (Abnahme „Ziel-SOC“):** `planned` zählt die geplanten Ladungen mit Abfahrt im
   Zeitraum: `reached` von `feasible` machbaren erreicht, `missed` machbar und verfehlt, `infeasible`
-  nicht machbar, `early` vor der Abfahrt abgesteckt, `unknown` ohne Ladestand; offene zählen nicht.
-  Die app legt je Session in „Geplant“ und Abfahrt eine Zeile in der Tabelle `planned_charge` an
-  (Migration `0012`, sie läuft beim Start). Machbar heißt: Zu Beginn reichte volle Leistung bis zur
-  Abfahrt, und das Ladelimit im Auto liegt nicht unter dem Ziel. Erreicht heißt: Der Ladestand des
-  letzten Health vor der Abfahrt war mindestens Ziel − 1 Prozentpunkt, oder ein bekannter Ladestand
-  war schon vorher am Ziel. Ein angenommener Ladestand zählt nie als erreicht. Die Abnahme verlangt
-  mindestens 95 % der machbaren Ladungen erreicht.
+  nicht machbar, `early` vor der Abfahrt abgesteckt, `unknown` ohne Ladestand, `changed` vor der
+  Abfahrt geändert oder verlassen; offene zählen nicht. Die Abnahme verlangt mindestens 95 % der
+  machbaren Ladungen erreicht; `infeasible`, `early`, `unknown` und `changed` zählen nicht in diese
+  Quote, stehen aber daneben. Die app legt dafür die Tabelle `planned_charge` an (Migration `0012`,
+  sie läuft beim Start); sie löscht keine Zeile. Die Regeln:
+  - **Beginn:** Eine Zeile entsteht je Session in „Geplant“ und Abfahrt, sobald das angesteckte Auto
+    für diese Abfahrt einen Bedarf hat (im Health ist `planned.state` nicht `reached` und
+    `need_kwh` über 0). Ein Auto, das über dem Ziel angesteckt wird oder über die Abfahrt hinaus am
+    Ziel steckt, zählt nirgends. Ist der Ladestand zu Beginn angenommen, ersetzt ihn der erste
+    bekannte; Beginn und Machbarkeit gelten dann ab diesem Zeitpunkt.
+  - **Machbar** heißt: Zu Beginn reichte volle Leistung bis zur Abfahrt, und das Ladelimit im Auto
+    liegt nicht unter dem Ziel (ohne `charge_limit_sync`). Sinkt das Limit später unter das Ziel,
+    bevor es erreicht ist, wird die Ladung nicht machbar; eine erreichte bleibt machbar.
+  - **Erreicht** heißt: Der Ladestand des letzten Health vor der Abfahrt war mindestens Ziel − 1
+    Prozentpunkt, oder ein bekannter Ladestand war schon vorher am Ziel. Ein angenommener Ladestand
+    zählt nie als erreicht. Ist der letzte Ladestand vor der Abfahrt angenommen oder älter als
+    15 min, ist das Ergebnis `unknown`.
+  - **Geändert** (`changed`): Abfahrt oder Ziel ändern sich vor der Abfahrt (für die neue kann eine
+    neue Zeile beginnen), oder das Auto wechselt auf PV, Min+PV oder Aus. Sofort und Boost lassen
+    die Ladung offen; sie wird an der Abfahrt beurteilt.
+  - **Lücke ohne Health:** Schließt die app eine Session nach mehr als 30 min ohne Health und
+    beginnt für dasselbe Auto an derselben Wallbox eine neue, läuft die geplante Ladung darin weiter
+    (Beginn und Machbarkeit bleiben). Lag die Abfahrt in der Lücke, ist sie `unknown`.
 - **Verbraucher:** `consumers` summiert die gespeicherten Tage bis gestern und für heute den
   laufenden Wert; fehlt ein Tag (älter als 31 Tage oder noch nicht gespeichert), ist `kwh` `null`
   und `note` nennt den Grund.

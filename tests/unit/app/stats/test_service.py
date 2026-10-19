@@ -470,6 +470,7 @@ def test_planned_charges_of_the_period(stats, engine) -> None:
             (T0 + timedelta(hours=4), True, "early"),
             (T0 + timedelta(hours=5), True, "unknown"),
             (T0 + timedelta(hours=6), True, "open"),
+            (T0 + timedelta(hours=7), True, "changed"),
             (datetime(2026, 10, 1, 5, 0, tzinfo=UTC), True, "reached"),
         ]:
             conn.execute(
@@ -492,6 +493,7 @@ def test_planned_charges_of_the_period(stats, engine) -> None:
         "infeasible": 1,
         "early": 1,
         "unknown": 1,
+        "changed": 1,
     }
     assert stats.period("month", TODAY)["planned"]["reached"] == 2
     assert stats.period("day", date(2026, 10, 12))["planned"] == {
@@ -501,4 +503,5 @@ def test_planned_charges_of_the_period(stats, engine) -> None:
         "infeasible": 0,
         "early": 0,
         "unknown": 0,
+        "changed": 0,
     }

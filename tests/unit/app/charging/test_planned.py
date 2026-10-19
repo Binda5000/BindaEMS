@@ -6,7 +6,7 @@ from sqlalchemy import insert, select, update
 from tests.unit.app.charging.charging_helpers import T0
 
 from bindaems.app.charging.planned import PlannedCharges, PlannedSummary, feasible
-from bindaems.app.charging.tracker import StoredSession
+from bindaems.app.charging.tracker import ChargingTracker, StoredSession, WallboxSeen
 from bindaems.app.db.schema import charging_session, planned_charge
 
 DEPARTURE = T0 + timedelta(hours=8)  # 18:00 Ortszeit
@@ -24,9 +24,12 @@ def health(
     limit: float | None = None,
     planned: bool = True,
     intent_mode: str = "planned",
+    state: str = "surplus",
+    need: float = 10.0,
 ) -> dict[str, Any]:
     """Health mit dem Tesla in „Geplant“; das wirksame Ziel ist ``min(target, limit)``, ``mode``
-    der geregelte Modus und ``intent_mode`` der der Absicht."""
+    der geregelte Modus und ``intent_mode`` der der Absicht; ``state`` und ``need`` die von
+    ``planned``."""
     effective = target if limit is None else min(target, limit)
     return {
         "intent": {
@@ -44,10 +47,10 @@ def health(
                 "soc_source": source,
                 "charge_limit_pct": limit,
                 "planned": {
-                    "state": "surplus",
+                    "state": state,
                     "target_soc_pct": effective,
                     "departure_at": departure.isoformat(),
-                    "need_kwh": 10.0,
+                    "need_kwh": need,
                     "latest_start": None,
                     "plan_w": None,
                 }
@@ -120,6 +123,15 @@ def test_no_row_without_planned_session_or_plug(charges, session, engine) -> Non
     assert rows(engine) == []
 
 
+def test_no_row_without_a_need(charges, session, engine) -> None:
+    # über dem Ziel angesteckt oder schon am Ziel: dafür gibt es keine geplante Ladung
+    charges.record(health(soc=85.0, state="reached", need=0.0), {"twc": session})
+    charges.record(health(soc=80.0, need=0.0), {"twc": session})
+    assert rows(engine) == []
+    charges.record(health(soc=70.0), {"twc": session})  # der Bedarf kommt
+    assert [row.start_soc_pct for row in rows(engine)] == [70.0]
+
+
 def test_reached_before_departure_counts(charges, session, engine, clock) -> None:
     charges.record(health(soc=40.0), {"twc": session})
     at(clock, T0 + timedelta(hours=4))
@@ -134,7 +146,7 @@ def test_reached_before_departure_counts(charges, session, engine, clock) -> Non
     assert first.outcome == "reached"
     assert (first.end_soc_pct, first.end_soc_source) == (0.0, "assumed")
     assert summary(charges) == PlannedSummary(
-        reached=1, feasible=1, missed=0, infeasible=0, early=0, unknown=0
+        reached=1, feasible=1, missed=0, infeasible=0, early=0, unknown=0, changed=0
     )
 
 
@@ -159,7 +171,7 @@ def test_feasible_charge_below_the_target_is_missed(charges, session, engine, cl
     charges.record(health(soc=78.9), {"twc": session})
     assert rows(engine)[0].outcome == "missed"
     assert summary(charges) == PlannedSummary(
-        reached=0, feasible=1, missed=1, infeasible=0, early=0, unknown=0
+        reached=0, feasible=1, missed=1, infeasible=0, early=0, unknown=0, changed=0
     )
 
 
@@ -174,7 +186,7 @@ def test_late_plug_in_is_not_feasible(charges, session, engine, clock, cfg) -> N
     charges.record(health(soc=50.0, target=76, departure=departure), {"twc": session})
     assert rows(engine)[0].outcome == "missed"
     assert summary(charges) == PlannedSummary(
-        reached=0, feasible=0, missed=0, infeasible=1, early=0, unknown=0
+        reached=0, feasible=0, missed=0, infeasible=1, early=0, unknown=0, changed=0
     )
 
 
@@ -198,6 +210,73 @@ def test_charge_limit_below_the_target_is_not_feasible(charges, session, engine,
     assert row.target_soc_pct == 80  # das Ziel der Absicht, nicht das wirksame
 
 
+def test_reached_charge_stays_feasible_when_the_limit_drops(
+    charges, session, engine, clock
+) -> None:
+    charges.record(health(soc=40.0), {"twc": session})
+    at(clock, T0 + timedelta(hours=4))
+    charges.record(health(soc=80.0, state="reached", need=0.0), {"twc": session})
+    at(clock, T0 + timedelta(hours=5))
+    charges.record(health(soc=80.0, limit=70.0, state="reached", need=0.0), {"twc": session})
+    assert rows(engine)[0].feasible is True
+
+
+def test_stale_soc_at_departure_is_unknown(charges, session, engine, clock) -> None:
+    charges.record(health(soc=40.0), {"twc": session})
+    at(clock, DEPARTURE - timedelta(minutes=20))
+    charges.record(health(soc=79.5), {"twc": session})  # der letzte Ladestand
+    at(clock, DEPARTURE - timedelta(minutes=1))
+    charges.record(health(soc=None, source=None), {"twc": session})  # ohne Ladestand
+    at(clock, DEPARTURE + timedelta(seconds=10))
+    charges.record(health(soc=None, source=None), {"twc": session})
+    [row] = rows(engine)
+    assert (row.outcome, row.end_soc_pct, row.end_soc_at) == (
+        "unknown",
+        79.5,
+        DEPARTURE - timedelta(minutes=20),
+    )
+
+
+def tracked(tracker: ChargingTracker, when: datetime) -> dict[str, StoredSession]:
+    """Eine Beobachtung des Trackers am Wall Connector; die offenen Sessions je Wallbox."""
+    tracker.record(when, [WallboxSeen("twc", True, "tesla", "detected")])
+    return {s.wallbox: s for s in tracker.open_sessions()[::-1]}
+
+
+def test_session_gap_moves_the_row_to_the_new_session(charges, tracker, engine, clock) -> None:
+    # Health fehlt 40 min: der Tracker schließt die Session bei ``last_seen`` und öffnet eine neue
+    charges.record(health(soc=40.0), tracked(tracker, T0))
+    [row] = rows(engine)
+    at(clock, T0 + timedelta(minutes=40))
+    sessions = tracked(tracker, T0 + timedelta(minutes=40))
+    assert sessions["twc"].id != row.session_id
+    charges.record(health(soc=45.0), sessions)
+    [moved] = rows(engine)
+    assert (moved.id, moved.session_id, moved.outcome) == (row.id, sessions["twc"].id, "open")
+    assert (moved.started_at, moved.start_soc_pct, moved.feasible) == (T0, 40.0, True)
+
+
+def test_departure_inside_a_session_gap_is_unknown(charges, tracker, engine, clock) -> None:
+    departure = T0 + timedelta(minutes=20)
+    charges.record(health(soc=40.0, target=45, departure=departure), tracked(tracker, T0))
+    at(clock, T0 + timedelta(minutes=40))
+    sessions = tracked(tracker, T0 + timedelta(minutes=40))
+    charges.record(health(soc=40.0, target=45, departure=departure + timedelta(days=1)), sessions)
+    first, second = rows(engine)
+    assert (first.outcome, second.outcome) == ("unknown", "open")
+
+
+def test_duplicate_open_rows_close_the_older_as_unknown(
+    charges, session, engine, clock, cfg
+) -> None:
+    charges.record(health(soc=40.0), {"twc": session})
+    with engine.begin() as conn:  # Rest eines Fehlers: eine zweite offene Zeile
+        older = dict(conn.execute(select(planned_charge)).mappings().one())
+        conn.execute(insert(planned_charge).values({**older, "id": None}))
+    PlannedCharges(engine, clock, cfg).record(health(soc=41.0), {"twc": session})
+    assert [row.outcome for row in rows(engine)] == ["unknown", "open"]
+
+
 def test_unplugged_before_departure_is_early(charges, session, engine, clock) -> None:
     charges.record(health(soc=40.0), {"twc": session})
     at(clock, T0 + timedelta(hours=2))
@@ -208,7 +287,7 @@ def test_unplugged_before_departure_is_early(charges, session, engine, clock) ->
     [row] = rows(engine)
     assert (row.outcome, row.end_soc_pct) == ("early", 60.0)
     assert summary(charges) == PlannedSummary(
-        reached=0, feasible=0, missed=0, infeasible=0, early=1, unknown=0
+        reached=0, feasible=0, missed=0, infeasible=0, early=1, unknown=0, changed=0
     )
 
 
@@ -248,7 +327,7 @@ def test_assumed_soc_is_unknown(charges, session, engine, clock) -> None:
     [row] = rows(engine)
     assert (row.outcome, row.reached_at) == ("unknown", None)
     assert summary(charges) == PlannedSummary(
-        reached=0, feasible=0, missed=0, infeasible=0, early=0, unknown=1
+        reached=0, feasible=0, missed=0, infeasible=0, early=0, unknown=1, changed=0
     )
 
 
@@ -267,7 +346,7 @@ def test_first_known_soc_replaces_an_assumed_start(charges, session, engine, clo
     charges.record(health(soc=40.0, source="measured"), {"twc": session})
     [row] = rows(engine)
     assert (row.start_soc_pct, row.start_soc_source, row.feasible) == (40.0, "measured", True)
-    assert row.started_at == T0
+    assert row.started_at == T0 + timedelta(minutes=5)  # ab dem ersten bekannten Ladestand
 
 
 def test_assumed_soc_never_sets_reached(charges, session, engine, clock) -> None:
@@ -280,43 +359,68 @@ def test_assumed_soc_never_sets_reached(charges, session, engine, clock) -> None
 def test_new_departure_opens_a_new_row(charges, session, engine, clock) -> None:
     charges.record(health(soc=40.0), {"twc": session})
     at(clock, DEPARTURE - timedelta(seconds=10))
-    charges.record(health(soc=80.0), {"twc": session})
-    # das Auto steckt über die Abfahrt hinaus: der core rollt auf den nächsten Tag
+    charges.record(health(soc=80.0, state="reached", need=0.0), {"twc": session})
+    # das Auto steckt über die Abfahrt hinaus: der core rollt auf den nächsten Tag, am Ziel
     at(clock, DEPARTURE + timedelta(seconds=10))
     following = DEPARTURE + timedelta(days=1)
-    charges.record(health(soc=80.0, departure=following), {"twc": session})
-    first, second = rows(engine)
+    reached = health(soc=80.0, departure=following, state="reached", need=0.0)
+    charges.record(reached, {"twc": session})
+    [first] = rows(engine)  # ohne Bedarf keine Zeile für die nächste Abfahrt
     assert (first.departure_at, first.outcome) == (DEPARTURE, "reached")
+    # der Ladestand sinkt unter Ziel − 3: der core lädt wieder, jetzt beginnt die nächste Ladung
+    at(clock, DEPARTURE + timedelta(hours=10))
+    charges.record(health(soc=76.0, departure=following), {"twc": session})
+    first, second = rows(engine)
     assert (second.departure_at, second.outcome, second.session_id) == (
         following,
         "open",
         session.id,
     )
-    assert (second.started_at, second.start_soc_pct) == (DEPARTURE + timedelta(seconds=10), 80.0)
+    assert (second.started_at, second.start_soc_pct) == (DEPARTURE + timedelta(hours=10), 76.0)
 
 
-def test_changed_departure_or_target_replaces_the_open_row(charges, session, engine, clock) -> None:
+def test_changed_departure_or_target_closes_the_row_as_changed(
+    charges, session, engine, clock
+) -> None:
     charges.record(health(soc=40.0), {"twc": session})
     at(clock, T0 + timedelta(minutes=10))
     later = DEPARTURE + timedelta(hours=1)
     charges.record(health(soc=42.0, departure=later), {"twc": session})
-    [row] = rows(engine)  # die alte Abfahrt kam nie: keine Zeile für sie
-    assert (row.departure_at, row.start_soc_pct) == (later, 42.0)
+    first, second = rows(engine)  # die alte Abfahrt kam nie: sichtbar als „geändert“
+    assert (first.departure_at, first.outcome, first.end_soc_pct) == (DEPARTURE, "changed", 40.0)
+    assert (second.departure_at, second.start_soc_pct, second.outcome) == (later, 42.0, "open")
     at(clock, T0 + timedelta(minutes=20))
-    charges.record(health(soc=43.0, departure=later, target=90), {"twc": session})
-    [row] = rows(engine)
-    assert (row.target_soc_pct, row.start_soc_pct, row.outcome) == (90, 43.0, "open")
+    charges.record(health(soc=43.0, departure=later, target=70), {"twc": session})  # gesenkt
+    outcomes = [(row.target_soc_pct, row.outcome) for row in rows(engine)]
+    assert outcomes == [(80, "changed"), (80, "changed"), (70, "open")]
+    assert summary(charges) == PlannedSummary(
+        reached=0, feasible=0, missed=0, infeasible=0, early=0, unknown=0, changed=2
+    )
 
 
-def test_leaving_planned_drops_the_open_row(charges, session, engine, clock) -> None:
+@pytest.mark.parametrize("mode", ["pv", "min_pv", "off"])
+def test_switch_away_from_planned_closes_the_row_as_changed(
+    charges, session, engine, clock, mode
+) -> None:
     charges.record(health(soc=40.0), {"twc": session})
     at(clock, T0 + timedelta(minutes=10))
     charges.record(health(mode=None, planned=False, plugged=None), {"twc": session})  # unbekannt
-    assert len(rows(engine)) == 1
-    charges.record(health(mode="boost", planned=False), {"twc": session})  # Boost über „Geplant“
-    assert len(rows(engine)) == 1
-    charges.record(health(mode="now", planned=False, intent_mode="now"), {"twc": session})
-    assert rows(engine) == []
+    assert [row.outcome for row in rows(engine)] == ["open"]
+    charges.record(health(mode=mode, planned=False, intent_mode=mode), {"twc": session})
+    assert [row.outcome for row in rows(engine)] == ["changed"]
+
+
+def test_now_and_boost_keep_the_row_until_departure(charges, session, engine, clock) -> None:
+    charges.record(health(soc=40.0), {"twc": session})
+    at(clock, T0 + timedelta(hours=1))
+    charges.record(health(mode="boost", planned=False, soc=50.0), {"twc": session})
+    now_mode = {"mode": "now", "planned": False, "intent_mode": "now", "soc": 60.0}
+    at(clock, DEPARTURE - timedelta(minutes=5))
+    charges.record(health(**now_mode), {"twc": session})
+    assert [row.outcome for row in rows(engine)] == ["open"]
+    at(clock, DEPARTURE + timedelta(seconds=10))
+    charges.record(health(**now_mode), {"twc": session})
+    assert [row.outcome for row in rows(engine)] == ["missed"]  # an der Abfahrt beurteilt
 
 
 def test_open_row_and_last_soc_survive_a_restart(charges, session, engine, clock, cfg) -> None:
@@ -354,6 +458,7 @@ def test_summary_counts_closed_rows_by_departure_day(charges, engine) -> None:
             (datetime(2026, 10, 9, 6, 0, tzinfo=UTC), False, "missed"),
             (datetime(2026, 10, 9, 7, 0, tzinfo=UTC), True, "early"),
             (datetime(2026, 10, 9, 7, 0, tzinfo=UTC), False, "unknown"),
+            (datetime(2026, 10, 9, 7, 0, tzinfo=UTC), True, "changed"),
             (datetime(2026, 10, 9, 21, 0, tzinfo=UTC), True, "open"),  # zählt nicht
             # andere Tage
             (datetime(2026, 10, 8, 21, 59, tzinfo=UTC), True, "reached"),
@@ -366,11 +471,11 @@ def test_summary_counts_closed_rows_by_departure_day(charges, engine) -> None:
                 )
             )
     assert summary(charges) == PlannedSummary(
-        reached=2, feasible=3, missed=1, infeasible=2, early=1, unknown=1
+        reached=2, feasible=3, missed=1, infeasible=2, early=1, unknown=1, changed=1
     )
     assert charges.summary(date(2026, 10, 8), date(2026, 10, 10)).reached == 4
     assert charges.summary(date(2026, 10, 11), date(2026, 10, 11)) == PlannedSummary(
-        reached=0, feasible=0, missed=0, infeasible=0, early=0, unknown=0
+        reached=0, feasible=0, missed=0, infeasible=0, early=0, unknown=0, changed=0
     )
 
 

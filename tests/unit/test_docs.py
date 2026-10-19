@@ -811,10 +811,18 @@ def test_stats_endpoint_in_the_guide() -> None:
         "`infeasible`",
         "`early`",
         "`unknown`",
+        "`changed`",
         "`planned_charge`",
         "Migration `0012`",
         "Ziel − 1 Prozentpunkt",
         "mindestens 95 %",
+        "sie löscht keine Zeile",
+        "zählt nirgends",
+        "Sofort und Boost lassen die Ladung offen",
+        "PV, Min+PV oder Aus",
+        "älter als 15 min",
+        "eine erreichte bleibt machbar",
+        "läuft die geplante Ladung darin weiter",
     ):
         assert text in section, text
 

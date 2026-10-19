@@ -233,9 +233,10 @@ async def test_demo_world_has_statistics_data(cfg, tmp_path) -> None:
         assert ("", "unclear") in entries["evcs"]  # die Session ohne Fahrzeug
         assert entries["twc"][:3] == [("", ""), ("tesla", "detected"), ("", "")]
 
-        # geplante Ladungen: je eine erreicht, nicht machbar und vorher abgesteckt, eine offen
+        # geplante Ladungen: je eine erreicht, nicht machbar, vorher abgesteckt und geändert, eine
+        # offen
         assert app.planned_charges.summary(FIRST_DAY, date(2026, 10, 9)) == PlannedSummary(
-            reached=1, feasible=1, missed=0, infeasible=1, early=1, unknown=0
+            reached=1, feasible=1, missed=0, infeasible=1, early=1, unknown=0, changed=1
         )
 
         checks = app.ledger_checks.checks(last - timedelta(days=6), last)

@@ -673,10 +673,11 @@ def _record_sessions(app: AppRuntime) -> None:
 
 
 # Geplante Ladungen der Demo je Session (Index in ``SESSIONS``): Abfahrt nach dem Beginn, machbar,
-# Ladestand zu Beginn und an der Abfahrt, Ergebnis; die offene von heute zählt nicht
+# Ladestand zu Beginn und am Ende, Ergebnis; die offene von heute zählt nicht
 DEMO_PLANNED = (
     (0, timedelta(hours=4, minutes=30), True, 35.0, 52.0, "early"),  # e-Golf vorher abgesteckt
     (1, timedelta(hours=3, minutes=45), False, 30.0, 62.0, "missed"),  # zu spät angesteckt
+    (3, timedelta(hours=2), True, 55.0, 58.0, "changed"),  # Abfahrt verschoben
     (3, timedelta(hours=4), True, 55.0, 80.0, "reached"),
     (5, timedelta(hours=9, minutes=15), True, 48.0, 51.0, "open"),
 )
@@ -708,6 +709,7 @@ def _record_planned(app: AppRuntime) -> None:
                     reached_at=reached_at,
                     end_soc_pct=end_soc,
                     end_soc_source="estimated",
+                    end_soc_at=start + after - timedelta(minutes=1),
                     outcome=outcome,
                 )
             )

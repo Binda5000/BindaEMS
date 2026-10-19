@@ -318,7 +318,8 @@
     "missed": 0,
     "infeasible": 0,
     "early": 0,
-    "unknown": 0
+    "unknown": 0,
+    "changed": 1
   },
   "consumers": [
     {

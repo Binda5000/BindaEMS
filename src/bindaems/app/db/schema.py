@@ -310,8 +310,9 @@ consumer_day = Table(
 )
 
 # Geplante Ladung für die Abnahme „Ziel-SOC“ (Plan 4b, Präzisierung 16): eine Zeile je Session in
-# „Geplant“ und Abfahrt. ``outcome`` ist ``open``, ``reached``, ``missed``, ``early`` oder
-# ``unknown``; solange sie offen ist, halten ``end_soc_*`` den letzten Ladestand vor der Abfahrt
+# „Geplant“ und Abfahrt. ``outcome`` ist ``open``, ``reached``, ``missed``, ``early``, ``unknown``
+# oder ``changed``; ``end_soc_*`` ist der letzte Ladestand vor der Abfahrt, ``end_soc_at`` dessen
+# Zeit
 planned_charge = Table(
     "planned_charge",
     metadata,
@@ -327,6 +328,7 @@ planned_charge = Table(
     Column("reached_at", UtcDateTime(), nullable=True),
     Column("end_soc_pct", Float, nullable=True),
     Column("end_soc_source", String(10), nullable=True),
+    Column("end_soc_at", UtcDateTime(), nullable=True),
     Column("outcome", String(10), nullable=False),
     Index("ix_planned_charge_departure_at", "departure_at"),
 )

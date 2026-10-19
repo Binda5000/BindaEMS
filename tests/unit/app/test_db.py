@@ -298,6 +298,7 @@ def test_migration_0012_creates_and_drops_planned_charge(engine: Engine) -> None
         "reached_at": True,
         "end_soc_pct": True,
         "end_soc_source": True,
+        "end_soc_at": True,
         "outcome": False,
     }
     assert inspector.get_pk_constraint("planned_charge")["constrained_columns"] == ["id"]
