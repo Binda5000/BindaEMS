@@ -146,6 +146,42 @@ app:
   trusted_proxies: [192.168.1.10]   # IP-Adresse des Reverse Proxy
   cookie_secure: true
 
+# Wärme und Kälte (Phase 6a): die Klimaanlage an der UVR610. Der core liest vom C.M.I. per CoE V2 (UDP)
+# Ist, Soll, Betriebsart, Rückmeldung, Leistung und das Echo des Versatzes und sendet der UVR einen
+# Sollwertversatz von −max_offset_k bis +max_offset_k (höchstens 3 K); ohne Paket fällt die UVR nach
+# 5 min selbst auf 0. Der Abschnitt ist optional. Phase 6a kennt nur eine Klimaanlage über CoE.
+thermal:
+  devices:
+    klima:
+      kind: coe_offset
+      label: Klimaanlage
+      cmi_host: 192.168.81.92   # C.M.I.: nur Pakete von dieser Adresse zählen, hierhin gehen die Versätze
+      port: 5442                # CoE-Port des C.M.I.
+      listen_port: 5442         # UDP-Port am core (docker-compose veröffentlicht ihn)
+      own_node: 60              # Knoten, unter dem BindaEMS sendet; darf kein Empfangsknoten sein
+      own_output: 1             # Analogausgang 1 des Knotens 60 trägt den Versatz
+      max_offset_k: 3.0         # harte Grenze −3 … +3 K, ein Vielfaches von step_k
+      step_k: 0.5
+      step_interval_s: 600      # frühestens so viele s zwischen zwei Erhöhungen des Versatzes
+      send_interval_s: 30       # zyklisch senden, auch unverändert
+      stale_after_s: 180        # ohne gültiges Paket so lange: Quelle nicht verbunden (UVR-Timeout 5 min)
+      # Empfangstabelle (C.M.I. Knoten 56 sendet an BindaEMS). Analoge Werte der Einheit 1 (°C) und
+      # 7 (K) kommen in Zehnteln; für jede andere Einheit ist `scale` (Teiler) Pflicht.
+      receive:
+        actual_c: {node: 56, analog: 1, unit: 1}
+        setpoint_c: {node: 56, analog: 2, unit: 1}        # inklusive Versatz
+        offset_active_k: {node: 56, analog: 3, unit: 1}   # Echo des Versatzes aus der UVR
+        power_kw: {node: 56, analog: 4, unit: 10, scale: 100}   # beim ersten Empfang mit coe_probe prüfen
+        cmd_on: {node: 56, digital: 1}
+        cooling: {node: 56, digital: 2}
+        venting: {node: 56, digital: 3}
+        heating: {node: 56, digital: 4}
+        running: {node: 56, digital: 5}
+      # Schwellen der Strategie (alle optional; hier die Standardwerte)
+      # strategy: {more_above_w: 800, import_above_w: 300, battery_soc_pct: 90, less_max_steps: 2}
+      # Freigabe für den Live-Betrieb, erst nach Prüfprotokoll Teil 2, Punkt thermal (Spec 8.7)
+      live_allowed: false
+
 # Freigabe einer Sperre nach so vielen Sekunden ohne Ursache (Spec 7.9). So lange besteht auch der
 # Alarm nach einer fremden Änderung von EVCS-Strom, Override oder Tesla-Strom.
 safety: {lock_release_s: 60}

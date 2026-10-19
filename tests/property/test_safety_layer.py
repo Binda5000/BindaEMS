@@ -325,6 +325,7 @@ VALUES = {  # meist ein Wert in der Nähe der Grenzen der Art, sonst irgendeiner
     ),
     K.MIN_SOC: mixed((3, st.integers(20, 100)), (2, st.floats(15, 105)), (1, ANY_VALUE)),
     K.CHARGE_LIMIT: mixed((3, st.integers(40, 110)), (2, st.floats(45, 105)), (1, ANY_VALUE)),
+    K.SETPOINT_OFFSET: mixed((3, st.floats(-3.5, 3.5)), (1, ANY_VALUE)),
 }
 PAIRS = [(actuator, kind) for actuator, kinds in KINDS.items() for kind in kinds]
 STRAYS = [  # an den Wall Connector (kein Aktor) oder in einer Art, die der Aktor nicht kennt

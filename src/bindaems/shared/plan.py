@@ -179,6 +179,11 @@ class Plan(_Model):
         return next((slot for slot in self.slots if slot.start == wanted), None)
 
 
+# Hinweis des Plans für die Klimaanlage in einem Slot (Plan 6a, Entscheidung 7): „mehr“ erwartet
+# Einspeisung, „weniger“ gehört zu den teuersten Stunden, sonst „neutral“.
+ThermalHint = Literal["mehr", "neutral", "weniger"]
+
+
 class IntentPlanSlot(_Model):
     """Eine Viertelstunde des Plans in der Absicht: nur, was der core zum Ausführen braucht."""
 
@@ -188,6 +193,9 @@ class IntentPlanSlot(_Model):
     import_ct: Finite | None = None
     support_soc_pct: Annotated[float, Field(ge=0, le=100)] | None = None
     vehicles: dict[str, Annotated[int, Field(ge=0)]] = Field(default_factory=dict)
+    # Alte gespeicherte Absichten kennen beide Felder nicht und laden mit den Standardwerten.
+    thermal: ThermalHint = "neutral"
+    soc_end_pct: Annotated[float, Field(ge=0, le=100)] | None = None
 
 
 class IntentPlan(_Model):

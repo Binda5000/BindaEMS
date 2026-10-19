@@ -9,6 +9,7 @@ from pydantic import ValidationError
 from bindaems.core.control.fleet import GUEST, guest_key
 from bindaems.shared.config import (
     AppConfig,
+    CoeChannel,
     Config,
     ConfigError,
     ControlConfig,
@@ -731,3 +732,157 @@ def test_load_history_needs_ha_database(tmp_path: Path) -> None:
         ConfigError, match=r"homeassistant\.load_history verlangt influxdb\.ha_database"
     ):
         load_config(write_cfg(tmp_path, mutate))
+
+
+def _example_dict() -> dict[str, Any]:
+    return yaml.safe_load(EXAMPLE.read_text())
+
+
+def _thermal_dict(**changes: Any) -> dict[str, Any]:
+    data = _example_dict()
+    data["thermal"]["devices"]["klima"].update(changes)
+    return data
+
+
+def test_thermal_defaults_empty() -> None:
+    data = _example_dict()
+    data.pop("thermal")
+    assert Config.model_validate(data).thermal.devices == {}
+    data["thermal"] = {}
+    assert Config.model_validate(data).thermal.devices == {}
+
+
+def test_example_has_klima(cfg: Config) -> None:
+    dev = cfg.thermal.devices["klima"]
+    assert dev.kind == "coe_offset" and str(dev.cmi_host) == "192.168.81.92"
+    assert dev.label == "Klimaanlage" and dev.port == 5442 and dev.listen_port == 5442
+    assert dev.own_node == 60 and dev.own_output == 1 and dev.max_offset_k == 3.0
+    assert dev.step_k == 0.5 and dev.step_interval_s == 600
+    assert dev.send_interval_s == 30 and dev.stale_after_s == 180
+    assert dev.receive.offset_active_k.analog == 3 and dev.receive.running.digital == 5
+    assert dev.receive.actual_c.node == 56 and dev.receive.actual_c.unit == 1
+    assert dev.receive.setpoint_c.analog == 2 and dev.receive.cmd_on is not None
+    assert dev.receive.cmd_on.digital == 1
+    assert (dev.receive.cooling.digital, dev.receive.venting.digital) == (2, 3)
+    assert dev.receive.heating.digital == 4
+    power = dev.receive.power_kw
+    assert power is not None and (power.analog, power.unit, power.scale) == (4, 10, 100)
+    assert dev.live_allowed is False
+    assert dev.strategy.more_above_w == 800 and dev.strategy.import_above_w == 300
+    assert dev.strategy.battery_soc_pct == 90 and dev.strategy.less_max_steps == 2
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [{"max_offset_k": 3.5}, {"max_offset_k": 1.2}, {"max_offset_k": 0}, {"own_node": 56}],
+)
+def test_coe_offset_rejects(bad: dict[str, Any]) -> None:
+    with pytest.raises(ValidationError):
+        Config.model_validate(_thermal_dict(**bad))
+
+
+def test_own_node_as_receive_node_has_a_german_message() -> None:
+    with pytest.raises(ValidationError, match="own_node ist auch ein Empfangsknoten"):
+        Config.model_validate(_thermal_dict(own_node=56))
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        {"step_k": 1.0},
+        {"step_interval_s": 59},
+        {"send_interval_s": 4},
+        {"send_interval_s": 61},
+        {"stale_after_s": 59},
+        {"stale_after_s": 291},
+        {"port": 0},
+        {"own_output": 65},
+        {"cmi_host": "cmi.lan"},
+        {"strategy": {"less_max_steps": 7}},
+        {"strategy": {"battery_soc_pct": 101}},
+        {"foo": 1},
+    ],
+)
+def test_coe_offset_values_are_bounded(bad: dict[str, Any]) -> None:
+    with pytest.raises(ValidationError):
+        Config.model_validate(_thermal_dict(**bad))
+
+
+def test_coe_offset_may_sit_on_its_bounds() -> None:
+    cfg = Config.model_validate(
+        _thermal_dict(max_offset_k=0.5, step_interval_s=60, send_interval_s=5, stale_after_s=290)
+    )
+    assert cfg.thermal.devices["klima"].max_offset_k == 0.5
+
+
+def test_only_one_coe_device() -> None:
+    data = _example_dict()
+    data["thermal"]["devices"]["zweite"] = dict(data["thermal"]["devices"]["klima"])
+    with pytest.raises(ValidationError, match=r"Phase 6a kennt nur eine Klimaanlage über CoE\."):
+        Config.model_validate(data)
+
+
+@pytest.mark.parametrize("name", ["Klima", "1klima", "kli-ma", "klima anlage", ""])
+def test_thermal_names_are_plain(name: str) -> None:
+    data = _example_dict()
+    data["thermal"]["devices"] = {name: data["thermal"]["devices"]["klima"]}
+    with pytest.raises(ValidationError):
+        Config.model_validate(data)
+
+
+def test_thermal_loads_from_the_config_file(tmp_path: Path) -> None:
+    def mutate(d: dict[str, Any]) -> None:
+        d["thermal"]["devices"]["klima"]["max_offset_k"] = 3.5
+
+    with pytest.raises(ConfigError, match=r"thermal\.devices\.klima\..*max_offset_k"):
+        load_config(write_cfg(tmp_path, mutate))
+
+
+@pytest.mark.parametrize(
+    "channel",
+    [
+        {"node": 56},
+        {"node": 56, "analog": 1, "digital": 1, "unit": 1},
+        {"node": 0, "analog": 1, "unit": 1},
+        {"node": 63, "analog": 1, "unit": 1},
+        {"node": 56, "analog": 0, "unit": 1},
+        {"node": 56, "digital": 65},
+    ],
+)
+def test_channel_needs_exactly_one_of_analog_digital(channel: dict[str, Any]) -> None:
+    with pytest.raises(ValidationError):
+        CoeChannel.model_validate(channel)
+
+
+def test_channel_with_one_address_is_valid() -> None:
+    assert CoeChannel(node=56, analog=1, unit=1).analog == 1
+    assert CoeChannel(node=56, digital=64).digital == 64
+
+
+@pytest.mark.parametrize("unit", [1, 7])
+def test_channel_scale_is_optional_for_tenths_units(unit: int) -> None:
+    assert CoeChannel(node=56, analog=1, unit=unit).scale is None
+
+
+def test_channel_scale_required_for_unit_10() -> None:
+    with pytest.raises(ValidationError, match="scale"):
+        CoeChannel(node=56, analog=4, unit=10)
+    assert CoeChannel(node=56, analog=4, unit=10, scale=100).scale == 100
+
+
+@pytest.mark.parametrize("scale", [0, -1])
+def test_channel_scale_must_be_positive(scale: float) -> None:
+    with pytest.raises(ValidationError):
+        CoeChannel(node=56, analog=4, unit=10, scale=scale)
+
+
+def test_receive_needs_the_mandatory_channels() -> None:
+    data = _thermal_dict()
+    del data["thermal"]["devices"]["klima"]["receive"]["running"]
+    with pytest.raises(ValidationError):
+        Config.model_validate(data)
+    data = _thermal_dict()
+    for optional in ("power_kw", "cmd_on"):
+        del data["thermal"]["devices"]["klima"]["receive"][optional]
+    receive = Config.model_validate(data).thermal.devices["klima"].receive
+    assert receive.power_kw is None and receive.cmd_on is None

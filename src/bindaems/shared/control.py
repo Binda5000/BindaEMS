@@ -31,6 +31,14 @@ def vehicle_actuator(name: str) -> str:
     return f"vehicle.{name}"
 
 
+THERMAL_PREFIX: Final = "thermal."
+
+
+def thermal_actuator(name: str) -> str:
+    """Aktor-ID eines Wärme-/Kältegeräts: ``thermal.<name>`` mit dem Schlüssel aus ``thermal``."""
+    return f"{THERMAL_PREFIX}{name}"
+
+
 class CommandKind(StrEnum):
     """Art eines Befehls; sie legt Einheit und Bedeutung des Werts fest."""
 
@@ -40,6 +48,7 @@ class CommandKind(StrEnum):
     MAX_DISCHARGE = "max_discharge"  # Entladegrenze in W; −1 = unbegrenzt
     MIN_SOC = "min_soc"  # Victron-Min-SOC in %
     CHARGE_LIMIT = "charge_limit"  # Ladelimit des Tesla in %, ganzzahlig (Plan 4b)
+    SETPOINT_OFFSET = "setpoint_offset"  # Sollwertversatz der Klimaanlage in K (Plan 6a)
 
 
 # Persistente Arten bleiben im Gerät gespeichert; für sie gilt das Schreibbudget (Regel 6). Das

@@ -237,3 +237,31 @@ def test_new_reason_codes_and_trigger_are_accepted() -> None:
     assert Plan.model_validate_json(plan.model_dump_json()).trigger == "vehicles"
     with pytest.raises(ValidationError):
         Reason(code="GIBT_ES_NICHT", params={})  # type: ignore[arg-type]
+
+
+def test_intent_plan_slot_defaults() -> None:
+    slot = IntentPlanSlot(start=at(DAY + "10:00:00+00:00"), intent=BatteryIntent())
+    assert slot.thermal == "neutral" and slot.soc_end_pct is None
+
+
+def test_intent_plan_slot_thermal_and_soc_end() -> None:
+    slot = IntentPlanSlot(
+        start=at(DAY + "10:00:00+00:00"),
+        intent=BatteryIntent(),
+        thermal="weniger",
+        soc_end_pct=87.5,
+    )
+    assert (slot.thermal, slot.soc_end_pct) == ("weniger", 87.5)
+    for bad in ({"thermal": "viel"}, {"soc_end_pct": 100.1}, {"soc_end_pct": -0.1}):
+        with pytest.raises(ValidationError):
+            IntentPlanSlot(start=at(DAY + "10:00:00+00:00"), intent=BatteryIntent(), **bad)
+
+
+def test_old_stored_intent_slots_load_with_defaults() -> None:
+    old = (
+        '{"start": "2026-10-16T10:00:00+00:00", "intent": {"kind": "EIGENVERBRAUCH"},'
+        ' "budget_kw": 4.5, "import_ct": 31.5, "support_soc_pct": 62.0, "vehicles": {}}'
+    )
+    slot = IntentPlanSlot.model_validate_json(old)
+    assert slot.thermal == "neutral" and slot.soc_end_pct is None
+    assert IntentPlanSlot.model_validate_json(slot.model_dump_json()) == slot

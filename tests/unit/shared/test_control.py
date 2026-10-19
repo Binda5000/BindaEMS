@@ -7,6 +7,8 @@ from tests.plan_helpers import sample_plan
 
 from bindaems.core.safety.types import de
 from bindaems.shared.control import (
+    PERSISTENT_KINDS,
+    THERMAL_PREFIX,
     VICTRON,
     ChargeMode,
     Command,
@@ -18,6 +20,7 @@ from bindaems.shared.control import (
     SurplusPriority,
     VehicleIntent,
     next_departure,
+    thermal_actuator,
     vehicle_actuator,
     wallbox_actuator,
 )
@@ -281,3 +284,13 @@ def test_next_departure_on_dst_days() -> None:
 def test_next_departure_after_the_first_winter_time_occurrence_is_the_next_day() -> None:
     now = datetime(2026, 10, 25, 0, 45, tzinfo=UTC)  # 02:45 Sommerzeit, nach dem ersten 02:30
     assert next_departure("02:30", now) == vienna(2026, 10, 26, 2, 30)
+
+
+def test_thermal_actuator() -> None:
+    assert thermal_actuator("klima") == "thermal.klima"
+    assert thermal_actuator("klima").startswith(THERMAL_PREFIX)
+
+
+def test_setpoint_offset_is_not_persistent() -> None:
+    assert CommandKind.SETPOINT_OFFSET == "setpoint_offset"
+    assert CommandKind.SETPOINT_OFFSET not in PERSISTENT_KINDS

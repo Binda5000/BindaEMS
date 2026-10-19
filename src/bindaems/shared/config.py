@@ -82,6 +82,10 @@ HA_VEHICLE_SUFFIXES = (
     "target_reachable",
 )
 HA_WALLBOX_SUFFIXES = ("power", "assignment", "occupant")
+# CoE-Einheiten, die in Zehnteln kommen: 1 = °C, 7 = K (Plan 6a, Entscheidung 10)
+_TENTHS_UNITS = (1, 7)
+# Stufe des Sollwertversatzes in K (Plan 6a, Präzisierung 2: nur 0,5 K)
+_STEP_K = 0.5
 
 
 def ha_object_id(key: str) -> str:
@@ -230,6 +234,132 @@ class TwcConfig(_Model):
 
 
 WallboxConfig = Annotated[EvcsConfig | TwcConfig, Field(discriminator="type")]
+
+
+class CoeChannel(_Model):
+    """Ein Wert, den das C.M.I. per CoE sendet: Knoten plus Analog- oder Digitalausgang.
+
+    ``unit`` ist die CoE-Einheit des Analogwerts. Einheit 1 (°C) und 7 (K) kommen in Zehnteln, für
+    jede andere Einheit ist ``scale`` (Teiler) Pflicht (Plan 6a, Entscheidung 10).
+    """
+
+    node: Annotated[int, Field(ge=1, le=62)]
+    analog: Annotated[int, Field(ge=1, le=64)] | None = None
+    digital: Annotated[int, Field(ge=1, le=64)] | None = None
+    unit: int | None = None
+    scale: Annotated[float, Field(gt=0, allow_inf_nan=False)] | None = None
+
+    @model_validator(mode="after")
+    def _one_address(self) -> Self:
+        if (self.analog is None) == (self.digital is None):
+            raise ValueError("Genau eines von analog und digital muss gesetzt sein.")
+        return self
+
+    @model_validator(mode="after")
+    def _scale_for_other_units(self) -> Self:
+        if (
+            self.analog is not None
+            and self.unit is not None
+            and self.unit not in _TENTHS_UNITS
+            and self.scale is None
+        ):
+            raise ValueError(
+                f"Für die Einheit {self.unit} muss scale gesetzt sein (nur die Einheiten "
+                "1 und 7 kommen in Zehnteln)."
+            )
+        return self
+
+
+class CoeReceive(_Model):
+    """Empfangstabelle: Welcher Wert des C.M.I. welche Größe der Klimaanlage ist."""
+
+    actual_c: CoeChannel
+    setpoint_c: CoeChannel
+    offset_active_k: CoeChannel
+    cooling: CoeChannel
+    venting: CoeChannel
+    heating: CoeChannel
+    running: CoeChannel
+    power_kw: CoeChannel | None = None
+    cmd_on: CoeChannel | None = None
+
+    def channels(self) -> dict[str, CoeChannel]:
+        """Die belegten Kanäle unter ihrem Feldnamen (ohne die optionalen, die fehlen)."""
+        found = {name: getattr(self, name) for name in type(self).model_fields}
+        return {name: channel for name, channel in found.items() if channel is not None}
+
+
+class ThermalStrategyConfig(_Model):
+    """Schwellen der Strategie der Klimaanlage (Plan 6a, Entscheidung 5); keine harten Grenzen."""
+
+    more_above_w: Annotated[float, Field(ge=0, allow_inf_nan=False)] = 800.0
+    import_above_w: Annotated[float, Field(ge=0, allow_inf_nan=False)] = 300.0
+    battery_soc_pct: Annotated[float, Field(ge=0, le=100, allow_inf_nan=False)] = 90.0
+    less_max_steps: Annotated[int, Field(ge=0, le=6)] = 2
+
+
+class CoeOffsetConfig(_Model):
+    """Klimaanlage an einer UVR610: Sollwertversatz per CoE V2 über das C.M.I. (Plan 6a).
+
+    Der Versatz liegt in ``−max_offset_k … +max_offset_k``; die UVR begrenzt nicht, das tut die
+    Safety-Schicht mit diesen harten Grenzen (Spec 8.2). Ohne Paket fällt die UVR nach 5 min selbst
+    auf 0.
+    """
+
+    kind: Literal["coe_offset"]
+    label: str = "Klimaanlage"
+    cmi_host: ipaddress.IPv4Address
+    port: Annotated[int, Field(ge=1, le=65535)] = 5442
+    listen_port: Annotated[int, Field(ge=1, le=65535)] = 5442
+    own_node: Annotated[int, Field(ge=1, le=62)] = 60
+    own_output: Annotated[int, Field(ge=1, le=64)] = 1
+    max_offset_k: Annotated[float, Field(ge=0.5, le=3.0, allow_inf_nan=False)] = 3.0
+    step_k: float = _STEP_K
+    step_interval_s: Annotated[float, Field(ge=60, allow_inf_nan=False)] = 600.0
+    send_interval_s: Annotated[float, Field(ge=5, le=60, allow_inf_nan=False)] = 30.0
+    stale_after_s: Annotated[float, Field(ge=60, le=290, allow_inf_nan=False)] = 180.0
+    receive: CoeReceive
+    strategy: ThermalStrategyConfig = Field(default_factory=ThermalStrategyConfig)
+    live_allowed: bool = False
+
+    @field_validator("step_k")
+    @classmethod
+    def _step_is_half_a_kelvin(cls, value: float) -> float:
+        # ein Literal[0.5] kennt mypy nicht; die Stufe ist fest (Plan 6a, Präzisierung 2)
+        if value != _STEP_K:
+            raise ValueError("step_k muss 0,5 sein.")
+        return value
+
+    @model_validator(mode="after")
+    def _max_offset_is_a_multiple_of_the_step(self) -> Self:
+        steps = self.max_offset_k / self.step_k
+        if abs(steps - round(steps)) > 1e-9:
+            raise ValueError("max_offset_k muss ein Vielfaches von step_k sein.")
+        return self
+
+    @model_validator(mode="after")
+    def _own_node_is_not_a_receive_node(self) -> Self:
+        if any(channel.node == self.own_node for channel in self.receive.channels().values()):
+            raise ValueError("own_node ist auch ein Empfangsknoten.")
+        return self
+
+
+# 6b ergänzt die Wärmepumpe als weitere Art in dieser Union.
+ThermalDevice = Annotated[CoeOffsetConfig, Field(discriminator="kind")]
+
+
+class ThermalConfig(_Model):
+    """Wärme und Kälte: Geräte unter ihrem Namen (``thermal.<name>`` als Aktor-ID)."""
+
+    devices: dict[Annotated[str, Field(pattern=r"^[a-z][a-z0-9_]*$")], ThermalDevice] = Field(
+        default_factory=dict
+    )
+
+    @model_validator(mode="after")
+    def _one_coe_device(self) -> Self:
+        if sum(device.kind == "coe_offset" for device in self.devices.values()) > 1:
+            raise ValueError("Phase 6a kennt nur eine Klimaanlage über CoE.")
+        return self
 
 
 class TessieVehicle(_Model):
@@ -511,6 +641,7 @@ class Config(_Model):
     app: AppConfig = Field(default_factory=AppConfig)
     safety: SafetyConfig = Field(default_factory=SafetyConfig)
     control: ControlConfig = Field(default_factory=ControlConfig)
+    thermal: ThermalConfig = Field(default_factory=ThermalConfig)
     core: CoreConfig = Field(default_factory=CoreConfig)
 
     @model_validator(mode="after")
