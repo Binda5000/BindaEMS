@@ -1046,6 +1046,9 @@ def test_stats_endpoint_in_the_guide() -> None:
         "älter als 15 min",
         "eine erreichte bleibt machbar",
         "läuft die geplante Ladung darin weiter",
+        "Ein unbekannter Modus",
+        "darum gilt das nie als `early`",
+        "War das Ziel vor der Lücke erreicht, bleibt die Ladung `reached`.",
     ):
         assert text in section, text
 

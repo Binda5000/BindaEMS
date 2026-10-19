@@ -26,7 +26,10 @@ Abfahrt geplant lief, bleibt mit eigenem Ergebnis sichtbar.
     ``early``; endet sie danach (die app war aus), wie an der Abfahrt;
   - hat der Tracker die Session nach einer Lücke ohne Health geschlossen (``SESSION_GAP``) und für
     dasselbe Fahrzeug an derselben Wallbox eine neue begonnen, zieht die Zeile in die neue um und
-    behält Beginn und Machbarkeit; lag die Abfahrt in der Lücke, ist sie ``unknown``;
+    behält Beginn und Machbarkeit; lag die Abfahrt in der Lücke, ist sie ``unknown``. Hat er sie
+    wegen einer Lücke geschlossen (ohne Health oder mit unbekanntem Steckzustand) und keine neue
+    begonnen, bleibt die Zeile offen, bis eine neue beginnt oder die Abfahrt vorbei ist
+    (``unknown``). Ein vorher erreichtes Ziel bleibt in allen Fällen ``reached``;
   - ``changed``: Abfahrt oder Ziel ändern sich vor der Abfahrt (dann kann eine neue beginnen), oder
     die Absicht wechselt auf PV, Min+PV oder Aus. Sofort und Boost lassen die Zeile offen, sie wird
     an der Abfahrt beurteilt; ein unbekannter Modus (core startet neu) ändert nichts.
@@ -50,7 +53,7 @@ from typing import Any, Final
 
 from sqlalchemy import Connection, Engine, func, insert, select, update
 
-from bindaems.app.charging.tracker import StoredSession
+from bindaems.app.charging.tracker import SESSION_GAP, StoredSession
 from bindaems.app.control.intent import _health_vehicles
 from bindaems.app.db.schema import charging_session, planned_charge
 from bindaems.app.planning.vehicles import full_power_w, need_kwh
@@ -331,11 +334,21 @@ class PlannedCharges:
     def _session_ended(
         self, conn: Connection, now: datetime, row: _Row, sessions: Mapping[str, StoredSession]
     ) -> None:
-        """Die Session der Zeile ist nicht mehr offen: Umzug nach einer Lücke oder Ende."""
+        """Die Session der Zeile ist nicht mehr offen: Umzug nach einer Lücke oder Ende.
+
+        Ein vorher erreichtes Ziel bleibt erreicht. Hat der Tracker nach einer Lücke für dasselbe
+        Auto eine neue Session begonnen, zieht die Zeile um (Abfahrt in der Lücke: ``unknown``).
+        Hat er die Session wegen einer Lücke geschlossen (Ende mehr als ``SESSION_GAP`` vor jetzt:
+        Health fehlte oder der Steckzustand war unbekannt) und keine neue begonnen, bleibt die
+        Zeile offen, bis eine neue beginnt (Umzug) oder die Abfahrt vorbei ist (``unknown``).
+        """
         end = conn.execute(
             select(charging_session.c.end).where(charging_session.c.id == row.session_id)
         ).scalar()
         ended = now if end is None else ensure_utc(end)
+        if row.reached_at is not None:
+            self._finish(conn, row, REACHED)
+            return
         newer = sessions.get(row.wallbox)
         if newer is not None and newer.vehicle == row.vehicle and newer.start >= ended:
             # der Tracker hat nach einer Lücke ohne Health neu begonnen: dasselbe Auto steckt noch
@@ -348,6 +361,11 @@ class PlannedCharges:
                 .where(planned_charge.c.id == row.id)
                 .values(session_id=newer.id)
             )
+            return
+        if ended < row.departure_at and now - ended > SESSION_GAP:
+            # Ende wegen einer Lücke: ob das Auto vor der Abfahrt abgesteckt wurde, ist unbekannt
+            if now >= row.departure_at:
+                self._finish(conn, row, UNKNOWN)
             return
         self._close(conn, row, before_departure=ended < row.departure_at)
 

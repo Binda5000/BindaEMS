@@ -1728,7 +1728,7 @@ Greift, wenn der Solver scheitert, das Zeitlimit überschritten ist oder das Erg
 - **Machbar:** zu Beginn reichte volle Leistung bis zur Abfahrt, und das Ladelimit liegt nicht unter dem Ziel; sinkt es später darunter, bevor das Ziel erreicht ist, wird die Ladung nicht machbar.
 - **Erreicht:** der Ladestand des letzten Health vor der Abfahrt mindestens Ziel − 1 Prozentpunkt, oder ein bekannter Ladestand war vorher am Ziel; vor der Abfahrt abgesteckt `early`. Ist der letzte Ladestand angenommen oder älter als 15 min (`end_soc_at`, damit die Regel einen Neustart übersteht), `unknown`.
 - **Zeilen werden nie gelöscht.** Ändern sich Ziel oder Abfahrt vor der Abfahrt oder wechselt das Auto auf PV, Min+PV oder Aus, ist das Ergebnis `changed` (eigener Zähler, nicht in der Quote); Sofort, Boost und ein unbekannter Modus lassen die Zeile offen.
-- **Lücke ohne Health:** Beginnt nach einer Lücke von mehr als 30 min für dasselbe Auto an derselben Wallbox eine neue Session, wandert die Zeile mit; lag die Abfahrt in der Lücke, `unknown`.
+- **Lücke ohne Health:** Beginnt nach einer Lücke von mehr als 30 min (ohne Health oder mit unbekanntem Steckzustand) für dasselbe Auto an derselben Wallbox eine neue Session, wandert die Zeile mit; lag die Abfahrt in der Lücke, `unknown`. Beginnt keine neue, bleibt die Zeile offen, bis eine beginnt oder die Abfahrt vorbei ist (`unknown`, nie `early`). Ein vor der Lücke erreichtes Ziel bleibt `reached`.
 
 ### 11.4 Viertelstunden-Abrechnung
 
@@ -2402,7 +2402,7 @@ Bei der Umsetzung haben diese Punkte die Entscheidungen ergänzt oder enger gefa
 - **Warnungen:** Ein unbekannter Zustand hält eine stehende Meldung (12, Stand Plan 4b).
 - **Zählung:** Zeile erst mit Bedarf, nie gelöscht, Ergebnis `changed`, Mitwandern über eine Lücke, 15-min-Regel mit `end_soc_at` (11.3, Stand Plan 4b); die Statistik zeigt `changed` als eigene Zeile.
 - **Abfahrt hinter dem Horizont:** „Fertig um“ ist leer, solange der Plan den Bedarf nicht im Horizont lädt, und der erwartete Ladestand gilt an der Abfahrt (9.3, Stand Plan 4b).
-- **Offen:** kleinere Punkte: der Ersatzplan kann Regel R2 bei vielen kleinen Überschüssen überschreiten (9.4); einige seltene Fälle der Zählung an einer Lücke ohne Health (Abfahrt in der Lücke ohne neue Session gilt als `early` statt `unknown`; ein vor der Lücke erreichtes Ziel gilt als `unknown`). Die Quote der Abnahme berühren sie nicht im Regelfall.
+- **Offen:** kleinere Punkte: der Ersatzplan kann Regel R2 bei vielen kleinen Überschüssen überschreiten (9.4); Die Quote der Abnahme berührt das nicht im Regelfall.
 
 ### Phase 5 – Lernen
 

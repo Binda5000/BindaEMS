@@ -266,6 +266,60 @@ def test_departure_inside_a_session_gap_is_unknown(charges, tracker, engine, clo
     assert (first.outcome, second.outcome) == ("unknown", "open")
 
 
+def unknown_plug(tracker: ChargingTracker, when: datetime) -> dict[str, StoredSession]:
+    """Eine Beobachtung des Trackers mit unbekanntem Steckzustand am Wall Connector."""
+    tracker.record(when, [WallboxSeen("twc", None, None, None)])
+    return {s.wallbox: s for s in tracker.open_sessions()[::-1]}
+
+
+def test_departure_in_a_gap_without_a_new_session_is_unknown(
+    charges, tracker, engine, clock
+) -> None:
+    # Health fehlt 40 min, danach ist der Steckzustand unbekannt: Der Tracker schließt die Session
+    # bei ``last_seen`` und beginnt keine neue. Ob das Auto vor der Abfahrt fuhr, weiß niemand.
+    departure = T0 + timedelta(minutes=20)
+    charges.record(health(soc=40.0, target=45, departure=departure), tracked(tracker, T0))
+    at(clock, T0 + timedelta(minutes=40))
+    sessions = unknown_plug(tracker, T0 + timedelta(minutes=40))
+    assert sessions == {}
+    charges.record(health(soc=None, source=None, plugged=None, planned=False), sessions)
+    [row] = rows(engine)
+    assert row.outcome == "unknown"
+
+
+def test_plug_state_unknown_over_the_gap_moves_the_row_when_the_session_restarts(
+    charges, tracker, engine, clock
+) -> None:
+    # Health läuft, der Steckzustand ist aber über 30 min unbekannt: Der Tracker schließt die
+    # Session; die Zeile bleibt offen und zieht in die neue Session um, keine zweite Zeile.
+    charges.record(health(soc=40.0), tracked(tracker, T0))
+    [row] = rows(engine)
+    at(clock, T0 + timedelta(minutes=40))
+    charges.record(health(soc=42.0, plugged=None), unknown_plug(tracker, clock.now()))
+    assert [r.outcome for r in rows(engine)] == ["open"]
+    at(clock, T0 + timedelta(minutes=45))
+    sessions = tracked(tracker, clock.now())
+    charges.record(health(soc=45.0), sessions)
+    [moved] = rows(engine)
+    assert (moved.id, moved.session_id, moved.outcome) == (row.id, sessions["twc"].id, "open")
+    assert (moved.started_at, moved.start_soc_pct) == (T0, 40.0)
+
+
+def test_reached_before_the_gap_stays_reached(charges, tracker, engine, clock) -> None:
+    # Ziel um T0 + 10 min erreicht, danach fehlt Health; die Abfahrt liegt in der Lücke
+    departure = T0 + timedelta(minutes=20)
+    charges.record(health(soc=40.0, target=45, departure=departure), tracked(tracker, T0))
+    at(clock, T0 + timedelta(minutes=10))
+    charges.record(
+        health(soc=45.0, target=45, departure=departure),
+        tracked(tracker, T0 + timedelta(minutes=10)),
+    )
+    at(clock, T0 + timedelta(minutes=50))
+    sessions = tracked(tracker, T0 + timedelta(minutes=50))
+    charges.record(health(soc=45.0, target=45, departure=departure + timedelta(days=1)), sessions)
+    assert rows(engine)[0].outcome == "reached"
+
+
 def test_duplicate_open_rows_close_the_older_as_unknown(
     charges, session, engine, clock, cfg
 ) -> None:

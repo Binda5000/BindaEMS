@@ -851,9 +851,13 @@ gerundet.
     neue Zeile beginnen), oder das Auto wechselt auf PV, Min+PV oder Aus. Sofort und Boost lassen
     die Ladung offen; sie wird an der Abfahrt beurteilt. Ein unbekannter Modus (etwa während der core
     neu startet) lässt sie ebenfalls offen.
-  - **Lücke ohne Health:** Schließt die app eine Session nach mehr als 30 min ohne Health und
-    beginnt für dasselbe Auto an derselben Wallbox eine neue, läuft die geplante Ladung darin weiter
-    (Beginn und Machbarkeit bleiben). Lag die Abfahrt in der Lücke, ist sie `unknown`.
+  - **Lücke ohne Health:** Schließt die app eine Session nach mehr als 30 min ohne Health (oder mit
+    unbekanntem Steckzustand) und beginnt für dasselbe Auto an derselben Wallbox eine neue, läuft die
+    geplante Ladung darin weiter (Beginn und Machbarkeit bleiben). Lag die Abfahrt in der Lücke, ist
+    sie `unknown`. Beginnt keine neue Session, bleibt die Ladung offen, bis eine beginnt (dann läuft
+    sie darin weiter) oder die Abfahrt vorbei ist (dann `unknown`): Ob das Auto in der Lücke
+    abgesteckt wurde, weiß die app nicht, darum gilt das nie als `early`. War das Ziel vor der Lücke
+    erreicht, bleibt die Ladung `reached`.
 - **Verbraucher:** `consumers` summiert die gespeicherten Tage bis gestern und für heute den
   laufenden Wert; fehlt ein Tag (älter als 31 Tage oder noch nicht gespeichert), ist `kwh` `null`
   und `note` nennt den Grund.
