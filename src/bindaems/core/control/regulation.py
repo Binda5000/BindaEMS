@@ -202,6 +202,8 @@ class Regulation:
         }
         self._thermal_last = LastValues()  # die letzten eigenen Versätze der Klimaanlagen
         self._thermal_health: dict[str, dict[str, Any]] = {}  # je Klimaanlage des letzten ``step``
+        # je Klimaanlage der Versatz, den der letzte ``thermal_step`` entschied (Ruling R26)
+        self._thermal_targets: dict[str, float] = {}
 
     def step(self, inputs: RegulationInputs) -> list[ControlCommand]:
         """Ein Regelzyklus (Präzisierung 3): die Befehle der Ladepunkte in der Reihenfolge der
@@ -290,6 +292,9 @@ class Regulation:
         letzten eigenen abweicht, der Aktor steuerbar und nicht gesperrt ist und die Art nicht in
         ``charge.blocked`` steht. Seine Eingaben sind ``thermal_steps``, ``export_w`` und
         ``soc_pct``. Vorher gleicht ``_resync`` den Stand mit dem Echo ab.
+
+        Den entschiedenen Versatz jeder Klimaanlage dieses Zyklus nennt ``thermal_targets``, auch
+        wenn kein Befehl kommt (Ruling R26).
         """
         charge, active = inputs.charge, self._active
         hint: ThermalHint = "neutral" if active is None else active.thermal
@@ -302,6 +307,7 @@ class Regulation:
         unmet_w = self.charger.unmet_surplus_w((export_w or 0.0) + thermal_w)
         found: list[ControlCommand] = []
         health: dict[str, dict[str, Any]] = {}
+        targets: dict[str, float] = {}
         for name, device in self._thermal.items():
             seen = inputs.thermal.get(name)
             if seen is None:
@@ -333,12 +339,14 @@ class Regulation:
             )
             health[name] = _thermal_json(wish, hint)
             offset = offset_for(wish, seen.mode, device.step_k)
+            targets[name] = offset + 0.0  # aus -0.0 wird 0.0
             if not acting or blocked or not self._thermal_last.changed(key, offset):
                 continue
             command = self._thermal_last.command(actuator, _OFFSET, offset, (wish.reason,))
             facts = {"thermal_steps": float(wish.steps), "export_w": export_w, "soc_pct": soc}
             found.append(ControlCommand(command, facts))
         self._thermal_health = health
+        self._thermal_targets = targets
         return found
 
     def _resync(
@@ -373,7 +381,8 @@ class Regulation:
         Für eine Klimaanlage setzt ein Urteil mit Wert oder ``UNCHANGED`` den letzten eigenen
         Versatz (``LastValues.judged``). Lehnt die Safety-Schicht einen Versatz außer 0 ab (etwa die
         Schrittregel nach einer Lücke), beginnt ihre Strategie neu bei 0: Der Wunsch bleibt so nie
-        bei einem Wert stehen, den die Schrittregel nicht zulässt.
+        bei einem Wert stehen, den die Schrittregel nicht zulässt. Entschieden ist dann sofort 0
+        (``thermal_targets``).
         """
         key = (command.actuator, command.kind)
         if key == _SETPOINT:
@@ -388,6 +397,9 @@ class Regulation:
         if rejected and command.value != 0:
             device.reset()
             self._thermal_last.forget_key(key)
+            name = command.actuator.removeprefix(THERMAL_PREFIX)
+            if name in self._thermal_targets:
+                self._thermal_targets[name] = 0.0
 
     def note_result(self, result: WriteResult) -> None:
         """Das Ergebnis eines abgeschlossenen Schreibvorgangs, auch eines des Keepers: zum Override
@@ -422,11 +434,15 @@ class Regulation:
         self.battery.forget(actuators)
 
     def thermal_forget(self, actuators: Collection[str]) -> None:
-        """``forget`` nur für die Klimaanlagen unter ``actuators``."""
+        """``forget`` nur für die Klimaanlagen unter ``actuators``; entschieden ist für sie 0."""
         thermal = {a: device for a in actuators if (device := self._device(a)) is not None}
         for device in thermal.values():
             device.reset()
         self._thermal_last.forget(thermal.keys())
+        for actuator in thermal:
+            name = actuator.removeprefix(THERMAL_PREFIX)
+            if name in self._thermal_targets:
+                self._thermal_targets[name] = 0.0
 
     def idle(self, now: datetime) -> None:
         """Ein Zyklus ohne Regelung für alle drei Bausteine.
@@ -445,11 +461,13 @@ class Regulation:
 
     def thermal_idle(self) -> None:
         """Die Klimaanlagen ruhen: Ihre Strategien beginnen neu bei 0, die letzten Versätze sind
-        vergessen, Health nennt keine. Ohne Freigabe sendet der Adapter ohnehin 0."""
+        vergessen, Health und ``thermal_targets`` nennen keine. Ohne Freigabe sendet der Adapter
+        ohnehin 0."""
         for device in self._thermal.values():
             device.reset()
         self._thermal_last.forget()
         self._thermal_health = {}
+        self._thermal_targets = {}
 
     def rest_plan(self, plan: IntentPlan | None, wall_now: datetime) -> None:
         """Legt in einem Zyklus ohne Regelung den Plan der Absicht für Health ab (nach ``idle``).
@@ -520,6 +538,18 @@ class Regulation:
     def thermal_health(self) -> dict[str, dict[str, Any]]:
         """``health()["thermal"]``: je Klimaanlage ``wish``, ``reason`` und ``hint``."""
         return {name: dict(entry) for name, entry in self._thermal_health.items()}
+
+    def thermal_targets(self) -> dict[str, float]:
+        """Je Klimaanlage, die der letzte ``thermal_step`` regelte, der Versatz in K, den er
+        entschied (``offset_for``), auch ohne Befehl (Ruling R26).
+
+        Danach gibt die Laufzeit frei: nur für einen Versatz außer 0, sonst nimmt sie die Freigabe
+        zurück, und der Adapter sendet sofort 0, auch wenn ein Schreibvorgang offen ist oder die
+        Safety-Schicht den Befehl 0 nicht braucht. Eine Ablehnung (``note_verdict``) und
+        ``forget`` setzen ihn auf 0; vor dem ersten ``thermal_step`` und nach ``thermal_idle`` ist
+        es leer.
+        """
+        return dict(self._thermal_targets)
 
     def _device(self, actuator: str) -> _Thermal | None:
         """Die Klimaanlage des Aktors ``thermal.<name>``; ``None`` für jeden anderen."""

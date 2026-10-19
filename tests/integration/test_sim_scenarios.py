@@ -13,11 +13,13 @@ starten kann oder sich selbst begrenzt (Ruling R23).
 from dataclasses import dataclass, replace
 from datetime import timedelta
 from functools import partial
+from itertools import pairwise
 
 import pytest
 
+from bindaems.core.adapters.coe import CoeAdapter
 from bindaems.shared.control import ChargeMode, CommandKind, Intent, VehicleIntent, wallbox_actuator
-from bindaems.tools.sim.model import PlantModel
+from bindaems.tools.sim.model import AirConditioner, PlantModel
 from bindaems.tools.sim.runner import SimResult, run_scenario
 from bindaems.tools.sim.scenarios import (
     CAR_EXPORT_W,
@@ -30,6 +32,7 @@ from bindaems.tools.sim.scenarios import (
     KLIMA_MORE_W,
     KLIMA_NOISE_W,
     KLIMA_SETTLED_S,
+    KLIMA_STEP_K,
     PEAK_LEAD_S,
     QUARTER_S,
     SCENARIOS,
@@ -38,7 +41,9 @@ from bindaems.tools.sim.scenarios import (
     _changes,
     _klima_pv_w,
     _Plug,
+    _receipts,
     _setup,
+    _thermal_samples,
     _weather,
 )
 
@@ -201,6 +206,7 @@ async def test_klima_takes_the_surplus_of_a_car_that_can_never_start(cfg, tmp_pa
     result = await run_scenario(scenario, cfg, tmp_path)
     assert result.failures == []
     assert _klima_codes(result) == [
+        (0.0, "thermal_off"),  # die 0 zu Beginn geht immer hinaus (Ruling R26)
         (-0.5, "thermal_more"),
         (-1.0, "thermal_more"),
         (-1.5, "thermal_more"),
@@ -246,3 +252,62 @@ async def test_klima_self_limiting_car_does_not_let_the_offset_flicker(cfg, tmp_
     assert len(currents) <= 2  # kein Wechsel im Gleichtakt mit der Klimaanlage
     assert _export_w(result) < KLIMA_MORE_W
     assert result.samples[-1].cars[EGOLF].current_a == 6.0
+
+
+def _unit(model: PlantModel) -> AirConditioner:
+    assert model.thermal is not None
+    return model.thermal
+
+
+@dataclass(frozen=True)
+class _Deaf:
+    """Ab hier erreichen die Pakete des core die UVR nicht (``deaf``) oder wieder, als Ereignis;
+    das C.M.I. sendet weiter."""
+
+    deaf: bool
+
+    def __call__(self, model: PlantModel, rt: object) -> None:
+        _unit(model).deaf = self.deaf
+
+
+@dataclass(frozen=True)
+class _Held:
+    """Merkt den Versatz, den der CoE-Adapter gerade hält, als Ereignis (``held``)."""
+
+    held: list[float]
+
+    def __call__(self, model: PlantModel, rt: object) -> None:
+        adapters = getattr(rt, "adapters", [])
+        self.held.extend(a.held_k for a in adapters if isinstance(a, CoeAdapter))
+
+
+DEAF_S, HEARD_S = 32 * 60, 47 * 60  # Pakete des core erreichen die UVR nicht, dann wieder
+
+
+async def test_klima_one_way_loss_does_not_keep_an_old_offset(cfg, tmp_path) -> None:
+    # Abschlussreview I2, Ruling R26: wie „klima-pv-kuehlen“; ab 32 min erreichen die Pakete des
+    # core die UVR nicht mehr, die des C.M.I. kommen weiter (die Quelle bleibt verbunden). Nach
+    # 5 min fällt die UVR selbst auf 0, ihr Echo zeigt 0, und die Regelung beginnt neu bei 0. Der
+    # Adapter darf den alten Versatz (−1,5 K) dann nicht weiter halten: Erreichen die Pakete die
+    # UVR nach 47 min wieder, geht ihr Versatz höchstens eine Stufe weg von 0, nie auf einmal auf
+    # −1,5 K.
+    base = SCENARIOS["klima-pv-kuehlen"]
+    held: list[float] = []
+    scenario = replace(
+        base,
+        events=(
+            *base.events,
+            (DEAF_S, _Deaf(True)),
+            (HEARD_S - 60, _Held(held)),
+            (HEARD_S, _Deaf(False)),
+        ),
+        checks=Checks(()),
+    )
+    result = await run_scenario(scenario, cfg, tmp_path)
+    assert result.failures == []
+    assert min(k for t, k in _receipts(result) if t < DEAF_S) == -3 * KLIMA_STEP_K
+    assert held == [0.0]  # die UVR wendet 0 an; der Adapter hält nichts anderes
+    active = [unit.active_k for t, unit in _thermal_samples(result) if t >= HEARD_S - 1]
+    assert active[0] == 0.0
+    jumps = [(old, new) for old, new in pairwise(active) if new != old]
+    assert all(abs(new) - abs(old) <= KLIMA_STEP_K + 1e-9 for old, new in jumps), jumps

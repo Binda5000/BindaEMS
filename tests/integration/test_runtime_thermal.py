@@ -15,6 +15,7 @@ from tests.unit.core.adapters.conftest import FakeDatagram, GatedSleep
 from bindaems.core.adapters.coe import CoeAdapter
 from bindaems.core.control.last_values import ControlCommand
 from bindaems.core.control.regulation import Regulation
+from bindaems.core.control.thermal import ThermalObs, ThermalStrategy, ThermalWish
 from bindaems.core.runtime import CoreRuntime
 from bindaems.core.safety.locks import LockInfo
 from bindaems.shared.coe import CoeValue, decode, encode
@@ -38,7 +39,9 @@ RECEIVE = {
 }
 
 
-def packet(offset_k: float, *, running: bool = True, cooling: bool = True) -> bytes:
+def packet(
+    offset_k: float, *, running: bool = True, cooling: bool = True, heating: bool = False
+) -> bytes:
     """Ein Paket des C.M.I. nach der Empfangstabelle des Beispiels (Knoten 56)."""
     return encode(
         [
@@ -49,7 +52,7 @@ def packet(offset_k: float, *, running: bool = True, cooling: bool = True) -> by
             CoeValue(56, 1, False, 0, 1),  # cmd_on
             CoeValue(56, 2, False, 0, int(cooling)),
             CoeValue(56, 3, False, 0, 0),  # venting
-            CoeValue(56, 4, False, 0, 0),  # heating
+            CoeValue(56, 4, False, 0, int(heating)),
             CoeValue(56, 5, False, 0, int(running)),
         ]
     )
@@ -67,7 +70,8 @@ def intent(version: int, mode: ActuatorMode) -> Intent:
 
 class CoeRuntime:
     """Laufzeit mit echtem CoE-Adapter am Ersatzport; die Regelung der Klimaanlage
-    (``thermal_step``) fordert je Zyklus ``wanted`` an, der Kern (``step``) nichts."""
+    (``thermal_step``) fordert je Zyklus ``wanted`` an und entscheidet dessen letzten Wert, der
+    Kern (``step``) nichts."""
 
     def __init__(self, rt: CoreRuntime, clock: ManualClock, device: CoeOffsetConfig) -> None:
         self.rt, self.clock = rt, clock
@@ -122,6 +126,8 @@ async def runtime_with_coe(runtime_env, monkeypatch) -> AsyncIterator[Callable[.
 
     def regulate_thermal(self: Regulation, inputs: Any) -> list[ControlCommand]:
         env = envs[-1]
+        # entschieden ist der letzte angeforderte Wert, ohne einen 0 (Ruling R26)
+        self._thermal_targets = {"klima": env.wanted[-1] if env.wanted else 0.0}
         return [ControlCommand(Command(THERMAL, OFFSET, value), {}) for value in env.wanted]
 
     monkeypatch.setattr(Regulation, "step", regulate)
@@ -475,3 +481,81 @@ async def test_thermal_exception_withdraws_only_its_permit(runtime_with_coe, mon
     assert "control.thermal_exception" in alarms
     assert "control.exception" not in alarms
     assert env.rt.health().mode == "CONTROL"
+
+
+@pytest.fixture
+async def runtime_with_strategy(runtime_env, monkeypatch) -> AsyncIterator[Callable[..., Any]]:
+    """Laufzeit mit echtem CoE-Adapter und echter Regelung der Klimaanlage (``thermal_step``);
+    nur die Strategie wünscht je Zyklus ``env.steps`` Stufen, beim Kühlen, sonst 0. Der Kern
+    (``step``) fordert nichts an."""
+    envs: list[CoeRuntime] = []
+
+    def regulate(self: Regulation, inputs: Any) -> list[ControlCommand]:
+        return []
+
+    def wish(self: ThermalStrategy, obs: ThermalObs) -> ThermalWish:
+        steps = getattr(envs[-1], "steps", 0)
+        if obs.mode != "kuehlen" or not obs.controllable:
+            return ThermalWish(0, "thermal_mode")
+        return ThermalWish(steps, "thermal_more")
+
+    monkeypatch.setattr(Regulation, "step", regulate)
+    monkeypatch.setattr(ThermalStrategy, "step", wish)
+
+    async def build() -> CoeRuntime:
+        rt, _, clock = runtime_env(state=GOOD_STATE, configure=allow_thermal_live)
+        device = rt._cfg.thermal.devices["klima"]
+        assert isinstance(device, CoeOffsetConfig)
+        env = CoeRuntime(rt, clock, device)
+        envs.append(env)
+        await env.start()
+        rt.submit_intent(intent(1, ActuatorMode.LIVE))
+        return env
+
+    yield build
+    for env in envs:
+        if env.task is not None:
+            env.task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await env.task
+
+
+async def test_mode_change_sends_zero_while_a_write_is_open(runtime_with_strategy) -> None:
+    # Abschlussreview I1, Ruling R26: −0,5 K ist gesendet, das Echo bestätigt es noch nicht (der
+    # Schreibvorgang ist offen). Wechselt die Betriebsart auf Heizen, wünscht die Regelung 0; die
+    # Laufzeit nimmt die Freigabe zurück, und der Adapter sendet 0 im selben Zyklus, auch wenn ihr
+    # Befehl wegen des offenen Schreibvorgangs nicht kommt.
+    env = await runtime_with_strategy()
+    regulate_until_control(env)
+    env.steps = 1  # beim Kühlen −0,5 K
+    env.echo(0.0)
+    run(env.rt, env.clock, 1)
+    assert env.sent()[-1] == -5
+    assert (THERMAL, OFFSET) in env.rt.executor.pending()
+    env.echo(0.0, cooling=False, heating=True)
+    run(env.rt, env.clock, 1)
+    assert env.rt.health().thermal["klima"]["mode"] == "heizen"
+    assert (THERMAL, OFFSET) in env.rt.executor.pending()  # der Befehl 0 kam nicht
+    assert env.sent()[-1] == 0 and env.adapter.held_k == 0.0
+    assert not permitted(env)
+
+
+async def test_permit_only_for_a_decided_offset(runtime_with_strategy) -> None:
+    # Ruling R26: Die Laufzeit gibt nur frei, solange die Regelung in diesem Zyklus einen Versatz
+    # außer 0 entschieden hat; bei 0 hält der Adapter 0, auch ohne neuen Befehl.
+    env = await runtime_with_strategy()
+    regulate_until_control(env)
+    assert not permitted(env)  # Wunsch 0
+    env.steps = 1
+    env.echo(0.0)
+    run(env.rt, env.clock, 1)
+    assert permitted(env) and env.adapter.held_k == -0.5
+    env.echo(-0.5)
+    run(env.rt, env.clock, 1)
+    assert env.thermal_decisions()[-1].result is DecisionResult.OK
+    assert permitted(env)
+    env.steps = 0
+    env.echo(-0.5)
+    run(env.rt, env.clock, 1)
+    assert env.sent()[-1] == 0 and env.adapter.held_k == 0.0
+    assert not permitted(env)

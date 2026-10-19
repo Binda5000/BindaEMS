@@ -157,12 +157,17 @@ def deadband(
     - Sonst ergibt eine Änderung unter dem Totband ``rate.deadband``: beim EVCS-Strom unter 1 A,
       beim Tesla-Strom unter ``current_step_a`` und beim Netz-Sollwert unter 50 W. Die anderen Arten
       haben kein Totband.
+    - Der Sollwertversatz 0 hat nie eins (Plan 6a, Ruling R26): Das Echo der UVR kann 0 zeigen,
+      während der Adapter noch einen alten Versatz hält (etwa wenn seine Pakete die UVR nicht
+      erreichen und sie nach ihrem Timeout selbst auf 0 fiel); 0 noch einmal zu senden ist harmlos.
 
     Eine Zahl, die nicht endlich ist, und alles, was keine Zahl ist, gleicht keinem Wert und liegt
     in keinem Totband (``finite_number``).
     """
     key = (command.actuator, command.kind)
     if key not in ctx.present:
+        return None
+    if command.kind == CommandKind.SETPOINT_OFFSET and finite_number(value) == 0:
         return None
     actual = ctx.present[key]
     if _same(value, actual):

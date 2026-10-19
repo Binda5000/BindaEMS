@@ -1088,14 +1088,13 @@ def test_dry_run_without_a_mode_entry_uses_the_last_decided_value(layer) -> None
     assert layer.authorize(offset(1.0), klima_at(600, echo=0.0, **ctx)).sendable
 
 
-def test_dry_run_zero_decided_as_unchanged_counts_as_decided(layer) -> None:
+def test_dry_run_zero_counts_as_decided(layer) -> None:
     dry = {"modes": {KLIMA: ActuatorMode.DRY_RUN}}
     assert layer.authorize(offset(0.5), klima_at(0, echo=0.0, **dry)).sendable
     assert layer.authorize(offset(1.0), klima_at(600, echo=0.0, **dry)).sendable
-    # zurück auf 0: gleich dem Echo, also nichts zu senden; entschieden ist trotzdem 0
-    assert layer.authorize(offset(0.0), klima_at(700, echo=0.0, **dry)).outcome is (
-        Outcome.UNCHANGED
-    )
+    # zurück auf 0: auch gleich dem Echo kein „unverändert“ (Ruling R26); entschieden ist 0
+    v = layer.authorize(offset(0.0), klima_at(700, echo=0.0, **dry))
+    assert (v.outcome, v.dry_run) == (Outcome.ACCEPTED, True)
     v = layer.authorize(offset(1.0), klima_at(1300, echo=0.0, **dry))
     assert outcome(v) == (Outcome.REJECTED, None, (OFFSET_STEP,))
     assert layer.authorize(offset(0.5), klima_at(1300, echo=0.0, **dry)).sendable
@@ -1131,3 +1130,15 @@ def test_urgent_offset_that_rounds_away_from_safe_is_not_urgent(layer) -> None:
 def test_offset_has_no_interval_or_budget(layer) -> None:
     for at in range(5):
         assert layer.authorize(offset(0.0), klima_at(at, echo=0.5)).outcome is Outcome.ACCEPTED
+
+
+def test_zero_offset_is_never_unchanged(layer) -> None:
+    # Abschlussreview I2, Ruling R26: Das Echo zeigt 0, der Adapter kann aber noch einen alten
+    # Versatz halten (Pakete zur UVR gehen verloren). 0 geht deshalb immer hinaus, auch gleich
+    # dem Echo; ein Wert außer 0 gleich dem Echo bleibt „unverändert“.
+    v = layer.authorize(offset(0.0), klima_at(0, echo=0.0))
+    assert (v.outcome, v.value, v.send) == (Outcome.ACCEPTED, 0.0, True)
+    v = layer.authorize(offset(0.0), klima_at(1, echo=0.04))
+    assert (v.outcome, v.send) == (Outcome.ACCEPTED, True)
+    assert layer.authorize(offset(0.5), klima_at(2, echo=0.0)).sendable
+    assert layer.authorize(offset(0.5), klima_at(3, echo=0.5)).outcome is Outcome.UNCHANGED

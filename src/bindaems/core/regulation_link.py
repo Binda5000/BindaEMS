@@ -292,6 +292,17 @@ class RegulationLink:
             "thermal_forget", lambda: self.regulation.thermal_forget(actuators), None
         )
 
+    def thermal_targets(self) -> dict[str, float]:
+        """Je Klimaanlage der Versatz, den die Regelung in diesem Zyklus entschied (Ruling R26).
+
+        Leer, wenn die Klimaanlagen in diesem Zyklus nicht ohne Ausnahme geregelt wurden
+        (``thermal_step`` lief nicht oder warf, oder ein späterer Aufruf für sie warf): Dann gibt
+        die Laufzeit keine frei.
+        """
+        if not self._thermal_regulated:
+            return {}
+        return self._thermal_call("thermal_targets", self.regulation.thermal_targets, {})
+
     def vehicle_wallbox(self) -> dict[str, str | None]:
         """Fahrzeug-Aktor → Wallbox für den ``SafetyContext``; ohne Ergebnis ``{}`` (unbekannt)."""
         return self._call("vehicle_wallbox", self.regulation.vehicle_wallbox, {})

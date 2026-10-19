@@ -3277,17 +3277,20 @@ def _backs_off_for_cars(from_s: int) -> Check:
 
 
 def _thermal_reason(code: str) -> Check:
-    """Jede Entscheidung an die Klimaanlage nennt ``code``."""
+    """Jede Entscheidung an die Klimaanlage außer 0 nennt ``code``.
+
+    Eine 0 geht immer hinaus, auch gleich dem Echo (Ruling R26): Die Regelung bietet sie zu
+    Beginn an, mit dem Grund ihres Wunschs 0 (etwa ``thermal_off``)."""
 
     def find(result: SimResult) -> list[str]:
         return [
             f"Die Entscheidung bei {_second(result, d.ts)} s nennt {', '.join(d.codes)}, "
             f"verlangt {code}."
             for d in _at(result.decisions, KLIMA_ACTUATOR)
-            if code not in d.codes
+            if code not in d.codes and finite_number(d.requested) != 0
         ]
 
-    return Check(f"Jede Entscheidung an die Klimaanlage nennt {code}.", find)
+    return Check(f"Jede Entscheidung an die Klimaanlage außer 0 nennt {code}.", find)
 
 
 def _klima_pv_w(export_w: float, base_w: float) -> float:

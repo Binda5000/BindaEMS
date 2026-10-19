@@ -1274,6 +1274,31 @@ def test_regulation_rejected_offset_restarts_the_strategy(reg_with_klima, cfg) -
     assert wish(reg_with_klima)["wish"] == 0
 
 
+def test_regulation_decides_the_offset_for_the_permit(reg_with_klima, cfg) -> None:
+    # Ruling R26: Der Versatz, den die Regelung in diesem Zyklus entschieden hat, auch ohne Befehl
+    # (offener Schreibvorgang, gleicher Wert); nach ihm gibt die Laufzeit frei.
+    assert reg_with_klima.thermal_targets() == {}  # vor dem ersten Zyklus
+    klima_run(reg_with_klima, cfg, 0, 600)
+    assert reg_with_klima.thermal_targets() == {"klima": -0.5}
+    assert klima(reg_with_klima, cfg, 610, blocked=frozenset({OFFSET_KEY})) == []
+    assert reg_with_klima.thermal_targets() == {"klima": -0.5}
+    # Wechsel auf Heizen, während der Schreibvorgang offen ist: kein Befehl, aber entschieden ist 0
+    assert klima(reg_with_klima, cfg, 620, mode="heizen", blocked=frozenset({OFFSET_KEY})) == []
+    assert reg_with_klima.thermal_targets() == {"klima": 0.0}
+    reg_with_klima.idle(T0 + timedelta(seconds=630))
+    assert reg_with_klima.thermal_targets() == {}
+
+
+def test_regulation_rejected_offset_decides_zero(reg_with_klima, cfg) -> None:
+    # Lehnt die Safety-Schicht einen Versatz außer 0 ab, beginnt die Strategie neu bei 0; der
+    # entschiedene Versatz ist dann sofort 0, nicht erst im nächsten Zyklus.
+    klima_run(reg_with_klima, cfg, 0, 590)
+    found = klima(reg_with_klima, cfg, 600, accept=False)
+    assert reg_with_klima.thermal_targets() == {"klima": -0.5}
+    reg_with_klima.note_verdict(found[0].command, rejected(found[0].command))
+    assert reg_with_klima.thermal_targets() == {"klima": 0.0}
+
+
 def test_regulation_rejected_zero_keeps_the_strategy(reg_with_klima, cfg) -> None:
     klima_run(reg_with_klima, cfg, 0, 600)
     zero = Command(KLIMA, OFFSET, 0.0, reasons=("thermal_off",))

@@ -303,6 +303,8 @@ class AirConditioner:
     - ``power_w``: die Leistung jetzt; ein Szenario setzt sie zu Beginn auf ``base_w``
     - ``actual_c``, ``base_setpoint_c``: Ist und Soll ohne Versatz
     - ``silent``: Das C.M.I. sendet nichts mehr (Paketverlust); Versätze erreichen die UVR weiter
+    - ``deaf``: Pakete des core erreichen die UVR nicht mehr (Paketverlust in der Gegenrichtung);
+      das C.M.I. sendet weiter
 
     Messgrößen: ``active_k`` ist der Versatz, den die UVR anwendet (ihr Echo), ``received`` jeder
     Versatz, den sie vom core bekam, mit der Zeit des letzten ``step``.
@@ -322,6 +324,7 @@ class AirConditioner:
         self.actual_c = AC_ROOM_C
         self.base_setpoint_c = AC_ROOM_C
         self.silent = False
+        self.deaf = False
         self.active_k = 0.0
         self.received: list[tuple[datetime, float]] = []
         self._deliver: Callable[[bytes, tuple[str, int]], None] | None = None
@@ -342,9 +345,10 @@ class AirConditioner:
         """Ein Paket des core an das C.M.I.: Der Versatz an ``own_node``/``own_output`` wirkt
         sofort.
 
-        Pakete an eine andere Adresse oder ohne den Versatz ändern nichts.
+        Pakete an eine andere Adresse oder ohne den Versatz ändern nichts; mit ``deaf`` kommt keins
+        an.
         """
-        if addr[0] != self._address[0]:
+        if addr[0] != self._address[0] or self.deaf:
             return
         now = self._time()
         for value in decode(data):
