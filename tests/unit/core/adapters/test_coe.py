@@ -537,3 +537,27 @@ async def test_renewing_an_expired_permit_does_not_revive_the_held_value(
     env.adapter.set_offset(1.0)
     env.adapter.permit(env.mono() + 10)
     assert env.adapter.held_k == 1.0 and sent_raw(env) == 10
+
+
+async def test_lapse_loop_is_armed_after_a_new_session(coe_env: CmiEnv) -> None:
+    # Abschlussreview M1 (T3): Die Freigabe gilt noch, als die Sitzung neu beginnt; der alte
+    # Lapse-Loop hatte ihre Änderung schon verbraucht. Hält der Adapter in der neuen Sitzung einen
+    # Wert, sendet er 0, sobald die Freigabe abläuft, nicht erst im nächsten Takt.
+    env = coe_env()
+    await env.start()
+    first = env.port
+    env.adapter.permit(env.mono() + 100)
+    await env.settle()  # der Lapse-Loop der ersten Sitzung schläft bis zum Ablauf
+
+    def broken(data: bytes, addr: tuple[str, int]) -> None:
+        raise OSError("Netzwerk nicht erreichbar")
+
+    first.sendto = broken  # type: ignore[method-assign]
+    env.advance(30)
+    await env.tick()  # der Takt scheitert, die Sitzung endet
+    await env.tick()  # nach der Pause beginnt die neue
+    assert env.port is not first
+    assert env.adapter.set_offset(1.0) is True  # unter der alten, noch gültigen Freigabe
+    assert sent_raw(env) == 10
+    await env.run_for(71)  # bis 1 s nach dem Ablauf; der nächste Takt käme erst bei 90 s
+    assert sent_raw(env) == 0 and env.adapter.held_k == 0.0

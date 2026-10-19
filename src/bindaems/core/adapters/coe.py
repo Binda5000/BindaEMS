@@ -212,6 +212,8 @@ class CoeAdapter:
         self._backoff.reset()
         self._held_k = 0.0  # ein neuer Port beginnt mit 0, ein alter Versatz lebt nicht weiter
         self._port = port
+        # Der Lapse-Loop dieser Sitzung wacht auch über eine Freigabe, die noch aus der alten gilt
+        self._permit_changed.set()
         tasks = [
             asyncio.create_task(self._send_loop()),
             asyncio.create_task(self._lapse_loop()),
