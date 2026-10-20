@@ -21,6 +21,7 @@ from tests.plan_helpers import (
     small_battery,
 )
 
+from bindaems.app.planning import optimizer
 from bindaems.app.planning.battery_model import SLOT_H, params_of
 from bindaems.app.planning.inputs import PeakMonth, PlanInputs
 from bindaems.app.planning.optimizer import (
@@ -109,10 +110,10 @@ def test_r1_allows_grid_charge_used_up_before_pv_surplus() -> None:
         assert sum(f.pv_x for f in flows[i : end + 1]) * SLOT_KWH <= 0.001
 
 
-def test_r1_blocks_grid_charge_that_lasts_into_pv_surplus() -> None:
-    # Billig laden und dafür PV zu 20 ct einspeisen lohnte sich ohne R1; der Akku wird vor der
-    # PV nicht leer, die Netzenergie wäre noch drin
-    inputs = scenario(
+def _grid_charge_into_pv_surplus() -> PlanInputs:
+    """Billig laden und dafür PV zu 20 ct einspeisen lohnte sich ohne R1; der Akku wird vor der
+    PV nicht leer, die Netzenergie wäre noch drin."""
+    return scenario(
         prices=[5.0] * 4 + [8.0] * 8 + [40.0] * 4,
         pv=[0.0] * 4 + [9000.0] * 8 + [0.0] * 4,
         load=[500.0] * 4 + [500.0] * 8 + [3000.0] * 4,
@@ -121,11 +122,30 @@ def test_r1_blocks_grid_charge_that_lasts_into_pv_surplus() -> None:
         soc_pct=20.0,
         grid_charge=True,
     )
+
+
+def test_r1_blocks_grid_charge_that_lasts_into_pv_surplus() -> None:
+    inputs = _grid_charge_into_pv_surplus()
     lo = params_of(inputs).lo_kwh
     # Erlaubt bleibt nur Netzenergie in Höhe der Leer-Toleranz: Nach jedem Netzladen gilt der Akku
     # noch als leer, sonst wäre er bis in die PV-Einspeisung gefüllt
     assert all(
         f.gr_b < 1 or f.soc_end_kwh <= lo + R1_EMPTY_TOL_KWH + _EMPTY_EPS_KWH
+        for f in solve(inputs).flows
+    )
+
+
+def test_without_r1_the_same_inputs_grid_charge_into_pv_surplus(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Kontrollfall zum Test davor: Gilt der Akku immer als leer (Toleranz über der ganzen
+    # Kapazität), sperrt R1 nichts mehr, und der Optimierer lädt mit denselben Eingaben aus dem
+    # Netz über die Leer-Grenze hinaus. Die Sperre oben kommt also von Regel R1.
+    monkeypatch.setattr(optimizer, "R1_EMPTY_TOL_KWH", 100.0)
+    inputs = _grid_charge_into_pv_surplus()
+    lo = params_of(inputs).lo_kwh
+    assert any(
+        f.gr_b >= 1 and f.soc_end_kwh > lo + R1_EMPTY_TOL_KWH + _EMPTY_EPS_KWH
         for f in solve(inputs).flows
     )
 
