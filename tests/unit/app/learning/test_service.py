@@ -964,6 +964,8 @@ async def test_timed_out_thread_keeps_the_service_busy(
         result = await env.service.train()  # nachts: kein zweites Training daneben
         assert result.outcome == "failed"
         assert result.text == "Training fehlgeschlagen: Das vorige Training rechnet noch."
+        # der Thread braucht unter ``--cov`` länger als das Zeitlimit, bis er den Trainer erreicht
+        await until(lambda: bool(trainer.seen))
         assert len(trainer.seen) == 1
     finally:
         trainer.gate.set()
