@@ -159,6 +159,38 @@ def test_grid_charge_survives_rounding_above_the_reserve() -> None:
     assert export_while_charged_kwh(steps, 0, lo_kwh) <= R1_TOL_KWH
 
 
+def test_grid_charge_is_cut_only_by_the_charge_left_before_the_feed_in() -> None:
+    # Die Rundung macht aus der Teilentladung in Slot 1 ``HALTEN``; die Nachrechnung kommt vor
+    # der PV in Slot 3 rund 0,2 kWh über der Reserve an und speist dort danach 0,875 kWh ein
+    # (PV über der Ladeleistung). Gekürzt wird nur um die Ladung, die vor der Einspeisung noch
+    # über der Reserve liegt (rund 430 W), nicht um die ganze Einspeisung: Das Netzladen bleibt.
+    inputs = scenario(
+        prices=[10.0, 40.0, 40.0, 10.0],
+        pv=[0.0, 0.0, 0.0, 9000.0],
+        load=[500.0, 2000.0, 1000.0, 500.0],
+        battery=small_battery(),
+        soc_pct=20.0,
+        grid_charge=True,
+        end_value_ct=0.0,
+    )
+    efficiency = eta(inputs.planning.roundtrip_pct)
+    lo_kwh = params_of(inputs).lo_kwh
+    soc = lo_kwh + 2000 * SLOT_H / 1000 * efficiency
+    flows = [flow(gr_h=500.0, gr_b=2000.0, soc_end_kwh=soc)]
+    soc -= 800 * SLOT_H / 1000 / efficiency
+    flows.append(flow(gr_h=1200.0, bt_h=800.0, soc_end_kwh=soc))
+    discharge_w = (soc - (lo_kwh + 0.05)) * efficiency / SLOT_H * 1000
+    flows.append(flow(gr_h=1000.0 - discharge_w, bt_h=discharge_w, soc_end_kwh=lo_kwh + 0.05))
+    flows.append(
+        flow(pv_h=500.0, pv_b=5000.0, pv_x=3500.0, soc_end_kwh=lo_kwh + 0.05 + 1.25 * efficiency)
+    )
+
+    intents = derive_intents(inputs, flows_result(flows))
+    assert intents[0].kind is BatteryIntentKind.NETZLADEN
+    assert GRID_CHARGE_MIN_W <= intents[0].grid_charge_w < 2000
+    assert export_while_charged_kwh(resimulate(inputs, intents), 0, lo_kwh) <= R1_TOL_KWH
+
+
 def test_grid_charge_without_room_left_becomes_halten() -> None:
     # Schon ohne Netzladen ist der Akku nach der PV voll und speist rund 0,7 kWh ein: Das Netzladen
     # in Slot 0 fällt ganz weg; der Slot hält den Akku, wie der Optimierer es wollte.

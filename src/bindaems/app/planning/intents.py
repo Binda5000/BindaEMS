@@ -15,7 +15,9 @@ from bindaems.app.planning.battery_model import SLOT_H, params_of, sim_slots, si
 from bindaems.app.planning.inputs import PlanInputs
 from bindaems.app.planning.optimizer import OptimizerResult, ev_power_w, grid_charge_cap_w
 from bindaems.app.planning.plausibility import (
+    EMPTY_TOL_KWH,
     R1_TOL_KWH,
+    charged_window_end,
     export_while_charged_kwh,
     grid_charge_pays,
 )
@@ -79,8 +81,11 @@ def _keep_rule_r1(
 
     Wenn Regel R1 bindet, füllt der Optimierer den Akku bis zur Einspeisung genau; schon die
     Rundung einer Teilentladung zu ``HALTEN`` lässt die Nachrechnung dann überlaufen und
-    einspeisen. Der letzte betroffene ``NETZLADEN``-Slot lädt um die eingespeiste Energie weniger
-    (auf ``ROUND_W`` aufgerundet); bleibt weniger als ``GRID_CHARGE_MIN_W``, hält er den Akku.
+    einspeisen. Der letzte betroffene ``NETZLADEN``-Slot lädt um die eingespeiste Energie weniger,
+    höchstens aber um die Ladung, die vor der ersten Einspeisung im Fenster noch über der Reserve
+    (plus ``EMPTY_TOL_KWH``) liegt: Ist der Akku davor leer, verdrängt er keine PV mehr. Gekürzt
+    wird auf ``ROUND_W`` aufgerundet, mindestens um ``ROUND_W``; bleibt weniger als
+    ``GRID_CHARGE_MIN_W``, hält er den Akku.
     ``ev_w`` ist die Ladeleistung der Autos je Slot (``sim_slots``).
     """
     params = params_of(inputs)
@@ -98,9 +103,16 @@ def _keep_rule_r1(
         if not late:
             break
         index = late[-1]
-        excess_w = export_while_charged_kwh(steps, index, params.lo_kwh) / SLOT_H * 1000
+        cut_kwh = export_while_charged_kwh(steps, index, params.lo_kwh)
+        end = charged_window_end(steps, index, params.lo_kwh)
+        first = next(j for j in range(index, end) if steps[j].export_w > 0)
+        if first > index:
+            # Es reicht, den Akku bis zur ersten Einspeisung auf die Reserve zu bringen.
+            above_kwh = steps[first].soc_start_kwh - (params.lo_kwh + EMPTY_TOL_KWH)
+            cut_kwh = min(cut_kwh, above_kwh / params.eta_ch)
+        cut_w = ROUND_W * max(1, ceil(cut_kwh / SLOT_H * 1000 / ROUND_W))
         power_w = min(result[index].grid_charge_w, steps[index].charge_grid_w)
-        power_w = ROUND_W * floor((power_w - ROUND_W * ceil(excess_w / ROUND_W)) / ROUND_W)
+        power_w = ROUND_W * floor((power_w - cut_w) / ROUND_W)
         result[index] = (
             BatteryIntent(kind=BatteryIntentKind.NETZLADEN, grid_charge_w=power_w)
             if power_w >= GRID_CHARGE_MIN_W
