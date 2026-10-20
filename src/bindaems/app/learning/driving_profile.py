@@ -29,7 +29,7 @@ from bindaems.shared.timeutil import LOCAL_TZ, SLOT, ensure_utc
 MIN_DAYS: Final = 3
 TRIP_SHARE_MIN: Final = 0.5
 QUARTERS: Final = 96
-NEXT_TRIP_DAYS: Final = 7
+NEXT_TRIP_DAYS: Final = 8  # heute und die sieben folgenden Tage: der gleiche Wochentag der Vorwoche
 
 # Konfidenz der Abfahrt: Fahrtage des Wochentags selbst und Streuung P80 − P20 in Minuten
 DEPARTURE_HIGH: Final = (6, 60.0)
@@ -295,8 +295,11 @@ def build_profile(
 
 
 def next_trip(profile: VehicleProfile, now: datetime) -> TripSuggestion | None:
-    """Die nächste erwartete Fahrt: der erste lokale Tag ab heute (höchstens 7 Tage) mit
-    Abfahrtsvorschlag, dessen Abfahrt echt nach ``now`` liegt."""
+    """Die nächste erwartete Fahrt: der erste lokale Tag ab heute bis in sieben Tagen mit
+    Abfahrtsvorschlag, dessen Abfahrt echt nach ``now`` liegt.
+
+    Heute und die sieben folgenden Tage heißt acht Tage: Fährt ein Auto nur samstags, gilt nach der
+    Abfahrt am Samstag der Vorschlag für den nächsten Samstag."""
     moment = ensure_utc(now)
     today = moment.astimezone(LOCAL_TZ).date()
     for offset in range(NEXT_TRIP_DAYS):

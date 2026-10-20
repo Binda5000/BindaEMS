@@ -163,6 +163,15 @@ def test_holiday_records_feed_weekday_six() -> None:
     assert profile_of(records).weekdays[6].departure_min == 600
 
 
+def test_target_rounding_tolerates_float_noise() -> None:
+    # P80 von 18,1, 18,1 und 29,6 ist 25,000000000000004 und darf nicht auf 30 aufrunden
+    settings = DrivingSettings(return_reserve_pct=0, target_min_pct=20)
+    sat = profile_of(saturdays([480] * 3, [29.6, 18.1, 18.1]), settings=settings).weekdays[5]
+    assert sat.consumption_p80_pp is not None
+    assert sat.consumption_p80_pp > 25.0
+    assert sat.target_soc_pct == 25
+
+
 def test_target_is_reserve_plus_p80_rounded_up_to_5() -> None:
     # 20 + 22,4 = 42,4 → 45, begrenzt auf mindestens 50
     sat = profile_of(saturdays([480] * 3, [22.4] * 3)).weekdays[5]
@@ -351,9 +360,32 @@ def test_presence_of_overlapping_sessions() -> None:
         (local(sat, "11:00"), local(sat, "13:00")),
     ]
     row = profile_of([], sessions).presence[5]
+    assert row[10 * 4 + 2] == 1.0  # 10:30: das verschachtelte Ende liegt davor, das lange deckt ab
     assert row[11 * 4 + 2] == 1.0
     assert row[12 * 4 + 2] == 1.0
     assert row[13 * 4] == 0.0
+
+
+def test_presence_counts_from_the_local_day_of_the_first_session() -> None:
+    # Dienstag, 24.11., 00:30 lokal ist noch Montag, 23.11., 23:30 UTC
+    tuesday = date(2026, 11, 24)
+    first = (local(tuesday, "00:30"), local(tuesday, "02:00"))
+    assert first[0].date() == date(2026, 11, 23)
+    profile = profile_of([], [first])
+    # Werktage 24., 25., 26., 27. und 30.11. (der Montag hat nur einen Tag): ein Treffer in fünf
+    assert profile.presence[0][1 * 4] == 0.2
+    assert profile.presence[1][1 * 4] == 0.2
+
+
+def test_presence_needs_the_centre_of_the_quarter() -> None:
+    sat = days_of(5, 1)[0]
+    sessions = [
+        (local(sat, "18:00"), local(sat, "18:07")),  # endet vor der Mitte 18:07:30
+        (local(sat, "19:05"), local(sat, "19:10")),  # deckt die Mitte 19:07:30 ab
+    ]
+    row = profile_of([], sessions).presence[5]
+    assert row[18 * 4] == 0.0
+    assert row[19 * 4] == 1.0
 
 
 def test_presence_without_sessions_is_zero() -> None:
@@ -457,15 +489,18 @@ def test_next_trip_after_todays_departure_passed() -> None:
     assert after.date == date(2026, 12, 9)
 
 
-def test_next_trip_none_within_seven_days() -> None:
+def test_next_trip_of_a_saturday_only_car_after_the_departure_is_next_saturday() -> None:
     profile = profile_of(saturdays([480, 480, 480]))
-    assert next_trip(profile, local(date(2026, 12, 5), "10:00")) is None  # nächster in 7 Tagen
-    trip = next_trip(profile, local(date(2026, 12, 5), "07:59"))
+    trip = next_trip(profile, local(date(2026, 12, 5), "10:00"))  # Abfahrt 08:00 ist vorbei
     assert trip is not None
-    assert trip.date == date(2026, 12, 5)
-    last_day = next_trip(profile, local(date(2026, 12, 6), "10:00"))  # Sonntag: Samstag in 6 Tagen
-    assert last_day is not None
-    assert last_day.date == date(2026, 12, 12)
+    assert trip.date == date(2026, 12, 12)
+    assert trip.departure == "08:00"
+    same_day = next_trip(profile, local(date(2026, 12, 5), "07:59"))
+    assert same_day is not None
+    assert same_day.date == date(2026, 12, 5)
+    sunday = next_trip(profile, local(date(2026, 12, 6), "10:00"))  # Samstag in sechs Tagen
+    assert sunday is not None
+    assert sunday.date == date(2026, 12, 12)
 
 
 def test_next_trip_without_any_suggestion() -> None:
