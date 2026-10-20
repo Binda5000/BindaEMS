@@ -81,8 +81,8 @@ Festlegungen und offene Kleinigkeiten in `docs/superpowers/plans/2026-10-19-phas
 mit 4b nach der Abnahme der Phase 3,** und vorher muss der Betreiber Routing und Firewall für UDP 5442
 zwischen 192.168.81.0/24 und 192.168.82.0/24 öffnen. Nichts geht dabei von selbst live: Die
 Klimaanlage folgt der Betriebsart ihres Aktors (`thermal.klima`), im Dry-Run sendet der core 0.
-**Plan 3d (Regel R1 nur, bis der Akku leer ist) ist umgesetzt, je Task geprüft, und die Doku und der
-Gesamtlauf sind nachgeführt** (`docs/superpowers/plans/2026-10-20-phase-3d-regel-r1.md`, 4 Tasks,
+**Plan 3d (Regel R1 nur, bis der Akku leer ist) ist umgesetzt, je Task und im Gesamtreview geprüft,
+und die Fix-Welle danach ist umgesetzt** (`docs/superpowers/plans/2026-10-20-phase-3d-regel-r1.md`, 4 Tasks,
 freigegeben vom Betreiber am 20.10.2026 mit den Entscheidungen 1 bis 6): auf dem Branch
 `claude/project-thread-707vv8`, **noch nicht auf `main`, nicht ausgerollt**. Er ändert nur die app
 (Planung) und das Szenario-Werkzeug; core, `shared`, UI, HA und `config.yaml` bleiben gleich (siehe
@@ -596,7 +596,8 @@ die Regel erst, wenn Victron live ist.
     Schätzung der Grundlast der Klimaanlage ist im Dry-Run nicht sichtbar; an der Anlage zu bestätigen:
     Absender der Pakete, Knotennummer und Einheit der Leistung, die Zeiten. Alles weitere steht in
     `docs/superpowers/plans/2026-10-19-phase-6a-entscheidungen.md`.
-- **Plan 3d (Regel R1 nur, bis der Akku leer ist) ist umgesetzt und je Task geprüft**
+- **Plan 3d (Regel R1 nur, bis der Akku leer ist) ist umgesetzt, je Task und im Gesamtreview geprüft,
+  und die Fix-Welle danach ist umgesetzt**
   (Plan: `docs/superpowers/plans/2026-10-20-phase-3d-regel-r1.md`, 4 Tasks, Ausführung subagent-driven;
   Branch `claude/project-thread-707vv8`, nicht auf `main`, nicht ausgerollt). Anlass war die
   Klarstellung des Betreibers vom 20.10.2026: R1 soll verhindern, dass Netzstrom den Akku füllt, den
@@ -634,6 +635,30 @@ die Regel erst, wenn Victron live ist.
     sagt „Reserve + Toleranz“, `lo` ist `min(Reserve, soc0)`. Task 3: `_charge_before_export_kwh`
     durchsucht den ganzen Lauf je Ladeslot (im schlimmsten Fall quadratisch, bei rund 2880 Slots für 30
     Tage harmlos); kein Test hält einen Fall fest, in dem die alte Tagesgrenze zählte.
+  - **Fix-Welle nach dem Gesamtreview** (20.10.2026; Befunde in
+    `.superpowers/sdd/2026-10-20-phase-3d-regel-r1/final-fixes.md`, ein wichtiger, sonst Kleinigkeiten;
+    jeder Code-Fix mit einem Test, der vorher scheiterte):
+    1. *Wichtig:* Das Szenario-Werkzeug prüfte Regel R mit der Reserve des Laufs (`min(Reserve,
+       Start-SOC)`), die Nachrechnung jedes Plans rechnet aber mit dessen eigener (`min(Reserve, SOC zur
+       Planzeit)`). Startete ein Lauf unter der Reserve, zählte ein legitimes Netzladen als Verstoß
+       („Nicht bestanden“). `_Planned` trägt jetzt `lo_kwh` des Plans.
+    2. `_keep_rule_r1` kürzte um die ganze Einspeisung im Fenster, unter der neuen Regel oft PV über der
+       Ladeleistung (2 kW Netzladen wurde ganz zu `HALTEN`). Gekürzt wird jetzt höchstens um die Ladung,
+       die vor der ersten Einspeisung im Fenster noch über Reserve + `EMPTY_TOL_KWH` liegt (durch `η_ch`),
+       auf 100 W aufgerundet, mindestens 100 W je Runde (die Schleife endet).
+    3. Der Ersatzplan prüft R1 nach jedem Kandidaten für jedes `NETZLADEN`, nicht nur für den Kandidaten:
+       Ein früherer Slot konnte den Akku vor einem schon angenommenen über die Leer-Grenze heben.
+    4. Kontrollfall zum Optimierer-Test von R1: dieselben Eingaben ohne wirksame Sperre laden über die
+       Leer-Grenze hinaus aus dem Netz (die Sperre kommt also von R1).
+    5. Der Befund lautet jetzt „Regel R verletzt: Netzladen um HH:MM, danach {kWh} kWh Einspeisung,
+       bevor der Akku leer ist“ (Test des Wortlauts im Betriebshandbuch).
+    6. Spec 9.6 (Erklärungsregel `REGEL_R_BLOCKIERT_NETZLADEN`, „bevor der Akku leer ist“), 9.4 und
+       Präzisierung zur Kürzung nachgezogen; überlange Zeilen im Betriebshandbuch umgebrochen.
+    Damit sind aus den aufgeschobenen Kleinigkeiten der Text des Befunds und der fehlende Test der
+    Szenario-Prüfung erledigt. Voller Lauf nach der Fix-Welle: 7949 Python-Tests (4188 `core`, Kopf
+    und Dokumentation, 3382 app/`shared`/Watchdog/Werkzeuge, 333 Integration, 46 Property), alle
+    grün; ruff, mypy und import-linter sauber; Abdeckung 98,04 % insgesamt und 99,94 % für
+    `core/safety`, `core/control` und `core/actuators`. Die UI ist unverändert (kein Vitest-Lauf).
   - **Tests auf dem Branch von Plan 3d** (20.10.2026): 7944 Python-Tests im vollen Lauf (in vier Teilen
     parallel mit gemeinsamer Abdeckung gemessen: 4141 `core` und Kopf, 3378 app/`shared`/Watchdog/Werkzeuge,
     46 Dokumentation, 333 Integration, 46 Property), alle grün; Vitest 696; ruff, mypy und import-linter
@@ -1575,7 +1600,8 @@ Demo-Zugänge: `admin`, `bedienen` (Bedienen), `gast` (Lesen) und `sicher` (Admi
    Gesamtreview geprüft, Fix-Welle und Re-Review erledigt, seit dem 20.10.2026
    auf `main`, nicht ausgerollt (Kurzfassung). Es folgt das Ausrollen mit 4b nach der Abnahme der Phase 3 (Punkt 8 unter
    „Offen an der Anlage“). Danach Phase 5; 6b (Wärmepumpe) frühestens Herbst 2027 nach Phase 5.
-6. **Plan 3d** (Regel R1 nur, bis der Akku leer ist): umgesetzt und je Task geprüft, auf dem Branch
+6. **Plan 3d** (Regel R1 nur, bis der Akku leer ist): umgesetzt, je Task und im Gesamtreview geprüft,
+   Fix-Welle umgesetzt, auf dem Branch
    `claude/project-thread-707vv8` (Kurzfassung); es folgt der Gang auf `main` und das Ausrollen nach
    Entscheidung des Betreibers (Punkt 9 unter „Offen an der Anlage“). Plan 5a läuft parallel in einem
    anderen Thread; wer als Zweiter auf `main` geht, führt die Doku (Übergabe, Spec) zusammen.

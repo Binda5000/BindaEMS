@@ -4157,8 +4157,9 @@ verbraucht ist, aber nicht mehr. Die Prüfung rechnet Regel R an der Nachrechnun
 Einspeisung, die sie in diesem Fenster zulässt, sind nur ihre Toleranz. Weil die Absichten gerundet
 sind, kann die Nachrechnung mehr im Akku haben als das Modell; würde sie deshalb nach einem
 `Netzladen`-Slot einspeisen, bevor der Akku leer ist, kürzt die app das Netzladen des letzten
-betroffenen Slots um diese Energie (auf 100 W aufgerundet, unter 100 W wird daraus `Halten`). Die
-Regel wirkt erst, wenn Victron live ist und „Netzladen erlaubt“ an ist.
+betroffenen Slots um diese Energie, höchstens aber um die Ladung, die vor der ersten Einspeisung
+noch über Reserve plus 0,1 kWh liegt (auf 100 W aufgerundet, unter 100 W wird daraus `Halten`).
+Die Regel wirkt erst, wenn Victron live ist und „Netzladen erlaubt“ an ist.
 
 Die **Spread-Regel** ist im Optimierer keine Bedingung: Marge, Verschleiß und Wirkungsgrad stehen
 als Kosten im Ziel. Die Prüfung kontrolliert sie danach je `Netzladen`-Slot. Er rechnet sich, wenn
@@ -4422,8 +4423,9 @@ Den Akku rechnet der Ersatzplan mit diesen Autos so:
   Kandidat bleibt. Dann folgt der nächste knappe teure Slot.
 - **Netzladen:** nur bei eingeschaltetem Schalter, nur gegen den ersten teuren Slot, der trotz
   Halten knapp bleibt, und nur in einem billigen Slot davor, für den die Spread-Regel mit dem Preis
-  des teuren Slots und Regel R (Einspeisung nur, bis der Akku leer ist) gelten. Die Leistung ist die höchste volle 100 W unter der Grenze des
-  Slots; neben Haus und Autos bleibt dabei die Grenze des Netzbezugs frei.
+  des teuren Slots und Regel R (Einspeisung nur, bis der Akku leer ist) gelten; Regel R hält dabei
+  auch jedes schon geplante Netzladen. Die Leistung ist die höchste volle 100 W unter der Grenze
+  des Slots; neben Haus und Autos bleibt dabei die Grenze des Netzbezugs frei.
 - **Budget:** wie beim Optimierer (unten, „Budget“), ohne die Spitze des Optimierers.
 
 ### Erklärungen
@@ -4646,9 +4648,9 @@ Der Bericht „Szenario-Vergleich mit Victron allein“ hat je Tag eine Zeile mi
   Ende mehr (oder weniger) im Akku hat als „Victron allein“; **diese Zahl entscheidet**,
 - „Leistungspreis“,
 - „Netzladen vor tatsächlicher Einspeisung“: die netzgeladene Energie in Slots, nach denen
-  tatsächlich mehr als 0,1 kWh eingespeist wurde, bevor der Akku leer war (über den ganzen Lauf, seit
-  Plan 3d nicht mehr je Tag); eine Informationszahl ohne Grenze, denn Prognosefehler machen sie
-  unvermeidbar,
+  tatsächlich mehr als 0,1 kWh eingespeist wurde, bevor der Akku leer war (über den ganzen Lauf,
+  seit Plan 3d nicht mehr je Tag); eine Informationszahl ohne Grenze, denn Prognosefehler machen
+  sie unvermeidbar,
 - „Takt: n min“.
 
 Hat `export_days` Tage übersprungen (`skipped_days`), steht direkt unter der Tabelle die Zeile
@@ -4679,10 +4681,10 @@ Die Pläne 3b und 3c sind ohne die echte Anlage getestet; das zeigt sich erst im
   der Übersicht und den Plan („Ablauf“) mit dem, was du bei diesen Preisen erwartest. Ein Ersatzplan
   oder „Auffälligkeiten“ über Stunden sind ein Befund.
 - **Regel R:** Bei eingeschaltetem „Netzladen erlaubt“ darf kein Block „Netzladen“ bis in einen
-  Zeitraum reichen, in dem laut PV-Prognose eingespeist wird, ohne dass der Akku dazwischen auf der
-  Reserve ankommt (SOC-Verlauf im Plan prüfen: ist er vor der Einspeisung bei der Reserve, ist
-  Netzladen davor in Ordnung). Der Satz „Kein Netzladen: … (Regel R)“ zeigt,
-  dass die Regel gegriffen hat.
+  Zeitraum reichen, in dem laut PV-Prognose eingespeist wird, ohne dass der Akku dazwischen auf
+  der Reserve ankommt (SOC-Verlauf im Plan prüfen: ist er vor der Einspeisung bei der Reserve,
+  ist Netzladen davor in Ordnung). Der Satz „Kein Netzladen: … (Regel R)“ zeigt, dass die Regel
+  gegriffen hat.
 - **Auslöser:** Die Zeit im Kopf („Plan von …“) springt jede Viertelstunde, eine Minute nach Slotbeginn.
   Weicht der SOC um mehr als 5 Prozentpunkte vom Plan ab (etwa durch einen großen Verbraucher),
   folgt ein Plan mit dem Anlass „SOC weicht ab“.
