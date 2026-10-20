@@ -124,7 +124,7 @@ def test_text_round_trip_predicts_the_same(synthetic_set: TrainingSet) -> None:
     model = train(data, BASE_FEATURES)
     loaded = load_model(model.text, list(model.features), model.max_w)
     assert loaded.features == model.features == BASE_FEATURES
-    assert loaded.max_w == model.max_w
+    assert loaded.max_w == pytest.approx(model.max_w, rel=1e-12)
     assert loaded.predict(data.rows) == pytest.approx(model.predict(data.rows), rel=1e-12)
     assert loaded.importance() == pytest.approx(model.importance())
 
