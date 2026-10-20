@@ -429,8 +429,8 @@ def _plan_at(
     steps = simulate(soc0_kwh, sim_slots(inputs, ev_w), [s.intent for s in plan.slots], params)
     grid = car_grid_kwh(inputs, ev_w) if ev_w else {}
     r2_broken = any(grid[car.key] > car.grid_allowed_kwh + R2_TOL_KWH for car in inputs.vehicles)
-    index = {s.start: i for i, s in enumerate(plan.slots)}
-    return _Planned(plan, steps, index, params.lo_kwh, r2_broken)
+    positions = {s.start: i for i, s in enumerate(plan.slots)}
+    return _Planned(plan, steps, positions, params.lo_kwh, r2_broken)
 
 
 def _charge(car: ScenarioCar, soc_pct: float, wanted_w: float) -> tuple[float, float]:
