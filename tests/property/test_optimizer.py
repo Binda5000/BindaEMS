@@ -4,7 +4,7 @@ kurze Horizonte mit bis zu zwei geplanten Autos.
 Jede Eingabe ist lösbar. Für jedes Ergebnis: SOC innerhalb der Grenzen, Einspeisung nie über der
 PV, das Haus bezieht aus Netz und Akku nie mehr als den Fehlbetrag (PV deckt es zuerst), nie Laden
 und Entladen im selben Slot, kein Netzladen bei ausgeschaltetem Schalter und Regel R1: Nach einem
-Slot mit Netzladen wird bis zum Horizontende nichts mehr eingespeist.
+Slot mit Netzladen wird bis zum Leerstand des Akkus (oder zum Horizontende) nichts eingespeist.
 
 Für die Autos: kein Laden ab der Abfahrt, Ladeleistung 0 oder zwischen ``min_w`` und ``max_w``,
 die PV-Bilanz und der Netzanschluss gelten mit den Autos, die Netzenergie ins Auto bleibt unter
@@ -22,7 +22,7 @@ from tests.plan_helpers import planned_car, scenario
 
 from bindaems.app.planning.battery_model import SLOT_H, params_of
 from bindaems.app.planning.inputs import PlanInputs
-from bindaems.app.planning.optimizer import solve
+from bindaems.app.planning.optimizer import R1_EMPTY_TOL_KWH, solve
 from bindaems.app.planning.vehicles import (
     PlanVehicleInput,
     grid_allowed,
@@ -112,7 +112,15 @@ def test_optimizer_respects_limits_and_rule_r1(kwargs: dict[str, Any]) -> None:
         if not inputs.planning.grid_charge_allowed:
             assert flow.gr_b == 0
         if flow.gr_b > 1:
-            later = sum(f.pv_x for f in result.flows[index:]) * SLOT_H / 1000
+            end = next(
+                (
+                    j
+                    for j in range(index, len(result.flows))
+                    if result.flows[j].soc_end_kwh <= params.lo_kwh + R1_EMPTY_TOL_KWH
+                ),
+                len(result.flows) - 1,
+            )
+            later = sum(f.pv_x for f in result.flows[index : end + 1]) * SLOT_H / 1000
             assert later <= 0.001
         pv_ev = sum(pv for pv, _ in flow.ev.values())
         gr_ev = sum(grid for _, grid in flow.ev.values())
