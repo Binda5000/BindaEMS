@@ -1,8 +1,10 @@
 import asyncio
+import json
 import threading
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
+import httpx
 import pytest
 from fastapi.testclient import TestClient
 from pydantic import SecretStr
@@ -23,6 +25,7 @@ from tests.unit.shared.test_decisions import decision
 from bindaems.app.control.decisions import DecisionQuery
 from bindaems.app.control.intent import CoreDown
 from bindaems.app.db.schema import charging_session, planned_charge
+from bindaems.app.forecast.openmeteo import OPEN_METEO_URL
 from bindaems.app.ha.entities import build_inputs
 from bindaems.app.runtime import AppRuntime, StatsInputs
 from bindaems.shared.config import Config, Secrets
@@ -1403,3 +1406,58 @@ async def test_stats_loop_survives_a_failing_refresh(runtime, monkeypatch) -> No
 async def test_stats_inputs_start_unknown(runtime) -> None:
     assert isinstance(runtime._stats_inputs, StatsInputs)
     assert runtime._stats_inputs == StatsInputs(None, {}, {})
+
+
+def history_body(now: datetime, days: int = 92) -> str:
+    """Antwort von Open-Meteo mit ``days`` Tagen Temperatur bis ``now`` (konstant 7 °C)."""
+    count = days * 96
+    first = now - timedelta(days=days) + timedelta(minutes=15)
+    stamps = [int((first + i * timedelta(minutes=15)).timestamp()) for i in range(count)]
+    return json.dumps(
+        {
+            "minutely_15_units": {"time": "unixtime", "temperature_2m": "°C"},
+            "minutely_15": {"time": stamps, "temperature_2m": [7.0] * count},
+        }
+    )
+
+
+async def test_weather_backfill_runs_once_at_start(runtime, respx_mock) -> None:
+    route = respx_mock.get(OPEN_METEO_URL).respond(200, text=history_body(T_APP))
+    await runtime._weather_backfill()
+    assert route.call_count == 1
+    assert runtime.weather.oldest() == T_APP - timedelta(days=92)
+    found = runtime.weather.temperatures(T_APP - timedelta(days=1), T_APP)
+    assert len(found) == 96 and set(found.values()) == {7.0}
+    await runtime._weather_backfill()  # das Archiv ist nun 92 Tage alt
+    assert route.call_count == 1
+
+
+async def test_backfill_failure_is_logged_and_retried_next_start(runtime, respx_mock) -> None:
+    route = respx_mock.get(OPEN_METEO_URL).respond(503)
+    with capture_logs() as logs:
+        await runtime._weather_backfill()  # wirft nicht: die app läuft weiter
+    warnings = [e for e in logs if e["log_level"] == "warning"]
+    assert [e["event"] for e in warnings] == ["Temperatur-Historie von Open-Meteo nicht abrufbar"]
+    assert "HTTP 503" in warnings[0]["error"]
+    assert runtime.weather.oldest() is None
+    route.respond(200, text=history_body(T_APP))
+    await runtime._weather_backfill()  # nächster Start
+    assert route.call_count == 2 and runtime.weather.oldest() == T_APP - timedelta(days=92)
+
+
+async def test_weather_backfill_survives_network_errors(runtime, respx_mock) -> None:
+    respx_mock.get(OPEN_METEO_URL).mock(side_effect=httpx.ConnectError("kein Netz"))
+    with capture_logs() as logs:
+        await runtime._weather_backfill()
+    assert "Temperatur-Historie von Open-Meteo nicht abrufbar" in [e["event"] for e in logs]
+
+
+@pytest.mark.respx(assert_all_called=False)
+async def test_runtime_starts_weather_backfill_as_one_shot_job(runtime, respx_mock) -> None:
+    respx_mock.route().respond(503)
+    task = asyncio.create_task(runtime.run())
+    await until(lambda: any(job.get_name() == "weather-backfill" for job in runtime._tasks))
+    job = next(job for job in runtime._tasks if job.get_name() == "weather-backfill")
+    await asyncio.wait_for(asyncio.shield(job), timeout=2)  # endet von selbst, ohne Neustart
+    await runtime.shutdown()
+    await asyncio.wait_for(task, timeout=2)

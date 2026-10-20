@@ -45,6 +45,11 @@ from bindaems.app.db.engine import DB_FILENAME, migrate, open_database
 from bindaems.app.forecast.archive import ForecastArchive
 from bindaems.app.forecast.calibration import pv_threshold_w
 from bindaems.app.forecast.load import LoadForecastService
+from bindaems.app.forecast.openmeteo import (
+    ForecastParseError,
+    fetch_temperature_history,
+    parse_temperatures,
+)
 from bindaems.app.forecast.quality import ForecastQuality
 from bindaems.app.forecast.routes import forecast_router
 from bindaems.app.forecast.service import ForecastService
@@ -60,6 +65,7 @@ from bindaems.app.ha.publisher import AiomqttHaTransport, HaPublisher
 from bindaems.app.history.influx import InfluxQueryError, InfluxReader
 from bindaems.app.history.routes import history_router
 from bindaems.app.history.series import build_catalog
+from bindaems.app.learning.weather import WeatherArchive
 from bindaems.app.ledger.checks import LedgerChecks
 from bindaems.app.ledger.costing import LedgerCosting
 from bindaems.app.ledger.estimate import GapEstimator
@@ -203,8 +209,15 @@ class AppRuntime:
         )
         self.price_scheduler = PriceScheduler(self.pipeline, self.price_store, self._clock)
         self.forecast_archive = ForecastArchive(self.engine)
+        self.weather = WeatherArchive(self.engine)
         self.forecast = ForecastService(
-            self._http, cfg, self.settings, self._clock, self._sink, self.forecast_archive
+            self._http,
+            cfg,
+            self.settings,
+            self._clock,
+            self._sink,
+            self.forecast_archive,
+            self.weather,
         )
         self.ledger = LedgerService(
             self.engine, self._clock, self.prices, self.settings, self.audit, self._sink
@@ -529,6 +542,8 @@ class AppRuntime:
             self._tasks = [
                 group.create_task(self._supervise(name, job), name=name) for name, job in jobs
             ]
+            # einmalig beim Start, daher nicht unter ``_supervise`` (das startete sie neu)
+            self._tasks.append(group.create_task(self._weather_backfill(), name="weather-backfill"))
             if self._serve:
                 self._tasks.append(group.create_task(self._serve_http(), name="http"))
 
@@ -808,6 +823,24 @@ class AppRuntime:
         except TimeoutError:
             log.warning("Kalibrierung der PV-Prognose dauert zu lange, der Abruf beginnt ohne sie")
         await self.forecast.run()
+
+    async def _fetch_temperature_history(self) -> dict[datetime, float]:
+        raw = await fetch_temperature_history(self._http, self._clock, self._cfg.site.location)
+        if not raw.ok:
+            raise ForecastParseError(f"Open-Meteo HTTP {raw.status}")
+        return parse_temperatures(raw.body)
+
+    async def _weather_backfill(self) -> None:
+        """Beim Start einmal die Temperatur der letzten 92 Tage nachholen, wenn das Wetterarchiv
+        noch jung ist. Ein Fehler wird gewarnt; der nächste Start versucht es erneut."""
+        try:
+            written = await self.weather.backfill(
+                self._fetch_temperature_history, self._clock.now()
+            )
+            if written:
+                log.info("Temperatur-Historie nachgeholt", slots=written)
+        except Exception as exc:  # die app läuft ohne die Historie weiter
+            log.warning("Temperatur-Historie von Open-Meteo nicht abrufbar", error=str(exc))
 
     async def _forecast_nightly_loop(self) -> None:
         """Beim Start und täglich um 02:30 Uhr: Güte bewerten, PV kalibrieren, Archiv pflegen."""

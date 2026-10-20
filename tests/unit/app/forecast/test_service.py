@@ -4,6 +4,7 @@ from datetime import UTC, date, datetime, timedelta
 
 import httpx
 import pytest
+from structlog.testing import capture_logs
 from tests.app_helpers import T_APP, StopScheduler, login_as, record_then_stop
 from tests.unit.app.forecast.conftest import FIXTURE
 
@@ -257,3 +258,36 @@ async def test_status_names_the_calibration_samples(forecast_env, archive) -> No
     assert service.component_status().message == (
         "PV-Prognose von 10:00 Uhr, kalibriert aus 24 Viertelstunden"
     )
+
+
+async def test_forecast_refresh_fills_weather_archive(forecast_env, weather, clock) -> None:
+    service, _ = forecast_env()
+    assert service.temperatures() == {}  # vor dem ersten Abruf
+    forecast = await service.refresh()
+    issued = forecast.issued_at
+    found = weather.temperatures(issued - timedelta(days=3), issued + timedelta(days=3))
+    assert found and max(found) < issued + timedelta(hours=6)
+    assert found[datetime(2026, 10, 9, 5, 15, tzinfo=UTC)] == 12.2  # Vortag und Tag der Ausgabe
+    assert dict(service.temperatures())[datetime(2026, 10, 9, 5, 15, tzinfo=UTC)] == 12.2
+    assert len(service.temperatures()) == 384  # die ganze letzte Antwort, nicht nur 6 h
+
+
+async def test_weather_archive_error_keeps_the_forecast(forecast_env, weather, monkeypatch) -> None:
+    def broken(slots, issued_at):
+        raise OSError("Datenbank gesperrt")
+
+    monkeypatch.setattr(weather, "record", broken)
+    service, _ = forecast_env()
+    with capture_logs() as logs:
+        forecast = await service.refresh()
+    assert service.latest() is forecast and service.component_status().ok
+    assert "Temperatur konnte nicht archiviert werden" in [e["event"] for e in logs]
+
+
+async def test_failed_refresh_keeps_previous_temperatures(forecast_env, respx_mock) -> None:
+    service, _ = forecast_env()
+    await service.refresh()
+    before = dict(service.temperatures())
+    respx_mock.routes["open_meteo"].respond(503)
+    await service.refresh()
+    assert dict(service.temperatures()) == before

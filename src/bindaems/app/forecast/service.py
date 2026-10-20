@@ -37,9 +37,16 @@ from bindaems.app.forecast.calibration import (
     fit_bands,
     pv_threshold_w,
 )
-from bindaems.app.forecast.openmeteo import SOURCE, ForecastParseError, fetch_plane, parse_plane
+from bindaems.app.forecast.openmeteo import (
+    SOURCE,
+    ForecastParseError,
+    WeatherSlot,
+    fetch_plane,
+    parse_plane,
+)
 from bindaems.app.forecast.pv_model import combine, plane_power_w
 from bindaems.app.history.influx import RP_LONG
+from bindaems.app.learning.weather import WeatherArchive
 from bindaems.app.schedule import next_local
 from bindaems.app.settings.service import SettingsService
 from bindaems.app.status import ComponentStatus
@@ -83,6 +90,7 @@ class ForecastService:
         clock: Clock,
         sink: PointSink | None = None,
         archive: ForecastArchive | None = None,
+        weather: WeatherArchive | None = None,
         *,
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
     ) -> None:
@@ -92,8 +100,10 @@ class ForecastService:
         self._clock = clock
         self._sink = sink
         self._archive = archive
+        self._weather = weather
         self._sleep = sleep
         self._forecast: PvForecast | None = None
+        self._temperatures: dict[datetime, float] = {}  # Lufttemperatur der letzten Antwort
         self._error: str | None = None
         # beide Modelle gehören zusammen und werden nur gemeinsam ersetzt
         self._models: tuple[Calibration, Bands] = (NEUTRAL, NEUTRAL_BANDS)
@@ -101,10 +111,15 @@ class ForecastService:
     def latest(self) -> PvForecast | None:
         return self._forecast
 
+    def temperatures(self) -> Mapping[datetime, float]:
+        """Lufttemperatur je Slot aus der letzten erfolgreichen Antwort (leer vor der ersten)."""
+        return self._temperatures
+
     async def refresh(self) -> PvForecast | None:
         """Neue Prognose; scheitert eine Fläche, bleibt die bisherige."""
         model = self._settings.current().settings.pv_model
         planes: list[dict[datetime, float]] = []
+        first_plane: list[WeatherSlot] = []
         clearness: dict[datetime, Clearness | None] = {}
         for plane in self._cfg.pv.planes:
             try:
@@ -118,7 +133,8 @@ class ForecastService:
                     "PV-Prognose für Fläche fehlgeschlagen", plane=plane.name, error=str(exc)
                 )
                 return self._forecast
-            if not planes:  # die Klarheit gilt am Standort und kommt aus der ersten Fläche
+            if not planes:  # Klarheit und Temperatur gelten am Standort, aus der ersten Fläche
+                first_plane = weather
                 clearness = {
                     slot.slot_start: clearness_class(slot.ghi_w_m2, slot.diffuse_w_m2)
                     for slot in weather
@@ -148,8 +164,10 @@ class ForecastService:
             )
         forecast = PvForecast(issued_at, SOURCE, p50_w, raw_w, p25_w, p75_w, slot_clearness)
         self._forecast, self._error = forecast, None
+        self._temperatures = {slot.slot_start: slot.temp_c for slot in first_plane}
         self._publish(forecast)
         await self._archive_forecast(forecast)
+        await self._archive_temperatures(first_plane, issued_at)
         return forecast
 
     def recalibrate(self, ledger: SlotSource) -> None:
@@ -199,6 +217,15 @@ class ForecastService:
             await asyncio.to_thread(self._archive.record, "pv", forecast.issued_at, values)
         except Exception as exc:  # das Archiv darf die Prognose nicht verhindern
             log.warning("PV-Prognose konnte nicht archiviert werden", error=str(exc))
+
+    async def _archive_temperatures(self, slots: list[WeatherSlot], issued_at: datetime) -> None:
+        """Ins Wetterarchiv schreiben; ein Fehler dort lässt die neue Prognose bestehen."""
+        if self._weather is None:
+            return
+        try:
+            await asyncio.to_thread(self._weather.record, slots, issued_at)
+        except Exception as exc:  # das Archiv darf die Prognose nicht verhindern
+            log.warning("Temperatur konnte nicht archiviert werden", error=str(exc))
 
     def _publish(self, forecast: PvForecast) -> None:
         if self._sink is None:

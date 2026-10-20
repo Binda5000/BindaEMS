@@ -1,5 +1,5 @@
 import json
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import httpx
@@ -10,7 +10,9 @@ from bindaems.app.forecast.openmeteo import (
     OPEN_METEO_URL,
     ForecastParseError,
     fetch_plane,
+    fetch_temperature_history,
     parse_plane,
+    parse_temperatures,
 )
 from bindaems.shared.config import PvPlane
 from bindaems.shared.timeutil import ManualClock
@@ -109,3 +111,64 @@ def test_null_radiation_entries_keep_the_slot() -> None:
     assert len(slots) == 384
     assert slots[0].ghi_w_m2 is None and slots[0].diffuse_w_m2 is not None
     assert slots[1].diffuse_w_m2 is None and slots[1].ghi_w_m2 is not None
+
+
+def _temperature_body(**changes) -> str:
+    data = {
+        "minutely_15_units": {"time": "unixtime", "temperature_2m": "°C"},
+        "minutely_15": {
+            "time": [1_791_000_900, 1_791_001_800, 1_791_002_700],
+            "temperature_2m": [11.5, None, 12.0],
+        },
+    }
+    for key, value in changes.items():
+        section, field = key.split("__")
+        data[section][field] = value
+    return json.dumps(data)
+
+
+def test_parse_temperatures_shifts_to_slot_start() -> None:
+    found = parse_temperatures(_temperature_body())
+    stamp = datetime.fromtimestamp(1_791_000_900, UTC)
+    assert found == {stamp - timedelta(minutes=15): 11.5, stamp + timedelta(minutes=15): 12.0}
+
+
+def test_parse_temperatures_matches_plane_temperatures() -> None:
+    plane = {s.slot_start: s.temp_c for s in parse_plane(FIXTURE.read_text())}
+    assert parse_temperatures(FIXTURE.read_text()) == plane
+
+
+def test_parse_temperatures_rejects_wrong_unit() -> None:
+    with pytest.raises(ForecastParseError, match="°C"):
+        parse_temperatures(_temperature_body(minutely_15_units__temperature_2m="°F"))
+
+
+@pytest.mark.parametrize(
+    ("body", "message"),
+    [
+        ("kein json", "kein JSON"),
+        ("[1]", "kein JSON-Objekt"),
+        ('{"error": true, "reason": "Invalid value"}', "Invalid value"),
+        ("{}", "minutely_15 fehlt"),
+        (_temperature_body(minutely_15__temperature_2m=[1.0]), "ungleich lang"),
+        (_temperature_body(minutely_15__temperature_2m="x"), "fehlt"),
+        (_temperature_body(minutely_15__temperature_2m=[1.0, None, "warm"]), "ungültiger Eintrag"),
+        (_temperature_body(minutely_15__time=[1e30, 2, 3]), "ungültiger Zeitstempel"),
+    ],
+)
+def test_parse_temperatures_rejects_malformed_bodies(body: str, message: str) -> None:
+    with pytest.raises(ForecastParseError, match=message):
+        parse_temperatures(body)
+
+
+async def test_temperature_history_request_parameters(respx_mock, cfg) -> None:
+    route = respx_mock.get(OPEN_METEO_URL).respond(200, text="{}")
+    async with httpx.AsyncClient() as http:
+        raw = await fetch_temperature_history(http, ManualClock(T_APP), cfg.site.location)
+    assert raw.source == "open_meteo"
+    params = route.calls.last.request.url.params
+    assert (params["latitude"], params["longitude"]) == ("48.2", "16.37")
+    assert params["minutely_15"] == "temperature_2m"
+    assert (params["past_days"], params["forecast_days"]) == ("92", "1")
+    assert (params["timezone"], params["timeformat"]) == ("GMT", "unixtime")
+    assert "tilt" not in params and "azimuth" not in params
