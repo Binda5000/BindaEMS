@@ -1,6 +1,6 @@
 # Betrieb von BindaEMS
 
-Stand: Plan 6a (Klimaanlage) auf dem Stand von Plan 4b (Geplantes Laden), Plan 4a (Statistik), 3c (Planausführung), 3b (Optimierer und Zeitplan), 3a (Tarif und Prognosen) und Phase 2d (Bedienung in UI und HA). Auf der VM laufen zwei Dienste. Der core **regelt** seit Plan
+Stand: Plan 5a (Lastmodell) und Plan 6a (Klimaanlage) auf dem Stand von Plan 4b (Geplantes Laden), Plan 4a (Statistik), 3c (Planausführung), 3b (Optimierer und Zeitplan), 3a (Tarif und Prognosen) und Phase 2d (Bedienung in UI und HA). Auf der VM laufen zwei Dienste. Der core **regelt** seit Plan
 2c-1 die beiden Ladepunkte (EVCS und Tesla), seit Plan 2c-2a den Akku (Override an Victron) und die
 Spitzen (15-min-Wächter) und **erkennt** seit Plan 2c-2b selbst, welches Auto an welcher Wallbox
 steht, auch ein Gast. Er **sendet aber nichts**, solange ihre Aktoren im Dry-Run sind: Er
@@ -43,6 +43,12 @@ auf der Seite „Entscheidungen“ und in Grafana.
   sendet dann nur 0. `ems-core` veröffentlicht dafür als einziger Dienst einen Port, `5442/udp`;
   Routing und Firewall zwischen den Subnetzen sind ein Schritt des Betreibers (Abschnitt
   „Klimaanlage (Phase 6a)“). Plan 6a ändert core, app, UI und Deploy.
+- Seit Plan 5a lernt die app die Hauslast zusätzlich mit einem **Modell** (LightGBM). Es nutzt
+  Kalender, Temperatur, die Last der Vortage und wenige Sensoren aus Home Assistant, wird jede Nacht
+  neu angelernt und gilt für die Planung nur, solange es in den letzten 14 Tagen mindestens 10 %
+  genauer ist als das Profil; sonst gilt das Profil. Die Seite **Prognosen** zeigt Verfahren,
+  Prognosegüte, Backtest und Merkmale (Abschnitt „Lastmodell (Phase 5a)“). Plan 5a ändert nur die
+  app und das UI, der core bleibt gleich, und er schaltet nichts an der Anlage.
 
 Dazu kommt der **Watchdog** auf dem Cerbo, den du einmal installierst (Abschnitt 14). Er ist der
 Totmann-Schalter der Anlage und greift nur ein, wenn ein live geschalteter core ausfällt.
@@ -51,7 +57,8 @@ Am Ende des Handbuchs stehen die Abschnitte „Laderegelung“ (Lademodi, „Gep
 Auto und Wallbox, Dry-Run-Vergleich mit evcc, Umstieg, Hinweise für die Anlage, Ausrollen von Plan
 4b), „Akku und Spitzen“ (Akku-Sollwert, 15-min-Wächter, Health, Victron in den Dry-Run und live,
 Alarme), „Prognosen“ (PV-Prognose mit Kalibrierung und Band, Lastprognose, Prognosegüte,
-Schätzpreise, nächtlicher Lauf), „Planung“ (Zeitplan, Schalter „Netzladen erlaubt“, Autos im Plan,
+Schätzpreise, nächtlicher Lauf), „Lastmodell (Phase 5a)“ (Ablauf, Mindestdaten, Aktivierung, Rückfall,
+Sensorauswahl, Seite „Prognosen“, Ausrollen), „Planung“ (Zeitplan, Schalter „Netzladen erlaubt“, Autos im Plan,
 Auslöser, Ersatzplan, Erklärungen, Vergleich mit „Victron allein“), „Klimaanlage (Phase 6a)“ (Netz
 und Firewall, Konfiguration, Empfang prüfen, Prüfprotokoll, Dry-Run, live, Gründe, Alarme,
 Fehlersuche) und „Simulator“ (die Szenarien der CI von Hand laufen lassen).
@@ -212,6 +219,15 @@ Minutenmittel in `long` und lassen sich in Grafana mit der Retention Policy `lon
 - **Update mit Plan 4b (Geplantes Laden):** Plan 4b ändert core und app; beide rollen gemeinsam aus,
   mit ausgeschaltetem Regelbetrieb während des Wechsels. Die Schritte stehen im Abschnitt
   „Laderegelung“, „Geplantes Laden ausrollen (Plan 4b)“.
+- **Update mit Plan 5a (Lastmodell):** Plan 5a ändert nur die app. Du ziehst und startest nur
+  `ems-app` (`docker compose pull ems-app && docker compose up -d ems-app`); der core läuft weiter, und
+  der Regelbetrieb bleibt an. Ausgerollt wird mit oder nach 4b und 6a; die Schritte stehen im
+  Abschnitt „Lastmodell (Phase 5a)“, „Lastmodell ausrollen (Plan 5a)“.
+- **Rollback auf einen Stand vor Plan 5a:** Die Migration `0013` der app ist beim Start gelaufen; eine
+  ältere app kennt sie nicht und startet mit dieser Datenbank nicht. Spiele die Kopie ein, die du vor
+  dem Ausrollen gemacht hast (`/backup/vor-plan-5a.sqlite3`, Wiederherstellen wie in Abschnitt 9). Die
+  Modelle und das Wetterarchiv seit dem Ausrollen gehen dabei verloren, sonst nichts; der core ist
+  nicht betroffen. Die Dateien unter `/data/models/load/` darfst du löschen.
 - **Rollback auf einen Stand vor Plan 4b:**
   - Die Migration `0012` der app ist beim Start gelaufen; eine ältere app startet mit dieser
     Datenbank nicht. Spiele die Kopie ein, die du vor dem Ausrollen gemacht hast
@@ -963,7 +979,9 @@ Daten seit der Sicherung (z. B. Preise, Abrechnung) holt die app beim Start zum 
 Preise neu von den Quellen, Viertelstunden der letzten 7 Tage aus InfluxDB. Die Statistik holt
 die app ebenfalls nach, soweit sie sich rechnen lässt: Einstandspreis, Abgleich (35 Tage) und
 Energie je Verbraucher (31 Tage). Ladesessions und Belegung seit der Sicherung gehen verloren, denn
-sie kommen nur aus dem Betrieb der app.
+sie kommen nur aus dem Betrieb der app. Die Modelle des Lastmodells liegen als Dateien unter
+`/data/models/load/` und brauchen keine Sicherung, weil die app jede Nacht neu trainiert
+(Abschnitt „Lastmodell (Phase 5a)“).
 
 ## 10. Proxmox-HA
 
@@ -1264,12 +1282,13 @@ gilt für diesen Browser.
 | Übersicht | Energiefluss live mit den Verbrauchern unter dem Haus, Strompreis jetzt und die nächsten 3 h (Balken überfahren, antippen oder mit den Pfeiltasten wählen zeigt den Preis der Viertelstunde), Ladestände, Preise und PV-Prognose für heute und morgen, Hinweise, Verbraucher mit Leistung und Energie seit Mitternacht, „Warum?“ (unten) |
 | Laden | je Fahrzeug und je Wallbox eine Karte, dazu „Gast“, „Akku-Unterstützung“ und „Vorrang“; in „Geplant“ mit Ziel-SOC, Abfahrt und „Fertig um“; ab „Bedienen“ mit den Bedienelementen (unten, „Laden“) |
 | Zeitplan | der Akkuplan für bis zu 36 h: Kopf mit dem Stand der Ausführung, Quelle, Gültigkeit, Kosten gegenüber „Victron allein“ und je geplantem Auto einer Zeile wie auf „Laden“, Diagramme „Preise und Prognosen“, „Akku“ und, mit geplanten Autos, „Autos“, „Ablauf“ in Blöcken mit Satz; ab „Bedienen“ mit „Netzladen erlaubt“ und „Neu planen“ (Abschnitt „Planung“) |
+| Prognosen | die Lastprognose mit Verfahren (Profil oder Modell), Grund und Taste „Jetzt neu trainieren“, die Prognosegüte von PV und Last (Profil und Modell) mit Zeitraum 7 bis 60 Tage, „Fehler je Tag“, „Backtest“ und „Merkmale“ (Abschnitt „Lastmodell (Phase 5a)“) |
 | Verlauf | Diagramm mit bis zu 8 Reihen für frei wählbare Tage (höchstens 400), Tagesbilanz mit Abdeckung (Viertelstunden und Anteil der aufgezeichneten Zeit; am laufenden Tag „bis jetzt“, also nur die vergangenen Viertelstunden), Kosten, Erlös, Autarkie und den Tageswerten der Zähler (Differenz über den Tag) für den Abgleich mit VRM |
 | Statistik | Tag, Woche, Monat oder Jahr mit Blättern: Autarkie, Eigenverbrauch, Kosten, Ersparnis und Einspeiseerlös, Diagramm „Energie“ und die Karten „Kosten“, „Autos“, „Geplantes Laden“, „Ladesessions“, „Verbraucher“, „Monatsspitzen“ und „Abgleich mit den Zählern“ (unten, „Statistik“) |
 | Verbraucher | Verbraucherbaum mit „Sonstiges“, Leistung und Energie seit Mitternacht („Heute“); Admins legen Verbraucher an, ändern und löschen sie |
 | System | Komponenten, Hinweise, core (Betriebsart mit Beginn und Gründen, Eingangsdaten, Adapter, Selbstprüfung, Alarme), Bedienung (Regelbetrieb; Admins: „Live schalten…“ und „Auf Dry-Run…“, Abschnitt 13), Aktoren (angefordert, wirksam, Freigabe, Hinweise und Sperren; Admins: „Quittieren“), Watchdog am Cerbo (Abschnitt 14), Preise (Admins: „Preise jetzt abrufen“), PV-Prognose, alle Signale mit Suche |
 | Entscheidungen | das Entscheidungslog mit Filtern (unten, „Entscheidungen und Warum?“) |
-| Einstellungen | Tarif, OeMAG-Werte, Preise, PV-Modell, Planung, Namen der Ladestationen und harte Grenzen; Admins bearbeiten, bewerten neu und exportieren oder importieren (Abschnitt 8) |
+| Einstellungen | Tarif, OeMAG-Werte, Preise, PV-Modell, Planung, Lastmodell (Schalter und Sensoren aus Home Assistant), Namen der Ladestationen und harte Grenzen; Admins bearbeiten, bewerten neu und exportieren oder importieren (Abschnitt 8) |
 | Benutzer | nur Admins: anlegen, Rolle ändern, Passwort setzen, löschen |
 | Protokoll | nur Admins: Änderungsprotokoll nach Bereich |
 | Konto | eigenes Passwort, Zwei-Faktor-Anmeldung, Abmelden |
@@ -4002,6 +4021,9 @@ influxdb:
   Beide Schemata der HA-Integration gehen wie bei den Verbrauchern (Abschnitt 12, „Verbraucher aus
   Home Assistant“). Nach einer Änderung startest du die app neu.
 
+Seit Plan 5a kann statt des Profils ein Modell die Lastprognose liefern (Abschnitt „Lastmodell
+(Phase 5a)“); das Profil bleibt der Rückfall und die Vergleichsgröße.
+
 Die Seite **System** zeigt die Karte „Lastprognose“ mit „Stand“ (Zeit der letzten Ausgabe),
 „Datenbasis“ („n Viertelstunden aus BindaEMS, m aus Home Assistant“) und der Energie von heute,
 morgen und übermorgen in kWh. Die Komponente „load-forecast“ meldet „Lastprognose von HH:MM Uhr“,
@@ -4031,7 +4053,8 @@ Fehler = Prognose (P50) − Ist. Ohne Daten steht „Noch keine Kennzahlen.“ i
 Zahlen liefert die API, eingeloggt und mit beliebiger Rolle: `GET /api/forecast/quality?days=14`
 (`days` von 1 bis 60); die Zeilen gibt es für PV, die ausgegebene Last (`load`) und die beiden
 Schatten `load_profile` und `load_model`. Die Aufrufe stehen im Unterabschnitt „API für Lastmodell
-und Prognosegüte“ unten. Eine Seite „Prognosen“ mit diesen Zahlen folgt.
+und Prognosegüte“ unten. Die Seite **Prognosen** zeigt dieselben Zahlen für 7, 14, 28 oder 60 Tage
+(Abschnitt „Lastmodell (Phase 5a)“).
 
 ### API für Lastmodell und Prognosegüte
 
@@ -4092,8 +4115,11 @@ sind als „geschätzt“ gekennzeichnet (Herkunft `estimated`) und stehen nur f
 - **Übersicht**, Diagramm „Preise und PV heute/morgen“: die Reihe „PV-Prognose“ (P50) mit dem
   Band „PV P25–P75“ und die „Lastprognose“ als Linie. Scheitert die Abfrage einer Prognose,
   steht der Fehler über dem Diagramm, und die übrigen Reihen bleiben.
-- **System**: die Karten „Lastprognose“ und „Prognosegüte“ (oben) und bei den Komponenten
-  „forecast“ und „load-forecast“ der Stand beider Prognosen.
+- **System**: die Karten „Lastprognose“ und „Prognosegüte“ (oben, mit dem Verweis „Mehr unter
+  Prognosen“) und bei den Komponenten „forecast“, „load-forecast“ und „load-model“ der Stand der
+  Prognosen und des Lastmodells.
+- **Prognosen**: Verfahren der Lastprognose, Prognosegüte, Fehler je Tag, Backtest und Merkmale des
+  Modells (Abschnitt „Lastmodell (Phase 5a)“).
 
 ### An der Anlage prüfen
 
@@ -4110,6 +4136,207 @@ Plan 3a ist ohne die echte Anlage getestet; zwei Dinge zeigen sich erst im Betri
   abweichen: In den ersten Tagen fehlen je Stunde und Klarheitsklasse die 8 Paare, und das Band
   steht auf 0,7 bis 1,2. Die Komponente „forecast“ nennt „kalibriert aus n Viertelstunden“, sobald
   es Faktoren gibt.
+
+## Lastmodell (Phase 5a)
+
+Seit Plan 5a lernt die app die Hauslast zusätzlich mit einem **Modell** (LightGBM) aus der
+Historie, dem Kalender, der Temperatur und, wenn du es willst, einigen Sensoren aus Home Assistant.
+Das Modell ist eine Alternative zum Profil der Lastprognose (Abschnitt „Prognosen“, „Lastprognose“):
+Die Planung nutzt es nur, solange es nachweislich genauer ist, sonst gilt das **Profil**. Der core
+ändert sich dabei nicht. **5a schaltet nichts an der Anlage:** Das Modell ändert nur die Eingabe
+des Planers, und jeder Wert liegt zwischen 0 und dem 1,5-Fachen des höchsten Viertelstundenwerts
+der Trainingsdaten (Spec 10.5).
+
+### Ablauf
+
+1. **Temperatur sammeln:** Jede PV-Prognose schreibt die Lufttemperatur der Viertelstunden bis 6 h
+   nach ihrer Ausgabe in die Tabelle `weather_slot` (auch die des Vortags); eine spätere Ausgabe
+   ersetzt eine frühere. Ist das Archiv beim Start jünger als 56 Tage, holt die app einmal 92 Tage
+   Temperatur von Open-Meteo nach (nur `temperature_2m`, am Standort). Das Log nennt es mit
+   „Temperatur-Historie nachgeholt“; scheitert der Abruf, warnt die app, und der nächste Start
+   versucht es erneut.
+2. **Trainieren:** Jede Nacht um 03:15 Uhr (Ortszeit), beim Start, wenn es noch keine brauchbare
+   Version gibt, und mit der Taste „Jetzt neu trainieren“ (nur Admin). Das erste Training nach dem
+   Start wartet auf die Nachholung der Temperatur, höchstens 10 min. Jedes Training legt eine neue
+   **Version** an.
+3. **Backtest:** Mit jedem Training rechnet die app einen Rückblick (unten).
+4. **Aktivieren:** Danach entscheidet die Regel (unten), ob die Planung das Modell oder das Profil
+   nutzt. Die Regel läuft auch, wenn das Training scheitert oder nicht genug Daten hat; dann bleibt
+   die bisherige Version.
+5. **Ausgeben:** Bei jeder stündlichen Ausgabe der Lastprognose (Minute 9) rechnen Profil und Modell,
+   beide Ergebnisse gehen in das Archiv, und als Lastprognose geht das aktive Verfahren hinaus.
+
+### Mindestdaten und Nachtlauf
+
+- **Fenster:** Das Training nutzt die letzten 56 Tage der Hauslast, dieselbe Historie wie das Profil
+  (Abrechnung, nur vollständige Viertelstunden; die HA-Historie der Hauslast nur mit
+  `homeassistant.load_history`).
+- **Mindestdaten:** Trainiert wird erst, wenn die 56 Tage mindestens **28 Tage** mit je mindestens
+  80 von 96 vollständigen Viertelstunden enthalten. Davor bleibt das Profil, und die Seite
+  „Prognosen“ nennt „Zu wenig Daten: {n} von 28 Tagen.“. Ein Tag mit weniger als 80 Viertelstunden
+  (Ausfall der app, Lücken in der Abrechnung) zählt nicht mit. Die Abrechnung läuft seit Phase 1b;
+  beim Ausrollen reicht das.
+- **Merkmale:** Vorlauf in Stunden (ein Modell für alle Vorläufe bis 72 h), Uhrzeit, Wochentag,
+  Tagestyp (Werktag, Samstag, Sonn- und Feiertag), Feiertag, Monat, die Temperatur der Viertelstunde
+  und das Tagesmittel, die Last zur selben Uhrzeit vor einem Tag und vor einer Woche, die mittlere
+  Last der letzten Stunde vor der Ausgabe, das Profil selbst und je gewähltem Sensor sein Wert vor
+  der Ausgabe. Ein Wert, den die app zum Zeitpunkt der Ausgabe nicht kannte, fließt nie ein: Die Last
+  von gestern gilt nur, wenn sie vor der Ausgabe vollständig war, und ein Sensor gilt für den ganzen
+  Vorlauf mit dem Wert vor der Ausgabe. Fehlt ein Wert, bleibt das Merkmal leer.
+- **Training:** Ausgaben um 00:00, 06:00, 12:00 und 18:00 Uhr (Ortszeit), je Ausgabe alle
+  Viertelstunden bis 72 h danach, die einen Ist-Wert haben (bei 56 Tagen rund 60 000 Zeilen). Das
+  Modell schätzt den Median wie das Profil; die Parameter sind fest, es gibt keine Suche. Training und
+  Backtest laufen in einem eigenen Thread; dauern sie länger als 10 min, gilt der Lauf als gescheitert
+  („Training fehlgeschlagen: Zeitlimit von 600 s überschritten“).
+- **Temperatur:** Im Training gilt die archivierte Temperatur (nahe am Ist), in der Vorhersage die
+  aktuelle Prognose. Das macht den Backtest etwas zu günstig; der Schattenbetrieb misst ehrlich.
+- **Versionen:** Behalten werden die 14 neuesten Versionen und die aktive.
+
+### Backtest
+
+Der Rückblick prüft, wie gut das Verfahren in den letzten Wochen gewesen wäre. Startpunkte sind die
+lokalen Mitternächte 7, 14, … Tage vor heute. Je Startpunkt lernt ein Modell nur mit Daten davor
+(höchstens 56 Tage) und sagt die Ausgaben der folgenden 7 Tage voraus; verglichen wird es mit dem
+Profil, das an dem Tag gegolten hätte. So viele Wochen, wie die Daten nach den ersten 14 Tagen
+erlauben, höchstens 8, mindestens 2 (also ab 28 Tagen Daten). Das Ergebnis steht je Woche und
+Vorlaufklasse (0–6 h, 6–24 h, über 24 h) auf der Seite „Prognosen“.
+
+### Aktivierung
+
+Das Modell ist **aktiv**, wenn sein mittlerer absoluter Fehler (MAE) über die letzten 14 vollen Tage
+**mindestens 10 %** unter dem des Profils liegt (`1 − MAE Modell / MAE Profil`), über alle
+Vorlaufklassen zusammen. Heute zählt nicht mit. Die Regel läuft jede Nacht nach dem Training, ohne
+Hysterese.
+
+- **Grundlage:** der **Schattenbetrieb** (die archivierten Ausgaben von Modell und Profil gegen das
+  Ist), sobald er an mindestens 10 der 14 Tage Werte hat; vorher die letzten 14 Tage des Backtests.
+  So kann das Modell schon kurz nach dem Ausrollen aktiv sein, wenn es im Backtest klar besser ist,
+  und der Betrieb entscheidet, sobald er genug gesehen hat. Nach einem Neustart der app gilt die
+  gespeicherte Entscheidung bis zur nächsten Bewertung; der Backtest fehlt bis zum nächsten Training,
+  bis dahin entscheidet nur der Schattenbetrieb.
+- **Profil gilt** ohne brauchbares Modell, mit ausgeschaltetem Schalter „Lastmodell verwenden“
+  (Standard an) und bei jedem Fehler. Der Schalter wirkt sofort; das Modell rechnet im Schatten
+  weiter.
+- **Die Gründe**, wie die Seite sie nennt:
+
+| Grund | Satz |
+|---|---|
+| `better` | „Modell aktiv: in den letzten 14 Tagen {x} % genauer als das Profil (im Schattenbetrieb).“ bzw. „(im Backtest)“ |
+| `not_better` | „Profil aktiv: Das Modell ist nur {x} % genauer, nötig sind 10 %.“ oder bei negativem Wert „Profil aktiv: Das Modell ist {x} % ungenauer als das Profil.“ |
+| `too_few_days` | „Profil aktiv: Für den Vergleich fehlen noch Tage ({n} von 10).“ |
+| `disabled` | „Profil aktiv: Das Lastmodell ist in den Einstellungen ausgeschaltet.“ |
+| `no_model` | „Profil aktiv: Es gibt noch kein brauchbares Modell.“ |
+
+  Ein knapp verfehltes Ergebnis rundet der Satz ab: 9,6 % heißt „nur 9 %“, damit nie „nur 10 %,
+  nötig sind 10 %“ dasteht.
+
+### Schattenbetrieb und Ausgabe
+
+- Jede stündliche Ausgabe rechnet Profil und Modell und schreibt beide ins Archiv (`load_profile` und
+  `load_model`); als `load` (für den Planer, InfluxDB und die bisherige Güte) geht das aktive
+  Verfahren. Daraus entsteht die Prognosegüte je Verfahren.
+- Fehlt dem Modell für einzelne Viertelstunden ein Wert, nimmt die Ausgabe dort das Profil. Fehlt er
+  für mehr als 10 % der Viertelstunden, oder wirft die Vorhersage einen Fehler, gilt für diese
+  Ausgabe ganz das Profil (Warnung im Log).
+
+### Rückfall
+
+| Fall | Folge |
+|---|---|
+| Training scheitert oder hat zu wenig Daten | Die bisherige Version bleibt; die Aktivierung wird trotzdem neu bewertet. Die Seite nennt den Grund unter „Lastprognose“. |
+| Modelldatei fehlt oder ist nicht lesbar (etwa nach einer Rücksicherung der Datenbank oder bei voller Platte) | Die Version gilt als unbrauchbar (Warnung „Lastmodell nicht lesbar, die Version wird nicht mehr verwendet“), die Planung nutzt das Profil, und das nächste Training legt eine neue Version an. |
+| Schalter „Lastmodell verwenden“ aus | Sofort Profil. |
+| Sensor in HA fehlt, ist umbenannt oder nicht numerisch | Das Merkmal ist leer, das Training läuft; die Karte „Merkmale“ zeigt den Sensor als „nicht im Modell“. |
+| Auswahl der Sensoren ändert sich | Jedes Modell rechnet mit seiner eigenen Merkmalsliste: Ein entfernter Sensor ist leer, ein neuer zählt erst ab dem nächsten Training. |
+
+Die Komponente `load-model` unter **System** → „Komponenten“ nennt den Zustand: „Lastmodell aktiv“,
+„Profil aktiv, Modell bereit“, „Noch kein Modell“ (Status nicht in Ordnung, bis das erste Training gelungen
+ist) oder „Lastmodell fehlgeschlagen: {Fehler}“.
+
+### Sensoren aus Home Assistant wählen
+
+Unter **Einstellungen** → „Lastmodell“ (Admins bearbeiten, alle anderen sehen die Auswahl):
+
+- **Lastmodell verwenden:** Aus: Die Planung nutzt immer das Profil. Das Modell rechnet weiter mit.
+- **Zusätzliche Sensoren aus Home Assistant (höchstens 8):** die Liste der Entitäten der
+  HA-Datenbank, die in den letzten 30 Tagen einen Zahlenwert hatten (Zahl, oder ein Zustand, den HA
+  als Zahl schreibt, etwa an/aus). Zum Beispiel Anwesenheit (`person.…`) oder die gemessene
+  Außentemperatur. Wirkt ab dem nächsten Training. Ohne HA-Datenbank steht dort „HA-Datenbank nicht
+  eingerichtet (influxdb.ha_database)“.
+- Der Wert eines Sensors ist das Mittel der letzten vollständigen Viertelstunde vor der Ausgabe und
+  gilt für den ganzen Vorlauf; für die Zukunft kennt BindaEMS keine Sensorwerte. Ein gewählter Sensor,
+  den die Liste nicht kennt, steht dort mit „nicht in HA gefunden“.
+- Das Modell hat nach dem Training für jedes Merkmal einen Anteil am Gewinn (Seite „Prognosen“, Karte
+  „Merkmale“). Ein gewählter Sensor ohne Anteil (er hatte keine Werte oder keinen Einfluss) steht
+  dort unter der Tabelle als „{Entität}: nicht im Modell“.
+
+### Die Seite „Prognosen“
+
+Sie steht in der Navigation nach „Zeitplan“ und ist für alle Rollen sichtbar; nur die Taste ist für
+Admins. Zeitraum der Güte und des Verlaufs: „7 Tage“, „14 Tage“, „28 Tage“ oder „60 Tage“.
+
+| Karte | Inhalt |
+|---|---|
+| Lastprognose | „Verfahren: Profil“ bzw. „Verfahren: Modell“, der Grund der Aktivierung (Tabelle oben), der Zustand von `load-model`, „Modell vom {TT.MM.JJJJ HH:MM}“, „Daten {TT.MM.}–{TT.MM.JJJJ} · {n} Viertelstunden“, das Ergebnis des letzten Trainings („Trainiert am {TT.MM. HH:MM} mit {n} Viertelstunden.“, „Zu wenig Daten: {n} von 28 Tagen.“ oder „Training fehlgeschlagen: {Fehler}“) und die Taste „Jetzt neu trainieren“ (während des Laufs „Training läuft …“). Ohne Modell: „Noch kein Modell trainiert.“ |
+| Prognosegüte | Spalten „Art“, „Vorlauf“, „Slots“, „MAE“, „Bias“, „rel. MAE“ und „besser als Profil“; Arten „PV“, „Last (verwendet)“, „Last Profil“ und „Last Modell“; Vorlauf „0–6 h“, „6–24 h“, „über 24 h“. „besser als Profil“ steht nur bei „Last Modell“. Leer: „Noch keine Werte im Zeitraum.“ |
+| Fehler je Tag | MAE je Tag als Linien „Profil“ und „Modell“, Achse „MAE (W)“ |
+| Backtest | Spalten „Woche ab“, „Vorlauf“, „Slots“, „Modell“, „Profil“ und „besser“, dazu die Zeile „Gesamt“. Leer: „Noch kein Backtest (braucht mindestens 28 Tage Daten).“ |
+| Merkmale | Spalten „Merkmal“ und „Anteil“: der Anteil jedes Merkmals am Gewinn des Modells, absteigend (Vorlauf, Uhrzeit, Temperatur, … bzw. die Entität eines Sensors) |
+
+Die Karte „Prognosegüte“ auf der Seite „System“ bleibt und verweist mit „Mehr unter Prognosen“ auf
+die Seite. Die Aufrufe dahinter stehen im Abschnitt „Prognosen“, „API für Lastmodell und
+Prognosegüte“.
+
+### Modelle auf der Platte, keine Sicherung nötig
+
+Die Modelle liegen als Textdateien `load-<Nummer>.txt` unter `/data/models/load/` im Volume
+`app-data`; die Registry (`model_registry`) steht in der Datenbank der app. **Eine Sicherung ist nicht
+nötig:** Jede Nacht entsteht eine neue Version, und ein verlorenes Modell ist spätestens am
+nächsten Morgen ersetzt (oder gleich mit „Jetzt neu trainieren“). Nach einer Rücksicherung der
+Datenbank kann die Registry Versionen kennen, deren Datei fehlt; die app erkennt das, stuft sie als
+unbrauchbar ein (siehe „Rückfall“), und das nächste Training behebt es. Das Wetterarchiv ist Teil der
+Datenbank; ist es nach einer Rücksicherung jünger als 56 Tage, holt die app beim Start die
+Temperatur-Historie wieder nach.
+
+Das Image von `ems-app` ist mit Plan 5a rund 130 MB größer: LightGBM bringt `numpy` und `scipy` mit,
+und es braucht `libgomp1` im Image (das Dockerfile installiert es). Die CI baut das Image, damit
+das auffällt; wer lokal baut (Abschnitt 4, „Lokaler Build“), braucht nichts Besonderes.
+
+### Lastmodell ausrollen (Plan 5a)
+
+Plan 5a ändert nur die app, `shared/settings.py` und das UI; der core und sein Image bleiben
+gleich. Ausgerollt wird **mit oder nach dem gemeinsamen Ausrollen von 4b und 6a** und damit erst nach
+der Abnahme der Phase 3. Bis dahin ziehst du keine Images (`docker compose pull`), denn `latest`
+enthält Plan 5a, sobald er auf `main` ist. **Nichts geht dabei von selbst live.**
+
+1. **Datenbank sichern** (empfohlen, wie bei 4a und 4b): `docker compose stop ems-app`, dann
+   `docker compose run --rm --no-deps --entrypoint sh ems-app -c 'cp /data/bindaems.sqlite3 /backup/vor-plan-5a.sqlite3'`.
+   Eine ältere app startet mit der Migration `0013` nicht (Abschnitt 4, „Rollback auf einen Stand vor
+   Plan 5a“).
+2. **Ausrollen:** nach (oder mit) 4b und 6a nur die app:
+   `cd /opt/bindaems && docker compose pull ems-app && docker compose up -d ems-app`. Der core
+   bleibt und der Regelbetrieb bleibt an. Rollst du 4b und 6a gleichzeitig aus, genügt deren
+   `docker compose pull && docker compose up -d`.
+3. **Beim Start** läuft die Migration `0013` (Tabellen `weather_slot` und `model_registry`; die Spalten
+   `kind` von `forecast_record` und `forecast_metric` werden auf 16 Zeichen verlängert), die app holt
+   die Temperatur-Historie einmal nach, und das **erste Training beginnt gleich danach**. Hat die
+   Abrechnung schon 28 Tage mit Daten, entsteht die erste Version; sonst steht auf der Seite „Prognosen“
+   „Zu wenig Daten: {n} von 28 Tagen.“, und die nächste Nacht versucht es wieder.
+4. **Sensoren wählen** (optional): unter **Einstellungen** → „Lastmodell“ bis zu 8 Entitäten (zum
+   Beispiel Anwesenheit), dann auf der Seite **Prognosen** „Jetzt neu trainieren“.
+5. **Beobachten:** Das Modell ist zuerst nur im Schatten; das Profil gilt, bis die Regel (oben) das
+   Modell aktiviert. Die Seite „Prognosen“ nennt den Grund.
+
+Die Abnahme der Phase 5, Teil Lastmodell, steht in `docs/verification/abnahme-phase-5a.md`: 28 Tage
+ab dem Ausrollen.
+
+### Abnahme
+
+Bestanden ist sie, wenn auf der Seite „Prognosen“ mit dem Zeitraum „28 Tage“ das Modell mindestens
+10 % niedrigeren MAE hat als das Profil (Zeile „Last Modell“, Spalte „besser als Profil“), **oder**
+das Profil in dieser Zeit automatisch aktiv war, sobald und solange das Modell es nicht schaffte.
+Dazu kommen jede Nacht ein Training (Registry), keine Fehler in `load-model` und der Rückfall bei
+fehlender Modelldatei, an der Anlage beobachtet. Die Checkliste führt die Schritte auf.
 
 ## Planung
 

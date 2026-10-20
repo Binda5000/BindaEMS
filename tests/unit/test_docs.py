@@ -399,6 +399,66 @@ def test_spec_names_the_notification_module_and_the_target_id() -> None:
     assert f"`{WARNING_PREFIX}<Fahrzeug>{TARGET_SUFFIX}`" in spec
 
 
+def test_guide_describes_the_load_model() -> None:
+    # Plan 5a, Task 14: Ablauf, Mindestdaten, Aktivierung, Rückfall, Sensorauswahl, Seite und
+    # Ausrollen; die Sätze der Aktivierung stehen so da, wie die app sie schreibt.
+    from bindaems.app.learning.activation import Activation, Reason
+
+    section = " ".join(_guide_section("Lastmodell (Phase 5a)").split())
+    for topic in (
+        "03:15 Uhr",
+        "28 Tage",
+        "80 von 96",
+        "**mindestens 10 %**",
+        "Schattenbetrieb",
+        "höchstens 8",
+        "`/data/models/load/`",
+        "Eine Sicherung ist nicht nötig",
+        "`libgomp1`",
+        "docker compose pull ems-app && docker compose up -d ems-app",
+        "`0013`",
+        "/backup/vor-plan-5a.sqlite3",
+        "Jetzt neu trainieren",
+        "docs/verification/abnahme-phase-5a.md",
+        "Zu wenig Daten: {n} von 28 Tagen.",
+        "Noch kein Backtest (braucht mindestens 28 Tage Daten).",
+    ):
+        assert topic in section, topic
+
+    def sentence(reason: Reason, improvement: float | None) -> str:
+        active = reason == "better"
+        return Activation(active, "shadow", 7, 100.0, 120.0, improvement, reason).text()
+
+    # die Sätze der Tabelle mit {x} und {n} als Platzhalter; die festen Sätze stehen wörtlich da
+    assert sentence("better", 15.0).replace("15", "{x}") in section
+    assert sentence("not_better", 4.0).replace("4", "{x}", 1) in section
+    assert sentence("not_better", -6.0).replace("6", "{x}") in section
+    assert sentence("too_few_days", None).replace("(7 ", "({n} ") in section
+    assert sentence("disabled", None) in section
+    assert sentence("no_model", None) in section
+
+
+def test_acceptance_checklist_of_phase_5a_covers_the_load_model() -> None:
+    # Spec 18, Phase 5, Teil Lastmodell; Plan 5a, Entscheidung 16.
+    text = " ".join(Path("docs/verification/abnahme-phase-5a.md").read_text("utf-8").split())
+    for criterion in (
+        "28 Tage",
+        "mindestens 10 %",
+        "Last Profil",
+        "Last Modell",
+        "besser als Profil",
+        "Karte „Lastprognose“",
+        "GET /api/learning/load",
+        "model_registry",
+        "load-model",
+        "Verfahren: Profil",
+        "Jetzt neu trainieren",
+        "Unterschrift",
+    ):
+        assert criterion in text, criterion
+    assert "abnahme-phase-5a.md" in Path("docs/verification/README.md").read_text("utf-8")
+
+
 def test_operations_guide_describes_charging() -> None:
     text = Path("docs/betrieb.md").read_text(encoding="utf-8")
     for topic in ("## Laderegelung", "## Simulator", '"vehicles"', "-m bindaems.tools.sim"):

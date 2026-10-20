@@ -315,6 +315,17 @@ innerhalb ±2 % von VRM, Preise und Prognose sichtbar und nachweislich keine Sch
 Geräten. Für die Abnahme kopierst du sie mit Datum, füllst sie an der Anlage aus und checkst sie
 hier ein.
 
+## Abnahme Phase 5a
+
+Die Checkliste für die Abnahme des Lastmodells (Phase 5a, Spec 18) steht in
+[`abnahme-phase-5a.md`](abnahme-phase-5a.md): 28 Tage ab dem Ausrollen, auf der Seite „Prognosen“
+(Zeitraum „28 Tage“) hat „Last Modell“ mindestens 10 % niedrigeren MAE als „Last Profil“, oder das
+Profil war automatisch aktiv, solange das Modell es nicht schaffte; Verfahren und Grund stehen in der
+Karte „Lastprognose“. Dazu kommen jede Nacht eine neue Version in der Registry, keine Fehler in der
+Komponente `load-model` und der Rückfall auf das Profil bei fehlender Modelldatei, an der Anlage
+beobachtet. Für die Abnahme kopierst du sie mit Datum, füllst sie an der Anlage aus und checkst sie
+hier ein. Das Fahrverhalten (Plan 5b) hat eine eigene Abnahme.
+
 ## Abnahme Phase 6a
 
 Die Checkliste für die Abnahme der Phase 6a (Klimaanlage, Spec 18) steht in

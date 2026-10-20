@@ -1,6 +1,6 @@
 # Übergabe an die nächste Session
 
-Stand: 19.10.2026. Plan 2c-1 (Laderegelung) ist umgesetzt, je Task und im Gesamtreview geprüft
+Stand: 20.10.2026. Plan 2c-1 (Laderegelung) ist umgesetzt, je Task und im Gesamtreview geprüft
 („mit Korrekturen“, keine kritischen Befunde), und die Fix-Welle danach ist umgesetzt. Er ist auf
 `main` (Stand `18c575a`, wie die Branches `ccr-e451cb4c-qeg1tm` und `ccr-9778345e-t3x44k` zu Beginn
 der folgenden Sitzung). Danach sind die EVCS-Hysterese (Freigabe des Betreibers vom 14.10.2026) und
@@ -81,6 +81,18 @@ Festlegungen und offene Kleinigkeiten in `docs/superpowers/plans/2026-10-19-phas
 mit 4b nach der Abnahme der Phase 3,** und vorher muss der Betreiber Routing und Firewall für UDP 5442
 zwischen 192.168.81.0/24 und 192.168.82.0/24 öffnen. Nichts geht dabei von selbst live: Die
 Klimaanlage folgt der Betriebsart ihres Aktors (`thermal.klima`), im Dry-Run sendet der core 0.
+**Plan 5a (Lastmodell, der erste Teil der Phase 5 „Lernen“) ist umgesetzt und je Task geprüft**
+(`docs/superpowers/plans/2026-10-20-phase-5a-lastmodell.md`, 14 Tasks, freigegeben vom Betreiber am 20.10.2026 mit allen 17 Entscheidungen: „Ja
+passt“): auf dem Branch `claude/phase-5-plan-s7xe0n` (ab `ee6ac9b`), **noch nicht auf `main`; die
+Integration braucht die Zustimmung des Betreibers**, und nicht ausgerollt. Jeder Task hat ein sauberes
+Review, fünf davon nach einer oder zwei Fix-Runden; der Gesamtreview über den Branch und die GitHub-CI
+auf dem Kopf des Branchs waren beim Schreiben dieser Übergabe noch offen. Plan 5a ändert nur die app, das UI,
+`shared/settings.py` und `deploy/Dockerfile.app` (der core und sein Image bleiben gleich) und braucht
+an der Anlage nur den Neubau von `ems-app`, **mit oder nach dem gemeinsamen Ausrollen von 4b und 6a**,
+also nach der Abnahme der Phase 3. Er schaltet nichts an der Anlage: Das Modell ändert nur die Eingabe
+des Planers und gilt nur, solange es in den letzten 14 Tagen mindestens 10 % genauer ist als das
+Profil. Als Nächstes folgt **Plan 5b (Fahrverhalten)**, danach 5c (Vorheizen und Vorkühlen, erst mit
+Daten aus 6a).
 `main` ist seit dem 12.10.2026 auch der Standard-Branch auf GitHub.
 
 ## Kurzfassung
@@ -588,6 +600,31 @@ Klimaanlage folgt der Betriebsart ihres Aktors (`thermal.klima`), im Dry-Run sen
     Schätzung der Grundlast der Klimaanlage ist im Dry-Run nicht sichtbar; an der Anlage zu bestätigen:
     Absender der Pakete, Knotennummer und Einheit der Leistung, die Zeiten. Alles weitere steht in
     `docs/superpowers/plans/2026-10-19-phase-6a-entscheidungen.md`.
+- **Phase 5a (Lastmodell) ist umgesetzt und je Task geprüft**
+  (Plan: `docs/superpowers/plans/2026-10-20-phase-5a-lastmodell.md`, 14 Tasks; Ausführung subagent-driven; Branch `claude/phase-5-plan-s7xe0n`, **noch nicht
+  auf `main`, nicht ausgerollt**). Die app lernt die Hauslast zusätzlich mit LightGBM; das Profil der
+  Lastprognose (3a) bleibt Rückfall und Vergleichsgröße:
+  - **Daten:** Wetterarchiv `weather_slot` (jede PV-Prognose schreibt die Temperatur bis 6 h nach der
+    Ausgabe; beim Start einmalig 92 Tage von Open-Meteo nachgeholt, wenn das Archiv jünger als 56 Tage
+    ist), bis zu 8 HA-Sensoren als Merkmale (`app/learning/ha_sensors.py`), Merkmalsbasis
+    (`features.py`: Kalender, Vorlauf, Temperatur, Last vor 1 und 7 Tagen, letzte Stunde, Profil).
+  - **Modell:** LightGBM mit festen Parametern, Median als Ziel, ein Modell für alle Vorläufe bis 72 h;
+    nachts um 03:15 Uhr, beim Start ohne Version und per Taste „Jetzt neu trainieren“ (Admin); erst ab
+    28 Tagen mit je 80 von 96 Viertelstunden. Versionen in `model_registry` und als Dateien unter
+    `/data/models/load/` (14 neueste und die aktive).
+  - **Backtest und Aktivierung:** rollierend über 2 bis 8 Wochen; aktiv ab 10 % niedrigerem MAE über die
+    letzten 14 Tage, Grundlage Schattenbetrieb (ab 10 Tagen mit Werten), sonst Backtest; sonst das
+    Profil, ebenso ohne Modell, bei ausgeschaltetem Schalter und bei jedem Fehler. Jede stündliche Ausgabe
+    schreibt Profil und Modell ins Archiv (`load_profile`, `load_model`); `load` ist das aktive Verfahren.
+  - **UI:** die Seite „Prognosen“ (Lastprognose mit Taste, Prognosegüte, Fehler je Tag, Backtest,
+    Merkmale), der Abschnitt „Lastmodell“ unter „Einstellungen“, die Komponente `load-model`, der
+    Verweis „Mehr unter Prognosen“ auf „System“. API: `GET /api/learning/load`,
+    `POST /api/learning/load/train`, `GET /api/learning/candidates`, `GET /api/forecast/quality/daily`.
+  - **Deploy und Doku:** Migration `0013`, `lightgbm` und `numpy` im Extra `app`, `libgomp1` im Image
+    (das Image von `ems-app` wird rund 130 MB größer); Betriebshandbuch „Lastmodell (Phase 5a)“, Checkliste
+    `docs/verification/abnahme-phase-5a.md`, Spec „Stand Plan 5a“ in 5.2, 10.2, 10.3, 11.3, 13 und 18.
+  - **Offen (klein):** die Liste unter „Bewusst offen gelassen“, „Aufgeschobene Kleinigkeiten aus Plan 5a“;
+    an der Anlage das Ausrollen und die 28 Tage der Abnahme (Punkt 9 unter „Offen an der Anlage“).
 - **Images:** `ghcr.io/binda5000/bindaems-core:latest` und `ghcr.io/binda5000/bindaems-app:latest`.
   Sie sind öffentlich, und die CI setzt `latest` bei jedem Push auf `main`. core und app werden
   immer gemeinsam aus demselben Stand ausgerollt (gleiche Compose-Datei, gleiche Image-Tags): Die
@@ -620,6 +657,8 @@ Klimaanlage folgt der Betriebsart ihres Aktors (`thermal.klima`), im Dry-Run sen
   mit Abdeckungsgrenzen (≥ 75 % insgesamt, ≥ 90 % für `core/safety`, `core/control` und
   `core/actuators`), Vitest mit svelte-check, Prettier und ESLint; dazu E2E mit Playwright.
 - **Offen:**
+  - an der Anlage: Plan 5a (nur `ems-app`) mit oder nach 4b und 6a ausrollen (Punkt 9 unter „Offen an
+    der Anlage“); danach die Abnahme 5a (28 Tage, `docs/verification/abnahme-phase-5a.md`)
   - an der Anlage: Plan 6a mit 4b nach der Abnahme der Phase 3 ausrollen (Punkt 8 unter „Offen an der
     Anlage“), vorher Routing und Firewall für UDP 5442; danach die Abnahme 6a (7 Tage Dry-Run, dann live)
   - an der Anlage: Plan 4b ausrollen, erst nach der Abnahme der Phase 3 und als Schritt des Betreibers
@@ -704,7 +743,7 @@ Klimaanlage folgt der Betriebsart ihres Aktors (`thermal.klima`), im Dry-Run sen
 
 | Dokument | Inhalt |
 |---|---|
-| `docs/superpowers/specs/2026-10-08-bindaems-design.md` | Spec, verbindlich. Wichtig: 7 Regelung, 8 Sicherheit, 13 Web-UI, 14 Login, 17 Prüfprotokoll, 18 Phasenplan, 19 offene Punkte. Die Absätze „Stand Plan 2a/2b/2c-1/2c-2a/2c-2b/2d/3a/3b/3c/4a/4b/6a“ gehen dem älteren Text davor vor |
+| `docs/superpowers/specs/2026-10-08-bindaems-design.md` | Spec, verbindlich. Wichtig: 7 Regelung, 8 Sicherheit, 13 Web-UI, 14 Login, 17 Prüfprotokoll, 18 Phasenplan, 19 offene Punkte. Die Absätze „Stand Plan 2a/2b/2c-1/2c-2a/2c-2b/2d/3a/3b/3c/4a/4b/6a/5a“ gehen dem älteren Text davor vor |
 | `docs/superpowers/plans/2026-10-08-phase-1a-fundament-datenerfassung.md` | Plan 1a (core) |
 | `docs/superpowers/plans/2026-10-09-phase-1b-app-backend.md` | Plan 1b (app) |
 | `docs/superpowers/plans/2026-10-09-phase-1c-web-ui.md` | Plan 1c (UI), mit Anhang A zu den API-Formen |
@@ -726,11 +765,13 @@ Klimaanlage folgt der Betriebsart ihres Aktors (`thermal.klima`), im Dry-Run sen
 | `docs/superpowers/plans/2026-10-18-phase-4b-geplantes-laden.md` | Plan 4b, 19 Tasks, umgesetzt, seit dem 19.10.2026 auf `main` (nicht ausgerollt): Modus „Geplant“ mit Ziel-SOC und Abfahrt, Ladestand der Autos, späteste Startzeit, Tesla-Ladelimit, die Autos im Optimierer mit Regel R2, Ersatzplan für Autos, HA vollständig, Benachrichtigungen komplett, Zählung für die Abnahme „Ziel-SOC“, Simulator- und Planungsszenarien; die 17 Entscheidungen des Betreibers vom 18.10.2026, Präzisierungen gegenüber der Spec, Texte |
 | `docs/superpowers/plans/2026-10-19-phase-6a-klimaanlage.md` | Plan 6a, 13 Tasks, umgesetzt, seit dem 20.10.2026 auf `main` (nicht ausgerollt): CoE-Codec und Adapter, Safety-Familie `thermal`, Aktor mit Echo, Strategie mit Rangfolge Akku → Autos → Klima, Hinweis aus dem Plan, UI, HA, Telemetrie, Werkzeuge, Simulator; die 16 Entscheidungen vom 19.10.2026 |
 | `docs/superpowers/plans/2026-10-19-phase-6a-entscheidungen.md` | Festlegungen R1 bis R32 der Umsetzung von Plan 6a (je mit Kosten, falls falsch) und die offenen Kleinigkeiten |
+| `docs/superpowers/plans/2026-10-20-phase-5a-lastmodell.md` | Plan 5a, 14 Tasks, umgesetzt auf dem Branch `claude/phase-5-plan-s7xe0n` (noch nicht auf `main`, nicht ausgerollt): Wetterarchiv, HA-Sensoren, Merkmale, LightGBM, Backtest, Registry, Aktivierungsregel, Schattenbetrieb, Seite „Prognosen“, Einstellungen „Lastmodell“; die Einordnung teilt Phase 5 in 5a, 5b und 5c; die 17 Entscheidungen des Betreibers vom 20.10.2026, Präzisierungen, Texte |
 | `cerbo-watchdog/README.md` | Watchdog: Zustände, Zeiten, D-Bus-Pfade, Installation und Probe |
 | `docs/verification/abnahme-phase-1.md` | Checkliste für die Abnahme der Phase 1 |
 | `docs/verification/abnahme-phase-4.md` | Checkliste für die Abnahme der Phase 4: Teil Statistik (Plan 4a, 30 Tage ab dem Ausrollen, Abgleich innerhalb ±1 %), „Ziel-SOC“ (mindestens 95 % der machbaren geplanten Ladungen, `GET /api/stats`) und „HA in beide Richtungen“ (Tabelle aller Bedienelemente) aus Plan 4b |
 | `docs/verification/abnahme-phase-6a.md` | Checkliste für die Abnahme 6a: Empfangstabelle, Timeout, 7 Tage Dry-Run, im Live-Betrieb Bereich, Schrittregel, Rückkehr auf 0 und Echo; Abfragen auf Entscheidungslog und Influx |
-| `docs/verification/README.md` | Prüfprotokoll Teil 1, Preise, Teil 2 (`verify_part2`) und Watchdog-Probe: Aufruf und Ergebnis; Verweise auf die Abnahmen der Phasen 1, 4 und 6a; seit 6a der Punkt `thermal` und `coe_probe` |
+| `docs/verification/abnahme-phase-5a.md` | Checkliste für die Abnahme 5a (Lastmodell): 28 Tage ab dem Ausrollen, Prognosegüte (Modell mindestens 10 % besser oder Profil automatisch aktiv), Verfahren und Grund in der Karte „Lastprognose“, Registry (jede Nacht eine Version), `load-model` ohne Fehler, Rückfall bei fehlender Modelldatei |
+| `docs/verification/README.md` | Prüfprotokoll Teil 1, Preise, Teil 2 (`verify_part2`) und Watchdog-Probe: Aufruf und Ergebnis; Verweise auf die Abnahmen der Phasen 1, 4, 5a und 6a; seit 6a der Punkt `thermal` und `coe_probe` |
 | `README.md` | Entwicklung, Web-UI, Demo-Backend |
 
 ## Aufbau
@@ -806,6 +847,11 @@ Klimaanlage folgt der Betriebsart ihres Aktors (`thermal.klima`), im Dry-Run sen
     Home Assistant (`ha/commands.py`, seit 2d) und den Benachrichtigungen (`ha/notify.py`, seit 2d)
   - die Bedienung (`control/`, seit 2d): `intent.py` (Absicht aus der app), `decisions.py`
     (Entscheidungslog in SQLite und Markierungen für Grafana), `routes.py`
+  - seit 5a: das Lastmodell (`learning/`): `weather.py` (Wetterarchiv), `ha_sensors.py` (Sensoren aus
+    der HA-Datenbank), `features.py` (Merkmale und Trainingssatz), `model.py` (LightGBM), `backtest.py`,
+    `activation.py` (Aktivierungsregel), rein; dazu `registry.py` (Versionen in SQLite und als
+    Dateien), `service.py` (der Lerndienst: Training, Bewertung, Vorhersage, Status) und `routes.py`.
+    Die Lastprognose (`forecast/load.py`) gibt Profil und Modell aus und wählt das aktive Verfahren.
   - liefert das UI unter `/` aus
 - **`src/bindaems/shared`:** Konfiguration, Domänentypen (auch `control.py`: Befehle, Betriebsarten,
   Absicht; `decisions.py`: Entscheidung und ihr deutscher Text; seit 3b `plan.py`: Plan, Slot,
@@ -990,7 +1036,9 @@ Demo-Zugänge: `admin`, `bedienen` (Bedienen), `gast` (Lesen) und `sicher` (Admi
 - Docker auf einer VM im LAN des Betreibers, Images vom Stand nach Plan 4a (`fb23bd0`, laut Betreiber
   ausgerollt am 18.10.2026; davor 2c-1 bis 3b am 17.10.2026 mit `6a6904a` und der Stand nach 2b vom
   12.10.2026). Plan 4b ist nicht ausgerollt (erst nach der Abnahme der Phase 3); bis dahin kein
-  `docker compose pull`, denn `latest` enthält seit dem 19.10.2026 Plan 4b. Laut Betreiber
+  `docker compose pull`, denn `latest` enthält seit dem 19.10.2026 Plan 4b (und 6a). Plan 5a liegt
+  auf einem Branch; sobald er auf `main` ist, enthält `latest` auch ihn, und das Ausrollen folgt dem
+  von 4b und 6a. Laut Betreiber
   sind die Schritte zum Ausrollen erledigt (HA-Token, Mosquitto-ACL, `config.yaml`) und Leistungspreis
   und Planung eingerichtet.
 - Wallbox (`wallbox.evcs`) und Tesla laut Betreiber seit dem 17.10.2026 **live**, evcc abgeschaltet;
@@ -1350,6 +1398,34 @@ Demo-Zugänge: `admin`, `bedienen` (Bedienen), `gast` (Lesen) und `sicher` (Admi
      3. **Punkt `thermal`:** `verify_part2 --punkt thermal --geraet klima` (sendet nur auf Aufruf).
      4. **core starten, Dry-Run** (der core sendet 0) und 7 Tage beobachten, dann `thermal.klima` live
         und die Abnahme 6a.
+  9. **Lastmodell (Plan 5a) ausrollen**, mit oder nach dem gemeinsamen Ausrollen von 4b und 6a, also
+     nach der Abnahme der Phase 3; bis dahin kein `docker compose pull`. Das ist ein Schritt des
+     Betreibers, und nichts geht dabei von selbst live: Das Modell ändert nur die Eingabe des Planers
+     und gilt nur, wenn es in den letzten 14 Tagen mindestens 10 % genauer ist als das Profil. Die
+     Schritte stehen im Betriebshandbuch, „Lastmodell (Phase 5a)“, „Lastmodell ausrollen (Plan 5a)“,
+     und in `docs/verification/abnahme-phase-5a.md`:
+     1. **Datenbank kopieren** (empfohlen): `/backup/vor-plan-5a.sqlite3`; eine ältere app startet
+        mit der Migration `0013` nicht (Betriebshandbuch 4, „Rollback auf einen Stand vor Plan 5a“).
+     2. **Ausrollen:** nach (oder mit) 4b und 6a nur die app:
+        `docker compose pull ems-app && docker compose up -d ems-app`. Der core bleibt, der Regelbetrieb
+        bleibt an. Das Image ist rund 130 MB größer (LightGBM und `libgomp1`).
+     3. **Beim Start:** Die Migration `0013` läuft (`weather_slot`, `model_registry`), die Temperatur-Historie
+        (92 Tage von Open-Meteo) wird einmal geholt, und das erste Training läuft gleich danach. Hat die
+        Abrechnung noch keine 28 Tage mit Daten, steht auf der Seite „Prognosen“ „Zu wenig Daten: {n} von
+        28 Tagen.“, und jede Nacht um 03:15 Uhr folgt ein neuer Versuch.
+     4. **Sensoren wählen** (optional): unter **Einstellungen** → „Lastmodell“ bis zu 8 Entitäten aus der
+        HA-Datenbank (etwa Anwesenheit `person.…`), dann auf **Prognosen** „Jetzt neu trainieren“.
+     5. **Abnahme 5a:** 28 Tage ab dem Ausrollen. Auf „Prognosen“ (Zeitraum „28 Tage“) hat „Last Modell“
+        mindestens 10 % niedrigeren MAE als „Last Profil“, **oder** das Profil war automatisch aktiv,
+        solange das Modell es nicht schaffte; dazu jede Nacht eine Version (Registry), keine Fehler in
+        `load-model` und der Rückfall bei fehlender Modelldatei, an der Anlage beobachtet (Datei
+        umbenennen, `ems-app` starten: „Verfahren: Profil“, danach trainiert die app von selbst neu).
+     6. **Bei der Abnahme zu wissen:** Das Modell ist zuerst nur im Schatten, bis die Regel es
+        aktiviert (ab 10 Tagen mit Werten im Schattenbetrieb, vorher entscheidet der Backtest). Der
+        Backtest ist etwas zu günstig, weil er mit der archivierten Temperatur rechnet; in den ersten
+        Wochen haben die Profile des Backtests wenig Historie, was das Profil dort schwächer macht.
+        Maßgeblich ist der Schattenbetrieb. Die Dauer eines Trainings an der Anlage ist nicht gemessen
+        (Zeitlimit 10 min); das Log nennt „Lastmodell trainiert“.
   - Teil 2 schreibt auf die Geräte: nicht während der 7 Tage der Abnahme Phase 1 und ihres
     24-h-Mitschnitts (`docs/verification/abnahme-phase-1.md`, 4.2 und 4.3). Seit dem
     19.10.2026 sind 4.2 und 4.3 überholt (`docs/verification/2026-10-19-abnahme-phase-1.md`).
@@ -1510,7 +1586,22 @@ Demo-Zugänge: `admin`, `bedienen` (Bedienen), `gast` (Lesen) und `sicher` (Admi
 5. **Phase 6a**, Klimaanlage (Spec 18, „Phase 6 – Wärme und Kälte“): umgesetzt, je Task und im
    Gesamtreview geprüft, Fix-Welle und Re-Review erledigt, seit dem 20.10.2026
    auf `main`, nicht ausgerollt (Kurzfassung). Es folgt das Ausrollen mit 4b nach der Abnahme der Phase 3 (Punkt 8 unter
-   „Offen an der Anlage“). Danach Phase 5; 6b (Wärmepumpe) frühestens Herbst 2027 nach Phase 5.
+   „Offen an der Anlage“). 6b (Wärmepumpe) frühestens Herbst 2027 nach Phase 5.
+6. **Phase 5**, Lernen (Spec 18), in drei Plänen (Entscheidung des Betreibers vom 20.10.2026;
+   Einordnung im Plan 5a):
+   - **5a Lastmodell und Prognosegüte:** umgesetzt und je Task geprüft, auf dem Branch
+     `claude/phase-5-plan-s7xe0n`, **noch nicht auf `main`** (die Integration braucht die Zustimmung des
+     Betreibers), nicht ausgerollt (Kurzfassung). Nur app und UI, der core bleibt gleich. Es folgt das
+     Ausrollen mit oder nach 4b und 6a (Punkt 9 unter „Offen an der Anlage“) und die Abnahme über 28 Tage.
+   - **5b Fahrverhalten (als Nächstes, eigener Plan):** Abfahrt, Ankunft und SOC bei Ankunft je Auto und
+     Wochentag lernen (Ladesessions seit 4a, Tessie `at_home` und `plugged`, HA `home_entity`), Vorschläge
+     für Abfahrt (20. Perzentil) und Ziel-SOC mit Konfidenz, optionale Automatik für „Geplant“,
+     Anwesenheitsprognose für den Optimierer und damit die Akku-Unterstützung für PV-Autos im MILP
+     (Spec 10.4). Es braucht einige Wochen Ladesessions; die laufen seit dem 18.10.2026. „Vorschläge
+     erscheinen mit Konfidenz“ gehört zu seiner Abnahme.
+   - **5c Vorheizen und Vorkühlen (später):** ein Wärmemodell des Hauses aus den Daten der Klimaanlage und
+     die Klimaanlage als flexible Last im Planer. Es braucht Wochen mit Daten aus 6a, also erst nach dem
+     Ausrollen von 6a; ob 5c allein oder mit 6b kommt, entscheidet der Betreiber dann.
 
 ### Nächster Schritt: die Anlage
 
@@ -1558,6 +1649,13 @@ Demo-Zugänge: `admin`, `bedienen` (Bedienen), `gast` (Lesen) und `sicher` (Admi
      Dann wird Plan 4b ausgerollt (Modus „Geplant“, Regel R2, die Autos im Planer; umgesetzt auf dem
      Branch, Punkt 7 unter „Offen an der Anlage“); die Statistik aus 4a ist schon gebaut und kann
      vorher ausgerollt werden (Punkt 6 dort).
+8. **Plan 5a** (Lastmodell) ist umgesetzt und je Task geprüft, auf dem Branch
+   `claude/phase-5-plan-s7xe0n` und noch nicht auf `main` (Kurzfassung). Es folgen:
+   - die **Integration auf `main`** (Fast-Forward, nur mit Zustimmung des Betreibers, nach Gesamtreview
+     und grüner CI des Branch-Kopfs, auch dem Bau des Images mit `libgomp1`);
+   - an der Anlage das Ausrollen von `ems-app` mit oder nach 4b und 6a (Punkt 9 unter „Offen an der
+     Anlage“) und die Abnahme über 28 Tage;
+   - als nächster Plan **5b (Fahrverhalten)**, Spec 10.4 und 18; danach 5c (Vorheizen und Vorkühlen).
 
 ## Hinweise für die Pläne 2c-2 und 2d
 
@@ -2873,3 +2971,159 @@ Nacharbeit vom 18.10.2026 erledigt hat, steht nicht mehr hier. Offen sind:
   Ausdrücke nur nach `FROM`, `=~` und `!~`; heute erzeugt kein Aufrufer etwas anderes.
 - **Abnahme:** Hat eine Größe nie einen Zählerwert (etwa PV bei DC-Kopplung), steht auf der Karte
   „Abgleich“ dauerhaft „Ohne Zählerwerte: PV.“. Das ist richtig, aber bei der Abnahme zu wissen.
+
+Entschieden in Plan 5a; die 17 Entscheidungen hat der Betreiber am 20.10.2026 mit dem Plan freigegeben
+(„Ja passt“; `docs/superpowers/plans/2026-10-20-phase-5a-lastmodell.md`, „Entscheidungen“, und Spec 18,
+„Stand Plan 5a“). Die Festlegungen der Umsetzung stehen unten und, soweit sie das Verhalten betreffen, in
+den Absätzen „Stand Plan 5a“ der Spec und im Betriebshandbuch („Lastmodell (Phase 5a)“). Hier alles
+kurz, mit der Alternative oder den Kosten, falls es falsch ist:
+
+- **Die Entscheidungen (mit der Alternative aus dem Plan, soweit der Plan eine nennt):**
+  1. **Zuschnitt der Phase 5:** 5a Lastmodell und Prognosegüte, 5b Fahrverhalten, 5c Vorheizen und
+     Vorkühlen (nach Daten aus 6a). Nicht in 5a: Fahrverhalten, Vorheizen und Vorkühlen, Quantile P25/P75
+     für die Last (der Planer nutzt nur P50), ein Modell für die PV (die Kalibrierung aus 3a bleibt), neue
+     Sensoren in Home Assistant, Grafana.
+  2. **Nur app, core unverändert:** `shared/settings.py` bekommt einen Abschnitt, den nur die app liest.
+     An der Anlage genügt der Neubau von `ems-app` mit Regelbetrieb an. Falls falsch: ein Typ in `shared`
+     ändert das core-Image.
+  3. **LightGBM als neue Abhängigkeit** mit festen Parametern (deterministisch, ein Thread), ohne Suche
+     nach Hyperparametern. Das Image wird rund 130 MB größer und braucht `libgomp1`. Alternative: ein
+     eigenes lineares Modell ohne neue Abhängigkeit; es bildet Wechselwirkungen (Uhrzeit × Temperatur)
+     nicht ohne Handarbeit ab.
+  4. **Lerndaten der Hauslast** wie beim Profil (Abrechnung, nur vollständige Slots; HA nur mit
+     `homeassistant.load_history`), Fenster 56 Tage; trainiert wird erst ab 28 Tagen mit je mindestens
+     80 von 96 Slots. Falls falsch (es gibt doch eine passende HA-Entität der Hauslast): `load_history`
+     wirkt auch für das Modell.
+  5. **Merkmale:** Kalender, Vorlauf, Temperatur (Slot und Tagesmittel), Last vor 1 und 7 Tagen, mittlere
+     Last der letzten Stunde, das Profil selbst und die gewählten Sensoren; Fehlendes bleibt leer.
+  6. **Temperatur aus einem Wetterarchiv** (`weather_slot`) mit einmaliger Nachholung von 92 Tagen. Im
+     Training gilt die archivierte, in der Vorhersage die aktuelle Prognose; das macht den Backtest etwas
+     zu günstig, der Schattenbetrieb misst ehrlich. Alternative: die gemessene Außentemperatur aus HA; für
+     die Zukunft gibt es sie nicht, als Sensor (7) kannst du sie trotzdem wählen.
+  7. **HA-Sensoren als Merkmale:** bis zu 8, Wert = Mittel des letzten vollständigen Slots vor der Ausgabe,
+     für den ganzen Vorlauf fortgeschrieben; Auswahl unter Einstellungen, versioniert; eine Änderung wirkt
+     ab dem nächsten Training.
+  8. **Ausgabezeitpunkte** 00:00, 06:00, 12:00 und 18:00 Uhr lokal, je Ausgabe alle Slots bis 72 h danach
+     mit Ist-Wert; Vorhersage stündlich zur Minute 9; Ziel ist der Median (`l1`).
+  9. **Training** nachts um 03:15 Uhr, beim Start ohne Modell und per Taste (Admin); 14 Versionen plus die
+     aktive; Thread mit Zeitlimit 10 min.
+  10. **Backtest** mit rollierendem Startpunkt über 2 bis 8 Wochen, verglichen mit dem Profil des jeweiligen
+      Tages, Ergebnis je Woche und Vorlaufklasse.
+  11. **Aktivierung** ab 10 % niedrigerem MAE über die letzten 14 vollen Tage, Grundlage Schattenbetrieb
+      (ab 10 Tagen mit Werten), sonst Backtest, sonst Profil; ohne Hysterese. Alternative aus dem Plan:
+      Abschalten erst unter 5 %, das verhinderte ein Hin und Her an der Grenze. Falls falsch: Die Regel
+      täglich neu anzuwenden kann an der Grenze zwischen Modell und Profil wechseln lassen; die Planung
+      nimmt jeweils nur die Prognose, nichts an der Anlage ändert sich.
+  12. **Schattenbetrieb:** jede Ausgabe schreibt Profil und Modell ins Archiv, `load` ist das aktive
+      Verfahren; Lücken füllt das Profil bis 10 % der Slots, darüber (oder bei einem Fehler) gilt das
+      Profil; Vorhersagen liegen zwischen 0 und dem 1,5-Fachen des höchsten Trainingswerts.
+  13. **Seite „Prognosen“** mit den Karten „Lastprognose“, „Prognosegüte“, „Fehler je Tag“, „Backtest“ und
+      „Merkmale“, in der Navigation nach „Zeitplan“, für alle Rollen.
+  14. **Sensorauswahl** unter Einstellungen → „Lastmodell“ mit dem Schalter „Lastmodell verwenden“.
+  15. **Rückfall:** Scheitert das Training, bleibt die bisherige Version; fehlt die Datei, gilt die Version
+      als unbrauchbar und das Profil; die Komponente `load-model` nennt den Zustand.
+  16. **Abnahme:** 28 Tage ab dem Ausrollen (Modell mindestens 10 % besser oder Profil automatisch aktiv,
+      dazu Training jede Nacht, keine Fehler in `load-model`, Rückfall beobachtet).
+  17. **Nichts geht von selbst live:** 5a schaltet nichts an der Anlage, es ändert nur die Eingabe des
+      Planers.
+- **Festlegungen der Umsetzung (R1 bis R11 des Controllers, je mit Kosten, falls falsch):**
+  - **R1: Entscheidung als JSON.** `ModelRegistry.decide` nimmt die Entscheidung als Zuordnung (die
+    Aktivierung als JSON) und das Kennzeichen `active` statt eines Objekts, weil die Registry (Task 7) vor
+    der Aktivierung (Task 8) gebaut wurde. Falls falsch: eine kleine Signaturänderung im Lerndienst.
+  - **R2: Genau 10 % aktiviert.** Der Vergleich hat eine Toleranz von 1e-9, damit eine Verbesserung von
+    genau 10 % trotz Rundung der Gleitkommazahlen aktiviert, wie die Spec „mindestens 10 %“ sagt. Falls
+    falsch: Der Grenzfall verschiebt sich um 1e-9, ohne praktische Wirkung.
+  - **R3: Migrationstests** stehen in `tests/unit/app/test_db.py` (dem bisherigen Ort), nicht in einer
+    neuen Datei. Falls falsch: nur der Ort der Datei.
+  - **R4: Volle Läufe gestückelt.** Je Task lief die Prüfkette in vier parallelen Teilen ohne Abdeckung;
+    der volle Lauf mit `--cov` kam einmal am Ende (Task 14). Falls falsch: Eine Abdeckungslücke fiele erst
+    am Ende auf.
+  - **R5: Wochenzahl als eigene Funktion.** `week_count(days_with_data)` in `backtest.py` rechnet die
+    Zahl der Testwochen (höchstens 8, mindestens 2, sonst keine); eine Woche, deren Training scheitert,
+    entfällt, bleibt keine, gibt es keinen Backtest. Falls falsch: ein Test bräuchte 8 Trainings.
+  - **R6: Commit-Zeilen einheitlich.** Alle Commits der Umsetzung tragen dieselbe Zuordnung (die Zeilen
+    aus der Vorgabe der Sitzung); ein Unterauftrag mit anderer Vorgabe wurde angeglichen. Falls falsch:
+    nur der Text der Schlusszeile.
+  - **R7: Backtest als Grundlage der Aktivierung** nur, wenn er im Fenster der letzten 14 Tage an
+    mindestens 10 Tagen Werte hat (Tage ohne Werte zählen nicht), sonst „zu wenige Tage“. Die Reihenfolge
+    der Gründe ist: Schalter aus, kein Modell, dann die Rechnung; die Zahlen der Grundlage werden auch bei
+    Schalter aus und ohne Modell gefüllt, damit die Seite den Vergleich zeigt. Falls falsch: nur die
+    Logik der Aktivierung ändert sich.
+  - **R8: Der Satz rundet ab.** Der Satz „Das Modell ist nur {x} % genauer, nötig sind 10 %“ rundet
+    positive Werte ab (9,6 % heißt „nur 9 %“), damit er sich nie widerspricht. Falls falsch: nur der
+    angezeigte Text.
+  - **R9: Archivarten früher.** Die Arten `load_profile` und `load_model` gibt es im Archiv schon ab
+    Task 9, denn der Lerndienst liest die Schatten; die Güte rechnete bis Task 10 weiter nur PV und Last.
+    Falls falsch: Task 10 hätte nur zwei Zeilen verschoben.
+  - **R10: Mindestdaten über 56 Tage.** Die 28 Tage zählen die Tage mit Daten in den 56 Trainingstagen,
+    der Backtest bekommt die Zahl über das ganze geladene Fenster (56 Tage plus bis zu 8 Wochen).
+    „Zu wenig Daten“ heißt damit: Das Training hätte zu wenig. Falls falsch: eine einzelne Zählung.
+  - **R11: Anteil am Gewinn.** `in_model` eines Sensors bleibt „Anteil am Gewinn über 0“ (die Seite zeigt
+    „nicht im Modell“ für einen Sensor ohne Anteil); `GET /api/learning/load` nimmt den Zustand des
+    Dienstes unverändert und ergänzt nur `method` aus der zuletzt ausgegebenen Lastprognose; die Route
+    der Taste ist `async`, weil sie die laufende Ereignisschleife braucht. Falls falsch: Der Dienst
+    müsste zusätzlich speichern, welche Sensoren im Training Werte hatten.
+  - **Wetterarchiv ohne Aufräumen:** `weather_slot` wächst um rund 35 000 Zeilen im Jahr, das Training
+    braucht 112 Tage; ein Aufräumen ist nicht gebaut. Falls falsch: ein Löschlauf im Nachtlauf.
+  - **Weitere Festlegungen beim Bau:** Der Feiertag kommt aus `is_holiday()` in `app/daytype.py`. Bei der
+    doppelten Stunde im Herbst gilt für die Last vor einem Tag der erste Durchlauf; an Tagen ohne
+    passenden Slot ist das Merkmal leer. Der Trainingssatz begrenzt Ausgaben und Ziele durch das Ende des
+    Fensters. Die Wochen des Backtests enden an der lokalen Mitternacht, damit an der Zeitumstellung
+    nichts doppelt zählt. Die Temperatur-Historie wird beim Start über ein Ereignis abgewartet (höchstens
+    600 s), bevor das erste Training beginnt. Die Schemas des UI sind valibot (der Plan nannte Zod). Die
+    Vorlaufklasse heißt auch auf „System“ „0–6 h“.
+
+Aufgeschobene Kleinigkeiten aus Plan 5a (aus den Reviews; keine davon gefährdet die Anlage, denn das
+Modell ändert nur die Eingabe des Planers, und das Profil fängt jeden Fehler ab). Reine Testpflege ist hier
+nicht aufgeführt. Offen sind:
+
+- **Wetterarchiv:** Die Nachholung stempelt `issued_at` vor dem Abruf, deshalb können wenige Slots im
+  Überlapp mit einer Prognose einen etwas älteren Wert tragen. Das Archiv wird nicht aufgeräumt.
+- **HA-Sensoren:**
+  - Die Kandidatenliste fragt den letzten Wert und die letzte Einheit mit zwei Selektoren; InfluxDB
+    liefert dann nicht die Zeit des Punkts. Der Tiebreak „jüngste Reihe“ wirkt nur für Entitäten in
+    mehreren Messungen. Das betrifft nur einen Wechsel der Einheit und die Anzeige der Einheit.
+  - Steht eine Entität in der Messung der Entität und in der der Einheit, gewinnt die spätere still.
+  - Hilfen zur Zahl und zum HA-Verweis gibt es dreimal (hier, bei den Verbrauchern und in der
+    Lastprognose).
+  - Ohne HA-Reader liefert der Server eine leere Liste ohne Grund, und die Einstellungen markieren jeden
+    gespeicherten Sensor mit „nicht in HA gefunden“.
+- **Merkmale und Modell:**
+  - Ein `NaN` in der Last vergiftet `recent_w` (das Training filtert endliche Werte).
+  - Das Training berechnet alle Spalten und dünnt sie dann aus; das ist langsamer als nötig.
+  - Beim Laden wird `max_w` nicht geprüft; ein `NaN` aus der Vorhersage würde still zu 0, und ein Fehler von
+    LightGBM bei der Vorhersage ist nicht zugeordnet (die Lastprognose fängt jede Ausnahme und nimmt das
+    Profil).
+- **Registry:** `decide` prüft die Art der Version nicht; scheitert der Commit nach dem Schreiben der
+  Datei, bleibt eine Modelldatei verwaist (nicht dokumentiert); das in `decision` gespeicherte `active` kann
+  nach einem späteren Wechsel veraltet sein (die API zeigt die Spalte `active`); die Gewichtung des
+  Backtests steht in `backtest_json` und in `improvement()` doppelt.
+- **Aktivierung:** Hat das Profil im Fenster keinen Fehler, aber das Modell, lautet der Satz „nur 0 %
+  genauer“. Je Slot und Vorlaufklasse gilt die jüngste Ausgabe, im Zweifel die mit dem kürzesten Vorlauf
+  (eine Entwurfsentscheidung). Ein `or 0.0` ist überflüssig.
+- **Lerndienst:**
+  - Das Training um 03:15 Uhr fällt mit der nächtlichen Sicherung der Datenbank (ebenfalls 03:15 Uhr,
+    `BACKUP_AT`) zusammen; beide können gleichzeitig laufen.
+  - Ist beim Start die gespeicherte Entscheidung „disabled“ und der Schalter inzwischen an, bewertet der
+    Dienst erst um 03:15 Uhr neu. Eine Bewertung, die hinter einem langen Training wartet, behält bis dahin
+    „disabled“. Ein zweites Training kann hinter einer Bewertung
+    in die Warteschlange (sie laufen nacheinander). `close()` wartet nicht auf andere Datenbankaufrufe im
+    Thread.
+  - Bei Lücken fragt die Lastprognose die HA-Historie über 112 Tage ab (`_ha_samples`); an der Anlage ist
+    `load_history` nicht gesetzt, dort greift das nicht.
+- **Lastprognose:** Ein Satz im Docstring von `_predict` ist verschachtelt; `model.active()` wird zweimal
+  gelesen; jede Ausgabe schreibt das Archiv in drei getrennten Aufrufen (je ein Thread).
+- **UI:**
+  - Nach einer Antwort 409 („Training läuft schon.“) bleibt die Meldung stehen und hat die Stufe Fehler.
+  - Die Seite fragt den Stand eines Trainings auch im verborgenen Tab ab.
+  - Der Verlauf „Fehler je Tag“ markiert veraltete Werte nicht; die Karte „Lastprognose“ zeigt zusätzlich
+    zum Satz einen Status-Punkt.
+  - Die Prüfung auf die Obergrenze von 8 beim Wählen eines Sensors ist im Code nicht erreichbar (die
+    Auswahl ist ab 8 gesperrt).
+- **Tests und CI:** In `stats.spec.ts` („Statistik wechselt den Zeitraum“) zeigt die Kachel „Kosten“ in
+  einzelnen Läufen „–“. Das trat in der GitHub-CI (Lauf 414) und im jeweils ersten lokalen Lauf der Tasks
+  12 und 13 auf, ohne dass diese die Statistik berührten. Es ist ein bekannter, von Plan 5a unabhängiger
+  Flake; der Test ist nicht angepasst und sollte robust gemacht werden (nicht übersprungen).
+- **Abnahme:** Das Modell ist zuerst im Schatten; bis dahin entscheidet der Backtest, der mit der
+  archivierten Temperatur rechnet und in den ersten Wochen wenig Historie für das Profil hat und damit
+  etwas zu günstig ist. Die Dauer eines Trainings an der Anlage und der Speicher dafür sind nicht gemessen.
