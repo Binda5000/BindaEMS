@@ -14,7 +14,7 @@
 
 	const KINDS: Record<QualityRow['kind'], string> = {
 		pv: 'PV',
-		load: 'Last',
+		load: 'Last (verwendet)',
 		load_profile: 'Last Profil',
 		load_model: 'Last Modell'
 	};

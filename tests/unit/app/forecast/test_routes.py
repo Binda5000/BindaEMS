@@ -167,7 +167,12 @@ def test_quality_daily_sorted_by_date_and_kind(client, auth, clock, archive, led
     early = datetime(2026, 10, 14, 8, 0, tzinfo=UTC)
     _rate(archive, ledger, quality, late, {"load_model": 900, "load": 1000, "pv": 1000})
     _rate(archive, ledger, quality, early, {"load_profile": 1100, "load_model": 700})
-    # eine zweite Vorlaufklasse am selben Tag: beide zählen zusammen
+    # zweiter Slot im Nahbereich und ein Slot in der Klasse 6–24 h am selben Tag: die Klassen haben
+    # ungleich viele Slots (2 gegen 1), das Tagesmittel zählt nach Slots (400 / 3) und ist nicht
+    # das Mittel der Klassenmittel (150)
+    next_slot = late + timedelta(minutes=15)
+    archive.record("load_model", next_slot - timedelta(hours=3), {next_slot: RecordValue(900, 900)})
+    ingest(ledger, next_slot, {"grid>house": 200})
     archive.record("load_model", late - timedelta(hours=15), {late: RecordValue(1000, 1000)})
     quality.update(late.astimezone(LOCAL_TZ).date())
     login_as(client, auth, "viewer")
@@ -178,7 +183,7 @@ def test_quality_daily_sorted_by_date_and_kind(client, auth, clock, archive, led
         ("2026-10-14", "load_model", 1, 100.0),
         ("2026-10-15", "pv", 1, 1000.0),
         ("2026-10-15", "load", 1, 200.0),
-        ("2026-10-15", "load_model", 2, 150.0),
+        ("2026-10-15", "load_model", 3, 400.0 / 3),
     ]
     assert set(body["rows"][0]) == {"date", "kind", "n", "mae_w"}
 

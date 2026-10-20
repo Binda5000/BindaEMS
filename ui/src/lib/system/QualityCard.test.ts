@@ -58,7 +58,7 @@ it('benennt Last und die anderen Vorläufe, fehlende relative Abweichung ist ein
 		},
 		error: null
 	});
-	expect(screen.getAllByText('Last')).toHaveLength(2);
+	expect(screen.getAllByText('Last (verwendet)')).toHaveLength(2);
 	expect(screen.getByText('6–24 h')).toBeTruthy();
 	expect(screen.getByText('über 24 h')).toBeTruthy();
 	expect(screen.getByText('–')).toBeTruthy();

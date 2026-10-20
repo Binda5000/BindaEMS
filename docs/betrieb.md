@@ -4017,7 +4017,7 @@ Vorlaufklasse bleibt die Ausgabe, deren Vorlauf der Klassenmitte am nächsten li
 Slot. Bei PV zählen nur Viertelstunden, in denen Prognose oder Ist die Schwelle erreichen, sonst
 verwässern die Nachtstunden den Fehler.
 
-Je Art (PV, Last) und Vorlaufklasse (bis 6 h, 6 bis 24 h, über 24 h) zeigt die Karte
+Je Art (PV, Last, Last Profil, Last Modell) und Vorlaufklasse (bis 6 h, 6 bis 24 h, über 24 h) zeigt die Karte
 **Prognosegüte** auf der Seite „System“ für die letzten 14 Tage:
 
 | Spalte | Bedeutung |
@@ -4029,7 +4029,9 @@ Je Art (PV, Last) und Vorlaufklasse (bis 6 h, 6 bis 24 h, über 24 h) zeigt die 
 
 Fehler = Prognose (P50) − Ist. Ohne Daten steht „Noch keine Kennzahlen.“ in der Karte. Dieselben
 Zahlen liefert die API, eingeloggt und mit beliebiger Rolle: `GET /api/forecast/quality?days=14`
-(`days` von 1 bis 60). Eine eigene Seite dafür folgt mit Phase 5.
+(`days` von 1 bis 60); die Zeilen gibt es für PV, die ausgegebene Last (`load`) und die beiden
+Schatten `load_profile` und `load_model`. Die Aufrufe stehen im Unterabschnitt „API für Lastmodell
+und Prognosegüte“ unten. Eine Seite „Prognosen“ mit diesen Zahlen folgt.
 
 ### API für Lastmodell und Prognosegüte
 

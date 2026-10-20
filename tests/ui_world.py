@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import math
 import re
+from collections.abc import Sequence
 from datetime import UTC, datetime, time, timedelta
 from pathlib import Path
 from typing import Any
@@ -56,7 +57,7 @@ from bindaems.app.forecast.openmeteo import OPEN_METEO_URL
 from bindaems.app.learning.backtest import BacktestResult, WeekResult
 from bindaems.app.learning.features import TrainingSet, feature_names, local_midnight
 from bindaems.app.learning.ha_sensors import _CANDIDATES_QUERY
-from bindaems.app.learning.model import MIN_ROWS, train
+from bindaems.app.learning.model import MIN_ROWS, TrainedModel, train
 from bindaems.app.learning.service import TrainingResult
 from bindaems.app.ledger.checks import EXPORT_COUNTER, IMPORT_COUNTER
 from bindaems.app.planning.process import solve_inline
@@ -690,6 +691,23 @@ BACKTEST_MAE: dict[HorizonClass, tuple[float, float]] = {
 }
 
 
+class _RoundedModel:
+    """Das geladene Modell, dessen Vorhersagen auf 0,1 W gerundet sind: Die letzten Stellen von
+    LightGBM hängen von Rechner und Wheel ab und dürften nicht in die Vertragsdateien."""
+
+    def __init__(self, model: TrainedModel) -> None:
+        self._model = model
+        self.features = model.features
+        self.max_w = model.max_w
+        self.text = model.text
+
+    def predict(self, rows: Sequence[Sequence[float]]) -> list[float]:
+        return [round(value, 1) for value in self._model.predict(rows)]
+
+    def importance(self) -> dict[str, float]:
+        return self._model.importance()
+
+
 def _demo_training_set(names: tuple[str, ...]) -> TrainingSet:
     """Erfundene Zeilen, nur damit ein echtes Modell entsteht: Die Last folgt der Uhrzeit
     (Spitzen am Morgen und Abend), die übrigen Merkmale sind Beiwerk; der Sensor ohne Werte bleibt
@@ -779,6 +797,9 @@ async def _learning(app: AppRuntime) -> None:
         )
     _shadow_rows(app)
     await app.load_model._load_latest()
+    loaded = app.load_model._model
+    assert loaded is not None
+    app.load_model._model = _RoundedModel(loaded)  # type: ignore[assignment]
     await app.load_model.evaluate()
     local = MODEL_TRAINED_AT.astimezone(LOCAL_TZ)
     app.load_model._result = TrainingResult(
