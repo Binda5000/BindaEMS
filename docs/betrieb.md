@@ -3996,7 +3996,8 @@ Wallboxen und ohne Akkuladung:
   Uhrzeit mindestens 3 Stichproben, gilt dieselbe Uhrzeit über alle Tagestypen, dann der Median
   aller Stichproben. Ohne Stichprobe gibt es keine Prognose.
 - **Ausgabe:** stündlich zur Minute 9 für die Viertelstunden vom laufenden Slot bis zum Ende des
-  übernächsten Tages. Das Profil baut die app beim Start und beim ersten Lauf eines neuen Tages
+  übernächsten Tages; außer der Reihe gleich, wenn das Lastmodell aktiv wird oder nicht mehr
+  (Abschnitt „Lastmodell (Phase 5a)“, „Aktivierung“). Das Profil baut die app beim Start und beim ersten Lauf eines neuen Tages
   neu. Bei einer Zeitumstellung bleibt die Zuordnung über die lokale Uhrzeit; die doppelte Stunde
   im Oktober hat in beiden Durchläufen den Wert des Profils.
 - **Quellen:** Die Hauslast kommt aus der Abrechnung (`ledger_slot`: Flüsse `*>house`), nur aus
@@ -4165,6 +4166,7 @@ der Trainingsdaten (Spec 10.5).
    die bisherige Version.
 5. **Ausgeben:** Bei jeder stündlichen Ausgabe der Lastprognose (Minute 9) rechnen Profil und Modell,
    beide Ergebnisse gehen in das Archiv, und als Lastprognose geht das aktive Verfahren hinaus.
+   Wechselt das Verfahren (Schalter, Bewertung), folgt gleich eine Ausgabe außer der Reihe.
 
 ### Mindestdaten und Nachtlauf
 
@@ -4215,8 +4217,12 @@ Hysterese.
   gespeicherte Entscheidung bis zur nächsten Bewertung; der Backtest fehlt bis zum nächsten Training,
   bis dahin entscheidet nur der Schattenbetrieb.
 - **Profil gilt** ohne brauchbares Modell, mit ausgeschaltetem Schalter „Lastmodell verwenden“
-  (Standard an) und bei jedem Fehler. Der Schalter wirkt sofort; das Modell rechnet im Schatten
-  weiter.
+  (Standard an) und bei jedem Fehler. Der Schalter wirkt sofort: Ausschalten gibt gleich eine neue
+  Lastprognose mit dem Profil aus, Einschalten bewertet gleich neu und gibt mit dem Modell aus, wenn
+  die Regel es aktiviert. Das Modell rechnet im Schatten weiter.
+- **Wechsel des Verfahrens:** Ändert sich, ob das Modell gilt (Schalter, Bewertung nach dem Training,
+  beim Start geladene Version), gibt die Lastprognose gleich neu aus, nicht erst zur Minute 9; die
+  neue Ausgabe löst wie jede andere die Planung aus.
 - **Die Gründe**, wie die Seite sie nennt:
 
 | Grund | Satz |
@@ -4245,7 +4251,7 @@ Hysterese.
 |---|---|
 | Training scheitert (auch bei voller Platte, die Datei wird dann gar nicht angelegt) oder hat zu wenig Daten | Die bisherige Version bleibt; die Aktivierung wird trotzdem neu bewertet. Die Seite nennt den Grund unter „Lastprognose“. |
 | Modelldatei fehlt oder ist nicht lesbar (etwa nach einer Rücksicherung der Datenbank) | Die Version gilt als unbrauchbar (Warnung „Lastmodell nicht lesbar, die Version wird nicht mehr verwendet“), die Planung nutzt das Profil, und das nächste Training legt eine neue Version an. |
-| Schalter „Lastmodell verwenden“ aus | Sofort Profil. |
+| Schalter „Lastmodell verwenden“ aus | Sofort Profil: Die Lastprognose gibt gleich neu aus, und die Planung rechnet damit. |
 | Sensor in HA fehlt, ist umbenannt oder nicht numerisch | Das Merkmal ist leer, das Training läuft; die Karte „Merkmale“ zeigt den Sensor als „nicht im Modell“. |
 | Auswahl der Sensoren ändert sich | Jedes Modell rechnet mit seiner eigenen Merkmalsliste: Ein entfernter Sensor ist leer, ein neuer zählt erst ab dem nächsten Training. |
 
