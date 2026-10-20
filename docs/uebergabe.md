@@ -81,18 +81,28 @@ Festlegungen und offene Kleinigkeiten in `docs/superpowers/plans/2026-10-19-phas
 mit 4b nach der Abnahme der Phase 3,** und vorher muss der Betreiber Routing und Firewall für UDP 5442
 zwischen 192.168.81.0/24 und 192.168.82.0/24 öffnen. Nichts geht dabei von selbst live: Die
 Klimaanlage folgt der Betriebsart ihres Aktors (`thermal.klima`), im Dry-Run sendet der core 0.
+**Plan 3d (Regel R1 nur, bis der Akku leer ist) ist umgesetzt, je Task und im Gesamtreview geprüft,
+und die Fix-Welle danach ist umgesetzt** (`docs/superpowers/plans/2026-10-20-phase-3d-regel-r1.md`, 4 Tasks,
+freigegeben vom Betreiber am 20.10.2026 mit den Entscheidungen 1 bis 6): seit dem 20.10.2026 **auf `main`**
+(zuvor Branch `claude/project-thread-707vv8`), **nicht ausgerollt**. Er ändert nur die app
+(Planung) und das Szenario-Werkzeug; core, `shared`, UI, HA und `config.yaml` bleiben gleich (siehe
+„Plan 3d“ unter „Kurzfassung“). **Ausgerollt wird nach Entscheidung 6 des Plans, wann der Betreiber
+es beschließt;** Vorschlag: zusammen mit 4b und 6a (Punkt 9 unter „Offen an der Anlage“). Wirken kann
+die Regel erst, wenn Victron live ist.
+
 **Plan 5a (Lastmodell, der erste Teil der Phase 5 „Lernen“) ist umgesetzt und je Task geprüft**
 (`docs/superpowers/plans/2026-10-20-phase-5a-lastmodell.md`, 14 Tasks, freigegeben vom Betreiber am 20.10.2026 mit allen 17 Entscheidungen: „Ja
-passt“): auf dem Branch `claude/phase-5-plan-s7xe0n` (ab `ee6ac9b`), **noch nicht auf `main`; die
+passt“): auf dem Branch `claude/phase-5-plan-s7xe0n` (ab `ee6ac9b`), **noch nicht auf `main` (auf dem Stand von `main` mit Plan 3d); die
 Integration braucht die Zustimmung des Betreibers**, und nicht ausgerollt. Jeder Task hat ein sauberes
-Review, fünf davon nach einer oder zwei Fix-Runden; der Gesamtreview über den Branch und die GitHub-CI
-auf dem Kopf des Branchs waren beim Schreiben dieser Übergabe noch offen. Plan 5a ändert nur die app, das UI,
+Review, fünf davon nach einer oder zwei Fix-Runden; der Gesamtreview über den Branch ist gemacht, seine
+Fix-Welle umgesetzt und nachgeprüft. Plan 5a ändert nur die app, das UI,
 `shared/settings.py` und `deploy/Dockerfile.app` (der core und sein Image bleiben gleich) und braucht
 an der Anlage nur den Neubau von `ems-app`, **mit oder nach dem gemeinsamen Ausrollen von 4b und 6a**,
 also nach der Abnahme der Phase 3. Er schaltet nichts an der Anlage: Das Modell ändert nur die Eingabe
 des Planers und gilt nur, solange es in den letzten 14 Tagen mindestens 10 % genauer ist als das
 Profil. Als Nächstes folgt **Plan 5b (Fahrverhalten)**, danach 5c (Vorheizen und Vorkühlen, erst mit
 Daten aus 6a).
+
 `main` ist seit dem 12.10.2026 auch der Standard-Branch auf GitHub.
 
 ## Kurzfassung
@@ -600,6 +610,75 @@ Daten aus 6a).
     Schätzung der Grundlast der Klimaanlage ist im Dry-Run nicht sichtbar; an der Anlage zu bestätigen:
     Absender der Pakete, Knotennummer und Einheit der Leistung, die Zeiten. Alles weitere steht in
     `docs/superpowers/plans/2026-10-19-phase-6a-entscheidungen.md`.
+- **Plan 3d (Regel R1 nur, bis der Akku leer ist) ist umgesetzt, je Task und im Gesamtreview geprüft,
+  und die Fix-Welle danach ist umgesetzt**
+  (Plan: `docs/superpowers/plans/2026-10-20-phase-3d-regel-r1.md`, 4 Tasks, Ausführung subagent-driven;
+  Branch `claude/project-thread-707vv8`, seit dem 20.10.2026 auf `main`, nicht ausgerollt). Anlass war die
+  Klarstellung des Betreibers vom 20.10.2026: R1 soll verhindern, dass Netzstrom den Akku füllt, den
+  die PV ohnehin gefüllt hätte; ist der Akku vor der nächsten Einspeisung leer (heute trüb, morgen
+  sonnig), darf er aus dem Netz laden. Nur app und Szenario-Werkzeug:
+  - **Nachrechnung** (`app/planning/plausibility.py`): `EMPTY_TOL_KWH = 0,1`, `charged_window_end` und
+    `export_while_charged_kwh` (Fenster vom `NETZLADEN`-Slot bis zum Ende des ersten Slots mit SOC ≤
+    Reserve + 0,1 kWh); `export_after_kwh` ist gelöscht. Prüfung, Kürzen der Absichten (`intents.py`),
+    Ersatzplan, Erklärung und Szenario rechnen damit.
+  - **Optimierer** (`app/planning/optimizer.py`): `R1_EMPTY_TOL_KWH = 0,05`; Binärvariable `e_t`
+    (`leer_t`), stetige `c_t` (`netz_im_akku_t`, `netz_im_akku_z_t`) und `r1_t: pv_x_t ≤ PV_t · (1 − c_t)`,
+    erst ab dem ersten Slot mit `z_t`. Die Lösezeit blieb gleich (längstes Planungsszenario 90,5 s auf
+    88,8 s, Gesamtzeit der Tests); Zeitlimit 20 s und `MIP_GAP` 0,005 unverändert.
+  - **Erklärung** (`explain.py`): „Kein Netzladen: Ab {um} Uhr speist die PV laut Prognose {kwh} kWh ein,
+    bevor der Akku leer ist (Regel R).“; `um` ist der erste Einspeise-Slot im Fenster, Code und Parameter
+    bleiben. Die Zahl „Netzladen vor tatsächlicher Einspeisung“ im Szenario-Bericht gilt jetzt über den
+    ganzen Lauf statt je Tag.
+  - **Doku:** Spec „Stand Plan 3d (20.10.2026)“ in 9.3 (mit den Verweisen in 9.4, 9.5, Präzisierung 19
+    und der Regel-R-Fassung von 3b), Betriebshandbuch („Planung“, Absatz „Regel R“, Prüfpunkt „Regel R“
+    unter „An der Anlage prüfen“, Tabelle der Erklärungen, Szenario-Bericht).
+  - **Rulings der Umsetzung:** `export_after_kwh` blieb bis Task 3, weil `explain.py` und das Szenario-
+    Werkzeug sie bis dahin nutzten; Task 1 stellte die Verstoß-Prüfung des Szenario-Werkzeugs
+    (`broken` in `tools/scenario/runner.py`) schon auf die neue Regel um, damit der Integrationslauf
+    von Task 2 nach ihr urteilt; der Test des Ersatzplans nutzt Last 0 in billigen Slots 0 bis 7 und PV ab
+    Slot 9 (bei 2 kW Last ist die Ladung vor der PV immer verbraucht, das Szenario des Plans sperrt nie);
+    ein Test des Optimierers lässt Netzladen bis zur Toleranz von 0,05 kWh zu (`gr_b < 1 oder
+    soc_end ≤ lo + R1_EMPTY_TOL_KWH`, Kosten falls falsch: höchstens 0,05 kWh Netzenergie je Fenster vor
+    der PV); Commits der Teilagenten tragen den Co-Authored-By des Modells, das sie schrieb.
+  - **Aufgeschobene Kleinigkeiten:** Task 1: die Änderung von `broken` im Szenario-Werkzeug hat keinen
+    eigenen Test (Task 3 deckt sie mit `r1_violations == 0`); ein Test `test_export_after_includes_the_slot`
+    entfiel mit `export_after_kwh`; `EMPTY_TOL_KWH` könnte `= R1_TOL_KWH` sein; ein Netzladen bis rund
+    0,1 kWh endet innerhalb der Toleranz und das Fenster ist ein Slot (stimmig mit der Toleranz); der Text
+    des Befunds „danach {kWh} kWh Einspeisung“ blieb. Task 2: Test 3 hat keine PV und beweist nur die
+    Lösbarkeit mit `lo = soc0`; `e` des letzten Slots wird angelegt und nicht gebraucht; der Docstring
+    sagt „Reserve + Toleranz“, `lo` ist `min(Reserve, soc0)`. Task 3: `_charge_before_export_kwh`
+    durchsucht den ganzen Lauf je Ladeslot (im schlimmsten Fall quadratisch, bei rund 2880 Slots für 30
+    Tage harmlos); kein Test hält einen Fall fest, in dem die alte Tagesgrenze zählte.
+  - **Fix-Welle nach dem Gesamtreview** (20.10.2026; Befunde in
+    `.superpowers/sdd/2026-10-20-phase-3d-regel-r1/final-fixes.md`, ein wichtiger, sonst Kleinigkeiten;
+    jeder Code-Fix mit einem Test, der vorher scheiterte):
+    1. *Wichtig:* Das Szenario-Werkzeug prüfte Regel R mit der Reserve des Laufs (`min(Reserve,
+       Start-SOC)`), die Nachrechnung jedes Plans rechnet aber mit dessen eigener (`min(Reserve, SOC zur
+       Planzeit)`). Startete ein Lauf unter der Reserve, zählte ein legitimes Netzladen als Verstoß
+       („Nicht bestanden“). `_Planned` trägt jetzt `lo_kwh` des Plans.
+    2. `_keep_rule_r1` kürzte um die ganze Einspeisung im Fenster, unter der neuen Regel oft PV über der
+       Ladeleistung (2 kW Netzladen wurde ganz zu `HALTEN`). Gekürzt wird jetzt höchstens um die Ladung,
+       die vor der ersten Einspeisung im Fenster noch über Reserve + `EMPTY_TOL_KWH` liegt (durch `η_ch`),
+       auf 100 W aufgerundet, mindestens 100 W je Runde (die Schleife endet).
+    3. Der Ersatzplan prüft R1 nach jedem Kandidaten für jedes `NETZLADEN`, nicht nur für den Kandidaten:
+       Ein früherer Slot konnte den Akku vor einem schon angenommenen über die Leer-Grenze heben.
+    4. Kontrollfall zum Optimierer-Test von R1: dieselben Eingaben ohne wirksame Sperre laden über die
+       Leer-Grenze hinaus aus dem Netz (die Sperre kommt also von R1).
+    5. Der Befund lautet jetzt „Regel R verletzt: Netzladen um HH:MM, danach {kWh} kWh Einspeisung,
+       bevor der Akku leer ist“ (Test des Wortlauts im Betriebshandbuch).
+    6. Spec 9.6 (Erklärungsregel `REGEL_R_BLOCKIERT_NETZLADEN`, „bevor der Akku leer ist“), 9.4 und
+       Präzisierung zur Kürzung nachgezogen; überlange Zeilen im Betriebshandbuch umgebrochen.
+    Damit sind aus den aufgeschobenen Kleinigkeiten der Text des Befunds und der fehlende Test der
+    Szenario-Prüfung erledigt. Voller Lauf nach der Fix-Welle: 7949 Python-Tests (4188 `core`, Kopf
+    und Dokumentation, 3382 app/`shared`/Watchdog/Werkzeuge, 333 Integration, 46 Property), alle
+    grün; ruff, mypy und import-linter sauber; Abdeckung 98,04 % insgesamt und 99,94 % für
+    `core/safety`, `core/control` und `core/actuators`. Die UI ist unverändert (kein Vitest-Lauf).
+  - **Tests auf dem Branch von Plan 3d** (20.10.2026): 7944 Python-Tests im vollen Lauf (in vier Teilen
+    parallel mit gemeinsamer Abdeckung gemessen: 4141 `core` und Kopf, 3378 app/`shared`/Watchdog/Werkzeuge,
+    46 Dokumentation, 333 Integration, 46 Property), alle grün; Vitest 696; ruff, mypy und import-linter
+    (4 Verträge) sauber; Abdeckung 98,03 % insgesamt und 99,94 % für `core/safety`, `core/control` und
+    `core/actuators` zusammen. Die Planungsszenarien (Integration) dauerten 38 Minuten bei vier
+    parallelen Läufen.
 - **Phase 5a (Lastmodell) ist umgesetzt und je Task geprüft**
   (Plan: `docs/superpowers/plans/2026-10-20-phase-5a-lastmodell.md`, 14 Tasks; Ausführung subagent-driven; Branch `claude/phase-5-plan-s7xe0n`, **noch nicht
   auf `main`, nicht ausgerollt**). Die app lernt die Hauslast zusätzlich mit LightGBM; das Profil der
@@ -624,7 +703,7 @@ Daten aus 6a).
     (das Image von `ems-app` wird rund 130 MB größer); Betriebshandbuch „Lastmodell (Phase 5a)“, Checkliste
     `docs/verification/abnahme-phase-5a.md`, Spec „Stand Plan 5a“ in 5.2, 10.2, 10.3, 11.3, 13 und 18.
   - **Offen (klein):** die Liste unter „Bewusst offen gelassen“, „Aufgeschobene Kleinigkeiten aus Plan 5a“;
-    an der Anlage das Ausrollen und die 28 Tage der Abnahme (Punkt 9 unter „Offen an der Anlage“).
+    an der Anlage das Ausrollen und die 28 Tage der Abnahme (Punkt 10 unter „Offen an der Anlage“).
 - **Images:** `ghcr.io/binda5000/bindaems-core:latest` und `ghcr.io/binda5000/bindaems-app:latest`.
   Sie sind öffentlich, und die CI setzt `latest` bei jedem Push auf `main`. core und app werden
   immer gemeinsam aus demselben Stand ausgerollt (gleiche Compose-Datei, gleiche Image-Tags): Die
@@ -664,7 +743,9 @@ Daten aus 6a).
   mit Abdeckungsgrenzen (≥ 75 % insgesamt, ≥ 90 % für `core/safety`, `core/control` und
   `core/actuators`), Vitest mit svelte-check, Prettier und ESLint; dazu E2E mit Playwright.
 - **Offen:**
-  - an der Anlage: Plan 5a (nur `ems-app`) mit oder nach 4b und 6a ausrollen (Punkt 9 unter „Offen an
+  - an der Anlage: Plan 3d (Regel R1 bis der Akku leer ist) ausrollen, Zeitpunkt entscheidet der
+    Betreiber (Entscheidung 6); Vorschlag: mit 4b und 6a (Punkt 9 unter „Offen an der Anlage“)
+  - an der Anlage: Plan 5a (nur `ems-app`) mit oder nach 4b und 6a ausrollen (Punkt 10 unter „Offen an
     der Anlage“); danach die Abnahme 5a (28 Tage, `docs/verification/abnahme-phase-5a.md`)
   - an der Anlage: Plan 6a mit 4b nach der Abnahme der Phase 3 ausrollen (Punkt 8 unter „Offen an der
     Anlage“), vorher Routing und Firewall für UDP 5442; danach die Abnahme 6a (7 Tage Dry-Run, dann live)
@@ -750,7 +831,7 @@ Daten aus 6a).
 
 | Dokument | Inhalt |
 |---|---|
-| `docs/superpowers/specs/2026-10-08-bindaems-design.md` | Spec, verbindlich. Wichtig: 7 Regelung, 8 Sicherheit, 13 Web-UI, 14 Login, 17 Prüfprotokoll, 18 Phasenplan, 19 offene Punkte. Die Absätze „Stand Plan 2a/2b/2c-1/2c-2a/2c-2b/2d/3a/3b/3c/4a/4b/6a/5a“ gehen dem älteren Text davor vor |
+| `docs/superpowers/specs/2026-10-08-bindaems-design.md` | Spec, verbindlich. Wichtig: 7 Regelung, 8 Sicherheit, 13 Web-UI, 14 Login, 17 Prüfprotokoll, 18 Phasenplan, 19 offene Punkte. Die Absätze „Stand Plan 2a/2b/2c-1/2c-2a/2c-2b/2d/3a/3b/3c/3d/4a/4b/6a/5a“ gehen dem älteren Text davor vor |
 | `docs/superpowers/plans/2026-10-08-phase-1a-fundament-datenerfassung.md` | Plan 1a (core) |
 | `docs/superpowers/plans/2026-10-09-phase-1b-app-backend.md` | Plan 1b (app) |
 | `docs/superpowers/plans/2026-10-09-phase-1c-web-ui.md` | Plan 1c (UI), mit Anhang A zu den API-Formen |
@@ -771,6 +852,7 @@ Daten aus 6a).
 | `docs/superpowers/plans/2026-10-17-phase-4a-statistik.md` | Plan 4a, 16 Tasks, umgesetzt auf dem Arbeitszweig (Gesamtreview und Fix-Welle abgeschlossen): Ladesessions, Einstandspreis, Kosten je Auto, Abgleich, Nachrechnung, Verbraucher je Tag, Seite „Statistik“, HA-Sensoren, Grafana; die 13 Entscheidungen des Betreibers vom 17.10.2026 (PV-Strom ins Auto kostet 0 ct), Präzisierungen gegenüber der Spec, Texte |
 | `docs/superpowers/plans/2026-10-18-phase-4b-geplantes-laden.md` | Plan 4b, 19 Tasks, umgesetzt, seit dem 19.10.2026 auf `main` (nicht ausgerollt): Modus „Geplant“ mit Ziel-SOC und Abfahrt, Ladestand der Autos, späteste Startzeit, Tesla-Ladelimit, die Autos im Optimierer mit Regel R2, Ersatzplan für Autos, HA vollständig, Benachrichtigungen komplett, Zählung für die Abnahme „Ziel-SOC“, Simulator- und Planungsszenarien; die 17 Entscheidungen des Betreibers vom 18.10.2026, Präzisierungen gegenüber der Spec, Texte |
 | `docs/superpowers/plans/2026-10-19-phase-6a-klimaanlage.md` | Plan 6a, 13 Tasks, umgesetzt, seit dem 20.10.2026 auf `main` (nicht ausgerollt): CoE-Codec und Adapter, Safety-Familie `thermal`, Aktor mit Echo, Strategie mit Rangfolge Akku → Autos → Klima, Hinweis aus dem Plan, UI, HA, Telemetrie, Werkzeuge, Simulator; die 16 Entscheidungen vom 19.10.2026 |
+| `docs/superpowers/plans/2026-10-20-phase-3d-regel-r1.md` | Plan 3d, 4 Tasks, umgesetzt auf dem Branch `claude/project-thread-707vv8` (nicht auf `main`, nicht ausgerollt): Regel R1 sperrt Netzladen nur, solange der Akku nicht leer ist (Nachrechnung, Optimierer, Erklärung, Szenario-Werkzeug); Einordnung, die sechs Entscheidungen des Betreibers vom 20.10.2026, Review-Schwerpunkte |
 | `docs/superpowers/plans/2026-10-19-phase-6a-entscheidungen.md` | Festlegungen R1 bis R32 der Umsetzung von Plan 6a (je mit Kosten, falls falsch) und die offenen Kleinigkeiten |
 | `docs/superpowers/plans/2026-10-20-phase-5a-lastmodell.md` | Plan 5a, 14 Tasks, umgesetzt auf dem Branch `claude/phase-5-plan-s7xe0n` (noch nicht auf `main`, nicht ausgerollt): Wetterarchiv, HA-Sensoren, Merkmale, LightGBM, Backtest, Registry, Aktivierungsregel, Schattenbetrieb, Seite „Prognosen“, Einstellungen „Lastmodell“; die Einordnung teilt Phase 5 in 5a, 5b und 5c; die 17 Entscheidungen des Betreibers vom 20.10.2026, Präzisierungen, Texte |
 | `cerbo-watchdog/README.md` | Watchdog: Zustände, Zeiten, D-Bus-Pfade, Installation und Probe |
@@ -1297,8 +1379,8 @@ Demo-Zugänge: `admin`, `bedienen` (Bedienen), `gast` (Lesen) und `sicher` (Admi
         Zeitlimit an. Stimmen Preise und Prognosen der Seite **Zeitplan** mit der Übersicht überein,
         und sind Ablauf und Blöcke plausibel? Springt die Zeit im Kopf jede Viertelstunde?
      2. **Netzladen erlaubt** bleibt aus, bis dir der Ablauf plausibel erscheint. Eingeschaltet darf
-        kein Block „Netzladen“ vor einem Zeitraum stehen, in dem laut PV-Prognose noch eingespeist
-        wird (Regel R).
+        kein Block „Netzladen“ bis in einen Zeitraum reichen, in dem laut PV-Prognose eingespeist
+        wird, ohne dass der Akku dazwischen auf der Reserve ankommt (Regel R, seit Plan 3d).
      3. **30 echte Tage:** Sobald das Prognose-Archiv gefüllt ist, erst `export_days`, dann
         `scenario_days --takt 15` (Befehle im Betriebshandbuch, „Szenarien“). „Bestanden“ über
         mindestens 30 Tage ist mit den 2 Wochen Dry-Run (Punkt 4) die Voraussetzung der Abnahme der
@@ -1405,39 +1487,48 @@ Demo-Zugänge: `admin`, `bedienen` (Bedienen), `gast` (Lesen) und `sicher` (Admi
      3. **Punkt `thermal`:** `verify_part2 --punkt thermal --geraet klima` (sendet nur auf Aufruf).
      4. **core starten, Dry-Run** (der core sendet 0) und 7 Tage beobachten, dann `thermal.klima` live
         und die Abnahme 6a.
-  9. **Lastmodell (Plan 5a) ausrollen**, mit oder nach dem gemeinsamen Ausrollen von 4b und 6a, also
-     nach der Abnahme der Phase 3; bis dahin kein `docker compose pull`. Das ist ein Schritt des
-     Betreibers. 5a schaltet nichts an der Anlage, es ändert nur die Eingabe des Planers. Das Modell
-     gilt, wenn es in den letzten 14 Tagen mindestens 10 % genauer ist als das Profil, und das kann
-     schon gleich nach dem ersten Training sein (Schalter „Lastmodell verwenden“ ab Werk an,
-     Grundlage dann der Backtest). Die Schritte stehen im Betriebshandbuch, „Lastmodell (Phase 5a)“,
-     „Lastmodell ausrollen (Plan 5a)“, und in `docs/verification/abnahme-phase-5a.md`:
-     1. **Datenbank kopieren** (empfohlen): `/backup/vor-plan-5a.sqlite3`; eine ältere app startet
-        mit der Migration `0013` nicht (Betriebshandbuch 4, „Rollback auf einen Stand vor Plan 5a“).
-     2. **Ausrollen:** nach (oder mit) 4b und 6a nur die app:
-        `docker compose pull ems-app && docker compose up -d ems-app`. Der core bleibt, der Regelbetrieb
-        bleibt an. Das Image ist rund 130 MB größer (LightGBM und `libgomp1`).
-     3. **Beim Start:** Die Migration `0013` läuft (`weather_slot`, `model_registry`), die Temperatur-Historie
-        (92 Tage von Open-Meteo) wird einmal geholt, und das erste Training läuft gleich danach. Hat die
-        Abrechnung noch keine 28 Tage mit Daten, steht auf der Seite „Prognosen“ „Zu wenig Daten: {n} von
-        28 Tagen.“, und jede Nacht um 03:15 Uhr folgt ein neuer Versuch.
-     4. **Sensoren wählen** (optional): unter **Einstellungen** → „Lastmodell“ bis zu 8 Entitäten aus der
-        HA-Datenbank (etwa Anwesenheit `person.…`), dann auf **Prognosen** „Jetzt neu trainieren“.
-     5. **Abnahme 5a:** 28 Tage ab dem Ausrollen. Auf „Prognosen“ (Zeitraum „28 Tage“) hat „Last Modell“
-        über alle Vorlaufklassen zusammen (Abruf mit `jq` in der Checkliste, Abschnitt 3)
-        mindestens 10 % niedrigeren MAE als „Last Profil“, **oder** das Profil war automatisch aktiv,
-        solange das Modell es nicht schaffte; dazu jede Nacht eine Version (Registry), keine Fehler in
-        `load-model` und der Rückfall bei fehlender Modelldatei, an der Anlage beobachtet (Datei
-        umbenennen, `ems-app` starten: „Verfahren: Profil“, danach trainiert die app von selbst neu).
-     6. **Bei der Abnahme zu wissen:** Das Modell kann gleich nach dem ersten Training aktiv werden,
-        wenn es im Backtest mindestens 10 % genauer ist; ab 10 Tagen mit Werten im Schattenbetrieb
-        entscheidet der Schattenbetrieb. Der Backtest ist in den ersten Wochen zu günstig, weil
-        Training und Backtest mit der archivierten Temperatur rechnen; zudem haben die Profile des
-        Backtests wenig Historie, was das Profil dort schwächer macht. Wer zuerst nur beobachten
-        will, schaltet gleich nach dem Start unter **Einstellungen** → „Lastmodell“ „Lastmodell
-        verwenden“ aus (reiner Schattenbetrieb, das Modell rechnet weiter mit) und später an
-        derselben Stelle wieder ein; die app bewertet dann sofort neu. Die Dauer eines Trainings an
-        der Anlage ist nicht gemessen (Zeitlimit 10 min); das Log nennt „Lastmodell trainiert“.
+  9. **Regel R1 bis der Akku leer ist (Plan 3d) ausrollen**; wann, entscheidet der Betreiber am Ende
+     (Entscheidung 6 des Plans). Vorschlag: im selben Zug wie 4b und 6a (Punkte 7 und 8), also nach der
+     Abnahme der Phase 3. Nur die app ändert sich (`docker compose pull && docker compose up -d`; der
+     core, `shared` und das UI sind unverändert, es gibt keine Migration). Das Image `latest` enthält
+     3d erst, wenn der Branch auf `main` ist. Nichts geht dabei von selbst live: Die Regel wirkt nur
+     im Plan, und der Plan wirkt nur, wenn Victron live ist und „Netzladen erlaubt“ an ist. Danach
+     beim Beobachten des Plans (Punkt 5) auf den Satz „Kein Netzladen: Ab … Uhr speist die PV … ein,
+     bevor der Akku leer ist (Regel R)“ und darauf achten, dass der Akku vor der Einspeisung wirklich
+     auf der Reserve ist.
+  10. **Lastmodell (Plan 5a) ausrollen**, mit oder nach dem gemeinsamen Ausrollen von 4b und 6a, also
+      nach der Abnahme der Phase 3; bis dahin kein `docker compose pull`. Das ist ein Schritt des
+      Betreibers. 5a schaltet nichts an der Anlage, es ändert nur die Eingabe des Planers. Das Modell
+      gilt, wenn es in den letzten 14 Tagen mindestens 10 % genauer ist als das Profil, und das kann
+      schon gleich nach dem ersten Training sein (Schalter „Lastmodell verwenden“ ab Werk an,
+      Grundlage dann der Backtest). Die Schritte stehen im Betriebshandbuch, „Lastmodell (Phase 5a)“,
+      „Lastmodell ausrollen (Plan 5a)“, und in `docs/verification/abnahme-phase-5a.md`:
+      1. **Datenbank kopieren** (empfohlen): `/backup/vor-plan-5a.sqlite3`; eine ältere app startet
+         mit der Migration `0013` nicht (Betriebshandbuch 4, „Rollback auf einen Stand vor Plan 5a“).
+      2. **Ausrollen:** nach (oder mit) 4b und 6a nur die app:
+         `docker compose pull ems-app && docker compose up -d ems-app`. Der core bleibt, der Regelbetrieb
+         bleibt an. Das Image ist rund 130 MB größer (LightGBM und `libgomp1`).
+      3. **Beim Start:** Die Migration `0013` läuft (`weather_slot`, `model_registry`), die Temperatur-Historie
+         (92 Tage von Open-Meteo) wird einmal geholt, und das erste Training läuft gleich danach. Hat die
+         Abrechnung noch keine 28 Tage mit Daten, steht auf der Seite „Prognosen“ „Zu wenig Daten: {n} von
+         28 Tagen.“, und jede Nacht um 03:15 Uhr folgt ein neuer Versuch.
+      4. **Sensoren wählen** (optional): unter **Einstellungen** → „Lastmodell“ bis zu 8 Entitäten aus der
+         HA-Datenbank (etwa Anwesenheit `person.…`), dann auf **Prognosen** „Jetzt neu trainieren“.
+      5. **Abnahme 5a:** 28 Tage ab dem Ausrollen. Auf „Prognosen“ (Zeitraum „28 Tage“) hat „Last Modell“
+         über alle Vorlaufklassen zusammen (Abruf mit `jq` in der Checkliste, Abschnitt 3)
+         mindestens 10 % niedrigeren MAE als „Last Profil“, **oder** das Profil war automatisch aktiv,
+         solange das Modell es nicht schaffte; dazu jede Nacht eine Version (Registry), keine Fehler in
+         `load-model` und der Rückfall bei fehlender Modelldatei, an der Anlage beobachtet (Datei
+         umbenennen, `ems-app` starten: „Verfahren: Profil“, danach trainiert die app von selbst neu).
+      6. **Bei der Abnahme zu wissen:** Das Modell kann gleich nach dem ersten Training aktiv werden,
+         wenn es im Backtest mindestens 10 % genauer ist; ab 10 Tagen mit Werten im Schattenbetrieb
+         entscheidet der Schattenbetrieb. Der Backtest ist in den ersten Wochen zu günstig, weil
+         Training und Backtest mit der archivierten Temperatur rechnen; zudem haben die Profile des
+         Backtests wenig Historie, was das Profil dort schwächer macht. Wer zuerst nur beobachten
+         will, schaltet gleich nach dem Start unter **Einstellungen** → „Lastmodell“ „Lastmodell
+         verwenden“ aus (reiner Schattenbetrieb, das Modell rechnet weiter mit) und später an
+         derselben Stelle wieder ein; die app bewertet dann sofort neu. Die Dauer eines Trainings an
+         der Anlage ist nicht gemessen (Zeitlimit 10 min); das Log nennt „Lastmodell trainiert“.
   - Teil 2 schreibt auf die Geräte: nicht während der 7 Tage der Abnahme Phase 1 und ihres
     24-h-Mitschnitts (`docs/verification/abnahme-phase-1.md`, 4.2 und 4.3). Seit dem
     19.10.2026 sind 4.2 und 4.3 überholt (`docs/verification/2026-10-19-abnahme-phase-1.md`).
@@ -1598,13 +1689,17 @@ Demo-Zugänge: `admin`, `bedienen` (Bedienen), `gast` (Lesen) und `sicher` (Admi
 5. **Phase 6a**, Klimaanlage (Spec 18, „Phase 6 – Wärme und Kälte“): umgesetzt, je Task und im
    Gesamtreview geprüft, Fix-Welle und Re-Review erledigt, seit dem 20.10.2026
    auf `main`, nicht ausgerollt (Kurzfassung). Es folgt das Ausrollen mit 4b nach der Abnahme der Phase 3 (Punkt 8 unter
-   „Offen an der Anlage“). 6b (Wärmepumpe) frühestens Herbst 2027 nach Phase 5.
-6. **Phase 5**, Lernen (Spec 18), in drei Plänen (Entscheidung des Betreibers vom 20.10.2026;
+   „Offen an der Anlage“). Danach Phase 5; 6b (Wärmepumpe) frühestens Herbst 2027 nach Phase 5.
+6. **Plan 3d** (Regel R1 nur, bis der Akku leer ist): umgesetzt, je Task und im Gesamtreview geprüft,
+   Fix-Welle umgesetzt, seit dem 20.10.2026 auf `main`
+   (Kurzfassung); es folgt das Ausrollen nach
+   Entscheidung des Betreibers (Punkt 9 unter „Offen an der Anlage“).
+7. **Phase 5**, Lernen (Spec 18), in drei Plänen (Entscheidung des Betreibers vom 20.10.2026;
    Einordnung im Plan 5a):
    - **5a Lastmodell und Prognosegüte:** umgesetzt und je Task geprüft, auf dem Branch
      `claude/phase-5-plan-s7xe0n`, **noch nicht auf `main`** (die Integration braucht die Zustimmung des
      Betreibers), nicht ausgerollt (Kurzfassung). Nur app und UI, der core bleibt gleich. Es folgt das
-     Ausrollen mit oder nach 4b und 6a (Punkt 9 unter „Offen an der Anlage“) und die Abnahme über 28 Tage.
+     Ausrollen mit oder nach 4b und 6a (Punkt 10 unter „Offen an der Anlage“) und die Abnahme über 28 Tage.
    - **5b Fahrverhalten (als Nächstes, eigener Plan):** Abfahrt, Ankunft und SOC bei Ankunft je Auto und
      Wochentag lernen (Ladesessions seit 4a, Tessie `at_home` und `plugged`, HA `home_entity`), Vorschläge
      für Abfahrt (20. Perzentil) und Ziel-SOC mit Konfidenz, optionale Automatik für „Geplant“,
@@ -1665,7 +1760,7 @@ Demo-Zugänge: `admin`, `bedienen` (Bedienen), `gast` (Lesen) und `sicher` (Admi
    `claude/phase-5-plan-s7xe0n` und noch nicht auf `main` (Kurzfassung). Es folgen:
    - die **Integration auf `main`** (Fast-Forward, nur mit Zustimmung des Betreibers, nach Gesamtreview
      und grüner CI des Branch-Kopfs, auch dem Bau des Images mit `libgomp1`);
-   - an der Anlage das Ausrollen von `ems-app` mit oder nach 4b und 6a (Punkt 9 unter „Offen an der
+   - an der Anlage das Ausrollen von `ems-app` mit oder nach 4b und 6a (Punkt 10 unter „Offen an der
      Anlage“) und die Abnahme über 28 Tage;
    - als nächster Plan **5b (Fahrverhalten)**, Spec 10.4 und 18; danach 5c (Vorheizen und Vorkühlen).
 

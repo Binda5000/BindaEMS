@@ -21,9 +21,11 @@ from tests.plan_helpers import (
     small_battery,
 )
 
-from bindaems.app.planning.battery_model import SLOT_H
+from bindaems.app.planning import optimizer
+from bindaems.app.planning.battery_model import SLOT_H, params_of
 from bindaems.app.planning.inputs import PeakMonth, PlanInputs
 from bindaems.app.planning.optimizer import (
+    R1_EMPTY_TOL_KWH,
     TIME_LIMIT_S,
     OptimizerResult,
     SlotFlows,
@@ -34,6 +36,7 @@ from bindaems.app.planning.vehicles import grid_allowed, horizon_need, need_kwh
 from bindaems.shared.timeutil import SLOT
 
 SLOT_KWH = SLOT_H / 1000  # W über einen Slot → kWh
+_EMPTY_EPS_KWH = 1e-6  # Rundung des Lösers an der Leer-Grenze von Regel R1
 
 
 def boom(*_args: Any, **_kwargs: Any) -> NoReturn:
@@ -79,23 +82,87 @@ def test_switch_off_never_grid_charges_even_at_negative_price() -> None:
     assert all(f.gr_b == 0 for f in solve(inputs).flows)
 
 
-def test_r1_blocks_grid_charge_before_pv_surplus() -> None:
-    # 10-kWh-Akku, 5 kW Ladeleistung: 8,5 kW Überschuss erzwingen später Einspeisung
-    kw: dict[str, Any] = {"battery": small_battery(), "soc_pct": 20.0, "grid_charge": True}
-    blocked = scenario(
+def test_r1_allows_grid_charge_used_up_before_pv_surplus() -> None:
+    # 10-kWh-Akku, 5 kW Ladeleistung: 8,5 kW Überschuss erzwingen später Einspeisung; die billige
+    # Netzenergie ist im teuren Block verbraucht, bevor die PV kommt
+    inputs = scenario(
         prices=[5.0] * 4 + [40.0] * 4 + [8.0] * 8,
         pv=[0.0] * 8 + [9000.0] * 8,
         load=[500.0] * 4 + [3000.0] * 4 + [500.0] * 8,
-        **kw,
+        battery=small_battery(),
+        soc_pct=20.0,
+        grid_charge=True,
     )
-    free = scenario(
-        prices=[5.0] * 4 + [40.0] * 4 + [8.0] * 8,
-        pv=[0.0] * 16,
-        load=[500.0] * 4 + [3000.0] * 4 + [500.0] * 8,
-        **kw,
+    flows = solve(inputs).flows
+    assert sum(f.gr_b for f in flows[:4]) > 0
+    lo = params_of(inputs).lo_kwh
+    for i, flow in enumerate(flows):
+        if flow.gr_b <= 1:
+            continue
+        end = next(
+            (
+                j
+                for j in range(i, len(flows))
+                if flows[j].soc_end_kwh <= lo + R1_EMPTY_TOL_KWH + _EMPTY_EPS_KWH
+            ),
+            len(flows) - 1,
+        )
+        assert sum(f.pv_x for f in flows[i : end + 1]) * SLOT_KWH <= 0.001
+
+
+def _grid_charge_into_pv_surplus() -> PlanInputs:
+    """Billig laden und dafür PV zu 20 ct einspeisen lohnte sich ohne R1; der Akku wird vor der
+    PV nicht leer, die Netzenergie wäre noch drin."""
+    return scenario(
+        prices=[5.0] * 4 + [8.0] * 8 + [40.0] * 4,
+        pv=[0.0] * 4 + [9000.0] * 8 + [0.0] * 4,
+        load=[500.0] * 4 + [500.0] * 8 + [3000.0] * 4,
+        feed_in=20.0,
+        battery=small_battery(),
+        soc_pct=20.0,
+        grid_charge=True,
     )
-    assert all(f.gr_b < 1 for f in solve(blocked).flows)
-    assert sum(f.gr_b for f in solve(free).flows[:4]) > 0
+
+
+def test_r1_blocks_grid_charge_that_lasts_into_pv_surplus() -> None:
+    inputs = _grid_charge_into_pv_surplus()
+    lo = params_of(inputs).lo_kwh
+    # Erlaubt bleibt nur Netzenergie in Höhe der Leer-Toleranz: Nach jedem Netzladen gilt der Akku
+    # noch als leer, sonst wäre er bis in die PV-Einspeisung gefüllt
+    assert all(
+        f.gr_b < 1 or f.soc_end_kwh <= lo + R1_EMPTY_TOL_KWH + _EMPTY_EPS_KWH
+        for f in solve(inputs).flows
+    )
+
+
+def test_without_r1_the_same_inputs_grid_charge_into_pv_surplus(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Kontrollfall zum Test davor: Gilt der Akku immer als leer (Toleranz über der ganzen
+    # Kapazität), sperrt R1 nichts mehr, und der Optimierer lädt mit denselben Eingaben aus dem
+    # Netz über die Leer-Grenze hinaus. Die Sperre oben kommt also von Regel R1.
+    monkeypatch.setattr(optimizer, "R1_EMPTY_TOL_KWH", 100.0)
+    inputs = _grid_charge_into_pv_surplus()
+    lo = params_of(inputs).lo_kwh
+    assert any(
+        f.gr_b >= 1 and f.soc_end_kwh > lo + R1_EMPTY_TOL_KWH + _EMPTY_EPS_KWH
+        for f in solve(inputs).flows
+    )
+
+
+def test_r1_with_soc_below_reserve_at_start() -> None:
+    # SOC 10 % unter der Reserve 20 %: lo = soc0, der Akku gilt als leer, Netzladen bleibt möglich
+    inputs = scenario(
+        prices=[5.0] * 4 + [40.0] * 4,
+        pv=[0.0] * 8,
+        load=[500.0] * 4 + [3000.0] * 4,
+        battery=small_battery(),
+        soc_pct=10.0,
+        grid_charge=True,
+    )
+    result = solve(inputs)
+    assert result.status == "optimal"
+    assert sum(f.gr_b for f in result.flows[:4]) > 0
 
 
 def test_soc_below_reserve_is_feasible() -> None:

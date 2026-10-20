@@ -19,7 +19,8 @@ höchsten Bezug des Laufs im Monat (mindestens die Spitze vor dem Lauf). Die ber
 des Optimierers ziehen den Wert des Mehr-SOC am Ende ab (``end_soc_value_ct``).
 
 Regel R (Präzisierung 19): Ein Verstoß ist ein ausgeführter ``NETZLADEN``-Slot, nach dem der
-Plan dieses Zeitpunkts bis zu seinem Horizontende mehr als ``R1_TOL_KWH`` Einspeisung erwartet.
+Plan dieses Zeitpunkts bis der Akku in der Nachrechnung leer ist (sonst bis zum Horizontende)
+mehr als ``R1_TOL_KWH`` Einspeisung erwartet.
 
 **Geplante Autos** (Plan 4b, Task 13; Datei der Version 2, ``car_sessions``):
 
@@ -70,7 +71,10 @@ from bindaems.app.planning.inputs import (
     assemble_inputs,
 )
 from bindaems.app.planning.optimizer import solve
-from bindaems.app.planning.plausibility import R1_TOL_KWH, export_after_kwh
+from bindaems.app.planning.plausibility import (
+    R1_TOL_KWH,
+    export_while_charged_kwh,
+)
 from bindaems.app.planning.service import plan_once
 from bindaems.app.planning.vehicles import (
     PlanVehicleInput,
@@ -310,12 +314,13 @@ def _battery_state(data: ScenarioFile, soc_kwh: float) -> BatteryState:
 
 @dataclass(frozen=True)
 class _Planned:
-    """Ein Plan des Laufs mit seiner Nachrechnung (für die Prüfung von Regel R) und ob er Regel
-    R2 verletzt."""
+    """Ein Plan des Laufs mit seiner Nachrechnung (für die Prüfung von Regel R), deren Reserve
+    (``lo_kwh`` des Plans, nicht des Laufs) und ob er Regel R2 verletzt."""
 
     plan: Plan
     steps: list[SimStep]
     index: dict[datetime, int]
+    lo_kwh: float
     r2_broken: bool = False
 
 
@@ -424,7 +429,8 @@ def _plan_at(
     steps = simulate(soc0_kwh, sim_slots(inputs, ev_w), [s.intent for s in plan.slots], params)
     grid = car_grid_kwh(inputs, ev_w) if ev_w else {}
     r2_broken = any(grid[car.key] > car.grid_allowed_kwh + R2_TOL_KWH for car in inputs.vehicles)
-    return _Planned(plan, steps, {s.start: i for i, s in enumerate(plan.slots)}, r2_broken)
+    positions = {s.start: i for i, s in enumerate(plan.slots)}
+    return _Planned(plan, steps, positions, params.lo_kwh, r2_broken)
 
 
 def _charge(car: ScenarioCar, soc_pct: float, wanted_w: float) -> tuple[float, float]:
@@ -598,7 +604,8 @@ def run_scenario(
                 intent = active[1].intent
                 broken = (
                     intent.kind is BatteryIntentKind.NETZLADEN
-                    and export_after_kwh(current.steps, position) > R1_TOL_KWH
+                    and export_while_charged_kwh(current.steps, position, current.lo_kwh)
+                    > R1_TOL_KWH
                 )
         ev_w = 0.0
         for i in plugged:
@@ -633,7 +640,7 @@ def run_scenario(
         baseline_power_ct=baseline_power,
         optimizer_power_ct=optimizer_power,
         r1_violations=sum(violation),
-        charge_before_export_kwh=_charge_before_export_kwh(data, steps),
+        charge_before_export_kwh=_charge_before_export_kwh(steps, params.lo_kwh),
         min_soc_kwh=min(soc0, *(item.soc_end_kwh for item in steps)),
         reserve_kwh=battery.reserve_soc_pct / 100 * capacity,
         plans=len(plans),
@@ -686,13 +693,11 @@ def _days(
     return result
 
 
-def _charge_before_export_kwh(data: ScenarioFile, steps: Sequence[SimStep]) -> float:
-    """Netzgeladene Energie in Slots, nach denen am selben lokalen Tag (den Slot eingeschlossen)
-    tatsächlich mehr als ``R1_TOL_KWH`` eingespeist wurde."""
-    total = 0.0
-    for indices in _day_groups(data).values():
-        day_steps = [steps[i] for i in indices]
-        for position, item in enumerate(day_steps):
-            if item.charge_grid_w > 0 and export_after_kwh(day_steps, position) > R1_TOL_KWH:
-                total += item.charge_grid_w * SLOT_H / 1000
-    return total
+def _charge_before_export_kwh(steps: Sequence[SimStep], lo_kwh: float) -> float:
+    """Netzgeladene Energie in Slots, nach denen tatsächlich mehr als ``R1_TOL_KWH`` eingespeist
+    wurde, bevor der Akku leer war (den Slot eingeschlossen; über den ganzen Lauf, nicht je Tag)."""
+    return sum(
+        item.charge_grid_w * SLOT_H / 1000
+        for position, item in enumerate(steps)
+        if item.charge_grid_w > 0 and export_while_charged_kwh(steps, position, lo_kwh) > R1_TOL_KWH
+    )

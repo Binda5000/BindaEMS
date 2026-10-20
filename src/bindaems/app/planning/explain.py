@@ -17,7 +17,8 @@ from bindaems.app.planning.inputs import PlanInputs
 from bindaems.app.planning.plausibility import (
     MENTION_W,
     R1_TOL_KWH,
-    export_after_kwh,
+    charged_window_end,
+    export_while_charged_kwh,
     pays_off,
 )
 from bindaems.app.planning.vehicles import _slots_before
@@ -70,8 +71,8 @@ _SENTENCES: dict[str, Callable[[Params], str]] = {
         f"Akku deckt den Verbrauch; ab {_txt(p, 'um')} Uhr lädt ihn die PV wieder."
     ),
     "REGEL_R_BLOCKIERT_NETZLADEN": lambda p: (
-        f"Kein Netzladen: Laut Prognose speist die PV bis {_txt(p, 'um')} Uhr noch "
-        f"{_de(_num(p, 'kwh'), 1)} kWh ein (Regel R)."
+        f"Kein Netzladen: Ab {_txt(p, 'um')} Uhr speist die PV laut Prognose "
+        f"{_de(_num(p, 'kwh'), 1)} kWh ein, bevor der Akku leer ist (Regel R)."
     ),
     "NETZLADEN_AUS": lambda p: (
         f"Netzladen würde sich lohnen (jetzt {_de(_num(p, 'ct'), 1)} ct, um {_txt(p, 'um')} Uhr "
@@ -202,10 +203,18 @@ def _main_reason(
     hit = pays_off(inputs, steps, index, by="import")
     switch = inputs.planning.grid_charge_allowed
     if switch and hit is not None:
-        exported = export_after_kwh(steps, index)
+        lo_kwh = params_of(inputs).lo_kwh
+        exported = export_while_charged_kwh(steps, index, lo_kwh)
         if exported > R1_TOL_KWH:
+            # Beginn des ersten Slots mit Einspeisung, solange der Akku noch geladen ist
+            first = next(
+                later
+                for later in range(index, charged_window_end(steps, index, lo_kwh))
+                if steps[later].export_w > 0
+            )
             return Reason(
-                code="REGEL_R_BLOCKIERT_NETZLADEN", params={"um": horizon_end, "kwh": exported}
+                code="REGEL_R_BLOCKIERT_NETZLADEN",
+                params={"um": _hhmm(slots[first].start), "kwh": exported},
             )
     if not switch and hit is not None:
         later, later_ct = hit

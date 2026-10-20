@@ -4,7 +4,8 @@ Entscheidung 8).
 Gilt, wenn der Optimierer scheitert oder sein Plan unplausibel ist. Grundlage ist
 ``EIGENVERBRAUCH`` in allen Slots. Reicht der SOC für einen teuren Slot des heutigen Tages nur
 knapp, hält der Plan den Akku in den billigsten Slots davor zurück und lädt, wenn der Schalter es
-erlaubt, die Spread-Regel erfüllt ist und Regel R1 hält, in billigen Slots aus dem Netz.
+erlaubt, die Spread-Regel erfüllt ist und Regel R1 hält (keine Einspeisung, bevor der Akku in der
+Nachrechnung wieder leer ist), in billigen Slots aus dem Netz.
 
 Die geplanten Autos laden zuerst den erwarteten PV-Überschuss bis zur Abfahrt, dann in den
 günstigsten Slots davor mit voller Leistung (``fallback_vehicles``); der Plan des Akkus rechnet
@@ -29,7 +30,7 @@ from bindaems.app.planning.battery_model import (
 )
 from bindaems.app.planning.inputs import PlanInputs
 from bindaems.app.planning.optimizer import grid_charge_cap_w
-from bindaems.app.planning.plausibility import R1_TOL_KWH, export_after_kwh, spread_pays
+from bindaems.app.planning.plausibility import R1_TOL_KWH, export_while_charged_kwh, spread_pays
 from bindaems.app.planning.vehicles import _slots_before
 from bindaems.shared.plan import BatteryIntent, BatteryIntentKind
 from bindaems.shared.timeutil import LOCAL_TZ, ensure_utc
@@ -217,7 +218,13 @@ def fallback_intents(
             trial_steps = run(trial)
             if trial_steps[candidate].charge_grid_w < SHORT_W:
                 continue  # kein Platz im Akku: das Netzladen brächte nichts
-            if export_after_kwh(trial_steps, candidate) > R1_TOL_KWH:
+            # Regel R1 für jedes Netzladen: Ein früheres kann den Akku vor einem schon
+            # angenommenen über die Leer-Grenze heben und dessen Fenster in die Einspeisung ziehen.
+            if any(
+                trial[i].kind is BatteryIntentKind.NETZLADEN
+                and export_while_charged_kwh(trial_steps, i, params.lo_kwh) > R1_TOL_KWH
+                for i in range(count)
+            ):
                 continue
             intents, steps = trial, trial_steps
             break

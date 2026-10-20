@@ -24,7 +24,8 @@ from bindaems.shared.timeutil import LOCAL_TZ, ensure_utc
 
 BALANCE_TOL_W: Final = 1.0  # Bilanz und Leistungsgrenzen
 SOC_TOL_KWH: Final = 0.01
-R1_TOL_KWH: Final = 0.1  # Einspeisung nach einem ``NETZLADEN``-Slot (Regel R1)
+R1_TOL_KWH: Final = 0.1  # Einspeisung nach einem ``NETZLADEN``-Slot, solange der Akku geladen ist
+EMPTY_TOL_KWH: Final = 0.1  # so nah an der Reserve gilt der Akku der Nachrechnung als leer
 # Über dieser Entladung zählt ein späterer Slot als Nutzen des Netzladens (Nachtrag 18.10.2026:
 # jede Entladung über der Toleranz der Bilanz; der Optimierer kennt keine Mindestentladung).
 USED_ABOVE_W: Final = BALANCE_TOL_W
@@ -33,9 +34,28 @@ MENTION_W: Final = 100.0  # ab dieser Leistung nennt eine Erklärung einen Fluss
 PaysOffBy = Literal["discharge", "import"]
 
 
-def export_after_kwh(steps: Sequence[SimStep], index: int) -> float:
-    """Einspeisung in kWh ab dem Slot ``index`` (eingeschlossen) bis zum Ende der Schritte."""
-    return sum(item.export_w for item in steps[index:]) * SLOT_H / 1000
+def charged_window_end(steps: Sequence[SimStep], index: int, lo_kwh: float) -> int:
+    """Ende des Fensters, in dem der Akku ab Slot ``index`` noch geladen ist (ausgeschlossen).
+
+    Gesucht ist der erste Slot ab ``index``, der mit höchstens ``lo_kwh + EMPTY_TOL_KWH`` endet;
+    der Akku ist dann leer, und das Fenster schließt diesen Slot ein. Gibt es keinen, reicht es bis
+    zum Ende der Schritte.
+    """
+    for later in range(index, len(steps)):
+        if steps[later].soc_end_kwh <= lo_kwh + EMPTY_TOL_KWH:
+            return later + 1
+    return len(steps)
+
+
+def export_while_charged_kwh(steps: Sequence[SimStep], index: int, lo_kwh: float) -> float:
+    """Einspeisung in kWh ab dem Slot ``index`` (eingeschlossen), solange der Akku noch geladen ist.
+
+    Regel R1 verbietet Netzladen nur, wenn die Nachrechnung danach einspeist, bevor der Akku
+    wieder die Reserve ``lo_kwh`` erreicht (``charged_window_end``); danach kann geladene Energie
+    der PV nicht mehr im Weg stehen.
+    """
+    end = charged_window_end(steps, index, lo_kwh)
+    return sum(item.export_w for item in steps[index:end]) * SLOT_H / 1000
 
 
 def spread_pays(planning: PlanningSettings, now_ct: float, later_ct: float) -> bool:
@@ -190,13 +210,14 @@ def check_plan(
         at = _local_time(inputs, index)
         if not switch:
             report("switch", index, f"Netzladen um {at}, obwohl ausgeschaltet")
-        after_kwh = export_after_kwh(steps, index)
-        if after_kwh > R1_TOL_KWH:
-            exported = _kwh_text(after_kwh)
+        while_charged_kwh = export_while_charged_kwh(steps, index, params.lo_kwh)
+        if while_charged_kwh > R1_TOL_KWH:
+            exported = _kwh_text(while_charged_kwh)
             report(
                 "r1",
                 index,
-                f"Regel R verletzt: Netzladen um {at}, danach {exported} kWh Einspeisung",
+                f"Regel R verletzt: Netzladen um {at}, danach {exported} kWh Einspeisung, "
+                "bevor der Akku leer ist",
             )
         if not grid_charge_pays(inputs, steps, index):
             report("spread", index, f"Netzladen um {at} rechnet sich nicht")

@@ -374,10 +374,75 @@ def test_grid_charge_before_export_counts_as_rule_r_violation(
     data = synthetic("sommer-sonnig", date(2027, 7, 5), 1)
     result = run_scenario(data, step_slots=4)
     assert result.r1_violations == result.days[0].r1_violations
-    # vor 20:30 folgt Einspeisung (Verstoß), danach nicht mehr: nur ein Teil der 96 Slots zählt
+    # vor 20:30 folgt Einspeisung (Verstoß), danach nicht mehr: nur ein Teil der 96 Slots zählt.
+    # Der Plan lädt in jedem Slot, der Akku ist nie leer: bis zum Horizontende wie bisher (75).
     assert 40 < result.r1_violations < 96
     assert result.days[0].grid_charge_kwh > 0
     assert 0 < result.charge_before_export_kwh <= result.days[0].grid_charge_kwh
+
+
+def test_charge_before_export_ignores_charge_used_up_before_pv(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Der Akku startet leer, lädt in den ersten zwei Slots aus dem Netz und ist nachts wieder
+    # leer, bevor die PV am Morgen einspeist: Regel R verbietet das Netzladen dann nicht.
+    original = runner.plan_once
+
+    def night_charging(inputs: PlanInputs, result: OptimizerResult) -> Plan:
+        plan = original(inputs, result)
+        intent = BatteryIntent(kind=BatteryIntentKind.NETZLADEN, grid_charge_w=2000.0)
+        slots = [
+            s.model_copy(update={"intent": intent}) if s.start < first + 2 * SLOT else s
+            for s in plan.slots
+        ]
+        return plan.model_copy(update={"slots": slots})
+
+    monkeypatch.setattr(runner, "plan_once", night_charging)
+    data = synthetic("sommer-sonnig", date(2027, 7, 5), 1)
+    first = data.slots[0].start
+    empty = data.model_copy(
+        update={
+            "battery": data.battery.model_copy(
+                update={"start_soc_pct": data.battery.reserve_soc_pct}
+            )
+        }
+    )
+    result = run_scenario(empty, step_slots=4)
+    assert result.days[0].grid_charge_kwh > 0  # es wurde geladen
+    assert result.charge_before_export_kwh == 0
+    assert result.r1_violations == 0
+
+
+def test_rule_r_uses_reserve_of_each_plan_below_the_start_reserve(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Der Lauf startet unter der Reserve; ein späterer Plan beginnt mit mehr SOC und lädt nachts
+    # kurz aus dem Netz, das vor der PV verbraucht ist. Seine Nachrechnung rechnet mit seiner
+    # eigenen Reserve (min(Reserve, SOC zur Planzeit)), nicht mit der des Laufs: kein Verstoß.
+    original = runner.plan_once
+
+    def night_charging(inputs: PlanInputs, result: OptimizerResult) -> Plan:
+        plan = original(inputs, result)
+        intent = BatteryIntent(kind=BatteryIntentKind.NETZLADEN, grid_charge_w=2000.0)
+        slots = [
+            s.model_copy(update={"intent": intent}) if (s.start - first) // SLOT in (8, 12) else s
+            for s in plan.slots
+        ]
+        return plan.model_copy(update={"slots": slots})
+
+    monkeypatch.setattr(runner, "plan_once", night_charging)
+    data = synthetic("sommer-sonnig", date(2027, 7, 5), 1)
+    first = data.slots[0].start
+    low = data.model_copy(
+        update={
+            "battery": data.battery.model_copy(
+                update={"start_soc_pct": data.battery.reserve_soc_pct - 10.0}
+            )
+        }
+    )
+    result = run_scenario(low, step_slots=4)
+    assert result.days[0].grid_charge_kwh > 0  # es wurde geladen
+    assert result.r1_violations == 0
 
 
 def test_scenario_rejects_bad_step() -> None:

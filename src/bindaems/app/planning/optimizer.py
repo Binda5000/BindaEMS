@@ -3,8 +3,9 @@ Präzisierung 11): ein MILP mit HiGHS über PuLP.
 
 Minimiert über den Horizont Bezug minus Einspeisung, Verschleiß beim Entladen, die Marge beim
 Netzladen, den Leistungspreis je Monat und die Abweichung vom vorigen Plan in den ersten Slots,
-abzüglich des Restwerts der Energie im Akku am Horizontende. Regel R1 ist hart: Netzladen nur,
-wenn ab diesem Slot laut Prognose nichts mehr eingespeist wird.
+abzüglich des Restwerts der Energie im Akku am Horizontende. Regel R1 ist hart: Nach Netzladen
+wird nichts eingespeist, solange Netzenergie im Akku sein kann, also bis der Akku wieder leer ist
+(SOC am Slotende ≤ Reserve + ``R1_EMPTY_TOL_KWH``) oder der Horizont endet.
 
 Geplante Autos (``PlanInputs.vehicles``) laden je Slot vor ihrer Abfahrt ``e = pv_ev + gr_ev``,
 0 oder zwischen ``min_w`` und ``max_w``. PV deckt zuerst das Haus, dann die Autos, dann den Akku:
@@ -40,6 +41,7 @@ TIME_LIMIT_S: Final = 20.0
 MIP_GAP: Final = 0.005
 SHORTFALL_CT: Final = 2000.0  # Strafe je kWh, die einem Auto bis zur Abfahrt fehlt
 R2_CT: Final = 200.0  # Strafe je kWh Netzenergie ins Auto über Regel R2
+R1_EMPTY_TOL_KWH: Final = 0.05  # Akku gilt als leer bei SOC ≤ Reserve + Toleranz (Regel R1)
 
 _KWH: Final = SLOT_H / 1000  # W über einen Slot → kWh
 
@@ -269,14 +271,29 @@ def _solve(inputs: PlanInputs, time_limit_s: float, gap: float, started: float) 
             )
         )
 
-    # Regel R1: Netzladen nur, wenn ab diesem Slot nichts mehr eingespeist wird.
-    for t, z_t in z.items():
-        pv_energy = sum(_KWH * s.pv_w for s in inputs.slots[t:])
-        if pv_energy > 0:
+    # Regel R1: Keine Einspeisung, solange Netzenergie im Akku sein kann. ``e_t`` = 1 heißt: Der
+    # Akku ist am Ende von Slot t leer (SOC ≤ Reserve + Toleranz). ``c_t`` ≥ 0 hält fest, dass
+    # nach Netzladen noch Netzenergie im Akku ist: Es springt bei Netzladen auf 1 und fällt erst
+    # nach einem leeren Akku wieder. ``c_t`` ist nur nach unten beschränkt, der Löser drückt es
+    # so weit wie möglich, und es bleibt stetig.
+    if z:
+        first = min(z)
+        span = params.hi_kwh - params.lo_kwh
+        empty = {t: prob.add_variable(f"e_{t}", cat=pulp.LpBinary) for t in range(first, count)}
+        in_battery = {
+            t: prob.add_variable(f"c_{t}", lowBound=0, upBound=1) for t in range(first, count)
+        }
+        for t in range(first, count):
             prob += (
-                pulp.lpSum(_KWH * pv_x[tau] for tau in range(t, count)) <= pv_energy * (1 - z_t),
-                f"r1_{t}",
+                soc[t] <= params.lo_kwh + R1_EMPTY_TOL_KWH + span * (1 - empty[t]),
+                f"leer_{t}",
             )
+            if t in z:
+                prob += in_battery[t] >= z[t], f"netz_im_akku_z_{t}"
+            if t > first:
+                prob += in_battery[t] >= in_battery[t - 1] - empty[t - 1], f"netz_im_akku_{t}"
+            if inputs.slots[t].pv_w > 0:
+                prob += pv_x[t] <= inputs.slots[t].pv_w * (1 - in_battery[t]), f"r1_{t}"
 
     # Leistungspreis: Spitze je Monat über der verrechneten Spitze vor dem Horizont.
     peaks: dict[str, tuple[float, pulp.LpVariable, pulp.LpVariable]] = {}
