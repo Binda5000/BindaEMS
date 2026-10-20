@@ -1,5 +1,5 @@
 import asyncio
-from datetime import date, timedelta
+from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
 import pytest
@@ -8,7 +8,7 @@ from tests.app_helpers import T_APP
 from tests.plan_helpers import sample_plan
 from tests.unit.app.control.conftest import FakeCoreClient, FakeFeed
 
-from bindaems.app.audit import AuditLog
+from bindaems.app.audit import AuditLog, Source
 from bindaems.app.control.intent import (
     ConflictAgain,
     CoreDown,
@@ -38,9 +38,11 @@ from bindaems.shared.control import (
     SurplusOrder,
     SurplusPriority,
     VehicleIntent,
+    next_departure,
 )
 from bindaems.shared.influx.lineprotocol import epoch_ms
 from bindaems.shared.plan import IntentPlan, intent_plan
+from bindaems.shared.timeutil import ManualClock
 
 
 def health(*vehicles: dict[str, Any], intent_version: int | None = 1) -> dict[str, Any]:
@@ -716,3 +718,104 @@ async def test_target_of_an_unknown_vehicle_is_unknown(
         await service.apply(SetTarget("zoe", 80, None), actor="admin", source="ui")
     assert unknown.value.text == "Unbekanntes Fahrzeug „zoe“."
     assert fake_client.sent == []
+
+
+def recorder(service: IntentService) -> list[tuple[str, datetime | None]]:
+    """Meldet einen Rückruf für die Bedienung von Ziel und Abfahrt an und sammelt seine Aufrufe."""
+    calls: list[tuple[str, datetime | None]] = []
+    service.on_manual_target(lambda key, departure_at: calls.append((key, departure_at)))
+    return calls
+
+
+async def test_manual_target_change_calls_back(service: IntentService) -> None:
+    calls = recorder(service)
+    await service.apply(SetTarget("tesla", 80, "07:15"), actor="anna", source="ui")
+    assert calls == [("tesla", next_departure("07:15", T_APP))]
+    assert calls[0][1] == datetime(2026, 10, 10, 5, 15, tzinfo=UTC)  # 07:15 Ortszeit am Folgetag
+
+
+@pytest.mark.parametrize("source", ["ui", "ha", "cli"])
+async def test_every_person_source_calls_back(service: IntentService, source: Source) -> None:
+    calls = recorder(service)
+    await service.apply(SetTarget("tesla", 80, "07:15"), actor="anna", source=source)
+    assert [key for key, _ in calls] == ["tesla"]
+
+
+async def test_callback_gets_the_departure_day_of_the_new_intent(service: IntentService) -> None:
+    calls = recorder(service)
+    day = date(2026, 10, 12)
+    await service.apply(SetTarget("tesla", None, "07:15", day), actor="anna", source="ui")
+    assert calls == [("tesla", next_departure("07:15", T_APP, day))]
+    assert calls[0][1] == datetime(2026, 10, 12, 5, 15, tzinfo=UTC)
+    await service.apply(SetTarget("tesla", 90, None), actor="anna", source="ui")  # Tag bleibt
+    assert calls[1] == calls[0]
+
+
+async def test_callback_uses_the_clock_of_the_service(
+    service: IntentService, clock: ManualClock
+) -> None:
+    calls = recorder(service)
+    clock.advance(timedelta(hours=20))  # 06:00 Ortszeit am Folgetag: 07:15 ist heute noch offen
+    await service.apply(SetTarget("tesla", 80, "07:15"), actor="anna", source="ui")
+    assert calls == [("tesla", datetime(2026, 10, 10, 5, 15, tzinfo=UTC))]
+
+
+async def test_unchanged_target_still_calls_back(service: IntentService) -> None:
+    calls = recorder(service)
+    await service.apply(SetTarget("tesla", 80, "07:15"), actor="anna", source="ui")
+    await service.apply(SetTarget("tesla", 80, "07:15"), actor="anna", source="ui")
+    assert len(calls) == 2
+
+
+async def test_system_change_does_not_call_back(service: IntentService) -> None:
+    calls = recorder(service)
+    await service.apply(SetTarget("tesla", 80, "07:15"), actor="fahrverhalten", source="system")
+    assert calls == []
+
+
+async def test_rejected_change_does_not_call_back(
+    service: IntentService, fake_client: FakeCoreClient
+) -> None:
+    calls = recorder(service)
+    with pytest.raises(Rejected):  # vor dem Senden abgelehnt
+        await service.apply(SetTarget("tesla", 15, None), actor="anna", source="ui")
+    fake_client.replies.append(CoreReply(422, {"result": "rejected", "details": ["Unsinn."]}))
+    with pytest.raises(Rejected):  # vom core abgelehnt
+        await service.apply(SetTarget("tesla", 80, "07:15"), actor="anna", source="ui")
+    assert calls == []
+
+
+async def test_other_changes_do_not_call_back(service: IntentService) -> None:
+    calls = recorder(service)
+    await service.apply(SetMode("tesla", ChargeMode.NOW), actor="anna", source="ui")
+    await service.apply(SetBoost("tesla", True), actor="anna", source="ui")
+    await service.apply(SetControl(True), actor="anna", source="ui")
+    assert calls == []
+
+
+async def test_several_callbacks_run_in_order(service: IntentService) -> None:
+    order: list[str] = []
+    service.on_manual_target(lambda key, _: order.append(f"erster {key}"))
+    service.on_manual_target(lambda key, _: order.append(f"zweiter {key}"))
+    await service.apply(SetTarget("egolf", 80, "07:15"), actor="anna", source="ui")
+    assert order == ["erster egolf", "zweiter egolf"]
+
+
+async def test_failing_callback_neither_fails_nor_undoes_the_change(
+    service: IntentService, fake_client: FakeCoreClient, audit: AuditLog, feed: FakeFeed
+) -> None:
+    def broken(key: str, departure_at: datetime | None) -> None:
+        raise RuntimeError("kaputt")
+
+    service.on_manual_target(broken)
+    calls = recorder(service)
+    with capture_logs() as logs:
+        result = await service.apply(SetTarget("tesla", 80, "07:15"), actor="anna", source="ui")
+    assert result.result == "accepted"
+    assert fake_client.valid == result.intent
+    assert service.cached() == result.intent
+    assert last_audit(audit) == ("intent.target", "tesla", "Ziel 80 %, Abfahrt 07:15")
+    assert feed.refreshed == 1
+    assert [key for key, _ in calls] == ["tesla"]  # der nächste Rückruf läuft weiter
+    assert [entry["log_level"] for entry in logs] == ["error"]
+    assert "Rückruf" in logs[0]["event"]

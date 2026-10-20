@@ -13,7 +13,7 @@ import asyncio
 import contextlib
 import math
 import re
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from typing import Any, Final, Literal
@@ -30,6 +30,7 @@ from bindaems.shared.control import (
     SupportIntent,
     SurplusPriority,
     VehicleIntent,
+    next_departure,
 )
 from bindaems.shared.influx.lineprotocol import epoch_ms
 from bindaems.shared.plan import IntentPlan
@@ -456,6 +457,10 @@ class IntentService:
     Änderungen laufen nacheinander (``asyncio.Lock``). Antwortet der core mit 409, weil die Absicht
     inzwischen anders lautet (etwa per ``curl``), holt der Dienst sie neu und wendet die Änderung
     genau einmal neu an.
+
+    Wer Ziel oder Abfahrt eines Fahrzeugs bedient (``SetTarget`` mit ``source`` ungleich
+    ``"system"``), meldet sich über ``on_manual_target`` bei der Automatik (Plan 5b,
+    Präzisierung 8).
     """
 
     def __init__(
@@ -475,6 +480,18 @@ class IntentService:
         self._cfg = cfg
         self._lock = asyncio.Lock()
         self._cached: Intent | None = None
+        self._manual_target: list[Callable[[str, datetime | None], None]] = []
+
+    def on_manual_target(self, callback: Callable[[str, datetime | None], None]) -> None:
+        """Meldet einen Rückruf an, den jede angenommene Bedienung von Ziel oder Abfahrt ruft.
+
+        Der Rückruf erhält das Fahrzeug und ``next_departure`` der neuen Absicht, auch wenn die
+        Änderung Ziel und Abfahrt nicht verändert hat: Die Person hat gehandelt. Ein Rückruf
+        gilt nicht für abgelehnte Änderungen, andere Änderungen und ``source == "system"``. Mehrere
+        Rückrufe laufen in der Reihenfolge der Anmeldung; ein Fehler in einem wird protokolliert
+        und ändert nichts an der angenommenen Änderung.
+        """
+        self._manual_target.append(callback)
 
     def cached(self) -> Intent | None:
         """Die zuletzt gesehene Absicht (für Home Assistant); ``None`` bis zur ersten."""
@@ -586,4 +603,18 @@ class IntentService:
             )
         self._cached = new
         self._feed.refresh_health()
+        if isinstance(change, SetTarget) and source != "system":
+            self._notify_manual_target(change.vehicle, new)
         return ChangeResult(result, version, details, new)
+
+    def _notify_manual_target(self, key: str, new: Intent) -> None:
+        """Ruft die Rückrufe der Bedienung; ein Fehler darin bleibt im Protokoll."""
+        vehicle = _vehicle(new, key)
+        departure_at = next_departure(vehicle.departure, self._clock.now(), vehicle.departure_on)
+        for callback in self._manual_target:
+            try:
+                callback(key, departure_at)
+            except Exception:
+                log.exception(
+                    "Rückruf der Bedienung von Ziel und Abfahrt fehlgeschlagen", vehicle=key
+                )
