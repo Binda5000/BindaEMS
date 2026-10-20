@@ -14,7 +14,7 @@ und den Tagesdatensätzen und bleibt im Speicher; nach einem Neustart fehlt sie 
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable, Iterator, Mapping
 from datetime import date, datetime, time, timedelta
 from types import MappingProxyType
 from typing import Any, Final
@@ -128,12 +128,17 @@ class DrivingService:
         self._stored_at: dict[str, datetime] = {}  # ``computed_at`` des gültigen Stands
         self._quality: dict[str, HitRates] = {}
         self._errors: dict[str, str] = {}  # Fehler des letzten Laufs je Auto
+        self._tasks: set[asyncio.Task[Any]] = set()  # Aufgaben in ``run`` und ``recompute``
+        # Rechnungen und Schreibzugriffe im Thread; nach einem Abbruch laufen sie weiter, bis sie
+        # wirklich enden (``close`` wartet darauf, bevor die Datenbank schließt)
+        self._threads: set[asyncio.Future[Any]] = set()
 
     # --- Betrieb --------------------------------------------------------------------------
 
     async def run(self) -> None:
         """Beim Start die abgelegten Stände laden und neu rechnen; dann täglich um 03:40 Uhr
         Ortszeit."""
+        self._track()
         await self.load_stored()
         await self._recompute_logged()
         while True:
@@ -142,9 +147,17 @@ class DrivingService:
             await self._sleep((due - now).total_seconds())
             await self._recompute_logged()
 
+    def _track(self) -> None:
+        """Merkt sich die laufende Aufgabe, damit ``close`` sie abbrechen kann."""
+        task = asyncio.current_task()
+        if task is not None:
+            self._tasks.add(task)
+            task.add_done_callback(self._tasks.discard)
+
     async def _recompute_logged(self) -> None:
         try:
-            await self.recompute()
+            if not await self.recompute():
+                log.warning("Berechnung des Fahrverhaltens übersprungen, weil schon eine läuft")
         except Exception:  # der Tagesrhythmus darf nicht abreißen
             log.exception("Berechnung des Fahrverhaltens fehlgeschlagen")
 
@@ -156,11 +169,38 @@ class DrivingService:
         if self._running:
             return False
         self._running = True
+        self._track()
         try:
             await self._compute_all()
         finally:
             self._running = False
         return True
+
+    async def _offload(self, func: Callable[..., Any], *args: Any) -> Any:
+        """Rechnet ``func`` in einem Thread; ein Abbruch beendet nur das Warten (``close`` wartet
+        auf den Thread)."""
+        work = asyncio.ensure_future(asyncio.to_thread(func, *args))
+        self._threads.add(work)
+        work.add_done_callback(self._thread_done)
+        return await asyncio.shield(work)
+
+    def _thread_done(self, work: asyncio.Future[Any]) -> None:
+        self._threads.discard(work)
+        if not work.cancelled():
+            work.exception()  # holt einen Fehler ab, auf den nach einem Abbruch niemand wartet
+
+    async def close(self, timeout_s: float) -> bool:
+        """Beim Herunterfahren: bricht laufende Läufe ab und wartet höchstens ``timeout_s`` auf
+        Rechnungen und Schreibzugriffe im Thread. ``True``, wenn keiner mehr läuft."""
+        tasks = [task for task in self._tasks if task is not asyncio.current_task()]
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        pending = set(self._threads)
+        if not pending:
+            return True
+        done, _ = await asyncio.wait(pending, timeout=timeout_s)
+        return len(done) == len(pending)
 
     async def _compute_all(self) -> None:
         now = self._clock.now()
@@ -189,12 +229,12 @@ class DrivingService:
         history = await load_history(
             self._reader, self._engine, self._cfg, settings, key, start=start, end=now
         )
-        records, profile = await asyncio.to_thread(_build, history, settings, today)
-        await asyncio.to_thread(self._store, profile, now)
+        records, profile = await self._offload(_build, history, settings, today)
+        await self._offload(self._store, profile, now)
         self._profiles[key], self._stored_at[key] = profile, now
         self._errors.pop(key, None)
         try:
-            snapshots = await asyncio.to_thread(self._snapshots, key)
+            snapshots = await self._offload(self._snapshots, key)
             self._quality[key] = hit_rates(
                 records, snapshots, settings.return_reserve_pct, today=today, days=QUALITY_DAYS
             )
@@ -222,8 +262,7 @@ class DrivingService:
                 )
             )
 
-    def _rows(self, key: str, *, newest_first: bool) -> list[Snapshot]:
-        """Die lesbaren abgelegten Stände eines Autos; ein unlesbarer fällt weg."""
+    def _rows(self, key: str, *, newest_first: bool) -> Iterator[tuple[datetime, Any]]:
         order = driving_profile.c.computed_at
         statement = (
             select(driving_profile.c.computed_at, driving_profile.c.profile)
@@ -231,32 +270,41 @@ class DrivingService:
             .order_by(order.desc() if newest_first else order)
         )
         with self._engine.connect() as conn:
-            rows = conn.execute(statement).all()
+            for row in conn.execute(statement):
+                yield ensure_utc(row.computed_at), row.profile
+
+    def _snapshots(self, key: str) -> list[Snapshot]:
+        """Alle lesbaren abgelegten Stände eines Autos, älteste zuerst."""
         result: list[Snapshot] = []
-        for row in rows:
+        for computed_at, data in self._rows(key, newest_first=False):
             try:
-                result.append(
-                    (ensure_utc(row.computed_at), VehicleProfile.model_validate(row.profile))
-                )
+                result.append((computed_at, VehicleProfile.model_validate(data)))
             except ValidationError:
                 log.warning("Ein abgelegter Stand des Fahrverhaltens ist unlesbar", vehicle=key)
         return result
 
-    def _snapshots(self, key: str) -> list[Snapshot]:
-        return self._rows(key, newest_first=False)
+    def _newest(self, key: str) -> Snapshot | None:
+        """Der jüngste lesbare Stand; ältere Zeilen werden gar nicht erst geprüft. Nur Zeilen, die
+        jünger sind als der gewählte Stand und unlesbar, melden eine Warnung."""
+        for computed_at, data in self._rows(key, newest_first=True):
+            try:
+                return computed_at, VehicleProfile.model_validate(data)
+            except ValidationError:
+                log.warning("Ein abgelegter Stand des Fahrverhaltens ist unlesbar", vehicle=key)
+        return None
 
     def _latest(self) -> dict[str, Snapshot]:
         found: dict[str, Snapshot] = {}
         for key in self._cfg.vehicles:
-            rows = self._rows(key, newest_first=True)
-            if rows:
-                found[key] = rows[0]
+            newest = self._newest(key)
+            if newest is not None:
+                found[key] = newest
         return found
 
     async def load_stored(self) -> None:
         """Lädt den jüngsten abgelegten Stand je konfiguriertem Auto (beim Start)."""
         try:
-            latest = await asyncio.to_thread(self._latest)
+            latest = await self._offload(self._latest)
         except Exception:
             log.exception("Abgelegte Stände des Fahrverhaltens nicht gelesen")
             return

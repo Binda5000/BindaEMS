@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import threading
 from datetime import UTC, date, datetime, time, timedelta
 
 import pytest
@@ -533,3 +534,154 @@ async def test_quality_failure_keeps_the_stored_profile(
     assert len(rows(engine, "tesla")) == 1
     assert service.component_status().ok
     assert any(e["log_level"] == "error" for e in logs)
+
+
+async def test_load_takes_the_newest_row_not_the_last_inserted(
+    make_service, service, reader, engine
+) -> None:
+    commuter(reader)
+    await service.recompute()
+    template = VehicleProfile.model_validate(rows(engine, "tesla")[0].profile)
+    with engine.begin() as conn:
+        conn.execute(driving_profile.delete())
+    # das jüngste Datum zuerst eingefügt: die Reihenfolge der Zeilen sagt nichts
+    put_row(engine, "tesla", NOW - timedelta(days=1), template.model_copy(update={"days": 22}))
+    put_row(engine, "tesla", NOW - timedelta(days=3), template.model_copy(update={"days": 11}))
+    put_row(engine, "tesla", NOW - timedelta(days=2), template.model_copy(update={"days": 33}))
+    later = make_service()
+    await later.load_stored()
+    profile = later.profile("tesla")
+    assert profile is not None
+    assert profile.days == 22
+    assert later.status()["computed_at"] == (NOW - timedelta(days=1)).isoformat()
+
+
+async def test_load_checks_no_older_row_than_the_one_used(
+    make_service, service, reader, engine
+) -> None:
+    commuter(reader)
+    await service.recompute()
+    good = rows(engine, "tesla")[0]
+    with engine.begin() as conn:
+        conn.execute(
+            insert(driving_profile).values(
+                vehicle="tesla",
+                computed_at=NOW - timedelta(days=5),
+                data_from=good.data_from,
+                data_to=good.data_to,
+                source="tessie",
+                profile={"key": "tesla"},  # älter als der gültige Stand: bleibt ungeprüft
+            )
+        )
+    later = make_service()
+    with capture_logs() as logs:
+        await later.load_stored()
+    assert later.profile("tesla") == service.profile("tesla")
+    assert not [e for e in logs if e["log_level"] == "warning"]
+
+
+async def test_close_cancels_the_run_and_waits_for_the_thread(service, reader, monkeypatch) -> None:
+    commuter(reader)
+    entered, release = threading.Event(), threading.Event()
+    original = service._store
+
+    def blocked(profile: VehicleProfile, now: datetime) -> None:
+        entered.set()
+        release.wait(5)
+        original(profile, now)
+
+    monkeypatch.setattr(service, "_store", blocked)
+    run = asyncio.create_task(service.recompute())
+    await until(entered.is_set)
+    closing = asyncio.create_task(service.close(5.0))
+    await until(run.done)  # der Lauf ist abgebrochen, der Thread blockiert noch
+    assert run.cancelled()
+    await asyncio.sleep(0.05)
+    assert not closing.done()  # ``close`` wartet auf den Thread
+    release.set()
+    assert await closing is True
+    assert service.running() is False
+    assert service._threads == set()
+
+
+async def test_close_gives_up_after_the_timeout(service, reader, monkeypatch) -> None:
+    commuter(reader)
+    entered, release = threading.Event(), threading.Event()
+    monkeypatch.setattr(service, "_store", lambda profile, now: (entered.set(), release.wait(5)))
+    run = asyncio.create_task(service.recompute())
+    await until(entered.is_set)
+    assert await service.close(0.05) is False  # der Thread rechnet noch
+    release.set()
+    await until(lambda: not service._threads)
+    assert run.cancelled()
+
+
+async def test_close_without_work_returns_at_once(service) -> None:
+    assert await service.close(0.0) is True
+
+
+async def test_close_cancels_the_run_loop(make_service, reader) -> None:
+    sleeps: list[float] = []
+
+    async def sleep(seconds: float) -> None:
+        sleeps.append(seconds)
+        await asyncio.sleep(3600)
+
+    later = make_service(sleep=sleep)
+    task = asyncio.create_task(later.run())
+    await until(lambda: bool(sleeps))
+    assert await later.close(1.0) is True
+    assert task.cancelled()
+
+
+async def test_skipped_run_is_logged_and_not_queued(service, reader, engine) -> None:
+    commuter(reader)
+    reader.gate = asyncio.Event()
+    first = asyncio.create_task(service.recompute())
+    await until(service.running)
+    with capture_logs() as logs:
+        await service._recompute_logged()
+    skipped = [
+        e for e in logs if e["event"].startswith("Berechnung des Fahrverhaltens übersprungen")
+    ]
+    assert [e["log_level"] for e in skipped] == ["warning"]
+    reader.gate.set()
+    assert await first is True
+    assert len(rows(engine, "tesla")) == 1  # kein zweiter Lauf hinterher
+    with capture_logs() as logs:
+        await service._recompute_logged()  # frei: kein Hinweis
+    assert not [e for e in logs if "übersprungen" in e["event"]]
+
+
+def test_the_night_run_is_at_0340() -> None:
+    assert RUN_AT == time(3, 40)
+
+
+@pytest.mark.parametrize(
+    ("now", "due"),
+    [
+        # Winterzeit (MEZ, UTC+1): 03:40 Uhr sind 02:40 UTC
+        (datetime(2026, 12, 1, 1, 0, tzinfo=UTC), datetime(2026, 12, 1, 2, 40, tzinfo=UTC)),
+        (datetime(2026, 12, 1, 2, 40, tzinfo=UTC), datetime(2026, 12, 2, 2, 40, tzinfo=UTC)),
+        # Sommerzeit (MESZ, UTC+2): 03:40 Uhr sind 01:40 UTC
+        (datetime(2026, 7, 1, 0, 0, tzinfo=UTC), datetime(2026, 7, 1, 1, 40, tzinfo=UTC)),
+        # Umstellung auf Sommerzeit, Nacht zum 29.03.2026 (02:00 wird 03:00): nur 23 h von 03:40
+        # MEZ bis 03:40 MESZ
+        (datetime(2026, 3, 28, 2, 40, tzinfo=UTC), datetime(2026, 3, 29, 1, 40, tzinfo=UTC)),
+        (datetime(2026, 3, 29, 0, 0, tzinfo=UTC), datetime(2026, 3, 29, 1, 40, tzinfo=UTC)),
+        (datetime(2026, 3, 29, 1, 40, tzinfo=UTC), datetime(2026, 3, 30, 1, 40, tzinfo=UTC)),
+        # Umstellung auf Winterzeit, Nacht zum 25.10.2026 (03:00 wird 02:00): 25 h von 03:40 MESZ
+        # bis 03:40 MEZ
+        (datetime(2026, 10, 24, 1, 40, tzinfo=UTC), datetime(2026, 10, 25, 2, 40, tzinfo=UTC)),
+        (datetime(2026, 10, 25, 0, 0, tzinfo=UTC), datetime(2026, 10, 25, 2, 40, tzinfo=UTC)),
+        (datetime(2026, 10, 25, 2, 40, tzinfo=UTC), datetime(2026, 10, 26, 2, 40, tzinfo=UTC)),
+    ],
+)
+async def test_next_night_run_is_0340_local_as_an_exact_instant(make_service, now, due) -> None:
+    sleeps: list[float] = []
+    later = make_service(sleep=record_then_stop(sleeps, 1))
+    later._clock = ManualClock(now)
+    with pytest.raises(StopScheduler):
+        await later.run()
+    assert now + timedelta(seconds=sleeps[0]) == due
+    assert due.astimezone(LOCAL_TZ).time() == time(3, 40)
