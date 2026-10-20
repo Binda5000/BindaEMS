@@ -218,7 +218,13 @@ def fallback_intents(
             trial_steps = run(trial)
             if trial_steps[candidate].charge_grid_w < SHORT_W:
                 continue  # kein Platz im Akku: das Netzladen brächte nichts
-            if export_while_charged_kwh(trial_steps, candidate, params.lo_kwh) > R1_TOL_KWH:
+            # Regel R1 für jedes Netzladen: Ein früheres kann den Akku vor einem schon
+            # angenommenen über die Leer-Grenze heben und dessen Fenster in die Einspeisung ziehen.
+            if any(
+                trial[i].kind is BatteryIntentKind.NETZLADEN
+                and export_while_charged_kwh(trial_steps, i, params.lo_kwh) > R1_TOL_KWH
+                for i in range(count)
+            ):
                 continue
             intents, steps = trial, trial_steps
             break

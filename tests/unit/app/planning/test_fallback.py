@@ -16,7 +16,7 @@ from tests.plan_helpers import (
     state,
 )
 
-from bindaems.app.planning.battery_model import params_of
+from bindaems.app.planning.battery_model import SLOT_H, eta, params_of
 from bindaems.app.planning.fallback import expensive_today, fallback_intents, fallback_vehicles
 from bindaems.app.planning.plausibility import R1_TOL_KWH, export_while_charged_kwh
 from bindaems.shared.plan import BatteryIntent, BatteryIntentKind
@@ -155,6 +155,38 @@ def test_grid_charge_is_blocked_when_it_lasts_into_pv() -> None:
     assert export_while_charged_kwh(steps, 7, params.lo_kwh) > R1_TOL_KWH  # sonst hielte R1
     intents = fallback_intents(inputs)
     assert all(x.kind != BatteryIntentKind.NETZLADEN for x in intents)
+
+
+def test_earlier_grid_charge_may_not_push_an_accepted_one_into_pv() -> None:
+    # Slot 2 (8 ct) lädt zuerst für den teuren Slot 3; der leert den Akku bis 0,05 kWh über der
+    # Reserve, bevor die PV in Slot 4 einspeist. Für den teuren Slot 5 käme danach Slot 0 dazu:
+    # Slot 1 leert ihn bis 0,08 kWh über der Reserve, für sein eigenes Fenster ist der Akku also
+    # leer. Diese 0,08 kWh trägt der Akku aber bis Slot 3 mit, der dann bei 0,13 kWh endet: Die
+    # Ladung aus Slot 2 wäre bei der Einspeisung noch im Akku. Slot 0 und 1 laden darum nicht.
+    probe = scenario(prices=[1.0] * 2, pv=[0.0] * 2, load=[0.0] * 2, battery=small_battery())
+    efficiency = eta(probe.planning.roundtrip_pct)
+    charge_kwh = 5000 * SLOT_H / 1000 * efficiency
+    inputs = scenario(
+        prices=[10.0, 10.0, 8.0, 40.0, 12.0, 40.0],
+        pv=[0.0] * 4 + [9000.0, 0.0],
+        load=[
+            0.0,
+            (charge_kwh - 0.08) * efficiency / SLOT_H * 1000,
+            0.0,
+            (charge_kwh - 0.05) * efficiency / SLOT_H * 1000,
+            500.0,
+            5000.0,
+        ],
+        battery=small_battery(),
+        soc_pct=20.0,
+        grid_charge=True,
+    )
+    intents = fallback_intents(inputs)
+    charging = [i for i, x in enumerate(intents) if x.kind == BatteryIntentKind.NETZLADEN]
+    assert charging == [2]
+    steps = resimulate(inputs, intents)
+    lo_kwh = params_of(inputs).lo_kwh
+    assert export_while_charged_kwh(steps, 2, lo_kwh) <= R1_TOL_KWH
 
 
 def test_no_grid_charge_without_headroom_below_the_setpoint_limit() -> None:
