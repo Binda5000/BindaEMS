@@ -1,11 +1,12 @@
 ---
-title: "Phase 5 Zuschnitt und Plan 5a Lastmodell"
+title: Phase 5 Zuschnitt und Plan 5a Lastmodell
 author: Claude
 date: 2026-10-20
 branch: claude/phase-5-plan-s7xe0n
-cost: { minutes: 25, tokens: 140000 }
+cost: { minutes: 13, tokens: 218155 }
 touches:
   - docs/superpowers/plans/2026-10-20-phase-5a-lastmodell.md
+  - deploy/Dockerfile.app
 ---
 
 ## Decided
