@@ -1477,7 +1477,7 @@ async def test_weather_backfill_survives_network_errors(runtime, respx_mock) -> 
 def test_runtime_wires_the_load_model(runtime, tmp_path) -> None:
     assert runtime.model_registry._directory == tmp_path / "models" / "load"
     status = runtime.load_model.component_status()
-    assert (status.name, status.ok, status.message) == ("load-model", False, "Noch kein Modell")
+    assert (status.name, status.ok, status.message) == ("load-model", True, "Noch kein Modell")
 
 
 async def test_runtime_reissues_the_load_forecast_when_the_model_changes(

@@ -629,7 +629,7 @@ class LoadModelService:
         if self._error is not None:
             return ComponentStatus(COMPONENT, False, f"Lastmodell fehlgeschlagen: {self._error}")
         if self._model is None:
-            return ComponentStatus(COMPONENT, False, "Noch kein Modell")
+            return ComponentStatus(COMPONENT, True, "Noch kein Modell")  # normal, kein Fehler
         if self.active():
             return ComponentStatus(COMPONENT, True, "Lastmodell aktiv")
         return ComponentStatus(COMPONENT, True, "Profil aktiv, Modell bereit")

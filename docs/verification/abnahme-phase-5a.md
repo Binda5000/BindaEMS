@@ -183,7 +183,8 @@ Datum: ________ Ergebnis: ☐ bestanden ☐ nicht bestanden Unterschrift: ______
 **Fundort im UI:** System → „Komponenten“, Zeile `load-model`.
 
 Die Komponente meldet „Lastmodell aktiv“ oder „Profil aktiv, Modell bereit“. Ein Befund sind „Noch
-kein Modell“ (nach dem ersten erfolgreichen Training) und „Lastmodell fehlgeschlagen: {Fehler}“.
+kein Modell“ nach dem ersten erfolgreichen Training (die Seite zeigt es als „in Ordnung“, weil es
+vor dem ersten Training normal ist) und „Lastmodell fehlgeschlagen: {Fehler}“ („gestört“).
 
 Prüfschritte:
 

@@ -107,7 +107,7 @@ describe('Lastmodell', () => {
 		model: null,
 		backtest: null,
 		training: { running: false, last_at: null, outcome: null, text: null },
-		status: { ok: false, text: 'Noch kein Modell' }
+		status: { ok: true, text: 'Noch kein Modell' }
 	};
 
 	it('akzeptiert den Zustand ohne Modell, Backtest und Lauf', () => {

@@ -766,7 +766,7 @@ def test_status_before_anything(service: LoadModelService) -> None:
         "backtest": None,
         "training": {"running": False, "last_at": None, "outcome": None, "text": None},
         "sensors": [],
-        "status": {"ok": False, "text": "Noch kein Modell"},
+        "status": {"ok": True, "text": "Noch kein Modell"},
     }
 
 
@@ -806,7 +806,7 @@ async def test_status_describes_the_model(
 
 async def test_component_status_texts(env: Env, trainer: Trainer) -> None:
     status = env.service.component_status()
-    assert (status.name, status.ok, status.message) == ("load-model", False, "Noch kein Modell")
+    assert (status.name, status.ok, status.message) == ("load-model", True, "Noch kein Modell")
     await env.service.train()  # ohne Backtest und Schatten: Profil aktiv
     status = env.service.component_status()
     assert (status.ok, status.message) == (True, "Profil aktiv, Modell bereit")

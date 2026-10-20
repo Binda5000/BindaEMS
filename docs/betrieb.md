@@ -4256,8 +4256,9 @@ Hysterese.
 | Auswahl der Sensoren ändert sich | Jedes Modell rechnet mit seiner eigenen Merkmalsliste: Ein entfernter Sensor ist leer, ein neuer zählt erst ab dem nächsten Training. |
 
 Die Komponente `load-model` unter **System** → „Komponenten“ nennt den Zustand: „Lastmodell aktiv“,
-„Profil aktiv, Modell bereit“, „Noch kein Modell“ (Status nicht in Ordnung, bis das erste Training gelungen
-ist) oder „Lastmodell fehlgeschlagen: {Fehler}“.
+„Profil aktiv, Modell bereit“, „Noch kein Modell“ (ein normaler Zustand bis zum ersten gelungenen
+Training, etwa mit zu wenig Daten; Status in Ordnung) oder „Lastmodell fehlgeschlagen: {Fehler}“
+(Status nicht in Ordnung).
 
 ### Sensoren aus Home Assistant wählen
 

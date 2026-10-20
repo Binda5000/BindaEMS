@@ -106,7 +106,7 @@ def test_learning_status_shape(client_as, model) -> None:
     assert body["model"] is None and body["backtest"] is None
     assert body["training"] == {"running": False, "last_at": None, "outcome": None, "text": None}
     assert body["sensors"] == []
-    assert body["status"] == {"ok": False, "text": "Noch kein Modell"}
+    assert body["status"] == {"ok": True, "text": "Noch kein Modell"}
     assert {k: v for k, v in body.items() if k != "method"} == {
         k: v for k, v in model.status().items()
     }
