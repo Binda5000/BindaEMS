@@ -150,7 +150,9 @@ Unterschrift: ________
 
 Jedes Training (03:15 Uhr Ortszeit, in der Nacht also etwa 01:15 oder 02:15 UTC) legt eine neue Version
 an; die Registry behält die 14 neuesten und die aktive. Zwei Abfragen, nach 14 und nach 28 Tagen,
-belegen dann 28 Nächte:
+belegen dann 28 Nächte. Jedes zusätzliche Training (beim Start, über „Jetzt neu trainieren“, die Probe
+aus Abschnitt 6) zählt mit und verkürzt das sichtbare Fenster; zweite Quelle ist die Logzeile
+„Lastmodell trainiert“, eine je Lauf:
 
 ```bash
 cd /opt/bindaems

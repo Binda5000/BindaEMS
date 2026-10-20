@@ -4243,8 +4243,8 @@ Hysterese.
 
 | Fall | Folge |
 |---|---|
-| Training scheitert oder hat zu wenig Daten | Die bisherige Version bleibt; die Aktivierung wird trotzdem neu bewertet. Die Seite nennt den Grund unter „Lastprognose“. |
-| Modelldatei fehlt oder ist nicht lesbar (etwa nach einer Rücksicherung der Datenbank oder bei voller Platte) | Die Version gilt als unbrauchbar (Warnung „Lastmodell nicht lesbar, die Version wird nicht mehr verwendet“), die Planung nutzt das Profil, und das nächste Training legt eine neue Version an. |
+| Training scheitert (auch bei voller Platte, die Datei wird dann gar nicht angelegt) oder hat zu wenig Daten | Die bisherige Version bleibt; die Aktivierung wird trotzdem neu bewertet. Die Seite nennt den Grund unter „Lastprognose“. |
+| Modelldatei fehlt oder ist nicht lesbar (etwa nach einer Rücksicherung der Datenbank) | Die Version gilt als unbrauchbar (Warnung „Lastmodell nicht lesbar, die Version wird nicht mehr verwendet“), die Planung nutzt das Profil, und das nächste Training legt eine neue Version an. |
 | Schalter „Lastmodell verwenden“ aus | Sofort Profil. |
 | Sensor in HA fehlt, ist umbenannt oder nicht numerisch | Das Merkmal ist leer, das Training läuft; die Karte „Merkmale“ zeigt den Sensor als „nicht im Modell“. |
 | Auswahl der Sensoren ändert sich | Jedes Modell rechnet mit seiner eigenen Merkmalsliste: Ein entfernter Sensor ist leer, ein neuer zählt erst ab dem nächsten Training. |
@@ -4316,7 +4316,8 @@ enthält Plan 5a, sobald er auf `main` ist. **Nichts geht dabei von selbst live.
 2. **Ausrollen:** nach (oder mit) 4b und 6a nur die app:
    `cd /opt/bindaems && docker compose pull ems-app && docker compose up -d ems-app`. Der core
    bleibt und der Regelbetrieb bleibt an. Rollst du 4b und 6a gleichzeitig aus, genügt deren
-   `docker compose pull && docker compose up -d`.
+   `docker compose pull && docker compose up -d`; ist 5a dann schon auf `main`, bringt dieser Pull 5a
+   und die Migration `0013` mit, die Sicherung aus Schritt 1 gehört dann davor.
 3. **Beim Start** läuft die Migration `0013` (Tabellen `weather_slot` und `model_registry`; die Spalten
    `kind` von `forecast_record` und `forecast_metric` werden auf 16 Zeichen verlängert), die app holt
    die Temperatur-Historie einmal nach, und das **erste Training beginnt gleich danach**. Hat die

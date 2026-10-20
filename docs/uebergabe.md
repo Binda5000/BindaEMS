@@ -631,7 +631,7 @@ Daten aus 6a).
   UI-Schemas sind streng, eine abweichende Version zeigt auf der System-Seite nur „Unerwartete
   Antwort vom Server“.
 - **Tests auf dem Branch von Plan 5a** (20.10.2026): voller Lauf mit `--cov` 8178 Tests in 49 Minuten,
-  dazu 2 neue Tests der Doku, 754 UI-Tests (Vitest) und 33 E2E-Tests (Playwright), alle grün; ruff, mypy
+  davon einer rot (siehe unten, behoben), dazu 2 neue Tests der Doku, 754 UI-Tests (Vitest) und 33 E2E-Tests (Playwright) grün; ruff, mypy
   und import-linter (4 Verträge) sauber; Abdeckung 98,14 % insgesamt, 99,94 % für `core/safety`,
   `core/control` und `core/actuators` und 99 % für `app/learning`. Ein Test des Lerndienstes (Zeitlimit des
   Trainings, 50 ms) schlug im vollen Lauf fehl, weil er unter `--cov` zu früh prüfte; er ist behoben
