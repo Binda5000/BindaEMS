@@ -224,10 +224,46 @@ Minutenmittel in `long` und lassen sich in Grafana mit der Retention Policy `lon
   der Regelbetrieb bleibt an. Ausgerollt wird mit oder nach 4b und 6a; die Schritte stehen im
   Abschnitt „Lastmodell (Phase 5a)“, „Lastmodell ausrollen (Plan 5a)“.
 - **Rollback auf einen Stand vor Plan 5a:** Die Migration `0013` der app ist beim Start gelaufen; eine
-  ältere app kennt sie nicht und startet mit dieser Datenbank nicht. Spiele die Kopie ein, die du vor
-  dem Ausrollen gemacht hast (`/backup/vor-plan-5a.sqlite3`, Wiederherstellen wie in Abschnitt 9). Die
-  Modelle und das Wetterarchiv seit dem Ausrollen gehen dabei verloren, sonst nichts; der core ist
-  nicht betroffen. Die Dateien unter `/data/models/load/` darfst du löschen.
+  ältere app kennt sie nicht und startet mit dieser Datenbank nicht. Der core ist nicht betroffen. Es
+  gibt zwei Wege:
+  - **Datenbank zurückführen (empfohlen, die übrigen Daten bleiben):** Noch mit dem Image von Plan 5a,
+    also bevor du das Tag änderst, setzt du die Datenbank auf den Stand `0012`:
+
+    ```bash
+    cd /opt/bindaems
+    docker compose stop ems-app
+    docker compose run --rm --no-deps --entrypoint python ems-app -c '
+    from pathlib import Path
+    from alembic import command
+    from alembic.config import Config
+    from bindaems.app.db.engine import MIGRATIONS_DIR, open_database
+    engine = open_database(Path("/data/bindaems.sqlite3"))
+    config = Config()
+    config.set_main_option("script_location", str(MIGRATIONS_DIR))
+    with engine.begin() as connection:
+        config.attributes["connection"] = connection
+        command.downgrade(config, "0012")
+    engine.dispose()
+    print("Datenbank auf Stand 0012")'
+    ```
+
+    Danach in `.env` `BINDAEMS_VERSION=<tag>` setzen und `docker compose up -d ems-app`. Verloren
+    gehen nur die Daten von Plan 5a: die Registry der Modelle, das Wetterarchiv, die Schatten im
+    Archiv der Prognosen (`load_profile`, `load_model`) samt ihrer Güte und der Abschnitt
+    „Lastmodell“ der Einstellungen (Schalter und Sensoren); alle anderen Einstellungen bleiben, die
+    ältere app liest sie ohne Warnung. Abrechnung, Statistik, Ladesessions, Belegung, geplante
+    Ladungen, Pläne, Benutzer und das Audit-Log bleiben. Die Dateien unter `/data/models/load/`
+    darfst du löschen. Der Befehl braucht das Image mit Plan 5a; das ältere Image kennt die Migration
+    `0013` nicht und kann sie nicht zurücknehmen.
+  - **Kopie vor dem Ausrollen einspielen** (`/backup/vor-plan-5a.sqlite3`, Wiederherstellen wie in
+    Abschnitt 9): Das setzt die **ganze** Datenbank der app auf den Stand vor dem Ausrollen zurück.
+    Was die app beim Start nachholt, steht in Abschnitt 9: Preise neu von den Quellen, die
+    Viertelstunden der Abrechnung nur der letzten 7 Tage aus InfluxDB, die Statistik, soweit sie sich
+    rechnen lässt. Verloren geht alles andere seit dem Ausrollen: die Abrechnung davor (nach den 28
+    Tagen der Abnahme also drei Wochen), Ladesessions und Belegung, die geplanten Ladungen, die Pläne
+    und das Archiv der Prognosen, die Versionen der Einstellungen (es gelten wieder die Einstellungen
+    vom Ausrollen), Änderungen an Benutzern und Verbrauchern, das Audit-Log sowie Modelle und
+    Wetterarchiv. Diesen Weg nimmst du nur, wenn das Zurückführen scheitert.
 - **Rollback auf einen Stand vor Plan 4b:**
   - Die Migration `0012` der app ist beim Start gelaufen; eine ältere app startet mit dieser
     Datenbank nicht. Spiele die Kopie ein, die du vor dem Ausrollen gemacht hast
