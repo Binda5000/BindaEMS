@@ -53,7 +53,12 @@ class Activation:
                 f"{pct} % genauer als das Profil ({basis})."
             )
         if self.reason == "not_better":
-            pct = _percent(self.improvement_pct) if self.improvement_pct is not None else 0
+            improvement = self.improvement_pct
+            if improvement is None or improvement >= 0.0:
+                # Knapp verfehlt wird abgerundet, damit nie „nur 10 %“ bei nötigen 10 % dasteht.
+                pct = math.floor(improvement + _TOLERANCE) if improvement is not None else 0
+            else:
+                pct = _percent(improvement)
             if pct < 0:
                 return f"Profil aktiv: Das Modell ist {-pct} % ungenauer als das Profil."
             return (

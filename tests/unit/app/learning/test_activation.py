@@ -239,6 +239,10 @@ def test_text_for_not_better_and_zero() -> None:
     assert _decide(_days(14, 230.0, 250.0)).text() == (
         "Profil aktiv: Das Modell ist nur 8 % genauer, nötig sind 10 %."
     )
+    # Knapp verfehlt wird abgerundet, nie auf die nötigen 10 % aufgerundet.
+    assert _decide(_days(14, 226.0, 250.0)).text() == (
+        "Profil aktiv: Das Modell ist nur 9 % genauer, nötig sind 10 %."
+    )
     # Auf 0 gerundet bleibt es bei „nur 0 %“, nie „−0 %“.
     assert _decide(_days(14, 250.4, 250.0)).text() == (
         "Profil aktiv: Das Modell ist nur 0 % genauer, nötig sind 10 %."
