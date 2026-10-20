@@ -10,7 +10,7 @@ from __future__ import annotations
 from collections import defaultdict
 from dataclasses import dataclass
 from datetime import date
-from typing import Literal, cast, get_args
+from typing import cast, get_args
 
 from sqlalchemy import Engine, delete, func, insert, select
 
@@ -18,20 +18,20 @@ from bindaems.app.db.schema import forecast_metric
 from bindaems.app.forecast.archive import (
     ForecastArchive,
     HorizonClass,
+    Kind,
     SlotSource,
     actuals,
 )
 from bindaems.shared.timeutil import SLOT, ensure_utc, local_day_slots
 
-QualityKind = Literal["pv", "load"]
-# die Schatten des Lastmodells (``load_profile``, ``load_model``) bewertet die Güte noch nicht
-_KIND_ORDER: tuple[QualityKind, ...] = ("pv", "load")
+# alle Arten des Archivs; das Ist aller ``load*`` ist die Hauslast (Plan 5a, Präzisierung 2)
+_KIND_ORDER: tuple[Kind, ...] = get_args(Kind)
 _HORIZON_ORDER: tuple[HorizonClass, ...] = get_args(HorizonClass)
 
 
 @dataclass(frozen=True)
 class QualityRow:
-    kind: QualityKind
+    kind: Kind
     horizon: HorizonClass
     n: int
     mae_w: float
@@ -59,9 +59,7 @@ class ForecastQuality:
         actual = {
             ensure_utc(slot): value for slot, value in actuals(self._ledger, start, end).items()
         }
-        sums: dict[tuple[QualityKind, HorizonClass], list[float]] = defaultdict(
-            lambda: [0, 0.0, 0.0, 0.0]
-        )
+        sums: dict[tuple[Kind, HorizonClass], list[float]] = defaultdict(lambda: [0, 0.0, 0.0, 0.0])
         for kind in _KIND_ORDER:
             for record in self._archive.records(kind, start, end):
                 known = actual.get(ensure_utc(record.slot_start))
@@ -114,7 +112,7 @@ class ForecastQuality:
             found = conn.execute(query).all()
         result = [
             QualityRow(
-                kind=cast(QualityKind, kind),
+                kind=cast(Kind, kind),
                 horizon=cast(HorizonClass, horizon),
                 n=int(n),
                 mae_w=abs_err / n,

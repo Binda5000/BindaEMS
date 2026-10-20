@@ -125,3 +125,20 @@ def test_relative_error_is_none_without_actual_energy(quality, archive, ledger):
 
 def test_quality_without_records_is_empty(quality):
     assert quality.summary(date(2026, 10, 1), date(2026, 10, 15)) == []
+
+
+def test_quality_rates_shadow_kinds(quality, archive, ledger):
+    """Alle vier Arten zählen; das Ist der drei ``load*`` ist die Hauslast, nicht die PV."""
+    slot = at("2026-10-15T08:00:00+00:00")
+    issued = at("2026-10-15T05:00:00+00:00")
+    for kind, watts in (("load_model", 900), ("load_profile", 600), ("load", 900), ("pv", 1000)):
+        archive.record(kind, issued, {slot: RecordValue(watts, watts)})
+    ingest(ledger, "2026-10-15T08:00:00+00:00", {"grid>house": 200, "pv>grid": 250})  # 800 / 1000 W
+    assert quality.update(DAY) == 4
+    rows = quality.summary(DAY, DAY)
+    assert [(r.kind, r.horizon, r.n, r.mae_w, r.bias_w) for r in rows] == [
+        ("pv", "h0_6", 1, 0.0, 0.0),
+        ("load", "h0_6", 1, 100.0, 100.0),
+        ("load_profile", "h0_6", 1, 200.0, -200.0),
+        ("load_model", "h0_6", 1, 100.0, 100.0),
+    ]

@@ -259,6 +259,7 @@ class AppRuntime:
             clock=self._clock,
             ready=self._weather_backfilled.wait,
         )
+        self.load_forecast.attach_model(self.load_model)  # die Ausgabe schattet das Modell mit
         self.plan_store = PlanStore(self.engine)
         self.forecast_quality = ForecastQuality(
             self.engine, self.forecast_archive, self.ledger, pv_threshold_w(cfg)

@@ -5,24 +5,29 @@ Slot liest der Dienst, falls ``homeassistant.load_history`` gesetzt ist, die HA-
 Profil wird beim Start und beim ersten Lauf eines neuen lokalen Tages gebaut; die stündlichen
 Ausgaben nutzen das gemerkte Profil. Die Prognose liegt im Speicher; jede Ausgabe geht
 zusätzlich ins Archiv und nach InfluxDB.
+
+Mit angehängtem Lastmodell (Plan 5a, Entscheidung 12) rechnet jede Ausgabe Profil und Modell und
+archiviert beide (``load_profile``, ``load_model``); als ``load`` geht das aktive Verfahren, bei
+fehlenden Modellwerten (mehr als 10 % der Slots) oder einem Fehler der Vorhersage das Profil.
 """
 
 from __future__ import annotations
 
 import asyncio
+import math
 from collections import defaultdict
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
 from types import MappingProxyType
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 import structlog
 
 from bindaems.app.consumers.energy import HA_SEED, ha_points
 from bindaems.app.consumers.values import HaRef, ha_selection
 from bindaems.app.daytype import DayType, slot_key
-from bindaems.app.forecast.archive import ForecastArchive, RecordValue, SlotSource, actuals
+from bindaems.app.forecast.archive import ForecastArchive, Kind, RecordValue, SlotSource, actuals
 from bindaems.app.history.influx import (
     RP_LONG,
     InfluxQueryError,
@@ -44,6 +49,9 @@ from bindaems.shared.timeutil import (
     slots_between,
 )
 
+if TYPE_CHECKING:  # ``learning.service`` importiert dieses Modul; zur Laufzeit nur der Name
+    from bindaems.app.learning.service import LoadModelService
+
 log = structlog.get_logger(__name__)
 
 WINDOW_DAYS = 56
@@ -56,6 +64,7 @@ OUTPUT_DAYS = 3  # heute, morgen, übermorgen
 MINUTES_PER_SLOT = 15
 _MINUTE_MS = 60_000
 _SCALE_TOLERANCE = 1e-9  # Rundung der Gewichtssummen
+MAX_MODEL_GAP = 0.10  # Anteil der Slots ohne Modellwert, bis zu dem das Profil sie auffüllt
 
 Source = Literal["ledger", "ha"]
 
@@ -132,6 +141,7 @@ class LoadForecast:
     issued_at: datetime
     p50_w: Mapping[datetime, float]
     basis: Mapping[str, int]  # Stichproben aus der Abrechnung ("ledger") und aus HA ("ha")
+    method: Literal["profile", "model"] = "profile"  # Verfahren, das die Werte liefert
 
     def day_energy_kwh(self, day: date) -> float | None:
         """Energie des lokalen Tages aus den vorhandenen Slots; ohne Slots ``None``."""
@@ -165,6 +175,12 @@ class LoadForecastService:
         self._profile_day: date | None = None  # lokaler Tag, an dem das Profil gebaut wurde
         self._ha_ok = True  # die HA-Abfrage der letzten Historie hat geklappt
         self._warned_units: set[str] = set()  # Entitäten mit falscher Einheit, schon gemeldet
+        self._model: LoadModelService | None = None
+
+    def attach_model(self, model: LoadModelService) -> None:
+        """Hängt das Lastmodell an (es braucht seinerseits dieses Profil, daher nicht im Aufbau).
+        Ohne Modell gibt jede Ausgabe das Profil aus."""
+        self._model = model
 
     def latest(self) -> LoadForecast | None:
         return self._forecast
@@ -241,17 +257,61 @@ class LoadForecastService:
         if profile is None or profile.overall is None:
             self._forecast, self._error = None, None
             return None
-        p50_w: dict[datetime, float] = {}
+        profile_w: dict[datetime, float] = {}
         for day in (today + timedelta(days=offset) for offset in range(OUTPUT_DAYS)):
             for slot in local_day_slots(day):
                 value = profile.at(slot)
                 if slot >= slot_start(now) and value is not None:
-                    p50_w[slot] = value
-        forecast = LoadForecast(now, p50_w, dict(self._basis))
+                    profile_w[slot] = value
+        model_w = await self._predict(now, profile_w, profile)
+        p50_w, method = self._output(profile_w, model_w)
+        forecast = LoadForecast(now, p50_w, dict(self._basis), method)
         self._forecast, self._error = forecast, None
         self._publish(forecast)
-        await self._archive_forecast(forecast)
+        await self._archive_forecast(forecast, profile_w, model_w)
         return forecast
+
+    async def _predict(
+        self, now: datetime, profile_w: Mapping[datetime, float], profile: LoadProfile
+    ) -> dict[datetime, float] | None:
+        """Die Modellwerte der Slots (nur endliche); ohne Modell, ohne Version oder bei einem Fehler
+        der Vorhersage ``None``. Nur schattenweise (nicht aktiv, kein Archiv) lohnt sie nicht."""
+        model = self._model
+        if model is None or not profile_w or (self._archive is None and not model.active()):
+            return None
+        try:
+            predicted = await model.predict(now, sorted(profile_w), profile)
+        except Exception as exc:  # das Modell darf die Prognose nie verhindern
+            log.warning(
+                "Vorhersage des Lastmodells fehlgeschlagen, die Ausgabe nimmt das Profil",
+                error=str(exc),
+            )
+            return None
+        if predicted is None:
+            return None
+        return {
+            slot: predicted[slot]
+            for slot in profile_w
+            if slot in predicted and math.isfinite(predicted[slot])
+        }
+
+    def _output(
+        self, profile_w: Mapping[datetime, float], model_w: Mapping[datetime, float] | None
+    ) -> tuple[dict[datetime, float], Literal["profile", "model"]]:
+        """Die ausgegebenen Werte: das Modell, wenn es aktiv ist und höchstens 10 % der Slots
+        fehlen (dort gilt das Profil), sonst das Profil."""
+        model = self._model
+        if model is None or model_w is None or not model.active():
+            return dict(profile_w), "profile"
+        missing = len(profile_w) - len(model_w)
+        if missing > MAX_MODEL_GAP * len(profile_w):
+            log.warning(
+                "Das Lastmodell hat zu viele Lücken, die Ausgabe nimmt das Profil",
+                missing=missing,
+                slots=len(profile_w),
+            )
+            return dict(profile_w), "profile"
+        return {slot: model_w.get(slot, value) for slot, value in profile_w.items()}, "model"
 
     async def _rebuild(self, now: datetime, today: date) -> None:
         start = now - timedelta(days=WINDOW_DAYS)
@@ -266,15 +326,30 @@ class LoadForecastService:
         self._profile_day = today if self._ha_ok else None
         log.info("Lastprofil gebaut", samples=self._profile.samples, basis=self._basis)
 
-    async def _archive_forecast(self, forecast: LoadForecast) -> None:
-        """Ins Archiv schreiben; ein Fehler dort lässt die neue Prognose bestehen."""
+    async def _archive_forecast(
+        self,
+        forecast: LoadForecast,
+        profile_w: Mapping[datetime, float],
+        model_w: Mapping[datetime, float] | None,
+    ) -> None:
+        """Ausgabe und Schatten ins Archiv schreiben (``load_model`` nur mit Vorhersage); ein
+        Fehler dort lässt die neue Prognose bestehen."""
         if self._archive is None:
             return
-        values = {slot: RecordValue(power_w, power_w) for slot, power_w in forecast.p50_w.items()}
-        try:
-            await asyncio.to_thread(self._archive.record, "load", forecast.issued_at, values)
-        except Exception as exc:  # das Archiv darf die Prognose nicht verhindern
-            log.warning("Lastprognose konnte nicht archiviert werden", error=str(exc))
+        shadows: list[tuple[Kind, Mapping[datetime, float]]] = [
+            ("load", forecast.p50_w),
+            ("load_profile", profile_w),
+        ]
+        if model_w is not None:
+            shadows.append(("load_model", model_w))
+        for kind, powers in shadows:
+            values = {slot: RecordValue(power_w, power_w) for slot, power_w in powers.items()}
+            try:
+                await asyncio.to_thread(self._archive.record, kind, forecast.issued_at, values)
+            except Exception as exc:  # das Archiv darf die Prognose nicht verhindern
+                log.warning(
+                    "Lastprognose konnte nicht archiviert werden", kind=kind, error=str(exc)
+                )
 
     def _publish(self, forecast: LoadForecast) -> None:
         if self._sink is None:

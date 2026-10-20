@@ -544,3 +544,174 @@ async def test_ha_samples_count_in_the_basis(
     )
     forecast = await load_service_with_ha.refresh()
     assert forecast is not None and forecast.basis == {"ledger": 1, "ha": 1}
+
+
+# --- Schattenbetrieb von Profil und Modell (Plan 5a, Entscheidung 12) ----------------------------
+
+
+class FakeModel:
+    """Ersatz für den ``LoadModelService``: feste Modellwerte, ``missing`` Slots ohne Wert."""
+
+    def __init__(
+        self,
+        *,
+        active: bool = True,
+        watts: float = 1000.0,
+        missing: int = 0,
+        bad: float | None = None,
+        none: bool = False,
+        error: Exception | None = None,
+    ) -> None:
+        self._active, self.watts, self.missing, self.bad = active, watts, missing, bad
+        self.none, self.error = none, error
+        self.calls: list[tuple[datetime, int]] = []
+
+    def active(self) -> bool:
+        return self._active
+
+    async def predict(self, issued_at, slots, profile):
+        self.calls.append((issued_at, len(slots)))
+        if self.error is not None:
+            raise self.error
+        if self.none:
+            return None
+        values = {slot: self.watts for slot in slots}
+        for slot in slots[: self.missing]:
+            if self.bad is None:
+                del values[slot]
+            else:
+                values[slot] = self.bad  # NaN: wie fehlend
+        return values
+
+
+@pytest.fixture
+def shadow_ledger(ledger):
+    for day in workdays(2):
+        ingest(ledger, at_local(day, "10:00"), {"grid>house": 125})  # Profil 500 W überall
+    return ledger
+
+
+def _archived(archive, kind: str) -> dict[datetime, float]:
+    return {r.slot_start: r.p50_w for r in archive.records(kind, NOW, NOW + timedelta(days=4))}
+
+
+async def test_without_model_output_is_profile(load_service, archive, shadow_ledger) -> None:
+    forecast = await load_service.refresh()
+    assert forecast is not None and forecast.method == "profile"
+    assert set(forecast.p50_w.values()) == {500.0}
+    assert _archived(archive, "load") == _archived(archive, "load_profile") == forecast.p50_w
+    assert _archived(archive, "load_model") == {}
+
+
+async def test_shadow_records_both_methods(load_service, archive, shadow_ledger, sink) -> None:
+    model = FakeModel(active=False)
+    load_service.attach_model(model)
+    forecast = await load_service.refresh()
+    assert forecast is not None and forecast.method == "profile"
+    assert model.calls == [(NOW, 256)]
+    assert set(_archived(archive, "load").values()) == {500.0}
+    assert set(_archived(archive, "load_profile").values()) == {500.0}
+    assert set(_archived(archive, "load_model").values()) == {1000.0}
+    assert len(_archived(archive, "load_model")) == 256
+    # InfluxDB bekommt weiter nur die ausgegebene Prognose
+    points = [p for p in sink.points if p.measurement == "forecast"]
+    assert {p.tags["kind"] for p in points} == {"load"} and len(points) == 256
+
+
+async def test_active_model_is_output(load_service, archive, shadow_ledger, sink) -> None:
+    load_service.attach_model(FakeModel(active=True))
+    forecast = await load_service.refresh()
+    assert forecast is not None and forecast.method == "model"
+    assert set(forecast.p50_w.values()) == {1000.0}
+    assert load_service.latest() is forecast
+    assert set(_archived(archive, "load").values()) == {1000.0}
+    assert set(_archived(archive, "load_profile").values()) == {500.0}
+    assert set(_archived(archive, "load_model").values()) == {1000.0}
+    points = [p for p in sink.points if p.measurement == "forecast"]
+    assert all(p.fields == {"kw": 1.0} and p.tags["kind"] == "load" for p in points)
+
+
+async def test_inactive_model_only_in_shadow(load_service, archive, shadow_ledger) -> None:
+    model = FakeModel(active=False)
+    load_service.attach_model(model)
+    forecast = await load_service.refresh()
+    assert forecast is not None and set(forecast.p50_w.values()) == {500.0}
+    assert forecast.method == "profile"
+    assert set(_archived(archive, "load_model").values()) == {1000.0}
+
+
+async def test_inactive_model_without_archive_is_not_asked(
+    cfg, ledger, now_clock, shadow_ledger
+) -> None:
+    service = LoadForecastService(ledger, cfg, None, None, now_clock)
+    model = FakeModel(active=False)
+    service.attach_model(model)
+    forecast = await service.refresh()
+    assert forecast is not None and forecast.method == "profile" and model.calls == []
+
+
+@pytest.mark.parametrize("missing", [12, 25])  # 4,7 % und 9,8 %; bis 10 % wird aufgefüllt
+@pytest.mark.parametrize("bad", [None, float("nan"), float("inf")])
+async def test_gaps_are_filled_with_profile(
+    load_service, archive, shadow_ledger, missing, bad
+) -> None:
+    load_service.attach_model(FakeModel(missing=missing, bad=bad))
+    forecast = await load_service.refresh()
+    assert forecast is not None and forecast.method == "model"
+    values = list(forecast.p50_w.values())
+    assert values.count(500.0) == missing and values.count(1000.0) == 256 - missing
+    assert len(forecast.p50_w) == 256
+    # das Modell wird nur dort archiviert, wo es wirklich einen Wert hat
+    assert len(_archived(archive, "load_model")) == 256 - missing
+    assert set(_archived(archive, "load_model").values()) == {1000.0}
+    assert len(_archived(archive, "load")) == 256
+
+
+@pytest.mark.parametrize("bad", [None, float("nan")])
+async def test_many_gaps_fall_back_to_profile(load_service, archive, shadow_ledger, bad) -> None:
+    load_service.attach_model(FakeModel(missing=29, bad=bad))  # 11,3 %
+    with capture_logs() as logs:
+        forecast = await load_service.refresh()
+    assert forecast is not None and forecast.method == "profile"
+    assert set(forecast.p50_w.values()) == {500.0}
+    assert len(_archived(archive, "load_model")) == 256 - 29
+    assert set(_archived(archive, "load").values()) == {500.0}
+    assert [e["log_level"] for e in logs if "Lücken" in e["event"]] == ["warning"]
+
+
+@pytest.mark.parametrize("model", [FakeModel(error=RuntimeError("kaputt")), FakeModel(none=True)])
+async def test_broken_model_falls_back_to_profile(
+    load_service, archive, shadow_ledger, model
+) -> None:
+    load_service.attach_model(model)
+    with capture_logs() as logs:
+        forecast = await load_service.refresh()
+    assert forecast is not None and forecast.method == "profile"
+    assert set(forecast.p50_w.values()) == {500.0}
+    assert _archived(archive, "load_model") == {}
+    assert set(_archived(archive, "load").values()) == {500.0}
+    assert set(_archived(archive, "load_profile").values()) == {500.0}
+    failures = [e for e in logs if "Vorhersage des Lastmodells" in e["event"]]
+    # genau eine Warnung je Ausgabe, kein Traceback je Slot; ohne Version keine
+    assert len(failures) == (1 if model.error else 0)
+    assert all(e["log_level"] == "warning" and "exc_info" not in e for e in failures)
+
+
+async def test_archive_failure_keeps_the_forecast_and_the_other_kinds(
+    load_service, archive, shadow_ledger, monkeypatch
+) -> None:
+    load_service.attach_model(FakeModel(active=True))
+    record = archive.record
+
+    def failing(kind, issued_at, values):
+        if kind == "load_profile":
+            raise OSError("voll")
+        return record(kind, issued_at, values)
+
+    monkeypatch.setattr(archive, "record", failing)
+    with capture_logs() as logs:
+        forecast = await load_service.refresh()
+    assert forecast is not None and forecast.method == "model"
+    assert _archived(archive, "load_profile") == {}
+    assert len(_archived(archive, "load")) == len(_archived(archive, "load_model")) == 256
+    assert [e["kind"] for e in logs if "archiviert" in e["event"]] == ["load_profile"]
