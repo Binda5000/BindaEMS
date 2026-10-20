@@ -17,7 +17,7 @@ from tests.plan_helpers import until
 from tests.unit.app.learning.conftest import SYNTHETIC_FIRST_DAY, FakeReader, make_synthetic
 
 from bindaems.app.forecast.archive import ForecastArchive, RecordValue
-from bindaems.app.forecast.load import LoadProfile, LoadSample, build_profile
+from bindaems.app.forecast.load import LoadForecastService, LoadProfile, LoadSample, build_profile
 from bindaems.app.history.influx import InfluxQueryError, Series
 from bindaems.app.learning import service as service_module
 from bindaems.app.learning.backtest import BacktestResult, DaySums
@@ -39,6 +39,7 @@ from bindaems.app.learning.service import (
 )
 from bindaems.app.ledger.service import LedgerSlot
 from bindaems.app.settings.service import SettingsService
+from bindaems.shared.config import Config
 from bindaems.shared.influx.lineprotocol import epoch_ms
 from bindaems.shared.timeutil import (
     LOCAL_TZ,
@@ -1096,3 +1097,109 @@ async def test_failed_evaluation_after_the_switch_is_logged(
         await until(
             lambda: "Aktivierung des Lastmodells nicht bewertet" in [e["event"] for e in logs]
         )
+
+
+def equal_backtest(today: date = TODAY) -> BacktestResult:
+    """Backtest mit 14 Tagen, an denen Modell und Profil gleich genau sind."""
+    daily = {today - timedelta(days=k): DaySums(100, 10000.0, 10000.0) for k in range(1, 15)}
+    return BacktestResult([], daily)
+
+
+def record_changes(service: LoadModelService) -> list[bool]:
+    """Merkt sich bei jeder Meldung, ob das Modell danach aktiv ist."""
+    seen: list[bool] = []
+    service.on_active_change(lambda: seen.append(service.active()))
+    return seen
+
+
+async def test_switch_announces_the_change_at_once(
+    env: Env, trainer: Trainer, settings_service: SettingsService, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(service_module, "rolling_backtest", lambda *args: better_backtest())
+    await env.service.train()
+    assert env.service.active()
+    seen = record_changes(env.service)
+    set_learning(settings_service, load_model_enabled=False)
+    assert seen == [False]  # sofort, nicht erst nach der Bewertung
+    await until(lambda: _stored_reason(env) == "disabled")
+    assert seen == [False]
+    set_learning(settings_service, load_model_enabled=True)
+    await until(lambda: _stored_reason(env) == "better")
+    assert seen == [False, True]  # aktiv erst nach der Bewertung
+
+
+async def test_decision_flip_announces_the_change(
+    env: Env, trainer: Trainer, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(service_module, "rolling_backtest", lambda *args: better_backtest())
+    seen = record_changes(env.service)
+    await env.service.train()
+    assert seen == [True]
+    await env.service.train()  # neue Version, wieder aktiv: keine Meldung
+    await env.service.evaluate()
+    assert seen == [True]
+    monkeypatch.setattr(service_module, "rolling_backtest", lambda *args: equal_backtest())
+    await env.service.train()
+    assert seen == [True, False]
+
+
+async def test_loaded_active_version_is_announced(
+    make_env: Callable[..., Env], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(service_module, "rolling_backtest", lambda *args: better_backtest())
+    assert (await make_env().service.train()).outcome == "trained"  # echtes Modell als Datei
+    env = make_env(stop_after=1)  # Neustart: lädt die aktive Version aus der Registry
+    seen = record_changes(env.service)
+    with pytest.raises(StopScheduler):
+        await env.service.run()
+    assert seen == [True]
+    assert env.service.status()["training"]["outcome"] is None  # geladen, nicht neu trainiert
+
+
+async def test_failing_listener_is_logged(
+    env: Env, trainer: Trainer, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(service_module, "rolling_backtest", lambda *args: better_backtest())
+
+    def broken() -> None:
+        raise RuntimeError("kaputt")
+
+    env.service.on_active_change(broken)
+    seen = record_changes(env.service)
+    with capture_logs() as logs:
+        result = await env.service.train()
+    assert result.outcome == "trained" and seen == [True]
+    assert "Meldung des Lastmodells fehlgeschlagen" in [e["event"] for e in logs]
+
+
+async def test_switching_off_reissues_the_load_forecast_at_once(
+    env: Env, trainer: Trainer, cfg: Config, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(service_module, "rolling_backtest", lambda *args: better_backtest())
+    for slot in slots_between(NOW - 7 * DAY, slot_start(NOW)):
+        env.ledger.add(slot, 400.0)  # Profil aus der Abrechnung
+    sleeps: list[float] = []
+
+    async def sleep(seconds: float) -> None:
+        sleeps.append(seconds)
+        await asyncio.Event().wait()  # die Minute 9 kommt in diesem Test nie
+
+    load_forecast = LoadForecastService(env.ledger, cfg, None, env.archive, env.clock, sleep=sleep)
+    load_forecast.attach_model(env.service)
+    env.service.on_active_change(load_forecast.request_refresh)  # wie in der Laufzeit
+    await env.service.train()
+    task = asyncio.create_task(load_forecast.run())
+    try:
+        await until(lambda: len(sleeps) == 1)
+        first = load_forecast.latest()
+        assert first is not None and first.method == "model"
+        env.clock.advance(timedelta(minutes=1))
+        set_learning(env.settings, load_model_enabled=False)
+        await until(lambda: load_forecast.latest() is not first)
+        second = load_forecast.latest()
+        assert second is not None and second.method == "profile"
+        assert set(second.p50_w.values()) == {400.0}
+        await until(lambda: len(sleeps) == 2)
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)

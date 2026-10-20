@@ -225,7 +225,26 @@ class LoadModelService:
         self._result: TrainingResult | None = None
         self._error: str | None = None  # Fehler des letzten Trainings
         self._units_known = False  # ``candidates`` gelang, die Messungen je Einheit sind bekannt
+        self._listeners: list[Callable[[], None]] = []  # hören auf Änderungen von ``active``
+        self._announced = False  # ``active`` bei der letzten Meldung
         settings.on_change(self._on_settings)
+
+    def on_active_change(self, callback: Callable[[], None]) -> None:
+        """Meldet jede Änderung von ``active`` (Schalter, Bewertung, Laden beim Start); die
+        Lastprognose gibt dann gleich neu aus. Der Aufruf kommt aus der Ereignisschleife."""
+        self._listeners.append(callback)
+
+    def _announce(self) -> None:
+        """Ruft die Hörer, wenn sich ``active`` seit der letzten Meldung geändert hat."""
+        active = self.active()
+        if active == self._announced:
+            return
+        self._announced = active
+        for callback in list(self._listeners):
+            try:
+                callback()
+            except Exception:  # ein Hörer darf Training und Bewertung nicht stören
+                log.exception("Meldung des Lastmodells fehlgeschlagen")
 
     # --- Training -------------------------------------------------------------------------
 
@@ -248,6 +267,7 @@ class LoadModelService:
                     await self._evaluate()
                 except Exception:
                     log.exception("Aktivierung des Lastmodells nicht bewertet")
+                self._announce()  # auch nach einer gescheiterten Bewertung der neuen Version
                 return result
             finally:
                 self._training = False
@@ -412,6 +432,7 @@ class LoadModelService:
                 self._registry.decide, entry.id, activation.as_json(), activation.active, now
             )
         self._activation, self._decided_at, self._active = activation, now, activation.active
+        self._announce()
         log.info(
             "Aktivierung des Lastmodells bewertet",
             reason=activation.reason,
@@ -426,8 +447,9 @@ class LoadModelService:
             self._loop, self._loop_thread = asyncio.get_running_loop(), threading.get_ident()
 
     def _on_settings(self, version: SettingsVersion) -> None:
-        """Ändert sich der Schalter „Lastmodell verwenden“, gleich neu bewerten (aus jedem
-        Thread); vor dem ersten Lauf ohne Wirkung, ``active`` liest den Schalter ohnehin."""
+        """Ändert sich der Schalter „Lastmodell verwenden“, die Änderung gleich melden und neu
+        bewerten (aus jedem Thread); vor dem ersten Lauf ohne Wirkung, ``active`` liest den
+        Schalter ohnehin."""
         enabled = version.settings.learning.load_model_enabled
         with self._seen_lock:
             changed, self._seen_enabled = enabled != self._seen_enabled, enabled
@@ -435,10 +457,15 @@ class LoadModelService:
         if not changed or loop is None or loop.is_closed():
             return
         if threading.get_ident() == self._loop_thread:
-            self._spawn_evaluation()
+            self._switched()
         else:
             with contextlib.suppress(RuntimeError):  # Schleife inzwischen geschlossen
-                loop.call_soon_threadsafe(self._spawn_evaluation)
+                loop.call_soon_threadsafe(self._switched)
+
+    def _switched(self) -> None:
+        # aus wirkt sofort (``active`` liest den Schalter); an erst mit der Bewertung danach
+        self._announce()
+        self._spawn_evaluation()
 
     def _spawn_evaluation(self) -> None:
         task = asyncio.get_running_loop().create_task(
@@ -544,6 +571,7 @@ class LoadModelService:
         if entry is not None and model is not None:
             self._use(entry, model)
             log.info("Lastmodell geladen", version=entry.id, active=entry.active)
+            self._announce()  # die erste Ausgabe kam womöglich noch ohne die Version
 
     async def _wait_ready(self) -> None:
         if self._ready is None:

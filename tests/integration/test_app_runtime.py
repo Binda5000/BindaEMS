@@ -1480,6 +1480,15 @@ def test_runtime_wires_the_load_model(runtime, tmp_path) -> None:
     assert (status.name, status.ok, status.message) == ("load-model", False, "Noch kein Modell")
 
 
+async def test_runtime_reissues_the_load_forecast_when_the_model_changes(
+    runtime, monkeypatch
+) -> None:
+    assert not runtime.load_forecast._wake.is_set()
+    monkeypatch.setattr(runtime.load_model, "active", lambda: True)  # etwa nach der Bewertung
+    runtime.load_model._announce()
+    assert runtime.load_forecast._wake.is_set()
+
+
 async def test_weather_backfill_releases_the_first_training_even_after_failure(
     runtime, respx_mock
 ) -> None:

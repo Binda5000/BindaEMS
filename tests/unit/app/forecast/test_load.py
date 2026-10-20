@@ -1,9 +1,11 @@
+import asyncio
 from datetime import UTC, date, datetime, time, timedelta
 
 import httpx
 import pytest
 from structlog.testing import capture_logs
 from tests.app_helpers import StopScheduler, influx_q, ingest, record_then_stop
+from tests.plan_helpers import until
 from tests.unit.app.forecast.conftest import NOW
 
 from bindaems.app.daytype import day_type
@@ -715,3 +717,54 @@ async def test_archive_failure_keeps_the_forecast_and_the_other_kinds(
     assert _archived(archive, "load_profile") == {}
     assert len(_archived(archive, "load")) == len(_archived(archive, "load_model")) == 256
     assert [e["kind"] for e in logs if "archiviert" in e["event"]] == ["load_profile"]
+
+
+async def test_requested_refresh_does_not_wait_for_minute_9(
+    cfg, ledger, archive, now_clock, shadow_ledger
+) -> None:
+    sleeps: list[float] = []
+
+    async def sleep(seconds: float) -> None:
+        sleeps.append(seconds)
+        await asyncio.Event().wait()  # die Minute 9 kommt in diesem Test nie
+
+    service = LoadForecastService(ledger, cfg, None, archive, now_clock, sleep=sleep)
+    model = FakeModel(active=True)
+    service.attach_model(model)
+    task = asyncio.create_task(service.run())
+    try:
+        await until(lambda: len(sleeps) == 1)  # wartet auf die Minute 9
+        first = service.latest()
+        assert first is not None and first.method == "model"
+        model._active = False  # etwa „Lastmodell verwenden“ ausgeschaltet
+        now_clock.advance(timedelta(minutes=2))
+        service.request_refresh()
+        await until(lambda: service.latest() is not first)
+        second = service.latest()
+        assert second is not None and second.method == "profile"
+        assert second.issued_at == first.issued_at + timedelta(minutes=2)
+        await until(lambda: len(sleeps) == 2)  # und danach wieder
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+
+async def test_refresh_requested_during_an_issue_runs_once_more(
+    cfg, ledger, archive, now_clock, shadow_ledger
+) -> None:
+    calls: list[bool] = []
+    service = LoadForecastService(
+        ledger, cfg, None, archive, now_clock, sleep=record_then_stop([], after=2)
+    )
+
+    class Requesting(FakeModel):
+        async def predict(self, issued_at, slots, profile):
+            calls.append(self._active)
+            if len(calls) == 1:
+                service.request_refresh()  # die Anfrage kommt, während die Ausgabe rechnet
+            return await super().predict(issued_at, slots, profile)
+
+    service.attach_model(Requesting(active=True))
+    with pytest.raises(StopScheduler):
+        await service.run()
+    assert len(calls) == 3  # erste Ausgabe, angeforderte Ausgabe, Ausgabe zur Minute 9

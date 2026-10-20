@@ -261,6 +261,9 @@ class AppRuntime:
             ready=self._weather_backfilled.wait,
         )
         self.load_forecast.attach_model(self.load_model)  # die Ausgabe schattet das Modell mit
+        # wird das Modell aktiv oder nicht mehr (Schalter, Bewertung), gleich neu ausgeben; die
+        # neue Ausgabe löst die Planung wie jede andere aus (``load_issued``)
+        self.load_model.on_active_change(self.load_forecast.request_refresh)
         self.plan_store = PlanStore(self.engine)
         self.forecast_quality = ForecastQuality(
             self.engine, self.forecast_archive, self.ledger, pv_threshold_w(cfg)

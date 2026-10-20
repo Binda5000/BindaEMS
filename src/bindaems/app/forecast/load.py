@@ -176,6 +176,7 @@ class LoadForecastService:
         self._ha_ok = True  # die HA-Abfrage der letzten Historie hat geklappt
         self._warned_units: set[str] = set()  # Entitäten mit falscher Einheit, schon gemeldet
         self._model: LoadModelService | None = None
+        self._wake = asyncio.Event()  # eine Ausgabe außer der Reihe ist angefordert
 
     def attach_model(self, model: LoadModelService) -> None:
         """Hängt das Lastmodell an (es braucht seinerseits dieses Profil, daher nicht im Aufbau).
@@ -184,6 +185,12 @@ class LoadForecastService:
 
     def latest(self) -> LoadForecast | None:
         return self._forecast
+
+    def request_refresh(self) -> None:
+        """Fordert eine neue Ausgabe gleich an statt erst zur Minute 9 (etwa wenn das Lastmodell
+        aktiv wird oder nicht mehr). ``run`` gibt sie aus, nie zwei Ausgaben zugleich; eine Anfrage
+        während einer Ausgabe ergibt danach genau eine weitere. Nur aus der Ereignisschleife."""
+        self._wake.set()
 
     def profile(self) -> LoadProfile | None:
         """Das gemerkte Profil (gebaut beim ersten Lauf des Tages); vor dem ersten ``None``."""
@@ -361,8 +368,10 @@ class LoadForecastService:
             )
 
     async def run(self) -> None:
-        """Sofort bauen und ausgeben, dann zur Minute 9 jeder Stunde; nach Fehler nach 10 min."""
+        """Sofort bauen und ausgeben, dann zur Minute 9 jeder Stunde und auf Anforderung
+        (``request_refresh``); nach Fehler nach 10 min."""
         while True:
+            self._wake.clear()  # diese Ausgabe erfüllt die Anforderungen bis hier
             try:
                 await self.refresh()
                 succeeded = self._error is None
@@ -374,7 +383,22 @@ class LoadForecastService:
             wait = (next_local(now, lambda t: t.minute == OUTPUT_MINUTE) - now).total_seconds()
             if not succeeded:
                 wait = min(wait, RETRY_S)
-            await self._sleep(max(wait, 0.0))
+            await self._wait(max(wait, 0.0))
+
+    async def _wait(self, seconds: float) -> None:
+        """Wartet ``seconds`` s oder bis zu einer Anforderung, was zuerst kommt."""
+        if self._wake.is_set():
+            return
+        waiter = asyncio.ensure_future(self._wake.wait())
+        sleeper = asyncio.ensure_future(self._sleep(seconds))
+        try:
+            await asyncio.wait({waiter, sleeper}, return_when=asyncio.FIRST_COMPLETED)
+        finally:
+            for task in (waiter, sleeper):
+                task.cancel()
+            await asyncio.gather(waiter, sleeper, return_exceptions=True)
+        if sleeper.done() and not sleeper.cancelled():
+            sleeper.result()  # ein Fehler beim Warten geht an ``run`` weiter
 
     def component_status(self) -> ComponentStatus:
         if self._error is not None:
