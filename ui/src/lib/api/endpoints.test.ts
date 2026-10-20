@@ -8,6 +8,8 @@ import review from './contract/plan-review.json';
 import gridCharge from './contract/plan-grid-charge.json';
 import sessions from './contract/charging-sessions.json';
 import candidates from './contract/learning-candidates.json';
+import learning from './contract/learning-load.json';
+import qualityDaily from './contract/forecast-quality-daily.json';
 import checks from './contract/ledger-checks.json';
 import statsMonth from './contract/stats-month.json';
 
@@ -211,4 +213,27 @@ it('liest die Sensorkandidaten für das Lastmodell mit GET', async () => {
 	expect(sent()).toMatchObject({ url: '/api/learning/candidates', method: 'GET' });
 	expect(result.entities.map((entity) => entity.entity_id)).toContain('sensor.aussentemperatur');
 	expect(result.error).toBeNull();
+});
+
+it('liest den Stand des Lastmodells und die Güte je Tag mit GET', async () => {
+	reply(learning);
+	const status = await api.learningStatus();
+	expect(sent()).toMatchObject({ url: '/api/learning/load', method: 'GET' });
+	expect(status.method).toBe('model');
+
+	fetchMock.mockClear();
+	reply(qualityDaily);
+	const daily = await api.forecastQualityDaily(28);
+	expect(sent()).toMatchObject({ url: '/api/forecast/quality/daily?days=28', method: 'GET' });
+	expect(daily.rows.length).toBeGreaterThan(0);
+});
+
+it('startet das Training mit POST und CSRF-Token', async () => {
+	reply({ started: true });
+	expect(await api.trainLoadModel()).toEqual({ started: true });
+	expect(sent()).toMatchObject({
+		url: '/api/learning/load/train',
+		method: 'POST',
+		csrf: 'tok-123'
+	});
 });

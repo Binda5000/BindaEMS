@@ -2,7 +2,13 @@ import type { BarSeriesOption, LineSeriesOption, YAXisComponentOption } from 'ec
 import { describe, expect, it } from 'vitest';
 import type { LoadForecast, PriceSlot } from '$lib/api/schemas';
 import { stats } from '$lib/testing/fixtures';
-import { axisTooltip, historyOption, priceForecastOption, statsEnergyOption } from './options';
+import {
+	axisTooltip,
+	historyOption,
+	priceForecastOption,
+	qualityDailyOption,
+	statsEnergyOption
+} from './options';
 import type { Palette } from './palette';
 
 const palette: Palette = {
@@ -308,5 +314,34 @@ describe('Energie der Statistik', () => {
 		expect(text).toContain('PV: <b>29,0');
 		expect(text).toContain('Bezug: <b>0,00');
 		expect(text).toContain('kWh');
+	});
+});
+
+describe('Fehler je Tag', () => {
+	it('zeichnet Profil und Modell als Linien über alle Tage, fehlende Tage als Lücke', () => {
+		const option = qualityDailyOption(
+			{
+				profile: [
+					{ date: '2026-10-01', mae_w: 120 },
+					{ date: '2026-10-02', mae_w: 118 }
+				],
+				model: [{ date: '2026-10-02', mae_w: 90 }]
+			},
+			palette
+		);
+		const series = option.series as LineSeriesOption[];
+		expect(series.map((s) => s.name)).toEqual(['Profil', 'Modell']);
+		expect(series[0]?.data).toEqual([120, 118]);
+		expect(series[1]?.data).toEqual([null, 90]);
+		expect((option.xAxis as { data: string[] }).data).toEqual(['Do., 01.10.', 'Fr., 02.10.']);
+		expect((option.yAxis as { name: string }).name).toBe('MAE (W)');
+		const tooltip = (option.tooltip as { formatter: (p: unknown) => string }).formatter;
+		const html = tooltip([
+			{ name: 'Fr., 02.10.', seriesName: 'Profil', value: 118 },
+			{ name: 'Fr., 02.10.', seriesName: 'Modell', value: null }
+		]);
+		expect(html).toContain('Fr., 02.10.');
+		expect(html).toContain('Profil: <b>118\u00a0W</b>');
+		expect(html).toContain('Modell: <b>–</b>');
 	});
 });

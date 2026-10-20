@@ -9,6 +9,7 @@ const PAGES = [
 	'/verbraucher',
 	'/laden',
 	'/zeitplan',
+	'/prognosen',
 	'/system',
 	'/entscheidungen',
 	'/entscheidungen?range=2026-10-09', // Tag der Demo-Uhr: die Tabelle ist gefüllt
@@ -81,7 +82,7 @@ test('Übersicht zeichnet das Diagramm mit Prognosen, System zeigt Lastprognose 
 	});
 	await expect(quality.getByText('letzte 14 Tage')).toBeVisible();
 	await expect(quality.getByRole('columnheader', { name: 'MAE relativ' })).toBeVisible();
-	await expect(quality.getByRole('cell', { name: 'bis 6 h' }).first()).toBeVisible();
+	await expect(quality.getByRole('cell', { name: '0–6 h' }).first()).toBeVisible();
 });
 
 test('System zeigt die Karte Klimaanlage ohne Werte', async ({ page }) => {

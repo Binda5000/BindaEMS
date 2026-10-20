@@ -17,6 +17,7 @@ import {
 	formatNumber,
 	formatTime
 } from '$lib/format';
+import type { DailyPoint } from '$lib/forecast/view';
 import { bucketLabels } from '$lib/stats/view';
 import { parseIso, todayVienna } from '$lib/time';
 import type { Palette } from './palette';
@@ -397,5 +398,62 @@ export function statsEnergyOption(stats: Stats, palette: Palette): EChartsCoreOp
 			splitLine: { show: true, lineStyle: { color: palette.grid } }
 		},
 		series
+	};
+}
+
+/** Tooltip einer Kategorieachse mit der Beschriftung des Tages und dem Wert je Reihe in W */
+function dailyTooltip(params: unknown): string {
+	const items = (Array.isArray(params) ? params : [params]) as {
+		marker?: string;
+		name?: string;
+		seriesName?: string;
+		value?: unknown;
+	}[];
+	const lines = items.map((item) => {
+		const text = typeof item.value === 'number' ? `${formatNumber(item.value, 0)}${NBSP}W` : DASH;
+		return `${item.marker ?? ''}${escapeHtml(item.seriesName ?? '')}: <b>${text}</b>`;
+	});
+	return [escapeHtml(items[0]?.name ?? ''), ...lines].join('<br>');
+}
+
+/** MAE je Tag von Profil und Modell als zwei Linien; Tage ohne Wert bleiben Lücken */
+export function qualityDailyOption(
+	series: { profile: DailyPoint[]; model: DailyPoint[] },
+	palette: Palette
+): EChartsCoreOption {
+	const dates = [
+		...new Set([...series.profile, ...series.model].map((point) => point.date))
+	].sort();
+	const line = (name: string, points: DailyPoint[], color: string): LineSeriesOption => {
+		const byDate = new Map(points.map((point) => [point.date, point.mae_w]));
+		return {
+			name,
+			type: 'line',
+			data: dates.map((date) => byDate.get(date) ?? null),
+			showSymbol: dates.length <= 31,
+			lineStyle: { color, width: 2 },
+			itemStyle: { color }
+		};
+	};
+	const base = baseOption(palette) as { legend: object };
+	return {
+		...base,
+		tooltip: { trigger: 'axis', formatter: dailyTooltip },
+		legend: { ...base.legend, data: ['Profil', 'Modell'] },
+		xAxis: {
+			type: 'category',
+			data: dates.map(formatDay),
+			axisLabel: { color: palette.muted, hideOverlap: true },
+			axisLine: { lineStyle: { color: palette.grid } },
+			axisTick: { alignWithLabel: true }
+		},
+		yAxis: {
+			...valueAxis('MAE (W)', palette),
+			splitLine: { show: true, lineStyle: { color: palette.grid } }
+		},
+		series: [
+			line('Profil', series.profile, palette.series[0] ?? palette.muted),
+			line('Modell', series.model, palette.series[2] ?? palette.load)
+		]
 	};
 }

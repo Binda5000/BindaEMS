@@ -6,6 +6,7 @@ it('zeigt Lesenden und Bedienenden dieselben Seiten', () => {
 		['/', 'Übersicht'],
 		['/laden', 'Laden'],
 		['/zeitplan', 'Zeitplan'],
+		['/prognosen', 'Prognosen'],
 		['/verlauf', 'Verlauf'],
 		['/statistik', 'Statistik'],
 		['/verbraucher', 'Verbraucher'],
@@ -22,6 +23,7 @@ it('zeigt Admins zusätzlich Benutzer und Protokoll', () => {
 		'/',
 		'/laden',
 		'/zeitplan',
+		'/prognosen',
 		'/verlauf',
 		'/statistik',
 		'/verbraucher',
@@ -39,6 +41,7 @@ it('zeigt Laden und Entscheidungen für alle Rollen mit ihren Symbolen', () => {
 		'/',
 		'/laden',
 		'/zeitplan',
+		'/prognosen',
 		'/verlauf',
 		'/statistik',
 		'/verbraucher',
@@ -62,6 +65,19 @@ it('zeigt die Statistik für alle Rollen nach dem Verlauf, mit drei Balken als S
 			href: '/statistik',
 			label: 'Statistik',
 			icon: 'stats'
+		});
+	}
+});
+
+it('zeigt Prognosen für alle Rollen nach dem Zeitplan, mit dem Symbol forecast', () => {
+	for (const role of ['viewer', 'operator', 'admin'] as const) {
+		const items = navItems(role);
+		const hrefs = items.map((item) => item.href);
+		expect(hrefs.indexOf('/prognosen')).toBe(hrefs.indexOf('/zeitplan') + 1);
+		expect(items.find((item) => item.href === '/prognosen')).toEqual({
+			href: '/prognosen',
+			label: 'Prognosen',
+			icon: 'forecast'
 		});
 	}
 });

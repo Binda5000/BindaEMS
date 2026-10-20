@@ -18,6 +18,7 @@ export const EXPORT_SETTINGS_URL = '/api/settings/export';
  */
 export const SESSIONS_LIMIT = 200;
 
+const StartedSchema = v.object({ started: v.boolean() });
 const RepriceSchema = v.object({ repriced: v.number() });
 
 const DECISION_FILTERS = ['since', 'until', 'actuator', 'result', 'text'] as const;
@@ -94,6 +95,11 @@ export const api = {
 		}),
 	learningCandidates: (o?: Load): Promise<s.SensorCandidates> =>
 		get('/api/learning/candidates', s.SensorCandidatesSchema, o),
+	learningStatus: (o?: Load): Promise<s.LearningStatus> =>
+		get('/api/learning/load', s.LearningStatusSchema, o),
+	/** Admin: startet das Training im Hintergrund; 409, wenn schon eines läuft */
+	trainLoadModel: (): Promise<{ started: boolean }> =>
+		request('POST', '/api/learning/load/train', { schema: StartedSchema }),
 	importSettings: (yaml: string): Promise<s.SettingsCurrent> =>
 		request('POST', '/api/settings/import', { body: { yaml }, schema: s.SettingsCurrentSchema }),
 	limits: (o?: Load): Promise<s.Limits> => get('/api/limits', s.LimitsSchema, o),
@@ -127,6 +133,8 @@ export const api = {
 		get('/api/forecast/load', s.LoadForecastSchema, o),
 	forecastQuality: (days = 14, o?: Load): Promise<s.Quality> =>
 		get(withQuery('/api/forecast/quality', { days: String(days) }), s.QualitySchema, o),
+	forecastQualityDaily: (days = 28, o?: Load): Promise<s.QualityDaily> =>
+		get(withQuery('/api/forecast/quality/daily', { days: String(days) }), s.QualityDailySchema, o),
 	ledgerDays: (first: string, last: string, o?: Load): Promise<s.DaySummary[]> =>
 		get(withQuery('/api/ledger/days', { from: first, to: last }), v.array(s.DaySummarySchema), o),
 	/** Statistik des Zeitraums, der `day` (YYYY-MM-DD) enthält; ohne `day` heute */

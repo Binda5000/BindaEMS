@@ -21,7 +21,7 @@ it('zeigt Kennzahlen mit deutschen Bezeichnungen', () => {
 		error: null
 	});
 	expect(screen.getByText('PV')).toBeTruthy();
-	expect(screen.getByText('bis 6 h')).toBeTruthy();
+	expect(screen.getByText('0–6 h')).toBeTruthy();
 	expect(screen.getByText('18,3 %')).toBeTruthy();
 	expect(screen.getByText('letzte 14 Tage')).toBeTruthy();
 	expect(screen.getByText('413 W')).toBeTruthy();
@@ -68,4 +68,12 @@ it('benennt Last und die anderen Vorläufe, fehlende relative Abweichung ist ein
 it('zeigt den leeren Zustand', () => {
 	render(QualityCard, { data: { days: 14, rows: [] }, error: null });
 	expect(screen.getByText('Noch keine Kennzahlen.')).toBeTruthy();
+});
+
+it('verweist auf die Seite Prognosen', () => {
+	render(QualityCard, { data: { days: 14, rows: [] }, error: null });
+	expect(screen.getByRole('link', { name: 'Mehr unter Prognosen' })).toHaveAttribute(
+		'href',
+		'/prognosen'
+	);
 });

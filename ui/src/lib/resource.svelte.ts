@@ -47,9 +47,9 @@ export class Resource<T> {
 		return () => this.#stop();
 	}
 
-	/** Neu laden im Vordergrund (nach einer Bedienung). */
-	refresh(): Promise<void> {
-		return this.#run(false);
+	/** Neu laden, nach einer Bedienung im Vordergrund, sonst (`background`) ohne die Sitzung zu verlängern. */
+	refresh(background = false): Promise<void> {
+		return this.#run(background);
 	}
 
 	#onVisibility = (): void => {

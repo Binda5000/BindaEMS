@@ -3,7 +3,10 @@ import * as v from 'valibot';
 import decisionsLatestJson from '$lib/api/contract/decisions-latest.json';
 import chargingSessionsJson from '$lib/api/contract/charging-sessions.json';
 import decisionsJson from '$lib/api/contract/decisions.json';
+import learningStatusJson from '$lib/api/contract/learning-load.json';
 import learningCandidatesJson from '$lib/api/contract/learning-candidates.json';
+import qualityDailyJson from '$lib/api/contract/forecast-quality-daily.json';
+import qualityJson from '$lib/api/contract/forecast-quality.json';
 import ledgerDaysJson from '$lib/api/contract/ledger-days.json';
 import limitsJson from '$lib/api/contract/limits.json';
 import settingsJson from '$lib/api/contract/settings.json';
@@ -15,7 +18,10 @@ import {
 	DaySummarySchema,
 	DecisionsResponseSchema,
 	LatestDecisionsResponseSchema,
+	LearningStatusSchema,
 	LimitsSchema,
+	QualityDailySchema,
+	QualitySchema,
 	ReadingSchema,
 	SensorCandidatesSchema,
 	SettingsCurrentSchema,
@@ -28,7 +34,10 @@ import {
 	type Derived,
 	type DecisionsResponse,
 	type LatestDecisionsResponse,
+	type LearningStatus,
 	type Limits,
+	type Quality,
+	type QualityDaily,
 	type Reading,
 	type SensorCandidates,
 	type SettingsCurrent,
@@ -97,4 +106,19 @@ export function decisions(): DecisionsResponse {
 /** Je Aktor die jüngste Entscheidung der letzten 24 h */
 export function latestDecisions(): LatestDecisionsResponse {
 	return v.parse(LatestDecisionsResponseSchema, decisionsLatestJson);
+}
+
+/** Stand des Lastmodells der Demo-Welt (Modell aktiv, Backtest, Schattenbetrieb) */
+export function learningStatus(overrides: Partial<LearningStatus> = {}): LearningStatus {
+	return { ...v.parse(LearningStatusSchema, learningStatusJson), ...overrides };
+}
+
+/** Prognosegüte der Demo-Welt über 14 Tage */
+export function quality(overrides: Partial<Quality> = {}): Quality {
+	return { ...v.parse(QualitySchema, qualityJson), ...overrides };
+}
+
+/** Güte je Tag der Demo-Welt über 28 Tage */
+export function qualityDaily(overrides: Partial<QualityDaily> = {}): QualityDaily {
+	return { ...v.parse(QualityDailySchema, qualityDailyJson), ...overrides };
 }

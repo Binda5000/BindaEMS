@@ -1,5 +1,12 @@
 import { expect, it } from 'vitest';
-import { chargingSession, daySummary, stats } from './fixtures';
+import {
+	chargingSession,
+	daySummary,
+	learningStatus,
+	quality,
+	qualityDaily,
+	stats
+} from './fixtures';
 
 it('liefert die Statistik des Monats aus der Demo-Welt, Felder überschreibbar', () => {
 	const base = stats();
@@ -20,4 +27,12 @@ it('liefert eine beendete Ladesession, Felder überschreibbar', () => {
 
 it('liefert für den Tag der Abrechnung den 09.10., nicht den davor', () => {
 	expect(daySummary().date).toBe('2026-10-09');
+});
+
+it('liefert Lastmodell und Güte der Demo-Welt, Felder überschreibbar', () => {
+	expect(learningStatus().method).toBe('model');
+	expect(learningStatus({ model: null }).model).toBeNull();
+	expect(quality().rows.some((row) => row.kind === 'load_model')).toBe(true);
+	expect(qualityDaily().rows.some((row) => row.kind === 'load_profile')).toBe(true);
+	expect(quality({ days: 7 }).days).toBe(7);
 });

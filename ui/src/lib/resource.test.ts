@@ -21,6 +21,18 @@ it('lädt zuerst im Vordergrund, danach im Takt im Hintergrund', async () => {
 	stop();
 });
 
+it('lädt auf Wunsch neu, im Vordergrund oder im Hintergrund', async () => {
+	const calls: boolean[] = [];
+	const resource = new Resource(async ({ background }) => {
+		calls.push(background);
+		return calls.length;
+	});
+	await resource.refresh();
+	await resource.refresh(true);
+	expect(calls).toEqual([false, true]);
+	expect(resource.data).toBe(2);
+});
+
 it('fragt in verborgenen Tabs nicht ab und holt beim Zurückkehren nach', async () => {
 	let hidden = false;
 	const calls: boolean[] = [];

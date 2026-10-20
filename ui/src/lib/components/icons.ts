@@ -65,6 +65,8 @@ export const ICONS: Record<IconName, Shape[]> = {
 	car: [{ d: 'M3 16v-3l2-5h14l2 5v3z' }, { cx: 7, cy: 16.5, r: 1.5 }, { cx: 17, cy: 16.5, r: 1.5 }],
 	list: [{ d: 'M9 6h12M9 12h12M9 18h12' }, { d: 'M4 6h.01M4 12h.01M4 18h.01' }],
 	// Kalender mit Balken: der Zeitplan
+	// Achsen, Verlauf und gepunktete Fortsetzung
+	forecast: [{ d: 'M3 3v18h18' }, { d: 'M7 16l4-5 3 2 2-3' }, { d: 'M18.5 8.5h.01M21 6h.01' }],
 	plan: [
 		{ x: 3, y: 5, width: 18, height: 16, rx: 2 },
 		{ d: 'M8 3v4M16 3v4M3 10h18' },
