@@ -34,15 +34,6 @@ MENTION_W: Final = 100.0  # ab dieser Leistung nennt eine Erklärung einen Fluss
 PaysOffBy = Literal["discharge", "import"]
 
 
-def export_after_kwh(steps: Sequence[SimStep], index: int) -> float:
-    """Einspeisung in kWh ab dem Slot ``index`` (eingeschlossen) bis zum Ende der Schritte.
-
-    Erklärung und Szenario-Kennzahl rechnen noch hiermit; die Regel selbst gilt mit
-    ``export_while_charged_kwh``.
-    """
-    return sum(item.export_w for item in steps[index:]) * SLOT_H / 1000
-
-
 def charged_window_end(steps: Sequence[SimStep], index: int, lo_kwh: float) -> int:
     """Ende des Fensters, in dem der Akku ab Slot ``index`` noch geladen ist (ausgeschlossen).
 

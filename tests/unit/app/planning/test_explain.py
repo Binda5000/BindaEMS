@@ -92,7 +92,8 @@ def test_sentences() -> None:
     )
     assert (
         sentence(Reason(code="REGEL_R_BLOCKIERT_NETZLADEN", params={"um": "12:00", "kwh": 7.25}))
-        == "Kein Netzladen: Laut Prognose speist die PV bis 12:00 Uhr noch 7,3 kWh ein (Regel R)."
+        == "Kein Netzladen: Ab 12:00 Uhr speist die PV laut Prognose 7,3 kWh ein, "
+        "bevor der Akku leer ist (Regel R)."
     )
 
 
@@ -105,7 +106,8 @@ def test_all_sentences_match_the_texts_exactly() -> None:
         "PV_LADEN": "Akku lädt 3,0 kW aus PV-Überschuss.",
         "PV_UEBERSCHUSS_ERWARTET": "Akku deckt den Verbrauch; ab 09:30 Uhr lädt ihn die PV wieder.",
         "REGEL_R_BLOCKIERT_NETZLADEN": (
-            "Kein Netzladen: Laut Prognose speist die PV bis 12:00 Uhr noch 7,3 kWh ein (Regel R)."
+            "Kein Netzladen: Ab 12:00 Uhr speist die PV laut Prognose 7,3 kWh ein, "
+            "bevor der Akku leer ist (Regel R)."
         ),
         "NETZLADEN_AUS": (
             "Netzladen würde sich lohnen (jetzt 10,0 ct, um 18:00 Uhr 40,0 ct), "
@@ -243,24 +245,41 @@ def test_pv_charge_comes_first_for_eigenverbrauch() -> None:
     assert reasons[0][0].params == {"kw": 2.5}
 
 
-def test_rule_r_blocks_grid_charge_when_pv_export_is_expected() -> None:
-    # Nachts teurer Bezug später, aber am Ende speist die PV ein.
+def _rule_r_scenario(soc_pct: float) -> PlanInputs:
+    # Nachts teurer Bezug später (Slots 2 und 3), danach speist die PV ein (ab Slot 4, 03:00 Uhr).
     prices = [10.0] * 2 + [40.0] * 2 + [10.0] * 4
     pv = [0.0] * 4 + [6000.0] * 4
     load = [2000.0] * 4 + [500.0] * 4
-    inputs = scenario(
+    return scenario(
         prices=prices,
         pv=pv,
         load=load,
-        soc_pct=20.0,
+        soc_pct=soc_pct,
         grid_charge=True,
         battery=small_battery(usable_kwh=2.0, max_charge_w=1000.0),
     )
-    steps = resimulate(inputs, [EV] * 8)
-    reasons = reasons_for(inputs, [EV] * 8, steps, [None] * 8, fallback=False)
+
+
+def test_rule_r_reason_names_first_export_before_empty() -> None:
+    # Der Akku ist voll und wird ab Slot 1 gehalten: er ist noch geladen, wenn die PV einspeist.
+    inputs = _rule_r_scenario(soc_pct=100.0)
+    intents = [EV, HOLD, HOLD, HOLD] + [EV] * 4
+    steps = resimulate(inputs, intents)
+    reasons = reasons_for(inputs, intents, steps, [None] * 8, fallback=False)
     assert reasons[0][0].code == "REGEL_R_BLOCKIERT_NETZLADEN"
-    assert reasons[0][0].params["um"] == "04:00"
+    assert reasons[0][0].params["um"] == "03:00"  # erster Slot mit Einspeisung, nicht Horizontende
     assert float(reasons[0][0].params["kwh"]) > 0.1
+
+
+def test_no_rule_r_reason_when_battery_empties_before_pv() -> None:
+    # Wie oben, aber der Akku ist vor der Einspeisung leer: die PV findet ihn leer vor.
+    inputs = _rule_r_scenario(soc_pct=20.0)
+    intents = [EV] * 8
+    steps = resimulate(inputs, intents)
+    assert sum(item.export_w for item in steps) > 0
+    reasons = reasons_for(inputs, intents, steps, [None] * 8, fallback=False)
+    assert "REGEL_R_BLOCKIERT_NETZLADEN" not in [r.code for r in reasons[0]]
+    assert reasons[0][0].code == "EIGENVERBRAUCH"
 
 
 def test_switched_off_grid_charge_is_explained() -> None:

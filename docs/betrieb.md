@@ -4438,7 +4438,7 @@ Zahlen:
 | `BUDGET_SPITZE` | Akku hält 55 %, damit die Monatsspitze unter 6,5 kW bleibt. | Absicht `Halten`; später würde ohne den Akku das Budget überschritten |
 | `HALTEN_RESTWERT` | Akku hält 40 % für die Zeit nach 10:00 Uhr. | Absicht `Halten` aus keinem der beiden Gründe; „nach“ ist das Horizontende |
 | `PV_LADEN` | Akku lädt 3,2 kW aus PV-Überschuss. | Absicht `Eigenverbrauch`, der Akku lädt mit mindestens 100 W aus der PV |
-| `REGEL_R_BLOCKIERT_NETZLADEN` | Kein Netzladen: Laut Prognose speist die PV bis 17:00 Uhr noch 8,4 kWh ein (Regel R). | Netzladen würde sich lohnen und ist erlaubt, aber die PV speist danach mehr als 0,1 kWh ein |
+| `REGEL_R_BLOCKIERT_NETZLADEN` | Kein Netzladen: Ab 17:00 Uhr speist die PV laut Prognose 8,4 kWh ein, bevor der Akku leer ist (Regel R). | Netzladen würde sich lohnen und ist erlaubt, aber die PV speist mehr als 0,1 kWh ein, bevor der Akku leer ist |
 | `NETZLADEN_AUS` | Netzladen würde sich lohnen (jetzt 10,0 ct, um 18:00 Uhr 30,0 ct), ist aber ausgeschaltet. | Netzladen würde sich lohnen, der Schalter ist aus |
 | `PV_UEBERSCHUSS_ERWARTET` | Akku deckt den Verbrauch; ab 09:30 Uhr lädt ihn die PV wieder. | Absicht `Eigenverbrauch`, der Akku entlädt, und später lädt die PV ihn |
 | `EIGENVERBRAUCH` | Akku deckt den Eigenverbrauch. | sonst |

@@ -73,7 +73,6 @@ from bindaems.app.planning.inputs import (
 from bindaems.app.planning.optimizer import solve
 from bindaems.app.planning.plausibility import (
     R1_TOL_KWH,
-    export_after_kwh,
     export_while_charged_kwh,
 )
 from bindaems.app.planning.service import plan_once
@@ -639,7 +638,7 @@ def run_scenario(
         baseline_power_ct=baseline_power,
         optimizer_power_ct=optimizer_power,
         r1_violations=sum(violation),
-        charge_before_export_kwh=_charge_before_export_kwh(data, steps),
+        charge_before_export_kwh=_charge_before_export_kwh(steps, params.lo_kwh),
         min_soc_kwh=min(soc0, *(item.soc_end_kwh for item in steps)),
         reserve_kwh=battery.reserve_soc_pct / 100 * capacity,
         plans=len(plans),
@@ -692,13 +691,11 @@ def _days(
     return result
 
 
-def _charge_before_export_kwh(data: ScenarioFile, steps: Sequence[SimStep]) -> float:
-    """Netzgeladene Energie in Slots, nach denen am selben lokalen Tag (den Slot eingeschlossen)
-    tatsächlich mehr als ``R1_TOL_KWH`` eingespeist wurde."""
-    total = 0.0
-    for indices in _day_groups(data).values():
-        day_steps = [steps[i] for i in indices]
-        for position, item in enumerate(day_steps):
-            if item.charge_grid_w > 0 and export_after_kwh(day_steps, position) > R1_TOL_KWH:
-                total += item.charge_grid_w * SLOT_H / 1000
-    return total
+def _charge_before_export_kwh(steps: Sequence[SimStep], lo_kwh: float) -> float:
+    """Netzgeladene Energie in Slots, nach denen tatsächlich mehr als ``R1_TOL_KWH`` eingespeist
+    wurde, bevor der Akku leer war (den Slot eingeschlossen; über den ganzen Lauf, nicht je Tag)."""
+    return sum(
+        item.charge_grid_w * SLOT_H / 1000
+        for position, item in enumerate(steps)
+        if item.charge_grid_w > 0 and export_while_charged_kwh(steps, position, lo_kwh) > R1_TOL_KWH
+    )

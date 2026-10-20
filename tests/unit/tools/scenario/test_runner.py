@@ -381,6 +381,38 @@ def test_grid_charge_before_export_counts_as_rule_r_violation(
     assert 0 < result.charge_before_export_kwh <= result.days[0].grid_charge_kwh
 
 
+def test_charge_before_export_ignores_charge_used_up_before_pv(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Der Akku startet leer, lädt in den ersten zwei Slots aus dem Netz und ist nachts wieder
+    # leer, bevor die PV am Morgen einspeist: Regel R verbietet das Netzladen dann nicht.
+    original = runner.plan_once
+
+    def night_charging(inputs: PlanInputs, result: OptimizerResult) -> Plan:
+        plan = original(inputs, result)
+        intent = BatteryIntent(kind=BatteryIntentKind.NETZLADEN, grid_charge_w=2000.0)
+        slots = [
+            s.model_copy(update={"intent": intent}) if s.start < first + 2 * SLOT else s
+            for s in plan.slots
+        ]
+        return plan.model_copy(update={"slots": slots})
+
+    monkeypatch.setattr(runner, "plan_once", night_charging)
+    data = synthetic("sommer-sonnig", date(2027, 7, 5), 1)
+    first = data.slots[0].start
+    empty = data.model_copy(
+        update={
+            "battery": data.battery.model_copy(
+                update={"start_soc_pct": data.battery.reserve_soc_pct}
+            )
+        }
+    )
+    result = run_scenario(empty, step_slots=4)
+    assert result.days[0].grid_charge_kwh > 0  # es wurde geladen
+    assert result.charge_before_export_kwh == 0
+    assert result.r1_violations == 0
+
+
 def test_scenario_rejects_bad_step() -> None:
     with pytest.raises(ValueError, match="step_slots"):
         run_scenario(synthetic("winter-spread", date(2027, 1, 11), 1), step_slots=0)
