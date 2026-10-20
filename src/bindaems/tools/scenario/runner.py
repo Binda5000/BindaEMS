@@ -314,12 +314,13 @@ def _battery_state(data: ScenarioFile, soc_kwh: float) -> BatteryState:
 
 @dataclass(frozen=True)
 class _Planned:
-    """Ein Plan des Laufs mit seiner Nachrechnung (für die Prüfung von Regel R) und ob er Regel
-    R2 verletzt."""
+    """Ein Plan des Laufs mit seiner Nachrechnung (für die Prüfung von Regel R), deren Reserve
+    (``lo_kwh`` des Plans, nicht des Laufs) und ob er Regel R2 verletzt."""
 
     plan: Plan
     steps: list[SimStep]
     index: dict[datetime, int]
+    lo_kwh: float
     r2_broken: bool = False
 
 
@@ -428,7 +429,8 @@ def _plan_at(
     steps = simulate(soc0_kwh, sim_slots(inputs, ev_w), [s.intent for s in plan.slots], params)
     grid = car_grid_kwh(inputs, ev_w) if ev_w else {}
     r2_broken = any(grid[car.key] > car.grid_allowed_kwh + R2_TOL_KWH for car in inputs.vehicles)
-    return _Planned(plan, steps, {s.start: i for i, s in enumerate(plan.slots)}, r2_broken)
+    index = {s.start: i for i, s in enumerate(plan.slots)}
+    return _Planned(plan, steps, index, params.lo_kwh, r2_broken)
 
 
 def _charge(car: ScenarioCar, soc_pct: float, wanted_w: float) -> tuple[float, float]:
@@ -602,7 +604,7 @@ def run_scenario(
                 intent = active[1].intent
                 broken = (
                     intent.kind is BatteryIntentKind.NETZLADEN
-                    and export_while_charged_kwh(current.steps, position, params.lo_kwh)
+                    and export_while_charged_kwh(current.steps, position, current.lo_kwh)
                     > R1_TOL_KWH
                 )
         ev_w = 0.0
