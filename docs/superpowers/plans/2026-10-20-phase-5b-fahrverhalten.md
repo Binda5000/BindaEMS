@@ -27,15 +27,15 @@
 ## Einordnung
 
 5b ist der zweite der drei Pläne der Phase 5 (Spec 18, Stand Plan 5a): Abfahrt, Ankunft und Ladestand bei der Ankunft je Auto und Wochentag, Vorschläge mit Konfidenz, optionale Automatik für „Geplant“ und die Anwesenheitsprognose für den Optimierer.
-- **Zeitpunkt:** Der Plan liegt jetzt zur Freigabe bereit. Umgesetzt wird nach deiner Freigabe; das ändert an der Anlage nichts.
+- **Freigabe:** Der Betreiber hat Plan 5b mit allen 17 Entscheidungen am 20.10.2026 freigegeben. Umgesetzt wird subagent-driven auf dem Branch `claude/phase-5b-plan-xo03ty`; an der Anlage ändert sich nichts, bis du ausrollst.
 - **Ausrollen:** frühestens mit dem gemeinsamen Ausrollen von 3d, 4b, 5a und 6a nach der Abnahme der Phase 3 (nach dem 16.11.2026), sonst danach. Weil 5b den core ändert (Entscheidung 9), kommen core und app gemeinsam, mit Regelbetrieb aus während des Wechsels, wie bei 4b. Migration `0014` läuft beim Start; vorher die Datenbank sichern.
 - **Daten:** Die Ansteckvorgänge laufen seit dem 18.10.2026 (Plan 4a), die Anwesenheit des Tesla (`at_home`) und der Ladestand stehen seit Phase 1 in InfluxDB (`raw`, 90 Tage), die Anwesenheit des e-Golf in der HA-Datenbank. Beim Ausrollen Ende November sind das rund 6 Wochen Ansteckvorgänge und die vollen 8 Wochen Anwesenheit.
 - **Wirkung:** Vorschläge und Prognose sind nur Eingaben (Spec 10.5). Die Automatik ist ab Werk aus. Erwartete Autos ändern nur den Plan des Akkus; solange Victron im Dry-Run ist, rechnet der core ihn nur mit.
 - **Danach:** 5c (Vorheizen und Vorkühlen), sobald Wochen mit Daten der Klimaanlage da sind.
 
-## Vorgeschlagene Entscheidungen (zur Freigabe)
+## Entscheidungen (freigegeben am 20.10.2026)
 
-Der Plan ist auf diese Vorschläge geschrieben; eine andere Wahl ändert die genannten Tasks. **Offen für dich sind vor allem 1, 8, 9, 11 und 12**; die übrigen folgen aus der Spec oder aus 4b und 5a.
+Der Plan ist auf diese Entscheidungen geschrieben; der Betreiber hat alle 17 am 20.10.2026 so freigegeben („Ja so umsetzen“). Zur Frage in Entscheidung 3: In Home Assistant gibt es einen `device_tracker` des Tesla; er wird nach dem Ausrollen unter „Fahrverhalten“ eingetragen (Betriebshandbuch, „Fahrverhalten ausrollen (Plan 5b)“).
 
 1. **Zuschnitt** (Spec 10.4, 18). **Offen.**
    - **In 5b:** Daten aus Anwesenheit, Steckzustand und Ladestand, Profil je Auto und Wochentag, Vorschläge mit Konfidenz, „Vorschlag übernehmen“, Automatik für „Geplant“ mit Abfahrt an einem Datum, Anwesenheitsprognose, erwartete Autos im Planer, Trefferquote, Anzeige in UI und HA, Abnahme.
