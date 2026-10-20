@@ -63,15 +63,15 @@ class HaRef:
         return cls(domain, object_id, unit)
 
 
-def ha_selection(refs: Sequence[HaRef]) -> tuple[str, str]:
+def ha_selection(refs: Sequence[HaRef], *, units: Sequence[str] = ("W", "kW")) -> tuple[str, str]:
     """``FROM``-Liste und ``WHERE``-Bedingung für Entitäten in beiden Schemata.
 
-    Die Liste nennt die Messungen je Einheit (immer ``W`` und ``kW``) und je Entität; die
-    Bedingung wählt die Entitäten über ``domain`` und ``entity_id``. Jede Entität kommt einmal
-    vor. Bezeichner und Werte sind maskiert.
+    Die Liste nennt die Messungen je Einheit (``units``, Standard ``W`` und ``kW``) und je
+    Entität; die Bedingung wählt die Entitäten über ``domain`` und ``entity_id``. Jede Entität
+    kommt einmal vor. Bezeichner und Werte sind maskiert.
     """
     entities = dict.fromkeys((ref.domain, ref.object_id) for ref in refs)
-    names = ["W", "kW", *(f"{domain}.{object_id}" for domain, object_id in entities)]
+    names = [*units, *(f"{domain}.{object_id}" for domain, object_id in entities)]
     measurements = ",".join(quote_ident(name) for name in names)
     condition = " OR ".join(
         f"({quote_ident('domain')}={quote_str(domain)} AND "

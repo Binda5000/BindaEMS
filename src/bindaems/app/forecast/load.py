@@ -187,9 +187,9 @@ class LoadForecastService:
         refs = [_ref(entity) for entity in (history.entity, *history.subtract)]
         first, last = missing[0], missing[-1] + SLOT
         try:
-            series = await self._reader.query(_ha_query(refs, first, last), database=database)
+            series = await self._reader.query(ha_query(refs, first, last), database=database)
             # HA schreibt nur bei Änderung: der Wert vor dem Bereich gilt bis zum ersten Punkt
-            earlier = await self._reader.query(_seed_query(refs, first), database=database)
+            earlier = await self._reader.query(seed_query(refs, first), database=database)
         except InfluxQueryError as exc:
             self._ha_ok = False
             log.warning("Lastverlauf aus Home Assistant nicht lesbar", error=str(exc))
@@ -197,7 +197,7 @@ class LoadForecastService:
         entities = [self._entity_values(series, earlier, ref) for ref in refs]
         samples: list[LoadSample] = []
         for slot in missing:
-            means = [_slot_mean(entity, slot) for entity in entities]
+            means = [slot_mean(entity, slot) for entity in entities]
             main, rest = means[0], means[1:]
             if main is None or any(value is None for value in rest):
                 continue  # fehlt ein Wert, fällt der Slot weg
@@ -207,7 +207,7 @@ class LoadForecastService:
 
     def _entity_values(
         self, series: Sequence[Series], earlier: Sequence[Series], ref: HaRef
-    ) -> _Entity:
+    ) -> MinuteMeans:
         rejected: set[str] = set()
         minutes = dict(ha_points(series, ref, rejected))
         seeds = sorted(ha_points(earlier, ref, rejected))
@@ -219,7 +219,7 @@ class LoadForecastService:
                 entity=name,
                 units=sorted(rejected),
             )
-        return _Entity(minutes, min(minutes, default=None), seeds[-1][1] if seeds else None)
+        return MinuteMeans(minutes, min(minutes, default=None), seeds[-1][1] if seeds else None)
 
     async def refresh(self) -> LoadForecast | None:
         """Neue Ausgabe; das Profil wird beim ersten Lauf eines Tages neu gebaut. Scheitert das,
@@ -308,11 +308,17 @@ class LoadForecastService:
         return ComponentStatus("load-forecast", True, f"Lastprognose von {issued:%H:%M} Uhr")
 
 
-def _ha_query(refs: Sequence[HaRef], first: datetime, last: datetime) -> str:
-    """Minutenmittel der Entitäten in ``[first, last)`` aus beiden Schemata (Messung je Einheit
-    ``W``/``kW`` und je Entität); die Einheit der Messung je Entität steht im Feld
+def ha_query(
+    refs: Sequence[HaRef],
+    first: datetime,
+    last: datetime,
+    *,
+    units: Sequence[str] = ("W", "kW"),
+) -> str:
+    """Minutenmittel der Entitäten in ``[first, last)`` aus beiden Schemata (Messung je Einheit,
+    Standard ``W``/``kW``, und je Entität); die Einheit der Messung je Entität steht im Feld
     ``unit_of_measurement_str``."""
-    measurements, condition = ha_selection(refs)
+    measurements, condition = ha_selection(refs, units=units)
     # Bezeichner und Werte sind maskiert
     return (
         f'SELECT mean("value") AS "w", last("unit_of_measurement_str") AS "u" '  # noqa: S608
@@ -322,9 +328,11 @@ def _ha_query(refs: Sequence[HaRef], first: datetime, last: datetime) -> str:
     )
 
 
-def _seed_query(refs: Sequence[HaRef], first: datetime) -> str:
+def seed_query(
+    refs: Sequence[HaRef], first: datetime, *, units: Sequence[str] = ("W", "kW")
+) -> str:
     """Letzter Wert jeder Entität in den ``HA_SEED`` vor ``first``."""
-    measurements, condition = ha_selection(refs)
+    measurements, condition = ha_selection(refs, units=units)
     begin = epoch_ms(first - HA_SEED)
     # Bezeichner und Werte sind maskiert
     return (
@@ -336,10 +344,10 @@ def _seed_query(refs: Sequence[HaRef], first: datetime) -> str:
 
 
 @dataclass(frozen=True)
-class _Entity:
-    minutes: Mapping[int, float]  # Minutenmittel in W (Millisekunden seit Epoche)
+class MinuteMeans:
+    minutes: Mapping[int, float]  # Minutenmittel (Millisekunden seit Epoche)
     earliest: int | None  # erste Minute mit Wert im Bereich
-    seed: float | None  # letzter Wert vor dem Bereich in W
+    seed: float | None  # letzter Wert vor dem Bereich
 
 
 def _ref(entity: str) -> HaRef:
@@ -348,7 +356,7 @@ def _ref(entity: str) -> HaRef:
     return HaRef(domain, object_id, "W")
 
 
-def _slot_mean(entity: _Entity, slot: datetime) -> float | None:
+def slot_mean(entity: MinuteMeans, slot: datetime) -> float | None:
     """Mittel der Minutenwerte des Slots; Minuten vor dem ersten Punkt im Bereich erhalten den
     Wert vor dem Bereich. Ohne Wert ``None``."""
     values: list[float] = []

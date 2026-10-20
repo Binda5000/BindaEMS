@@ -216,3 +216,10 @@ def test_ha_selection_names_both_schemas_and_each_entity_once() -> None:
 def test_ha_selection_escapes_names() -> None:
     measurements, condition = ha_selection([HaRef("sensor", "a'b", "W")])
     assert measurements == '"W","kW","sensor.a\'b"' and "'a\\'b'" in condition
+
+
+def test_ha_selection_with_extra_units() -> None:
+    measurements, _ = ha_selection([HaRef("sensor", "aussen", "W")], units=("°C", "%"))
+    assert measurements == '"°C","%","sensor.aussen"'
+    measurements, _ = ha_selection([HaRef("sensor", "aussen", "W")], units=())
+    assert measurements == '"sensor.aussen"'  # ohne Einheiten nur die Messung je Entität
