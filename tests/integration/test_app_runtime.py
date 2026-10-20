@@ -105,6 +105,7 @@ def test_runtime_wires_routes_and_components(runtime) -> None:
         "prices",
         "forecast",
         "load-forecast",
+        "load-model",
         "planning",
         "ledger",
         "influx",
@@ -1450,6 +1451,41 @@ async def test_weather_backfill_survives_network_errors(runtime, respx_mock) -> 
     with capture_logs() as logs:
         await runtime._weather_backfill()
     assert "Temperatur-Historie von Open-Meteo nicht abrufbar" in [e["event"] for e in logs]
+
+
+def test_runtime_wires_the_load_model(runtime, tmp_path) -> None:
+    assert runtime.model_registry._directory == tmp_path / "models" / "load"
+    status = runtime.load_model.component_status()
+    assert (status.name, status.ok, status.message) == ("load-model", False, "Noch kein Modell")
+
+
+async def test_weather_backfill_releases_the_first_training_even_after_failure(
+    runtime, respx_mock
+) -> None:
+    respx_mock.get(OPEN_METEO_URL).respond(503)
+    assert not runtime._weather_backfilled.is_set()
+    await runtime._weather_backfill()
+    assert runtime._weather_backfilled.is_set()
+
+
+@pytest.mark.respx(assert_all_called=False)
+async def test_runtime_starts_the_load_model_after_the_weather_backfill(
+    runtime, respx_mock, monkeypatch
+) -> None:
+    respx_mock.route().respond(503)
+    trained: list[bool] = []
+
+    async def fake_train():
+        trained.append(runtime._weather_backfilled.is_set())
+        return None
+
+    monkeypatch.setattr(runtime.load_model, "train", fake_train)
+    task = asyncio.create_task(runtime.run())
+    await until(lambda: bool(trained))
+    assert "load-model" in {job.get_name() for job in runtime._tasks}
+    assert trained == [True]  # erst nach der Nachholung des Wetterarchivs
+    await runtime.shutdown()
+    await asyncio.wait_for(task, timeout=2)
 
 
 @pytest.mark.respx(assert_all_called=False)

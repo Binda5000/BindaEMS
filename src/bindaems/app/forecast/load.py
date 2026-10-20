@@ -169,6 +169,10 @@ class LoadForecastService:
     def latest(self) -> LoadForecast | None:
         return self._forecast
 
+    def profile(self) -> LoadProfile | None:
+        """Das gemerkte Profil (gebaut beim ersten Lauf des Tages); vor dem ersten ``None``."""
+        return self._profile
+
     async def history(self, start: datetime, end: datetime) -> list[LoadSample]:
         """Hauslast je Viertelstunde in ``[start, end)``: Abrechnung, wo vollständig, sonst HA."""
         known = await asyncio.to_thread(actuals, self._ledger, start, end)

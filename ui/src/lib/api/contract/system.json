@@ -327,6 +327,13 @@
       "details": {}
     },
     {
+      "name": "load-model",
+      "ok": false,
+      "message": "Noch kein Modell",
+      "since": null,
+      "details": {}
+    },
+    {
       "name": "planning",
       "ok": true,
       "message": "Plan von 10:00 Uhr",

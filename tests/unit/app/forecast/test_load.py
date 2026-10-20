@@ -376,7 +376,10 @@ async def test_without_load_history_only_the_ledger_counts(load_service, ledger)
 async def test_refresh_records_and_publishes(load_service, archive, sink, ledger) -> None:
     for day in workdays(2):
         ingest(ledger, at_local(day, "10:00"), {"grid>house": 125})  # 500 W
+    assert load_service.profile() is None
     forecast = await load_service.refresh()
+    profile = load_service.profile()  # das gemerkte Profil, z. B. für das Lastmodell
+    assert profile is not None and profile.overall == 500.0
     assert forecast is not None and forecast.basis == {"ledger": 2, "ha": 0}
     assert archive.records("load", NOW, NOW + timedelta(days=1))
     assert {p.tags["kind"] for p in sink.points if p.measurement == "forecast"} == {"load"}

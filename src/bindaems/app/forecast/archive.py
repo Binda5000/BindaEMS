@@ -22,7 +22,9 @@ from bindaems.shared.timeutil import ensure_utc
 
 HorizonClass = Literal["h0_6", "h6_24", "h24"]
 Clearness = Literal["clear", "mixed", "overcast"]
-Kind = Literal["pv", "load"]
+# ``load`` ist die ausgegebene Lastprognose; ``load_profile`` und ``load_model`` sind die Schatten
+# beider Verfahren (Plan 5a, Präzisierung 2)
+Kind = Literal["pv", "load", "load_profile", "load_model"]
 
 REPRESENTATIVE_LEAD: Mapping[HorizonClass, timedelta] = MappingProxyType(
     {

@@ -65,6 +65,9 @@ from bindaems.app.ha.publisher import AiomqttHaTransport, HaPublisher
 from bindaems.app.history.influx import InfluxQueryError, InfluxReader
 from bindaems.app.history.routes import history_router
 from bindaems.app.history.series import build_catalog
+from bindaems.app.learning.ha_sensors import HaSensorReader
+from bindaems.app.learning.registry import ModelRegistry
+from bindaems.app.learning.service import LoadModelService
 from bindaems.app.learning.weather import WeatherArchive
 from bindaems.app.ledger.checks import LedgerChecks
 from bindaems.app.ledger.costing import LedgerCosting
@@ -238,6 +241,23 @@ class AppRuntime:
         self.load_forecast = LoadForecastService(
             self.ledger, cfg, self.reader, self.forecast_archive, self._clock, self._sink
         )
+        # Lastmodell (Plan 5a): lernt nachts, das erste Training wartet auf die Nachholung des
+        # Wetterarchivs (``_weather_backfill`` setzt ``_weather_backfilled``, auch nach Fehler)
+        self._weather_backfilled = asyncio.Event()
+        self.ha_sensors = HaSensorReader(self.reader, ha_database)
+        self.model_registry = ModelRegistry(self.engine, cfg.app.data_dir / "models" / "load")
+        self.load_model = LoadModelService(
+            load=self.load_forecast,
+            ledger=self.ledger,
+            weather=self.weather,
+            forecast=self.forecast,
+            sensors=self.ha_sensors,
+            archive=self.forecast_archive,
+            registry=self.model_registry,
+            settings=self.settings,
+            clock=self._clock,
+            ready=self._weather_backfilled.wait,
+        )
         self.plan_store = PlanStore(self.engine)
         self.forecast_quality = ForecastQuality(
             self.engine, self.forecast_archive, self.ledger, pv_threshold_w(cfg)
@@ -356,6 +376,7 @@ class AppRuntime:
             self.pipeline.component_status,
             self.forecast.component_status,
             self.load_forecast.component_status,
+            self.load_model.component_status,
             self.planning.component_status,
             self.ledger.component_status,
             self._influx_status,
@@ -511,6 +532,7 @@ class AppRuntime:
             ("prices", self.price_scheduler.run),
             ("forecast", self._forecast_run),
             ("load-forecast", self.load_forecast.run),
+            ("load-model", self.load_model.run),
             ("planning", self.planning.run),
             ("plan-sender", self.plan_sender.run),
             ("charging", self.charging.run),
@@ -832,7 +854,8 @@ class AppRuntime:
 
     async def _weather_backfill(self) -> None:
         """Beim Start einmal die Temperatur der letzten 92 Tage nachholen, wenn das Wetterarchiv
-        noch jung ist. Ein Fehler wird gewarnt; der nächste Start versucht es erneut."""
+        noch jung ist. Ein Fehler wird gewarnt; der nächste Start versucht es erneut. Danach (auch
+        nach einem Fehler) darf das erste Training des Lastmodells beginnen."""
         try:
             written = await self.weather.backfill(
                 self._fetch_temperature_history, self._clock.now()
@@ -841,6 +864,8 @@ class AppRuntime:
                 log.info("Temperatur-Historie nachgeholt", slots=written)
         except Exception as exc:  # die app läuft ohne die Historie weiter
             log.warning("Temperatur-Historie von Open-Meteo nicht abrufbar", error=str(exc))
+        finally:
+            self._weather_backfilled.set()
 
     async def _forecast_nightly_loop(self) -> None:
         """Beim Start und täglich um 02:30 Uhr: Güte bewerten, PV kalibrieren, Archiv pflegen."""

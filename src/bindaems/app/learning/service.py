@@ -1,0 +1,502 @@
+"""Lerndienst des Lastmodells (Plan 5a, Entscheidungen 4, 9, 11 und 15, Präzisierung 7).
+
+Jede Nacht um 03:15 Uhr lernt der Dienst ein neues Modell der Hauslast an, rechnet den Backtest,
+legt die Version in der Registry ab und bewertet danach die Aktivierung. Beim Start lädt er die
+neueste brauchbare Version; ohne eine trainiert er gleich, sobald die Nachholung des Wetterarchivs
+vorbei ist. Training und Backtest laufen in einem Thread mit Zeitlimit; scheitern sie oder reichen
+die Daten nicht, bleibt die bisherige Version, und die Aktivierung wird trotzdem neu bewertet.
+
+``predict`` rechnet mit der geladenen Version, auch wenn sie nicht aktiv ist (Schattenbetrieb),
+und immer mit der Merkmalsliste dieser Version: Ein seither entfernter Sensor bleibt leer, ein neuer
+zählt erst ab dem nächsten Training.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import math
+from collections import Counter
+from collections.abc import Awaitable, Callable, Mapping, Sequence
+from dataclasses import dataclass, replace
+from datetime import date, datetime, time, timedelta
+from types import MappingProxyType
+from typing import Any, Final, Literal, Protocol
+
+import structlog
+
+from bindaems.app.forecast.archive import ForecastArchive, SlotSource, actuals
+from bindaems.app.forecast.load import WINDOW_DAYS, LoadProfile, LoadSample
+from bindaems.app.learning.activation import ACTIVATION_DAYS, Activation, decide, shadow_sums
+from bindaems.app.learning.backtest import MAX_WEEKS, BacktestResult, DaySums, rolling_backtest
+from bindaems.app.learning.features import (
+    SENSOR_PREFIX,
+    FeatureInputs,
+    TrainingSet,
+    feature_names,
+    feature_rows,
+    local_midnight,
+    profile_cache,
+    training_set,
+)
+from bindaems.app.learning.ha_sensors import HaSensorReader
+from bindaems.app.learning.model import TrainedModel, TrainingError, train
+from bindaems.app.learning.registry import ModelRegistry, RegistryEntry
+from bindaems.app.learning.weather import WeatherArchive
+from bindaems.app.schedule import next_local
+from bindaems.app.settings.service import SettingsService
+from bindaems.app.status import ComponentStatus
+from bindaems.shared.timeutil import LOCAL_TZ, SLOT, Clock, ensure_utc, slot_start
+
+log = structlog.get_logger(__name__)
+
+TRAIN_AT: Final = time(3, 15)
+MIN_DAYS: Final = 28
+MIN_SLOTS_PER_DAY: Final = 80
+TRAIN_TIMEOUT_S: Final = 600
+COMPONENT: Final = "load-model"
+HISTORY_DAYS: Final = WINDOW_DAYS + 7 * MAX_WEEKS  # Training (56 Tage) und alle Backtest-Wochen
+PREDICT_HISTORY: Final = timedelta(days=8)  # Last vor der Ausgabe: 7 Tage Verzögerung und mehr
+SENSOR_CHUNK: Final = timedelta(days=7)  # HA-Abfragen in Stücken, sonst reicht das Zeitlimit nicht
+SENSOR_RECENT: Final = timedelta(hours=1)
+READY_WAIT_S = 600.0  # so lange wartet das erste Training höchstens auf die Nachholung
+FEATURE_LABELS: Final[Mapping[str, str]] = MappingProxyType(
+    {
+        "lead_h": "Vorlauf",
+        "minute_of_day": "Uhrzeit",
+        "weekday": "Wochentag",
+        "day_type": "Tagestyp",
+        "holiday": "Feiertag",
+        "month": "Monat",
+        "temp_c": "Temperatur",
+        "temp_day_c": "Tagesmittel der Temperatur",
+        "lag_1d_w": "Last vor einem Tag",
+        "lag_7d_w": "Last vor einer Woche",
+        "recent_w": "Last der letzten Stunde",
+        "profile_w": "Profil",
+    }
+)
+
+Outcome = Literal["trained", "too_little_data", "failed"]
+
+
+class LoadHistory(Protocol):
+    """Hauslast je Slot wie für das Profil (``LoadForecastService.history``)."""
+
+    async def history(self, start: datetime, end: datetime) -> list[LoadSample]: ...
+
+
+class TemperatureForecast(Protocol):
+    """Temperatur der aktuellen Wetterprognose (``ForecastService.temperatures``)."""
+
+    def temperatures(self) -> Mapping[datetime, float]: ...
+
+
+@dataclass(frozen=True)
+class TrainingResult:
+    """Ergebnis eines Trainingslaufs mit dem Satz für die Anzeige."""
+
+    outcome: Outcome
+    at: datetime
+    text: str
+
+
+def days_with_data(load_w: Mapping[datetime, float]) -> int:
+    """Lokale Tage mit mindestens ``MIN_SLOTS_PER_DAY`` Slots mit Last."""
+    per_day = Counter(
+        slot.astimezone(LOCAL_TZ).date() for slot, value in load_w.items() if math.isfinite(value)
+    )
+    return sum(1 for count in per_day.values() if count >= MIN_SLOTS_PER_DAY)
+
+
+def _fit(
+    inputs: FeatureInputs, names: Sequence[str], today: date, days: int
+) -> tuple[TrainingSet, TrainedModel, BacktestResult | None]:
+    """Training über die letzten 56 Tage vor heute und Backtest (blockiert: im Thread)."""
+    end = local_midnight(today)
+    data = training_set(inputs, local_midnight(today - timedelta(days=WINDOW_DAYS)), end, names)
+    model = train(data, names)
+    return data, model, rolling_backtest(inputs, names, today, days)
+
+
+def _predict(
+    model: TrainedModel, issued: datetime, slots: Sequence[datetime], inputs: FeatureInputs
+) -> list[float]:
+    return model.predict(feature_rows(issued, slots, inputs, model.features))
+
+
+def _activation(data: Mapping[str, Any] | None) -> Activation | None:
+    """Die gespeicherte Entscheidung (``Activation.as_json``) als Objekt; unlesbar ``None``."""
+    if data is None:
+        return None
+    try:
+        return Activation(
+            active=bool(data["active"]),
+            basis=data["basis"],
+            days=int(data["days"]),
+            model_mae_w=data["model_mae_w"],
+            profile_mae_w=data["profile_mae_w"],
+            improvement_pct=data["improvement_pct"],
+            reason=data["reason"],
+        )
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
+def _model_json(entry: RegistryEntry) -> dict[str, Any]:
+    # nach Anteil am Gewinn absteigend; bei Gleichstand in der Reihenfolge des Modells
+    ranked = sorted(entry.features, key=lambda name: -entry.importance.get(name, 0.0))
+    features = [
+        {
+            "name": name,
+            "label": FEATURE_LABELS.get(name, name.removeprefix(SENSOR_PREFIX)),
+            "importance": entry.importance.get(name, 0.0),
+        }
+        for name in ranked
+    ]
+    return {
+        "id": entry.id,
+        "trained_at": ensure_utc(entry.trained_at).isoformat(),
+        "data_from": ensure_utc(entry.data_from).isoformat(),
+        "data_to": ensure_utc(entry.data_to).isoformat(),
+        "samples": entry.samples,
+        "features": features,
+    }
+
+
+class LoadModelService:
+    def __init__(
+        self,
+        *,
+        load: LoadHistory,
+        ledger: SlotSource,
+        weather: WeatherArchive,
+        forecast: TemperatureForecast,
+        sensors: HaSensorReader,
+        archive: ForecastArchive,
+        registry: ModelRegistry,
+        settings: SettingsService,
+        clock: Clock,
+        ready: Callable[[], Awaitable[object]] | None = None,
+        sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+        timeout_s: float = TRAIN_TIMEOUT_S,
+    ) -> None:
+        self._load = load
+        self._ledger = ledger
+        self._weather = weather
+        self._forecast = forecast
+        self._sensors = sensors
+        self._archive = archive
+        self._registry = registry
+        self._settings = settings
+        self._clock = clock
+        self._ready = ready  # Ende der Nachholung des Wetterarchivs (auch nach einem Fehler)
+        self._sleep = sleep
+        self._timeout_s = timeout_s
+        self._lock = asyncio.Lock()  # ein Training zugleich
+        self._task: asyncio.Task[None] | None = None  # Lauf über die Taste
+        self._entry: RegistryEntry | None = None  # geladene, brauchbare Version
+        self._model: TrainedModel | None = None
+        self._active = False  # Entscheidung der letzten Bewertung für die geladene Version
+        self._activation: Activation | None = None
+        self._decided_at: datetime | None = None
+        # Backtest je Tag zur Version (nicht in der Registry; nach einem Neustart fehlt er bis
+        # zum nächsten Training, dann entscheidet nur der Schattenbetrieb)
+        self._backtest: tuple[int, Mapping[date, DaySums] | None] | None = None
+        self._result: TrainingResult | None = None
+        self._error: str | None = None  # Fehler des letzten Trainings
+        self._units_known = False  # ``candidates`` lief, die Messungen je Einheit sind bekannt
+
+    # --- Training -------------------------------------------------------------------------
+
+    async def train(self) -> TrainingResult:
+        """Ein Trainingslauf und danach die Bewertung der Aktivierung; Läufe warten aufeinander.
+        Ein Fehler gibt das Ergebnis ``failed``, die bisherige Version bleibt."""
+        async with self._lock:
+            now = self._clock.now()
+            self._error = None
+            try:
+                result = await self._train(now)
+            except Exception as exc:
+                log.exception("Training des Lastmodells fehlgeschlagen")
+                result = self._failed(now, str(exc))
+            self._result = result
+            try:
+                await self.evaluate()
+            except Exception:
+                log.exception("Aktivierung des Lastmodells nicht bewertet")
+            return result
+
+    def _failed(self, now: datetime, error: str) -> TrainingResult:
+        self._error = error
+        return TrainingResult("failed", now, f"Training fehlgeschlagen: {error}")
+
+    async def _train(self, now: datetime) -> TrainingResult:
+        today = now.astimezone(LOCAL_TZ).date()
+        start = local_midnight(today - timedelta(days=HISTORY_DAYS))
+        end = local_midnight(today)
+        samples = await self._load.history(start, end)
+        load_w = {ensure_utc(item.slot_start): item.house_w for item in samples}
+        days = days_with_data(load_w)
+        if days < MIN_DAYS:
+            log.info("Zu wenig Daten für das Lastmodell", days=days, needed=MIN_DAYS)
+            return TrainingResult(
+                "too_little_data", now, f"Zu wenig Daten: {days} von {MIN_DAYS} Tagen."
+            )
+        sensors = list(self._settings.current().settings.learning.ha_sensors)
+        names = feature_names(sensors)
+        temps = await asyncio.to_thread(self._weather.temperatures, start, end)
+        inputs = FeatureInputs(
+            load_w=load_w,
+            temp_c=temps,
+            sensors=await self._sensor_history(sensors, start, end),
+            profile_for=profile_cache(samples),
+        )
+        try:
+            data, model, backtest = await asyncio.wait_for(
+                asyncio.to_thread(_fit, inputs, names, today, days), timeout=self._timeout_s
+            )
+        except TimeoutError:
+            log.warning("Training des Lastmodells dauert zu lange", limit_s=self._timeout_s)
+            return self._failed(now, f"Zeitlimit von {self._timeout_s:g} s überschritten")
+        except TrainingError as exc:
+            log.warning("Lastmodell nicht trainiert", error=str(exc))
+            return self._failed(now, str(exc))
+        entry = await asyncio.to_thread(
+            self._registry.add,
+            model,
+            trained_at=now,
+            data_from=min(data.slots),
+            data_to=max(data.slots),
+            samples=len(data.rows),
+            backtest=backtest,
+        )
+        try:
+            await asyncio.to_thread(self._registry.prune)
+        except Exception as exc:  # die neue Version gilt trotzdem
+            log.warning("Alte Versionen des Lastmodells nicht gelöscht", error=str(exc))
+        self._use(entry, model)
+        self._backtest = (entry.id, backtest.daily if backtest is not None else None)
+        log.info("Lastmodell trainiert", version=entry.id, samples=len(data.rows), days=days)
+        local = now.astimezone(LOCAL_TZ)
+        return TrainingResult(
+            "trained",
+            now,
+            f"Trainiert am {local:%d.%m. %H:%M} mit {len(data.rows)} Viertelstunden.",
+        )
+
+    async def _sensor_history(
+        self, sensors: Sequence[str], start: datetime, end: datetime
+    ) -> dict[str, dict[datetime, float]]:
+        """Slot-Werte der Sensoren in ``[start, end)``, in Stücken von 7 Tagen gelesen."""
+        if not sensors:
+            return {}
+        await self._sensors.candidates()  # Messungen je Einheit für ``slot_values``
+        self._units_known = True
+        merged: dict[str, dict[datetime, float]] = {}
+        first = ensure_utc(start)
+        day = first.astimezone(LOCAL_TZ).date()
+        while first < end:
+            day += SENSOR_CHUNK  # Stücke bis zur lokalen Mitternacht, auch über die Umstellung
+            last = min(local_midnight(day), end)
+            for entity, series in (await self._sensors.slot_values(sensors, first, last)).items():
+                merged.setdefault(entity, {}).update(series)
+            first = last
+        return merged
+
+    def _use(self, entry: RegistryEntry, model: TrainedModel) -> None:
+        self._entry, self._model = entry, model
+        self._active = entry.active
+        self._activation = _activation(entry.decision)
+        self._decided_at = entry.decided_at
+
+    def running(self) -> bool:
+        return self._lock.locked() or (self._task is not None and not self._task.done())
+
+    def start_training(self) -> bool:
+        """Training im Hintergrund (Taste „Jetzt neu trainieren“); ``False``, wenn schon eines
+        läuft. Nur aus der Ereignisschleife aufrufen."""
+        if self.running():
+            return False
+        self._task = asyncio.get_running_loop().create_task(
+            self._train_logged(), name="load-model-training"
+        )
+        return True
+
+    async def _train_logged(self) -> None:
+        try:
+            await self.train()
+        except Exception:  # der Tagesrhythmus darf nicht abreißen
+            log.exception("Training des Lastmodells fehlgeschlagen")
+
+    # --- Aktivierung ----------------------------------------------------------------------
+
+    async def evaluate(self) -> Activation:
+        """Entscheidet über die Aktivierung: Schatten der letzten 14 Tage aus dem Archiv,
+        Backtest der geladenen Version, Schalter aus den Einstellungen. Die Entscheidung kommt
+        zur Version in die Registry."""
+        now = self._clock.now()
+        today = now.astimezone(LOCAL_TZ).date()
+        entry = self._entry if self._model is not None else None
+        enabled = self._settings.current().settings.learning.load_model_enabled
+        start = local_midnight(today - timedelta(days=ACTIVATION_DAYS))
+        shadow = await asyncio.to_thread(self._shadow, start, local_midnight(today))
+        backtest = None
+        if entry is not None and self._backtest is not None and self._backtest[0] == entry.id:
+            backtest = self._backtest[1]
+        activation = decide(
+            shadow, backtest, enabled=enabled, has_model=entry is not None, today=today
+        )
+        if entry is not None:
+            await asyncio.to_thread(
+                self._registry.decide, entry.id, activation.as_json(), activation.active, now
+            )
+        self._activation, self._decided_at, self._active = activation, now, activation.active
+        log.info(
+            "Aktivierung des Lastmodells bewertet",
+            reason=activation.reason,
+            active=activation.active,
+            basis=activation.basis,
+        )
+        return activation
+
+    def _shadow(self, start: datetime, end: datetime) -> dict[date, DaySums]:
+        return shadow_sums(
+            self._archive.records("load_model", start, end),
+            self._archive.records("load_profile", start, end),
+            actuals(self._ledger, start, end),
+        )
+
+    def active(self) -> bool:
+        """Die geladene Version ist brauchbar und aktiv; der ausgeschaltete Schalter wirkt sofort,
+        nicht erst nach der nächsten Bewertung."""
+        enabled = self._settings.current().settings.learning.load_model_enabled
+        return self._model is not None and self._active and enabled
+
+    # --- Vorhersage -----------------------------------------------------------------------
+
+    async def predict(
+        self, issued_at: datetime, slots: Sequence[datetime], profile: LoadProfile
+    ) -> dict[datetime, float] | None:
+        """Erwartete Hauslast der Slots mit der geladenen Version, auch wenn sie nicht aktiv ist;
+        ``None`` ohne Version. Last der letzten 8 Tage, Temperatur der Prognose (sonst aus dem
+        Archiv), Sensoren der letzten Stunde, als Profil ``profile``. Fehler gehen an den Aufrufer.
+        """
+        model = self._model
+        if model is None:
+            return None
+        issued = ensure_utc(issued_at)
+        targets = [ensure_utc(slot) for slot in slots]
+        if not targets:
+            return {}
+        cutoff = slot_start(issued)
+        samples = await self._load.history(cutoff - PREDICT_HISTORY, cutoff)
+        first = local_midnight(issued.astimezone(LOCAL_TZ).date())
+        archived = await asyncio.to_thread(self._weather.temperatures, first, max(targets) + SLOT)
+        forecast = {ensure_utc(slot): t for slot, t in self._forecast.temperatures().items()}
+        selected = self._settings.current().settings.learning.ha_sensors
+        wanted = [e for e in selected if f"{SENSOR_PREFIX}{e}" in model.features]
+        inputs = FeatureInputs(
+            load_w={ensure_utc(item.slot_start): item.house_w for item in samples},
+            temp_c={**archived, **forecast},
+            sensors=await self._recent_sensors(wanted, cutoff),
+            profile_for=lambda _day: profile,
+        )
+        values = await asyncio.to_thread(_predict, model, issued, targets, inputs)
+        return dict(zip(targets, values, strict=True))
+
+    async def _recent_sensors(
+        self, sensors: Sequence[str], cutoff: datetime
+    ) -> dict[str, dict[datetime, float]]:
+        if not sensors:
+            return {}
+        if not self._units_known:
+            await self._sensors.candidates()
+            self._units_known = True
+        return await self._sensors.slot_values(sensors, cutoff - SENSOR_RECENT, cutoff)
+
+    # --- Betrieb --------------------------------------------------------------------------
+
+    async def run(self) -> None:
+        """Beim Start die neueste brauchbare Version laden, ohne eine gleich trainieren (nach der
+        Nachholung des Wetterarchivs); dann täglich um 03:15 Uhr Ortszeit."""
+        await self._load_latest()
+        if self._model is None:
+            await self._wait_ready()
+            await self._train_logged()
+        while True:
+            now = self._clock.now()
+            due = next_local(now, lambda t: (t.hour, t.minute) == (TRAIN_AT.hour, TRAIN_AT.minute))
+            await self._sleep((due - now).total_seconds())
+            await self._train_logged()
+
+    async def _load_latest(self) -> None:
+        try:
+            entry = await asyncio.to_thread(self._registry.latest_usable)
+            model = await asyncio.to_thread(self._registry.load, entry) if entry else None
+        except Exception:
+            log.exception("Lastmodell nicht geladen")
+            return
+        if entry is not None and model is not None:
+            self._use(entry, model)
+            log.info("Lastmodell geladen", version=entry.id, active=entry.active)
+
+    async def _wait_ready(self) -> None:
+        if self._ready is None:
+            return
+        try:
+            await asyncio.wait_for(self._ready(), timeout=READY_WAIT_S)
+        except TimeoutError:
+            log.warning(
+                "Nachholung des Wetterarchivs dauert zu lange, das Training beginnt ohne sie"
+            )
+
+    # --- Status ---------------------------------------------------------------------------
+
+    def status(self) -> dict[str, Any]:
+        """Zustand für ``GET /api/learning/load`` (Präzisierung 7, ohne ``method``)."""
+        learning = self._settings.current().settings.learning
+        entry = self._entry if self._model is not None else None
+        result = self._result
+        component = self.component_status()
+        return {
+            "enabled": learning.load_model_enabled,
+            "activation": self._activation_json(learning.load_model_enabled, entry),
+            "model": _model_json(entry) if entry is not None else None,
+            "backtest": entry.backtest if entry is not None else None,
+            "training": {
+                "running": self.running(),
+                "last_at": ensure_utc(result.at).isoformat() if result is not None else None,
+                "outcome": result.outcome if result is not None else None,
+                "text": result.text if result is not None else None,
+            },
+            "sensors": [
+                {
+                    "entity_id": entity,
+                    # im Modell nur mit Anteil am Gewinn: ein Sensor ohne Daten zählt nicht
+                    "in_model": entry is not None
+                    and entry.importance.get(f"{SENSOR_PREFIX}{entity}", 0.0) > 0.0,
+                }
+                for entity in learning.ha_sensors
+            ],
+            "status": {"ok": component.ok, "text": component.message},
+        }
+
+    def _activation_json(self, enabled: bool, entry: RegistryEntry | None) -> dict[str, Any]:
+        activation, decided_at = self._activation, self._decided_at
+        if activation is None:  # noch nie bewertet: nur Schalter und Modell
+            today = self._clock.now().astimezone(LOCAL_TZ).date()
+            activation = decide({}, None, enabled=enabled, has_model=entry is not None, today=today)
+            decided_at = None
+        if not enabled and activation.reason != "disabled":
+            activation = replace(activation, active=False, reason="disabled")
+        decided = ensure_utc(decided_at).isoformat() if decided_at is not None else None
+        return {**activation.as_json(), "decided_at": decided}
+
+    def component_status(self) -> ComponentStatus:
+        if self._error is not None:
+            return ComponentStatus(COMPONENT, False, f"Lastmodell fehlgeschlagen: {self._error}")
+        if self._model is None:
+            return ComponentStatus(COMPONENT, False, "Noch kein Modell")
+        if self.active():
+            return ComponentStatus(COMPONENT, True, "Lastmodell aktiv")
+        return ComponentStatus(COMPONENT, True, "Profil aktiv, Modell bereit")
