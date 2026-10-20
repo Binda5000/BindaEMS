@@ -6,9 +6,19 @@ from __future__ import annotations
 from datetime import datetime
 
 import pytest
-from tests.plan_helpers import SCENARIO_START, at, planned_car, scenario, small_battery, state
+from tests.plan_helpers import (
+    SCENARIO_START,
+    at,
+    planned_car,
+    resimulate,
+    scenario,
+    small_battery,
+    state,
+)
 
+from bindaems.app.planning.battery_model import params_of
 from bindaems.app.planning.fallback import expensive_today, fallback_intents, fallback_vehicles
+from bindaems.app.planning.plausibility import R1_TOL_KWH, export_while_charged_kwh
 from bindaems.shared.plan import BatteryIntent, BatteryIntentKind
 from bindaems.shared.timeutil import SLOT
 
@@ -97,19 +107,54 @@ def test_grid_charge_needs_a_spread_over_wear_and_margin() -> None:
     assert all(i.kind != BatteryIntentKind.NETZLADEN for i in fallback_intents(inputs))
 
 
-def test_grid_charge_is_blocked_by_feed_in_after_it() -> None:
-    base = dict(
+_R1_BASE = dict(
+    prices=[8.0] * 8 + [40.0] * 4 + [8.0] * 4,
+    load=[2000.0] * 16,
+    battery=small_battery(),
+    soc_pct=20.0,
+    grid_charge=True,
+)
+
+
+def test_fallback_charges_what_the_evening_uses_before_pv() -> None:
+    # PV ab Slot 12 (8 kW, 6 kW Überschuss bei 5 kW Ladeleistung): Die Netzladung der billigen
+    # Slots ist am Abend (Slots 8–11) verbraucht, der Akku ist leer, bevor die PV einspeist.
+    # Regel R1 gilt nur bis der Akku leer ist, also darf der Ersatzplan laden.
+    inputs = scenario(pv=[0.0] * 12 + [8000.0] * 4, **_R1_BASE)
+    intents = fallback_intents(inputs)
+    charging = [i for i, x in enumerate(intents) if x.kind == BatteryIntentKind.NETZLADEN]
+    assert charging
+    steps = resimulate(inputs, intents)
+    lo_kwh = params_of(inputs).lo_kwh
+    assert all(export_while_charged_kwh(steps, i, lo_kwh) <= R1_TOL_KWH for i in charging)
+
+
+def test_grid_charge_is_blocked_when_it_lasts_into_pv() -> None:
+    # Das Haus braucht in den billigen Slots 0–7 nichts (Last 0), so bleibt jede Netzladung bis
+    # zum teuren Block (Slots 8–11) im Akku. PV 8 kW ab Slot 9 speist dort 1 kW ein (6 kW
+    # Überschuss bei 5 kW Ladeleistung). Die kleinste Ladung des Ersatzplans ist ein Slot mit voller
+    # Leistung: 5 kW · 0,25 h · η_ch 0,938 = 1,17 kWh über der Reserve. Slot 8 (Last 2 kW)
+    # entlädt 2 kW · 0,25 h / 0,938 = 0,53 kWh; bei Einspeisebeginn in Slot 9 bleiben 0,64 kWh,
+    # mehr als die 0,1 kWh Toleranz des leeren Akkus. Jedes Netzladen wäre eine Einspeisung bei
+    # geladenem Akku (Regel R1) und fällt weg.
+    inputs = scenario(
         prices=[8.0] * 8 + [40.0] * 4 + [8.0] * 4,
-        load=[2000.0] * 16,
+        pv=[0.0] * 9 + [8000.0] * 7,
+        load=[0.0] * 8 + [2000.0] * 8,
         battery=small_battery(),
         soc_pct=20.0,
         grid_charge=True,
     )
-    free = fallback_intents(scenario(pv=[0.0] * 16, **base))
-    assert any(i.kind == BatteryIntentKind.NETZLADEN for i in free)
-    # 8 kW PV nach dem Abend: 6 kW Überschuss bei 5 kW Ladeleistung speisen 1 kW ein (Regel R1).
-    blocked = fallback_intents(scenario(pv=[0.0] * 12 + [8000.0] * 4, **base))
-    assert all(i.kind != BatteryIntentKind.NETZLADEN for i in blocked)
+    params = params_of(inputs)
+    smallest = [BatteryIntent()] * 7 + [
+        BatteryIntent(kind=BatteryIntentKind.NETZLADEN, grid_charge_w=5000)
+    ]
+    smallest += [BatteryIntent()] * 8
+    steps = resimulate(inputs, smallest)
+    assert steps[8].soc_end_kwh - params.lo_kwh == pytest.approx(0.64, abs=0.01)
+    assert export_while_charged_kwh(steps, 7, params.lo_kwh) > R1_TOL_KWH  # sonst hielte R1
+    intents = fallback_intents(inputs)
+    assert all(x.kind != BatteryIntentKind.NETZLADEN for x in intents)
 
 
 def test_no_grid_charge_without_headroom_below_the_setpoint_limit() -> None:

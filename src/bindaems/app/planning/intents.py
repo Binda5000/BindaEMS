@@ -14,7 +14,11 @@ from typing import Final
 from bindaems.app.planning.battery_model import SLOT_H, params_of, sim_slots, simulate
 from bindaems.app.planning.inputs import PlanInputs
 from bindaems.app.planning.optimizer import OptimizerResult, ev_power_w, grid_charge_cap_w
-from bindaems.app.planning.plausibility import R1_TOL_KWH, export_after_kwh, grid_charge_pays
+from bindaems.app.planning.plausibility import (
+    R1_TOL_KWH,
+    export_while_charged_kwh,
+    grid_charge_pays,
+)
 from bindaems.shared.plan import BatteryIntent, BatteryIntentKind
 
 GRID_CHARGE_MIN_W: Final = 100.0  # darunter ist es kein Netzladen
@@ -71,12 +75,12 @@ def _keep_rule_r1(
     ev_w: Sequence[Mapping[str, float]] = (),
 ) -> list[BatteryIntent]:
     """Kürzt Netzladen, bis die Nachrechnung nach keinem ``NETZLADEN``-Slot mehr als
-    ``R1_TOL_KWH`` einspeist.
+    ``R1_TOL_KWH`` einspeist, solange der Akku noch geladen ist (``export_while_charged_kwh``).
 
-    Wenn Regel R1 bindet, füllt der Optimierer den Akku bis zum Ende genau; schon die Rundung
-    einer Teilentladung zu ``HALTEN`` lässt die Nachrechnung dann überlaufen und einspeisen. Der
-    letzte betroffene ``NETZLADEN``-Slot lädt um die eingespeiste Energie weniger (auf
-    ``ROUND_W`` aufgerundet); bleibt weniger als ``GRID_CHARGE_MIN_W``, hält er den Akku.
+    Wenn Regel R1 bindet, füllt der Optimierer den Akku bis zur Einspeisung genau; schon die
+    Rundung einer Teilentladung zu ``HALTEN`` lässt die Nachrechnung dann überlaufen und
+    einspeisen. Der letzte betroffene ``NETZLADEN``-Slot lädt um die eingespeiste Energie weniger
+    (auf ``ROUND_W`` aufgerundet); bleibt weniger als ``GRID_CHARGE_MIN_W``, hält er den Akku.
     ``ev_w`` ist die Ladeleistung der Autos je Slot (``sim_slots``).
     """
     params = params_of(inputs)
@@ -89,12 +93,12 @@ def _keep_rule_r1(
             index
             for index, intent in enumerate(result)
             if intent.kind is BatteryIntentKind.NETZLADEN
-            and export_after_kwh(steps, index) > R1_TOL_KWH
+            and export_while_charged_kwh(steps, index, params.lo_kwh) > R1_TOL_KWH
         ]
         if not late:
             break
         index = late[-1]
-        excess_w = export_after_kwh(steps, index) / SLOT_H * 1000
+        excess_w = export_while_charged_kwh(steps, index, params.lo_kwh) / SLOT_H * 1000
         power_w = min(result[index].grid_charge_w, steps[index].charge_grid_w)
         power_w = ROUND_W * floor((power_w - ROUND_W * ceil(excess_w / ROUND_W)) / ROUND_W)
         result[index] = (

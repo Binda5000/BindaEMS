@@ -19,7 +19,8 @@ höchsten Bezug des Laufs im Monat (mindestens die Spitze vor dem Lauf). Die ber
 des Optimierers ziehen den Wert des Mehr-SOC am Ende ab (``end_soc_value_ct``).
 
 Regel R (Präzisierung 19): Ein Verstoß ist ein ausgeführter ``NETZLADEN``-Slot, nach dem der
-Plan dieses Zeitpunkts bis zu seinem Horizontende mehr als ``R1_TOL_KWH`` Einspeisung erwartet.
+Plan dieses Zeitpunkts bis der Akku in der Nachrechnung leer ist (sonst bis zum Horizontende)
+mehr als ``R1_TOL_KWH`` Einspeisung erwartet.
 
 **Geplante Autos** (Plan 4b, Task 13; Datei der Version 2, ``car_sessions``):
 
@@ -70,7 +71,11 @@ from bindaems.app.planning.inputs import (
     assemble_inputs,
 )
 from bindaems.app.planning.optimizer import solve
-from bindaems.app.planning.plausibility import R1_TOL_KWH, export_after_kwh
+from bindaems.app.planning.plausibility import (
+    R1_TOL_KWH,
+    export_after_kwh,
+    export_while_charged_kwh,
+)
 from bindaems.app.planning.service import plan_once
 from bindaems.app.planning.vehicles import (
     PlanVehicleInput,
@@ -598,7 +603,8 @@ def run_scenario(
                 intent = active[1].intent
                 broken = (
                     intent.kind is BatteryIntentKind.NETZLADEN
-                    and export_after_kwh(current.steps, position) > R1_TOL_KWH
+                    and export_while_charged_kwh(current.steps, position, params.lo_kwh)
+                    > R1_TOL_KWH
                 )
         ev_w = 0.0
         for i in plugged:

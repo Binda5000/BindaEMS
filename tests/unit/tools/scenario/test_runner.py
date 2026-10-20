@@ -374,7 +374,8 @@ def test_grid_charge_before_export_counts_as_rule_r_violation(
     data = synthetic("sommer-sonnig", date(2027, 7, 5), 1)
     result = run_scenario(data, step_slots=4)
     assert result.r1_violations == result.days[0].r1_violations
-    # vor 20:30 folgt Einspeisung (Verstoß), danach nicht mehr: nur ein Teil der 96 Slots zählt
+    # vor 20:30 folgt Einspeisung (Verstoß), danach nicht mehr: nur ein Teil der 96 Slots zählt.
+    # Der Plan lädt in jedem Slot, der Akku ist nie leer: bis zum Horizontende wie bisher (75).
     assert 40 < result.r1_violations < 96
     assert result.days[0].grid_charge_kwh > 0
     assert 0 < result.charge_before_export_kwh <= result.days[0].grid_charge_kwh

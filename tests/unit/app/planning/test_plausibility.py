@@ -21,13 +21,14 @@ from tests.plan_helpers import (
     small_battery,
 )
 
-from bindaems.app.planning.battery_model import SLOT_H, params_of, sim_slots, simulate
+from bindaems.app.planning.battery_model import SLOT_H, SimStep, params_of, sim_slots, simulate
 from bindaems.app.planning.inputs import PlanInputs
 from bindaems.app.planning.intents import derive_intents
 from bindaems.app.planning.optimizer import OptimizerResult, SlotFlows, solve
 from bindaems.app.planning.plausibility import (
+    charged_window_end,
     check_plan,
-    export_after_kwh,
+    export_while_charged_kwh,
     pays_off,
     spread_pays,
 )
@@ -78,6 +79,28 @@ def test_r1_on_resimulation_is_reported() -> None:
     result = flows_result([flow(gr_h=500, gr_b=1000), flow(pv_h=500, pv_x=8500)])
     issues = check_plan(inputs, result, intents, resimulate(inputs, intents))
     assert any(i.startswith("Regel R verletzt: Netzladen um 02:00, danach ") for i in issues)
+
+
+def test_r1_allows_grid_charge_used_up_before_pv() -> None:
+    # Die 0,5 kWh Netzladung (2 kW · 15 min) sind in Slot 1 verbraucht (Last 4 kW, Akku leer),
+    # bevor Slot 2 mit PV einspeist: Regel R1 gilt nur bis der Akku leer ist.
+    inputs = scenario(
+        prices=[5.0, 40.0, 8.0],
+        pv=[0.0, 0.0, 9000.0],
+        load=[500.0, 4000.0, 500.0],
+        battery=small_battery(),
+        soc_pct=20.0,
+        grid_charge=True,
+    )
+    intents = [
+        BatteryIntent(kind=BatteryIntentKind.NETZLADEN, grid_charge_w=2000),
+        BatteryIntent(kind=BatteryIntentKind.EIGENVERBRAUCH),
+        BatteryIntent(kind=BatteryIntentKind.EIGENVERBRAUCH),
+    ]
+    steps = resimulate(inputs, intents)
+    assert steps[2].export_w > 0  # der Test prüft wirklich eine Einspeisung hinter der Leerung
+    issues = check_plan(inputs, flows_of(steps, inputs), intents, steps)
+    assert not any(i.startswith("Regel R verletzt") for i in issues)
 
 
 def test_unprofitable_grid_charge_is_reported_without_power_price() -> None:
@@ -137,17 +160,48 @@ def test_issues_come_in_slot_order() -> None:
     assert issues == ["SOC außerhalb der Grenzen um 02:00", "Bilanz verletzt um 02:15"]
 
 
-def test_export_after_includes_the_slot() -> None:
-    inputs = scenario(
-        prices=[5.0, 8.0],
-        pv=[4000.0, 4000.0],
-        load=[0.0, 0.0],
-        battery=small_battery(),
-        soc_pct=100.0,
-    )
-    steps = resimulate(inputs, [BatteryIntent(), BatteryIntent()])
-    assert export_after_kwh(steps, 0) == 2.0
-    assert export_after_kwh(steps, 1) == 1.0
+def _steps_of(soc_end_kwh: list[float], export_w: list[float]) -> list[SimStep]:
+    """Schritte mit den gegebenen SOC-Enden und Einspeisungen (alles andere 0)."""
+    return [
+        SimStep(
+            soc_start_kwh=0.0,
+            soc_end_kwh=soc,
+            import_w=0.0,
+            export_w=export,
+            charge_pv_w=0.0,
+            charge_grid_w=0.0,
+            discharge_w=0.0,
+            cost_ct=0.0,
+        )
+        for soc, export in zip(soc_end_kwh, export_w, strict=True)
+    ]
+
+
+def test_export_while_charged_stops_when_battery_is_empty() -> None:
+    # Reserve 2,0 kWh: Slot 1 endet mit 2,05 kWh, also innerhalb der Toleranz (0,1 kWh) leer;
+    # die Einspeisung in Slot 2 liegt hinter dem Fenster und zählt nicht.
+    steps = _steps_of([4.0, 2.05, 3.0], [0.0, 0.0, 3000.0])
+    assert export_while_charged_kwh(steps, 0, 2.0) == 0.0
+    assert charged_window_end(steps, 0, 2.0) == 2
+
+
+def test_export_while_charged_counts_export_in_the_empty_slot() -> None:
+    # Ein Slot, der den Akku leert und zugleich einspeist (PV über Last), zählt mit: 2 kW · 15 min.
+    steps = _steps_of([4.0, 2.0], [0.0, 2000.0])
+    assert export_while_charged_kwh(steps, 0, 2.0) == 0.5
+
+
+def test_export_while_charged_without_empty_slot_counts_to_the_end() -> None:
+    steps = _steps_of([4.0, 3.0, 5.0], [0.0, 0.0, 4000.0])
+    assert export_while_charged_kwh(steps, 0, 2.0) == 1.0
+    assert charged_window_end(steps, 0, 2.0) == 3
+
+
+def test_export_while_charged_starts_at_the_given_slot() -> None:
+    # Ab Slot 1 ist der Akku schon im Slot selbst leer: nur dessen Einspeisung zählt.
+    steps = _steps_of([4.0, 2.0, 2.0], [4000.0, 1000.0, 8000.0])
+    assert charged_window_end(steps, 1, 2.0) == 2
+    assert export_while_charged_kwh(steps, 1, 2.0) == 0.25
 
 
 def test_pays_off_picks_most_expensive_later_slot_earliest_on_tie() -> None:
