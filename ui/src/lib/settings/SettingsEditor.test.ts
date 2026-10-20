@@ -241,7 +241,9 @@ it('speichert Schalter und Sensoren des Lastmodells mit den übrigen Einstellung
 			'sensor.aussentemperatur',
 			'sensor.wohnzimmer_temperatur',
 			'binary_sensor.anwesenheit'
-		]
+		],
+		// der Abschnitt Fahrverhalten bleibt unverändert erhalten
+		driving: current.settings.learning.driving
 	});
 	expect(loadCandidates).toHaveBeenCalledTimes(1);
 });

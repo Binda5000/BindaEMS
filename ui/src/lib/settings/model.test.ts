@@ -422,7 +422,16 @@ it('übernimmt Schalter und Sensoren des Lastmodells', () => {
 	if (!('settings' in result)) throw new Error(JSON.stringify(result.errors));
 	expect(result.settings.learning).toEqual({
 		load_model_enabled: false,
-		ha_sensors: ['person.anna', 'sensor.aussentemperatur']
+		ha_sensors: ['person.anna', 'sensor.aussentemperatur'],
+		// der Abschnitt Fahrverhalten bleibt unverändert erhalten
+		driving: current.learning.driving
+	});
+	expect(result.settings.learning.driving).toEqual({
+		return_reserve_pct: 20,
+		target_min_pct: 50,
+		target_max_pct: 90,
+		automation: {},
+		presence_entities: {}
 	});
 	expect(result.tariffChanged).toBe(false);
 });
