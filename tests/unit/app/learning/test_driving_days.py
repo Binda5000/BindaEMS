@@ -122,6 +122,7 @@ def test_departure_after_midnight_belongs_to_new_day() -> None:
         pt(MON, "18:00", True),
         pt(TUE, "00:30", False),
         pt(TUE, "06:00", True),
+        soc=[(at(TUE, "00:20"), 80.0), (at(TUE, "06:05"), 66.0)],
     )
     # Der Montag endet zu Hause und bekommt die Abfahrt nicht
     mon = record(hist, MON)
@@ -131,6 +132,10 @@ def test_departure_after_midnight_belongs_to_new_day() -> None:
     assert not tue.away
     assert tue.departure == at(TUE, "00:30")
     assert tue.arrival == at(TUE, "06:00")
+    # Rückkehr ist der Aufenthalt, der die folgende Nacht umfasst, auch nach einer Abfahrt vor 03:00
+    assert tue.return_at == at(TUE, "06:00")
+    assert tue.return_soc == 66.0
+    assert tue.consumption_pp == 14.0
 
 
 def test_arrival_before_midnight_stay_through_midnight() -> None:
@@ -303,7 +308,7 @@ def test_autumn_day_after_night_departure() -> None:
     hist = history(pt(day, "01:30", False), pt(day, "09:00", True))
     rec = record(hist, day, today=date(2026, 11, 2))
     assert rec.departure == at(day, "01:30")
-    assert rec.return_at is None  # um 03:00 ist das Auto weg
+    assert rec.return_at == at(day, "09:00")  # Rückkehr in die folgende Nacht
 
 
 def test_presence_points_with_repeated_states() -> None:
@@ -319,15 +324,80 @@ def test_presence_points_with_repeated_states() -> None:
     assert rec.return_at == at(MON, "17:45")
 
 
-def test_overlapping_and_empty_sessions_are_merged() -> None:
+def test_overlapping_and_adjacent_sessions_form_one_stay() -> None:
     hist = history(
         seed=None,
         source="sessions",
         sessions=[
-            (at(MON, "00:30"), at(MON, "12:00")),
-            (at(MON, "00:30"), at(MON, "00:30")),
-            (at(MON, "10:00"), at(MON, "07:30") + timedelta(hours=6)),
+            (at(MON, "20:00"), at(TUE, "01:00")),
+            (at(TUE, "00:30"), at(TUE, "12:00")),
+            (at(TUE, "12:00"), at(TUE, "15:00")),
         ],
     )
-    assert record(hist, TUE).day == TUE
-    assert record(hist, TUE).away
+    rec = record(hist, TUE)
+    assert not rec.away
+    assert rec.departure == at(TUE, "15:00")  # ohne Zusammenführen: 12:00
+
+
+def test_empty_session_does_not_hide_the_stay() -> None:
+    hist = history(
+        seed=None,
+        source="sessions",
+        sessions=[(at(MON, "20:00"), at(TUE, "12:00")), (at(TUE, "02:00"), at(TUE, "02:00"))],
+    )
+    rec = record(hist, TUE)
+    assert not rec.away
+    assert rec.departure == at(TUE, "12:00")
+
+
+def utc(month: int, day: int, hour: int, minute: int = 0) -> datetime:
+    return datetime(2026, month, day, hour, minute, tzinfo=UTC)
+
+
+def test_summer_departure_after_local_midnight_belongs_to_new_day() -> None:
+    # 00:30 MESZ am 15.7. ist 22:30 UTC am 14.7.; mit festem +01:00 läge sie noch am 14.7.
+    hist = history(
+        PresencePoint(utc(7, 14, 22, 30), False),
+        PresencePoint(utc(7, 15, 4), True),
+    )
+    today = date(2026, 7, 20)
+    assert record(hist, date(2026, 7, 14), today).departure is None
+    rec = record(hist, date(2026, 7, 15), today)
+    assert not rec.away
+    assert rec.departure == utc(7, 14, 22, 30)
+    assert rec.return_at == utc(7, 15, 4)
+
+
+def test_spring_forward_day_is_23_hours_with_dst_anchor() -> None:
+    # 29.3.2026: 03:00 MESZ ist 01:00 UTC, der Tag dauert 23 Stunden (28.3. 23:00 – 29.3. 22:00 UTC)
+    hist = history(
+        PresencePoint(utc(3, 29, 0, 30), True),
+        PresencePoint(utc(3, 29, 1, 50), False),
+        PresencePoint(utc(3, 29, 16), True),
+        PresencePoint(utc(3, 29, 22, 30), False),  # 00:30 MESZ am 30.3.
+        PresencePoint(utc(3, 30, 5), True),
+        seed=False,
+    )
+    today = date(2026, 4, 5)
+    sunday = record(hist, date(2026, 3, 29), today)
+    assert not sunday.away  # um 03:00 MESZ (01:00 UTC) zu Hause; mit festem +01:00 wäre es weg
+    assert sunday.departure == utc(3, 29, 1, 50)
+    assert sunday.return_at == sunday.arrival == utc(3, 29, 16)
+    monday = record(hist, date(2026, 3, 30), today)
+    assert monday.departure == utc(3, 29, 22, 30)
+    assert monday.return_at == utc(3, 30, 5)
+
+
+def test_autumn_day_is_25_hours_with_winter_anchor() -> None:
+    # 25.10.2026: der Tag beginnt 24.10. 22:00 UTC; 03:00 MEZ ist 02:00 UTC
+    hist = history(
+        PresencePoint(utc(10, 24, 22, 30), False),  # 00:30 MESZ am 25.10.
+        PresencePoint(utc(10, 25, 5), True),
+        seed=True,
+    )
+    today = date(2026, 11, 2)
+    assert record(hist, date(2026, 10, 24), today).departure is None
+    rec = record(hist, date(2026, 10, 25), today)
+    assert not rec.away
+    assert rec.departure == utc(10, 24, 22, 30)
+    assert rec.arrival == utc(10, 25, 5)

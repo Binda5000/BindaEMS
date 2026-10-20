@@ -53,8 +53,6 @@ def _local(day: date, at: time) -> datetime:
 def _merge(stays: list[Stay]) -> list[Stay]:
     merged: list[Stay] = []
     for start, end in sorted(stays):
-        if end <= start:
-            continue
         if merged and start <= merged[-1][1]:
             merged[-1] = (merged[-1][0], max(merged[-1][1], end))
         else:
@@ -178,12 +176,12 @@ def _record(
         departure = unplugged[-1]
     departure_soc = _soc_between(soc, departure - DEPARTURE_SOC_LOOKBACK, departure, last=True)
 
-    return_at = _return_after(stays, day, departure)
+    # Rückkehr: Beginn des Aufenthalts, der die folgende Nacht umfasst (Ruling T4-2), auch nach
+    # einer Abfahrt vor 03:00; die Ankunft ist dieselbe Rückkehr, wenn sie auf den Tag fällt
+    night_stay = _night_stay(stays, day + timedelta(days=1))
+    return_at = night_stay[0] if night_stay is not None else None
     return_soc = _arrival_soc(soc, session_starts, return_at) if return_at else None
-    arrival_stay = _night_stay(stays, day + timedelta(days=1))
-    arrival = None
-    if arrival_stay is not None and day_start <= arrival_stay[0] < day_end:
-        arrival = arrival_stay[0]
+    arrival = return_at if return_at is not None and day_start <= return_at < day_end else None
     arrival_soc = _arrival_soc(soc, session_starts, arrival) if arrival else None
     consumption = (
         departure_soc - return_soc if departure_soc is not None and return_soc is not None else None
@@ -200,10 +198,3 @@ def _record(
         return_soc,
         consumption,
     )
-
-
-def _return_after(stays: list[Stay], day: date, departure: datetime) -> datetime | None:
-    """Beginn des Aufenthalts nach ``departure``, der die nächste Nacht umfasst."""
-    night = day if _local(day, time(3)) > departure else day + timedelta(days=1)
-    stay = _night_stay(stays, night)
-    return stay[0] if stay is not None and stay[0] >= departure else None
