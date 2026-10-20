@@ -35,6 +35,7 @@ from bindaems.app.planning.vehicles import grid_allowed, horizon_need, need_kwh
 from bindaems.shared.timeutil import SLOT
 
 SLOT_KWH = SLOT_H / 1000  # W über einen Slot → kWh
+_EMPTY_EPS_KWH = 1e-6  # Rundung des Lösers an der Leer-Grenze von Regel R1
 
 
 def boom(*_args: Any, **_kwargs: Any) -> NoReturn:
@@ -98,7 +99,11 @@ def test_r1_allows_grid_charge_used_up_before_pv_surplus() -> None:
         if flow.gr_b <= 1:
             continue
         end = next(
-            (j for j in range(i, len(flows)) if flows[j].soc_end_kwh <= lo + R1_EMPTY_TOL_KWH),
+            (
+                j
+                for j in range(i, len(flows))
+                if flows[j].soc_end_kwh <= lo + R1_EMPTY_TOL_KWH + _EMPTY_EPS_KWH
+            ),
             len(flows) - 1,
         )
         assert sum(f.pv_x for f in flows[i : end + 1]) * SLOT_KWH <= 0.001
@@ -120,7 +125,8 @@ def test_r1_blocks_grid_charge_that_lasts_into_pv_surplus() -> None:
     # Erlaubt bleibt nur Netzenergie in Höhe der Leer-Toleranz: Nach jedem Netzladen gilt der Akku
     # noch als leer, sonst wäre er bis in die PV-Einspeisung gefüllt
     assert all(
-        f.gr_b < 1 or f.soc_end_kwh <= lo + R1_EMPTY_TOL_KWH + 1e-6 for f in solve(inputs).flows
+        f.gr_b < 1 or f.soc_end_kwh <= lo + R1_EMPTY_TOL_KWH + _EMPTY_EPS_KWH
+        for f in solve(inputs).flows
     )
 
 

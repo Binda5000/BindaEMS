@@ -32,6 +32,7 @@ from bindaems.app.planning.vehicles import (
 from bindaems.shared.timeutil import SLOT
 
 _KWH = SLOT_H / 1000
+_EMPTY_EPS_KWH = 1e-6  # Rundung des Lösers an der Leer-Grenze von Regel R1
 
 # Zwei erfundene Autos: Schlüssel, Name, Wallbox, Kapazität, kleinste und volle Ladeleistung
 _CARS = (
@@ -116,7 +117,8 @@ def test_optimizer_respects_limits_and_rule_r1(kwargs: dict[str, Any]) -> None:
                 (
                     j
                     for j in range(index, len(result.flows))
-                    if result.flows[j].soc_end_kwh <= params.lo_kwh + R1_EMPTY_TOL_KWH
+                    if result.flows[j].soc_end_kwh
+                    <= params.lo_kwh + R1_EMPTY_TOL_KWH + _EMPTY_EPS_KWH
                 ),
                 len(result.flows) - 1,
             )
