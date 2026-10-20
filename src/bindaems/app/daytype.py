@@ -23,9 +23,14 @@ def _holidays(year: int) -> holidays.HolidayBase:
     return holidays.country_holidays("AT", years=year)
 
 
+def is_holiday(day: date) -> bool:
+    """Ob der lokale Kalendertag ``day`` ein bundesweiter Feiertag in Österreich ist."""
+    return day in _holidays(day.year)
+
+
 def day_type(day: date) -> DayType:
     """Tagestyp des lokalen Kalendertags ``day``."""
-    if day.weekday() == 6 or day in _holidays(day.year):
+    if day.weekday() == 6 or is_holiday(day):
         return "sunday"
     if day.weekday() == 5:
         return "saturday"
