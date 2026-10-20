@@ -18,6 +18,7 @@ from tests.unit.app.learning.conftest import SYNTHETIC_FIRST_DAY, FakeReader, ma
 
 from bindaems.app.forecast.archive import ForecastArchive, RecordValue
 from bindaems.app.forecast.load import LoadProfile, LoadSample, build_profile
+from bindaems.app.history.influx import InfluxQueryError, Series
 from bindaems.app.learning import service as service_module
 from bindaems.app.learning.backtest import BacktestResult, DaySums
 from bindaems.app.learning.features import (
@@ -38,7 +39,14 @@ from bindaems.app.learning.service import (
 )
 from bindaems.app.ledger.service import LedgerSlot
 from bindaems.app.settings.service import SettingsService
-from bindaems.shared.timeutil import LOCAL_TZ, ManualClock, local_day_slots, slots_between
+from bindaems.shared.influx.lineprotocol import epoch_ms
+from bindaems.shared.timeutil import (
+    LOCAL_TZ,
+    ManualClock,
+    local_day_slots,
+    slot_start,
+    slots_between,
+)
 
 TODAY = SYNTHETIC_FIRST_DAY + timedelta(days=28)  # Tag nach 28 Tagen synthetischer Last
 NOW = datetime.combine(TODAY, TRAIN_AT, tzinfo=LOCAL_TZ).astimezone(UTC)
@@ -826,6 +834,45 @@ async def test_predict_reads_the_sensor_units_once(
     await env.service.predict(NOW, next_slots(NOW), profile_of(env))
     await env.service.predict(NOW, next_slots(NOW), profile_of(env))
     assert env.sensors.candidate_calls == calls + 1
+
+
+class FlakyUnitsReader(FakeReader):
+    """HA-Datenbank mit dem Schema je Einheit (``°C``); die erste Abfrage der Kandidaten
+    scheitert, danach antwortet sie."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.candidate_calls = 0
+
+    async def query(self, q: str, *, database: str | None = None) -> list[Series]:
+        self.queries.append((q, database))
+        tags = {"domain": "sensor", "entity_id": "aussentemperatur"}
+        if "FROM /.*/" in q:
+            self.candidate_calls += 1
+            if self.candidate_calls == 1:
+                raise InfluxQueryError("InfluxDB: Zeitüberschreitung")
+            return [Series("°C", tags, ["time", "v", "u"], [[epoch_ms(NOW), 7.5, None]])]
+        start = slot_start(NOW) - timedelta(hours=2)
+        rows = [[epoch_ms(start + k * timedelta(minutes=1)), 7.5, None] for k in range(180)]
+        return [Series("°C", tags, ["time", "w", "u"], rows)]
+
+
+async def test_failed_unit_lookup_is_retried(
+    make_env: Callable[..., Env], trainer: Trainer, settings_service: SettingsService
+) -> None:
+    temp = "sensor.aussentemperatur"
+    set_learning(settings_service, ha_sensors=[temp])
+    reader = FlakyUnitsReader()
+    env = make_env(sensors=HaSensorReader(reader, "homeassistant"))  # type: ignore[arg-type]
+    await env.service.train()  # die Kandidaten scheitern: die Einheiten bleiben unbekannt
+    assert reader.candidate_calls == 1
+    model = trainer.models[0]
+    column = model.features.index(f"ha:{temp}")
+    await env.service.predict(NOW, next_slots(NOW), profile_of(env))
+    assert reader.candidate_calls == 2  # neuer Versuch, diesmal mit Erfolg
+    assert model.rows and all(row[column] == 7.5 for row in model.rows)
+    await env.service.predict(NOW, next_slots(NOW), profile_of(env))
+    assert reader.candidate_calls == 2  # danach bekannt
 
 
 async def test_failed_evaluation_keeps_the_training_result(

@@ -224,7 +224,7 @@ class LoadModelService:
         self._backtest: tuple[int, Mapping[date, DaySums] | None] | None = None
         self._result: TrainingResult | None = None
         self._error: str | None = None  # Fehler des letzten Trainings
-        self._units_known = False  # ``candidates`` lief, die Messungen je Einheit sind bekannt
+        self._units_known = False  # ``candidates`` gelang, die Messungen je Einheit sind bekannt
         settings.on_change(self._on_settings)
 
     # --- Training -------------------------------------------------------------------------
@@ -325,8 +325,7 @@ class LoadModelService:
         """Slot-Werte der Sensoren in ``[start, end)``, in Stücken von 7 Tagen gelesen."""
         if not sensors:
             return {}
-        await self._sensors.candidates()  # Messungen je Einheit für ``slot_values``
-        self._units_known = True
+        await self._learn_units()  # Messungen je Einheit für ``slot_values``
         merged: dict[str, dict[datetime, float]] = {}
         first = ensure_utc(start)
         day = first.astimezone(LOCAL_TZ).date()
@@ -505,9 +504,15 @@ class LoadModelService:
         if not sensors:
             return {}
         if not self._units_known:
-            await self._sensors.candidates()
-            self._units_known = True
+            await self._learn_units()
         return await self._sensors.slot_values(sensors, cutoff - SENSOR_RECENT, cutoff)
+
+    async def _learn_units(self) -> None:
+        """Fragt die Messungen je Einheit ab (``candidates``). Nur eine gelungene Abfrage macht
+        sie bekannt; nach einem Fehler versucht es die nächste Vorhersage erneut."""
+        _, error = await self._sensors.candidates()
+        if error is None:
+            self._units_known = True
 
     # --- Betrieb --------------------------------------------------------------------------
 
