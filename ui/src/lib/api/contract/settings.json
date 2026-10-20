@@ -151,7 +151,14 @@
       "ha_sensors": [
         "sensor.aussentemperatur",
         "sensor.wohnzimmer_temperatur"
-      ]
+      ],
+      "driving": {
+        "return_reserve_pct": 20,
+        "target_min_pct": 50,
+        "target_max_pct": 90,
+        "automation": {},
+        "presence_entities": {}
+      }
     },
     "wallbox_names": {
       "twc": "Garage"

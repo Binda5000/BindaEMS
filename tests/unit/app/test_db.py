@@ -15,6 +15,8 @@ from bindaems.app.db.schema import (
     assignment_log,
     charging_session,
     consumer_day,
+    driving_automation,
+    driving_profile,
     forecast_record,
     ledger_check,
     ledger_cost,
@@ -24,7 +26,7 @@ from bindaems.app.db.schema import (
     settings_version,
 )
 
-HEAD = "0013"  # neueste Migration
+HEAD = "0014"  # neueste Migration
 
 
 def test_migrations_match_schema(engine: Engine) -> None:
@@ -496,6 +498,132 @@ def test_migration_0013_downgrade_removes_the_learning_settings(tmp_path: Path) 
         assert [(r["version"], r["actor"], r["created_at"]) for r in rows] == [
             (1, "admin", t),
             (2, "admin", t),
+        ]
+    finally:
+        engine.dispose()
+
+
+def test_migration_0014_creates_driving_tables(engine: Engine) -> None:
+    inspector = inspect(engine)
+    assert _columns(inspector, "driving_profile") == {
+        "id": False,
+        "vehicle": False,
+        "computed_at": False,
+        "data_from": False,
+        "data_to": False,
+        "source": False,
+        "profile": False,
+    }
+    assert inspector.get_pk_constraint("driving_profile")["constrained_columns"] == ["id"]
+    assert [(i["name"], i["column_names"]) for i in inspector.get_indexes("driving_profile")] == [
+        ("ix_driving_profile_vehicle_computed_at", ["vehicle", "computed_at"])
+    ]
+    lengths = {
+        c["name"]: c["type"].length
+        for c in inspector.get_columns("driving_profile")
+        if c["name"] in ("vehicle", "source")
+    }
+    assert lengths == {"vehicle": 32, "source": 16}
+    assert _columns(inspector, "driving_automation") == {
+        "vehicle": False,
+        "paused_until": True,
+        "last_set_at": True,
+        "last_values": True,
+    }
+    assert inspector.get_pk_constraint("driving_automation")["constrained_columns"] == ["vehicle"]
+    with engine.connect() as conn:
+        assert conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one() == HEAD
+
+
+def test_driving_tables_store_utc_and_json(engine: Engine) -> None:
+    t = datetime(2026, 10, 20, 2, 0, tzinfo=UTC)
+    profile = {"key": "tesla", "weekdays": [], "presence": [[0.5]]}
+    with engine.begin() as conn:
+        conn.execute(
+            insert(driving_profile).values(
+                vehicle="tesla",
+                computed_at=t,
+                data_from=t,
+                data_to=t,
+                source="tessie",
+                profile=profile,
+            )
+        )
+        conn.execute(insert(driving_automation).values(vehicle="tesla"))
+        stored = conn.execute(select(driving_profile)).mappings().one()
+        automation = conn.execute(select(driving_automation)).mappings().one()
+    assert (stored["computed_at"], stored["profile"]) == (t, profile)
+    assert automation["paused_until"] is None and automation["last_values"] is None
+    with pytest.raises(IntegrityError), engine.begin() as conn:  # ein Eintrag je Fahrzeug
+        conn.execute(insert(driving_automation).values(vehicle="tesla"))
+
+
+def test_migration_0014_keeps_model_registry(tmp_path: Path) -> None:
+    engine = open_database(tmp_path / "alt.sqlite3")
+    t = datetime(2026, 10, 20, 2, 0, tzinfo=UTC)
+    try:
+        migrate(engine)
+        _downgrade(engine, "0013")
+        assert {"driving_profile", "driving_automation"}.isdisjoint(
+            inspect(engine).get_table_names()
+        )
+        with engine.begin() as conn:
+            conn.execute(
+                insert(model_registry).values(
+                    trained_at=t,
+                    data_from=t,
+                    data_to=t,
+                    samples=1200,
+                    features=["lead_h"],
+                    max_w=9000.0,
+                    file="load-1.txt",
+                    importance={"lead_h": 1.0},
+                )
+            )
+        migrate(engine)
+        with engine.connect() as conn:
+            rows = conn.execute(select(model_registry)).mappings().all()
+            version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
+        assert [(r["file"], r["samples"], r["trained_at"]) for r in rows] == [
+            ("load-1.txt", 1200, t)
+        ]
+        assert version == HEAD
+        assert {"driving_profile", "driving_automation"} <= set(inspect(engine).get_table_names())
+    finally:
+        engine.dispose()
+
+
+def test_migration_0014_downgrade_removes_the_driving_settings(tmp_path: Path) -> None:
+    # eine app aus Plan 5a lehnt ``learning.driving`` ab; die übrigen Lerneinstellungen bleiben
+    engine = open_database(tmp_path / "alt.sqlite3")
+    t = datetime(2026, 10, 20, 8, 0, tzinfo=UTC)
+    learning = {"load_model_enabled": False, "ha_sensors": ["sensor.aussentemperatur"]}
+    try:
+        migrate(engine)
+        with engine.begin() as conn:
+            for version, data in (
+                (1, {"tariff": {"x": 1}, "learning": learning}),
+                (
+                    2,
+                    {
+                        "tariff": {"x": 2},
+                        "learning": {**learning, "driving": {"target_min_pct": 40}},
+                    },
+                ),
+                (3, {"tariff": {"x": 3}}),
+            ):
+                conn.execute(
+                    insert(settings_version).values(
+                        version=version, created_at=t, actor="admin", source="ui", data=data
+                    )
+                )
+        _downgrade(engine, "0013")
+        with engine.connect() as conn:
+            rows = conn.execute(select(settings_version).order_by("version")).mappings().all()
+        assert [r["data"] for r in rows] == [
+            {"tariff": {"x": 1}, "learning": learning},
+            {"tariff": {"x": 2}, "learning": learning},
+            {"tariff": {"x": 3}},
         ]
     finally:
         engine.dispose()

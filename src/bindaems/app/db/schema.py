@@ -214,6 +214,29 @@ model_registry = Table(
     Index("ix_model_registry_trained_at", "trained_at"),
 )
 
+# Fahrverhalten (Plan 5b, Präzisierung 1): berechnete Profile je Auto und Stand der Automatik
+driving_profile = Table(
+    "driving_profile",
+    metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("vehicle", String(32), nullable=False),
+    Column("computed_at", UtcDateTime(), nullable=False),
+    Column("data_from", UtcDateTime(), nullable=False),
+    Column("data_to", UtcDateTime(), nullable=False),
+    Column("source", String(16), nullable=False),
+    Column("profile", JSON, nullable=False),
+    Index("ix_driving_profile_vehicle_computed_at", "vehicle", "computed_at"),
+)
+
+driving_automation = Table(
+    "driving_automation",
+    metadata,
+    Column("vehicle", String(32), primary_key=True),
+    Column("paused_until", UtcDateTime(), nullable=True),
+    Column("last_set_at", UtcDateTime(), nullable=True),
+    Column("last_values", JSON, nullable=True),
+)
+
 # Abrechnung je Viertelstunde aus den slot_flows des core (Spec 11.4)
 ledger_slot = Table(
     "ledger_slot",

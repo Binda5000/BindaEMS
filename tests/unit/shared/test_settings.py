@@ -4,6 +4,7 @@ import pytest
 from pydantic import ValidationError
 
 from bindaems.shared.settings import (
+    DrivingSettings,
     EnergyComponent,
     FeedInSettings,
     LearningSettings,
@@ -113,3 +114,55 @@ def test_old_settings_without_learning_load() -> None:
     old = RuntimeSettings().model_dump(mode="json", exclude={"learning"})
     assert "learning" not in old
     assert RuntimeSettings.model_validate(old).learning == LearningSettings()
+
+
+def test_driving_defaults() -> None:
+    d = RuntimeSettings().learning.driving
+    assert (d.return_reserve_pct, d.target_min_pct, d.target_max_pct) == (20, 50, 90)
+    assert d.automation == {} and d.presence_entities == {}
+
+
+def test_target_min_above_max_is_rejected() -> None:
+    with pytest.raises(ValidationError, match=r"Ziel-SOC mindestens liegt über höchstens\."):
+        DrivingSettings(target_min_pct=80, target_max_pct=60)
+    assert DrivingSettings(target_min_pct=70, target_max_pct=70).target_min_pct == 70
+
+
+def test_reserve_above_50_is_rejected() -> None:
+    assert DrivingSettings(return_reserve_pct=50).return_reserve_pct == 50
+    with pytest.raises(ValidationError):
+        DrivingSettings(return_reserve_pct=51)
+    with pytest.raises(ValidationError):
+        DrivingSettings(return_reserve_pct=-1)
+
+
+@pytest.mark.parametrize("field", ["target_min_pct", "target_max_pct"])
+@pytest.mark.parametrize("value", [19, 101])
+def test_targets_stay_between_20_and_100(field: str, value: int) -> None:
+    with pytest.raises(ValidationError):
+        DrivingSettings(**{field: value})  # type: ignore[arg-type]
+
+
+def test_driving_per_vehicle_entries() -> None:
+    d = DrivingSettings(
+        automation={"tesla": True}, presence_entities={"tesla": "device_tracker.auto"}
+    )
+    assert d.automation == {"tesla": True}
+    assert d.presence_entities == {"tesla": "device_tracker.auto"}
+    with pytest.raises(ValidationError):
+        DrivingSettings(presence_entities={"tesla": "Device Tracker"})
+    with pytest.raises(ValidationError):
+        DrivingSettings(automation={"": True})
+
+
+def test_old_learning_settings_without_driving_load() -> None:
+    old = RuntimeSettings().model_dump(mode="json")
+    del old["learning"]["driving"]
+    assert RuntimeSettings.model_validate(old).learning.driving == DrivingSettings()
+
+
+def test_driving_settings_round_trip() -> None:
+    settings = RuntimeSettings(
+        learning=LearningSettings(driving=DrivingSettings(automation={"tesla": True}))
+    )
+    assert RuntimeSettings.model_validate(settings.model_dump(mode="json")) == settings

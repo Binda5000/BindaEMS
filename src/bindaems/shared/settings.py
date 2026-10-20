@@ -236,6 +236,24 @@ class PlanningSettings(_Model):
 
 
 HaEntityId = Annotated[str, Field(pattern=r"^[a-z_]+\.[a-z0-9_]+$")]
+VehicleKey = Annotated[str, Field(min_length=1, max_length=60)]
+
+
+class DrivingSettings(_Model):
+    """Fahrverhalten (Plan 5b): Puffer bei der Rückkehr, Spanne des Ziel-SOC, Automatik und
+    Anwesenheits-Entität je Fahrzeug (Schlüssel wie in config.yaml)."""
+
+    return_reserve_pct: Annotated[int, Field(ge=0, le=50)] = 20
+    target_min_pct: Annotated[int, Field(ge=20, le=100)] = 50
+    target_max_pct: Annotated[int, Field(ge=20, le=100)] = 90
+    automation: dict[VehicleKey, bool] = Field(default_factory=dict)
+    presence_entities: dict[VehicleKey, HaEntityId] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def _target_range(self) -> Self:
+        if self.target_min_pct > self.target_max_pct:
+            raise ValueError("Ziel-SOC mindestens liegt über höchstens.")
+        return self
 
 
 class LearningSettings(_Model):
@@ -243,6 +261,7 @@ class LearningSettings(_Model):
 
     load_model_enabled: bool = True
     ha_sensors: Annotated[list[HaEntityId], Field(max_length=8)] = Field(default_factory=list)
+    driving: DrivingSettings = Field(default_factory=DrivingSettings)
 
     @field_validator("ha_sensors")
     @classmethod
