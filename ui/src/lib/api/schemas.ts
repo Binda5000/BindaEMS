@@ -550,6 +550,14 @@ export const PlanningSettingsSchema = v.looseObject({
 });
 export type PlanningSettings = v.InferOutput<typeof PlanningSettingsSchema>;
 
+export const LearningSettingsSchema = v.looseObject({
+	/** Schalter „Lastmodell verwenden“ */
+	load_model_enabled: v.boolean(),
+	/** zusätzliche Sensoren aus Home Assistant, höchstens 8 */
+	ha_sensors: v.array(v.string())
+});
+export type LearningSettings = v.InferOutput<typeof LearningSettingsSchema>;
+
 export const RuntimeSettingsSchema = v.looseObject({
 	prices: PriceSettingsSchema,
 	tariff: v.looseObject({
@@ -564,6 +572,7 @@ export const RuntimeSettingsSchema = v.looseObject({
 		noct_c: v.number()
 	}),
 	planning: PlanningSettingsSchema,
+	learning: LearningSettingsSchema,
 	/** eigene Namen der Ladestationen; ohne Eintrag gilt der Typ */
 	wallbox_names: v.optional(v.record(v.string(), v.string()), {})
 });

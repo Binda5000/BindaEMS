@@ -144,3 +144,25 @@ test('Einstellungen der Planung melden ungültige Zahlen am Feld', async ({ page
 	await expect(page.getByText('Zahl von 50 bis 100')).toBeVisible();
 	await expect(page.getByLabel('Roundtrip-Wirkungsgrad (%)')).toBeFocused();
 });
+
+test('admin wählt einen Sensor für das Lastmodell und speichert ihn', async ({ page }) => {
+	await login(page, 'admin');
+	await page.goto('/einstellungen');
+	const view = page.getByRole('heading', { name: 'Lastmodell' }).locator('..');
+	await expect(view.getByText('Zusätzliche Sensoren aus Home Assistant')).toBeVisible();
+	// der Demo-Zustand ist geteilt: nach dem Test wieder abwählen
+	const choose = async (checked: boolean) => {
+		await page.goto('/einstellungen');
+		await page.getByRole('button', { name: 'Bearbeiten' }).click();
+		await page.getByRole('checkbox', { name: 'binary_sensor.anwesenheit' }).setChecked(checked);
+		await page.getByRole('button', { name: 'Speichern' }).click();
+		await expect(page.getByText(/Version \d+ gespeichert/)).toBeVisible();
+	};
+	await choose(true);
+	try {
+		await expect(view.getByText('binary_sensor.anwesenheit')).toBeVisible();
+	} finally {
+		await choose(false);
+	}
+	await expect(view.getByText('binary_sensor.anwesenheit')).toHaveCount(0);
+});

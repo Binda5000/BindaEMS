@@ -3,6 +3,7 @@ import * as v from 'valibot';
 import decisionsLatestJson from '$lib/api/contract/decisions-latest.json';
 import chargingSessionsJson from '$lib/api/contract/charging-sessions.json';
 import decisionsJson from '$lib/api/contract/decisions.json';
+import learningCandidatesJson from '$lib/api/contract/learning-candidates.json';
 import ledgerDaysJson from '$lib/api/contract/ledger-days.json';
 import limitsJson from '$lib/api/contract/limits.json';
 import settingsJson from '$lib/api/contract/settings.json';
@@ -16,6 +17,7 @@ import {
 	LatestDecisionsResponseSchema,
 	LimitsSchema,
 	ReadingSchema,
+	SensorCandidatesSchema,
 	SettingsCurrentSchema,
 	StateResponseSchema,
 	StatsSchema,
@@ -28,6 +30,7 @@ import {
 	type LatestDecisionsResponse,
 	type Limits,
 	type Reading,
+	type SensorCandidates,
 	type SettingsCurrent,
 	type Stats,
 	type SystemResponse
@@ -79,6 +82,11 @@ export function chargingSession(overrides: Partial<ChargingSession> = {}): Charg
 
 export function settingsCurrent(): SettingsCurrent {
 	return v.parse(SettingsCurrentSchema, settingsJson);
+}
+
+/** Entitäten der HA-Datenbank zur Sensorauswahl (Demo-Welt) */
+export function sensorCandidates(): SensorCandidates {
+	return v.parse(SensorCandidatesSchema, learningCandidatesJson);
 }
 
 /** Entscheidungen der Demo-Welt (neueste zuerst, mit `cursor`) */

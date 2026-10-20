@@ -2,7 +2,7 @@ import { fireEvent, render, screen, within } from '@testing-library/svelte';
 import { expect, it, vi } from 'vitest';
 import { ApiError } from '$lib/api/errors';
 import error422 from '$lib/api/contract/error-422.json';
-import { limits, settingsCurrent } from '$lib/testing/fixtures';
+import { limits, sensorCandidates, settingsCurrent } from '$lib/testing/fixtures';
 import SettingsEditor from './SettingsEditor.svelte';
 
 const LOSS = () =>
@@ -223,4 +223,33 @@ it('fügt einen Bestandteil hinzu und speichert ihn mit fester ID', async () => 
 		kind: 'fixed_per_month',
 		value_eur: 3.5
 	});
+});
+
+it('speichert Schalter und Sensoren des Lastmodells mit den übrigen Einstellungen', async () => {
+	const current = settingsCurrent();
+	const save = vi.fn().mockResolvedValueOnce(current);
+	const loadCandidates = vi.fn().mockResolvedValue(sensorCandidates());
+	render(SettingsEditor, { current, save, loadCandidates, onSaved: vi.fn(), onReload: vi.fn() });
+	await fireEvent.click(await screen.findByRole('checkbox', { name: 'binary_sensor.anwesenheit' }));
+	await fireEvent.click(screen.getByRole('checkbox', { name: 'Lastmodell verwenden' }));
+	await fireEvent.click(screen.getByRole('button', { name: 'Speichern' }));
+	await vi.waitFor(() => expect(save).toHaveBeenCalled());
+	expect(save).toHaveBeenCalledTimes(1);
+	expect(save.mock.calls[0][1].learning).toEqual({
+		load_model_enabled: false,
+		ha_sensors: [
+			'sensor.aussentemperatur',
+			'sensor.wohnzimmer_temperatur',
+			'binary_sensor.anwesenheit'
+		]
+	});
+	expect(loadCandidates).toHaveBeenCalledTimes(1);
+});
+
+it('zeigt Serverfehler der Sensorliste am Lastmodell', async () => {
+	const save = reject422({ loc: ['learning', 'ha_sensors', 0], msg: 'keine gültige Entität' });
+	render(SettingsEditor, { current: settingsCurrent(), save, onSaved: vi.fn(), onReload: vi.fn() });
+	await fireEvent.click(screen.getByRole('button', { name: 'Speichern' }));
+	expect(await screen.findByText('keine gültige Entität')).toBeInTheDocument();
+	expect(screen.getByText('Bitte die markierten Felder prüfen.')).toBeInTheDocument();
 });

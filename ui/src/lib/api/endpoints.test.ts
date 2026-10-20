@@ -7,6 +7,7 @@ import plan from './contract/plan.json';
 import review from './contract/plan-review.json';
 import gridCharge from './contract/plan-grid-charge.json';
 import sessions from './contract/charging-sessions.json';
+import candidates from './contract/learning-candidates.json';
 import checks from './contract/ledger-checks.json';
 import statsMonth from './contract/stats-month.json';
 
@@ -202,4 +203,12 @@ it('liest den Abgleich mit den Zählern mit GET', async () => {
 	expect(url.pathname).toBe('/api/ledger/checks');
 	expect(Object.fromEntries(url.searchParams)).toEqual({ from: '2026-10-02', to: '2026-10-08' });
 	expect(result.days.some((day) => day.flagged)).toBe(true);
+});
+
+it('liest die Sensorkandidaten für das Lastmodell mit GET', async () => {
+	reply(candidates);
+	const result = await api.learningCandidates();
+	expect(sent()).toMatchObject({ url: '/api/learning/candidates', method: 'GET' });
+	expect(result.entities.map((entity) => entity.entity_id)).toContain('sensor.aussentemperatur');
+	expect(result.error).toBeNull();
 });

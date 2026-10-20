@@ -92,6 +92,8 @@ export const api = {
 			body: { base_version: baseVersion, settings, comment },
 			schema: s.SettingsCurrentSchema
 		}),
+	learningCandidates: (o?: Load): Promise<s.SensorCandidates> =>
+		get('/api/learning/candidates', s.SensorCandidatesSchema, o),
 	importSettings: (yaml: string): Promise<s.SettingsCurrent> =>
 		request('POST', '/api/settings/import', { body: { yaml }, schema: s.SettingsCurrentSchema }),
 	limits: (o?: Load): Promise<s.Limits> => get('/api/limits', s.LimitsSchema, o),

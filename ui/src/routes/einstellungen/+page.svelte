@@ -11,6 +11,7 @@
 	import ImportExport from '$lib/settings/ImportExport.svelte';
 	import LimitsView from '$lib/settings/LimitsView.svelte';
 	import { defaultRepriceRange } from '$lib/settings/model';
+	import LearningView from '$lib/settings/LearningView.svelte';
 	import PlanningView from '$lib/settings/PlanningView.svelte';
 	import RepriceForm from '$lib/settings/RepriceForm.svelte';
 	import SettingsEditor from '$lib/settings/SettingsEditor.svelte';
@@ -109,6 +110,7 @@
 							{current}
 							wallboxes={limits.data?.wallboxes}
 							save={api.saveSettings}
+							loadCandidates={api.learningCandidates}
 							onSaved={afterSave}
 							onReload={reload}
 							onCancel={() => (editing = false)}
@@ -170,6 +172,10 @@
 
 		<Card title="Planung">
 			<PlanningView planning={current.settings.planning} />
+		</Card>
+
+		<Card title="Lastmodell">
+			<LearningView learning={current.settings.learning} />
 		</Card>
 	{:else if !settings.error}
 		<p class="muted">Lädt …</p>

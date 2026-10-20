@@ -6,6 +6,7 @@ import type {
 	MonthlyFeeComponent,
 	PowerComponent,
 	PriceComponent,
+	LearningSettings,
 	PlanningSettings,
 	PriceSettings,
 	RuntimeSettings,
@@ -64,11 +65,21 @@ export interface PlanningDraft {
 	inertiaCt: string;
 }
 
+/** Lastmodell: Schalter und die gewählten HA-Sensoren (Entitäts-IDs) */
+export interface LearningDraft {
+	loadModelEnabled: boolean;
+	haSensors: string[];
+}
+
+/** So viele zusätzliche Sensoren erlaubt `LearningSettings.ha_sensors` höchstens */
+export const MAX_HA_SENSORS = 8;
+
 export interface SettingsDraft {
 	tariff: TariffDraft;
 	feedIn: { month: string; ct: string }[];
 	prices: PriceSettings;
 	planning: PlanningDraft;
+	learning: LearningDraft;
 	/** eigene Namen der Ladestationen nach Schlüssel; leer = Typname */
 	wallboxNames: Record<string, string>;
 	comment: string;
@@ -278,6 +289,10 @@ function planningDraft(planning: PlanningSettings): PlanningDraft {
 	};
 }
 
+function learningDraft(learning: LearningSettings): LearningDraft {
+	return { loadModelEnabled: learning.load_model_enabled, haSensors: [...learning.ha_sensors] };
+}
+
 /** `wallboxes`: Schlüssel aller Ladestationen aus config.yaml (auch ohne eigenen Namen) */
 export function draftFrom(settings: RuntimeSettings, wallboxes: string[] = []): SettingsDraft {
 	return {
@@ -291,6 +306,7 @@ export function draftFrom(settings: RuntimeSettings, wallboxes: string[] = []): 
 			.map(([month, ct]) => ({ month, ct: decimalText(ct) })),
 		prices: { ...settings.prices },
 		planning: planningDraft(settings.planning),
+		learning: learningDraft(settings.learning),
 		wallboxNames: {
 			...Object.fromEntries(wallboxes.map((key) => [key, ''])),
 			...settings.wallbox_names
@@ -563,6 +579,17 @@ function applyPlanning(
 	return planning as PlanningSettings;
 }
 
+function applyLearning(
+	draft: LearningDraft,
+	errors: Record<string, string>
+): Pick<LearningSettings, 'load_model_enabled' | 'ha_sensors'> {
+	const sensors = draft.haSensors.map((id) => id.trim());
+	if (sensors.length > MAX_HA_SENSORS || new Set(sensors).size !== sensors.length) {
+		errors['learning.ha_sensors'] = `Höchstens ${MAX_HA_SENSORS} Sensoren, jeder nur einmal`;
+	}
+	return { load_model_enabled: draft.loadModelEnabled, ha_sensors: sensors };
+}
+
 export function applyDraft(settings: RuntimeSettings, draft: SettingsDraft): DraftResult {
 	const errors: Record<string, string> = {};
 	const vatPct = readNumber(draft.tariff.vatPct, 'tariff.vat_pct', errors, {
@@ -606,6 +633,8 @@ export function applyDraft(settings: RuntimeSettings, draft: SettingsDraft): Dra
 
 	const planning = applyPlanning(draft.planning, errors);
 
+	const learning = applyLearning(draft.learning, errors);
+
 	const wallboxNames: Record<string, string> = {};
 	for (const [key, text] of Object.entries(draft.wallboxNames)) {
 		const name = text.trim();
@@ -638,6 +667,7 @@ export function applyDraft(settings: RuntimeSettings, draft: SettingsDraft): Dra
 			tariff,
 			feed_in: { ...settings.feed_in, monthly_ct: monthly },
 			planning: { ...settings.planning, ...planning },
+			learning: { ...settings.learning, ...learning },
 			wallbox_names: wallboxNames
 		},
 		tariffChanged: importPricesChanged(settings.tariff, tariff)

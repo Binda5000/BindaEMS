@@ -408,3 +408,45 @@ it('maps server errors of the planning fields to the editor keys', () => {
 	];
 	expect(editorFieldErrors(detail, settings())).toHaveProperty('planning.roundtrip_pct');
 });
+
+it('übernimmt Schalter und Sensoren des Lastmodells', () => {
+	const current = settings();
+	const draft = draftFrom(current);
+	expect(draft.learning).toEqual({
+		loadModelEnabled: true,
+		haSensors: ['sensor.aussentemperatur', 'sensor.wohnzimmer_temperatur']
+	});
+	draft.learning.loadModelEnabled = false;
+	draft.learning.haSensors = [' person.anna ', 'sensor.aussentemperatur'];
+	const result = applyDraft(current, draft);
+	if (!('settings' in result)) throw new Error(JSON.stringify(result.errors));
+	expect(result.settings.learning).toEqual({
+		load_model_enabled: false,
+		ha_sensors: ['person.anna', 'sensor.aussentemperatur']
+	});
+	expect(result.tariffChanged).toBe(false);
+});
+
+it('lässt höchstens 8 Sensoren, jeden nur einmal, zu', () => {
+	const current = settings();
+	const draft = draftFrom(current);
+	draft.learning.haSensors = Array.from({ length: 9 }, (_, index) => `sensor.s${index}`);
+	expect(applyDraft(current, draft)).toEqual({
+		errors: { 'learning.ha_sensors': 'Höchstens 8 Sensoren, jeder nur einmal' }
+	});
+	draft.learning.haSensors = ['sensor.a', 'sensor.a'];
+	expect(applyDraft(current, draft)).toEqual({
+		errors: { 'learning.ha_sensors': 'Höchstens 8 Sensoren, jeder nur einmal' }
+	});
+	draft.learning.haSensors = Array.from({ length: 8 }, (_, index) => `sensor.s${index}`);
+	expect('settings' in applyDraft(current, draft)).toBe(true);
+});
+
+it('ordnet Serverfehler der Sensorliste zu', () => {
+	expect(
+		editorFieldErrors(
+			[{ loc: ['body', 'settings', 'learning', 'ha_sensors', 1], msg: 'ungültig', type: 'x' }],
+			settings()
+		)
+	).toEqual({ 'learning.ha_sensors.1': 'ungültig' });
+});

@@ -1,10 +1,16 @@
 <script lang="ts">
 	import { tick, untrack } from 'svelte';
 	import { ApiError, detailText } from '$lib/api/errors';
-	import type { Limits, RuntimeSettings, SettingsCurrent } from '$lib/api/schemas';
+	import type {
+		Limits,
+		RuntimeSettings,
+		SensorCandidates,
+		SettingsCurrent
+	} from '$lib/api/schemas';
 	import Notice from '$lib/components/Notice.svelte';
 	import { WALLBOX_NAME_MAX, WALLBOX_TYPES } from '$lib/wallboxes';
 	import { applyDraft, draftFrom, editorFieldErrors } from './model';
+	import LearningEditor from './LearningEditor.svelte';
 	import PlanningEditor from './PlanningEditor.svelte';
 	import TariffEditor from './TariffEditor.svelte';
 
@@ -17,12 +23,22 @@
 			settings: RuntimeSettings,
 			comment: string | null
 		) => Promise<SettingsCurrent>;
+		/** Entitäten der HA-Datenbank für die Sensorauswahl; fehlt es, gibt es keine Auswahlliste */
+		loadCandidates?: () => Promise<SensorCandidates>;
 		onSaved: (result: SettingsCurrent, tariffChanged: boolean) => void;
 		onReload: () => void;
 		onCancel?: () => void;
 	}
 
-	let { current, wallboxes = {}, save, onSaved, onReload, onCancel }: Props = $props();
+	let {
+		current,
+		wallboxes = {},
+		save,
+		loadCandidates,
+		onSaved,
+		onReload,
+		onCancel
+	}: Props = $props();
 
 	const uid = $props.id();
 	// Der Entwurf beginnt beim geladenen Stand; „Neu laden“ baut den Editor neu auf
@@ -46,7 +62,7 @@
 		'name|valid_from|valid_until|value_ct|value_eur|value_above_eur|tier_kw|minimum_kw';
 	const WINDOW_FIELDS = 'months|weekdays|start|end|factor|value_ct';
 	const SHOWN_KEYS = [
-		/^(feedIn|prices|planning|wallboxNames)\./,
+		/^(feedIn|prices|planning|learning|wallboxNames)\./,
 		/^tariff(\.components|\.vat_pct|\.fixed_price_gross_ct)?$/,
 		new RegExp(`^tariff\\.components\\.\\d+(\\.(${COMPONENT_FIELDS}))?$`),
 		new RegExp(`^tariff\\.components\\.\\d+\\.windows\\.\\d+(\\.(${WINDOW_FIELDS}))?$`)
@@ -205,6 +221,8 @@
 	</fieldset>
 
 	<PlanningEditor bind:draft={draft.planning} {errors} />
+
+	<LearningEditor bind:draft={draft.learning} {errors} {loadCandidates} />
 
 	{#if Object.keys(draft.wallboxNames).length > 0}
 		<fieldset>
