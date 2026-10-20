@@ -1,5 +1,5 @@
 import asyncio
-from datetime import timedelta
+from datetime import date, timedelta
 from typing import Any
 
 import pytest
@@ -628,6 +628,53 @@ async def test_target_change_is_audited(service: IntentService, audit: AuditLog)
     assert last_audit(audit) == ("intent.target", "tesla", "Ziel 60 %, Abfahrt 07:00")
     await service.apply(SetTarget("tesla", None, "06:05"), actor="anna", source="ui")
     assert last_audit(audit) == ("intent.target", "tesla", "Ziel 60 %, Abfahrt 06:05")
+
+
+async def test_set_target_with_time_replaces_date(service: IntentService) -> None:
+    dated = await service.apply(
+        SetTarget("tesla", None, "07:15", date(2026, 11, 23)), actor="anna", source="ui"
+    )
+    assert dated.intent.vehicles["tesla"].departure_on == date(2026, 11, 23)
+    daily = await service.apply(SetTarget("tesla", None, "06:00"), actor="anna", source="ui")
+    tesla = daily.intent.vehicles["tesla"]
+    assert (tesla.departure, tesla.departure_on) == ("06:00", None)
+
+
+async def test_set_target_without_time_keeps_date(service: IntentService) -> None:
+    await service.apply(
+        SetTarget("tesla", 70, "07:15", date(2026, 11, 23)), actor="anna", source="ui"
+    )
+    result = await service.apply(SetTarget("tesla", 90, None), actor="anna", source="ui")
+    tesla = result.intent.vehicles["tesla"]
+    assert (tesla.target_soc_pct, tesla.departure, tesla.departure_on) == (
+        90,
+        "07:15",
+        date(2026, 11, 23),
+    )
+
+
+async def test_date_without_time_is_rejected(
+    service: IntentService, fake_client: FakeCoreClient, audit: AuditLog
+) -> None:
+    with pytest.raises(Rejected) as rejected:
+        await service.apply(
+            SetTarget("tesla", 80, None, date(2026, 11, 23)), actor="anna", source="ui"
+        )
+    assert rejected.value.details == ["Ein Abfahrtstag verlangt eine Abfahrtszeit."]
+    assert fake_client.sent == [] and audit.recent() == []
+
+
+async def test_audit_comment_names_the_date(service: IntentService, audit: AuditLog) -> None:
+    await service.apply(
+        SetTarget("tesla", 80, "07:15", date(2026, 11, 23)), actor="anna", source="ui"
+    )
+    assert last_audit(audit) == ("intent.target", "tesla", "Ziel 80 %, Abfahrt Mo 23.11. 07:15")
+    await service.apply(
+        SetTarget("tesla", None, "07:15", date(2026, 11, 29)), actor="anna", source="ui"
+    )
+    assert last_audit(audit) == ("intent.target", "tesla", "Ziel 80 %, Abfahrt So 29.11. 07:15")
+    await service.apply(SetTarget("tesla", None, "07:15"), actor="anna", source="ui")
+    assert last_audit(audit) == ("intent.target", "tesla", "Ziel 80 %, Abfahrt 07:15")
 
 
 @pytest.mark.parametrize(

@@ -1,4 +1,4 @@
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 
 import pytest
 
@@ -239,3 +239,14 @@ def test_departure_passed_while_plugged_uses_next_day(tracker) -> None:
     assert step(tracker, "tesla", wall_now=DEP - MIN, soc=measured(80.0)).state == "reached"
     kept = step(tracker, "tesla", wall_now=after, soc=measured(79.0))
     assert (kept.state, kept.departure_at) == ("reached", DEP + timedelta(days=1))
+
+
+def test_core_planned_uses_departure_on(tracker) -> None:
+    # Freitag 20.11.2026 18:00 UTC; die Abfahrt gilt am Montag 23.11. um 07:00 (06:00 UTC)
+    friday = datetime(2026, 11, 20, 18, 0, tzinfo=UTC)
+    dated = INTENT.model_copy(update={"departure_on": date(2026, 11, 23)})
+    state = step(tracker, wall_now=friday, intent=dated)
+    assert state.departure_at == datetime(2026, 11, 23, 6, 0, tzinfo=UTC)
+    # Ohne Tag gilt die tägliche Abfahrt am nächsten Morgen
+    daily = step(tracker, "tesla", wall_now=friday)
+    assert daily.departure_at == datetime(2026, 11, 21, 6, 0, tzinfo=UTC)

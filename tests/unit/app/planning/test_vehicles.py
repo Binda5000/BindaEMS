@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from typing import Any
 
 import pytest
@@ -239,3 +239,25 @@ def test_departure_passed_since_the_last_health_uses_the_next_one(cfg: Config) -
     health = planned_health(vehicle_health("tesla", departure_at="2026-10-17T05:00:00+00:00"))
     [tesla] = planned_vehicles(cfg, health, intent, now=now, slots=slots)
     assert tesla.departure_at == datetime.fromisoformat("2026-10-18T05:00:00+00:00")
+
+
+def test_planner_departure_uses_date(cfg: Config) -> None:
+    # Health-Abfahrt ist vorbei (Freitag 07:00); die Absicht nennt den Montag 23.11.
+    now = at("2026-11-20T06:00:30+00:00")
+    slots = scenario(
+        prices=[20.0] * 8, pv=[0.0] * 8, load=[500.0] * 8, start="2026-11-20T06:00:00+00:00"
+    ).slots
+    dated = VehicleIntent(
+        mode=ChargeMode.PLANNED, departure="07:00", departure_on=date(2026, 11, 23)
+    )
+    health = planned_health(vehicle_health("tesla", departure_at="2026-11-20T06:00:00+00:00"))
+    [tesla] = planned_vehicles(
+        cfg, health, Intent(version=3, vehicles={"tesla": dated}), now=now, slots=slots
+    )
+    assert tesla.departure_at == datetime.fromisoformat("2026-11-23T06:00:00+00:00")
+    # Ohne Tag: nächster Morgen
+    daily = dated.model_copy(update={"departure_on": None})
+    [tesla] = planned_vehicles(
+        cfg, health, Intent(version=3, vehicles={"tesla": daily}), now=now, slots=slots
+    )
+    assert tesla.departure_at == datetime.fromisoformat("2026-11-21T06:00:00+00:00")

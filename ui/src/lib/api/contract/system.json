@@ -81,7 +81,8 @@
             "boost_until": null,
             "wallbox": null,
             "target_soc_pct": 60,
-            "departure": "17:30"
+            "departure": "17:30",
+            "departure_on": null
           }
         },
         "priority": null,

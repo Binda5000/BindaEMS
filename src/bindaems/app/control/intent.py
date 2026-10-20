@@ -15,7 +15,7 @@ import math
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from typing import Any, Final, Literal
 
 import structlog
@@ -43,6 +43,16 @@ SUPPORT_TARGET: Final = "Akku-Unterstützung"  # Ziel im Änderungsprotokoll
 TARGET_SOC_MIN: Final = 20  # Grenzen wie ``VehicleIntent.target_soc_pct``
 TARGET_SOC_MAX: Final = 100
 DEPARTURE_PATTERN: Final = re.compile(r"([01]\d|2[0-3]):[0-5]\d")  # wie ``VehicleIntent.departure``
+DEPARTURE_DATE_NEEDS_TIME: Final = "Ein Abfahrtstag verlangt eine Abfahrtszeit."
+WEEKDAYS: Final = (
+    "Mo",
+    "Di",
+    "Mi",
+    "Do",
+    "Fr",
+    "Sa",
+    "So",
+)  # ``date.weekday()``, Änderungsprotokoll
 
 
 @dataclass(frozen=True)
@@ -62,15 +72,18 @@ class SetMode:
 
 @dataclass(frozen=True)
 class SetTarget:
-    """Ziel-SOC und tägliche Abfahrtszeit (``HH:MM``) eines Fahrzeugs für „Geplant“.
+    """Ziel-SOC und Abfahrtszeit (``HH:MM``) eines Fahrzeugs für „Geplant“, optional an einem Tag.
 
-    Ein Feld mit ``None`` bleibt unverändert. Gültig sind 20 bis 100 % und eine Uhrzeit von 00:00
-    bis 23:59 (``IntentService._check``).
+    ``target_soc_pct`` und ``departure`` mit ``None`` bleiben unverändert. Gültig sind 20 bis 100 %
+    und eine Uhrzeit von 00:00 bis 23:59 (``IntentService._check``). Ist ``departure`` gesetzt,
+    wird auch ``departure_on`` übernommen (``None`` löscht den Tag, die Abfahrt gilt dann täglich);
+    ohne ``departure`` bleibt der Tag stehen, und ``departure_on`` allein lehnt die app ab.
     """
 
     vehicle: str
     target_soc_pct: int | None
     departure: str | None
+    departure_on: date | None = None
 
 
 @dataclass(frozen=True)
@@ -244,11 +257,11 @@ def _apply(change: Change, base: Intent, now: datetime) -> Intent:
             return base.model_copy(update={"control": on})
         case SetMode(vehicle=key, mode=mode):
             edit(key, mode=mode)
-        case SetTarget(vehicle=key, target_soc_pct=soc, departure=departure):
+        case SetTarget(vehicle=key, target_soc_pct=soc, departure=departure, departure_on=day):
             if soc is not None:
                 edit(key, target_soc_pct=soc)
             if departure is not None:
-                edit(key, departure=departure)
+                edit(key, departure=departure, departure_on=day)
         case SetBoost(vehicle=key, on=on):
             edit(key, boost_until=boost_until(now) if on else None)
         case SetAssignment(wallbox=wallbox, vehicle=key):
@@ -411,8 +424,11 @@ def _support_comment(support: SupportIntent) -> str:
 
 
 def _target_comment(vehicle: VehicleIntent) -> str:
-    """Kommentar im Änderungsprotokoll: „Ziel {soc} %, Abfahrt {HH:MM}“."""
-    return f"Ziel {vehicle.target_soc_pct} %, Abfahrt {vehicle.departure}"
+    """Kommentar im Änderungsprotokoll: „Ziel {soc} %, Abfahrt {HH:MM}“, mit Tag
+    „Ziel {soc} %, Abfahrt {Wochentag} {TT.MM.} {HH:MM}“."""
+    day = vehicle.departure_on
+    shown = f"{WEEKDAYS[day.weekday()]} {day:%d.%m.} " if day is not None else ""
+    return f"Ziel {vehicle.target_soc_pct} %, Abfahrt {shown}{vehicle.departure}"
 
 
 def _mode(intent: Intent, actuator: str) -> str:
@@ -494,11 +510,13 @@ class IntentService:
                     raise Rejected([f"Unterstützungsschwelle {soc:g} % liegt über 100 %."])
             case SetMode(vehicle=key) | SetBoost(vehicle=key):
                 keys = [key]
-            case SetTarget(vehicle=key, target_soc_pct=soc, departure=departure):
+            case SetTarget(vehicle=key, target_soc_pct=soc, departure=departure, departure_on=day):
                 if soc is not None and not TARGET_SOC_MIN <= soc <= TARGET_SOC_MAX:
                     raise Rejected([f"Ziel-SOC „{soc}“ liegt außerhalb von 20–100 %."])
                 if departure is not None and DEPARTURE_PATTERN.fullmatch(departure) is None:
                     raise Rejected([f"Abfahrt „{departure}“ ist keine Uhrzeit (HH:MM)."])
+                if day is not None and departure is None:
+                    raise Rejected([DEPARTURE_DATE_NEEDS_TIME])
                 keys = [key]
             case SetAssignment(wallbox=wallbox, vehicle=key):
                 if wallbox not in self._cfg.wallboxes:

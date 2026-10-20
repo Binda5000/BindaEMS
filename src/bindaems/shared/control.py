@@ -137,6 +137,8 @@ class VehicleIntent(_Model):
     - ``target_soc_pct`` und ``departure``: Ziel-SOC (ganze Zahl 20 bis 100) und tägliche
       Abfahrtszeit (lokale Uhrzeit ``HH:MM``) für „Geplant“ (Plan 4b). Beide bleiben auch in den
       anderen Modi stehen; gespeicherte Absichten ohne sie laden mit den Standardwerten.
+    - ``departure_on``: optionaler Tag (lokales Datum) der Abfahrt für „Geplant“ (Plan 5b); ohne
+      Tag, oder wenn der Zeitpunkt schon vorbei ist, gilt ``departure`` täglich.
     """
 
     mode: ChargeMode = ChargeMode.PV
@@ -144,6 +146,7 @@ class VehicleIntent(_Model):
     wallbox: str | None = None
     target_soc_pct: Annotated[int, Field(ge=20, le=100)] = 80
     departure: Annotated[str, Field(pattern=r"^([01]\d|2[0-3]):[0-5]\d$")] = "07:00"
+    departure_on: date | None = None
 
 
 def _local_instant(day: date, at: time) -> datetime:
@@ -166,15 +169,20 @@ def _local_instant(day: date, at: time) -> datetime:
     return instant
 
 
-def next_departure(departure: str, now: datetime) -> datetime:
+def next_departure(departure: str, now: datetime, on: date | None = None) -> datetime:
     """Das erste lokale ``departure`` (``HH:MM``, Wiener Zeit) echt nach ``now``, in UTC.
 
     Ist die Uhrzeit am lokalen Tag von ``now`` schon erreicht oder vorbei, gilt die des nächsten
-    Tages (Plan 4b, Präzisierung 1).
+    Tages (Plan 4b, Präzisierung 1). Mit ``on`` gilt die Uhrzeit an diesem Tag, solange dieser
+    Zeitpunkt echt nach ``now`` liegt; sonst wie ohne ``on`` (Plan 5b, Präzisierung 3).
     """
     hour, minute = departure.split(":")
     at = time(int(hour), int(minute))
     moment = ensure_utc(now)
+    if on is not None:
+        dated = _local_instant(on, at)
+        if dated > moment:
+            return dated
     day = moment.astimezone(LOCAL_TZ).date()
     result = _local_instant(day, at)
     while result <= moment:

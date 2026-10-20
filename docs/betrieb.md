@@ -2414,6 +2414,14 @@ laden: Für ihn gibt es weder Ladestand noch Abfahrt.
   gilt die nächste Abfahrt nach jetzt: Ist sie vorbei und das Auto steckt noch, gilt die des nächsten
   Tages. Gibt es die Uhrzeit an einem Tag nicht (Beginn der Sommerzeit, 02:30), gilt 03:00; gibt es
   sie zweimal (Ende der Sommerzeit), das erste Vorkommen.
+- **Abfahrt an einem Tag:** Optional nennt die Absicht mit `departure_on` (`YYYY-MM-DD`, lokales
+  Datum) einen Tag. Dann gilt die Abfahrt an diesem Tag, solange der Zeitpunkt in der Zukunft liegt;
+  danach gilt `departure` wieder täglich. Wer über `PUT /api/control/vehicles/{key}/target` eine
+  Abfahrtszeit setzt, ersetzt den Tag: ohne `departure_on` im Aufruf wird er gelöscht. Ein Aufruf ohne
+  Abfahrtszeit lässt ihn stehen, und `departure_on` ohne Abfahrtszeit lehnt die app ab („Ein
+  Abfahrtstag verlangt eine Abfahrtszeit.“). Im Änderungsprotokoll steht er mit Wochentag: „Ziel 80 %,
+  Abfahrt Mo 23.11. 07:15“. Die Home-Assistant-Entität „Abfahrtszeit“ sendet nur die Uhrzeit und
+  löscht den Tag also.
 - **Ladestand** (Health `soc_pct` mit `soc_source`):
   - `measured` (gemessen): beim Tesla aus Tessie, höchstens 900 s alt; beim e-Golf aus Home Assistant
     (`soc_entity`; die Einstellung steht unten in „Zuordnung Auto und Wallbox“).
@@ -2547,6 +2555,7 @@ wieder im PV-Überschuss. Für „Geplant“ hieße der Eintrag des Tesla etwa
 | `vehicles.<Schlüssel>.mode` | `pv`, `min_pv`, `now`, `off`, `planned` (seit Plan 4b, oben „Geplant“) | `pv` |
 | `vehicles.<Schlüssel>.target_soc_pct` | Ziel-SOC für „Geplant“, ganze Zahl von 20 bis 100 | 80 |
 | `vehicles.<Schlüssel>.departure` | tägliche Abfahrt für „Geplant“, `HH:MM` (Wiener Zeit) | `07:00` |
+| `vehicles.<Schlüssel>.departure_on` | optionaler Tag der Abfahrt für „Geplant“, `YYYY-MM-DD` (lokales Datum); ist der Zeitpunkt vorbei, gilt `departure` täglich | kein Tag |
 | `vehicles.<Schlüssel>.boost_until` | Zeitpunkt mit Zeitzone, höchstens 12 h nach dem Senden | kein Boost |
 | `vehicles.<Schlüssel>.wallbox` | Schlüssel einer Wallbox; übersteuert die Zuordnung (unten) | keine Übersteuerung |
 | `priority` | alle Fahrzeug-Schlüssel genau einmal, in der Reihenfolge der Zuteilung | Reihenfolge unter `vehicles` in `config.yaml` |

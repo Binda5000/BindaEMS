@@ -488,6 +488,7 @@ def test_charging_intent_is_accepted_saved_and_reloaded(tmp_path, limits) -> Non
                     "wallbox": "evcs",
                     "target_soc_pct": 80,
                     "departure": "07:00",
+                    "departure_on": None,
                 },
                 "egolf": {
                     "mode": "min_pv",
@@ -495,6 +496,7 @@ def test_charging_intent_is_accepted_saved_and_reloaded(tmp_path, limits) -> Non
                     "wallbox": None,
                     "target_soc_pct": 80,
                     "departure": "07:00",
+                    "departure_on": None,
                 },
             },
             "priority": ["egolf", "tesla"],

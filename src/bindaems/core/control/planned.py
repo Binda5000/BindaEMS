@@ -153,7 +153,7 @@ class PlannedTracker:
         setzt beide Merker zurück. Die Abfahrt ist immer die nächste nach ``wall_now``.
         """
         target = effective_target(intent.target_soc_pct, limit_pct, sync)
-        departure_at = next_departure(intent.departure, wall_now)
+        departure_at = next_departure(intent.departure, wall_now, intent.departure_on)
         known = soc.source != "assumed" and soc.pct is not None
         soc_pct = soc.pct if soc.pct is not None else 0.0
         need = need_kwh(soc_pct, target, usable_kwh, efficiency)

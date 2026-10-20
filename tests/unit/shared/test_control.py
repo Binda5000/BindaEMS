@@ -1,5 +1,5 @@
 from dataclasses import fields
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 
 import pytest
 from pydantic import ValidationError
@@ -294,3 +294,44 @@ def test_thermal_actuator() -> None:
 def test_setpoint_offset_is_not_persistent() -> None:
     assert CommandKind.SETPOINT_OFFSET == "setpoint_offset"
     assert CommandKind.SETPOINT_OFFSET not in PERSISTENT_KINDS
+
+
+def test_next_departure_with_date() -> None:
+    now = datetime(2026, 11, 20, 18, 0, tzinfo=UTC)  # Freitag
+    assert next_departure("07:15", now, date(2026, 11, 23)) == datetime(
+        2026, 11, 23, 6, 15, tzinfo=UTC
+    )
+
+
+def test_next_departure_with_past_date_falls_back_to_daily() -> None:
+    now = datetime(2026, 11, 20, 18, 0, tzinfo=UTC)
+    assert next_departure("07:15", now, date(2026, 11, 19)) == next_departure("07:15", now)
+    assert next_departure("07:15", now, date(2026, 11, 19)) == datetime(
+        2026, 11, 21, 6, 15, tzinfo=UTC
+    )
+    # Heute, aber die Uhrzeit ist erreicht: ebenfalls täglich, also morgen
+    reached = datetime(2026, 11, 23, 6, 15, tzinfo=UTC)
+    assert next_departure("07:15", reached, date(2026, 11, 23)) == datetime(
+        2026, 11, 24, 6, 15, tzinfo=UTC
+    )
+
+
+def test_next_departure_without_date_is_unchanged() -> None:
+    now = datetime(2026, 11, 20, 18, 0, tzinfo=UTC)
+    assert next_departure("07:15", now, None) == next_departure("07:15", now)
+
+
+def test_next_departure_on_date_at_dst() -> None:
+    # Beginn der Sommerzeit am 29.3.2026: 02:30 gibt es nicht, es gilt 03:00 lokal
+    now = datetime(2026, 3, 27, 12, 0, tzinfo=UTC)
+    assert next_departure("02:30", now, date(2026, 3, 29)) == vienna(2026, 3, 29, 3, 0)
+
+
+def test_old_intent_without_departure_on_loads() -> None:
+    old = VehicleIntent.model_validate(
+        {"mode": "planned", "target_soc_pct": 70, "departure": "06:00"}
+    )
+    assert old.departure_on is None
+    dated = VehicleIntent.model_validate({"departure_on": "2026-11-23"})
+    assert dated.departure_on == date(2026, 11, 23)
+    assert VehicleIntent.model_validate(dated.model_dump(mode="json")) == dated

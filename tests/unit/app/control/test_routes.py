@@ -1,5 +1,5 @@
 import json
-from datetime import timedelta
+from datetime import date, timedelta
 from urllib.parse import quote
 
 import pytest
@@ -580,6 +580,47 @@ def test_target_accepts_one_field_and_null(client, auth) -> None:
     )
     tesla = only_departure.json()["intent"]["vehicles"]["tesla"]
     assert (tesla["target_soc_pct"], tesla["departure"]) == (90, "08:00")
+
+
+def test_target_with_departure_date(client, auth, fake_client, audit) -> None:
+    operator = login_as(client, auth, "operator")
+    url = "/api/control/vehicles/tesla/target"
+    dated = client.put(
+        url,
+        json={"target_soc_pct": 80, "departure": "07:15", "departure_on": "2026-11-23"},
+        headers=operator,
+    )
+    assert dated.status_code == 200
+    assert dated.json()["intent"]["vehicles"]["tesla"]["departure_on"] == "2026-11-23"
+    assert fake_client.sent[-1].vehicles["tesla"].departure_on == date(2026, 11, 23)
+    entry = audit.recent()[0]
+    assert entry.details is not None and entry.details["to"] == "Ziel 80 %, Abfahrt Mo 23.11. 07:15"
+    # Ohne departure_on (etwa ältere Clients) gilt die Abfahrt wieder täglich
+    daily = client.put(url, json={"target_soc_pct": None, "departure": "07:15"}, headers=operator)
+    assert daily.json()["intent"]["vehicles"]["tesla"]["departure_on"] is None
+
+
+def test_target_date_without_time_is_rejected(client, auth, fake_client) -> None:
+    operator = login_as(client, auth, "operator")
+    response = client.put(
+        "/api/control/vehicles/tesla/target",
+        json={"target_soc_pct": 80, "departure": None, "departure_on": "2026-11-23"},
+        headers=operator,
+    )
+    assert response.status_code == 422
+    assert response.json()["detail"] == "Ein Abfahrtstag verlangt eine Abfahrtszeit."
+    assert fake_client.sent == []
+
+
+def test_target_with_a_bad_date_is_rejected(client, auth, fake_client) -> None:
+    operator = login_as(client, auth, "operator")
+    response = client.put(
+        "/api/control/vehicles/tesla/target",
+        json={"target_soc_pct": 80, "departure": "07:00", "departure_on": "morgen"},
+        headers=operator,
+    )
+    assert response.status_code == 422
+    assert fake_client.sent == []
 
 
 def test_target_out_of_range_is_rejected(client, auth, fake_client) -> None:

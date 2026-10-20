@@ -234,8 +234,8 @@ def planned_vehicles(
         if departure_at is None or target is None:
             continue
         if departure_at <= ensure_utc(now):
-            departure = intent.vehicles.get(key, VehicleIntent()).departure
-            departure_at = next_departure(departure, now)
+            wanted = intent.vehicles.get(key, VehicleIntent())
+            departure_at = next_departure(wanted.departure, now, wanted.departure_on)
         if departure_at < current_end:
             continue
         vehicle = cfg.vehicles[key]

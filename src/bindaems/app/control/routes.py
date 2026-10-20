@@ -4,12 +4,12 @@ Ohne ``from __future__ import annotations`` (siehe ``auth/routes.py``).
 """
 
 import asyncio
-from datetime import timedelta
+from datetime import date, timedelta
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import JSONResponse
-from pydantic import AwareDatetime, BaseModel, ConfigDict
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field
 
 from bindaems.app.audit import AuditLog
 from bindaems.app.auth.service import (
@@ -71,12 +71,14 @@ class ModeBody(_Body):
 
 class TargetBody(_Body):
     """Ziel-SOC und Abfahrt (``HH:MM``); ``null`` lässt das Feld unverändert. Den Bereich prüft
-    der ``IntentService`` mit den Sätzen der Ablehnung."""
+    der ``IntentService`` mit den Sätzen der Ablehnung. ``departure_on`` (``YYYY-MM-DD``) setzt die
+    Abfahrt auf einen Tag; ohne ihn oder mit ``null`` gilt sie täglich. Er braucht ``departure``."""
 
     model_config = ConfigDict(extra="forbid", strict=True)
 
     target_soc_pct: int | None
     departure: str | None
+    departure_on: Annotated[date | None, Field(strict=False)] = None
 
 
 class AssignmentBody(_Body):
@@ -198,7 +200,9 @@ def control_router(
 
     @router.put("/api/control/vehicles/{key}/target")
     async def vehicle_target(key: str, body: TargetBody, session: Operator) -> dict[str, Any]:
-        return await change(SetTarget(key, body.target_soc_pct, body.departure), session)
+        return await change(
+            SetTarget(key, body.target_soc_pct, body.departure, body.departure_on), session
+        )
 
     @router.put("/api/control/vehicles/{key}/boost")
     async def vehicle_boost(key: str, body: OnBody, session: Operator) -> dict[str, Any]:
