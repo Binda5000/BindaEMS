@@ -825,6 +825,27 @@ async def test_shutdown_waits_for_the_running_costing_thread(runtime, monkeypatc
     assert order == ["Block gerechnet", "dispose"]
 
 
+async def test_shutdown_closes_the_load_model_before_dispose(runtime, monkeypatch) -> None:
+    order: list[str] = []
+
+    async def close(timeout_s: float) -> bool:
+        order.append(f"close {timeout_s:g}")
+        return False  # rechnet noch: wird gewarnt
+
+    real_dispose = runtime.engine.dispose
+
+    def dispose() -> None:
+        order.append("dispose")
+        real_dispose()
+
+    monkeypatch.setattr(runtime.load_model, "close", close)
+    monkeypatch.setattr(runtime.engine, "dispose", dispose)
+    with capture_logs() as logs:
+        await runtime.shutdown()
+    assert order == ["close 5", "dispose"]
+    assert "Training des Lastmodells läuft beim Beenden noch" in [e["event"] for e in logs]
+
+
 async def test_costing_job_survives_a_failing_catch_up(runtime, monkeypatch) -> None:
     calls: list[int] = []
 

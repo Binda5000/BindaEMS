@@ -14,7 +14,9 @@ zählt erst ab dem nächsten Training.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import math
+import threading
 from collections import Counter
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
@@ -43,7 +45,7 @@ from bindaems.app.learning.model import TrainedModel, TrainingError, train
 from bindaems.app.learning.registry import ModelRegistry, RegistryEntry
 from bindaems.app.learning.weather import WeatherArchive
 from bindaems.app.schedule import next_local
-from bindaems.app.settings.service import SettingsService
+from bindaems.app.settings.service import SettingsService, SettingsVersion
 from bindaems.app.status import ComponentStatus
 from bindaems.shared.timeutil import LOCAL_TZ, SLOT, Clock, ensure_utc, slot_start
 
@@ -58,7 +60,7 @@ HISTORY_DAYS: Final = WINDOW_DAYS + 7 * MAX_WEEKS  # Training (56 Tage) und alle
 PREDICT_HISTORY: Final = timedelta(days=8)  # Last vor der Ausgabe: 7 Tage Verzögerung und mehr
 SENSOR_CHUNK: Final = timedelta(days=7)  # HA-Abfragen in Stücken, sonst reicht das Zeitlimit nicht
 SENSOR_RECENT: Final = timedelta(hours=1)
-READY_WAIT_S = 600.0  # so lange wartet das erste Training höchstens auf die Nachholung
+READY_WAIT_S: Final = 600.0  # so lange wartet das erste Training höchstens auf die Nachholung
 FEATURE_LABELS: Final[Mapping[str, str]] = MappingProxyType(
     {
         "lead_h": "Vorlauf",
@@ -100,22 +102,31 @@ class TrainingResult:
     text: str
 
 
-def days_with_data(load_w: Mapping[datetime, float]) -> int:
-    """Lokale Tage mit mindestens ``MIN_SLOTS_PER_DAY`` Slots mit Last."""
+def days_with_data(load_w: Mapping[datetime, float], since: datetime | None = None) -> int:
+    """Lokale Tage mit mindestens ``MIN_SLOTS_PER_DAY`` Slots mit Last (ab ``since``)."""
     per_day = Counter(
-        slot.astimezone(LOCAL_TZ).date() for slot, value in load_w.items() if math.isfinite(value)
+        slot.astimezone(LOCAL_TZ).date()
+        for slot, value in load_w.items()
+        if math.isfinite(value) and (since is None or slot >= since)
     )
     return sum(1 for count in per_day.values() if count >= MIN_SLOTS_PER_DAY)
 
 
-def _fit(
-    inputs: FeatureInputs, names: Sequence[str], today: date, days: int
-) -> tuple[TrainingSet, TrainedModel, BacktestResult | None]:
+_Fitted = tuple[TrainingSet, TrainedModel, BacktestResult | None]
+
+
+def _fit(inputs: FeatureInputs, names: Sequence[str], today: date, days: int) -> _Fitted:
     """Training über die letzten 56 Tage vor heute und Backtest (blockiert: im Thread)."""
     end = local_midnight(today)
     data = training_set(inputs, local_midnight(today - timedelta(days=WINDOW_DAYS)), end, names)
     model = train(data, names)
     return data, model, rolling_backtest(inputs, names, today, days)
+
+
+def _consume(fit: asyncio.Future[Any]) -> None:
+    """Holt den Fehler einer Rechnung ab, auf die nach einem Zeitlimit niemand mehr wartet."""
+    if not fit.cancelled():
+        fit.exception()
 
 
 def _predict(
@@ -192,8 +203,17 @@ class LoadModelService:
         self._ready = ready  # Ende der Nachholung des Wetterarchivs (auch nach einem Fehler)
         self._sleep = sleep
         self._timeout_s = timeout_s
-        self._lock = asyncio.Lock()  # ein Training zugleich
+        self._lock = asyncio.Lock()  # ein Training oder eine Bewertung zugleich
+        self._training = False  # ein Lauf von ``train`` ist im Gang
+        self._waiting_ready = False  # ``run`` wartet beim Start auf die Nachholung
         self._task: asyncio.Task[None] | None = None  # Lauf über die Taste
+        # Rechnung im Thread; nach einem Zeitlimit rechnet sie weiter, bis sie wirklich endet
+        self._fit: asyncio.Future[_Fitted] | None = None
+        self._evaluations: set[asyncio.Task[None]] = set()  # Bewertungen nach dem Schalter
+        self._loop: asyncio.AbstractEventLoop | None = None
+        self._loop_thread: int | None = None
+        self._seen_lock = threading.Lock()
+        self._seen_enabled = settings.current().settings.learning.load_model_enabled
         self._entry: RegistryEntry | None = None  # geladene, brauchbare Version
         self._model: TrainedModel | None = None
         self._active = False  # Entscheidung der letzten Bewertung für die geladene Version
@@ -205,26 +225,32 @@ class LoadModelService:
         self._result: TrainingResult | None = None
         self._error: str | None = None  # Fehler des letzten Trainings
         self._units_known = False  # ``candidates`` lief, die Messungen je Einheit sind bekannt
+        settings.on_change(self._on_settings)
 
     # --- Training -------------------------------------------------------------------------
 
     async def train(self) -> TrainingResult:
         """Ein Trainingslauf und danach die Bewertung der Aktivierung; Läufe warten aufeinander.
         Ein Fehler gibt das Ergebnis ``failed``, die bisherige Version bleibt."""
+        self._bind()
         async with self._lock:
-            now = self._clock.now()
-            self._error = None
+            self._training = True
             try:
-                result = await self._train(now)
-            except Exception as exc:
-                log.exception("Training des Lastmodells fehlgeschlagen")
-                result = self._failed(now, str(exc))
-            self._result = result
-            try:
-                await self.evaluate()
-            except Exception:
-                log.exception("Aktivierung des Lastmodells nicht bewertet")
-            return result
+                now = self._clock.now()
+                self._error = None
+                try:
+                    result = await self._train(now)
+                except Exception as exc:
+                    log.exception("Training des Lastmodells fehlgeschlagen")
+                    result = self._failed(now, str(exc))
+                self._result = result
+                try:
+                    await self._evaluate()
+                except Exception:
+                    log.exception("Aktivierung des Lastmodells nicht bewertet")
+                return result
+            finally:
+                self._training = False
 
     def _failed(self, now: datetime, error: str) -> TrainingResult:
         self._error = error
@@ -234,13 +260,18 @@ class LoadModelService:
         today = now.astimezone(LOCAL_TZ).date()
         start = local_midnight(today - timedelta(days=HISTORY_DAYS))
         end = local_midnight(today)
+        if self._fit is not None and not self._fit.done():
+            log.warning("Das vorige Training des Lastmodells rechnet noch, dieses entfällt")
+            return self._failed(now, "Das vorige Training rechnet noch.")
         samples = await self._load.history(start, end)
         load_w = {ensure_utc(item.slot_start): item.house_w for item in samples}
+        # die Schwelle gilt in den 56 Trainingstagen, der Backtest sieht das ganze Fenster
+        train_days = days_with_data(load_w, local_midnight(today - timedelta(days=WINDOW_DAYS)))
         days = days_with_data(load_w)
-        if days < MIN_DAYS:
-            log.info("Zu wenig Daten für das Lastmodell", days=days, needed=MIN_DAYS)
+        if train_days < MIN_DAYS:
+            log.info("Zu wenig Daten für das Lastmodell", days=train_days, needed=MIN_DAYS)
             return TrainingResult(
-                "too_little_data", now, f"Zu wenig Daten: {days} von {MIN_DAYS} Tagen."
+                "too_little_data", now, f"Zu wenig Daten: {train_days} von {MIN_DAYS} Tagen."
             )
         sensors = list(self._settings.current().settings.learning.ha_sensors)
         names = feature_names(sensors)
@@ -251,9 +282,13 @@ class LoadModelService:
             sensors=await self._sensor_history(sensors, start, end),
             profile_for=profile_cache(samples),
         )
+        fit = asyncio.ensure_future(asyncio.to_thread(_fit, inputs, names, today, days))
+        fit.add_done_callback(_consume)
+        self._fit = fit
         try:
+            # ``shield``: das Zeitlimit beendet nur das Warten, ``fit`` endet mit dem Thread
             data, model, backtest = await asyncio.wait_for(
-                asyncio.to_thread(_fit, inputs, names, today, days), timeout=self._timeout_s
+                asyncio.shield(fit), timeout=self._timeout_s
             )
         except TimeoutError:
             log.warning("Training des Lastmodells dauert zu lange", limit_s=self._timeout_s)
@@ -305,22 +340,43 @@ class LoadModelService:
 
     def _use(self, entry: RegistryEntry, model: TrainedModel) -> None:
         self._entry, self._model = entry, model
-        self._active = entry.active
         self._activation = _activation(entry.decision)
+        self._active = entry.active and self._activation is not None  # unlesbar: nicht aktiv
         self._decided_at = entry.decided_at
 
     def running(self) -> bool:
-        return self._lock.locked() or (self._task is not None and not self._task.done())
+        """Ein Training läuft, wartet auf die Nachholung, ist über die Taste angestoßen oder
+        rechnet nach einem Zeitlimit noch im Thread."""
+        return (
+            self._training
+            or self._waiting_ready
+            or (self._task is not None and not self._task.done())
+            or (self._fit is not None and not self._fit.done())
+        )
 
     def start_training(self) -> bool:
         """Training im Hintergrund (Taste „Jetzt neu trainieren“); ``False``, wenn schon eines
         läuft. Nur aus der Ereignisschleife aufrufen."""
         if self.running():
             return False
+        self._bind()
         self._task = asyncio.get_running_loop().create_task(
             self._train_logged(), name="load-model-training"
         )
         return True
+
+    async def close(self, timeout_s: float) -> bool:
+        """Beim Herunterfahren: bricht den Lauf über die Taste und Bewertungen ab und wartet
+        höchstens ``timeout_s`` auf eine Rechnung im Thread. ``True``, wenn keine mehr läuft."""
+        tasks = [task for task in (self._task, *self._evaluations) if task is not None]
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        fit = self._fit
+        if fit is None or fit.done():
+            return True
+        done, _ = await asyncio.wait({fit}, timeout=timeout_s)
+        return bool(done)
 
     async def _train_logged(self) -> None:
         try:
@@ -333,7 +389,13 @@ class LoadModelService:
     async def evaluate(self) -> Activation:
         """Entscheidet über die Aktivierung: Schatten der letzten 14 Tage aus dem Archiv,
         Backtest der geladenen Version, Schalter aus den Einstellungen. Die Entscheidung kommt
-        zur Version in die Registry."""
+        zur Version in die Registry. Wartet auf ein laufendes Training."""
+        self._bind()
+        async with self._lock:
+            return await self._evaluate()
+
+    async def _evaluate(self) -> Activation:
+        """``evaluate`` ohne Lock; nur unter ``_lock`` aufrufen."""
         now = self._clock.now()
         today = now.astimezone(LOCAL_TZ).date()
         entry = self._entry if self._model is not None else None
@@ -358,6 +420,39 @@ class LoadModelService:
             basis=activation.basis,
         )
         return activation
+
+    def _bind(self) -> None:
+        """Merkt sich die Ereignisschleife, damit Änderungen des Schalters dort bewerten."""
+        if self._loop is None:
+            self._loop, self._loop_thread = asyncio.get_running_loop(), threading.get_ident()
+
+    def _on_settings(self, version: SettingsVersion) -> None:
+        """Ändert sich der Schalter „Lastmodell verwenden“, gleich neu bewerten (aus jedem
+        Thread); vor dem ersten Lauf ohne Wirkung, ``active`` liest den Schalter ohnehin."""
+        enabled = version.settings.learning.load_model_enabled
+        with self._seen_lock:
+            changed, self._seen_enabled = enabled != self._seen_enabled, enabled
+        loop = self._loop
+        if not changed or loop is None or loop.is_closed():
+            return
+        if threading.get_ident() == self._loop_thread:
+            self._spawn_evaluation()
+        else:
+            with contextlib.suppress(RuntimeError):  # Schleife inzwischen geschlossen
+                loop.call_soon_threadsafe(self._spawn_evaluation)
+
+    def _spawn_evaluation(self) -> None:
+        task = asyncio.get_running_loop().create_task(
+            self._evaluate_logged(), name="load-model-evaluate"
+        )
+        self._evaluations.add(task)
+        task.add_done_callback(self._evaluations.discard)
+
+    async def _evaluate_logged(self) -> None:
+        try:
+            await self.evaluate()
+        except Exception:
+            log.exception("Aktivierung des Lastmodells nicht bewertet")
 
     def _shadow(self, start: datetime, end: datetime) -> dict[date, DaySums]:
         return shadow_sums(
@@ -419,9 +514,14 @@ class LoadModelService:
     async def run(self) -> None:
         """Beim Start die neueste brauchbare Version laden, ohne eine gleich trainieren (nach der
         Nachholung des Wetterarchivs); dann täglich um 03:15 Uhr Ortszeit."""
+        self._bind()
         await self._load_latest()
         if self._model is None:
-            await self._wait_ready()
+            self._waiting_ready = True
+            try:
+                await self._wait_ready()
+            finally:
+                self._waiting_ready = False
             await self._train_logged()
         while True:
             now = self._clock.now()

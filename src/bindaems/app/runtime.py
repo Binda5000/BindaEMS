@@ -111,6 +111,7 @@ STATS_SESSION_DAYS = 90  # so weit zurück sucht HA die letzte Ladesession eines
 RESTART_S = 10.0
 COSTING_RETRY_S = 60.0  # Pause der Nachführung des Einstandspreises nach einem Fehler
 COSTING_STOP_S = 5.0  # so lange wartet das Beenden auf den Block einer laufenden Nachführung
+LOAD_MODEL_STOP_S = 5.0  # so lange wartet das Beenden auf eine Rechnung des Lastmodells
 BACKUP_AT = (3, 15)  # Ortszeit
 FORECAST_NIGHTLY_AT = (2, 30)  # Ortszeit
 FORECAST_KEEP = timedelta(days=60)
@@ -986,6 +987,9 @@ class AppRuntime:
         # ``to_thread`` des abgebrochenen Jobs ``costing`` rechnet weiter: vor ``dispose`` abwarten
         if not await asyncio.to_thread(self.costing.close, COSTING_STOP_S):
             log.warning("Nachführung des Einstandspreises läuft beim Beenden noch")
+        # ebenso den Lauf über die Taste und eine Rechnung des Lastmodells im Thread
+        if not await self.load_model.close(LOAD_MODEL_STOP_S):
+            log.warning("Training des Lastmodells läuft beim Beenden noch")
         try:
             await self.influx_writer.flush_now()
         except Exception:

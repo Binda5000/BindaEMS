@@ -869,9 +869,181 @@ async def test_unreadable_stored_decision_is_ignored(
         samples=1234,
         backtest=None,
     )
-    registry.decide(entry.id, {"kaputt": True}, False, NOW - DAY)
+    registry.decide(entry.id, {"kaputt": True}, True, NOW - DAY)  # aktiv, aber unlesbar
     env = make_env(stop_after=1)
     with pytest.raises(StopScheduler):
         await env.service.run()
+    assert not env.service.active()
     activation = env.service.status()["activation"]
     assert (activation["reason"], activation["decided_at"]) == ("too_few_days", None)
+
+
+# --- Nacharbeit 1 -------------------------------------------------------------------------
+
+
+async def test_min_days_count_only_the_training_window(
+    make_env: Callable[..., Env], trainer: Trainer
+) -> None:
+    # 30 volle Tage, davon nur 20 in den 56 Tagen vor heute
+    data = make_synthetic(30, first_day=TODAY - timedelta(days=66))
+    env = make_env(samples=data.samples)
+    result = await env.service.train()
+    assert (result.outcome, result.text) == ("too_little_data", "Zu wenig Daten: 20 von 28 Tagen.")
+    assert trainer.seen == []
+
+
+async def test_backtest_gets_the_days_of_the_whole_window(
+    make_env: Callable[..., Env], trainer: Trainer, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    seen: list[int] = []
+
+    def backtest(inputs: Any, names: Any, today: date, days: int) -> None:
+        seen.append(days)
+
+    monkeypatch.setattr(service_module, "rolling_backtest", backtest)
+    data = make_synthetic(70, first_day=TODAY - timedelta(days=70))
+    env = make_env(samples=data.samples)
+    assert (await env.service.train()).outcome == "trained"
+    assert seen == [70]  # 56 davon im Trainingsfenster
+
+
+async def test_switching_the_model_back_on_evaluates_at_once(
+    env: Env, trainer: Trainer, settings_service: SettingsService, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(service_module, "rolling_backtest", lambda *args: better_backtest())
+    await env.service.train()
+    assert env.service.active()
+    set_learning(settings_service, load_model_enabled=False)
+    await until(lambda: env.service.status()["activation"]["decided_at"] is not None)
+    await until(lambda: _stored_reason(env) == "disabled")
+    await asyncio.to_thread(set_learning, settings_service, load_model_enabled=True)  # Route
+    await until(lambda: _stored_reason(env) == "better")
+    assert env.service.active()
+    shown = env.service.status()["activation"]
+    assert (shown["reason"], shown["active"]) == ("better", True)
+
+
+def _stored_reason(env: Env) -> str | None:
+    entry = env.registry.latest_usable()
+    return entry.decision["reason"] if entry is not None and entry.decision else None
+
+
+async def test_other_settings_changes_do_not_evaluate(
+    env: Env, trainer: Trainer, settings_service: SettingsService, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    await env.service.train()
+    calls: list[int] = []
+
+    async def counting() -> None:
+        calls.append(1)
+
+    monkeypatch.setattr(env.service, "evaluate", counting)
+    set_learning(settings_service, ha_sensors=[SENSOR])
+    await asyncio.sleep(0.05)
+    assert calls == []
+    set_learning(settings_service, load_model_enabled=False)
+    await until(lambda: calls == [1])
+
+
+async def test_switch_change_before_run_does_nothing(
+    service: LoadModelService, settings_service: SettingsService
+) -> None:
+    set_learning(settings_service, load_model_enabled=False)  # noch keine Ereignisschleife gebunden
+    assert service.status()["activation"]["reason"] == "disabled"
+
+
+async def test_timed_out_thread_keeps_the_service_busy(
+    make_env: Callable[..., Env], trainer: Trainer
+) -> None:
+    trainer.gate = threading.Event()
+    env = make_env(timeout_s=0.05)
+    try:
+        assert (await env.service.train()).outcome == "failed"
+        assert env.service.running()  # der Thread rechnet noch
+        assert not env.service.start_training()
+        result = await env.service.train()  # nachts: kein zweites Training daneben
+        assert result.outcome == "failed"
+        assert result.text == "Training fehlgeschlagen: Das vorige Training rechnet noch."
+        assert len(trainer.seen) == 1
+    finally:
+        trainer.gate.set()
+    await until(lambda: not env.service.running())
+    assert env.service.start_training()
+    await until(lambda: not env.service.running())
+    assert len(trainer.seen) == 2
+
+
+async def test_close_cancels_the_button_run_and_waits_for_the_thread(
+    env: Env, trainer: Trainer
+) -> None:
+    trainer.gate = threading.Event()
+    assert env.service.start_training()
+    await until(lambda: bool(trainer.seen))
+    task = env.service._task
+    assert task is not None
+    assert not await env.service.close(0.05)  # der Thread rechnet noch
+    assert task.cancelled()
+    threading.Timer(0.1, trainer.gate.set).start()
+    assert await env.service.close(5.0)
+    assert not env.service.running()
+    assert env.registry.latest_usable() is None  # abgebrochen: keine Version
+
+
+async def test_close_without_anything_running(service: LoadModelService) -> None:
+    assert await service.close(0.01)
+
+
+async def test_no_button_run_while_waiting_for_the_backfill(
+    make_env: Callable[..., Env], trainer: Trainer
+) -> None:
+    backfilled = asyncio.Event()
+    env = make_env(ready=backfilled.wait, stop_after=1)
+    task = asyncio.create_task(env.service.run())
+    await asyncio.sleep(0.05)
+    assert env.service.running()
+    assert not env.service.start_training()
+    backfilled.set()
+    with pytest.raises(StopScheduler):
+        await task
+    assert len(trainer.seen) == 1
+
+
+async def test_evaluate_waits_for_a_running_training(env: Env, trainer: Trainer) -> None:
+    trainer.gate = threading.Event()
+    assert env.service.start_training()
+    await until(lambda: bool(trainer.seen))
+    evaluation = asyncio.create_task(env.service.evaluate())
+    await asyncio.sleep(0.05)
+    assert not evaluation.done()
+    trainer.gate.set()
+    activation = await asyncio.wait_for(evaluation, timeout=5)
+    assert activation.reason == "too_few_days"
+
+
+def test_ready_wait_is_final() -> None:
+    import ast
+    import inspect
+
+    tree = ast.parse(inspect.getsource(service_module))
+    annotated = {
+        node.target.id: ast.unparse(node.annotation)
+        for node in tree.body
+        if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name)
+    }
+    assert annotated.get("READY_WAIT_S") == "Final"
+
+
+async def test_failed_evaluation_after_the_switch_is_logged(
+    env: Env, trainer: Trainer, settings_service: SettingsService, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    await env.service.train()
+
+    def broken(*args: Any) -> None:
+        raise OSError("Datenbank gesperrt")
+
+    monkeypatch.setattr(env.registry, "decide", broken)
+    with capture_logs() as logs:
+        set_learning(settings_service, load_model_enabled=False)
+        await until(
+            lambda: "Aktivierung des Lastmodells nicht bewertet" in [e["event"] for e in logs]
+        )
