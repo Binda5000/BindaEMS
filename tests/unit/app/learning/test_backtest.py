@@ -154,3 +154,20 @@ def test_daily_sums_cover_the_last_fourteen_days(
 
 def test_improvement_without_profile_error_is_none() -> None:
     assert BacktestResult([], {}).improvement() is None
+
+
+def test_weeks_end_at_local_midnight_across_spring_dst(
+    monkeypatch: pytest.MonkeyPatch, synthetic_factory: Callable[..., Synthetic]
+) -> None:
+    # Die Woche ab dem 24.03.2027 enthält die Umstellung am 28.03. (nur 167 h); die Ausgabe um
+    # 00:00 Uhr des 31.03. gehört allein zur Folgewoche.
+    monkeypatch.setattr(backtest, "train", lambda data, features: _Zero())
+    data = synthetic_factory(DAYS, first_day=date(2027, 3, 10))
+    result = _run(data)
+    for week in result.weeks:
+        local_end = week.end.astimezone(LOCAL_TZ)
+        assert (local_end.hour, local_end.minute) == (0, 0)
+        assert local_end.date() - week.origin.astimezone(LOCAL_TZ).date() == timedelta(days=7)
+    assert len({week.end for week in result.weeks}) == 2
+    assert sum(day.n for day in result.daily.values()) == sum(week.n for week in result.weeks)
+    assert set(result.daily) == {_today(data) - timedelta(days=k) for k in range(1, 15)}

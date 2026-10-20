@@ -82,24 +82,26 @@ def make_synthetic(
     temperature_effect: bool = True,
     noise_w: float = 15.0,
     seed: int = 20261020,
+    first_day: date = SYNTHETIC_FIRST_DAY,
 ) -> Synthetic:
-    """Hauslast und Temperatur für ``days`` Tage; der feste Zufallsstart macht jeden Aufruf gleich.
+    """Hauslast und Temperatur für ``days`` Tage ab ``first_day``; der feste Zufallsstart macht
+    jeden Aufruf gleich.
 
     Die Last ist die Tagesform (``_shape``) plus Rauschen; mit ``temperature_effect`` kommen
     ``HEATING_W_PER_K`` Watt je Kelvin unter ``HEATING_BELOW_C`` hinzu. Der Tagesmittelwert der
     Temperatur springt von Tag zu Tag zwischen −8 und 18 °C, damit die Temperatur sich nicht aus
     der Last des Vortags ablesen lässt."""
     rng = random.Random(seed)  # noqa: S311 - Testdaten, keine Kryptographie
-    start = datetime.combine(SYNTHETIC_FIRST_DAY, time(0), tzinfo=LOCAL_TZ).astimezone(UTC)
-    end = datetime.combine(
-        SYNTHETIC_FIRST_DAY + timedelta(days=days), time(0), tzinfo=LOCAL_TZ
-    ).astimezone(UTC)
+    start = datetime.combine(first_day, time(0), tzinfo=LOCAL_TZ).astimezone(UTC)
+    end = datetime.combine(first_day + timedelta(days=days), time(0), tzinfo=LOCAL_TZ).astimezone(
+        UTC
+    )
     day_means = [rng.uniform(-8.0, 18.0) for _ in range(days)]
     temp_c: dict[datetime, float] = {}
     load_w: dict[datetime, float] = {}
     for slot in slots_between(start, end):
         local = slot.astimezone(LOCAL_TZ)
-        day = (local.date() - SYNTHETIC_FIRST_DAY).days
+        day = (local.date() - first_day).days
         hour = local.hour + local.minute / 60
         temp = day_means[day] + 3.0 * math.sin((hour - 9.0) / 24 * 2 * math.pi)
         temp_c[slot] = temp

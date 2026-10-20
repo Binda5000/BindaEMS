@@ -13,7 +13,7 @@ import math
 from collections import defaultdict
 from collections.abc import Sequence
 from dataclasses import dataclass
-from datetime import UTC, date, datetime, time, timedelta
+from datetime import date, datetime, timedelta
 from typing import Final
 
 from bindaems.app.forecast.archive import HorizonClass, horizon_class
@@ -22,6 +22,7 @@ from bindaems.app.learning.features import (
     FeatureInputs,
     feature_rows,
     issuances,
+    local_midnight,
     training_set,
 )
 from bindaems.app.learning.model import TrainingError, train
@@ -33,7 +34,6 @@ MIN_TRAIN_DAYS: Final = 14
 MAX_WEEKS: Final = 8
 MIN_WEEKS: Final = 2
 TRAIN_WINDOW: Final = timedelta(days=56)
-WEEK: Final = timedelta(days=7)
 _CLASSES: Final[tuple[HorizonClass, ...]] = ("h0_6", "h6_24", "h24")
 
 
@@ -76,10 +76,6 @@ def week_count(days_with_data: int) -> int | None:
     return weeks if weeks >= MIN_WEEKS else None
 
 
-def _midnight(day: date) -> datetime:
-    return datetime.combine(day, time(0), tzinfo=LOCAL_TZ).astimezone(UTC)
-
-
 @dataclass
 class _Sums:
     n: int = 0
@@ -88,7 +84,7 @@ class _Sums:
 
 
 def _test_week(
-    inputs: FeatureInputs, names: Sequence[str], origin: datetime, limit: datetime
+    inputs: FeatureInputs, names: Sequence[str], origin: datetime, end: datetime, limit: datetime
 ) -> tuple[dict[HorizonClass, _Sums], dict[date, _Sums]] | None:
     """Summen der Absolutfehler einer Testwoche, oder ``None``, wenn das Training scheitert."""
     try:
@@ -98,7 +94,7 @@ def _test_week(
         return None
     cases: list[tuple[float, float, HorizonClass, date]] = []  # Ist, Profil, Klasse, Tag
     rows: list[list[float]] = []
-    for issued in issuances(origin, origin + WEEK):
+    for issued in issuances(origin, end):
         day = issued.astimezone(LOCAL_TZ).date()
         profile = inputs.profile_for(day)
         if profile is None:
@@ -132,12 +128,13 @@ def rolling_backtest(
     weeks = week_count(days_with_data)
     if weeks is None:
         return None
-    limit = _midnight(today)
+    limit = local_midnight(today)
     results: list[WeekResult] = []
     daily: dict[date, DaySums] = {}
     for k in range(weeks, 0, -1):  # älteste Woche zuerst
-        origin = _midnight(today - timedelta(days=7 * k))
-        tested = _test_week(inputs, names, origin, limit)
+        origin = local_midnight(today - timedelta(days=7 * k))
+        end = local_midnight(today - timedelta(days=7 * (k - 1)))  # nächste lokale Mitternacht
+        tested = _test_week(inputs, names, origin, end, limit)
         if tested is None:
             continue
         by_class, by_day = tested
@@ -147,7 +144,7 @@ def rolling_backtest(
                 results.append(
                     WeekResult(
                         origin,
-                        origin + WEEK,
+                        end,
                         cls,
                         sums.n,
                         sums.model_abs / sums.n,

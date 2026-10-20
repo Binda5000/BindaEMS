@@ -88,7 +88,8 @@ def issuances(start: datetime, end: datetime) -> list[datetime]:
     return found
 
 
-def _midnight(day: date) -> datetime:
+def local_midnight(day: date) -> datetime:
+    """Beginn des lokalen Kalendertags, als UTC."""
     return datetime.combine(day, time(0), tzinfo=LOCAL_TZ).astimezone(UTC)
 
 
@@ -101,7 +102,7 @@ def profile_cache(samples: Sequence[LoadSample]) -> Callable[[date], LoadProfile
 
     def profile_for(day: date) -> LoadProfile | None:
         if day not in cache:
-            midnight = _midnight(day)
+            midnight = local_midnight(day)
             lo = bisect_left(starts, midnight - timedelta(days=WINDOW_DAYS))
             hi = bisect_left(starts, midnight)
             profile = build_profile(ordered[lo:hi], midnight) if hi > lo else None
