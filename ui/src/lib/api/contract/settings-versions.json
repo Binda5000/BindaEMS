@@ -1,5 +1,12 @@
 [
   {
+    "version": 5,
+    "created_at": "2026-10-09T08:00:00+00:00",
+    "actor": "admin",
+    "source": "ui",
+    "comment": null
+  },
+  {
     "version": 4,
     "created_at": "2026-10-09T08:00:00+00:00",
     "actor": "test",

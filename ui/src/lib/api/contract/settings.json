@@ -1,7 +1,7 @@
 {
-  "version": 4,
+  "version": 5,
   "created_at": "2026-10-09T08:00:00+00:00",
-  "actor": "test",
+  "actor": "admin",
   "source": "ui",
   "comment": null,
   "settings": {
@@ -148,7 +148,10 @@
     },
     "learning": {
       "load_model_enabled": true,
-      "ha_sensors": []
+      "ha_sensors": [
+        "sensor.aussentemperatur",
+        "sensor.wohnzimmer_temperatur"
+      ]
     },
     "wallbox_names": {
       "twc": "Garage"

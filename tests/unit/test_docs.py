@@ -1193,3 +1193,25 @@ def test_climate_chapter_matches_the_code(capsys: pytest.CaptureFixture[str]) ->
     readme = Path("docs/verification/README.md").read_text("utf-8")
     for text in (section, " ".join(abnahme.split()), " ".join(readme.split())):
         assert re.search(r"löst der Watchdog (am Cerbo )?nach 90 s", text), text[:80]
+
+
+def test_guide_lists_the_endpoints_of_load_model_and_forecast_quality() -> None:
+    # Plan 5a, Task 11: die API-Liste im Abschnitt „Prognosen“ nennt jeden neuen Aufruf mit der
+    # Rolle, die er verlangt, und die Texte, die das UI zeigt.
+    section = " ".join(_guide_section("Prognosen").split())
+    _, found, text = section.partition("### API für Lastmodell und Prognosegüte ")
+    assert found, "Der Unterabschnitt „API für Lastmodell und Prognosegüte“ fehlt."
+    text = text.split("### ", 1)[0]
+    for topic in (
+        "`GET /api/forecast/load` (ab „Lesen“)",
+        "`method`",
+        "`GET /api/forecast/quality?days=14` (ab „Lesen“)",
+        "`improvement_pct`",
+        "`GET /api/forecast/quality/daily?days=28` (ab „Lesen“, `days` von 1 bis 60)",
+        "`GET /api/learning/load` (ab „Lesen“)",
+        "`POST /api/learning/load/train` (nur Admin, Antwort 202",
+        "409 „Training läuft schon.“",
+        "`GET /api/learning/candidates` (nur Admin)",
+        "HA-Datenbank nicht eingerichtet (influxdb.ha_database)",
+    ):
+        assert topic in text, topic

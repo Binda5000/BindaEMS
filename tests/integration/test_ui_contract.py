@@ -13,7 +13,7 @@ from typing import Any
 
 from fastapi.testclient import TestClient
 from sqlalchemy import select
-from tests.ui_history import DAYS, FIRST_DAY
+from tests.ui_history import DAYS, FIRST_DAY, LAST_DAY
 from tests.ui_world import DEMO_PASSWORD, DEMO_TOTP_SECRET, T_DEMO, World, build_world
 
 from bindaems.app.charging.planned import PlannedSummary
@@ -40,6 +40,9 @@ GET_ENDPOINTS = {
     "forecast": "/api/forecast/pv",
     "forecast-load": "/api/forecast/load",
     "forecast-quality": "/api/forecast/quality?days=14",
+    "forecast-quality-daily": "/api/forecast/quality/daily?days=28",
+    "learning-load": "/api/learning/load",
+    "learning-candidates": "/api/learning/candidates",
     "ledger-days": "/api/ledger/days?from=2026-09-24&to=2026-10-09",
     "ledger-checks": "/api/ledger/checks?from=2026-10-02&to=2026-10-08",
     "stats-day": "/api/stats?period=day&date=2026-10-08",
@@ -267,6 +270,31 @@ async def test_demo_world_has_statistics_data(cfg, tmp_path) -> None:
         assert len(costs) == 96 * DAYS and any(cost.avg_ct for cost in costs.values())
         stored = app.consumer_days.energy(last - timedelta(days=6), last)
         assert {kwh is not None for kwh, _ in stored.values()} == {True}
+    finally:
+        world.close()
+
+
+async def test_demo_world_has_a_loaded_model(cfg, tmp_path) -> None:
+    # Grundlage der Seite „Prognosen“: ein aktives Modell mit Backtest, Schattenbetrieb an 12 Tagen
+    # und zwei gewählten Sensoren, von denen das Modell einen nutzt
+    world = await build_world(cfg, tmp_path)
+    try:
+        status = world.app.load_model.status()
+        assert status["activation"]["active"] and status["activation"]["basis"] == "shadow"
+        assert status["activation"]["days"] == 12 and status["activation"]["reason"] == "better"
+        assert status["model"]["samples"] == 5376
+        assert len(status["backtest"]["weeks"]) == 9  # drei Wochen zu drei Vorlaufklassen
+        assert [(x["entity_id"], x["in_model"]) for x in status["sensors"]] == [
+            ("sensor.aussentemperatur", True),
+            ("sensor.wohnzimmer_temperatur", False),
+        ]
+        assert status["training"]["outcome"] == "trained" and status["status"]["ok"]
+        latest = world.app.load_forecast.latest()
+        assert latest is not None and latest.method == "model"
+        last = LAST_DAY
+        rows = world.app.forecast_quality.daily(last - timedelta(days=11), last)
+        assert {row.kind for row in rows} == {"load", "load_profile", "load_model"}
+        assert len({row.day for row in rows}) == 12
     finally:
         world.close()
 

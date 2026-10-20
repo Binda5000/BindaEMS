@@ -1,0 +1,17 @@
+{
+  "entities": [
+    {
+      "entity_id": "binary_sensor.anwesenheit",
+      "unit": null
+    },
+    {
+      "entity_id": "sensor.aussentemperatur",
+      "unit": "°C"
+    },
+    {
+      "entity_id": "sensor.wohnzimmer_temperatur",
+      "unit": "°C"
+    }
+  ],
+  "error": null
+}

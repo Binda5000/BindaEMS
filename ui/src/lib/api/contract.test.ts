@@ -23,6 +23,9 @@ const SCHEMAS: Record<string, v.GenericSchema> = {
 	forecast: s.ForecastSchema,
 	'forecast-load': s.LoadForecastSchema,
 	'forecast-quality': s.QualitySchema,
+	'forecast-quality-daily': s.QualityDailySchema,
+	'learning-load': s.LearningStatusSchema,
+	'learning-candidates': s.SensorCandidatesSchema,
 	'ledger-days': v.array(s.DaySummarySchema),
 	'ledger-checks': s.LedgerChecksSchema,
 	'stats-day': s.StatsSchema,
@@ -83,6 +86,83 @@ it('akzeptiert die Nullfälle der API', () => {
 			warnings: []
 		})
 	).toEqual([]);
+});
+
+describe('Lastmodell', () => {
+	const demo = files['./contract/learning-load.json'] as Record<string, unknown>;
+	const noModel = {
+		...demo,
+		method: 'profile',
+		activation: {
+			active: false,
+			basis: 'none',
+			days: 0,
+			model_mae_w: null,
+			profile_mae_w: null,
+			improvement_pct: null,
+			reason: 'no_model',
+			text: 'Profil aktiv: Es gibt noch kein brauchbares Modell.',
+			decided_at: null
+		},
+		model: null,
+		backtest: null,
+		training: { running: false, last_at: null, outcome: null, text: null },
+		status: { ok: false, text: 'Noch kein Modell' }
+	};
+
+	it('akzeptiert den Zustand ohne Modell, Backtest und Lauf', () => {
+		expect(issues(s.LearningStatusSchema, noModel)).toEqual([]);
+	});
+
+	it('kennt jeden Grund der Aktivierung und jedes Ergebnis des Trainings', () => {
+		const activation = noModel.activation;
+		for (const reason of ['better', 'not_better', 'too_few_days', 'disabled', 'no_model']) {
+			expect(issues(s.ActivationSchema, { ...activation, reason })).toEqual([]);
+		}
+		expect(issues(s.ActivationSchema, { ...activation, reason: 'unknown' })).not.toEqual([]);
+		for (const outcome of ['trained', 'too_little_data', 'failed', null]) {
+			const training = { ...noModel.training, outcome };
+			expect(issues(s.TrainingSchema, training)).toEqual([]);
+		}
+		expect(issues(s.TrainingSchema, { ...noModel.training, outcome: 'x' })).not.toEqual([]);
+	});
+
+	it('nennt Verfahren und Sensoren des Modells', () => {
+		const status = v.parse(s.LearningStatusSchema, demo);
+		expect(status.method).toBe('model');
+		expect(status.sensors.map((x) => [x.entity_id, x.in_model])).toEqual([
+			['sensor.aussentemperatur', true],
+			['sensor.wohnzimmer_temperatur', false]
+		]);
+		expect(status.model?.features[0]?.label).toBe('Temperatur');
+		expect(issues(s.LearningStatusSchema, { ...demo, method: 'forest' })).not.toEqual([]);
+	});
+
+	it('Güte je Tag nennt alle vier Arten, die Liste der Sensoren den Grund ihres Fehlens', () => {
+		const daily = v.parse(s.QualityDailySchema, files['./contract/forecast-quality-daily.json']);
+		expect(new Set(daily.rows.map((row) => row.kind))).toEqual(
+			new Set(['pv', 'load', 'load_profile', 'load_model'])
+		);
+		const row = { date: '2026-10-08', kind: 'pv', n: 8, mae_w: 120 };
+		expect(issues(s.QualityDailyRowSchema, row)).toEqual([]);
+		expect(issues(s.QualityDailyRowSchema, { ...row, kind: 'wind' })).not.toEqual([]);
+		const missing = {
+			entities: [],
+			error: 'HA-Datenbank nicht eingerichtet (influxdb.ha_database)'
+		};
+		expect(issues(s.SensorCandidatesSchema, missing)).toEqual([]);
+	});
+
+	it('Güte nennt die Verbesserung nur beim Modell', () => {
+		const quality = v.parse(s.QualitySchema, files['./contract/forecast-quality.json']);
+		expect(quality.rows.map((row) => [row.kind, row.improvement_pct !== null])).toContainEqual([
+			'load_model',
+			true
+		]);
+		expect(
+			quality.rows.filter((row) => row.kind !== 'load_model' && row.improvement_pct !== null)
+		).toEqual([]);
+	});
 });
 
 describe('Gesundheitsbericht des core', () => {

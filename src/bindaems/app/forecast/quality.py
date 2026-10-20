@@ -8,7 +8,7 @@ Reine Datenbankarbeit, synchron (Aufrufer nehmen ``asyncio.to_thread``).
 from __future__ import annotations
 
 from collections import defaultdict
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date
 from typing import cast, get_args
 
@@ -37,6 +37,18 @@ class QualityRow:
     mae_w: float
     bias_w: float
     rel_mae_pct: float | None
+    # nur bei ``load_model``: Verbesserung gegenüber ``load_profile`` derselben Vorlaufklasse
+    improvement_pct: float | None = None
+
+
+@dataclass(frozen=True)
+class DailyRow:
+    """MAE einer Art an einem lokalen Tag über alle Vorlaufklassen."""
+
+    day: date
+    kind: Kind
+    n: int
+    mae_w: float
 
 
 class ForecastQuality:
@@ -125,4 +137,37 @@ class ForecastQuality:
         result.sort(
             key=lambda row: (_KIND_ORDER.index(row.kind), _HORIZON_ORDER.index(row.horizon))
         )
+        profile = {row.horizon: row.mae_w for row in result if row.kind == "load_profile"}
+        return [
+            replace(row, improvement_pct=_improvement(row.mae_w, profile.get(row.horizon)))
+            if row.kind == "load_model"
+            else row
+            for row in result
+        ]
+
+    def daily(self, first: date, last: date) -> list[DailyRow]:
+        """MAE je lokalem Tag und Art über die Tage ``first`` bis ``last`` (einschließlich), die
+        Vorlaufklassen zusammen; sortiert nach Datum und Art. Tage ohne Werte fehlen."""
+        table = forecast_metric.c
+        query = (
+            select(table.day, table.kind, func.sum(table.n), func.sum(table.abs_err_sum_w))
+            .where(table.day >= first.isoformat())
+            .where(table.day <= last.isoformat())
+            .group_by(table.day, table.kind)
+        )
+        with self._engine.connect() as conn:
+            found = conn.execute(query).all()
+        result = [
+            DailyRow(date.fromisoformat(day), cast(Kind, kind), int(n), abs_err / n)
+            for day, kind, n, abs_err in found
+            if n > 0
+        ]
+        result.sort(key=lambda row: (row.day, _KIND_ORDER.index(row.kind)))
         return result
+
+
+def _improvement(model_mae_w: float, profile_mae_w: float | None) -> float | None:
+    """Verbesserung des Modells in Prozent; ohne Profil oder ohne Profilfehler ``None``."""
+    if profile_mae_w is None or profile_mae_w <= 0.0:
+        return None
+    return (1.0 - model_mae_w / profile_mae_w) * 100.0

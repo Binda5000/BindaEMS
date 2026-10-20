@@ -12,7 +12,7 @@ from __future__ import annotations
 import asyncio
 import math
 import re
-from datetime import UTC, timedelta
+from datetime import UTC, datetime, time, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -44,9 +44,20 @@ from tests.ui_history import (
 from bindaems.app.charging.tracker import WallboxSeen
 from bindaems.app.consumers.service import ConsumerInput
 from bindaems.app.consumers.values import ENTITY_UNITS_QUERY, HaRef
-from bindaems.app.db.schema import charging_session, ledger_slot, planned_charge, user_table
-from bindaems.app.forecast.archive import RecordValue
+from bindaems.app.db.schema import (
+    charging_session,
+    ledger_slot,
+    model_registry,
+    planned_charge,
+    user_table,
+)
+from bindaems.app.forecast.archive import HorizonClass, Kind, RecordValue, actuals
 from bindaems.app.forecast.openmeteo import OPEN_METEO_URL
+from bindaems.app.learning.backtest import BacktestResult, WeekResult
+from bindaems.app.learning.features import TrainingSet, feature_names, local_midnight
+from bindaems.app.learning.ha_sensors import _CANDIDATES_QUERY
+from bindaems.app.learning.model import MIN_ROWS, train
+from bindaems.app.learning.service import TrainingResult
 from bindaems.app.ledger.checks import EXPORT_COUNTER, IMPORT_COUNTER
 from bindaems.app.planning.process import solve_inline
 from bindaems.app.planning.service import plan_once
@@ -231,6 +242,13 @@ HA_BY_ENTITY = {
     ("sensor", "wohnzimmer_temperatur"): (21.5, "°C"),
 }
 HA_BY_UNIT = {("sensor", "waschmaschine_power"): (2.4, "W")}
+# Sensoren zur Auswahl für das Lastmodell (letzter Wert und Einheit je Entität, Schema je Entität);
+# ohne Einheit ist der Wert ein Zustand, den HA als Zahl schreibt (an = 1)
+HA_SENSOR_CANDIDATES = {
+    ("sensor", "aussentemperatur"): (8.2, "°C"),
+    ("sensor", "wohnzimmer_temperatur"): (21.5, "°C"),
+    ("binary_sensor", "anwesenheit"): (1.0, None),
+}
 MISSING_POINT = 2  # der dritte Punkt jeder Verlaufsreihe fehlt (Lücke)
 
 _MEAN = re.compile(
@@ -408,6 +426,18 @@ def _influx(request: httpx.Request) -> httpx.Response:
         columns = ["time", "v"]
         return _influx_result(
             [{"name": mean["measurement"], "columns": columns, "values": values}] if values else []
+        )
+    if query == _CANDIDATES_QUERY:
+        return _influx_result(
+            [
+                {
+                    "name": f"{domain}.{object_id}",
+                    "tags": {"domain": domain, "entity_id": object_id},
+                    "columns": ["time", "v", "u"],
+                    "values": [[epoch_ms(T_DEMO), value, unit]],
+                }
+                for (domain, object_id), (value, unit) in sorted(HA_SENSOR_CANDIDATES.items())
+            ]
         )
     if _LAST.search(query):
         series = []
@@ -619,6 +649,145 @@ def _rate_forecasts(app: AppRuntime) -> None:
     app.forecast_quality.update(T_DEMO.astimezone(LOCAL_TZ).date())
 
 
+# Lastmodell der Demo (Plan 5a): ein Modell vom Morgen des 09.10. mit Backtest und Schattenbetrieb
+# an den 12 Tagen davor. Das Modell ist klein und mit erfundenen Zeilen angelernt; angezeigt werden
+# die festen Anteile in ``MODEL_IMPORTANCE``, damit die Vertragsdateien auf jedem Rechner gleich
+# sind.
+SHADOW_DAYS = 12
+SHADOW_WINDOW = (time(7, 0), 8)  # erster Slot (Ortszeit) und Zahl der Slots je Tag
+# Fehlerbreite (Anteil der Last) von Profil und Modell je Vorlaufklasse; das Modell ist etwa 30 %
+# genauer
+SHADOW_SCALE: dict[HorizonClass, tuple[float, float]] = {
+    "h0_6": (0.20, 0.14),
+    "h6_24": (0.25, 0.175),
+    "h24": (0.30, 0.21),
+}
+SHADOW_LEAD_H: dict[HorizonClass, int] = {"h0_6": 3, "h6_24": 15, "h24": 30}
+DEMO_SENSORS = ["sensor.aussentemperatur", "sensor.wohnzimmer_temperatur"]
+MODEL_TRAINED_AT = datetime(2026, 10, 9, 1, 15, tzinfo=UTC)  # 03:15 Ortszeit
+MODEL_SAMPLES = 5376  # 56 Tage zu 96 Viertelstunden
+MODEL_IMPORTANCE = {
+    "temp_c": 0.28,
+    "profile_w": 0.19,
+    "lag_1d_w": 0.16,
+    "minute_of_day": 0.12,
+    "recent_w": 0.08,
+    "temp_day_c": 0.05,
+    "lead_h": 0.04,
+    "ha:sensor.aussentemperatur": 0.03,
+    "lag_7d_w": 0.02,
+    "weekday": 0.015,
+    "day_type": 0.015,
+    "month": 0.0,
+    "holiday": 0.0,
+    "ha:sensor.wohnzimmer_temperatur": 0.0,  # ohne Werte: „nicht im Modell“
+}
+# (Modell, Profil) in W je Woche und Vorlaufklasse des Backtests
+BACKTEST_MAE: dict[HorizonClass, tuple[float, float]] = {
+    "h0_6": (176.0, 221.0),
+    "h6_24": (203.0, 247.0),
+    "h24": (231.0, 268.0),
+}
+
+
+def _demo_training_set(names: tuple[str, ...]) -> TrainingSet:
+    """Erfundene Zeilen, nur damit ein echtes Modell entsteht: Die Last folgt der Uhrzeit
+    (Spitzen am Morgen und Abend), die übrigen Merkmale sind Beiwerk; der Sensor ohne Werte bleibt
+    leer."""
+    rows: list[list[float]] = []
+    targets: list[float] = []
+    for index in range(MIN_ROWS + 200):
+        minute = float(index % 96 * 15)
+        temp = 4.0 + 12.0 * math.sin(index * 0.7311)  # unabhängig von der Uhrzeit
+        row = dict.fromkeys(names, float("nan"))
+        row |= {"lead_h": float(index % 72), "minute_of_day": minute, "temp_c": temp}
+        row |= {"ha:sensor.aussentemperatur": temp + 1.0, "weekday": float(index % 7)}
+        rows.append([row[name] for name in names])
+        hour = minute / 60.0
+        morning = 450.0 * math.exp(-(((hour - 7.5) / 1.5) ** 2))
+        evening = 700.0 * math.exp(-(((hour - 19.0) / 2.0) ** 2))
+        targets.append(550.0 + morning + evening)
+    return TrainingSet(rows, targets, [], [])
+
+
+def _shadow_rows(app: AppRuntime) -> None:
+    """Schattenprognosen von Profil und Modell für zwei Stunden am Morgen der letzten Tage, mit
+    festen Abweichungen vom Ist; die ausgegebene Last entspricht dem Profil."""
+    today = T_DEMO.astimezone(LOCAL_TZ).date()
+    first_slot, count = SHADOW_WINDOW
+    for back in range(SHADOW_DAYS, 0, -1):
+        day = today - timedelta(days=back)
+        start = datetime.combine(day, first_slot, tzinfo=LOCAL_TZ).astimezone(UTC)
+        slots = [start + k * timedelta(minutes=15) for k in range(count)]
+        known = actuals(app.ledger, slots[0], slots[-1] + timedelta(minutes=15))
+        for horizon, (profile_scale, model_scale) in SHADOW_SCALE.items():
+            issued = start - timedelta(hours=SHADOW_LEAD_H[horizon])
+            shadows: tuple[tuple[Kind, float], ...] = (
+                ("load_profile", profile_scale),
+                ("load_model", model_scale),
+            )
+            for kind, scale in shadows:
+                values = {}
+                for k, slot in enumerate(slots):
+                    wave = ((back * 5 + k * 3) % 7 - 3) / 3  # −1 bis 1, je Tag und Slot anders
+                    power = known[slot].house_w * (1.0 + 0.04 + scale * wave)
+                    values[slot] = RecordValue(power, power)
+                app.forecast_archive.record(kind, issued, values)
+                if kind == "load_profile":  # ausgegeben wurde das Profil
+                    app.forecast_archive.record("load", issued, values)
+        app.forecast_quality.update(day)
+
+
+def _demo_backtest() -> BacktestResult:
+    today = T_DEMO.astimezone(LOCAL_TZ).date()
+    weeks = []
+    for weeks_back in (3, 2, 1):
+        origin = local_midnight(today - timedelta(days=7 * weeks_back))
+        end = local_midnight(today - timedelta(days=7 * (weeks_back - 1)))
+        for horizon, (model, profile) in BACKTEST_MAE.items():
+            factor = 1.0 + 0.03 * (weeks_back - 2)  # die Wochen unterscheiden sich leicht
+            weeks.append(WeekResult(origin, end, horizon, 840, model * factor, profile * factor))
+    return BacktestResult(weeks, {})
+
+
+async def _learning(app: AppRuntime) -> None:
+    """Geladenes Lastmodell mit Backtest, Schattenbetrieb und Aktivierung (Modell aktiv); zwei
+    Sensoren aus HA sind gewählt, einer davon liefert dem Modell Werte."""
+    settings = app.settings.current()
+    learning = settings.settings.learning.model_copy(update={"ha_sensors": DEMO_SENSORS})
+    app.settings.update(
+        settings.settings.model_copy(update={"learning": learning}),
+        base_version=settings.version,
+        actor="admin",
+        source="ui",
+    )
+    names = feature_names(DEMO_SENSORS)
+    model = train(_demo_training_set(names), names)
+    entry = app.model_registry.add(
+        model,
+        trained_at=MODEL_TRAINED_AT,
+        data_from=MODEL_TRAINED_AT - timedelta(days=56),
+        data_to=MODEL_TRAINED_AT,
+        samples=MODEL_SAMPLES,
+        backtest=_demo_backtest(),
+    )
+    with app.engine.begin() as conn:
+        conn.execute(
+            update(model_registry)
+            .where(model_registry.c.id == entry.id)
+            .values(importance=MODEL_IMPORTANCE)
+        )
+    _shadow_rows(app)
+    await app.load_model._load_latest()
+    await app.load_model.evaluate()
+    local = MODEL_TRAINED_AT.astimezone(LOCAL_TZ)
+    app.load_model._result = TrainingResult(
+        "trained",
+        MODEL_TRAINED_AT,
+        f"Trainiert am {local:%d.%m. %H:%M} mit {MODEL_SAMPLES} Viertelstunden.",
+    )
+
+
 async def _earlier_plan(app: AppRuntime, plan: Plan) -> None:
     """Ein Plan um 09:01 neben dem von 10:00, damit „Plan gegen Ist“ für 09:00 bis 10:00 Plan
     und Ist zeigt.
@@ -814,11 +983,14 @@ async def build_world(cfg: Config, data_dir: Path, *, ui_dir: Path | None = None
         # Der Verlauf vor dem Plan: so plant er mit der Monatsspitze, die auch Boost-Mehrkosten
         # und Statistik zeigen (aus dem Verlauf, nicht nur aus den vier Slots von heute)
         await _statistics(app)
+        await _learning(app)
         # Plan aus den Prognosen und Preisen; der Solver läuft im selben Prozess (wie in Tests)
         app.planning._solver = solve_inline
         plan = await app.planning.replan("start")
         assert plan is not None, app.planning.component_status().message
         await _earlier_plan(app, plan)
+        # erst nach dem Plan: er bleibt mit dem Profil gerechnet, die Ausgabe nennt das Modell
+        await app.load_forecast.refresh()
     except BaseException:
         router.stop(quiet=True)
         raise

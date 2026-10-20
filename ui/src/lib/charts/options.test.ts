@@ -82,6 +82,7 @@ describe('Preise und Prognose', () => {
 			{ start: '2026-10-09T08:15:00+00:00', p50_w: 1100 }
 		],
 		days: [],
+		method: 'profile',
 		basis: { ledger: 10, ha: 5 },
 		status: { name: 'load-forecast', ok: true, message: 'ok', since: null, details: {} }
 	};

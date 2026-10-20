@@ -328,8 +328,8 @@
     },
     {
       "name": "load-model",
-      "ok": false,
-      "message": "Noch kein Modell",
+      "ok": true,
+      "message": "Lastmodell aktiv",
       "since": null,
       "details": {}
     },

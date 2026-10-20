@@ -11,6 +11,7 @@ const data: LoadForecast = {
 		{ date: '2026-10-10', kwh: 14 },
 		{ date: '2026-10-11', kwh: null }
 	],
+	method: 'profile',
 	basis: { ledger: 480, ha: 120 },
 	status: {
 		name: 'load-forecast',

@@ -18,6 +18,7 @@ from bindaems.shared.timeutil import LOCAL_TZ, Clock
 
 DAYS = 3  # heute, morgen, übermorgen
 QUALITY_DAYS = 14
+DAILY_DAYS = 28
 
 
 def forecast_router(
@@ -83,6 +84,7 @@ def forecast_router(
                 }
                 for day in days
             ],
+            "method": forecast.method if forecast is not None else "profile",
             "basis": (
                 {"ledger": forecast.basis["ledger"], "ha": forecast.basis["ha"]}
                 if forecast is not None
@@ -108,7 +110,23 @@ def forecast_router(
                     "mae_w": row.mae_w,
                     "bias_w": row.bias_w,
                     "rel_mae_pct": row.rel_mae_pct,
+                    "improvement_pct": row.improvement_pct,
                 }
+                for row in rows
+            ],
+        }
+
+    @router.get("/quality/daily")
+    def forecast_quality_daily(
+        session: Viewer, days: Annotated[int, Query(ge=1, le=60)] = DAILY_DAYS
+    ) -> dict[str, Any]:
+        """MAE je lokalem Tag und Art der letzten ``days`` Tage einschließlich heute."""
+        last = clock.now().astimezone(LOCAL_TZ).date()
+        rows = quality.daily(last - timedelta(days=days - 1), last)
+        return {
+            "days": days,
+            "rows": [
+                {"date": row.day.isoformat(), "kind": row.kind, "n": row.n, "mae_w": row.mae_w}
                 for row in rows
             ],
         }

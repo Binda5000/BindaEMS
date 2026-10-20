@@ -1,0 +1,204 @@
+{
+  "enabled": true,
+  "method": "model",
+  "activation": {
+    "active": true,
+    "basis": "shadow",
+    "days": 12,
+    "model_mae_w": 101.05456944444445,
+    "profile_mae_w": 141.69102777777778,
+    "improvement_pct": 28.67962705236765,
+    "reason": "better",
+    "text": "Modell aktiv: in den letzten 14 Tagen 29 % genauer als das Profil (im Schattenbetrieb).",
+    "decided_at": "2026-10-09T08:00:00+00:00"
+  },
+  "model": {
+    "id": 1,
+    "trained_at": "2026-10-09T01:15:00+00:00",
+    "data_from": "2026-08-14T01:15:00+00:00",
+    "data_to": "2026-10-09T01:15:00+00:00",
+    "samples": 5376,
+    "features": [
+      {
+        "name": "temp_c",
+        "label": "Temperatur",
+        "importance": 0.28
+      },
+      {
+        "name": "profile_w",
+        "label": "Profil",
+        "importance": 0.19
+      },
+      {
+        "name": "lag_1d_w",
+        "label": "Last vor einem Tag",
+        "importance": 0.16
+      },
+      {
+        "name": "minute_of_day",
+        "label": "Uhrzeit",
+        "importance": 0.12
+      },
+      {
+        "name": "recent_w",
+        "label": "Last der letzten Stunde",
+        "importance": 0.08
+      },
+      {
+        "name": "temp_day_c",
+        "label": "Tagesmittel der Temperatur",
+        "importance": 0.05
+      },
+      {
+        "name": "lead_h",
+        "label": "Vorlauf",
+        "importance": 0.04
+      },
+      {
+        "name": "ha:sensor.aussentemperatur",
+        "label": "sensor.aussentemperatur",
+        "importance": 0.03
+      },
+      {
+        "name": "lag_7d_w",
+        "label": "Last vor einer Woche",
+        "importance": 0.02
+      },
+      {
+        "name": "weekday",
+        "label": "Wochentag",
+        "importance": 0.015
+      },
+      {
+        "name": "day_type",
+        "label": "Tagestyp",
+        "importance": 0.015
+      },
+      {
+        "name": "holiday",
+        "label": "Feiertag",
+        "importance": 0.0
+      },
+      {
+        "name": "month",
+        "label": "Monat",
+        "importance": 0.0
+      },
+      {
+        "name": "ha:sensor.wohnzimmer_temperatur",
+        "label": "sensor.wohnzimmer_temperatur",
+        "importance": 0.0
+      }
+    ]
+  },
+  "backtest": {
+    "weeks": [
+      {
+        "origin": "2026-09-17T22:00:00+00:00",
+        "end": "2026-09-24T22:00:00+00:00",
+        "horizon": "h0_6",
+        "n": 840,
+        "model_mae_w": 181.28,
+        "profile_mae_w": 227.63,
+        "improvement_pct": 20.36199095022624
+      },
+      {
+        "origin": "2026-09-17T22:00:00+00:00",
+        "end": "2026-09-24T22:00:00+00:00",
+        "horizon": "h6_24",
+        "n": 840,
+        "model_mae_w": 209.09,
+        "profile_mae_w": 254.41,
+        "improvement_pct": 17.813765182186238
+      },
+      {
+        "origin": "2026-09-17T22:00:00+00:00",
+        "end": "2026-09-24T22:00:00+00:00",
+        "horizon": "h24",
+        "n": 840,
+        "model_mae_w": 237.93,
+        "profile_mae_w": 276.04,
+        "improvement_pct": 13.805970149253731
+      },
+      {
+        "origin": "2026-09-24T22:00:00+00:00",
+        "end": "2026-10-01T22:00:00+00:00",
+        "horizon": "h0_6",
+        "n": 840,
+        "model_mae_w": 176.0,
+        "profile_mae_w": 221.0,
+        "improvement_pct": 20.36199095022625
+      },
+      {
+        "origin": "2026-09-24T22:00:00+00:00",
+        "end": "2026-10-01T22:00:00+00:00",
+        "horizon": "h6_24",
+        "n": 840,
+        "model_mae_w": 203.0,
+        "profile_mae_w": 247.0,
+        "improvement_pct": 17.813765182186238
+      },
+      {
+        "origin": "2026-09-24T22:00:00+00:00",
+        "end": "2026-10-01T22:00:00+00:00",
+        "horizon": "h24",
+        "n": 840,
+        "model_mae_w": 231.0,
+        "profile_mae_w": 268.0,
+        "improvement_pct": 13.805970149253731
+      },
+      {
+        "origin": "2026-10-01T22:00:00+00:00",
+        "end": "2026-10-08T22:00:00+00:00",
+        "horizon": "h0_6",
+        "n": 840,
+        "model_mae_w": 170.72,
+        "profile_mae_w": 214.37,
+        "improvement_pct": 20.36199095022625
+      },
+      {
+        "origin": "2026-10-01T22:00:00+00:00",
+        "end": "2026-10-08T22:00:00+00:00",
+        "horizon": "h6_24",
+        "n": 840,
+        "model_mae_w": 196.91,
+        "profile_mae_w": 239.59,
+        "improvement_pct": 17.813765182186238
+      },
+      {
+        "origin": "2026-10-01T22:00:00+00:00",
+        "end": "2026-10-08T22:00:00+00:00",
+        "horizon": "h24",
+        "n": 840,
+        "model_mae_w": 224.07,
+        "profile_mae_w": 259.96,
+        "improvement_pct": 13.805970149253731
+      }
+    ],
+    "total": {
+      "model_mae_w": 203.33333333333334,
+      "profile_mae_w": 245.33333333333334,
+      "improvement_pct": 17.119565217391308
+    }
+  },
+  "training": {
+    "running": false,
+    "last_at": "2026-10-09T01:15:00+00:00",
+    "outcome": "trained",
+    "text": "Trainiert am 09.10. 03:15 mit 5376 Viertelstunden."
+  },
+  "sensors": [
+    {
+      "entity_id": "sensor.aussentemperatur",
+      "in_model": true
+    },
+    {
+      "entity_id": "sensor.wohnzimmer_temperatur",
+      "in_model": false
+    }
+  ],
+  "status": {
+    "ok": true,
+    "text": "Lastmodell aktiv"
+  }
+}

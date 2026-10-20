@@ -67,6 +67,7 @@ from bindaems.app.history.routes import history_router
 from bindaems.app.history.series import build_catalog
 from bindaems.app.learning.ha_sensors import HaSensorReader
 from bindaems.app.learning.registry import ModelRegistry
+from bindaems.app.learning.routes import learning_router
 from bindaems.app.learning.service import LoadModelService
 from bindaems.app.learning.weather import WeatherArchive
 from bindaems.app.ledger.checks import LedgerChecks
@@ -406,6 +407,7 @@ class AppRuntime:
                 forecast_router(
                     self.forecast, self.load_forecast, self.forecast_quality, self._clock, guard
                 ),
+                learning_router(self.load_model, self.ha_sensors, self.load_forecast, guard),
                 ledger_router(self.ledger, guard, self.ledger_checks),
                 charging_router(self.charging_sessions, cfg, self.settings, guard),
                 stats_router(self.stats, guard),

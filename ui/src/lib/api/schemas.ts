@@ -787,19 +787,31 @@ export type Forecast = v.InferOutput<typeof ForecastSchema>;
 export const LoadForecastSlotSchema = v.object({ start: Iso, p50_w: v.number() });
 export type LoadForecastSlot = v.InferOutput<typeof LoadForecastSlotSchema>;
 
+/** Verfahren, das die Lastprognose liefert: das Profil oder das gelernte Modell */
+export const LoadMethodSchema = v.picklist(['profile', 'model']);
+export type LoadMethod = v.InferOutput<typeof LoadMethodSchema>;
+
 export const LoadForecastSchema = v.object({
 	issued_at: v.nullable(Iso),
 	slots: v.array(LoadForecastSlotSchema),
 	days: v.array(v.object({ date: DateText, kwh: NullableNumber })),
+	method: LoadMethodSchema,
 	/** Viertelstunden des Profils: aus der Abrechnung (BindaEMS) und aus Home Assistant */
 	basis: v.object({ ledger: v.number(), ha: v.number() }),
 	status: ComponentStatusSchema
 });
 export type LoadForecast = v.InferOutput<typeof LoadForecastSchema>;
 
+/** Art der Prognose: PV, die ausgegebene Last und die beiden Schatten (Profil, Modell) */
+export const QualityKindSchema = v.picklist(['pv', 'load', 'load_profile', 'load_model']);
+export type QualityKind = v.InferOutput<typeof QualityKindSchema>;
+
+export const HorizonSchema = v.picklist(['h0_6', 'h6_24', 'h24']);
+export type Horizon = v.InferOutput<typeof HorizonSchema>;
+
 export const QualityRowSchema = v.object({
-	kind: v.picklist(['pv', 'load']),
-	horizon: v.picklist(['h0_6', 'h6_24', 'h24']),
+	kind: QualityKindSchema,
+	horizon: HorizonSchema,
 	/** bewertete Viertelstunden */
 	n: v.number(),
 	/** mittlerer absoluter Fehler in W */
@@ -807,12 +819,123 @@ export const QualityRowSchema = v.object({
 	/** mittlerer Fehler (Prognose − Ist) in W */
 	bias_w: v.number(),
 	/** mittlerer absoluter Fehler im Verhältnis zur Ist-Leistung; ohne Ist-Leistung null */
-	rel_mae_pct: NullableNumber
+	rel_mae_pct: NullableNumber,
+	/** nur bei `load_model`: wie viel Prozent genauer als `load_profile` derselben Vorlaufklasse */
+	improvement_pct: NullableNumber
 });
 export type QualityRow = v.InferOutput<typeof QualityRowSchema>;
 
 export const QualitySchema = v.object({ days: v.number(), rows: v.array(QualityRowSchema) });
 export type Quality = v.InferOutput<typeof QualitySchema>;
+
+export const QualityDailyRowSchema = v.object({
+	date: DateText,
+	kind: QualityKindSchema,
+	/** bewertete Viertelstunden des Tages */
+	n: v.number(),
+	/** mittlerer absoluter Fehler des Tages in W, alle Vorlaufklassen zusammen */
+	mae_w: v.number()
+});
+export type QualityDailyRow = v.InferOutput<typeof QualityDailyRowSchema>;
+
+/** `GET /api/forecast/quality/daily`: nach Datum und Art sortiert */
+export const QualityDailySchema = v.object({
+	days: v.number(),
+	rows: v.array(QualityDailyRowSchema)
+});
+export type QualityDaily = v.InferOutput<typeof QualityDailySchema>;
+
+// --- Lastmodell ----------------------------------------------------------------------------
+
+export const ActivationSchema = v.object({
+	/** das Modell liefert die Lastprognose der Planung */
+	active: v.boolean(),
+	basis: v.picklist(['shadow', 'backtest', 'none']),
+	/** Tage, auf denen der Vergleich beruht */
+	days: v.number(),
+	model_mae_w: NullableNumber,
+	profile_mae_w: NullableNumber,
+	improvement_pct: NullableNumber,
+	reason: v.picklist(['better', 'not_better', 'too_few_days', 'disabled', 'no_model']),
+	/** der Grund als deutscher Satz */
+	text: v.string(),
+	decided_at: v.nullable(Iso)
+});
+export type Activation = v.InferOutput<typeof ActivationSchema>;
+
+export const ModelFeatureSchema = v.object({
+	name: v.string(),
+	/** Anzeigename; bei einem HA-Sensor die Entität */
+	label: v.string(),
+	/** Anteil am Gewinn der Splits, Summe 1 */
+	importance: v.number()
+});
+export type ModelFeature = v.InferOutput<typeof ModelFeatureSchema>;
+
+export const LoadModelSchema = v.object({
+	id: v.number(),
+	trained_at: Iso,
+	data_from: Iso,
+	data_to: Iso,
+	/** Viertelstunden im Training */
+	samples: v.number(),
+	/** nach Anteil absteigend */
+	features: v.array(ModelFeatureSchema)
+});
+export type LoadModel = v.InferOutput<typeof LoadModelSchema>;
+
+export const BacktestWeekSchema = v.object({
+	origin: Iso,
+	end: Iso,
+	horizon: HorizonSchema,
+	n: v.number(),
+	model_mae_w: v.number(),
+	profile_mae_w: v.number(),
+	improvement_pct: NullableNumber
+});
+export type BacktestWeek = v.InferOutput<typeof BacktestWeekSchema>;
+
+export const BacktestSchema = v.object({
+	weeks: v.array(BacktestWeekSchema),
+	total: v.object({
+		model_mae_w: v.number(),
+		profile_mae_w: v.number(),
+		improvement_pct: NullableNumber
+	})
+});
+export type Backtest = v.InferOutput<typeof BacktestSchema>;
+
+export const TrainingSchema = v.object({
+	running: v.boolean(),
+	last_at: v.nullable(Iso),
+	/** null: noch kein Lauf seit dem Start */
+	outcome: v.nullable(v.picklist(['trained', 'too_little_data', 'failed'])),
+	text: v.nullable(v.string())
+});
+export type Training = v.InferOutput<typeof TrainingSchema>;
+
+/** `GET /api/learning/load` */
+export const LearningStatusSchema = v.object({
+	/** Schalter „Lastmodell verwenden“ */
+	enabled: v.boolean(),
+	method: LoadMethodSchema,
+	activation: ActivationSchema,
+	model: v.nullable(LoadModelSchema),
+	backtest: v.nullable(BacktestSchema),
+	training: TrainingSchema,
+	/** die gewählten HA-Sensoren; `in_model`: das Modell nutzt sie (Anteil am Gewinn über 0) */
+	sensors: v.array(v.object({ entity_id: v.string(), in_model: v.boolean() })),
+	status: v.object({ ok: v.boolean(), text: v.string() })
+});
+export type LearningStatus = v.InferOutput<typeof LearningStatusSchema>;
+
+/** `GET /api/learning/candidates` (Admin): Entitäten der HA-Datenbank zur Auswahl */
+export const SensorCandidatesSchema = v.object({
+	entities: v.array(v.object({ entity_id: v.string(), unit: v.nullable(v.string()) })),
+	/** Grund, warum die Liste fehlt */
+	error: v.nullable(v.string())
+});
+export type SensorCandidates = v.InferOutput<typeof SensorCandidatesSchema>;
 
 export const DaySummarySchema = v.object({
 	date: DateText,

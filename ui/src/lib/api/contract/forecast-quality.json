@@ -7,23 +7,89 @@
       "n": 4,
       "mae_w": 240.0,
       "bias_w": -120.0,
-      "rel_mae_pct": 11.320754716981133
+      "rel_mae_pct": 11.320754716981133,
+      "improvement_pct": null
     },
     {
       "kind": "load",
       "horizon": "h0_6",
-      "n": 4,
-      "mae_w": 80.0,
-      "bias_w": 20.0,
-      "rel_mae_pct": 6.25
+      "n": 100,
+      "mae_w": 113.2160533333333,
+      "bias_w": 39.531253333333346,
+      "rel_mae_pct": 11.747962384179992,
+      "improvement_pct": null
     },
     {
       "kind": "load",
       "horizon": "h6_24",
-      "n": 4,
-      "mae_w": 180.0,
-      "bias_w": -180.0,
-      "rel_mae_pct": 14.0625
+      "n": 100,
+      "mae_w": 143.22338666666664,
+      "bias_w": 32.08898666666668,
+      "rel_mae_pct": 14.861699463599622,
+      "improvement_pct": null
+    },
+    {
+      "kind": "load",
+      "horizon": "h24",
+      "n": 96,
+      "mae_w": 168.782,
+      "bias_w": 41.50700000000005,
+      "rel_mae_pct": 17.7566355582636,
+      "improvement_pct": null
+    },
+    {
+      "kind": "load_profile",
+      "horizon": "h0_6",
+      "n": 96,
+      "mae_w": 114.60005555555553,
+      "bias_w": 40.34505555555557,
+      "rel_mae_pct": 12.056448089587523,
+      "improvement_pct": null
+    },
+    {
+      "kind": "load_profile",
+      "horizon": "h6_24",
+      "n": 96,
+      "mae_w": 141.69102777777775,
+      "bias_w": 40.92602777777779,
+      "rel_mae_pct": 14.90654182392556,
+      "improvement_pct": null
+    },
+    {
+      "kind": "load_profile",
+      "horizon": "h24",
+      "n": 96,
+      "mae_w": 168.782,
+      "bias_w": 41.50700000000005,
+      "rel_mae_pct": 17.7566355582636,
+      "improvement_pct": null
+    },
+    {
+      "kind": "load_model",
+      "horizon": "h0_6",
+      "n": 96,
+      "mae_w": 82.0908888888889,
+      "bias_w": 39.64788888888892,
+      "rel_mae_pct": 8.63633560838188,
+      "improvement_pct": 28.367496428399996
+    },
+    {
+      "kind": "load_model",
+      "horizon": "h6_24",
+      "n": 96,
+      "mae_w": 101.05456944444448,
+      "bias_w": 40.054569444444475,
+      "rel_mae_pct": 10.63140122241851,
+      "improvement_pct": 28.679627052367618
+    },
+    {
+      "kind": "load_model",
+      "horizon": "h24",
+      "n": 96,
+      "mae_w": 120.01824999999998,
+      "bias_w": 40.46125000000004,
+      "rel_mae_pct": 12.62646683645513,
+      "improvement_pct": 28.891558341529322
     }
   ]
 }

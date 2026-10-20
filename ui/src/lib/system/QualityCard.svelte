@@ -12,7 +12,12 @@
 
 	let { data, error }: Props = $props();
 
-	const KINDS: Record<QualityRow['kind'], string> = { pv: 'PV', load: 'Last' };
+	const KINDS: Record<QualityRow['kind'], string> = {
+		pv: 'PV',
+		load: 'Last',
+		load_profile: 'Last Profil',
+		load_model: 'Last Modell'
+	};
 	const HORIZONS: Record<QualityRow['horizon'], string> = {
 		h0_6: 'bis 6 h',
 		h6_24: '6–24 h',

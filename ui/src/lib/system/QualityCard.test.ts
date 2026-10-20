@@ -6,7 +6,17 @@ it('zeigt Kennzahlen mit deutschen Bezeichnungen', () => {
 	render(QualityCard, {
 		data: {
 			days: 14,
-			rows: [{ kind: 'pv', horizon: 'h0_6', n: 120, mae_w: 412.5, bias_w: -80, rel_mae_pct: 18.3 }]
+			rows: [
+				{
+					kind: 'pv',
+					horizon: 'h0_6',
+					n: 120,
+					mae_w: 412.5,
+					bias_w: -80,
+					rel_mae_pct: 18.3,
+					improvement_pct: null
+				}
+			]
 		},
 		error: null
 	});
@@ -26,8 +36,24 @@ it('benennt Last und die anderen Vorläufe, fehlende relative Abweichung ist ein
 		data: {
 			days: 14,
 			rows: [
-				{ kind: 'load', horizon: 'h6_24', n: 300, mae_w: 100, bias_w: 20, rel_mae_pct: null },
-				{ kind: 'load', horizon: 'h24', n: 200, mae_w: 150, bias_w: 0, rel_mae_pct: 12 }
+				{
+					kind: 'load',
+					horizon: 'h6_24',
+					n: 300,
+					mae_w: 100,
+					bias_w: 20,
+					rel_mae_pct: null,
+					improvement_pct: null
+				},
+				{
+					kind: 'load',
+					horizon: 'h24',
+					n: 200,
+					mae_w: 150,
+					bias_w: 0,
+					rel_mae_pct: 12,
+					improvement_pct: null
+				}
 			]
 		},
 		error: null

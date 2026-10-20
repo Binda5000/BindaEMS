@@ -4031,6 +4031,37 @@ Fehler = Prognose (P50) − Ist. Ohne Daten steht „Noch keine Kennzahlen.“ i
 Zahlen liefert die API, eingeloggt und mit beliebiger Rolle: `GET /api/forecast/quality?days=14`
 (`days` von 1 bis 60). Eine eigene Seite dafür folgt mit Phase 5.
 
+### API für Lastmodell und Prognosegüte
+
+Für Skripte, mit Sitzung und Rolle wie das UI:
+
+- `GET /api/forecast/load` (ab „Lesen“): die Lastprognose; `method` nennt das Verfahren der letzten
+  Ausgabe, `profile` oder `model` (ohne Ausgabe `profile`).
+- `GET /api/forecast/quality?days=14` (ab „Lesen“): Kennzahlen je Art (`pv`, `load`, `load_profile`,
+  `load_model`) und Vorlaufklasse. `improvement_pct` steht nur bei `load_model` und sagt, wie viel
+  Prozent genauer das Modell als das Profil derselben Vorlaufklasse war; sonst ist es `null`.
+- `GET /api/forecast/quality/daily?days=28` (ab „Lesen“, `days` von 1 bis 60): der MAE in W je
+  lokalem Tag und Art (`date`, `kind`, `n`, `mae_w`), die Vorlaufklassen zusammen, nach Datum und
+  Art sortiert.
+- `GET /api/learning/load` (ab „Lesen“): Zustand des Lastmodells mit `enabled`, `method`,
+  `activation` (aktiv ja oder nein, Grundlage, MAE von Modell und Profil, `improvement_pct`,
+  Grund und Satz), dem geladenen `model` mit den Anteilen der Merkmale, dem `backtest`, dem
+  letzten `training` und den gewählten `sensors` (`in_model`: das Modell nutzt ihre Werte).
+  `model` und `backtest` sind leer, solange es kein Modell gibt.
+- `POST /api/learning/load/train` (nur Admin, Antwort 202 mit `{"started": true}`): trainiert
+  sofort neu, wie die Taste „Jetzt neu trainieren“. Läuft schon ein Training, antwortet die API mit
+  409 „Training läuft schon.“.
+- `GET /api/learning/candidates` (nur Admin): Entitäten der HA-Datenbank mit Zahlenwert in den
+  letzten 30 Tagen (`entities` mit `entity_id` und `unit`) zur Auswahl der Sensoren; `error` nennt,
+  warum die Liste fehlt, etwa „HA-Datenbank nicht eingerichtet (influxdb.ha_database)“.
+
+Anmeldung und `X-CSRF-Token` für den schreibenden Aufruf wie in Abschnitt 8, „Alternative für
+Skripte (curl)“, etwa:
+
+```bash
+curl -b jar -H "X-CSRF-Token: $CSRF" -X POST "$APP/api/learning/load/train"
+```
+
 ### Nächtlicher Lauf
 
 Jede Nacht um 02:30 Uhr (lokal) und beim Start der app:

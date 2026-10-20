@@ -1,5 +1,28 @@
 [
   {
+    "id": 11,
+    "ts": "2026-10-09T08:00:00+00:00",
+    "actor": "admin",
+    "source": "ui",
+    "action": "settings.update",
+    "target": "einstellungen",
+    "details": {
+      "version": 5,
+      "changes": [
+        {
+          "path": "learning.ha_sensors[0]",
+          "old": null,
+          "new": "sensor.aussentemperatur"
+        },
+        {
+          "path": "learning.ha_sensors[1]",
+          "old": null,
+          "new": "sensor.wohnzimmer_temperatur"
+        }
+      ]
+    }
+  },
+  {
     "id": 10,
     "ts": "2026-10-09T08:00:00+00:00",
     "actor": "admin",
