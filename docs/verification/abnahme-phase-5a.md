@@ -47,12 +47,24 @@ Prüfschritte:
    „Lastprognose“ „Trainiert am {TT.MM. HH:MM} mit {n} Viertelstunden.“ und „Modell vom
    {TT.MM.JJJJ HH:MM}“. Sonst steht dort „Zu wenig Daten: {n} von 28 Tagen.“; dann beginnt die
    Abnahme mit dem Tag, an dem das erste Training gelingt, und du trägst ihn hier ein.
-3. Optional: Sensoren wählen (Einstellungen → Lastmodell), dann „Jetzt neu trainieren“.
+3. Gleich nach dem ersten Training ist die Aktivierung bewertet: Die Karte „Lastprognose“ nennt
+   „Verfahren: Modell“ oder „Verfahren: Profil“ und den Grund. Mit „Lastmodell verwenden“ an (ab
+   Werk) kann das Modell also schon jetzt aktiv sein, mit dem Backtest als Grundlage („… (im
+   Backtest).“); der Planer rechnet dann mit seiner Lastprognose. Der Backtest ist in den ersten Wochen
+   zu günstig (Training und Backtest rechnen mit der archivierten Temperatur). Willst du zuerst einen
+   reinen Schattenbetrieb, schalte „Lastmodell verwenden“ jetzt aus (Einstellungen → Lastmodell) und
+   später an derselben Stelle wieder ein; die app bewertet dann sofort neu. Profil und Modell rechnen
+   in dieser Zeit beide weiter, die Prognosegüte (Abschnitt 3) bleibt also vergleichbar; in
+   Abschnitt 2 steht in diesen Wochen „Profil aktiv: Das Lastmodell ist in den Einstellungen
+   ausgeschaltet.“
+4. Optional: Sensoren wählen (Einstellungen → Lastmodell), dann „Jetzt neu trainieren“.
 
 | Angabe | Wert |
 |---|---|
 | Temperatur-Historie nachgeholt (Zahl der Slots im Log) | |
 | Erstes Training am / „Trainiert am …“ | |
+| Verfahren und Grund gleich nach dem ersten Training | |
+| Reiner Schattenbetrieb mit „Lastmodell verwenden“ aus (von–bis, oder „nein“) | |
 | Beginn der 28 Tage (erstes brauchbares Modell) | |
 
 Datum: ________ Ergebnis: ☐ bestanden ☐ nicht bestanden Unterschrift: ________

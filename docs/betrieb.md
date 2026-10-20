@@ -4350,7 +4350,26 @@ das auffällt; wer lokal baut (Abschnitt 4, „Lokaler Build“), braucht nichts
 Plan 5a ändert nur die app, `shared/settings.py` und das UI; der core und sein Image bleiben
 gleich. Ausgerollt wird **mit oder nach dem gemeinsamen Ausrollen von 4b und 6a** und damit erst nach
 der Abnahme der Phase 3. Bis dahin ziehst du keine Images (`docker compose pull`), denn `latest`
-enthält Plan 5a, sobald er auf `main` ist. **Nichts geht dabei von selbst live.**
+enthält Plan 5a, sobald er auf `main` ist.
+
+**Was sich an der Anlage ändert:** Plan 5a schaltet nichts an der Anlage; kein Aktor geht live, und
+der core bleibt, wie er ist. Er ändert nur die Eingabe des Planers, die Lastprognose. **Das Modell
+kann aber gleich nach dem ersten Training aktiv werden:** Der Schalter „Lastmodell verwenden“ steht
+ab Werk auf an, und hat die Abrechnung schon 28 Tage mit Daten, bewertet die app die Aktivierung
+nach dem ersten Training (wenige Minuten nach dem Start) aus dem Backtest. Ist das Modell dort
+mindestens 10 % genauer, plant der Planer ab dann mit der Lastprognose des Modells. Der Backtest ist
+in den ersten Wochen zu günstig für das Modell: Training und Backtest rechnen mit der archivierten
+Temperatur, die fast der gemessenen entspricht, im Betrieb kennt das Modell nur die Prognose; und die
+Profile des Backtests haben wenig Historie, was das Profil dort schwächer macht. Erst ab 10 Tagen
+Schattenbetrieb entscheidet der Betrieb selbst.
+
+**Reiner Schattenbetrieb (wahlweise):** Willst du zuerst nur beobachten, schaltest du gleich nach
+dem Start unter **Einstellungen** → „Lastmodell“ den Schalter „Lastmodell verwenden“ aus (Admin).
+Dann gilt immer das Profil; das Modell rechnet trotzdem jede Stunde im Schatten mit, und die Seite
+„Prognosen“ zeigt seine Güte. War es schon aktiv, gibt die Lastprognose gleich wieder mit dem Profil
+aus. Einschalten geht später an derselben Stelle: Die app bewertet sofort neu und nimmt das Modell
+nur, wenn die Regel (oben, „Aktivierung“) es aktiviert; nach mindestens 10 Tagen Schattenbetrieb
+entscheidet dabei der Schattenbetrieb, nicht der Backtest.
 
 1. **Datenbank sichern** (empfohlen, wie bei 4a und 4b): `docker compose stop ems-app`, dann
    `docker compose run --rm --no-deps --entrypoint sh ems-app -c 'cp /data/bindaems.sqlite3 /backup/vor-plan-5a.sqlite3'`.
@@ -4368,8 +4387,10 @@ enthält Plan 5a, sobald er auf `main` ist. **Nichts geht dabei von selbst live.
    „Zu wenig Daten: {n} von 28 Tagen.“, und die nächste Nacht versucht es wieder.
 4. **Sensoren wählen** (optional): unter **Einstellungen** → „Lastmodell“ bis zu 8 Entitäten (zum
    Beispiel Anwesenheit), dann auf der Seite **Prognosen** „Jetzt neu trainieren“.
-5. **Beobachten:** Das Modell ist zuerst nur im Schatten; das Profil gilt, bis die Regel (oben) das
-   Modell aktiviert. Die Seite „Prognosen“ nennt den Grund.
+5. **Beobachten:** Gleich nach dem ersten Training zeigt die Karte „Lastprognose“ auf der Seite
+   „Prognosen“, welches Verfahren gilt und warum. Steht dort „Modell aktiv: … (im Backtest)“, plant
+   der Planer schon mit dem Modell; willst du zuerst einen reinen Schattenbetrieb, schalte jetzt
+   „Lastmodell verwenden“ aus (oben, „Reiner Schattenbetrieb“).
 
 Die Abnahme der Phase 5, Teil Lastmodell, steht in `docs/verification/abnahme-phase-5a.md`: 28 Tage
 ab dem Ausrollen.

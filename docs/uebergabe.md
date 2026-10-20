@@ -1407,10 +1407,11 @@ Demo-Zugänge: `admin`, `bedienen` (Bedienen), `gast` (Lesen) und `sicher` (Admi
         und die Abnahme 6a.
   9. **Lastmodell (Plan 5a) ausrollen**, mit oder nach dem gemeinsamen Ausrollen von 4b und 6a, also
      nach der Abnahme der Phase 3; bis dahin kein `docker compose pull`. Das ist ein Schritt des
-     Betreibers, und nichts geht dabei von selbst live: Das Modell ändert nur die Eingabe des Planers
-     und gilt nur, wenn es in den letzten 14 Tagen mindestens 10 % genauer ist als das Profil. Die
-     Schritte stehen im Betriebshandbuch, „Lastmodell (Phase 5a)“, „Lastmodell ausrollen (Plan 5a)“,
-     und in `docs/verification/abnahme-phase-5a.md`:
+     Betreibers. 5a schaltet nichts an der Anlage, es ändert nur die Eingabe des Planers. Das Modell
+     gilt, wenn es in den letzten 14 Tagen mindestens 10 % genauer ist als das Profil, und das kann
+     schon gleich nach dem ersten Training sein (Schalter „Lastmodell verwenden“ ab Werk an,
+     Grundlage dann der Backtest). Die Schritte stehen im Betriebshandbuch, „Lastmodell (Phase 5a)“,
+     „Lastmodell ausrollen (Plan 5a)“, und in `docs/verification/abnahme-phase-5a.md`:
      1. **Datenbank kopieren** (empfohlen): `/backup/vor-plan-5a.sqlite3`; eine ältere app startet
         mit der Migration `0013` nicht (Betriebshandbuch 4, „Rollback auf einen Stand vor Plan 5a“).
      2. **Ausrollen:** nach (oder mit) 4b und 6a nur die app:
@@ -1427,12 +1428,15 @@ Demo-Zugänge: `admin`, `bedienen` (Bedienen), `gast` (Lesen) und `sicher` (Admi
         solange das Modell es nicht schaffte; dazu jede Nacht eine Version (Registry), keine Fehler in
         `load-model` und der Rückfall bei fehlender Modelldatei, an der Anlage beobachtet (Datei
         umbenennen, `ems-app` starten: „Verfahren: Profil“, danach trainiert die app von selbst neu).
-     6. **Bei der Abnahme zu wissen:** Das Modell ist zuerst nur im Schatten, bis die Regel es
-        aktiviert (ab 10 Tagen mit Werten im Schattenbetrieb, vorher entscheidet der Backtest). Der
-        Backtest ist etwas zu günstig, weil er mit der archivierten Temperatur rechnet; in den ersten
-        Wochen haben die Profile des Backtests wenig Historie, was das Profil dort schwächer macht.
-        Maßgeblich ist der Schattenbetrieb. Die Dauer eines Trainings an der Anlage ist nicht gemessen
-        (Zeitlimit 10 min); das Log nennt „Lastmodell trainiert“.
+     6. **Bei der Abnahme zu wissen:** Das Modell kann gleich nach dem ersten Training aktiv werden,
+        wenn es im Backtest mindestens 10 % genauer ist; ab 10 Tagen mit Werten im Schattenbetrieb
+        entscheidet der Schattenbetrieb. Der Backtest ist in den ersten Wochen zu günstig, weil
+        Training und Backtest mit der archivierten Temperatur rechnen; zudem haben die Profile des
+        Backtests wenig Historie, was das Profil dort schwächer macht. Wer zuerst nur beobachten
+        will, schaltet gleich nach dem Start unter **Einstellungen** → „Lastmodell“ „Lastmodell
+        verwenden“ aus (reiner Schattenbetrieb, das Modell rechnet weiter mit) und später an
+        derselben Stelle wieder ein; die app bewertet dann sofort neu. Die Dauer eines Trainings an
+        der Anlage ist nicht gemessen (Zeitlimit 10 min); das Log nennt „Lastmodell trainiert“.
   - Teil 2 schreibt auf die Geräte: nicht während der 7 Tage der Abnahme Phase 1 und ihres
     24-h-Mitschnitts (`docs/verification/abnahme-phase-1.md`, 4.2 und 4.3). Seit dem
     19.10.2026 sind 4.2 und 4.3 überholt (`docs/verification/2026-10-19-abnahme-phase-1.md`).
@@ -3131,6 +3135,8 @@ nicht aufgeführt. Offen sind:
   einzelnen Läufen „–“. Das trat in der GitHub-CI (Lauf 414) und im jeweils ersten lokalen Lauf der Tasks
   12 und 13 auf, ohne dass diese die Statistik berührten. Es ist ein bekannter, von Plan 5a unabhängiger
   Flake; der Test ist nicht angepasst und sollte robust gemacht werden (nicht übersprungen).
-- **Abnahme:** Das Modell ist zuerst im Schatten; bis dahin entscheidet der Backtest, der mit der
-  archivierten Temperatur rechnet und in den ersten Wochen wenig Historie für das Profil hat und damit
-  etwas zu günstig ist. Die Dauer eines Trainings an der Anlage und der Speicher dafür sind nicht gemessen.
+- **Abnahme:** Das Modell kann gleich nach dem ersten Training aktiv werden: Bis 10 Tage Schattenbetrieb
+  vorliegen, entscheidet der Backtest, der mit der archivierten Temperatur rechnet und in den ersten
+  Wochen wenig Historie für das Profil hat und damit etwas zu günstig ist. Wer zuerst nur beobachten
+  will, schaltet „Lastmodell verwenden“ gleich nach dem Start aus (Betriebshandbuch, „Lastmodell
+  ausrollen (Plan 5a)“, „Reiner Schattenbetrieb“). Die Dauer eines Trainings an der Anlage und der Speicher dafür sind nicht gemessen.
