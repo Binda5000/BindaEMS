@@ -1,7 +1,8 @@
 """Lernen der Hauslast (Plan 5a, Präzisierung 1): Wetterarchiv ``weather_slot`` und Registry der
 Lastmodelle ``model_registry``. Die Archivarten wachsen um ``load_profile`` und ``load_model``;
 deshalb wird ``kind`` in ``forecast_record`` und ``forecast_metric`` auf 16 Zeichen verlängert.
-Vorhandene Zeilen bleiben unverändert.
+Vorhandene Zeilen bleiben unverändert. ``downgrade`` entfernt außerdem den Abschnitt ``learning``
+aus den gespeicherten Einstellungen, damit eine app vor Plan 5a sie lesen kann.
 
 Revision ID: 0013
 """
@@ -50,6 +51,12 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    # Einstellungen ab Plan 5a haben den Abschnitt ``learning``; eine ältere app lehnt ihn ab und
+    # nähme sonst Standardwerte. Alle anderen Werte bleiben.
+    op.execute(
+        "UPDATE settings_version SET data = json_remove(data, '$.learning') "
+        "WHERE json_type(data, '$.learning') IS NOT NULL"
+    )
     # Zeilen der neuen Arten passen nicht mehr in die alte Spalte und sind ohnehin abgeleitet
     op.execute("DELETE FROM forecast_record WHERE kind NOT IN ('pv', 'load')")
     op.execute("DELETE FROM forecast_metric WHERE kind NOT IN ('pv', 'load')")

@@ -21,6 +21,7 @@ from bindaems.app.db.schema import (
     metadata,
     model_registry,
     planned_charge,
+    settings_version,
 )
 
 HEAD = "0013"  # neueste Migration
@@ -467,5 +468,34 @@ def test_migration_0013_keeps_forecast_records_and_downgrades(tmp_path: Path) ->
         ]
         assert version == HEAD
         assert {"weather_slot", "model_registry"} <= set(inspect(engine).get_table_names())
+    finally:
+        engine.dispose()
+
+
+def test_migration_0013_downgrade_removes_the_learning_settings(tmp_path: Path) -> None:
+    # eine app vor Plan 5a lehnt den Abschnitt ``learning`` ab und nähme sonst Standardwerte
+    engine = open_database(tmp_path / "alt.sqlite3")
+    t = datetime(2026, 10, 20, 8, 0, tzinfo=UTC)
+    learning = {"load_model_enabled": False, "ha_sensors": ["sensor.aussentemperatur"]}
+    try:
+        migrate(engine)
+        with engine.begin() as conn:
+            for version, data in (
+                (1, {"tariff": {"x": 1}}),  # vor dem Ausrollen gespeichert
+                (2, {"tariff": {"x": 2}, "learning": learning}),
+            ):
+                conn.execute(
+                    insert(settings_version).values(
+                        version=version, created_at=t, actor="admin", source="ui", data=data
+                    )
+                )
+        _downgrade(engine, "0012")
+        with engine.connect() as conn:
+            rows = conn.execute(select(settings_version).order_by("version")).mappings().all()
+        assert [r["data"] for r in rows] == [{"tariff": {"x": 1}}, {"tariff": {"x": 2}}]
+        assert [(r["version"], r["actor"], r["created_at"]) for r in rows] == [
+            (1, "admin", t),
+            (2, "admin", t),
+        ]
     finally:
         engine.dispose()
