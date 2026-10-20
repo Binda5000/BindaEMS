@@ -30,14 +30,14 @@ Phase 5 hat laut Spec 18 vier Teile: Daten (Historie, Merkmalsbasis, Sensorauswa
 - **5c „Vorheizen und Vorkühlen“** (später): ein Wärmemodell des Hauses aus den Daten der Klimaanlage und die Klimaanlage als flexible Last im Planer. Braucht Wochen mit Daten der Klimaanlage, also erst nach dem Ausrollen von 6a; ob 5c allein kommt oder mit 6b (Wärmepumpe), entscheidest du dann.
 
 Weitere Punkte:
-- **Zeitpunkt:** Der Plan wird jetzt zur Freigabe geschrieben; umgesetzt wird nach der Freigabe. An der Anlage ändert sich nichts, bis du ausrollst.
+- **Freigabe:** Der Betreiber hat den Schnitt 5a/5b/5c und Plan 5a mit allen 17 Entscheidungen am 20.10.2026 freigegeben („Ja passt“). Umgesetzt wird subagent-driven auf dem Branch `claude/phase-5-plan-s7xe0n`. An der Anlage ändert sich nichts, bis du ausrollst.
 - **Ausrollen:** 5a ändert nur `ems-app` (Entscheidung 2). Weil `latest` schon 4b und 6a enthält, kommt 5a erst **mit oder nach** dem gemeinsamen Ausrollen von 4b und 6a an die Anlage, also nach der Abnahme der Phase 3 (Punkt 10 deiner Anlagenliste). Danach laufen die 4 Wochen der Abnahme (Entscheidung 16).
 - **Wirkung:** Die Lastprognose ist nur eine Eingabe der Planung (Spec 10.5). Solange Victron im Dry-Run ist, rechnet der core den Plan nur mit; die Wirkung zeigt sich im Zeitplan.
 - **Danach:** Plan 5b.
 
-## Vorgeschlagene Entscheidungen (zur Freigabe)
+## Entscheidungen (freigegeben am 20.10.2026)
 
-Der Plan ist auf diese Vorschläge geschrieben; du kannst jede einzeln bestätigen oder ändern. Eine andere Wahl ändert die genannten Tasks.
+Der Plan ist auf diese Entscheidungen geschrieben; der Betreiber hat alle 17 so freigegeben.
 
 1. **Zuschnitt** 5a, 5b, 5c wie in der Einordnung.
    - **In 5a:** Wetterarchiv mit Nachholung, HA-Sensoren als Merkmale mit Auswahl im UI, Merkmalsbasis, LightGBM, Backtest, Registry, Aktivierungsregel, Schattenbetrieb, Rückfall, Seite „Prognosen“, Betrieb und Abnahme.
