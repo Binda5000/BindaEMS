@@ -6,6 +6,7 @@ from pydantic import ValidationError
 from bindaems.shared.settings import (
     EnergyComponent,
     FeedInSettings,
+    LearningSettings,
     RuntimeSettings,
     TariffSettings,
     TimeWindow,
@@ -84,3 +85,31 @@ def test_warnings_list_missing_values() -> None:
         "Tarifbestandteil „Grundgebühr Netz“ hat noch keinen Wert.",
         "Noch kein OeMAG-Monatswert eingetragen.",
     ]
+
+
+def test_learning_defaults() -> None:
+    assert RuntimeSettings().learning == LearningSettings(load_model_enabled=True, ha_sensors=[])
+
+
+def test_at_most_eight_sensors() -> None:
+    names = [f"sensor.s{i}" for i in range(9)]
+    assert len(LearningSettings(ha_sensors=names[:8]).ha_sensors) == 8
+    with pytest.raises(ValidationError):
+        LearningSettings(ha_sensors=names)
+
+
+def test_sensors_must_be_unique() -> None:
+    with pytest.raises(ValidationError, match="Sensoren dürfen nicht doppelt vorkommen"):
+        LearningSettings(ha_sensors=["sensor.a", "sensor.a"])
+
+
+@pytest.mark.parametrize("entity_id", ["Sensor.a", "sensor", "sensor.a b", "sensor.a.b", ""])
+def test_sensor_names_must_be_entity_ids(entity_id: str) -> None:
+    with pytest.raises(ValidationError):
+        LearningSettings(ha_sensors=[entity_id])
+
+
+def test_old_settings_without_learning_load() -> None:
+    old = RuntimeSettings().model_dump(mode="json", exclude={"learning"})
+    assert "learning" not in old
+    assert RuntimeSettings.model_validate(old).learning == LearningSettings()

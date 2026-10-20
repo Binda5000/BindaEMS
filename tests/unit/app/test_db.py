@@ -15,13 +15,15 @@ from bindaems.app.db.schema import (
     assignment_log,
     charging_session,
     consumer_day,
+    forecast_record,
     ledger_check,
     ledger_cost,
     metadata,
+    model_registry,
     planned_charge,
 )
 
-HEAD = "0012"  # neueste Migration
+HEAD = "0013"  # neueste Migration
 
 
 def test_migrations_match_schema(engine: Engine) -> None:
@@ -381,3 +383,89 @@ def test_rows_of_the_statistics_tables_round_trip(engine: Engine) -> None:
     for table in (ledger_cost, ledger_check, consumer_day):  # gleicher Primärschlüssel
         with pytest.raises(IntegrityError), engine.begin() as conn:
             conn.execute(insert(table).values(**rows[table]))
+
+
+def test_migration_0013_creates_learning_tables(engine: Engine) -> None:
+    inspector = inspect(engine)
+    assert _columns(inspector, "weather_slot") == {
+        "slot_start": False,
+        "temp_c": False,
+        "issued_at": False,
+    }
+    assert inspector.get_pk_constraint("weather_slot")["constrained_columns"] == ["slot_start"]
+    assert _columns(inspector, "model_registry") == {
+        "id": False,
+        "kind": False,
+        "trained_at": False,
+        "data_from": False,
+        "data_to": False,
+        "samples": False,
+        "features": False,
+        "max_w": False,
+        "file": False,
+        "backtest": True,
+        "importance": False,
+        "usable": False,
+        "active": False,
+        "decided_at": True,
+        "decision": True,
+    }
+    assert inspector.get_pk_constraint("model_registry")["constrained_columns"] == ["id"]
+    assert [(i["name"], i["column_names"]) for i in inspector.get_indexes("model_registry")] == [
+        ("ix_model_registry_trained_at", ["trained_at"])
+    ]
+    kinds = {
+        table: next(c["type"].length for c in inspector.get_columns(table) if c["name"] == "kind")
+        for table in ("forecast_record", "forecast_metric", "model_registry")
+    }
+    assert kinds == {"forecast_record": 16, "forecast_metric": 16, "model_registry": 16}
+    with engine.connect() as conn:
+        assert conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one() == HEAD
+
+
+def test_model_registry_defaults(engine: Engine) -> None:
+    t = datetime(2026, 10, 20, 2, 0, tzinfo=UTC)
+    with engine.begin() as conn:
+        conn.execute(
+            insert(model_registry).values(
+                trained_at=t,
+                data_from=t,
+                data_to=t,
+                samples=1200,
+                features=["lead_h"],
+                max_w=9000.0,
+                file="load-1.txt",
+                importance={"lead_h": 1.0},
+            )
+        )
+        row = conn.execute(select(model_registry)).mappings().one()
+    assert (row["kind"], row["usable"], row["active"]) == ("load", True, False)
+    assert row["backtest"] is None and row["decided_at"] is None and row["decision"] is None
+
+
+def test_migration_0013_keeps_forecast_records_and_downgrades(tmp_path: Path) -> None:
+    engine = open_database(tmp_path / "alt.sqlite3")
+    try:
+        migrate(engine)
+        _downgrade(engine, "0012")
+        assert {"weather_slot", "model_registry"}.isdisjoint(inspect(engine).get_table_names())
+        t = datetime(2026, 10, 20, 8, 0, tzinfo=UTC)
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    "INSERT INTO forecast_record (kind, slot_start, horizon, issued_at, p50_w,"
+                    " raw_w, clearness) VALUES ('load', :t, 'h0_6', :t, 410.0, 410.0, NULL)"
+                ),
+                {"t": t.isoformat(timespec="microseconds")},
+            )
+        migrate(engine)
+        with engine.connect() as conn:
+            rows = conn.execute(select(forecast_record)).mappings().all()
+            version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
+        assert [(r["kind"], r["slot_start"], r["horizon"], r["p50_w"]) for r in rows] == [
+            ("load", t, "h0_6", 410.0)
+        ]
+        assert version == HEAD
+        assert {"weather_slot", "model_registry"} <= set(inspect(engine).get_table_names())
+    finally:
+        engine.dispose()

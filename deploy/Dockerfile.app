@@ -30,6 +30,11 @@ ENV UV_COMPILE_BYTECODE=1 \
 
 WORKDIR /app
 
+# LightGBM lädt libgomp.so.1 (OpenMP), das python:3.12-slim nicht mitbringt
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends libgomp1 \
+    && rm -rf /var/lib/apt/lists/*
+
 # Abhängigkeiten zuerst (eigene Schicht, bleibt bei Codeänderungen im Cache)
 COPY pyproject.toml uv.lock README.md ./
 RUN uv sync --locked --no-dev --extra app --no-install-project

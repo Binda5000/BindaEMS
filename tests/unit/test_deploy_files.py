@@ -285,3 +285,15 @@ def test_ci_publishes_latest_from_main() -> None:
     assert "type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}" in tags
     assert "is_default_branch" not in meta["with"]["tags"]
     assert "github.ref == 'refs/heads/main'" in docker["env"]["PUBLISH"]
+
+
+def test_app_image_has_libgomp() -> None:
+    # LightGBM lädt libgomp.so.1, das python:3.12-slim nicht mitbringt (Plan 5a, Task 1)
+    text = Path("deploy/Dockerfile.app").read_text()
+    install = text.index("apt-get install -y --no-install-recommends libgomp1")
+    assert install < text.index("uv sync"), "libgomp1 muss vor uv sync installiert werden"
+    assert "rm -rf /var/lib/apt/lists/*" in text
+
+
+def test_lightgbm_imports() -> None:
+    import lightgbm  # noqa: F401

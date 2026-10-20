@@ -146,6 +146,10 @@
       "end_value_factor": 0.9,
       "inertia_ct": 0.5
     },
+    "learning": {
+      "load_model_enabled": true,
+      "ha_sensors": []
+    },
     "wallbox_names": {
       "twc": "Garage"
     }

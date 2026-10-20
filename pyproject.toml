@@ -32,6 +32,8 @@ app = [
     "holidays>=0.60",
     "pulp>=3.3,<4",
     "highspy>=1.8",
+    "lightgbm>=4.6,<5",
+    "numpy>=2",
 ]
 dev = [
     "pytest>=8.3",

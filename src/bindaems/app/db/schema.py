@@ -19,6 +19,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     false,
+    true,
 )
 from sqlalchemy.types import TypeDecorator
 
@@ -158,7 +159,7 @@ price_slot = Table(
 forecast_record = Table(
     "forecast_record",
     metadata,
-    Column("kind", String(8), primary_key=True),  # pv, load
+    Column("kind", String(16), primary_key=True),  # pv, load, load_profile, load_model
     Column("slot_start", UtcDateTime(), primary_key=True),
     Column("horizon", String(8), primary_key=True),  # h0_6, h6_24, h24
     Column("issued_at", UtcDateTime(), nullable=False),
@@ -172,12 +173,45 @@ forecast_metric = Table(
     "forecast_metric",
     metadata,
     Column("day", String(10), primary_key=True),  # lokales Datum, ISO
-    Column("kind", String(8), primary_key=True),
+    Column("kind", String(16), primary_key=True),
     Column("horizon", String(8), primary_key=True),
     Column("n", Integer, nullable=False),
     Column("abs_err_sum_w", Float, nullable=False),
     Column("err_sum_w", Float, nullable=False),
     Column("actual_sum_w", Float, nullable=False),
+)
+
+# Wetterarchiv: je Slot die beste bekannte Temperatur; spätere Ausgaben ersetzen frühere
+# (Plan 5a, Entscheidung 6)
+weather_slot = Table(
+    "weather_slot",
+    metadata,
+    Column("slot_start", UtcDateTime(), primary_key=True),
+    Column("temp_c", Float, nullable=False),
+    Column("issued_at", UtcDateTime(), nullable=False),
+)
+
+# Lastmodelle: jedes Training ein Eintrag mit Backtest, Wichtigkeit und Aktivierungsentscheidung
+# (Plan 5a, Präzisierung 1)
+model_registry = Table(
+    "model_registry",
+    metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("kind", String(16), nullable=False, default="load", server_default="load"),
+    Column("trained_at", UtcDateTime(), nullable=False),
+    Column("data_from", UtcDateTime(), nullable=False),
+    Column("data_to", UtcDateTime(), nullable=False),
+    Column("samples", Integer, nullable=False),
+    Column("features", JSON, nullable=False),
+    Column("max_w", Float, nullable=False),
+    Column("file", String(200), nullable=False),
+    Column("backtest", JSON, nullable=True),
+    Column("importance", JSON, nullable=False),
+    Column("usable", Boolean, nullable=False, default=True, server_default=true()),
+    Column("active", Boolean, nullable=False, default=False, server_default=false()),
+    Column("decided_at", UtcDateTime(), nullable=True),
+    Column("decision", JSON, nullable=True),
+    Index("ix_model_registry_trained_at", "trained_at"),
 )
 
 # Abrechnung je Viertelstunde aus den slot_flows des core (Spec 11.4)

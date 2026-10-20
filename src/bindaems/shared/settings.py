@@ -235,6 +235,23 @@ class PlanningSettings(_Model):
     inertia_ct: NonNegative = 0.5  # Planträgheit je kWh Abweichung vom vorigen Plan
 
 
+HaEntityId = Annotated[str, Field(pattern=r"^[a-z_]+\.[a-z0-9_]+$")]
+
+
+class LearningSettings(_Model):
+    """Lernen der Hauslast (Plan 5a): Modell ein oder aus, bis zu 8 HA-Sensoren als Merkmale."""
+
+    load_model_enabled: bool = True
+    ha_sensors: Annotated[list[HaEntityId], Field(max_length=8)] = Field(default_factory=list)
+
+    @field_validator("ha_sensors")
+    @classmethod
+    def _unique_sensors(cls, value: list[str]) -> list[str]:
+        if len(set(value)) != len(value):
+            raise ValueError("Sensoren dürfen nicht doppelt vorkommen")
+        return value
+
+
 WallboxKey = Annotated[str, Field(min_length=1, max_length=60)]
 DisplayName = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=40)]
 
@@ -245,6 +262,7 @@ class RuntimeSettings(_Model):
     feed_in: FeedInSettings = Field(default_factory=FeedInSettings)
     pv_model: PvModelSettings = Field(default_factory=PvModelSettings)
     planning: PlanningSettings = Field(default_factory=PlanningSettings)
+    learning: LearningSettings = Field(default_factory=LearningSettings)
     # eigene Namen der Ladestationen (Schlüssel wie in config.yaml); ohne Namen gilt der Typ
     wallbox_names: dict[WallboxKey, DisplayName] = Field(default_factory=dict)
 
