@@ -106,6 +106,7 @@ def test_runtime_wires_routes_and_components(runtime) -> None:
         "forecast",
         "load-forecast",
         "load-model",
+        "driving",
         "planning",
         "ledger",
         "influx",
@@ -1478,6 +1479,29 @@ def test_runtime_wires_the_load_model(runtime, tmp_path) -> None:
     assert runtime.model_registry._directory == tmp_path / "models" / "load"
     status = runtime.load_model.component_status()
     assert (status.name, status.ok, status.message) == ("load-model", True, "Noch kein Modell")
+
+
+def test_runtime_wires_the_driving_service(runtime) -> None:
+    status = runtime.driving.component_status()
+    assert (status.name, status.ok, status.message) == ("driving", True, "Noch keine Fahrdaten")
+    assert runtime.driving.status()["vehicles"][0]["days"] == 0
+
+
+@pytest.mark.respx(assert_all_called=False)
+async def test_runtime_starts_the_driving_service(runtime, respx_mock, monkeypatch) -> None:
+    respx_mock.route().respond(503)
+    computed: list[bool] = []
+
+    async def fake_recompute() -> bool:
+        computed.append(True)
+        return True
+
+    monkeypatch.setattr(runtime.driving, "recompute", fake_recompute)
+    task = asyncio.create_task(runtime.run())
+    await until(lambda: bool(computed))  # beim Start wird gerechnet
+    assert "driving" in {job.get_name() for job in runtime._tasks}
+    await runtime.shutdown()
+    await asyncio.wait_for(task, timeout=2)
 
 
 async def test_runtime_reissues_the_load_forecast_when_the_model_changes(

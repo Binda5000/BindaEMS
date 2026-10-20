@@ -65,6 +65,7 @@ from bindaems.app.ha.publisher import AiomqttHaTransport, HaPublisher
 from bindaems.app.history.influx import InfluxQueryError, InfluxReader
 from bindaems.app.history.routes import history_router
 from bindaems.app.history.series import build_catalog
+from bindaems.app.learning.driving_service import DrivingService
 from bindaems.app.learning.ha_sensors import HaSensorReader
 from bindaems.app.learning.registry import ModelRegistry
 from bindaems.app.learning.routes import learning_router
@@ -264,6 +265,14 @@ class AppRuntime:
         # wird das Modell aktiv oder nicht mehr (Schalter, Bewertung), gleich neu ausgeben; die
         # neue Ausgabe löst die Planung wie jede andere aus (``load_issued``)
         self.load_model.on_active_change(self.load_forecast.request_refresh)
+        # Fahrverhalten (Plan 5b): rechnet nachts um 03:40 Uhr und beim Start je Auto ein Profil
+        self.driving = DrivingService(
+            reader=self.reader,
+            engine=self.engine,
+            cfg=cfg,
+            settings=self.settings,
+            clock=self._clock,
+        )
         self.plan_store = PlanStore(self.engine)
         self.forecast_quality = ForecastQuality(
             self.engine, self.forecast_archive, self.ledger, pv_threshold_w(cfg)
@@ -383,6 +392,7 @@ class AppRuntime:
             self.forecast.component_status,
             self.load_forecast.component_status,
             self.load_model.component_status,
+            self.driving.component_status,
             self.planning.component_status,
             self.ledger.component_status,
             self._influx_status,
@@ -540,6 +550,7 @@ class AppRuntime:
             ("forecast", self._forecast_run),
             ("load-forecast", self.load_forecast.run),
             ("load-model", self.load_model.run),
+            ("driving", self.driving.run),
             ("planning", self.planning.run),
             ("plan-sender", self.plan_sender.run),
             ("charging", self.charging.run),
