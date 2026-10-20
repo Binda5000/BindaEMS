@@ -868,6 +868,27 @@ async def test_shutdown_closes_the_driving_service_before_dispose(runtime, monke
     assert "Berechnung des Fahrverhaltens läuft beim Beenden noch" in [e["event"] for e in logs]
 
 
+async def test_shutdown_closes_the_automation_before_dispose(runtime, monkeypatch) -> None:
+    order: list[str] = []
+
+    async def close(timeout_s: float) -> bool:
+        order.append(f"close {timeout_s:g}")
+        return False  # schreibt noch: wird gewarnt
+
+    real_dispose = runtime.engine.dispose
+
+    def dispose() -> None:
+        order.append("dispose")
+        real_dispose()
+
+    monkeypatch.setattr(runtime.automation, "close", close)
+    monkeypatch.setattr(runtime.engine, "dispose", dispose)
+    with capture_logs() as logs:
+        await runtime.shutdown()
+    assert order == ["close 5", "dispose"]
+    assert "Automatik für Ziel und Abfahrt schreibt beim Beenden noch" in [e["event"] for e in logs]
+
+
 async def test_costing_job_survives_a_failing_catch_up(runtime, monkeypatch) -> None:
     calls: list[int] = []
 
@@ -1521,6 +1542,31 @@ async def test_runtime_starts_the_driving_service(runtime, respx_mock, monkeypat
     task = asyncio.create_task(runtime.run())
     await until(lambda: bool(computed))  # beim Start wird gerechnet
     assert "driving" in {job.get_name() for job in runtime._tasks}
+    await runtime.shutdown()
+    await asyncio.wait_for(task, timeout=2)
+
+
+def test_runtime_wires_the_driving_automation(runtime) -> None:
+    automation = runtime.automation
+    assert automation.state("tesla")["state"] == "off"  # ab Werk aus
+    # die Zählung der geplanten Ladungen fragt die Automatik, der Dienst stößt sie an
+    assert runtime.planned_charges._recently_set == automation.recently_set
+    assert automation.request_tick in runtime.driving._run_done
+    assert automation.on_manual_target in runtime.intents._manual_target
+
+
+@pytest.mark.respx(assert_all_called=False)
+async def test_runtime_starts_the_driving_automation(runtime, respx_mock, monkeypatch) -> None:
+    respx_mock.route().respond(503)
+    ticks: list[bool] = []
+
+    async def fake_tick() -> None:
+        ticks.append(True)
+
+    monkeypatch.setattr(runtime.automation, "tick", fake_tick)
+    task = asyncio.create_task(runtime.run())
+    await until(lambda: bool(ticks))  # beim Start wird geprüft
+    assert "driving-automation" in {job.get_name() for job in runtime._tasks}
     await runtime.shutdown()
     await asyncio.wait_for(task, timeout=2)
 

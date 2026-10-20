@@ -5,7 +5,14 @@ import pytest
 from sqlalchemy import insert, select, update
 from tests.unit.app.charging.charging_helpers import T0
 
-from bindaems.app.charging.planned import PlannedCharges, PlannedSummary, feasible
+from bindaems.app.charging.planned import (
+    AUTO_ADOPT,
+    OpenCharge,
+    PlannedCharges,
+    PlannedSummary,
+    feasible,
+    open_charges,
+)
 from bindaems.app.charging.tracker import ChargingTracker, StoredSession, WallboxSeen
 from bindaems.app.db.schema import charging_session, planned_charge
 
@@ -562,3 +569,93 @@ def test_known_soc_during_boost_replaces_an_assumed_start(charges, session, engi
     charges.record(health(mode="boost", planned=False, soc=50.0), {"twc": session})
     [row] = rows(engine)
     assert (row.start_soc_pct, row.start_soc_source, row.feasible) == (50.0, "measured", True)
+
+
+# --- Übernahme der Automatik (Plan 5b, Präzisierung 9) ------------------------------------------
+
+
+class Recently:
+    """Stand-in für ``DrivingAutomation.recently_set``: antwortet ``answer``, merkt die Fragen."""
+
+    def __init__(self, answer: bool) -> None:
+        self.answer = answer
+        self.asked: list[tuple[str, datetime]] = []
+
+    def __call__(self, key: str, now: datetime) -> bool:
+        self.asked.append((key, now))
+        return self.answer
+
+
+def test_fresh_row_adopts_automation_change(engine, clock, cfg, session) -> None:
+    recently = Recently(True)
+    charges = PlannedCharges(engine, clock, cfg, recently_set=recently)
+    charges.record(health(soc=40.0), {"twc": session})
+    at(clock, T0 + AUTO_ADOPT)  # höchstens 10 min nach dem Beginn
+    # die Automatik setzt eine knappe Abfahrt: 30 kWh in gut 50 min reichen nicht
+    sooner = T0 + timedelta(hours=1)
+    charges.record(health(soc=41.0, target=76, departure=sooner), {"twc": session})
+    [row] = rows(engine)  # keine zweite Zeile, nichts „geändert“
+    assert (row.target_soc_pct, row.departure_at, row.outcome) == (76, sooner, "open")
+    assert row.feasible is False  # neu berechnet wie bei einer neuen Zeile
+    assert (row.started_at, row.start_soc_pct) == (T0, 40.0)  # der Beginn bleibt
+    assert row.end_soc_pct == 41.0
+    assert recently.asked == [("tesla", T0 + AUTO_ADOPT)]
+    at(clock, T0 + AUTO_ADOPT + timedelta(minutes=1))
+    charges.record(health(soc=42.0, target=76, departure=sooner), {"twc": session})
+    assert [r.outcome for r in rows(engine)] == ["open"]  # die übernommenen Werte gelten
+    assert summary(charges).changed == 0
+
+
+def test_adopted_higher_target_is_no_longer_reached(engine, clock, cfg, session) -> None:
+    charges = PlannedCharges(engine, clock, cfg, recently_set=Recently(True))
+    charges.record(health(soc=40.0), {"twc": session})
+    at(clock, T0 + timedelta(minutes=2))
+    charges.record(health(soc=80.0), {"twc": session})
+    assert rows(engine)[0].reached_at == T0 + timedelta(minutes=2)
+    at(clock, T0 + timedelta(minutes=4))
+    charges.record(health(soc=80.0, target=90), {"twc": session})
+    [row] = rows(engine)
+    assert (row.target_soc_pct, row.reached_at, row.outcome) == (90, None, "open")
+    assert row.feasible is True
+
+
+def test_older_row_still_ends_changed(engine, clock, cfg, session) -> None:
+    recently = Recently(True)
+    charges = PlannedCharges(engine, clock, cfg, recently_set=recently)
+    charges.record(health(soc=40.0), {"twc": session})
+    at(clock, T0 + AUTO_ADOPT + timedelta(seconds=1))
+    later = DEPARTURE + timedelta(hours=1)
+    charges.record(health(soc=41.0, departure=later), {"twc": session})
+    outcomes = [(row.departure_at, row.outcome) for row in rows(engine)]
+    assert outcomes == [(DEPARTURE, "changed"), (later, "open")]
+
+
+def test_manual_change_of_fresh_row_ends_changed(engine, clock, cfg, session) -> None:
+    recently = Recently(False)
+    charges = PlannedCharges(engine, clock, cfg, recently_set=recently)
+    charges.record(health(soc=40.0), {"twc": session})
+    at(clock, T0 + timedelta(minutes=5))
+    charges.record(health(soc=41.0, target=70), {"twc": session})
+    assert [(row.target_soc_pct, row.outcome) for row in rows(engine)] == [
+        (80, "changed"),
+        (70, "open"),
+    ]
+    assert recently.asked == [("tesla", T0 + timedelta(minutes=5))]
+
+
+def test_adoption_window_counts_from_the_stored_start(engine, clock, cfg, session) -> None:
+    # nach einem Neustart gilt der Beginn aus der Datenbank
+    PlannedCharges(engine, clock, cfg).record(health(soc=40.0), {"twc": session})
+    restarted = PlannedCharges(engine, clock, cfg, recently_set=Recently(True))
+    at(clock, T0 + timedelta(minutes=9))
+    restarted.record(health(soc=41.0, target=70), {"twc": session})
+    assert [(row.target_soc_pct, row.outcome) for row in rows(engine)] == [(70, "open")]
+
+
+def test_open_charges_name_start_and_departure(charges, session, engine, clock) -> None:
+    assert open_charges(engine) == {}
+    charges.record(health(soc=40.0), {"twc": session})
+    assert open_charges(engine) == {"tesla": OpenCharge(started_at=T0, departure_at=DEPARTURE)}
+    at(clock, T0 + timedelta(minutes=30))
+    charges.record(health(mode="pv", planned=False, intent_mode="pv"), {"twc": session})
+    assert open_charges(engine) == {}

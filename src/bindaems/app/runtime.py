@@ -65,6 +65,7 @@ from bindaems.app.ha.publisher import AiomqttHaTransport, HaPublisher
 from bindaems.app.history.influx import InfluxQueryError, InfluxReader
 from bindaems.app.history.routes import history_router
 from bindaems.app.history.series import build_catalog
+from bindaems.app.learning.driving_auto import DrivingAutomation
 from bindaems.app.learning.driving_service import DrivingService
 from bindaems.app.learning.ha_sensors import HaSensorReader
 from bindaems.app.learning.registry import ModelRegistry
@@ -115,6 +116,7 @@ COSTING_RETRY_S = 60.0  # Pause der Nachführung des Einstandspreises nach einem
 COSTING_STOP_S = 5.0  # so lange wartet das Beenden auf den Block einer laufenden Nachführung
 LOAD_MODEL_STOP_S = 5.0  # so lange wartet das Beenden auf eine Rechnung des Lastmodells
 DRIVING_STOP_S = 5.0  # so lange wartet das Beenden auf eine Rechnung des Fahrverhaltens
+AUTOMATION_STOP_S = 5.0  # so lange wartet das Beenden auf einen Schreibzugriff der Automatik
 BACKUP_AT = (3, 15)  # Ortszeit
 FORECAST_NIGHTLY_AT = (2, 30)  # Ortszeit
 FORECAST_KEEP = timedelta(days=60)
@@ -296,6 +298,19 @@ class AppRuntime:
         self.intents = IntentService(
             core_client, self.live, self.live_feed, self.audit, self._clock, cfg
         )
+        # Automatik für Ziel und Abfahrt (Plan 5b): ab Werk aus; meldet sich selbst für die
+        # Bedienung an und prüft nach jedem Lauf des Fahrverhaltens neu
+        self.automation = DrivingAutomation(
+            intents=self.intents,
+            live=self.live,
+            profiles=self.driving.profile,
+            settings=self.settings,
+            audit=self.audit,
+            engine=self.engine,
+            cfg=cfg,
+            clock=self._clock,
+        )
+        self.driving.on_run_done(self.automation.request_tick)
         # nach der Lastprognose und dem core-Zustand; hört selbst auf geänderte Einstellungen
         self.planning = PlanningService(
             cfg,
@@ -323,7 +338,9 @@ class AppRuntime:
             self.charging, self.ledger, self.costing, self._clock
         )
         # geplante Ladungen für die Abnahme „Ziel-SOC“ nach jeder Abfrage von Health (Plan 4b)
-        self.planned_charges = PlannedCharges(self.engine, self._clock, cfg)
+        self.planned_charges = PlannedCharges(
+            self.engine, self._clock, cfg, recently_set=self.automation.recently_set
+        )
         self._planned_wake = asyncio.Event()
         self.live_feed.health_handlers.append(self._planned_wake.set)
         self.ha_values = HaValueCache(self.reader, ha_database) if ha_database is not None else None
@@ -552,6 +569,7 @@ class AppRuntime:
             ("load-forecast", self.load_forecast.run),
             ("load-model", self.load_model.run),
             ("driving", self.driving.run),
+            ("driving-automation", self.automation.run),
             ("planning", self.planning.run),
             ("plan-sender", self.plan_sender.run),
             ("charging", self.charging.run),
@@ -1010,6 +1028,8 @@ class AppRuntime:
             log.warning("Training des Lastmodells läuft beim Beenden noch")
         if not await self.driving.close(DRIVING_STOP_S):
             log.warning("Berechnung des Fahrverhaltens läuft beim Beenden noch")
+        if not await self.automation.close(AUTOMATION_STOP_S):
+            log.warning("Automatik für Ziel und Abfahrt schreibt beim Beenden noch")
         try:
             await self.influx_writer.flush_now()
         except Exception:

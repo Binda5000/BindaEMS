@@ -356,6 +356,33 @@ async def test_running_is_cleared_after_a_crash(service, monkeypatch) -> None:
     assert service.running() is False
 
 
+async def test_each_completed_run_calls_the_hooks(service, reader, monkeypatch) -> None:
+    commuter(reader)
+    calls: list[str] = []
+
+    def broken() -> None:
+        calls.append("kaputt")
+        raise RuntimeError("kaputt")
+
+    service.on_run_done(broken)
+    service.on_run_done(lambda: calls.append(f"danach {service.running()}"))
+    with capture_logs() as logs:
+        assert await service.recompute() is True
+    # nach dem Lauf, in der Reihenfolge der Anmeldung; ein Fehler hält die übrigen nicht auf
+    assert calls == ["kaputt", "danach False"]
+    assert "Rückmeldung nach dem Lauf des Fahrverhaltens fehlgeschlagen" in [
+        e["event"] for e in logs
+    ]
+
+    async def crashed() -> None:
+        raise RuntimeError("kaputt")
+
+    monkeypatch.setattr(service, "_compute_all", crashed)
+    with pytest.raises(RuntimeError):
+        await service.recompute()
+    assert len(calls) == 2  # ein abgebrochener Lauf meldet sich nicht
+
+
 async def test_unknown_vehicle_in_settings_is_ignored(
     service, reader, engine, cfg, settings_service
 ) -> None:

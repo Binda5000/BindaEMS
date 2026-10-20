@@ -132,6 +132,7 @@ class DrivingService:
         # Rechnungen und Schreibzugriffe im Thread; nach einem Abbruch laufen sie weiter, bis sie
         # wirklich enden (``close`` wartet darauf, bevor die Datenbank schließt)
         self._threads: set[asyncio.Future[Any]] = set()
+        self._run_done: list[Callable[[], None]] = []
 
     # --- Betrieb --------------------------------------------------------------------------
 
@@ -164,6 +165,14 @@ class DrivingService:
     def running(self) -> bool:
         return self._running
 
+    def on_run_done(self, callback: Callable[[], None]) -> None:
+        """Meldet einen Rückruf an, den jeder beendete Lauf ruft (die Automatik prüft dann neu).
+
+        Auch ein Lauf, in dem einzelne Autos scheiterten, ist beendet; ein abgebrochener nicht.
+        Ein Fehler in einem Rückruf wird protokolliert, die übrigen laufen weiter.
+        """
+        self._run_done.append(callback)
+
     async def recompute(self) -> bool:
         """Rechnet alle Autos neu; ``False``, wenn schon ein Lauf läuft."""
         if self._running:
@@ -174,6 +183,11 @@ class DrivingService:
             await self._compute_all()
         finally:
             self._running = False
+        for callback in self._run_done:
+            try:
+                callback()
+            except Exception:
+                log.exception("Rückmeldung nach dem Lauf des Fahrverhaltens fehlgeschlagen")
         return True
 
     async def _offload(self, func: Callable[..., Any], *args: Any) -> Any:

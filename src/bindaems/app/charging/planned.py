@@ -33,6 +33,12 @@ Abfahrt geplant lief, bleibt mit eigenem Ergebnis sichtbar.
   - ``changed``: Abfahrt oder Ziel ändern sich vor der Abfahrt (dann kann eine neue beginnen), oder
     die Absicht wechselt auf PV, Min+PV oder Aus. Sofort und Boost lassen die Zeile offen, sie wird
     an der Abfahrt beurteilt; ein unbekannter Modus (core startet neu) ändert nichts.
+- **Übernahme** (Plan 5b, Präzisierung 9): Ändern sich Ziel oder Abfahrt einer Zeile, deren Beginn
+  (``started_at``) höchstens ``AUTO_ADOPT`` zurückliegt, und hat die Automatik das Auto in den
+  letzten 2 min gesetzt (``recently_set``), übernimmt die Zeile Ziel und Abfahrt und rechnet die
+  Machbarkeit neu wie eine neue Zeile, statt mit ``changed`` zu enden. Ein erreichtes Ziel gilt
+  nach einem höheren nicht mehr als erreicht. So entsteht keine „geänderte“ Ladung, wenn nach einer
+  Abfahrt, zu der das Auto stecken blieb, sofort die Zeile für die nächste beginnt.
 
 ``end_soc_pct``, ``end_soc_source`` und ``end_soc_at`` halten den letzten Ladestand vor der Abfahrt
 mit seiner Zeit; gespeichert wird er höchstens jede Minute, so übersteht er einen Neustart.
@@ -46,11 +52,12 @@ für sich.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from typing import Any, Final
 
+import structlog
 from sqlalchemy import Connection, Engine, func, insert, select, update
 
 from bindaems.app.charging.tracker import SESSION_GAP, StoredSession
@@ -61,6 +68,8 @@ from bindaems.shared.config import Config
 from bindaems.shared.control import ChargeMode
 from bindaems.shared.numbers import finite_number
 from bindaems.shared.timeutil import SLOT, Clock, ensure_utc, local_day_slots
+
+log = structlog.get_logger(__name__)
 
 OPEN: Final = "open"
 REACHED: Final = "reached"
@@ -81,6 +90,15 @@ REACHED_TOLERANCE_PP: Final = 1.0  # an der Abfahrt zählt Ziel − 1 Prozentpun
 SAVE_EVERY: Final = timedelta(minutes=1)  # höchstens so oft den letzten Ladestand speichern
 # ein Ladestand, der so lange vor der Abfahrt gelesen wurde, gilt an der Abfahrt als unbekannt
 SOC_STALE: Final = timedelta(minutes=15)
+# so lange nach ihrem Beginn übernimmt eine Zeile Ziel und Abfahrt der Automatik (Präzisierung 9)
+AUTO_ADOPT: Final = timedelta(minutes=10)
+
+RecentlySet = Callable[[str, datetime], bool]
+
+
+def _never(key: str, now: datetime) -> bool:
+    """Ohne Automatik hat sie nie etwas gesetzt."""
+    return False
 
 
 @dataclass(frozen=True)
@@ -100,6 +118,28 @@ class PlannedSummary:
     early: int
     unknown: int
     changed: int
+
+
+@dataclass(frozen=True)
+class OpenCharge:
+    """Beginn und Abfahrt der offenen Zeile eines Fahrzeugs."""
+
+    started_at: datetime
+    departure_at: datetime
+
+
+def open_charges(engine: Engine) -> dict[str, OpenCharge]:
+    """Die offenen Zeilen je Fahrzeug aus der Datenbank (blockiert: aus einem Thread aufrufen)."""
+    query = (
+        select(planned_charge.c.vehicle, planned_charge.c.started_at, planned_charge.c.departure_at)
+        .where(planned_charge.c.outcome == OPEN)
+        .order_by(planned_charge.c.id)
+    )
+    with engine.connect() as conn:
+        return {
+            row.vehicle: OpenCharge(ensure_utc(row.started_at), ensure_utc(row.departure_at))
+            for row in conn.execute(query)
+        }
 
 
 def feasible(
@@ -149,6 +189,8 @@ class _Row:
     wallbox: str
     target_pct: float
     departure_at: datetime
+    started_at: datetime
+    start_soc_pct: float
     start_soc_source: str
     feasible: bool
     reached_at: datetime | None
@@ -210,10 +252,18 @@ def _seen(health: Mapping[str, Any], key: str) -> _Seen | None:
 class PlannedCharges:
     """Zeichnet die geplanten Ladungen auf und zählt sie für die Statistik."""
 
-    def __init__(self, engine: Engine, clock: Clock, cfg: Config) -> None:
+    def __init__(
+        self,
+        engine: Engine,
+        clock: Clock,
+        cfg: Config,
+        *,
+        recently_set: RecentlySet = _never,
+    ) -> None:
         self._engine = engine
         self._clock = clock
         self._cfg = cfg
+        self._recently_set = recently_set  # ``DrivingAutomation.recently_set`` (Plan 5b)
         self._open: dict[str, _Row] = {}  # je Fahrzeug höchstens eine offene Zeile
         self._loaded = False
 
@@ -284,6 +334,8 @@ class PlannedCharges:
                 wallbox=row.wallbox,
                 target_pct=row.target_soc_pct,
                 departure_at=ensure_utc(row.departure_at),
+                started_at=ensure_utc(row.started_at),
+                start_soc_pct=row.start_soc_pct,
                 start_soc_source=row.start_soc_source,
                 feasible=bool(row.feasible),
                 reached_at=None if row.reached_at is None else ensure_utc(row.reached_at),
@@ -317,6 +369,10 @@ class PlannedCharges:
                 and seen.departure_at is not None
                 and (seen.departure_at != row.departure_at or seen.target_pct != row.target_pct)
             ):
+                target = seen.target_pct
+                if target is not None and self._adopts(now, row, seen.departure_at):
+                    self._adopt(conn, now, row, seen, target, seen.departure_at)
+                    return
                 self._finish(conn, row, CHANGED)
             else:
                 if seen is not None:
@@ -411,6 +467,8 @@ class PlannedCharges:
             wallbox=session.wallbox,
             target_pct=target,
             departure_at=departure_at,
+            started_at=now,
+            start_soc_pct=start_soc,
             start_soc_source=source,
             feasible=ok,
             reached_at=reached_at,
@@ -441,6 +499,51 @@ class PlannedCharges:
             limit_pct=None if synced else seen.limit_pct,
         )
 
+    def _adopts(self, now: datetime, row: _Row, departure_at: datetime) -> bool:
+        """Ob die Zeile geänderte Werte als die der Automatik übernimmt (Präzisierung 9)."""
+        if departure_at <= now or now - row.started_at > AUTO_ADOPT:
+            return False
+        return self._recently_set(row.vehicle, now)
+
+    def _adopt(
+        self,
+        conn: Connection,
+        now: datetime,
+        row: _Row,
+        seen: _Seen,
+        target: float,
+        departure_at: datetime,
+    ) -> None:
+        """Übernimmt Ziel und Abfahrt der Automatik; die Machbarkeit gilt neu wie bei einer neuen
+        Zeile (mit dem bekannten Ladestand, sonst dem zu Beginn), ein erreichtes Ziel nur, wenn
+        das neue nicht höher liegt."""
+        raised = target > row.target_pct
+        row.target_pct, row.departure_at = target, departure_at
+        soc = _known_soc(seen)
+        start = row.start_soc_pct if soc is None else soc
+        row.feasible = self._feasible(
+            row.vehicle, row.wallbox, start, row.target_pct, row.departure_at, seen, now
+        )
+        if raised:
+            row.reached_at = None
+        conn.execute(
+            update(planned_charge)
+            .where(planned_charge.c.id == row.id)
+            .values(
+                target_soc_pct=row.target_pct,
+                departure_at=row.departure_at,
+                feasible=row.feasible,
+                reached_at=row.reached_at,
+            )
+        )
+        log.info(
+            "Geplante Ladung übernimmt Ziel und Abfahrt der Automatik",
+            vehicle=row.vehicle,
+            target_soc_pct=row.target_pct,
+            departure_at=row.departure_at.isoformat(),
+        )
+        self._update(conn, now, row, seen)
+
     def _update(self, conn: Connection, now: datetime, row: _Row, seen: _Seen) -> None:
         """Merkt den Ladestand vor der Abfahrt mit seiner Zeit, ``reached_at``, einen bekannten
         Start und ein Ladelimit unter dem Ziel."""
@@ -452,6 +555,7 @@ class PlannedCharges:
         if soc is not None:
             if row.start_soc_source == ASSUMED:
                 row.start_soc_source = str(seen.soc_source)
+                row.started_at, row.start_soc_pct = now, soc
                 row.feasible = self._feasible(
                     row.vehicle, row.wallbox, soc, row.target_pct, row.departure_at, seen, now
                 )
