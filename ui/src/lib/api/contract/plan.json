@@ -380,7 +380,7 @@
         "soc_pct": 55.00000000000001,
         "pv_w": 4754.90342125,
         "load_w": 1240.0,
-        "import_w": 2169.867979062451,
+        "import_w": 2169.8679790624365,
         "export_w": 0.0,
         "battery_w": 0.0,
         "import_ct": 35.24,
@@ -389,7 +389,7 @@
         "budget_kw": 5.5,
         "support_soc_pct": 51.0,
         "ev_w": {
-          "tesla": 5684.771400312451
+          "tesla": 5684.7714003124365
         },
         "codes": [
           "EIGENVERBRAUCH",

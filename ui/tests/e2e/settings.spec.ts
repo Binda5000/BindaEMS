@@ -1,6 +1,6 @@
 import { expect, test } from '@playwright/test';
 import type { Page } from '@playwright/test';
-import { login } from './helpers';
+import { T_DEMO, login } from './helpers';
 
 /** Feld „Wert netto“ des Bestandteils im geöffneten Editor */
 const valueOf = (page: Page, component: string) =>
@@ -10,6 +10,8 @@ const GRID = 'Netznutzungsentgelt Arbeitspreis (Netzebene 7)';
 
 test('Admin ändert das Netzverlustentgelt und bewertet neu', async ({ page }) => {
 	await login(page, 'admin');
+	// „heute“ ist der 09.10.2026 wie in der Demo-Welt, nicht das Datum des Browsers
+	await page.clock.setFixedTime(T_DEMO);
 	await page.goto('/einstellungen');
 	await page.getByRole('button', { name: 'Bearbeiten' }).click();
 	// der Demo-Zustand ist geteilt: einen Wert wählen, der vom aktuellen abweicht
@@ -17,6 +19,10 @@ test('Admin ändert das Netzverlustentgelt und bewertet neu', async ({ page }) =
 	await loss.fill((await loss.inputValue()) === '1,23' ? '1,24' : '1,23');
 	await page.getByRole('button', { name: 'Speichern' }).click();
 	await expect(page.getByText(/Version \d+ gespeichert/)).toBeVisible();
+	// der Vorschlag beginnt am Monatsersten; der Demo-Zustand ist geteilt, darum nur der 09.10.
+	await expect(page.getByLabel('Erster Tag')).toHaveValue('2026-10-01');
+	await expect(page.getByLabel('Letzter Tag')).toHaveValue('2026-10-09');
+	await page.getByLabel('Erster Tag').fill('2026-10-09');
 	await page.getByRole('button', { name: 'Neu bewerten' }).click();
 	await expect(page.getByText(/\d+ Viertelstunden neu bewertet\./)).toBeVisible();
 });

@@ -20,7 +20,7 @@ from typing import Any
 import httpx
 import respx
 from pydantic import SecretStr
-from sqlalchemy import bindparam, insert, select, update
+from sqlalchemy import insert, select, update
 from tests.app_helpers import (
     T_APP,
     influx_q,
@@ -47,7 +47,6 @@ from bindaems.app.consumers.service import ConsumerInput
 from bindaems.app.consumers.values import ENTITY_UNITS_QUERY, HaRef
 from bindaems.app.db.schema import (
     charging_session,
-    ledger_slot,
     model_registry,
     planned_charge,
     user_table,
@@ -62,7 +61,9 @@ from bindaems.app.learning.service import TrainingResult
 from bindaems.app.ledger.checks import EXPORT_COUNTER, IMPORT_COUNTER
 from bindaems.app.planning.process import solve_inline
 from bindaems.app.planning.service import plan_once
+from bindaems.app.prices.store import SlotRow
 from bindaems.app.runtime import AppRuntime
+from bindaems.app.tariff.calc import import_price
 from bindaems.core.adapters.base import AdapterHealth
 from bindaems.core.adapters.homeassistant import SOURCE as HA_SOURCE
 from bindaems.core.api.app import create_api
@@ -847,10 +848,26 @@ def _demo_tariff(app: AppRuntime) -> TariffSettings:
     return tariff.model_copy(update={"components": components})
 
 
+def _history_spot(app: AppRuntime, slots: list[HistorySlot]) -> list[SlotRow]:
+    """Börsenpreise netto der Slots, aus denen der Tarif der Demo ihren Bezugspreis brutto ergibt
+    (der Bezugspreis hängt linear vom Börsenpreis ab)."""
+    tariff = app.settings.current().settings.tariff
+    rows: list[SlotRow] = []
+    for slot in slots:
+        base = import_price(slot.start, 0.0, tariff).gross_ct
+        per_ct = import_price(slot.start, 1.0, tariff).gross_ct - base
+        spot = (slot.price_ct - base) / per_ct
+        rows.append(SlotRow(slot.start, None, spot, None, "primary", None))
+    return rows
+
+
 def _ingest_history(app: AppRuntime, slots: list[HistorySlot]) -> None:
-    """Die 14 Tage Abrechnung vor ``T_DEMO``; Bezugspreise setzt die Demo selbst (die Aufnahmen
-    der Preisquellen reichen nur über den 09.10.). Die Punkte für InfluxDB entfallen: dort liegt in
+    """Die 14 Tage Abrechnung vor ``T_DEMO``. Die Aufnahmen der Preisquellen reichen nur über den
+    09.10.; die Börsenpreise davor legt die Demo selbst in den Preisspeicher, und die Abrechnung
+    bewertet die Slots damit wie im Betrieb. So ändert „Neu bewerten“ (E2E, Einstellungen) die
+    Kosten nur mit dem Tarif und verliert sie nie. Die Punkte für InfluxDB entfallen: dort liegt in
     der Demo nichts."""
+    assert app.price_store.save(_history_spot(app, slots)) == len(slots)
     sink, app.ledger._sink = app.ledger._sink, None
     try:
         for slot in slots:
@@ -859,12 +876,6 @@ def _ingest_history(app: AppRuntime, slots: list[HistorySlot]) -> None:
             assert app.ledger.ingest(flows, "estimate" if slot.estimated else "stream")
     finally:
         app.ledger._sink = sink
-    price = ledger_slot.update().where(ledger_slot.c.slot_start == bindparam("b_start"))
-    with app.engine.begin() as conn:
-        conn.execute(
-            price.values(import_price_ct=bindparam("b_price")),
-            [{"b_start": slot.start, "b_price": slot.price_ct} for slot in slots],
-        )
 
 
 def _record_sessions(app: AppRuntime) -> None:

@@ -11,6 +11,7 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 from tests.ui_history import DAYS, FIRST_DAY, LAST_DAY
@@ -295,6 +296,30 @@ async def test_demo_world_has_a_loaded_model(cfg, tmp_path) -> None:
         rows = world.app.forecast_quality.daily(last - timedelta(days=11), last)
         assert {row.kind for row in rows} == {"load", "load_profile", "load_model"}
         assert len({row.day for row in rows}) == 12
+    finally:
+        world.close()
+
+
+async def test_reprice_keeps_the_demo_costs(cfg, tmp_path) -> None:
+    # Die Demo-Welt ist in den E2E-Tests geteilt: „Neu bewerten“ (Einstellungen) darf die Kosten
+    # der Statistik nicht verlieren; die Preise der Demo liegen deshalb auch im Preisspeicher
+    world = await build_world(cfg, tmp_path)
+    try:
+        app = world.app
+        first, last = local_range(FIRST_DAY, date(2026, 10, 20))  # bis zum echten Datum der CI
+        months = (date(2026, 9, 25), date(2026, 10, 9))
+        before = [app.stats.period("month", day)["money"] for day in months]
+        prices = {slot.slot_start: slot.import_price_ct for slot in app.ledger.slots(first, last)}
+        assert None not in prices.values()
+        app.ledger.reprice(FIRST_DAY, date(2026, 10, 20), actor="test", source="ui")
+        app.costing.catch_up()  # wie die Nachführung des Einstandspreises im Betrieb
+        after = {slot.slot_start: slot.import_price_ct for slot in app.ledger.slots(first, last)}
+        assert after.keys() == prices.keys()
+        assert all(after[k] == pytest.approx(v, abs=1e-9) for k, v in prices.items())
+        money = [app.stats.period("month", day)["money"] for day in months]
+        for old, new in zip(before, money, strict=True):
+            assert old["total_eur"] is not None
+            assert new == pytest.approx(old)
     finally:
         world.close()
 
