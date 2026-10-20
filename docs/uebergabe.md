@@ -1481,11 +1481,15 @@ Demo-Zugänge: `admin`, `bedienen` (Bedienen), `gast` (Lesen) und `sicher` (Admi
      Betriebshandbuch, „Klimaanlage (Phase 6a)“, und in `docs/verification/abnahme-phase-6a.md`:
      1. **Netz:** Routing und Firewall für UDP 5442 zwischen 192.168.81.0/24 (C.M.I.) und
         192.168.82.0/24 (BindaEMS) öffnen; am C.M.I. Pakete von 192.168.82.20 (Knoten 60) annehmen.
-     2. **Empfang prüfen:** `coe_probe listen` bei gestopptem core (Warnung zum Watchdog beachten,
+     2. **Compose-Datei und Images:** Die Datei in `/opt/bindaems` ist die Kopie aus der Installation;
+        die neue aus `deploy/` (Port `5442:5442/udp` am core) übernehmen, eigene Änderungen vorher per
+        `diff` hineinnehmen. Dann mit 4b ausrollen (`pull`, `up -d`), noch ohne Abschnitt `thermal`.
+        Ohne die neue Datei kommt kein Paket des C.M.I. an.
+     3. **Empfang prüfen:** `coe_probe listen` bei gestopptem core (Warnung zum Watchdog beachten,
         wenn EVCS oder Victron live sind); Knotennummer, Einheit der Leistung und Absender notieren,
         `config.yaml` (`thermal.devices.klima`) anpassen.
-     3. **Punkt `thermal`:** `verify_part2 --punkt thermal --geraet klima` (sendet nur auf Aufruf).
-     4. **core starten, Dry-Run** (der core sendet 0) und 7 Tage beobachten, dann `thermal.klima` live
+     4. **Punkt `thermal`:** `verify_part2 --punkt thermal --geraet klima` (sendet nur auf Aufruf).
+     5. **core starten, Dry-Run** (der core sendet 0) und 7 Tage beobachten, dann `thermal.klima` live
         und die Abnahme 6a.
   9. **Regel R1 bis der Akku leer ist (Plan 3d) ausrollen**; wann, entscheidet der Betreiber am Ende
      (Entscheidung 6 des Plans). Vorschlag: im selben Zug wie 4b und 6a (Punkte 7 und 8), also nach der

@@ -9,7 +9,7 @@ Paketen auf 0; jeder gesendete Versatz ist durch das Echo bestätigt.
 Diese Checkliste füllst du an der Anlage aus. Kopiere sie dafür nach
 `docs/verification/JJJJ-MM-TT-abnahme-phase-6a.md`, trage die Ergebnisse ein und checke sie ein.
 Voraussetzung: Plan 6a ist ausgerollt (nach der Abnahme der Phase 3, Betriebshandbuch, Abschnitt
-„Klimaanlage (Phase 6a)“), das Netz für UDP 5442 zwischen 192.168.81.0/24 und 192.168.82.0/24 ist
+„Klimaanlage (Phase 6a)“, mit der neuen `docker-compose.yml` in `/opt/bindaems`), das Netz für UDP 5442 zwischen 192.168.81.0/24 und 192.168.82.0/24 ist
 freigegeben und das Prüfprotokoll Teil 2, Punkt `thermal` (Spec 17.2-9), liegt als Bericht vor. Die
 Abschnitte 1 und 2 prüfst du vor dem Dry-Run, Abschnitt 3 im Dry-Run und Abschnitt 4 nach der
 Live-Schaltung.

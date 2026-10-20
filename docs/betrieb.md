@@ -5120,7 +5120,10 @@ daran nichts:
   Firewall.
 
 `docker-compose.yml` veröffentlicht dafür am Dienst `ems-core` genau diesen Port (`5442:5442/udp`);
-sonst hat der core keinen Port. Prüfe auf der VM, dass `docker compose ps` ihn zeigt (`5442/udp`)
+sonst hat der core keinen Port. **Die Compose-Datei in `/opt/bindaems` ist deine Kopie aus der
+Installation** (Abschnitt 2); `docker compose pull` ändert sie nicht. Übernimm darum die neue Datei
+aus `deploy/` (Schritt 2 der Reihenfolge unten), sonst kommt kein Paket des C.M.I. an, und auch
+`coe_probe` mit `--service-ports` hört ins Leere. Prüfe auf der VM, dass `docker compose ps` ihn zeigt (`5442/udp`)
 und die Firewall der VM (Proxmox-Firewall oder `DOCKER-USER`, wie bei Port 8080 in Abschnitt 6)
 nur das C.M.I. zulässt. Der core verwirft ohnehin jedes Paket, das nicht von `cmi_host` kommt.
 Das C.M.I. sendet CoE an `192.168.82.20` (Betreiber, erledigt); in der UVR sind die CAN-Ausgänge
@@ -5187,15 +5190,23 @@ anderen Einheit oder Art als in der Tabelle macht den Wert ungültig und zählt 
 
 ### Reihenfolge an der Anlage
 
-1. **Netz freigeben** (oben, „Netz und Firewall“) und die Pakete mit `coe_probe listen` sehen.
-2. **Tabelle prüfen:** Knotennummer des C.M.I. und die Einheit der Leistung notieren,
-   `config.yaml` anpassen (unten, „Empfang prüfen“).
-3. **Prüfprotokoll Teil 2, Punkt `thermal`** durchführen und den Bericht einchecken (unten).
-4. **core starten** (core und app gemeinsam ausrollen wie in Abschnitt „Laderegelung“,
-   „Geplantes Laden ausrollen (Plan 4b)“, mit Regelbetrieb aus während des Wechsels). Der Aktor
-   bleibt im Dry-Run.
-5. **Dry-Run beobachten**, mindestens 7 Tage (unten).
-6. **Live schalten** (unten) und die Abnahme der Phase 6a durchführen
+1. **Netz freigeben** (oben, „Netz und Firewall“).
+2. **Compose-Datei und Images übernehmen,** zuerst noch ohne Abschnitt `thermal` in `config.yaml`:
+   Vergleiche deine Datei mit der neuen (`diff /opt/bindaems/docker-compose.yml
+   <repo>/deploy/docker-compose.yml`), übernimm eigene Änderungen (etwa die Zeile
+   `127.0.0.1:8081:8081` aus Abschnitt 6) in die neue und kopiere sie nach `/opt/bindaems`. Dann
+   rollst du core und app gemeinsam aus wie in „Laderegelung“, „Geplantes Laden ausrollen (Plan 4b)“
+   (Regelbetrieb aus, Datenbank sichern, `docker compose pull && docker compose up -d`). Ohne
+   Abschnitt `thermal` läuft der core wie vorher, ohne Klimaanlage. `docker compose ps` zeigt am
+   core jetzt `5442/udp`. Die Werkzeuge der nächsten Schritte kommen erst mit diesen Images.
+3. **Tabelle prüfen:** core stoppen, die Pakete mit `coe_probe listen` sehen, Knotennummer des
+   C.M.I. und die Einheit der Leistung notieren und den Abschnitt `thermal` in `config.yaml`
+   eintragen (unten, „Empfang prüfen“).
+4. **Prüfprotokoll Teil 2, Punkt `thermal`** durchführen und den Bericht einchecken (unten).
+5. **core starten** (`docker compose up -d ems-core`). Der Aktor der Klimaanlage startet im
+   Dry-Run.
+6. **Dry-Run beobachten**, mindestens 7 Tage (unten).
+7. **Live schalten** (unten) und die Abnahme der Phase 6a durchführen
    (`docs/verification/abnahme-phase-6a.md`).
 
 Plan 6a rollt erst nach der Abnahme der Phase 3 aus.
@@ -5226,7 +5237,7 @@ docker compose run --rm --service-ports --entrypoint python ems-core \
 ```
 
 Danach startest du den core wieder, wenn er vorher lief (`docker compose up -d ems-core`). Vor
-dem Ausrollen von Plan 6a startet ihn erst Schritt 4 der Reihenfolge.
+dem Ausrollen von Plan 6a startet ihn erst Schritt 5 der Reihenfolge.
 
 `--service-ports` ist nötig, denn `docker compose run` veröffentlicht sonst keine Ports und die
 Pakete des C.M.I. kämen nicht an. Ohne `--sekunden` hört das Werkzeug bis Strg+C; `--port` wählt
