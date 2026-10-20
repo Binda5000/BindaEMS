@@ -216,7 +216,8 @@ def check_plan(
             report(
                 "r1",
                 index,
-                f"Regel R verletzt: Netzladen um {at}, danach {exported} kWh Einspeisung",
+                f"Regel R verletzt: Netzladen um {at}, danach {exported} kWh Einspeisung, "
+                "bevor der Akku leer ist",
             )
         if not grid_charge_pays(inputs, steps, index):
             report("spread", index, f"Netzladen um {at} rechnet sich nicht")

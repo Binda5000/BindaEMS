@@ -78,7 +78,11 @@ def test_r1_on_resimulation_is_reported() -> None:
     intents = [BatteryIntent(kind=BatteryIntentKind.NETZLADEN, grid_charge_w=1000), BatteryIntent()]
     result = flows_result([flow(gr_h=500, gr_b=1000), flow(pv_h=500, pv_x=8500)])
     issues = check_plan(inputs, result, intents, resimulate(inputs, intents))
-    assert any(i.startswith("Regel R verletzt: Netzladen um 02:00, danach ") for i in issues)
+    assert any(
+        i.startswith("Regel R verletzt: Netzladen um 02:00, danach ")
+        and i.endswith(" kWh Einspeisung, bevor der Akku leer ist")
+        for i in issues
+    )
 
 
 def test_r1_allows_grid_charge_used_up_before_pv() -> None:

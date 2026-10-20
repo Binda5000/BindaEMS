@@ -4390,9 +4390,10 @@ Die Seite und die Komponente nennen den Grund:
 Die Prüfung findet diese Befunde, jeweils mit der Uhrzeit des Slots (je Art der erste, in der
 Reihenfolge der Slots; der früheste ist der „erste Befund“): „Bilanz verletzt um HH:MM“,
 „SOC außerhalb der Grenzen um HH:MM“, „Leistung über der Grenze um HH:MM“, „Netzladen um HH:MM,
-obwohl ausgeschaltet“, „Regel R verletzt: Netzladen um HH:MM, danach {kWh} kWh Einspeisung“ (bevor der Akku leer ist) und
-„Netzladen um HH:MM rechnet sich nicht“, mit Autos (seit Plan 4b) dazu „Auto {Name} lädt außerhalb
-seiner Grenzen um HH:MM“ und „Auto {Name} lädt nach der Abfahrt“.
+obwohl ausgeschaltet“, „Regel R verletzt: Netzladen um HH:MM, danach {kWh} kWh Einspeisung,
+bevor der Akku leer ist“ und „Netzladen um HH:MM rechnet sich nicht“, mit Autos (seit Plan 4b)
+dazu „Auto {Name} lädt außerhalb seiner Grenzen um HH:MM“ und „Auto {Name} lädt nach der
+Abfahrt“.
 
 Der Ersatzplan plant zuerst die Autos im Modus „Geplant“, in der Reihenfolge `priority` (seit Plan
 4b):

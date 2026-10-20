@@ -220,6 +220,14 @@ def test_planning_section_describes_the_cars() -> None:
     assert "Auto {car.name} lädt nach der Abfahrt" in source
 
 
+def test_rule_r_finding_in_the_guide_matches_the_app() -> None:
+    # Befund „Regel R verletzt“ (seit Plan 3d: Einspeisung, bevor der Akku leer ist) mit dem
+    # Wortlaut der app (``check_plan``, geprüft in test_plausibility.py) im Abschnitt „Planung“.
+    section = " ".join(_guide_section("Planung").split())
+    shown = "„Regel R verletzt: Netzladen um HH:MM, danach {kWh} kWh Einspeisung, bevor der Akku "
+    assert shown + "leer ist“" in section
+
+
 def test_scenario_report_with_cars_in_the_guide_matches_the_tool() -> None:
     # Der Bericht „Szenario-Vergleich mit Victron allein“ (Plan 3b, mit Autos Plan 4b, Task 13):
     # Spalten und Gründe für „Nicht bestanden“ stehen mit dem Wortlaut des Werkzeugs im Abschnitt.
