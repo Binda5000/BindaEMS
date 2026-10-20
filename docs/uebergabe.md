@@ -1,6 +1,6 @@
 # Übergabe an die nächste Session
 
-Stand: 19.10.2026. Plan 2c-1 (Laderegelung) ist umgesetzt, je Task und im Gesamtreview geprüft
+Stand: 20.10.2026. Plan 2c-1 (Laderegelung) ist umgesetzt, je Task und im Gesamtreview geprüft
 („mit Korrekturen“, keine kritischen Befunde), und die Fix-Welle danach ist umgesetzt. Er ist auf
 `main` (Stand `18c575a`, wie die Branches `ccr-e451cb4c-qeg1tm` und `ccr-9778345e-t3x44k` zu Beginn
 der folgenden Sitzung). Danach sind die EVCS-Hysterese (Freigabe des Betreibers vom 14.10.2026) und
@@ -81,6 +81,14 @@ Festlegungen und offene Kleinigkeiten in `docs/superpowers/plans/2026-10-19-phas
 mit 4b nach der Abnahme der Phase 3,** und vorher muss der Betreiber Routing und Firewall für UDP 5442
 zwischen 192.168.81.0/24 und 192.168.82.0/24 öffnen. Nichts geht dabei von selbst live: Die
 Klimaanlage folgt der Betriebsart ihres Aktors (`thermal.klima`), im Dry-Run sendet der core 0.
+**Plan 3d (Regel R1 nur, bis der Akku leer ist) ist umgesetzt, je Task geprüft, und die Doku und der
+Gesamtlauf sind nachgeführt** (`docs/superpowers/plans/2026-10-20-phase-3d-regel-r1.md`, 4 Tasks,
+freigegeben vom Betreiber am 20.10.2026 mit den Entscheidungen 1 bis 6): auf dem Branch
+`claude/project-thread-707vv8`, **noch nicht auf `main`, nicht ausgerollt**. Er ändert nur die app
+(Planung) und das Szenario-Werkzeug; core, `shared`, UI, HA und `config.yaml` bleiben gleich (siehe
+„Plan 3d“ unter „Kurzfassung“). **Ausgerollt wird nach Entscheidung 6 des Plans, wann der Betreiber
+es beschließt;** Vorschlag: zusammen mit 4b und 6a (Punkt 9 unter „Offen an der Anlage“). Wirken kann
+die Regel erst, wenn Victron live ist.
 `main` ist seit dem 12.10.2026 auch der Standard-Branch auf GitHub.
 
 ## Kurzfassung
@@ -588,6 +596,50 @@ Klimaanlage folgt der Betriebsart ihres Aktors (`thermal.klima`), im Dry-Run sen
     Schätzung der Grundlast der Klimaanlage ist im Dry-Run nicht sichtbar; an der Anlage zu bestätigen:
     Absender der Pakete, Knotennummer und Einheit der Leistung, die Zeiten. Alles weitere steht in
     `docs/superpowers/plans/2026-10-19-phase-6a-entscheidungen.md`.
+- **Plan 3d (Regel R1 nur, bis der Akku leer ist) ist umgesetzt und je Task geprüft**
+  (Plan: `docs/superpowers/plans/2026-10-20-phase-3d-regel-r1.md`, 4 Tasks, Ausführung subagent-driven;
+  Branch `claude/project-thread-707vv8`, nicht auf `main`, nicht ausgerollt). Anlass war die
+  Klarstellung des Betreibers vom 20.10.2026: R1 soll verhindern, dass Netzstrom den Akku füllt, den
+  die PV ohnehin gefüllt hätte; ist der Akku vor der nächsten Einspeisung leer (heute trüb, morgen
+  sonnig), darf er aus dem Netz laden. Nur app und Szenario-Werkzeug:
+  - **Nachrechnung** (`app/planning/plausibility.py`): `EMPTY_TOL_KWH = 0,1`, `charged_window_end` und
+    `export_while_charged_kwh` (Fenster vom `NETZLADEN`-Slot bis zum Ende des ersten Slots mit SOC ≤
+    Reserve + 0,1 kWh); `export_after_kwh` ist gelöscht. Prüfung, Kürzen der Absichten (`intents.py`),
+    Ersatzplan, Erklärung und Szenario rechnen damit.
+  - **Optimierer** (`app/planning/optimizer.py`): `R1_EMPTY_TOL_KWH = 0,05`; Binärvariable `e_t`
+    (`leer_t`), stetige `c_t` (`netz_im_akku_t`, `netz_im_akku_z_t`) und `r1_t: pv_x_t ≤ PV_t · (1 − c_t)`,
+    erst ab dem ersten Slot mit `z_t`. Die Lösezeit blieb gleich (längstes Planungsszenario 90,5 s auf
+    88,8 s, Gesamtzeit der Tests); Zeitlimit 20 s und `MIP_GAP` 0,005 unverändert.
+  - **Erklärung** (`explain.py`): „Kein Netzladen: Ab {um} Uhr speist die PV laut Prognose {kwh} kWh ein,
+    bevor der Akku leer ist (Regel R).“; `um` ist der erste Einspeise-Slot im Fenster, Code und Parameter
+    bleiben. Die Zahl „Netzladen vor tatsächlicher Einspeisung“ im Szenario-Bericht gilt jetzt über den
+    ganzen Lauf statt je Tag.
+  - **Doku:** Spec „Stand Plan 3d (20.10.2026)“ in 9.3 (mit den Verweisen in 9.4, 9.5, Präzisierung 19
+    und der Regel-R-Fassung von 3b), Betriebshandbuch („Planung“, Absatz „Regel R“, Prüfpunkt „Regel R“
+    unter „An der Anlage prüfen“, Tabelle der Erklärungen, Szenario-Bericht).
+  - **Rulings der Umsetzung:** `export_after_kwh` blieb bis Task 3, weil `explain.py` und das Szenario-
+    Werkzeug sie bis dahin nutzten; Task 1 stellte die Verstoß-Prüfung des Szenario-Werkzeugs
+    (`broken` in `tools/scenario/runner.py`) schon auf die neue Regel um, damit der Integrationslauf
+    von Task 2 nach ihr urteilt; der Test des Ersatzplans nutzt Last 0 in billigen Slots 0 bis 7 und PV ab
+    Slot 9 (bei 2 kW Last ist die Ladung vor der PV immer verbraucht, das Szenario des Plans sperrt nie);
+    ein Test des Optimierers lässt Netzladen bis zur Toleranz von 0,05 kWh zu (`gr_b < 1 oder
+    soc_end ≤ lo + R1_EMPTY_TOL_KWH`, Kosten falls falsch: höchstens 0,05 kWh Netzenergie je Fenster vor
+    der PV); Commits der Teilagenten tragen den Co-Authored-By des Modells, das sie schrieb.
+  - **Aufgeschobene Kleinigkeiten:** Task 1: die Änderung von `broken` im Szenario-Werkzeug hat keinen
+    eigenen Test (Task 3 deckt sie mit `r1_violations == 0`); ein Test `test_export_after_includes_the_slot`
+    entfiel mit `export_after_kwh`; `EMPTY_TOL_KWH` könnte `= R1_TOL_KWH` sein; ein Netzladen bis rund
+    0,1 kWh endet innerhalb der Toleranz und das Fenster ist ein Slot (stimmig mit der Toleranz); der Text
+    des Befunds „danach {kWh} kWh Einspeisung“ blieb. Task 2: Test 3 hat keine PV und beweist nur die
+    Lösbarkeit mit `lo = soc0`; `e` des letzten Slots wird angelegt und nicht gebraucht; der Docstring
+    sagt „Reserve + Toleranz“, `lo` ist `min(Reserve, soc0)`. Task 3: `_charge_before_export_kwh`
+    durchsucht den ganzen Lauf je Ladeslot (im schlimmsten Fall quadratisch, bei rund 2880 Slots für 30
+    Tage harmlos); kein Test hält einen Fall fest, in dem die alte Tagesgrenze zählte.
+  - **Tests auf dem Branch von Plan 3d** (20.10.2026): 7944 Python-Tests im vollen Lauf (in vier Teilen
+    parallel mit gemeinsamer Abdeckung gemessen: 4141 `core` und Kopf, 3378 app/`shared`/Watchdog/Werkzeuge,
+    46 Dokumentation, 333 Integration, 46 Property), alle grün; Vitest 696; ruff, mypy und import-linter
+    (4 Verträge) sauber; Abdeckung 98,03 % insgesamt und 99,94 % für `core/safety`, `core/control` und
+    `core/actuators` zusammen. Die Planungsszenarien (Integration) dauerten 38 Minuten bei vier
+    parallelen Läufen.
 - **Images:** `ghcr.io/binda5000/bindaems-core:latest` und `ghcr.io/binda5000/bindaems-app:latest`.
   Sie sind öffentlich, und die CI setzt `latest` bei jedem Push auf `main`. core und app werden
   immer gemeinsam aus demselben Stand ausgerollt (gleiche Compose-Datei, gleiche Image-Tags): Die
@@ -620,6 +672,8 @@ Klimaanlage folgt der Betriebsart ihres Aktors (`thermal.klima`), im Dry-Run sen
   mit Abdeckungsgrenzen (≥ 75 % insgesamt, ≥ 90 % für `core/safety`, `core/control` und
   `core/actuators`), Vitest mit svelte-check, Prettier und ESLint; dazu E2E mit Playwright.
 - **Offen:**
+  - an der Anlage: Plan 3d (Regel R1 bis der Akku leer ist) ausrollen, Zeitpunkt entscheidet der
+    Betreiber (Entscheidung 6); Vorschlag: mit 4b und 6a (Punkt 9 unter „Offen an der Anlage“)
   - an der Anlage: Plan 6a mit 4b nach der Abnahme der Phase 3 ausrollen (Punkt 8 unter „Offen an der
     Anlage“), vorher Routing und Firewall für UDP 5442; danach die Abnahme 6a (7 Tage Dry-Run, dann live)
   - an der Anlage: Plan 4b ausrollen, erst nach der Abnahme der Phase 3 und als Schritt des Betreibers
@@ -704,7 +758,7 @@ Klimaanlage folgt der Betriebsart ihres Aktors (`thermal.klima`), im Dry-Run sen
 
 | Dokument | Inhalt |
 |---|---|
-| `docs/superpowers/specs/2026-10-08-bindaems-design.md` | Spec, verbindlich. Wichtig: 7 Regelung, 8 Sicherheit, 13 Web-UI, 14 Login, 17 Prüfprotokoll, 18 Phasenplan, 19 offene Punkte. Die Absätze „Stand Plan 2a/2b/2c-1/2c-2a/2c-2b/2d/3a/3b/3c/4a/4b/6a“ gehen dem älteren Text davor vor |
+| `docs/superpowers/specs/2026-10-08-bindaems-design.md` | Spec, verbindlich. Wichtig: 7 Regelung, 8 Sicherheit, 13 Web-UI, 14 Login, 17 Prüfprotokoll, 18 Phasenplan, 19 offene Punkte. Die Absätze „Stand Plan 2a/2b/2c-1/2c-2a/2c-2b/2d/3a/3b/3c/3d/4a/4b/6a“ gehen dem älteren Text davor vor |
 | `docs/superpowers/plans/2026-10-08-phase-1a-fundament-datenerfassung.md` | Plan 1a (core) |
 | `docs/superpowers/plans/2026-10-09-phase-1b-app-backend.md` | Plan 1b (app) |
 | `docs/superpowers/plans/2026-10-09-phase-1c-web-ui.md` | Plan 1c (UI), mit Anhang A zu den API-Formen |
@@ -725,6 +779,7 @@ Klimaanlage folgt der Betriebsart ihres Aktors (`thermal.klima`), im Dry-Run sen
 | `docs/superpowers/plans/2026-10-17-phase-4a-statistik.md` | Plan 4a, 16 Tasks, umgesetzt auf dem Arbeitszweig (Gesamtreview und Fix-Welle abgeschlossen): Ladesessions, Einstandspreis, Kosten je Auto, Abgleich, Nachrechnung, Verbraucher je Tag, Seite „Statistik“, HA-Sensoren, Grafana; die 13 Entscheidungen des Betreibers vom 17.10.2026 (PV-Strom ins Auto kostet 0 ct), Präzisierungen gegenüber der Spec, Texte |
 | `docs/superpowers/plans/2026-10-18-phase-4b-geplantes-laden.md` | Plan 4b, 19 Tasks, umgesetzt, seit dem 19.10.2026 auf `main` (nicht ausgerollt): Modus „Geplant“ mit Ziel-SOC und Abfahrt, Ladestand der Autos, späteste Startzeit, Tesla-Ladelimit, die Autos im Optimierer mit Regel R2, Ersatzplan für Autos, HA vollständig, Benachrichtigungen komplett, Zählung für die Abnahme „Ziel-SOC“, Simulator- und Planungsszenarien; die 17 Entscheidungen des Betreibers vom 18.10.2026, Präzisierungen gegenüber der Spec, Texte |
 | `docs/superpowers/plans/2026-10-19-phase-6a-klimaanlage.md` | Plan 6a, 13 Tasks, umgesetzt, seit dem 20.10.2026 auf `main` (nicht ausgerollt): CoE-Codec und Adapter, Safety-Familie `thermal`, Aktor mit Echo, Strategie mit Rangfolge Akku → Autos → Klima, Hinweis aus dem Plan, UI, HA, Telemetrie, Werkzeuge, Simulator; die 16 Entscheidungen vom 19.10.2026 |
+| `docs/superpowers/plans/2026-10-20-phase-3d-regel-r1.md` | Plan 3d, 4 Tasks, umgesetzt auf dem Branch `claude/project-thread-707vv8` (nicht auf `main`, nicht ausgerollt): Regel R1 sperrt Netzladen nur, solange der Akku nicht leer ist (Nachrechnung, Optimierer, Erklärung, Szenario-Werkzeug); Einordnung, die sechs Entscheidungen des Betreibers vom 20.10.2026, Review-Schwerpunkte |
 | `docs/superpowers/plans/2026-10-19-phase-6a-entscheidungen.md` | Festlegungen R1 bis R32 der Umsetzung von Plan 6a (je mit Kosten, falls falsch) und die offenen Kleinigkeiten |
 | `cerbo-watchdog/README.md` | Watchdog: Zustände, Zeiten, D-Bus-Pfade, Installation und Probe |
 | `docs/verification/abnahme-phase-1.md` | Checkliste für die Abnahme der Phase 1 |
@@ -1242,8 +1297,8 @@ Demo-Zugänge: `admin`, `bedienen` (Bedienen), `gast` (Lesen) und `sicher` (Admi
         Zeitlimit an. Stimmen Preise und Prognosen der Seite **Zeitplan** mit der Übersicht überein,
         und sind Ablauf und Blöcke plausibel? Springt die Zeit im Kopf jede Viertelstunde?
      2. **Netzladen erlaubt** bleibt aus, bis dir der Ablauf plausibel erscheint. Eingeschaltet darf
-        kein Block „Netzladen“ vor einem Zeitraum stehen, in dem laut PV-Prognose noch eingespeist
-        wird (Regel R).
+        kein Block „Netzladen“ bis in einen Zeitraum reichen, in dem laut PV-Prognose eingespeist
+        wird, ohne dass der Akku dazwischen auf der Reserve ankommt (Regel R, seit Plan 3d).
      3. **30 echte Tage:** Sobald das Prognose-Archiv gefüllt ist, erst `export_days`, dann
         `scenario_days --takt 15` (Befehle im Betriebshandbuch, „Szenarien“). „Bestanden“ über
         mindestens 30 Tage ist mit den 2 Wochen Dry-Run (Punkt 4) die Voraussetzung der Abnahme der
@@ -1350,6 +1405,15 @@ Demo-Zugänge: `admin`, `bedienen` (Bedienen), `gast` (Lesen) und `sicher` (Admi
      3. **Punkt `thermal`:** `verify_part2 --punkt thermal --geraet klima` (sendet nur auf Aufruf).
      4. **core starten, Dry-Run** (der core sendet 0) und 7 Tage beobachten, dann `thermal.klima` live
         und die Abnahme 6a.
+  9. **Regel R1 bis der Akku leer ist (Plan 3d) ausrollen**; wann, entscheidet der Betreiber am Ende
+     (Entscheidung 6 des Plans). Vorschlag: im selben Zug wie 4b und 6a (Punkte 7 und 8), also nach der
+     Abnahme der Phase 3. Nur die app ändert sich (`docker compose pull && docker compose up -d`; der
+     core, `shared` und das UI sind unverändert, es gibt keine Migration). Das Image `latest` enthält
+     3d erst, wenn der Branch auf `main` ist. Nichts geht dabei von selbst live: Die Regel wirkt nur
+     im Plan, und der Plan wirkt nur, wenn Victron live ist und „Netzladen erlaubt“ an ist. Danach
+     beim Beobachten des Plans (Punkt 5) auf den Satz „Kein Netzladen: Ab … Uhr speist die PV … ein,
+     bevor der Akku leer ist (Regel R)“ und darauf achten, dass der Akku vor der Einspeisung wirklich
+     auf der Reserve ist.
   - Teil 2 schreibt auf die Geräte: nicht während der 7 Tage der Abnahme Phase 1 und ihres
     24-h-Mitschnitts (`docs/verification/abnahme-phase-1.md`, 4.2 und 4.3). Seit dem
     19.10.2026 sind 4.2 und 4.3 überholt (`docs/verification/2026-10-19-abnahme-phase-1.md`).
@@ -1511,6 +1575,10 @@ Demo-Zugänge: `admin`, `bedienen` (Bedienen), `gast` (Lesen) und `sicher` (Admi
    Gesamtreview geprüft, Fix-Welle und Re-Review erledigt, seit dem 20.10.2026
    auf `main`, nicht ausgerollt (Kurzfassung). Es folgt das Ausrollen mit 4b nach der Abnahme der Phase 3 (Punkt 8 unter
    „Offen an der Anlage“). Danach Phase 5; 6b (Wärmepumpe) frühestens Herbst 2027 nach Phase 5.
+6. **Plan 3d** (Regel R1 nur, bis der Akku leer ist): umgesetzt und je Task geprüft, auf dem Branch
+   `claude/project-thread-707vv8` (Kurzfassung); es folgt der Gang auf `main` und das Ausrollen nach
+   Entscheidung des Betreibers (Punkt 9 unter „Offen an der Anlage“). Plan 5a läuft parallel in einem
+   anderen Thread; wer als Zweiter auf `main` geht, führt die Doku (Übergabe, Spec) zusammen.
 
 ### Nächster Schritt: die Anlage
 
