@@ -3132,10 +3132,14 @@ nicht aufgeführt. Offen sind:
     zum Satz einen Status-Punkt.
   - Die Prüfung auf die Obergrenze von 8 beim Wählen eines Sensors ist im Code nicht erreichbar (die
     Auswahl ist ab 8 gesperrt).
-- **Tests und CI:** In `stats.spec.ts` („Statistik wechselt den Zeitraum“) zeigt die Kachel „Kosten“ in
-  einzelnen Läufen „–“. Das trat in der GitHub-CI (Lauf 414) und im jeweils ersten lokalen Lauf der Tasks
-  12 und 13 auf, ohne dass diese die Statistik berührten. Es ist ein bekannter, von Plan 5a unabhängiger
-  Flake; der Test ist nicht angepasst und sollte robust gemacht werden (nicht übersprungen).
+- **Tests und CI:** In `stats.spec.ts` („Statistik wechselt den Zeitraum“) zeigte die Kachel „Kosten“ in
+  einzelnen Läufen „–“ (GitHub-CI, Lauf 414, und je der erste lokale Lauf der Tasks 12 und 13). Ursache
+  war der geteilte Demo-Zustand: `settings.spec.ts` bewertete ohne `page.clock` vom Monatsersten bis
+  zum echten Datum neu, und weil die Demo die Bezugspreise der 14 Tage Verlauf nur in die Abrechnung
+  schrieb, nicht in den Preisspeicher, verloren diese Slots dabei ihren Preis. Seit der Nacharbeit legt
+  die Demo die Börsenpreise in den Preisspeicher (Neubewerten ändert die Kosten nur mit dem Tarif),
+  und der Test bewertet mit der Uhr der Demo nur den 09.10. neu
+  (`test_reprice_keeps_the_demo_costs`).
 - **Abnahme:** Das Modell kann gleich nach dem ersten Training aktiv werden: Bis 10 Tage Schattenbetrieb
   vorliegen, entscheidet der Backtest, der mit der archivierten Temperatur rechnet und in den ersten
   Wochen wenig Historie für das Profil hat und damit etwas zu günstig ist. Wer zuerst nur beobachten
