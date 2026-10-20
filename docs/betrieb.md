@@ -4398,8 +4398,13 @@ ab dem Ausrollen.
 ### Abnahme
 
 Bestanden ist sie, wenn auf der Seite „Prognosen“ mit dem Zeitraum „28 Tage“ das Modell mindestens
-10 % niedrigeren MAE hat als das Profil (Zeile „Last Modell“, Spalte „besser als Profil“), **oder**
-das Profil in dieser Zeit automatisch aktiv war, sobald und solange das Modell es nicht schaffte.
+10 % niedrigeren MAE hat als das Profil, **über alle Vorlaufklassen zusammen** (nach Viertelstunden
+gewichtet, so wie die Regel der Aktivierung sie zusammenfasst), **oder** das Profil in dieser Zeit
+automatisch aktiv war, sobald und solange das Modell es nicht schaffte. Die Spalte „besser als
+Profil“ der Zeilen „Last Modell“ steht je Vorlaufklasse und entscheidet allein nicht; die Zahl für
+die 28 Tage liefert der Abruf mit `jq` in der Checkliste (Abschnitt 3, `improvement_pct`). Der Satz
+der Aktivierung in der Karte „Lastprognose“ nennt dieselbe zusammengefasste Verbesserung, aber für
+die letzten 14 Tage; ihn trägst du wöchentlich ein (Checkliste, Abschnitt 2).
 Dazu kommen jede Nacht ein Training (Registry), keine Fehler in `load-model` und der Rückfall bei
 fehlender Modelldatei, an der Anlage beobachtet. Die Checkliste führt die Schritte auf.
 

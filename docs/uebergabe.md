@@ -1424,6 +1424,7 @@ Demo-Zugänge: `admin`, `bedienen` (Bedienen), `gast` (Lesen) und `sicher` (Admi
      4. **Sensoren wählen** (optional): unter **Einstellungen** → „Lastmodell“ bis zu 8 Entitäten aus der
         HA-Datenbank (etwa Anwesenheit `person.…`), dann auf **Prognosen** „Jetzt neu trainieren“.
      5. **Abnahme 5a:** 28 Tage ab dem Ausrollen. Auf „Prognosen“ (Zeitraum „28 Tage“) hat „Last Modell“
+        über alle Vorlaufklassen zusammen (Abruf mit `jq` in der Checkliste, Abschnitt 3)
         mindestens 10 % niedrigeren MAE als „Last Profil“, **oder** das Profil war automatisch aktiv,
         solange das Modell es nicht schaffte; dazu jede Nacht eine Version (Registry), keine Fehler in
         `load-model` und der Rückfall bei fehlender Modelldatei, an der Anlage beobachtet (Datei

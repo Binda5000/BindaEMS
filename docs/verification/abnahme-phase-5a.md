@@ -122,9 +122,11 @@ Prüfschritte:
 
 1. Zeitraum „28 Tage“ wählen. Die Zeilen „Last Profil“ und „Last Modell“ stehen je Vorlauf (0–6 h,
    6–24 h, über 24 h) mit „MAE“; „besser als Profil“ steht bei „Last Modell“ und rechnet gegen das
-   Profil derselben Vorlaufklasse. Trage die Werte ein.
-2. Die Verbesserung über alle Vorlaufklassen (nach Viertelstunden gewichtet; das Kriterium der Spec)
-   liefert dieser Abruf:
+   Profil derselben Vorlaufklasse. Trage die Werte ein. Sie zeigen, wo das Modell gut oder schlecht
+   ist; **keine einzelne dieser Zeilen ist das Kriterium.**
+2. Das Kriterium ist die Verbesserung **über alle Vorlaufklassen zusammen** (nach Viertelstunden
+   gewichtet), so wie die Regel der Aktivierung die Klassen zusammenfasst. Die Zahl für die 28 Tage
+   liefert dieser Abruf; trage sie in die Zeile „Gesamt (jq)“ ein:
 
    ```bash
    curl -s -b jar "$APP/api/forecast/quality?days=28" | jq '
@@ -136,7 +138,10 @@ Prüfschritte:
 3. Die Karten „Fehler je Tag“ (Linien „Profil“ und „Modell“) und „Backtest“ (Zeile „Gesamt“) ansehen
    und die Auffälligkeiten notieren, etwa Tage, an denen das Modell deutlich schlechter war.
 
-Das Kriterium ist erfüllt, wenn `improvement_pct` **mindestens 10** ist. Ist es das nicht, gilt die
+Das Kriterium ist erfüllt, wenn `improvement_pct` aus dem Abruf **mindestens 10** ist. Der Satz der
+Aktivierung in der Karte „Lastprognose“ („… {x} % genauer als das Profil …“) fasst die Klassen
+genauso zusammen, gilt aber für die letzten 14 Tage; er ist der Nachweis für Abschnitt 2, nicht für
+die 28 Tage. Ist es das nicht, gilt die
 Alternative aus Abschnitt 2: Das Profil war automatisch aktiv, sobald und solange das Modell die
 10 % nicht schaffte; die Abnahme besteht dann mit den Wochen aus Abschnitt 2 als Nachweis (keine
 Woche mit „Modell aktiv“, in der das Modell die 10 % nicht erreichte, und kein „Profil aktiv“ bei
