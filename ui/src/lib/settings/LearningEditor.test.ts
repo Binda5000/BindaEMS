@@ -119,6 +119,21 @@ it('nennt den Grund, wenn die Abfrage scheitert', async () => {
 	expect(screen.getByText('sensor.aussentemperatur')).toBeInTheDocument();
 });
 
+it('markiert ohne HA-Leser keinen Sensor als „nicht in HA gefunden“', async () => {
+	renderEditor({
+		load: vi.fn().mockResolvedValue({
+			entities: [],
+			error: 'Home Assistant ist nicht eingerichtet.'
+		})
+	});
+	expect(await screen.findByText('Home Assistant ist nicht eingerichtet.')).toBeInTheDocument();
+	const items = within(screen.getByRole('list', { name: 'Gewählte Sensoren' })).getAllByRole(
+		'listitem'
+	);
+	expect(items.length).toBeGreaterThan(0);
+	for (const item of items) expect(item).not.toHaveTextContent('nicht in HA gefunden');
+});
+
 it('zeigt einen gespeicherten Sensor, der nicht mehr in HA steht, mit Hinweis', async () => {
 	const { draft } = renderEditor({
 		draft: { haSensors: ['sensor.aussentemperatur', 'sensor.weg'] }

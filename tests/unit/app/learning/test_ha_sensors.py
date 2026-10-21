@@ -4,7 +4,7 @@ from structlog.testing import capture_logs
 
 from bindaems.app.consumers.values import NOT_CONFIGURED
 from bindaems.app.history.influx import Series
-from bindaems.app.learning.ha_sensors import HaSensorReader, SensorCandidate
+from bindaems.app.learning.ha_sensors import NO_READER, HaSensorReader, SensorCandidate
 from bindaems.shared.influx.lineprotocol import epoch_ms
 
 FIRST = datetime(2026, 10, 16, 6, 0, tzinfo=UTC)
@@ -62,7 +62,7 @@ async def test_candidates_without_database_name_the_reason(fake_reader) -> None:
     assert await HaSensorReader(fake_reader, None).candidates() == ([], NOT_CONFIGURED)
     assert await HaSensorReader(None, None).candidates() == ([], NOT_CONFIGURED)
     assert fake_reader.queries == []
-    assert await HaSensorReader(None, "homeassistant").candidates() == ([], None)
+    assert await HaSensorReader(None, "homeassistant").candidates() == ([], NO_READER)
 
 
 async def test_candidates_say_why_ha_is_unreadable(fake_reader, unreadable) -> None:

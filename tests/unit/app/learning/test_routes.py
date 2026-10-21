@@ -216,6 +216,27 @@ def test_candidates_without_ha_database(client_as) -> None:
     assert NOT_CONFIGURED == "HA-Datenbank nicht eingerichtet (influxdb.ha_database)"
 
 
+def test_candidates_without_reader_name_the_reason(
+    make_client, model, load, guard, auth, driving, automation
+) -> None:
+    # Datenbank benannt, aber kein Leser: sonst hielte der Editor alle Sensoren für verschwunden
+    client = make_client(
+        learning_router(
+            model,
+            HaSensorReader(None, "homeassistant"),
+            load,
+            guard,
+            driving,
+            automation,  # type: ignore[arg-type]
+        )
+    )
+    client.headers.update(login_as(client, auth, "admin", "admin"))
+    assert client.get("/api/learning/candidates").json() == {
+        "entities": [],
+        "error": "Home Assistant ist nicht eingerichtet.",
+    }
+
+
 def test_candidates_list_entities_and_units(
     make_client, model, load, guard, auth, driving, automation
 ) -> None:

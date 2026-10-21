@@ -13,7 +13,7 @@ import math
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any
+from typing import Any, Final
 
 import structlog
 
@@ -24,6 +24,8 @@ from bindaems.app.history.influx import InfluxQueryError, InfluxReader, Series
 from bindaems.shared.timeutil import slots_between
 
 log = structlog.get_logger(__name__)
+
+NO_READER: Final = "Home Assistant ist nicht eingerichtet."  # kein Leser: Liste fehlt
 
 # letzter Wert und letzte Einheit je Entität und Messung der letzten 30 Tage
 _CANDIDATES_QUERY = (
@@ -97,7 +99,7 @@ class HaSensorReader:
         if self._database is None:
             return [], NOT_CONFIGURED
         if self._reader is None:
-            return [], None
+            return [], NO_READER
         try:
             series = await self._reader.query(_CANDIDATES_QUERY, database=self._database)
         except InfluxQueryError as exc:
