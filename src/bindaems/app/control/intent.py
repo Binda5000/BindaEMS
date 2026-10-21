@@ -46,6 +46,7 @@ TARGET_SOC_MIN: Final = 20  # Grenzen wie ``VehicleIntent.target_soc_pct``
 TARGET_SOC_MAX: Final = 100
 DEPARTURE_PATTERN: Final = re.compile(r"([01]\d|2[0-3]):[0-5]\d")  # wie ``VehicleIntent.departure``
 DEPARTURE_DATE_NEEDS_TIME: Final = "Ein Abfahrtstag verlangt eine Abfahrtszeit."
+TARGET_NEEDS_A_FIELD: Final = "Ziel oder Abfahrt angeben."
 WEEKDAYS: Final = (
     "Mo",
     "Di",
@@ -533,13 +534,15 @@ class IntentService:
             case SetMode(vehicle=key) | SetBoost(vehicle=key):
                 keys = [key]
             case SetTarget(vehicle=key, target_soc_pct=soc, departure=departure, departure_on=day):
+                self._require_vehicle(key)  # vor den Bereichen: ein unbekanntes Fahrzeug ist 404
                 if soc is not None and not TARGET_SOC_MIN <= soc <= TARGET_SOC_MAX:
                     raise Rejected([f"Ziel-SOC „{soc}“ liegt außerhalb von 20–100 %."])
                 if departure is not None and DEPARTURE_PATTERN.fullmatch(departure) is None:
                     raise Rejected([f"Abfahrt „{departure}“ ist keine Uhrzeit (HH:MM)."])
                 if day is not None and departure is None:
                     raise Rejected([DEPARTURE_DATE_NEEDS_TIME])
-                keys = [key]
+                if soc is None and departure is None:
+                    raise Rejected([TARGET_NEEDS_A_FIELD])
             case SetAssignment(wallbox=wallbox, vehicle=key):
                 if wallbox not in self._cfg.wallboxes:
                     raise UnknownTarget(f"Unbekannte Wallbox „{wallbox}“.")
@@ -547,8 +550,11 @@ class IntentService:
             case SetPriority(priority=priority):
                 keys = priority
         for key in keys:
-            if key not in self._cfg.vehicles:
-                raise UnknownTarget(f"Unbekanntes Fahrzeug „{key}“.")
+            self._require_vehicle(key)
+
+    def _require_vehicle(self, key: str) -> None:
+        if key not in self._cfg.vehicles:
+            raise UnknownTarget(f"Unbekanntes Fahrzeug „{key}“.")
 
     async def apply(
         self,

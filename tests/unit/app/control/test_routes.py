@@ -679,6 +679,31 @@ def test_target_of_an_unknown_vehicle_is_404(client, auth) -> None:
     assert response.json()["detail"] == "Unbekanntes Fahrzeug „zoe“."
 
 
+def test_unknown_vehicle_with_bad_target_is_404(client, auth, fake_client) -> None:
+    operator = login_as(client, auth, "operator")
+    response = client.put(
+        "/api/control/vehicles/zoe/target",
+        json={"target_soc_pct": 15, "departure": "7 Uhr"},
+        headers=operator,
+    )
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Unbekanntes Fahrzeug „zoe“."
+    assert fake_client.sent == []
+
+
+def test_empty_target_request_is_rejected(client, auth, fake_client, audit) -> None:
+    operator = login_as(client, auth, "operator")
+    response = client.put(
+        "/api/control/vehicles/tesla/target",
+        json={"target_soc_pct": None, "departure": None},
+        headers=operator,
+    )
+    assert response.status_code == 422
+    assert response.json()["detail"] == "Ziel oder Abfahrt angeben."
+    assert fake_client.sent == []
+    assert [e for e in audit.recent() if e.action.startswith("intent.")] == []
+
+
 # --- Automatik für Ziel und Abfahrt (Plan 5b, Präzisierung 12) -------------------------------
 
 

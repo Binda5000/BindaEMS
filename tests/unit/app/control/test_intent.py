@@ -732,6 +732,23 @@ async def test_target_of_an_unknown_vehicle_is_unknown(
     assert fake_client.sent == []
 
 
+async def test_unknown_vehicle_is_checked_before_the_ranges(
+    service: IntentService, fake_client: FakeCoreClient
+) -> None:
+    with pytest.raises(UnknownTarget):
+        await service.apply(SetTarget("zoe", 15, "7 Uhr"), actor="admin", source="ui")
+    assert fake_client.sent == []
+
+
+async def test_target_without_target_and_departure_is_rejected_and_not_audited(
+    service: IntentService, fake_client: FakeCoreClient, audit: AuditLog
+) -> None:
+    with pytest.raises(Rejected) as rejected:
+        await service.apply(SetTarget("tesla", None, None), actor="anna", source="ui")
+    assert rejected.value.details == ["Ziel oder Abfahrt angeben."]
+    assert fake_client.sent == [] and audit.recent() == []
+
+
 def recorder(service: IntentService) -> list[tuple[str, datetime | None]]:
     """Meldet einen Rückruf für die Bedienung von Ziel und Abfahrt an und sammelt seine Aufrufe."""
     calls: list[tuple[str, datetime | None]] = []
