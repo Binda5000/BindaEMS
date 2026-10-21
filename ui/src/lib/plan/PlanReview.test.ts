@@ -1,4 +1,4 @@
-import { render, screen, within } from '@testing-library/svelte';
+import { cleanup, render, screen, within } from '@testing-library/svelte';
 import type { LineSeriesOption } from 'echarts/charts';
 import { describe, expect, it, vi } from 'vitest';
 import { ApiError } from '$lib/api/errors';
@@ -226,6 +226,15 @@ describe('Karte Plan gegen Ist (heute)', () => {
 		).toBeTruthy();
 		expect(screen.queryByRole('table')).toBeNull();
 		expect(screen.queryByRole('img')).toBeNull();
+	});
+
+	it('says where the plans come from', () => {
+		const note = 'Plan zeigt das Archiv der app, auch Pläne, die der core nicht bekommen hat.';
+		render(PlanReview, { review: BOTH, soc: SOC, error: null, palette });
+		expect(screen.getByText(note)).toBeTruthy();
+		cleanup();
+		render(PlanReview, { review: EMPTY, soc: SOC, error: null, palette });
+		expect(screen.getByText(note)).toBeTruthy();
 	});
 
 	it('shows the error text instead of the server message', () => {

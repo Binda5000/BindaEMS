@@ -29,6 +29,9 @@
 		<Notice level="error">Plan gegen Ist ist nicht verfügbar.</Notice>
 	{/if}
 	{#if review}
+		<p class="muted note">
+			Plan zeigt das Archiv der app, auch Pläne, die der core nicht bekommen hat.
+		</p>
 		{#if option}
 			<EChart {option} label={TITLE} height="14rem" />
 			<div class="scroll">
@@ -64,6 +67,10 @@
 <style>
 	p {
 		margin: 0;
+	}
+
+	.note {
+		margin-bottom: 0.5rem;
 	}
 
 	.scroll {
