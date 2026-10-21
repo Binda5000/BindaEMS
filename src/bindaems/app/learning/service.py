@@ -545,9 +545,13 @@ class LoadModelService:
 
     async def run(self) -> None:
         """Beim Start die neueste brauchbare Version laden, ohne eine gleich trainieren (nach der
-        Nachholung des Wetterarchivs); dann täglich um 03:15 Uhr Ortszeit."""
+        Nachholung des Wetterarchivs); dann täglich um 03:15 Uhr Ortszeit. Eine gespeicherte
+        Entscheidung „ausgeschaltet“ oder eine fehlende bewertet der Dienst gleich neu, wenn der
+        Schalter an ist: Er könnte zwischen zwei Starts angegangen sein."""
         self._bind()
         await self._load_latest()
+        if self._needs_evaluation():
+            await self._evaluate_logged()
         if self._model is None:
             self._waiting_ready = True
             try:
@@ -560,6 +564,11 @@ class LoadModelService:
             due = next_local(now, lambda t: (t.hour, t.minute) == (TRAIN_AT.hour, TRAIN_AT.minute))
             await self._sleep((due - now).total_seconds())
             await self._train_logged()
+
+    def _needs_evaluation(self) -> bool:
+        if self._model is None or not self._settings.current().settings.learning.load_model_enabled:
+            return False
+        return self._activation is None or self._activation.reason == "disabled"
 
     async def _load_latest(self) -> None:
         try:

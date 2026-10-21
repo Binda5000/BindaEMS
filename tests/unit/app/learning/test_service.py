@@ -20,6 +20,7 @@ from bindaems.app.forecast.archive import ForecastArchive, RecordValue
 from bindaems.app.forecast.load import LoadForecastService, LoadProfile, LoadSample, build_profile
 from bindaems.app.history.influx import InfluxQueryError, Series
 from bindaems.app.learning import service as service_module
+from bindaems.app.learning.activation import decide
 from bindaems.app.learning.backtest import BacktestResult, DaySums
 from bindaems.app.learning.features import (
     BASE_FEATURES,
@@ -702,6 +703,29 @@ async def test_loaded_version_keeps_its_decision(
     assert env.service.component_status().message == "Lastmodell aktiv"
 
 
+async def test_start_reevaluates_a_disabled_decision_when_switched_on(
+    make_env: Callable[..., Env], registry: ModelRegistry, real_model: TrainedModel
+) -> None:
+    entry = registry.add(
+        real_model,
+        trained_at=NOW - DAY,
+        data_from=NOW - 30 * DAY,
+        data_to=NOW - DAY,
+        samples=1234,
+        backtest=None,
+    )
+    off = decide({}, None, enabled=False, has_model=True, today=TODAY)
+    registry.decide(entry.id, off.as_json(), False, NOW - DAY)  # beim Ausschalten gespeichert
+    env = make_env(stop_after=1)  # der Schalter ist an
+    with pytest.raises(StopScheduler):
+        await env.service.run()
+    stored = registry.get(entry.id)
+    assert stored is not None and stored.decision is not None
+    assert stored.decision["reason"] == "too_few_days"  # neu bewertet, nicht „disabled“
+    assert stored.decided_at == NOW
+    assert env.service.status()["activation"]["reason"] == "too_few_days"
+
+
 async def test_evaluate_uses_switch_from_settings(
     env: Env, trainer: Trainer, settings_service: SettingsService, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -923,7 +947,8 @@ async def test_unreadable_stored_decision_is_ignored(
         await env.service.run()
     assert not env.service.active()
     activation = env.service.status()["activation"]
-    assert (activation["reason"], activation["decided_at"]) == ("too_few_days", None)
+    # die unlesbare Entscheidung gilt als fehlend: der Dienst bewertet beim Start neu
+    assert (activation["reason"], activation["decided_at"]) == ("too_few_days", NOW.isoformat())
 
 
 # --- Nacharbeit 1 -------------------------------------------------------------------------
