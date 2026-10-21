@@ -18,7 +18,9 @@ from bindaems.app.planning.triggers import (
     peak_rose,
     settings_relevant,
     soc_deviates,
+    vehicles_core,
     vehicles_fingerprint,
+    vehicles_soft,
 )
 from bindaems.shared.control import ChargeMode, Intent, VehicleIntent
 from bindaems.shared.settings import FeedInSettings, PlanningSettings, RuntimeSettings
@@ -155,11 +157,21 @@ def test_target_change_triggers_but_soc_drift_does_not():
         {"target": 90.0},
         {"departure_at": "2026-10-18T05:00:00+00:00"},
         {"wallbox": "evcs"},
-        {"charge_limit_pct": 70.0},
-        {"soc_pct": None, "soc_source": "assumed"},  # Ladestand angenommen
     ):
         moved = replace(old, vehicles=fingerprint_of(vehicle_health("tesla", **change)))
         assert changed(old, moved) == ["vehicles"], change
+
+
+def test_charge_limit_and_soc_source_are_soft_changes():
+    """Ladelimit und „Ladestand angenommen“ lösen in ``changed`` nicht aus; der Dienst drosselt
+    sie (``vehicles_soft``, K15)."""
+    base = fingerprint_of(vehicle_health("tesla"))
+    old = Fingerprint(None, 0, None, None, base)
+    for change in ({"charge_limit_pct": 70.0}, {"soc_pct": None, "soc_source": "assumed"}):
+        moved = fingerprint_of(vehicle_health("tesla", **change))
+        assert changed(old, replace(old, vehicles=moved)) == [], change
+        assert vehicles_core(moved) == vehicles_core(base)
+        assert vehicles_soft(moved) != vehicles_soft(base)
 
 
 def test_car_entering_or_leaving_planned_mode_triggers():

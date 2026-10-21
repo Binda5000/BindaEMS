@@ -51,6 +51,7 @@ from bindaems.app.planning.plausibility import check_plan
 from bindaems.app.planning.process import OUTER_TIMEOUT_S, Solver, solve_in_subprocess
 from bindaems.app.planning.store import PlanStore
 from bindaems.app.planning.triggers import (
+    VEHICLE_REPLAN_MIN_S,
     WATCH_S,
     ExpectedCars,
     Fingerprint,
@@ -61,6 +62,7 @@ from bindaems.app.planning.triggers import (
     settings_relevant,
     soc_deviates,
     vehicles_fingerprint,
+    vehicles_soft,
 )
 from bindaems.app.planning.vehicles import PlanVehicleInput, expected_vehicles, planned_vehicles
 from bindaems.app.prices.service import PriceService
@@ -221,6 +223,10 @@ class PlanningService:
         # zuletzt „vehicles“ angefordert hat (Plan 5b, Präzisierung 10)
         self._inputs: PlanInputs | None = None
         self._expected_requested: ExpectedCars | None = None
+        # Ladelimit und Quelle des Ladestands (``vehicles_soft``), mit denen zuletzt „vehicles“
+        # angefordert wurde, und wann; ``None`` bis zur ersten Prüfung bzw. Anforderung
+        self._limits_seen: tuple[Any, ...] | None = None
+        self._limits_at: datetime | None = None
 
     def current(self) -> Plan | None:
         """Der zuletzt erzeugte Plan, auch wenn er abgelaufen ist."""
@@ -342,14 +348,20 @@ class PlanningService:
             vehicles=vehicles,
             support_pct=self._support_pct(),
         )
-        for trigger in changed(old, new):
+        triggers = changed(old, new)
+        for trigger in triggers:
             self.request(trigger)
+        vehicles_requested = "vehicles" in triggers
         if self._cars_unseen and intent is not None and _trusted(intent.version, health):
             # Der letzte Plan entstand ohne die Autos in „Geplant“; Health bestätigt die Absicht
             # jetzt, auch wenn sich der Stand der Autos nicht geändert hat (Ruling R23)
             self._cars_unseen = False
             self.request("vehicles")
+            vehicles_requested = True
         if self._expected_changed(health, intent):
+            self.request("vehicles")
+            vehicles_requested = True
+        if self._limits_due(vehicles, now, planned=vehicles_requested):
             self.request("vehicles")
         plan = self._plan
         if plan is not None:
@@ -362,6 +374,30 @@ class PlanningService:
             if plan.valid_at(now) and peak_rose(plan, peak_kw):
                 self.request("month_peak")
         return new
+
+    def _limits_due(self, vehicles: tuple[Any, ...], now: datetime, *, planned: bool) -> bool:
+        """Ist ein Lauf wegen Ladelimit oder Quelle des Ladestands fällig? Höchstens alle
+        ``VEHICLE_REPLAN_MIN_S`` s. Verglichen wird mit dem Stand der letzten Anforderung
+        „vehicles“, nicht mit der Prüfung davor: Eine gedrosselte Änderung geht so nicht
+        verloren, sondern löst aus, sobald die Zeit um ist und der Stand noch abweicht. Fordert
+        die Prüfung ohnehin „vehicles“ an (``planned``), rechnet der Lauf mit dem Stand von
+        jetzt."""
+        soft = vehicles_soft(vehicles)
+        if planned:
+            self._limits_seen, self._limits_at = soft, now
+            return False
+        if self._limits_seen is None:
+            self._limits_seen = soft  # erste Prüfung: der Lauf „start“ kennt den Stand
+            return False
+        if soft == self._limits_seen:
+            return False
+        if (
+            self._limits_at is not None
+            and (now - self._limits_at).total_seconds() < VEHICLE_REPLAN_MIN_S
+        ):
+            return False
+        self._limits_seen, self._limits_at = soft, now
+        return True
 
     def _expected_changed(self, health: Mapping[str, Any] | None, intent: Intent | None) -> bool:
         """Hat sich die Menge der erwarteten Autos gegenüber den Eingangsdaten des letzten Plans

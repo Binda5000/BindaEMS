@@ -26,6 +26,12 @@ WATCH_S: Final = 30.0
 TICK_DELAY: Final = timedelta(minutes=1)
 SOC_DEVIATION_PP: Final = 5.0
 PEAK_RISE_KW: Final = 0.05
+# Ladelimit und Quelle des Ladestands flattern (der Tesla meldet sie wechselnd): Ein Lauf
+# deswegen höchstens alle 5 min; Menge der Autos, Ziel und Abfahrt planen sofort
+VEHICLE_REPLAN_MIN_S: Final = 300.0
+# Felder eines Eintrags von ``vehicles_fingerprint`` bis einschließlich Abfahrt; danach folgen
+# die gedrosselten Felder (Ladestand angenommen, Ladelimit)
+_CORE_FIELDS: Final = 5
 
 
 @dataclass(frozen=True)
@@ -46,6 +52,10 @@ def changed(old: Fingerprint | None, new: Fingerprint) -> list[PlanTrigger]:
     """Auslöser aus zwei Fingerabdrücken, in der Reihenfolge Preise, PV-, Lastprognose, Autos,
     Einstellungen (geänderte Unterstützungsschwelle).
 
+    Autos lösen nur aus, wenn sich die Menge, Wallbox, Anstecken, Ziel oder Abfahrt ändern
+    (``vehicles_core``); Ladelimit und Quelle des Ladestands drosselt der Dienst
+    (``vehicles_soft``, ``VEHICLE_REPLAN_MIN_S``).
+
     Neue Preise heißt: ein anderer letzter Slot oder mehr ``primary``-Slots (Ersatzpreise
     ersetzt). Weniger ``primary``-Slots löst nicht aus, denn das Fenster wandert mit dem
     aktuellen Slot und verliert dabei jede Viertelstunde einen. Ohne alten Fingerabdruck (erste
@@ -60,7 +70,7 @@ def changed(old: Fingerprint | None, new: Fingerprint) -> list[PlanTrigger]:
         result.append("pv_forecast")
     if new.load_issued != old.load_issued:
         result.append("load_forecast")
-    if new.vehicles != old.vehicles:
+    if vehicles_core(new.vehicles) != vehicles_core(old.vehicles):
         result.append("vehicles")
     if new.support_pct != old.support_pct:
         result.append("settings")
@@ -100,6 +110,17 @@ def vehicles_fingerprint(
             )
         )
     return tuple(sorted(entries, key=lambda item: str(item[0])))
+
+
+def vehicles_core(vehicles: tuple[Any, ...]) -> tuple[Any, ...]:
+    """Der Teil des Fingerabdrucks der Autos, der sofort neu plant: Menge der Autos, Wallbox,
+    angesteckt, Ziel und Abfahrt."""
+    return tuple(entry[:_CORE_FIELDS] for entry in vehicles)
+
+
+def vehicles_soft(vehicles: tuple[Any, ...]) -> tuple[Any, ...]:
+    """Der gedrosselte Teil: je Auto „Ladestand angenommen“ und Ladelimit, mit dem Schlüssel."""
+    return tuple((entry[0], *entry[_CORE_FIELDS:]) for entry in vehicles)
 
 
 ExpectedCars = tuple[tuple[str, datetime | None, datetime, float], ...]

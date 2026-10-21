@@ -809,6 +809,79 @@ async def test_support_threshold_change_requests_a_plan(service_with):
     assert calls[1].support_soc_pct == 60.0
 
 
+def _planned_tesla(live, **changes) -> Intent:
+    """Health mit dem Tesla in „Geplant“ (``changes`` wie bei ``vehicle_health``) und die
+    passende Absicht."""
+    live.health = planned_health(vehicle_health("tesla", **changes), version=3)
+    return Intent(version=3, vehicles={"tesla": VehicleIntent(mode=ChargeMode.PLANNED)})
+
+
+async def test_charge_limit_flapping_replans_at_most_every_five_minutes(service_with, live, clock):
+    """Wechselt das Ladelimit alle 30 s über 10 min, plant der Dienst höchstens alle 5 min neu:
+    die erste Änderung sofort, die nächste nach 300 s (330 s, 630 s liegt dahinter)."""
+    intent = _planned_tesla(live, charge_limit_pct=80.0)
+    calls: list[PlanInputs] = []
+    steps = {"n": 0}
+
+    async def sleep(seconds: float) -> None:
+        clock.advance(timedelta(seconds=seconds))
+        steps["n"] += 1
+        limit = 70.0 if steps["n"] % 2 else 80.0
+        live.health = planned_health(vehicle_health("tesla", charge_limit_pct=limit), version=3)
+        await asyncio.sleep(0.005)
+
+    service = service_with(solver=recording(calls), sleep=sleep, intent=lambda: intent)
+    async with running(service):
+        await until(lambda: steps["n"] >= 20)  # 10 min
+    assert 2 <= triggers(calls).count("vehicles") <= 3
+    assert triggers(calls)[0] == "start"
+
+
+async def test_throttled_charge_limit_change_is_replanned_after_five_minutes(
+    service_with, live, clock
+):
+    """Eine gedrosselte Änderung geht nicht verloren: Weicht der Fingerabdruck nach 5 min noch
+    vom zuletzt geplanten ab, plant der Dienst dann neu."""
+    intent = _planned_tesla(live, charge_limit_pct=80.0)
+    calls: list[PlanInputs] = []
+    service = service_with(solver=recording(calls), sleep=fast_sleep(), intent=lambda: intent)
+    async with running(service):
+        await until(lambda: len(calls) == 1)
+        await asyncio.sleep(0.05)
+        _planned_tesla(live, charge_limit_pct=70.0)
+        await until(lambda: len(calls) == 2)  # die erste Änderung gleich
+        clock.advance(timedelta(seconds=60))
+        _planned_tesla(live, charge_limit_pct=60.0)
+        await asyncio.sleep(0.1)
+        assert len(calls) == 2  # gedrosselt
+        clock.advance(timedelta(seconds=239))
+        await asyncio.sleep(0.1)
+        assert len(calls) == 2  # 299 s seit dem letzten Lauf
+        clock.advance(timedelta(seconds=2))
+        await until(lambda: len(calls) == 3)
+        await asyncio.sleep(0.1)  # danach ist der Fingerabdruck geplant: keine weitere Anfrage
+    assert triggers(calls) == ["start", "vehicles", "vehicles"]
+    assert [inputs.vehicles[0].limit_pct for inputs in calls] == [80.0, 70.0, 60.0]
+
+
+async def test_target_change_replans_immediately(service_with, live, clock):
+    """Ziel und Abfahrt gehören nicht zur Drosselung: Die zweite Zieländerung 40 s nach der
+    ersten plant sofort neu."""
+    intent = _planned_tesla(live, target=80.0)
+    calls: list[PlanInputs] = []
+    service = service_with(solver=recording(calls), sleep=fast_sleep(), intent=lambda: intent)
+    async with running(service):
+        await until(lambda: len(calls) == 1)
+        await asyncio.sleep(0.05)
+        _planned_tesla(live, target=90.0)
+        await until(lambda: len(calls) == 2)
+        clock.advance(timedelta(seconds=40))
+        _planned_tesla(live, target=85.0)
+        await until(lambda: len(calls) == 3)
+    assert triggers(calls) == ["start", "vehicles", "vehicles"]
+    assert [inputs.vehicles[0].target_soc_pct for inputs in calls] == [80.0, 90.0, 85.0]
+
+
 async def test_untrusted_health_does_not_flap_the_vehicles_trigger(service_with, live):
     """Fällt Health kurz weg (Neustart des core), ist das keine Änderung der Autos."""
     live.health = planned_health(vehicle_health("tesla"), version=3)
