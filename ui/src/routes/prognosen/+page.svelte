@@ -17,6 +17,14 @@
 	/** Solange ein Training läuft, wird der Stand in diesem Takt abgefragt. */
 	const TRAINING_POLL_MS = 5000;
 
+	/** Die Abfrage im Takt ruht, solange der Tab verborgen ist (wie bei `Resource`, `lib/activity.ts`). */
+	function poll(refresh: () => void): () => void {
+		const timer = setInterval(() => {
+			if (document.visibilityState !== 'hidden') refresh();
+		}, TRAINING_POLL_MS);
+		return () => clearInterval(timer);
+	}
+
 	// Zeitraum der Güte und des Verlaufs in Tagen; die Abfragen lesen ihn beim Laden
 	let days = $state(14);
 	const learning = new Resource((o) => api.learningStatus(o), { retryMs: RETRY_MS });
@@ -55,19 +63,18 @@
 			return;
 		}
 		wasRunning = true;
-		const timer = setInterval(() => void learning.refresh(true), TRAINING_POLL_MS);
-		return () => clearInterval(timer);
+		return poll(() => void learning.refresh(true));
 	});
 
 	let starting = $state(false);
 	let message = $state<string | null>(null);
+	let messageLevel = $state<'error' | 'info'>('error');
 
 	// Fahrverhalten: Solange eine Berechnung läuft, wird der Stand abgefragt, bis sie fertig ist
 	const drivingRunning = $derived(driving.data?.running ?? false);
 	$effect(() => {
 		if (!drivingRunning) return;
-		const timer = setInterval(() => void driving.refresh(true), TRAINING_POLL_MS);
-		return () => clearInterval(timer);
+		return poll(() => void driving.refresh(true));
 	});
 
 	let recomputing = $state(false);
@@ -100,6 +107,8 @@
 		try {
 			await api.trainLoadModel();
 		} catch (error) {
+			// 409: Es läuft schon ein Training. Das ist kein Fehler, sondern ein Hinweis.
+			messageLevel = error instanceof ApiError && error.status === 409 ? 'info' : 'error';
 			message = error instanceof ApiError ? error.detail : 'Unbekannter Fehler';
 		}
 		try {
@@ -116,6 +125,7 @@
 		error={learning.error}
 		{admin}
 		{message}
+		{messageLevel}
 		{starting}
 		onTrain={train}
 	/>

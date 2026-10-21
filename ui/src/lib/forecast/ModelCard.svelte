@@ -13,12 +13,22 @@
 		admin: boolean;
 		/** Meldung zur Taste (Fehler beim Start) */
 		message?: string | null;
+		/** Stufe der Meldung: ein Training, das schon läuft, ist ein Hinweis, kein Fehler */
+		messageLevel?: 'error' | 'info';
 		/** Der Start läuft gerade (zwischen Klick und Antwort) */
 		starting?: boolean;
 		onTrain: () => void;
 	}
 
-	let { status, error, admin, message = null, starting = false, onTrain }: Props = $props();
+	let {
+		status,
+		error,
+		admin,
+		message = null,
+		messageLevel = 'error',
+		starting = false,
+		onTrain
+	}: Props = $props();
 
 	const running = $derived(starting || (status?.training.running ?? false));
 </script>
@@ -56,7 +66,7 @@
 			<p class="muted">Training läuft …</p>
 		{/if}
 		{#if message}
-			<Notice level="error">{message}</Notice>
+			<Notice level={messageLevel}>{message}</Notice>
 		{/if}
 	{:else if !error}
 		<p class="muted">Lädt …</p>

@@ -192,6 +192,45 @@ it('zeigt, wenn schon ein Training läuft (409)', async () => {
 	expect(await screen.findByText('Training läuft schon.')).toBeInTheDocument();
 });
 
+it('zeigt die Ablehnung mit 409 als Hinweis, nicht als Fehler', async () => {
+	api.trainLoadModel.mockRejectedValue(new ApiError(409, 'Training läuft schon.'));
+	render(Page);
+	await fireEvent.click(await screen.findByRole('button', { name: 'Jetzt neu trainieren' }));
+	const notice = (await screen.findByText('Training läuft schon.')).closest('.notice');
+	expect(notice).toHaveClass('info');
+	expect(notice).toHaveTextContent('Hinweis:');
+});
+
+it('zeigt andere Fehler beim Start des Trainings als Fehler', async () => {
+	api.trainLoadModel.mockRejectedValue(new ApiError(500, 'Start fehlgeschlagen'));
+	render(Page);
+	await fireEvent.click(await screen.findByRole('button', { name: 'Jetzt neu trainieren' }));
+	const notice = (await screen.findByText('Start fehlgeschlagen')).closest('.notice');
+	expect(notice).toHaveClass('error');
+});
+
+it('ruht mit der Abfrage im Takt, solange der Tab verborgen ist', async () => {
+	api.learningStatus.mockResolvedValue(learningStatus({ training: training(true) }));
+	api.drivingStatus.mockResolvedValue(driving({ running: true }));
+	const visibility = vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('hidden');
+	try {
+		render(Page);
+		await vi.advanceTimersByTimeAsync(0);
+		expect(api.learningStatus).toHaveBeenCalledTimes(1);
+		expect(api.drivingStatus).toHaveBeenCalledTimes(1);
+		await vi.advanceTimersByTimeAsync(20_000);
+		expect(api.learningStatus).toHaveBeenCalledTimes(1);
+		expect(api.drivingStatus).toHaveBeenCalledTimes(1);
+		// sichtbar: die Abfrage im Takt läuft weiter
+		visibility.mockReturnValue('visible');
+		await vi.advanceTimersByTimeAsync(5000);
+		expect(api.learningStatus.mock.calls.length).toBeGreaterThan(1);
+		expect(api.drivingStatus.mock.calls.length).toBeGreaterThan(1);
+	} finally {
+		visibility.mockRestore();
+	}
+});
+
 it('fragt den Stand alle 5 s ab, solange das Training läuft, und lädt danach die Güte neu', async () => {
 	api.learningStatus
 		.mockResolvedValueOnce(learningStatus({ training: training(true) }))
