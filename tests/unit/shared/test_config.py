@@ -907,6 +907,18 @@ def test_channel_scale_required_for_unit_10() -> None:
     assert CoeChannel(node=56, analog=4, unit=10, scale=100).scale == 100
 
 
+@pytest.mark.parametrize("unit", [-1, 256])
+def test_channel_unit_out_of_range_is_rejected(unit: int) -> None:
+    # die Einheit ist ein Byte im Paket
+    with pytest.raises(ValidationError):
+        CoeChannel(node=56, analog=4, unit=unit, scale=10)
+
+
+@pytest.mark.parametrize("unit", [0, 7, 255])
+def test_channel_unit_in_range_is_accepted(unit: int) -> None:
+    assert CoeChannel(node=56, analog=4, unit=unit, scale=10).unit == unit
+
+
 @pytest.mark.parametrize("scale", [0, -1])
 def test_channel_scale_must_be_positive(scale: float) -> None:
     with pytest.raises(ValidationError):

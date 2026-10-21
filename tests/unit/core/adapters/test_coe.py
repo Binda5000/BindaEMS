@@ -294,6 +294,40 @@ async def test_send_error_restarts_session_with_zero_held(coe_env: CmiEnv) -> No
     assert env.port.sent[0][0] == offset_packet(0.0, node=60, output=1)  # trotz Freigabe: 0
 
 
+async def test_permit_revoke_survives_oserror(coe_env: CmiEnv) -> None:
+    from structlog.testing import capture_logs
+
+    env = coe_env()
+    await env.start()
+    env.adapter.permit(env.mono() + 100)
+    env.adapter.set_offset(2.0)
+
+    def broken(data: bytes, addr: tuple[str, int]) -> None:
+        raise OSError("Netzwerk nicht erreichbar")
+
+    env.port.sendto = broken  # type: ignore[method-assign]
+    with capture_logs() as logs:
+        env.adapter.permit(float("-inf"))  # darf den Zyklus nicht stören
+    assert env.adapter.held_k == 0.0  # der Wert ist trotzdem zurückgenommen
+    warnings = [entry for entry in logs if entry["log_level"] == "warning"]
+    assert len(warnings) == 1 and "Netzwerk nicht erreichbar" in str(warnings[0])
+
+
+async def test_held_offset_unchanged_when_send_fails(coe_env: CmiEnv) -> None:
+    env = coe_env()
+    await env.start()
+    env.adapter.permit(env.mono() + 100)
+    env.adapter.set_offset(1.0)
+
+    def broken(data: bytes, addr: tuple[str, int]) -> None:
+        raise OSError("Netzwerk nicht erreichbar")
+
+    env.port.sendto = broken  # type: ignore[method-assign]
+    with pytest.raises(OSError):
+        env.adapter.set_offset(2.0)
+    assert env.adapter.held_k == 1.0  # nicht gesendet, also nicht gehalten
+
+
 async def test_cancel_closes_port_and_disconnects(coe_env: CmiEnv) -> None:
     env = coe_env()
     await env.receive(FIXTURE, CMI)
@@ -451,6 +485,18 @@ async def test_stale_disconnect_and_recovery_are_logged(coe_env: CmiEnv) -> None
     assert warnings == ["Seit 181 Sekunden ist kein gültiges CoE-Paket vom C.M.I. eingegangen."]
     assert infos == ["Adapter verbunden", "Adapter verbunden"]
     assert env.adapter.health().last_error == warnings[0]
+
+
+async def test_stale_log_has_no_retry(coe_env: CmiEnv) -> None:
+    from structlog.testing import capture_logs
+
+    env = coe_env()
+    with capture_logs() as logs:
+        await env.receive(FIXTURE, CMI)
+        env.advance(181)
+        await env.tick()
+    [entry] = [e for e in logs if e["event"] == "Adapter-Fehler"]
+    assert "retry_in_s" not in entry  # es folgt keine Wiederholung: die Quelle meldet sich selbst
 
 
 async def test_unit_mismatch_is_logged_once(coe_env: CmiEnv) -> None:

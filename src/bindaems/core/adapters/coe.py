@@ -164,7 +164,16 @@ class CoeAdapter:
         self._permit_until = until_monotonic
         if (expired or self._clock() >= until_monotonic) and self._held_k != 0.0:
             self._held_k = 0.0  # Rücknahme: nicht erst auf den Lapse-Loop warten
-            self._send()
+            try:
+                self._send()
+            except OSError as exc:
+                # Ein Sendefehler darf den Zyklus nicht stören; der Lapse-Loop und die Sitzung
+                # senden die 0 weiter, bis sie hinausgeht.
+                log.warning(
+                    "CoE: Rücknahme der Freigabe nicht gesendet",
+                    adapter=self.name,
+                    grund=f"{type(exc).__name__}: {exc}",
+                )
         self._permit_changed.set()
 
     def permit_for(self, seconds: float) -> None:
@@ -186,8 +195,9 @@ class CoeAdapter:
             return False
         if not math.isfinite(value_k) or abs(value_k) > self._cfg.max_offset_k:
             return False
-        self._held_k = value_k if self._clock() < self._permit_until else 0.0
-        self._send()
+        held_k = value_k if self._clock() < self._permit_until else 0.0
+        self._send(held_k)
+        self._held_k = held_k  # erst nach dem Senden: scheitert es, bleibt der alte Wert
         return True
 
     async def run(self) -> None:
@@ -277,7 +287,7 @@ class CoeAdapter:
                     "vom C.M.I. eingegangen."
                 )
                 self._health.last_error = error
-                self._status.failed(error, 0.0)
+                self._status.failed(error)
 
     @property
     def _destination(self) -> tuple[str, int]:
@@ -286,11 +296,14 @@ class CoeAdapter:
     def _packet(self, value: float) -> bytes:
         return offset_packet(value, node=self._cfg.own_node, output=self._cfg.own_output)
 
-    def _send(self) -> None:
+    def _send(self, held_k: float | None = None) -> None:
+        """Sendet den gehaltenen Versatz (``held_k``, sonst der gehaltene Wert), ohne Freigabe 0."""
         port = self._port
         if port is None:
             return
-        value = self._held_k if self._clock() < self._permit_until else 0.0
+        if held_k is None:
+            held_k = self._held_k
+        value = held_k if self._clock() < self._permit_until else 0.0
         port.sendto(self._packet(value), self._destination)
         self._last_sent_k = value + 0.0  # aus -0.0 wird 0.0
         self._publish_sent()

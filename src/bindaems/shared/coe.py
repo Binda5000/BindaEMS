@@ -7,6 +7,7 @@ Werten steht 0 oder 1 im ersten Byte des Rohwerts (Plan 6a, Präzisierung 1).
 
 from __future__ import annotations
 
+import math
 import struct
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -80,7 +81,12 @@ def decode(data: bytes) -> list[CoeValue]:
 
 
 def offset_packet(offset_k: float, *, node: int, output: int) -> bytes:
-    """Das Paket mit einem Sollwertversatz in Kelvin: analog, Einheit 1, in Zehnteln."""
+    """Das Paket mit einem Sollwertversatz in Kelvin: analog, Einheit 1, in Zehnteln.
+
+    Ein Versatz, der keine endliche Zahl ist, lehnt es mit ``ValueError`` ab.
+    """
+    if not math.isfinite(offset_k):
+        raise ValueError("Versatz ist keine endliche Zahl.")
     return encode([CoeValue(node, output, True, 1, round(offset_k * 10))])
 
 

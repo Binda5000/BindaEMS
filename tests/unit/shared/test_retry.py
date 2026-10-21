@@ -34,3 +34,14 @@ def test_status_log_reports_changes_and_throttles_repeats() -> None:
     ]
     assert all(e["adapter"] == "evcs" for e in logs)
     assert logs[1]["log_level"] == "warning" and logs[1]["retry_in_s"] == 1.0
+
+
+def test_status_log_failed_without_retry_leaves_the_field_out() -> None:
+    from structlog.testing import capture_logs
+
+    from bindaems.shared.retry import StatusLog
+
+    status = StatusLog("klima")
+    with capture_logs() as logs:
+        status.failed("Quelle verstummt")
+    assert "retry_in_s" not in logs[0] and logs[0]["error"] == "Quelle verstummt"

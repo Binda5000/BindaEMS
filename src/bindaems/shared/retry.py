@@ -50,10 +50,17 @@ class StatusLog:
         self._connected = True
         self._last_error = None
 
-    def failed(self, error: str, retry_in_s: float) -> None:
+    def failed(self, error: str, retry_in_s: float | None = None) -> None:
+        """Meldet einen Fehler; ``retry_in_s`` ist die Wartezeit bis zum nächsten Versuch, ohne
+        Wiederholung (die Quelle muss sich selbst melden) ``None``."""
         now = self._monotonic()
         if error != self._last_error or now - self._last_logged >= self.REPEAT_S:
-            log.warning("Adapter-Fehler", adapter=self._adapter, error=error, retry_in_s=retry_in_s)
+            if retry_in_s is None:
+                log.warning("Adapter-Fehler", adapter=self._adapter, error=error)
+            else:
+                log.warning(
+                    "Adapter-Fehler", adapter=self._adapter, error=error, retry_in_s=retry_in_s
+                )
             self._last_error = error
             self._last_logged = now
         self._connected = False

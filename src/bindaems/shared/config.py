@@ -248,13 +248,14 @@ class CoeChannel(_Model):
     """Ein Wert, den das C.M.I. per CoE sendet: Knoten plus Analog- oder Digitalausgang.
 
     ``unit`` ist die CoE-Einheit des Analogwerts. Einheit 1 (°C) und 7 (K) kommen in Zehnteln, für
-    jede andere Einheit ist ``scale`` (Teiler) Pflicht (Plan 6a, Entscheidung 10).
+    jede andere Einheit ist ``scale`` (Teiler) Pflicht (Plan 6a, Entscheidung 10). Die Einheit ist
+    ein Byte im Paket, also 0 bis 255.
     """
 
     node: Annotated[int, Field(ge=1, le=62)]
     analog: Annotated[int, Field(ge=1, le=64)] | None = None
     digital: Annotated[int, Field(ge=1, le=64)] | None = None
-    unit: int | None = None
+    unit: Annotated[int, Field(ge=0, le=255)] | None = None
     scale: Annotated[float, Field(gt=0, allow_inf_nan=False)] | None = None
 
     @model_validator(mode="after")

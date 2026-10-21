@@ -26,6 +26,12 @@ def test_offset_packet_rounds_to_tenths() -> None:
     assert decode(offset_packet(0.0, node=60, output=64))[0] == CoeValue(60, 64, True, 1, 0)
 
 
+@pytest.mark.parametrize("value", [float("inf"), float("-inf"), float("nan")])
+def test_offset_packet_rejects_non_finite(value: float) -> None:
+    with pytest.raises(ValueError, match=r"Versatz ist keine endliche Zahl\."):
+        offset_packet(value, node=60, output=1)
+
+
 def test_digital_value_in_first_byte() -> None:
     packet = encode([CoeValue(56, 5, False, 43, 1)])
     assert packet[4:] == bytes([56, 4, 0, 43, 1, 0, 0, 0])
