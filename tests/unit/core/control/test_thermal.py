@@ -562,6 +562,20 @@ def test_end_of_hint_wins_over_a_due_more_step_from_minus_two(
     assert strategy.step(obs(now=1900, export_w=900)) == ThermalWish(0, "thermal_less")
 
 
+def test_hint_end_restarts_the_export_timer(strategy: ThermalStrategy) -> None:
+    less = dict(hint="weniger", export_w=0.0)
+    for now in (0, 600, 1200):
+        strategy.step(obs(now=now, **less))  # -1, -2
+    strategy.step(obs(now=1300, hint="weniger", export_w=900))  # die Einspeisung steht an
+    # Zyklus 1: der Hinweis endet, die Wartezeit der Einspeisung wäre um
+    assert strategy.step(obs(now=1900, export_w=900)) == ThermalWish(0, "thermal_less")
+    # Zyklus 2, eine Sekunde später: weiter 0, nicht gleich +1
+    assert strategy.step(obs(now=1901, export_w=900)).steps == 0
+    # die volle Wartezeit der Strategie läuft ab dem Ende des Hinweises
+    assert strategy.step(obs(now=1900 + INTERVAL - 1, export_w=900)).steps == 0
+    assert strategy.step(obs(now=1900 + INTERVAL, export_w=900)) == ThermalWish(1, "thermal_more")
+
+
 def import_backoff(strategy: ThermalStrategy, **changes: Any) -> dict[int, float]:
     """Wann (Sekunden nach dem Start) der Wunsch 3 mit Netzbezug 400 W auf 2, 1, 0 fällt."""
     start = climb(strategy, 3)

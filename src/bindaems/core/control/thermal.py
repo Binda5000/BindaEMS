@@ -296,6 +296,9 @@ class ThermalStrategy:
         if self._wish.steps >= 0 or obs.hint == "weniger":
             return False
         self._wish = ThermalWish(0, "thermal_less")
+        # Die Einspeisung muss danach die volle Wartezeit anstehen: sonst folgte im nächsten
+        # Zyklus gleich +1 (−2 → 0 → +1).
+        self._export_since = obs.now
         return True
 
 
