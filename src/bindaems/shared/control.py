@@ -59,6 +59,9 @@ PERSISTENT_KINDS: frozenset[CommandKind] = frozenset(
 
 CommandValue = float | bool | None
 
+TARGET_SOC_MIN: Final = 20  # Grenzen von ``VehicleIntent.target_soc_pct`` in %
+TARGET_SOC_MAX: Final = 100
+
 
 @dataclass(frozen=True)
 class Command:
@@ -144,7 +147,7 @@ class VehicleIntent(_Model):
     mode: ChargeMode = ChargeMode.PV
     boost_until: AwareDatetime | None = None
     wallbox: str | None = None
-    target_soc_pct: Annotated[int, Field(ge=20, le=100)] = 80
+    target_soc_pct: Annotated[int, Field(ge=TARGET_SOC_MIN, le=TARGET_SOC_MAX)] = 80
     departure: Annotated[str, Field(pattern=r"^([01]\d|2[0-3]):[0-5]\d$")] = "07:00"
     departure_on: date | None = None
 

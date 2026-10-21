@@ -552,7 +552,7 @@ async def test_slow_training_times_out(make_env: Callable[..., Env], trainer: Tr
     finally:
         trainer.gate.set()
     assert result.outcome == "failed"
-    assert result.text == "Training fehlgeschlagen: Zeitlimit von 0.05 s überschritten"
+    assert result.text == "Training fehlgeschlagen: Zeitlimit von 0,05 s überschritten"
     assert env.registry.latest_usable() is None
 
 

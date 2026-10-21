@@ -31,7 +31,7 @@ from typing import Final
 
 from bindaems.core.actuators.thermal import ThermalActuator
 from bindaems.core.adapters.coe import CoeAdapter, DatagramPort, PortFactory, coe_source, udp_port
-from bindaems.core.control.actuator import Confirmation
+from bindaems.core.control.actuator import OFFSET_SAME_K, Confirmation
 from bindaems.core.control.thermal import thermal_mode
 from bindaems.core.safety.ranges import check_range
 from bindaems.core.state.store import StateStore
@@ -412,7 +412,7 @@ class _ThermalSteps:
 
     def _echo_zero(self, snap: Snapshot) -> bool:
         echo = self._session.echo(snap)
-        return echo is not None and abs(echo) < 0.05
+        return echo is not None and abs(echo) < OFFSET_SAME_K
 
     def _record(self, title: str, status: Status, detail: str) -> None:
         self._session.record(Finding(ITEM, title, status, detail))

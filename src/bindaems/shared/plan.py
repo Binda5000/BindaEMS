@@ -246,6 +246,12 @@ class IntentPlan(_Model):
         return next((slot for slot in self.slots if slot.start == wanted), None)
 
 
+def high_percentile(prices: Sequence[float]) -> float:
+    """Das 80. Perzentil (inklusiv) der ``prices``: ab diesem Preis ist ein Slot teuer. Der Plan
+    und der Ersatzplan rechnen damit gleich; es braucht mindestens zwei Preise."""
+    return quantiles(prices, n=10, method="inclusive")[HIGH_PERCENTILE_INDEX]
+
+
 def expensive_import_ct(slots: Sequence[PlanSlot]) -> float | None:
     """Der Bezugspreis, ab dem ein Slot zu den teuersten 20 % des Plans gehört: das 80. Perzentil
     von ``import_ct`` über alle ``slots`` (wie ``expensive_today`` im Ersatzplan, inklusiv).
@@ -255,7 +261,7 @@ def expensive_import_ct(slots: Sequence[PlanSlot]) -> float | None:
     prices = [slot.import_ct for slot in slots]
     if len(prices) < THERMAL_MIN_SLOTS or min(prices) == max(prices):
         return None
-    return quantiles(prices, n=10, method="inclusive")[HIGH_PERCENTILE_INDEX]
+    return high_percentile(prices)
 
 
 def thermal_hint(slot: PlanSlot, expensive_ct: float | None) -> ThermalHint:

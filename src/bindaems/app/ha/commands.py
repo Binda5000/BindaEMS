@@ -23,8 +23,6 @@ import structlog
 from bindaems.app.audit import Source
 from bindaems.app.control.intent import (
     DEPARTURE_PATTERN,
-    TARGET_SOC_MAX,
-    TARGET_SOC_MIN,
     Change,
     ConflictAgain,
     CoreDown,
@@ -44,7 +42,7 @@ from bindaems.app.core_link import CoreUnavailableError
 from bindaems.app.ha.entities import AUTOMATIC, GUEST_MODE_LABELS, MODE_LABELS, object_id
 from bindaems.app.settings.service import SettingsVersion, VersionConflictError
 from bindaems.shared.config import Config
-from bindaems.shared.control import SupportIntent
+from bindaems.shared.control import TARGET_SOC_MAX, TARGET_SOC_MIN, SupportIntent
 from bindaems.shared.numbers import de
 from bindaems.shared.plan import PlanTrigger
 from bindaems.shared.timeutil import Clock

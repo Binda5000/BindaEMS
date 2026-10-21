@@ -110,6 +110,13 @@ def test_min_soc_above_reserve_warns(cfg) -> None:
     assert res["min_soc"].message == "Victron-Min-SOC 30 % liegt über der USV-Reserve 20 %."
 
 
+def test_min_soc_texts_use_the_decimal_comma(cfg) -> None:
+    below = by_id(run_selfcheck(snap(GOOD | {"ess.min_soc_pct": 19.5}, kind=STATE), cfg, fresh, T0))
+    above = by_id(run_selfcheck(snap(GOOD | {"ess.min_soc_pct": 20.5}, kind=STATE), cfg, fresh, T0))
+    assert below["min_soc"].message == "Victron-Min-SOC 19,5 % liegt unter der USV-Reserve 20 %."
+    assert above["min_soc"].message == "Victron-Min-SOC 20,5 % liegt über der USV-Reserve 20 %."
+
+
 @pytest.mark.parametrize(
     ("mode", "expected"),
     [

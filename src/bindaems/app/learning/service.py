@@ -47,6 +47,7 @@ from bindaems.app.learning.weather import WeatherArchive
 from bindaems.app.schedule import next_local
 from bindaems.app.settings.service import SettingsService, SettingsVersion
 from bindaems.app.status import ComponentStatus
+from bindaems.shared.numbers import de
 from bindaems.shared.timeutil import LOCAL_TZ, SLOT, Clock, ensure_utc, slot_start
 
 log = structlog.get_logger(__name__)
@@ -312,7 +313,7 @@ class LoadModelService:
             )
         except TimeoutError:
             log.warning("Training des Lastmodells dauert zu lange", limit_s=self._timeout_s)
-            return self._failed(now, f"Zeitlimit von {self._timeout_s:g} s überschritten")
+            return self._failed(now, f"Zeitlimit von {de(self._timeout_s)} s überschritten")
         except TrainingError as exc:
             log.warning("Lastmodell nicht trainiert", error=str(exc))
             return self._failed(now, str(exc))

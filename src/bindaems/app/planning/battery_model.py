@@ -26,7 +26,6 @@ SLOT_H: Final = 0.25
 LIMIT_NOW_SLOTS: Final = (
     4  # so viele Slots gelten die BMS-Grenzen (CCL/DCL); ``inputs`` führt sie mit
 )
-EV_ON_W: Final = 1.0  # ab dieser Leistung lädt ein Auto im Slot; darunter ist es Rundung
 
 
 @dataclass(frozen=True)

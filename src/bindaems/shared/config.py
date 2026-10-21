@@ -10,7 +10,7 @@ from __future__ import annotations
 import ipaddress
 import re
 from pathlib import Path
-from typing import Annotated, Any, Literal, Self
+from typing import Annotated, Any, Final, Literal, Self
 
 import yaml
 from pydantic import (
@@ -329,6 +329,9 @@ class ThermalStrategyConfig(_Model):
     less_max_steps: Annotated[int, Field(ge=0, le=6)] = 2
 
 
+THERMAL_DEFAULT_LABEL: Final = "Klimaanlage"  # ``CoeOffsetConfig.label`` ohne eigenen Namen
+
+
 class CoeOffsetConfig(_Model):
     """Klimaanlage an einer UVR610: Sollwertversatz per CoE V2 über das C.M.I. (Plan 6a).
 
@@ -338,7 +341,7 @@ class CoeOffsetConfig(_Model):
     """
 
     kind: Literal["coe_offset"]
-    label: str = "Klimaanlage"
+    label: str = THERMAL_DEFAULT_LABEL
     cmi_host: ipaddress.IPv4Address
     port: Annotated[int, Field(ge=1, le=65535)] = 5442
     listen_port: Annotated[int, Field(ge=1, le=65535)] = 5442

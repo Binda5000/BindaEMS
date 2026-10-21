@@ -13,7 +13,7 @@ from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime
 from decimal import ROUND_HALF_UP, Decimal
 
-from bindaems.app.planning.battery_model import EV_ON_W, SimStep, params_of
+from bindaems.app.planning.battery_model import SimStep, params_of
 from bindaems.app.planning.inputs import PlanInputs
 from bindaems.app.planning.plausibility import (
     MENTION_W,
@@ -22,12 +22,11 @@ from bindaems.app.planning.plausibility import (
     export_while_charged_kwh,
     pays_off,
 )
-from bindaems.app.planning.vehicles import charge_window
+from bindaems.app.planning.vehicles import EV_ON_W, KWH_EPS, charge_window
 from bindaems.shared.plan import BatteryIntent, BatteryIntentKind, PlanSlot, PlanVehicle, Reason
 from bindaems.shared.timeutil import LOCAL_TZ, SLOT, ensure_utc
 
 Params = Mapping[str, float | str]
-_KWH_EPS = 1e-9  # Gleitkommafehler beim Vergleich von Energien der Autos
 
 
 def _de(value: float, digits: int) -> str:
@@ -282,7 +281,7 @@ def _car_reasons(
                     params={"name": car.name, "um": _hhmm(car.arrival_at), "soc": car.soc_pct},
                 )
             )
-        binds = car.grid_allowed_kwh < car.horizon_need_kwh - _KWH_EPS
+        binds = car.grid_allowed_kwh < car.horizon_need_kwh - KWH_EPS
         for index in range(count):
             if watts[index] - from_pv[index] >= MENTION_W:
                 result[index].append(

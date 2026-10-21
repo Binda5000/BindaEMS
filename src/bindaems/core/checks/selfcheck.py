@@ -10,6 +10,7 @@ from typing import Literal
 from bindaems.core.checks.values import evcs_mode, fmt, number, schedule_days
 from bindaems.shared.config import Config, EvcsConfig
 from bindaems.shared.domain import Snapshot
+from bindaems.shared.numbers import de
 
 Status = Literal["ok", "warn", "fail", "unknown"]
 
@@ -90,11 +91,15 @@ def _min_soc(snap: Snapshot, cfg: Config) -> CheckResult:
         return CheckResult("min_soc", "unknown", "Victron-Min-SOC nicht verfügbar.")
     if v < reserve:
         return CheckResult(
-            "min_soc", "fail", f"Victron-Min-SOC {v:g} % liegt unter der USV-Reserve {reserve:g} %."
+            "min_soc",
+            "fail",
+            f"Victron-Min-SOC {de(v)} % liegt unter der USV-Reserve {de(reserve)} %.",
         )
     if v > reserve:
         return CheckResult(
-            "min_soc", "warn", f"Victron-Min-SOC {v:g} % liegt über der USV-Reserve {reserve:g} %."
+            "min_soc",
+            "warn",
+            f"Victron-Min-SOC {de(v)} % liegt über der USV-Reserve {de(reserve)} %.",
         )
     return CheckResult("min_soc", "ok", "Victron-Min-SOC entspricht der USV-Reserve.")
 

@@ -15,7 +15,6 @@ from math import ceil
 from typing import Final
 
 from bindaems.app.planning.battery_model import (
-    EV_ON_W,
     SLOT_H,
     SimStep,
     params_of,
@@ -24,6 +23,7 @@ from bindaems.app.planning.battery_model import (
 )
 from bindaems.app.planning.explain import reasons_for
 from bindaems.app.planning.inputs import PlanInputs
+from bindaems.app.planning.vehicles import EV_ON_W, KWH_EPS, cars_charging
 from bindaems.shared.plan import (
     PLAN_VALID,
     BatteryIntent,
@@ -38,7 +38,6 @@ from bindaems.shared.timeutil import LOCAL_TZ, SLOT, ensure_utc
 REACHABLE_TOL_KWH: Final = 0.1  # bis zu dieser Fehlmenge gilt das Ziel als erreichbar
 _TENTH_EPS = 1e-9  # Gleitkommafehler vor dem Aufrunden auf 0,1 kW
 _SOC_EPS = 1e-9  # Gleitkommafehler vor dem Aufrunden auf ganze Prozent und beim Bedarf null
-_KWH_EPS = 1e-9  # Gleitkommafehler beim Vergleich von Energien der Autos
 
 
 def _resimulate(
@@ -65,7 +64,7 @@ def _car_powers(inputs: PlanInputs, ev_w: Sequence[Mapping[str, float]]) -> list
         return [{} for _ in inputs.slots]
     if len(ev_w) != len(inputs.slots):
         raise ValueError("Ladeleistung der Autos muss zu den Slots passen")
-    return [{key: w for key, w in powers.items() if w >= EV_ON_W} for powers in ev_w]
+    return [cars_charging(powers) for powers in ev_w]
 
 
 def vehicle_summary(
@@ -105,10 +104,10 @@ def vehicle_summary(
             after_h = (car.departure_at - horizon_end).total_seconds() / 3600
         charged = planned + min(max(0.0, car.need_kwh - planned), car.max_w / 1000 * after_h)
         expected = car.soc_pct + charged * car.efficiency / car.usable_kwh * 100
-        if charged >= car.need_kwh - _KWH_EPS:
+        if charged >= car.need_kwh - KWH_EPS:
             expected = min(expected, max(car.target_soc_pct, car.soc_pct))
         charging = [index for index, w in enumerate(watts) if w >= EV_ON_W]
-        remains = after_h > 0 and planned < car.need_kwh - _KWH_EPS
+        remains = after_h > 0 and planned < car.need_kwh - KWH_EPS
         finish_at = inputs.slots[charging[-1]].start + SLOT if charging and not remains else None
         result.append(
             PlanVehicle(
@@ -125,7 +124,7 @@ def vehicle_summary(
                 shortfall_kwh=shortfall,
                 expected_soc_pct=min(100.0, expected),
                 finish_at=finish_at,
-                reachable=shortfall <= REACHABLE_TOL_KWH + _KWH_EPS,
+                reachable=shortfall <= REACHABLE_TOL_KWH + KWH_EPS,
                 expected=car.expected,
                 arrival_at=car.arrival_at,
             )

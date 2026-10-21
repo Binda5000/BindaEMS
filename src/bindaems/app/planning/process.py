@@ -19,6 +19,7 @@ from typing import Final
 
 from bindaems.app.planning.inputs import PlanInputs
 from bindaems.app.planning.optimizer import OptimizerResult, solve
+from bindaems.shared.numbers import de
 from bindaems.shared.plan import SolverStatus
 
 Solver = Callable[[PlanInputs], Awaitable[OptimizerResult]]
@@ -93,7 +94,7 @@ async def solve_in_subprocess(
         await asyncio.shield(start)
         sender.close()  # sonst sähe der Elternprozess das Ende des Kindes nicht (EOF)
         if not await asyncio.to_thread(receiver.poll, timeout_s):
-            return _failure("timeout", started, f"keine Antwort nach {timeout_s:g} s")
+            return _failure("timeout", started, f"keine Antwort nach {de(timeout_s)} s")
         try:
             result = await asyncio.to_thread(receiver.recv)
         except EOFError:

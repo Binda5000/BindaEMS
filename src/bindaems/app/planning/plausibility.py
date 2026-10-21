@@ -27,7 +27,7 @@ from bindaems.shared.timeutil import LOCAL_TZ, ensure_utc
 BALANCE_TOL_W: Final = 1.0  # Bilanz und Leistungsgrenzen
 SOC_TOL_KWH: Final = 0.01
 R1_TOL_KWH: Final = 0.1  # Einspeisung nach einem ``NETZLADEN``-Slot, solange der Akku geladen ist
-EMPTY_TOL_KWH: Final = 0.1  # so nah an der Reserve gilt der Akku der Nachrechnung als leer
+EMPTY_TOL_KWH: Final = R1_TOL_KWH  # so nah an der Reserve gilt der Akku der Nachrechnung als leer
 # Über dieser Entladung zählt ein späterer Slot als Nutzen des Netzladens (Nachtrag 18.10.2026:
 # jede Entladung über der Toleranz der Bilanz; der Optimierer kennt keine Mindestentladung).
 USED_ABOVE_W: Final = BALANCE_TOL_W

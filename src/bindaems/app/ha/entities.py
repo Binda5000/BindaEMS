@@ -18,8 +18,6 @@ from bindaems import __version__
 from bindaems.app.control.intent import (
     ASSIGNMENT_OVERRIDE,
     DEPARTURE_PATTERN,
-    TARGET_SOC_MAX,
-    TARGET_SOC_MIN,
 )
 from bindaems.app.core_link import LiveState
 from bindaems.app.forecast.service import ForecastService
@@ -41,13 +39,21 @@ from bindaems.app.prices.store import PriceStore
 from bindaems.shared.config import (
     ASSIGNMENT_AUTOMATIC,
     HA_THERMAL_PREFIX,
+    THERMAL_DEFAULT_LABEL,
     Config,
     EvcsConfig,
     HaMqttConfig,
     WallboxConfig,
     ha_object_id,
 )
-from bindaems.shared.control import ChargeMode, Intent, VehicleIntent, _local_instant
+from bindaems.shared.control import (
+    TARGET_SOC_MAX,
+    TARGET_SOC_MIN,
+    ChargeMode,
+    Intent,
+    VehicleIntent,
+    _local_instant,
+)
 from bindaems.shared.domain import Value
 from bindaems.shared.numbers import finite_number
 from bindaems.shared.plan import BatteryIntentKind, Plan, PlanSlot, PlanVehicle
@@ -97,7 +103,6 @@ NO_VEHICLE: Final = "keins"
 UNCLEAR: Final = "unclear"  # ``assignment`` in Health
 # Betriebsarten der Klimaanlage wie ``core.control.thermal.ThermalMode`` (Health ``thermal``)
 THERMAL_MODES: Final = ("heizen", "kuehlen", "lueften", "aus", "unbekannt")
-THERMAL_DEFAULT_LABEL: Final = "Klimaanlage"  # ``CoeOffsetConfig.label`` ohne eigenen Namen
 THERMAL_SHORT_NAME: Final = "Klima"  # so beginnen die Sensoren des Standardnamens
 
 

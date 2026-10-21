@@ -26,6 +26,9 @@ from bindaems.shared.control import CommandKind, CommandValue
 from bindaems.shared.domain import Alarm, Snapshot
 from bindaems.shared.numbers import finite_number
 
+# So weit darf das Echo des Versatzes abweichen und gilt doch als derselbe Wert (K, Plan 6a,
+# Entscheidung 9); die Safety-Schicht und der Prüfer der Klimaanlage nehmen dieselbe Zahl.
+OFFSET_SAME_K: Final = 0.05
 # Bestätigt ist ein Wert, wenn der zurückgelesene höchstens so weit abweicht (Einheit der Art).
 _TOLERANCE: Final = {
     CommandKind.CURRENT: 0.4,  # A
@@ -33,7 +36,7 @@ _TOLERANCE: Final = {
     CommandKind.MAX_DISCHARGE: 1.0,  # W
     CommandKind.MIN_SOC: 0.5,  # %
     CommandKind.CHARGE_LIMIT: 0.5,  # % (Plan 4b, Präzisierung 9)
-    CommandKind.SETPOINT_OFFSET: 0.05,  # K (Plan 6a, Entscheidung 9)
+    CommandKind.SETPOINT_OFFSET: OFFSET_SAME_K,  # K
 }
 # Rundungsfehler bei Zahlen wie 6.4 − 6.0 sollen den Rand des Bands nicht ausschließen.
 _ROUNDING: Final = 1e-9

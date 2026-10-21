@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Literal
+from typing import Final, Literal
 
 from bindaems.core.safety.types import SafetyContext, finite_number
 from bindaems.shared.config import Config, EvcsConfig, PhaseMap, VehicleCommandLimits
@@ -23,6 +23,9 @@ from bindaems.shared.control import (
 )
 
 Family = Literal["evcs", "victron", "tesla", "thermal"]
+
+# Name der Obergrenze in ``HardLimits.setpoint_limits``, die ein Netzladen im Plan klemmt
+GRID_CHARGE_CAP: Final = "maximaler Netzladesetpoint"
 
 _VICTRON_KINDS = frozenset(
     {CommandKind.GRID_SETPOINT, CommandKind.MAX_DISCHARGE, CommandKind.MIN_SOC}
@@ -114,7 +117,7 @@ class HardLimits:
         phase_limit_a = cfg.grid.fuse_a - cfg.grid.fuse_margin_a
         voltage_v = cfg.grid.voltage_nominal_v
         setpoint_limits = [
-            (cfg.victron.max_grid_charge_setpoint_w, "maximaler Netzladesetpoint"),
+            (cfg.victron.max_grid_charge_setpoint_w, GRID_CHARGE_CAP),
             (3 * voltage_v * phase_limit_a, "Absicherung"),
         ]
         if cfg.grid.max_import_kw is not None:

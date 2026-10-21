@@ -19,6 +19,8 @@ from tests.plan_helpers import (
 from bindaems.app.learning.driving_profile import VehicleProfile, WeekdayProfile
 from bindaems.app.planning.inputs import SlotInput
 from bindaems.app.planning.vehicles import (
+    EV_ON_W,
+    cars_charging,
     expected_vehicles,
     grid_allowed,
     horizon_need,
@@ -607,3 +609,8 @@ def test_plugged_allowance_is_unchanged_by_arrival_support() -> None:
     assert grid_allowed([car], slots, ["tesla"]) == pytest.approx({"tesla": 4.0})
     late = car.model_copy(update={"expected": True, "arrival_at": at(START) + HOUR})
     assert grid_allowed([late], slots, ["tesla"]) == pytest.approx({"tesla": 7.0})
+
+
+def test_cars_charging_drops_cars_below_the_on_threshold() -> None:
+    powers = {"a": EV_ON_W, "b": EV_ON_W - 0.01, "c": 0.0, "d": 4140.0}
+    assert cars_charging(powers) == {"a": EV_ON_W, "d": 4140.0}

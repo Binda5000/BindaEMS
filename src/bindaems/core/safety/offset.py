@@ -11,8 +11,8 @@ Vorhanden ist, je nach Betriebsart des Aktors:
   Echo bleibt also 0; gegen das Echo zeigte das Entscheidungslog sonst jeden zweiten Schritt als
   abgelehnt.
 
-Ein Echo, das höchstens ``SAME_K`` vom Wert abweicht, zählt als dieser Wert (die Toleranz der
-Bestätigung im Aktor); ein Echo bis ``SAME_K`` um 0 zählt als 0.
+Ein Echo, das höchstens ``OFFSET_SAME_K`` vom Wert abweicht, zählt als dieser Wert (die Toleranz der
+Bestätigung im Aktor); ein Echo bis ``OFFSET_SAME_K`` um 0 zählt als 0.
 
 Die Zeit ist monoton und kommt in Sekunden als Argument. Sie lebt nur im Speicher: Nach einem
 Neustart sendet der Adapter ohnehin 0.
@@ -21,13 +21,11 @@ Neustart sendet der Adapter ohnehin 0.
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import Final
 
+from bindaems.core.control.actuator import OFFSET_SAME_K
 from bindaems.core.safety.limits import OffsetRange
 from bindaems.core.safety.types import Finding, de, finite_number, invalid_value
 from bindaems.shared.control import Command
-
-SAME_K: Final = 0.05  # so weit darf das Echo abweichen und gilt doch als derselbe Wert
 
 _SIGN = Finding("offset.step", "Vorzeichenwechsel nur über 0.")
 
@@ -60,7 +58,7 @@ class OffsetSteps:
             return _SIGN
         limits = self._ranges[actuator]
         raised_at = self._raised_at.get(actuator)
-        one_step = abs(value) - abs(before) <= limits.step_k + SAME_K
+        one_step = abs(value) - abs(before) <= limits.step_k + OFFSET_SAME_K
         waited = raised_at is None or now - raised_at >= limits.interval_s
         if one_step and waited:
             return None
@@ -84,7 +82,7 @@ class OffsetSteps:
     def _reference(self, actuator: str, present_k: float | None, dry_run: bool) -> float:
         """Der vorhandene Wert: im Dry-Run der zuletzt erfasste, live das Echo; sonst 0."""
         before = self._decided.get(actuator) if dry_run else finite_number(present_k)
-        if before is None or abs(before) <= SAME_K:
+        if before is None or abs(before) <= OFFSET_SAME_K:
             return 0.0
         return before
 
@@ -93,4 +91,4 @@ def _raises(value: float, before: float) -> bool:
     """Geht ``value`` dem Betrag nach über ``before`` hinaus oder auf die andere Seite von 0?"""
     if value == 0:
         return False
-    return value * before < 0 or abs(value) > abs(before) + SAME_K
+    return value * before < 0 or abs(value) > abs(before) + OFFSET_SAME_K

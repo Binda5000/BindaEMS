@@ -45,6 +45,8 @@ LATEST_START_BUFFER: Final = timedelta(minutes=15)  # Puffer vor der Abfahrt (wi
 _SLOT_H: Final = SLOT.total_seconds() / 3600
 
 PRESENCE_MIN: Final = 0.5  # ab dieser Wahrscheinlichkeit gilt ein Auto als erwartet
+EV_ON_W: Final = 1.0  # ab dieser Leistung lädt ein Auto im Slot; darunter ist es Rundung
+KWH_EPS: Final = 1e-9  # Gleitkommafehler beim Vergleich von Energien der Autos
 
 Finite = Annotated[float, Field(allow_inf_nan=False)]
 NonNegativeFinite = Annotated[float, Field(ge=0, allow_inf_nan=False)]
@@ -206,6 +208,12 @@ def grid_allowed(
             wanted -= take
         allowed[car.key] = max(0.0, wanted)
     return allowed
+
+
+def cars_charging(powers: Mapping[str, float]) -> dict[str, float]:
+    """Die Autos, die im Slot laden: Ladeleistung in W je Auto ab ``EV_ON_W``; darunter ist es
+    Rundung, und das Auto fehlt im Ergebnis."""
+    return {key: watts for key, watts in powers.items() if watts >= EV_ON_W}
 
 
 def _order(cfg: Config, intent: Intent) -> list[str]:

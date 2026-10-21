@@ -18,11 +18,9 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from math import floor
-from statistics import quantiles
 from typing import Final
 
 from bindaems.app.planning.battery_model import (
-    EV_ON_W,
     SLOT_H,
     SimStep,
     params_of,
@@ -32,14 +30,12 @@ from bindaems.app.planning.battery_model import (
 from bindaems.app.planning.inputs import PlanInputs
 from bindaems.app.planning.optimizer import grid_charge_cap_w
 from bindaems.app.planning.plausibility import R1_TOL_KWH, export_while_charged_kwh, spread_pays
-from bindaems.app.planning.vehicles import _slots_before
-from bindaems.shared.plan import BatteryIntent, BatteryIntentKind
+from bindaems.app.planning.vehicles import KWH_EPS, _slots_before, cars_charging
+from bindaems.shared.plan import BatteryIntent, BatteryIntentKind, high_percentile
 from bindaems.shared.timeutil import LOCAL_TZ, ensure_utc
 
-HIGH_PERCENTILE_INDEX: Final = 7  # 80. Perzentil aus ``quantiles(n=10)``
 SHORT_W: Final = 100.0  # ab dieser Netzleistung im teuren Slot reicht der SOC nur knapp
 ROUND_W: Final = 100.0  # Schritt der Netzladeleistung
-_KWH_EPS: Final = 1e-9  # Gleitkommafehler beim Vergleich von Energien der Autos
 
 
 def _local_day(inputs: PlanInputs, index: int) -> object:
@@ -60,7 +56,7 @@ def expensive_today(inputs: PlanInputs) -> list[int]:
     prices = [inputs.slots[i].import_ct for i in indices]
     if len(prices) < 2 or min(prices) == max(prices):
         return []
-    threshold = quantiles(prices, n=10, method="inclusive")[HIGH_PERCENTILE_INDEX]
+    threshold = high_percentile(prices)
     return [i for i in indices if inputs.slots[i].import_ct >= threshold]
 
 
@@ -113,7 +109,7 @@ def fallback_vehicles(inputs: PlanInputs) -> dict[str, list[float]]:
 
         left = car.need_kwh
         for index in range(before):
-            if left <= _KWH_EPS:
+            if left <= KWH_EPS:
                 break
             power_w = min(pv_left[index], car.max_w, max(left / SLOT_H * 1000, car.min_w))
             if power_w < car.min_w:
@@ -124,7 +120,7 @@ def fallback_vehicles(inputs: PlanInputs) -> dict[str, list[float]]:
         left = car.horizon_need_kwh - sum(watts) * SLOT_H / 1000
         cheapest = sorted(range(before), key=lambda index: (inputs.slots[index].import_ct, index))
         for index in cheapest:
-            if left <= _KWH_EPS:
+            if left <= KWH_EPS:
                 break
             current = watts[index]
             power_w = max(min(car.max_w, current + left / SLOT_H * 1000), car.min_w)
@@ -141,7 +137,7 @@ def per_slot(powers: Mapping[str, Sequence[float]], count: int) -> list[dict[str
     """Ladeleistung je Slot und Auto aus ``fallback_vehicles``; ein Auto unter ``EV_ON_W``
     fehlt im Slot."""
     return [
-        {key: watts[index] for key, watts in powers.items() if watts[index] >= EV_ON_W}
+        cars_charging({key: watts[index] for key, watts in powers.items()})
         for index in range(count)
     ]
 

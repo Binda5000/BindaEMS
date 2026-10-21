@@ -24,6 +24,8 @@ from bindaems.app.audit import AuditLog, Source
 from bindaems.app.core_link import CoreClient, CoreReply, CoreUnavailableError, LiveFeed, LiveState
 from bindaems.shared.config import Config
 from bindaems.shared.control import (
+    TARGET_SOC_MAX,
+    TARGET_SOC_MIN,
     ActuatorMode,
     ChargeMode,
     Intent,
@@ -42,8 +44,6 @@ log = structlog.get_logger(__name__)
 BOOST_DURATION: Final = timedelta(hours=12)  # der core klemmt ohnehin auf 12 h
 ASSIGNMENT_OVERRIDE: Final = "override"  # ``vehicles[].assignment`` in Health
 SUPPORT_TARGET: Final = "Akku-Unterstützung"  # Ziel im Änderungsprotokoll
-TARGET_SOC_MIN: Final = 20  # Grenzen wie ``VehicleIntent.target_soc_pct``
-TARGET_SOC_MAX: Final = 100
 DEPARTURE_PATTERN: Final = re.compile(r"([01]\d|2[0-3]):[0-5]\d")  # wie ``VehicleIntent.departure``
 DEPARTURE_DATE_NEEDS_TIME: Final = "Ein Abfahrtstag verlangt eine Abfahrtszeit."
 TARGET_NEEDS_A_FIELD: Final = "Ziel oder Abfahrt angeben."

@@ -5,7 +5,8 @@ Minimiert über den Horizont Bezug minus Einspeisung, Verschleiß beim Entladen,
 Netzladen, den Leistungspreis je Monat und die Abweichung vom vorigen Plan in den ersten Slots,
 abzüglich des Restwerts der Energie im Akku am Horizontende. Regel R1 ist hart: Nach Netzladen
 wird nichts eingespeist, solange Netzenergie im Akku sein kann, also bis der Akku wieder leer ist
-(SOC am Slotende ≤ Reserve + ``R1_EMPTY_TOL_KWH``) oder der Horizont endet.
+(SOC am Slotende ≤ untere Grenze ``min(Reserve, SOC₀)`` + ``R1_EMPTY_TOL_KWH``) oder der
+Horizont endet.
 
 Geplante Autos (``PlanInputs.vehicles``) laden je Slot vor ihrer Abfahrt ``e = pv_ev + gr_ev``,
 0 oder zwischen ``min_w`` und ``max_w``. PV deckt zuerst das Haus, dann die Autos, dann den Akku:
@@ -35,9 +36,9 @@ from typing import Any, Final
 import highspy
 import pulp
 
-from bindaems.app.planning.battery_model import EV_ON_W, SLOT_H, SimSlot, params_of, sim_slots
+from bindaems.app.planning.battery_model import SLOT_H, SimSlot, params_of, sim_slots
 from bindaems.app.planning.inputs import INERTIA_SLOTS, PlanInputs
-from bindaems.app.planning.vehicles import PlanVehicleInput, charge_window
+from bindaems.app.planning.vehicles import PlanVehicleInput, cars_charging, charge_window
 from bindaems.shared.plan import SolverStatus
 from bindaems.shared.timeutil import LOCAL_TZ, ensure_utc
 
@@ -45,7 +46,7 @@ TIME_LIMIT_S: Final = 20.0
 MIP_GAP: Final = 0.005
 SHORTFALL_CT: Final = 2000.0  # Strafe je kWh, die einem Auto bis zur Abfahrt fehlt
 R2_CT: Final = 200.0  # Strafe je kWh Netzenergie ins Auto über Regel R2
-R1_EMPTY_TOL_KWH: Final = 0.05  # Akku gilt als leer bei SOC ≤ Reserve + Toleranz (Regel R1)
+R1_EMPTY_TOL_KWH: Final = 0.05  # Akku gilt als leer bei SOC ≤ untere Grenze + Toleranz (Regel R1)
 
 _KWH: Final = SLOT_H / 1000  # W über einen Slot → kWh
 
@@ -97,7 +98,7 @@ def ev_power_w(result: OptimizerResult) -> list[dict[str, float]]:
     """Ladeleistung ``e = pv_ev + gr_ev`` je Auto und Slot in W; ein Auto unter ``EV_ON_W``
     (Rundung des Solvers) fehlt im Slot."""
     return [
-        {key: pv + grid for key, (pv, grid) in flows.ev.items() if pv + grid >= EV_ON_W}
+        cars_charging({key: pv + grid for key, (pv, grid) in flows.ev.items()})
         for flows in result.flows
     ]
 
@@ -278,10 +279,11 @@ def _solve(inputs: PlanInputs, time_limit_s: float, gap: float, started: float) 
         )
 
     # Regel R1: Keine Einspeisung, solange Netzenergie im Akku sein kann. ``e_t`` = 1 heißt: Der
-    # Akku ist am Ende von Slot t leer (SOC ≤ Reserve + Toleranz). ``c_t`` ≥ 0 hält fest, dass
-    # nach Netzladen noch Netzenergie im Akku ist: Es springt bei Netzladen auf 1 und fällt erst
-    # nach einem leeren Akku wieder. ``c_t`` ist nur nach unten beschränkt, der Löser drückt es
-    # so weit wie möglich, und es bleibt stetig.
+    # Akku ist am Ende von Slot t leer (SOC ≤ untere Grenze ``min(Reserve, SOC₀)`` + Toleranz).
+    # Die Binärvariable des letzten Slots bleibt, um die Lösezeit nicht zu berühren. ``c_t`` ≥ 0
+    # hält fest, dass nach Netzladen noch Netzenergie im Akku ist: Es springt bei Netzladen auf 1
+    # und fällt erst nach einem leeren Akku wieder. ``c_t`` ist nur nach unten beschränkt, der
+    # Löser drückt es so weit wie möglich, und es bleibt stetig.
     if z:
         first = min(z)
         span = params.hi_kwh - params.lo_kwh

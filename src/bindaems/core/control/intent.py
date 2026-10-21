@@ -27,7 +27,7 @@ from typing import Any, Final, Literal
 import structlog
 
 from bindaems.core.persistence.files import read_json, write_json_atomic
-from bindaems.core.safety.limits import HardLimits
+from bindaems.core.safety.limits import GRID_CHARGE_CAP, HardLimits
 from bindaems.shared.control import ActuatorMode, ChargeMode, Intent, SupportIntent
 from bindaems.shared.numbers import de
 from bindaems.shared.plan import (
@@ -46,9 +46,6 @@ INTENT_FILE_PROBLEM: Final = (
 
 # So weit nach dem Empfang der Absicht darf ein ``boost_until`` höchstens liegen (Präzisierung 2).
 BOOST_MAX: Final = timedelta(hours=12)
-
-# Name der Obergrenze in ``HardLimits.setpoint_limits``, die ein Netzladen im Plan klemmt
-GRID_CHARGE_CAP: Final = "maximaler Netzladesetpoint"
 
 
 @dataclass(frozen=True)

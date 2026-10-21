@@ -67,7 +67,7 @@ async def test_timeout_kills_child() -> None:
     started = time.monotonic()
     result = await solve_in_subprocess(small_inputs(), timeout_s=0.5, target=sleep_forever)
     assert result.status == "timeout" and time.monotonic() - started < 5
-    assert result.flows == () and result.message is not None
+    assert result.flows == () and result.message == "keine Antwort nach 0,5 s"
     assert no_live_children()
 
 

@@ -15,6 +15,7 @@ from bindaems.shared.plan import (
     PlanVehicle,
     Reason,
     expensive_import_ct,
+    high_percentile,
     intent_plan,
     thermal_hint,
 )
@@ -393,6 +394,11 @@ def test_expensive_import_ct_is_the_80th_percentile_of_all_slots() -> None:
     slots = [s.model_copy(update={"import_ct": p}) for s, p in zip(plan.slots, prices, strict=True)]
     # quantiles(n=10, inclusive)[7] bei vier Preisen: 10 + 3 * 0.8 * 10 = 34
     assert expensive_import_ct(slots) == pytest.approx(34.0)
+
+
+def test_high_percentile_is_the_inclusive_80th_percentile() -> None:
+    # quantiles(n=10, inclusive)[7] bei 1 bis 10: 1 + 9 * 0,8 = 8,2
+    assert high_percentile([float(price) for price in range(1, 11)]) == pytest.approx(8.2)
 
 
 def test_expensive_import_ct_needs_four_slots_and_different_prices() -> None:
