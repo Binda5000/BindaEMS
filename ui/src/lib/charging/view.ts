@@ -16,6 +16,7 @@ import type {
 import {
 	DASH,
 	departureText,
+	formatDayTime,
 	formatEur,
 	formatNumber,
 	formatNumberMax,
@@ -428,6 +429,12 @@ function known(source: SocSource | null): boolean {
 	return source === 'measured' || source === 'estimated';
 }
 
+/** „07:15“, „morgen 07:15“ oder „Mi 22.10. 07:15“ für einen Zeitstempel; ohne Zeit ein Strich */
+function dayTime(iso: string, now: Date): string {
+	const ms = parseIso(iso);
+	return ms === null ? DASH : formatDayTime(new Date(ms), now);
+}
+
 /** Die Zeile, die zuerst zutrifft (Texte von Plan 4b); `null`, wenn keine zutrifft */
 function plannedText(
 	vehicle: VehicleHealth | null,
@@ -441,19 +448,20 @@ function plannedText(
 		return `Ziel erreicht (${formatSoc(soc)}).`;
 	}
 	if (car === undefined) return null; // ohne Plan weder „Fertig um“ noch „Kein Plan“
+	const now = new Date();
 	if (car !== null) {
-		const goal = `Ziel ${formatSoc(car.target_soc_pct)} bis ${departureText(car.departure_at, departureOn)}`;
+		const goal = `Ziel ${formatSoc(car.target_soc_pct)} bis ${departureText(car.departure_at, departureOn, now)}`;
 		if (!car.reachable) {
 			return `${goal} nicht erreichbar, voraussichtlich ${formatSoc(car.expected_soc_pct)}.`;
 		}
-		if (car.finish_at !== null) return `Fertig um ${formatTime(car.finish_at)} · ${goal}`;
+		if (car.finish_at !== null) return `Fertig um ${dayTime(car.finish_at, now)} · ${goal}`;
 		if (!car.soc_assumed && car.soc_start_pct >= car.target_soc_pct) {
 			return `Ziel erreicht (${formatSoc(car.soc_start_pct)}).`;
 		}
 		return null; // der Plan lädt das Auto in seinem Horizont nicht
 	}
 	if (planned?.latest_start != null) {
-		return `Kein Plan · lädt spätestens ab ${formatTime(planned.latest_start)}`;
+		return `Kein Plan · lädt spätestens ab ${dayTime(planned.latest_start, now)}`;
 	}
 	return null;
 }

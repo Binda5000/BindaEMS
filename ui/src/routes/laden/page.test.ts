@@ -377,7 +377,7 @@ it('nennt den Tag einer Abfahrt an einem Tag in der Zeile und neben dem Feld', a
 	await show(system(), dated);
 	const tesla = card('Tesla Model 3');
 	expect(
-		await within(tesla).findByText('Fertig um 16:30 · Ziel 60 % bis Fr 09.10. 17:30')
+		await within(tesla).findByText('Fertig um morgen 16:30 · Ziel 60 % bis Fr 09.10. 17:30')
 	).toBeInTheDocument();
 	const manual = within(tesla).getByRole('group', { name: 'Von Hand' });
 	expect(within(manual).getByText('am Fr 09.10.')).toBeInTheDocument();
@@ -392,6 +392,8 @@ it('zeigt eine Wallbox ohne Vorgang', async () => {
 // Demo: Der Tesla lädt „Geplant“ (Ziel 60 %, Abfahrt 17:30), der Plan lädt ihn bis 16:30; sein
 // Ladestand ist angenommen. Der e-Golf hat einen geschätzten Ladestand.
 it('zeigt „Geplant“ mit dem Plan, der Quelle des Ladestands und den Feldern', async () => {
+	vi.useFakeTimers({ toFake: ['Date'] });
+	vi.setSystemTime(new Date('2026-10-09T08:00:00Z')); // der Tag des Demo-Plans
 	await show();
 	const tesla = card('Tesla Model 3');
 	// testing-library vergleicht mit Leerzeichen statt geschützter Leerzeichen
@@ -408,6 +410,8 @@ it('zeigt „Geplant“ mit dem Plan, der Quelle des Ladestands und den Feldern'
 });
 
 it('nennt ohne gültigen Plan die späteste Startzeit aus Health', async () => {
+	vi.useFakeTimers({ toFake: ['Date'] });
+	vi.setSystemTime(new Date('2026-10-09T08:00:00Z')); // der Tag des Demo-Plans
 	await show(system(), baseIntent(), boostCostJson, [], {
 		...PLAN_RESPONSE,
 		plan: { ...PLAN_RESPONSE.plan!, valid: false }
@@ -450,9 +454,12 @@ it('nach Übernehmen holt die Seite den Plan neu', async () => {
 it('zeigt „Fertig um“ erst wieder, wenn der Plan zu Ziel und Abfahrt in Health passt', async () => {
 	// Health meldet nach „Übernehmen“ das neue Ziel 80 %, der Plan rechnet noch mit 60 %: Die
 	// Zeile „Fertig um …“ fehlt, bis die app neu geplant hat; die Seite fragt höchstens alle 10 s.
+	vi.useFakeTimers({ toFake: ['Date'] });
+	vi.setSystemTime(new Date('2026-10-09T08:00:00Z')); // der Tag des Demo-Plans
 	await show();
 	api.setTarget.mockResolvedValue(reply());
-	vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+	vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] });
+	vi.setSystemTime(new Date('2026-10-09T08:00:00Z'));
 	const health = system().core.health!;
 	const before = health.vehicles.find((vehicle) => vehicle.id === 'tesla')!.planned!;
 	api.system.mockResolvedValue(

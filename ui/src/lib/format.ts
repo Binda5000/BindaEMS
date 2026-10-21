@@ -181,6 +181,18 @@ export function departureText(
 	return dated ? `${weekdayDate(day)} ${time}` : time;
 }
 
+/**
+ * Ein Zeitpunkt mit Tag, wenn der nicht heute ist: „17:30“, „morgen 07:15“, sonst „Mi 22.10. 07:15“
+ * (Wiener Zeit; heute und morgen zählen nach dem Wiener Kalender von `now`).
+ */
+export function formatDayTime(at: Date, now: Date = new Date()): string {
+	const time = TIME.format(at);
+	const day = todayVienna(at);
+	const today = todayVienna(now);
+	if (day === today) return time;
+	return day === addDays(today, 1) ? `morgen ${time}` : `${weekdayDate(day)} ${time}`;
+}
+
 /** Woher die Anwesenheit eines Autos kommt; bei Home Assistant mit der eingestellten Entität */
 export function drivingSourceText(source: DrivingSource, entity?: string | null): string {
 	switch (source) {

@@ -499,7 +499,7 @@ describe('Geplant', () => {
 
 	it('nennt mit Plan, wann das Auto fertig ist', () => {
 		expect(plannedLine({ mode: 'planned', vehicle: health(), car: car(), target: 80 })).toEqual({
-			text: `Fertig um 05:45 · Ziel 80${NB}% bis 07:00`,
+			text: `Fertig um morgen 05:45 · Ziel 80${NB}% bis 07:00`,
 			notes: []
 		});
 	});
@@ -513,7 +513,7 @@ describe('Geplant', () => {
 
 	it('nennt ohne Plan die späteste Startzeit aus Health', () => {
 		expect(plannedLine({ mode: 'planned', vehicle: health(), car: null, target: 80 })?.text).toBe(
-			'Kein Plan · lädt spätestens ab 01:30'
+			'Kein Plan · lädt spätestens ab morgen 01:30'
 		);
 	});
 
@@ -531,7 +531,7 @@ describe('Geplant', () => {
 			planned: planned({ state: 'reached' })
 		});
 		expect(plannedLine({ mode: 'planned', vehicle: assumed, car: null, target: 80 })?.text).toBe(
-			'Kein Plan · lädt spätestens ab 01:30'
+			'Kein Plan · lädt spätestens ab morgen 01:30'
 		);
 	});
 
@@ -574,7 +574,7 @@ describe('Geplant', () => {
 			car: car({ target_soc_pct: 70, limit_pct: 70 }),
 			target: 80
 		});
-		expect(line?.text).toBe(`Fertig um 05:45 · Ziel 70${NB}% bis 07:00`);
+		expect(line?.text).toBe(`Fertig um morgen 05:45 · Ziel 70${NB}% bis 07:00`);
 		expect(line?.notes).toEqual([`Ladelimit im Auto 70${NB}% liegt unter dem Ziel.`]);
 		// gleicht der core das Limit an (das wirksame Ziel bleibt), gibt es den Satz nicht
 		const synced = health({ charge_limit_pct: 70 });
@@ -623,7 +623,7 @@ describe('Geplant', () => {
 				target: 80,
 				departureOn: '2026-10-12'
 			});
-			expect(line?.text).toBe(`Fertig um 05:45 · Ziel 80${NB}% bis Mo 12.10. 07:00`);
+			expect(line?.text).toBe(`Fertig um Mo 12.10. 05:45 · Ziel 80${NB}% bis Mo 12.10. 07:00`);
 			const short = car({ departure_at: monday, reachable: false, expected_soc_pct: 60 });
 			expect(
 				plannedLine({
@@ -638,11 +638,11 @@ describe('Geplant', () => {
 
 		it('nennt ihn im Zeitplan ohne Absicht ab übermorgen', () => {
 			expect(plannedLine({ mode: null, vehicle: null, car: dated, target: null })?.text).toBe(
-				`Fertig um 05:45 · Ziel 80${NB}% bis Mo 12.10. 07:00`
+				`Fertig um Mo 12.10. 05:45 · Ziel 80${NB}% bis Mo 12.10. 07:00`
 			);
 			const tomorrow = car({ departure_at: '2026-10-10T05:00:00+00:00' });
 			expect(plannedLine({ mode: null, vehicle: null, car: tomorrow, target: null })?.text).toBe(
-				`Fertig um 05:45 · Ziel 80${NB}% bis 07:00`
+				`Fertig um morgen 05:45 · Ziel 80${NB}% bis 07:00`
 			);
 		});
 	});

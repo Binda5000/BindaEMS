@@ -6,6 +6,7 @@ import {
 	formatCt,
 	formatDateTime,
 	formatDay,
+	formatDayTime,
 	formatEnergy,
 	formatEur,
 	formatNumberMax,
@@ -169,5 +170,33 @@ describe('Fahrverhalten', () => {
 		expect(suggestionText({ ...trip, target_soc_pct: null, target_confidence: null })).toBe(
 			'Vorschlag: Mo 07:15 (Konfidenz hoch)'
 		);
+	});
+});
+
+describe('formatDayTime', () => {
+	// Mi 21.10.2026, 14:00 in Wien
+	const now = new Date('2026-10-21T12:00:00Z');
+
+	it('nennt heute nur die Uhrzeit', () => {
+		expect(formatDayTime(new Date('2026-10-21T15:30:00Z'), now)).toBe('17:30');
+		expect(formatDayTime(new Date('2026-10-21T08:00:00Z'), now)).toBe('10:00'); // schon vorbei
+	});
+
+	it('nennt morgen „morgen“', () => {
+		expect(formatDayTime(new Date('2026-10-22T05:15:00Z'), now)).toBe('morgen 07:15');
+	});
+
+	it('nennt später Wochentag und Datum', () => {
+		expect(formatDayTime(new Date('2026-10-23T05:15:00Z'), now)).toBe('Fr 23.10. 07:15');
+	});
+
+	it('rechnet die Tage in Wien: kurz vor Mitternacht UTC ist schon der nächste Tag', () => {
+		// 21.10. 22:30 UTC = 22.10. 00:30 in Wien: morgen
+		expect(formatDayTime(new Date('2026-10-21T22:30:00Z'), now)).toBe('morgen 00:30');
+	});
+
+	it('kennt die Zeitumstellung (Sommerzeit endet am 25.10.2026)', () => {
+		const eve = new Date('2026-10-24T12:00:00Z'); // Sa 14:00
+		expect(formatDayTime(new Date('2026-10-25T12:00:00Z'), eve)).toBe('morgen 13:00');
 	});
 });
