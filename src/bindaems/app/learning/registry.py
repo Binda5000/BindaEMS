@@ -117,30 +117,40 @@ class ModelRegistry:
         """Legt eine neue Version an: Zeile und Modelldatei ``load-<id>.txt``.
 
         Zeile und Datei entstehen in einer Transaktion. Scheitert das Schreiben der Datei, geht die
-        Zeile mit zurück, und es bleibt weder ein Eintrag ohne Datei noch eine halbe Datei."""
+        Zeile mit zurück; scheitert die Transaktion nach dem Schreiben, wird die Datei gelöscht.
+        So bleibt weder ein Eintrag ohne Datei noch eine Datei ohne Eintrag."""
         self._directory.mkdir(parents=True, exist_ok=True)
-        with self._engine.begin() as conn:
-            result = conn.execute(
-                insert(model_registry).values(
-                    kind=KIND,
-                    trained_at=ensure_utc(trained_at),
-                    data_from=ensure_utc(data_from),
-                    data_to=ensure_utc(data_to),
-                    samples=samples,
-                    features=list(model.features),
-                    max_w=model.max_w,
-                    file="",  # folgt, sobald die Nummer feststeht
-                    backtest=backtest_json(backtest) if backtest is not None else None,
-                    importance=model.importance(),
+        written: Path | None = None  # die Datei, sobald sie steht
+        try:
+            with self._engine.begin() as conn:
+                result = conn.execute(
+                    insert(model_registry).values(
+                        kind=KIND,
+                        trained_at=ensure_utc(trained_at),
+                        data_from=ensure_utc(data_from),
+                        data_to=ensure_utc(data_to),
+                        samples=samples,
+                        features=list(model.features),
+                        max_w=model.max_w,
+                        file="",  # folgt, sobald die Nummer feststeht
+                        backtest=backtest_json(backtest) if backtest is not None else None,
+                        importance=model.importance(),
+                    )
                 )
-            )
-            entry_id = int(result.lastrowid)
-            name = f"{KIND}-{entry_id}.txt"
-            self._write(name, model.text)
-            conn.execute(
-                update(model_registry).where(model_registry.c.id == entry_id).values(file=name)
-            )
-            row = conn.execute(select(model_registry).where(model_registry.c.id == entry_id)).one()
+                entry_id = int(result.lastrowid)
+                name = f"{KIND}-{entry_id}.txt"
+                self._write(name, model.text)
+                written = self._directory / name
+                conn.execute(
+                    update(model_registry).where(model_registry.c.id == entry_id).values(file=name)
+                )
+                row = conn.execute(
+                    select(model_registry).where(model_registry.c.id == entry_id)
+                ).one()
+        except BaseException:
+            if written is not None:  # die Transaktion ging zurück, die Datei bliebe verwaist
+                written.unlink(missing_ok=True)
+            raise
         return _entry(row)
 
     def _write(self, name: str, text: str) -> None:
@@ -203,14 +213,19 @@ class ModelRegistry:
         ``decision`` (als JSON) und ``decided_at = at`` stehen danach in dieser Zeile, ``active``
         ebenso. Höchstens eine Version ist aktiv: Bei ``active=True`` werden alle anderen
         inaktiv. Bei ``active=False`` wird nur diese Zeile inaktiv, doch auch dann wird ``active``
-        überall gelöscht, denn dann gilt das Profil und keine Version ist in Gebrauch."""
+        überall gelöscht, denn dann gilt das Profil und keine Version ist in Gebrauch. Gezählt
+        werden nur Versionen dieser Art (``kind``)."""
         with self._engine.begin() as conn:
             exists = conn.execute(
-                select(model_registry.c.id).where(model_registry.c.id == entry_id)
+                select(model_registry.c.id).where(
+                    model_registry.c.id == entry_id, model_registry.c.kind == KIND
+                )
             ).first()
             if exists is None:
                 raise LookupError(f"Keine Modellversion mit der Nummer {entry_id}")
-            conn.execute(update(model_registry).values(active=False))
+            conn.execute(
+                update(model_registry).where(model_registry.c.kind == KIND).values(active=False)
+            )
             conn.execute(
                 update(model_registry)
                 .where(model_registry.c.id == entry_id)

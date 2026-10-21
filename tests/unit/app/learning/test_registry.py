@@ -3,7 +3,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
-from sqlalchemy import Engine, select, update
+from sqlalchemy import Engine, event, select, update
 
 from bindaems.app.db.schema import model_registry
 from bindaems.app.learning.backtest import BacktestResult, WeekResult
@@ -261,3 +261,39 @@ def test_other_kinds_are_ignored(
     assert registry.get(entry.id) is None
     assert registry.latest_usable() is None
     assert registry.prune(keep=0) == 0
+
+
+def test_decide_ignores_other_kinds(
+    registry: ModelRegistry, engine: Engine, model: TrainedModel
+) -> None:
+    mine = _add(registry, model, offset=0)
+    other = _add(registry, model, offset=1)
+    with engine.begin() as conn:
+        conn.execute(
+            update(model_registry)
+            .where(model_registry.c.id == other.id)
+            .values(kind="pv", active=True)
+        )
+    # die Nummer einer fremden Art gilt als unbekannt
+    with pytest.raises(LookupError):
+        registry.decide(other.id, {"active": True}, True, T0)
+    # und das Zurücksetzen von ``active`` lässt die Zeilen fremder Arten in Ruhe
+    registry.decide(mine.id, {"active": True, "reason": "better"}, True, T0)
+    with engine.connect() as conn:
+        flags = dict(conn.execute(select(model_registry.c.id, model_registry.c.active)).all())
+    assert flags == {mine.id: True, other.id: True}
+
+
+def test_failed_commit_removes_the_model_file(
+    engine: Engine, registry: ModelRegistry, directory: Path, model: TrainedModel
+) -> None:
+    def boom(conn: object) -> None:
+        raise RuntimeError("Festplatte voll")
+
+    event.listen(engine, "commit", boom)
+    with pytest.raises(RuntimeError, match="Festplatte voll"):
+        _add(registry, model)
+    event.remove(engine, "commit", boom)
+    with engine.connect() as conn:
+        assert conn.execute(select(model_registry.c.id)).all() == []
+    assert list(directory.iterdir()) == []  # weder die Datei noch eine halbe
