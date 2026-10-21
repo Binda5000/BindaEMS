@@ -1,16 +1,20 @@
-"""Strukturierte JSON-Logs auf stdout mit UTC-Zeitstempeln (auch für stdlib-Logger)."""
+"""Strukturierte JSON-Logs mit UTC-Zeitstempeln (auch für stdlib-Logger), auf stdout oder stderr."""
 
 from __future__ import annotations
 
 import logging
 import sys
+from typing import TextIO
 
 import structlog
 
 QUIET_LOGGERS = ("httpx", "httpcore", "uvicorn.error", "uvicorn.access")
 
 
-def configure_logging(level: str = "INFO") -> None:
+def configure_logging(level: str = "INFO", *, stream: TextIO | None = None) -> None:
+    """Stellt die Logs ein. ``stream`` ist ohne Angabe die Standardausgabe (core und app); die
+    Werkzeuge geben ``sys.stderr`` an, damit auf der Standardausgabe nur ihre Zeilen stehen."""
+    target = stream if stream is not None else sys.stdout
     numeric = logging.getLevelNamesMapping()[level.upper()]
     timestamper = structlog.processors.TimeStamper(fmt="iso", utc=True)
     structlog.configure(
@@ -22,10 +26,10 @@ def configure_logging(level: str = "INFO") -> None:
             structlog.processors.JSONRenderer(),
         ],
         wrapper_class=structlog.make_filtering_bound_logger(numeric),
-        logger_factory=structlog.PrintLoggerFactory(sys.stdout),
+        logger_factory=structlog.PrintLoggerFactory(target),
         cache_logger_on_first_use=False,
     )
-    handler = logging.StreamHandler(sys.stdout)
+    handler = logging.StreamHandler(target)
     handler.setFormatter(
         structlog.stdlib.ProcessorFormatter(
             foreign_pre_chain=[

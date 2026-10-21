@@ -248,3 +248,18 @@ def test_report_lists_skipped_days_below_the_table() -> None:
     ]
     plain = synthetic("winter-spread", date(2027, 1, 11), 1)
     assert "Übersprungene Tage" not in render_report(result_of(), plain)
+
+
+def test_scenario_exception_exits_2(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    def broken(*_args: object, **_kwargs: object) -> object:
+        raise ZeroDivisionError("Rechenfehler")
+
+    monkeypatch.setattr(scenario_days, "run_scenario", broken)
+    out = tmp_path / "bericht.md"
+    code = main(["--synthetisch", "winter-spread", "--anzahl", "1", "--out", str(out)])
+    assert code == 2
+    assert not out.exists()
+    error = capsys.readouterr().err
+    assert "Rechnung gescheitert" in error and "ZeroDivisionError: Rechenfehler" in error

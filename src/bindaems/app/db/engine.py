@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
 from alembic import command
 from alembic.config import Config as AlembicConfig
@@ -34,6 +35,27 @@ def open_database(path: Path) -> Engine:
 
     with engine.connect() as conn:
         conn.exec_driver_sql("PRAGMA journal_mode=WAL")  # bleibt in der Datei gespeichert
+    return engine
+
+
+def open_database_readonly(path: Path) -> Engine:
+    """Engine für ``path``, nur lesend (``mode=ro``): schreibt nichts, auch kein Verzeichnis.
+
+    Für Werkzeuge, die die Datenbank der laufenden app nur auswerten. Die Datei muss es geben;
+    Schema und WAL-Modus hat die app angelegt.
+    """
+    uri = f"file:{quote(str(path.resolve()))}?mode=ro"
+    engine = create_engine(f"sqlite:///{uri}&uri=true")
+
+    @event.listens_for(engine, "connect")
+    def _pragmas(dbapi_connection: Any, _record: Any) -> None:
+        cursor = dbapi_connection.cursor()
+        cursor.execute("PRAGMA busy_timeout=5000")
+        cursor.close()
+        dbapi_connection.create_function(
+            "ulower", 1, lambda s: s.casefold() if s is not None else None, deterministic=True
+        )
+
     return engine
 
 

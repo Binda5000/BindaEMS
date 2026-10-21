@@ -8,7 +8,7 @@ from typing import Literal
 
 from bindaems.app.prices.estimate import WINDOW, SpotHistory
 from bindaems.app.prices.store import PriceStore, StoredPrice
-from bindaems.app.settings.service import SettingsService
+from bindaems.app.settings.service import CurrentSettings
 from bindaems.app.tariff.calc import ImportPrice, feed_in_price, import_price
 from bindaems.shared.settings import RuntimeSettings
 from bindaems.shared.timeutil import SLOT, slot_start, slots_between
@@ -61,7 +61,7 @@ def _view(stored: StoredPrice, settings: RuntimeSettings) -> PriceView:
 
 
 class PriceService:
-    def __init__(self, store: PriceStore, settings: SettingsService) -> None:
+    def __init__(self, store: PriceStore, settings: CurrentSettings) -> None:
         self._store = store
         self._settings = settings
 

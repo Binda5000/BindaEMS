@@ -16,7 +16,7 @@ Auf der Standardausgabe steht je Tag eine Zeile, der Bericht geht als Markdown n
 (das Verzeichnis muss existieren und beschreibbar sein; geprüft wird vor dem Lauf). Exitcode 0
 bei „Bestanden“ (bereinigte Kosten höchstens „Victron allein“, keine Verletzung von Regel R, mit
 Autos jedes Ziel erreicht und keine Verletzung von Regel R2), 1 bei „Nicht bestanden“, 2 bei
-ungültiger Eingabe.
+ungültiger Eingabe und bei einem Fehler der Rechnung. Die Logs gehen nach stderr.
 """
 
 from __future__ import annotations
@@ -99,11 +99,16 @@ def main(argv: list[str] | None = None) -> int:
     except ValueError as exc:  # auch die Prüfung der Datei (pydantic) ist ein ValueError
         print(f"Eingabe ungültig: {exc}", file=sys.stderr)
         return 2
-    result = run_scenario(
-        data, step_slots=args.takt // SLOT_MINUTES, grid_charge=GRID_CHARGE[args.netzladen]
-    )
     try:
-        args.out.write_text(render_report(result, data), encoding="utf-8")
+        result = run_scenario(
+            data, step_slots=args.takt // SLOT_MINUTES, grid_charge=GRID_CHARGE[args.netzladen]
+        )
+        report = render_report(result, data)
+    except Exception as exc:  # ein Fehler der Rechnung ist ein Fehler des Aufrufs, kein Absturz
+        print(f"Rechnung gescheitert: {type(exc).__name__}: {exc}", file=sys.stderr)
+        return 2
+    try:
+        args.out.write_text(report, encoding="utf-8")
     except OSError as exc:
         print(f"Bericht nicht geschrieben: {exc}", file=sys.stderr)
         return 2
@@ -113,5 +118,6 @@ def main(argv: list[str] | None = None) -> int:
 
 
 if __name__ == "__main__":
-    configure_logging("WARNING")  # nur als Programm: ``main`` lässt die Logs der Tests in Ruhe
+    # nur als Programm: ``main`` lässt die Logs der Tests in Ruhe
+    configure_logging("WARNING", stream=sys.stderr)
     sys.exit(main())

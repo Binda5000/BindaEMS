@@ -11,7 +11,7 @@ Absicht, Rate-Limits und Schreibbudget eines früheren Laufs weiter, und seine E
 zu denen des neuen. Auf die Standardausgabe kommt je Kennzahl eine Zeile, dann je Informationszahl
 eine (ohne Grenze), dann je Prüfung des Szenarios eine, mit ihren Verstößen als Befund, wenn sie
 fehlschlägt; der Bericht (``report.render_report``) geht nach ``--out``. Geloggt wird erst ab
-WARNING.
+WARNING, nach stderr.
 
 Rückgabe: 0, wenn alle Kennzahlen und Prüfungen bestehen, sonst 1; 2 bei unbekanntem Szenario,
 einer Konfiguration, die fehlt, ungültig ist oder die Geräte der Szenarien nicht hat, und einem
@@ -95,7 +95,7 @@ def main(argv: list[str] | None = None) -> int:
     duration_s = None  # ohne --stunden die Dauer des Szenarios
     if args.stunden is not None:
         duration_s = min(scenario.duration_s, max(1, round(args.stunden * HOUR_S)))
-    configure_logging("WARNING")
+    configure_logging("WARNING", stream=sys.stderr)
     with tempfile.TemporaryDirectory(prefix="bindaems-sim-") as data_dir:
         result = asyncio.run(run_scenario(scenario, cfg, Path(data_dir), duration_s=duration_s))
     for figure in result.metrics.figures(cfg):

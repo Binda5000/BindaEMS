@@ -23,7 +23,7 @@ from bindaems.app.audit import AuditLog, Source
 from bindaems.app.db.schema import ledger_slot
 from bindaems.app.history.influx import RP_LONG, RP_RAW, InfluxReader, quote_ident
 from bindaems.app.prices.service import PriceService
-from bindaems.app.settings.service import SettingsService
+from bindaems.app.settings.service import CurrentSettings
 from bindaems.app.status import ComponentStatus
 from bindaems.app.tariff.calc import feed_in_price
 from bindaems.shared.domain import SlotFlows
@@ -266,7 +266,7 @@ class LedgerService:
         engine: Engine,
         clock: Clock,
         prices: PriceService,
-        settings: SettingsService,
+        settings: CurrentSettings,
         audit: AuditLog,
         sink: PointSink | None = None,
     ) -> None:

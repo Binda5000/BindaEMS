@@ -21,8 +21,10 @@ Danach rechnet ``scenario_days --tage /data/tage.json --out /data/bericht.md`` d
 
 Je Tag steht eine Zeile auf der Standardausgabe. Exitcode 2 mit der Meldung auf stderr bei
 ungültiger Konfiguration oder Eingabe, fehlender Datenbank, einer nicht schreibbaren Zieldatei und
-wenn kein Tag exportierbar ist. Die Datenbank wird nur gelesen (Schema und Einstellungen müssen
-schon da sein).
+wenn kein Tag exportierbar ist. Die Datenbank wird nur lesend geöffnet (``mode=ro``) und die
+Einstellungen direkt gelesen: Das Werkzeug legt weder eine Version noch einen Eintrag an. Ein
+relatives ``app.data_dir`` gilt relativ zur Konfigurationsdatei, nicht zum Arbeitsverzeichnis.
+Die Logs gehen nach stderr.
 """
 
 from __future__ import annotations
@@ -39,7 +41,7 @@ from sqlalchemy import Engine
 from sqlalchemy.exc import SQLAlchemyError
 
 from bindaems.app.audit import AuditLog
-from bindaems.app.db.engine import DB_FILENAME, open_database
+from bindaems.app.db.engine import DB_FILENAME, open_database_readonly
 from bindaems.app.forecast.archive import (
     Actual,
     ForecastArchive,
@@ -50,7 +52,7 @@ from bindaems.app.forecast.archive import (
 from bindaems.app.ledger.service import LedgerService
 from bindaems.app.prices.service import PriceService, PriceView
 from bindaems.app.prices.store import PriceStore
-from bindaems.app.settings.service import SettingsService
+from bindaems.app.settings.service import CurrentSettings, StoredSettings
 from bindaems.shared.config import Config, ConfigError, load_config
 from bindaems.shared.logging import configure_logging
 from bindaems.shared.timeutil import (
@@ -80,12 +82,12 @@ class _Services:
     prices: PriceService
     ledger: LedgerService
     archive: ForecastArchive
-    settings: SettingsService
+    settings: CurrentSettings
 
 
 def _services(engine: Engine, clock: Clock) -> _Services:
     audit = AuditLog(engine, clock)
-    settings = SettingsService(engine, clock, audit)
+    settings = StoredSettings(engine)  # liest nur: legt keine Version an
     prices = PriceService(PriceStore(engine, clock), settings)
     return _Services(
         prices,
@@ -302,11 +304,11 @@ def main(argv: list[str] | None = None) -> int:
     except ConfigError as exc:
         print(exc, file=sys.stderr)
         return 2
-    path = cfg.app.data_dir / DB_FILENAME
+    path = args.config.parent / cfg.app.data_dir / DB_FILENAME  # ein absolutes data_dir gewinnt
     if not path.is_file():
         print(f"Datenbank nicht gefunden: {path}", file=sys.stderr)
         return 2
-    engine = open_database(path)
+    engine = open_database_readonly(path)
     try:
         data, lines = export_days_with_lines(
             engine,
@@ -336,5 +338,6 @@ def main(argv: list[str] | None = None) -> int:
 
 
 if __name__ == "__main__":
-    configure_logging("WARNING")  # nur als Programm: ``main`` lässt die Logs der Tests in Ruhe
+    # nur als Programm: ``main`` lässt die Logs der Tests in Ruhe
+    configure_logging("WARNING", stream=sys.stderr)
     sys.exit(main())

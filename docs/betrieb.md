@@ -5204,8 +5204,13 @@ docker compose run --rm -T --entrypoint cat ems-app /data/bericht.md
   - Die **Monatsspitze** vor dem ersten Tag ist der höchste Netzbezug der Slots dieses Monats vor dem
     ersten Tag aus der Abrechnung. Ein übersprungener Tag lässt eine Lücke: Der Lauf rechnet die Tage der
     Datei hintereinander, und der höchste Bezug des fehlenden Tages fehlt im Leistungspreis.
-  - Die Datenbank wird nur gelesen. Rückgabewert 2 bei ungültiger Eingabe oder Konfiguration, fehlender
+  - Die Datenbank wird nur lesend geöffnet (`mode=ro`) und die Einstellungen direkt gelesen: Das
+    Werkzeug legt weder eine Einstellungsversion noch einen Eintrag im Protokoll an. Ein relatives
+    `app.data_dir` der Konfiguration gilt relativ zur Konfigurationsdatei, nicht zum
+    Arbeitsverzeichnis. Rückgabewert 2 bei ungültiger Eingabe oder Konfiguration, fehlender
     Datenbank, nicht schreibbarer Zieldatei und wenn kein Tag exportierbar ist.
+  - Die Logs der Werkzeuge (`export_days`, `scenario_days`, `bindaems.tools.sim`) gehen nach stderr:
+    Wer die Standardausgabe in eine Datei oder Pipe leitet, bekommt nur die Zeilen des Werkzeugs.
 - **`scenario_days`:**
   - Die Tage kommen aus `--tage DATEI` (von `export_days`) oder erzeugt aus `--synthetisch ART` (die
     Arten oben) mit `--anzahl N` Tagen. Der Bericht geht als Markdown nach `--out`. Das Verzeichnis
@@ -5215,7 +5220,8 @@ docker compose run --rm -T --entrypoint cat ems-app /data/bericht.md
     so schnell. Für die Abnahme zählt `--takt 15`; 30 Tage brauchen einige Minuten.
   - `--netzladen an|aus|einstellung` ersetzt den Schalter „Netzladen erlaubt“ der Datei;
     `einstellung` (Standard) lässt ihn, wie er beim Export stand.
-  - **Rückgabewert:** 0 bei „Bestanden“, 1 bei „Nicht bestanden“, 2 bei ungültiger Eingabe.
+  - **Rückgabewert:** 0 bei „Bestanden“, 1 bei „Nicht bestanden“, 2 bei ungültiger Eingabe und bei
+    einem Fehler der Rechnung („Rechnung gescheitert: …“ auf stderr, kein Bericht).
 
 Der Bericht „Szenario-Vergleich mit Victron allein“ hat je Tag eine Zeile mit den Spalten „Tag“,
 „Victron allein (€)“, „Optimierer (€)“, „Differenz (€)“, „Netzladen (kWh)“, „Halten (Slots)“,

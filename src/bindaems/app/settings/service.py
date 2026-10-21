@@ -9,8 +9,8 @@ from __future__ import annotations
 import threading
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import datetime
-from typing import Any
+from datetime import UTC, datetime
+from typing import Any, Protocol
 
 import structlog
 import yaml
@@ -72,11 +72,59 @@ def diff_paths(old: Any, new: Any) -> list[dict[str, Any]]:
     return changes
 
 
+class CurrentSettings(Protocol):
+    """Was Preise und Abrechnung von den Einstellungen brauchen: die aktuelle Version."""
+
+    def current(self) -> SettingsVersion: ...
+
+
 def _validation_lines(error: ValidationError) -> str:
     return "\n".join(
         f"{'.'.join(str(part) for part in item['loc']) or '<wurzel>'}: {item['msg']}"
         for item in error.errors(include_input=False, include_url=False)
     )
+
+
+def _parse_stored(data: Any, version: int) -> tuple[RuntimeSettings, bool]:
+    """Die gespeicherten Einstellungen; passen sie nicht zum Schema, die Standardwerte (False)."""
+    try:
+        return RuntimeSettings.model_validate(data), True
+    except ValidationError as exc:
+        # nichts überschreiben: der Admin soll die Daten prüfen und neu speichern
+        log.error(
+            "Gespeicherte Einstellungen ungültig, Standardwerte aktiv",
+            version=version,
+            errors=_validation_lines(exc)[:1000],
+        )
+        return RuntimeSettings(), False
+
+
+class StoredSettings:
+    """Die zuletzt gespeicherten Einstellungen, nur gelesen (für Werkzeuge an einer fremden
+    Datenbank): Anders als ``SettingsService`` legt es nie eine Version an. Ohne gespeicherte
+    Version gelten die Standardwerte, ohne etwas zu schreiben."""
+
+    def __init__(self, engine: Engine) -> None:
+        query = select(settings_version).order_by(settings_version.c.version.desc()).limit(1)
+        with engine.connect() as conn:
+            row = conn.execute(query).first()
+        if row is None:
+            self._current = SettingsVersion(
+                0,
+                datetime.fromtimestamp(0, UTC),
+                "system",
+                "system",
+                "Standardwerte",
+                RuntimeSettings(),
+            )
+            return
+        settings, _ = _parse_stored(row.data, row.version)
+        self._current = SettingsVersion(
+            row.version, row.created_at, row.actor, row.source, row.comment, settings
+        )
+
+    def current(self) -> SettingsVersion:
+        return self._current
 
 
 class SettingsService:
@@ -216,17 +264,8 @@ class SettingsService:
                     )
                 )
                 return SettingsVersion(1, now, "system", "system", "Standardwerte", defaults)
-        try:
-            settings = RuntimeSettings.model_validate(row.data)
-        except ValidationError as exc:
-            # nichts überschreiben: der Admin soll die Daten prüfen und neu speichern
-            log.error(
-                "Gespeicherte Einstellungen ungültig, Standardwerte aktiv",
-                version=row.version,
-                errors=_validation_lines(exc)[:1000],
-            )
-            self._invalid_stored = True
-            settings = RuntimeSettings()
+        settings, valid = _parse_stored(row.data, row.version)
+        self._invalid_stored = not valid
         return SettingsVersion(
             row.version, row.created_at, row.actor, row.source, row.comment, settings
         )

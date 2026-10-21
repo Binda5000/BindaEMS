@@ -13,11 +13,13 @@ from pathlib import Path
 import pytest
 import structlog
 import yaml
-from sqlalchemy import Engine
+from sqlalchemy import Engine, Table, func, select
+from sqlalchemy.exc import OperationalError
 from tests.app_helpers import ingest, price_row
 
 from bindaems.app.audit import AuditLog
-from bindaems.app.db.engine import DB_FILENAME, migrate, open_database
+from bindaems.app.db.engine import DB_FILENAME, migrate, open_database, open_database_readonly
+from bindaems.app.db.schema import audit_log, settings_version
 from bindaems.app.forecast.archive import ForecastArchive, RecordValue
 from bindaems.app.ledger.service import LedgerService
 from bindaems.app.prices.service import PriceService
@@ -93,6 +95,11 @@ def fill_day(
             issued = slot - timedelta(hours=3)
             db.archive.record("pv", issued, {slot: RecordValue(pv_w + 100, pv_w + 100)})
             db.archive.record("load", issued, {slot: RecordValue(load_w + 50, load_w + 50)})
+
+
+def _count(engine: Engine, table: Table) -> int:
+    with engine.connect() as conn:
+        return int(conn.execute(select(func.count()).select_from(table)).scalar_one())
 
 
 def run(
@@ -305,6 +312,44 @@ def test_main_fails_on_bad_config_database_and_dates(
     assert main(["--config", str(config_file), "--von", "gestern", "--bis", "2026-10-14",
                  "--out", out]) == 2  # fmt: skip
     assert main(["--config", str(config_file), *days, "--start-soc", "130"]) == 2
+
+
+def _main(config: Path, out: Path) -> int:
+    return main(
+        ["--config", str(config), "--von", "2026-10-14", "--bis", "2026-10-14", "--out", str(out)]
+    )
+
+
+def test_export_days_does_not_write(app_db: AppDb, config_file: Path, tmp_path: Path) -> None:
+    fill_day(app_db, DAY, pv_w=0, load_w=600, price_ct=10.0)
+    with app_db.engine.begin() as conn:  # eine Datenbank, die noch keine Einstellungen hat
+        conn.execute(settings_version.delete())
+    audit_before = _count(app_db.engine, audit_log)
+    assert _main(config_file, tmp_path / "tage.json") == 0
+    assert _count(app_db.engine, settings_version) == 0  # keine Version 1 angelegt
+    assert _count(app_db.engine, audit_log) == audit_before
+    # die Datenbank ist nur lesend geöffnet: Schreiben scheitert
+    engine = open_database_readonly(tmp_path / DB_FILENAME)
+    try:
+        with pytest.raises(OperationalError, match="readonly"), engine.begin() as conn:
+            conn.exec_driver_sql("DELETE FROM price_raw")
+    finally:
+        engine.dispose()
+
+
+def test_relative_data_dir_follows_the_config(
+    app_db: AppDb, config_file: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fill_day(app_db, DAY, pv_w=0, load_w=600, price_ct=10.0)
+    raw = yaml.safe_load(config_file.read_text(encoding="utf-8"))
+    raw["app"]["data_dir"] = ".."  # die Datenbank liegt eine Ebene über der Konfiguration
+    (tmp_path / "konfig").mkdir()
+    config = tmp_path / "konfig" / "config.yaml"
+    config.write_text(yaml.safe_dump(raw), encoding="utf-8")
+    elsewhere = tmp_path / "anderswo" / "tief"
+    elsewhere.mkdir(parents=True)
+    monkeypatch.chdir(elsewhere)  # nicht das Arbeitsverzeichnis, die Konfigurationsdatei zählt
+    assert _main(config, tmp_path / "tage.json") == 0
 
 
 def test_main_fails_when_output_directory_is_missing(
