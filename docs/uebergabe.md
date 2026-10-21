@@ -1,6 +1,6 @@
 # Übergabe an die nächste Session
 
-Stand: 20.10.2026. Plan 2c-1 (Laderegelung) ist umgesetzt, je Task und im Gesamtreview geprüft
+Stand: 21.10.2026. Plan 2c-1 (Laderegelung) ist umgesetzt, je Task und im Gesamtreview geprüft
 („mit Korrekturen“, keine kritischen Befunde), und die Fix-Welle danach ist umgesetzt. Er ist auf
 `main` (Stand `18c575a`, wie die Branches `ccr-e451cb4c-qeg1tm` und `ccr-9778345e-t3x44k` zu Beginn
 der folgenden Sitzung). Danach sind die EVCS-Hysterese (Freigabe des Betreibers vom 14.10.2026) und
@@ -105,9 +105,9 @@ Profil.
 **Plan 5b (Fahrverhalten, der zweite Teil der Phase 5) ist umgesetzt und je Task geprüft**
 (`docs/superpowers/plans/2026-10-20-phase-5b-fahrverhalten.md`, 14 Tasks, freigegeben vom Betreiber am 20.10.2026 mit allen 17 Entscheidungen:
 „Ja so umsetzen“; in Home Assistant gibt es einen `device_tracker` des Tesla): auf dem Branch
-`claude/phase-5b-plan-xo03ty` (auf dem Stand von Plan 5a), **noch nicht auf `main`; ein Gesamtreview
-des Branches steht noch aus, und die Integration braucht die Zustimmung des Betreibers.** Nicht
-ausgerollt. Anders als 5a ändert 5b auch den **core** (eine Zeile in `core/control/planned.py`: die
+`claude/phase-5b-plan-xo03ty` (auf dem Stand von Plan 5a), Gesamtreview, Fix-Welle und Re-Review
+erledigt, **seit dem 21.10.2026 per Fast-Forward auf `main` (`d29d4e2`, Zustimmung des Betreibers); `latest`
+enthält damit 5b.** Nicht ausgerollt. Anders als 5a ändert 5b auch den **core** (eine Zeile in `core/control/planned.py`: die
 Abfahrt an einem Datum, `departure_on`), `shared` und die Datenbank der app (Migration `0014`); core und
 app rollen gemeinsam aus, mit ausgeschaltetem Regelbetrieb, **zusammen mit 3d, 4b, 5a und 6a und damit
 nach der Abnahme der Phase 3**. Nichts geht von selbst live: Die Automatik ist aus, bis du sie
@@ -716,8 +716,8 @@ Als Nächstes folgt 5c (Vorheizen und Vorkühlen, erst mit Daten aus 6a).
   - **Offen (klein):** die Liste unter „Bewusst offen gelassen“, „Aufgeschobene Kleinigkeiten aus Plan 5a“;
     an der Anlage das Ausrollen und die 28 Tage der Abnahme (Punkt 10 unter „Offen an der Anlage“).
 - **Phase 5b (Fahrverhalten) ist umgesetzt, je Task und im Gesamtreview geprüft**
-  (Plan: `docs/superpowers/plans/2026-10-20-phase-5b-fahrverhalten.md`, 14 Tasks; Ausführung subagent-driven; Branch `claude/phase-5b-plan-xo03ty`, **noch nicht
-  auf `main`, Gesamtreview und Fix-Welle erledigt, nicht ausgerollt**). Die app lernt je Auto, wann es abfährt, mit welchem
+  (Plan: `docs/superpowers/plans/2026-10-20-phase-5b-fahrverhalten.md`, 14 Tasks; Ausführung subagent-driven; Branch `claude/phase-5b-plan-xo03ty`, **seit dem
+  21.10.2026 auf `main` (Fast-Forward mit Zustimmung des Betreibers), Gesamtreview und Fix-Welle erledigt, nicht ausgerollt**). Die app lernt je Auto, wann es abfährt, mit welchem
   Ladestand es zurückkommt und wann es angesteckt ist:
   - **Lernen:** empirische Perzentile über 56 Tage statt LightGBM (`app/learning/driving_*.py`): Daten aus
     Anwesenheit (HA-Entität, `home_entity`, Tessie, sonst Ansteckvorgänge), Tage, Profil je Wochentag mit
@@ -740,8 +740,8 @@ Als Nächstes folgt 5c (Vorheizen und Vorkühlen, erst mit Daten aus 6a).
   - **Geprüft:** Gesamtreview, Fix-Welle (Budget des Wächters ohne erwartete Autos, Zielbereich wirkt sofort,
     Abfahrtstag in der UI, kein erwartetes Auto auf belegter Wallbox) und Re-Review; die Liste
     „Deferred minors 5b“ steht unter „Bewusst offen gelassen“.
-  - **Offen:** Übernahme auf `main` (nur mit Zustimmung); an der Anlage das Ausrollen und die 28 Tage der
-    Abnahme (Punkt 11 unter „Offen an der Anlage“).
+  - **Offen:** an der Anlage das Ausrollen und die 28 Tage der Abnahme (Punkt 11 unter „Offen an der
+    Anlage“).
 - **Images:** `ghcr.io/binda5000/bindaems-core:latest` und `ghcr.io/binda5000/bindaems-app:latest`.
   Sie sind öffentlich, und die CI setzt `latest` bei jedem Push auf `main`. core und app werden
   immer gemeinsam aus demselben Stand ausgerollt (gleiche Compose-Datei, gleiche Image-Tags): Die
@@ -785,8 +785,7 @@ Als Nächstes folgt 5c (Vorheizen und Vorkühlen, erst mit Daten aus 6a).
     Betreiber (Entscheidung 6); Vorschlag: mit 4b und 6a (Punkt 9 unter „Offen an der Anlage“)
   - an der Anlage: Plan 5b (core und app gemeinsam, Regelbetrieb aus) mit 3d, 4b, 5a und 6a ausrollen
     (Punkt 11 unter „Offen an der Anlage“); danach die Abnahme 5b (28 Tage,
-    `docs/verification/abnahme-phase-5b.md`); vorher Gesamtreview des Branches und Zustimmung zur
-    Integration auf `main`
+    `docs/verification/abnahme-phase-5b.md`)
   - an der Anlage: Plan 5a (nur `ems-app`) mit oder nach 4b und 6a ausrollen (Punkt 10 unter „Offen an
     der Anlage“); danach die Abnahme 5a (28 Tage, `docs/verification/abnahme-phase-5a.md`)
   - an der Anlage: Plan 6a mit 4b nach der Abnahme der Phase 3 ausrollen (Punkt 8 unter „Offen an der
@@ -897,7 +896,7 @@ Als Nächstes folgt 5c (Vorheizen und Vorkühlen, erst mit Daten aus 6a).
 | `docs/superpowers/plans/2026-10-20-phase-3d-regel-r1.md` | Plan 3d, 4 Tasks, umgesetzt auf dem Branch `claude/project-thread-707vv8` (nicht auf `main`, nicht ausgerollt): Regel R1 sperrt Netzladen nur, solange der Akku nicht leer ist (Nachrechnung, Optimierer, Erklärung, Szenario-Werkzeug); Einordnung, die sechs Entscheidungen des Betreibers vom 20.10.2026, Review-Schwerpunkte |
 | `docs/superpowers/plans/2026-10-19-phase-6a-entscheidungen.md` | Festlegungen R1 bis R32 der Umsetzung von Plan 6a (je mit Kosten, falls falsch) und die offenen Kleinigkeiten |
 | `docs/superpowers/plans/2026-10-20-phase-5a-lastmodell.md` | Plan 5a, 14 Tasks, umgesetzt auf dem Branch `claude/phase-5-plan-s7xe0n` (noch nicht auf `main`, nicht ausgerollt): Wetterarchiv, HA-Sensoren, Merkmale, LightGBM, Backtest, Registry, Aktivierungsregel, Schattenbetrieb, Seite „Prognosen“, Einstellungen „Lastmodell“; die Einordnung teilt Phase 5 in 5a, 5b und 5c; die 17 Entscheidungen des Betreibers vom 20.10.2026, Präzisierungen, Texte |
-| `docs/superpowers/plans/2026-10-20-phase-5b-fahrverhalten.md` | Plan 5b, 14 Tasks, umgesetzt auf dem Branch `claude/phase-5b-plan-xo03ty` (noch nicht auf `main`, Gesamtreview und Fix-Welle erledigt, nicht ausgerollt): Fahrverhalten mit Vorschlägen, Automatik für „Geplant“, Abfahrt an einem Datum und erwartete Autos im Planer; 17 Entscheidungen, vom Betreiber am 20.10.2026 freigegeben |
+| `docs/superpowers/plans/2026-10-20-phase-5b-fahrverhalten.md` | Plan 5b, 14 Tasks, umgesetzt auf dem Branch `claude/phase-5b-plan-xo03ty`, seit dem 21.10.2026 auf `main` (Gesamtreview und Fix-Welle erledigt, nicht ausgerollt): Fahrverhalten mit Vorschlägen, Automatik für „Geplant“, Abfahrt an einem Datum und erwartete Autos im Planer; 17 Entscheidungen, vom Betreiber am 20.10.2026 freigegeben |
 | `cerbo-watchdog/README.md` | Watchdog: Zustände, Zeiten, D-Bus-Pfade, Installation und Probe |
 | `docs/verification/abnahme-phase-1.md` | Checkliste für die Abnahme der Phase 1 |
 | `docs/verification/abnahme-phase-4.md` | Checkliste für die Abnahme der Phase 4: Teil Statistik (Plan 4a, 30 Tage ab dem Ausrollen, Abgleich innerhalb ±1 %), „Ziel-SOC“ (mindestens 95 % der machbaren geplanten Ladungen, `GET /api/stats`) und „HA in beide Richtungen“ (Tabelle aller Bedienelemente) aus Plan 4b |
@@ -1174,9 +1173,8 @@ Demo-Zugänge: `admin`, `bedienen` (Bedienen), `gast` (Lesen) und `sicher` (Admi
 - Docker auf einer VM im LAN des Betreibers, Images vom Stand nach Plan 4a (`fb23bd0`, laut Betreiber
   ausgerollt am 18.10.2026; davor 2c-1 bis 3b am 17.10.2026 mit `6a6904a` und der Stand nach 2b vom
   12.10.2026). Plan 4b ist nicht ausgerollt (erst nach der Abnahme der Phase 3); bis dahin kein
-  `docker compose pull`, denn `latest` enthält seit dem 19.10.2026 Plan 4b (und 6a). Plan 5a liegt
-  auf einem Branch; sobald er auf `main` ist, enthält `latest` auch ihn, und das Ausrollen folgt dem
-  von 4b und 6a. Laut Betreiber
+  `docker compose pull`, denn `latest` enthält seit dem 19.10.2026 Plan 4b, seit dem 20.10.2026 auch
+  6a, 3d und 5a und seit dem 21.10.2026 5b; alle rollen gemeinsam aus. Laut Betreiber
   sind die Schritte zum Ausrollen erledigt (HA-Token, Mosquitto-ACL, `config.yaml`) und Leistungspreis
   und Planung eingerichtet.
 - Wallbox (`wallbox.evcs`) und Tesla laut Betreiber seit dem 17.10.2026 **live**, evcc abgeschaltet;
@@ -1778,9 +1776,8 @@ Demo-Zugänge: `admin`, `bedienen` (Bedienen), `gast` (Lesen) und `sicher` (Admi
      `claude/phase-5-plan-s7xe0n`, **noch nicht auf `main`** (die Integration braucht die Zustimmung des
      Betreibers), nicht ausgerollt (Kurzfassung). Nur app und UI, der core bleibt gleich. Es folgt das
      Ausrollen mit oder nach 4b und 6a (Punkt 10 unter „Offen an der Anlage“) und die Abnahme über 28 Tage.
-   - **5b Fahrverhalten:** umgesetzt und je Task geprüft, auf dem Branch `claude/phase-5b-plan-xo03ty`,
-     **noch nicht auf `main`** (Gesamtreview und Fix-Welle erledigt, die Integration braucht die Zustimmung des Betreibers),
-     nicht ausgerollt (Kurzfassung). Es lernt Abfahrt, Ankunft und SOC bei Ankunft je Auto und Wochentag,
+   - **5b Fahrverhalten:** umgesetzt und je Task geprüft, seit dem 21.10.2026 per Fast-Forward auf `main`
+     (Gesamtreview und Fix-Welle erledigt, Zustimmung des Betreibers), nicht ausgerollt (Kurzfassung). Es lernt Abfahrt, Ankunft und SOC bei Ankunft je Auto und Wochentag,
      macht Vorschläge mit Konfidenz, hat eine optionale Automatik für „Geplant“ und liefert die
      Anwesenheitsprognose für den Optimierer (erwartete Autos). **Nicht in 5b** ist die Akku-Unterstützung
      für PV-Autos im MILP (Spec 7.6, Stand Plan 5b). Ändert auch den core (eine Zeile). Es folgt das
