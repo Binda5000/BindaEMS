@@ -25,12 +25,12 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from datetime import datetime, timedelta
-from typing import TYPE_CHECKING, Annotated, Any, Final
+from typing import TYPE_CHECKING, Annotated, Any, Final, Self
 
-from pydantic import AwareDatetime, Field
+from pydantic import AwareDatetime, Field, model_validator
 
 from bindaems.app.control.intent import _health_vehicles, _trusted
-from bindaems.app.learning.driving_profile import VehicleProfile, _weekday_of, presence_at
+from bindaems.app.learning.driving_profile import VehicleProfile, presence_at, weekday_of
 from bindaems.shared.config import Config, EvcsConfig, TwcConfig, VehicleConfig, _Model
 from bindaems.shared.control import ChargeMode, Intent, VehicleIntent, next_departure
 from bindaems.shared.numbers import finite_number
@@ -67,7 +67,9 @@ class PlanVehicleInput(_Model):
     - ``expected``: das Auto ist noch nicht angesteckt und wird ab ``arrival_at`` (Beginn der
       ersten Viertelstunde mit Anwesenheit ab 50 %, UTC) erwartet; ``soc_pct`` ist dann der
       gelernte Ladestand bei der Ankunft. Angesteckte Autos: ``False`` und ``None``; gespeicherte
-      Eingangsdaten ohne beide Felder laden so (Plan 5b).
+      Eingangsdaten ohne beide Felder laden so (Plan 5b). Beide kommen nur zusammen vor (Ruling
+      T10): So meinen ``charge_window``, Regel R2 und die Plausibilität, die an ``arrival_at``
+      hängen, dasselbe wie ``expected``.
 
     Die drei Energien stehen auf der Wallbox-Seite (Ruling R10).
     """
@@ -89,6 +91,12 @@ class PlanVehicleInput(_Model):
     grid_allowed_kwh: NonNegativeFinite
     expected: bool = False
     arrival_at: AwareDatetime | None = None
+
+    @model_validator(mode="after")
+    def _arrival_only_when_expected(self) -> Self:
+        if self.expected != (self.arrival_at is not None):
+            raise ValueError("Nur ein erwartetes Auto hat eine Ankunft, und es braucht eine.")
+        return self
 
 
 def need_kwh(soc_pct: float, target_pct: float, usable_kwh: float, efficiency: float) -> float:
@@ -337,6 +345,34 @@ def _arrival(
     return None
 
 
+def _occupied_wallboxes(
+    health: Mapping[str, Any] | None,
+    entries: Mapping[str, Mapping[str, Any]],
+    plugged: Sequence[PlanVehicleInput],
+) -> dict[str, str]:
+    """Wer laut Health an welcher Wallbox steckt (Ruling F-4): die Wallbox eines angesteckten
+    Autos (``plugged`` wahr in Health oder unter den angesteckten Autos des Laufs) und jede
+    Wallbox, die ``health["wallboxes"]`` mit einem Vorgang nennt (``occupant``, ``guest`` für
+    einen Gast; ohne ``occupant`` bei unklarer Zuordnung ``""``)."""
+    occupied: dict[str, str] = {}
+    listed = health.get("wallboxes") if health is not None else None
+    for item in listed if isinstance(listed, list) else []:
+        if not isinstance(item, Mapping) or not isinstance(item.get("id"), str):
+            continue
+        occupant = item.get("occupant")
+        if isinstance(occupant, str) and occupant:
+            occupied[item["id"]] = occupant
+        elif item.get("assignment") is not None:
+            occupied[item["id"]] = ""
+    for key, entry in entries.items():
+        wallbox = entry.get("wallbox")
+        if entry.get("plugged") is True and isinstance(wallbox, str):
+            occupied[wallbox] = key
+    for car in plugged:
+        occupied[car.wallbox] = car.key
+    return occupied
+
+
 def expected_vehicles(
     cfg: Config,
     intent: Intent | None,
@@ -352,7 +388,10 @@ def expected_vehicles(
 
     Erwartet wird ein Auto, das die Absicht in „Geplant“ nennt, laut Health nicht steckt
     (``plugged`` genau ``False``), ein Profil und eine ``default_wallbox`` der Konfiguration hat
-    und nicht unter ``plugged`` (den angesteckten Autos des Laufs) steht. Seine Abfahrt
+    und nicht unter ``plugged`` (den angesteckten Autos des Laufs) steht. Belegt laut Health ein
+    anderes Auto oder ein Gast die ``default_wallbox`` (``_occupied_wallboxes``), kommt es nicht
+    hinein (Ruling F-4): Der Optimierer kennt keine Grenze je Wallbox und plante sonst zwei Autos
+    an einer. Seine Abfahrt
     (``next_departure`` mit Tag) muss nach dem Ende des aktuellen Slots liegen. Die Ankunft ist
     der Beginn des ersten Slots nach dem aktuellen und vor der Abfahrt, für den die Prognose
     mindestens 50 % sagt. Ladestand ist der Median der Ankunft des lokalen Wochentags der Ankunft
@@ -367,6 +406,7 @@ def expected_vehicles(
         return []
     entries = _health_vehicles(health)
     taken = {car.key for car in plugged}
+    occupied = _occupied_wallboxes(health, entries, plugged)
     current_end = ensure_utc(slots[0].start) + SLOT
     horizon_end = ensure_utc(slots[-1].start) + SLOT
     cars: list[PlanVehicleInput] = []
@@ -384,7 +424,7 @@ def expected_vehicles(
         if entry.get("plugged") is not False:
             continue
         wallbox_key = cfg.vehicles[key].default_wallbox
-        if wallbox_key not in cfg.wallboxes:
+        if wallbox_key not in cfg.wallboxes or occupied.get(wallbox_key, key) != key:
             continue
         departure_at = next_departure(wanted.departure, now, wanted.departure_on)
         if departure_at <= current_end:
@@ -392,7 +432,7 @@ def expected_vehicles(
         arrival_at = _arrival(profile, slots, departure_at)
         if arrival_at is None:
             continue
-        soc = profile.weekdays[_weekday_of(arrival_at.astimezone(LOCAL_TZ).date())].arrival_soc_p50
+        soc = profile.weekdays[weekday_of(arrival_at.astimezone(LOCAL_TZ).date())].arrival_soc_p50
         if soc is None:
             continue
         cars.append(

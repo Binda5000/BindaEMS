@@ -178,6 +178,23 @@ def _budgets(
     return [budget_of.get(_month_of(inputs, index)) for index in range(len(inputs.slots))]
 
 
+def _guard_steps(
+    inputs: PlanInputs,
+    intents: Sequence[BatteryIntent],
+    powers: Sequence[Mapping[str, float]],
+    steps: list[SimStep],
+) -> list[SimStep]:
+    """Nachrechnung für das Budget des Wächters (Ruling F-1): ohne die Ladeleistung erwarteter
+    Autos (Plan 5b). Das Budget geht an den core, und ein Auto, das nur die Anwesenheitsprognose
+    kennt, darf es vor seiner Ankunft nicht anheben; steckt es an, rechnet der nächste Plan es als
+    angestecktes Auto mit. Ohne erwartete Autos ist es die Nachrechnung des Plans."""
+    expected = {car.key for car in inputs.vehicles if car.expected}
+    if not expected:
+        return steps
+    known = [{key: w for key, w in slot.items() if key not in expected} for slot in powers]
+    return _resimulate(inputs, intents, known)
+
+
 def support_thresholds(
     slots: Sequence[PlanSlot], reserve_pct: float
 ) -> list[tuple[float, datetime]]:
@@ -221,14 +238,20 @@ def build_plan(
 
     ``ev_w`` ist die Ladeleistung je geplantem Auto und Slot (W), ``shortfall_kwh`` die
     Fehlmenge je Auto aus dem Optimierer (``vehicle_summary``); die Nachrechnung, das Budget und
-    die Vergleichskosten rechnen die Autos mit.
+    die Vergleichskosten rechnen die Autos mit. Das Budget rechnet ohne die Leistung erwarteter
+    Autos (Ruling F-1, ``_guard_steps``).
     """
     if len(intents) != len(inputs.slots):
         raise ValueError("Absichten und Slots müssen gleich viele sein")
     params = params_of(inputs)
     powers = _car_powers(inputs, ev_w)
     steps = _resimulate(inputs, intents, powers)
-    budgets = _budgets(inputs, steps, source=source, optimizer_peaks_kw=optimizer_peaks_kw)
+    budgets = _budgets(
+        inputs,
+        _guard_steps(inputs, intents, powers, steps),
+        source=source,
+        optimizer_peaks_kw=optimizer_peaks_kw,
+    )
     vehicles = vehicle_summary(inputs, powers, shortfall_kwh)
 
     drafts: list[PlanSlot] = []

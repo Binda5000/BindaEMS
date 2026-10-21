@@ -17,6 +17,7 @@ from tests.plan_helpers import (
     flows_of,
     live_signals,
     month,
+    planned_car,
     planned_health,
     resimulate,
     returns,
@@ -28,11 +29,11 @@ from tests.plan_helpers import (
 )
 
 from bindaems.app.learning.driving_profile import VehicleProfile, WeekdayProfile
-from bindaems.app.planning.inputs import PlanInputs
+from bindaems.app.planning.inputs import PlanInputs, PlanningUnavailable
 from bindaems.app.planning.optimizer import OptimizerResult, solve
 from bindaems.app.planning.service import PlanningService, PlanningStatus, plan_once
 from bindaems.shared.control import ChargeMode, Intent, VehicleIntent
-from bindaems.shared.plan import BatteryIntent, PlanTrigger
+from bindaems.shared.plan import BatteryIntent, PlanTrigger, intent_plan
 from bindaems.shared.settings import PlanningSettings
 from bindaems.shared.timeutil import SLOT, ManualClock, slot_start
 
@@ -503,6 +504,35 @@ def test_plan_once_optimizer_budget_uses_peaks():
     assert plan.source == "optimizer" and plan.slots[0].budget_kw == 6.3
 
 
+def test_plan_once_budget_is_not_raised_by_an_expected_car():
+    # Ruling F-1: Das Budget des Wächters geht an den core; ein erwartetes Auto (nur Prognose)
+    # darf es nicht anheben. Ein angestecktes Auto hebt es weiter an.
+    base = {
+        "prices": [10.0] * 8,
+        "pv": [0.0] * 8,
+        "load": [500.0] * 8,
+        "peak_months": [month("2026-10", 2.0)],
+    }
+    alone = scenario(**base)
+    arrival = alone.slots[5].start
+    car = planned_car(need_kwh=10.0, expected=True, arrival_at=arrival)
+    plugged = car.model_copy(update={"expected": False, "arrival_at": None})
+
+    def budgets(inputs: PlanInputs) -> tuple[list[float | None], list[float | None]]:
+        plan = plan_once(inputs, solve(inputs)).model_copy(update={"id": 1})
+        sent = intent_plan(plan, grid_charge_allowed=False)
+        return [s.budget_kw for s in plan.slots], [s.budget_kw for s in sent.slots]
+
+    without = budgets(alone)
+    assert without == ([2.0] * 8, [2.0] * 3)
+    expected_plan = plan_once(with_car := scenario(**base, vehicles=[car]), solve(with_car))
+    assert expected_plan.source == "optimizer"
+    assert expected_plan.vehicles[0].planned_kwh == pytest.approx(3 * 11.04 * 0.25)
+    assert budgets(with_car) == without
+    raised, _ = budgets(scenario(**base, vehicles=[plugged]))
+    assert all(value is not None and value > 2.0 for value in raised)
+
+
 # --- Auslöser und Schleife (Task 10) ---------------------------------------------------------
 
 
@@ -827,14 +857,16 @@ async def test_plug_in_of_expected_car_triggers_replan(service_with, live):
         await asyncio.sleep(0.1)  # unverändert: kein weiterer Lauf
         live.health = planned_health(vehicle_health("tesla"), version=3)  # angesteckt
         await until(lambda: len(calls) == 2)
-        await asyncio.sleep(0.1)
+        # der Plan wird nach dem Solver in einem Thread gespeichert: auf ihn warten
+        await until(lambda: (p := service.current()) is not None and p.trigger == "vehicles")
     assert triggers(calls) == ["start", "vehicles"]
     assert [[(car.key, car.expected) for car in inputs.vehicles] for inputs in calls] == [
         [("tesla", True)],
         [("tesla", False)],
     ]
     assert calls[1].vehicles[0].soc_pct == 40.0  # jetzt der echte Ladestand aus Health
-    assert service.current() is not None and not service.current().vehicles[0].expected
+    plan = service.current()
+    assert plan is not None and not plan.vehicles[0].expected
 
 
 async def test_changed_expected_set_triggers_replan(service_with, live):
@@ -868,6 +900,51 @@ async def test_changed_expected_set_triggers_replan(service_with, live):
         datetime.fromisoformat("2026-10-16T13:00:00+00:00"),
     ]
     assert [inputs.vehicles[0].target_soc_pct for inputs in calls] == [80.0, 80.0, 90.0]
+
+
+async def test_changed_expected_set_is_requested_once_while_no_plan_comes(
+    service_with, live, monkeypatch
+):
+    """Ergibt der Lauf „vehicles“ keinen Plan (``PlanningUnavailable``), bleiben die
+    Eingangsdaten des letzten Plans; dieselbe neue Menge erwarteter Autos fordert trotzdem nur
+    einmal an, nicht bei jeder Prüfung der Schleife."""
+    live.health = planned_health(vehicle_health("tesla", plugged=False), version=3)
+    intent = Intent(version=3, vehicles={"tesla": VehicleIntent(mode=ChargeMode.PLANNED)})
+    profiles = {"tesla": _driving_profile()}
+    calls: list[PlanInputs] = []
+    service = service_with(
+        solver=recording(calls),
+        sleep=fast_sleep(),
+        intent=lambda: intent,
+        driving_profiles=lambda: dict(profiles),
+    )
+    attempts: list[PlanTrigger] = []
+    collect = service.collect
+
+    async def unavailable_after_start(trigger: PlanTrigger) -> PlanInputs:
+        if calls:
+            attempts.append(trigger)
+            raise PlanningUnavailable("Keine Preise")
+        return await collect(trigger)
+
+    monkeypatch.setattr(service, "collect", unavailable_after_start)
+    checks = 0
+    expected_changed = service._expected_changed
+
+    def counted(*args):
+        nonlocal checks
+        checks += 1
+        return expected_changed(*args)
+
+    monkeypatch.setattr(service, "_expected_changed", counted)
+    async with running(service):
+        await until(lambda: (p := service.current()) is not None and p.trigger == "start")
+        profiles["tesla"] = _driving_profile(arrival=60)  # neue Ankunft: neue Menge
+        await until(lambda: attempts == ["vehicles"])
+        seen = checks
+        await until(lambda: checks >= seen + 10)  # die Schleife prüft weiter
+    assert attempts == ["vehicles"]
+    assert triggers(calls) == ["start"]
 
 
 async def test_untrusted_health_does_not_flap_the_expected_cars(service_with, live):

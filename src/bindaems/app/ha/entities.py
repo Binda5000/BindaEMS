@@ -22,7 +22,6 @@ from bindaems.app.control.intent import (
     TARGET_SOC_MIN,
 )
 from bindaems.app.core_link import LiveState
-from bindaems.app.daytype import is_holiday
 from bindaems.app.forecast.service import ForecastService
 from bindaems.app.learning.driving_profile import (
     Confidence,
@@ -30,6 +29,7 @@ from bindaems.app.learning.driving_profile import (
     VehicleProfile,
     WeekdayProfile,
     next_trip,
+    weekday_of,
 )
 from bindaems.app.ledger.service import MonthPeak
 from bindaems.app.planning.execution import ExecutionState, execution_state
@@ -473,8 +473,7 @@ def suggestion(key: str, inputs: HaInputs) -> Suggestion | None:
     if trip is None:
         return None
     # ein Feiertag gilt wie ein Sonntag (Eintrag 6 des Profils)
-    weekday = 6 if is_holiday(trip.date) else trip.date.weekday()
-    return Suggestion(trip, profile.weekdays[weekday])
+    return Suggestion(trip, profile.weekdays[weekday_of(trip.date)])
 
 
 def _suggested_departure(key: str) -> Callable[[HaInputs], str]:

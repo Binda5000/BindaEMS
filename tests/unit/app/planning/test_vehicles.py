@@ -6,6 +6,7 @@ from datetime import date, datetime, timedelta
 from typing import Any
 
 import pytest
+from pydantic import ValidationError
 from tests.plan_helpers import (
     PLANNED_DEPARTURE,
     at,
@@ -501,6 +502,61 @@ def test_expected_cars_follow_the_priority_and_skip_the_rest(cfg: Config) -> Non
     assert [car.key for car in cars] == ["tesla"]
 
 
+def test_expected_car_departure_uses_the_date_of_the_intent(cfg: Config) -> None:
+    # Ruling T9: Die Absicht nennt Montag 07:00 (Freitag jetzt); ohne Tag wäre es Samstag 07:00
+    dated = VehicleIntent(
+        mode=ChargeMode.PLANNED, departure="07:00", departure_on=date(2026, 10, 19)
+    )
+    [tesla] = _expected(cfg, intent=Intent(version=3, vehicles={"tesla": dated}))
+    assert tesla.departure_at == at("2026-10-19T05:00:00+00:00")
+    daily = dated.model_copy(update={"departure_on": None})
+    [tesla] = _expected(cfg, intent=Intent(version=3, vehicles={"tesla": daily}))
+    assert tesla.departure_at == at(DEPARTURE)
+
+
+def _wallbox(key: str, occupant: str | None, assignment: str | None) -> dict[str, Any]:
+    return {"id": key, "occupant": occupant, "name": None, "assignment": assignment}
+
+
+def test_expected_car_needs_a_free_default_wallbox(cfg: Config) -> None:
+    # Ruling F-4: Steht am Wall Connector (default_wallbox des Tesla) laut Health schon ein
+    # anderes Auto oder ein Gast, kommt der Tesla nicht als erwartetes Auto in den Plan
+    profiles = {"tesla": _profile()}
+
+    def expected(health: dict[str, Any]) -> list[str]:
+        cars = expected_vehicles(cfg, _intent(), health, profiles, _slots(), NOW)
+        return [car.key for car in cars]
+
+    # der e-Golf steckt am Wall Connector
+    golf_there = vehicle_health("egolf", wallbox="twc")
+    assert expected(planned_health(_away(), golf_there)) == []
+    # ein Gast steht dort
+    guest = planned_health(_away()) | {"wallboxes": [_wallbox("twc", "guest", "default")]}
+    assert expected(guest) == []
+    # unklare Zuordnung: dort steckt jemand, aber nicht der Tesla
+    unclear = planned_health(_away()) | {"wallboxes": [_wallbox("twc", None, "unclear")]}
+    assert expected(unclear) == []
+    # frei: der e-Golf an der EVCS, der Wall Connector ohne Vorgang
+    free = planned_health(_away(), vehicle_health("egolf")) | {
+        "wallboxes": [_wallbox("twc", None, None), _wallbox("evcs", "egolf", "detected")]
+    }
+    assert expected(free) == ["tesla"]
+    # ein abgestecktes Auto belegt nichts, auch wenn Health seine letzte Wallbox nennt
+    golf_away = vehicle_health("egolf", wallbox="twc", plugged=False)
+    assert expected(planned_health(_away(), golf_away)) == ["tesla"]
+
+
+def test_expected_and_arrival_come_together() -> None:
+    # Ruling T10: Ankunft nur bei einem erwarteten Auto und ein erwartetes Auto nur mit Ankunft;
+    # so meinen charge_window, R2 und die Plausibilität (arrival_at) dasselbe wie expected
+    with pytest.raises(ValidationError, match="Ankunft"):
+        planned_car(arrival_at=at(START))
+    with pytest.raises(ValidationError, match="Ankunft"):
+        planned_car(expected=True)
+    car = planned_car(expected=True, arrival_at=at(START))
+    assert (car.expected, car.arrival_at) == (True, at(START))
+
+
 def test_grid_allowed_counts_pv_from_arrival(cfg: Config) -> None:
     # 3 kW Überschuss (P25 3500 W, Last 500 W) nur vor der Ankunft (die ersten drei Slots)
     # zählt nicht: die Netzenergie bleibt der ganze Bedarf
@@ -515,7 +571,9 @@ def test_grid_allowed_counts_pv_from_arrival(cfg: Config) -> None:
 
 def test_grid_allowed_leaves_the_plugged_cars_their_surplus(cfg: Config) -> None:
     slots = _slots(48, pv_p25=[0.0] * 3 + [3500.0] * 8 + [0.0] * 37)
-    plugged = planned_car(key="egolf", horizon_need_kwh=4.5, departure_at=at(DEPARTURE))
+    plugged = planned_car(
+        key="egolf", wallbox="evcs", horizon_need_kwh=4.5, departure_at=at(DEPARTURE)
+    )
     [alone] = _expected(cfg, slots=slots)
     [shared] = _expected(cfg, slots=slots, plugged=[plugged])
     # der e-Golf nimmt 4,5 kWh der 6 kWh Überschuss vorweg
@@ -527,5 +585,5 @@ def test_plugged_allowance_is_unchanged_by_arrival_support() -> None:
     slots = _slots(8, pv_p25=[3500.0] * 8)
     car = planned_car(horizon_need_kwh=10.0, departure_at=at(START) + 2 * HOUR)
     assert grid_allowed([car], slots, ["tesla"]) == pytest.approx({"tesla": 4.0})
-    late = car.model_copy(update={"arrival_at": at(START) + HOUR})
+    late = car.model_copy(update={"expected": True, "arrival_at": at(START) + HOUR})
     assert grid_allowed([late], slots, ["tesla"]) == pytest.approx({"tesla": 7.0})

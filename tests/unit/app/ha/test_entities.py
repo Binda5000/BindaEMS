@@ -1351,6 +1351,16 @@ def test_a_holiday_uses_the_sunday_profile(cfg) -> None:
     assert state(cfg, "tesla_suggested_departure", inputs) == "2026-10-26T06:30:00+00:00"
 
 
+def test_a_holiday_with_group_basis_names_the_sunday_group(cfg) -> None:
+    # der Montag, 26.10., ist ein Feiertag: Eintrag 6 aus der Gruppe „So/Feiertag“, nicht der
+    # Montag aus der Gruppe „Mo–Fr“
+    monday = {"basis": "group", "departure_min": 6 * 60, "departure_confidence": "low"}
+    holiday = {"d6": HOLIDAY_TRIP["d6"] | {"basis": "group"}}
+    inputs = sample_inputs(driving_profiles={"tesla": _profile(d0=monday, **holiday)}, now=SUNDAY)
+    for oid in ("tesla_suggested_departure", "tesla_suggested_target"):
+        assert entity(cfg, oid).attributes(inputs)["basis"] == "Gruppe So/Feiertag", oid
+
+
 def test_no_suggestion_is_unknown_not_none(cfg) -> None:
     # ohne Profil, ohne Zeitpunkt und ohne Fahrt in den nächsten Tagen: HA „unbekannt“ (die
     # Nutzlast, die HA als unbekannt liest, nie ein Ersatzwert) und leere Attribute

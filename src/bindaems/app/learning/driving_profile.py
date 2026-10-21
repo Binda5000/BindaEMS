@@ -106,7 +106,9 @@ class TripSuggestion(_Model):
     target_confidence: Confidence | None
 
 
-def _weekday_of(day: dt.date) -> int:
+def weekday_of(day: dt.date) -> int:
+    """Der Eintrag des Profils für den lokalen Tag ``day``: sein Wochentag (0 Montag), ein
+    Feiertag wie Sonntag (6)."""
     return 6 if is_holiday(day) else day.weekday()
 
 
@@ -241,7 +243,7 @@ def _presence(
     days_of = [0] * 7
     day = starts[0].astimezone(LOCAL_TZ).date()
     while day < today:
-        weekday = _weekday_of(day)
+        weekday = weekday_of(day)
         days_of[weekday] += 1
         begin = _local_instant(day, time(0))
         end_of_day = _local_instant(day + timedelta(days=1), time(0))
@@ -304,7 +306,7 @@ def next_trip(profile: VehicleProfile, now: datetime) -> TripSuggestion | None:
     today = moment.astimezone(LOCAL_TZ).date()
     for offset in range(NEXT_TRIP_DAYS):
         day = today + timedelta(days=offset)
-        wp = profile.weekdays[_weekday_of(day)]
+        wp = profile.weekdays[weekday_of(day)]
         if wp.departure_min is None or wp.departure_confidence is None:
             continue
         hour, minute = divmod(wp.departure_min, 60)
@@ -322,4 +324,4 @@ def next_trip(profile: VehicleProfile, now: datetime) -> TripSuggestion | None:
 def presence_at(profile: VehicleProfile, moment: datetime) -> float:
     """Wahrscheinlichkeit, dass das Auto zu ``moment`` angesteckt ist (Viertelstunde, lokal)."""
     local = ensure_utc(moment).astimezone(LOCAL_TZ)
-    return profile.presence[_weekday_of(local.date())][(local.hour * 60 + local.minute) // 15]
+    return profile.presence[weekday_of(local.date())][(local.hour * 60 + local.minute) // 15]

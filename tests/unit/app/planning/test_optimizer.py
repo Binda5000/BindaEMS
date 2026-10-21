@@ -575,6 +575,23 @@ def test_expected_car_shares_night_with_battery() -> None:
     assert battery_kwh[1] < battery_kwh[0] - 1.0
 
 
+def test_expected_car_does_not_raise_the_peak() -> None:
+    # Ruling F-1: Die Spitze geht ins Budget des Wächters; die Netzleistung eines erwarteten Autos
+    # zählt darin nicht, die eines angesteckten schon.
+    base: dict[str, Any] = {
+        "prices": [10.0] * 8,
+        "pv": [0.0] * 8,
+        "load": [500.0] * 8,
+        "peak_months": [month("2026-10", 2.0)],
+    }
+    car = planned_car(need_kwh=10.0, expected=True, arrival_at=slot(5))
+    result = solve(scenario(**base, vehicles=[car]))
+    assert car_kwh(result) > 0
+    assert result.peaks_kw == {"2026-10": pytest.approx(2.0)}
+    plugged = car.model_copy(update={"expected": False, "arrival_at": None})
+    assert solve(scenario(**base, vehicles=[plugged])).peaks_kw["2026-10"] > 2.0
+
+
 @pytest.mark.slow
 def test_two_cars_over_36_hours_solve_in_time() -> None:
     # 36 h ab 16:00 Ortszeit, zwei Tage PV, Netzladen an; Tesla fährt morgen um 07:00, der e-Golf

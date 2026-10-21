@@ -74,7 +74,10 @@ class SlotFlows:
 class OptimizerResult:
     """Ergebnis eines Laufs; ``flows`` ist leer, wenn es keine Lösung gibt.
 
-    ``peaks_kw`` ist die Spitze des Optimierers je Monat mit Leistungspreis (``JJJJ-MM``).
+    ``peaks_kw`` ist die Spitze des Optimierers je Monat mit Leistungspreis (``JJJJ-MM``). Mit
+    erwarteten Autos (Plan 5b, Ruling F-1) ist sie die Spitze ohne deren Netzleistung:
+    ``max(peak0, höchster Bezug im Monat ohne erwartete Autos)``. Sie geht ins Budget des Wächters
+    im core, und ein Auto, das nur die Prognose kennt, darf es nicht anheben.
     Je geplantem Auto: ``shortfall_kwh`` die Fehlmenge gegen ``horizon_need_kwh``,
     ``r2_excess_kwh`` die Netzenergie über ``grid_allowed_kwh`` (Regel R2), beide in kWh auf der
     Wallbox-Seite; leer ohne Lösung.
@@ -362,17 +365,40 @@ def _solve(inputs: PlanInputs, time_limit_s: float, gap: float, started: float) 
         )
         for t in range(count)
     )
+    expected = {car.key for car in inputs.vehicles if car.expected}
+    if expected:
+        peaks_kw = _known_peaks_kw(inputs, {m: p[0] for m, p in peaks.items()}, flows, expected)
+    else:
+        peaks_kw = {
+            month: peak0 + _value(d1) + _value(d2) for month, (peak0, d1, d2) in peaks.items()
+        }
     return OptimizerResult(
         status=status,
         flows=flows,
-        peaks_kw={
-            month: peak0 + _value(d1) + _value(d2) for month, (peak0, d1, d2) in peaks.items()
-        },
+        peaks_kw=peaks_kw,
         objective_ct=float(pulp.value(prob.objective)),
         solve_ms=_elapsed_ms(started),
         shortfall_kwh={c.car.key: _value(c.short) for c in cars},
         r2_excess_kwh={c.car.key: _value(c.rho) for c in cars},
     )
+
+
+def _known_peaks_kw(
+    inputs: PlanInputs,
+    peak0_kw: Mapping[str, float],
+    flows: tuple[SlotFlows, ...],
+    expected: set[str],
+) -> dict[str, float]:
+    """Spitze je Monat ohne die Netzleistung der erwarteten Autos (Ruling F-1): das Größere aus
+    ``peak0`` und dem höchsten Bezug ``gr_h + gr_b + Netz in angesteckte Autos`` im Monat."""
+    result = dict(peak0_kw)
+    for t, item in enumerate(flows):
+        month = _month(inputs, t)
+        if month not in result:
+            continue
+        cars_w = sum(grid for key, (_, grid) in item.ev.items() if key not in expected)
+        result[month] = max(result[month], (item.gr_h + item.gr_b + cars_w) / 1000)
+    return result
 
 
 def _status(prob: pulp.LpProblem) -> SolverStatus:
