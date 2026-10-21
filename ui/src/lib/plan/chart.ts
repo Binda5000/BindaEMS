@@ -30,7 +30,10 @@ function steps(slots: PlanSlot[], value: (slot: PlanSlot) => number | null): Poi
 	return points;
 }
 
-/** Zeitachse vom ersten Slot bis zum Ende des Horizonts; „jetzt“ nur, wenn es darin liegt */
+/**
+ * Zeitachse vom Slot von jetzt (nicht vor dem ersten Slot) bis zum Ende des Horizonts; die Linie
+ * „jetzt“ nur, wenn es darin liegt
+ */
 function timeAxis(plan: Plan, nowIso: string, palette: Palette) {
 	const base = baseOption(palette) as { xAxis: object };
 	const first = plan.slots[0];
@@ -38,8 +41,10 @@ function timeAxis(plan: Plan, nowIso: string, palette: Palette) {
 	const to = parseIso(plan.horizon_end) ?? undefined;
 	const now = parseIso(nowIso);
 	const inside = now !== null && from !== undefined && to !== undefined && now >= from && now <= to;
+	const start =
+		inside && from !== undefined ? Math.max(from, Math.floor(now / SLOT_MS) * SLOT_MS) : from;
 	return {
-		xAxis: { ...base.xAxis, min: from, max: to },
+		xAxis: { ...base.xAxis, min: start, max: to },
 		now: inside ? now : null
 	};
 }

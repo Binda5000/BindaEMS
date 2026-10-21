@@ -153,3 +153,20 @@ it('zeichnet erwartete Autos gestrichelt und benennt sie mit „erwartet ab“',
 	]);
 	expect(html).toContain('e-Golf erwartet ab 17:30: <b>2,30');
 });
+
+it('starts the time axis at the slot of now and keeps the "jetzt" line', () => {
+	const first = Date.parse(PLAN.slots[0].start);
+	const now = new Date(first + 40 * 60_000).toISOString(); // 40 min nach dem ersten Slot
+	for (const option of [planPriceOption(PLAN, now, palette), planSocOption(PLAN, now, palette)] as {
+		xAxis: { min: number };
+		series: { markLine?: { data: { xAxis: number }[] } }[];
+	}[]) {
+		expect(option.xAxis.min).toBe(first + 30 * 60_000);
+		expect(option.series[0].markLine?.data[0].xAxis).toBe(Date.parse(now));
+	}
+});
+
+it('starts at the first slot while now is before it', () => {
+	const option = planPriceOption(PLAN, NOW, palette) as { xAxis: { min: number } };
+	expect(option.xAxis.min).toBe(Date.parse(PLAN.slots[0].start));
+});
