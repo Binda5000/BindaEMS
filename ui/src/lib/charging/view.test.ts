@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ChargingSession, Intent, PlanVehicle, VehicleHealth } from '$lib/api/schemas';
 import { chargingSession } from '$lib/testing/fixtures';
+import { PLAN } from '$lib/testing/plan';
 import {
 	assignmentLabel,
 	boostInfo,
@@ -675,12 +676,34 @@ describe('Geplant', () => {
 			text: 'Ziel-SOC „19“ liegt außerhalb von 20–100 %.'
 		});
 		expect(parseTarget('80.5', '07:00', now).ok).toBe(false);
-		expect(parseTarget('', '07:00', now).ok).toBe(false);
+		expect(parseTarget('', '07:00', now)).toEqual({
+			ok: false,
+			text: 'Ziel-SOC „(leer)“ liegt außerhalb von 20–100 %.'
+		});
 		expect(parseTarget('80', '07:00', now, true).ok).toBe(false);
 		expect(parseTarget('80', '24:00', now)).toEqual({
 			ok: false,
 			text: 'Abfahrt „24:00“ ist keine Uhrzeit (HH:MM).'
 		});
-		expect(parseTarget('80', '', now).ok).toBe(false);
+		expect(parseTarget('80', '', now)).toEqual({
+			ok: false,
+			text: 'Abfahrt „(leer)“ ist keine Uhrzeit (HH:MM).'
+		});
+	});
+});
+
+describe('Ladelimit im Zeitplan', () => {
+	const NB = ' ';
+	const withLimit = (limit_pct: number | null, target_soc_pct = 80) =>
+		({ ...PLAN.vehicles[0]!, soc_assumed: false, target_soc_pct, limit_pct }) as PlanVehicle;
+
+	it('vergleicht das Limit des Autos mit dem Ziel des Plans, wenn der Zeitplan nur den Plan kennt', () => {
+		const line = plannedLine({ mode: null, vehicle: null, car: withLimit(70), target: 80 });
+		expect(line?.notes).toEqual([`Ladelimit im Auto 70${NB}% liegt unter dem Ziel.`]);
+		for (const limit of [null, 80, 100]) {
+			expect(
+				plannedLine({ mode: null, vehicle: null, car: withLimit(limit), target: 80 })?.notes
+			).toEqual([]);
+		}
 	});
 });

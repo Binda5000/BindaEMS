@@ -20,6 +20,7 @@
 		modeLabel,
 		parseTarget,
 		reasonLabel,
+		SOC_ESTIMATED_NOTE,
 		type BoostInfo,
 		type CardNotice,
 		type PlannedLine
@@ -101,6 +102,11 @@
 	);
 	// Ein geschätzter Ladestand (Health) sagt mehr als der zuletzt gemessene Wert des Signals
 	const estimated = $derived(vehicle.soc_source === 'estimated' && vehicle.soc_pct !== null);
+
+	// „geschätzt“ steht neben dem Ladestand: der Zusatz von „Geplant“ wiederholt es nicht
+	const notes = $derived(
+		(planned?.notes ?? []).filter((note) => !(estimated && note === SOC_ESTIMATED_NOTE))
+	);
 
 	const costText = $derived(boostCostText(boostCost, vehicle.id));
 
@@ -198,7 +204,7 @@
 	{#if planned}
 		<div class="planned">
 			{#if planned.text !== null}<p>{planned.text}</p>{/if}
-			{#each planned.notes as note (note)}<p class="muted">{note}</p>{/each}
+			{#each notes as note (note)}<p class="muted">{note}</p>{/each}
 		</div>
 	{/if}
 	{#if sessionLine !== null}

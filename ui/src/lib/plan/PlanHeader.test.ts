@@ -170,3 +170,24 @@ it('nennt ein erwartetes Auto mit „erwartet ab“ statt nur mit dem Namen', ()
 	const item = screen.getByText('Tesla Model 3 erwartet ab 12:30').closest('li');
 	expect(item).toHaveClass('expected');
 });
+
+it('zeigt „Ladelimit“, wenn das Limit des Autos unter dem Ziel des Plans liegt', () => {
+	const car = { ...PLAN.vehicles[0]!, target_soc_pct: 80, limit_pct: 70 };
+	render(PlanHeader, {
+		data: { ...RESPONSE, plan: { ...PLAN, vehicles: [car] } },
+		canOperate: false
+	});
+	expect(screen.getByText('Ladelimit im Auto 70 % liegt unter dem Ziel.')).toBeVisible();
+});
+
+it('zeigt „Ladelimit“ nicht ohne Limit oder mit Limit ab dem Ziel', () => {
+	for (const limit_pct of [null, 80, 100]) {
+		const car = { ...PLAN.vehicles[0]!, target_soc_pct: 80, limit_pct };
+		const { unmount } = render(PlanHeader, {
+			data: { ...RESPONSE, plan: { ...PLAN, vehicles: [car] } },
+			canOperate: false
+		});
+		expect(screen.queryByText(/Ladelimit/)).toBeNull();
+		unmount();
+	}
+});

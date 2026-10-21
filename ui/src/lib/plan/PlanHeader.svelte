@@ -51,7 +51,7 @@
 					? expectedLabel(car.name, car.arrival_at)
 					: car.name,
 			expected: car.expected,
-			line: plannedLine({ mode: null, vehicle: null, car, target: null })
+			line: plannedLine({ mode: null, vehicle: null, car, target: car.target_soc_pct })
 		}))
 	);
 

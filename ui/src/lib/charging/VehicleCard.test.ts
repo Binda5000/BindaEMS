@@ -133,6 +133,21 @@ it('nennt einen geschätzten Ladestand aus Health', () => {
 	expect(screen.queryByText('veraltet')).toBeNull();
 });
 
+it('sagt „geschätzt“ auf der Karte nur einmal', () => {
+	const vehicle = {
+		...system().core.health!.vehicles.find((item) => item.id === 'tesla')!,
+		soc_pct: 48.9,
+		soc_source: 'estimated' as const
+	};
+	show({ vehicle, mode: 'planned', planned: PLANNED });
+	expect(screen.getAllByText(/geschätzt/)).toHaveLength(1);
+	expect(screen.getByText('geschätzt').parentElement).toHaveTextContent('49 % geschätzt');
+	// ohne Zahl im Feld bleibt der Zusatz von „Geplant“
+	cleanup();
+	show({ vehicle: { ...vehicle, soc_pct: null }, mode: 'planned', planned: PLANNED });
+	expect(screen.getAllByText(/geschätzt/)).toHaveLength(1);
+});
+
 describe('Fahrverhalten', () => {
 	const tesla = () => drivingVehicle('tesla');
 	const egolf = () => drivingVehicle('egolf');

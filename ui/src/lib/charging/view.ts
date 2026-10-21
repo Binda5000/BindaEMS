@@ -173,6 +173,9 @@ export function supportHint(effective: SupportEffective | null): string {
 	return `Wirksam ab ${formatSoc(effective.soc_pct)} (${supportSourceLabel(effective.source)}).`;
 }
 
+/** So steht ein leeres Feld in der Fehlermeldung */
+const EMPTY = '(leer)';
+
 /** Ergebnis der Prüfung des Zahlfelds: `soc_pct` `null` heißt „Schwelle der Konfiguration“ */
 export type SupportThreshold = { ok: true; soc_pct: number | null } | { ok: false; text: string };
 
@@ -390,10 +393,10 @@ export function parseTarget(
 	const pct = Number(socText);
 	if (badInput || socText.trim() === '' || !Number.isInteger(pct) || pct < 20 || pct > 100) {
 		const shown = Number.isFinite(pct) && socText.trim() !== '' ? formatNumberMax(pct, 1) : socText;
-		return { ok: false, text: `Ziel-SOC „${shown}“ liegt außerhalb von 20–100 %.` };
+		return { ok: false, text: `Ziel-SOC „${shown.trim() || EMPTY}“ liegt außerhalb von 20–100 %.` };
 	}
 	if (!DEPARTURE.test(departure)) {
-		return { ok: false, text: `Abfahrt „${departure}“ ist keine Uhrzeit (HH:MM).` };
+		return { ok: false, text: `Abfahrt „${departure.trim() || EMPTY}“ ist keine Uhrzeit (HH:MM).` };
 	}
 	return {
 		ok: true,
@@ -466,6 +469,9 @@ function plannedText(
 	return null;
 }
 
+/** Zusatz zu „Geplant“, wenn der Ladestand geschätzt ist */
+export const SOC_ESTIMATED_NOTE = 'Ladestand geschätzt';
+
 /** So weit dürfen das wirksame Ziel in Health und im Plan auseinanderliegen (Rundung) in % */
 const TARGET_TOLERANCE_PCT = 0.05;
 
@@ -501,18 +507,14 @@ export function plannedLine({
 	if (!vehicle?.planned && !car) return null;
 	const source = vehicle?.soc_source ?? (car?.soc_assumed ? 'assumed' : null);
 	const notes: string[] = [];
-	if (source === 'estimated') notes.push('Ladestand geschätzt');
+	if (source === 'estimated') notes.push(SOC_ESTIMATED_NOTE);
 	if (source === 'assumed') notes.push(`Ladestand unbekannt, gerechnet ab ${formatSoc(0)}.`);
 	// ohne Angleichen rechnen Plan und core mit dem Limit als Ziel: das wirksame Ziel liegt darunter
 	const limit = vehicle?.charge_limit_pct ?? car?.limit_pct ?? null;
 	const effective = vehicle?.planned?.target_soc_pct ?? car?.target_soc_pct ?? null;
-	if (
-		limit !== null &&
-		target !== null &&
-		effective !== null &&
-		effective < target &&
-		limit < target
-	) {
+	// der Zeitplan kennt nur das Ziel des Plans (`mode` ist `null`): dort genügt das Limit darunter
+	const below = mode === null || (effective !== null && target !== null && effective < target);
+	if (limit !== null && target !== null && below && limit < target) {
 		notes.push(`Ladelimit im Auto ${formatSoc(limit)} liegt unter dem Ziel.`);
 	}
 	return { text: plannedText(vehicle, car, source, departureOn), notes };
