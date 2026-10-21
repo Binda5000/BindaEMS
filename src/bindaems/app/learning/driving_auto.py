@@ -213,6 +213,14 @@ class DrivingAutomation:
             "last_set_at": stored.last_set_at,
         }
 
+    def state_json(self, key: str) -> dict[str, Any]:
+        """Wie ``state``, die Zeiten als ISO-8601-Text in UTC (für die API)."""
+        state = self.state(key)
+        for field in ("paused_until", "last_set_at"):
+            moment = state[field]
+            state[field] = None if moment is None else ensure_utc(moment).isoformat()
+        return state
+
     def auto_set_at(self, key: str, now: datetime) -> datetime | None:
         """Wann die Automatik das Auto gesetzt hat, wenn das höchstens ``AUTO_RECENT`` vor ``now``
         liegt und seither niemand Ziel oder Abfahrt bedient hat; sonst ``None`` (für

@@ -946,6 +946,91 @@ export const SensorCandidatesSchema = v.object({
 });
 export type SensorCandidates = v.InferOutput<typeof SensorCandidatesSchema>;
 
+// --- Fahrverhalten (Plan 5b) ---------------------------------------------------------------
+
+export const ConfidenceSchema = v.picklist(['high', 'medium', 'low']);
+export type Confidence = v.InferOutput<typeof ConfidenceSchema>;
+
+/** Herkunft der Anwesenheit: HA-Entität, `home_entity` der Konfiguration, Tessie oder Ansteckvorgänge */
+export const DrivingSourceSchema = v.picklist(['ha', 'home_entity', 'tessie', 'sessions']);
+export type DrivingSource = v.InferOutput<typeof DrivingSourceSchema>;
+
+/** Ein Wochentag (0 = Montag … 6 = Sonntag und Feiertag); Uhrzeiten `HH:MM`, fehlende Werte `null` */
+export const DrivingWeekdaySchema = v.object({
+	weekday: v.number(),
+	/** `group`: zu wenige Tage, das Profil rechnet mit der Gruppe (Mo–Fr, Sa, So/Feiertag) */
+	basis: v.picklist(['weekday', 'group']),
+	days: v.number(),
+	trips: v.number(),
+	trip_pct: v.number(),
+	/** Vorschlag Abfahrt (auf die Viertelstunde abgerundetes P20) */
+	departure: v.nullable(v.string()),
+	departure_p50: v.nullable(v.string()),
+	departure_p80: v.nullable(v.string()),
+	departure_confidence: v.nullable(ConfidenceSchema),
+	arrival_p50: v.nullable(v.string()),
+	arrival_soc_p50: NullableNumber,
+	consumption_p50_pp: NullableNumber,
+	consumption_p80_pp: NullableNumber,
+	/** Vorschlag Ziel-SOC; `target_clamped`: auf die Grenzen der Einstellungen begrenzt */
+	target_soc_pct: NullableNumber,
+	target_clamped: v.boolean(),
+	target_confidence: v.nullable(ConfidenceSchema)
+});
+export type DrivingWeekday = v.InferOutput<typeof DrivingWeekdaySchema>;
+
+export const DrivingTripSchema = v.object({
+	date: DateText,
+	departure: v.string(),
+	departure_confidence: ConfidenceSchema,
+	target_soc_pct: NullableNumber,
+	target_confidence: v.nullable(ConfidenceSchema)
+});
+export type DrivingTrip = v.InferOutput<typeof DrivingTripSchema>;
+
+/** Zustand der Automatik für Ziel und Abfahrt eines Autos; `text` ist der fertige Satz */
+export const AutomationStateSchema = v.object({
+	enabled: v.boolean(),
+	state: v.picklist(['off', 'inactive', 'waiting', 'paused', 'uncertain', 'applied', 'error']),
+	text: v.string(),
+	paused_until: v.nullable(Iso),
+	last_set_at: v.nullable(Iso)
+});
+export type AutomationState = v.InferOutput<typeof AutomationStateSchema>;
+
+/** Ein Auto ohne abgelegten Stand: `source`, `data_from`, `data_to` sind `null`, `days` ist 0 */
+export const DrivingVehicleSchema = v.object({
+	key: v.string(),
+	name: v.string(),
+	source: v.nullable(DrivingSourceSchema),
+	data_from: v.nullable(Iso),
+	data_to: v.nullable(Iso),
+	days: v.number(),
+	weekdays: v.array(DrivingWeekdaySchema),
+	next_trip: v.nullable(DrivingTripSchema),
+	/** Wahrscheinlichkeit angesteckt je Viertelstunde der nächsten 48 Stunden; leer ohne Stand */
+	presence: v.array(v.object({ start: Iso, p: v.number() })),
+	/** Trefferquote der letzten 28 Tage; `null` ohne bewertete Tage */
+	quality: v.object({
+		days: v.number(),
+		departure_n: v.number(),
+		departure_hit_pct: NullableNumber,
+		target_n: v.number(),
+		target_hit_pct: NullableNumber
+	}),
+	automation: AutomationStateSchema
+});
+export type DrivingVehicle = v.InferOutput<typeof DrivingVehicleSchema>;
+
+/** `GET /api/learning/driving` */
+export const DrivingStatusSchema = v.object({
+	computed_at: v.nullable(Iso),
+	running: v.boolean(),
+	status: v.object({ ok: v.boolean(), text: v.string() }),
+	vehicles: v.array(DrivingVehicleSchema)
+});
+export type DrivingStatus = v.InferOutput<typeof DrivingStatusSchema>;
+
 export const DaySummarySchema = v.object({
 	date: DateText,
 	slots: v.number(),
@@ -1189,7 +1274,8 @@ export const PlanReasonCodeSchema = v.picklist([
 	'ERSATZPLAN',
 	'ZIEL_SOC_ABFAHRT',
 	'AUTO_WARTET_AUF_PV',
-	'ZIEL_SOC_UNERREICHBAR'
+	'ZIEL_SOC_UNERREICHBAR',
+	'AUTO_ERWARTET'
 ]);
 export type PlanReasonCode = v.InferOutput<typeof PlanReasonCodeSchema>;
 
@@ -1252,7 +1338,10 @@ export const PlanVehicleSchema = v.object({
 	expected_soc_pct: v.number(),
 	/** Ende des letzten Slots mit Laden, `null` ohne Laden */
 	finish_at: v.nullable(Iso),
-	reachable: v.boolean()
+	reachable: v.boolean(),
+	/** erwartetes Auto (Plan 5b): noch nicht angesteckt, die Anwesenheitsprognose erwartet es ab `arrival_at` */
+	expected: v.boolean(),
+	arrival_at: v.nullable(Iso)
 });
 export type PlanVehicle = v.InferOutput<typeof PlanVehicleSchema>;
 

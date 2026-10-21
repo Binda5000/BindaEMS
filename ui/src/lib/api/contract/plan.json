@@ -37,7 +37,9 @@
         "shortfall_kwh": 0.0,
         "expected_soc_pct": 59.99999999999998,
         "finish_at": "2026-10-09T14:30:00+00:00",
-        "reachable": true
+        "reachable": true,
+        "expected": false,
+        "arrival_at": null
       }
     ],
     "slots": [

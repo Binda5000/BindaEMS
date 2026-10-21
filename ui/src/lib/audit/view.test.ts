@@ -56,6 +56,7 @@ it('beschriftet die Bedienung und die Quittierung', () => {
 		'intent.priority',
 		'intent.actuators',
 		'control.support',
+		'control.automation',
 		'lock.acknowledge'
 	].map(actionLabel);
 	expect(labels).toEqual([
@@ -68,6 +69,7 @@ it('beschriftet die Bedienung und die Quittierung', () => {
 		'Vorrang geändert',
 		'Betriebsart der Aktoren geändert',
 		'Akku-Unterstützung geändert',
+		'Automatik geändert',
 		'Sperre quittiert'
 	]);
 	expect(actionLabel('unbekannt.aktion')).toBe('unbekannt.aktion');

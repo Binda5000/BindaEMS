@@ -1,4 +1,5 @@
-"""Lastmodell für das UI: Zustand, Taste „Jetzt neu trainieren“, HA-Sensoren zur Auswahl.
+"""Lastmodell und Fahrverhalten für das UI: Zustand, Tasten „Jetzt neu trainieren“ und „Jetzt neu
+berechnen“, HA-Sensoren zur Auswahl.
 
 Ohne ``from __future__ import annotations`` (siehe ``auth/routes.py``).
 """
@@ -10,10 +11,13 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from bindaems.app.auth.service import SessionInfo
 from bindaems.app.auth.web import Guard
 from bindaems.app.forecast.load import LoadForecastService
+from bindaems.app.learning.driving_auto import DrivingAutomation
+from bindaems.app.learning.driving_service import DrivingService
 from bindaems.app.learning.ha_sensors import HaSensorReader
 from bindaems.app.learning.service import LoadModelService
 
 TRAINING_RUNNING = "Training läuft schon."
+RECOMPUTE_RUNNING = "Berechnung läuft schon."
 
 
 def learning_router(
@@ -21,6 +25,8 @@ def learning_router(
     sensors: HaSensorReader,
     load: LoadForecastService,
     guard: Guard,
+    driving: DrivingService,
+    automation: DrivingAutomation,
 ) -> APIRouter:
     router = APIRouter(prefix="/api/learning")
     Viewer = Annotated[SessionInfo, Depends(guard.require("viewer"))]
@@ -41,6 +47,24 @@ def learning_router(
     async def train(session: Admin) -> dict[str, bool]:
         if not model.start_training():
             raise HTTPException(status.HTTP_409_CONFLICT, TRAINING_RUNNING)
+        return {"started": True}
+
+    # ``async``: Dienst und Automatik ändern ihren Zustand in der Ereignisschleife; so liest ihn die
+    # Antwort ohne Wettlauf
+    @router.get("/driving")
+    async def driving_status(session: Viewer) -> dict[str, Any]:
+        """Fahrverhalten je Auto (Präzisierung 11): der Zustand des Dienstes, dazu je Auto die
+        Automatik."""
+        body = driving.status()
+        for vehicle in body["vehicles"]:
+            vehicle["automation"] = automation.state_json(vehicle["key"])
+        return body
+
+    # ``async``: die Berechnung braucht die laufende Ereignisschleife
+    @router.post("/driving/recompute", status_code=status.HTTP_202_ACCEPTED)
+    async def recompute(session: Admin) -> dict[str, bool]:
+        if not driving.start_recompute():
+            raise HTTPException(status.HTTP_409_CONFLICT, RECOMPUTE_RUNNING)
         return {"started": True}
 
     @router.get("/candidates")

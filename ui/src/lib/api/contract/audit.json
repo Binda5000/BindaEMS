@@ -18,6 +18,16 @@
           "path": "learning.ha_sensors[1]",
           "old": null,
           "new": "sensor.wohnzimmer_temperatur"
+        },
+        {
+          "path": "learning.driving.automation.tesla",
+          "old": null,
+          "new": true
+        },
+        {
+          "path": "learning.driving.automation.egolf",
+          "old": null,
+          "new": false
         }
       ]
     }

@@ -441,7 +441,14 @@ class AppRuntime:
                 forecast_router(
                     self.forecast, self.load_forecast, self.forecast_quality, self._clock, guard
                 ),
-                learning_router(self.load_model, self.ha_sensors, self.load_forecast, guard),
+                learning_router(
+                    self.load_model,
+                    self.ha_sensors,
+                    self.load_forecast,
+                    guard,
+                    self.driving,
+                    self.automation,
+                ),
                 ledger_router(self.ledger, guard, self.ledger_checks),
                 charging_router(self.charging_sessions, cfg, self.settings, guard),
                 stats_router(self.stats, guard),
@@ -466,6 +473,7 @@ class AppRuntime:
                     cfg=cfg,
                     clock=self._clock,
                     live=self.live,
+                    automation=self.automation,
                 ),
             ],
             ui_dir=cfg.app.ui_dir,

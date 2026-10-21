@@ -41,6 +41,7 @@ const ACTIONS: Record<string, string> = {
 	'intent.priority': 'Vorrang geändert',
 	'intent.actuators': 'Betriebsart der Aktoren geändert',
 	'control.support': 'Akku-Unterstützung geändert',
+	'control.automation': 'Automatik geändert',
 	'lock.acknowledge': 'Sperre quittiert'
 };
 

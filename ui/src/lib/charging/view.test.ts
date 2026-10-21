@@ -476,6 +476,8 @@ describe('Geplant', () => {
 		expected_soc_pct: 80,
 		finish_at: '2026-10-10T03:45:00+00:00',
 		reachable: true,
+		expected: false,
+		arrival_at: null,
 		...changes
 	});
 	const health = (changes: Partial<VehicleHealth> = {}) =>

@@ -13,7 +13,7 @@ import asyncio
 import math
 import re
 from collections.abc import Sequence
-from datetime import UTC, datetime, time, timedelta
+from datetime import UTC, date, datetime, time, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -45,6 +45,7 @@ from tests.ui_history import (
 from bindaems.app.charging.tracker import WallboxSeen
 from bindaems.app.consumers.service import ConsumerInput
 from bindaems.app.consumers.values import ENTITY_UNITS_QUERY, HaRef
+from bindaems.app.daytype import is_holiday
 from bindaems.app.db.schema import (
     charging_session,
     model_registry,
@@ -54,6 +55,9 @@ from bindaems.app.db.schema import (
 from bindaems.app.forecast.archive import HorizonClass, Kind, RecordValue, actuals
 from bindaems.app.forecast.openmeteo import OPEN_METEO_URL
 from bindaems.app.learning.backtest import BacktestResult, WeekResult
+from bindaems.app.learning.driving_days import DayRecord
+from bindaems.app.learning.driving_profile import VehicleProfile, build_profile
+from bindaems.app.learning.driving_quality import HitRates
 from bindaems.app.learning.features import TrainingSet, feature_names, local_midnight
 from bindaems.app.learning.ha_sensors import _CANDIDATES_QUERY
 from bindaems.app.learning.model import MIN_ROWS, TrainedModel, train
@@ -71,12 +75,23 @@ from bindaems.core.runtime import CoreRuntime
 from bindaems.core.safety.types import Outcome
 from bindaems.core.watchdog_client.status import WATCHDOG_VERSION
 from bindaems.shared.config import Config, Secrets, soc_signal
-from bindaems.shared.control import ChargeMode, CommandKind, Intent, VehicleIntent
+from bindaems.shared.control import (
+    ChargeMode,
+    CommandKind,
+    Intent,
+    VehicleIntent,
+    next_departure,
+)
 from bindaems.shared.decisions import NO_VERDICT, Decision, DecisionResult, decision_text
 from bindaems.shared.domain import SignalKind, SlotFlows
 from bindaems.shared.influx.lineprotocol import epoch_ms
 from bindaems.shared.plan import Plan
-from bindaems.shared.settings import MonthlyFeeComponent, PowerComponent, TariffSettings
+from bindaems.shared.settings import (
+    DrivingSettings,
+    MonthlyFeeComponent,
+    PowerComponent,
+    TariffSettings,
+)
 from bindaems.shared.timeutil import LOCAL_TZ, Clock, ManualClock, local_day_slots
 
 T_DEMO = T_APP  # 09.10.2026, 10:00 Ortszeit
@@ -665,6 +680,7 @@ SHADOW_SCALE: dict[HorizonClass, tuple[float, float]] = {
     "h24": (0.30, 0.21),
 }
 SHADOW_LEAD_H: dict[HorizonClass, int] = {"h0_6": 3, "h6_24": 15, "h24": 30}
+DEMO_AUTOMATION = {"tesla": True, "egolf": False}
 DEMO_SENSORS = ["sensor.aussentemperatur", "sensor.wohnzimmer_temperatur"]
 MODEL_TRAINED_AT = datetime(2026, 10, 9, 1, 15, tzinfo=UTC)  # 03:15 Ortszeit
 MODEL_SAMPLES = 5376  # 56 Tage zu 96 Viertelstunden
@@ -773,7 +789,11 @@ async def _learning(app: AppRuntime) -> None:
     """Geladenes Lastmodell mit Backtest, Schattenbetrieb und Aktivierung (Modell aktiv); zwei
     Sensoren aus HA sind gewählt, einer davon liefert dem Modell Werte."""
     settings = app.settings.current()
-    learning = settings.settings.learning.model_copy(update={"ha_sensors": DEMO_SENSORS})
+    # dieselbe Version schaltet die Automatik (``_driving``): Tesla an, e-Golf aus
+    driving = settings.settings.learning.driving.model_copy(update={"automation": DEMO_AUTOMATION})
+    learning = settings.settings.learning.model_copy(
+        update={"ha_sensors": DEMO_SENSORS, "driving": driving}
+    )
     app.settings.update(
         settings.settings.model_copy(update={"learning": learning}),
         base_version=settings.version,
@@ -808,6 +828,109 @@ async def _learning(app: AppRuntime) -> None:
         MODEL_TRAINED_AT,
         f"Trainiert am {local:%d.%m. %H:%M} mit {MODEL_SAMPLES} Viertelstunden.",
     )
+
+
+DRIVING_COMPUTED_AT = datetime(2026, 10, 9, 1, 40, tzinfo=UTC)  # 03:40 Ortszeit, der Lauf der Nacht
+TESLA_TRIP_DAYS = 56  # Fenster des Fahrverhaltens: acht Wochen
+
+
+def _local(day: date, at: str) -> datetime:
+    hour, minute = (int(part) for part in at.split(":"))
+    return datetime.combine(day, time(hour, minute), tzinfo=LOCAL_TZ).astimezone(UTC)
+
+
+def _trip(
+    day: date, leave: str, depart_soc: float, back: str, back_soc: float, used_pp: float
+) -> DayRecord:
+    return DayRecord(
+        day=day,
+        weekday=6 if is_holiday(day) else day.weekday(),
+        away=False,
+        departure=_local(day, leave),
+        departure_soc=depart_soc,
+        arrival=_local(day, back),
+        arrival_soc=back_soc,
+        return_at=_local(day, back),
+        return_soc=back_soc,
+        consumption_pp=used_pp,
+    )
+
+
+def _stay(day: date) -> DayRecord:
+    """Ein Tag zu Hause ohne Fahrt."""
+    return DayRecord(
+        day=day,
+        weekday=6 if is_holiday(day) else day.weekday(),
+        away=False,
+        departure=None,
+        departure_soc=None,
+        arrival=None,
+        arrival_soc=None,
+        return_at=None,
+        return_soc=None,
+        consumption_pp=None,
+    )
+
+
+def _tesla_profile(today: date) -> VehicleProfile:
+    """Der Tesla pendelt Mo bis Fr gegen 07:15 Uhr (leichte Streuung) und kommt gegen 17:40 Uhr
+    mit etwa 40 % zurück; er steckt über Nacht und am Wochenende."""
+    records: list[DayRecord] = []
+    plugged: list[date] = []  # Tage, an denen er abends angesteckt wurde (nicht immer)
+    for back in range(TESLA_TRIP_DAYS, 0, -1):
+        day = today - timedelta(days=back)
+        if is_holiday(day) or day.weekday() >= 5:
+            records.append(_stay(day))
+            continue
+        shift = day.toordinal() % 3
+        leave = f"07:{15 + 5 * shift:02d}"
+        used = 16.0 + day.toordinal() % 4  # 16 bis 19 Prozentpunkte
+        records.append(_trip(day, leave, 58.0, f"17:{30 + 5 * shift}", 58.0 - used, used))
+        if day.toordinal() * 3 % 8 != 5:
+            plugged.append(day)
+    # jeder Ansteckvorgang endet kurz vor der nächsten Abfahrt (die letzte war heute um 07:15)
+    departures = {r.day: r.departure for r in records if r.departure is not None}
+    sessions: list[tuple[datetime, datetime | None]] = []
+    for day in plugged:
+        following = [d for d in departures if d > day]
+        leave_next = departures[min(following)] if following else _local(today, "07:15")
+        assert leave_next is not None
+        sessions.append((_local(day, "17:50"), leave_next - timedelta(minutes=5)))
+    return build_profile("tesla", "tessie", records, sessions, DrivingSettings(), today=today)
+
+
+def _egolf_profile(today: date) -> VehicleProfile:
+    """Der e-Golf hat erst vier Tage Daten, nur aus den Ansteckvorgängen und zwei Fahrten: Das
+    Profil bleibt unsicher (Konfidenz „niedrig“)."""
+    monday = today - timedelta(days=4)
+    records = [
+        _trip(monday, "08:00", 90.0, "17:00", 70.0, 20.0),
+        _stay(monday + timedelta(days=1)),
+        _trip(monday + timedelta(days=2), "08:30", 85.0, "17:20", 60.0, 25.0),
+        _stay(monday + timedelta(days=3)),
+    ]
+    sessions: list[tuple[datetime, datetime | None]] = [
+        (_local(monday, "17:15"), _local(monday + timedelta(days=2), "07:55")),
+        (_local(monday + timedelta(days=2), "17:30"), _local(today, "07:50")),
+    ]
+    return build_profile("egolf", "sessions", records, sessions, DrivingSettings(), today=today)
+
+
+async def _driving(app: AppRuntime) -> None:
+    """Fahrverhalten wie nach dem Lauf der Nacht: ein Pendler-Profil für den Tesla (Automatik an,
+    pausiert, weil Ziel und Abfahrt heute von Hand stehen) und ein dünnes für den e-Golf
+    (Automatik aus; die Schalter setzt ``_learning``). Beide Stände liegen in der Datenbank und
+    werden wie beim Start geladen."""
+    today = T_DEMO.astimezone(LOCAL_TZ).date()
+    for profile in (_tesla_profile(today), _egolf_profile(today)):
+        app.driving._store(profile, DRIVING_COMPUTED_AT)
+    await app.driving.load_stored()
+    app.driving._quality["tesla"] = HitRates(
+        departure_n=19, departure_hits=17, target_n=17, target_hits=16
+    )
+    # Ziel und Abfahrt des Tesla stehen von Hand (Absicht der Demo): die Automatik pausiert bis
+    # zu dieser Abfahrt
+    app.automation.on_manual_target("tesla", next_departure(DEMO_DEPARTURE, T_DEMO))
 
 
 async def _earlier_plan(app: AppRuntime, plan: Plan) -> None:
@@ -1021,6 +1144,7 @@ async def build_world(cfg: Config, data_dir: Path, *, ui_dir: Path | None = None
         plan = await app.planning.replan("start")
         assert plan is not None, app.planning.component_status().message
         await _earlier_plan(app, plan)
+        await _driving(app)
         # erst nach dem Plan: er bleibt mit dem Profil gerechnet, die Ausgabe nennt das Modell
         await app.load_forecast.refresh()
     except BaseException:

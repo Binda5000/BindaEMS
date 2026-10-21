@@ -4417,6 +4417,91 @@ die letzten 14 Tage; ihn trägst du wöchentlich ein (Checkliste, Abschnitt 2).
 Dazu kommen jede Nacht ein Training (Registry), keine Fehler in `load-model` und der Rückfall bei
 fehlender Modelldatei, an der Anlage beobachtet. Die Checkliste führt die Schritte auf.
 
+## Fahrverhalten (Phase 5b)
+
+Seit Plan 5b lernt die app aus den Fahrdaten jedes Autos, **wann es abfährt, mit wie viel Ladestand
+es zurückkommt und wann es angesteckt ist**. Daraus entstehen ein **Vorschlag** für Ziel-SOC und
+Abfahrt, eine **Anwesenheitsprognose** für die nächsten 48 Stunden und, wenn du es willst, eine
+**Automatik**, die Ziel und Abfahrt von „Geplant“ selbst setzt. **Unbekannt bleibt unbekannt:** Ohne
+Daten gibt es keinen Vorschlag, keine Prognose und kein erwartetes Auto, nie einen Ersatzwert.
+Gelernte Werte erreichen die Safety-Schicht nie und ändern keine harte Grenze (Spec 10.5); die
+Automatik ist ab Werk **aus**, und kein Aktor wird dafür live geschaltet.
+
+### Ablauf und Komponente
+
+- **Berechnung:** Jede Nacht um **03:40 Uhr** (Ortszeit, nach dem Lastmodell um 03:15), beim Start
+  und mit der Taste „Jetzt neu berechnen“ (nur Admin) liest die app je konfiguriertem Auto die
+  Fahrdaten der letzten 56 Tage und legt ein Profil in der Tabelle `driving_profile` ab (behalten
+  werden 70 Tage). Während eines Laufs steht auf der Taste „Berechnung läuft …“; ein zweiter Start
+  ist nicht möglich. Scheitert das Lesen oder Rechnen für ein Auto, gilt dessen letzter Stand weiter.
+- **Quelle der Anwesenheit** (je Auto die erste verfügbare): die Entität
+  `learning.driving.presence_entities` (HA-Datenbank), `home_entity` des Autos, bei einem
+  Tessie-Auto der Status `at_home`, sonst nur die Ansteckvorgänge. Das Profil nennt die Quelle:
+  `ha`, `home_entity`, `tessie` oder `sessions`. Fehlt dem Auto ein Stand, steht dort `null`.
+- **Profil:** Je Wochentag (Gruppen „Mo–Fr“, „Sa“, „So/Feiertag“, wenn ein Wochentag weniger als 3
+  Tage hat) Abfahrt (P20, auf die Viertelstunde abgerundet), Ankunft, Ladestand bei der Ankunft,
+  Verbrauch (P80) und daraus das Ziel: Reserve (`return_reserve_pct`) plus Verbrauch, auf 5 %
+  aufgerundet und zwischen `target_min_pct` und `target_max_pct` begrenzt. Dazu die **Konfidenz**
+  („hoch“, „mittel“, „niedrig“) und je Viertelstunde die Wahrscheinlichkeit, dass das Auto angesteckt
+  ist.
+- **Einstellungen** (`learning.driving`): `return_reserve_pct` (20), `target_min_pct` (50),
+  `target_max_pct` (90), `automation` (Schalter je Auto, ab Werk leer, also aus) und
+  `presence_entities` (je Auto eine HA-Entität). Einträge für Autos, die `config.yaml` nicht kennt,
+  übergeht die app.
+- **Komponente `driving`** unter **System** → „Komponenten“: „Fahrverhalten aktuell“, „Noch keine
+  Fahrdaten“ (normal, bis das erste Profil Tage hat; Status in Ordnung) oder „Fahrverhalten
+  fehlgeschlagen: {Fehler}“ (Status nicht in Ordnung).
+
+### Die Automatik für Ziel und Abfahrt
+
+Je Auto gibt es einen Schalter „Ziel und Abfahrt automatisch“ (`learning.driving.automation`, ab
+Werk **aus**). Ist er an, prüft die app jede Minute und nach jedem Lauf des Fahrverhaltens der
+Reihe nach: Health vertrauenswürdig, das Auto steht auf „Geplant“, keine geplante Ladung läuft, die
+Pause ist vorbei und der nächste Vorschlag hat für Abfahrt oder Ziel mindestens die Konfidenz
+„mittel“. Weichen die Werte von der Absicht ab, setzt sie Ziel und Abfahrt (mit dem Tag der Fahrt)
+mit dem Urheber „Automatik“; den Lademodus ändert sie nie.
+
+**Pause bei Bedienung von Hand:** Ändert jemand Ziel oder Abfahrt eines Autos mit Automatik von
+Hand (also nicht durch die Automatik selbst), pausiert die Automatik bis zu dieser Abfahrt (ohne
+Abfahrt bis Mitternacht). Das Einschalten des Schalters beendet eine Pause. Die Zustände und ihre
+Sätze (`automation.state` und `automation.text`):
+
+| Zustand | Satz |
+|---|---|
+| `off` | „Automatik aus.“ |
+| `inactive` | „Automatik wartet: Das Auto steht nicht auf „Geplant“.“ |
+| `waiting` | „Automatik wartet: Eine geplante Ladung läuft bis {Tag} {HH:MM}.“ |
+| `paused` | „Automatik pausiert bis {Tag} {HH:MM}, weil Ziel oder Abfahrt von Hand geändert wurden.“ |
+| `uncertain` | „Automatik wartet: Der Vorschlag ist noch zu unsicher.“ |
+| `applied` | „Automatik: {Tag} {HH:MM}, Ziel {x} %.“ bzw. mit „(gesetzt {TT.MM. HH:MM})“ |
+| `error` | „Automatik fehlgeschlagen: {Fehler}“ (nächster Versuch in einer Minute) |
+
+Das Schalten steht im Änderungsprotokoll als Aktion `control.automation` („Automatik an“ bzw.
+„Automatik aus“, Urheber ist der Benutzer); die Änderung von Ziel und Abfahrt durch die Automatik
+steht dort mit dem Urheber „Automatik“.
+
+### API für das Fahrverhalten
+
+- `GET /api/learning/driving` (ab „Lesen“): `computed_at`, `running`, `status` (`ok`, `text`) und
+  `vehicles`. Je Auto: `key`, `name`, `source`, `data_from`, `data_to`, `days`, `weekdays` (sieben
+  Einträge mit `weekday`, `basis`, `days`, `trips`, `trip_pct`, `departure`, `departure_p50`,
+  `departure_p80`, `departure_confidence`, `arrival_p50`, `arrival_soc_p50`, `consumption_p50_pp`,
+  `consumption_p80_pp`, `target_soc_pct`, `target_clamped`, `target_confidence`), `next_trip`,
+  `presence`, `quality` (Trefferquote der letzten 28 Tage) und `automation` (`enabled`, `state`,
+  `text`, `paused_until`, `last_set_at`). Alle Zeiten sind ISO 8601 in UTC. `presence` nennt die
+  nächsten 48 Stunden als Viertelstunden `{"start": …, "p": 0.88}` ab dem Beginn der laufenden
+  Viertelstunde, `p` auf zwei Stellen gerundet; ohne Profil ist die Liste leer. Ein Auto ohne Stand
+  fehlt nicht: `source`, `data_from` und `data_to` sind `null`, `days` ist 0 und `weekdays` leer.
+  `next_trip`, die Trefferquoten und die Werte je Wochentag können `null` sein.
+- `POST /api/learning/driving/recompute` (nur Admin, Antwort 202 `{"started": true}`): rechnet im
+  Hintergrund neu. Läuft schon eine Berechnung, antwortet die app mit 409 „Berechnung läuft schon.“.
+- `PUT /api/control/vehicles/{key}/automation` (ab „Bedienen“) mit `{"on": true}`: schaltet die
+  Automatik des Autos, schreibt `control.automation` ins Änderungsprotokoll und antwortet mit 200 und
+  dem neuen `automation`-Objekt. Ein unbekanntes Auto beantwortet die app mit 404.
+- `GET /api/plan` nennt je Auto zusätzlich `expected` (das Auto ist noch nicht angesteckt, die
+  Anwesenheitsprognose erwartet es) und `arrival_at` (erwartete Ankunft, sonst `null`); der Grundcode
+  `AUTO_ERWARTET` steht im Abschnitt „Planung“.
+
 ## Planung
 
 Seit Plan 3b plant die app den Hausakku für bis zu 36 h. Seit Plan 3c übergibt sie den Plan in der

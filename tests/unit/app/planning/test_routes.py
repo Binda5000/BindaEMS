@@ -166,6 +166,8 @@ async def test_get_plan_shows_the_planned_cars(client_as, planning, live):
         "expected_soc_pct": source.expected_soc_pct,
         "finish_at": source.finish_at.isoformat() if source.finish_at else None,
         "reachable": source.reachable,
+        "expected": False,
+        "arrival_at": None,
     }
     assert car["departure_at"].endswith("+00:00") and car["planned_kwh"] > 0
     for item, slot in zip(plan["slots"], stored.slots, strict=True):

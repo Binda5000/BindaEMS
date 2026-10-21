@@ -44,6 +44,7 @@ GET_ENDPOINTS = {
     "forecast-quality-daily": "/api/forecast/quality/daily?days=28",
     "learning-load": "/api/learning/load",
     "learning-candidates": "/api/learning/candidates",
+    "learning-driving": "/api/learning/driving",
     "ledger-days": "/api/ledger/days?from=2026-09-24&to=2026-10-09",
     "ledger-checks": "/api/ledger/checks?from=2026-10-02&to=2026-10-08",
     "stats-day": "/api/stats?period=day&date=2026-10-08",
@@ -71,6 +72,7 @@ OTHER = {
     "control-reply",
     "plan-grid-charge",
     "control-support",
+    "control-automation",
 }
 
 
@@ -138,6 +140,11 @@ def collect_responses(world: World) -> dict[str, object]:
     )
     assert support.status_code == 200, support.text
     actual["control-support"] = support.json()
+    automation = client.put(
+        "/api/control/vehicles/egolf/automation", json={"on": True}, headers=csrf
+    )
+    assert automation.status_code == 200, automation.text
+    actual["control-automation"] = automation.json()
     return actual
 
 
@@ -298,6 +305,43 @@ async def test_demo_world_has_a_loaded_model(cfg, tmp_path) -> None:
         assert len({row.day for row in rows}) == 12
     finally:
         world.close()
+
+
+async def test_demo_world_has_driving_behaviour(cfg, tmp_path) -> None:
+    # Grundlage der Karten „Fahrverhalten“ und „Anwesenheit“: ein Pendler (Automatik an) und ein
+    # Auto mit wenig Daten (Konfidenz niedrig, Automatik aus), beide über die echte Route
+    world = await build_world(cfg, tmp_path)
+    try:
+
+        def fetch() -> dict[str, Any]:
+            client = TestClient(world.app.app, base_url="https://testserver")
+            login = client.post(
+                "/api/auth/login", json={"username": "admin", "password": DEMO_PASSWORD}
+            )
+            assert login.status_code == 200, login.text
+            return client.get("/api/learning/driving").json()
+
+        body = await asyncio.to_thread(fetch)
+    finally:
+        world.close()
+    assert body["status"]["text"] == "Fahrverhalten berechnet am 09.10. 03:40."
+    tesla, egolf = body["vehicles"]
+    commute = tesla["weekdays"][:5]
+    assert {(w["departure"], w["departure_confidence"]) for w in commute} == {("07:15", "high")}
+    assert [tesla["weekdays"][5]["trips"], tesla["weekdays"][6]["trips"]] == [0, 0]
+    assert tesla["automation"]["enabled"] is True and tesla["automation"]["state"] == "paused"
+    assert tesla["quality"]["departure_hit_pct"] == 89 and len(tesla["presence"]) == 192
+    assert max(item["p"] for item in tesla["presence"]) > 0.8
+    assert egolf["days"] < 7 and egolf["source"] == "sessions"
+    low = {w["departure_confidence"] for w in egolf["weekdays"] if w["departure"] is not None}
+    assert low == {"low"}
+    assert egolf["automation"] == {
+        "enabled": False,
+        "state": "off",
+        "text": "Automatik aus.",
+        "paused_until": None,
+        "last_set_at": None,
+    }
 
 
 async def test_reprice_keeps_the_demo_costs(cfg, tmp_path) -> None:

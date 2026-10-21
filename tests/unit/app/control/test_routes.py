@@ -15,10 +15,28 @@ from bindaems.app.control.decisions import DecisionStore
 from bindaems.app.control.intent import IntentService
 from bindaems.app.control.routes import control_router
 from bindaems.app.core_link import CoreReply, CoreUnavailableError, LiveState
+from bindaems.app.learning.driving_auto import DrivingAutomation
 from bindaems.shared.control import ActuatorMode, ChargeMode, Intent, VehicleIntent
 from bindaems.shared.decisions import DecisionResult
 
 LIVE_BODY = {"modes": {"wallbox.evcs": "live"}, "password": PASSWORD, "confirmed": True}
+
+
+@pytest.fixture
+def automation(
+    service: IntentService, live: LiveState, settings_service, audit, engine, cfg, clock
+) -> DrivingAutomation:
+    return DrivingAutomation(
+        intents=service,
+        live=live,
+        profiles=lambda key: None,
+        charges=dict,
+        settings=settings_service,
+        audit=audit,
+        engine=engine,
+        cfg=cfg,
+        clock=clock,
+    )
 
 
 @pytest.fixture
@@ -35,6 +53,7 @@ def client(
     settings_service,
     ledger,
     cfg,
+    automation: DrivingAutomation,
 ) -> TestClient:
     router = control_router(
         service,
@@ -48,6 +67,7 @@ def client(
         cfg=cfg,
         clock=clock,
         live=live,
+        automation=automation,
     )
     return make_client(router)
 
@@ -72,6 +92,7 @@ def test_every_change_route_needs_operator_and_a_csrf_token(client, auth) -> Non
     calls = [
         ("/api/control/regulation", {"on": True}),
         ("/api/control/vehicles/tesla/boost", {"on": True}),
+        ("/api/control/vehicles/tesla/automation", {"on": True}),
         ("/api/control/vehicles/tesla/target", {"target_soc_pct": 80, "departure": "07:00"}),
         ("/api/control/wallboxes/evcs/vehicle", {"vehicle": "tesla"}),
         ("/api/control/guest", {"mode": "now"}),
@@ -656,3 +677,72 @@ def test_target_of_an_unknown_vehicle_is_404(client, auth) -> None:
     )
     assert response.status_code == 404
     assert response.json()["detail"] == "Unbekanntes Fahrzeug „zoe“."
+
+
+# --- Automatik für Ziel und Abfahrt (Plan 5b, Präzisierung 12) -------------------------------
+
+
+def test_automation_switch_needs_operate_role(client, auth, audit) -> None:
+    viewer = login_as(client, auth, "viewer")
+    denied = client.put("/api/control/vehicles/tesla/automation", json={"on": True}, headers=viewer)
+    assert denied.status_code == 403
+    assert not [e for e in audit.recent() if e.action == "control.automation"]
+
+
+def test_automation_switch_needs_login(client) -> None:
+    response = client.put("/api/control/vehicles/tesla/automation", json={"on": True})
+    assert response.status_code == 401
+
+
+def test_operator_switches_the_automation_and_gets_its_state(
+    client, auth, settings_service, automation
+) -> None:
+    operator = login_as(client, auth, "operator")
+    response = client.put(
+        "/api/control/vehicles/tesla/automation", json={"on": True}, headers=operator
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert list(body) == ["enabled", "state", "text", "paused_until", "last_set_at"]
+    assert body["enabled"] is True and body["state"] != "off"
+    assert (body["paused_until"], body["last_set_at"]) == (None, None)
+    assert settings_service.current().settings.learning.driving.automation == {"tesla": True}
+    off = client.put("/api/control/vehicles/tesla/automation", json={"on": False}, headers=operator)
+    assert off.json() == {
+        "enabled": False,
+        "state": "off",
+        "text": "Automatik aus.",
+        "paused_until": None,
+        "last_set_at": None,
+    }
+    assert settings_service.current().settings.learning.driving.automation == {"tesla": False}
+
+
+def test_automation_switch_is_audited(client, auth, audit) -> None:
+    operator = login_as(client, auth, "operator", username="bedienen")
+    client.put("/api/control/vehicles/tesla/automation", json={"on": True}, headers=operator)
+    client.put("/api/control/vehicles/tesla/automation", json={"on": False}, headers=operator)
+    entries = [e for e in audit.recent() if e.action == "control.automation"]
+    assert len(entries) == 2  # kein zweiter Eintrag aus der Route
+    off, on = entries  # neueste zuerst
+    assert (on.actor, on.source, on.target) == ("bedienen", "ui", "tesla")
+    assert (on.details or {})["to"] == "Automatik an"
+    assert (off.details or {})["to"] == "Automatik aus"
+
+
+def test_unknown_vehicle_is_404(client, auth, audit) -> None:
+    operator = login_as(client, auth, "operator")
+    response = client.put(
+        "/api/control/vehicles/unbekannt/automation", json={"on": True}, headers=operator
+    )
+    assert response.status_code == 404
+    assert "unbekannt" in response.json()["detail"]
+    assert not [e for e in audit.recent() if e.action == "control.automation"]
+
+
+def test_automation_body_forbids_extra_fields(client, auth) -> None:
+    operator = login_as(client, auth, "operator")
+    response = client.put(
+        "/api/control/vehicles/tesla/automation", json={"on": True, "x": 1}, headers=operator
+    )
+    assert response.status_code == 422

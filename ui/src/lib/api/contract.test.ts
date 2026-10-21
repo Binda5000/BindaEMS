@@ -26,6 +26,7 @@ const SCHEMAS: Record<string, v.GenericSchema> = {
 	'forecast-quality-daily': s.QualityDailySchema,
 	'learning-load': s.LearningStatusSchema,
 	'learning-candidates': s.SensorCandidatesSchema,
+	'learning-driving': s.DrivingStatusSchema,
 	'ledger-days': v.array(s.DaySummarySchema),
 	'ledger-checks': s.LedgerChecksSchema,
 	'stats-day': s.StatsSchema,
@@ -45,6 +46,7 @@ const SCHEMAS: Record<string, v.GenericSchema> = {
 	'boost-cost': s.BoostCostSchema,
 	'control-reply': s.ControlReplySchema,
 	'control-support': s.ControlReplySchema,
+	'control-automation': s.AutomationStateSchema,
 	decisions: s.DecisionsResponseSchema,
 	'decisions-latest': s.LatestDecisionsResponseSchema,
 	plan: s.PlanResponseSchema,
@@ -86,6 +88,41 @@ it('akzeptiert die Nullfälle der API', () => {
 			warnings: []
 		})
 	).toEqual([]);
+});
+
+describe('Fahrverhalten', () => {
+	const demo = files['./contract/learning-driving.json'] as {
+		vehicles: Record<string, unknown>[];
+	};
+
+	it('akzeptiert ein Auto ohne Stand: Quelle und Daten fehlen, keine Tage', () => {
+		const noData = {
+			...demo.vehicles[1],
+			source: null,
+			data_from: null,
+			data_to: null,
+			days: 0,
+			weekdays: [],
+			next_trip: null,
+			presence: []
+		};
+		expect(issues(s.DrivingVehicleSchema, noData)).toEqual([]);
+		expect(issues(s.DrivingStatusSchema, { ...demo, vehicles: [noData] })).toEqual([]);
+	});
+
+	it('lehnt eine unbekannte Quelle und einen unbekannten Zustand der Automatik ab', () => {
+		expect(issues(s.DrivingSourceSchema, 'tessie')).toEqual([]);
+		expect(issues(s.DrivingSourceSchema, 'garage')).not.toEqual([]);
+		const automation = demo.vehicles[0].automation as Record<string, unknown>;
+		expect(issues(s.AutomationStateSchema, { ...automation, state: 'kaputt' })).not.toEqual([]);
+	});
+
+	it('zeigt Tesla mit hoher und e-Golf mit niedriger Konfidenz', () => {
+		const first = (index: number) =>
+			demo.vehicles[index].weekdays as { departure_confidence: string }[];
+		expect(first(0)[0].departure_confidence).toBe('high');
+		expect(first(1)[0].departure_confidence).toBe('low');
+	});
 });
 
 describe('Lastmodell', () => {
@@ -365,7 +402,12 @@ describe('Bedienung und Entscheidungen', () => {
 	it('kennt den Modus „Geplant“ und die neuen Grundcodes des Plans', () => {
 		expect(issues(s.ChargeModeSchema, 'planned')).toEqual([]);
 		expect(issues(s.EffectiveModeSchema, 'planned')).toEqual([]);
-		for (const code of ['ZIEL_SOC_ABFAHRT', 'AUTO_WARTET_AUF_PV', 'ZIEL_SOC_UNERREICHBAR']) {
+		for (const code of [
+			'ZIEL_SOC_ABFAHRT',
+			'AUTO_WARTET_AUF_PV',
+			'ZIEL_SOC_UNERREICHBAR',
+			'AUTO_ERWARTET'
+		]) {
 			expect(issues(s.PlanReasonCodeSchema, code)).toEqual([]);
 		}
 		expect(issues(s.PlanTriggerSchema, 'vehicles')).toEqual([]);
@@ -448,9 +490,14 @@ describe('Zeitplan', () => {
 			shortfall_kwh: 0,
 			expected_soc_pct: 80,
 			finish_at: '2026-10-10T03:15:00+00:00',
-			reachable: true
+			reachable: true,
+			expected: false,
+			arrival_at: null
 		};
 		expect(issues(s.PlanSchema, { ...demo.plan, vehicles: [car] })).toEqual([]);
+		// ein erwartetes Auto (Plan 5b) nennt seine Ankunft
+		const expected = { ...car, expected: true, arrival_at: '2026-10-09T15:30:00+00:00' };
+		expect(issues(s.PlanSchema, { ...demo.plan, vehicles: [expected] })).toEqual([]);
 		expect(
 			issues(s.PlanSchema, { ...demo.plan, vehicles: [{ ...car, finish_at: null, limit_pct: 70 }] })
 		).toEqual([]);

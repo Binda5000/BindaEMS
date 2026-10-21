@@ -335,6 +335,13 @@
       "details": {}
     },
     {
+      "name": "driving",
+      "ok": true,
+      "message": "Fahrverhalten aktuell",
+      "since": null,
+      "details": {}
+    },
+    {
       "name": "planning",
       "ok": true,
       "message": "Plan von 10:00 Uhr",

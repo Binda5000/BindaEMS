@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { api } from './endpoints';
 import boostCost from './contract/boost-cost.json';
+import automation from './contract/control-automation.json';
 import control from './contract/control-reply.json';
 import decisions from './contract/decisions.json';
 import plan from './contract/plan.json';
@@ -9,6 +10,7 @@ import gridCharge from './contract/plan-grid-charge.json';
 import sessions from './contract/charging-sessions.json';
 import candidates from './contract/learning-candidates.json';
 import learning from './contract/learning-load.json';
+import driving from './contract/learning-driving.json';
 import qualityDaily from './contract/forecast-quality-daily.json';
 import checks from './contract/ledger-checks.json';
 import statsMonth from './contract/stats-month.json';
@@ -236,4 +238,30 @@ it('startet das Training mit POST und CSRF-Token', async () => {
 		method: 'POST',
 		csrf: 'tok-123'
 	});
+});
+
+it('liest das Fahrverhalten und startet die Neuberechnung mit POST und CSRF-Token', async () => {
+	reply(driving);
+	expect((await api.drivingStatus()).vehicles.map((car) => car.key)).toEqual(['tesla', 'egolf']);
+	expect(sent()).toMatchObject({ url: '/api/learning/driving', method: 'GET' });
+	fetchMock.mockReset();
+	reply({ started: true });
+	expect(await api.recomputeDriving()).toEqual({ started: true });
+	expect(sent()).toMatchObject({
+		url: '/api/learning/driving/recompute',
+		method: 'POST',
+		csrf: 'tok-123'
+	});
+});
+
+it('schaltet die Automatik eines Autos und prüft ihren Zustand', async () => {
+	reply(automation);
+	const state = await api.setAutomation('e-golf', true);
+	expect(sent()).toEqual({
+		url: '/api/control/vehicles/e-golf/automation',
+		method: 'PUT',
+		body: { on: true },
+		csrf: 'tok-123'
+	});
+	expect(state.state).toBe('inactive');
 });

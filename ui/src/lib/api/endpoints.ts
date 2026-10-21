@@ -100,6 +100,11 @@ export const api = {
 	/** Admin: startet das Training im Hintergrund; 409, wenn schon eines läuft */
 	trainLoadModel: (): Promise<{ started: boolean }> =>
 		request('POST', '/api/learning/load/train', { schema: StartedSchema }),
+	drivingStatus: (o?: Load): Promise<s.DrivingStatus> =>
+		get('/api/learning/driving', s.DrivingStatusSchema, o),
+	/** Admin: rechnet das Fahrverhalten im Hintergrund neu; 409, wenn schon ein Lauf läuft */
+	recomputeDriving: (): Promise<{ started: boolean }> =>
+		request('POST', '/api/learning/driving/recompute', { schema: StartedSchema }),
 	importSettings: (yaml: string): Promise<s.SettingsCurrent> =>
 		request('POST', '/api/settings/import', { body: { yaml }, schema: s.SettingsCurrentSchema }),
 	limits: (o?: Load): Promise<s.Limits> => get('/api/limits', s.LimitsSchema, o),
@@ -190,6 +195,12 @@ export const api = {
 		request('PUT', `/api/control/vehicles/${encode(vehicle)}/target`, {
 			body: { target_soc_pct: targetSocPct, departure },
 			schema: s.ControlReplySchema
+		}),
+	/** Ab „Bedienen“: schaltet die Automatik für Ziel und Abfahrt; die Antwort ist ihr neuer Zustand */
+	setAutomation: (vehicle: string, on: boolean): Promise<s.AutomationState> =>
+		request('PUT', `/api/control/vehicles/${encode(vehicle)}/automation`, {
+			body: { on },
+			schema: s.AutomationStateSchema
 		}),
 	setBoost: (vehicle: string, on: boolean): Promise<s.ControlReply> =>
 		request('PUT', `/api/control/vehicles/${encode(vehicle)}/boost`, {

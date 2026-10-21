@@ -178,6 +178,31 @@ class DrivingService:
         if self._running:
             return False
         self._running = True
+        await self._run_claimed()
+        return True
+
+    def start_recompute(self) -> bool:
+        """Rechnet im Hintergrund neu (Taste „Jetzt neu berechnen“); ``False``, wenn schon ein Lauf
+        läuft. Der Lauf gilt sofort als laufend, auch bevor die Aufgabe beginnt. Nur aus der
+        Ereignisschleife aufrufen."""
+        if self._running:
+            return False
+        self._running = True
+        task = asyncio.get_running_loop().create_task(
+            self._run_claimed_logged(), name="driving-recompute"
+        )
+        self._tasks.add(task)  # ``close`` bricht sie ab, auch bevor sie begonnen hat
+        task.add_done_callback(self._tasks.discard)
+        return True
+
+    async def _run_claimed_logged(self) -> None:
+        try:
+            await self._run_claimed()
+        except Exception:  # eine Taste darf nichts abreißen
+            log.exception("Berechnung des Fahrverhaltens fehlgeschlagen")
+
+    async def _run_claimed(self) -> None:
+        """Der Lauf, nachdem ``_running`` gesetzt wurde; danach rufen die Rückmeldungen."""
         self._track()
         try:
             await self._compute_all()
@@ -188,7 +213,6 @@ class DrivingService:
                 callback()
             except Exception:
                 log.exception("Rückmeldung nach dem Lauf des Fahrverhaltens fehlgeschlagen")
-        return True
 
     async def _offload(self, func: Callable[..., Any], *args: Any) -> Any:
         """Rechnet ``func`` in einem Thread; ein Abbruch beendet nur das Warten (``close`` wartet
@@ -405,7 +429,8 @@ class DrivingService:
             "weekdays": [_weekday_json(wp) for wp in profile.weekdays],
             "next_trip": trip.model_dump(mode="json") if trip is not None else None,
             "presence": [
-                {"start": slot.isoformat(), "p": presence_at(profile, slot)} for slot in slots
+                {"start": slot.isoformat(), "p": round(presence_at(profile, slot), 2)}
+                for slot in slots
             ],
             "quality": quality,
         }

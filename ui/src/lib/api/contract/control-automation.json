@@ -1,0 +1,7 @@
+{
+  "enabled": true,
+  "state": "inactive",
+  "text": "Automatik wartet: Das Auto steht nicht auf „Geplant“.",
+  "paused_until": null,
+  "last_set_at": null
+}

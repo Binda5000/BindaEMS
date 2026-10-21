@@ -41,8 +41,9 @@ from bindaems.app.control.intent import (
     UnknownTarget,
 )
 from bindaems.app.core_link import CoreClient, CoreUnavailableError, LiveState
+from bindaems.app.learning.driving_auto import DrivingAutomation
 from bindaems.app.ledger.service import LedgerService
-from bindaems.app.settings.service import SettingsService
+from bindaems.app.settings.service import SettingsService, VersionConflictError
 from bindaems.shared.config import Config
 from bindaems.shared.control import ActuatorMode, ChargeMode, SurplusPriority
 from bindaems.shared.decisions import DecisionResult, decision_to_json
@@ -139,11 +140,13 @@ def control_router(
     ledger: LedgerService,
     cfg: Config,
     clock: Clock | None = None,
+    automation: DrivingAutomation,
     live: LiveState | None = None,
 ) -> APIRouter:
     """Routen der Bedienung. ``clock`` und ``live`` brauchen nur „Warum?“: das Fenster der
     letzten 24 h und die Reihenfolge der Aktoren aus Health. ``settings`` (Tarif), ``ledger``
-    (Monatsspitze) und ``cfg`` (Fahrzeuge, Netzspannung) brauchen die Mehrkosten des Boosts."""
+    (Monatsspitze) und ``cfg`` (Fahrzeuge, Netzspannung) brauchen die Mehrkosten des Boosts.
+    ``automation`` (Plan 5b) schaltet die Automatik für Ziel und Abfahrt."""
     now = (clock or SystemClock()).now
     router = APIRouter()
     Viewer = Annotated[SessionInfo, Depends(guard.require("viewer"))]
@@ -203,6 +206,17 @@ def control_router(
         return await change(
             SetTarget(key, body.target_soc_pct, body.departure, body.departure_on), session
         )
+
+    @router.put("/api/control/vehicles/{key}/automation")
+    async def vehicle_automation(key: str, body: OnBody, session: Operator) -> dict[str, Any]:
+        # Der Eintrag ``control.automation`` im Änderungsprotokoll entsteht im Schalter selbst
+        try:
+            await automation.set_enabled(key, body.on, actor=session.user.username, source="ui")
+        except UnknownTarget as exc:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, exc.text) from exc
+        except VersionConflictError as exc:
+            raise HTTPException(status.HTTP_409_CONFLICT, CONFLICT) from exc
+        return automation.state_json(key)
 
     @router.put("/api/control/vehicles/{key}/boost")
     async def vehicle_boost(key: str, body: OnBody, session: Operator) -> dict[str, Any]:

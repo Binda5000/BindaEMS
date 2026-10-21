@@ -1290,3 +1290,61 @@ def test_guide_lists_the_endpoints_of_load_model_and_forecast_quality() -> None:
         "HA-Datenbank nicht eingerichtet (influxdb.ha_database)",
     ):
         assert topic in text, topic
+
+
+def test_guide_describes_the_driving_behaviour() -> None:
+    # Plan 5b, Task 11: Abschnitt „Fahrverhalten (Phase 5b)“ mit Nachtlauf, Komponente, Automatik
+    # und jedem neuen Aufruf samt Rolle; die Sätze der Automatik stehen so im Code.
+    from datetime import UTC, datetime
+
+    from bindaems.app.learning import driving_auto as auto
+    from bindaems.app.learning.driving_service import COMPONENT, RUN_AT
+    from bindaems.app.learning.routes import RECOMPUTE_RUNNING
+
+    text = " ".join(_guide_section("Fahrverhalten (Phase 5b)").split())
+    assert (RUN_AT.hour, RUN_AT.minute) == (3, 40) and COMPONENT == "driving"
+    assert RECOMPUTE_RUNNING == "Berechnung läuft schon."
+    for topic in (
+        "03:40 Uhr",
+        "Jetzt neu berechnen",
+        "Berechnung läuft …",
+        "`driving_profile`",
+        "Komponente `driving`",
+        "Fahrverhalten aktuell",
+        "Noch keine Fahrdaten",
+        "Fahrverhalten fehlgeschlagen: {Fehler}",
+        "ab Werk **aus**",
+        "pausiert die Automatik bis zu dieser Abfahrt",
+        "Konfidenz „mittel“",
+        "`control.automation`",
+        "„Automatik an“",
+        "„Automatik aus“",
+        "Urheber „Automatik“",
+        "`GET /api/learning/driving` (ab „Lesen“)",
+        "`POST /api/learning/driving/recompute` (nur Admin, Antwort 202",
+        "409 „Berechnung läuft schon.“",
+        "`PUT /api/control/vehicles/{key}/automation` (ab „Bedienen“)",
+        '`{"on": true}`',
+        "404",
+        "`presence`",
+        "`next_trip`",
+        "`AUTO_ERWARTET`",
+        "`return_reserve_pct`",
+        "`target_min_pct`",
+        "`target_max_pct`",
+        "`presence_entities`",
+    ):
+        assert topic in text, topic
+    # die Sätze der Zustände stehen in der Tabelle wie im Code
+    moment = datetime(2026, 10, 12, 5, 15, tzinfo=UTC)
+    for status in (
+        auto._off(),
+        auto._inactive(),
+        auto._uncertain(),
+        auto._waiting(moment),
+        auto._paused(moment),
+    ):
+        expected = status.text.replace("Mo 07:15", "{Tag} {HH:MM}")
+        assert f"| `{status.state}` | „{expected}“ |" in "\n".join(
+            line.strip() for line in _guide_section("Fahrverhalten (Phase 5b)").splitlines()
+        ), status.state

@@ -507,6 +507,18 @@ async def test_switch_on_clears_the_pause(auto, intents, client) -> None:
     assert tesla(client).departure_on == MONDAY  # gleich wieder gesetzt
 
 
+@pytest.mark.usefixtures("enabled")
+async def test_state_json_renders_the_times_as_iso_utc(auto, intents) -> None:
+    await auto.tick()  # setzt
+    await intents.apply(SetTarget("tesla", 90, "08:00"), actor="anna", source="ui")
+    body = auto.state_json("tesla")
+    assert body["last_set_at"] == T_APP.isoformat()
+    assert body["paused_until"] == datetime(2026, 10, 10, 6, 0, tzinfo=UTC).isoformat()
+    assert body["paused_until"].endswith("+00:00")
+    assert auto.state_json("egolf")["paused_until"] is None
+    assert auto.state("tesla")["paused_until"] == datetime(2026, 10, 10, 6, 0, tzinfo=UTC)
+
+
 async def test_unknown_vehicle_cannot_be_switched(auto) -> None:
     from bindaems.app.control.intent import UnknownTarget
 

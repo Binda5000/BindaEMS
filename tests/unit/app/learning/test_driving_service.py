@@ -346,6 +346,31 @@ async def test_recompute_while_running_returns_false(service, reader) -> None:
     assert await service.recompute() is True  # danach wieder frei
 
 
+async def test_start_recompute_claims_the_run_at_once(service, reader) -> None:
+    commuter(reader)
+    reader.gate = asyncio.Event()
+    assert service.start_recompute() is True
+    assert service.running()  # schon vor dem ersten Schritt der Aufgabe
+    assert service.start_recompute() is False
+    assert await service.recompute() is False
+    reader.gate.set()
+    await until(lambda: not service.running())
+    assert service.status()["computed_at"] == NOW.isoformat()
+    assert service.start_recompute() is True  # danach wieder frei
+    await until(lambda: not service.running())
+
+
+async def test_start_recompute_logs_a_crash_and_frees_the_run(service, monkeypatch) -> None:
+    async def broken() -> None:
+        raise RuntimeError("kaputt")
+
+    monkeypatch.setattr(service, "_compute_all", broken)
+    with capture_logs() as logs:
+        assert service.start_recompute() is True
+        await until(lambda: not service.running())
+    assert any(entry["log_level"] == "error" for entry in logs)
+
+
 async def test_running_is_cleared_after_a_crash(service, monkeypatch) -> None:
     async def broken() -> None:
         raise RuntimeError("kaputt")

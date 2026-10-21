@@ -430,7 +430,7 @@ it('übernimmt Schalter und Sensoren des Lastmodells', () => {
 		return_reserve_pct: 20,
 		target_min_pct: 50,
 		target_max_pct: 90,
-		automation: {},
+		automation: { tesla: true, egolf: false },
 		presence_entities: {}
 	});
 	expect(result.tariffChanged).toBe(false);

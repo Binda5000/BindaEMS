@@ -71,6 +71,8 @@ def vehicle_json(car: PlanVehicle) -> dict[str, Any]:
         "expected_soc_pct": car.expected_soc_pct,
         "finish_at": car.finish_at.isoformat() if car.finish_at is not None else None,
         "reachable": car.reachable,
+        "expected": car.expected,
+        "arrival_at": car.arrival_at.isoformat() if car.arrival_at is not None else None,
     }
 
 
