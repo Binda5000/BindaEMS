@@ -176,6 +176,7 @@ describe('thermalRows', () => {
 			'thermal_peak',
 			'thermal_mode',
 			'thermal_stale',
+			'thermal_no_echo',
 			'thermal_off'
 		];
 		expect(reasons.map((reason) => rows({ reason, running: false }).Grund)).toEqual([
@@ -187,6 +188,7 @@ describe('thermalRows', () => {
 			'Spitze droht, Klimaanlage nicht mehr',
 			'Betriebsart gewechselt, Versatz 0',
 			'Keine Werte der Klimaanlage, Versatz 0',
+			'Klimaanlage nicht steuerbar (kein Echo oder gesperrt), Versatz 0',
 			'Klimaanlage aus oder lüftet, Versatz 0'
 		]);
 		expect(rows({ reason: null }).Grund).toBe('–');

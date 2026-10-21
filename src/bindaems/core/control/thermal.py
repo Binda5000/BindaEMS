@@ -292,7 +292,7 @@ class ThermalStrategy:
 
     def _rule_less_end(self, obs: ThermalObs, allow_up: bool) -> bool:
         # Ein negativer Wunsch stammt nur aus „weniger“; ohne den Hinweis geht er sofort auf 0.
-        # Der Grund bleibt ``thermal_less``: keiner der neun Codes sagt „Hinweis zu Ende“ besser.
+        # Der Grund bleibt ``thermal_less``: keiner der zehn Codes sagt „Hinweis zu Ende“ besser.
         if self._wish.steps >= 0 or obs.hint == "weniger":
             return False
         self._wish = ThermalWish(0, "thermal_less")
@@ -304,8 +304,10 @@ class ThermalStrategy:
 
 def _reset_reason(obs: ThermalObs, previous_mode: ThermalMode | None) -> str | None:
     """Der Grund für „sofort 0“ (Regel 1) oder ``None``."""
-    if not obs.fresh or not obs.controllable:
+    if not obs.fresh:
         return "thermal_stale"
+    if not obs.controllable:
+        return "thermal_no_echo"
     if obs.degraded or obs.mode not in ("heizen", "kuehlen"):
         return "thermal_off"
     if previous_mode is not None and previous_mode != obs.mode:

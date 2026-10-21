@@ -1326,7 +1326,7 @@ def test_climate_chapter_matches_the_code(capsys: pytest.CaptureFixture[str]) ->
 
     section = " ".join(_guide_section("Klimaanlage (Phase 6a)").split())
     codes = {code: text for code, text in _REASON_TEXT.items() if code.startswith("thermal_")}
-    assert len(codes) == 9
+    assert len(codes) == 10
     for code, text in codes.items():
         assert f"| `{code}` | {text} |" in section, code
     assert f"`{THERMAL_EXCEPTION}`" in section

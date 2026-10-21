@@ -5596,7 +5596,7 @@ Punkt `thermal`, ist bestanden. Dann:
    (er läuft im selben Prozess) und sendet nichts mehr; dann setzt die UVR den Versatz nach 5 min
    selbst auf 0. Das Echo bestätigt jeden Versatz (Frist 60 s).
    **Ohne Echo** (Analog 3 veraltet oder nie angekommen) ist der Aktor nicht steuerbar, auch wenn
-   die übrigen Werte ankommen: Die Strategie wünscht 0 (`thermal_stale`), die Karte „Aktoren“ nennt
+   die übrigen Werte ankommen: Die Strategie wünscht 0 (`thermal_no_echo`), die Karte „Aktoren“ nennt
    „Kein Echo des Versatzes von der UVR.“, und nach 120 s kommt der Alarm
    `thermal.echo_mismatch.<name>`.
 4. Zurück: im UI „Auf Dry-Run…“. Der core übergibt den Aktor und sendet 0. Die Übergabe endet erst,
@@ -5623,7 +5623,8 @@ im UI, „Warum?“). Der Grund beschreibt den Wunsch der Strategie, nicht jeden
 | `thermal_less` | Teurer Strom, Klimaanlage zurückhaltend | Der Plan gibt den Hinweis „weniger“: eine Stufe weniger, höchstens `less_max_steps`; auch beim Ende des Hinweises (Wunsch zurück auf 0). |
 | `thermal_peak` | Spitze droht, Klimaanlage nicht mehr | Der 15-min-Wächter oder der Phasenwächter macht Druck: Versatz sofort auf 0. |
 | `thermal_mode` | Betriebsart gewechselt, Versatz 0 | Die Klimaanlage wechselte zwischen Kühlen und Heizen: sofort 0. |
-| `thermal_stale` | Keine Werte der Klimaanlage, Versatz 0 | Die Werte sind veraltet (länger als `stale_after_s` kein Paket) oder der Aktor ist nicht steuerbar: sofort 0. Solange die Quelle fehlt, erzeugt die Regelung keinen Befehl; die 0 geht vom Adapter hinaus. Im Log steht der Eintrag erst, wenn die Werte zurückkehren und der Versatz vorher nicht 0 war. |
+| `thermal_stale` | Keine Werte der Klimaanlage, Versatz 0 | Die Werte sind veraltet (länger als `stale_after_s` kein Paket): sofort 0. Solange die Quelle fehlt, erzeugt die Regelung keinen Befehl; die 0 geht vom Adapter hinaus. Im Log steht der Eintrag erst, wenn die Werte zurückkehren und der Versatz vorher nicht 0 war. |
+| `thermal_no_echo` | Klimaanlage nicht steuerbar (kein Echo oder gesperrt), Versatz 0 | Die Werte kommen an, aber der Aktor ist nicht steuerbar: Das Echo des Versatzes (Analog 3) fehlt oder ist veraltet, oder die Klimaanlage ist gesperrt. Sofort 0. |
 | `thermal_off` | Klimaanlage aus oder lüftet, Versatz 0 | Betriebsart `aus`, `lueften` oder `unbekannt`, oder der Zustand DEGRADED: Versatz 0. Auch der Anfangsgrund nach einem Start: Der erste Eintrag nach dem Start ist meist eine 0 mit diesem Grund. |
 
 Ein Eintrag lautet etwa

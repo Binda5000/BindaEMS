@@ -1325,10 +1325,10 @@ def test_regulation_drops_the_wish_while_not_controllable(cfg, kw) -> None:
     regulation = Regulation(cfg, HardLimits.from_config(cfg), started=T0)
     klima_run(regulation, cfg, 0, 600)
     assert klima_run(regulation, cfg, 610, 700, **kw) == []
-    assert wish(regulation) == {"wish": 0, "reason": "thermal_stale", "hint": "neutral"}
+    assert wish(regulation) == {"wish": 0, "reason": "thermal_no_echo", "hint": "neutral"}
     # Wieder steuerbar: 0 geht hinaus (wie am Adapter), die nächste Stufe erst nach 600 s.
     assert offsets(klima_run(regulation, cfg, 710, 1310)) == [
-        (710, 0.0, ("thermal_stale",)),  # der Grund des letzten Rücksetzens bleibt stehen
+        (710, 0.0, ("thermal_no_echo",)),  # der Grund des letzten Rücksetzens bleibt stehen
         (1310, -0.5, ("thermal_more",)),
     ]
 

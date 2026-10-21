@@ -1,20 +1,25 @@
 """Betriebsart und Strategie der Klimaanlage (Plan 6a, Entscheidungen 4, 5 und 11)."""
 
+import inspect
+import re
 from dataclasses import replace
 from typing import Any
 
 import pytest
 from tests.helpers import snap
 
+from bindaems.core.control import thermal as thermal_module
 from bindaems.core.control.thermal import (
     ThermalMode,
     ThermalObs,
     ThermalStrategy,
     ThermalWish,
+    _reset_reason,
     offset_for,
     thermal_mode,
 )
 from bindaems.shared.config import CoeOffsetConfig, Config
+from bindaems.shared.decisions import _REASON_TEXT
 from bindaems.shared.domain import Quality, SignalKind, Value
 
 P = "thermal.klima."
@@ -92,6 +97,7 @@ CODES = {
     "thermal_peak",
     "thermal_mode",
     "thermal_stale",
+    "thermal_no_echo",
     "thermal_off",
 }
 
@@ -237,7 +243,23 @@ def test_stale_zero(strategy: ThermalStrategy) -> None:
 
 def test_not_controllable_zero(strategy: ThermalStrategy) -> None:
     climb(strategy, 2)
-    assert strategy.step(obs(now=1300, controllable=False)) == ThermalWish(0, "thermal_stale")
+    assert strategy.step(obs(now=1300, controllable=False)) == ThermalWish(0, "thermal_no_echo")
+
+
+def test_reset_reason_without_echo_is_no_echo() -> None:
+    # Werte da, Aktor aber nicht steuerbar (kein Echo oder gesperrt): eigener Grund
+    assert _reset_reason(obs(fresh=True, controllable=False), None) == "thermal_no_echo"
+    # keine frischen Werte: weiter ``thermal_stale``, auch wenn der Aktor nicht steuerbar ist
+    assert _reset_reason(obs(fresh=False), None) == "thermal_stale"
+    assert _reset_reason(obs(fresh=False, controllable=False), None) == "thermal_stale"
+    assert _reset_reason(obs(), None) is None
+
+
+def test_every_code_of_the_strategy_has_a_text() -> None:
+    codes = set(re.findall(r'"(thermal_\w+)"', inspect.getsource(thermal_module)))
+    assert CODES <= codes
+    for code in sorted(codes):
+        assert code in _REASON_TEXT, code
 
 
 def test_degraded_zero(strategy: ThermalStrategy) -> None:
@@ -630,6 +652,7 @@ def test_reset_returns_to_the_initial_state(strategy: ThermalStrategy) -> None:
         ({"peak_pressure": True}, "thermal_peak", 300),
         ({"mode": "heizen"}, "thermal_mode", 300),
         ({"fresh": False}, "thermal_stale", 300),
+        ({"controllable": False}, "thermal_no_echo", 300),
         ({"mode": "aus"}, "thermal_off", 300),
     ],
 )

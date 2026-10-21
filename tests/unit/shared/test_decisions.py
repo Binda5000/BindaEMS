@@ -612,6 +612,7 @@ def test_offset_text_has_sign_comma_and_one_decimal(value: float, expected: str)
         ("thermal_peak", "Spitze droht, Klimaanlage nicht mehr"),
         ("thermal_mode", "Betriebsart gewechselt, Versatz 0"),
         ("thermal_stale", "Keine Werte der Klimaanlage, Versatz 0"),
+        ("thermal_no_echo", "Klimaanlage nicht steuerbar (kein Echo oder gesperrt), Versatz 0"),
         ("thermal_off", "Klimaanlage aus oder lüftet, Versatz 0"),
     ],
 )
