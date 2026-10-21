@@ -265,6 +265,14 @@ async def test_does_nothing_when_off(auto, client, engine) -> None:
 
 
 @pytest.mark.usefixtures("enabled")
+async def test_enabled_vehicle_is_pending_before_the_first_check(auto, client) -> None:
+    state = auto.state("tesla")
+    assert (state["state"], state["text"]) == ("pending", "Automatik prüft in Kürze.")
+    await auto.tick()
+    assert auto.state("tesla")["state"] == "applied"  # nach der ersten Prüfung gilt ihr Stand
+
+
+@pytest.mark.usefixtures("enabled")
 async def test_inactive_outside_planned_mode(auto, client) -> None:
     client.valid = planned_intent(mode=ChargeMode.PV)
     await auto.tick()

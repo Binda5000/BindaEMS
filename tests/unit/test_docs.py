@@ -1451,6 +1451,7 @@ def test_guide_describes_the_driving_behaviour() -> None:
     moment = datetime(2026, 10, 12, 5, 15, tzinfo=UTC)
     for status in (
         auto._off(),
+        auto._pending(),
         auto._inactive(),
         auto._uncertain(),
         auto._waiting(moment),

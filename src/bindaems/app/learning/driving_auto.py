@@ -77,7 +77,7 @@ REJECTED: Final = "Der core lehnt die Absicht ab."
 UNREADABLE: Final = "Zustand der Automatik nicht lesbar."
 CHARGES_UNREADABLE: Final = "Geplante Ladungen nicht lesbar."
 
-State = Literal["off", "inactive", "waiting", "paused", "uncertain", "applied", "error"]
+State = Literal["off", "pending", "inactive", "waiting", "paused", "uncertain", "applied", "error"]
 Values = tuple[int, str, date | None]  # Ziel, Abfahrt und Tag der Abfahrt eines Autos
 Profiles = Callable[[str], VehicleProfile | None]
 Charges = Callable[[], Mapping[str, OpenCharge]]  # ``PlannedCharges.open_charges`` (blockiert)
@@ -110,6 +110,10 @@ def _stamp(moment: datetime) -> str:
 
 def _off() -> _Status:
     return _Status("off", "Automatik aus.")
+
+
+def _pending() -> _Status:
+    return _Status("pending", "Automatik prüft in Kürze.")
 
 
 def _inactive() -> _Status:
@@ -204,8 +208,8 @@ class DrivingAutomation:
         """Das Feld ``automation`` des Autos (Präzisierung 11); Zeiten als UTC-``datetime``."""
         stored = self._stored.get(key, _Stored())
         enabled = self.enabled(key)
-        # vor der ersten Prüfung nach dem Start: „wartet“
-        status = self._status.get(key, _inactive()) if enabled else _off()
+        # vor der ersten Prüfung nach dem Start: „prüft in Kürze“
+        status = self._status.get(key, _pending()) if enabled else _off()
         paused = stored.paused_until
         if not enabled or paused is None or self._clock.now() >= paused:
             paused = None

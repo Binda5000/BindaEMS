@@ -873,6 +873,28 @@ describe('Fahrverhalten an den Fahrzeugkarten', () => {
 		).toBeVisible();
 	});
 
+	it('zeigt vor der ersten Prüfung „Automatik prüft in Kürze.“', async () => {
+		const egolf = driving().vehicles[1]!;
+		api.drivingStatus.mockResolvedValue(
+			driving({
+				vehicles: [
+					driving().vehicles[0]!,
+					{
+						...egolf,
+						automation: {
+							...egolf.automation,
+							enabled: true,
+							state: 'pending',
+							text: 'Automatik prüft in Kürze.'
+						}
+					}
+				]
+			})
+		);
+		await show();
+		expect(await within(card('e-Golf')).findByText('Automatik prüft in Kürze.')).toBeVisible();
+	});
+
 	it('Lesende sehen den Schalter gesperrt und keine Taste', async () => {
 		user.role = 'viewer';
 		api.drivingStatus.mockResolvedValue(driving());

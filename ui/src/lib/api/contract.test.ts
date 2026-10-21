@@ -117,6 +117,12 @@ describe('Fahrverhalten', () => {
 		expect(issues(s.AutomationStateSchema, { ...automation, state: 'kaputt' })).not.toEqual([]);
 	});
 
+	it('nimmt den Zustand „pending“ der Automatik vor der ersten Prüfung an', () => {
+		const automation = demo.vehicles[0].automation as Record<string, unknown>;
+		const pending = { ...automation, state: 'pending', text: 'Automatik prüft in Kürze.' };
+		expect(issues(s.AutomationStateSchema, pending)).toEqual([]);
+	});
+
 	it('zeigt Tesla mit hoher und e-Golf mit niedriger Konfidenz', () => {
 		const first = (index: number) =>
 			demo.vehicles[index].weekdays as { departure_confidence: string }[];

@@ -1013,7 +1013,16 @@ export type DrivingTrip = v.InferOutput<typeof DrivingTripSchema>;
 /** Zustand der Automatik für Ziel und Abfahrt eines Autos; `text` ist der fertige Satz */
 export const AutomationStateSchema = v.object({
 	enabled: v.boolean(),
-	state: v.picklist(['off', 'inactive', 'waiting', 'paused', 'uncertain', 'applied', 'error']),
+	state: v.picklist([
+		'off',
+		'pending',
+		'inactive',
+		'waiting',
+		'paused',
+		'uncertain',
+		'applied',
+		'error'
+	]),
 	text: v.string(),
 	paused_until: v.nullable(Iso),
 	last_set_at: v.nullable(Iso)

@@ -4517,12 +4517,14 @@ mit dem Urheber „Automatik“; den Lademodus ändert sie nie.
 
 **Pause bei Bedienung von Hand:** Ändert jemand Ziel oder Abfahrt eines Autos mit Automatik von
 Hand (also nicht durch die Automatik selbst), pausiert die Automatik bis zu dieser Abfahrt (ohne
-Abfahrt bis Mitternacht). Das Einschalten des Schalters beendet eine Pause. Die Zustände und ihre
+Abfahrt bis Mitternacht). Das Einschalten des Schalters beendet eine Pause. Bis zur ersten
+Prüfung nach dem Start steht ein eingeschaltetes Auto auf `pending`. Die Zustände und ihre
 Sätze (`automation.state` und `automation.text`):
 
 | Zustand | Satz |
 |---|---|
 | `off` | „Automatik aus.“ |
+| `pending` | „Automatik prüft in Kürze.“ |
 | `inactive` | „Automatik wartet: Das Auto steht nicht auf „Geplant“.“ |
 | `waiting` | „Automatik wartet: Eine geplante Ladung läuft bis {Tag} {HH:MM}.“ |
 | `paused` | „Automatik pausiert bis {Tag} {HH:MM}, weil Ziel oder Abfahrt von Hand geändert wurden.“ |
