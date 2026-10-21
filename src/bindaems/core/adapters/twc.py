@@ -45,7 +45,11 @@ def _integer(data: Mapping[str, Any], key: str) -> int | None:
 
 
 def parse_vitals(data: Mapping[str, Any], phase_map: PhaseMap) -> Parsed:
-    """Klemme A/B/C → Netzphase laut ``phase_map``; fehlende Felder ergeben ``None``."""
+    """Klemme A/B/C → Netzphase laut ``phase_map``; fehlende Felder ergeben ``None``.
+
+    Bei ausdrücklich offenem Schütz ist die Leistung 0 W; die Phasenströme und -spannungen bleiben
+    die Messung.
+    """
     result: Parsed = {
         "vehicle_connected": (_flag(data, "vehicle_connected"), S),
         "contactor_closed": (_flag(data, "contactor_closed"), S),
@@ -61,6 +65,9 @@ def parse_vitals(data: Mapping[str, Any], phase_map: PhaseMap) -> Parsed:
             power = None
         else:
             power += current * voltage
+    if result["contactor_closed"][0] is False:
+        # Offenes Schütz: Es fließt nichts, die Klemmen messen nur Rauschen (Prüfprotokoll 17.1-9).
+        power = 0.0
     result["power_w"] = (power, M)
     energy_wh = _number(data, "session_energy_wh")
     result["session_kwh"] = (energy_wh / 1000 if energy_wh is not None else None, M)

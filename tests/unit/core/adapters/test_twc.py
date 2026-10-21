@@ -30,6 +30,39 @@ def test_parse_vitals_missing_field_invalidates_power() -> None:
     assert d["l2.current_a"][0] is None
 
 
+def test_open_contactor_reports_zero_power() -> None:
+    # Leerlauf (Prüfprotokoll 17.1-9): Das Schütz ist offen, die Klemmen messen nur Rauschen.
+    data = {
+        **VITALS,
+        "contactor_closed": False,
+        "currentA_a": 0.2,
+        "currentB_a": 0.0,
+        "currentC_a": 0.2,
+        "voltageA_v": 0.0,
+        "voltageB_v": 2.6,
+        "voltageC_v": 7.4,
+    }
+    d = parse_vitals(data, ("L1", "L2", "L3"))
+    assert d["power_w"][0] == 0.0
+    # der Sicherungsschutz sieht weiter die Messung
+    assert [d[f"l{n}.current_a"][0] for n in (1, 2, 3)] == [0.2, 0.0, 0.2]
+
+
+def test_missing_contactor_flag_still_computes_power() -> None:
+    data = {k: v for k, v in VITALS.items() if k != "contactor_closed"}
+    data |= {
+        "currentA_a": 0.2,
+        "currentB_a": 0.0,
+        "currentC_a": 0.2,
+        "voltageA_v": 0.0,
+        "voltageB_v": 2.6,
+        "voltageC_v": 7.4,
+    }
+    d = parse_vitals(data, ("L1", "L2", "L3"))
+    assert d["contactor_closed"][0] is None
+    assert d["power_w"][0] == pytest.approx(1.48)
+
+
 def test_parse_lifetime() -> None:
     assert parse_lifetime(LIFETIME)["total_kwh"][0] == pytest.approx(1234.567)
 
