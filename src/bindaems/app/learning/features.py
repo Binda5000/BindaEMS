@@ -113,7 +113,9 @@ def profile_cache(samples: Sequence[LoadSample]) -> Callable[[date], LoadProfile
 
 
 def _mean(values: Sequence[float]) -> float:
-    return sum(values) / len(values) if values else _NAN
+    """Mittel der endlichen Werte; ohne einen NaN (sonst vergiftete ein NaN das Mittel)."""
+    finite = [value for value in values if math.isfinite(value)]
+    return sum(finite) / len(finite) if finite else _NAN
 
 
 def _local_shift(slot: datetime, days: int) -> datetime | None:

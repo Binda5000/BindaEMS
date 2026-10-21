@@ -270,6 +270,17 @@ def test_recent_uses_the_slots_that_exist() -> None:
     assert math.isnan(row[0])
 
 
+def test_recent_load_ignores_nan() -> None:
+    names = ["recent_w"]
+    issued = local(date(2026, 10, 20), 12)
+    cutoff = slot_start(issued)
+    load = {cutoff - 3 * SLOT: 100.0, cutoff - 2 * SLOT: math.nan, cutoff - SLOT: 300.0}
+    assert feature_rows(issued, [cutoff], make_inputs(load_w=load), names) == [[200.0]]
+    all_nan = {cutoff - SLOT: math.nan}
+    (row,) = feature_rows(issued, [cutoff], make_inputs(load_w=all_nan), names)
+    assert math.isnan(row[0])
+
+
 def test_sensor_value_is_held_over_the_lead() -> None:
     sensor = "person.b"
     names = feature_names([sensor, "sensor.gone"])

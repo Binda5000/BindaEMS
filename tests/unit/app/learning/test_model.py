@@ -108,6 +108,26 @@ def test_predictions_are_clamped(synthetic_set: TrainingSet) -> None:
     assert max(values) > 0.0
 
 
+def test_nan_prediction_is_not_zero(synthetic_set: TrainingSet) -> None:
+    model = train(head(synthetic_set, SMALL), BASE_FEATURES)
+
+    class Broken:
+        def predict(self, matrix: object, **_: object) -> list[float]:
+            return [math.nan, math.inf, -math.inf, 500.0]
+
+    object.__setattr__(model, "_booster", Broken())
+    values = model.predict([[0.0] * len(BASE_FEATURES)] * 4)
+    assert all(math.isnan(value) for value in values[:3])  # nicht 0 W: der Aufrufer lässt aus
+    assert values[3] == 500.0
+
+
+@pytest.mark.parametrize("max_w", [math.nan, math.inf, 0.0, -5.0])
+def test_model_with_bad_max_is_unusable(synthetic_set: TrainingSet, max_w: float) -> None:
+    model = train(head(synthetic_set, SMALL), BASE_FEATURES)
+    with pytest.raises(TrainingError, match="Obergrenze"):
+        load_model(model.text, list(model.features), max_w)
+
+
 def test_too_few_rows_raise(synthetic_set: TrainingSet) -> None:
     with pytest.raises(TrainingError, match=r"zu wenige Zeilen: 999"):
         train(head(synthetic_set, MIN_ROWS - 1), BASE_FEATURES)

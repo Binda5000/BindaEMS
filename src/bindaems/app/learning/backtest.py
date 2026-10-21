@@ -112,6 +112,8 @@ def _test_week(
     by_class: dict[HorizonClass, _Sums] = defaultdict(_Sums)
     by_day: dict[date, _Sums] = defaultdict(_Sums)
     for (actual, expected, cls, day), value in zip(cases, model.predict(rows), strict=True):
+        if not math.isfinite(value):  # keine Vorhersage: der Slot zählt für keine Seite
+            continue
         for sums in (by_class[cls], by_day[day]):
             sums.n += 1
             sums.model_abs += abs(value - actual)

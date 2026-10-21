@@ -7,6 +7,7 @@ reproduzierbar. Gespeichert wird der Text des Boosters; die Merkmalsliste gehör
 
 from __future__ import annotations
 
+import math
 import re
 from collections.abc import Sequence
 from dataclasses import dataclass, field
@@ -71,11 +72,15 @@ class TrainedModel:
         object.__setattr__(self, "_booster", _read(self.text, self.features))
 
     def predict(self, rows: Sequence[Sequence[float]]) -> list[float]:
-        """Erwartete Last in W je Zeile, begrenzt auf ``[0, max_w]``."""
+        """Erwartete Last in W je Zeile, begrenzt auf ``[0, max_w]``; eine nicht endliche
+        Vorhersage bleibt NaN, damit der Aufrufer sie auslässt (statt 0 W zu melden)."""
         if not len(rows):
             return []
         values = self._booster.predict(np.asarray(rows, dtype=float), num_threads=1)
-        return [max(0.0, min(float(value), self.max_w)) for value in np.asarray(values)]
+        return [
+            max(0.0, min(float(value), self.max_w)) if math.isfinite(value) else math.nan
+            for value in np.asarray(values)
+        ]
 
     def importance(self) -> dict[str, float]:
         """Anteil jedes Merkmals am Gewinn der Splits, Summe 1; ohne Gewinn überall 0."""
@@ -106,4 +111,6 @@ def train(data: TrainingSet, features: Sequence[str]) -> TrainedModel:
 
 def load_model(text: str, features: Sequence[str], max_w: float) -> TrainedModel:
     """Liest ein gespeichertes Modell; ``TrainingError``, wenn der Text nicht passt."""
+    if not math.isfinite(max_w) or max_w <= 0.0:
+        raise TrainingError(f"Obergrenze des Modells unbrauchbar: {max_w}")
     return TrainedModel(text, tuple(features), max_w)

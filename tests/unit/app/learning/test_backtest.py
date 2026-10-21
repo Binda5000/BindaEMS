@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from collections.abc import Callable, Sequence
 from datetime import date, timedelta
 from typing import TYPE_CHECKING
@@ -105,6 +106,17 @@ def test_week_with_failed_training_is_skipped(
     monkeypatch.setattr(backtest, "train", flaky_train)
     result = _run(synthetic)
     assert len({week.origin for week in result.weeks}) == 1
+
+
+def test_slots_without_prediction_do_not_count(
+    monkeypatch: pytest.MonkeyPatch, synthetic: Synthetic
+) -> None:
+    class Nan:
+        def predict(self, rows: Sequence[Sequence[float]]) -> list[float]:
+            return [math.nan] * len(rows)
+
+    monkeypatch.setattr(backtest, "train", lambda data, features: Nan())
+    assert rolling_backtest(synthetic.inputs, BASE_FEATURES, _today(synthetic), DAYS) is None
 
 
 def test_no_week_left_gives_none(monkeypatch: pytest.MonkeyPatch, synthetic: Synthetic) -> None:
