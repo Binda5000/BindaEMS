@@ -1,7 +1,14 @@
 import { render, screen } from '@testing-library/svelte';
-import { expect, it } from 'vitest';
+import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import PlanHeader from './PlanHeader.svelte';
-import { PLAN, RESPONSE } from '$lib/testing/plan';
+import { NOW, PLAN, RESPONSE } from '$lib/testing/plan';
+
+// Der Zeitplan nennt den Abfahrtstag nach der Uhr (Ruling F-7): die Uhr steht auf dem Plan-Beginn
+beforeEach(() => {
+	vi.useFakeTimers({ toFake: ['Date'] });
+	vi.setSystemTime(new Date(NOW));
+});
+afterEach(() => vi.useRealTimers());
 
 it('shows source, validity and the fallback reason', () => {
 	render(PlanHeader, {

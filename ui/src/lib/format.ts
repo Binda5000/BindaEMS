@@ -162,7 +162,8 @@ export function weekdayDate(date: string): string {
  * Die Abfahrt als „07:15“ oder mit Tag als „Mo 23.11. 07:15“ (Wiener Zeit, Plan 5b, Ruling F-3).
  * Den Tag nennt sie, wenn die Absicht einen Abfahrtstag `departureOn` hat, der nicht heute ist;
  * eine tägliche Abfahrt (`null`) bleibt bei der Uhrzeit. Ohne Absicht (`undefined`, etwa im
- * Zeitplan) nennt sie ihn ab übermorgen: Eine tägliche Abfahrt liegt immer heute oder morgen.
+ * Zeitplan) nennt sie ihn, wenn der Tag nicht das nächste Auftreten der Uhrzeit ist: heute, wenn
+ * die Uhrzeit heute noch bevorsteht, sonst morgen (Plan 5b, Ruling F-7).
  */
 export function departureText(
 	departureAt: string,
@@ -174,10 +175,9 @@ export function departureText(
 	if (ms === null) return time;
 	const day = todayVienna(new Date(ms));
 	const today = todayVienna(now);
+	const next = time > formatTime(now.toISOString()) ? today : addDays(today, 1);
 	const dated =
-		departureOn === undefined
-			? day > addDays(today, 1)
-			: departureOn !== null && departureOn !== today;
+		departureOn === undefined ? day !== next : departureOn !== null && departureOn !== today;
 	return dated ? `${weekdayDate(day)} ${time}` : time;
 }
 

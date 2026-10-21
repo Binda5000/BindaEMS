@@ -134,10 +134,26 @@ describe('Fahrverhalten', () => {
 			expect(departureText(saturday, null, now)).toBe('07:15');
 		});
 
-		it('nennt ohne Absicht den Tag erst ab übermorgen', () => {
+		it('nennt ohne Absicht den Tag, wenn er nicht das nächste Auftreten der Uhrzeit ist', () => {
 			expect(departureText(monday, undefined, now)).toBe('Mo 23.11. 07:15');
 			expect(departureText(saturday, undefined, now)).toBe('07:15');
 			expect(departureText(tonight, undefined, now)).toBe('19:30');
+		});
+
+		it('nennt den Tag auch für morgen, wenn die Uhrzeit heute noch bevorsteht', () => {
+			// So 22.11.2026, 06:00 in Wien: 07:15 kommt heute noch, Montag ist erst das übernächste Mal
+			const sundayEarly = new Date('2026-11-22T05:00:00Z');
+			expect(departureText(monday, undefined, sundayEarly)).toBe('Mo 23.11. 07:15');
+			expect(departureText(monday, '2026-11-23', sundayEarly)).toBe('Mo 23.11. 07:15');
+		});
+
+		it('lässt den Tag weg, wenn die Abfahrt das nächste Auftreten der Uhrzeit ist', () => {
+			// So 22.11.2026, 08:00 in Wien: 07:15 war schon, der Montag ist das nächste Mal
+			const sundayLate = new Date('2026-11-22T07:00:00Z');
+			expect(departureText(monday, undefined, sundayLate)).toBe('07:15');
+			// am selben Tag: 07:15 kommt heute noch
+			const sameDay = '2026-11-22T06:15:00+00:00';
+			expect(departureText(sameDay, undefined, new Date('2026-11-22T05:00:00Z'))).toBe('07:15');
 		});
 	});
 

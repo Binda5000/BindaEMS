@@ -1450,7 +1450,7 @@ die Bedienelemente. Aufbau, Auslöser, Ersatzplan und die Sätze der Erklärung 
 
 Lädt der Plan Autos im Modus „Geplant“, nennt der Kopf je Auto die Zeile wie auf „Laden“ („Fertig um
 {HH:MM} · Ziel {soc} % bis {HH:MM}“ oder „… nicht erreichbar, voraussichtlich {x} %.“, dazu die Quelle
-des Ladestands; liegt die Abfahrt nach morgen, mit Wochentag und Datum, etwa „bis Mo 23.11. 07:15“), und
+des Ladestands; liegt die Abfahrt nicht am nächsten Tag, an dem die Uhrzeit kommt (heute, wenn sie heute noch bevorsteht, sonst morgen), mit Wochentag und Datum wie auf der Fahrzeugkarte, etwa „bis Mo 23.11. 07:15“), und
 das Diagramm „Autos“ zeigt je Auto eine Reihe mit seinem Namen: die geplante
 Ladeleistung in kW (ohne Laden 0 kW).
 

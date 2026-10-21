@@ -450,6 +450,13 @@ describe('Session in der Fahrzeugkarte', () => {
 
 describe('Geplant', () => {
 	const NB = '\u00a0';
+	// Freitag, 09.10.2026, 20:00 in Wien: die Abfahrt Samstag 07:00 ist das nächste Mal 07:00
+	beforeEach(() => {
+		vi.useFakeTimers({ toFake: ['Date'] });
+		vi.setSystemTime(new Date('2026-10-09T18:00:00Z'));
+	});
+	afterEach(() => vi.useRealTimers());
+
 	// Abfahrt 07:00, späteste Startzeit 01:30, fertig um 05:45 (Wiener Zeit, MESZ)
 	const DEPARTURE = '2026-10-10T05:00:00+00:00';
 	const planned = (changes: Partial<NonNullable<VehicleHealth['planned']>> = {}) => ({
