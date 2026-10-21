@@ -345,6 +345,9 @@ def spy_nightly(runtime, monkeypatch) -> list[tuple]:
     monkeypatch.setattr(
         runtime.forecast_archive, "cleanup", lambda before: calls.append(("cleanup", before)) or 0
     )
+    monkeypatch.setattr(
+        runtime.weather, "cleanup", lambda before: calls.append(("weather-cleanup", before)) or 0
+    )
     return calls
 
 
@@ -361,6 +364,7 @@ async def test_forecast_nightly_runs_at_start_and_at_0230_local(runtime, monkeyp
         ("quality", date(2026, 10, 7)),
         ("recalibrate", runtime.ledger),
         ("cleanup", T_APP - timedelta(days=60)),
+        ("weather-cleanup", T_APP - timedelta(days=120)),  # nach dem Prognosearchiv
     ]
     assert sleeps == [16.5 * 3600]  # 10:00 Ortszeit → 02:30 am nächsten Tag
 

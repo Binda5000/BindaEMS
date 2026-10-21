@@ -15,12 +15,12 @@ from collections.abc import Awaitable, Callable, Mapping, Sequence
 from datetime import datetime, timedelta
 
 import structlog
-from sqlalchemy import Engine, func, select
+from sqlalchemy import Engine, delete, func, select
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
 from bindaems.app.db.schema import weather_slot
 from bindaems.app.forecast.openmeteo import WeatherSlot
-from bindaems.shared.timeutil import ensure_utc
+from bindaems.shared.timeutil import Clock, ensure_utc
 
 log = structlog.get_logger(__name__)
 
@@ -58,22 +58,33 @@ class WeatherArchive:
             ).scalar_one()
         return oldest
 
+    def cleanup(self, before: datetime) -> int:
+        """Löscht Slots mit ``slot_start < before``; gibt die Zahl der gelöschten zurück."""
+        with self._engine.begin() as conn:
+            result = conn.execute(
+                delete(weather_slot).where(weather_slot.c.slot_start < ensure_utc(before))
+            )
+        return result.rowcount
+
     async def backfill(
-        self, fetch: Callable[[], Awaitable[Mapping[datetime, float]]], now: datetime
+        self, fetch: Callable[[], Awaitable[Mapping[datetime, float]]], clock: Clock
     ) -> int:
         """Holt die Temperatur der letzten Monate nach, wenn das Archiv jünger als 56 Tage ist.
 
         Vorhandene Slots bleiben, denn sie stammen aus einer Prognose mit besserem Wissen als die
         Rückschau. Fehler von ``fetch`` gehen an den Aufrufer; das Archiv bleibt dann unverändert,
         und der nächste Start versucht es erneut. Gibt die Zahl der geschriebenen Zeilen zurück.
+
+        Das Alter des Archivs gilt zum Zeitpunkt vor dem Abruf, der Stempel ``issued_at`` (und
+        damit die Grenze von 6 h nach „jetzt“) zum Zeitpunkt danach: Der Abruf dauert, und
+        Slots, die währenddessen die Prognose schrieb, sind ohnehin nicht zu überschreiben.
         """
-        moment = ensure_utc(now)
         oldest = await asyncio.to_thread(self.oldest)
-        if oldest is not None and oldest <= moment - BACKFILL_MIN_AGE:
+        if oldest is not None and oldest <= ensure_utc(clock.now()) - BACKFILL_MIN_AGE:
             return 0
         fetched = await fetch()
         values = {ensure_utc(slot): temp_c for slot, temp_c in fetched.items()}
-        return await asyncio.to_thread(self._write, values, moment, replace=False)
+        return await asyncio.to_thread(self._write, values, ensure_utc(clock.now()), replace=False)
 
     def _write(self, values: Mapping[datetime, float], issued: datetime, *, replace: bool) -> int:
         cutoff = issued + LEAD

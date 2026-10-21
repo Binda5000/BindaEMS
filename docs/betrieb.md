@@ -4248,6 +4248,8 @@ der Trainingsdaten (Spec 10.5).
    Temperatur von Open-Meteo nach (nur `temperature_2m`, am Standort). Das Log nennt es mit
    „Temperatur-Historie nachgeholt“; scheitert der Abruf, warnt die app, und der nächste Start
    versucht es erneut.
+   Temperaturen, die älter als 120 Tage sind, löscht der Nachtlauf um 02:30 Uhr (das Training
+   braucht 112 Tage).
 2. **Trainieren:** Jede Nacht um 03:15 Uhr (Ortszeit), beim Start, wenn es noch keine brauchbare
    Version gibt, und mit der Taste „Jetzt neu trainieren“ (nur Admin). Das erste Training nach dem
    Start wartet auf die Nachholung der Temperatur, höchstens 10 min. Jedes Training legt eine neue

@@ -120,6 +120,9 @@ AUTOMATION_STOP_S = 5.0  # so lange wartet das Beenden auf einen Schreibzugriff 
 BACKUP_AT = (4, 0)  # Ortszeit, nach Training (03:15) und Fahrverhalten (03:40)
 FORECAST_NIGHTLY_AT = (2, 30)  # Ortszeit
 FORECAST_KEEP = timedelta(days=60)
+WEATHER_KEEP = timedelta(
+    days=120
+)  # das Training braucht 112 Tage; unter 56 holte die Nachholung nach
 LEDGER_NIGHTLY_AT = (2, 45)  # Ortszeit, nach der Prognose um 02:30
 LEDGER_CHECK_START_DAYS = 35  # Abgleich beim Start: die letzten 35 vollständigen Tage
 LEDGER_CHECK_NIGHTLY_DAYS = 7  # nachts: die letzten 7
@@ -914,9 +917,7 @@ class AppRuntime:
         noch jung ist. Ein Fehler wird gewarnt; der nächste Start versucht es erneut. Danach (auch
         nach einem Fehler) darf das erste Training des Lastmodells beginnen."""
         try:
-            written = await self.weather.backfill(
-                self._fetch_temperature_history, self._clock.now()
-            )
+            written = await self.weather.backfill(self._fetch_temperature_history, self._clock)
             if written:
                 log.info("Temperatur-Historie nachgeholt", slots=written)
         except Exception as exc:  # die app läuft ohne die Historie weiter
@@ -957,6 +958,14 @@ class AppRuntime:
                 log.info("Alte Prognosen aus dem Archiv gelöscht", records=removed)
         except Exception:
             log.exception("Pflege des Prognosearchivs fehlgeschlagen")
+        try:
+            removed = await asyncio.to_thread(
+                self.weather.cleanup, self._clock.now() - WEATHER_KEEP
+            )
+            if removed:
+                log.info("Alte Temperaturen aus dem Wetterarchiv gelöscht", slots=removed)
+        except Exception:
+            log.exception("Pflege des Wetterarchivs fehlgeschlagen")
 
     async def _ledger_nightly_loop(self) -> None:
         """Beim Start (35 Tage) und täglich um 02:45 Uhr (7 Tage): Lücken nachrechnen, dann die
