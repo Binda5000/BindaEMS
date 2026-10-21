@@ -1,15 +1,18 @@
-"""Geplante Autos als Eingangsdaten des Planers (Plan 4b, Entscheidungen 6 und 7, Präzisierung 10).
+"""Geplante Autos als Eingangsdaten des Planers (Plan 4b, Entscheidungen 6 und 7, Präzisierung 10;
+Plan 5b, Entscheidung 11, Präzisierung 10).
 
-Im Planer stehen nur Autos, die laut Health in „Geplant“ geregelt werden und angesteckt sind (es
-gibt noch keine Anwesenheitsprognose). Ladestand, Quelle, Ladelimit, wirksames Ziel und Abfahrt
-kommen aus Health, Wirkungsgrad, Kapazität und Ladeleistung aus der Konfiguration.
+Im Planer stehen Autos, die laut Health in „Geplant“ geregelt werden und angesteckt sind, und
+erwartete Autos (``expected_vehicles``): nicht angesteckt, aber laut Anwesenheitsprognose bald
+da. Ladestand, Quelle, Ladelimit, wirksames Ziel und Abfahrt der angesteckten kommen aus Health,
+Wirkungsgrad, Kapazität und Ladeleistung aus der Konfiguration.
 
 - ``need_kwh``, ``full_power_w``, ``latest_start``: dieselbe Formel wie im core
   (``core.control.planned``, Präzisierung 6). Die app importiert nichts aus dem core, darum steht
   sie zweimal; ``tests/unit/test_planned_formula.py`` vergleicht beide.
 - ``horizon_need``: der Teil des Bedarfs, der im Horizont geladen werden muss
 - ``grid_allowed``: Regel R2, die Netzenergie, die ein Auto bis zur Abfahrt laden darf
-- ``planned_vehicles``: die geplanten Autos eines Laufs
+- ``planned_vehicles``: die geplanten, angesteckten Autos eines Laufs
+- ``expected_vehicles``: die erwarteten Autos eines Laufs, sie stehen nach den angesteckten
 
 Alle Energien der Autos stehen auf der Wallbox-Seite (Ruling R10): Bedarf, Bedarf im Horizont
 und die nach Regel R2 erlaubte Netzenergie; der Wirkungsgrad steckt nur in ``need_kwh``.
@@ -26,10 +29,11 @@ from typing import TYPE_CHECKING, Annotated, Any, Final
 from pydantic import AwareDatetime, Field
 
 from bindaems.app.control.intent import _health_vehicles, _trusted
+from bindaems.app.learning.driving_profile import VehicleProfile, _weekday_of, presence_at
 from bindaems.shared.config import Config, EvcsConfig, TwcConfig, VehicleConfig, _Model
 from bindaems.shared.control import ChargeMode, Intent, VehicleIntent, next_departure
 from bindaems.shared.numbers import finite_number
-from bindaems.shared.timeutil import SLOT, ensure_utc
+from bindaems.shared.timeutil import LOCAL_TZ, SLOT, ensure_utc
 
 if TYPE_CHECKING:  # ``inputs`` importiert dieses Modul für ``PlanInputs.vehicles``
     from bindaems.app.planning.inputs import SlotInput
@@ -38,6 +42,8 @@ LATEST_START_MARGIN: Final = 1.1  # Zuschlag auf die Ladedauer bei voller Leistu
 LATEST_START_BUFFER: Final = timedelta(minutes=15)  # Puffer vor der Abfahrt (wie im core)
 
 _SLOT_H: Final = SLOT.total_seconds() / 3600
+
+PRESENCE_MIN: Final = 0.5  # ab dieser Wahrscheinlichkeit gilt ein Auto als erwartet
 
 Finite = Annotated[float, Field(allow_inf_nan=False)]
 NonNegativeFinite = Annotated[float, Field(ge=0, allow_inf_nan=False)]
@@ -57,6 +63,10 @@ class PlanVehicleInput(_Model):
     - ``need_kwh``: der Bedarf bis zum Ziel aus der Wallbox (``need_kwh``)
     - ``horizon_need_kwh``: der Teil davon, der im Horizont geladen werden muss (``horizon_need``)
     - ``grid_allowed_kwh``: so viel davon darf bis zur Abfahrt aus dem Netz kommen (Regel R2)
+    - ``expected``: das Auto ist noch nicht angesteckt und wird ab ``arrival_at`` (Beginn der
+      ersten Viertelstunde mit Anwesenheit ab 50 %, UTC) erwartet; ``soc_pct`` ist dann der
+      gelernte Ladestand bei der Ankunft. Angesteckte Autos: ``False`` und ``None``; gespeicherte
+      Eingangsdaten ohne beide Felder laden so (Plan 5b).
 
     Die drei Energien stehen auf der Wallbox-Seite (Ruling R10).
     """
@@ -76,6 +86,8 @@ class PlanVehicleInput(_Model):
     need_kwh: NonNegativeFinite
     horizon_need_kwh: NonNegativeFinite
     grid_allowed_kwh: NonNegativeFinite
+    expected: bool = False
+    arrival_at: AwareDatetime | None = None
 
 
 def need_kwh(soc_pct: float, target_pct: float, usable_kwh: float, efficiency: float) -> float:
@@ -150,6 +162,7 @@ def grid_allowed(
     Reihenfolge ``priority`` an die Autos; Autos, die ``priority`` nicht nennt, folgen in der
     Reihenfolge von ``vehicles``. Jedes Auto nimmt seinen Anteil von den letzten Slots vor seiner
     Abfahrt rückwärts: So bleibt der frühe Überschuss für ein späteres Auto, das früher abfährt.
+    Ein erwartetes Auto zählt den Überschuss erst ab seiner Ankunft (``arrival_at``).
     """
     left = [
         max(0.0, (slot.pv_w if slot.pv_p25_w is None else slot.pv_p25_w) - slot.load_w)
@@ -163,7 +176,8 @@ def grid_allowed(
     for car in order:
         wanted = car.horizon_need_kwh
         per_slot = car.max_w / 1000 * _SLOT_H
-        for index in reversed(range(_slots_before(car.departure_at, slots))):
+        first = 0 if car.arrival_at is None else _slots_before(car.arrival_at, slots)
+        for index in reversed(range(first, _slots_before(car.departure_at, slots))):
             if wanted <= 0:
                 break
             take = min(wanted, left[index], per_slot)
@@ -194,6 +208,49 @@ def _moment(value: Any) -> datetime | None:
     return ensure_utc(moment) if moment.tzinfo is not None else None
 
 
+def _car_input(
+    cfg: Config,
+    key: str,
+    wallbox_key: str,
+    *,
+    soc_pct: float,
+    soc_assumed: bool,
+    target_soc_pct: float,
+    limit_pct: float | None,
+    departure_at: datetime,
+    horizon_end: datetime,
+    arrival_at: datetime | None = None,
+) -> PlanVehicleInput:
+    """Das Auto ``key`` an der Wallbox ``wallbox_key`` als Eingangsdatum; ``arrival_at`` macht
+    es zum erwarteten Auto. ``grid_allowed_kwh`` ist noch der Bedarf im Horizont (R2 folgt)."""
+    vehicle = cfg.vehicles[key]
+    wallbox = cfg.wallboxes[wallbox_key]
+    volts = cfg.grid.voltage_nominal_v
+    efficiency = vehicle.charge_efficiency_pct / 100
+    max_w = full_power_w(vehicle, wallbox, volts)
+    need = need_kwh(soc_pct, target_soc_pct, vehicle.usable_kwh, efficiency)
+    within = horizon_need(need, max_w, departure_at, horizon_end)
+    return PlanVehicleInput(
+        key=key,
+        name=vehicle.name,
+        wallbox=wallbox_key,
+        soc_pct=soc_pct,
+        soc_assumed=soc_assumed,
+        target_soc_pct=target_soc_pct,
+        limit_pct=limit_pct,
+        departure_at=departure_at,
+        efficiency=efficiency,
+        usable_kwh=vehicle.usable_kwh,
+        min_w=_min_power_w(vehicle, wallbox, volts),
+        max_w=max_w,
+        need_kwh=need,
+        horizon_need_kwh=within,
+        grid_allowed_kwh=within,
+        expected=arrival_at is not None,
+        arrival_at=arrival_at,
+    )
+
+
 def planned_vehicles(
     cfg: Config,
     health: Mapping[str, Any] | None,
@@ -210,12 +267,12 @@ def planned_vehicles(
     dem Ende des aktuellen Slots (``slots[0]``) liegt. Ein unbekannter Ladestand rechnet mit 0 %
     (``soc_assumed``). Ist die Abfahrt aus Health schon vorbei (Health ist bis zu einer Abfrage
     alt), gilt die nächste nach ``now`` (``next_departure``), wie im nächsten Zyklus des core.
-    ``grid_allowed_kwh`` verteilt den Überschuss in der Reihenfolge der Priorität.
+    ``grid_allowed_kwh`` verteilt den Überschuss in der Reihenfolge der Priorität. Nicht
+    angesteckte Autos nennt ``expected_vehicles``.
     """
     if intent is None or not slots or not _trusted(intent.version, health):
         return []
     entries = _health_vehicles(health)
-    volts = cfg.grid.voltage_nominal_v
     current_end = ensure_utc(slots[0].start) + SLOT
     horizon_end = ensure_utc(slots[-1].start) + SLOT
     cars: list[PlanVehicleInput] = []
@@ -238,33 +295,111 @@ def planned_vehicles(
             departure_at = next_departure(wanted.departure, now, wanted.departure_on)
         if departure_at < current_end:
             continue
-        vehicle = cfg.vehicles[key]
-        wallbox = cfg.wallboxes[wallbox_key]
         soc = finite_number(entry.get("soc_pct"))
         assumed = soc is None or entry.get("soc_source") not in ("measured", "estimated")
-        soc_pct = 0.0 if assumed or soc is None else soc
-        efficiency = vehicle.charge_efficiency_pct / 100
-        max_w = full_power_w(vehicle, wallbox, volts)
-        need = need_kwh(soc_pct, target, vehicle.usable_kwh, efficiency)
-        within = horizon_need(need, max_w, departure_at, horizon_end)
         cars.append(
-            PlanVehicleInput(
-                key=key,
-                name=vehicle.name,
-                wallbox=wallbox_key,
-                soc_pct=soc_pct,
+            _car_input(
+                cfg,
+                key,
+                wallbox_key,
+                soc_pct=0.0 if assumed or soc is None else soc,
                 soc_assumed=assumed,
                 target_soc_pct=target,
                 limit_pct=finite_number(entry.get("charge_limit_pct")),
                 departure_at=departure_at,
-                efficiency=efficiency,
-                usable_kwh=vehicle.usable_kwh,
-                min_w=_min_power_w(vehicle, wallbox, volts),
-                max_w=max_w,
-                need_kwh=need,
-                horizon_need_kwh=within,
-                grid_allowed_kwh=within,
+                horizon_end=horizon_end,
             )
         )
     allowed = grid_allowed(cars, slots, [car.key for car in cars])
+    return [car.model_copy(update={"grid_allowed_kwh": allowed[car.key]}) for car in cars]
+
+
+def _arrival(
+    profile: VehicleProfile, slots: Sequence[SlotInput], departure_at: datetime
+) -> datetime | None:
+    """Der Beginn des ersten Slots nach dem aktuellen (``slots[0]``) und vor ``departure_at``, in
+    dem die Prognose das Auto mit mindestens ``PRESENCE_MIN`` angesteckt sieht; sonst ``None``.
+    Die Prognose gilt zum Beginn des Slots (Viertelstunde, lokal)."""
+    for slot in slots[1:]:
+        start = ensure_utc(slot.start)
+        if start >= departure_at:
+            return None
+        if presence_at(profile, start) >= PRESENCE_MIN:
+            return start
+    return None
+
+
+def expected_vehicles(
+    cfg: Config,
+    intent: Intent | None,
+    health: Mapping[str, Any] | None,
+    profiles: Mapping[str, VehicleProfile],
+    slots: Sequence[SlotInput],
+    now: datetime,
+    *,
+    plugged: Sequence[PlanVehicleInput] = (),
+) -> list[PlanVehicleInput]:
+    """Die erwarteten Autos eines Laufs, in der Reihenfolge ihrer Priorität (Plan 5b,
+    Entscheidung 11, Präzisierung 10).
+
+    Erwartet wird ein Auto, das die Absicht in „Geplant“ nennt, laut Health nicht steckt
+    (``plugged`` genau ``False``), ein Profil und eine ``default_wallbox`` der Konfiguration hat
+    und nicht unter ``plugged`` (den angesteckten Autos des Laufs) steht. Seine Abfahrt
+    (``next_departure`` mit Tag) muss nach dem Ende des aktuellen Slots liegen. Die Ankunft ist
+    der Beginn des ersten Slots nach dem aktuellen und vor der Abfahrt, für den die Prognose
+    mindestens 50 % sagt. Ladestand ist der Median der Ankunft des lokalen Wochentags der Ankunft
+    (Feiertage zählen als Sonntag); ohne ihn kommt das Auto nicht hinein (unbekannt bleibt
+    unbekannt). Ziel und Abfahrt stammen aus der Absicht, die Wallbox ist ``default_wallbox``.
+
+    Bedarf, Bedarf im Horizont und ``grid_allowed_kwh`` rechnen wie bei angesteckten Autos; der
+    PV-Überschuss zählt nur in ``[arrival_at, departure_at)`` und erst, was die angesteckten
+    Autos ``plugged`` davon übrig lassen (sie stehen in der Priorität davor).
+    """
+    if intent is None or not slots:
+        return []
+    entries = _health_vehicles(health)
+    taken = {car.key for car in plugged}
+    current_end = ensure_utc(slots[0].start) + SLOT
+    horizon_end = ensure_utc(slots[-1].start) + SLOT
+    cars: list[PlanVehicleInput] = []
+    for key in _order(cfg, intent):
+        wanted = intent.vehicles.get(key, VehicleIntent())
+        entry = entries.get(key)
+        profile = profiles.get(key)
+        if (
+            key in taken
+            or profile is None
+            or entry is None
+            or wanted.mode is not ChargeMode.PLANNED
+        ):
+            continue
+        if entry.get("plugged") is not False:
+            continue
+        wallbox_key = cfg.vehicles[key].default_wallbox
+        if wallbox_key not in cfg.wallboxes:
+            continue
+        departure_at = next_departure(wanted.departure, now, wanted.departure_on)
+        if departure_at <= current_end:
+            continue
+        arrival_at = _arrival(profile, slots, departure_at)
+        if arrival_at is None:
+            continue
+        soc = profile.weekdays[_weekday_of(arrival_at.astimezone(LOCAL_TZ).date())].arrival_soc_p50
+        if soc is None:
+            continue
+        cars.append(
+            _car_input(
+                cfg,
+                key,
+                wallbox_key,
+                soc_pct=soc,
+                soc_assumed=False,
+                target_soc_pct=float(wanted.target_soc_pct),
+                limit_pct=None,
+                departure_at=departure_at,
+                horizon_end=horizon_end,
+                arrival_at=arrival_at,
+            )
+        )
+    allowed = grid_allowed([*plugged, *cars], slots, [car.key for car in (*plugged, *cars)])
     return [car.model_copy(update={"grid_allowed_kwh": allowed[car.key]}) for car in cars]

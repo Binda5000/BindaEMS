@@ -30,6 +30,7 @@ from bindaems.app.control.intent import _trusted
 from bindaems.app.core_link import LiveState
 from bindaems.app.forecast.load import LoadForecastService
 from bindaems.app.forecast.service import ForecastService
+from bindaems.app.learning.driving_profile import VehicleProfile
 from bindaems.app.ledger.service import LedgerService
 from bindaems.app.planning.battery_model import params_of, sim_slots, simulate
 from bindaems.app.planning.builder import build_plan
@@ -40,6 +41,7 @@ from bindaems.app.planning.inputs import (
     PlanInputs,
     PlanningUnavailable,
     PriceInput,
+    SlotInput,
     assemble_inputs,
     car_floor_kw,
 )
@@ -58,7 +60,7 @@ from bindaems.app.planning.triggers import (
     soc_deviates,
     vehicles_fingerprint,
 )
-from bindaems.app.planning.vehicles import planned_vehicles
+from bindaems.app.planning.vehicles import PlanVehicleInput, expected_vehicles, planned_vehicles
 from bindaems.app.prices.service import PriceService
 from bindaems.app.settings.service import (
     SettingsService,
@@ -173,6 +175,7 @@ class PlanningService:
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
         support_pct: Callable[[], float] | None = None,
         intent: Callable[[], Intent | None] | None = None,
+        driving_profiles: Callable[[], Mapping[str, VehicleProfile]] | None = None,
     ) -> None:
         self._cfg = cfg
         self._settings = settings
@@ -189,6 +192,8 @@ class PlanningService:
         self._support_pct = support_pct or (lambda: cfg.control.support_soc_pct)
         # zuletzt gesehene Absicht (``IntentService.cached``) für die geplanten Autos (Plan 4b)
         self._intent = intent or (lambda: None)
+        # Profile des Fahrverhaltens (Plan 5b) für die erwarteten Autos; ohne Quelle gibt es keine
+        self._driving_profiles = driving_profiles
         self._lock = asyncio.Lock()  # ein Lauf nach dem anderen
         self._running = False
         self._unavailable: str | None = None
@@ -432,9 +437,11 @@ class PlanningService:
         """Eingangsdaten eines Laufs; wirft ``PlanningUnavailable``.
 
         Die geplanten Autos kommen aus dem Health des core und der Absicht (``planned_vehicles``),
-        die PV-Prognose P25 für Regel R2 aus der PV-Prognose. Hat Health die Absicht noch nicht
-        bestätigt und steht darin ein Auto in „Geplant“, plant der Lauf ohne die Autos; der Dienst
-        merkt sich das und plant neu, sobald Health sie bestätigt (``_watch``, Ruling R23).
+        danach die erwarteten aus der Anwesenheitsprognose (``expected_vehicles``, nur mit
+        ``driving_profiles``), die PV-Prognose P25 für Regel R2 aus der PV-Prognose. Hat Health
+        die Absicht noch nicht bestätigt und steht darin ein Auto in „Geplant“, plant der Lauf
+        ohne die Autos; der Dienst merkt sich das und plant neu, sobald Health sie bestätigt
+        (``_watch``, Ruling R23).
         """
         now = self._clock.now()
         prices, month_peak_kw = await asyncio.to_thread(self._read, now)
@@ -464,10 +471,25 @@ class PlanningService:
             peak_target_kw=self._cfg.control.peak_target_kw,
             car_floor_kw=car_floor_kw(self._cfg),
             pv_p25_w=pv.p25_w if pv is not None else None,
-            vehicles=lambda slots: planned_vehicles(
-                self._cfg, health, intent, now=now, slots=slots
-            ),
+            vehicles=lambda slots: self._vehicles(health, intent, now, slots),
         )
+
+    def _vehicles(
+        self,
+        health: Mapping[str, Any] | None,
+        intent: Intent | None,
+        now: datetime,
+        slots: list[SlotInput],
+    ) -> list[PlanVehicleInput]:
+        """Die angesteckten geplanten Autos, danach die erwarteten (Plan 5b, Entscheidung 11);
+        ohne Profile des Fahrverhaltens gibt es keine erwarteten."""
+        cars = planned_vehicles(self._cfg, health, intent, now=now, slots=slots)
+        if self._driving_profiles is None:
+            return cars
+        expected = expected_vehicles(
+            self._cfg, intent, health, self._driving_profiles(), slots, now, plugged=cars
+        )
+        return [*cars, *expected]
 
     async def replan(self, trigger: PlanTrigger) -> Plan | None:
         """Ein Planungslauf; ``None``, wenn Eingangsdaten fehlen (der letzte Plan bleibt).

@@ -327,3 +327,46 @@ def test_old_inputs_load_without_vehicles(store: PlanStore, engine: Engine) -> N
     expected = sample_inputs()
     old_slots = [s.model_copy(update={"pv_p25_w": None, "prev_ev_w": None}) for s in expected.slots]
     assert inputs == expected.model_copy(update={"vehicles": [], "slots": old_slots})
+
+
+def test_old_inputs_without_expected_cars_load(store: PlanStore, engine: Engine) -> None:
+    # Gespeicherte Autos aus 5a kennen ``expected`` und ``arrival_at`` nicht
+    saved = store.save(
+        sample_plan(created="2026-10-16T10:01:00+00:00", slots=["10:00"]), sample_inputs()
+    )
+    assert saved.id is not None
+    data = sample_inputs().model_dump(mode="json")
+    for car in data["vehicles"]:
+        assert (car["expected"], car["arrival_at"]) == (False, None)
+        del car["expected"]
+        del car["arrival_at"]
+    with engine.begin() as conn:
+        conn.execute(
+            update(plan_inputs_table)
+            .where(plan_inputs_table.c.plan_id == saved.id)
+            .values(data=data)
+        )
+    inputs = store.inputs_of(saved.id)
+    assert inputs is not None
+    assert [(car.expected, car.arrival_at) for car in inputs.vehicles] == [(False, None)]
+    assert inputs == sample_inputs()
+
+
+def test_expected_cars_follow_the_plugged_ones_and_round_trip(
+    store: PlanStore,
+) -> None:
+    arrival = NOW + 4 * SLOT
+    expected = planned_car(key="egolf", expected=True, arrival_at=arrival, soc_pct=30.0)
+    inputs = assemble(
+        load=flat(NOW, 10, 500.0),
+        vehicles=lambda slots: [planned_car(), expected],
+    )
+    assert [(car.key, car.expected) for car in inputs.vehicles] == [
+        ("tesla", False),
+        ("egolf", True),
+    ]
+    saved = store.save(sample_plan(created="2026-10-16T10:01:00+00:00", slots=["10:00"]), inputs)
+    assert saved.id is not None
+    loaded = store.inputs_of(saved.id)
+    assert loaded is not None and loaded.vehicles[1].arrival_at == arrival
+    assert loaded == inputs

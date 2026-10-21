@@ -326,6 +326,7 @@ class AppRuntime:
             self._clock,
             support_pct=self._support_soc_pct,
             intent=self.intents.cached,
+            driving_profiles=self.driving.profiles,
         )
         # nach Planung und Absicht; hört selbst auf neue Pläne und geänderte Einstellungen
         self.plan_sender = PlanSender(

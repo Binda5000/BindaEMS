@@ -7,7 +7,7 @@ import asyncio
 import contextlib
 from collections.abc import Awaitable, Callable
 from dataclasses import replace
-from datetime import timedelta
+from datetime import datetime, timedelta
 
 import pytest
 from structlog.testing import capture_logs
@@ -27,6 +27,7 @@ from tests.plan_helpers import (
     vehicle_health,
 )
 
+from bindaems.app.learning.driving_profile import VehicleProfile, WeekdayProfile
 from bindaems.app.planning.inputs import PlanInputs
 from bindaems.app.planning.optimizer import OptimizerResult, solve
 from bindaems.app.planning.service import PlanningService, PlanningStatus, plan_once
@@ -279,6 +280,71 @@ async def test_collect_takes_p25_and_the_planned_cars(service_with, live, foreca
     assert [car.key for car in inputs.vehicles] == ["tesla"]
     live.health = None
     assert (await service_with().collect("start")).vehicles == []
+
+
+CLOCK_NOW = datetime.fromisoformat("2026-10-16T10:01:00+00:00")  # Uhr der Fixtures
+
+
+def _driving_profile(soc: float = 40.0) -> VehicleProfile:
+    """Anwesenheit 0,8 ab 14:00 Ortszeit an jedem Tag, Ladestand bei Ankunft ``soc``."""
+    weekdays = [
+        WeekdayProfile(
+            weekday=day,
+            basis="weekday",
+            days=8,
+            trips=8,
+            trip_share=1.0,
+            departure_min=None,
+            departure_p50_min=None,
+            departure_p80_min=None,
+            departure_confidence=None,
+            arrival_p50_min=None,
+            arrival_soc_p50=soc,
+            consumption_p50_pp=None,
+            consumption_p80_pp=None,
+            target_soc_pct=None,
+            target_clamped=False,
+            target_confidence=None,
+        )
+        for day in range(7)
+    ]
+    return VehicleProfile(
+        key="tesla",
+        source="tessie",
+        data_from=CLOCK_NOW - timedelta(days=60),
+        data_to=CLOCK_NOW,
+        days=60,
+        weekdays=weekdays,
+        presence=[[0.0] * 56 + [0.8] * 40 for _ in range(7)],
+    )
+
+
+async def test_collect_appends_expected_cars_after_the_plugged_ones(service_with, live):
+    live.health = planned_health(
+        vehicle_health("egolf"), vehicle_health("tesla", plugged=False), version=3
+    )
+    planned = VehicleIntent(mode=ChargeMode.PLANNED)
+    intent = Intent(version=3, vehicles={"tesla": planned, "egolf": planned})
+    profiles = {"tesla": _driving_profile(), "egolf": _driving_profile()}
+    inputs = await service_with(intent=lambda: intent, driving_profiles=lambda: profiles).collect(
+        "start"
+    )
+    assert [(car.key, car.expected) for car in inputs.vehicles] == [
+        ("egolf", False),
+        ("tesla", True),
+    ]
+    tesla = inputs.vehicles[1]
+    assert tesla.arrival_at == datetime.fromisoformat("2026-10-16T12:00:00+00:00")  # 14:00 Ortszeit
+    assert (tesla.soc_pct, tesla.soc_assumed) == (40.0, False)
+
+
+async def test_collect_expects_no_cars_without_profiles(service_with, live):
+    live.health = planned_health(vehicle_health("tesla", plugged=False), version=3)
+    intent = Intent(version=3, vehicles={"tesla": VehicleIntent(mode=ChargeMode.PLANNED)})
+    inputs = await service_with(intent=lambda: intent).collect("start")
+    assert inputs.vehicles == []
+    inputs = await service_with(intent=lambda: intent, driving_profiles=lambda: {}).collect("start")
+    assert inputs.vehicles == []
 
 
 async def test_collect_checks_health_against_the_newer_intent(service_with, live):

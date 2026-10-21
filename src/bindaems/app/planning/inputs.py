@@ -116,7 +116,8 @@ class PlanInputs(_Model):
     peak_target_kw: NonNegativeFinite | None = None
     car_floor_kw: NonNegativeFinite = 0.0
     slots: list[SlotInput]
-    # die geplanten Autos in der Reihenfolge ihrer Priorität (Plan 4b); alte Eingangsdaten: keine
+    # die geplanten Autos in der Reihenfolge ihrer Priorität, die angesteckten vor den erwarteten
+    # (Plan 4b, 5b); alte Eingangsdaten: keine
     vehicles: list[PlanVehicleInput] = Field(default_factory=list)
 
 
@@ -242,8 +243,8 @@ def assemble_inputs(
     ``peak_target_kw`` und ``car_floor_kw`` sind die Untergrenzen des Budgets
     (``control.peak_target_kw``, ``car_floor_kw``; Gesamtreview I2). ``pv_p25_w`` ist die
     PV-Prognose P25; ein Slot ohne sie bekommt ``None`` und beendet den Horizont nicht.
-    ``vehicles`` ergibt die geplanten Autos zu den Slots des Horizonts (``planned_vehicles``);
-    ohne gibt es keine.
+    ``vehicles`` ergibt die geplanten Autos zu den Slots des Horizonts (``planned_vehicles``, danach
+    ``expected_vehicles``); ohne gibt es keine.
 
     Prüfreihenfolge: Akkuzustand, Preis des aktuellen Slots, PV, Last, Horizontlänge. Der
     Horizont endet vor dem ersten Slot ohne PV- oder Lastprognose.

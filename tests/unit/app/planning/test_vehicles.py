@@ -15,8 +15,14 @@ from tests.plan_helpers import (
     vehicle_health,
 )
 
+from bindaems.app.learning.driving_profile import VehicleProfile, WeekdayProfile
 from bindaems.app.planning.inputs import SlotInput
-from bindaems.app.planning.vehicles import grid_allowed, horizon_need, planned_vehicles
+from bindaems.app.planning.vehicles import (
+    expected_vehicles,
+    grid_allowed,
+    horizon_need,
+    planned_vehicles,
+)
 from bindaems.shared.config import Config
 from bindaems.shared.control import ChargeMode, Intent, VehicleIntent
 
@@ -261,3 +267,265 @@ def test_planner_departure_uses_date(cfg: Config) -> None:
         cfg, health, Intent(version=3, vehicles={"tesla": daily}), now=now, slots=slots
     )
     assert tesla.departure_at == datetime.fromisoformat("2026-11-21T06:00:00+00:00")
+
+
+# --- erwartete Autos (Plan 5b, Task 9, Präzisierung 10) ---------------------------------------
+
+ARRIVAL = at("2026-10-16T18:45:00+00:00")  # 20:45 Ortszeit, Freitag: Viertelstunde 83
+
+
+def _weekday(day: int, soc: float | None) -> WeekdayProfile:
+    return WeekdayProfile(
+        weekday=day,
+        basis="weekday",
+        days=8,
+        trips=8,
+        trip_share=1.0,
+        departure_min=None,
+        departure_p50_min=None,
+        departure_p80_min=None,
+        departure_confidence=None,
+        arrival_p50_min=None,
+        arrival_soc_p50=soc,
+        consumption_p50_pp=None,
+        consumption_p80_pp=None,
+        target_soc_pct=None,
+        target_clamped=False,
+        target_confidence=None,
+    )
+
+
+def _profile(
+    presence: list[float] | None = None,
+    socs: dict[int, float | None] | None = None,
+    saturday: list[float] | None = None,
+) -> VehicleProfile:
+    """Anwesenheit 0,3 bis 20:30 Ortszeit und 0,8 ab 20:45 an jedem Tag (oder ``presence``, 96
+    Werte für jeden Tag, am Samstag ``saturday``); Ladestand bei Ankunft am Freitag 35 %, am
+    Samstag 22 %."""
+    day = presence or [0.3] * 83 + [0.8] * 13
+    values: dict[int, float | None] = {day_: 50.0 for day_ in range(7)} | {4: 35.0, 5: 22.0}
+    values.update(socs or {})
+    return VehicleProfile(
+        key="tesla",
+        source="tessie",
+        data_from=at("2026-08-01T00:00:00+00:00"),
+        data_to=at("2026-10-15T00:00:00+00:00"),
+        days=60,
+        weekdays=[_weekday(index, values[index]) for index in range(7)],
+        presence=[list(saturday if index == 5 and saturday else day) for index in range(7)],
+    )
+
+
+def _away(**changes: Any) -> dict[str, Any]:
+    return vehicle_health("tesla", **{"plugged": False, **changes})
+
+
+def _expected(
+    cfg: Config,
+    health_entry: dict[str, Any] | None = None,
+    *,
+    profile: VehicleProfile | None = None,
+    intent: Intent | None = None,
+    slots: list[SlotInput] | None = None,
+    now: datetime = NOW,
+    **kwargs: Any,
+) -> list[Any]:
+    return expected_vehicles(
+        cfg,
+        intent or _intent(),
+        planned_health(health_entry or _away()),
+        {"tesla": profile or _profile()},
+        slots or _slots(),
+        now,
+        **kwargs,
+    )
+
+
+def test_unplugged_planned_car_is_expected_from_arrival(cfg: Config) -> None:
+    [tesla] = _expected(cfg)
+    assert (tesla.expected, tesla.arrival_at) == (True, ARRIVAL)
+    assert (tesla.key, tesla.name, tesla.wallbox) == ("tesla", "Tesla Model 3", "twc")
+    # Ladestand der Ankunft am Freitag, Ziel und Abfahrt aus der Absicht (80 %, 07:00 Ortszeit)
+    assert (tesla.soc_pct, tesla.soc_assumed, tesla.target_soc_pct) == (35.0, False, 80.0)
+    assert (tesla.limit_pct, tesla.departure_at) == (None, at(DEPARTURE))
+    assert (tesla.efficiency, tesla.usable_kwh) == (0.9, 75.0)
+    assert (tesla.min_w, tesla.max_w) == (5 * 230 * 3, 16 * 230 * 3)
+    assert tesla.need_kwh == pytest.approx(45 / 100 * 75 / 0.9)
+    assert tesla.horizon_need_kwh == tesla.need_kwh == tesla.grid_allowed_kwh
+
+
+def test_plugged_cars_have_no_expected_flag(cfg: Config) -> None:
+    [tesla] = planned_vehicles(
+        cfg, planned_health(vehicle_health("tesla")), _intent(), now=NOW, slots=_slots()
+    )
+    assert (tesla.expected, tesla.arrival_at) == (False, None)
+
+
+def test_plugged_car_is_not_expected(cfg: Config) -> None:
+    assert _expected(cfg, vehicle_health("tesla", plugged=True)) == []
+
+
+def test_car_already_among_the_plugged_inputs_is_not_expected(cfg: Config) -> None:
+    assert _expected(cfg, plugged=[planned_car(key="tesla")]) == []
+
+
+def test_unknown_plug_state_is_not_expected(cfg: Config) -> None:
+    assert _expected(cfg, _away(plugged=None)) == []
+    entry = _away()
+    del entry["plugged"]
+    assert _expected(cfg, entry) == []
+    assert expected_vehicles(cfg, _intent(), None, {"tesla": _profile()}, _slots(), NOW) == []
+
+
+def test_car_in_pv_mode_is_not_expected(cfg: Config) -> None:
+    pv_intent = Intent(version=3, vehicles={"tesla": VehicleIntent(mode=ChargeMode.PV)})
+    assert _expected(cfg, intent=pv_intent) == []
+    assert _expected(cfg, intent=Intent(version=3)) == []
+
+
+def test_car_without_profile_is_not_expected(cfg: Config) -> None:
+    assert expected_vehicles(cfg, _intent(), planned_health(_away()), {}, _slots(), NOW) == []
+
+
+def test_no_arrival_soc_means_not_expected(cfg: Config) -> None:
+    assert _expected(cfg, profile=_profile(socs={4: None})) == []
+
+
+def test_no_default_wallbox_means_not_expected(cfg: Config) -> None:
+    wallboxes = {key: box for key, box in cfg.wallboxes.items() if key != "twc"}
+    assert _expected(cfg.model_copy(update={"wallboxes": wallboxes})) == []
+
+
+def test_arrival_after_departure_means_not_expected(cfg: Config) -> None:
+    # Abfahrt 20:30 Ortszeit, die Prognose steigt erst um 20:45 über 0,5
+    early = _intent().model_copy(
+        update={"vehicles": {"tesla": VehicleIntent(mode=ChargeMode.PLANNED, departure="20:30")}}
+    )
+    assert _expected(cfg, intent=early) == []
+    # Abfahrt genau zur Viertelstunde der Ankunft: der Slot beginnt nicht vor der Abfahrt
+    exact = early.model_copy(
+        update={"vehicles": {"tesla": VehicleIntent(mode=ChargeMode.PLANNED, departure="20:45")}}
+    )
+    assert _expected(cfg, intent=exact) == []
+    # eine Viertelstunde später reicht
+    later = early.model_copy(
+        update={"vehicles": {"tesla": VehicleIntent(mode=ChargeMode.PLANNED, departure="21:00")}}
+    )
+    [tesla] = _expected(cfg, intent=later)
+    assert tesla.arrival_at == ARRIVAL and tesla.departure_at == at("2026-10-16T19:00:00+00:00")
+
+
+def test_departure_must_be_after_the_current_slot(cfg: Config) -> None:
+    # Jetzt 20:05, aktueller Slot bis 20:15: Abfahrt 20:15 liegt nicht danach
+    today = _intent().model_copy(
+        update={"vehicles": {"tesla": VehicleIntent(mode=ChargeMode.PLANNED, departure="20:15")}}
+    )
+    assert _expected(cfg, profile=_profile([0.9] * 96), intent=today) == []
+
+
+def test_presence_below_half_never_expects_the_car(cfg: Config) -> None:
+    assert _expected(cfg, profile=_profile([0.49] * 96)) == []
+    # genau 0,5 genügt
+    [tesla] = _expected(cfg, profile=_profile([0.5] * 96))
+    assert tesla.arrival_at == at(START) + timedelta(minutes=15)
+
+
+def test_the_current_slot_does_not_count_for_the_arrival(cfg: Config) -> None:
+    # Hoch nur im aktuellen Slot (Viertelstunde 80) und nach der Abfahrt
+    presence = [0.0] * 80 + [0.9] + [0.0] * 15
+    assert _expected(cfg, profile=_profile(presence)) == []
+
+
+def test_arrival_is_the_first_slot_over_half(cfg: Config) -> None:
+    # 20:15 niedrig, 20:30 hoch, 20:45 wieder niedrig
+    presence = [0.0] * 82 + [0.5] + [0.1] * 13
+    [tesla] = _expected(cfg, profile=_profile(presence))
+    assert tesla.arrival_at == at("2026-10-16T18:30:00+00:00")
+
+
+def test_arrival_soc_follows_the_weekday_of_the_arrival(cfg: Config) -> None:
+    # Ankunft nach Mitternacht: Samstag (22 %); Abfahrt Sonntag 07:00
+    start = "2026-10-16T21:00:00+00:00"  # 23:00 Ortszeit, Freitag
+    slots = scenario(prices=[20.0] * 48, pv=[0.0] * 48, load=[500.0] * 48, start=start).slots
+    friday = [0.0] * 96
+    saturday = [0.0] * 4 + [0.9] * 92  # ab 01:00 Ortszeit hoch
+    intent = Intent(
+        version=3,
+        vehicles={"tesla": VehicleIntent(mode=ChargeMode.PLANNED, departure="07:00")},
+    )
+    [tesla] = _expected(
+        cfg,
+        profile=_profile(friday, saturday=saturday),
+        intent=intent,
+        slots=slots,
+        now=at("2026-10-16T21:05:00+00:00"),
+    )
+    assert tesla.arrival_at == at("2026-10-16T23:00:00+00:00")  # Samstag 01:00 Ortszeit
+    assert tesla.soc_pct == 22.0
+
+
+def test_holiday_counts_as_weekday_six(cfg: Config) -> None:
+    # Montag, 26. 10. 2026 ist Nationalfeiertag: Wochentag 6 (Ladestand 55 %) statt Montag (20 %)
+    start = "2026-10-26T06:00:00+00:00"
+    slots = scenario(prices=[20.0] * 48, pv=[0.0] * 48, load=[500.0] * 48, start=start).slots
+    intent = Intent(
+        version=3,
+        vehicles={"tesla": VehicleIntent(mode=ChargeMode.PLANNED, departure="20:00")},
+    )
+    [tesla] = _expected(
+        cfg,
+        profile=_profile([0.9] * 96, socs={0: 20.0, 6: 55.0}),
+        intent=intent,
+        slots=slots,
+        now=at("2026-10-26T06:05:00+00:00"),
+    )
+    assert tesla.soc_pct == 55.0
+
+
+def test_expected_cars_follow_the_priority_and_skip_the_rest(cfg: Config) -> None:
+    health = planned_health(_away(), vehicle_health("egolf", plugged=False))
+    intent = Intent(
+        version=3,
+        priority=["egolf", "tesla"],
+        vehicles={
+            "tesla": VehicleIntent(mode=ChargeMode.PLANNED),
+            "egolf": VehicleIntent(mode=ChargeMode.PLANNED),
+        },
+    )
+    profiles = {"tesla": _profile(), "egolf": _profile()}
+    cars = expected_vehicles(cfg, intent, health, profiles, _slots(), NOW)
+    assert [car.key for car in cars] == ["egolf", "tesla"]
+    # der e-Golf hat kein Profil
+    cars = expected_vehicles(cfg, intent, health, {"tesla": _profile()}, _slots(), NOW)
+    assert [car.key for car in cars] == ["tesla"]
+
+
+def test_grid_allowed_counts_pv_from_arrival(cfg: Config) -> None:
+    # 3 kW Überschuss (P25 3500 W, Last 500 W) nur vor der Ankunft (die ersten drei Slots)
+    # zählt nicht: die Netzenergie bleibt der ganze Bedarf
+    before = _slots(48, pv_p25=[3500.0] * 3 + [0.0] * 45)
+    [tesla] = _expected(cfg, slots=before)
+    assert tesla.grid_allowed_kwh == pytest.approx(tesla.horizon_need_kwh)
+    # ab der Ankunft zählt er: acht Slots · 0,75 kWh
+    after = _slots(48, pv_p25=[0.0] * 3 + [3500.0] * 8 + [0.0] * 37)
+    [tesla] = _expected(cfg, slots=after)
+    assert tesla.grid_allowed_kwh == pytest.approx(tesla.horizon_need_kwh - 6.0)
+
+
+def test_grid_allowed_leaves_the_plugged_cars_their_surplus(cfg: Config) -> None:
+    slots = _slots(48, pv_p25=[0.0] * 3 + [3500.0] * 8 + [0.0] * 37)
+    plugged = planned_car(key="egolf", horizon_need_kwh=4.5, departure_at=at(DEPARTURE))
+    [alone] = _expected(cfg, slots=slots)
+    [shared] = _expected(cfg, slots=slots, plugged=[plugged])
+    # der e-Golf nimmt 4,5 kWh der 6 kWh Überschuss vorweg
+    assert alone.grid_allowed_kwh == pytest.approx(alone.horizon_need_kwh - 6.0)
+    assert shared.grid_allowed_kwh == pytest.approx(shared.horizon_need_kwh - 1.5)
+
+
+def test_plugged_allowance_is_unchanged_by_arrival_support() -> None:
+    slots = _slots(8, pv_p25=[3500.0] * 8)
+    car = planned_car(horizon_need_kwh=10.0, departure_at=at(START) + 2 * HOUR)
+    assert grid_allowed([car], slots, ["tesla"]) == pytest.approx({"tesla": 4.0})
+    late = car.model_copy(update={"arrival_at": at(START) + HOUR})
+    assert grid_allowed([late], slots, ["tesla"]) == pytest.approx({"tesla": 7.0})
