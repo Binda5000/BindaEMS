@@ -2,7 +2,7 @@
 // ein gemeinsamer Zustand: Die Tests stellen den Tesla am Ende auf „Geplant“ mit Ziel 60 % und
 // Abfahrt 17:30 zurück (auch bei einem Fehlschlag), damit keine andere Datei von ihrer Änderung abhängt.
 import { expect, test, type Page } from '@playwright/test';
-import { login } from './helpers';
+import { T_DEMO, login } from './helpers';
 
 /** Lademodus des Tesla auf der Seite „Laden“ (Auswahl der Karte „Tesla Model 3“) */
 function teslaCard(page: Page) {
@@ -83,6 +83,7 @@ test('Bedienen stellt den Tesla auf Geplant mit Ziel 80 % und Abfahrt 07:00', as
 	browser
 }) => {
 	await login(page, 'bedienen');
+	await page.clock.setFixedTime(T_DEMO); // „heute“ ist der 09.10.2026, wie in der Demo-Welt
 	await page.goto('/laden');
 	// Demo: der Tesla lädt schon „Geplant“ (Ziel 60 %, Abfahrt 17:30); der Plan nennt, wann er fertig
 	// ist, und sein Ladestand ist angenommen
