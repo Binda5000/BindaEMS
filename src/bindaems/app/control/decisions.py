@@ -34,8 +34,10 @@ log = structlog.get_logger(__name__)
 CATCH_UP_OVERLAP: Final = timedelta(minutes=10)
 CATCH_UP_EMPTY: Final = timedelta(days=7)  # ohne Eintrag in der Tabelle
 PAGE_LIMIT: Final = 1000
-# Höchstzahl wartender Entscheidungen, solange die Datenbank nicht schreibt; der core hält seine
-# Entscheidungen 7 Tage, ``catch_up`` holt beim nächsten Verbinden nach, was dort noch liegt.
+# Höchstzahl wartender Entscheidungen, solange die Datenbank nicht schreibt; darüber fallen die
+# ältesten weg. ``catch_up`` holt sie nicht nach: Es beginnt 10 min vor dem jüngsten ``ts`` der
+# Tabelle, und das liegt nach dem Rückstau hinter der Lücke, obwohl der core die Entscheidungen
+# 7 Tage hält.
 BUFFER_MAX: Final = 10_000
 FLUSH_S: Final = 1.0
 MEASUREMENT: Final = "decision"

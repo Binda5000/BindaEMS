@@ -133,7 +133,7 @@ def _keep_rule_r1(
             log.warning(
                 "Netzladen nach Regel R1 gekürzt",
                 code="plan_r1_trimmed",
-                slot=inputs.slots[index].start,
+                slot=inputs.slots[index].start.isoformat(),
                 cut_kwh=round(cut_kwh, 3),
                 export_kwh=round(export_kwh, 3),
             )

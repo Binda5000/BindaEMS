@@ -157,7 +157,7 @@ def test_r1_trim_is_logged() -> None:
     trimmed = [entry for entry in logs if entry.get("code") == "plan_r1_trimmed"]
     assert len(trimmed) == 1
     assert trimmed[0]["log_level"] == "warning"
-    assert trimmed[0]["slot"] == inputs.slots[1].start
+    assert trimmed[0]["slot"] == inputs.slots[1].start.isoformat()
     assert trimmed[0]["cut_kwh"] == pytest.approx(1100 * SLOT_H / 1000)
     assert trimmed[0]["cut_kwh"] > R1_TOL_KWH
 
@@ -232,7 +232,10 @@ def test_r1_trim_over_several_rounds_is_logged_once_per_slot() -> None:
         intents = derive_intents(inputs, flows_result(flows))
     assert intents[0] == BatteryIntent(kind=BatteryIntentKind.NETZLADEN, grid_charge_w=400.0)
     trimmed = [entry for entry in logs if entry.get("code") == "plan_r1_trimmed"]
-    assert [entry["slot"] for entry in trimmed] == [inputs.slots[1].start, inputs.slots[0].start]
+    assert [entry["slot"] for entry in trimmed] == [
+        inputs.slots[1].start.isoformat(),
+        inputs.slots[0].start.isoformat(),
+    ]
     assert [entry["cut_kwh"] for entry in trimmed] == [pytest.approx(0.5), pytest.approx(0.9)]
 
 
