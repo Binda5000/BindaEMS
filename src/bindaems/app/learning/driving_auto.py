@@ -6,15 +6,18 @@ nach:
 
 1. Health ist vertrauenswürdig (``health_trusted``), sonst ``error``;
 2. die Absicht nennt das Auto in „Geplant“, sonst ``inactive``;
-3. keine geplante Ladung des Autos läuft (offene Zeile in ``planned_charge``), außer sie begann vor
-   höchstens ``AUTO_ADOPT``; sonst ``waiting``;
+3. keine geplante Ladung des Autos läuft (offene Zeile in ``planned_charge``), außer sie wurde vor
+   höchstens ``AUTO_ADOPT`` geöffnet (``opened_at``, Ruling T8-13); sonst ``waiting``;
 4. die Pause nach einer Bedienung ist vorbei (``paused_until``), sonst ``paused``;
 5. die nächste erwartete Fahrt (``next_trip``) hat für Abfahrt oder Ziel mindestens „mittel“,
    sonst ``uncertain``.
 
 Abfahrt (Uhrzeit und Tag der Fahrt) und Ziel gelten unabhängig: Übernommen wird nur ein Wert mit
 Konfidenz ab „mittel“, der andere bleibt, wie er in der Absicht steht. Weichen die Werte von der
-Absicht ab, sendet die Automatik ``SetTarget`` mit „Automatik“ als Urheber (``applied``); bei
+Absicht ab, sendet die Automatik ``SetTarget`` mit „Automatik“ als Urheber (``applied``), aber
+nur, wenn seit dem Lesen der Absicht niemand Ziel oder Abfahrt bedient hat (Vorbedingung unter der
+Sperre des ``IntentService``, Ruling T8-11; sonst bleibt der Zustand, die Pause gilt ab der
+nächsten Prüfung); bei
 ``CoreDown``, ``Rejected`` oder einem zweiten Konflikt ``error`` mit dem Grund, der nächste Versuch
 folgt in einer Minute. Den Modus ändert sie nie.
 
@@ -37,12 +40,13 @@ from sqlalchemy import Engine, select
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
 from bindaems.app.audit import AuditLog, Source
-from bindaems.app.charging.planned import AUTO_ADOPT, OpenCharge, open_charges
+from bindaems.app.charging.planned import AUTO_ADOPT, OpenCharge
 from bindaems.app.control.intent import (
     WEEKDAYS,
     ConflictAgain,
     CoreDown,
     IntentService,
+    PreconditionFailed,
     Rejected,
     SetTarget,
     UnknownTarget,
@@ -71,9 +75,11 @@ CORE_DOWN: Final = "core nicht erreichbar."
 CONFLICT: Final = "Die Absicht wurde gleichzeitig geändert."
 REJECTED: Final = "Der core lehnt die Absicht ab."
 UNREADABLE: Final = "Zustand der Automatik nicht lesbar."
+CHARGES_UNREADABLE: Final = "Geplante Ladungen nicht lesbar."
 
 State = Literal["off", "inactive", "waiting", "paused", "uncertain", "applied", "error"]
 Profiles = Callable[[str], VehicleProfile | None]
+Charges = Callable[[], Mapping[str, OpenCharge]]  # ``PlannedCharges.open_charges`` (blockiert)
 
 
 @dataclass(frozen=True)
@@ -152,6 +158,7 @@ class DrivingAutomation:
         intents: IntentService,
         live: LiveState,
         profiles: Profiles,
+        charges: Charges,
         settings: SettingsService,
         audit: AuditLog,
         engine: Engine,
@@ -162,6 +169,7 @@ class DrivingAutomation:
         self._intents = intents
         self._live = live
         self._profiles = profiles
+        self._charges = charges
         self._settings = settings
         self._audit = audit
         self._engine = engine
@@ -175,6 +183,8 @@ class DrivingAutomation:
         self._loaded = False
         self._status: dict[str, _Status] = {}
         self._recent: dict[str, datetime] = {}  # letztes Setzen ohne spätere Bedienung
+        # Bedienungen je Auto: ändert sich die Zahl zwischen Prüfung und Senden, sendet sie nicht
+        self._manual: dict[str, int] = {}
         self._tasks: set[asyncio.Task[Any]] = set()
         self._threads: set[asyncio.Future[Any]] = set()
         intents.on_manual_target(self.on_manual_target)
@@ -203,11 +213,14 @@ class DrivingAutomation:
             "last_set_at": stored.last_set_at,
         }
 
-    def recently_set(self, key: str, now: datetime) -> bool:
-        """Ob die Automatik das Auto in den letzten ``AUTO_RECENT`` gesetzt hat und seither niemand
-        Ziel oder Abfahrt bedient hat (für ``PlannedCharges``, Präzisierung 9)."""
+    def auto_set_at(self, key: str, now: datetime) -> datetime | None:
+        """Wann die Automatik das Auto gesetzt hat, wenn das höchstens ``AUTO_RECENT`` vor ``now``
+        liegt und seither niemand Ziel oder Abfahrt bedient hat; sonst ``None`` (für
+        ``PlannedCharges``, Präzisierung 9, Ruling T8-10)."""
         set_at = self._recent.get(key)
-        return set_at is not None and timedelta(0) <= now - set_at <= AUTO_RECENT
+        if set_at is None or not timedelta(0) <= now - set_at <= AUTO_RECENT:
+            return None
+        return set_at
 
     # --- Rückmeldungen --------------------------------------------------------------------
 
@@ -218,6 +231,7 @@ class DrivingAutomation:
         bei der nächsten Prüfung, die dieser Aufruf anstößt.
         """
         self._recent.pop(key, None)
+        self._manual[key] = self._manual.get(key, 0) + 1
         if key not in self._stored or not self.enabled(key):
             return
         until = departure_at if departure_at is not None else _next_midnight(self._clock.now())
@@ -242,11 +256,19 @@ class DrivingAutomation:
         changed = await self._offload(self._store_switch, key, on, actor, source)
         if not on:
             return
-        if changed:
-            self._stored[key].paused_until = None
-            self._dirty.add(key)
-        self._status.pop(key, None)
-        await self.tick()
+        # der Schalter ist gespeichert: ein Fehler danach zeigt sich im Zustand, nicht beim Aufrufer
+        try:
+            async with self._lock:
+                if not self._loaded:  # erst laden, sonst käme die gelöschte Pause zurück
+                    await self._load_stored()
+                if changed:
+                    self._stored[key].paused_until = None
+                    self._dirty.add(key)
+                self._status.pop(key, None)
+            await self.tick()
+        except Exception as exc:
+            log.exception("Automatik nach dem Einschalten nicht geprüft", vehicle=key)
+            self._status[key] = _error(str(exc) or type(exc).__name__)
 
     def _store_switch(self, key: str, on: bool, actor: str, source: Source) -> bool:
         """Speichert den Schalter (blockiert: Datenbank); ``False``, wenn er schon so stand.
@@ -345,6 +367,8 @@ class DrivingAutomation:
             await self._flush()
 
     async def _check_all(self, keys: list[str]) -> None:
+        # die Bedienungen vor dem Lesen der Absicht: jede spätere verhindert das Senden
+        manual = {key: self._manual.get(key, 0) for key in keys}
         health = self._live.health if self._live.connected else None
         if not health_trusted(health):
             for key in keys:
@@ -356,16 +380,22 @@ class DrivingAutomation:
             for key in keys:
                 self._status[key] = _error(CORE_DOWN)
             return
-        charges = await self._offload(open_charges, self._engine)
+        try:
+            charges = await self._offload(self._charges)
+        except Exception:
+            log.exception("Geplante Ladungen für die Automatik nicht gelesen")
+            for key in keys:
+                self._status[key] = _error(CHARGES_UNREADABLE)
+            return
         for key in keys:
             try:
-                self._status[key] = await self._check(key, intent, charges)
+                self._status[key] = await self._check(key, intent, charges, manual[key])
             except Exception as exc:
                 log.exception("Automatik für ein Auto fehlgeschlagen", vehicle=key)
                 self._status[key] = _error(str(exc) or type(exc).__name__)
 
     async def _check(
-        self, key: str, intent: Intent | None, charges: Mapping[str, OpenCharge]
+        self, key: str, intent: Intent | None, charges: Mapping[str, OpenCharge], manual: int
     ) -> _Status:
         now = self._clock.now()
         vehicle = (
@@ -374,7 +404,7 @@ class DrivingAutomation:
         if vehicle.mode is not ChargeMode.PLANNED:
             return _inactive()
         charge = charges.get(key)
-        if charge is not None and now - charge.started_at > AUTO_ADOPT:
+        if charge is not None and now - charge.opened_at > AUTO_ADOPT:
             return _waiting(charge.departure_at)
         stored = self._stored[key]
         if stored.paused_until is not None:
@@ -406,12 +436,26 @@ class DrivingAutomation:
             return _applied(vehicle, now, stored.last_set_at)
         if not self.enabled(key):  # inzwischen ausgeschaltet: nichts mehr senden
             return _off()
-        return await self._send(key, change)
+        return await self._send(key, change, manual)
 
-    async def _send(self, key: str, change: SetTarget) -> _Status:
-        """Sendet die Änderung und merkt sich, wann und was gesetzt wurde."""
+    def _unchanged(self, key: str, manual: int) -> bool:
+        """Ob seit der Prüfung niemand Ziel oder Abfahrt des Autos bedient hat."""
+        return self._manual.get(key, 0) == manual
+
+    async def _send(self, key: str, change: SetTarget, manual: int) -> _Status:
+        """Sendet die Änderung, wenn seit der Prüfung niemand bedient hat (unter der Sperre des
+        ``IntentService``), und merkt sich, wann und was gesetzt wurde."""
         try:
-            result = await self._intents.apply(change, actor=ACTOR, source="system")
+            result = await self._intents.apply(
+                change,
+                actor=ACTOR,
+                source="system",
+                precondition=lambda: self._unchanged(key, manual),
+            )
+        except PreconditionFailed:
+            # die Bedienung geht vor; ihre Pause gilt ab der nächsten Prüfung
+            log.info("Automatik sendet nicht, weil gerade bedient wurde", vehicle=key)
+            return self._status.get(key, _inactive())
         except CoreDown:
             return _error(CORE_DOWN)
         except Rejected as exc:
@@ -427,7 +471,8 @@ class DrivingAutomation:
             "departure": sent.departure,
             "departure_on": sent.departure_on.isoformat() if sent.departure_on else None,
         }
-        self._recent[key] = now
+        if self._unchanged(key, manual):  # nach einer Bedienung übernimmt die Zählung nichts
+            self._recent[key] = now
         self._dirty.add(key)
         log.info("Automatik hat Ziel und Abfahrt gesetzt", vehicle=key, **stored.last_values)
         return _applied(sent, now, now)
@@ -437,9 +482,19 @@ class DrivingAutomation:
     async def _load_stored(self) -> None:
         rows = await self._offload(self._load)
         for key, row in rows.items():
-            # was eine Bedienung vor dem Laden geändert hat, gilt
-            if key in self._stored and key not in self._dirty:
+            if key not in self._stored:
+                continue
+            if key not in self._dirty:
                 self._stored[key] = row
+                continue
+            # vor dem Laden geändert (eine Bedienung): gesetzte Felder gelten, die übrigen kommen
+            # aus der Ablage, damit das Speichern sie nicht leert
+            memory = self._stored[key]
+            self._stored[key] = _Stored(
+                paused_until=memory.paused_until or row.paused_until,
+                last_set_at=memory.last_set_at or row.last_set_at,
+                last_values=memory.last_values or row.last_values,
+            )
         self._loaded = True
 
     def _load(self) -> dict[str, _Stored]:

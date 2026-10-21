@@ -331,6 +331,10 @@ class Rejected(Exception):
         self.details = details
 
 
+class PreconditionFailed(Exception):
+    """Die Vorbedingung der Änderung galt unter der Sperre nicht mehr; nichts wurde gesendet."""
+
+
 class LiveNotAuthorized(Exception):
     """Ein Aktor ginge auf „live“, ohne dass Passwort und Bestätigung für ihn geprüft sind.
 
@@ -545,15 +549,29 @@ class IntentService:
             if key not in self._cfg.vehicles:
                 raise UnknownTarget(f"Unbekanntes Fahrzeug „{key}“.")
 
-    async def apply(self, change: Change, *, actor: str, source: Source) -> ChangeResult:
+    async def apply(
+        self,
+        change: Change,
+        *,
+        actor: str,
+        source: Source,
+        precondition: Callable[[], bool] | None = None,
+    ) -> ChangeResult:
         """Wendet die Änderung auf die gültige Absicht an und sendet sie.
 
+        ``precondition`` prüft der Dienst unter seiner Sperre vor dem Senden; gilt sie nicht,
+        wird nichts gesendet und nichts protokolliert (``PreconditionFailed``). So sieht die
+        Automatik eine Bedienung, die zwischen ihrer Prüfung und dem Senden angenommen wurde.
+
         Fehler: ``UnknownTarget`` (Fahrzeug oder Wallbox unbekannt), ``CoreDown``,
-        ``Rejected`` (422 des core), ``ConflictAgain`` (zweites 409) und ``LiveNotAuthorized``
-        (ein Aktor ginge ohne Prüfung live; die Absicht bleibt unverändert).
+        ``Rejected`` (422 des core), ``ConflictAgain`` (zweites 409), ``LiveNotAuthorized``
+        (ein Aktor ginge ohne Prüfung live; die Absicht bleibt unverändert) und
+        ``PreconditionFailed``.
         """
         self._check(change)
         async with self._lock:
+            if precondition is not None and not precondition():
+                raise PreconditionFailed
             try:
                 for attempt in (1, 2):
                     current = await self._client.intent()

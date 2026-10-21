@@ -11,7 +11,6 @@ from bindaems.app.charging.planned import (
     PlannedCharges,
     PlannedSummary,
     feasible,
-    open_charges,
 )
 from bindaems.app.charging.tracker import ChargingTracker, StoredSession, WallboxSeen
 from bindaems.app.db.schema import charging_session, planned_charge
@@ -574,21 +573,21 @@ def test_known_soc_during_boost_replaces_an_assumed_start(charges, session, engi
 # --- Übernahme der Automatik (Plan 5b, Präzisierung 9) ------------------------------------------
 
 
-class Recently:
-    """Stand-in für ``DrivingAutomation.recently_set``: antwortet ``answer``, merkt die Fragen."""
+class SetAt:
+    """Stand-in für ``DrivingAutomation.auto_set_at``: antwortet ``at``, merkt die Fragen."""
 
-    def __init__(self, answer: bool) -> None:
-        self.answer = answer
+    def __init__(self, at: datetime | None) -> None:
+        self.at = at
         self.asked: list[tuple[str, datetime]] = []
 
-    def __call__(self, key: str, now: datetime) -> bool:
+    def __call__(self, key: str, now: datetime) -> datetime | None:
         self.asked.append((key, now))
-        return self.answer
+        return self.at
 
 
 def test_fresh_row_adopts_automation_change(engine, clock, cfg, session) -> None:
-    recently = Recently(True)
-    charges = PlannedCharges(engine, clock, cfg, recently_set=recently)
+    set_at = SetAt(T0 + AUTO_ADOPT)
+    charges = PlannedCharges(engine, clock, cfg, auto_set_at=set_at)
     charges.record(health(soc=40.0), {"twc": session})
     at(clock, T0 + AUTO_ADOPT)  # höchstens 10 min nach dem Beginn
     # die Automatik setzt eine knappe Abfahrt: 30 kWh in gut 50 min reichen nicht
@@ -599,15 +598,24 @@ def test_fresh_row_adopts_automation_change(engine, clock, cfg, session) -> None
     assert row.feasible is False  # neu berechnet wie bei einer neuen Zeile
     assert (row.started_at, row.start_soc_pct) == (T0, 40.0)  # der Beginn bleibt
     assert row.end_soc_pct == 41.0
-    assert recently.asked == [("tesla", T0 + AUTO_ADOPT)]
+    assert set_at.asked == [("tesla", T0 + AUTO_ADOPT)]
     at(clock, T0 + AUTO_ADOPT + timedelta(minutes=1))
     charges.record(health(soc=42.0, target=76, departure=sooner), {"twc": session})
     assert [r.outcome for r in rows(engine)] == ["open"]  # die übernommenen Werte gelten
     assert summary(charges).changed == 0
 
 
+def test_set_inside_the_window_is_adopted_when_seen_later(engine, clock, cfg, session) -> None:
+    # gesetzt nach 9:50 min, das Health damit kommt erst nach 10:05 min: maßgeblich ist das Setzen
+    charges = PlannedCharges(engine, clock, cfg, auto_set_at=SetAt(T0 + timedelta(seconds=590)))
+    charges.record(health(soc=40.0), {"twc": session})
+    at(clock, T0 + timedelta(seconds=605))
+    charges.record(health(soc=41.0, target=70), {"twc": session})
+    assert [(row.target_soc_pct, row.outcome) for row in rows(engine)] == [(70, "open")]
+
+
 def test_adopted_higher_target_is_no_longer_reached(engine, clock, cfg, session) -> None:
-    charges = PlannedCharges(engine, clock, cfg, recently_set=Recently(True))
+    charges = PlannedCharges(engine, clock, cfg, auto_set_at=SetAt(T0 + timedelta(minutes=4)))
     charges.record(health(soc=40.0), {"twc": session})
     at(clock, T0 + timedelta(minutes=2))
     charges.record(health(soc=80.0), {"twc": session})
@@ -619,9 +627,24 @@ def test_adopted_higher_target_is_no_longer_reached(engine, clock, cfg, session)
     assert row.feasible is True
 
 
-def test_older_row_still_ends_changed(engine, clock, cfg, session) -> None:
-    recently = Recently(True)
-    charges = PlannedCharges(engine, clock, cfg, recently_set=recently)
+def test_adopted_lower_target_keeps_the_time_it_was_reached(engine, clock, cfg, session) -> None:
+    charges = PlannedCharges(engine, clock, cfg, auto_set_at=SetAt(T0 + timedelta(minutes=4)))
+    charges.record(health(soc=40.0), {"twc": session})
+    at(clock, T0 + timedelta(minutes=2))
+    charges.record(health(soc=80.0), {"twc": session})
+    at(clock, T0 + timedelta(minutes=4))
+    charges.record(health(soc=80.0, target=70, need=0.0, state="reached"), {"twc": session})
+    [row] = rows(engine)
+    assert (row.target_soc_pct, row.reached_at, row.outcome) == (
+        70,
+        T0 + timedelta(minutes=2),
+        "open",
+    )
+
+
+def test_set_after_the_window_still_ends_changed(engine, clock, cfg, session) -> None:
+    set_at = SetAt(T0 + AUTO_ADOPT + timedelta(seconds=1))
+    charges = PlannedCharges(engine, clock, cfg, auto_set_at=set_at)
     charges.record(health(soc=40.0), {"twc": session})
     at(clock, T0 + AUTO_ADOPT + timedelta(seconds=1))
     later = DEPARTURE + timedelta(hours=1)
@@ -631,8 +654,8 @@ def test_older_row_still_ends_changed(engine, clock, cfg, session) -> None:
 
 
 def test_manual_change_of_fresh_row_ends_changed(engine, clock, cfg, session) -> None:
-    recently = Recently(False)
-    charges = PlannedCharges(engine, clock, cfg, recently_set=recently)
+    set_at = SetAt(None)
+    charges = PlannedCharges(engine, clock, cfg, auto_set_at=set_at)
     charges.record(health(soc=40.0), {"twc": session})
     at(clock, T0 + timedelta(minutes=5))
     charges.record(health(soc=41.0, target=70), {"twc": session})
@@ -640,22 +663,52 @@ def test_manual_change_of_fresh_row_ends_changed(engine, clock, cfg, session) ->
         (80, "changed"),
         (70, "open"),
     ]
-    assert recently.asked == [("tesla", T0 + timedelta(minutes=5))]
+    assert set_at.asked == [("tesla", T0 + timedelta(minutes=5))]
+
+
+def test_departure_already_past_is_not_adopted(engine, clock, cfg, session) -> None:
+    charges = PlannedCharges(engine, clock, cfg, auto_set_at=SetAt(T0 + timedelta(minutes=5)))
+    charges.record(health(soc=40.0), {"twc": session})
+    at(clock, T0 + timedelta(minutes=5))
+    past = T0 + timedelta(minutes=4)
+    charges.record(health(soc=41.0, departure=past), {"twc": session})
+    assert [(row.departure_at, row.outcome) for row in rows(engine)] == [(DEPARTURE, "changed")]
+
+
+def test_corrected_start_does_not_reopen_the_window(engine, clock, cfg, session) -> None:
+    # geöffnet mit angenommenem Ladestand; der erste bekannte verschiebt ``started_at``, aber
+    # nicht das Fenster der Übernahme
+    set_at = SetAt(T0 + timedelta(minutes=11))
+    charges = PlannedCharges(engine, clock, cfg, auto_set_at=set_at)
+    charges.record(health(soc=0.0, source="assumed"), {"twc": session})
+    at(clock, T0 + timedelta(minutes=8))
+    charges.record(health(soc=40.0), {"twc": session})
+    assert rows(engine)[0].started_at == T0 + timedelta(minutes=8)
+    assert charges.open_charges() == {"tesla": OpenCharge(opened_at=T0, departure_at=DEPARTURE)}
+    at(clock, T0 + timedelta(minutes=11))
+    charges.record(health(soc=41.0, target=70), {"twc": session})
+    assert [(row.target_soc_pct, row.outcome) for row in rows(engine)] == [
+        (80, "changed"),
+        (70, "open"),
+    ]
 
 
 def test_adoption_window_counts_from_the_stored_start(engine, clock, cfg, session) -> None:
     # nach einem Neustart gilt der Beginn aus der Datenbank
     PlannedCharges(engine, clock, cfg).record(health(soc=40.0), {"twc": session})
-    restarted = PlannedCharges(engine, clock, cfg, recently_set=Recently(True))
+    set_at = SetAt(T0 + timedelta(minutes=9))
+    restarted = PlannedCharges(engine, clock, cfg, auto_set_at=set_at)
     at(clock, T0 + timedelta(minutes=9))
     restarted.record(health(soc=41.0, target=70), {"twc": session})
     assert [(row.target_soc_pct, row.outcome) for row in rows(engine)] == [(70, "open")]
 
 
-def test_open_charges_name_start_and_departure(charges, session, engine, clock) -> None:
-    assert open_charges(engine) == {}
+def test_open_charges_name_opening_and_departure(charges, session, engine, clock, cfg) -> None:
+    assert charges.open_charges() == {}
     charges.record(health(soc=40.0), {"twc": session})
-    assert open_charges(engine) == {"tesla": OpenCharge(started_at=T0, departure_at=DEPARTURE)}
+    opened = {"tesla": OpenCharge(opened_at=T0, departure_at=DEPARTURE)}
+    assert charges.open_charges() == opened
+    assert PlannedCharges(engine, clock, cfg).open_charges() == opened  # vor dem Laden: Datenbank
     at(clock, T0 + timedelta(minutes=30))
     charges.record(health(mode="pv", planned=False, intent_mode="pv"), {"twc": session})
-    assert open_charges(engine) == {}
+    assert charges.open_charges() == {}

@@ -14,6 +14,7 @@ from bindaems.app.control.intent import (
     CoreDown,
     IntentService,
     LiveNotAuthorized,
+    PreconditionFailed,
     Rejected,
     SetActuators,
     SetAssignment,
@@ -819,3 +820,37 @@ async def test_failing_callback_neither_fails_nor_undoes_the_change(
     assert [key for key, _ in calls] == ["tesla"]  # der nächste Rückruf läuft weiter
     assert [entry["log_level"] for entry in logs] == ["error"]
     assert "Rückruf" in logs[0]["event"]
+
+
+async def test_failed_precondition_sends_nothing(
+    service: IntentService, fake_client: FakeCoreClient, audit: AuditLog, feed: FakeFeed
+) -> None:
+    checked: list[bool] = []
+
+    def precondition() -> bool:
+        checked.append(service._lock.locked())  # unter der Sperre des Dienstes
+        return False
+
+    calls = recorder(service)
+    with pytest.raises(PreconditionFailed):
+        await service.apply(
+            SetTarget("tesla", 80, "07:15"),
+            actor="Automatik",
+            source="system",
+            precondition=precondition,
+        )
+    assert checked == [True]
+    assert (fake_client.sent, audit.recent(), feed.refreshed, calls) == ([], [], 0, [])
+
+
+async def test_met_precondition_applies_the_change(
+    service: IntentService, fake_client: FakeCoreClient
+) -> None:
+    result = await service.apply(
+        SetTarget("tesla", 80, "07:15"),
+        actor="Automatik",
+        source="system",
+        precondition=lambda: True,
+    )
+    assert result.result == "accepted"
+    assert fake_client.sent == [result.intent]

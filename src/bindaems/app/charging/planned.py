@@ -33,12 +33,16 @@ Abfahrt geplant lief, bleibt mit eigenem Ergebnis sichtbar.
   - ``changed``: Abfahrt oder Ziel ändern sich vor der Abfahrt (dann kann eine neue beginnen), oder
     die Absicht wechselt auf PV, Min+PV oder Aus. Sofort und Boost lassen die Zeile offen, sie wird
     an der Abfahrt beurteilt; ein unbekannter Modus (core startet neu) ändert nichts.
-- **Übernahme** (Plan 5b, Präzisierung 9): Ändern sich Ziel oder Abfahrt einer Zeile, deren Beginn
-  (``started_at``) höchstens ``AUTO_ADOPT`` zurückliegt, und hat die Automatik das Auto in den
-  letzten 2 min gesetzt (``recently_set``), übernimmt die Zeile Ziel und Abfahrt und rechnet die
-  Machbarkeit neu wie eine neue Zeile, statt mit ``changed`` zu enden. Ein erreichtes Ziel gilt
-  nach einem höheren nicht mehr als erreicht. So entsteht keine „geänderte“ Ladung, wenn nach einer
-  Abfahrt, zu der das Auto stecken blieb, sofort die Zeile für die nächste beginnt.
+- **Übernahme** (Plan 5b, Präzisierung 9, Rulings T8-10 und T8-13): Ändern sich Ziel oder Abfahrt
+  einer Zeile und hat die Automatik das Auto in den letzten 2 min gesetzt (``auto_set_at``), und
+  zwar höchstens ``AUTO_ADOPT`` nach dem Öffnen der Zeile (``opened_at``), übernimmt die Zeile Ziel
+  und Abfahrt und rechnet die Machbarkeit neu wie eine neue Zeile, statt mit ``changed`` zu enden;
+  die neue Abfahrt muss noch kommen. Maßgeblich ist der Zeitpunkt des Setzens, nicht der des
+  Health, das es zeigt. ``opened_at`` ist der Zeitpunkt, zu dem die Zeile geöffnet (nach einem
+  Neustart: gelesen) wurde, und ändert sich nicht, wenn ein angenommener Beginn korrigiert wird.
+  Ein erreichtes Ziel gilt nach einem höheren nicht mehr als erreicht. So entsteht keine
+  „geänderte“ Ladung, wenn nach einer Abfahrt, zu der das Auto stecken blieb, sofort die Zeile für
+  die nächste beginnt.
 
 ``end_soc_pct``, ``end_soc_source`` und ``end_soc_at`` halten den letzten Ladestand vor der Abfahrt
 mit seiner Zeit; gespeichert wird er höchstens jede Minute, so übersteht er einen Neustart.
@@ -52,6 +56,7 @@ für sich.
 
 from __future__ import annotations
 
+import threading
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
@@ -93,12 +98,12 @@ SOC_STALE: Final = timedelta(minutes=15)
 # so lange nach ihrem Beginn übernimmt eine Zeile Ziel und Abfahrt der Automatik (Präzisierung 9)
 AUTO_ADOPT: Final = timedelta(minutes=10)
 
-RecentlySet = Callable[[str, datetime], bool]
+AutoSetAt = Callable[[str, datetime], datetime | None]
 
 
-def _never(key: str, now: datetime) -> bool:
+def _never(key: str, now: datetime) -> datetime | None:
     """Ohne Automatik hat sie nie etwas gesetzt."""
-    return False
+    return None
 
 
 @dataclass(frozen=True)
@@ -122,24 +127,10 @@ class PlannedSummary:
 
 @dataclass(frozen=True)
 class OpenCharge:
-    """Beginn und Abfahrt der offenen Zeile eines Fahrzeugs."""
+    """Öffnen (``opened_at``) und Abfahrt der offenen Zeile eines Fahrzeugs."""
 
-    started_at: datetime
+    opened_at: datetime
     departure_at: datetime
-
-
-def open_charges(engine: Engine) -> dict[str, OpenCharge]:
-    """Die offenen Zeilen je Fahrzeug aus der Datenbank (blockiert: aus einem Thread aufrufen)."""
-    query = (
-        select(planned_charge.c.vehicle, planned_charge.c.started_at, planned_charge.c.departure_at)
-        .where(planned_charge.c.outcome == OPEN)
-        .order_by(planned_charge.c.id)
-    )
-    with engine.connect() as conn:
-        return {
-            row.vehicle: OpenCharge(ensure_utc(row.started_at), ensure_utc(row.departure_at))
-            for row in conn.execute(query)
-        }
 
 
 def feasible(
@@ -189,6 +180,7 @@ class _Row:
     wallbox: str
     target_pct: float
     departure_at: datetime
+    opened_at: datetime  # geöffnet oder nach einem Neustart gelesen; Fenster der Übernahme
     started_at: datetime
     start_soc_pct: float
     start_soc_source: str
@@ -258,30 +250,58 @@ class PlannedCharges:
         clock: Clock,
         cfg: Config,
         *,
-        recently_set: RecentlySet = _never,
+        auto_set_at: AutoSetAt = _never,
     ) -> None:
         self._engine = engine
         self._clock = clock
         self._cfg = cfg
-        self._recently_set = recently_set  # ``DrivingAutomation.recently_set`` (Plan 5b)
+        self._auto_set_at = auto_set_at  # ``DrivingAutomation.auto_set_at`` (Plan 5b)
         self._open: dict[str, _Row] = {}  # je Fahrzeug höchstens eine offene Zeile
         self._loaded = False
+        # ``record`` und ``open_charges`` laufen in verschiedenen Threads
+        self._mutex = threading.Lock()
 
     def record(self, health: Mapping[str, Any], sessions: Mapping[str, StoredSession]) -> None:
         """Verarbeitet ein Health; ``sessions`` sind die offenen Sessions je Wallbox."""
         now = self._clock.now()
         open_ids = {session.id for session in sessions.values()}
-        try:
-            with self._engine.begin() as conn:
-                if not self._loaded:
-                    self._load(conn)
-                for key in self._cfg.vehicles:
-                    self._observe(conn, now, key, _seen(health, key), sessions, open_ids)
-        except Exception:
-            # zurückgerollt: der nächste Lauf liest die offenen Zeilen neu
-            self._loaded = False
-            self._open.clear()
-            raise
+        with self._mutex:
+            try:
+                with self._engine.begin() as conn:
+                    if not self._loaded:
+                        self._load(conn)
+                    for key in self._cfg.vehicles:
+                        self._observe(conn, now, key, _seen(health, key), sessions, open_ids)
+            except Exception:
+                # zurückgerollt: der nächste Lauf liest die offenen Zeilen neu
+                self._loaded = False
+                self._open.clear()
+                raise
+
+    def open_charges(self) -> dict[str, OpenCharge]:
+        """Die offenen Zeilen je Fahrzeug mit ``opened_at`` (für die Automatik).
+
+        Vor dem ersten ``record`` aus der Datenbank, dann gilt ``started_at`` als Öffnen wie nach
+        einem Neustart. Blockiert: aus einem Thread aufrufen.
+        """
+        with self._mutex:
+            if self._loaded:
+                return {
+                    key: OpenCharge(row.opened_at, row.departure_at)
+                    for key, row in self._open.items()
+                }
+        query = (
+            select(
+                planned_charge.c.vehicle, planned_charge.c.started_at, planned_charge.c.departure_at
+            )
+            .where(planned_charge.c.outcome == OPEN)
+            .order_by(planned_charge.c.id)
+        )
+        with self._engine.connect() as conn:
+            return {
+                row.vehicle: OpenCharge(ensure_utc(row.started_at), ensure_utc(row.departure_at))
+                for row in conn.execute(query)
+            }
 
     def summary(self, first: date, last: date) -> PlannedSummary:
         """Die geschlossenen Zeilen mit Abfahrt an den Ortstagen ``first … last``."""
@@ -334,6 +354,7 @@ class PlannedCharges:
                 wallbox=row.wallbox,
                 target_pct=row.target_soc_pct,
                 departure_at=ensure_utc(row.departure_at),
+                opened_at=ensure_utc(row.started_at),
                 started_at=ensure_utc(row.started_at),
                 start_soc_pct=row.start_soc_pct,
                 start_soc_source=row.start_soc_source,
@@ -370,7 +391,7 @@ class PlannedCharges:
                 and (seen.departure_at != row.departure_at or seen.target_pct != row.target_pct)
             ):
                 target = seen.target_pct
-                if target is not None and self._adopts(now, row, seen.departure_at):
+                if target is not None and self._adopts(now, row, key, seen.departure_at):
                     self._adopt(conn, now, row, seen, target, seen.departure_at)
                     return
                 self._finish(conn, row, CHANGED)
@@ -467,6 +488,7 @@ class PlannedCharges:
             wallbox=session.wallbox,
             target_pct=target,
             departure_at=departure_at,
+            opened_at=now,
             started_at=now,
             start_soc_pct=start_soc,
             start_soc_source=source,
@@ -499,11 +521,13 @@ class PlannedCharges:
             limit_pct=None if synced else seen.limit_pct,
         )
 
-    def _adopts(self, now: datetime, row: _Row, departure_at: datetime) -> bool:
-        """Ob die Zeile geänderte Werte als die der Automatik übernimmt (Präzisierung 9)."""
-        if departure_at <= now or now - row.started_at > AUTO_ADOPT:
+    def _adopts(self, now: datetime, row: _Row, key: str, departure_at: datetime) -> bool:
+        """Ob die Zeile geänderte Werte als die der Automatik übernimmt (Präzisierung 9): gesetzt
+        in den letzten 2 min, höchstens ``AUTO_ADOPT`` nach dem Öffnen, Abfahrt noch vorn."""
+        if departure_at <= now:
             return False
-        return self._recently_set(row.vehicle, now)
+        set_at = self._auto_set_at(key, now)
+        return set_at is not None and set_at - row.opened_at <= AUTO_ADOPT
 
     def _adopt(
         self,

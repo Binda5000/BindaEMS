@@ -11,15 +11,16 @@ from tests.plan_helpers import until
 from tests.unit.app.control.conftest import FakeCoreClient, FakeFeed
 
 from bindaems.app.audit import AuditLog
-from bindaems.app.charging.planned import AUTO_ADOPT
+from bindaems.app.charging.planned import AUTO_ADOPT, OpenCharge, PlannedCharges
 from bindaems.app.control.intent import IntentService, SetTarget
 from bindaems.app.core_link import CoreReply, CoreUnavailableError, LiveState
 from bindaems.app.db.schema import charging_session, driving_automation, planned_charge
 from bindaems.app.learning.driving_auto import AUTO_RECENT, DrivingAutomation
 from bindaems.app.learning.driving_profile import Confidence, VehicleProfile, WeekdayProfile
-from bindaems.app.settings.service import SettingsService
+from bindaems.app.settings.service import SettingsService, SettingsVersion, VersionConflictError
 from bindaems.shared.config import Config
 from bindaems.shared.control import ChargeMode, Intent, VehicleIntent, next_departure
+from bindaems.shared.settings import RuntimeSettings
 from bindaems.shared.timeutil import ManualClock
 
 # ``T_APP`` ist Freitag, 9. Oktober 2026, 10:00 Ortszeit: die Abfahrt um 07:15 ist heute vorbei,
@@ -178,6 +179,7 @@ def make_auto(
     clock: ManualClock,
 ) -> Callable[..., DrivingAutomation]:
     def make(**kwargs: Any) -> DrivingAutomation:
+        kwargs.setdefault("charges", PlannedCharges(engine, clock, cfg).open_charges)
         return DrivingAutomation(
             intents=intents,
             live=live,
@@ -233,9 +235,10 @@ async def test_applies_next_trip_in_planned_mode(auto, client, audit, engine, cl
         "departure": "07:15",
         "departure_on": "2026-10-12",
     }
-    assert auto.recently_set("tesla", T_APP + AUTO_RECENT) is True
-    assert auto.recently_set("tesla", T_APP + AUTO_RECENT + timedelta(seconds=1)) is False
-    assert auto.recently_set("egolf", T_APP) is False
+    assert auto.auto_set_at("tesla", T_APP + AUTO_RECENT) == T_APP
+    assert auto.auto_set_at("tesla", T_APP + AUTO_RECENT + timedelta(seconds=1)) is None
+    assert auto.auto_set_at("tesla", T_APP - timedelta(seconds=1)) is None  # nicht vor dem Setzen
+    assert auto.auto_set_at("egolf", T_APP) is None
     clock.advance(timedelta(minutes=1))
     await auto.tick()
     assert len(client.sent) == 1  # gesetzt bleibt gesetzt
@@ -336,9 +339,9 @@ async def test_manual_change_while_off_is_ignored(auto, intents, client, engine)
 @pytest.mark.usefixtures("enabled")
 async def test_manual_change_ends_the_recent_set(auto, intents) -> None:
     await auto.tick()
-    assert auto.recently_set("tesla", T_APP) is True
+    assert auto.auto_set_at("tesla", T_APP) == T_APP
     await intents.apply(SetTarget("tesla", 90, None), actor="anna", source="ha")
-    assert auto.recently_set("tesla", T_APP) is False  # die Zeile übernimmt das nicht
+    assert auto.auto_set_at("tesla", T_APP) is None  # die Zeile übernimmt das nicht
 
 
 @pytest.mark.usefixtures("enabled")
@@ -392,7 +395,7 @@ async def test_no_send_when_values_already_match(auto, client) -> None:
         "Automatik: Mo 07:15, Ziel 60 %.",  # nie selbst gesetzt: ohne „gesetzt“
         None,
     )
-    assert auto.recently_set("tesla", T_APP) is False
+    assert auto.auto_set_at("tesla", T_APP) is None
 
 
 @pytest.mark.usefixtures("enabled")
@@ -581,3 +584,195 @@ async def test_run_ticks_every_interval(make_auto, monkeypatch) -> None:
     await until(lambda: len(ticks) >= 3)  # ohne Anstoß, nur nach der Wartezeit
     assert await auto.close(1.0) is True
     assert task.cancelled()
+
+
+# --- Fix-Runde 1 ---------------------------------------------------------------------------------
+
+
+@pytest.mark.usefixtures("enabled")
+async def test_own_setting_does_not_pause(auto, client, profiles, engine, clock) -> None:
+    await auto.tick()
+    assert auto.state("tesla")["paused_until"] is None
+    assert stored(engine)["tesla"].paused_until is None
+    profiles.by_key["tesla"] = commuter(soc=70)
+    clock.advance(timedelta(minutes=1))
+    await auto.tick()
+    assert len(client.sent) == 2 and tesla(client).target_soc_pct == 70
+
+
+@pytest.mark.usefixtures("enabled")
+async def test_trip_today_is_sent_once_then_stable(auto, client, clock) -> None:
+    clock.advance(timedelta(hours=-4))  # Freitag 06:00 Ortszeit: die Fahrt um 07:15 kommt heute
+    await auto.tick()
+    assert tesla(client).departure_on == date(2026, 10, 9)
+    clock.advance(timedelta(minutes=1))
+    await auto.tick()
+    assert len(client.sent) == 1
+
+
+@pytest.mark.usefixtures("enabled")
+async def test_kept_departure_keeps_its_day(auto, client, profiles) -> None:
+    # Abfahrt unsicher: Tag und Uhrzeit der Absicht bleiben; das Ziel stimmt schon
+    client.valid = planned_intent(target_soc_pct=60, departure_on=MONDAY)
+    profiles.by_key["tesla"] = commuter(departure="low")
+    await auto.tick()
+    assert client.sent == []
+    assert auto.state("tesla")["state"] == "applied"
+
+
+@pytest.mark.usefixtures("enabled")
+async def test_manual_change_between_check_and_send_wins(auto, client, profiles, clock) -> None:
+    until_at = datetime(2026, 10, 10, 6, 0, tzinfo=UTC)
+    # die Bedienung kommt, nachdem die Automatik die Pause geprüft hat, und vor dem Senden
+    profiles.hook = lambda: auto.on_manual_target("tesla", until_at)
+    await auto.tick()
+    assert client.sent == []
+    assert auto.state("tesla")["state"] == "paused"
+    assert auto.auto_set_at("tesla", T_APP) is None
+    profiles.hook = None
+    clock.advance(timedelta(minutes=1))
+    await auto.tick()
+    assert client.sent == []
+    assert auto.state("tesla")["paused_until"] == until_at
+
+
+@pytest.mark.usefixtures("enabled")
+async def test_manual_change_after_a_clamped_send_ends_the_recent_set(
+    auto, client, monkeypatch
+) -> None:
+    calls: list[int] = []
+    real_intent = client.intent
+
+    async def intent() -> Intent | None:
+        calls.append(1)
+        if len(calls) == 3:  # nach dem Senden holt der Dienst die geklemmte Absicht
+            auto.on_manual_target("tesla", datetime(2026, 10, 10, 6, 0, tzinfo=UTC))
+        return await real_intent()
+
+    def clamped() -> CoreReply:
+        sent = client.sent[-1]
+        client.valid = sent
+        return CoreReply(200, {"result": "clamped", "version": sent.version, "details": []})
+
+    monkeypatch.setattr(client, "intent", intent)
+    client.replies = [clamped]
+    await auto.tick()
+    assert len(calls) == 3
+    assert auto.state("tesla")["last_set_at"] == T_APP  # gesetzt hat sie
+    assert auto.auto_set_at("tesla", T_APP) is None  # aber danach wurde bedient
+
+
+@pytest.mark.usefixtures("enabled")
+async def test_manual_change_while_off_ends_the_recent_set(auto, intents) -> None:
+    await auto.tick()
+    await auto.set_enabled("tesla", False, actor="anna", source="ui")
+    await intents.apply(SetTarget("tesla", 90, None), actor="anna", source="ui")
+    assert auto.auto_set_at("tesla", T_APP) is None
+
+
+@pytest.mark.usefixtures("enabled")
+async def test_pause_expires_in_the_state_without_a_tick(auto, clock) -> None:
+    until_at = datetime(2026, 10, 10, 6, 0, tzinfo=UTC)
+    auto.on_manual_target("tesla", until_at)
+    clock.advance(until_at - clock.now())
+    assert auto.state("tesla")["paused_until"] is None
+
+
+@pytest.mark.usefixtures("enabled")
+async def test_window_counts_from_the_opening_of_the_charge(make_auto, client) -> None:
+    opened = {"tesla": OpenCharge(T_APP - AUTO_ADOPT - timedelta(seconds=1), T_APP + AUTO_ADOPT)}
+    auto = make_auto(charges=lambda: opened)
+    await auto.tick()
+    assert (client.sent, auto.state("tesla")["state"]) == ([], "waiting")
+
+
+@pytest.mark.usefixtures("enabled")
+async def test_unreadable_planned_charges_set_error(make_auto, client) -> None:
+    def broken() -> dict[str, OpenCharge]:
+        raise RuntimeError("Datenbank gesperrt")
+
+    auto = make_auto(charges=broken)
+    with capture_logs() as logs:
+        await auto.tick()
+    assert client.sent == []
+    assert auto.state("tesla")["text"] == (
+        "Automatik fehlgeschlagen: Geplante Ladungen nicht lesbar."
+    )
+    assert any(entry["log_level"] == "error" for entry in logs)
+
+
+async def test_failed_check_after_switching_on_does_not_raise(
+    auto, settings_service, monkeypatch
+) -> None:
+    async def broken(keys: list[str]) -> None:
+        raise RuntimeError("kaputt")
+
+    monkeypatch.setattr(auto, "_check_all", broken)
+    with capture_logs() as logs:
+        await auto.set_enabled("tesla", True, actor="anna", source="ui")
+    assert settings_service.current().settings.learning.driving.automation == {"tesla": True}
+    assert auto.state("tesla")["text"] == "Automatik fehlgeschlagen: kaputt"
+    assert any(entry["log_level"] == "error" for entry in logs)
+
+
+async def test_switch_retries_once_on_a_version_conflict(
+    auto, settings_service, audit, monkeypatch
+) -> None:
+    real_update = settings_service.update
+    calls: list[int] = []
+
+    def racing(settings: RuntimeSettings, **kwargs: Any) -> SettingsVersion:
+        calls.append(1)
+        if len(calls) == 1:  # gleichzeitig ändert jemand anderes die Einstellungen
+            set_switch(settings_service, "egolf", False)
+        return real_update(settings, **kwargs)
+
+    monkeypatch.setattr(settings_service, "update", racing)
+    await auto.set_enabled("tesla", True, actor="anna", source="ui")
+    automation = settings_service.current().settings.learning.driving.automation
+    assert automation == {"egolf": False, "tesla": True}
+    assert [e.action for e in audit.recent(10)].count("control.automation") == 1
+
+
+async def test_second_version_conflict_is_raised(auto, settings_service, monkeypatch) -> None:
+    def conflict(settings: RuntimeSettings, **kwargs: Any) -> SettingsVersion:
+        raise VersionConflictError(99)
+
+    monkeypatch.setattr(settings_service, "update", conflict)
+    with pytest.raises(VersionConflictError):
+        await auto.set_enabled("tesla", True, actor="anna", source="ui")
+
+
+@pytest.mark.usefixtures("enabled")
+async def test_manual_change_before_the_first_load_merges(make_auto, engine, client) -> None:
+    first = make_auto()
+    await first.tick()  # setzt und speichert last_set_at
+    second = make_auto()  # Neustart; die Bedienung kommt vor dem ersten Laden
+    until_at = datetime(2026, 10, 10, 6, 0, tzinfo=UTC)
+    second.on_manual_target("tesla", until_at)
+    await second.tick()
+    assert len(client.sent) == 1  # pausiert, nicht überschrieben
+    row = stored(engine)["tesla"]
+    assert (row.paused_until, row.last_set_at) == (until_at, T_APP)
+    assert row.last_values is not None
+    state = second.state("tesla")
+    assert (state["state"], state["last_set_at"]) == ("paused", T_APP)
+
+
+@pytest.mark.usefixtures("enabled")
+async def test_failed_save_is_retried(auto, engine, monkeypatch) -> None:
+    real_save = auto._save
+    failures: list[int] = []
+
+    def flaky(rows: Any) -> None:
+        if not failures:
+            failures.append(1)
+            raise RuntimeError("Datenbank gesperrt")
+        real_save(rows)
+
+    monkeypatch.setattr(auto, "_save", flaky)
+    with capture_logs():
+        await auto.tick()
+    assert stored(engine) == {}
+    await auto.tick()
+    assert stored(engine)["tesla"].last_set_at == T_APP

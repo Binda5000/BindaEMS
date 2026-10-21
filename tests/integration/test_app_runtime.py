@@ -1550,7 +1550,10 @@ def test_runtime_wires_the_driving_automation(runtime) -> None:
     automation = runtime.automation
     assert automation.state("tesla")["state"] == "off"  # ab Werk aus
     # die Zählung der geplanten Ladungen fragt die Automatik, der Dienst stößt sie an
-    assert runtime.planned_charges._recently_set == automation.recently_set
+    assert runtime.planned_charges._auto_set_at == automation.auto_set_at
+    opened = {"tesla": object()}
+    runtime.planned_charges.open_charges = lambda: opened
+    assert automation._charges() is opened  # liest die offenen Zeilen der Zählung
     assert automation.request_tick in runtime.driving._run_done
     assert automation.on_manual_target in runtime.intents._manual_target
 

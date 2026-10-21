@@ -304,6 +304,8 @@ class AppRuntime:
             intents=self.intents,
             live=self.live,
             profiles=self.driving.profile,
+            # die geplanten Ladungen entstehen erst unten (sie fragen ``auto_set_at``)
+            charges=lambda: self.planned_charges.open_charges(),
             settings=self.settings,
             audit=self.audit,
             engine=self.engine,
@@ -339,7 +341,7 @@ class AppRuntime:
         )
         # geplante Ladungen für die Abnahme „Ziel-SOC“ nach jeder Abfrage von Health (Plan 4b)
         self.planned_charges = PlannedCharges(
-            self.engine, self._clock, cfg, recently_set=self.automation.recently_set
+            self.engine, self._clock, cfg, auto_set_at=self.automation.auto_set_at
         )
         self._planned_wake = asyncio.Event()
         self.live_feed.health_handlers.append(self._planned_wake.set)
