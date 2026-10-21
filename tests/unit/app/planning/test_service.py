@@ -818,7 +818,9 @@ def _planned_tesla(live, **changes) -> Intent:
 
 async def test_charge_limit_flapping_replans_at_most_every_five_minutes(service_with, live, clock):
     """Wechselt das Ladelimit alle 30 s über 10 min, plant der Dienst höchstens alle 5 min neu:
-    die erste Änderung sofort, die nächste nach 300 s (330 s, 630 s liegt dahinter)."""
+    die erste Änderung sofort (30 s, Limit 70), die nächste erst nach 300 s: Bei 330 s steht das
+    Limit wieder auf 70 wie beim letzten Lauf, bei 360 s weicht es mit 80 ab; 660 s liegt hinter
+    den 10 min. Das sind genau zwei Läufe „vehicles“."""
     intent = _planned_tesla(live, charge_limit_pct=80.0)
     calls: list[PlanInputs] = []
     steps = {"n": 0}
@@ -833,8 +835,7 @@ async def test_charge_limit_flapping_replans_at_most_every_five_minutes(service_
     service = service_with(solver=recording(calls), sleep=sleep, intent=lambda: intent)
     async with running(service):
         await until(lambda: steps["n"] >= 20)  # 10 min
-    assert 2 <= triggers(calls).count("vehicles") <= 3
-    assert triggers(calls)[0] == "start"
+    assert triggers(calls) == ["start", "vehicles", "vehicles"]
 
 
 async def test_throttled_charge_limit_change_is_replanned_after_five_minutes(
