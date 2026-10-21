@@ -326,6 +326,18 @@ Komponente `load-model` und der Rückfall auf das Profil bei fehlender Modelldat
 beobachtet. Für die Abnahme kopierst du sie mit Datum, füllst sie an der Anlage aus und checkst sie
 hier ein. Das Fahrverhalten (Plan 5b) hat eine eigene Abnahme.
 
+## Abnahme Phase 5b
+
+Die Checkliste für die Abnahme des Fahrverhaltens (Phase 5b, Spec 18) steht in
+[`abnahme-phase-5b.md`](abnahme-phase-5b.md): 28 Tage ab dem Ausrollen; für jedes Auto mit Daten
+erscheinen Vorschläge mit Konfidenz auf „Prognosen“, „Laden“ und in Home Assistant; für jedes Auto mit
+mindestens 10 bewerteten Tagen sind die Trefferquoten der Abfahrt und des Ziels je mindestens 80 %
+(`GET /api/learning/driving`, `quality`); mit eingeschalteter Automatik entsteht keine Zeile „geändert“
+durch die Automatik in den geplanten Ladungen und keine Änderung während einer laufenden geplanten
+Ladung; und ein erwartetes Auto steht im Zeitplan und wird beim Anstecken durch das echte ersetzt,
+einmal an der Anlage beobachtet. Für die Abnahme kopierst du sie mit Datum, füllst sie an der Anlage
+aus und checkst sie hier ein.
+
 ## Abnahme Phase 6a
 
 Die Checkliste für die Abnahme der Phase 6a (Klimaanlage, Spec 18) steht in

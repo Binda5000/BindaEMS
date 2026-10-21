@@ -100,8 +100,19 @@ Fix-Welle umgesetzt und nachgeprüft. Plan 5a ändert nur die app, das UI,
 an der Anlage nur den Neubau von `ems-app`, **mit oder nach dem gemeinsamen Ausrollen von 4b und 6a**,
 also nach der Abnahme der Phase 3. Er schaltet nichts an der Anlage: Das Modell ändert nur die Eingabe
 des Planers und gilt nur, solange es in den letzten 14 Tagen mindestens 10 % genauer ist als das
-Profil. Als Nächstes folgt **Plan 5b (Fahrverhalten)**, danach 5c (Vorheizen und Vorkühlen, erst mit
-Daten aus 6a).
+Profil.
+
+**Plan 5b (Fahrverhalten, der zweite Teil der Phase 5) ist umgesetzt und je Task geprüft**
+(`docs/superpowers/plans/2026-10-20-phase-5b-fahrverhalten.md`, 14 Tasks, freigegeben vom Betreiber am 20.10.2026 mit allen 17 Entscheidungen:
+„Ja so umsetzen“; in Home Assistant gibt es einen `device_tracker` des Tesla): auf dem Branch
+`claude/phase-5b-plan-xo03ty` (auf dem Stand von Plan 5a), **noch nicht auf `main`; ein Gesamtreview
+des Branches steht noch aus, und die Integration braucht die Zustimmung des Betreibers.** Nicht
+ausgerollt. Anders als 5a ändert 5b auch den **core** (eine Zeile in `core/control/planned.py`: die
+Abfahrt an einem Datum, `departure_on`), `shared` und die Datenbank der app (Migration `0014`); core und
+app rollen gemeinsam aus, mit ausgeschaltetem Regelbetrieb, **zusammen mit 3d, 4b, 5a und 6a und damit
+nach der Abnahme der Phase 3**. Nichts geht von selbst live: Die Automatik ist aus, bis du sie
+einschaltest, erwartete Autos ändern nur den Plan, und gelernte Werte erreichen die Safety-Schicht nie.
+Als Nächstes folgt 5c (Vorheizen und Vorkühlen, erst mit Daten aus 6a).
 
 `main` ist seit dem 12.10.2026 auch der Standard-Branch auf GitHub.
 
@@ -704,6 +715,30 @@ Daten aus 6a).
     `docs/verification/abnahme-phase-5a.md`, Spec „Stand Plan 5a“ in 5.2, 10.2, 10.3, 11.3, 13 und 18.
   - **Offen (klein):** die Liste unter „Bewusst offen gelassen“, „Aufgeschobene Kleinigkeiten aus Plan 5a“;
     an der Anlage das Ausrollen und die 28 Tage der Abnahme (Punkt 10 unter „Offen an der Anlage“).
+- **Phase 5b (Fahrverhalten) ist umgesetzt und je Task geprüft**
+  (Plan: `docs/superpowers/plans/2026-10-20-phase-5b-fahrverhalten.md`, 14 Tasks; Ausführung subagent-driven; Branch `claude/phase-5b-plan-xo03ty`, **noch nicht
+  auf `main`, Gesamtreview steht aus, nicht ausgerollt**). Die app lernt je Auto, wann es abfährt, mit welchem
+  Ladestand es zurückkommt und wann es angesteckt ist:
+  - **Lernen:** empirische Perzentile über 56 Tage statt LightGBM (`app/learning/driving_*.py`): Daten aus
+    Anwesenheit (HA-Entität, `home_entity`, Tessie, sonst Ansteckvorgänge), Tage, Profil je Wochentag mit
+    Gruppen „Mo–Fr“, „Sa“, „So/Feiertag“, Vorschläge (Abfahrt P20, Ziel aus Puffer plus Verbrauch P80,
+    geklemmt) mit Konfidenz, Anwesenheitsprognose, Trefferquote über 28 Tage. Nachts um 03:40 Uhr, beim
+    Start und per Taste „Jetzt neu berechnen“ (Admin); Tabelle `driving_profile` (70 Tage).
+  - **Automatik** (je Auto, ab Werk aus): setzt Ziel und Abfahrt (mit Tag, `departure_on`) von „Geplant“ nach
+    dem Vorschlag, wenn die Konfidenz mindestens „mittel“ ist; jede Minute, nie während einer geplanten Ladung
+    (außer in den ersten 10 min einer Zeile, `AUTO_ADOPT`); eine Änderung von Hand pausiert sie bis zur Abfahrt.
+  - **Erwartete Autos:** ein Auto in „Geplant“, das nicht steckt und laut Anwesenheitsprognose (mindestens 50 %)
+    kommt, steht ab der erwarteten Ankunft im Optimierer (Grundcode `AUTO_ERWARTET`); der core bekommt nichts.
+  - **UI und HA:** Karten „Fahrverhalten“ und „Anwesenheit“ auf „Prognosen“, Vorschlag und Schalter auf „Laden“,
+    erwartete Autos auf „Zeitplan“, Abschnitt „Fahrverhalten“ unter „Einstellungen“, Komponente `driving`;
+    in HA je Fahrzeug `auto_target`, `suggested_departure`, `suggested_target`, `next_departure`. API:
+    `GET /api/learning/driving`, `POST /api/learning/driving/recompute`,
+    `PUT /api/control/vehicles/{key}/automation`.
+  - **Deploy und Doku:** Migration `0014`; Betriebshandbuch „Fahrverhalten (Phase 5b)“, „Fahrverhalten ausrollen
+    (Plan 5b)“, Checkliste `docs/verification/abnahme-phase-5b.md`, Spec „Stand Plan 5b“ in 5.3, 7.5, 7.6, 9.3,
+    10.4, 11.3, 12, 13 und 18. Der core ändert sich nur in `core/control/planned.py`.
+  - **Offen:** Gesamtreview und seine Fix-Welle; die Liste unter „Bewusst offen gelassen“, „Deferred minors 5b“;
+    an der Anlage das Ausrollen und die 28 Tage der Abnahme (Punkt 11 unter „Offen an der Anlage“).
 - **Images:** `ghcr.io/binda5000/bindaems-core:latest` und `ghcr.io/binda5000/bindaems-app:latest`.
   Sie sind öffentlich, und die CI setzt `latest` bei jedem Push auf `main`. core und app werden
   immer gemeinsam aus demselben Stand ausgerollt (gleiche Compose-Datei, gleiche Image-Tags): Die
@@ -745,6 +780,10 @@ Daten aus 6a).
 - **Offen:**
   - an der Anlage: Plan 3d (Regel R1 bis der Akku leer ist) ausrollen, Zeitpunkt entscheidet der
     Betreiber (Entscheidung 6); Vorschlag: mit 4b und 6a (Punkt 9 unter „Offen an der Anlage“)
+  - an der Anlage: Plan 5b (core und app gemeinsam, Regelbetrieb aus) mit 3d, 4b, 5a und 6a ausrollen
+    (Punkt 11 unter „Offen an der Anlage“); danach die Abnahme 5b (28 Tage,
+    `docs/verification/abnahme-phase-5b.md`); vorher Gesamtreview des Branches und Zustimmung zur
+    Integration auf `main`
   - an der Anlage: Plan 5a (nur `ems-app`) mit oder nach 4b und 6a ausrollen (Punkt 10 unter „Offen an
     der Anlage“); danach die Abnahme 5a (28 Tage, `docs/verification/abnahme-phase-5a.md`)
   - an der Anlage: Plan 6a mit 4b nach der Abnahme der Phase 3 ausrollen (Punkt 8 unter „Offen an der
@@ -855,12 +894,14 @@ Daten aus 6a).
 | `docs/superpowers/plans/2026-10-20-phase-3d-regel-r1.md` | Plan 3d, 4 Tasks, umgesetzt auf dem Branch `claude/project-thread-707vv8` (nicht auf `main`, nicht ausgerollt): Regel R1 sperrt Netzladen nur, solange der Akku nicht leer ist (Nachrechnung, Optimierer, Erklärung, Szenario-Werkzeug); Einordnung, die sechs Entscheidungen des Betreibers vom 20.10.2026, Review-Schwerpunkte |
 | `docs/superpowers/plans/2026-10-19-phase-6a-entscheidungen.md` | Festlegungen R1 bis R32 der Umsetzung von Plan 6a (je mit Kosten, falls falsch) und die offenen Kleinigkeiten |
 | `docs/superpowers/plans/2026-10-20-phase-5a-lastmodell.md` | Plan 5a, 14 Tasks, umgesetzt auf dem Branch `claude/phase-5-plan-s7xe0n` (noch nicht auf `main`, nicht ausgerollt): Wetterarchiv, HA-Sensoren, Merkmale, LightGBM, Backtest, Registry, Aktivierungsregel, Schattenbetrieb, Seite „Prognosen“, Einstellungen „Lastmodell“; die Einordnung teilt Phase 5 in 5a, 5b und 5c; die 17 Entscheidungen des Betreibers vom 20.10.2026, Präzisierungen, Texte |
+| `docs/superpowers/plans/2026-10-20-phase-5b-fahrverhalten.md` | Plan 5b, 14 Tasks, umgesetzt auf dem Branch `claude/phase-5b-plan-xo03ty` (noch nicht auf `main`, Gesamtreview steht aus, nicht ausgerollt): Fahrverhalten mit Vorschlägen, Automatik für „Geplant“, Abfahrt an einem Datum und erwartete Autos im Planer; 17 Entscheidungen, vom Betreiber am 20.10.2026 freigegeben |
 | `cerbo-watchdog/README.md` | Watchdog: Zustände, Zeiten, D-Bus-Pfade, Installation und Probe |
 | `docs/verification/abnahme-phase-1.md` | Checkliste für die Abnahme der Phase 1 |
 | `docs/verification/abnahme-phase-4.md` | Checkliste für die Abnahme der Phase 4: Teil Statistik (Plan 4a, 30 Tage ab dem Ausrollen, Abgleich innerhalb ±1 %), „Ziel-SOC“ (mindestens 95 % der machbaren geplanten Ladungen, `GET /api/stats`) und „HA in beide Richtungen“ (Tabelle aller Bedienelemente) aus Plan 4b |
 | `docs/verification/abnahme-phase-6a.md` | Checkliste für die Abnahme 6a: Empfangstabelle, Timeout, 7 Tage Dry-Run, im Live-Betrieb Bereich, Schrittregel, Rückkehr auf 0 und Echo; Abfragen auf Entscheidungslog und Influx |
 | `docs/verification/abnahme-phase-5a.md` | Checkliste für die Abnahme 5a (Lastmodell): 28 Tage ab dem Ausrollen, Prognosegüte (Modell mindestens 10 % besser oder Profil automatisch aktiv), Verfahren und Grund in der Karte „Lastprognose“, Registry (jede Nacht eine Version), `load-model` ohne Fehler, Rückfall bei fehlender Modelldatei |
-| `docs/verification/README.md` | Prüfprotokoll Teil 1, Preise, Teil 2 (`verify_part2`) und Watchdog-Probe: Aufruf und Ergebnis; Verweise auf die Abnahmen der Phasen 1, 4, 5a und 6a; seit 6a der Punkt `thermal` und `coe_probe` |
+| `docs/verification/abnahme-phase-5b.md` | Checkliste für die Abnahme 5b (Fahrverhalten): 28 Tage ab dem Ausrollen, Vorschläge mit Konfidenz auf „Prognosen“, „Laden“ und in HA, Trefferquote je mindestens 80 % bei mindestens 10 bewerteten Tagen, keine Zeile „geändert“ durch die Automatik, erwartetes Auto im Zeitplan und beim Anstecken ersetzt |
+| `docs/verification/README.md` | Prüfprotokoll Teil 1, Preise, Teil 2 (`verify_part2`) und Watchdog-Probe: Aufruf und Ergebnis; Verweise auf die Abnahmen der Phasen 1, 4, 5a, 5b und 6a; seit 6a der Punkt `thermal` und `coe_probe` |
 | `README.md` | Entwicklung, Web-UI, Demo-Backend |
 
 ## Aufbau
@@ -941,6 +982,11 @@ Daten aus 6a).
     `activation.py` (Aktivierungsregel), rein; dazu `registry.py` (Versionen in SQLite und als
     Dateien), `service.py` (der Lerndienst: Training, Bewertung, Vorhersage, Status) und `routes.py`.
     Die Lastprognose (`forecast/load.py`) gibt Profil und Modell aus und wählt das aktive Verfahren.
+  - seit 5b: das Fahrverhalten im selben Paket: `driving_data.py` (Anwesenheit, Ansteckvorgänge und Ladestand
+    lesen), `driving_days.py` (Tage), `driving_profile.py` (Profil, Vorschläge, Anwesenheitsprognose),
+    `driving_quality.py` (Trefferquote), alle rein bis auf das Lesen; dazu `driving_service.py` (Berechnung,
+    Ablage in `driving_profile`, Status, Komponente `driving`) und `driving_auto.py` (die Automatik). Erwartete
+    Autos baut `planning/vehicles.py` (`expected_vehicles`).
   - liefert das UI unter `/` aus
 - **`src/bindaems/shared`:** Konfiguration, Domänentypen (auch `control.py`: Befehle, Betriebsarten,
   Absicht; `decisions.py`: Entscheidung und ihr deutscher Text; seit 3b `plan.py`: Plan, Slot,
@@ -1533,6 +1579,28 @@ Demo-Zugänge: `admin`, `bedienen` (Bedienen), `gast` (Lesen) und `sicher` (Admi
          verwenden“ aus (reiner Schattenbetrieb, das Modell rechnet weiter mit) und später an
          derselben Stelle wieder ein; die app bewertet dann sofort neu. Die Dauer eines Trainings an
          der Anlage ist nicht gemessen (Zeitlimit 10 min); das Log nennt „Lastmodell trainiert“.
+  11. **Fahrverhalten (Plan 5b) ausrollen**, gemeinsam mit 3d, 4b, 5a und 6a und damit nach der Abnahme der
+      Phase 3; bis dahin kein `docker compose pull`, und erst nach dem Gesamtreview und der Zustimmung des
+      Betreibers zur Integration auf `main`. Das ist ein Schritt des Betreibers. Anders als 5a ändert 5b den
+      core (`departure_on`), core und app rollen darum gemeinsam aus, **mit ausgeschaltetem Regelbetrieb**.
+      Nichts geht von selbst live: Die Automatik ist aus, bis du sie einschaltest. Die Schritte stehen im
+      Betriebshandbuch, „Fahrverhalten (Phase 5b)“, „Fahrverhalten ausrollen (Plan 5b)“, und in
+      `docs/verification/abnahme-phase-5b.md`:
+      1. **Datenbank sichern:** `/backup/vor-plan-5b.sqlite3`; die Migration `0014` legt `driving_profile` und
+         `driving_automation` an, eine ältere app startet danach nicht (Betriebshandbuch 4, „Rollback auf
+         einen Stand vor Plan 5b“).
+      2. **core und app gemeinsam aktualisieren**, Regelbetrieb vorher aus, danach erst wieder an, wenn
+         **System** beide mit demselben Stand zeigt (`cd /opt/bindaems && docker compose pull && docker compose up -d`).
+      3. **Anwesenheit eintragen:** **Einstellungen** → „Fahrverhalten“ → beim Tesla „Anwesenheit aus Home
+         Assistant“ den `device_tracker.…` des Tesla (er ist in Home Assistant vorhanden; der Betreiber hat
+         es am 20.10.2026 bestätigt). Leer gelten Tessie oder `home_entity`.
+      4. **Prüfen:** Komponente `driving` auf **System** („Fahrverhalten aktuell“ oder „Noch keine
+         Fahrdaten“), der erste Nachtlauf um 03:40 Uhr oder als Admin „Jetzt neu berechnen“ auf **Prognosen**.
+      5. **Automatik bewusst einschalten**, je Auto erst, wenn die Vorschläge mindestens die Konfidenz
+         „mittel“ haben und du sie für richtig hältst.
+      6. **Abnahme 5b:** 28 Tage ab dem Ausrollen (Checkliste oben): Vorschläge mit Konfidenz,
+         Trefferquoten je mindestens 80 % bei mindestens 10 bewerteten Tagen, keine Zeile „geändert“ durch
+         die Automatik, ein erwartetes Auto im Zeitplan, beim Anstecken ersetzt (einmal beobachtet).
   - Teil 2 schreibt auf die Geräte: nicht während der 7 Tage der Abnahme Phase 1 und ihres
     24-h-Mitschnitts (`docs/verification/abnahme-phase-1.md`, 4.2 und 4.3). Seit dem
     19.10.2026 sind 4.2 und 4.3 überholt (`docs/verification/2026-10-19-abnahme-phase-1.md`).
@@ -1704,12 +1772,14 @@ Demo-Zugänge: `admin`, `bedienen` (Bedienen), `gast` (Lesen) und `sicher` (Admi
      `claude/phase-5-plan-s7xe0n`, **noch nicht auf `main`** (die Integration braucht die Zustimmung des
      Betreibers), nicht ausgerollt (Kurzfassung). Nur app und UI, der core bleibt gleich. Es folgt das
      Ausrollen mit oder nach 4b und 6a (Punkt 10 unter „Offen an der Anlage“) und die Abnahme über 28 Tage.
-   - **5b Fahrverhalten (als Nächstes, eigener Plan):** Abfahrt, Ankunft und SOC bei Ankunft je Auto und
-     Wochentag lernen (Ladesessions seit 4a, Tessie `at_home` und `plugged`, HA `home_entity`), Vorschläge
-     für Abfahrt (20. Perzentil) und Ziel-SOC mit Konfidenz, optionale Automatik für „Geplant“,
-     Anwesenheitsprognose für den Optimierer und damit die Akku-Unterstützung für PV-Autos im MILP
-     (Spec 10.4). Es braucht einige Wochen Ladesessions; die laufen seit dem 18.10.2026. „Vorschläge
-     erscheinen mit Konfidenz“ gehört zu seiner Abnahme.
+   - **5b Fahrverhalten:** umgesetzt und je Task geprüft, auf dem Branch `claude/phase-5b-plan-xo03ty`,
+     **noch nicht auf `main`** (Gesamtreview steht aus, die Integration braucht die Zustimmung des Betreibers),
+     nicht ausgerollt (Kurzfassung). Es lernt Abfahrt, Ankunft und SOC bei Ankunft je Auto und Wochentag,
+     macht Vorschläge mit Konfidenz, hat eine optionale Automatik für „Geplant“ und liefert die
+     Anwesenheitsprognose für den Optimierer (erwartete Autos). **Nicht in 5b** ist die Akku-Unterstützung
+     für PV-Autos im MILP (Spec 7.6, Stand Plan 5b). Ändert auch den core (eine Zeile). Es folgt das
+     Ausrollen gemeinsam mit 3d, 4b, 5a und 6a (Punkt 11 unter „Offen an der Anlage“) und die Abnahme über
+     28 Tage; „Vorschläge erscheinen mit Konfidenz“ gehört zu ihr.
    - **5c Vorheizen und Vorkühlen (später):** ein Wärmemodell des Hauses aus den Daten der Klimaanlage und
      die Klimaanlage als flexible Last im Planer. Es braucht Wochen mit Daten aus 6a, also erst nach dem
      Ausrollen von 6a; ob 5c allein oder mit 6b kommt, entscheidet der Betreiber dann.
@@ -3244,3 +3314,10 @@ nicht aufgeführt. Offen sind:
   Wochen wenig Historie für das Profil hat und damit etwas zu günstig ist. Wer zuerst nur beobachten
   will, schaltet „Lastmodell verwenden“ gleich nach dem Start aus (Betriebshandbuch, „Lastmodell
   ausrollen (Plan 5a)“, „Reiner Schattenbetrieb“). Die Dauer eines Trainings an der Anlage und der Speicher dafür sind nicht gemessen.
+
+Aufgeschobene Kleinigkeiten aus Plan 5b (Deferred minors 5b). **Platzhalter:** Der Controller trägt die
+Liste nach dem Gesamtreview des Branches `claude/phase-5b-plan-xo03ty` und seiner Fix-Welle ein (aus den
+Reviews der Tasks 1 bis 14; keine davon soll die Anlage gefährden, denn gelernte Werte erreichen die
+Safety-Schicht nie und die Automatik ist ab Werk aus). Bis dahin gilt:
+
+- *(noch nicht eingetragen)*

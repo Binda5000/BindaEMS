@@ -472,6 +472,73 @@ def test_acceptance_checklist_of_phase_5a_covers_the_load_model() -> None:
     assert "abnahme-phase-5a.md" in Path("docs/verification/README.md").read_text("utf-8")
 
 
+def test_docs_name_driving_endpoints_entities_and_component() -> None:
+    # Plan 5b, Task 14: Betriebshandbuch, Abnahme, Spec und Übergabe nennen, was 5b baut.
+    guide = " ".join(_guide_section("Fahrverhalten (Phase 5b)").split())
+    for endpoint in (
+        "`GET /api/learning/driving`",
+        "`POST /api/learning/driving/recompute`",
+        "`PUT /api/control/vehicles/{key}/automation`",
+    ):
+        assert endpoint in guide, endpoint
+    for entity in ("auto_target", "suggested_departure", "suggested_target", "next_departure"):
+        assert f"`tesla_{entity}`" in guide, entity
+    assert "Komponente `driving`" in guide
+    assert "**03:40 Uhr**" in guide
+    # Ausrollen: Sicherung, core und app gemeinsam, Entität der Anwesenheit, Automatik bewusst
+    _, found, rest = _guide_section("Fahrverhalten (Phase 5b)").partition(
+        "### Fahrverhalten ausrollen (Plan 5b)\n"
+    )
+    assert found, "Der Unterabschnitt „Fahrverhalten ausrollen (Plan 5b)“ fehlt."
+    rollout = " ".join(rest.split("\n### ", 1)[0].split())
+    for step in (
+        "/backup/vor-plan-5b.sqlite3",
+        "`0014`",
+        "`driving_profile`",
+        "`driving_automation`",
+        "core und app gemeinsam",
+        "Regelbetrieb aus",
+        "`departure_on`",
+        "`device_tracker.…`",
+        "„Anwesenheit aus Home Assistant“",
+        "Tessie oder `home_entity`",
+        "Komponente `driving`",
+        "03:40",
+        "„Jetzt neu berechnen“",
+        "Konfidenz „mittel“",
+        "Phase 3",
+        "3d, 4b, 5a und 6a",
+        "docs/verification/abnahme-phase-5b.md",
+    ):
+        assert step in rollout, step
+    # Abnahme: die vier Kriterien der Entscheidung 16
+    text = " ".join(Path("docs/verification/abnahme-phase-5b.md").read_text("utf-8").split())
+    for criterion in (
+        "28 Tage",
+        "Vorschläge mit Konfidenz",
+        "„Prognosen“",
+        "„Laden“",
+        "mindestens 10 bewerteten Tagen",
+        "mindestens 80 %",
+        "GET /api/learning/driving",
+        "Zeile „geändert“",
+        "laufenden geplanten Ladung",
+        "erwartetes Auto",
+        "wird beim Anstecken durch das echte ersetzt",
+        "Unterschrift",
+    ):
+        assert criterion in text, criterion
+    assert "abnahme-phase-5b.md" in Path("docs/verification/README.md").read_text("utf-8")
+    # Spec: „Stand Plan 5b“ in jedem Abschnitt, in dem 5b etwas ändert
+    spec = Path("docs/superpowers/specs/2026-10-08-bindaems-design.md").read_text("utf-8")
+    for number in ("5.3", "7.5", "7.6", "9.3", "10.4", "11.3", "12", "13", "18"):
+        heading = f"\n## {number}. " if "." not in number else f"\n### {number} "
+        _, found, rest = spec.partition(heading)
+        assert found, number
+        body = re.split(r"\n###? \d", rest, maxsplit=1)[0]
+        assert "**Stand Plan 5b**" in body, number
+
+
 def test_operations_guide_describes_charging() -> None:
     text = Path("docs/betrieb.md").read_text(encoding="utf-8")
     for topic in ("## Laderegelung", "## Simulator", '"vehicles"', "-m bindaems.tools.sim"):

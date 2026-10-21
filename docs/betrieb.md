@@ -223,6 +223,21 @@ Minutenmittel in `long` und lassen sich in Grafana mit der Retention Policy `lon
   `ems-app` (`docker compose pull ems-app && docker compose up -d ems-app`); der core läuft weiter, und
   der Regelbetrieb bleibt an. Ausgerollt wird mit oder nach 4b und 6a; die Schritte stehen im
   Abschnitt „Lastmodell (Phase 5a)“, „Lastmodell ausrollen (Plan 5a)“.
+- **Update mit Plan 5b (Fahrverhalten):** Plan 5b ändert core und app; beide rollen gemeinsam aus, mit
+  ausgeschaltetem Regelbetrieb während des Wechsels, zusammen mit 3d, 4b, 5a und 6a. Die Schritte
+  stehen im Abschnitt „Fahrverhalten (Phase 5b)“, „Fahrverhalten ausrollen (Plan 5b)“.
+- **Rollback auf einen Stand vor Plan 5b:**
+  - Die Migration `0014` der app ist beim Start gelaufen; eine ältere app kennt sie nicht und startet
+    mit dieser Datenbank nicht. Wie beim Rollback vor Plan 5a gibt es zwei Wege: die Datenbank mit
+    `command.downgrade(config, "0013")` auf den Stand `0013` zurückführen (noch mit dem Image von Plan
+    5b; der Befehl steht dort, mit `0013` statt `0012`) oder die Kopie `/backup/vor-plan-5b.sqlite3`
+    einspielen (Wiederherstellen wie in Abschnitt 9). Das Zurückführen entfernt die Tabellen
+    `driving_profile` und `driving_automation` und den Abschnitt `learning.driving` der Einstellungen
+    (Puffer, Bereich, Automatik, Entitäten); alles andere bleibt.
+  - Ein core vor Plan 5b liest die Absicht eines core ab 5b nicht, sobald sie einen Eintrag unter
+    `vehicles` hat (jeder trägt jetzt `departure_on`; die Modelle verbieten unbekannte Felder). Er
+    startet dann ohne Absicht mit dem Alarm `intent.file`, wie beim Rollback vor Plan 4b. Setze die
+    Absicht danach neu (Bedienung oder `PUT /v1/intent`).
 - **Rollback auf einen Stand vor Plan 5a:** Die Migration `0013` der app ist beim Start gelaufen; eine
   ältere app kennt sie nicht und startet mit dieser Datenbank nicht. Der core ist nicht betroffen. Es
   gibt zwei Wege:
@@ -4532,6 +4547,50 @@ Schlüssel vorn.
   Anwesenheitsprognose erwartet es) und `arrival_at` (erwartete Ankunft, sonst `null`); der Grundcode
   `AUTO_ERWARTET` steht im Abschnitt „Planung“.
 
+### Fahrverhalten ausrollen (Plan 5b)
+
+Plan 5b ändert **den core** (eine Zeile in `core/control/planned.py`: die Abfahrt an einem Datum,
+`departure_on`), die app, `shared` und das UI. Ausgerollt wird **gemeinsam mit 3d, 4b, 5a und 6a** und
+damit erst nach der Abnahme der Phase 3; bis dahin ziehst du keine Images (`docker compose pull`), denn
+`latest` enthält Plan 5b, sobald er auf `main` ist. **Nichts geht von selbst live:** Die Automatik ist
+aus, bis du sie einschaltest, erwartete Autos ändern nur den Plan, und gelernte Werte erreichen die
+Safety-Schicht nie (Spec 10.5).
+
+1. **Datenbank sichern:** `docker compose stop ems-app`, dann
+   `docker compose run --rm --no-deps --entrypoint sh ems-app -c 'cp /data/bindaems.sqlite3 /backup/vor-plan-5b.sqlite3'`.
+   Die Migration `0014` legt `driving_profile` und `driving_automation` an; eine ältere app startet
+   danach nicht (Abschnitt 4, „Rollback auf einen Stand vor Plan 5b“).
+2. **core und app gemeinsam aktualisieren, mit Regelbetrieb aus:** Der core hat sich für
+   `departure_on` geändert, und ein core vor 5b liest eine Absicht mit Abfahrtstag nicht. Schalte den
+   Regelbetrieb aus, ziehe beide Images (`cd /opt/bindaems && docker compose pull && docker compose up -d`)
+   und schalte ihn erst wieder ein, wenn **System** beide mit demselben Stand zeigt. Wo 3d, 4b, 5a und
+   6a im selben Zug ausgerollt werden, ist das derselbe Pull.
+3. **Anwesenheit eintragen:** Unter **Einstellungen** → „Fahrverhalten“ trägst du beim Tesla unter
+   „Anwesenheit aus Home Assistant“ den `device_tracker.…` ein, den Home Assistant für ihn hat. Die
+   HA-Datenbank reicht weiter zurück als Tessie, die Vorschläge stehen so sofort auf breiterer
+   Grundlage. Leer lässt die app Tessie oder `home_entity` gelten (Abschnitt „Ablauf und Komponente“).
+   Puffer und Ziel-SOC-Bereich lässt du zunächst bei den Standardwerten.
+4. **Prüfen:** Auf **System** → „Komponenten“ meldet die Komponente `driving` nach dem Start
+   „Fahrverhalten aktuell“ oder „Noch keine Fahrdaten“; der erste Nachtlauf ist um 03:40 Uhr. Willst du
+   nicht warten, drückst du als Admin auf **Prognosen** → „Jetzt neu berechnen“. Die Karte
+   „Fahrverhalten“ zeigt je Auto die Quelle, die Tage und die Konfidenz.
+5. **Automatik bewusst einschalten:** Je Auto erst, wenn die Vorschläge auf „Prognosen“ mindestens die
+   Konfidenz „mittel“ haben und du sie für richtig hältst: **Laden** → Fahrzeugkarte → „Ziel und Abfahrt
+   automatisch“ (oder in Home Assistant „Automatik Ziel und Abfahrt“). Bis dahin setzt nur du Ziel und
+   Abfahrt. Von Hand geänderte Werte gehen immer vor (Pause der Automatik, oben).
+6. **Abnahme:** 28 Tage ab dem Ausrollen, Checkliste `docs/verification/abnahme-phase-5b.md`.
+
+### Abnahme
+
+Bestanden ist sie nach 28 Tagen ab dem Ausrollen, wenn (1) für jedes Auto mit Daten Vorschläge mit
+Konfidenz auf „Prognosen“, „Laden“ und in Home Assistant erscheinen, (2) für jedes Auto mit
+mindestens 10 bewerteten Tagen die Trefferquote der Abfahrt und die des Ziels je mindestens 80 %
+betragen (`quality` in `GET /api/learning/driving`, Karte „Fahrverhalten“), (3) mit eingeschalteter
+Automatik keine Zeile „geändert“ durch die Automatik in „Geplante Ladungen“ entsteht und sich während
+einer laufenden geplanten Ladung nichts ändert und (4) ein erwartetes Auto im Zeitplan steht und beim
+Anstecken durch das echte ersetzt wird (einmal an der Anlage beobachtet). Die Checkliste führt die
+Schritte auf.
+
 ## Planung
 
 Seit Plan 3b plant die app den Hausakku für bis zu 36 h. Seit Plan 3c übergibt sie den Plan in der
@@ -4650,9 +4709,21 @@ nennt.
   Konfiguration zeigt (`mode` `planned`, `plugged`, dazu `planned`), wenn die app Health traut
   (`intent_version` erreicht die Version der gültigen Absicht) und die Abfahrt nicht vor dem Ende der
   laufenden Viertelstunde liegt. Ladestand und seine Quelle, Ladelimit, wirksames Ziel und Abfahrt
-  kommen aus Health, Wirkungsgrad, Kapazität und Ladeleistungen aus `config.yaml`. Eine
-  Anwesenheitsprognose gibt es nicht: Ein Auto, das noch nicht steckt, plant die app erst nach dem
-  Anstecken (Auslöser `vehicles`, unten). Autos in den anderen Modi bleiben wie bisher außerhalb.
+  kommen aus Health, Wirkungsgrad, Kapazität und Ladeleistungen aus `config.yaml`. Ein Auto, das
+  noch nicht steckt, plant die app als erwartetes Auto (nächster Punkt) oder, ohne Prognose, erst nach
+  dem Anstecken (Auslöser `vehicles`, unten). Autos in den anderen Modi bleiben wie bisher außerhalb.
+- **Erwartete Autos** (seit Plan 5b, Abschnitt „Fahrverhalten (Phase 5b)“): Ein Auto in „Geplant“,
+  das Health als nicht angesteckt zeigt (`plugged` genau `false`), kommt in den Plan, wenn es eine
+  `default_wallbox` hat, ein Profil mit gelerntem Ladestand bei der Ankunft da ist und die
+  Anwesenheitsprognose für eine Viertelstunde vor seiner Abfahrt mindestens 50 % sagt. Seine
+  Ladeleistung ist erst ab dieser erwarteten Ankunft (`arrival_at`) bis zur Abfahrt frei; Regel R2
+  zählt die PV ebenfalls erst ab dann. Der Ladestand ist der gelernte Median der Ankunft des
+  Wochentags (nie „angenommen“). **Der core bekommt für ein erwartetes Auto nichts:** `intent_plan`
+  lässt es weg, und der Ersatzplan, die Warnungen („Ziel-SOC unerreichbar“), „Fertig um“ in Home
+  Assistant und die Zählung der geplanten Ladungen übergehen es. Steckt das Auto an, plant der Auslöser
+  `vehicles` neu mit dem echten Ladestand; ändert sich die Menge der erwarteten Autos (Ankunft,
+  Abfahrt, Ziel), löst das ebenfalls aus. Auf der Seite „Zeitplan“ steht es gestrichelt mit „{Name}
+  erwartet ab {HH:MM}“.
 - **Im Modell** hat jedes Auto je Slot bis zur Abfahrt eine Ladeleistung von 0 oder zwischen seiner
   kleinsten (`min_a` · `grid.voltage_nominal_v` · Phasen) und seiner vollen Leistung (Abschnitt
   „Laderegelung“, „Geplant“), aus PV und Netz, nie aus dem Akku. Die PV deckt zuerst das Haus, dann
