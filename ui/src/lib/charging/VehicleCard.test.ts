@@ -1,6 +1,6 @@
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/svelte';
 import type { ComponentProps } from 'svelte';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { BoostCost } from '$lib/api/schemas';
 import { drivingVehicle, system } from '$lib/testing/fixtures';
 import VehicleCard from './VehicleCard.svelte';
@@ -231,6 +231,13 @@ describe('Fahrverhalten', () => {
 		expect(screen.getByText('Automatik aus.')).toBeVisible();
 	});
 
+	it('beschreibt den Schalter mit dem Zustand der Automatik', () => {
+		show({ driving: egolf() });
+		expect(
+			screen.getByRole('switch', { name: 'Ziel und Abfahrt automatisch' })
+		).toHaveAccessibleDescription('Automatik aus.');
+	});
+
 	it('hält die Felder von Hand getrennt vom Vorschlag', async () => {
 		const props = show({ mode: 'planned', planned: PLANNED, driving: tesla() });
 		const manual = screen.getByRole('group', { name: 'Von Hand' });
@@ -240,5 +247,37 @@ describe('Fahrverhalten', () => {
 		await fireEvent.click(within(manual).getByRole('button', { name: 'Übernehmen' }));
 		expect(props.onTarget).toHaveBeenCalledWith(80, null);
 		expect(props.onAdopt).not.toHaveBeenCalled();
+	});
+});
+
+describe('Abfahrt an einem Tag (Ruling F-3)', () => {
+	// Freitag, 09.10.2026, 20:00 in Wien
+	beforeEach(() => {
+		vi.useFakeTimers({ toFake: ['Date'] });
+		vi.setSystemTime(new Date('2026-10-09T18:00:00Z'));
+	});
+	afterEach(() => vi.useRealTimers());
+
+	const goal = { target_soc_pct: 60, departure: '07:15', departure_on: '2026-10-12' };
+
+	it('nennt neben dem Feld den Tag der Abfahrt', () => {
+		show({ mode: 'planned', planned: PLANNED, goal });
+		const manual = screen.getByRole('group', { name: 'Von Hand' });
+		expect(within(manual).getByText('am Mo 12.10.')).toBeVisible();
+		expect(within(manual).getByLabelText('Abfahrt')).toHaveAccessibleDescription('am Mo 12.10.');
+	});
+
+	it('nennt keinen Tag für heute und für eine tägliche Abfahrt', () => {
+		show({ mode: 'planned', planned: PLANNED, goal: { ...goal, departure_on: '2026-10-09' } });
+		expect(screen.queryByText(/^am /)).toBeNull();
+		cleanup();
+		show({ mode: 'planned', planned: PLANNED, goal: { ...goal, departure_on: null } });
+		expect(screen.queryByText(/^am /)).toBeNull();
+	});
+
+	it('nimmt den Tag weg, sobald die Uhrzeit von Hand geändert wird', async () => {
+		show({ mode: 'planned', planned: PLANNED, goal });
+		await fireEvent.input(screen.getByLabelText('Abfahrt'), { target: { value: '08:00' } });
+		expect(screen.queryByText('am Mo 12.10.')).toBeNull();
 	});
 });

@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ChargingSession, Intent, PlanVehicle, VehicleHealth } from '$lib/api/schemas';
 import { chargingSession } from '$lib/testing/fixtures';
 import {
@@ -594,6 +594,50 @@ describe('Geplant', () => {
 		expect(planFits(health(), car({ departure_at: '2026-10-10T05:30:00+00:00' }))).toBe(false);
 		expect(planFits(health({ planned: null }), car({ target_soc_pct: 60 }))).toBe(true);
 		expect(planFits(null, car())).toBe(true);
+	});
+
+	describe('Abfahrt an einem Tag (Ruling F-3)', () => {
+		// Freitag, 09.10.2026, 20:00 in Wien; Abfahrt Montag 07:00
+		const monday = '2026-10-12T05:00:00+00:00';
+		const dated = car({ departure_at: monday, finish_at: '2026-10-12T03:45:00+00:00' });
+		const mondayHealth = () => health({ planned: planned({ departure_at: monday }) });
+
+		beforeEach(() => {
+			vi.useFakeTimers();
+			vi.setSystemTime(new Date('2026-10-09T18:00:00Z'));
+		});
+		afterEach(() => vi.useRealTimers());
+
+		it('nennt den Tag, wenn die Absicht einen nennt', () => {
+			const line = plannedLine({
+				mode: 'planned',
+				vehicle: mondayHealth(),
+				car: dated,
+				target: 80,
+				departureOn: '2026-10-12'
+			});
+			expect(line?.text).toBe(`Fertig um 05:45 · Ziel 80${NB}% bis Mo 12.10. 07:00`);
+			const short = car({ departure_at: monday, reachable: false, expected_soc_pct: 60 });
+			expect(
+				plannedLine({
+					mode: 'planned',
+					vehicle: mondayHealth(),
+					car: short,
+					target: 80,
+					departureOn: '2026-10-12'
+				})?.text
+			).toBe(`Ziel 80${NB}% bis Mo 12.10. 07:00 nicht erreichbar, voraussichtlich 60${NB}%.`);
+		});
+
+		it('nennt ihn im Zeitplan ohne Absicht ab übermorgen', () => {
+			expect(plannedLine({ mode: null, vehicle: null, car: dated, target: null })?.text).toBe(
+				`Fertig um 05:45 · Ziel 80${NB}% bis Mo 12.10. 07:00`
+			);
+			const tomorrow = car({ departure_at: '2026-10-10T05:00:00+00:00' });
+			expect(plannedLine({ mode: null, vehicle: null, car: tomorrow, target: null })?.text).toBe(
+				`Fertig um 05:45 · Ziel 80${NB}% bis 07:00`
+			);
+		});
 	});
 
 	it('nennt bei unbekanntem Plan weder Plan noch „Kein Plan“', () => {

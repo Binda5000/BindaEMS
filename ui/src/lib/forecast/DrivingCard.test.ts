@@ -115,6 +115,41 @@ it('zeigt die Trefferquote oder „noch zu wenig Tage“', () => {
 	expect(screen.getByText('Trefferquote: noch zu wenig Tage')).toBeVisible();
 });
 
+it('nennt eine Seite ohne bewertete Tage „noch zu wenig Tage“', () => {
+	// Ruling T13: statt „– (0 Tage)“
+	const quality = {
+		days: 28,
+		departure_n: 19,
+		departure_hit_pct: 89,
+		target_n: 0,
+		target_hit_pct: null
+	};
+	const tesla = drivingVehicle('tesla', { quality });
+	const golf = drivingVehicle('egolf', {
+		quality: {
+			...quality,
+			departure_n: 0,
+			departure_hit_pct: null,
+			target_n: 17,
+			target_hit_pct: 94
+		}
+	});
+	render(DrivingCard, {
+		data: driving({ vehicles: [tesla, golf] }),
+		error: null,
+		admin: false,
+		presenceEntities: {},
+		onRecompute: vi.fn()
+	});
+	expect(
+		screen.getByText('Trefferquote 28 Tage: Abfahrt 89 % (19 Tage), Ziel – (noch zu wenig Tage)')
+	).toBeVisible();
+	expect(
+		screen.getByText('Trefferquote 28 Tage: Abfahrt – (noch zu wenig Tage), Ziel 94 % (17 Tage)')
+	).toBeVisible();
+	expect(screen.queryByText(/0 Tage\)/)).toBeNull();
+});
+
 it('zeigt ein Auto ohne Tage mit „Noch keine Daten für dieses Auto.“, ohne Quelle und Tabelle', () => {
 	const car = drivingVehicle('egolf', {
 		source: null,

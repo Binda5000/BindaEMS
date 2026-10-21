@@ -15,6 +15,7 @@ import type {
 } from '$lib/api/schemas';
 import {
 	DASH,
+	departureText,
 	formatEur,
 	formatNumber,
 	formatNumberMax,
@@ -415,6 +416,11 @@ export interface PlannedInput {
 	car: PlanVehicle | null | undefined;
 	/** Ziel-SOC der Absicht in %; `null` unbekannt */
 	target: number | null;
+	/**
+	 * Abfahrtstag der Absicht (`YYYY-MM-DD`, Plan 5b); `null` täglich; ohne Angabe unbekannt (der
+	 * Zeitplan kennt nur den Plan). Bestimmt, ob die Zeile den Tag der Abfahrt nennt.
+	 */
+	departureOn?: string | null;
 }
 
 function known(source: SocSource | null): boolean {
@@ -425,7 +431,8 @@ function known(source: SocSource | null): boolean {
 function plannedText(
 	vehicle: VehicleHealth | null,
 	car: PlanVehicle | null | undefined,
-	source: SocSource | null
+	source: SocSource | null,
+	departureOn: string | null | undefined
 ): string | null {
 	const planned = vehicle?.planned ?? null;
 	const soc = vehicle?.soc_pct ?? null;
@@ -434,7 +441,7 @@ function plannedText(
 	}
 	if (car === undefined) return null; // ohne Plan weder „Fertig um“ noch „Kein Plan“
 	if (car !== null) {
-		const goal = `Ziel ${formatSoc(car.target_soc_pct)} bis ${formatTime(car.departure_at)}`;
+		const goal = `Ziel ${formatSoc(car.target_soc_pct)} bis ${departureText(car.departure_at, departureOn)}`;
 		if (!car.reachable) {
 			return `${goal} nicht erreichbar, voraussichtlich ${formatSoc(car.expected_soc_pct)}.`;
 		}
@@ -473,7 +480,13 @@ export function planFits(vehicle: VehicleHealth | null, car: PlanVehicle): boole
  * aus dem Plan; angenommen heißt nie gemessen) und ein Ladelimit unter dem Ziel. `null` außerhalb
  * von „Geplant“, für ein abgestecktes Auto und ohne Stand von „Geplant“ in Health und Plan.
  */
-export function plannedLine({ mode, vehicle, car, target }: PlannedInput): PlannedLine | null {
+export function plannedLine({
+	mode,
+	vehicle,
+	car,
+	target,
+	departureOn
+}: PlannedInput): PlannedLine | null {
 	if (mode !== null && mode !== 'planned') return null;
 	if (vehicle?.plugged === false) return null;
 	if (!vehicle?.planned && !car) return null;
@@ -493,5 +506,5 @@ export function plannedLine({ mode, vehicle, car, target }: PlannedInput): Plann
 	) {
 		notes.push(`Ladelimit im Auto ${formatSoc(limit)} liegt unter dem Ziel.`);
 	}
-	return { text: plannedText(vehicle, car, source), notes };
+	return { text: plannedText(vehicle, car, source, departureOn), notes };
 }

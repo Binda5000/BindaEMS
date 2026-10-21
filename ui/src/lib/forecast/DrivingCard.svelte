@@ -73,13 +73,18 @@
 		return weakest === null ? DASH : CONFIDENCE_LABELS[weakest];
 	}
 
+	/** „89 % (19 Tage)“; ohne bewertete Tage „– (noch zu wenig Tage)“ */
+	function rate(pct: number | null, n: number): string {
+		return n === 0 ? `${DASH} (noch zu wenig Tage)` : `${percent(pct)} (${n} Tage)`;
+	}
+
 	/** „Trefferquote 28 Tage: Abfahrt 89 % (19 Tage), Ziel 94 % (17 Tage)“ oder „noch zu wenig Tage“ */
 	function quality(car: DrivingVehicle): string {
 		const q = car.quality;
 		if (q.departure_n === 0 && q.target_n === 0) return 'Trefferquote: noch zu wenig Tage';
 		return (
-			`Trefferquote ${q.days} Tage: Abfahrt ${percent(q.departure_hit_pct)} (${q.departure_n} Tage), ` +
-			`Ziel ${percent(q.target_hit_pct)} (${q.target_n} Tage)`
+			`Trefferquote ${q.days} Tage: Abfahrt ${rate(q.departure_hit_pct, q.departure_n)}, ` +
+			`Ziel ${rate(q.target_hit_pct, q.target_n)}`
 		);
 	}
 </script>

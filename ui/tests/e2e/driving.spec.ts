@@ -46,6 +46,10 @@ test('Bedienen sieht Vorschlag, Zustand und Schalter der Automatik', async ({ pa
 	const teslaSwitch = tesla.getByRole('switch', { name: 'Ziel und Abfahrt automatisch' });
 	await expect(teslaSwitch).toBeChecked();
 	await expect(teslaSwitch).toBeEnabled();
+	// der Satz des Zustands beschreibt den Schalter (Ruling T13)
+	await expect(teslaSwitch).toHaveAccessibleDescription(
+		'Automatik pausiert bis Fr 17:30, weil Ziel oder Abfahrt von Hand geändert wurden.'
+	);
 	await expect(
 		tesla.getByText(
 			'Automatik pausiert bis Fr 17:30, weil Ziel oder Abfahrt von Hand geändert wurden.'

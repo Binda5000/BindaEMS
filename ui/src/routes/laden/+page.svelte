@@ -147,11 +147,16 @@
 	});
 
 	/** Die Ziele der Absicht; ohne Eintrag die Standardwerte des core */
-	function goalOf(id: string): { target_soc_pct: number; departure: string } {
+	function goalOf(id: string): {
+		target_soc_pct: number;
+		departure: string;
+		departure_on: string | null;
+	} {
 		const wanted = intent?.vehicles[id];
 		return {
 			target_soc_pct: wanted?.target_soc_pct ?? DEFAULT_TARGET_PCT,
-			departure: wanted?.departure ?? DEFAULT_DEPARTURE
+			departure: wanted?.departure ?? DEFAULT_DEPARTURE,
+			departure_on: wanted?.departure_on ?? null
 		};
 	}
 
@@ -167,7 +172,9 @@
 			mode: intent === null ? null : (intent.vehicles[vehicle.id]?.mode ?? 'pv'),
 			vehicle,
 			car,
-			target: goalOf(vehicle.id).target_soc_pct
+			target: goalOf(vehicle.id).target_soc_pct,
+			// ohne Absicht unbekannt: dann nennt die Zeile den Tag erst ab übermorgen
+			departureOn: intent === null ? undefined : goalOf(vehicle.id).departure_on
 		});
 	}
 

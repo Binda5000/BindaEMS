@@ -13,9 +13,11 @@ import {
 	formatRatio,
 	formatSoc,
 	formatTime,
+	departureText,
 	drivingSourceText,
 	expectedLabel,
 	suggestionText,
+	weekdayDate,
 	weekdayGroup,
 	weekdayOfDate,
 	weakestConfidence
@@ -108,6 +110,35 @@ describe('Fahrverhalten', () => {
 		expect(expectedLabel('Tesla Model 3', '2026-10-09T15:30:00+00:00')).toBe(
 			'Tesla Model 3 erwartet ab 17:30'
 		);
+	});
+
+	it('schreibt einen Tag als Wochentag und Datum', () => {
+		expect(weekdayDate('2026-11-23')).toBe('Mo 23.11.');
+		expect(weekdayDate('2026-03-01')).toBe('So 01.03.');
+	});
+
+	describe('Abfahrt mit Tag (Ruling F-3)', () => {
+		// Freitag, 20.11.2026, 18:00 in Wien
+		const now = new Date('2026-11-20T17:00:00Z');
+		const monday = '2026-11-23T06:15:00+00:00'; // Mo 07:15
+		const saturday = '2026-11-21T06:15:00+00:00'; // Sa 07:15
+		const tonight = '2026-11-20T18:30:00+00:00'; // Fr 19:30
+
+		it('nennt den Tag, wenn die Absicht einen Tag nennt, der nicht heute ist', () => {
+			expect(departureText(monday, '2026-11-23', now)).toBe('Mo 23.11. 07:15');
+			expect(departureText(saturday, '2026-11-21', now)).toBe('Sa 21.11. 07:15');
+		});
+
+		it('bleibt bei der Uhrzeit für heute und für eine tägliche Abfahrt', () => {
+			expect(departureText(tonight, '2026-11-20', now)).toBe('19:30');
+			expect(departureText(saturday, null, now)).toBe('07:15');
+		});
+
+		it('nennt ohne Absicht den Tag erst ab übermorgen', () => {
+			expect(departureText(monday, undefined, now)).toBe('Mo 23.11. 07:15');
+			expect(departureText(saturday, undefined, now)).toBe('07:15');
+			expect(departureText(tonight, undefined, now)).toBe('19:30');
+		});
 	});
 
 	it('schreibt den Vorschlag mit Tag, Abfahrt, Ziel und der schwächeren Konfidenz', () => {

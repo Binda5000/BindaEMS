@@ -2,7 +2,16 @@
 	import type { BoostCost, ChargeMode, DrivingVehicle, VehicleHealth } from '$lib/api/schemas';
 	import Card from '$lib/components/Card.svelte';
 	import Notice from '$lib/components/Notice.svelte';
-	import { DASH, formatNumber, formatSoc, formatTime, NBSP, suggestionText } from '$lib/format';
+	import {
+		DASH,
+		formatNumber,
+		formatSoc,
+		formatTime,
+		NBSP,
+		suggestionText,
+		weekdayDate
+	} from '$lib/format';
+	import { todayVienna } from '$lib/time';
 	import type { SocEntry } from '$lib/dashboard/socs';
 	import { boostCostText } from './boostCost';
 	import {
@@ -34,8 +43,8 @@
 		notice: CardNotice | null;
 		onMode: (mode: ChargeMode) => Promise<void>;
 		onBoost: (on: boolean) => Promise<void>;
-		/** Ziel-SOC und Abfahrt der Absicht (für „Geplant“) */
-		goal: { target_soc_pct: number; departure: string };
+		/** Ziel-SOC, Abfahrt und Abfahrtstag (`YYYY-MM-DD`, `null` täglich) der Absicht (für „Geplant“) */
+		goal: { target_soc_pct: number; departure: string; departure_on?: string | null };
 		/** Zeile und Zusätze von „Geplant“ (`plannedLine`); `null` ohne */
 		planned: PlannedLine | null;
 		/** schickt Ziel-SOC und Abfahrt; `null` lässt das Feld unverändert, nie beide */
@@ -83,6 +92,13 @@
 
 	const socText = $derived(socDraft ?? String(goal.target_soc_pct));
 	const departureText = $derived(departureDraft ?? goal.departure);
+	// Abfahrt an einem Tag, der nicht heute ist (Ruling F-3): „am Mo 23.11.“ neben dem Feld. Eine
+	// geänderte Uhrzeit gilt danach täglich (die app löscht den Tag), dann fehlt der Hinweis.
+	const departureDay = $derived(
+		goal.departure_on && goal.departure_on !== todayVienna() && departureText === goal.departure
+			? weekdayDate(goal.departure_on)
+			: null
+	);
 	// Ein geschätzter Ladestand (Health) sagt mehr als der zuletzt gemessene Wert des Signals
 	const estimated = $derived(vehicle.soc_source === 'estimated' && vehicle.soc_pct !== null);
 
@@ -207,11 +223,12 @@
 					role="switch"
 					checked={driving.automation.enabled}
 					disabled={!operate || busy}
+					aria-describedby="{uid}-automation"
 					onchange={toggleAutomation}
 				/>
 				Ziel und Abfahrt automatisch
 			</label>
-			<p class="muted">{driving.automation.text}</p>
+			<p id="{uid}-automation" class="muted">{driving.automation.text}</p>
 		</div>
 	{/if}
 
@@ -249,13 +266,19 @@
 				</div>
 				<div class="field">
 					<label for="{uid}-departure">Abfahrt</label>
-					<input
-						id="{uid}-departure"
-						type="time"
-						value={departureText}
-						disabled={busy}
-						oninput={typeDeparture}
-					/>
+					<div class="unit">
+						<input
+							id="{uid}-departure"
+							type="time"
+							value={departureText}
+							disabled={busy}
+							aria-describedby={departureDay === null ? undefined : `${uid}-day`}
+							oninput={typeDeparture}
+						/>
+						{#if departureDay !== null}
+							<span id="{uid}-day" class="muted">am {departureDay}</span>
+						{/if}
+					</div>
 				</div>
 				<button type="button" disabled={busy} onclick={applyTarget}>Übernehmen</button>
 			</div>

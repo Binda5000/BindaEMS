@@ -1,7 +1,7 @@
 // Zahlen und Zeiten für die Anzeige: deutsch (de-AT), Zeiten in Wien, Einheit mit geschütztem
 // Leerzeichen; fehlende Werte sind ein Strich, nie 0
 import type { Confidence, DrivingSource, DrivingTrip } from './api/schemas';
-import { VIENNA, parseIso } from './time';
+import { VIENNA, addDays, parseIso, todayVienna } from './time';
 
 export const DASH = '–';
 export const NBSP = '\u00a0';
@@ -150,6 +150,35 @@ export function weekdayGroup(weekday: number): string {
 export function weekdayOfDate(date: string): string {
 	const day = new Date(`${date}T12:00:00Z`).getUTCDay(); // 0 = Sonntag
 	return WEEKDAY_LABELS[(day + 6) % 7] ?? DASH;
+}
+
+/** „Mo 23.11.“ für ein Datum `YYYY-MM-DD` */
+export function weekdayDate(date: string): string {
+	const [, month, day] = date.split('-');
+	return `${weekdayOfDate(date)} ${day}.${month}.`;
+}
+
+/**
+ * Die Abfahrt als „07:15“ oder mit Tag als „Mo 23.11. 07:15“ (Wiener Zeit, Plan 5b, Ruling F-3).
+ * Den Tag nennt sie, wenn die Absicht einen Abfahrtstag `departureOn` hat, der nicht heute ist;
+ * eine tägliche Abfahrt (`null`) bleibt bei der Uhrzeit. Ohne Absicht (`undefined`, etwa im
+ * Zeitplan) nennt sie ihn ab übermorgen: Eine tägliche Abfahrt liegt immer heute oder morgen.
+ */
+export function departureText(
+	departureAt: string,
+	departureOn: string | null | undefined,
+	now: Date = new Date()
+): string {
+	const time = formatTime(departureAt);
+	const ms = parseIso(departureAt);
+	if (ms === null) return time;
+	const day = todayVienna(new Date(ms));
+	const today = todayVienna(now);
+	const dated =
+		departureOn === undefined
+			? day > addDays(today, 1)
+			: departureOn !== null && departureOn !== today;
+	return dated ? `${weekdayDate(day)} ${time}` : time;
 }
 
 /** Woher die Anwesenheit eines Autos kommt; bei Home Assistant mit der eingestellten Entität */

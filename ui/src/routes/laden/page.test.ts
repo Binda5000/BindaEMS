@@ -362,6 +362,27 @@ it('Zuordnung je Wallbox mit Indizien', async () => {
 	await waitFor(() => expect(api.setWallboxVehicle).toHaveBeenLastCalledWith('evcs', null));
 });
 
+it('nennt den Tag einer Abfahrt an einem Tag in der Zeile und neben dem Feld', async () => {
+	// Ruling F-3: Donnerstag, 08.10.; die Absicht nennt Freitag, 09.10., 17:30
+	vi.useFakeTimers({ toFake: ['Date'] });
+	vi.setSystemTime(new Date('2026-10-08T10:00:00Z'));
+	const base = baseIntent();
+	const dated = {
+		...base,
+		vehicles: {
+			...base.vehicles,
+			tesla: { ...base.vehicles.tesla!, departure_on: '2026-10-09' }
+		}
+	};
+	await show(system(), dated);
+	const tesla = card('Tesla Model 3');
+	expect(
+		await within(tesla).findByText('Fertig um 16:30 · Ziel 60 % bis Fr 09.10. 17:30')
+	).toBeInTheDocument();
+	const manual = within(tesla).getByRole('group', { name: 'Von Hand' });
+	expect(within(manual).getByText('am Fr 09.10.')).toBeInTheDocument();
+});
+
 it('zeigt eine Wallbox ohne Vorgang', async () => {
 	const health = system().core.health!;
 	await show(healthWith({ wallboxes: wallboxAt(health, 'evcs', { occupant: null }) }));

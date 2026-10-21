@@ -121,7 +121,9 @@ export const VehicleIntentSchema = v.object({
 	/** Ziel-SOC für „Geplant“ in %, ganze Zahl 20 bis 100 */
 	target_soc_pct: v.number(),
 	/** Tägliche Abfahrt für „Geplant“, lokale Uhrzeit `HH:MM` */
-	departure: v.string()
+	departure: v.string(),
+	/** Abfahrt an diesem Tag (`YYYY-MM-DD`, Plan 5b); `null` täglich; ältere Antworten ohne */
+	departure_on: v.optional(v.nullable(v.string()))
 });
 export type VehicleIntent = v.InferOutput<typeof VehicleIntentSchema>;
 
