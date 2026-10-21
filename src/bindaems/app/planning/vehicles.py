@@ -10,6 +10,7 @@ Wirkungsgrad, Kapazität und Ladeleistung aus der Konfiguration.
   (``core.control.planned``, Präzisierung 6). Die app importiert nichts aus dem core, darum steht
   sie zweimal; ``tests/unit/test_planned_formula.py`` vergleicht beide.
 - ``horizon_need``: der Teil des Bedarfs, der im Horizont geladen werden muss
+- ``charge_window``: die Slots, in denen ein Auto laden kann (erwartete erst ab der Ankunft)
 - ``grid_allowed``: Regel R2, die Netzenergie, die ein Auto bis zur Abfahrt laden darf
 - ``planned_vehicles``: die geplanten, angesteckten Autos eines Laufs
 - ``expected_vehicles``: die erwarteten Autos eines Laufs, sie stehen nach den angesteckten
@@ -149,6 +150,14 @@ def _slots_before(departure_at: datetime, slots: Sequence[SlotInput]) -> int:
     return sum(1 for slot in slots if ensure_utc(slot.start) < moment)
 
 
+def charge_window(car: PlanVehicleInput, slots: Sequence[SlotInput]) -> range:
+    """Die Indizes der Slots, in denen das Auto laden kann: ab dem ersten Slot ab seiner Ankunft
+    (``arrival_at``, nur erwartete Autos; sonst ab dem aktuellen Slot) bis vor den ersten Slot ab
+    der Abfahrt (Plan 5b, Präzisierung 10)."""
+    first = 0 if car.arrival_at is None else _slots_before(car.arrival_at, slots)
+    return range(first, _slots_before(car.departure_at, slots))
+
+
 def grid_allowed(
     vehicles: Sequence[PlanVehicleInput], slots: Sequence[SlotInput], priority: Sequence[str]
 ) -> dict[str, float]:
@@ -176,8 +185,7 @@ def grid_allowed(
     for car in order:
         wanted = car.horizon_need_kwh
         per_slot = car.max_w / 1000 * _SLOT_H
-        first = 0 if car.arrival_at is None else _slots_before(car.arrival_at, slots)
-        for index in reversed(range(first, _slots_before(car.departure_at, slots))):
+        for index in reversed(charge_window(car, slots)):
             if wanted <= 0:
                 break
             take = min(wanted, left[index], per_slot)

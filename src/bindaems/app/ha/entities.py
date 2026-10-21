@@ -130,7 +130,8 @@ class HaInputs:
     # fehlender Schlüssel oder ``None`` heißt: keine bekannt
     sessions: Mapping[str, ChargingSession | None] = field(default_factory=dict)
     month_kwh: Mapping[str, float | None] = field(default_factory=dict)  # Ladeenergie im Monat
-    plan_vehicles: Sequence[PlanVehicle] = ()  # die geplanten Autos des gültigen Plans (Plan 4b)
+    # die geplanten Autos des gültigen Plans (Plan 4b), ohne erwartete (Plan 5b)
+    plan_vehicles: Sequence[PlanVehicle] = ()
     # Health ``thermal``: je Gerät (Schlüssel aus ``config.yaml``) die Werte der Klimaanlage
     thermal: Mapping[str, Mapping[str, Any]] = field(default_factory=dict)
     now: datetime | None = None  # Zeitpunkt der Werte; None = unbekannt
@@ -310,6 +311,7 @@ def planned_view(cfg: Config, key: str, inputs: HaInputs) -> PlannedView | None:
     das Auto nennt, sein Ende des Ladens (``finish_at``) und ``reachable``; ohne Plan für das Auto
     rechnet die app aus der spätesten Startzeit in Health (``planned_from_health``). Nicht geplant
     ist ein Auto, dessen Absicht einen anderen Modus nennt oder das laut Health abgesteckt ist.
+    Ein erwartetes Auto des Plans (Plan 5b) zählt nicht als Plan für das Auto.
     """
     intent = inputs.intent
     mode = None if intent is None else intent.vehicles.get(key, VehicleIntent()).mode
@@ -322,7 +324,7 @@ def planned_view(cfg: Config, key: str, inputs: HaInputs) -> PlannedView | None:
     soc_source = source if source in SOC_SOURCES else None
     planned = entry.get("planned") if entry is not None else None
     reached = isinstance(planned, Mapping) and planned.get("state") == "reached"
-    car = next((car for car in inputs.plan_vehicles if car.key == key), None)
+    car = next((car for car in inputs.plan_vehicles if car.key == key and not car.expected), None)
     if car is not None and not reached:
         if soc_source is None and car.soc_assumed:
             soc_source = "assumed"
@@ -437,10 +439,11 @@ def _unreachable(cfg: Config, inputs: HaInputs) -> list[str]:
 
 def _target_unreachable(cfg: Config) -> Callable[[HaInputs], str]:
     """AN, wenn ein Auto in „Geplant“ sein Ziel nicht erreicht; ohne core und ohne Plan für ein
-    Auto unbekannt."""
+    Auto unbekannt (ein erwartetes Auto ist kein Plan für ein Auto)."""
 
     def value(inputs: HaInputs) -> str:
-        if not inputs.core_connected and not inputs.plan_vehicles:
+        planned = any(not car.expected for car in inputs.plan_vehicles)
+        if not inputs.core_connected and not planned:
             return UNKNOWN
         return on_off(bool(_unreachable(cfg, inputs)))
 
@@ -1269,7 +1272,9 @@ def build_inputs(
         stats=stats,
         sessions=dict(sessions or {}),
         month_kwh=dict(month_kwh or {}),
-        plan_vehicles=list(valid.vehicles) if valid is not None else [],
+        plan_vehicles=(
+            [car for car in valid.vehicles if not car.expected] if valid is not None else []
+        ),
         thermal=(
             {name: item for name, item in thermal.items() if isinstance(item, dict)}
             if isinstance(thermal, dict)

@@ -68,6 +68,7 @@ ReasonCode = Literal[
     "ZIEL_SOC_ABFAHRT",
     "AUTO_WARTET_AUF_PV",
     "ZIEL_SOC_UNERREICHBAR",
+    "AUTO_ERWARTET",
 ]
 PlanSource = Literal["optimizer", "fallback"]
 PlanTrigger = Literal[
@@ -131,6 +132,11 @@ class PlanVehicle(_Model):
     - ``expected_soc_pct``: Ladestand an der Abfahrt, wenn der Plan so läuft
     - ``finish_at``: Ende des letzten Slots mit Laden, ``None`` ohne Laden
     - ``reachable``: erreicht der Plan das Ziel (Fehlmenge höchstens 0,1 kWh)?
+    - ``expected``: ein erwartetes Auto (Plan 5b, Präzisierung 10), noch nicht angesteckt und ab
+      ``arrival_at`` laut Anwesenheitsprognose da; ``soc_start_pct`` ist dann der gelernte
+      Ladestand bei der Ankunft. Es steht nur im Plan: Die Absicht (``intent_plan``), HA und die
+      Zählung der geplanten Ladungen übergehen es. Pläne ohne beide Felder laden mit ``False``
+      und ``None``.
     """
 
     key: str
@@ -147,6 +153,8 @@ class PlanVehicle(_Model):
     expected_soc_pct: Finite
     finish_at: AwareDatetime | None
     reachable: bool
+    expected: bool = False
+    arrival_at: AwareDatetime | None = None
 
 
 class Plan(_Model):
@@ -265,26 +273,31 @@ def intent_plan(plan: Plan, *, grid_charge_allowed: bool) -> IntentPlan:
     ``EIGENVERBRAUCH``. Die Ladeleistung je Auto geht auf ganze W gerundet mit. Jedes Auto aus
     ``plan.vehicles`` steht in jedem Slot vor seiner Abfahrt, auch mit 0 W (Ruling R22): Ein Auto,
     das ein gültiger Slot nicht nennt, kennt der Plan nicht, und der core lädt es nach der
-    spätesten Startzeit. Je Slot gehen der Hinweis für die Klimaanlage (Perzentil über alle Slots
-    des Plans, nicht nur über die gesendeten) und der geplante SOC am Ende (auf 0,1 % gerundet,
-    in 0 bis 100 geklemmt) mit. ``plan.id`` muss gesetzt sein (der Plan ist gespeichert)."""
+    spätesten Startzeit. Erwartete Autos (``expected``, Plan 5b) fehlen ganz, ohne Leistung und
+    ohne Eintrag: Der core bekommt für sie nichts. Je Slot gehen der Hinweis für die Klimaanlage
+    (Perzentil über alle Slots des Plans, nicht nur über die gesendeten) und der geplante SOC am
+    Ende (auf 0,1 % gerundet, in 0 bis 100 geklemmt) mit. ``plan.id`` muss gesetzt sein (der
+    Plan ist gespeichert)."""
     if plan.id is None:
         raise ValueError("Nur ein gespeicherter Plan (mit id) geht in die Absicht")
 
     expensive_ct = expensive_import_ct(plan.slots)
+    expected = {car.key for car in plan.vehicles if car.expected}
+    cars = [car for car in plan.vehicles if not car.expected]
 
     def binding(slot: PlanSlot) -> IntentPlanSlot:
         intent = slot.intent
         if not grid_charge_allowed and intent.kind is BatteryIntentKind.NETZLADEN:
             intent = BatteryIntent()
-        planned = {car.key: 0 for car in plan.vehicles if slot.start < car.departure_at}
+        planned = {car.key: 0 for car in cars if slot.start < car.departure_at}
+        powers = {key: round(w) for key, w in slot.ev_w.items() if key not in expected}
         return IntentPlanSlot(
             start=slot.start,
             intent=intent,
             budget_kw=slot.budget_kw,
             import_ct=slot.import_ct,
             support_soc_pct=slot.support_soc_pct,
-            vehicles=planned | {key: round(watts) for key, watts in slot.ev_w.items()},
+            vehicles=planned | powers,
             thermal=thermal_hint(slot, expensive_ct),
             soc_end_pct=min(100.0, max(0.0, round(slot.soc_end_pct, 1))),
         )

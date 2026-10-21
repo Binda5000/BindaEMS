@@ -3,17 +3,20 @@
 Der Dienst prüft alle ``WATCH_S`` Sekunden Fingerabdrücke von Preisen und Prognosen, den SOC
 gegen den Plan und die Monatsspitze gegen den Plan; die Viertelstunde kommt zur Minute 1 nach
 Slotbeginn. Einstellungen lösen nur aus, wenn sich Planung, Tarif oder Einspeisung ändern.
-Neu in Plan 4b: ein Fingerabdruck der geplanten Autos (Entscheidung 10).
+Neu in Plan 4b: ein Fingerabdruck der geplanten Autos (Entscheidung 10). Neu in Plan 5b: die
+Menge der erwarteten Autos (``expected_cars``, Präzisierung 10), die der Dienst mit den
+Eingangsdaten des letzten Plans vergleicht.
 """
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any, Final
 
 from bindaems.app.control.intent import _health_vehicles, _trusted
+from bindaems.app.planning.vehicles import PlanVehicleInput
 from bindaems.shared.control import ChargeMode, Intent
 from bindaems.shared.plan import Plan, PlanTrigger
 from bindaems.shared.settings import RuntimeSettings
@@ -93,6 +96,25 @@ def vehicles_fingerprint(
             )
         )
     return tuple(sorted(entries, key=lambda item: str(item[0])))
+
+
+ExpectedCars = tuple[tuple[str, datetime | None, datetime, float], ...]
+
+
+def expected_cars(vehicles: Sequence[PlanVehicleInput]) -> ExpectedCars:
+    """Die erwarteten Autos unter ``vehicles`` als Menge ``(key, arrival_at, departure_at,
+    target_soc_pct)``, sortiert nach Schlüssel (Plan 5b, Präzisierung 10).
+
+    Ändert sie sich gegenüber den Eingangsdaten des letzten Plans, plant der Auslöser
+    ``vehicles`` neu. Ladestand und Bedarf gehören nicht dazu: Sie folgen aus Profil und Ziel.
+    Angesteckte Autos stehen nicht darin; steckt ein erwartetes Auto an, verlässt es die Menge.
+    """
+    entries = [
+        (car.key, car.arrival_at, car.departure_at, car.target_soc_pct)
+        for car in vehicles
+        if car.expected
+    ]
+    return tuple(sorted(entries, key=lambda entry: entry[0]))
 
 
 def next_tick(now: datetime) -> datetime:

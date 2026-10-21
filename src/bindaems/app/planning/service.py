@@ -17,7 +17,7 @@ import asyncio
 import contextlib
 import math
 import threading
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any, Final
@@ -52,8 +52,10 @@ from bindaems.app.planning.process import OUTER_TIMEOUT_S, Solver, solve_in_subp
 from bindaems.app.planning.store import PlanStore
 from bindaems.app.planning.triggers import (
     WATCH_S,
+    ExpectedCars,
     Fingerprint,
     changed,
+    expected_cars,
     next_tick,
     peak_rose,
     settings_relevant,
@@ -113,6 +115,8 @@ def plan_once(inputs: PlanInputs, result: OptimizerResult) -> Plan:
     er. Sonst der Ersatzplan mit dem Grund aus „Texte“, bei einem unplausiblen Plan dem ersten
     Befund und allen Befunden als Auffälligkeiten. Die geplanten Autos laden im Plan des
     Optimierers mit seiner Ladeleistung und Fehlmenge, im Ersatzplan nach ``fallback_vehicles``.
+    Der Ersatzplan bleibt ohne erwartete Autos (Plan 5b, Entscheidung 11): Er rechnet mit den
+    Eingangsdaten ohne sie.
     """
     reason = _failure_reason(inputs, result)
     findings: list[str] = []
@@ -134,6 +138,8 @@ def plan_once(inputs: PlanInputs, result: OptimizerResult) -> Plan:
                 shortfall_kwh=result.shortfall_kwh,
             )
         reason = f"Plan unplausibel: {findings[0]}"
+    plugged = [car for car in inputs.vehicles if not car.expected]
+    inputs = inputs.model_copy(update={"vehicles": plugged})
     ev_w = per_slot(fallback_vehicles(inputs), len(inputs.slots))
     return build_plan(
         inputs,
@@ -211,6 +217,10 @@ class PlanningService:
         # Der letzte Lauf sah ein Auto in „Geplant“ nicht, weil Health die Absicht noch nicht
         # bestätigt hatte (Ruling R23); ``_watch`` fordert dann „vehicles“ an
         self._cars_unseen = False
+        # Eingangsdaten des letzten Plans und die Menge erwarteter Autos, für die ``_watch``
+        # zuletzt „vehicles“ angefordert hat (Plan 5b, Präzisierung 10)
+        self._inputs: PlanInputs | None = None
+        self._expected_requested: ExpectedCars | None = None
 
     def current(self) -> Plan | None:
         """Der zuletzt erzeugte Plan, auch wenn er abgelaufen ist."""
@@ -338,6 +348,8 @@ class PlanningService:
             # jetzt, auch wenn sich der Stand der Autos nicht geändert hat (Ruling R23)
             self._cars_unseen = False
             self.request("vehicles")
+        if self._expected_changed(health, intent):
+            self.request("vehicles")
         plan = self._plan
         if plan is not None:
             # Ein Plan wegen des SOC löst im selben Slot nicht erneut aus: Die lineare Erwartung
@@ -349,6 +361,30 @@ class PlanningService:
             if plan.valid_at(now) and peak_rose(plan, peak_kw):
                 self.request("month_peak")
         return new
+
+    def _expected_changed(self, health: Mapping[str, Any] | None, intent: Intent | None) -> bool:
+        """Hat sich die Menge der erwarteten Autos gegenüber den Eingangsdaten des letzten Plans
+        geändert (Plan 5b, Präzisierung 10)? Gerechnet wird wie im letzten Lauf, mit seinen Slots
+        und seiner Zeit, aber mit Health, Absicht und Profilen von jetzt: So ändert der Lauf der
+        Zeit nichts (dafür plant die Viertelstunde neu), nur eine neue Ankunft, Abfahrt oder ein
+        neues Ziel und ein Auto, das ansteckt. Dieselbe Menge meldet es nur einmal, auch wenn der
+        Lauf danach keinen Plan ergibt. Solange Health der Absicht nicht traut (Neustart des core,
+        neue Absicht), prüft es nicht: Ohne Health sähe es kein erwartetes Auto, und der Auslöser
+        flatterte wie beim Fingerabdruck der Autos."""
+        inputs = self._inputs
+        if inputs is None or self._driving_profiles is None:
+            return False
+        if intent is None or not _trusted(intent.version, health):
+            return False
+        cars = self._vehicles(health, intent, inputs.created_at, inputs.slots)
+        current = expected_cars(cars)
+        if current == expected_cars(inputs.vehicles):
+            self._expected_requested = None
+            return False
+        if current == self._expected_requested:
+            return False
+        self._expected_requested = current
+        return True
 
     def _observe(self, now: datetime) -> tuple[datetime | None, int, float | None]:
         """Letzter Preis-Slot und ``primary``-Slots in 48 h, Monatsspitze (blockiert)."""
@@ -479,7 +515,7 @@ class PlanningService:
         health: Mapping[str, Any] | None,
         intent: Intent | None,
         now: datetime,
-        slots: list[SlotInput],
+        slots: Sequence[SlotInput],
     ) -> list[PlanVehicleInput]:
         """Die angesteckten geplanten Autos, danach die erwarteten (Plan 5b, Entscheidung 11);
         ohne Profile des Fahrverhaltens gibt es keine erwarteten."""
@@ -522,6 +558,7 @@ class PlanningService:
         plan = plan_once(inputs, result)
         saved = await asyncio.to_thread(self._store.save, plan, inputs)
         self._plan = saved
+        self._inputs = inputs
         log.info(
             "Plan erstellt",
             trigger=trigger,

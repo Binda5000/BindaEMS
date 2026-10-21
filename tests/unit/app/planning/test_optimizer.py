@@ -19,6 +19,7 @@ from tests.plan_helpers import (
     pv_arc,
     scenario,
     small_battery,
+    state,
 )
 
 from bindaems.app.planning import optimizer
@@ -521,6 +522,57 @@ def test_without_cars_results_have_no_car_entries() -> None:
     result = solve(scenario(prices=[20.0] * 4, pv=[3000.0] * 4, load=[500.0] * 4))
     assert result.shortfall_kwh == {} and result.r2_excess_kwh == {}
     assert all(f.ev == {} for f in result.flows)
+
+
+# Erwartete Autos (Plan 5b, Präzisierung 10, Ruling T10-2)
+
+
+def test_expected_car_charges_only_after_arrival() -> None:
+    # Billig nur vor der Ankunft: Angesteckt lüde das Auto dort, erwartet erst ab dem Slot 4
+    base: dict[str, Any] = {"prices": [5.0] * 4 + [20.0] * 4, "pv": [0.0] * 8, "load": [500.0] * 8}
+    car = planned_car(departure_at=slot(8), need_kwh=5.0, expected=True, arrival_at=slot(4))
+    result = solve(scenario(**base, vehicles=[car]))
+    assert result.status == "optimal"
+    assert all("tesla" not in f.ev for f in result.flows[:4])  # e = 0 vor arrival_at
+    assert car_kwh(result) == pytest.approx(5.0)
+    assert result.shortfall_kwh == {"tesla": pytest.approx(0.0, abs=1e-6)}
+    plugged = car.model_copy(update={"expected": False, "arrival_at": None})
+    early = solve(scenario(**base, vehicles=[plugged]))
+    assert sum(car_w(f) for f in early.flows[:4]) * SLOT_KWH == pytest.approx(5.0)
+
+
+def test_expected_car_short_of_time_after_arrival_keeps_a_shortfall() -> None:
+    # Zwei Slots zwischen Ankunft und Abfahrt reichen nicht: Fehlmenge statt „infeasible“
+    car = planned_car(departure_at=slot(8), need_kwh=10.0, expected=True, arrival_at=slot(6))
+    result = solve(scenario(prices=[20.0] * 8, pv=[0.0] * 8, load=[500.0] * 8, vehicles=[car]))
+    assert result.status == "optimal"
+    full = 2 * 11040.0 * SLOT_KWH
+    assert result.shortfall_kwh["tesla"] == pytest.approx(10.0 - full)
+    assert [car_w(f) for f in result.flows[6:]] == [pytest.approx(11040.0)] * 2
+    assert all("tesla" not in f.ev for f in result.flows[:6])
+
+
+def test_expected_car_shares_night_with_battery() -> None:
+    # Nacht billig, Abend teuer: Der Akku lädt aus dem Netz. Kommt in der Nacht ein Auto (ab
+    # dem Slot 2, Abfahrt nach dem Slot 3), teilt er die Bezugsgrenze mit ihm und lädt weniger.
+    base: dict[str, Any] = {
+        "prices": [10.0] * 4 + [40.0] * 8,
+        "pv": [0.0] * 12,
+        "load": [500.0] * 4 + [3000.0] * 8,
+        "soc_pct": 20.0,
+        "grid_charge": True,
+        "battery": state(grid_max_import_w=12000.0),
+    }
+    alone = solve(scenario(**base))
+    car = planned_car(departure_at=slot(4), need_kwh=5.0, expected=True, arrival_at=slot(2))
+    shared = solve(scenario(**base, vehicles=[car]))
+    assert alone.status == shared.status == "optimal"
+    assert car_kwh(shared) == pytest.approx(5.0)
+    assert all("tesla" not in f.ev for f in shared.flows[:2])
+    for f in shared.flows[2:4]:
+        assert f.gr_h + f.gr_b + f.ev["tesla"][1] <= 12000.0 + 1e-6
+    battery_kwh = [sum(f.gr_b for f in r.flows) * SLOT_KWH for r in (alone, shared)]
+    assert battery_kwh[1] < battery_kwh[0] - 1.0
 
 
 @pytest.mark.slow

@@ -129,6 +129,22 @@ def test_no_row_without_planned_session_or_plug(charges, session, engine) -> Non
     assert rows(engine) == []
 
 
+def test_planned_charge_ignores_expected_cars(charges, engine) -> None:
+    # Plan 5b, Präzisierung 10 (Ruling T10-5): Ein erwartetes Auto steckt laut Health nicht;
+    # es zählt nicht, auch wenn an seiner Wallbox gerade eine Session eines anderen läuft
+    with engine.begin() as conn:
+        other_id = conn.execute(
+            insert(charging_session)
+            .returning(charging_session.c.id)
+            .values(wallbox="twc", vehicle="guest", start=T0, end=None, last_seen=T0)
+        ).scalar_one()
+    other = StoredSession(other_id, "twc", "guest", T0, None, T0)
+    charges.record(health(plugged=False, soc=35.0), {"twc": other})
+    charges.record(health(plugged=False, soc=None, source=None), {"twc": other})
+    assert rows(engine) == []
+    assert charges.open_charges() == {}
+
+
 def test_no_row_without_a_need(charges, session, engine) -> None:
     # über dem Ziel angesteckt oder schon am Ziel: dafür gibt es keine geplante Ladung
     charges.record(health(soc=85.0, state="reached", need=0.0), {"twc": session})

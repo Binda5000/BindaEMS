@@ -10,7 +10,8 @@ Nachrechnung wieder leer ist), in billigen Slots aus dem Netz.
 Die geplanten Autos laden zuerst den erwarteten PV-Überschuss bis zur Abfahrt, dann in den
 günstigsten Slots davor mit voller Leistung (``fallback_vehicles``); der Plan des Akkus rechnet
 sie mit, und sein Netzladen lässt neben Haus und Autos den höchsten Netzbezug
-(``grid_max_import_w``) frei.
+(``grid_max_import_w``) frei. Erwartete Autos (Plan 5b, Entscheidung 11) kennt der Ersatzplan
+nicht: Er plant nur, was angesteckt ist.
 """
 
 from __future__ import annotations
@@ -91,12 +92,15 @@ def fallback_vehicles(inputs: PlanInputs) -> dict[str, list[float]]:
     P25. Nicht immer: Einen Überschuss unter ``min_w`` rechnet R2 (``grid_allowed_kwh``) dem Auto
     als PV an, der Ersatzplan lädt dort aber nicht; bei vielen solchen Slots lädt er mehr aus dem
     Netz als ``grid_allowed_kwh`` erlaubt. Was nicht in den Horizont passt, bleibt Fehlmenge.
+    Erwartete Autos (``expected``) fehlen im Ergebnis; sie nehmen keinem anderen PV oder Netz.
     """
     count = len(inputs.slots)
     pv_left = [max(0.0, slot.pv_w - slot.load_w) for slot in inputs.slots]
     room = [inputs.battery.grid_max_import_w + slot.pv_w - slot.load_w for slot in inputs.slots]
     result: dict[str, list[float]] = {}
     for car in inputs.vehicles:
+        if car.expected:
+            continue
         watts = [0.0] * count
         before = _slots_before(car.departure_at, inputs.slots) if car.need_kwh > 0 else 0
 

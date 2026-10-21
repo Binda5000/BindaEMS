@@ -54,6 +54,7 @@ SAMPLE_PARAMS: dict[str, dict[str, float | str]] = {
     "ZIEL_SOC_ABFAHRT": {"name": "Tesla Model 3", "kw": 7.0, "soc": 80.0, "um": "07:00"},
     "AUTO_WARTET_AUF_PV": {"name": "e-Golf"},
     "ZIEL_SOC_UNERREICHBAR": {"name": "e-Golf", "soc": 62.4, "um": "06:30"},
+    "AUTO_ERWARTET": {"name": "Tesla Model 3", "um": "17:30", "soc": 40.6},
 }
 
 
@@ -123,6 +124,9 @@ def test_all_sentences_match_the_texts_exactly() -> None:
         "ZIEL_SOC_ABFAHRT": "Tesla Model 3 lädt 7,0 kW, damit es um 07:00 Uhr 80 % hat.",
         "AUTO_WARTET_AUF_PV": "e-Golf wartet auf PV-Überschuss (Regel R).",
         "ZIEL_SOC_UNERREICHBAR": "e-Golf erreicht bis 06:30 Uhr voraussichtlich nur 62 %.",
+        "AUTO_ERWARTET": (
+            "Tesla Model 3 wird um 17:30 Uhr mit etwa 41 % erwartet (Anwesenheitsprognose)."
+        ),
     }
     assert set(expected) == set(get_args(ReasonCode))
     for code, text in expected.items():
@@ -438,3 +442,69 @@ def test_car_import_does_not_make_grid_charge_worthwhile() -> None:
         soc_pct=90.0,
     )
     assert plan.slots[0].reasons[0].code == "EIGENVERBRAUCH"
+
+
+# Erwartete Autos (Plan 5b, Präzisierung 10)
+
+
+def _expected_car(**changes: Any) -> PlanVehicleInput:
+    """Der Tesla, noch nicht angesteckt, ab dem Slot 2 (02:30 Ortszeit) mit 35 % erwartet."""
+    values: dict[str, Any] = {
+        "soc_pct": 35.0,
+        "departure_at": _slot(6),
+        "need_kwh": 2.75,
+        "expected": True,
+        "arrival_at": _slot(2),
+    }
+    return planned_car(**(values | changes))
+
+
+def test_expected_car_reason_in_arrival_slot() -> None:
+    # Der e-Golf steckt und lädt im selben Slot; der Grundcode des erwarteten Autos steht vor
+    # den Codes der Autos aus 4b, auch vor denen eines Autos mit höherer Priorität
+    golf = planned_car(
+        key="egolf", name="e-Golf", wallbox="evcs", departure_at=_slot(6), need_kwh=0.9
+    )
+    ev_w: list[dict[str, float]] = [{}, {}, {"egolf": 3600.0, "tesla": 5500.0}, {"tesla": 5500.0}]
+    plan = _car_plan(ev_w + [{}] * 4, [golf, _expected_car()])
+    arrival = plan.slots[2].reasons
+    assert [(r.code, r.params.get("name")) for r in arrival] == [
+        ("EIGENVERBRAUCH", None),
+        ("AUTO_ERWARTET", "Tesla Model 3"),
+        ("ZIEL_SOC_ABFAHRT", "e-Golf"),
+        ("ZIEL_SOC_ABFAHRT", "Tesla Model 3"),
+    ]
+    assert arrival[1].params == {"name": "Tesla Model 3", "um": "02:30", "soc": 35.0}
+    assert slot_text(plan.slots[2]).startswith(
+        "Akku deckt den Eigenverbrauch. "
+        "Tesla Model 3 wird um 02:30 Uhr mit etwa 35 % erwartet (Anwesenheitsprognose). "
+    )
+    # nur im Slot der Ankunft
+    assert all(
+        "AUTO_ERWARTET" not in [r.code for r in s.reasons]
+        for index, s in enumerate(plan.slots)
+        if index != 2
+    )
+    (_, tesla) = plan.vehicles
+    assert (tesla.expected, tesla.arrival_at) == (True, _slot(2))
+
+
+def test_expected_car_has_no_unreachable_warning() -> None:
+    # 40 kWh zwischen Ankunft und Abfahrt (zwei volle Slots) erreicht der Plan nicht; für ein
+    # erwartetes Auto gibt es trotzdem keinen Code „Ziel-SOC unerreichbar“
+    car = _expected_car(departure_at=_slot(4), need_kwh=40.0)
+    plan = _car_plan([{}, {}, {"tesla": 11040.0}, {"tesla": 11040.0}], [car])
+    assert not plan.vehicles[0].reachable and plan.vehicles[0].expected
+    assert all("ZIEL_SOC_UNERREICHBAR" not in [r.code for r in s.reasons] for s in plan.slots)
+    # dasselbe Auto angesteckt nennt ihn
+    plugged = car.model_copy(update={"expected": False, "arrival_at": None})
+    plan = _car_plan([{"tesla": 11040.0}] * 4, [plugged])
+    assert "ZIEL_SOC_UNERREICHBAR" in [r.code for r in plan.slots[0].reasons]
+
+
+def test_expected_car_waits_for_pv_only_after_arrival() -> None:
+    car = _expected_car(departure_at=_slot(4), grid_allowed_kwh=0.0)
+    ev_w: list[dict[str, float]] = [{}, {}, {}, {"tesla": 5500.0}]
+    plan = _car_plan(ev_w, [car], pv=[0.0, 0.0, 0.0, 6000.0])
+    waits = ["AUTO_WARTET_AUF_PV" in [r.code for r in s.reasons] for s in plan.slots]
+    assert waits == [False, False, True, False]

@@ -87,7 +87,8 @@ def vehicle_summary(
     ``None`` (Ruling R20). Die Fehlmenge kommt aus ``shortfall_kwh`` (Optimierer); fehlt das Auto
     dort, ist sie ``horizon_need_kwh`` minus ``planned_kwh``. ``reachable`` heißt Fehlmenge
     höchstens ``REACHABLE_TOL_KWH``; bei einer Abfahrt hinter dem Horizont gilt sie gegen den
-    Bedarf im Horizont.
+    Bedarf im Horizont. Ein erwartetes Auto (Plan 5b) behält ``expected`` und ``arrival_at``;
+    sein Ladestand zu Beginn ist der bei der Ankunft.
     """
     powers = _car_powers(inputs, ev_w)
     known = shortfall_kwh or {}
@@ -125,6 +126,8 @@ def vehicle_summary(
                 expected_soc_pct=min(100.0, expected),
                 finish_at=finish_at,
                 reachable=shortfall <= REACHABLE_TOL_KWH + _KWH_EPS,
+                expected=car.expected,
+                arrival_at=car.arrival_at,
             )
         )
     return result

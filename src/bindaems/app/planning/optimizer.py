@@ -17,6 +17,10 @@ ins Auto. Die Energien der Autos stehen auf der Wallbox-Seite (Ruling R10): Der 
 je kWh: Ziel vor Regel R vor Kosten. PV ins Auto kostet nichts, Netz ins Auto den Bezugspreis.
 Ohne Autos ist das Modell das des Akkus allein.
 
+Ein erwartetes Auto (Plan 5b, Präzisierung 10) steht erst ab seiner Ankunft im Modell: Seine
+Variablen gibt es nur in den Slots ``[arrival_at, departure_at)`` (``charge_window``); Bedarf,
+Ziel, Fehlmenge und Regel R2 rechnen sonst wie bei einem angesteckten Auto.
+
 Leistungen in W, Energien in kWh, Preise in ct/kWh. Reine Rechnung im selben Prozess; den
 Kindprozess und das harte Zeitlimit stellt der Planungsdienst.
 """
@@ -33,7 +37,7 @@ import pulp
 
 from bindaems.app.planning.battery_model import EV_ON_W, SLOT_H, SimSlot, params_of, sim_slots
 from bindaems.app.planning.inputs import INERTIA_SLOTS, PlanInputs
-from bindaems.app.planning.vehicles import PlanVehicleInput, _slots_before
+from bindaems.app.planning.vehicles import PlanVehicleInput, charge_window
 from bindaems.shared.plan import SolverStatus
 from bindaems.shared.timeutil import LOCAL_TZ, ensure_utc
 
@@ -53,7 +57,7 @@ class SlotFlows:
     ``pv_h``/``pv_b``/``pv_x``: PV ins Haus, in den Akku, ins Netz; ``gr_h``/``gr_b``: Netz ins
     Haus, in den Akku; ``bt_h``: Akku ins Haus. ``ev``: ``(pv_ev, gr_ev)`` je geplantem Auto, PV
     und Netz ins Auto; es fehlen Autos, die in dem Slot nicht laden können (ab der Abfahrt, ohne
-    Bedarf).
+    Bedarf, ein erwartetes Auto vor seiner Ankunft).
     """
 
     pv_h: float
@@ -144,13 +148,13 @@ def _elapsed_ms(started: float) -> int:
 
 @dataclass(frozen=True, eq=False)
 class _Car:
-    """Variablen des Autos ``inputs.vehicles[index]`` in den Slots ``0 … len(pv) − 1`` vor
-    seiner Abfahrt."""
+    """Variablen des Autos ``inputs.vehicles[index]`` je Slot, in dem es laden kann (Schlüssel
+    von ``pv`` und ``grid``: ab der Ankunft, vor der Abfahrt)."""
 
     index: int
     car: PlanVehicleInput
-    pv: list[pulp.LpVariable]
-    grid: list[pulp.LpVariable]
+    pv: dict[int, pulp.LpVariable]
+    grid: dict[int, pulp.LpVariable]
     short: pulp.LpVariable
     rho: pulp.LpVariable
 
@@ -163,7 +167,8 @@ def _add_car(prob: pulp.LpProblem, inputs: PlanInputs, index: int) -> _Car:
     """Variablen und Bedingungen des Autos ``inputs.vehicles[index]``; die Kosten stehen in
     ``_solve``.
 
-    Variablen gibt es in den Slots vor dem ersten Slot ab der Abfahrt (``T_c``), ohne Bedarf in
+    Variablen gibt es in den Slots vor dem ersten Slot ab der Abfahrt (``T_c``), bei einem
+    erwarteten Auto erst ab dem ersten Slot ab der Ankunft (``charge_window``), ohne Bedarf in
     keinem. Je Slot ``min_w · u ≤ e ≤ max_w · u`` mit ``u`` binär. Bedarf auf der Wallbox-Seite
     (Ruling R10): ``Σ e · Δ + short ≥ horizon_need_kwh``, ohne Wirkungsgrad. Mehr als
     ``need_kwh`` lädt es nicht, denn am Ziel stoppt der core; liegt der Bedarf unter einem Slot
@@ -171,26 +176,24 @@ def _add_car(prob: pulp.LpProblem, inputs: PlanInputs, index: int) -> _Car:
     rho``.
     """
     car = inputs.vehicles[index]
-    count = _slots_before(car.departure_at, inputs.slots) if car.need_kwh > 0 else 0
-    pv = [
-        prob.add_variable(f"pv_ev{index}_{t}", lowBound=0, upBound=car.max_w) for t in range(count)
-    ]
-    grid = [
-        prob.add_variable(f"gr_ev{index}_{t}", lowBound=0, upBound=car.max_w) for t in range(count)
-    ]
+    window = charge_window(car, inputs.slots) if car.need_kwh > 0 else range(0)
+    pv = {t: prob.add_variable(f"pv_ev{index}_{t}", lowBound=0, upBound=car.max_w) for t in window}
+    grid = {
+        t: prob.add_variable(f"gr_ev{index}_{t}", lowBound=0, upBound=car.max_w) for t in window
+    }
     short = prob.add_variable(f"fehl{index}", lowBound=0)
     rho = prob.add_variable(f"rho{index}", lowBound=0)
     entry = _Car(index=index, car=car, pv=pv, grid=grid, short=short, rho=rho)
-    for t in range(count):
+    for t in window:
         on = prob.add_variable(f"u{index}_{t}", cat=pulp.LpBinary)
         prob += entry.power(t) <= car.max_w * on, f"auto{index}_max_{t}"
         prob += entry.power(t) >= car.min_w * on, f"auto{index}_min_{t}"
-    energy = pulp.lpSum(_KWH * entry.power(t) for t in range(count))
+    energy = pulp.lpSum(_KWH * entry.power(t) for t in window)
     prob += energy + short >= car.horizon_need_kwh, f"auto{index}_bedarf"
-    if count:
+    if window:
         prob += energy <= max(car.need_kwh, _KWH * car.min_w), f"auto{index}_ziel"
         prob += (
-            pulp.lpSum(_KWH * g for g in grid) <= car.grid_allowed_kwh + rho,
+            pulp.lpSum(_KWH * g for g in grid.values()) <= car.grid_allowed_kwh + rho,
             f"auto{index}_r2",
         )
     return entry
@@ -234,7 +237,7 @@ def _solve(inputs: PlanInputs, time_limit_s: float, gap: float, started: float) 
     ]
     cars = [_add_car(prob, inputs, index) for index in range(len(inputs.vehicles))]
     # Autos, die im Slot laden können; PV und Netz ins Auto je Slot
-    active = [[c for c in cars if t < len(c.pv)] for t in range(count)]
+    active = [[c for c in cars if t in c.pv] for t in range(count)]
     car_pv = [pulp.lpSum(c.pv[t] for c in active[t]) for t in range(count)]
     car_grid = [pulp.lpSum(c.grid[t] for c in active[t]) for t in range(count)]
     imports = [gr_h[t] + gr_b[t] + car_grid[t] for t in range(count)]

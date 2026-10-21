@@ -6,18 +6,20 @@ Ersatzplan mit dem ersten Befund als Grund. Je Art wird nur der erste Slot gemel
 
 Geplante Autos (Plan 4b, Präzisierung 15): Die PV-Bilanz zählt die PV ins Auto mit; je Auto ist
 die Ladeleistung 0 oder zwischen ``min_w`` und ``max_w`` (``BALANCE_TOL_W`` Toleranz), und ab dem
-ersten Slot ab der Abfahrt lädt es nicht. Die Befunde gelten je Auto.
+ersten Slot ab der Abfahrt lädt es nicht. Die Befunde gelten je Auto. Ein erwartetes Auto
+(Plan 5b, Präzisierung 10) lädt auch vor dem ersten Slot ab seiner Ankunft nicht.
 """
 
 from __future__ import annotations
 
 from collections.abc import Sequence
+from datetime import datetime
 from typing import Final, Literal
 
 from bindaems.app.planning.battery_model import SLOT_H, SimStep, params_of, sim_slots
 from bindaems.app.planning.inputs import PlanInputs
 from bindaems.app.planning.optimizer import OptimizerResult
-from bindaems.app.planning.vehicles import _slots_before
+from bindaems.app.planning.vehicles import charge_window
 from bindaems.shared.plan import BatteryIntent, BatteryIntentKind
 from bindaems.shared.settings import PlanningSettings
 from bindaems.shared.timeutil import LOCAL_TZ, ensure_utc
@@ -133,8 +135,12 @@ def grid_charge_pays(inputs: PlanInputs, steps: Sequence[SimStep], index: int) -
     )
 
 
+def _hhmm(moment: datetime) -> str:
+    return ensure_utc(moment).astimezone(LOCAL_TZ).strftime("%H:%M")
+
+
 def _local_time(inputs: PlanInputs, index: int) -> str:
-    return ensure_utc(inputs.slots[index].start).astimezone(LOCAL_TZ).strftime("%H:%M")
+    return _hhmm(inputs.slots[index].start)
 
 
 def _kwh_text(value: float) -> str:
@@ -180,14 +186,21 @@ def check_plan(
             report("soc", index, f"SOC außerhalb der Grenzen um {at}")
 
     for car in inputs.vehicles:
-        departure = _slots_before(car.departure_at, inputs.slots)
+        window = charge_window(car, inputs.slots)
         for index, flows in enumerate(result.flows):
             pv, grid = flows.ev.get(car.key, (0.0, 0.0))
             power_w = pv + grid
             if power_w <= BALANCE_TOL_W:
                 continue
-            if index >= departure:
+            if index >= window.stop:
                 report(f"after:{car.key}", index, f"Auto {car.name} lädt nach der Abfahrt")
+            if car.arrival_at is not None and index < window.start:
+                at = _hhmm(car.arrival_at)
+                report(
+                    f"before:{car.key}",
+                    index,
+                    f"Auto {car.name} lädt vor der erwarteten Ankunft um {at}",
+                )
             if power_w < car.min_w - BALANCE_TOL_W or power_w > car.max_w + BALANCE_TOL_W:
                 at = _local_time(inputs, index)
                 report(

@@ -211,13 +211,18 @@ def test_planning_section_describes_the_cars() -> None:
         "jedes Auto des Plans in jedem Slot vor seiner Abfahrt, auch mit 0 W",
     ):
         assert topic in text, topic
-    for finding in ("Auto {Name} lädt außerhalb seiner Grenzen um HH:MM", "Auto {Name} lädt nach"):
+    for finding in (
+        "Auto {Name} lädt außerhalb seiner Grenzen um HH:MM",
+        "Auto {Name} lädt nach",
+        "Auto {Name} lädt vor der erwarteten Ankunft um HH:MM",  # Plan 5b
+    ):
         assert finding in section, finding
     assert "Der Ersatzplan rechnet nur den Akku" not in section
     assert "Dann die günstigsten Slots" in section
     source = Path("src/bindaems/app/planning/plausibility.py").read_text(encoding="utf-8")
     assert "Auto {car.name} lädt außerhalb seiner Grenzen um {at}" in source
     assert "Auto {car.name} lädt nach der Abfahrt" in source
+    assert "Auto {car.name} lädt vor der erwarteten Ankunft um {at}" in source
 
 
 def test_rule_r_finding_in_the_guide_matches_the_app() -> None:
@@ -902,6 +907,7 @@ def test_plan_reasons_in_the_guide_match_the_code() -> None:
         "ZIEL_SOC_ABFAHRT": {"name": "Tesla Model 3", "kw": 7.0, "soc": 80.0, "um": "07:00"},
         "AUTO_WARTET_AUF_PV": {"name": "e-Golf"},
         "ZIEL_SOC_UNERREICHBAR": {"name": "e-Golf", "soc": 62.0, "um": "06:30"},
+        "AUTO_ERWARTET": {"name": "Tesla Model 3", "um": "17:30", "soc": 41.0},
     }
     assert set(examples) == codes
     section = _guide_section("Planung")
@@ -923,6 +929,7 @@ def test_plan_reasons_in_the_guide_match_the_code() -> None:
         "NETZLADEN_AUS",
         "PV_UEBERSCHUSS_ERWARTET",
         "EIGENVERBRAUCH",
+        "AUTO_ERWARTET",
         "ZIEL_SOC_ABFAHRT",
         "AUTO_WARTET_AUF_PV",
         "ZIEL_SOC_UNERREICHBAR",

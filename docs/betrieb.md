@@ -4733,7 +4733,8 @@ Reihenfolge der Slots; der früheste ist der „erste Befund“): „Bilanz verl
 obwohl ausgeschaltet“, „Regel R verletzt: Netzladen um HH:MM, danach {kWh} kWh Einspeisung,
 bevor der Akku leer ist“ und „Netzladen um HH:MM rechnet sich nicht“, mit Autos (seit Plan 4b)
 dazu „Auto {Name} lädt außerhalb seiner Grenzen um HH:MM“ und „Auto {Name} lädt nach der
-Abfahrt“.
+Abfahrt“, mit erwarteten Autos (seit Plan 5b) „Auto {Name} lädt vor der erwarteten Ankunft um HH:MM“
+(die Uhrzeit ist die erwartete Ankunft).
 
 Der Ersatzplan plant zuerst die Autos im Modus „Geplant“, in der Reihenfolge `priority` (seit Plan
 4b):
@@ -4788,9 +4789,10 @@ Zahlen:
 | `NETZLADEN_AUS` | Netzladen würde sich lohnen (jetzt 10,0 ct, um 18:00 Uhr 30,0 ct), ist aber ausgeschaltet. | Netzladen würde sich lohnen, der Schalter ist aus |
 | `PV_UEBERSCHUSS_ERWARTET` | Akku deckt den Verbrauch; ab 09:30 Uhr lädt ihn die PV wieder. | Absicht `Eigenverbrauch`, der Akku entlädt, und später lädt die PV ihn |
 | `EIGENVERBRAUCH` | Akku deckt den Eigenverbrauch. | sonst |
+| `AUTO_ERWARTET` | Tesla Model 3 wird um 17:30 Uhr mit etwa 41 % erwartet (Anwesenheitsprognose). | Zusatz im Slot der erwarteten Ankunft, vor den übrigen Codes der Autos (seit Plan 5b): ein Auto in „Geplant“ steckt noch nicht, die Anwesenheitsprognose erwartet es ab diesem Slot mit mindestens 50 %; „etwa“ ist der gelernte Ladestand bei der Ankunft. Das Auto steht nur im Plan, der core bekommt dafür nichts |
 | `ZIEL_SOC_ABFAHRT` | Tesla Model 3 lädt 7,0 kW, damit es um 07:00 Uhr 80 % hat. | Zusatz zum Hauptcode, je Auto in der Reihenfolge `priority`: ein Auto im Modus „Geplant“ lädt in diesem Slot mindestens 100 W aus dem Netz; „kW“ ist die Netzleistung, „um“ die Abfahrt |
 | `AUTO_WARTET_AUF_PV` | e-Golf wartet auf PV-Überschuss (Regel R). | Zusatz: ein Auto im Modus „Geplant“ lädt in diesem Slot vor der Abfahrt nicht, weil Regel R2 das Netzladen begrenzt und ein späterer Slot es aus PV lädt |
-| `ZIEL_SOC_UNERREICHBAR` | e-Golf erreicht bis 06:30 Uhr voraussichtlich nur 62 %. | Zusatz im ersten Slot: der Plan erreicht das Ziel eines Autos im Modus „Geplant“ nicht (Fehlmenge über 0,1 kWh); „nur“ ist der erwartete Ladestand an der Abfahrt |
+| `ZIEL_SOC_UNERREICHBAR` | e-Golf erreicht bis 06:30 Uhr voraussichtlich nur 62 %. | Zusatz im ersten Slot: der Plan erreicht das Ziel eines Autos im Modus „Geplant“ nicht (Fehlmenge über 0,1 kWh); „nur“ ist der erwartete Ladestand an der Abfahrt; nicht für erwartete Autos |
 | `UNTERSTUETZUNG_RESERVIERT` | Akku-Unterstützung fürs Auto erst ab 70 %, weil der Plan den Akku bis 18:00 Uhr braucht. | Absicht `Eigenverbrauch`; die Schwelle, die der Plan für spätere Entladungen braucht, liegt über der Unterstützungsschwelle; „bis“ ist der Beginn des ersten späteren Slots ohne diesen Bedarf |
 | `GESCHAETZT` | Preis geschätzt. | der Preis des Slots ist ein Schätzpreis |
 | `ERSATZPLAN` | Ersatzplan. | der Plan ist ein Ersatzplan |

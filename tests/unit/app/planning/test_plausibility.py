@@ -506,3 +506,68 @@ def test_fallback_plan_carries_the_cars() -> None:
     assert [s.ev_w for s in plan.slots] == [{"tesla": pytest.approx(11040.0)}, {}, {}, {}]
     assert plan.vehicles[0].planned_kwh == pytest.approx(2.76)
     assert plan.vehicles[0].reachable
+
+
+# Erwartete Autos (Plan 5b, Präzisierung 10, Ruling T10-6)
+
+
+def test_plausibility_flags_charging_before_arrival() -> None:
+    # Ankunft im Slot 2 (02:30 Ortszeit): Laden davor ist ein Befund, ab der Ankunft nicht
+    inputs = _car_inputs(departure=4, expected=True, arrival_at=at(SCENARIO_START) + 2 * SLOT)
+    flows = [
+        flow(gr_h=500),
+        flow(gr_h=500, ev={"tesla": (0.0, 11040.0)}),
+        flow(gr_h=500, ev={"tesla": (0.0, 11040.0)}),
+        flow(gr_h=500, ev={"tesla": (0.0, 3450.0)}),
+    ]
+    assert _check(inputs, flows) == ["Auto Tesla Model 3 lädt vor der erwarteten Ankunft um 02:30"]
+    allowed = [flow(gr_h=500), flow(gr_h=500), *flows[2:]]
+    assert _check(inputs, allowed) == []
+
+
+def test_optimizer_plan_with_an_expected_car_is_plausible() -> None:
+    vehicle = planned_car(
+        departure_at=at(SCENARIO_START) + 8 * SLOT,
+        need_kwh=5.0,
+        expected=True,
+        arrival_at=at(SCENARIO_START) + 4 * SLOT,
+    )
+    inputs = scenario(
+        prices=[10.0] * 4 + [30.0] * 4, pv=[0.0] * 8, load=[500.0] * 8, vehicles=[vehicle]
+    )
+    plan = plan_once(inputs, solve(inputs))
+    assert plan.source == "optimizer", plan.issues
+    assert all(s.ev_w == {} for s in plan.slots[:4])
+    assert sum(w for s in plan.slots for w in s.ev_w.values()) * SLOT_H / 1000 == pytest.approx(5.0)
+    assert [(v.key, v.expected) for v in plan.vehicles] == [("tesla", True)]
+
+
+def test_fallback_ignores_expected_cars() -> None:
+    # Ruling T10-1: Der Ersatzplan bleibt ohne erwartete Autos (Spec 9.4); das angesteckte lädt
+    golf = planned_car(
+        key="egolf",
+        name="e-Golf",
+        wallbox="evcs",
+        departure_at=at(SCENARIO_START) + 4 * SLOT,
+        need_kwh=2.76,
+    )
+    tesla = planned_car(
+        departure_at=at(SCENARIO_START) + 4 * SLOT,
+        need_kwh=2.76,
+        expected=True,
+        arrival_at=at(SCENARIO_START) + SLOT,
+    )
+    inputs = scenario(prices=[20.0] * 4, pv=[0.0] * 4, load=[500.0] * 4, vehicles=[golf, tesla])
+    failed = OptimizerResult(
+        status="error", flows=(), peaks_kw={}, objective_ct=None, solve_ms=0, message="kaputt"
+    )
+    plan = plan_once(inputs, failed)
+    assert plan.source == "fallback"
+    assert [v.key for v in plan.vehicles] == ["egolf"]
+    assert all("tesla" not in s.ev_w for s in plan.slots)
+    assert sum(s.ev_w.get("egolf", 0.0) for s in plan.slots) * SLOT_H / 1000 == pytest.approx(2.76)
+    codes = {r.code for s in plan.slots for r in s.reasons}
+    assert "AUTO_ERWARTET" not in codes
+    # Nur das erwartete Auto: der Ersatzplan rechnet wie ohne Autos
+    alone = plan_once(inputs.model_copy(update={"vehicles": [tesla]}), failed)
+    assert alone.vehicles == [] and all(s.ev_w == {} for s in alone.slots)

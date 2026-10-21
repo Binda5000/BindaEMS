@@ -4,13 +4,15 @@ Einstellungen (Plan 3b, Task 10)."""
 from __future__ import annotations
 
 from dataclasses import replace
+from datetime import timedelta
 
 import pytest
-from tests.plan_helpers import at, planned_health, sample_plan, vehicle_health
+from tests.plan_helpers import at, planned_car, planned_health, sample_plan, vehicle_health
 
 from bindaems.app.planning.triggers import (
     Fingerprint,
     changed,
+    expected_cars,
     expected_soc_pct,
     next_tick,
     peak_rose,
@@ -188,3 +190,31 @@ def test_vehicles_fingerprint_ignores_unusable_entries():
     health["vehicles"].append({"mode": "planned", "plugged": True})  # ohne Schlüssel
     health["vehicles"].append("kaputt")
     assert vehicles_fingerprint(health, PLANNED_INTENT) == fingerprint_of(vehicle_health("tesla"))
+
+
+# --- Erwartete Autos (Plan 5b, Präzisierung 10, Ruling T10-4) --------------------------------
+
+ARRIVAL = at("2026-10-16T15:30:00+00:00")
+
+
+def test_changed_expected_set_triggers_replan():
+    # Die Menge der erwarteten Autos mit Ankunft, Abfahrt und Ziel; angesteckte zählen nicht
+    car = planned_car(expected=True, arrival_at=ARRIVAL, soc_pct=35.0)
+    plugged = planned_car(key="egolf", name="e-Golf", wallbox="evcs")
+    base = expected_cars([plugged, car])
+    assert base == ((car.key, ARRIVAL, car.departure_at, 80.0),)
+    assert expected_cars([plugged]) == () and expected_cars([]) == ()
+    # Ladestand und Bedarf allein ändern nichts: Sie folgen aus Profil und Ziel
+    assert expected_cars([plugged, car.model_copy(update={"soc_pct": 40.0, "need_kwh": 1.0})]) == (
+        base
+    )
+    for change in (
+        {"arrival_at": ARRIVAL + timedelta(minutes=15)},
+        {"departure_at": at("2026-10-18T05:00:00+00:00")},
+        {"target_soc_pct": 90.0},
+    ):
+        assert expected_cars([plugged, car.model_copy(update=change)]) != base, change
+    # zwei erwartete Autos: sortiert nach Schlüssel, unabhängig von der Priorität
+    golf = planned_car(key="egolf", name="e-Golf", expected=True, arrival_at=ARRIVAL)
+    assert expected_cars([car, golf]) == expected_cars([golf, car])
+    assert [entry[0] for entry in expected_cars([car, golf])] == ["egolf", "tesla"]

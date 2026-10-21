@@ -285,8 +285,9 @@ async def test_collect_takes_p25_and_the_planned_cars(service_with, live, foreca
 CLOCK_NOW = datetime.fromisoformat("2026-10-16T10:01:00+00:00")  # Uhr der Fixtures
 
 
-def _driving_profile(soc: float = 40.0) -> VehicleProfile:
-    """Anwesenheit 0,8 ab 14:00 Ortszeit an jedem Tag, Ladestand bei Ankunft ``soc``."""
+def _driving_profile(soc: float = 40.0, arrival: int = 56) -> VehicleProfile:
+    """Anwesenheit 0,8 ab der Viertelstunde ``arrival`` (56: 14:00 Ortszeit) an jedem Tag,
+    Ladestand bei Ankunft ``soc``."""
     weekdays = [
         WeekdayProfile(
             weekday=day,
@@ -315,7 +316,7 @@ def _driving_profile(soc: float = 40.0) -> VehicleProfile:
         data_to=CLOCK_NOW,
         days=60,
         weekdays=weekdays,
-        presence=[[0.0] * 56 + [0.8] * 40 for _ in range(7)],
+        presence=[[0.0] * arrival + [0.8] * (96 - arrival) for _ in range(7)],
     )
 
 
@@ -805,3 +806,88 @@ async def test_a_plan_made_before_health_trusts_the_intent_is_redone_for_the_car
         [],
         ["tesla"],
     ]
+
+
+# --- erwartete Autos als Auslöser (Plan 5b, Präzisierung 10, Ruling T10-4) --------------------
+
+
+async def test_plug_in_of_expected_car_triggers_replan(service_with, live):
+    live.health = planned_health(vehicle_health("tesla", plugged=False), version=3)
+    intent = Intent(version=3, vehicles={"tesla": VehicleIntent(mode=ChargeMode.PLANNED)})
+    profiles = {"tesla": _driving_profile()}
+    calls: list[PlanInputs] = []
+    service = service_with(
+        solver=recording(calls),
+        sleep=fast_sleep(),
+        intent=lambda: intent,
+        driving_profiles=lambda: profiles,
+    )
+    async with running(service):
+        await until(lambda: len(calls) == 1)
+        await asyncio.sleep(0.1)  # unverändert: kein weiterer Lauf
+        live.health = planned_health(vehicle_health("tesla"), version=3)  # angesteckt
+        await until(lambda: len(calls) == 2)
+        await asyncio.sleep(0.1)
+    assert triggers(calls) == ["start", "vehicles"]
+    assert [[(car.key, car.expected) for car in inputs.vehicles] for inputs in calls] == [
+        [("tesla", True)],
+        [("tesla", False)],
+    ]
+    assert calls[1].vehicles[0].soc_pct == 40.0  # jetzt der echte Ladestand aus Health
+    assert service.current() is not None and not service.current().vehicles[0].expected
+
+
+async def test_changed_expected_set_triggers_replan(service_with, live):
+    # Health bleibt gleich: Eine neue Ankunft (Profil) oder ein neues Ziel (Absicht) ändert
+    # die Menge der erwarteten Autos und löst „vehicles“ aus
+    live.health = planned_health(vehicle_health("tesla", plugged=False), version=3)
+    seen = {"intent": Intent(version=3, vehicles={"tesla": VehicleIntent(mode=ChargeMode.PLANNED)})}
+    profiles = {"tesla": _driving_profile()}
+    calls: list[PlanInputs] = []
+    service = service_with(
+        solver=recording(calls),
+        sleep=fast_sleep(),
+        intent=lambda: seen["intent"],
+        driving_profiles=lambda: dict(profiles),
+    )
+    async with running(service):
+        await until(lambda: len(calls) == 1)
+        await asyncio.sleep(0.1)
+        profiles["tesla"] = _driving_profile(arrival=60)  # 15:00 Ortszeit statt 14:00
+        await until(lambda: len(calls) == 2)
+        await asyncio.sleep(0.1)
+        target = VehicleIntent(mode=ChargeMode.PLANNED, target_soc_pct=90)
+        seen["intent"] = Intent(version=3, vehicles={"tesla": target})
+        await until(lambda: len(calls) == 3)
+        await asyncio.sleep(0.1)
+    assert triggers(calls) == ["start", "vehicles", "vehicles"]
+    arrivals = [inputs.vehicles[0].arrival_at for inputs in calls]
+    assert arrivals == [
+        datetime.fromisoformat("2026-10-16T12:00:00+00:00"),
+        datetime.fromisoformat("2026-10-16T13:00:00+00:00"),
+        datetime.fromisoformat("2026-10-16T13:00:00+00:00"),
+    ]
+    assert [inputs.vehicles[0].target_soc_pct for inputs in calls] == [80.0, 80.0, 90.0]
+
+
+async def test_untrusted_health_does_not_flap_the_expected_cars(service_with, live):
+    """Fällt Health kurz weg (Neustart des core), sieht der Dienst kein erwartetes Auto; das ist
+    keine Änderung der erwarteten Autos."""
+    live.health = planned_health(vehicle_health("tesla", plugged=False), version=3)
+    intent = Intent(version=3, vehicles={"tesla": VehicleIntent(mode=ChargeMode.PLANNED)})
+    calls: list[PlanInputs] = []
+    service = service_with(
+        solver=recording(calls),
+        sleep=fast_sleep(),
+        intent=lambda: intent,
+        driving_profiles=lambda: {"tesla": _driving_profile()},
+    )
+    async with running(service):
+        await until(lambda: len(calls) == 1)
+        await asyncio.sleep(0.05)
+        live.health = None
+        await asyncio.sleep(0.1)
+        live.health = planned_health(vehicle_health("tesla", plugged=False), version=3)
+        await asyncio.sleep(0.1)
+    assert triggers(calls) == ["start"]
+    assert [car.expected for car in calls[0].vehicles] == [True]

@@ -3,7 +3,8 @@ ihre Sätze.
 
 Der Hauptcode eines Slots folgt der ersten passenden Regel; dazu kommen ``ERSATZPLAN`` an erster
 und ``GESCHAETZT`` an letzter Stelle. Nach dem Hauptcode stehen die Codes der geplanten Autos
-(Plan 4b, Präzisierung 13). Reine Rechnung ohne Zugriff auf Zeit oder Konfiguration.
+(Plan 4b, Präzisierung 13), im Slot der Ankunft eines erwarteten Autos zuerst ``AUTO_ERWARTET``
+(Plan 5b, Präzisierung 10). Reine Rechnung ohne Zugriff auf Zeit oder Konfiguration.
 """
 
 from __future__ import annotations
@@ -21,7 +22,7 @@ from bindaems.app.planning.plausibility import (
     export_while_charged_kwh,
     pays_off,
 )
-from bindaems.app.planning.vehicles import _slots_before
+from bindaems.app.planning.vehicles import charge_window
 from bindaems.shared.plan import BatteryIntent, BatteryIntentKind, PlanSlot, PlanVehicle, Reason
 from bindaems.shared.timeutil import LOCAL_TZ, SLOT, ensure_utc
 
@@ -93,6 +94,10 @@ _SENTENCES: dict[str, Callable[[Params], str]] = {
     "ZIEL_SOC_UNERREICHBAR": lambda p: (
         f"{_txt(p, 'name')} erreicht bis {_txt(p, 'um')} Uhr voraussichtlich nur "
         f"{_de(_num(p, 'soc'), 0)} %."
+    ),
+    "AUTO_ERWARTET": lambda p: (
+        f"{_txt(p, 'name')} wird um {_txt(p, 'um')} Uhr mit etwa {_de(_num(p, 'soc'), 0)} % "
+        "erwartet (Anwesenheitsprognose)."
     ),
 }
 
@@ -245,13 +250,17 @@ def _car_reasons(
 
     - ``ZIEL_SOC_ABFAHRT`` in Slots, in denen das Auto mindestens ``MENTION_W`` aus dem Netz lädt;
       ``soc`` ist das Ziel, wenn es erreichbar ist, sonst der erwartete Ladestand.
-    - ``AUTO_WARTET_AUF_PV`` in Slots vor der Abfahrt ohne Laden, wenn Regel R2 bindet
-      (``grid_allowed_kwh < horizon_need_kwh``) und ein späterer Slot davor das Auto mit
-      mindestens ``MENTION_W`` aus PV lädt.
-    - ``ZIEL_SOC_UNERREICHBAR`` im ersten Slot, wenn der Plan das Ziel nicht erreicht.
+    - ``AUTO_WARTET_AUF_PV`` in Slots vor der Abfahrt ohne Laden (ein erwartetes Auto erst ab
+      seiner Ankunft), wenn Regel R2 bindet (``grid_allowed_kwh < horizon_need_kwh``) und ein
+      späterer Slot davor das Auto mit mindestens ``MENTION_W`` aus PV lädt.
+    - ``ZIEL_SOC_UNERREICHBAR`` im ersten Slot, wenn der Plan das Ziel nicht erreicht; nicht für
+      erwartete Autos (Plan 5b).
+    - ``AUTO_ERWARTET`` im Slot der Ankunft eines erwarteten Autos mit Name, Ankunft und dem
+      Ladestand bei der Ankunft, vor allen übrigen Codes der Autos in diesem Slot.
     """
     count = len(inputs.slots)
     result: list[list[Reason]] = [[] for _ in range(count)]
+    arrivals: list[list[Reason]] = [[] for _ in range(count)]
     summary = {vehicle.key: vehicle for vehicle in vehicles}
     pv_left = [max(0.0, slot.pv_w - slot.load_w) for slot in inputs.slots]
     for car in inputs.vehicles:
@@ -265,7 +274,14 @@ def _car_reasons(
         reachable = plan is None or plan.reachable
         expected = plan.expected_soc_pct if plan is not None else car.target_soc_pct
         um = _hhmm(car.departure_at)
-        departure = _slots_before(car.departure_at, inputs.slots)
+        window = charge_window(car, inputs.slots)
+        if car.expected and car.arrival_at is not None and window.start < count:
+            arrivals[window.start].append(
+                Reason(
+                    code="AUTO_ERWARTET",
+                    params={"name": car.name, "um": _hhmm(car.arrival_at), "soc": car.soc_pct},
+                )
+            )
         binds = car.grid_allowed_kwh < car.horizon_need_kwh - _KWH_EPS
         for index in range(count):
             if watts[index] - from_pv[index] >= MENTION_W:
@@ -282,19 +298,19 @@ def _car_reasons(
                 )
             elif (
                 binds
-                and index < departure
+                and index in window
                 and watts[index] < EV_ON_W
-                and any(from_pv[later] >= MENTION_W for later in range(index + 1, departure))
+                and any(from_pv[later] >= MENTION_W for later in range(index + 1, window.stop))
             ):
                 result[index].append(Reason(code="AUTO_WARTET_AUF_PV", params={"name": car.name}))
-        if not reachable and count:
+        if not reachable and not car.expected and count:
             result[0].append(
                 Reason(
                     code="ZIEL_SOC_UNERREICHBAR",
                     params={"name": car.name, "soc": expected, "um": um},
                 )
             )
-    return result
+    return [first + rest for first, rest in zip(arrivals, result, strict=True)]
 
 
 def reasons_for(

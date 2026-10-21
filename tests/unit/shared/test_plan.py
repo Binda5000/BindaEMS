@@ -233,7 +233,63 @@ def test_plan_vehicle_rejects_unknown_fields_and_naive_times() -> None:
         _vehicle(departure_at=at("2026-10-16T05:00:00"))
 
 
+def test_intent_plan_drops_expected_cars() -> None:
+    # Plan 5b, Präzisierung 10 (Ruling T10-3): Ein erwartetes Auto steht nur im Plan; der core
+    # bekommt dafür weder Leistung noch einen Eintrag, auch nicht 0 W.
+    plan = _stored(
+        DAY + "10:01:00+00:00",
+        ["10:00", "10:15", "10:30"],
+        intents=[{}, {"ev_w": {"tesla": 7000.0}}, {"ev_w": {"tesla": 7000.0}}],
+    )
+    expected = _vehicle(
+        departure_at=at(DAY + "12:00:00+00:00"),
+        expected=True,
+        arrival_at=at(DAY + "10:15:00+00:00"),
+    )
+    only = intent_plan(plan.model_copy(update={"vehicles": [expected]}), grid_charge_allowed=True)
+    assert [slot.vehicles for slot in only.slots] == [{}, {}, {}]
+    # neben einem angesteckten Auto: nur dieses steht in der Absicht
+    plugged = _vehicle(key="egolf", departure_at=at(DAY + "12:00:00+00:00"))
+    both = plan.model_copy(update={"vehicles": [plugged, expected]})
+    both = both.model_copy(
+        update={
+            "slots": [
+                slot.model_copy(update={"ev_w": {**slot.ev_w, "egolf": 3500.0}})
+                for slot in both.slots
+            ]
+        }
+    )
+    assert [slot.vehicles for slot in intent_plan(both, grid_charge_allowed=True).slots] == [
+        {"egolf": 3500}
+    ] * 3
+
+
+def test_old_plan_without_expected_loads() -> None:
+    # Pläne aus 4b und 5a kennen ``expected`` und ``arrival_at`` nicht (Ruling T10-7)
+    plan = sample_plan(DAY + "10:01:00+00:00", ["10:00"]).model_copy(
+        update={"vehicles": [_vehicle()]}
+    )
+    raw = plan.model_dump(mode="json")
+    assert (raw["vehicles"][0]["expected"], raw["vehicles"][0]["arrival_at"]) == (False, None)
+    del raw["vehicles"][0]["expected"]
+    del raw["vehicles"][0]["arrival_at"]
+    (car,) = Plan.model_validate(raw).vehicles
+    assert (car.expected, car.arrival_at) == (False, None)
+
+
+def test_expected_plan_vehicle_roundtrips() -> None:
+    arrival = at(DAY + "15:30:00+00:00")
+    plan = sample_plan(DAY + "10:01:00+00:00", ["10:00"]).model_copy(
+        update={"vehicles": [_vehicle(expected=True, arrival_at=arrival)]}
+    )
+    (car,) = Plan.model_validate_json(plan.model_dump_json()).vehicles
+    assert (car.expected, car.arrival_at) == (True, arrival)
+    with pytest.raises(ValidationError):
+        _vehicle(expected=True, arrival_at=at("2026-10-16T15:30:00"))  # ohne Zeitzone
+
+
 def test_new_reason_codes_and_trigger_are_accepted() -> None:
+    assert Reason(code="AUTO_ERWARTET", params={}).code == "AUTO_ERWARTET"
     for code in ("ZIEL_SOC_ABFAHRT", "AUTO_WARTET_AUF_PV", "ZIEL_SOC_UNERREICHBAR"):
         assert Reason(code=code, params={}).code == code  # type: ignore[arg-type]
     plan = sample_plan(DAY + "10:01:00+00:00", ["10:00"]).model_copy(update={"trigger": "vehicles"})

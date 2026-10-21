@@ -1080,6 +1080,41 @@ def test_build_inputs_takes_the_plan_vehicles_and_the_time(
     assert list(expired.plan_vehicles) == []
 
 
+def test_expected_car_has_no_unreachable_warning(cfg) -> None:
+    # Plan 5b, Präzisierung 10 (Ruling T10-5): Ein erwartetes Auto im Plan hat kein „Fertig um“,
+    # kein „Ziel erreichbar“ und meldet kein „Ziel-SOC unerreichbar“
+    expected = _plan_car(
+        reachable=False,
+        shortfall_kwh=10.0,
+        expected_soc_pct=60.0,
+        expected=True,
+        arrival_at=T_APP + timedelta(hours=4),
+    )
+    inputs = _planned(plan_vehicles=[expected], vehicles=[])
+    assert state(cfg, "tesla_done_by", inputs) == "None"
+    assert state(cfg, "tesla_target_reachable", inputs) == "None"
+    assert state(cfg, "problem_target_unreachable", inputs) == "OFF"
+    assert entity(cfg, "problem_target_unreachable").attributes(inputs) == {"vehicles": []}
+    # ohne core steht nur ein erwartetes Auto im Plan: unbekannt wie ganz ohne Plan
+    offline = _planned(plan_vehicles=[expected], vehicles=[], core_connected=False)
+    assert state(cfg, "problem_target_unreachable", offline) == "None"
+    # steckt es inzwischen an, gilt bis zum neuen Plan die späteste Startzeit aus Health
+    plugged = _planned(plan_vehicles=[expected], vehicles=[_health_car()])
+    assert state(cfg, "tesla_done_by", plugged) == local(T_APP + timedelta(hours=3))
+    assert state(cfg, "tesla_target_reachable", plugged) == "ja"
+
+
+def test_build_inputs_leaves_out_expected_cars(
+    live, price_service, store, forecast_service
+) -> None:
+    plugged = _plan_car(key="egolf")
+    expected = _plan_car(expected=True, arrival_at=T_APP + timedelta(hours=4))
+    plan = sample_plan(created="2026-10-09T07:58:00+00:00", slots=["08:00", "08:15"])
+    plan = plan.model_copy(update={"vehicles": [plugged, expected]})
+    inputs = build_inputs(live, price_service, store, forecast_service, T_APP, plan=plan)
+    assert list(inputs.plan_vehicles) == [plugged]
+
+
 # Klimaanlage (Plan 6a, Entscheidung 12): vier Sensoren je konfiguriertem Gerät
 THERMAL_HEALTH: dict[str, Any] = {
     "klima": {

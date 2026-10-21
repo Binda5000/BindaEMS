@@ -317,3 +317,18 @@ def test_fallback_grid_charge_leaves_room_for_the_cars_below_the_import_limit() 
     assert fallback_intents(inputs)[0] == BatteryIntent(
         kind=BatteryIntentKind.NETZLADEN, grid_charge_w=5000
     )
+
+
+def test_fallback_vehicles_skip_expected_cars() -> None:
+    # Ruling T10-1: Ein erwartetes Auto lädt im Ersatzplan nie, und es nimmt dem angesteckten
+    # weder PV noch Platz unter dem Netzbezug
+    expected = planned_car(departure_at=_slot(4), need_kwh=5.0, expected=True, arrival_at=_slot(1))
+    golf = planned_car(
+        key="egolf", name="e-Golf", wallbox="evcs", departure_at=_slot(4), need_kwh=2.75
+    )
+    inputs = scenario(
+        prices=[20.0] * 4, pv=[6000.0] * 4, load=[500.0] * 4, vehicles=[expected, golf]
+    )
+    powers = fallback_vehicles(inputs)
+    assert "tesla" not in powers
+    assert powers["egolf"] == pytest.approx([5500.0, 5500.0, 0.0, 0.0])

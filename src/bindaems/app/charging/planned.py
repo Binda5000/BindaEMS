@@ -51,6 +51,10 @@ Die Abnahme zählt die geschlossenen Zeilen nach dem Tag der Abfahrt (``summary`
 den machbaren; nicht machbare, vor der Abfahrt abgesteckte, solche ohne Ladestand und geänderte je
 für sich.
 
+Ein erwartetes Auto des Plans (Plan 5b, Präzisierung 10) zählt nie: Die Zeilen folgen nur Health,
+und ein erwartetes Auto steckt laut Health nicht. Steckt es an, beginnt die Zeile wie bei jedem
+Auto mit dem Ladestand aus Health.
+
 ``PlannedCharges`` liest und schreibt blockierend: aus einem Thread aufrufen.
 """
 
