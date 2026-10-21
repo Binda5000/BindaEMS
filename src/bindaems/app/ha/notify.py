@@ -226,7 +226,8 @@ class _Pending:
     Ein Eintrag gilt erst als gemeldet, wenn ``raised`` gelungen ist. Bis dahin versucht es
     ``update`` erneut, solange er besteht, je Eintrag höchstens alle ``RETRY_AFTER_S`` (über dem
     Budget, oder Home Assistant startet gerade neu). Ebenso wird ein gescheitertes Entfernen
-    wiederholt, bis es gelingt oder der Eintrag wiederkommt.
+    wiederholt, bis es gelingt oder die neue Meldung des wiedergekehrten Eintrags die alte
+    ersetzt hat.
     """
 
     def __init__(
@@ -256,9 +257,9 @@ class _Pending:
                 self._notified.discard(item)
                 self._dismiss_at[item] = now
         for item, due in list(self._dismiss_at.items()):
-            if item in present:  # wieder da: die neue Meldung ersetzt die alte
-                del self._dismiss_at[item]
-            elif now >= due:
+            if item in present:  # wieder da: die alte Meldung bleibt, bis die neue sie ersetzt
+                continue
+            if now >= due:
                 if await self._cleared(item):
                     del self._dismiss_at[item]
                 else:
@@ -272,6 +273,7 @@ class _Pending:
             if await self._raised(item, text):
                 self._notified.add(item)
                 self._retry_at.pop(item, None)
+                self._dismiss_at.pop(item, None)  # die neue Meldung hat die alte ersetzt
             else:
                 self._retry_at[item] = retry_at
 

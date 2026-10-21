@@ -150,6 +150,24 @@ async def test_alarm_returning_is_sent_again(env: Env) -> None:
     ]
 
 
+async def test_returning_alarm_that_vanishes_again_is_dismissed(env: Env) -> None:
+    env.live.alarms = [_alarm()]
+    await env.alarms.check()
+    await env.advance(NOTIFY_AFTER_S)
+    env.failing = True  # das Entfernen scheitert: die alte Meldung steht noch
+    env.live.alarms = []
+    await env.advance(1)
+    env.calls.clear()
+    env.live.alarms = [_alarm()]  # kehrt zurück, die neue Meldung wäre erst nach 30 s da
+    await env.advance(5)
+    env.live.alarms = []  # und verschwindet vorher wieder
+    env.failing = False
+    await env.advance(RETRY_AFTER_S)
+    assert env.calls == [
+        ("persistent_notification", "dismiss", {"notification_id": NOTIFICATION_ID})
+    ]
+
+
 async def test_warnings_are_not_sent(env: Env) -> None:
     env.live.alarms = [_alarm(severity="warning")]
     await env.alarms.check()
