@@ -142,9 +142,11 @@ class DrivingService:
         self._threads: set[asyncio.Future[Any]] = set()
         self._run_done: list[Callable[[], None]] = []
         # Geänderte Einstellungen des Fahrverhaltens rechnen gleich neu (Ruling F-2); läuft schon
-        # ein Lauf mit den alten, folgt danach einer (``_again``)
+        # ein Lauf mit den alten, folgt danach einer (``_again``). Der Haken greift erst, wenn der
+        # Start die Stände geladen hat (``_loop``), und nicht mehr nach ``close`` (``_closed``).
         self._loop: asyncio.AbstractEventLoop | None = None
         self._loop_thread: int | None = None
+        self._closed = False
         self._seen_lock = threading.Lock()
         self._seen = _without_switches(settings.current().settings.learning.driving)
         self._again = False
@@ -156,8 +158,8 @@ class DrivingService:
         """Beim Start die abgelegten Stände laden und neu rechnen; dann täglich um 03:40 Uhr
         Ortszeit."""
         self._track()
-        self._loop, self._loop_thread = asyncio.get_running_loop(), threading.get_ident()
         await self.load_stored()
+        self._loop, self._loop_thread = asyncio.get_running_loop(), threading.get_ident()
         await self._recompute_logged()
         while True:
             now = self._clock.now()
@@ -199,8 +201,8 @@ class DrivingService:
         with self._seen_lock:
             old, self._seen = self._seen, new
         loop = self._loop
-        if new == old or loop is None or loop.is_closed():
-            return  # ohne laufenden Dienst rechnet der Start ohnehin
+        if new == old or self._closed or loop is None or loop.is_closed():
+            return  # vor dem Laden rechnet der Start ohnehin, nach ``close`` läuft nichts mehr
         if threading.get_ident() == self._loop_thread:
             self._settings_changed()
         else:
@@ -208,6 +210,8 @@ class DrivingService:
                 loop.call_soon_threadsafe(self._settings_changed)
 
     def _settings_changed(self) -> None:
+        if self._closed:
+            return
         if self.start_recompute():
             log.info("Fahrverhalten wird nach geänderten Einstellungen neu berechnet")
         else:
@@ -272,7 +276,9 @@ class DrivingService:
 
     async def close(self, timeout_s: float) -> bool:
         """Beim Herunterfahren: bricht laufende Läufe ab und wartet höchstens ``timeout_s`` auf
-        Rechnungen und Schreibzugriffe im Thread. ``True``, wenn keiner mehr läuft."""
+        Rechnungen und Schreibzugriffe im Thread. ``True``, wenn keiner mehr läuft. Danach startet
+        eine Änderung der Einstellungen keinen Lauf mehr."""
+        self._closed = True
         tasks = [task for task in self._tasks if task is not asyncio.current_task()]
         for task in tasks:
             task.cancel()

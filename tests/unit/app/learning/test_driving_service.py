@@ -504,6 +504,78 @@ async def test_a_changed_driving_setting_starts_a_run(make_service, reader, sett
         await asyncio.gather(task, return_exceptions=True)
 
 
+async def test_a_setting_changed_during_startup_waits_for_the_load(
+    make_service, reader, settings_service, monkeypatch
+):
+    # Der Haken für geänderte Einstellungen greift erst, wenn der Start die Stände geladen hat;
+    # der Lauf nach dem Laden rechnet die Änderung ohnehin mit
+    commuter(reader)
+
+    async def wait(seconds: float) -> None:
+        await asyncio.Event().wait()
+
+    service = make_service(sleep=wait)
+    load = service.load_stored
+    loading, release = asyncio.Event(), asyncio.Event()
+
+    async def slow_load() -> None:
+        loading.set()
+        await release.wait()
+        await load()
+
+    monkeypatch.setattr(service, "load_stored", slow_load)
+    runs = 0
+
+    def counted() -> None:
+        nonlocal runs
+        runs += 1
+
+    service.on_run_done(counted)
+    task = asyncio.create_task(service.run())
+    try:
+        await loading.wait()
+        current = settings_service.current().settings.learning.driving
+        set_driving(settings_service, current.model_copy(update={"return_reserve_pct": 25}))
+        await asyncio.sleep(0.05)
+        assert not service.running()
+        assert runs == 0
+        release.set()
+        await until(lambda: runs == 1)
+        await asyncio.sleep(0.05)
+        assert runs == 1  # der Lauf des Starts, kein zweiter für die Änderung
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+
+async def test_a_setting_changed_after_close_starts_no_run(make_service, reader, settings_service):
+    commuter(reader)
+
+    async def wait(seconds: float) -> None:
+        await asyncio.Event().wait()
+
+    service = make_service(sleep=wait)
+    runs = 0
+
+    def counted() -> None:
+        nonlocal runs
+        runs += 1
+
+    service.on_run_done(counted)
+    task = asyncio.create_task(service.run())
+    await until(lambda: runs == 1)
+    assert await service.close(1.0)
+    await asyncio.gather(task, return_exceptions=True)
+    current = settings_service.current().settings.learning.driving
+    set_driving(settings_service, current.model_copy(update={"return_reserve_pct": 25}))
+    await asyncio.to_thread(
+        set_driving, settings_service, current.model_copy(update={"return_reserve_pct": 30})
+    )
+    await asyncio.sleep(0.05)
+    assert not service.running()
+    assert runs == 1
+
+
 async def test_status_before_the_first_run(service, cfg) -> None:
     status = service.status()
     assert status["computed_at"] is None
