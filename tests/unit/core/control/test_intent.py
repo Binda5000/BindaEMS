@@ -1048,11 +1048,11 @@ def test_support_threshold_below_reserve_is_raised_to_it(tmp_path, limits) -> No
     assert again == reply
 
 
-def test_support_threshold_with_decimals_is_shown_as_is(tmp_path, limits) -> None:
+def test_support_threshold_text_uses_comma(tmp_path, limits) -> None:
     reply = make_store(tmp_path, limits).submit(
         Intent(version=1, support=SupportIntent(soc_pct=19.5)), T0
     )
-    assert reply.details == ("Unterstützungsschwelle 19.5 % auf die USV-Reserve (20 %) angehoben.",)
+    assert reply.details == ("Unterstützungsschwelle 19,5 % auf die USV-Reserve (20 %) angehoben.",)
 
 
 def test_a_raised_reserve_does_not_block_other_changes(tmp_path, limits) -> None:

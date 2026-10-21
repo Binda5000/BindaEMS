@@ -551,7 +551,7 @@ async def test_support_audit_comment_for_each_state(
         "gesperrt",
     ]
     await service.apply(SetSupport(True, 62.5), actor="ha", source="ha")
-    assert last_audit(audit)[2] == "erlaubt, ab 62.5 %"
+    assert last_audit(audit)[2] == "erlaubt, ab 62,5 %"
 
 
 async def test_support_change_keeps_the_plan_and_the_rest(
@@ -574,12 +574,23 @@ async def test_support_threshold_below_reserve_is_rejected(
     assert fake_client.sent == [] and audit.recent() == []
 
 
+async def test_support_threshold_text_uses_comma(
+    service: IntentService, fake_client: FakeCoreClient
+) -> None:
+    with pytest.raises(Rejected) as rejected:
+        await service.apply(SetSupport(True, 19.5), actor="admin", source="ui")
+    assert rejected.value.details == [
+        "Unterstützungsschwelle 19,5 % liegt unter der USV-Reserve (20 %)."
+    ]
+    assert fake_client.sent == []
+
+
 async def test_support_threshold_above_100_is_rejected(
     service: IntentService, fake_client: FakeCoreClient
 ) -> None:
     with pytest.raises(Rejected) as rejected:
         await service.apply(SetSupport(True, 100.5), actor="admin", source="ui")
-    assert rejected.value.details == ["Unterstützungsschwelle 100.5 % liegt über 100 %."]
+    assert rejected.value.details == ["Unterstützungsschwelle 100,5 % liegt über 100 %."]
     assert fake_client.sent == []
 
 

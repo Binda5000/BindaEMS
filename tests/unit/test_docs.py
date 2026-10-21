@@ -777,6 +777,8 @@ def test_json_examples_of_the_battery_section_are_valid() -> None:
     # Die Beispiele sind eine Absicht für PUT /v1/intent, ein Ausschnitt von GET /v1/health und
     # Einträge von GET /v1/decisions. Der Ausschnitt nennt genau die Werte, die der core meldet,
     # und die Gründe eines Eintrags stehen mit ihrem Text aus der Tabelle in seinem Satz.
+    from datetime import UTC, datetime
+
     from bindaems.core.control.battery import BatteryController
     from bindaems.core.control.peak_guard import PeakGuard
     from bindaems.shared.config import load_config
@@ -802,7 +804,8 @@ def test_json_examples_of_the_battery_section_are_valid() -> None:
             assert set(item) == {"battery", "peak"}
             assert set(item["battery"]) == set(BatteryController(cfg).health())
             ceiling_w = cfg.victron.max_grid_charge_setpoint_w
-            peak = PeakGuard(cfg.control, cfg.battery.reserve_soc_pct, ceiling_w).health()
+            guard = PeakGuard(cfg.control, cfg.battery.reserve_soc_pct, ceiling_w)
+            peak = guard.health(datetime(2026, 10, 12, tzinfo=UTC))
             assert set(item["peak"]) == set(peak)
             assert item["battery"]["state"] in {"ok", "unknown", "locked", "idle"}
             assert item["battery"]["support"] in {"on", "soc", "time", "mode", "off", "plan", None}

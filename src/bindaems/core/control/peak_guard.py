@@ -324,7 +324,11 @@ class PeakGuard:
 
     def __init__(self, control: ControlConfig, reserve_soc_pct: float, ceiling_w: float) -> None:
         # das Ziel des letzten Schritts; vor dem ersten das der Konfiguration (Health, ``idle``)
-        self._target_kw = control.peak_target_kw
+        self._config_target_kw = control.peak_target_kw
+        self._target_kw = self._config_target_kw
+        self._off = (
+            self._target_kw is None
+        )  # der letzte Schritt hatte kein Ziel (``state`` ``off``)
         self._margin_w = control.peak_margin_kw * 1000.0
         # Über diesem SOC geht das Budget an den Akku (Präzisierung 12).
         self._budget_above_pct = reserve_soc_pct + control.reserve_guard_pct
@@ -359,6 +363,7 @@ class PeakGuard:
           Wächter ruht
         """
         self._target_kw = target_kw
+        self._off = target_kw is None
         if target_kw is None:
             self._rest()
             return NO_LIMITS
@@ -423,9 +428,12 @@ class PeakGuard:
     def idle(self) -> None:
         """Ein Zyklus ohne Regelung: Die laufende Viertelstunde ist lückenhaft bis zu ihrem Ende.
 
-        Health zeigt dann ``gap`` ohne Werte, bei einer überschrittenen Viertelstunde ``exceeded``.
-        Eine spätere Viertelstunde beginnt normal. Vor dem ersten Schritt ändert sich nichts.
+        Health zeigt dann ``gap`` ohne Werte, bei einer überschrittenen Viertelstunde ``exceeded``
+        (bis zu ihrem Ende, siehe ``health``). Eine spätere Viertelstunde beginnt normal. Vor dem
+        ersten Schritt ändert sich nur das Ziel: Das Budget des Plan-Slots gilt nicht weiter, es
+        bleibt ``control.peak_target_kw`` (ohne Wert ``None``); der Zustand bleibt, auch ``off``.
         """
+        self._target_kw = self._config_target_kw
         running, last = self._running, self._last
         if running is None or last is None:
             return
@@ -434,11 +442,15 @@ class PeakGuard:
         state: PeakState = "gap" if running.exceeded is None else "exceeded"
         self._last = _Last(state, last.quarter_end, None)
 
-    def health(self) -> dict[str, Any]:
-        """Der Stand des letzten Schritts (Design 9); was ohne Wert ist, ist ``None``.
+    def health(self, wall_now: datetime) -> dict[str, Any]:
+        """Der Stand des letzten Schritts zur Wanduhr ``wall_now`` (Design 9).
+
+        Was ohne Wert ist, ist ``None``.
 
         - ``state``: ``off`` ohne Ziel; sonst ``gap`` vor dem ersten Schritt und danach der Zustand
-          des letzten Schritts (nach ``idle`` der neue)
+          des letzten Schritts (nach ``idle`` der neue). Ein ``exceeded`` gilt nur bis zum Ende
+          seiner Viertelstunde: Ruht die Regelung darüber hinaus, ist es ``gap`` (wie bei
+          ``alarms`` der Alarm, den der Aufrufer mit der Wanduhr beendet).
         - ``target_kw``: das Ziel des letzten Schritts, vor dem ersten ``control.peak_target_kw``
         - ``energy_kwh``: ``E_bisher`` ohne Boost; ``projected_kw``: die Hochrechnung;
           ``budget_kw``: ``P_zul``, auch unter der Schwelle des SOC; ``reduction_kw``: die verlangte
@@ -448,10 +460,12 @@ class PeakGuard:
           nach dem ersten Schritt
         """
         last = self._last
-        if self._target_kw is None:
+        if self._off:
             state: PeakState = "off"
         else:
             state = "gap" if last is None else last.state
+            if state == "exceeded" and last is not None and wall_now >= last.quarter_end:
+                state = "gap"
         values = _NO_VALUES if last is None or last.calc is None else last.calc.health()
         return {
             "state": state,

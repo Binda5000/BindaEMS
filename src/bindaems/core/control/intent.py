@@ -29,6 +29,7 @@ import structlog
 from bindaems.core.persistence.files import read_json, write_json_atomic
 from bindaems.core.safety.limits import HardLimits
 from bindaems.shared.control import ActuatorMode, ChargeMode, Intent, SupportIntent
+from bindaems.shared.numbers import de
 from bindaems.shared.plan import (
     MAX_INTENT_PLAN_SLOTS,
     PLAN_VALID,
@@ -270,8 +271,8 @@ class IntentStore:
         if support.soc_pct is None or support.soc_pct >= reserve:
             return support, []
         detail = (
-            f"Unterstützungsschwelle {support.soc_pct:g} % auf die USV-Reserve "
-            f"({reserve:g} %) angehoben."
+            f"Unterstützungsschwelle {de(support.soc_pct)} % auf die USV-Reserve "
+            f"({de(reserve)} %) angehoben."
         )
         return support.model_copy(update={"soc_pct": reserve}), [detail]
 

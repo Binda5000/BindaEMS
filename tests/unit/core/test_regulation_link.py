@@ -351,14 +351,14 @@ def test_the_alarm_of_the_guard_ends_with_its_quarter_without_regulation(cfg) ->
 
 def test_health_shows_the_last_cycle_without_exception(cfg, monkeypatch) -> None:
     link = link_for(cfg)
-    fresh = Regulation(cfg, HardLimits.from_config(cfg), started=T0).health()
+    fresh = Regulation(cfg, HardLimits.from_config(cfg), started=T0).health(T0)
     assert link.health() == fresh  # vor dem ersten ``finish``
     cycle(link, cfg, NOW)
     good = link.health()
     assert good != fresh
     monkeypatch.setattr(link.regulation, "step", broken)
     cycle(link, cfg, NOW + timedelta(seconds=1))
-    assert link.regulation.health() == fresh  # der Kern ruht
+    assert link.regulation.health(T0) == fresh  # der Kern ruht
     assert link.health() == good
 
 
@@ -600,5 +600,5 @@ def test_a_thermal_exception_in_health_leaves_the_kernel(cfg, monkeypatch) -> No
     assert link.thermal_failed and not link.failed
     health = link.health()
     assert health["thermal"] == {}
-    assert health == {**link.regulation.core_health(), "thermal": {}}
+    assert health == {**link.regulation.core_health(NOW), "thermal": {}}
     assert link.alarms() == [Alarm(THERMAL_EXCEPTION, Severity.WARNING, THERMAL_MESSAGE, NOW)]

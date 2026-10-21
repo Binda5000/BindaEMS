@@ -162,8 +162,8 @@ def test_regulation_passes_the_charging_through(cfg) -> None:
     found = regulation.step(RegulationInputs(inputs(cfg)))
     assert found  # „Laden aus“ für den e-Golf in PV-Überschuss
     assert found == charger.step(inputs(cfg))
-    assert regulation.health()["vehicles"] == charger.health()
-    assert regulation.health()["wallboxes"] == charger.wallbox_health()
+    assert regulation.health(T0)["vehicles"] == charger.health()
+    assert regulation.health(T0)["wallboxes"] == charger.wallbox_health()
     assert regulation.vehicle_wallbox() == charger.vehicle_wallbox()
 
 
@@ -310,7 +310,7 @@ def test_battery_commands_follow_the_charging_commands(cfg) -> None:  # Präzisi
         Command(VICTRON, CommandKind.GRID_SETPOINT, 2760.0, reasons=("battery_comp",)),
     ]
     assert found[-1].inputs["cars_w"] == 2760.0
-    health = regulation.health()["battery"]
+    health = regulation.health(T0)["battery"]
     assert (health["state"], health["target_w"], health["support"]) == ("ok", 2760.0, "soc")
 
 
@@ -334,7 +334,7 @@ def test_no_override_without_a_target_or_while_victron_is_held(cfg) -> None:  # 
         regulation = Regulation(cfg, HardLimits.from_config(cfg), started=T0)
         found = regulation.step(regulation_inputs)
         assert VICTRON not in {x.command.actuator for x in found}
-        assert regulation.health()["battery"]["state"] == state
+        assert regulation.health(T0)["battery"]["state"] == state
     # Die Sperre eines anderen Aktors hält den Override nicht auf.
     regulation = Regulation(cfg, HardLimits.from_config(cfg), started=T0)
     found = regulation.step(RegulationInputs(charge, **usual, locks={"wallbox.evcs": ("x",)}))
@@ -347,7 +347,7 @@ def test_without_a_target_the_guard_rests(cfg) -> None:
         peak_cycle(regulation, cfg, s)
     assert regulation.alarms(T0 + timedelta(seconds=60)) == []
     assert regulation.grid_budget_w() is None
-    assert regulation.health()["peak"]["state"] == "off"
+    assert regulation.health(T0)["peak"]["state"] == "off"
 
 
 # --- 15-min-Wächter (Plan 2c-2a, Präzisierungen 3, 9 bis 14 und 16) ------------------------------
@@ -389,7 +389,7 @@ def test_the_wanted_grid_counts_when_it_is_above_the_mean(cfg) -> None:  # Präz
     regulation = Regulation(peak, HardLimits.from_config(peak), started=T0)
     victron = {**CONTROLLABLE, VICTRON: True}
     peak_cycle(regulation, peak, 0, base_w=600.0, drawn_w=6680.0, controllable=victron)
-    assert regulation.health()["peak"]["reduction_kw"] == 0.26
+    assert regulation.health(T0)["peak"]["reduction_kw"] == 0.26
     found = peak_cycle(regulation, peak, 1, base_w=600.0, drawn_w=6680.0, controllable=victron)
     assert currents(found) == [
         Command("wallbox.evcs", CommandKind.CURRENT, 15.0, reasons=("mode_now", "peak_guard"))
@@ -424,7 +424,7 @@ def test_with_p_zul_above_the_fixed_ceiling_the_guard_does_not_throttle(
     for s in range(3):
         peak_cycle(regulation, peak, s, drawn_w=8000.0, **kw)
     assert [limits.caps_w for limits in seen] == [{}, {}, {}]
-    assert regulation.health()["peak"]["reduction_kw"] == 0.0
+    assert regulation.health(T0)["peak"]["reduction_kw"] == 0.0
 
 
 @pytest.mark.parametrize(
@@ -515,7 +515,7 @@ def test_without_a_budget_the_guard_cuts_the_whole_reduction_at_once(
     seen = charger_limits(regulation, monkeypatch)
     kw = {"controllable": ALL_STEERABLE, "grid_obs": grid(soc=25.0), **BOTH_CHARGING}
     peak_cycle(regulation, peak, 0, drawn_w=8000.0, **kw)
-    assert regulation.health()["peak"]["reduction_kw"] == pytest.approx(reduction_kw)
+    assert regulation.health(T0)["peak"]["reduction_kw"] == pytest.approx(reduction_kw)
     peak_cycle(regulation, peak, 1, drawn_w=8000.0, **kw)
     assert seen[1] == PeakLimits(budget_w=None, caps_w=caps)
 
@@ -548,7 +548,7 @@ def test_a_car_whose_point_is_no_longer_regulated_loses_its_cap(cfg, monkeypatch
         steerable = {"wallbox.evcs": s == 0, "vehicle.tesla": True}
         kw = {"controllable": steerable, "intent": BOTH_NOW, **tesla_charging}
         peak_cycle(regulation, peak, s, pv_w=9720.0, drawn_w=10400.0, **kw)
-        reduction_w.append(regulation.health()["peak"]["reduction_kw"] * 1000)
+        reduction_w.append(regulation.health(T0)["peak"]["reduction_kw"] * 1000)
     assert seen[1].caps_w == {"egolf": 4660.0}
     assert [limits.caps_w for limits in seen[2:31]] == [{}] * 29  # still, ohne Änderung
     assert seen[31].caps_w == pytest.approx({"tesla": 11040.0 - reduction_w[30]})
@@ -563,7 +563,7 @@ def test_an_unregulated_car_in_boost_counts_for_the_boost_share(cfg) -> None:  #
     boost = Intent(version=1, control=True, vehicles={"egolf": VehicleIntent(boost_until=until)})
     unsteerable = {**CONTROLLABLE, "wallbox.evcs": False}
     peak_cycle(regulation, peak, 0, intent=boost, controllable=unsteerable)
-    assert regulation.health()["peak"]["projected_kw"] == 1.72
+    assert regulation.health(T0)["peak"]["projected_kw"] == 1.72
 
 
 def test_boost_wallboxes_name_the_wallboxes_of_the_cars_in_boost(cfg) -> None:  # Präzisierung 9
@@ -650,7 +650,7 @@ def test_the_guard_runs_on_the_wall_clock(cfg) -> None:  # Global Constraints: Z
     for s in range(61):
         peak_cycle(regulation, peak, s, lag=timedelta(days=1))
     assert regulation.grid_budget_w() is not None  # die Viertelstunde der Abrechnung passt
-    health = regulation.health()["peak"]
+    health = regulation.health(T0)["peak"]
     assert (health["state"], health["quarter_end"]) == ("exceeded", QUARTER_END.isoformat())
     [alarm] = regulation.alarms(T0 + timedelta(seconds=60))
     assert alarm.since == T0 + timedelta(seconds=60)
@@ -664,7 +664,7 @@ def test_idle_rests_the_guard_and_drops_its_limits(cfg, monkeypatch) -> None:  #
     assert regulation.grid_budget_w() == 7700.0
     regulation.idle(T0 + timedelta(seconds=1))
     assert regulation.grid_budget_w() is None  # keins, solange die Regelung ruht
-    assert regulation.health()["peak"]["state"] == "gap"
+    assert regulation.health(T0)["peak"]["state"] == "gap"
     # Nach der Pause ist die Viertelstunde lückenhaft: keine Grenze, kein Budget bis zur nächsten.
     peak_cycle(regulation, peak, 2)
     assert seen == [NO_LIMITS, NO_LIMITS]
@@ -674,9 +674,9 @@ def test_idle_rests_the_guard_and_drops_its_limits(cfg, monkeypatch) -> None:  #
 def test_health_shows_the_guard(cfg) -> None:  # Präzisierung 16
     peak = with_target(cfg)
     regulation = Regulation(peak, HardLimits.from_config(peak), started=T0)
-    assert regulation.health()["peak"]["state"] == "gap"  # vor dem ersten Schritt
+    assert regulation.health(T0)["peak"]["state"] == "gap"  # vor dem ersten Schritt
     peak_cycle(regulation, peak, 0)
-    assert regulation.health()["peak"] == {
+    assert regulation.health(T0)["peak"] == {
         "state": "active",
         "target_kw": 8.0,
         "energy_kwh": 0.0,
@@ -688,7 +688,7 @@ def test_health_shows_the_guard(cfg) -> None:  # Präzisierung 16
 
 
 def test_health_has_the_wallboxes(cfg) -> None:  # Plan 2c-2b, Präzisierung 11
-    health = Regulation(cfg, HardLimits.from_config(cfg), started=T0).health()
+    health = Regulation(cfg, HardLimits.from_config(cfg), started=T0).health(T0)
     assert list(health) == [
         "intent_version",
         "vehicles",
@@ -725,28 +725,28 @@ def plan_cycle(regulation: Regulation, cfg: Config, s: int, plan: IntentPlan | N
 
 def test_regulation_health_has_the_plan(cfg) -> None:  # Plan 3c, Präzisierung 5
     regulation = Regulation(cfg, HardLimits.from_config(cfg), started=T0)
-    assert regulation.health()["plan"]["state"] == "none"  # vor dem ersten Schritt
+    assert regulation.health(T0)["plan"]["state"] == "none"  # vor dem ersten Schritt
     assert regulation.active() is None
     plan_cycle(regulation, cfg, 20 * 60, PLAN)  # 10:20
     active = regulation.active()
     assert active is not None and active.start == T0 + timedelta(minutes=15)
-    assert regulation.health()["plan"] == plan_health(PLAN, active, T0 + timedelta(minutes=20))
-    assert regulation.health()["plan"]["state"] == "valid"
-    assert regulation.health()["plan"]["intent"] == "HALTEN"
+    assert regulation.health(T0)["plan"] == plan_health(PLAN, active, T0 + timedelta(minutes=20))
+    assert regulation.health(T0)["plan"]["state"] == "valid"
+    assert regulation.health(T0)["plan"]["intent"] == "HALTEN"
 
 
 def test_regulation_takes_the_slot_from_the_wall_clock_of_each_cycle(cfg) -> None:
     regulation = Regulation(cfg, HardLimits.from_config(cfg), started=T0)
     plan_cycle(regulation, cfg, 30, PLAN)  # 10:00:30, vor created_at
     assert regulation.active() is None
-    assert regulation.health()["plan"]["state"] == "expired"
+    assert regulation.health(T0)["plan"]["state"] == "expired"
     plan_cycle(regulation, cfg, 20 * 60, PLAN)
     assert regulation.active() is not None
     plan_cycle(regulation, cfg, 46 * 60, PLAN)  # valid_until ist offen
     assert regulation.active() is None
-    assert regulation.health()["plan"]["state"] == "expired"
+    assert regulation.health(T0)["plan"]["state"] == "expired"
     plan_cycle(regulation, cfg, 47 * 60, None)  # Absicht ohne Plan
-    assert regulation.health()["plan"]["state"] == "none"
+    assert regulation.health(T0)["plan"]["state"] == "none"
 
 
 def test_a_step_without_an_intent_has_no_plan(cfg) -> None:
@@ -754,7 +754,7 @@ def test_a_step_without_an_intent_has_no_plan(cfg) -> None:
     plan_cycle(regulation, cfg, 20 * 60, PLAN)
     regulation.step(RegulationInputs(replace(inputs(cfg, s=21 * 60), intent=None)))
     assert regulation.active() is None
-    assert regulation.health()["plan"]["state"] == "none"
+    assert regulation.health(T0)["plan"]["state"] == "none"
 
 
 def test_a_resting_regulation_reports_the_plan_by_its_validity(cfg) -> None:
@@ -762,16 +762,16 @@ def test_a_resting_regulation_reports_the_plan_by_its_validity(cfg) -> None:
     plan_cycle(regulation, cfg, 20 * 60, PLAN)
     regulation.idle(T0 + timedelta(minutes=21))
     assert regulation.active() is None  # in Ruhe bindet kein Slot
-    assert regulation.health()["plan"]["state"] == "none"  # ohne Angabe des Plans
+    assert regulation.health(T0)["plan"]["state"] == "none"  # ohne Angabe des Plans
     regulation.rest_plan(PLAN, T0 + timedelta(minutes=21))
     assert regulation.active() is None
-    health = regulation.health()["plan"]
+    health = regulation.health(T0)["plan"]
     assert health == plan_health(PLAN, None, T0 + timedelta(minutes=21))
     assert (health["state"], health["slot"]) == ("valid", None)  # gültig, aber nichts bindet
     regulation.rest_plan(PLAN, T0 + timedelta(minutes=50))
-    assert regulation.health()["plan"]["state"] == "expired"
+    assert regulation.health(T0)["plan"]["state"] == "expired"
     regulation.rest_plan(None, T0 + timedelta(minutes=22))
-    assert regulation.health()["plan"]["state"] == "none"
+    assert regulation.health(T0)["plan"]["state"] == "none"
 
 
 # --- Ausführung des Plans (Plan 3c, Präzisierung 7) ----------------------------------------------
@@ -862,45 +862,45 @@ def test_the_slot_power_reaches_the_charge_controller(cfg) -> None:  # Plan 4b, 
         Command("wallbox.evcs", CommandKind.CHARGING, True, reasons=reasons),
     ]
     assert regulation.active().vehicles == {"egolf": 4600}  # type: ignore[union-attr]
-    health = regulation.health()["vehicles"][1]["planned"]
+    health = regulation.health(T0)["vehicles"][1]["planned"]
     assert (health["state"], health["plan_w"]) == ("plan", 4600.0)
     # Nach dem Plan gibt es keinen Slot mehr: kein fester Bedarf aus dem Plan
     peak_cycle(regulation, cfg, 900, **calm)
     assert regulation.active() is None
-    assert regulation.health()["vehicles"][1]["planned"]["plan_w"] is None
+    assert regulation.health(T0)["vehicles"][1]["planned"]["plan_w"] is None
 
 
 def test_regulation_uses_the_plan_budget(cfg) -> None:  # Plan 3c, Präzisierung 9
     # Ohne Ziel in der Konfiguration schaltet das Budget des Slots den Wächter ein:
     # P_zul = 5,5 kW · 0,25 h in 900 s, abzüglich der Marge von 300 W.
     regulation = budget_run(cfg, budget_plan(5.5))
-    health = regulation.health()["peak"]
+    health = regulation.health(T0)["peak"]
     assert (health["state"], health["target_kw"]) == ("active", 5.5)
     assert regulation.grid_budget_w() == 5200.0
     # Das Budget ersetzt das Ziel der Konfiguration.
     with_config = with_target(cfg, 8.0)
     regulation = budget_run(with_config, budget_plan(5.5))
-    assert regulation.health()["peak"]["target_kw"] == 5.5
+    assert regulation.health(T0)["peak"]["target_kw"] == 5.5
     # Ein Slot ohne Budget und ein Zyklus ohne Plan lassen das Ziel der Konfiguration gelten.
     for plan in (budget_plan(None), None):
         regulation = budget_run(with_config, plan)
-        assert regulation.health()["peak"]["target_kw"] == 8.0
-        assert regulation.health()["peak"]["state"] == "active"
+        assert regulation.health(T0)["peak"]["target_kw"] == 8.0
+        assert regulation.health(T0)["peak"]["state"] == "active"
     # Ohne Budget und ohne Ziel ruht der Wächter.
     for plan in (budget_plan(None), None):
         regulation = budget_run(cfg, plan)
-        assert regulation.health()["peak"]["state"] == "off"
+        assert regulation.health(T0)["peak"]["state"] == "off"
         assert regulation.grid_budget_w() is None
 
 
 def test_the_plan_budget_ends_with_its_slot(cfg) -> None:
     # Im zweiten Slot (ab 10:15) hat der Plan kein Budget mehr: Ohne Ziel ruht der Wächter.
     regulation = budget_run(cfg, budget_plan(5.5))
-    assert regulation.health()["peak"]["target_kw"] == 5.5
+    assert regulation.health(T0)["peak"]["target_kw"] == 5.5
     intent = Intent(version=1, control=True, vehicles=EGOLF_NOW.vehicles, plan=budget_plan(5.5))
     peak_cycle(regulation, cfg, 900, intent=intent)
-    assert regulation.health()["peak"]["state"] == "off"
-    assert regulation.health()["peak"]["target_kw"] is None
+    assert regulation.health(T0)["peak"]["state"] == "off"
+    assert regulation.health(T0)["peak"]["target_kw"] is None
     assert regulation.grid_budget_w() is None
 
 
@@ -1048,7 +1048,7 @@ def test_regulation_hands_the_support_and_the_slot_to_the_battery(cfg) -> None:
     def cycle(s: int, given: Intent) -> dict[str, Any]:
         charge = inputs(cfg, s=s, intent=given)
         regulation.step(RegulationInputs(charge, pv_w=0.0, house_w=500.0, base_setpoint_w=0.0))
-        battery: dict[str, Any] = regulation.health()["battery"]
+        battery: dict[str, Any] = regulation.health(T0)["battery"]
         return battery
 
     found = cycle(5 * 60, intent)
@@ -1144,7 +1144,7 @@ def offsets(found: list) -> list[tuple[int, float, tuple[str, ...]]]:
 
 
 def klima_health(regulation: Regulation) -> dict[str, Any]:
-    entry: dict[str, Any] = regulation.health()["thermal"]["klima"]
+    entry: dict[str, Any] = regulation.health(T0)["thermal"]["klima"]
     return entry
 
 
@@ -1211,7 +1211,7 @@ def test_regulation_idle_resets(reg_with_klima, cfg) -> None:
     klima_run(reg_with_klima, cfg, 0, 600)
     assert wish(reg_with_klima)["wish"] == 1
     reg_with_klima.idle(T0 + timedelta(seconds=601))
-    assert reg_with_klima.health()["thermal"] == {}
+    assert reg_with_klima.health(T0)["thermal"] == {}
     # Die Strategie beginnt neu bei 0 und vergisst den letzten Versatz: 0 kommt wieder, −0,5 K erst
     # nach weiteren 600 s Einspeisung.
     found = klima_run(reg_with_klima, cfg, 610, 1210)
@@ -1540,7 +1540,7 @@ def test_regulation_skips_a_device_without_inputs(reg_with_klima, cfg) -> None:
     given = RegulationInputs(inputs(cfg))
     reg_with_klima.step(given)
     assert reg_with_klima.thermal_step(given) == []
-    assert reg_with_klima.health()["thermal"] == {}
+    assert reg_with_klima.health(T0)["thermal"] == {}
 
 
 def test_regulation_routes_thermal_verdicts_and_results(reg_with_klima, cfg, monkeypatch) -> None:
@@ -1587,7 +1587,7 @@ def test_regulation_without_thermal_devices(cfg) -> None:  # Ruling R20
     # Auch Eingaben für ein unbekanntes Gerät ergeben nichts.
     seen = {"klima": ThermalInputs(True, "kuehlen", True, False, T0.timestamp())}
     assert regulation.thermal_step(replace(given, thermal=seen)) == []
-    assert regulation.health()["thermal"] == {}
+    assert regulation.health(T0)["thermal"] == {}
     command = Command(KLIMA, OFFSET, -0.5)
     regulation.note_verdict(command, accepted(command))  # geht an die Laderegelung, ohne Wirkung
     regulation.forget({KLIMA})

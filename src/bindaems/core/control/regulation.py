@@ -578,23 +578,24 @@ class Regulation:
         kennt ihn nicht."""
         return frozenset(car.wallbox for car in self.charger.cars() if car.mode is Effective.BOOST)
 
-    def health(self) -> dict[str, Any]:
-        """Der Stand des letzten Zyklus: ``intent_version`` (die Version der Absicht des letzten
-        ``step``, sonst ``None``), ``vehicles`` je Fahrzeug (``ChargeController.health``),
-        ``battery`` (``BatteryController.health``), ``peak`` (``PeakGuard.health``) und
-        ``wallboxes`` je Wallbox (``ChargeController.wallbox_health``, Plan 2c-2b), ``plan``
-        (``plan_health``, Plan 3c) und ``thermal`` je Klimaanlage, die der letzte ``step`` regelte:
-        ``wish`` (Stufen), ``reason`` (Code) und ``hint`` (Plan 6a, Präzisierung 4). Vor dem ersten
-        ``step`` und solange die Regelung ruht, ist ``thermal`` leer."""
-        return {**self.core_health(), "thermal": self.thermal_health()}
+    def health(self, wall_now: datetime) -> dict[str, Any]:
+        """Der Stand des letzten Zyklus zur Wanduhr ``wall_now``: ``intent_version`` (die Version
+        der Absicht des letzten ``step``, sonst ``None``), ``vehicles`` je Fahrzeug
+        (``ChargeController.health``), ``battery`` (``BatteryController.health``), ``peak``
+        (``PeakGuard.health``, mit ``wall_now``) und ``wallboxes`` je Wallbox
+        (``ChargeController.wallbox_health``, Plan 2c-2b), ``plan`` (``plan_health``, Plan 3c) und
+        ``thermal`` je Klimaanlage, die der letzte ``step`` regelte: ``wish`` (Stufen), ``reason``
+        (Code) und ``hint`` (Plan 6a, Präzisierung 4). Vor dem ersten ``step`` und solange die
+        Regelung ruht, ist ``thermal`` leer."""
+        return {**self.core_health(wall_now), "thermal": self.thermal_health()}
 
-    def core_health(self) -> dict[str, Any]:
+    def core_health(self, wall_now: datetime) -> dict[str, Any]:
         """``health`` ohne ``thermal``."""
         return {
             "intent_version": self.charger.intent_version,
             "vehicles": self.charger.health(),
             "battery": self.battery.health(),
-            "peak": self.peak_guard.health(),
+            "peak": self.peak_guard.health(wall_now),
             "wallboxes": self.charger.wallbox_health(),
             "plan": self._plan,
         }

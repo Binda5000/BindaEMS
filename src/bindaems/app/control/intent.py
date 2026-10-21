@@ -33,6 +33,7 @@ from bindaems.shared.control import (
     next_departure,
 )
 from bindaems.shared.influx.lineprotocol import epoch_ms
+from bindaems.shared.numbers import de
 from bindaems.shared.plan import IntentPlan
 from bindaems.shared.timeutil import Clock
 
@@ -425,7 +426,7 @@ def _support_comment(support: SupportIntent) -> str:
         return "gesperrt"
     if support.soc_pct is None:
         return "erlaubt, Schwelle aus der Konfiguration"
-    return f"erlaubt, ab {support.soc_pct:g} %"
+    return f"erlaubt, ab {de(support.soc_pct)} %"
 
 
 def _target_comment(vehicle: VehicleIntent) -> str:
@@ -525,10 +526,10 @@ class IntentService:
                 if not math.isfinite(soc):
                     raise Rejected(["Unterstützungsschwelle ist keine endliche Zahl."])
                 if soc < reserve:
-                    below = f"liegt unter der USV-Reserve ({reserve:g} %)."
-                    raise Rejected([f"Unterstützungsschwelle {soc:g} % {below}"])
+                    below = f"liegt unter der USV-Reserve ({de(reserve)} %)."
+                    raise Rejected([f"Unterstützungsschwelle {de(soc)} % {below}"])
                 if soc > 100:
-                    raise Rejected([f"Unterstützungsschwelle {soc:g} % liegt über 100 %."])
+                    raise Rejected([f"Unterstützungsschwelle {de(soc)} % liegt über 100 %."])
             case SetMode(vehicle=key) | SetBoost(vehicle=key):
                 keys = [key]
             case SetTarget(vehicle=key, target_soc_pct=soc, departure=departure, departure_on=day):

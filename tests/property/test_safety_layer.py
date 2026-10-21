@@ -827,8 +827,8 @@ def test_refresh_differs_from_a_plain_command_only_by_the_deadband(case: Refresh
             )
             continue
         codes = [finding.code for finding in plain.findings]
-        # Ein Auffrischen ist nie dringend: kein ``urgent.bypass``, ``urgent.ignored`` ist erlaubt.
-        got = [finding.code for finding in refreshed.findings if finding.code != "urgent.ignored"]
+        # Ein Auffrischen ist nie dringend: kein ``urgent.bypass``, ``urgent.refresh`` ist erlaubt.
+        got = [finding.code for finding in refreshed.findings if finding.code != "urgent.refresh"]
         assert "urgent.bypass" not in got, refreshed
         if plain.outcome is Outcome.UNCHANGED:
             # Allein das Totband fällt weg; Mindestabstand, Erfassen und Ergebnis laufen weiter.

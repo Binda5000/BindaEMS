@@ -104,7 +104,7 @@ class RegulationLink:
         # Wanduhr des ersten gescheiterten Zyklus der laufenden Folge; ``None`` ohne Folge
         self._failed_since: datetime | None = None
         self._traced = False  # die Folge gescheiterter Zyklen hat ihren Traceback im Log
-        self._health = self.regulation.health()
+        self._health = self.regulation.health(started)
         self._alarms: list[Alarm] = []  # die des Kerns
         self._exception: Alarm | None = None  # ``control.exception``
         # Dasselbe für die Klimaanlagen (``control.thermal_exception``, Ruling R19)
@@ -333,7 +333,7 @@ class RegulationLink:
         empty: dict[str, dict[str, Any]] = {}
         thermal = self._thermal_call("thermal_health", self.regulation.thermal_health, empty)
         self._finish_thermal(wall_now)
-        health = self._call("health", self.regulation.core_health, self._health)
+        health = self._call("health", lambda: self.regulation.core_health(wall_now), self._health)
         alarms = self._call("alarms", lambda: self.regulation.alarms(wall_now), self._alarms)
         if self._failed:
             if self._failed_since is None:

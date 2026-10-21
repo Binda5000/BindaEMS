@@ -62,6 +62,7 @@ URGENT_IGNORED: Final = Finding(
     "urgent.ignored",
     "Als dringend markiert, aber nicht Richtung sicherer Zustand; es gelten die normalen Regeln.",
 )
+URGENT_REFRESH: Final = Finding("urgent.refresh", "Auffrischen ist nie dringend")
 URGENT_BYPASS: Final = Finding(
     "urgent.bypass", "Dringend (Richtung sicherer Zustand): ohne Mindestabstand und Limits."
 )
@@ -113,7 +114,7 @@ class SafetyLayer:
            Wert nach den Regeln 1–3 (lehnen sie ab, nie). Ein Auffrischen (``refresh`` beim
            Netz-Sollwert) ist nie ``urgent_ok``; bei anderen Arten hat ``refresh`` keine Wirkung.
            Ist der Befehl als dringend markiert, aber nicht ``urgent_ok``, kommt ``urgent.ignored``
-           dazu, und er wird normal geprüft.
+           dazu, beim Auffrischen ``urgent.refresh``, und er wird normal geprüft.
         3. Zustand CONTROL oder DEGRADED, oder ``urgent_ok`` in SAFE; sonst ``REJECTED``.
         4. Gesperrter Aktor: ``REJECTED``, auch bei ``urgent_ok``.
         5. Betriebsart: Dry-Run, außer der Aktor steht in ``ctx.modes`` auf ``LIVE``.
@@ -178,7 +179,9 @@ class SafetyLayer:
             and toward_safe(command, ctx, limits)
             and toward_safe(replace(command, value=ranged.value), ctx, limits)
         )
-        if command.urgent and not urgent_ok:
+        if command.urgent and refreshing:
+            findings.append(URGENT_REFRESH)
+        elif command.urgent and not urgent_ok:
             findings.append(URGENT_IGNORED)
 
         # 3. Betriebszustand (Regel 8): in SAFE nur, um den sicheren Zustand herzustellen

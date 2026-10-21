@@ -912,19 +912,29 @@ def test_refresh_is_still_reduced_by_the_phases(layer) -> None:
 def test_refresh_is_never_urgent(layer) -> None:
     command = Command("victron", K.GRID_SETPOINT, 2000.0, urgent=True, refresh=True)
     verdict = layer.authorize(command, make_ctx(present={SETPOINT: 2000.0}))
-    assert (verdict.outcome, verdict.findings[0].code) == (Outcome.ACCEPTED, "urgent.ignored")
+    assert (verdict.outcome, verdict.findings[0].code) == (Outcome.ACCEPTED, "urgent.refresh")
     early = layer.authorize(command, make_ctx(now=S(1), present={SETPOINT: 2000.0}))
     assert (early.outcome, [f.code for f in early.findings]) == (
         Outcome.DEFERRED,
-        ["urgent.ignored", "rate.interval"],
+        ["urgent.refresh", "rate.interval"],
     )
     # auch in SAFE nicht, obwohl der Wert dem des Cerbo gleicht, also Richtung sicher geht
     safe = make_ctx(now=S(5), operating=OperatingState.SAFE, present={SETPOINT: 2000.0})
     in_safe = layer.authorize(command, safe)
     assert (in_safe.outcome, [f.code for f in in_safe.findings]) == (
         Outcome.REJECTED,
-        ["urgent.ignored", "state.inactive"],
+        ["urgent.refresh", "state.inactive"],
     )
+
+
+def test_urgent_refresh_gets_its_own_finding(layer) -> None:
+    command = Command("victron", K.GRID_SETPOINT, 2000.0, urgent=True, refresh=True)
+    verdict = layer.authorize(command, make_ctx(present={SETPOINT: 2000.0}))
+    (finding,) = verdict.findings
+    assert (finding.code, finding.text) == ("urgent.refresh", "Auffrischen ist nie dringend")
+    # ein dringender Befehl, der nur nicht Richtung sicher geht, behält seinen Befund
+    away = Command("victron", K.GRID_SETPOINT, 9000.0, urgent=True)
+    assert layer.authorize(away, make_ctx(now=S(5))).findings[0].code == "urgent.ignored"
 
 
 def test_refresh_does_nothing_for_other_kinds(layer) -> None:

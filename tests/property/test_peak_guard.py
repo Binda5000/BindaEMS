@@ -107,11 +107,13 @@ def test_budget_is_finite_and_follows_the_formula(energy_wh, millis, target_kw, 
     guard, limits = run_to(second, energy_wh, target_kw=target_kw, margin_kw=margin_kw)
 
     expected_w = (target_kw * 250 - energy_wh) * 3600 / max(1.0, 900 - second) - margin_kw * 1000
-    assert guard.health()["state"] == "active"
+    assert guard.health(QUARTER)["state"] == "active"
     assert limits.budget_w is not None
     assert math.isfinite(limits.budget_w)
     assert limits.budget_w == pytest.approx(expected_w, rel=1e-9, abs=1e-6)
-    assert guard.health()["budget_kw"] * 1000 == pytest.approx(expected_w, rel=1e-9, abs=1e-6)
+    assert guard.health(QUARTER)["budget_kw"] * 1000 == pytest.approx(
+        expected_w, rel=1e-9, abs=1e-6
+    )
 
 
 @settings(max_examples=100, deadline=None)
@@ -130,8 +132,8 @@ def test_the_budget_follows_the_target_of_the_step(energy_wh, millis, first_kw, 
     quarter = QuarterObs(slot_start(now), energy_wh, 0.0, {})
     limits = guard.step(now, quarter, (), 0.0, 0.0, 60.0, target_kw=second_kw)
     expected_w = (second_kw * 250 - energy_wh) * 3600 / max(1.0, 900 - second) - 300.0
-    assert guard.health()["state"] == "active"
-    assert guard.health()["target_kw"] == second_kw
+    assert guard.health(QUARTER)["state"] == "active"
+    assert guard.health(QUARTER)["target_kw"] == second_kw
     assert limits.budget_w == pytest.approx(expected_w, rel=1e-9, abs=1e-6)
 
 
@@ -143,7 +145,7 @@ def test_the_budget_is_never_nan_or_infinite(energy_wh, millis) -> None:
     # ``P_zul`` ist endlich, oder der Schritt rechnet nicht
     guard, limits = run_to(millis / 1000, energy_wh)
     assert limits.budget_w is None or math.isfinite(limits.budget_w)
-    budget_kw = guard.health()["budget_kw"]
+    budget_kw = guard.health(QUARTER)["budget_kw"]
     assert budget_kw is None or math.isfinite(budget_kw)
 
 
@@ -162,7 +164,7 @@ def test_the_reduction_is_finite_for_any_finite_wanted_grid_and_base(
     wanted_w, base_w, mean_w, energy_wh, soc
 ) -> None:
     guard, _ = run_to(300, energy_wh, grid_w=mean_w, wanted_w=wanted_w, base_w=base_w, soc=soc)
-    reduction_kw = guard.health()["reduction_kw"]
+    reduction_kw = guard.health(QUARTER)["reduction_kw"]
     assert reduction_kw is not None
     assert math.isfinite(reduction_kw)
     assert reduction_kw >= 0.0
@@ -223,7 +225,7 @@ def test_any_course_of_steps_keeps_the_guard_consistent(steps) -> None:
         limits = guard.step(
             now, quarter, [EGOLF_BOOST, TESLA_NOW], 0.0, 0.0, 60.0, target_kw=8.0
         )  # wirft nie
-        health, alarms = guard.health(), guard.alarms()
+        health, alarms = guard.health(now), guard.alarms()
         state = health["state"]
 
         assert state in {"gap", "active", "exceeded"}

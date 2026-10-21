@@ -285,7 +285,7 @@ def test_an_exceeded_quarter_still_throttles() -> None:  # Präzisierung 14
     for second in range(60):
         step(g, second, grid_w=12300.0, wh=12300.0 * second / 3600.0)
     limits = step(g, 60, cars=CARS, grid_w=12300.0, wh=205.0)
-    assert g.health()["state"] == "exceeded"
+    assert g.health(QUARTER)["state"] == "exceeded"
     allowed_w = (2000.0 - 205.0) * 3600.0 / 840.0 - 300.0  # P_zul 7392,9 W
     # Senkung Mittel 12300 W − P_zul: „c“ verliert 3000 W, „b“ 1240 W, „a“ den Rest.
     rest_w = 12300.0 - allowed_w - 3000.0 - 1240.0
@@ -382,12 +382,12 @@ def test_with_a_budget_the_guard_cuts_once_by_the_gap_below_the_ceiling(tesla) -
     limits = held(g, 0, [tesla, EGOLF_NOW])
     assert limits.caps_w == {"egolf": 7060.0}
     assert limits.budget_w == 7700.0
-    assert g.health()["reduction_kw"] == pytest.approx(0.3)
+    assert g.health(QUARTER)["reduction_kw"] == pytest.approx(0.3)
     # Der e-Golf folgt mit 15 A. Die gemerkte Senkung S = 300 W deckt das Band zwischen P_zul und C:
     # Der Bedarf ist C − S = 7700 W, und über fünf Wartezeiten senkt der Wächter nicht weiter.
     followed = [tesla, EGOLF_15_A]
     assert all(held(g, second, followed).caps_w == {"egolf": 7060.0} for second in range(1, 151))
-    assert g.health()["reduction_kw"] == 0.0
+    assert g.health(QUARTER)["reduction_kw"] == 0.0
 
 
 def test_only_the_caps_that_stay_count_as_cut() -> None:
@@ -398,7 +398,9 @@ def test_only_the_caps_that_stay_count_as_cut() -> None:
     held(g, 0, [TESLA_NOW, EGOLF_NOW])
     held(g, 1, [TESLA_NOW, EGOLF_15_A])
     assert held(g, 2, [TESLA_NOW]).caps_w == {}
-    assert g.health()["reduction_kw"] * 1000 == pytest.approx(300.0 - 600.0 / 898.0)  # C − P_zul
+    assert g.health(QUARTER)["reduction_kw"] * 1000 == pytest.approx(
+        300.0 - 600.0 / 898.0
+    )  # C − P_zul
     assert all(held(g, second, [TESLA_NOW]).caps_w == {} for second in range(3, 30))
     cut_w = 300.0 - 9000.0 / 870.0  # C − P_zul um 18:00:30
     assert held(g, 30, [TESLA_NOW]).caps_w == pytest.approx({"tesla": 11040.0 - cut_w})
@@ -437,9 +439,9 @@ def test_with_a_budget_and_the_grid_at_the_ceiling_a_cap_lifts_1_kw_plus_its_cut
         grid_w = min(p_zul_without_draw(second), CEILING_W)
         caps = step(g, second, cars=followed, wanted_w=17940.0, grid_w=grid_w).caps_w
         assert caps == {"egolf": 7060.0}, second
-    assert g.health()["budget_kw"] * 1000 < 9300.0
+    assert g.health(QUARTER)["budget_kw"] * 1000 < 9300.0
     assert step(g, 150, cars=followed, wanted_w=17940.0, grid_w=CEILING_W).caps_w == {}
-    assert g.health()["budget_kw"] == 9.3
+    assert g.health(QUARTER)["budget_kw"] == 9.3
 
 
 @pytest.mark.parametrize("soc", [25.0, None])
@@ -453,7 +455,7 @@ def test_without_a_budget_the_guard_cuts_the_whole_reduction_at_once(soc) -> Non
     limits = step(g, 0, cars=[TESLA_NOW, EGOLF_NOW], wanted_w=18400.0, grid_w=8000.0, soc=soc)
     assert limits.caps_w == {"egolf": 2760.0, "tesla": 4940.0}
     assert limits.budget_w is None
-    assert g.health()["reduction_kw"] == pytest.approx(10.7)
+    assert g.health(QUARTER)["reduction_kw"] == pytest.approx(10.7)
 
 
 def at_the_ceiling(
@@ -478,7 +480,7 @@ def test_without_a_budget_and_p_zul_above_the_ceiling_the_guard_cuts_nothing(soc
     # 8000 W: Über zwei Wartezeiten senkt der Wächter nichts.
     g = guard(CEILING_W)
     assert all(at_the_ceiling(g, second, soc).caps_w == {} for second in range(61))
-    assert g.health()["reduction_kw"] == 0.0
+    assert g.health(QUARTER)["reduction_kw"] == 0.0
 
 
 def test_a_soc_at_the_threshold_with_p_zul_above_the_ceiling_cuts_nothing() -> None:

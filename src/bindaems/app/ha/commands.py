@@ -45,6 +45,7 @@ from bindaems.app.ha.entities import AUTOMATIC, GUEST_MODE_LABELS, MODE_LABELS, 
 from bindaems.app.settings.service import SettingsVersion, VersionConflictError
 from bindaems.shared.config import Config
 from bindaems.shared.control import SupportIntent
+from bindaems.shared.numbers import de
 from bindaems.shared.plan import PlanTrigger
 from bindaems.shared.timeutil import Clock
 
@@ -220,9 +221,8 @@ def _table(cfg: Config, planning: bool, automation: bool) -> dict[str, _Command]
         if not math.isfinite(soc):
             return None
         if not reserve <= soc <= 100:
-            raise Refused(
-                f"Unterstützungsschwelle „{_shown(payload)}“ liegt außerhalb von {reserve:g}–100 %."
-            )
+            shown, low = _shown(payload), de(reserve)
+            raise Refused(f"Unterstützungsschwelle „{shown}“ liegt außerhalb von {low}–100 %.")
         return SupportThreshold(soc)
 
     table = {
