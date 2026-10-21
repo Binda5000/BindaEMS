@@ -1,5 +1,6 @@
 import asyncio
 import json
+import os
 import re
 import signal
 import statistics
@@ -998,6 +999,68 @@ def test_main_releases_the_watchdog_and_exits_130_on_ctrl_c(
     assert "Abgebrochen." in shown.out
     assert "Traceback" not in shown.err
     assert cerbo.heartbeats()[-1] == 0  # der Watchdog ist freigegeben
+    assert cerbo.state == WAITING
+
+
+@pytest.fixture
+def sigterm_fails_loudly():
+    """Ohne Handler der Probe ist SIGTERM hier ein Fehler des Tests, nicht das Ende von pytest."""
+
+    def refuse(_number: int, _frame: object) -> None:
+        raise AssertionError("SIGTERM ohne Handler der Probe")
+
+    before = {sig: signal.signal(sig, refuse) for sig in (signal.SIGTERM, signal.SIGHUP)}
+    yield
+    for sig, handler in before.items():
+        signal.signal(sig, handler)
+
+
+@pytest.mark.usefixtures("sigterm_fails_loudly")
+async def test_sigterm_handler_is_registered() -> None:
+    cancelled: list[bool] = []
+
+    async def waiting() -> None:
+        with watchdog_probe._cancel_on_signals():
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                cancelled.append(True)
+                raise
+
+    for sig in (signal.SIGTERM, signal.SIGHUP):
+        cancelled.clear()
+        task = asyncio.create_task(waiting())
+        await asyncio.sleep(0.05)  # der Handler steht
+        os.kill(os.getpid(), sig)
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert cancelled == [True]
+
+
+class TerminatedCerbo(SimulatedCerbo):
+    """SIGTERM (``docker stop``) kommt, sobald der dritte Heartbeat gesendet ist."""
+
+    async def publish(self, topic: str, payload: bytes) -> None:
+        await super().publish(topic, payload)
+        if topic == HEARTBEAT and len(self.heartbeats()) == 3:
+            signal.raise_signal(signal.SIGTERM)
+
+
+@pytest.mark.usefixtures("secrets_env", "sigterm_fails_loudly")
+def test_main_releases_the_watchdog_and_exits_143_on_sigterm(
+    monkeypatch, tmp_path: Path, capsys
+) -> None:
+    cerbo = TerminatedCerbo()
+    _connect_to(monkeypatch, cerbo)
+    out = tmp_path / "bericht.md"
+    code = main(["--config", "deploy/config.example.yaml", "--yes", "--out", str(out)])
+    assert code == 143
+    assert not out.exists()
+    shown = capsys.readouterr()
+    assert "Der Watchdog ist mit dem Heartbeat 0 freigegeben." in shown.out
+    assert "Abgebrochen." in shown.out
+    assert "Traceback" not in shown.err
+    assert cerbo.heartbeats()[-1] == 0
     assert cerbo.state == WAITING
 
 

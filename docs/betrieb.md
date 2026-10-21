@@ -2229,8 +2229,9 @@ docker compose run --rm -v "$PWD/verification:/out" --entrypoint python ems-core
   stört der core die Probe nicht: Er sendet keine Heartbeats und gibt einen Watchdog nicht frei,
   für den er in diesem Lauf nie zuständig war.
 - Mit Strg+C brichst du die Probe ab. Sie gibt den Watchdog dann vorher mit dem Heartbeat 0 frei
-  und endet mit dem Exitcode 130, ohne Bericht. `docker stop` oder SIGTERM gibt ihn **nicht**
-  frei. Gelingt die Freigabe nach einem Abbruch nicht, warnt die Probe auf der Konsole: Der
+  und endet mit dem Exitcode 130, ohne Bericht. `docker stop` (SIGTERM) und SIGHUP behandelt sie
+  ebenso, nur mit dem Exitcode 143; die Freigabe dauert höchstens 2 s und passt in die 10 s von
+  `docker stop`. Ein SIGKILL, auch das von `docker stop` nach 10 s, gibt ihn **nicht** frei. Gelingt die Freigabe nach einem Abbruch nicht, warnt die Probe auf der Konsole: Der
   Watchdog kann dann scharf bleiben und später auslösen oder ausgelöst bleiben. Starte die Probe
   erneut (sie endet mit der Freigabe) oder gib ihn am Cerbo frei:
   `dbus -y com.victronenergy.bindaems /Heartbeat SetValue 0`. Prüfe danach, dass `/State` 0 ist:

@@ -32,14 +32,15 @@ sie das Ende des Laufs nicht gesehen: Die Zeile ist dann höchstens eine Warnung
 (``NOT_REARMED``, in der Pause ``ABORTED_IN_PAUSE``), auch bei 0 fehlgeschlagenen Aktionen, denn
 die 0 kann der Stand vor dem Ende des Laufs sein.
 
-Bricht die Probe ab, nachdem die Heartbeats liefen (Strg+C, Verbindungsverlust, Fehler), versucht
-sie, den Watchdog mit dem Heartbeat 0 freizugeben: Sonst löste er später unbeaufsichtigt aus oder
-bliebe ausgelöst. Gelingt das nicht, steht es im Bericht und auf der Konsole, dazu der Weg zurück.
-Befunde, die bis dahin vorlagen, bleiben im Bericht.
+Bricht die Probe ab, nachdem die Heartbeats liefen (Strg+C, SIGTERM, Verbindungsverlust, Fehler),
+versucht sie, den Watchdog mit dem Heartbeat 0 freizugeben: Sonst löste er später unbeaufsichtigt
+aus oder bliebe ausgelöst. Gelingt das nicht, steht es im Bericht und auf der Konsole, dazu der
+Weg zurück. Befunde, die bis dahin vorlagen, bleiben im Bericht.
 
 Exitcode 0: kein Schritt ist ``fail``. 1: ein Schritt ist ``fail``, der Bericht ließ sich nicht
 schreiben oder der Betreiber hat die Rückfrage verneint (dann ohne Verbindung und ohne Secrets).
-2: Konfiguration oder Secrets ungültig. 130: Strg+C.
+2: Konfiguration oder Secrets ungültig. 130: Strg+C. 143: SIGTERM (``docker stop``) oder SIGHUP;
+beide behandelt die Probe wie Strg+C und gibt den Watchdog vorher frei.
 """
 
 from __future__ import annotations
@@ -48,8 +49,9 @@ import argparse
 import asyncio
 import contextlib
 import json
+import signal
 import sys
-from collections.abc import AsyncIterator, Callable, Coroutine
+from collections.abc import AsyncIterator, Callable, Coroutine, Iterator
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -442,13 +444,35 @@ async def _discover_portal(transport: MqttTransport) -> str:
     raise ConnectionError("Portal-ID konnte nicht ermittelt werden")
 
 
+@contextlib.contextmanager
+def _cancel_on_signals() -> Iterator[None]:
+    """SIGTERM und SIGHUP brechen die laufende Task ab, wie ``asyncio.run`` es für SIGINT tut.
+
+    Die Freigabe im ``finally`` von ``run_probe`` läuft dann: höchstens ``RELEASE_ATTEMPT_S``, das
+    passt in die 10 s von ``docker stop``.
+    """
+    loop = asyncio.get_running_loop()
+    task = asyncio.current_task()
+    if task is None:  # nur im Ereignisschleifen-Kontext möglich, hier unerreichbar
+        raise RuntimeError("keine laufende Task")
+    signals = (signal.SIGTERM, signal.SIGHUP)
+    for number in signals:
+        loop.add_signal_handler(number, task.cancel)
+    try:
+        yield
+    finally:
+        for number in signals:
+            loop.remove_signal_handler(number)
+
+
 async def _probe(cfg: Config, secrets: Secrets) -> list[Finding]:
     mqtt = cfg.victron.mqtt
     findings: list[Finding] = []
     try:
-        async with AiomqttTransport(mqtt, secrets.mqtt_password) as transport:
-            portal = mqtt.portal_id or await _discover_portal(transport)
-            findings = await run_probe(transport, portal, timings_from_config(cfg))
+        with _cancel_on_signals():
+            async with AiomqttTransport(mqtt, secrets.mqtt_password) as transport:
+                portal = mqtt.portal_id or await _discover_portal(transport)
+                findings = await run_probe(transport, portal, timings_from_config(cfg))
     except Exception as exc:  # ein Befund statt eines Abbruchs
         if findings:  # die Probe ist durch; nur das Trennen schlug fehl
             print(f"Verbindung nicht sauber getrennt: {type(exc).__name__}: {exc}", file=sys.stderr)
@@ -493,6 +517,9 @@ def main(argv: list[str] | None = None) -> int:
     except KeyboardInterrupt:  # Strg+C, auch an der Rückfrage; eine laufende Probe hat aufgeräumt
         print("\nAbgebrochen.")
         return 130
+    except asyncio.CancelledError:  # SIGTERM oder SIGHUP; die Probe hat den Watchdog freigegeben
+        print("\nAbgebrochen.")
+        return 143
 
 
 def _run(args: argparse.Namespace) -> int:
