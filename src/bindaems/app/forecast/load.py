@@ -407,6 +407,10 @@ class LoadForecastService:
             )
         if self._forecast is None:
             return ComponentStatus("load-forecast", False, "Noch keine Daten für die Lastprognose")
+        if not self._ha_ok:  # kein Fehler: die Prognose läuft, nur ohne die Lücken aus HA
+            return ComponentStatus(
+                "load-forecast", True, "Verlauf aus HA nicht lesbar, Profil aus der Abrechnung."
+            )
         issued = self._forecast.issued_at.astimezone(LOCAL_TZ)
         return ComponentStatus("load-forecast", True, f"Lastprognose von {issued:%H:%M} Uhr")
 

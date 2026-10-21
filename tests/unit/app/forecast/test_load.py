@@ -366,6 +366,16 @@ async def test_ha_failure_leaves_the_ledger_samples(
     assert samples == [LoadSample(at("2026-10-12T06:00:00+00:00"), 400.0, "ledger")]
 
 
+async def test_status_mentions_failed_ha_history(load_service_with_ha, ledger, respx_mock) -> None:
+    for day in workdays(3):
+        ingest(ledger, at_local(day, "10:00"), {"grid>house": 125})
+    respx_mock.post(URL).respond(500)
+    assert await load_service_with_ha.refresh() is not None  # die Prognose läuft weiter
+    status = load_service_with_ha.component_status()
+    assert status.ok  # keine Benachrichtigung: nur ein Hinweis im Status
+    assert status.message == "Verlauf aus HA nicht lesbar, Profil aus der Abrechnung."
+
+
 async def test_without_load_history_only_the_ledger_counts(load_service, ledger) -> None:
     ingest(ledger, "2026-10-12T06:00:00+00:00", {"grid>house": 100}, covered_s=100)
     ingest(ledger, "2026-10-12T06:15:00+00:00", {"grid>house": 100})
