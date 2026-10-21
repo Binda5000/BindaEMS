@@ -1403,6 +1403,11 @@ Regelbetrieb“). Bis Health eine Änderung zeigt, steht auf der Seite die gesen
   - „Kein Plan · lädt spätestens ab {HH:MM}“ ohne gültigen Plan für das Auto, mit der spätesten
     Startzeit aus Health.
 
+  Nennt die Absicht einen Abfahrtstag, der nicht heute ist (Plan 5b, etwa von der Automatik), steht
+  vor der Uhrzeit der Abfahrt Wochentag und Datum („Ziel 50 % bis Mo 23.11. 07:15“), und neben dem
+  Feld „Abfahrt“ steht „am Mo 23.11.“. Änderst du die Uhrzeit von Hand, gilt sie danach täglich (der
+  Hinweis verschwindet).
+
   Dazu, wenn es zutrifft: „Ladestand geschätzt“, „Ladestand unbekannt, gerechnet ab 0 %.“ (angenommen,
   nie „gemessen“) und „Ladelimit im Auto {x} % liegt unter dem Ziel.“ (ohne `charge_limit_sync`). Das
   Ziel ist das wirksame, bei einem Ladelimit darunter also das Limit. Abgesteckt oder in einem anderen
@@ -1445,7 +1450,8 @@ die Bedienelemente. Aufbau, Auslöser, Ersatzplan und die Sätze der Erklärung 
 
 Lädt der Plan Autos im Modus „Geplant“, nennt der Kopf je Auto die Zeile wie auf „Laden“ („Fertig um
 {HH:MM} · Ziel {soc} % bis {HH:MM}“ oder „… nicht erreichbar, voraussichtlich {x} %.“, dazu die Quelle
-des Ladestands), und das Diagramm „Autos“ zeigt je Auto eine Reihe mit seinem Namen: die geplante
+des Ladestands; liegt die Abfahrt nach morgen, mit Wochentag und Datum, etwa „bis Mo 23.11. 07:15“), und
+das Diagramm „Autos“ zeigt je Auto eine Reihe mit seinem Namen: die geplante
 Ladeleistung in kW (ohne Laden 0 kW).
 
 ### Statistik
@@ -4488,7 +4494,12 @@ Automatik ist ab Werk **aus**, und kein Aktor wird dafür live geschaltet.
 - **Einstellungen** (`learning.driving`): `return_reserve_pct` (20), `target_min_pct` (50),
   `target_max_pct` (90), `automation` (Schalter je Auto, ab Werk leer, also aus) und
   `presence_entities` (je Auto eine HA-Entität). Einträge für Autos, die `config.yaml` nicht kennt,
-  übergeht die app.
+  übergeht die app. **Änderungen wirken sofort:** Das Ziel jedes Wochentags rechnet die app bei jeder
+  Verwendung (Vorschlag, Automatik, Karte „Fahrverhalten“, Home Assistant) aus dem abgelegten
+  Verbrauch (P80) mit dem aktuellen Puffer und Ziel-SOC-Bereich neu, mit „(begrenzt)“ dazu. Jede
+  Änderung von `learning.driving` außer den Schaltern der Automatik startet außerdem gleich einen
+  neuen Lauf (etwa für eine geänderte Anwesenheit aus Home Assistant), nicht erst um 03:40 Uhr; läuft
+  schon einer, folgt der neue danach.
 - **Komponente `driving`** unter **System** → „Komponenten“: „Fahrverhalten aktuell“, „Noch keine
   Fahrdaten“ (normal, bis das erste Profil Tage hat; Status in Ordnung) oder „Fahrverhalten
   fehlgeschlagen: {Fehler}“ (Status nicht in Ordnung).
@@ -4542,8 +4553,11 @@ Schlüssel vorn.
   „So/Feiertag“.
 - **Unbekannt bleibt unbekannt:** Ohne Profil, ohne Fahrt in den nächsten acht Tagen (oder ohne
   Ziel) sind der Sensor „unbekannt“ und beide Attribute `null`; nie steht ein Ersatzwert da.
-  „Nächste Abfahrt“ ist „unbekannt“, solange Health keine Abfahrt nennt (etwa weil das Auto nicht in
-  „Geplant“ steht).
+  „Nächste Abfahrt“ ist „unbekannt“, solange Health keine Abfahrt nennt: wenn das Auto nicht in
+  „Geplant“ steht, aber auch, solange ein Auto in „Geplant“ nicht angesteckt ist, denn der core meldet
+  den Stand von „Geplant“ nur für ein Auto an einer Wallbox. Eine Abfahrt an einem Tag, die die
+  Automatik für ein Auto unterwegs setzt, siehst du in Home Assistant bis zum Anstecken nur als
+  „Vorschlag Abfahrt“.
 - **Schalten:** Nach einem Befehl veröffentlicht die app den Zustand des Schalters gleich neu. Das
   Einschalten prüft die Automatik sofort und beendet eine Pause (siehe oben). Wie für alle Befehle
   gilt höchstens ein Befehl je Sekunde und Entität (Abschnitt 7, „Bedienelemente und Befehle“).
@@ -4745,12 +4759,14 @@ nennt.
   dem Anstecken (Auslöser `vehicles`, unten). Autos in den anderen Modi bleiben wie bisher außerhalb.
 - **Erwartete Autos** (seit Plan 5b, Abschnitt „Fahrverhalten (Phase 5b)“): Ein Auto in „Geplant“,
   das Health als nicht angesteckt zeigt (`plugged` genau `false`), kommt in den Plan, wenn es eine
-  `default_wallbox` hat, ein Profil mit gelerntem Ladestand bei der Ankunft da ist und die
+  `default_wallbox` hat, die laut Health frei ist (kein anderes angestecktes Auto, kein Gast, kein
+  Vorgang mit unklarer Zuordnung), ein Profil mit gelerntem Ladestand bei der Ankunft da ist und die
   Anwesenheitsprognose für eine Viertelstunde vor seiner Abfahrt mindestens 50 % sagt. Seine
   Ladeleistung ist erst ab dieser erwarteten Ankunft (`arrival_at`) bis zur Abfahrt frei; Regel R2
   zählt die PV ebenfalls erst ab dann. Der Ladestand ist der gelernte Median der Ankunft des
   Wochentags (nie „angenommen“). **Der core bekommt für ein erwartetes Auto nichts:** `intent_plan`
-  lässt es weg, und der Ersatzplan, die Warnungen („Ziel-SOC unerreichbar“), „Fertig um“ in Home
+  lässt es weg, das Budget des Wächters (`budget_kw`) rechnet ohne seine Ladeleistung (eine Prognose
+  hebt die akzeptierte Monatsspitze nicht an), und der Ersatzplan, die Warnungen („Ziel-SOC unerreichbar“), „Fertig um“ in Home
   Assistant und die Zählung der geplanten Ladungen übergehen es. Steckt das Auto an, plant der Auslöser
   `vehicles` neu mit dem echten Ladestand; ändert sich die Menge der erwarteten Autos (Ankunft,
   Abfahrt, Ziel), löst das ebenfalls aus. Auf der Seite „Zeitplan“ steht es gestrichelt mit „{Name}

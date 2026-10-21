@@ -15,7 +15,14 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 from tests.ui_history import DAYS, FIRST_DAY, LAST_DAY
-from tests.ui_world import DEMO_PASSWORD, DEMO_TOTP_SECRET, T_DEMO, World, build_world
+from tests.ui_world import (
+    DEMO_AUTOMATION,
+    DEMO_PASSWORD,
+    DEMO_TOTP_SECRET,
+    T_DEMO,
+    World,
+    build_world,
+)
 
 from bindaems.app.charging.planned import PlannedSummary
 from bindaems.app.db.schema import assignment_log
@@ -322,6 +329,9 @@ async def test_demo_world_has_driving_behaviour(cfg, tmp_path) -> None:
             return client.get("/api/learning/driving").json()
 
         body = await asyncio.to_thread(fetch)
+        # Ruling T11: die Einstellungen der Welt teilen sich das Wörterbuch nicht mit der Konstante
+        automation = world.app.settings.current().settings.learning.driving.automation
+        assert automation == DEMO_AUTOMATION and automation is not DEMO_AUTOMATION
     finally:
         world.close()
     assert body["status"]["text"] == "Fahrverhalten berechnet am 09.10. 03:40."

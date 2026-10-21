@@ -790,7 +790,9 @@ async def _learning(app: AppRuntime) -> None:
     Sensoren aus HA sind gewählt, einer davon liefert dem Modell Werte."""
     settings = app.settings.current()
     # dieselbe Version schaltet die Automatik (``_driving``): Tesla an, e-Golf aus
-    driving = settings.settings.learning.driving.model_copy(update={"automation": DEMO_AUTOMATION})
+    driving = settings.settings.learning.driving.model_copy(
+        update={"automation": dict(DEMO_AUTOMATION)}
+    )
     learning = settings.settings.learning.model_copy(
         update={"ha_sensors": DEMO_SENSORS, "driving": driving}
     )
