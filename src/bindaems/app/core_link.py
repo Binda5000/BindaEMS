@@ -373,6 +373,8 @@ class LiveFeed:
         if self._live.connected:
             return
         self._live.connected = True
+        self._live.health = None  # gespeichertes Health stammt aus der Zeit vor dieser Verbindung
+        self._disconnects += 1  # eine Antwort, die vor der Verbindung gefragt wurde, gilt nicht
         self._since = self._clock.now()
         self._status.connected()
         self._live.publish({"type": "core", "data": {"connected": True}})

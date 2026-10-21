@@ -200,6 +200,23 @@ async def test_untrusted_health_sends_nothing(
     assert await sender.sync() == "sent"
 
 
+async def test_no_wait_line_when_core_already_has_the_plan(
+    sender: PlanSender, live: LiveState, fake_client: FakeCoreClient, planning: FakePlanning
+) -> None:
+    # K12: Hat der core den Plan schon, ist nichts zu übergeben; die Zeile „wartet“ wäre falsch
+    wanted = sender.wanted()
+    assert wanted is not None
+    live.health = {
+        **trusted_health(),
+        "intent": {**CORE_INTENT.model_dump(mode="json"), "plan": wanted.model_dump(mode="json")},
+        "intent_version": CORE_INTENT.version - 1,  # regelt noch nicht mit der Absicht
+    }
+    with capture_logs() as logs:
+        assert await sender.sync() == "current"
+    assert fake_client.sent == []
+    assert not [entry for entry in logs if "wartet" in entry["event"]]
+
+
 async def test_health_without_a_core_intent_sends_nothing(
     sender: PlanSender, live: LiveState, fake_client: FakeCoreClient
 ) -> None:

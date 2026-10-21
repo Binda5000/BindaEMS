@@ -17,6 +17,7 @@ from bindaems.app.planning.execution import (
 from bindaems.shared.plan import Plan
 
 PLAN_ID = 7
+CREATED_AT = "2026-10-16T10:01:00+00:00"
 
 
 def stored_plan() -> Plan:
@@ -33,14 +34,15 @@ def health(
     locked: tuple[str, ...] = (),
     effective: str = "live",
     plan_state: str = "valid",
+    created_at: str | None = CREATED_AT,
 ) -> dict[str, Any]:
     """Health des core, in der der Plan der Absicht ``plan_id`` heißt; ``plan_state`` ist sein
-    Stand beim core."""
-    held = (
-        None
-        if plan_id is None
-        else {"id": plan_id, "grid_charge_allowed": grid_charge, "valid_until": "…", "slots": []}
-    )
+    Stand beim core. ``created_at`` ``None`` lässt das Feld weg (ein älterer core)."""
+    held: dict[str, Any] | None = None
+    if plan_id is not None:
+        held = {"id": plan_id, "grid_charge_allowed": grid_charge, "valid_until": "…", "slots": []}
+        if created_at is not None:
+            held["created_at"] = created_at
     return {
         "mode": mode,
         "intent": {"version": 3, "control": control, "plan": held},
@@ -171,12 +173,38 @@ def test_execution_state_without_victron_is_not_live() -> None:
 
 
 def test_core_has_plan_is_what_the_sender_compares() -> None:
-    assert core_has_plan(health(), PLAN_ID, False)
-    assert not core_has_plan(health(), PLAN_ID, True)
-    assert not core_has_plan(health(), PLAN_ID + 1, False)
-    assert not core_has_plan(health(plan_id=None), PLAN_ID, False)
-    assert not core_has_plan(None, PLAN_ID, False)
-    assert not core_has_plan({"intent": None}, PLAN_ID, False)
+    plan = stored_plan()
+    assert core_has_plan(health(), plan, grid_charge_allowed=False)
+    assert not core_has_plan(health(), plan, grid_charge_allowed=True)
+    assert not core_has_plan(health(plan_id=PLAN_ID + 1), plan, grid_charge_allowed=False)
+    assert not core_has_plan(health(plan_id=None), plan, grid_charge_allowed=False)
+    assert not core_has_plan(None, plan, grid_charge_allowed=False)
+    assert not core_has_plan({"intent": None}, plan, grid_charge_allowed=False)
+
+
+def test_same_id_other_created_at_is_not_the_plan() -> None:
+    # Nach einer Wiederherstellung der Datenbank kann eine id wiederkehren
+    other = health(created_at="2026-10-16T09:01:00+00:00")
+    assert not core_has_plan(other, stored_plan(), grid_charge_allowed=False)
+
+
+@pytest.mark.parametrize("written", ["2026-10-16T10:01:00Z", "2026-10-16T12:01:00+02:00"])
+def test_created_at_is_compared_as_a_moment(written: str) -> None:
+    held = health(created_at=written)
+    assert core_has_plan(held, stored_plan(), grid_charge_allowed=False)
+
+
+def test_health_without_created_at_compares_id_and_grid_charge_only() -> None:
+    # Ein älterer core meldet kein created_at; während der Umstellung darf der Plan nicht endlos
+    # neu hinausgehen
+    older = health(created_at=None)
+    assert core_has_plan(older, stored_plan(), grid_charge_allowed=False)
+    assert not core_has_plan(older, stored_plan(), grid_charge_allowed=True)
+
+
+@pytest.mark.parametrize("written", ["gestern", 5, "2026-10-16T10:01:00"])
+def test_unreadable_created_at_is_not_the_plan(written: Any) -> None:
+    assert not core_has_plan(health(created_at=written), stored_plan(), grid_charge_allowed=False)
 
 
 def test_execution_texts() -> None:

@@ -12,9 +12,10 @@ darum stehen ``off`` und ``idle`` vor ``pending``.
 from __future__ import annotations
 
 from collections.abc import Mapping
+from datetime import datetime
 from typing import Any, Final, Literal
 
-from bindaems.shared.plan import Plan
+from bindaems.shared.plan import IntentPlan, Plan
 
 ExecutionState = Literal[
     "none", "unreachable", "pending", "off", "idle", "locked", "dry_run", "live"
@@ -43,16 +44,36 @@ def _intent(health: Mapping[str, Any] | None) -> Mapping[str, Any] | None:
 
 
 def core_has_plan(
-    health: Mapping[str, Any] | None, plan_id: int, grid_charge_allowed: bool
+    health: Mapping[str, Any] | None, plan: Plan | IntentPlan, *, grid_charge_allowed: bool
 ) -> bool:
-    """Ob der Plan der Absicht im Health des core dieselbe ``id`` und dasselbe
-    ``grid_charge_allowed`` trägt wie der gewollte (Präzisierung 11). Ohne Health ist es unbekannt
-    und gilt als nein."""
+    """Ob der Plan der Absicht im Health des core dieselbe ``id``, dasselbe ``grid_charge_allowed``
+    und dasselbe ``created_at`` trägt wie der gewollte (Präzisierung 11). Ohne Health ist es
+    unbekannt und gilt als nein.
+
+    ``created_at`` fängt eine ``id`` ab, die nach einer Wiederherstellung der Datenbank
+    wiederkehrt; es wird als Zeitpunkt verglichen. Meldet ein älterer core es nicht, vergleichen
+    nur ``id`` und ``grid_charge_allowed``, sonst ginge der Plan während der Umstellung endlos
+    neu hinaus."""
     intent = _intent(health)
     held = intent.get("plan") if intent is not None else None
-    if not isinstance(held, dict):
+    if plan.id is None or not isinstance(held, dict):
         return False
-    return (held.get("id"), held.get("grid_charge_allowed")) == (plan_id, grid_charge_allowed)
+    if (held.get("id"), held.get("grid_charge_allowed")) != (plan.id, grid_charge_allowed):
+        return False
+    created_at = held.get("created_at")
+    return created_at is None or _same_moment(created_at, plan.created_at)
+
+
+def _same_moment(written: Any, moment: datetime) -> bool:
+    """Ob ``written`` (ISO-Text aus dem Health) denselben Zeitpunkt wie ``moment`` nennt; was sich
+    nicht als Zeitpunkt mit Zone lesen lässt, ist nicht derselbe."""
+    if not isinstance(written, str):
+        return False
+    try:
+        parsed = datetime.fromisoformat(written)
+    except ValueError:
+        return False
+    return parsed.tzinfo is not None and parsed == moment
 
 
 def _core_plan_valid(health: Mapping[str, Any]) -> bool:
@@ -94,7 +115,7 @@ def execution_state(
         return "off"
     if health.get("mode") not in REGULATING_MODES:
         return "idle"
-    if plan.id is None or not core_has_plan(health, plan.id, grid_charge_allowed):
+    if not core_has_plan(health, plan, grid_charge_allowed=grid_charge_allowed):
         return "pending"
     if not _core_plan_valid(health):
         return "pending"

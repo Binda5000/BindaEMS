@@ -119,11 +119,13 @@ class PlanSender:
         health = self._live.health
         if health is None:
             return self._wait("Plan wartet auf Health des core", wanted.id)
+        # Hat der core den Plan schon, ist nichts zu übergeben; erst sonst zählt, ob er regelt
+        if core_has_plan(health, wanted, grid_charge_allowed=wanted.grid_charge_allowed):
+            self._waiting = None
+            return "current"
         if not health_trusted(health):
             return self._wait("Plan wartet, bis der core mit der Absicht regelt", wanted.id)
         self._waiting = None
-        if core_has_plan(health, wanted.id, wanted.grid_charge_allowed):
-            return "current"
         fields = {"plan": wanted.id, "grid_charge_allowed": wanted.grid_charge_allowed}
         try:
             result = await self._intents.apply(SetPlan(wanted), actor=ACTOR, source=SOURCE)

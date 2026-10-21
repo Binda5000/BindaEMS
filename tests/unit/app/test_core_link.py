@@ -247,6 +247,15 @@ async def test_disconnect_drops_the_health_of_the_old_connection() -> None:
     assert client.health_calls == 1
 
 
+async def test_connect_discards_health_from_before() -> None:
+    # K13: Health aus der Zeit vor der Verbindung gilt für den neuen core nicht
+    feed, live, _, _ = feed_env([])
+    live.health = TRUSTED
+    feed._connected()
+    assert live.connected and live.health is None
+    assert feed._disconnects == 1
+
+
 async def test_health_asked_before_a_disconnect_is_dropped() -> None:
     # Die Antwort kam noch vom alten core, sie gilt nach der Trennung nicht mehr
     feed, live, _, client = feed_env([[STATE_MSG]], health=[TRUSTED], health_interval_s=30.0)
