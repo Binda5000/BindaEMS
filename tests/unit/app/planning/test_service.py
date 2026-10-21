@@ -791,6 +791,24 @@ async def test_vehicle_change_requests_replan(service_with, live):
     assert calls[2].vehicles[0].target_soc_pct == 90.0
 
 
+async def test_support_threshold_change_requests_a_plan(service_with):
+    """Die Unterstützungsschwelle geht in den Plan ein: Ändert sie sich (anderer Wert der
+    Einstellungen), plant der Dienst mit dem Auslöser „settings“ neu, genau einmal."""
+    support = {"pct": 70.0}
+    calls: list[PlanInputs] = []
+    service = service_with(
+        solver=recording(calls), sleep=fast_sleep(), support_pct=lambda: support["pct"]
+    )
+    async with running(service):
+        await until(lambda: len(calls) == 1)
+        await asyncio.sleep(0.1)  # die Schleife kennt den Fingerabdruck
+        support["pct"] = 60.0
+        await until(lambda: len(calls) == 2)
+        await asyncio.sleep(0.2)  # keine weitere Anfrage
+    assert triggers(calls) == ["start", "settings"]
+    assert calls[1].support_soc_pct == 60.0
+
+
 async def test_untrusted_health_does_not_flap_the_vehicles_trigger(service_with, live):
     """Fällt Health kurz weg (Neustart des core), ist das keine Änderung der Autos."""
     live.health = planned_health(vehicle_health("tesla"), version=3)

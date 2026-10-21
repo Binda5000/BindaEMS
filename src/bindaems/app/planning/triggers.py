@@ -32,17 +32,19 @@ PEAK_RISE_KW: Final = 0.05
 class Fingerprint:
     """Stand der Eingangsdaten: letzter bekannter Preis-Slot und Zahl der ``primary``-Slots im
     Fenster, Ausgabezeit von PV- und Lastprognose, Stand der geplanten Autos
-    (``vehicles_fingerprint``)."""
+    (``vehicles_fingerprint``) und die wirksame Unterstützungsschwelle (%)."""
 
     last_price: datetime | None
     primary: int
     pv_issued: datetime | None
     load_issued: datetime | None
     vehicles: tuple[Any, ...] = ()
+    support_pct: float | None = None
 
 
 def changed(old: Fingerprint | None, new: Fingerprint) -> list[PlanTrigger]:
-    """Auslöser aus zwei Fingerabdrücken, in der Reihenfolge Preise, PV-, Lastprognose, Autos.
+    """Auslöser aus zwei Fingerabdrücken, in der Reihenfolge Preise, PV-, Lastprognose, Autos,
+    Einstellungen (geänderte Unterstützungsschwelle).
 
     Neue Preise heißt: ein anderer letzter Slot oder mehr ``primary``-Slots (Ersatzpreise
     ersetzt). Weniger ``primary``-Slots löst nicht aus, denn das Fenster wandert mit dem
@@ -60,6 +62,8 @@ def changed(old: Fingerprint | None, new: Fingerprint) -> list[PlanTrigger]:
         result.append("load_forecast")
     if new.vehicles != old.vehicles:
         result.append("vehicles")
+    if new.support_pct != old.support_pct:
+        result.append("settings")
     return result
 
 

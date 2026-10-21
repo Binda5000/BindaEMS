@@ -55,6 +55,12 @@ def test_changed_all_in_order_and_nothing():
     assert changed(new, new) == []
 
 
+def test_changed_support_threshold_is_a_settings_trigger():
+    old = Fingerprint(None, 0, None, None, support_pct=70.0)
+    assert changed(old, replace(old, support_pct=60.0)) == ["settings"]
+    assert changed(old, old) == []
+
+
 def test_more_primary_prices_are_new_prices_a_sliding_window_is_not():
     old = Fingerprint(at("2026-10-16T21:45:00+00:00"), 40, None, None)
     assert changed(old, replace(old, primary=44)) == ["prices"]  # Ersatzpreise ersetzt

@@ -340,6 +340,7 @@ class PlanningService:
             pv_issued=pv.issued_at if pv is not None else None,
             load_issued=load.issued_at if load is not None else None,
             vehicles=vehicles,
+            support_pct=self._support_pct(),
         )
         for trigger in changed(old, new):
             self.request(trigger)
