@@ -408,7 +408,7 @@
             "uid": "${DS_BINDAEMS}"
           },
           "refId": "D",
-          "query": "SELECT last(\"offset_sent_k\") FROM \"raw\".\"thermal\" WHERE $timeFilter GROUP BY time($__interval), \"id\" fill(previous)",
+          "query": "SELECT last(\"offset_sent_k\") FROM \"raw\".\"thermal\" WHERE $timeFilter GROUP BY time($__interval), \"id\" fill(null)",
           "rawQuery": true,
           "resultFormat": "time_series",
           "alias": "Versatz $tag_id"
@@ -419,7 +419,7 @@
             "uid": "${DS_BINDAEMS}"
           },
           "refId": "E",
-          "query": "SELECT mean(\"p_w\") FROM \"raw\".\"power\" WHERE \"source\" = 'thermal' AND $timeFilter GROUP BY time($__interval), \"id\" fill(null)",
+          "query": "SELECT mean(\"p_w\") FROM \"raw\".\"power\" WHERE \"source\" = 'thermal' AND \"phase\" = 'total' AND $timeFilter GROUP BY time($__interval), \"id\" fill(null)",
           "rawQuery": true,
           "resultFormat": "time_series",
           "alias": "Leistung $tag_id"

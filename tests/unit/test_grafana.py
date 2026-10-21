@@ -182,6 +182,13 @@ def test_the_rows_hold_the_expected_data() -> None:
         assert f'("{field}")' in climate, field
     assert 'FROM "raw"."thermal"' in climate
     assert "\"source\" = 'thermal'" in climate and '"p_w"' in climate  # Leistung
+    # Die Leistung der Klimaanlage steht je Phase und gesamt; gezeigt wird nur die Summe
+    (power,) = [q for q in by_row["Klimaanlage"] if "\"source\" = 'thermal'" in q]
+    assert "\"phase\" = 'total'" in power
+    # Der Versatz springt auf 0, wenn kein Paket kommt: Lücken bleiben Lücken statt den letzten
+    # Wert zu halten
+    (sent,) = [q for q in by_row["Klimaanlage"] if '"offset_sent_k"' in q]
+    assert "fill(null)" in sent and "fill(previous)" not in sent
     for kind in ("import_gross", "feed_in"):
         assert f"\"kind\" = '{kind}'" in joined["Preise"], kind
     assert 'FROM "long"."price"' in joined["Preise"]
