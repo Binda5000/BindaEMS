@@ -1586,19 +1586,22 @@ Demo-Zugänge: `admin`, `bedienen` (Bedienen), `gast` (Lesen) und `sicher` (Admi
       Nichts geht von selbst live: Die Automatik ist aus, bis du sie einschaltest. Die Schritte stehen im
       Betriebshandbuch, „Fahrverhalten (Phase 5b)“, „Fahrverhalten ausrollen (Plan 5b)“, und in
       `docs/verification/abnahme-phase-5b.md`:
-      1. **Datenbank sichern:** `/backup/vor-plan-5b.sqlite3`; die Migration `0014` legt `driving_profile` und
-         `driving_automation` an, eine ältere app startet danach nicht (Betriebshandbuch 4, „Rollback auf
-         einen Stand vor Plan 5b“).
-      2. **core und app gemeinsam aktualisieren**, Regelbetrieb vorher aus, danach erst wieder an, wenn
-         **System** beide mit demselben Stand zeigt (`cd /opt/bindaems && docker compose pull && docker compose up -d`).
-      3. **Anwesenheit eintragen:** **Einstellungen** → „Fahrverhalten“ → beim Tesla „Anwesenheit aus Home
+      1. **Regelbetrieb aus** (System → „Bedienung“) und warten, bis die Übergabe fertig ist; das **vor**
+         dem Stoppen der app, sonst ist der Schalter nicht erreichbar.
+      2. **Datenbank sichern:** `docker compose stop ems-app`, dann Kopie nach `/backup/vor-plan-5b.sqlite3`;
+         die Migration `0014` legt `driving_profile` und `driving_automation` an, eine ältere app startet
+         danach nicht (Betriebshandbuch 4, „Rollback auf einen Stand vor Plan 5b“).
+      3. **core und app gemeinsam ziehen** (`cd /opt/bindaems && docker compose pull && docker compose up -d`;
+         jede Absicht mit Eintrag unter `vehicles` trägt jetzt `departure_on`, ein core vor 5b liest sie nicht),
+         dann **Regelbetrieb an**, sobald **System** beide mit demselben Stand zeigt.
+      4. **Anwesenheit eintragen:** **Einstellungen** → „Fahrverhalten“ → beim Tesla „Anwesenheit aus Home
          Assistant“ den `device_tracker.…` des Tesla (er ist in Home Assistant vorhanden; der Betreiber hat
-         es am 20.10.2026 bestätigt). Leer gelten Tessie oder `home_entity`.
-      4. **Prüfen:** Komponente `driving` auf **System** („Fahrverhalten aktuell“ oder „Noch keine
+         es am 20.10.2026 bestätigt). Der Eintrag wirkt nur mit `influxdb.ha_database`, sonst warnt die app und nimmt die nächste Quelle. Leer gelten Tessie oder `home_entity`.
+      5. **Prüfen:** Komponente `driving` auf **System** („Fahrverhalten aktuell“ oder „Noch keine
          Fahrdaten“), der erste Nachtlauf um 03:40 Uhr oder als Admin „Jetzt neu berechnen“ auf **Prognosen**.
-      5. **Automatik bewusst einschalten**, je Auto erst, wenn die Vorschläge mindestens die Konfidenz
+      6. **Automatik bewusst einschalten**, je Auto erst, wenn die Vorschläge mindestens die Konfidenz
          „mittel“ haben und du sie für richtig hältst.
-      6. **Abnahme 5b:** 28 Tage ab dem Ausrollen (Checkliste oben): Vorschläge mit Konfidenz,
+      7. **Abnahme 5b:** 28 Tage ab dem Ausrollen (Checkliste oben): Vorschläge mit Konfidenz,
          Trefferquoten je mindestens 80 % bei mindestens 10 bewerteten Tagen, keine Zeile „geändert“ durch
          die Automatik, ein erwartetes Auto im Zeitplan, beim Anstecken ersetzt (einmal beobachtet).
   - Teil 2 schreibt auf die Geräte: nicht während der 7 Tage der Abnahme Phase 1 und ihres

@@ -18,7 +18,7 @@ Diese Checkliste füllst du an der Anlage aus. Kopiere sie dafür nach
 `docs/verification/JJJJ-MM-TT-abnahme-phase-5b.md`, trage die Ergebnisse ein und checke sie ein.
 Voraussetzung: Plan 5b ist ausgerollt, gemeinsam mit 3d, 4b, 5a und 6a und damit nach der Abnahme der
 Phase 3 (Betriebshandbuch, Abschnitt „Fahrverhalten (Phase 5b)“, „Fahrverhalten ausrollen (Plan 5b)“).
-Die 28 Tage beginnen mit dem Ausrollen. **Plan 5b schaltet nichts von selbst:** Die Automatik ist ab
+Die 28 Tage beginnen mit dem Ausrollen. **Nichts geht von selbst live:** Die Automatik ist ab
 Werk aus, erwartete Autos ändern nur den Plan, und gelernte Werte erreichen die Safety-Schicht nie
 (Spec 10.5).
 
@@ -76,9 +76,12 @@ Für **jedes Auto mit Daten** erscheinen Vorschläge mit Konfidenz an drei Stell
 - **Prognosen:** je Wochentag „Abfahrt“, „Vorschlag Ziel“ und „Konfidenz“ („hoch“, „mittel“,
   „niedrig“); ein Wochentag ohne Fahrt zeigt „keine Fahrt erwartet“.
 - **Laden:** auf der Fahrzeugkarte „Vorschlag: {Tag} {HH:MM} · {x} % (Konfidenz {k})“ mit der Taste
-  „Übernehmen“. Ohne Vorschlag steht dort „Kein Vorschlag (zu wenig Daten).“; das gilt nur für ein Auto
-  ohne brauchbare Tage (ein Auto mit Daten, aber ohne erwartete Fahrt in der nächsten Woche zeigt es
-  auch, das ist kein Befund).
+  „Übernehmen“. Ohne `next_trip` steht dort „Kein Vorschlag (zu wenig Daten).“. Das gilt auch für ein
+  Auto mit Daten, das in den nächsten acht Tagen keine Fahrt erwartet (etwa weil der Fahrtanteil seiner
+  Wochentage unter 50 % liegt). Für dieses Auto ist Kriterium 1 **nicht** weicher: Es braucht dann die
+  Karte „Fahrverhalten“ auf „Prognosen“ mit der Konfidenz je Wochentag (Zeilen mit Fahrt) und die
+  Sensoren in Home Assistant, soweit sie einen Vorschlag haben; trage in der Tabelle ein, wo es fehlt,
+  und warum.
 - **Home Assistant:** die Sensoren „Vorschlag Abfahrt“ und „Vorschlag Ziel-SOC“ mit den Attributen
   `confidence` („hoch“, „mittel“, „niedrig“) und `basis`.
 
@@ -124,8 +127,20 @@ Prüfschritte:
 2. Für jedes Auto mit `departure_n` und `target_n` je mindestens 10 (bewertete Tage) müssen
    `departure_hit_pct` und `target_hit_pct` je mindestens **80** sein. Ein Auto mit weniger als 10
    bewerteten Tagen zählt nicht zum Kriterium; trage es mit seiner Zahl der Tage ein.
-3. Liegt eine Quote darunter, schau dir die verfehlten Tage an (Seite „Prognosen“, Zeile des
-   Wochentags; die tatsächlichen Abfahrten in der Karte „Fahrverhalten“) und notiere die Ursache (etwa
+3. Liegt eine Quote darunter, schau dir die verfehlten Tage an. Die Karte „Fahrverhalten“ zeigt keine
+   einzelnen Abfahrten, und die Trefferquote liegt nur im Speicher der app. Die tatsächlichen Abfahrten
+   liest du aus zwei Quellen: Das Ende der Ansteckvorgänge steht in der Tabelle `charging_session` der
+   app (nur lesend; die Zeiten sind UTC, Ortszeit ist eine bzw. zwei Stunden mehr):
+
+   ```bash
+   cd /opt/bindaems
+   docker compose exec ems-app python -c "import sqlite3; db = sqlite3.connect('file:/data/bindaems.sqlite3?mode=ro', uri=True); [print(r) for r in db.execute(\"select vehicle, start, end from charging_session where vehicle = 'tesla' order by end desc limit 60\")]"
+   ```
+
+   (`'tesla'` durch den Schlüssel des Autos ersetzen.) Das ist die Abfahrt, wenn das Auto beim Losfahren
+   abgesteckt wurde. Die genaue Abfahrt (Wechsel „zu Hause“ → „weg“) steht im Verlauf der Anwesenheit
+   des Autos in Home Assistant (Verlauf der Entität `device_tracker.…`, bzw. `home_entity`). Vergleiche
+   sie mit „Abfahrt“ (P20) und „Konfidenz“ des Wochentags auf „Prognosen“ und notiere die Ursache (etwa
    ein geänderter Arbeitsweg, Urlaub, ein Auto, das nur selten fährt). Das Kriterium ist dann nicht
    erfüllt; die Ursache entscheidet, ob du die Parameter (Puffer, Bereich) änderst und die 28 Tage neu
    beginnst.
@@ -151,7 +166,9 @@ möglich, die Automatik bleibt aber unabgenommen.
 
 Die Automatik setzt Ziel und Abfahrt nur, wenn **keine geplante Ladung des Autos läuft** (Zustand
 `waiting`: „Automatik wartet: Eine geplante Ladung läuft bis {Tag} {HH:MM}.“). Nur in den ersten 10 min
-einer Zeile übernimmt die Zeile die Werte der Automatik, statt als „geändert“ zu enden. Eine Änderung
+einer Zeile übernimmt die Zeile die Werte der Automatik, statt als „geändert“ zu enden. **Das ist
+erlaubt** (Entscheidung 8 des Plans): Eine Änderung der Automatik in den ersten 10 min einer Zeile zählt
+weder als „geändert“ noch als Änderung während der Ladung, die Zeile übernimmt die Werte. Eine Änderung
 von Hand pausiert die Automatik bis zur gesetzten Abfahrt (`paused`).
 
 Prüfschritte:
@@ -166,8 +183,8 @@ Prüfschritte:
    docker compose exec ems-app python -c "import sqlite3; db = sqlite3.connect('file:/data/bindaems.sqlite3?mode=ro', uri=True); [print(r) for r in db.execute(\"select ts, action, target, details from audit_log where actor = 'Automatik' order by ts\")]"
    ```
 
-2. Die geplanten Ladungen mit dem Ergebnis `changed` (Spalte „Vor der Abfahrt geändert oder verlassen“
-   der Karte „Geplantes Laden“) lesen, nur lesend:
+2. Die geplanten Ladungen mit dem Ergebnis `changed` (die Zeile „Vor der Abfahrt geändert oder
+   verlassen: {n}“ der Karte „Geplantes Laden“ zählt sie) lesen, nur lesend:
 
    ```bash
    docker compose exec ems-app python -c "import sqlite3; db = sqlite3.connect('file:/data/bindaems.sqlite3?mode=ro', uri=True); [print(r) for r in db.execute(\"select vehicle, started_at, departure_at, target_soc_pct, outcome from planned_charge where outcome = 'changed' order by started_at\")]"
@@ -178,8 +195,8 @@ Prüfschritte:
    sein:** Eine Zeile „geändert“ ist nur durch deine Änderung von Hand erlaubt (dann steht sie ohne
    Eintrag der Automatik und mit einem Eintrag von dir im Protokoll).
 4. Kein Eintrag der Automatik liegt während einer laufenden geplanten Ladung des Autos: Zwischen
-   `started_at` und der Abfahrt (offene Zeile) hat die Automatik außer in den ersten 10 min der Zeile
-   nichts geändert. Die Zustände `waiting` und `paused` während der Ladung auf der Fahrzeugkarte
+   `started_at` und der Abfahrt (offene Zeile) hat die Automatik **außer in den ersten 10 min der Zeile
+   (erlaubt, siehe oben)** nichts geändert. Die Zustände `waiting` und `paused` während der Ladung auf der Fahrzeugkarte
    bestätigen es.
 
 | Auto | Automatik an seit | Einträge „Automatik“ (Zahl) | Zeilen `changed` seit dem Einschalten | davon durch die Automatik | Änderungen während einer laufenden Ladung |

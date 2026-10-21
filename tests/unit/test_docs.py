@@ -529,6 +529,21 @@ def test_docs_name_driving_endpoints_entities_and_component() -> None:
     ):
         assert criterion in text, criterion
     assert "abnahme-phase-5b.md" in Path("docs/verification/README.md").read_text("utf-8")
+    assert "Nichts geht von selbst live" in text  # Entscheidung 17
+    assert "nicht auf `main`" in Path("docs/uebergabe.md").read_text("utf-8")
+    # Reihenfolge des Ausrollens: Regelbetrieb aus, bevor ems-app stoppt (sonst ist der Schalter
+    # nicht erreichbar), dann sichern, dann core und app gemeinsam ziehen, dann wieder an
+    steps = [
+        rollout.index(marker)
+        for marker in (
+            "Regelbetrieb aus",
+            "docker compose stop ems-app",
+            "docker compose pull && docker compose up -d",
+            "Regelbetrieb an",
+        )
+    ]
+    assert steps == sorted(steps), steps
+    assert "influxdb.ha_database" in rollout
     # Spec: „Stand Plan 5b“ in jedem Abschnitt, in dem 5b etwas ändert
     spec = Path("docs/superpowers/specs/2026-10-08-bindaems-design.md").read_text("utf-8")
     for number in ("5.3", "7.5", "7.6", "9.3", "10.4", "11.3", "12", "13", "18"):

@@ -226,14 +226,38 @@ Minutenmittel in `long` und lassen sich in Grafana mit der Retention Policy `lon
 - **Update mit Plan 5b (Fahrverhalten):** Plan 5b ändert core und app; beide rollen gemeinsam aus, mit
   ausgeschaltetem Regelbetrieb während des Wechsels, zusammen mit 3d, 4b, 5a und 6a. Die Schritte
   stehen im Abschnitt „Fahrverhalten (Phase 5b)“, „Fahrverhalten ausrollen (Plan 5b)“.
-- **Rollback auf einen Stand vor Plan 5b:**
-  - Die Migration `0014` der app ist beim Start gelaufen; eine ältere app kennt sie nicht und startet
-    mit dieser Datenbank nicht. Wie beim Rollback vor Plan 5a gibt es zwei Wege: die Datenbank mit
-    `command.downgrade(config, "0013")` auf den Stand `0013` zurückführen (noch mit dem Image von Plan
-    5b; der Befehl steht dort, mit `0013` statt `0012`) oder die Kopie `/backup/vor-plan-5b.sqlite3`
-    einspielen (Wiederherstellen wie in Abschnitt 9). Das Zurückführen entfernt die Tabellen
-    `driving_profile` und `driving_automation` und den Abschnitt `learning.driving` der Einstellungen
-    (Puffer, Bereich, Automatik, Entitäten); alles andere bleibt.
+- **Rollback auf einen Stand vor Plan 5b:** Die Migration `0014` der app ist beim Start gelaufen; eine
+  ältere app kennt sie nicht und startet mit dieser Datenbank nicht. Core und app gehen gemeinsam
+  zurück, auf dasselbe Tag, mit **Regelbetrieb aus** (System → „Bedienung“) vor dem Wechsel und erst
+  danach wieder an. Es gibt zwei Wege für die Datenbank:
+  - **Datenbank zurückführen (empfohlen, die übrigen Daten bleiben):** Noch mit dem Image von Plan 5b,
+    also bevor du das Tag änderst, setzt du die Datenbank auf den Stand `0013`:
+
+    ```bash
+    cd /opt/bindaems
+    docker compose stop ems-app
+    docker compose run --rm --no-deps --entrypoint python ems-app -c '
+    from pathlib import Path
+    from alembic import command
+    from alembic.config import Config
+    from bindaems.app.db.engine import MIGRATIONS_DIR, open_database
+    engine = open_database(Path("/data/bindaems.sqlite3"))
+    config = Config()
+    config.set_main_option("script_location", str(MIGRATIONS_DIR))
+    with engine.begin() as connection:
+        config.attributes["connection"] = connection
+        command.downgrade(config, "0013")
+    engine.dispose()
+    print("Datenbank auf Stand 0013")'
+    ```
+
+    Danach in `.env` `BINDAEMS_VERSION=<tag>` setzen und `docker compose up -d` (core und app). Verloren
+    gehen nur die Daten von Plan 5b: die Profile (`driving_profile`), der Stand der Automatik
+    (`driving_automation`) und der Abschnitt `learning.driving` der Einstellungen (Puffer, Bereich,
+    Automatik, Entitäten); alles andere bleibt.
+  - **Kopie vor dem Ausrollen einspielen** (`/backup/vor-plan-5b.sqlite3`, Wiederherstellen wie in
+    Abschnitt 9): Das setzt die **ganze** Datenbank der app auf den Stand vor dem Ausrollen zurück, mit
+    den Folgen wie beim Rollback vor Plan 5a. Diesen Weg nimmst du nur, wenn das Zurückführen scheitert.
   - Ein core vor Plan 5b liest die Absicht eines core ab 5b nicht, sobald sie einen Eintrag unter
     `vehicles` hat (jeder trägt jetzt `departure_on`; die Modelle verbieten unbekannte Felder). Er
     startet dann ohne Absicht mit dem Alarm `intent.file`, wie beim Rollback vor Plan 4b. Setze die
@@ -4556,29 +4580,36 @@ damit erst nach der Abnahme der Phase 3; bis dahin ziehst du keine Images (`dock
 aus, bis du sie einschaltest, erwartete Autos ändern nur den Plan, und gelernte Werte erreichen die
 Safety-Schicht nie (Spec 10.5).
 
-1. **Datenbank sichern:** `docker compose stop ems-app`, dann
+1. **Regelbetrieb aus:** im UI unter **System** → „Bedienung“ oder in Home Assistant. Der core übergibt
+   die Aktoren und geht nach OBSERVE (Abschnitt 13); warte, bis die Übergabe fertig ist. Das muss
+   **vor** dem Stoppen der app geschehen, denn ohne app erreichst du den Schalter nicht. Der core hat
+   sich für `departure_on` geändert: Jede Absicht mit einem Eintrag unter `vehicles` trägt jetzt dieses
+   Feld, und ein core vor 5b liest sie nicht. Core und app müssen deshalb gemeinsam wechseln.
+2. **Datenbank sichern:** `docker compose stop ems-app`, dann
    `docker compose run --rm --no-deps --entrypoint sh ems-app -c 'cp /data/bindaems.sqlite3 /backup/vor-plan-5b.sqlite3'`.
    Die Migration `0014` legt `driving_profile` und `driving_automation` an; eine ältere app startet
    danach nicht (Abschnitt 4, „Rollback auf einen Stand vor Plan 5b“).
-2. **core und app gemeinsam aktualisieren, mit Regelbetrieb aus:** Der core hat sich für
-   `departure_on` geändert, und ein core vor 5b liest eine Absicht mit Abfahrtstag nicht. Schalte den
-   Regelbetrieb aus, ziehe beide Images (`cd /opt/bindaems && docker compose pull && docker compose up -d`)
-   und schalte ihn erst wieder ein, wenn **System** beide mit demselben Stand zeigt. Wo 3d, 4b, 5a und
-   6a im selben Zug ausgerollt werden, ist das derselbe Pull.
-3. **Anwesenheit eintragen:** Unter **Einstellungen** → „Fahrverhalten“ trägst du beim Tesla unter
-   „Anwesenheit aus Home Assistant“ den `device_tracker.…` ein, den Home Assistant für ihn hat. Die
-   HA-Datenbank reicht weiter zurück als Tessie, die Vorschläge stehen so sofort auf breiterer
-   Grundlage. Leer lässt die app Tessie oder `home_entity` gelten (Abschnitt „Ablauf und Komponente“).
-   Puffer und Ziel-SOC-Bereich lässt du zunächst bei den Standardwerten.
-4. **Prüfen:** Auf **System** → „Komponenten“ meldet die Komponente `driving` nach dem Start
+3. **core und app gemeinsam ziehen:** `cd /opt/bindaems && docker compose pull && docker compose up -d`
+   (dieselben Image-Tags). Wo 3d, 4b, 5a und 6a im selben Zug ausgerollt werden, ist das derselbe Pull.
+   Die Migration `0014` läuft beim Start der app von selbst und ändert keine vorhandene Tabelle.
+4. **Regelbetrieb an:** wieder unter **System** → „Bedienung“, erst wenn **System** core und app mit
+   demselben Stand zeigt.
+5. **Anwesenheit eintragen:** Unter **Einstellungen** → „Fahrverhalten“ trägst du beim Tesla unter
+   „Anwesenheit aus Home Assistant“ den `device_tracker.…` ein, den Home Assistant für ihn hat. Der
+   Eintrag wirkt **nur mit `influxdb.ha_database`** in der `config.yaml`; ohne sie schreibt die app eine
+   Warnung („Die Anwesenheit aus Home Assistant braucht eine HA-Datenbank. Die nächste Quelle gilt.“) und
+   nimmt die nächste Quelle. Die HA-Datenbank reicht meist weiter zurück als Tessie, die Vorschläge stehen
+   dann früher auf breiterer Grundlage. Leer lässt die app Tessie oder `home_entity` gelten (Abschnitt
+   „Ablauf und Komponente“). Puffer und Ziel-SOC-Bereich lässt du zunächst bei den Standardwerten.
+6. **Prüfen:** Auf **System** → „Komponenten“ meldet die Komponente `driving` nach dem Start
    „Fahrverhalten aktuell“ oder „Noch keine Fahrdaten“; der erste Nachtlauf ist um 03:40 Uhr. Willst du
    nicht warten, drückst du als Admin auf **Prognosen** → „Jetzt neu berechnen“. Die Karte
    „Fahrverhalten“ zeigt je Auto die Quelle, die Tage und die Konfidenz.
-5. **Automatik bewusst einschalten:** Je Auto erst, wenn die Vorschläge auf „Prognosen“ mindestens die
+7. **Automatik bewusst einschalten:** Je Auto erst, wenn die Vorschläge auf „Prognosen“ mindestens die
    Konfidenz „mittel“ haben und du sie für richtig hältst: **Laden** → Fahrzeugkarte → „Ziel und Abfahrt
    automatisch“ (oder in Home Assistant „Automatik Ziel und Abfahrt“). Bis dahin setzt nur du Ziel und
    Abfahrt. Von Hand geänderte Werte gehen immer vor (Pause der Automatik, oben).
-6. **Abnahme:** 28 Tage ab dem Ausrollen, Checkliste `docs/verification/abnahme-phase-5b.md`.
+8. **Abnahme:** 28 Tage ab dem Ausrollen, Checkliste `docs/verification/abnahme-phase-5b.md`.
 
 ### Abnahme
 
