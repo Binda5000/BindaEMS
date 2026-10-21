@@ -89,16 +89,24 @@ def _stays(history: VehicleHistory) -> tuple[list[Stay], datetime | None]:
     return _merge(stays), known
 
 
-def _stay_at(stays: list[Stay], moment: datetime) -> Stay | None:
+def _stay_at(stays: list[Stay], moment: datetime, *, closed: bool = False) -> Stay | None:
+    """Der Aufenthalt, der ``moment`` enthält; mit ``closed`` zählt auch sein Ende dazu."""
     index = bisect_right(stays, (moment, _NEVER)) - 1
-    if index >= 0 and stays[index][0] <= moment < stays[index][1]:
+    if (
+        index >= 0
+        and stays[index][0] <= moment
+        and (moment <= stays[index][1] if closed else moment < stays[index][1])
+    ):
         return stays[index]
     return None
 
 
 def _night_stay(stays: list[Stay], day: date) -> Stay | None:
-    """Der Aufenthalt, der den Anker von ``day`` enthält: 03:00, sonst 00:00."""
-    return _stay_at(stays, _local(day, time(3))) or _stay_at(stays, _local(day, time(0)))
+    """Der Aufenthalt, der den Anker von ``day`` enthält: 03:00, sonst 00:00. Am Rand zählt eine
+    Abfahrt genau um 00:00:00 mit (das Ende ist eingeschlossen)."""
+    return _stay_at(stays, _local(day, time(3))) or _stay_at(
+        stays, _local(day, time(0)), closed=True
+    )
 
 
 def _soc_between(

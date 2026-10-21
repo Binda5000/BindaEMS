@@ -138,6 +138,15 @@ def test_departure_after_midnight_belongs_to_new_day() -> None:
     assert tue.consumption_pp == 14.0
 
 
+def test_departure_at_midnight_is_kept() -> None:
+    hist = history(pt(MON, "18:00", True), pt(TUE, "00:00", False), pt(TUE, "06:00", True))
+    tue = record(hist, TUE)
+    assert not tue.away
+    assert tue.departure == at(TUE, "00:00")
+    assert tue.arrival == at(TUE, "06:00")
+    assert record(hist, MON).departure is None  # die Abfahrt gehört dem neuen Tag
+
+
 def test_arrival_before_midnight_stay_through_midnight() -> None:
     hist = history(
         pt(MON, "07:00", False),
