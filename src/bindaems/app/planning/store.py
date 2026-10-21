@@ -10,12 +10,16 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 from typing import Any, Final
 
+import structlog
+from pydantic import ValidationError
 from sqlalchemy import Engine, delete, insert, select, update
 
 from bindaems.app.db.schema import plan_inputs_table, plan_table
 from bindaems.app.planning.inputs import PlanInputs
 from bindaems.shared.plan import PLAN_VALID, Plan
 from bindaems.shared.timeutil import ensure_utc
+
+log = structlog.get_logger(__name__)
 
 KEEP_PLANS: Final = timedelta(days=30)
 KEEP_INPUTS: Final = timedelta(days=7)
@@ -25,6 +29,22 @@ _REASON_LENGTH: Final = 200
 
 def _plan_of(row_id: int, trimmed: bool, data: dict[str, Any]) -> Plan:
     return Plan.model_validate({**data, "id": row_id, "trimmed": trimmed})
+
+
+def _readable(row_id: int, trimmed: bool, data: Any) -> Plan | None:
+    """Der Plan der Zeile; ``None`` mit Warnung (``code=plan_row_unreadable``), wenn sich ``data``
+    nicht als Plan lesen lässt (etwa nach einer Änderung des Formats). Eine kaputte Zeile soll
+    weder das Aufräumen noch das Laden der übrigen Pläne blockieren."""
+    try:
+        return _plan_of(row_id, trimmed, data)
+    except (ValidationError, TypeError) as exc:
+        log.warning(
+            "Plan-Zeile nicht lesbar",
+            code="plan_row_unreadable",
+            plan_id=row_id,
+            error=str(exc).splitlines()[0],
+        )
+        return None
 
 
 class PlanStore:
@@ -62,21 +82,24 @@ class PlanStore:
         return plan.model_copy(update={"id": plan_id})
 
     def latest(self) -> Plan | None:
-        """Der zuletzt erzeugte Plan, ``None`` ohne Pläne."""
-        query = (
-            select(plan_table.c.id, plan_table.c.trimmed, plan_table.c.data)
-            .order_by(plan_table.c.created_at.desc(), plan_table.c.id.desc())
-            .limit(1)
+        """Der zuletzt erzeugte lesbare Plan, ``None`` ohne Pläne; eine kaputte Zeile wird
+        übersprungen (``code=plan_row_unreadable``)."""
+        query = select(plan_table.c.id, plan_table.c.trimmed, plan_table.c.data).order_by(
+            plan_table.c.created_at.desc(), plan_table.c.id.desc()
         )
         with self._engine.connect() as conn:
-            row = conn.execute(query).first()
-        return None if row is None else _plan_of(row.id, row.trimmed, row.data)
+            for row in conn.execute(query):
+                plan = _readable(row.id, row.trimmed, row.data)
+                if plan is not None:
+                    return plan
+        return None
 
     def plans_between(self, start: datetime, end: datetime) -> list[Plan]:
         """Pläne mit ``created_at`` in ``[start − PLAN_VALID, end)``, älteste zuerst.
 
         Das sind alle Pläne, die für einen Slot im Fenster ``[start, end)`` gegolten haben können
         (Plan 3c, Präzisierung 13); gekürzte Pläne gehören dazu, sie behalten ihre bindenden Slots.
+        Kaputte Zeilen fehlen (``code=plan_row_unreadable``).
         """
         query = (
             select(plan_table.c.id, plan_table.c.trimmed, plan_table.c.data)
@@ -86,7 +109,8 @@ class PlanStore:
         )
         with self._engine.connect() as conn:
             rows = conn.execute(query).all()
-        return [_plan_of(row.id, row.trimmed, row.data) for row in rows]
+        plans = (_readable(row.id, row.trimmed, row.data) for row in rows)
+        return [plan for plan in plans if plan is not None]
 
     def inputs_of(self, plan_id: int) -> PlanInputs | None:
         """Eingangsdaten des Plans; ``None``, wenn sie fehlen oder schon gelöscht sind."""
@@ -96,7 +120,9 @@ class PlanStore:
         return None if data is None else PlanInputs.model_validate(data)
 
     def cleanup(self, now: datetime) -> tuple[int, int]:
-        """Räumt auf; liefert die Zahl der gelöschten und der gekürzten Pläne."""
+        """Räumt auf; liefert die Zahl der gelöschten und der gekürzten Pläne. Eine Zeile, die
+        sich nicht lesen lässt, bleibt stehen (``code=plan_row_unreadable``), statt die Transaktion
+        zurückzurollen."""
         moment = ensure_utc(now)
         with self._engine.begin() as conn:
             expired = list(
@@ -115,8 +141,11 @@ class PlanStore:
                     plan_table.c.trimmed.is_(False),
                 )
             ).all()
+            trimmed_count = 0
             for row in aged:
-                plan = _plan_of(row.id, False, row.data)
+                plan = _readable(row.id, False, row.data)
+                if plan is None:
+                    continue
                 kept = [slot for slot in plan.slots if slot.start < plan.valid_until]
                 trimmed = plan.model_copy(update={"slots": kept or plan.slots[:1], "trimmed": True})
                 conn.execute(
@@ -125,4 +154,5 @@ class PlanStore:
                     .values(trimmed=True, data=trimmed.model_dump(mode="json", exclude={"id"}))
                 )
                 conn.execute(delete(plan_inputs_table).where(plan_inputs_table.c.plan_id == row.id))
-        return len(expired), len(aged)
+                trimmed_count += 1
+        return len(expired), trimmed_count
