@@ -33,6 +33,7 @@ from datetime import datetime, timedelta
 from typing import Final, Literal
 
 from bindaems.core.control.actuator import at_most, matches
+from bindaems.core.control.last_values import Key
 from bindaems.core.safety.limits import HardLimits
 from bindaems.shared.control import Command, CommandKind, CommandValue
 from bindaems.shared.domain import Alarm, Severity
@@ -45,7 +46,6 @@ _GRID_OUTAGE: Final = "grid_outage"  # Grund des Stopps bei Netzausfall
 _STOP_FAMILIES: Final = frozenset({"evcs", "tesla"})  # sie stoppen das Laden bei Netzausfall
 _WATCHDOG_TAKES_OVER: Final = " Der Watchdog am Cerbo übernimmt."
 
-_Key = tuple[str, CommandKind]  # Aktor und Art
 _Wanted = dict[CommandKind, tuple[CommandValue, tuple[str, ...]]]  # Sicherwert und Grund je Art
 
 
@@ -73,7 +73,7 @@ def safe_values(limits: HardLimits, target: SafeTarget) -> dict[CommandKind, Com
 
 
 def safe_values_reached(
-    limits: HardLimits, target: SafeTarget, present: Mapping[_Key, CommandValue]
+    limits: HardLimits, target: SafeTarget, present: Mapping[Key, CommandValue]
 ) -> bool:
     """Hat das Gerät alle Sicherwerte des Ziels? Jede Art muss per ``matches`` passen.
 
@@ -130,12 +130,12 @@ class SafeStateKeeper:
 
     def __init__(self, limits: HardLimits) -> None:
         self._limits = limits
-        self._attempts: dict[_Key, _Attempts] = {}
+        self._attempts: dict[Key, _Attempts] = {}
         self._failed: dict[str, tuple[CommandKind, ...]] = {}  # je Aktor, in Reihenfolge der Ziele
         self._failed_since: dict[str, datetime] = {}  # erste gescheiterte Art im Vorfall
 
     @property
-    def failed(self) -> frozenset[_Key]:
+    def failed(self) -> frozenset[Key]:
         """Die gescheiterten Arten nach dem letzten ``commands``, als (Aktor, Art).
 
         Eine Art scheitert, wenn ihr Ziel wirksam live ist, die 3 Versuche verbraucht sind, der
@@ -152,8 +152,8 @@ class SafeStateKeeper:
         self,
         now: datetime,
         targets: Sequence[SafeTarget],
-        present: Mapping[_Key, CommandValue],
-        pending: AbstractSet[_Key],
+        present: Mapping[Key, CommandValue],
+        pending: AbstractSet[Key],
         live: AbstractSet[str],
     ) -> list[Command]:
         """Die dringenden Befehle für die Sicherwerte der ``targets`` zum Zeitpunkt ``now``.
@@ -237,7 +237,7 @@ def _wanted(limits: HardLimits, target: SafeTarget) -> _Wanted:
     return wanted
 
 
-def _reached(present: Mapping[_Key, CommandValue], key: _Key, value: CommandValue) -> bool:
+def _reached(present: Mapping[Key, CommandValue], key: Key, value: CommandValue) -> bool:
     """Hat das Gerät den Sicherwert? Fehlt der zurückgelesene Wert, ist er unbekannt.
 
     Es gilt ``matches``. Beim Strom genügt ein Wert bis zum Sicherwert, mit derselben Toleranz
@@ -252,6 +252,6 @@ def _reached(present: Mapping[_Key, CommandValue], key: _Key, value: CommandValu
     return matches(key[1], value, present[key])
 
 
-def _command(key: _Key, value: CommandValue, reasons: tuple[str, ...]) -> Command:
+def _command(key: Key, value: CommandValue, reasons: tuple[str, ...]) -> Command:
     """Ein dringender Befehl für den Sicherwert."""
     return Command(key[0], key[1], value, urgent=True, reasons=reasons)

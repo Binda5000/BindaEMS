@@ -8,9 +8,10 @@ Die Autos sind die Fahrzeuge der Konfiguration und je Wallbox ein Gast (``fleet`
 zählt die Ansteckvorgänge je Wallbox (Präzisierung 3) samt dem Beginn des laufenden auf der Wanduhr
 (Plan 2c-2b, Präzisierung 9) und bindet Boost und Übersteuerung daran (Design 3.1, 8): eine
 Übersteuerung an den Vorgang ihrer Wallbox, einen Boost ohne Übersteuerung an den, an dem das
-Fahrzeug steht, und steht es an keinem, an den seiner Standard-Wallbox. Wer an einer Wallbox mit
-Vorgang steht, entscheidet die Erkennung (``Detector``) aus den Indizien. Solange die Zuordnung klar
-ist, steht je Zyklus (Plan 2c-2b, Präzisierung 5):
+Fahrzeug im vorigen Aufruf stand, wenn er noch läuft, sonst an den seiner Standard-Wallbox (den
+laufenden oder den nächsten Vorgang). Wer an einer Wallbox mit Vorgang steht, entscheidet die
+Erkennung (``Detector``) aus den Indizien. Solange die Zuordnung klar ist, steht je Zyklus
+(Plan 2c-2b, Präzisierung 5):
 
 1. jede Übersteuerung an ihrer Wallbox (``OVERRIDE``)
 2. an jeder Wallbox mit Vorgang, in der Reihenfolge von ``config.yaml``, das dort erkannte
@@ -127,7 +128,7 @@ class WallboxState:
     - ``kind``: woher sein Platz kommt (``VehicleState.kind``)
     - ``evidence``: die Indizien des Zyklus an dieser Wallbox, in der Reihenfolge der Erkennung
 
-    Ohne laufenden Vorgang ist sie ``WallboxState(None, None, ())``. Steht an einer Wallbox mit
+    Ohne laufenden Vorgang ist sie ``NO_SESSION``. Steht an einer Wallbox mit
     Vorgang niemand, was nur bei unklarer Zuordnung vorkommt, ist ``occupant`` ``None`` und
     ``kind`` ``UNCLEAR``.
     """
@@ -135,6 +136,9 @@ class WallboxState:
     occupant: str | None
     kind: AssignmentKind | None
     evidence: tuple[Evidence, ...]
+
+
+NO_SESSION: Final = WallboxState(None, None, ())  # an der Wallbox läuft kein Vorgang
 
 
 @dataclass(frozen=True)
@@ -511,7 +515,7 @@ class Assignment:
         Zuordnung unklar ist), ist die Art ``UNCLEAR``.
         """
         if key not in sessions:
-            return WallboxState(None, None, ())
+            return NO_SESSION
         evidence = tuple(found for found in detection.evidence if found.wallbox == key)
         occupant = next((car for car in self._fleet if places.get(car, _NOWHERE)[0] == key), None)
         if occupant is None:

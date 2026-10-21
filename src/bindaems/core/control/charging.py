@@ -121,7 +121,13 @@ from dataclasses import dataclass, replace
 from datetime import datetime
 from typing import Any, Final
 
-from bindaems.core.control.assignment import Assignment, AssignmentKind, VehicleState, WallboxState
+from bindaems.core.control.assignment import (
+    NO_SESSION,
+    Assignment,
+    AssignmentKind,
+    VehicleState,
+    WallboxState,
+)
 from bindaems.core.control.charge_inputs import NO_VEHICLE_DATA, ChargeInputs, VehicleObs
 from bindaems.core.control.charge_modes import (
     FULL_POWER,
@@ -205,7 +211,6 @@ _LIMIT: Final = CommandKind.CHARGE_LIMIT
 # Wunsch aus dem Anteil; „Geplant“ ohne festen Bedarf
 _SURPLUS_MODES: Final = frozenset({Effective.PV, Effective.MIN_PV, Effective.PLANNED})
 _PV_LIKE: Final = frozenset({Effective.PV, Effective.PLANNED})  # ladend halten sie ``min_a``
-_NOBODY: Final = WallboxState(None, None, ())  # an der Wallbox läuft kein Vorgang
 _SELF_START_MIN_A: Final = 1.0  # ab diesem Strom in A lädt ein Fahrzeug laut Tessie
 # Die Modi, deren offener Wunsch der Klimaanlage vorgeht (Plan 6a, Entscheidung 5.3)
 _UNMET_MODES: Final = frozenset({Effective.PV, Effective.MIN_PV})
@@ -874,7 +879,7 @@ class ChargeController:
         """
         entries: list[dict[str, Any]] = []
         for key in self._cfg.wallboxes:
-            state = self._wallboxes.get(key, _NOBODY)
+            state = self._wallboxes.get(key, NO_SESSION)
             car = state.occupant
             entries.append(
                 {

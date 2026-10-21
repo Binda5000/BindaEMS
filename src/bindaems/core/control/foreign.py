@@ -28,6 +28,7 @@ from datetime import datetime, timedelta
 from typing import Final
 
 from bindaems.core.control.actuator import matches
+from bindaems.core.control.last_values import Key
 from bindaems.shared.control import CommandKind, CommandValue
 from bindaems.shared.domain import Alarm, Severity
 from bindaems.shared.numbers import de, finite_number
@@ -40,8 +41,6 @@ _ALARM_PREFIX: Final = "competitor.foreign."
 _NAMES: Final = {CommandKind.CURRENT: "Strom", CommandKind.GRID_SETPOINT: "Netz-Sollwert"}
 _UNITS: Final = {CommandKind.CURRENT: "A", CommandKind.GRID_SETPOINT: "W"}
 _NO_OVERRIDE: Final = "kein Override"
-
-_Key = tuple[str, CommandKind]  # Aktor und Art
 
 
 @dataclass(frozen=True)
@@ -85,7 +84,7 @@ class ForeignChangeDetector:
     def __init__(self, hold_s: float, hits: int = FOREIGN_HITS) -> None:
         self._hold = timedelta(seconds=hold_s)
         self._needed = hits
-        self._watched: dict[_Key, _Watch] = {}
+        self._watched: dict[Key, _Watch] = {}
         self._latest: dict[str, ForeignChange] = {}  # die letzte Erkennung je Aktor
 
     def expect(
@@ -128,8 +127,8 @@ class ForeignChangeDetector:
 
     def check(
         self,
-        present: Mapping[_Key, CommandValue],
-        pending: AbstractSet[_Key],
+        present: Mapping[Key, CommandValue],
+        pending: AbstractSet[Key],
         now: datetime,
     ) -> list[ForeignChange]:
         """Vergleicht die zurückgelesenen Werte mit den Erwartungen und liefert neue Erkennungen.

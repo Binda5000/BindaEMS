@@ -170,7 +170,7 @@ class SafetyLayer:
         #    Ein Auffrischen des Overrides ist nie dringend: Es hat Zeit und hält Mindestabstand und
         #    Zustand ein. Es betrifft nur den Netz-Sollwert; bei anderen Arten hat ``refresh`` keine
         #    Wirkung.
-        refreshing = command.refresh and command.kind == CommandKind.GRID_SETPOINT
+        refreshing = command.refreshes
         ranged = check_range(command, limits, ctx.grid_budget_w)
         urgent_ok = (
             command.urgent

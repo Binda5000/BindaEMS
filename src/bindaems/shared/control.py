@@ -84,6 +84,11 @@ class Command:
     wake: bool = False
     refresh: bool = False
 
+    @property
+    def refreshes(self) -> bool:
+        """Frischt der Befehl einen Override auf? ``refresh`` zählt nur beim Netz-Sollwert."""
+        return self.refresh and self.kind == CommandKind.GRID_SETPOINT
+
 
 class ActuatorMode(StrEnum):
     """Betriebsart eines Aktors: Dry-Run prüft und protokolliert, schreibt aber nicht."""

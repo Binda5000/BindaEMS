@@ -102,6 +102,7 @@ from bindaems.core.control.foreign import (
     show_value,
 )
 from bindaems.core.control.intent import INTENT_FILE_PROBLEM, IntentReply, IntentStore
+from bindaems.core.control.last_values import Key
 from bindaems.core.control.operating import (
     OperatingInputs,
     OperatingStateMachine,
@@ -204,8 +205,6 @@ _NOT_CHARGING_SIGNALS: Final = ("online", "at_home", "plugged")
 # danach 0 (Plan 6a, Entscheidung 3)
 THERMAL_PERMIT_S: Final = 10.0
 
-_Key = tuple[str, CommandKind]  # Aktor und Art
-
 
 class _ApiServer(uvicorn.Server):
     @contextlib.contextmanager
@@ -236,7 +235,7 @@ def _actuator_json(
     mode: ModeInfo,
     lock: LockInfo | None,
     capabilities: Capabilities,
-    pending: frozenset[_Key],
+    pending: frozenset[Key],
     owned: frozenset[str],
 ) -> dict[str, Any]:
     """Ein Aktor für ``health``.
@@ -466,7 +465,7 @@ class CoreRuntime:
         self.ownership = Ownership(initially_owned(intent, self.limits))
         self.foreign = ForeignChangeDetector(cfg.safety.lock_release_s)
         # Erwartungen, die erst gelten, wenn das Rücklesen den Wert zeigt (``_note_write``)
-        self._awaiting_readback: dict[_Key, CommandValue] = {}
+        self._awaiting_readback: dict[Key, CommandValue] = {}
         self._confirmed_by_command = frozenset(
             actuator
             for actuator, spec in self.limits.actuators.items()
@@ -897,7 +896,7 @@ class CoreRuntime:
                 if isinstance(adapter, TessieAdapter):
                     adapter.poll_soon()
 
-    def _readback(self, snap: Snapshot, now: datetime, snow: datetime) -> dict[_Key, CommandValue]:
+    def _readback(self, snap: Snapshot, now: datetime, snow: datetime) -> dict[Key, CommandValue]:
         """Die zurückgelesenen Werte aller Aktoren je Art; dazu das Rücklesen des Ausführers.
 
         Der Ausführer fragt in jedem Zustand seine offenen Schreibvorgänge ab. Jeder
@@ -972,7 +971,7 @@ class CoreRuntime:
         flows: Mapping[str, float] | None,
         now: datetime,
         snow: datetime,
-        present: Mapping[_Key, CommandValue],
+        present: Mapping[Key, CommandValue],
     ) -> None:
         """Sicherer Zustand und Übergabe (Plan 2b, Präzisierungen 3 und 4), dann die Regelung.
 
@@ -1164,7 +1163,7 @@ class CoreRuntime:
         return switched
 
     def _keeper_commands(
-        self, snap: Snapshot, snow: datetime, present: Mapping[_Key, CommandValue]
+        self, snap: Snapshot, snow: datetime, present: Mapping[Key, CommandValue]
     ) -> list[Command]:
         """Die Befehle des ``SafeStateKeeper`` in diesem Zyklus.
 
@@ -1368,7 +1367,7 @@ class CoreRuntime:
         snap: Snapshot,
         plausibility: Sequence[Alarm],
         now: datetime,
-        present: Mapping[_Key, CommandValue],
+        present: Mapping[Key, CommandValue],
         *,
         checked: bool,
     ) -> None:

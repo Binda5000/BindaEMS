@@ -135,6 +135,19 @@ def test_command_wake_defaults_to_false() -> None:
     assert Command("vehicle.tesla", CommandKind.CHARGING, True, wake=True).wake is True
 
 
+@pytest.mark.parametrize(
+    ("kind", "refresh", "expected"),
+    [
+        (CommandKind.GRID_SETPOINT, True, True),
+        (CommandKind.GRID_SETPOINT, False, False),
+        (CommandKind.CURRENT, True, False),  # ``refresh`` wirkt nur beim Netz-Sollwert
+        (CommandKind.MIN_SOC, False, False),
+    ],
+)
+def test_command_refreshes_only_for_a_refreshing_grid_setpoint(kind, refresh, expected) -> None:
+    assert Command("victron", kind, 100.0, refresh=refresh).refreshes is expected
+
+
 def test_command_refresh_is_the_last_field_and_defaults_to_false() -> None:
     # ``wake`` behält seinen Platz davor; neue Felder kommen nur hinten dazu.
     assert [field.name for field in fields(Command)][-2:] == ["wake", "refresh"]

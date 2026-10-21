@@ -413,8 +413,7 @@ def _own_values(rt: CoreRuntime) -> list[OwnValue | Forgotten]:
         if not_sent:
             own.append(Forgotten(command.actuator, command.kind))
         elif verdict is not None and (verdict.sendable or verdict.outcome == Outcome.UNCHANGED):
-            refresh = command.refresh and command.kind is CommandKind.GRID_SETPOINT
-            dry_run = verdict.sendable and verdict.dry_run and not refresh
+            dry_run = verdict.sendable and verdict.dry_run and not command.refreshes
             own.append(OwnValue(command.actuator, command.kind, command.value, dry_run=dry_run))
         note(command, verdict, not_sent=not_sent)
 

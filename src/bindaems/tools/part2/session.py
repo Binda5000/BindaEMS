@@ -60,6 +60,7 @@ from bindaems.core.adapters.twc import TwcAdapter
 from bindaems.core.adapters.victron_mqtt import SOURCE as VICTRON_SOURCE
 from bindaems.core.adapters.victron_mqtt import AiomqttTransport, VictronMqttAdapter
 from bindaems.core.control.actuator import Actuator, Confirmation, matches
+from bindaems.core.control.last_values import Key
 from bindaems.core.safety.limits import Family, HardLimits
 from bindaems.core.safety.ranges import check_range
 from bindaems.core.state.store import StateStore
@@ -95,8 +96,6 @@ _VICTRON_ITEMS: Final[Mapping[CommandKind, str]] = {
     CommandKind.MAX_DISCHARGE: "17.2-2",
     CommandKind.MIN_SOC: "17.2-2",
 }
-
-_Key = tuple[str, CommandKind]  # Aktor und Art
 
 
 def seconds(value: float) -> str:
@@ -212,17 +211,17 @@ class Part2Session:
         self._cleanup = tuple(cleanup)
         self._tasks: list[asyncio.Task[None]] = []
         # die vorgefundenen Werte je Aktor und Art, in der Reihenfolge des ersten Schreibens
-        self._originals: dict[_Key, CommandValue] = {}
-        self._sent: dict[_Key, CommandValue] = {}  # zuletzt angenommener Auftrag
-        self._confirmed: dict[_Key, CommandValue] = {}  # zuletzt bestätigter Wert
-        self._unrestorable: set[_Key] = set()  # nicht wiederherstellbar, schon gemeldet
+        self._originals: dict[Key, CommandValue] = {}
+        self._sent: dict[Key, CommandValue] = {}  # zuletzt angenommener Auftrag
+        self._confirmed: dict[Key, CommandValue] = {}  # zuletzt bestätigter Wert
+        self._unrestorable: set[Key] = set()  # nicht wiederherstellbar, schon gemeldet
         self._persistent_writes = 0  # angenommene Aufträge für persistente Arten in diesem Lauf
         self._answered: datetime | None = (
             None  # Zeit der letzten Antwort, nach der Uhr des Speichers
         )
 
     @property
-    def confirmed(self) -> Mapping[_Key, CommandValue]:
+    def confirmed(self) -> Mapping[Key, CommandValue]:
         """Der zuletzt bestätigte Wert je Aktor und Art, auch vom Wiederherstellen."""
         return MappingProxyType(self._confirmed)
 
@@ -494,7 +493,7 @@ class Part2Session:
         return kind not in PERSISTENT_KINDS and since_last_s >= self._resend_s
 
     def _send(
-        self, device: Actuator, key: _Key, kind: CommandKind, value: CommandValue
+        self, device: Actuator, key: Key, kind: CommandKind, value: CommandValue
     ) -> str | None:
         """Sendet, wenn der Aktor steuerbar und der Ausgangswert brauchbar ist; sonst der Grund.
 
@@ -521,7 +520,7 @@ class Part2Session:
             self._persistent_writes += 1
         return None
 
-    def _in_place(self, key: _Key, original: CommandValue) -> bool:
+    def _in_place(self, key: Key, original: CommandValue) -> bool:
         """Steht der vorgefundene Wert wieder?
 
         Nur wenn das Rücklesen ihn zeigt, er zuletzt gesendet wurde und der letzte bestätigte
@@ -540,7 +539,7 @@ class Part2Session:
             and matches(kind, original, confirmed)
         )
 
-    async def _restore(self, key: _Key, original: CommandValue, timeout_s: float) -> Finding | None:
+    async def _restore(self, key: Key, original: CommandValue, timeout_s: float) -> Finding | None:
         """Stellt einen Wert wieder her; ``None``, wenn er schon steht."""
         actuator, kind = key
         item = _restore_item(self.limits.actuators[actuator].family, kind)

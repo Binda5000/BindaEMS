@@ -46,7 +46,7 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import Final, Protocol
+from typing import TYPE_CHECKING, Final, Protocol
 from uuid import uuid4
 
 from bindaems.core.control.actuator import Actuator, Capabilities, Confirmation, WakeStart
@@ -57,11 +57,13 @@ from bindaems.shared.control import Command, CommandKind, CommandValue
 from bindaems.shared.decisions import Decision, DecisionResult, decision_text
 from bindaems.shared.domain import Snapshot
 
+if TYPE_CHECKING:  # ``last_values`` importiert ``WriteResult`` aus diesem Modul
+    from bindaems.core.control.last_values import Key
+
 _REPEAT_INTERVAL: Final = timedelta(seconds=60)  # dieselbe Ablehnung bzw. Zurückstellung so oft
 # Diese Ergebnisse stehen für ein Auffrischen eines Overrides nicht im Log, alle anderen schon
 _QUIET_REFRESH: Final = frozenset({DecisionResult.OK, DecisionResult.DRY_RUN})
 
-_Key = tuple[str, CommandKind]  # Aktor und Art: ein Schreibvorgang je Schlüssel
 # Ergebnis (Ablehnung oder Zurückstellung), Aktor, Art, angeforderter Wert und die Codes der Befunde
 _RepeatKey = tuple[DecisionResult, str, CommandKind, CommandValue, tuple[str, ...]]
 
@@ -125,7 +127,7 @@ class CommandExecutor:
         self._sink = sink
         self._labels = labels
         self._new_id = new_id
-        self._open: dict[_Key, _Open] = {}
+        self._open: dict[Key, _Open] = {}
         self._failures: list[WriteResult] = []
         self._repeated: dict[_RepeatKey, datetime] = {}  # wann zuletzt protokolliert
 
@@ -194,7 +196,7 @@ class CommandExecutor:
             )
         return finished
 
-    def pending(self) -> frozenset[tuple[str, CommandKind]]:
+    def pending(self) -> frozenset[Key]:
         """Aktor und Art aller Schreibvorgänge, die noch auf das Rücklesen warten."""
         return frozenset(self._open)
 
@@ -280,7 +282,7 @@ class CommandExecutor:
         und bei ``DRY_RUN`` keine.
         """
         command = verdict.command
-        if _is_refresh(command) and result in _QUIET_REFRESH:
+        if command.refreshes and result in _QUIET_REFRESH:
             return
         label = self._labels.get(command.actuator, command.actuator)
         # Der Text nennt den Wert nach der Safety-Schicht; ohne einen (Ablehnung) den angeforderten.
@@ -330,11 +332,6 @@ class CommandExecutor:
         }
         self._repeated[key] = now
         return True
-
-
-def _is_refresh(command: Command) -> bool:
-    """Frischt der Befehl einen Override auf? ``Command.refresh`` zählt nur beim Netz-Sollwert."""
-    return command.refresh and command.kind == CommandKind.GRID_SETPOINT
 
 
 def _held_back(verdict: Verdict) -> DecisionResult | None:
