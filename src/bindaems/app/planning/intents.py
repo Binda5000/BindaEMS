@@ -11,6 +11,8 @@ from collections.abc import Mapping, Sequence
 from math import ceil, floor
 from typing import Final
 
+import structlog
+
 from bindaems.app.planning.battery_model import SLOT_H, params_of, sim_slots, simulate
 from bindaems.app.planning.inputs import PlanInputs
 from bindaems.app.planning.optimizer import OptimizerResult, ev_power_w, grid_charge_cap_w
@@ -22,6 +24,8 @@ from bindaems.app.planning.plausibility import (
     grid_charge_pays,
 )
 from bindaems.shared.plan import BatteryIntent, BatteryIntentKind
+
+log = structlog.get_logger(__name__)
 
 GRID_CHARGE_MIN_W: Final = 100.0  # darunter ist es kein Netzladen
 ROUND_W: Final = 100.0  # Schritt der Netzladeleistung
@@ -85,7 +89,9 @@ def _keep_rule_r1(
     höchstens aber um die Ladung, die vor der ersten Einspeisung im Fenster noch über der Reserve
     (plus ``EMPTY_TOL_KWH``) liegt: Ist der Akku davor leer, verdrängt er keine PV mehr. Gekürzt
     wird auf ``ROUND_W`` aufgerundet, mindestens um ``ROUND_W``; bleibt weniger als
-    ``GRID_CHARGE_MIN_W``, hält er den Akku.
+    ``GRID_CHARGE_MIN_W``, hält er den Akku. Jede Kürzung steht als Warnung
+    (``code=plan_r1_trimmed``, Slot, gekürzte kWh) im Log: Ein echter Fehler des Optimierers
+    bleibt so sichtbar.
     ``ev_w`` ist die Ladeleistung der Autos je Slot (``sim_slots``).
     """
     params = params_of(inputs)
@@ -103,7 +109,7 @@ def _keep_rule_r1(
         if not late:
             break
         index = late[-1]
-        cut_kwh = export_while_charged_kwh(steps, index, params.lo_kwh)
+        cut_kwh = export_kwh = export_while_charged_kwh(steps, index, params.lo_kwh)
         end = charged_window_end(steps, index, params.lo_kwh)
         first = next(j for j in range(index, end) if steps[j].export_w > 0)
         if first > index:
@@ -113,10 +119,18 @@ def _keep_rule_r1(
         cut_w = ROUND_W * max(1, ceil(cut_kwh / SLOT_H * 1000 / ROUND_W))
         power_w = min(result[index].grid_charge_w, steps[index].charge_grid_w)
         power_w = ROUND_W * floor((power_w - cut_w) / ROUND_W)
+        before_w = result[index].grid_charge_w
         result[index] = (
             BatteryIntent(kind=BatteryIntentKind.NETZLADEN, grid_charge_w=power_w)
             if power_w >= GRID_CHARGE_MIN_W
             else BatteryIntent(kind=BatteryIntentKind.HALTEN)
+        )
+        log.warning(
+            "Netzladen nach Regel R1 gekürzt",
+            code="plan_r1_trimmed",
+            slot=inputs.slots[index].start,
+            cut_kwh=round((before_w - result[index].grid_charge_w) * SLOT_H / 1000, 3),
+            export_kwh=round(export_kwh, 3),
         )
     return result
 

@@ -4,6 +4,7 @@ zurückgehaltener Entladung, sonst Eigenverbrauch."""
 from __future__ import annotations
 
 import pytest
+from structlog.testing import capture_logs
 from tests.plan_helpers import (
     SCENARIO_START,
     at,
@@ -126,6 +127,63 @@ def test_grid_charge_is_cut_so_the_resimulation_keeps_rule_r1() -> None:
     assert intents[1] == BatteryIntent(kind=BatteryIntentKind.NETZLADEN, grid_charge_w=2900)
     lo_kwh = params_of(inputs).lo_kwh
     assert export_while_charged_kwh(resimulate(inputs, intents), 1, lo_kwh) <= R1_TOL_KWH
+
+
+def test_r1_trim_is_logged() -> None:
+    # Dieselben Flüsse wie oben: Das Netzladen in Slot 1 wird von 4000 W auf 2900 W gekürzt
+    # (1,1 kW über 15 min = 0,275 kWh); das steht als Warnung im Log, damit ein Fehler des
+    # Optimierers sichtbar bleibt. Ohne Kürzung (nächster Test) gibt es keinen Eintrag.
+    pv = [0.0, 0.0] + [4586.0] * 4
+    inputs = scenario(
+        prices=[20.0] * 6,
+        pv=pv,
+        load=[2000.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+        battery=small_battery(),
+        soc_pct=50.0,
+        grid_charge=True,
+        end_value_ct=30.0,
+    )
+    efficiency = eta(inputs.planning.roundtrip_pct)
+    soc = 5.0 - 900 * SLOT_H / 1000 / efficiency
+    flows = [flow(gr_h=1100.0, bt_h=900.0, soc_end_kwh=soc)]
+    soc += 4000 * SLOT_H / 1000 * efficiency
+    flows.append(flow(gr_b=4000.0, soc_end_kwh=soc))
+    for pv_w in pv[2:]:
+        soc = min(10.0, soc + pv_w * SLOT_H / 1000 * efficiency)
+        flows.append(flow(pv_b=pv_w, soc_end_kwh=soc))
+
+    with capture_logs() as logs:
+        derive_intents(inputs, flows_result(flows))
+    trimmed = [entry for entry in logs if entry.get("code") == "plan_r1_trimmed"]
+    assert len(trimmed) == 1
+    assert trimmed[0]["log_level"] == "warning"
+    assert trimmed[0]["slot"] == inputs.slots[1].start
+    assert trimmed[0]["cut_kwh"] == pytest.approx(1100 * SLOT_H / 1000)
+    assert trimmed[0]["cut_kwh"] > R1_TOL_KWH
+
+
+def test_no_r1_trim_is_not_logged() -> None:
+    # Wie ``test_grid_charge_survives_rounding_above_the_reserve``: nichts wird gekürzt.
+    inputs = scenario(
+        prices=[10.0, 40.0, 40.0],
+        pv=[0.0, 0.0, 9000.0],
+        load=[500.0, 2000.0, 500.0],
+        battery=small_battery(),
+        soc_pct=20.0,
+        grid_charge=True,
+    )
+    efficiency = eta(inputs.planning.roundtrip_pct)
+    lo_kwh = params_of(inputs).lo_kwh
+    soc = lo_kwh + 2000 * SLOT_H / 1000 * efficiency
+    flows = [flow(gr_h=500.0, gr_b=2000.0, soc_end_kwh=soc)]
+    soc_after = lo_kwh + 0.05
+    discharge_w = (soc - soc_after) * efficiency / SLOT_H * 1000
+    flows.append(flow(gr_h=2000.0 - discharge_w, bt_h=discharge_w, soc_end_kwh=soc_after))
+    flows.append(flow(pv_h=500.0, pv_x=8500.0, soc_end_kwh=soc_after))
+
+    with capture_logs() as logs:
+        derive_intents(inputs, flows_result(flows))
+    assert [entry for entry in logs if entry.get("code") == "plan_r1_trimmed"] == []
 
 
 def test_grid_charge_survives_rounding_above_the_reserve() -> None:
