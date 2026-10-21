@@ -92,10 +92,10 @@
 
 	const socText = $derived(socDraft ?? String(goal.target_soc_pct));
 	const departureText = $derived(departureDraft ?? goal.departure);
-	// Abfahrt an einem Tag, der nicht heute ist (Ruling F-3): „am Mo 23.11.“ neben dem Feld. Eine
+	// Abfahrt an einem Tag nach heute (Ruling F-3): „am Mo 23.11.“ neben dem Feld. Eine
 	// geänderte Uhrzeit gilt danach täglich (die app löscht den Tag), dann fehlt der Hinweis.
 	const departureDay = $derived(
-		goal.departure_on && goal.departure_on !== todayVienna() && departureText === goal.departure
+		goal.departure_on && goal.departure_on > todayVienna() && departureText === goal.departure
 			? weekdayDate(goal.departure_on)
 			: null
 	);

@@ -275,6 +275,11 @@ describe('Abfahrt an einem Tag (Ruling F-3)', () => {
 		expect(screen.queryByText(/^am /)).toBeNull();
 	});
 
+	it('nennt keinen Tag, der schon vorbei ist', () => {
+		show({ mode: 'planned', planned: PLANNED, goal: { ...goal, departure_on: '2026-10-08' } });
+		expect(screen.queryByText(/^am /)).toBeNull();
+	});
+
 	it('nimmt den Tag weg, sobald die Uhrzeit von Hand geändert wird', async () => {
 		show({ mode: 'planned', planned: PLANNED, goal });
 		await fireEvent.input(screen.getByLabelText('Abfahrt'), { target: { value: '08:00' } });
