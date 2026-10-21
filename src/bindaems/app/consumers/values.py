@@ -81,7 +81,8 @@ def ha_selection(refs: Sequence[HaRef], *, units: Sequence[str] = ("W", "kW")) -
     return measurements, condition
 
 
-def _number(value: Any) -> float | None:
+def number(value: Any) -> float | None:
+    """Der Wert einer Zelle als endliche Zahl; ``bool``, Text, NaN und ±∞ gelten als kein Wert."""
     if isinstance(value, bool) or not isinstance(value, int | float):
         return None
     return float(value) if math.isfinite(value) else None
@@ -90,6 +91,13 @@ def _number(value: Any) -> float | None:
 def _cell(item: Series, row: list[Any], column: str) -> Any:
     index = item.columns.index(column) if column in item.columns else len(row)
     return row[index] if index < len(row) else None
+
+
+def ha_ref(entity: str) -> HaRef:
+    """``sensor.x`` als Entität; die Einheit gilt, wo HA keine mitschreibt und nichts umgerechnet
+    wird, als W."""
+    domain, _, object_id = entity.partition(".")
+    return HaRef(domain, object_id, "W")
 
 
 def _entity(item: Series) -> tuple[str, str] | None:
@@ -166,7 +174,7 @@ def _readings(series: Sequence[Series]) -> dict[tuple[str, str], list[tuple[str 
                 unit = recorded if isinstance(recorded, str) else None
             else:
                 continue
-            value = _number(_cell(item, row, "v"))
+            value = number(_cell(item, row, "v"))
             if value is not None:
                 found.setdefault(entity, []).append((unit, value))
     return found
@@ -257,7 +265,7 @@ def build_tree(
 
 def consumer_power(consumer: Consumer, live: LiveState, ha: HaValueCache | None) -> float | None:
     if consumer.source_kind == "core":
-        return _number(live.value(consumer.power_ref))
+        return number(live.value(consumer.power_ref))
     if ha is None:
         return None
     try:

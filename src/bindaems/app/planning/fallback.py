@@ -30,7 +30,7 @@ from bindaems.app.planning.battery_model import (
 from bindaems.app.planning.inputs import PlanInputs
 from bindaems.app.planning.optimizer import grid_charge_cap_w
 from bindaems.app.planning.plausibility import R1_TOL_KWH, export_while_charged_kwh, spread_pays
-from bindaems.app.planning.vehicles import KWH_EPS, _slots_before, cars_charging
+from bindaems.app.planning.vehicles import KWH_EPS, cars_charging, slots_before
 from bindaems.shared.plan import BatteryIntent, BatteryIntentKind, high_percentile
 from bindaems.shared.timeutil import LOCAL_TZ, ensure_utc
 
@@ -98,7 +98,7 @@ def fallback_vehicles(inputs: PlanInputs) -> dict[str, list[float]]:
         if car.expected:
             continue
         watts = [0.0] * count
-        before = _slots_before(car.departure_at, inputs.slots) if car.need_kwh > 0 else 0
+        before = slots_before(car.departure_at, inputs.slots) if car.need_kwh > 0 else 0
 
         def charge(index: int, power_w: float, *, from_pv: bool, w: list[float] = watts) -> None:
             added = power_w - w[index]

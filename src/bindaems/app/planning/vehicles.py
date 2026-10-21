@@ -29,7 +29,7 @@ from typing import TYPE_CHECKING, Annotated, Any, Final, Self
 
 from pydantic import AwareDatetime, Field, model_validator
 
-from bindaems.app.control.intent import _health_vehicles, _trusted
+from bindaems.app.control.intent import health_vehicles, trusted
 from bindaems.app.learning.driving_profile import VehicleProfile, presence_at, weekday_of
 from bindaems.shared.config import Config, EvcsConfig, TwcConfig, VehicleConfig, _Model
 from bindaems.shared.control import ChargeMode, Intent, VehicleIntent, next_departure
@@ -159,7 +159,7 @@ def horizon_need(need: float, max_w: float, departure_at: datetime, horizon_end:
     return max(0.0, need - max_w / 1000 * usable_h / LATEST_START_MARGIN)
 
 
-def _slots_before(departure_at: datetime, slots: Sequence[SlotInput]) -> int:
+def slots_before(departure_at: datetime, slots: Sequence[SlotInput]) -> int:
     """Die Zahl der Slots vor dem ersten Slot ab ``departure_at`` (``T_c``, Präzisierung 11)."""
     moment = ensure_utc(departure_at)
     return sum(1 for slot in slots if ensure_utc(slot.start) < moment)
@@ -169,8 +169,8 @@ def charge_window(car: PlanVehicleInput, slots: Sequence[SlotInput]) -> range:
     """Die Indizes der Slots, in denen das Auto laden kann: ab dem ersten Slot ab seiner Ankunft
     (``arrival_at``, nur erwartete Autos; sonst ab dem aktuellen Slot) bis vor den ersten Slot ab
     der Abfahrt (Plan 5b, Präzisierung 10)."""
-    first = 0 if car.arrival_at is None else _slots_before(car.arrival_at, slots)
-    return range(first, _slots_before(car.departure_at, slots))
+    first = 0 if car.arrival_at is None else slots_before(car.arrival_at, slots)
+    return range(first, slots_before(car.departure_at, slots))
 
 
 def grid_allowed(
@@ -299,9 +299,9 @@ def planned_vehicles(
     ``grid_allowed_kwh`` verteilt den Überschuss in der Reihenfolge der Priorität. Nicht
     angesteckte Autos nennt ``expected_vehicles``.
     """
-    if intent is None or not slots or not _trusted(intent.version, health):
+    if intent is None or not slots or not trusted(intent.version, health):
         return []
-    entries = _health_vehicles(health)
+    entries = health_vehicles(health)
     current_end = ensure_utc(slots[0].start) + SLOT
     horizon_end = ensure_utc(slots[-1].start) + SLOT
     cars: list[PlanVehicleInput] = []
@@ -417,7 +417,7 @@ def expected_vehicles(
     """
     if intent is None or not slots:
         return []
-    entries = _health_vehicles(health)
+    entries = health_vehicles(health)
     taken = {car.key for car in plugged}
     occupied = _occupied_wallboxes(health, entries, plugged)
     current_end = ensure_utc(slots[0].start) + SLOT

@@ -26,7 +26,7 @@ import structlog
 from pydantic import ValidationError
 
 from bindaems.app.audit import Source
-from bindaems.app.control.intent import _trusted
+from bindaems.app.control.intent import trusted
 from bindaems.app.core_link import LiveState
 from bindaems.app.forecast.load import LoadForecastService
 from bindaems.app.forecast.service import ForecastService
@@ -336,7 +336,7 @@ class PlanningService:
         health = self._live.health
         intent = self._intent_for(health)
         vehicles = vehicles_fingerprint(health, intent)
-        if old is not None and (intent is None or not _trusted(intent.version, health)):
+        if old is not None and (intent is None or not trusted(intent.version, health)):
             # Health fehlt oder regelt noch nicht mit der Absicht (Neustart des core): das ist
             # keine Änderung der Autos; der Planer sähe sie dann nur nicht
             vehicles = old.vehicles
@@ -352,7 +352,7 @@ class PlanningService:
         for trigger in triggers:
             self.request(trigger)
         vehicles_requested = "vehicles" in triggers
-        if self._cars_unseen and intent is not None and _trusted(intent.version, health):
+        if self._cars_unseen and intent is not None and trusted(intent.version, health):
             # Der letzte Plan entstand ohne die Autos in „Geplant“; Health bestätigt die Absicht
             # jetzt, auch wenn sich der Stand der Autos nicht geändert hat (Ruling R23)
             self._cars_unseen = False
@@ -411,7 +411,7 @@ class PlanningService:
         inputs = self._inputs
         if inputs is None or self._driving_profiles is None:
             return False
-        if intent is None or not _trusted(intent.version, health):
+        if intent is None or not trusted(intent.version, health):
             return False
         cars = self._vehicles(health, intent, inputs.created_at, inputs.slots)
         current = expected_cars(cars)
@@ -526,7 +526,7 @@ class PlanningService:
         self._cars_unseen = (
             intent is not None
             and any(entry.mode is ChargeMode.PLANNED for entry in intent.vehicles.values())
-            and not _trusted(intent.version, health)
+            and not trusted(intent.version, health)
         )
         return assemble_inputs(
             now=now,

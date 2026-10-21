@@ -12,17 +12,16 @@ Alle Werte einer Art kommen mit einer Abfrage; ``refresh`` ersetzt das Ergebnis 
 
 from __future__ import annotations
 
-import math
 import re
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, time, timedelta
-from typing import Any, Final
+from typing import Final
 
 import structlog
 
 from bindaems.app.consumers.service import Consumer
-from bindaems.app.consumers.values import HaRef, ha_selection
+from bindaems.app.consumers.values import HaRef, ha_selection, number
 from bindaems.app.history.influx import (
     RP_RAW,
     InfluxQueryError,
@@ -73,12 +72,6 @@ def _key(consumer: Consumer) -> Key:
     return (consumer.source_kind, consumer.power_ref, consumer.power_unit)
 
 
-def _number(value: Any) -> float | None:
-    if isinstance(value, bool) or not isinstance(value, int | float):
-        return None
-    return float(value) if math.isfinite(value) else None
-
-
 def _points(
     item: Series, scale: float, unit_column: bool = False, rejected: set[str] | None = None
 ) -> list[Point]:
@@ -90,7 +83,7 @@ def _points(
     unit = item.columns.index("u") if unit_column and "u" in item.columns else None
     points: list[Point] = []
     for row in item.values:
-        value = _number(row[column]) if column < len(row) else None
+        value = number(row[column]) if column < len(row) else None
         if value is not None and isinstance(row[0], int):
             recorded = row[unit] if unit is not None and unit < len(row) else None
             if isinstance(recorded, str):

@@ -70,7 +70,7 @@ import structlog
 from sqlalchemy import Connection, Engine, func, insert, select, update
 
 from bindaems.app.charging.tracker import SESSION_GAP, StoredSession
-from bindaems.app.control.intent import _health_vehicles
+from bindaems.app.control.intent import health_vehicles
 from bindaems.app.db.schema import charging_session, planned_charge
 from bindaems.app.planning.vehicles import full_power_w, need_kwh
 from bindaems.shared.config import Config
@@ -209,7 +209,7 @@ def _moment(value: Any) -> datetime | None:
 
 
 def _seen(health: Mapping[str, Any], key: str) -> _Seen | None:
-    entry = _health_vehicles(health).get(key)
+    entry = health_vehicles(health).get(key)
     if entry is None:
         return None
     planned = entry.get("planned")

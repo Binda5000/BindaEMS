@@ -174,14 +174,14 @@ def boost_until(now: datetime) -> datetime:
     return now + BOOST_DURATION
 
 
-def _health_vehicles(health: Mapping[str, Any] | None) -> dict[str, Mapping[str, Any]]:
+def health_vehicles(health: Mapping[str, Any] | None) -> dict[str, Mapping[str, Any]]:
     raw = health.get("vehicles") if health is not None else None
     if not isinstance(raw, list):
         return {}
     return {item["id"]: item for item in raw if isinstance(item, dict) and "id" in item}
 
 
-def _trusted(current: int, health: Mapping[str, Any] | None) -> bool:
+def trusted(current: int, health: Mapping[str, Any] | None) -> bool:
     """Ob Health den Stand der Regelung mit der gültigen Absicht (Version ``current``) oder einer
     neueren zeigt.
 
@@ -195,7 +195,7 @@ def _trusted(current: int, health: Mapping[str, Any] | None) -> bool:
 
 
 def health_trusted(health: Mapping[str, Any] | None) -> bool:
-    """``_trusted`` gegen die gültige Absicht, die Health selbst nennt (``intent.version``).
+    """``trusted`` gegen die gültige Absicht, die Health selbst nennt (``intent.version``).
 
     Falsch ohne Health, ohne Absicht des core und solange er nicht mit ihr regelt (Neustart,
     OBSERVE, SAFE, Regelbetrieb aus). Der ``PlanSender`` sendet nur dann (Plan 3c, Gesamtreview
@@ -205,7 +205,7 @@ def health_trusted(health: Mapping[str, Any] | None) -> bool:
     """
     intent = health.get("intent") if health is not None else None
     version = intent.get("version") if isinstance(intent, dict) else None
-    return isinstance(version, int) and _trusted(version, health)
+    return isinstance(version, int) and trusted(version, health)
 
 
 def _clean(
@@ -213,7 +213,7 @@ def _clean(
 ) -> VehicleIntent:
     """Entfernt Boost und Übersteuerung, die der core nicht mehr führt (Präzisierung 2).
 
-    ``shown`` ist der Eintrag des Fahrzeugs in einem vertrauenswürdigen Health (``_trusted``),
+    ``shown`` ist der Eintrag des Fahrzeugs in einem vertrauenswürdigen Health (``trusted``),
     sonst ``None``. Ohne Eintrag oder mit ``mode`` null ist der Stand der Regelung unbekannt: Ein
     Boost in der Zukunft und die Übersteuerung bleiben erhalten. Mit Stand bleibt der Boost nur,
     wenn Health einen zeigt oder er auf seinen Ansteckvorgang wartet (``boost_pending``), die
@@ -242,7 +242,7 @@ def _base(current: Intent | None, health: Mapping[str, Any] | None, now: datetim
     """Die gültige Absicht ohne abgelaufenen Boost und beendete Übersteuerung."""
     if current is None:
         return Intent(version=1)
-    shown = _health_vehicles(health) if _trusted(current.version, health) else {}
+    shown = health_vehicles(health) if trusted(current.version, health) else {}
     vehicles = {
         key: _clean(key, item, shown.get(key), now) for key, item in current.vehicles.items()
     }

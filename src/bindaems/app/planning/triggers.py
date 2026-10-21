@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any, Final
 
-from bindaems.app.control.intent import _health_vehicles, _trusted
+from bindaems.app.control.intent import health_vehicles, trusted
 from bindaems.app.planning.vehicles import PlanVehicleInput
 from bindaems.shared.control import ChargeMode, Intent
 from bindaems.shared.plan import Plan, PlanTrigger
@@ -90,10 +90,10 @@ def vehicles_fingerprint(
 
     Leer ohne Absicht und solange Health der Absicht nicht traut (wie ``planned_vehicles``).
     """
-    if intent is None or not _trusted(intent.version, health):
+    if intent is None or not trusted(intent.version, health):
         return ()
     entries: list[tuple[Any, ...]] = []
-    for key, entry in _health_vehicles(health).items():
+    for key, entry in health_vehicles(health).items():
         if entry.get("mode") != ChargeMode.PLANNED.value:
             continue
         planned = entry.get("planned")

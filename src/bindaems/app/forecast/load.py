@@ -25,7 +25,7 @@ from typing import TYPE_CHECKING, Literal
 import structlog
 
 from bindaems.app.consumers.energy import HA_SEED, ha_points
-from bindaems.app.consumers.values import HaRef, ha_selection
+from bindaems.app.consumers.values import HaRef, ha_ref, ha_selection
 from bindaems.app.daytype import DayType, slot_key
 from bindaems.app.forecast.archive import ForecastArchive, Kind, RecordValue, SlotSource, actuals
 from bindaems.app.history.influx import (
@@ -211,7 +211,7 @@ class LoadForecastService:
         database = self._cfg.influxdb.ha_database
         if history is None or database is None or self._reader is None:
             return []
-        refs = [_ref(entity) for entity in (history.entity, *history.subtract)]
+        refs = [ha_ref(entity) for entity in (history.entity, *history.subtract)]
         first, last = missing[0], missing[-1] + SLOT
         try:
             series = await self._reader.query(ha_query(refs, first, last), database=database)
@@ -455,12 +455,6 @@ class MinuteMeans:
     minutes: Mapping[int, float]  # Minutenmittel (Millisekunden seit Epoche)
     earliest: int | None  # erste Minute mit Wert im Bereich
     seed: float | None  # letzter Wert vor dem Bereich
-
-
-def _ref(entity: str) -> HaRef:
-    """``sensor.x`` als Entität; die Einheit gilt, wenn HA keine mitschreibt, als W."""
-    domain, _, object_id = entity.partition(".")
-    return HaRef(domain, object_id, "W")
 
 
 def slot_mean(entity: MinuteMeans, slot: datetime) -> float | None:

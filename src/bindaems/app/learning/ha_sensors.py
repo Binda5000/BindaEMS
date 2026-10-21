@@ -9,7 +9,6 @@ Gelesen wird die HA-Datenbank wie bei den Verbrauchern, aber mit beliebigen Einh
 
 from __future__ import annotations
 
-import math
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
@@ -18,7 +17,7 @@ from typing import Any, Final
 import structlog
 
 from bindaems.app.consumers.service import HA_REF_RE
-from bindaems.app.consumers.values import NOT_CONFIGURED, HaRef
+from bindaems.app.consumers.values import NOT_CONFIGURED, ha_ref, number
 from bindaems.app.forecast.load import MinuteMeans, ha_query, seed_query, slot_mean
 from bindaems.app.history.influx import InfluxQueryError, InfluxReader, Series
 from bindaems.shared.timeutil import slots_between
@@ -40,12 +39,6 @@ class SensorCandidate:
     unit: str | None
 
 
-def _number(value: Any) -> float | None:
-    if isinstance(value, bool) or not isinstance(value, int | float):
-        return None
-    return float(value) if math.isfinite(value) else None
-
-
 def _cell(item: Series, row: list[Any], column: str) -> Any:
     index = item.columns.index(column) if column in item.columns else len(row)
     return row[index] if index < len(row) else None
@@ -56,11 +49,6 @@ def _entity_id(item: Series) -> str | None:
     domain, object_id = item.tags.get("domain"), item.tags.get("entity_id")
     entity_id = f"{domain}.{object_id}" if domain is not None and object_id is not None else ""
     return entity_id if HA_REF_RE.fullmatch(entity_id) else None
-
-
-def _ref(entity_id: str) -> HaRef:
-    domain, _, object_id = entity_id.partition(".")
-    return HaRef(domain, object_id, "W")  # die Einheit gilt hier nicht: nichts wird umgerechnet
 
 
 def _minute_means(
@@ -75,7 +63,7 @@ def _minute_means(
             if _entity_id(item) != entity_id or item.name not in (entity_id, *units):
                 continue
             for row in item.values:
-                value = _number(_cell(item, row, "w"))
+                value = number(_cell(item, row, "w"))
                 if value is not None and isinstance(row[0], int):
                     result.append((row[0], value))
         return result
@@ -113,7 +101,7 @@ class HaSensorReader:
                 continue
             per_entity = item.name == entity_id
             for row in item.values:
-                if _number(_cell(item, row, "v")) is None:
+                if number(_cell(item, row, "v")) is None:
                     continue
                 recorded = _cell(item, row, "u")
                 unit = recorded if per_entity and isinstance(recorded, str) else None
@@ -135,7 +123,7 @@ class HaSensorReader:
         wanted = [e for e in dict.fromkeys(entities) if HA_REF_RE.fullmatch(e)]
         if not wanted or self._database is None or self._reader is None:
             return {}
-        refs = [_ref(entity_id) for entity_id in wanted]
+        refs = [ha_ref(entity_id) for entity_id in wanted]
         try:
             series = await self._reader.query(
                 ha_query(refs, start, end, units=self._units), database=self._database
