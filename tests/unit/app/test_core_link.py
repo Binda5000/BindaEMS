@@ -70,6 +70,7 @@ class FakeCoreClient:
         # gesetzt: der Stream endet erst, die Antwort auf Health kommt erst mit dem Ereignis
         self.end_stream: asyncio.Event | None = None
         self.answer_health: asyncio.Event | None = None
+        self.start_stream: asyncio.Event | None = None  # gesetzt: der Stream beginnt erst damit
 
     async def health(self) -> dict[str, Any]:
         self.health_calls += 1
@@ -87,6 +88,8 @@ class FakeCoreClient:
 
     @contextlib.asynccontextmanager
     async def _stream(self) -> AsyncIterator[AsyncIterator[dict[str, Any]]]:
+        if self.start_stream is not None:
+            await self.start_stream.wait()
         if not self._sessions:
             raise CoreUnavailableError("ConnectError: weg")
         messages = self._sessions.pop(0)
@@ -254,6 +257,29 @@ async def test_connect_discards_health_from_before() -> None:
     feed._connected()
     assert live.connected and live.health is None
     assert feed._disconnects == 1
+
+
+async def test_connect_asks_for_health_at_once() -> None:
+    # Das Health, das beim Start vor der Verbindung gefragt wurde, fällt weg; die nächste Abfrage
+    # soll nicht erst nach dem Takt folgen
+    feed, _, _, _ = feed_env([], health_interval_s=30.0)
+    assert not feed._health_now.is_set()
+    feed._connected()
+    assert feed._health_now.is_set()
+
+
+async def test_health_asked_before_a_connect_is_dropped_and_asked_again() -> None:
+    old, new = {"mode": "OBSERVE"}, TRUSTED
+    feed, live, _, client = feed_env([[STATE_MSG]], health=[old, new], health_interval_s=30.0)
+    client.end_stream, client.answer_health = asyncio.Event(), asyncio.Event()
+    client.start_stream = asyncio.Event()
+    async with feeding(feed):
+        await until(lambda: client.health_calls == 1)  # gefragt, bevor der Stream verbindet
+        client.start_stream.set()
+        await until(lambda: live.connected)
+        client.answer_health.set()  # die erste Antwort kommt erst nach dem Verbinden
+        await until(lambda: live.health == new)
+    assert client.health_calls == 2  # nicht erst nach 30 s
 
 
 async def test_health_asked_before_a_disconnect_is_dropped() -> None:
