@@ -157,14 +157,12 @@ class DecisionStore:
             conditions.append(func.ulower(table.c.text).like(_like_pattern(q.text), escape="\\"))
         if q.before is not None:
             # „älter“ heißt nach (ts, seq), nicht nach seq: der Rückstand liefert ältere Zeiten
-            # mit höherem seq nach. Hat das Aufräumen die Zeile des Zeigers entfernt, fehlt der
-            # Anker; dann gilt ``seq < before``, statt dass die Seite leer bleibt.
+            # mit höherem seq nach
             anchor = select(table.c.ts).where(table.c.seq == q.before).scalar_subquery()
             conditions.append(
                 or_(
                     table.c.ts < anchor,
                     and_(table.c.ts == anchor, table.c.seq < q.before),
-                    and_(anchor.is_(None), table.c.seq < q.before),
                 )
             )
         statement = (
