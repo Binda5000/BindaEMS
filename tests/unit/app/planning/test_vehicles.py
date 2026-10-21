@@ -22,6 +22,7 @@ from bindaems.app.planning.vehicles import (
     expected_vehicles,
     grid_allowed,
     horizon_need,
+    latest_start,
     planned_vehicles,
 )
 from bindaems.shared.config import Config
@@ -202,12 +203,31 @@ def test_departure_beyond_horizon_reduces_the_need() -> None:
     horizon_end = at("2026-10-17T12:00:00+00:00")
     departure = horizon_end + 2 * HOUR
     # Wallbox-Seite (Ruling R10): need enthält η schon, die Zeit danach zählt ohne η
-    assert horizon_need(30.0, 11040.0, departure, horizon_end) == pytest.approx(30 - 11.04 * 2)
-    assert horizon_need(30.0, 11040.0, departure, horizon_end) == pytest.approx(7.92)
+    # nach dem Horizont zählt die Leistung wie bei ``latest_start``: durch 1,1 geteilt, 15 min
+    # Puffer vor der Abfahrt: 11,04 · (2 − 0,25) / 1,1 kWh
+    assert horizon_need(30.0, 11040.0, departure, horizon_end) == pytest.approx(
+        30 - 11.04 * (2 - 0.25) / 1.1
+    )
     # Abfahrt im Horizont: der ganze Bedarf; weit dahinter: nichts
     assert horizon_need(30.0, 11040.0, horizon_end, horizon_end) == 30.0
     assert horizon_need(30.0, 11040.0, horizon_end - HOUR, horizon_end) == 30.0
     assert horizon_need(30.0, 11040.0, horizon_end + 10 * HOUR, horizon_end) == 0.0
+
+
+def test_horizon_need_keeps_the_latest_start_margin() -> None:
+    horizon_end = at("2026-10-17T12:00:00+00:00")
+    departure = horizon_end + timedelta(minutes=30)
+    # Abfahrt 30 min hinter dem Horizont, Bedarf 10 kWh, 11 kW: Wie bei ``latest_start`` gilt
+    # die Ladedauer mal 1,1 und 15 min Puffer vor der Abfahrt. Nach dem Horizont bleiben
+    # (0,5 h − 0,25 h) / 1,1 · 11 kW = 2,5 kWh (nicht 5,5 kWh wie ohne Zuschlag und Puffer).
+    assert horizon_need(10.0, 11000.0, departure, horizon_end) == pytest.approx(10 - 2.5)
+    # dieselbe Rechnung rückwärts: Mit dem Rest nach dem Horizont startet ``latest_start`` genau
+    # am Horizontende
+    after_kwh = 10.0 - horizon_need(10.0, 11000.0, departure, horizon_end)
+    start = latest_start(departure, after_kwh, 11000.0)
+    assert start is not None and abs(start - horizon_end) < timedelta(seconds=1)
+    # Abfahrt weniger als der Puffer hinter dem Horizont: nach dem Horizont geht nichts mehr
+    assert horizon_need(10.0, 11000.0, horizon_end + timedelta(minutes=10), horizon_end) == 10.0
 
 
 def test_planned_vehicles_carry_horizon_need_and_allowance(cfg: Config) -> None:

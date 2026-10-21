@@ -142,14 +142,19 @@ def horizon_need(need: float, max_w: float, departure_at: datetime, horizon_end:
     """Der Teil des Bedarfs in kWh, der im Horizont geladen werden muss (Entscheidung 6).
 
     Liegt die Abfahrt hinter dem Horizontende, muss nur das geladen werden, was danach mit voller
-    Leistung nicht mehr ginge: ``max(0, need − max_w / 1000 · Stunden zwischen Horizontende und
-    Abfahrt)``; sonst der ganze Bedarf. Gerechnet wird auf der Wallbox-Seite wie ``need_kwh``
-    (Ruling R10): Der Wirkungsgrad steckt schon im Bedarf und kommt hier nicht noch einmal dazu.
+    Leistung nicht mehr ginge. Die Leistung danach zählt wie in ``latest_start``: durch
+    ``LATEST_START_MARGIN`` geteilt, und ``LATEST_START_BUFFER`` vor der Abfahrt lädt das Auto
+    nicht mehr: ``max(0, need − max_w / 1000 · (Stunden zwischen Horizontende und Abfahrt −
+    Puffer) / Zuschlag)``; sonst der ganze Bedarf. So liegt eine Abfahrt knapp hinter dem Horizont
+    nie zu knapp (mehr Autoenergie im Horizont, nie weniger). Gerechnet wird auf der Wallbox-Seite
+    wie ``need_kwh`` (Ruling R10): Der Wirkungsgrad steckt schon im Bedarf und kommt hier nicht
+    noch einmal dazu.
     """
     after_h = (ensure_utc(departure_at) - ensure_utc(horizon_end)).total_seconds() / 3600
     if after_h <= 0:
         return need
-    return max(0.0, need - max_w / 1000 * after_h)
+    usable_h = max(0.0, after_h - LATEST_START_BUFFER.total_seconds() / 3600)
+    return max(0.0, need - max_w / 1000 * usable_h / LATEST_START_MARGIN)
 
 
 def _slots_before(departure_at: datetime, slots: Sequence[SlotInput]) -> int:
