@@ -2,8 +2,7 @@ from datetime import datetime
 
 import pytest
 from tests.app_helpers import price_row, set_feed_in
-from tests.helpers import FakeSink
-from tests.unit.app.ledger.conftest import FakeInflux
+from tests.helpers import FakeInflux, FakeSink
 
 from bindaems.app.charging.planned import PlannedCharges
 from bindaems.app.charging.sessions import SessionService

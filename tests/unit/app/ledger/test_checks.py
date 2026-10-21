@@ -1,7 +1,7 @@
 from datetime import UTC, date, datetime, timedelta
 
 import pytest
-from tests.unit.app.ledger.conftest import FakeInflux
+from tests.helpers import FakeInflux
 
 from bindaems.app.history.influx import InfluxQueryError
 from bindaems.app.ledger.checks import NOTE_MISSING, DayCheck, check_day

@@ -7,6 +7,7 @@ import pytest
 from pydantic import SecretStr
 from structlog.testing import capture_logs
 from tests.app_helpers import T_APP, sample_inputs
+from tests.helpers import stop
 from websockets.asyncio.server import ServerConnection, serve
 
 from bindaems.app.core_link import LiveState
@@ -340,7 +341,7 @@ async def test_run_checks_every_second(env: Env) -> None:
             if env.calls:
                 break
     finally:
-        task.cancel()
+        await stop(task)
     assert set(sleeps) == {1.0}
     assert len(sleeps) >= NOTIFY_AFTER_S
     assert len(env.calls) == 2
@@ -704,7 +705,7 @@ async def test_warning_check_survives_broken_inputs(cfg: Config, warn: WarnEnv) 
         for _ in range(5):
             await asyncio.sleep(0)
     finally:
-        task.cancel()
+        await stop(task)
     assert sleeps and set(sleeps) == {1.0}
     assert warn.calls == []
 

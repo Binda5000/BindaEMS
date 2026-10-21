@@ -339,6 +339,8 @@ async def test_cancelled_helper_ends_the_session_as_a_connection_error(fake_env)
     with pytest.raises(ConnectionError) as raised:
         await asyncio.wait_for(adapter._session(), 1.0)
     assert str(raised.value) == "Hilfs-Task beendet: Sender (abgebrochen)"
+    # Leser und Keepalive sind abgewartet: Nach der Sitzung läuft kein Task mehr.
+    assert asyncio.all_tasks() == {asyncio.current_task()}
 
 
 async def test_session_end_by_a_helper_leaves_no_task_behind(fake_env) -> None:
