@@ -292,6 +292,24 @@ def test_tessie_complete_belongs_to_the_limit_it_was_reported_at(cfg) -> None:
     assert update(b, 1, twc_obs=on, tesla_obs=at(90.0)).vehicles["tesla"].complete
 
 
+def test_complete_without_limit_keeps_known_limit(cfg) -> None:
+    a = Assignment(cfg, started=T0)
+    intent = Intent(version=1, control=True, vehicles={"tesla": VehicleIntent(wallbox="evcs")})
+
+    def at(s: int, pct: float | None, *, complete: bool = False) -> VehicleState:
+        done = evcs(complete=complete)
+        obs = tesla(plugged=True, charge_limit_pct=pct)
+        return update(a, s, evcs_obs=done, tesla_obs=obs, intent=intent).vehicles["tesla"]
+
+    assert at(0, 80.0).wallbox == "evcs"
+    # die EVCS meldet „geladen“, Tessie kennt das Limit: geladen bei 80
+    assert at(1, 80.0, complete=True).complete
+    # nächster Zyklus: die EVCS meldet es weiter, Tessie kennt das Limit gerade nicht
+    assert at(2, None, complete=True).complete
+    # ein höheres Limit etwa für „Geplant“: nicht mehr geladen
+    assert not at(3, 90.0).complete
+
+
 @pytest.mark.parametrize("twc_before", [None, False], ids=["never_known", "no_vehicle"])
 def test_tessie_complete_counts_during_a_wall_connector_outage(cfg, twc_before) -> None:
     a = Assignment(cfg, started=T0)

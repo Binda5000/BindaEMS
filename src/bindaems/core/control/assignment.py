@@ -604,7 +604,8 @@ class Assignment:
         „Geladen“ heißt: voll bis zum Ladelimit, das Tessie dabei meldete. Meldet Tessie später ein
         anderes Limit, gilt es nicht mehr, etwa nach einem höheren Limit für „Geplant“; ist das
         Auto auch daran voll, meldet Tessie es wieder. Ein unbekanntes Limit, beim Melden oder
-        jetzt, ändert nichts. So hängt es nicht davon ab, wann Tessie das neue Limit bestätigt und
+        jetzt, ändert nichts; meldet die Wallbox „geladen“ ohne Limit, bleibt das bekannte Limit
+        desselben Vorgangs. So hängt es nicht davon ab, wann Tessie das neue Limit bestätigt und
         ob danach noch ein alter Bericht kommt.
         """
         port = self._ports[wallbox_key]
@@ -614,6 +615,9 @@ class Assignment:
         session = (wallbox_key, port.count)
         limit = tessie.charge_limit_pct
         if wallbox.complete is True or tessie.complete is True:
+            known = self._charged.get(key)
+            if limit is None and known is not None and known[0] == session:
+                return True  # ohne Limit gemeldet: das bekannte desselben Vorgangs bleibt
             self._charged[key] = (session, limit)
         held = self._charged.get(key)
         if held is None or held[0] != session:
