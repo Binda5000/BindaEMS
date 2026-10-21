@@ -114,6 +114,12 @@ nach der Abnahme der Phase 3**. Nichts geht von selbst live: Die Automatik ist a
 einschaltest, erwartete Autos ändern nur den Plan, und gelernte Werte erreichen die Safety-Schicht nie.
 Als Nächstes folgt 5c (Vorheizen und Vorkühlen, erst mit Daten aus 6a).
 
+**Die Welle „Aufgeschobene Kleinigkeiten“ (56 Punkte K1 bis K56, freigegeben vom Betreiber am 21.10.2026 um 10:39) ist
+umgesetzt** (`docs/superpowers/plans/2026-10-21-aufgeschobene-kleinigkeiten.md`, 13 Tasks, subagent-driven, Branch
+`claude/project-thread-yjjmlu`, Plan ab `d9c3cc8`): kleine Korrekturen aus den Listen der Pläne 2c bis 6a vor dem
+gemeinsamen Pull nach dem 16.11.2026, **nicht auf `main`, nicht ausgerollt** (siehe „Kurzfassung“, „Welle
+Aufgeschobene Kleinigkeiten“). Die durchgestrichenen Punkte in „Bewusst offen gelassen“ sind erledigt.
+
 `main` ist seit dem 12.10.2026 auch der Standard-Branch auf GitHub.
 
 ## Kurzfassung
@@ -588,8 +594,8 @@ Als Nächstes folgt 5c (Vorheizen und Vorkühlen, erst mit Daten aus 6a).
       Grenze von 20 s erreicht; an der Anlagenmaschine messen.
     - Einmal in HA prüfen, dass die Text-Entität „Abfahrtszeit“ „unbekannt“ zeigt (nicht den Text
       „None“), solange keine Absicht bekannt ist.
-    - `horizon_need` hat keinen Puffer: Liegt die Abfahrt knapp hinter dem Ende des Horizonts, gibt es
-      keinen Spielraum.
+    - ~~`horizon_need` hat keinen Puffer: Liegt die Abfahrt knapp hinter dem Ende des Horizonts, gibt es
+      keinen Spielraum.~~ (erledigt 21.10.2026, Plan aufgeschobene-kleinigkeiten, K18)
     - Die gesammelten Kleinigkeiten stehen in der Abschlusszusammenfassung
       `/mnt/project-files/plaene/phase-4b-abschluss.md` (außerhalb des Repos).
 - **Phase 6a (Klimaanlage) ist umgesetzt, je Task und im Gesamtreview geprüft, die Fix-Welle ist umgesetzt**
@@ -611,14 +617,14 @@ Als Nächstes folgt 5c (Vorheizen und Vorkühlen, erst mit Daten aus 6a).
   - **Vorrang der Autos** (`charging.py`): „will mehr“ nur, wenn das Auto seinem Befehl folgt, mit
     Anlaufzeit 90 s, Hysterese und nur mit der Leistung, die die Klimaanlage freigeben kann.
   - **Anzeige:** Karte „Klimaanlage“ auf „System“, HA-Sensoren `thermal_<key>_offset/mode/power/wish`,
-    Influx-Messung `thermal`, Grafana-Zeile „Klimaanlage“, neun Gründe im Entscheidungslog.
+    Influx-Messung `thermal`, Grafana-Zeile „Klimaanlage“, zehn Gründe im Entscheidungslog (`thermal_no_echo` seit dem 21.10.2026).
   - **Werkzeuge:** `coe_probe listen`, `verify_part2 --punkt thermal --geraet klima` (Spec 17.2, Punkt
     9); sechs Szenarien `klima-*` im Simulator.
   - **Deploy und Doku:** `ems-core` veröffentlicht `5442:5442/udp`; Betriebshandbuch „Klimaanlage
     (Phase 6a)“, Checkliste `docs/verification/abnahme-phase-6a.md`, Spec „Stand Plan 6a“ in 8.2,
     8.7, 11.2, 12, 17.2 und 18.
-  - **Offen (klein):** Übergabe ohne Echo bleibt in „Übergabe“ (Festlegung R32, sicher); die
-    Schätzung der Grundlast der Klimaanlage ist im Dry-Run nicht sichtbar; an der Anlage zu bestätigen:
+  - **Offen (klein):** Übergabe ohne Echo bleibt in „Übergabe“ (Festlegung R32, sicher); ~~die
+    Schätzung der Grundlast der Klimaanlage ist im Dry-Run nicht sichtbar~~ (erledigt 21.10.2026, Plan aufgeschobene-kleinigkeiten, K3); an der Anlage zu bestätigen:
     Absender der Pakete, Knotennummer und Einheit der Leistung, die Zeiten. Alles weitere steht in
     `docs/superpowers/plans/2026-10-19-phase-6a-entscheidungen.md`.
 - **Plan 3d (Regel R1 nur, bis der Akku leer ist) ist umgesetzt, je Task und im Gesamtreview geprüft,
@@ -653,7 +659,7 @@ Als Nächstes folgt 5c (Vorheizen und Vorkühlen, erst mit Daten aus 6a).
     der PV); Commits der Teilagenten tragen den Co-Authored-By des Modells, das sie schrieb.
   - **Aufgeschobene Kleinigkeiten:** Task 1: die Änderung von `broken` im Szenario-Werkzeug hat keinen
     eigenen Test (Task 3 deckt sie mit `r1_violations == 0`); ein Test `test_export_after_includes_the_slot`
-    entfiel mit `export_after_kwh`; `EMPTY_TOL_KWH` könnte `= R1_TOL_KWH` sein; ein Netzladen bis rund
+    entfiel mit `export_after_kwh`; ~~`EMPTY_TOL_KWH` könnte `= R1_TOL_KWH` sein;~~ (erledigt 21.10.2026, Plan aufgeschobene-kleinigkeiten, K50) ein Netzladen bis rund
     0,1 kWh endet innerhalb der Toleranz und das Fenster ist ein Slot (stimmig mit der Toleranz); der Text
     des Befunds „danach {kWh} kWh Einspeisung“ blieb. Task 2: Test 3 hat keine PV und beweist nur die
     Lösbarkeit mit `lo = soc0`; `e` des letzten Slots wird angelegt und nicht gebraucht; der Docstring
@@ -742,6 +748,54 @@ Als Nächstes folgt 5c (Vorheizen und Vorkühlen, erst mit Daten aus 6a).
     „Deferred minors 5b“ steht unter „Bewusst offen gelassen“.
   - **Offen:** an der Anlage das Ausrollen und die 28 Tage der Abnahme (Punkt 11 unter „Offen an der
     Anlage“).
+- **Welle „Aufgeschobene Kleinigkeiten“ (21.10.2026) ist umgesetzt, je Task geprüft** (Plan:
+  `docs/superpowers/plans/2026-10-21-aufgeschobene-kleinigkeiten.md`, 13 Tasks, 56 Punkte K1 bis K56, Ausführung
+  subagent-driven; Branch `claude/project-thread-yjjmlu`, **noch nicht auf `main`, nicht ausgerollt**). Kein neues
+  Feature; die erledigten Punkte stehen durchgestrichen in den Listen unter „Bewusst offen gelassen“, die
+  übrigen unter „Aufgeschobene Kleinigkeiten (Welle 21.10.2026)“ und im Plan unter „Nicht vorgeschlagen“. Was sich
+  für dich an der Anlage ändert:
+  - **Wallboxen:** Der Wall Connector zeigt bei offenem Schütz 0 W statt etwa 1 W (K1; Phasenströme und
+    -spannungen bleiben die Messung, der Phasenwächter sieht sie weiter). Meldet die EVCS „geladen“ ohne bekanntes
+    Ladelimit, behält der core das bekannte Limit des Vorgangs (K2).
+  - **Klimaanlage:** Die Karte auf „System“ zeigt „Grundlast … W · freigebbar … W“ (K3, Health `base_w` und `spare_w`);
+    nach dem Ende des Hinweises „weniger“ wartet die Strategie die volle Zeit der Einspeisung, bevor der Wunsch
+    steigt (K4); der neue Grund `thermal_no_echo` trennt „kein Echo oder gesperrt“ von `thermal_stale` (K5); der
+    CoE-Adapter übersteht Sendefehler, `unit` liegt zwischen 0 und 255 (K6, eine `config.yaml` mit einem Wert
+    außerhalb wird beim Start abgelehnt; die Beispielkonfiguration nennt nur kleine Nummern). Health zeigt `peak`
+    nach der Viertelstunde und `target_kw` im Leerlauf richtig, Zahlen in Texten haben das Komma, „Auffrischen ist
+    nie dringend“ hat einen eigenen Befund (K7 bis K10).
+  - **Planung:** Der Vergleich des Plans beim core nimmt `created_at` dazu, die falsche Zeile „Plan wartet …“ entfällt,
+    Health wird beim Verbinden verworfen und sofort neu abgefragt (K11 bis K13); eine geänderte Unterstützungsschwelle
+    plant neu, der Auslöser „Fahrzeug“ bei Ladelimit höchstens alle 5 min, die Kürzung nach R1 steht im Log, eine
+    kaputte Plan-Zeile blockiert nichts, der Plan prüft seine Ordnung, und eine Abfahrt knapp hinter dem Horizont
+    bekommt den Puffer von `latest_start` (K14 bis K18; K18 ändert Pläne: etwas mehr Autoenergie im Horizont).
+  - **app:** Die Sicherung der Datenbank läuft um **04:00** statt 03:15, also nach Training (03:15) und Fahrverhalten
+    (03:40) (K19); das Lastmodell bewertet beim Start neu, ignoriert NaN, die Registry prüft die Art, das Wetterarchiv
+    wird nach 120 Tagen aufgeräumt, die Sensorliste nennt den Grund ohne HA-Leser, der Status nennt einen
+    gescheiterten HA-Verlauf (K20 bis K25); der Puffer des Entscheidungslogs ist auf 10 000 Einträge begrenzt (K26);
+    eine alte HA-Meldung bleibt nicht stehen, die HA-Zahl der Schwelle nimmt nur ganze Zahlen (K28, K29); die
+    Ziel-API prüft erst das Fahrzeug (404 vor 422) und lehnt leere Anfragen ab, `departure_on` nimmt nur ein Datum
+    (K30, K31); Fahrverhalten und Automatik (K32 bis K36, neuer Stand `pending`). **K27 ist überholt:** Nach dem
+    Aufräumen ist die leere Seite des Entscheidungslogs richtig.
+  - **UI:** Zeitplan mit der Achse ab jetzt, ohne 40 s Warten bei gleichem Wert und mit dem Tag bei „Fertig um“; „Plan gegen
+    Ist“ sagt, woher der Plan kommt; Prognosen mit dem Hinweis bei 409, ohne Abfrage im verborgenen Tab und mit einem
+    Band nie unter 0; der Tarif-Editor prüft echte Kalenderdaten (K37 bis K44).
+  - **Werkzeuge:** `verify_part2 --punkt thermal` überspringt Schritt 4 nach einem nicht bestandenen Schritt 2 (K45);
+    die Watchdog-Probe behandelt **SIGTERM und SIGHUP** wie Strg+C, gibt den Watchdog frei und endet mit **143** (K46);
+    `export_days` öffnet die Datenbank **nur lesend** (`mode=ro`), loggt nach stderr, und `scenario_days` endet bei einem
+    Fehler mit 2 (K47); `plan-netzladen` rechnet mit der Kapazität der Konfiguration, die Prüfsätze des Simulators
+    zeigen eine Stelle mehr (K48, K49).
+  - **Aufräumen ohne Wirkung** (K50 bis K56): Konstanten je einmal, `Command.refreshes`, ein `Key`-Alias, öffentliche Helfer,
+    `Support.update` und `assess` mit ausdrücklichen Parametern, Grafana (Leistung der Klimaanlage gesamt, Lücken im
+    Versatz) und das Minuszeichen im UI.
+  - **Zum gemeinsamen Ausrollen:** core und app ändern sich zusammen und gehen gemeinsam aus demselben Stand (Betriebshandbuch,
+    „core und app immer gemeinsam“): K1 bis K10 und K50, K51 und K53 ändern den core (Health bekommt `base_w` und
+    `spare_w`, ein Grundcode kommt dazu; das UI-Schema nimmt die Felder optional, eine kurze Versionsmischung
+    bricht „System“ nicht). **Keine Migration:** die letzte ist `0014`, und `git diff d9c3cc8..HEAD --stat --
+    src/bindaems/app/db/migrations` ist leer (`app/db/engine.py` hat nur die neue Funktion `open_database_readonly`);
+    keine neue Einstellung, keine neue Abhängigkeit. Die Regelung ändert sich nur in K2 und K4, beide in die sichere
+    Richtung. Ausgerollt wird mit dem gemeinsamen Pull nach dem 16.11.2026 (3d, 4b, 5a, 5b, 6a); ein Schritt
+    des Betreibers, nichts geht dabei von selbst live.
 - **Images:** `ghcr.io/binda5000/bindaems-core:latest` und `ghcr.io/binda5000/bindaems-app:latest`.
   Sie sind öffentlich, und die CI setzt `latest` bei jedem Push auf `main`. core und app werden
   immer gemeinsam aus demselben Stand ausgerollt (gleiche Compose-Datei, gleiche Image-Tags): Die
@@ -781,6 +835,9 @@ Als Nächstes folgt 5c (Vorheizen und Vorkühlen, erst mit Daten aus 6a).
   mit Abdeckungsgrenzen (≥ 75 % insgesamt, ≥ 90 % für `core/safety`, `core/control` und
   `core/actuators`), Vitest mit svelte-check, Prettier und ESLint; dazu E2E mit Playwright.
 - **Offen:**
+  - an der Anlage: die Welle „Aufgeschobene Kleinigkeiten“ gemeinsam mit 3d, 4b, 5a, 5b und 6a ausrollen (core und app
+    zusammen, nach dem 16.11.2026, keine Migration); an der Anlage zu bestätigen: `mode=ro` für `export_days` auf der
+    WAL-Datenbank im Compose-Volume, die Probe mit `docker stop` (Exitcode 143)
   - an der Anlage: Plan 3d (Regel R1 bis der Akku leer ist) ausrollen, Zeitpunkt entscheidet der
     Betreiber (Entscheidung 6); Vorschlag: mit 4b und 6a (Punkt 9 unter „Offen an der Anlage“)
   - an der Anlage: Plan 5b (core und app gemeinsam, Regelbetrieb aus) mit 3d, 4b, 5a und 6a ausrollen
@@ -897,6 +954,7 @@ Als Nächstes folgt 5c (Vorheizen und Vorkühlen, erst mit Daten aus 6a).
 | `docs/superpowers/plans/2026-10-19-phase-6a-entscheidungen.md` | Festlegungen R1 bis R32 der Umsetzung von Plan 6a (je mit Kosten, falls falsch) und die offenen Kleinigkeiten |
 | `docs/superpowers/plans/2026-10-20-phase-5a-lastmodell.md` | Plan 5a, 14 Tasks, umgesetzt auf dem Branch `claude/phase-5-plan-s7xe0n` (noch nicht auf `main`, nicht ausgerollt): Wetterarchiv, HA-Sensoren, Merkmale, LightGBM, Backtest, Registry, Aktivierungsregel, Schattenbetrieb, Seite „Prognosen“, Einstellungen „Lastmodell“; die Einordnung teilt Phase 5 in 5a, 5b und 5c; die 17 Entscheidungen des Betreibers vom 20.10.2026, Präzisierungen, Texte |
 | `docs/superpowers/plans/2026-10-20-phase-5b-fahrverhalten.md` | Plan 5b, 14 Tasks, umgesetzt auf dem Branch `claude/phase-5b-plan-xo03ty`, seit dem 21.10.2026 auf `main` (Gesamtreview und Fix-Welle erledigt, nicht ausgerollt): Fahrverhalten mit Vorschlägen, Automatik für „Geplant“, Abfahrt an einem Datum und erwartete Autos im Planer; 17 Entscheidungen, vom Betreiber am 20.10.2026 freigegeben |
+| `docs/superpowers/plans/2026-10-21-aufgeschobene-kleinigkeiten.md` | Welle „Aufgeschobene Kleinigkeiten“, 13 Tasks, 56 Punkte K1 bis K56 vor dem gemeinsamen Ausrollen; vom Betreiber am 21.10.2026 freigegeben |
 | `cerbo-watchdog/README.md` | Watchdog: Zustände, Zeiten, D-Bus-Pfade, Installation und Probe |
 | `docs/verification/abnahme-phase-1.md` | Checkliste für die Abnahme der Phase 1 |
 | `docs/verification/abnahme-phase-4.md` | Checkliste für die Abnahme der Phase 4: Teil Statistik (Plan 4a, 30 Tage ab dem Ausrollen, Abgleich innerhalb ±1 %), „Ziel-SOC“ (mindestens 95 % der machbaren geplanten Ladungen, `GET /api/stats`) und „HA in beide Richtungen“ (Tabelle aller Bedienelemente) aus Plan 4b |
@@ -1049,6 +1107,12 @@ UPDATE_UI_CONTRACT=1 uv run pytest tests/integration/test_ui_contract.py
 # Demo-Backend mit gebautem UI
 uv run python -m tests.e2e.ui_server --port 8099 --ui-dir ui/build
 ```
+
+**Reihenfolge der Testpfade:** `pytest tests/unit/app/ledger tests/unit/test_docs.py tests/unit/app/stats` in
+dieser Reihenfolge endet mit „make_client not found“ in den Routentests der Statistik. Das ist eine Eigenheit von
+pytest 9.1.1 (Knotenidentität der `conftest.py`-Dateien), sie tritt schon vor der Welle „Aufgeschobene Kleinigkeiten“
+und auch mit anderen Verzeichnissen auf. Starte `pytest tests` ganz oder halte die Pfade der app zusammen (ohne
+`tests/unit/test_docs.py` dazwischen); einzeln und im vollen Lauf tritt es nicht auf.
 
 Demo-Zugänge: `admin`, `bedienen` (Bedienen), `gast` (Lesen) und `sicher` (Admin mit TOTP, Geheimnis
 `JBSWY3DPEHPK3PXP`). Das Passwort ist jeweils `demo-passwort-1`.
@@ -1962,8 +2026,8 @@ Entschieden in Phase 2a; die Festlegungen stehen im Plan (Präzisierungen) bzw. 
   erst ab 2d, und die API prüft die Typen der Felder nicht streng (etwa `"version": true`).
 - Die Texte der Plausibilitätsprüfung aus Phase 1 zeigen den Dezimalpunkt („300.0 V“), auch unter
   „Eingangsdaten“ auf der System-Seite.
-- Die Probe behandelt nur SIGINT. `docker stop` oder SIGTERM beenden sie ohne Freigabe des
-  Watchdogs (Betriebshandbuch 14). Ihre Schritte „scharf“, „Auslösung“ und „Freigabe“ können
+- ~~Die Probe behandelt nur SIGINT. `docker stop` oder SIGTERM beenden sie ohne Freigabe des
+  Watchdogs (Betriebshandbuch 14).~~ (erledigt 21.10.2026, Plan aufgeschobene-kleinigkeiten, K46) Ihre Schritte „scharf“, „Auslösung“ und „Freigabe“ können
   „OK“ melden, ohne dass sich der Zustand geändert hat, wenn der Startzustand schon dem Ziel
   entspricht.
 - Die `config.ini` des Watchdogs ändert man nicht von Hand (Betriebshandbuch 14). Täte man es,
@@ -2171,19 +2235,19 @@ Notizen für später aus Plan 2c-2a:
 Aufgeschobene Kleinigkeiten aus Plan 2c-2a (die inhaltlichen; sie sind klein, keine blockiert
 etwas):
 
-- **Doppelte Definitionen:** Die Regel „`refresh` zählt nur beim Netz-Sollwert“ steht dreimal
+- **Doppelte Definitionen:** ~~Die Regel „`refresh` zählt nur beim Netz-Sollwert“ steht dreimal
   (`core/safety/layer.py`, `core/control/executor.py`, `tools/sim/runner.py`); ein gemeinsames
-  Prädikat neben `Command` verhinderte Abweichungen. Den Alias `_Key` für (Aktor, Art) gibt es in
+  Prädikat neben `Command` verhinderte Abweichungen.~~ (erledigt 21.10.2026, Plan aufgeschobene-kleinigkeiten, K51) ~~Den Alias `_Key` für (Aktor, Art) gibt es in
   `executor.py`, `foreign.py`, `safe_state.py`, `runtime.py` und `tools/part2/session.py`; er ließe
-  sich zusammenführen, wenn `Key` in `shared/control` läge. Den Schlüssel (`victron`,
+  sich zusammenführen, wenn `Key` in `shared/control` läge.~~ (erledigt 21.10.2026, Plan aufgeschobene-kleinigkeiten, K51) Den Schlüssel (`victron`,
   `grid_setpoint`) gibt es in `battery.py` und `regulation.py` doppelt, die Menge der
   Unterstützungs-Modi in `battery.py` und `charging.py`. Die Platzierung von `ControlCommand`,
   `LastValues` und `ok_number` ist plangemäß, aber schwach. `MovingAverage` liegt in
   `tesla_policy.py` und trägt einen Docstring „Zeit der Safety-Schicht“, der Wächter nutzt es auf
   der Wanduhr.
 - **Grenzfälle im Verhalten:**
-  - `health().peak` zeigt nach dem Ende einer überschrittenen Viertelstunde weiter `exceeded`,
-    solange die Regelung ruht (nur Anzeige; der Alarm endet).
+  - ~~`health().peak` zeigt nach dem Ende einer überschrittenen Viertelstunde weiter `exceeded`,
+    solange die Regelung ruht (nur Anzeige; der Alarm endet).~~ (erledigt 21.10.2026, Plan aufgeschobene-kleinigkeiten, K7)
   - Ein eigener Override, der im Totband über einem inzwischen gefallenen Budget liegt, wird beim
     Auffrischen von Regel 2 auf einen Wert ohne 10-W-Raster geklemmt (nur wenn `P_zul` fällt, etwa
     in einer überschrittenen Viertelstunde).
@@ -2196,8 +2260,8 @@ etwas):
     `SETTLE_S` neu, ohne den Strom zu ändern, und das „ausstehend“ eines Autos am Boden wird über
     230 V nie 0. Die Marge fängt es; ein Totband wäre eine Entscheidung des Betreibers (siehe „Offen
     an der Anlage“).
-  - Ein dringender Befehl mit `refresh` bekommt `urgent.ignored` mit dem Text „nicht Richtung
-    sicherer Zustand“, obwohl nur `refresh` die Dringlichkeit verhindert.
+  - ~~Ein dringender Befehl mit `refresh` bekommt `urgent.ignored` mit dem Text „nicht Richtung
+    sicherer Zustand“, obwohl nur `refresh` die Dringlichkeit verhindert.~~ (erledigt 21.10.2026, Plan aufgeschobene-kleinigkeiten, K10)
   - `projected_kw` und `reduction_kw` in Health können bei physikalisch unsinnigen Eingaben
     unendlich werden (nur das Budget ist garantiert endlich); `MovingAverage.value` wirft bei einer
     überlaufenden Summe einen `OverflowError`, und die Regelung setzte dann mit `control.exception`
@@ -2205,9 +2269,9 @@ etwas):
 - **Simulator:** Das Modell hebt den Override bei einer Auslösung des Watchdogs nicht auf (der echte
   Watchdog tut es mit `victron.live_allowed`), und kein Szenario verbindet heute den Ausfall
   `cerbo`, den Watchdog und Victron live. `sim_config` prüft `control` nur feldweise (die Prüfung
-  von `import_margin_a` gegen das Importlimit läuft nicht erneut). Die Verstoß-Sätze einiger
+  von `import_margin_a` gegen das Importlimit läuft nicht erneut). ~~Die Verstoß-Sätze einiger
   Szenario-Prüfungen runden ihren Wert (ein Verstoß um 0,001 läse sich wie die Grenze); je ein
-  Aufruf von `shown_number` behöbe das.
+  Aufruf von `shown_number` behöbe das.~~ (erledigt 21.10.2026, Plan aufgeschobene-kleinigkeiten, K49; vier Stellen bleiben, siehe „Aufgeschobene Kleinigkeiten (Welle 21.10.2026)“, Task 11)
 - **Tests:** Es fehlen Tests dafür, dass der Modus des Gastes aus `intent.guest.mode` kommt (über
   `Regulation.step`) und dass `start_cycle` den Merker `_regulated` zurücksetzt; die Tests für
   `_lapses_at` und für den Stream in einem gescheiterten Zyklus kamen mit der Fix-Welle nach dem
@@ -2375,9 +2439,9 @@ Aufgeschobene Kleinigkeiten aus Plan 2c-2b (die inhaltlichen; sie sind klein, ke
   `assignment_detected` trägt und dass der Merker eines neu erkannten Autos ein `idle` übersteht.
   `test_wallbox_health_is_empty_before_the_first_step_and_after_idle` prüft nicht, dass der Stand vor
   `idle` nicht leer war.
-- **Docstrings und Doppelungen:** Der Docstring von `assignment.py` nennt die Boost-Regel ungenau
-  („an dem das Fahrzeug steht“ statt „im vorigen Aufruf stand, solange dieser Vorgang läuft“).
-  `_NOBODY` in `charging.py` wiederholt das Literal „ohne Vorgang“ aus `assignment.py`; ein vom
+- **Docstrings und Doppelungen:** ~~Der Docstring von `assignment.py` nennt die Boost-Regel ungenau
+  („an dem das Fahrzeug steht“ statt „im vorigen Aufruf stand, solange dieser Vorgang läuft“).~~ (erledigt 21.10.2026, Plan aufgeschobene-kleinigkeiten, K51)
+  ~~`_NOBODY` in `charging.py` wiederholt das Literal „ohne Vorgang“ aus `assignment.py`;~~ (erledigt 21.10.2026, Plan aufgeschobene-kleinigkeiten, K51) ein vom
   Detektor anderswo erkanntes, übersteuertes Fahrzeug überschriebe seinen Platz in
   `_place_at_sessions` (heute unmöglich, der Detektor schließt es aus).
 - **Simulator:** `model.py` nimmt für den Gast `next(iter(cfg.wallboxes))` (ohne Wallbox ein Fehler),
@@ -2479,9 +2543,9 @@ Aufgeschobene Kleinigkeiten aus Plan 2d (aus den Reviews; keine davon gefährdet
 - **`PUT /v1/intent` am core:** Der Notfallweg kennt kein Passwort (Token genügt) und übernimmt jede
   neuere Version ohne Abgleich der Basis; schreiben app und ein direkter Aufruf im selben Moment, gilt
   der spätere.
-- **Benachrichtigungen:** Kehrt ein Alarm zurück, während das Entfernen seiner alten Meldung noch
+- **Benachrichtigungen:** ~~Kehrt ein Alarm zurück, während das Entfernen seiner alten Meldung noch
   aussteht, und verschwindet er vor einer neuen Meldung wieder, bleibt die alte Meldung in Home
-  Assistant stehen. Ablehnungen und Alarme teilen sich die Verbindung zu Home Assistant der Reihe nach.
+  Assistant stehen.~~ (erledigt 21.10.2026, Plan aufgeschobene-kleinigkeiten, K28) Ablehnungen und Alarme teilen sich die Verbindung zu Home Assistant der Reihe nach.
 - **HA-Befehle:** Die Begrenzung auf einen Befehl je Sekunde misst beim Verarbeiten, nicht beim
   Eintreffen; antwortet der core langsam, werden gestaute Befehle ausgeführt statt verworfen. Ein
   Abruf der Absicht neben einer Bedienung kann den Zustand in Home Assistant für bis zu 5 s
@@ -2490,8 +2554,8 @@ Aufgeschobene Kleinigkeiten aus Plan 2d (aus den Reviews; keine davon gefährdet
   `live_allowed` verkleinert (sichere Richtung). Die URL-Filter der Seite „Entscheidungen“ können bei
   sehr schnellem Wechsel kurz von der Anzeige abweichen. Ein ungültiger SOC-Wert wird still
   zurückgesetzt.
-- **Entscheidungslog:** Ein `before`-Zeiger auf eine aufgeräumte Zeile liefert eine leere Seite; fällt
-  die Datenbank aus, wächst der Puffer der app bis zur Rückkehr.
+- **Entscheidungslog:** ~~Ein `before`-Zeiger auf eine aufgeräumte Zeile liefert eine leere Seite;~~ (überholt 21.10.2026, Plan aufgeschobene-kleinigkeiten, K27: Das Aufräumen löscht nach `ts`; fehlt die Zeile des Zeigers, sind alle älteren Zeilen auch weg, die leere Seite ist richtig, ein Test hält es fest) ~~fällt
+  die Datenbank aus, wächst der Puffer der app bis zur Rückkehr.~~ (erledigt 21.10.2026, Plan aufgeschobene-kleinigkeiten, K26)
 - **Tesla:** `poll_soon` verkürzt die Wartezeit nach einem Fehler (höchstens eine Abfrage mehr je
   Anstecken). Der Simulator beschriftet Boost-Sekunden nach der Absicht, nicht nach der Regelung.
 - **Tests:** Einige Prüfungen greifen auf interne Felder zu (`_acks`), die Zeitstempel-Ersetzung der
@@ -2550,14 +2614,14 @@ Aufgeschobene Kleinigkeiten aus Plan 3a (aus den Reviews; keine davon gefährdet
     `runtime._build_ha_inputs` ist ungetestet, und ein Kommentar im ersten Test von `month_peak` ist
     unglücklich umbrochen.
 - **Tarif-Editor im UI:**
-  - Das Datum prüft nur die Form (2026-13-45 geht durch den Client; der Server lehnt es ab).
+  - ~~Das Datum prüft nur die Form (2026-13-45 geht durch den Client; der Server lehnt es ab).~~ (erledigt 21.10.2026, Plan aufgeschobene-kleinigkeiten, K44)
   - Der Wert eines Zeitfensters heißt nur „Wert“ (nicht nach dem Modus), und die Einheit steht
     außerhalb des Labels.
   - Die Auswahlgruppen und Schalter haben keine Gruppensemantik und kein `aria-describedby`.
-  - Eine Änderung der Struktur löscht alle Fehler, auch die der OeMAG-Felder; der Hinweis „Bitte die
-    markierten Felder prüfen.“ bleibt danach stehen.
-  - `focusFirstError` tut still nichts, wenn zu einem Fehlerschlüssel des Clients kein Element
-    gezeichnet ist.
+  - ~~Eine Änderung der Struktur löscht alle Fehler, auch die der OeMAG-Felder; der Hinweis „Bitte die
+    markierten Felder prüfen.“ bleibt danach stehen.~~ (erledigt 21.10.2026, Plan aufgeschobene-kleinigkeiten, K44)
+  - ~~`focusFirstError` tut still nichts, wenn zu einem Fehlerschlüssel des Clients kein Element
+    gezeichnet ist.~~ (erledigt 21.10.2026, Plan aufgeschobene-kleinigkeiten, K44)
   - Die lokale Variable `window` in `WindowEditor` verdeckt das globale Objekt.
   - Tests fehlen für: einen Spotbestandteil ohne Wert, Einspeise-Zeitfenster hin und zurück, das Ende
     24:00.
@@ -2583,14 +2647,14 @@ Aufgeschobene Kleinigkeiten aus Plan 3a (aus den Reviews; keine davon gefährdet
     `ForecastQuality.update`, und die Konstanten in `runtime.py` hat der Formatter umbrochen (Kommentare
     stehen darüber).
 - **Lastprognose und HA-Historie:**
-  - Ein Lesefehler aus Home Assistant steht nur im Log, der Status bleibt `ok`.
+  - ~~Ein Lesefehler aus Home Assistant steht nur im Log, der Status bleibt `ok`.~~ (erledigt 21.10.2026, Plan aufgeschobene-kleinigkeiten, K24)
   - `_ha_ok` ist ein Nebeneffekt der öffentlichen `history()`; die Reihen beider Schemata können sich
     überlappen; ein leeres Profil wird stündlich neu gebaut (gewollt, Kommentar); ein ungenutzter
     `monkeypatch`-Parameter; `LoadForecast.p50_w` ist ein veränderliches Dict.
   - Der Seed mit zwei `last()`-Selektoren kann bei einer Entität in beiden Schemata eine der Reihen
     wählen; eine HA-Entität, die länger als 7 Tage schweigt, fällt weiter weg.
 - **UI der Prognosen:**
-  - Die Höhe des Bandes `P75 − P25` ist nicht auf 0 begrenzt; ungetestet sind der Ausschluss von „PV P25“
+  - ~~Die Höhe des Bandes `P75 − P25` ist nicht auf 0 begrenzt;~~ (erledigt 21.10.2026, Plan aufgeschobene-kleinigkeiten, K43) ungetestet sind der Ausschluss von „PV P25“
     in der Legende und verschiedene x-Punkte der Reihen.
 - **Doku:**
   - Im Betriebshandbuch fehlt beim Band die Schwellenangabe, „`fill(previous)` auf dem Einheitenfeld“
@@ -2694,8 +2758,8 @@ Fix-Welle oder spätere Tasks erledigt haben, steht nicht mehr hier (etwa die Pu
 die Punkte B der Fix-Welle):
 
 - **Plan-Typen und Eingangsdaten (Tasks 1 bis 3):**
-  - `Plan` hat keinen Validator für `valid_until > created_at` und aufsteigende, eindeutige Slots
-    (`horizon_end` und `slot_at` nehmen die Ordnung an); der JSON-Roundtrip-Test hat keine gefüllten
+  - ~~`Plan` hat keinen Validator für `valid_until > created_at` und aufsteigende, eindeutige Slots
+    (`horizon_end` und `slot_at` nehmen die Ordnung an);~~ (erledigt 21.10.2026, Plan aufgeschobene-kleinigkeiten, K17) der JSON-Roundtrip-Test hat keine gefüllten
     Parameter eines Grundes und keinen `NETZLADEN`-Slot. `BatteryState` und `PeakMonth.month` sind
     unvalidiert.
   - Akkumodell: Der erste Test von `battery_w` wiederholt die Formel, die `SLOT_H`-Prüfung steht im
@@ -2718,7 +2782,7 @@ die Punkte B der Fix-Welle):
   Spitze des Optimierers nimmt `peak0` des Monats. Optional ein Grund „Ergebnis mit n statt m Slots“.
 - **Store und Prozess (Tasks 8 und 9):** Der Test von `latest()` speichert aufsteigend (Ordnung und
   Gleichstand sind ungeprüft); `slots[:1]` des Ersatzplans und `reason[:200]` sind ungetestet; es fehlt ein
-  Test mit einem Offset ungleich UTC; eine beschädigte Zeile blockiert die Transaktion des Aufräumens; eine
+  Test mit einem Offset ungleich UTC; ~~eine beschädigte Zeile blockiert die Transaktion des Aufräumens;~~ (erledigt 21.10.2026, Plan aufgeschobene-kleinigkeiten, K17) eine
   zweite Abbrechung kann den Empfänger früh schließen; es fehlt ein Monatsgrenzen-Test für das lokale Datum
   der Monatsspitze; `no_live_children` ist schwach.
 - **Dienst, API und HA (Tasks 11 und 12):** Der Retry-Test prüft nicht zwei `update`-Aufrufe; es fehlt ein
@@ -2727,21 +2791,21 @@ die Punkte B der Fix-Welle):
 - **UI (Tasks 13 und 14):**
   - `ui_world` setzt das private `app.planning._solver` (`AppRuntime` hat kein `solver=`); `applyPlanning`
     ist ein zweiter Prüfpfad neben `readNumber`; ein Cast statt Eingrenzen.
-  - Der Timeout von 40 s nach „Neu planen“ ist ohne Hinweis und Test; bei gleichem Wert des Schalters
+  - ~~Der Timeout von 40 s nach „Neu planen“ ist ohne Hinweis und Test; bei gleichem Wert des Schalters
     zeigt die Seite 40 s „Plant …“ und der Schalter ist 40 s gesperrt; die Achse beginnt am ersten Slot
-    statt bei jetzt; `markArea` fasst nur nach Absicht zusammen; der Text eines Blocks ist der Satz des
+    statt bei jetzt;~~ (erledigt 21.10.2026, Plan aufgeschobene-kleinigkeiten, K37, K38) `markArea` fasst nur nach Absicht zusammen; der Text eines Blocks ist der Satz des
     ersten Slots; ein geschütztes Leerzeichen in `blockLabel`.
 - **Szenarien und Werkzeuge (Tasks 15 und 16):**
   - Der Prognosefehler je Stunde ist für alle Klassen gleich (schmeichelt dem Optimierer; die echten Tage
     sind die Prüfung, siehe „Offen an der Anlage“); der Verschleiß steckt nicht in den Szenariokosten; der
     Einspeisetarif gilt nur für den ersten Monat; der Name eines Tests (`baseline_never…`) prüft den
     Optimierer.
-  - `export_days` erzwingt „nur lesen“ nicht (der `SettingsService` legt Version 1 an, wenn die
-    Einstellungen leer sind); es fehlen Tests für einen Tag mit 100 Slots, Lücken am Rand und die Klassen
-    `h6_24` und `h24`; ein Pfad hängt vom Arbeitsverzeichnis ab; die Logs gehen auf die Standardausgabe;
-    eine Ausnahme aus `run_scenario` endet mit Code 1 statt 2.
-- **Fix-Welle (Re-Review):** `_keep_rule_r1` verdeckt einen echten R1-Fehler des Optimierers (das Signal
-  geht verloren, solange die Kürzung ihn ausgleicht), und `pays_off_at_end` prüft je Slot, nicht die Summe
+  - ~~`export_days` erzwingt „nur lesen“ nicht (der `SettingsService` legt Version 1 an, wenn die
+    Einstellungen leer sind);~~ (erledigt 21.10.2026, Plan aufgeschobene-kleinigkeiten, K47) es fehlen Tests für einen Tag mit 100 Slots, Lücken am Rand und die Klassen
+    `h6_24` und `h24`; ~~ein Pfad hängt vom Arbeitsverzeichnis ab; die Logs gehen auf die Standardausgabe;
+    eine Ausnahme aus `run_scenario` endet mit Code 1 statt 2.~~ (erledigt 21.10.2026, Plan aufgeschobene-kleinigkeiten, K47)
+- **Fix-Welle (Re-Review):** ~~`_keep_rule_r1` verdeckt einen echten R1-Fehler des Optimierers (das Signal
+  geht verloren, solange die Kürzung ihn ausgleicht)~~ (erledigt 21.10.2026, Plan aufgeschobene-kleinigkeiten, K16), und `pays_off_at_end` prüft je Slot, nicht die Summe
   aller Ladeslots.
 
 Entschieden in Plan 3c; die 14 Entscheidungen hat der Betreiber am 17.10.2026 mit dem Plan freigegeben
@@ -2893,14 +2957,14 @@ betreffen, in den Absätzen „Stand Plan 3c“ der Spec. Hier beides mit Kosten
     wäre, nur neu zu binden, wenn sich `vehicles` ändert, und „wiederhergestellt“ an der Annahme der
     letzten Version zu entscheiden, die `vehicles` geändert hat (in `intent.json` neben `accepted_at`
     gespeichert). Das deckte auch Bedienungen im Fenster ohne vertrauten Stand.
-  - **Kleiner Befund 2:** `core_has_plan` vergleicht nur `(id, grid_charge_allowed)`. Nach einer
+  - ~~**Kleiner Befund 2:** `core_has_plan` vergleicht nur `(id, grid_charge_allowed)`. Nach einer
     Wiederherstellung der Datenbank der app überspringt der Sender mit einer wiederverwendeten `id`
     einen anderen Plan für einen Planungszyklus, und der Zeitplan meldet die Ausführung. Abhilfe: auch
-    `created_at` vergleichen, das Health schon trägt.
-  - **Kleiner Befund 6:** „Plan gegen Ist“ vergleicht mit dem Archiv der app, nicht mit dem, was der
+    `created_at` vergleichen, das Health schon trägt.~~ (erledigt 21.10.2026, Plan aufgeschobene-kleinigkeiten, K11)
+  - ~~**Kleiner Befund 6:** „Plan gegen Ist“ vergleicht mit dem Archiv der app, nicht mit dem, was der
     core hatte; Slots von Plänen, die der core nie bekam (core aus, 422), stehen als „Plan“. Abhilfe:
     solche Slots kennzeichnen (braucht einen Vermerk, wann ein Plan gesendet wurde) oder es im
-    Hilfetext der Karte sagen.
+    Hilfetext der Karte sagen.~~ (erledigt 21.10.2026, Plan aufgeschobene-kleinigkeiten, K39: der Hilfetext der Karte sagt es)
 
 Aufgeschobene Kleinigkeiten aus Plan 3c (aus den Reviews; keine davon gefährdet die Anlage). Was spätere Tasks erledigt haben, steht nicht mehr hier (etwa die Doku-Punkte aus
 den Tasks 4, 6, 7, 11 und 16, die mit Task 17 eingearbeitet sind):
@@ -2908,17 +2972,17 @@ den Tasks 4, 6, 7, 11 und 16, die mit Task 17 eingearbeitet sind):
 - **Typen und Prüfung (Tasks 1 und 2):** Der Helfer `_stored` in `tests/unit/shared/test_plan.py` braucht
   ein `type: ignore` für `**kwargs`; `intent_plan` schneidet still nach 8 Slots ab (ein Hinweis im
   Docstring fehlt); `PlanSlot.support_soc_pct` ist nur endlich, `IntentPlanSlot` verlangt 0 bis 100.
-  `GRID_CHARGE_CAP` in `core/control/intent.py` wiederholt den Namen aus `limits.py` (ein Test hält beide
-  gleich, eine gemeinsame Konstante wäre besser); eine doppelte Prüfung auf `NETZLADEN`; der API-Test
-  zum geklemmten Plan schickt keinen Plan; „19.5 %“ steht mit Punkt statt Komma (`:g`).
+  ~~`GRID_CHARGE_CAP` in `core/control/intent.py` wiederholt den Namen aus `limits.py` (ein Test hält beide
+  gleich, eine gemeinsame Konstante wäre besser);~~ (erledigt 21.10.2026, Plan aufgeschobene-kleinigkeiten, K50) eine doppelte Prüfung auf `NETZLADEN`; der API-Test
+  zum geklemmten Plan schickt keinen Plan; ~~„19.5 %“ steht mit Punkt statt Komma (`:g`).~~ (erledigt 21.10.2026, Plan aufgeschobene-kleinigkeiten, K9)
 - **Slot und Health (Task 3):** `active is not None or valid_at` ist zum Teil doppelt; `idle()` schreibt
   `plan` `none`, wenn der Aufrufer nicht auch `rest_plan` ruft, und nach einem gescheiterten Zyklus
   steht für einen Zyklus `none`; das UI-Schema von Health kennt `plan` nicht (der Stand kommt aus der
   app); der Neustart-Test stoppt die erste Laufzeit nicht, bevor er `data_dir` wiederverwendet.
-- **Unterstützung und Wächter (Tasks 5 und 6):** `Support.update(plan_blocks=False)` könnte Pflicht sein;
+- **Unterstützung und Wächter (Tasks 5 und 6):** ~~`Support.update(plan_blocks=False)` könnte Pflicht sein;~~ (erledigt 21.10.2026, Plan aufgeschobene-kleinigkeiten, K53)
   der Property-Test nur mit fester Schwelle; hängende Kommentare in `test_battery.py` nach dem Umbruch
-  durch ruff; `assess` hat `support` und `active` nicht nur als Schlüsselwort. Im Leerlauf zeigt Health
-  das letzte Budget des Plans als `target_kw`.
+  durch ruff; ~~`assess` hat `support` und `active` nicht nur als Schlüsselwort.~~ (erledigt 21.10.2026, Plan aufgeschobene-kleinigkeiten, K53) ~~Im Leerlauf zeigt Health
+  das letzte Budget des Plans als `target_kw`.~~ (erledigt 21.10.2026, Plan aufgeschobene-kleinigkeiten, K8)
 - **Entscheidungen (Task 7):** Die Integrationstests prüfen nur Entscheidungen an Victron, keiner die
   Reihenfolge des Zusammenführens; Preis und Budget prüft `regulation.py` nur auf `is not None` (NaN
   käme durch, das Modell des Plans prüft es).
@@ -2929,18 +2993,18 @@ den Tasks 4, 6, 7, 11 und 16, die mit Task 17 eingearbeitet sind):
   `DEFAULT_SUPPORT_SOC_PCT` in `inputs.py` wiederholt den Standard der Konfiguration (das Argument von
   `assemble_inputs` könnte Pflicht sein); der Parameter `um` von `UNTERSTUETZUNG_RESERVIERT` ist ISO,
   die anderen Codes nehmen HH:MM; es fehlen Tests für den `ValueError` von `reasons_for` bei falscher
-  Länge und für eine Schwelle in `NETZLADEN`-Slots ohne Code. Eine geänderte Unterstützungsschwelle löst
-  keine Neuplanung aus; der Grundcode kann bis zu 15 min veraltet sein.
+  Länge und für eine Schwelle in `NETZLADEN`-Slots ohne Code. ~~Eine geänderte Unterstützungsschwelle löst
+  keine Neuplanung aus;~~ (erledigt 21.10.2026, Plan aufgeschobene-kleinigkeiten, K14) der Grundcode kann bis zu 15 min veraltet sein.
 - **Übergabe (Task 10):** `test_core_link.py` holt `FakePlanning` aus einem Unit-Test-Modul; `PlanSender`
   ist auf den konkreten `PlanningService` getypt (ein Protocol spart `type: ignore` in den Tests).
 - **Stand der Ausführung (Task 11):** unerreichbare `None`-Zweige in `execution.py`; kein Test für
   „idle vor locked“ (SAFE und gesperrt ergibt `idle`); ein lokaler Import von `timedelta` in
   `test_routes.py`; die Seite „Zeitplan“ fragt `/api/plan` alle 60 s ab, „noch nicht beim core“ kann bis
   zu 1 min nachhängen.
-- **Bedienung der Unterstützung (Tasks 12 und 13):** Die HA-Zahl nimmt Dezimalzahlen und Unterstriche an
-  (`float()`), Schritt 1 wird nicht erzwungen; `_support` in HA liest `current()`, und `apply` leitet neu
-  ab (ein kleines Rennen zwischen UI und HA um das jeweils andere Feld); `_support_comment` mit sechs
-  gültigen Stellen (`:g`); der Typ der Befehle steht dreimal; `extra=forbid` in `SupportBody` ist doppelt;
+- **Bedienung der Unterstützung (Tasks 12 und 13):** ~~Die HA-Zahl nimmt Dezimalzahlen und Unterstriche an
+  (`float()`), Schritt 1 wird nicht erzwungen;~~ (erledigt 21.10.2026, Plan aufgeschobene-kleinigkeiten, K29) `_support` in HA liest `current()`, und `apply` leitet neu
+  ab (ein kleines Rennen zwischen UI und HA um das jeweils andere Feld); ~~`_support_comment` mit sechs
+  gültigen Stellen (`:g`);~~ (erledigt 21.10.2026, Plan aufgeschobene-kleinigkeiten, K9) der Typ der Befehle steht dreimal; `extra=forbid` in `SupportBody` ist doppelt;
   der HA-Bereich ist nur mit Reserve 20 getestet. Im UI: ein verwaister Doc-Kommentar in `schemas.ts`
   (bei `Intent`), die Karte bleibt verborgen, bis `/api/limits` geladen ist, `badInput` ist im Baustein
   ungetestet, der Entwurf setzt sich nach einer abgelehnten Änderung zurück, der Hinweis hängt nicht an
@@ -2953,11 +3017,11 @@ den Tasks 4, 6, 7, 11 und 16, die mit Task 17 eingearbeitet sind):
 - **Mehrkosten beim Boost (Task 16):** kein Routentest über eine Monatsgrenze in Wiener Zeit; der Test der
   Stufe mit `tier_kw` 100 wiederholt den linearen Fall; `month_peak_kw` ist der rohe Wert der
   Abrechnung.
-- **Nach der Fix-Welle (Nachprüfung):** Fast nach jeder Übergabe oder Bedienung schreibt die app einmal
+- **Nach der Fix-Welle (Nachprüfung):** ~~Fast nach jeder Übergabe oder Bedienung schreibt die app einmal
   „Plan wartet, bis der core mit der Absicht regelt“, obwohl der Plan schon beim core ist (die sofortige
   Abfrage der Health landet vor dem nächsten Regelzyklus; etwa 100 Zeilen am Tag, `sender.py`). Kommt
   der core innerhalb einer Abfrage (10 s) nach einem Neustart zurück, kann die gespeicherte Health bis
-  zum Wecken beim Verbinden überleben (`core_link.py`, `_connected` leert sie nicht).
+  zum Wecken beim Verbinden überleben (`core_link.py`, `_connected` leert sie nicht).~~ (erledigt 21.10.2026, Plan aufgeschobene-kleinigkeiten, K12, K13)
 
 Entschieden in Plan 4a; die 13 Entscheidungen hat der Betreiber am 17.10.2026 mit dem Plan freigegeben
 (`docs/superpowers/plans/2026-10-17-phase-4a-statistik.md`, „Vorgeschlagene Entscheidungen“, und Spec 18,
@@ -3145,10 +3209,11 @@ Nacharbeit vom 18.10.2026 erledigt hat, steht nicht mehr hier. Offen sind:
 - **Tests und Demo-Welt:** Die Tests des Dashboards lesen den Quelltext der Schreiber (spröde, aber
   wirksam) und holen einen Helfer aus einem anderen Testmodul; `ui_world` greift auf private Mitglieder
   zu; der Akku der Demo hat 15 kWh Reserve (nur im erfundenen Verlauf, die Beispielkonfiguration hat
-  6 kWh); außerhalb von 4a warten ältere Tests (Maintenance, planning, ha, core) `task.cancel()` nicht
-  ab; und `pytest tests/unit/app/ledger tests/unit/test_docs.py tests/unit/app/stats` in dieser
+  6 kWh); ~~außerhalb von 4a warten ältere Tests (Maintenance, planning, ha, core) `task.cancel()` nicht
+  ab;~~ (erledigt 21.10.2026, Plan aufgeschobene-kleinigkeiten, K56, für `test_notify.py` und `test_victron_mqtt.py`, die Stellen, an denen es Läufe störte) und `pytest tests/unit/app/ledger tests/unit/test_docs.py tests/unit/app/stats` in dieser
   Reihenfolge findet in den Routentests der Statistik die Fixture `make_client` nicht (einzeln und im
-  vollen Lauf tritt das nicht auf).
+  vollen Lauf tritt das nicht auf). Das bleibt offen: K56 hat `FakeInflux` nach `tests/helpers.py`
+  verschoben, der Fehler tritt trotzdem auf (Eigenheit von pytest 9.1.1, siehe „Befehle“).
 - **InfluxDB-Leser:** Die Schutzschicht, die nur lesende Anweisungen durchlässt, kennt reguläre
   Ausdrücke nur nach `FROM`, `=~` und `!~`; heute erzeugt kein Aufrufer etwas anderes.
 - **Abnahme:** Hat eine Größe nie einen Zählerwert (etwa PV bei DC-Kopplung), steht auf der Karte
@@ -3245,8 +3310,8 @@ kurz, mit der Alternative oder den Kosten, falls es falsch ist:
     Dienstes unverändert und ergänzt nur `method` aus der zuletzt ausgegebenen Lastprognose; die Route
     der Taste ist `async`, weil sie die laufende Ereignisschleife braucht. Falls falsch: Der Dienst
     müsste zusätzlich speichern, welche Sensoren im Training Werte hatten.
-  - **Wetterarchiv ohne Aufräumen:** `weather_slot` wächst um rund 35 000 Zeilen im Jahr, das Training
-    braucht 112 Tage; ein Aufräumen ist nicht gebaut. Falls falsch: ein Löschlauf im Nachtlauf.
+  - ~~**Wetterarchiv ohne Aufräumen:** `weather_slot` wächst um rund 35 000 Zeilen im Jahr, das Training
+    braucht 112 Tage; ein Aufräumen ist nicht gebaut. Falls falsch: ein Löschlauf im Nachtlauf.~~ (erledigt 21.10.2026, Plan aufgeschobene-kleinigkeiten, K22)
   - **Weitere Festlegungen beim Bau:** Der Feiertag kommt aus `is_holiday()` in `app/daytype.py`. Bei der
     doppelten Stunde im Herbst gilt für die Last vor einem Tag der erste Durchlauf; an Tagen ohne
     passenden Slot ist das Merkmal leer. Der Trainingssatz begrenzt Ausgaben und Ziele durch das Ende des
@@ -3259,35 +3324,35 @@ Aufgeschobene Kleinigkeiten aus Plan 5a (aus den Reviews; keine davon gefährdet
 Modell ändert nur die Eingabe des Planers, und das Profil fängt jeden Fehler ab). Reine Testpflege ist hier
 nicht aufgeführt. Offen sind:
 
-- **Wetterarchiv:** Die Nachholung stempelt `issued_at` vor dem Abruf, deshalb können wenige Slots im
-  Überlapp mit einer Prognose einen etwas älteren Wert tragen. Das Archiv wird nicht aufgeräumt.
+- **Wetterarchiv:** ~~Die Nachholung stempelt `issued_at` vor dem Abruf, deshalb können wenige Slots im
+  Überlapp mit einer Prognose einen etwas älteren Wert tragen. Das Archiv wird nicht aufgeräumt.~~ (erledigt 21.10.2026, Plan aufgeschobene-kleinigkeiten, K22)
 - **HA-Sensoren:**
   - Die Kandidatenliste fragt den letzten Wert und die letzte Einheit mit zwei Selektoren; InfluxDB
     liefert dann nicht die Zeit des Punkts. Der Tiebreak „jüngste Reihe“ wirkt nur für Entitäten in
     mehreren Messungen. Das betrifft nur einen Wechsel der Einheit und die Anzeige der Einheit.
   - Steht eine Entität in der Messung der Entität und in der der Einheit, gewinnt die spätere still.
-  - Hilfen zur Zahl und zum HA-Verweis gibt es dreimal (hier, bei den Verbrauchern und in der
-    Lastprognose).
-  - Ohne HA-Reader liefert der Server eine leere Liste ohne Grund, und die Einstellungen markieren jeden
-    gespeicherten Sensor mit „nicht in HA gefunden“.
+  - ~~Hilfen zur Zahl und zum HA-Verweis gibt es dreimal (hier, bei den Verbrauchern und in der
+    Lastprognose).~~ (erledigt 21.10.2026, Plan aufgeschobene-kleinigkeiten, K52)
+  - ~~Ohne HA-Reader liefert der Server eine leere Liste ohne Grund, und die Einstellungen markieren jeden
+    gespeicherten Sensor mit „nicht in HA gefunden“.~~ (erledigt 21.10.2026, Plan aufgeschobene-kleinigkeiten, K23)
 - **Merkmale und Modell:**
-  - Ein `NaN` in der Last vergiftet `recent_w` (das Training filtert endliche Werte).
+  - ~~Ein `NaN` in der Last vergiftet `recent_w` (das Training filtert endliche Werte).~~ (erledigt 21.10.2026, Plan aufgeschobene-kleinigkeiten, K21)
   - Das Training berechnet alle Spalten und dünnt sie dann aus; das ist langsamer als nötig.
-  - Beim Laden wird `max_w` nicht geprüft; ein `NaN` aus der Vorhersage würde still zu 0, und ein Fehler von
+  - ~~Beim Laden wird `max_w` nicht geprüft; ein `NaN` aus der Vorhersage würde still zu 0,~~ (erledigt 21.10.2026, Plan aufgeschobene-kleinigkeiten, K21) und ein Fehler von
     LightGBM bei der Vorhersage ist nicht zugeordnet (die Lastprognose fängt jede Ausnahme und nimmt das
     Profil).
-- **Registry:** `decide` prüft die Art der Version nicht; scheitert der Commit nach dem Schreiben der
-  Datei, bleibt eine Modelldatei verwaist (nicht dokumentiert); das in `decision` gespeicherte `active` kann
+- **Registry:** ~~`decide` prüft die Art der Version nicht; scheitert der Commit nach dem Schreiben der
+  Datei, bleibt eine Modelldatei verwaist (nicht dokumentiert);~~ (erledigt 21.10.2026, Plan aufgeschobene-kleinigkeiten, K25) das in `decision` gespeicherte `active` kann
   nach einem späteren Wechsel veraltet sein (die API zeigt die Spalte `active`); die Gewichtung des
   Backtests steht in `backtest_json` und in `improvement()` doppelt.
 - **Aktivierung:** Hat das Profil im Fenster keinen Fehler, aber das Modell, lautet der Satz „nur 0 %
   genauer“. Je Slot und Vorlaufklasse gilt die jüngste Ausgabe, im Zweifel die mit dem kürzesten Vorlauf
   (eine Entwurfsentscheidung). Ein `or 0.0` ist überflüssig.
 - **Lerndienst:**
-  - Das Training um 03:15 Uhr fällt mit der nächtlichen Sicherung der Datenbank (ebenfalls 03:15 Uhr,
-    `BACKUP_AT`) zusammen; beide können gleichzeitig laufen.
-  - Ist beim Start die gespeicherte Entscheidung „disabled“ und der Schalter inzwischen an, bewertet der
-    Dienst erst um 03:15 Uhr neu. Eine Bewertung, die hinter einem langen Training wartet, behält bis dahin
+  - ~~Das Training um 03:15 Uhr fällt mit der nächtlichen Sicherung der Datenbank (ebenfalls 03:15 Uhr,
+    `BACKUP_AT`) zusammen; beide können gleichzeitig laufen.~~ (erledigt 21.10.2026, Plan aufgeschobene-kleinigkeiten, K19)
+  - ~~Ist beim Start die gespeicherte Entscheidung „disabled“ und der Schalter inzwischen an, bewertet der
+    Dienst erst um 03:15 Uhr neu.~~ (erledigt 21.10.2026, Plan aufgeschobene-kleinigkeiten, K20) Eine Bewertung, die hinter einem langen Training wartet, behält bis zu dessen Ende
     „disabled“. Ein zweites Training kann hinter einer Bewertung
     in die Warteschlange (sie laufen nacheinander). `close()` wartet nicht auf andere Datenbankaufrufe im
     Thread.
@@ -3296,8 +3361,8 @@ nicht aufgeführt. Offen sind:
 - **Lastprognose:** Ein Satz im Docstring von `_predict` ist verschachtelt; `model.active()` wird zweimal
   gelesen; jede Ausgabe schreibt das Archiv in drei getrennten Aufrufen (je ein Thread).
 - **UI:**
-  - Nach einer Antwort 409 („Training läuft schon.“) bleibt die Meldung stehen und hat die Stufe Fehler.
-  - Die Seite fragt den Stand eines Trainings auch im verborgenen Tab ab.
+  - ~~Nach einer Antwort 409 („Training läuft schon.“) bleibt die Meldung stehen und hat die Stufe Fehler.~~ (erledigt 21.10.2026, Plan aufgeschobene-kleinigkeiten, K42)
+  - ~~Die Seite fragt den Stand eines Trainings auch im verborgenen Tab ab.~~ (erledigt 21.10.2026, Plan aufgeschobene-kleinigkeiten, K42)
   - Der Verlauf „Fehler je Tag“ markiert veraltete Werte nicht; die Karte „Lastprognose“ zeigt zusätzlich
     zum Satz einen Status-Punkt.
   - Die Prüfung auf die Obergrenze von 8 beim Wählen eines Sensors ist im Code nicht erreichbar (die
@@ -3320,20 +3385,20 @@ Aufgeschobene Kleinigkeiten aus Plan 5b (Deferred minors 5b), aus den Reviews de
 Gesamtreview und dem Re-Review der Fix-Welle. Keine davon gefährdet die Anlage: Gelernte Werte erreichen die
 Safety-Schicht nie, und die Automatik ist ab Werk aus.
 
-- **Daten und Tage:** Eine Abfahrt genau um 00:00:00 geht verloren; der Ladestand bei der Ankunft sieht nur
+- **Daten und Tage:** ~~Eine Abfahrt genau um 00:00:00 geht verloren;~~ (erledigt 21.10.2026, Plan aufgeschobene-kleinigkeiten, K32) der Ladestand bei der Ankunft sieht nur
   Ansteckvorgänge ab der Ankunft; der Seed liest nur den jüngsten Punkt (90 Tage Rückblick, `raw` hält 90 Tage);
   `load_history` liest die Ansteckvorgänge synchron im Event-Loop (kleine Abfrage); `WINDOW_DAYS` steht in zwei
   Modulen; `presence[0]` setzt sortierte Punkte voraus.
 - **Profil und Trefferquote:** Die Trefferquote liegt nur im Speicher (nach einem Neustart bis zum Startlauf
-  n = 0) und wird nach einem gescheiterten Schritt nicht als veraltet markiert; die Prüfung auf `away` in
+  n = 0) ~~und wird nach einem gescheiterten Schritt nicht als veraltet markiert~~ (erledigt 21.10.2026, Plan aufgeschobene-kleinigkeiten, K36); die Prüfung auf `away` in
   `driving_quality` ist redundant; `driving_profile` importiert `Source` aus dem Lesemodul.
 - **Absicht und Automatik:** Ein vergangenes `departure_on` bleibt in der Absicht stehen (fällt auf die tägliche
-  Uhrzeit zurück); `departure_on` nimmt in der API auch einen Zeitstempel an; nach einem „clamped“-Ergebnis zeigt
-  der Zustand kurz „applied“ mit Pause (der nächste Check korrigiert); vor dem ersten Check nach dem Start
-  zeigt ein eingeschaltetes Auto kurz „nicht auf Geplant“; Schalter und Änderungsprotokoll stehen in zwei
-  Transaktionen (ein Fehler im Protokoll gibt 500, obwohl der Schalter gespeichert ist).
-- **Planer:** Kein Test mit einer Ankunft außerhalb einer Slotgrenze; „Kein Plan · lädt spätestens ab“ und
-  „Fertig um“ zeigen bei einer Abfahrt in mehreren Tagen keinen Tag; zwei Service-Tests prüfen mit
+  Uhrzeit zurück); ~~`departure_on` nimmt in der API auch einen Zeitstempel an;~~ (erledigt 21.10.2026, Plan aufgeschobene-kleinigkeiten, K31) ~~nach einem „clamped“-Ergebnis zeigt
+  der Zustand kurz „applied“ mit Pause (der nächste Check korrigiert);~~ (erledigt 21.10.2026, Plan aufgeschobene-kleinigkeiten, K34) ~~vor dem ersten Check nach dem Start
+  zeigt ein eingeschaltetes Auto kurz „nicht auf Geplant“;~~ (erledigt 21.10.2026, Plan aufgeschobene-kleinigkeiten, K35) ~~Schalter und Änderungsprotokoll stehen in zwei
+  Transaktionen (ein Fehler im Protokoll gibt 500, obwohl der Schalter gespeichert ist).~~ (erledigt 21.10.2026, Plan aufgeschobene-kleinigkeiten, K33)
+- **Planer:** Kein Test mit einer Ankunft außerhalb einer Slotgrenze; ~~„Kein Plan · lädt spätestens ab“ und
+  „Fertig um“ zeigen bei einer Abfahrt in mehreren Tagen keinen Tag;~~ (erledigt 21.10.2026, Plan aufgeschobene-kleinigkeiten, K40) zwei Service-Tests prüfen mit
   `sleep(0.1)`-Fenstern.
 - **Code und Tests:** private Importe (`_local_instant`, `_Model`); `VehicleKey` doppelt zu `WallboxKey`;
   `WEEKDAYS` über mehrere Zeilen; einzelne Tests greifen auf private Felder zu oder pinnen Grenzen
@@ -3342,3 +3407,98 @@ Safety-Schicht nie, und die Automatik ist ab Werk aus.
 - **UI und Doku:** Die Demo-Welt schaltet die Automatik ohne Protokolleintrag ein; NBSP vor „%“ wie im übrigen
   `format.ts`; die Prognosen-Seite lädt die vollen Einstellungen nur für den Namen der Entität; der
   Rollback-Befehl 5b nennt „Regelbetrieb aus“ nur im Einleitungssatz.
+
+Entschieden und aufgeschoben in der Welle „Aufgeschobene Kleinigkeiten“ vom 21.10.2026
+(`docs/superpowers/plans/2026-10-21-aufgeschobene-kleinigkeiten.md`, 56 Punkte K1 bis K56, vom Betreiber am
+21.10.2026 um 10:39 freigegeben; Umsetzung subagent-driven auf dem Branch `claude/project-thread-yjjmlu`, Stand
+„Kurzfassung“). Die Punkte, die sie behoben hat, sind oben in den Listen der Pläne 2c-2a bis 5b durchgestrichen
+(`~~…~~`, „erledigt 21.10.2026“). Was der Plan unter „Nicht vorgeschlagen“ nennt, bleibt dort offen und ist
+**nicht** durchgestrichen: Boost nach Neustart des core und Neubinden nur bei geänderten `vehicles`, Quittierung
+mit der gesehenen Erkennung, `pays_off_at_end` über die Summe, Ersatzplan über R2 bei kleinem PV-Überschuss, HA-Befehle
+mit Begrenzung beim Eintreffen, der Nachtlauf in der März-Nacht, ein vergangenes `departure_on` in der Absicht, die
+CoE-Feinheiten (Header-Byte 1, `unit`/`scale` an digitalen Kanälen), „nicht erreichbar“ auf der Karte ohne Plan,
+Feinheiten im Vorrang der Autos vor der Klimaanlage, die Aufteilung von `charging.py` und `scenarios.py`, alles, was
+an der Anlage zu messen oder zu bestätigen ist, die Entscheidungen des Betreibers und Liste D aus 4a.
+
+- **Festlegungen der Welle (mit Kosten, falls falsch):**
+  - **K27 überholt, nicht behoben:** Das Aufräumen des Entscheidungslogs löscht nach `ts`. Fehlt die Zeile des
+    `before`-Zeigers, sind alle älteren Zeilen auch weg; die leere Seite ist richtig, ein Rückgriff auf `seq <
+    before` könnte nur Zeilen wiederholen, die schon gezeigt wurden. Der alte Stand bleibt, ein Test aus einem
+    echten Aufräumen hält ihn fest. Falls falsch: eine leere Seite nach dem Aufräumen, wie bisher.
+  - **K34 an der echten Ursache:** Die Annahme „geklemmt ergibt Pause“ stimmt im Code nicht (die Automatik sendet
+    mit `source=system`). Behoben ist, dass Status und `last_values` den gesendeten statt des gewünschten Werts
+    nannten und derselbe Wunsch jede Minute neu ging; die Liste der geklemmten Werte steht im Speicher. Falls
+    falsch: nach einem Neustart ein Senden mehr.
+  - **K38:** Der erste Schalter nach dem Laden der Seite kennt noch keine `settings_version`. Hat Home Assistant den
+    Wert schon gesetzt, wartet die Seite bis zu 40 s und zeigt dann den neuen Hinweis; genau wäre das nur mit einer
+    Änderung der API. Falls falsch: einmal 40 s Warten in einem seltenen Fall.
+  - **K41 ohne Hinweis im Kopf des Zeitplans:** `PlanVehicle.target_soc_pct` ist schon das wirksame Ziel, und der
+    Zeitplan kennt das Ziel der Absicht nicht; ein Hinweis „Ladelimit“ im Kopf widerspräche der Karte „Laden“
+    in beide Richtungen. Er entfällt, die Karte „Laden“ nennt das Limit weiter. Falls falsch: Der Zeitplan nennt das
+    Ladelimit nicht.
+  - **K11:** Ein Health ohne `intent.plan.created_at` (älterer core) vergleicht wie bisher nur `id` und
+    `grid_charge_allowed`; sonst gäbe es beim Ausrollen mit gemischten Ständen endlose erneute Sendungen. Falls
+    falsch: Der Fall der wiederhergestellten Datenbank bleibt gegen einen alten core unerkannt.
+  - **K13:** Eine Health-Antwort, die vor der ersten Nachricht des Streams eintrifft, wird verworfen; `_connected`
+    fragt Health sofort neu ab (eine Abfrage mehr je Verbindung), damit der Plan nicht bis zu 10 s später kommt.
+  - **K16/K17:** Die Logzeilen sind deutsche Sätze mit `code=plan_r1_trimmed` und `code=plan_row_unreadable`
+    (`test_layout` verbietet Ereignisse in snake_case). Zum Suchen im Log nimmst du den Code, nicht den Ereignisnamen.
+    Eine Plan-Zeile ohne gültiges JSON blockiert Laden und Aufräumen nicht (der Zweck von K17).
+  - **K56:** Das Symptom „make_client not found“ bei gemischter Reihenfolge der Pfade (Abschnitt „Befehle“) ist eine
+    Eigenheit von pytest 9.1.1, die auch vor dieser Welle und mit anderen Verzeichnissen auftritt; `pytest tests`
+    ist nicht betroffen. `FakeInflux` zog trotzdem nach `tests/helpers.py`; ein Umgehen ist nicht gebaut. Falls
+    falsch: eine verwirrende Fehlermeldung bei genau dieser Reihenfolge.
+  - **Texte mit `:g` außerhalb von K9:** `core/checks/selfcheck.py`, `app/planning/process.py` und die weiteren
+    Sätze an den Betreiber gingen mit K50 auf das Dezimalkomma (`de()`); `:g` bleibt in `watchdog_config.py` und
+    `verify_part1.py`, denn das sind keine Sätze an den Betreiber.
+- **Aufgeschobene Kleinigkeiten (Welle 21.10.2026)** (aus den Reviews der Tasks 1 bis 13; keine davon gefährdet die
+  Anlage), gruppiert nach Task:
+  - **Task 1 (Wallboxen):** In `core/adapters/twc.py` (um Zeile 51) ergibt ein offenes Schütz mit fehlendem
+    Phasenfeld jetzt 0,0 statt `None`; dafür gibt es keinen Test. Der Docstring in `assignment.py` (Zeile 80 und 81)
+    nennt nur die Wallbox, der Pfad gilt auch für `tessie.complete`.
+  - **Task 2 (Klimaanlage):** `failed()` in `shared/retry.py` hat zwei fast gleiche `log.warning`-Aufrufe.
+    `_send(held_k=None)` in `core/adapters/coe.py` prüft die Freigabe erneut; der Vertrag ist unklar. Der Test
+    `test_every_code_of_the_strategy_has_a_text` durchsucht den Quelltext mit einem regulären Ausdruck (spröde). In
+    `regulation.py` liest Health `spare_w` vor dem Lernen und `base_w` danach, die zwei Werte stammen also aus
+    verschiedenen Zyklen.
+  - **Task 3 (Anzeige und Texte):** Die Initialisierung von `_off` in `peak_guard.py` (um Zeile 328) ist
+    unglücklich umbrochen. `de(reserve)` in `app/ha/commands.py` hat keinen Test mit Komma (gehört in den Test
+    von K29).
+  - **Task 4 (Übergabe des Plans):** `test_connect_discards_health_from_before` liest das private `_disconnects` und
+    ruft `_connected` direkt auf.
+  - **Task 5 (Planer):** Ein „vehicles“-Lauf nach 300 s ist überflüssig, wenn ein anderer Auslöser schon mit dem
+    neuen Limit geplant hat (begrenzt auf einen je 300 s). Eine nicht lesbare Plan-Zeile warnt bei jedem
+    stündlichen Aufräumen, bis sie nach 30 Tagen verfällt. Das Fehlerfeld in `store.py` beginnt mit „: Meldung“
+    (führender Doppelpunkt), wenn `loc` leer ist (Model-Validator). Der Docstring in `intents.py` (Zeile 33 bis 35)
+    hat einen schiefen Zeilenumbruch.
+  - **Task 6 (Lastmodell, Sicherung):** Der Formatter hat `WEATHER_KEEP` in `runtime.py` wegen des Kommentars am
+    Zeilenende umbrochen. `test_backup.py` importiert in der Testfunktion, `test_weather.py` hat einen hängenden
+    Kommentar. Die Neubewertung nach dem Neustart (K20) läuft mit `backtest=None` (nur, wenn die Entscheidung fehlt
+    oder „disabled“ lautet).
+  - **Task 7 (Entscheidungslog, HA, Bedienen):** `_whole_number` nimmt über `float()` auch „1e2“ und „+45“ an. Bei einer
+    gebrochenen `reserve_soc_pct` und Schritt 1 des HA-Reglers ist das Minimum nicht erreichbar (unwahrscheinliche
+    Konfiguration). Die Warnung beim Verwerfen nennt nicht, wie viele Einträge verworfen wurden. Der Revert-Commit
+    hat den englischen Betreff „Revert …“ von git (der Rumpf ist deutsch).
+  - **Task 8 (Fahrverhalten):** Ein veralteter Eintrag in `_clamped` wird im frühen Zweig `wanted == have` nicht
+    entfernt (theoretisch, der core klemmt Ziel und Abfahrt nicht). Es fehlen ein Test für einen neuen Vorschlag
+    nach einer Klemme und ein Test für K36 jenseits von `reader.down`; der Test für `pending` im UI übt keinen neuen
+    UI-Code.
+  - **Task 9 (UI Zeitplan und Laden):** `formatDayTime` und `plannedText` nehmen standardmäßig `new Date()` (die Tests
+    pinnen die Uhr). Die Fehlerzeilen in `parseTarget` können die Breite von Prettier überschreiten (lint ist sauber).
+  - **Task 10 (UI Prognosen und Tarif-Editor):** `removeMonth` im `SettingsEditor` löscht alle Fehler und lässt einen
+    veralteten Prüfhinweis stehen (Einspeisemonate, nicht die Struktur aus K44). `isCalendarDate` lehnt die Jahre
+    0000 bis 0099 ab (`Date.UTC` bildet sie auf 19xx ab). Die Prüfung auf den verborgenen Tab steht dreimal
+    (`Resource`, `activity.ts`, Abfrage der Prognosen).
+  - **Task 11 (Werkzeuge):** `_zero` in `tools/part2/thermal.py` gibt ein unbenutztes `bool` zurück, und
+    `open_database_readonly` doppelt die Einrichtung der Pragmas. Es fehlt ein Test, dass die Signalhandler wieder
+    entfernt werden; ein zweites SIGTERM während der Freigabe bricht sie ab. Das Rundungsmuster steht noch in
+    `tools/sim/scenarios.py` um Zeile 873, 1280, 1748 und 1947 (`_override_kept`, `_reserve_kept`, Stopp am
+    Ziel-SOC). **An der Anlage zu bestätigen:** `mode=ro` auf der WAL-Datenbank im Compose-Volume ist dort nicht
+    geprüft (es geht, solange das Verzeichnis schreibbar ist).
+  - **Task 12 (Aufräumen):** Der Commit `84d5730` lässt die Property-Tests bis `b1e9d69` rot (der Verlauf ist nicht je
+    Commit grün). `number()` und `_number` doppeln `shared.numbers.finite_number` (ein `OverflowError` bei riesigen
+    ganzen Zahlen, schon vorher). `safe_state.py` und `foreign.py` importieren `last_values` nur zur Laufzeit für den
+    Alias `Key` (Zyklusrisiko). Andere Schreibweisen von `tuple[str, CommandKind]` bleiben; `:g` bleibt in
+    `watchdog_config.py` und `verify_part1.py`; diese Übergabe nennt `_NOBODY` und `_trusted` noch in ihrem
+    damaligen Wortlaut.
+  - **Task 13 (Doku):** keine.

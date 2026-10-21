@@ -3281,6 +3281,14 @@ Zurück zu evcc: beide Aktoren im UI mit „Auf Dry-Run…“ auf Dry-Run stelle
   (Abschnitt „Simulator“). Der e-Golf folgt den Wolken binnen Sekunden. Mit Victron live verschiebt
   der Akku-Sollwert den Fehlbetrag des Tesla aufs Netz, solange die Unterstützung nicht gilt
   (Abschnitt „Akku und Spitzen“).
+- **Wall Connector bei offenem Schütz:** Die Klemmen messen dann nur Rauschen (im Prüfprotokoll
+  17.1-9 rund 1,5 W bei 0,2 A und 7,4 V). Meldet der Wall Connector ausdrücklich `contactor_closed`
+  `false`, setzt der core seine Leistung auf 0 W; Phasenströme und
+  -spannungen bleiben die Messung, der Phasenwächter sieht sie weiter. Fehlt das Feld, rechnet der
+  core wie bisher Strom mal Spannung. So zeigen Anzeige und Statistik im Leerlauf 0 W statt 1 W.
+- **„Complete“ ohne Ladelimit (EVCS, Tesla):** Meldet die EVCS „geladen“, ohne dass das Ladelimit
+  bekannt ist, behält der core das Limit, das Tessie im selben Ansteckvorgang schon gemeldet hat. Ein
+  später höheres Limit für „Geplant“ hebt „geladen“ also weiterhin auf.
 
 **Vor der Live-Schaltung von EVCS und Tesla** waren diese Punkte zu entscheiden oder umzusetzen; die
 Punkte 1 bis 3 hat Plan 2d umgesetzt, 5 und 8 mit einer Entscheidung abgeschlossen (je mit Befund und
@@ -4928,9 +4936,9 @@ Die app plant beim Start und danach auf diese Auslöser; die Seite zeigt sie als
 | `load_forecast` | neue Lastprognose | die Lastprognose hat eine neue Ausgabe |
 | `soc` | SOC weicht ab | der SOC liegt mehr als 5 Prozentpunkte neben dem Plan (linear im Slot gerechnet); nach einem Plan mit diesem Anlass im selben Slot nicht erneut |
 | `month_peak` | neue Monatsspitze | die Monatsspitze liegt mehr als 0,05 kW über der, die der Plan kennt |
-| `settings` | Einstellungen geändert | Planung, Tarif oder Einspeisung wurden geändert |
+| `settings` | Einstellungen geändert | Planung, Tarif oder Einspeisung wurden geändert, oder die wirksame Unterstützungsschwelle (Einstellung, Bedienung, Home Assistant) |
 | `manual` | Neu planen | die Taste im UI oder in Home Assistant, oder `POST /api/plan/replan` |
-| `vehicles` | Fahrzeug geändert | bei einem Auto im Modus „Geplant“ ändern sich Ein- oder Ausstecken, Wallbox, Ziel, Abfahrt, „Ladestand angenommen“ oder das Ladelimit des Tesla, oder ein Auto kommt in „Geplant“ oder verlässt den Modus; außerdem, sobald Health eine neue Absicht bestätigt, wenn der letzte Lauf davor ein Auto in „Geplant“ nicht sehen konnte |
+| `vehicles` | Fahrzeug geändert | bei einem Auto im Modus „Geplant“ ändern sich Ein- oder Ausstecken, Wallbox, Ziel, Abfahrt, „Ladestand angenommen“ oder das Ladelimit des Tesla, oder ein Auto kommt in „Geplant“ oder verlässt den Modus (ändern sich nur das Ladelimit oder die Quelle des Ladestands, plant die app höchstens alle 5 min neu; Ziel, Abfahrt und die Menge der geplanten Autos lösen sofort aus); außerdem, sobald Health eine neue Absicht bestätigt, wenn der letzte Lauf davor ein Auto in „Geplant“ nicht sehen konnte |
 
 Nach jeder neuen Absicht (ein gesendeter Plan, eine Bedienung) regelt der core ab seinem nächsten
 Zyklus mit ihr. Die app sieht das erst im nächsten Health, das sie abfragt (`intent_version`, bis zu
@@ -5338,7 +5346,9 @@ der Aktor macht daraus das Vorzeichen je Betriebsart. Je Zyklus gewinnt die erst
      Überschuss. Freigeben kann sie nur, was sie über ihrer Leistung bei Versatz 0 aufnimmt, und
      nur bei positivem Wunsch: Die Grundlast beim Heizen oder Kühlen bekäme ein Auto nie. Die
      Leistung bei Versatz 0 lernt der core, wenn der Versatz 5 min lang 0 war; bis dahin zählt die
-     ganze Leistung. Hat ein Auto einmal gezählt, zählt es weiter, solange der Überschuss um
+     ganze Leistung. Die gelernte Grundlast und die freigebbare Leistung zeigt die Karte
+     „Klimaanlage“ auf „System“ („Grundlast … W · freigebbar … W“, „–“ ohne Wert), damit du im
+     Dry-Run siehst, ob die Grundlast gelernt wird. Hat ein Auto einmal gezählt, zählt es weiter, solange der Überschuss um
      höchstens eine Stufe (1 A) unter seiner Startleistung liegt (Hysterese).
 4. **Der Akku hat Vorrang:** Liegt der SOC mehr als 5 Prozentpunkte unter der Schwelle (der geplante
    SOC am Ende des Slots, ohne Plan `strategy.battery_soc_pct`, Standard 90 %), geht ein positiver
@@ -5350,7 +5360,8 @@ der Aktor macht daraus das Vorzeichen je Betriebsart. Je Zyklus gewinnt die erst
 7. **Weniger:** Der Plan gibt dem Slot den Hinweis „weniger“ (die teuersten 20 % der Bezugspreise,
    keine geplante Einspeisung) und die Einspeisung liegt unter 100 W: je 10 min eine Stufe weniger,
    bis `strategy.less_max_steps` (2, also höchstens 1 K). Endet der Hinweis, geht der Wunsch sofort
-   auf 0.
+   auf 0; die Einspeisung muss danach wieder die volle Wartezeit von Regel 5 anstehen, bevor der
+   Wunsch eine Stufe höher geht (er springt nicht von −2 über 0 gleich auf +1).
 8. **Sonst** bleibt der Wunsch stehen (Totband gegen Wolken).
 
 Neue positive Stufen gibt es nur, wenn kein Druck besteht, kein Auto mehr aufnehmen könnte und der
@@ -5567,7 +5578,8 @@ Mit laufendem core, Regelbetrieb an und dem Aktor im Dry-Run ändert sich an der
 Der Adapter sendet alle 30 s **0**, und das Echo bleibt 0. Beobachte mindestens **7 Tage**:
 
 - **System** → „Klimaanlage“ zeigt „Werte kommen an“, Betriebsart, Ist, Soll ohne Versatz, Versatz,
-  Wunsch, Leistung, den letzten Empfang und den Grund. Dort steht auch „Fremde Pakete“,
+  Wunsch, Leistung, die Zeile „Grundlast … W · freigebbar … W“, den letzten Empfang und den Grund.
+  Dort steht auch „Fremde Pakete“,
   „Fehlerhafte Pakete“ und „Werte mit falscher Einheit“, wenn welche ankamen.
 - **Entscheidungen** (und Grafana, Panel „Klimaanlage“) zeigen, welchen Versatz der core im
   Live-Betrieb senden würde („Dry-Run, nicht gesendet“), mit den Gründen. Kühlen und Heizen, Wechsel
@@ -5703,8 +5715,8 @@ dem Code, an der Anlage zu bestätigen.
 ### Anzeige
 
 - **UI:** Die Karte „Klimaanlage“ unter **System** (Zeilen: Betriebsart, Läuft, Ist, Soll ohne
-  Versatz, Versatz mit „bestätigt“ oder dem Echo, Wunsch in Stufen, Leistung, Letzter Empfang,
-  Grund). „Warum?“ nennt die Gründe oben.
+  Versatz, Versatz mit „bestätigt“ oder dem Echo, Wunsch in Stufen, Leistung, „Grundlast … W ·
+  freigebbar … W“, Letzter Empfang, Grund). „Warum?“ nennt die Gründe oben.
 - **Home Assistant** (Abschnitt 7): je Gerät vier Sensoren am Gerät „BindaEMS“.
 - **InfluxDB und Grafana:** Messung `thermal` (Tag `id`) mit `actual_c`, `setpoint_c`, `offset_k`
   (das Echo) und `offset_sent_k`, die Leistung in `power` mit `source=thermal`; das Panel
