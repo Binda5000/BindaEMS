@@ -118,6 +118,43 @@ def test_cleanup_skips_an_unreadable_row(store: PlanStore, engine: Engine, data:
         assert conn.execute(text("select count(*) from plan_inputs")).scalar_one() == 1
 
 
+def _corrupt(engine: Engine, plan_id: int, raw: str) -> None:
+    """Überschreibt ``data`` der Zeile mit Text, der kein JSON ist."""
+    with engine.begin() as conn:
+        conn.execute(
+            text("update plan set data = :raw where id = :id"), {"raw": raw, "id": plan_id}
+        )
+
+
+def test_cleanup_and_latest_skip_a_row_that_is_not_json(store: PlanStore, engine: Engine) -> None:
+    old = store.save(
+        sample_plan(created="2026-09-10T10:01:00+00:00", slots=["10:00"]), sample_inputs()
+    )
+    good = store.save(
+        sample_plan(created="2026-10-15T10:01:00+00:00", slots=["10:00"]), sample_inputs()
+    )
+    aged = _insert_broken(engine, "2026-10-06T10:01:00+00:00", {})  # würde gekürzt
+    newest = _insert_broken(engine, "2026-10-16T09:00:00+00:00", {})  # der neueste Plan
+    _corrupt(engine, aged, "{kein json")
+    _corrupt(engine, newest, "")
+    assert old.id is not None
+    with capture_logs() as logs:
+        assert store.cleanup(at("2026-10-16T10:00:00+00:00")) == (1, 0)
+        assert store.latest() == good
+    unreadable = [entry for entry in logs if entry.get("code") == "plan_row_unreadable"]
+    assert [entry["plan_id"] for entry in unreadable] == [aged, newest]
+    with engine.connect() as conn:
+        assert set(conn.execute(select(plan_table.c.id)).scalars()) == {good.id, aged, newest}
+
+
+def test_unreadable_row_logs_the_first_validation_error(store: PlanStore, engine: Engine) -> None:
+    store.save(sample_plan(created="2026-10-16T10:01:00+00:00", slots=["10:00"]), sample_inputs())
+    _insert_broken(engine, "2026-10-16T10:16:00+00:00", {"bogus": 1})
+    with capture_logs() as logs:
+        store.latest()
+    assert logs[0]["error"] == "created_at: Field required"
+
+
 def test_latest_skips_an_unreadable_row(store: PlanStore, engine: Engine) -> None:
     good = store.save(
         sample_plan(created="2026-10-16T10:01:00+00:00", slots=["10:00"]), sample_inputs()

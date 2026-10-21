@@ -7,12 +7,13 @@ sie über ``asyncio.to_thread``.
 
 from __future__ import annotations
 
+import json
 from datetime import datetime, timedelta
 from typing import Any, Final
 
 import structlog
 from pydantic import ValidationError
-from sqlalchemy import Engine, delete, insert, select, update
+from sqlalchemy import Engine, Text, cast, delete, insert, select, update
 
 from bindaems.app.db.schema import plan_inputs_table, plan_table
 from bindaems.app.planning.inputs import PlanInputs
@@ -25,6 +26,10 @@ KEEP_PLANS: Final = timedelta(days=30)
 KEEP_INPUTS: Final = timedelta(days=7)
 
 _REASON_LENGTH: Final = 200
+# ``data`` als Text lesen: Der JSON-Typ von SQLAlchemy zerlegt die Spalte schon beim Lesen der
+# Zeile; ein Text, der kein JSON ist, risse sonst die Abfrage ab, statt dass ``_readable`` die
+# Zeile überspringt
+_DATA_TEXT: Final = cast(plan_table.c.data, Text).label("data")
 
 
 def _plan_of(row_id: int, trimmed: bool, data: dict[str, Any]) -> Plan:
@@ -32,17 +37,19 @@ def _plan_of(row_id: int, trimmed: bool, data: dict[str, Any]) -> Plan:
 
 
 def _readable(row_id: int, trimmed: bool, data: Any) -> Plan | None:
-    """Der Plan der Zeile; ``None`` mit Warnung (``code=plan_row_unreadable``), wenn sich ``data``
-    nicht als Plan lesen lässt (etwa nach einer Änderung des Formats). Eine kaputte Zeile soll
-    weder das Aufräumen noch das Laden der übrigen Pläne blockieren."""
+    """Der Plan der Zeile aus ``data`` (Text der JSON-Spalte); ``None`` mit Warnung
+    (``code=plan_row_unreadable``), wenn er sich nicht als Plan lesen lässt (kein JSON, oder nach
+    einer Änderung des Formats). Eine kaputte Zeile soll weder das Aufräumen noch das Laden der
+    übrigen Pläne blockieren."""
     try:
-        return _plan_of(row_id, trimmed, data)
-    except (ValidationError, TypeError) as exc:
+        return _plan_of(row_id, trimmed, json.loads(data) if isinstance(data, str) else data)
+    except (ValueError, TypeError) as exc:  # ``ValidationError`` und ``JSONDecodeError``
+        if isinstance(exc, ValidationError) and (errors := exc.errors()):
+            error = f"{'.'.join(str(part) for part in errors[0]['loc'])}: {errors[0]['msg']}"
+        else:
+            error = str(exc).splitlines()[0]
         log.warning(
-            "Plan-Zeile nicht lesbar",
-            code="plan_row_unreadable",
-            plan_id=row_id,
-            error=str(exc).splitlines()[0],
+            "Plan-Zeile nicht lesbar", code="plan_row_unreadable", plan_id=row_id, error=error
         )
         return None
 
@@ -84,7 +91,7 @@ class PlanStore:
     def latest(self) -> Plan | None:
         """Der zuletzt erzeugte lesbare Plan, ``None`` ohne Pläne; eine kaputte Zeile wird
         übersprungen (``code=plan_row_unreadable``)."""
-        query = select(plan_table.c.id, plan_table.c.trimmed, plan_table.c.data).order_by(
+        query = select(plan_table.c.id, plan_table.c.trimmed, _DATA_TEXT).order_by(
             plan_table.c.created_at.desc(), plan_table.c.id.desc()
         )
         with self._engine.connect() as conn:
@@ -102,7 +109,7 @@ class PlanStore:
         Kaputte Zeilen fehlen (``code=plan_row_unreadable``).
         """
         query = (
-            select(plan_table.c.id, plan_table.c.trimmed, plan_table.c.data)
+            select(plan_table.c.id, plan_table.c.trimmed, _DATA_TEXT)
             .where(plan_table.c.created_at >= ensure_utc(start) - PLAN_VALID)
             .where(plan_table.c.created_at < ensure_utc(end))
             .order_by(plan_table.c.created_at, plan_table.c.id)
@@ -136,7 +143,7 @@ class PlanStore:
                 )
                 conn.execute(delete(plan_table).where(plan_table.c.id.in_(expired)))
             aged = conn.execute(
-                select(plan_table.c.id, plan_table.c.valid_until, plan_table.c.data).where(
+                select(plan_table.c.id, plan_table.c.valid_until, _DATA_TEXT).where(
                     plan_table.c.created_at < moment - KEEP_INPUTS,
                     plan_table.c.trimmed.is_(False),
                 )
