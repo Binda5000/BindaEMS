@@ -176,10 +176,10 @@ Prüfschritte:
 | 7 | ☐ | ☐ | ☐ | | ☐ | |
 
 Ausfälle des C.M.I. im Zeitraum (Beginn – Ende, Ursache). Erwartet: die Karte zeigt „Keine Werte“, die
-0 geht hinaus (Visu oder `tcpdump`, siehe 4.3), und nach der Rückkehr steht `thermal_stale` im
-Entscheidungslog, falls der Versatz vorher nicht 0 war:
+0 geht hinaus (Visu oder `tcpdump`, siehe 4.3), und nach der Rückkehr steht `thermal_stale` oder
+`thermal_no_echo` im Entscheidungslog, falls der Versatz vorher nicht 0 war:
 
-| Beginn | Ende | Ursache | Karte „Keine Werte“ | 0 gesendet | `thermal_stale` nach Rückkehr |
+| Beginn | Ende | Ursache | Karte „Keine Werte“ | 0 gesendet | `thermal_stale`/`thermal_no_echo` nach Rückkehr |
 |---|---|---|---|---|---|
 | | | | ☐ | ☐ | ☐ |
 
