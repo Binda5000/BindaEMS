@@ -48,7 +48,7 @@ import itertools
 import random
 from collections import defaultdict
 from collections.abc import Callable, Collection, Mapping, Sequence
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
 from functools import partial
 from pathlib import Path
@@ -119,6 +119,8 @@ class SimResult:
     - ``failures``: die Verstöße gegen Kennzahlen und eigene Prüfungen, je ein Satz
     - ``sent``: je Kennung einer Entscheidung an ein Fahrzeug mit Tessie der Zeitpunkt, zu dem ihr
       Befehl Tessie erreichte (``sent_times``); fehlt er, gilt der der Entscheidung
+    - ``usable_kwh``: die nutzbare Kapazität des Akkus der Konfiguration des Laufs; Prüfungen, die
+      den SOC in Energie umrechnen, nehmen sie von hier statt einer festen Zahl
     """
 
     scenario: Scenario
@@ -128,6 +130,7 @@ class SimResult:
     samples: list[Sample]
     failures: list[str]
     sent: Mapping[str, datetime] = MappingProxyType({})
+    usable_kwh: float = field(kw_only=True)
 
 
 class SimTimer:
@@ -352,7 +355,16 @@ async def run_scenario(
         await rt.shutdown()
     sent = sent_times(decisions, requests, cfg)
     metrics = measure(samples, decisions, cfg, sent=sent, own=own)
-    result = SimResult(scenario, metrics, decisions, health, samples, [], MappingProxyType(sent))
+    result = SimResult(
+        scenario,
+        metrics,
+        decisions,
+        health,
+        samples,
+        [],
+        MappingProxyType(sent),
+        usable_kwh=cfg.battery.usable_kwh,
+    )
     return replace(result, failures=[*metrics.failures(cfg), *scenario.checks(result)])
 
 

@@ -134,7 +134,15 @@ def result_of(
 ) -> SimResult:
     samples, decisions = samples or [], decisions or []
     metrics = measure(samples, decisions, cfg)
-    return SimResult(SCENARIOS[name], metrics, decisions, states or [], samples, [])
+    return SimResult(
+        SCENARIOS[name],
+        metrics,
+        decisions,
+        states or [],
+        samples,
+        [],
+        usable_kwh=cfg.battery.usable_kwh,
+    )
 
 
 def check(name: str, index: int) -> Any:
@@ -777,7 +785,8 @@ def test_grid_charging_raises_the_soc_by_90_pct_of_the_energy(cfg) -> None:
     raised = check("plan-netzladen", 1)
     # 0,9 · 3 kW · 0,5 h · √0,88 = 1,266 kWh, von 30 kWh 4,22 Prozentpunkte
     assert raised.text == (
-        "Der SOC steigt um mindestens 4,22 Prozentpunkte: 90 % von 3 kW · 0,5 h · √0,88 in 30 kWh."
+        "Der SOC steigt um mindestens 90 % von 3 kW · 0,5 h · √0,88, geteilt durch die nutzbare "
+        "Kapazität des Akkus."
     )
 
     def run(last: float) -> list[str]:
@@ -787,6 +796,22 @@ def test_grid_charging_raises_the_soc_by_90_pct_of_the_energy(cfg) -> None:
     assert run(34.23) == []
     assert run(34.2) == ["Der SOC steigt um 4,2 Prozentpunkte, verlangt mindestens 4,22."]
     assert raised.find(result_of(cfg, "plan-netzladen")) == ["Der Lauf hat keine Probe."]
+
+
+def test_plan_netzladen_scales_with_capacity(cfg) -> None:
+    raised = check("plan-netzladen", 1)
+    big = cfg.model_copy(update={"battery": cfg.battery.model_copy(update={"usable_kwh": 60.0})})
+    # 0,9 · 3 kW · 0,5 h · √0,88 = 1,266 kWh, von 60 kWh 2,11 Prozentpunkte
+    samples = [sample(0, soc_pct=30.0), sample(1, soc_pct=31.0), sample(2, soc_pct=32.12)]
+    assert raised.find(result_of(big, "plan-netzladen", samples=samples)) == []
+    too_little = [sample(0, soc_pct=30.0), sample(2, soc_pct=32.0)]
+    assert raised.find(result_of(big, "plan-netzladen", samples=too_little)) == [
+        "Der SOC steigt um 2 Prozentpunkte, verlangt mindestens 2,11."
+    ]
+    # dieselbe Probe wäre bei 30 kWh zu wenig
+    assert raised.find(result_of(cfg, "plan-netzladen", samples=samples)) == [
+        "Der SOC steigt um 2,12 Prozentpunkte, verlangt mindestens 4,22."
+    ]
 
 
 def test_after_the_plan_expires_the_battery_carries_the_house(cfg) -> None:

@@ -105,7 +105,16 @@ def result_of(
     metrics = measure(samples, decisions, cfg)
     start = SCENARIOS[name].start
     at = {key: start + timedelta(seconds=s) for key, s in (sent or {}).items()}
-    return SimResult(SCENARIOS[name], metrics, decisions, states or [], samples, [], sent=at)
+    return SimResult(
+        SCENARIOS[name],
+        metrics,
+        decisions,
+        states or [],
+        samples,
+        [],
+        sent=at,
+        usable_kwh=cfg.battery.usable_kwh,
+    )
 
 
 def check(name: str, index: int) -> Any:

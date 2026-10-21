@@ -263,7 +263,15 @@ def run(
         last = unit
         samples.append(sample(t, unit, grid_w=grid_w))
     decisions = decisions or []
-    return SimResult(SCENARIOS[name], measure(samples, decisions, cfg), decisions, [], samples, [])
+    return SimResult(
+        SCENARIOS[name],
+        measure(samples, decisions, cfg),
+        decisions,
+        [],
+        samples,
+        [],
+        usable_kwh=cfg.battery.usable_kwh,
+    )
 
 
 def decision(name: str, seconds: int, value: float, *codes: str) -> Decision:
@@ -450,7 +458,15 @@ def test_the_export_is_averaged_over_the_last_ten_minutes(cfg: Config) -> None:
 def test_checks_without_the_air_conditioner_find_it_missing(cfg: Config) -> None:
     name = "klima-auto-vorrang"
     samples = [sample(t, None) for t in range(5)]
-    result = SimResult(SCENARIOS[name], measure(samples, [], cfg), [], [], samples, [])
+    result = SimResult(
+        SCENARIOS[name],
+        measure(samples, [], cfg),
+        [],
+        [],
+        samples,
+        [],
+        usable_kwh=cfg.battery.usable_kwh,
+    )
     assert check(name, "am Ende 0 K").find(result) == [
         "Die UVR wendet am Ende keinen Versatz an, verlangt 0 K."
     ]

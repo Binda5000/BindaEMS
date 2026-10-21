@@ -53,7 +53,15 @@ def result_of(
     cfg: Config, samples: list[Sample], decisions: list[Decision], checks: Checks
 ) -> SimResult:
     scenario = replace(SCENARIOS["reserve"], checks=checks)
-    return SimResult(scenario, measure(samples, decisions, cfg), decisions, [], samples, [])
+    return SimResult(
+        scenario,
+        measure(samples, decisions, cfg),
+        decisions,
+        [],
+        samples,
+        [],
+        usable_kwh=cfg.battery.usable_kwh,
+    )
 
 
 def passing(result: SimResult) -> list[str]:

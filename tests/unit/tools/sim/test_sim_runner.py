@@ -840,7 +840,15 @@ def result_of(
     health: list[tuple[int, HealthReport]] | None = None,
 ) -> SimResult:
     metrics = measure([], [], cfg)
-    return SimResult(SCENARIOS["reserve"], metrics, decisions or [], health or [], samples, [])
+    return SimResult(
+        SCENARIOS["reserve"],
+        metrics,
+        decisions or [],
+        health or [],
+        samples,
+        [],
+        usable_kwh=cfg.battery.usable_kwh,
+    )
 
 
 def egolf_at(t: int, current_a: float, *, soc_pct: float = 60.0, l1: float = 0.0) -> Sample:

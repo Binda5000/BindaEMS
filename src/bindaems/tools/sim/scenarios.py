@@ -268,14 +268,15 @@ GRID_CHARGE_W: Final = 3000.0  # „plan-netzladen“: Netzladen für 30 min …
 GRID_CHARGE_S: Final = 30 * MINUTE_S
 GRID_CHARGE_BAND_W: Final = 300.0  # … der Netzbezug bei Haus + 3000 W auf ± so viel …
 GRID_CHARGE_SHARE: Final = 0.9  # … und der SOC steigt um mindestens diesen Anteil der Energie
-BATTERY_KWH: Final = 30.0  # nutzbar im Akku der Beispielkonfiguration
-# der Anstieg des SOC in „plan-netzladen“ in Prozentpunkten: 90 % von 3 kW · 0,5 h · √0,88
-GRID_CHARGE_RISE_PCT: Final = (
-    (GRID_CHARGE_SHARE * GRID_CHARGE_W / 1000 * GRID_CHARGE_S / HOUR_S)
-    * math.sqrt(ROUNDTRIP_PCT / 100)
-    / BATTERY_KWH
-    * 100
-)
+
+
+def grid_charge_rise_pct(usable_kwh: float) -> float:
+    """Der Anstieg des SOC in „plan-netzladen“ in Prozentpunkten bei ``usable_kwh`` nutzbaren kWh:
+    90 % von 3 kW · 0,5 h · √0,88, geteilt durch die Kapazität."""
+    stored_kwh = GRID_CHARGE_SHARE * GRID_CHARGE_W / 1000 * GRID_CHARGE_S / HOUR_S
+    return stored_kwh * math.sqrt(ROUNDTRIP_PCT / 100) / usable_kwh * 100
+
+
 NIGHT_SOC_PCT: Final = 30.0
 EXPIRES_S: Final = 20 * MINUTE_S  # „plan-abgelaufen“: Der Plan gilt so lange; ab …
 FREE_FROM_S: Final = 26 * MINUTE_S  # … hier (Override verfallen, 300 s plus 60 s) gilt keiner …
@@ -1501,16 +1502,17 @@ def _grid_at_house_plus_charge(result: SimResult) -> list[str]:
 
 
 def _soc_raised(result: SimResult) -> list[str]:
-    """Der SOC der letzten Probe liegt mindestens ``GRID_CHARGE_RISE_PCT`` über dem der ersten."""
+    """Der SOC der letzten Probe liegt mindestens ``grid_charge_rise_pct`` über dem der ersten, bei
+    der nutzbaren Kapazität des Laufs."""
     if not result.samples:
         return ["Der Lauf hat keine Probe."]
+    required = grid_charge_rise_pct(result.usable_kwh)
     rise = result.samples[-1].soc_pct - result.samples[0].soc_pct
-    if rise >= GRID_CHARGE_RISE_PCT:
+    if rise >= required:
         return []
-    shown = shown_number(rise, 2, lambda number: number >= GRID_CHARGE_RISE_PCT)
+    shown = shown_number(rise, 2, lambda number: number >= required)
     return [
-        f"Der SOC steigt um {shown} Prozentpunkte, verlangt mindestens "
-        f"{de(round(GRID_CHARGE_RISE_PCT, 2))}."
+        f"Der SOC steigt um {shown} Prozentpunkte, verlangt mindestens {de(round(required, 2))}."
     ]
 
 
@@ -2619,9 +2621,9 @@ def _plan_netzladen() -> Scenario:
         _grid_at_house_plus_charge,
     )
     raised = Check(
-        f"Der SOC steigt um mindestens {de(round(GRID_CHARGE_RISE_PCT, 2))} Prozentpunkte: "
-        f"{de(GRID_CHARGE_SHARE * 100)} % von {de(GRID_CHARGE_W / 1000)} kW · "
-        f"{de(GRID_CHARGE_S / HOUR_S)} h · √{de(ROUNDTRIP_PCT / 100)} in {de(BATTERY_KWH)} kWh.",
+        f"Der SOC steigt um mindestens {de(GRID_CHARGE_SHARE * 100)} % von "
+        f"{de(GRID_CHARGE_W / 1000)} kW · {de(GRID_CHARGE_S / HOUR_S)} h · "
+        f"√{de(ROUNDTRIP_PCT / 100)}, geteilt durch die nutzbare Kapazität des Akkus.",
         _soc_raised,
     )
     return Scenario(

@@ -2922,9 +2922,7 @@ den Tasks 4, 6, 7, 11 und 16, die mit Task 17 eingearbeitet sind):
 - **Entscheidungen (Task 7):** Die Integrationstests prüfen nur Entscheidungen an Victron, keiner die
   Reihenfolge des Zusammenführens; Preis und Budget prüft `regulation.py` nur auf `is not None` (NaN
   käme durch, das Modell des Plans prüft es).
-- **Simulator (Task 8):** `plan-netzladen` rechnet fest mit 30 kWh (`BATTERY_KWH`) und meldet mit
-  `--config` einer Anlage mit deutlich mehr nutzbarer Kapazität zu Unrecht einen Fehler; die Klemme an
-  der Reserve macht `_reserve_kept` am Netz unscheiterbar; `_Plan.__call__` wiederholt den Block von
+- **Simulator (Task 8):** die Klemme an der Reserve macht `_reserve_kept` am Netz unscheiterbar; `_Plan.__call__` wiederholt den Block von
   `_new_version`; die Version von `_Boost(3, …)` in `plan-boost` ist von Hand gekoppelt;
   `test_default_model_stays_lossless` nutzt `approx`.
 - **Plan-Schwelle (Task 9):** `model_copy` im Builder überspringt die Prüfung von `support_soc_pct`;

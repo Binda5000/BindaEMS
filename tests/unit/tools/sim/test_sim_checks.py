@@ -119,7 +119,9 @@ def result_of(
     samples, decisions = samples or [], decisions or []
     metrics = measure(samples, decisions, cfg)
     scenario = replace(SCENARIOS[name], start=T0)
-    return SimResult(scenario, metrics, decisions, states or [], samples, [])
+    return SimResult(
+        scenario, metrics, decisions, states or [], samples, [], usable_kwh=cfg.battery.usable_kwh
+    )
 
 
 def check(name: str, index: int) -> Any:
