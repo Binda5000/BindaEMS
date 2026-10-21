@@ -814,6 +814,48 @@ def test_plan_netzladen_scales_with_capacity(cfg) -> None:
     ]
 
 
+def test_violation_text_never_reads_like_the_limit(cfg, monkeypatch) -> None:
+    """Ein Verstoß, den die Rundung auf die Grenze legte, zeigt eine Stelle mehr: sonst stünde da
+    „1,02 kWh, verlangt höchstens 1,02 kWh“."""
+    # Netzbezug einer Viertelstunde: 4081,6 W · 900 s = 1,0204 kWh gegen 1,02; 3598,4 W = 0,8996
+    quarters = check("plan-budget", 0)
+
+    def quarter(grid_w: float, begin: int) -> list[str]:
+        samples = [
+            sample(t, grid_w=grid_w if begin <= t < begin + 900 else 4000.0) for t in range(2820)
+        ]
+        return quarters.find(result_of(cfg, "plan-budget", samples=samples))
+
+    assert quarter(4081.6, 960) == [
+        "Netzbezug der Viertelstunde ab 18:15: 1,0204 kWh, verlangt höchstens 1,02 kWh."
+    ]
+    assert quarter(3598.4, 1860) == [
+        "Netzbezug der Viertelstunde ab 18:30: 0,8996 kWh, verlangt mindestens 0,9 kWh."
+    ]
+    # 40 Entscheidungen in 3599 s sind 40,01 je Stunde, gerundet 40,0
+    few = check("plan-halten", 2)
+    decisions = [
+        decision("plan-halten", t, VICTRON, SETPOINT, 900.0, "plan_hold") for t in range(40)
+    ]
+    samples = [sample(t) for t in range(3599)]
+    [text] = few.find(result_of(cfg, "plan-halten", samples=samples, decisions=decisions))
+    assert "40,0111142 je Stunde, verlangt höchstens 40." in text
+    # 8999 von 10000 s in Boost sind 89,99 %, gerundet 90,0
+    boosted = check("plan-boost", 0)
+    samples = [
+        sample(t, egolf=car(0.0 if t < 60 + 1001 else 16.0, "boost" if t >= 60 else "pv"))
+        for t in range(10060)
+    ]
+    assert boosted.find(result_of(cfg, "plan-boost", samples=samples)) == [
+        "„egolf“ lädt ab 60 s in 89,99 % der Sekunden in Boost, verlangt mindestens 90 %."
+    ]
+    # 5,004 % aus dem Akku gegen 5, gerundet 5,0
+    monkeypatch.setattr("bindaems.tools.sim.scenarios.battery_into_car_pct", lambda *_: 5.004)
+    assert check("akku-wolkig", 0).find(result_of(cfg, "akku-wolkig")) == [
+        "„egolf“ lädt zu 5,004 % aus dem Akku, verlangt höchstens 5 %."
+    ]
+
+
 def test_after_the_plan_expires_the_battery_carries_the_house(cfg) -> None:
     free = check("plan-abgelaufen", 1)
     assert free.text == (

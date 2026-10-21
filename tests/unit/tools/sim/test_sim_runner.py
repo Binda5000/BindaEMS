@@ -925,6 +925,23 @@ def test_the_evcs_follows_the_sun_with_few_current_commands(cfg) -> None:  # Des
     assert sunny(result_of(cfg, samples, [*seven, *others])) == []
 
 
+def test_violation_text_never_reads_like_the_limit(cfg) -> None:
+    """Ein Verstoß, den die Rundung auf die Grenze legte, zeigt eine Stelle mehr."""
+    sunny = SCENARIOS["sonnig"].checks
+    # der Tesla lädt 2699 s = 44,98 min gegen 45 min, der e-Golf danach 2699 s
+    short = one_after_the_other(tesla_until=2699, egolf_from=2800, end=5499)
+    assert sunny(result_of(cfg, short)) == [
+        "„tesla“ lädt 44,98333333 min, verlangt 45 min.",
+        "„egolf“ lädt danach 44,98333333 min, verlangt 45 min.",
+    ]
+    # 8 Strombefehle in 47,82 min sind 10,04 je Stunde, gerundet 10,0
+    samples = one_after_the_other(tesla_until=3000, egolf_from=3150, end=6019)
+    eight = [evcs_decision(3150 + 60 * i, CommandKind.CURRENT, DecisionResult.OK) for i in range(8)]
+    [text] = sunny(result_of(cfg, samples, eight))
+    assert text.startswith("8 Strombefehle an die EVCS in 47,8 min Laden von „egolf“: 10,03")
+    assert text.endswith(", verlangt höchstens 10.")
+
+
 def test_the_evcs_must_drop_during_the_peak(cfg) -> None:
     check = SCENARIOS["abend-sofort"].checks
     before = [egolf_at(1199, 15.0)]

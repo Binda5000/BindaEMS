@@ -794,13 +794,14 @@ def _one_after_the_other(result: SimResult, *, tesla_min: float, egolf_min: floa
         found.append("„tesla“ erreicht „Complete“ nicht.")
     minutes = _minutes(samples, TESLA)
     if minutes < tesla_min:
-        found.append(f"„tesla“ lädt {de(round(minutes, 1))} min, verlangt {de(tesla_min)} min.")
+        shown = shown_number(minutes, 1, lambda number: number >= tesla_min)
+        found.append(f"„tesla“ lädt {shown} min, verlangt {de(tesla_min)} min.")
     started = next((s.t for s in samples if s.cars[EGOLF].charging), None)
     if started is not None and (done is None or started <= done):
         found.append(f"„egolf“ startet bei {started} s, bevor „tesla“ „Complete“ erreicht.")
     after = _minutes([s for s in samples if done is not None and s.t > done], EGOLF)
     if after < egolf_min:
-        shown = de(round(after, 1))
+        shown = shown_number(after, 1, lambda number: number >= egolf_min)
         found.append(f"„egolf“ lädt danach {shown} min, verlangt {de(egolf_min)} min.")
     return found
 
@@ -829,9 +830,10 @@ def _few_evcs_currents(result: SimResult) -> list[str]:
     per_hour = count * MINUTE_S / minutes
     if per_hour <= EVCS_CURRENTS_PER_HOUR:
         return []
+    shown = shown_number(per_hour, 1, lambda number: number <= EVCS_CURRENTS_PER_HOUR)
     return [
         f"{count} Strombefehle an die EVCS in {de(round(minutes, 1))} min Laden von „egolf“: "
-        f"{de(round(per_hour, 1))} je Stunde, verlangt höchstens {EVCS_CURRENTS_PER_HOUR}."
+        f"{shown} je Stunde, verlangt höchstens {EVCS_CURRENTS_PER_HOUR}."
     ]
 
 
@@ -1192,7 +1194,7 @@ def _from_battery_at_most(key: str, limit_pct: float) -> Check:
             return [f"„{key}“ lädt nie."]
         if pct <= limit_pct:
             return []
-        shown = de(round(pct, 2))
+        shown = shown_number(pct, 2, lambda number: number <= limit_pct)
         return [f"„{key}“ lädt zu {shown} % aus dem Akku, verlangt höchstens {de(limit_pct)} %."]
 
     text = (
@@ -1334,13 +1336,15 @@ def _quarters_within(start: datetime, limit_kwh: float, low_kwh: float | None = 
                 continue
             kwh = sum(max(0.0, s.grid_w) for s in inside) / 3_600_000
             if kwh > limit_kwh:
+                at_most = shown_number(kwh, 3, lambda number: number <= limit_kwh)
                 found.append(
-                    f"Netzbezug der Viertelstunde ab {shown}: {de(round(kwh, 3))} kWh, verlangt "
+                    f"Netzbezug der Viertelstunde ab {shown}: {at_most} kWh, verlangt "
                     f"höchstens {de(limit_kwh)} kWh."
                 )
             if low_kwh is not None and kwh < low_kwh:
+                at_least = shown_number(kwh, 3, lambda number: number >= low_kwh)
                 found.append(
-                    f"Netzbezug der Viertelstunde ab {shown}: {de(round(kwh, 3))} kWh, verlangt "
+                    f"Netzbezug der Viertelstunde ab {shown}: {at_least} kWh, verlangt "
                     f"mindestens {de(low_kwh)} kWh."
                 )
         return found
@@ -1472,9 +1476,10 @@ def _victron_decisions_per_hour(result: SimResult) -> list[str]:
     per_hour = count * MINUTE_S / minutes
     if per_hour <= HOLD_DECISIONS_PER_HOUR:
         return []
+    shown = shown_number(per_hour, 1, lambda number: number <= HOLD_DECISIONS_PER_HOUR)
     return [
         f"{count} Entscheidungen an „{VICTRON}“ in {de(round(minutes, 1))} min: "
-        f"{de(round(per_hour, 1))} je Stunde, verlangt höchstens {HOLD_DECISIONS_PER_HOUR}."
+        f"{shown} je Stunde, verlangt höchstens {HOLD_DECISIONS_PER_HOUR}."
     ]
 
 
@@ -1551,8 +1556,9 @@ def _boosting_from(result: SimResult) -> list[str]:
     share = boosting / len(after)
     if share >= BOOSTING_SHARE:
         return []
+    shown = shown_number(share * 100, 1, lambda number: number >= BOOSTING_SHARE * 100)
     return [
-        f"„{EGOLF}“ lädt ab {BOOST_FROM_S} s in {de(round(share * 100, 1))} % der Sekunden in "
+        f"„{EGOLF}“ lädt ab {BOOST_FROM_S} s in {shown} % der Sekunden in "
         f"Boost, verlangt mindestens {de(BOOSTING_SHARE * 100)} %."
     ]
 
@@ -1825,7 +1831,8 @@ def _reaches_before(key: str, target_pct: float, before_s: int) -> Check:
             return [f"„{key}“ hat vor der Abfahrt keinen Ladestand."]
         if best >= target_pct:
             return []
-        return [f"„{key}“ hat vor der Abfahrt höchstens {de(round(best, 2))} %."]
+        shown = shown_number(best, 2, lambda number: number >= target_pct)
+        return [f"„{key}“ hat vor der Abfahrt höchstens {shown} %."]
 
     text = f"„{key}“ erreicht {de(target_pct)} % vor der Abfahrt ({de(before_s / MINUTE_S)} min)."
     return Check(text, find)

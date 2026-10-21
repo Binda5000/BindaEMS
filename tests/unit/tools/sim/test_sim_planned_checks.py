@@ -424,6 +424,14 @@ def test_the_egolf_must_reach_its_target_before_the_departure(cfg) -> None:
     assert found(69.9, 69.98, 69.99, 70.2) == ["„egolf“ hat vor der Abfahrt höchstens 69,99 %."]
 
 
+def test_violation_text_never_reads_like_the_limit(cfg) -> None:
+    reaches = check("geplant-spaet", 2)
+    samples = [sample(7197 + t, egolf=car(16.0, soc)) for t, soc in enumerate((69.9, 69.998))]
+    assert reaches.find(result_of(cfg, "geplant-spaet", samples=samples)) == [
+        "„egolf“ hat vor der Abfahrt höchstens 69,998 %."
+    ]
+
+
 def test_the_unknown_soc_is_assumed_at_0_pct(cfg) -> None:
     assumed = check("geplant-unbekannt", 0)
     assert assumed.text == (
