@@ -2,6 +2,7 @@ import asyncio
 from datetime import timedelta
 
 import pytest
+from sqlalchemy import Engine, delete
 from structlog.testing import capture_logs
 from tests.app_helpers import T_APP
 from tests.helpers import FakeSink
@@ -18,6 +19,7 @@ from bindaems.app.control.decisions import (
     DecisionStore,
 )
 from bindaems.app.core_link import CoreUnavailableError
+from bindaems.app.db.schema import decision_table
 from bindaems.shared.control import CommandKind
 from bindaems.shared.decisions import DecisionResult
 from bindaems.shared.influx.lineprotocol import Point
@@ -159,6 +161,18 @@ def test_paging_follows_ts_not_arrival_when_the_backlog_delivers_older_rows(
     assert more
     second, more = store.query(DecisionQuery(limit=1, before=first[0].cursor))
     assert [item.decision.id for item in second] == ["old"]
+    assert not more
+
+
+def test_before_cursor_on_a_cleaned_row_still_pages(store: DecisionStore, engine: Engine) -> None:
+    store.add([decision(id=f"d{i}", ts=at(i)) for i in range(5)])
+    first, more = store.query(DecisionQuery(limit=2))
+    assert [item.decision.id for item in first] == ["d4", "d3"]
+    assert more
+    with engine.begin() as conn:  # das Aufräumen entfernt die Zeile des Zeigers
+        conn.execute(delete(decision_table).where(decision_table.c.seq == first[-1].cursor))
+    second, more = store.query(DecisionQuery(limit=10, before=first[-1].cursor))
+    assert [item.decision.id for item in second] == ["d2", "d1", "d0"]
     assert not more
 
 
