@@ -693,16 +693,17 @@ describe('Geplant', () => {
 });
 
 describe('Ladelimit im Zeitplan', () => {
-	const NB = ' ';
-	const withLimit = (limit_pct: number | null, target_soc_pct = 80) =>
+	const withLimit = (limit_pct: number | null, target_soc_pct: number) =>
 		({ ...PLAN.vehicles[0]!, soc_assumed: false, target_soc_pct, limit_pct }) as PlanVehicle;
 
-	it('vergleicht das Limit des Autos mit dem Ziel des Plans, wenn der Zeitplan nur den Plan kennt', () => {
-		const line = plannedLine({ mode: null, vehicle: null, car: withLimit(70), target: 80 });
-		expect(line?.notes).toEqual([`Ladelimit im Auto 70${NB}% liegt unter dem Ziel.`]);
-		for (const limit of [null, 80, 100]) {
+	it('nennt es nicht, weil der Zeitplan nur das wirksame Ziel des Plans kennt', () => {
+		// angeglichen (Ziel 80 %, Limit 70 %) und gedeckelt (Ziel 70 %, Limit 70 %)
+		for (const [target, limit] of [
+			[80, 70],
+			[70, 70]
+		] as const) {
 			expect(
-				plannedLine({ mode: null, vehicle: null, car: withLimit(limit), target: 80 })?.notes
+				plannedLine({ mode: null, vehicle: null, car: withLimit(limit, target), target })?.notes
 			).toEqual([]);
 		}
 	});

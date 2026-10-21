@@ -512,8 +512,7 @@ export function plannedLine({
 	// ohne Angleichen rechnen Plan und core mit dem Limit als Ziel: das wirksame Ziel liegt darunter
 	const limit = vehicle?.charge_limit_pct ?? car?.limit_pct ?? null;
 	const effective = vehicle?.planned?.target_soc_pct ?? car?.target_soc_pct ?? null;
-	// der Zeitplan kennt nur das Ziel des Plans (`mode` ist `null`): dort genügt das Limit darunter
-	const below = mode === null || (effective !== null && target !== null && effective < target);
+	const below = effective !== null && target !== null && effective < target;
 	if (limit !== null && target !== null && below && limit < target) {
 		notes.push(`Ladelimit im Auto ${formatSoc(limit)} liegt unter dem Ziel.`);
 	}

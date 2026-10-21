@@ -171,18 +171,14 @@ it('nennt ein erwartetes Auto mit „erwartet ab“ statt nur mit dem Namen', ()
 	expect(item).toHaveClass('expected');
 });
 
-it('zeigt „Ladelimit“, wenn das Limit des Autos unter dem Ziel des Plans liegt', () => {
-	const car = { ...PLAN.vehicles[0]!, target_soc_pct: 80, limit_pct: 70 };
-	render(PlanHeader, {
-		data: { ...RESPONSE, plan: { ...PLAN, vehicles: [car] } },
-		canOperate: false
-	});
-	expect(screen.getByText('Ladelimit im Auto 70 % liegt unter dem Ziel.')).toBeVisible();
-});
-
-it('zeigt „Ladelimit“ nicht ohne Limit oder mit Limit ab dem Ziel', () => {
-	for (const limit_pct of [null, 80, 100]) {
-		const car = { ...PLAN.vehicles[0]!, target_soc_pct: 80, limit_pct };
+it('nennt „Ladelimit“ nicht: Der Zeitplan kennt das Ziel der Absicht nicht', () => {
+	// angeglichen (Ziel 80 %, Limit 70 %) und gedeckelt (Ziel 70 %, Limit 70 %), dazu ohne Limit
+	for (const [target_soc_pct, limit_pct] of [
+		[80, 70],
+		[70, 70],
+		[80, null]
+	] as const) {
+		const car = { ...PLAN.vehicles[0]!, target_soc_pct, limit_pct };
 		const { unmount } = render(PlanHeader, {
 			data: { ...RESPONSE, plan: { ...PLAN, vehicles: [car] } },
 			canOperate: false
