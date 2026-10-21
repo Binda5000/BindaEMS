@@ -1,5 +1,5 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/svelte';
-import { beforeEach, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as v from 'valibot';
 import reviewJson from '$lib/api/contract/plan-review.json';
 import { ApiError } from '$lib/api/errors';
@@ -216,4 +216,49 @@ it('zeigt erwartete Autos im Ablauf gestrichelt mit „erwartet ab“', async ()
 	expect(within(blocks).getByText('e-Golf erwartet ab 17:30')).toHaveClass('expected');
 	// auch im Kopf des Plans steht das Auto als erwartet
 	expect(screen.getAllByText('e-Golf erwartet ab 17:30')).toHaveLength(2);
+});
+
+const NO_PLAN = 'Kein neuer Plan nach 40 s. Die Seite zeigt den letzten.';
+
+describe('Warten auf den neuen Plan', () => {
+	beforeEach(() => vi.useFakeTimers({ shouldAdvanceTime: true }));
+	afterEach(() => vi.useRealTimers());
+
+	it('sagt nach 40 s ohne neuen Plan, dass die Seite den letzten zeigt', async () => {
+		renderPage('operator'); // api.plan liefert immer denselben Plan
+		await fireEvent.click(await screen.findByRole('switch', { name: 'Netzladen erlaubt' }));
+		expect(await screen.findByRole('button', { name: 'Plant …' })).toBeDisabled();
+		expect(screen.queryByText(NO_PLAN)).toBeNull();
+		await vi.advanceTimersByTimeAsync(30_000);
+		expect(screen.queryByText(NO_PLAN)).toBeNull();
+		await vi.advanceTimersByTimeAsync(12_000);
+		expect(await screen.findByText(NO_PLAN)).toBeTruthy();
+		expect(screen.getByRole('button', { name: 'Neu planen' })).toBeEnabled();
+		expect(screen.getByText('Plan von 10:00 Uhr')).toBeTruthy();
+	});
+
+	it('nennt dasselbe nach „Neu planen“ und löscht den Hinweis beim nächsten Versuch', async () => {
+		renderPage('operator');
+		await fireEvent.click(await screen.findByRole('button', { name: 'Neu planen' }));
+		await vi.advanceTimersByTimeAsync(42_000);
+		expect(await screen.findByText(NO_PLAN)).toBeTruthy();
+		await fireEvent.click(screen.getByRole('button', { name: 'Neu planen' }));
+		await waitFor(() => expect(screen.queryByText(NO_PLAN)).toBeNull());
+	});
+
+	it('wartet nicht, wenn der Schalter die Version der Einstellungen nicht ändert', async () => {
+		renderPage('operator');
+		await fireEvent.click(await screen.findByRole('switch', { name: 'Netzladen erlaubt' }));
+		api.plan.mockResolvedValue(NEXT);
+		await screen.findByText('Plan von 10:15 Uhr', undefined, { timeout: 5_000 });
+		await waitFor(() => expect(screen.getByRole('button', { name: 'Neu planen' })).toBeEnabled());
+		// dieselbe Version wie bei der Antwort davor: nichts geändert, keine Neuplanung
+		await fireEvent.click(screen.getByRole('switch', { name: 'Netzladen erlaubt' }));
+		await waitFor(() => expect(api.setGridCharge).toHaveBeenCalledTimes(2));
+		await waitFor(() =>
+			expect(screen.getByRole('switch', { name: 'Netzladen erlaubt' })).toBeEnabled()
+		);
+		expect(screen.queryByRole('button', { name: 'Plant …' })).toBeNull();
+		expect(screen.getByRole('button', { name: 'Neu planen' })).toBeEnabled();
+	});
 });

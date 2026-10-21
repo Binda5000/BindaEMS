@@ -23,6 +23,8 @@
 	const POLL_MS = 2000;
 	const POLL_MAX_MS = 40_000;
 
+	const NO_NEW_PLAN = 'Kein neuer Plan nach 40 s. Die Seite zeigt den letzten.';
+
 	const REVIEW_MS = 300_000;
 
 	const plan = new Resource((o) => api.plan(o), { intervalMs: 60_000 });
@@ -41,6 +43,8 @@
 	let replanning = $state(false);
 	let switching = $state(false);
 	let actionError = $state<string | null>(null);
+	let waitNotice = $state<string | null>(null); // der Plan blieb nach 40 s aus
+	let settingsVersion: number | null = null; // Version der Einstellungen laut letzter Antwort des Schalters
 	let stopped = false;
 	let timer: ReturnType<typeof setTimeout> | undefined;
 
@@ -86,7 +90,10 @@
 		return value ? `${value.id}|${value.created_at}` : '';
 	}
 
-	/** Fragt nach einem Auslöser alle 2 s, bis der Plan wechselt (höchstens 40 s); zeigt „Plant …“ */
+	/**
+	 * Fragt nach einem Auslöser alle 2 s, bis der Plan wechselt (höchstens 40 s); zeigt „Plant …“.
+	 * Bleibt der Plan aus, sagt ein Hinweis, dass die Seite den letzten zeigt.
+	 */
 	async function waitForNewPlan(before: string): Promise<void> {
 		replanning = true;
 		try {
@@ -96,8 +103,9 @@
 				await new Promise<void>((resolve) => (timer = setTimeout(resolve, POLL_MS)));
 				if (stopped) return;
 				await plan.refresh();
-				if (plan.error === null && signature(plan.data?.plan) !== before) break;
+				if (plan.error === null && signature(plan.data?.plan) !== before) return;
 			}
+			if (!stopped) waitNotice = NO_NEW_PLAN;
 		} finally {
 			replanning = false;
 		}
@@ -108,12 +116,16 @@
 		switching = true;
 		replanning = true; // „Neu planen“ bleibt für den ganzen Ablauf des Schalters gesperrt
 		actionError = null;
+		waitNotice = null;
 		const before = signature(current);
 		try {
-			await api.setGridCharge(on);
+			const reply = await api.setGridCharge(on);
+			// dieselbe Version wie bei der Antwort davor: nichts hat sich geändert, nichts wird neu geplant
+			const changed = reply.settings_version !== settingsVersion;
+			settingsVersion = reply.settings_version;
 			await plan.refresh();
 			// die geänderte Einstellung löst eine Neuplanung aus: deren Plan abwarten
-			await waitForNewPlan(before);
+			if (changed) await waitForNewPlan(before);
 		} catch (error) {
 			actionError = failure(error);
 		} finally {
@@ -126,6 +138,7 @@
 		if (replanning) return;
 		replanning = true;
 		actionError = null;
+		waitNotice = null;
 		const before = signature(current);
 		try {
 			await api.replan();
@@ -144,6 +157,9 @@
 	{/if}
 	{#if actionError}
 		<Notice level="error">{actionError}</Notice>
+	{/if}
+	{#if waitNotice}
+		<Notice level="warning">{waitNotice}</Notice>
 	{/if}
 
 	{#if plan.data}
