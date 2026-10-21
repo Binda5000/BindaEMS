@@ -318,7 +318,7 @@ Minutenmittel in `long` und lassen sich in Grafana mit der Retention Policy `lon
   Start gelaufen. Eine ältere app kennt diese Versionen nicht und startet mit dieser Datenbank
   nicht. Spiele die Kopie ein, die du vor dem Ausrollen gemacht hast (`/backup/vor-plan-4a.sqlite3`,
   Schritt 1 in Abschnitt 8, „Statistik ausrollen (Plan 4a)“; Wiederherstellen wie in Abschnitt 9).
-  Die nächtlichen Sicherungen helfen nur am Tag des Ausrollens, vor 03:15 Uhr: Schon die erste
+  Die nächtlichen Sicherungen helfen nur am Tag des Ausrollens, vor 04:00 Uhr: Schon die erste
   Sicherung danach enthält `0010` und `0011`. Die Statistik seit dem Ausrollen geht dabei
   verloren. Der core ist nicht betroffen.
 - **Rollback auf einen Stand vor Plan 3c:**
@@ -1036,7 +1036,7 @@ Ausrollen.
 
 ## 9. Sicherung und Wiederherstellung
 
-Die app sichert ihre Datenbank jede Nacht um 03:15 Uhr im laufenden Betrieb in das Volume
+Die app sichert ihre Datenbank jede Nacht um 04:00 Uhr im laufenden Betrieb in das Volume
 `backup` (`/backup/bindaems-JJJJMMTT-HHMMSS.sqlite3`) und behält 14 Sicherungen. Gegen den
 Verlust der VM helfen sie nur zusammen mit der Proxmox-Replikation oder einer Kopie außerhalb
 der VM.

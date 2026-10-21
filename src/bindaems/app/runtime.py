@@ -117,7 +117,7 @@ COSTING_STOP_S = 5.0  # so lange wartet das Beenden auf den Block einer laufende
 LOAD_MODEL_STOP_S = 5.0  # so lange wartet das Beenden auf eine Rechnung des Lastmodells
 DRIVING_STOP_S = 5.0  # so lange wartet das Beenden auf eine Rechnung des Fahrverhaltens
 AUTOMATION_STOP_S = 5.0  # so lange wartet das Beenden auf einen Schreibzugriff der Automatik
-BACKUP_AT = (3, 15)  # Ortszeit
+BACKUP_AT = (4, 0)  # Ortszeit, nach Training (03:15) und Fahrverhalten (03:40)
 FORECAST_NIGHTLY_AT = (2, 30)  # Ortszeit
 FORECAST_KEEP = timedelta(days=60)
 LEDGER_NIGHTLY_AT = (2, 45)  # Ortszeit, nach der Prognose um 02:30

@@ -33,3 +33,14 @@ def test_backup_leaves_foreign_files_alone(tmp_path) -> None:
         "bindaems-20261003-020000.sqlite3",
         "notizen.txt",
     ]
+
+
+def test_backup_runs_after_the_night_jobs() -> None:
+    from bindaems.app.learning.driving_service import RUN_AT as DRIVING_AT
+    from bindaems.app.learning.service import TRAIN_AT, TRAIN_TIMEOUT_S
+    from bindaems.app.runtime import BACKUP_AT
+
+    backup = BACKUP_AT[0] * 60 + BACKUP_AT[1]
+    train_end = TRAIN_AT.hour * 60 + TRAIN_AT.minute + TRAIN_TIMEOUT_S // 60
+    assert backup > train_end
+    assert backup > DRIVING_AT.hour * 60 + DRIVING_AT.minute
