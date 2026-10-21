@@ -4,12 +4,13 @@ Ohne ``from __future__ import annotations`` (siehe ``auth/routes.py``).
 """
 
 import asyncio
+import re
 from datetime import date, timedelta
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import JSONResponse
-from pydantic import AwareDatetime, BaseModel, ConfigDict, Field
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, field_validator
 
 from bindaems.app.audit import AuditLog
 from bindaems.app.auth.service import (
@@ -56,6 +57,7 @@ CONFLICT = "Die Absicht wurde gleichzeitig geändert. Bitte erneut versuchen."
 NEEDS_CONFIRMATION = "Bitte bestätige Prüfprotokoll Teil 2."
 WRONG_PASSWORD = "Passwort falsch."  # noqa: S105 (Fehlertext, kein Passwort)
 NO_ACTUATORS = "Keine Aktoren gewählt."
+DATE_PATTERN = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}")
 
 
 class _Body(BaseModel):
@@ -80,6 +82,14 @@ class TargetBody(_Body):
     target_soc_pct: int | None
     departure: str | None
     departure_on: Annotated[date | None, Field(strict=False)] = None
+
+    @field_validator("departure_on", mode="before")
+    @classmethod
+    def _only_a_date(cls, value: object) -> object:
+        """Nur ``YYYY-MM-DD``: pydantic nähme sonst auch einen Zeitstempel oder eine Zahl."""
+        if value is not None and not (isinstance(value, str) and DATE_PATTERN.fullmatch(value)):
+            raise ValueError("Abfahrtstag muss ein Datum sein (YYYY-MM-DD).")
+        return value
 
 
 class AssignmentBody(_Body):

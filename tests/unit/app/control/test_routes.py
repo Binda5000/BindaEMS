@@ -644,6 +644,21 @@ def test_target_with_a_bad_date_is_rejected(client, auth, fake_client) -> None:
     assert fake_client.sent == []
 
 
+@pytest.mark.parametrize(
+    "value",
+    ["2026-11-23T00:00:00", "2026-11-23 00:00:00", "2026-11-23T00:00:00Z", 1795305600, 20261123],
+)
+def test_departure_on_rejects_timestamps(client, auth, fake_client, value) -> None:
+    operator = login_as(client, auth, "operator")
+    response = client.put(
+        "/api/control/vehicles/tesla/target",
+        json={"target_soc_pct": 80, "departure": "07:00", "departure_on": value},
+        headers=operator,
+    )
+    assert response.status_code == 422
+    assert fake_client.sent == []
+
+
 def test_target_out_of_range_is_rejected(client, auth, fake_client) -> None:
     operator = login_as(client, auth, "operator")
     response = client.put(
