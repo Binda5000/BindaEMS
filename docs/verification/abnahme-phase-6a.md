@@ -254,11 +254,13 @@ letzte Zeile der Abstand 601 s zur Erhöhung um 10:10:01, nicht 302 s zur Entsch
 
 **4.3 Spätestens einen Zyklus nach einem Wechsel der Betriebsart oder nach veralteten Paketen steht
 der Versatz auf 0.** Die Zeiten unten sind Erwartungen aus dem Code, an der Anlage zu bestätigen.
-Suche die Entscheidungen mit den Gründen `thermal_mode`, `thermal_off` und `thermal_stale`:
+Suche die Entscheidungen mit den Gründen `thermal_mode`, `thermal_off`, `thermal_stale` und
+`thermal_no_echo`:
 
 ```bash
 jq -r '.decisions[] | select(.actuator == "thermal.klima" and (.dry_run | not)
-    and any(.codes[]; . == "thermal_mode" or . == "thermal_off" or . == "thermal_stale"))
+    and any(.codes[]; . == "thermal_mode" or . == "thermal_off" or . == "thermal_stale"
+        or . == "thermal_no_echo"))
     | [.ts, .requested, .applied, .result, (.codes | join(","))] | @tsv' klima.json
 ```
 
@@ -281,8 +283,10 @@ jq -r '.decisions[] | select(.actuator == "thermal.klima" and (.dry_run | not)
      dst port 5442` (wo verfügbar) Pakete mit dem Rohwert 0 (die letzten vier Datenbytes
      `00 00 00 00`); oder die Visu der UVR zeigt den Versatz „EMS“ früher als nach 5 min auf 0, falls
      das C.M.I. die Pakete der VM noch erhält (der Timeout der UVR allein käme erst nach 5 min).
-  3. Nach der Rückkehr der Werte steht im Entscheidungslog ein Eintrag `thermal_stale` mit dem Versatz
-     0, wenn der Versatz vor dem Ausfall nicht 0 war, und das Echo (`offset_k`) zeigt 0.
+  3. Nach der Rückkehr der Werte steht im Entscheidungslog ein Eintrag `thermal_stale` oder
+     `thermal_no_echo` mit dem Versatz 0, wenn der Versatz vor dem Ausfall nicht 0 war, und das Echo
+     (`offset_k`) zeigt 0. `thermal_no_echo` steht dort, wenn das Echo erst in einem späteren Paket
+     kommt als die übrigen Werte; beide Gründe gelten als bestanden.
   Trage Ausfälle des C.M.I. mit Beginn und Ende ein.
 
 **4.4 Jeder gesendete Versatz ist durch das Echo bestätigt.**

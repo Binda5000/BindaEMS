@@ -5707,8 +5707,9 @@ Was du während des Ausfalls siehst: Die Karte zeigt „Keine Werte“ und den G
 Entscheidungslog bleibt still, denn solange die Quelle fehlt, erzeugt die Regelung keinen Befehl;
 der Adapter sendet die 0 von selbst, sobald er die Quelle als nicht verbunden führt (erwartet rund
 180 s plus Überwachungstakt von 10 s nach dem letzten Paket, die Freigabe läuft nach 10 s ab). Ein
-Eintrag `thermal_stale` mit Versatz 0 folgt erst nach der Rückkehr der Werte, und nur, wenn der
-Versatz vor dem Ausfall nicht 0 war. InfluxDB hat in dieser Zeit eine Lücke bei `offset_k` und
+Eintrag `thermal_stale` oder `thermal_no_echo` mit Versatz 0 folgt erst nach der Rückkehr der
+Werte, und nur, wenn der Versatz vor dem Ausfall nicht 0 war (`thermal_no_echo`, wenn das Echo erst
+in einem späteren Paket kommt als die übrigen Werte). InfluxDB hat in dieser Zeit eine Lücke bei `offset_k` und
 `offset_sent_k` (der Sampler schreibt nur Werte mit Qualität OK). Die Zeiten sind Erwartungen aus
 dem Code, an der Anlage zu bestätigen.
 
