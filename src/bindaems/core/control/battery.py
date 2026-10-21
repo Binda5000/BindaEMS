@@ -193,7 +193,7 @@ class Support:
         *,
         threshold_pct: float,
         allowed: bool,
-        plan_blocks: bool = False,
+        plan_blocks: bool,
     ) -> tuple[SupportReason, float | None]:
         """Rechnet einen Zyklus zum Zeitpunkt ``now``.
 
@@ -437,6 +437,7 @@ class BatteryController:
         pv_w: float | None,
         house_w: float | None,
         cars: Sequence[BatteryCar],
+        *,
         support: SupportIntent = _ALLOWED,
         active: ActiveSlot | None = None,
     ) -> BatteryNeed | None:

@@ -2,6 +2,7 @@ import math
 from datetime import datetime, timedelta
 from typing import TypedDict
 
+import pytest
 from tests.helpers import T0
 
 from bindaems.core.control.battery import (
@@ -39,11 +40,14 @@ class Cycle(TypedDict):
 
     threshold_pct: float
     allowed: bool
+    plan_blocks: bool
 
 
 CARS = [car(mode=Effective.MIN_PV)]  # ein Auto, für das die Unterstützung gelten kann
 DEFICIT = {"evcs": 500.0}  # weit über der Schwelle von 100 W
-AT_70 = Cycle(threshold_pct=70.0, allowed=True)  # die Schwelle aus der Konfiguration, erlaubt
+AT_70 = Cycle(
+    threshold_pct=70.0, allowed=True, plan_blocks=False
+)  # die Schwelle aus der Konfiguration, erlaubt
 
 
 def test_constants() -> None:
@@ -157,7 +161,7 @@ def test_a_soc_that_is_not_a_finite_number_is_unknown() -> None:
 
 def test_soc_thresholds_follow_the_threshold_and_the_config() -> None:
     support = Support(ControlConfig(support_hysteresis_pct=10.0))
-    at_50 = Cycle(threshold_pct=50.0, allowed=True)
+    at_50 = Cycle(threshold_pct=50.0, allowed=True, plan_blocks=False)
     socs = [49.9, 50.0, 40.0, 39.9, 49.0, 50.0]
     found = [support.update(at(s), soc, CARS, DEFICIT, **at_50)[0] for s, soc in enumerate(socs)]
     assert found == ["soc", "on", "on", "soc", "soc", "on"]
@@ -166,7 +170,7 @@ def test_soc_thresholds_follow_the_threshold_and_the_config() -> None:
 def test_hysteresis_follows_the_moving_threshold() -> None:  # Plan 3c, Präzisierung 8
     support = Support(ControlConfig())
     assert support.update(at(0), 72.0, CARS, DEFICIT, **AT_70)[0] == "on"
-    at_80 = Cycle(threshold_pct=80.0, allowed=True)
+    at_80 = Cycle(threshold_pct=80.0, allowed=True, plan_blocks=False)
     assert support.update(at(1), 76.0, CARS, DEFICIT, **at_80)[0] == "on"  # nicht unter 80 − 5
     assert support.update(at(2), 72.0, CARS, DEFICIT, **at_80)[0] == "soc"  # unter 75 %: gesperrt
     assert support.update(at(3), 68.0, CARS, DEFICIT, **AT_70)[0] == "soc"  # erst ab 70 % wieder
@@ -299,26 +303,38 @@ def test_the_reason_names_mode_before_soc_before_time() -> None:
 
 def test_support_switched_off_is_blocked_with_reason_off() -> None:  # Plan 3c, Präzisierung 8
     support = Support(ControlConfig())
-    off = Cycle(threshold_pct=70.0, allowed=False)
+    off = Cycle(threshold_pct=70.0, allowed=False, plan_blocks=False)
     assert support.update(T0, 90.0, CARS, DEFICIT, **off) == ("off", 0.0)
     # Hysterese und Überbrückung laufen mit: Wieder erlaubt, gilt sie sofort, in derselben
     # Überbrückung.
     assert support.update(at(1), 68.0, CARS, DEFICIT, **AT_70) == ("on", 1.0)
 
 
+def test_update_needs_plan_blocks_explicitly() -> None:
+    with pytest.raises(TypeError):
+        Support(ControlConfig()).update(  # type: ignore[call-arg]
+            T0, 90.0, CARS, DEFICIT, threshold_pct=70.0, allowed=True
+        )
+
+
 def test_the_plan_blocks_the_support_with_reason_plan() -> None:  # Plan 3c, Präzisierung 8
     support = Support(ControlConfig())
-    assert support.update(T0, 90.0, CARS, DEFICIT, **AT_70, plan_blocks=True) == ("plan", 0.0)
+    assert support.update(T0, 90.0, CARS, DEFICIT, **{**AT_70, "plan_blocks": True}) == (
+        "plan",
+        0.0,
+    )
     assert support.update(at(1), 68.0, CARS, DEFICIT, **AT_70) == ("on", 1.0)
 
 
 def test_the_reason_names_mode_off_plan_soc_and_time_in_this_order() -> None:
     support = Support(ControlConfig())
-    off = Cycle(threshold_pct=70.0, allowed=False)
+    off = Cycle(threshold_pct=70.0, allowed=False, plan_blocks=False)
     now_only = [car(mode=Effective.NOW)]
-    assert support.update(at(0), 60.0, now_only, DEFICIT, **off, plan_blocks=True)[0] == "mode"
-    assert support.update(at(1), 60.0, CARS, DEFICIT, **off, plan_blocks=True)[0] == "off"
-    assert support.update(at(2), 60.0, CARS, DEFICIT, **AT_70, plan_blocks=True)[0] == "plan"
+    assert (
+        support.update(at(0), 60.0, now_only, DEFICIT, **{**off, "plan_blocks": True})[0] == "mode"
+    )
+    assert support.update(at(1), 60.0, CARS, DEFICIT, **{**off, "plan_blocks": True})[0] == "off"
+    assert support.update(at(2), 60.0, CARS, DEFICIT, **{**AT_70, "plan_blocks": True})[0] == "plan"
     assert support.update(at(3), 60.0, CARS, DEFICIT, **AT_70)[0] == "soc"
 
 

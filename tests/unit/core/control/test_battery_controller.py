@@ -99,6 +99,12 @@ def test_need_puts_on_the_grid_what_the_battery_may_not_give() -> None:
     assert BatteryNeed(0.0, 0.0, 0.0, {}, {}, "mode", None).wanted_w == 0.0
 
 
+def test_assess_takes_support_and_active_by_keyword_only(cfg) -> None:
+    cars = [BatteryCar("evcs", Effective.MIN_PV, 2760.0, True)]
+    with pytest.raises(TypeError):
+        BatteryController(cfg).assess(T0, 80.0, 0.0, 500.0, cars, SupportIntent())  # type: ignore[misc]
+
+
 def test_assess_combines_deficit_support_and_allowed(cfg) -> None:
     battery = BatteryController(cfg)
     cars = [BatteryCar("evcs", Effective.MIN_PV, 2760.0, True)]
