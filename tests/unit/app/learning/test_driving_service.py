@@ -690,6 +690,23 @@ async def test_quality_uses_the_row_of_the_evening_before(service, reader, engin
     }
 
 
+async def test_failed_step_drops_the_hit_rate(service, reader, engine) -> None:
+    commuter(reader)
+    await service.recompute()
+    template = VehicleProfile.model_validate(rows(engine, "tesla")[0].profile)
+    put_row(engine, "tesla", NOW - timedelta(days=40), template)
+    await service.recompute()
+
+    def quality() -> dict:
+        return next(v for v in service.status()["vehicles"] if v["key"] == "tesla")["quality"]
+
+    assert quality()["departure_n"] == 20
+    reader.down = True  # die Berechnung scheitert: ein alter Wert bliebe sonst stehen
+    await service.recompute()
+    assert service.profile("tesla") is not None  # der letzte Stand gilt weiter
+    assert quality()["departure_n"] == 0 and quality()["departure_hit_pct"] is None
+
+
 async def test_quality_counts_misses_and_rounds(service, reader, engine) -> None:
     commuter(reader)
     await service.recompute()

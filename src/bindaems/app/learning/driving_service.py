@@ -302,9 +302,11 @@ class DrivingService:
                     "Fahrdaten nicht gelesen, der letzte Stand gilt", vehicle=key, error=str(exc)
                 )
                 self._errors[key] = str(exc)
+                self._quality.pop(key, None)  # ein alter Wert gälte für den neuen Lauf nicht
             except Exception as exc:
                 log.exception("Fahrverhalten nicht berechnet, der letzte Stand gilt", vehicle=key)
                 self._errors[key] = str(exc) or type(exc).__name__
+                self._quality.pop(key, None)
         log.info(
             "Fahrverhalten berechnet", vehicles=len(self._cfg.vehicles), failed=len(self._errors)
         )
@@ -327,6 +329,7 @@ class DrivingService:
             )
         except Exception:  # der Stand ist abgelegt; nur die Trefferquote fehlt
             log.exception("Trefferquote des Fahrverhaltens nicht berechnet", vehicle=key)
+            self._quality.pop(key, None)
 
     # --- Ablage ---------------------------------------------------------------------------
 
