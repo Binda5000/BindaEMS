@@ -326,9 +326,8 @@ class PeakGuard:
         # das Ziel des letzten Schritts; vor dem ersten das der Konfiguration (Health, ``idle``)
         self._config_target_kw = control.peak_target_kw
         self._target_kw = self._config_target_kw
-        self._off = (
-            self._target_kw is None
-        )  # der letzte Schritt hatte kein Ziel (``state`` ``off``)
+        # der letzte Schritt hatte kein Ziel (``state`` ``off``)
+        self._off = self._target_kw is None
         self._margin_w = control.peak_margin_kw * 1000.0
         # Über diesem SOC geht das Budget an den Akku (Präzisierung 12).
         self._budget_above_pct = reserve_soc_pct + control.reserve_guard_pct

@@ -62,7 +62,7 @@ URGENT_IGNORED: Final = Finding(
     "urgent.ignored",
     "Als dringend markiert, aber nicht Richtung sicherer Zustand; es gelten die normalen Regeln.",
 )
-URGENT_REFRESH: Final = Finding("urgent.refresh", "Auffrischen ist nie dringend")
+URGENT_REFRESH: Final = Finding("urgent.refresh", "Auffrischen ist nie dringend.")
 URGENT_BYPASS: Final = Finding(
     "urgent.bypass", "Dringend (Richtung sicherer Zustand): ohne Mindestabstand und Limits."
 )

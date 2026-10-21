@@ -931,7 +931,7 @@ def test_urgent_refresh_gets_its_own_finding(layer) -> None:
     command = Command("victron", K.GRID_SETPOINT, 2000.0, urgent=True, refresh=True)
     verdict = layer.authorize(command, make_ctx(present={SETPOINT: 2000.0}))
     (finding,) = verdict.findings
-    assert (finding.code, finding.text) == ("urgent.refresh", "Auffrischen ist nie dringend")
+    assert (finding.code, finding.text) == ("urgent.refresh", "Auffrischen ist nie dringend.")
     # ein dringender Befehl, der nur nicht Richtung sicher geht, behält seinen Befund
     away = Command("victron", K.GRID_SETPOINT, 9000.0, urgent=True)
     assert layer.authorize(away, make_ctx(now=S(5))).findings[0].code == "urgent.ignored"

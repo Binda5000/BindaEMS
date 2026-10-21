@@ -120,9 +120,8 @@ AUTOMATION_STOP_S = 5.0  # so lange wartet das Beenden auf einen Schreibzugriff 
 BACKUP_AT = (4, 0)  # Ortszeit, nach Training (03:15) und Fahrverhalten (03:40)
 FORECAST_NIGHTLY_AT = (2, 30)  # Ortszeit
 FORECAST_KEEP = timedelta(days=60)
-WEATHER_KEEP = timedelta(
-    days=120
-)  # das Training braucht 112 Tage; unter 56 holte die Nachholung nach
+# das Training braucht 112 Tage; unter 56 holte die Nachholung nach
+WEATHER_KEEP = timedelta(days=120)
 LEDGER_NIGHTLY_AT = (2, 45)  # Ortszeit, nach der Prognose um 02:30
 LEDGER_CHECK_START_DAYS = 35  # Abgleich beim Start: die letzten 35 vollständigen Tage
 LEDGER_CHECK_NIGHTLY_DAYS = 7  # nachts: die letzten 7
