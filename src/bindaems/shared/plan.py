@@ -10,6 +10,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from datetime import datetime, timedelta
 from enum import StrEnum
+from itertools import pairwise
 from statistics import quantiles
 from typing import Annotated, Final, Literal, Self
 
@@ -177,6 +178,15 @@ class Plan(_Model):
     trimmed: bool = False
     vehicles: list[PlanVehicle] = Field(default_factory=list)
     slots: Annotated[list[PlanSlot], Field(min_length=1)]
+
+    @model_validator(mode="after")
+    def _consistent(self) -> Self:
+        if self.valid_until <= self.created_at:
+            raise ValueError("valid_until muss nach created_at liegen")
+        starts = [slot.start for slot in self.slots]
+        if any(later <= earlier for earlier, later in pairwise(starts)):
+            raise ValueError("Die Slots müssen streng aufsteigend und eindeutig nach start sein")
+        return self
 
     @property
     def horizon_end(self) -> datetime:

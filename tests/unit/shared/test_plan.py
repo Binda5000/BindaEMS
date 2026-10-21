@@ -6,6 +6,7 @@ from tests.plan_helpers import at, sample_plan, sample_slot
 
 from bindaems.shared.plan import (
     MAX_INTENT_PLAN_SLOTS,
+    PLAN_VALID,
     BatteryIntent,
     BatteryIntentKind,
     IntentPlanSlot,
@@ -50,6 +51,25 @@ def test_plan_slot_lookup_and_validity() -> None:
 def test_plan_roundtrips_as_json() -> None:
     plan = sample_plan(created="2026-10-16T10:01:00+00:00", slots=["10:00"])
     assert Plan.model_validate_json(plan.model_dump_json()) == plan
+
+
+def test_plan_rejects_unsorted_slots() -> None:
+    plan = sample_plan(created="2026-10-16T10:01:00+00:00", slots=["10:00", "10:15", "10:30"])
+    data = plan.model_dump()
+    for slots in (
+        [data["slots"][1], data["slots"][0], data["slots"][2]],  # nicht aufsteigend
+        [data["slots"][0], data["slots"][1], data["slots"][1]],  # doppelt
+    ):
+        with pytest.raises(ValidationError, match="aufsteigend"):
+            Plan.model_validate({**data, "slots": slots})
+
+
+def test_plan_rejects_valid_until_before_created() -> None:
+    plan = sample_plan(created="2026-10-16T10:01:00+00:00", slots=["10:00"])
+    data = plan.model_dump()
+    for valid_until in (plan.created_at, plan.created_at - PLAN_VALID):  # gleich, davor
+        with pytest.raises(ValidationError, match="valid_until"):
+            Plan.model_validate({**data, "valid_until": valid_until})
 
 
 def test_plan_needs_at_least_one_slot() -> None:
