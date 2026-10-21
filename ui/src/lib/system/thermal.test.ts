@@ -4,7 +4,7 @@ import { formatDateTime } from '$lib/format';
 import { thermalLoad, thermalOffset, thermalRows } from './thermal';
 
 const NB = ' ';
-const MINUS = '−';
+const MINUS = '-';
 
 const base: ThermalHealth = {
 	label: 'Klimaanlage',

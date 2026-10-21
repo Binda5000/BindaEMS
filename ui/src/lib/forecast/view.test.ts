@@ -70,7 +70,7 @@ it('zeigt die Verbesserung nur bei Last Modell', () => {
 it('schreibt die Verbesserung mit Vorzeichen', () => {
 	expect(improvementText(15)).toBe('+15 %');
 	expect(improvementText(14.6)).toBe('+15 %');
-	expect(improvementText(-4)).toBe('−4 %');
+	expect(improvementText(-4)).toBe('-4 %');
 	expect(improvementText(-0.2)).toBe('0 %');
 	expect(improvementText(0)).toBe('0 %');
 	expect(improvementText(null)).toBe('–');
@@ -139,7 +139,7 @@ it('ordnet den Backtest nach Woche und Vorlauf und zählt die Slots zusammen', (
 	});
 	expect(view.weeks.map((w) => [w.origin, w.horizon, w.better])).toEqual([
 		['18.09.2026', '0–6 h', '+10\u00a0%'],
-		['18.09.2026', 'über 24 h', '\u22125\u00a0%'],
+		['18.09.2026', 'über 24 h', '-5\u00a0%'],
 		['25.09.2026', '0–6 h', '+25\u00a0%']
 	]);
 	expect(view.weeks[0]).toMatchObject({ slots: '840', model: '180\u00a0W', profile: '200\u00a0W' });

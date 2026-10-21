@@ -8,8 +8,6 @@ export interface ThermalRow {
 	value: string;
 }
 
-const MINUS = '−';
-
 /** So nah muss das Echo der UVR am gesendeten Versatz liegen, damit es als bestätigt gilt (K) */
 const ECHO_TOLERANCE_K = 0.05;
 
@@ -21,19 +19,18 @@ const MODES: Record<string, string> = {
 	unbekannt: 'unbekannt'
 };
 
-/** Versatz in K mit Vorzeichen, Komma und einer Nachkommastelle: „+0,5 K“, „−1,0 K“, „+0,0 K“ */
+/** Versatz in K mit Vorzeichen, Komma und einer Nachkommastelle: „+0,5 K“, „-1,0 K“, „+0,0 K“ */
 export function thermalOffset(k: number | null): string {
 	if (k === null) return DASH;
 	const rounded = Math.round(k * 10) / 10;
-	const sign = rounded < 0 ? MINUS : '+';
-	return `${sign}${formatNumber(Math.abs(rounded), 1)}${NBSP}K`;
+	return `${rounded < 0 ? '' : '+'}${formatNumber(rounded, 1)}${NBSP}K`;
 }
 
 function degrees(c: number | null): string {
 	return c === null ? DASH : `${formatNumber(c, 1)}${NBSP}°C`;
 }
 
-/** „−1,0 K (bestätigt)“, wenn das Echo den gesendeten Versatz zeigt, sonst „−1,0 K (Echo +0,0 K)“ */
+/** „-1,0 K (bestätigt)“, wenn das Echo den gesendeten Versatz zeigt, sonst „-1,0 K (Echo +0,0 K)“ */
 function offsetText(block: ThermalHealth): string {
 	const sent = block.offset_sent_k;
 	if (sent === null) return DASH;
@@ -45,7 +42,7 @@ function offsetText(block: ThermalHealth): string {
 function wishText(wish: number | null): string {
 	if (wish === null) return DASH;
 	if (wish === 0) return 'Stufe 0';
-	return `Stufe ${wish > 0 ? '+' : MINUS}${Math.abs(wish)}`;
+	return `Stufe ${wish > 0 ? '+' : ''}${formatNumber(wish, 0)}`;
 }
 
 /**

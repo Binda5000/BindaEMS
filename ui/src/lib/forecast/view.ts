@@ -38,12 +38,12 @@ export function relativeText(pct: number | null): string {
 	return pct === null ? DASH : `${formatNumber(pct, 1)}${NBSP}%`;
 }
 
-/** Verbesserung des Modells mit Vorzeichen: „+15 %“, „−4 %“; ohne Wert ein Strich */
+/** Verbesserung des Modells mit Vorzeichen: „+15 %“, „-4 %“; ohne Wert ein Strich */
 export function improvementText(pct: number | null): string {
 	if (pct === null) return DASH;
 	const rounded = Math.round(pct);
 	if (rounded === 0) return `0${NBSP}%`;
-	return `${rounded > 0 ? '+' : '−'}${Math.abs(rounded)}${NBSP}%`;
+	return `${rounded > 0 ? '+' : ''}${formatNumber(rounded, 0)}${NBSP}%`;
 }
 
 export interface QualityView {
