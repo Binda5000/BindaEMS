@@ -443,6 +443,16 @@ function applyWindow(
 	};
 }
 
+/** Ein echtes Kalenderdatum `JJJJ-MM-TT`: `2026-02-30` gibt es nicht */
+function isCalendarDate(text: string): boolean {
+	if (!DATE_RE.test(text)) return false;
+	const [year, month, day] = text.split('-').map(Number);
+	const date = new Date(Date.UTC(year, month - 1, day));
+	return (
+		date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day
+	);
+}
+
 function applyComponent(
 	draft: ComponentDraft,
 	prefix: string,
@@ -456,12 +466,14 @@ function applyComponent(
 		['valid_from', draft.validFrom],
 		['valid_until', draft.validUntil]
 	] as const) {
-		if (text.trim() !== '' && !DATE_RE.test(text.trim()))
-			errors[`${prefix}.${field}`] = 'Datum wählen';
+		const date = text.trim();
+		if (date === '') continue;
+		if (!DATE_RE.test(date)) errors[`${prefix}.${field}`] = 'Datum wählen';
+		else if (!isCalendarDate(date)) errors[`${prefix}.${field}`] = 'Datum gibt es nicht';
 	}
 	const from = draft.validFrom.trim() || null;
 	const until = draft.validUntil.trim() || null;
-	if (from && until && DATE_RE.test(from) && DATE_RE.test(until) && from > until)
+	if (from && until && isCalendarDate(from) && isCalendarDate(until) && from > until)
 		errors[`${prefix}.valid_from`] = '„gültig ab“ liegt nach „gültig bis“';
 
 	const base = { id: draft.id, name, vat: draft.vat, valid_from: from, valid_until: until };

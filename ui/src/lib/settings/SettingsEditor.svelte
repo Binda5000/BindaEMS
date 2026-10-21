@@ -82,12 +82,15 @@
 	const shownHere = (key: string) => SHOWN_KEYS.some((pattern) => pattern.test(key));
 
 	let form: HTMLFormElement;
+	let hint = $state<HTMLElement | null>(null);
 	const CHECK_FIELDS = 'Bitte die markierten Felder prüfen.';
 
 	/** Springt zum ersten Fehler: die Seite ist lang und „Speichern“ steht unten */
 	async function focusFirstError() {
 		await tick();
-		const target = form.querySelector<HTMLElement>('[aria-invalid="true"], p.error');
+		// Findet er kein Feld (der Server nennt eines, das der Editor nicht zeigt), bekommt der Hinweis
+		// oben den Fokus
+		const target = form.querySelector<HTMLElement>('[aria-invalid="true"], p.error') ?? hint;
 		if (!target) return;
 		// Fehlertexte von Gruppen (Tarif, Bestandteil, Zeitfenster) haben kein Feld
 		if (!target.matches('input, select, textarea, button')) target.tabIndex = -1;
@@ -97,6 +100,14 @@
 
 	function describedBy(key: string): string | undefined {
 		return errors[key] ? `${uid}-${key}-error` : undefined;
+	}
+
+	/** Eine Änderung der Struktur des Tarifs entwertet nur dessen Fehler (Indizes verschieben sich) */
+	function onTariffStructure() {
+		errors = Object.fromEntries(
+			Object.entries(errors).filter(([key]) => key !== 'tariff' && !key.startsWith('tariff.'))
+		);
+		if (message === CHECK_FIELDS && Object.keys(errors).length === 0) message = null;
 	}
 
 	function addMonth() {
@@ -157,7 +168,9 @@
 
 <form class="editor" bind:this={form} onsubmit={submit} novalidate>
 	{#if message}
-		<Notice level="error">{message}</Notice>
+		<div bind:this={hint}>
+			<Notice level="error">{message}</Notice>
+		</div>
 	{/if}
 	{#if conflict}
 		<p>
@@ -165,7 +178,7 @@
 		</p>
 	{/if}
 
-	<TariffEditor bind:draft={draft.tariff} {errors} onStructure={() => (errors = {})} />
+	<TariffEditor bind:draft={draft.tariff} {errors} onStructure={onTariffStructure} />
 
 	<fieldset>
 		<legend>Einspeisung (OeMAG-Marktpreis je Monat)</legend>

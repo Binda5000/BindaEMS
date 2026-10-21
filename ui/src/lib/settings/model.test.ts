@@ -308,6 +308,23 @@ it('checks validity order, numbers and names of components', () => {
 	});
 });
 
+it('rejects a date that does not exist in the calendar', () => {
+	const draft = draftFrom(settings());
+	const power = component(draft, 'power_price');
+	power.validFrom = '2026-02-30';
+	power.validUntil = '2026-13-01';
+	expect(errorsOf(draft)).toMatchObject({
+		'tariff.components.6.valid_from': 'Datum gibt es nicht',
+		'tariff.components.6.valid_until': 'Datum gibt es nicht'
+	});
+	// Schaltjahr: der 29. Februar 2028 gibt es, der 29. Februar 2027 nicht
+	power.validFrom = '2028-02-29';
+	power.validUntil = '2027-02-29';
+	const errors = errorsOf(draft);
+	expect(errors['tariff.components.6.valid_from']).toBeUndefined();
+	expect(errors['tariff.components.6.valid_until']).toBe('Datum gibt es nicht');
+});
+
 it('maps server errors in windows onto the editor keys', () => {
 	// Modell-Prüfungen (pydantic) nennen kein Feld: der Pfad endet beim Zeitfenster
 	const detail = [

@@ -97,6 +97,48 @@ it('Prüfung im Editor: ohne Feld (Monate) bekommt der Fehlertext den Fokus', as
 	await vi.waitFor(() => expect(within(window).getByText('Mindestens ein Monat')).toHaveFocus());
 });
 
+it('Prüfung im Editor: eine Änderung der Struktur löscht die Tarif-Fehler und den Hinweis', async () => {
+	render(SettingsEditor, {
+		current: settingsCurrent(),
+		save: vi.fn(),
+		onSaved: vi.fn(),
+		onReload: vi.fn()
+	});
+	await fireEvent.input(screen.getByLabelText('USt. (%)'), { target: { value: 'abc' } });
+	await fireEvent.click(screen.getByRole('button', { name: 'Speichern' }));
+	expect(await screen.findByText('Bitte die markierten Felder prüfen.')).toBeInTheDocument();
+	await fireEvent.click(screen.getByRole('button', { name: 'Bestandteil hinzufügen' }));
+	expect(screen.queryByText('Bitte die markierten Felder prüfen.')).toBeNull();
+	expect(screen.getByLabelText('USt. (%)')).not.toHaveAttribute('aria-invalid');
+});
+
+it('Prüfung im Editor: eine Änderung der Struktur lässt Fehler außerhalb des Tarifs und den Hinweis stehen', async () => {
+	render(SettingsEditor, {
+		current: settingsCurrent(),
+		save: vi.fn(),
+		onSaved: vi.fn(),
+		onReload: vi.fn()
+	});
+	await fireEvent.input(screen.getByLabelText('USt. (%)'), { target: { value: 'abc' } });
+	await fireEvent.click(screen.getByRole('button', { name: 'Monat hinzufügen' }));
+	const rows = screen.getAllByLabelText('ct/kWh');
+	await fireEvent.input(rows[rows.length - 1], { target: { value: '7,3' } });
+	await fireEvent.click(screen.getByRole('button', { name: 'Speichern' }));
+	expect(await screen.findByText('Monat wählen')).toBeInTheDocument();
+	await fireEvent.click(screen.getByRole('button', { name: 'Bestandteil hinzufügen' }));
+	expect(screen.getByLabelText('USt. (%)')).not.toHaveAttribute('aria-invalid');
+	expect(screen.getByText('Monat wählen')).toBeInTheDocument();
+	expect(screen.getByText('Bitte die markierten Felder prüfen.')).toBeInTheDocument();
+});
+
+it('Serverfehler ohne Feld im Editor: der Hinweis oben bekommt den Fokus', async () => {
+	const save = reject422({ loc: ['learning', 'gibt_es_nicht'], msg: 'nicht erlaubt' });
+	render(SettingsEditor, { current: settingsCurrent(), save, onSaved: vi.fn(), onReload: vi.fn() });
+	await fireEvent.click(screen.getByRole('button', { name: 'Speichern' }));
+	const hint = await screen.findByText('Bitte die markierten Felder prüfen.');
+	await vi.waitFor(() => expect(hint.parentElement).toHaveFocus());
+});
+
 it('meldet nach dem Speichern, ob sich Tarifwerte geändert haben', async () => {
 	const current = settingsCurrent();
 	const saved = { ...current, version: current.version + 1 };
