@@ -32,7 +32,7 @@ import asyncio
 import contextlib
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from typing import Any, Final, Literal
 
 import structlog
@@ -78,6 +78,7 @@ UNREADABLE: Final = "Zustand der Automatik nicht lesbar."
 CHARGES_UNREADABLE: Final = "Geplante Ladungen nicht lesbar."
 
 State = Literal["off", "inactive", "waiting", "paused", "uncertain", "applied", "error"]
+Values = tuple[int, str, date | None]  # Ziel, Abfahrt und Tag der Abfahrt eines Autos
 Profiles = Callable[[str], VehicleProfile | None]
 Charges = Callable[[], Mapping[str, OpenCharge]]  # ``PlannedCharges.open_charges`` (blockiert)
 
@@ -183,6 +184,9 @@ class DrivingAutomation:
         self._loaded = False
         self._status: dict[str, _Status] = {}
         self._recent: dict[str, datetime] = {}  # letztes Setzen ohne spätere Bedienung
+        # Wunsch und Antwort des core, wenn er den Wunsch geklemmt hat: Dieselbe Klemmung gilt als
+        # gesetzt, sie wird nicht jede Minute neu gesendet
+        self._clamped: dict[str, tuple[Values, Values]] = {}
         # Bedienungen je Auto: ändert sich die Zahl zwischen Prüfung und Senden, sendet sie nicht
         self._manual: dict[str, int] = {}
         self._tasks: set[asyncio.Task[Any]] = set()
@@ -440,19 +444,21 @@ class DrivingAutomation:
             vehicle.departure if change.departure is None else change.departure,
             vehicle.departure_on if change.departure is None else change.departure_on,
         )
-        if wanted == (vehicle.target_soc_pct, vehicle.departure, vehicle.departure_on):
+        have = (vehicle.target_soc_pct, vehicle.departure, vehicle.departure_on)
+        if wanted == have or self._clamped.get(key) == (wanted, have):
             return _applied(vehicle, now, stored.last_set_at)
         if not self.enabled(key):  # inzwischen ausgeschaltet: nichts mehr senden
             return _off()
-        return await self._send(key, change, manual)
+        return await self._send(key, change, wanted, manual)
 
     def _unchanged(self, key: str, manual: int) -> bool:
         """Ob seit der Prüfung niemand Ziel oder Abfahrt des Autos bedient hat."""
         return self._manual.get(key, 0) == manual
 
-    async def _send(self, key: str, change: SetTarget, manual: int) -> _Status:
+    async def _send(self, key: str, change: SetTarget, wanted: Values, manual: int) -> _Status:
         """Sendet die Änderung, wenn seit der Prüfung niemand bedient hat (unter der Sperre des
-        ``IntentService``), und merkt sich, wann und was gesetzt wurde."""
+        ``IntentService``), und merkt sich, wann und was gesetzt wurde. Klemmt der core Ziel oder
+        Abfahrt, gilt der geklemmte Wert als gesetzt (nicht der gesendete)."""
         try:
             result = await self._intents.apply(
                 change,
@@ -471,7 +477,14 @@ class DrivingAutomation:
         except ConflictAgain:
             return _error(CONFLICT)
         now = self._clock.now()
-        sent = result.intent.vehicles.get(key, VehicleIntent())
+        # nach einer Klemmung hat ``apply`` die Absicht des core geholt; sie steht im Cache
+        intent = self._intents.cached() if result.result == "clamped" else None
+        sent = (intent or result.intent).vehicles.get(key, VehicleIntent())
+        got = (sent.target_soc_pct, sent.departure, sent.departure_on)
+        if got == wanted:
+            self._clamped.pop(key, None)
+        else:
+            self._clamped[key] = (wanted, got)
         stored = self._stored[key]
         stored.last_set_at = now
         stored.last_values = {

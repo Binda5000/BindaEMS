@@ -882,3 +882,27 @@ async def test_a_lower_maximum_is_sent_without_a_new_run(
     assert len(client.sent) == 2
     assert tesla(client).target_soc_pct == 70
     assert runs == []  # kein neuer Lauf
+
+
+@pytest.mark.usefixtures("enabled")
+async def test_clamped_result_does_not_pause(auto, client, profiles, engine) -> None:
+    # der core klemmt das Ziel 95 auf 90: Das gilt als von der Automatik gesetzt
+    profiles.by_key["tesla"] = commuter(soc=95)
+
+    def clamped() -> CoreReply:
+        sent = client.sent[-1]
+        vehicle = sent.vehicles["tesla"].model_copy(update={"target_soc_pct": 90})
+        client.valid = sent.model_copy(update={"vehicles": {"tesla": vehicle}})
+        return CoreReply(200, {"result": "clamped", "version": sent.version, "details": []})
+
+    client.replies = [clamped]
+    await auto.tick()
+    assert tesla(client).target_soc_pct == 90
+    assert auto.state("tesla")["state"] == "applied"
+    assert auto.state("tesla")["paused_until"] is None
+    await auto.tick()
+    assert auto.state("tesla")["state"] == "applied"
+    assert auto.state("tesla")["paused_until"] is None
+    assert len(client.sent) == 1  # der geklemmte Wert gilt, kein zweites Senden
+    assert "Ziel 90 %" in auto.state("tesla")["text"]
+    assert stored(engine)["tesla"].last_values["target_soc_pct"] == 90
