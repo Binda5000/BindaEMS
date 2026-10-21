@@ -3502,3 +3502,9 @@ an der Anlage zu messen oder zu bestätigen ist, die Entscheidungen des Betreibe
     `watchdog_config.py` und `verify_part1.py`; diese Übergabe nennt `_NOBODY` und `_trusted` noch in ihrem
     damaligen Wortlaut.
   - **Task 13 (Doku):** keine.
+  - **Gesamtreview des Branches:** Die Klimakarte zeigt bei einer Sperre mit Echo nur „Versatz 0“ (der Grund
+    `thermal_no_echo` deckt auch Sperren ab) und verdeckt so „gesperrt“. `export_days` löst ein relatives `data_dir`
+    gegen die Konfigurationsdatei auf, die app gegen das Arbeitsverzeichnis (scheitert sicher; die Anlage nutzt das
+    absolute `/data`). Ist die neueste Planzeile unlesbar, gibt `store.latest()` einen älteren, noch gültigen Plan
+    zurück, und der Sender schickt ihn bis zum nächsten Takt an den core. `core/safety` importiert `OFFSET_SAME_K`
+    aus `core/control` (so im Plan festgelegt). Zwei Zeilen im Betriebshandbuch sind ungleichmäßig umbrochen.
