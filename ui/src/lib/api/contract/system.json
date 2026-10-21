@@ -293,7 +293,9 @@
           "power_w": null,
           "wish": 0,
           "reason": "thermal_stale",
-          "hint": "neutral"
+          "hint": "neutral",
+          "base_w": null,
+          "spare_w": 0
         }
       }
     }

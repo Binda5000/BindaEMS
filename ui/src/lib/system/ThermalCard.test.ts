@@ -20,7 +20,9 @@ const silent: CoreHealth['thermal'][string] = {
 	wish: 0,
 	power_w: null,
 	reason: 'thermal_stale',
-	hint: 'neutral'
+	hint: 'neutral',
+	base_w: null,
+	spare_w: null
 };
 
 it('zeigt ohne Werte „Keine Werte“ und den Grund', () => {
@@ -48,6 +50,22 @@ it('zeigt mit Werten die Zeilen', () => {
 	expect(screen.getByText('Werte kommen an')).toBeTruthy();
 	expect(screen.getByText('Kühlen')).toBeTruthy();
 	expect(screen.getByText('−1,0 K (bestätigt)')).toBeTruthy();
+});
+
+it('zeigt die Grundlast und die freigebbare Leistung, ohne Werte „–“', () => {
+	const connected = { ...silent, connected: true, mode: 'kuehlen', running: true };
+	const { unmount } = render(ThermalCard, {
+		thermal: { klima: { ...connected, base_w: 400, spare_w: 500 } }
+	});
+	expect(screen.getByText('Grundlast 400 W · freigebbar 500 W')).toBeTruthy();
+	unmount();
+	render(ThermalCard, { thermal: { klima: connected } });
+	expect(screen.getByText('Grundlast – · freigebbar –')).toBeTruthy();
+});
+
+it('zeigt ohne Werte der Anlage keine Grundlast', () => {
+	render(ThermalCard, { thermal: { klima: silent } });
+	expect(screen.queryByText(/Grundlast/)).toBeNull();
 });
 
 it('zeigt ohne Klimaanlage keine Karte', () => {

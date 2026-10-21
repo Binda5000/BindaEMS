@@ -289,6 +289,8 @@ async def test_health_has_thermal_block(runtime_with_coe) -> None:
         "wish": None,
         "reason": None,
         "hint": None,
+        "base_w": None,
+        "spare_w": None,
     }
 
 

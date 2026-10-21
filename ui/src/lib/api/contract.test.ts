@@ -334,7 +334,9 @@ it('Gesundheitsbericht akzeptiert eine Klimaanlage, deren Regelung ruht, mit Nul
 		power_w: null,
 		wish: null,
 		reason: null,
-		hint: null
+		hint: null,
+		base_w: null,
+		spare_w: null
 	};
 	const health = { ...demo.core.health, thermal: { klima: resting } };
 	expect(issues(s.CoreHealthSchema, health)).toEqual([]);
@@ -344,6 +346,8 @@ it('Gesundheitsbericht akzeptiert eine Klimaanlage, deren Regelung ruht, mit Nul
 		'wish',
 		'reason',
 		'hint',
+		'base_w',
+		'spare_w',
 		'foreign_packets',
 		'bad_packets',
 		'unit_mismatch',

@@ -165,7 +165,8 @@ class _Thermal:
     ``confirmed`` ist der Versatz, den das letzte Ergebnis ``OK`` bestätigt hat (das Echo zeigte
     ihn), ``apart_since`` die Zeit, seit der das Echo davon abweicht; beide ``None`` ohne.
     ``base_w`` ist die Leistung bei Versatz 0 in der Betriebsart ``base_mode`` (``learn``), ohne
-    Messung ``None``.
+    Messung ``None``. ``spare_w`` ist die Leistung, die ``freeable_w`` im letzten Zyklus nannte
+    (für Health; ``None`` vor dem ersten Zyklus).
     """
 
     def __init__(self, cfg: CoeOffsetConfig) -> None:
@@ -176,6 +177,7 @@ class _Thermal:
         self.apart_since: float | None = None
         self.base_w: float | None = None
         self.base_mode: ThermalMode | None = None
+        self.spare_w: float | None = None
         self._base_at: float | None = None  # Zeit der letzten Messung in ``base_w``
         self._zero_since: float | None = None  # seit wann der Versatz 0 ist
 
@@ -360,11 +362,11 @@ class Regulation:
         import_w = None if grid_w is None else max(0.0, grid_w)
         peak = self.peak_guard.pressure()
         phase = self.charger.overload_level() > OverloadLevel.NONE
-        thermal_w = sum(
-            device.freeable_w(seen, wish_steps=device.strategy.wish.steps)
-            for name, device in self._thermal.items()
-            if (seen := inputs.thermal.get(name)) is not None
-        )
+        thermal_w = 0.0
+        for name, device in self._thermal.items():
+            if (seen := inputs.thermal.get(name)) is not None:
+                device.spare_w = device.freeable_w(seen, wish_steps=device.strategy.wish.steps)
+                thermal_w += device.spare_w
         unmet_w = self.charger.unmet_surplus_w((export_w or 0.0) + thermal_w)
         found: list[ControlCommand] = []
         health: dict[str, dict[str, Any]] = {}
@@ -398,10 +400,10 @@ class Regulation:
                     unmet_cars_w=unmet_w,
                 )
             )
-            health[name] = _thermal_json(wish, hint)
             offset = offset_for(wish, seen.mode, device.step_k)
             targets[name] = offset + 0.0  # aus -0.0 wird 0.0
             device.learn(seen, offset)
+            health[name] = _thermal_json(wish, hint, device)
             if not acting or blocked or not self._thermal_last.changed(key, offset):
                 continue
             command = self._thermal_last.command(actuator, _OFFSET, offset, (wish.reason,))
@@ -635,9 +637,17 @@ class Regulation:
         return self._peak.budget_w
 
 
-def _thermal_json(wish: ThermalWish, hint: ThermalHint) -> dict[str, Any]:
-    """Eine Klimaanlage in ``health()["thermal"]``: Wunsch in Stufen, Grund und Hinweis."""
-    return {"wish": wish.steps, "reason": wish.reason, "hint": hint}
+def _thermal_json(wish: ThermalWish, hint: ThermalHint, device: _Thermal) -> dict[str, Any]:
+    """Eine Klimaanlage in ``health()["thermal"]``: Wunsch in Stufen, Grund und Hinweis, dazu die
+    gelernte Grundlast bei Versatz 0 und die zuletzt freigebbare Leistung (ganze W, ``None`` ohne).
+    """
+    return {
+        "wish": wish.steps,
+        "reason": wish.reason,
+        "hint": hint,
+        "base_w": None if device.base_w is None else round(device.base_w),
+        "spare_w": None if device.spare_w is None else round(device.spare_w),
+    }
 
 
 def battery_cars(

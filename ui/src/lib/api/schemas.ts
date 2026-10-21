@@ -350,7 +350,11 @@ export const ThermalHealthSchema = v.object({
 	/** Code des Grundes der Strategie */
 	reason: v.optional(v.nullable(v.string()), null),
 	/** Hinweis des Plans im aktuellen Slot: `mehr`, `neutral` oder `weniger` */
-	hint: v.optional(v.nullable(v.string()), null)
+	hint: v.optional(v.nullable(v.string()), null),
+	/** Gelernte Leistung bei Versatz 0 in ganzen W; ein älterer core sendet das Feld nicht */
+	base_w: v.optional(NullableNumber, null),
+	/** Zuletzt freigebbare Leistung in ganzen W (`freeable_w`); ein älterer core sendet es nicht */
+	spare_w: v.optional(NullableNumber, null)
 });
 export type ThermalHealth = v.InferOutput<typeof ThermalHealthSchema>;
 

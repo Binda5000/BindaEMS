@@ -73,6 +73,11 @@ function running(value: boolean | null): string {
 	return value === null ? DASH : value ? 'ja' : 'nein';
 }
 
+/** „Grundlast 400 W · freigebbar 500 W“, ohne Wert „–“ */
+export function thermalLoad(block: ThermalHealth): string {
+	return `Grundlast ${formatPower(block.base_w)} · freigebbar ${formatPower(block.spare_w)}`;
+}
+
 /**
  * Die Zeilen der Karte. Ohne frische Werte („nicht verbunden“) gibt es nur den letzten Empfang
  * und den Grund; die übrigen Zahlen wären alt oder leer.

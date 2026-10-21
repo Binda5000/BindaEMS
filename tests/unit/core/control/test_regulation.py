@@ -1143,9 +1143,15 @@ def offsets(found: list) -> list[tuple[int, float, tuple[str, ...]]]:
     return [(s, x.command.value, x.command.reasons) for s, x in found]
 
 
-def wish(regulation: Regulation) -> dict[str, Any]:
+def klima_health(regulation: Regulation) -> dict[str, Any]:
     entry: dict[str, Any] = regulation.health()["thermal"]["klima"]
     return entry
+
+
+def wish(regulation: Regulation) -> dict[str, Any]:
+    """Wunsch, Grund und Hinweis aus dem Eintrag in Health."""
+    entry = klima_health(regulation)
+    return {key: entry[key] for key in ("wish", "reason", "hint")}
 
 
 def test_regulation_emits_offset_after_override(reg_with_klima, cfg) -> None:
@@ -1503,6 +1509,23 @@ def test_klima_power_without_offset_is_learned_after_it_settled(cfg) -> None:  #
     assert unit.freeable_w(seen(460, 1300.0, "lueften"), wish_steps=1) == 0.0
     unit.learn(seen(470, 1500.0, "heizen"), 0.0)  # neue Betriebsart: neu lernen
     assert unit.freeable_w(seen(470, 1500.0, "heizen"), wish_steps=1) == 1500.0
+
+
+def test_thermal_health_shows_base_and_spare(reg_with_klima, cfg) -> None:
+    # Die Grundlast (gelernt bei Versatz 0) und die zuletzt freigebbare Leistung stehen in Health:
+    # 400 W gelernt, 900 W bei einer Stufe mehr → 500 W freigebbar.
+    klima_run(reg_with_klima, cfg, 0, 600, power_w=400.0)
+    assert klima_health(reg_with_klima)["base_w"] == 400
+    klima(reg_with_klima, cfg, 610, power_w=900.0)
+    entry = klima_health(reg_with_klima)
+    assert (entry["wish"], entry["base_w"], entry["spare_w"]) == (1, 400, 500)
+
+
+def test_thermal_health_without_learned_base_has_none(reg_with_klima, cfg) -> None:
+    # Nichts gelernt und die Leistung unbekannt: keine Grundlast, nichts freigebbar.
+    klima(reg_with_klima, cfg, 0)
+    entry = klima_health(reg_with_klima)
+    assert (entry["base_w"], entry["spare_w"]) == (None, 0)
 
 
 def test_regulation_without_grid_power_knows_no_export(reg_with_klima, cfg) -> None:

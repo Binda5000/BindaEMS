@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { ThermalHealth } from '$lib/api/schemas';
 import { formatDateTime } from '$lib/format';
-import { thermalOffset, thermalRows } from './thermal';
+import { thermalLoad, thermalOffset, thermalRows } from './thermal';
 
 const NB = ' ';
 const MINUS = '−';
@@ -23,12 +23,27 @@ const base: ThermalHealth = {
 	wish: 2,
 	power_w: 1250,
 	reason: 'thermal_more',
-	hint: 'neutral'
+	hint: 'neutral',
+	base_w: 400,
+	spare_w: 500
 };
 
 function rows(changes: Partial<ThermalHealth> = {}): Record<string, string> {
 	return Object.fromEntries(thermalRows({ ...base, ...changes }).map((r) => [r.label, r.value]));
 }
+
+describe('thermalLoad', () => {
+	it('nennt Grundlast und freigebbare Leistung', () => {
+		expect(thermalLoad(base)).toBe(`Grundlast 400${NB}W · freigebbar 500${NB}W`);
+	});
+
+	it('zeigt „–“ ohne Wert', () => {
+		expect(thermalLoad({ ...base, base_w: null, spare_w: null })).toBe(
+			'Grundlast – · freigebbar –'
+		);
+		expect(thermalLoad({ ...base, spare_w: 0 })).toBe(`Grundlast 400${NB}W · freigebbar 0${NB}W`);
+	});
+});
 
 describe('thermalRows', () => {
 	it('zeigt Kühlen mit bestätigtem Versatz', () => {

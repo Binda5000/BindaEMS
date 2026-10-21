@@ -5697,7 +5697,9 @@ dem Code, an der Anlage zu bestätigen.
   „Klimaanlage“ im Dashboard (Abschnitt 3, „Grafana“). Der Wunsch steht im Entscheidungslog.
 - **Health:** `GET /v1/health`, `thermal.<name>`: `label`, `connected`, `last_packet_at`,
   `foreign_packets`, `bad_packets`, `mode`, `running`, `actual_c`, `setpoint_c`, `base_setpoint_c`
-  (Soll minus Versatz), `offset_sent_k`, `offset_active_k`, `power_w`, `wish`, `reason`, `hint`.
+  (Soll minus Versatz), `offset_sent_k`, `offset_active_k`, `power_w`, `wish`, `reason`, `hint`, `base_w`
+  (die gelernte Leistung bei Versatz 0) und `spare_w` (die zuletzt freigebbare Leistung), beide in
+  ganzen W. Die Karte „Klimaanlage“ auf „System“ zeigt sie als „Grundlast … W · freigebbar … W“.
 - **Statistik:** Die Klimaanlage bleibt in der Abrechnung Hauslast. Als Verbraucher in der Statistik
   legst du sie über ihre Home-Assistant-Entität an (Abschnitt 12, „Verbraucher aus Home Assistant“).
 

@@ -88,8 +88,10 @@ class HealthReport(BaseModel):
       (``heizen``, ``kuehlen``, ``lueften``, ``aus``, ``unbekannt``), ``running``, ``actual_c``,
       ``setpoint_c`` (mit Versatz), ``base_setpoint_c`` (``setpoint_c`` minus das Echo, ohne
       Echo minus ``offset_sent_k``), ``offset_sent_k`` (was der Adapter sendet),
-      ``offset_active_k`` (das Echo der UVR), ``power_w``, dazu ``wish``, ``reason`` und
-      ``hint`` aus der Regelung; was fehlt, ist ``null``. Vor dem ersten Zyklus leer.
+      ``offset_active_k`` (das Echo der UVR), ``power_w``, dazu ``wish``, ``reason``,
+      ``hint``, ``base_w`` (gelernte Leistung bei Versatz 0) und ``spare_w`` (zuletzt freigebbare
+      Leistung), beide in ganzen W, aus der Regelung; was fehlt, ist ``null``. Vor dem ersten
+      Zyklus leer.
     """
 
     mode: Literal["START", "OBSERVE", "CONTROL", "DEGRADED", "SAFE"]

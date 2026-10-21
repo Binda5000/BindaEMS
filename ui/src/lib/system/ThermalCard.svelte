@@ -2,7 +2,7 @@
 	import type { CoreHealth } from '$lib/api/schemas';
 	import Card from '$lib/components/Card.svelte';
 	import StatusDot from '$lib/components/StatusDot.svelte';
-	import { thermalRows } from './thermal';
+	import { thermalLoad, thermalRows } from './thermal';
 
 	interface Props {
 		thermal: CoreHealth['thermal'];
@@ -32,6 +32,9 @@
 					<dd>{row.value}</dd>
 				{/each}
 			</dl>
+			{#if block.connected}
+				<p class="load">{thermalLoad(block)}</p>
+			{/if}
 		{/each}
 	</Card>
 {/if}
@@ -51,5 +54,9 @@
 
 	.facts {
 		margin: 0;
+	}
+
+	.load {
+		margin: 0.5rem 0 0;
 	}
 </style>
