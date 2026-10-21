@@ -34,6 +34,9 @@ log = structlog.get_logger(__name__)
 CATCH_UP_OVERLAP: Final = timedelta(minutes=10)
 CATCH_UP_EMPTY: Final = timedelta(days=7)  # ohne Eintrag in der Tabelle
 PAGE_LIMIT: Final = 1000
+# Höchstzahl wartender Entscheidungen, solange die Datenbank nicht schreibt; der core hält seine
+# Entscheidungen 7 Tage, ``catch_up`` holt beim nächsten Verbinden nach, was dort noch liegt.
+BUFFER_MAX: Final = 10_000
 FLUSH_S: Final = 1.0
 MEASUREMENT: Final = "decision"
 
@@ -229,25 +232,45 @@ class DecisionCollector:
         self._sink = sink
         self._clock = clock
         self._buffer: list[Decision] = []
+        self._dropping = False  # in dieser Ausfallphase ist schon gewarnt
 
     async def on_decision(self, decision: Decision) -> None:
         """Handler des Streams: puffert die Entscheidung bis zum nächsten Schreiben."""
         self._buffer.append(decision)
+        self._cap_buffer()
+
+    def _cap_buffer(self) -> None:
+        """Hält höchstens ``BUFFER_MAX`` Einträge; die ältesten fallen weg, eine Warnung je
+        Ausfallphase (bis ein Schreiben wieder gelingt)."""
+        excess = len(self._buffer) - BUFFER_MAX
+        if excess <= 0:
+            return
+        del self._buffer[:excess]
+        if not self._dropping:
+            self._dropping = True
+            log.warning(
+                "Entscheidungspuffer voll, die ältesten Entscheidungen werden verworfen",
+                code="decisions_dropped",
+                limit=BUFFER_MAX,
+            )
 
     async def flush(self) -> int:
         """Schreibt den Puffer in einem Zug; liefert die Zahl der neu gespeicherten.
 
         Schlägt das Schreiben fehl oder wird es abgebrochen, bleibt der Stapel für den nächsten
-        Versuch im Puffer.
+        Versuch im Puffer (höchstens ``BUFFER_MAX`` Einträge, die ältesten fallen zuerst weg).
         """
         pending, self._buffer = self._buffer, []
         if not pending:
             return 0
         try:
-            return await self._store_and_mark(pending)
+            stored = await self._store_and_mark(pending)
         except BaseException:  # auch ein Abbruch (Herunterfahren) gibt den Stapel zurück
             self._buffer = pending + self._buffer
+            self._cap_buffer()
             raise
+        self._dropping = False  # die Ausfallphase ist vorbei
+        return stored
 
     async def run(self) -> None:
         """Schreibt den Puffer jede Sekunde; ein Fehler kommt ins Log, die Schleife läuft weiter."""

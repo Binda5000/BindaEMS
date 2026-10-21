@@ -10,6 +10,7 @@ from tests.unit.shared.test_decisions import decision
 
 from bindaems.app.control import decisions as decisions_module
 from bindaems.app.control.decisions import (
+    BUFFER_MAX,
     CATCH_UP_OVERLAP,
     PAGE_LIMIT,
     DecisionCollector,
@@ -400,6 +401,39 @@ async def test_failed_write_keeps_the_buffer(
     await collector.on_decision(decision(id="s2", ts=at(1)))
     assert await collector.flush() == 2
     assert _ids(store) == ["s1", "s2"]
+
+
+async def test_buffer_is_capped_while_the_database_is_down(
+    collector: DecisionCollector, store: DecisionStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    real_add = store.add
+
+    def broken(items):
+        raise RuntimeError("Datenbank gesperrt")
+
+    monkeypatch.setattr(store, "add", broken)
+    with capture_logs() as logs:
+        for i in range(12_000):
+            await collector.on_decision(decision(id=f"d{i}", ts=at(i / 60)))
+            if i == 6_000:  # ein gescheitertes Schreiben mitten in der Ausfallphase
+                with pytest.raises(RuntimeError):
+                    await collector.flush()
+    assert len(collector._buffer) == BUFFER_MAX == 10_000
+    dropped = [entry for entry in logs if entry.get("code") == "decisions_dropped"]
+    assert len(dropped) == 1  # je Ausfallphase, nicht je Eintrag
+    assert dropped[0]["log_level"] == "warning"
+
+    monkeypatch.setattr(store, "add", real_add)
+    assert await collector.flush() == 10_000
+    ids = _ids(store)
+    assert "d1999" not in ids and "d2000" in ids and "d11999" in ids  # die ältesten fielen weg
+
+    # nach dem Schreiben beginnt eine neue Ausfallphase mit eigener Warnung
+    monkeypatch.setattr(store, "add", broken)
+    with capture_logs() as logs:
+        for i in range(10_001):
+            await collector.on_decision(decision(id=f"e{i}", ts=at(1000 + i / 60)))
+    assert len([entry for entry in logs if entry.get("code") == "decisions_dropped"]) == 1
 
 
 async def test_cleanup(
