@@ -13,6 +13,7 @@ from bindaems.app.learning.driving_profile import (
     next_trip,
     percentile,
     presence_at,
+    with_settings,
 )
 from bindaems.shared.settings import DrivingSettings
 from bindaems.shared.timeutil import LOCAL_TZ
@@ -218,6 +219,34 @@ def test_negative_consumption_counts_as_zero_for_target() -> None:
     clamped = profile_of(saturdays([480] * 3, [-10.0] * 3)).weekdays[5]
     assert clamped.target_soc_pct == 50
     assert clamped.target_clamped is True
+
+
+def test_with_settings_rederives_the_target_from_the_stored_p80() -> None:
+    # Ruling F-2: Ziel und „begrenzt“ folgen den aktuellen Einstellungen ohne neuen Lauf
+    profile = profile_of(saturdays([480] * 3, [42.0] * 3))  # 20 + 42 = 62 → 65
+    assert profile.weekdays[5].target_soc_pct == 65
+    narrow = with_settings(profile, DrivingSettings(target_max_pct=60))
+    assert (narrow.weekdays[5].target_soc_pct, narrow.weekdays[5].target_clamped) == (60, True)
+    reserve = with_settings(profile, DrivingSettings(return_reserve_pct=30))  # 72 → 75
+    assert (reserve.weekdays[5].target_soc_pct, reserve.weekdays[5].target_clamped) == (75, False)
+    raised = with_settings(profile, DrivingSettings(target_min_pct=80))
+    assert (raised.weekdays[5].target_soc_pct, raised.weekdays[5].target_clamped) == (80, True)
+    # alles Übrige bleibt, ein Tag ohne Verbrauch bleibt ohne Ziel
+    assert narrow.weekdays[5].target_confidence == profile.weekdays[5].target_confidence
+    assert narrow.weekdays[0] == profile.weekdays[0] and narrow.weekdays[0].target_soc_pct is None
+    assert narrow.presence == profile.presence
+    # gleiche Einstellungen: gleiches Profil
+    assert with_settings(profile, SETTINGS) == profile
+
+
+def test_with_settings_clamps_a_target_without_p80() -> None:
+    # ein Stand ohne P80 (gibt es aus build_profile nicht): das Ziel wird nur geklemmt
+    profile = profile_of(saturdays([480] * 3, [42.0] * 3))
+    weekdays = list(profile.weekdays)
+    weekdays[5] = weekdays[5].model_copy(update={"consumption_p80_pp": None, "target_soc_pct": 85})
+    profile = profile.model_copy(update={"weekdays": weekdays})
+    sat = with_settings(profile, DrivingSettings(target_max_pct=70)).weekdays[5]
+    assert (sat.target_soc_pct, sat.target_clamped) == (70, True)
 
 
 def test_no_soc_gives_departure_but_no_target() -> None:

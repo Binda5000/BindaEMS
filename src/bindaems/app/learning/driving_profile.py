@@ -143,6 +143,38 @@ def _level(
     return "low"
 
 
+def _target(consumption_p80_pp: float | None, settings: DrivingSettings) -> tuple[int | None, bool]:
+    """Vorschlag Ziel und ob er begrenzt ist: ``clamp(ceil5(Reserve + max(0, P80)), min, max)``;
+    ohne Verbrauch kein Ziel."""
+    if consumption_p80_pp is None:
+        return None, False
+    wanted = _ceil5(settings.return_reserve_pct + max(0.0, consumption_p80_pp))
+    target = min(max(wanted, settings.target_min_pct), settings.target_max_pct)
+    return target, target != wanted
+
+
+def with_settings(profile: VehicleProfile, settings: DrivingSettings) -> VehicleProfile:
+    """Das Profil mit den Zielen nach den Einstellungen ``settings`` (Ruling F-2).
+
+    Ein abgelegter Stand trägt das Ziel der Einstellungen seines Laufs; „Puffer“, „Ziel-SOC
+    mindestens“ und „höchstens“ sollen aber sofort gelten, nicht erst nach dem nächsten Lauf. Das
+    Ziel jedes Wochentags entsteht darum neu aus dem abgelegten P80 des Verbrauchs, mit
+    ``target_clamped`` dazu. Ein Wochentag mit Ziel, aber ohne P80 (gibt es aus ``build_profile``
+    nicht), wird nur in den Bereich geklemmt. Alles Übrige bleibt."""
+    weekdays: list[WeekdayProfile] = []
+    for wp in profile.weekdays:
+        if wp.consumption_p80_pp is not None:
+            target, clamped = _target(wp.consumption_p80_pp, settings)
+        elif wp.target_soc_pct is not None:
+            target = min(max(wp.target_soc_pct, settings.target_min_pct), settings.target_max_pct)
+            clamped = wp.target_clamped or target != wp.target_soc_pct
+        else:
+            weekdays.append(wp)
+            continue
+        weekdays.append(wp.model_copy(update={"target_soc_pct": target, "target_clamped": clamped}))
+    return profile.model_copy(update={"weekdays": weekdays})
+
+
 def _weekday_profile(
     weekday: int, records: Sequence[DayRecord], settings: DrivingSettings
 ) -> WeekdayProfile:
@@ -177,13 +209,10 @@ def _weekday_profile(
     arrival_socs = [r.arrival_soc for r in sample if r.arrival_soc is not None]
     consumption = [r.consumption_pp for r in sample if r.consumption_pp is not None]
 
-    target: int | None = None
-    clamped = False
+    consumption_p80 = percentile(consumption, 80) if consumption else None
+    target, clamped = _target(consumption_p80, settings)
     target_confidence: Confidence | None = None
     if consumption:
-        wanted = _ceil5(settings.return_reserve_pct + max(0.0, percentile(consumption, 80)))
-        target = min(max(wanted, settings.target_min_pct), settings.target_max_pct)
-        clamped = target != wanted
         target_confidence = _level(
             len(consumption), _spread(consumption), TARGET_HIGH, TARGET_MEDIUM
         )
@@ -201,7 +230,7 @@ def _weekday_profile(
         arrival_p50_min=round(percentile(arrivals, 50)) if arrivals else None,
         arrival_soc_p50=percentile(arrival_socs, 50) if arrival_socs else None,
         consumption_p50_pp=percentile(consumption, 50) if consumption else None,
-        consumption_p80_pp=percentile(consumption, 80) if consumption else None,
+        consumption_p80_pp=consumption_p80,
         target_soc_pct=target,
         target_clamped=clamped,
         target_confidence=target_confidence,

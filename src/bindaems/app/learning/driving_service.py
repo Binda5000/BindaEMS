@@ -14,6 +14,8 @@ und den Tagesdatensätzen und bleibt im Speicher; nach einem Neustart fehlt sie 
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import threading
 from collections.abc import Awaitable, Callable, Iterator, Mapping
 from datetime import date, datetime, time, timedelta
 from types import MappingProxyType
@@ -33,11 +35,12 @@ from bindaems.app.learning.driving_profile import (
     build_profile,
     next_trip,
     presence_at,
+    with_settings,
 )
 from bindaems.app.learning.driving_quality import HitRates, hit_rates
 from bindaems.app.learning.features import local_midnight
 from bindaems.app.schedule import next_local
-from bindaems.app.settings.service import SettingsService
+from bindaems.app.settings.service import SettingsService, SettingsVersion
 from bindaems.app.status import ComponentStatus
 from bindaems.shared.config import Config
 from bindaems.shared.settings import DrivingSettings
@@ -100,6 +103,11 @@ def _quality_json(rates: HitRates) -> dict[str, Any]:
     }
 
 
+def _without_switches(settings: DrivingSettings) -> DrivingSettings:
+    """Die Einstellungen ohne die Schalter der Automatik: Nur sie zu schalten rechnet nicht neu."""
+    return settings.model_copy(update={"automation": {}})
+
+
 def _stamp(moment: datetime) -> str:
     return f"{ensure_utc(moment).astimezone(LOCAL_TZ):%d.%m. %H:%M}"
 
@@ -133,6 +141,14 @@ class DrivingService:
         # wirklich enden (``close`` wartet darauf, bevor die Datenbank schließt)
         self._threads: set[asyncio.Future[Any]] = set()
         self._run_done: list[Callable[[], None]] = []
+        # Geänderte Einstellungen des Fahrverhaltens rechnen gleich neu (Ruling F-2); läuft schon
+        # ein Lauf mit den alten, folgt danach einer (``_again``)
+        self._loop: asyncio.AbstractEventLoop | None = None
+        self._loop_thread: int | None = None
+        self._seen_lock = threading.Lock()
+        self._seen = _without_switches(settings.current().settings.learning.driving)
+        self._again = False
+        settings.on_change(self._on_settings)
 
     # --- Betrieb --------------------------------------------------------------------------
 
@@ -140,6 +156,7 @@ class DrivingService:
         """Beim Start die abgelegten Stände laden und neu rechnen; dann täglich um 03:40 Uhr
         Ortszeit."""
         self._track()
+        self._loop, self._loop_thread = asyncio.get_running_loop(), threading.get_ident()
         await self.load_stored()
         await self._recompute_logged()
         while True:
@@ -172,6 +189,29 @@ class DrivingService:
         Ein Fehler in einem Rückruf wird protokolliert, die übrigen laufen weiter.
         """
         self._run_done.append(callback)
+
+    def _on_settings(self, version: SettingsVersion) -> None:
+        """Rechnet neu, wenn sich ``learning.driving`` ändert, außer allein die Schalter der
+        Automatik (Ruling F-2). Die Ziele gelten ohnehin sofort (``profile``); neu rechnen muss
+        der Dienst für Puffer (Trefferquote) und eine geänderte Quelle der Anwesenheit. Ruft der
+        Einstellungsdienst aus einem anderen Thread, läuft der Lauf in der Ereignisschleife."""
+        new = _without_switches(version.settings.learning.driving)
+        with self._seen_lock:
+            old, self._seen = self._seen, new
+        loop = self._loop
+        if new == old or loop is None or loop.is_closed():
+            return  # ohne laufenden Dienst rechnet der Start ohnehin
+        if threading.get_ident() == self._loop_thread:
+            self._settings_changed()
+        else:
+            with contextlib.suppress(RuntimeError):  # Schleife inzwischen geschlossen
+                loop.call_soon_threadsafe(self._settings_changed)
+
+    def _settings_changed(self) -> None:
+        if self.start_recompute():
+            log.info("Fahrverhalten wird nach geänderten Einstellungen neu berechnet")
+        else:
+            self._again = True
 
     async def recompute(self) -> bool:
         """Rechnet alle Autos neu; ``False``, wenn schon ein Lauf läuft."""
@@ -213,6 +253,9 @@ class DrivingService:
                 callback()
             except Exception:
                 log.exception("Rückmeldung nach dem Lauf des Fahrverhaltens fehlgeschlagen")
+        if self._again:  # die Einstellungen änderten sich während des Laufs
+            self._again = False
+            self._settings_changed()
 
     async def _offload(self, func: Callable[..., Any], *args: Any) -> Any:
         """Rechnet ``func`` in einem Thread; ein Abbruch beendet nur das Warten (``close`` wartet
@@ -353,10 +396,21 @@ class DrivingService:
     # --- Zugriff --------------------------------------------------------------------------
 
     def profile(self, key: str) -> VehicleProfile | None:
-        return self._profiles.get(key)
+        """Der gültige Stand des Autos mit den Zielen nach den aktuellen Einstellungen."""
+        profile = self._profiles.get(key)
+        return None if profile is None else with_settings(profile, self._driving_settings())
 
     def profiles(self) -> Mapping[str, VehicleProfile]:
-        return MappingProxyType(dict(self._profiles))
+        """Die gültigen Stände aller Autos wie ``profile``."""
+        settings = self._driving_settings()
+        return MappingProxyType(
+            {key: with_settings(profile, settings) for key, profile in self._profiles.items()}
+        )
+
+    def _driving_settings(self) -> DrivingSettings:
+        """Ziele gelten nach den aktuellen Einstellungen, nicht nach denen des letzten Laufs
+        (Ruling F-2): Automatik, API und HA lesen die Stände nur über ``profile(s)``."""
+        return self._settings.current().settings.learning.driving
 
     # --- Status ---------------------------------------------------------------------------
 
@@ -401,7 +455,7 @@ class DrivingService:
 
     def _vehicle_json(self, key: str, now: datetime) -> dict[str, Any]:
         name = self._cfg.vehicles[key].name
-        profile = self._profiles.get(key)
+        profile = self.profile(key)
         quality = _quality_json(self._quality.get(key, HitRates(0, 0, 0, 0)))
         if profile is None:  # ein Auto ohne Stand fehlt nicht: keine Tage, leere Wochentage
             return {

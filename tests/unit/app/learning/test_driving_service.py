@@ -436,6 +436,74 @@ async def test_settings_of_the_run_reach_the_profile(service, reader, settings_s
     assert profile.weekdays[1].target_soc_pct == 50  # 30 Reserve + 20 Verbrauch
 
 
+async def test_a_narrower_range_applies_without_a_new_run(
+    service, reader, settings_service
+) -> None:
+    # Ruling F-2: Der Pendler verbraucht 20 Punkte, Ziel 20 + 20 = 40 → 50 (mindestens 50).
+    # Höchstens 35 wirkt sofort auf Profil, alle Profile und den Status, ohne neuen Lauf.
+    commuter(reader)
+    await service.recompute()
+    monday = service.profile("tesla").weekdays[0]
+    assert (monday.target_soc_pct, monday.target_clamped) == (50, True)
+    reader.down = True  # ein neuer Lauf könnte nichts lesen
+    set_driving(settings_service, DrivingSettings(target_min_pct=30, target_max_pct=35))
+    monday = service.profile("tesla").weekdays[0]
+    assert (monday.target_soc_pct, monday.target_clamped) == (35, True)
+    assert service.profiles()["tesla"].weekdays[0] == monday
+    [tesla] = [v for v in service.status()["vehicles"] if v["key"] == "tesla"]
+    assert (tesla["weekdays"][0]["target_soc_pct"], tesla["weekdays"][0]["target_clamped"]) == (
+        35,
+        True,
+    )
+    assert tesla["next_trip"]["target_soc_pct"] == 35
+    set_driving(settings_service, DrivingSettings(target_min_pct=30))
+    monday = service.profile("tesla").weekdays[0]
+    assert (monday.target_soc_pct, monday.target_clamped) == (40, False)
+
+
+async def test_a_changed_driving_setting_starts_a_run(make_service, reader, settings_service):
+    # Ruling F-2: Eine Änderung von learning.driving (etwa presence_entities) rechnet gleich
+    # neu, nicht erst um 03:40; der Schalter der Automatik allein nicht
+    commuter(reader)
+    sleeps: list[float] = []
+
+    async def wait(seconds: float) -> None:
+        sleeps.append(seconds)
+        await asyncio.Event().wait()  # die Nacht kommt im Test nicht
+
+    service = make_service(sleep=wait)
+    runs = 0
+
+    def counted() -> None:
+        nonlocal runs
+        runs += 1
+
+    service.on_run_done(counted)
+    task = asyncio.create_task(service.run())
+    try:
+        await until(lambda: runs == 1 and sleeps)
+        current = settings_service.current().settings.learning.driving
+        set_driving(settings_service, current.model_copy(update={"automation": {"tesla": True}}))
+        await asyncio.sleep(0.05)
+        assert runs == 1
+        set_driving(settings_service, current.model_copy(update={"return_reserve_pct": 25}))
+        await until(lambda: runs == 2)
+        # aus einem anderen Thread (wie eine Route im Threadpool)
+        changed = current.model_copy(update={"presence_entities": {"tesla": "device_tracker.t"}})
+        await asyncio.to_thread(set_driving, settings_service, changed)
+        await until(lambda: runs == 3)
+        # während eines Laufs: ein weiterer Lauf danach
+        reader.gate = asyncio.Event()
+        assert service.start_recompute()
+        set_driving(settings_service, current)
+        await asyncio.sleep(0.05)
+        reader.gate.set()
+        await until(lambda: runs == 5)
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+
 async def test_status_before_the_first_run(service, cfg) -> None:
     status = service.status()
     assert status["computed_at"] is None

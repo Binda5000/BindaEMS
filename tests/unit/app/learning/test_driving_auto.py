@@ -9,14 +9,21 @@ from structlog.testing import capture_logs
 from tests.app_helpers import T_APP
 from tests.plan_helpers import until
 from tests.unit.app.control.conftest import FakeCoreClient, FakeFeed
+from tests.unit.app.learning.conftest import FakeReader
 
 from bindaems.app.audit import AuditLog
 from bindaems.app.charging.planned import AUTO_ADOPT, OpenCharge, PlannedCharges
 from bindaems.app.control.intent import IntentService, SetTarget
 from bindaems.app.core_link import CoreReply, CoreUnavailableError, LiveState
-from bindaems.app.db.schema import charging_session, driving_automation, planned_charge
+from bindaems.app.db.schema import (
+    charging_session,
+    driving_automation,
+    driving_profile,
+    planned_charge,
+)
 from bindaems.app.learning.driving_auto import AUTO_RECENT, DrivingAutomation
 from bindaems.app.learning.driving_profile import Confidence, VehicleProfile, WeekdayProfile
+from bindaems.app.learning.driving_service import DrivingService
 from bindaems.app.settings.service import SettingsService, SettingsVersion, VersionConflictError
 from bindaems.shared.config import Config
 from bindaems.shared.control import ChargeMode, Intent, VehicleIntent, next_departure
@@ -180,10 +187,10 @@ def make_auto(
 ) -> Callable[..., DrivingAutomation]:
     def make(**kwargs: Any) -> DrivingAutomation:
         kwargs.setdefault("charges", PlannedCharges(engine, clock, cfg).open_charges)
+        kwargs.setdefault("profiles", profiles)
         return DrivingAutomation(
             intents=intents,
             live=live,
-            profiles=profiles,
             settings=settings_service,
             audit=audit,
             engine=engine,
@@ -788,3 +795,90 @@ async def test_failed_save_is_retried(auto, engine, monkeypatch) -> None:
     assert stored(engine) == {}
     await auto.tick()
     assert stored(engine)["tesla"].last_set_at == T_APP
+
+
+# --- Fix-Welle nach dem Gesamtreview --------------------------------------------------------
+
+
+@pytest.mark.usefixtures("enabled")
+async def test_switch_on_loads_the_stored_pause_before_clearing_it(
+    make_auto, intents, client, engine, settings_service
+) -> None:
+    # Ruling T8: pausiert nach einer Bedienung, Pause gespeichert, Schalter aus; eine frische
+    # Automatik (Neustart) lädt beim Einschalten zuerst, sonst käme die gespeicherte Pause zurück
+    first = make_auto()
+    await first.tick()  # setzt
+    await intents.apply(SetTarget("tesla", 90, "08:00"), actor="anna", source="ui")
+    await first.tick()  # speichert die Pause
+    assert stored(engine)["tesla"].paused_until is not None
+    await first.set_enabled("tesla", False, actor="anna", source="ui")
+    second = make_auto()
+    await second.set_enabled("tesla", True, actor="anna", source="ui")
+    assert second.state("tesla")["paused_until"] is None
+    assert stored(engine)["tesla"].paused_until is None
+    assert second.state("tesla")["state"] == "applied"
+    assert (tesla(client).target_soc_pct, tesla(client).departure_on) == (60, MONDAY)
+
+
+@pytest.mark.usefixtures("enabled")
+async def test_same_time_on_another_day_sends_the_day(auto, client) -> None:
+    # Ruling T8: Die Absicht nennt 07:15 ohne Tag (also Samstag), die Fahrt ist Montag 07:15
+    # mit demselben Ziel: Nur der Tag weicht ab, und die Automatik sendet ihn
+    client.valid = planned_intent(target_soc_pct=60, departure="07:15")
+    await auto.tick()
+    assert len(client.sent) == 1
+    car = tesla(client)
+    assert (car.target_soc_pct, car.departure, car.departure_on) == (60, "07:15", MONDAY)
+
+
+def set_range(settings: SettingsService, **fields: int) -> None:
+    current = settings.current()
+    driving = current.settings.learning.driving.model_copy(update=fields)
+    learning = current.settings.learning.model_copy(update={"driving": driving})
+    settings.update(
+        current.settings.model_copy(update={"learning": learning}),
+        base_version=current.version,
+        actor="test",
+        source="cli",
+    )
+
+
+@pytest.mark.usefixtures("enabled")
+async def test_a_lower_maximum_is_sent_without_a_new_run(
+    make_auto, client, engine, cfg, settings_service, clock
+) -> None:
+    # Ruling F-2: Der gespeicherte Stand schlägt 90 % vor (Reserve 20 + P80 70). „Ziel-SOC
+    # höchstens“ 70 gilt sofort: Die Automatik sendet 70 %, ohne dass das Fahrverhalten neu rechnet
+    profile = commuter(soc=90)
+    weekdays = [
+        wp.model_copy(update={"consumption_p80_pp": 70.0, "target_clamped": True})
+        if wp.target_soc_pct is not None
+        else wp
+        for wp in profile.weekdays
+    ]
+    with engine.begin() as conn:
+        conn.execute(
+            insert(driving_profile).values(
+                vehicle="tesla",
+                computed_at=T_APP - timedelta(hours=6),
+                data_from=profile.data_from,
+                data_to=profile.data_to,
+                source=profile.source,
+                profile=profile.model_copy(update={"weekdays": weekdays}).model_dump(mode="json"),
+            )
+        )
+    driving = DrivingService(
+        reader=FakeReader(), engine=engine, cfg=cfg, settings=settings_service, clock=clock
+    )
+    await driving.load_stored()
+    runs: list[int] = []
+    driving.on_run_done(lambda: runs.append(1))
+    auto = make_auto(profiles=driving.profile)
+    await auto.tick()
+    assert tesla(client).target_soc_pct == 90
+    set_range(settings_service, target_max_pct=70)
+    clock.advance(timedelta(minutes=1))
+    await auto.tick()
+    assert len(client.sent) == 2
+    assert tesla(client).target_soc_pct == 70
+    assert runs == []  # kein neuer Lauf
