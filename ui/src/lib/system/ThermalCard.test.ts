@@ -63,9 +63,9 @@ it('zeigt die Grundlast und die freigebbare Leistung, ohne Werte „–“', () 
 	expect(screen.getByText('Grundlast – · freigebbar –')).toBeTruthy();
 });
 
-it('zeigt ohne Werte der Anlage keine Grundlast', () => {
-	render(ThermalCard, { thermal: { klima: silent } });
-	expect(screen.queryByText(/Grundlast/)).toBeNull();
+it('zeigt ohne Werte der Anlage die Grundlast als „–“', () => {
+	render(ThermalCard, { thermal: { klima: { ...silent, base_w: 400, spare_w: 500 } } });
+	expect(screen.getByText('Grundlast – · freigebbar –')).toBeTruthy();
 });
 
 it('zeigt ohne Klimaanlage keine Karte', () => {

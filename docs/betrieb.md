@@ -5347,7 +5347,7 @@ der Aktor macht daraus das Vorzeichen je Betriebsart. Je Zyklus gewinnt die erst
      nur bei positivem Wunsch: Die Grundlast beim Heizen oder Kühlen bekäme ein Auto nie. Die
      Leistung bei Versatz 0 lernt der core, wenn der Versatz 5 min lang 0 war; bis dahin zählt die
      ganze Leistung. Die gelernte Grundlast und die freigebbare Leistung zeigt die Karte
-     „Klimaanlage“ auf „System“ („Grundlast … W · freigebbar … W“, „–“ ohne Wert), damit du im
+     „Klimaanlage“ auf „System“ („Grundlast … W · freigebbar … W“, „–“ ohne Wert und ohne Verbindung), damit du im
      Dry-Run siehst, ob die Grundlast gelernt wird. Hat ein Auto einmal gezählt, zählt es weiter, solange der Überschuss um
      höchstens eine Stufe (1 A) unter seiner Startleistung liegt (Hysterese).
 4. **Der Akku hat Vorrang:** Liegt der SOC mehr als 5 Prozentpunkte unter der Schwelle (der geplante

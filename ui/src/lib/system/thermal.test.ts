@@ -43,6 +43,10 @@ describe('thermalLoad', () => {
 		);
 		expect(thermalLoad({ ...base, spare_w: 0 })).toBe(`Grundlast 400${NB}W · freigebbar 0${NB}W`);
 	});
+
+	it('zeigt „–“ ohne Verbindung, auch bei alten Werten', () => {
+		expect(thermalLoad({ ...base, connected: false })).toBe('Grundlast – · freigebbar –');
+	});
 });
 
 describe('thermalRows', () => {
@@ -163,6 +167,23 @@ describe('thermalRows', () => {
 		// andere Gründe bleiben
 		expect(rows({ reason: 'thermal_cars', wish: 0, running: true }).Grund).toBe(
 			'Autos haben Vorrang'
+		);
+	});
+
+	it('zeigt „Versatz 0“ statt „nicht steuerbar“, sobald das Echo wieder da ist', () => {
+		const text = (changes: Partial<ThermalHealth>) =>
+			rows({ reason: 'thermal_no_echo', wish: 0, offset_active_k: 0, ...changes }).Grund;
+		expect(text({})).toBe('Versatz 0');
+		// ohne Echo stimmt der Text
+		expect(text({ offset_active_k: null })).toBe(
+			'Klimaanlage nicht steuerbar (kein Echo oder gesperrt), Versatz 0'
+		);
+		// nur bei Wunsch 0
+		expect(text({ wish: 1 })).toBe(
+			'Klimaanlage nicht steuerbar (kein Echo oder gesperrt), Versatz 0'
+		);
+		expect(text({ wish: null })).toBe(
+			'Klimaanlage nicht steuerbar (kein Echo oder gesperrt), Versatz 0'
 		);
 	});
 

@@ -32,9 +32,7 @@
 					<dd>{row.value}</dd>
 				{/each}
 			</dl>
-			{#if block.connected}
-				<p class="load">{thermalLoad(block)}</p>
-			{/if}
+			<p class="load">{thermalLoad(block)}</p>
 		{/each}
 	</Card>
 {/if}

@@ -48,7 +48,8 @@ function wishText(wish: number | null): string {
 /**
  * Nach einem Rücksetzen der Strategie bleibt der Grund `thermal_off`, auch wenn die Anlage
  * läuft. Läuft sie (und lüftet nicht) und ist der Wunsch 0, ist „aus oder lüftet“ falsch: dann
- * steht nur, dass der Versatz 0 ist.
+ * steht nur, dass der Versatz 0 ist. Ebenso bleibt `thermal_no_echo` stehen, wenn das Echo
+ * wieder da ist: Bei Wunsch 0 und einem Echo stimmt „nicht steuerbar“ nicht mehr.
  */
 function reasonText(block: ThermalHealth): string {
 	if (
@@ -57,6 +58,9 @@ function reasonText(block: ThermalHealth): string {
 		block.running === true &&
 		block.mode !== 'lueften'
 	) {
+		return 'Versatz 0';
+	}
+	if (block.reason === 'thermal_no_echo' && block.wish === 0 && block.offset_active_k !== null) {
 		return 'Versatz 0';
 	}
 	return reasonLabel(block.reason);
@@ -70,9 +74,11 @@ function running(value: boolean | null): string {
 	return value === null ? DASH : value ? 'ja' : 'nein';
 }
 
-/** „Grundlast 400 W · freigebbar 500 W“, ohne Wert „–“ */
+/** „Grundlast 400 W · freigebbar 500 W“, ohne Wert und ohne Verbindung „–“ */
 export function thermalLoad(block: ThermalHealth): string {
-	return `Grundlast ${formatPower(block.base_w)} · freigebbar ${formatPower(block.spare_w)}`;
+	const base = block.connected ? block.base_w : null;
+	const spare = block.connected ? block.spare_w : null;
+	return `Grundlast ${formatPower(base)} · freigebbar ${formatPower(spare)}`;
 }
 
 /**
