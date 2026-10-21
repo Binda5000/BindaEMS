@@ -715,9 +715,9 @@ Als Nächstes folgt 5c (Vorheizen und Vorkühlen, erst mit Daten aus 6a).
     `docs/verification/abnahme-phase-5a.md`, Spec „Stand Plan 5a“ in 5.2, 10.2, 10.3, 11.3, 13 und 18.
   - **Offen (klein):** die Liste unter „Bewusst offen gelassen“, „Aufgeschobene Kleinigkeiten aus Plan 5a“;
     an der Anlage das Ausrollen und die 28 Tage der Abnahme (Punkt 10 unter „Offen an der Anlage“).
-- **Phase 5b (Fahrverhalten) ist umgesetzt und je Task geprüft**
+- **Phase 5b (Fahrverhalten) ist umgesetzt, je Task und im Gesamtreview geprüft**
   (Plan: `docs/superpowers/plans/2026-10-20-phase-5b-fahrverhalten.md`, 14 Tasks; Ausführung subagent-driven; Branch `claude/phase-5b-plan-xo03ty`, **noch nicht
-  auf `main`, Gesamtreview steht aus, nicht ausgerollt**). Die app lernt je Auto, wann es abfährt, mit welchem
+  auf `main`, Gesamtreview und Fix-Welle erledigt, nicht ausgerollt**). Die app lernt je Auto, wann es abfährt, mit welchem
   Ladestand es zurückkommt und wann es angesteckt ist:
   - **Lernen:** empirische Perzentile über 56 Tage statt LightGBM (`app/learning/driving_*.py`): Daten aus
     Anwesenheit (HA-Entität, `home_entity`, Tessie, sonst Ansteckvorgänge), Tage, Profil je Wochentag mit
@@ -737,8 +737,11 @@ Als Nächstes folgt 5c (Vorheizen und Vorkühlen, erst mit Daten aus 6a).
   - **Deploy und Doku:** Migration `0014`; Betriebshandbuch „Fahrverhalten (Phase 5b)“, „Fahrverhalten ausrollen
     (Plan 5b)“, Checkliste `docs/verification/abnahme-phase-5b.md`, Spec „Stand Plan 5b“ in 5.3, 7.5, 7.6, 9.3,
     10.4, 11.3, 12, 13 und 18. Der core ändert sich nur in `core/control/planned.py`.
-  - **Offen:** Gesamtreview und seine Fix-Welle; die Liste unter „Bewusst offen gelassen“, „Deferred minors 5b“;
-    an der Anlage das Ausrollen und die 28 Tage der Abnahme (Punkt 11 unter „Offen an der Anlage“).
+  - **Geprüft:** Gesamtreview, Fix-Welle (Budget des Wächters ohne erwartete Autos, Zielbereich wirkt sofort,
+    Abfahrtstag in der UI, kein erwartetes Auto auf belegter Wallbox) und Re-Review; die Liste
+    „Deferred minors 5b“ steht unter „Bewusst offen gelassen“.
+  - **Offen:** Übernahme auf `main` (nur mit Zustimmung); an der Anlage das Ausrollen und die 28 Tage der
+    Abnahme (Punkt 11 unter „Offen an der Anlage“).
 - **Images:** `ghcr.io/binda5000/bindaems-core:latest` und `ghcr.io/binda5000/bindaems-app:latest`.
   Sie sind öffentlich, und die CI setzt `latest` bei jedem Push auf `main`. core und app werden
   immer gemeinsam aus demselben Stand ausgerollt (gleiche Compose-Datei, gleiche Image-Tags): Die
@@ -894,7 +897,7 @@ Als Nächstes folgt 5c (Vorheizen und Vorkühlen, erst mit Daten aus 6a).
 | `docs/superpowers/plans/2026-10-20-phase-3d-regel-r1.md` | Plan 3d, 4 Tasks, umgesetzt auf dem Branch `claude/project-thread-707vv8` (nicht auf `main`, nicht ausgerollt): Regel R1 sperrt Netzladen nur, solange der Akku nicht leer ist (Nachrechnung, Optimierer, Erklärung, Szenario-Werkzeug); Einordnung, die sechs Entscheidungen des Betreibers vom 20.10.2026, Review-Schwerpunkte |
 | `docs/superpowers/plans/2026-10-19-phase-6a-entscheidungen.md` | Festlegungen R1 bis R32 der Umsetzung von Plan 6a (je mit Kosten, falls falsch) und die offenen Kleinigkeiten |
 | `docs/superpowers/plans/2026-10-20-phase-5a-lastmodell.md` | Plan 5a, 14 Tasks, umgesetzt auf dem Branch `claude/phase-5-plan-s7xe0n` (noch nicht auf `main`, nicht ausgerollt): Wetterarchiv, HA-Sensoren, Merkmale, LightGBM, Backtest, Registry, Aktivierungsregel, Schattenbetrieb, Seite „Prognosen“, Einstellungen „Lastmodell“; die Einordnung teilt Phase 5 in 5a, 5b und 5c; die 17 Entscheidungen des Betreibers vom 20.10.2026, Präzisierungen, Texte |
-| `docs/superpowers/plans/2026-10-20-phase-5b-fahrverhalten.md` | Plan 5b, 14 Tasks, umgesetzt auf dem Branch `claude/phase-5b-plan-xo03ty` (noch nicht auf `main`, Gesamtreview steht aus, nicht ausgerollt): Fahrverhalten mit Vorschlägen, Automatik für „Geplant“, Abfahrt an einem Datum und erwartete Autos im Planer; 17 Entscheidungen, vom Betreiber am 20.10.2026 freigegeben |
+| `docs/superpowers/plans/2026-10-20-phase-5b-fahrverhalten.md` | Plan 5b, 14 Tasks, umgesetzt auf dem Branch `claude/phase-5b-plan-xo03ty` (noch nicht auf `main`, Gesamtreview und Fix-Welle erledigt, nicht ausgerollt): Fahrverhalten mit Vorschlägen, Automatik für „Geplant“, Abfahrt an einem Datum und erwartete Autos im Planer; 17 Entscheidungen, vom Betreiber am 20.10.2026 freigegeben |
 | `cerbo-watchdog/README.md` | Watchdog: Zustände, Zeiten, D-Bus-Pfade, Installation und Probe |
 | `docs/verification/abnahme-phase-1.md` | Checkliste für die Abnahme der Phase 1 |
 | `docs/verification/abnahme-phase-4.md` | Checkliste für die Abnahme der Phase 4: Teil Statistik (Plan 4a, 30 Tage ab dem Ausrollen, Abgleich innerhalb ±1 %), „Ziel-SOC“ (mindestens 95 % der machbaren geplanten Ladungen, `GET /api/stats`) und „HA in beide Richtungen“ (Tabelle aller Bedienelemente) aus Plan 4b |
@@ -1776,7 +1779,7 @@ Demo-Zugänge: `admin`, `bedienen` (Bedienen), `gast` (Lesen) und `sicher` (Admi
      Betreibers), nicht ausgerollt (Kurzfassung). Nur app und UI, der core bleibt gleich. Es folgt das
      Ausrollen mit oder nach 4b und 6a (Punkt 10 unter „Offen an der Anlage“) und die Abnahme über 28 Tage.
    - **5b Fahrverhalten:** umgesetzt und je Task geprüft, auf dem Branch `claude/phase-5b-plan-xo03ty`,
-     **noch nicht auf `main`** (Gesamtreview steht aus, die Integration braucht die Zustimmung des Betreibers),
+     **noch nicht auf `main`** (Gesamtreview und Fix-Welle erledigt, die Integration braucht die Zustimmung des Betreibers),
      nicht ausgerollt (Kurzfassung). Es lernt Abfahrt, Ankunft und SOC bei Ankunft je Auto und Wochentag,
      macht Vorschläge mit Konfidenz, hat eine optionale Automatik für „Geplant“ und liefert die
      Anwesenheitsprognose für den Optimierer (erwartete Autos). **Nicht in 5b** ist die Akku-Unterstützung
@@ -3318,9 +3321,29 @@ nicht aufgeführt. Offen sind:
   will, schaltet „Lastmodell verwenden“ gleich nach dem Start aus (Betriebshandbuch, „Lastmodell
   ausrollen (Plan 5a)“, „Reiner Schattenbetrieb“). Die Dauer eines Trainings an der Anlage und der Speicher dafür sind nicht gemessen.
 
-Aufgeschobene Kleinigkeiten aus Plan 5b (Deferred minors 5b). **Platzhalter:** Der Controller trägt die
-Liste nach dem Gesamtreview des Branches `claude/phase-5b-plan-xo03ty` und seiner Fix-Welle ein (aus den
-Reviews der Tasks 1 bis 14; keine davon soll die Anlage gefährden, denn gelernte Werte erreichen die
-Safety-Schicht nie und die Automatik ist ab Werk aus). Bis dahin gilt:
+Aufgeschobene Kleinigkeiten aus Plan 5b (Deferred minors 5b), aus den Reviews der Tasks 1 bis 14, dem
+Gesamtreview und dem Re-Review der Fix-Welle. Keine davon gefährdet die Anlage: Gelernte Werte erreichen die
+Safety-Schicht nie, und die Automatik ist ab Werk aus.
 
-- *(noch nicht eingetragen)*
+- **Daten und Tage:** Eine Abfahrt genau um 00:00:00 geht verloren; der Ladestand bei der Ankunft sieht nur
+  Ansteckvorgänge ab der Ankunft; der Seed liest nur den jüngsten Punkt (90 Tage Rückblick, `raw` hält 90 Tage);
+  `load_history` liest die Ansteckvorgänge synchron im Event-Loop (kleine Abfrage); `WINDOW_DAYS` steht in zwei
+  Modulen; `presence[0]` setzt sortierte Punkte voraus.
+- **Profil und Trefferquote:** Die Trefferquote liegt nur im Speicher (nach einem Neustart bis zum Startlauf
+  n = 0) und wird nach einem gescheiterten Schritt nicht als veraltet markiert; die Prüfung auf `away` in
+  `driving_quality` ist redundant; `driving_profile` importiert `Source` aus dem Lesemodul.
+- **Absicht und Automatik:** Ein vergangenes `departure_on` bleibt in der Absicht stehen (fällt auf die tägliche
+  Uhrzeit zurück); `departure_on` nimmt in der API auch einen Zeitstempel an; nach einem „clamped“-Ergebnis zeigt
+  der Zustand kurz „applied“ mit Pause (der nächste Check korrigiert); vor dem ersten Check nach dem Start
+  zeigt ein eingeschaltetes Auto kurz „nicht auf Geplant“; Schalter und Änderungsprotokoll stehen in zwei
+  Transaktionen (ein Fehler im Protokoll gibt 500, obwohl der Schalter gespeichert ist).
+- **Planer:** Kein Test mit einer Ankunft außerhalb einer Slotgrenze; „Kein Plan · lädt spätestens ab“ und
+  „Fertig um“ zeigen bei einer Abfahrt in mehreren Tagen keinen Tag; zwei Service-Tests prüfen mit
+  `sleep(0.1)`-Fenstern.
+- **Code und Tests:** private Importe (`_local_instant`, `_Model`); `VehicleKey` doppelt zu `WallboxKey`;
+  `WEEKDAYS` über mehrere Zeilen; einzelne Tests greifen auf private Felder zu oder pinnen Grenzen
+  (30 min, 25-h-Tag im Herbst) nur teilweise; kein Test für „clamped“ und `CoreDown` ohne Rückruf; kein Test
+  gegen eine Flächenfüllung erwarteter Autos im Diagramm.
+- **UI und Doku:** Die Demo-Welt schaltet die Automatik ohne Protokolleintrag ein; NBSP vor „%“ wie im übrigen
+  `format.ts`; die Prognosen-Seite lädt die vollen Einstellungen nur für den Namen der Entität; der
+  Rollback-Befehl 5b nennt „Regelbetrieb aus“ nur im Einleitungssatz.
