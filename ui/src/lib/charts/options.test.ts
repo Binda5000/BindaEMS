@@ -54,6 +54,18 @@ describe('Preise und Prognose', () => {
 		]);
 	});
 
+	it('lässt die Höhe des PV-Bandes nie unter 0 fallen, auch wenn P75 unter P25 liegt', () => {
+		const option = priceForecastOption(
+			[slot('2026-10-09T08:00:00+00:00', 13.44, null)],
+			[{ start: '2026-10-09T08:00:00+00:00', p50_w: 2500, p25_w: 3000, p75_w: 2400 }],
+			null,
+			'2026-10-09T08:05:00+00:00',
+			palette
+		);
+		const band = (option.series as LineSeriesOption[]).find((s) => s.id === 'pv_band');
+		expect(band?.data).toEqual([[at(0), 0, 2.4]]);
+	});
+
 	it('zeigt die PV-Prognose in kW auf der zweiten Achse und markiert jetzt', () => {
 		const option = priceForecastOption(
 			[slot('2026-10-09T08:00:00+00:00', 13.44, null)],

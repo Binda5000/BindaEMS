@@ -191,7 +191,7 @@ export function priceForecastOption(
 				showSymbol: false,
 				data: forecast.map((slot) => [
 					epoch(slot.start),
-					(slot.p75_w - slot.p25_w) / 1000,
+					Math.max(0, slot.p75_w - slot.p25_w) / 1000,
 					slot.p75_w / 1000
 				]),
 				lineStyle: { width: 0 },
