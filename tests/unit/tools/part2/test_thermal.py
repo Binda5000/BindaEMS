@@ -89,9 +89,22 @@ async def test_a_missing_echo_is_a_failure(thermal_session, cfg: Config) -> None
     assert next(f for f in findings if f.title == "Versatz +0,5 K").detail == (
         "Echo nach 0,5 s 0 K"
     )
-    assert rows["Timeout der UVR"] == "fail"
+    assert rows["Timeout der UVR"] == "info"
     assert "Visu der UVR" not in rows  # ohne Echo keine Rückfrage zur Visu
     assert cmi.sent_k()[-1] == 0.0  # das Ende sendet trotzdem 0
+
+
+async def test_step4_skipped_after_failed_step2(thermal_session, cfg: Config) -> None:
+    asked: list[str] = []
+    session, cmi = thermal_session(answers=[True], asked=asked, echoes=False)
+    findings = await _run(session, cfg)
+    timeout = next(f for f in findings if f.title == "Timeout der UVR")
+    assert (timeout.status, timeout.detail) == (
+        "info",
+        "übersprungen, weil Schritt 2 nicht bestanden hat",
+    )
+    assert QUESTION_TIMEOUT not in asked  # der Schritt fragt nicht einmal
+    assert cmi.sent_k().count(0.5) == 1  # nur der Versuch aus Schritt 2, kein zweiter im Timeout
 
 
 async def test_missing_values_end_the_part_without_sending(thermal_session, cfg: Config) -> None:

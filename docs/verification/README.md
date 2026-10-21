@@ -226,7 +226,8 @@ Jeder Schritt ist eine Zeile im Bericht. Vor jedem Schritt, der schreibt, fragt 
     die Visu der UVR „EMS“ +0,5 K?“. Entfällt mit `--yes`.
   - „Versatz 0“: gesendet, das Echo zeigt 0.
   - „Timeout der UVR“: Das Werkzeug sendet +0,5 K und danach bis zu 5 min 30 s nichts mehr; das
-    Echo muss von selbst auf 0 fallen. Mit Rückfrage; entfällt mit `--yes`.
+    Echo muss von selbst auf 0 fallen. Mit Rückfrage; entfällt mit `--yes` und, mit INFO
+    „übersprungen, weil Schritt 2 nicht bestanden hat“, wenn „Versatz +0,5 K“ nicht bestanden hat.
   - „Am Ende: Versatz 0“: Am Ende, nach einem Fehler und nach Strg+C sendet es 0 und wartet auf das
     Echo 0, statt Werte wiederherzustellen.
 

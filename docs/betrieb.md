@@ -5540,7 +5540,9 @@ Danach startest du den core wieder, wenn er vorher lief (`docker compose up -d e
    es: „Zeigt die Visu der UVR „EMS“ +0,5 K?“ Sieh dazu auf die Visu der UVR.
 3. **Versatz 0:** gesendet, das Echo zeigt 0.
 4. **Timeout der UVR** (mit Rückfrage): Das Werkzeug sendet +0,5 K und danach bis zu 5 min 30 s
-   nichts mehr; das Echo muss von selbst auf 0 fallen. Das belegt den sicheren Zustand.
+   nichts mehr; das Echo muss von selbst auf 0 fallen. Das belegt den sicheren Zustand. Hat
+   Schritt 2 nicht bestanden (kein Echo oder die Visu zeigt den Versatz nicht), überspringt das
+   Werkzeug diesen Schritt mit INFO „übersprungen, weil Schritt 2 nicht bestanden hat“.
 
 Am Ende, nach einem Fehler und nach Strg+C sendet das Werkzeug 0 und wartet auf das Echo 0.
 `--yes` beantwortet alle Rückfragen mit Ja und überspringt dann den Timeout und die Rückfrage zur

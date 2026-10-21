@@ -55,6 +55,7 @@ TEST_OFFSET_K: Final = 0.5  # eine Stufe, wie die Strategie sie geht
 # so lange über das Warten auf das Echo hinaus gilt die Freigabe beim Senden eines Versatzes
 PERMIT_MARGIN_S: Final = 10.0
 SKIPPED: Final = "übersprungen"
+SKIPPED_AFTER_STEP2: Final = "übersprungen, weil Schritt 2 nicht bestanden hat"
 NOT_FOUND: Final = "Keine Klimaanlage „{}“ in thermal.devices."
 
 QUESTION_VISU: Final = "Zeigt die Visu der UVR „EMS“ +0,5 K?"
@@ -309,9 +310,12 @@ class _ThermalSteps:
     async def run(self) -> None:
         if not await self._values():
             return
-        await self._offset()
+        offset_ok = await self._offset()
         await self._zero()
-        await self._timeout()
+        if offset_ok:
+            await self._timeout()
+        else:  # ohne Echo auf +0,5 K sagt der Timeout nichts; er würde nur noch einmal senden
+            self._record("Timeout der UVR", "info", SKIPPED_AFTER_STEP2)
 
     async def _values(self) -> bool:
         """Alle Werte der Empfangstabelle sind da, sonst FEHLER und Ende ohne Senden."""
@@ -349,13 +353,16 @@ class _ThermalSteps:
         text = repr(value) if number is None else de(round(number, 1))
         return f"{label} {text} {unit}".rstrip()
 
-    async def _offset(self) -> None:
-        """+0,5 K senden, das Echo zeigt es; dann die Rückfrage zur Visu der UVR."""
+    async def _offset(self) -> bool:
+        """+0,5 K senden, das Echo zeigt es; dann die Rückfrage zur Visu der UVR.
+
+        ``True``, wenn der Schritt bestanden hat (Echo da, Visu bestätigt oder nicht gefragt).
+        """
         title = f"Versatz {kelvin(TEST_OFFSET_K)}"
         waited = await self._session.send_and_confirm(TEST_OFFSET_K, self._t.echo_s)
         if waited is None:
             self._record(title, "fail", self._session.failure or "kein Echo")
-            return
+            return False
         self._record(title, "ok", f"Echo {kelvin(TEST_OFFSET_K)} nach {seconds(waited)} s")
         visu = "Visu der UVR"
         if self._session.unattended:  # niemand sieht auf die Visu
@@ -364,15 +371,18 @@ class _ThermalSteps:
             self._record(visu, "ok", f"zeigt „EMS“ {kelvin(TEST_OFFSET_K)}")
         else:
             self._record(visu, "fail", f"zeigt „EMS“ nicht {kelvin(TEST_OFFSET_K)}")
+            return False
+        return True
 
-    async def _zero(self) -> None:
-        """0 senden, das Echo zeigt 0."""
+    async def _zero(self) -> bool:
+        """0 senden, das Echo zeigt 0; ``True``, wenn der Schritt bestanden hat."""
         title = "Versatz 0"
         waited = await self._session.send_and_confirm(0.0, self._t.echo_s)
         if waited is None:
             self._record(title, "fail", self._session.failure or "kein Echo")
-            return
+            return False
         self._record(title, "ok", f"Echo 0 K nach {seconds(waited)} s")
+        return True
 
     async def _timeout(self) -> None:
         """+0,5 K senden, dann schweigen: Die UVR setzt den Versatz von selbst auf 0."""
