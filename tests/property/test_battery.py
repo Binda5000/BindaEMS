@@ -207,7 +207,15 @@ def run(support, samples):
         now = T0 + timedelta(seconds=second)
         threshold_pct = CONTROL.support_soc_pct  # die Schwelle aus der Konfiguration, erlaubt
         answers.append(
-            support.update(now, soc, cars, deficit, threshold_pct=threshold_pct, allowed=True)
+            support.update(
+                now,
+                soc,
+                cars,
+                deficit,
+                threshold_pct=threshold_pct,
+                allowed=True,
+                plan_blocks=False,
+            )
         )
     return answers
 
