@@ -150,6 +150,18 @@ class _Command:
     option: bool  # ``select`` (Option) oder Schalter und Taste (Befehl)
 
 
+def _whole_number(payload: str) -> float | None:
+    """Die Nutzlast als ganze Zahl (``"45"``, ``"45.0"``); sonst ``None``. ``float`` nähme auch
+    ``"4_5"`` als 45 an, deshalb fällt der Unterstrich vorher weg."""
+    if "_" in payload:
+        return None
+    try:
+        number = float(payload)
+    except ValueError:
+        return None
+    return number if math.isfinite(number) and number.is_integer() else None
+
+
 def _table(cfg: Config, planning: bool, automation: bool) -> dict[str, _Command]:
     by_label = {label: mode for mode, label in MODE_LABELS.items()}
     guest_by_label = {label: mode for mode, label in GUEST_MODE_LABELS.items()}
@@ -161,11 +173,8 @@ def _table(cfg: Config, planning: bool, automation: bool) -> dict[str, _Command]
         """Nur das Ziel; die Abfahrt bleibt (``None``). Eine ganze Zahl von 20 bis 100."""
 
         def parse(payload: str) -> Change | None:
-            try:
-                soc = float(payload)
-            except ValueError:
-                return None
-            if not math.isfinite(soc) or not soc.is_integer():
+            soc = _whole_number(payload)
+            if soc is None:
                 return None
             if not TARGET_SOC_MIN <= soc <= TARGET_SOC_MAX:
                 raise Refused(f"Ziel-SOC „{_shown(payload)}“ liegt außerhalb von 20–100 %.")
@@ -214,11 +223,9 @@ def _table(cfg: Config, planning: bool, automation: bool) -> dict[str, _Command]
         return SupportSwitch(payload == ON) if payload in (ON, OFF) else None
 
     def support_threshold(payload: str) -> SupportThreshold | None:
-        try:
-            soc = float(payload)
-        except ValueError:
-            return None
-        if not math.isfinite(soc):
+        """Eine ganze Zahl von der USV-Reserve bis 100, wie beim Ziel-SOC."""
+        soc = _whole_number(payload)
+        if soc is None:
             return None
         if not reserve <= soc <= 100:
             shown, low = _shown(payload), de(reserve)

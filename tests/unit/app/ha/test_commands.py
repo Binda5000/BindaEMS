@@ -449,25 +449,63 @@ async def test_number_sets_the_threshold_and_keeps_the_switch(handler, intents, 
     intents.intent = Intent(version=4, support=SupportIntent(allowed=False))
     await handler("support_soc", "60")
     clock.advance(1.0)
-    await handler("support_soc", "62.5")
+    await handler("support_soc", "45.0")
     clock.advance(1.0)
     await handler("support_soc", " 100.0 ")
     assert [change for change, _, _ in intents.applied] == [
         SetSupport(False, 60.0),
-        SetSupport(False, 62.5),
+        SetSupport(False, 45.0),
         SetSupport(False, 100.0),
     ]
 
 
 async def test_number_command_out_of_range_is_rejected(handler, intents, rejections, clock) -> None:
-    for payload in ("150", "19.9", "-5"):
+    for payload in ("150", "19", "-5"):
         await handler("support_soc", payload)
         clock.advance(1.0)
     assert intents.applied == []
     assert rejections.texts == [
         PREFIX + "Unterstützungsschwelle „150“ liegt außerhalb von 20–100 %.",
-        PREFIX + "Unterstützungsschwelle „19.9“ liegt außerhalb von 20–100 %.",
+        PREFIX + "Unterstützungsschwelle „19“ liegt außerhalb von 20–100 %.",
         PREFIX + "Unterstützungsschwelle „-5“ liegt außerhalb von 20–100 %.",
+    ]
+
+
+async def test_support_threshold_rejects_fractions_and_underscores(
+    handler, intents, rejections, clock
+) -> None:
+    for payload in ("45", "45.0"):
+        await handler("support_soc", payload)
+        clock.advance(1.0)
+    assert [change for change, _, _ in intents.applied] == [
+        SetSupport(True, 45.0),
+        SetSupport(True, 45.0),
+    ]
+    intents.applied.clear()
+    for payload in ("45.5", "4_5"):
+        await handler("support_soc", payload)
+        clock.advance(1.0)
+    assert intents.applied == []
+    assert rejections.texts == [
+        PREFIX + f"Unbekannter Befehl „{shown}“ für „Unterstützungsschwelle“."
+        for shown in ("45.5", "4_5")
+    ]
+
+
+async def test_support_threshold_below_a_fractional_reserve_names_it_with_a_comma(
+    cfg, intents, rejections, clock
+) -> None:
+    battery = cfg.battery.model_copy(update={"reserve_soc_pct": 20.5})
+    handler = HaCommandHandler(
+        cfg.model_copy(update={"battery": battery}),
+        intents,  # type: ignore[arg-type]
+        rejections,
+        clock,
+    )
+    await handler("support_soc", "20")
+    assert intents.applied == []
+    assert rejections.texts == [
+        PREFIX + "Unterstützungsschwelle „20“ liegt außerhalb von 20,5–100 %."
     ]
 
 
@@ -541,7 +579,7 @@ async def test_target_number_sets_only_the_target(handler, intents, clock) -> No
 async def test_target_number_out_of_range_or_no_whole_number_is_rejected(
     handler, intents, rejections, clock
 ) -> None:
-    for payload in ("15", "101", "80.5", "viel", "nan", ""):
+    for payload in ("15", "101", "80.5", "4_5", "viel", "nan", ""):
         await handler("tesla_target_soc", payload)
         clock.advance(1.0)
     assert intents.applied == []
@@ -550,7 +588,7 @@ async def test_target_number_out_of_range_or_no_whole_number_is_rejected(
         PREFIX + "Ziel-SOC „101“ liegt außerhalb von 20–100 %.",
         *(
             PREFIX + f"Unbekannter Befehl „{shown}“ für „Ziel-SOC“."
-            for shown in ("80.5", "viel", "nan", "")
+            for shown in ("80.5", "4_5", "viel", "nan", "")
         ),
     ]
 
