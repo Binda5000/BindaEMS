@@ -11,7 +11,7 @@ import json
 import math
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime, time, timedelta
 from typing import TYPE_CHECKING, Any, Final, Literal
 
 from bindaems import __version__
@@ -22,7 +22,15 @@ from bindaems.app.control.intent import (
     TARGET_SOC_MIN,
 )
 from bindaems.app.core_link import LiveState
+from bindaems.app.daytype import is_holiday
 from bindaems.app.forecast.service import ForecastService
+from bindaems.app.learning.driving_profile import (
+    Confidence,
+    TripSuggestion,
+    VehicleProfile,
+    WeekdayProfile,
+    next_trip,
+)
 from bindaems.app.ledger.service import MonthPeak
 from bindaems.app.planning.execution import ExecutionState, execution_state
 from bindaems.app.planning.explain import slot_text
@@ -39,7 +47,7 @@ from bindaems.shared.config import (
     WallboxConfig,
     ha_object_id,
 )
-from bindaems.shared.control import ChargeMode, Intent, VehicleIntent
+from bindaems.shared.control import ChargeMode, Intent, VehicleIntent, _local_instant
 from bindaems.shared.domain import Value
 from bindaems.shared.numbers import finite_number
 from bindaems.shared.plan import BatteryIntentKind, Plan, PlanSlot, PlanVehicle
@@ -66,6 +74,14 @@ MODE_LABELS: Final[dict[ChargeMode, str]] = {
 GUEST_MODE_LABELS: Final[dict[ChargeMode, str]] = {
     mode: label for mode, label in MODE_LABELS.items() if mode is not ChargeMode.PLANNED
 }
+# Konfidenz und Grundlage des Vorschlags (Plan 5b, Texte): „Wochentag“ oder die Gruppe des Tages
+CONFIDENCE_LABELS: Final[dict[Confidence, str]] = {
+    "high": "hoch",
+    "medium": "mittel",
+    "low": "niedrig",
+}
+BASIS_WEEKDAY: Final = "Wochentag"
+GROUP_LABELS: Final = ("Gruppe Mo–Fr", "Gruppe Sa", "Gruppe So/Feiertag")  # Gruppen 0–4, 5, 6
 YES: Final = "ja"  # Zustände von „Ziel erreichbar“ (Texte, „HA“)
 NO: Final = "nein"
 SOC_SOURCES: Final = ("measured", "estimated", "assumed")  # ``soc_source`` in Health
@@ -132,6 +148,11 @@ class HaInputs:
     month_kwh: Mapping[str, float | None] = field(default_factory=dict)  # Ladeenergie im Monat
     # die geplanten Autos des gültigen Plans (Plan 4b), ohne erwartete (Plan 5b)
     plan_vehicles: Sequence[PlanVehicle] = ()
+    # Plan 5b: das Profil je Fahrzeug (Schlüssel aus ``config.yaml``); ein fehlender Schlüssel heißt
+    # „noch kein Profil“
+    driving_profiles: Mapping[str, VehicleProfile] = field(default_factory=dict)
+    # Plan 5b: Schalter „Automatik Ziel und Abfahrt“ je Fahrzeug; fehlt der Schlüssel: unbekannt
+    auto_target: Mapping[str, bool] = field(default_factory=dict)
     # Health ``thermal``: je Gerät (Schlüssel aus ``config.yaml``) die Werte der Klimaanlage
     thermal: Mapping[str, Mapping[str, Any]] = field(default_factory=dict)
     now: datetime | None = None  # Zeitpunkt der Werte; None = unbekannt
@@ -424,6 +445,90 @@ def _target_reachable_attributes(cfg: Config, key: str) -> Callable[[HaInputs], 
         }
 
     return attributes
+
+
+@dataclass(frozen=True)
+class Suggestion:
+    """Die nächste erwartete Fahrt eines Autos und der Wochentag, dessen Profil sie nennt."""
+
+    trip: TripSuggestion
+    weekday: WeekdayProfile
+
+    @property
+    def basis(self) -> str:
+        """„Wochentag“, bei einem Profil aus der Gruppe der Name der Gruppe des Tages."""
+        if self.weekday.basis == "weekday":
+            return BASIS_WEEKDAY
+        weekday = self.weekday.weekday
+        return GROUP_LABELS[0] if weekday < 5 else GROUP_LABELS[weekday - 4]
+
+
+def suggestion(key: str, inputs: HaInputs) -> Suggestion | None:
+    """Die nächste erwartete Fahrt des Autos ``key``; ``None`` ohne Profil, ohne Zeitpunkt oder
+    ohne Fahrt in den nächsten Tagen (Plan 5b: unbekannt bleibt unbekannt)."""
+    profile = inputs.driving_profiles.get(key)
+    if profile is None or inputs.now is None:
+        return None
+    trip = next_trip(profile, inputs.now)
+    if trip is None:
+        return None
+    # ein Feiertag gilt wie ein Sonntag (Eintrag 6 des Profils)
+    weekday = 6 if is_holiday(trip.date) else trip.date.weekday()
+    return Suggestion(trip, profile.weekdays[weekday])
+
+
+def _suggested_departure(key: str) -> Callable[[HaInputs], str]:
+    def value(inputs: HaInputs) -> str:
+        found = suggestion(key, inputs)
+        if found is None:
+            return UNKNOWN
+        hour, minute = (int(part) for part in found.trip.departure.split(":"))
+        # Tag und Uhrzeit der Fahrt sind lokal; HA bekommt den Zeitpunkt in UTC
+        return _local_instant(found.trip.date, time(hour, minute)).isoformat()
+
+    return value
+
+
+def _suggested_target(key: str) -> Callable[[HaInputs], str]:
+    def value(inputs: HaInputs) -> str:
+        found = suggestion(key, inputs)
+        if found is None or found.trip.target_soc_pct is None:
+            return UNKNOWN
+        return str(found.trip.target_soc_pct)
+
+    return value
+
+
+def _suggestion_attributes(key: str, *, target: bool) -> Callable[[HaInputs], Mapping[str, Any]]:
+    """Konfidenz („hoch“, „mittel“, „niedrig“) und Grundlage des Vorschlags für die Abfahrt oder
+    das Ziel; ``None`` ohne den jeweiligen Vorschlag."""
+
+    def attributes(inputs: HaInputs) -> Mapping[str, Any]:
+        found = suggestion(key, inputs)
+        if found is None or (target and found.trip.target_soc_pct is None):
+            return {"confidence": None, "basis": None}
+        confidence = found.trip.target_confidence if target else found.trip.departure_confidence
+        if confidence is None:
+            return {"confidence": None, "basis": None}
+        return {"confidence": CONFIDENCE_LABELS[confidence], "basis": found.basis}
+
+    return attributes
+
+
+def _next_departure(key: str) -> Callable[[HaInputs], str]:
+    """Die nächste Abfahrt aus Health (``planned.departure_at``) als UTC-Zeitpunkt."""
+
+    def value(inputs: HaInputs) -> str:
+        entry = _entry(inputs.vehicles, key)
+        planned = entry.get("planned") if entry is not None else None
+        moment = _moment(planned.get("departure_at")) if isinstance(planned, Mapping) else None
+        return UNKNOWN if moment is None else moment.isoformat()
+
+    return value
+
+
+def _auto_target_state(key: str) -> Callable[[HaInputs], str]:
+    return lambda inputs: on_off(inputs.auto_target.get(key))
 
 
 def _unreachable(cfg: Config, inputs: HaInputs) -> list[str]:
@@ -1059,6 +1164,39 @@ def build_entities(cfg: Config) -> list[EntitySpec]:
                 attributes=_target_reachable_attributes(cfg, key),
                 options=(YES, NO),
             ),
+            _control(
+                f"{oid}_auto_target",
+                "switch",
+                "Automatik Ziel und Abfahrt",
+                device,
+                _auto_target_state(key),
+            ),
+            EntitySpec(
+                f"{oid}_suggested_departure",
+                "sensor",
+                "Vorschlag Abfahrt",
+                device,
+                _suggested_departure(key),
+                device_class="timestamp",
+                attributes=_suggestion_attributes(key, target=False),
+            ),
+            EntitySpec(
+                f"{oid}_suggested_target",
+                "sensor",
+                "Vorschlag Ziel-SOC",
+                device,
+                _suggested_target(key),
+                unit="%",
+                attributes=_suggestion_attributes(key, target=True),
+            ),
+            EntitySpec(
+                f"{oid}_next_departure",
+                "sensor",
+                "Nächste Abfahrt",
+                device,
+                _next_departure(key),
+                device_class="timestamp",
+            ),
         ]
     options = (AUTOMATIC, *(vehicle.name for vehicle in cfg.vehicles.values()))
     for key, wallbox in cfg.wallboxes.items():
@@ -1187,6 +1325,8 @@ def build_inputs(
     stats: TodayStats | None = None,
     sessions: Mapping[str, ChargingSession | None] | None = None,
     month_kwh: Mapping[str, float | None] | None = None,
+    driving_profiles: Mapping[str, VehicleProfile] | None = None,
+    auto_target: Mapping[str, bool] | None = None,
 ) -> HaInputs:
     connected = live.connected
     signals: dict[str, Value] = {}
@@ -1275,6 +1415,8 @@ def build_inputs(
         plan_vehicles=(
             [car for car in valid.vehicles if not car.expected] if valid is not None else []
         ),
+        driving_profiles=dict(driving_profiles or {}),
+        auto_target=dict(auto_target or {}),
         thermal=(
             {name: item for name, item in thermal.items() if isinstance(item, dict)}
             if isinstance(thermal, dict)

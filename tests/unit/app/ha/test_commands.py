@@ -75,6 +75,24 @@ class FakePlanning:
         self.calls.append(("request", trigger))
 
 
+class FakeAutomation:
+    """Zeichnet ``set_enabled`` auf; ``error`` wird beim nächsten Aufruf geworfen."""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, bool, str, str]] = []
+        self.error: Exception | None = None
+
+    async def set_enabled(self, key, on, *, actor, source) -> None:
+        if self.error is not None:
+            raise self.error
+        self.calls.append((key, on, actor, source))
+
+
+@pytest.fixture
+def automation() -> FakeAutomation:
+    return FakeAutomation()
+
+
 @pytest.fixture
 def planning() -> FakePlanning:
     return FakePlanning()
@@ -91,8 +109,15 @@ def rejections() -> FakeRejections:
 
 
 @pytest.fixture
-def handler(cfg, intents, rejections, clock, planning) -> HaCommandHandler:
-    return HaCommandHandler(cfg, intents, rejections, clock, planning)  # type: ignore[arg-type]
+def handler(cfg, intents, rejections, clock, planning, automation) -> HaCommandHandler:
+    return HaCommandHandler(
+        cfg,
+        intents,  # type: ignore[arg-type]
+        rejections,
+        clock,
+        planning,
+        automation,  # type: ignore[arg-type]
+    )
 
 
 @pytest.fixture
@@ -568,3 +593,44 @@ async def test_target_and_departure_through_the_real_service(
         ("ha", "intent.target", "tesla")
     ] * 2
     assert rejections.texts == []
+
+
+@pytest.mark.parametrize(("payload", "on"), [("ON", True), ("OFF", False)])
+@pytest.mark.parametrize("key", ["tesla", "egolf"])
+async def test_auto_target_switch_calls_the_automation(
+    handler, automation, intents, rejections, key, payload, on
+) -> None:
+    await handler(f"{key}_auto_target", payload)
+    # Urheber und Quelle wie bei den übrigen Befehlen aus Home Assistant
+    assert automation.calls == [(key, on, "home-assistant", "ha")]
+    assert intents.applied == [] and rejections.texts == []
+
+
+async def test_unknown_auto_target_payload_is_rejected(handler, automation, rejections) -> None:
+    await handler("tesla_auto_target", "VIELLEICHT")
+    assert automation.calls == []
+    assert rejections.texts == [
+        PREFIX + "Unbekannter Befehl „VIELLEICHT“ für „Automatik Ziel und Abfahrt“."
+    ]
+
+
+async def test_auto_target_failures_are_reported(handler, automation, rejections) -> None:
+    automation.error = VersionConflictError(5)
+    await handler("tesla_auto_target", "ON")
+    assert rejections.texts == [PREFIX + str(VersionConflictError(5))]
+    automation.error = UnknownTarget("Unbekanntes Fahrzeug „tesla“.")
+    await handler("egolf_auto_target", "ON")
+    assert rejections.texts[-1] == PREFIX + "Unbekanntes Fahrzeug „tesla“."
+
+
+async def test_unexpected_auto_target_errors_do_not_escape(handler, automation, rejections) -> None:
+    automation.error = RuntimeError("kaputt")
+    with capture_logs() as logs:
+        await handler("tesla_auto_target", "ON")
+    assert rejections.texts == []
+    assert any(entry["event"] == "Befehl aus Home Assistant fehlgeschlagen" for entry in logs)
+
+
+async def test_without_automation_the_switch_is_unknown(bare_handler, rejections) -> None:
+    await bare_handler("tesla_auto_target", "ON")
+    assert rejections.texts == []  # unbekannte Entität: nur im Log

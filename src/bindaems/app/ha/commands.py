@@ -1,8 +1,8 @@
 """Befehle aus Home Assistant (Plan 2d, Präzisierung 15).
 
 Home Assistant hat die Rechte von „Bedienen“: Regelbetrieb, Lademodus, Ziel-SOC und Abfahrt,
-Boost, Zuordnung, Gast-Modus und Akku-Unterstützung. Live-Schaltung (``SetActuators``) und Vorrang
-(``SetPriority``) gibt es hier nicht.
+Boost, Zuordnung, Gast-Modus, Akku-Unterstützung und die Automatik für Ziel und Abfahrt.
+Live-Schaltung (``SetActuators``) und Vorrang (``SetPriority``) gibt es hier nicht.
 Jeder Befehl wird eine ``Change`` an den ``IntentService``; was Home Assistant sendet, kann nichts
 außer diesen Änderungen auslösen. Ein ungültiger oder abgelehnter Befehl ändert nichts und wird
 gemeldet (``Rejections``); keine Ausnahme verlässt den Handler.
@@ -68,6 +68,12 @@ class PlanningCommands(Protocol):
     def request(self, trigger: PlanTrigger) -> None: ...
 
 
+class AutomationCommands(Protocol):
+    """Was die Automatik für Home Assistant tut: den Schalter eines Autos setzen."""
+
+    async def set_enabled(self, key: str, on: bool, *, actor: str, source: Source) -> None: ...
+
+
 @dataclass(frozen=True)
 class SetGridCharge:
     """Schalter „Netzladen erlaubt“."""
@@ -92,6 +98,18 @@ class SupportThreshold:
     """Zahl „Unterstützungsschwelle“ in %, im Bereich USV-Reserve bis 100; der Schalter bleibt."""
 
     soc_pct: float
+
+
+@dataclass(frozen=True)
+class SetAutoTarget:
+    """Schalter „Automatik Ziel und Abfahrt“ eines Fahrzeugs."""
+
+    vehicle: str
+    on: bool
+
+
+# was ein Befehl aus Home Assistant bewirken kann
+Command = Change | SetGridCharge | Replan | SupportSwitch | SupportThreshold | SetAutoTarget
 
 
 class Refused(Exception):
@@ -127,13 +145,11 @@ class _Command:
 
     name: str
     # ``None``: Nutzlast unbekannt; ``Refused``: bekannt, aber nicht erlaubt
-    parse: Callable[
-        [str], Change | SetGridCharge | Replan | SupportSwitch | SupportThreshold | None
-    ]
+    parse: Callable[[str], Command | None]
     option: bool  # ``select`` (Option) oder Schalter und Taste (Befehl)
 
 
-def _table(cfg: Config, planning: bool) -> dict[str, _Command]:
+def _table(cfg: Config, planning: bool, automation: bool) -> dict[str, _Command]:
     by_label = {label: mode for mode, label in MODE_LABELS.items()}
     guest_by_label = {label: mode for mode, label in GUEST_MODE_LABELS.items()}
 
@@ -188,6 +204,9 @@ def _table(cfg: Config, planning: bool) -> dict[str, _Command]:
     def grid_charge(payload: str) -> SetGridCharge | None:
         return SetGridCharge(payload == ON) if payload in (ON, OFF) else None
 
+    def auto_target(key: str) -> Callable[[str], SetAutoTarget | None]:
+        return lambda payload: SetAutoTarget(key, payload == ON) if payload in (ON, OFF) else None
+
     reserve = cfg.battery.reserve_soc_pct
 
     def support_switch(payload: str) -> SupportSwitch | None:
@@ -226,6 +245,10 @@ def _table(cfg: Config, planning: bool) -> dict[str, _Command]:
         table[f"{oid}_boost_stop"] = _Command(
             "Boost beenden", press(SetBoost(key, False)), option=False
         )
+        if automation:
+            table[f"{oid}_auto_target"] = _Command(
+                "Automatik Ziel und Abfahrt", auto_target(key), option=False
+            )
     for key in cfg.wallboxes:
         table[f"{object_id(key)}_assignment"] = _Command("Zuordnung", assignment(key), option=True)
     return table
@@ -241,11 +264,14 @@ class HaCommandHandler:
         rejections: Rejections,
         clock: Clock,
         planning: PlanningCommands | None = None,
+        automation: AutomationCommands | None = None,
     ) -> None:
-        # ohne Planung kennt der Handler „Netzladen erlaubt“ und „Neu planen“ nicht
-        self._commands = _table(cfg, planning is not None)
+        # ohne Planung kennt der Handler „Netzladen erlaubt“ und „Neu planen“ nicht, ohne
+        # Automatik den Schalter „Automatik Ziel und Abfahrt“ nicht
+        self._commands = _table(cfg, planning is not None, automation is not None)
         self._intents = intents
         self._planning = planning
+        self._automation = automation
         self._rejections = rejections
         self._clock = clock
         self._last: dict[str, datetime] = {}
@@ -286,18 +312,20 @@ class HaCommandHandler:
         except Exception:
             log.exception("Befehl aus Home Assistant fehlgeschlagen", object_id=object_id)
 
-    async def _execute(
-        self, change: Change | SetGridCharge | Replan | SupportSwitch | SupportThreshold
-    ) -> None:
-        planning = self._planning
+    async def _execute(self, change: Command) -> None:
+        planning, automation = self._planning, self._automation
         if isinstance(change, SupportSwitch | SupportThreshold):
             await self._intents.apply(await self._support(change), actor=ACTOR, source=SOURCE)
+        elif isinstance(change, SetAutoTarget):
+            if automation is not None:
+                # speichert die Einstellung selbst (Thread) und schreibt den Eintrag ins Protokoll
+                await automation.set_enabled(change.vehicle, change.on, actor=ACTOR, source=SOURCE)
         elif isinstance(change, SetGridCharge) and planning is not None:
             # blockiert (Datenbank): nicht in der Ereignisschleife
             await asyncio.to_thread(planning.set_grid_charge, change.on, actor=ACTOR, source=SOURCE)
         elif isinstance(change, Replan) and planning is not None:
             planning.request("manual")
-        elif not isinstance(change, SetGridCharge | Replan | SupportSwitch | SupportThreshold):
+        elif not isinstance(change, SetGridCharge | Replan):
             await self._intents.apply(change, actor=ACTOR, source=SOURCE)
 
     async def _support(self, change: SupportSwitch | SupportThreshold) -> SetSupport:

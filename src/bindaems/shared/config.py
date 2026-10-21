@@ -80,6 +80,10 @@ HA_VEHICLE_SUFFIXES = (
     "departure",
     "done_by",
     "target_reachable",
+    "auto_target",  # Fahrverhalten (Plan 5b, Präzisierung 13)
+    "suggested_departure",
+    "suggested_target",
+    "next_departure",
 )
 HA_WALLBOX_SUFFIXES = ("power", "assignment", "occupant")
 # Sensoren je Klimaanlage: ``thermal_<Schlüssel>_<Endung>`` (Plan 6a, Entscheidung 12). Das Präfix

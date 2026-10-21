@@ -456,6 +456,7 @@ Entitäten (Gerät „BindaEMS“, sofern nicht anders angegeben):
 | SOC (Gerät „BindaEMS <Fahrzeug>“) | % | je Fahrzeug |
 | Wallbox (Gerät „BindaEMS <Fahrzeug>“) | – | je Fahrzeug der Name der Wallbox, an der es steht (eigener Name oder „EVCS“ / „Wall Connector“), sonst „keine“ |
 | Fertig um, Ziel erreichbar (Gerät „BindaEMS <Fahrzeug>“) | – | je Fahrzeug im Modus „Geplant“ (Unterabschnitt „Geplantes Laden“) |
+| Vorschlag Abfahrt, Vorschlag Ziel-SOC, Nächste Abfahrt (Gerät „BindaEMS <Fahrzeug>“) | –, %, – | je Fahrzeug der gelernte Vorschlag und die nächste Abfahrt (Abschnitt „Fahrverhalten (Phase 5b)“, „Home Assistant“); „Unbekannt“ ohne Vorschlag |
 | Ladeenergie (Gerät „BindaEMS <Fahrzeug>“) | kWh | je Fahrzeug die Energie der laufenden Ladesession, sonst der letzten (eine Nachkommastelle, Geräteklasse „Energie“, ohne Zustandsklasse); Attribute `start` und `end` (Ortszeit, `end` ist `null`, solange die Session läuft), `pv_kwh`, `battery_kwh`, `grid_kwh` (Herkunft der Energie), `cost_eur` (`null`, wenn ein Preis fehlt oder der Einstandspreis des Akkus unbekannt ist) und `month_kwh` (Ladeenergie des Fahrzeugs im Monat). „Unbekannt“ ohne laufende Session und ohne beendete der letzten 90 Tage (eine laufende zählt, egal wie lange sie schon läuft) |
 | Klima Versatz (`thermal_<Schlüssel>_offset`) | K | je Klimaanlage (Abschnitt „Klimaanlage (Phase 6a)“) der Versatz, den die UVR anwendet (das Echo), ersatzweise der zuletzt gesendete; eine Nachkommastelle. „Klima“ steht für den Namen der Klimaanlage (`label`): bei einem eigenen Namen steht er ganz davor, etwa „Büro Versatz“ |
 | Klima Betriebsart (`thermal_<Schlüssel>_mode`) | – | `heizen`, `kuehlen`, `lueften`, `aus` oder `unbekannt` |
@@ -491,6 +492,7 @@ steht die Quelle „ha“.
 | Abfahrtszeit (je Fahrzeug) | Text | die tägliche Abfahrt für „Geplant“ als `HH:MM` (00:00 bis 23:59); das Ziel bleibt |
 | Boost (je Fahrzeug) | Taste | Boost bis zum Abstecken, höchstens 12 h |
 | Boost beenden (je Fahrzeug) | Taste | beendet den Boost |
+| Automatik Ziel und Abfahrt (je Fahrzeug) | Schalter | schaltet die Automatik, die Ziel und Abfahrt von „Geplant“ nach dem Vorschlag setzt (Abschnitt „Fahrverhalten (Phase 5b)“); ab Werk aus. Eine Änderung ist eine neue Version der Einstellungen und steht im Änderungsprotokoll als `control.automation` mit der Quelle „ha“ |
 | Zuordnung (je Wallbox) | Auswahl | „Automatisch“ oder der Name eines Fahrzeugs; „Automatisch“ hebt jede Übersteuerung dieser Wallbox auf (Abschnitt „Laderegelung“, „Zuordnung Auto und Wallbox“) |
 | Regelbetrieb | Schalter | schaltet den Regelbetrieb ein oder aus |
 | Gast-Lademodus | Auswahl | der Modus für einen Gast an jeder Wallbox; ohne „Geplant“, denn für einen Gast gibt es weder Ladestand noch Abfahrt |
@@ -4480,6 +4482,34 @@ Das Schalten steht im Änderungsprotokoll als Aktion `control.automation` („Au
 „Automatik aus“, Urheber ist der Benutzer); die Änderung von Ziel und Abfahrt durch die Automatik
 steht dort mit dem Urheber „Automatik“.
 
+### Home Assistant
+
+Seit Plan 5b hat jedes Fahrzeug vier Entitäten am Gerät „BindaEMS <Fahrzeug>“. Die Objekt-IDs stehen
+hier für den Schlüssel `tesla` der Beispielkonfiguration; bei einem anderen Fahrzeug steht dessen
+Schlüssel vorn.
+
+| Objekt-ID | Name | Plattform | Wert |
+|---|---|---|---|
+| `tesla_auto_target` | Automatik Ziel und Abfahrt | switch | „an“, wenn die Automatik für das Auto an ist (`learning.driving.automation`); schreibend, mit den Rechten von „Bedienen“ (Quelle „ha“, Urheber `home-assistant`) |
+| `tesla_suggested_departure` | Vorschlag Abfahrt | sensor | die nächste erwartete Abfahrt als Zeitstempel (Geräteklasse „timestamp“, UTC); Attribute `confidence` und `basis` |
+| `tesla_suggested_target` | Vorschlag Ziel-SOC | sensor | das vorgeschlagene Ziel in % für diese Fahrt; Attribute `confidence` und `basis` |
+| `tesla_next_departure` | Nächste Abfahrt | sensor | die nächste Abfahrt aus Health (`planned.departure_at`) als Zeitstempel; ohne Attribute |
+
+- **Vorschlag:** „Vorschlag Abfahrt“ und „Vorschlag Ziel-SOC“ stammen aus derselben nächsten
+  erwarteten Fahrt wie `next_trip` in der API: Tag und Uhrzeit sind lokal (Wiener Zeit), Home
+  Assistant bekommt den Zeitpunkt in UTC. Das Attribut `confidence` ist „hoch“, „mittel“ oder
+  „niedrig“ (für die Abfahrt bzw. für das Ziel), `basis` ist „Wochentag“ oder, wenn der Wochentag zu
+  wenige Tage hat, „Gruppe Mo–Fr“, „Gruppe Sa“ oder „Gruppe So/Feiertag“; ein Feiertag zählt zu
+  „So/Feiertag“.
+- **Unbekannt bleibt unbekannt:** Ohne Profil, ohne Fahrt in den nächsten acht Tagen (oder ohne
+  Ziel) sind der Sensor „unbekannt“ und beide Attribute `null`; nie steht ein Ersatzwert da.
+  „Nächste Abfahrt“ ist „unbekannt“, solange Health keine Abfahrt nennt (etwa weil das Auto nicht in
+  „Geplant“ steht).
+- **Schalten:** Nach einem Befehl veröffentlicht die app den Zustand des Schalters gleich neu. Das
+  Einschalten prüft die Automatik sofort und beendet eine Pause (siehe oben). Wie für alle Befehle
+  gilt höchstens ein Befehl je Sekunde und Entität (Abschnitt 7, „Bedienelemente und Befehle“).
+- **Zeiten:** Alle Zeitstempel der Entitäten dieses Abschnitts sind ISO 8601 in UTC.
+
 ### API für das Fahrverhalten
 
 - `GET /api/learning/driving` (ab „Lesen“): `computed_at`, `running`, `status` (`ok`, `text`) und
@@ -4488,8 +4518,8 @@ steht dort mit dem Urheber „Automatik“.
   `departure_p80`, `departure_confidence`, `arrival_p50`, `arrival_soc_p50`, `consumption_p50_pp`,
   `consumption_p80_pp`, `target_soc_pct`, `target_clamped`, `target_confidence`), `next_trip`,
   `presence`, `quality` (Trefferquote der letzten 28 Tage) und `automation` (`enabled`, `state`,
-  `text`, `paused_until`, `last_set_at`). Alle Zeiten sind ISO 8601 in UTC. `presence` nennt die
-  nächsten 48 Stunden als Viertelstunden `{"start": …, "p": 0.88}` ab dem Beginn der laufenden
+  `text`, `paused_until`, `last_set_at`). Alle Zeitstempel sind ISO 8601 in UTC, Werte der Form
+  `HH:MM` sind Ortszeit. `presence` nennt die nächsten 48 Stunden als Viertelstunden `{"start": …, "p": 0.88}` ab dem Beginn der laufenden
   Viertelstunde, `p` auf zwei Stellen gerundet; ohne Profil ist die Liste leer. Ein Auto ohne Stand
   fehlt nicht: `source`, `data_from` und `data_to` sind `null`, `days` ist 0 und `weekdays` leer.
   `next_trip`, die Trefferquoten und die Werte je Wochentag können `null` sein.

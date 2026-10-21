@@ -18,6 +18,7 @@ from tests.plan_helpers import (
 
 from bindaems.app.charging.sessions import ChargingSession, FlowSplit
 from bindaems.app.ha.entities import (
+    UNKNOWN,
     EntitySpec,
     HaInputs,
     build_entities,
@@ -25,6 +26,7 @@ from bindaems.app.ha.entities import (
     discovery,
     on_off,
 )
+from bindaems.app.learning.driving_profile import VehicleProfile, WeekdayProfile
 from bindaems.app.ledger.service import MonthPeak
 from bindaems.app.planning.builder import build_plan
 from bindaems.app.prices.service import PriceService
@@ -91,6 +93,10 @@ def test_entities_from_config(cfg) -> None:
         "tesla_departure",
         "tesla_done_by",
         "tesla_target_reachable",
+        "tesla_auto_target",
+        "tesla_suggested_departure",
+        "tesla_suggested_target",
+        "tesla_next_departure",
         "egolf_soc",
         "egolf_mode",
         "egolf_boost",
@@ -101,6 +107,10 @@ def test_entities_from_config(cfg) -> None:
         "egolf_departure",
         "egolf_done_by",
         "egolf_target_reachable",
+        "egolf_auto_target",
+        "egolf_suggested_departure",
+        "egolf_suggested_target",
+        "egolf_next_departure",
         "evcs_power",
         "evcs_assignment",
         "evcs_occupant",
@@ -1216,3 +1226,200 @@ def test_build_inputs_takes_the_thermal_health(
     assert build_inputs(live, price_service, store, forecast_service, T_APP).thermal == {}
     live.connected = False
     assert build_inputs(live, price_service, store, forecast_service, T_APP).thermal == {}
+
+
+# --- Fahrverhalten und Automatik (Plan 5b, Präzisierung 13) ------------------------------------
+
+# Sonntag, 25.10.2026 12:00 Uhr Ortszeit (MEZ, die Sommerzeit endete in der Nacht): Montag, der
+# 26.10., ist ein Feiertag und gilt als „So/Feiertag“ (6).
+SUNDAY = datetime(2026, 10, 25, 11, 0, tzinfo=UTC)
+
+
+def _weekday(weekday: int, **changes: Any) -> WeekdayProfile:
+    values: dict[str, Any] = {
+        "weekday": weekday,
+        "basis": "weekday",
+        "days": 8,
+        "trips": 8,
+        "trip_share": 1.0,
+        "departure_min": None,
+        "departure_p50_min": None,
+        "departure_p80_min": None,
+        "departure_confidence": None,
+        "arrival_p50_min": None,
+        "arrival_soc_p50": None,
+        "consumption_p50_pp": None,
+        "consumption_p80_pp": None,
+        "target_soc_pct": None,
+        "target_clamped": False,
+        "target_confidence": None,
+    }
+    return WeekdayProfile(**(values | changes))
+
+
+def _profile(**by_weekday: dict[str, Any]) -> VehicleProfile:
+    """Ein Profil, in dem nur die genannten Wochentage (``d0`` bis ``d6``) einen Vorschlag haben."""
+    weekdays = [_weekday(i, **by_weekday.get(f"d{i}", {})) for i in range(7)]
+    return VehicleProfile(
+        key="tesla",
+        source="tessie",
+        data_from=SUNDAY - timedelta(days=56),
+        data_to=SUNDAY,
+        days=56,
+        weekdays=weekdays,
+        presence=[[0.0] * 96 for _ in range(7)],
+    )
+
+
+HOLIDAY_TRIP = {
+    "d6": {
+        "departure_min": 7 * 60 + 30,
+        "departure_confidence": "high",
+        "target_soc_pct": 75,
+        "target_confidence": "medium",
+    }
+}
+
+
+def test_vehicle_has_driving_entities(cfg) -> None:
+    switch = config_of(cfg, "tesla_auto_target")
+    assert (switch["name"], switch["payload_on"], switch["payload_off"]) == (
+        "Automatik Ziel und Abfahrt",
+        "ON",
+        "OFF",
+    )
+    assert switch["command_topic"] == "bindaems/cmd/tesla_auto_target"
+    assert switch["state_topic"] == "bindaems/state/tesla_auto_target"
+    assert entity(cfg, "tesla_auto_target").component == "switch"
+    departure = config_of(cfg, "tesla_suggested_departure")
+    assert (departure["name"], departure["device_class"]) == ("Vorschlag Abfahrt", "timestamp")
+    assert (
+        departure["json_attributes_topic"] == "bindaems/state/tesla_suggested_departure/attributes"
+    )
+    target = config_of(cfg, "tesla_suggested_target")
+    assert (target["name"], target["unit_of_measurement"]) == ("Vorschlag Ziel-SOC", "%")
+    assert target["json_attributes_topic"] == "bindaems/state/tesla_suggested_target/attributes"
+    nxt = config_of(cfg, "tesla_next_departure")
+    assert (nxt["name"], nxt["device_class"]) == ("Nächste Abfahrt", "timestamp")
+    for oid in ("suggested_departure", "suggested_target", "next_departure"):
+        spec = entity(cfg, f"tesla_{oid}")
+        assert spec.component == "sensor" and not spec.command, oid
+    assert "json_attributes_topic" not in nxt
+    # die Entitäten gehören zum Gerät des Fahrzeugs
+    assert entity(cfg, "egolf_auto_target").device.name == "BindaEMS e-Golf"
+
+
+def test_suggested_departure_is_timestamp_with_confidence(cfg) -> None:
+    inputs = sample_inputs(driving_profiles={"tesla": _profile(**HOLIDAY_TRIP)}, now=SUNDAY)
+    spec = entity(cfg, "tesla_suggested_departure")
+    # Montag, 26.10. (Feiertag), 07:30 Uhr Ortszeit (MEZ, UTC+1) als UTC-Zeitpunkt
+    assert spec.value(inputs) == "2026-10-26T06:30:00+00:00"
+    assert spec.attributes(inputs) == {"confidence": "hoch", "basis": "Wochentag"}
+    target = entity(cfg, "tesla_suggested_target")
+    assert target.value(inputs) == "75"
+    assert target.attributes(inputs) == {"confidence": "mittel", "basis": "Wochentag"}
+
+
+@pytest.mark.parametrize(
+    ("weekday", "now", "basis"),
+    [
+        # ``now`` ist jeweils der Tag vor der Fahrt, mittags
+        (0, datetime(2026, 10, 18, 11, 0, tzinfo=UTC), "Gruppe Mo–Fr"),  # Montag 19.10.
+        (4, datetime(2026, 10, 15, 11, 0, tzinfo=UTC), "Gruppe Mo–Fr"),  # Freitag 16.10.
+        (5, datetime(2026, 10, 16, 11, 0, tzinfo=UTC), "Gruppe Sa"),  # Samstag 17.10.
+        (6, datetime(2026, 10, 17, 11, 0, tzinfo=UTC), "Gruppe So/Feiertag"),  # Sonntag 18.10.
+    ],
+)
+def test_basis_names_the_group_of_the_trip_day(cfg, weekday, now, basis) -> None:
+    day = {
+        "basis": "group",
+        "departure_min": 8 * 60,
+        "departure_confidence": "low",
+        "target_soc_pct": 60,
+        "target_confidence": "low",
+    }
+    inputs = sample_inputs(driving_profiles={"tesla": _profile(**{f"d{weekday}": day})}, now=now)
+    for oid in ("tesla_suggested_departure", "tesla_suggested_target"):
+        assert entity(cfg, oid).attributes(inputs) == {"confidence": "niedrig", "basis": basis}
+
+
+def test_a_holiday_uses_the_sunday_profile(cfg) -> None:
+    # der Montag, 26.10., ist ein Feiertag: Es zählt der Eintrag 6, nicht der des Montags
+    monday = {"departure_min": 6 * 60, "departure_confidence": "low"}
+    profile = _profile(d0=monday, **HOLIDAY_TRIP)
+    inputs = sample_inputs(driving_profiles={"tesla": profile}, now=SUNDAY)
+    assert state(cfg, "tesla_suggested_departure", inputs) == "2026-10-26T06:30:00+00:00"
+
+
+def test_no_suggestion_is_unknown_not_none(cfg) -> None:
+    # ohne Profil, ohne Zeitpunkt und ohne Fahrt in den nächsten Tagen: HA „unbekannt“ (die
+    # Nutzlast, die HA als unbekannt liest, nie ein Ersatzwert) und leere Attribute
+    nothing = _profile()
+    for inputs in (
+        sample_inputs(now=SUNDAY),
+        sample_inputs(driving_profiles={"tesla": nothing}, now=SUNDAY),
+        sample_inputs(driving_profiles={"tesla": _profile(**HOLIDAY_TRIP)}, now=None),
+    ):
+        for oid in ("tesla_suggested_departure", "tesla_suggested_target"):
+            spec = entity(cfg, oid)
+            assert spec.value(inputs) == UNKNOWN, oid
+            assert spec.attributes(inputs) == {"confidence": None, "basis": None}, oid
+
+
+def test_suggested_target_unknown_when_only_the_departure_is_known(cfg) -> None:
+    only_departure = {
+        "d6": HOLIDAY_TRIP["d6"] | {"target_soc_pct": None, "target_confidence": None}
+    }
+    inputs = sample_inputs(driving_profiles={"tesla": _profile(**only_departure)}, now=SUNDAY)
+    assert state(cfg, "tesla_suggested_target", inputs) == UNKNOWN
+    assert entity(cfg, "tesla_suggested_target").attributes(inputs) == {
+        "confidence": None,
+        "basis": None,
+    }
+    assert state(cfg, "tesla_suggested_departure", inputs) == "2026-10-26T06:30:00+00:00"
+
+
+def test_the_suggestion_of_another_vehicle_does_not_leak(cfg) -> None:
+    inputs = sample_inputs(driving_profiles={"tesla": _profile(**HOLIDAY_TRIP)}, now=SUNDAY)
+    assert state(cfg, "egolf_suggested_departure", inputs) == UNKNOWN
+
+
+def test_auto_target_switch_state(cfg) -> None:
+    on, off = sample_inputs(auto_target={"tesla": True, "egolf": False}), sample_inputs()
+    assert (state(cfg, "tesla_auto_target", on), state(cfg, "egolf_auto_target", on)) == (
+        "ON",
+        "OFF",
+    )
+    assert state(cfg, "tesla_auto_target", off) == UNKNOWN  # Zustand unbekannt
+
+
+def test_next_departure_from_health(cfg) -> None:
+    inputs = _planned(vehicles=[_health_car()])
+    assert state(cfg, "tesla_next_departure", inputs) == DEPARTURE.astimezone(UTC).isoformat()
+    # ohne Teil „planned“, mit unlesbarem Zeitpunkt oder ohne Eintrag: unbekannt
+    for vehicles in (
+        [{"id": "tesla", "planned": None}],
+        [_health_car(departure_at="morgen")],
+        [_health_car(departure_at=None)],
+        [],
+    ):
+        assert state(cfg, "tesla_next_departure", _planned(vehicles=vehicles)) == UNKNOWN
+    assert entity(cfg, "tesla_next_departure").attributes is None
+
+
+def test_build_inputs_takes_the_driving_values(
+    live, price_service, store, forecast_service
+) -> None:
+    profiles = {"tesla": _profile()}
+    inputs = build_inputs(
+        live,
+        price_service,
+        store,
+        forecast_service,
+        T_APP,
+        driving_profiles=profiles,
+        auto_target={"tesla": True},
+    )
+    assert inputs.driving_profiles == profiles and inputs.auto_target == {"tesla": True}
+    plain = build_inputs(live, price_service, store, forecast_service, T_APP)
+    assert (plain.driving_profiles, plain.auto_target) == ({}, {})

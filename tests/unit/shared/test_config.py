@@ -9,6 +9,7 @@ from pydantic import ValidationError
 
 from bindaems.core.control.fleet import GUEST, guest_key
 from bindaems.shared.config import (
+    HA_VEHICLE_SUFFIXES,
     AppConfig,
     CoeChannel,
     Config,
@@ -564,6 +565,10 @@ def test_object_ids_include_planned_and_statistics_entities(cfg) -> None:
         "tesla_done_by",
         "tesla_target_reachable",
         "egolf_charge_energy",
+        "tesla_auto_target",
+        "tesla_suggested_departure",
+        "egolf_suggested_target",
+        "egolf_next_departure",
     } <= set(ids)
     assert len(ids) == len(set(ids))
 
@@ -934,4 +939,25 @@ def test_a_vehicle_key_must_not_collide_with_a_thermal_entity(tmp_path) -> None:
     with pytest.raises(
         ConfigError, match=r"thermal\.klima: .*thermal_klima_mode.*vehicles\.thermal_klima"
     ):
+        load_config(write_cfg(tmp_path, mutate))
+
+
+def test_driving_suffixes_are_ha_vehicle_suffixes() -> None:
+    assert {"auto_target", "suggested_departure", "suggested_target", "next_departure"} <= set(
+        HA_VEHICLE_SUFFIXES
+    )
+    assert len(HA_VEHICLE_SUFFIXES) == len(set(HA_VEHICLE_SUFFIXES))
+
+
+@pytest.mark.parametrize(
+    ("key", "entity"),
+    [("tesla_suggested", "tesla_suggested_departure"), ("tesla_next", "tesla_next_departure")],
+)
+def test_suffix_collision_is_detected(tmp_path, key, entity) -> None:
+    # „tesla_next“ mit der Endung „departure“ ergäbe dieselbe Entität wie „tesla“ mit
+    # „next_departure“
+    def mutate(d: dict[str, Any]) -> None:
+        d["vehicles"][key] = d["vehicles"].pop("egolf")
+
+    with pytest.raises(ConfigError, match=rf"vehicles\.{key}: .*{entity}.*vehicles\.tesla"):
         load_config(write_cfg(tmp_path, mutate))

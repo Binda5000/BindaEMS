@@ -125,6 +125,14 @@ def _cases(cfg: Config) -> dict[str, Case]:
                 api=(f"{path}/target", {"target_soc_pct": None, "departure": "08:15"}),
                 shown="08:15",
             ),
+            # die Automatik des Tesla ist in der Demo an, die des e-Golf aus: HA kehrt sie um, die
+            # API danach wieder
+            f"{oid}_auto_target": Case(
+                "OFF" if key == "tesla" else "ON",
+                lambda w, key=key: w.app.automation.enabled(key) is (key != "tesla"),
+                api=(f"{path}/automation", {"on": key == "tesla"}),
+                shown="ON" if key == "tesla" else "OFF",
+            ),
             f"{oid}_boost": Case("PRESS", lambda w, get=get: get(w).boost_until is not None),
             f"{oid}_boost_stop": Case("PRESS", lambda w, get=get: get(w).boost_until is None),
         }
@@ -160,7 +168,9 @@ async def test_every_command_entity_round_trips(world) -> None:
     cases = _cases(cfg)
     assert sorted(cases) == sorted(spec.object_id for spec in entities if spec.command)
     rejections = Rejections()
-    commands = HaCommandHandler(cfg, app.intents, rejections, world.clock, app.planning)
+    commands = HaCommandHandler(
+        cfg, app.intents, rejections, world.clock, app.planning, app.automation
+    )
     transport = FakeTransport([], False, mqtt.publish_interval_s)
     await app.intents.current()  # die gültige Absicht des core im Cache
 

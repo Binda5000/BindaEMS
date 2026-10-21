@@ -402,6 +402,7 @@ class AppRuntime:
                     self.ha_notifier or LogRejections(),
                     self._clock,
                     self.planning,
+                    self.automation,
                 ),
             )
             self.ledger.on_slots_changed(self._on_stats_slots)
@@ -521,16 +522,22 @@ class AppRuntime:
             return cached.support.soc_pct
         return self._cfg.control.support_soc_pct
 
+    def _auto_targets(self) -> dict[str, bool]:
+        """Schalter „Automatik Ziel und Abfahrt“ je Auto (Speicher, ohne Datenbank)."""
+        return {key: bool(self.automation.state(key)["enabled"]) for key in self._cfg.vehicles}
+
     def _current_ha_inputs(self) -> HaInputs:
         if self._ha_inputs is None:  # der Publisher startet erst nach den ersten Werten
             raise RuntimeError("Werte für Home Assistant noch nicht bestimmt")
+        inputs = self._ha_inputs
+        auto_target = self._auto_targets()  # nach einem Befehl gleich der neue Schalter
+        if auto_target != inputs.auto_target:
+            inputs = replace(inputs, auto_target=auto_target)
         cached = self.intents.cached()  # nach einem Befehl gleich die neue Absicht zeigen
-        if cached is None or cached == self._ha_inputs.intent:
-            return self._ha_inputs
+        if cached is None or cached == inputs.intent:
+            return inputs
         allowed, soc_pct = support_of(cached, self._cfg.control.support_soc_pct)
-        return replace(
-            self._ha_inputs, intent=cached, support_allowed=allowed, support_soc_pct=soc_pct
-        )
+        return replace(inputs, intent=cached, support_allowed=allowed, support_soc_pct=soc_pct)
 
     def _build_ha_inputs(self, intent: Intent | None) -> HaInputs:
         """Läuft im Worker-Thread (``_ha_inputs_loop``): die Datenbankabfrage blockiert nicht."""
@@ -552,6 +559,8 @@ class AppRuntime:
             stats=cached.stats,
             sessions=cached.sessions,
             month_kwh=cached.month_kwh,
+            driving_profiles=self.driving.profiles(),
+            auto_target=self._auto_targets(),
         )
 
     async def _ha_intent(self) -> Intent | None:

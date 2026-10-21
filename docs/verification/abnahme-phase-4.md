@@ -261,6 +261,7 @@ Prüfschritte, je Zeile der Tabelle:
 | Abfahrtszeit (je Fahrzeug) | „BindaEMS <Fahrzeug>“ | Laden, Fahrzeugkarte in „Geplant“ („Abfahrt“) | ☐ | ☐ |
 | Boost (je Fahrzeug) | „BindaEMS <Fahrzeug>“ | Laden, „Boost beenden“ und „bis HH:MM“ | ☐ | – (Taste ohne Zustand) |
 | Boost beenden (je Fahrzeug) | „BindaEMS <Fahrzeug>“ | Laden, wieder „Boost“ | ☐ | – (Taste ohne Zustand) |
+| Automatik Ziel und Abfahrt (je Fahrzeug) | „BindaEMS <Fahrzeug>“ | Laden, Fahrzeugkarte („Ziel und Abfahrt automatisch“) | ☐ | ☐ |
 | Zuordnung (je Wallbox) | „BindaEMS EVCS“ / „BindaEMS Wall Connector“ | Laden, Wallbox-Karte | ☐ | ☐ |
 | Regelbetrieb | „BindaEMS“ | System, „Bedienung“ | ☐ | ☐ |
 | Gast-Lademodus | „BindaEMS“ | Laden, „Gast“ | ☐ | ☐ |

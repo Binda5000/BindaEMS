@@ -1038,6 +1038,33 @@ def test_planned_charging_entities_in_the_guide_exist() -> None:
     assert "Sofort, Aus oder Geplant" in section
 
 
+def test_driving_entities_in_the_guide_exist() -> None:
+    # „Fahrverhalten (Phase 5b)“, Unterabschnitt „Home Assistant“: Objekt-ID, Name und Plattform
+    # wie die Entitäten der app; der Schalter steht auch in der Tabelle der Bedienelemente und
+    # alle vier im Abschnitt 7.
+    _check_entities_exist(
+        _documented_entities("Fahrverhalten (Phase 5b)"),
+        {
+            "tesla_auto_target",
+            "tesla_suggested_departure",
+            "tesla_suggested_target",
+            "tesla_next_departure",
+        },
+    )
+    section = " ".join(_guide_section("Fahrverhalten (Phase 5b)").split())
+    for confidence in ("„hoch“", "„mittel“", "„niedrig“"):
+        assert confidence in section
+    for basis in ("„Wochentag“", "„Gruppe Mo–Fr“", "„Gruppe Sa“", "„Gruppe So/Feiertag“"):
+        assert basis in section
+    # Zeitstempel sind UTC, `HH:MM` ist Ortszeit (Fehler der Task 11 im Satz zu den Zeiten)
+    assert "Alle Zeiten sind ISO 8601 in UTC" not in section
+    assert "Alle Zeitstempel sind ISO 8601 in UTC, Werte der Form `HH:MM` sind Ortszeit" in section
+    controls = _guide_section("7. Home Assistant über MQTT")
+    assert "| Automatik Ziel und Abfahrt (je Fahrzeug) | Schalter |" in controls
+    for name in ("Vorschlag Abfahrt", "Vorschlag Ziel-SOC", "Nächste Abfahrt"):
+        assert name in controls
+
+
 def test_support_entities_in_the_guide_exist() -> None:
     # „Akku-Unterstützung bedienen“: der Schalter und die Zahl (Plattform `number`) mit Namen wie
     # in der app; die Bedienelemente der Tabelle in Abschnitt 7 nennen dieselben Namen.

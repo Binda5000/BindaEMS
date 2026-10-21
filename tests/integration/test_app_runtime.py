@@ -1170,6 +1170,19 @@ async def test_ha_inputs_carry_the_support_of_the_intent_or_the_config(
     assert (shown.support_allowed, shown.support_soc_pct) == (True, default)
 
 
+async def test_ha_inputs_carry_the_driving_values_and_show_the_switch_at_once(runtime) -> None:
+    # Profile aus dem Speicher des Fahrverhaltens und der Schalter der Automatik je Auto; nach einem
+    # Befehl zeigt Home Assistant den neuen Schalter gleich, ohne auf die nächsten Werte zu warten
+    inputs = runtime._build_ha_inputs(Intent(version=1))
+    assert inputs.driving_profiles == dict(runtime.driving.profiles())
+    assert inputs.auto_target == {key: False for key in runtime._cfg.vehicles}
+    runtime._ha_inputs = inputs
+    await runtime.automation.set_enabled("tesla", True, actor="home-assistant", source="ha")
+    shown = runtime._current_ha_inputs()
+    assert shown.auto_target["tesla"] is True and shown.auto_target["egolf"] is False
+    assert runtime._ha_inputs.auto_target["tesla"] is False  # die gespeicherten Werte bleiben
+
+
 async def test_ha_inputs_carry_the_plan_and_the_grid_charge_switch(runtime, monkeypatch) -> None:
     # Sensoren und Schalter des Plans lesen aus ``inputs.plan`` und ``grid_charge_allowed``.
     plan = sample_plan(T_APP.isoformat(), ["08:00", "08:15"])
