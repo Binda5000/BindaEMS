@@ -186,14 +186,22 @@ export const api = {
 			body: { mode },
 			schema: s.ControlReplySchema
 		}),
-	/** Ziel-SOC (ganze Zahl) und Abfahrt (`HH:MM`) für „Geplant“; `null` lässt das Feld, nie beide */
+	/**
+	 * Ziel-SOC (ganze Zahl) und Abfahrt (`HH:MM`) für „Geplant“; `null` lässt das Feld, nie beide.
+	 * `departureOn` (`YYYY-MM-DD`) legt die Abfahrt auf diesen Tag; ohne Angabe wird es nicht gesendet.
+	 */
 	setTarget: (
 		vehicle: string,
 		targetSocPct: number | null,
-		departure: string | null
+		departure: string | null,
+		departureOn?: string | null
 	): Promise<s.ControlReply> =>
 		request('PUT', `/api/control/vehicles/${encode(vehicle)}/target`, {
-			body: { target_soc_pct: targetSocPct, departure },
+			body: {
+				target_soc_pct: targetSocPct,
+				departure,
+				...(departureOn === undefined ? {} : { departure_on: departureOn })
+			},
 			schema: s.ControlReplySchema
 		}),
 	/** Ab „Bedienen“: schaltet die Automatik für Ziel und Abfahrt; die Antwort ist ihr neuer Zustand */

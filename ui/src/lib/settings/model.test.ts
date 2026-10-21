@@ -1,4 +1,4 @@
-import { expect, it } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import error422 from '$lib/api/contract/error-422.json';
 import { settingsCurrent } from '$lib/testing/fixtures';
 import {
@@ -414,7 +414,13 @@ it('übernimmt Schalter und Sensoren des Lastmodells', () => {
 	const draft = draftFrom(current);
 	expect(draft.learning).toEqual({
 		loadModelEnabled: true,
-		haSensors: ['sensor.aussentemperatur', 'sensor.wohnzimmer_temperatur']
+		haSensors: ['sensor.aussentemperatur', 'sensor.wohnzimmer_temperatur'],
+		driving: {
+			returnReservePct: '20',
+			targetMinPct: '50',
+			targetMaxPct: '90',
+			presenceEntities: {}
+		}
 	});
 	draft.learning.loadModelEnabled = false;
 	draft.learning.haSensors = [' person.anna ', 'sensor.aussentemperatur'];
@@ -458,4 +464,103 @@ it('ordnet Serverfehler der Sensorliste zu', () => {
 			settings()
 		)
 	).toEqual({ 'learning.ha_sensors.1': 'ungültig' });
+});
+
+describe('Fahrverhalten', () => {
+	it('übernimmt Puffer, Grenzen und Entitäten ins Formular und legt Felder für alle Autos an', () => {
+		const current = settings();
+		const draft = draftFrom(current, [], ['tesla', 'egolf']);
+		expect(draft.learning.driving).toEqual({
+			returnReservePct: '20',
+			targetMinPct: '50',
+			targetMaxPct: '90',
+			presenceEntities: { tesla: '', egolf: '' }
+		});
+	});
+
+	it('schreibt die Werte zurück, kürzt die Entitäten und lässt leere weg', () => {
+		const current = settings();
+		const draft = draftFrom(current, [], ['tesla', 'egolf']);
+		draft.learning.driving.returnReservePct = '25';
+		draft.learning.driving.targetMinPct = '40';
+		draft.learning.driving.targetMaxPct = '85';
+		draft.learning.driving.presenceEntities.tesla = ' device_tracker.tesla ';
+		const result = applyDraft(current, draft);
+		if (!('settings' in result)) throw new Error(JSON.stringify(result.errors));
+		expect(result.settings.learning.driving).toEqual({
+			return_reserve_pct: 25,
+			target_min_pct: 40,
+			target_max_pct: 85,
+			// die Automatik wird auf der Fahrzeugkarte geschaltet, nicht hier
+			automation: { tesla: true, egolf: false },
+			presence_entities: { tesla: 'device_tracker.tesla' }
+		});
+	});
+
+	it('lehnt Ziel-SOC mindestens über höchstens ab', () => {
+		const draft = draftFrom(settings());
+		draft.learning.driving.targetMinPct = '80';
+		draft.learning.driving.targetMaxPct = '70';
+		expect(applyDraft(settings(), draft)).toEqual({
+			errors: { 'learning.driving.target_min_pct': 'Ziel-SOC mindestens liegt über höchstens.' }
+		});
+		draft.learning.driving.targetMaxPct = '80';
+		expect('settings' in applyDraft(settings(), draft)).toBe(true);
+	});
+
+	it('prüft Zahl und Bereich der drei Felder', () => {
+		const draft = draftFrom(settings());
+		draft.learning.driving.returnReservePct = '51';
+		draft.learning.driving.targetMinPct = '19';
+		draft.learning.driving.targetMaxPct = 'viel';
+		expect(applyDraft(settings(), draft)).toEqual({
+			errors: {
+				'learning.driving.return_reserve_pct': 'Ganze Zahl von 0 bis 50',
+				'learning.driving.target_min_pct': 'Ganze Zahl von 20 bis 100',
+				'learning.driving.target_max_pct': 'Ganze Zahl von 20 bis 100'
+			}
+		});
+		draft.learning.driving.returnReservePct = '20,5';
+		draft.learning.driving.targetMinPct = '50';
+		draft.learning.driving.targetMaxPct = '90';
+		expect(applyDraft(settings(), draft)).toEqual({
+			errors: { 'learning.driving.return_reserve_pct': 'Ganze Zahl von 0 bis 50' }
+		});
+	});
+
+	it('ordnet Serverfehler der Entität dem Feld des Autos zu', () => {
+		expect(
+			editorFieldErrors(
+				[
+					{
+						loc: ['body', 'settings', 'learning', 'driving', 'presence_entities', 'tesla'],
+						msg: 'ungültig',
+						type: 'x'
+					}
+				],
+				settings()
+			)
+		).toEqual({ 'learning.driving.presence_entities.tesla': 'ungültig' });
+	});
+
+	it('lädt Einstellungen ohne den Abschnitt mit den Standardwerten', () => {
+		const old = structuredClone(settings());
+		delete old.learning.driving;
+		const draft = draftFrom(old);
+		expect(draft.learning.driving).toEqual({
+			returnReservePct: '20',
+			targetMinPct: '50',
+			targetMaxPct: '90',
+			presenceEntities: {}
+		});
+		const result = applyDraft(old, draft);
+		if (!('settings' in result)) throw new Error(JSON.stringify(result.errors));
+		expect(result.settings.learning.driving).toEqual({
+			return_reserve_pct: 20,
+			target_min_pct: 50,
+			target_max_pct: 90,
+			automation: {},
+			presence_entities: {}
+		});
+	});
 });

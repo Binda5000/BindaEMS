@@ -5,6 +5,7 @@
 	import { ApiError } from '$lib/api/errors';
 	import type { SensorCandidates } from '$lib/api/schemas';
 	import Notice from '$lib/components/Notice.svelte';
+	import DrivingEditor from './DrivingEditor.svelte';
 	import { MAX_HA_SENSORS, type LearningDraft } from './model';
 
 	interface Props {
@@ -13,9 +14,11 @@
 		errors: Record<string, string>;
 		/** holt die Kandidaten; fehlt es, bleibt nur die Liste der gewählten Sensoren */
 		loadCandidates?: () => Promise<SensorCandidates>;
+		/** Namen der Fahrzeuge nach Schlüssel, für die Anwesenheit im Abschnitt Fahrverhalten */
+		vehicles?: Record<string, { name: string }>;
 	}
 
-	let { draft = $bindable(), errors, loadCandidates }: Props = $props();
+	let { draft = $bindable(), errors, loadCandidates, vehicles }: Props = $props();
 
 	/** So viele Treffer zeigt die Auswahl höchstens; der Rest erscheint nach dem Eingrenzen */
 	const SHOWN_MAX = 100;
@@ -151,6 +154,8 @@
 		{/if}
 	</fieldset>
 </fieldset>
+
+<DrivingEditor bind:draft={draft.driving} {errors} {vehicles} />
 
 <style>
 	fieldset {

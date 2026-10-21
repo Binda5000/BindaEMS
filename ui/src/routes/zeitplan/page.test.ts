@@ -200,3 +200,20 @@ it('keeps the plan and says so when "Plan gegen Ist" fails', async () => {
 	expect(screen.getByText('Plan von 10:00 Uhr')).toBeTruthy();
 	expect(screen.queryByText('Interner Fehler')).toBeNull();
 });
+
+it('zeigt erwartete Autos im Ablauf gestrichelt mit „erwartet ab“', async () => {
+	const expected = {
+		...PLAN.vehicles[0]!,
+		key: 'egolf',
+		name: 'e-Golf',
+		expected: true,
+		arrival_at: '2026-10-09T15:30:00+00:00'
+	};
+	const plan = { ...planWithWindows(), vehicles: [...PLAN.vehicles, expected] };
+	renderPage('viewer', { ...RESPONSE, plan });
+	await screen.findByText('Plan von 10:00 Uhr');
+	const blocks = screen.getByRole('heading', { name: 'Ablauf' }).closest('section')!;
+	expect(within(blocks).getByText('e-Golf erwartet ab 17:30')).toHaveClass('expected');
+	// auch im Kopf des Plans steht das Auto als erwartet
+	expect(screen.getAllByText('e-Golf erwartet ab 17:30')).toHaveLength(2);
+});

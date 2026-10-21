@@ -22,6 +22,9 @@
 					>
 				</p>
 				<p class="text">{block.text}</p>
+				{#each block.expected as label (label)}
+					<p class="expected">{label}</p>
+				{/each}
 			</li>
 		{/each}
 	</ol>
@@ -52,6 +55,16 @@
 
 	p {
 		margin: 0;
+	}
+
+	/* erwartetes Auto: gestrichelt, denn es steht noch nicht an der Wallbox */
+	.expected {
+		display: inline-block;
+		margin-top: 0.25rem;
+		padding: 0.125rem 0.5rem;
+		border: 1px dashed var(--muted);
+		border-radius: 6px;
+		overflow-wrap: anywhere;
 	}
 
 	.head {

@@ -1,6 +1,6 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/svelte';
 import * as v from 'valibot';
-import { afterEach, beforeEach, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import boostCostJson from '$lib/api/contract/boost-cost.json';
 import controlJson from '$lib/api/contract/control.json';
 import { ApiError } from '$lib/api/errors';
@@ -17,7 +17,7 @@ import {
 	type VehicleHealth,
 	type WallboxHealth
 } from '$lib/api/schemas';
-import { chargingSession, limits, system } from '$lib/testing/fixtures';
+import { chargingSession, driving, limits, system } from '$lib/testing/fixtures';
 import { RESPONSE as PLAN_RESPONSE } from '$lib/testing/plan';
 import Page from './+page.svelte';
 
@@ -36,7 +36,9 @@ const { api, user } = vi.hoisted(() => ({
 		setWallboxVehicle: vi.fn(),
 		setGuestMode: vi.fn(),
 		setSupport: vi.fn(),
-		setPriority: vi.fn()
+		setPriority: vi.fn(),
+		drivingStatus: vi.fn(),
+		setAutomation: vi.fn()
 	},
 	user: { role: 'operator' as Role }
 }));
@@ -767,4 +769,118 @@ it('lässt die Karten heil, wenn die Abfrage der Sessions fehlschlägt', async (
 	await waitFor(() => expect(api.chargingSessions).toHaveBeenCalled());
 	expect(screen.queryByText(/Session/)).not.toBeInTheDocument();
 	expect(screen.queryByText('kaputt')).not.toBeInTheDocument();
+});
+
+describe('Fahrverhalten an den Fahrzeugkarten', () => {
+	const suggestion = (name: string) =>
+		within(within(card(name)).getByRole('group', { name: 'Vorschlag' }));
+
+	it('zeigt Vorschlag und Zustand der Automatik je Fahrzeug', async () => {
+		api.drivingStatus.mockResolvedValue(driving());
+		await show();
+		await waitFor(() =>
+			expect(
+				suggestion('Tesla Model 3').getByText('Vorschlag: Mo 07:15 · 50 % (Konfidenz hoch)')
+			).toBeVisible()
+		);
+		expect(
+			within(card('Tesla Model 3')).getByText(
+				'Automatik pausiert bis Fr 17:30, weil Ziel oder Abfahrt von Hand geändert wurden.'
+			)
+		).toBeVisible();
+		expect(
+			suggestion('e-Golf').getByText('Vorschlag: Mo 08:00 · 50 % (Konfidenz niedrig)')
+		).toBeVisible();
+		expect(within(card('e-Golf')).getByText('Automatik aus.')).toBeVisible();
+	});
+
+	it('Übernehmen sendet Ziel, Abfahrt und Abfahrtstag und lädt das Fahrverhalten neu', async () => {
+		api.drivingStatus.mockResolvedValue(driving());
+		await show();
+		api.setTarget.mockResolvedValue(reply());
+		await waitFor(() => expect(suggestion('e-Golf').getByRole('button')).toBeEnabled());
+		const loaded = api.drivingStatus.mock.calls.length;
+		await fireEvent.click(suggestion('e-Golf').getByRole('button', { name: 'Übernehmen' }));
+		await waitFor(() =>
+			expect(api.setTarget).toHaveBeenCalledWith('egolf', 50, '08:00', '2026-10-12')
+		);
+		await waitFor(() => expect(api.drivingStatus.mock.calls.length).toBeGreaterThan(loaded));
+	});
+
+	it('Übernehmen am Tesla in „Geplant“ ist vom Übernehmen der Felder getrennt', async () => {
+		api.drivingStatus.mockResolvedValue(driving());
+		await show();
+		api.setTarget.mockResolvedValue(reply());
+		await waitFor(() => expect(suggestion('Tesla Model 3').getByRole('button')).toBeEnabled());
+		await fireEvent.click(suggestion('Tesla Model 3').getByRole('button', { name: 'Übernehmen' }));
+		await waitFor(() =>
+			expect(api.setTarget).toHaveBeenCalledWith('tesla', 50, '07:15', '2026-10-12')
+		);
+	});
+
+	it('Bedienen schaltet die Automatik und sieht danach den neuen Zustand', async () => {
+		api.drivingStatus.mockResolvedValue(driving());
+		await show();
+		const egolf = driving().vehicles[1]!;
+		api.setAutomation.mockResolvedValue({ ...egolf.automation, enabled: true });
+		const toggle = await within(card('e-Golf')).findByRole('switch', {
+			name: 'Ziel und Abfahrt automatisch'
+		});
+		await waitFor(() => expect(toggle).toBeEnabled());
+		api.drivingStatus.mockResolvedValue(
+			driving({
+				vehicles: [
+					driving().vehicles[0]!,
+					{
+						...egolf,
+						automation: {
+							...egolf.automation,
+							enabled: true,
+							state: 'inactive',
+							text: 'Automatik wartet: Das Auto steht nicht auf „Geplant“.'
+						}
+					}
+				]
+			})
+		);
+		await fireEvent.click(toggle);
+		await waitFor(() => expect(api.setAutomation).toHaveBeenCalledWith('egolf', true));
+		expect(
+			await within(card('e-Golf')).findByText(
+				'Automatik wartet: Das Auto steht nicht auf „Geplant“.'
+			)
+		).toBeVisible();
+	});
+
+	it('Lesende sehen den Schalter gesperrt und keine Taste', async () => {
+		user.role = 'viewer';
+		api.drivingStatus.mockResolvedValue(driving());
+		await show();
+		const toggle = await within(card('e-Golf')).findByRole('switch', {
+			name: 'Ziel und Abfahrt automatisch'
+		});
+		expect(toggle).toBeDisabled();
+		expect(within(card('e-Golf')).queryByRole('button', { name: 'Übernehmen' })).toBeNull();
+		expect(within(card('e-Golf')).getByText('Automatik aus.')).toBeVisible();
+	});
+
+	it('zeigt die Ablehnung der Automatik an der Karte', async () => {
+		api.drivingStatus.mockResolvedValue(driving());
+		await show();
+		api.setAutomation.mockRejectedValue(new ApiError(409, 'core nicht erreichbar'));
+		const toggle = await within(card('e-Golf')).findByRole('switch', {
+			name: 'Ziel und Abfahrt automatisch'
+		});
+		await waitFor(() => expect(toggle).toBeEnabled());
+		await fireEvent.click(toggle);
+		expect(await within(card('e-Golf')).findByText('core nicht erreichbar')).toBeVisible();
+		expect(toggle).not.toBeChecked();
+	});
+
+	it('zeigt ohne Antwort zum Fahrverhalten keine Vorschläge', async () => {
+		api.drivingStatus.mockRejectedValue(new ApiError(500, 'kaputt'));
+		await show();
+		expect(within(card('Tesla Model 3')).queryByText(/Vorschlag/)).toBeNull();
+		expect(within(card('Tesla Model 3')).queryByRole('switch')).toBeNull();
+	});
 });

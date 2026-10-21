@@ -4,6 +4,7 @@
 	import { api } from '$lib/api/endpoints';
 	import { ApiError } from '$lib/api/errors';
 	import type {
+		AutomationState,
 		ChargeMode,
 		ControlReply,
 		SupportIntent,
@@ -56,6 +57,8 @@
 	const plan = new Resource((o) => api.plan(o), { intervalMs: 60_000 });
 	// Die Mehrkosten sind eine Zugabe: schlägt ihre Abfrage fehl, fehlt nur der Satz an der Karte.
 	const boostCost = new Resource((o) => api.boostCost(o), { intervalMs: 60_000 });
+	// Vorschlag und Automatik sind ebenfalls eine Zugabe: ohne Antwort fehlen sie an den Karten.
+	const driving = new Resource((o) => api.drivingStatus(o), { intervalMs: 60_000 });
 
 	// Die Session je Fahrzeug ist eine Zugabe: schlägt die Abfrage fehl, fehlt nur die Zeile.
 	// Die Tage werden bei jeder Abfrage neu bestimmt, damit eine lange offene Seite nicht veraltet.
@@ -74,7 +77,7 @@
 	let refreshTimer: ReturnType<typeof setTimeout> | undefined;
 
 	onMount(() => {
-		const stops = [system, control, limits, boostCost, sessions, plan].map((resource) =>
+		const stops = [system, control, limits, boostCost, sessions, plan, driving].map((resource) =>
 			resource.start()
 		);
 		const clock = setInterval(() => (nowMs = Date.now()), 30_000);
@@ -184,12 +187,15 @@
 	 * alten zeigen. Ein neues Ziel oder eine neue Abfahrt plant die app erst nach dem nächsten
 	 * Health neu; bis dahin fehlt die Zeile (`planStale`).
 	 */
-	async function act(card: string, call: () => Promise<ControlReply>): Promise<void> {
+	async function act(
+		card: string,
+		call: () => Promise<ControlReply | AutomationState>
+	): Promise<void> {
 		busy = true;
 		notices[card] = undefined;
 		try {
 			const reply = await call();
-			if (reply.result === 'clamped') {
+			if ('result' in reply && reply.result === 'clamped') {
 				notices[card] = { level: 'warning', text: reply.details.join('\n') };
 			}
 		} catch (error) {
@@ -198,7 +204,7 @@
 				text: error instanceof ApiError ? error.detail : 'Unbekannter Fehler'
 			};
 		}
-		await control.refresh();
+		await Promise.all([control.refresh(), driving.refresh()]);
 		if (!stopped) {
 			clearTimeout(refreshTimer);
 			refreshTimer = setTimeout(() => {
@@ -263,6 +269,13 @@
 					planned={plannedOf(vehicle)}
 					onTarget={(pct, departure) =>
 						act(`vehicle:${vehicle.id}`, () => api.setTarget(vehicle.id, pct, departure))}
+					driving={driving.data?.vehicles.find((item) => item.key === vehicle.id) ?? null}
+					onAdopt={(pct, departure, departureOn) =>
+						act(`vehicle:${vehicle.id}`, () =>
+							api.setTarget(vehicle.id, pct, departure, departureOn)
+						)}
+					onAutomation={(on) =>
+						act(`vehicle:${vehicle.id}`, () => api.setAutomation(vehicle.id, on))}
 				/>
 			{/each}
 			{#each health.wallboxes as wallbox (wallbox.id)}

@@ -57,7 +57,7 @@
 
 	const operate = $derived(canOperate(page.data.user));
 	const current = $derived(plan.data?.plan ?? null);
-	const blocks = $derived(planBlocks(current?.slots ?? []));
+	const blocks = $derived(planBlocks(current?.slots ?? [], current?.vehicles ?? []));
 
 	// Farben neu lesen, wenn hell/dunkel wechselt
 	const palette = $derived.by(() => {

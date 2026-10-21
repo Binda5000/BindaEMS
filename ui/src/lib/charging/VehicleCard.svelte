@@ -1,8 +1,8 @@
 <script lang="ts">
-	import type { BoostCost, ChargeMode, VehicleHealth } from '$lib/api/schemas';
+	import type { BoostCost, ChargeMode, DrivingVehicle, VehicleHealth } from '$lib/api/schemas';
 	import Card from '$lib/components/Card.svelte';
 	import Notice from '$lib/components/Notice.svelte';
-	import { DASH, formatNumber, formatSoc, formatTime, NBSP } from '$lib/format';
+	import { DASH, formatNumber, formatSoc, formatTime, NBSP, suggestionText } from '$lib/format';
 	import type { SocEntry } from '$lib/dashboard/socs';
 	import { boostCostText } from './boostCost';
 	import {
@@ -40,6 +40,16 @@
 		planned: PlannedLine | null;
 		/** schickt Ziel-SOC und Abfahrt; `null` lässt das Feld unverändert, nie beide */
 		onTarget: (targetSocPct: number | null, departure: string | null) => Promise<void>;
+		/** Fahrverhalten des Autos (Vorschlag und Automatik); `null` ohne Antwort des Servers */
+		driving?: DrivingVehicle | null;
+		/** übernimmt den Vorschlag: Ziel (`null` ohne), Abfahrt `HH:MM` und Abfahrtstag `YYYY-MM-DD` */
+		onAdopt?: (
+			targetSocPct: number | null,
+			departure: string,
+			departureOn: string
+		) => Promise<void>;
+		/** schaltet die Automatik für Ziel und Abfahrt */
+		onAutomation?: (on: boolean) => Promise<void>;
 	}
 
 	let {
@@ -57,7 +67,10 @@
 		onBoost,
 		goal,
 		planned,
-		onTarget
+		onTarget,
+		driving = null,
+		onAdopt,
+		onAutomation
 	}: Props = $props();
 
 	const uid = $props.id();
@@ -104,6 +117,18 @@
 		socDraft = null; // danach zeigen die Felder wieder den Stand der Absicht
 		departureDraft = null;
 		badInput = false;
+	}
+
+	async function adopt() {
+		const trip = driving?.next_trip;
+		if (!trip) return;
+		await onAdopt?.(trip.target_soc_pct, trip.departure, trip.date);
+	}
+
+	async function toggleAutomation(event: Event) {
+		const box = event.currentTarget as HTMLInputElement;
+		await onAutomation?.(box.checked);
+		box.checked = driving?.automation.enabled ?? false; // bei einer Ablehnung zurück auf den Stand des Servers
 	}
 
 	async function chooseMode(event: Event) {
@@ -164,6 +189,32 @@
 		<p class="session">{sessionLine}</p>
 	{/if}
 
+	{#if driving}
+		<div class="driving" role="group" aria-label="Vorschlag">
+			{#if driving.next_trip}
+				<p>{suggestionText(driving.next_trip)}</p>
+				{#if operate}
+					<button type="button" disabled={busy} onclick={adopt}>Übernehmen</button>
+				{/if}
+			{:else}
+				<p class="muted">Kein Vorschlag (zu wenig Daten).</p>
+			{/if}
+		</div>
+		<div class="automation">
+			<label class="switch">
+				<input
+					type="checkbox"
+					role="switch"
+					checked={driving.automation.enabled}
+					disabled={!operate || busy}
+					onchange={toggleAutomation}
+				/>
+				Ziel und Abfahrt automatisch
+			</label>
+			<p class="muted">{driving.automation.text}</p>
+		</div>
+	{/if}
+
 	{#if operate}
 		<div class="controls">
 			<label>
@@ -179,7 +230,7 @@
 			</button>
 		</div>
 		{#if mode === 'planned'}
-			<div class="target">
+			<div class="target" role="group" aria-label="Von Hand">
 				<div class="field">
 					<label for="{uid}-soc">Ziel-SOC</label>
 					<div class="unit">
@@ -291,6 +342,36 @@
 
 	.cost {
 		margin: 0.5rem 0 0;
+	}
+
+	.driving {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: center;
+		gap: 0.5rem 0.75rem;
+		margin-top: 0.75rem;
+	}
+
+	.driving p,
+	.automation p {
+		margin: 0;
+		overflow-wrap: anywhere;
+	}
+
+	.automation {
+		margin-top: 0.5rem;
+	}
+
+	/* Das Feld ist 44 px hoch, auch wenn der Schalter selbst klein ist */
+	.switch {
+		display: flex;
+		align-items: center;
+		gap: 0.625rem;
+		min-height: 2.75rem;
+	}
+
+	.switch input {
+		flex: none;
 	}
 
 	.note {

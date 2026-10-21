@@ -1,6 +1,7 @@
 // Einstellungen im UI: Entwurf als Text (deutsche Dezimalzahlen), Prüfung wie der Server,
 // Texte für Zeitfenster und Gültigkeit, Zuordnung von Serverfehlern zu den Feldern
 import type {
+	DrivingSettings,
 	EnergyComponent,
 	FeedInComponent,
 	MonthlyFeeComponent,
@@ -65,11 +66,32 @@ export interface PlanningDraft {
 	inertiaCt: string;
 }
 
-/** Lastmodell: Schalter und die gewählten HA-Sensoren (Entitäts-IDs) */
+/** Fahrverhalten: Puffer und Grenzen als Text, die Anwesenheits-Entität je Fahrzeug (leer = keine) */
+export interface DrivingDraft {
+	returnReservePct: string;
+	targetMinPct: string;
+	targetMaxPct: string;
+	presenceEntities: Record<string, string>;
+}
+
+/** Lastmodell: Schalter und die gewählten HA-Sensoren (Entitäts-IDs), dazu das Fahrverhalten */
 export interface LearningDraft {
 	loadModelEnabled: boolean;
 	haSensors: string[];
+	driving: DrivingDraft;
 }
+
+/** Standardwerte des Abschnitts `learning.driving`, wie `DrivingSettings` der app */
+export const DEFAULT_DRIVING: DrivingSettings = {
+	return_reserve_pct: 20,
+	target_min_pct: 50,
+	target_max_pct: 90,
+	automation: {},
+	presence_entities: {}
+};
+
+/** Fehlertext, wenn „Ziel-SOC mindestens“ über „höchstens“ liegt (wie der Server) */
+export const TARGET_RANGE_ERROR = 'Ziel-SOC mindestens liegt über höchstens.';
 
 /** So viele zusätzliche Sensoren erlaubt `LearningSettings.ha_sensors` höchstens */
 export const MAX_HA_SENSORS = 8;
@@ -289,12 +311,35 @@ function planningDraft(planning: PlanningSettings): PlanningDraft {
 	};
 }
 
-function learningDraft(learning: LearningSettings): LearningDraft {
-	return { loadModelEnabled: learning.load_model_enabled, haSensors: [...learning.ha_sensors] };
+function drivingDraft(driving: DrivingSettings, vehicles: string[]): DrivingDraft {
+	return {
+		returnReservePct: String(driving.return_reserve_pct),
+		targetMinPct: String(driving.target_min_pct),
+		targetMaxPct: String(driving.target_max_pct),
+		presenceEntities: {
+			...Object.fromEntries(vehicles.map((key) => [key, ''])),
+			...driving.presence_entities
+		}
+	};
 }
 
-/** `wallboxes`: Schlüssel aller Ladestationen aus config.yaml (auch ohne eigenen Namen) */
-export function draftFrom(settings: RuntimeSettings, wallboxes: string[] = []): SettingsDraft {
+function learningDraft(learning: LearningSettings, vehicles: string[]): LearningDraft {
+	return {
+		loadModelEnabled: learning.load_model_enabled,
+		haSensors: [...learning.ha_sensors],
+		driving: drivingDraft(learning.driving ?? DEFAULT_DRIVING, vehicles)
+	};
+}
+
+/**
+ * `wallboxes`: Schlüssel aller Ladestationen aus config.yaml (auch ohne eigenen Namen);
+ * `vehicles`: Schlüssel aller Fahrzeuge (für die Anwesenheit aus Home Assistant)
+ */
+export function draftFrom(
+	settings: RuntimeSettings,
+	wallboxes: string[] = [],
+	vehicles: string[] = []
+): SettingsDraft {
 	return {
 		tariff: {
 			vatPct: decimalText(settings.tariff.vat_pct),
@@ -306,7 +351,7 @@ export function draftFrom(settings: RuntimeSettings, wallboxes: string[] = []): 
 			.map(([month, ct]) => ({ month, ct: decimalText(ct) })),
 		prices: { ...settings.prices },
 		planning: planningDraft(settings.planning),
-		learning: learningDraft(settings.learning),
+		learning: learningDraft(settings.learning, vehicles),
 		wallboxNames: {
 			...Object.fromEntries(wallboxes.map((key) => [key, ''])),
 			...settings.wallbox_names
@@ -579,15 +624,69 @@ function applyPlanning(
 	return planning as PlanningSettings;
 }
 
+/** Ganze Zahl im Bereich [min, max] oder `null` mit Fehlertext unter `key` */
+function wholeNumber(
+	text: string,
+	key: string,
+	errors: Record<string, string>,
+	min: number,
+	max: number
+): number | null {
+	const value = parseDecimal(text);
+	if (typeof value !== 'number' || !Number.isInteger(value) || value < min || value > max) {
+		errors[key] = `Ganze Zahl von ${min} bis ${max}`;
+		return null;
+	}
+	return value;
+}
+
+function applyDriving(
+	draft: DrivingDraft,
+	current: DrivingSettings | undefined,
+	errors: Record<string, string>
+): DrivingSettings {
+	const base = current ?? DEFAULT_DRIVING;
+	const reserve = wholeNumber(
+		draft.returnReservePct,
+		'learning.driving.return_reserve_pct',
+		errors,
+		0,
+		50
+	);
+	const min = wholeNumber(draft.targetMinPct, 'learning.driving.target_min_pct', errors, 20, 100);
+	const max = wholeNumber(draft.targetMaxPct, 'learning.driving.target_max_pct', errors, 20, 100);
+	if (min !== null && max !== null && min > max) {
+		errors['learning.driving.target_min_pct'] = TARGET_RANGE_ERROR;
+	}
+	const presence: Record<string, string> = {};
+	for (const [key, text] of Object.entries(draft.presenceEntities)) {
+		const entity = text.trim();
+		if (entity !== '') presence[key] = entity; // leer: Tessie oder home_entity
+	}
+	// die Schalter der Automatik gehören der Fahrzeugkarte und bleiben, wie sie sind
+	return {
+		...base,
+		return_reserve_pct: reserve ?? base.return_reserve_pct,
+		target_min_pct: min ?? base.target_min_pct,
+		target_max_pct: max ?? base.target_max_pct,
+		presence_entities: presence
+	};
+}
+
 function applyLearning(
 	draft: LearningDraft,
+	current: LearningSettings,
 	errors: Record<string, string>
-): Pick<LearningSettings, 'load_model_enabled' | 'ha_sensors'> {
+): Pick<LearningSettings, 'load_model_enabled' | 'ha_sensors' | 'driving'> {
 	const sensors = draft.haSensors.map((id) => id.trim());
 	if (sensors.length > MAX_HA_SENSORS || new Set(sensors).size !== sensors.length) {
 		errors['learning.ha_sensors'] = `Höchstens ${MAX_HA_SENSORS} Sensoren, jeder nur einmal`;
 	}
-	return { load_model_enabled: draft.loadModelEnabled, ha_sensors: sensors };
+	return {
+		load_model_enabled: draft.loadModelEnabled,
+		ha_sensors: sensors,
+		driving: applyDriving(draft.driving, current.driving, errors)
+	};
 }
 
 export function applyDraft(settings: RuntimeSettings, draft: SettingsDraft): DraftResult {
@@ -633,7 +732,7 @@ export function applyDraft(settings: RuntimeSettings, draft: SettingsDraft): Dra
 
 	const planning = applyPlanning(draft.planning, errors);
 
-	const learning = applyLearning(draft.learning, errors);
+	const learning = applyLearning(draft.learning, settings.learning, errors);
 
 	const wallboxNames: Record<string, string> = {};
 	for (const [key, text] of Object.entries(draft.wallboxNames)) {

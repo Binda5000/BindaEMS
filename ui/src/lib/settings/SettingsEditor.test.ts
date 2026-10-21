@@ -255,3 +255,75 @@ it('zeigt Serverfehler der Sensorliste am Lastmodell', async () => {
 	expect(await screen.findByText('keine gültige Entität')).toBeInTheDocument();
 	expect(screen.getByText('Bitte die markierten Felder prüfen.')).toBeInTheDocument();
 });
+
+const DRIVING = () => screen.getByRole('group', { name: 'Fahrverhalten' });
+
+it('speichert Puffer, Ziel-Grenzen und Anwesenheit des Fahrverhaltens', async () => {
+	const current = settingsCurrent();
+	const save = vi.fn().mockResolvedValueOnce(current);
+	render(SettingsEditor, {
+		current,
+		vehicles: limits().vehicles,
+		save,
+		onSaved: vi.fn(),
+		onReload: vi.fn()
+	});
+	const section = within(DRIVING());
+	await fireEvent.input(section.getByLabelText('Puffer bei der Rückkehr (%)'), {
+		target: { value: '25' }
+	});
+	await fireEvent.input(section.getByLabelText('Ziel-SOC mindestens (%)'), {
+		target: { value: '40' }
+	});
+	await fireEvent.input(
+		within(section.getByRole('group', { name: 'Tesla Model 3' })).getByLabelText(
+			'Anwesenheit aus Home Assistant'
+		),
+		{ target: { value: ' device_tracker.tesla ' } }
+	);
+	await fireEvent.click(screen.getByRole('button', { name: 'Speichern' }));
+	await vi.waitFor(() => expect(save).toHaveBeenCalledTimes(1));
+	// die Schalter der Automatik gehören der Fahrzeugkarte und bleiben unverändert
+	expect(save.mock.calls[0][1].learning.driving).toEqual({
+		return_reserve_pct: 25,
+		target_min_pct: 40,
+		target_max_pct: 90,
+		automation: current.settings.learning.driving?.automation,
+		presence_entities: { tesla: 'device_tracker.tesla' }
+	});
+});
+
+it('speichert nicht, wenn Ziel-SOC mindestens über höchstens liegt', async () => {
+	const save = vi.fn();
+	render(SettingsEditor, {
+		current: settingsCurrent(),
+		vehicles: limits().vehicles,
+		save,
+		onSaved: vi.fn(),
+		onReload: vi.fn()
+	});
+	await fireEvent.input(within(DRIVING()).getByLabelText('Ziel-SOC mindestens (%)'), {
+		target: { value: '95' }
+	});
+	await fireEvent.click(screen.getByRole('button', { name: 'Speichern' }));
+	expect(await screen.findByText('Ziel-SOC mindestens liegt über höchstens.')).toBeVisible();
+	expect(screen.getByText('Bitte die markierten Felder prüfen.')).toBeVisible();
+	expect(save).not.toHaveBeenCalled();
+});
+
+it('zeigt Serverfehler der Anwesenheits-Entität am Feld des Autos', async () => {
+	const save = reject422({
+		loc: ['learning', 'driving', 'presence_entities', 'tesla'],
+		msg: 'keine gültige Entität'
+	});
+	render(SettingsEditor, {
+		current: settingsCurrent(),
+		vehicles: limits().vehicles,
+		save,
+		onSaved: vi.fn(),
+		onReload: vi.fn()
+	});
+	await fireEvent.click(screen.getByRole('button', { name: 'Speichern' }));
+	const tesla = within(DRIVING()).getByRole('group', { name: 'Tesla Model 3' });
+	expect(await within(tesla).findByText('keine gültige Entität')).toBeVisible();
+});

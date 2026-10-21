@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
+	CONFIDENCE_LABELS,
 	DASH,
+	WEEKDAY_LABELS,
 	formatCt,
 	formatDateTime,
 	formatDay,
@@ -10,7 +12,13 @@ import {
 	formatPower,
 	formatRatio,
 	formatSoc,
-	formatTime
+	formatTime,
+	drivingSourceText,
+	expectedLabel,
+	suggestionText,
+	weekdayGroup,
+	weekdayOfDate,
+	weakestConfidence
 } from './format';
 
 const NB = '\u00a0';
@@ -63,5 +71,56 @@ describe('formatNumberMax', () => {
 		expect(formatNumberMax(2.3, 1)).toBe('2,3');
 		expect(formatNumberMax(2.349, 1)).toBe('2,3');
 		expect(formatNumberMax(-0.01, 1)).toBe('0');
+	});
+});
+
+describe('Fahrverhalten', () => {
+	it('nennt die Konfidenz auf Deutsch', () => {
+		expect(CONFIDENCE_LABELS).toEqual({ high: 'hoch', medium: 'mittel', low: 'niedrig' });
+	});
+
+	it('nimmt von zwei Konfidenzen die schwächere, null zählt nicht', () => {
+		expect(weakestConfidence('high', 'low')).toBe('low');
+		expect(weakestConfidence('medium', 'high')).toBe('medium');
+		expect(weakestConfidence('high', null)).toBe('high');
+		expect(weakestConfidence(null, null)).toBeNull();
+	});
+
+	it('kürzt die Wochentage ab und nennt die Gruppe', () => {
+		expect(WEEKDAY_LABELS).toEqual(['Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa', 'So']);
+		expect([0, 4, 5, 6].map(weekdayGroup)).toEqual(['Mo–Fr', 'Mo–Fr', 'Sa', 'So/Feiertag']);
+		expect(weekdayOfDate('2026-10-12')).toBe('Mo');
+		expect(weekdayOfDate('2026-10-18')).toBe('So');
+	});
+
+	it('nennt die Quelle der Anwesenheit', () => {
+		expect(drivingSourceText('tessie')).toBe('Tessie');
+		expect(drivingSourceText('sessions')).toBe('nur Ansteckvorgänge');
+		expect(drivingSourceText('home_entity')).toBe('Home Assistant (home_entity)');
+		expect(drivingSourceText('ha', 'device_tracker.tesla')).toBe(
+			'Home Assistant (device_tracker.tesla)'
+		);
+		expect(drivingSourceText('ha')).toBe('Home Assistant');
+		expect(drivingSourceText('ha', '')).toBe('Home Assistant');
+	});
+
+	it('beschriftet ein erwartetes Auto mit der Ankunft in Wiener Zeit', () => {
+		expect(expectedLabel('Tesla Model 3', '2026-10-09T15:30:00+00:00')).toBe(
+			'Tesla Model 3 erwartet ab 17:30'
+		);
+	});
+
+	it('schreibt den Vorschlag mit Tag, Abfahrt, Ziel und der schwächeren Konfidenz', () => {
+		const trip = {
+			date: '2026-10-12',
+			departure: '07:15',
+			departure_confidence: 'high' as const,
+			target_soc_pct: 50,
+			target_confidence: 'medium' as const
+		};
+		expect(suggestionText(trip)).toBe(`Vorschlag: Mo 07:15 · 50${NB}% (Konfidenz mittel)`);
+		expect(suggestionText({ ...trip, target_soc_pct: null, target_confidence: null })).toBe(
+			'Vorschlag: Mo 07:15 (Konfidenz hoch)'
+		);
 	});
 });

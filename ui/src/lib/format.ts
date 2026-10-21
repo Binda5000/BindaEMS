@@ -1,5 +1,6 @@
 // Zahlen und Zeiten für die Anzeige: deutsch (de-AT), Zeiten in Wien, Einheit mit geschütztem
 // Leerzeichen; fehlende Werte sind ein Strich, nie 0
+import type { Confidence, DrivingSource, DrivingTrip } from './api/schemas';
 import { VIENNA, parseIso } from './time';
 
 export const DASH = '–';
@@ -114,4 +115,69 @@ export function formatDateTime(iso: string): string {
 /** „Fr., 09.10.“ für ein Datum `YYYY-MM-DD` (Mittag UTC liegt in Wien immer am selben Tag). */
 export function formatDay(date: string): string {
 	return formatInstant(DAY, `${date}T12:00:00Z`);
+}
+
+// --- Fahrverhalten (Plan 5b) ---------------------------------------------------------------
+
+export const CONFIDENCE_LABELS: Record<Confidence, string> = {
+	high: 'hoch',
+	medium: 'mittel',
+	low: 'niedrig'
+};
+
+const CONFIDENCE_RANK: Record<Confidence, number> = { low: 0, medium: 1, high: 2 };
+
+/** Die schwächere von zwei Konfidenzen; `null` zählt nicht, beide `null` ergeben `null`. */
+export function weakestConfidence(
+	first: Confidence | null,
+	second: Confidence | null
+): Confidence | null {
+	if (first === null) return second;
+	if (second === null) return first;
+	return CONFIDENCE_RANK[first] <= CONFIDENCE_RANK[second] ? first : second;
+}
+
+/** 0 = Montag … 6 = Sonntag (und Feiertag) */
+export const WEEKDAY_LABELS = ['Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa', 'So'] as const;
+
+/** Gruppe, aus der das Profil rechnet, wenn ein Wochentag zu wenige Tage hat */
+export function weekdayGroup(weekday: number): string {
+	if (weekday <= 4) return 'Mo–Fr';
+	return weekday === 5 ? 'Sa' : 'So/Feiertag';
+}
+
+/** „Mo“ für ein Datum `YYYY-MM-DD` */
+export function weekdayOfDate(date: string): string {
+	const day = new Date(`${date}T12:00:00Z`).getUTCDay(); // 0 = Sonntag
+	return WEEKDAY_LABELS[(day + 6) % 7] ?? DASH;
+}
+
+/** Woher die Anwesenheit eines Autos kommt; bei Home Assistant mit der eingestellten Entität */
+export function drivingSourceText(source: DrivingSource, entity?: string | null): string {
+	switch (source) {
+		case 'ha':
+			return entity ? `Home Assistant (${entity})` : 'Home Assistant';
+		case 'home_entity':
+			return 'Home Assistant (home_entity)';
+		case 'tessie':
+			return 'Tessie';
+		case 'sessions':
+			return 'nur Ansteckvorgänge';
+	}
+}
+
+/** „Tesla Model 3 erwartet ab 17:30“ (Uhrzeit in Wien) */
+export function expectedLabel(name: string, arrivalAt: string): string {
+	return `${name} erwartet ab ${formatTime(arrivalAt)}`;
+}
+
+/** „Vorschlag: Mo 07:15 · 50 % (Konfidenz hoch)“; ohne Ziel nur Tag und Abfahrt */
+export function suggestionText(trip: DrivingTrip): string {
+	const confidence = weakestConfidence(
+		trip.departure_confidence,
+		trip.target_soc_pct === null ? null : trip.target_confidence
+	);
+	const goal = trip.target_soc_pct === null ? '' : ` · ${formatSoc(trip.target_soc_pct)}`;
+	const label = confidence === null ? '' : ` (Konfidenz ${CONFIDENCE_LABELS[confidence]})`;
+	return `Vorschlag: ${weekdayOfDate(trip.date)} ${trip.departure}${goal}${label}`;
 }

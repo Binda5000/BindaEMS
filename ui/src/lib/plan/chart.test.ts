@@ -127,3 +127,29 @@ it('kennt ohne geplante Autos keine Reihe', () => {
 	};
 	expect(option.series).toEqual([]);
 });
+
+it('zeichnet erwartete Autos gestrichelt und benennt sie mit „erwartet ab“', () => {
+	const expected = {
+		...PLAN.vehicles[0]!,
+		key: 'egolf',
+		name: 'e-Golf',
+		expected: true,
+		arrival_at: '2026-10-09T15:30:00+00:00'
+	};
+	const option = planVehiclesOption(
+		{ ...PLAN, vehicles: [...PLAN.vehicles, expected] },
+		NOW,
+		palette
+	) as {
+		series: (LineSeriesOption & { lineStyle: { type?: string } })[];
+		tooltip: { formatter: (params: unknown) => string };
+	};
+	expect(option.series.map((s) => s.name)).toEqual(['Tesla Model 3', 'e-Golf erwartet ab 17:30']);
+	expect(option.series[0]?.lineStyle.type).toBeUndefined();
+	expect(option.series[1]?.lineStyle.type).toBe('dashed');
+	// der Tooltip kennt die Reihe unter dem Namen mit „erwartet ab“
+	const html = option.tooltip.formatter([
+		{ seriesName: 'e-Golf erwartet ab 17:30', value: [Date.UTC(2026, 9, 9, 8, 0), 2.3] }
+	]);
+	expect(html).toContain('e-Golf erwartet ab 17:30: <b>2,30');
+});

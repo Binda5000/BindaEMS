@@ -18,6 +18,8 @@
 		current: SettingsCurrent;
 		/** Ladestationen aus config.yaml (für ihre Namen); fehlt, solange nicht geladen */
 		wallboxes?: Limits['wallboxes'];
+		/** Fahrzeuge aus config.yaml (für die Anwesenheit aus Home Assistant); fehlt, solange nicht geladen */
+		vehicles?: Limits['vehicles'];
 		save: (
 			baseVersion: number,
 			settings: RuntimeSettings,
@@ -33,6 +35,7 @@
 	let {
 		current,
 		wallboxes = {},
+		vehicles = {},
 		save,
 		loadCandidates,
 		onSaved,
@@ -42,7 +45,9 @@
 
 	const uid = $props.id();
 	// Der Entwurf beginnt beim geladenen Stand; „Neu laden“ baut den Editor neu auf
-	let draft = $state(untrack(() => draftFrom(current.settings, Object.keys(wallboxes))));
+	let draft = $state(
+		untrack(() => draftFrom(current.settings, Object.keys(wallboxes), Object.keys(vehicles)))
+	);
 	let errors = $state<Record<string, string>>({});
 
 	// Ladestationen, die erst nach dem Öffnen geladen wurden, bekommen ein leeres Feld
@@ -50,6 +55,13 @@
 		const keys = Object.keys(wallboxes);
 		untrack(() => {
 			for (const key of keys) draft.wallboxNames[key] ??= '';
+		});
+	});
+	// ebenso Fahrzeuge für die Anwesenheit aus Home Assistant
+	$effect(() => {
+		const keys = Object.keys(vehicles);
+		untrack(() => {
+			for (const key of keys) draft.learning.driving.presenceEntities[key] ??= '';
 		});
 	});
 	let message = $state<string | null>(null);
@@ -222,7 +234,7 @@
 
 	<PlanningEditor bind:draft={draft.planning} {errors} />
 
-	<LearningEditor bind:draft={draft.learning} {errors} {loadCandidates} />
+	<LearningEditor bind:draft={draft.learning} {errors} {loadCandidates} {vehicles} />
 
 	{#if Object.keys(draft.wallboxNames).length > 0}
 		<fieldset>

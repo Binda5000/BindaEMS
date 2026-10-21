@@ -153,3 +153,13 @@ it('zeigt ohne geplante Autos keine Zeile dazu', () => {
 	render(PlanHeader, { data: { ...RESPONSE, plan: { ...PLAN, vehicles: [] } }, canOperate: false });
 	expect(screen.queryByText(/^Fertig um/)).toBeNull();
 });
+
+it('nennt ein erwartetes Auto mit „erwartet ab“ statt nur mit dem Namen', () => {
+	const car = { ...PLAN.vehicles[0]!, expected: true, arrival_at: '2026-10-09T10:30:00+00:00' };
+	render(PlanHeader, {
+		data: { ...RESPONSE, plan: { ...PLAN, vehicles: [car] } },
+		canOperate: false
+	});
+	const item = screen.getByText('Tesla Model 3 erwartet ab 12:30').closest('li');
+	expect(item).toHaveClass('expected');
+});

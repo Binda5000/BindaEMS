@@ -1,7 +1,7 @@
 <script lang="ts">
 	import type { PlanResponse } from '$lib/api/schemas';
 	import Card from '$lib/components/Card.svelte';
-	import { DASH, formatEur, formatNumber, formatTime, NBSP } from '$lib/format';
+	import { DASH, expectedLabel, formatEur, formatNumber, formatTime, NBSP } from '$lib/format';
 	import { plannedLine } from '$lib/charging/view';
 	import { SOURCE_LABELS, TRIGGER_LABELS } from './model';
 
@@ -45,7 +45,12 @@
 	const cars = $derived(
 		(plan?.vehicles ?? []).map((car) => ({
 			key: car.key,
-			name: car.name,
+			// ein erwartetes Auto steht noch nicht an der Wallbox: „{Name} erwartet ab {HH:MM}“
+			name:
+				car.expected && car.arrival_at !== null
+					? expectedLabel(car.name, car.arrival_at)
+					: car.name,
+			expected: car.expected,
 			line: plannedLine({ mode: null, vehicle: null, car, target: null })
 		}))
 	);
@@ -90,7 +95,7 @@
 		{#if cars.length > 0}
 			<ul class="cars" aria-label="Geplante Autos">
 				{#each cars as car (car.key)}
-					<li>
+					<li class:expected={car.expected}>
 						<strong>{car.name}</strong>
 						{#if car.line?.text}<span>{car.line.text}</span>{/if}
 						{#each car.line?.notes ?? [] as note (note)}<span class="muted">{note}</span>{/each}
@@ -199,6 +204,13 @@
 		display: flex;
 		flex-wrap: wrap;
 		gap: 0 0.5rem;
+	}
+
+	/* erwartetes Auto: gestrichelt wie im Ablauf und im Diagramm */
+	.cars li.expected {
+		padding: 0.125rem 0.5rem;
+		border: 1px dashed var(--muted);
+		border-radius: 6px;
 	}
 
 	.status {

@@ -1,8 +1,8 @@
-import { fireEvent, render, screen } from '@testing-library/svelte';
+import { cleanup, fireEvent, render, screen, within } from '@testing-library/svelte';
 import type { ComponentProps } from 'svelte';
-import { expect, it, vi } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { BoostCost } from '$lib/api/schemas';
-import { system } from '$lib/testing/fixtures';
+import { drivingVehicle, system } from '$lib/testing/fixtures';
 import VehicleCard from './VehicleCard.svelte';
 
 type Props = ComponentProps<typeof VehicleCard>;
@@ -29,6 +29,8 @@ function show(changes: Partial<Props> = {}) {
 		goal: { target_soc_pct: 60, departure: '17:30' },
 		planned: null,
 		onTarget: vi.fn().mockResolvedValue(undefined),
+		onAdopt: vi.fn().mockResolvedValue(undefined),
+		onAutomation: vi.fn().mockResolvedValue(undefined),
 		...changes
 	};
 	render(VehicleCard, props);
@@ -129,4 +131,114 @@ it('nennt einen geschätzten Ladestand aus Health', () => {
 	show({ vehicle, soc: { id: 'tesla', label: 'Tesla Model 3', pct: 70, quality: 'stale' } });
 	expect(screen.getByText('geschätzt').parentElement).toHaveTextContent('49 % geschätzt');
 	expect(screen.queryByText('veraltet')).toBeNull();
+});
+
+describe('Fahrverhalten', () => {
+	const tesla = () => drivingVehicle('tesla');
+	const egolf = () => drivingVehicle('egolf');
+
+	function suggestion(): HTMLElement {
+		return screen.getByRole('group', { name: 'Vorschlag' });
+	}
+
+	it('zeigt den Vorschlag mit Tag, Abfahrt, Ziel und Konfidenz', () => {
+		show({ driving: tesla() });
+		expect(
+			within(suggestion()).getByText('Vorschlag: Mo 07:15 · 50 % (Konfidenz hoch)')
+		).toBeVisible();
+		cleanup();
+		show({ driving: egolf() });
+		expect(
+			within(suggestion()).getByText('Vorschlag: Mo 08:00 · 50 % (Konfidenz niedrig)')
+		).toBeVisible();
+	});
+
+	it('Übernehmen sendet Ziel, Abfahrt und Abfahrtstag des Vorschlags', async () => {
+		const props = show({ driving: tesla() });
+		await fireEvent.click(within(suggestion()).getByRole('button', { name: 'Übernehmen' }));
+		expect(props.onAdopt).toHaveBeenCalledWith(50, '07:15', '2026-10-12');
+	});
+
+	it('Übernehmen sendet ohne Ziel nur Abfahrt und Abfahrtstag', async () => {
+		const car = tesla();
+		const props = show({
+			driving: {
+				...car,
+				next_trip: { ...car.next_trip!, target_soc_pct: null, target_confidence: null }
+			}
+		});
+		expect(within(suggestion()).getByText('Vorschlag: Mo 07:15 (Konfidenz hoch)')).toBeVisible();
+		await fireEvent.click(within(suggestion()).getByRole('button', { name: 'Übernehmen' }));
+		expect(props.onAdopt).toHaveBeenCalledWith(null, '07:15', '2026-10-12');
+	});
+
+	it('zeigt ohne Vorschlag „Kein Vorschlag (zu wenig Daten).“ und keine Taste', () => {
+		show({ driving: { ...tesla(), next_trip: null } });
+		expect(within(suggestion()).getByText('Kein Vorschlag (zu wenig Daten).')).toBeVisible();
+		expect(within(suggestion()).queryByRole('button')).toBeNull();
+	});
+
+	it('zeigt Lesenden den Vorschlag ohne Taste', () => {
+		show({ driving: tesla(), operate: false });
+		expect(screen.getByText('Vorschlag: Mo 07:15 · 50 % (Konfidenz hoch)')).toBeVisible();
+		expect(screen.queryByRole('button', { name: 'Übernehmen' })).toBeNull();
+	});
+
+	it('zeigt ohne Antwort zum Fahrverhalten weder Vorschlag noch Schalter', () => {
+		show();
+		expect(screen.queryByText(/Vorschlag/)).toBeNull();
+		expect(screen.queryByRole('switch')).toBeNull();
+	});
+
+	it('Schalter der Automatik nur ab Bedienen', async () => {
+		const props = show({ driving: tesla() });
+		const toggle = screen.getByRole('switch', { name: 'Ziel und Abfahrt automatisch' });
+		expect(toggle).toBeChecked();
+		expect(toggle).toBeEnabled();
+		await fireEvent.click(toggle);
+		expect(props.onAutomation).toHaveBeenCalledWith(false);
+	});
+
+	it('schaltet die Automatik an, wenn sie aus ist', async () => {
+		const props = show({ driving: egolf() });
+		const toggle = screen.getByRole('switch', { name: 'Ziel und Abfahrt automatisch' });
+		expect(toggle).not.toBeChecked();
+		await fireEvent.click(toggle);
+		expect(props.onAutomation).toHaveBeenCalledWith(true);
+	});
+
+	it('zeigt Lesenden den Schalter gesperrt', () => {
+		show({ driving: tesla(), operate: false });
+		const toggle = screen.getByRole('switch', { name: 'Ziel und Abfahrt automatisch' });
+		expect(toggle).toBeChecked();
+		expect(toggle).toBeDisabled();
+	});
+
+	it('sperrt den Schalter während einer Bedienung', () => {
+		show({ driving: tesla(), busy: true });
+		expect(screen.getByRole('switch', { name: 'Ziel und Abfahrt automatisch' })).toBeDisabled();
+	});
+
+	it('zeigt den Zustand der Automatik wörtlich vom Server', () => {
+		show({ driving: tesla() });
+		expect(
+			screen.getByText(
+				'Automatik pausiert bis Fr 17:30, weil Ziel oder Abfahrt von Hand geändert wurden.'
+			)
+		).toBeVisible();
+		cleanup();
+		show({ driving: egolf() });
+		expect(screen.getByText('Automatik aus.')).toBeVisible();
+	});
+
+	it('hält die Felder von Hand getrennt vom Vorschlag', async () => {
+		const props = show({ mode: 'planned', planned: PLANNED, driving: tesla() });
+		const manual = screen.getByRole('group', { name: 'Von Hand' });
+		await fireEvent.input(within(manual).getByRole('spinbutton', { name: 'Ziel-SOC' }), {
+			target: { value: '80' }
+		});
+		await fireEvent.click(within(manual).getByRole('button', { name: 'Übernehmen' }));
+		expect(props.onTarget).toHaveBeenCalledWith(80, null);
+		expect(props.onAdopt).not.toHaveBeenCalled();
+	});
 });

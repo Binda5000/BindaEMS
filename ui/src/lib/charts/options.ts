@@ -457,3 +457,45 @@ export function qualityDailyOption(
 		]
 	};
 }
+
+const percentFormat: ValueFormat = (value) => `${formatNumber(value, 0)}${NBSP}%`;
+
+/**
+ * Wahrscheinlichkeit angesteckt in den nächsten 48 Stunden: je Auto eine Stufenlinie in %, ein Punkt
+ * je Viertelstunde und ein Schlusspunkt am Ende der letzten. Autos ohne Prognose bleiben weg.
+ */
+export function presenceOption(
+	cars: { name: string; presence: { start: string; p: number }[] }[],
+	palette: Palette
+): EChartsCoreOption {
+	const shown = cars.filter((car) => car.presence.length > 0);
+	const series: LineSeriesOption[] = shown.map((car, index) => {
+		const color = palette.series[index % palette.series.length] ?? palette.load;
+		const data: Point[] = car.presence.map((slot) => [epoch(slot.start), slot.p * 100]);
+		const last = car.presence.at(-1);
+		if (last) data.push([epoch(last.start) + SLOT_MS, last.p * 100]);
+		return {
+			name: car.name,
+			type: 'line',
+			step: 'start',
+			showSymbol: false,
+			data,
+			lineStyle: { color, width: 2 },
+			itemStyle: { color }
+		};
+	});
+	return {
+		...baseOption(palette),
+		tooltip: {
+			trigger: 'axis',
+			formatter: axisTooltip(Object.fromEntries(shown.map((car) => [car.name, percentFormat])))
+		},
+		yAxis: {
+			...valueAxis('%', palette),
+			min: 0,
+			max: 100,
+			splitLine: { show: true, lineStyle: { color: palette.grid } }
+		},
+		series
+	};
+}

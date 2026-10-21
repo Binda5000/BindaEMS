@@ -3,6 +3,7 @@ import * as v from 'valibot';
 import decisionsLatestJson from '$lib/api/contract/decisions-latest.json';
 import chargingSessionsJson from '$lib/api/contract/charging-sessions.json';
 import decisionsJson from '$lib/api/contract/decisions.json';
+import drivingJson from '$lib/api/contract/learning-driving.json';
 import learningStatusJson from '$lib/api/contract/learning-load.json';
 import learningCandidatesJson from '$lib/api/contract/learning-candidates.json';
 import qualityDailyJson from '$lib/api/contract/forecast-quality-daily.json';
@@ -17,6 +18,7 @@ import {
 	ChargingSessionSchema,
 	DaySummarySchema,
 	DecisionsResponseSchema,
+	DrivingStatusSchema,
 	LatestDecisionsResponseSchema,
 	LearningStatusSchema,
 	LimitsSchema,
@@ -33,6 +35,8 @@ import {
 	type DaySummary,
 	type Derived,
 	type DecisionsResponse,
+	type DrivingStatus,
+	type DrivingVehicle,
 	type LatestDecisionsResponse,
 	type LearningStatus,
 	type Limits,
@@ -121,4 +125,16 @@ export function quality(overrides: Partial<Quality> = {}): Quality {
 /** Güte je Tag der Demo-Welt über 28 Tage */
 export function qualityDaily(overrides: Partial<QualityDaily> = {}): QualityDaily {
 	return { ...v.parse(QualityDailySchema, qualityDailyJson), ...overrides };
+}
+
+/** Fahrverhalten der Demo-Welt: Tesla mit Pendelprofil, e-Golf mit vier Tagen Daten */
+export function driving(overrides: Partial<DrivingStatus> = {}): DrivingStatus {
+	return { ...v.parse(DrivingStatusSchema, drivingJson), ...overrides };
+}
+
+/** Ein Auto aus `driving()`; `changes` überschreiben Felder */
+export function drivingVehicle(key: string, changes: Partial<DrivingVehicle> = {}): DrivingVehicle {
+	const found = driving().vehicles.find((item) => item.key === key);
+	if (!found) throw new Error(`Auto ${key} fehlt in learning-driving.json`);
+	return { ...found, ...changes };
 }

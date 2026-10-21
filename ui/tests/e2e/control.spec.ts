@@ -66,13 +66,15 @@ test('Bedienen stellt den Tesla auf Sofort', async ({ page, browser }) => {
 /** Setzt Ziel-SOC und Abfahrt des Tesla über „Übernehmen“ und wartet auf die Antwort */
 async function setTarget(page: Page, soc: string, departure: string): Promise<void> {
 	const card = teslaCard(page);
-	await expect(card.getByRole('button', { name: 'Übernehmen' })).toBeEnabled();
+	// Die Karte hat daneben die Taste „Übernehmen“ des Vorschlags (Gruppe „Vorschlag“)
+	const manual = card.getByRole('group', { name: 'Von Hand' });
+	await expect(manual.getByRole('button', { name: 'Übernehmen' })).toBeEnabled();
 	await card.getByRole('spinbutton', { name: 'Ziel-SOC' }).fill(soc);
-	await card.getByLabel('Abfahrt').fill(departure);
+	await card.getByLabel('Abfahrt', { exact: true }).fill(departure);
 	const reply = page.waitForResponse((response) =>
 		response.url().endsWith('/api/control/vehicles/tesla/target')
 	);
-	await card.getByRole('button', { name: 'Übernehmen' }).click();
+	await manual.getByRole('button', { name: 'Übernehmen' }).click();
 	expect((await reply).status()).toBe(200);
 }
 
@@ -95,7 +97,7 @@ test('Bedienen stellt den Tesla auf Geplant mit Ziel 80 % und Abfahrt 07:00', as
 		// nach dem Neuladen zeigen die Felder die neue Absicht
 		await page.reload();
 		await expect(card.getByRole('spinbutton', { name: 'Ziel-SOC' })).toHaveValue('80');
-		await expect(card.getByLabel('Abfahrt')).toHaveValue('07:00');
+		await expect(card.getByLabel('Abfahrt', { exact: true })).toHaveValue('07:00');
 
 		// das Änderungsprotokoll nennt die Änderung (als admin)
 		const context = await browser.newContext();

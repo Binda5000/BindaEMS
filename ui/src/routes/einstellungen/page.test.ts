@@ -56,3 +56,25 @@ it('lädt die Kandidaten erst, wenn der Admin den Editor öffnet', async () => {
 	).toBeInTheDocument();
 	expect(api.learningCandidates).toHaveBeenCalledTimes(1);
 });
+
+it('zeigt den Abschnitt Fahrverhalten mit den Namen der Autos aus den Grenzen', async () => {
+	user.role = 'viewer';
+	api.settings.mockResolvedValue(settingsCurrent());
+	api.limits.mockResolvedValue(limits());
+	render(Page);
+	expect(await screen.findByRole('heading', { name: 'Fahrverhalten' })).toBeVisible();
+	expect(screen.getByText('Ziel-SOC mindestens (%)').nextElementSibling).toHaveTextContent('50');
+	expect(screen.getByText('Anwesenheit aus Home Assistant (e-Golf)')).toBeVisible();
+	user.role = 'admin';
+});
+
+it('reicht die Autos der Grenzen an den Editor: je Auto ein Feld für die Anwesenheit', async () => {
+	api.settings.mockResolvedValue(settingsCurrent());
+	api.limits.mockResolvedValue(limits());
+	api.settingsVersions.mockReturnValue(new Promise(() => {}));
+	api.learningCandidates.mockResolvedValue(sensorCandidates());
+	render(Page);
+	await fireEvent.click(await screen.findByRole('button', { name: 'Bearbeiten' }));
+	expect(await screen.findByRole('group', { name: 'Tesla Model 3' })).toBeVisible();
+	expect(screen.getByRole('group', { name: 'e-Golf' })).toBeVisible();
+});

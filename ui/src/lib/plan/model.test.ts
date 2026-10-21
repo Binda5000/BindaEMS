@@ -1,6 +1,7 @@
 import { expect, it } from 'vitest';
 import { INTENT_LABELS, SOURCE_LABELS, TRIGGER_LABELS, blockLabel, planBlocks } from './model';
-import { iso, slot } from '$lib/testing/plan';
+import type { PlanVehicle } from '$lib/api/schemas';
+import { PLAN, iso, slot } from '$lib/testing/plan';
 
 it('groups slots into blocks by intent, power and main code', () => {
 	const blocks = planBlocks([
@@ -75,4 +76,41 @@ it('names intents, triggers and sources in German', () => {
 		vehicles: 'Fahrzeug geändert'
 	});
 	expect(SOURCE_LABELS).toEqual({ optimizer: 'Optimierer', fallback: 'Ersatzplan' });
+});
+
+const expectedCar = (changes: Partial<PlanVehicle> = {}): PlanVehicle => ({
+	...PLAN.vehicles[0]!,
+	expected: true,
+	arrival_at: iso('10:20'),
+	...changes
+});
+
+it('hängt ein erwartetes Auto an den Block seiner Ankunft', () => {
+	const slots = [
+		slot('10:00', 'EIGENVERBRAUCH', 0, 'EIGENVERBRAUCH'),
+		slot('10:15', 'NETZLADEN', 2300, 'NETZLADEN_GUENSTIG'),
+		slot('10:30', 'NETZLADEN', 2000, 'NETZLADEN_GUENSTIG')
+	];
+	const blocks = planBlocks(slots, [expectedCar()]);
+	expect(blocks.map((block) => block.expected)).toEqual([
+		[],
+		['Tesla Model 3 erwartet ab 10:20'],
+		[]
+	]);
+});
+
+it('ignoriert angesteckte Autos, erwartete ohne Ankunft und Ankünfte außerhalb des Plans', () => {
+	const slots = [slot('10:00', 'EIGENVERBRAUCH', 0, 'EIGENVERBRAUCH')];
+	const blocks = planBlocks(slots, [
+		expectedCar({ expected: false }),
+		expectedCar({ arrival_at: null }),
+		expectedCar({ arrival_at: iso('14:00') })
+	]);
+	expect(blocks[0]?.expected).toEqual([]);
+});
+
+it('legt eine Ankunft vor dem ersten Slot in den ersten Block', () => {
+	const slots = [slot('10:00', 'EIGENVERBRAUCH', 0, 'EIGENVERBRAUCH')];
+	const blocks = planBlocks(slots, [expectedCar({ arrival_at: iso('09:00') })]);
+	expect(blocks[0]?.expected).toEqual(['Tesla Model 3 erwartet ab 09:00']);
 });

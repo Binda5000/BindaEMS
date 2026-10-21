@@ -5,6 +5,7 @@ import { stats } from '$lib/testing/fixtures';
 import {
 	axisTooltip,
 	historyOption,
+	presenceOption,
 	priceForecastOption,
 	qualityDailyOption,
 	statsEnergyOption
@@ -343,5 +344,44 @@ describe('Fehler je Tag', () => {
 		expect(html).toContain('Fr., 02.10.');
 		expect(html).toContain('Profil: <b>118\u00a0W</b>');
 		expect(html).toContain('Modell: <b>–</b>');
+	});
+});
+
+describe('Anwesenheit', () => {
+	const cars = [
+		{
+			name: 'Tesla Model 3',
+			presence: [
+				{ start: '2026-10-09T08:00:00+00:00', p: 0.88 },
+				{ start: '2026-10-09T08:15:00+00:00', p: 0.5 }
+			]
+		},
+		{ name: 'e-Golf', presence: [{ start: '2026-10-09T08:00:00+00:00', p: 1 }] },
+		{ name: 'ohne Stand', presence: [] }
+	];
+
+	it('zeichnet je Auto mit Prognose eine Stufenlinie in Prozent, ein Auto ohne Prognose nicht', () => {
+		const option = presenceOption(cars, palette);
+		const series = option.series as LineSeriesOption[];
+		expect(series.map((s) => s.name)).toEqual(['Tesla Model 3', 'e-Golf']);
+		expect(series[0]?.step).toBe('start');
+		// ein Punkt je Viertelstunde und ein Schlusspunkt am Ende der letzten
+		expect(series[0]?.data).toEqual([
+			[Date.UTC(2026, 9, 9, 8, 0), 88],
+			[Date.UTC(2026, 9, 9, 8, 15), 50],
+			[Date.UTC(2026, 9, 9, 8, 30), 50]
+		]);
+		const axis = option.yAxis as { name: string; min: number; max: number };
+		expect([axis.name, axis.min, axis.max]).toEqual(['%', 0, 100]);
+	});
+
+	it('nennt im Tooltip Zeit und Prozent je Auto', () => {
+		const option = presenceOption(cars, palette);
+		const tooltip = (option.tooltip as { formatter: (p: unknown) => string }).formatter;
+		const html = tooltip([
+			{ seriesName: 'Tesla Model 3', value: [Date.UTC(2026, 9, 9, 8, 0), 88] }
+		]);
+		expect(html).toContain('10:00');
+		expect(html).toContain('Tesla Model 3: <b>88 %</b>');
 	});
 });

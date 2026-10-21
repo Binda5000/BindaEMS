@@ -9,10 +9,11 @@
 		initial: LearningDraft;
 		errors?: Record<string, string>;
 		loadCandidates?: () => Promise<SensorCandidates>;
+		vehicles?: Record<string, { name: string }>;
 		probe: { draft: LearningDraft | null };
 	}
 
-	let { initial, errors = {}, loadCandidates, probe }: Props = $props();
+	let { initial, errors = {}, loadCandidates, vehicles, probe }: Props = $props();
 
 	let draft = $state(untrack(() => initial));
 	$effect(() => {
@@ -20,4 +21,4 @@
 	});
 </script>
 
-<LearningEditor bind:draft {errors} {loadCandidates} />
+<LearningEditor bind:draft {errors} {loadCandidates} {vehicles} />

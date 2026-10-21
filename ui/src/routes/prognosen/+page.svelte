@@ -5,8 +5,10 @@
 	import { ApiError } from '$lib/api/errors';
 	import BacktestTable from '$lib/forecast/BacktestTable.svelte';
 	import DailyChart from '$lib/forecast/DailyChart.svelte';
+	import DrivingCard from '$lib/forecast/DrivingCard.svelte';
 	import FeatureTable from '$lib/forecast/FeatureTable.svelte';
 	import ModelCard from '$lib/forecast/ModelCard.svelte';
+	import PresenceChart from '$lib/forecast/PresenceChart.svelte';
 	import QualityTable from '$lib/forecast/QualityTable.svelte';
 	import { Resource } from '$lib/resource.svelte';
 	import { hasRole } from '$lib/roles';
@@ -20,9 +22,13 @@
 	const learning = new Resource((o) => api.learningStatus(o), { retryMs: RETRY_MS });
 	const quality = new Resource((o) => api.forecastQuality(days, o), { retryMs: RETRY_MS });
 	const daily = new Resource((o) => api.forecastQualityDaily(days, o), { retryMs: RETRY_MS });
+	const driving = new Resource((o) => api.drivingStatus(o), { retryMs: RETRY_MS });
+	// Die Entität der Anwesenheit nennt nur die Quelle im Kopf eines Autos: eine Zugabe, ohne sie
+	// steht dort „Home Assistant“.
+	const settings = new Resource((o) => api.settings(o), { retryMs: RETRY_MS });
 
 	onMount(() => {
-		const stops = [learning, quality, daily].map((resource) => resource.start());
+		const stops = [learning, quality, daily, driving, settings].map((resource) => resource.start());
 		return () => stops.forEach((stop) => stop());
 	});
 
@@ -56,6 +62,38 @@
 	let starting = $state(false);
 	let message = $state<string | null>(null);
 
+	// Fahrverhalten: Solange eine Berechnung läuft, wird der Stand abgefragt, bis sie fertig ist
+	const drivingRunning = $derived(driving.data?.running ?? false);
+	$effect(() => {
+		if (!drivingRunning) return;
+		const timer = setInterval(() => void driving.refresh(true), TRAINING_POLL_MS);
+		return () => clearInterval(timer);
+	});
+
+	let recomputing = $state(false);
+	let recomputeMessage = $state<string | null>(null);
+	const presenceEntities = $derived(
+		settings.data?.settings.learning.driving?.presence_entities ?? {}
+	);
+
+	async function recompute() {
+		recomputing = true;
+		recomputeMessage = null;
+		try {
+			await api.recomputeDriving();
+		} catch (error) {
+			// 409: Es läuft schon eine Berechnung. Das ist kein Fehler; der Stand zeigt den Lauf.
+			if (!(error instanceof ApiError && error.status === 409)) {
+				recomputeMessage = error instanceof ApiError ? error.detail : 'Unbekannter Fehler';
+			}
+		}
+		try {
+			await driving.refresh();
+		} finally {
+			recomputing = false;
+		}
+	}
+
 	async function train() {
 		starting = true;
 		message = null;
@@ -85,6 +123,16 @@
 	<DailyChart data={daily.data} error={daily.error} />
 	<BacktestTable status={learning.data} />
 	<FeatureTable status={learning.data} />
+	<DrivingCard
+		data={driving.data}
+		error={driving.error}
+		{admin}
+		starting={recomputing}
+		message={recomputeMessage}
+		{presenceEntities}
+		onRecompute={recompute}
+	/>
+	<PresenceChart data={driving.data} error={driving.error} />
 </div>
 
 <style>

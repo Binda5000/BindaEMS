@@ -172,3 +172,23 @@ test('admin wählt einen Sensor für das Lastmodell und speichert ihn', async ({
 	}
 	await expect(view.getByText('binary_sensor.anwesenheit')).toHaveCount(0);
 });
+
+test('Fahrverhalten im Editor: Ziel-SOC mindestens über höchstens wird nicht gespeichert', async ({
+	page
+}) => {
+	await login(page, 'admin');
+	await page.goto('/einstellungen');
+	await expect(page.getByRole('heading', { name: 'Fahrverhalten' })).toBeVisible();
+	await page.getByRole('button', { name: 'Bearbeiten' }).click();
+	const section = page.getByRole('group', { name: 'Fahrverhalten', exact: true });
+	await expect(section.getByLabel('Puffer bei der Rückkehr (%)')).toHaveValue('20');
+	await expect(
+		section
+			.getByRole('group', { name: 'Tesla Model 3' })
+			.getByLabel('Anwesenheit aus Home Assistant')
+	).toBeVisible();
+	await section.getByLabel('Ziel-SOC mindestens (%)').fill('95');
+	await page.getByRole('button', { name: 'Speichern' }).click();
+	await expect(page.getByText('Ziel-SOC mindestens liegt über höchstens.')).toBeVisible();
+	await expect(page.getByText(/Version \d+ gespeichert/)).toHaveCount(0);
+});

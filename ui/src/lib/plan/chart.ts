@@ -2,7 +2,7 @@
 // Ladeleistung der geplanten Autos
 import type { LineSeriesOption } from 'echarts/charts';
 import type { EChartsCoreOption } from 'echarts/core';
-import type { Plan, PlanSlot } from '$lib/api/schemas';
+import type { Plan, PlanSlot, PlanVehicle } from '$lib/api/schemas';
 import {
 	SLOT_MS,
 	axisTooltip,
@@ -12,7 +12,7 @@ import {
 	type ValueFormat
 } from '$lib/charts/options';
 import type { Palette } from '$lib/charts/palette';
-import { NBSP, formatCt, formatNumber } from '$lib/format';
+import { NBSP, expectedLabel, formatCt, formatNumber } from '$lib/format';
 import { parseIso } from '$lib/time';
 import { INTENT_LABELS } from './model';
 
@@ -216,7 +216,17 @@ export function planSocOption(plan: Plan, nowIso: string, palette: Palette): ECh
 	};
 }
 
-/** Diagramm „Autos“: je geplantem Auto die Ladeleistung des Plans in kW (ohne Laden 0 kW) */
+/** Name der Reihe: erwartete Autos tragen ihre Ankunft, „{Name} erwartet ab {HH:MM}“ */
+function carName(car: PlanVehicle): string {
+	return car.expected && car.arrival_at !== null
+		? expectedLabel(car.name, car.arrival_at)
+		: car.name;
+}
+
+/**
+ * Diagramm „Autos“: je geplantem Auto die Ladeleistung des Plans in kW (ohne Laden 0 kW). Erwartete
+ * Autos sind gestrichelt und ohne Fläche gezeichnet.
+ */
 export function planVehiclesOption(
 	plan: Plan,
 	nowIso: string,
@@ -227,15 +237,15 @@ export function planVehiclesOption(
 		const color = palette.series[index % palette.series.length] ?? palette.load;
 		return {
 			id: `ev:${car.key}`,
-			name: car.name,
+			name: carName(car),
 			type: 'line',
 			step: 'end',
 			yAxisIndex: 0,
 			showSymbol: false,
 			data: steps(plan.slots, (slot) => (slot.ev_w[car.key] ?? 0) / 1000),
-			lineStyle: { color, width: 2 },
+			lineStyle: car.expected ? { color, width: 2, type: 'dashed' } : { color, width: 2 },
 			itemStyle: { color },
-			areaStyle: { color, opacity: 0.15 },
+			areaStyle: car.expected ? undefined : { color, opacity: 0.15 },
 			markLine: index === 0 ? nowLine(now, palette) : undefined
 		};
 	});
@@ -244,7 +254,7 @@ export function planVehiclesOption(
 		xAxis,
 		tooltip: {
 			trigger: 'axis',
-			formatter: axisTooltip(Object.fromEntries(plan.vehicles.map((car) => [car.name, kw])))
+			formatter: axisTooltip(Object.fromEntries(plan.vehicles.map((car) => [carName(car), kw])))
 		},
 		yAxis: [{ ...valueAxis('kW', palette), min: 0 }],
 		series

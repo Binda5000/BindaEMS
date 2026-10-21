@@ -87,6 +87,17 @@ it('sendet die Akku-Unterstützung als PUT, auch ohne eigene Schwelle', async ()
 	});
 });
 
+it('sendet den Abfahrtstag nur, wenn er angegeben ist', async () => {
+	reply(control);
+	await api.setTarget('tesla', 50, '07:15', '2026-10-12');
+	expect(sent()).toEqual({
+		url: '/api/control/vehicles/tesla/target',
+		method: 'PUT',
+		body: { target_soc_pct: 50, departure: '07:15', departure_on: '2026-10-12' },
+		csrf: 'tok-123'
+	});
+});
+
 it('sendet Ziel-SOC und Abfahrt, ein unverändertes Feld als null', async () => {
 	reply(control);
 	await api.setTarget('tesla', 80, null);

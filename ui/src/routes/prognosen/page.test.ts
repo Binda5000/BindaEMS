@@ -2,7 +2,14 @@ import { fireEvent, render, screen, waitFor, within } from '@testing-library/sve
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { ApiError } from '$lib/api/errors';
 import type { LearningStatus, Role } from '$lib/api/schemas';
-import { learningStatus, quality, qualityDaily } from '$lib/testing/fixtures';
+import {
+	driving,
+	drivingVehicle,
+	learningStatus,
+	quality,
+	qualityDaily,
+	settingsCurrent
+} from '$lib/testing/fixtures';
 import Page from './+page.svelte';
 
 const { api, user } = vi.hoisted(() => ({
@@ -10,7 +17,10 @@ const { api, user } = vi.hoisted(() => ({
 		learningStatus: vi.fn(),
 		trainLoadModel: vi.fn(),
 		forecastQuality: vi.fn(),
-		forecastQualityDaily: vi.fn()
+		forecastQualityDaily: vi.fn(),
+		drivingStatus: vi.fn(),
+		recomputeDriving: vi.fn(),
+		settings: vi.fn()
 	},
 	user: { role: 'admin' as Role }
 }));
@@ -50,15 +60,25 @@ beforeEach(() => {
 	api.learningStatus.mockResolvedValue(learningStatus());
 	api.forecastQuality.mockImplementation(async (days: number) => quality({ days }));
 	api.forecastQualityDaily.mockImplementation(async (days: number) => qualityDaily({ days }));
+	api.drivingStatus.mockResolvedValue(driving());
+	api.settings.mockResolvedValue(settingsCurrent());
 });
 
 afterEach(() => {
 	vi.useRealTimers();
 });
 
-it('zeigt alle fünf Karten', async () => {
+it('zeigt alle sieben Karten', async () => {
 	render(Page);
-	for (const name of ['Lastprognose', 'Prognosegüte', 'Fehler je Tag', 'Backtest', 'Merkmale']) {
+	for (const name of [
+		'Lastprognose',
+		'Prognosegüte',
+		'Fehler je Tag',
+		'Backtest',
+		'Merkmale',
+		'Fahrverhalten',
+		'Anwesenheit'
+	]) {
 		expect(screen.getByRole('heading', { name })).toBeInTheDocument();
 	}
 	await waitFor(() => expect(within(card('Merkmale')).getByText('Temperatur')).toBeInTheDocument());
@@ -276,4 +296,130 @@ it('zeigt Fehler der Abfragen an der Karte', async () => {
 	render(Page);
 	expect(await within(card('Lastprognose')).findByText('Lernstand nicht lesbar')).toBeVisible();
 	expect(await within(card('Prognosegüte')).findByText('Güte nicht lesbar')).toBeVisible();
+});
+
+it('zeigt das Fahrverhalten beider Autos und die Anwesenheit', async () => {
+	render(Page);
+	const driving = card('Fahrverhalten');
+	expect(
+		await within(driving).findByRole('heading', {
+			name: 'Tesla Model 3 · Quelle: Tessie · 56 Tage'
+		})
+	).toBeVisible();
+	expect(
+		within(driving).getByRole('heading', { name: 'e-Golf · Quelle: nur Ansteckvorgänge · 4 Tage' })
+	).toBeVisible();
+	expect(within(driving).getByText('Fahrverhalten berechnet am 09.10. 03:40.')).toBeVisible();
+	expect(
+		within(card('Anwesenheit')).getByText('Wahrscheinlichkeit angesteckt, nächste 48 Stunden')
+	).toBeVisible();
+});
+
+it('nennt bei der Quelle Home Assistant die Entität aus den Einstellungen', async () => {
+	const current = settingsCurrent();
+	api.settings.mockResolvedValue({
+		...current,
+		settings: {
+			...current.settings,
+			learning: {
+				...current.settings.learning,
+				driving: {
+					...current.settings.learning.driving!,
+					presence_entities: { tesla: 'device_tracker.tesla' }
+				}
+			}
+		}
+	});
+	api.drivingStatus.mockResolvedValue(
+		driving({ vehicles: [drivingVehicle('tesla', { source: 'ha' })] })
+	);
+	render(Page);
+	expect(
+		await within(card('Fahrverhalten')).findByRole('heading', {
+			name: 'Tesla Model 3 · Quelle: Home Assistant (device_tracker.tesla) · 56 Tage'
+		})
+	).toBeVisible();
+});
+
+it('zeigt die Quelle Home Assistant auch ohne lesbare Einstellungen', async () => {
+	api.settings.mockRejectedValue(new ApiError(403, 'Keine Berechtigung'));
+	api.drivingStatus.mockResolvedValue(
+		driving({ vehicles: [drivingVehicle('tesla', { source: 'ha' })] })
+	);
+	render(Page);
+	expect(
+		await within(card('Fahrverhalten')).findByRole('heading', {
+			name: 'Tesla Model 3 · Quelle: Home Assistant · 56 Tage'
+		})
+	).toBeVisible();
+});
+
+it('Taste „Jetzt neu berechnen“ startet die Berechnung und sperrt sich während des Laufs', async () => {
+	api.recomputeDriving.mockResolvedValue({ started: true });
+	api.drivingStatus.mockResolvedValueOnce(driving()).mockResolvedValue(driving({ running: true }));
+	render(Page);
+	const button = await within(card('Fahrverhalten')).findByRole('button', {
+		name: 'Jetzt neu berechnen'
+	});
+	await fireEvent.click(button);
+	expect(api.recomputeDriving).toHaveBeenCalledTimes(1);
+	const running = await within(card('Fahrverhalten')).findByRole('button', {
+		name: 'Berechnung läuft …'
+	});
+	expect(running).toBeDisabled();
+});
+
+it('zeigt nach einer Ablehnung mit 409 „Berechnung läuft …“', async () => {
+	api.recomputeDriving.mockRejectedValue(new ApiError(409, 'Die Berechnung läuft schon.'));
+	api.drivingStatus.mockResolvedValueOnce(driving()).mockResolvedValue(driving({ running: true }));
+	render(Page);
+	await fireEvent.click(
+		await within(card('Fahrverhalten')).findByRole('button', { name: 'Jetzt neu berechnen' })
+	);
+	expect(
+		await within(card('Fahrverhalten')).findByRole('button', { name: 'Berechnung läuft …' })
+	).toBeDisabled();
+	// kein Fehlerkasten: ein Lauf, der schon läuft, ist kein Fehler
+	expect(within(card('Fahrverhalten')).queryByText('Die Berechnung läuft schon.')).toBeNull();
+});
+
+it('zeigt andere Fehler beim Start an der Karte', async () => {
+	api.recomputeDriving.mockRejectedValue(new ApiError(500, 'Start fehlgeschlagen'));
+	render(Page);
+	await fireEvent.click(
+		await within(card('Fahrverhalten')).findByRole('button', { name: 'Jetzt neu berechnen' })
+	);
+	expect(await within(card('Fahrverhalten')).findByText('Start fehlgeschlagen')).toBeVisible();
+});
+
+it('Taste „Jetzt neu berechnen“ ist für Nicht-Admins nicht da', async () => {
+	user.role = 'operator';
+	render(Page);
+	await within(card('Fahrverhalten')).findByText('Fahrverhalten berechnet am 09.10. 03:40.');
+	expect(screen.queryByRole('button', { name: 'Jetzt neu berechnen' })).toBeNull();
+});
+
+it('fragt den Stand alle 5 s ab, solange die Berechnung läuft', async () => {
+	api.drivingStatus
+		.mockResolvedValueOnce(driving({ running: true }))
+		.mockResolvedValueOnce(driving({ running: true }))
+		.mockResolvedValue(driving());
+	render(Page);
+	await vi.advanceTimersByTimeAsync(0);
+	expect(api.drivingStatus).toHaveBeenCalledTimes(1);
+	await vi.advanceTimersByTimeAsync(5000);
+	expect(api.drivingStatus).toHaveBeenCalledTimes(2);
+	await vi.advanceTimersByTimeAsync(5000);
+	expect(api.drivingStatus).toHaveBeenCalledTimes(3);
+	await vi.advanceTimersByTimeAsync(30_000);
+	expect(api.drivingStatus).toHaveBeenCalledTimes(3);
+});
+
+it('zeigt Fehler der Abfrage des Fahrverhaltens an den beiden Karten', async () => {
+	api.drivingStatus.mockRejectedValue(new ApiError(500, 'Fahrverhalten nicht lesbar'));
+	render(Page);
+	expect(
+		await within(card('Fahrverhalten')).findByText('Fahrverhalten nicht lesbar')
+	).toBeVisible();
+	expect(within(card('Anwesenheit')).getByText('Fahrverhalten nicht lesbar')).toBeVisible();
 });

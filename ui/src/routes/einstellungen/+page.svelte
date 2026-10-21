@@ -109,6 +109,7 @@
 						<SettingsEditor
 							{current}
 							wallboxes={limits.data?.wallboxes}
+							vehicles={limits.data?.vehicles}
 							save={api.saveSettings}
 							loadCandidates={api.learningCandidates}
 							onSaved={afterSave}
@@ -175,7 +176,7 @@
 		</Card>
 
 		<Card title="Lastmodell">
-			<LearningView learning={current.settings.learning} />
+			<LearningView learning={current.settings.learning} vehicles={limits.data?.vehicles} />
 		</Card>
 	{:else if !settings.error}
 		<p class="muted">Lädt …</p>

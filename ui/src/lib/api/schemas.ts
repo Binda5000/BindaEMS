@@ -550,11 +550,27 @@ export const PlanningSettingsSchema = v.looseObject({
 });
 export type PlanningSettings = v.InferOutput<typeof PlanningSettingsSchema>;
 
+/** Abschnitt „Fahrverhalten“ (Plan 5b); die Schalter der Automatik setzt die Fahrzeugkarte */
+export const DrivingSettingsSchema = v.looseObject({
+	/** Puffer bei der Rückkehr in % (0–50) */
+	return_reserve_pct: v.number(),
+	/** Grenzen der vorgeschlagenen Ziel-SOC in % (20–100) */
+	target_min_pct: v.number(),
+	target_max_pct: v.number(),
+	/** Automatik für Ziel und Abfahrt je Fahrzeug */
+	automation: v.record(v.string(), v.boolean()),
+	/** HA-Entität der Anwesenheit je Fahrzeug (z. B. `device_tracker.…`) */
+	presence_entities: v.record(v.string(), v.string())
+});
+export type DrivingSettings = v.InferOutput<typeof DrivingSettingsSchema>;
+
 export const LearningSettingsSchema = v.looseObject({
 	/** Schalter „Lastmodell verwenden“ */
 	load_model_enabled: v.boolean(),
 	/** zusätzliche Sensoren aus Home Assistant, höchstens 8 */
-	ha_sensors: v.array(v.string())
+	ha_sensors: v.array(v.string()),
+	/** Fahrverhalten; ältere Stände haben den Abschnitt nicht (es gelten die Standardwerte) */
+	driving: v.optional(DrivingSettingsSchema)
 });
 export type LearningSettings = v.InferOutput<typeof LearningSettingsSchema>;
 
