@@ -312,7 +312,13 @@ class DrivingAutomation:
                 "to": SWITCH_TEXT[on],
                 "version": version.version,
             }
-            self._audit.record(actor, source, ACTION, key, details)
+            try:
+                self._audit.record(actor, source, ACTION, key, details)
+            except Exception:  # der Schalter ist gespeichert: der Eintrag fehlt, mehr nicht
+                log.exception(
+                    "Eintrag im Änderungsprotokoll nach dem Schalten der Automatik fehlgeschlagen",
+                    vehicle=key,
+                )
             log.info("Automatik für Ziel und Abfahrt geschaltet", vehicle=key, on=on)
             return True
         raise AssertionError("unerreichbar")  # pragma: no cover - die Schleife kehrt zurück

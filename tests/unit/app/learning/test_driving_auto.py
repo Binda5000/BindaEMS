@@ -488,6 +488,25 @@ async def test_switch_on_and_off_is_a_settings_version_with_audit(
     )
 
 
+async def test_audit_failure_does_not_fail_the_switch(
+    auto, settings_service, audit, monkeypatch
+) -> None:
+    original = audit.record
+
+    def record(actor: str, source: Any, action: str, *args: Any, **kwargs: Any) -> None:
+        if action == "control.automation":
+            raise RuntimeError("Datenbank gesperrt")
+        original(actor, source, action, *args, **kwargs)
+
+    monkeypatch.setattr(audit, "record", record)
+    with capture_logs() as logs:
+        await auto.set_enabled("tesla", True, actor="anna", source="ui")
+    # der Schalter ist gespeichert, der Fehler steht im Protokoll
+    assert settings_service.current().settings.learning.driving.automation == {"tesla": True}
+    assert any(entry["log_level"] == "error" for entry in logs)
+    assert auto.enabled("tesla")
+
+
 @pytest.mark.usefixtures("enabled")
 async def test_switch_off_stops_immediately(auto, client, profiles, settings_service) -> None:
     await auto.tick()
