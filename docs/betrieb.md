@@ -3360,8 +3360,9 @@ Regelung das falsche Auto oder den Tesla gar nicht regelt.
 ### Geplantes Laden ausrollen (Plan 4b)
 
 Plan 4b ändert den core und die app; sie rollen **gemeinsam** aus (dieselben Image-Tags), denn die
-Absicht ändert ihre Form. Ausgerollt wird erst nach der Abnahme der Phase 3 (Victron live, 30 echte
-Tage) und erst, wenn Plan 4b auf `main` ist und die Images veröffentlicht sind; einen lokalen Build
+Absicht ändert ihre Form. Ausgerollt wird im gemeinsamen Fenster nach dem 25.10.2026 (Entscheidung des Betreibers vom
+22.10.2026, statt nach der Abnahme der Phase 3; Victron danach noch mindestens eine Woche im Dry-Run,
+die 30 echten Tage laufen weiter) und erst, wenn Plan 4b auf `main` ist und die Images veröffentlicht sind; einen lokalen Build
 machst du wie in Abschnitt 4 („Lokaler Build“). **Nichts geht dabei von selbst live:** Jeder Aktor
 behält seine Betriebsart, und ein Fahrzeug lädt erst „Geplant“, wenn du es darauf stellst. Alle
 anderen Modi verhalten sich wie vorher. Der Watchdog bleibt unverändert, eine neue `config.ini` ist
@@ -4415,8 +4416,8 @@ das auffällt; wer lokal baut (Abschnitt 4, „Lokaler Build“), braucht nichts
 ### Lastmodell ausrollen (Plan 5a)
 
 Plan 5a ändert nur die app, `shared/settings.py` und das UI; der core und sein Image bleiben
-gleich. Ausgerollt wird **mit oder nach dem gemeinsamen Ausrollen von 4b und 6a** und damit erst nach
-der Abnahme der Phase 3. Bis dahin ziehst du keine Images (`docker compose pull`), denn `latest`
+gleich. Ausgerollt wird **mit oder nach dem gemeinsamen Ausrollen von 4b und 6a** und damit im
+gemeinsamen Fenster nach dem 25.10.2026 (Entscheidung des Betreibers vom 22.10.2026). Bis dahin ziehst du keine Images (`docker compose pull`), denn `latest`
 enthält Plan 5a, sobald er auf `main` ist.
 
 **Was sich an der Anlage ändert:** Plan 5a schaltet nichts an der Anlage; kein Aktor geht live, und
@@ -4602,7 +4603,8 @@ Schlüssel vorn.
 
 Plan 5b ändert **den core** (eine Zeile in `core/control/planned.py`: die Abfahrt an einem Datum,
 `departure_on`), die app, `shared` und das UI. Ausgerollt wird **gemeinsam mit 3d, 4b, 5a und 6a** und
-damit erst nach der Abnahme der Phase 3; bis dahin ziehst du keine Images (`docker compose pull`), denn
+damit im gemeinsamen Fenster nach dem 25.10.2026 (Entscheidung des Betreibers vom 22.10.2026, statt
+nach der Abnahme der Phase 3); bis dahin ziehst du keine Images (`docker compose pull`), denn
 `latest` enthält Plan 5b, sobald er auf `main` ist. **Nichts geht von selbst live:** Die Automatik ist
 aus, bis du sie einschaltest, erwartete Autos ändern nur den Plan, und gelernte Werte erreichen die
 Safety-Schicht nie (Spec 10.5).
@@ -5475,7 +5477,7 @@ anderen Einheit oder Art als in der Tabelle macht den Wert ungültig und zählt 
 7. **Live schalten** (unten) und die Abnahme der Phase 6a durchführen
    (`docs/verification/abnahme-phase-6a.md`).
 
-Plan 6a rollt erst nach der Abnahme der Phase 3 aus.
+Plan 6a rollt mit 4b im gemeinsamen Fenster nach dem 25.10.2026 aus (Entscheidung des Betreibers vom 22.10.2026).
 
 **Achtung, Watchdog:** `coe_probe listen` und der Punkt `thermal` verlangen einen **gestoppten
 core**. Das dauert Minuten: bei `coe_probe` so lange wie `--sekunden`, beim Timeout-Schritt des

@@ -115,7 +115,7 @@ def test_rollout_of_plan_4b_in_the_guide() -> None:
     _, found, text = section.partition("### Geplantes Laden ausrollen (Plan 4b) ")
     assert found, "Der Unterabschnitt „Geplantes Laden ausrollen (Plan 4b)“ fehlt."
     for topic in (
-        "nach der Abnahme der Phase 3",
+        "im gemeinsamen Fenster nach dem 25.10.2026",
         "Nichts geht dabei von selbst live",
         "topic write homeassistant/text/bindaems/#",
         "Regelbetrieb aus",

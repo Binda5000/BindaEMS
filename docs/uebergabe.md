@@ -49,6 +49,14 @@ hat der Betreiber am 19.10.2026 im Live-Betrieb geprüft, ohne Befund. Als Näch
 Anlage die **2 Wochen Dry-Run der Planausführung** (DESS dafür aus) und die **30 echten
 Tage** durch `export_days` und `scenario_days`; danach geht Victron live (siehe „Offen an der
 Anlage“).
+**Entscheidung des Betreibers vom 22.10.2026:** Der gemeinsame Pull (3d, 4b, 5a, 5b, 6a und die Welle
+„Kleinigkeiten“) wartet nicht mehr auf die Abnahme der Phase 3. Er kommt in **ein Fenster nach der
+Zeitumstellung am 25.10.2026**, zusammen mit Teil 2, der Freigabe von Victron und der Watchdog-Probe
+(alle Aktoren im Dry-Run). Victron bleibt danach mindestens eine Woche im Dry-Run mit dem neuen core
+und geht um den 2.11.2026 live. Die 30 echten Tage (18.10. bis 16.11.2026) bleiben: `export_days`
+liest nur aufgezeichnete Werte, und `scenario_days` rechnet am 17.11.2026 mit dem Planer, der dann
+läuft (mit 3d). Ein Probelauf von `export_days` über den 18. bis 25.10.2026 folgt am 26.10.2026. Wo
+unten „nach der Abnahme der Phase 3“ steht, gilt für das Ausrollen dieses Fenster.
 **Plan 4a (Statistik, der erste Teil der Phase 4) ist umgesetzt und je Task geprüft**
 (`docs/superpowers/plans/2026-10-17-phase-4a-statistik.md`, 16 Tasks, freigegeben vom Betreiber am
 17.10.2026 mit allen 13 Entscheidungen und der Änderung, dass PV-Strom ins Auto 0 ct kostet): auf dem
@@ -845,9 +853,9 @@ Aufgeschobene Kleinigkeiten“). Die durchgestrichenen Punkte in „Bewusst offe
     `docs/verification/abnahme-phase-5b.md`)
   - an der Anlage: Plan 5a (nur `ems-app`) mit oder nach 4b und 6a ausrollen (Punkt 10 unter „Offen an
     der Anlage“); danach die Abnahme 5a (28 Tage, `docs/verification/abnahme-phase-5a.md`)
-  - an der Anlage: Plan 6a mit 4b nach der Abnahme der Phase 3 ausrollen (Punkt 8 unter „Offen an der
+  - an der Anlage: Plan 6a mit 4b im gemeinsamen Fenster nach dem 25.10.2026 ausrollen (Punkt 8 unter „Offen an der
     Anlage“), vorher Routing und Firewall für UDP 5442; danach die Abnahme 6a (7 Tage Dry-Run, dann live)
-  - an der Anlage: Plan 4b ausrollen, erst nach der Abnahme der Phase 3 und als Schritt des Betreibers
+  - an der Anlage: Plan 4b ausrollen, im gemeinsamen Fenster nach dem 25.10.2026 und als Schritt des Betreibers
     (Punkt 7 unter „Offen an der Anlage“); danach die Abnahme der Phase 4 (30 Tage Statistik, „Ziel-SOC“
     ≥ 95 %, „HA in beide Richtungen“)
   - an der Anlage: Plan 4a ausrollen (nur `ems-app`, Punkt 6 unter „Offen an der Anlage“) und die 30 Tage
@@ -1236,7 +1244,7 @@ Demo-Zugänge: `admin`, `bedienen` (Bedienen), `gast` (Lesen) und `sicher` (Admi
 
 - Docker auf einer VM im LAN des Betreibers, Images vom Stand nach Plan 4a (`fb23bd0`, laut Betreiber
   ausgerollt am 18.10.2026; davor 2c-1 bis 3b am 17.10.2026 mit `6a6904a` und der Stand nach 2b vom
-  12.10.2026). Plan 4b ist nicht ausgerollt (erst nach der Abnahme der Phase 3); bis dahin kein
+  12.10.2026). Plan 4b ist nicht ausgerollt (erst im gemeinsamen Fenster nach dem 25.10.2026); bis dahin kein
   `docker compose pull`, denn `latest` enthält seit dem 19.10.2026 Plan 4b, seit dem 20.10.2026 auch
   6a, 3d und 5a und seit dem 21.10.2026 5b; alle rollen gemeinsam aus. Laut Betreiber
   sind die Schritte zum Ausrollen erledigt (HA-Token, Mosquitto-ACL, `config.yaml`) und Leistungspreis
@@ -1564,7 +1572,7 @@ Demo-Zugänge: `admin`, `bedienen` (Bedienen), `gast` (Lesen) und `sicher` (Admi
         die Wallbox-Zähler als `energy` ankommen, zeigt die erste Nacht. Die Belegung der Wallboxen
         kommt aus Health (`wallboxes[].occupant`, 10-s-Takt): Ohne Regelbetrieb steht dort niemand,
         und alle Sessions heißen „Unbekannt“ (der Steckzustand kommt aber auch dann).
-  7. **Geplantes Laden (Plan 4b) ausrollen**, erst **nach der Abnahme der Phase 3**; das ist ein
+  7. **Geplantes Laden (Plan 4b) ausrollen**, **im gemeinsamen Fenster nach dem 25.10.2026** (Entscheidung vom 22.10.2026); das ist ein
      Schritt des Betreibers (Entscheidung 17 des Plans), und nichts geht dabei von selbst live. Die
      Images enthalten 4b seit dem 19.10.2026 (`latest`). Die Schritte stehen
      im Betriebshandbuch, „Laderegelung“, „Geplantes Laden ausrollen (Plan 4b)“:
@@ -1587,7 +1595,7 @@ Demo-Zugänge: `admin`, `bedienen` (Bedienen), `gast` (Lesen) und `sicher` (Admi
      7. **Rückweg:** Ein core vor 4b liest die gespeicherte Absicht nicht, sobald sie Ziel, Abfahrt
         oder Autos im Plan trägt, und startet ohne Absicht mit dem Alarm `intent.file`
         (Betriebshandbuch 4, „Rollback auf einen Stand vor Plan 4b“).
-  8. **Klimaanlage (Plan 6a) ausrollen**, mit 4b nach der Abnahme der Phase 3;
+  8. **Klimaanlage (Plan 6a) ausrollen**, mit 4b im gemeinsamen Fenster nach dem 25.10.2026;
      das ist ein Schritt des Betreibers, und nichts geht dabei von selbst live. Die Schritte stehen im
      Betriebshandbuch, „Klimaanlage (Phase 6a)“, und in `docs/verification/abnahme-phase-6a.md`:
      1. **Netz:** Routing und Firewall für UDP 5442 zwischen 192.168.81.0/24 (C.M.I.) und
@@ -1612,7 +1620,7 @@ Demo-Zugänge: `admin`, `bedienen` (Bedienen), `gast` (Lesen) und `sicher` (Admi
      bevor der Akku leer ist (Regel R)“ und darauf achten, dass der Akku vor der Einspeisung wirklich
      auf der Reserve ist.
   10. **Lastmodell (Plan 5a) ausrollen**, mit oder nach dem gemeinsamen Ausrollen von 4b und 6a, also
-      nach der Abnahme der Phase 3; bis dahin kein `docker compose pull`. Das ist ein Schritt des
+      im gemeinsamen Fenster nach dem 25.10.2026; bis dahin kein `docker compose pull`. Das ist ein Schritt des
       Betreibers. 5a schaltet nichts an der Anlage, es ändert nur die Eingabe des Planers. Das Modell
       gilt, wenn es in den letzten 14 Tagen mindestens 10 % genauer ist als das Profil, und das kann
       schon gleich nach dem ersten Training sein (Schalter „Lastmodell verwenden“ ab Werk an,
