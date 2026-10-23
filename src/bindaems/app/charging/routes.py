@@ -21,7 +21,7 @@ from bindaems.app.ledger.routes import _check_days, rounded
 from bindaems.app.settings.service import SettingsService
 from bindaems.shared.config import Config
 
-MAX_SESSIONS = 200
+MAX_SESSIONS = 2000
 
 
 def session_json(

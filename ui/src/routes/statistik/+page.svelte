@@ -63,34 +63,51 @@
 	}
 
 	// Der laufende Zeitraum lädt jede Minute nach, ein vergangener nur einmal (nach einem Fehler
-	// alle 30 s erneut). Das gilt für die Statistik wie für die Ladesessions. Eine Abfrage merkt
-	// sich Titel und „läuft“ ihres Zeitraums, damit Hinweise und Diagramm zu ihren Werten passen.
+	// alle 30 s erneut). Das gilt für die Statistik wie für die Ladesessions. Die Statistik hängt nur
+	// an Zeitraum und Datum, die Sessions zusätzlich am Auto: ein anderes Auto lädt nur die Sessions
+	// neu. Eine Abfrage merkt sich Titel und „läuft“ ihres Zeitraums, damit Hinweise und Diagramm zu
+	// ihren Werten passen.
 	interface Query {
 		title: string;
 		running: boolean;
+		first: string;
+		last: string;
 		stats: Resource<Stats>;
+	}
+	interface SessionsQuery {
+		first: string;
+		last: string;
+		vehicle: string | null;
 		sessions: Resource<ChargingSession[]>;
 	}
+	const options = $derived({ intervalMs: running ? POLL_MS : undefined, retryMs: RETRY_MS });
+
 	let query = $state.raw<Query | null>(null);
 	$effect(() => {
-		const key = { period, day, first: range.first, last: range.last, vehicle };
-		const options = { intervalMs: running ? POLL_MS : undefined, retryMs: RETRY_MS };
+		const key = { period, day };
 		const next: Query = {
 			title,
 			running,
-			stats: new Resource((o) => api.stats(key.period, key.day, o), options),
+			first: range.first,
+			last: range.last,
+			stats: new Resource((o) => api.stats(key.period, key.day, o), options)
+		};
+		query = next;
+		return next.stats.start();
+	});
+
+	let sessionsQuery = $state.raw<SessionsQuery | null>(null);
+	$effect(() => {
+		const key = { first: range.first, last: range.last, vehicle };
+		const next: SessionsQuery = {
+			...key,
 			sessions: new Resource(
 				(o) => api.chargingSessions(key.first, key.last, key.vehicle ?? undefined, o),
 				options
 			)
 		};
-		query = next;
-		const stopStats = next.stats.start();
-		const stopSessions = next.sessions.start();
-		return () => {
-			stopStats();
-			stopSessions();
-		};
+		sessionsQuery = next;
+		return next.sessions.start();
 	});
 
 	// Jeder Zeitraum hat seine eigene Abfrage. Beim Blättern bleibt bis zur Antwort der Statistik
@@ -108,8 +125,40 @@
 	const current = $derived(view?.stats.data);
 	// gedimmt: die Werte gehören noch zum vorigen Zeitraum
 	const stale = $derived(view !== undefined && view !== query);
+
+	// Die Sessions unter den gezeigten Werten gehören zu deren Zeitraum (nie zu einem anderen). Die
+	// letzte Abfrage zeigt sich, sobald sie Sessions hat; bis dahin (anderes Auto) stehen die
+	// vorigen desselben Zeitraums da, aber nicht nach einem Fehler: dann steht die Meldung.
+	let shownSessions = $state.raw<SessionsQuery | undefined>(undefined);
+	const sameRange = (item: SessionsQuery | null | undefined) =>
+		item != null && view !== undefined && item.first === view.first && item.last === view.last;
+	$effect(() => {
+		if (sameRange(sessionsQuery) && sessionsQuery?.sessions.data !== undefined) {
+			shownSessions = sessionsQuery ?? undefined;
+		}
+	});
+	const sessionsView = $derived.by(() => {
+		if (!sameRange(sessionsQuery)) return sameRange(shownSessions) ? shownSessions : undefined;
+		if (sessionsQuery?.sessions.data !== undefined || sessionsQuery?.sessions.error) {
+			return sessionsQuery;
+		}
+		return sameRange(shownSessions) ? shownSessions : sessionsQuery;
+	});
+	const sessionsError = $derived(
+		sessionsQuery !== null && sameRange(sessionsQuery) ? sessionsQuery.sessions.error : null
+	);
+	const sessionsData = $derived(sessionsView?.sessions.data);
 	const busy = $derived(
-		stale || (view !== undefined && view.sessions.data === undefined && !view.sessions.error)
+		stale ||
+			(view !== undefined &&
+				(!sameRange(sessionsQuery) ||
+					(sessionsQuery?.sessions.data === undefined && !sessionsQuery?.sessions.error)))
+	);
+	// Name der Datei: Zeitraum und Auto der Sessions, die dastehen
+	const filename = $derived(
+		sessionsView
+			? `ladesessions-${sessionsView.first}-${sessionsView.last}${sessionsView.vehicle ? `-${sessionsView.vehicle}` : ''}.csv`
+			: 'ladesessions.csv'
 	);
 
 	// Anzeigenamen der Wallboxes für den Abgleich; ohne Antwort gilt der Schlüssel
@@ -188,9 +237,17 @@
 
 			<CostCard stats={current} />
 			<VehicleCard stats={current} />
-			<VehicleTrendCard stats={current} {vehicle} {choices} {colorOf} {palette} onselect={choose} />
+			<VehicleTrendCard
+				stats={current}
+				{vehicle}
+				{choices}
+				{colorOf}
+				{palette}
+				title={view?.title ?? title}
+				onselect={choose}
+			/>
 			<PlannedCard stats={current} />
-			<SessionsCard sessions={view?.sessions.data} error={view?.sessions.error?.detail} />
+			<SessionsCard sessions={sessionsData} error={sessionsError?.detail} {filename} />
 			<ConsumersCard stats={current} />
 			<PeaksCard stats={current} />
 			<ChecksCard stats={current} {wallboxNames} />

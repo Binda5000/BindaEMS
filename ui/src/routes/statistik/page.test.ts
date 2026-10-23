@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/svelte';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/svelte';
 import { page } from '$app/state';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { chargingSession, limits, stats } from '$lib/testing/fixtures';
@@ -421,4 +421,87 @@ it('wählt ein Auto über die Adresse', async () => {
 		'/statistik?zeitraum=monat&datum=2026-10-09&auto=egolf',
 		expect.objectContaining({ keepFocus: true, noScroll: true })
 	);
+});
+
+it('lädt beim Wechsel des Autos nur die Sessions neu, nicht die Statistik', async () => {
+	navigate('?zeitraum=monat&datum=2026-09-15'); // vergangen: kein Takt
+	render(Page);
+	await screen.findByRole('table', { name: 'Ladesessions' });
+	expect(api.stats).toHaveBeenCalledTimes(1);
+	expect(api.chargingSessions).toHaveBeenCalledTimes(1);
+
+	let answerSessions: (value: ReturnType<typeof chargingSession>[]) => void = () => {};
+	api.chargingSessions.mockReturnValue(new Promise((resolve) => (answerSessions = resolve)));
+	navigate('?zeitraum=monat&datum=2026-09-15&auto=tesla');
+	await vi.advanceTimersByTimeAsync(0);
+	expect(api.chargingSessions).toHaveBeenCalledTimes(2);
+	expect(api.chargingSessions.mock.lastCall?.slice(0, 3)).toEqual([
+		'2026-09-01',
+		'2026-09-30',
+		'tesla'
+	]);
+	expect(api.stats).toHaveBeenCalledTimes(1);
+	// die Werte der Statistik bleiben stehen, ungedimmt; nur die Sessions sind noch unterwegs
+	const results = screen.getByText('Autarkie').closest('[aria-busy]');
+	expect(results).not.toHaveClass('stale');
+	expect(results).toHaveAttribute('aria-busy', 'true');
+	expect(screen.getByRole('heading', { name: 'September 2026' })).toBeInTheDocument();
+
+	answerSessions([chargingSession({ vehicle: 'tesla', vehicle_name: 'Tesla Model 3' })]);
+	await vi.advanceTimersByTimeAsync(0);
+	expect(results).toHaveAttribute('aria-busy', 'false');
+	expect(
+		within(screen.getByRole('table', { name: 'Ladesessions' })).getByRole('cell', {
+			name: 'Tesla Model 3'
+		})
+	).toBeInTheDocument();
+	expect(api.stats).toHaveBeenCalledTimes(1);
+});
+
+it('lässt beim Wechsel des Autos die Seite stehen, wenn die Sessions scheitern', async () => {
+	const { ApiError } = await import('$lib/api/errors');
+	navigate('?zeitraum=monat&datum=2026-09-15');
+	render(Page);
+	await screen.findByRole('table', { name: 'Ladesessions' });
+	api.chargingSessions.mockRejectedValue(new ApiError(503, 'Sessions nicht verfügbar'));
+	navigate('?zeitraum=monat&datum=2026-09-15&auto=tesla');
+	expect(await screen.findByText('Sessions nicht verfügbar')).toBeInTheDocument();
+	expect(screen.getByText('Autarkie')).toBeInTheDocument(); // Statistik unberührt
+	expect(screen.queryByRole('table', { name: 'Ladesessions' })).not.toBeInTheDocument();
+	expect(api.stats).toHaveBeenCalledTimes(1);
+});
+
+it('benennt das Diagramm „Laden je Auto“ mit dem Titel des gezeigten Zeitraums', async () => {
+	navigate('?zeitraum=monat&datum=2026-10-09');
+	render(Page);
+	expect(
+		await screen.findByRole('img', { name: 'Laden je Auto Oktober 2026' })
+	).toBeInTheDocument();
+});
+
+it('benennt die CSV nach Zeitraum und Auto der gezeigten Sessions', async () => {
+	Object.assign(URL, { createObjectURL: () => 'blob:csv', revokeObjectURL: () => {} });
+	const downloads: string[] = [];
+	const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function (
+		this: HTMLAnchorElement
+	) {
+		downloads.push(this.download);
+	});
+	try {
+		navigate('?zeitraum=monat&datum=2026-10-09&auto=tesla');
+		render(Page);
+		await fireEvent.click(await screen.findByRole('button', { name: 'CSV herunterladen' }));
+		expect(downloads).toEqual(['ladesessions-2026-10-01-2026-10-31-tesla.csv']);
+
+		// September noch unterwegs: die gezeigten Sessions sind die des Oktobers, der Name auch
+		api.stats.mockReturnValue(new Promise(() => {}));
+		navigate('?zeitraum=monat&datum=2026-09-15');
+		await vi.advanceTimersByTimeAsync(0);
+		await fireEvent.click(screen.getByRole('button', { name: 'CSV herunterladen' }));
+		expect(downloads.at(-1)).toBe('ladesessions-2026-10-01-2026-10-31-tesla.csv');
+	} finally {
+		click.mockRestore();
+		Reflect.deleteProperty(URL, 'createObjectURL');
+		Reflect.deleteProperty(URL, 'revokeObjectURL');
+	}
 });

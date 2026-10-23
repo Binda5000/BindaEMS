@@ -814,7 +814,7 @@ zum Verschleiß oder zu `battery.usable_kwh` passt, und rechnet ab dort neu. Sch
 
 `GET /api/charging/sessions?from=JJJJ-MM-TT&to=JJJJ-MM-TT[&vehicle=<Schlüssel>]` (ab „Lesen“) liefert die
 Ladesessions, die die Tage (Wiener Zeit) überdecken, neueste zuerst: höchstens 400 Tage (sonst 422) und
-höchstens 200 Einträge. `vehicle` ist der Schlüssel aus `config.yaml`, `guest` („Gast“) oder `unknown`
+höchstens 2000 Einträge. `vehicle` ist der Schlüssel aus `config.yaml`, `guest` („Gast“) oder `unknown`
 („Unbekannt“, kein Fahrzeug erkannt). Je Eintrag: `id`, `wallbox` und `wallbox_name`, `vehicle` und
 `vehicle_name`, `start`, `end` (`null` und `open: true`, solange die Session läuft), die Energie
 `kwh` mit den Anteilen `pv_kwh`, `battery_kwh`, `grid_kwh` und `cost_eur`.
@@ -1490,14 +1490,29 @@ und dem Abgleich (Abschnitt 8).
   Sessions, dazu die Zeile „Akku → Autos“. Gast und ohne erkanntes Auto erscheinen als „Gast“ und
   „Unbekannt“. Ohne Ladung: „Im Zeitraum wurde kein Auto geladen.“ PV-Strom ins Auto kostet 0 ct
   (Abschnitt 8, „Einstandspreis des Akkus“).
+- **„Laden je Auto“:** wählst du oben ein Auto („Alle“ oder eines der Liste, auch „Gast“ und „Unbekannt“),
+  zeigt das Diagramm es allein und die Karte „Ladesessions“ nur dessen Sessions. Die Wahl steht in der
+  Adresse (`/statistik?zeitraum=monat&datum=2026-10-09&auto=tesla`) und bleibt beim Blättern erhalten;
+  „Alle“ entfernt `auto=`. Mit „kWh“ oder „€“ wählst du die Einheit. In Woche, Monat und Jahr steht je Tag
+  bzw. Monat ein gestapelter Balken, bei „Alle“ je Auto, bei einem Auto nach Herkunft (PV, Akku, Netz).
+  Bei „Tag“ steht stattdessen „Den Verlauf zeigen Woche, Monat und Jahr.“ Unbekannte Kosten sind eine
+  Lücke im Balken, im Hinweis beim Darüberfahren steht „–“. Hat im Zeitraum kein Auto geladen, steht
+  „Im Zeitraum wurde kein Auto geladen.“
 - **„Geplantes Laden“:** die Abnahme „Ziel-SOC“ (Abschnitt 8, „Statistik je Zeitraum“): „{a} von {b}
   machbaren Ladungen erreicht ({pct} %)“, abgerundet (94,6 % stehen als 94 %), darunter „Nicht machbar:
   {n} · Vor der Abfahrt abgesteckt: {n} · Ohne Ladestand: {n}“ und „Vor der Abfahrt geändert oder
   verlassen: {n}“; diese zählen nicht in die Quote. Ohne machbare Ladung steht „(– %)“. Leer: „Im
   Zeitraum gab es keine geplante Ladung.“
 - **„Ladesessions“:** Beginn, Ende (eine laufende Session: „läuft“), Wallbox, Auto, Energie, „PV / Akku /
-  Netz“ und Kosten, neueste zuerst. Mehr als 200 zeigt die Karte nicht; sie sagt dann „Angezeigt werden
-  die 200 neuesten Sessions.“ Leer: „Keine Ladesessions im Zeitraum.“
+  Netz“ und Kosten, neueste zuerst. Zuerst stehen 50; darunter sagt „{n} von {m} angezeigt“, wie viele
+  es sind, und „Weitere 50 anzeigen“ zeigt die nächsten 50. „CSV herunterladen“ speichert alle
+  geladenen Sessions der Auswahl (nicht nur die angezeigten) als Datei
+  `ladesessions-{erster Tag}-{letzter Tag}[-{Auto}].csv` für Excel: Semikolon als Trenner, UTF-8 mit
+  BOM, Zeilenende `\r\n`, Kopfzeile
+  `Beginn;Ende;Wallbox;Auto;Energie kWh;PV kWh;Akku kWh;Netz kWh;Kosten EUR`, Zeiten in Wiener Zeit als
+  `09.10.2026 08:00` (bei einer laufenden Session bleibt das Ende leer), Energie mit drei und Kosten mit
+  zwei Nachkommastellen und Komma, ohne Tausenderpunkt; unbekannte Kosten bleiben leer.
+  Angezeigt werden die 2000 neuesten Sessions. Leer: „Keine Ladesessions im Zeitraum.“
 - **„Verbraucher“:** die Energie je Verbraucher im Zeitraum. Fehlt sie, steht „–“ und darunter klein
   der Grund. Zu den Tagen siehe „Energie der Verbraucher“ unten.
 - **„Monatsspitzen“:** nur in Monat und Jahr: je Monat die höchste Viertelstunde des Netzbezugs mit

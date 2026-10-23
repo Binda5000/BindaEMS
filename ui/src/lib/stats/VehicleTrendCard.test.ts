@@ -45,6 +45,7 @@ function setup(props: Partial<{ stats: ReturnType<typeof stats>; vehicle: string
 		choices: vehicleChoices(limits(), props.vehicle ?? null),
 		colorOf: () => '#123456',
 		palette,
+		title: 'KW 41 · 05.10.–11.10.2026',
 		onselect,
 		...props
 	});
@@ -97,9 +98,11 @@ it('schaltet zwischen kWh und €', async () => {
 	);
 });
 
-it('zeigt den Verlauf als Diagramm', () => {
+it('zeigt den Verlauf als Diagramm, benannt nach dem Zeitraum', () => {
 	setup();
-	expect(screen.getByRole('img', { name: /Laden je Auto/ })).toBeInTheDocument();
+	expect(
+		screen.getByRole('img', { name: 'Laden je Auto KW 41 · 05.10.–11.10.2026' })
+	).toBeInTheDocument();
 });
 
 it('zeigt bei Tag keinen Verlauf', () => {

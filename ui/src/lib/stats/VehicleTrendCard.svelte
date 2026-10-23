@@ -13,10 +13,12 @@
 		choices: VehicleChoice[];
 		colorOf: (key: string) => string;
 		palette: Palette;
+		/** Titel des Zeitraums für die Beschriftung des Diagramms */
+		title: string;
 		onselect: (key: string | null) => void;
 	}
 
-	let { stats, vehicle, choices, colorOf, palette, onselect }: Props = $props();
+	let { stats, vehicle, choices, colorOf, palette, title, onselect }: Props = $props();
 
 	const UNITS = [
 		{ id: 'kwh', label: 'kWh' },
@@ -35,7 +37,6 @@
 	const option = $derived(
 		!daily && loaded ? vehicleTrendOption(stats, vehicle, unit, colorOf, palette) : null
 	);
-	const selected = $derived(choices.find((choice) => choice.key === vehicle)?.label ?? 'Alle');
 </script>
 
 <Card title="Laden je Auto">
@@ -68,7 +69,7 @@
 	{#if daily}
 		<p class="muted">Den Verlauf zeigen Woche, Monat und Jahr.</p>
 	{:else if option}
-		<EChart {option} label="Laden je Auto {selected}" height="18rem" />
+		<EChart {option} label="Laden je Auto {title}" height="18rem" />
 	{:else}
 		<p class="muted">Im Zeitraum wurde kein Auto geladen.</p>
 	{/if}
@@ -85,6 +86,11 @@
 		display: flex;
 		flex-wrap: wrap;
 		gap: 0.5rem;
+	}
+
+	.switch button {
+		/* ein langer Schlüssel aus `auto=` bricht um, statt die Seite zu verbreitern */
+		overflow-wrap: anywhere;
 	}
 
 	.switch .active {
