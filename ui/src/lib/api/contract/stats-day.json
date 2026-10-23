@@ -225,6 +225,7 @@
   ],
   "vehicles": [],
   "battery_to_vehicles_kwh": 0.0,
+  "vehicle_buckets": [],
   "planned": {
     "reached": 0,
     "feasible": 0,

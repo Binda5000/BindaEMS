@@ -435,24 +435,96 @@ def test_today_stats_are_unknown_without_data_or_prices(stats) -> None:
     assert result.autarky_today == 0.0
 
 
+def test_vehicle_buckets_follow_the_buckets(stats) -> None:
+    assert stats.period("day", TODAY)["vehicle_buckets"] == []
+    for period in ("week", "month", "year"):
+        result = stats.period(period, TODAY)
+        assert [b["start"] for b in result["vehicle_buckets"]] == [
+            b["start"] for b in result["buckets"]
+        ]
+
+
+def test_vehicle_buckets_per_day_in_config_order(stats, engine, price_all) -> None:
+    yesterday = T0 - timedelta(days=1)
+    add_session(engine, yesterday, yesterday + SLOT, "egolf", "evcs")
+    add_session(engine, T0, T0 + SLOT, "guest", "evcs")
+    add_session(engine, T0, T0 + SLOT, "tesla", "twc")
+    ingest(stats._ledger, yesterday, {"pv>wb:evcs": 2000.0})
+    ingest(stats._ledger, T0, {"pv>wb:twc": 1000.0, "grid>wb:evcs": 500.0})
+    result = stats.period("week", TODAY)
+    by_start = {b["start"]: b["vehicles"] for b in result["vehicle_buckets"]}
+    assert [v["key"] for v in by_start["2026-10-08"]] == ["egolf"]
+    assert [v["key"] for v in by_start["2026-10-09"]] == ["tesla", "guest"]
+    assert by_start["2026-10-05"] == []
+    tesla = by_start["2026-10-09"][0]
+    assert (tesla["kwh"], tesla["pv_kwh"], tesla["cost_eur"]) == (1.0, 1.0, 0.0)
+    assert set(tesla) == {"key", "kwh", "pv_kwh", "battery_kwh", "grid_kwh", "cost_eur"}
+
+
+def test_vehicle_bucket_cost_unknown_only_where_the_price_is_missing(stats, engine) -> None:
+    yesterday = T0 - timedelta(days=1)
+    add_session(engine, yesterday, T0 + SLOT, "tesla", "twc")
+    ingest(stats._ledger, yesterday, {"pv>wb:twc": 1000.0})
+    ingest(stats._ledger, T0, {"grid>wb:twc": 1000.0})  # ohne Bezugspreis
+    by_start = {b["start"]: b["vehicles"] for b in stats.period("week", TODAY)["vehicle_buckets"]}
+    assert by_start["2026-10-08"][0]["cost_eur"] == 0.0
+    assert by_start["2026-10-09"][0]["cost_eur"] is None
+    [tesla] = stats.period("week", TODAY)["vehicles"]
+    assert tesla["cost_eur"] is None
+
+
+def test_year_vehicle_buckets_are_months(stats, engine) -> None:
+    september = T0 - timedelta(days=20)
+    add_session(engine, september, september + SLOT, "tesla", "twc")
+    add_session(engine, T0, T0 + SLOT, "tesla", "twc")
+    ingest(stats._ledger, september, {"pv>wb:twc": 1000.0})
+    ingest(stats._ledger, T0, {"pv>wb:twc": 500.0})
+    by_start = {b["start"]: b["vehicles"] for b in stats.period("year", TODAY)["vehicle_buckets"]}
+    assert by_start["2026-09"][0]["kwh"] == 1.0 and by_start["2026-10"][0]["kwh"] == 0.5
+    assert by_start["2026-01"] == []
+
+
+def test_vehicle_totals_equal_the_sum_of_the_buckets(stats, engine, price_all) -> None:
+    price_all(T0 - timedelta(days=3), T0 - timedelta(days=3) + SLOT)
+    add_session(engine, T0 - timedelta(days=3), T0 - timedelta(days=3) + SLOT, "tesla", "twc")
+    add_session(engine, T0, None, "tesla", "twc")  # offen
+    ingest(stats._ledger, T0 - timedelta(days=3), {"grid>wb:twc": 800.0})
+    ingest(stats._ledger, T0, {"pv>wb:twc": 600.0, "battery>wb:twc": 200.0})
+    ingest(stats._ledger, T0 + SLOT, {"pv>wb:evcs": 100.0})  # ohne Session
+    result = stats.period("month", TODAY)
+    for vehicle in result["vehicles"]:
+        parts = [
+            v
+            for b in result["vehicle_buckets"]
+            for v in b["vehicles"]
+            if v["key"] == vehicle["key"]
+        ]
+        assert sum(p["kwh"] for p in parts) == pytest.approx(vehicle["kwh"])
+        assert sum(p["cost_eur"] for p in parts) == pytest.approx(vehicle["cost_eur"])
+
+
 def test_year_view_attributes_the_sessions_only_once(stats, engine, monkeypatch) -> None:
     import bindaems.app.charging.sessions as sessions_module
 
     calls: list[int] = []
-    original = sessions_module.attribute
+    original = sessions_module.attribute_days
 
     def counted(*args, **kwargs):  # type: ignore[no-untyped-def]
         calls.append(len(args[0]))
         return original(*args, **kwargs)
 
-    monkeypatch.setattr(sessions_module, "attribute", counted)
+    def forbidden(*args, **kwargs):  # type: ignore[no-untyped-def]
+        raise AssertionError("attribute darf nicht aufgerufen werden")
+
+    monkeypatch.setattr(sessions_module, "attribute_days", counted)
+    monkeypatch.setattr(sessions_module, "attribute", forbidden)
     add_session(engine, T0, T0 + SLOT, "tesla", "twc")
     add_session(engine, T0 + SLOT, T0 + SLOT * 2, "tesla", "twc")
     ingest(stats._ledger, T0, {"pv>wb:twc": 1000.0})
     ingest(stats._ledger, T0 + SLOT, {"pv>wb:twc": 500.0})
     [tesla] = stats.period("year", TODAY)["vehicles"]
     assert (tesla["kwh"], tesla["sessions"]) == (1.5, 2)
-    assert len(calls) == 1  # nur die Summen je Auto; die Anzahl ohne Zuordnung
+    assert len(calls) == 1  # eine Zuordnung je Tag und Auto; die Anzahl ohne Zuordnung
 
 
 def test_planned_charges_of_the_period(stats, engine) -> None:

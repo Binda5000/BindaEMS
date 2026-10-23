@@ -3,7 +3,7 @@ from collections.abc import Callable
 import pytest
 from fastapi.testclient import TestClient
 from tests.app_helpers import ingest, login_as
-from tests.unit.app.stats.stats_helpers import T0
+from tests.unit.app.stats.stats_helpers import T0, add_session
 
 from bindaems.shared.timeutil import SLOT
 
@@ -58,6 +58,7 @@ def test_stats_route_shape(client_as, ledger, price_all) -> None:
         "buckets",
         "vehicles",
         "battery_to_vehicles_kwh",
+        "vehicle_buckets",
         "planned",
         "consumers",
         "month_peaks",
@@ -98,6 +99,19 @@ def test_stats_route_shape(client_as, ledger, price_all) -> None:
     assert body["buckets"][8]["import_kwh"] == 1.235  # auch in den Listen
     assert body["money"]["power_eur"] is None and body["month_peaks"][0]["kw"] == 4.938
     assert body["month_peaks"][0]["power_eur"] is None
+
+
+def test_stats_route_rounds_the_vehicle_buckets(client_as, ledger, engine) -> None:
+    add_session(engine, T0, T0 + SLOT, "tesla", "twc")
+    ingest(ledger, T0, {"pv>wb:twc": 1234.5678})
+    body = (
+        client_as("viewer")
+        .get("/api/stats", params={"period": "week", "date": "2026-10-09"})
+        .json()
+    )
+    by_start = {b["start"]: b["vehicles"] for b in body["vehicle_buckets"]}
+    assert by_start["2026-10-09"][0]["kwh"] == 1.235  # auf drei Stellen gerundet
+    assert body["vehicles"][0]["kwh"] == 1.235
 
 
 def test_day_buckets_start_with_a_zone(client_as) -> None:

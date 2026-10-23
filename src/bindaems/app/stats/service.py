@@ -19,13 +19,20 @@ from __future__ import annotations
 
 import calendar
 import math
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass
 from datetime import date, timedelta
 from typing import Any, Final, Literal, get_args
 
 from bindaems.app.charging.planned import PlannedCharges
-from bindaems.app.charging.sessions import GUEST, UNKNOWN, SessionService, vehicle_name
+from bindaems.app.charging.sessions import (
+    GUEST,
+    UNKNOWN,
+    FlowSplit,
+    SessionService,
+    merge_splits,
+    vehicle_name,
+)
 from bindaems.app.consumers.days import NO_DAY, ConsumerDays
 from bindaems.app.consumers.energy import EnergyCache
 from bindaems.app.consumers.service import ConsumerService
@@ -211,7 +218,8 @@ class StatsService:
         peaks = self._month_peaks(period, first, last, tariff)
         priced = [peak["power_eur"] for peak in peaks if peak["power_eur"] is not None]
         power = math.fsum(priced) if priced else None
-        vehicles, battery_to_vehicles = self._vehicles(first, last)
+        buckets = self._buckets(period, first, days, settings)
+        vehicles, battery_to_vehicles, vehicle_days, vehicle_order = self._vehicles(first, last)
         return {
             "period": period,
             "first": first.isoformat(),
@@ -242,9 +250,10 @@ class StatsService:
                 "savings_same_import_eur": sums.savings_same_import_eur,
             },
             "ratios": {"autarky": sums.autarky, "self_consumption": sums.self_consumption},
-            "buckets": self._buckets(period, first, days, settings),
+            "buckets": buckets,
             "vehicles": vehicles,
             "battery_to_vehicles_kwh": battery_to_vehicles,
+            "vehicle_buckets": self._vehicle_buckets(period, buckets, vehicle_days, vehicle_order),
             "planned": asdict(self._planned.summary(first, last)),
             "consumers": self._consumer_energy(first, last, today),
             "month_peaks": peaks,
@@ -311,11 +320,18 @@ class StatsService:
 
     # Autos
 
-    def _vehicles(self, first: date, last: date) -> tuple[list[dict[str, Any]], float]:
+    def _vehicles(
+        self, first: date, last: date
+    ) -> tuple[list[dict[str, Any]], float, dict[date, dict[str, FlowSplit]], list[str]]:
         """Autos mit Energie im Zeitraum: Reihenfolge der ``config.yaml``, dann sonstige
-        Schlüssel, ``guest``, ``unknown``. Einträge ohne Energie (Session ohne Ladung) entfallen."""
-        start, end = local_day_slots(first)[0], local_day_slots(last)[-1] + SLOT
-        by_vehicle = self._sessions.by_vehicle(start, end)
+        Schlüssel, ``guest``, ``unknown``. Einträge ohne Energie (Session ohne Ladung) entfallen.
+        Dazu die Akku-Energie ins Auto, die Aufteilung je Tag und die Reihenfolge der Schlüssel."""
+        days = self._sessions.by_vehicle_days(first, last)
+        grouped: dict[str, list[FlowSplit]] = {}
+        for splits in days.values():
+            for key, day_split in splits.items():
+                grouped.setdefault(key, []).append(day_split)
+        by_vehicle = {key: merge_splits(parts) for key, parts in grouped.items()}
         sessions = self._sessions.count_by_vehicle(first, last)
         configured = list(self._cfg.vehicles)
         extra = sorted(key for key in by_vehicle if key not in (*configured, GUEST, UNKNOWN))
@@ -334,7 +350,42 @@ class StatsService:
             for key in order
             if (split := by_vehicle.get(key)) is not None and split.kwh > 0
         ]
-        return vehicles, math.fsum(split.battery_kwh for split in by_vehicle.values())
+        battery = math.fsum(split.battery_kwh for split in by_vehicle.values())
+        return vehicles, battery, days, order
+
+    def _vehicle_buckets(
+        self,
+        period: Period,
+        buckets: Sequence[Mapping[str, Any]],
+        days: Mapping[date, Mapping[str, FlowSplit]],
+        order: Sequence[str],
+    ) -> list[dict[str, Any]]:
+        """Je Bucket die Autos mit Energie (Reihenfolge ``order``): Woche und Monat je Tag, Jahr je
+        Monat; Tag liefert keine Einträge."""
+        if period == "day":
+            return []
+        keys = _month_key if period == "year" else date.isoformat
+        grouped: dict[str, dict[str, list[FlowSplit]]] = {}
+        for day, splits in days.items():
+            for key, day_split in splits.items():
+                grouped.setdefault(keys(day), {}).setdefault(key, []).append(day_split)
+        result: list[dict[str, Any]] = []
+        for bucket in buckets:
+            parts = grouped.get(bucket["start"], {})
+            vehicles = [
+                {
+                    "key": key,
+                    "kwh": total.kwh,
+                    "pv_kwh": total.pv_kwh,
+                    "battery_kwh": total.battery_kwh,
+                    "grid_kwh": total.grid_kwh,
+                    "cost_eur": total.cost_eur,
+                }
+                for key in order
+                if key in parts and (total := merge_splits(parts[key])).kwh > 0
+            ]
+            result.append({"start": bucket["start"], "vehicles": vehicles})
+        return result
 
     # Verbraucher
 
