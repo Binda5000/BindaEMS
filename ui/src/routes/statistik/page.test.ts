@@ -446,10 +446,18 @@ it('lädt beim Wechsel des Autos nur die Sessions neu, nicht die Statistik', asy
 	expect(results).not.toHaveClass('stale');
 	expect(results).toHaveAttribute('aria-busy', 'true');
 	expect(screen.getByRole('heading', { name: 'September 2026' })).toBeInTheDocument();
+	// die Sessions des vorigen Autos stehen gedimmt da, und das CSV bleibt gesperrt
+	const sessionsCard = screen.getByRole('table', { name: 'Ladesessions' }).closest('.sessions');
+	expect(sessionsCard).toHaveClass('stale');
+	expect(screen.getByRole('button', { name: 'CSV herunterladen' })).toBeDisabled();
 
 	answerSessions([chargingSession({ vehicle: 'tesla', vehicle_name: 'Tesla Model 3' })]);
 	await vi.advanceTimersByTimeAsync(0);
 	expect(results).toHaveAttribute('aria-busy', 'false');
+	expect(screen.getByRole('table', { name: 'Ladesessions' }).closest('.sessions')).not.toHaveClass(
+		'stale'
+	);
+	expect(screen.getByRole('button', { name: 'CSV herunterladen' })).toBeEnabled();
 	expect(
 		within(screen.getByRole('table', { name: 'Ladesessions' })).getByRole('cell', {
 			name: 'Tesla Model 3'
@@ -493,12 +501,18 @@ it('benennt die CSV nach Zeitraum und Auto der gezeigten Sessions', async () => 
 		await fireEvent.click(await screen.findByRole('button', { name: 'CSV herunterladen' }));
 		expect(downloads).toEqual(['ladesessions-2026-10-01-2026-10-31-tesla.csv']);
 
-		// September noch unterwegs: die gezeigten Sessions sind die des Oktobers, der Name auch
+		// September noch unterwegs: die Sessions des Oktobers stehen gedimmt da, das CSV ist gesperrt
 		api.stats.mockReturnValue(new Promise(() => {}));
-		navigate('?zeitraum=monat&datum=2026-09-15');
+		navigate('?zeitraum=monat&datum=2026-09-15&auto=tesla');
+		await vi.advanceTimersByTimeAsync(0);
+		expect(screen.getByRole('button', { name: 'CSV herunterladen' })).toBeDisabled();
+
+		// September da: der Name gehört zu Zeitraum und Auto der Sessions, die jetzt dastehen
+		api.stats.mockResolvedValue(stats());
+		navigate('?zeitraum=monat&datum=2026-09-16&auto=tesla');
 		await vi.advanceTimersByTimeAsync(0);
 		await fireEvent.click(screen.getByRole('button', { name: 'CSV herunterladen' }));
-		expect(downloads.at(-1)).toBe('ladesessions-2026-10-01-2026-10-31-tesla.csv');
+		expect(downloads.at(-1)).toBe('ladesessions-2026-09-01-2026-09-30-tesla.csv');
 	} finally {
 		click.mockRestore();
 		Reflect.deleteProperty(URL, 'createObjectURL');

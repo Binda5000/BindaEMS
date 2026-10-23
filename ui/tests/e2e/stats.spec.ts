@@ -70,8 +70,10 @@ test('Statistik filtert die Ladesessions nach Auto und zeigt den Verlauf', async
 	await card.getByRole('button', { name: 'Tesla Model 3' }).click();
 	await expect(page).toHaveURL(/auto=tesla/);
 	const rows = page.getByRole('table', { name: 'Ladesessions' }).locator('tbody tr');
+	// erst die gefilterte Liste abwarten: solange stehen noch die Zeilen aller Autos da
+	await expect(rows.filter({ hasNotText: 'Tesla Model 3' })).toHaveCount(0);
 	await expect(rows.first()).toBeVisible();
-	for (const row of await rows.all()) await expect(row).toContainText('Tesla Model 3');
+	await expect(page.locator('.results')).toHaveAttribute('aria-busy', 'false');
 
 	// Blättern behält das Auto
 	await page.getByRole('button', { name: 'Zurück' }).click();
