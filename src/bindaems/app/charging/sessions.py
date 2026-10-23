@@ -9,6 +9,9 @@ Kosten: PV zählt 0 ct, Akku mit dem Einstandspreis der Entladung (``SlotCost.di
 mit dem Bezugspreis des Slots. Fehlt der Bezugspreis bei einem Netzanteil über 0 oder ist der
 Einstandspreis bei einem Akkuanteil über 0 unbekannt, sind die Kosten unbekannt (``None``), nie 0.
 
+Die Tagesgruppe (``attribute_days``) teilt dieselbe Zuordnung nach dem Wiener Datum des
+Slotbeginns auf; ihre Tage ergeben zusammen die Summe je Auto von ``attribute``.
+
 ``SessionService`` liest und rechnet blockierend (``LedgerCosting.costs`` holt zuerst nach):
 aus einem Thread bzw. einem synchronen Route-Handler aufrufen.
 """
@@ -18,7 +21,7 @@ from __future__ import annotations
 import math
 from bisect import bisect_left
 from collections import Counter
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from itertools import accumulate
@@ -29,7 +32,14 @@ from bindaems.app.ha.entities import wallbox_type_label
 from bindaems.app.ledger.costing import LedgerCosting, SlotCost
 from bindaems.app.ledger.service import WALLBOX_PREFIX, LedgerService, LedgerSlot
 from bindaems.shared.config import Config
-from bindaems.shared.timeutil import SLOT, Clock, ensure_utc, local_day_slots, slot_start
+from bindaems.shared.timeutil import (
+    LOCAL_TZ,
+    SLOT,
+    Clock,
+    ensure_utc,
+    local_day_slots,
+    slot_start,
+)
 
 GUEST: Final = "guest"
 UNKNOWN: Final = "unknown"
@@ -174,16 +184,15 @@ def slot_sessions(
     return SessionLookup(sessions, now).at(wallbox, slot)
 
 
-def attribute(
+def _shares(
     slots: Sequence[LedgerSlot],
     costs: Mapping[datetime, SlotCost],
     sessions: Sequence[StoredSession],
     now: datetime,
-) -> tuple[dict[int, FlowSplit], dict[str, FlowSplit]]:
-    """Energie und Kosten je Session (Schlüssel ``id``) und je Auto (Schlüssel wie
-    ``vehicle_key``). Jede übergebene Session kommt vor, auch ohne Energie."""
-    per_session: dict[int, _Sum] = {session.id: _Sum() for session in sessions}
-    per_vehicle: dict[str, _Sum] = {vehicle_key(session): _Sum() for session in sessions}
+) -> Iterator[tuple[LedgerSlot, StoredSession | None, float, float, float, float | None]]:
+    """Je Slot und Wallbox mit Energie: Slot, Session (oder ``None``), PV-, Akku- und Netz-Wh
+    sowie die Kosten in ct (``None``: unbekannt). Gemeinsamer Durchlauf von ``attribute`` und
+    ``attribute_days``."""
     lookup = SessionLookup(sessions, now)
     for slot in slots:
         energy: dict[str, list[float]] = {}  # Wallbox → pv, Akku, Netz in Wh
@@ -194,14 +203,62 @@ def attribute(
         for wallbox, (pv_wh, battery_wh, grid_wh) in energy.items():
             session = lookup.at(wallbox, slot.slot_start)
             cost = _cost_ct(slot, costs.get(slot.slot_start), battery_wh, grid_wh)
-            if session is not None:
-                per_session[session.id].add(pv_wh, battery_wh, grid_wh, cost)
-            key = vehicle_key(session) if session is not None else UNKNOWN
-            per_vehicle.setdefault(key, _Sum()).add(pv_wh, battery_wh, grid_wh, cost)
+            yield slot, session, pv_wh, battery_wh, grid_wh, cost
+
+
+def attribute(
+    slots: Sequence[LedgerSlot],
+    costs: Mapping[datetime, SlotCost],
+    sessions: Sequence[StoredSession],
+    now: datetime,
+) -> tuple[dict[int, FlowSplit], dict[str, FlowSplit]]:
+    """Energie und Kosten je Session (Schlüssel ``id``) und je Auto (Schlüssel wie
+    ``vehicle_key``). Jede übergebene Session kommt vor, auch ohne Energie."""
+    per_session: dict[int, _Sum] = {session.id: _Sum() for session in sessions}
+    per_vehicle: dict[str, _Sum] = {vehicle_key(session): _Sum() for session in sessions}
+    for _, session, pv_wh, battery_wh, grid_wh, cost in _shares(slots, costs, sessions, now):
+        if session is not None:
+            per_session[session.id].add(pv_wh, battery_wh, grid_wh, cost)
+        key = vehicle_key(session) if session is not None else UNKNOWN
+        per_vehicle.setdefault(key, _Sum()).add(pv_wh, battery_wh, grid_wh, cost)
     return (
         {session_id: total.split() for session_id, total in per_session.items()},
         {key: total.split() for key, total in per_vehicle.items()},
     )
+
+
+def attribute_days(
+    slots: Sequence[LedgerSlot],
+    costs: Mapping[datetime, SlotCost],
+    sessions: Sequence[StoredSession],
+    now: datetime,
+) -> dict[date, dict[str, FlowSplit]]:
+    """Energie und Kosten je Wiener Datum des Slotbeginns und je Auto (Schlüssel wie
+    ``vehicle_key``, Energie ohne Session ``unknown``). Nur Tage und Autos mit Wallbox-Energie
+    über 0; die Kosten sind je Tag und Auto unbekannt, sobald ein Slot daran unbekannt ist."""
+    totals: dict[tuple[date, str], _Sum] = {}
+    for slot, session, pv_wh, battery_wh, grid_wh, cost in _shares(slots, costs, sessions, now):
+        key = vehicle_key(session) if session is not None else UNKNOWN
+        day = slot.slot_start.astimezone(LOCAL_TZ).date()
+        totals.setdefault((day, key), _Sum()).add(pv_wh, battery_wh, grid_wh, cost)
+    days: dict[date, dict[str, FlowSplit]] = {}
+    for (day, key), total in sorted(totals.items()):
+        split = total.split()
+        if split.kwh > 0:
+            days.setdefault(day, {})[key] = split
+    return days
+
+
+def merge_splits(splits: Iterable[FlowSplit]) -> FlowSplit:
+    """Summe mehrerer ``FlowSplit``; die Kosten sind unbekannt (``None``), sobald eine
+    Teilsumme unbekannt ist. Ohne Teile alles 0."""
+    parts = list(splits)
+    pv = math.fsum(part.pv_kwh for part in parts)
+    battery = math.fsum(part.battery_kwh for part in parts)
+    grid = math.fsum(part.grid_kwh for part in parts)
+    costs = [part.cost_eur for part in parts]
+    cost = None if any(c is None for c in costs) else math.fsum(c for c in costs if c is not None)
+    return FlowSplit(math.fsum((pv, battery, grid)), pv, battery, grid, cost)
 
 
 def _cost_ct(
@@ -296,6 +353,15 @@ class SessionService:
         stop = slot_start(last) if slot_start(last) == last else slot_start(last) + SLOT
         sessions = self._tracker.sessions(first, stop)
         return self._attribute(first, stop, sessions, self._clock.now())[1]
+
+    def by_vehicle_days(self, first: date, last: date) -> dict[date, dict[str, FlowSplit]]:
+        """Energie und Kosten je Wiener Tag und Auto (``guest``, ``unknown``) für die Tage
+        ``first`` bis ``last``; nur Tage und Autos mit Wallbox-Energie. Eine Abfrage der
+        Abrechnung, eine Zuordnung."""
+        start, end = local_day_slots(first)[0], local_day_slots(last)[-1] + SLOT
+        sessions = self._tracker.sessions(start, end)
+        slots = self._ledger.slots(start, end)
+        return attribute_days(slots, self._costing.costs(start, end), sessions, self._clock.now())
 
     def _attribute(
         self,

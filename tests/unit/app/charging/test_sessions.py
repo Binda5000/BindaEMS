@@ -1,4 +1,4 @@
-from datetime import date, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 
 import pytest
 from sqlalchemy import insert
@@ -10,6 +10,8 @@ from bindaems.app.charging.sessions import (
     UNKNOWN,
     FlowSplit,
     attribute,
+    attribute_days,
+    merge_splits,
     slot_sessions,
     vehicle_name,
     wallbox_name,
@@ -21,6 +23,7 @@ from bindaems.app.ledger.service import LedgerSlot
 from bindaems.shared.timeutil import SLOT
 
 NOW = T0 + timedelta(hours=6)
+NOW_LATE = datetime(2026, 10, 10, 6, 0, tzinfo=UTC)
 
 
 def stored(
@@ -334,3 +337,84 @@ def test_count_by_vehicle_counts_without_attribution(
     monkeypatch.setattr("bindaems.app.charging.sessions.attribute", no_attribution)
     day = date(2026, 10, 9)
     assert service.count_by_vehicle(day, day) == {"tesla": 2, GUEST: 1, UNKNOWN: 1}
+
+
+def test_merge_splits_sums_and_keeps_unknown_cost() -> None:
+    a = FlowSplit(1.5, 1.0, 0.5, 0.0, 0.01)
+    b = FlowSplit(2.0, 0.0, 0.0, 2.0, 0.6)
+    assert merge_splits([a, b]) == FlowSplit(3.5, 1.0, 0.5, 2.0, pytest.approx(0.61))
+    assert merge_splits([a, FlowSplit(1.0, 0.0, 0.0, 1.0, None)]).cost_eur is None
+    assert merge_splits([]) == FlowSplit(0.0, 0.0, 0.0, 0.0, 0.0)
+
+
+def test_attribute_days_splits_at_vienna_midnight() -> None:
+    # 21:45Z = 23:45 Ortszeit am 9., 22:00Z = 00:00 Ortszeit am 10. (MESZ)
+    late = datetime(2026, 10, 9, 21, 45, tzinfo=UTC)
+    session = stored(1, late, late + SLOT * 2)
+    slots = [led(late, {"pv>wb:twc": 1000.0}), led(late + SLOT, {"pv>wb:twc": 500.0})]
+    days = attribute_days(slots, {}, [session], NOW_LATE)
+    assert days == {
+        date(2026, 10, 9): {"tesla": FlowSplit(1.0, 1.0, 0.0, 0.0, 0.0)},
+        date(2026, 10, 10): {"tesla": FlowSplit(0.5, 0.5, 0.0, 0.0, 0.0)},
+    }
+
+
+def test_attribute_days_energy_without_session_is_unknown() -> None:
+    days = attribute_days([led(T0, {"pv>wb:evcs": 300.0})], {}, [], NOW)
+    assert days == {date(2026, 10, 9): {UNKNOWN: FlowSplit(0.3, 0.3, 0.0, 0.0, 0.0)}}
+
+
+def test_attribute_days_cost_unknown_only_on_that_day() -> None:
+    session = stored(1, T0 - timedelta(days=1), T0 + SLOT)
+    slots = [
+        led(T0 - timedelta(days=1), {"grid>wb:twc": 1000.0}, price=30.0),
+        led(T0, {"grid>wb:twc": 1000.0}),  # ohne Bezugspreis
+    ]
+    days = attribute_days(slots, {}, [session], NOW)
+    assert days[date(2026, 10, 8)]["tesla"].cost_eur == pytest.approx(0.30)
+    assert days[date(2026, 10, 9)]["tesla"].cost_eur is None
+
+
+def test_attribute_days_add_up_to_attribute() -> None:
+    sessions = [stored(1, T0, T0 + SLOT * 3), stored(2, T0, T0 + SLOT * 3, "guest", "evcs")]
+    slots = [
+        led(
+            T0 + SLOT * i,
+            {"pv>wb:twc": 400.0 + i, "battery>wb:evcs": 100.0, "grid>wb:twc": 50.0},
+            price=25.0,
+        )
+        for i in range(3)
+    ]
+    costs = {slot.slot_start: cost(slot.slot_start) for slot in slots}
+    _, per_vehicle = attribute(slots, costs, sessions, NOW)
+    days = attribute_days(slots, costs, sessions, NOW)
+    for key, split in per_vehicle.items():
+        merged = merge_splits(day[key] for day in days.values() if key in day)
+        assert merged.kwh == pytest.approx(split.kwh)
+        assert merged.cost_eur == pytest.approx(split.cost_eur)
+
+
+def test_attribute_days_on_the_dst_day() -> None:
+    # 25.10.2026 hat 25 Stunden: 100 Slots von 24.10. 22:00Z bis 25.10. 23:00Z
+    day_start = datetime(2026, 10, 24, 22, 0, tzinfo=UTC)
+    slots = [led(day_start + SLOT * i, {"pv>wb:twc": 100.0}) for i in range(100)]
+    session = stored(1, day_start, day_start + SLOT * 100)
+    days = attribute_days(slots, {}, [session], datetime(2026, 10, 26, 12, 0, tzinfo=UTC))
+    assert list(days) == [date(2026, 10, 25)]
+    assert days[date(2026, 10, 25)]["tesla"].kwh == pytest.approx(10.0)
+
+
+def test_service_by_vehicle_days_covers_the_local_days(service, engine, ledger, clock) -> None:
+    clock.advance(timedelta(days=2))
+    add_session(engine, T0, T0 + SLOT)
+    add_session(engine, T0 + timedelta(days=1), T0 + timedelta(days=1) + SLOT, "guest")
+    ingest(ledger, T0, {"pv>wb:twc": 1000.0})
+    ingest(ledger, T0 + timedelta(days=1), {"pv>wb:twc": 500.0})
+    days = service.by_vehicle_days(date(2026, 10, 9), date(2026, 10, 10))
+    assert {day: list(found) for day, found in days.items()} == {
+        date(2026, 10, 9): ["tesla"],
+        date(2026, 10, 10): ["guest"],
+    }
+    assert service.by_vehicle_days(date(2026, 10, 10), date(2026, 10, 10)) == {
+        date(2026, 10, 10): {"guest": FlowSplit(0.5, 0.5, 0.0, 0.0, 0.0)}
+    }
