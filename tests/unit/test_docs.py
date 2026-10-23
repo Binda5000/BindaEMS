@@ -281,13 +281,17 @@ def test_statistics_page_in_the_guide_uses_the_texts_of_the_ui() -> None:
         "machbaren Ladungen erreicht",
         "Vor der Abfahrt abgesteckt:",
         "Vor der Abfahrt geändert oder verlassen:",
+        "Weitere 50 anzeigen",
+        "CSV herunterladen",
+        "Laden je Auto",
+        "Den Verlauf zeigen Woche, Monat und Jahr.",
     ):
         assert phrase in text, phrase
         assert phrase in source, phrase
     # die Grenze steht im UI als SESSIONS_LIMIT (gleich MAX_SESSIONS des Servers, test_routes.py)
-    assert "Angezeigt werden die 200 neuesten Sessions." in text
+    assert "Angezeigt werden die 2000 neuesten Sessions." in text
     assert "Angezeigt werden die {SESSIONS_LIMIT} neuesten Sessions." in source
-    assert "export const SESSIONS_LIMIT = 200;" in source
+    assert "export const SESSIONS_LIMIT = 2000;" in source
     assert "\n| Statistik | " in _guide_section("12. Web-UI")  # die Zeile der Seitenliste
     for topic in ("Session seit {HH:MM}", "Letzte Session {TT.MM.}"):
         assert topic in section, topic
@@ -1201,7 +1205,7 @@ def test_charging_sessions_endpoint_in_the_guide() -> None:
     # „Ladesessions und Kosten je Auto“: der Endpunkt mit Parametern, Grenzen und Kostenregel.
     section = _guide_section("8. Tarif und Abrechnung")
     assert "GET /api/charging/sessions?from=JJJJ-MM-TT&to=JJJJ-MM-TT" in section
-    for text in ("höchstens 400 Tage", "höchstens 200 Einträge", "`guest`", "`unknown`"):
+    for text in ("höchstens 400 Tage", "höchstens 2000 Einträge", "`guest`", "`unknown`"):
         assert text in section, text
     for field in ("pv_kwh", "battery_kwh", "grid_kwh", "cost_eur", "wallbox_name", "vehicle_name"):
         assert f"`{field}`" in section, field

@@ -14,6 +14,7 @@ import {
 	peakRows,
 	savingsRows,
 	sessionRows,
+	sessionsCsv,
 	tiles,
 	vehicleLabel,
 	vehicleRows
@@ -417,5 +418,53 @@ describe('Karte Abgleich', () => {
 		const missing = stats({ checks: { days: 3, flagged_days: [], totals } });
 		expect(checkRows(missing, {})).toEqual([]);
 		expect(checkNotice(missing)).toBe('Keine Zählerwerte für diesen Zeitraum.');
+	});
+});
+
+describe('CSV der Sessions', () => {
+	it('schreibt die Sessions als CSV für Excel', () => {
+		const csv = sessionsCsv([
+			chargingSession({
+				start: '2026-10-09T06:00:00+00:00',
+				end: '2026-10-09T07:30:00+00:00',
+				wallbox_name: 'Garage',
+				vehicle: 'tesla',
+				vehicle_name: 'Tesla Model 3',
+				kwh: 12.3456,
+				pv_kwh: 10,
+				battery_kwh: 2.3456,
+				grid_kwh: 0,
+				cost_eur: 0.4567
+			}),
+			chargingSession({ open: true, end: null, cost_eur: null, vehicle: 'guest', vehicle_name: '' })
+		]);
+		const lines = csv.split('\r\n');
+		expect(csv.startsWith('\ufeff')).toBe(true);
+		expect(lines[0]).toBe(
+			'\ufeffBeginn;Ende;Wallbox;Auto;Energie kWh;PV kWh;Akku kWh;Netz kWh;Kosten EUR'
+		);
+		expect(lines[1]).toBe(
+			'09.10.2026 08:00;09.10.2026 09:30;Garage;Tesla Model 3;12,346;10,000;2,346;0,000;0,46'
+		);
+		expect(lines[2]).toMatch(/^[\d.]+ [\d:]+;;[^;]*;Gast;/);
+		expect(lines[2].endsWith(';')).toBe(true); // Kosten unbekannt: leer
+	});
+
+	it('quotet Felder mit Semikolon und Anführungszeichen', () => {
+		const csv = sessionsCsv([chargingSession({ wallbox_name: 'Garage; "links"' })]);
+		expect(csv.split('\r\n')[1]).toContain(';"Garage; ""links""";');
+	});
+
+	it('schreibt Zahlen ohne Tausenderpunkt', () => {
+		const csv = sessionsCsv([chargingSession({ kwh: 12345.678, cost_eur: 1234.5 })]);
+		const fields = csv.split('\r\n')[1].split(';');
+		expect(fields[4]).toBe('12345,678');
+		expect(fields[8]).toBe('1234,50');
+	});
+
+	it('hat ohne Sessions nur die Kopfzeile', () => {
+		expect(sessionsCsv([]).split('\r\n')).toEqual([
+			'\ufeffBeginn;Ende;Wallbox;Auto;Energie kWh;PV kWh;Akku kWh;Netz kWh;Kosten EUR'
+		]);
 	});
 });

@@ -12,7 +12,7 @@ import {
 	formatRatio,
 	formatTime
 } from '$lib/format';
-import { offsetMinutes, parseIso, todayVienna } from '$lib/time';
+import { VIENNA, offsetMinutes, parseIso, todayVienna } from '$lib/time';
 import { MONTHS, periodTitle, type Period } from './period';
 
 export interface Tile {
@@ -217,6 +217,73 @@ export function sessionRows(sessions: ChargingSession[]): SessionRow[] {
 			.join(' / ')}${NBSP}kWh`,
 		cost: formatEur(session.cost_eur)
 	}));
+}
+
+/** So viele Sessions zeigt die Karte „Ladesessions“ zuerst und je „Weitere 50 anzeigen“ mehr */
+export const SESSIONS_PAGE = 50;
+
+const CSV_HEADER = [
+	'Beginn',
+	'Ende',
+	'Wallbox',
+	'Auto',
+	'Energie kWh',
+	'PV kWh',
+	'Akku kWh',
+	'Netz kWh',
+	'Kosten EUR'
+];
+
+// „09.10.2026 08:00“ in Wiener Zeit, mit Leerzeichen statt Komma wie `formatDateTime`
+const CSV_TIME = new Intl.DateTimeFormat('de-AT', {
+	timeZone: VIENNA,
+	day: '2-digit',
+	month: '2-digit',
+	year: 'numeric',
+	hour: '2-digit',
+	minute: '2-digit',
+	hourCycle: 'h23'
+});
+
+function csvTime(iso: string | null): string {
+	const ms = iso === null ? null : parseIso(iso);
+	if (ms === null) return '';
+	const part = Object.fromEntries(CSV_TIME.formatToParts(ms).map((p) => [p.type, p.value]));
+	return `${part.day}.${part.month}.${part.year} ${part.hour}:${part.minute}`;
+}
+
+/** Zahl mit Komma, ohne Tausenderpunkt (Excel liest sie dann als Zahl) und ohne „-0“ */
+function csvNumber(value: number, digits: number): string {
+	const text = value.toFixed(digits);
+	return (/^-0(\.0*)?$/.test(text) ? text.slice(1) : text).replace('.', ',');
+}
+
+function csvField(text: string): string {
+	return /[;"\r\n]/.test(text) ? `"${text.replaceAll('"', '""')}"` : text;
+}
+
+/**
+ * Die Sessions als CSV für Excel (de-AT): Semikolon, Zeilenende `\r\n`, mit BOM am Anfang. Kopfzeile
+ * und eine Zeile je Session in der Reihenfolge der Liste; Zeiten in Wiener Zeit, eine laufende Session
+ * hat kein Ende, unbekannte Kosten bleiben leer (nie 0).
+ */
+export function sessionsCsv(sessions: ChargingSession[]): string {
+	const lines = sessions.map((session) =>
+		[
+			csvTime(session.start),
+			session.open ? '' : csvTime(session.end),
+			session.wallbox_name,
+			vehicleLabel(session.vehicle, session.vehicle_name),
+			csvNumber(session.kwh, 3),
+			csvNumber(session.pv_kwh, 3),
+			csvNumber(session.battery_kwh, 3),
+			csvNumber(session.grid_kwh, 3),
+			session.cost_eur === null ? '' : csvNumber(session.cost_eur, 2)
+		]
+			.map(csvField)
+			.join(';')
+	);
+	return `\ufeff${[CSV_HEADER.join(';'), ...lines].join('\r\n')}`;
 }
 
 export interface ConsumerRow {
