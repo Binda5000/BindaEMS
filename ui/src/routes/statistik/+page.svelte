@@ -18,7 +18,6 @@
 		isRunning,
 		parseDay,
 		parsePeriod,
-		periodParam,
 		periodRange,
 		periodTitle,
 		shift,
@@ -30,7 +29,9 @@
 	import SessionsCard from '$lib/stats/SessionsCard.svelte';
 	import StatTiles from '$lib/stats/StatTiles.svelte';
 	import VehicleCard from '$lib/stats/VehicleCard.svelte';
+	import VehicleTrendCard from '$lib/stats/VehicleTrendCard.svelte';
 	import { hints, tiles } from '$lib/stats/view';
+	import { parseVehicle, statsHref, vehicleChoices, vehicleColor } from '$lib/stats/vehicles';
 	import { theme } from '$lib/theme.svelte';
 	import { wallboxName } from '$lib/wallboxes';
 
@@ -44,18 +45,21 @@
 		return () => clearInterval(clock);
 	});
 
-	// Zeitraum und Datum stehen in der URL (?zeitraum=tag|woche|monat|jahr&datum=JJJJ-MM-TT)
+	// Zeitraum, Datum und Auto stehen in der URL (?zeitraum=tag|woche|monat|jahr&datum=JJJJ-MM-TT&auto=…)
 	const period = $derived(parsePeriod(page.url.searchParams.get('zeitraum')));
 	const day = $derived(parseDay(page.url.searchParams.get('datum'), today));
 	const title = $derived(periodTitle(period, day));
 	const range = $derived(periodRange(period, day));
 	const running = $derived(isRunning(period, day, today));
+	// gewähltes Auto (?auto=…), `null`: alle; filtert auch die Ladesessions
+	const vehicle = $derived(parseVehicle(page.url.searchParams.get('auto')));
 
 	function open(nextPeriod: Period, nextDay: string) {
-		void goto(`/statistik?zeitraum=${periodParam(nextPeriod)}&datum=${nextDay}`, {
-			keepFocus: true,
-			noScroll: true
-		});
+		void goto(statsHref(nextPeriod, nextDay, vehicle), { keepFocus: true, noScroll: true });
+	}
+
+	function choose(key: string | null) {
+		void goto(statsHref(period, day, key), { keepFocus: true, noScroll: true });
 	}
 
 	// Der laufende Zeitraum lädt jede Minute nach, ein vergangener nur einmal (nach einem Fehler
@@ -69,14 +73,14 @@
 	}
 	let query = $state.raw<Query | null>(null);
 	$effect(() => {
-		const key = { period, day, first: range.first, last: range.last };
+		const key = { period, day, first: range.first, last: range.last, vehicle };
 		const options = { intervalMs: running ? POLL_MS : undefined, retryMs: RETRY_MS };
 		const next: Query = {
 			title,
 			running,
 			stats: new Resource((o) => api.stats(key.period, key.day, o), options),
 			sessions: new Resource(
-				(o) => api.chargingSessions(key.first, key.last, undefined, o),
+				(o) => api.chargingSessions(key.first, key.last, key.vehicle ?? undefined, o),
 				options
 			)
 		};
@@ -121,6 +125,8 @@
 		void theme.dark;
 		return readPalette();
 	});
+	const choices = $derived(vehicleChoices(limits.data, vehicle));
+	const colorOf = (key: string) => vehicleColor(key, limits.data, palette);
 	const chartOption = $derived(current ? statsEnergyOption(current, palette) : null);
 </script>
 
@@ -182,6 +188,7 @@
 
 			<CostCard stats={current} />
 			<VehicleCard stats={current} />
+			<VehicleTrendCard stats={current} {vehicle} {choices} {colorOf} {palette} onselect={choose} />
 			<PlannedCard stats={current} />
 			<SessionsCard sessions={view?.sessions.data} error={view?.sessions.error?.detail} />
 			<ConsumersCard stats={current} />

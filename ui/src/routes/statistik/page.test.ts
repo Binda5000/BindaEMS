@@ -164,7 +164,7 @@ it('rückt um Mitternacht auf den neuen Tag weiter', async () => {
 	expect(api.stats.mock.lastCall?.slice(0, 2)).toEqual(['day', '2026-10-10']);
 });
 
-it('zeigt unter den Kosten Autos, Ladesessions, Verbraucher, Monatsspitzen und Abgleich', async () => {
+it('zeigt unter den Kosten Autos, Laden je Auto, Ladesessions, Verbraucher, Monatsspitzen und Abgleich', async () => {
 	navigate('?zeitraum=monat&datum=2026-10-09');
 	render(Page);
 	await screen.findByRole('table', { name: 'Ladesessions' });
@@ -174,6 +174,7 @@ it('zeigt unter den Kosten Autos, Ladesessions, Verbraucher, Monatsspitzen und A
 		'Energie',
 		'Kosten',
 		'Autos',
+		'Laden je Auto',
 		'Geplantes Laden',
 		'Ladesessions',
 		'Verbraucher',
@@ -375,4 +376,49 @@ it('fragt nach dem Verlassen der Seite nicht mehr nach', async () => {
 	expect(api.chargingSessions).not.toHaveBeenCalled();
 	expect(api.limits).not.toHaveBeenCalled();
 	expect(vi.getTimerCount()).toBe(0);
+});
+
+it('filtert die Ladesessions nach dem Auto aus der Adresse', async () => {
+	navigate('?zeitraum=monat&datum=2026-10-09&auto=tesla');
+	render(Page);
+	await waitFor(() => expect(api.chargingSessions).toHaveBeenCalled());
+	expect(api.chargingSessions.mock.lastCall?.slice(0, 3)).toEqual([
+		'2026-10-01',
+		'2026-10-31',
+		'tesla'
+	]);
+	expect(await screen.findByRole('group', { name: 'Auto wählen' })).toBeInTheDocument();
+	expect(screen.getByRole('button', { name: 'Tesla Model 3' })).toHaveAttribute(
+		'aria-pressed',
+		'true'
+	);
+});
+
+it('lädt ohne Auto alle Ladesessions', async () => {
+	navigate('?zeitraum=monat&datum=2026-10-09');
+	render(Page);
+	await waitFor(() => expect(api.chargingSessions).toHaveBeenCalled());
+	expect(api.chargingSessions.mock.lastCall?.[2]).toBeUndefined();
+});
+
+it('behält das Auto beim Blättern und entfernt es mit „Alle“', async () => {
+	navigate('?zeitraum=monat&datum=2026-10-09&auto=tesla');
+	render(Page);
+	await fireEvent.click(screen.getByRole('button', { name: 'Zurück' }));
+	expect(goto.mock.lastCall?.[0]).toBe('/statistik?zeitraum=monat&datum=2026-09-09&auto=tesla');
+	await fireEvent.click(await screen.findByRole('button', { name: 'Alle' }));
+	expect(goto).toHaveBeenLastCalledWith(
+		'/statistik?zeitraum=monat&datum=2026-10-09',
+		expect.objectContaining({ keepFocus: true, noScroll: true })
+	);
+});
+
+it('wählt ein Auto über die Adresse', async () => {
+	navigate('?zeitraum=monat&datum=2026-10-09');
+	render(Page);
+	await fireEvent.click(await screen.findByRole('button', { name: 'e-Golf' }));
+	expect(goto).toHaveBeenLastCalledWith(
+		'/statistik?zeitraum=monat&datum=2026-10-09&auto=egolf',
+		expect.objectContaining({ keepFocus: true, noScroll: true })
+	);
 });
