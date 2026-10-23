@@ -64,6 +64,10 @@ Prüfschritte:
    Zählerständen nachgerechnet hat (Betriebshandbuch, „Lücken nachrechnen“). Eine Schätzung rechnet
    aus denselben Zählern und verbessert den Abgleich an diesen Tagen von selbst. Trage die Zahl ein
    und vermerke die Tage mit Schätzung in Abschnitt 3.
+6. **Laden je Auto (Plan 4c, nur wenn 4c ausgerollt ist):** Im Monat stimmt die Summe der Balken eines
+   Autos (kWh und €) mit der Zeile in „Autos“ überein; die CSV des Monats öffnet in Excel mit Zahlen in
+   den Spalten Energie und Kosten (Betriebshandbuch, Abschnitt 12, „Statistik“, „Laden je Auto“ und
+   „Ladesessions“). Das ist kein Kriterium der Spec, sondern eine Probe der neuen Karte.
 
 Nachweis: Ausgabe von `GET /api/ledger/checks` (`totals`) oder Bildschirmfoto der Karte.
 
@@ -76,6 +80,8 @@ Nachweis: Ausgabe von `GET /api/ledger/checks` (`totals`) oder Bildschirmfoto de
 | Wallbox ______ , nur notiert | | | | – | von 30 |
 
 Geschätzte Viertelstunden im Zeitraum: ________ (Tage: ________________)
+
+Laden je Auto (Schritt 6): Summe der Balken = Zeile in „Autos“ ☐ (kWh) ☐ (€) · CSV in Excel mit Zahlen ☐
 
 Datum: ________ Ergebnis: ☐ bestanden ☐ nicht bestanden Unterschrift: ________
 
