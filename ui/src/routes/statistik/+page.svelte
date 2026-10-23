@@ -147,6 +147,8 @@
 	const sessionsError = $derived(
 		sessionsQuery !== null && sameRange(sessionsQuery) ? sessionsQuery.sessions.error : null
 	);
+	// die Sessions im Bild gehören noch nicht zur letzten Abfrage (anderes Auto oder Zeitraum)
+	const sessionsStale = $derived(sessionsView !== undefined && sessionsView !== sessionsQuery);
 	const sessionsData = $derived(sessionsView?.sessions.data);
 	const busy = $derived(
 		stale ||
@@ -247,7 +249,12 @@
 				onselect={choose}
 			/>
 			<PlannedCard stats={current} />
-			<SessionsCard sessions={sessionsData} error={sessionsError?.detail} {filename} />
+			<SessionsCard
+				sessions={sessionsData}
+				error={sessionsError?.detail}
+				{filename}
+				stale={sessionsStale}
+			/>
 			<ConsumersCard stats={current} />
 			<PeaksCard stats={current} />
 			<ChecksCard stats={current} {wallboxNames} />
@@ -273,6 +280,11 @@
 
 	.stale {
 		opacity: 0.5;
+	}
+
+	/* schon die ganze Seite ist gedimmt: die Sessions nicht ein zweites Mal */
+	.results.stale :global(.sessions.stale) {
+		opacity: 1;
 	}
 
 	.switch {

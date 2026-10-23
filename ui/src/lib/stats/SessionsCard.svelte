@@ -12,9 +12,13 @@
 		error?: string;
 		/** Dateiname des CSV, z. B. `ladesessions-2026-10-01-2026-10-31-tesla.csv` */
 		filename: string;
+		/** die Sessions gehören noch zur vorigen Auswahl: gedimmt, CSV gesperrt, bis die neuen da sind */
+		stale?: boolean;
 	}
 
-	let { sessions, error, filename }: Props = $props();
+	const REVOKE_MS = 40_000;
+
+	let { sessions, error, filename, stale = false }: Props = $props();
 
 	const rows = $derived(sessions ? sessionRows(sessions) : []);
 
@@ -29,7 +33,7 @@
 
 	// Alle geladenen Sessions (nicht nur die angezeigten) als Datei speichern, ganz im Browser
 	function download() {
-		if (!sessions) return;
+		if (!sessions || stale) return;
 		const url = URL.createObjectURL(
 			new Blob([sessionsCsv(sessions)], { type: 'text/csv;charset=utf-8' })
 		);
@@ -37,64 +41,77 @@
 		link.href = url;
 		link.download = filename;
 		link.click();
-		URL.revokeObjectURL(url);
+		// Safari/iOS und manche Firefox brechen den Download ab, wenn die Adresse sofort fällt
+		setTimeout(() => URL.revokeObjectURL(url), REVOKE_MS);
 	}
 </script>
 
-<Card title="Ladesessions">
-	{#if !sessions}
-		{#if error}
-			<Notice level="error">{error}</Notice>
-		{:else}
-			<p class="muted">Lädt …</p>
-		{/if}
-	{:else if rows.length === 0}
-		<p class="muted">Keine Ladesessions im Zeitraum.</p>
-	{:else}
-		<div class="scroll wide">
-			<table aria-label="Ladesessions">
-				<thead>
-					<tr>
-						<th scope="col">Beginn</th>
-						<th scope="col">Ende</th>
-						<th scope="col">Wallbox</th>
-						<th scope="col">Auto</th>
-						<th scope="col" class="num">Energie</th>
-						<th scope="col" class="num">PV / Akku / Netz</th>
-						<th scope="col" class="num">Kosten</th>
-					</tr>
-				</thead>
-				<tbody>
-					{#each rows.slice(0, shown) as row (row.id)}
-						<tr>
-							<td>{row.start}</td>
-							<td>{row.end}</td>
-							<td>{row.wallbox}</td>
-							<td>{row.vehicle}</td>
-							<td class="num">{row.energy}</td>
-							<td class="num">{row.split}</td>
-							<td class="num">{row.cost}</td>
-						</tr>
-					{/each}
-				</tbody>
-			</table>
-		</div>
-		{#if rows.length > shown}
-			<p class="muted more">{shown} von {rows.length} angezeigt</p>
-		{/if}
-		<div class="actions">
-			{#if rows.length > shown}
-				<button type="button" onclick={() => (shown += SESSIONS_PAGE)}>Weitere 50 anzeigen</button>
+<div class="sessions" class:stale>
+	<Card title="Ladesessions">
+		{#if !sessions}
+			{#if error}
+				<Notice level="error">{error}</Notice>
+			{:else}
+				<p class="muted">Lädt …</p>
 			{/if}
-			<button type="button" onclick={download}>CSV herunterladen</button>
-		</div>
-		{#if rows.length >= SESSIONS_LIMIT}
-			<p class="muted limit">Angezeigt werden die {SESSIONS_LIMIT} neuesten Sessions.</p>
+		{:else if rows.length === 0}
+			<p class="muted">Keine Ladesessions im Zeitraum.</p>
+		{:else}
+			<div class="scroll wide">
+				<table aria-label="Ladesessions">
+					<thead>
+						<tr>
+							<th scope="col">Beginn</th>
+							<th scope="col">Ende</th>
+							<th scope="col">Wallbox</th>
+							<th scope="col">Auto</th>
+							<th scope="col" class="num">Energie</th>
+							<th scope="col" class="num">PV / Akku / Netz</th>
+							<th scope="col" class="num">Kosten</th>
+						</tr>
+					</thead>
+					<tbody>
+						{#each rows.slice(0, shown) as row (row.id)}
+							<tr>
+								<td>{row.start}</td>
+								<td>{row.end}</td>
+								<td>{row.wallbox}</td>
+								<td>{row.vehicle}</td>
+								<td class="num">{row.energy}</td>
+								<td class="num">{row.split}</td>
+								<td class="num">{row.cost}</td>
+							</tr>
+						{/each}
+					</tbody>
+				</table>
+			</div>
+			{#if rows.length > shown}
+				<p class="muted more">{shown} von {rows.length} angezeigt</p>
+			{/if}
+			<div class="actions">
+				{#if rows.length > shown}
+					<button type="button" onclick={() => (shown += SESSIONS_PAGE)}>Weitere 50 anzeigen</button
+					>
+				{/if}
+				<button type="button" disabled={stale} onclick={download}>CSV herunterladen</button>
+			</div>
+			{#if rows.length >= SESSIONS_LIMIT}
+				<p class="muted limit">Angezeigt werden die {SESSIONS_LIMIT} neuesten Sessions.</p>
+			{/if}
 		{/if}
-	{/if}
-</Card>
+	</Card>
+</div>
 
 <style>
+	.sessions {
+		min-width: 0;
+		transition: opacity 0.2s;
+	}
+
+	.sessions.stale {
+		opacity: 0.5;
+	}
+
 	.limit,
 	.more {
 		margin: 0.5rem 0 0;

@@ -137,6 +137,36 @@ it('speichert mit „CSV herunterladen“ alle Sessions unter dem Dateinamen', a
 	const text = new TextDecoder('utf-8', { ignoreBOM: true }).decode(await blob.arrayBuffer());
 	expect(text.split('\r\n')).toHaveLength(61);
 	expect(clicked).toEqual([{ download: FILENAME, href: 'blob:csv' }]);
-	expect(revokeObjectURL).toHaveBeenCalledWith('blob:csv');
 	expect(document.querySelector('a[download]')).toBeNull(); // der Link bleibt nicht im Dokument
+});
+
+it('dimmt die Karte und sperrt „CSV herunterladen“, solange die Sessions veraltet sind', async () => {
+	const sessions = [chargingSession()];
+	const { rerender } = render(SessionsCard, { sessions, filename: FILENAME, stale: true });
+	expect(screen.getByRole('table', { name: 'Ladesessions' }).closest('.sessions')).toHaveClass(
+		'stale'
+	);
+	expect(screen.getByRole('button', { name: 'CSV herunterladen' })).toBeDisabled();
+	await rerender({ sessions, filename: FILENAME, stale: false });
+	expect(screen.getByRole('table', { name: 'Ladesessions' }).closest('.sessions')).not.toHaveClass(
+		'stale'
+	);
+	expect(screen.getByRole('button', { name: 'CSV herunterladen' })).toBeEnabled();
+});
+
+it('gibt die Download-Adresse erst verzögert frei', async () => {
+	vi.useFakeTimers();
+	try {
+		const revokeObjectURL = vi.fn();
+		Object.assign(URL, { createObjectURL: () => 'blob:csv', revokeObjectURL });
+		vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
+		render(SessionsCard, { sessions: [chargingSession()], filename: FILENAME });
+		await fireEvent.click(screen.getByRole('button', { name: 'CSV herunterladen' }));
+		// sofort noch nicht: Safari und manche Firefox brechen den Download sonst ab
+		expect(revokeObjectURL).not.toHaveBeenCalled();
+		await vi.advanceTimersByTimeAsync(40_000);
+		expect(revokeObjectURL).toHaveBeenCalledWith('blob:csv');
+	} finally {
+		vi.useRealTimers();
+	}
 });
