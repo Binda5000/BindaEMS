@@ -128,6 +128,17 @@ umgesetzt** (`docs/superpowers/plans/2026-10-21-aufgeschobene-kleinigkeiten.md`,
 gemeinsamen Pull nach dem 16.11.2026, **nicht auf `main`, nicht ausgerollt** (siehe „Kurzfassung“, „Welle
 Aufgeschobene Kleinigkeiten“). Die durchgestrichenen Punkte in „Bewusst offen gelassen“ sind erledigt.
 
+**Plan 4c (Ladeübersicht je Auto) ist umgesetzt und je Task geprüft**
+(`docs/superpowers/plans/2026-10-23-phase-4c-ladeuebersicht-je-auto.md`, 5 Tasks, freigegeben vom Betreiber am 23.10.2026
+mit allen 7 Entscheidungen: „Ja passt“): auf dem Branch `claude/project-thread-ypsieg` (Plan ab `5fe0c6c`), **nicht auf
+`main`, nicht ausgerollt**. Die Seite „Statistik“ zeigt das Laden je Auto: die Auswahl „Alle“, Autos, „Gast“ und
+„Unbekannt“ (`auto=` in der Adresse), die Karte „Laden je Auto“ (kWh oder €, je Tag oder Monat), „Ladesessions“ bis 2000 mit
+Nachladen und als CSV. Plan 4c ändert nur die app (`GET /api/stats` hat `vehicle_buckets`, `GET /api/charging/sessions`
+liefert bis 2000 Einträge) und das UI; core, `shared`, Migrationen und HA bleiben gleich. **Ausgerollt wird nur `ems-app`, und
+wann, entscheidet der Betreiber (Entscheidung 7);** Vorschlag: mit dem nächsten Pull von `ems-app` nach dem gemeinsamen
+Fenster (nach dem 25.10.2026), nicht in dieses Fenster gedrängt. Der Gesamtreview steht noch aus. Betrieb: `docs/betrieb.md`,
+Abschnitt 8 (API) und Abschnitt 12, „Statistik“.
+
 `main` ist seit dem 12.10.2026 auch der Standard-Branch auf GitHub.
 
 ## Kurzfassung
@@ -957,6 +968,7 @@ Aufgeschobene Kleinigkeiten“). Die durchgestrichenen Punkte in „Bewusst offe
 | `docs/superpowers/plans/2026-10-17-phase-3c-planausfuehrung.md` | Plan 3c, 17 Tasks, umgesetzt auf dem Branch (Gesamtreview und Fix-Welle erledigt): Plan in der Absicht, Prüfung im core, `HALTEN` und `NETZLADEN` über den Override, Budget des Wächters, Plan-Schwelle und Schalter der Akku-Unterstützung, Übergabe, Stand der Ausführung, „Plan gegen Ist“, Mehrkosten beim Boost, Simulator mit Wirkungsgrad; die 14 Entscheidungen des Betreibers vom 17.10.2026, Präzisierungen gegenüber der Spec, Texte |
 | `docs/superpowers/plans/2026-10-17-phase-4a-statistik.md` | Plan 4a, 16 Tasks, umgesetzt auf dem Arbeitszweig (Gesamtreview und Fix-Welle abgeschlossen): Ladesessions, Einstandspreis, Kosten je Auto, Abgleich, Nachrechnung, Verbraucher je Tag, Seite „Statistik“, HA-Sensoren, Grafana; die 13 Entscheidungen des Betreibers vom 17.10.2026 (PV-Strom ins Auto kostet 0 ct), Präzisierungen gegenüber der Spec, Texte |
 | `docs/superpowers/plans/2026-10-18-phase-4b-geplantes-laden.md` | Plan 4b, 19 Tasks, umgesetzt, seit dem 19.10.2026 auf `main` (nicht ausgerollt): Modus „Geplant“ mit Ziel-SOC und Abfahrt, Ladestand der Autos, späteste Startzeit, Tesla-Ladelimit, die Autos im Optimierer mit Regel R2, Ersatzplan für Autos, HA vollständig, Benachrichtigungen komplett, Zählung für die Abnahme „Ziel-SOC“, Simulator- und Planungsszenarien; die 17 Entscheidungen des Betreibers vom 18.10.2026, Präzisierungen gegenüber der Spec, Texte |
+| `docs/superpowers/plans/2026-10-23-phase-4c-ladeuebersicht-je-auto.md` | Plan 4c, 5 Tasks, umgesetzt auf dem Branch `claude/project-thread-ypsieg` (nicht auf `main`, nicht ausgerollt): Verlauf je Auto in `GET /api/stats` (`vehicle_buckets`), Auswahl des Autos und Karte „Laden je Auto“ auf „Statistik“, Ladesessions bis 2000 mit Nachladen und CSV; die sieben Entscheidungen des Betreibers vom 23.10.2026 |
 | `docs/superpowers/plans/2026-10-19-phase-6a-klimaanlage.md` | Plan 6a, 13 Tasks, umgesetzt, seit dem 20.10.2026 auf `main` (nicht ausgerollt): CoE-Codec und Adapter, Safety-Familie `thermal`, Aktor mit Echo, Strategie mit Rangfolge Akku → Autos → Klima, Hinweis aus dem Plan, UI, HA, Telemetrie, Werkzeuge, Simulator; die 16 Entscheidungen vom 19.10.2026 |
 | `docs/superpowers/plans/2026-10-20-phase-3d-regel-r1.md` | Plan 3d, 4 Tasks, umgesetzt auf dem Branch `claude/project-thread-707vv8` (nicht auf `main`, nicht ausgerollt): Regel R1 sperrt Netzladen nur, solange der Akku nicht leer ist (Nachrechnung, Optimierer, Erklärung, Szenario-Werkzeug); Einordnung, die sechs Entscheidungen des Betreibers vom 20.10.2026, Review-Schwerpunkte |
 | `docs/superpowers/plans/2026-10-19-phase-6a-entscheidungen.md` | Festlegungen R1 bis R32 der Umsetzung von Plan 6a (je mit Kosten, falls falsch) und die offenen Kleinigkeiten |
@@ -3516,3 +3528,26 @@ an der Anlage zu messen oder zu bestätigen ist, die Entscheidungen des Betreibe
     absolute `/data`). Ist die neueste Planzeile unlesbar, gibt `store.latest()` einen älteren, noch gültigen Plan
     zurück, und der Sender schickt ihn bis zum nächsten Takt an den core. `core/safety` importiert `OFFSET_SAME_K`
     aus `core/control` (so im Plan festgelegt). Zwei Zeilen im Betriebshandbuch sind ungleichmäßig umbrochen.
+
+Aufgeschobene Kleinigkeiten aus Plan 4c (aus den Reviews der Tasks 1 bis 4; keine davon gefährdet die Anlage, denn Plan 4c
+ändert nur die Anzeige und die Auswertung der Statistik). Die Punkte „Vorschlag für die Schlusswelle“ können nach dem Gesamtreview
+noch behoben werden; der Stand steht dann hier.
+
+- **Task 1 (Zuordnung je Wiener Tag):** Der Test von `add_up` führt je Auto nur einen Tag zusammen (kein Zusammenführen über
+  mehrere Tage); der Test der Zeitumstellung hat keine Nachbarslots und nicht den 23-Stunden-Tag im Frühjahr;
+  `by_vehicle_days` hat keine Absicherung für `last < first` (`by_vehicle` hat sie); `vehicle_key(session) if session else
+  UNKNOWN` steht doppelt in `sessions.py` (Zeilen 126 und 145).
+- **Task 2 (`vehicle_buckets`):** Der Kommentar „eine Zuordnung je Tag und Auto“ in `test_service.py` (um Zeile 440) stimmt
+  nicht (es ist ein Aufruf für den ganzen Zeitraum); `price_all` wird in `test_service.py` (um Zeile 357) angefordert und
+  nicht gebraucht; `_vehicles` gibt ein Vierertupel zurück, das Zeilen und Zwischenwerte mischt (`service.py`, um Zeile 174);
+  es fehlt ein Test für einen unbekannten oder zusätzlichen Schlüssel in `vehicle_buckets`.
+- **Task 3 (Karte „Laden je Auto“):** „Unbekannt“ und ein Schlüssel außerhalb der Liste teilen sich `palette.muted` (so
+  im Plan); der Test der Karte prüft nicht, dass die Einheit im Diagramm ankommt.
+- **Task 4 (Ladesessions):** *Vorschlag für die Schlusswelle:* Beim Wechsel des Autos werden die Sessions nicht gedimmt, und
+  „CSV herunterladen“ speichert dann kurz die Zeilen des alten Autos; der E2E-Test des Filters kann ein Rennen haben (er liest
+  die Zeilen, bevor die neuen Sessions da sind); `URL.revokeObjectURL` steht gleich nach dem Klick (Risiko in Safari und
+  Firefox); `docs/betrieb.md` nennt die Bedingung des Hinweises zu den 2000 Sessions nicht mehr. Außerdem: Das Zurücksetzen der
+  Seitenzahl geschieht erst im nächsten Durchlauf (`$effect`); `@testing-library` wird doppelt importiert; die CSV schützt
+  Werte mit führendem `=`, `+`, `-` oder `@` nicht (die Namen kommen aus der Konfiguration des Admins).
+- **Nicht gemessen:** Mit 6 Sessions der Demo-Welt dauern die Sessions 0,05 bis 0,11 s und „Jahr“ in der Statistik 0,14 bis
+  0,34 s; der Fall mit 2000 Sessions ist nicht gemessen (Gesamtreview oder Lasttest).
