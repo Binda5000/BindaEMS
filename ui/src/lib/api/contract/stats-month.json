@@ -312,6 +312,168 @@
     }
   ],
   "battery_to_vehicles_kwh": 6.877,
+  "vehicle_buckets": [
+    {
+      "start": "2026-10-01",
+      "vehicles": []
+    },
+    {
+      "start": "2026-10-02",
+      "vehicles": []
+    },
+    {
+      "start": "2026-10-03",
+      "vehicles": [
+        {
+          "key": "unknown",
+          "kwh": 5.75,
+          "pv_kwh": 5.154,
+          "battery_kwh": 0.331,
+          "grid_kwh": 0.265,
+          "cost_eur": 0.053
+        }
+      ]
+    },
+    {
+      "start": "2026-10-04",
+      "vehicles": []
+    },
+    {
+      "start": "2026-10-05",
+      "vehicles": [
+        {
+          "key": "tesla",
+          "kwh": 18.63,
+          "pv_kwh": 11.729,
+          "battery_kwh": 2.745,
+          "grid_kwh": 4.156,
+          "cost_eur": 0.645
+        }
+      ]
+    },
+    {
+      "start": "2026-10-06",
+      "vehicles": []
+    },
+    {
+      "start": "2026-10-07",
+      "vehicles": [
+        {
+          "key": "guest",
+          "kwh": 9.2,
+          "pv_kwh": 0.0,
+          "battery_kwh": 3.801,
+          "grid_kwh": 5.399,
+          "cost_eur": 1.027
+        }
+      ]
+    },
+    {
+      "start": "2026-10-08",
+      "vehicles": []
+    },
+    {
+      "start": "2026-10-09",
+      "vehicles": [
+        {
+          "key": "tesla",
+          "kwh": 1.38,
+          "pv_kwh": 0.0,
+          "battery_kwh": 0.0,
+          "grid_kwh": 1.38,
+          "cost_eur": 0.516
+        }
+      ]
+    },
+    {
+      "start": "2026-10-10",
+      "vehicles": []
+    },
+    {
+      "start": "2026-10-11",
+      "vehicles": []
+    },
+    {
+      "start": "2026-10-12",
+      "vehicles": []
+    },
+    {
+      "start": "2026-10-13",
+      "vehicles": []
+    },
+    {
+      "start": "2026-10-14",
+      "vehicles": []
+    },
+    {
+      "start": "2026-10-15",
+      "vehicles": []
+    },
+    {
+      "start": "2026-10-16",
+      "vehicles": []
+    },
+    {
+      "start": "2026-10-17",
+      "vehicles": []
+    },
+    {
+      "start": "2026-10-18",
+      "vehicles": []
+    },
+    {
+      "start": "2026-10-19",
+      "vehicles": []
+    },
+    {
+      "start": "2026-10-20",
+      "vehicles": []
+    },
+    {
+      "start": "2026-10-21",
+      "vehicles": []
+    },
+    {
+      "start": "2026-10-22",
+      "vehicles": []
+    },
+    {
+      "start": "2026-10-23",
+      "vehicles": []
+    },
+    {
+      "start": "2026-10-24",
+      "vehicles": []
+    },
+    {
+      "start": "2026-10-25",
+      "vehicles": []
+    },
+    {
+      "start": "2026-10-26",
+      "vehicles": []
+    },
+    {
+      "start": "2026-10-27",
+      "vehicles": []
+    },
+    {
+      "start": "2026-10-28",
+      "vehicles": []
+    },
+    {
+      "start": "2026-10-29",
+      "vehicles": []
+    },
+    {
+      "start": "2026-10-30",
+      "vehicles": []
+    },
+    {
+      "start": "2026-10-31",
+      "vehicles": []
+    }
+  ],
   "planned": {
     "reached": 1,
     "feasible": 1,

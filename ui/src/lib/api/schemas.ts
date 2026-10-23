@@ -1162,6 +1162,23 @@ export const StatsSchema = v.object({
 		})
 	),
 	battery_to_vehicles_kwh: v.number(),
+	/** Woche/Monat: je Tag, Jahr: je Monat (gleiche `start` wie `buckets`); Tag: leer */
+	vehicle_buckets: v.array(
+		v.object({
+			start: v.string(),
+			/** Reihenfolge wie `vehicles`, nur mit Energie */
+			vehicles: v.array(
+				v.object({
+					key: v.string(),
+					kwh: v.number(),
+					pv_kwh: v.number(),
+					battery_kwh: v.number(),
+					grid_kwh: v.number(),
+					cost_eur: NullableNumber
+				})
+			)
+		})
+	),
 	/**
 	 * Geplante Ladungen mit Abfahrt im Zeitraum (Abnahme „Ziel-SOC“): `reached` von `feasible`
 	 * machbaren erreicht, `missed` verfehlt; `infeasible` nicht machbar, `early` vor der Abfahrt

@@ -920,8 +920,8 @@ curl -b jar "$APP/api/ledger/checks?from=2026-10-01&to=2026-10-07"
 Zeitraums, der `date` (Wiener Zeit, Standard: heute) enthält; ein anderes `period` gibt 422. Die Woche
 läuft von Montag bis Sonntag (ISO). Die Antwort enthält `period`, `first`, `last`, `complete`,
 `coverage`, `estimated_slots`, `energy`, `money`, `ratios`, `buckets`, `vehicles`,
-`battery_to_vehicles_kwh`, `planned`, `consumers`, `month_peaks` und `checks`; Zahlen sind auf 3 Stellen
-gerundet.
+`battery_to_vehicles_kwh`, `vehicle_buckets`, `planned`, `consumers`, `month_peaks` und `checks`; Zahlen
+sind auf 3 Stellen gerundet.
 
 - **Kennzahlen:** Sie entstehen aus den Summen der Tage, nicht als Mittel der Tageskennzahlen:
   `autarky` ist `1 − Bezug ÷ Verbrauch`, `self_consumption` ist `(PV − Einspeisung) ÷ PV`, die
@@ -941,6 +941,12 @@ gerundet.
 - **Autos:** `vehicles` nennt die Autos mit Energie über 0 in der Reihenfolge der `config.yaml`, dann
   `guest` („Gast“) und `unknown` („Unbekannt“); `sessions` zählt die Ladesessions, die den Zeitraum
   überdecken. `battery_to_vehicles_kwh` ist der Akku-Strom, der ins Auto ging.
+- **Verlauf je Auto:** `vehicle_buckets` hat bei „Tag“ keine Einträge; bei „Woche“, „Monat“ und „Jahr“
+  genau einen Eintrag je Eintrag von `buckets`, mit demselben `start` (Datum `JJJJ-MM-TT` bzw. Monat
+  `JJJJ-MM`) in derselben Reihenfolge. `vehicles` darin (`key`, `kwh`, `pv_kwh`, `battery_kwh`,
+  `grid_kwh`, `cost_eur`) folgt der Reihenfolge von `vehicles` und nennt nur Autos mit Energie über 0;
+  ein Bucket ohne Ladung hat `vehicles: []`. `cost_eur` ist `null`, wenn in diesem Bucket ein Preis
+  fehlt.
 - **Geplantes Laden (Abnahme „Ziel-SOC“):** `planned` zählt die geplanten Ladungen mit Abfahrt im
   Zeitraum: `reached` von `feasible` machbaren erreicht, `missed` machbar und verfehlt, `infeasible`
   nicht machbar, `early` vor der Abfahrt abgesteckt, `unknown` ohne Ladestand, `changed` vor der

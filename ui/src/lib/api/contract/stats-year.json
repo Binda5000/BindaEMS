@@ -170,6 +170,98 @@
     }
   ],
   "battery_to_vehicles_kwh": 6.878,
+  "vehicle_buckets": [
+    {
+      "start": "2026-01",
+      "vehicles": []
+    },
+    {
+      "start": "2026-02",
+      "vehicles": []
+    },
+    {
+      "start": "2026-03",
+      "vehicles": []
+    },
+    {
+      "start": "2026-04",
+      "vehicles": []
+    },
+    {
+      "start": "2026-05",
+      "vehicles": []
+    },
+    {
+      "start": "2026-06",
+      "vehicles": []
+    },
+    {
+      "start": "2026-07",
+      "vehicles": []
+    },
+    {
+      "start": "2026-08",
+      "vehicles": []
+    },
+    {
+      "start": "2026-09",
+      "vehicles": [
+        {
+          "key": "tesla",
+          "kwh": 16.56,
+          "pv_kwh": 0.0,
+          "battery_kwh": 0.0,
+          "grid_kwh": 16.56,
+          "cost_eur": 3.819
+        },
+        {
+          "key": "egolf",
+          "kwh": 9.2,
+          "pv_kwh": 7.575,
+          "battery_kwh": 0.001,
+          "grid_kwh": 1.624,
+          "cost_eur": 0.284
+        }
+      ]
+    },
+    {
+      "start": "2026-10",
+      "vehicles": [
+        {
+          "key": "tesla",
+          "kwh": 20.01,
+          "pv_kwh": 11.729,
+          "battery_kwh": 2.745,
+          "grid_kwh": 5.536,
+          "cost_eur": 1.161
+        },
+        {
+          "key": "guest",
+          "kwh": 9.2,
+          "pv_kwh": 0.0,
+          "battery_kwh": 3.801,
+          "grid_kwh": 5.399,
+          "cost_eur": 1.027
+        },
+        {
+          "key": "unknown",
+          "kwh": 5.75,
+          "pv_kwh": 5.154,
+          "battery_kwh": 0.331,
+          "grid_kwh": 0.265,
+          "cost_eur": 0.053
+        }
+      ]
+    },
+    {
+      "start": "2026-11",
+      "vehicles": []
+    },
+    {
+      "start": "2026-12",
+      "vehicles": []
+    }
+  ],
   "planned": {
     "reached": 1,
     "feasible": 1,
