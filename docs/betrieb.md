@@ -1512,7 +1512,8 @@ und dem Abgleich (Abschnitt 8).
   `Beginn;Ende;Wallbox;Auto;Energie kWh;PV kWh;Akku kWh;Netz kWh;Kosten EUR`, Zeiten in Wiener Zeit als
   `09.10.2026 08:00` (bei einer laufenden Session bleibt das Ende leer), Energie mit drei und Kosten mit
   zwei Nachkommastellen und Komma, ohne Tausenderpunkt; unbekannte Kosten bleiben leer.
-  Angezeigt werden die 2000 neuesten Sessions. Leer: „Keine Ladesessions im Zeitraum.“
+  Sind es 2000 oder mehr, steht darunter „Angezeigt werden die 2000 neuesten Sessions.“ Leer: „Keine
+  Ladesessions im Zeitraum.“
 - **„Verbraucher“:** die Energie je Verbraucher im Zeitraum. Fehlt sie, steht „–“ und darunter klein
   der Grund. Zu den Tagen siehe „Energie der Verbraucher“ unten.
 - **„Monatsspitzen“:** nur in Monat und Jahr: je Monat die höchste Viertelstunde des Netzbezugs mit

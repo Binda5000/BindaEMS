@@ -128,7 +128,7 @@ umgesetzt** (`docs/superpowers/plans/2026-10-21-aufgeschobene-kleinigkeiten.md`,
 gemeinsamen Pull nach dem 16.11.2026, **nicht auf `main`, nicht ausgerollt** (siehe „Kurzfassung“, „Welle
 Aufgeschobene Kleinigkeiten“). Die durchgestrichenen Punkte in „Bewusst offen gelassen“ sind erledigt.
 
-**Plan 4c (Ladeübersicht je Auto) ist umgesetzt und je Task geprüft**
+**Plan 4c (Ladeübersicht je Auto) ist umgesetzt, je Task und im Gesamtreview geprüft, und die Fix-Welle danach ist umgesetzt**
 (`docs/superpowers/plans/2026-10-23-phase-4c-ladeuebersicht-je-auto.md`, 5 Tasks, freigegeben vom Betreiber am 23.10.2026
 mit allen 7 Entscheidungen: „Ja passt“): auf dem Branch `claude/project-thread-ypsieg` (Plan ab `5fe0c6c`), **nicht auf
 `main`, nicht ausgerollt**. Die Seite „Statistik“ zeigt das Laden je Auto: die Auswahl „Alle“, Autos, „Gast“ und
@@ -136,7 +136,7 @@ mit allen 7 Entscheidungen: „Ja passt“): auf dem Branch `claude/project-thre
 Nachladen und als CSV. Plan 4c ändert nur die app (`GET /api/stats` hat `vehicle_buckets`, `GET /api/charging/sessions`
 liefert bis 2000 Einträge) und das UI; core, `shared`, Migrationen und HA bleiben gleich. **Ausgerollt wird nur `ems-app`, und
 wann, entscheidet der Betreiber (Entscheidung 7);** Vorschlag: mit dem nächsten Pull von `ems-app` nach dem gemeinsamen
-Fenster (nach dem 25.10.2026), nicht in dieses Fenster gedrängt. Der Gesamtreview steht noch aus. Betrieb: `docs/betrieb.md`,
+Fenster (nach dem 25.10.2026), nicht in dieses Fenster gedrängt. Der Gesamtreview ist gemacht, und die Fix-Welle danach ist umgesetzt. Betrieb: `docs/betrieb.md`,
 Abschnitt 8 (API) und Abschnitt 12, „Statistik“.
 
 `main` ist seit dem 12.10.2026 auch der Standard-Branch auf GitHub.
@@ -3530,24 +3530,29 @@ an der Anlage zu messen oder zu bestätigen ist, die Entscheidungen des Betreibe
     aus `core/control` (so im Plan festgelegt). Zwei Zeilen im Betriebshandbuch sind ungleichmäßig umbrochen.
 
 Aufgeschobene Kleinigkeiten aus Plan 4c (aus den Reviews der Tasks 1 bis 4; keine davon gefährdet die Anlage, denn Plan 4c
-ändert nur die Anzeige und die Auswertung der Statistik). Die Punkte „Vorschlag für die Schlusswelle“ können nach dem Gesamtreview
-noch behoben werden; der Stand steht dann hier.
+ändert nur die Anzeige und die Auswertung der Statistik). Die Fix-Welle nach dem Gesamtreview hat die durchgestrichenen
+Punkte behoben (23.10.2026); der Rest bleibt offen.
 
 - **Task 1 (Zuordnung je Wiener Tag):** Der Test von `add_up` führt je Auto nur einen Tag zusammen (kein Zusammenführen über
   mehrere Tage); der Test der Zeitumstellung hat keine Nachbarslots und nicht den 23-Stunden-Tag im Frühjahr;
   `by_vehicle_days` hat keine Absicherung für `last < first` (`by_vehicle` hat sie); `vehicle_key(session) if session else
   UNKNOWN` steht doppelt in `sessions.py` (Zeilen 126 und 145).
-- **Task 2 (`vehicle_buckets`):** Der Kommentar „eine Zuordnung je Tag und Auto“ in `test_service.py` (um Zeile 440) stimmt
-  nicht (es ist ein Aufruf für den ganzen Zeitraum); `price_all` wird in `test_service.py` (um Zeile 357) angefordert und
+- **Task 2 (`vehicle_buckets`):** ~~Der Kommentar „eine Zuordnung je Tag und Auto“ in `test_service.py` (um Zeile 440) stimmt
+  nicht (es ist ein Aufruf für den ganzen Zeitraum)~~ (erledigt 23.10.2026, Fix-Welle); `price_all` wird in `test_service.py` (um Zeile 357) angefordert und
   nicht gebraucht; `_vehicles` gibt ein Vierertupel zurück, das Zeilen und Zwischenwerte mischt (`service.py`, um Zeile 174);
   es fehlt ein Test für einen unbekannten oder zusätzlichen Schlüssel in `vehicle_buckets`.
 - **Task 3 (Karte „Laden je Auto“):** „Unbekannt“ und ein Schlüssel außerhalb der Liste teilen sich `palette.muted` (so
   im Plan); der Test der Karte prüft nicht, dass die Einheit im Diagramm ankommt.
-- **Task 4 (Ladesessions):** *Vorschlag für die Schlusswelle:* Beim Wechsel des Autos werden die Sessions nicht gedimmt, und
-  „CSV herunterladen“ speichert dann kurz die Zeilen des alten Autos; der E2E-Test des Filters kann ein Rennen haben (er liest
-  die Zeilen, bevor die neuen Sessions da sind); `URL.revokeObjectURL` steht gleich nach dem Klick (Risiko in Safari und
-  Firefox); `docs/betrieb.md` nennt die Bedingung des Hinweises zu den 2000 Sessions nicht mehr. Außerdem: Das Zurücksetzen der
+- **Task 4 (Ladesessions):** ~~Beim Wechsel des Autos werden die Sessions nicht gedimmt, und „CSV herunterladen“ speichert dann
+  kurz die Zeilen des alten Autos; der E2E-Test des Filters kann ein Rennen haben (er liest die Zeilen, bevor die neuen
+  Sessions da sind); `URL.revokeObjectURL` steht gleich nach dem Klick (Risiko in Safari und Firefox); `docs/betrieb.md` nennt
+  die Bedingung des Hinweises zu den 2000 Sessions nicht mehr~~ (erledigt 23.10.2026, Fix-Welle: veraltete Sessions gedimmt und
+  das CSV gesperrt, die Adresse des Downloads wird nach 40 s freigegeben, der E2E-Test wartet auf die gefilterte Liste, die
+  Bedingung steht im Handbuch). Außerdem: Das Zurücksetzen der
   Seitenzahl geschieht erst im nächsten Durchlauf (`$effect`); `@testing-library` wird doppelt importiert; die CSV schützt
   Werte mit führendem `=`, `+`, `-` oder `@` nicht (die Namen kommen aus der Konfiguration des Admins).
-- **Nicht gemessen:** Mit 6 Sessions der Demo-Welt dauern die Sessions 0,05 bis 0,11 s und „Jahr“ in der Statistik 0,14 bis
-  0,34 s; der Fall mit 2000 Sessions ist nicht gemessen (Gesamtreview oder Lasttest).
+- **Laufzeit an der Anlage einmal messen:** Mit 6 Sessions der Demo-Welt dauern die Sessions 0,05 bis 0,11 s und „Jahr“ in
+  der Statistik 0,14 bis 0,34 s. Synthetisch im Container (Gesamtreview): Die Zuordnung über ein Jahr mit 1500 Sessions
+  braucht etwa 0,5 s; erwartet werden an der Anlage für die Jahresansicht insgesamt 4 bis 5 s. Gemessen an der Anlage ist das
+  noch nicht; das Ergebnis (Laufzeit von „Jahr“ in der Statistik und der Sessions mit vielen Einträgen) kommt hierher, sobald
+  `ems-app` ausgerollt ist.
