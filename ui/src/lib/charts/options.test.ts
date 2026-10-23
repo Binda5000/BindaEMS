@@ -8,7 +8,8 @@ import {
 	presenceOption,
 	priceForecastOption,
 	qualityDailyOption,
-	statsEnergyOption
+	statsEnergyOption,
+	vehicleTrendOption
 } from './options';
 import type { Palette } from './palette';
 
@@ -395,5 +396,128 @@ describe('Anwesenheit', () => {
 		]);
 		expect(html).toContain('10:00');
 		expect(html).toContain('Tesla Model 3: <b>88 %</b>');
+	});
+});
+
+describe('Laden je Auto', () => {
+	const entry = (
+		key: string,
+		kwh: number,
+		pv: number,
+		battery: number,
+		grid: number,
+		cost: number | null
+	) => ({
+		key,
+		kwh,
+		pv_kwh: pv,
+		battery_kwh: battery,
+		grid_kwh: grid,
+		cost_eur: cost
+	});
+	const total = (key: string, name: string, kwh: number) => ({
+		key,
+		name,
+		kwh,
+		pv_kwh: 0,
+		battery_kwh: 0,
+		grid_kwh: kwh,
+		cost_eur: null,
+		sessions: 1
+	});
+	/** Woche mit zwei Tagen: Tesla nur am ersten (1 kWh, 0,30 €), Gast an beiden (0,5 und 2 kWh) */
+	function trendStats({ unknownCost = false } = {}) {
+		const bucket = (start: string) => ({
+			start,
+			pv_kwh: 0,
+			import_kwh: 0,
+			export_kwh: 0,
+			consumption_kwh: 0,
+			net_eur: null
+		});
+		return stats({
+			period: 'week',
+			buckets: [bucket('2026-10-05'), bucket('2026-10-06')],
+			vehicles: [total('tesla', 'Tesla Model 3', 1), total('guest', 'Gast', 2.5)],
+			vehicle_buckets: [
+				{
+					start: '2026-10-05',
+					vehicles: [
+						entry('tesla', 1, 0.4, 0.2, 0.4, unknownCost ? null : 0.3),
+						entry('guest', 0.5, 0, 0.1, 0.4, 0.2)
+					]
+				},
+				{ start: '2026-10-06', vehicles: [entry('guest', 2, 1, 0, 1, 0.2)] }
+			]
+		});
+	}
+	const colorOf = () => '#123456';
+
+	it('stapelt im Verlauf alle Autos je Tag', () => {
+		const option = vehicleTrendOption(trendStats(), null, 'kwh', colorOf, palette);
+		const series = option.series as BarSeriesOption[];
+		expect(series.map((s) => [s.name, s.stack, s.data])).toEqual([
+			['Tesla Model 3', 'autos', [1, 0]],
+			['Gast', 'autos', [0.5, 2]]
+		]);
+		expect(series.map((s) => (s.itemStyle as { color: string }).color)).toEqual([
+			'#123456',
+			'#123456'
+		]);
+		expect((option.xAxis as { data: string[] }).data).toEqual(['Mo., 05.10.', 'Di., 06.10.']);
+		expect((option.yAxis as YAXisComponentOption).name).toBe('kWh');
+	});
+
+	it('zeigt ein Auto nach PV, Akku und Netz und in Euro als Kosten', () => {
+		const kwh = vehicleTrendOption(trendStats(), 'tesla', 'kwh', colorOf, palette);
+		const series = kwh.series as BarSeriesOption[];
+		expect(series.map((s) => [s.name, s.data, (s.itemStyle as { color: string }).color])).toEqual([
+			['PV', [0.4, 0], palette.pv],
+			['Akku', [0.2, 0], palette.importPrice],
+			['Netz', [0.4, 0], palette.series[0]]
+		]);
+		const eur = vehicleTrendOption(trendStats(), 'tesla', 'eur', colorOf, palette);
+		expect((eur.series as BarSeriesOption[]).map((s) => [s.name, s.data])).toEqual([
+			['Kosten', [0.3, 0]]
+		]);
+		expect((eur.yAxis as YAXisComponentOption).name).toBe('€');
+	});
+
+	it('lässt unbekannte Kosten als Lücke und schreibt im Tooltip „–“ und die Summe', () => {
+		const option = vehicleTrendOption(
+			trendStats({ unknownCost: true }),
+			null,
+			'eur',
+			colorOf,
+			palette
+		);
+		expect((option.series as BarSeriesOption[])[0].data).toEqual([null, 0]);
+		const formatter = (option.tooltip as { formatter: (params: unknown) => string }).formatter;
+		const text = formatter([
+			{ name: 'Mo., 05.10.', seriesName: 'Tesla Model 3', value: null, marker: '' },
+			{ name: 'Mo., 05.10.', seriesName: 'Gast', value: 0.2, marker: '' }
+		]);
+		expect(text).toContain('Tesla Model 3: <b>–</b>');
+		expect(text).toContain('Summe: <b>–</b>');
+	});
+
+	it('schreibt im Tooltip die Summe, wenn alle Werte bekannt sind', () => {
+		const option = vehicleTrendOption(trendStats(), null, 'kwh', colorOf, palette);
+		const formatter = (option.tooltip as { formatter: (params: unknown) => string }).formatter;
+		const text = formatter([
+			{ name: 'Mo., 05.10.', seriesName: 'Tesla Model 3', value: 1, marker: '' },
+			{ name: 'Mo., 05.10.', seriesName: 'Gast', value: 0.5, marker: '' }
+		]);
+		expect(text).toContain('Mo., 05.10.');
+		expect(text).toContain('Gast: <b>0,50');
+		expect(text).toContain('Summe: <b>1,50');
+	});
+
+	it('hat bei einer Reihe keine Summe im Tooltip', () => {
+		const option = vehicleTrendOption(trendStats(), 'tesla', 'eur', colorOf, palette);
+		const formatter = (option.tooltip as { formatter: (params: unknown) => string }).formatter;
+		const text = formatter([{ name: 'Mo., 05.10.', seriesName: 'Kosten', value: 0.3, marker: '' }]);
+		expect(text).toContain('Kosten: <b>0,30');
+		expect(text).not.toContain('Summe');
 	});
 });

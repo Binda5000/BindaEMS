@@ -14,11 +14,12 @@ import {
 	formatCt,
 	formatDay,
 	formatEnergy,
+	formatEur,
 	formatNumber,
 	formatTime
 } from '$lib/format';
 import type { DailyPoint } from '$lib/forecast/view';
-import { bucketLabels } from '$lib/stats/view';
+import { bucketLabels, vehicleLabel } from '$lib/stats/view';
 import { parseIso, todayVienna } from '$lib/time';
 import type { Palette } from './palette';
 
@@ -395,6 +396,106 @@ export function statsEnergyOption(stats: Stats, palette: Palette): EChartsCoreOp
 		},
 		yAxis: {
 			...valueAxis('kWh', palette),
+			splitLine: { show: true, lineStyle: { color: palette.grid } }
+		},
+		series
+	};
+}
+
+/**
+ * Tooltip des Verlaufs je Auto: Beschriftung des Balkens und der Wert je Reihe in kWh bzw. €
+ * (`null` als „–“); bei mehr als einer Reihe die Summe, die „–“ ist, sobald ein Wert fehlt.
+ */
+function vehicleTrendTooltip(format: (value: number | null) => string) {
+	return (params: unknown): string => {
+		const items = (Array.isArray(params) ? params : [params]) as {
+			marker?: string;
+			name?: string;
+			seriesName?: string;
+			value?: unknown;
+		}[];
+		const values = items.map((item) => (typeof item.value === 'number' ? item.value : null));
+		const lines = items.map(
+			(item, index) =>
+				`${item.marker ?? ''}${escapeHtml(item.seriesName ?? '')}: <b>${format(values[index] ?? null)}</b>`
+		);
+		if (items.length > 1) {
+			const known = values.every((value) => value !== null);
+			const sum = known ? values.reduce<number>((acc, value) => acc + (value ?? 0), 0) : null;
+			lines.push(`Summe: <b>${format(sum)}</b>`);
+		}
+		return [escapeHtml(items[0]?.name ?? ''), ...lines].join('<br>');
+	};
+}
+
+/**
+ * Diagramm „Laden je Auto“: je Tag (Woche, Monat) oder Monat (Jahr) ein gestapelter Balken. Ohne
+ * Auswahl (`vehicle` ist `null`) eine Reihe je Auto aus `stats.vehicles`; mit Auswahl in kWh die
+ * Reihen PV, Akku und Netz dieses Autos, in € eine Reihe „Kosten“. Lädt ein Auto in einem Balken
+ * nicht, ist der Wert 0; nur ein unbekannter Preis bleibt `null` und damit eine Lücke.
+ */
+export function vehicleTrendOption(
+	stats: Stats,
+	vehicle: string | null,
+	unit: 'kwh' | 'eur',
+	colorOf: (key: string) => string,
+	palette: Palette
+): EChartsCoreOption {
+	const labels = bucketLabels(
+		stats.period,
+		stats.vehicle_buckets.map((bucket) => bucket.start)
+	);
+	type Entry = Stats['vehicle_buckets'][number]['vehicles'][number];
+	const bars = (
+		name: string,
+		color: string,
+		value: (entry: Entry) => number | null,
+		key: string
+	): BarSeriesOption => ({
+		name,
+		type: 'bar',
+		stack: 'autos',
+		data: stats.vehicle_buckets.map((bucket) => {
+			const entry = bucket.vehicles.find((item) => item.key === key);
+			return entry === undefined ? 0 : value(entry);
+		}),
+		itemStyle: { color },
+		barMaxWidth: 24
+	});
+	let series: BarSeriesOption[];
+	if (vehicle === null) {
+		series = stats.vehicles.map((item) =>
+			bars(
+				vehicleLabel(item.key, item.name),
+				colorOf(item.key),
+				(entry) => (unit === 'kwh' ? entry.kwh : entry.cost_eur),
+				item.key
+			)
+		);
+	} else if (unit === 'kwh') {
+		series = [
+			bars('PV', palette.pv, (entry) => entry.pv_kwh, vehicle),
+			bars('Akku', palette.importPrice, (entry) => entry.battery_kwh, vehicle),
+			bars('Netz', palette.series[0] ?? palette.muted, (entry) => entry.grid_kwh, vehicle)
+		];
+	} else {
+		series = [bars('Kosten', colorOf(vehicle), (entry) => entry.cost_eur, vehicle)];
+	}
+	return {
+		...baseOption(palette),
+		tooltip: {
+			trigger: 'axis',
+			formatter: vehicleTrendTooltip(unit === 'kwh' ? formatEnergy : formatEur)
+		},
+		xAxis: {
+			type: 'category',
+			data: labels,
+			axisLabel: { color: palette.muted, hideOverlap: true },
+			axisLine: { lineStyle: { color: palette.grid } },
+			axisTick: { alignWithLabel: true }
+		},
+		yAxis: {
+			...valueAxis(unit === 'kwh' ? 'kWh' : '€', palette),
 			splitLine: { show: true, lineStyle: { color: palette.grid } }
 		},
 		series
