@@ -524,7 +524,7 @@ def test_year_view_attributes_the_sessions_only_once(stats, engine, monkeypatch)
     ingest(stats._ledger, T0 + SLOT, {"pv>wb:twc": 500.0})
     [tesla] = stats.period("year", TODAY)["vehicles"]
     assert (tesla["kwh"], tesla["sessions"]) == (1.5, 2)
-    assert len(calls) == 1  # eine Zuordnung je Tag und Auto; die Anzahl ohne Zuordnung
+    assert len(calls) == 1  # eine Zuordnung für den ganzen Zeitraum; die Anzahl ohne Zuordnung
 
 
 def test_planned_charges_of_the_period(stats, engine) -> None:
