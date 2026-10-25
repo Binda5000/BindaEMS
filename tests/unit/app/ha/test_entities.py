@@ -278,12 +278,15 @@ def test_build_inputs_derives_the_execution(live, price_service, store, forecast
     ).execution == "none"
 
 
-def test_prices_missing_after_16_when_tomorrow_incomplete(
+def test_prices_missing_from_18_when_tomorrow_incomplete(
     live, price_service, store, forecast_service
 ) -> None:
-    afternoon = T_APP.replace(hour=14)  # 16:00 Ortszeit
-    store.save([price_row(afternoon, 10.0, "primary")])
+    afternoon = T_APP.replace(hour=15)  # 17:00 Ortszeit: smartENERGY veröffentlicht gerade
+    evening = T_APP.replace(hour=16)  # 18:00 Ortszeit
+    store.save([price_row(afternoon, 10.0, "primary"), price_row(evening, 10.0, "primary")])
     inputs = build_inputs(live, price_service, store, forecast_service, afternoon)
+    assert inputs.price_now_ct is not None and not inputs.prices_missing
+    inputs = build_inputs(live, price_service, store, forecast_service, evening)
     assert inputs.price_now_ct is not None and inputs.prices_missing
 
 

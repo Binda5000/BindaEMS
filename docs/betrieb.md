@@ -488,7 +488,7 @@ Entitäten (Gerät „BindaEMS“, sofern nicht anders angegeben):
 | core verbunden | an/aus | Diagnose |
 | Mitregelndes System | Problem | ein anderes System regelt mit (z. B. Dynamic ESS) |
 | Watchdog ausgelöst | Problem | der Watchdog am Cerbo hat ausgelöst (Abschnitt 14); unbekannt, solange er nicht antwortet |
-| Preise fehlen | Problem | kein Preis für jetzt oder nach 16 Uhr keiner für morgen |
+| Preise fehlen | Problem | kein Preis für jetzt oder ab 18 Uhr keiner für morgen (smartENERGY veröffentlicht um 17 Uhr, die app fragt von 17 bis 19 Uhr alle 5 min nach) |
 | Gerät offline | Problem | ein Adapter des core ist getrennt; Attribut `adapters` |
 | Zuordnung unklar | Problem | eine Wallbox oder ein Fahrzeug zeigt `unclear` (Abschnitt „Laderegelung“, „Zuordnung Auto und Wallbox“) |
 | Ziel-SOC unerreichbar | Problem | ein Auto im Modus „Geplant“ erreicht sein Ziel bis zur Abfahrt nicht (Unterabschnitt „Geplantes Laden“); Attribut `vehicles` mit den Namen |

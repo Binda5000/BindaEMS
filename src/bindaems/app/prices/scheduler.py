@@ -1,5 +1,5 @@
-"""Abrufplan der Preise (Spec 6.7): stündlich, zwischen 12:30 und 16:00 alle 15 min, bis der
-Folgetag von smartENERGY vollständig vorliegt."""
+"""Abrufplan der Preise (Spec 6.7): stündlich, zwischen 17:00 und 19:00 alle 5 min, bis der
+Folgetag von smartENERGY vollständig vorliegt (smartENERGY veröffentlicht ihn um 17 Uhr)."""
 
 from __future__ import annotations
 
@@ -17,8 +17,9 @@ from bindaems.shared.timeutil import LOCAL_TZ, Clock
 log = structlog.get_logger(__name__)
 
 HOURLY_MINUTE = 2
-DENSE_FROM = time(12, 30)
-DENSE_UNTIL = time(16, 0)
+DENSE_FROM = time(17, 0)
+DENSE_UNTIL = time(19, 0)
+DENSE_STEP_MIN = 5
 RETRY_S = 300.0
 
 
@@ -27,7 +28,7 @@ def next_price_fetch(now: datetime, tomorrow_complete: bool) -> datetime:
         if local.minute == HOURLY_MINUTE:
             return True
         dense = not tomorrow_complete and DENSE_FROM <= local.time() < DENSE_UNTIL
-        return dense and local.minute % 15 == 0
+        return dense and local.minute % DENSE_STEP_MIN == 0
 
     return next_local(now, accept)
 

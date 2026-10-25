@@ -1156,6 +1156,10 @@ Demo-Zugänge: `admin`, `bedienen` (Bedienen), `gast` (Lesen) und `sicher` (Admi
   zweimal kommt, nach der Reihenfolge zu (erst Sommer-, dann Winterzeit); Aufnahme vom 25.10.2026 in
   `tests/fixtures/smartenergy_2026-10-25.json`. Den Frühjahrstag (23 h) hat noch niemand
   aufgezeichnet.
+- **smartENERGY veröffentlicht den Folgetag um 17 Uhr:** Die app fragt daher von 17 bis 19 Uhr
+  alle 5 min nach (sonst stündlich um :02), bis morgen vollständig ist; ab 18 Uhr meldet sie einen
+  fehlenden Folgetag (Statusseite „Preise“, HA „Preise fehlen“). Vorher füllt Energy-Charts ihn
+  still als Ersatzquelle (`app/prices/scheduler.py`, `TOMORROW_EXPECTED_FROM` in `pipeline.py`).
 - **`{#each}` über Texte vom Server:** immer den Index als Schlüssel nehmen. Svelte bricht bei
   doppelten Schlüsseln ab, auch im Produktions-Build.
 - **Einstellungen:** Die Schemas sind `looseObject`, weil das UI die Einstellungen vollständig

@@ -237,8 +237,12 @@ async def test_net_day_is_caught_even_when_overall_detection_says_gross(pipeline
     assert {s.origin for s in store.get(T_END, T_END + timedelta(days=1))} == {"fallback"}
 
 
-async def test_tomorrow_only_from_reference_is_no_error_before_16(pipeline_env) -> None:
-    # smartENERGY veröffentlicht den Folgetag oft erst am Nachmittag
+@pytest.mark.parametrize("hours", [0, 7])  # 10:00 und 17:00 Ortszeit
+async def test_tomorrow_only_from_reference_is_no_error_before_18(
+    pipeline_env, clock, hours: int
+) -> None:
+    # smartENERGY veröffentlicht den Folgetag erst um 17 Uhr
+    clock.advance(hours * 3600)
     pipeline, store, _ = pipeline_env(primary=FIX_SE, reference=two_days_reference())
     status = await pipeline.refresh()
     assert {d.day: d.origin for d in status.days} == {
@@ -250,8 +254,8 @@ async def test_tomorrow_only_from_reference_is_no_error_before_16(pipeline_env) 
     assert len(store.get(T_END, T_END + timedelta(days=1))) == 96
 
 
-async def test_tomorrow_still_missing_at_16_is_reported(pipeline_env, clock) -> None:
-    clock.advance(6 * 3600)  # 16:00 Ortszeit
+async def test_tomorrow_still_missing_at_18_is_reported(pipeline_env, clock) -> None:
+    clock.advance(8 * 3600)  # 18:00 Ortszeit
     pipeline, _, _ = pipeline_env(primary=FIX_SE, reference=two_days_reference())
     status = await pipeline.refresh()
     assert status.errors == ["10.10.: keine Daten von smartENERGY – Ersatzquelle energy_charts"]

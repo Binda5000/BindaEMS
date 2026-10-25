@@ -42,7 +42,7 @@ VatMode = Literal["net", "gross"]
 VAT_WORDS: dict[VatMode, str] = {"net": "netto", "gross": "brutto"}
 NO_PRIMARY = "keine Daten von smartENERGY"
 PUBLISH_AHEAD = timedelta(days=3)
-TOMORROW_EXPECTED_FROM = time(16)  # ab dann sollten die Preise für morgen vorliegen
+TOMORROW_EXPECTED_FROM = time(18)  # smartENERGY veröffentlicht um 17 Uhr, eine Stunde Reserve
 
 
 @dataclass(frozen=True)
@@ -208,8 +208,8 @@ class PricePipeline:
                 continue
             findings = found if found is not None else [NO_PRIMARY]
             reason = NO_PRIMARY if found is None else f"smartENERGY verdächtig ({'; '.join(found)})"
-            # den Folgetag veröffentlicht smartENERGY oft erst am Nachmittag; bis dahin ist sein
-            # Fehlen normal, verdächtige Werte sind es nie
+            # den Folgetag veröffentlicht smartENERGY erst um 17 Uhr; bis zur Frist ist sein Fehlen
+            # normal, verdächtige Werte sind es nie
             report = found is not None or day == local_now.date() or tomorrow_expected
             if all(slot in reference_slots for slot in expected):
                 rows += [

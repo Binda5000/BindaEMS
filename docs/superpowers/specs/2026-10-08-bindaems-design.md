@@ -576,7 +576,7 @@ bindaems/
   - Ausgewertet werden `tariff`, `unit`, `interval` und `data[{date, value}]`; jede Intervalllänge wird unterstützt.
   - Die Rohantworten werden archiviert.
 - **EPEX-AT-Referenz:** über eine Adapter-Schnittstelle. Standard ist Energy-Charts, Alternativen sind aWATTar und ENTSO-E (mit Token). Die Verfügbarkeit wird in Phase 1 geprüft.
-- **Abruf:** stündlich, zwischen 12:30 und 16:00 Uhr alle 15 min, bis der Folgetag vollständig ist.
+- **Abruf:** stündlich, zwischen 17:00 und 19:00 Uhr alle 5 min, bis der Folgetag vollständig ist. smartENERGY veröffentlicht den Folgetag um 17 Uhr; erst ab 18 Uhr gilt sein Fehlen als Fehler. Bis dahin wird er still aus der Referenz ergänzt (Stand 25.10.2026, Betreiber; vorher 12:30–16:00 alle 15 min, Frist 16 Uhr).
 - **Plausibilität:** Ein Datensatz gilt als verdächtig, wenn
   - ein Wert außerhalb von −50 bis +100 ct/kWh netto liegt,
   - Slots fehlen oder doppelt vorkommen (Zeitumstellung beachtet) oder
