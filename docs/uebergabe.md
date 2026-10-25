@@ -1139,6 +1139,11 @@ Demo-Zugänge: `admin`, `bedienen` (Bedienen), `gast` (Lesen) und `sicher` (Admi
 - **Cookies:** Die Sitzungs-Cookies tragen „Secure“. Über `http://` klappt die Anmeldung nur mit
   `app.cookie_secure: false`, und das ist nur zum Testen gedacht. Die Anmeldeseite meldet das
   verworfene Cookie.
+- **smartENERGY an der Rückstellung auf Winterzeit:** Die API stempelt beide Stunden 02:00 mit
+  +01:00, die erste (Sommerzeit) also falsch. Der Parser ordnet eine mehrdeutige Ortszeit, die genau
+  zweimal kommt, nach der Reihenfolge zu (erst Sommer-, dann Winterzeit); Aufnahme vom 25.10.2026 in
+  `tests/fixtures/smartenergy_2026-10-25.json`. Den Frühjahrstag (23 h) hat noch niemand
+  aufgezeichnet.
 - **`{#each}` über Texte vom Server:** immer den Index als Schlüssel nehmen. Svelte bricht bei
   doppelten Schlüsseln ab, auch im Produktions-Build.
 - **Einstellungen:** Die Schemas sind `looseObject`, weil das UI die Einstellungen vollständig
