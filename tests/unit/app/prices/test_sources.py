@@ -45,6 +45,50 @@ def test_smartenergy_interval_60_gives_hour_intervals(source) -> None:
     assert interval.start == datetime(2026, 10, 8, 22, tzinfo=UTC)
 
 
+def _smartenergy_body(*entries: tuple[str, float]) -> str:
+    data = [{"date": date, "value": value} for date, value in entries]
+    return json.dumps({"tariff": "EPEXSPOTAT", "unit": "ct/kWh", "interval": 60, "data": data})
+
+
+def test_smartenergy_autumn_dst_recorded_response(source) -> None:
+    # smartENERGY schreibt am 25.10.2026 beide Stunden 02:00 mit +01:00; die erste ist Sommerzeit
+    intervals = source.parse((FIX / "smartenergy_2026-10-25.json").read_text())
+    starts = [interval.start for interval in intervals]
+    assert len(intervals) == 100 and len(set(starts)) == 100
+    assert starts == [
+        datetime(2026, 10, 24, 22, tzinfo=UTC) + i * timedelta(minutes=15) for i in range(100)
+    ]
+    by_start = {interval.start: interval.ct_kwh for interval in intervals}
+    assert by_start[datetime(2026, 10, 25, 0, tzinfo=UTC)] == 25.339  # 02:00 Sommerzeit
+    assert by_start[datetime(2026, 10, 25, 1, tzinfo=UTC)] == 25.092  # 02:00 Winterzeit
+
+
+def test_smartenergy_autumn_dst_with_correct_offsets(source) -> None:
+    body = _smartenergy_body(("2026-10-25T02:00:00+02:00", 1.0), ("2026-10-25T02:00:00+01:00", 2.0))
+    assert [(i.start, i.ct_kwh) for i in source.parse(body)] == [
+        (datetime(2026, 10, 25, 0, tzinfo=UTC), 1.0),
+        (datetime(2026, 10, 25, 1, tzinfo=UTC), 2.0),
+    ]
+
+
+def test_smartenergy_single_ambiguous_hour_keeps_its_offset(source) -> None:
+    [interval] = source.parse(_smartenergy_body(("2026-10-25T02:00:00+01:00", 2.0)))
+    assert interval.start == datetime(2026, 10, 25, 1, tzinfo=UTC)
+
+
+def test_smartenergy_triple_ambiguous_hour_stays_as_given(source) -> None:
+    body = _smartenergy_body(*(("2026-10-25T02:00:00+01:00", float(i)) for i in range(3)))
+    assert {i.start for i in source.parse(body)} == {datetime(2026, 10, 25, 1, tzinfo=UTC)}
+
+
+def test_smartenergy_spring_dst_day(source) -> None:
+    starts = [datetime(2027, 3, 27, 23, tzinfo=UTC) + i * timedelta(hours=1) for i in range(23)]
+    body = _smartenergy_body(
+        *((start.astimezone(LOCAL_TZ).isoformat(), float(i)) for i, start in enumerate(starts))
+    )
+    assert [interval.start for interval in source.parse(body)] == starts
+
+
 @pytest.mark.parametrize(
     ("body", "message"),
     [

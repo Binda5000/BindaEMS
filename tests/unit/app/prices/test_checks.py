@@ -1,5 +1,6 @@
 from collections.abc import Callable, Mapping
 from datetime import UTC, date, datetime, timedelta
+from pathlib import Path
 
 import pytest
 
@@ -15,6 +16,8 @@ from bindaems.app.prices.checks import (
 )
 from bindaems.app.prices.sources import PriceInterval
 from bindaems.shared.timeutil import local_day_slots
+
+FIX = Path("tests/fixtures")
 
 
 def iv(start: str, minutes: int, ct: float) -> PriceInterval:
@@ -79,6 +82,13 @@ def test_spring_dst_day_needs_92_slots() -> None:
     day = date(2027, 3, 28)
     full = day_intervals(day, lambda i: 10.0 + i % 7)
     assert len(full) == 92 and structure_findings(day, full) == []
+
+
+def test_recorded_autumn_dst_day_is_complete_and_gross(source, energy_charts) -> None:
+    intervals = source.parse((FIX / "smartenergy_2026-10-25.json").read_text())
+    reference = energy_charts.parse((FIX / "energycharts_at_2026-10-25.json").read_text())
+    assert structure_findings(date(2026, 10, 25), intervals) == []
+    assert detect_vat(to_slots(intervals), to_slots(reference), 1.2).result == "gross"
 
 
 def test_all_equal_day_is_suspicious() -> None:  # Ausfall wie im September 2025

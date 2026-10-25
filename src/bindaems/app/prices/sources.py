@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import math
+from collections import Counter
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from itertools import pairwise
@@ -76,6 +77,36 @@ def _from_epoch(label: str, value: Any, divisor: int) -> datetime:
         raise PriceParseError(f"{label}: ungültiger Zeitstempel: {value!r}") from exc
 
 
+def _fold_ambiguous(starts: list[datetime]) -> list[datetime]:
+    """Ordnet doppelte Ortszeiten der Rückstellung auf Winterzeit nach ihrer Reihenfolge zu.
+
+    smartENERGY schreibt am Tag der Rückstellung beide Stunden 02:00 mit +01:00 (die erste ist
+    falsch). Kommt eine mehrdeutige Ortszeit genau zweimal mit einem Wiener Offset vor, ist die
+    erste Sommerzeit (``fold=0``), die zweite Winterzeit (``fold=1``). Alles andere bleibt, wie
+    angegeben; die Plausibilitätsprüfung meldet es dann.
+    """
+
+    def wall(start: datetime) -> datetime | None:
+        naive = start.replace(tzinfo=None)
+        summer, winter = (naive.replace(tzinfo=LOCAL_TZ, fold=fold) for fold in (0, 1))
+        # mehrdeutig nur, wenn fold=0 früher liegt; in der Lücke im Frühjahr ist es umgekehrt
+        ambiguous = summer.astimezone(UTC) < winter.astimezone(UTC)
+        offsets = {summer.utcoffset(), winter.utcoffset()}
+        return naive if ambiguous and start.utcoffset() in offsets else None
+
+    walls = [wall(start) for start in starts]
+    counts = Counter(naive for naive in walls if naive is not None)
+    seen: set[datetime] = set()
+    repaired: list[datetime] = []
+    for start, naive in zip(starts, walls, strict=True):
+        if naive is None or counts[naive] != 2:
+            repaired.append(start)
+            continue
+        repaired.append(naive.replace(tzinfo=LOCAL_TZ, fold=int(naive in seen)))
+        seen.add(naive)
+    return repaired
+
+
 class SmartEnergySource:
     name = "smartenergy"
     URL = "https://apis.smartenergy.at/market/v1/price"
@@ -98,7 +129,7 @@ class SmartEnergySource:
         if isinstance(minutes, bool) or not isinstance(minutes, int) or minutes <= 0:
             raise PriceParseError(f"{label}: ungültiges Intervall: {minutes!r}")
         step = timedelta(minutes=minutes)
-        intervals: list[PriceInterval] = []
+        entries: list[tuple[datetime, float]] = []
         for entry in _list(label, data, "data"):
             if not isinstance(entry, dict):
                 raise PriceParseError(f"{label}: Eintrag ist kein Objekt: {entry!r}")
@@ -114,8 +145,12 @@ class SmartEnergySource:
             value = _number(entry.get("value"))
             if value is None:
                 raise PriceParseError(f"{label}: ungültiger Preis: {entry.get('value')!r}")
-            start = start.astimezone(UTC)
-            intervals.append(_interval(label, start, start + step, value))
+            entries.append((start, value))
+        starts = _fold_ambiguous([start for start, _ in entries])
+        intervals = [
+            _interval(label, start.astimezone(UTC), start.astimezone(UTC) + step, value)
+            for start, (_, value) in zip(starts, entries, strict=True)
+        ]
         return sorted(intervals, key=lambda interval: interval.start)
 
 
