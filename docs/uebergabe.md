@@ -1160,6 +1160,12 @@ Demo-Zugänge: `admin`, `bedienen` (Bedienen), `gast` (Lesen) und `sicher` (Admi
   alle 5 min nach (sonst stündlich um :02), bis morgen vollständig ist; ab 18 Uhr meldet sie einen
   fehlenden Folgetag (Statusseite „Preise“, HA „Preise fehlen“). Vorher füllt Energy-Charts ihn
   still als Ersatzquelle (`app/prices/scheduler.py`, `TOMORROW_EXPECTED_FROM` in `pipeline.py`).
+- **Open-Meteo antwortet manchmal kurz mit HTTP 503:** an der Anlage 5-mal am 18. und 19.10.2026
+  (Logs vom 18. bis 26.10.), nie mit 429 (2 Flächen, ca. 50 Aufrufe am Tag, das Limit von 10.000 ist weit weg). Die PV-Prognose
+  holt eine Fläche bei 5xx oder Netzfehler nach 30 s noch bis zu zweimal und behält schon geholte
+  Flächen bis 30 min (`PLANE_ATTEMPTS`, `PLANE_KEEP` in `app/forecast/service.py`); den `reason`
+  aus der Antwort zeigen Status und Log (`http_error` in `app/forecast/openmeteo.py`, auch für die
+  Temperatur-Historie). Open-Meteo zählt je öffentlicher IP.
 - **`{#each}` über Texte vom Server:** immer den Index als Schlüssel nehmen. Svelte bricht bei
   doppelten Schlüsseln ab, auch im Produktions-Build.
 - **Einstellungen:** Die Schemas sind `looseObject`, weil das UI die Einstellungen vollständig

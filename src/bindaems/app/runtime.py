@@ -46,8 +46,8 @@ from bindaems.app.forecast.archive import ForecastArchive
 from bindaems.app.forecast.calibration import pv_threshold_w
 from bindaems.app.forecast.load import LoadForecastService
 from bindaems.app.forecast.openmeteo import (
-    ForecastParseError,
     fetch_temperature_history,
+    http_error,
     parse_temperatures,
 )
 from bindaems.app.forecast.quality import ForecastQuality
@@ -908,7 +908,7 @@ class AppRuntime:
     async def _fetch_temperature_history(self) -> dict[datetime, float]:
         raw = await fetch_temperature_history(self._http, self._clock, self._cfg.site.location)
         if not raw.ok:
-            raise ForecastParseError(f"Open-Meteo HTTP {raw.status}")
+            raise http_error(raw)
         return parse_temperatures(raw.body)
 
     async def _weather_backfill(self) -> None:

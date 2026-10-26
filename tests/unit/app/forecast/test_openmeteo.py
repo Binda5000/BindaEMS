@@ -6,11 +6,14 @@ import httpx
 import pytest
 from tests.app_helpers import T_APP
 
+from bindaems.app.fetch import RawResponse
 from bindaems.app.forecast.openmeteo import (
     OPEN_METEO_URL,
     ForecastParseError,
+    OpenMeteoUnavailable,
     fetch_plane,
     fetch_temperature_history,
+    http_error,
     parse_plane,
     parse_temperatures,
 )
@@ -172,3 +175,28 @@ async def test_temperature_history_request_parameters(respx_mock, cfg) -> None:
     assert (params["past_days"], params["forecast_days"]) == ("92", "1")
     assert (params["timezone"], params["timeformat"]) == ("GMT", "unixtime")
     assert "tilt" not in params and "azimuth" not in params
+
+
+def raw_response(status: int, body: str) -> RawResponse:
+    return RawResponse("open_meteo", OPEN_METEO_URL, T_APP, status, body)
+
+
+def test_http_error_names_the_reason() -> None:
+    body = json.dumps({"error": True, "reason": "  Hourly API request limit exceeded.  "})
+    error = http_error(raw_response(429, body))
+    assert str(error) == "Open-Meteo HTTP 429: Hourly API request limit exceeded."
+    assert not isinstance(error, OpenMeteoUnavailable)  # ein Limit wiederholt man nicht sofort
+
+
+@pytest.mark.parametrize(
+    "body", ["<html>Service Unavailable</html>", "[]", '{"reason": 5}', '{"reason": " "}', ""]
+)
+def test_http_error_without_reason_names_only_the_status(body) -> None:
+    error = http_error(raw_response(503, body))
+    assert str(error) == "Open-Meteo HTTP 503" and isinstance(error, OpenMeteoUnavailable)
+
+
+def test_http_error_shortens_a_long_reason() -> None:
+    error = http_error(raw_response(400, json.dumps({"reason": "x" * 500})))
+    assert str(error) == "Open-Meteo HTTP 400: " + "x" * 200
+    assert isinstance(error, ForecastParseError) and not isinstance(error, OpenMeteoUnavailable)

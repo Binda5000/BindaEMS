@@ -4084,6 +4084,11 @@ liegen im Speicher der app, jede Ausgabe geht zusätzlich in ein Archiv in SQLit
 
 Die PV-Prognose holt die app von Open-Meteo, je Fläche, und rechnet sie mit dem PV-Modell in
 Leistung um: stündlich zur Minute 7, beim Start sofort, nach einem Fehler spätestens nach 10 min.
+Ist Open-Meteo kurz nicht verfügbar (HTTP 5xx, kein Netz), holt die app dieselbe Fläche nach 30 s
+noch bis zu zweimal; Flächen, die schon geklappt haben, behält sie bis zu 30 min, die Wiederholung
+holt nur die fehlenden. Ein Limit (HTTP 429) wiederholt sie nicht sofort. Den Grund, den Open-Meteo
+mitschickt (z. B. „Daily API request limit exceeded“), zeigt die Karte „System“ bei der
+Komponente „forecast“.
 Sie unterscheidet nach der **Klarheit** des Himmels: `k = 1 − diffuse / globale Strahlung`;
 ab 0,6 ist es `clear`, ab 0,3 `mixed`, sonst `overcast`. Unter 50 W/m² global (Nacht, Dämmerung)
 gibt es keine Klasse.

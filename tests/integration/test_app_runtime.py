@@ -1527,6 +1527,15 @@ async def test_backfill_failure_is_logged_and_retried_next_start(runtime, respx_
     assert route.call_count == 2 and runtime.weather.oldest() == T_APP - timedelta(days=92)
 
 
+async def test_backfill_warning_names_the_reason_from_open_meteo(runtime, respx_mock) -> None:
+    reason = "Daily API request limit exceeded. Please try again tomorrow."
+    respx_mock.get(OPEN_METEO_URL).respond(429, json={"error": True, "reason": reason})
+    with capture_logs() as logs:
+        await runtime._weather_backfill()
+    (warning,) = [e for e in logs if e["log_level"] == "warning"]
+    assert warning["error"] == f"Open-Meteo HTTP 429: {reason}"
+
+
 async def test_weather_backfill_survives_network_errors(runtime, respx_mock) -> None:
     respx_mock.get(OPEN_METEO_URL).mock(side_effect=httpx.ConnectError("kein Netz"))
     with capture_logs() as logs:

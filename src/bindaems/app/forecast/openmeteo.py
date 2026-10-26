@@ -31,6 +31,7 @@ GTI_UNIT = "W/m²"
 RADIATION_UNIT = "W/m²"
 TEMPERATURE_UNIT = "°C"
 HISTORY_DAYS = 92  # so weit zurück reicht die Vorhersage-Schnittstelle von Open-Meteo
+REASON_MAX = 200
 
 
 @dataclass(frozen=True)
@@ -44,6 +45,24 @@ class WeatherSlot:
 
 class ForecastParseError(Exception):
     """Antwort von Open-Meteo ist ein Fehler oder hat nicht die erwartete Form."""
+
+
+class OpenMeteoUnavailable(ForecastParseError):
+    """HTTP 5xx: Open-Meteo ist kurz nicht verfügbar, ein neuer Versuch lohnt sich."""
+
+
+def http_error(raw: RawResponse) -> ForecastParseError:
+    """Fehler zu einer Antwort mit HTTP-Fehlerstatus, mit dem ``reason`` von Open-Meteo, falls
+    vorhanden („Open-Meteo HTTP 429: Daily API request limit exceeded …“)."""
+    message = f"Open-Meteo HTTP {raw.status}"
+    try:
+        data = json.loads(raw.body)
+    except ValueError:
+        data = None
+    reason = data.get("reason") if isinstance(data, dict) else None
+    if isinstance(reason, str) and reason.strip():
+        message += f": {reason.strip()[:REASON_MAX]}"
+    return OpenMeteoUnavailable(message) if raw.status >= 500 else ForecastParseError(message)
 
 
 async def fetch_plane(

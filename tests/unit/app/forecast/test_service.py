@@ -51,15 +51,15 @@ async def test_run_refreshes_at_minute_7_and_retries_sooner_after_error(
 ) -> None:
     clock.advance(8 * 60)  # 10:08 Ortszeit; nächster Termin 11:07
     sleeps: list[float] = []
-    service, _ = forecast_env(sleep=record_then_stop(sleeps, after=2))
+    service, _ = forecast_env(sleep=record_then_stop(sleeps, after=4))
     body = respx_mock.routes["open_meteo"].return_value.text
     respx_mock.routes["open_meteo"].side_effect = [
-        httpx.Response(503),
+        *[httpx.Response(503)] * 3,  # drei Versuche je Fläche, dazwischen je 30 s
         httpx.Response(200, text=body),
     ]
     with pytest.raises(StopScheduler):
         await service.run()
-    assert sleeps == [600.0, 59 * 60.0] and service.latest() is not None
+    assert sleeps == [30.0, 30.0, 600.0, 59 * 60.0] and service.latest() is not None
 
 
 def test_forecast_endpoint(client, auth, filled_forecast) -> None:
@@ -291,3 +291,144 @@ async def test_failed_refresh_keeps_previous_temperatures(forecast_env, respx_mo
     respx_mock.routes["open_meteo"].respond(503)
     await service.refresh()
     assert dict(service.temperatures()) == before
+
+
+# Kurze Ausfälle von Open-Meteo (5 × HTTP 503 an der Anlage am 18. und 19.10.2026)
+
+
+def recording_sleep(sleeps: list[float]):
+    async def sleep(seconds: float) -> None:
+        sleeps.append(seconds)
+
+    return sleep
+
+
+def two_planes(cfg):
+    west = cfg.pv.planes[0].model_copy(update={"name": "West", "azimuth_deg": 50.0})
+    return cfg.model_copy(
+        update={"pv": cfg.pv.model_copy(update={"planes": [cfg.pv.planes[0], west]})}
+    )
+
+
+def azimuths(route) -> list[str]:
+    return [call.request.url.params["azimuth"] for call in route.calls]
+
+
+async def test_plane_is_fetched_again_after_30_s_on_503(forecast_env, respx_mock) -> None:
+    sleeps: list[float] = []
+    service, _ = forecast_env(sleep=recording_sleep(sleeps))
+    route = respx_mock.routes["open_meteo"]
+    route.side_effect = [httpx.Response(503), httpx.Response(200, text=FIXTURE.read_text())]
+    forecast = await service.refresh()
+    assert forecast is not None and service.component_status().ok
+    assert sleeps == [30.0] and route.call_count == 2
+
+
+async def test_network_error_is_fetched_again(forecast_env, respx_mock) -> None:
+    sleeps: list[float] = []
+    service, _ = forecast_env(sleep=recording_sleep(sleeps))
+    route = respx_mock.routes["open_meteo"]
+    route.side_effect = [
+        httpx.ConnectError("kein Netz"),
+        httpx.Response(200, text=FIXTURE.read_text()),
+    ]
+    assert await service.refresh() is not None
+    assert sleeps == [30.0] and route.call_count == 2
+
+
+async def test_plane_gives_up_after_three_attempts(forecast_env, respx_mock) -> None:
+    sleeps: list[float] = []
+    service, _ = forecast_env(sleep=recording_sleep(sleeps))
+    route = respx_mock.routes["open_meteo"]
+    route.respond(503)
+    with capture_logs() as logs:
+        assert await service.refresh() is None
+    assert sleeps == [30.0, 30.0] and route.call_count == 3
+    assert "HTTP 503" in service.component_status().message
+    assert [e["event"] for e in logs].count("Open-Meteo nicht verfügbar, neuer Versuch") == 2
+
+
+async def test_rate_limit_is_not_fetched_again_and_names_the_reason(
+    forecast_env, respx_mock
+) -> None:
+    sleeps: list[float] = []
+    service, _ = forecast_env(sleep=recording_sleep(sleeps))
+    route = respx_mock.routes["open_meteo"]
+    reason = "Daily API request limit exceeded. Please try again tomorrow."
+    route.respond(429, json={"error": True, "reason": reason})
+    assert await service.refresh() is None
+    assert sleeps == [] and route.call_count == 1
+    message = service.component_status().message
+    assert "HTTP 429" in message and reason in message
+
+
+async def test_status_ignores_a_body_without_reason(forecast_env, respx_mock) -> None:
+    service, _ = forecast_env()
+    respx_mock.routes["open_meteo"].respond(503, text="<html>Service Unavailable</html>")
+    await service.refresh()
+    assert service.component_status().message.endswith("Open-Meteo HTTP 503")
+
+
+async def test_retry_fetches_only_the_missing_plane(forecast_env, respx_mock, cfg, clock) -> None:
+    service, _ = forecast_env()
+    service._cfg = two_planes(cfg)
+    route = respx_mock.routes["open_meteo"]
+    body = FIXTURE.read_text()
+    route.side_effect = [httpx.Response(200, text=body), *[httpx.Response(503)] * 3]
+    assert await service.refresh() is None
+    assert azimuths(route) == ["0.0", "50.0", "50.0", "50.0"]
+    clock.advance(10 * 60)  # die Wiederholung der Schleife
+    route.side_effect = None
+    route.respond(200, text=body)
+    forecast = await service.refresh()
+    assert forecast is not None and service.component_status().ok
+    assert azimuths(route)[4:] == ["50.0"]
+    fresh, _ = forecast_env()  # beide Flächen auf einmal geholt
+    fresh._cfg = service._cfg
+    expected = await fresh.refresh()
+    assert forecast.raw_w == expected.raw_w and forecast.clearness == expected.clearness
+    assert service.temperatures() == fresh.temperatures()
+
+
+async def test_kept_planes_expire_after_30_min(forecast_env, respx_mock, cfg, clock) -> None:
+    service, _ = forecast_env()
+    service._cfg = two_planes(cfg)
+    route = respx_mock.routes["open_meteo"]
+    body = FIXTURE.read_text()
+    route.side_effect = [httpx.Response(200, text=body), *[httpx.Response(503)] * 3]
+    await service.refresh()
+    clock.advance(31 * 60)
+    route.side_effect = None
+    route.respond(200, text=body)
+    assert await service.refresh() is not None
+    assert azimuths(route)[4:] == ["0.0", "50.0"]
+
+
+async def test_kept_plane_expires_30_min_after_it_was_fetched(
+    forecast_env, respx_mock, cfg, clock
+) -> None:
+    service, _ = forecast_env()
+    service._cfg = two_planes(cfg)
+    route = respx_mock.routes["open_meteo"]
+    route.side_effect = [httpx.Response(200, text=FIXTURE.read_text()), *[httpx.Response(503)] * 6]
+    await service.refresh()
+    clock.advance(20 * 60)
+    await service.refresh()  # Süd kommt aus dem ersten Abruf, West scheitert wieder
+    assert azimuths(route)[4:] == ["50.0"] * 3
+    clock.advance(11 * 60)  # 31 min nach dem Abruf von Süd
+    route.side_effect = None
+    route.respond(200, text=FIXTURE.read_text())
+    assert await service.refresh() is not None
+    assert azimuths(route)[7:] == ["0.0", "50.0"]
+
+
+async def test_successful_refresh_fetches_all_planes_next_time(
+    forecast_env, respx_mock, cfg, clock
+) -> None:
+    service, _ = forecast_env()
+    service._cfg = two_planes(cfg)
+    route = respx_mock.routes["open_meteo"]
+    await service.refresh()
+    clock.advance(5 * 60)
+    await service.refresh()
+    assert azimuths(route) == ["0.0", "50.0", "0.0", "50.0"]

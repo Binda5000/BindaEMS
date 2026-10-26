@@ -41,11 +41,15 @@ def weather(engine) -> WeatherArchive:
     return WeatherArchive(engine)
 
 
+async def no_sleep(seconds: float) -> None:
+    """Wartet nicht; so kosten die Wiederholungen nach 30 s im Test keine Zeit."""
+
+
 @pytest.fixture
 def forecast_env(cfg, settings_service, clock, respx_mock, archive, weather):
     """Dienst mit dem Beispiel-cfg (eine Fläche Süd, 10 kWp); Route ``open_meteo`` = Aufnahme."""
 
-    def build(sleep=asyncio.sleep) -> tuple[ForecastService, FakeSink]:
+    def build(sleep=no_sleep) -> tuple[ForecastService, FakeSink]:
         respx_mock.get(OPEN_METEO_URL, name="open_meteo").respond(200, text=FIXTURE.read_text())
         sink = FakeSink()
         service = ForecastService(

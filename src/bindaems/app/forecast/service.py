@@ -40,8 +40,10 @@ from bindaems.app.forecast.calibration import (
 from bindaems.app.forecast.openmeteo import (
     SOURCE,
     ForecastParseError,
+    OpenMeteoUnavailable,
     WeatherSlot,
     fetch_plane,
+    http_error,
     parse_plane,
 )
 from bindaems.app.forecast.pv_model import combine, plane_power_w
@@ -50,7 +52,7 @@ from bindaems.app.learning.weather import WeatherArchive
 from bindaems.app.schedule import next_local
 from bindaems.app.settings.service import SettingsService
 from bindaems.app.status import ComponentStatus
-from bindaems.shared.config import Config
+from bindaems.shared.config import Config, PvPlane
 from bindaems.shared.influx.lineprotocol import Point, PointSink
 from bindaems.shared.timeutil import LOCAL_TZ, Clock, ensure_utc, local_day_slots, slot_start
 
@@ -58,6 +60,9 @@ log = structlog.get_logger(__name__)
 
 FETCH_MINUTE = 7
 RETRY_S = 600.0
+PLANE_ATTEMPTS = 3  # je Fläche und Abruf; kurze Ausfälle (HTTP 503) überbrückt das
+PLANE_RETRY_S = 30.0
+PLANE_KEEP = timedelta(minutes=30)  # so lange zählt eine Fläche aus einem gescheiterten Abruf
 SLOT_HOURS = 0.25
 CALIBRATION_WINDOW = timedelta(days=30)
 
@@ -105,6 +110,8 @@ class ForecastService:
         self._forecast: PvForecast | None = None
         self._temperatures: dict[datetime, float] = {}  # Lufttemperatur der letzten Antwort
         self._error: str | None = None
+        # Flächen eines gescheiterten Abrufs: Index → Wetter, mit dem Zeitpunkt des Abrufs
+        self._kept: dict[int, tuple[datetime, list[WeatherSlot]]] = {}
         # beide Modelle gehören zusammen und werden nur gemeinsam ersetzt
         self._models: tuple[Calibration, Bands] = (NEUTRAL, NEUTRAL_BANDS)
 
@@ -116,23 +123,30 @@ class ForecastService:
         return self._temperatures
 
     async def refresh(self) -> PvForecast | None:
-        """Neue Prognose; scheitert eine Fläche, bleibt die bisherige."""
+        """Neue Prognose; scheitert eine Fläche, bleibt die bisherige. Schon geholte Flächen
+        behält der Dienst bis 30 min, die Wiederholung holt nur die fehlenden."""
         model = self._settings.current().settings.pv_model
         planes: list[dict[datetime, float]] = []
         first_plane: list[WeatherSlot] = []
         clearness: dict[datetime, Clearness | None] = {}
-        for plane in self._cfg.pv.planes:
+        now = self._clock.now()
+        self._kept = {
+            index: kept
+            for index, kept in self._kept.items()
+            if timedelta(0) <= now - kept[0] < PLANE_KEEP  # auch nach einem Rücksprung der Uhr
+        }
+        for index, plane in enumerate(self._cfg.pv.planes):
+            kept = self._kept.get(index)
             try:
-                raw = await fetch_plane(self._http, self._clock, self._cfg.site.location, plane)
-                if not raw.ok:
-                    raise ForecastParseError(f"Open-Meteo HTTP {raw.status}")
-                weather = parse_plane(raw.body)
+                weather = kept[1] if kept is not None else await self._fetch_plane(plane)
             except (FetchError, ForecastParseError) as exc:
                 self._error = f"PV-Prognose für Fläche {plane.name} fehlgeschlagen: {exc}"
                 log.warning(
                     "PV-Prognose für Fläche fehlgeschlagen", plane=plane.name, error=str(exc)
                 )
                 return self._forecast
+            if kept is None:  # der Stempel bleibt der des Abrufs, auch wenn die Fläche wiederkommt
+                self._kept[index] = (self._clock.now(), weather)
             if not planes:  # Klarheit und Temperatur gelten am Standort, aus der ersten Fläche
                 first_plane = weather
                 clearness = {
@@ -164,11 +178,39 @@ class ForecastService:
             )
         forecast = PvForecast(issued_at, SOURCE, p50_w, raw_w, p25_w, p75_w, slot_clearness)
         self._forecast, self._error = forecast, None
+        self._kept = {}  # der nächste Abruf holt wieder alle Flächen
         self._temperatures = {slot.slot_start: slot.temp_c for slot in first_plane}
         self._publish(forecast)
         await self._archive_forecast(forecast)
+        # eine behaltene erste Fläche ist bis 30 min älter als issued_at; das Archiv nimmt dann
+        # bis 30 min mehr als 6 h Vorlauf auf, der nächste Abruf ersetzt diese Werte
         await self._archive_temperatures(first_plane, issued_at)
         return forecast
+
+    async def _fetch_plane(self, plane: PvPlane) -> list[WeatherSlot]:
+        """Wetter einer Fläche; bei Netzwerkfehler oder HTTP 5xx bis zu zweimal nach 30 s erneut.
+
+        HTTP 429 (Limit) und andere Fehler gehen sofort an den Aufrufer: Ein schneller neuer
+        Versuch hilft dort nicht.
+        """
+        for attempt in range(1, PLANE_ATTEMPTS):
+            try:
+                return await self._fetch_plane_once(plane)
+            except (FetchError, OpenMeteoUnavailable) as exc:
+                log.info(
+                    "Open-Meteo nicht verfügbar, neuer Versuch",
+                    plane=plane.name,
+                    attempt=attempt,
+                    error=str(exc),
+                )
+            await self._sleep(PLANE_RETRY_S)
+        return await self._fetch_plane_once(plane)
+
+    async def _fetch_plane_once(self, plane: PvPlane) -> list[WeatherSlot]:
+        raw = await fetch_plane(self._http, self._clock, self._cfg.site.location, plane)
+        if not raw.ok:
+            raise http_error(raw)
+        return parse_plane(raw.body)
 
     def recalibrate(self, ledger: SlotSource) -> None:
         """Faktoren und Bänder aus Archiv und Abrechnung der letzten 30 Tage neu bestimmen.
