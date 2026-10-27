@@ -12,13 +12,14 @@ keine Uhr; die Zeit kommt als monotone Sekunde in der Beobachtung.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Final, Literal
+from typing import Final
 
 from bindaems.shared.config import CoeOffsetConfig
 from bindaems.shared.domain import Snapshot
-from bindaems.shared.plan import ThermalHint
 
-ThermalMode = Literal["heizen", "kuehlen", "lueften", "aus", "unbekannt"]
+# ``ThermalMode`` steht in shared.plan und bleibt hier importierbar (regulation, Tests)
+from bindaems.shared.plan import ThermalHint
+from bindaems.shared.plan import ThermalMode as ThermalMode
 
 # Reihenfolge der Vorgabe: Sind mehrere Bits gesetzt, gilt das erste
 _ORDER: Final[tuple[tuple[str, ThermalMode], ...]] = (

@@ -208,6 +208,9 @@ class Plan(_Model):
 # Einspeisung, „weniger“ gehört zu den teuersten Stunden, sonst „neutral“.
 ThermalHint = Literal["mehr", "neutral", "weniger"]
 
+# Betriebsart der Klimaanlage (Plan 6a, Entscheidung 4); ``unbekannt``, wenn die Bits nicht reichen.
+ThermalMode = Literal["heizen", "kuehlen", "lueften", "aus", "unbekannt"]
+
 
 class IntentPlanSlot(_Model):
     """Eine Viertelstunde des Plans in der Absicht: nur, was der core zum Ausführen braucht."""
