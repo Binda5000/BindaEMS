@@ -127,7 +127,7 @@
 
 	<div class="tiles">
 		<div class="battery">
-			<BatteryTile view={battery} stale={live.stale} />
+			<BatteryTile view={battery} stale={live.stale} {nowMs} />
 		</div>
 		<KpiTile
 			data-testid="kpi-pv"

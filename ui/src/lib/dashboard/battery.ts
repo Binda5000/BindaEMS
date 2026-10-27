@@ -1,7 +1,15 @@
 // Akku-Kachel der Übersicht: Ladestand, Leistung, Reserve und der Ausblick aus dem Plan
 import type { CoreState, Limits, PlanResponse, PlanSlot } from '$lib/api/schemas';
-import { DASH, formatNumberMax, formatPower, formatSoc, formatTime, NBSP } from '$lib/format';
-import { parseIso } from '$lib/time';
+import {
+	DASH,
+	formatNumberMax,
+	formatPower,
+	formatSoc,
+	formatTime,
+	NBSP,
+	weekdayDate
+} from '$lib/format';
+import { addDays, parseIso, todayVienna } from '$lib/time';
 import { IDLE_W } from './flow';
 import type { SocQuality } from './socs';
 
@@ -103,12 +111,23 @@ export function batteryView(
 	};
 }
 
-/** „steigt bis 90 % um 15:00“, „sinkt bis 25 % um 06:00“, „hält 55 %“ */
-export function outlookText(outlook: PlanOutlook): string {
+/** „um 15:00“ heute, „morgen um 06:00“, danach „am So 11.10. um 06:00“ (Wiener Kalender von `nowMs`) */
+function whenText(at: string, nowMs: number): string {
+	const time = `um ${formatTime(at)}`;
+	const ms = parseIso(at);
+	if (ms === null) return time;
+	const day = todayVienna(new Date(ms));
+	const today = todayVienna(new Date(nowMs));
+	if (day === today) return time;
+	return day === addDays(today, 1) ? `morgen ${time}` : `am ${weekdayDate(day)} ${time}`;
+}
+
+/** „steigt bis 90 % um 15:00“, „sinkt bis 25 % morgen um 06:00“, „hält 55 %“ */
+export function outlookText(outlook: PlanOutlook, nowMs: number): string {
 	const soc = formatSoc(outlook.socPct);
 	if (outlook.trend === 'hold') return `hält ${soc}`;
 	const verb = outlook.trend === 'up' ? 'steigt' : 'sinkt';
-	return `${verb} bis ${soc} um ${formatTime(outlook.at)}`;
+	return `${verb} bis ${soc} ${whenText(outlook.at, nowMs)}`;
 }
 
 /** „lädt 1,00 kW“, „entlädt 800 W“, „ruht“; unbekannt ist ein Strich */

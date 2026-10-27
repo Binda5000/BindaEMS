@@ -13,9 +13,11 @@
 		view: BatteryView;
 		/** Live-Verbindung veraltet: alles gedämpft */
 		stale: boolean;
+		/** „jetzt“ für die Planzeile (heute oder „morgen“) */
+		nowMs: number;
 	}
 
-	let { view, stale }: Props = $props();
+	let { view, stale, nowMs }: Props = $props();
 
 	const dimmed = $derived(stale || view.quality === 'stale');
 	const fill = $derived(Math.min(100, Math.max(0, view.pct ?? 0)));
@@ -59,7 +61,7 @@
 		{#if gridCharge}<span>{gridCharge}</span>{/if}
 	</div>
 	{#if view.outlook}
-		<p class="plan">Plan: {outlookText(view.outlook)}</p>
+		<p class="plan">Plan: {outlookText(view.outlook, nowMs)}</p>
 	{/if}
 </section>
 

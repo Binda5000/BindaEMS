@@ -186,14 +186,31 @@ describe('planOutlook', () => {
 
 describe('outlookText', () => {
 	it('beschreibt Anstieg, Abfall und Halten', () => {
-		expect(outlookText({ trend: 'up', socPct: 90, at: iso('15:00') })).toBe(
+		expect(outlookText({ trend: 'up', socPct: 90, at: iso('15:00') }, NOW)).toBe(
 			`steigt bis ${formatSoc(90)} um 15:00`
 		);
-		expect(outlookText({ trend: 'down', socPct: 25, at: iso('06:00') })).toBe(
-			`sinkt bis ${formatSoc(25)} um 06:00`
+		expect(outlookText({ trend: 'down', socPct: 25, at: iso('23:45') }, NOW)).toBe(
+			`sinkt bis ${formatSoc(25)} um 23:45`
 		);
-		expect(outlookText({ trend: 'hold', socPct: 55, at: iso('12:15') })).toBe(
+		expect(outlookText({ trend: 'hold', socPct: 55, at: iso('12:15') }, NOW)).toBe(
 			`hält ${formatSoc(55)}`
+		);
+	});
+
+	it('nennt „morgen“, wenn das Ziel nach Mitternacht liegt', () => {
+		// 10.10., 06:00 in Wien; jetzt ist 09.10., 12:00
+		expect(outlookText({ trend: 'down', socPct: 25, at: '2026-10-10T04:00:00+00:00' }, NOW)).toBe(
+			`sinkt bis ${formatSoc(25)} morgen um 06:00`
+		);
+		// Ende des letzten Slots von heute: 00:00 gehört schon zu morgen
+		expect(outlookText({ trend: 'up', socPct: 80, at: '2026-10-09T22:00:00+00:00' }, NOW)).toBe(
+			`steigt bis ${formatSoc(80)} morgen um 00:00`
+		);
+	});
+
+	it('nennt danach den Tag', () => {
+		expect(outlookText({ trend: 'down', socPct: 25, at: '2026-10-11T04:00:00+00:00' }, NOW)).toBe(
+			`sinkt bis ${formatSoc(25)} am So 11.10. um 06:00`
 		);
 	});
 });
