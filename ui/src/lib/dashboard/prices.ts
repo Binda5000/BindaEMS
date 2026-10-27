@@ -51,26 +51,33 @@ export function forecastForChart<T extends { start: string }>(forecast: T[], now
 	});
 }
 
-/** Günstigster Slot der nächsten 3 h (bei Gleichstand der früheste); `now`, wenn es der erste ist */
+/**
+ * Günstigster Zeitpunkt aus dem jetzigen Preis und den nächsten 3 h. `next` beginnt wie `next_3h`
+ * des Servers erst mit der nächsten Viertelstunde; „jetzt“ ist `nowCt`. Bei Gleichstand gewinnt der
+ * früheste Zeitpunkt, „jetzt“ also vor allen Slots (`start: null`). Ohne Slots der nächsten 3 h
+ * gibt es nichts zu vergleichen: `null`.
+ */
 export function cheapestNext(
 	summary: PriceSummary
-): { start: string; ct: number; now: boolean } | null {
-	let best = -1;
-	summary.next.forEach((slot, index) => {
-		if (best < 0 || slot.ct < (summary.next[best]?.ct ?? Infinity)) best = index;
-	});
-	const slot = summary.next[best];
-	return slot ? { start: slot.start, ct: slot.ct, now: best === 0 } : null;
+): { start: string | null; ct: number; now: boolean } | null {
+	let best: PriceSummary['next'][number] | null = null;
+	for (const slot of summary.next) if (best === null || slot.ct < best.ct) best = slot;
+	if (best === null) return null;
+	if (summary.nowCt !== null && summary.nowCt <= best.ct) {
+		return { start: null, ct: summary.nowCt, now: true };
+	}
+	return { start: best.start, ct: best.ct, now: false };
 }
 
 /** „am günstigsten um 10:15“ bzw. „jetzt am günstigsten“; ohne Slots `null` */
 export function cheapestText(summary: PriceSummary): string | null {
 	const cheapest = cheapestNext(summary);
 	if (!cheapest) return null;
-	return cheapest.now ? 'jetzt am günstigsten' : `am günstigsten um ${formatTime(cheapest.start)}`;
+	if (cheapest.now || cheapest.start === null) return 'jetzt am günstigsten';
+	return `am günstigsten um ${formatTime(cheapest.start)}`;
 }
 
-/** Beschriftung der Mini-Balken: die Spanne der nächsten 3 h */
+/** Beschriftung der Mini-Balken: die Spanne der nächsten 3 h (ab der nächsten Viertelstunde) */
 export function priceRangeText(summary: PriceSummary): string {
 	const prices = summary.next.map((slot) => slot.ct);
 	if (prices.length === 0) return 'Preise der nächsten 3 Stunden';

@@ -21,7 +21,7 @@ function slot(index: number, ct: number, extra: Partial<PriceSlot> = {}): PriceS
 
 it('zeigt Preis, Einspeisung, Mini-Balken und den günstigsten Zeitpunkt', () => {
 	render(PriceTile, {
-		data: { now: slot(0, 30), next_3h: [slot(0, 30), slot(1, 20), slot(2, 40)] },
+		data: { now: slot(0, 30), next_3h: [slot(1, 20), slot(2, 40)] }, // next_3h ab 10:15 wie vom Server
 		error: null
 	});
 	expect(screen.getByTestId('price-now')).toHaveTextContent(/^30,00\sct\/kWh$/);
@@ -32,7 +32,7 @@ it('zeigt Preis, Einspeisung, Mini-Balken und den günstigsten Zeitpunkt', () =>
 
 it('sagt „jetzt am günstigsten“', () => {
 	render(PriceTile, {
-		data: { now: slot(0, 10), next_3h: [slot(0, 10), slot(1, 20)] },
+		data: { now: slot(0, 10), next_3h: [slot(1, 20), slot(2, 15)] },
 		error: null
 	});
 	expect(screen.getByText('jetzt am günstigsten')).toBeInTheDocument();

@@ -20,7 +20,9 @@ const slot = (minute: number, ct: number, extra: Partial<PriceSlot> = {}): Price
 });
 
 it('teilt die nächsten 3 h in günstig, mittel und teuer', () => {
-	const next = [10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21].map((ct, i) => slot(15 * i, ct));
+	const next = [10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21].map((ct, i) =>
+		slot(15 * (i + 1), ct)
+	);
 	const summary = priceSummary({ now: slot(0, 13.44), next_3h: next });
 	expect([summary.nowCt, summary.feedInCt]).toEqual([13.44, 7.3]);
 	expect(summary.next.map((n) => n.level)).toEqual([
@@ -79,44 +81,58 @@ it('zeigt die PV-Prognose für heute und morgen, auch bevor die Preise für morg
 	expect(shown).toHaveLength(2 * 96);
 });
 
-describe('cheapestNext', () => {
-	const summaryOf = (cts: number[]) =>
-		priceSummary({ now: slot(0, cts[0] ?? 0), next_3h: cts.map((ct, i) => slot(15 * i, ct)) });
+// Wie der Server (`/api/prices/now`): `now` ist der laufende Slot (10:00), `next_3h` beginnt danach (10:15)
+function current(nowCt: number | null, next: number[]) {
+	return priceSummary({
+		now: nowCt === null ? null : slot(0, nowCt),
+		next_3h: next.map((ct, i) => slot(15 * (i + 1), ct))
+	});
+}
 
+describe('cheapestNext', () => {
 	it('liefert den niedrigsten Preis der nächsten 3 h', () => {
-		const summary = summaryOf([14, 13, 11.5, 12, 15]);
-		expect(cheapestNext(summary)).toEqual({ start: summary.next[2]?.start, ct: 11.5, now: false });
+		const summary = current(14, [13, 11.5, 12, 15]);
+		expect(cheapestNext(summary)).toEqual({ start: summary.next[1]?.start, ct: 11.5, now: false });
+	});
+
+	it('die nächste Viertelstunde ist nicht „jetzt“', () => {
+		const summary = current(14, [11, 12, 13]);
+		expect(cheapestNext(summary)).toEqual({ start: summary.next[0]?.start, ct: 11, now: false });
 	});
 
 	it('nimmt bei Gleichstand den frühesten Slot', () => {
-		const summary = summaryOf([14, 11, 12, 11]);
+		const summary = current(14, [12, 11, 13, 11]);
 		expect(cheapestNext(summary)?.start).toBe(summary.next[1]?.start);
 	});
 
-	it('meldet „jetzt“, wenn der erste Slot am günstigsten ist', () => {
-		const summary = summaryOf([10, 11, 12]);
-		expect(cheapestNext(summary)).toEqual({ start: summary.next[0]?.start, ct: 10, now: true });
+	it('meldet „jetzt“, wenn der jetzige Preis am günstigsten ist, auch bei Gleichstand', () => {
+		expect(cheapestNext(current(10, [11, 12]))).toEqual({ start: null, ct: 10, now: true });
+		expect(cheapestNext(current(11, [11, 12]))).toEqual({ start: null, ct: 11, now: true });
 	});
 
-	it('ohne Preise gibt es keinen günstigsten Slot', () => {
-		expect(cheapestNext(summaryOf([]))).toBeNull();
+	it('ohne jetzigen Preis zählen nur die nächsten Slots', () => {
+		const summary = current(null, [11, 12]);
+		expect(cheapestNext(summary)).toEqual({ start: summary.next[0]?.start, ct: 11, now: false });
+	});
+
+	it('ohne Preise der nächsten 3 h gibt es keinen günstigsten Slot', () => {
+		expect(cheapestNext(current(10, []))).toBeNull();
+		expect(cheapestNext(current(null, []))).toBeNull();
 	});
 });
 
 describe('Texte der Preis-Kachel', () => {
-	const data = (ct: number[]) =>
-		priceSummary({ now: slot(0, ct[0] ?? 0), next_3h: ct.map((c, i) => slot(i * 15, c)) });
-
 	it('nennt den günstigsten Slot oder „jetzt“', () => {
-		expect(cheapestText(data([30, 20, 25]))).toBe('am günstigsten um 10:15');
-		expect(cheapestText(data([10, 20, 25]))).toBe('jetzt am günstigsten');
-		expect(cheapestText(data([]))).toBeNull();
+		expect(cheapestText(current(30, [20, 25]))).toBe('am günstigsten um 10:15');
+		expect(cheapestText(current(30, [25, 20]))).toBe('am günstigsten um 10:30');
+		expect(cheapestText(current(10, [20, 25]))).toBe('jetzt am günstigsten');
+		expect(cheapestText(current(10, []))).toBeNull();
 	});
 
 	it('fasst die Spanne der nächsten 3 h zusammen', () => {
-		expect(priceRangeText(data([30, 20, 25]))).toMatch(
+		expect(priceRangeText(current(30, [30, 20, 25]))).toMatch(
 			/^Preise der nächsten 3 Stunden: 20,00\sct\/kWh bis 30,00\sct\/kWh$/
 		);
-		expect(priceRangeText(data([]))).toBe('Preise der nächsten 3 Stunden');
+		expect(priceRangeText(current(30, []))).toBe('Preise der nächsten 3 Stunden');
 	});
 });
