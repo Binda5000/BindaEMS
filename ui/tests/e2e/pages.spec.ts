@@ -85,12 +85,19 @@ test('Übersicht zeichnet das Diagramm mit Prognosen, System zeigt Lastprognose 
 	await expect(quality.getByRole('cell', { name: '0–6 h' }).first()).toBeVisible();
 });
 
-test('Übersicht: Hinweise aufklappen', async ({ page }) => {
+test('Übersicht: Hinweise aufklappen, bei 390 px eine Zeile', async ({ page }) => {
+	await page.setViewportSize({ width: 390, height: 844 });
 	await login(page, 'gast');
 	await page.goto('/');
 	const bar = page.getByRole('region', { name: 'Hinweise' });
 	await expect(bar).toBeVisible();
 	await expect(bar.getByRole('listitem')).toHaveCount(0);
+	// Entscheidung 2: eine Zeile; die Vorschau wird gekürzt, „Anzeigen“ bleibt rechts sichtbar
+	const lineHeight = await bar
+		.locator('.line')
+		.evaluate((line) => line.getBoundingClientRect().height);
+	expect(lineHeight).toBeLessThanOrEqual(48);
+	await expect(bar.getByRole('button', { name: 'Anzeigen' })).toBeInViewport({ ratio: 1 });
 	await bar.getByRole('button', { name: 'Anzeigen' }).click();
 	await expect(
 		bar.getByRole('listitem').filter({ hasText: 'MQTT noch nicht verbunden' })

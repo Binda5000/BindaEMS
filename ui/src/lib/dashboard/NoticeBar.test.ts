@@ -52,3 +52,12 @@ it('richtet die Klasse nach dem schwersten Hinweis', () => {
 	});
 	expect(container.querySelector('.bar')).toHaveClass('error');
 });
+
+it('hält die Vorschau auf einer Zeile, „Anzeigen“ steht daneben', () => {
+	const { container } = render(NoticeBar, { notices: three });
+	const text = container.querySelector('.line > .text');
+	// .single-line: nowrap, overflow hidden, Auslassungspunkte (Breite prüft das E2E bei 390 px)
+	expect(text).toHaveClass('single-line');
+	expect(text?.querySelector('button')).toBeNull();
+	expect(container.querySelector('.line > button')).toHaveTextContent('Anzeigen');
+});

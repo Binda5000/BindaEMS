@@ -16,7 +16,7 @@
 {#if summary}
 	<section class="bar {summary.level}" aria-label="Hinweise">
 		<div class="line">
-			<p class="text">
+			<p class="text single-line">
 				<strong>{summary.count}</strong>
 				{#if !open}
 					<span class="preview">· {summary.preview}</span>
@@ -71,7 +71,13 @@
 		min-width: 0;
 		margin: 0;
 		padding: 0.25rem 0;
-		overflow-wrap: anywhere;
+	}
+
+	/* Entscheidung 2: eine Zeile; die Vorschau wird mit „…“ gekürzt, „Anzeigen“ bleibt rechts */
+	.single-line {
+		white-space: nowrap;
+		overflow: hidden;
+		text-overflow: ellipsis;
 	}
 
 	.error .text strong {
@@ -87,6 +93,7 @@
 	}
 
 	button {
+		flex-shrink: 0;
 		min-width: 2.75rem;
 		min-height: 2.75rem;
 		padding: 0 0.75rem;
