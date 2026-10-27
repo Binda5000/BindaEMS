@@ -204,7 +204,8 @@ export const DecisionSchema = v.object({
 		'grid_setpoint',
 		'max_discharge',
 		'min_soc',
-		'charge_limit'
+		'charge_limit',
+		'setpoint_offset'
 	]),
 	requested: v.nullable(v.union([v.number(), v.boolean()])),
 	applied: v.nullable(v.union([v.number(), v.boolean()])),

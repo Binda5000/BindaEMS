@@ -61,6 +61,26 @@
         "grid_l1_a": 1.2
       },
       "cursor": 5
+    },
+    {
+      "id": "demo-10",
+      "ts": "2026-10-09T07:54:00+00:00",
+      "actuator": "thermal.klima",
+      "kind": "setpoint_offset",
+      "requested": 0.5,
+      "applied": 0.5,
+      "dry_run": true,
+      "outcome": "accepted",
+      "result": "dry_run",
+      "codes": [
+        "thermal_more"
+      ],
+      "text": "Klimaanlage (PV-Überschuss in die Klimaanlage): Sollwertversatz +0,5 K – Dry-Run, nicht gesendet.",
+      "inputs": {
+        "soc_pct": 55.0,
+        "grid_l1_a": 1.2
+      },
+      "cursor": 10
     }
   ]
 }

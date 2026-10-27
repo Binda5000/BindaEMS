@@ -149,8 +149,8 @@ DEMO_DEPARTURE = "17:30"
 # Vorlauf vor T_DEMO: die Selbstprüfung verlangt seit 30 s aktuelle Messwerte
 WARMUP = timedelta(seconds=60)
 
-# Entscheidungen der Demo (Tabelle ``decision`` der app): je Aktor zwei, darunter eine
-# ``deferred`` und genau eine ``foreign``; die jüngste je Aktor steht in „Warum?“
+# Entscheidungen der Demo (Tabelle ``decision`` der app): jede Befehlsart mindestens einmal,
+# darunter eine ``deferred`` und genau eine ``foreign``; die jüngste je Aktor steht in „Warum?“
 _INPUTS = {"soc_pct": 55.0, "grid_l1_a": 1.2}
 
 
@@ -249,6 +249,48 @@ DEMO_DECISIONS = [
         True,
         DecisionResult.DRY_RUN,
         ("mode_min_pv", "wake"),
+    ),
+    # ältere Arten, die „Warum?“ nicht zeigt: der Vertrag führt dem UI jede Befehlsart vor
+    _decision(
+        "demo-7",
+        120,
+        "victron",
+        "Victron (ESS)",
+        CommandKind.MAX_DISCHARGE,
+        3000.0,
+        DecisionResult.DRY_RUN,
+        ("plan_hold",),
+    ),
+    _decision(
+        "demo-8",
+        150,
+        "victron",
+        "Victron (ESS)",
+        CommandKind.MIN_SOC,
+        20.0,
+        DecisionResult.DRY_RUN,
+        ("plan_hold",),
+    ),
+    _decision(
+        "demo-9",
+        180,
+        "vehicle.tesla",
+        "Tesla Model 3",
+        CommandKind.CHARGE_LIMIT,
+        80.0,
+        DecisionResult.DRY_RUN,
+        ("charge_limit",),
+    ),
+    # Klimaanlage (Plan 6a): ohne sie verwarf das UI „Warum?“ an der Anlage (setpoint_offset)
+    _decision(
+        "demo-10",
+        6,
+        "thermal.klima",
+        "Klimaanlage",
+        CommandKind.SETPOINT_OFFSET,
+        0.5,
+        DecisionResult.DRY_RUN,
+        ("thermal_more",),
     ),
 ]
 

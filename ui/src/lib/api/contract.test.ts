@@ -385,9 +385,9 @@ describe('Bedienung und Entscheidungen', () => {
 		expect(issues(s.DecisionSchema, { ...first, result: 'unbekannt' })).not.toEqual([]);
 	});
 
-	it('kennt jede Befehlsart des core, auch das Ladelimit des Tesla', () => {
+	it('kennt jede Befehlsart des core, auch Ladelimit und Sollwertversatz der Klimaanlage', () => {
 		const kinds = ['current', 'charging', 'grid_setpoint', 'max_discharge', 'min_soc'];
-		for (const kind of [...kinds, 'charge_limit']) {
+		for (const kind of [...kinds, 'charge_limit', 'setpoint_offset']) {
 			expect(issues(s.DecisionSchema, { ...first, kind })).toEqual([]);
 		}
 		expect(issues(s.DecisionSchema, { ...first, kind: 'unbekannt' })).not.toEqual([]);

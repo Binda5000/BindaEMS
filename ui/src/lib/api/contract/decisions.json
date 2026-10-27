@@ -42,6 +42,26 @@
       "cursor": 3
     },
     {
+      "id": "demo-10",
+      "ts": "2026-10-09T07:54:00+00:00",
+      "actuator": "thermal.klima",
+      "kind": "setpoint_offset",
+      "requested": 0.5,
+      "applied": 0.5,
+      "dry_run": true,
+      "outcome": "accepted",
+      "result": "dry_run",
+      "codes": [
+        "thermal_more"
+      ],
+      "text": "Klimaanlage (PV-Überschuss in die Klimaanlage): Sollwertversatz +0,5 K – Dry-Run, nicht gesendet.",
+      "inputs": {
+        "soc_pct": 55.0,
+        "grid_l1_a": 1.2
+      },
+      "cursor": 10
+    },
+    {
       "id": "demo-5",
       "ts": "2026-10-09T07:52:00+00:00",
       "actuator": "vehicle.tesla",
@@ -122,6 +142,66 @@
         "grid_l1_a": 1.2
       },
       "cursor": 6
+    },
+    {
+      "id": "demo-7",
+      "ts": "2026-10-09T06:00:00+00:00",
+      "actuator": "victron",
+      "kind": "max_discharge",
+      "requested": 3000.0,
+      "applied": 3000.0,
+      "dry_run": true,
+      "outcome": "accepted",
+      "result": "dry_run",
+      "codes": [
+        "plan_hold"
+      ],
+      "text": "Victron (ESS) (Plan: Halten): Entladegrenze 3000 W – Dry-Run, nicht gesendet.",
+      "inputs": {
+        "soc_pct": 55.0,
+        "grid_l1_a": 1.2
+      },
+      "cursor": 7
+    },
+    {
+      "id": "demo-8",
+      "ts": "2026-10-09T05:30:00+00:00",
+      "actuator": "victron",
+      "kind": "min_soc",
+      "requested": 20.0,
+      "applied": 20.0,
+      "dry_run": true,
+      "outcome": "accepted",
+      "result": "dry_run",
+      "codes": [
+        "plan_hold"
+      ],
+      "text": "Victron (ESS) (Plan: Halten): Min-SOC 20 % – Dry-Run, nicht gesendet.",
+      "inputs": {
+        "soc_pct": 55.0,
+        "grid_l1_a": 1.2
+      },
+      "cursor": 8
+    },
+    {
+      "id": "demo-9",
+      "ts": "2026-10-09T05:00:00+00:00",
+      "actuator": "vehicle.tesla",
+      "kind": "charge_limit",
+      "requested": 80.0,
+      "applied": 80.0,
+      "dry_run": true,
+      "outcome": "accepted",
+      "result": "dry_run",
+      "codes": [
+        "charge_limit"
+      ],
+      "text": "Tesla Model 3 (Ladelimit): Ladelimit 80 % – Dry-Run, nicht gesendet.",
+      "inputs": {
+        "soc_pct": 55.0,
+        "grid_l1_a": 1.2
+      },
+      "cursor": 9
     }
   ],
   "more": false

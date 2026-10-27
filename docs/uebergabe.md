@@ -1166,6 +1166,12 @@ Demo-Zugänge: `admin`, `bedienen` (Bedienen), `gast` (Lesen) und `sicher` (Admi
   Flächen bis 30 min (`PLANE_ATTEMPTS`, `PLANE_KEEP` in `app/forecast/service.py`); den `reason`
   aus der Antwort zeigen Status und Log (`http_error` in `app/forecast/openmeteo.py`, auch für die
   Temperatur-Historie). Open-Meteo zählt je öffentlicher IP.
+- **Neue Befehlsart (`CommandKind`) auch ins UI:** `DecisionSchema.kind` in `ui/src/lib/api/schemas.ts`
+  ist eine feste Liste. Fehlte eine Art, verwarf das UI die ganze Antwort; so zeigte „Warum?“ nach
+  dem Einschalten der Klimaanlage (Dry-Run, 26.10.2026) „Unerwartete Antwort vom Server“
+  (`setpoint_offset`). Die Demo-Entscheidungen in `tests/ui_world.py` enthalten jetzt jede Art
+  (`test_demo_decisions_cover_every_command_kind`), daher scheitert `contract.test.ts` bei einer
+  neuen Art, bis das UI sie kennt.
 - **`{#each}` über Texte vom Server:** immer den Index als Schlüssel nehmen. Svelte bricht bei
   doppelten Schlüsseln ab, auch im Produktions-Build.
 - **Einstellungen:** Die Schemas sind `looseObject`, weil das UI die Einstellungen vollständig

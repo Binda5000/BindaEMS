@@ -17,6 +17,7 @@ from sqlalchemy import select
 from tests.ui_history import DAYS, FIRST_DAY, LAST_DAY
 from tests.ui_world import (
     DEMO_AUTOMATION,
+    DEMO_DECISIONS,
     DEMO_PASSWORD,
     DEMO_TOTP_SECRET,
     T_DEMO,
@@ -27,6 +28,7 @@ from tests.ui_world import (
 from bindaems.app.charging.planned import PlannedSummary
 from bindaems.app.db.schema import assignment_log
 from bindaems.app.ledger.checks import NOTE_ZERO
+from bindaems.shared.control import CommandKind
 from bindaems.shared.domain import Alarm, Severity
 from bindaems.shared.timeutil import LOCAL_TZ, SLOT, local_day_slots
 
@@ -376,6 +378,12 @@ async def test_reprice_keeps_the_demo_costs(cfg, tmp_path) -> None:
             assert new == pytest.approx(old)
     finally:
         world.close()
+
+
+def test_demo_decisions_cover_every_command_kind() -> None:
+    # Der Vertrag führt dem UI jede Befehlsart vor: Kennt sein Schema eine nicht, scheitert
+    # contract.test.ts, statt dass „Warum?“ an der Anlage die ganze Antwort verwirft (6a)
+    assert {decision.kind for decision in DEMO_DECISIONS} == set(CommandKind)
 
 
 def test_no_stale_contract_files() -> None:
