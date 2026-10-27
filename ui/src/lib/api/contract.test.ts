@@ -517,3 +517,61 @@ describe('Zeitplan', () => {
 		expect(issues(s.PlanSchema, { ...demo.plan, vehicles: [incomplete] })).not.toEqual([]);
 	});
 });
+
+describe('Vorheizen und Vorkühlen im Plan', () => {
+	const demo = files['./contract/plan.json'] as {
+		plan: { thermal: unknown; slots: Record<string, unknown>[] } & Record<string, unknown>;
+	};
+
+	it('liest Planwert, Vorschau und Ersparnis', () => {
+		const plan = v.parse(s.PlanResponseSchema, demo).plan!;
+		expect(plan.thermal).toEqual({
+			device: 'klima',
+			mode: 'heizen',
+			active: false,
+			saving_ct: 18.4,
+			model_computed_at: '2026-10-09T01:50:00+00:00',
+			reason: 'ok'
+		});
+		expect(plan.slots.map((slot) => slot.thermal_steps)).toContain(2);
+	});
+
+	it('liest ältere Pläne ohne Klimaanlage', () => {
+		const slots = demo.plan.slots.map((slot) => {
+			const older = { ...slot };
+			delete older.thermal_w;
+			delete older.thermal_steps;
+			delete older.thermal_grid_w;
+			return older;
+		});
+		const older = { ...demo.plan, slots } as Record<string, unknown>;
+		delete older.thermal;
+		const plan = v.parse(s.PlanSchema, older);
+		expect(plan.thermal).toBeNull();
+		expect(plan.slots[0]).toMatchObject({ thermal_w: 0, thermal_steps: null, thermal_grid_w: 0 });
+	});
+
+	it('liest den Planwert im Health und in der Absicht, ältere ohne', () => {
+		const system = files['./contract/system.json'] as {
+			core: { health: { thermal: Record<string, Record<string, unknown>> } };
+		};
+		const entry: Record<string, unknown> = { ...system.core.health.thermal.klima, planned: 2 };
+		expect(v.parse(s.ThermalHealthSchema, entry).planned).toBe(2);
+		delete entry.planned;
+		expect(v.parse(s.ThermalHealthSchema, entry).planned).toBeNull();
+		const control = files['./contract/control.json'] as { intent: Record<string, unknown> };
+		const plan = {
+			id: 1,
+			created_at: '2026-10-09T08:00:00+00:00',
+			valid_until: '2026-10-09T09:00:00+00:00',
+			grid_charge_allowed: false,
+			slots: [
+				{ start: '2026-10-09T08:00:00+00:00', intent: 'EIGENVERBRAUCH', thermal_steps: 1 },
+				{ start: '2026-10-09T08:15:00+00:00', intent: 'EIGENVERBRAUCH' }
+			]
+		};
+		const intent = v.parse(s.IntentSchema, { ...control.intent, plan });
+		expect(intent.plan?.slots.map((slot) => slot.thermal_steps)).toEqual([1, null]);
+		expect(v.parse(s.IntentSchema, control.intent).plan).toBeNull();
+	});
+});

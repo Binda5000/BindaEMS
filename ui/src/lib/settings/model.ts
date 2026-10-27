@@ -11,6 +11,7 @@ import type {
 	PlanningSettings,
 	PriceSettings,
 	RuntimeSettings,
+	ThermalPlanSettings,
 	TimeWindow
 } from '$lib/api/schemas';
 import { fieldErrors } from '$lib/api/errors';
@@ -74,11 +75,25 @@ export interface DrivingDraft {
 	presenceEntities: Record<string, string>;
 }
 
-/** Lastmodell: Schalter und die gewählten HA-Sensoren (Entitäts-IDs), dazu das Fahrverhalten */
+/** Vorheizen und Vorkühlen: Schalter, Komfortband in K und Mindestvorteil in ct/kWh als Text */
+export interface ThermalPlanDraft {
+	enabled: boolean;
+	heatUpK: string;
+	heatDownK: string;
+	coolUpK: string;
+	coolDownK: string;
+	marginCt: string;
+}
+
+/**
+ * Lastmodell: Schalter und die gewählten HA-Sensoren (Entitäts-IDs), dazu das Fahrverhalten und
+ * Vorheizen und Vorkühlen
+ */
 export interface LearningDraft {
 	loadModelEnabled: boolean;
 	haSensors: string[];
 	driving: DrivingDraft;
+	thermal: ThermalPlanDraft;
 }
 
 /** Standardwerte des Abschnitts `learning.driving`, wie `DrivingSettings` der app */
@@ -89,6 +104,19 @@ export const DEFAULT_DRIVING: DrivingSettings = {
 	automation: {},
 	presence_entities: {}
 };
+
+/** Standardwerte des Abschnitts `learning.thermal`, wie `ThermalPlanSettings` der app */
+export const DEFAULT_THERMAL_PLAN: ThermalPlanSettings = {
+	enabled: false,
+	heat_up_k: 1.5,
+	heat_down_k: 1.0,
+	cool_up_k: 1.5,
+	cool_down_k: 1.0,
+	margin_ct: 2.0
+};
+
+/** Fehlertext, wenn ein Komfortband kein Vielfaches von 0,5 K ist (wie der Server) */
+export const BAND_STEP_ERROR = 'Das Komfortband geht in Schritten von 0,5 K.';
 
 /** Fehlertext, wenn „Ziel-SOC mindestens“ über „höchstens“ liegt (wie der Server) */
 export const TARGET_RANGE_ERROR = 'Ziel-SOC mindestens liegt über höchstens.';
@@ -323,11 +351,23 @@ function drivingDraft(driving: DrivingSettings, vehicles: string[]): DrivingDraf
 	};
 }
 
+function thermalPlanDraft(thermal: ThermalPlanSettings): ThermalPlanDraft {
+	return {
+		enabled: thermal.enabled,
+		heatUpK: decimalText(thermal.heat_up_k),
+		heatDownK: decimalText(thermal.heat_down_k),
+		coolUpK: decimalText(thermal.cool_up_k),
+		coolDownK: decimalText(thermal.cool_down_k),
+		marginCt: decimalText(thermal.margin_ct)
+	};
+}
+
 function learningDraft(learning: LearningSettings, vehicles: string[]): LearningDraft {
 	return {
 		loadModelEnabled: learning.load_model_enabled,
 		haSensors: [...learning.ha_sensors],
-		driving: drivingDraft(learning.driving ?? DEFAULT_DRIVING, vehicles)
+		driving: drivingDraft(learning.driving ?? DEFAULT_DRIVING, vehicles),
+		thermal: thermalPlanDraft(learning.thermal ?? DEFAULT_THERMAL_PLAN)
 	};
 }
 
@@ -685,11 +725,64 @@ function applyDriving(
 	};
 }
 
+/** Ein Komfortband in K: Zahl von 0 bis `max`, ein Vielfaches von 0,5 (wie `BandUp`/`BandDown`) */
+function bandNumber(
+	text: string,
+	key: string,
+	errors: Record<string, string>,
+	max: number,
+	example: string
+): number | null {
+	const value = planningNumber(
+		text,
+		key,
+		errors,
+		0,
+		max,
+		`Zahl von 0 bis ${max}, z. B. ${example}`
+	);
+	if (value !== null && value * 2 !== Math.round(value * 2)) {
+		errors[key] = BAND_STEP_ERROR;
+		return null;
+	}
+	return value;
+}
+
+function applyThermalPlan(
+	draft: ThermalPlanDraft,
+	current: ThermalPlanSettings | undefined,
+	errors: Record<string, string>
+): ThermalPlanSettings {
+	const base = current ?? DEFAULT_THERMAL_PLAN;
+	const key = (field: string) => `learning.thermal.${field}`;
+	const heatUp = bandNumber(draft.heatUpK, key('heat_up_k'), errors, 3, '1,5');
+	const heatDown = bandNumber(draft.heatDownK, key('heat_down_k'), errors, 2, '1,0');
+	const coolUp = bandNumber(draft.coolUpK, key('cool_up_k'), errors, 3, '1,5');
+	const coolDown = bandNumber(draft.coolDownK, key('cool_down_k'), errors, 2, '1,0');
+	const margin = planningNumber(
+		draft.marginCt,
+		key('margin_ct'),
+		errors,
+		0,
+		20,
+		'Zahl von 0 bis 20, z. B. 2,0'
+	);
+	return {
+		...base,
+		enabled: draft.enabled,
+		heat_up_k: heatUp ?? base.heat_up_k,
+		heat_down_k: heatDown ?? base.heat_down_k,
+		cool_up_k: coolUp ?? base.cool_up_k,
+		cool_down_k: coolDown ?? base.cool_down_k,
+		margin_ct: margin ?? base.margin_ct
+	};
+}
+
 function applyLearning(
 	draft: LearningDraft,
 	current: LearningSettings,
 	errors: Record<string, string>
-): Pick<LearningSettings, 'load_model_enabled' | 'ha_sensors' | 'driving'> {
+): Pick<LearningSettings, 'load_model_enabled' | 'ha_sensors' | 'driving' | 'thermal'> {
 	const sensors = draft.haSensors.map((id) => id.trim());
 	if (sensors.length > MAX_HA_SENSORS || new Set(sensors).size !== sensors.length) {
 		errors['learning.ha_sensors'] = `Höchstens ${MAX_HA_SENSORS} Sensoren, jeder nur einmal`;
@@ -697,7 +790,8 @@ function applyLearning(
 	return {
 		load_model_enabled: draft.loadModelEnabled,
 		ha_sensors: sensors,
-		driving: applyDriving(draft.driving, current.driving, errors)
+		driving: applyDriving(draft.driving, current.driving, errors),
+		thermal: applyThermalPlan(draft.thermal, current.thermal, errors)
 	};
 }
 

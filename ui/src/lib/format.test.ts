@@ -3,7 +3,10 @@ import {
 	CONFIDENCE_LABELS,
 	DASH,
 	WEEKDAY_LABELS,
+	formatCents,
 	formatCt,
+	formatDayMonthTime,
+	formatKelvinShift,
 	formatDateTime,
 	formatDay,
 	formatDayTime,
@@ -198,5 +201,27 @@ describe('formatDayTime', () => {
 	it('kennt die Zeitumstellung (Sommerzeit endet am 25.10.2026)', () => {
 		const eve = new Date('2026-10-24T12:00:00Z'); // Sa 14:00
 		expect(formatDayTime(new Date('2026-10-25T12:00:00Z'), eve)).toBe('morgen 13:00');
+	});
+});
+
+describe('Vorheizen und Vorkühlen', () => {
+	it('zeigt den Versatz mit Vorzeichen und echtem Minus', () => {
+		expect(formatKelvinShift(1)).toBe(`+1,0${NB}K`);
+		expect(formatKelvinShift(-0.5)).toBe(`−0,5${NB}K`);
+		expect(formatKelvinShift(0)).toBe(`0,0${NB}K`);
+		expect(formatKelvinShift(-0.01)).toBe(`0,0${NB}K`);
+		expect(formatKelvinShift(null)).toBe(DASH);
+	});
+
+	it('zeigt Cent mit höchstens einer Nachkommastelle', () => {
+		expect(formatCents(12)).toBe(`12${NB}ct`);
+		expect(formatCents(18.44)).toBe(`18,4${NB}ct`);
+		expect(formatCents(null)).toBe(DASH);
+	});
+
+	it('zeigt Tag und Uhrzeit ohne Jahr in Wien', () => {
+		expect(formatDayMonthTime('2026-10-09T01:50:00+00:00')).toBe('09.10. 03:50');
+		expect(formatDayMonthTime('2026-12-31T23:05:00Z')).toBe('01.01. 00:05');
+		expect(formatDayMonthTime('kaputt')).toBe(DASH);
 	});
 });

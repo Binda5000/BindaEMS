@@ -135,6 +135,20 @@ export const SupportIntentSchema = v.object({
 });
 export type SupportIntent = v.InferOutput<typeof SupportIntentSchema>;
 
+/** Ausschnitt eines Slots des Plans in der Absicht; ältere Absichten haben keinen Planwert */
+export const IntentPlanSlotSchema = v.object({
+	start: Iso,
+	thermal_steps: v.optional(NullableNumber, null)
+});
+export type IntentPlanSlot = v.InferOutput<typeof IntentPlanSlotSchema>;
+
+export const IntentPlanSchema = v.object({
+	/** bis hierhin führt der core den Plan aus */
+	valid_until: Iso,
+	slots: v.array(IntentPlanSlotSchema)
+});
+export type IntentPlan = v.InferOutput<typeof IntentPlanSchema>;
+
 export const IntentSchema = v.object({
 	version: v.number(),
 	control: v.boolean(),
@@ -144,7 +158,12 @@ export const IntentSchema = v.object({
 	priority: v.nullable(v.array(v.string())),
 	surplus_priority: SurplusPrioritySchema,
 	guest: v.object({ mode: ChargeModeSchema }),
-	support: SupportIntentSchema
+	support: SupportIntentSchema,
+	/**
+	 * Der Plan, den der core ausführt (Plan 3c), hier nur, was die Karte „Klimaanlage“ braucht:
+	 * Gültigkeit und je Slot der Planwert in Stufen (Plan 5c); `null` ohne Plan.
+	 */
+	plan: v.optional(v.nullable(IntentPlanSchema))
 });
 export type Intent = v.InferOutput<typeof IntentSchema>;
 
@@ -355,7 +374,12 @@ export const ThermalHealthSchema = v.object({
 	/** Gelernte Leistung bei Versatz 0 in ganzen W; ein älterer core sendet das Feld nicht */
 	base_w: v.optional(NullableNumber, null),
 	/** Zuletzt freigebbare Leistung in ganzen W (`freeable_w`); ein älterer core sendet es nicht */
-	spare_w: v.optional(NullableNumber, null)
+	spare_w: v.optional(NullableNumber, null),
+	/**
+	 * Planwert des laufenden Slots in Stufen (Plan 5c), positiv heißt mehr Leistung (nicht der
+	 * Versatz); `null` ohne Planwert. Ein älterer core sendet das Feld nicht.
+	 */
+	planned: v.optional(NullableNumber, null)
 });
 export type ThermalHealth = v.InferOutput<typeof ThermalHealthSchema>;
 
@@ -571,13 +595,26 @@ export const DrivingSettingsSchema = v.looseObject({
 });
 export type DrivingSettings = v.InferOutput<typeof DrivingSettingsSchema>;
 
+/** Vorheizen und Vorkühlen: Schalter, Komfortband in K (Schritte von 0,5), Mindestvorteil in ct/kWh */
+export const ThermalPlanSettingsSchema = v.looseObject({
+	enabled: v.boolean(),
+	heat_up_k: v.number(),
+	heat_down_k: v.number(),
+	cool_up_k: v.number(),
+	cool_down_k: v.number(),
+	margin_ct: v.number()
+});
+export type ThermalPlanSettings = v.InferOutput<typeof ThermalPlanSettingsSchema>;
+
 export const LearningSettingsSchema = v.looseObject({
 	/** Schalter „Lastmodell verwenden“ */
 	load_model_enabled: v.boolean(),
 	/** zusätzliche Sensoren aus Home Assistant, höchstens 8 */
 	ha_sensors: v.array(v.string()),
 	/** Fahrverhalten; ältere Stände haben den Abschnitt nicht (es gelten die Standardwerte) */
-	driving: v.optional(DrivingSettingsSchema)
+	driving: v.optional(DrivingSettingsSchema),
+	/** Vorheizen und Vorkühlen (Plan 5c); ältere Stände haben den Abschnitt nicht */
+	thermal: v.optional(ThermalPlanSettingsSchema)
 });
 export type LearningSettings = v.InferOutput<typeof LearningSettingsSchema>;
 
@@ -1430,9 +1467,41 @@ export const PlanSlotSchema = v.object({
 	/** geplante Ladeleistung je Fahrzeug in W (Schlüssel aus `vehicles`; nur Autos mit Leistung) */
 	ev_w: v.record(v.string(), v.number()),
 	codes: v.array(PlanReasonCodeSchema),
-	text: v.string()
+	text: v.string(),
+	/**
+	 * Vorheizen und Vorkühlen (Plan 5c): Mehr- oder Minderverbrauch der Klimaanlage in W, die
+	 * Stufen (positiv mehr Leistung; `null` ohne Verschiebung im Plan) und der Netzbezug dafür in W.
+	 * Ältere Pläne haben die Felder nicht.
+	 */
+	thermal_w: v.optional(v.number(), 0),
+	thermal_steps: v.optional(NullableNumber, null),
+	thermal_grid_w: v.optional(v.number(), 0)
 });
 export type PlanSlot = v.InferOutput<typeof PlanSlotSchema>;
+
+/** Betriebsart der Klimaanlage beim Planen (aus Health) */
+export const PlanThermalModeSchema = v.picklist([
+	'heizen',
+	'kuehlen',
+	'lueften',
+	'aus',
+	'unbekannt'
+]);
+export type PlanThermalMode = v.InferOutput<typeof PlanThermalModeSchema>;
+
+/**
+ * Vorheizen und Vorkühlen im Plan (Plan 5c): `active` heißt, die Verschiebung geht an den core;
+ * mit `reason` `ok` und `active` falsch ist sie Vorschau. `saving_ct` ist die Ersparnis in ct.
+ */
+export const PlanThermalSchema = v.object({
+	device: v.string(),
+	mode: PlanThermalModeSchema,
+	active: v.boolean(),
+	saving_ct: v.number(),
+	model_computed_at: v.nullable(Iso),
+	reason: v.picklist(['ok', 'off', 'no_model', 'mode', 'not_worth', 'solver'])
+});
+export type PlanThermal = v.InferOutput<typeof PlanThermalSchema>;
 
 /** Zusammenfassung des Plans für ein geplantes Auto (Plan 4b) */
 export const PlanVehicleSchema = v.object({
@@ -1483,6 +1552,8 @@ export const PlanSchema = v.object({
 	baseline_cost_eur: v.number(),
 	issues: v.array(v.string()),
 	vehicles: v.array(PlanVehicleSchema),
+	/** `null` ohne Klimaanlage; ältere Pläne haben das Feld nicht */
+	thermal: v.optional(v.nullable(PlanThermalSchema), null),
 	slots: v.array(PlanSlotSchema)
 });
 export type Plan = v.InferOutput<typeof PlanSchema>;

@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from '@testing-library/svelte';
+import { fireEvent, render, screen, within } from '@testing-library/svelte';
 import { expect, it, vi } from 'vitest';
 import { limits, sensorCandidates, settingsCurrent } from '$lib/testing/fixtures';
 import Page from './+page.svelte';
@@ -77,4 +77,22 @@ it('reicht die Autos der Grenzen an den Editor: je Auto ein Feld für die Anwese
 	await fireEvent.click(await screen.findByRole('button', { name: 'Bearbeiten' }));
 	expect(await screen.findByRole('group', { name: 'Tesla Model 3' })).toBeVisible();
 	expect(screen.getByRole('group', { name: 'e-Golf' })).toBeVisible();
+});
+
+it('zeigt den Abschnitt Vorheizen und Vorkühlen lesbar', async () => {
+	user.role = 'viewer';
+	api.settings.mockResolvedValue(settingsCurrent());
+	api.limits.mockResolvedValue(limits());
+	render(Page);
+	const heading = await screen.findByRole('heading', { name: 'Vorheizen und Vorkühlen' });
+	const card = within(heading.closest('section')!);
+	const value = (label: string) =>
+		card.getByText(label, { selector: 'dt' }).nextElementSibling?.textContent?.replace(/\s+/g, ' ');
+	expect(value('Vorheizen und Vorkühlen')).toBe('aus');
+	expect(value('Heizen: vorheizen bis (K)')).toBe('1,5 K');
+	expect(value('Heizen: absenken bis (K)')).toBe('1,0 K');
+	expect(value('Kühlen: vorkühlen bis (K)')).toBe('1,5 K');
+	expect(value('Kühlen: wärmer werden lassen bis (K)')).toBe('1,0 K');
+	expect(value('Mindestvorteil bei Netzbezug (ct/kWh)')).toBe('2,00 ct/kWh');
+	user.role = 'admin';
 });

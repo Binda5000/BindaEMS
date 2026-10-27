@@ -72,6 +72,23 @@ export function formatCt(ct: MaybeNumber): string {
 	return isNumber(ct) ? withUnit(ct, 2, 'ct/kWh') : DASH;
 }
 
+/** Ein Betrag in Cent mit höchstens einer Nachkommastelle: „12 ct“, „18,4 ct“ */
+export function formatCents(ct: MaybeNumber): string {
+	return isNumber(ct) ? `${formatNumberMax(ct, 1)}${NBSP}ct` : DASH;
+}
+
+/**
+ * Ein Versatz in K mit Vorzeichen und echtem Minus: „+1,0 K“, „−0,5 K“; 0 ohne Vorzeichen
+ * („0,0 K“), ohne Wert „–“.
+ */
+export function formatKelvinShift(k: MaybeNumber): string {
+	if (!isNumber(k)) return DASH;
+	const text = formatNumber(Math.abs(k), 1);
+	const rounded = Math.round(k * 10) / 10;
+	const sign = rounded > 0 ? '+' : rounded < 0 ? '\u2212' : '';
+	return `${sign}${text}${NBSP}K`;
+}
+
 /**
  * Betrag in € wie „1.234,50 €“: Zahl mit Tausenderpunkten, geschütztes Leerzeichen, „€“ (de-AT
  * stellt das Zeichen voran, die Anzeige überall dahinter). Ohne „-0“: ein Betrag, der auf 0,00
@@ -110,6 +127,25 @@ export function formatTime(iso: string): string {
 /** „09.10.2026, 10:00“ */
 export function formatDateTime(iso: string): string {
 	return formatInstant(DATE_TIME, iso);
+}
+
+const DAY_MONTH_TIME = new Intl.DateTimeFormat(LOCALE, {
+	timeZone: VIENNA,
+	day: '2-digit',
+	month: '2-digit',
+	hour: '2-digit',
+	minute: '2-digit',
+	hourCycle: 'h23'
+});
+
+/** „09.10. 03:50“ (Wiener Zeit, ohne Jahr) */
+export function formatDayMonthTime(iso: string): string {
+	const ms = parseIso(iso);
+	if (ms === null) return DASH;
+	const parts = Object.fromEntries(
+		DAY_MONTH_TIME.formatToParts(ms).map((part) => [part.type, part.value])
+	);
+	return `${parts.day}.${parts.month}. ${parts.hour}:${parts.minute}`;
 }
 
 /** „Fr., 09.10.“ für ein Datum `YYYY-MM-DD` (Mittag UTC liegt in Wien immer am selben Tag). */

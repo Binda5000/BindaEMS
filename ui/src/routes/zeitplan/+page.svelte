@@ -13,6 +13,7 @@
 	import PlanBlocks from '$lib/plan/PlanBlocks.svelte';
 	import PlanHeader from '$lib/plan/PlanHeader.svelte';
 	import PlanReview from '$lib/plan/PlanReview.svelte';
+	import ThermalPlanCard from '$lib/plan/ThermalPlanCard.svelte';
 	import { SOC_SERIES } from '$lib/plan/review';
 	import { Resource } from '$lib/resource.svelte';
 	import { canOperate } from '$lib/roles';
@@ -186,6 +187,9 @@
 				{/if}
 			</div>
 			<PlanBlocks {blocks} />
+			{#if current.thermal}
+				<ThermalPlanCard thermal={current.thermal} slots={current.slots} />
+			{/if}
 		{/if}
 	{:else if !plan.error}
 		<p class="muted">Lädt …</p>

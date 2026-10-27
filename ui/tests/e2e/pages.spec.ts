@@ -118,6 +118,43 @@ test('System zeigt die Karte Klimaanlage ohne Werte', async ({ page }) => {
 	await expect(card.getByText('Keine Werte der Klimaanlage, Versatz 0')).toBeVisible();
 });
 
+test('Wärmemodell, Vorschau im Zeitplan und Einstellungen passen bei 360 px ohne waagrechte Scrollleiste', async ({
+	page
+}) => {
+	await page.setViewportSize({ width: 360, height: 740 });
+	await login(page, 'gast');
+	const overflow = () =>
+		page.evaluate(
+			() => document.documentElement.scrollWidth - document.documentElement.clientWidth
+		);
+	const card = (name: string) =>
+		page.locator('section', { has: page.getByRole('heading', { name, level: 2 }) });
+
+	await page.goto('/prognosen');
+	const model = card('Wärmemodell');
+	await expect(model.getByRole('heading', { name: 'Heizen · 21 Tage' })).toBeVisible();
+	await expect(model.getByText('Modell taugt.')).toBeVisible();
+	await expect(model.getByText('Noch zu wenig Tage mit Kühlen: 6 von 14.')).toBeVisible();
+	await expect(model.getByText('Berechnet am 09.10. 03:50.')).toBeVisible();
+	expect(await overflow()).toBeLessThanOrEqual(0);
+
+	// die Vorschau stammt aus dem ersten Plan der Demo-Welt; vorher plant hier nichts neu
+	await page.goto('/zeitplan');
+	const shift = card('Vorheizen und Vorkühlen');
+	await expect(
+		shift.getByText('Vorschau: Vorheizen/Vorkühlen spräche etwa 18,4 ct.')
+	).toBeVisible();
+	await expect(shift.getByRole('columnheader', { name: 'Klima' })).toBeVisible();
+	await expect(shift.getByRole('cell', { name: '+1,0 K' })).toBeVisible();
+	await expect(shift.getByRole('cell', { name: '\u22120,5 K' })).toBeVisible();
+	expect(await overflow()).toBeLessThanOrEqual(0);
+
+	await page.goto('/einstellungen');
+	const settings = card('Vorheizen und Vorkühlen');
+	await expect(settings.getByText('Heizen: vorheizen bis (K)')).toBeVisible();
+	expect(await overflow()).toBeLessThanOrEqual(0);
+});
+
 /** Bedienelemente unter 44 × 44 px (Global Constraints: Mobil zuerst); Links im Text zählen nicht */
 function smallTargets(path: string): string[] {
 	const selector = [

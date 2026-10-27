@@ -262,3 +262,73 @@ describe('Warten auf den neuen Plan', () => {
 		expect(screen.getByRole('button', { name: 'Neu planen' })).toBeEnabled();
 	});
 });
+
+describe('Vorheizen und Vorkühlen', () => {
+	/** Die Karte „Vorheizen und Vorkühlen“ */
+	function thermalCard(): HTMLElement {
+		const section = screen
+			.getByRole('heading', { name: 'Vorheizen und Vorkühlen' })
+			.closest('section');
+		if (!section) throw new Error('Karte Vorheizen und Vorkühlen fehlt');
+		return section;
+	}
+
+	function withThermal(changes: Partial<NonNullable<typeof PLAN.thermal>>): PlanResponse {
+		return { ...RESPONSE, plan: { ...PLAN, thermal: { ...PLAN.thermal!, ...changes } } };
+	}
+
+	it('zeigt im Zeitplan die Spalte Klima und die Vorschau', async () => {
+		renderPage('viewer', withThermal({ saving_ct: 12 }));
+		await screen.findByRole('heading', { name: 'Vorheizen und Vorkühlen' });
+		const card = within(thermalCard());
+		expect(card.getByText('Vorschau: Vorheizen/Vorkühlen spräche etwa 12 ct.')).toBeVisible();
+		const table = card.getByRole('table');
+		expect(
+			within(table)
+				.getAllByRole('columnheader')
+				.map((header) => header.textContent)
+		).toEqual(['Zeit', 'Klima']);
+		const rows = within(table)
+			.getAllByRole('row')
+			.slice(1)
+			.map((row) =>
+				[...row.querySelectorAll('th, td')].map((cell) =>
+					cell.textContent?.replace(/\s+/g, ' ').trim()
+				)
+			);
+		// Demo-Vorschau beim Heizen: +1, +2, +1 Stufen am Nachmittag, −1 am Abend
+		expect(rows).toEqual([
+			['10:00–13:30', '–'],
+			['13:30–16:00', '+0,5 K'],
+			['16:00–17:00', '+1,0 K'],
+			['17:00–18:00', '+0,5 K'],
+			['18:00–19:00', '–'],
+			['19:00–20:00', '−0,5 K'],
+			['20:00–00:00', '–']
+		]);
+	});
+
+	it('zeigt die aktive Verschiebung mit der Ersparnis', async () => {
+		renderPage('viewer', withThermal({ active: true, saving_ct: 18.4 }));
+		await screen.findByRole('heading', { name: 'Vorheizen und Vorkühlen' });
+		expect(
+			within(thermalCard()).getByText('Vorheizen/Vorkühlen aktiv: spart etwa 18,4 ct.')
+		).toBeVisible();
+	});
+
+	it('nennt ohne Verschiebung den Grund und zeigt keine Tabelle', async () => {
+		const response = withThermal({ reason: 'off', saving_ct: 0 });
+		const plan = response.plan!;
+		const slots = plan.slots.map((s) => ({ ...s, thermal_steps: null, thermal_w: 0 }));
+		renderPage('viewer', { ...response, plan: { ...plan, slots } });
+		await screen.findByRole('heading', { name: 'Vorheizen und Vorkühlen' });
+		expect(within(thermalCard()).getByText('Vorheizen und Vorkühlen ist aus.')).toBeVisible();
+		expect(within(thermalCard()).queryByRole('table')).toBeNull();
+	});
+
+	it('fehlt ohne Klimaanlage', async () => {
+		renderPage('viewer', { ...RESPONSE, plan: { ...PLAN, thermal: null } });
+		await screen.findByRole('heading', { name: 'Ablauf' });
+		expect(screen.queryByRole('heading', { name: 'Vorheizen und Vorkühlen' })).toBeNull();
+	});
+});

@@ -10,6 +10,7 @@
 	import ModelCard from '$lib/forecast/ModelCard.svelte';
 	import PresenceChart from '$lib/forecast/PresenceChart.svelte';
 	import QualityTable from '$lib/forecast/QualityTable.svelte';
+	import ThermalModelCard from '$lib/learning/ThermalModelCard.svelte';
 	import { Resource } from '$lib/resource.svelte';
 	import { hasRole } from '$lib/roles';
 
@@ -31,12 +32,16 @@
 	const quality = new Resource((o) => api.forecastQuality(days, o), { retryMs: RETRY_MS });
 	const daily = new Resource((o) => api.forecastQualityDaily(days, o), { retryMs: RETRY_MS });
 	const driving = new Resource((o) => api.drivingStatus(o), { retryMs: RETRY_MS });
+	// Wärmemodell der Klimaanlage (Plan 5c); ohne Klimaanlage antwortet der Server mit 404
+	const thermal = new Resource((o) => api.thermalStatus(o), { retryMs: RETRY_MS });
 	// Die Entität der Anwesenheit nennt nur die Quelle im Kopf eines Autos: eine Zugabe, ohne sie
 	// steht dort „Home Assistant“.
 	const settings = new Resource((o) => api.settings(o), { retryMs: RETRY_MS });
 
 	onMount(() => {
-		const stops = [learning, quality, daily, driving, settings].map((resource) => resource.start());
+		const stops = [learning, quality, daily, driving, thermal, settings].map((resource) =>
+			resource.start()
+		);
 		return () => stops.forEach((stop) => stop());
 	});
 
@@ -101,6 +106,34 @@
 		}
 	}
 
+	// Wärmemodell: wie beim Fahrverhalten abfragen, solange eine Berechnung läuft
+	const thermalRunning = $derived(thermal.data?.running ?? false);
+	$effect(() => {
+		if (!thermalRunning) return;
+		return poll(() => void thermal.refresh(true));
+	});
+
+	let thermalStarting = $state(false);
+	let thermalMessage = $state<string | null>(null);
+
+	async function recomputeThermal() {
+		thermalStarting = true;
+		thermalMessage = null;
+		try {
+			await api.recomputeThermal();
+		} catch (error) {
+			// 409: Es läuft schon eine Berechnung. Das ist kein Fehler; der Stand zeigt den Lauf.
+			if (!(error instanceof ApiError && error.status === 409)) {
+				thermalMessage = error instanceof ApiError ? error.detail : 'Unbekannter Fehler';
+			}
+		}
+		try {
+			await thermal.refresh();
+		} finally {
+			thermalStarting = false;
+		}
+	}
+
 	async function train() {
 		starting = true;
 		message = null;
@@ -143,6 +176,14 @@
 		onRecompute={recompute}
 	/>
 	<PresenceChart data={driving.data} error={driving.error} />
+	<ThermalModelCard
+		data={thermal.data}
+		error={thermal.error}
+		{admin}
+		starting={thermalStarting}
+		message={thermalMessage}
+		onRecompute={recomputeThermal}
+	/>
 </div>
 
 <style>

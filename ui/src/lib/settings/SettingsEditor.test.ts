@@ -371,3 +371,67 @@ it('zeigt Serverfehler der Anwesenheits-Entität am Feld des Autos', async () =>
 	const tesla = within(DRIVING()).getByRole('group', { name: 'Tesla Model 3' });
 	expect(await within(tesla).findByText('keine gültige Entität')).toBeVisible();
 });
+
+const THERMAL = () => screen.getByRole('group', { name: 'Vorheizen und Vorkühlen' });
+
+it('speichert Schalter, Komfortband und Mindestvorteil von Vorheizen und Vorkühlen', async () => {
+	const current = settingsCurrent();
+	const save = vi.fn().mockResolvedValueOnce(current);
+	render(SettingsEditor, { current, save, onSaved: vi.fn(), onReload: vi.fn() });
+	const section = within(THERMAL());
+	expect(
+		section.getByText(
+			'Die Klimaanlage nutzt das Haus als Wärmespeicher. Aus: Der Zeitplan zeigt nur eine Vorschau.'
+		)
+	).toBeVisible();
+	await fireEvent.click(section.getByRole('checkbox', { name: 'Vorheizen und Vorkühlen' }));
+	await fireEvent.input(section.getByLabelText('Heizen: vorheizen bis (K)'), {
+		target: { value: '2' }
+	});
+	await fireEvent.input(section.getByLabelText('Heizen: absenken bis (K)'), {
+		target: { value: '0,5' }
+	});
+	await fireEvent.input(section.getByLabelText('Kühlen: vorkühlen bis (K)'), {
+		target: { value: '1' }
+	});
+	await fireEvent.input(section.getByLabelText('Kühlen: wärmer werden lassen bis (K)'), {
+		target: { value: '1,5' }
+	});
+	await fireEvent.input(section.getByLabelText('Mindestvorteil bei Netzbezug (ct/kWh)'), {
+		target: { value: '3,5' }
+	});
+	await fireEvent.click(screen.getByRole('button', { name: 'Speichern' }));
+	await vi.waitFor(() => expect(save).toHaveBeenCalledTimes(1));
+	expect(save.mock.calls[0][1].learning.thermal).toEqual({
+		enabled: true,
+		heat_up_k: 2,
+		heat_down_k: 0.5,
+		cool_up_k: 1,
+		cool_down_k: 1.5,
+		margin_ct: 3.5
+	});
+});
+
+it('lehnt ein Komfortband außerhalb der Schritte ab', async () => {
+	const save = vi.fn();
+	render(SettingsEditor, { current: settingsCurrent(), save, onSaved: vi.fn(), onReload: vi.fn() });
+	const field = within(THERMAL()).getByLabelText('Heizen: vorheizen bis (K)');
+	await fireEvent.input(field, { target: { value: '1,2' } });
+	await fireEvent.click(screen.getByRole('button', { name: 'Speichern' }));
+	expect(await screen.findByText('Das Komfortband geht in Schritten von 0,5 K.')).toBeVisible();
+	expect(field).toHaveAttribute('aria-invalid', 'true');
+	expect(screen.getByText('Bitte die markierten Felder prüfen.')).toBeVisible();
+	expect(save).not.toHaveBeenCalled();
+});
+
+it('zeigt Serverfehler des Komfortbands am Feld', async () => {
+	const save = reject422({
+		loc: ['learning', 'thermal', 'cool_down_k'],
+		msg: 'Das Komfortband geht in Schritten von 0,5 K.'
+	});
+	render(SettingsEditor, { current: settingsCurrent(), save, onSaved: vi.fn(), onReload: vi.fn() });
+	await fireEvent.click(screen.getByRole('button', { name: 'Speichern' }));
+	expect(
+		await within(THERMAL()).findByText('Das Komfortband geht in Schritten von 0,5 K.')
+	).toBeVisible();
+});

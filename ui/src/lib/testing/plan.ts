@@ -46,6 +46,9 @@ export function slot(
 		ev_w: {},
 		codes: [code],
 		text: `Satz ${code}`,
+		thermal_w: 0,
+		thermal_steps: null,
+		thermal_grid_w: 0,
 		...changes
 	};
 }

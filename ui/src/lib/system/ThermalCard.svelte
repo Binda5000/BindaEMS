@@ -1,14 +1,18 @@
 <script lang="ts">
-	import type { CoreHealth } from '$lib/api/schemas';
+	import type { CoreHealth, IntentPlan } from '$lib/api/schemas';
 	import Card from '$lib/components/Card.svelte';
 	import StatusDot from '$lib/components/StatusDot.svelte';
 	import { thermalLoad, thermalRows } from './thermal';
 
 	interface Props {
 		thermal: CoreHealth['thermal'];
+		/** Plan, den der core ausführt (aus der Absicht): Ende des Planwerts in der Zeile „Plan“ */
+		plan?: Pick<IntentPlan, 'valid_until' | 'slots'> | null;
+		/** Zeitpunkt für das Ende des Planwerts; ohne Angabe jetzt */
+		now?: Date;
 	}
 
-	let { thermal }: Props = $props();
+	let { thermal, plan = null, now }: Props = $props();
 
 	const devices = $derived(Object.entries(thermal));
 </script>
@@ -27,7 +31,7 @@
 				{block.connected ? 'Werte kommen an' : 'Keine Werte'}
 			</p>
 			<dl class="facts">
-				{#each thermalRows(block) as row (row.label)}
+				{#each thermalRows(block, plan, now ?? new Date()) as row (row.label)}
 					<dt>{row.label}</dt>
 					<dd>{row.value}</dd>
 				{/each}

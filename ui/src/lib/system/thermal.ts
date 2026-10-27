@@ -1,7 +1,17 @@
-// Zeilen der Karte „Klimaanlage“ auf der System-Seite (Health des core, Plan 6a)
-import type { ThermalHealth } from '$lib/api/schemas';
+// Zeilen der Karte „Klimaanlage“ auf der System-Seite (Health des core, Plan 6a; Zeile „Plan“
+// aus Plan 5c)
+import type { IntentPlan, ThermalHealth } from '$lib/api/schemas';
 import { reasonLabel } from '$lib/charging/view';
-import { DASH, formatDateTime, formatNumber, formatPower, NBSP } from '$lib/format';
+import {
+	DASH,
+	formatDateTime,
+	formatKelvinShift,
+	formatNumber,
+	formatPower,
+	formatTime,
+	NBSP
+} from '$lib/format';
+import { plannedOffsetK, plannedUntil } from '$lib/learning/thermal';
 
 export interface ThermalRow {
 	label: string;
@@ -74,6 +84,23 @@ function running(value: boolean | null): string {
 	return value === null ? DASH : value ? 'ja' : 'nein';
 }
 
+/**
+ * Zeile „Plan“: der Planwert des core (`planned`, Stufen) als Versatz des Sollwerts, wie der core
+ * ihn sendet (Heizen +0,5 K je Stufe, Kühlen −0,5 K je Stufe, `plannedOffsetK`), bis zum Ende der
+ * Slots gleicher Stufen im Plan der Absicht: „+1,0 K bis 14:00“. Ohne diesen Plan oder ohne Slot
+ * für jetzt nur der Versatz; ohne Planwert „kein Planwert“.
+ */
+function planText(
+	block: ThermalHealth,
+	plan: Pick<IntentPlan, 'valid_until' | 'slots'> | null,
+	now: Date
+): string {
+	const k = plannedOffsetK(block.planned, block.mode);
+	if (k === null) return 'kein Planwert';
+	const until = plannedUntil(plan, now);
+	return until === null ? formatKelvinShift(k) : `${formatKelvinShift(k)} bis ${formatTime(until)}`;
+}
+
 /** „Grundlast 400 W · freigebbar 500 W“, ohne Wert und ohne Verbindung „–“ */
 export function thermalLoad(block: ThermalHealth): string {
 	const base = block.connected ? block.base_w : null;
@@ -85,7 +112,11 @@ export function thermalLoad(block: ThermalHealth): string {
  * Die Zeilen der Karte. Ohne frische Werte („nicht verbunden“) gibt es nur den letzten Empfang
  * und den Grund; die übrigen Zahlen wären alt oder leer.
  */
-export function thermalRows(block: ThermalHealth): ThermalRow[] {
+export function thermalRows(
+	block: ThermalHealth,
+	plan: Pick<IntentPlan, 'valid_until' | 'slots'> | null = null,
+	now: Date = new Date()
+): ThermalRow[] {
 	const received = {
 		label: 'Letzter Empfang',
 		value: block.last_packet_at === null ? DASH : formatDateTime(block.last_packet_at)
@@ -110,6 +141,7 @@ export function thermalRows(block: ThermalHealth): ThermalRow[] {
 		{ label: 'Soll ohne Versatz', value: degrees(block.base_setpoint_c) },
 		{ label: 'Versatz', value: offsetText(block) },
 		{ label: 'Wunsch', value: wishText(block.wish) },
+		{ label: 'Plan', value: planText(block, plan, now) },
 		{ label: 'Leistung', value: formatPower(block.power_w) },
 		received,
 		...dropped,

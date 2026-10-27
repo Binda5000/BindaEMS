@@ -25,7 +25,8 @@ const base: ThermalHealth = {
 	reason: 'thermal_more',
 	hint: 'neutral',
 	base_w: 400,
-	spare_w: 500
+	spare_w: 500,
+	planned: null
 };
 
 function rows(changes: Partial<ThermalHealth> = {}): Record<string, string> {
@@ -58,6 +59,7 @@ describe('thermalRows', () => {
 			{ label: 'Soll ohne Versatz', value: `24,5${NB}°C` },
 			{ label: 'Versatz', value: `${MINUS}1,0${NB}K (bestätigt)` },
 			{ label: 'Wunsch', value: 'Stufe +2' },
+			{ label: 'Plan', value: 'kein Planwert' },
 			{ label: 'Leistung', value: `1,25${NB}kW` },
 			{ label: 'Letzter Empfang', value: formatDateTime(base.last_packet_at!) },
 			{ label: 'Grund', value: 'PV-Überschuss in die Klimaanlage' }
@@ -225,5 +227,44 @@ describe('thermalOffset', () => {
 		expect(thermalOffset(0)).toBe(`+0,0${NB}K`);
 		expect(thermalOffset(-0.04)).toBe(`+0,0${NB}K`);
 		expect(thermalOffset(null)).toBe('–');
+	});
+});
+
+describe('Zeile „Plan“', () => {
+	const NOW = new Date('2026-10-09T08:20:00Z');
+	const plan = {
+		valid_until: '2026-10-09T12:00:00+00:00',
+		slots: [
+			{ start: '2026-10-09T08:00:00+00:00', thermal_steps: 2 },
+			{ start: '2026-10-09T08:15:00+00:00', thermal_steps: 2 },
+			{ start: '2026-10-09T08:30:00+00:00', thermal_steps: 2 },
+			{ start: '2026-10-09T08:45:00+00:00', thermal_steps: 0 }
+		]
+	};
+
+	function planRow(changes: Partial<ThermalHealth>, intentPlan: typeof plan | null = plan) {
+		const found = thermalRows({ ...base, ...changes }, intentPlan, NOW).find(
+			(row) => row.label === 'Plan'
+		);
+		return found?.value;
+	}
+
+	it('zeigt den Versatz des Plans bis zum Ende der Stufen in Wiener Zeit', () => {
+		// Kühlen: 2 Stufen mehr Leistung heißen 1 K tieferer Sollwert
+		expect(planRow({ planned: 2, mode: 'kuehlen' })).toBe(`\u22121,0${NB}K bis 10:45`);
+		expect(planRow({ planned: 2, mode: 'heizen' })).toBe(`+1,0${NB}K bis 10:45`);
+	});
+
+	it('zeigt ohne Ende im Plan nur den Versatz', () => {
+		expect(planRow({ planned: 1, mode: 'heizen' }, null)).toBe(`+0,5${NB}K`);
+	});
+
+	it('sagt ohne Planwert „kein Planwert“', () => {
+		expect(planRow({ planned: null })).toBe('kein Planwert');
+		expect(planRow({ planned: 1, mode: 'unbekannt' })).toBe('kein Planwert');
+	});
+
+	it('fehlt ohne frische Werte', () => {
+		expect(planRow({ planned: 1, connected: false })).toBeUndefined();
 	});
 });

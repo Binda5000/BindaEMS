@@ -11,6 +11,7 @@ import sessions from './contract/charging-sessions.json';
 import candidates from './contract/learning-candidates.json';
 import learning from './contract/learning-load.json';
 import driving from './contract/learning-driving.json';
+import thermal from './contract/learning-thermal.json';
 import qualityDaily from './contract/forecast-quality-daily.json';
 import checks from './contract/ledger-checks.json';
 import statsMonth from './contract/stats-month.json';
@@ -260,6 +261,20 @@ it('liest das Fahrverhalten und startet die Neuberechnung mit POST und CSRF-Toke
 	expect(await api.recomputeDriving()).toEqual({ started: true });
 	expect(sent()).toMatchObject({
 		url: '/api/learning/driving/recompute',
+		method: 'POST',
+		csrf: 'tok-123'
+	});
+});
+
+it('liest das Wärmemodell und startet die Neuberechnung mit POST und CSRF-Token', async () => {
+	reply(thermal);
+	expect((await api.thermalStatus()).modes.map((mode) => mode.mode)).toEqual(['heizen', 'kuehlen']);
+	expect(sent()).toMatchObject({ url: '/api/learning/thermal', method: 'GET' });
+	fetchMock.mockReset();
+	reply({ started: true });
+	expect(await api.recomputeThermal()).toEqual({ started: true });
+	expect(sent()).toMatchObject({
+		url: '/api/learning/thermal/recompute',
 		method: 'POST',
 		csrf: 'tok-123'
 	});

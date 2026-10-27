@@ -1,5 +1,5 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/svelte';
-import { afterEach, beforeEach, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ApiError } from '$lib/api/errors';
 import type { LearningStatus, Role } from '$lib/api/schemas';
 import {
@@ -8,7 +8,8 @@ import {
 	learningStatus,
 	quality,
 	qualityDaily,
-	settingsCurrent
+	settingsCurrent,
+	thermal
 } from '$lib/testing/fixtures';
 import Page from './+page.svelte';
 
@@ -20,6 +21,8 @@ const { api, user } = vi.hoisted(() => ({
 		forecastQualityDaily: vi.fn(),
 		drivingStatus: vi.fn(),
 		recomputeDriving: vi.fn(),
+		thermalStatus: vi.fn(),
+		recomputeThermal: vi.fn(),
 		settings: vi.fn()
 	},
 	user: { role: 'admin' as Role }
@@ -61,6 +64,7 @@ beforeEach(() => {
 	api.forecastQuality.mockImplementation(async (days: number) => quality({ days }));
 	api.forecastQualityDaily.mockImplementation(async (days: number) => qualityDaily({ days }));
 	api.drivingStatus.mockResolvedValue(driving());
+	api.thermalStatus.mockResolvedValue(thermal());
 	api.settings.mockResolvedValue(settingsCurrent());
 });
 
@@ -68,8 +72,9 @@ afterEach(() => {
 	vi.useRealTimers();
 });
 
-it('zeigt alle sieben Karten', async () => {
+it('zeigt alle acht Karten', async () => {
 	render(Page);
+	await screen.findByRole('heading', { name: 'Wärmemodell' });
 	for (const name of [
 		'Lastprognose',
 		'Prognosegüte',
@@ -77,7 +82,8 @@ it('zeigt alle sieben Karten', async () => {
 		'Backtest',
 		'Merkmale',
 		'Fahrverhalten',
-		'Anwesenheit'
+		'Anwesenheit',
+		'Wärmemodell'
 	]) {
 		expect(screen.getByRole('heading', { name })).toBeInTheDocument();
 	}
@@ -461,4 +467,52 @@ it('zeigt Fehler der Abfrage des Fahrverhaltens an den beiden Karten', async () 
 		await within(card('Fahrverhalten')).findByText('Fahrverhalten nicht lesbar')
 	).toBeVisible();
 	expect(within(card('Anwesenheit')).getByText('Fahrverhalten nicht lesbar')).toBeVisible();
+});
+
+describe('Wärmemodell', () => {
+	it('zeigt je Betriebsart Kopf und Zustand', async () => {
+		render(Page);
+		const model = await screen.findByRole('heading', { name: 'Wärmemodell' });
+		const section = within(model.closest('section')!);
+		expect(section.getByRole('heading', { name: 'Heizen · 21 Tage' })).toBeVisible();
+		expect(section.getByText('Modell taugt.')).toBeVisible();
+		expect(section.getByText('Noch zu wenig Tage mit Kühlen: 6 von 14.')).toBeVisible();
+	});
+
+	it('fehlt ohne Klimaanlage (404)', async () => {
+		api.thermalStatus.mockRejectedValue(new ApiError(404, 'Keine Klimaanlage eingerichtet.'));
+		render(Page);
+		await screen.findByRole('heading', { name: 'Fahrverhalten' });
+		await waitFor(() => expect(api.thermalStatus).toHaveBeenCalled());
+		await Promise.resolve();
+		expect(screen.queryByRole('heading', { name: 'Wärmemodell' })).toBeNull();
+		expect(screen.queryByText('Keine Klimaanlage eingerichtet.')).toBeNull();
+	});
+
+	it('startet die Berechnung und zeigt bei 409 den Lauf ohne Fehler', async () => {
+		api.recomputeThermal.mockRejectedValue(new ApiError(409, 'Die Berechnung läuft schon.'));
+		api.thermalStatus
+			.mockResolvedValueOnce(thermal())
+			.mockResolvedValue(thermal({ running: true }));
+		render(Page);
+		await screen.findByRole('heading', { name: 'Wärmemodell' });
+		await fireEvent.click(
+			within(card('Wärmemodell')).getByRole('button', { name: 'Jetzt neu berechnen' })
+		);
+		expect(api.recomputeThermal).toHaveBeenCalledTimes(1);
+		expect(
+			await within(card('Wärmemodell')).findByRole('button', { name: 'Berechnung läuft …' })
+		).toBeDisabled();
+		expect(within(card('Wärmemodell')).queryByText('Die Berechnung läuft schon.')).toBeNull();
+	});
+
+	it('zeigt andere Fehler beim Start an der Karte', async () => {
+		api.recomputeThermal.mockRejectedValue(new ApiError(500, 'Start fehlgeschlagen'));
+		render(Page);
+		await screen.findByRole('heading', { name: 'Wärmemodell' });
+		await fireEvent.click(
+			within(card('Wärmemodell')).getByRole('button', { name: 'Jetzt neu berechnen' })
+		);
+		expect(await within(card('Wärmemodell')).findByText('Start fehlgeschlagen')).toBeVisible();
+	});
 });

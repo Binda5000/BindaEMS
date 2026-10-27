@@ -336,7 +336,7 @@
 	</Card>
 
 	{#if health}
-		<ThermalCard thermal={health.thermal} />
+		<ThermalCard thermal={health.thermal} plan={control.data?.intent?.plan ?? null} />
 	{/if}
 
 	<Card title="Watchdog am Cerbo">

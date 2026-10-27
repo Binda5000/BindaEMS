@@ -22,7 +22,8 @@ const silent: CoreHealth['thermal'][string] = {
 	reason: 'thermal_stale',
 	hint: 'neutral',
 	base_w: null,
-	spare_w: null
+	spare_w: null,
+	planned: null
 };
 
 it('zeigt ohne Werte „Keine Werte“ und den Grund', () => {
@@ -71,4 +72,26 @@ it('zeigt ohne Werte der Anlage die Grundlast als „–“', () => {
 it('zeigt ohne Klimaanlage keine Karte', () => {
 	render(ThermalCard, { thermal: {} });
 	expect(screen.queryByRole('heading', { name: 'Klimaanlage' })).toBeNull();
+});
+
+it('zeigt in der Karte Klimaanlage den Planwert', () => {
+	const plan = {
+		valid_until: '2026-10-09T12:00:00+00:00',
+		slots: [
+			{ start: '2026-10-09T08:00:00+00:00', thermal_steps: 1 },
+			{ start: '2026-10-09T08:15:00+00:00', thermal_steps: 1 },
+			{ start: '2026-10-09T08:30:00+00:00', thermal_steps: 0 }
+		]
+	};
+	const heating = { ...silent, connected: true, mode: 'heizen', running: true, planned: 1 };
+	const { unmount } = render(ThermalCard, {
+		thermal: { klima: heating },
+		plan,
+		now: new Date('2026-10-09T08:05:00Z')
+	});
+	expect(screen.getByText('Plan')).toBeTruthy();
+	expect(screen.getByText('+0,5 K bis 10:30')).toBeTruthy();
+	unmount();
+	render(ThermalCard, { thermal: { klima: { ...heating, planned: null } }, plan });
+	expect(screen.getByText('kein Planwert')).toBeTruthy();
 });

@@ -6,6 +6,7 @@
 	import type { SensorCandidates } from '$lib/api/schemas';
 	import Notice from '$lib/components/Notice.svelte';
 	import DrivingEditor from './DrivingEditor.svelte';
+	import ThermalPlanEditor from './ThermalPlanEditor.svelte';
 	import { MAX_HA_SENSORS, type LearningDraft } from './model';
 
 	interface Props {
@@ -156,6 +157,8 @@
 </fieldset>
 
 <DrivingEditor bind:draft={draft.driving} {errors} {vehicles} />
+
+<ThermalPlanEditor bind:draft={draft.thermal} {errors} />
 
 <style>
 	fieldset {

@@ -4,6 +4,7 @@ import decisionsLatestJson from '$lib/api/contract/decisions-latest.json';
 import chargingSessionsJson from '$lib/api/contract/charging-sessions.json';
 import decisionsJson from '$lib/api/contract/decisions.json';
 import drivingJson from '$lib/api/contract/learning-driving.json';
+import thermalJson from '$lib/api/contract/learning-thermal.json';
 import historyJson from '$lib/api/contract/history.json';
 import learningStatusJson from '$lib/api/contract/learning-load.json';
 import learningCandidatesJson from '$lib/api/contract/learning-candidates.json';
@@ -33,6 +34,7 @@ import {
 	StateResponseSchema,
 	StatsSchema,
 	SystemResponseSchema,
+	ThermalStatusSchema,
 	type ChargingSession,
 	type CoreState,
 	type DaySummary,
@@ -50,7 +52,8 @@ import {
 	type SensorCandidates,
 	type SettingsCurrent,
 	type Stats,
-	type SystemResponse
+	type SystemResponse,
+	type ThermalStatus
 } from '$lib/api/schemas';
 
 export function coreState(): CoreState {
@@ -144,6 +147,11 @@ export function qualityDaily(overrides: Partial<QualityDaily> = {}): QualityDail
 /** Fahrverhalten der Demo-Welt: Tesla mit Pendelprofil, e-Golf mit vier Tagen Daten */
 export function driving(overrides: Partial<DrivingStatus> = {}): DrivingStatus {
 	return { ...v.parse(DrivingStatusSchema, drivingJson), ...overrides };
+}
+
+/** Wärmemodell der Demo-Welt: Heizen taugt, Kühlen hat erst 6 Tage */
+export function thermal(overrides: Partial<ThermalStatus> = {}): ThermalStatus {
+	return { ...v.parse(ThermalStatusSchema, thermalJson), ...overrides };
 }
 
 /** Ein Auto aus `driving()`; `changes` überschreiben Felder */

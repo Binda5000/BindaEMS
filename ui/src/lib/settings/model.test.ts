@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import error422 from '$lib/api/contract/error-422.json';
 import { settingsCurrent } from '$lib/testing/fixtures';
 import {
+	DEFAULT_THERMAL_PLAN,
 	applyDraft,
 	componentId,
 	defaultRepriceRange,
@@ -437,6 +438,14 @@ it('übernimmt Schalter und Sensoren des Lastmodells', () => {
 			targetMinPct: '50',
 			targetMaxPct: '90',
 			presenceEntities: {}
+		},
+		thermal: {
+			enabled: false,
+			heatUpK: '1,5',
+			heatDownK: '1',
+			coolUpK: '1,5',
+			coolDownK: '1',
+			marginCt: '2'
 		}
 	});
 	draft.learning.loadModelEnabled = false;
@@ -483,6 +492,72 @@ it('ordnet Serverfehler der Sensorliste zu', () => {
 			settings()
 		)
 	).toEqual({ 'learning.ha_sensors.1': 'ungültig' });
+});
+
+describe('Vorheizen und Vorkühlen', () => {
+	it('schreibt Schalter, Komfortband und Mindestvorteil zurück', () => {
+		const current = settings();
+		const draft = draftFrom(current);
+		draft.learning.thermal.enabled = true;
+		draft.learning.thermal.heatUpK = '2,5';
+		draft.learning.thermal.heatDownK = '0';
+		draft.learning.thermal.coolUpK = ' 3 ';
+		draft.learning.thermal.coolDownK = '0,5';
+		draft.learning.thermal.marginCt = '4,5';
+		const result = applyDraft(current, draft);
+		if (!('settings' in result)) throw new Error(JSON.stringify(result.errors));
+		expect(result.settings.learning.thermal).toEqual({
+			enabled: true,
+			heat_up_k: 2.5,
+			heat_down_k: 0,
+			cool_up_k: 3,
+			cool_down_k: 0.5,
+			margin_ct: 4.5
+		});
+	});
+
+	it('lehnt ein Komfortband außerhalb der Schritte ab', () => {
+		const draft = draftFrom(settings());
+		draft.learning.thermal.heatUpK = '1,25';
+		draft.learning.thermal.coolDownK = '0,7';
+		expect(errorsOf(draft)).toEqual({
+			'learning.thermal.heat_up_k': 'Das Komfortband geht in Schritten von 0,5 K.',
+			'learning.thermal.cool_down_k': 'Das Komfortband geht in Schritten von 0,5 K.'
+		});
+	});
+
+	it('prüft Zahl und Bereich je Feld', () => {
+		const draft = draftFrom(settings());
+		draft.learning.thermal.heatUpK = '3,5';
+		draft.learning.thermal.heatDownK = '2,5';
+		draft.learning.thermal.coolUpK = '';
+		draft.learning.thermal.coolDownK = '-0,5';
+		draft.learning.thermal.marginCt = '21';
+		expect(errorsOf(draft)).toEqual({
+			'learning.thermal.heat_up_k': 'Zahl von 0 bis 3, z. B. 1,5',
+			'learning.thermal.heat_down_k': 'Zahl von 0 bis 2, z. B. 1,0',
+			'learning.thermal.cool_up_k': 'Zahl von 0 bis 3, z. B. 1,5',
+			'learning.thermal.cool_down_k': 'Zahl von 0 bis 2, z. B. 1,0',
+			'learning.thermal.margin_ct': 'Zahl von 0 bis 20, z. B. 2,0'
+		});
+	});
+
+	it('nimmt für ältere Einstellungen ohne Abschnitt die Standardwerte', () => {
+		const current = settings();
+		const older = { ...current, learning: { ...current.learning, thermal: undefined } };
+		const draft = draftFrom(older);
+		expect(draft.learning.thermal).toEqual({
+			enabled: false,
+			heatUpK: '1,5',
+			heatDownK: '1',
+			coolUpK: '1,5',
+			coolDownK: '1',
+			marginCt: '2'
+		});
+		const result = applyDraft(older, draft);
+		if (!('settings' in result)) throw new Error(JSON.stringify(result.errors));
+		expect(result.settings.learning.thermal).toEqual(DEFAULT_THERMAL_PLAN);
+	});
 });
 
 describe('Fahrverhalten', () => {

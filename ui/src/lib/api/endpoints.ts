@@ -105,6 +105,12 @@ export const api = {
 	/** Admin: rechnet das Fahrverhalten im Hintergrund neu; 409, wenn schon ein Lauf läuft */
 	recomputeDriving: (): Promise<{ started: boolean }> =>
 		request('POST', '/api/learning/driving/recompute', { schema: StartedSchema }),
+	/** Wärmemodell der Klimaanlage (Plan 5c); 404 ohne Klimaanlage */
+	thermalStatus: (o?: Load): Promise<s.ThermalStatus> =>
+		get('/api/learning/thermal', s.ThermalStatusSchema, o),
+	/** Admin: rechnet das Wärmemodell im Hintergrund neu; 409, wenn schon ein Lauf läuft */
+	recomputeThermal: (): Promise<{ started: boolean }> =>
+		request('POST', '/api/learning/thermal/recompute', { schema: StartedSchema }),
 	importSettings: (yaml: string): Promise<s.SettingsCurrent> =>
 		request('POST', '/api/settings/import', { body: { yaml }, schema: s.SettingsCurrentSchema }),
 	limits: (o?: Load): Promise<s.Limits> => get('/api/limits', s.LimitsSchema, o),
