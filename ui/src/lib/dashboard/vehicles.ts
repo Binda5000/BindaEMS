@@ -16,6 +16,8 @@ export interface VehicleCard {
 	mode: string | null;
 }
 
+const UNKNOWN = 'Stand unbekannt';
+
 function power(state: CoreState | null | undefined, wallbox: string): number | null {
 	const watts = state?.derived.wallbox_w[wallbox];
 	return typeof watts === 'number' && Number.isFinite(watts) ? watts : null;
@@ -25,16 +27,24 @@ function charging(label: string, watts: number | null): string {
 	return watts === null ? `${label} · lädt` : `${label} · lädt ${formatPower(watts)}`;
 }
 
+/**
+ * Ohne Gesundheitsbericht (core getrennt, `/api/system` gescheitert oder noch nicht da), ohne Eintrag
+ * des Autos oder mit unbekanntem Steckerstatus ist der Stand unbekannt – nie „nicht angesteckt“.
+ * „lädt“ meldet der Bericht auch ohne Steckerstatus.
+ */
 function vehicleStatus(
 	health: VehicleHealth | undefined,
 	state: CoreState | null | undefined,
 	wallboxes: Record<string, string>
 ): string {
-	const wallbox = health?.wallbox;
-	if (!wallbox) return 'nicht angesteckt';
-	const label = wallboxes[wallbox] ?? wallbox;
-	if (health.charging === true) return charging(label, power(state, wallbox));
-	return health.plugged === true ? `${label} · angesteckt` : 'nicht angesteckt';
+	if (!health) return UNKNOWN;
+	const wallbox = health.wallbox;
+	if (wallbox && health.charging === true) {
+		return charging(wallboxes[wallbox] ?? wallbox, power(state, wallbox));
+	}
+	if (health.plugged === null) return UNKNOWN;
+	if (wallbox && health.plugged) return `${wallboxes[wallbox] ?? wallbox} · angesteckt`;
+	return 'nicht angesteckt';
 }
 
 function guestStatus(

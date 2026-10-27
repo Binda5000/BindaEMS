@@ -130,12 +130,32 @@ describe('vehicleCards', () => {
 		expect(tesla).toMatchObject({ socPct: 70, socQuality: 'stale' });
 	});
 
-	it('ohne Gesundheitsbericht und Zustand: nicht angesteckt, ohne Modus', () => {
+	it('ohne Gesundheitsbericht (core getrennt, /api/system fehlt): Stand unbekannt, ohne Modus', () => {
 		const cards = vehicleCards(null, limits(), null, labels);
 		expect(cards.map((card) => [card.status, card.mode, card.socQuality])).toEqual([
-			['nicht angesteckt', null, 'missing'],
-			['nicht angesteckt', null, 'missing']
+			['Stand unbekannt', null, 'missing'],
+			['Stand unbekannt', null, 'missing']
 		]);
+	});
+
+	it('Auto ohne Eintrag im Gesundheitsbericht: Stand unbekannt', () => {
+		const cards = vehicleCards(state(), limits(), { vehicles: [vehicle()], wallboxes: [] }, labels);
+		expect(cards.map((card) => [card.id, card.status])).toEqual([
+			['tesla', `Garage · lädt ${formatPower(1380)}`],
+			['egolf', 'Stand unbekannt']
+		]);
+	});
+
+	it('unbekannt, ob angesteckt: Stand unbekannt, auch mit Wallbox und ohne', () => {
+		const status = (changes: Partial<VehicleHealth>) =>
+			vehicleCards(state(), limits(), { vehicles: [vehicle(changes)], wallboxes: [] }, labels)[0]
+				?.status;
+		expect(status({ plugged: null, charging: false })).toBe('Stand unbekannt');
+		expect(status({ plugged: null, charging: null })).toBe('Stand unbekannt');
+		expect(status({ wallbox: null, plugged: null, charging: null })).toBe('Stand unbekannt');
+		// lädt laut Bericht: das gilt auch ohne Steckerstatus
+		expect(status({ plugged: null, charging: true })).toBe(`Garage · lädt ${formatPower(1380)}`);
+		expect(status({ plugged: false, charging: false })).toBe('nicht angesteckt');
 	});
 
 	it('ohne Einstellungen gibt es keine Karten', () => {

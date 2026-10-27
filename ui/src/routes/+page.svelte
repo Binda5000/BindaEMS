@@ -86,7 +86,8 @@
 	const energy = $derived(dayEnergy(day.data));
 	const flow = $derived(balance(powers, wallboxNames));
 	const houseConsumers = $derived(flowConsumers(consumers.data?.tree));
-	// solange die Grenzen der Anlage fehlen, sind die Autos unbekannt („Lädt …“)
+	// solange die Grenzen der Anlage fehlen, sind die Autos unbekannt („Lädt …“); ohne Gesundheitsbericht
+	// (core getrennt, /api/system gescheitert oder noch nicht da) zeigen sie „Stand unbekannt“
 	const cars = $derived(
 		limits.data === undefined
 			? undefined
