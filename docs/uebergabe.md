@@ -164,7 +164,7 @@ Zeile „Übersicht“.
 Entscheidungen und der Änderung „Limit bitte auch für Gäste, ansonsten passt alles“): Branch
 `claude/project-thread-wi9jx5`, **nicht auf `main`** (die Integration braucht die Zustimmung des Betreibers), **nicht ausgerollt**.
 Wer in „Sofort“ nicht mit voller Leistung laden will, stellt je Auto und einmal für Gäste einen Höchststrom ein (`now_max_a`, ganze
-A je Phase, dauerhaft, „Volle Leistung“ ist `null`): Der core kappt Autos und Gäste an der EVCS in „Sofort“ (nicht in Boost, nicht
+A je Phase, dauerhaft, „Volle Leistung“ ist `null`): Der core kappt Autos (an jeder geregelten Wallbox) und Gäste (nur an der EVCS) in „Sofort“ (nicht in Boost, nicht
 in „Geplant“), nie unter den Mindeststrom, mit dem Grund `now_limit` („Sofort-Limit“); die app hat
 `PUT /api/control/vehicles/{key}/now-limit` und `PUT /api/control/guest/now-limit`, das UI die Auswahl „Höchststrom“ in der
 Fahrzeug- und Gastkarte, Home Assistant die Zahlen `<Fahrzeug>_now_max_a` und `guest_now_max_a`; neu ist das Simulator-Szenario
