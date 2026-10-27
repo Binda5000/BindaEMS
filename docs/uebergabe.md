@@ -1783,8 +1783,8 @@ Demo-Zugänge: `admin`, `bedienen` (Bedienen), `gast` (Lesen) und `sicher` (Admi
          dann **Regelbetrieb an**, sobald **System** beide mit demselben Stand zeigt.
       4. **Prüfen:** Komponente `thermal_model`, Karte „Wärmemodell“ auf **Prognosen**, Karte „Vorheizen und
          Vorkühlen“ auf **Zeitplan**. Der Schalter bleibt aus, der Aktor der Klimaanlage im Dry-Run.
-      5. **Abnahme Teil A:** 14 Tage Vorschau mit Schalter aus, sobald das Heizmodell taugt (14 Tage Heizen
-         seit dem 26.10.2026, also etwa ab Ende November).
+      5. **Abnahme Teil A:** 14 Tage Vorschau mit Schalter aus, frühestens, sobald das Heizmodell taugt
+         (14 Heiztage, Daten seit dem 26.10.2026).
       6. **Abnahme Teil B:** nach Teil A, nach der Abnahme 6a (Aktor live) und nur auf Entscheidung des
          Betreibers: Schalter an, 14 Tage live.
   - Teil 2 schreibt auf die Geräte: nicht während der 7 Tage der Abnahme Phase 1 und ihres

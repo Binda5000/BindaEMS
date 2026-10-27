@@ -31,7 +31,7 @@ Entscheidungslog. Gelernte Werte erreichen die Safety-Schicht nie und ändern ke
 Abfragen der app laufen mit Anmeldung (`jar` und `$APP` wie im Betriebshandbuch, Abschnitt 8,
 „Alternative für Skripte (curl)“); das Entscheidungslog des core liest du über die interne API
 (Abschnitt 4, „Diagnose“, Port 8081 kurzzeitig veröffentlichen). Abfragen auf InfluxDB laufen in
-Grafana (Explore, InfluxQL, Datenbank `bindaems`) oder mit dem `influx`-CLI. Zeiten in API, Datenbank
+Grafana (Explore, InfluxQL, Datenbank `bindaems`). Zeiten in API, Datenbank
 und InfluxDB sind UTC; die Seiten zeigen Ortszeit. Die Beispiele nehmen den Schlüssel `klima` der
 Beispielkonfiguration; bei einem anderen Gerät setzt du dessen Schlüssel ein.
 
@@ -152,7 +152,7 @@ Prüfschritte:
 
    ```bash
    cd /opt/bindaems
-   SINCE=2026-12-01
+   SINCE=2026-12-01   # nur das Datum (UTC), wie SQLite und docker es lesen
    docker compose exec ems-app python -c "import sqlite3; db = sqlite3.connect('file:/data/bindaems.sqlite3?mode=ro', uri=True); [print(r) for r in db.execute(\"select json_extract(data, '$.thermal.mode'), json_extract(data, '$.thermal.reason'), json_extract(data, '$.thermal.active'), count(*), min(json_extract(data, '$.thermal.saving_ct')), max(json_extract(data, '$.thermal.saving_ct')), sum(json_extract(data, '$.thermal.model_computed_at') is null) from plan where created_at >= '$SINCE' group by 1, 2, 3 order by 1, 2, 3\")]"
    ```
 
@@ -162,10 +162,14 @@ Prüfschritte:
      Klimaanlage im Plan),
    - `active` überall `0` (falsch) ist,
    - jede Zeile mit `heizen` und `ok` eine kleinste Ersparnis von mindestens 2,0 ct hat,
-   - und die Zeilen mit `heizen` den Stand des Modells tragen (letzte Spalte 0).
+   - die Zeilen mit `heizen` den Stand des Modells tragen (letzte Spalte 0)
+   - und es an Heiztagen **mindestens einen Plan** mit `heizen` und dem Grund `ok` (eine Vorschau)
+     gibt. Fehlt er, lohnt sich das Verschieben im Zeitraum nie oder die Rechnung lief nie bis zum
+     Ende: Verlängere den Zeitraum um kalte Tage und prüfe, ob in den Zeilen `off` der Grund
+     plausibel ist (Betriebshandbuch, Tabelle der Gründe).
    Zeilen mit `lueften`, `aus` oder `unbekannt` stehen mit `off` da; das ist kein Befund. Wie oft
    `heizen` mit `ok` und wie oft mit `off` vorkommt, trägst du ein: Mit dem großen Hausakku ist `off`
-   (es lohnt sich nicht) oft zu erwarten (Betriebshandbuch, „Was Vorheizen und Vorkühlen an dieser
+   (es lohnt sich nicht) oft zu erwarten, mindestens ein `ok` muss aber vorkommen (Betriebshandbuch, „Was Vorheizen und Vorkühlen an dieser
    Anlage bringt“).
 3. **Ohne Fehler:** Im Log der app steht im Zeitraum weder „Vorheizen und Vorkühlen nicht berechnet“
    (die Rechnung warf) noch „Verschiebung der Klimaanlage verworfen, weil sie unplausibel ist“ (die
@@ -194,6 +198,7 @@ Prüfschritte:
 | jeder Plan mit `thermal` | ☐ |
 | `active` nie wahr | ☐ |
 | jede Vorschau (`ok`) mit mindestens 2 ct | ☐ |
+| mindestens ein Plan `heizen` mit `ok` an einem Heiztag | ☐ |
 | Log ohne die beiden Zeilen | ☐ |
 | Stichproben Karte und API passen (Tage) | ☐ |
 
@@ -247,15 +252,27 @@ Trage das wirksame Band oben ein. Das „Ist“ der Klimaanlage (UVR A9) ist bei
 Raumtemperatur; das Band gilt also für den ungünstigsten Raum, die anderen Räume liegen beim Vorheizen
 ähnlich darüber (Abschnitt B5).
 
-Die Entscheidungen des Zeitraums holst du einmal (`SINCE` ist der Beginn von Teil B in UTC):
+Die Entscheidungen des Zeitraums holst du einmal. `SINCE` ist der Beginn von Teil B als Zeit mit
+Zeitzone, das `+` als `%2B` geschrieben, z. B. `2026-12-15T00:00:00%2B01:00` (Wiener Winterzeit; ohne
+Zeitzone lehnt der core die Anfrage mit 422 ab). Das einfache Datum aus A3 gilt nur für SQLite und
+`docker compose logs`, nicht hier:
 
 ```bash
+SINCE=2026-12-15T00:00:00%2B01:00
 curl -s -H "Authorization: Bearer $BINDAEMS_INTERNAL_TOKEN" \
   "http://127.0.0.1:8081/v1/decisions?since=$SINCE&limit=5000" > klima.json
 ```
 
 `more` in der Antwort sagt, ob weitere Entscheidungen folgen (Betriebshandbuch, Abschnitt 13,
-„Entscheidungslog“); dann holst du den Rest mit einem späteren `since`.
+„Entscheidungslog“). Ist `more` wahr, holst du den Rest mit dem `ts` der letzten gelieferten
+Entscheidung als neuem `since` (der Parameter `before` gehört zur app, nicht zum core), wieder mit
+`%2B` statt `+`, und wiederholst das, bis `more` falsch ist:
+
+```bash
+SINCE=$(jq -r '.decisions[-1].ts' klima.json | sed 's/+/%2B/')
+curl -s -H "Authorization: Bearer $BINDAEMS_INTERNAL_TOKEN" \
+  "http://127.0.0.1:8081/v1/decisions?since=$SINCE&limit=5000" > klima-2.json
+```
 
 ### B1. Ist minus Soll ohne Versatz in mindestens 95 % der Viertelstunden im Komfortband ±0,5 K
 
@@ -269,18 +286,39 @@ Soll inklusive Versatz (`setpoint_c`) minus das Echo (`offset_k`).
 
 Prüfschritte:
 
-1. Die Abweichung je Viertelstunde abfragen und zählen (Zeitraum von Teil B, Grenzen nach deinem
-   Band):
+1. In Grafana (Explore, InfluxQL, Datenbank `bindaems`; Messung `thermal`, Tag `id` mit dem Schlüssel
+   der Klimaanlage, Felder `actual_c`, `setpoint_c` und `offset_k`) die Abweichung je Viertelstunde
+   ansehen. Zeitraum von Teil B (UTC) und Grenzen nach deinem Band (hier die Standardwerte):
 
-   ```bash
-   influx -host "$INFLUX_HOST" -username "$INFLUX_USER" -password "$INFLUX_PASSWORD" \
-     -database bindaems -precision rfc3339 -format csv -execute "SELECT MEAN(actual_c) - MEAN(setpoint_c) + MEAN(offset_k) AS abweichung FROM raw.thermal WHERE id = 'klima' AND time >= '2026-12-15T00:00:00Z' AND time < '2026-12-29T00:00:00Z' GROUP BY time(15m) fill(none)" \
-     > abweichung.csv
-   awk -F, -v lo=-1.5 -v hi=2.0 'NR > 1 && $3 != "" { n++; if ($3 >= lo && $3 <= hi) ok++; else print $2, $3 }
-     END { printf "%d von %d Viertelstunden im Band (%.1f %%)\n", ok, n, 100 * ok / n }' abweichung.csv
+   ```sql
+   SELECT MEAN("actual_c") - MEAN("setpoint_c") + MEAN("offset_k") AS "abweichung"
+   FROM "raw"."thermal" WHERE "id" = 'klima'
+     AND time >= '2026-12-15T00:00:00Z' AND time < '2026-12-29T00:00:00Z'
+   GROUP BY time(15m) fill(none)
    ```
 
-   Die letzte Zeile nennt den Anteil, davor stehen die Viertelstunden außerhalb.
+   Zählen lässt sich mit derselben Abfrage als Unterabfrage: zuerst alle Viertelstunden mit Werten,
+   dann die im Band (Untergrenze −1,5 und Obergrenze 2,0 nach deinem Band ersetzen). Jede Abfrage
+   liefert eine Zeile mit der Zahl in der Spalte `count`:
+
+   ```sql
+   SELECT COUNT("abweichung") FROM (
+     SELECT MEAN("actual_c") - MEAN("setpoint_c") + MEAN("offset_k") AS "abweichung"
+     FROM "raw"."thermal" WHERE "id" = 'klima'
+       AND time >= '2026-12-15T00:00:00Z' AND time < '2026-12-29T00:00:00Z'
+     GROUP BY time(15m) fill(none))
+
+   SELECT COUNT("abweichung") FROM (
+     SELECT MEAN("actual_c") - MEAN("setpoint_c") + MEAN("offset_k") AS "abweichung"
+     FROM "raw"."thermal" WHERE "id" = 'klima'
+       AND time >= '2026-12-15T00:00:00Z' AND time < '2026-12-29T00:00:00Z'
+     GROUP BY time(15m) fill(none))
+   WHERE "abweichung" >= -1.5 AND "abweichung" <= 2.0
+   ```
+
+   Die Viertelstunden außerhalb zeigt die erste Abfrage im Panel (Tabellenansicht, nach
+   `abweichung` sortiert); ihre Zeitpunkte brauchst du für Schritt 2. Beide Zahlen und der Anteil
+   kommen in die Tabelle unten.
 2. Viertelstunden außerhalb prüfst du einzeln: Lief die Klimaanlage nicht im Heizen (Verlauf von
    „Klima Betriebsart“ in Home Assistant, Lüften oder Aus), zählen sie nicht; zähle sie ab und rechne
    den Anteil ohne sie neu. Nach dem Einschalten am Morgen oder nach einem Ausfall darf das Haus eine
@@ -386,7 +424,8 @@ zusammenzählen.
 Prüfschritte:
 
 1. Die Pläne von Teil B zählen, wie in A3, mit `SINCE` gleich dem Beginn von Teil B (der Befehl aus A3,
-   Schritt 2).
+   Schritt 2, mit dem einfachen Datum; das Format mit Zeitzone und `%2B` gilt nur für
+   `/v1/decisions`).
 2. Bestanden, wenn keine Ersparnis negativ ist, jede Zeile mit `active` `1` (wahr) den Grund `ok` und
    eine kleinste Ersparnis von mindestens 2,0 ct hat und es keinen Plan mit `active` wahr und einem
    anderen Grund gibt.

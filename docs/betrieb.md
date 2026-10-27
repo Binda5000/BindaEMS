@@ -4785,9 +4785,11 @@ Nach dem Plan für Akku und Autos (Optimierer oder Ersatzplan) rechnet die app e
 Schritt** auf den fertigen Slots (ein lineares Modell, gelöst mit HiGHS, Zeitlimit 5 s). Der Optimierer
 bleibt unverändert; so gilt die Rangfolge Akku → Autos → Klimaanlage → Einspeisung schon durch den
 Aufbau. Das Haus ist der Speicher: Der Plan darf es im Komfortband vorheizen (beim Kühlen vorkühlen)
-und absenken (wärmer werden lassen), je Viertelstunde höchstens eine Stufe von 0,5 K weiter weg vom
-Sollwert, und am Ende des Plans steht es nicht unter dem Sollwert ohne Versatz (beim Kühlen nicht
-darüber).
+und absenken (wärmer werden lassen). Die Rechnung begrenzt je Viertelstunde nur das **Wachsen** des
+Speichers auf 0,5·`C` kWh (also etwa 0,5 K); das Absenken begrenzt allein die Grundleistung. Der core
+setzt die Stufen zusätzlich langsam um: eine Stufe nach oben je 600 s, nach unten sofort, ein
+Vorzeichenwechsel über 0. Am Ende des Plans steht das Haus nicht unter dem Sollwert ohne Versatz
+(beim Kühlen nicht darüber).
 
 - **Mehrverbrauch** kommt zuerst aus der geplanten Einspeisung (er kostet den Einspeisepreis, ohne
   Einspeisepreis nichts), dann aus dem Netz, aber **nie in einem Slot, in dem der Akku das Haus
@@ -4847,9 +4849,9 @@ Abschnitt laden mit den Standardwerten.
 - **Das Band ist nie weiter als `max_offset_k`:** Je Richtung gilt der kleinere Wert aus der
   Einstellung und `max_offset_k` der Klimaanlage in der `config.yaml`, auf ein Vielfaches von 0,5 K
   abgerundet. Die harte Grenze von ±3 K bleibt in der Safety-Schicht.
-- **Wirkung:** Jede Änderung des Abschnitts löst einen neuen Plan aus (Anlass „Einstellungen geändert“). Der
-  Schalter wirkt auf den Plan, den die app dem core übergibt; das Verhalten des core steht im
-  Abschnitt „Klimaanlage (Phase 6a)“, „Planwert“.
+- **Wirkung:** Jede Änderung des Abschnitts löst einen neuen Plan aus (Anlass „Einstellungen
+  geändert“). Der Schalter wirkt auf den Plan, den die app dem core übergibt; das Verhalten des core
+  steht im Abschnitt „Klimaanlage (Phase 6a)“, „Planwert“.
 
 ### Home Assistant
 
@@ -4954,8 +4956,8 @@ würde) und in günstige Stunden, in denen der Akku nicht entlädt. Die Ersparni
 und an vielen Tagen 0; die Zeile im Zeitplan sagt dann „Vorheizen und Vorkühlen ist aus.“ (Schalter
 aus) bzw. „Verschieben lohnt sich in diesem Plan nicht.“.
 
-**Der Heizteil wirkt voraussichtlich nur diesen Winter.** Ein Heizmodell gibt es ab etwa Ende November
-2026 (14 Tage Heizen seit dem 26.10.2026), ein Kühlmodell erst im Sommer 2027. Mit der Wärmepumpe
+**Der Heizteil wirkt voraussichtlich nur diesen Winter.** Ein Heizmodell gibt es frühestens, sobald
+14 Heiztage vorliegen (Daten seit dem 26.10.2026), ein Kühlmodell erst im Sommer 2027. Mit der Wärmepumpe
 (Phase 6b, 2027) heizt die Klimaanlage kaum noch; 6b bekommt dann ein eigenes Modell mit dem
 Pufferspeicher. Der Kühlteil bleibt. Die Wärme des Ölofens in den Bädern ist nicht gemessen; sie
 verlängert dort das Auskühlen, und ob das Heizmodell trotzdem trägt, zeigen `R²`, τ und die
@@ -6033,7 +6035,7 @@ im UI, „Warum?“). Der Grund beschreibt den Wunsch der Strategie, nicht jeden
 | `thermal_more` | PV-Überschuss in die Klimaanlage | Die Einspeisung lag 10 min über der Schwelle: eine Stufe mehr Leistung. |
 | `thermal_back` | Netzbezug, Klimaanlage eine Stufe zurück | Bei positivem Wunsch lag der Netzbezug 5 min über der Schwelle. |
 | `thermal_cars` | Autos haben Vorrang | Ein Auto im Modus PV oder Min+PV könnte mehr aufnehmen: eine Stufe zurück. Die Klimaanlage hält sich im Anlauf eines Autos (90 s), bei einem Auto, das sich selbst begrenzt, und bei einem Auto ohne erreichbare Startleistung zurück, wie oben unter „Rangfolge und Strategie“. |
-| `thermal_battery` | Akku hat Vorrang | Der SOC liegt unter der Schwelle: eine Stufe zurück. |
+| `thermal_battery` | Akku hat Vorrang | Zwei Auslöser, je eine Stufe zurück: ohne Planwert (und bei einem Planwert von höchstens 0) liegt der SOC unter der Schwelle (6a); bei einem Planwert über 0 gilt statt der SOC-Schwelle der Akku-Wächter: Der Akku entlädt mindestens 300 W seit 300 s (5 min), danach je weitere 300 s. |
 | `thermal_less` | Teurer Strom, Klimaanlage zurückhaltend | Der Plan gibt den Hinweis „weniger“: eine Stufe weniger, höchstens `less_max_steps`; auch beim Ende des Hinweises (Wunsch zurück auf 0). |
 | `thermal_peak` | Spitze droht, Klimaanlage nicht mehr | Der 15-min-Wächter oder der Phasenwächter macht Druck: Versatz sofort auf 0. |
 | `thermal_mode` | Betriebsart gewechselt, Versatz 0 | Die Klimaanlage wechselte zwischen Kühlen und Heizen: sofort 0. |
