@@ -160,7 +160,7 @@ INTENT_CHARGING_DEFAULTS: dict[str, Any] = {
     "vehicles": {},
     "priority": None,
     "surplus_priority": {"kind": "battery_until_soc", "soc_pct": 30.0},
-    "guest": {"mode": "pv"},
+    "guest": {"mode": "pv", "now_max_a": None},
     "plan": None,
     "support": {"allowed": True, "soc_pct": None},
 }

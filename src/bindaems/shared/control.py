@@ -147,6 +147,10 @@ class VehicleIntent(_Model):
       anderen Modi stehen; gespeicherte Absichten ohne sie laden mit den Standardwerten.
     - ``departure_on``: optionaler Tag (lokales Datum) der Abfahrt für „Geplant“ (Plan 5b); ohne
       Tag, oder wenn der Zeitpunkt schon vorbei ist, gilt ``departure`` täglich.
+    - ``now_max_a``: Höchststrom je Phase in „Sofort“ (ganze A); ``None`` heißt volle Leistung.
+      Der core klemmt auf den Strombereich des Ladepunkts. Das Limit bleibt wie Ziel-SOC und
+      Abfahrt in allen Modi stehen; Boost lädt trotzdem mit voller Leistung (Plan Sofort-Limit,
+      Entscheidungen 1 bis 3).
     """
 
     mode: ChargeMode = ChargeMode.PV
@@ -155,6 +159,7 @@ class VehicleIntent(_Model):
     target_soc_pct: Annotated[int, Field(ge=TARGET_SOC_MIN, le=TARGET_SOC_MAX)] = 80
     departure: Annotated[str, Field(pattern=r"^([01]\d|2[0-3]):[0-5]\d$")] = "07:00"
     departure_on: date | None = None
+    now_max_a: Annotated[int, Field(ge=1, le=32)] | None = None
 
 
 def _local_instant(day: date, at: time) -> datetime:
@@ -203,10 +208,13 @@ class GuestIntent(_Model):
     """Modus eines Autos ohne Fahrzeug der Konfiguration, eines Gastes (Plan 2c-2a, Design 3.1).
 
     Es gibt für ihn weder Boost noch Übersteuerung der Wallbox. Ohne Angabe lädt ein Gast im
-    PV-Überschuss.
+    PV-Überschuss. ``now_max_a`` ist der Höchststrom je Phase in „Sofort“ für jeden Gast (ganze
+    A); ``None`` heißt volle Leistung. Der core klemmt auf den Strombereich des Ladepunkts;
+    wirken kann das Limit nur an einer Wallbox mit Aktor (Plan Sofort-Limit, Entscheidung 5).
     """
 
     mode: ChargeMode = ChargeMode.PV
+    now_max_a: Annotated[int, Field(ge=1, le=32)] | None = None
 
 
 class SupportIntent(_Model):

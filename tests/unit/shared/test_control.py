@@ -171,10 +171,11 @@ def test_support_is_the_last_field_of_the_intent() -> None:
 
 
 def test_guest_shows_its_mode_as_in_the_api() -> None:
-    assert Intent(version=1).model_dump(mode="json")["guest"] == {"mode": "pv"}
+    # ``now_max_a`` steht mit ``null`` darin (Plan Sofort-Limit)
+    assert Intent(version=1).model_dump(mode="json")["guest"] == {"mode": "pv", "now_max_a": None}
     for mode in ChargeMode:
         intent = Intent.model_validate({"version": 1, "guest": {"mode": mode.value}})
-        assert intent.model_dump(mode="json")["guest"] == {"mode": mode.value}
+        assert intent.model_dump(mode="json")["guest"] == {"mode": mode.value, "now_max_a": None}
 
 
 @pytest.mark.parametrize(
@@ -258,6 +259,37 @@ def test_departure_must_be_hh_mm(bad: str) -> None:
 @pytest.mark.parametrize("good", ["00:00", "07:00", "23:59"])
 def test_departure_accepts_valid_times(good: str) -> None:
     assert VehicleIntent(departure=good).departure == good
+
+
+# Höchststrom für „Sofort“ je Fahrzeug und für Gäste (Plan Sofort-Limit, Entscheidungen 1, 2, 5)
+
+
+def test_vehicle_intent_now_max_a_defaults_to_full_power() -> None:
+    assert VehicleIntent().now_max_a is None
+    assert VehicleIntent.model_validate({"mode": "now"}).now_max_a is None  # alte Absicht
+
+
+@pytest.mark.parametrize("value", [0, 33, 10.5, "x"])
+def test_vehicle_intent_now_max_a_rejects_outside_1_to_32(value: object) -> None:
+    with pytest.raises(ValidationError):
+        VehicleIntent.model_validate({"now_max_a": value})
+
+
+@pytest.mark.parametrize("value", [1, 32])
+def test_vehicle_intent_now_max_a_bounds_are_valid(value: int) -> None:
+    assert VehicleIntent(now_max_a=value).now_max_a == value
+
+
+def test_guest_intent_now_max_a_like_a_vehicle() -> None:
+    assert GuestIntent().now_max_a is None
+    assert GuestIntent(mode=ChargeMode.NOW, now_max_a=8).now_max_a == 8
+    with pytest.raises(ValidationError):
+        GuestIntent.model_validate({"now_max_a": 0})
+
+
+def test_vehicle_intent_now_max_a_round_trips() -> None:
+    entry = VehicleIntent(mode=ChargeMode.NOW, now_max_a=10)
+    assert VehicleIntent.model_validate(entry.model_dump(mode="json")) == entry
 
 
 def test_next_departure_is_today_before_the_time() -> None:

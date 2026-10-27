@@ -82,7 +82,8 @@
             "wallbox": null,
             "target_soc_pct": 60,
             "departure": "17:30",
-            "departure_on": null
+            "departure_on": null,
+            "now_max_a": null
           }
         },
         "priority": null,
@@ -91,7 +92,8 @@
           "soc_pct": 30.0
         },
         "guest": {
-          "mode": "pv"
+          "mode": "pv",
+          "now_max_a": null
         },
         "plan": null,
         "support": {
