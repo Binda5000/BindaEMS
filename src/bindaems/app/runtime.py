@@ -71,6 +71,7 @@ from bindaems.app.learning.ha_sensors import HaSensorReader
 from bindaems.app.learning.registry import ModelRegistry
 from bindaems.app.learning.routes import learning_router
 from bindaems.app.learning.service import LoadModelService
+from bindaems.app.learning.thermal_service import ThermalModelService, thermal_device
 from bindaems.app.learning.weather import WeatherArchive
 from bindaems.app.ledger.checks import LedgerChecks
 from bindaems.app.ledger.costing import LedgerCosting
@@ -116,8 +117,9 @@ COSTING_RETRY_S = 60.0  # Pause der Nachführung des Einstandspreises nach einem
 COSTING_STOP_S = 5.0  # so lange wartet das Beenden auf den Block einer laufenden Nachführung
 LOAD_MODEL_STOP_S = 5.0  # so lange wartet das Beenden auf eine Rechnung des Lastmodells
 DRIVING_STOP_S = 5.0  # so lange wartet das Beenden auf eine Rechnung des Fahrverhaltens
+THERMAL_STOP_S = 5.0  # so lange wartet das Beenden auf eine Rechnung des Wärmemodells
 AUTOMATION_STOP_S = 5.0  # so lange wartet das Beenden auf einen Schreibzugriff der Automatik
-BACKUP_AT = (4, 0)  # Ortszeit, nach Training (03:15) und Fahrverhalten (03:40)
+BACKUP_AT = (4, 0)  # Ortszeit, nach Training (03:15), Fahrverhalten (03:40), Wärmemodell (03:50)
 FORECAST_NIGHTLY_AT = (2, 30)  # Ortszeit
 FORECAST_KEEP = timedelta(days=60)
 # das Training braucht 112 Tage; unter 56 holte die Nachholung nach
@@ -278,6 +280,19 @@ class AppRuntime:
             settings=self.settings,
             clock=self._clock,
         )
+        # Wärmemodell der Klimaanlage (Plan 5c): rechnet nachts um 03:50 Uhr und beim Start (nach
+        # der Nachholung des Wetterarchivs); nur mit einem Gerät der Art ``coe_offset``
+        device = thermal_device(cfg)
+        self.thermal_model: ThermalModelService | None = None
+        if device is not None:
+            self.thermal_model = ThermalModelService(
+                reader=self.reader,
+                weather=self.weather,
+                engine=self.engine,
+                device=device,
+                clock=self._clock,
+                ready=self._weather_backfilled.wait,
+            )
         self.plan_store = PlanStore(self.engine)
         self.forecast_quality = ForecastQuality(
             self.engine, self.forecast_archive, self.ledger, pv_threshold_w(cfg)
@@ -417,6 +432,10 @@ class AppRuntime:
             self.load_forecast.component_status,
             self.load_model.component_status,
             self.driving.component_status,
+        ]
+        if self.thermal_model is not None:
+            sources.append(self.thermal_model.component_status)
+        sources += [
             self.planning.component_status,
             self.ledger.component_status,
             self._influx_status,
@@ -605,6 +624,8 @@ class AppRuntime:
             ("ledger-nightly", self._ledger_nightly_loop),
             ("consumer-energy", self._energy_loop),
         ]
+        if self.thermal_model is not None:
+            jobs.append(("thermal-model", self.thermal_model.run))
         if self.ha_values is not None:
             jobs.append(("ha-values", partial(self._ha_values_loop, self.ha_values)))
         if self.ha_publisher is not None:
@@ -1056,6 +1077,8 @@ class AppRuntime:
             log.warning("Training des Lastmodells läuft beim Beenden noch")
         if not await self.driving.close(DRIVING_STOP_S):
             log.warning("Berechnung des Fahrverhaltens läuft beim Beenden noch")
+        if self.thermal_model is not None and not await self.thermal_model.close(THERMAL_STOP_S):
+            log.warning("Berechnung des Wärmemodells läuft beim Beenden noch")
         if not await self.automation.close(AUTOMATION_STOP_S):
             log.warning("Automatik für Ziel und Abfahrt schreibt beim Beenden noch")
         try:

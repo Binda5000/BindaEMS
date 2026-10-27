@@ -344,6 +344,13 @@
       "details": {}
     },
     {
+      "name": "thermal_model",
+      "ok": true,
+      "message": "Noch keine Daten der Klimaanlage",
+      "since": null,
+      "details": {}
+    },
+    {
       "name": "planning",
       "ok": true,
       "message": "Plan von 10:00 Uhr",

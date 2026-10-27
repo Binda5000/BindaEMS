@@ -107,6 +107,7 @@ def test_runtime_wires_routes_and_components(runtime) -> None:
         "load-forecast",
         "load-model",
         "driving",
+        "thermal_model",
         "planning",
         "ledger",
         "influx",
@@ -872,6 +873,43 @@ async def test_shutdown_closes_the_driving_service_before_dispose(runtime, monke
     assert "Berechnung des Fahrverhaltens läuft beim Beenden noch" in [e["event"] for e in logs]
 
 
+async def test_shutdown_closes_the_thermal_model_before_dispose(runtime, monkeypatch) -> None:
+    order: list[str] = []
+
+    async def close(timeout_s: float) -> bool:
+        order.append(f"close {timeout_s:g}")
+        return False  # rechnet noch: wird gewarnt
+
+    real_dispose = runtime.engine.dispose
+
+    def dispose() -> None:
+        order.append("dispose")
+        real_dispose()
+
+    assert runtime.thermal_model is not None
+    monkeypatch.setattr(runtime.thermal_model, "close", close)
+    monkeypatch.setattr(runtime.engine, "dispose", dispose)
+    with capture_logs() as logs:
+        await runtime.shutdown()
+    assert order == ["close 5", "dispose"]
+    assert "Berechnung des Wärmemodells läuft beim Beenden noch" in [e["event"] for e in logs]
+
+
+def test_without_a_coe_device_the_thermal_model_is_absent(cfg: Config, tmp_path) -> None:
+    # Plan 5c, Task 5: ohne Gerät der Art ``coe_offset`` kein Dienst und keine Komponente
+    thermal = cfg.thermal.model_copy(update={"devices": {}})
+    rt = make_runtime(cfg.model_copy(update={"thermal": thermal}), tmp_path)
+    try:
+        assert rt.thermal_model is None
+        client = TestClient(rt.app, base_url="https://testserver")
+        rt.auth.create_user("chris", PASSWORD, "admin", actor="cli", source="cli")
+        client.post("/api/auth/login", json={"username": "chris", "password": PASSWORD})
+        names = [c["name"] for c in client.get("/api/system").json()["components"]]
+        assert "driving" in names and "thermal_model" not in names
+    finally:
+        rt.engine.dispose()
+
+
 async def test_shutdown_closes_the_automation_before_dispose(runtime, monkeypatch) -> None:
     order: list[str] = []
 
@@ -1568,6 +1606,39 @@ async def test_runtime_starts_the_driving_service(runtime, respx_mock, monkeypat
     task = asyncio.create_task(runtime.run())
     await until(lambda: bool(computed))  # beim Start wird gerechnet
     assert "driving" in {job.get_name() for job in runtime._tasks}
+    await runtime.shutdown()
+    await asyncio.wait_for(task, timeout=2)
+
+
+def test_runtime_wires_the_thermal_model(runtime) -> None:
+    # Plan 5c, Task 5: das erste Gerät der Art ``coe_offset`` (``klima`` im Beispiel)
+    service = runtime.thermal_model
+    assert service is not None and service._device == "klima"
+    assert service._reader is runtime.reader and service._weather is runtime.weather
+    status = service.component_status()
+    assert (status.name, status.ok, status.message) == (
+        "thermal_model",
+        True,
+        "Noch keine Daten der Klimaanlage",
+    )
+
+
+@pytest.mark.respx(assert_all_called=False)
+async def test_runtime_starts_the_thermal_model(runtime, respx_mock, monkeypatch) -> None:
+    respx_mock.route().respond(503)
+    computed: list[bool] = []
+
+    async def fake_recompute() -> bool:
+        computed.append(True)
+        return True
+
+    assert runtime.thermal_model is not None
+    monkeypatch.setattr(runtime.thermal_model, "recompute", fake_recompute)
+    task = asyncio.create_task(runtime.run())
+    # beim Start wird gerechnet, nach der Nachholung des Wetterarchivs (auch nach deren Fehler)
+    await until(lambda: bool(computed))
+    assert runtime._weather_backfilled.is_set()
+    assert "thermal-model" in {job.get_name() for job in runtime._tasks}
     await runtime.shutdown()
     await asyncio.wait_for(task, timeout=2)
 
