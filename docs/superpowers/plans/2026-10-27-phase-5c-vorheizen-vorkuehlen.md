@@ -9,7 +9,7 @@
 - Anzeige auf „Prognosen“, „Zeitplan“, „System“, in „Warum?“ und in Home Assistant.
 
 **Architecture:** 5c ändert app, UI, `shared` und an zwei Stellen den core.
-- **core:** `core/telemetry/sampler.py` zeichnet die Betriebsart auf, Health nennt sie (Task 1, vorziehbar, Entscheidung 5); `core/control/thermal.py` und `core/control/regulation.py` folgen dem Planwert (Task 8).
+- **core:** `core/control/thermal.py` und `core/control/regulation.py` folgen dem Planwert (Task 8). Die Betriebsart steht schon in InfluxDB und Health (Task 1 entfällt).
 - **`app/learning/`:** `thermal_data.py` (Lesen aus InfluxDB und Wetterarchiv), `thermal_model.py` (Modell, rein), `thermal_service.py` (Nachtlauf, Ablage, Status), Routen in `routes.py`.
 - **`app/planning/`:** `thermal_shift.py` (zweiter Schritt, ein LP mit HiGHS über PuLP, rein), Einbindung in `service.py`, `explain.py`, `plausibility.py`, `triggers.py`; `shared/plan.py` (Planwerte je Slot, `Plan.thermal`, Grundcodes).
 - **Migration `0015`:** `thermal_model` (Stand je Nacht, Gerät und Betriebsart).
@@ -26,7 +26,7 @@
 ## Einordnung
 
 5c ist der dritte Plan der Phase 5 (Spec 18, Stand Plan 5a: „ein Wärmemodell des Hauses und die Klimaanlage als flexible Last im Planer; es braucht Wochen mit Daten der Klimaanlage“).
-- **Daten heute:** Seit dem 26.10.2026 abends läuft 6a an der Anlage im Dry-Run. InfluxDB hat seitdem `thermal` (`actual_c`, `setpoint_c`, `offset_k`, `offset_sent_k`) und `power` mit `source=thermal`. **Die Betriebsart (läuft, Heizen, Kühlen, Lüften) fehlt in InfluxDB**; ohne sie lässt sich ein Heizmodell nicht sauber von Lüften und Aus trennen. Task 1 schließt die Lücke (Entscheidung 5).
+- **Daten heute:** Seit dem 26.10.2026 abends läuft 6a an der Anlage im Dry-Run. InfluxDB hat seitdem `thermal` (`actual_c`, `setpoint_c`, `offset_k`, `offset_sent_k`), `power` mit `source=thermal` und die Betriebsbits als Zustände in `status` (bei jeder Änderung).
 - **Was die Daten hergeben:** Im Dry-Run ist der Versatz immer 0. Daraus lassen sich die Grundleistung (Leistung gegen Temperaturdifferenz) und die Zeitkonstante (Auskühlen, wenn die Anlage nicht läuft) bestimmen, und beides zusammen ergibt den Speicher je Kelvin. Wie stark die Anlage auf einen Versatz reagiert, zeigt sich erst im Live-Betrieb von 6a; die Versatz-Ereignisse führen das Modell dann nach (Entscheidung 10).
 - **Jahreszeit:** Ein Heizmodell kann es ab etwa Mitte bis Ende November geben (14 Tage Heizen mit aufgezeichneter Betriebsart), ein Kühlmodell erst im Sommer 2027. Bis dahin bleibt die jeweilige Betriebsart bei 6a.
 - **Ausrollen:** frühestens nach den Abnahmen von 5a und 5b (22.11.2026) und nicht während des Wechsels von Victron auf live; wann, entscheidest du (Entscheidung 15). core und app kommen gemeinsam, mit Regelbetrieb aus während des Wechsels; Migration `0015` läuft beim Start, vorher die Datenbank sichern.
@@ -36,7 +36,7 @@
 
 ## Entscheidungen (freigegeben am 27.10.2026)
 
-Der Plan ist auf diese Entscheidungen geschrieben; der Betreiber hat alle 17 am 27.10.2026 mit den vorgeschlagenen Werten freigegeben („Freigeben, Task 1 vorziehen“). Task 1 geht zuerst allein zur Integration; die mit **Offen** markierten Punkte gelten mit dem jeweiligen Vorschlag.
+Der Plan ist auf diese Entscheidungen geschrieben; der Betreiber hat alle 17 am 27.10.2026 mit den vorgeschlagenen Werten freigegeben („Freigeben, Task 1 vorziehen“); die mit **Offen** markierten Punkte gelten mit dem jeweiligen Vorschlag. Entscheidung 5 und Task 1 sind bei der Umsetzung entfallen, weil die Betriebsart schon aufgezeichnet wird.
 
 1. **Zuschnitt** (Spec 18).
    - **In 5c:** Betriebsart in InfluxDB, Wärmemodell je Betriebsart mit Nachtlauf und Status, zweiter Planungsschritt mit Vorschau, Planwert an den core, Folgen im core mit den Regeln aus 6a, Schalter, Komfortband, Anzeige in UI und HA, Simulator-Szenarien, Abnahme.
@@ -51,9 +51,7 @@ Der Plan ist auf diese Entscheidungen geschrieben; der Betreiber hat alle 17 am 
    - Anpassung der Grundleistung **R² ≥ 0,5** über die Slots, in denen die Anlage läuft, der Versatz 0 ist und Ist und Soll höchstens 0,5 K auseinander liegen
    - **τ zwischen 4 h und 200 h**
    - Sonst sagt der Status den ersten Grund, der fehlt; die Vorschau rechnet dann nicht.
-5. **Betriebsart sofort aufzeichnen** (Task 1). **Offen.**
-   - **Vorschlag:** Task 1 vorziehen und allein auf `main` bringen, sobald der Plan freigegeben ist; du ziehst ihn mit dem nächsten Pull von `ems-core` (Regelbetrieb kurz aus). Er ändert kein Verhalten, nur Aufzeichnung und Health. Dann hat das Heizmodell beim Ausrollen von 5c schon Wochen an Daten.
-   - **Alternative:** Task 1 kommt mit dem Rest von 5c; das Heizmodell taugt dann frühestens 14 Tage nach dem Ausrollen.
+5. **Betriebsart aufzeichnen: entfällt.** Freigegeben war „Task 1 vorziehen“. Bei der Umsetzung zeigte sich, dass die Betriebsbits schon seit 6a in InfluxDB `status` stehen (Task 1). Das Heizmodell hat beim Ausrollen also die Daten seit dem 26.10.2026.
 6. **Komfortband** (Task 2, Einstellungen). **Offen.**
    - **Vorschlag:** Heizen bis **+1,5 K** vorheizen, bis **−1,0 K** absenken; Kühlen bis **−1,5 K** vorkühlen, bis **+1,0 K** wärmer werden lassen. Einstellbar in Stufen von 0,5 K: vor 0 bis 3 K, zurück 0 bis 2 K; nie über `max_offset_k` aus `config.yaml` (harte Grenze ±3 K bleibt in der Safety-Schicht).
    - **Frage an dich:** Passt das für eure Räume, oder lieber enger (etwa +1,0/−0,5 K)?
@@ -78,7 +76,7 @@ Der Plan ist auf diese Entscheidungen geschrieben; der Betreiber hat alle 17 am 
 
 ## Präzisierungen gegenüber der Spec
 
-1. **Aufzeichnung** (`core/telemetry/sampler.py`): Messung `thermal`, Felder `running`, `heating`, `cooling`, `venting` als 0/1 (aus `thermal.<id>.running` usw., Wahrheitswert mit Qualität `OK`; sonst kein Punkt), Takt 10 s wie die übrigen. Health `thermal.<name>` nennt zusätzlich `mode` (`thermal_mode`, auch im Dry-Run).
+1. **Aufzeichnung:** unverändert. Die Betriebsbits stehen in `status` (`id` = `thermal.<name>.running|heating|cooling|venting`, `value_bool`, nur bei Änderung); Health nennt `mode`, `running`, `actual_c`, `base_setpoint_c`.
 2. **Einstellungen** (`shared/settings.py`):
    - `ThermalPlanSettings`: `enabled: bool = False`, `heat_up_k = 1.5`, `heat_down_k = 1.0`, `cool_up_k = 1.5`, `cool_down_k = 1.0` (Vielfache von 0,5; vor 0 bis 3, zurück 0 bis 2), `margin_ct = 2.0` (0 bis 20).
    - `LearningSettings.thermal: ThermalPlanSettings = ThermalPlanSettings()`; alte Einstellungen ohne `thermal` laden.
@@ -86,7 +84,7 @@ Der Plan ist auf diese Entscheidungen geschrieben; der Betreiber hat alle 17 am 
 3. **Migration `0015`** (`v0015_thermal_model.py`): Tabelle `thermal_model` mit `id`, `computed_at` (UTC), `device` (String 32), `mode` (`heizen`/`kuehlen`), `params` (JSON: `ModeModel` ohne Profile), `profile` (JSON: Sollwert und Laufanteil je Gruppe und Viertelstunde), `usable` (bool), `reason` (String 32); Index auf `(device, mode, computed_at)`.
 4. **Daten** (`app/learning/thermal_data.py`), je Viertelstunde (UTC-Beginn) im Fenster:
    - Mittel von `actual_c`, `setpoint_c`, `offset_k`, `p_w` (Messung `power`, `source=thermal`), PV gesamt (`power`, `source=pv`, `phase=total`, über alle `id` summiert) aus InfluxDB `raw`; Außentemperatur aus dem Wetterarchiv (5a).
-   - `running`: wahr, wenn mindestens 80 % der Punkte 1 sind, falsch bei höchstens 20 %, sonst `None`. `mode`: `heizen`/`kuehlen`/`lueften` nach dem Anteil wie bei `running`, `aus` bei `running` falsch, sonst `None`.
+   - Die Bits aus `status`: je Bit der letzte Wert vor dem Fenster (eine Abfrage `LAST` bis zum Fensterbeginn) und alle Änderungen im Fenster; daraus der Zeitanteil „wahr“ je Viertelstunde. Ohne bekannten Wert (vor dem ersten Punkt) ist der Anteil unbekannt. `running`: wahr, wenn der Anteil mindestens 80 % ist, falsch bei höchstens 20 %, sonst `None`. `mode`: `heizen`/`kuehlen`/`lueften` nach dem Anteil wie bei `running`, `aus` bei `running` falsch, sonst `None`.
    - Slots ohne `actual_c` oder ohne Außentemperatur fehlen; es gibt nie einen Ersatzwert.
 5. **Modell** (`app/learning/thermal_model.py`, rein), je Betriebsart `m` und Fenster:
    - **Grundleistung:** kleinste Quadrate (numpy `lstsq`) über die tauglichen Slots (Entscheidung 4): `p_w ≈ u · ΔT + s · pv_kw + b` mit `ΔT` wie in Entscheidung 3; `s` frei im Vorzeichen. `P₀(slot) = max(0, u · ΔT + s · pv_kw + b)`. R² über dieselben Slots.
@@ -115,7 +113,7 @@ Der Plan ist auf diese Entscheidungen geschrieben; der Betreiber hat alle 17 am 
 
 - Deutsch in Texten, Logs (ganze Sätze, `tests/unit/test_layout.py`), Commits im Stil `feat(app): …`; keine Modellbezeichnungen im Repo.
 - `core` und `app` importieren nur aus `shared`; die Importverträge bleiben unverändert.
-- Im core ändern sich nur `core/telemetry/sampler.py` (Task 1), `core/control/thermal.py` (Tasks 3, 8) und `core/control/regulation.py` (Tasks 1, 8): `git diff main --stat -- src/bindaems/core cerbo-watchdog` nennt am Ende nur diese drei Dateien. Die Safety-Schicht (`core/safety`) bleibt unverändert.
+- Im core ändern sich nur `core/control/thermal.py` (Tasks 3, 8) und `core/control/regulation.py` (Task 8): `git diff main --stat -- src/bindaems/core cerbo-watchdog` nennt am Ende nur diese zwei Dateien. Die Safety-Schicht (`core/safety`) bleibt unverändert.
 - **Rückwärts lesbar:** Absichten ohne `thermal_steps`, Pläne ohne `thermal`, Einstellungen ohne `learning.thermal` laden unverändert. Mit Schalter aus oder ohne taugliches Modell sind Absicht und core-Verhalten genau die aus 6a: die Simulator-Szenarien (auch die sechs `klima-*`) und die Planungsszenarien bleiben grün, ohne gelockerte Prüfungen.
 - Scheitert ein Simulator-Szenario, liegt der Fehler zuerst in der Regelung (eigener `fix(core)`-Commit mit Test); das Szenario nur ändern, wenn es physikalisch nicht zu schaffen ist.
 - Abdeckung ≥ 75 % gesamt, ≥ 90 % für `core/safety`, `core/control`, `core/actuators`; `app/learning` und `app/planning/thermal_shift.py` sollen ≥ 90 % erreichen.
@@ -134,7 +132,7 @@ Der Plan ist auf diese Entscheidungen geschrieben; der Betreiber hat alle 17 am 
 1. **Betriebsart wechselt oder ist unbekannt, mitten im Plan** (UVR schaltet auf Lüften oder Aus, Heizen ↔ Kühlen in der Übergangszeit).
    - Erwartet: Der core geht im selben Zyklus auf 0 (6a); die app plant neu und sendet ohne `heizen`/`kuehlen` keinen Planwert; ein Plan für Heizen wirkt nie beim Kühlen.
    - Tests: Task 8 `test_plan_steps_ignored_when_mode_changes`; Task 7 `test_no_thermal_steps_without_known_mode`, `test_mode_change_triggers_replan`.
-2. **Lücken in den Daten** (InfluxDB nachts weg, C.M.I. schweigt, Wetterarchiv ohne Wert, Task 1 noch nicht ausgerollt).
+2. **Lücken in den Daten** (InfluxDB nachts weg, C.M.I. schweigt, Wetterarchiv ohne Wert, ein Bit hat im Fenster noch keinen Punkt).
    - Erwartet: Slots ohne Ist oder Außentemperatur fehlen; ohne Betriebsart zählt der Slot nicht; ein Lauf ohne Daten behält den letzten Stand; der Status nennt den fehlenden Grund.
    - Tests: Task 3 `test_slot_without_outdoor_temp_is_missing`, `test_mixed_mode_slot_has_no_mode`; Task 4 `test_days_without_mode_do_not_count`; Task 5 `test_failed_run_keeps_last_model`.
 3. **Der Akku deckt, was der Plan dem Netz zugedacht hat** (Victron im Dry-Run, Prognose daneben).
@@ -166,44 +164,9 @@ Der Plan ist auf diese Entscheidungen geschrieben; der Betreiber hat alle 17 am 
 
 ---
 
-### Task 1: Betriebsart aufzeichnen (vorziehbar, Entscheidung 5)
+### Task 1: entfällt (Ruling vom 27.10.2026)
 
-**Files:**
-- Modify: `src/bindaems/core/telemetry/sampler.py`, `src/bindaems/core/control/regulation.py` (`_thermal_json`)
-- Modify: `docs/superpowers/specs/2026-10-08-bindaems-design.md` (11.2, Zeile `thermal`), `docs/betrieb.md`
-- Test: `tests/unit/core/telemetry/test_sampler.py`, `tests/unit/core/control/test_regulation.py`
-
-**Interfaces:**
-- Produces: InfluxDB `thermal` mit Feldern `running`, `heating`, `cooling`, `venting` (0/1); Health `thermal.<name>.mode` (`ThermalMode`).
-
-- [ ] **Step 1: Write the failing tests**
-
-```python
-def test_thermal_flags_are_recorded_as_zero_or_one() -> None: ...  # running True → 1.0, heating False → 0.0
-def test_thermal_flag_with_bad_quality_is_not_recorded() -> None: ...
-def test_thermal_health_names_mode() -> None:
-    assert regulation.health(now)["thermal"]["klima"]["mode"] == "heizen"
-def test_thermal_health_names_mode_in_dry_run() -> None: ...
-```
-
-- [ ] **Step 2: Run tests to verify they fail**
-
-Run: `uv run pytest tests/unit/core/telemetry/test_sampler.py tests/unit/core/control -q -k "thermal"`
-Expected: FAIL
-
-- [ ] **Step 3: Implement** vier Regeln für die Wahrheitswerte (eigene Umrechnung auf 0/1, denn `_float` lehnt `bool` ab) und `mode` in `_thermal_json`. Spec 11.2 und Betriebshandbuch nennen die Felder.
-
-- [ ] **Step 4: Run tests to verify they pass**
-
-Run: `uv run pytest -q tests/unit/core tests/unit/test_docs.py && uv run mypy src`
-Expected: PASS
-
-- [ ] **Step 5: Commit**
-
-```bash
-git add src tests docs
-git commit -m "feat(core): Betriebsart der Klimaanlage aufzeichnen und in Health nennen"
-```
+Bei der Umsetzung zeigte sich: Die Betriebsbits der Klimaanlage (`running`, `heating`, `cooling`, `venting`, `cmd_on`) sind im CoE-Adapter Zustände (`SignalKind.STATE`) und gehen schon seit 6a bei jeder Änderung nach InfluxDB, Messung `status`, Tag `id` = `thermal.<name>.<bit>`, Feld `value_bool` (`core/telemetry/sampler.py`, `_status`). Health nennt `mode`, `running`, `actual_c` und `base_setpoint_c` schon (`core/runtime.py`, `_thermal_json`). An der Anlage wird die Betriebsart also seit dem 26.10.2026 aufgezeichnet; der core bleibt bis Task 8 unverändert. Task 3 liest die Bits aus `status`.
 
 ### Task 2: Migration 0015 und Einstellungen
 
@@ -267,6 +230,8 @@ git commit -m "feat(app): Tabelle und Einstellungen für Vorheizen und Vorkühle
 ```python
 async def test_slots_are_quarter_hour_means() -> None: ...
 async def test_running_needs_80_percent() -> None: ...  # 0.85 → True, 0.15 → False, 0.5 → None
+async def test_flags_carry_last_status_value_into_window() -> None: ...  # `status` vor dem Fenster wahr, keine Änderung → Anteil 1.0
+async def test_flag_before_first_point_is_unknown() -> None: ...
 async def test_mixed_mode_slot_has_no_mode() -> None: ...
 async def test_slot_without_outdoor_temp_is_missing() -> None: ...
 async def test_pv_sums_all_planes() -> None: ...
@@ -278,7 +243,7 @@ async def test_read_error_raises_thermal_data_error() -> None: ...
 Run: `uv run pytest tests/unit/app/learning/test_thermal_data.py -q`
 Expected: FAIL
 
-- [ ] **Step 3: Implement** nach Präzisierung 4: eine InfluxQL-Abfrage je Messung mit `GROUP BY time(15m)`, Mittel; die Anteile von `running`/`heating`/`cooling`/`venting` aus dem Mittel der 0/1-Werte.
+- [ ] **Step 3: Implement** nach Präzisierung 4: für die Zahlen eine InfluxQL-Abfrage je Messung mit `GROUP BY time(15m)`, Mittel; die Bits aus `status` als Stufenfunktion (letzter Wert vorher plus Änderungen), Zeitanteil je Viertelstunde.
 
 - [ ] **Step 4: Run tests to verify they pass**
 
@@ -452,7 +417,7 @@ git commit -m "feat(app): Vorheizen und Vorkühlen als zweiter Planungsschritt"
 - Test: `tests/unit/shared/test_plan.py`, `tests/unit/app/planning/test_service.py`, `test_explain.py`, `test_plausibility.py`, `test_triggers.py`, `test_intents.py`
 
 **Interfaces:**
-- Consumes: `ThermalModelService.current` (Task 5), `shift` (Task 6), Health `thermal.<name>.mode` (Task 1), `PlanInputs.end_value_ct`.
+- Consumes: `ThermalModelService.current` (Task 5), `shift` (Task 6), Health `thermal.<name>.mode`, `actual_c`, `base_setpoint_c` (vorhanden, `core/runtime.py`), `PlanInputs.end_value_ct`.
 - Produces: `PlanSlot.thermal_w`, `PlanSlot.thermal_steps`, `Plan.thermal: PlanThermal | None`, `IntentPlanSlot.thermal_steps`, `IntentPlanSlot.thermal_grid_w`, Grundcodes `KLIMA_MEHR`/`KLIMA_WENIGER`, Auslöser `thermal` (Präzisierungen 7 und 8).
 
 - [ ] **Step 1: Write the failing tests**
@@ -475,7 +440,7 @@ def test_old_intent_without_thermal_steps_loads() -> None: ...
 Run: `uv run pytest tests/unit/shared/test_plan.py tests/unit/app/planning -q`
 Expected: FAIL
 
-- [ ] **Step 3: Implement**: In `plan_once` (oder direkt danach im Dienst) die `ShiftSlot` aus den Slots des Plans bauen (`base_w` aus `base_power_w` mit Profil-Sollwert, Temperatur der PV-Prognose, PV der Slots, mal `on_share`), `shift` aufrufen, Ergebnis in `PlanSlot`/`Plan.thermal`; `intent_plan` setzt die Felder nur bei `active`. `start_k` aus Health (`actual_c − setpoint_c + offset`) – ohne Wert 0.
+- [ ] **Step 3: Implement**: In `plan_once` (oder direkt danach im Dienst) die `ShiftSlot` aus den Slots des Plans bauen (`base_w` aus `base_power_w` mit Profil-Sollwert, Temperatur der PV-Prognose, PV der Slots, mal `on_share`), `shift` aufrufen, Ergebnis in `PlanSlot`/`Plan.thermal`; `intent_plan` setzt die Felder nur bei `active`. `start_k` aus Health (`actual_c − base_setpoint_c`) – ohne Wert 0.
 
 - [ ] **Step 4: Run tests to verify they pass**
 
@@ -671,7 +636,7 @@ git commit -m "docs: Vorheizen und Vorkühlen in Spec, Betrieb, Abnahme und Übe
 
 ## Selbstprüfung (beim Schreiben erledigt)
 
-- **Spec-Abdeckung:** „Wärmemodell des Hauses“ → Tasks 3 bis 5; „Klimaanlage als flexible Last im Planer“ → Tasks 6, 7; „Vorheizen und Vorkühlen über Stunden nach Preis“ (6a, „Sonst 0“) → Tasks 6 bis 8; Rangfolge Akku → Autos → Klima (18) → Entscheidungen 2, 8, 9; harte Grenzen und Schrittregel (8.2, 8.3) bleiben in der Safety-Schicht, der Planer hält sie zusätzlich (Präzisierung 6); Spec 10.5 → Entscheidung 17; 11.2 → Task 1; HA und UI (12, 13) → Tasks 10, 11; Abnahme → Task 12.
+- **Spec-Abdeckung:** „Wärmemodell des Hauses“ → Tasks 3 bis 5; „Klimaanlage als flexible Last im Planer“ → Tasks 6, 7; „Vorheizen und Vorkühlen über Stunden nach Preis“ (6a, „Sonst 0“) → Tasks 6 bis 8; Rangfolge Akku → Autos → Klima (18) → Entscheidungen 2, 8, 9; harte Grenzen und Schrittregel (8.2, 8.3) bleiben in der Safety-Schicht, der Planer hält sie zusätzlich (Präzisierung 6); Spec 10.5 → Entscheidung 17; 11.2 bleibt (Task 1 entfällt); HA und UI (12, 13) → Tasks 10, 11; Abnahme → Task 12.
 - **Typen:** `ThermalSlot` (3) → `fit_mode`/`mode_profile` (4) → `ThermalModelService.current` (5) → `ShiftSlot`/`shift` (6) → `PlanThermal`, `IntentPlanSlot.thermal_steps`/`thermal_grid_w` (7) → `ThermalObs.planned_steps`/`planned_grid_w` (8). `ThermalMode` zieht in Task 3 nach `shared`.
 - **Review Focus:** jede der fünf Zeilen hat Tests in der Task, die den Code besitzt.
-- **Umfang:** 12 Tasks; Task 1 steht für sich und lässt sich vorziehen.
+- **Umfang:** 11 Tasks (Task 1 entfällt).

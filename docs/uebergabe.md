@@ -120,7 +120,7 @@ Abfahrt an einem Datum, `departure_on`), `shared` und die Datenbank der app (Mig
 app rollen gemeinsam aus, mit ausgeschaltetem Regelbetrieb, **zusammen mit 3d, 4b, 5a und 6a und damit
 nach der Abnahme der Phase 3**. Nichts geht von selbst live: Die Automatik ist aus, bis du sie
 einschaltest, erwartete Autos ändern nur den Plan, und gelernte Werte erreichen die Safety-Schicht nie.
-Als Nächstes folgt 5c (Vorheizen und Vorkühlen, erst mit Daten aus 6a); der Plan `docs/superpowers/plans/2026-10-27-phase-5c-vorheizen-vorkuehlen.md` ist seit dem 27.10.2026 freigegeben; Task 1 (Betriebsart aufzeichnen) kommt vorab.
+Als Nächstes folgt 5c (Vorheizen und Vorkühlen, erst mit Daten aus 6a); der Plan `docs/superpowers/plans/2026-10-27-phase-5c-vorheizen-vorkuehlen.md` ist seit dem 27.10.2026 freigegeben und in Umsetzung.
 
 **Die Welle „Aufgeschobene Kleinigkeiten“ (56 Punkte K1 bis K56, freigegeben vom Betreiber am 21.10.2026 um 10:39) ist
 umgesetzt** (`docs/superpowers/plans/2026-10-21-aufgeschobene-kleinigkeiten.md`, 13 Tasks, subagent-driven, Branch
@@ -996,7 +996,7 @@ Zeile „Übersicht“.
 | `docs/superpowers/plans/2026-10-20-phase-5a-lastmodell.md` | Plan 5a, 14 Tasks, umgesetzt auf dem Branch `claude/phase-5-plan-s7xe0n` (noch nicht auf `main`, nicht ausgerollt): Wetterarchiv, HA-Sensoren, Merkmale, LightGBM, Backtest, Registry, Aktivierungsregel, Schattenbetrieb, Seite „Prognosen“, Einstellungen „Lastmodell“; die Einordnung teilt Phase 5 in 5a, 5b und 5c; die 17 Entscheidungen des Betreibers vom 20.10.2026, Präzisierungen, Texte |
 | `docs/superpowers/plans/2026-10-20-phase-5b-fahrverhalten.md` | Plan 5b, 14 Tasks, umgesetzt auf dem Branch `claude/phase-5b-plan-xo03ty`, seit dem 21.10.2026 auf `main` (Gesamtreview und Fix-Welle erledigt, nicht ausgerollt): Fahrverhalten mit Vorschlägen, Automatik für „Geplant“, Abfahrt an einem Datum und erwartete Autos im Planer; 17 Entscheidungen, vom Betreiber am 20.10.2026 freigegeben |
 | `docs/superpowers/plans/2026-10-21-aufgeschobene-kleinigkeiten.md` | Welle „Aufgeschobene Kleinigkeiten“, 13 Tasks, 56 Punkte K1 bis K56 vor dem gemeinsamen Ausrollen; vom Betreiber am 21.10.2026 freigegeben |
-| `docs/superpowers/plans/2026-10-27-phase-5c-vorheizen-vorkuehlen.md` | Plan 5c, 12 Tasks, 17 Entscheidungen, **freigegeben vom Betreiber am 27.10.2026** (Task 1 zuerst allein zur Integration): Betriebsart der Klimaanlage in InfluxDB (Task 1, vorziehbar), Wärmemodell je Betriebsart (Grundleistung, Zeitkonstante, Speicher je K), zweiter Planungsschritt nach Akku und Autos mit Vorschau, Planwert an den core, Schalter „Vorheizen und Vorkühlen“ ab Werk aus |
+| `docs/superpowers/plans/2026-10-27-phase-5c-vorheizen-vorkuehlen.md` | Plan 5c, 11 Tasks (Task 1 entfällt: die Betriebsart steht schon in InfluxDB `status`), 17 Entscheidungen, **freigegeben vom Betreiber am 27.10.2026**: Wärmemodell je Betriebsart (Grundleistung, Zeitkonstante, Speicher je K), zweiter Planungsschritt nach Akku und Autos mit Vorschau, Planwert an den core, Schalter „Vorheizen und Vorkühlen“ ab Werk aus |
 | `cerbo-watchdog/README.md` | Watchdog: Zustände, Zeiten, D-Bus-Pfade, Installation und Probe |
 | `docs/verification/abnahme-phase-1.md` | Checkliste für die Abnahme der Phase 1 |
 | `docs/verification/abnahme-phase-4.md` | Checkliste für die Abnahme der Phase 4: Teil Statistik (Plan 4a, 30 Tage ab dem Ausrollen, Abgleich innerhalb ±1 %), „Ziel-SOC“ (mindestens 95 % der machbaren geplanten Ladungen, `GET /api/stats`) und „HA in beide Richtungen“ (Tabelle aller Bedienelemente) aus Plan 4b |
